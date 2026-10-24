@@ -24,7 +24,7 @@ capture = _review.capture
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[3]
 TOOLKIT = ["apps/libdeskui/draw.c", "apps/libdeskui/widgets.c", "apps/libdeskui/list.c",
-           "apps/libdeskui/menu.c", "apps/libdeskui/dialog.c", "apps/libdeskui/textarea.c", "apps/desktop/compositor.c", "apps/desktop/theme.c",
+           "apps/libdeskui/menu.c", "apps/libdeskui/dialog.c", "apps/libdeskui/controls.c", "apps/libdeskui/commdlg.c", "apps/libdeskui/textarea.c", "apps/desktop/compositor.c", "apps/desktop/theme.c",
            "apps/libdeskui/icons.c", "apps/libdeskui/icon_map.c"]
 
 # Reviewed frames (2026-10-11): an unpinned run prints the new digests. Convert
@@ -33,13 +33,14 @@ TOOLKIT = ["apps/libdeskui/draw.c", "apps/libdeskui/widgets.c", "apps/libdeskui/
 # wt/ui-integ (2026-10-12): Tango store icons (wt/icons) and the ui-look theme, fonts and controls together;
 # F2-64 recorded affected transient frames; remaining frames await lead review.
 # 2026-10-15 (main after f2-63 + f2-64): pinned frames re-recorded on the combined tree (FreeType text in the f2-64 dialogs), reviewed against the 9a05ab9f renders.
+# G16 (2026-10-24): deskui-open and the four Places frames re-pinned for the toolkit Open/Save As (New Folder, List/Details, Files of type).
 # F4-30 (2026-10-18): only deskui-open changes for the shared Places pane;
 # the four dialog-places-goldens.json frames cover mounted media and Save.
 TOOLKIT_FRAMES = {
     'deskui-input.xrgb': '72e8a91f02bdb8b2b5ef0bafe23a9dc1332152aef2280790299cfb5951c16da6',
     'deskui-menu.xrgb': 'a9ffa04ca2ea5565a6a7ca8a99b32dc3c3b3d7e0edba6646be7d7ee31946cea9',
     'deskui-message.xrgb': '23bca4045904f0bdc3311b8578b025328a1baa30b2b202b2f872ec8242f36f41',
-    'deskui-open.xrgb': 'fc912b457c774d912452593b94c8dbea73c0f0222c7fb4de97f441a86f06552e',
+    'deskui-open.xrgb': 'dfc6242164e8cc9c9dc4405d3b5f71bf8ffbf83d919eda20f20bd7315889ce15',
     'deskui-popup.xrgb': '0d67abb32369b6a755ed7f5247dea1389049a56297cef185087485cd8ec8035c',
     'deskui-progress.xrgb': 'af6ac5d3e8525d71376d9d0768b53a9d45c4b0403e0289a1d2aab3837e7c9b76',
     'deskui-view0.xrgb': '9269da40f4bd59ba2b6331b8382dcd432b1dd1089456a608fbeef7986f823c05',
@@ -182,6 +183,13 @@ class DeskuiTests(unittest.TestCase):
         _, digests = self.run_harness('places', sources, frames=True)
         expected = json.loads((ROOT/'tests/host/desktop/dialog-places-goldens.json').read_text())
         self.check_frames(digests, expected, 'PLACES')
+
+    def test_common_controls_and_dialogs(self):
+        """G16: combo box, trackbar, up-down, tooltips, edit undo, Open/Save As, Font, Color, Browse for Folder, Find and Replace."""
+        stdout, digests = self.run_harness("common-dialogs", ["tests/host/desktop/common_dialogs_test.c", *TOOLKIT], frames=True)
+        self.assertIn("PASS G16 common controls and dialogs", stdout)
+        expected = json.loads((ROOT / "tests/host/desktop/common-dialogs-goldens.json").read_text())
+        self.check_frames(digests, expected, "G16")
 
     def test_files_slow_listing_responsive(self):
         stdout, _ = self.run_harness("files-async", ["tests/host/desktop/files_async_test.c",

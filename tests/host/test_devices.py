@@ -68,7 +68,7 @@ class DeviceTests(unittest.TestCase):
             icons = load('devices_icons', ROOT / 'tests/host/desktop/icon_assets.py')
             sources = ['tests/host/desktop/device_manager_test.c', 'apps/control/app.c', 'apps/control/driver_pack_ui.c', 'apps/control/display.c', 'apps/control/fonts.c', 'sdk/libfont/font.c', 'apps/libdeskui/text_ttf.c', 'apps/desktop/protocol.c',
                        *(f'apps/desktop/{n}.c' for n in ('settings', 'sounds', 'wallpaper', 'image', 'compositor', 'theme')),
-                       *(f'apps/libdeskui/{n}.c' for n in ('draw', 'widgets', 'list', 'menu', 'dialog', 'textarea', 'icons', 'icon_map'))]
+                       *(f'apps/libdeskui/{n}.c' for n in ('draw', 'widgets', 'list', 'menu', 'dialog', 'controls', 'commdlg', 'textarea', 'icons', 'icon_map'))]
             ft = load('devices_freetype', ROOT / 'sdk/freetype/build.py'); library = ft.host()  # f2-63: libfont needs FreeType
             subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                             '-D_POSIX_C_SOURCE=200809L', '-fsanitize=address,undefined', '-fno-sanitize-recover=undefined',
@@ -98,7 +98,7 @@ class DeviceTests(unittest.TestCase):
             icons = load('datetime_icons', ROOT / 'tests/host/desktop/icon_assets.py')
             sources = ['tests/host/desktop/datetime_control_test.c', 'src/kernel/lib/tzrule.c', 'apps/control/app.c', 'apps/control/driver_pack_ui.c', 'apps/control/display.c', 'apps/control/fonts.c', 'sdk/libfont/font.c', 'apps/libdeskui/text_ttf.c', 'apps/desktop/protocol.c',
                        *(f'apps/desktop/{n}.c' for n in ('settings', 'sounds', 'wallpaper', 'image', 'compositor', 'theme')),
-                       *(f'apps/libdeskui/{n}.c' for n in ('draw', 'widgets', 'list', 'menu', 'dialog', 'textarea', 'icons', 'icon_map'))]
+                       *(f'apps/libdeskui/{n}.c' for n in ('draw', 'widgets', 'list', 'menu', 'dialog', 'controls', 'commdlg', 'textarea', 'icons', 'icon_map'))]
             ft = load('datetime_freetype', ROOT / 'sdk/freetype/build.py'); library = ft.host()
             subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                             '-D_POSIX_C_SOURCE=200809L', '-fsanitize=address,undefined', '-fno-sanitize-recover=undefined',
@@ -140,7 +140,7 @@ class DeviceTests(unittest.TestCase):
             icons=load('network_settings_icons', ROOT / 'tests/host/desktop/icon_assets.py')
             sources=['tests/host/desktop/network_settings_test.c', 'apps/control/app.c', 'apps/control/driver_pack_ui.c', 'apps/control/display.c', 'apps/control/fonts.c', 'sdk/libfont/font.c', 'apps/libdeskui/text_ttf.c', 'apps/desktop/protocol.c',
                 *(f'apps/desktop/{n}.c' for n in ('settings','sounds','wallpaper','image','compositor','theme')),
-                *(f'apps/libdeskui/{n}.c' for n in ('draw','widgets','list','menu','dialog','textarea','icons','icon_map'))]
+                *(f'apps/libdeskui/{n}.c' for n in ('draw','widgets','list','menu','dialog', 'controls', 'commdlg','textarea','icons','icon_map'))]
             ft=load('network_settings_freetype', ROOT / 'sdk/freetype/build.py'); library=ft.host()
             subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror','-D_POSIX_C_SOURCE=200809L',
                 '-fsanitize=address,undefined','-fno-sanitize-recover=undefined',*icons.defines(),

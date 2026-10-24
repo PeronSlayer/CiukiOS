@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "internal.h"
+#include "../../../apps/desktop/sounds.h"
 static DWORD colors[29] = {0xc0c0c0, 0x808000, 0x800000, 0x808080, 0xc0c0c0,
                            0xffffff, 0,        0,        0,        0xffffff,
                            0xc0c0c0, 0xc0c0c0, 0x808080, 0x800000, 0xffffff,
@@ -413,15 +414,30 @@ BOOL W32API SystemParametersInfoA(UINT action, UINT param, void *out,
         SendNotifyMessageA(u32_windows[i].handle, 0x1a, action, 0);
   return result;
 }
+/* MessageBeep plays the user's system sound for the icon (the desktop owns the
+ * scheme, volume and mute): MB_ICONERROR/HAND/STOP -> Error, MB_ICONEXCLAMATION
+ * and MB_ICONWARNING -> Error (the scheme has one alert sound), MB_ICONQUESTION
+ * -> Question, MB_ICONASTERISK/INFORMATION and MB_OK or any other value (and
+ * 0xFFFFFFFF, the simple beep) -> Information. The sound is queued and the call
+ * returns; with SPI_SETBEEP off, or before the process has a window to carry the
+ * request, nothing is played and the call still succeeds. */
 BOOL W32API MessageBeep(UINT type) {
   U32_GUARD;
-  (void)type;
-  static BOOL once;
-  if (!once) {
-    once = 1;
-    w32_diag("stub", "user32.dll", "MessageBeep");
+  if (!spi.beep)
+    return 1;
+  UINT event = type == 0x10 || type == 0x30 ? SOUND_ERROR
+               : type == 0x20               ? SOUND_QUESTION
+                                            : SOUND_INFORMATION;
+  for (UINT i = 0; i < U32_WINDOWS; i++) {
+    struct u32_window *w = &u32_windows[i];
+    if (!w->handle || !w->wire)
+      continue;
+    uint8_t data[4];
+    desk_put32(data, event);
+    u32_wire(w, DESK_V3_SOUND, data, 4, -1);
+    return 1;
   }
-  return u32_fail(120);
+  return 1;
 }
 BOOL W32API ExitWindowsEx(UINT flags, DWORD reserved) {
   U32_GUARD;

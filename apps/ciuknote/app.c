@@ -15,7 +15,6 @@ _Static_assert(CN_LIMIT == 61440u, "CN_LIMIT_TEXT must name CN_LIMIT");
 #define STATUS_H 20
 #define MENUBAR_H 20   /* libdeskui menu bar height */
 #define EDIT_H 22
-#define TEXT_FILTER "*.txt"
 
 static const struct du_menu_item file_template[] = {
     {"&New", M_NEW, 0x31, DU_CTRL, 0}, {"&Open...", M_OPEN, 0x18, DU_CTRL, 0}, {"&Save", M_SAVE, 0x1f, DU_CTRL, 0},
@@ -352,24 +351,25 @@ static void after_edit(struct cn_app *a)
 
 /* ---- file dialogs ------------------------------------------------------- */
 
-struct collect { struct du_file_entry *out; unsigned capacity, count; const char *pattern; };
+/* Folders and files, unfiltered: the toolkit dialog filters by the chosen file type. */
 static int collect_entry(const char *name, const struct cn_stat *st, void *arg)
 {
-    struct collect *c = arg;
+    struct { struct du_file_entry *out; unsigned capacity, count; } *c = arg;
     if (c->count >= c->capacity || strlen(name) >= sizeof(c->out->name)) return 0;
-    if (!st->dir && !cn_match(c->pattern, name)) return 0;
     struct du_file_entry *f = &c->out[c->count++];
     snprintf(f->name, sizeof(f->name), "%s", name); f->directory = st->dir != 0; f->size = st->size;
     return 0;
 }
-/* Folders always, files matching the current filter (`*.txt` until a pattern is typed in the name box). */
 static int lister(void *ctx, const char *path, struct du_file_entry *out, unsigned capacity, unsigned *count)
 {
-    struct cn_app *a = ctx; struct collect c = {out, capacity, 0, a->filter};
+    struct cn_app *a = ctx; struct { struct du_file_entry *out; unsigned capacity, count; } c = {out, capacity, 0};
     int r = a->fs->list(a->fs->ctx, path, collect_entry, &c);
     *count = c.count;
     return r;
 }
+/* The shared Open/Save As dialog: the type filter, the default extension, the overwrite
+ * prompt and the "file not found" message are the toolkit's (docs/design/common-dialogs.md). */
+static const struct du_file_filter file_types[] = {{"Text Documents (*.txt)", "*.txt"}, {"All Files (*.*)", "*.*"}};
 static void file_dialog(struct cn_app *a, int save, const char *name)
 {
     char folder[CN_PATH]; snprintf(folder, sizeof(folder), "%s", a->dir[0] ? a->dir : "/");
@@ -379,7 +379,10 @@ static void file_dialog(struct cn_app *a, int save, const char *name)
         if (slash == folder) folder[1] = 0; else if (slash) *slash = 0;
         if (save && !name[0]) name = cn_basename(a->path);
     }
-    int r = du_file_dialog(a->ui, save ? D_SAVE : D_OPEN, save, save ? "Save As" : "Open", folder, name, lister, a);
+    struct du_file_options o = {.flags = save ? DU_FILE_SAVE | DU_FILE_OVERWRITE_PROMPT : DU_FILE_FILE_MUST_EXIST,
+                                .title = save ? "Save As" : "Open", .folder = folder, .name = name,
+                                .filters = file_types, .filter_count = 2, .default_ext = "txt", .lister = lister, .lister_ctx = a};
+    int r = du_file_open(a->ui, save ? D_SAVE : D_OPEN, &o);
     if (r) { failure(a, "The folder could not be opened:", folder, r); abandon(a); }
 }
 static const char *folder_of(char *out, size_t size, const char *path)
@@ -397,27 +400,15 @@ static void save_as(struct cn_app *a, const char *target)
     snprintf(a->dir, sizeof(a->dir), "%s", folder);
     proceed(a);
 }
-/* A name chosen in the Open or Save As dialog (the toolkit joins it with the folder). */
+/* A path accepted by the Open or Save As dialog (existence, extension and replace were settled there). */
 static void file_chosen(struct cn_app *a, int save, const char *chosen)
 {
-    char target[CN_PATH], folder[CN_PATH], with[CN_PATH + 8]; struct cn_stat st;
+    char target[CN_PATH], folder[CN_PATH]; struct cn_stat st;
     if (cn_resolve(target, "/", chosen)) { failure(a, "That file name is not valid:", cn_basename(chosen), EINVAL); abandon(a); return; }
     folder_of(folder, sizeof(folder), target);
     snprintf(a->dir, sizeof(a->dir), "%s", folder);
-    const char *base = cn_basename(target);
-    if (cn_has_wildcard(base)) {        /* a pattern in the name box is a filter, as in classic file dialogs */
-        snprintf(a->filter, sizeof(a->filter), "%s", base);
-        file_dialog(a, save, "");
-        return;
-    }
     int r = a->fs->stat(a->fs->ctx, target, &st);
-    int default_extension = !cn_has_extension(base) && !strcmp(a->filter, TEXT_FILTER);
-    strcpy(a->filter, TEXT_FILTER);      /* a typed filter lasts for one dialog */
     if (!save) {
-        if (r == -ENOENT && default_extension) {
-            snprintf(with, sizeof(with), "%s.txt", target);
-            if (!cn_resolve(target, "/", with)) r = a->fs->stat(a->fs->ctx, target, &st);
-        }
         if (!r && st.dir) r = -EISDIR;
         if (r) { failure(a, r == -ENOENT ? "The file was not found:" : "The file could not be opened:", cn_basename(target), r); abandon(a); return; }
         r = load_file(a, target);
@@ -426,18 +417,7 @@ static void file_chosen(struct cn_app *a, int save, const char *chosen)
         a->after = CN_AFTER_NONE;
         return;
     }
-    if (default_extension) {
-        snprintf(with, sizeof(with), "%s.txt", target);
-        if (!cn_resolve(target, "/", with)) r = a->fs->stat(a->fs->ctx, target, &st);
-    }
     if (!r && st.dir) { failure(a, "That name is a folder:", cn_basename(target), EISDIR); abandon(a); return; }
-    if (!r) { /* the target exists: ask before replacing it */
-        char shown[40]; shorten(shown, sizeof(shown), cn_basename(target), 36);
-        snprintf(a->pending, sizeof(a->pending), "%s", target);
-        box(a, D_REPLACE, "Save As", DU_DLG_ICON_WARNING, yes_no, 2, 1, 1,
-            "%s already exists.\n\nDo you want to replace it?", shown);
-        return;
-    }
     save_as(a, target);
 }
 
@@ -526,11 +506,7 @@ static void dialog_result(struct cn_app *a, int id, int index, const char *text)
         break;
     case D_OPEN: case D_SAVE:
         if (index == 0) file_chosen(a, id == D_SAVE, text);
-        else { strcpy(a->filter, TEXT_FILTER); abandon(a); }
-        break;
-    case D_REPLACE:
-        if (index == 0) save_as(a, a->pending);
-        else file_dialog(a, 1, cn_basename(a->pending));
+        else abandon(a);
         break;
     case D_GOTO: if (index == 0) goto_line(a, text); break;
     case D_FONT: if (index < 2) a->ta.bold = index; break;
@@ -592,7 +568,7 @@ int cn_attach(struct cn_app *a, struct du_ui *u)
 {
     a->ui = u; u->event = cn_event; u->user = a; u->layout = resize_layout;
     if (du_ta_init(&a->ta, CN_LIMIT)) return -ENOMEM;
-    a->crlf = 1; a->show_status = 1; strcpy(a->dir, "/"); strcpy(a->filter, TEXT_FILTER);
+    a->crlf = 1; a->show_status = 1; strcpy(a->dir, "/");
     memcpy(a->file_items, file_template, sizeof(file_template));
     memcpy(a->edit_items, edit_template, sizeof(edit_template));
     memcpy(a->format_items, format_template, sizeof(format_template));

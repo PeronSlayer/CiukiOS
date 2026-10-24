@@ -53,7 +53,44 @@ int du_menu_release(struct du_ui *, int button);
 int du_menu_accelerator(struct du_ui *, unsigned code);
 int du_menu_mnemonic(struct du_ui *, unsigned ch);
 
+/* controls.c (G16) */
+#define DU_TIMER_REPEAT (-0x4650)   /* held up-down arrow or trackbar page click */
+void du_draw_combo(struct du_canvas *, struct du_widget *, int focused, int window_focused);
+int du_combo_key(struct du_ui *, struct du_widget *, unsigned code);
+int du_combo_press(struct du_ui *, struct du_widget *, int button, int x, int y);
+void du_combo_overlay_key(struct du_ui *, unsigned code);
+void du_combo_overlay_motion(struct du_ui *);
+void du_combo_overlay_button(struct du_ui *, int button, int down);
+void du_combo_overlay_wheel(struct du_ui *, int detents);
+void du_draw_trackbar(struct du_canvas *, struct du_widget *, int focused);
+int du_trackbar_key(struct du_ui *, struct du_widget *, unsigned code);
+int du_trackbar_wheel(struct du_ui *, struct du_widget *, int detents);
+int du_trackbar_press(struct du_ui *, struct du_widget *, int button, int x, int y);
+void du_trackbar_motion(struct du_ui *, struct du_widget *, int x, int y);
+void du_trackbar_release(struct du_ui *, struct du_widget *);
+void du_draw_updown(struct du_canvas *, struct du_widget *);
+int du_updown_press(struct du_ui *, struct du_widget *, int button, int x, int y);
+void du_updown_motion(struct du_ui *, struct du_widget *, int x, int y);
+void du_updown_release(struct du_ui *, struct du_widget *);
+int du_updown_buddy_key(struct du_ui *, struct du_widget *edit, unsigned code);
+void du_repeat_tick(struct du_ui *);
+void du_undo_note(struct du_ui *, const struct du_widget *, const char *old_text, size_t old_cursor, size_t old_anchor, int kind);
+void du_tip_hide(struct du_ui *);
+void du_tip_motion(struct du_ui *, struct du_widget *under);
+void du_tip_tick(struct du_ui *);
+uint64_t du_tip_deadline(const struct du_ui *);
+void du_draw_overlays(struct du_ui *);
+void du_overlays_forget(struct du_ui *, const struct du_widget *items, unsigned count);
+
 /* dialog.c */
+/* Run fn(u, w, arg) with the dialog's event capture, as for a control of the dialog. */
+void du_dialog_route(struct du_ui *, void (*fn)(struct du_ui *, struct du_widget *, int), struct du_widget *, int arg);
+struct du_widget *du_dialog_item(struct du_ui *, unsigned index, enum du_kind, int id, const char *text);
+void du_dialog_begin(struct du_ui *, enum du_dialog_kind, int id, const char *title, const char *text);
+void du_dialog_place(struct du_ui *, int w, int h);
+void du_dialog_damage(struct du_ui *);
+int du_dialog_body_y(const struct du_dialog *);
+void du_dialog_finish(struct du_ui *, int index, const char *text);   /* close, then DU_EV_DIALOG */
 void du_draw_dialog(struct du_ui *);
 void du_dialog_key(struct du_ui *, unsigned code);
 void du_dialog_wheel(struct du_ui *, int detents);

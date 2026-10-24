@@ -424,6 +424,16 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 28 | Drop-target highlight (`DROPEFFECT` feedback: the target item drawn selected while it would accept the drop) | the old and new target icon | `dnd_evaluate` (`drop_index`), `icon_repaint` | none | drag and drop |
 | 29 | Taskbar hover during a drag (Windows 98: holding a dragged object over a task button for about a second activates that window) | the restored window (rows 7, 8, 11) | `desk_shell_tick` drag hover | none (covered by the window rows) | drag and drop |
 | 30 | Right-drag menu, Esc and cancelled drags | the menu box (row 13); the image box when the drag ends | `desk_shell_drag_button`, `desk_shell_drag_cancel`, `dnd_finish` | none | drag and drop |
+| 31 | Tooltip shown and hidden (`TTN_SHOW`/`TTN_POP`; G16): after the 500 ms initial delay, on autopop at 5 s, on leave, press, key and wheel | the tip's box only (old and new box when it moves to another tool) | libdeskui `controls.c` `du_tip_motion`/`du_tip_tick`/`draw_tip` (client surface, drawn after dialogs) | none | toolkit (`common_dialogs_test.c` `tooltips`) |
+| 32 | Combo box list opened, highlighted, scrolled and closed (`CB_SHOWDROPDOWN`; G16) | the list box (above or below the combo), the combo itself | `controls.c` `du_combo_drop`, `draw_combo_list` (overlay, drawn after dialogs) | none | toolkit (`combo_box`) |
+| 33 | Held up-down arrow and trackbar page repeat (`WM_TIMER` of the control; G16) | the control's box, and the buddy edit's box | `controls.c` `du_repeat_tick`, `updown_step`, `tb_set` | none | toolkit (`up_down`, `track_bar`) |
+| 34 | Confirmation, message and new-folder panel of the Open/Save As dialog (Windows shows a message box over the dialog; G16) | the dialog's box | `dialog.c` `sub_open`/`sub_close`/`file_draw` | none | toolkit (`file_dialog`) |
+| 35 | Color dialog widened by "Define Custom Colors >>" (the dialog grows and is re-centred; G16) | old and new dialog boxes with their shadow | `commdlg.c` `color_resize` (`du_dialog_place`) | none | toolkit (`color_dialog`) |
+
+Rows 31-35 (G16) happen inside one client's own surface, so `window_model_test.c`
+is not their harness: the toolkit harness (`common_dialogs_test.c`, run by
+`test_deskui.py`) compares the partially repainted surface with a full redraw
+after each of these transients (`equivalent()`).
 
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with

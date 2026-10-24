@@ -61,7 +61,12 @@ enum desk_v3_opcode {
     DESK_V3_ACTIVATE, DESK_V3_LEASE_EVENT, DESK_V3_RELATIVE_EVENT,
     DESK_V3_CRASH, DESK_V3_RESTART, DESK_V3_POINTER_STATE,
     DESK_V3_WINDOW_ORDER, DESK_V3_WIN32_HWND,
-    DESK_V3_PRESENT /* 16-byte damage; RESULT after frame, immediate if covered/identical */
+    DESK_V3_PRESENT, /* 16-byte damage; RESULT after frame, immediate if covered/identical */
+    /* G16 SOUND (MessageBeep): client to desktop, 4 bytes: the toolkit sound
+     * event (apps/desktop/sounds.h, below SOUND_EVENTS) the desktop plays through
+     * its system-sound scheme (mute, volume and DOS-window rules apply). There is
+     * no reply: like DAMAGE it only needs the window tuple of an open window. */
+    DESK_V3_SOUND
 };
 #define DESK_RESIZABLE 1u
 #define DESK_CONFIGURE_COMMITTED 1u

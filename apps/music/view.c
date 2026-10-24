@@ -161,10 +161,20 @@ void music_event(struct du_ui *u, const struct du_event *e, void *ctx)
     } else if (e->type==DU_EV_ACTIVATE) {
         switch (e->id) {
         case M_OPEN: case M_ADD:
-            du_file_dialog(u,e->id==M_OPEN ? M_D_OPEN : M_D_ADD,0,e->id==M_OPEN ? "Open Music or Playlist" : "Add Music or Playlist",
-                           "/Documents/Music","",du_posix_lister,NULL); break;
+            {
+                static const struct du_file_filter types[]={{"Music and Playlists (*.wav;*.mp3;*.ogg;*.m3u)","*.wav;*.mp3;*.ogg;*.m3u"},{"All Files (*.*)","*.*"}};
+                struct du_file_options o={.flags=DU_FILE_FILE_MUST_EXIST,.title=e->id==M_OPEN ? "Open Music or Playlist" : "Add Music or Playlist",
+                    .folder="/Documents/Music",.name="",.filters=types,.filter_count=2};
+                du_file_open(u,e->id==M_OPEN ? M_D_OPEN : M_D_ADD,&o);
+            } break;
         case M_FOLDER: du_input_box(u,M_D_FOLDER,"Add Folder","Folder path (including subfolders):","/Documents/Music"); break;
-        case M_SAVE: du_file_dialog(u,M_D_SAVE,1,"Save Playlist","/Documents/Music","playlist.m3u",du_posix_lister,NULL); break;
+        case M_SAVE:
+            {
+                static const struct du_file_filter types[]={{"Playlists (*.m3u)","*.m3u"},{"All Files (*.*)","*.*"}};
+                struct du_file_options o={.flags=DU_FILE_SAVE|DU_FILE_OVERWRITE_PROMPT,.title="Save Playlist",.folder="/Documents/Music",
+                    .name="playlist.m3u",.filters=types,.filter_count=2,.default_ext="m3u"};
+                du_file_open(u,M_D_SAVE,&o);
+            } break;
         case M_CLEAR: send(a,MUSIC_CLEAR,NULL,0); break;
         case M_EXIT: if (a->backend->quit) a->backend->quit(a->backend->ctx); break;
         case M_PLAY: send(a,MUSIC_PLAY,NULL,0); break;

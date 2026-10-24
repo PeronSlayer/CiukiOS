@@ -20,7 +20,7 @@ class RegeditTests(unittest.TestCase):
             env = dict(os.environ, TMPDIR=str(work), ASAN_OPTIONS="detect_leaks=0")
             sources = [ROOT / "tests/host/desktop/regedit_test.c", ROOT / "apps/regedit/app.c",
                        *sorted((ROOT / "sdk/libreg").glob("*.c")),
-                       *(ROOT / "apps/libdeskui" / (s + ".c") for s in ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map")),
+                       *(ROOT / "apps/libdeskui" / (s + ".c") for s in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map")),
                        ROOT / "apps/desktop/compositor.c", ROOT / "apps/desktop/theme.c"]
             binary = work / "editor"
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-Wno-macro-redefined",

@@ -21,8 +21,12 @@ int ciuki_devctl(int, uint32_t, void *, uint32_t);
 #define LINE_H 15
 #define TAB_X 84
 
-enum { ID_BUTTON = -1000, ID_UP = -2000, ID_LIST = -3000, ID_NAME = -4000, ID_FOLDER = -5000, ID_EDIT = -6000, ID_BAR = -7000, ID_PLACES = -8000 };
-enum { F_ACCEPT, F_CANCEL, F_UP, F_FOLDER, F_LIST, F_NAME, F_LOOK, F_FILE, F_PLACES, F_PLACES_TITLE };
+enum { ID_BUTTON = -1000, ID_UP = -2000, ID_LIST = -3000, ID_NAME = -4000, ID_FOLDER = -5000, ID_EDIT = -6000, ID_BAR = -7000, ID_PLACES = -8000,
+       ID_NEWDIR = -9000, ID_VLIST = -9100, ID_VDETAILS = -9200, ID_TYPE = -9300, ID_SUB_YES = -9400, ID_SUB_NO = -9401, ID_SUB_EDIT = -9402 };
+/* File dialog item slots. F_SUB_* form the overlay panel (confirmation, message, new folder name). */
+enum { F_ACCEPT, F_CANCEL, F_UP, F_FOLDER, F_LIST, F_NAME, F_LOOK, F_FILE, F_PLACES, F_PLACES_TITLE,
+       F_NEWDIR, F_VLIST, F_VDETAILS, F_TYPE, F_TYPE_LABEL, F_SUB_YES, F_SUB_NO, F_SUB_EDIT };
+enum { SUB_NONE, SUB_CONFIRM, SUB_MESSAGE, SUB_NEWDIR };
 #define PLACE_MAX 31
 struct du_dialog_places {
     struct du_item rows[PLACE_MAX];
@@ -199,12 +203,21 @@ static struct du_widget *item(struct du_dialog *d, unsigned i, enum du_kind kind
     return w;
 }
 
+/* Everything a dialog owns, released before it is replaced or closed. */
+static void release(struct du_ui *u)
+{
+    struct du_dialog *d = &u->dialog;
+    du_overlays_forget(u, d->items, DU_DIALOG_ITEMS);
+    places_close(d);
+    free(d->entries); free(d->rows);
+    if (d->free_state) d->free_state(d->state);
+}
+
 static void begin(struct du_ui *u, enum du_dialog_kind kind, int id, const char *title, const char *text)
 {
     struct du_dialog *d = &u->dialog;
     if (d->kind) dialog_damage(u);
-    places_close(d);
-    free(d->entries); free(d->rows);
+    release(u);
     memset(d, 0, sizeof(*d));
     d->kind = kind; d->id = id; d->capture = -1;
     snprintf(d->title, sizeof(d->title), "%s", title ? title : "");
@@ -238,6 +251,15 @@ static void button_row(struct du_dialog *d, unsigned count, int y)
 }
 
 static int body_y(const struct du_dialog *d) { return d->box.y + 3 + TITLE_H; }
+
+/* Shared with commdlg.c. */
+struct du_widget *du_dialog_item(struct du_ui *u, unsigned i, enum du_kind kind, int id, const char *text)
+{ return item(&u->dialog, i, kind, id, text); }
+void du_dialog_begin(struct du_ui *u, enum du_dialog_kind kind, int id, const char *title, const char *text)
+{ begin(u, kind, id, title, text); }
+void du_dialog_place(struct du_ui *u, int w, int h) { place(u, w, h); }
+void du_dialog_damage(struct du_ui *u) { dialog_damage(u); }
+int du_dialog_body_y(const struct du_dialog *d) { return body_y(d); }
 
 void du_message(struct du_ui *u, int id, const char *title, const char *text, int icon,
                 const char *const *buttons, unsigned count, int def, int cancel)
@@ -318,6 +340,13 @@ void du_progress(struct du_ui *u, int id, const char *title, const char *text, u
 }
 
 /* ---- file dialogs ---- */
+/* Truncating copy: names longer than the field are cut, never refused. */
+static void copy_str(char *dst, size_t size, const char *src)
+{
+    size_t n = strlen(src);
+    if (n >= size) n = size - 1;
+    memcpy(dst, src, n); dst[n] = 0;
+}
 static unsigned fold(unsigned c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
 static int name_cmp(const struct du_file_entry *a, const struct du_file_entry *b)
 {
@@ -347,9 +376,115 @@ int du_posix_lister(void *ctx, const char *path, struct du_file_entry *out, unsi
     return 0;
 }
 
+static int posix_mkdir(void *ctx, const char *path)
+{ (void)ctx; return mkdir(path, 0777) ? -errno : 0; }
+
+/* ---- wildcard patterns (OPENFILENAME filter strings) ---- */
+static int wild(const char *p, const char *pe, const char *s)
+{
+    const char *star = NULL, *mark = NULL;
+    while (*s) {
+        if (p < pe && *p == '*') { star = p++; mark = s; }
+        else if (p < pe && (*p == '?' || fold((unsigned char)*p) == fold((unsigned char)*s))) { p++; s++; }
+        else if (star) { p = star + 1; s = ++mark; }
+        else return 0;
+    }
+    while (p < pe && *p == '*') p++;
+    return p == pe;
+}
+
+int du_pattern_match(const char *patterns, const char *name)
+{
+    if (!patterns || !patterns[0]) return 1;
+    for (const char *p = patterns; *p;) {
+        while (*p == ' ' || *p == ';') p++;
+        const char *end = p; while (*end && *end != ';') end++;
+        const char *trim = end; while (trim > p && trim[-1] == ' ') trim--;
+        if (trim > p && (trim - p == 3 && !memcmp(p, "*.*", 3) ? 1 : wild(p, trim, name))) return 1;   /* *.* is every name, with or without a dot */
+        p = end;
+    }
+    return 0;
+}
+
+static const char *base_name(const char *path)
+{ const char *slash = strrchr(path, '/'); return slash ? slash + 1 : path; }
+static int has_extension(const char *name) { return strrchr(base_name(name), '.') != NULL; }
+
+#define FILTER_MAX 12
+struct file_state {
+    unsigned flags;
+    char default_ext[4];
+    struct { char label[72], pattern[96]; } filters[FILTER_MAX];
+    unsigned filter_count;
+    int filter;
+    struct du_item type_rows[FILTER_MAX];
+    char typed[96];                        /* a pattern typed in the name box: the filter until the folder or type changes */
+    unsigned map[DU_FILE_ENTRIES], shown;  /* list row -> entry */
+    char size_text[DU_FILE_ENTRIES][24], kind_text[DU_FILE_ENTRIES][16];
+    du_mkdir_fn make_dir; void *make_dir_ctx;
+    char pending[DU_TEXT_MAX];             /* the path accepted (or being confirmed) */
+    char sub_text[320]; int sub_icon;
+    int panel_dx, panel_dy, panel_w, panel_h;
+    char title[96];
+};
+#define FILE_STATE(d) ((struct file_state *)(d)->state)
+static int file_event(struct du_ui *, const struct du_event *);
+static int file_key(struct du_ui *, unsigned);
+static int file_press(struct du_ui *, int, int, int);
+static void file_draw(struct du_ui *);
+
+static void file_free(void *state) { free(state); }
+
+static const char *active_pattern(const struct file_state *f)
+{
+    if (f->typed[0]) return f->typed;
+    return f->filter_count && f->filter >= 0 ? f->filters[f->filter].pattern : "*.*";
+}
+
+static void file_columns(struct du_widget *list, int details)
+{
+    list->view = details ? DU_DETAILS : DU_LIST;
+    list->column_count = 3;
+    list->columns[0] = (struct du_column){"Name", list->box.w > 330 ? list->box.w - 200 : 130, 0};
+    list->columns[1] = (struct du_column){"Size", 70, 1};
+    list->columns[2] = (struct du_column){"Type", 90, 0};
+}
+
+static void refilter(struct du_ui *u)
+{
+    struct du_dialog *d = &u->dialog; struct file_state *f = FILE_STATE(d);
+    const char *pattern = active_pattern(f);
+    unsigned n = 0;
+    for (unsigned i = 0; i < d->entry_count; i++) {
+        const struct du_file_entry *e = &d->entries[i];
+        if (!e->directory && !du_pattern_match(pattern, e->name)) continue;
+        f->map[n] = i;
+        struct du_item *row = &d->rows[n];
+        memset(row, 0, sizeof(*row));
+        row->text[0] = e->name;
+        if (e->directory) { snprintf(f->size_text[n], sizeof(f->size_text[n]), "%s", ""); snprintf(f->kind_text[n], sizeof(f->kind_text[n]), "Folder"); }
+        else {
+            uint64_t kb = (e->size + 1023) / 1024;
+            snprintf(f->size_text[n], sizeof(f->size_text[n]), "%llu KB", (unsigned long long)(kb ? kb : (e->size ? 1 : 0)));
+            const char *dot = strrchr(e->name, '.'), *ext = dot && dot[1] ? dot + 1 : NULL;
+            if (ext && strlen(ext) <= 5) {
+                char up[8]; size_t k = 0; for (; ext[k] && k < 5; k++) up[k] = ext[k] >= 'a' && ext[k] <= 'z' ? (char)(ext[k] - 32) : ext[k];
+                up[k] = 0; snprintf(f->kind_text[n], sizeof(f->kind_text[n]), "%s File", up);
+            } else snprintf(f->kind_text[n], sizeof(f->kind_text[n]), "File");
+        }
+        row->text[1] = f->size_text[n]; row->text[2] = f->kind_text[n];
+        row->icon16 = du_icon_argb(du_icon_file(e->name, e->directory, 0), 16);
+        n++;
+    }
+    f->shown = n;
+    struct du_widget *list = &d->items[F_LIST];
+    list->items = d->rows; list->count = n; list->active = 0; list->scroll = list->hscroll = 0;
+    du_invalidate(u, list->box);
+}
+
 static int navigate(struct du_ui *u, const char *path)
 {
-    struct du_dialog *d = &u->dialog;
+    struct du_dialog *d = &u->dialog; struct file_state *f = FILE_STATE(d);
     unsigned count = 0;
     int r = d->lister(d->lister_ctx, path, d->entries, DU_FILE_ENTRIES, &count);
     if (r) return r;
@@ -360,14 +495,9 @@ static int navigate(struct du_ui *u, const char *path)
         d->entries[j] = key;
     }
     d->entry_count = count;
-    for (unsigned i = 0; i < count; i++) {
-        memset(&d->rows[i], 0, sizeof(d->rows[i]));
-        d->rows[i].text[0] = d->entries[i].name;
-        d->rows[i].icon16 = du_icon_argb(du_icon_file(d->entries[i].name, d->entries[i].directory, 0), 16);
-    }
+    if (strcmp(d->folder, path)) f->typed[0] = 0;
     snprintf(d->folder, sizeof(d->folder), "%s", path);
-    struct du_widget *list = &d->items[F_LIST];
-    list->items = d->rows; list->count = count; list->active = 0; list->scroll = list->hscroll = 0;
+    refilter(u);
     du_set_text(&d->items[F_FOLDER], d->folder);
     places_select(d);
     dialog_damage(u);
@@ -380,41 +510,89 @@ static void join(char *out, const char *folder, const char *name)
     else snprintf(out, DU_TEXT_MAX, "%s%s%s", folder, folder[0] && folder[strlen(folder) - 1] == '/' ? "" : "/", name);
 }
 
-int du_file_dialog(struct du_ui *u, int id, int save, const char *title, const char *folder,
-                   const char *name, du_lister lister, void *ctx)
+int du_file_open(struct du_ui *u, int id, const struct du_file_options *o)
 {
-    begin(u, save ? DU_DLG_SAVE : DU_DLG_OPEN, id, title ? title : save ? "Save As" : "Open", "");
+    int save = (o->flags & DU_FILE_SAVE) != 0;
+    const char *title = o->title ? o->title : save ? "Save As" : "Open";
+    begin(u, save ? DU_DLG_SAVE : DU_DLG_OPEN, id, title, "");
     struct du_dialog *d = &u->dialog;
-    d->lister = lister ? lister : du_posix_lister; d->lister_ctx = ctx;
+    d->lister = o->lister ? o->lister : du_posix_lister; d->lister_ctx = o->lister_ctx;
     d->entries = calloc(DU_FILE_ENTRIES, sizeof(*d->entries));
     d->rows = calloc(DU_FILE_ENTRIES, sizeof(*d->rows));
-    d->places=calloc(2,sizeof(*d->places)); /* published list + poll scratch */
-    if (d->places) d->places->fd=-1;
-    if (!d->entries || !d->rows || !d->places) { places_close(d); free(d->entries); free(d->rows); memset(d, 0, sizeof(*d)); return -ENOMEM; }
+    d->places = calloc(2, sizeof(*d->places)); /* published list + poll scratch */
+    struct file_state *f = calloc(1, sizeof(*f));
+    if (d->places) d->places->fd = -1;
+    if (!d->entries || !d->rows || !d->places || !f) { free(f); release(u); memset(d, 0, sizeof(*d)); d->capture = -1; return -ENOMEM; }
+    d->state = f; d->free_state = file_free;
+    f->flags = o->flags; f->make_dir = o->make_dir ? o->make_dir : posix_mkdir; f->make_dir_ctx = o->make_dir ? o->make_dir_ctx : NULL;
+    snprintf(f->title, sizeof(f->title), "%s", title);
+    const char *ext = o->default_ext;
+    while (ext && *ext == '.') ext++;
+    for (size_t n = 0; ext && n < 3 && ext[n]; n++) f->default_ext[n] = ext[n];   /* only the first three characters, as OPENFILENAME */
+    for (unsigned i = 0; i < o->filter_count && i < FILTER_MAX; i++) {
+        snprintf(f->filters[i].label, sizeof(f->filters[i].label), "%s", o->filters[i].label ? o->filters[i].label : "");
+        snprintf(f->filters[i].pattern, sizeof(f->filters[i].pattern), "%s", o->filters[i].pattern ? o->filters[i].pattern : "*.*");
+        f->filter_count++;
+    }
+    if (!f->filter_count) {
+        snprintf(f->filters[0].label, sizeof(f->filters[0].label), "All Files (*.*)"); snprintf(f->filters[0].pattern, sizeof(f->filters[0].pattern), "*.*");
+        f->filter_count = 1;
+    }
+    f->filter = o->filter_index < f->filter_count ? (int)o->filter_index : 0;
+    d->result = f->filter;
+    for (unsigned i = 0; i < f->filter_count; i++) f->type_rows[i].text[0] = f->filters[i].label;
     d->buttons = 2; d->cancel = 1; d->focus = F_NAME;
-    place(u, 540, 360);
+    d->on_event = file_event; d->on_key = file_key; d->on_press = file_press; d->on_draw = file_draw; d->overlay = F_SUB_YES;
+    place(u, 540, 392);
     struct du_rect b = d->box; int y = body_y(d) + 10, right = b.x + b.w - 14;
-    item(d, F_ACCEPT, DU_BUTTON, ID_BUTTON, save ? "&Save" : "&Open")->box = (struct du_rect){right - BTN_W, b.y + b.h - 3 - 10 - 2 * BTN_H - 6, BTN_W, BTN_H};
-    item(d, F_CANCEL, DU_BUTTON, ID_BUTTON - 1, "Cancel")->box = (struct du_rect){right - BTN_W, b.y + b.h - 3 - 10 - BTN_H, BTN_W, BTN_H};
-    item(d, F_UP, DU_BUTTON, ID_UP, "Up")->box = (struct du_rect){right - 40, y, 40, 22};
-    item(d, F_FOLDER, DU_EDIT, ID_FOLDER, folder)->box = (struct du_rect){b.x + 80, y, right - 46 - b.x - 80, 22};
+    int row2 = b.y + b.h - 3 - 10 - BTN_H, row1 = row2 - BTN_H - 6;
+    item(d, F_ACCEPT, DU_BUTTON, ID_BUTTON, save ? "&Save" : "&Open")->box = (struct du_rect){right - BTN_W, row1, BTN_W, BTN_H};
+    item(d, F_CANCEL, DU_BUTTON, ID_BUTTON - 1, "Cancel")->box = (struct du_rect){right - BTN_W, row2, BTN_W, BTN_H};
+    /* Toolbar row: Look in, folder, Up, New Folder, List, Details. */
+    int x = right;
+    x -= 56; item(d, F_VDETAILS, DU_BUTTON, ID_VDETAILS, "D&etails")->box = (struct du_rect){x, y, 56, 22}; x -= 4;
+    x -= 40; item(d, F_VLIST, DU_BUTTON, ID_VLIST, "&List")->box = (struct du_rect){x, y, 40, 22}; x -= 4;
+    int hide_new = (o->flags & DU_FILE_NO_NEW_FOLDER) != 0;
+    x -= 80; item(d, F_NEWDIR, DU_BUTTON, ID_NEWDIR, "&New Folder")->box = (struct du_rect){x, y, 80, 22}; x -= 4;
+    d->items[F_NEWDIR].hidden = (uint8_t)hide_new;
+    x -= 40; item(d, F_UP, DU_BUTTON, ID_UP, "Up")->box = (struct du_rect){x, y, 40, 22}; x -= 4;
+    int folder_w = x - (b.x + 80); if (folder_w < 40) folder_w = 40;
+    item(d, F_FOLDER, DU_EDIT, ID_FOLDER, o->folder)->box = (struct du_rect){b.x + 80, y, folder_w, 22};
     d->items[F_FOLDER].icon = du_icon_argb(du_icon_name("type:folder"), 16);
+    du_set_tip(&d->items[F_UP], "Up One Level"); du_set_tip(&d->items[F_NEWDIR], "Create New Folder");
+    du_set_tip(&d->items[F_VLIST], "List"); du_set_tip(&d->items[F_VDETAILS], "Details");
     struct du_widget *list = item(d, F_LIST, DU_LISTVIEW, ID_LIST, "");
     list->view = DU_LIST; list->inactive_selection = 1;
-    int pane=b.w>=460 ? 150 : 120;
-    list->box = (struct du_rect){b.x + 14 + pane + 8, y + 30, b.w - 36 - pane, d->items[F_ACCEPT].box.y - 10 - (y + 30)};
-    struct du_widget *places=item(d,F_PLACES,DU_TREE,ID_PLACES,"");
-    places->inactive_selection=1;
-    places->box=(struct du_rect){b.x+14,y+48,pane,list->box.h-18};
-    item(d,F_PLACES_TITLE,DU_HEADER,0,"Places")->box=(struct du_rect){b.x+14,y+30,pane,18};
-    item(d, F_NAME, DU_EDIT, ID_NAME, name)->box = (struct du_rect){b.x + 80, d->items[F_ACCEPT].box.y, right - BTN_W - 10 - b.x - 80, 22};
+    int pane = b.w >= 460 ? 150 : 120;
+    list->box = (struct du_rect){b.x + 14 + pane + 8, y + 30, b.w - 36 - pane, row1 - 10 - (y + 30)};
+    file_columns(list, 0); list->view = DU_LIST;
+    struct du_widget *places = item(d, F_PLACES, DU_TREE, ID_PLACES, "");
+    places->inactive_selection = 1;
+    places->box = (struct du_rect){b.x + 14, y + 48, pane, list->box.h - 18};
+    item(d, F_PLACES_TITLE, DU_HEADER, 0, "Places")->box = (struct du_rect){b.x + 14, y + 30, pane, 18};
+    item(d, F_NAME, DU_EDIT, ID_NAME, o->name)->box = (struct du_rect){b.x + 94, row1, right - BTN_W - 10 - (b.x + 94), 22};
     d->items[F_NAME].anchor = 0;
     item(d, F_LOOK, DU_LABEL, 0, "Look &in:")->box = (struct du_rect){b.x + 14, y, 64, 22};
-    item(d, F_FILE, DU_LABEL, 0, "File &name:")->box = (struct du_rect){b.x + 14, d->items[F_ACCEPT].box.y, 64, 22};
-    int r = navigate(u, folder && folder[0] ? folder : "/");
+    item(d, F_FILE, DU_LABEL, 0, "File &name:")->box = (struct du_rect){b.x + 14, row1, 78, 22};
+    item(d, F_TYPE_LABEL, DU_LABEL, 0, "Files of &type:")->box = (struct du_rect){b.x + 14, row2, 78, 22};
+    struct du_widget *type = item(d, F_TYPE, DU_COMBO, ID_TYPE, "");
+    type->box = (struct du_rect){b.x + 94, row2, right - BTN_W - 10 - (b.x + 94), 22};
+    du_combo_set(type, f->type_rows, f->filter_count, f->filter);
+    item(d, F_SUB_YES, DU_BUTTON, ID_SUB_YES, "&Yes")->hidden = 1;
+    item(d, F_SUB_NO, DU_BUTTON, ID_SUB_NO, "&No")->hidden = 1;
+    item(d, F_SUB_EDIT, DU_EDIT, ID_SUB_EDIT, "")->hidden = 1;
+    int r = navigate(u, o->folder && o->folder[0] ? o->folder : "/");
     if (r && navigate(u, "/")) { du_dialog_close(u); return r; }
     du_dialog_tick(u);
     return 0;
+}
+
+int du_file_dialog(struct du_ui *u, int id, int save, const char *title, const char *folder,
+                   const char *name, du_lister lister, void *ctx)
+{
+    struct du_file_options o = {.flags = save ? DU_FILE_SAVE | DU_FILE_OVERWRITE_PROMPT : 0,
+                                .title = title, .folder = folder, .name = name, .lister = lister, .lister_ctx = ctx};
+    return du_file_open(u, id, &o);
 }
 
 void du_property_sheet(struct du_ui *u, int id, const char *title, int width, int height,
@@ -453,8 +631,7 @@ void du_dialog_close(struct du_ui *u)
 {
     if (u->dialog.kind) dialog_damage(u);
     struct du_dialog *d = &u->dialog;
-    places_close(d);
-    free(d->entries); free(d->rows);
+    release(u);
     memset(d,0,sizeof(*d)); d->capture=-1;
     if (u->focus>=0 && (unsigned)u->focus<u->count) du_invalidate(u,u->widgets[u->focus].box);
 }
@@ -465,10 +642,21 @@ static void finish(struct du_ui *u, int index)
     if (d->accept && d->accept(u, index, d->accept_ctx)) { dialog_damage(u); return; }
     char text[DU_TEXT_MAX] = "";
     if (d->kind == DU_DLG_INPUT) snprintf(text, sizeof(text), "%s", d->items[2].text);
-    if ((d->kind == DU_DLG_OPEN || d->kind == DU_DLG_SAVE) && index == 0) join(text, d->folder, d->items[F_NAME].text);
-    int id = d->id;
+    if ((d->kind == DU_DLG_OPEN || d->kind == DU_DLG_SAVE) && index == 0) {
+        struct file_state *f = d->state;
+        if (f && f->pending[0]) snprintf(text, sizeof(text), "%s", f->pending);
+        else join(text, d->folder, d->items[F_NAME].text);
+    }
+    int id = d->id; unsigned key = (unsigned)d->result;
     du_dialog_close(u);
-    du_emit(u, (struct du_event){.type = DU_EV_DIALOG, .id = id, .index = index, .text = text});
+    du_emit(u, (struct du_event){.type = DU_EV_DIALOG, .id = id, .index = index, .key = key, .text = text});
+}
+
+void du_dialog_finish(struct du_ui *u, int index, const char *text)
+{
+    int id = u->dialog.id; unsigned key = (unsigned)u->dialog.result;
+    du_dialog_close(u);
+    du_emit(u, (struct du_event){.type = DU_EV_DIALOG, .id = id, .index = index, .key = key, .text = text});
 }
 
 static void parent_folder(struct du_ui *u)
@@ -480,24 +668,198 @@ static void parent_folder(struct du_ui *u)
     navigate(u, path);
 }
 
-static void accept_file(struct du_ui *u)
+/* ---- file dialog: name validation, confirmations, new folder ---- */
+/* Collapse "." and ".." components and repeated slashes of an absolute path. */
+static void normalize(char *path)
+{
+    char out[DU_TEXT_MAX]; size_t n = 1; out[0] = '/'; out[1] = 0;
+    for (const char *p = path; *p;) {
+        while (*p == '/') p++;
+        const char *seg = p; while (*p && *p != '/') p++;
+        size_t len = (size_t)(p - seg);
+        if (!len || (len == 1 && seg[0] == '.')) continue;
+        if (len == 2 && seg[0] == '.' && seg[1] == '.') {
+            while (n > 1 && out[n - 1] != '/') n--;
+            if (n > 1) n--;
+            out[n] = 0; if (!n) { out[0] = '/'; out[1] = 0; n = 1; }
+            continue;
+        }
+        if (n + len + 2 >= sizeof(out)) return;
+        if (n > 1) out[n++] = '/';
+        memcpy(out + n, seg, len); n += len; out[n] = 0;
+    }
+    snprintf(path, DU_TEXT_MAX, "%s", out);
+}
+static int ci_equal(const char *a, const char *b)
+{
+    while (*a && fold((unsigned char)*a) == fold((unsigned char)*b)) { a++; b++; }
+    return !*a && !*b;
+}
+static int entry_index(const struct du_dialog *d, const char *name)
+{
+    for (unsigned i = 0; i < d->entry_count; i++) if (ci_equal(d->entries[i].name, name)) return (int)i;
+    return -1;
+}
+
+static void sub_close(struct du_ui *u)
 {
     struct du_dialog *d = &u->dialog;
-    const char *name = d->items[F_NAME].text;
-    if (!name[0]) return;
-    for (unsigned i = 0; i < d->entry_count; i++)
-        if (d->entries[i].directory && !strcmp(d->entries[i].name, name)) {
-            char path[DU_TEXT_MAX]; join(path, d->folder, name);
-            if (!navigate(u, path)) du_set_text(&d->items[F_NAME], "");
-            return;
+    d->sub = SUB_NONE;
+    d->items[F_SUB_YES].hidden = d->items[F_SUB_NO].hidden = d->items[F_SUB_EDIT].hidden = 1;
+    d->focus = F_NAME; dialog_damage(u);
+}
+
+static void sub_open(struct du_ui *u, int kind, const char *text, int icon, const char *edit)
+{
+    struct du_dialog *d = &u->dialog; struct file_state *f = FILE_STATE(d);
+    d->sub = kind; f->sub_icon = icon;
+    snprintf(f->sub_text, sizeof(f->sub_text), "%s", text);
+    int pw = d->box.w - 40; if (pw > 380) pw = 380; if (pw < 160) pw = d->box.w - 8;
+    struct du_rect measure = {0, 0, pw - 28 - (icon ? 46 : 0), 4000};
+    int th = du_text_wrap(NULL, measure, f->sub_text, 0) * (desk_font_line(desk_theme->font_ui) + 1);
+    if (icon && th < 32) th = 32;
+    int ph = 16 + th + (kind == SUB_NEWDIR ? 8 + 22 : 0) + 14 + BTN_H + 12;
+    f->panel_w = pw; f->panel_h = ph; f->panel_dx = (d->box.w - pw) / 2; f->panel_dy = (d->box.h - ph) / 2;
+    struct du_rect pr = {d->box.x + f->panel_dx, d->box.y + f->panel_dy, pw, ph};
+    int by = pr.y + ph - BTN_H - 12;
+    du_set_text(&d->items[F_SUB_YES], kind == SUB_CONFIRM ? "&Yes" : "&OK");
+    du_set_text(&d->items[F_SUB_NO], kind == SUB_CONFIRM ? "&No" : "Cancel");
+    if (kind == SUB_MESSAGE) d->items[F_SUB_YES].box = (struct du_rect){pr.x + (pw - BTN_W) / 2, by, BTN_W, BTN_H};
+    else {
+        d->items[F_SUB_NO].box = (struct du_rect){pr.x + pw - 14 - BTN_W, by, BTN_W, BTN_H};
+        d->items[F_SUB_YES].box = (struct du_rect){pr.x + pw - 14 - 2 * BTN_W - 6, by, BTN_W, BTN_H};
+    }
+    d->items[F_SUB_YES].hidden = 0; d->items[F_SUB_NO].hidden = kind == SUB_MESSAGE;
+    d->items[F_SUB_EDIT].hidden = kind != SUB_NEWDIR;
+    if (kind == SUB_NEWDIR) {
+        du_set_text(&d->items[F_SUB_EDIT], edit ? edit : "");
+        d->items[F_SUB_EDIT].anchor = 0;
+        d->items[F_SUB_EDIT].box = (struct du_rect){pr.x + 14, pr.y + 16 + th + 8, pw - 28, 22};
+    }
+    d->focus = kind == SUB_CONFIRM ? F_SUB_NO : kind == SUB_NEWDIR ? F_SUB_EDIT : F_SUB_YES;
+    if (u->sound && icon) u->sound(u->sound_ctx, du_message_sound(icon));
+    dialog_damage(u);
+}
+
+static void sub_message(struct du_ui *u, int icon, const char *fmt, const char *name)
+{
+    char text[320]; snprintf(text, sizeof(text), fmt, name);
+    sub_open(u, SUB_MESSAGE, text, icon, NULL);
+}
+
+/* Look a path up: 1 file, 2 folder, 0 absent, -errno when its folder cannot be listed. */
+static int lookup(struct du_ui *u, const char *path)
+{
+    struct du_dialog *d = &u->dialog;
+    const char *base = base_name(path);
+    char parent[DU_TEXT_MAX]; size_t n = (size_t)(base - path);
+    if (n > 1) n--;
+    snprintf(parent, sizeof(parent), "%.*s", (int)n, path);
+    if (!parent[0]) strcpy(parent, "/");
+    const struct du_file_entry *list = d->entries; unsigned count = d->entry_count;
+    struct du_file_entry *scratch = NULL;
+    if (strcmp(parent, d->folder)) {
+        scratch = calloc(DU_FILE_ENTRIES, sizeof(*scratch));
+        if (!scratch) return -ENOMEM;
+        unsigned c = 0; int r = d->lister(d->lister_ctx, parent, scratch, DU_FILE_ENTRIES, &c);
+        if (r) { free(scratch); return r < 0 ? r : -r; }
+        list = scratch; count = c;
+    }
+    int found = 0;
+    for (unsigned i = 0; i < count && !found; i++) if (ci_equal(list[i].name, base)) found = list[i].directory ? 2 : 1;
+    free(scratch);
+    return found;
+}
+
+static void accept_file(struct du_ui *u)
+{
+    struct du_dialog *d = &u->dialog; struct file_state *f = FILE_STATE(d);
+    int save = d->kind == DU_DLG_SAVE;
+    char name[DU_TEXT_MAX]; snprintf(name, sizeof(name), "%s", d->items[F_NAME].text);
+    char *start = name; while (*start == ' ') start++;
+    size_t len = strlen(start); while (len && start[len - 1] == ' ') start[--len] = 0;
+    if (!*start) return;
+    /* A name with wildcards is a filter, not a file (classic file dialogs). */
+    if (strpbrk(start, "*?")) {
+        copy_str(f->typed, sizeof(f->typed), start);
+        refilter(u); du_set_text(&d->items[F_NAME], ""); return;
+    }
+    for (const char *c = start; *c; c++)
+        if (*c == '"' || *c == '<' || *c == '>' || *c == '|' || *c == ':' || (unsigned char)*c < 32) {
+            sub_message(u, DU_DLG_ICON_WARNING, "%s\nThe file name is not valid.", start); return;
         }
-    if (name[0] == '/') {
-        unsigned count = 0;
-        /* An absolute folder path navigates; anything else is a file name. */
-        if (!d->lister(d->lister_ctx, name, d->entries, DU_FILE_ENTRIES, &count)) { navigate(u, name); du_set_text(&d->items[F_NAME], ""); return; }
-        navigate(u, d->folder);
+    char path[DU_TEXT_MAX]; join(path, d->folder, start); normalize(path);
+    int kind = lookup(u, path);
+    if (kind == 2) { if (!navigate(u, path)) du_set_text(&d->items[F_NAME], ""); return; }
+    if (kind < 0) { sub_message(u, DU_DLG_ICON_WARNING, "%s\nThe path does not exist.\nPlease verify that the path is correct and try again.", start); return; }
+    /* The default extension is appended when the user types none; a name that
+     * exists exactly as typed is opened as it is. */
+    if (f->default_ext[0] && !has_extension(start) && (save || !kind)) {
+        char with[DU_TEXT_MAX];
+        if (snprintf(with, sizeof(with), "%s.%s", path, f->default_ext) < (int)sizeof(with)) {
+            int k = lookup(u, with);
+            if (k == 2) { sub_message(u, DU_DLG_ICON_WARNING, "%s\nThat name is a folder.", start); return; }
+            if (k >= 0) { snprintf(path, sizeof(path), "%s", with); kind = k; }
+        }
+    }
+    const char *shown = base_name(path);
+    if (!kind && !save && (f->flags & DU_FILE_FILE_MUST_EXIST)) {
+        sub_message(u, DU_DLG_ICON_WARNING, "%.200s\nFile not found.\nPlease verify the correct file name was given.", shown); return;
+    }
+    snprintf(f->pending, sizeof(f->pending), "%s", path);
+    d->result = f->filter;
+    if (kind == 1 && save && (f->flags & DU_FILE_OVERWRITE_PROMPT)) {
+        char text[320]; snprintf(text, sizeof(text), "%.200s already exists.\nDo you want to replace it?", shown);
+        sub_open(u, SUB_CONFIRM, text, DU_DLG_ICON_WARNING, NULL);
+        return;
     }
     finish(u, 0);
+}
+
+static void file_newdir(struct du_ui *u)
+{
+    struct du_dialog *d = &u->dialog;
+    char name[64] = "New Folder";
+    for (unsigned n = 2; entry_index(d, name) >= 0 && n < 1000; n++) snprintf(name, sizeof(name), "New Folder (%u)", n);
+    sub_open(u, SUB_NEWDIR, "Name of the new folder:", 0, name);
+}
+
+static void file_newdir_accept(struct du_ui *u)
+{
+    struct du_dialog *d = &u->dialog; struct file_state *f = FILE_STATE(d);
+    char name[DU_TEXT_MAX]; snprintf(name, sizeof(name), "%s", d->items[F_SUB_EDIT].text);
+    char *start = name; while (*start == ' ') start++;
+    size_t len = strlen(start); while (len && start[len - 1] == ' ') start[--len] = 0;
+    sub_close(u);
+    if (!*start || strpbrk(start, "/\\*?\"<>|") ) { sub_message(u, DU_DLG_ICON_WARNING, "%s\nThe folder name is not valid.", *start ? start : "(empty)"); return; }
+    if (entry_index(d, start) >= 0) { sub_message(u, DU_DLG_ICON_WARNING, "%s\nA file or folder with that name already exists.", start); return; }
+    char path[DU_TEXT_MAX]; join(path, d->folder, start);
+    int r = f->make_dir(f->make_dir_ctx, path);
+    if (r) {
+        char text[320]; snprintf(text, sizeof(text), "The folder could not be created:\n%.100s\n%.100s", start, strerror(r < 0 ? -r : r));
+        sub_open(u, SUB_MESSAGE, text, DU_DLG_ICON_ERROR, NULL); return;
+    }
+    char folder[DU_TEXT_MAX]; snprintf(folder, sizeof(folder), "%s", d->folder);
+    if (navigate(u, folder)) return;
+    struct du_widget *list = &d->items[F_LIST];
+    for (unsigned k = 0; k < f->shown; k++) {
+        d->rows[k].selected = ci_equal(d->entries[f->map[k]].name, start);
+        if (d->rows[k].selected) { list->active = k; du_list_ensure(list, k); }
+    }
+}
+
+static void sub_yes(struct du_ui *u)
+{
+    struct du_dialog *d = &u->dialog;
+    if (d->sub == SUB_CONFIRM) finish(u, 0);
+    else if (d->sub == SUB_NEWDIR) file_newdir_accept(u);
+    else sub_close(u);
+}
+static void sub_no(struct du_ui *u)
+{
+    struct du_dialog *d = &u->dialog;
+    if (d->sub == SUB_CONFIRM) FILE_STATE(d)->pending[0] = 0;
+    sub_close(u);
 }
 
 static void dialog_event(struct du_ui *u, const struct du_event *e, void *arg)
@@ -515,6 +877,7 @@ static void process(struct du_ui *u)
     for (unsigned k = 0; k < n && d->kind; k++) {
         struct du_event *e = &pending[k];
         if (d->sheet && d->changed) d->changed(u, e, d->sheet_ctx);
+        if (d->on_event && d->on_event(u, e)) continue;
         int file = d->kind == DU_DLG_OPEN || d->kind == DU_DLG_SAVE;
         if (e->type == DU_EV_ACTIVATE && e->id <= ID_BUTTON && e->id > ID_BUTTON - 4) {
             int index = ID_BUTTON - e->id;
@@ -524,14 +887,7 @@ static void process(struct du_ui *u)
             if (!navigate(u,d->places->entries[e->index].path)) du_set_text(&d->items[F_NAME],"");
             places_select(d);
         }
-        else if (e->type == DU_EV_SELECT && e->id == ID_LIST && e->index >= 0 && (unsigned)e->index < d->entry_count) {
-            for (unsigned i = 0; i < d->entry_count; i++) d->rows[i].selected = i == (unsigned)e->index;
-            if (!d->entries[e->index].directory) du_set_text(&d->items[F_NAME], d->entries[e->index].name);
-        } else if (e->type == DU_EV_OPEN && e->id == ID_LIST && e->index >= 0 && (unsigned)e->index < d->entry_count) {
-            if (d->entries[e->index].directory) {
-                char path[DU_TEXT_MAX]; join(path, d->folder, d->entries[e->index].name); navigate(u, path);
-            } else { du_set_text(&d->items[F_NAME], d->entries[e->index].name); accept_file(u); }
-        } else if (e->type == DU_EV_COMMIT && e->id == ID_NAME) accept_file(u);
+        else if (e->type == DU_EV_COMMIT && e->id == ID_NAME) accept_file(u);
         else if (e->type == DU_EV_COMMIT && e->id == ID_FOLDER) { if (navigate(u, d->items[F_FOLDER].text)) du_set_text(&d->items[F_FOLDER], d->folder); }
         else if (e->type == DU_EV_COMMIT && e->id == ID_EDIT) finish(u, 0);
         else if (e->type == DU_EV_COMMIT && d->accept) finish(u, 0);
@@ -546,7 +902,108 @@ static void process(struct du_ui *u)
         u->event = saved; u->user = user; process(u); \
     } while (0)
 
-static int focusable(const struct du_widget *w) { return du_focusable(w) || (w->kind == DU_BUTTON && !w->disabled); }
+static int focusable(const struct du_widget *w) { return du_focusable(w) || (w->kind == DU_BUTTON && !w->disabled && !w->hidden); }
+
+void du_dialog_route(struct du_ui *u, void (*fn)(struct du_ui *, struct du_widget *, int), struct du_widget *w, int arg)
+{ DIALOG_CALL(fn(u, w, arg)); }
+
+/* ---- file dialog hooks ---- */
+static int file_event(struct du_ui *u, const struct du_event *e)
+{
+    struct du_dialog *d = &u->dialog; struct file_state *f = FILE_STATE(d);
+    struct du_widget *list = &d->items[F_LIST];
+    if (e->type == DU_EV_ACTIVATE) {
+        if (e->id == ID_SUB_YES) { sub_yes(u); return 1; }
+        if (e->id == ID_SUB_NO) { sub_no(u); return 1; }
+        if (e->id == ID_NEWDIR) { file_newdir(u); return 1; }
+        if (e->id == ID_VLIST || e->id == ID_VDETAILS) {
+            list->view = e->id == ID_VLIST ? DU_LIST : DU_DETAILS; list->scroll = list->hscroll = 0;
+            du_invalidate(u, list->box); return 1;
+        }
+    }
+    if (e->type == DU_EV_COMMIT && e->id == ID_SUB_EDIT) { sub_yes(u); return 1; }
+    if (e->type == DU_EV_CANCEL && e->id == ID_SUB_EDIT) { sub_no(u); return 1; }
+    if (e->type == DU_EV_SELECT && e->id == ID_TYPE) {
+        f->filter = e->index; d->result = e->index; f->typed[0] = 0; refilter(u); return 1;
+    }
+    if ((e->type == DU_EV_SELECT || e->type == DU_EV_OPEN) && e->id == ID_LIST) {
+        if (e->index < 0 || (unsigned)e->index >= f->shown) return 1;
+        const struct du_file_entry *entry = &d->entries[f->map[e->index]];
+        if (e->type == DU_EV_SELECT) {
+            for (unsigned i = 0; i < f->shown; i++) d->rows[i].selected = i == (unsigned)e->index;
+            if (!entry->directory) du_set_text(&d->items[F_NAME], entry->name);
+        } else if (entry->directory) {
+            char path[DU_TEXT_MAX]; join(path, d->folder, entry->name); navigate(u, path);
+        } else { du_set_text(&d->items[F_NAME], entry->name); accept_file(u); }
+        return 1;
+    }
+    return 0;
+}
+
+static int file_key(struct du_ui *u, unsigned code)
+{
+    struct du_dialog *d = &u->dialog;
+    if (!d->sub) return 0;
+    struct du_widget *fw = d->focus >= 0 && (unsigned)d->focus < d->count ? &d->items[d->focus] : NULL;
+    if (code == DU_KEY_ESC) { sub_no(u); return 1; }
+    int two = !d->items[F_SUB_NO].hidden;
+    if (code == DU_KEY_TAB) {
+        static const int order[3] = {F_SUB_EDIT, F_SUB_YES, F_SUB_NO};
+        int at = 0; for (int i = 0; i < 3; i++) if (order[i] == d->focus) at = i;
+        for (int n = 1; n <= 3; n++) {
+            int next = order[(at + (u->modifiers & DU_SHIFT ? 3 - n : n)) % 3];
+            if (!d->items[next].hidden) { d->focus = next; break; }
+        }
+        dialog_damage(u); return 1;
+    }
+    if (fw && fw->kind == DU_EDIT) {
+        if (code == DU_KEY_ENTER) { sub_yes(u); return 1; }
+        int handled = 0; DIALOG_CALL(handled = du_widget_key(u, fw, code)); (void)handled; return 1;
+    }
+    if (code == DU_KEY_ENTER || code == DU_KEY_SPACE) { if (d->focus == F_SUB_NO) sub_no(u); else sub_yes(u); return 1; }
+    if (two && (code == DU_KEY_LEFT || code == DU_KEY_RIGHT || code == DU_KEY_UP || code == DU_KEY_DOWN)) {
+        d->focus = d->focus == F_SUB_YES ? F_SUB_NO : F_SUB_YES; dialog_damage(u); return 1;
+    }
+    unsigned saved = u->modifiers; u->modifiers &= ~DU_ALT;
+    unsigned ch = du_key_char(u, code); u->modifiers = saved;
+    if (ch >= 'A' && ch <= 'Z') ch += 32;
+    if (ch == 'y' || ch == 'o') sub_yes(u); else if (ch == 'n' && two) sub_no(u);
+    return 1;
+}
+
+static int file_press(struct du_ui *u, int button, int x, int y)
+{
+    (void)button;
+    struct du_dialog *d = &u->dialog;
+    if (!d->sub) return 0;
+    for (unsigned i = F_SUB_YES; i <= F_SUB_EDIT; i++)
+        if (!d->items[i].hidden && du_contains(d->items[i].box, x, y)) return 0;
+    return 1;   /* the panel is modal over the dialog */
+}
+
+static void file_draw(struct du_ui *u)
+{
+    struct du_dialog *d = &u->dialog; struct file_state *f = FILE_STATE(d);
+    if (!d->sub) return;
+    struct du_canvas *c = &u->canvas;
+    struct du_rect pr = {d->box.x + f->panel_dx, d->box.y + f->panel_dy, f->panel_w, f->panel_h};
+    du_shadow(c, pr, 4);
+    du_fill(c, pr, DU_FACE); du_edge(c, pr, DU_RAISED);
+    int icon = f->sub_icon, tx = pr.x + 14 + (icon ? 46 : 0);
+    if (icon && du_message_icon_name(icon)) du_icon_draw(c, pr.x + 14, pr.y + 16, du_icon_for(du_message_icon_name(icon), 32), DU_ICON_NORMAL);
+    struct du_rect body = {tx, pr.y + 16, pr.x + pr.w - 14 - tx, pr.h};
+    int lines = du_text_wrap(NULL, body, f->sub_text, 0), th = lines * (desk_font_line(desk_theme->font_ui) + 1);
+    if (icon && th < 32) body.y += (32 - th) / 2;
+    du_text_wrap(c, body, f->sub_text, DU_INK);
+    for (unsigned i = F_SUB_YES; i <= F_SUB_EDIT; i++) {
+        struct du_widget *w = &d->items[i];
+        if (w->hidden) continue;
+        if (w->kind == DU_BUTTON) w->def = d->sub == SUB_CONFIRM ? i == F_SUB_NO : i == F_SUB_YES;
+        struct du_rect old = c->clip; c->clip = du_intersection(old, w->box);
+        du_draw_widget(u, w, d->focus == (int)i && u->focused_window);
+        c->clip = old;
+    }
+}
 
 void du_dialog_wheel(struct du_ui *u, int detents)
 {
@@ -564,6 +1021,7 @@ void du_dialog_key(struct du_ui *u, unsigned code)
 {
     struct du_dialog *d = &u->dialog;
     struct du_widget *f = d->focus >= 0 && (unsigned)d->focus < d->count ? &d->items[d->focus] : NULL;
+    if (d->on_key && d->on_key(u, code)) return;
     if (code == DU_KEY_ESC) { finish(u, d->cancel); return; }
     if (d->sheet && code == DU_KEY_TAB && (u->modifiers & DU_CTRL)) {
         struct du_widget *tabs = &d->items[3];
@@ -581,11 +1039,15 @@ void du_dialog_key(struct du_ui *u, unsigned code)
         }
         dialog_damage(u); return;
     }
-    if (f && (f->kind == DU_EDIT || f->kind == DU_TEXTAREA || f->kind == DU_LISTVIEW || f->kind == DU_TREE || f->kind == DU_TABS)) {
+    if (f && (f->kind == DU_EDIT || f->kind == DU_TEXTAREA || f->kind == DU_LISTVIEW || f->kind == DU_TREE || f->kind == DU_TABS ||
+              f->kind == DU_COMBO || f->kind == DU_TRACKBAR)) {
         int handled = 0; DIALOG_CALL(handled = du_widget_key(u, f, code)); if (handled) return;
     }
     if (f && (f->kind == DU_CHECKBOX || f->kind == DU_RADIO)) {
         int handled = 0; DIALOG_CALL(handled = du_widget_key(u, f, code)); if (handled) return;
+    }
+    if ((code == DU_KEY_ENTER || code == DU_KEY_SPACE) && f && f->kind == DU_BUTTON && (unsigned)d->focus >= d->buttons && f->id != ID_UP) {
+        DIALOG_CALL(du_post(u, DU_EV_ACTIVATE, f->id, 0)); return;   /* a button that is not one of the closing buttons */
     }
     if (code == DU_KEY_ENTER || (code == DU_KEY_SPACE && f && f->kind == DU_BUTTON)) {
         int index = f && f->kind == DU_BUTTON ? (f->id == ID_UP ? -1 : ID_BUTTON - f->id) : 0;
@@ -610,7 +1072,12 @@ void du_dialog_key(struct du_ui *u, unsigned code)
                 if ((d->kind == DU_DLG_OPEN || d->kind == DU_DLG_SAVE) && i == 0) accept_file(u); else finish(u, (int)i);
             } else if (d->sheet && (d->items[i].kind == DU_CHECKBOX || d->items[i].kind == DU_RADIO)) {
                 d->focus=(int)i; DIALOG_CALL(du_widget_key(u,&d->items[i],DU_KEY_SPACE));
-            } else if (d->items[i].kind == DU_LABEL && i + 1 <= d->count) d->focus = i == F_LOOK ? F_FOLDER : F_NAME;
+            } else if (d->items[i].kind == DU_BUTTON) {
+                d->focus = (int)i; DIALOG_CALL(du_post(u, DU_EV_ACTIVATE, d->items[i].id, 0));
+            } else if (d->items[i].kind == DU_LABEL && i + 1 <= d->count) {
+                if (d->kind == DU_DLG_OPEN || d->kind == DU_DLG_SAVE) d->focus = i == F_LOOK ? F_FOLDER : i == F_TYPE_LABEL ? F_TYPE : F_NAME;
+                else for (unsigned j = i + 1; j < d->count; j++) if (focusable(&d->items[j])) { d->focus = (int)j; break; }   /* the control a label names follows it */
+            }
             dialog_damage(u); return;
         }
     }
@@ -631,6 +1098,7 @@ void du_dialog_press(struct du_ui *u, int button)
     if (!du_contains(d->box, x, y)) return;
     if (button == 1 && du_contains(close_box(d), x, y)) { finish(u, d->cancel); return; }
     if (button == 1 && y < body_y(d)) { d->dragging = 1; d->drag_x = x - d->box.x; d->drag_y = y - d->box.y; return; }
+    if (d->on_press && d->on_press(u, button, x, y)) return;
     for (unsigned i = d->count; i > 0; i--) {
         struct du_widget *w = &d->items[i - 1];
         if (w->hidden || !du_contains(w->box, x, y)) continue;
@@ -647,6 +1115,13 @@ void du_dialog_motion(struct du_ui *u)
     struct du_dialog *d = &u->dialog;
     int hot = !d->dragging && du_contains(close_box(d), u->mouse_x, u->mouse_y);
     if (hot != d->close_hot) { d->close_hot = hot; dialog_damage(u); }
+    {   /* tooltips of the control under the pointer */
+        struct du_widget *under = NULL;
+        if (!d->dragging && d->capture < 0)
+            for (unsigned i = d->count; i > 0 && !under; i--)
+                if (!d->items[i - 1].hidden && du_contains(d->items[i - 1].box, u->mouse_x, u->mouse_y)) under = &d->items[i - 1];
+        du_tip_motion(u, under);
+    }
     if (d->dragging) {
         int nx = u->mouse_x - d->drag_x, ny = u->mouse_y - d->drag_y;
         if (nx < -d->box.w + 40) nx = -d->box.w + 40;
@@ -714,11 +1189,12 @@ void du_draw_dialog(struct du_ui *u)
     int focus_button = d->focus >= 0 && (unsigned)d->focus < d->buttons;
     for (unsigned i = 0; i < d->count; i++) {
         struct du_widget *w = &d->items[i];
-        if (w->hidden || (d->sheet && i == 3)) continue;
+        if (w->hidden || (d->sheet && i == 3) || (d->overlay && i >= d->overlay)) continue;
         if (w->kind == DU_BUTTON && i < d->buttons) w->def = focus_button ? (int)i == d->focus : i == 0;
         struct du_rect old = c->clip;
         c->clip = du_intersection(old, w->box);
         du_draw_widget(u, w, d->focus == (int)i && u->focused_window);
         c->clip = old;
     }
+    if (d->on_draw) { struct du_rect keep = c->clip; d->on_draw(u); c->clip = keep; }
 }

@@ -24,7 +24,7 @@ _review_spec = _util.spec_from_file_location("frame_review", ROOT / "tests/host/
 _review = _util.module_from_spec(_review_spec); _review_spec.loader.exec_module(_review)
 
 TOOLKIT = ["apps/libdeskui/draw.c", "apps/libdeskui/widgets.c", "apps/libdeskui/list.c",
-           "apps/libdeskui/menu.c", "apps/libdeskui/dialog.c", "apps/libdeskui/textarea.c", "apps/desktop/compositor.c", "apps/desktop/theme.c",
+           "apps/libdeskui/menu.c", "apps/libdeskui/dialog.c", "apps/libdeskui/controls.c", "apps/libdeskui/commdlg.c", "apps/libdeskui/textarea.c", "apps/desktop/compositor.c", "apps/desktop/theme.c",
            "apps/libdeskui/icons.c", "apps/libdeskui/icon_map.c"]
 GOLDENS = ROOT / "tests/host/desktop/recycle-goldens.json"
 

@@ -30,6 +30,7 @@ TEXTAREA_SCREENS = {
     'ta-plain.xrgb': 'fb9a313f1a54d109e21735aa28049a1cd71d3f632c5255bceef2a07351b99cce',
     'ta-scrolled.xrgb': '33d61b4ba794401e2fbc8ae712df3e6466c836e0a5ef57b569b690de48059021',
 }
+# G16 (2026-10-24): the three Open/Save frames re-pinned for the toolkit file dialog (types, New Folder, List/Details).
 # F4-30 (2026-10-18): reviewed Places in the shared Open/Save dialog;
 # only the dialog frames change.
 APP_SCREENS = {
@@ -43,11 +44,11 @@ APP_SCREENS = {
     'cn-limit.xrgb': '200981da8810de5f08368d9ec8990eb5c544fbb571cd4f8bbd0b001e70bff88d',
     'cn-menu-edit.xrgb': '1e116d6bf0b76ed52d7f28cfd1bfcb01bb61e6685605e46c80f7b1ece428f962',
     'cn-menu-file.xrgb': '8373e57ec17b178ef87538570d77303d42a7265e4afb9aa994e3bd9c3ed58f13',
-    'cn-open-root.xrgb': '31c0813f08d9ded09f97c9a41a39a72a2331c5c008547a70da06e2ef5a8e36e1',
-    'cn-open-tests.xrgb': 'ae632eeb42e0a5184db2ab11e11232564551b5bc43c3b0b987fa0a926d1e1af0',
+    'cn-open-root.xrgb': '85e351265c7644cb358a8bf25c003434648aad002ba48cd481c8ecb691829928',
+    'cn-open-tests.xrgb': 'dddb68d52597d18c37942011073b7cb60fc2a27155ce8161627a2bcdbdec61dd',
     'cn-prompt-changes.xrgb': '1dac23bc0dcb2c31e1361d83e7b411362324f26dae3a7e4f076b07e4a65168a2',
     'cn-replace-bar.xrgb': '95039478d4218b647d6e842cf3c7553e130d8eb2bbcc22a8e8ed7afb2c1da801',
-    'cn-save-page.xrgb': 'de5affaa20dc00ffe5d24ae002e467033140c1aea5a4ad5f284f123a0a7081ed',
+    'cn-save-page.xrgb': '500d52373312276dedf3d7d8e0a5f91719688190d78de9098a73bb1a2a0a2894',
     'cn-saved.xrgb': 'c31ebaddb8dc2b5f791cee0cfc693a942fafa3e1e12902490bb1ceb7198da3a5',
     'cn-scrolled-bars.xrgb': '06804b6ef253b27c12cf0f48b6ab0ff63faa3d073d9b13cde8a9e938be7ab366',
     'cn-status-hidden.xrgb': '7b12865ddbc38c28518557e9b58151831dc6a27b5dd376c1443217dd7b2380ff',
@@ -70,7 +71,7 @@ FLAGS = ["-std=c17", "-D_POSIX_C_SOURCE=200809L", "-O1", "-g", "-Wall", "-Wextra
 INCLUDES = ["-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "apps/ciuknote"), "-I", str(ROOT / "apps/desktop"),
             "-I", str(ROOT / "src/kernel/include")]
 TOOLKIT = ["apps/libdeskui/draw.c", "apps/libdeskui/widgets.c", "apps/libdeskui/list.c", "apps/libdeskui/menu.c",
-           "apps/libdeskui/dialog.c", "apps/libdeskui/textarea.c", "apps/desktop/compositor.c", "apps/desktop/theme.c",
+           "apps/libdeskui/dialog.c", "apps/libdeskui/controls.c", "apps/libdeskui/commdlg.c", "apps/libdeskui/textarea.c", "apps/desktop/compositor.c", "apps/desktop/theme.c",
            "apps/libdeskui/icons.c", "apps/libdeskui/icon_map.c"]
 APP = [*TOOLKIT, "apps/ciuknote/app.c", "apps/ciuknote/doc.c", "tests/host/desktop/ciuknote_test.c"]
 
