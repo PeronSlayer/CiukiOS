@@ -2756,6 +2756,9 @@ LRESULT W32API u32_control_proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
   }
   if (m == WM_GETFONT)
     return (LRESULT)c->font;
+  /* G15: F1 is not a control key; DefWindowProc turns it into WM_HELP for the parent. */
+  if (m == WM_KEYDOWN && wp == VK_F1)
+    return DefWindowProcA(h, m, wp, lp);
   BOOL handled = 0;
   LRESULT r = 0;
   switch (c->kind) {

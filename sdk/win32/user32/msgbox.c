@@ -175,10 +175,24 @@ static intptr_t W32API box_proc(HWND dlg, UINT m, WPARAM wp, LPARAM lp) {
       SetForegroundWindow(dlg);
     return 0;
   }
+  if (m == WM_HELP && b && (b->type & MB_HELP)) {
+    /* F1 in a message box with a Help button behaves like the button. */
+    HWND owner = GetWindow(dlg, 4);
+    if (owner)
+      SendMessageA(owner, WM_HELP, 0, lp);
+    return 1;
+  }
   if (m == WM_COMMAND && b) {
     UINT id = (UINT)(wp & 0xffff);
-    if (id == IDHELP)
+    if (id == IDHELP) {
+      /* G15 (MB_HELP): the Help button sends WM_HELP to the owner window. */
+      HWND owner = GetWindow(dlg, 4);
+      POINT p;
+      GetCursorPos(&p);
+      if (owner)
+        u32_help_send(owner, GetDlgItem(dlg, IDHELP), IDHELP, p);
       return 1;
+    }
     if (id == IDCANCEL && !GetDlgItem(dlg, IDCANCEL)) {
       if (!b->cancel)
         return 1;

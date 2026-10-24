@@ -1295,6 +1295,10 @@ LRESULT W32API DefWindowProcA(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     return 1;
   }
   case WM_SETCURSOR:
+    if (u32_help_mode()) {
+      SetCursor((HCURSOR)(uintptr_t)32651u);   /* G15: What's This? keeps the help arrow over every window */
+      return 1;
+    }
     if (w && w->cls->c.hCursor)
       SetCursor(w->cls->c.hCursor);
     return 1;
@@ -1323,4 +1327,24 @@ LRESULT W32API DefWindowProcA(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
   default:
     return 0;
   }
+}
+
+/* G15: the help topic number a window reports in HELPINFO.dwContextId
+ * (SetWindowContextHelpId / GetWindowContextHelpId, user32 exports). */
+BOOL W32API SetWindowContextHelpId(HWND h, DWORD id) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  if (!w)
+    return u32_fail(1400);
+  w->help_id = id;
+  return 1;
+}
+DWORD W32API GetWindowContextHelpId(HWND h) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  if (!w) {
+    u32_fail(1400);
+    return 0;
+  }
+  return w->help_id;
 }

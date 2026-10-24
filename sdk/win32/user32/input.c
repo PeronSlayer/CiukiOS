@@ -8,6 +8,7 @@ static HWND click_window;
 static UINT click_button;
 static DWORD click_time;
 static POINT click_pos;
+static UINT help_swallow; /* G15: buttons whose release belongs to a What's This? click */
 static RECT clip;
 static BOOL clipped;
 HWND u32_input_exclusive;
@@ -129,6 +130,10 @@ void u32_input(struct u32_window *root, const struct ciuki_input_event *e) {
           (down ? 128 : 0) | (down && !previous ? 1 : async_keys[key] & 1);
     if (key == 0x2c && down)
       return; /* Windows delivers Snapshot on release. */
+    if (key == 27 && down && u32_help_mode()) { /* VK_ESCAPE */
+      u32_help_end(); /* G15: Esc leaves What's This? */
+      return;
+    }
     if (u32_hooks(2, 0, key, lp))
       return;
     if (down) {
@@ -195,6 +200,16 @@ void u32_input(struct u32_window *root, const struct ciuki_input_event *e) {
                   : button == 2 ? 2
                                 : 16;
       async_keys[button] = e->value ? 129 : 0;
+      /* G15: What's This? takes the next click (and its release) for itself. */
+      if (e->value && u32_help_mode()) {
+        help_swallow |= flag;
+        u32_help_click(h, p);
+        return;
+      }
+      if (!e->value && (help_swallow & flag)) {
+        help_swallow &= ~flag;
+        return;
+      }
       if (e->value)
         wp |= flag;
       else

@@ -135,6 +135,9 @@ struct desk_box desk_outer(const struct desk_client *c)
 static struct desk_box title_box(const struct desk_client *c, unsigned button)
 {
     if ((c->v3_style&3)==DESK_V3_POPUP || ((c->v3_style&3)==DESK_V3_TOOL && button!=DESK_TB_CLOSE)) return (struct desk_box){0};
+    /* G15 WS_EX_CONTEXTHELP: the "?" takes the minimise slot and the window has no minimise or zoom. */
+    int help=(c->v3_style&DESK_V3_CONTEXTHELP)!=0;
+    if (button==DESK_TB_HELP ? !help : help && button!=DESK_TB_CLOSE) return (struct desk_box){0};
     int b[4];
     desk_title_button_box(c->frame.x,c->frame.y,c->frame.w,button,b);
     return (struct desk_box){b[0],b[1],b[2],b[3]};
@@ -149,10 +152,11 @@ struct desk_box desk_caption_icon_box(const struct desktop *d, const struct desk
     return (struct desk_box){c->frame.x+6,c->frame.y+4,16,16};
 }
 struct desk_box desk_min_box(const struct desk_client *c) { return title_box(c,DESK_TB_MINIMIZE); }
+struct desk_box desk_help_box(const struct desk_client *c) { return title_box(c,DESK_TB_HELP); }   /* G15 */
 /* Zoom button, left of minimise (the old function and theme flag names are retained). */
 struct desk_box desk_shade_box(const struct desk_client *c) { return title_box(c,DESK_TB_COLLAPSE); }
 /* The title button (DESK_TB_*) of the topmost window under the pointer, as
- * index*4+k+1 (k: 0 close, 1 minimise, 2 zoom), or 0: hover tracking. */
+ * index*4+k+1 (k: 0 close, 1 minimise, 2 zoom, 3 help), or 0: hover tracking. */
 static int inside(struct desk_box b, int32_t x, int32_t y)
 { return x>=b.x && y>=b.y && (int64_t)x<(int64_t)b.x+b.w && (int64_t)y<(int64_t)b.y+b.h; }
 int desk_title_code(const struct desktop *d, int32_t x, int32_t y)
@@ -171,6 +175,8 @@ int desk_title_code(const struct desktop *d, int32_t x, int32_t y)
         struct desk_box b=title_box(&d->clients[i],1u<<k);
         if (b.w>0 && inside(b,x,y)) return i*4+k+1;
     }
+    struct desk_box help=title_box(&d->clients[i],DESK_TB_HELP);   /* G15: k 3, also on owned dialogs */
+    if (help.w>0 && inside(help,x,y)) return i*4+3+1;
     return 0;
 }
 struct desk_box desk_title_code_box(const struct desktop *d, int code)
@@ -661,7 +667,8 @@ static struct desk_frame_style frame_style(struct desktop *d, int i)
         .title=c->closing ? "Closing..." : c->unresponsive ? "Not responding" : c->title,
         .icon=desk_shell_window_icon ? desk_shell_window_icon(d,i,16) : NULL,
         .active=((i==d->focus) != !!c->flash) && !c->unresponsive, .alert=c->unresponsive, .collapsed=c->collapsed, .maximized=c->zoomed,
-        .buttons=d->shell && !c->owner_id && (c->v3_style&3)!=DESK_V3_TOOL ? DESK_TB_CLOSE|DESK_TB_MINIMIZE|(c->resizable ? DESK_TB_COLLAPSE : 0) : DESK_TB_CLOSE,
+        .buttons=(c->v3_style&DESK_V3_CONTEXTHELP) && (c->v3_style&3)==DESK_V3_OVERLAPPED ? DESK_TB_CLOSE|DESK_TB_HELP :
+            d->shell && !c->owner_id && (c->v3_style&3)!=DESK_V3_TOOL ? DESK_TB_CLOSE|DESK_TB_MINIMIZE|(c->resizable ? DESK_TB_COLLAPSE : 0) : DESK_TB_CLOSE,
         .hot=hot, .pressed=hot && code==d->title_down && (d->buttons&1u) ? hot : 0};
 }
 static void window(struct desktop *d, int i, struct desk_box clip)
@@ -981,7 +988,7 @@ void desk_scene_reconcile(struct desktop *d)
                     desk_damage_add(&d->damage,desk_content(c),d->width,d->height);
             } else if (s->hot!=st.hot || s->pressed!=st.pressed) {
                 unsigned buttons=s->hot|st.hot|s->pressed|st.pressed;
-                for (unsigned b=DESK_TB_CLOSE;b<=DESK_TB_COLLAPSE;b<<=1) if (buttons&b)
+                for (unsigned b=DESK_TB_CLOSE;b<=DESK_TB_HELP;b<<=1) if (buttons&b)
                     desk_damage_add(&d->damage,title_box(c,b),d->width,d->height);
             }
         }

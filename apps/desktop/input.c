@@ -516,6 +516,9 @@ static void input(struct desktop *d, const struct ciuki_input_event *in)
                     d->ops.send(c->channel, &m, DONTWAIT);
                     desk_drop_client(d, i); break;
                 }
+                if (desk_contains(desk_help_box(c),d->mouse_x,d->mouse_y)) {
+                    desk_context_help(d,i); break;   /* G15: "?" caption button */
+                }
                 if (d->shell && desk_contains(desk_min_box(c),d->mouse_x,d->mouse_y)) {
                     desk_minimize(d,i); break;
                 }

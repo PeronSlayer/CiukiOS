@@ -840,6 +840,7 @@ int main(int argc, char **argv)
         if (m->writer_started) cfg_writer_stop(&m->writer);
         completion_stop(m); free(m->hwid_pci); free(m->hwid_usb); free(m); return 1;
     }
+    du_help_topic(&m->ui, "control");   /* G15: F1 opens this program's Help topic */
     m->window.message = on_message; m->window.close_request = close_request; m->window.user = m;
     if (cp_attach(&m->app, &m->ui, game ? CP_HOME : page)) {
         du_window_destroy(&m->window); if (m->writer_started) cfg_writer_stop(&m->writer); completion_stop(m); free(m->hwid_pci); free(m->hwid_usb); free(m); return 1;

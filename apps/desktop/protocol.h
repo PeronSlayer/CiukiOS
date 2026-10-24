@@ -19,7 +19,8 @@
 #define DESK_V3_TOOL 2u
 #define DESK_V3_TOPMOST 4u
 #define DESK_V3_MODAL 8u
-#define DESK_V3_STYLES 15u
+#define DESK_V3_CONTEXTHELP 16u   /* G15 WS_EX_CONTEXTHELP: the "?" caption button (it replaces minimise and zoom) */
+#define DESK_V3_STYLES 31u
 #define DESK_V3_CAPTURE 1u
 #define DESK_V3_CLIP 2u
 #define DESK_V3_RELATIVE 4u
@@ -53,6 +54,9 @@
  * WINDOW_ORDER: flags (Z=1,OWNER=2), insert-after id/sentinel,generation,
  * owner id,owner-generation. Unselected fields are zero; no descriptors.
  * CLOSE/CLOSE_REQUEST/CLOSED: empty; PING/PONG: UI progress token.
+ * HELP (server, G15): empty. The user pressed the "?" caption button of a
+ * window created with DESK_V3_CONTEXTHELP; the client enters What's This?
+ * (WM_SYSCOMMAND SC_CONTEXTHELP) and answers the next click itself.
  * CREATE/DAMAGE keep XRGB8888; only cursor bitmap uses alpha in its high byte.
  */
 enum desk_v3_opcode {
@@ -76,7 +80,8 @@ enum desk_v3_opcode {
      * text-length,timeout-ms(low16)|NIIF-kind(high16),title,text.
      * EVENT: id,callback,mouse-message,screen-x,screen-y.
      * FLASH: invert (0/1). All use the authenticated window tuple. */
-    DESK_V3_TRAY_ICON = 85, DESK_V3_TRAY_BALLOON, DESK_V3_TRAY_EVENT, DESK_V3_FLASH
+    DESK_V3_TRAY_ICON = 85, DESK_V3_TRAY_BALLOON, DESK_V3_TRAY_EVENT, DESK_V3_FLASH,
+    DESK_V3_HELP = 89 /* G15: server to client, empty payload */
 };
 /* G12: shared settings, v2/v3; no fds. Request: key (0=query), value,
  * flags (SPIF_UPDATEINIFILE=1, SENDCHANGE=2). Snapshot: 11 u32 values, changed key, flags.

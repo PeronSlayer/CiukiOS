@@ -61,7 +61,8 @@ void desk_paint_round_blend(struct desk_paint *, int x, int y, int w, int h, int
                             uint32_t fill, unsigned fill_alpha, uint32_t outline, unsigned outline_alpha);
 /* A 16x16 (or size x size) ARGB icon, alpha in the top byte, blended at (x, y). */
 void desk_paint_icon(struct desk_paint *, int x, int y, const uint32_t *argb, int size);
-enum { DESK_GLYPH_CLOSE, DESK_GLYPH_MINIMIZE, DESK_GLYPH_ZOOM, DESK_GLYPH_COLLAPSE, DESK_GLYPH_EXPAND, DESK_GLYPH_RESTORE };
+enum { DESK_GLYPH_CLOSE, DESK_GLYPH_MINIMIZE, DESK_GLYPH_ZOOM, DESK_GLYPH_COLLAPSE, DESK_GLYPH_EXPAND, DESK_GLYPH_RESTORE,
+       DESK_GLYPH_HELP /* G15: the "?" of WS_EX_CONTEXTHELP windows and help dialogs */ };
 /* One title-bar button in the current theme at its hit box (x, y, w, h):
  * the theme's square centred in that box. */
 void desk_paint_title_button(struct desk_paint *, int x, int y, int w, int h, int kind, int active, int hot, int pressed);
@@ -74,7 +75,8 @@ void desk_paint_title_button(struct desk_paint *, int x, int y, int w, int h, in
 #define DESK_FRAME_BORDER 3
 #define DESK_FRAME_TITLE 24
 #define DESK_FRAME_BUTTON 18                          /* square hit box of a title button */
-enum { DESK_TB_CLOSE = 1, DESK_TB_MINIMIZE = 2, DESK_TB_COLLAPSE = 4 };
+/* DESK_TB_HELP (G15) takes the minimise slot: a window with the "?" button has no minimise or zoom. */
+enum { DESK_TB_CLOSE = 1, DESK_TB_MINIMIZE = 2, DESK_TB_COLLAPSE = 4, DESK_TB_HELP = 8 };
 struct desk_frame_style {
     const char *title;
     const uint32_t *icon;         /* 16x16 ARGB window icon (gradient captions), or NULL */

@@ -286,6 +286,7 @@ int main(int argc, char **argv)
         free(m);
         return 1;
     }
+    du_help_topic(&m->ui, "files");   /* G15: F1 opens this program's Help topic */
     struct files_app *a = &m->app;
     fm_registry_exchange=files_registry_exchange;
     a->shell_open=shell_open; a->shell_record=shell_record;

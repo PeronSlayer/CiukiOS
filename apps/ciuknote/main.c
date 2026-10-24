@@ -141,6 +141,7 @@ int main(int argc, char **argv)
     if (du_window_open_resizable(&m->window, &m->ui, channel, width, height, title, 440, 280)) {
         fprintf(stderr, "CiukNote: desktop connection failed: %s\n", strerror(errno)); free(m); return 1;
     }
+    du_help_topic(&m->ui, "ciuknote");   /* G15: F1 opens this program's Help topic */
     struct cn_app *a = &m->app;
     m->window.close_request = close_request; m->window.user = a;
     a->fs = cn_native_fs(); a->now = host_now; a->quit = host_quit; a->declined = host_declined; a->wordpad = test ? NULL : host_wordpad; m->window.message = on_message; a->portrait = portrait;

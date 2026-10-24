@@ -644,12 +644,35 @@ static struct du_rect close_box(const struct du_dialog *d)
     return (struct du_rect){b[0], b[1], b[2], b[3]};
 }
 
+/* G15: the "?" button takes the slot of minimise, as in a WS_EX_CONTEXTHELP frame. */
+struct du_rect du_dialog_help_box(const struct du_ui *u)
+{
+    const struct du_dialog *d = &u->dialog;
+    int b[4] = {0, 0, 0, 0};
+    if (d->kind && d->help_button) desk_title_button_box(d->box.x, d->box.y, d->box.w, DESK_TB_HELP, b);
+    return (struct du_rect){b[0], b[1], b[2], b[3]};
+}
+void du_dialog_help_button(struct du_ui *u, int on)
+{
+    struct du_dialog *d = &u->dialog;
+    if (!d->kind) return;
+    d->help_button = on != 0; d->help_hot = 0; dialog_damage(u);
+}
+struct du_widget *du_dialog_item_at(struct du_ui *u, int x, int y)
+{
+    struct du_dialog *d = &u->dialog;
+    for (unsigned i = d->count; i > 0; i--)
+        if (!d->items[i - 1].hidden && du_contains(d->items[i - 1].box, x, y)) return &d->items[i - 1];
+    return NULL;
+}
+
 void du_dialog_press(struct du_ui *u, int button)
 {
     struct du_dialog *d = &u->dialog;
     int x = u->mouse_x, y = u->mouse_y;
     if (!du_contains(d->box, x, y)) return;
     if (button == 1 && du_contains(close_box(d), x, y)) { finish(u, d->cancel); return; }
+    if (button == 1 && d->help_button && du_contains(du_dialog_help_box(u), x, y)) { du_context_help(u, 1); dialog_damage(u); return; }
     if (button == 1 && y < body_y(d)) { d->dragging = 1; d->drag_x = x - d->box.x; d->drag_y = y - d->box.y; return; }
     for (unsigned i = d->count; i > 0; i--) {
         struct du_widget *w = &d->items[i - 1];
@@ -667,6 +690,8 @@ void du_dialog_motion(struct du_ui *u)
     struct du_dialog *d = &u->dialog;
     int hot = !d->dragging && du_contains(close_box(d), u->mouse_x, u->mouse_y);
     if (hot != d->close_hot) { d->close_hot = hot; dialog_damage(u); }
+    int help_hot = !d->dragging && d->help_button && du_contains(du_dialog_help_box(u), u->mouse_x, u->mouse_y);
+    if (help_hot != d->help_hot) { d->help_hot = help_hot; dialog_damage(u); }
     if (d->dragging) {
         int nx = u->mouse_x - d->drag_x, ny = u->mouse_y - d->drag_y;
         if (nx < -d->box.w + 40) nx = -d->box.w + 40;
@@ -711,6 +736,8 @@ void du_draw_dialog(struct du_ui *u)
     struct desk_paint p = {c->pixels, c->width, c->height, v.x, v.y, v.w, v.h};
     struct desk_frame_style style = {.title = d->title, .active = u->focused_window, .buttons = DESK_TB_CLOSE,
                                      .hot = d->close_hot && du_contains(close_box(d), u->mouse_x, u->mouse_y) ? DESK_TB_CLOSE : 0};
+    if (d->help_button) style.buttons |= DESK_TB_HELP;
+    if (d->help_button && d->help_hot) style.hot = DESK_TB_HELP;
     desk_paint_frame(&p, b.x, b.y, b.w, b.h, &style);
     int top = body_y(d);
     if (d->kind == DU_DLG_MESSAGE) {

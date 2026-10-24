@@ -240,6 +240,9 @@ class DialogTests(unittest.TestCase):
     def test_message_boxes(self):
         self.execute('msgbox')
 
+    def test_g15_wm_help_f1_and_whats_this(self):
+        self.execute('help')
+
     def test_installer_style_pages(self):
         self.execute('installer')
 

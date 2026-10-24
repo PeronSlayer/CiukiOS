@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT
  * /Programs/help: CiukiOS Help and text viewer (desktop client, protocol v2).
- * Usage: help [--channel-fd=N] [--test=help] [text file] */
+ * Usage: help [--channel-fd=N] [--test=help] [topic:<id> | text file]
+ * A program's F1 and Help menu start it as "help topic:<program>". */
 #include "help.h"
 #include "../libdeskui/job.h"
 #include <errno.h>
@@ -40,7 +41,7 @@ int main(int argc, char **argv)
     struct help_main *m = calloc(1, sizeof(*m));
     if (!m) return 1;
     char title[64]; int w, h;
-    acc_title(title, sizeof(title), "CiukiOS Help", path);
+    acc_title(title, sizeof(title), "CiukiOS Help", path && strncmp(path, "topic:", 6) ? path : NULL);
     acc_window_size(HELP_W, HELP_H, &w, &h);
     if (test) { w = HELP_W; h = HELP_H; }
     if (du_window_open_resizable(&m->window, &m->ui, channel, w, h, title, 440, 280)) {
@@ -48,6 +49,7 @@ int main(int argc, char **argv)
     }
     if (help_attach(&m->app, &m->ui)) { du_window_destroy(&m->window); free(m); return 1; }
     m->app.quit = quit; m->app.host = m;
+    if (path && !strncmp(path, "topic:", 6)) { (void)help_open_argument(&m->app, path); path = NULL; }
     m->path=path;
     if (test) du_window_move(&m->window, 24, 48);
     int r = du_run(&m->window,idle,m);

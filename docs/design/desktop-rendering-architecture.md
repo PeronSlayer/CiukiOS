@@ -460,6 +460,8 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 63 | Win32 FlashWindow (G18): TRUE alternates caption and task button appearance without activation; FALSE restores it and returns the prior drawn-active state | the caption and task button; activation remains unchanged | authenticated `DESK_V3_FLASH`, `client.c` and `compositor.c` reconcile | none | G18 flash |
 | 64 | Win32 system tray integration (G18): add/modify/delete icons, tooltip, queued balloons with timeout/cancel and owner cleanup; Win32 file drops use immutable snapshots | tray layout, tooltip, balloon bounds and the normal drop target | `shell_tray.h`, v3 client, shell drag target | snapshot ownership and explicit damage cover tray and drop changes | G18 tray and shell integration |
 
+| 31 | Context-help caption button (G15; `WS_EX_CONTEXTHELP`, `DS_CONTEXTHELP`): the "?" takes the minimise slot, a window with it has no minimise or zoom, it is hot and pressed like every title button, and a press sends `WM_SYSCOMMAND` `SC_CONTEXTHELP` to the program (v3 `HELP`) | the caption when the style appears or goes away (the whole title bar: the buttons changed); the "?" box while hot or pressed | `compositor.c` `title_box`, `frame_style`, `desk_title_code`; `input.c` press; `client.c` `desk_context_help`; v3 `PLACE`/`CREATE` style bit `DESK_V3_CONTEXTHELP` | none | caption |
+
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with
 fx-19 (drag and drop, rubber-band and keyboard selection) and were added by

@@ -242,6 +242,10 @@ struct du_widget {
     void *data;                             /* f2-32: DU_TEXTAREA state */
     unsigned pointer_cursor;               /* application cursor for this widget; arrow is automatic */
     struct du_rect cursor_box;              /* optional client-coordinate subregion */
+    /* G15: tooltip (shown after the pointer rests on the widget) and
+     * "What's This?" text (Shift+F1 or the dialog "?" button, then a click).
+     * Both are NUL-terminated strings owned by the application. */
+    const char *tip, *help;
 };
 
 #define DU_ANCHOR_LEFT   1u
@@ -265,8 +269,14 @@ enum du_event_type {
     DU_EV_POINTER, DU_EV_DRAG, DU_EV_CONSUMER,
     /* fx-19: rubber-band selection phases, and files dropped on the window
      * (x/y client position; du_drop_file reads the paths). */
-    DU_EV_MARQUEE, DU_EV_DROPFILES
+    DU_EV_MARQUEE, DU_EV_DROPFILES,
+    /* G15 WM_HELP: id is the focused widget (F1) or the widget clicked in
+     * What's This? mode (zero when none), index is DU_HELP_F1 or
+     * DU_HELP_CONTEXT, x/y the pointer, text the widget's `help` text or NULL.
+     * A handler that shows its own help sets du_ui.help_consumed. */
+    DU_EV_HELP
 };
+enum { DU_HELP_F1 = 0, DU_HELP_CONTEXT = 1 };
 /* fx-19 DU_EV_SELECT .key from a file_drag list press: PENDING on an
  * already selected item without Shift (keep the selection so it can be
  * dragged), RELEASE when that press ends without a drag (apply it now). */
@@ -308,6 +318,7 @@ struct du_dialog {
     struct du_dialog_places *places;        /* owned, live file-dialog Places observer */
     int dragging, drag_x, drag_y, capture;
     int close_hot;                          /* the pointer is over the close button */
+    int help_button, help_hot;              /* G15: "?" caption button (du_dialog_help_button), hover */
     const uint32_t *icon_pixels;            /* optional 32x32 replacement icon */
     struct du_event pending[4]; unsigned pending_count;
     /* Optional custom-controls validation before values are released. Zero
@@ -324,6 +335,18 @@ struct du_dialog {
 };
 
 struct du_timer { uint64_t deadline, interval; int id, active, repeat; };
+
+/* G15: one tooltip or What's This? popup at a time (Windows: tooltips show
+ * after 500 ms of rest and hide after 5 s; the popup stays until a click or
+ * key). `widget` is the hovered widget with a `tip` (-1 none). */
+#define DU_TIP_DELAY_NS 500000000ull
+#define DU_TIP_SHOW_NS  5000000000ull
+struct du_tip {
+    int widget, visible, context;
+    uint64_t show_ns, hide_ns;
+    struct du_rect box;
+    const char *text;
+};
 
 struct du_ui {
     void (*sound)(void *, unsigned);
@@ -364,6 +387,16 @@ struct du_ui {
     void (*service)(struct du_ui *, void *);
     int wait_fds[4];
     unsigned wait_count;
+    /* G15 help everywhere. help_topic names the program's topic in CiukiOS
+     * Help (NULL: F1 reaches the program as an ordinary key). help_open is
+     * installed by du_window_open (a DESK_LAUNCH of /Programs/help); host
+     * tests replace it. */
+    const char *help_topic;
+    int (*help_open)(struct du_ui *, const char *topic, void *);
+    void *help_ctx;
+    int help_consumed;
+    int whats_this;                       /* the pointer waits for a click (Shift+F1, SC_CONTEXTHELP) */
+    struct du_tip tip;
 };
 static inline void du_wake(struct du_ui *u)
 { if (u && u->wake) u->wake(u->wake_ctx); }
@@ -391,6 +424,19 @@ void du_window_focus(struct du_ui *, int focused);
 void du_release(struct du_ui *);
 unsigned du_key_char(const struct du_ui *, unsigned code);
 void du_post(struct du_ui *, enum du_event_type, int id, int index);
+
+/* G15 help. du_help_topic names the program's Help topic (an id of
+ * apps/accessories/help_topics.c, the program name in /Programs). F1 opens
+ * it through du_help; Shift+F1 starts What's This? (du_context_help).
+ * du_help opens CiukiOS Help at `topic` (NULL: the program's topic, else
+ * the contents): 0 or -errno (-ENOSYS without a launcher). */
+void du_help_topic(struct du_ui *, const char *topic);
+int du_help(struct du_ui *, const char *topic);
+void du_context_help(struct du_ui *, int on);
+/* Hides the tooltip or What's This? popup (every key and button press does). */
+void du_tip_hide(struct du_ui *);
+/* The tooltip of a widget by id; returns the widget or NULL. */
+struct du_widget *du_tooltip(struct du_ui *, int id, const char *tip);
 
 /* Lists and trees */
 int du_list_hit(const struct du_widget *, int x, int y);
@@ -441,6 +487,12 @@ void du_dialog_icon(struct du_ui *, const uint32_t *argb32);
 void du_dialog_close(struct du_ui *);
 int du_dialog_id(const struct du_ui *);
 struct du_rect du_dialog_button(const struct du_ui *, unsigned index);
+/* G15: a "?" caption button left of the close button; clicking it starts
+ * What's This? for the dialog's controls (their `help` text). */
+void du_dialog_help_button(struct du_ui *, int on);
+struct du_rect du_dialog_help_box(const struct du_ui *);
+/* The dialog control under (x, y), or NULL. */
+struct du_widget *du_dialog_item_at(struct du_ui *, int x, int y);
 
 /* Timers (monotonic nanoseconds) and the shared text clipboard. */
 /* DU_EV_TICK preserves dirty state; callbacks invalidate changed content. */

@@ -19,6 +19,12 @@
 #endif
 #include <unistd.h>
 
+static void tip_service(struct du_ui *);
+static uint64_t tip_deadline(const struct du_ui *);
+static void tip_track(struct du_ui *, int hit);
+static void context_click(struct du_ui *);
+static int help_key(struct du_ui *);
+
 extern int du_system_clipboard_text_set(const char *, size_t) __attribute__((weak));
 extern const char *du_system_clipboard_text_get(void) __attribute__((weak));
 static char *clipboard;
@@ -162,7 +168,7 @@ void du_init(struct du_ui *u, uint32_t *pixels, int width, int height)
     u->canvas = (struct du_canvas){pixels, width, height, {0, 0, width, height}};
     u->focus = u->capture = u->hover = u->menu = u->popup_owner = -1;
     u->input_double_ms=500;u->input_blink_ms=530;u->input_wheel_lines=3;u->input_caret_on=1;
-    u->last_click_widget = -1; u->focused_window = 1; u->dirty = 1;
+    u->last_click_widget = -1; u->focused_window = 1; u->dirty = 1; u->tip.widget = -1;
 }
 
 void du_resize(struct du_ui *u, uint32_t *pixels, int width, int height)
@@ -171,7 +177,7 @@ void du_resize(struct du_ui *u, uint32_t *pixels, int width, int height)
     if (!pixels || width <= 0 || height <= 0) return;
     if (u->capture >= 0 && (unsigned)u->capture < u->count && u->widgets[u->capture].kind == DU_CANVAS)
         du_post(u, DU_EV_POINTER, u->widgets[u->capture].id, DU_POINTER_CANCEL);
-    du_menu_close(u);
+    du_menu_close(u); du_tip_hide(u);
     u->capture = u->hover = -1;
     for (unsigned i = 0; i < u->count; i++) {
         struct du_widget *w = &u->widgets[i];
@@ -264,6 +270,7 @@ static unsigned widget_cursor(const struct du_widget *w, const struct du_ui *u)
 }
 unsigned du_cursor_at(const struct du_ui *u)
 {
+    if (u->whats_this) return DESK_CURSOR_HELP;
     if (!du_contains((struct du_rect){0,0,u->canvas.width,u->canvas.height},u->mouse_x,u->mouse_y) && u->capture < 0) return DESK_CURSOR_ARROW;
     if (u->dialog.kind) {
         const struct du_dialog *d = &u->dialog;
@@ -290,7 +297,7 @@ int du_focused(const struct du_ui *u)
 
 void du_release(struct du_ui *u)
 {
-    u->input_dead=0;
+    du_tip_hide(u); u->whats_this = 0; u->input_dead=0;
     memset(u->keys, 0, sizeof(u->keys));
     u->modifiers = u->buttons = 0; u->menu_armed = 0;
     if (u->capture >= 0 && (unsigned)u->capture < u->count) {
@@ -363,6 +370,7 @@ void du_tick(struct du_ui *u, uint64_t now)
     }
     if (u->service) u->service(u,u->user);
     du_dialog_tick(u);
+    tip_service(u);
     for (int i = 0; i < DU_TIMERS; i++) {
         struct du_timer *t = &u->timers[i];
         if (!t->active || u->now < t->deadline) continue;
@@ -381,8 +389,9 @@ void du_tick(struct du_ui *u, uint64_t now)
 
 uint64_t du_next_deadline(const struct du_ui *u)
 {
-    uint64_t next = du_dialog_deadline(u);
-    if(u->input_blink_ms && u->focused_window && u->focus>=0 && (unsigned)u->focus<u->count &&
+    uint64_t next = du_dialog_deadline(u), tip = tip_deadline(u);
+    if (tip < next) next = tip;
+    if(u->input_blink_ms && u->input_caret_deadline && u->focused_window && u->focus>=0 && (unsigned)u->focus<u->count &&
        (u->widgets[u->focus].kind==DU_EDIT || u->widgets[u->focus].kind==DU_TEXTAREA) && u->input_caret_deadline<next)next=u->input_caret_deadline;
     for (int i = 0; i < DU_TIMERS; i++) if (u->timers[i].active && u->timers[i].deadline < next) next = u->timers[i].deadline;
     return next;
@@ -997,6 +1006,125 @@ void du_scroll(struct du_ui *u, struct du_rect r, int dx, int dy)
     if (dx) du_invalidate(u,(struct du_rect){dx>0?r.x:r.x+r.w+dx,dest.y,dx>0?dx:-dx,dest.h});
 }
 
+/* ---- G15: tooltips, What's This? and F1 help ----
+ * Windows 98 (RK-vmm, RK-keys): a tooltip appears after the pointer rests on a
+ * control and goes away after a few seconds, a click or a key; F1 opens the
+ * program's help topic (WM_HELP); Shift+F1 and the dialog "?" button turn the
+ * pointer into a question-mark cursor and the next click shows the control's
+ * What's This? text. */
+#define TIP_PAPER 0xffffe1u
+#define TIP_MAX_W 210
+static struct du_rect tip_place(const struct du_ui *u, int w, int h)
+{
+    int x = u->mouse_x, y = u->mouse_y + 20;
+    if (x + w > u->canvas.width) x = u->canvas.width - w;
+    if (x < 0) x = 0;
+    if (y + h > u->canvas.height) y = u->mouse_y - h - 2;
+    if (y < 0) y = 0;
+    return (struct du_rect){x, y, w, h};
+}
+void du_tip_hide(struct du_ui *u)
+{
+    if (u->tip.visible) du_invalidate(u, u->tip.box);
+    u->tip.visible = u->tip.context = 0; u->tip.widget = -1; u->tip.text = NULL;
+}
+static void tip_show(struct du_ui *u, const char *text, int context)
+{
+    int w, h;
+    if (!text || !*text) return;
+    if (context) {
+        int lines = du_text_wrap(NULL, (struct du_rect){0, 0, TIP_MAX_W - 12, 4096}, text, 0);
+        w = TIP_MAX_W; h = lines * (desk_font_line(desk_theme->font_ui) + 1) + 10;
+    } else { w = du_text_width(text) + 10; h = DU_ROW + 1; }
+    if (w > u->canvas.width) w = u->canvas.width;
+    u->tip.box = tip_place(u, w, h); u->tip.text = text;
+    u->tip.visible = 1; u->tip.context = context;
+    u->tip.hide_ns = context ? 0 : u->now + DU_TIP_SHOW_NS;
+    du_invalidate(u, u->tip.box);
+}
+static void tip_track(struct du_ui *u, int hit)
+{
+    if (u->tip.visible && u->tip.context) return;   /* What's This? stays until a click or key */
+    du_tip_hide(u);
+    if (hit < 0 || (unsigned)hit >= u->count || !u->widgets[hit].tip || !u->widgets[hit].tip[0]) return;
+    u->tip.widget = hit; u->tip.show_ns = u->now + DU_TIP_DELAY_NS;
+}
+static void tip_service(struct du_ui *u)
+{
+    struct du_tip *t = &u->tip;
+    if (t->visible) {
+        if (!t->context && u->now >= t->hide_ns) { du_tip_hide(u); t->widget = -1; }
+        return;
+    }
+    if (t->widget < 0 || u->now < t->show_ns) return;
+    if ((unsigned)t->widget >= u->count || u->dialog.kind || u->menu >= 0 || u->popup || u->capture >= 0 || !u->focused_window ||
+        u->whats_this) { t->widget = -1; return; }
+    tip_show(u, u->widgets[t->widget].tip, 0);
+}
+static uint64_t tip_deadline(const struct du_ui *u)
+{
+    if (u->tip.visible) return u->tip.context ? UINT64_MAX : u->tip.hide_ns;
+    return u->tip.widget >= 0 ? u->tip.show_ns : UINT64_MAX;
+}
+static void tip_draw(struct du_ui *u)
+{
+    struct du_canvas *c = &u->canvas;
+    struct du_rect b = u->tip.box;
+    if (!u->tip.visible || !u->tip.text) return;
+    struct du_rect clip = du_intersection(c->clip, (struct du_rect){b.x, b.y, b.w + 3, b.h + 3});
+    if (clip.w <= 0 || clip.h <= 0) return;
+    struct du_rect saved = c->clip;
+    c->clip = du_intersection(saved, b);
+    du_fill(c, b, TIP_PAPER); du_outline(c, b, 0x000000u);
+    if (u->tip.context) du_text_wrap(c, (struct du_rect){b.x + 6, b.y + 5, b.w - 12, b.h - 8}, u->tip.text, 0x000000u);
+    else du_text(c, b.x + 5, b.y + (b.h - DU_GLYPH_H) / 2, u->tip.text, 0x000000u);
+    c->clip = saved;
+}
+struct du_widget *du_tooltip(struct du_ui *u, int id, const char *tip)
+{
+    struct du_widget *w = du_get(u, id);
+    if (w) w->tip = tip;
+    return w;
+}
+void du_help_topic(struct du_ui *u, const char *topic) { u->help_topic = topic; }
+int du_help(struct du_ui *u, const char *topic)
+{
+    if (!u->help_open) return -ENOSYS;
+    return u->help_open(u, topic ? topic : u->help_topic, u->help_ctx);
+}
+void du_context_help(struct du_ui *u, int on)
+{
+    on = on != 0;
+    du_tip_hide(u);
+    if (u->whats_this == on) return;
+    u->whats_this = on; u->menu_armed = 0;
+}
+/* A click in What's This? mode: WM_HELP for the control (HELPINFO_WINDOW),
+ * then its text in a popup unless the program handled it. */
+static void context_click(struct du_ui *u)
+{
+    struct du_widget *w = u->dialog.kind ? du_dialog_item_at(u, u->mouse_x, u->mouse_y) :
+        du_hit(u, u->mouse_x, u->mouse_y) >= 0 ? &u->widgets[du_hit(u, u->mouse_x, u->mouse_y)] : NULL;
+    u->whats_this = 0; u->help_consumed = 0;
+    du_emit(u, (struct du_event){.type = DU_EV_HELP, .id = w ? w->id : 0, .index = DU_HELP_CONTEXT,
+                                 .x = u->mouse_x, .y = u->mouse_y, .text = w ? w->help : NULL});
+    if (!u->help_consumed && w && w->help && w->help[0]) tip_show(u, w->help, 1);
+}
+/* F1 (WM_HELP from the keyboard): the focused control's id; the default
+ * action opens the program's topic. Returns 0 when the program has no topic
+ * and no handler, so F1 stays an ordinary key. */
+static int help_key(struct du_ui *u)
+{
+    const struct du_widget *f = u->focus >= 0 && (unsigned)u->focus < u->count ? &u->widgets[u->focus] : NULL;
+    if (!u->help_topic) return 0;
+    if (u->dialog.kind) f = u->dialog.focus >= 0 && (unsigned)u->dialog.focus < u->dialog.count ? &u->dialog.items[u->dialog.focus] : NULL;
+    u->help_consumed = 0;
+    du_emit(u, (struct du_event){.type = DU_EV_HELP, .id = f ? f->id : 0, .index = DU_HELP_F1,
+                                 .text = f ? f->help : NULL});
+    if (!u->help_consumed) (void)du_help(u, NULL);
+    return 1;
+}
+
 void du_render(struct du_ui *u)
 {
     struct du_canvas *c=&u->canvas;
@@ -1024,6 +1152,7 @@ void du_render(struct du_ui *u)
         if (u->paint) u->paint(u,u->user);
         c->clip=repaint; du_draw_menus(u);
         c->clip=repaint; du_draw_dialog(u);
+        c->clip=repaint; tip_draw(u);
     }
     u->rendered=(struct du_rect){0};
     for (unsigned i=0;i<u->frame_count;i++) u->rendered=i ? covering(u->rendered,u->frames[i]) : u->frames[i];
@@ -1281,6 +1410,12 @@ static void focus_next(struct du_ui *u, int back)
 
 static void key_down(struct du_ui *u, unsigned code)
 {
+    /* G15: What's This? waits for a click; Esc cancels, other keys are ignored. */
+    if (u->whats_this) { if (code == DU_KEY_ESC) du_context_help(u, 0); return; }
+    if (code == DU_KEY_F1 && !(u->modifiers & (DU_CTRL | DU_ALT))) {
+        if (u->modifiers & DU_SHIFT) { du_context_help(u, 1); return; }
+        if (help_key(u)) return;
+    }
     if (u->dialog.kind) { du_dialog_key(u, code); return; }
     if (u->menu >= 0 || u->popup) { du_menu_key(u, code); return; }
     if (code == DU_KEY_F10 && !(u->modifiers & ~DU_SHIFT)) {
@@ -1360,7 +1495,7 @@ void du_input(struct du_ui *u, const struct ciuki_input_event *e)
             return;
         }
         if (!e->value) return;
-        u->menu_armed = 0;
+        u->menu_armed = 0; du_tip_hide(u);
         if (code == DU_KEY_CAPS && e->value == 1) { u->caps = !u->caps; return; }
         if (code == DU_KEY_LSHIFT || code == DU_KEY_RSHIFT || code == DU_KEY_LCTRL || code == DU_KEY_RCTRL) return;
         unsigned ch=du_key_char(u,code);
@@ -1373,6 +1508,7 @@ void du_input(struct du_ui *u, const struct ciuki_input_event *e)
     }
     if (e->type == CIUKI_INPUT_TEXT) return; /* text derives from KEY events plus Shift/Caps */
     if (e->type == CIUKI_INPUT_WHEEL) {
+        du_tip_hide(u);
         if (u->dialog.kind) { du_dialog_wheel(u,e->value); return; }
         if (u->menu>=0 || u->popup || u->capture>=0) return;
         int hit=du_hit(u,u->mouse_x,u->mouse_y);
@@ -1385,6 +1521,7 @@ void du_input(struct du_ui *u, const struct ciuki_input_event *e)
         if (u->menu >= 0 || u->popup) { du_menu_motion(u); return; }
         if (u->capture >= 0 && (unsigned)u->capture < u->count) { du_widget_motion(u, &u->widgets[u->capture], u->mouse_x, u->mouse_y); return; }
         int hit = du_hit(u, u->mouse_x, u->mouse_y);
+        if (hit != u->hover) tip_track(u, hit);
         if (hit != u->hover) {
             if (u->hover>=0 && (unsigned)u->hover<u->count) {
                 struct du_widget *old=&u->widgets[u->hover];
@@ -1405,6 +1542,7 @@ void du_input(struct du_ui *u, const struct ciuki_input_event *e)
     int button = e->code;
     unsigned bit = 1u << (button - 1);
     if (e->value) u->buttons |= bit; else u->buttons &= ~bit;
+    if (e->value) { du_tip_hide(u); if (u->whats_this) { context_click(u); return; } }
     if (u->dialog.kind) { if (e->value) du_dialog_press(u, button); else du_dialog_release(u, button); return; }
     if (e->value) {
         /* A second button cannot steal an application's drawing capture. */

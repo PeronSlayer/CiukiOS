@@ -399,8 +399,9 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         item(m, "Documents", "document-open", SH_ACT_SUBMENU, SH_MENU_DOCUMENTS, 0);
         item(m, "Settings", "preferences-system", SH_ACT_SUBMENU, SH_MENU_SETTINGS, 0);
         item(m, "Find", "system-search", SH_ACT_SUBMENU, SH_MENU_FIND, 0);
-        item(m, "Help", "help-browser", SH_ACT_SUBMENU, SH_MENU_HELP, 0);
+        item(m, "Help", "help-browser", SH_ACT_HELP, 0, 0); /* G15: launch Help directly */
         item(m, "Run...", "go-jump", SH_ACT_RUN, 0, 0);
+        item(m, "About CiukiOS", "ciuki", SH_ACT_ABOUT, 0, 0);   /* G15: it left the Help submenu */
         separator(m);
         char logoff_label[44];
         snprintf(logoff_label,sizeof(logoff_label),"Log Off%s%.31s...",d->sh.profile.name[0] ? " " : "",d->sh.profile.name);
@@ -811,6 +812,7 @@ static void act(struct desktop *d, const struct sh_item *it)
     case SH_ACT_FIND: desk_shell_find(d, 0); break;
     case SH_ACT_LAUNCH: d->action = it->arg; break;
     case SH_ACT_ABOUT: desk_about(d); break;
+    case SH_ACT_HELP: launch_named(d, "help", NULL); break;
     case SH_ACT_EMPTY_RECYCLE: desk_folder_empty_request(d); break;
     case SH_ACT_RUN: desk_internal_open(d, DESK_INTERNAL_RUN); break;
     case SH_ACT_LOGOFF: d->sh.want_power=3; break;
@@ -4416,6 +4418,11 @@ int desk_shell_key(struct desktop *d, int code, int value)
     }
     if (!value && (code == DU_KEY_TAB || code == DU_KEY_F4 || code==DU_KEY_SPACE || code==DU_KEY_ESC || code==0x40 || code==0x32 || code==0x1f) && d->sh.alt_used) return 1;
     if ((d->sh.modifiers & DU_CTRL) && code == DU_KEY_ESC) { if (value == 1) toggle_start(d); return 1; }
+    /* G15: F1 with no window focused (the desktop) opens its Help topic; a focused program gets the key. */
+    if (code == DU_KEY_F1 && !(d->sh.modifiers & (DU_CTRL | DU_ALT | DU_SHIFT)) && d->focus < 0 && !d->sh.levels && !d->session.state) {
+        if (value == 1) launch_named(d, "help", "topic:desktop");
+        return 1;
+    }
     if (d->focus<0 && d->sh.folder && d->sh.folder->editing>=0) {
         struct desk_folder *f=d->sh.folder;
         if (!value) return 1;

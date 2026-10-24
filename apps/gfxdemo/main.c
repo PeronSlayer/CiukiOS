@@ -218,6 +218,7 @@ int main(int argc,char **argv)
     if (du_window_open_resizable(&r->window,&r->ui,channel,width,height,"Graphics Demo",560,360)) {
         fprintf(stderr,"gfxdemo: desktop connection failed: %s\n",strerror(errno)); free(r->portrait);free(r);return 1;
     }
+    du_help_topic(&r->ui, "gfxdemo");   /* G15: F1 opens this program's Help topic */
     gfx_attach(&r->app,&r->ui,r->portrait);
     r->app.page=page;du_get(&r->ui,GFX_TABS)->active=page;
     du_get(&r->ui,GFX_RUN)->hidden=1;du_get(&r->ui,GFX_SHADE)->hidden=page!=1;

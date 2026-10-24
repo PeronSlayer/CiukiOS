@@ -266,6 +266,7 @@ int shell_fstat(int fd, struct stat *st)
 static int expect_files_test, expect_note_test, expect_authority=-1, expect_test=0;
 static const char *expect_note_arg, *expect_dosbox[2], *expect_control_arg, *expect_netsurf[2];
 static unsigned dosbox_spawns, netsurf_spawns;
+static const char *expect_help_arg; static unsigned help_spawns;
 static unsigned control_spawns;
 /* fx-8: a slow spawn. With spawn_hold_ms set the call blocks until the test
  * releases it or the hold expires (the T23 trial's NetSurf: 3891 ms). */
@@ -319,6 +320,13 @@ ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],
         for (unsigned i=0;i<2 && expect_netsurf[i];i++) assert(argv[at] && !strcmp(argv[at++],expect_netsurf[i]));
         assert(!argv[at]);
         netsurf_spawns++;
+    } else if (!strcmp(path,"/Programs/help")) {
+        /* G15: CiukiOS Help takes a text file or topic:<id> as its only argument. */
+        assert(!strcmp(argv[0],"help") && !strcmp(argv[1],"--channel-fd=3") && count==1);
+        unsigned at=2;
+        if (expect_help_arg) assert(argv[at] && !strcmp(argv[at++],expect_help_arg));
+        assert(!argv[at]);
+        help_spawns++;
     } else if (!strcmp(path,"/Programs/hello")) assert(!strcmp(argv[0],"hello") && !argv[1] && count==1);
     else if (!strcmp(path,"/Programs/music")) assert(!strcmp(argv[0],"music") && !strcmp(argv[1],"--channel-fd=3") && !argv[2] && count==1);
     else if (!strcmp(path,"/Programs/tasks")) {
@@ -885,6 +893,62 @@ __attribute__((noinline)) static void test_clock_double_click(void)
     expect_control_arg=NULL; drop_all(&d); desk_render_release(&d); fake_reset();
     puts("PASS G1 tray clock: double-click opens Date/Time Properties (--panel=datetime), single and slow clicks do not");
 }
+/* G15: Help everywhere on the desktop side. Any program may ask for CiukiOS
+ * Help (LAUNCH help with no argument or topic:<id>) and nothing else; Start >
+ * Help opens it; F1 on the empty desktop opens its topic; About CiukiOS moved
+ * to Settings. */
+__attribute__((noinline)) static void test_help_launch(void)
+{
+    static struct desktop d;
+    uint8_t elf[52]={0x7f,'E','L','F',1,1,1}; elf[16]=2; elf[18]=3; elf[20]=1; elf[40]=52;
+    fake_reset(); next_pair=20; pid_source=700; desk_init(&d,&fake_ops,1024,768); desk_shell_enable(&d);
+    d.launch=launch_program; d.terminate=fake_terminate; d.self_pid=50; d.authority_fd=-1;
+    desk_program_add(&d,"hello",elf,sizeof(elf)); desk_program_add(&d,"help",elf,sizeof(elf));
+    desk_program_add(&d,"ciuknote",elf,sizeof(elf)); desk_program_add(&d,"control",elf,sizeof(elf));
+    assert(desk_help_argument("") && desk_help_argument("topic:files") && desk_help_argument("topic:a-b9") && !desk_help_argument("topic:") &&
+           !desk_help_argument("topic:Files") && !desk_help_argument("topic:a/b") && !desk_help_argument("topic:a b") && !desk_help_argument("/Documents/x.txt") &&
+           !desk_help_argument("files") && !desk_help_argument("topic:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));   /* 41 characters */
+    assert(desk_help_argument("topic:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));                                        /* 40 */
+    /* An ordinary program (no rights of its own) opens Help at its topic. */
+    const struct desk_program *hello_program=NULL;
+    for (unsigned k=0;k<d.program_count;k++) if (!strcmp(d.programs[k].name,"hello")) hello_program=&d.programs[k];
+    assert(hello_program);
+    int hello=launch_program(&d,hello_program); assert(hello>0 && d.clients[0].program==0);
+    window(&d,0,(uint32_t)hello,104,"Hello");
+    unsigned before=help_spawns;
+    expect_help_arg="topic:files"; assert(launch_request(&d,0,(uint32_t)hello,"help","topic:files")>0 && help_spawns==before+1);
+    expect_help_arg=NULL; assert(launch_request(&d,0,(uint32_t)hello,"help",NULL)>0 && help_spawns==before+2);
+    /* Nothing else is allowed from it: other arguments, other programs, other topic spellings. */
+    assert(launch_request(&d,0,(uint32_t)hello,"help","/Documents/x.txt")==-EPERM && launch_request(&d,0,(uint32_t)hello,"help","topic:")==-EPERM);
+    assert(launch_request(&d,0,(uint32_t)hello,"help","topic:Files")==-EPERM && launch_request(&d,0,(uint32_t)hello,"help","topic:../x")==-EPERM);
+    assert(launch_request(&d,0,(uint32_t)hello,"help","--test=help")==-EPERM && launch_request(&d,0,(uint32_t)hello,"help","topic:a b")==-EPERM);
+    assert(launch_request(&d,0,(uint32_t)hello,"ciuknote","topic:files")==-EPERM && launch_request(&d,0,(uint32_t)hello,"hello",NULL)==-EPERM);
+    assert(launch_request(&d,0,(uint32_t)hello,"control","topic:files")==-EPERM && help_spawns==before+2);
+    /* Start > Help is one row that opens Help; the old submenu rows moved. */
+    desk_menu_open(&d,SH_MENU_START,0,0);
+    int row=item_at(&d.sh.menus[0],"Help"); assert(row>=0);
+    assert(d.sh.menus[0].items[row].action==SH_ACT_HELP && !(d.sh.menus[0].items[row].flags&SH_ITEM_DISABLED) && !strcmp(d.sh.menus[0].items[row].icon,"help-browser"));
+    int about=item_at(&d.sh.menus[0],"About CiukiOS"); assert(about==item_at(&d.sh.menus[0],"Run...")+1 && d.sh.menus[0].items[about].action==SH_ACT_ABOUT);
+    d.sh.menus[0].hot=row; key(&d,DU_KEY_RIGHT); assert(d.sh.levels==1);            /* no submenu to enter */
+    expect_help_arg=NULL; before=help_spawns; key(&d,DU_KEY_ENTER);
+    assert(help_spawns==before+1 && !d.sh.levels);
+    /* F1: the empty desktop opens its topic; a focused window, Ctrl+F1 and an open menu get the key. */
+    int saved=d.focus; d.focus=-1; expect_help_arg="topic:desktop"; before=help_spawns;
+    assert(desk_shell_key(&d,DU_KEY_F1,1) && help_spawns==before+1 && desk_shell_key(&d,DU_KEY_F1,0) && help_spawns==before+1);
+    d.focus=saved; assert(d.focus>=0 && !desk_shell_key(&d,DU_KEY_F1,1) && help_spawns==before+1);
+    d.focus=-1; desk_shell_key(&d,0x1d,1); (void)desk_shell_key(&d,DU_KEY_F1,1); assert(help_spawns==before+1); desk_shell_key(&d,0x1d,0);
+    desk_menu_open(&d,SH_MENU_START,0,0); (void)desk_shell_key(&d,DU_KEY_F1,1); assert(help_spawns==before+1); desk_menu_close(&d);
+    /* Without /Programs/help the row stays (the layout and keyboard order never change) and starts nothing. */
+    d.program_count=0; desk_program_add(&d,"hello",elf,sizeof(elf));
+    desk_menu_open(&d,SH_MENU_START,0,0); row=item_at(&d.sh.menus[0],"Help");
+    assert(row>=0 && !(d.sh.menus[0].items[row].flags&SH_ITEM_DISABLED)); before=help_spawns;
+    d.sh.menus[0].hot=row; key(&d,DU_KEY_ENTER); assert(help_spawns==before);
+    for (int i=0;i<DESK_CLIENTS;i++) if (d.clients[i].internal==DESK_INTERNAL_MESSAGE) desk_drop_client(&d,i);
+    desk_menu_close(&d);
+    expect_help_arg=NULL; drop_all(&d); fake_reset();
+    puts("PASS G15 desktop: LAUNCH help (none or topic:<id>) from any program and nothing wider, Start > Help direct, kept without /Programs/help, F1 on the empty desktop, About CiukiOS on the Start menu");
+}
+
 __attribute__((noinline)) static void test_games_menu(void)
 {
     struct desktop d;
@@ -1458,6 +1522,7 @@ int main(int argc,char **argv)
     test_note_scenario();
     test_cd_player_menu();
     test_games_menu();
+    test_help_launch();
     test_menu_icons(); test_g8_open_with_record();
     test_hwreport_menu();
     test_netsurf_record();

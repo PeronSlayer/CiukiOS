@@ -2235,6 +2235,7 @@ void paint_command(int id)
     case M_CLEARIMG: finish_pending(); drop_selection(); begin_op(0); fill_rect(0,0,cv.w-1,cv.h-1,bg); commit_op(); break;
     case M_OPAQUE: opaque=!opaque; if (floating) float_render(); if (text_on) text_render(); break;
     case M_HELP:
+        if (!du_help(ui, NULL)) break;   /* G15: the CiukPaint topic in CiukiOS Help */
         message("Choose a tool; its options appear below the tool box.\nLeft: foreground. Right: background. Palette: left/right click.\nSelect: choose Rect or Free, then drag the selection.\nDrag inside to move (Ctrl: copy). Arrows move it.\nRight-click a selection for the edit menu.\nText: click, type, click outside to place. Esc cancels.\nCurve: draw a line, then drag twice to bend it.\nPolygon: drag first side, click corners, double-click to close.\nRight eraser: erase only the foreground colour.\nCtrl+Z Undo, Ctrl+Y Repeat, Ctrl+X/C/V Cut/Copy/Paste.\nCtrl+A Select All, Del Clear, Ctrl+I Invert, Ctrl+R Rotate.\nCtrl+E Attributes, Ctrl+T/L Tool/Colour Box, Ctrl+G Grid.\nCtrl+PgDn/PgUp Zoom. Arrows scroll; PgUp/PgDn page."); break;
     case M_ABOUT:
         du_message(ui,999,"About CiukPaint","CiukPaint\nClassic computing, one woof at a time.\nOriginal CiukiOS bitmap editor, native desktop edition.\nBMP (1/4/8/24/32-bit) and PNG import.\nOriginal 8-bit BMP, 24-bit BMP and PNG save.\nOne undo/redo level. Maximum 2048 x 1200 pixels.",DU_DLG_ICON_INFO,NULL,0,0,0);

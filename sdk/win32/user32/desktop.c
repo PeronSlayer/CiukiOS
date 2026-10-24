@@ -90,7 +90,8 @@ UINT u32_style(struct u32_window *w) {
           : (w->style & WS_POPUP) && !(w->style & WS_CAPTION)
               ? DESK_V3_POPUP
               : DESK_V3_OVERLAPPED) |
-         (w->exstyle & WS_EX_TOPMOST ? DESK_V3_TOPMOST : 0);
+         (w->exstyle & WS_EX_TOPMOST ? DESK_V3_TOPMOST : 0) |
+         (w->exstyle & WS_EX_CONTEXTHELP ? DESK_V3_CONTEXTHELP : 0);
 }
 BOOL u32_create_wire(struct u32_window *w) {
   if (!u32_connect())
@@ -330,6 +331,11 @@ void u32_event(const struct desk_packet *p) {
   case DESK_CLOSE_REQUEST:
     w->desktop_close = 1;
     u32_queue(w->tid, h, WM_CLOSE, 0, 0, QS_POSTMESSAGE, u32_ticks(),
+              u32_pointer);
+    break;
+  case DESK_V3_HELP:
+    /* G15: the "?" caption button: DefWindowProc turns SC_CONTEXTHELP into What's This? */
+    u32_queue(w->tid, h, WM_SYSCOMMAND, 0xf180u /* SC_CONTEXTHELP */, 0, QS_POSTMESSAGE, u32_ticks(),
               u32_pointer);
     break;
   case DESK_V3_ACTIVATE:

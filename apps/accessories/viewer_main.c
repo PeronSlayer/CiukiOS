@@ -42,6 +42,7 @@ int main(int argc, char **argv)
     if (du_window_open_resizable(&m->window, &m->ui, channel, w, h, title, 320, 240)) {
         fprintf(stderr, "viewer: desktop connection failed: %s\n", strerror(errno)); free(m); return 1;
     }
+    du_help_topic(&m->ui, "viewer");   /* G15: F1 opens this program's Help topic */
     viewer_attach(&m->app, &m->ui, viewer_native_fs());
     m->app.quit = quit; m->app.host = m;
     m->app.printing=print_request;m->ui.event=print_event;

@@ -514,6 +514,8 @@ struct desk_box desk_frame(uint32_t w, uint32_t h, int32_t x, int32_t y);
 struct desk_box desk_content(const struct desk_client *c);
 struct desk_box desk_close_box(const struct desk_client *c);
 struct desk_box desk_caption_icon_box(const struct desktop *, const struct desk_client *c);   /* zero when the theme draws none */
+struct desk_box desk_help_box(const struct desk_client *c);   /* G15: empty without DESK_V3_CONTEXTHELP */
+void desk_context_help(struct desktop *, int index);          /* G15: HELP to a v3 client */
 struct desk_box desk_min_box(const struct desk_client *c);
 struct desk_box desk_shade_box(const struct desk_client *c);   /* zoom; zero box when too narrow */
 struct desk_box desk_outer(const struct desk_client *c);       /* frame plus drop shadow */
@@ -571,6 +573,7 @@ void desk_about(struct desktop *);
 void desk_task_windows(struct desktop *, int index, uint32_t serial);
 int desk_task_end(struct desktop *, uint32_t window_id, uint32_t pid);
 int desk_task_switch(struct desktop *, uint32_t window_id);
+int desk_help_argument(const char *argument);   /* G15: LAUNCH help from any client */
 /* Launch results: a PID, -errno, or 0 when d->launch_async queued the spawn
  * (fx-8); desk_launch_completed reports the late result to its origin. */
 int desk_task_launch(struct desktop *, const char *name, const char *argument);

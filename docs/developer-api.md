@@ -5283,7 +5283,13 @@ v2.1: header byte 2; v1/v2.0 remain unchanged
 #define DESK_V3_TOOL 2u
 #define DESK_V3_TOPMOST 4u
 #define DESK_V3_MODAL 8u
-#define DESK_V3_STYLES 15u
+#define DESK_V3_CONTEXTHELP 16u
+```
+
+G15 WS_EX_CONTEXTHELP: the "?" caption button (it replaces minimise and zoom)
+
+```c
+#define DESK_V3_STYLES 31u
 #define DESK_V3_CAPTURE 1u
 #define DESK_V3_CLIP 2u
 #define DESK_V3_RELATIVE 4u
@@ -5323,6 +5329,9 @@ gets the desktop's "This program is not responding" dialog (G3).
 WINDOW_ORDER: flags (Z=1,OWNER=2), insert-after id/sentinel,generation,
 owner id,owner-generation. Unselected fields are zero; no descriptors.
 CLOSE/CLOSE_REQUEST/CLOSED: empty; PING/PONG: UI progress token.
+HELP (server, G15): empty. The user pressed the "?" caption button of a
+window created with DESK_V3_CONTEXTHELP; the client enters What's This?
+(WM_SYSCOMMAND SC_CONTEXTHELP) and answers the next click itself.
 CREATE/DAMAGE keep XRGB8888; only cursor bitmap uses alpha in its high byte.
 
 ```c
@@ -5361,7 +5370,13 @@ EVENT: id,callback,mouse-message,screen-x,screen-y.
 FLASH: invert (0/1). All use the authenticated window tuple.
 
 ```c
-DESK_V3_TRAY_ICON = 85, DESK_V3_TRAY_BALLOON, DESK_V3_TRAY_EVENT, DESK_V3_FLASH
+DESK_V3_TRAY_ICON = 85, DESK_V3_TRAY_BALLOON, DESK_V3_TRAY_EVENT, DESK_V3_FLASH,
+    DESK_V3_HELP = 89
+```
+
+G15: server to client, empty payload
+
+```c
 };
 ```
 
@@ -7459,7 +7474,12 @@ struct du_rect cursor_box;
 
 optional client-coordinate subregion
 
+G15: tooltip (shown after the pointer rests on the widget) and
+"What's This?" text (Shift+F1 or the dialog "?" button, then a click).
+Both are NUL-terminated strings owned by the application.
+
 ```c
+const char *tip, *help;
 };
 
 #define DU_ANCHOR_LEFT   1u
@@ -7487,8 +7507,18 @@ fx-19: rubber-band selection phases, and files dropped on the window
 (x/y client position; du_drop_file reads the paths).
 
 ```c
-DU_EV_MARQUEE, DU_EV_DROPFILES
+DU_EV_MARQUEE, DU_EV_DROPFILES,
+```
+
+G15 WM_HELP: id is the focused widget (F1) or the widget clicked in
+What's This? mode (zero when none), index is DU_HELP_F1 or
+DU_HELP_CONTEXT, x/y the pointer, text the widget's `help` text or NULL.
+A handler that shows its own help sets du_ui.help_consumed.
+
+```c
+DU_EV_HELP
 };
+enum { DU_HELP_F1 = 0, DU_HELP_CONTEXT = 1 };
 ```
 
 fx-19 DU_EV_SELECT .key from a file_drag list press: PENDING on an
@@ -7556,6 +7586,12 @@ int dragging, drag_x, drag_y, capture;
 the pointer is over the close button
 
 ```c
+int help_button, help_hot;
+```
+
+G15: "?" caption button (du_dialog_help_button), hover
+
+```c
 const uint32_t *icon_pixels;
 ```
 
@@ -7585,6 +7621,21 @@ int sheet;
 };
 
 struct du_timer { uint64_t deadline, interval; int id, active, repeat; };
+```
+
+G15: one tooltip or What's This? popup at a time (Windows: tooltips show
+after 500 ms of rest and hide after 5 s; the popup stays until a click or
+key). `widget` is the hovered widget with a `tip` (-1 none).
+
+```c
+#define DU_TIP_DELAY_NS 500000000ull
+#define DU_TIP_SHOW_NS  5000000000ull
+struct du_tip {
+    int widget, visible, context;
+    uint64_t show_ns, hide_ns;
+    struct du_rect box;
+    const char *text;
+};
 
 struct du_ui {
     void (*sound)(void *, unsigned);
@@ -7652,6 +7703,25 @@ void (*wake)(void *);
     void (*service)(struct du_ui *, void *);
     int wait_fds[4];
     unsigned wait_count;
+```
+
+G15 help everywhere. help_topic names the program's topic in CiukiOS
+Help (NULL: F1 reaches the program as an ordinary key). help_open is
+installed by du_window_open (a DESK_LAUNCH of /Programs/help); host
+tests replace it.
+
+```c
+const char *help_topic;
+    int (*help_open)(struct du_ui *, const char *topic, void *);
+    void *help_ctx;
+    int help_consumed;
+    int whats_this;
+```
+
+the pointer waits for a click (Shift+F1, SC_CONTEXTHELP)
+
+```c
+struct du_tip tip;
 };
 static inline void du_wake(struct du_ui *u)
 { if (u && u->wake) u->wake(u->wake_ctx); }
@@ -7690,6 +7760,30 @@ void du_window_focus(struct du_ui *, int focused);
 void du_release(struct du_ui *);
 unsigned du_key_char(const struct du_ui *, unsigned code);
 void du_post(struct du_ui *, enum du_event_type, int id, int index);
+```
+
+G15 help. du_help_topic names the program's Help topic (an id of
+apps/accessories/help_topics.c, the program name in /Programs). F1 opens
+it through du_help; Shift+F1 starts What's This? (du_context_help).
+du_help opens CiukiOS Help at `topic` (NULL: the program's topic, else
+the contents): 0 or -errno (-ENOSYS without a launcher).
+
+```c
+void du_help_topic(struct du_ui *, const char *topic);
+int du_help(struct du_ui *, const char *topic);
+void du_context_help(struct du_ui *, int on);
+```
+
+Hides the tooltip or What's This? popup (every key and button press does).
+
+```c
+void du_tip_hide(struct du_ui *);
+```
+
+The tooltip of a widget by id; returns the widget or NULL.
+
+```c
+struct du_widget *du_tooltip(struct du_ui *, int id, const char *tip);
 ```
 
 Lists and trees
@@ -7769,6 +7863,20 @@ void du_dialog_icon(struct du_ui *, const uint32_t *argb32);
 void du_dialog_close(struct du_ui *);
 int du_dialog_id(const struct du_ui *);
 struct du_rect du_dialog_button(const struct du_ui *, unsigned index);
+```
+
+G15: a "?" caption button left of the close button; clicking it starts
+What's This? for the dialog's controls (their `help` text).
+
+```c
+void du_dialog_help_button(struct du_ui *, int on);
+struct du_rect du_dialog_help_box(const struct du_ui *);
+```
+
+The dialog control under (x, y), or NULL.
+
+```c
+struct du_widget *du_dialog_item_at(struct du_ui *, int x, int y);
 ```
 
 Timers (monotonic nanoseconds) and the shared text clipboard.
