@@ -97,8 +97,15 @@ static void navigate(const char *text)
     nsurl *url=NULL;
     nserror err=nsurl_create(text,&url);
     if(!err && browser())err=browser_window_navigate(browser(),url,NULL,BW_NAVIGATE_HISTORY,NULL,NULL,NULL);
+    bool parsed=url!=NULL;
     if(url)nsurl_unref(url);
-    if(err)ciuki_chrome_status("Unable to open this address.");
+    if(err) {
+        /* No address text (privacy, as the input records); the nserror tells
+         * an unparsable address from a missing fetcher (NO_FETCH_HANDLER) or
+         * a refused fetch setup (NOMEM) when no fetch record follows. */
+        ciuki_log_line("[netsurf] navigate error=%d parsed=%d window=%d",(int)err,parsed,browser()!=NULL);
+        ciuki_chrome_status("Unable to open this address.");
+    }
 }
 static int save_hotlist(const char *path,void *unused)
 { (void)unused;return hotlist_export(path,"NetSurf Bookmarks")==NSERROR_OK?0:-1; }

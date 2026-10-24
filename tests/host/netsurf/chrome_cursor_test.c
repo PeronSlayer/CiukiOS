@@ -4,6 +4,18 @@
 #include "../../../sdk/netsurf/port/chrome.c"
 #include <assert.h>
 static unsigned selected, selections;
+/* G26 downloads: ciuki_download_table keeps these sections (sanitizer global
+ * metadata); the cursor paths never reach them. */
+fbtk_widget_t *fbtk;
+void fbtk_request_redraw(fbtk_widget_t *w) { (void)w;abort(); }
+void du_dialog_close(struct du_ui *u) { (void)u;abort(); }
+const char *download_context_get_filename(const download_context *c) { (void)c;abort(); }
+unsigned long long int download_context_get_total_length(const download_context *c) { (void)c;abort(); }
+void download_context_destroy(download_context *c) { (void)c;abort(); }
+int ciuki_download_begin(struct ciuki_download_store *s,const char *d,const char *n) { (void)s;(void)d;(void)n;abort(); }
+int ciuki_download_write(struct ciuki_download_store *s,const void *b,size_t n) { (void)s;(void)b;(void)n;abort(); }
+int ciuki_download_complete(struct ciuki_download_store *s) { (void)s;abort(); }
+void ciuki_download_discard(struct ciuki_download_store *s) { (void)s;abort(); }
 int ciuki_browser_cursor(struct ciuki_browser_surface *s,unsigned shape)
 { assert(s==surface);selected=shape;selections++;return 0; }
 int main(void)

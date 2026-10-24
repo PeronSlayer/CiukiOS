@@ -22,6 +22,7 @@ class SurfaceTests(unittest.TestCase):
                "-include",str(ROOT / "tests/host/desktop/replay_base.h")]
         subprocess.run([*flags,str(ROOT / "tests/host/netsurf/chrome_cursor_test.c"),
                         str(ROOT / "apps/libdeskui/widgets.c"),str(ROOT / "apps/libdeskui/draw.c"),
+                        str(ROOT / "apps/desktop/theme.c"),
                         "-o",str(out / "chrome-cursor")],check=True)
         subprocess.run([str(out / "chrome-cursor")],check=True,
                        env=dict(os.environ,ASAN_OPTIONS="detect_leaks=1",UBSAN_OPTIONS="halt_on_error=1"),timeout=30)

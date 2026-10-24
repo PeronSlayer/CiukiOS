@@ -1,0 +1,281 @@
+CiukiOS: JavaScript heap and thread setup that cannot end the browser. G26B
+charges Duktape allocations to the JavaScript budget (port/js_memory.c, an
+eighth of free memory). Upstream js_newheap and js_newthread build the
+prototypes, thread map and window object without a catchpoint, so a refused
+allocation ended in Duktape's default fatal handler (abort) or, when the
+uncaught-error text could not be allocated either, in unbounded recursion
+(stack overflow); the generated dukky_create_prototypes() skips a prototype
+whose allocation failed, and a missing Window prototype made the window an
+HTMLUnknownElement over the browser_window pointer (crash in its finaliser).
+Now: a heap is made only with 1 MiB of budget left, setup steps run under
+duk_safe_call, a refused allocation during heap setup discards the heap, and
+a document whose thread failed is not retried at every inserted element. A
+window without a heap has no scripting (NULL heap and thread, as with the
+"none" backend) and one stderr line, instead of no browser.
+
+--- a/netsurf/content/handlers/javascript/duktape/dukky.c
++++ b/netsurf/content/handlers/javascript/duktape/dukky.c
+@@ -62,6 +62,9 @@
+ 	bool pending_destroy; /**< Whether this heap is pending destruction */
+ 	unsigned int live_threads; /**< number of live threads */
+ 	uint64_t exec_start_time;
++#ifdef CIUKI_NETSURF
++	void *ciuki_failed_doc; /**< document whose thread setup failed */
++#endif
+ };
+ 
+ /**
+@@ -599,6 +602,45 @@
+ }
+ 
+ 
++#ifdef CIUKI_NETSURF
++#include <stdio.h>
++/* CiukiOS: Duktape allocations are admitted against the JavaScript budget
++ * (js_memory.c, an eighth of free memory), so heap and thread setup can fail
++ * an allocation. Upstream runs that setup without a catchpoint: the error
++ * reached Duktape's default fatal handler (abort) or, when even the
++ * uncaught-error text could not be allocated, recursed until the stack
++ * overflowed. Heap creation itself has no catchpoint inside Duktape, so a
++ * heap is only made with CIUKI_JS_HEAP_MIN of budget left; the generated
++ * dukky_create_prototypes() skips a prototype whose allocation failed (a
++ * missing Window prototype then made the window an HTMLUnknownElement over
++ * the browser_window pointer), so any refused allocation during setup
++ * discards the heap. Each step runs under duk_safe_call; a window whose heap
++ * cannot be made has no scripting (as with the "none" backend: NULL heap,
++ * NULL thread) instead of no window, and a document whose thread could not
++ * be made is not retried at each inserted element. */
++#define CIUKI_JS_HEAP_MIN (1024u * 1024u)
++static void dukky_ciuki_unavailable(const char *what, size_t charged)
++{
++	char line[128];
++	int n = snprintf(line, sizeof(line),
++		"NetSurf JavaScript unavailable: %s (charged %zu bytes)\n",
++		what, charged);
++	if (n > 0) fwrite(line, 1, (size_t)n < sizeof(line) ? (size_t)n : sizeof(line) - 1, stderr);
++}
++static duk_ret_t dukky_ciuki_heap_setup(duk_context *ctx, void *udata)
++{
++	(void)udata;
++	duk_push_global_object(ctx);
++	duk_push_boolean(ctx, true);
++	duk_put_prop_string(ctx, -2, "protos");
++	duk_put_global_string(ctx, PROTO_MAGIC);
++	dukky_create_prototypes(ctx);
++	duk_push_object(ctx);
++	duk_put_global_string(ctx, THREAD_MAP);
++	return 0;
++}
++#endif
++
+ /* exported interface documented in js.h */
+ nserror
+ js_newheap(int timeout, jsheap **heap)
+@@ -609,12 +651,36 @@
+ 	*heap = NULL;
+ 	NSLOG(dukky, DEBUG, "Creating new duktape javascript heap");
+ 	if (ret == NULL) return NSERROR_NOMEM;
++#ifdef CIUKI_NETSURF
++	if (ciuki_js_available() < CIUKI_JS_HEAP_MIN) {
++		free(ret);
++		dukky_ciuki_unavailable("budget", ciuki_js_charged());
++		return NSERROR_OK;
++	}
++	unsigned long refused = ciuki_js_refusals();
++#endif
+ 	ctx = ret->ctx = duk_create_heap(
+ 		dukky_alloc_function,
+ 		dukky_realloc_function,
+ 		dukky_free_function,
+ 		ret,
+ 		NULL);
++#ifdef CIUKI_NETSURF
++	if (ret->ctx == NULL) {
++		free(ret);
++		dukky_ciuki_unavailable("heap", ciuki_js_charged());
++		return NSERROR_OK;
++	}
++	if (duk_safe_call(ctx, dukky_ciuki_heap_setup, NULL, 0, 1) != DUK_EXEC_SUCCESS ||
++	    ciuki_js_refusals() != refused) {
++		size_t charged = ciuki_js_charged();
++		duk_destroy_heap(ctx);
++		free(ret);
++		dukky_ciuki_unavailable("prototypes", charged);
++		return NSERROR_OK;
++	}
++	duk_pop(ctx);
++#else
+ 	if (ret->ctx == NULL) { free(ret); return NSERROR_NOMEM; }
+ 	/* Create the prototype stuffs */
+ 	duk_push_global_object(ctx);
+@@ -626,6 +692,7 @@
+ 	/* Now create the thread map */
+ 	duk_push_object(ctx);
+ 	duk_put_global_string(ctx, THREAD_MAP);
++#endif
+ 
+ 	*heap = ret;
+ 	return NSERROR_OK;
+@@ -653,10 +720,55 @@
+ /* Just for here, the CTX is in ret, not thread */
+ #define CTX (ret->ctx)
+ 
++#ifdef CIUKI_NETSURF
++static duk_ret_t dukky_ciuki_thread_register(duk_context *ctx, void *udata)
++{
++	jsthread *t = udata;
++	duk_get_global_string(ctx, THREAD_MAP); /* ... threads */
++	duk_push_thread(ctx); /* ... threads thread */
++	t->ctx = duk_require_context(ctx, -1);
++	duk_put_prop_index(ctx, -2, t->thread_idx);
++	return 0;
++}
++static duk_ret_t dukky_ciuki_thread_window(duk_context *ctx, void *udata)
++{
++	void **priv = udata;
++	duk_push_pointer(ctx, priv[0]);
++	duk_push_pointer(ctx, priv[1]);
++	dukky_create_object(ctx, PROTO_NAME(WINDOW), 2);
++	duk_push_global_object(ctx);
++	duk_put_prop_string(ctx, -2, PROTO_MAGIC);
++	duk_set_global_object(ctx);
++	duk_push_object(ctx);
++	duk_push_pointer(ctx, NULL);
++	duk_push_null(ctx);
++	duk_put_prop(ctx, -3);
++	duk_put_global_string(ctx, NODE_MAGIC);
++	duk_push_object(ctx);
++	duk_put_global_string(ctx, EVENT_MAGIC);
++	return 0;
++}
++static duk_ret_t dukky_ciuki_thread_generics(duk_context *ctx, void *udata)
++{
++	(void)udata;
++	duk_push_global_object(ctx);
++	duk_get_prop_string(ctx, -1, "NetSurf");
++	duk_put_global_string(ctx, GENERICS_MAGIC);
++	duk_del_prop_string(ctx, -1, "NetSurf");
++	duk_pop(ctx);
++	return 0;
++}
++#endif
++
+ /* exported interface documented in js.h */
+ nserror js_newthread(jsheap *heap, void *win_priv, void *doc_priv, jsthread **thread)
+ {
+ 	jsthread *ret;
++#ifdef CIUKI_NETSURF
++	*thread = NULL;
++	if (heap == NULL) return NSERROR_NOT_IMPLEMENTED;
++	if (heap->ciuki_failed_doc == doc_priv) return NSERROR_NOMEM;
++#endif
+ 	assert(heap != NULL);
+ 	assert(heap->pending_destroy == false);
+ 
+@@ -671,6 +783,33 @@
+ 	      win_priv, doc_priv);
+ 
+ 	/* create new thread */
++#ifdef CIUKI_NETSURF
++	ret->heap = heap;
++	ret->thread_idx = heap->next_thread++;
++	if (duk_safe_call(heap->ctx, dukky_ciuki_thread_register, ret, 0, 1) != DUK_EXEC_SUCCESS) {
++		duk_pop(heap->ctx);
++		free(ret);
++		heap->ciuki_failed_doc = doc_priv;
++		dukky_ciuki_unavailable("thread", ciuki_js_charged());
++		return NSERROR_NOMEM;
++	}
++	duk_pop(heap->ctx);
++	heap->live_threads++;
++	/* The thread's value stack is preallocated by duk_push_thread. */
++	duk_push_int(CTX, 0);
++	duk_push_int(CTX, 1);
++	duk_push_int(CTX, 2);
++	{
++		void *priv[2] = { win_priv, doc_priv };
++		if (duk_safe_call(CTX, dukky_ciuki_thread_window, priv, 0, 1) != DUK_EXEC_SUCCESS) {
++			dukky_ciuki_unavailable("window object", ciuki_js_charged());
++			heap->ciuki_failed_doc = doc_priv;
++			js_destroythread(ret);
++			return NSERROR_NOMEM;
++		}
++		duk_pop(CTX);
++	}
++#else
+ 	duk_get_global_string(heap->ctx, THREAD_MAP); /* ... threads */
+ 	duk_push_thread(heap->ctx); /* ... threads thread */
+ 	ret->heap = heap;
+@@ -701,6 +840,7 @@
+ 	/* And now the event mapping table */
+ 	duk_push_object(CTX);
+ 	duk_put_global_string(CTX, EVENT_MAGIC);
++#endif
+ 
+ 	/* Now load the polyfills */
+ 	/* ... */
+@@ -710,12 +850,20 @@
+ 					  (const char *)polyfill_js, polyfill_js_len) != 0) {
+ 		NSLOG(dukky, CRITICAL, "%s", duk_safe_to_string(CTX, -1));
+ 		NSLOG(dukky, CRITICAL, "Unable to compile polyfill.js, thread aborted");
++#ifdef CIUKI_NETSURF
++		dukky_ciuki_unavailable("scripts", ciuki_js_charged());
++		heap->ciuki_failed_doc = doc_priv;
++#endif
+ 		js_destroythread(ret);
+ 		return NSERROR_INIT_FAILED;
+ 	}
+ 	/* ..., (generics.js) */
+ 	if (dukky_pcall(CTX, 0, true) != 0) {
+ 		NSLOG(dukky, CRITICAL, "Unable to run polyfill.js, thread aborted");
++#ifdef CIUKI_NETSURF
++		dukky_ciuki_unavailable("scripts", ciuki_js_charged());
++		heap->ciuki_failed_doc = doc_priv;
++#endif
+ 		js_destroythread(ret);
+ 		return NSERROR_INIT_FAILED;
+ 	}
+@@ -731,18 +879,35 @@
+ 					  (const char *)generics_js, generics_js_len) != 0) {
+ 		NSLOG(dukky, CRITICAL, "%s", duk_safe_to_string(CTX, -1));
+ 		NSLOG(dukky, CRITICAL, "Unable to compile generics.js, thread aborted");
++#ifdef CIUKI_NETSURF
++		dukky_ciuki_unavailable("scripts", ciuki_js_charged());
++		heap->ciuki_failed_doc = doc_priv;
++#endif
+ 		js_destroythread(ret);
+ 		return NSERROR_INIT_FAILED;
+ 	}
+ 	/* ..., (generics.js) */
+ 	if (dukky_pcall(CTX, 0, true) != 0) {
+ 		NSLOG(dukky, CRITICAL, "Unable to run generics.js, thread aborted");
++#ifdef CIUKI_NETSURF
++		dukky_ciuki_unavailable("scripts", ciuki_js_charged());
++		heap->ciuki_failed_doc = doc_priv;
++#endif
+ 		js_destroythread(ret);
+ 		return NSERROR_INIT_FAILED;
+ 	}
+ 	/* ..., result */
+ 	duk_pop(CTX);
+ 	/* ... */
++#ifdef CIUKI_NETSURF
++	if (duk_safe_call(CTX, dukky_ciuki_thread_generics, NULL, 0, 1) != DUK_EXEC_SUCCESS) {
++		dukky_ciuki_unavailable("generics", ciuki_js_charged());
++		heap->ciuki_failed_doc = doc_priv;
++		js_destroythread(ret);
++		return NSERROR_NOMEM;
++	}
++	duk_pop(CTX);
++#else
+ 	duk_push_global_object(CTX);
+ 	/* ..., Win */
+ 	duk_get_prop_string(CTX, -1, "NetSurf");
+@@ -751,6 +916,7 @@
+ 	/* ..., Win */
+ 	duk_del_prop_string(CTX, -1, "NetSurf");
+ 	duk_pop(CTX);
++#endif
+ 	/* ... */
+ 
+ 	dukky_log_stack_frame(CTX, "New thread created");
