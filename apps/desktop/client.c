@@ -2286,6 +2286,7 @@ int desk_v3_dialog_accept(struct desktop *d)
     return result;
 }
 #include <ciuki/w32_diagnostics.h>
+#include "fault_text.h"
 void desk_w32_fault_dialog(struct desktop *d,const struct ciuki_w32_fault *f)
 {
     char text[320];
@@ -2301,6 +2302,13 @@ void desk_w32_fault_dialog(struct desktop *d,const struct ciuki_w32_fault *f)
                 snprintf(d->v3_details+n,sizeof(d->v3_details)-(unsigned)n,"%s????????",i%4?" ":"\n");n+=k;
         }
         desk_shell_message(d,"Windows program error",text,1);return;
+    }
+    if(f->kind==W32_REPORT_NATIVE_FAULT){
+        /* G13: Windows 9x wording for a native program's fault; the program is already shut down. */
+        d->v3_dialog_kind=1;
+        char title[64];snprintf(title,sizeof(title),"%.40s",f->exe);
+        if(desk_native_fault_text(f,d->v3_details,sizeof(d->v3_details))<0)snprintf(d->v3_details,sizeof(d->v3_details),"Details are not available.");
+        desk_shell_message(d,title,"This program has performed an illegal operation and will be shut down.\n\nIf the problem persists, contact the program vendor.",1);return;
     }
     d->v3_dialog_kind=3;
     switch(f->code){

@@ -421,7 +421,6 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 25 | Desktop icon selection (fx-19): click, Ctrl and Shift clicks, keyboard (Ctrl+A, arrows, Shift+arrows, Ctrl+Space); the list view repaints each item whose selection or focus state changes (`LVN_ITEMCHANGED`) | the icon's box (selection tint, label halo, focus rectangle) | `shell.c` `mark`, `icon_focus`, `icon_repaint` | none (fx-15b audit) | selection |
 | 26 | Rubber band (marquee): an XOR focus rectangle (`DrawFocusRect`) drawn and erased as the pointer moves | the band's old and new outline | `band_begin`, `band_update`, `band_end`, `draw_band` | fx-15b: a band ended by an icon-list rebuild (`icons_build`, run by a shortcut or folder refresh) vanished from the state without any repaint: its outline stayed on screen (the merge failure: `engine+cache ... fuzz run=0 step=49`) | selection |
 | 27 | Drag image (`ImageList_DragMove`/`DragShowNolock` in the Windows 98 shell): the image follows the pointer above every window | the image's old and new box; screen copies are cut by it | `dnd_image_box`, `dnd_image_damage`, `draw_drag_image`, `copy_region`, `desk_shell_chrome_intersects` | none reachable found; the "as painted" record that the copy cut and the direct client path use is updated by the input path only, so fx-15b's reconcile now keeps it equal to the painter's box whatever moves the pointer | drag and drop |
-| 36 | Startup programs (G21): background logon batch shows, activates and closes ordinary windows | existing CREATE_WINDOW, activation and close damage; no batch-wide repaint | startup worker → shared launcher → `client.c` | none new | startup programs |
 | 28 | Drop-target highlight (`DROPEFFECT` feedback: the target item drawn selected while it would accept the drop) | the old and new target icon | `dnd_evaluate` (`drop_index`), `icon_repaint` | none | drag and drop |
 | 29 | Taskbar hover during a drag (Windows 98: holding a dragged object over a task button for about a second activates that window) | the restored window (rows 7, 8, 11) | `desk_shell_tick` drag hover | none (covered by the window rows) | drag and drop |
 | 30 | Right-drag menu, Esc and cancelled drags | the menu box (row 13); the image box when the drag ends | `desk_shell_drag_button`, `desk_shell_drag_cancel`, `dnd_finish` | none | drag and drop |
@@ -432,12 +431,14 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 35 | Caption icon (Ciuki Blue): a click opens the window menu under it, a second click within the double-click time closes the window (`WM_SYSCOMMAND` `SC_CLOSE`) | the menu's outer box; the caption and task button ("Closing...") | `desk_shell_caption_icon` (`shell.c`), `desk_caption_icon_box` (`compositor.c`) | none | caption icon |
 | 36 | Startup programs (G21): background logon batch shows, activates and closes ordinary windows | existing CREATE_WINDOW, activation and close damage; no batch-wide repaint | startup worker → shared launcher → `client.c` | none new | startup programs |
 | 37 | Window move while other windows repaint (fx-26): preserve valid client bits while repainting damage outside the carried rectangle | the exposed area, damage from the other window, and the moving window's damaged pixels | `desk_move`, `copy_region`, `window_damage` | unrelated damage disabled new move copies; damage on the shadow ring cancelled continuing copies | move with other damage (`WM_ROW=29`) |
+| 38 | Native program fault dialog (G13, ER-1; Windows 98 "This program has performed an illegal operation" box): a message window with Close and a Details panel that opens and closes in place | the dialog's outer box, its task button, the Details text swap | `desk_w32_fault_dialog` (`client.c`), `fault_text.h`, `shell.c` message window | none (the Win32 crash dialog already used the same message window; this adds the native record) | native fault dialog |
 
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with
 fx-19 (drag and drop, rubber-band and keyboard selection) and were added by
 fx-15b after the merge, with the reconcile extended to the band and the
-drag image. Rows 31-35 came with G4 (`docs/design/taskbar-arrangement-windows-keys.md`);
+drag image. Rows 31-35 came with G4 (`docs/design/taskbar-arrangement-windows-keys.md`),
+and row 36 came with G13 (`docs/directives/g13-g16-os-gaps-batch-3.md`);
 the randomized sequences gained operations 42-47 (taskbar menu, Win+D/M and
 Alt+M, taskbar focus keys, Alt+F6/Menu key/Shift+F10/F3, caption icon,
 Win+E/R/F/Break/F1). Row 36 adds fx-26's drag with concurrent damage.

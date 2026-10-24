@@ -6724,8 +6724,15 @@ struct ciuki_w32_compat_args {
     uint32_t action, settings, bytes, timestamp, image_size, file_size;
     uint32_t source, source_bytes;
 };
+```
+
+W32_REPORT_NATIVE_FAULT (G13) is only ever the `kind` of a W32_REPORT_NEXT
+record, never an action: a native (ELF) program was shut down by a
+processor fault.
+
+```c
 enum w32_report_action { W32_REPORT_CRASH=1, W32_REPORT_REFUSE,
-    W32_REPORT_NEXT, W32_REPORT_CLOSE, W32_REPORT_REASON };
+    W32_REPORT_NEXT, W32_REPORT_CLOSE, W32_REPORT_REASON, W32_REPORT_NATIVE_FAULT };
 enum w32_refusal { W32_REFUSE_MSI=1, W32_REFUSE_DRIVER, W32_REFUSE_RUNTIME,
     W32_REFUSE_MISSING_DLL, W32_REFUSE_EXPORT, W32_REFUSE_IMAGE, W32_REFUSE_SERVER };
 enum w32_exit_reason { W32_EXIT_NORMAL, W32_EXIT_CRASH, W32_EXIT_KILLED, W32_EXIT_RESTART };
@@ -6738,6 +6745,9 @@ struct ciuki_w32_report_args {
 No pointers, strings, file contents or general memory dump on the wire.
 registers: eax ebx ecx edx esi edi ebp esp eflags. Unreadable stack words
 are zero with their valid-mask bit clear; display them as ????????.
+Kind W32_REPORT_NATIVE_FAULT: code = vector | error code << 8 (low 24 bits
+of the error code), eip = faulting instruction, offset = faulting address
+(CR2 for a page fault, else eip), exe = program name, module empty.
 
 ```c
 struct ciuki_w32_fault {

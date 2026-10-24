@@ -25,6 +25,7 @@ ACCESSORIES = {
     "charmap": ["charmap_main.c", "charmap_view.c"],
     "clock": ["clock_main.c", "clock_view.c", "clock_model.c"],
     "help": ["help_main.c", "help_view.c", "help_topics.c"],
+    "logview": ["logview_main.c", "logview_view.c", "logview_model.c"],
     "mixer": ["mixer_main.c", "mixer_view.c"],
     "music": ["../music/main.c", "../music/view.c", "../music/player.c", "../music/runtime.c", "../music/decoder.c", "../music/playlist.c", "../music/vorbis.c"],
     "paint": ["../paint/main.c", "../paint/paint.c", "../paint/io.c", "../paint/stb.c"],

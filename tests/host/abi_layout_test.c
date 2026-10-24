@@ -20,6 +20,15 @@ _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,launch.reserved[3])
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,launch.reserved[4])==100,"launch second joystick generation");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,launch.reserved[5])==104,"launch joystick mode");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,launch.reserved[6])==108,"launch joystick session");
+/* G13: a native program fault reuses the 224-byte Win32 fault record (kind 6, appended to w32_report_action). */
+#include <ciuki/w32_diagnostics.h>
+_Static_assert(W32_REPORT_CRASH==1 && W32_REPORT_REFUSE==2 && W32_REPORT_NEXT==3 && W32_REPORT_CLOSE==4 &&
+               W32_REPORT_REASON==5 && W32_REPORT_NATIVE_FAULT==6,"native fault record kind");
+_Static_assert(sizeof(struct ciuki_w32_fault)==224,"fault record size");
+_Static_assert(__builtin_offsetof(struct ciuki_w32_fault,code)==12 && __builtin_offsetof(struct ciuki_w32_fault,eip)==16 &&
+               __builtin_offsetof(struct ciuki_w32_fault,offset)==20 && __builtin_offsetof(struct ciuki_w32_fault,valid)==24 &&
+               __builtin_offsetof(struct ciuki_w32_fault,registers)==28 && __builtin_offsetof(struct ciuki_w32_fault,stack)==64 &&
+               __builtin_offsetof(struct ciuki_w32_fault,exe)==96 && __builtin_offsetof(struct ciuki_w32_fault,module)==160,"fault record fields");
 #include "../../sdk/win32/include/w32/clipboard_formats.h"
 _Static_assert(CF_TEXT==1u,"G5 Win32 CF_TEXT");
 _Static_assert(CF_BITMAP==2u,"G5 Win32 CF_BITMAP");

@@ -12,6 +12,7 @@
  * 16 bpp. The fx-2 occlusion harness (occlusion_test.c) supplies the
  * presenters, the full-composite comparison and the per-pixel oracle. */
 #define DESKTOP_OCCLUSION_NO_MAIN
+#include <ciuki/w32_diagnostics.h>
 #include "occlusion_test.c"
 
 enum { WM_SOFTWARE, WM_ENGINE, WM_CACHE, WM_BATCH32, WM_BATCH16, WM_MODES };
@@ -945,6 +946,18 @@ static void row_internal(unsigned m)
     desk_shell_message(&d,"Programs","A second message replaces the first.",0); step("message replaced");
     wm_end();
 }
+static void row_fault(unsigned m)
+{
+    /* G13: the native program fault dialog is a message window with a Details panel. */
+    row_name="native fault dialog"; wm_begin(m,1);
+    struct ciuki_w32_fault f={.kind=W32_REPORT_NATIVE_FAULT,.pid=42,.tid=43,.code=14u|6u<<8,.eip=0x401234,.offset=0x10,.valid=3};
+    strcpy(f.exe,"crasher"); f.stack[0]=0xdeadbeef; f.stack[1]=0x01020304;
+    desk_w32_fault_dialog(&d,&f); step("illegal operation dialog");
+    tap(DU_KEY_TAB); step("Details panel opens");
+    tap(DU_KEY_TAB); step("Details panel closes");
+    tap(DU_KEY_ENTER); step("Close");
+    wm_end();
+}
 static void row_icons(unsigned m)
 {
     row_name="desktop icons"; wm_begin(m,1);
@@ -1231,8 +1244,8 @@ static void row_caption_icon(unsigned m)
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
     row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,
-    row_taskbar_menu,row_arrange,row_minimize_all,row_win_keys,row_caption_icon,row_startup,
-    row_move_damaged};
+    row_taskbar_menu, row_arrange, row_minimize_all, row_win_keys, row_caption_icon, row_startup,
+    row_move_damaged, row_fault};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).
