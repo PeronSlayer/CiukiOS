@@ -24,16 +24,21 @@ enum { CFG_WALL_CENTER, CFG_WALL_STRETCH, CFG_WALL_TILE, CFG_WALL_FIT, CFG_WALL_
 /* Keyboard layouts (keyboard). */
 enum { CFG_KEYS_US, CFG_KEYS_IT, CFG_KEYS_COUNT };
 #define CFG_THEMES 2
+#define CFG_ICON_SPACING_MIN 60
+#define CFG_ICON_SPACING_MAX 256
 #define CFG_MOUSE_MIN 1
 #define CFG_MOUSE_MAX 10
 #define CFG_MOUSE_NORMAL 5
 struct ciuki_settings {
     char theme[32];                 /* "Platinum", "Ciuki Blue" */
     char wallpaper[CFG_PATH_MAX];   /* "ciuki", "none", "builtin:<name>" or an absolute file path */
+    int wallpaper_pattern;          /* DESK_WALL_PATTERNS index; 0 = none */
     int wallpaper_mode;             /* CFG_WALL_* */
     uint32_t desktop_color;         /* 0xRRGGBB behind and around the wallpaper */
     int clock_24h, clock_seconds, desktop_icons;
     int icon_auto_arrange, icon_sort; /* G19: persisted desktop view state */
+    int icon_spacing_x, icon_spacing_y; /* icon-cell width and height, pixels */
+    int icon_font;                  /* DESK_FONT_* caption font */
     int mouse_speed;                /* 1..10, 5 = one screen pixel per mouse count */
     int double_click_ms;            /* 200..900 */
     uint16_t display_mode;         /* confirmed VBE mode id; 0 keeps loader default */
@@ -57,7 +62,14 @@ void cfg_recent_add(struct ciuki_settings *, const char *path);
 int cfg_icon_position(const struct ciuki_settings *, const char *, int *, int *);
 int cfg_icon_move(struct ciuki_settings *, const char *, int, int);
 void cfg_icon_forget(struct ciuki_settings *, const char *);
+/* Atomic rename of all saved resolution profiles, or 0 at capacity. */
+int cfg_icon_rename(struct ciuki_settings *, const char *old_name, const char *new_name);
 void cfg_icons_arrange(struct ciuki_settings *);
+/* Resolution profiles preserve each layout independently; old unqualified
+ * positions are a fallback until that resolution is explicitly arranged. */
+int cfg_icon_position_at(const struct ciuki_settings *, const char *, unsigned width, unsigned height, int *, int *);
+int cfg_icon_move_at(struct ciuki_settings *, const char *, unsigned width, unsigned height, int, int);
+int cfg_icons_arrange_at(struct ciuki_settings *, unsigned width, unsigned height);
 int cfg_icon_label(const struct ciuki_settings *, const char *, char *, size_t);
 int cfg_icon_label_set(struct ciuki_settings *, const char *, const char *);
 void cfg_icon_label_forget(struct ciuki_settings *, const char *);

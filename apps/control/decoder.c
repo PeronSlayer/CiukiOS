@@ -100,8 +100,8 @@ int cp_decoder_work_default(const struct cp_preview_req *req, struct cp_preview_
     }
     if (cp_decoder_cancelled()) return -ECANCELED;
     clock_gettime(CLOCK_MONOTONIC, &t0);
-    desk_wallpaper_render_styled(d.preview, 192, 144, req->bar, req->bar, req->path, req->mode, req->colour,
-                                 &out->image, req->portrait, req->font, req->label, req->aa);
+    desk_wallpaper_render_pattern_styled(d.preview, 192, 144, req->bar, req->bar, req->path, req->mode, req->colour,
+                                 &out->image, req->portrait, req->font, req->label, req->aa, req->pattern);
     out->render_ms = elapsed_ms(&t0); out->rendered = 1;
     return 0;
 }

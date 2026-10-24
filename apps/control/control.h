@@ -39,6 +39,8 @@
 enum { CP_BACKGROUND, CP_APPEARANCE, CP_SCREEN_SETTINGS, CP_SCREEN_SAVER, CP_DISPLAY_TABS };
 enum { CP_DISPLAY_TABS_ID = 960, CP_OK, CP_CANCEL, CP_CATEGORY, CP_POWER_ACTION, CP_OPEN_LOG, CP_LOG_PREV, CP_LOG_NEXT, CP_LOG_VIEW, CP_LOG_STATUS };
 enum { CP_SAVER_KIND=1980, CP_SAVER_ENABLE, CP_SAVER_WAIT, CP_SAVER_PREVIEW, CP_MONITOR_WAIT, CP_SAVER_NOTE, CP_SAVER_SETTINGS };
+enum { CP_WALL_PATTERN=2001 };
+enum { CP_ICON_APPEARANCE=1990, CP_ICON_APPEARANCE_BACK, CP_ICON_SPACE_X, CP_ICON_SPACE_Y, CP_ICON_FONT, CP_ICON_SPACE_X_VALUE, CP_ICON_SPACE_Y_VALUE };
 #define CP_LOG_BYTES 8192u
 #define CP_LOG_FILE "/system/logs/BOOT.LOG"
 #define CP_FONTS_MAX 32
@@ -53,7 +55,7 @@ enum { CP_AREA_LABEL = 800, CP_AREA, CP_DEPTH_LABEL, CP_DEPTH, CP_APPLY, CP_MODE
 enum { CP_MODE_IDLE, CP_MODE_WAIT, CP_MODE_CONFIRM, CP_MODE_REVERT, CP_MODE_SAVE };
 /* f2-88b: one preview job. image is moved to the worker (NULL: decode path first). */
 struct cp_preview_req {
-    char path[128]; int mode; uint32_t colour, bar; int font; uint32_t label; int aa;
+    char path[128]; int mode, pattern; uint32_t colour, bar; int font; uint32_t label; int aa;
     const uint32_t *portrait; struct desk_image image;
 };
 struct cp_preview_done {
@@ -178,6 +180,9 @@ struct cp_app {
     char power_lines[20][128];
     struct ciuki_settings cfg;
     struct ciuki_settings display_original;
+    int icon_appearance;
+    struct du_item icon_font_items[DESK_FONTS];
+    char icon_font_labels[DESK_FONTS][64];
     int display_tab, display_session, display_dirty, display_preview, display_write;
     int display_accept, display_leaving, close_pending;
     int navigation_pending, next_page;
@@ -197,6 +202,7 @@ struct cp_app {
     struct du_item sound_items[SOUND_EVENTS], scheme_items[3];
     char sound_volume_label[24];
     char wall_names[CP_WALLPAPERS][CFG_PATH_MAX]; unsigned wall_count;
+    struct du_item pattern_items[DESK_WALL_PATTERNS];
     struct du_item theme_items[CFG_THEMES], wall_items[CP_WALLPAPERS + 8], key_items[CFG_KEYS_COUNT], tab_items[CP_PAGES];
     char wall_labels[CP_WALLPAPERS + 8][48];
     uint32_t preview[192 * 144];

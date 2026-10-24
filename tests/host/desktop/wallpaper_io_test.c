@@ -11,6 +11,13 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#include <utime.h>
+#ifdef __CIUKIOS__
+/* Host fixture dependency: the SDK supplies utimbuf but has no utime
+ * binding. Compile its real POSIX declaration; this fixture is never linked
+ * or run as a guest program. The host libc performs the timestamp mutation. */
+extern int utime(const char *, const struct utimbuf *);
+#endif
 static int read_only;
 static unsigned read_calls, write_calls;
 static size_t read_limit=512, write_limit=512;
@@ -59,8 +66,8 @@ static unsigned raw_count(const char *dir)
 }
 static void stamp(const char *path, time_t seconds)
 {
-    struct timespec times[2]={{seconds,0},{seconds,0}};
-    assert(!utimensat(AT_FDCWD,path,times,0));
+    const struct utimbuf times={.actime=seconds,.modtime=seconds};
+    assert(!utime(path,&times));
 }
 static void check_keys(struct desk_wall_request r)
 {
@@ -74,6 +81,7 @@ static void check_keys(struct desk_wall_request r)
     other.height++; desk_wall_cache_name(name,&other,1234,5678); assert(strcmp(base,name)); other=r;
     other.colour++; desk_wall_cache_name(name,&other,1234,5678); assert(strcmp(base,name)); other=r;
     other.mode=CFG_WALL_FIT; desk_wall_cache_name(name,&other,1234,5678); assert(strcmp(base,name)); other=r;
+    other.pattern=3; desk_wall_cache_name(name,&other,1234,5678); assert(strcmp(base,name)); other=r;
     other.top++; desk_wall_cache_name(name,&other,1234,5678); assert(strcmp(base,name)); other=r;
     strcat(other.path,"x"); desk_wall_cache_name(name,&other,1234,5678); assert(strcmp(base,name));
 }
@@ -114,7 +122,8 @@ int main(int argc, char **argv)
     struct stat s; assert(!stat(r.path,&s));
     char name[DESK_WALL_NAME_MAX], file[640]; desk_wall_cache_name(name,&r,(uint64_t)s.st_size,s.st_mtime);
     snprintf(file,sizeof(file),"%s/%s",dir,name);
-    assert(!truncate(file,4)); /* A truncated cache is decoded again, never published. */
+    int trunc_fd=open(file,O_WRONLY); assert(trunc_fd>=0);
+    assert(!ftruncate(trunc_fd,4) && !close(trunc_fd)); /* A truncated cache is decoded again, never published. */
     assert(!desk_wall_prepare(&r,dir,&pixels,&hit,NULL) && !hit); free(pixels);
     stamp(r.path,s.st_mtime+2);
     assert(!desk_wall_prepare(&r,dir,&pixels,&hit,NULL) && !hit); free(pixels);
@@ -134,7 +143,7 @@ int main(int argc, char **argv)
     char absent[512]; snprintf(absent,sizeof(absent),"%s/read-only/wallpaper",argv[2]);
     read_only=1;
     assert(!desk_wall_prepare(&r,absent,&pixels,&hit,NULL) && !hit && pixels); free(pixels);
-    assert(access(absent,F_OK)==-1 && errno==ENOENT); read_only=0;
+    struct stat missing; assert(stat(absent,&missing)==-1 && errno==ENOENT); read_only=0;
     bulk_io(r,argv[2]);
     /* Golden frames are generated with the identical production cache path. */
     for (int mode=0;mode<CFG_WALL_MODES;mode++) {
@@ -157,7 +166,7 @@ int main(int argc, char **argv)
     for (unsigned i=0;i<10000 && !ready;i++) {
         assert(!desk_wall_worker_take(&w,first,&pixels,&error,&hit));
         ready=desk_wall_worker_take(&w,latest,&pixels,&error,&hit);
-        if (!ready) { struct timespec pause={0,1000000}; nanosleep(&pause,NULL); }
+        if (!ready) { struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL); }
     }
     assert(ready && !error && pixels && !hit && decoded==1); free(pixels);
     /* A colour change blends the retained ARGB layer; a repeated request
@@ -168,24 +177,34 @@ int main(int argc, char **argv)
         latest=desk_wall_worker_submit(&w,&r); ready=0;
         for (unsigned i=0;i<10000 && !ready;i++) {
             ready=desk_wall_worker_take(&w,latest,&pixels,&error,&hit);
-            if (!ready) { struct timespec pause={0,1000000}; nanosleep(&pause,NULL); }
+            if (!ready) { struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL); }
         }
         assert(ready && !error && pixels && hit==(int)repeat && decoded==1 && scaled==2);
         uint32_t *expected; int disk_hit;
         assert(!desk_wall_prepare(&r,NULL,&expected,&disk_hit,NULL));
         assert(!memcmp(pixels,expected,(size_t)r.width*r.height*4)); free(expected); free(pixels);
     }
+    /* Pattern changes reuse the image layer but produce a different frame/key. */
+    r.pattern=3; latest=desk_wall_worker_submit(&w,&r); ready=0;
+    for (unsigned i=0;i<10000 && !ready;i++) {
+        ready=desk_wall_worker_take(&w,latest,&pixels,&error,&hit);
+        if (!ready) { struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL); }
+    }
+    assert(ready && !error && pixels && !hit && decoded==1 && scaled==2);
+    uint32_t *pattern_expected; int pattern_hit;
+    assert(!desk_wall_prepare(&r,NULL,&pattern_expected,&pattern_hit,NULL));
+    assert(!memcmp(pixels,pattern_expected,(size_t)r.width*r.height*4)); free(pattern_expected); free(pixels);
     stamp(r.path,s.st_mtime+4);
     latest=desk_wall_worker_submit(&w,&r); ready=0;
     for (unsigned i=0;i<10000 && !ready;i++) {
         ready=desk_wall_worker_take(&w,latest,&pixels,&error,&hit);
-        if (!ready) { struct timespec pause={0,1000000}; nanosleep(&pause,NULL); }
+        if (!ready) { struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL); }
     }
     assert(ready && !error && !hit && pixels && decoded==2 && scaled==3); free(pixels);
     strcpy(r.path,"/nonexistent-ciuki-wallpaper.png"); latest=desk_wall_worker_submit(&w,&r); ready=0;
     for (unsigned i=0;i<10000 && !ready;i++) {
         ready=desk_wall_worker_take(&w,latest,&pixels,&error,&hit);
-        if (!ready) { struct timespec pause={0,1000000}; nanosleep(&pause,NULL); }
+        if (!ready) { struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL); }
     }
     assert(ready && error==ENOENT && !pixels); desk_wall_worker_stop(&w);
     assert(read_calls>100 && write_calls>100);

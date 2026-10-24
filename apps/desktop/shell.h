@@ -43,7 +43,7 @@ struct sh_notification {
 /* Built-in (internal) windows: desk_client.internal holds the kind. */
 enum { DESK_INTERNAL_NONE, DESK_INTERNAL_ABOUT, DESK_INTERNAL_RUN, DESK_INTERNAL_SHUTDOWN,
        DESK_INTERNAL_MESSAGE, DESK_INTERNAL_POWER, DESK_INTERNAL_AUTOPLAY, DESK_INTERNAL_TRANSFER, DESK_INTERNAL_PROGRAMS, DESK_INTERNAL_GAME_DATA,
-       DESK_INTERNAL_END_TASK /* G3: not responding or DOS warning (d->end_task) */, DESK_INTERNAL_KINDS };
+       DESK_INTERNAL_END_TASK /* G3: not responding or DOS warning (d->end_task) */, DESK_INTERNAL_SHORTCUT, DESK_INTERNAL_KINDS };
 enum sh_menu_kind { SH_MENU_NONE, SH_MENU_START, SH_MENU_PROGRAMS, SH_MENU_DEVELOPER, SH_MENU_DOCUMENTS,
                     SH_MENU_SETTINGS, SH_MENU_HELP, SH_MENU_DESKTOP, SH_MENU_ICON, SH_MENU_TASK, SH_MENU_ACCESSORIES,
                     SH_MENU_GAMES, SH_MENU_NEW, SH_MENU_OPEN_WITH, SH_MENU_TRAY_SETTINGS,
@@ -57,7 +57,7 @@ enum sh_action { SH_ACT_NONE, SH_ACT_SUBMENU, SH_ACT_LAUNCH, SH_ACT_ABOUT, SH_AC
                  SH_ACT_DRAG /* fx-19 right-drag menu: arg is the DROPEFFECT, 0 Cancel */,
                  /* G4 taskbar menu */
                  SH_ACT_CASCADE, SH_ACT_TILE_H, SH_ACT_TILE_V, SH_ACT_MINIMIZE_ALL, SH_ACT_ARRANGE_UNDO,
-                 SH_ACT_TASKBAR_PROPERTIES, SH_ACT_ICON_SORT, SH_ACT_ICON_AUTO };
+                 SH_ACT_TASKBAR_PROPERTIES, SH_ACT_ICON_SORT, SH_ACT_ICON_AUTO, SH_ACT_ICONS_SHOW };
 #define SH_ITEM_SEPARATOR 1u
 #define SH_ITEM_DISABLED 2u
 #define SH_ITEM_DEFAULT 4u
@@ -69,7 +69,7 @@ struct sh_menu { int kind, count, hot, row_h, icon; struct desk_box box; struct 
 struct sh_icon { char label[FM_NAME], program[24], argument[FM_PATH]; const char *icon; int action, ciuki, selected; struct desk_box box; };
 /* fx-19 shell drag session (DoDragDrop): the desktop owns the pointer from
  * the drag threshold until the drop, Esc or a right-drag menu choice. */
-enum { SH_DROP_NONE, SH_DROP_DESKTOP, SH_DROP_ICON, SH_DROP_TRASH, SH_DROP_FILES, SH_DROP_APP, SH_DROP_TASK };
+enum { SH_DROP_NONE, SH_DROP_DESKTOP, SH_DROP_ICON, SH_DROP_TRASH, SH_DROP_FILES, SH_DROP_APP, SH_DROP_TASK, SH_DROP_PROGRAM };
 #define SH_DRAG_IMAGE_ITEMS 8
 struct sh_dnd {
     int active, menu;                 /* menu: right-drag menu waits for a choice */
@@ -85,6 +85,8 @@ struct sh_dnd {
     char destination[FM_PATH];
     uint64_t hover_ns, repeat_ns;
     int hover_task, drop_index;
+    int resolved_icon, resolved_kind;
+    char resolved_destination[FM_PATH];
     int icons[SH_DRAG_IMAGE_ITEMS]; unsigned icon_count;   /* desktop source: dragged icons drawn */
     struct desk_box image;            /* drag image bounds as last painted */
 };
@@ -220,5 +222,7 @@ void desk_shell_drag_status(struct desktop *, int client, uint32_t serial, unsig
 int desk_shell_drag_motion(struct desktop *);
 int desk_shell_drag_button(struct desktop *, int button, int down);
 void desk_shell_drag_cancel(struct desktop *);
+struct desk_launch_record;
+int desk_shell_open_record(struct desktop *, const struct desk_launch_record *, unsigned);
 int desk_shell_icon_marked(const struct desktop *, int index);
 #endif

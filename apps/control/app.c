@@ -72,7 +72,7 @@ static void changed(struct cp_app *a)
     if (a->page==CP_MOUSE) { now.mouse_speed=a->cfg.mouse_speed; now.double_click_ms=a->cfg.double_click_ms; }
     else if (a->page==CP_DISPLAY) {
         snprintf(now.wallpaper,sizeof(now.wallpaper),"%s",a->cfg.wallpaper);
-        now.wallpaper_mode=a->cfg.wallpaper_mode; now.desktop_color=a->cfg.desktop_color;
+        now.wallpaper_mode=a->cfg.wallpaper_mode; now.wallpaper_pattern=a->cfg.wallpaper_pattern; now.desktop_color=a->cfg.desktop_color;
     }
     else if (a->page==CP_POWER) now.monitor_seconds=a->cfg.monitor_seconds;
     else if (a->page==CP_KEYBOARD) now.keyboard=a->cfg.keyboard;
@@ -89,10 +89,12 @@ static void display_copy(struct ciuki_settings *to, const struct ciuki_settings 
 {
     memcpy(to->theme, from->theme, sizeof(to->theme));
     memcpy(to->wallpaper, from->wallpaper, sizeof(to->wallpaper));
-    to->wallpaper_mode = from->wallpaper_mode; to->desktop_color = from->desktop_color;
+    to->wallpaper_mode = from->wallpaper_mode; to->wallpaper_pattern=from->wallpaper_pattern; to->desktop_color = from->desktop_color;
     to->saver_enabled=from->saver_enabled; to->saver_seconds=from->saver_seconds;
     to->saver_kind=from->saver_kind;
     to->desktop_icons = from->desktop_icons; to->display_mode = from->display_mode;
+    to->icon_spacing_x=from->icon_spacing_x; to->icon_spacing_y=from->icon_spacing_y;
+    to->icon_font=from->icon_font;
 }
 int cp_display_store(struct cp_app *a)
 {
@@ -218,14 +220,14 @@ static void preview_build(struct cp_app *a)
             snprintf(a->image_path, sizeof(a->image_path), "%s", a->cfg.wallpaper);
         }
         uint32_t bar = sh ? (32u * 144u) / sh : 6;
-        desk_wallpaper_render(a->preview, 192, 144, bar, bar, a->cfg.wallpaper, a->cfg.wallpaper_mode,
-                              desktop_colour(a, chosen(a)), &a->image, a->host.portrait);
+        desk_wallpaper_render_pattern(a->preview, 192, 144, bar, bar, a->cfg.wallpaper, a->cfg.wallpaper_mode,
+                              desktop_colour(a, chosen(a)), &a->image, a->host.portrait,a->cfg.wallpaper_pattern);
         a->preview_valid = 1;   /* no alpha: the scaled path never carried one either */
         return;
     }
     uint32_t *full = malloc((size_t)sw * sh * 4u);
     if (full) {
-        desk_wallpaper_render(full, sw, sh, 32, 32, a->cfg.wallpaper, a->cfg.wallpaper_mode, desktop_colour(a, chosen(a)), &a->image, a->host.portrait);
+        desk_wallpaper_render_pattern(full, sw, sh, 32, 32, a->cfg.wallpaper, a->cfg.wallpaper_mode, desktop_colour(a, chosen(a)), &a->image, a->host.portrait,a->cfg.wallpaper_pattern);
         struct desk_image src = {full, sw, sh};
         for (size_t i = 0; i < (size_t)sw * sh; i++) full[i] |= 0xff000000u;
         desk_image_scale(&src, a->preview, 192, 144, CFG_WALL_STRETCH, desktop_colour(a, chosen(a)));
@@ -296,7 +298,10 @@ static void paint(struct du_ui *u, void *user)
         for (unsigned k=0;k<5;k++) { put(c,240+(int)k*42,112,34,18,colours[k]); du_outline(c,(struct du_rect){240+(int)k*42,112,34,18},t->outline); }
         char roles[128]; snprintf(roles,sizeof(roles),"UI: %s; captions: %s",desk_font(t->font_ui)->name,desk_font(t->font_title)->name);
         du_text_fit(c,240,138,CP_WIDTH-264,roles,t->ink);
-        cp_fonts_paint(a,c);
+        if (a->icon_appearance) {
+            int f=a->cfg.icon_font;
+            du_text_font(c,f,248,260,"Desktop icon caption",t->ink);
+        } else cp_fonts_paint(a,c);
     }
     else if (a->page == CP_SYSTEM && a->system_tab == 0 && a->host.portrait) {
         du_edge(c, (struct du_rect){22, 46, 100, 100}, DU_SUNKEN);
@@ -334,7 +339,19 @@ static void sync(struct cp_app *a)
     if ((w = du_get(u, C_WALL))) { w->active = wall; du_list_ensure(w, wall); }
     for (int k = 0; k < CP_POSITIONS; k++) if ((w = du_get(u, C_POS0 + k))) w->def = mode_order[k] == a->cfg.wallpaper_mode;
     toggle_label(a, C_ICONS, "Desktop icons", a->cfg.desktop_icons);
+    if ((w=du_get(u,CP_WALL_PATTERN))) {
+        w->active=(unsigned)a->cfg.wallpaper_pattern; du_list_ensure(w,w->active);
+        for (int i=0;i<DESK_WALL_PATTERNS;i++) a->pattern_items[i].selected=i==a->cfg.wallpaper_pattern;
+    }
     char s[64];
+    if ((w=du_get(u,CP_ICON_SPACE_X))) w->value=a->cfg.icon_spacing_x-CFG_ICON_SPACING_MIN;
+    if ((w=du_get(u,CP_ICON_SPACE_Y))) w->value=a->cfg.icon_spacing_y-CFG_ICON_SPACING_MIN;
+    snprintf(s,sizeof(s),"%d pixels",a->cfg.icon_spacing_x); text(a,CP_ICON_SPACE_X_VALUE,s);
+    snprintf(s,sizeof(s),"%d pixels",a->cfg.icon_spacing_y); text(a,CP_ICON_SPACE_Y_VALUE,s);
+    if ((w=du_get(u,CP_ICON_FONT))) {
+        w->active=(unsigned)a->cfg.icon_font; du_list_ensure(w,w->active);
+        for (int i=0;i<DESK_FONTS;i++) a->icon_font_items[i].selected=i==a->cfg.icon_font;
+    }
     if ((w = du_get(u, C_SPEED))) w->value = a->cfg.mouse_speed - CFG_MOUSE_MIN;
     snprintf(s, sizeof(s), "%d of %d%s", a->cfg.mouse_speed, CFG_MOUSE_MAX, a->cfg.mouse_speed == CFG_MOUSE_NORMAL ? " (normal)" : ""); text(a, C_SPEED_V, s);
     if ((w = du_get(u, C_DBL))) w->value = (a->cfg.double_click_ms - 200) / 100;
@@ -698,6 +715,21 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
         }
         break;
     case C_CLOSE: if (e->type == DU_EV_ACTIVATE) cp_close(a); break;
+    case CP_ICON_APPEARANCE: case CP_ICON_APPEARANCE_BACK:
+        if (e->type==DU_EV_ACTIVATE) { a->icon_appearance=e->id==CP_ICON_APPEARANCE; build(a); }
+        break;
+    case CP_ICON_SPACE_X: case CP_ICON_SPACE_Y:
+        if (e->type==DU_EV_CHANGE && e->index>=0 && e->index<=CFG_ICON_SPACING_MAX-CFG_ICON_SPACING_MIN) {
+            if (e->id==CP_ICON_SPACE_X) a->cfg.icon_spacing_x=CFG_ICON_SPACING_MIN+e->index;
+            else a->cfg.icon_spacing_y=CFG_ICON_SPACING_MIN+e->index;
+            save=1;
+        }
+        break;
+    case CP_ICON_FONT:
+        if (e->type==DU_EV_SELECT && e->index>=0 && e->index<DESK_FONTS) {
+            a->cfg.icon_font=e->index; save=1; du_invalidate(u,(struct du_rect){240,240,CP_WIDTH-264,40});
+        }
+        break;
     case C_THEME:
         if (e->type == DU_EV_SELECT && e->index >= 0 && e->index < CFG_THEMES) {
             snprintf(a->cfg.theme, sizeof(a->cfg.theme), "%s", cfg_theme_names[e->index]); save = 1; a->preview_valid = 0;
@@ -713,6 +745,11 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
                 snprintf(a->cfg.wallpaper, sizeof(a->cfg.wallpaper), "%s", a->wall_names[k - 2 - DESK_BUILTIN_WALLPAPERS]);
             } else break;
             save = 1; a->preview_valid = 0;
+        }
+        break;
+    case CP_WALL_PATTERN:
+        if (e->type==DU_EV_SELECT && e->index>=0 && e->index<DESK_WALL_PATTERNS) {
+            a->cfg.wallpaper_pattern=e->index; save=1; a->preview_valid=0;
         }
         break;
     case C_WALL_BROWSE:
@@ -1319,14 +1356,38 @@ static void build(struct cp_app *a)
             add(a,DU_LABEL,C_COL_L,24,296,180,14,"Desktop colour:");
             for (int k=0;k<6;k++) add(a,DU_BUTTON,C_COL0+k,24+k*34,312,30,24,"");
             add(a,DU_BUTTON,C_ICONS,248,236,CP_WIDTH-272,24,"")->anchors=DU_ANCHOR_GROW_X;
+            add(a,DU_LABEL,2002,248,264,200,16,"Pattern:");
+            for (int k=0;k<DESK_WALL_PATTERNS;k++) a->pattern_items[k]=(struct du_item){.text={desk_wallpaper_pattern_labels[k]}};
+            w=add(a,DU_LISTVIEW,CP_WALL_PATTERN,248,282,CP_WIDTH-272,70,"");
+            w->items=a->pattern_items; w->count=DESK_WALL_PATTERNS; list_style(w,"Pattern"); w->anchors=DU_ANCHOR_GROW_X;
         } else if (a->display_tab==CP_APPEARANCE) {
             add(a,DU_LABEL,C_THEME_L,24,44,200,16,"&Theme:");
             for (int k=0;k<CFG_THEMES;k++) a->theme_items[k]=(struct du_item){.text={cfg_theme_names[k]}};
             w=add(a,DU_LISTVIEW,C_THEME,24,64,200,84,""); w->items=a->theme_items; w->count=CFG_THEMES;
             list_style(w,"Theme");
             add(a,DU_LABEL,970,240,64,292,16,"Colours and UI fonts follow the theme.");
-            add(a,DU_LABEL,971,240,88,292,16,"Installed fonts can be previewed below.");
-            cp_fonts_build(a);
+            if (a->icon_appearance) {
+                add(a,DU_BUTTON,CP_ICON_APPEARANCE_BACK,240,84,292,24,"Back to installed font previews");
+                add(a,DU_LABEL,1998,24,160,200,16,"Horizontal icon spacing:");
+                w=add(a,DU_SCROLLBAR,CP_ICON_SPACE_X,24,182,160,18,"");
+                w->vertical=0; w->total=CFG_ICON_SPACING_MAX-CFG_ICON_SPACING_MIN+1; w->page=1;
+                add(a,DU_LABEL,CP_ICON_SPACE_X_VALUE,192,182,96,18,"");
+                add(a,DU_LABEL,1999,24,212,200,16,"Vertical icon spacing:");
+                w=add(a,DU_SCROLLBAR,CP_ICON_SPACE_Y,24,234,160,18,"");
+                w->vertical=0; w->total=CFG_ICON_SPACING_MAX-CFG_ICON_SPACING_MIN+1; w->page=1;
+                add(a,DU_LABEL,CP_ICON_SPACE_Y_VALUE,192,234,96,18,"");
+                add(a,DU_LABEL,2000,24,268,200,16,"Icon caption font:");
+                for (int k=0;k<DESK_FONTS;k++) {
+                    const struct desk_font *f=desk_font(k);
+                    snprintf(a->icon_font_labels[k],sizeof(a->icon_font_labels[k]),"%s (%d px)",f->name,f->size);
+                    a->icon_font_items[k]=(struct du_item){.text={a->icon_font_labels[k]}};
+                }
+                w=add(a,DU_LISTVIEW,CP_ICON_FONT,24,290,CP_WIDTH-48,64,"");
+                w->items=a->icon_font_items; w->count=DESK_FONTS; list_style(w,"Font");
+            } else {
+                add(a,DU_BUTTON,CP_ICON_APPEARANCE,240,84,292,24,"Desktop icon appearance...");
+                cp_fonts_build(a);
+            }
         } else if (a->display_tab==CP_SCREEN_SAVER) {
             static const char *const names[]={"Blank","Ciuki logo","Starfield"};
             add(a,DU_LABEL,1979,24,44,200,16,"Screen saver:");

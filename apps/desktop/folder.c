@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <pthread.h>
 struct folder_worker {
     struct desktop *desktop;
@@ -40,7 +41,7 @@ void desk_folder_changed(struct desktop *d)
 int desk_folder_init(struct desktop *d, const struct fm_vfs *fs)
 {
     struct desk_folder *f = calloc(1, sizeof(*f)); if (!f) return -ENOMEM;
-    fm_init(&f->model, fs); fm_init(&f->result,fs); f->dialog_window=-1; f->editing = -1; f->index = -1;
+    fm_init(&f->model, fs); fm_init(&f->result,fs); f->dialog_window=-1; f->wizard_window=-1; f->editing = -1; f->index = -1;
     int r = fm_navigate(&f->model, DESK_FOLDER);
     if (!r) r=poll_start(f,d);
     if (r) { fm_destroy(&f->model); free(f); return r; }
@@ -49,6 +50,7 @@ int desk_folder_init(struct desktop *d, const struct fm_vfs *fs)
 void desk_folder_destroy(struct desktop *d)
 {
     if (!d->sh.folder) return;
+    desk_folder_shortcut_close(d);
     poll_stop(d->sh.folder);
     fm_transfer_destroy(d->sh.folder->transfer);
     if (d->sh.folder->dialog) du_dialog_close(d->sh.folder->dialog);
@@ -60,7 +62,7 @@ void desk_folder_destroy(struct desktop *d)
 void desk_folder_rename(struct desktop *d, int index)
 {
     struct desk_folder *f = d->sh.folder;
-    if (!f || f->busy || index < 3 || index>=d->sh.icon_count || (unsigned)(index-3) >= f->model.count) return;
+    if (!f || f->busy || f->wizard || index < 3 || index>=d->sh.icon_count || (unsigned)(index-3) >= f->model.count) return;
     f->editing = index-3; f->select_all = 1;
     snprintf(f->edit, sizeof(f->edit), "%s", f->model.entries[f->editing].name);
     f->cursor = (unsigned)strlen(f->edit);
@@ -81,26 +83,36 @@ static int bitmap(struct fm_model *m, const char *name)
     if (r) m->fs.unlink(m->fs.ctx,path); else { r=fm_refresh(m); if (!r) fm_select_name(m,name,0); }
     return r;
 }
-static int shortcut(struct fm_model *m, const char *name)
+int desk_folder_link_read(struct desktop *d, const char *path, struct desk_launch_record *record)
 {
-    struct desk_launch_record *record=calloc(1,sizeof(*record));
-    uint8_t *bytes=malloc(DESK_LINK_BYTES);
-    if (!record || !bytes) { free(record); free(bytes); return -ENOMEM; }
-    snprintf(record->label,sizeof(record->label),"Files");
-    snprintf(record->target,sizeof(record->target),"/Programs/files");
-    snprintf(record->icon,sizeof(record->icon),"system-file-manager");
-    record->show=1;
-    unsigned size=desk_link_encode(record,bytes,DESK_LINK_BYTES); free(record);
+    if (!d->sh.folder) return -ENODEV;
+    struct fm_vfs *fs=&d->sh.folder->model.fs;
+    uint8_t *bytes=malloc(DESK_LINK_BYTES+1); if (!bytes) return -ENOMEM;
+    int fd=fs->open(fs->ctx,path,0), r=fd<0 ? fd : 0; unsigned at=0;
+    while (!r && at<DESK_LINK_BYTES+1) {
+        int n=fs->read(fs->ctx,fd,bytes+at,DESK_LINK_BYTES+1-at);
+        if (n<0) { r=n; break; } if (!n) break; at+=(unsigned)n;
+    }
+    if (fd>=0) { int closed=fs->close(fs->ctx,fd); if (!r) r=closed; }
+    if (!r && !desk_link_decode(bytes,at,record)) r=-EINVAL;
+    free(bytes); return r;
+}
+int desk_folder_link_create(struct desktop *d, const char *directory, const char *name,
+                            const struct desk_launch_record *record)
+{
+    if (!d->sh.folder || fm_valid_name(name)) return -EINVAL;
+    struct fm_vfs *fs=&d->sh.folder->model.fs;
+    uint8_t *bytes=malloc(DESK_LINK_BYTES); if (!bytes) return -ENOMEM;
+    unsigned size=desk_link_encode(record,bytes,DESK_LINK_BYTES);
     if (!size) { free(bytes); return -EINVAL; }
-    char path[FM_PATH]; int r=fm_join(path,m->path,name); if (r) { free(bytes); return r; }
-    int fd=m->fs.open(m->fs.ctx,path,1); if (fd<0) { free(bytes); return fd; }
+    char path[FM_PATH]; int r=fm_join(path,directory,name); if (r) { free(bytes); return r; }
+    int fd=fs->open(fs->ctx,path,1); if (fd<0) { free(bytes); return fd; }
     unsigned at=0;
-    while (at<size) { int n=m->fs.write(m->fs.ctx,fd,bytes+at,size-at); if (n<=0) { r=n<0?n:-EIO; break; } at+=(unsigned)n; }
+    while (at<size) { int n=fs->write(fs->ctx,fd,bytes+at,size-at); if (n<=0) { r=n<0?n:-EIO; break; } at+=(unsigned)n; }
     free(bytes);
-    if (!r) r=m->fs.sync(m->fs.ctx,fd);
-    int closed=m->fs.close(m->fs.ctx,fd); if (!r) r=closed;
-    if (r) m->fs.unlink(m->fs.ctx,path);
-    else { r=fm_refresh(m); if (!r) fm_select_name(m,name,0); }
+    if (!r) r=fs->sync(fs->ctx,fd);
+    int closed=fs->close(fs->ctx,fd); if (!r) r=closed;
+    if (r) fs->unlink(fs->ctx,path);
     return r;
 }
 enum { F_PROGRESS=850, F_REPLACE };
@@ -240,7 +252,7 @@ int desk_folder_delete_request(struct desktop *d, char *const *paths, unsigned c
 {
     struct desk_folder *f=d->sh.folder;
     if (!f || d->power.state) return -EAGAIN;
-    if (f->busy) return -EBUSY;
+    if (f->busy || f->wizard) return -EBUSY;
     if (!count) return -ENOENT;
     pending_free(f);
     f->pending=calloc(count,sizeof(*f->pending)); if (!f->pending) return -ENOMEM;
@@ -323,9 +335,34 @@ int desk_folder_transfer(struct desktop *d, char *const *paths, unsigned count, 
 {
     struct desk_folder *f=d->sh.folder;
     if (!f || d->power.state) return -EAGAIN;
-    if (f->busy) return -EBUSY;
+    if (f->busy || f->wizard) return -EBUSY;
     if (!count) return -ENOENT;
     if (trash) return desk_folder_delete_request(d,paths,count,0);   /* the old Trash drop is a Delete (G2) */
+    if (effect==FM_EFFECT_LINK) {
+        struct desk_launch_record *record=calloc(1,sizeof(*record));
+        struct fm_model *target=calloc(1,sizeof(*target));
+        if (!record || !target) { free(record); free(target); return -ENOMEM; }
+        fm_init(target,&f->model.fs); int r=fm_navigate(target,destination);
+        for (unsigned i=0;!r && i<count;i++) {
+            char name[FM_NAME], stem[FM_NAME];
+            snprintf(stem,sizeof(stem),"Shortcut to %.220s",fm_basename(paths[i]));
+            r=fm_unique(target,stem,".lnk",name);
+            if (!r && !strcasecmp(strrchr(paths[i],'.') ? strrchr(paths[i],'.') : "", ".lnk"))
+                r=desk_folder_link_read(d,paths[i],record);
+            else if (!r) {
+                memset(record,0,sizeof(*record)); record->show=1;
+                if (strlen(paths[i])>=sizeof(record->target)) r=-ENAMETOOLONG;
+                else strcpy(record->target,paths[i]);
+                snprintf(record->label,sizeof(record->label),"%.63s",fm_basename(paths[i]));
+            }
+            if (!r) r=desk_folder_link_create(d,destination,name,record);
+            if (!r && place) { cfg_icon_move_at(&d->sh.cfg,name,d->width,d->height,x+(int)i*16,y+(int)i*16); d->sh.want_save=1; }
+            if (!r) r=fm_refresh(target);
+        }
+        fm_destroy(target); free(target); free(record);
+        if (!r) { r=fm_refresh(&f->model); if (!r) desk_folder_changed(d); }
+        return r;
+    }
     if (effect!=FM_EFFECT_COPY && effect!=FM_EFFECT_MOVE) return -EINVAL;
     f->revision++;
     int r=job(d,effect==FM_EFFECT_MOVE ? FM_MOVE : FM_COPY,(char **)paths,count,destination,0);
@@ -355,7 +392,7 @@ static void positions_after(struct desktop *d, struct fm_job *j)
             int x=f->place_x-48+(int)(k/(unsigned)rows)*96, y=f->place_y-24+(int)(k%(unsigned)rows)*cell_h;
             if (x<0) x=0;
             if (y<top) y=top;
-            changed|=cfg_icon_move(&d->sh.cfg,j->created[k],x,y);
+            changed|=cfg_icon_move_at(&d->sh.cfg,j->created[k],d->width,d->height,x,y);
         }
     }
     f->place=0;
@@ -531,24 +568,65 @@ void desk_folder_service(struct desktop *d)
     }
     int command=f->command, index=f->index, multi=f->multi; unsigned flags=f->command_flags; f->command=DF_NONE; f->multi=0; f->command_flags=0;
     if (f->busy || !command) {
-        if (!f->busy && f->editing<0) poll_service(d);
+        if (!f->busy && !f->wizard && f->editing<0) poll_service(d);
         return;
     }
     f->revision++; /* an in-flight poll predates this explicit operation */
     int r=0; char name[FM_NAME], path[FM_PATH];
-    if (command==DF_FOLDER || command==DF_TEXT || command==DF_BITMAP || command==DF_SHORTCUT) {
+    if (command==DF_SHORTCUT) { desk_folder_shortcut_begin(d); return; }
+    if (command==DF_SHORTCUT_FINISH) {
+        if (f->wizard!=2) return;
+        struct desk_launch_record *record=calloc(1,sizeof(*record));
+        if (!record) r=-ENOMEM;
+        else {
+            snprintf(record->label,sizeof(record->label),"%.63s",f->shortcut_name);
+            snprintf(record->target,sizeof(record->target),"%s",f->shortcut_target);
+            snprintf(record->arguments,sizeof(record->arguments),"%s",f->shortcut_args); record->show=1;
+            size_t n=strlen(f->shortcut_name);
+            int suffix=n>=4 && !strcasecmp(f->shortcut_name+n-4,".lnk");
+            if (n+(!suffix ? 4u : 0u)>=sizeof(name)) r=-ENAMETOOLONG;
+            else { snprintf(name,sizeof(name),"%s",f->shortcut_name); if (!suffix) strcat(name,".lnk");
+                r=desk_folder_link_create(d,DESK_FOLDER,name,record); }
+            free(record);
+        }
+        if (r) { snprintf(f->wizard_error,sizeof(f->wizard_error),"Cannot create shortcut: %s",strerror(-r)); desk_shell_apply(d); return; }
+        desk_folder_shortcut_close(d); r=fm_refresh(m); if (!r) desk_folder_changed(d);
+    } else if (command==DF_FOLDER || command==DF_TEXT || command==DF_BITMAP) {
         r=fm_unique(m,command==DF_FOLDER ? "New Folder" : command==DF_TEXT ? "New Text Document" : command==DF_BITMAP ? "New Bitmap Image" : "New Shortcut",
                     command==DF_FOLDER ? "" : command==DF_TEXT ? ".txt" : command==DF_BITMAP ? ".bmp" : ".lnk",name);
-        if (!r) r=command==DF_BITMAP ? bitmap(m,name) : command==DF_SHORTCUT ? shortcut(m,name) : fm_create(m,name,command==DF_FOLDER);
+        if (!r) r=command==DF_BITMAP ? bitmap(m,name) : fm_create(m,name,command==DF_FOLDER);
         if (!r) { desk_folder_changed(d); d->sh.icon_selected=(int)m->active+3; desk_folder_rename(d,d->sh.icon_selected); }
-    } else if (command==DF_REFRESH) { r=fm_refresh(m); if (!r) desk_folder_changed(d); }
+    } else if (command==DF_REFRESH) {
+        char focused[FM_PATH]=""; unsigned systems=0; int focus_unselected=d->sh.focus_unselected;
+        if (d->sh.icon_selected>=0 && d->sh.icon_selected<d->sh.icon_count)
+            snprintf(focused,sizeof(focused),"%s",d->sh.icons[d->sh.icon_selected].argument);
+        for (int k=0;k<d->sh.icon_count;k++) {
+            if (k<3 && desk_shell_icon_marked(d,k)) systems|=1u<<k;
+            if (k>=3 && (unsigned)(k-3)<m->count) m->entries[k-3].selected=(unsigned)desk_shell_icon_marked(d,k);
+        }
+        r=fm_refresh(m);
+        if (!r) {
+            desk_folder_changed(d);
+            for (int k=0;k<d->sh.icon_count;k++) {
+                if (k<3 && (systems&(1u<<k))) d->sh.icons[k].selected=1;
+                if (focused[0] && !strcmp(d->sh.icons[k].argument,focused)) { d->sh.icon_selected=k; d->sh.anchor=k; }
+            }
+            d->sh.focus_unselected=focus_unselected;
+        }
+    }
     else if (command==DF_PASTE) r=job(d,FM_COPY,NULL,0,m->path,2);
     else if (index>=0 && (unsigned)index<m->count) {
         if (command==DF_RENAME) {
-            int x,y,placed=cfg_icon_position(&d->sh.cfg,m->entries[index].name,&x,&y);
             snprintf(name,sizeof(name),"%s",m->entries[index].name);
-            r=fm_rename(m,(unsigned)index,f->edit);
-            if (!r) { cfg_icon_forget(&d->sh.cfg,name); d->sh.want_save=1; if (placed) { cfg_icon_move(&d->sh.cfg,f->edit,x,y); d->sh.want_save=1; } f->editing=-1; desk_folder_changed(d); d->sh.icon_selected=(int)m->active+3; }
+            struct ciuki_settings *next=malloc(sizeof(*next));
+            if (!next) r=-ENOMEM;
+            else {
+                *next=d->sh.cfg;
+                if (!cfg_icon_rename(next,name,f->edit)) r=-ENOSPC;
+                if (!r) r=fm_rename(m,(unsigned)index,f->edit);
+                if (!r) { d->sh.cfg=*next; d->sh.want_save=1; f->editing=-1; desk_folder_changed(d); d->sh.icon_selected=(int)m->active+3; }
+                free(next);
+            }
         } else if (command==DF_DELETE && multi && fm_selected(m,NULL)>1) {
             unsigned n=fm_selected(m,NULL),k=0; char **paths=calloc(n,sizeof(*paths));
             if (!paths) r=-ENOMEM;
@@ -575,4 +653,200 @@ void desk_folder_service(struct desktop *d)
         }
     }
     if (r) error(d,r);
+}
+
+/* G19 Create Shortcut: no file is created until Finish succeeds. Browse uses
+ * the same injectable VFS and Computer drive model as Files, including drives. */
+static void shortcut_damage(struct desktop *d)
+{
+    struct desk_folder *f=d->sh.folder;
+    if (f && f->wizard_window>=0)
+        desk_damage_add(&d->damage,desk_outer(&d->clients[f->wizard_window]),d->width,d->height);
+}
+void desk_folder_shortcut_close(struct desktop *d)
+{
+    struct desk_folder *f=d->sh.folder; if (!f) return;
+    int window=f->wizard_window;
+    if (f->command==DF_SHORTCUT_FINISH) f->command=DF_NONE;
+    f->wizard=0; f->wizard_window=-1;
+    if (f->picker) { fm_destroy(f->picker); free(f->picker); f->picker=NULL; }
+    if (window>=0 && d->clients[window].window) desk_drop_client(d,window);
+}
+void desk_folder_shortcut_begin(struct desktop *d)
+{
+    struct desk_folder *f=d->sh.folder; if (!f || f->busy) return;
+    if (f->wizard) { if (f->wizard_window>=0) desk_focus(d,f->wizard_window); return; }
+    f->wizard=1; f->wizard_focus=0; f->wizard_select_all=0; f->shortcut_target[0]=f->shortcut_args[0]=f->shortcut_name[0]=f->wizard_error[0]=0;
+    f->wizard_window=desk_internal_open(d,DESK_INTERNAL_SHORTCUT);
+    if (f->wizard_window<0) f->wizard=0;
+}
+static int shortcut_picker(struct desktop *d, const char *path)
+{
+    struct desk_folder *f=d->sh.folder;
+    if (!f->picker) { f->picker=calloc(1,sizeof(*f->picker)); if (!f->picker) return -ENOMEM; fm_init(f->picker,&f->model.fs); }
+    int r=fm_navigate(f->picker,path);
+    if (!r) { f->wizard=3; f->wizard_focus=1; f->picker_scroll=0; f->picker_click=-1; snprintf(f->picker_path,sizeof(f->picker_path),"%s",path); }
+    return r;
+}
+static int shortcut_command(struct desk_folder *f)
+{
+    char input[sizeof(f->shortcut_target)]; snprintf(input,sizeof(input),"%s",f->shortcut_target);
+    const char *p=input; while (*p==' ') p++;
+    int quote=*p=='"'; if (quote) p++;
+    unsigned at=0;
+    /* URLs and existing paths with spaces are accepted whole; program argument
+     * tails use the usual quoted command-line form. */
+    struct fm_meta meta;
+    int whole=!quote && (desk_target_url(p) || !f->model.fs.stat_path(f->model.fs.ctx,p,&meta));
+    while (*p && (whole || (quote ? *p!='"' : *p!=' '))) f->shortcut_target[at++]=*p++;
+    f->shortcut_target[at]=0;
+    if (quote && *p++!='"') return -EINVAL;
+    while (*p==' ') p++;
+    if (*p) snprintf(f->shortcut_args,sizeof(f->shortcut_args),"%s",p);
+    if (!at || (!desk_target_url(f->shortcut_target) && f->shortcut_target[0]!='/' &&
+        !(at>=3 && f->shortcut_target[1]==':' && (f->shortcut_target[2]=='\\' || f->shortcut_target[2]=='/')))) return -EINVAL;
+    return 0;
+}
+void desk_folder_shortcut_action(struct desktop *d, unsigned action)
+{
+    struct desk_folder *f=d->sh.folder; if (!f || !f->wizard) return;
+    int r=0; f->wizard_error[0]=0;
+    /* 0 edit; 1 Browse/list; 2 Back/Up; 3 Next/Finish/OK; 4 Cancel. */
+    if (action==4) { if (f->wizard==3) { f->wizard=1; f->wizard_focus=1; } else desk_folder_shortcut_close(d); }
+    else if (action==1 && f->wizard==1) r=shortcut_picker(d,FM_COMPUTER);
+    else if (action==2 && f->wizard==2) { f->wizard=1; f->wizard_focus=0; }
+    else if (action==2 && f->wizard==3) { char parent[FM_PATH]; r=fm_parent(parent,f->picker->path); if (!r) r=shortcut_picker(d,parent); }
+    else if (action==3 && f->wizard==1) {
+        r=shortcut_command(f);
+        if (!r && !desk_target_url(f->shortcut_target)) {
+            char path[FM_PATH]; struct fm_meta meta;
+            r=fm_posix_path(path,f->shortcut_target);
+            if (!r) {
+                r=f->model.fs.stat_path(f->model.fs.ctx,path,&meta);
+                if (r) for (unsigned i=0;i<d->program_count;i++)
+                    if (!strcmp(path,d->programs[i].path)) { r=0; break; }
+            }
+        }
+        if (!r) {
+            if (!f->shortcut_name[0]) snprintf(f->shortcut_name,sizeof(f->shortcut_name),"%.240s",desk_target_url(f->shortcut_target) ? "Internet Shortcut" : fm_basename(f->shortcut_target));
+            if (!f->shortcut_name[0]) strcpy(f->shortcut_name,"New Shortcut");
+            f->wizard=2; f->wizard_focus=0; f->wizard_select_all=1;
+        }
+    } else if (action==3 && f->wizard==2) {
+        r=fm_valid_name(f->shortcut_name);
+        if (!r) { f->command=DF_SHORTCUT_FINISH; f->index=-1; }
+    } else if (action==3 && f->wizard==3) {
+        char path[FM_PATH];
+        if (f->wizard_focus==0) {
+            r=shortcut_picker(d,f->picker_path);
+        } else if (f->picker->count && f->picker->active<f->picker->count) {
+            r=fm_entry_path(f->picker,f->picker->active,path);
+            if (!r && strlen(path)>=sizeof(f->shortcut_target)) r=-ENAMETOOLONG;
+            if (!r) { strcpy(f->shortcut_target,path); f->shortcut_args[0]=0; f->wizard=1; f->wizard_focus=0; }
+        } else r=-ENOENT;
+    }
+    if (r) snprintf(f->wizard_error,sizeof(f->wizard_error),"%s (%d)",strerror(-r),-r);
+    shortcut_damage(d);
+}
+void desk_folder_shortcut_key(struct desktop *d, int code, unsigned ch)
+{
+    struct desk_folder *f=d->sh.folder; if (!f || !f->wizard) return;
+    if (code==DU_KEY_ESC) { desk_folder_shortcut_action(d,4); return; }
+    if (code==DU_KEY_TAB) { do { f->wizard_focus=(f->wizard_focus+(d->sh.modifiers&DU_SHIFT ? 4 : 1))%5; } while ((f->wizard==2 && f->wizard_focus==1) || (f->wizard==1 && f->wizard_focus==2)); }
+    else if (f->wizard==3 && f->wizard_focus==1 && (code==DU_KEY_UP || code==DU_KEY_DOWN || code==DU_KEY_HOME || code==DU_KEY_END || code==DU_KEY_PGUP || code==DU_KEY_PGDN)) {
+        struct fm_model *m=f->picker;
+        int next=(int)m->active+(code==DU_KEY_UP ? -1 : code==DU_KEY_DOWN ? 1 : code==DU_KEY_PGUP ? -9 : code==DU_KEY_PGDN ? 9 : 0);
+        if (code==DU_KEY_HOME) next=0;
+        if (code==DU_KEY_END) next=(int)m->count-1;
+        if (next<0) next=0;
+        if (m->count && next>=(int)m->count) next=(int)m->count-1;
+        m->active=(unsigned)next;
+    } else if (code==DU_KEY_ENTER && f->wizard==3 && f->wizard_focus==1 && f->picker->count && f->picker->entries[f->picker->active].meta.type==FM_DIR) {
+        char path[FM_PATH]; int r=fm_entry_path(f->picker,f->picker->active,path);
+        if (!r) r=shortcut_picker(d,path);
+        if (r) snprintf(f->wizard_error,sizeof(f->wizard_error),"%s",strerror(-r));
+    } else if (code==DU_KEY_ENTER || (code==DU_KEY_SPACE && f->wizard_focus>0 && (f->wizard!=3 || f->wizard_focus>1))) {
+        desk_folder_shortcut_action(d,f->wizard_focus>=1 ? (unsigned)f->wizard_focus : 3); return;
+    } else if (f->wizard_focus==0) {
+        char *text=f->wizard==3 ? f->picker_path : f->wizard==2 ? f->shortcut_name : f->shortcut_target;
+        size_t capacity=f->wizard==3 ? sizeof(f->picker_path) : f->wizard==2 ? sizeof(f->shortcut_name) : sizeof(f->shortcut_target), n=strlen(text);
+        if (code==0x1e && (d->sh.modifiers&DU_CTRL)) f->wizard_select_all=1;
+        else if ((code==0x2e || code==0x2d) && (d->sh.modifiers&DU_CTRL) && f->wizard_select_all) {
+            du_clipboard_set(text); if (code==0x2d) { text[0]=0; f->wizard_select_all=0; }
+        } else if (code==0x2f && (d->sh.modifiers&DU_CTRL)) {
+            const char *paste=du_clipboard_get(); size_t count=paste ? strlen(paste) : 0;
+            int valid=1; for (size_t i=0;i<count;i++) if ((unsigned char)paste[i]<32) valid=0;
+            size_t at=f->wizard_select_all ? 0 : n;
+            if (valid && at+count<capacity) { memcpy(text+at,paste ? paste : "",count+1); f->wizard_select_all=0; if (f->wizard==1) f->shortcut_args[0]=0; }
+            else snprintf(f->wizard_error,sizeof(f->wizard_error),"The pasted text is invalid or too long.");
+        } else if (!(d->sh.modifiers&DU_CTRL)) {
+            if (f->wizard==1) f->shortcut_args[0]=0;
+            if (f->wizard_select_all && (code==DU_KEY_BACKSPACE || code==DU_KEY_DELETE || (ch>=32 && ch<127))) { text[0]=0; n=0; f->wizard_select_all=0; }
+            if (code==DU_KEY_BACKSPACE && n) text[n-1]=0;
+            else if (ch>=32 && ch<127 && n+1<capacity) { text[n]=(char)ch; text[n+1]=0; }
+        }
+    }
+    if (f->wizard==3) { if ((int)f->picker->active<f->picker_scroll) f->picker_scroll=(int)f->picker->active;
+        if ((int)f->picker->active>=f->picker_scroll+8) f->picker_scroll=(int)f->picker->active-7; }
+    shortcut_damage(d);
+}
+static struct desk_box shortcut_box(struct desk_box b, int part)
+{
+    if (part==0) return (struct desk_box){b.x+16,b.y+64,b.w-32,26};
+    if (part==1) return (struct desk_box){b.x+16,b.y+104,100,26};
+    return (struct desk_box){b.x+b.w-324+(part-2)*104,b.y+b.h-38,96,26};
+}
+void desk_folder_shortcut_paint(struct desktop *d, struct desk_box content, struct desk_box clip)
+{
+    struct desk_folder *f=d->sh.folder; if (!f || !f->wizard) return;
+    struct desk_box b; if (!desk_intersect(content,clip,&b)) return;
+    struct du_canvas c={d->pixels,(int)d->width,(int)d->height,{b.x,b.y,b.w,b.h}};
+    du_fill(&c,(struct du_rect){content.x,content.y,content.w,content.h},DU_FACE);
+    du_text(&c,content.x+16,content.y+16,f->wizard==3 ? "Browse for a target" : f->wizard==2 ? "Select a name for the shortcut" : "Create Shortcut",DU_INK);
+    du_text(&c,content.x+16,content.y+42,f->wizard==3 ? "Location (Enter to open):" : f->wizard==2 ? "Type a name for this shortcut:" : "Type the location of the item (or click Browse):",DU_INK);
+    struct desk_box edit=shortcut_box(content,0);
+    du_well(&c,(struct du_rect){edit.x,edit.y,edit.w,edit.h},f->wizard_focus==0 && f->wizard_select_all ? DU_SELECT : DU_WINDOW);
+    du_text_fit(&c,edit.x+5,edit.y+7,edit.w-10,f->wizard==3 ? f->picker_path : f->wizard==2 ? f->shortcut_name : f->shortcut_target,f->wizard_focus==0 && f->wizard_select_all ? DU_SELECT_INK : DU_INK);
+    if (f->wizard_focus==0) du_dotted(&c,(struct du_rect){edit.x+2,edit.y+2,edit.w-4,edit.h-4});
+    if (f->wizard==3) {
+        struct du_rect list={content.x+16,content.y+104,content.w-32,176}; du_well(&c,list,DU_WINDOW);
+        for (int row=0;row<8;row++) {
+            unsigned k=(unsigned)(f->picker_scroll+row); if (k>=f->picker->count) break;
+            const struct fm_entry *e=&f->picker->entries[k]; int y=list.y+4+row*21;
+            if (k==f->picker->active) du_fill(&c,(struct du_rect){list.x+3,y-1,list.w-6,21},DU_SELECT);
+            char label[FM_NAME+8]; snprintf(label,sizeof(label),"%s%s",e->meta.type==FM_DIR ? "[+] " : "",e->name);
+            du_text_fit(&c,list.x+7,y+3,list.w-14,label,k==f->picker->active ? DU_SELECT_INK : DU_INK);
+        }
+    }
+    for (int part=1;part<5;part++) {
+        if (part==1 && f->wizard!=1) continue;
+        struct desk_box box=shortcut_box(content,part);
+        du_raised(&c,(struct du_rect){box.x,box.y,box.w,box.h},0,0);
+        const char *label=part==1 ? "Browse..." : part==2 ? (f->wizard==3 ? "Up" : "< Back") : part==3 ? (f->wizard==2 ? "Finish" : f->wizard==3 ? "OK" : "Next >") : "Cancel";
+        if (part==2 && f->wizard==1) du_text_disabled(&c,box.x+(box.w-du_text_width(label))/2,box.y+7,label);
+        else du_text(&c,box.x+(box.w-du_text_width(label))/2,box.y+7,label,DU_INK);
+        if (f->wizard_focus==part) du_dotted(&c,(struct du_rect){box.x+3,box.y+3,box.w-6,box.h-6});
+    }
+    du_text_fit(&c,content.x+16,content.y+content.h-68,content.w-32,f->wizard_error,DU_INK);
+}
+void desk_folder_shortcut_click(struct desktop *d, int x, int y)
+{
+    struct desk_folder *f=d->sh.folder; if (!f || f->wizard_window<0) return;
+    struct desk_box b=desk_content(&d->clients[f->wizard_window]);
+    for (int part=0;part<5;part++) {
+        if ((part==1 && f->wizard!=1) || (part==2 && f->wizard==1)) continue;
+        if (desk_contains(shortcut_box(b,part),x,y)) { f->wizard_focus=part; f->wizard_select_all=0; if (part) desk_folder_shortcut_action(d,(unsigned)part); shortcut_damage(d); return; }
+    }
+    if (f->wizard==3 && x>=b.x+16 && x<b.x+b.w-16 && y>=b.y+108 && y<b.y+276) {
+        unsigned row=(unsigned)((y-b.y-108)/21+f->picker_scroll);
+        if (row<f->picker->count) {
+            int twice=f->picker_click==(int)row && d->now_ns-f->picker_click_ns<=(uint64_t)d->sh.cfg.double_click_ms*1000000ull;
+            f->picker->active=row; f->wizard_focus=1; f->picker_click=(int)row; f->picker_click_ns=d->now_ns;
+            if (twice) { f->picker_click=-1;
+                if (f->picker->entries[row].meta.type==FM_DIR) desk_folder_shortcut_key(d,DU_KEY_ENTER,0);
+                else desk_folder_shortcut_action(d,3);
+            }
+            shortcut_damage(d);
+        }
+    }
 }

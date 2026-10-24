@@ -12,6 +12,10 @@
 #define DESK_IMAGE_FILE_MAX (24u * 1024u * 1024u)
 struct desk_image { uint32_t *pixels, width, height; };   /* ARGB8888 */
 struct desk_builtin_wallpaper { const char *id, *label; };
+#define DESK_WALL_PATTERNS 6
+extern const char *const desk_wallpaper_pattern_names[DESK_WALL_PATTERNS];
+extern const char *const desk_wallpaper_pattern_labels[DESK_WALL_PATTERNS];
+uint32_t desk_wallpaper_pattern_pixel(int pattern, uint32_t x, uint32_t y, uint32_t colour);
 #define DESK_BUILTIN_WALLPAPERS 6
 extern const struct desk_builtin_wallpaper desk_builtin_wallpapers[DESK_BUILTIN_WALLPAPERS];
 int desk_image_decode(const uint8_t *data, size_t size, struct desk_image *out);
@@ -28,6 +32,13 @@ int desk_wallpaper_render(uint32_t *out, uint32_t width, uint32_t height, uint32
 int desk_wallpaper_render_styled(uint32_t *, uint32_t, uint32_t, uint32_t, uint32_t,
                                 const char *, int, uint32_t, const struct desk_image *,
                                 const uint32_t *, int caption_font, uint32_t caption_colour, int caption_aa);
+/* Pattern is a screen-anchored 8x8 monochrome tile behind wallpaper.
+ * Opaque image pixels cover it; uncovered/transparent pixels preserve it. */
+int desk_wallpaper_render_pattern(uint32_t *, uint32_t, uint32_t, uint32_t, uint32_t,
+                                 const char *, int, uint32_t, const struct desk_image *, const uint32_t *, int pattern);
+int desk_wallpaper_render_pattern_styled(uint32_t *, uint32_t, uint32_t, uint32_t, uint32_t,
+                                       const char *, int, uint32_t, const struct desk_image *, const uint32_t *,
+                                       int caption_font, uint32_t caption_colour, int caption_aa, int pattern);
 /* Scales an ARGB image into a w*h ARGB box with the given mode, for previews. */
 void desk_image_scale(const struct desk_image *src, uint32_t *dst, uint32_t w, uint32_t h, int mode, uint32_t colour);
 /* Colour-independent ARGB layer; uncovered pixels are transparent. */

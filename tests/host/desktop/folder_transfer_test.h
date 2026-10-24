@@ -1,3 +1,9 @@
+/* CiukiOS has no per-thread CPU clock; host latency coverage uses it. */
+#ifdef CLOCK_THREAD_CPUTIME_ID
+#define FOLDER_CPU_CLOCK CLOCK_THREAD_CPUTIME_ID
+#else
+#define FOLDER_CPU_CLOCK CLOCK_MONOTONIC
+#endif
 /* SPDX-License-Identifier: MIT
  * Block production transfer I/O while replaying real shell input. */
 static uint64_t folder_clock(clockid_t clock)
@@ -11,16 +17,16 @@ static void folder_transfer_cases(struct fm_model *other)
     pthread_mutex_lock(&poll_lock); while(!copy_entered) pthread_cond_wait(&poll_changed,&poll_lock); pthread_mutex_unlock(&poll_lock);
     struct desk_folder *f=d.sh.folder; assert(f->busy && f->dialog && f->dialog_window>=0);
     assert(!strcmp(f->dialog->dialog.title,"Copying...") && strstr(f->dialog->dialog.text,"Preparing the selected items") && f->transfer);
-    uint64_t latency=0, spent=folder_clock(CLOCK_THREAD_CPUTIME_ID), begin=folder_clock(CLOCK_MONOTONIC);
+    uint64_t latency=0, spent=folder_clock(FOLDER_CPU_CLOCK), begin=folder_clock(CLOCK_MONOTONIC);
     for (unsigned k=0;k<120;k++) {
         uint64_t at=folder_clock(CLOCK_MONOTONIC); d.now_ns+=1000000;
         struct ciuki_input_event motion={.type=CIUKI_INPUT_MOTION,.value=500+(int)(k%20),.value2=500}; desk_input(&d,&motion);
         desk_folder_service(&d);
         uint64_t elapsed=folder_clock(CLOCK_MONOTONIC)-at; if(elapsed>latency)latency=elapsed;
-        struct timespec pause={0,1000000}; nanosleep(&pause,NULL);
+        struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL);
     }
     assert(strstr(f->dialog->dialog.text,"Bytes:"));
-    spent=folder_clock(CLOCK_THREAD_CPUTIME_ID)-spent; uint64_t elapsed=folder_clock(CLOCK_MONOTONIC)-begin;
+    spent=folder_clock(FOLDER_CPU_CLOCK)-spent; uint64_t elapsed=folder_clock(CLOCK_MONOTONIC)-begin;
     assert(latency<50000000ull && spent*100/elapsed<=5 && f->busy);
     printf("DESKTOP TRANSFER input_max_ms=%.3f ui_cpu_pct=%.3f turns=120\n",latency/1e6,spent*100.0/elapsed);
     /* Pin the shell-hosted, shared dialog body for both themes. Worker stays
@@ -48,7 +54,7 @@ static void folder_transfer_cases(struct fm_model *other)
     /* A real collision sleeps on the mailbox. No automatic Cancel. */
     fake_file(DESK_FOLDER "/Worker.mp3",10,90); command(DF_REFRESH,-1); command(DF_PASTE,-1);
     for(unsigned k=0;f->dialog->dialog.id!=851;k++) {
-        assert(k<3000); d.now_ns+=1000000; desk_folder_service(&d); struct timespec pause={0,1000000}; nanosleep(&pause,NULL);
+        assert(k<3000); d.now_ns+=1000000; desk_folder_service(&d); struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL);
     }
     assert(f->busy && f->dialog->dialog.buttons==4);
     /* No leaves the destination unchanged; then Yes to all replaces it. */
@@ -57,7 +63,7 @@ static void folder_transfer_cases(struct fm_model *other)
     desk_folder_dialog_key(&d,DU_KEY_ENTER,1); desk_folder_dialog_key(&d,DU_KEY_ENTER,0);
     settle(); assert(f->job.state==FM_DONE && f->job.skipped && fake_nodes[fake_lookup(DESK_FOLDER "/Worker.mp3")].meta.size==10);
     command(DF_PASTE,-1);
-    for(unsigned k=0;f->dialog->dialog.id!=851;k++) { assert(k<3000); d.now_ns+=1000000; desk_folder_service(&d); struct timespec pause={0,1000000}; nanosleep(&pause,NULL); }
+    for(unsigned k=0;f->dialog->dialog.id!=851;k++) { assert(k<3000); d.now_ns+=1000000; desk_folder_service(&d); struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL); }
     struct du_rect button=du_dialog_button(f->dialog,1); struct desk_box content=desk_content(&d.clients[f->dialog_window]);
     desk_folder_dialog_click(&d,content.x+button.x-f->dialog->dialog.box.x-DESK_BORDER+3,content.y+button.y-f->dialog->dialog.box.y-DESK_TITLE+3);
     settle(); assert(f->job.state==FM_DONE && !f->job.skipped && fake_nodes[fake_lookup(DESK_FOLDER "/Worker.mp3")].meta.size==30000);

@@ -114,8 +114,10 @@ static unsigned program_removes,program_changes,program_installs,program_overflo
 static int installed_programs(void *ctx,struct desk_uninstall_entry *out,unsigned cap)
 {
     (void)ctx;assert(cap>=2);
-    out[0]=(struct desk_uninstall_entry){.name="DOOM (shareware)",.kind=DESK_PROGRAM_GAME,.game=2,.version="1.9",.publisher="id Software",.disk_bytes=8192,.inventory_more=program_overflow};
-    out[1]=(struct desk_uninstall_entry){.name="Desktop",.no_remove=1,.system_component=1};return 2;
+    static const struct desk_uninstall_entry entries[2]={
+        {.name="DOOM (shareware)",.kind=DESK_PROGRAM_GAME,.game=2,.version="1.9",.publisher="id Software",.disk_bytes=8192},
+        {.name="Desktop",.no_remove=1,.system_component=1}};
+    memcpy(out,entries,sizeof(entries)); out[0].inventory_more=program_overflow; return 2;
 }
 static int remove_program(void *ctx,const struct desk_uninstall_entry *r)
 {(void)ctx;assert(r->game==2);program_removes++;return 0;}
@@ -320,7 +322,7 @@ int main(int argc, char **argv)
         assert(preview_band() == (modes[k] == CFG_WALL_FIT));
         if (modes[k] == CFG_WALL_FIT) at_save(renders, "control-display-fit", &u);
     }
-    struct ciuki_settings parsed;
+    static struct ciuki_settings parsed;
     cfg_defaults(&parsed); parsed.wallpaper_mode = CFG_WALL_CENTER;
     assert(!cfg_parse(&parsed, saved, saved_n) && parsed.wallpaper_mode == CFG_WALL_FILL);
 
@@ -420,6 +422,42 @@ int main(int argc, char **argv)
     assert(!cp_wallpaper_set(&a,"/Documents/Desktop/Paint.bmp") && !strcmp(a.cfg.wallpaper,"/Documents/Desktop/Paint.bmp"));
     assert(cp_wallpaper_set(&a,"/Documents/Desktop/not-an-image.txt")==-EINVAL);
     cp_close(&a); cp_detach(&a);
+    /* Appearance icon metrics use the same reversible Display transaction. */
+    cfg_defaults(&parsed); saved_n=cfg_format(&parsed,saved,sizeof(saved));
+    attach(CP_DISPLAY);
+    struct du_event tab={.type=DU_EV_SELECT,.id=CP_DISPLAY_TABS_ID,.index=CP_APPEARANCE};
+    u.event(&u,&tab,u.user); at_click_widget(&u,CP_ICON_APPEARANCE);
+    assert(a.icon_appearance && du_get(&u,CP_ICON_FONT)->count==DESK_FONTS);
+    assert(du_get(&u,CP_ICON_SPACE_X)->value==96-CFG_ICON_SPACING_MIN);
+    assert(du_get(&u,CP_ICON_SPACE_Y)->value==94-CFG_ICON_SPACING_MIN);
+    struct du_event metric={.type=DU_EV_CHANGE,.id=CP_ICON_SPACE_X,.index=128-CFG_ICON_SPACING_MIN};
+    u.event(&u,&metric,u.user); metric.id=CP_ICON_SPACE_Y; metric.index=120-CFG_ICON_SPACING_MIN; u.event(&u,&metric,u.user);
+    struct du_event font={.type=DU_EV_SELECT,.id=CP_ICON_FONT,.index=DESK_FONT_MONO};
+    u.event(&u,&font,u.user);
+    assert(a.display_dirty && a.cfg.icon_spacing_x==128 && a.cfg.icon_spacing_y==120 && a.cfg.icon_font==DESK_FONT_MONO);
+    du_render(&u); at_save(getenv("CIUKI_ICON_FRAMES"),"g19-icon-appearance",&u); at_click_widget(&u,CP_APPLY);
+    cfg_defaults(&parsed); assert(!cfg_parse(&parsed,saved,saved_n));
+    assert(parsed.icon_spacing_x==128 && parsed.icon_spacing_y==120 && parsed.icon_font==DESK_FONT_MONO);
+    at_click_widget(&u,CP_ICON_APPEARANCE_BACK); assert(!a.icon_appearance && du_get(&u,CP_FONT_LIST));
+    assert(cp_close(&a)); cp_detach(&a);
+    cfg_defaults(&parsed); assert(!cfg_parse(&parsed,saved,saved_n));
+    assert(parsed.icon_spacing_x==96 && parsed.icon_spacing_y==94 && parsed.icon_font==DESK_FONT_LABEL);
+    attach(CP_DISPLAY); u.event(&u,&tab,u.user); at_click_widget(&u,CP_ICON_APPEARANCE);
+    u.event(&u,&font,u.user); at_click_widget(&u,CP_OK); assert(a.quit); cp_detach(&a);
+    cfg_defaults(&parsed); assert(!cfg_parse(&parsed,saved,saved_n) && parsed.icon_font==DESK_FONT_MONO);
+    cfg_defaults(&parsed); strcpy(parsed.wallpaper,"none"); saved_n=cfg_format(&parsed,saved,sizeof(saved));
+    attach(CP_DISPLAY); assert(du_get(&u,CP_WALL_PATTERN)->count==DESK_WALL_PATTERNS);
+    render_settled(&u); static uint32_t plain_preview[192*144]; memcpy(plain_preview,a.preview,sizeof(plain_preview));
+    struct du_event pattern={.type=DU_EV_SELECT,.id=CP_WALL_PATTERN,.index=3}; u.event(&u,&pattern,u.user);
+    assert(a.display_dirty && a.cfg.wallpaper_pattern==3); render_settled(&u);
+    assert(a.preview_valid && memcmp(plain_preview,a.preview,sizeof(plain_preview))); at_click_widget(&u,CP_APPLY);
+    cfg_defaults(&parsed); assert(!cfg_parse(&parsed,saved,saved_n) && parsed.wallpaper_pattern==3);
+    assert(cp_close(&a)); cp_detach(&a);
+    cfg_defaults(&parsed); assert(!cfg_parse(&parsed,saved,saved_n) && !parsed.wallpaper_pattern);
+    attach(CP_DISPLAY); u.event(&u,&pattern,u.user); at_click_widget(&u,CP_OK); assert(a.quit); cp_detach(&a);
+    cfg_defaults(&parsed); assert(!cfg_parse(&parsed,saved,saved_n) && parsed.wallpaper_pattern==3);
+    puts("PASS Background Pattern: chooser, preview, Apply, Cancel restore and OK persistence");
+    puts("PASS icon Appearance: cell spacing/font draft, Apply, Cancel restore, OK persistence and font-preview navigation");
     puts("PASS Display Properties: staged edits, preview/Cancel merge, durable OK, pending-close rollback and failed save");
     puts("PASS F1-63 Control Panel: two Tab presses and Space apply master preference 20/20/muted");
     printf("PASS control display: five positions, layout, desktop.cfg modes, preview\n");

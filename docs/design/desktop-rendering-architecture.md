@@ -441,6 +441,15 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 40 | Saver input dismissal and monitor wake | full desktop, windows, overlays and pointer | `desk_saver_input`, `saver_wake`, full invalidation | G10: dismissing input consumed, failed wake remains retryable | saver |
 | 41 | Monitor off after idle or SC_MONITORPOWER | no presentation while off; wake invalidates the complete scene (row 37) | `desk_saver_tick`, `monitor_power`, `desk_redraw` | G10: suspend drawing until firmware wake succeeds | saver |
 
+| 45 | Create Shortcut target/name pages, Browse picker, selection, Back, validation and Cancel/Finish | wizard content or exposed outer window and taskbar | `desk_folder_shortcut_*`, `DESK_INTERNAL_SHORTCUT` | deterministic picker and page repaint comparisons | G19 Create Shortcut |
+| 46 | Appearance icon spacing and caption font Apply | full desktop icon layer, old and new cells; halo cache depends on metrics and font | `icons_layout`, `label_halo_of`, `draw_icons` | minimum cell and large-font clipping included | G19 icon appearance |
+| 47 | Show Desktop Icons on/off | full desktop icon layer and pending selection/editor/drag | `SH_ACT_ICONS_SHOW`, `desk_shell_apply` | hidden icons are neither painted nor hit tested | G19 Show Desktop Icons |
+| 48 | System icon context menus, including Network Neighborhood | menu boxes, focus highlight and any launched property window | `SH_MENU_ICON`, `SH_ACT_ICON_PROPERTIES` | four system menus; actions covered by folder replay | G19 system icon menus |
+| 49 | Desktop Refresh | rebuilt desktop layer, exposed icons and links; settings preserved | `SH_ACT_REFRESH`, `DF_REFRESH`, `desk_links_refresh` | refresh uses existing snapshot scan and invalidation | G19 Refresh |
+| 50 | Resolution-specific position selection and Arrange | all old and new icon cells | `cfg_icon_*_at`, `icons_layout` | per-resolution reset and independent coordinates | G19 resolution positions |
+| 51 | Drop on a program or Create Shortcut(s) Here | drag highlight/image, new link icons and launch feedback | `SH_DROP_PROGRAM`, `FM_EFFECT_LINK`, `desk_folder_transfer` | folder replay verifies effects and preserved source data; existing drag row compares frames | G19 icon drop targets |
+| 52 | Background pattern chooser Apply/Cancel/OK and None | background layer and exposed/transparent image margins | `desk_wallpaper_render_pattern_styled`, wallpaper worker snapshot/cache identity | original periodic masks, image compositing and full redraw comparisons | G19 wallpaper patterns |
+
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with
 fx-19 (drag and drop, rubber-band and keyboard selection) and were added by
