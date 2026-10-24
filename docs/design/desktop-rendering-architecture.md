@@ -423,9 +423,7 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 27 | Drag image (`ImageList_DragMove`/`DragShowNolock` in the Windows 98 shell): the image follows the pointer above every window | the image's old and new box; screen copies are cut by it | `dnd_image_box`, `dnd_image_damage`, `draw_drag_image`, `copy_region`, `desk_shell_chrome_intersects` | none reachable found; the "as painted" record that the copy cut and the direct client path use is updated by the input path only, so fx-15b's reconcile now keeps it equal to the painter's box whatever moves the pointer | drag and drop |
 | 28 | Drop-target highlight (`DROPEFFECT` feedback: the target item drawn selected while it would accept the drop) | the old and new target icon | `dnd_evaluate` (`drop_index`), `icon_repaint` | none | drag and drop |
 | 29 | Taskbar hover during a drag (Windows 98: holding a dragged object over a task button for about a second activates that window) | the restored window (rows 7, 8, 11) | `desk_shell_tick` drag hover | none (covered by the window rows) | drag and drop |
-| 30 | G22 volume-tray double-click: close the single-click popup and launch Volume Control | old volume popup and the newly created window (rows 1, 6) | `shell.c` double-click before popup outside-click dismissal | popup footprint explicitly invalidated | tray popups |
 | 30 | Right-drag menu, Esc and cancelled drags | the menu box (row 13); the image box when the drag ends | `desk_shell_drag_button`, `desk_shell_drag_cancel`, `dnd_finish` | none | drag and drop |
-| 36 | G31 Printers folder/Add Printer, default selection and queue refresh (queued, paused, resumed, cancelled or purged); Print and Page Setup opening, changing fields, cancelling or accepting | dialog/client damage; old dialog area exposed on close; covered queue damage retained until exposure | `apps/printers/main.c`, `apps/libprint/dialog.c`, libdeskui `du_invalidate`/`DAMAGE` | completion notices wait while another modal dialog (such as an unsaved-document prompt) is open | printing |
 | 31 | Taskbar menu (G4, WM-12): `TrackPopupMenu` at the cursor on the empty taskbar or the empty top bar; its Cascade/Tile/Minimize All items enable with the windows, and Undo Cascade/Undo Tile/Undo Minimize All replace or follow them | the menu's outer box on open, close and each hot row | `desk_shell_button` (empty bar), `build` `SH_MENU_TASKBAR`, `menu_key`/`menu_letter` (access keys) | none | taskbar menu |
 | 32 | `CascadeWindows`/`TileWindows` of the taskbar menu: `SetWindowPos` on every arranged window in one pass (`EndDeferWindowPos`); maximised and shaded windows are restored first | the old and new outer box of each window that moved or changed size; its client through the stretch of rows 2 and 5 | `desk_arrange`, `arrange_place`, `arrange_settle` (`client.c`) | none found; `desk_move` plans one screen copy for one moved window, so `arrange_prepare`/`arrange_settle` turn a pending copy into plain damage before and after the batch | arrange |
 | 33 | Minimize All Windows, Show Desktop (Win+D toggles), Win+M, Shift+Win+M, Alt+M and their Undo: the windows go to the taskbar at once (no caption animation), the desktop becomes active | every window's outer box, its task button, the caption of the window that loses the activation | `desk_minimize_all`, `desk_show_desktop`, `desk_arrange_undo` | none | minimize all |
@@ -449,6 +447,9 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 51 | G17 Properties opens, changes tab/value, Apply/OK/Cancel closes | property sheet and exposed viewport | `db_properties`, `db_page`, `db_input`, `db_apply` | none | DOS toolbar/properties/selection |
 | 52 | G17 Font size, Background label, clipboard/error notice and viewport scroll; incremental guest frame | toolbar/viewport for control changes; only scaled destination rows sampling changed VGA rows for video | `db_source_x/y`, `db_paint_rows`, `dosbox.c` damage mapping | hidden property-sheet backing is not uploaded over the sheet | DOS toolbar/properties/selection |
 | 53 | G17 font-size dropdown opens, changes highlighted choice, selects or cancels | list box and exposed guest rows | `db_input` font menu, `db_paint_rows` | guest updates do not overwrite the open list | DOS toolbar/properties/selection |
+| 54 | G22 volume-tray double-click: close the single-click popup and launch Volume Control | old volume popup and the newly created window (rows 1, 6) | `shell.c` double-click before popup outside-click dismissal | popup footprint explicitly invalidated | tray popups |
+| 55 | G31 Printers folder/Add Printer, default selection and queue refresh (queued, paused, resumed, cancelled or purged); Print and Page Setup opening, changing fields, cancelling or accepting | dialog/client damage; old dialog area exposed on close; covered queue damage retained until exposure | `apps/printers/main.c`, `apps/libprint/dialog.c`, libdeskui `du_invalidate`/`DAMAGE` | completion notices wait while another modal dialog (such as an unsaved-document prompt) is open | printing |
+| 56 | G32 logon / user selection / masked password / checking / failure / Cancel / password lock and unlock | whole screen for the opaque gate and its removal; application input is consumed before routing | `desk_logon_*`, `desk_session_lock`, `input.c`, `desk_shell_chrome_intersects` | none in the host model | `row_logon` in `test_window_model` (all five presenters) |
 
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with
@@ -456,18 +457,21 @@ fx-19 (drag and drop, rubber-band and keyboard selection) and were added by
 fx-15b after the merge, with the reconcile extended to the band and the
 drag image. Rows 31-35 came with G4 (`docs/design/taskbar-arrangement-windows-keys.md`),
 row 36 with G21, row 37 with fx-26, row 38 with G13 (`docs/directives/g13-g16-os-gaps-batch-3.md`)
-and rows 39-41 with G10 (`docs/directives/g7-g12-os-gaps-batch-2.md`);
-drag image. Rows 31-35 came with G4 (`docs/design/taskbar-arrangement-windows-keys.md`); rows 36-37 came with G12 (`docs/design/input-settings.md`).
-the randomized sequences gained operations 42-47 (taskbar menu, Win+D/M and
+and rows 39-41 with G10 (`docs/directives/g7-g12-os-gaps-batch-2.md`).
+Rows 47-48 cover G12 (`docs/design/input-settings.md`), rows 49-53 G17,
+row 54 G22, row 55 G31 and row 56 G32 logon.
+The randomized sequences gained operations 42-47 (taskbar menu, Win+D/M and
 Alt+M, taskbar focus keys, Alt+F6/Menu key/Shift+F10/F3, caption icon,
-Win+E/R/F/Break/F1). Row 36 adds fx-26's drag with concurrent damage.
+Win+E/R/F/Break/F1). Row 37 adds fx-26's drag with concurrent damage.
 The executable row table groups several inventory events into one scenario:
 main's indexes 0–32 stay unchanged, including G4 at `WM_ROW=24` through
 `WM_ROW=28`, startup at 29, fx-26 at 30, fault at 31 and saver at 32.
 G7 appends inventory row 42 and executable scenario `row_find` at `WM_ROW=33`.
 G8 appends inventory rows 43–46. Its desktop-menu scenario is
 `row_g8_menus`, selected by `WM_ROW=34`; rows 44–46 use the production
-Files dialog replay. Existing executable scenario indexes stay unchanged.
+Files dialog replay. G12 follows at `WM_ROW=35` and `WM_ROW=36`, G17 at
+`WM_ROW=37`, printing at `WM_ROW=38` and G32 logon at `WM_ROW=39`.
+Existing executable scenario indexes stay unchanged.
 
 ### One rule instead of one fix per path: the frame reconcile
 

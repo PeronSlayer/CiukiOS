@@ -537,6 +537,7 @@ class DesktopTests(unittest.TestCase):
             binary = folder / "launch-test"
             sources = [ROOT / "apps/desktop" / n for n in ("client.c", "protocol.c", "input.c", "compositor.c", "theme.c", "clipboard.c")] + SHELL_SOURCES
             sources += [ROOT / "tests/host/desktop" / n for n in ("fake.c", "shell_launch_test.c")]
+            sources += [ROOT / "apps/desktop/users.c", ROOT / "apps/desktop/users_io.c"]
             sources += [ROOT / "apps/desktop/image.c", ROOT / "apps/desktop/wallpaper_io.c"]  # shell_service's workers
             sources += [ROOT / "apps/libdeskui" / n for n in ("icons.c", "icon_map.c", "clipboard.c", "clipstore.c")]
             bridge = folder / "kernel-poll.o"
@@ -858,7 +859,10 @@ class AppCaseReplayTests(unittest.TestCase):
                  ("demo", os_calls + ["-Dmain=demo_main"], ROOT / "apps/demo/demo.c"),
                  ("survivor_demo", os_calls + ["-Dmain=survivor_demo_main"], ROOT / "apps/demo/demo.c"),
                  ("fake_vfs", posix, host / "fake_vfs.c"),
-                 ("harness", ["-D_DEFAULT_SOURCE"], host / "app_replay.c")]
+                 ("harness", ["-D_DEFAULT_SOURCE"], host / "app_replay.c"),
+                 ("users", posix, ROOT / "apps/desktop/users.c"),
+                 ("users_io", posix, ROOT / "apps/desktop/users_io.c"),
+                 ("sha256", posix, ROOT / "src/kernel/lib/sha256.c")]
         def compile_unit(unit):
             name, flags, source = unit
             target = folder / f"{name}.o"

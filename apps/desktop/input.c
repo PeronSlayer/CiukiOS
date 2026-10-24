@@ -176,8 +176,8 @@ static void trail_damage(struct desktop *d)
 void desk_cursor_update(struct desktop *d)
 {
     unsigned shape=DESK_CURSOR_ARROW, edges=0;
-    if (d->power.state) {
-        /* The power dialog owns pointer feedback while it blocks clients. */
+    if (d->power.state || d->sh.user_gate) {
+        /* The power / logon dialog owns pointer feedback while it blocks clients. */
     } else if (d->shell && d->sh.dnd.active && !d->sh.dnd.menu) {
         /* fx-19: IDropSource::GiveFeedback default cursors for the effect. */
         unsigned e=d->sh.dnd.effect;
@@ -220,7 +220,7 @@ void desk_cursor_update(struct desktop *d)
     unsigned old_custom=d->v3_cursor_id, old_slot=d->v3_cursor_slot, old_hidden=d->v3_cursor_hidden;
     d->v3_cursor_id=0; d->v3_cursor_hidden=0;
     int vi=d->v3_pointer_window ? d->v3_pointer_window-1 : desk_hit(d,d->mouse_x,d->mouse_y);
-    if (vi>=0 && !d->sh.levels && !d->sh.switcher && !d->power.state && d->drag<0) {
+    if (vi>=0 && !d->sh.user_gate && !d->sh.levels && !d->sh.switcher && !d->power.state && d->drag<0) {
         struct desk_client *vc=&d->clients[vi];
         if (vc->version==DESK_V3_VERSION && (d->v3_pointer_window || desk_contains(desk_content(vc),d->mouse_x,d->mouse_y))) {
             d->v3_cursor_id=vc->v3_cursor; d->v3_cursor_slot=(unsigned)vi;
@@ -312,6 +312,7 @@ static void input(struct desktop *d, const struct ciuki_input_event *in)
         desk_power_input(d,&e);
         return;
     }
+    if (d->shell && desk_logon_input(d,&e)) return;
     switch (e.type) {
     case CIUKI_INPUT_CONSUMER: {
         if (e.lost_count!=CIUKI_HID_VERSION || e.code<1 || e.code>6 || e.value<0 || e.value>1) break;

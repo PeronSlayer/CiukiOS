@@ -23,8 +23,8 @@ enum {
 };
 enum { C_REPEAT_DELAY=1500, C_REPEAT_SPEED, C_BLINK, C_SWAP, C_TRAILS,
        C_WHEEL, C_POINTER, C_LAYOUT_SWITCH, C_DOUBLE_TEST };
-static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts", "autoplay", "programs", "joystick", "multimedia"};
-static const char *const page_labels[CP_PAGES] = {"Display Properties", "Mouse", "Keyboard", "Sounds and Audio", "Date and Time", "System", "System", "System", "Network", "Power", "Display Properties", "Display Properties", "Storage and removable devices", "Add/Remove Programs", "Game controllers", "Multimedia"};
+static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts", "autoplay", "programs", "joystick", "multimedia", "users", "passwords"};
+static const char *const page_labels[CP_PAGES] = {"Display Properties", "Mouse", "Keyboard", "Sounds and Audio", "Date and Time", "System", "System", "System", "Network", "Power", "Display Properties", "Display Properties", "Storage and removable devices", "Add/Remove Programs", "Game controllers", "Multimedia", "Users", "Passwords"};
 static void build(struct cp_app *a);
 static void refresh(struct cp_app *a);
 static unsigned power_read(struct cp_app *a);
@@ -50,6 +50,7 @@ static void text(struct cp_app *a, int id, const char *s)
 #include "network.inc"
 #include "game_properties.inc"
 #include "joystick.inc"
+#include "users.inc"
 
 /* ---- settings: merge the panel's keys into the file as it is now ---- */
 static void load(struct cp_app *a, struct ciuki_settings *out)
@@ -255,6 +256,7 @@ static void paint(struct du_ui *u, void *user)
 {
     struct cp_app *a = user;
     struct du_canvas *c = &u->canvas;
+    user_paint(a);
     if (a->page == CP_DISPLAY && a->display_tab == CP_BACKGROUND) {
         if (!a->preview_valid) {
             /* An image wallpaper not decoded yet: paint the desktop colour now and
@@ -417,6 +419,7 @@ void cp_audio_result(struct cp_app *a, int result)
 }
 void cp_tick(struct cp_app *a)
 {
+    user_poll(a);
     network_poll(a);
     game_poll(a);
     if (a->page==CP_JOYSTICK) {
@@ -496,6 +499,7 @@ static void log_refresh(struct cp_app *a)
 static void event(struct du_ui *u, const struct du_event *e, void *user)
 {
     struct cp_app *a = user;
+    if (user_event(a,e)) return;
     if (cp_pack_event(a, e)) return;
     int save = 0;
     if (e->type == DU_EV_KEY && e->key == DU_KEY_ESC) { cp_close(a); return; }
@@ -1359,7 +1363,9 @@ static void build(struct cp_app *a)
     } else add(a, DU_BUTTON, C_CLOSE, CP_WIDTH - 88, CP_HEIGHT - 34, 80, 24, "Close")->anchors = DU_ANCHOR_RIGHT | DU_ANCHOR_BOTTOM;
     add(a, DU_LABEL, C_STATUS, 12, CP_HEIGHT - 52, 476, 16, a->status)->anchors = DU_ANCHOR_GROW_X | DU_ANCHOR_BOTTOM;
     if (a->page == CP_HOME) text(a, C_STATUS, "Open an applet to change its settings.");
-    if (a->page == CP_DISPLAY) {
+    if (user_page(a)) {
+        user_build(a);
+    } else if (a->page == CP_DISPLAY) {
         static const char *const tabs[]={"Background","Appearance","Settings","Screen Saver"};
         for (int k=0;k<CP_DISPLAY_TABS;k++) a->display_tabs[k].text[0]=tabs[k];
         w=du_get(u,C_TABS); w->id=CP_DISPLAY_TABS_ID; w->items=a->display_tabs;
@@ -1579,6 +1585,8 @@ static void build(struct cp_app *a)
 }
 void cp_open(struct cp_app *a, int page)
 {
+    user_wipe(a);
+    if (page==CP_USERS || page==CP_PASSWORDS) a->user_loaded=0;
     if (a->game_save) { game_note(a,"Waiting for game properties to finish saving...");return; }
     if (a->mode_state==CP_MODE_SAVE) { text(a,C_STATUS,"Waiting for display settings to finish saving..."); return; }
     if (a->display_session && page != CP_DISPLAY && page != CP_ADAPTER && page != CP_FONTS && !cp_display_leave(a)) {

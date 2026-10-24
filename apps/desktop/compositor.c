@@ -276,6 +276,7 @@ int desk_start_contains(const struct desktop *d, int32_t x, int32_t y)
 }
 int desk_shell_chrome_intersects(const struct desktop *d, struct desk_box box)
 {
+    if (d->sh.user_gate) return 1;
     struct desk_box ignored;
     if(d->shell && d->sh.cfg.mouse_trails)for(unsigned k=0;k<d->pointer_trail_count;k++)
         if(desk_intersect(box,(struct desk_box){d->pointer_trail[k].x-64,d->pointer_trail[k].y-64,128,128},&ignored))return 1;

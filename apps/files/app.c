@@ -2,6 +2,7 @@
 /* SPDX-License-Identifier: MIT
  * Files controller: layout, menus, panes, selection, operations and jobs. */
 #include "app.h"
+#include "../desktop/profile.h"
 #include "transfer.h"
 #include "transfer_ui.h"
 #include "../desktop/catalog.h"
@@ -338,13 +339,14 @@ static void places_build(struct files_app *a)
     for (unsigned i = 0; i < 7; i++) {
         if (i == 4 && !a->games_available) continue;
         struct files_place *p = &a->places[a->place_count++];
-        snprintf(p->name, sizeof(p->name), "%s", names[i]); snprintf(p->path, sizeof(p->path), "%s", paths[i]);
+        snprintf(p->name, sizeof(p->name), "%s", names[i]); snprintf(p->path, sizeof(p->path), "%s", i==2 ? profile_home() : paths[i]);
+        if (i==6) profile_child(p->path,sizeof(p->path),"Desktop");
     }
     for (unsigned i = 0; i < a->place_count; i++) {
         struct du_item *it = &a->place_items[i];
         memset(it, 0, sizeof(*it));
         it->text[0] = a->places[i].name;
-        it->icon16 = i == 0 && a->ciuki ? a->ciuki16 : named(!strcmp(a->places[i].path, "control:") ? "menu:control-panel" : !strcmp(a->places[i].path,"/Documents/Desktop") ? "place:desktop" : !strcmp(a->places[i].path,"/Games") ? "place:folder" : icons[i], 16);
+        it->icon16 = i == 0 && a->ciuki ? a->ciuki16 : named(!strcmp(a->places[i].path, "control:") ? "menu:control-panel" : !strcmp(a->places[i].name,"Desktop") ? "place:desktop" : !strcmp(a->places[i].path,"/Games") ? "place:folder" : icons[i], 16);
     }
     struct du_widget *w = W(a, W_PLACES);
     w->items = a->place_items; w->count = a->place_count;
@@ -2053,8 +2055,8 @@ static void command(struct files_app *a, int id)
     case C_EMPTY_BIN: confirm_empty(a); break;
     case C_BIN_PROPS: bin_properties(a); break;
     case C_GO_BIN: files_navigate(a, "/Programs"); break;
-    case C_GO_DESKTOP: files_navigate(a,"/Documents/Desktop"); break;
-    case C_GO_DOCUMENTS: files_navigate(a, "/Documents"); break;
+    case C_GO_DESKTOP: { char path[FM_PATH]; profile_child(path,sizeof(path),"Desktop"); files_navigate(a,path); break; }
+    case C_GO_DOCUMENTS: files_navigate(a, profile_home()); break;
     case C_GO_GAMES: files_navigate(a, "/Games"); break;
     case C_GO_SYSTEM: files_navigate(a, "/system"); break;
     case C_TREE_OPEN: files_update(a); break;

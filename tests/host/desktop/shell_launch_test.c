@@ -33,10 +33,13 @@
 #define CIUKI_RUNTIME_H
 #define CIUKI_RAW_H
 #define CU_PTR(p) ((uintptr_t)(p))
+/* The footprint fixture supplies CU_CALL in its generated raw.h. */
+#ifndef DESK_FOOTPRINT_TEST
 /* G10's raw DISPLAY controls share this fixture's absent display device. */
 static uint32_t shell_display_call(uint32_t op,uintptr_t argument,uint32_t b,uint32_t c,uint32_t d,uint32_t e)
 { (void)op; (void)argument; (void)b; (void)c; (void)d; (void)e; return (uint32_t)-ENOSYS; }
 #define CU_CALL(name,...) shell_display_call(__VA_ARGS__)
+#endif
 static int ciuki_error(uint32_t r) { return r >= (uint32_t)-4095 ? -(int32_t)r : 0; }
 uint32_t ciuki_raw_probe_report(uintptr_t,uint32_t,uint32_t,uint32_t,uint32_t,uint32_t);
 int shell_close(int);
@@ -288,7 +291,7 @@ ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],
                       const struct ciuki_spawn_fd *mapping,uint32_t count,uint32_t flags)
 {
     spawn_hold();
-    assert(!strcmp(env[0],"LC_ALL=C") && !strcmp(env[1],"TZ=UTC0") && !strncmp(env[5],"CIUKI_DISPLAY=",14) && !strcmp(env[6],"CIUKI_KEYMAP=us") && !env[7]);
+    assert(!strcmp(env[0],"LC_ALL=C") && !strcmp(env[1],"TZ=UTC0") && !strncmp(env[5],"CIUKI_DISPLAY=",14) && !strcmp(env[6],"CIUKI_KEYMAP=us") && !strcmp(env[7],"USER=") && !strcmp(env[8],"CIUKI_SETTINGS=/system/settings/desktop.cfg") && !strcmp(env[9],"CIUKI_PROFILE=") && !env[10]);
     assert(!strcmp(env[2],"HOME=/Documents") && !strcmp(env[3],"TMPDIR=/tmp") && !strcmp(env[4],"PATH=/Programs"));
     assert(count>=1 && mapping[0].source==last_child && mapping[0].target==3 && !flags);
     if (!strcmp(path,"/Programs/files")) {

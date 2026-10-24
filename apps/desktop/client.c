@@ -1900,13 +1900,14 @@ void desk_power_tick(struct desktop *d)
         }
         if (pending && d->now_ns<p->close_deadline) return;
         if (p->action==3) {
-            /* Log off: every program is closed; no power call. The desktop
-             * stays (single user, no logon dialog until G32). */
+            /* G32: retain G3 veto/close semantics, then return to logon. */
             if (pending) {
                 for (unsigned i=0; i<p->count; i++) if (power_live(d,&p->targets[i]) && !p->targets[i].terminated) power_terminate(d,&p->targets[i]);
                 if (d->now_ns<p->close_deadline+DESK_POWER_BUSY_NS) return;
             }
-            desk_power_cancel(d); return;
+            desk_power_cancel(d);
+            if (d->logoff) d->logoff(d);
+            return;
         }
         p->state=DESK_POWER_RETRY; p->next_try=d->now_ns;
         p->busy_deadline=d->now_ns+DESK_POWER_BUSY_NS;
@@ -2699,7 +2700,7 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
         break;
     }
     case DESK_V3_POINTER: case DESK_V3_WARP:
-        if (d->focus<0 || d->clients[d->focus].pid!=c->pid || c->minimized || d->power.state || d->sh.levels) { error=-EPERM; break; }
+        if (d->focus<0 || d->clients[d->focus].pid!=c->pid || c->minimized || d->power.state || d->sh.user_gate || d->sh.levels) { error=-EPERM; break; }
         if (p.opcode==DESK_V3_POINTER) {
             struct desk_box b=desk_content(c), clip={b.x+p.x*(int)c->v3_scale,b.y+p.y*(int)c->v3_scale,
                 (int)p.width*(int)c->v3_scale,(int)p.height*(int)c->v3_scale}, screen={0,0,(int)d->width,(int)d->height};
@@ -2733,7 +2734,7 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
             if (d->v3_lease_state && d->v3_lease_window!=c->window_id) error=-EPERM;
             else if (d->v3_lease_state) { desk_v3_revoke(d); if (d->v3_lease_state) error=-EBUSY; }
         }
-        else if (d->focus!=i || d->power.state || d->sh.levels || d->v3_lease_state) error=-EBUSY;
+        else if (d->focus!=i || d->power.state || d->sh.user_gate || d->sh.levels || d->v3_lease_state) error=-EBUSY;
         else if (!d->v3_lease) error=-ENOSYS;
         else {
             if (!++d->v3_lease_generation) ++d->v3_lease_generation;
@@ -2803,7 +2804,7 @@ int desk_v3_mode(const struct ciuki_display_info *info, unsigned w, unsigned h, 
 }
 void desk_v3_reactivate(struct desktop *d, int i)
 {
-    if (i<0 || d->v3_lease_state || d->power.state || d->sh.levels || d->sh.switcher || !d->v3_lease) return;
+    if (i<0 || d->v3_lease_state || d->power.state || d->sh.user_gate || d->sh.levels || d->sh.switcher || !d->v3_lease) return;
     struct desk_client *c=&d->clients[i];
     if (!c->v3_lease_wanted) {d->v3_reactivate_pending=0;return;}
     /* Finish the restored desktop frame before suspending it again. Otherwise

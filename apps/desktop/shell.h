@@ -8,6 +8,7 @@
 #ifndef CIUKI_DESKTOP_SHELL_H
 #define CIUKI_DESKTOP_SHELL_H
 #include "settings.h"
+#include "users.h"
 #include "shell_link.h"
 #include "settings_catalog.h"
 #include "folder.h"
@@ -54,6 +55,7 @@ enum sh_action { SH_ACT_NONE, SH_ACT_SUBMENU, SH_ACT_LAUNCH, SH_ACT_ABOUT, SH_AC
                  SH_ACT_ICON_PROPERTIES, SH_ACT_REFRESH, SH_ACT_TASK_RESTORE, SH_ACT_TASK_MINIMIZE,
                  SH_ACT_TASK_CLOSE, SH_ACT_TASKMAN, SH_ACT_CLEAR_RECENT, SH_ACT_GAME, SH_ACT_EMPTY_RECYCLE, SH_ACT_FILE, SH_ACT_RENAME, SH_ACT_OPEN_WITH, SH_ACT_DOS_FULLSCREEN, SH_ACT_DOS_MARK, SH_ACT_DOS_COPY, SH_ACT_DOS_PASTE, SH_ACT_DOS_QUICKEDIT,
                  SH_ACT_TASK_MOVE, SH_ACT_TASK_SIZE, SH_ACT_TASK_MAXIMIZE, SH_ACT_WIN32_LINK, SH_ACT_PROGRAMS_FOLDER, SH_ACT_WIN32_PROGRAM,
+                 SH_ACT_LOGOFF, SH_ACT_LOCK,
                  SH_ACT_DRAG /* fx-19 right-drag menu: arg is the DROPEFFECT, 0 Cancel */,
                  /* G4 taskbar menu: retain main's action values. */
                  SH_ACT_CASCADE, SH_ACT_TILE_H, SH_ACT_TILE_V, SH_ACT_MINIMIZE_ALL, SH_ACT_ARRANGE_UNDO,
@@ -91,6 +93,11 @@ struct sh_dnd {
 };
 struct desk_shell {
     struct ciuki_settings cfg;
+    struct user_profile profile;
+    struct users_view users;
+    struct users_request user_request;
+    int user_gate, user_focus, user_pending, user_want, user_choose, user_previous_focus;
+    char user_status[96];
     int programs_selected, programs_scroll, programs_click;
     unsigned save_game, save_op, save_bytes, save_quota, save_confirm, save_focus, save_busy;
     char save_status[160];
@@ -164,6 +171,12 @@ struct desk_shell {
 };
 struct desktop;
 struct desk_client;
+/* mode 1: logon (Cancel selects default); mode 2: password lock. */
+void desk_logon_open(struct desktop *, int mode);
+void desk_logon_result(struct desktop *, const struct users_view *, int error);
+void desk_logon_done(struct desktop *);
+int desk_logon_input(struct desktop *, const struct ciuki_input_event *);
+void desk_session_lock(struct desktop *);
 void desk_shell_reset(struct desktop *);
 void desk_shell_apply(struct desktop *);
 void desk_shell_background(struct desktop *, struct desk_box clip);

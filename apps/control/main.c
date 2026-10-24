@@ -9,6 +9,8 @@
 #include "programs.h"
 #include "decoder.h"
 #include "job.h"
+#include "../desktop/users_worker.h"
+#include "../desktop/profile.h"
 #include <ciuki/channel.h>
 #include "../../sdk/sysroot-overlay/include/ciuki/dosvm.h"
 #ifdef __i386__
@@ -38,7 +40,7 @@
 #include "network_io.inc"
 #include "../dosbox/port_settings.h"
 
-struct cp_main { struct cp_network_worker network_worker; struct cp_app app; struct du_ui ui; struct du_window window; struct cfg_writer writer;
+struct cp_main { struct users_worker users_worker; char settings_temp[160]; struct cp_network_worker network_worker; struct cp_app app; struct du_ui ui; struct du_window window; struct cfg_writer writer;
     int writer_started, reload_pending, hwid_loaded, usb_hwid_loaded; char *hwid_pci, *hwid_usb; uint32_t portrait[256 * 256]; uint32_t install_serial, serial, display_serial, audio_serial, engine_serial;
     struct ciuki_display_engine_info generic_engine;
     struct ciuki_accel_info engine; int engine_ok; uint64_t engine_next; int title_page;
@@ -68,6 +70,11 @@ static int startup_list(void *ctx,struct desk_startup_entry *out,unsigned cap)
 static int startup_enable(void *ctx,const struct desk_startup_entry *entry,int enabled)
 { (void)ctx; return desk_startup_enable_at("/System/Registry",entry,enabled); }
 static void programs_poll(struct cp_main *);
+static void notify_completion(void *);
+static int user_begin(void *ctx,const struct users_request *q)
+{ struct cp_main *m=ctx; return users_begin(&m->users_worker,q,notify_completion,m); }
+static int user_poll(void *ctx,struct users_view *v,int *e)
+{ struct cp_main *m=ctx; return users_poll(&m->users_worker,v,e); }
 /* All applet jobs share one bounded notification channel. Queue saturation
  * already means readable; other send failures close the peer and wake HUP.
  * Serialize send/close so concurrent producers cannot use a recycled fd. */
@@ -145,7 +152,7 @@ static void remember_size(struct cp_main *m)
 static int load(void *ctx, char *text, size_t size, size_t *length)
 {
     (void)ctx;
-    FILE *f = fopen(CFG_FILE, "rb");
+    FILE *f = fopen(profile_settings(), "rb");
     if (!f) return -1;
     *length = fread(text, 1, size, f);
     int ok = !ferror(f) && *length < size;
@@ -786,9 +793,11 @@ int main(int argc, char **argv)
     struct cp_main *m = calloc(1, sizeof(*m));
     if (!m) return 1;
     if (completion_start(m)) { free(m); return 1; }
+    snprintf(m->settings_temp,sizeof(m->settings_temp),"%s.cpl",profile_settings());
     m->writer.notify=notify_completion; m->writer.notify_ctx=m;
-    m->writer_started=!cfg_writer_start(&m->writer,CFG_FILE,CFG_DIR "/desktop.cpl");
+    m->writer_started=!cfg_writer_start(&m->writer,profile_settings(),m->settings_temp);
     struct cp_host *h = &m->app.host;
+    h->user_begin=user_begin; h->user_poll=user_poll;
     h->pack_scan=pack_scan; h->pack_preview=pack_preview;
     h->pack_install=pack_install; h->pack_remove=pack_remove;
     h->startup_list=startup_list; h->startup_enable=startup_enable;
@@ -832,6 +841,7 @@ int main(int argc, char **argv)
     if (game) cp_game_open(&m->app,game);
     int r = control_run(m);
     cp_decoder_stop();
+    cp_job_finish(&m->users_worker.job);
     cp_job_finish(&m->game_job);
     cp_job_finish(&m->program_scan); free(m->program_next);
     cp_job_finish(&m->assets);
