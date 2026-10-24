@@ -202,10 +202,11 @@ void recorder_attach(struct recorder_app *a,struct du_ui *u,struct du_window *w,
         (struct du_rect){12+(int)(i%4)*116,12+(int)(i/4)*32,110,26},labels[i]);
     du_add(u,DU_BUTTON,REC_SOURCE,(struct du_rect){12,116,210,26},"Source: Microphone");
     du_add(u,DU_LABEL,1699,(struct du_rect){244,116,112,20},"Input level:");
-    struct du_widget *v=du_add(u,DU_SCROLLBAR,REC_GAIN,(struct du_rect){350,118,110,18},"");
-    v->total=101; v->page=1; v->value=100;
+    struct du_widget *v=du_add(u,DU_TRACKBAR,REC_GAIN,(struct du_rect){350,114,110,24},"");
+    du_trackbar_set(v,0,100,100,5,20,0);
     du_add(u,DU_LABEL,1698,(struct du_rect){12,152,448,20},"Position (editing and playback):");
-    v=du_add(u,DU_SCROLLBAR,REC_POSITION,(struct du_rect){12,176,448,18},""); v->total=1001; v->page=1;
+    v=du_add(u,DU_TRACKBAR,REC_POSITION,(struct du_rect){12,176,448,24},"");
+    du_trackbar_set(v,0,1000,0,10,100,0);
     du_add(u,DU_STATUS,REC_STATUS,(struct du_rect){0,REC_H-24,REC_W,24},"");
     strcpy(a->status,"Ready"); show(a);
 }

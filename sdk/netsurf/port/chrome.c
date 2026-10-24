@@ -255,7 +255,8 @@ void ciuki_chrome_init(struct ciuki_browser_surface *s)
     const char *labels[]={"Back","Forward","Reload","Stop","Home","Bookmark","New window","Wallpaper"};
     const char *icons[]={"actions/go-previous","actions/go-next","actions/view-refresh","actions/process-stop","actions/go-home","actions/bookmark-new","actions/document-new","preferences-desktop-wallpaper"};
     for(unsigned i=0;i<sizeof(buttons)/sizeof(*buttons);i++) {
-        struct du_widget *widget=du_add(&ui,DU_TOOLBUTTON,buttons[i],(struct du_rect){0},labels[i]);
+        struct du_widget *widget=du_add(&ui,DU_TOOLBUTTON,buttons[i],(struct du_rect){0},"");
+        snprintf(widget->tip,sizeof(widget->tip),"%s",labels[i]);   /* icon-only buttons like IE5's compact bar; the name is the tooltip */
         widget->icon=du_icon_argb(icons[i],22);widget->icon_size=22;
     }
     du_add(&ui,DU_EDIT,URL,(struct du_rect){0},"");

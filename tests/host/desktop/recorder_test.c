@@ -1,6 +1,7 @@
 /* G22 production recorder model, UI and WAV round trip. SPDX-License-Identifier: MIT */
 #include <unistd.h>
 #include "recorder.h"
+#include "acc_test.h"
 #include <assert.h>
 #include <errno.h>
 #include <stdio.h>
@@ -44,6 +45,7 @@ int main(int argc,char **argv)
     click(&a,REC_RECORD); assert(a.recording && source==1 && gain==50 && starts==2);
     recorder_pump(&a); assert(a.frames==128 && a.dirty && a.position==128 && reads==2);
     du_render(&ui);
+    at_save(argv[1],"recorder-recording",&ui);
     assert(a.pcm[2]==1 && a.pcm[3]==-1);
     click(&a,REC_REVERSE); assert(a.pcm[0]==0); /* editing locked while recording */
     input_error=-EIO; recorder_pump(&a); assert(!a.recording && a.frames==128 && strstr(a.status,"retained"));
@@ -55,6 +57,17 @@ int main(int argc,char **argv)
     event(&a,DU_EV_CHANGE,REC_POSITION,500,NULL); assert(a.position==64);
     click(&a,REC_TRIM_BEFORE); assert(a.frames==64 && !a.position);
     event(&a,DU_EV_CHANGE,REC_POSITION,500,NULL); click(&a,REC_TRIM_AFTER); assert(a.frames==32 && a.position==32);
+    {   /* the position and input-level controls are trackbars driven by the pointer */
+        struct du_widget *pos=du_get(&ui,REC_POSITION), *gn=du_get(&ui,REC_GAIN);
+        assert(pos->kind==DU_TRACKBAR && gn->kind==DU_TRACKBAR && pos->box.w>pos->box.h);
+        unsigned before=a.position;   /* the position sits at the end after the trims */
+        at_click(&ui,pos->box.x+8,pos->box.y+pos->box.h/2); du_render(&ui);
+        assert(a.position<before);    /* a page click before the thumb moves back */
+        before=a.position;
+        at_click(&ui,pos->box.x+pos->box.w-8,pos->box.y+pos->box.h/2); du_render(&ui);
+        assert(a.position>before && a.position<=a.frames);
+        at_click(&ui,gn->box.x+8,gn->box.y+gn->box.h/2); du_render(&ui); assert(a.gain<100);
+    }
     char path[512]; snprintf(path,sizeof(path),"%s/recording.wav",argv[1]);
     assert(!recorder_save(&a,path) && !a.dirty);
     int16_t sample=a.pcm[0];

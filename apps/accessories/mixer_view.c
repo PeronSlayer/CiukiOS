@@ -86,7 +86,8 @@ static void show(struct mixer_app *a)
         if (w->id==MX_MUTE) snprintf(text,sizeof(text),a->mute ? "[x] &Mute" : "[ ] &Mute");
         if (w->id==MX_LEVEL) {
             uint32_t l,r; mixer_split(a->volume,a->balance,&l,&r);
-            snprintf(text,sizeof(text),"%d%%  (L %u, R %u)",a->volume,(unsigned)l,(unsigned)r);
+            if (l==r) snprintf(text,sizeof(text),"%d%%",a->volume);
+            else snprintf(text,sizeof(text),"L %u  R %u",(unsigned)l,(unsigned)r);
         }
         if (w->id>=MX_VOLUME && w->id<=MX_MUTE) disabled=!a->available || a->recording;
         if (w->id==MX_STATUS) snprintf(text,sizeof(text),"%s",a->status);
@@ -151,23 +152,23 @@ void mixer_attach(struct mixer_app *a, struct du_ui *u, const struct mixer_backe
     a->menus[1] = (struct du_menu){"&Help", a->help_items, 1};
     u->menus = a->menus; u->menu_count = 2;
     du_add(u, DU_GROUP, MX_GROUP, (struct du_rect){8, 28, 96, 230}, "Master");
-    struct du_widget *v = du_add(u, DU_SCROLLBAR, MX_VOLUME, (struct du_rect){48, 86, 18, 110}, "");
-    v->vertical = 1; v->total = 110; v->page = 10;
+    struct du_widget *v = du_add(u, DU_TRACKBAR, MX_VOLUME, (struct du_rect){44, 86, 26, 110}, "");
+    du_trackbar_set(v, 0, 100, 0, 2, 10, 0);
     du_add(u, DU_LABEL, MX_LEVEL, (struct du_rect){14, 200, 86, 16}, "");
     du_add(u, DU_BUTTON, MX_MUTE, (struct du_rect){18, 224, 76, 22}, "[ ] &Mute");
     du_add(u,DU_BUTTON,MX_MODE,(struct du_rect){8,2,220,24},"&Recording controls");
-    struct du_widget *b = du_add(u, DU_SCROLLBAR, MX_BALANCE, (struct du_rect){24, 58, 64, 18}, "");
-    b->total = 210; b->page = 10;
-    du_add(u, DU_LABEL, MX_LEFT, (struct du_rect){16, 58, 10, 18}, "L");
-    du_add(u, DU_LABEL, MX_RIGHT, (struct du_rect){90, 58, 10, 18}, "R");
+    struct du_widget *b = du_add(u, DU_TRACKBAR, MX_BALANCE, (struct du_rect){24, 56, 64, 24}, "");
+    du_trackbar_set(b, 0, 200, 100, 5, 20, 0);
+    du_add(u, DU_LABEL, MX_LEFT, (struct du_rect){14, 60, 10, 18}, "L");
+    du_add(u, DU_LABEL, MX_RIGHT, (struct du_rect){90, 60, 10, 18}, "R");
     du_add(u, DU_STATUS, MX_STATUS, (struct du_rect){0, MIXER_H - 20, MIXER_W, 20}, "");
     for (unsigned i=1;i<=5;i++) {
         int x=108+(int)(i-1)*102;
         du_add(u,DU_GROUP,line_id(i,4),(struct du_rect){x,28,100,230},line_names[i]);
-        struct du_widget *vol=du_add(u,DU_SCROLLBAR,line_id(i,0),(struct du_rect){x+42,86,18,110},"");
-        vol->vertical=1; vol->total=110; vol->page=10;
-        struct du_widget *bal=du_add(u,DU_SCROLLBAR,line_id(i,1),(struct du_rect){x+8,58,84,18},"");
-        bal->total=210; bal->page=10;
+        struct du_widget *vol=du_add(u,DU_TRACKBAR,line_id(i,0),(struct du_rect){x+37,86,26,110},"");
+        du_trackbar_set(vol,0,100,0,2,10,0);
+        struct du_widget *bal=du_add(u,DU_TRACKBAR,line_id(i,1),(struct du_rect){x+8,56,84,24},"");
+        du_trackbar_set(bal,0,200,100,5,20,0);
         du_add(u,DU_LABEL,line_id(i,3),(struct du_rect){x+6,200,88,18},"");
         du_add(u,DU_BUTTON,line_id(i,2),(struct du_rect){x+6,224,88,22},"[ ] Mute");
     }
