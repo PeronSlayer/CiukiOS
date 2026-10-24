@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT
  * Files entry point: desktop channel, native VFS, program launching. */
 #include "app.h"
+#include "cleanup.h"
 #include "../desktop/autoplay.h"
 #include <ciuki/media.h>
 #include <ciuki/fileinfo.h>
@@ -203,6 +204,12 @@ static int media_space(unsigned d,struct ciuki_media_space *sp)
     int fd=open("/dev/media",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
     int e=ciuki_devctl(fd,MEDIA_GET_SPACE,sp,sizeof(*sp)) ? -errno : 0; close(fd); return e;
 }
+static int media_format(int write,struct ciuki_media_format *request)
+{
+    int fd=open("/dev/media",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
+    int e=ciuki_devctl(fd,write ? MEDIA_FORMAT : MEDIA_GET_FORMAT,request,sizeof(*request)) ? -errno : 0;
+    close(fd); return e;
+}
 static int native_info(const char *path,struct ciuki_file_info *info)
 { return ciuki_file_info_get(path,info) ? -errno : 0; }
 static int native_attributes(const char *path,uint32_t attributes)
@@ -286,6 +293,7 @@ int main(int argc, char **argv)
     a->user = m; a->test = test; a->spawn = launch; a->drop=drop; a->drag_begin=drag_begin; a->drag_status=drag_status; a->close = close_window; a->close_declined=close_declined; a->portrait = portrait;
     a->poll_clipboard=1; a->media_label_key=media_label_key; a->media_label=media_label; a->media_read=media_read; a->media_remove=media_remove; a->media_blockers=media_blockers;
     a->media_load=media_load; a->media_space=media_space;
+    a->media_format=media_format; a->cleanup_fs=fm_native_cleanup_vfs();
     a->file_info=native_info; a->set_attributes=native_attributes; a->set_label=native_label; a->volume_label=native_volume_label; a->version_info=fm_native_version;
     if (property) snprintf(a->property_request,sizeof(a->property_request),"%s",property);
     if (test) a->checkpoint = checkpoint;

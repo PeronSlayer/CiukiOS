@@ -22,6 +22,7 @@ struct storage_volume {
     unsigned disk, partition, drive;
     int error;
     bool present, read_gate, removable, safely_removed;
+    bool formatting; /* namespace protected: retained raw-format owner, even while detached */
     bool optical; /* f9-01: Setup C: over the boot CD's image view; disk = ATA slot */
     uint32_t read_sequence, write_sequence;
     uint32_t census_next_ms; /* fx-17b: next background free-count step */
@@ -119,6 +120,10 @@ int storage_add_removable_bounded(struct storage *, struct blkdev *,
                                   bool (*cancel)(void *), void (*pause)(void *), void *);
 int storage_remove_removable(struct storage *, struct blkdev *, bool surprise);
 int storage_remove_removable_locked(struct storage *, struct blkdev *, bool surprise);
+/* G29: query or exclusively reformat one mounted removable FAT volume.
+ * Record is already copied, returns FS errors; physical generation required. */
+struct ciuki_media_format;
+int storage_format_removable(struct storage *, struct ciuki_media_format *, bool execute);
 int storage_add_ro(struct storage *, unsigned slot, struct blkdev *, uint64_t session);
 int storage_add_ro_locked(struct storage *, unsigned slot, struct blkdev *, uint64_t session);
 void storage_refresh_ro(struct storage *);

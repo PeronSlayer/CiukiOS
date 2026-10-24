@@ -89,6 +89,11 @@ struct files_app {
      * 0 mounted, -ENXIO no disk. space: volume capacity and free count. */
     int (*media_load)(unsigned drive);
     int (*media_space)(unsigned drive, struct ciuki_media_space *);
+    int (*media_format)(int write, struct ciuki_media_format *);
+    struct files_disk *disk;
+    const struct fm_vfs *cleanup_fs;
+    int disk_pending, disk_drive;
+    uint32_t disk_low_seen;
     int (*file_info)(const char *, struct ciuki_file_info *);
     int (*set_attributes)(const char *, uint32_t);
     int (*set_label)(unsigned, const char *);
@@ -119,6 +124,9 @@ struct files_app {
 void files_shell_action(struct files_app *, int action, const char *path);
 
 void files_properties_path(struct files_app *, const char *);
+/* G29: asynchronous disk dialogs; drive is zero-based (C: = 2). */
+int files_disk_open(struct files_app *, unsigned drive, int format);
+int files_disk_busy(const struct files_app *);
 void files_drop(struct files_app *, int x, int y, int copy);
 /* fx-19 drop target and source, driven by the desktop's drag session.
  * keys are FM_KEY_* bits; phase 0 enter/over/repeat, 1 leave. */

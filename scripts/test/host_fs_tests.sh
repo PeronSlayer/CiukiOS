@@ -27,6 +27,31 @@ if [[ ${1:-} == --libsetup ]]; then
     bash scripts/test/host_libsetup_tests.sh
     exit 0
 fi
+run_format_tests() {
+    ((missing == 0)) || exit 1
+    local out=build/host/fs/format type size
+    mkdir -p "$out"
+    for type in 12 16 32; do
+        case $type in 12) size=1440K;; 16) size=16M;; 32) size=64M;; esac
+        truncate -s "$size" "$out/fat$type.img"
+        mkfs.fat -F "$type" -s 1 "$out/fat$type.img"
+    done
+    clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+        -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+        -ffunction-sections -fdata-sections -Wl,--gc-sections \
+        -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c \
+        src/kernel/fs/cache.c src/kernel/fs/partition.c src/kernel/fs/path.c src/kernel/fs/fat.c \
+        src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c src/kernel/fs/iso9660.c src/kernel/fs/ntfs_ro.c \
+        src/kernel/fs/ntfs_fs.c src/kernel/fs/mount.c src/kernel/drivers/blkpart.c \
+        src/kernel/lib/fmt.c tests/host/fs/fake.c tests/host/fs/scan.c tests/host/fs/test_format.c -o "$out/test_format"
+    "$out/test_format" "$out/fat12.img" "$out/fat16.img" "$out/fat32.img"
+    for type in 12 16 32; do fsck.fat -n "$out/fat$type.img"; done
+    rm "$out/test_format" "$out/fat12.img" "$out/fat16.img" "$out/fat32.img"
+}
+if [[ ${1:-} == --format ]]; then
+    run_format_tests
+    exit 0
+fi
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
     -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c src/kernel/fs/partition.c \
@@ -367,6 +392,7 @@ for bits in 12 16 32; do
 done
 python3 tests/host/fs/test_crash_classifier.py
 python3 tests/host/fs/classify_crashes.py
+run_format_tests
 python3 - <<'PY'
 from pathlib import Path
 root=Path('build/host/fs')

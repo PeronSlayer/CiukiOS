@@ -603,6 +603,9 @@ void du_dialog_key(struct du_ui *u, unsigned code)
         int handled = 0; DIALOG_CALL(handled = du_widget_key(u, f, code)); if (handled) return;
     }
     if (code == DU_KEY_ENTER || (code == DU_KEY_SPACE && f && f->kind == DU_BUTTON)) {
+        if (d->sheet && f && f->kind==DU_BUTTON && (unsigned)d->focus>=d->buttons) {
+            DIALOG_CALL(du_widget_key(u,f,code)); return;
+        }
         int index = f && f->kind == DU_BUTTON ? (f->id == ID_UP ? -1 : ID_BUTTON - f->id) : 0;
         if (f && f->id == ID_UP) { parent_folder(u); return; }
         if ((d->kind == DU_DLG_OPEN || d->kind == DU_DLG_SAVE) && index == 0) accept_file(u); else finish(u, index);
@@ -623,9 +626,11 @@ void du_dialog_key(struct du_ui *u, unsigned code)
             if (m != ch || d->items[i].hidden || d->items[i].disabled) continue;
             if (d->items[i].kind == DU_BUTTON && i < d->buttons) {
                 if ((d->kind == DU_DLG_OPEN || d->kind == DU_DLG_SAVE) && i == 0) accept_file(u); else finish(u, (int)i);
+            } else if (d->sheet && d->items[i].kind==DU_BUTTON) {
+                d->focus=(int)i; DIALOG_CALL(du_widget_key(u,&d->items[i],DU_KEY_ENTER));
             } else if (d->sheet && (d->items[i].kind == DU_CHECKBOX || d->items[i].kind == DU_RADIO)) {
                 d->focus=(int)i; DIALOG_CALL(du_widget_key(u,&d->items[i],DU_KEY_SPACE));
-            } else if (d->items[i].kind == DU_LABEL && i + 1 <= d->count) d->focus = i == F_LOOK ? F_FOLDER : F_NAME;
+            } else if (d->items[i].kind == DU_LABEL && i + 1 < d->count) d->focus = d->sheet ? (int)i+1 : i == F_LOOK ? F_FOLDER : F_NAME;
             dialog_damage(u); return;
         }
     }

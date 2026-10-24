@@ -15,6 +15,9 @@
 #include <ciuki/w32_diagnostics.h>
 #include "occlusion_test.c"
 #include "../../../apps/dosbox/window.h"
+#define fake_reset disk_ui_vfs_reset
+#include "disk_ui_scenario.h"
+#undef fake_reset
 
 enum { WM_SOFTWARE, WM_ENGINE, WM_CACHE, WM_BATCH32, WM_BATCH16, WM_MODES };
 static const char *const wm_names[WM_MODES]={"software","engine","engine+cache","batch32","batch16"};
@@ -1246,6 +1249,23 @@ static void row_find(unsigned m)
     assert(!d.sh.levels && find_launches==launched+3);
     wm_end();
 }
+static void disk_ui_present(struct du_ui *u,const char *label,void *ctx)
+{
+    struct fake_app *a=ctx; struct desk_client *c=&d.clients[a->slot];
+    assert(c->info.width==(unsigned)u->canvas.width && c->info.height==(unsigned)u->canvas.height);
+    memcpy((void *)c->pixels,u->canvas.pixels,(size_t)u->canvas.width*u->canvas.height*4);
+    struct ciuki_message message; shell_message(&message,DESK_DAMAGE,24);
+    desk_put32(message.data+4,0); desk_put32(message.data+8,0);
+    desk_put32(message.data+12,(unsigned)u->canvas.width); desk_put32(message.data+16,(unsigned)u->canvas.height);
+    wm_send(a,&message); step(label);
+}
+static void row_disk_tools(unsigned m)
+{
+    row_name="disk tools"; wm_begin(m,1);
+    struct fake_app *a=app_open("files",560,400,40,50);
+    disk_ui_scenario(disk_ui_present,a);
+    app_close(a); step("disk tools close exposes desktop"); wm_end();
+}
 /* ---- G4: the taskbar menu, window arrangement and the Windows-key shortcuts ---- */
 static void win_chord(int code) { key(0x15b,1); tap(code); key(0x15b,0); }
 static void bar_right_click(int top) { click(top ? 300 : (int)d.width-60,top ? 10 : (int)d.height-16,CIUKI_BUTTON_RIGHT); }
@@ -1597,7 +1617,7 @@ static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overl
     row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,
     row_taskbar_menu, row_arrange, row_minimize_all, row_win_keys, row_caption_icon, row_startup,
     row_move_damaged, row_fault, row_saver, row_find, row_g8_menus, row_input_preferences,
-    row_input_text, row_dos_controls, row_printing, row_logon, row_regional};
+    row_input_text, row_dos_controls, row_printing, row_logon, row_regional, row_disk_tools};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).

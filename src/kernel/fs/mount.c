@@ -3,6 +3,15 @@
  * See tests/host/fs/STORAGE-VALIDATION.md for integration decisions.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/storage.h>
+#ifdef FS_HOST
+/* Hosted stdlib/time also define ABI clock/wait macros (disklease.c). */
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmacro-redefined"
+#include <ciuki/abi.h>
+#pragma clang diagnostic pop
+#else
+#include <ciuki/abi.h>
+#endif
 #include <ciuki/kernel.h>
 #include <ciuki/bootlog.h>
 #include <ciuki/blackbox.h>
@@ -363,10 +372,10 @@ static int add_removable(struct storage *s, struct blkdev *dev,
 {
     if (!s || !s->ready || s->stopped || !dev || dev->sector_size!=512 || (cancel && !pause)) return -FS_EINVAL;
     int e=removable_lock(s,cancel,pause,ctx); if (e) return e;
-    if (fixed<2 && (vfs_drive_present(&s->vfs,fixed) || s->volumes[fixed].fat.preparing)) {
+    if (fixed<2 && (vfs_drive_present(&s->vfs,fixed) || s->volumes[fixed].fat.preparing || s->volumes[fixed].formatting)) {
         vfs_unlock(&s->vfs); return -FS_EBUSY;
     }
-    for (unsigned d=0;d<26;d++) if ((s->volumes[d].present || s->volumes[d].fat.preparing) &&
+    for (unsigned d=0;d<26;d++) if ((s->volumes[d].present || s->volumes[d].fat.preparing || s->volumes[d].formatting) &&
         s->volumes[d].removable && s->volumes[d].part.parent==dev) {
         vfs_unlock(&s->vfs); return -FS_EBUSY;
     }
@@ -392,7 +401,7 @@ static int add_removable(struct storage *s, struct blkdev *dev,
             if (s->next_drive<4) s->next_drive=4;
             while (s->next_drive<26 && vfs_drive_present(&s->vfs,s->next_drive)) s->next_drive++;
             d=s->next_drive++;
-        } else if (vfs_drive_present(&s->vfs,d) || s->volumes[d].fat.preparing) {
+        } else if (vfs_drive_present(&s->vfs,d) || s->volumes[d].fat.preparing || s->volumes[d].formatting) {
             vfs_unlock(&s->vfs); return -FS_EBUSY;
         }
         if (d>=26) { vfs_unlock(&s->vfs); return -FS_ENOSPC; }
@@ -544,6 +553,235 @@ int storage_remove_removable(struct storage *s, struct blkdev *dev, bool surpris
     vfs_lock(&s->vfs,0);
     int e=storage_remove_removable_locked(s,dev,surprise);
     vfs_unlock(&s->vfs); return e;
+}
+
+/* G29: no partition changes, raw fixed-disk access or low-level FDC format.
+ * BPB/FAT/FSInfo: Microsoft FAT specification, sections 3-6; see
+ * docs/design/removable-format.md. All buffers are private to this call. */
+struct removable_geometry {
+    uint32_t sectors, fat, clusters, root, data;
+    unsigned type, spc, reserved, entries;
+};
+static uint32_t format_family(unsigned type)
+{ return type==12 ? CIUKI_FORMAT_FAT12 : type==16 ? CIUKI_FORMAT_FAT16 : type==32 ? CIUKI_FORMAT_FAT32 : 0; }
+static bool format_geometry(uint64_t sectors, unsigned type, bool floppy, struct removable_geometry *g)
+{
+    if (!format_family(type) || sectors>UINT32_MAX || sectors<64) return false;
+    unsigned reserved=type==32 ? 32 : 1, entries=type==32 ? 0 : floppy ? 224 : 512;
+    uint32_t root=(entries*32u+511)/512;
+    if (sectors<=reserved+root+2u) return false;
+    for (unsigned spc=1;spc<=64;spc*=2) {
+        /* Start with the FAT large enough for all data before subtracting
+         * either FAT. The final cluster count can only be smaller. */
+        uint64_t max=(sectors-reserved-root)/spc;
+        uint64_t fat=((max+2)*type+4095)/4096;
+        if (!fat || (type!=32 && fat>65535) || sectors<=reserved+root+2*fat) continue;
+        uint64_t clusters=(sectors-reserved-root-2*fat)/spc;
+        /* Keep the specification's recommended 16-cluster margin. */
+        if ((type==12 && (!clusters || clusters>4068)) ||
+            (type==16 && (clusters<4101 || clusters>65508)) ||
+            (type==32 && (clusters<65541 || clusters>0x0fffffedu))) continue;
+        *g=(struct removable_geometry){(uint32_t)sectors,(uint32_t)fat,(uint32_t)clusters,
+            root,(uint32_t)(reserved+2*fat+root),type,spc,reserved,entries};
+        return true;
+    }
+    return false;
+}
+static int format_label(const char label[12], char padded[11])
+{
+    unsigned n=0;
+    for (;n<12 && label[n];n++) {
+        unsigned char c=(unsigned char)label[n];
+        if (n==11 || c<32 || c>126) return -FS_EINVAL;
+        for (const char *bad="*?.,;:/\\|+=<>[]\"";*bad;bad++) if (c==(unsigned char)*bad) return -FS_EINVAL;
+        padded[n]=(char)(c>='a' && c<='z' ? c-32 : c);
+    }
+    if (n==12) return -FS_EINVAL;
+    for (;n<11;n++) padded[n]=' ';
+    return 0;
+}
+static int format_live(struct storage_volume *v, uint32_t generation)
+{
+    struct blkdev *dev=v->part.parent;
+    int e=fs_request_check();
+    if (e) return e;
+    if (!dev || dev->quarantined || dev->media_generation!=generation) return -FS_EIO;
+    return 0;
+}
+static int format_transfer(struct storage_volume *v, uint32_t generation, uint32_t lba,
+                           unsigned n, void *buf, bool write)
+{
+    int e=format_live(v,generation); if (e) return e;
+    struct blkdev *dev=blkpart_device(&v->part);
+    e=write ? dev->write(dev,lba,n,buf) : dev->read(dev,lba,n,buf);
+    return e ? e : format_live(v,generation);
+}
+static int format_flush(struct storage_volume *v, uint32_t generation)
+{
+    int e=format_live(v,generation); if (e) return e;
+    struct blkdev *dev=blkpart_device(&v->part);
+    e=dev->flush ? dev->flush(dev) : blkdev_durable(dev) ? 0 : -FS_EROFS;
+    return e ? e : format_live(v,generation);
+}
+static void format_boot(uint8_t b[512], const struct removable_geometry *g,
+                        const struct storage_volume *v, const char label[11], uint32_t serial,
+                        uint16_t sectors_per_track, uint16_t heads)
+{
+    memset(b,0,512);
+    b[0]=0xeb; b[1]=0xfe; b[2]=0x90; /* deliberately nonbootable */
+    memcpy(b+3,"CIUKIOS ",8); fs_wr16(b+11,512); b[13]=(uint8_t)g->spc;
+    fs_wr16(b+14,(uint16_t)g->reserved); b[16]=2; fs_wr16(b+17,(uint16_t)g->entries);
+    if (g->sectors<=65535) fs_wr16(b+19,(uint16_t)g->sectors);
+    else fs_wr32(b+32,g->sectors);
+    b[21]=v->drive<2 ? v->fat.media : 0xf8;
+    if (g->type!=32) fs_wr16(b+22,(uint16_t)g->fat);
+    /* Retain the mounted floppy's actual geometry (including 720K/1.2M).
+     * USB CHS fields are advisory; LBA fields delimit all transfers. */
+    fs_wr16(b+24,sectors_per_track);
+    fs_wr16(b+26,heads);
+    fs_wr32(b+28,(uint32_t)v->part.start);
+    unsigned ext=36;
+    if (g->type==32) {
+        fs_wr32(b+36,g->fat); fs_wr32(b+44,2); fs_wr16(b+48,1); fs_wr16(b+50,6); ext=64;
+    }
+    b[ext]=v->drive<2 ? (uint8_t)v->drive : 0x80; b[ext+2]=0x29;
+    fs_wr32(b+ext+3,serial);
+    memcpy(b+ext+7,label,11);
+    if (!memcmp(label,"           ",11)) memcpy(b+ext+7,"NO NAME    ",11);
+    memcpy(b+ext+18,g->type==12 ? "FAT12   " : g->type==16 ? "FAT16   " : "FAT32   ",8);
+    b[510]=0x55; b[511]=0xaa;
+}
+static int format_write(struct storage_volume *v, const struct ciuki_media_format *r,
+                         const struct removable_geometry *g, const char label[11], uint8_t *b)
+{
+    int e=format_transfer(v,r->generation,0,1,b,false);
+    if (e) return e;
+    uint16_t sectors_per_track=fs_rd16(b+24), heads=fs_rd16(b+26);
+    if (!(r->flags&CIUKI_FORMAT_QUICK)) {
+        for (uint32_t lba=0;lba<g->sectors;) {
+            unsigned n=g->sectors-lba<8 ? g->sectors-lba : 8;
+            e=format_transfer(v,r->generation,lba,n,b,false); if (e) return e;
+            lba+=n; fs_service();
+        }
+    }
+    memset(b,0,512);
+    e=format_transfer(v,r->generation,0,1,b,true);
+    if (!e) e=format_flush(v,r->generation);
+    if (e) return e;
+    /* Reserved sectors, both FATs and the root directory/cluster. */
+    uint32_t end=g->data+(g->type==32 ? g->spc : 0);
+    memset(b,0,4096);
+    for (uint32_t lba=1;lba<end;) {
+        unsigned n=end-lba<8 ? end-lba : 8;
+        e=format_transfer(v,r->generation,lba,n,b,true); if (e) return e;
+        lba+=n; fs_service();
+    }
+    for (unsigned copy=0;copy<2;copy++) {
+        memset(b,0,512);
+        unsigned media=v->drive<2 ? v->fat.media : 0xf8;
+        if (g->type==12) { b[0]=(uint8_t)media; b[1]=0xff; b[2]=0xff; }
+        else if (g->type==16) { fs_wr16(b,(uint16_t)(0xff00u|media)); fs_wr16(b+2,0xffff); }
+        else { fs_wr32(b,0x0fffff00u|media); fs_wr32(b+4,0x0fffffff); fs_wr32(b+8,0x0fffffff); }
+        e=format_transfer(v,r->generation,g->reserved+copy*g->fat,1,b,true); if (e) return e;
+    }
+    if (memcmp(label,"           ",11)) {
+        memset(b,0,512); memcpy(b,label,11); b[11]=8;
+        uint32_t root=g->type==32 ? g->data : g->reserved+2*g->fat;
+        e=format_transfer(v,r->generation,root,1,b,true); if (e) return e;
+    }
+    if (g->type==32) {
+        memset(b,0,512); fs_wr32(b,0x41615252); fs_wr32(b+484,0x61417272);
+        fs_wr32(b+488,g->clusters-1); fs_wr32(b+492,3); fs_wr32(b+508,0xaa550000);
+        e=format_transfer(v,r->generation,1,1,b,true);
+        if (!e) e=format_transfer(v,r->generation,7,1,b,true);
+        if (e) return e;
+    }
+    uint32_t serial=v->fat.volume_serial+1;
+    if (!serial) serial=1;
+    format_boot(b,g,v,label,serial,sectors_per_track,heads);
+    if (g->type==32) e=format_transfer(v,r->generation,6,1,b,true);
+    if (!e) e=format_flush(v,r->generation);
+    if (!e) e=format_transfer(v,r->generation,0,1,b,true);
+    if (!e) e=format_flush(v,r->generation);
+    return e;
+}
+int storage_format_removable(struct storage *s, struct ciuki_media_format *r, bool execute)
+{
+    if (!r || r->version!=CIUKI_MEDIA_VERSION || r->size!=sizeof(*r) ||
+        r->drive>=26 || !r->generation || r->reserved) return -FS_EINVAL;
+    if (!s || !s->ready || s->stopped) return -FS_ENOENT;
+    if (s->setup_mode || r->drive==2 || r->drive==3) return -FS_EROFS;
+    unsigned d=r->drive;
+    struct removable_geometry g;
+    char label[11];
+    if (execute && ((r->flags&~CIUKI_FORMAT_QUICK) || !format_family(r->filesystem) ||
+        format_label(r->label,label))) return -FS_EINVAL;
+    vfs_lock(&s->vfs,0);
+    struct storage_volume *v=&s->volumes[d];
+    struct blkdev *dev=v->part.parent;
+    int e=!v->present || s->vfs.volumes[d]!=&v->fat || !v->fat.mounted ? -FS_ENOENT :
+        !v->removable ? -FS_EROFS : !dev || dev->quarantined || dev->media_generation!=r->generation ? -FS_EIO : 0;
+    if (!e && (!dev->read || !blkdev_durable(dev))) e=-FS_EROFS;
+    uint32_t mask=0;
+    for (unsigned i=0;!e && i<26;i++) if (s->volumes[i].removable && s->volumes[i].part.parent==dev) {
+        if (i!=d && (s->volumes[i].present || s->volumes[i].formatting || s->volumes[i].fat.preparing)) e=-FS_EBUSY;
+        /* Include retained letters too: remove_removable reserves this
+         * same union, so no late extension can enter a waiting path. */
+        mask|=vfs_drive_mask(i);
+    }
+    if (!e && v->part.block.capacity>UINT32_MAX) e=-FS_EOPNOTSUPP;
+    uint32_t supported=0;
+    static const unsigned families[]={12,16,32};
+    for (unsigned i=0;!e && i<3;i++) {
+        unsigned type=families[i];
+        if (v->partition && type!=v->fat.type) continue;
+        if (format_geometry(v->part.block.capacity,type,d<2,&g)) supported|=format_family(type);
+    }
+    if (!e && execute && !(supported&format_family(r->filesystem))) e=-FS_EOPNOTSUPP;
+    if (!e && !execute) {
+        r->filesystem=v->fat.type; r->flags=0; r->sectors=(uint32_t)v->part.block.capacity;
+        r->cluster_bytes=(uint32_t)v->fat.spc*512; r->supported_filesystems=supported;
+        memset(r->label,0,sizeof(r->label)); memcpy(r->label,v->fat.volume_label,11);
+    }
+    if (!e && execute) {
+        vfs_reserve_locked(&s->vfs,mask);
+        /* Recheck after reservation waits: safe/surprise removal may have
+         * changed publication while we yielded the namespace. */
+        if (!v->present || s->vfs.volumes[d]!=&v->fat || dev!=v->part.parent ||
+            dev->quarantined || dev->media_generation!=r->generation) e=-FS_EIO;
+        uint8_t *buffer=0;
+        if (!e) { buffer=fs_page_alloc(); if (!buffer) e=-FS_ENOMEM; }
+        if (!e && !format_geometry(v->part.block.capacity,r->filesystem,d<2,&g)) e=-FS_EINVAL;
+        if (!e) {
+            v->formatting=true;
+            e=storage_remove_removable_locked(s,dev,false);
+        }
+        if (!e) {
+            v->safely_removed=false;
+            e=VFS_IO(&s->vfs,format_write(v,r,&g,label,buffer));
+            if (!e) {
+                refresh_volume(v);
+                e=VFS_IO(&s->vfs,fat_prepare_removable(&v->fat,&s->cache,&v->io,0,v->io.capacity));
+                v->fat.preparing=false;
+                v->fat.write_through=true;
+            }
+            if (!e) { v->read_gate=true; e=VFS_IO(&s->vfs,fat_enable_write_removable(&v->fat)); }
+            if (!e) e=format_live(v,r->generation);
+            if (!e) e=vfs_attach_locked(&s->vfs,d,&v->fat);
+            if (!e) {
+                v->present=true; s->vfs.drive_flags[d]|=VFS_DRIVE_REMOVABLE;
+                r->sectors=g.sectors; r->cluster_bytes=g.spc*512; r->supported_filesystems=supported;
+                memset(r->label,0,sizeof(r->label)); memcpy(r->label,v->fat.volume_label,11);
+            } else {
+                v->error=e; v->fat.mounted=false; v->read_gate=false;
+                cache_invalidate(&s->cache,&v->io,true);
+            }
+        }
+        v->formatting=false;
+        if (buffer) fs_page_free(buffer);
+    }
+    vfs_unlock(&s->vfs);
+    return e;
 }
 int storage_add_ro_locked(struct storage *s, unsigned slot, struct blkdev *dev, uint64_t session)
 {

@@ -231,10 +231,21 @@ class DeskuiTests(unittest.TestCase):
         self.assertIn("PASS G6 Properties", stdout)
         self.check_frames(digests, G6_FRAMES, "G6")
 
+    def test_files_cleanup(self):
+        stdout, _ = self.run_harness("files-cleanup", ["tests/host/desktop/files_cleanup_test.c",
+            "tests/host/desktop/fake_vfs.c", "apps/files/model.c", "apps/files/vfs.c"])
+        self.assertIn("PASS G29 Disk Cleanup model", stdout)
+
     def test_files_model(self):
         stdout, _ = self.run_harness("files-model", ["tests/host/desktop/files_model_test.c", "tests/host/desktop/fake_vfs.c",
                                                      "apps/files/model.c"])
         self.assertIn("PASS Files model", stdout)
+
+    def test_files_disk_ui(self):
+        stdout, _ = self.run_harness("files-disk-ui", ["tests/host/desktop/files_disk_ui_test.c",
+            "tests/host/desktop/fake_vfs.c", "apps/files/app.c", "apps/files/model.c",
+            "apps/files/transfer.c", *TOOLKIT], frames=True)
+        self.assertIn("PASS G29 disk dialogs", stdout)
 
     def files_ui(self):
         if DeskuiTests.portrait is None:

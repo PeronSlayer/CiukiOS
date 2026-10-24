@@ -26,6 +26,7 @@ enum {
     D_DELETE = 200, D_REPLACE, D_ERROR, D_PROPERTIES, D_INFO, D_PROGRESS, D_CANCEL_JOB, D_BIN_PURGE, D_BIN_EMPTY, D_BIN_PROPS, D_BIN_ITEM, D_INSERT, D_FIND,
     C_GO_DOCUMENTS = 300, C_GO_GAMES, C_GO_CONTROL, C_GO_DESKTOP, C_MUSIC, C_GO_RECYCLE, C_RESTORE, C_EMPTY_BIN, C_BIN_PROPS, C_DELETE_NOW,
     C_OPTIONS = 310, C_ATTRIBUTES = 311,
+    C_CLEANUP = 312, C_FORMAT = 313,
     T_JOB = 1, T_MEDIA, T_BROWSER, T_DRAG_REFRESH
 };
 #define PANE_TOP 92
@@ -69,6 +70,12 @@ static void bin_properties(struct files_app *);
 static void command(struct files_app *, int);
 static int scan_cancelled(const struct files_scan *);
 static void find_dialog(struct files_app *);
+static void disk_service(struct files_app *);
+static void disk_stop(struct files_app *);
+static int disk_dialog_result(struct files_app *, const struct du_event *);
+static void disk_allocation_completed(struct files_app *);
+static int disk_target(const struct files_app *);
+static int disk_close_request(struct files_app *);
 
 static const struct du_menu_item file_template[] = {
     {"&Open", C_OPEN, 0, 0, DU_ITEM_DEFAULT}, {"Open &With...", FILES_OPEN_WITH, 0, 0, 0},
@@ -1390,6 +1397,9 @@ static void property_page(struct files_app *a)
 static void property_changed(struct du_ui *u,const struct du_event *e,void *ctx)
 {
     struct files_app *a=ctx;
+    if (e->type==DU_EV_ACTIVATE && e->id==C_CLEANUP && a->property_drive>=0) {
+        a->disk_drive=a->property_drive; a->disk_pending=1; du_dialog_close(u); return;
+    }
     if (e->type==DU_EV_SELECT && !a->property_options) property_page(a);
     if (e->type==DU_EV_CHANGE) { u->dialog.items[2].disabled=0; du_invalidate(u,u->dialog.box); }
 }
@@ -1507,6 +1517,8 @@ static void properties_dialog(struct files_app *a)
         snprintf(a->property_text,sizeof(a->property_text),"Drive %c:\nType:\tDisk drive\n\nUsed space:\t%s (blue)\nFree space:\t%s (purple)\nCapacity:\t%s\n\nVolume label:",'A'+a->property_drive,used,free_text,capacity);
         struct du_widget *w=du_property_control(a->ui,4,DU_EDIT,400,(struct du_rect){24,178,220,23},a->property_label);
         w->disabled=!a->set_label || (have && (info->flags & CIUKI_FILE_INFO_READ_ONLY_MEDIUM));
+        w=du_property_control(a->ui,5,DU_BUTTON,C_CLEANUP,(struct du_rect){24,220,150,25},"Disk &Cleanup...");
+        w->disabled=a->property_drive<2 || !a->property_have_space || (have && (info->flags & CIUKI_FILE_INFO_READ_ONLY_MEDIUM));
     } else {
         static const char *const names[]={"&Read-only","&Hidden","&Archive","&System"};
         for (unsigned i=0;i<4;i++) {
@@ -1568,6 +1580,7 @@ __attribute__((noinline)) static void job_finished(struct files_app *a)
         files_update(a);
         return;
     }
+    if (kind==FM_COPY || kind==FM_MOVE) disk_allocation_completed(a);
     a->select_created = (kind == FM_COPY || kind == FM_MOVE) && j->created_count && fm_same_path(j->destination, a->model.path);
     scan_submit(a, SCAN_REFRESH, NULL, 0);
     if (kind == FM_MOVE && !j->bin && j->state == FM_DONE && !j->skipped && !j->kept && !j->kept_folders && a->model.cut) fm_clipboard_consume(&a->model);
@@ -1623,6 +1636,7 @@ static void files_service(struct du_ui *u,void *ctx)
 {
     (void)u; struct files_app *a=ctx;
     scan_poll(a); job_tick(a);
+    disk_service(a);
     if (a->property_request[0] && !a->loading && !a->job_active && !du_dialog_id(a->ui)) {
         files_properties_path(a,a->property_request); a->property_request[0]=0;
     }
@@ -1918,6 +1932,12 @@ static void context(struct files_app *a, const struct du_event *e)
         if (m->searching) popup_add(a, "Open Containing &Folder", C_FIND_FOLDER, 0);
         int target=removal_target(a);
         if (target>=3) popup_add(a, removal_label(a,target), C_SAFE_REMOVE, 0);
+        int drive=!m->path[0] ? disk_target(a) : -1;
+        if (drive>=0) {
+            if (drive>=2) popup_add(a,"Disk &Cleanup...",C_CLEANUP,a->media.type[drive]==CIUKI_MEDIA_OPTICAL ? DU_ITEM_DISABLED : 0);
+            if (a->media.type[drive]==CIUKI_MEDIA_USB || a->media.type[drive]==CIUKI_MEDIA_FLOPPY)
+                popup_add(a,"&Format...",C_FORMAT,a->media_format ? 0 : DU_ITEM_DISABLED);
+        }
         if (kind != FM_KIND_FOLDER) popup_add(a, "Open &With...", FILES_OPEN_WITH, 0);
         if (n == 1 && m->path[0] && (kind == FM_KIND_FOLDER || kind == FM_KIND_AUDIO))
             popup_add(a, "Play in &Music Player", C_MUSIC, 0);
@@ -2029,6 +2049,11 @@ static void command(struct files_app *a, int id)
     case C_FIND: files_find(a); break;
     case C_FIND_STOP: if (a->find_running) files_find(a); break;
     case C_FIND_FOLDER: { char p[FM_PATH]; if (m->searching && m->active < m->count && !fm_entry_path(m, m->active, p) && !fm_parent(p, p)) files_navigate(a, p); break; }
+    case C_CLEANUP: case C_FORMAT: {
+        int drive=disk_target(a);
+        if (drive>=0) (void)files_disk_open(a,(unsigned)drive,id==C_FORMAT);
+        break;
+    }
     case C_SAFE_REMOVE: {
         int d=removal_target(a);
         if (d<3) break;
@@ -2129,6 +2154,7 @@ static void command(struct files_app *a, int id)
 static void dialog_result(struct files_app *a, const struct du_event *e)
 {
     if (operations_result(a,e)) return;
+    if (disk_dialog_result(a,e)) return;
     switch (e->id) {
     case D_FIND:
         if (e->index == 2) { a->find_page = (a->find_page + 1) % 3; find_dialog(a); }
@@ -2165,6 +2191,7 @@ static void dialog_result(struct files_app *a, const struct du_event *e)
 /* The toolkit acknowledges the shell request while confirmation/cleanup waits. */
 int files_close_request(struct files_app *a)
 {
+    if (files_disk_busy(a)) return disk_close_request(a);
     if (!a->job_active) return 1;
     if (du_dialog_id(a->ui)!=D_CANCEL_JOB && !a->close_pending)
         du_message(a->ui,D_CANCEL_JOB,"Cancel Operation?","Cancel the current operation and close Files?",DU_DLG_ICON_QUESTION,yes_no,2,1,1);
@@ -2604,6 +2631,7 @@ void files_destroy(struct files_app *a)
 {
     operations_destroy(a);
     fm_drag_free(a->shell_paths,NULL,a->shell_count); a->shell_paths=NULL; a->shell_count=0;
+    disk_stop(a);
     a->ui->service=NULL;
     du_timer_stop(a->ui,T_DRAG_REFRESH);
     fm_drag_free(a->drag_paths,a->drag_types,a->drag_count); a->drag_paths=NULL; a->drag_types=NULL; a->drag_count=0;
@@ -2620,6 +2648,8 @@ void files_destroy(struct files_app *a)
     free(a->rows); free(a->texts); free(a->tree); free(a->tree_items);
     a->rows = NULL; a->texts = NULL; a->tree = NULL; a->tree_items = NULL;
 }
+
+#include "disk_ui.inc"
 
 void files_drop(struct files_app *a, int x, int y, int copy)
 {

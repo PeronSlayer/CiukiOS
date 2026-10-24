@@ -455,6 +455,7 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 59 | Regional Settings: format field edited | changed field and validation status | toolkit edits, `regional_pull`, `DESK_DAMAGE` | none | regional settings: field edit |
 | 60 | Regional Settings: Apply started | save status | `regional_save`, `DESK_DAMAGE` | none | regional settings: Apply status |
 | 61 | Regional Settings: save completed or failed | completion status and error dialog | `cp_settings_saved`, `DESK_DAMAGE` | none | regional settings: save failure; real applet retry/OK tested by `regional_control_test.h` |
+| 62 | Disk tools (G29): Cleanup scan, category selection, permanent-delete confirmation, progress, cancellation/completion, Format options and confirmation, busy/error report, low-space warning and its Cleanup action | the Files client's damaged region; exposed client content when its modal dialog closes | `apps/files/disk_ui.inc`, libdeskui dialog invalidation and native `DESK_DAMAGE` | none | disk tools (`disk_ui_scenario.h`, production controller on all five presenters) |
 
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with
@@ -477,6 +478,7 @@ G8 appends inventory rows 43–46. Its desktop-menu scenario is
 Files dialog replay. G12 follows at `WM_ROW=35` and `WM_ROW=36`, G17 at
 `WM_ROW=37`, printing at `WM_ROW=38` and G32 logon at `WM_ROW=39`.
 G24 Regional Settings follows at `WM_ROW=40` (inventory rows 57–61).
+G29 Disk tools follows at `WM_ROW=41` (inventory row 62).
 Existing executable scenario indexes stay unchanged.
 
 ### One rule instead of one fix per path: the frame reconcile

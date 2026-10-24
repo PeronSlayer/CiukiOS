@@ -1117,3 +1117,4 @@ void fm_job_destroy(struct fm_job *j)
 
 #include "recycle.inc"
 #include "operations.inc"
+#include "cleanup.inc"
