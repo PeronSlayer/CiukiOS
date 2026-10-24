@@ -127,7 +127,7 @@ def build():
     inc = target / "include"
     shutil.copytree(ROOT / "apps/libdeskui", inc / "deskui", ignore=shutil.ignore_patterns("*.c"))
     (inc / "desktop").mkdir(exist_ok=True)
-    for name in ("protocol.h", "theme.h"):
+    for name in ("protocol.h", "theme.h", "appearance.h", "font_codes.h"):
         shutil.copy2(ROOT / "apps/desktop" / name, inc / "desktop" / name)
     (inc / "deskui.h").write_text('/* SPDX-License-Identifier: MIT */\n#include "deskui/deskui.h"\n')
     shutil.copy2(ROOT / "build/apps/desktop/libdeskui.a", target / "lib/libdeskui.a")

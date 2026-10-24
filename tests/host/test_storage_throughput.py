@@ -57,6 +57,8 @@ bool cache_writeback_due(const struct block_cache *c, uint32_t now) {
     assert(c==&s.cache);
     return !written && now>=5000;
 }
+void klog(const char *fmt, ...) { (void)fmt; } /* fx-23 writer_busy line */
+unsigned storage_hold_watch(struct storage *arg, uint32_t now) { (void)arg; (void)now; return 0; } /* fx-23 */
 unsigned storage_census_service(struct storage *arg, uint32_t now) { (void)arg; (void)now; return 0; } /* fx-17b */
 int storage_writeback(struct storage *arg, uint32_t now) {
     assert(arg==&s && !s.stopped);

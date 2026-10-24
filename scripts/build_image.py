@@ -375,7 +375,7 @@ def desktop_payloads():
     sound_sources, sounds = sound_payloads()
     sources.update(sound_sources)
     metadata["sounds"] = sounds
-    return sources, {"/WINDOWS/SPOOL", "/Documents", "/Documents/Music", "/Documents/Pictures", "/system/sounds", "/Programs", "/System", "/System/Win32", "/System/hwids", "/System/cache", "/System/cache/wallpaper", "/System/cache/wallpaper/thumbnails", "/system/assets", "/system/icons", "/system/licenses", "/system/fonts", "/system/settings", "/system/wallpapers"}, metadata
+    return sources, {"/WINDOWS", "/WINDOWS/SPOOL", "/Documents", "/Documents/Music", "/Documents/Pictures", "/system/sounds", "/Programs", "/System", "/System/Win32", "/System/hwids", "/System/cache", "/System/cache/wallpaper", "/System/cache/wallpaper/thumbnails", "/system/assets", "/system/icons", "/system/licenses", "/system/fonts", "/system/settings", "/system/wallpapers"}, metadata
 
 
 def font_payloads():

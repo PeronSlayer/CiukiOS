@@ -27,7 +27,7 @@ class VolumeResolutionTests(unittest.TestCase):
                      '-fsanitize=address,undefined', '-fno-sanitize-recover=undefined',
                      '-ffunction-sections', '-fdata-sections', '-pthread']
             master = work / 'master.o'
-            subprocess.run([*flags, '-D__CIUKIOS__', '-I'+str(inc),
+            subprocess.run([*flags, '-Wno-macro-redefined', '-D__CIUKIOS__', '-I'+str(inc),
                             '-I'+str(ROOT / 'src/kernel/include'), '-c',
                             str(ROOT / 'apps/desktop/master_storage.c'), '-o', str(master)], check=True, env=env)
             sources = ['src/kernel/fs/'+n+'.c' for n in
