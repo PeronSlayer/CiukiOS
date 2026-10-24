@@ -621,3 +621,27 @@ or 5 s after creation, as Windows' startup feedback does
 Gate scenarios keep the synchronous spawn. A spawn's channel is neither read
 nor polled before its PID is bound. Restart confirmation is UI-only; its adapter owns
 the separate service transaction and must not perform a machine reboot.
+
+## Visual audit, group E (2026-10-24)
+
+Reference: the Windows 98 Resource Kit's descriptions of the Shut Down
+Windows dialog, drive Properties (General tab with used/free space swatches
+and pie chart), Task Manager-class list headers and Start menu program groups
+(folder icon). Decisions, CiukiOS naming and Tango/Ciuki artwork throughout:
+
+- Shut Down CiukiOS: computer icon, "What do you want CiukiOS to do?" and a
+  radio group (Stand by only where qualified, Shut down, Restart), OK /
+  Cancel / Help. "Restart in MS-DOS mode" is not offered: CiukiOS has no
+  real-mode restart. Arrow keys, B/S/R, Enter and Esc work; OK performs the
+  selected action through the same session path as the former buttons.
+- Drive Properties General page: drive icon with the label edit, Type and
+  File system, Used and Free space rows with coloured swatches, bytes and MB
+  columns, Capacity, the 3D pie with its "Drive C" caption and Disk Cleanup.
+- Start menu: it opens below the protruding Ciuki orb; program groups
+  (System Tools, Accessories, Games, Developer, Programs folders) use the
+  folder icon.
+- Close-program texts use the product name ("CiukiOS cannot shut down this
+  program automatically").
+- Log Viewer wraps long lines by default (View > Word Wrap toggles the
+  horizontal scrolling mode); CiukIDE has an icon toolbar with tooltips,
+  captioned panes and a tabbed status bar.

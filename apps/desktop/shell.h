@@ -76,6 +76,8 @@ struct desk_run_ui {
 #define SH_SEPARATOR 8
 #include "start-orb.h"         /* shared orb / approved portrait geometry */
 /* Built-in (internal) windows: desk_client.internal holds the kind. */
+/* Shut Down CiukiOS radio group (Windows 98 "Shut Down Windows"): geometry is relative to the dialog content. */
+enum { SD_STANDBY, SD_SHUTDOWN, SD_RESTART, SD_RADIO_X = 72, SD_RADIO_Y = 52, SD_RADIO_STEP = 22, SD_RADIO_W = 230 };
 enum { DESK_INTERNAL_NONE, DESK_INTERNAL_ABOUT, DESK_INTERNAL_RUN, DESK_INTERNAL_SHUTDOWN,
        DESK_INTERNAL_MESSAGE, DESK_INTERNAL_POWER, DESK_INTERNAL_AUTOPLAY, DESK_INTERNAL_TRANSFER, DESK_INTERNAL_PROGRAMS, DESK_INTERNAL_GAME_DATA,
        DESK_INTERNAL_END_TASK /* G3: not responding or DOS warning (d->end_task) */, DESK_INTERNAL_SHORTCUT, DESK_INTERNAL_SHORTCUT_WIZARD /* G19: the Create Shortcut wizard (G18 properties keep SHORTCUT) */, DESK_INTERNAL_KINDS };
@@ -211,7 +213,7 @@ struct desk_shell {
     int tooltip_painted;
     struct sh_notification notification;
     int switcher, switch_pick, switch_count, switch_list[16];
-    int about_tab, about_scroll, shutdown_choice, message_kind;
+    int about_tab, about_scroll, shutdown_choice, shutdown_sel, message_kind;   /* shutdown_sel: SD_STANDBY/SD_SHUTDOWN/SD_RESTART radio */
     int confirm;                    /* G2: SH_CONFIRM_*, the message window asks Yes or No */
     char run_text[DESK_RUN_MAX]; unsigned run_length;
     struct desk_run_ui *run;

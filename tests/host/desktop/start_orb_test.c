@@ -77,7 +77,7 @@ static void exercise(const char *directory)
     full(); d.damage.count=0; frame(directory,"idle");
     point(cx,py); assert(d.sh.start_hot); parity(); frame(directory,"hover");
     click(); assert(d.menu_open && d.sh.levels==1); parity(); frame(directory,"pressed");
-    assert(desk_menu_box(&d).x==b.x && desk_menu_box(&d).y==DESK_BAR);
+    assert(desk_menu_box(&d).x==b.x && desk_menu_box(&d).y==b.y+b.h+DESK_START_SHADOW);
     /* Click the protrusion again; the overlaid menu must not steal it. */
     click(); assert(!d.menu_open); parity();
     point(100,80); parity();

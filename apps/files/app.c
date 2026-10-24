@@ -1404,7 +1404,7 @@ static void property_page(struct files_app *a)
     }
     if (a->property_drive>=0 && a->backup_call && d->count>6) d->items[6].hidden=(uint8_t)!tools;
     snprintf(d->text,sizeof(d->text),"%s",tools ?
-        (a->backup_call ? "Error-checking\nCheck Now checks this drive for errors with ScanDisk.\n\nBackup\n\n\nDefragmentation\nUse Defragment Now below." : "Error-checking\nCheck Now checks this drive for errors with ScanDisk.\n\nBackup\nBackup Now: Backup is not installed.\n\nDefragmentation\nUse Defragment Now below.") : version ? a->property_version : a->property_text);
+        (a->backup_call ? "Error-checking\nCheck Now checks this drive for errors with ScanDisk.\n\nBackup\n\n\nDefragmentation\nUse Defragment Now below." : "Error-checking\nCheck Now checks this drive for errors with ScanDisk.\n\nBackup\nBackup Now: Backup is not installed.\n\nDefragmentation\nUse Defragment Now below.") : version ? a->property_version : a->property_drive>=0 ? "" : a->property_text);
 }
 static void property_changed(struct du_ui *u,const struct du_event *e,void *ctx)
 {
@@ -1443,26 +1443,73 @@ static void drive_space_text(char out[64], uint64_t bytes)
     grouped[n]=0;
     snprintf(out,64,"%s bytes %llu MB",grouped,(unsigned long long)(bytes/1048576));
 }
+/* Windows 98 drive General page: icon and label, Type / File system,
+ * Used and Free rows with colour swatches, Capacity, then the 3D pie with its
+ * "Drive C" caption. Coordinates are relative to the sheet body. */
+#define PD_X 24
+#define PD_ICON_Y 46
+#define PD_BTN_X 340
+#define PD_PIE_Y 246
+static void drive_row(struct du_ui *u,int bx,int by,int y,const char *name,const char *row,uint32_t swatch)
+{
+    struct du_canvas *c=&u->canvas;
+    int x=bx+PD_X+(swatch ? 20 : 0);
+    if (swatch) {
+        du_fill(c,(struct du_rect){bx+PD_X,by+y+2,11,11},0xff000000u);
+        du_fill(c,(struct du_rect){bx+PD_X+1,by+y+3,9,9},swatch);
+    }
+    du_text(c,x,by+y,name,DU_INK);
+    const char *split=strstr(row," bytes ");
+    char bytes[40]; size_t n=split ? (size_t)(split-row)+6 : strlen(row);
+    if (n>=sizeof(bytes)) n=sizeof(bytes)-1;
+    memcpy(bytes,row,n); bytes[n]=0;
+    if (split) { /* bytes column right-aligned, then the MB column */
+        du_text(c,bx+PD_BTN_X-8-du_text_width(bytes),by+y,bytes,DU_INK);
+        const char *mb=split+7; du_text(c,bx+PD_BTN_X+120-du_text_width(mb),by+y,mb,DU_INK);
+    } else du_text(c,bx+PD_BTN_X-8-du_text_width(bytes),by+y,bytes,DU_INK);
+}
+static void drive_sep(struct du_ui *u,int bx,int by,int y)
+{
+    du_hline(&u->canvas,bx+PD_X,by+y,u->dialog.box.w-2*PD_X,0xff808080u);
+    du_hline(&u->canvas,bx+PD_X,by+y+1,u->dialog.box.w-2*PD_X,0xffffffffu);
+}
 /* Elliptical top and shaded front thickness, integer-only. A unit ray is
  * chosen in the untilted disc so the used/free ratio survives projection. */
 static void property_paint(struct du_ui *u,void *ctx)
 {
     struct files_app *a=ctx;
-    if (a->property_options || a->property_drive<0 || !a->property_have_space ||
-        u->dialog.items[3].active || (a->property_space.flags & CIUKI_MEDIA_SPACE_COUNTING)) return;
+    if (a->property_options || a->property_drive<0 || u->dialog.items[3].active) return;
+    int bx=u->dialog.box.x, by=u->dialog.box.y+DESK_TITLE;
+    const uint32_t blue=0xff2059c5u,purple=0xffc52dafu;
+    struct du_canvas *c=&u->canvas;
+    int drive=a->property_drive;
+    int floppy=floppy_drive(a,drive), removable=drive>=3 && (a->media.removable_mask & (1u<<drive));
+    int optical=removable && a->media.type[drive]==CIUKI_MEDIA_OPTICAL;
+    const char *icon=floppy ? "place:floppy" : optical ? "place:optical" : removable ? "place:removable" : "place:volume";
+    const uint32_t *pixels=named(icon,32);
+    if (pixels) du_icon_blit(c,bx+PD_X,by+PD_ICON_Y,pixels,32,DU_ICON_NORMAL);
+    drive_sep(u,bx,by,PD_ICON_Y+44);
+    du_text(c,bx+PD_X,by+98,"Type:",DU_INK);
+    du_text(c,bx+PD_X+120,by+98,floppy ? "3.5-Inch Floppy Disk" : optical ? "CD-ROM Drive" : removable ? "Removable Drive" : "Local Disk",DU_INK);
+    du_text(c,bx+PD_X,by+116,"File system:",DU_INK);
+    du_text(c,bx+PD_X+120,by+116,floppy ? "FAT12" : optical ? "CDFS" : drive==2 ? "FAT32" : "FAT",DU_INK);
+    drive_sep(u,bx,by,138);
+    drive_row(u,bx,by,148,"Used space:",a->property_rows[0],blue);
+    drive_row(u,bx,by,166,"Free space:",a->property_rows[1],purple);
+    drive_sep(u,bx,by,186);
+    drive_row(u,bx,by,194,"Capacity:",a->property_rows[2],0);
+    char caption[16]; snprintf(caption,sizeof(caption),"Drive %c",'A'+drive);
+    du_text(c,bx+PD_X,by+PD_PIE_Y+8,caption,DU_INK);
+    if (!a->property_have_space || (a->property_space.flags & CIUKI_MEDIA_SPACE_COUNTING)) return;
     static const int16_t sine[17]={0,25,50,74,98,121,142,162,181,198,213,226,237,245,251,255,256};
     const struct ciuki_media_space *sp=&a->property_space;
     uint32_t total=sp->total_clusters, free=sp->free_clusters>total ? total : sp->free_clusters;
     unsigned used=total ? (unsigned)((uint64_t)(total-free)*64/total) : 0;
-    const uint32_t blue=0xff2059c5u,purple=0xffc52dafu;
-    int pitch=desk_font_line(desk_theme->font_ui)+1;
-    int legend_y=u->dialog.box.y+DESK_TITLE+42+3*pitch;
-    du_fill(&u->canvas,(struct du_rect){u->dialog.box.x+24,legend_y,10,10},blue);
-    du_fill(&u->canvas,(struct du_rect){u->dialog.box.x+24,legend_y+pitch,10,10},purple);
-    int cx=u->dialog.box.x+366,cy=u->dialog.box.y+250;
+    const int radius=80;
+    int cx=bx+190,cy=by+PD_PIE_Y;
     /* Back-to-front layers leave a ten-pixel front wall below the top. */
-    for (int layer=1;layer>=0;layer--) for (int y=-32;y<=32;y++) for (int x=-96;x<=96;x++)
-        if (x*x+9*y*y<=96*96) {
+    for (int layer=1;layer>=0;layer--) for (int y=-radius/3;y<=radius/3;y++) for (int x=-radius;x<=radius;x++)
+        if (x*x+9*y*y<=radius*radius) {
             unsigned angle=0; int best=-100000;
             for (unsigned k=0;k<64;k++) {
                 unsigned q=k/16,t=k%16; int sn=sine[t],cs=sine[16-t];
@@ -1473,7 +1520,7 @@ static void property_paint(struct du_ui *u,void *ctx)
             }
             uint32_t colour=angle<used ? blue : purple;
             if (layer) colour=(colour&0xff000000u)|((colour&0xfefefeu)>>1);
-            du_fill(&u->canvas,(struct du_rect){cx+x,cy+y,1,layer ? 11 : 1},colour);
+            du_fill(c,(struct du_rect){cx+x,cy+y,1,layer ? 11 : 1},colour);
         }
 }
 static int property_accept(struct du_ui *u,int button,void *ctx)
@@ -1553,20 +1600,20 @@ static void properties_dialog(struct files_app *a)
     d->accept=property_accept; d->accept_ctx=a; d->changed=property_changed; d->paint=property_paint; d->sheet_ctx=a;
     d->items[2].disabled=1;
     if (a->property_drive>=0) {
-        char used[64]="Unavailable",free_text[64]="Unavailable",capacity[64]="Unavailable";
+        for (unsigned i=0;i<3;i++) strcpy(a->property_rows[i],"Unavailable");
         struct ciuki_media_space *sp=&a->property_space;
         if (a->property_have_space) {
             uint64_t total=(uint64_t)sp->total_clusters*sp->cluster_bytes;
             uint64_t free=(uint64_t)(sp->free_clusters>sp->total_clusters ? sp->total_clusters : sp->free_clusters)*sp->cluster_bytes;
-            drive_space_text(capacity,total);
-            if (sp->flags & CIUKI_MEDIA_SPACE_COUNTING) { strcpy(used,"calculating..."); strcpy(free_text,"calculating..."); }
-            else { drive_space_text(used,total-free); drive_space_text(free_text,free); }
+            drive_space_text(a->property_rows[2],total);
+            if (sp->flags & CIUKI_MEDIA_SPACE_COUNTING) { strcpy(a->property_rows[0],"calculating..."); strcpy(a->property_rows[1],"calculating..."); }
+            else { drive_space_text(a->property_rows[0],total-free); drive_space_text(a->property_rows[1],free); }
         }
-        snprintf(a->property_text,sizeof(a->property_text),"Drive %c:\nType:\tDisk drive\n\n    Used space:\t%s\n    Free space:\t%s\nCapacity:\t%s\n\nVolume label:",'A'+a->property_drive,used,free_text,capacity);
-        struct du_widget *w=du_property_control(a->ui,4,DU_EDIT,400,(struct du_rect){24,178,220,23},a->property_label);
+        a->property_text[0]=0; /* the drive General page is painted by property_paint */
+        struct du_widget *w=du_property_control(a->ui,4,DU_EDIT,400,(struct du_rect){PD_X+48,PD_ICON_Y+5,250,23},a->property_label);
         w->disabled=!a->set_label || (have && (info->flags & CIUKI_FILE_INFO_READ_ONLY_MEDIUM));
-        if (a->backup_call) du_property_control(a->ui,6,DU_BUTTON,C_BACKUP,(struct du_rect){24,157,150,25},"&Backup Now...");
-        w=du_property_control(a->ui,5,DU_BUTTON,C_CLEANUP,(struct du_rect){24,220,150,25},"Disk &Cleanup...");
+        if (a->backup_call) du_property_control(a->ui,6,DU_BUTTON,C_BACKUP,(struct du_rect){PD_BTN_X,PD_PIE_Y+16,150,25},"&Backup Now...");
+        w=du_property_control(a->ui,5,DU_BUTTON,C_CLEANUP,(struct du_rect){PD_BTN_X,PD_PIE_Y-16,150,25},"Disk &Cleanup...");
         w->disabled=a->property_drive<2 || !a->property_have_space || (have && (info->flags & CIUKI_FILE_INFO_READ_ONLY_MEDIUM));
         w=du_property_control(a->ui,7,DU_BUTTON,PROPERTY_CHECK_NOW,(struct du_rect){360,30,110,23},"Check &Now...");
         w->disabled=!a->spawn;

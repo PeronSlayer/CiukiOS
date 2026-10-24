@@ -334,7 +334,7 @@ static void restart_notice(void *ctx,unsigned kind,uint32_t pid,uint32_t flags)
     if(kind==1){
         if(desk_v3_revoke)desk_v3_revoke(owner);if(desk_v3_pointer_release)desk_v3_pointer_release(owner);
         owner->v3_dialog_kind=2;owner->v3_dialog_pid=pid;owner->v3_restart_flags=flags;
-        desk_shell_message(owner,"Restart Windows","Setup wants to restart Windows. CiukiOS will close all Windows programs and finish the installation.",0);
+        desk_shell_message(owner,"Restart CiukiOS","Setup wants to restart CiukiOS. CiukiOS will close all Windows programs and finish the installation.",0);
     }else if(kind==2){
         if(desk_v3_revoke)desk_v3_revoke(owner);if(desk_v3_pointer_release)desk_v3_pointer_release(owner);
         restart_closing_pending=1;
@@ -519,7 +519,7 @@ void desk_w32_poll(struct desktop *d)
     if(!authorized)return;
     fault_poll(d);
     if(restart_closing_pending && !d->v3_dialog_kind){
-        desk_shell_message(d,"Restart Windows","Closing Windows programs...",0);
+        desk_shell_message(d,"Restart CiukiOS","Closing Windows programs...",0);
         for(unsigned i=0;i<DESK_CLIENTS;i++)if(d->clients[i].window && d->clients[i].internal==DESK_INTERNAL_MESSAGE)restart_progress_window=d->clients[i].window_id;
         restart_closing_pending=0;
     }

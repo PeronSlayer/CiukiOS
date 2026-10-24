@@ -28,9 +28,9 @@ struct lv_app {
     struct du_item items[LV_MAX]; struct lv_list list; int selected;
     char status[160];
     void (*quit)(void *host); void *host;
-    struct du_menu menus[3]; struct du_menu_item file_items[4], edit_items[2], help_items[1];
+    struct du_menu menus[4]; struct du_menu_item file_items[4], edit_items[2], view_items[1], help_items[1];
 };
-enum { LV_M_REFRESH = 1, LV_M_EXIT, LV_M_COPY, LV_M_SELALL, LV_M_ABOUT, LV_LIST = 100, LV_TEXT, LV_STATUS, LV_D_INFO = 200 };
+enum { LV_M_REFRESH = 1, LV_M_EXIT, LV_M_COPY, LV_M_SELALL, LV_M_ABOUT, LV_M_WRAP, LV_LIST = 100, LV_TEXT, LV_STATUS, LV_D_INFO = 200 };
 int lv_attach(struct lv_app *, struct du_ui *);
 void lv_detach(struct lv_app *);
 void lv_refresh(struct lv_app *);

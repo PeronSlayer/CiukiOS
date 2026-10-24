@@ -33,7 +33,7 @@ INCLUDES = ["-I", str(ROOT / "apps/tasks"), "-I", str(ROOT / "apps/libdeskui"), 
 # 2026-10-15 (main after f2-63 + f2-64): pinned frames re-recorded on the combined tree (FreeType text in the f2-64 dialogs), reviewed against the 9a05ab9f renders.
 RENDERS = {
     "tasks-applications.xrgb": "PIN-FROM-FIRST-RUN",
-    "tasks-newtask.xrgb": "282ebae6bdb76811ac3ba8d0e2986bf1b41344a31a740738b05bc893adffa1a8",
+    "tasks-newtask.xrgb": "0783bf3ddf73be3ef236fa600bb6d220f3b6eeab1babf53d62ea7cb043c13e88",
     "tasks-performance.xrgb": "PIN-FROM-FIRST-RUN",
     "tasks-processes.xrgb": "PIN-FROM-FIRST-RUN",
 }

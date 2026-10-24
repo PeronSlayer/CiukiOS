@@ -244,7 +244,7 @@ static void drag_and_menu_damage(struct desktop *d)
     desk_input(d,&e);
     e=(struct ciuki_input_event){.type=CIUKI_INPUT_BUTTON,.code=CIUKI_BUTTON_LEFT,.value=1};
     desk_input(d,&e); assert(d->drag==3); redraw_exact(d);
-    struct desk_box regions[7]; regions[0]=desk_outer(c);
+    struct desk_box regions[8]; regions[0]=desk_outer(c);
     e=(struct ciuki_input_event){.type=CIUKI_INPUT_MOTION,.value=64,.value2=32};
     desk_input(d,&e); regions[1]=desk_outer(c);
     uint64_t area=damage_union(d,regions,2);
@@ -267,11 +267,11 @@ static void drag_and_menu_damage(struct desktop *d)
     regions[2]=(struct desk_box){c->frame.x,c->frame.y+DESK_TITLE,DESK_BORDER,c->frame.h-DESK_TITLE};
     regions[3]=regions[2]; regions[3].x=c->frame.x+c->frame.w-DESK_BORDER;
     regions[4]=(struct desk_box){c->frame.x,c->frame.y+c->frame.h-DESK_BORDER,c->frame.w,DESK_BORDER};
-    regions[5]=desk_task_button(d,3); regions[6]=(struct desk_box){0,0,W,DESK_BAR};
-    area=damage_union(d,regions,7); redraw_exact(d);
+    regions[5]=desk_task_button(d,3); regions[6]=(struct desk_box){0,0,W,DESK_BAR}; regions[7]=desk_start_bounds(d);
+    area=damage_union(d,regions,8); redraw_exact(d);
     assert(d->frame_stats.scene_px==area && area<=W*H/4);
     printf("DAMAGE theme=%s action=start_open scene_px=%llu menu_and_focus_cues=1\n",desk_theme->name,(unsigned long long)area);
-    desk_menu_close(d); area=damage_union(d,regions,7); redraw_exact(d);
+    desk_menu_close(d); area=damage_union(d,regions,8); redraw_exact(d);
     assert(d->frame_stats.scene_px==area && area<=W*H/4);
     printf("DAMAGE theme=%s action=start_close scene_px=%llu menu_and_focus_cues=1\n",desk_theme->name,(unsigned long long)area);
 }

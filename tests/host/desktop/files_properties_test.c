@@ -100,16 +100,16 @@ int main(int argc,char **argv)
     assert(strstr(ui.dialog.text,"1.2.3.4") && ui.dialog.items[4].hidden); dump(argv[1],"g6-version"); cancel();
     sheet("/Documents/Sub"); assert(app.job.files==1 && app.job.bytes==11 && app.job.allocated==4096); dump(argv[1],"g6-folder"); cancel();
     sheet("/"); assert(app.property_drive==2 && app.property_have_space && ui.dialog.items[3].count==2);
-    assert(strstr(ui.dialog.text,"102,400 bytes 0 MB") && strstr(ui.dialog.text,"307,200 bytes 0 MB") && strstr(ui.dialog.text,"409,600 bytes 0 MB")); dump(argv[1],"g6-drive");
+    assert(!strcmp(app.property_rows[0],"102,400 bytes 0 MB") && !strcmp(app.property_rows[1],"307,200 bytes 0 MB") && !strcmp(app.property_rows[2],"409,600 bytes 0 MB") && !ui.dialog.text[0]); dump(argv[1],"g6-drive");
     du_set_text(&ui.dialog.items[4],"DATA"); apply(); assert(label_sets==1 && !strcmp(label,"DATA"));
     struct ciuki_input_event ctrl={.type=CIUKI_INPUT_KEY,.code=DU_KEY_LCTRL,.value=1};
     du_input(&ui,&ctrl); press(DU_KEY_TAB); ctrl.value=0; du_input(&ui,&ctrl);
     /* G14: Check Now (slot 7, id 410: slot 5 is G8's Disk Cleanup) is on the Tools page only. */
     assert(ui.dialog.items[3].active==1 && strstr(ui.dialog.text,"Check Now checks this drive") && ui.dialog.items[4].hidden &&
            !ui.dialog.items[7].hidden && ui.dialog.items[7].id==410 && !strcmp(ui.dialog.items[7].text,"Check &Now...")); dump(argv[1],"g6-tools"); cancel();
-    counting=1; sheet("/"); assert(strstr(ui.dialog.text,"calculating...")); dump(argv[1],"g6-counting"); cancel();
+    counting=1; sheet("/"); assert(strstr(app.property_rows[0],"calculating...") && strstr(app.property_rows[1],"calculating...")); dump(argv[1],"g6-counting"); cancel();
     counting=0;volume_total=76544;volume_free=0;sheet("/");
-    assert(strstr(ui.dialog.text,"313,524,224 bytes 299 MB") && strstr(ui.dialog.text,"0 bytes 0 MB"));
+    assert(strstr(app.property_rows[2],"313,524,224 bytes 299 MB") && strstr(app.property_rows[1],"0 bytes 0 MB"));
     du_render(&ui);
     unsigned top_blue=0,top_purple=0,front=0;
     for (unsigned i=0;i<760*520;i++) {
@@ -118,7 +118,7 @@ int main(int argc,char **argv)
     }
     assert(top_blue>5000 && top_purple<=100 && front>1000);cancel();
     volume_free=volume_total;sheet("/");du_render(&ui);cancel();
-    volume_total=0;volume_free=0;sheet("/");assert(strstr(ui.dialog.text,"0 bytes 0 MB"));du_render(&ui);cancel();
+    volume_total=0;volume_free=0;sheet("/");assert(!strcmp(app.property_rows[2],"0 bytes 0 MB"));du_render(&ui);cancel();
     volume_total=100;volume_free=75;
     /* View options filter only browser listings; Properties includes hidden children. */
     assert(!files_navigate(&app,"/Documents/Sub") && app.model.count==0);

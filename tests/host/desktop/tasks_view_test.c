@@ -59,6 +59,12 @@ int main(int argc, char **argv)
     for (unsigned i = 0; i < 256; i++) icon[i] = 0xff000000u | (i * 0x010203u);
     du_init(&ui, pixels, TV_WIDTH, TV_HEIGHT); ui.event = record;
     tm_init(&m); tv_init(&v, &ui, icon);
+    for (int id = A_APPS; id <= A_PROCS; id++) {   /* headers must never clip (sort arrow = 14 px) */
+        struct du_widget *lw = du_get(&ui, id);
+        if (lw->column_count == 0) continue;
+        for (unsigned c = 0; c < lw->column_count; c++)
+            assert(du_text_width(lw->columns[c].title) + 14 <= lw->columns[c].width);
+    }
     m.performance[0]=120; m.performance[1]=44880; m.performance[2]=240; m.performance[3]=179520;
     m.performance[4]=600000; m.performance[5]=1200000; m.performance[7]=2000000; m.performance[8]=2000000000;
     tv_update(&v,&m);
@@ -106,7 +112,7 @@ int main(int argc, char **argv)
     assert(!procs->hidden && apps->hidden && du_get(&ui, A_END_TASK)->hidden && !du_get(&ui, A_END_PROCESS)->hidden);
     assert(procs->count == m.count && !strcmp(procs->items[1].text[0], "supervisor"));
     /* Header clicks name the column under the pointer. */
-    event_count = 0; click(&ui, 150, 60); assert(last()->type == DU_EV_SORT && last()->index == TM_PID);
+    event_count = 0; click(&ui, 130, 60); assert(last()->type == DU_EV_SORT && last()->index == TM_PID);
     click(&ui, 350, 60); assert(last()->type == DU_EV_SORT && last()->index == TM_CPU);
     tm_sort(&m, TM_CPU, 1); tv_select_pid(&v, &m, 9);
     assert(procs->sort == TM_CPU && procs->descending && procs->items[procs->active].selected && m.processes[procs->active].pid == 9);

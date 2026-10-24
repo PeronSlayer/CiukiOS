@@ -75,6 +75,7 @@ static const struct du_menu_item file_template[] = {
     {"&Refresh", LV_M_REFRESH, DU_KEY_F5, 0, 0}, {"", 0, 0, 0, DU_ITEM_SEPARATOR}, {"E&xit", LV_M_EXIT, 0, 0, 0} };
 static const struct du_menu_item edit_template[] = {
     {"&Copy", LV_M_COPY, 0x2e, DU_CTRL, 0}, {"Select &All", LV_M_SELALL, 0x1e, DU_CTRL, 0} };
+static const struct du_menu_item view_template[] = { {"&Word Wrap", LV_M_WRAP, 0, 0, DU_ITEM_CHECKED} };
 static const struct du_menu_item help_template[] = { {"&About Log Viewer", LV_M_ABOUT, 0, 0, 0} };
 
 static void resize_layout(struct du_ui *u, void *user) { (void)u; lv_layout(user); }
@@ -83,14 +84,16 @@ int lv_attach(struct lv_app *a, struct du_ui *u)
 {
     a->ui = u; u->event = lv_event; u->user = a; u->layout = resize_layout; a->selected = -1;
     if (du_ta_init(&a->ta, LV_TEXT_MAX)) return -ENOMEM;
-    a->ta.wrap = 0; a->ta.readonly = 1;
+    a->ta.readonly = 1; du_ta_set_wrap(&a->ta, 1); /* long log lines wrap by default; View > Word Wrap toggles the horizontal scroll mode */
     memcpy(a->file_items, file_template, sizeof(file_template));
     memcpy(a->edit_items, edit_template, sizeof(edit_template));
+    memcpy(a->view_items, view_template, sizeof(view_template));
     memcpy(a->help_items, help_template, sizeof(help_template));
     a->menus[0] = (struct du_menu){"&File", a->file_items, 3};
     a->menus[1] = (struct du_menu){"&Edit", a->edit_items, 2};
-    a->menus[2] = (struct du_menu){"&Help", a->help_items, 1};
-    u->menus = a->menus; u->menu_count = 3;
+    a->menus[2] = (struct du_menu){"&View", a->view_items, 1};
+    a->menus[3] = (struct du_menu){"&Help", a->help_items, 1};
+    u->menus = a->menus; u->menu_count = 4;
     struct du_rect zero = {0, 0, 0, 0};
     struct du_widget *list = du_add(u, DU_LISTVIEW, LV_LIST, zero, "");
     list->view = DU_DETAILS; list->inactive_selection = 1;
@@ -122,6 +125,10 @@ void lv_event(struct du_ui *u, const struct du_event *e, void *user)
                 if (copy) { memcpy(copy, a->ta.text + lo, hi - lo); copy[hi - lo] = 0; du_clipboard_set(copy); free(copy); }
             }
         } else if (e->id == LV_M_SELALL) { du_ta_select_all(&a->ta); du_focus(u, LV_TEXT); }
+        else if (e->id == LV_M_WRAP) {
+            int wrap = !a->ta.wrap; du_ta_set_wrap(&a->ta, wrap);
+            a->view_items[0].flags = wrap ? DU_ITEM_CHECKED : 0;
+        }
         else if (e->id == LV_M_ABOUT)
             du_message(u, LV_D_INFO, "About Log Viewer", "CiukiOS Log Viewer - Classic computing, one woof at a time.\nBoot, NetSurf, Setup and crash logs, read-only.\nCode: MIT.",
                        DU_DLG_ICON_INFO, NULL, 0, 0, 0);

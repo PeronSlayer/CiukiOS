@@ -2966,7 +2966,7 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
             desk_w32_fault_dialog(d,&fault);break;
         }
         else snprintf(text,sizeof(text),"Setup wants to restart Windows. CiukiOS will close all Windows programs and finish the installation.");
-        desk_shell_message(d,p.opcode==DESK_V3_CRASH ? "Windows program error" : "Restart Windows",text,p.opcode==DESK_V3_CRASH);
+        desk_shell_message(d,p.opcode==DESK_V3_CRASH ? "Windows program error" : "Restart CiukiOS",text,p.opcode==DESK_V3_CRASH);
         break;
     }
     case DESK_CLOSE:

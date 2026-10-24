@@ -59,6 +59,7 @@ static const uint32_t *row_icon(const struct sysinfo_app *a, int i)
     if (is_conflict_node(t, i)) return a->warning_icon;
     if (in_category(t, i, "Problem Devices") || !strncmp(n->value, "Stopped (problem)", 17)) return a->error_icon;
     if (!strncmp(n->value, "IRQ shared:", 11)) return a->info_icon;
+    if (i == 0 && n->kind == SI_CATEGORY && n->parent < 0 && a->root_icon) return a->root_icon; /* System Information: the computer icon */
     return n->kind == SI_CATEGORY ? a->folder_icon : NULL;
 }
 
@@ -252,7 +253,7 @@ void siv_layout(struct du_ui *u, void *user)
     du_get(u, SIV_LIST)->box = (struct du_rect){left + 8, 24, w - left - 12, h - 24 - 24 - 4};
     du_get(u, SIV_STATUS)->box = (struct du_rect){0, h - 22, w, 22};
     struct du_widget *list = du_get(u, SIV_LIST);
-    list->columns[0].width = list->box.w * 9 / 20;
+    list->columns[0].width = list->box.w * 52 / 100; /* "CPU family/model/stepping" must fit */
     list->columns[1].width = list->box.w - list->columns[0].width;
 }
 
@@ -263,6 +264,7 @@ int siv_init(struct sysinfo_app *a, struct du_ui *u, const struct sysinfo_host *
     memset(a, 0, sizeof(*a));
     a->ui = u; a->host = *host; a->devices = devices; a->tree = tree;
     snprintf(a->folder, sizeof(a->folder), "/Documents");
+    a->root_icon = du_icon_argb(du_icon_name("place:computer"), 16);
     a->folder_icon = du_icon_argb(du_icon_name("type:folder"), 16);
     a->warning_icon = du_icon_argb(du_icon_name("status:warning"), 16);
     a->error_icon = du_icon_argb(du_icon_name("status:error"), 16);

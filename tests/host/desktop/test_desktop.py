@@ -43,13 +43,14 @@ SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "autoplay.c", "a
 # F2-99: only the new software arrow/shadow footprint differs (integ-fix1 pixel comparison).
 # Fix C (2026-10-24): reviewed G16b/G28b dialogs in the G23 appearance tree; see build/codex/fixc-report.md.
 RUN_GOLDEN = "c96f36fabf83610080708a635823c5543308d01fb58cb4a95ddadb4838533078"  # qa4: Run dialog, one explanation text
+SHUTDOWN_GOLDEN = "ac6777c8719f9b25f5b2e3a6d6a98cf64880f0df120f38c4893462b11c147b14"  # audit E: Shut Down CiukiOS radio dialog (no Stand by on the fixture)
 LOOK_GOLDENS = {
     "ciuki-blue-desktop.ppm": "51a90eca8b2ec1432c161d1a9ab5058b7085ce7a146c2c2232823c06ed9d220b",
-    "ciuki-blue-dialogs.ppm": "afa1cc7cc7167b0c5c9c3b1937b22cc287ec42ede25a3440db6147bfc4f65314",
+    "ciuki-blue-dialogs.ppm": "da06d339474ff284c03de3e64b9e20b248b79457da84dcf734d6026e3e0e06fd",
     "ciuki-blue-tray-disabled.ppm": "c325bc05ad479d8c7ae324593d8e4d313815052b234943678d1b09b85d5a1991",
     "ciuki-blue-tray-media.ppm": "fa294798fa35fc7c263c4c13a191baf4650ebb0598589bd5343c884cd5baf657",
     "platinum-desktop.ppm": "35bce69536a7ffd0739d64d32748a446d7b8f7cf0377d3c2227ac913c9a15d21",
-    "platinum-dialogs.ppm": "90f9c7b39bbeccda0fdb732e099817a67fc423826d736622c6a7bd4119db2f10",
+    "platinum-dialogs.ppm": "878fd06f163a656ae1d73e534f967beb1cec308d142864574aed82ae2b51394b",
     "platinum-tray-disabled.ppm": "591a2ae6e4e03b971c5602e6b98d65959beae4a98dba385733c55127f2aa727f",
     "platinum-tray-media.ppm": "6917caa80c0416cfd2073a2cb6df6e8a198ebb25711109f835171d27e39e3910"
 }
@@ -188,6 +189,33 @@ class DesktopTests(unittest.TestCase):
             actual = hashlib.sha256(pixels).hexdigest()
             if RUN_GOLDEN == "PIN-FROM-FIRST-RUN": print("RUN_GOLDEN", actual)
             else: self.assertEqual(actual, RUN_GOLDEN)
+
+    def test_shutdown_dialog_layout_frame(self):
+        """Visual audit E: Shut Down CiukiOS is the Windows 98 dialog: icon, question, radio group, OK / Cancel / Help."""
+        parent = ROOT / "build/host"
+        parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="desktop-shutdown-", dir=parent) as temp:
+            folder = Path(temp)
+            env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
+            binary = folder / "capture"
+            sources = [ROOT / "apps/desktop" / n for n in ("client.c", "protocol.c", "input.c", "compositor.c", "theme.c")] + SHELL_SOURCES
+            sources += [ROOT / "tests/host/desktop" / n for n in ("fake.c", "compositor_capture.c")]
+            sources += [ROOT / "apps/libdeskui" / n for n in ("icons.c", "icon_map.c")]
+            subprocess.run(["clang", "-std=c17", "-D_POSIX_C_SOURCE=200809L", "-include", str(ROOT / "tests/host/desktop/replay_base.h"), "-O1", "-Wall", "-Wextra", "-Werror",
+                            "-fsanitize=address,undefined", "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
+                            "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "src/kernel/include"),
+                            *(str(p) for p in sources), "-o", str(binary)], check=True, env=env)
+            c = load("capture_portrait_shutdown", ROOT / "apps/desktop/convert_portrait.py")
+            source = folder / "portrait.xrgb"
+            source.write_bytes(c.convert(ROOT / "assets/brand/ciuki-logo.png"))
+            target = folder / "shutdown.xrgb"
+            subprocess.run([str(binary), str(source), str(target), "shutdown"], check=True, env=env)
+            pixels = target.read_bytes()
+            self.assertEqual(len(pixels), 640*480*4)
+            capture("desktop-shutdown", pixels, 640, 480)
+            actual = hashlib.sha256(pixels).hexdigest()
+            if SHUTDOWN_GOLDEN == "PIN-FROM-FIRST-RUN": print("SHUTDOWN_GOLDEN", actual)
+            else: self.assertEqual(actual, SHUTDOWN_GOLDEN)
 
     def test_plain_screen_digest_and_shell_portrait(self):
         parent = ROOT / "build/host"

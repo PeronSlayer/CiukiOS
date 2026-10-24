@@ -120,6 +120,15 @@ static void editor(void)
     assert(ide_open_project(a,"/Documents/..")==-EINVAL && ide_open_project(a,"/Documents/Test/.")==-EINVAL);
     assert(a->editor.line_numbers && a->syntax[0]==IDE_C_KEYWORD);
     du_render(u);
+    /* Icon toolbar with tooltips, captioned panes, tabbed status bar. */
+    for (int id=IDE_OPEN;id<=IDE_GUIDE;++id) if (id!=IDE_NEW_WINDOW && id!=IDE_NEW_CONSOLE) {
+        struct du_widget *b=du_get(u,id); assert(b->kind==DU_TOOLBUTTON && b->tip[0] && !b->text[0] && b->box.w>=28);
+    }
+    assert(!strcmp(du_get(u,IDE_HDR_PROJECT)->text,"Project") && !strcmp(du_get(u,IDE_HDR_EDITOR)->text,"Editor") &&
+           !strcmp(du_get(u,IDE_HDR_ERRORS)->text,"Errors") && !strcmp(du_get(u,IDE_HDR_OUTPUT)->text,"Output"));
+    assert(du_get(u,IDE_HDR_EDITOR)->box.y+17<=du_get(u,IDE_EDITOR)->box.y && du_get(u,IDE_HDR_OUTPUT)->box.x==du_get(u,IDE_OUTPUT)->box.x);
+    { const char *st=du_get(u,IDE_STATUS)->text; int tabs=0; for (;*st;++st) tabs+=*st=='\t';
+      assert(tabs==3 && strstr(du_get(u,IDE_STATUS)->text,"\tLn 1, Col 1\t0 errors, 0 warnings")); }
     struct du_widget *edit=du_get(u,IDE_EDITOR); assert(a->editor.cols<(unsigned)edit->box.w/DU_TA_CELL_W);
     assert(du_ta_hit(&a->editor,edit->box,edit->box.x+46,edit->box.y+4)==0);
     assert(!du_ta_insert(&a->editor,"/* change */",12,DU_TA_EDIT_TYPE));

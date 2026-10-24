@@ -474,7 +474,8 @@ static void custom_folder_items(struct desktop *d,struct sh_menu *m,int folder)
     for (unsigned k=0;k<s->count;k++) if (s->entries[k].parent==folder) {
         if (shown++>=limit) { extra=1;continue; }
         const struct sh_folder_item *e=&s->entries[k];
-        item(m,e->label,e->icon[0] ? du_icon_name(e->icon) : e->folder>=0 ? "folder" : "application-x-executable",
+        item(m,e->label,e->folder>=0 ? "folder" : e->icon[0] ? du_icon_name(e->icon) : "application-x-executable",   /* program groups use the folder icon, as in Windows 98 */
+             
              e->folder>=0 ? SH_ACT_SUBMENU : SH_ACT_SHELL_ITEM,e->folder>=0 ? SH_MENU_FOLDER_BASE+e->folder : (int)k,0);
     }
     if (extra || s->truncated) item(m,"More... Open Folder","folder",SH_ACT_FOLDER_EXPLORE,folder,0);
@@ -576,11 +577,11 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         }
         for (unsigned k = 0; k < d->program_count; k++) if (!program_find(d->programs[k].name)) developer = 1;
         if (!m->count) item(m, "(No programs)", NULL, SH_ACT_NONE, 0, SH_ITEM_DISABLED);
-        if (system_tools) item(m, "System Tools", "applications-system", SH_ACT_SUBMENU, SH_MENU_SYSTEM_TOOLS, 0);
-        if (accessories) item(m, "Accessories", "applications-accessories", SH_ACT_SUBMENU, SH_MENU_ACCESSORIES, 0);
+        if (system_tools) item(m, "System Tools", "folder", SH_ACT_SUBMENU, SH_MENU_SYSTEM_TOOLS, 0);
+        if (accessories) item(m, "Accessories", "folder", SH_ACT_SUBMENU, SH_MENU_ACCESSORIES, 0);
         /* The bundled shareware games run in a DOS Box window (catalog.h desk_games). */
-        if (games || program_index(d, "dosbox") >= 0) item(m, "Games", "applications-games", SH_ACT_SUBMENU, SH_MENU_GAMES, 0);
-        if (developer) { separator(m); item(m, "Developer", "applications-development", SH_ACT_SUBMENU, SH_MENU_DEVELOPER, 0); }
+        if (games || program_index(d, "dosbox") >= 0) item(m, "Games", "folder", SH_ACT_SUBMENU, SH_MENU_GAMES, 0);
+        if (developer) { separator(m); item(m, "Developer", "folder", SH_ACT_SUBMENU, SH_MENU_DEVELOPER, 0); }
         shortcut_programs_menu(d,m,kind);
         break;
     }
@@ -897,7 +898,9 @@ void desk_menu_open(struct desktop *d, int kind, int32_t x, int32_t y)
     d->sh.menus[0].opened=desk_appearance_active && (desk_appearance.effects&AP_MENU_ANIMATION) ? d->now_ns : 0;
     if (kind == SH_MENU_START) {
         /* Drops from the Ciuki button at the left end of the top bar. */
-        layout(d, &d->sh.menus[0], desk_start_button(d).x, DESK_BAR, 0);
+        /* The menu hangs below the protruding Ciuki orb, never under it. */
+        struct desk_box orb = desk_start_bounds(d);
+        layout(d, &d->sh.menus[0], orb.x, orb.y + orb.h > DESK_BAR ? orb.y + orb.h : DESK_BAR, 0);
         if (!d->menu_open) { d->menu_focus = d->focus; desk_focus(d, -1); }
         d->menu_open = 1;
         if (d->shell_test && d->shell_stage == 0) d->shell_stage = 1;
@@ -3774,7 +3777,7 @@ static const char *const about_tabs[] = {"General", "System", "Credits"};
 static const char *end_task_text(const struct desktop *d)
 {
     return d->end_task.kind==DESK_HANG_DOS ?
-        "Windows cannot shut down this program automatically. It is recommended that you quit this program with its quit or exit command.\n\n"
+        "CiukiOS cannot shut down this program automatically. It is recommended that you quit this program with its quit or exit command.\n\n"
         "If you close it now, you will lose any unsaved information in this program. Do you want to close it now?" :
         "This program is not responding. It may be busy, waiting for a response from you, or it may have stopped running.\n\n"
         "Click Cancel to return to CiukiOS and check the status of the program.\n\n"
@@ -3798,7 +3801,7 @@ static void internal_size(const struct desktop *d, int kind, uint32_t *w, uint32
     case DESK_INTERNAL_ABOUT: *w = 540; *h = 420; break;
     case DESK_INTERNAL_AUTOPLAY: *w = 430; *h = 252; break;
     case DESK_INTERNAL_RUN: *w = 372; *h = 128; break;
-    case DESK_INTERNAL_SHUTDOWN: *w = 352; *h = 132; break;
+    case DESK_INTERNAL_SHUTDOWN: *w = 392; *h = 176; break;
     case DESK_INTERNAL_POWER: {
         unsigned lines=1;
         for (const char *s=d->power.text; *s; s++) lines+=*s=='\n';
@@ -3856,7 +3859,7 @@ int desk_internal_open(struct desktop *d, int kind)
         d->sh.run->selected=-1; d->sh.run_history_request=1;
     }
     if (kind == DESK_INTERNAL_RUN) { d->sh.prompt_mode=0; d->sh.run_length = 0; d->sh.run_text[0] = 0; }
-    if (kind == DESK_INTERNAL_SHUTDOWN) d->sh.shutdown_choice = 0;
+    if (kind == DESK_INTERNAL_SHUTDOWN) { d->sh.shutdown_choice = 0; d->sh.shutdown_sel = SD_SHUTDOWN; }
     int32_t x = ((int32_t)d->width - c->frame.w) / 2, y = DESK_BAR + 20;
     if (kind == DESK_INTERNAL_RUN) { x = 8; y = DESK_BAR + 8; }   /* under the Ciuki button and its menu */
     else if (kind != DESK_INTERNAL_ABOUT) y = ((int32_t)d->height - c->frame.h) / 2 - 20;
@@ -4293,16 +4296,31 @@ void desk_internal_paint(struct desktop *d, int index, struct desk_box content, 
         break;
     }
     case DESK_INTERNAL_SHUTDOWN: {
+        /* Windows 98 "Shut Down Windows": computer icon, question, radio group, OK / Cancel / Help.
+         * Restart in MS-DOS mode is not offered (CiukiOS has no real-mode restart). */
         du_icon_blit(&c, content.x + 14, content.y + 16, desk_shell_icon("system-shutdown", 32), 32, DU_ICON_NORMAL);
         du_icon_blit(&c, content.x + 30, content.y + 32, desk_shell_icon("ciuki", 20), 20, DU_ICON_NORMAL);
         bold(&c, content.x + 64, content.y + 18, "What do you want CiukiOS to do?", SH_INK);
-        multiline(&c, content.x + 64, content.y + 38, "Your settings are saved first. Programs\nand virtual machines will be closed.", SH_INK);
-        static const char *const labels[] = {"Stand &by", "&Restart", "&Shut Down", "Cancel"};
-        /* shutdown_choice 1: Restart is the default (Ctrl+Alt+Del pressed again in Task Manager).
-         * G11: Stand by comes first, as in Windows 98, only where it is qualified. */
-        int first = d->sh.power_can_standby ? 0 : 1, count = 4 - first;
-        for (int k = 0; k < count; k++)
-            push_button(&c, button_box(content, k, count), labels[k + first], k + first == (d->sh.shutdown_choice == 1 ? 1 : 2));
+        static const char *const names[] = {"Stand &by", "&Shut down", "&Restart"};
+        int row = 0;
+        for (int k = 0; k < 3; k++) {
+            if (k == SD_STANDBY && !d->sh.power_can_standby) continue;
+            int rx = content.x + SD_RADIO_X, ry = content.y + SD_RADIO_Y + row * SD_RADIO_STEP;
+            for (int yy = 0; yy < 13; yy++) for (int xx = 0; xx < 13; xx++) {   /* 13 px circle, sunken */
+                int dx = 2 * xx - 12, dy = 2 * yy - 12, r2 = dx * dx + dy * dy;
+                if (r2 <= 144) du_fill(&c, (struct du_rect){rx + xx, ry + yy, 1, 1}, r2 > 110 ? DU_SHADOW : SH_WINDOW);
+            }
+            if (d->sh.shutdown_sel == k)
+                for (int yy = 0; yy < 13; yy++) for (int xx = 0; xx < 13; xx++) {
+                    int dx = 2 * xx - 12, dy = 2 * yy - 12;
+                    if (dx * dx + dy * dy <= 20) du_fill(&c, (struct du_rect){rx + xx, ry + yy, 1, 1}, SH_INK);
+                }
+            du_label(&c, rx + 22, ry, names[k], SH_INK, 1);
+            if (d->sh.shutdown_sel == k) du_focus_ring(&c, (struct du_rect){rx + 18, ry - 3, du_label_width(names[k]) + 8, 19});
+            row++;
+        }
+        static const char *const labels[] = {"OK", "Cancel", "&Help"};
+        for (int k = 0; k < 3; k++) push_button(&c, button_box(content, k, 3), labels[k], k == 0);
         break;
     }
     case DESK_INTERNAL_END_TASK:
@@ -4325,7 +4343,7 @@ void desk_internal_paint(struct desktop *d, int index, struct desk_box content, 
             break;
         }
         push_button(&c, message_button_box(d,content,0),
-                    d->v3_dialog_kind==1 ? "Close" : d->v3_dialog_kind==2 ? "Restart Windows" : "OK",1);
+                    d->v3_dialog_kind==1 ? "Close" : d->v3_dialog_kind==2 ? "Restart CiukiOS" : "OK",1);
         if (d->v3_dialog_kind==1) push_button(&c,message_button_box(d,content,1),"Details",0);
         if (d->v3_dialog_kind==2) push_button(&c,message_button_box(d,content,1),"Cancel",0);
         break;
@@ -4367,6 +4385,14 @@ int desk_power_input(struct desktop *d, const struct ciuki_input_event *e)
         else if (count==2 && desk_contains(button_box(content,1,2),d->mouse_x,d->mouse_y)) desk_power_force(d);
     }
     return 1;
+}
+/* OK in the Shut Down dialog: the selected radio does what the old buttons did. */
+static void shutdown_commit(struct desktop *d, int index)
+{
+    int sel = d->sh.shutdown_sel;
+    if (sel == SD_STANDBY && d->sh.power_can_standby) d->sh.want_standby = 1;
+    else d->sh.want_power = sel == SD_RESTART ? 1 : 2;
+    desk_request_close(d, index);
 }
 int desk_internal_click(struct desktop *d, int index, int32_t x, int32_t y)
 {
@@ -4436,13 +4462,17 @@ int desk_internal_click(struct desktop *d, int index, int32_t x, int32_t y)
         else if (desk_contains(button_box(content,1,2),x,y)) desk_end_task_choice(d,0);
         return 1;
     case DESK_INTERNAL_SHUTDOWN: {
-        int first = d->sh.power_can_standby ? 0 : 1, count = 4 - first;
-        for (int k = 0; k < count; k++) if (desk_contains(button_box(content, k, count), x, y)) {
-            int choice = k + first;   /* 0 Stand by, 1 Restart, 2 Shut Down, 3 Cancel */
-            if (!choice) d->sh.want_standby = 1;
-            else if (choice < 3) d->sh.want_power = choice;
-            desk_request_close(d, index);
+        int row = 0;
+        for (int k = 0; k < 3; k++) {
+            if (k == SD_STANDBY && !d->sh.power_can_standby) continue;
+            if (desk_contains((struct desk_box){content.x + SD_RADIO_X, content.y + SD_RADIO_Y + row * SD_RADIO_STEP - 3, SD_RADIO_W, SD_RADIO_STEP}, x, y)) {
+                d->sh.shutdown_sel = k; damage(d, desk_outer(cl));
+            }
+            row++;
         }
+        if (desk_contains(button_box(content, 0, 3), x, y)) shutdown_commit(d, index);
+        else if (desk_contains(button_box(content, 1, 3), x, y)) desk_request_close(d, index);
+        else if (desk_contains(button_box(content, 2, 3), x, y)) launch_named(d, "help", NULL);
         return 1;
     }
     default:
@@ -5198,13 +5228,20 @@ static int internal_key(struct desktop *d, int index, int code, int value)
         else if ((d->end_task.kind == DESK_HANG_DOS && code == 0x15) || (d->end_task.kind == DESK_HANG_NOT_RESPONDING && code == 0x12))
             desk_end_task_choice(d, 1);   /* Y (Yes) / E (End Task) */
         return 1;
-    case DESK_INTERNAL_SHUTDOWN:
+    case DESK_INTERNAL_SHUTDOWN: {
+        int standby = d->sh.power_can_standby, sel = d->sh.shutdown_sel;
+        if (sel == SD_STANDBY && !standby) sel = SD_SHUTDOWN;
         if (code == DU_KEY_ESC) desk_request_close(d, index);
-        else if (code == DU_KEY_ENTER && d->sh.shutdown_choice == 1) { d->sh.want_power = 1; desk_request_close(d, index); }
-        else if (code == DU_KEY_ENTER || code == 0x1f) { d->sh.want_power = 2; desk_request_close(d, index); }
-        else if (code == 0x13) { d->sh.want_power = 1; desk_request_close(d, index); }
-        else if (code == 0x30 && d->sh.power_can_standby) { d->sh.want_standby = 1; desk_request_close(d, index); }   /* B */
+        else if (code == DU_KEY_ENTER) shutdown_commit(d, index);
+        else if (code == DU_KEY_UP || code == DU_KEY_LEFT) { if (sel > (standby ? SD_STANDBY : SD_SHUTDOWN)) sel--; }
+        else if (code == DU_KEY_DOWN || code == DU_KEY_RIGHT) { if (sel < SD_RESTART) sel++; }
+        else if (code == 0x1f) sel = SD_SHUTDOWN;      /* S */
+        else if (code == 0x13) sel = SD_RESTART;       /* R */
+        else if (code == 0x30 && standby) sel = SD_STANDBY;   /* B */
+        else if (code == 0x23) launch_named(d, "help", NULL); /* H */
+        if (sel != d->sh.shutdown_sel) { d->sh.shutdown_sel = sel; damage(d, desk_outer(&d->clients[index])); }
         return 1;
+    }
     default:
         if (d->sh.confirm) {
             if (code==DU_KEY_ENTER || code==DU_KEY_SPACE || code==0x15) confirm_answer(d,index,1);   /* Enter, Space, Y */
@@ -5489,7 +5526,7 @@ int desk_shell_key(struct desktop *d, int code, int value)
         int tasks=-1;
         for (int i=0;i<DESK_CLIENTS;i++) if (d->clients[i].window && d->clients[i].taskman) tasks=i;
         if (tasks>=0 && d->focus==tasks && !d->session.state) {
-            if (desk_internal_open(d,DESK_INTERNAL_SHUTDOWN)>=0) { d->sh.shutdown_choice=1; damage_all(d); }
+            if (desk_internal_open(d,DESK_INTERNAL_SHUTDOWN)>=0) { d->sh.shutdown_choice=1; d->sh.shutdown_sel=SD_RESTART; damage_all(d); }
         } else if (tasks>=0) { if (d->clients[tasks].minimized) desk_minimize(d,tasks); else desk_focus(d,tasks); }
         else launch_named(d,"tasks",NULL);
         d->sh.alt_used=1; return 1;

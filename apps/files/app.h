@@ -115,6 +115,7 @@ struct files_app {
     struct ciuki_media_space property_space;
     int property_drive, property_have_space, property_options, attribute_column;
     char property_text[DU_DIALOG_TEXT], property_label[12], property_request[FM_PATH];
+    char property_rows[3][64]; /* drive General page: used, free, capacity as "N bytes M MB" */
     char insert_path[1040]; int insert_drive;
     char removal_label[96];
     /* G2 Recycle Bin: the policy read when a delete starts, the rows of the
