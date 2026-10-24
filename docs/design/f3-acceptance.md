@@ -1842,3 +1842,146 @@ accounting. Host replay timings are not P3/T23 TSC or achieved game fps.
 
 Host evidence and the remaining QEMU/T23 gates are recorded in
 [`../validation/2026-10-14-f3-19-host.md`](../validation/2026-10-14-f3-19-host.md).
+
+## fx-27 — windowed DOS graphics: lean port exits, batched palette loads, lazy chain-4 planes, dirty-row presentation
+
+Directive: `docs/directives/t23-f441c5bd-trial-fixes.md` (fx-27). Written
+2026-10-23 23:22 before the code changes it describes were finalised;
+measurements and commands: [`../validation/fx-27-windowed-dos-graphics.md`](../validation/fx-27-windowed-dos-graphics.md).
+This amendment supersedes, for windowed VMs, f3-19's "the selected
+operation is one CR3 reload", f3-13's per-presentation chain-4 publication
+(the linear backing is deinterleaved only for a model consumer) and the
+f3-41 VBE rule that any dirty page redraws every row.
+
+### Evidence (T23 trials)
+
+- f441c5bd, Quake in a window (BOOT.LOG banks n=3/n=4, 5 s each): 31 and 11
+  frames; `vga_io` 17,677 exits / 386 ms, all `03c9` (DAC data, 21.8 us
+  each: about 570 per frame, 12.4 ms per frame); `pit_pic` 12,909 / 293 ms
+  and 26,536 / 666 ms (`0040`/`0043`, Quake's `Sys_FloatTime` latch and two
+  reads, 22.7 us each); DMA position polls `00c6`/`00d8`; present 5.6 ms and
+  harvest 1.05 ms per frame (16 pages, 291 rows); monitor 42 %, off-CPU 42 %.
+- e831e685 and a79f840c, DOOM in a window: 14–20 us per VGA port exit,
+  about 950–1300 map-mask OUTs per frame (planar.asm one per column, one per
+  plane per span); the fx-16 T23 model attributes 44 % of the CPU to them.
+
+### Reference behaviour
+
+- Windows 3.0/95 VDD: "When an application is running in the background,
+  the VDD traps all the video I/O, saving the output port values and
+  emulating the input port values" (Windows 3.0 DDK *Virtual Device
+  Adaptation Guide*, 18.1.2); the grabber repaints incrementally: "Get_Mod
+  returns a data structure which indicates modifications to the current
+  display. The Grabber DLL will modify only those parts of the window that
+  have changed and then issue a Clear_Mod" (18.4.1); VMM's ModifyPageBits
+  "always has the side effect of clearing P_DIRTY and P_ACC" (chapter 19):
+  page-table dirty bits are the modification record. A windowed VM's port
+  writes are therefore trapped by design; CiukiOS keeps that model and makes
+  each trapped write cheap, and repaints only what changed.
+- DOSBox 0.74 (`vga_memory.cpp` `VGA_ChainedVGA_Handler`): chained mode-13h
+  stores also go to a linear `fastmem` copy that the renderer draws from;
+  `render.cpp` compares every scanline with a cache of the last frame and
+  passes only changed lines to `GFX_EndUpdate`; `RENDER_SetPal` accumulates
+  palette entries (first/last) and `Check_Palette` applies them once at the
+  next frame, which is then a full update.
+- QEMU 10.1 `hw/display/vga.c` `vga_draw_graphic`: per-scanline dirty-page
+  test on a memory snapshot, a changed palette (`update_palette256`) forces
+  a full update, `dpy_gfx_update` per run of changed lines.
+- Intel SDM Vol. 3A 4.10.4.1: MOV to CR3 invalidates every non-global TLB
+  entry; CiukiOS maps the kernel without PTE_G. Linux `arch/x86/mm/tlb.c`
+  invalidates ranges of up to `tlb_single_page_flush_ceiling` = 33 pages
+  with INVLPG ("balancing the cycles you spend doing invlpg with the cycles
+  that you spend refilling the TLB later", `Documentation/arch/x86/tlb.rst`).
+- Agner Fog, *Instruction tables* (Pentium M, Pentium II/III): CPUID about
+  130 cycles, RDTSC about 42: the monitor's serialized clock read is about
+  0.27 us on the T23, a small part of a 14–22 us exit.
+- Quake 1.06 (QUAKE.EXE disassembled): `VGA_SetPalette` per byte
+  `movzx eax,[edi+esi]; mov ecx,ebx; sar eax,cl; mov edx,3C9h; out dx,al;
+  inc edi; cmp edi,2FFh; jng`; `Sys_FloatTime` calls `dos_outportb(43h,0)`
+  and `dos_inportb(40h)` twice. DOOM 1.9 `i_ibm.c` `I_SetPalette`: 768
+  OUTs to 3C9h after one to 3C8h.
+
+### Behaviour
+
+1. **Lean port exits.** A #GP(0) on IN/OUT (optionally 66h-prefixed) to a
+   hot emulated port — the VGA register file (3C0h–3CFh, 3D4h/3D5h/3DAh and
+   the monochrome 3B4h/3B5h/3BAh, byte or word), the PIT (40h–43h), the PIC
+   (20h/21h/A0h/A1h), AdLib/OPL (388h–38Bh) and the DMA controllers (00h–0Fh,
+   80h–8Fh, C0h–DFh), byte only — is emulated by the same handler and the
+   same I/O bursts as on the ordinary path (entered only when the next
+   opcode passes the burst's own first test or a DAC write is open), then
+   returns without the ordinary path's per-exit housekeeping and with one
+   serialized clock read fewer in its cost sample, when before the instruction the
+   VM is booted, windowed and running, has no full-screen hold, idle poll,
+   IPX/NE2000 binding, pending SB16 IRQ-entry stamp, STI or MOV SS shadow,
+   single-step, mouse callback due, and, with a DPMI client, no
+   IF recovery, return tracker, client watchpoint or CLI-seed demand
+   (fx-16), is not a host stub and is not the saved return point of an open
+   hardware-interrupt record; and when after it (IF clear until IRET) no
+   virtual IRQ is pending, no reschedule is due, no DMA channel waits to be
+   pinned (f3-46 settle point), the frame is not at a launch/EXEC return and
+   not at an interrupted context's return point. Otherwise the exit
+   continues through the ordinary tail without emulating again, so IRQ
+   delivery, IF recovery, scheduling and pinning happen at the same
+   boundary as before. The skipped work (UART/IPX service, present
+   sampling, heartbeat/stall diagnostics, reports, audio log, file-service
+   watchdog) is periodic; the host timer's own exit always takes the
+   ordinary path, so it runs at most one host tick later. A lean PM exit
+   keeps the DPMI bookkeeping the ordinary path leaves (decode seed at the
+   returned boundary, skipped-seed count unless a flags image is armed,
+   `if_recovery_end`). An armed fx-16 flags image (PUSHF image patched with
+   TF at its CLI, not yet loaded by its POPF) does not refuse a lean exit:
+   at an I/O exit without TF and without a pending IRQ the ordinary path
+   does nothing for it (`flags_restored` needs the step, the boundary seed
+   returns first, the I/O and DAC bursts refuse it themselves), and DOOM
+   1.9 keeps such an image armed across most of its frame (section 6 of the
+   validation record).
+2. **PTE batches invalidate per entry.** `as_replace_pages` (plane swaps,
+   D-bit collection) issues INVLPG for each changed entry (at most 32) of
+   the active address space and never reloads CR3.
+3. **Palette loads are one exit.** After a trapped DAC write (3C8h/3C9h)
+   the monitor looks ahead at most 8 instructions, on a copy, for the next
+   DAC (3C6h–3C9h) or status-register (3DAh/3BAh read) access. Only
+   instructions without memory stores or VGA memory reads qualify (register
+   setup/ALU/shifts, short branches, loads from resident user pages; PM
+   descriptors are checked as `dpmi_ptr` does, once per burst); when found,
+   the copy's state is committed and the port instruction executes through
+   the VGA port callback. The burst stops on anything else, on TF,
+   watchpoints, IF-image/return tracking, shadows, a deliverable IRQ, a
+   reschedule, a host tick and after 8192 instructions. A whole palette
+   load is presented with its final values (one display change).
+4. **Chain-4 planes are deinterleaved lazily.** While the linear window is
+   open its 16 backing pages are the chained image. A collection (present,
+   present sample, CRTC flip) records D pages as stale and as presenter
+   damage; `dosvm_vga_model`/`dosvm_vga_sync`, a window switch and the
+   presenter's planar path deinterleave the stale pages first, so every
+   consumer of the planes still sees exact planes.
+5. **Chained rows come from the linear backing.** With every row base
+   dword-aligned, dot x of row y is linear byte `(base + pan + x) & FFFFh`;
+   rows touching damaged pages are compared byte-exactly with the last
+   displayed indexes and only differing rows are converted (LUT, 2x) and
+   written. Any other scanout uses the planes (unchanged f3-19 path).
+6. **Proven rows are written without read-back.** A destination row whose
+   displayed indexes differ is written to the shared surface directly; rows
+   redrawn only because of a palette, geometry, blank or layout change are
+   still compared with the surface first (unchanged rows keep no damage).
+7. **VBE rows from dirty pages.** The windowed VBE presenter collects and
+   clears the D bits of the visible buffer pages and converts only rows
+   whose source lies in a dirty page; a palette or mode change redraws all.
+   Columns step with an exact DDA (no division per pixel), 8-bit pixels use
+   the shared 256-entry palette LUT, 640-wide 8-bit rows convert directly.
+8. **Records.** `vm_perf_remap` adds `lean=` (exits retired lean), `dac=`
+   (OUTs retired by palette bursts) and `linear=` (rows converted from the
+   linear backing) to the five-second bank.
+
+### Kept, and limits
+
+- Every map-mask/read-map change still traps (a different plane shadow
+  backs the same addresses; Windows traps it too). DOOM's ~1,000 OUTs per
+  frame become ~1,000 lean exits.
+- The DOS window's surface stays 640x480 XRGB (no ABI change). The desktop
+  composes it and presents duplicated scaled rows with 2D-engine screen
+  copies (f2-92 `present_box_raw`); that path is unchanged here.
+- Full-screen operation, the SB16 DSP ports (22xh), the keyboard (60h/64h)
+  and the game port (201h) keep the ordinary exit; so do exits during a
+  CLI-seed demand window (fx-16) and every exit with a pending IRQ.

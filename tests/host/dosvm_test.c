@@ -1008,6 +1008,7 @@ static void test_memory_services(bool locked)
 #include "dosvm_uart_test.inc"
 #include "dosvm_fx4_test.inc"
 #include "dosvm_fx16_test.inc"     /* fx-16: T23 trial e831e685 replays */
+#include "dosvm_fx27_test.inc"     /* fx-27: windowed DOS graphics budgets */
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
@@ -1023,6 +1024,7 @@ int main(void)
         free(ram);fflush(stdout);return 0;
     }
     if (getenv("CIUKI_VM_FX16")) { test_fx16(); printf("fx-16 checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
+    if (getenv("CIUKI_VM_FX27")) { test_fx27(); printf("fx-27 checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
     if (getenv("CIUKI_VM_SERIAL")) { test_serial_uart(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_WAIT_PRESENT")) {
         test_wait_present(); test_client_boundary(); test_video_presenter(); test_fullscreen_vbe();
@@ -1067,6 +1069,7 @@ int main(void)
     test_isr_return_evidence(); test_isr_expiry(); test_if_cli_epoch(); test_if_handler_scope();
     test_speed();
     test_cost_bursts();
+    test_fx27();
     test_exit_cost();
     test_idle();
     test_fullscreen_transport();

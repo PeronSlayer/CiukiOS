@@ -94,6 +94,16 @@ static void io_burst_inc(struct v86_frame *f, unsigned width)
     f->tf.edx = (f->tf.edx & ~mask) | value;
     f->tf.eflags = (f->tf.eflags & ~0x8D4u) | flags; /* CF is unchanged. */
 }
+/* The opcodes dosvm_io_burst can continue with (its first-instruction
+ * filter below); fx-27's lean exit peeks with a resident-page lookup and
+ * skips the burst's checked fetch when the next instruction is none of them. */
+static bool io_burst_candidate(uint8_t op)
+{
+    return op == 0xB0 || op == 0xB4 || op == 0xB8 || op == 0xBA || op == 0x88 || op == 0x42 ||
+        (op >= 0xE4 && op <= 0xE7) || (op >= 0xEC && op <= 0xEF) || op == 0x6E || op == 0x6F ||
+        op == 0x66 || op == 0x67 || op == 0x26 || op == 0x2E || op == 0x36 || op == 0x3E ||
+        op == 0x64 || op == 0x65 || op == 0xF2 || op == 0xF3;
+}
 int dosvm_io_burst(struct dosvm *v, struct v86_frame *f)
 {
     unsigned cause = v->perf.cause;
@@ -102,10 +112,7 @@ int dosvm_io_burst(struct dosvm *v, struct v86_frame *f)
         if (!io_burst_fetch(v, f, 0, &op)) return 0;
         /* Most scalar EOIs end in POP/IRET. Avoid a frame copy and full
          * prefix decoder when no supported burst instruction can follow. */
-        if (!(op == 0xB0 || op == 0xB4 || op == 0xB8 || op == 0xBA || op == 0x88 || op == 0x42 ||
-            (op >= 0xE4 && op <= 0xE7) || (op >= 0xEC && op <= 0xEF) || op == 0x6E || op == 0x6F ||
-            op == 0x66 || op == 0x67 || op == 0x26 || op == 0x2E || op == 0x36 || op == 0x3E ||
-            op == 0x64 || op == 0x65 || op == 0xF2 || op == 0xF3)) return 0;
+        if (!io_burst_candidate(op)) return 0;
         struct v86_frame n = *f;
         struct dpmi_seg cs;
         bool big = v->frame_pm && dpmi_seg(v, (uint16_t)n.tf.cs, &cs) && cs.big;
@@ -190,4 +197,14 @@ int dosvm_io_burst(struct dosvm *v, struct v86_frame *f)
         v->perf.batched++;
     }
     return 0;
+}
+/* fx-27: the monitor's port bursts after a trapped IN/OUT: the straight-line
+ * VGA/PIT/OPL sequence above, then, after a DAC write, the decoded palette
+ * loop of dosvm_vga_dac_burst (DAC loads are one OUT per byte). */
+int dosvm_port_bursts(struct dosvm *v, struct v86_frame *f)
+{
+    int e = dosvm_io_burst(v, f);
+    if (!e && v->video_dac_burst && v->info.state < DOSVM_STOPPING) e = dosvm_vga_dac_burst(v, f);
+    v->video_dac_burst = false;
+    return e;
 }

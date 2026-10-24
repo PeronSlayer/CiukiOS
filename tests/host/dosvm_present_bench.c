@@ -40,6 +40,78 @@ static void bench_planar(struct dosvm *v)
     port_out(v, 0x3D4, 2, 0xE317);
     port_out(v, 0x3C4, 2, 0x0102);
 }
+/* fx-27: frame-level costs for the representative patterns. Host time is
+ * reported; the deterministic counters are the budgets (dosvm_fx27_test). */
+static void bench_fx27(void)
+{
+    /* Quake VGA_SetPalette (the fx27 test's instruction forms): one VM,
+     * the 3C9h loop timed alone; the "native" decoder runs the instructions
+     * between exits, as libx86emu does in the guest runner. */
+    struct dosvm *pv = fx27_vm(true);
+    const uint8_t loop[] = {0x31, 0xFF, 0x0F, 0xB6, 0x04, 0x37, 0x89, 0xD9, 0xD3, 0xF8,
+        0xBA, 0xC9, 0x03, 0x00, 0x00, 0xEE, 0x47, 0x81, 0xFF, 0xFF, 0x02, 0x00, 0x00, 0x7E, 0xE9, 0x90};
+    CHECK(!dosvm_write(pv, 0x30000, loop, sizeof(loop)));
+    uint8_t source[768];
+    for (unsigned i = 0; i < 768; i++) source[i] = (uint8_t)(i * 5 + 3);
+    CHECK(!dosvm_write(pv, 0x40000, source, sizeof(source)));
+    const unsigned loads = 200;
+    unsigned exits = 0;
+    uint64_t elapsed = 0;
+    for (unsigned i = 0; i < loads; i++) {
+        port_out(pv, 0x3C8, 1, 0);
+        cur.tf.eip = 0x30000; cur.tf.esi = 0x40000; cur.tf.ebx = 2;
+        uint64_t start = bench_ns();
+        exits += fx27_run(pv, 0x30000 + sizeof(loop) - 1, 100000, false);
+        elapsed += bench_ns() - start;
+        CHECK(pv->vga.dac[255][2] == (source[767] >> 2));
+    }
+    printf("fx27 pattern=quake-palette loads=%u exits_per_load=%.2f host_us_per_load=%.1f\n",
+           loads, (double)exits / loads, (double)elapsed / loads / 1000);
+    destroy(pv, true); empty();
+    uint64_t start;
+    /* Quake mode 13h: a whole frame through the chain-4 window, presented. */
+    struct dosvm *v = create(); int10(v, 0x13, 0, 0, 0);
+    struct ciuki_rect d;
+    CHECK(dosvm_vga_present(v, bench_row, frame_buffer, 0, &d) == 1);
+    const unsigned frames = 200;
+    uint64_t present = 0; unsigned pages = v->perf.direct_pages; bench_rows = 0;
+    for (unsigned f = 1; f <= frames; f++) {
+        for (unsigned at = 0; at < 64000; at++)
+            ((uint8_t *)P2V(v->frames[0xA0 + at / PAGE_SIZE]))[at % PAGE_SIZE] = (uint8_t)(at + f);
+        for (unsigned pg = 0; pg < 16; pg++) *window_pte(v, 0xA0000 + pg * PAGE_SIZE) |= DOSVM_PTE_DIRTY;
+        start = bench_ns();
+        CHECK(dosvm_vga_present(v, bench_row, frame_buffer, f * 40, &d) == 1);
+        present += bench_ns() - start;
+    }
+    printf("fx27 pattern=quake-13h-frame frames=%u present_ns_per_frame=%llu rows_per_frame=%u deinterleaved_pages_per_frame=%.2f\n",
+           frames, (unsigned long long)(present / frames), bench_rows / frames,
+           (double)(v->perf.direct_pages - pages) / frames);
+    destroy(v, true); empty();
+    /* VESA 640x480x8: a whole frame, then a 32-line status bar only. */
+    CHECK(!dosvm_create(0, &v));
+    bool available = fs_vbe_available; fs_vbe_available = true;
+    int10(v, 0x4F02, 0x4101, 0, 0);
+    CHECK(v->vbe_mode == 0x101 && v->vbe_buffer.used);
+    CHECK(dosvm_vga_present(v, bench_row, frame_buffer, 0, &d) == 1);
+    for (unsigned partial = 0; partial < 2; partial++) {
+        uint64_t total = 0; bench_rows = 0;
+        unsigned first = partial ? 448 : 0;
+        for (unsigned f = 1; f <= frames; f++) {
+            uint8_t row[640];
+            for (unsigned y = first; y < 480; y++) {
+                memset(row, (int)(y + f), sizeof(row));
+                CHECK(!dosvm_write(v, v->vbe_buffer.base + y * 640, row, sizeof(row)));
+            }
+            for (unsigned pg = first * 640 / PAGE_SIZE; pg <= (480 * 640 - 1) / PAGE_SIZE; pg++) *vbe_pte(v, pg) |= 0x40;
+            start = bench_ns();
+            CHECK(dosvm_vga_present(v, bench_row, frame_buffer, (partial * frames + f) * 40, &d) == 1);
+            total += bench_ns() - start;
+        }
+        printf("fx27 pattern=vbe-640x480x8-%s frames=%u present_ns_per_frame=%llu rows_per_frame=%u\n",
+               partial ? "statusbar32" : "full", frames, (unsigned long long)(total / frames), bench_rows / frames);
+    }
+    fs_vbe_available = available; destroy(v, true); empty();
+}
 static void bench_case(const char *name, bool planar, bool sparse)
 {
     struct dosvm *v = create();
@@ -242,6 +314,8 @@ int main(void)
     ram = calloc(HOST_PAGES, PAGE_SIZE); CHECK(ram);
     if (getenv("CVGA_ROW_BENCH")) { bench_planar_rows(); free(ram); return 0; }
     bench_planar_rows();
+    if (getenv("FX27_BENCH")) { bench_fx27(); free(ram); return 0; }
+    bench_fx27();
     bench_case("chain-full", false, false);
     bench_case("planar-full", true, false);
     bench_case("chain-one-row", false, true);

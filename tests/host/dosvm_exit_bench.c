@@ -52,6 +52,55 @@ static void exit_vga_bench(bool pm)
         exit_result(pm ? (word ? "pm_vga_word_exit" : "pm_vga_byte_exit") :
                     (word ? "rm_vga_word_exit" : "rm_vga_byte_exit"),start,n);
     }
+    if (pm) {
+        /* fx-27: the steady state of a settled client (fx-16: no CLI seed
+         * demand), where map-mask OUTs may take the lean path. */
+        bool settled = v->dpmi.cli_settled; uint64_t miss = v->dpmi.cli_miss_tick, ticks = g_ticks;
+        v->dpmi.cli_settled = true; v->dpmi.cli_miss_tick = 0; if (g_ticks < 5000) g_ticks = 5000;
+        CHECK(!dosvm_write(v,address,byte,sizeof(byte)));
+        uint64_t start=exit_ns();
+        for (unsigned i=0;i<n;i++) {
+            cur.tf.eip=address; cur.tf.edx=0x3C5; cur.tf.eax=1u<<(i&3);
+            step(v,13,0); CHECK(!left);
+        }
+        exit_result("pm_vga_byte_exit_settled",start,n);
+#ifndef FX27_HEAD_BASELINE
+        /* fx-27: the same settled exits with a cache-cold monitor, as on
+         * the T23 where the game's working set evicts the monitor between
+         * exits: 4 MiB are walked (one load per 64-byte line) before each
+         * exit and timed separately. "ordinary" refuses the lean path with
+         * the IPX-binding precondition only. Thread CPU time per exit. */
+        static uint8_t polluter[4u << 20];
+        for (unsigned mode = 0; mode < 2; mode++) {
+            v->network_attached = mode == 1;
+            uint64_t t0 = __builtin_ia32_rdtsc();
+            for (unsigned i = 0; i < n; i++) {
+                cur.tf.eip=address; cur.tf.edx=0x3C5; cur.tf.eax=1u<<(i&3);
+                step(v,13,0); CHECK(!left);
+            }
+            printf("exit_bench case=%s iterations=%u avg_tsc_cycles=%llu\n", mode ? "pm_vga_byte_exit_settled_hot_ordinary" :
+                   "pm_vga_byte_exit_settled_hot_lean", n, (unsigned long long)((__builtin_ia32_rdtsc() - t0) / n));
+        }
+        for (unsigned mode = 0; mode < 2; mode++) {
+            v->network_attached = mode == 1;
+            uint64_t total = 0; volatile uint8_t sink = 0;
+            const unsigned cold = 2000;
+            for (unsigned i = 0; i < cold; i++) {
+                for (unsigned at = 0; at < sizeof(polluter); at += 64) sink += polluter[at] + (uint8_t)i;
+                cur.tf.eip=address; cur.tf.edx=0x3C5; cur.tf.eax=1u<<(i&3);
+                uint64_t t0 = __builtin_ia32_rdtsc();   /* no system call inside the interval */
+                step(v,13,0);
+                total += __builtin_ia32_rdtsc() - t0;
+                CHECK(!left);
+            }
+            (void)sink;
+            printf("exit_bench case=%s iterations=%u avg_tsc_cycles=%llu\n", mode ? "pm_vga_byte_exit_settled_cold_ordinary" :
+                   "pm_vga_byte_exit_settled_cold_lean", cold, (unsigned long long)(total / cold));
+        }
+        v->network_attached = false;
+#endif
+        v->dpmi.cli_settled = settled; v->dpmi.cli_miss_tick = miss; g_ticks = ticks;
+    }
     CHECK(!dosvm_write(v,address,byte,sizeof(byte)));
     tsc_clock_hook=exit_ns; g_tsc_per_ms=1000000;
     uint64_t clocked=exit_ns();

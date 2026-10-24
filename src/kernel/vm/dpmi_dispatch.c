@@ -1413,6 +1413,63 @@ static int pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t 
     }
 }
 
+/* fx-27 lean port exits (dosvm.c lean_io). True when a #GP(0) at this
+ * boundary of a VM with a DPMI client carries no monitor obligation of its
+ * own: no STI shadow or IF recovery, no return tracker or client
+ * watchpoint, no CLI-seed demand (fx-16 dpmi_seed_wanted), not a host stub
+ * or single-step (PM), and not the saved return point of an open
+ * hardware-interrupt record (dpmi_irq_resync). An armed flags image
+ * (fx-16: a PUSHF image patched with TF at its CLI) is no obligation at an
+ * I/O exit: without TF in the frame it has not been loaded yet, so
+ * flags_restored does nothing, return_boundary_seed returns before any
+ * seed or count, the I/O bursts refuse it themselves, and with no IRQ
+ * pending if_recovery_prepare only ends recovery. For such a PM exit
+ * dpmi_pm_trap's work around an emulated IN/OUT reduces to the bookkeeping
+ * of dpmi_lean_retire; the caller still requires that no virtual IRQ is
+ * pending before it skips dpmi_deliver. */
+bool dpmi_lean_eligible(const struct dosvm *v, const struct v86_frame *f)
+{
+    const struct dpmi *d = &v->dpmi;
+    if (!d->active || d->shadow || d->if_waiting || d->if_step || d->if_restore_step ||
+        d->return_steps || d->return_step || d->return_replan || d->dr7 || dpmi_seed_wanted(v))
+        return false;
+    if (v->frame_pm && ((uint16_t)f->tf.cs == DPMI_HOST_CS || (f->tf.eflags & (V86_TF | (1u << 14)))))
+        return false;
+    return dpmi_lean_quiet(v, f);
+}
+/* dpmi_irq_resync's predicate: true when f is not the saved return point of
+ * an open hardware-interrupt record (a native late return to observe). An
+ * OUT inside a handler is lean; reaching the interrupted context is not. */
+bool dpmi_lean_quiet(const struct dosvm *v, const struct v86_frame *f)
+{
+    const struct dpmi *d = &v->dpmi;
+    for (unsigned n = d->depth; n; n--) {
+        const struct dpmi_record *r = &d->rec[n - 1];
+        if (!(r->flags & DPMI_RF_HWINT) || (!r->isr_measured && !r->isr_expired) || r->client != d->clients) continue;
+        if (r->saved_pm == v->frame_pm && f->tf.cs == r->saved.tf.cs && f->tf.eip == r->saved.tf.eip &&
+            f->tf.user_ss == r->saved.tf.user_ss && f->tf.user_esp == r->saved.tf.user_esp) return false;
+    }
+    return true;
+}
+/* Exactly the state dpmi_pm_trap and dpmi_deliver leave after such an
+ * exit with no deliverable IRQ: return_boundary_seed's skipped-seed count,
+ * the decode seed at the returned boundary (no stack snapshot while no
+ * seed is wanted), and if_recovery_end through if_recovery_prepare. */
+void dpmi_lean_retire(struct dosvm *v, const struct v86_frame *f)
+{
+    struct dpmi *d = &v->dpmi;
+    if (v->monitor.vif && !d->if_armed) d->cli.seeds_skipped++;
+    d->decode_valid = true;
+    d->decode_cs = (uint16_t)f->tf.cs;
+    d->decode_eip = f->tf.eip;
+    d->decode_stack_valid = false;
+    struct dpmi_seg ds;
+    d->decode_ds_valid = dpmi_seg(v, (uint16_t)f->tf.ds, &ds) && ds.present;
+    if (d->decode_ds_valid) d->decode_ds_base = ds.base;
+    d->if_waiting = d->if_step = d->if_restore_step = false;
+    d->if_steps = 0;
+}
+
 int dpmi_pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t dr6)
 {
     /* A physical IRQ can land between PUSHF, POP and CLI without changing
@@ -1444,7 +1501,7 @@ int dpmi_pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t dr
     if (!e && v->frame_pm && f->tf.vector == 13 && !f->tf.err &&
         (v->perf.cause == DOSVM_COST_VGA_IO || (v->perf.cause == DOSVM_COST_PIT_PIC &&
          v->perf.io_port >= 0x40 && v->perf.io_port <= 0x43)))
-        e = dosvm_io_burst(v, f);
+        e = dosvm_port_bursts(v, f);
     bool replanning = !e && v->frame_pm && v->dpmi.return_replan &&
         v->dpmi.depth == v->dpmi.return_depth && v->dpmi.clients == v->dpmi.return_client;
     /* Preserve a flags save already reached before the IRQ; otherwise the

@@ -32,6 +32,12 @@ static bool isr_replay(void)
     memset(gv->perf.if_enable, 0, sizeof(gv->perf.if_enable));
     memset(&gv->dpmi.cli, 0, sizeof(gv->dpmi.cli));
     memset(t23_charged_ns, 0, sizeof(t23_charged_ns)); memset(t23_exits, 0, sizeof(t23_exits));
+    memset(t23x_code_ns, 0, sizeof(t23x_code_ns)); memset(t23x_ser, 0, sizeof(t23x_ser));
+    memset(t23x_path, 0, sizeof(t23x_path));
+    memset(t23x_lean_ns, 0, sizeof(t23x_lean_ns)); memset(t23x_lean_exits, 0, sizeof(t23x_lean_exits));
+    memset(t23x_lean_charged, 0, sizeof(t23x_lean_charged));
+    uint64_t calib_exits[DOSVM_COST_COUNT];
+    for (unsigned i = 0; i < DOSVM_COST_COUNT; i++) calib_exits[i] = gv->perf.cost_count[i];
     uint64_t pit_edges = gv->pit.edges, pit_lost = gv->pit.lost_edges, pit_reinjected = gv->pit.reinjected;
     uint32_t sb_late = gv->audio.cadence_late_acks;
     gv->perf.if_samples_ms = gv->perf.if_clear_ms = gv->perf.if_outside_ms = 0;
@@ -80,6 +86,19 @@ static bool isr_replay(void)
             if (t23_exits[i]) printf("t23_cost cause=%s exits=%llu ms=%.1f us_per_exit=%.1f\n", names[i],
                 (unsigned long long)t23_exits[i], t23_charged_ns[i] / 1e6, t23_charged_ns[i] / 1e3 / t23_exits[i]);
         }
+        /* fx-27: host code time and clock reads per cause (calibration of
+         * the GUEST_T23_MODEL=fx27 ratios from the HEAD replay). */
+        for (unsigned i = 0; i < DOSVM_COST_COUNT; i++) {
+            uint64_t n = gv->perf.cost_count[i] - calib_exits[i];
+            if (n) printf("t23x_calibration cause=%s exits=%llu code_ns_per_exit=%.1f serialized_per_exit=%.2f path_per_exit=%.2f\n",
+                names[i], (unsigned long long)n, (double)t23x_code_ns[i] / n, (double)t23x_ser[i] / n,
+                (double)t23x_path[i] / n);
+        }
+        for (unsigned i = 0; i < DOSVM_COST_COUNT; i++) if (t23x_lean_exits[i])
+            printf("t23x_lean cause=%s exits=%llu code_ns_per_exit=%.1f t23_us_per_exit=%.1f\n", names[i],
+                   (unsigned long long)t23x_lean_exits[i], (double)t23x_lean_ns[i] / t23x_lean_exits[i],
+                   (double)t23x_lean_charged[i] / 1e3 / t23x_lean_exits[i]);
+        printf("t23x_model=%s host_clock_ns=%.1f\n", t23_fx27 ? "fx27" : "fx16", host_clock_ns);
         uint64_t edges = gv->pit.edges - pit_edges, irq0 = gv->monitor.stats.delivered[0] - timer;
         printf("t23_model ms=%llu monitor_ms=%.1f monitor_pm=%.0f pit_edges=%llu irq0=%llu irq0_lost_pm=%.1f reinjected=%llu lost=%llu sb_late_acks=%u merged=%u if_clear=%u descheduled=%u irq_latency_avg_us=%llu irq_latency_max_us=%u\n",
             (unsigned long long)ms, total / 1e6, ms ? total / 1e3 / ms : 0.0,

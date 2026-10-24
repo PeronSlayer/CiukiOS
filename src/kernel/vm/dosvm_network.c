@@ -214,6 +214,8 @@ int dosvm_network_attach(struct dosvm *v, struct net_bridge_port *port)
     dosvm_ipx_service(&n->ipx, interval_ticks(n->host_ms));
     error = dosvm_port_register(n->key, DOSVM_NE2000_BASE, DOSVM_NE2000_LAST, virtual_port, n);
     if (error) goto fail;
+    /* fx-27: exits must dispatch this VM's IPX events; no lean port exits. */
+    v->network_attached = true;
     dosvm_network_rom_init(v); net_bridge_port_release(port); return 0;
 fail:
     dosvm_ipx_destroy(&n->ipx);
@@ -233,7 +235,7 @@ int dosvm_network_detach(struct dosvm *v)
     net_bridge_port_release(n->port);
     v->monitor.pic[0].irr &= ~(1u << DOSVM_NE2000_IRQ);
     if (pending) return -16; /* Retain owner until receive-mode cleanup succeeds. */
-    memset(n, 0, sizeof(*n)); return 0;
+    memset(n, 0, sizeof(*n)); v->network_attached = false; return 0;
 }
 void dosvm_network_service(struct dosvm *v, uint64_t host_ms)
 {

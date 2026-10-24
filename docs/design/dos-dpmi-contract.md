@@ -451,6 +451,26 @@ share falls from 43.5 % to 30.4 %. The `vm_perf_tracker` and checkpoint rows
 remain; the `[vm-audio] cadence_clock` record now also reports
 `cli_hits`, `cli_learned`, `cli_missed` and `seeds_skipped`.
 
+### fx-27 amendment: lean port exits (2026-10-23)
+
+A #GP(0) on IN/OUT to a hot emulated port (VGA register file, PIT, PIC,
+OPL, DMA) may retire without the per-exit housekeeping when the exit owes
+the client nothing at that boundary: no STI shadow, IF
+recovery, return tracker, client watchpoint or seed demand (the fx-16 rule
+above: a lean exit is never taken while seeds are wanted, so CLI proofs are
+unchanged), not a host stub, and not the saved return point of an open
+hardware-interrupt record (the `dpmi_irq_resync` predicate, checked before
+and after the instruction). After the instruction no virtual IRQ may be
+pending; otherwise `dpmi_deliver` and the rest of the ordinary tail run at
+that same boundary. A lean exit leaves the state `dpmi_pm_trap` and
+`dpmi_deliver` would: the decode seed at the returned boundary, no stack
+snapshot, the skipped-seed count (not while a flags image is armed) and
+`if_recovery_end`. An armed flags image (a PUSHF image patched with TF at
+its CLI) does not prevent a lean exit: until its POPF loads TF the ordinary
+path does nothing for it at an I/O exit, and it keeps its owner until
+`flags_restored`. Details and the full eligibility list:
+`f3-acceptance.md`, fx-27.
+
 ## DOS personality and VFS bridge
 
 **[F4]** Shared-drive routing MUST live inside CIUKIDOS before FAT/LFN

@@ -58,9 +58,15 @@ static void host_clock_tick(void);
 uint64_t g_tsc_per_ms;
 static bool guest_perf;
 static uint64_t presenter_sample_max;
+/* fx-27: the monitor's clock reads are counted by kind. On the T23 a
+ * dosvm_perf_clock read is read_tsc_serialized (two CPUIDs and RDTSC) and a
+ * dosvm_perf_task_clock read is cpu_path_clock (irq_save/RDTSC); here both
+ * are a clock_gettime system call that costs far more than either. */
+static uint64_t host_clock_calls;
 static uint64_t read_tsc_serialized(void)
 {
     if (!guest_perf) return 0;
+    host_clock_calls++;
     struct timespec t;
     if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t)) abort();
     return (uint64_t)t.tv_sec * 1000000000u + (uint64_t)t.tv_nsec;
@@ -531,9 +537,85 @@ static double t23_ratio(unsigned cause)
     default: return 21.6 / 0.79;           /* the I/O exit ratio */
     }
 }
-static void t23_charge(void)
+/* fx-27 GUEST_T23_MODEL=fx27, a two-point model. The fx-16 ratio scales
+ * the host's whole measured exit time; on this host most of that time is
+ * the monitor's own clock_gettime calls (about 0.43 us each, three per VGA
+ * exit) and the rest varies with this host's cache state, which the lean
+ * path itself changes (fewer exits keep the full path's code warm here).
+ * So: an ordinary exit of a fixed-length path (port I/O, CLI/STI, #DB,
+ * timer, V86 flag/IRET) costs exactly the T23's measured average for its
+ * cause, whatever the host saw; an exit of variable work (DOS/BIOS/DPMI
+ * services, mode switches, aperture faults) keeps the fx-16 scaling. A lean
+ * exit costs the T23 average of its cause scaled by its host code time
+ * (clock calls removed) over the HEAD code time of that cause, plus the
+ * T23 cost of its own clock reads. Agner Fog's instruction tables give
+ * CPUID about 130 and RDTSC about 42 clocks (Pentium M, the T23's P6
+ * lineage): read_tsc_serialized (CPUID, RDTSC, CPUID) is about 300 cycles
+ * = 265 ns at 1.13 GHz; cpu_path_clock (RDTSC plus the irq_save/restore
+ * section stamps) about 150 ns. Host-specific HEAD code times (this
+ * workstation, HEAD 6b0a5481 sources, DOOM shooting replay, t23x_calibration
+ * lines): vga_io 589 ns, pit_pic 375 ns, io 349 ns. */
+static bool t23_fx27;
+static double host_clock_ns;
+#define T23_SERIALIZED_NS 265.0
+#define T23_PATH_NS 150.0
+static uint64_t t23x_code_ns[DOSVM_COST_COUNT], t23x_ser[DOSVM_COST_COUNT], t23x_path[DOSVM_COST_COUNT];
+/* fx-27: the same split for exits retired on the lean path. */
+static uint64_t t23x_lean_ns[DOSVM_COST_COUNT], t23x_lean_exits[DOSVM_COST_COUNT], t23x_lean_charged[DOSVM_COST_COUNT];
+static bool t23x_lean_exit;
+/* T23 us per exit (trial e831e685 n=7/8 as fx-16; V86 flag/IRET exits and
+ * the keyboard from trial f441c5bd n=3); 0: variable work, fx-16 scaling. */
+static double t23x_average(unsigned cause)
+{
+    switch (cause) {
+    case DOSVM_COST_IO: return 21.6;
+    case DOSVM_COST_PIT_PIC: return 19.2;
+    case DOSVM_COST_PM_FLAGS: return 56.6;
+    case DOSVM_COST_DB: return 37.4;
+    case DOSVM_COST_TIMER: return 60.7;
+    case DOSVM_COST_VGA_IO: return 19.7;
+    case DOSVM_COST_KBD: return 40.0;
+    case DOSVM_COST_RM_IRET: return 12.7;
+    case DOSVM_COST_RM_PUSHF: return 13.5;
+    case DOSVM_COST_RM_POPF: return 13.9;
+    case DOSVM_COST_RM_CLI: return 11.9;
+    case DOSVM_COST_RM_STI: return 12.2;
+    default: return 0;
+    }
+}
+static double t23x_head_code_ns(unsigned cause)
+{
+    return cause == DOSVM_COST_VGA_IO ? 589.1 : cause == DOSVM_COST_PIT_PIC ? 375.1 : 348.7;
+}
+static void t23_charge_calls(uint64_t serialized, uint64_t path)
 {
     if (!t23_model || !g_tsc_per_ms) return;
+    unsigned cause = gv->perf.cause < DOSVM_COST_COUNT ? gv->perf.cause : DOSVM_COST_OTHER;
+    double trap = (double)gv->perf.trap_cycles * 1000000.0 / (double)g_tsc_per_ms;
+    /* Boundary reads: the entry and exit stamps (half of each inside the
+     * interval) and the return to guest time after it. */
+    uint64_t inner = serialized >= 3 ? serialized - 3 : 0;
+    double code = trap - (double)(inner + 1 + path) * host_clock_ns;
+    if (code < 0) code = 0;
+    t23x_code_ns[cause] += (uint64_t)code; t23x_ser[cause] += inner + 1; t23x_path[cause] += path;
+    double clocks = (double)(inner + 1) * T23_SERIALIZED_NS + (double)path * T23_PATH_NS;
+    double average = t23x_average(cause) * 1000.0, ns;
+    if (t23x_lean_exit) {
+        /* HEAD's ordinary exit of the same cause: one serialized read, and
+         * two path reads for a VGA register write. */
+        double head_clocks = T23_SERIALIZED_NS + (cause == DOSVM_COST_VGA_IO ? 2 * T23_PATH_NS : 0);
+        double base = average ? average : 21600.0;
+        ns = (base - head_clocks) * code / t23x_head_code_ns(cause) + clocks;
+        t23x_lean_ns[cause] += (uint64_t)code; t23x_lean_exits[cause]++; t23x_lean_charged[cause] += (uint64_t)ns;
+    } else ns = average ? average : trap * t23_ratio(cause);
+    if (!t23_fx27) return;
+    if (t23_fullscreen && (cause == DOSVM_COST_VGA_IO || cause == DOSVM_COST_VGA_PF)) ns = 1000.0;
+    t23_charged_ns[cause] += (uint64_t)ns; t23_exits[cause]++;
+    t23_monitor += (uint64_t)(ns * guest_slice / 1000000.0);
+}
+static void t23_charge(void)
+{
+    if (!t23_model || !g_tsc_per_ms || t23_fx27) return;
     unsigned cause = gv->perf.cause < DOSVM_COST_COUNT ? gv->perf.cause : DOSVM_COST_OTHER;
     double ns = (double)gv->perf.trap_cycles * 1000000.0 / (double)g_tsc_per_ms * t23_ratio(cause);
     if (t23_fullscreen && (cause == DOSVM_COST_VGA_IO || cause == DOSVM_COST_VGA_PF)) ns = 1000.0;
@@ -717,8 +799,56 @@ static void i21_observe(const struct gcpu_event *ev)
     }
 }
 static unsigned slice_left = SLICE;
-static bool g_read(uint32_t lin, void *b, unsigned n) { return !dosvm_read(gv, lin, b, n); }
-static bool g_write(uint32_t lin, const void *b, unsigned n) { return !dosvm_write(gv, lin, b, n); }
+/* fx-27: guest cycles to A0000h-BFFFFh obey the VM's page tables as the
+ * CPU does (Intel SDM Vol. 3A 4.6 access rights, 4.8 accessed/dirty
+ * flags): a present user page (writable for a store) is accessed in its
+ * mapped frame (a plane shadow or the chain-4 linear backing) with A, and D
+ * for a store, set in the PTE; anything else is a #PF before any byte
+ * moves, with P set when the PTE was present (a protection violation, as
+ * the supervisor-only window produces on hardware) and U (CPL 3). Before
+ * fx-27 these cycles reached the VGA model directly at no cost, so the
+ * runner never produced the aperture faults a closed window costs. */
+static bool aperture_fault_present;
+static uint64_t aperture_direct_bytes, aperture_faults;
+static uint32_t *aperture_pte(uint32_t lin)
+{
+    uint32_t pde = ((uint32_t *)P2V(gv->as.pd_phys))[lin >> 22];
+    if (!(pde & PTE_P)) return 0;
+    return &((uint32_t *)P2V(pde & ~0xFFFu))[(lin >> 12) & 1023];
+}
+static bool aperture_access(uint32_t lin, void *b, unsigned n, bool write)
+{
+    /* Validate every page of the access first: a split access faults
+     * without a partial store, as on hardware. */
+    for (uint32_t at = lin & ~0xFFFu; at < lin + n; at += PAGE_SIZE) {
+        uint32_t *pte = aperture_pte(at);
+        if (!pte || !(*pte & PTE_P) || !(*pte & PTE_U) || (write && !(*pte & PTE_W))) {
+            aperture_fault_present = pte && (*pte & PTE_P);
+            aperture_faults++;
+            return false;
+        }
+    }
+    uint8_t *bytes = b;
+    for (unsigned i = 0; i < n; i++) {
+        uint32_t *pte = aperture_pte(lin + i), at = lin + i, frame = *pte & ~0xFFFu;
+        /* Model planes live in the static VM slot outside fake RAM (as in
+         * dosvm_workloads_test.inc): resolve a plane frame explicitly. */
+        uint8_t *cell = 0;
+        if (at < 0xB0000) for (unsigned plane = 0; plane < 4 && !cell; plane++)
+            if (frame == plane_frame(gv, plane, (at - 0xA0000) / PAGE_SIZE))
+                cell = &gv->vga.plane[plane][at - 0xA0000];
+        if (!cell) { CHECK(frame < HOST_PAGES * PAGE_SIZE); cell = (uint8_t *)P2V(frame | (at & 0xFFFu)); }
+        *pte |= write ? 0x60u : 0x20u;
+        if (write) *cell = bytes[i]; else bytes[i] = *cell;
+    }
+    aperture_direct_bytes += n;
+    return true;
+}
+static bool aperture(uint32_t lin, unsigned n) { return lin < 0xC0000 && lin + n > 0xA0000; }
+static bool g_read(uint32_t lin, void *b, unsigned n)
+{ return aperture(lin, n) ? aperture_access(lin, b, n, false) : !dosvm_read(gv, lin, b, n); }
+static bool g_write(uint32_t lin, const void *b, unsigned n)
+{ return aperture(lin, n) ? aperture_access(lin, (void *)b, n, true) : !dosvm_write(gv, lin, b, n); }
 static void g_descriptor(uint16_t sel, bool write, uint32_t d[2])
 {
     (void)write;
@@ -765,10 +895,61 @@ static void from_state(const struct gcpu_state *s)
 }
 /* One trap into the production monitor, exactly as trap_return/v86_enter
  * would resume the worker: in place, or re-entered after a mode switch. */
+/* fx-27 GUEST_LEAN_DIAG=1: why port exits did not take the lean path. */
+static uint64_t lean_why[24];
+static const char *const lean_names[24] = {"lean_or_tail", "state", "fullscreen", "idle_poll", "network",
+    "sb_entry", "halted", "resched", "pm_inactive", "pm_shadow", "pm_if_image", "pm_if_recovery",
+    "pm_return", "pm_dr7", "pm_depth", "pm_host_cs", "pm_tf", "pm_seed", "v86_dpmi", "v86_shadow_tf",
+    "v86_mouse", "not_port", 0, 0};
+static void lean_diag(const struct v86_frame *hw)
+{
+#ifdef FX27_HEAD_BASELINE
+    (void)hw; return;           /* baseline sources: no lean path */
+#endif
+#ifndef FX27_HEAD_BASELINE
+    /* GUEST_NO_LEAN=1: the same production state that refuses lean exits
+     * for an IPX VM, for A/B replays of the lean path alone. */
+    if (getenv("GUEST_NO_LEAN")) gv->network_attached = true;
+#endif
+    if (!getenv("GUEST_LEAN_DIAG") || hw->tf.vector != 13 || hw->tf.err) return;
+    bool pm = !(hw->tf.eflags & V86_VM);
+    uint8_t op = 0;
+    uint32_t lin = pm ? dpmi_fault_linear(gv, hw) : (hw->tf.cs << 4) + hw->tf.eip;
+    if (dosvm_read(gv, lin, &op, 1)) return;
+    if (op == 0x66 && dosvm_read(gv, lin + 1, &op, 1)) return;
+    if (op < 0xE4 || (op > 0xE7 && op < 0xEC) || op > 0xEF) return;
+    const struct dpmi *d = &gv->dpmi;
+    unsigned why = 0;
+    if (gv->info.state >= DOSVM_STOPPING || !gv->info.dos_ready) why = 1;
+    else if (gv->fullscreen || gv->fullscreen_hold || gv->fullscreen_suspended) why = 2;
+    else if (gv->idle.depth) why = 3;
+#ifndef FX27_HEAD_BASELINE
+    else if (gv->network_attached) why = 4;
+#endif
+    else if (gv->audio.sb.irq_entry_ready) why = 5;
+    else if (gv->monitor.state == V86_HALTED) why = 6;
+    else if (g_need_resched) why = 7;
+    else if (pm) {
+        if (!d->active) why = 8;
+        else if (d->shadow) why = 9;
+        /* why 10 (pm_if_image) retired: an armed flags image is lean (fx-27). */
+        else if (d->if_waiting || d->if_step || d->if_restore_step) why = 11;
+        else if (d->return_steps || d->return_step || d->return_replan) why = 12;
+        else if (d->dr7) why = 13;
+        else if (d->depth) why = 14;
+        else if ((uint16_t)hw->tf.cs == DPMI_HOST_CS) why = 15;
+        else if (hw->tf.eflags & (V86_TF | (1u << 14))) why = 16;
+        else if (dpmi_seed_wanted(gv)) why = 17;
+    } else if (d->active) why = 18;
+    else if (gv->monitor.shadow || (hw->tf.eflags & V86_TF)) why = 19;
+    else if (gv->mouse.pending_mask && gv->mouse.mask && !gv->mouse.active) why = 20;
+    lean_why[why]++;
+}
 static void deliver(unsigned vector, uint32_t err, uint32_t cr2)
 {
     struct v86_frame hw = cpu;
     hw.tf.vector = vector; hw.tf.err = err; fake_cr2 = cr2;
+    lean_diag(&hw);
     unsigned cost = getenv("GUEST_COSTS") ? replay_cause(&hw) : 13;
     uint64_t begin = getenv("GUEST_COSTS") ? replay_clock() : 0;
     g_current = gv->task; gv->continuation = 0x12345678; cpu_flags = 0;
@@ -794,9 +975,25 @@ static void deliver(unsigned vector, uint32_t err, uint32_t cr2)
         else db_other++;
     }
     if (setjmp(idle_return)) { g_current = &caller; sti(); return; }
+    /* The runner has no cpu_path_clock, so dosvm_perf_task_clock reads the
+     * same host clock: its reads are the two per VGA register byte written
+     * (dosvm_vga_port) and per dirty collection (video_collect). */
+#ifndef FX27_HEAD_BASELINE
+    uint32_t lean_before = gv->perf.lean_exits;
+#endif
+    uint64_t calls = host_clock_calls, harvest = gv->perf.harvest_cycles, ports = 0;
+    for (unsigned i = 0; i < DOSVM_VGA_REGS; i++) ports += gv->perf.port_count[i];
     if (!setjmp(guest_return)) { CHECK(dosvm_trap(&hw.tf)); cpu = hw; }
     else cpu = gv->frame;
     t23_charge();
+    uint64_t after = 0;
+    for (unsigned i = 0; i < DOSVM_VGA_REGS; i++) after += gv->perf.port_count[i];
+    uint64_t path = 2 * (after - ports) + (gv->perf.harvest_cycles != harvest ? 2 : 0), total = host_clock_calls - calls;
+    if (path > total) path = total;
+#ifndef FX27_HEAD_BASELINE
+    t23x_lean_exit = gv->perf.lean_exits != lean_before;
+#endif
+    t23_charge_calls(total - path, path);
     if (guest_perf && gv->perf.if_enable[DOSVM_IF_FORCED] != forced)
         printf("isr_forced cli=%04x:%08x ss:sp=%04x:%08x depth=%u seed=%04x:%08x at=%04x:%08x\n",
                last_cli.tf.cs, last_cli.tf.eip, last_cli.tf.user_ss, last_cli.tf.user_esp,
@@ -922,6 +1119,8 @@ static int run(uint64_t budget, bool (*done)(void))
                 debug_dr6 |= bits;
             }
             i21_observe(&ev);
+            if (ev.vector == 14 && aperture(ev.cr2, 1) && aperture_fault_present) ev.err |= 1;
+            aperture_fault_present = false;
             deliver(ev.vector, ev.err, ev.cr2);
             t23_settle();
             if (quake_exec_mode && quake_alias_calls && !quake_alias_returned &&
@@ -1237,6 +1436,23 @@ int main(int argc, char **argv)
     setvbuf(stdout, 0, _IOLBF, 0);
     guest_perf = getenv("GUEST_PERF") != 0;
     t23_model = guest_perf && getenv("GUEST_T23") != 0;
+    t23_fx27 = t23_model && getenv("GUEST_T23_MODEL") && !strcmp(getenv("GUEST_T23_MODEL"), "fx27");
+    if (guest_perf) {
+        /* Host cost of one monitor clock read (a CLOCK_THREAD_CPUTIME_ID
+         * system call); the median of five 20000-call batches. */
+        double batch[5];
+        for (unsigned b = 0; b < 5; b++) {
+            struct timespec t0, t1, t;
+            clock_gettime(CLOCK_MONOTONIC, &t0);
+            for (unsigned i = 0; i < 20000; i++) clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
+            clock_gettime(CLOCK_MONOTONIC, &t1);
+            batch[b] = ((double)(t1.tv_sec - t0.tv_sec) * 1e9 + (double)(t1.tv_nsec - t0.tv_nsec)) / 20000.0;
+        }
+        for (unsigned i = 0; i < 5; i++) for (unsigned j = i + 1; j < 5; j++)
+            if (batch[j] < batch[i]) { double x = batch[i]; batch[i] = batch[j]; batch[j] = x; }
+        host_clock_ns = batch[2];
+        printf("host clock: %.1f ns per monitor clock read (thread CPU clock system call)\n", host_clock_ns);
+    }
     t23_fullscreen = t23_model && getenv("GUEST_T23_FULLSCREEN") != 0;
     if (guest_perf) {
         g_tsc_per_ms = 1000000;
@@ -1490,6 +1706,19 @@ int main(int argc, char **argv)
                (unsigned long long)perf_us(gv->perf.audio_cycles));
         printf("host presenter: max_sample_us=%llu (whole-sample thread CPU; no cpustat/physical timer)\n",
                (unsigned long long)(presenter_sample_max / 1000));
+#ifdef FX27_HEAD_BASELINE
+        if (0) {
+            printf("lean diag:");
+#else
+        if (getenv("GUEST_LEAN_DIAG")) {
+            printf("lean diag: lean_exits=%u", gv->perf.lean_exits);
+#endif
+            for (unsigned i = 0; i < 24; i++) if (lean_why[i]) printf(" %s=%llu", lean_names[i], (unsigned long long)lean_why[i]);
+            printf("\n");
+        }
+        printf("guest aperture: direct_bytes=%llu faults=%llu linear_maps=%u plane_maps=%u harvests=%u\n",
+               (unsigned long long)aperture_direct_bytes, (unsigned long long)aperture_faults,
+               gv->video_linear_maps, gv->video_maps, gv->perf.harvests);
     }
     if (getenv("GUEST_IRQ0_RESTORE") && restore_edges != 1) {
         printf("restore edge: FAIL (requested PM boundary was not reached)\n");

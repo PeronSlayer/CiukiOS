@@ -244,7 +244,7 @@ static void test_planar_completions(void)
     unsigned faults = v->video_faults;
     for (unsigned frame = 0; frame < 3; frame++) {
         unsigned base = frame * 0x4000, pages = v->perf.direct_pages,
-                 harvests = v->perf.harvests, invalidated = cr3_reloads;
+                 harvests = v->perf.harvests, invalidated = invalidations, reloads = cr3_reloads;
         for (unsigned plane = 0; plane < 4; plane++) {
             port_out(v, 0x3C4, 2, ((1u << plane) << 8) | 2);
             for (unsigned at = 0; at < 16000; at++) {
@@ -258,7 +258,9 @@ static void test_planar_completions(void)
               v->video_direct == 4 && v->video_faults == faults);
         dosvm_vga_sync(v, false);
         CHECK(v->perf.direct_pages == pages + 16 && v->perf.harvests == harvests + 1);
-        CHECK(cr3_reloads >= invalidated + 4);
+        /* fx-27: at least three plane swaps of 16 entries (plane 0 may
+         * already be mapped), invalidated per entry, and no CR3 reload. */
+        CHECK(cr3_reloads == reloads && invalidations >= invalidated + 3 * 16);
         for (unsigned page = 0; page < VIDEO_WINDOW_PAGES; page++)
             CHECK(!(*window_pte(v, 0xA0000 + page * PAGE_SIZE) & DOSVM_PTE_DIRTY));
         port_out(v, 0x3D4, 2, (base & 0xFF00u) | 0x0C);
@@ -303,9 +305,14 @@ static void test_video_pte_batch(void)
     *window_pte(v, 0xAF000) |= 0x40;
     unsigned flush = cr3_reloads, single = invalidations;
     CHECK(!as_replace_pages(&v->as, 0xA0000, frames, 16, PTE_U | PTE_W, &dirty, &accessed));
-    CHECK(dirty == 0x8001 && accessed == 1 && cr3_reloads == flush + 1 && invalidations == single);
+    /* fx-27: every changed entry is invalidated by INVLPG; no CR3 reload. */
+    CHECK(dirty == 0x8001 && accessed == 1 && cr3_reloads == flush && invalidations == single + 16);
     CHECK(v->as.pages == pages && v->as.tables == tables_before && g_user_mappings == mappings);
-    CHECK(!as_replace_pages(&v->as, 0xA0000, 0, 16, 0, &dirty, 0) && !dirty && cr3_reloads == flush + 1);
+    CHECK(!as_replace_pages(&v->as, 0xA0000, 0, 16, 0, &dirty, 0) && !dirty && cr3_reloads == flush &&
+          invalidations == single + 16);
+    *window_pte(v, 0xA3000) |= 0x40;
+    CHECK(!as_replace_pages(&v->as, 0xA0000, 0, 16, 0, &dirty, 0) && dirty == 0x0008 &&
+          invalidations == single + 17 && !(*window_pte(v, 0xA3000) & 0x40));
     uint32_t snapshot[16];
     for (unsigned i = 0; i < 16; i++) snapshot[i] = *window_pte(v, 0xA0000 + i * PAGE_SIZE);
     frames[15] |= 1;
@@ -316,10 +323,10 @@ static void test_video_pte_batch(void)
     for (unsigned i = 0; i < 16; i++) CHECK(snapshot[i] == *window_pte(v, 0xA0000 + i * PAGE_SIZE));
     cpu_cr3 = 0; frames[15] &= ~1u;
     CHECK(!as_replace_pages(&v->as, 0xA0000, frames, 16, dosvm_low_flags(0xA0), 0, 0));
-    CHECK(cr3_reloads == flush + 1);
+    CHECK(cr3_reloads == flush && invalidations == single + 17); /* inactive: nothing cached */
     for (unsigned i = 0; i < 16; i++) CHECK(old[i] == *window_pte(v, 0xA0000 + i * PAGE_SIZE));
     destroy(v, true); empty();
-    puts("f3-19 PTE batch: D/A masks, one active CR3 reload, no inactive/clean flush, unchanged ownership and atomic rejection PASS");
+    puts("f3-19 PTE batch: D/A masks, per-entry INVLPG when active (fx-27), no inactive/clean flush, unchanged ownership and atomic rejection PASS");
 }
 static void test_doom_column_replay(void)
 {
@@ -331,7 +338,7 @@ static void test_doom_column_replay(void)
     cpu_cr3 = v->as.pd_phys;
     for (unsigned frame = 0; frame < 3; frame++) {
         unsigned base = frame * 0x4000, harvests = v->perf.harvests, pages = v->perf.direct_pages;
-        unsigned flush = cr3_reloads, writes = v->perf.port_count[DOSVM_VGA_SR_MASK];
+        unsigned flush = cr3_reloads, single = invalidations, writes = v->perf.port_count[DOSVM_VGA_SR_MASK];
         for (unsigned n = 0; n < 1279; n++) {
             unsigned p = n < 320 ? n & 3 : (n - 320) & 3;
             port_out(v, 0x3C5, 1, 1u << p);
@@ -347,7 +354,8 @@ static void test_doom_column_replay(void)
         }
         CHECK(v->perf.port_count[DOSVM_VGA_SR_MASK] == writes + 1279);
         CHECK(v->perf.harvests == harvests && v->perf.direct_pages == pages);
-        CHECK(cr3_reloads - flush >= 1278 && cr3_reloads - flush <= 1279);
+        /* fx-27: each plane swap invalidates its 16 changed entries. */
+        CHECK(cr3_reloads == flush && invalidations - single >= 1278 * 16 && invalidations - single <= 1279 * 16);
         unsigned remaps = v->perf.port_remaps;
         port_out(v, 0x3D4, 2, (base & 0xff00u) | 0x0C);
         CHECK(v->perf.harvests == harvests && v->perf.port_remaps == remaps);
@@ -408,6 +416,9 @@ static void test_modex_conversion(void)
 }
 static void speed_compare_scanout(struct dosvm *v)
 {
+    /* The reference presenter reads the planes: publish chain-4 pages the
+     * presenter took from the open linear window (fx-27 lazy deinterleave). */
+    video_linear_flush(v);
     cvga_geometry g; CHECK(cvga_get_geometry(&v->vga,&g));
     unsigned scale=DOSVM_VIDEO_WIDTH/g.width;
     if (DOSVM_VIDEO_HEIGHT/g.height<scale) scale=DOSVM_VIDEO_HEIGHT/g.height;
@@ -430,10 +441,10 @@ static void test_planar_changed_rows(void)
     *window_memory(v,9*80+3)=37;
     *window_pte(v,0xA0000)|=0x60;
     uint32_t pte=*window_pte(v,0xA0000);
-    unsigned remaps=v->perf.port_remaps,flush=cr3_reloads;
+    unsigned remaps=v->perf.port_remaps,flush=cr3_reloads,single=invalidations;
     port_out(v,0x3C5,1,0xF1); /* masked map-mask is still plane zero */
     port_out(v,0x3CE,2,0xFC04); /* same plane, same writable page set */
-    CHECK(v->perf.port_remaps==remaps && cr3_reloads==flush &&
+    CHECK(v->perf.port_remaps==remaps && cr3_reloads==flush && invalidations==single &&
           *window_pte(v,0xA0000)==pte && v->video_direct==1 && v->video_writable);
     unsigned rows=v->perf.rows,converted=v->perf.converted_bytes;
     CHECK(dosvm_vga_present(v,capture_row,frame_buffer,40,&damage)==1);
@@ -809,6 +820,11 @@ static void test_chain4_changed_rows(void)
     static const unsigned columns[] = {0, 1, 2, 3, 100, 101, 102, 103, 316, 317, 318, 319};
     for (unsigned pan = 0; pan < 8; pan++) for (unsigned split = 0; split < 2; split++) {
         struct dosvm *v = create(); int10(v, 0x13, 0, 0, 0);
+        /* This case drives the plane model directly (cvga_store_plane), as
+         * the virtual BIOS does after dosvm_vga_model: close the chain-4
+         * window first, so scanout reads the planes (fx-27: an open window's
+         * linear backing is the chained image; fx27 linear rows test). */
+        dosvm_vga_model(v);
         v->vga.attr[19] = pan; v->vga.attr[16] |= 0x20;
         v->vga.crtc[12] = 0xff; v->vga.crtc[13] = 0xe0;
         v->vga.crtc[24] = split ? 79 : 255;

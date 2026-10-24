@@ -80,6 +80,147 @@ static bool dosvm_in_irq(const struct dosvm *v)
 #include "dosvm_perf.inc"
 #include "dosvm_io_burst.inc"
 
+/* ---- fx-27 lean port exits ----
+ * A trapped IN/OUT to a hot emulated port (the VGA register file, PIT,
+ * PIC, AdLib/OPL and the DMA controllers) is the windowed VM's most frequent
+ * exit: DOOM's Mode Y selects the plane of every column with an OUT to
+ * 3C5h (about 950 per frame), Quake loads 768 DAC bytes per palette change
+ * and reads the PIT and DMA counters several thousand times a second. The
+ * T23 trials measured 14-22 us for each such exit (vm_perf_cost vga_io,
+ * pit_pic, io) against 11-12 us for a V86 CLI; nearly all of it is the
+ * monitor's per-exit housekeeping rather than the device emulation.
+ * An exit is lean when, before it, the VM has no boundary obligation that
+ * this exit must serve (no STI/MOV SS shadow, single-step, IF-image or
+ * return tracking, CLI-seed demand, return to an interrupted context, idle
+ * poll, mouse/IPX event, full-screen hold) and, after the emulated
+ * instruction (with the same
+ * handler and bursts as the ordinary path), no virtual IRQ is pending, no
+ * reschedule is due and no EXEC/launch frame was reached. Then everything
+ * else the ordinary path does at an exit is periodic (UART/IPX service,
+ * present sampling, heartbeats, reports, audio log) and runs at the next
+ * ordinary exit, at most one host tick later: the host timer interrupt
+ * itself always takes the ordinary path. When an obligation appears
+ * after the instruction, the exit continues through the ordinary tail
+ * without emulating again, so delivery and scheduling are unchanged. */
+static bool lean_port(uint16_t port, unsigned width)
+{
+    if ((port >= 0x3C0 && port <= 0x3CF) || port == 0x3D4 || port == 0x3D5 || port == 0x3DA ||
+        port == 0x3B4 || port == 0x3B5 || port == 0x3BA) return width <= 2;
+    if (width != 1) return false;
+    return (port >= 0x40 && port <= 0x43) || port == 0x20 || port == 0x21 || port == 0xA0 ||
+        port == 0xA1 || (port >= 0x388 && port <= 0x38B) || port <= 0x0F ||
+        (port >= 0x80 && port <= 0x8F) || (port >= 0xC0 && port <= 0xDF);
+}
+static bool lean_fetch(struct dosvm *v, const struct v86_frame *f, const struct dpmi_seg *cs,
+                       unsigned at, uint8_t *byte)
+{
+    uint32_t linear;
+    if (cs) {
+        uint32_t off = f->tf.eip + at;
+        if (!cs->big) off &= 0xFFFF;
+        if (off > cs->limit) return false;
+        linear = cs->base + off;
+    } else {
+        if (f->tf.cs > 0xFFFF || f->tf.eip + at > 0xFFFF) return false;
+        linear = (f->tf.cs << 4) + f->tf.eip + at;
+    }
+    if (linear >= 0xA0000 && linear < 0xC0000) return false;
+    uint32_t pte = 0, phys = as_lookup(&v->as, linear, &pte);
+    if (!phys || !(pte & PTE_U)) return false;     /* not resident: the ordinary path */
+    *byte = *(const uint8_t *)P2V(phys);
+    return true;
+}
+static bool lean_before(const struct dosvm *v, const struct v86_frame *f)
+{
+    if (v->info.state >= DOSVM_STOPPING || !v->info.dos_ready || v->fullscreen ||
+        v->fullscreen_hold || v->fullscreen_suspended || v->idle.depth || v->network_attached ||
+        v->audio.sb.irq_entry_ready || v->monitor.state == V86_HALTED || g_need_resched) return false;
+    if (v->dpmi.active && !dpmi_lean_eligible(v, f)) return false;
+    if (v->frame_pm) return true;
+    if (v->monitor.shadow || (f->tf.eflags & V86_TF)) return false;
+    const struct dosvm_mouse *m = &v->mouse;
+    return !(m->pending_mask && m->mask && !m->active);
+}
+/* IF clear: nothing may become pending between this check and IRET. */
+static bool lean_after(struct dosvm *v, const struct v86_frame *f)
+{
+    /* A DMA channel just programmed (or completed) is pinned at the
+     * ordinary settle point (f3-46 dosvm_pool_settle), never later. */
+    if (v->info.state >= DOSVM_STOPPING || g_need_resched || v->monitor.state == V86_HALTED ||
+        v->audio.sb.irq_entry_ready || (v->memory.pool.dma_dirty && v->memory.pool.pages)) return false;
+    dosvm_pic_cascade(&v->monitor);
+    if (dosvm_pic_pending(&v->monitor) >= 0) return false;
+    if (v->dpmi.active && !dpmi_lean_quiet(v, f)) return false;
+    if (v->frame_pm) return true;
+    if (v->launch_exec && f->tf.cs == v->launch_cs && f->tf.eip == v->launch_ip &&
+        f->tf.user_ss == v->launch_ss && (uint16_t)f->tf.user_esp == v->launch_sp) return false;
+    if (v->exec_pending) {
+        unsigned top = v->exec_pending - 1u;
+        if (f->tf.cs == v->exec_frame[top].cs && f->tf.eip == v->exec_frame[top].ip &&
+            f->tf.user_ss == v->exec_frame[top].ss && (uint16_t)f->tf.user_esp == v->exec_frame[top].sp) return false;
+    }
+    return true;
+}
+/* Returns 0 when the exit is not lean (nothing was done), 1 when the
+ * instruction retired and the exit can return now (IF clear on return),
+ * 2 when it retired and the ordinary tail must run (*error set). */
+static int lean_io(struct dosvm *v, struct v86_frame *f, int *error)
+{
+    *error = 0;
+    if (!lean_before(v, f)) return 0;
+    struct dpmi_seg seg, *cs = 0;
+    if (v->frame_pm) {
+        if (!dpmi_seg(v, (uint16_t)f->tf.cs, &seg) || !seg.code || !seg.present) return 0;
+        cs = &seg;
+    }
+    uint8_t op, imm;
+    unsigned len = 1, width = cs && cs->big ? 4 : 2;
+    if (!lean_fetch(v, f, cs, 0, &op)) return 0;
+    if (op == 0x66) {
+        width = width == 4 ? 2 : 4;
+        if (!lean_fetch(v, f, cs, len++, &op)) return 0;
+    }
+    if (op < 0xE4 || (op > 0xE7 && op < 0xEC) || op > 0xEF) return 0;
+    uint16_t port = (uint16_t)f->tf.edx;
+    if (op < 0xE8) {
+        if (!lean_fetch(v, f, cs, len++, &imm)) return 0;
+        port = imm;
+    }
+    if (!(op & 1)) width = 1;
+    bool write = op & 2;
+    if (!lean_port(port, width)) return 0;
+    uint32_t value = f->tf.eax;
+    int e = 0;
+    /* The same dispatch as dosvm_io_fast: the cached PIT/OPL handlers,
+     * then the port registry (dosvm_io). */
+    if (!dosvm_io_hot(v, port, width, write, &value, &e)) e = v86_io(&v->monitor, port, width, write, &value);
+    if (e) {
+        *error = v->frame_pm ? (e < 0 ? e : -EFAULT) : v86_abort(&v->monitor, f, e);
+        return 2;
+    }
+    if (!write) {
+        uint32_t mask = width == 4 ? UINT32_MAX : (1u << (width * 8)) - 1;
+        f->tf.eax = (f->tf.eax & ~mask) | (value & mask);
+    }
+    f->tf.eip += len;
+    if (!cs || !cs->big) f->tf.eip &= 0xFFFF;
+    if (!v->frame_pm) v->monitor.stats.insn[write ? V86_OUT : V86_IN]++;
+    uint8_t next;
+    if ((v->perf.cause == DOSVM_COST_VGA_IO || (v->perf.cause == DOSVM_COST_PIT_PIC &&
+        v->perf.io_port >= 0x40 && v->perf.io_port <= 0x43)) &&
+        (v->video_dac_burst || !lean_fetch(v, f, cs, 0, &next) || io_burst_candidate(next))) {
+        e = dosvm_port_bursts(v, f);
+        if (e) { *error = e; return 2; }
+    }
+    v->video_dac_burst = false;
+    if (v->frame_pm) dpmi_lean_retire(v, f);
+    else if (v->dpmi.active) v->dpmi.if_steps = 0; /* dpmi_deliver's if_recovery_end */
+    cli();
+    if (lean_after(v, f)) { v->perf.lean_exits++; return 1; }
+    sti();
+    return 2;
+}
+
 void dosvm_launch_video(struct dosvm *v)
 {
     if (v->launch_armed && v->launch_exec && !v->launch_failed && !v->launch_ready) {
@@ -902,8 +1043,23 @@ bool dosvm_trap(struct trap_frame *tf)
     struct v86_frame *f = &v->frame;
     memcpy(f, tf, size);
     v->frame_pm = pm;
+    v->video_dac_burst = false;
     crit_end();
     sti();
+    int lean_error = 0;
+    int lean = tf->vector == 13 && !tf->err ? lean_io(v, f, &lean_error) : 0;
+    if (lean == 1) {
+        /* fx-27: the ordinary return sequence below, IF already clear. */
+        if (!v->frame_pm) v86_prepare_return(&v->monitor, f);
+        perf_exit_end(v);
+        /* Guest time starts at the exit's closing stamp: one serialized
+         * TSC read (two CPUIDs) fewer than perf_phase(v, 1). */
+        v->perf.phase = 1;
+        crit_begin();
+        if (crit_label) crit_label("dosvm_return");
+        memcpy(tf, f, size);
+        return true;
+    }
     /* f3-46: a not-present fault on a pool page or EMS-window alias is
      * resolved here, at the published continuation (the faulting
      * instruction restarts; nothing was emulated), before the transaction
@@ -920,7 +1076,8 @@ bool dosvm_trap(struct trap_frame *tf)
     if (tf->vector == 1)
         dosvm_trace(v, pm ? DOSVM_TRACE_DB_PM : DOSVM_TRACE_DB_RM, f, dr6, dpmi_debug_status(v, dr6), 0);
     int e = pool_fault == -ENOENT ? 0 : pool_fault ? -EFAULT : 0;
-    if (pool_fault == -ENOENT && v->info.state != DOSVM_STOPPING) {
+    if (lean) e = lean_error;           /* retired above: only the tail runs */
+    if (!lean && pool_fault == -ENOENT && v->info.state != DOSVM_STOPPING) {
         if (pm) {
             bool eligible = idle_safe(v);
             unsigned depth = v->dpmi.depth;
@@ -980,7 +1137,7 @@ bool dosvm_trap(struct trap_frame *tf)
                 dosvm_file_return(v,f);
             if (!e && !v->frame_pm && (v->perf.cause == DOSVM_COST_VGA_IO ||
                 (v->perf.cause == DOSVM_COST_PIT_PIC && v->perf.io_port >= 0x40 &&
-                 v->perf.io_port <= 0x43))) e = dosvm_io_burst(v, f);
+                 v->perf.io_port <= 0x43))) e = dosvm_port_bursts(v, f);
         }
         else if (tf->vector == 1 && (v->monitor.shadow || v->monitor.track_boundaries)) {
             dr6 = dpmi_debug_status(v, dr6);

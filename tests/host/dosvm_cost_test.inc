@@ -57,11 +57,15 @@ static unsigned cost_startup(bool pm, bool batch, uint8_t palette[256][3])
     }
     unsigned exits = v->perf.exits[0] - gp;
     CHECK(v->perf.exits[1] == pf && v->video_direct == VIDEO_LINEAR && v->video_linear_maps == maps);
-    CHECK(exits == (batch ? 13u : 774u) && v->perf.batched == (batch ? 761u : 0u));
+    /* fx-27: after the first 64-instruction I/O burst the DAC burst retires
+     * the rest of the palette load in the same exit; the sequencer OUTWs
+     * (not DAC ports) end it and take one more exit. 774 OUTs in all. */
+    CHECK(exits == (batch ? 2u : 774u) &&
+          v->perf.batched + v->perf.dac_batched == (batch ? 772u : 0u) && (!batch || v->perf.dac_batched > 600));
     CHECK(cur.tf.eax == 0x0E04 && cur.tf.edx == 0x3C4 && cur.tf.eip == (pm ? 0x30000u : 0u) + size - 1);
     memcpy(palette, v->vga.dac, sizeof(v->vga.dac));
-    printf("f3-14 DOOM-style %s DAC/sequencer startup %s: vga_io GP=%u vga_pf=0 batched=%u maps_delta=0\n",
-           pm ? "PM32" : "V86", batch ? "batched" : "scalar", exits, v->perf.batched);
+    printf("f3-14 DOOM-style %s DAC/sequencer startup %s: vga_io GP=%u vga_pf=0 batched=%u dac=%u maps_delta=0\n",
+           pm ? "PM32" : "V86", batch ? "batched" : "scalar", exits, v->perf.batched, v->perf.dac_batched);
     destroy(v, true);
     empty();
     return exits;
@@ -97,7 +101,7 @@ static void test_cost_bursts(void)
     uint8_t scalar[256][3], batched[256][3];
     for (unsigned pm = 0; pm < 2; pm++) {
         CHECK(cost_startup(pm, false, scalar) == 774);
-        CHECK(cost_startup(pm, true, batched) == 13);
+        CHECK(cost_startup(pm, true, batched) == 2); /* fx-27 DAC burst */
         CHECK(!memcmp(scalar, batched, sizeof(scalar)));
         for (unsigned i = 0; i < 768; i++) CHECK(scalar[i / 3][i % 3] == (i & 63));
     }
