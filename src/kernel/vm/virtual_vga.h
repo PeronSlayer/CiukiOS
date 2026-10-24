@@ -144,6 +144,10 @@ uint8_t CVGA_CALL cvga_peek_vram(const cvga_state *v, uint32_t address);
  * memory accesses return FF/ignore writes while SR04 bit 1 is clear.
  */
 int CVGA_CALL cvga_get_geometry(const cvga_state *v, cvga_geometry *g);
+/* Visible text cells, using the same CRTC start/pitch/split as scanout.
+ * Returns the total column count, or zero for graphics/invalid rows. */
+unsigned cvga_text_chunk(const cvga_state *, unsigned row, unsigned column,
+                         uint8_t *characters, unsigned capacity, unsigned *rows);
 /* No partial output: insufficient capacity or unsupported mode returns 0.
  * Outputs DAC indexes after attribute lookup and pixel mask, not RGB. A
  * blanked screen emits zero indexes; geometry.blank tells the presenter to

@@ -581,7 +581,7 @@ class DesktopTests(unittest.TestCase):
             self.assertIn("PASS dosbox autorun", result.stdout)
 
     def test_dosbox_loading(self):
-        self.dosbox_loading_replay(range(23), True)  # fx-4b: 20 verify wait, 21 mismatch; G3: 22 end of session
+        self.dosbox_loading_replay(range(27), True)  # G17: 23..26 short EXEC close/retain and per-program warning
 
     def test_dosbox_save_quota(self):
         self.dosbox_loading_replay((18, 19), False)
@@ -605,7 +605,7 @@ class DesktopTests(unittest.TestCase):
                 result = subprocess.run([str(binary), str(scenario)], capture_output=True, text=True,
                                         timeout=30, env=dict(os.environ, ASAN_OPTIONS="detect_leaks=0"))
                 self.assertEqual(result.returncode, 0, f"scenario {scenario}: {result.stderr}")
-                self.assertIn("PASS dosbox loading replay", result.stdout)
+                self.assertIn("PASS G17 DOS program lifecycle" if scenario>=23 else "PASS dosbox loading replay", result.stdout)
                 if scenario==0: print(result.stdout.strip())
             for events in ((1, 2) if event_cases else ()):
                 for scenario in (0, 1, 3, 5, 8):

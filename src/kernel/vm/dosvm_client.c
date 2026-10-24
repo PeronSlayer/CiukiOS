@@ -174,6 +174,7 @@ static bool event_valid(const struct ciuki_input_event *e)
     case CIUKI_INPUT_KEY: return e->code > 0 && e->code <= 0x200 && e->value >= 0 && e->value <= 2 && !e->value2 && !e->lost_count;
     case CIUKI_INPUT_TEXT: return e->code > 0 && e->code <= 0x10FFFF && !(e->code >= 0xD800 && e->code <= 0xDFFF) && !e->value && !e->value2 && !e->lost_count;
     case CIUKI_INPUT_MOTION: return !e->code && !e->lost_count;
+    case CIUKI_INPUT_WHEEL: return !e->code && e->value>=-127 && e->value<=127 && !e->value2 && !e->lost_count;
     case CIUKI_INPUT_BUTTON: return e->code >= 1 && e->code <= 3 && e->value >= 0 && e->value <= 1 && !e->value2 && !e->lost_count;
     case CIUKI_INPUT_RESYNC: return !e->code && e->value >= 0 && e->value <= 7 && !e->value2;
     default: return false;
@@ -192,6 +193,7 @@ static uint32_t status_flags(const struct dosvm *v)
            (v->fullscreen_suspended ? CIUKI_DOSVM_SUSPENDED : 0) |
            (v->fullscreen_error ? CIUKI_DOSVM_FULLSCREEN_REFUSED : 0) |
            (v->persistent && v->save.full ? CIUKI_DOSVM_SAVE_FULL : 0) |
+           (v->launch_returned && !v->exec_pending && !v->exec_overflow ? CIUKI_DOSVM_PROGRAM_RETURNED : 0) |
            (dosvm_shell_idle(v) && v->idle.sleeping && !v->key_count && !v->kbd.count ? CIUKI_DOSVM_SHELL_READY : 0);
 }
 static uint32_t wait_phase(void)
@@ -325,7 +327,8 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         ua_unpin(p->memory,&pin);return error;
     }
     if (!p->dosvm_capability) return -EPERM;
-    if (op < CIUKI_DOSVM_CREATE || op > CIUKI_DOSVM_WAIT_PRESENT) return -EINVAL;
+    if (op < CIUKI_DOSVM_CREATE || (op > CIUKI_DOSVM_WAIT_PRESENT &&
+        op != CIUKI_DOSVM_TEXT_CHUNK && op != CIUKI_DOSVM_POLICY)) return -EINVAL;
     if (tf->edx != sizeof(struct ciuki_dosvm_command)) return -EINVAL;
     struct ciuki_dosvm_command c, allowed;
     bool direct = op == CIUKI_DOSVM_WAIT_PRESENT || op == CIUKI_DOSVM_PRESENT || op == CIUKI_DOSVM_PRESENT_BANDS;
@@ -370,6 +373,16 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
     if (op == CIUKI_DOSVM_INPUT) {
         if (!event_valid(&c.event)) return -EINVAL;
         allowed.event = c.event;
+    }
+    if (op == CIUKI_DOSVM_TEXT_CHUNK) {
+        if (c.text_chunk.row>=100 || c.text_chunk.column>=160) return -EINVAL;
+        allowed.text_chunk.row=c.text_chunk.row;
+        allowed.text_chunk.column=c.text_chunk.column;
+    }
+    if (op == CIUKI_DOSVM_POLICY) {
+        if (c.policy.marking>1 || c.policy.idle_sensitivity>100) return -EINVAL;
+        allowed.policy.marking=c.policy.marking;
+        allowed.policy.idle_sensitivity=c.policy.idle_sensitivity;
     }
     if (op == CIUKI_DOSVM_WAIT_PRESENT) {
         if (!c.wait.timeout_ms || c.wait.timeout_ms > CIUKI_DOSVM_WAIT_MAX_MS) return -EINVAL;
@@ -499,6 +512,22 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
             }
         } else if (op == CIUKI_DOSVM_BACKGROUND) {
             v->fullscreen_pause=c.focused!=0;
+            if (!v->fullscreen) {
+                v->fullscreen_suspended=v->fullscreen_pause && !b->focused;
+                dosvm_idle_wake(v);
+            }
+        } else if (op == CIUKI_DOSVM_POLICY) {
+            v->window_marking=c.policy.marking!=0;
+            v->window_idle=(uint8_t)(c.policy.idle_sensitivity+1);
+            if (v->window_marking) dosvm_kbd_release(v);
+            dosvm_idle_wake(v);
+        } else if (op == CIUKI_DOSVM_TEXT_CHUNK) {
+            dosvm_vga_sync(v,true);
+            unsigned rows=0;
+            c.text_chunk.columns=v->vbe_mode ? 0 : cvga_text_chunk(&v->vga,c.text_chunk.row,
+                c.text_chunk.column,c.text_chunk.characters,CIUKI_DOSVM_TEXT_BYTES,&rows);
+            c.text_chunk.rows=rows;
+            if (!c.text_chunk.columns) e=-EOPNOTSUPP;
         }
         else if (op == CIUKI_DOSVM_LAUNCH) {
             if (v->launch_armed) e = -EBUSY;

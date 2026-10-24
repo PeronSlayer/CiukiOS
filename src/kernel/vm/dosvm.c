@@ -606,7 +606,7 @@ const struct task *dosvm_task_focus(void)
 {
     struct dosvm *v = dosvm_lookup(input_focus);
     return v && v->owner_pid && v->window_input && v->info.state < DOSVM_STOPPING &&
-           v->info.state != DOSVM_BLOCKED && !idle_recent(v) ? v->task : 0;
+           v->info.state != DOSVM_BLOCKED && !v->window_marking && !v->fullscreen_suspended && !idle_recent(v) ? v->task : 0;
 }
 const struct task *dosvm_task_irq(void)
 {
@@ -781,7 +781,8 @@ static void idle_poll_return(struct dosvm *v, const struct v86_frame *f)
         if (!(f->tf.eflags & V86_ZF)) { v->idle.polls = 0; return; }
         if (!idle_safe(v)) return;
         if (v->idle.poll_tick != g_ticks) { v->idle.poll_tick = g_ticks; v->idle.polls = 0; }
-        if (++v->idle.polls >= DOSVM_IDLE_POLLS) {
+        unsigned threshold=v->window_idle ? 1u+(101u-v->window_idle)*15u/100u : DOSVM_IDLE_POLLS;
+        if (++v->idle.polls >= threshold) {
             v->idle.polls = 0;
             idle_wait(v, DOSVM_IDLE_16);
         }
@@ -1832,6 +1833,7 @@ bool dosvm_input_focus(struct dosvm_key key, bool focused)
         task_input_withdraw(previous->task);
         dosvm_kbd_release(previous); dosvm_mouse_event(previous, 0, 0, 0);
         previous->pointer_known = false;
+        if (previous->fullscreen_pause && !previous->fullscreen) previous->fullscreen_suspended=true;
     }
     v->window_input = true;
     bool resumed = focused && v->fullscreen_suspended;
@@ -1840,6 +1842,7 @@ bool dosvm_input_focus(struct dosvm_key key, bool focused)
         task_input_withdraw(v->task);
         dosvm_kbd_release(v); dosvm_mouse_event(v, 0, 0, 0);
         v->pointer_known = false; input_focus = (struct dosvm_key){0};
+        if (v->fullscreen_pause && !v->fullscreen) v->fullscreen_suspended=true;
     }
     if (resumed) kwait_wake_all(&v->wake); /* fx-22: a parked VM blocks on it */
     irq_restore(flags);
@@ -1855,6 +1858,9 @@ bool dosvm_input_event(struct dosvm_key key, const struct ciuki_input_event *e)
     switch (e->type) {
     case CIUKI_INPUT_KEY: ok = dosvm_kbd_event(v, e->code, e->value); break;
     case CIUKI_INPUT_TEXT: break; /* KEY already supplies the guest keyboard */
+    case CIUKI_INPUT_WHEEL:
+        if (e->value<-127 || e->value>127) { ok=false; break; }
+        dosvm_mouse_wheel(v,-e->value); break;
     case CIUKI_INPUT_MOTION:
         if (v->pointer_known) {
             int64_t dx = (int64_t)e->value - v->input_x, dy = (int64_t)e->value2 - v->input_y;
