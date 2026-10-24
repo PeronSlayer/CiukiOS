@@ -49,6 +49,10 @@
 #include <signal.h>
 #include <time.h>
 #include <unistd.h>
+static int screen_control(struct ciuki_screen_control *q)
+{ return (int32_t)CU_CALL(DISPLAY,CIUKI_DISPLAY_SCREEN,CU_PTR(q),0,0,0,0); }
+static int monitor_power(int state)
+{ return (int32_t)CU_CALL(DISPLAY,CIUKI_DISPLAY_DPMS,(uint32_t)state,0,0,0,0); }
 static uint64_t monotonic(void)
 {
     struct timespec t;
@@ -175,6 +179,10 @@ static uint64_t desktop_pause_ns(const struct desktop *d,uint64_t now,int input_
         loop_deadline(now,d->animation.started+(d->animation.step+1)*25000000ull,&wait);
     reason=PAUSE_TIMER;
     loop_deadline(now,timer,&wait);
+    if (d->shell && !d->sh.gate) {
+        loop_deadline(now,d->saver_poll ? d->saver_poll : now+1000000000ull,&wait);
+        if (d->saver_active && !d->monitor_off && d->saver_frame!=UINT64_MAX) loop_deadline(now,d->saver_frame,&wait);
+    }
     reason=PAUSE_PING;
     for (int i=0;i<DESK_CLIENTS;i++) {
         const struct desk_client *c=&d->clients[i];
@@ -1941,6 +1949,7 @@ static void shell_service(struct desktop *d)
             int rejected=reload_error ? 0 : cfg_parse(&sh->cfg,reload_text,reload_size);
             if (rejected) snprintf(d->notice,sizeof(d->notice),"desktop.cfg: %d line(s) ignored",rejected);
             sh->cfg.display_mode = confirmed;
+            desk_saver_config(d);
             /* Explicit desktop Refresh also updates the launch inventory;
              * Control Panel display settings must not rescan its ELF files. */
             if (settings_reload_wallpaper) { desktop_wait("program-scan"); scan_programs(d); }
@@ -2431,7 +2440,8 @@ int main(int argc, char **argv)
     const struct desk_ops ops = {ciuki_channel_send,ciuki_surface_info,ciuki_surface_map,munmap,close,ciuki_present};
     desk_init(d,&ops,info.width,info.height); du_clip_bind(desk_clip_local,d); d->display=display; d->input=input;
     d->now_ns=monotonic(); /* startup notifications use the same clock as service turns */
-    d->time_ns=monotonic; d->lfb_bytes_per_pixel=(info.bpp+7)/8;
+    d->time_ns=monotonic;
+    d->screen_control=screen_control; d->monitor_power=monitor_power; d->lfb_bytes_per_pixel=(info.bpp+7)/8;
     d->accel=ciuki_display_accel;
     d->accel_info=ciuki_display_accel_info;
     d->engine_info=ciuki_display_engine_info;
@@ -2471,6 +2481,7 @@ int main(int argc, char **argv)
         if ((survivor_pid=spawn_demo(d,"none",1))<0) return gate_setup_error(gate,GATE_SETUP_SURVIVOR,errno);
         gate_report(d,CU_PTR(control),0,survivor_pid,0,0);
     }
+    desk_saver_config(d);
     int victim_pid = -1, completed = 0;
     uint64_t next_victim = 0;
     int input_reported = 0, display_reported = 0;

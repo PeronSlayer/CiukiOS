@@ -408,7 +408,8 @@ static void wm_frame(const char *what)
     }
     snprintf(step_name,sizeof(step_name),"%s",what);
     if (wm_mode>=WM_BATCH32) batch_frame(); else redraw();
-    if (!d.animation.active) visible_oracle();
+    /* A saver intentionally covers every application. Full-scene oracle still runs. */
+    if (!d.animation.active && !d.saver_active) visible_oracle();
     frames_checked++; wm_frames++;
     if (wm_mode==WM_CACHE && !d.damage.count && !d.move_damage.count && !d.present_damage.count)
         for (unsigned k=0;k<64;k++) { wm_clock+=40000000ull; if (!desk_accel_cache_step(&d,wm_clock)) break; }
@@ -1123,6 +1124,86 @@ static void row_startup(unsigned m)
     app_close(a); step("startup batch windows closed");
     wm_end();
 }
+static int saver_monitor_error;
+static unsigned saver_monitor_calls;
+static int saver_monitor(int state)
+{
+    assert(state==-1 || state==1 || state==2);
+    saver_monitor_calls++; return saver_monitor_error;
+}
+static struct ciuki_screen_control saver_shared;
+static int saver_control(struct ciuki_screen_control *q)
+{
+    assert(q->version==CIUKI_SCREEN_VERSION && q->size==sizeof(*q));
+    if (q->action==CIUKI_SCREEN_CONFIG) {
+        saver_shared=*q; saver_shared.sequence++;
+    } else if (q->action==CIUKI_SCREEN_STATUS) {
+        saver_shared.running=(unsigned)q->value;
+        if (q->sequence==saver_shared.sequence) saver_shared.flags=saver_shared.command=0;
+    } else assert(!q->action);
+    *q=saver_shared; return 0;
+}
+static void row_saver(unsigned m)
+{
+    row_name="G10 saver"; wm_begin(m,1);
+    (void)app_open("ciuknote",240,160,100,100); step("application before saver");
+    uint32_t *portrait=malloc(256*256*4); assert(portrait);
+    for (unsigned i=0;i<256*256;i++) portrait[i]=i*31u&0xffffffu;
+    d.portrait=portrait;
+    assert(desk_saver_start(&d,3)==-EINVAL);
+    for (unsigned k=0;k<3;k++) {
+        assert(!desk_saver_start(&d,k)); step("preview start");
+        for (unsigned frame=0;frame<3;frame++) { turn(50000000ull); wm_frame("animated saver"); }
+        unsigned sent=fake_sent;
+        struct ciuki_input_event e={.type=CIUKI_INPUT_BUTTON,.code=CIUKI_BUTTON_LEFT,.value=1};
+        desk_input(&d,&e); assert(!d.saver_active); step("input dismisses and restores desktop");
+        for (unsigned n=sent;n<fake_sent;n++) assert(fake_messages[n].data[1]!=DESK_BUTTON);
+    }
+    d.sh.cfg.saver_enabled=1; d.sh.cfg.saver_seconds=1;
+    d.now_ns=wm_clock; d.saver_idle=d.now_ns; turn(999000000ull); assert(!d.saver_active);
+    turn(1000000ull); assert(d.saver_active); wm_frame("idle activation");
+    tap(DU_KEY_ESC); step("keyboard dismisses");
+    d.v3_lease_state=1; d.saver_idle=d.now_ns-2000000000ull;
+    desk_saver_tick(&d); assert(!d.saver_active); assert(desk_saver_start(&d,0)==-EBUSY);
+    d.v3_lease_state=0; d.sh.cfg.saver_enabled=0;
+    d.monitor_power=saver_monitor; saver_monitor_error=0; saver_monitor_calls=0;
+    d.sh.cfg.monitor_seconds=1; d.saver_idle=d.now_ns-2000000000ull;
+    desk_saver_tick(&d); assert(d.monitor_off && saver_monitor_calls==1);
+    uint64_t before_present=d.presents;
+    desk_damage_add(&d.damage,(struct desk_box){0,0,640,480},640,480);
+    assert(!desk_redraw(&d) && d.presents==before_present && d.damage.count);
+
+    saver_monitor_error=-EIO;
+    struct ciuki_input_event motion={.type=CIUKI_INPUT_MOTION,.value=1};
+    desk_input(&d,&motion); assert(d.monitor_off);
+    saver_monitor_error=0; desk_input(&d,&motion); assert(!d.monitor_off);
+    step("monitor wake repaints scene");
+    saver_monitor_error=-EOPNOTSUPP; d.saver_idle=d.now_ns-2000000000ull;
+    desk_saver_tick(&d); assert(!d.monitor_off && d.monitor_failed);
+    unsigned calls=saver_monitor_calls; desk_saver_tick(&d); assert(calls==saver_monitor_calls);
+    d.sh.cfg.monitor_seconds=0;
+    d.screen_control=saver_control; memset(&saver_shared,0,sizeof(saver_shared));
+    desk_saver_config(&d); assert(saver_shared.timeout==1 && !saver_shared.enabled);
+    saver_shared.enabled=1; saver_shared.timeout=120;
+    saver_shared.command=0xf140; saver_shared.argument=2;
+    saver_shared.flags=CIUKI_SCREEN_PERSIST; saver_shared.sequence++;
+    d.saver_poll=0; desk_saver_tick(&d);
+    assert(d.saver_active && d.saver_kind==2 && d.sh.want_save);
+    assert(!saver_shared.flags && !saver_shared.command);
+    step("shared SC_SCREENSAVE request");
+    desk_input(&d,&motion); desk_saver_tick(&d); assert(!saver_shared.running);
+    saver_shared.running=1; d.saver_poll=0; desk_saver_tick(&d);
+    assert(d.saver_external_running && desk_saver_start(&d,0)==-EBUSY);
+    saver_shared.running=0; d.saver_poll=0; desk_saver_tick(&d);
+    assert(!d.saver_external_running);
+    saver_shared.inhibited=1; d.saver_poll=0; desk_saver_tick(&d);
+    assert(d.saver_display_inhibited && desk_saver_start(&d,0)==-EBUSY);
+    saver_shared.inhibited=0; d.saver_poll=0; desk_saver_tick(&d);
+    assert(!d.saver_display_inhibited);
+    d.sh.cfg.saver_enabled=0; d.screen_control=NULL;
+    d.portrait=NULL; free(portrait);
+    wm_end();
+}
 /* ---- G4: the taskbar menu, window arrangement and the Windows-key shortcuts ---- */
 static void win_chord(int code) { key(0x15b,1); tap(code); key(0x15b,0); }
 static void bar_right_click(int top) { click(top ? 300 : (int)d.width-60,top ? 10 : (int)d.height-16,CIUKI_BUTTON_RIGHT); }
@@ -1245,7 +1326,7 @@ static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overl
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
     row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,
     row_taskbar_menu, row_arrange, row_minimize_all, row_win_keys, row_caption_icon, row_startup,
-    row_move_damaged, row_fault};
+    row_move_damaged, row_fault, row_saver};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).

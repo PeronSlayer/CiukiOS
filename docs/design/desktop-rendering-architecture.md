@@ -432,13 +432,17 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 36 | Startup programs (G21): background logon batch shows, activates and closes ordinary windows | existing CREATE_WINDOW, activation and close damage; no batch-wide repaint | startup worker → shared launcher → `client.c` | none new | startup programs |
 | 37 | Window move while other windows repaint (fx-26): preserve valid client bits while repainting damage outside the carried rectangle | the exposed area, damage from the other window, and the moving window's damaged pixels | `desk_move`, `copy_region`, `window_damage` | unrelated damage disabled new move copies; damage on the shadow ring cancelled continuing copies | move with other damage (`WM_ROW=29`) |
 | 38 | Native program fault dialog (G13, ER-1; Windows 98 "This program has performed an illegal operation" box): a message window with Close and a Details panel that opens and closes in place | the dialog's outer box, its task button, the Details text swap | `desk_w32_fault_dialog` (`client.c`), `fault_text.h`, `shell.c` message window | none (the Win32 crash dialog already used the same message window; this adds the native record) | native fault dialog |
+| 39 | Screen saver idle/SC_SCREENSAVE/preview start and animation | full screen with pointer hidden; application backing stores remain untouched | `desk_saver_start`, `desk_saver_tick`, `saver_scene` | G10: dedicated overlay bypasses window copies and caches | saver |
+| 40 | Saver input dismissal and monitor wake | full desktop, windows, overlays and pointer | `desk_saver_input`, `saver_wake`, full invalidation | G10: dismissing input consumed, failed wake remains retryable | saver |
+| 41 | Monitor off after idle or SC_MONITORPOWER | no presentation while off; wake invalidates the complete scene (row 37) | `desk_saver_tick`, `monitor_power`, `desk_redraw` | G10: suspend drawing until firmware wake succeeds | saver |
 
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with
 fx-19 (drag and drop, rubber-band and keyboard selection) and were added by
 fx-15b after the merge, with the reconcile extended to the band and the
 drag image. Rows 31-35 came with G4 (`docs/design/taskbar-arrangement-windows-keys.md`),
-and row 36 came with G13 (`docs/directives/g13-g16-os-gaps-batch-3.md`);
+row 36 with G21, row 37 with fx-26, row 38 with G13 (`docs/directives/g13-g16-os-gaps-batch-3.md`)
+and rows 39-41 with G10 (`docs/directives/g7-g12-os-gaps-batch-2.md`);
 the randomized sequences gained operations 42-47 (taskbar menu, Win+D/M and
 Alt+M, taskbar focus keys, Alt+F6/Menu key/Shift+F10/F3, caption icon,
 Win+E/R/F/Break/F1). Row 36 adds fx-26's drag with concurrent damage.

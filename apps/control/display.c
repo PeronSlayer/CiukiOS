@@ -23,7 +23,7 @@ void cp_settings_message(struct ciuki_message *m, uint32_t serial, unsigned requ
     if (request == DESK_SETTINGS_MASTER) {
         desk_put32(m->data + 12, (uint32_t)value); desk_put32(m->data + 16, (uint32_t)value);
         desk_put32(m->data + 20, (uint32_t)(flag != 0));
-    } else if (request == DESK_SETTINGS_DISPLAY || request == DESK_SETTINGS_DISPLAY_PREVIEW || request == DESK_SETTINGS_SOUND_TEST)
+    } else if (request == DESK_SETTINGS_DISPLAY || request == DESK_SETTINGS_DISPLAY_PREVIEW || request == DESK_SETTINGS_SOUND_TEST || request == DESK_SETTINGS_SAVER_PREVIEW)
         desk_put32(m->data + 12, (uint32_t)value);
 }
 
