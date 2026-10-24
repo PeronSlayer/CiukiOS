@@ -54,6 +54,30 @@ static const struct desk_theme themes[] = {
         .font_mono = DESK_FONT_MONO, .font_mono_bold = DESK_FONT_MONO_BOLD, .font_large = DESK_FONT_LARGE,
     },
 };
+/* G25 high-contrast schemes (Windows 98 Resource Kit appendix H: high-contrast mode is a global flag that asks
+ * Windows and programs to use the scheme "with a high degree of contrast"). They are not listed among the
+ * selectable themes (desk_theme_count stays 2); high-contrast mode names one of them and the desktop, the
+ * toolkit and the Control Panel follow it through the theme key (settings.c cfg_effective_theme).
+ * Colours are flat: text and every edge in one ink on one background, a distinct selection and accent. */
+#define HC_THEME(NAME, DESC, BG, FG, DIS, SEL, SELINK, ACC) { \
+    .name = NAME, .description = DESC, .desktop = BG, .desktop_label = FG, \
+    .topbar = BG, .topbar_edge = FG, .topbar_text = FG, .topbar_accent = ACC, \
+    .taskbar = BG, .taskbar_text = FG, .start = BG, .start_open = SEL, .start_text = FG, .task_active = SEL, .task_active_text = SELINK, \
+    .face = BG, .light = FG, .hilite = FG, .shadow = FG, .dark = FG, .outline = FG, .face_top = BG, .face_bottom = BG, .hover = SEL, \
+    .window = BG, .ink = FG, .gray = DIS, .select = SEL, .select_ink = SELINK, .accent = ACC, .focus = ACC, \
+    .frame = FG, .frame_inactive = DIS, .title = {SEL, SEL}, .title_inactive = {BG, BG}, \
+    .title_text = SELINK, .title_text_inactive = DIS, .stripe_light = BG, .stripe_dark = FG, .drop_shadow = 0x000000u, \
+    .title_style = DESK_TITLE_FLAT, .title_center = 0, .control_style = 0, .focus_style = DESK_FOCUS_RING, .text_aa = 1, \
+    .radius = 0, .shadow_size = 0, .button = 15, .icon_small = 16, .icon_toolbar = 22, .icon_large = 32, \
+    .font_ui = DESK_FONT_UI, .font_bold = DESK_FONT_BOLD, .font_title = DESK_FONT_TITLE, \
+    .font_mono = DESK_FONT_MONO, .font_mono_bold = DESK_FONT_MONO_BOLD, .font_large = DESK_FONT_LARGE }
+static const struct desk_theme contrast_themes[] = {
+    HC_THEME("High Contrast Black", "White on black, cyan selection", 0x000000u, 0xffffffu, 0x3ff23fu, 0x1aebffu, 0x000000u, 0xffff00u),
+    HC_THEME("High Contrast White", "Black on white, deep purple selection", 0xffffffu, 0x000000u, 0x600000u, 0x37006eu, 0xffffffu, 0x00009fu),
+    HC_THEME("High Contrast #1", "Yellow on black, blue selection", 0x000000u, 0xffff00u, 0x00ff00u, 0x0000ffu, 0xffffffu, 0xffffffu),
+    HC_THEME("High Contrast #2", "Green on black, yellow selection", 0x000000u, 0x00ff00u, 0xc0c0c0u, 0xffff00u, 0x000000u, 0x00ffffu),
+};
+#define CONTRAST_THEMES (int)(sizeof(contrast_themes) / sizeof(contrast_themes[0]))
 #define THEMES (int)(sizeof(themes) / sizeof(themes[0]))
 const struct desk_theme *desk_theme = &themes[1];
 
@@ -74,6 +98,7 @@ static int same_name(const char *a, const char *b)
 const struct desk_theme *desk_theme_named(const char *name)
 {
     for (int i = 0; name && i < THEMES; i++) if (same_name(themes[i].name, name)) return &themes[i];
+    for (int i = 0; name && i < CONTRAST_THEMES; i++) if (same_name(contrast_themes[i].name, name)) return &contrast_themes[i];
     return NULL;
 }
 
@@ -754,9 +779,17 @@ static size_t span(const char *s, size_t a, size_t b, size_t *end)
     return a;
 }
 
+/* The exact name of a high-contrast scheme, or NULL. */
+static const char *contrast_name(const char *name)
+{
+    for (int i = 0; i < CONTRAST_THEMES; i++) if (!strcmp(contrast_themes[i].name, name)) return contrast_themes[i].name;
+    return NULL;
+}
+
 int desk_settings_theme(const char *text, size_t length, char *name, size_t size)
 {
     int found = 0;
+    char contrast[40] = "";     /* the last valid "access_contrast=<flags>,<scheme>" line that is switched on */
     for (size_t at = 0; at < length;) {
         size_t stop = at, k0, k1, v0, v1;
         while (stop < length && text[stop] != '\n') stop++;
@@ -769,6 +802,21 @@ int desk_settings_theme(const char *text, size_t length, char *name, size_t size
         if (eq == k1) continue;
         k0 = span(text, k0, eq, &k1);
         v0 = span(text, eq + 1, stop, &v1);
+        if (k1 - k0 == 15 && !memcmp(text + k0, "access_contrast", 15) && v1 - v0 < 64) {
+            /* Flags are hexadecimal: bit 0 is HCF_HIGHCONTRASTON. */
+            char value[64]; memcpy(value, text + v0, v1 - v0); value[v1 - v0] = 0;
+            char *comma = strchr(value, ',');
+            contrast[0] = 0;
+            if (comma) {
+                *comma = 0;
+                unsigned long flags = 0; int digits = 0;
+                for (const char *c = value; (*c >= '0' && *c <= '9') || ((*c | 32) >= 'a' && (*c | 32) <= 'f'); c++, digits++)
+                    flags = flags << 4 | (unsigned long)(*c <= '9' ? *c - '0' : (*c | 32) - 'a' + 10);
+                const char *scheme = contrast_name(comma + 1);
+                if (digits && digits < 9 && (flags & 1) && scheme) snprintf(contrast, sizeof(contrast), "%s", scheme);
+            }
+            continue;
+        }
         if (k1 - k0 != 5 || memcmp(text + k0, "theme", 5) || v1 - v0 >= size || v1 - v0 >= 64) continue;
         char value[64];
         memcpy(value, text + v0, v1 - v0); value[v1 - v0] = 0;
@@ -777,6 +825,7 @@ int desk_settings_theme(const char *text, size_t length, char *name, size_t size
         snprintf(name, size, "%s", canonical);
         found = 1;
     }
+    if (contrast[0] && strlen(contrast) < size) { snprintf(name, size, "%s", contrast); return 0; }
     return found ? 0 : -1;
 }
 

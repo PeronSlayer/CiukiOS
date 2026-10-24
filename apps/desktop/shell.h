@@ -23,7 +23,7 @@
 #define SH_TRAY_GAP 4
 #define SH_TRAY_MARGIN 6
 /* Tray identifiers; geometry places Notifications next to the clock. */
-enum sh_tray_icon { SH_TRAY_VOLUME, SH_TRAY_NETWORK, SH_TRAY_NOTIFICATION, SH_TRAY_MEDIA, SH_TRAY_POWER };
+enum sh_tray_icon { SH_TRAY_VOLUME, SH_TRAY_NETWORK, SH_TRAY_NOTIFICATION, SH_TRAY_MEDIA, SH_TRAY_POWER, SH_TRAY_ACCESS /* G25 */ };
 enum sh_notify_action { SH_NOTIFY_DETAILS, SH_NOTIFY_MEDIA, SH_NOTIFY_NETWORK, SH_NOTIFY_VOLUME };
 /* fx-21b: wording of the Windows notification (Microsoft KB 2654149, KB 314634). */
 #define DESK_USB_UNRECOGNIZED_TITLE "USB Device Not Recognized"
@@ -54,7 +54,8 @@ enum sh_action { SH_ACT_NONE, SH_ACT_SUBMENU, SH_ACT_LAUNCH, SH_ACT_ABOUT, SH_AC
                  SH_ACT_ICON_PROPERTIES, SH_ACT_REFRESH, SH_ACT_TASK_RESTORE, SH_ACT_TASK_MINIMIZE,
                  SH_ACT_TASK_CLOSE, SH_ACT_TASKMAN, SH_ACT_CLEAR_RECENT, SH_ACT_GAME, SH_ACT_EMPTY_RECYCLE, SH_ACT_FILE, SH_ACT_RENAME, SH_ACT_OPEN_WITH, SH_ACT_DOS_FULLSCREEN,
                  SH_ACT_TASK_MOVE, SH_ACT_TASK_SIZE, SH_ACT_TASK_MAXIMIZE, SH_ACT_WIN32_LINK, SH_ACT_PROGRAMS_FOLDER, SH_ACT_WIN32_PROGRAM,
-                 SH_ACT_DRAG /* fx-19 right-drag menu: arg is the DROPEFFECT, 0 Cancel */ };
+                 SH_ACT_DRAG /* fx-19 right-drag menu: arg is the DROPEFFECT, 0 Cancel */,
+                 SH_ACT_MAGNIFIER /* G25: Accessories > Magnifier: toggles the Magnifier */ };
 #define SH_ITEM_SEPARATOR 1u
 #define SH_ITEM_DISABLED 2u
 #define SH_ITEM_DEFAULT 4u
@@ -182,6 +183,7 @@ int desk_internal_open(struct desktop *, int kind);
 void desk_shell_message(struct desktop *, const char *title, const char *text, int error);
 /* G2: a Yes/No question in the message window; Yes runs desk_folder_confirmed(action), No or closing it desk_folder_cancelled. */
 enum { SH_CONFIRM_NONE, SH_CONFIRM_DELETE, SH_CONFIRM_EMPTY };
+#define SH_CONFIRM_ACCESS 100   /* G25: 100 + ACC_F_* feature: Yes keeps the feature the hot key switched on, No or closing it switches it off */
 void desk_shell_confirm(struct desktop *, const char *title, const char *text, int icon, int action);
 void desk_shell_bin_state(struct desktop *, int full);   /* the Recycle Bin icon's full or empty picture */
 void desk_shell_message_class(struct desktop *, const char *title, const char *text, int icon);

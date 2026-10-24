@@ -149,9 +149,13 @@ static unsigned fifo_head, fifo_count;
 /* Input and completion descriptors use the f2-88c native wait. */
 /* f2-95: which deadline shortened the wait (the [desktop] loop record). */
 enum { PAUSE_IDLE, PAUSE_INPUT, PAUSE_FRAME, PAUSE_ANIMATION, PAUSE_TIMER, PAUSE_PING, PAUSE_CLOSE,
-       PAUSE_NOTIFY, PAUSE_HOVER, PAUSE_POWER, PAUSE_CACHE, PAUSE_REASONS };
+       PAUSE_NOTIFY, PAUSE_HOVER, PAUSE_POWER, PAUSE_CACHE, PAUSE_ACCESS, PAUSE_REASONS };
 static const char *const pause_names[PAUSE_REASONS]={"idle","input","frame","animation","timer","ping",
-    "close","notify","hover","power","cache"};
+    "close","notify","hover","power","cache","access"};
+/* G25 accessibility glue (access_desktop.c): the filters' timers (SlowKeys, hot-key holds, MouseKeys, time-out). */
+extern void desk_access_tick(struct desktop *) __attribute__((weak));
+extern uint64_t desk_access_wake(const struct desktop *, uint64_t) __attribute__((weak));
+extern void desk_access_settings_changed(struct desktop *) __attribute__((weak));
 static unsigned pause_reason;
 static void loop_deadline_for(uint64_t now,uint64_t deadline,uint64_t *wait,unsigned reason)
 {
@@ -192,6 +196,8 @@ static uint64_t desktop_pause_ns(const struct desktop *d,uint64_t now,int input_
             if (now>=n->started && now-n->started<160000000ull)
                 loop_deadline(now,n->started+((now-n->started)/8000000ull+1)*8000000ull,&wait);
         }
+        reason=PAUSE_ACCESS;
+        if (desk_access_wake) { uint64_t access=desk_access_wake(d,now); if (access) loop_deadline(now,access,&wait); }
         reason=PAUSE_HOVER;
         if (!d->sh.tooltip && d->sh.hover_since && d->sh.hover_target && !n->active &&
             !d->sh.levels && !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open)
@@ -1876,7 +1882,7 @@ static void shell_service(struct desktop *d)
         } else {
             int old_tray_width = desk_shell_tray_box(d).w;
             char old_wall[CFG_PATH_MAX], old_theme[sizeof(sh->cfg.theme)];
-            memcpy(old_wall,sh->cfg.wallpaper,sizeof(old_wall)); memcpy(old_theme,sh->cfg.theme,sizeof(old_theme));
+            memcpy(old_wall,sh->cfg.wallpaper,sizeof(old_wall)); snprintf(old_theme,sizeof(old_theme),"%s",cfg_effective_theme(&sh->cfg));   /* G25: high contrast changes the theme in force */
             int old_mode=sh->cfg.wallpaper_mode, old_icons=sh->cfg.desktop_icons;
             uint32_t old_colour=sh->cfg.desktop_color;
             uint16_t confirmed = sh->cfg.display_mode;
@@ -1888,17 +1894,18 @@ static void shell_service(struct desktop *d)
              * Control Panel display settings must not rescan its ELF files. */
             if (settings_reload_wallpaper) { desktop_wait("program-scan"); scan_programs(d); }
             int image_changed=strcmp(old_wall,sh->cfg.wallpaper) || settings_reload_wallpaper;
-            int visual=image_changed || strcmp(old_theme,sh->cfg.theme) || old_mode!=sh->cfg.wallpaper_mode ||
+            int visual=image_changed || strcmp(old_theme,cfg_effective_theme(&sh->cfg)) || old_mode!=sh->cfg.wallpaper_mode ||
                        old_icons!=sh->cfg.desktop_icons || old_colour!=sh->cfg.desktop_color;
             if (visual) {
                 /* A wallpaper-only request leaves the retained desktop
                  * untouched until its complete replacement is ready. */
-                if (strcmp(old_theme,sh->cfg.theme) || old_icons!=sh->cfg.desktop_icons || settings_reload_wallpaper) {
+                if (strcmp(old_theme,cfg_effective_theme(&sh->cfg)) || old_icons!=sh->cfg.desktop_icons || settings_reload_wallpaper) {
                     desktop_wait("theme-apply"); sh->icon_count=0; desk_shell_apply(d);
                 }
                 if (image_changed) wallpaper_load(d); else wallpaper_update(d);
             }
             desk_shell_tray_damage(d,old_tray_width);
+            if (desk_access_settings_changed) desk_access_settings_changed(d);   /* G25: the filters and the pointer scheme follow the file */
             settings_reload_wallpaper=0;
         }
     }
@@ -2440,7 +2447,10 @@ int main(int argc, char **argv)
                 desktop_time_refresh(d);
                 desk_shell_clock_damage(d,previous);
             }
-            if (!d->power.state) { desktop_wait("shell-tick"); desk_shell_tick(d); desk_links_refresh(d); links_service(d); }
+            if (!d->power.state) {
+                desktop_wait("shell-tick"); desk_shell_tick(d); desk_links_refresh(d); links_service(d);
+                if (desk_access_tick) desk_access_tick(d);
+            }
         }
         if (gate && control->command) {
             unsigned command=control->command; generation=control->generation;

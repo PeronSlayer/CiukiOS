@@ -271,6 +271,11 @@ static int32_t axis(int32_t old, int32_t delta, uint32_t limit)
     if (n >= limit) return (int32_t)limit - 1;
     return (int32_t)n;
 }
+/* G25: the accessibility filters (access_desktop.c) are weak, like the shell: programs linking this file
+ * without them see the raw stream. */
+extern int desk_access_filter(struct desktop *, const struct ciuki_input_event *) __attribute__((weak));
+extern int desk_access_shortcut(struct desktop *, int code, int value) __attribute__((weak));
+extern void desk_access_resync(struct desktop *) __attribute__((weak));
 static void input(struct desktop *d, const struct ciuki_input_event *in)
 {
     /* Preserve the timestamp of a deferred menu action across the remaining
@@ -317,6 +322,7 @@ static void input(struct desktop *d, const struct ciuki_input_event *in)
         break;
     }
     case CIUKI_INPUT_RESYNC:
+        if (desk_access_resync) desk_access_resync(d);
         desk_v3_pointer_release(d);
         /* The input stream was cut: keys are released below, and the screen may
          * have been owned by someone else meanwhile (a DOS full-screen session
@@ -364,6 +370,8 @@ static void input(struct desktop *d, const struct ciuki_input_event *in)
             else desk_move(d,d->drag,f.x+dx,f.y+dy);
             break;
         }
+        /* G25 Magnifier shortcuts (Windows logo key with the arrows and Page keys). */
+        if (d->shell && desk_access_shortcut && desk_access_shortcut(d, e.code, e.value)) break;
         /* Shell shortcuts and menus (shell.c): Win, Ctrl+Esc, Alt+Tab, Alt+F4, menu keys, built-in windows. */
         if (d->shell && desk_shell_key(d, e.code, e.value)) break;
         d->keys[e.code] = (uint8_t)(e.value != 0 && d->focus >= 0);
@@ -392,7 +400,7 @@ static void input(struct desktop *d, const struct ciuki_input_event *in)
         d->cursor_dirty=1;
         {
             int32_t dx = e.value, dy = e.value2;
-            desk_shell_scale_motion(d, &dx, &dy);   /* Control Panel mouse speed; 1:1 by default */
+            if (e.source != DESK_ACCESS_SOURCE) desk_shell_scale_motion(d, &dx, &dy);   /* Control Panel mouse speed; 1:1 by default; MouseKeys steps are exact pixels */
             d->mouse_x = axis(d->mouse_x, dx, d->width);
             d->mouse_y = axis(d->mouse_y, dy, d->height);
         }
@@ -518,5 +526,12 @@ static void input(struct desktop *d, const struct ciuki_input_event *in)
     default: break;
     }
 }
-void desk_input(struct desktop *d, const struct ciuki_input_event *in)
+void desk_input_unfiltered(struct desktop *d, const struct ciuki_input_event *in)
 { input(d,in); desk_cursor_update(d); }
+void desk_input(struct desktop *d, const struct ciuki_input_event *in)
+{
+    /* G25: StickyKeys, FilterKeys, ToggleKeys, MouseKeys and the hot keys see the stream first; the filter
+     * delivers what remains (usually the event itself) through desk_input_unfiltered. */
+    if (d->shell && desk_access_filter && desk_access_filter(d,in)) { desk_cursor_update(d); return; }
+    desk_input_unfiltered(d,in);
+}

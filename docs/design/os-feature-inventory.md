@@ -151,7 +151,7 @@ placement: a feature is done when the user can do the same thing.
 | WM-18 | Full-screen programs (DOS Alt+Enter, DirectDraw exclusive) and switching back | RK-apps | done (host) | `DESK_DOS_FULLSCREEN` (`shell.c:798-806`), v3 lease (`client.c:1518-1556`); `v3_test.c:145`. T23 defects are tracked in fx-16 |
 | WM-19 | Multiple monitors (Windows 98 supports up to nine displays) | RK-vmm, MS-winfeat | absent (scope) | `MonitorFromWindow` returns one constant handle (`sdk/win32/user32/upper.c:258-285`) |
 | WM-20 | Cursors: arrow, I-beam, hourglass, AppStarting, resize, move, hand, no-drop, help | MS-cursor | done | 22 shapes (`apps/desktop/protocol.h:67-77`), routing `input.c:166-218`; `tests/host/desktop/cursor_set_test.c` |
-| WM-21 | Pointer schemes (large, inverted, animated cursors) chosen in Mouse properties | RK-acc | absent | One fixed set in `assets/cursors/` |
+| WM-21 | Pointer schemes (large, inverted, animated cursors) chosen in Mouse properties | RK-acc | partial | G25: Ciuki Standard, Large, Inverted and Large Inverted (`access_general` pointer index; `assets/cursors/cursors.h` Large set from `scripts/cursors/build_ciuki.py`; inversion at run time), chosen in Accessibility Options > Display. Missing: the Mouse page's own scheme list (G12), extra-large and animated cursors (the 32x32 raster is the limit of every presenter) |
 | WM-22 | Window opening is fast: the frame appears promptly after a click, with the AppStarting cursor in between | RK-perf | partial | AppStarting from click to the first frame (`input.c:190-197`); `[desktop] launch … spawn_ms` records (`desktop.c:566-581`). The T23 still reports slow opening; fx-15 measures and fixes it |
 
 ## 5. Keyboard shortcuts (system-wide)
@@ -177,7 +177,7 @@ application are in that application's section.
 | KB-14 | Ctrl+Alt+Del: reserved for the system (Close Program) | RK-keys | done | Task Manager (SD-5) |
 | KB-15 | Shift while inserting a CD: bypass AutoPlay | RK-keys | absent | `apps/desktop/autoplay.c` has no modifier check |
 | KB-16 | Ctrl+Tab / Ctrl+Shift+Tab: next or previous tab in a property sheet | RK-keys | done | `widgets.c:1209-1216` (first tab control) |
-| KB-17 | Accessibility hotkeys: Shift×5 StickyKeys, right Shift 8 s FilterKeys, NumLock 5 s ToggleKeys, Left Alt+Left Shift+NumLock MouseKeys, Left Alt+Left Shift+PrintScreen High Contrast | RK-keys (`wrkappg_3`) | absent | See AC-* |
+| KB-17 | Accessibility hotkeys: Shift×5 StickyKeys, right Shift 8 s FilterKeys, NumLock 5 s ToggleKeys, Left Alt+Left Shift+NumLock MouseKeys, Left Alt+Left Shift+PrintScreen High Contrast | RK-keys (`wrkappg_3`) | done | G25 (2026-10-24): all five on the raw input stream with sirens, a Yes/No confirmation and persisted state (`apps/desktop/access.c`, `access_desktop.c`; `access_test.c`, `window_model_test.c` row `accessibility`). Hold times: FilterKeys 8 s with the 4/12/16 s steps, ToggleKeys 5 s (the Resource Kit's own text also says 8; `docs/design/accessibility.md`). Not seen: keys of a full-screen DOS session |
 
 ## 6. Desktop
 
@@ -348,14 +348,14 @@ application are in that application's section.
 
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
-| AC-1 | Accessibility Options applet (Keyboard, Sound, Display, Mouse, General tabs) | RK-acc, RK-cpl | absent | Only an icon name (`apps/libdeskui/icon_map.c:292`) |
-| AC-2 | StickyKeys, FilterKeys (SlowKeys, RepeatKeys, BounceKeys), ToggleKeys | RK-acc, MS-spi | absent | — |
-| AC-3 | SoundSentry and ShowSounds | RK-acc | absent | Win32 `SPI_SETSHOWSOUNDS` is stored per process only (`sdk/win32/user32/system.c:250,352`) |
-| AC-4 | High Contrast colour schemes and hotkey | RK-acc | absent | The Blue theme makes no accessibility claim (`docs/validation/f2-62-blue-theme.md:15`) |
-| AC-5 | MouseKeys (numeric keypad moves the pointer) | RK-acc | absent | — |
-| AC-6 | SerialKeys and alternative input devices | RK-acc | absent | — |
-| AC-7 | Accessibility Wizard, Magnifier, large and inverted pointers, scalable interface elements | RK-acc | absent | — |
-| AC-8 | Automatic reset after an idle time and the status indicator in the tray | RK-acc | absent | — |
+| AC-1 | Accessibility Options applet (Keyboard, Sound, Display, Mouse, General tabs) | RK-acc, RK-cpl | done | G25: five tabs and a Settings page with OK and Cancel per feature (`apps/control/access.inc`; `access_control_test.c`; renders reviewed). Saves on each change, merges only the fields it changed, refreshes once a second. SerialKeys is shown disabled (AC-6) |
+| AC-2 | StickyKeys, FilterKeys (SlowKeys, RepeatKeys, BounceKeys), ToggleKeys | RK-acc, MS-spi | done | G25: `apps/desktop/access.c` (latch, lock, two-keys-off, click release; acceptance delay, repeat delay and rate, no repeat, bounce; Caps/Num/Scroll tones) with the Win32 flag words; Win32 `SPI_GET/SETSTICKYKEYS`, `FILTERKEYS`, `TOGGLEKEYS` with Microsoft's validation (per process, see W32 note in `accessibility.md`) |
+| AC-3 | SoundSentry and ShowSounds | RK-acc | partial | G25: SoundSentry flashes the active title bar, window or desktop for the desktop's alert sounds; ShowSounds shows a caption for them and sets `SM_SHOWSOUNDS`/`SPI_GETSHOWSOUNDS` (per process in Win32). Missing: sounds of full-screen DOS programs, other programs' sounds (no Win32 or native notification of a played sound), custom effects |
+| AC-4 | High Contrast colour schemes and hotkey | RK-acc | partial | G25: four flat schemes (High Contrast Black, White, #1, #2; contrast ratios tested), the flag and the hot key, applied to the desktop, the Control Panel and libdeskui programs through `desktop.cfg`. Missing: the other eight of the 12 selections (large-font variants need G23), the 27 custom schemes, Win32 `HCF_HIGHCONTRASTON` as seen by programs |
+| AC-5 | MouseKeys (numeric keypad moves the pointer) | RK-acc | done | G25: eight directions with acceleration, click, double-click, drag lock, button selection, Ctrl and Shift modifiers, Num Lock mode, SlowKeys applied, status in the indicator; Win32 `SPI_GET/SETMOUSEKEYS` |
+| AC-6 | SerialKeys and alternative input devices | RK-acc | absent | Not provided: `SPI_GETSERIALKEYS` fails with ERROR_CALL_NOT_IMPLEMENTED; the applet shows the option disabled |
+| AC-7 | Accessibility Wizard, Magnifier, large and inverted pointers, scalable interface elements | RK-acc | partial | G25: Magnifier (levels 1-9, follows pointer and focus, invert, panel top or bottom, Windows+Up/Down/Page Up/Page Down; Start > Accessories) and large/inverted pointers (WM-21). Missing: the Wizard, large fonts and scalable elements (G23), "follow text editing" (no caret channel), High Contrast switch inside the Magnifier dialog (the applet has it) |
+| AC-8 | Automatic reset after an idle time and the status indicator in the tray | RK-acc | done | G25: idle time-out (5 to 30 minutes in the applet, 1 to 60 in the file) switches the five features off with an optional falling siren; the tray indicator shows Shift/Ctrl/Alt latch and lock, mouse buttons and the FilterKeys stopwatch. Missing: the free-floating indicator window |
 
 ## 17. Display
 
@@ -494,7 +494,7 @@ row's detail is in the area section it points to.
 
 | ID | Windows 98 applet | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
-| CP-1 | Accessibility Options | RK-cpl | absent | AC-1 |
+| CP-1 | Accessibility Options | RK-cpl | done | G25: `apps/control/access.inc`, Input category; AC-1 |
 | CP-2 | Add New Hardware (detection wizard, manual driver choice) | RK-cpl, RK-dev | absent | Device Manager can only install a network driver from the driver pack (`apps/control/driver_pack_ui.c:8-14`) |
 | CP-3 | Add/Remove Programs: Install/Uninstall, Windows Setup (add or remove components), Startup Disk | RK-cpl | partial | Install/Uninstall only (`apps/control/app.c:1296-1330`, `programs.c`); `tests/host/desktop/test_add_remove.py`. No Windows Setup or Startup Disk tab; 96 entries at most |
 | CP-4 | Date/Time | RK-cpl | partial | TM-1, TM-2 |
@@ -711,7 +711,7 @@ below assume they land first.
 | G22 | Multimedia completion | MM-1, MM-3, MM-4, MM-5, MM-6, MM-7, MM-9, AX-9. Sound schemes with Browse; per-source mixer channels (wave, MIDI, CD, line, mic) and recording controls; a Multimedia page; a capture path and Sound Recorder; a native Media Player front-end for MIDI and AVI over the existing MCI code; CD Player track list and time; tray volume double-click | audio driver capture support (per driver family) | L | Only the master volume can be changed |
 | G23 | Display appearance and DPI | DS-2, DS-5, DS-6, DS-9, DS-10, FT-4, FT-5. A scheme editor (per-item colours, sizes, fonts), saved schemes; Effects (full-window drag, smoothing, large icons); refresh rate and EDID monitor; Large Fonts / DPI; a desktop colour picker and patterns | none | L | The desktop cannot be personalised beyond two themes |
 | G24 | Regional Settings | TM-4, CP-17. Locale with number, currency, date and time formats; `LC_*` for native programs and NLS for Win32 (`GetLocaleInfo`, `GetDateFormat`); Italian and English defaults | G1 | M | Dates and numbers follow neither the Italian nor the US convention |
-| G25 | Accessibility | AC-1 to AC-8, KB-17, WM-21. Accessibility Options applet: StickyKeys, FilterKeys, ToggleKeys, MouseKeys, SoundSentry, ShowSounds, High Contrast schemes and hotkeys, idle reset, tray indicator; large and inverted pointers; a Magnifier | G12, G23 | L | Required for users with disabilities; nothing exists |
+| G25 | Accessibility | AC-1 to AC-8, KB-17, WM-21. Accessibility Options applet: StickyKeys, FilterKeys, ToggleKeys, MouseKeys, SoundSentry, ShowSounds, High Contrast schemes and hotkeys, idle reset, tray indicator; large and inverted pointers; a Magnifier | G12, G23 | L | Required for users with disabilities; nothing exists. **Delivered by G25 on 2026-10-24** (`docs/design/accessibility.md`, `build/codex/g25-report.md`); remaining: Accessibility Wizard, SerialKeys, scalable UI (G23), caret tracking, Win32 persistence of the SPI records (G12), DOS full-screen sessions |
 | G26 | Network user tools | NW-5, NW-6, NW-7, NW-8 (downloads, windows, PNG/JPEG), CP-8. Raw ICMP and `ping`/`tracert`/`ipconfig`; a HOSTS file; Winsock 1.1/2 over the native sockets for Win32 programs; NetSurf downloads, new windows and PNG/JPEG decoding; an Internet page (home page, proxy, cache) | fx-14 | L | Win32 programs cannot reach the network, and a downloaded file cannot be saved |
 | G27 | Accessories completion | AX-3, AX-4, AX-5, AX-6, AX-8, AX-11, AX-17, FT-7. Paint Stretch/Skew, Edit Colors, GIF/JPEG save, Set As Wallpaper; Calculator Scientific; Character Map fonts and Latin-1/Unicode ranges; Viewer rotate and wallpaper; a serial terminal; Solitaire, Minesweeper, FreeCell and Hearts equivalents; Terminal pipes, redirection, batch files and the missing commands | G5 for the clipboard parts | L (split per accessory) | Each accessory is reachable from the menu and shows its gap immediately |
 | G28 | WordPad-class editor | AX-1 (large files), AX-2. A rich-text editor (RTF and text, later `.wri`/`.doc` import) with fonts, paragraphs, bullets, print preview; CiukNote offers it above its 60 KiB limit | G16 (Font dialog), G31 for printing | L | Documents larger than 60 KiB cannot be opened |

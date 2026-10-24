@@ -295,7 +295,7 @@ int main(void)
 {
     setvbuf(stdout,NULL,_IONBF,0);
 #if defined(CASE_CONTROL)
-    static const char *names[]={"Display","Mouse","Keyboard","Sounds","Date and Time","System","Devices","Drivers","Network","Power","Adapter","Fonts","Storage","Programs","Game controllers"};
+    static const char *names[]={"Display","Mouse","Keyboard","Sounds","Date and Time","System","Devices","Drivers","Network","Power","Adapter","Fonts","Storage","Programs","Game controllers","Accessibility Options"};
     for (page=CP_HOME;page<CP_PAGES;page++) { memset(&app,0,sizeof(app)); budgets(page<0 ? "Control Panel Home" : names[page]); }
 #elif defined(CASE_GFX)
     for(gfx_page=0;gfx_page<3;gfx_page++)budgets(gfx_page==0 ? "Graphics Demo 2D" : gfx_page==1 ? "Graphics Demo paused cube" : "Graphics Demo paused tiles");

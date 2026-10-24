@@ -1195,6 +1195,73 @@ static void test_spi(void) {
     notified |= trace[i].h == windows[0] && trace[i].m == 0x1a &&
                 trace[i].wp == 105;
   CHECK(notified);
+  /* G25: the accessibility records and SM_SHOWSOUNDS. */
+  uint8_t rec[48];
+  w32_fill(rec, 0, sizeof(rec));
+  w32_put32(rec, 8);
+  CHECK(SystemParametersInfoA(58, 8, rec, 0) && w32_u32(rec + 4) == 0x1fe);   /* StickyKeys defaults: Flags 510 */
+  w32_put32(rec + 4, 0x1ff | 0x01000000u);                                   /* the latched bit is state: ignored */
+  CHECK(SystemParametersInfoA(59, 8, rec, 0));
+  w32_put32(rec + 4, 0);
+  CHECK(SystemParametersInfoA(58, 8, rec, 0) && w32_u32(rec + 4) == 0x1ff);
+  CHECK(!SystemParametersInfoA(58, 12, rec, 0) && GetLastError() == 87);    /* uiParam must be the size */
+  w32_put32(rec, 4);
+  CHECK(!SystemParametersInfoA(58, 8, rec, 0) && GetLastError() == 87);     /* and so must cbSize */
+  w32_put32(rec, 24);
+  CHECK(SystemParametersInfoA(50, 24, rec, 0) && w32_u32(rec + 4) == 0x7e &&
+        w32_u32(rec + 8) == 1000 && w32_u32(rec + 12) == 1000 &&
+        w32_u32(rec + 16) == 500 && w32_u32(rec + 20) == 0);
+  w32_put32(rec + 20, 700);                                                  /* BounceKeys needs the others zero */
+  CHECK(!SystemParametersInfoA(51, 24, rec, 0) && GetLastError() == 87);
+  w32_put32(rec + 8, 0); w32_put32(rec + 12, 0); w32_put32(rec + 16, 0);
+  CHECK(SystemParametersInfoA(51, 24, rec, 0) && SystemParametersInfoA(50, 24, rec, 0) && w32_u32(rec + 20) == 700);
+  w32_put32(rec + 20, 0);                                                    /* and zero bounce needs them all */
+  CHECK(!SystemParametersInfoA(51, 24, rec, 0));
+  w32_put32(rec + 8, 20001); w32_put32(rec + 12, 1); w32_put32(rec + 16, 1);
+  CHECK(!SystemParametersInfoA(51, 24, rec, 0) && GetLastError() == 87);
+  w32_put32(rec + 8, 2000); w32_put32(rec + 12, 300); w32_put32(rec + 16, 1400);
+  CHECK(SystemParametersInfoA(51, 24, rec, 0));
+  w32_put32(rec, 8);
+  CHECK(SystemParametersInfoA(52, 8, rec, 0) && w32_u32(rec + 4) == 0x3e);
+  w32_put32(rec + 4, 0x3f);
+  CHECK(SystemParametersInfoA(53, 8, rec, 0) && SystemParametersInfoA(52, 8, rec, 0) && w32_u32(rec + 4) == 0x3f);
+  w32_fill(rec, 0, sizeof(rec)); w32_put32(rec, 28);
+  CHECK(SystemParametersInfoA(54, 28, rec, 0) && w32_u32(rec + 4) == 0x7e && w32_u32(rec + 8) == 80 &&
+        w32_u32(rec + 12) == 3000 && w32_u32(rec + 16) == 8);
+  w32_put32(rec + 8, 9);                                                     /* iMaxSpeed 10..360 */
+  CHECK(!SystemParametersInfoA(55, 28, rec, 0) && GetLastError() == 87);
+  w32_put32(rec + 8, 360); w32_put32(rec + 12, 999);
+  CHECK(!SystemParametersInfoA(55, 28, rec, 0));                              /* iTimeToMaxSpeed 1000..5000 */
+  w32_put32(rec + 12, 5000); w32_put32(rec + 4, 0xff | 0x80000000u);          /* MKF_MOUSEMODE is state */
+  CHECK(SystemParametersInfoA(55, 28, rec, 0) && SystemParametersInfoA(54, 28, rec, 0) &&
+        w32_u32(rec + 4) == 0xff && w32_u32(rec + 8) == 360 && w32_u32(rec + 12) == 5000);
+  w32_put32(rec + 24, 1);                                                    /* reserved */
+  CHECK(!SystemParametersInfoA(55, 28, rec, 0));
+  w32_fill(rec, 0, sizeof(rec)); w32_put32(rec, 48);
+  CHECK(SystemParametersInfoA(64, 48, rec, 0) && w32_u32(rec + 4) == 2 && w32_u32(rec + 32) == 0);
+  w32_put32(rec + 4, 1); w32_put32(rec + 32, 4);                              /* a custom effect is not available */
+  CHECK(!SystemParametersInfoA(65, 48, rec, 0) && GetLastError() == 87);
+  w32_put32(rec + 32, 3);
+  CHECK(SystemParametersInfoA(65, 48, rec, 0) && SystemParametersInfoA(64, 48, rec, 0) &&
+        w32_u32(rec + 4) == 3 && w32_u32(rec + 32) == 3);
+  char scheme[64] = "";
+  struct { UINT cb; DWORD flags; char *scheme; } hc = {sizeof(hc), 0, scheme};   /* HIGHCONTRASTA */
+  CHECK(SystemParametersInfoA(66, sizeof(hc), &hc, 0) && hc.flags == 0x7e &&
+        !strcmp(scheme, "High Contrast Black"));
+  strcpy(scheme, "High Contrast White"); hc.flags = 0x7f;
+  CHECK(SystemParametersInfoA(67, sizeof(hc), &hc, 0));
+  scheme[0] = 0; hc.flags = 0;
+  CHECK(SystemParametersInfoA(66, sizeof(hc), &hc, 0) && hc.flags == 0x7f && !strcmp(scheme, "High Contrast White"));
+  w32_fill(rec, 0, sizeof(rec)); w32_put32(rec, 12);
+  CHECK(SystemParametersInfoA(60, 12, rec, 0) && w32_u32(rec + 4) == 0 && w32_u32(rec + 8) == 300000);
+  w32_put32(rec + 4, 3); w32_put32(rec + 8, 600000);
+  CHECK(SystemParametersInfoA(61, 12, rec, 0) && SystemParametersInfoA(60, 12, rec, 0) &&
+        w32_u32(rec + 4) == 3 && w32_u32(rec + 8) == 600000);
+  CHECK(!SystemParametersInfoA(62, 16, rec, 0) && GetLastError() == 120);    /* SerialKeys is not provided */
+  CHECK(!GetSystemMetrics(70));
+  CHECK(SystemParametersInfoA(57, 1, 0, 0) && GetSystemMetrics(70) == 1 &&
+        SystemParametersInfoA(56, 0, &old, 0) && old);
+  CHECK(SystemParametersInfoA(57, 0, 0, 0) && !GetSystemMetrics(70));
   CHECK(!SystemParametersInfoA(9999, 0, 0, 0) && GetLastError() == 120);
   printf("TRACE SystemParametersInfo setters: uiParam pvParam-value and "
          "structure conventions, metrics, SPIF_SENDCHANGE\n");

@@ -386,7 +386,7 @@ static void turn(uint64_t ns)
 {
     wm_clock+=ns; d.now_ns=wm_clock;
     desk_heartbeat(&d,d.now_ns);
-    if (d.shell) { desk_shell_tick(&d); desk_links_refresh(&d); }
+    if (d.shell) { desk_shell_tick(&d); desk_links_refresh(&d); desk_access_tick(&d); }
     serve_launches();
     for (int k=0;k<DESK_CLIENTS;k++) desk_flush(&d,k);
     apps_forget_dropped();
@@ -1025,9 +1025,86 @@ static void row_drag(unsigned m)
     tap(DU_KEY_ESC); press(CIUKI_BUTTON_RIGHT,0); step("cancelled");
     wm_end();
 }
+static unsigned access_tones[ACC_TONES];
+static void access_tone_seen(struct desktop *dd, unsigned tone) { (void)dd; assert(tone<ACC_TONES); access_tones[tone]++; }
+static void access_settings(void) { desk_access_settings_changed(&d); }
+static void row_access(unsigned m)
+{
+    /* G25: the screen-changing events of the accessibility features: the tray status indicator (StickyKeys latch and
+     * lock, MouseKeys button, FilterKeys stopwatch), the hot-key confirmation window, the SoundSentry flash
+     * (title bar, window, desktop), high contrast (a theme change), the pointer schemes and the Magnifier panel
+     * (pointer motion, damage in and beside its source, a window dragged through it, panel flipping edges). */
+    row_name="accessibility"; wm_begin(m,1);
+    d.sound_tone=access_tone_seen; memset(access_tones,0,sizeof(access_tones));
+    struct fake_app *a=app_open("files",300,200,120,70); step("window");
+    /* Shift five times: StickyKeys on, indicator appears in the tray, a confirmation window opens. */
+    for (unsigned k=0;k<5;k++) { tap(0x2a); step("shift"); }
+    assert(access_feature_on(&d.acc.eng,ACC_F_STICKY) && d.acc.shown_visible && d.sh.confirm==SH_CONFIRM_ACCESS+ACC_F_STICKY);
+    assert(access_tones[ACC_TONE_SIREN_UP]==1);
+    step("StickyKeys confirmation");
+    tap(DU_KEY_ENTER); step("kept");
+    assert(access_feature_on(&d.acc.eng,ACC_F_STICKY) && !d.sh.confirm);
+    tap(0x1d); step("Ctrl latched"); tap(0x1d); step("Ctrl locked"); assert(d.acc.eng.locked);
+    tap(0x2a); step("Shift latched"); tap(0x1e); step("Shift released by a key");
+    tap(0x1d); step("Ctrl unlocked");
+    /* The dialog declined: the feature goes off again and the indicator leaves the tray. */
+    access_set_locks(&d.acc.eng,0,0,0);
+    for (unsigned k=0;k<5;k++) { tap(0x36); step("shift"); }
+    assert(!access_feature_on(&d.acc.eng,ACC_F_STICKY));
+    for (unsigned k=0;k<5;k++) { tap(0x36); step("shift"); }
+    assert(access_feature_on(&d.acc.eng,ACC_F_STICKY) && d.sh.confirm);
+    tap(DU_KEY_ESC); step("declined"); assert(!access_feature_on(&d.acc.eng,ACC_F_STICKY) && !d.acc.shown_visible);
+    /* MouseKeys: the hot key, the keypad moves the pointer, a drag holds the button (indicator state). */
+    key(0x38,1); key(0x2a,1); key(0x45,1); key(0x45,0); key(0x2a,0); key(0x38,0); step("MouseKeys hot key");
+    assert(access_feature_on(&d.acc.eng,ACC_F_MOUSE) && d.sh.confirm); tap(DU_KEY_ENTER); step("MouseKeys kept");
+    int px=d.mouse_x, py=d.mouse_y;
+    key(0x50,1); step("keypad down: one pixel"); for (unsigned k=0;k<40;k++) step("held"); key(0x50,0);
+    assert(d.mouse_y>py && d.mouse_x==px);
+    key(0x52,1); step("button held"); key(0x52,0); key(0x53,1); step("button released"); key(0x53,0);
+    key(0x4a,1); key(0x4a,0); step("right button selected");
+    d.sh.cfg.access.mouse&=~ACC_ON; access_settings(); step("MouseKeys off");
+    /* FilterKeys stopwatch in the tray. */
+    d.sh.cfg.access.filter|=ACC_ON; access_settings(); step("FilterKeys on");
+    d.sh.cfg.access.filter&=~ACC_ON; access_settings(); step("FilterKeys off");
+    /* SoundSentry: flash the title bar, the window, the desktop; the flash ends by itself. */
+    d.sh.cfg.access.sentry|=ACC_ON; d.sh.cfg.access.show_sounds=1;
+    for (unsigned effect=ACC_SS_TITLE;effect<=ACC_SS_DISPLAY;effect++) {
+        d.sh.cfg.access.sentry_effect=effect; access_settings();
+        desk_sound(&d,SOUND_ERROR); assert(d.acc.flash_active); step("flash");
+        turn(100000000ull); step("flash still on");
+        turn(200000000ull); desk_access_tick(&d); step("flash over"); assert(!d.acc.flash_active);
+    }
+    d.sh.cfg.access.sentry&=~ACC_ON; d.sh.cfg.access.show_sounds=0; access_settings();
+    /* High contrast by its hot key, and back. */
+    key(0x38,1); key(0x2a,1); key(0x137,1); key(0x137,0); key(0x2a,0); key(0x38,0); step("High Contrast hot key");
+    assert(access_feature_on(&d.acc.eng,ACC_F_CONTRAST) && desk_theme==desk_theme_named("High Contrast Black"));
+    tap(DU_KEY_ENTER); step("High Contrast kept");
+    d.sh.cfg.access.contrast|=ACC_ON; strcpy(d.sh.cfg.access.scheme,"High Contrast White"); access_settings(); step("another scheme");
+    key(0x38,1); key(0x2a,1); key(0x137,1); key(0x137,0); key(0x2a,0); key(0x38,0); step("High Contrast off");
+    assert(!access_feature_on(&d.acc.eng,ACC_F_CONTRAST) && desk_theme==desk_theme_named(d.sh.cfg.theme));
+    /* Pointer schemes. */
+    for (unsigned scheme=1;scheme<ACC_POINTERS;scheme++) { d.sh.cfg.access.pointer=scheme; access_settings(); pointer_to(300,200+(int)scheme*20); step("pointer scheme"); }
+    d.sh.cfg.access.pointer=0; access_settings(); step("standard pointer");
+    /* Magnifier. */
+    d.sh.cfg.access.mag_on=1; d.sh.cfg.access.mag_level=3; access_settings();
+    pointer_to(320,300); step("Magnifier on"); assert(d.acc.mag_shown);
+    pointer_to(330,310); step("pointer moves"); pointer_to(500,450); step("pointer moves more");
+    app_paint(a,10,10,120,60,a->salt+7); step("damage under the source");
+    app_paint(a,10,100,50,30,a->salt+9); step("damage beside the source");
+    desk_move(&d,a->slot,300,120); step("window moved through the source");
+    pointer_to(320,60); step("pointer near the panel: the panel flips edge"); pointer_to(320,440); step("and back");
+    d.sh.cfg.access.mag_level=9; access_settings(); step("level 9");
+    d.sh.cfg.access.mag_invert=1; access_settings(); step("inverted");
+    d.sh.cfg.access.mag_dock=ACC_DOCK_BOTTOM; d.sh.cfg.access.mag_percent=40; access_settings(); step("docked at the bottom, taller");
+    key(0x15b,1); key(0x148,1); key(0x148,0); key(0x15b,0); step("Win+Up"); (void)0;
+    d.sh.cfg.access.mag_follow=ACC_MAG_FOCUS; access_settings(); desk_focus(&d,a->slot); step("follows the focus");
+    (void)desk_internal_open(&d,DESK_INTERNAL_ABOUT); step("window above the source");
+    d.sh.cfg.access.mag_on=0; access_settings(); step("Magnifier off"); assert(!d.acc.mag_shown);
+    wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
-    row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag};
+    row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,row_access};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code). */

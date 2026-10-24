@@ -223,13 +223,13 @@ class IconStoreTests(unittest.TestCase):
         rows = dict(re.findall(r'item\(m,\s*"([^"]+)",\s*"([a-z-]+)"', shell))
         settings=(ROOT / "apps/desktop/settings_catalog.h").read_text()
         applets=re.findall(r'\{CP_\w+, CP_CAT_\w+, "[^"]+", "([^"]+)", "([a-z-]+)"\}',settings)
-        self.assertEqual(len(applets),11)  # f5-09 Add/Remove Programs, f1-113 Game controllers
+        self.assertEqual(len(applets),12)  # f5-09 Add/Remove Programs, f1-113 Game controllers, G25 Accessibility Options
         rows.update(applets)
         objects = {"Programs": "menu:programs", "Documents": "menu:documents", "Settings": "menu:settings", "Help": "menu:help",
                    "System Tools": "menu:system-tools", "Run...": "menu:run", "Shut Down...": "menu:shutdown", "Accessories": "menu:accessories", "Games": "menu:games",
                    "Developer": "menu:development", "Control Panel": "menu:control-panel", "My Documents": "place:home",
                    "Add/Remove Programs": "type:executable", "Display": "settings:display", "Mouse": "settings:mouse", "Keyboard": "settings:keyboard",
-                   "Sounds and Audio": "settings:sound", "Date and Time": "settings:date-time", "Task Manager": "program:tasks",
+                   "Sounds and Audio": "settings:sound", "Accessibility Options": "settings:accessibility", "Date and Time": "settings:date-time", "Task Manager": "program:tasks",
                    "Keyboard Shortcuts": "settings:shortcuts", "Refresh": "action:refresh", "Properties": "action:properties",
                    "Close    Alt+F4": "action:stop", "About CiukiOS": "menu:about"}
         for label, obj in objects.items():

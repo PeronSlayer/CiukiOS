@@ -22,7 +22,11 @@ void cfg_defaults(struct ciuki_settings *s)
     s->mouse_speed = CFG_MOUSE_NORMAL;
     s->double_click_ms = 500;
     s->keyboard = CFG_KEYS_US;
+    access_defaults(&s->access);
 }
+
+const char *cfg_effective_theme(const struct ciuki_settings *s)
+{ return (s->access.contrast & ACC_ON) && access_scheme_valid(s->access.scheme) ? s->access.scheme : s->theme; }
 
 int cfg_theme_index(const char *name)
 {
@@ -79,9 +83,81 @@ static void extra_add(struct ciuki_settings *s, const char *line)
     s->extra[used + n + 1] = 0;
 }
 
+
+/* ---- G25 access_* keys ---------------------------------------------------
+ * access_sticky=<flags>, access_filter=<flags>,<wait>,<delay>,<repeat>,<bounce>,
+ * access_toggle=<flags>, access_mouse=<flags>,<max>,<time>,<ctrl>,
+ * access_sentry=<flags>,<effect>, access_contrast=<flags>,<scheme>,
+ * access_timeout=<flags>,<ms>, access_general=<showsounds>,<status>,<pointer>,
+ * access_magnifier=<on>,<level>,<follow>,<invert>,<dock>,<percent>.
+ * Flags are hexadecimal Win32 values (access.h); the others decimal. */
+static int hex_field(const char **p, uint32_t mask, uint32_t *out)
+{
+    const char *v = *p; uint32_t n = 0; int digits = 0;
+    for (; (*v >= '0' && *v <= '9') || (*v >= 'a' && *v <= 'f') || (*v >= 'A' && *v <= 'F'); v++, digits++) {
+        n = n << 4 | (uint32_t)(*v <= '9' ? *v - '0' : (*v | 32) - 'a' + 10);
+        if (digits >= 8) return 0;
+    }
+    if (!digits) return 0;
+    *out = n & mask; *p = v; return 1;
+}
+static int dec_field(const char **p, uint32_t lo, uint32_t hi, uint32_t *out)
+{
+    const char *v = *p; uint32_t n = 0; int digits = 0;
+    for (; *v >= '0' && *v <= '9'; v++, digits++) { n = n * 10 + (uint32_t)(*v - '0'); if (digits >= 9) return 0; }
+    if (!digits || n < lo || n > hi) return 0;
+    *out = n; *p = v; return 1;
+}
+static int comma(const char **p) { if (**p != ',') return 0; (*p)++; return 1; }
+static int access_assign(struct access_settings *a, const char *key, const char *v)
+{
+    uint32_t n[6];
+    if (!strcmp(key, "access_sticky")) { if (!hex_field(&v, 0x1ffu, &n[0]) || *v) return 0; a->sticky = n[0]; return 1; }
+    if (!strcmp(key, "access_toggle")) { if (!hex_field(&v, 0x3fu, &n[0]) || *v) return 0; a->toggle = n[0]; return 1; }
+    if (!strcmp(key, "access_filter")) {
+        if (!hex_field(&v, 0x107fu, &n[0]) || !comma(&v) || !dec_field(&v, 0, ACC_FILTER_MAX_MS, &n[1]) || !comma(&v) ||
+            !dec_field(&v, 0, ACC_FILTER_MAX_MS, &n[2]) || !comma(&v) || !dec_field(&v, 0, ACC_FILTER_MAX_MS, &n[3]) || !comma(&v) ||
+            !dec_field(&v, 0, ACC_FILTER_MAX_MS, &n[4]) || *v) return 0;
+        a->filter = n[0]; a->filter_wait = n[1]; a->filter_delay = n[2]; a->filter_repeat = n[3]; a->filter_bounce = n[4];
+        return 1;
+    }
+    if (!strcmp(key, "access_mouse")) {
+        if (!hex_field(&v, 0xffu, &n[0]) || !comma(&v) || !dec_field(&v, ACC_MOUSE_MAX_SPEED_MIN, ACC_MOUSE_MAX_SPEED_MAX, &n[1]) || !comma(&v) ||
+            !dec_field(&v, ACC_MOUSE_TIME_MIN, ACC_MOUSE_TIME_MAX, &n[2]) || !comma(&v) || !dec_field(&v, 1, 32, &n[3]) || *v) return 0;
+        a->mouse = n[0]; a->mouse_max = n[1]; a->mouse_time = n[2]; a->mouse_ctrl = n[3];
+        return 1;
+    }
+    if (!strcmp(key, "access_sentry")) {
+        if (!hex_field(&v, 0x7u, &n[0]) || !comma(&v) || !dec_field(&v, 0, ACC_SS_MAX, &n[1]) || *v) return 0;
+        a->sentry = n[0]; a->sentry_effect = n[1]; return 1;
+    }
+    if (!strcmp(key, "access_contrast")) {
+        if (!hex_field(&v, 0x7fu, &n[0]) || !comma(&v) || !access_scheme_valid(v)) return 0;
+        a->contrast = n[0]; snprintf(a->scheme, sizeof(a->scheme), "%s", v); return 1;
+    }
+    if (!strcmp(key, "access_timeout")) {
+        if (!hex_field(&v, 0x3u, &n[0]) || !comma(&v) || !dec_field(&v, ACC_TIMEOUT_MIN_MS / 1000, ACC_TIMEOUT_MAX_MS / 1000, &n[1]) || *v) return 0;
+        a->timeout = n[0]; a->timeout_ms = n[1] * 1000u; return 1;
+    }
+    if (!strcmp(key, "access_general")) {
+        if (!dec_field(&v, 0, 1, &n[0]) || !comma(&v) || !dec_field(&v, 0, 1, &n[1]) || !comma(&v) || !dec_field(&v, 0, ACC_POINTERS - 1, &n[2]) || *v) return 0;
+        a->show_sounds = n[0]; a->status = n[1]; a->pointer = n[2]; return 1;
+    }
+    if (!strcmp(key, "access_magnifier")) {
+        if (!dec_field(&v, 0, 1, &n[0]) || !comma(&v) || !dec_field(&v, ACC_MAG_LEVEL_MIN, ACC_MAG_LEVEL_MAX, &n[1]) || !comma(&v) ||
+            !dec_field(&v, 0, 7, &n[2]) || !comma(&v) || !dec_field(&v, 0, 1, &n[3]) || !comma(&v) || !dec_field(&v, 0, 1, &n[4]) || !comma(&v) ||
+            !dec_field(&v, ACC_MAG_PERCENT_MIN, ACC_MAG_PERCENT_MAX, &n[5]) || *v) return 0;
+        a->mag_on = n[0]; a->mag_level = n[1]; a->mag_follow = n[2]; a->mag_invert = n[3]; a->mag_dock = n[4]; a->mag_percent = n[5];
+        return 1;
+    }
+    return -1;
+}
+static int access_key_known(const char *key) { return !strncmp(key, "access_", 7); }
+
 static int assign(struct ciuki_settings *s, const char *key, const char *v, int *recent_reset)
 {
     int n;
+    if (access_key_known(key)) { int r = access_assign(&s->access, key, v); if (r >= 0) return r; }
     if (!strcmp(key, "version")) return number(v, 1, 1000, &n);
     if (!strcmp(key, "theme")) {
         const char *name = desk_theme_preference(v);
@@ -169,15 +245,27 @@ size_t cfg_format(const struct ciuki_settings *s, char *out, size_t size)
 {
     int n = snprintf(out, size,
         "# CiukiOS desktop settings (key=value). Written by the desktop and Control Panel.\n"
-        "version=%d\ntheme=%s\nwallpaper=%s\nwallpaper_mode=%s\ndesktop_color=%06x\n"
+        "version=%d\ntheme=%s\naccess_contrast=%x,%s\nwallpaper=%s\nwallpaper_mode=%s\ndesktop_color=%06x\n"
         "clock_24h=%d\nclock_seconds=%d\ndesktop_icons=%d\nmouse_speed=%d\ndouble_click_ms=%d\nkeyboard=%s\ndisplay_mode=%u\n",
-        CFG_VERSION, s->theme, s->wallpaper,
+        CFG_VERSION, s->theme, (unsigned)(s->access.contrast & 0x7fu), access_scheme_valid(s->access.scheme) ? s->access.scheme : acc_high_contrast_names[0], s->wallpaper,
         cfg_mode_names[s->wallpaper_mode >= 0 && s->wallpaper_mode < CFG_WALL_MODES ? s->wallpaper_mode : 0],
         (unsigned)(s->desktop_color & 0xffffffu), !!s->clock_24h, !!s->clock_seconds, !!s->desktop_icons,
         s->mouse_speed, s->double_click_ms,
         cfg_keyboard_names[s->keyboard >= 0 && s->keyboard < CFG_KEYS_COUNT ? s->keyboard : 0], (unsigned)s->display_mode);
     if (n <= 0 || (size_t)n >= size) return 0;
     size_t used = (size_t)n;
+    const struct access_settings *a = &s->access;
+    n = snprintf(out + used, size - used,
+        "access_sticky=%x\naccess_filter=%x,%u,%u,%u,%u\naccess_toggle=%x\naccess_mouse=%x,%u,%u,%u\naccess_sentry=%x,%u\n"
+        "access_timeout=%x,%u\naccess_general=%u,%u,%u\naccess_magnifier=%u,%u,%u,%u,%u,%u\n",
+        (unsigned)(a->sticky & 0x1ffu), (unsigned)(a->filter & 0x107fu), (unsigned)a->filter_wait, (unsigned)a->filter_delay,
+        (unsigned)a->filter_repeat, (unsigned)a->filter_bounce, (unsigned)(a->toggle & 0x3fu), (unsigned)(a->mouse & 0xffu),
+        (unsigned)a->mouse_max, (unsigned)a->mouse_time, (unsigned)a->mouse_ctrl, (unsigned)(a->sentry & 7u),
+        (unsigned)a->sentry_effect, (unsigned)(a->timeout & 3u), (unsigned)(a->timeout_ms / 1000u), (unsigned)!!a->show_sounds,
+        (unsigned)!!a->status, (unsigned)a->pointer, (unsigned)!!a->mag_on, (unsigned)a->mag_level, (unsigned)a->mag_follow,
+        (unsigned)!!a->mag_invert, (unsigned)a->mag_dock, (unsigned)a->mag_percent);
+    if (n <= 0 || (size_t)n >= size - used) return 0;
+    used += (size_t)n;
     for (unsigned i = 0; i < s->recent_count && i < CFG_RECENT_MAX; i++) {
         n = snprintf(out + used, size - used, "recent=%s\n", s->recent[i]);
         if (n <= 0 || (size_t)n >= size - used) return 0;

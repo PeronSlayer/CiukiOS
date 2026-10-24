@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[3]
 class WindowModelTests(unittest.TestCase):
     def test_every_row_equals_a_full_redraw(self):
         sources = [ROOT / "apps/desktop" / name for name in
-                   ("protocol.c", "client.c", "input.c", "compositor.c", "theme.c", "shell.c", "autoplay.c",
+                   ("protocol.c", "client.c", "input.c", "compositor.c", "theme.c", "shell.c", "access.c", "access_desktop.c", "autoplay.c",
                     "autoplay_content.c", "settings.c", "wallpaper.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c")]
         sources += [*(ROOT / "apps/libdeskui" / n for n in ("draw.c", "widgets.c", "list.c", "menu.c", "dialog.c", "textarea.c", "icons.c", "icon_map.c")),
                     ROOT / "tests/host/desktop/fake.c", ROOT / "src/kernel/drivers/video/swdib.c", ROOT / "src/kernel/drivers/video/batch.c",

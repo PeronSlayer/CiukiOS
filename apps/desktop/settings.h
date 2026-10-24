@@ -8,6 +8,7 @@
 #define CIUKI_DESKTOP_SETTINGS_H
 #include <stddef.h>
 #include <stdint.h>
+#include "access.h"
 #define CFG_DIR "/system/settings"
 #define CFG_FILE "/system/settings/desktop.cfg"
 #define CFG_WALLPAPER_DIR "/system/wallpapers"
@@ -37,6 +38,7 @@ struct ciuki_settings {
     int double_click_ms;            /* 200..900 */
     uint16_t display_mode;         /* confirmed VBE mode id; 0 keeps loader default */
     int keyboard;                   /* CFG_KEYS_* */
+    struct access_settings access;  /* G25: access_* keys (access.h) */
     char recent[CFG_RECENT_MAX][CFG_PATH_MAX];
     unsigned recent_count;          /* newest first */
     char extra[CFG_EXTRA_MAX];      /* unknown "key=value" lines, newline separated */
@@ -57,6 +59,8 @@ int cfg_icon_move(struct ciuki_settings *, const char *, int, int);
 void cfg_icon_forget(struct ciuki_settings *, const char *);
 void cfg_icons_arrange(struct ciuki_settings *);
 int cfg_theme_index(const char *name);   /* -1 when unknown */
+/* G25: the theme in force: the high-contrast scheme while that mode is on, otherwise `theme`. */
+const char *cfg_effective_theme(const struct ciuki_settings *);
 /* Mouse speed as a rational multiplier num/8 applied to relative motion. */
 int cfg_mouse_numerator(int speed);
 #endif

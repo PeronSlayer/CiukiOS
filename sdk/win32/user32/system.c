@@ -112,6 +112,8 @@ int W32API GetSystemMetrics(int n) {
     return 0;
   case 75:
     return 1;
+  case 70: /* SM_SHOWSOUNDS */
+    return u32_spi_metric(n, 0);
   case 80:
     return 1;
   default:
@@ -154,8 +156,174 @@ int u32_spi_metric(int n, int fallback) {
     return (int)spi.icon_x;
   case 39:
     return (int)spi.icon_y;
+  case 70: /* SM_SHOWSOUNDS */
+    return (int)spi.show_sounds;
   default:
     return fallback;
+  }
+}
+/* G25: the accessibility records of SystemParametersInfo (STICKYKEYS, FILTERKEYS, TOGGLEKEYS, MOUSEKEYS,
+ * SOUNDSENTRY, HIGHCONTRAST, ACCESSTIMEOUT). Like every value above they are process-global and never persisted;
+ * the defaults are those of the desktop's settings (apps/desktop/access.h access_defaults): the flag words are the
+ * Win32 values, so a bridge to the desktop is a field copy. The latched and locked bits of STICKYKEYS and the
+ * button and mode bits of MOUSEKEYS are state, ignored on SET and zero on GET (the desktop owns the keys).
+ * SerialKeys (SPI 62, 63) is not provided. docs/design/accessibility.md. */
+static struct {
+  DWORD sticky, filter, wait, delay, repeat, bounce, toggle, mouse, mouse_max,
+      mouse_time, mouse_ctrl, sentry, sentry_window, sentry_ms, contrast,
+      timeout, timeout_ms;
+  char scheme[32];
+} acc = {.sticky = 0x1fe, .filter = 0x7e, .wait = 1000, .delay = 1000,
+         .repeat = 500, .toggle = 0x3e, .mouse = 0x7e, .mouse_max = 80,
+         .mouse_time = 3000, .mouse_ctrl = 8, .sentry = 2, .sentry_ms = 200,
+         .contrast = 0x7e, .timeout_ms = 300000,
+         .scheme = "High Contrast Black"};
+#define ACC_AVAILABLE 2u
+/* HIGHCONTRASTA: its pointer is as wide as the build's (12 bytes on the 32-bit guest). */
+struct acc_contrast { UINT cb; DWORD flags; char *scheme; };
+static int acc_copy_name(char *to, UINT size, const char *from) {
+  UINT n = 0;
+  while (from[n])
+    n++;
+  if (n >= size)
+    return 0;
+  w32_copy(to, from, n + 1);
+  return 1;
+}
+static BOOL acc_size(const void *p, UINT param, UINT size) {
+  if (!p || param != size || w32_u32(p) != size)
+    return u32_fail(87);
+  return 1;
+}
+static BOOL acc_get(UINT action, UINT param, void *out) {
+  uint8_t *o = out;
+  switch (action) {
+  case 58: /* SPI_GETSTICKYKEYS */
+    if (!acc_size(out, param, 8))
+      return 0;
+    w32_put32(o + 4, (acc.sticky | ACC_AVAILABLE) & 0x1ffu);
+    return 1;
+  case 50: /* SPI_GETFILTERKEYS */
+    if (!acc_size(out, param, 24))
+      return 0;
+    w32_put32(o + 4, (acc.filter | ACC_AVAILABLE) & 0x7fu);
+    w32_put32(o + 8, acc.wait);
+    w32_put32(o + 12, acc.delay);
+    w32_put32(o + 16, acc.repeat);
+    w32_put32(o + 20, acc.bounce);
+    return 1;
+  case 52: /* SPI_GETTOGGLEKEYS */
+    if (!acc_size(out, param, 8))
+      return 0;
+    w32_put32(o + 4, (acc.toggle | ACC_AVAILABLE) & 0x3fu);
+    return 1;
+  case 54: /* SPI_GETMOUSEKEYS */
+    if (!acc_size(out, param, 28))
+      return 0;
+    w32_put32(o + 4, (acc.mouse | ACC_AVAILABLE) & 0xffu);
+    w32_put32(o + 8, acc.mouse_max);
+    w32_put32(o + 12, acc.mouse_time);
+    w32_put32(o + 16, acc.mouse_ctrl);
+    w32_put32(o + 20, 0);
+    w32_put32(o + 24, 0);
+    return 1;
+  case 64: /* SPI_GETSOUNDSENTRY */
+    if (!acc_size(out, param, 48))
+      return 0;
+    w32_fill(o + 4, 0, 44);
+    w32_put32(o + 4, (acc.sentry | ACC_AVAILABLE) & 0x7u);
+    w32_put32(o + 32, acc.sentry_window);
+    w32_put32(o + 36, acc.sentry_ms);
+    return 1;
+  case 66: { /* SPI_GETHIGHCONTRAST: lpszDefaultScheme receives the name when the caller supplied a buffer */
+    if (!acc_size(out, param, sizeof(struct acc_contrast)))
+      return 0;
+    struct acc_contrast *hc = out;
+    hc->flags = acc.contrast & 0x7fu;
+    if (hc->scheme)
+      acc_copy_name(hc->scheme, sizeof(acc.scheme), acc.scheme);
+    return 1;
+  }
+  case 60: /* SPI_GETACCESSTIMEOUT */
+    if (!acc_size(out, param, 12))
+      return 0;
+    w32_put32(o + 4, acc.timeout & 3u);
+    w32_put32(o + 8, acc.timeout_ms);
+    return 1;
+  default:
+    return -1;
+  }
+}
+static BOOL acc_set(UINT action, UINT param, const void *in) {
+  const uint8_t *i = in;
+  switch (action) {
+  case 59: /* SPI_SETSTICKYKEYS */
+    if (!acc_size(in, param, 8))
+      return 0;
+    acc.sticky = w32_u32(i + 4) & 0x1ffu;
+    return 1;
+  case 51: { /* SPI_SETFILTERKEYS: BounceKeys excludes the other three (FILTERKEYS remarks), 20 s at most */
+    if (!acc_size(in, param, 24))
+      return 0;
+    DWORD wait = w32_u32(i + 8), delay = w32_u32(i + 12),
+          repeat = w32_u32(i + 16), bounce = w32_u32(i + 20);
+    if (wait > 20000 || delay > 20000 || repeat > 20000 || bounce > 20000 ||
+        (bounce ? (wait || delay || repeat) : (!wait || !delay || !repeat)))
+      return u32_fail(87);
+    acc.filter = w32_u32(i + 4) & 0x107fu;
+    acc.wait = wait; acc.delay = delay; acc.repeat = repeat; acc.bounce = bounce;
+    return 1;
+  }
+  case 53: /* SPI_SETTOGGLEKEYS */
+    if (!acc_size(in, param, 8))
+      return 0;
+    acc.toggle = w32_u32(i + 4) & 0x3fu;
+    return 1;
+  case 55: { /* SPI_SETMOUSEKEYS: the Windows NT ranges, reserved fields zero */
+    if (!acc_size(in, param, 28))
+      return 0;
+    DWORD max = w32_u32(i + 8), time = w32_u32(i + 12), ctrl = w32_u32(i + 16);
+    if (max < 10 || max > 360 || time < 1000 || time > 5000 || !ctrl ||
+        ctrl > 32 || w32_u32(i + 20) || w32_u32(i + 24))
+      return u32_fail(87);
+    acc.mouse = w32_u32(i + 4) & 0xffu;
+    acc.mouse_max = max; acc.mouse_time = time; acc.mouse_ctrl = ctrl;
+    return 1;
+  }
+  case 65: { /* SPI_SETSOUNDSENTRY: cbSize, dwFlags and iWindowsEffect; no custom effect DLLs */
+    if (!acc_size(in, param, 48))
+      return 0;
+    DWORD effect = w32_u32(i + 32);
+    if (effect > 3)
+      return u32_fail(87);
+    acc.sentry = w32_u32(i + 4) & 0x7u;
+    acc.sentry_window = effect;
+    if (w32_u32(i + 36))
+      acc.sentry_ms = w32_u32(i + 36);
+    return 1;
+  }
+  case 67: { /* SPI_SETHIGHCONTRAST */
+    if (!acc_size(in, param, sizeof(struct acc_contrast)))
+      return 0;
+    const struct acc_contrast *hc = in;
+    const char *name = hc->scheme;
+    char scheme[32];
+    if (name) {
+      if (!acc_copy_name(scheme, sizeof(scheme), name) || !scheme[0])
+        return u32_fail(87);
+      acc_copy_name(acc.scheme, sizeof(acc.scheme), scheme);
+    }
+    acc.contrast = hc->flags & 0x7fu;
+    return 1;
+  }
+  case 61: /* SPI_SETACCESSTIMEOUT */
+    if (!acc_size(in, param, 12))
+      return 0;
+    acc.timeout = w32_u32(i + 4) & 3u;
+    acc.timeout_ms = w32_u32(i + 8);
+    return 1;
+  default:
+    return -1;
   }
 }
 static BOOL put_bool(void *out, UINT value) {
@@ -264,8 +432,7 @@ static BOOL spi_get(UINT action, UINT param, void *out) {
   case 114: /* SPI_GETSCREENSAVERRUNNING */
     return put_bool(out, spi.saver_running);
   default:
-    (void)param;
-    return -1;
+    return acc_get(action, param, out);
   }
 }
 static BOOL spi_set(UINT action, UINT param, void *in) {
@@ -371,7 +538,7 @@ static BOOL spi_set(UINT action, UINT param, void *in) {
     spi.mouse_speed = (UINT)(uintptr_t)in;
     return 1;
   default:
-    return -1;
+    return acc_set(action, param, in);
   }
 }
 BOOL W32API SystemParametersInfoA(UINT action, UINT param, void *out,

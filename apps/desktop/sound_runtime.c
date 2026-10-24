@@ -6,6 +6,9 @@
 #include "sounds.h"
 #include "sound_runtime.h"
 #include "sound_storage.h"
+#include "access.h"
+/* The tone synthesiser is part of the accessibility engine (access.c); harnesses that link the worker alone have none. */
+extern unsigned access_tone_render(unsigned, int16_t *, unsigned, unsigned) __attribute__((weak));
 #include <ciuki/audio.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -21,6 +24,7 @@
 #define CMD_STOP 102
 #define CMD_SHUTDOWN 103
 #define CMD_TEST 104
+#define CMD_TONE 105   /* G25: a synthesised accessibility tone (access.h ACC_TONE_*) */
 struct command { unsigned kind, event; };
 static struct {
     pthread_mutex_t lock; pthread_cond_t changed;
@@ -47,6 +51,8 @@ static int push(unsigned kind, unsigned event)
 }
 static void notify(struct desktop *d, unsigned event)
 { (void)d; if (!rt.shutting && event < SOUND_EVENTS) (void)push(event,0); }
+static void tone(struct desktop *d, unsigned id)
+{ (void)d; if (!rt.shutting && id < ACC_TONES) (void)push(CMD_TONE,id); }
 static int request(struct desktop *d, int client, unsigned op, unsigned event, uint32_t serial)
 {
     if (op == DESK_SETTINGS_SOUND_RELOAD) return push(CMD_RELOAD,0);
@@ -100,6 +106,7 @@ struct worker {
     uint8_t files[SOUND_EVENTS][SOUND_FILE_MAX+1]; struct sound_clip clips[SOUND_EVENTS];
     struct sound_player player;
     int16_t tone[SOUND_RATE];
+    int16_t cue[2][SOUND_RATE]; unsigned cue_next;   /* G25: accessibility tones, alternating buffers */
     int fd, hardware; uint64_t hardware_deadline, drain_until;
     uint32_t drain_ms;
     int mixer; struct sound_throttle played;
@@ -178,6 +185,14 @@ static void *worker(void *arg)
             else if (cmd.kind == CMD_HARDWARE) {
                 stop(w); w->hardware = 1; w->hardware_deadline = now_ns()+2000000000ull;
                 sound_play(&w->player,(struct sound_clip){(const uint8_t *)w->tone,SOUND_RATE});
+            } else if (cmd.kind == CMD_TONE) {
+                /* The cues of StickyKeys, ToggleKeys, the hot keys and the time-out play whatever the sound scheme
+                 * says (they are accessibility feedback) but never over a mute or a running DOS VM. */
+                if (!w->hardware && access_tone_render && permitted(w,1)) {
+                    int16_t *buffer = w->cue[w->cue_next++ & 1u];
+                    unsigned frames = access_tone_render(cmd.event,buffer,SOUND_RATE,SOUND_RATE);
+                    if (frames) { w->player.volume = (unsigned)w->scheme.volume; (void)sound_play(&w->player,(struct sound_clip){(const uint8_t *)buffer,frames}); }
+                }
             } else if (cmd.kind == CMD_SHUTDOWN) {
                 stop(w); if (permitted(w,0)) { w->player.volume = (unsigned)w->scheme.volume; sound_play(&w->player,w->clips[SOUND_SHUTDOWN]); }
             } else if (!w->hardware && (w->scheme.enabled || cmd.kind == CMD_TEST)) {
@@ -245,6 +260,6 @@ void desk_sound_init(struct desktop *d)
     int r = pthread_create(&thread,NULL,worker,w);
     if (r) { rt.live = 0; free(w); fprintf(stderr,"desktop: sound worker unavailable (%d)\n",r); return; }
     pthread_detach(thread);
-    d->sound_event = notify; d->sound_request = request;
+    d->sound_event = notify; d->sound_request = request; d->sound_tone = tone;
     d->sound_shutdown = shutdown_wait; d->sound_cancel = cancel;
 }

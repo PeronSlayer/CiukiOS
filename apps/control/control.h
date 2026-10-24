@@ -241,6 +241,10 @@ struct cp_app {
     int dt_year, dt_month, dt_day;
     struct du_item dt_tabs[2], dt_zone_items[CP_TZ_MAX];
     char dt_time_text[16], dt_zone_line[160], dt_dst_line[192];
+    /* G25 Accessibility Options (access.inc): settings as last read, the sub-view's entry state, tab and view. */
+    struct access_settings access_loaded, ac_backup;
+    int ac_tab, ac_view;
+    struct du_item ac_tabs[5], ac_items[8];
 };
 void cp_game_open(struct cp_app *, unsigned);
 void cp_joystick_result(struct cp_app *, const struct ciuki_joystick_control *, int);

@@ -82,7 +82,7 @@ class DeviceTests(unittest.TestCase):
             image = load('devices_png', ROOT / 'tests/host/desktop/test_desktop.py')
             target = ROOT / 'build/host/f2-75'; target.mkdir(parents=True, exist_ok=True)
             captures = sorted(frames.glob('*.xrgb'))
-            self.assertEqual(len(captures), 38)  # firmware dialog, game controllers and f6-07 driver pack frames
+            self.assertEqual(len(captures), 39)  # G25 Accessibility Options, firmware dialog, game controllers and f6-07 driver pack frames
             for path in captures:
                 width, height = map(int, path.with_suffix('.size').read_text().split())
                 image.control_frame(self,path.stem,path.read_bytes(),width,height)
