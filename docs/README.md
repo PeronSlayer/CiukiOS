@@ -12,6 +12,7 @@ merged, the F5 Win32 personality in progress); the 0.8 line lives on branch
 - [Terminal](terminal.md)
 - [SDK and libc](sdk.md) · [Developing native applications](developer-guide.md) · [API reference](developer-api.md)
 - [Windows portable release](windows-portable-release.md) (0.8 line)
+- [Stable image release procedure](release-process.md)
 - [0.9.2 screenshots](screenshots/0.9.2/README.md)
 - [0.9.0 screenshots](screenshots/0.9.0/README.md)
 - [0.8.3 screenshots](screenshots/0.8.3/README.md)
