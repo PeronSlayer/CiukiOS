@@ -833,7 +833,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
             d->tasks_stage >= 5) d->tasks_checkpoint = 1;
         break;
     case DESK_WINDOWS_QUERY:
-        if (c->taskman) desk_task_windows(d, i, p.serial);
+        if (c->taskman || c->sysapp) desk_task_windows(d, i, p.serial);
         else {
             desk_message(&reply, DESK_TASK_RESULT, 16); desk_put32(reply.data + 4, p.serial);
             desk_put32(reply.data + 8, DESK_WINDOWS_QUERY); desk_put32(reply.data + 12, (uint32_t)-EPERM);
@@ -854,6 +854,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         int terminal_launch = terminal && p.opcode == DESK_LAUNCH && desk_program_graphical(p.title) &&
                               (!p.argument[0] || p.argument[0] == '/');
         int terminal_end = terminal && p.opcode == DESK_END_TASK && !p.window_id && p.pid;
+        int sysapp_launch = c->sysapp && p.opcode == DESK_LAUNCH && desk_program_graphical(p.title) && !p.argument[0];
         /* fx-8: a queued launch owes this TASK_RESULT; it is sent when the
          * launcher worker completes, to this requester only. */
         d->launch_deferred = 0;
@@ -863,7 +864,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
             r->client = i; r->channel = c->channel; r->pid = c->pid; r->serial = p.serial; r->opcode = p.opcode;
             r->recent = files_open; snprintf(r->argument, sizeof(r->argument), "%s", p.argument);
         }
-        int32_t result = !c->taskman && !files_open && !ide_run && !ide_guide && !terminal_launch && !terminal_end && !install ? -EPERM :
+        int32_t result = !c->taskman && !files_open && !ide_run && !ide_guide && !terminal_launch && !terminal_end && !install && !sysapp_launch ? -EPERM :
             p.opcode == DESK_END_TASK ? (terminal_end && p.pid == 1 ? -EPERM : desk_task_end(d, p.window_id, p.pid)) :
             p.opcode == DESK_SWITCH_TO ? desk_task_switch(d, p.window_id) :
             install ? (d->power.state ? -EBUSY : d->install_program ? d->install_program(d,p.argument) : -ENOSYS) :

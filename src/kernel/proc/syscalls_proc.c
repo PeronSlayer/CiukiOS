@@ -192,6 +192,9 @@ int proc_authority_install(struct process *p)
  * kernel heap stops at 2 KiB objects, so the 5184-byte snapshot lives in one
  * static buffer: nothing between snapshot and copy-out waits, and kernel code
  * is never preempted (execution-abi.md, Locking), so no two calls share it. */
+/* G30: totals kept by fs/blkreq.c; weak, so harnesses without it report zero. */
+extern uint64_t g_blk_read_bytes __attribute__((weak));
+extern uint64_t g_blk_write_bytes __attribute__((weak));
 static struct {
     struct ciuki_proc_system system;
     struct ciuki_proc_record records[CIUKI_PROCESS_MAX];
@@ -218,7 +221,9 @@ int proc_list(uint32_t buffer, uint32_t bytes)
         .tick_hz = 1000, .records = records, .total_ticks = g_ticks, .idle_ticks = g_idle_ticks,
         .usable_pages = pmm_total_usable(), .free_pages = pmm_free_count(),
         .kheap_pages = (uint32_t)heap.pages, .kheap_bytes = (uint32_t)heap.in_use,
-        .kheap_high_water = (uint32_t)heap.peak, .processes = total };
+        .kheap_high_water = (uint32_t)heap.peak, .processes = total,
+        .disk_read_kib = &g_blk_read_bytes ? (uint32_t)(g_blk_read_bytes >> 10) : 0,
+        .disk_write_kib = &g_blk_write_bytes ? (uint32_t)(g_blk_write_bytes >> 10) : 0 };
     irq_restore(flags);
     int err = copy_to_user(buffer, &proc_list_buffer, sizeof(*sys) + records * sizeof(struct ciuki_proc_record));
     return err ? err : (int)records;

@@ -412,7 +412,7 @@ static void wm_frame(const char *what)
     if (wm_mode==WM_CACHE && !d.damage.count && !d.move_damage.count && !d.present_damage.count)
         for (unsigned k=0;k<64;k++) { wm_clock+=40000000ull; if (!desk_accel_cache_step(&d,wm_clock)) break; }
 }
-static const char *const wm_programs[]={"files","ciuknote","control","netsurf","dosbox","calc","tasks","terminal","gfxdemo"};
+static const char *const wm_programs[]={"files","ciuknote","control","netsurf","dosbox","calc","tasks","terminal","gfxdemo","resmeter"};
 static void wm_begin(unsigned m, int shell)
 {
     wm_mode=m; wm_shell=shell;
@@ -851,6 +851,24 @@ static void row_popups(unsigned m)
     turn(8100000000ull); step("notification expired");
     wm_end();
 }
+static void row_resources(unsigned m)
+{
+    /* G30: the Resource Meter tray icon: appears and disappears (the clock and every icon move), changes level, tooltip, click. */
+    row_name="resource meter tray icon"; wm_begin(m,1);
+    struct fake_app *meter=app_open("resmeter",300,160,200,100); (void)meter;
+    struct fake_app *other=app_open("files",320,200,60,150); (void)other;
+    struct sh_resources r={.visible=1,.system=80,.user=80,.gdi=95,.level=0};
+    desk_shell_resources_update(&d,&r); step("Resource Meter icon appears: the tray widens");
+    r.system=25; r.user=25; r.level=1; desk_shell_resources_update(&d,&r); step("level low: the bar changes");
+    struct desk_box i=desk_shell_tray_icon_box(&d,SH_TRAY_RESOURCES); assert(i.w==SH_TRAY_ICON_SIZE);
+    pointer_to(i.x+4,i.y+4); step("hover the icon");
+    turn(700000000ull); assert(d.sh.tooltip==6); step("tooltip with the three values");
+    r.system=10; r.level=2; desk_shell_resources_update(&d,&r); step("critical while the tooltip shows");
+    click(i.x+4,i.y+4,CIUKI_BUTTON_LEFT); step("click raises the Resource Meter window");
+    r.visible=0; desk_shell_resources_update(&d,&r); assert(!d.sh.tooltip || d.sh.tooltip!=6); step("Resource Meter closed: the icon is removed");
+    struct desk_box gone=desk_shell_tray_icon_box(&d,SH_TRAY_RESOURCES); assert(!gone.w);
+    wm_end();
+}
 static void row_switcher(unsigned m)
 {
     row_name="switcher"; wm_begin(m,1);
@@ -1026,7 +1044,7 @@ static void row_drag(unsigned m)
     wm_end();
 }
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
-    row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
+    row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_resources,row_switcher,row_internal,row_icons,
     row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag};
 static void wm_rows(unsigned m)
 {

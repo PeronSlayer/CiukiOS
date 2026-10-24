@@ -259,6 +259,10 @@ static const struct program_info programs[] = {
     {"help", "CiukiOS Help", "help-browser", "accessories", NULL},
     {"mixer", "Volume Control", "audio-volume-high", "accessories", NULL},
     {"hwreport", "Hardware Report", "preferences-system", "system-tools", NULL},
+    {"resmeter", "Resource Meter", "applications-system", "system-tools", NULL},
+    {"schedtask", "Scheduled Tasks", "x-office-calendar", "system-tools", NULL},
+    {"sysinfo", "System Information", "document-properties", "system-tools", NULL},
+    {"sysmon", "System Monitor", "utilities-system-monitor", "system-tools", NULL},
     {"regedit", "Registry Editor", "preferences-system", "accessories", NULL},
     {"viewer", "Image Viewer", "image-x-generic", "accessories", NULL},
     {"hello", "Hello", "face-smile", "developer", NULL},
@@ -1094,6 +1098,10 @@ static void tooltip_text(const struct desktop *d, char *text, size_t size)
         return;
     }
     if (d->sh.tooltip==5) { snprintf(text,size,"Notifications"); return; }
+    if (d->sh.tooltip==6) {      /* G30: the Resource Meter tooltip, as rm_tooltip */
+        snprintf(text,size,"System Resources: %u%%\nUser Resources: %u%%\nGDI Resources: %u%%",d->sh.resources.system,d->sh.resources.user,d->sh.resources.gdi);
+        return;
+    }
     if (d->sh.tooltip != 2) { date_text(d, text, size, 1); return; }
     const struct ciuki_net_state *n = &d->sh.network;
     if (!n->present) snprintf(text, size, "No network adapter");
@@ -1131,7 +1139,8 @@ static struct desk_box tooltip_box(const struct desktop *d)
     if (h>(int)d->height-2*DESK_BAR-12) h=(int)d->height-2*DESK_BAR-12;
     struct desk_box anchor=d->sh.tooltip>=16 ? desk_task_button(d,d->sh.tooltip-16) :
         d->sh.tooltip==2 ? network_icon_box(d) : d->sh.tooltip==3 ? volume_icon_box(d) :
-        d->sh.tooltip==4 ? media_icon_box(d) : d->sh.tooltip==5 ? notification_icon_box(d) : clock_box(d);
+        d->sh.tooltip==4 ? media_icon_box(d) : d->sh.tooltip==5 ? notification_icon_box(d) :
+        d->sh.tooltip==6 ? desk_shell_tray_icon_box(d,SH_TRAY_RESOURCES) : clock_box(d);
     return tray_popup(d,anchor,w,h);
 }
 static void damage_moved_popup(struct desktop *d, struct desk_box anchor, int dx, int w, int h)
@@ -1158,6 +1167,25 @@ void desk_shell_tray_damage(struct desktop *d, int previous_width)
         struct desk_box b=notification_outer(d);
         damage(d,b); b.x+=dx; damage(d,b);
     }
+}
+void desk_shell_resources_update(struct desktop *d, const struct sh_resources *now)
+{
+    struct sh_resources *old = &d->sh.resources;
+    int shown = !!now->visible;
+    if (!shown) {
+        if (!old->visible) return;
+        int previous = tray_box(d).w;
+        old->visible = 0;
+        if (d->sh.tooltip==6) tooltip_hide(d);
+        desk_shell_tray_damage(d, previous);
+        return;
+    }
+    if (old->visible && old->system==now->system && old->user==now->user && old->gdi==now->gdi && old->level==now->level) return;
+    int previous = tray_box(d).w, was = old->visible;
+    *old = *now; old->visible = 1;
+    if (!was) { desk_shell_tray_damage(d, previous); return; }
+    damage(d, desk_shell_tray_icon_box(d, SH_TRAY_RESOURCES));
+    if (d->sh.tooltip==6) damage(d, tooltip_box(d));
 }
 void desk_shell_network_update(struct desktop *d, const struct ciuki_net_state *state)
 {
@@ -1274,6 +1302,16 @@ static void draw_tray(struct desktop *d, struct du_canvas *canvas)
          * backup power), '?' unknown. ACPI and APM records share this path. */
         du_text(&c,bi.x+9,bi.y+4,p->ac_online == 1 ? "+" : p->ac_online == 0 || p->ac_online == CIUKI_POWER_AC_BACKUP ? "-" : "?",
                 desk_theme->topbar_text);
+    }
+    if (d->sh.resources.visible) {
+        /* G30: Tango "applications-system" with a level bar: green, amber (low) or red (critical). */
+        struct desk_box ri = desk_shell_tray_icon_box(d, SH_TRAY_RESOURCES);
+        du_icon_blit(&c, ri.x, ri.y, desk_shell_icon("applications-system", 16), 16, DU_ICON_NORMAL);
+        static const uint32_t level_colors[3] = {0x2e9a2eu, 0xe0a000u, 0xcc2222u};
+        int level = d->sh.resources.level > 2 ? 2 : (int)d->sh.resources.level;
+        int filled = (int)(d->sh.resources.system > 100 ? 100 : d->sh.resources.system) * SH_TRAY_ICON_SIZE / 100;
+        du_fill(&c, (struct du_rect){ri.x, ri.y + SH_TRAY_ICON_SIZE - 3, SH_TRAY_ICON_SIZE, 3}, 0x202020u);
+        if (filled) du_fill(&c, (struct du_rect){ri.x, ri.y + SH_TRAY_ICON_SIZE - 3, filled, 3}, level_colors[level]);
     }
     char clock[24];
     clock_text(d, clock, sizeof(clock));
@@ -3338,6 +3376,11 @@ int desk_shell_button(struct desktop *d, int button, int down)
     }
     struct desk_box bar = desk_taskbar(d);
     if (y >= 0 && y < DESK_BAR) {
+        if (d->sh.resources.visible && desk_contains(desk_shell_tray_icon_box(d, SH_TRAY_RESOURCES),x,y) && button == CIUKI_BUTTON_LEFT) {
+            /* G30: the icon opens the running Resource Meter window, as double-clicking it does in Windows 98. */
+            for (int i=0;i<DESK_CLIENTS;i++) if (d->clients[i].window && !strcmp(d->clients[i].application,"resmeter")) { desk_task_switch(d,d->clients[i].window_id); break; }
+            return 1;
+        }
         if (desk_contains(desk_shell_tray_icon_box(d, SH_TRAY_POWER),x,y) && button == CIUKI_BUTTON_LEFT) {
             if (program_index(d,"control")>=0) launch_named(d,"control","--panel=power");
             return 1;
@@ -3428,6 +3471,7 @@ static int hover_target(const struct desktop *d)
     if (desk_contains(volume_icon_box(d),x,y)) return 3;
     if ((d->sh.media.removable_mask & ~7u) && desk_contains(media_icon_box(d),x,y)) return 4;
     if (desk_contains(notification_icon_box(d),x,y)) return 5;
+    if (d->sh.resources.visible && desk_contains(desk_shell_tray_icon_box(d,SH_TRAY_RESOURCES),x,y)) return 6;
     for (int i=0;i<DESK_CLIENTS;i++) if (d->clients[i].window && desk_contains(desk_task_button(d,i),x,y)) return 16+i;
     return 0;
 }

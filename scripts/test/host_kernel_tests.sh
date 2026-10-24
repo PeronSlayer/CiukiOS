@@ -362,6 +362,14 @@ ASAN_OPTIONS=detect_leaks=0 "$out/savage2d_test"
 # f2-125: per-game controller/COM/LPT panel, persistence and launch services.
 python3 -B "$root/tests/host/desktop/test_game_properties.py"
 
+# G30: system tools models (System Information, Monitor, Resource Meter, device actions, Add New Hardware, Scheduler).
+nice -n 19 python3 -B "$root/tests/host/desktop/test_systools.py"
+nice -n 19 python3 -B "$root/tests/host/desktop/test_control_system_tools.py"
+nice -n 19 python3 -B "$root/tests/host/desktop/test_systools_ui.py"
+nice -n 19 python3 -B "$root/tests/host/desktop/test_schedtask.py"
+nice -n 19 python3 -B "$root/tests/host/desktop/test_schedsvc.py"
+nice -n 19 python3 -B "$root/tests/host/desktop/test_resources.py"
+
 # f1-113: RC jitter/calibration, real HID state and V86 polling loop/BIOS.
 bash "$root/tests/host/joystick/run.sh"
 

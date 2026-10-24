@@ -424,6 +424,7 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 28 | Drop-target highlight (`DROPEFFECT` feedback: the target item drawn selected while it would accept the drop) | the old and new target icon | `dnd_evaluate` (`drop_index`), `icon_repaint` | none | drag and drop |
 | 29 | Taskbar hover during a drag (Windows 98: holding a dragged object over a task button for about a second activates that window) | the restored window (rows 7, 8, 11) | `desk_shell_tick` drag hover | none (covered by the window rows) | drag and drop |
 | 30 | Right-drag menu, Esc and cancelled drags | the menu box (row 13); the image box when the drag ends | `desk_shell_drag_button`, `desk_shell_drag_cancel`, `dnd_finish` | none | drag and drop |
+| 31 | Resource Meter tray icon (G30; Windows 98 `Shell_NotifyIcon` of rsrcmtr.exe): appears with the running Resource Meter window, changes its level bar, tooltip with the three percentages, click opens the window, removed when the program ends | the tray box and everything right of the changed icon (the clock and icons shift by one slot), then only the icon box; the tooltip box | `desk_shell_resources_update`, `draw_tray`, `desk_shell_tray_damage`, `hover_target` 6 | none | resource meter tray icon |
 
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with

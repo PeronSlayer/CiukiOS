@@ -21,6 +21,7 @@
 #include <ciuki/font.h>
 #include <stdint.h>
 #include "driver_pack.h"
+#include "../systools/systools.h"
 #define CP_PACK_INSTALL 1450
 #define CP_PACK_REMOVE 1451
 #define CP_PACK_LOCATION 1452
@@ -127,6 +128,15 @@ struct cp_host {
     /* G1: the system time-zone record (syscall 97): GET, SET_LOCAL,
      * SET_ZONE; 0 or -errno. NULL: Date/Time shows the host clock read-only. */
     int (*time_zone)(void *, struct ciuki_time_zone *, uint32_t operation);
+    /* G30 (docs/design/system-tools.md): hardware profile settings,
+     * /system/settings/hwprofiles.cfg. load returns 0 or -errno (absent -ENOENT) with a terminated text;
+     * save replaces the file atomically (temp file, fsync, rename). NULL: profiles live in memory only. */
+    int (*hw_load)(void *, char *text, size_t size, size_t *length);
+    int (*hw_save)(void *, const char *text, size_t length);
+    /* Installed driver-pack entries as Add New Hardware models (class NETWORK); count or -errno. NULL: none. */
+    /* Current memory totals (call 70), KiB; NULL: the startup values mem_total_k and mem_free_k. */
+    int (*memory)(void *, uint64_t *total_k, uint64_t *free_k);
+    int (*driver_catalog)(void *, struct aw_model *out, unsigned capacity);
     void *ctx;
     const uint32_t *portrait;                                         /* 256x256 or NULL */
     uint32_t screen_w, screen_h;
@@ -209,7 +219,7 @@ struct cp_app {
     uint64_t snapshot_time;
     unsigned collapsed;
     uint32_t selected_device_id;
-    struct du_item applet_items[CP_PAGES], system_tabs[4];
+    struct du_item applet_items[CP_PAGES], system_tabs[6];
     struct du_item tree_items[CP_TREE_MAX], driver_items[CIUKI_DRIVERS_MAX], lease_items[CIUKI_LEASES_MAX];
     int tree_device[CP_TREE_MAX]; unsigned tree_count;
     char device_names[CIUKI_DEVICES_MAX][96];
@@ -241,6 +251,22 @@ struct cp_app {
     int dt_year, dt_month, dt_day;
     struct du_item dt_tabs[2], dt_zone_items[CP_TZ_MAX];
     char dt_time_text[16], dt_zone_line[160], dt_dst_line[192];
+    /* G30 device actions, Add New Hardware, Performance and Hardware Profiles (hardware.inc). */
+    struct hp_store hp; int hp_ready;
+    unsigned hp_selected;
+    int hp_wait_mode;                    /* start-up radio: 0 wait for me, 1 default after N seconds */
+    char hp_wait_text[8], hp_status[96];
+    char hp_loaded_note[96];
+    uint32_t dm_pending_id; int dm_pending_action; int dm_updating;
+    unsigned dm_candidates[AW_CATALOG_MAX], dm_candidate_count, dm_candidate;
+    struct du_item dm_items[AW_CATALOG_MAX];
+    struct aw_model aw_catalog[AW_CATALOG_MAX]; uint8_t aw_from_pack[AW_CATALOG_MAX]; unsigned aw_catalog_count;
+    struct aw_wizard aw; int aw_active, aw_searching; unsigned aw_progress;
+    unsigned aw_list[AW_CATALOG_MAX], aw_list_count;
+    struct du_item aw_items[CIUKI_DEVICE_CLASSES > AW_CATALOG_MAX ? CIUKI_DEVICE_CLASSES : AW_CATALOG_MAX];
+    char aw_names[AW_FOUND_MAX][96];
+    struct du_item profile_items[HP_MAX]; char profile_notes[HP_MAX][48];
+    struct pf_status perf;
 };
 void cp_game_open(struct cp_app *, unsigned);
 void cp_joystick_result(struct cp_app *, const struct ciuki_joystick_control *, int);

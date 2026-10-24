@@ -205,7 +205,7 @@ class IconStoreTests(unittest.TestCase):
         catalog = (ROOT / "apps/desktop/catalog.h").read_text()
         programs = re.findall(r'\{"(\w+)", "[^"]+", "([a-z-]+)", "(?:programs|accessories|developer|system-tools)", (?:NULL|"[^"]*")\}', shell)
         accessories = re.findall(r'\{"(\w+)", "[^"]+", "([a-z-]+)", [01], "[^"]*"\}', catalog)
-        self.assertEqual(len(programs), 26)  # f5-22 system CD Player joins Accessories; f6-19 NetSurf
+        self.assertEqual(len(programs), 30)  # G30 adds four system tools; f5-22 system CD Player joins Accessories; f6-19 NetSurf
         self.assertEqual(len(accessories), 11)  # f2-52 Graphics Demo
         for name, tango in programs + accessories:
             self.assertEqual(tango, table[f"program:{name}"], name)
@@ -223,7 +223,7 @@ class IconStoreTests(unittest.TestCase):
         rows = dict(re.findall(r'item\(m,\s*"([^"]+)",\s*"([a-z-]+)"', shell))
         settings=(ROOT / "apps/desktop/settings_catalog.h").read_text()
         applets=re.findall(r'\{CP_\w+, CP_CAT_\w+, "[^"]+", "([^"]+)", "([a-z-]+)"\}',settings)
-        self.assertEqual(len(applets),11)  # f5-09 Add/Remove Programs, f1-113 Game controllers
+        self.assertEqual(len(applets),12)  # f5-09 Add/Remove Programs, f1-113 Game controllers, G30 Add New Hardware
         rows.update(applets)
         objects = {"Programs": "menu:programs", "Documents": "menu:documents", "Settings": "menu:settings", "Help": "menu:help",
                    "System Tools": "menu:system-tools", "Run...": "menu:run", "Shut Down...": "menu:shutdown", "Accessories": "menu:accessories", "Games": "menu:games",

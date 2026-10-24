@@ -11,6 +11,11 @@ struct desk_catalog_entry { const char *name, *label, *tango; int takes_file; co
 static const struct desk_catalog_entry desk_catalog[] = {
     {"gfxdemo", "Graphics Demo", "applications-graphics", 0, ""},
     {"hwreport", "Hardware Report", "preferences-system", 0, ""},
+    /* G30 system tools (apps/systools). */
+    {"resmeter", "Resource Meter", "applications-system", 0, ""},
+    {"schedtask", "Scheduled Tasks", "x-office-calendar", 0, ""},
+    {"sysinfo", "System Information", "document-properties", 0, ""},
+    {"sysmon", "System Monitor", "utilities-system-monitor", 0, ""},
     {"regedit", "Registry Editor", "preferences-system", 0, ""},
     {"calc", "Calculator", "accessories-calculator", 0, ""},
     {"charmap", "Character Map", "accessories-character-map", 0, ""},

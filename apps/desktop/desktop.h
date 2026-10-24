@@ -107,6 +107,7 @@ struct desk_client {
     int collapsed;                /* retained shade state, independent of maximize */
     int32_t shade_height;
     int taskman;                  /* f2-33: launched /Programs/tasks; may send task requests */
+    int sysapp;                   /* G30: launched sysinfo/sysmon/schedtask/resmeter; window list and argument-free catalogue launches */
     int gfxdemo;                  /* launch-bound graphics diagnostics authority */
     int dosbox;                   /* launch-bound DOS full-screen menu */
     int mixer;                    /* launched Volume Control or Music Player; may send MIXER_SET */
@@ -383,6 +384,8 @@ struct desktop {
     int (*autoplay_preference)(struct desktop *, const char *id, const char *label, int action);
     void (*media_sound)(struct desktop *, int connected);
     struct desk_shell sh;
+    uint64_t resources_next_ns;     /* G30: next Resource Meter sample (resources.c) */
+    struct desk_schedsvc *schedsvc; /* G30: scheduled tasks service (schedsvc.c), or NULL */
     struct desk_power_sequence power;
     struct desk_session session;   /* G3: the end-of-session queries before power */
     struct desk_end_task end_task;

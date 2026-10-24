@@ -348,6 +348,8 @@ BOOL W32API ChangeClipboardChain(HWND, HWND);
 int W32API GetSystemMetrics(int);
 BOOL W32API SystemParametersInfoA(UINT, UINT, void *, UINT);
 DWORD W32API GetSysColor(int);
+/* G30: GFSR_SYSTEMRESOURCES 0, GFSR_GDIRESOURCES 1, GFSR_USERRESOURCES 2; percent free. */
+UINT W32API GetFreeSystemResources(UINT);
 BOOL W32API SetSysColors(int, const int *, const DWORD *);
 BOOL W32API MessageBeep(UINT);
 BOOL W32API ExitWindowsEx(UINT, DWORD);

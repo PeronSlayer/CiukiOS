@@ -115,7 +115,8 @@ static const struct {
                EXPORT(GetObjectA),         EXPORT(GetDIBits),
                EXPORT(w32_gdi_draw_icon),  EXPORT(SetDIBits),
                EXPORT(CreateCompatibleDC), EXPORT(StretchBlt),
-               EXPORT(w32_gdi_palette_hook), EXPORT(w32_gdi_gl_window_format)};
+               EXPORT(w32_gdi_palette_hook), EXPORT(w32_gdi_gl_window_format),
+               EXPORT(w32_gdi_live_objects)};
 void *host_gdi_proc(const char *name) {
   for (unsigned i = 0; i < sizeof(exports) / sizeof(*exports); i++)
     if (!strcmp(exports[i].name, name))

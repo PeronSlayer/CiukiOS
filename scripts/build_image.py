@@ -326,6 +326,8 @@ def desktop_payloads():
                "/Programs/files": DESKTOP / "files", "/Programs/tasks": DESKTOP / "tasks", "/Programs/ciuknote": DESKTOP / "ciuknote",
                "/Programs/regedit": DESKTOP / "regedit",
                "/Programs/hwreport": DESKTOP / "hwreport",
+               "/Programs/resmeter": DESKTOP / "resmeter", "/Programs/schedtask": DESKTOP / "schedtask",
+               "/Programs/sysinfo": DESKTOP / "sysinfo", "/Programs/sysmon": DESKTOP / "sysmon",
                "/Programs/control": DESKTOP / "control", "/Programs/ciukide": DESKTOP / "ciukide",
                "/Programs/calc": DESKTOP / "calc", "/Programs/charmap": DESKTOP / "charmap", "/Programs/clock": DESKTOP / "clock",
                "/Programs/help": DESKTOP / "help", "/Programs/mixer": DESKTOP / "mixer", "/Programs/viewer": DESKTOP / "viewer",

@@ -376,7 +376,7 @@ class FontTests(unittest.TestCase):
     def test_control_panel_through_desktop_harness(self):
         toolkit = module("fonts_test_toolkit", ROOT / "tests/host/desktop/test_deskui.py")
         icons = module("fonts_test_icons", ROOT / "tests/host/desktop/icon_assets.py")
-        sources = ["tests/host/desktop/fonts_control_test.c", "apps/control/app.c", "apps/control/driver_pack_ui.c", "apps/control/display.c", "apps/control/fonts.c",
+        sources = ["tests/host/desktop/fonts_control_test.c", "apps/control/app.c", "apps/systools/devctl.c", "apps/systools/profiles.c", "apps/control/driver_pack_ui.c", "apps/control/display.c", "apps/control/fonts.c",
                    "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c", "apps/desktop/protocol.c", "apps/desktop/settings.c",
                    "apps/desktop/sounds.c", "apps/desktop/wallpaper.c", "apps/desktop/image.c", *toolkit.TOOLKIT]
         binary = self.folder / "fonts-control"
