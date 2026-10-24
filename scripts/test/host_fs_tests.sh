@@ -42,7 +42,7 @@ run_format_tests() {
         -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c \
         src/kernel/fs/cache.c src/kernel/fs/partition.c src/kernel/fs/path.c src/kernel/fs/fat.c \
         src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c src/kernel/fs/iso9660.c src/kernel/fs/ntfs_ro.c \
-        src/kernel/fs/ntfs_fs.c src/kernel/fs/mount.c src/kernel/drivers/blkpart.c \
+        src/kernel/fs/ntfs_fs.c src/kernel/fs/mount.c src/kernel/fs/disklease.c src/kernel/drivers/blkpart.c \
         src/kernel/lib/fmt.c tests/host/fs/fake.c tests/host/fs/scan.c tests/host/fs/test_format.c -o "$out/test_format"
     "$out/test_format" "$out/fat12.img" "$out/fat16.img" "$out/fat32.img"
     for type in 12 16 32; do fsck.fat -n "$out/fat$type.img"; done

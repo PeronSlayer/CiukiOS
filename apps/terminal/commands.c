@@ -293,6 +293,7 @@ static const char help[]=
 "REG is reserved. Quote paths with spaces; * and ? match names.\n"
 "Tab: complete path; Up/Down: history; PgUp/PgDn: scroll.\n"
 "Ctrl+C: copy selection or interrupt; Ctrl+V: paste.\n"
+"Disk tools: BACKUP, RESTORE, FDISK (type the command for help).\n"
 "Interactive Lua: .exit returns to the command prompt.\n";
 int term_execute(struct terminal *t,const char *line)
 {
@@ -309,6 +310,7 @@ int term_execute(struct terminal *t,const char *line)
     }
     else if(term_recovery && term_recovery(t,n,a,&r)) { } /* G14: SCANREG, SCANDISK, SFC, WIN */
     else if(equal(a[0],"RUN"))term_write(t,"not available in this release\n");
+    else if(equal(a[0],"BACKUP") || equal(a[0],"RESTORE") || equal(a[0],"FDISK"))r=t->host.disktool ? t->host.disktool(t->host.ctx,n,a) : -ENOSYS;
     else if(equal(a[0],"REG"))term_write(t,"REG is reserved for a later release.\n");
     else if(equal(a[0],"DIR") || equal(a[0],"ls"))r=n>2 ? -EINVAL : directory(t,n==2 ? a[1] : t->cwd[0] ? t->cwd : "Computer");
     else if(equal(a[0],"CD") || (n==1 && strlen(a[0])==2 && a[0][1]==':')) {

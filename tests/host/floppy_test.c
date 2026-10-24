@@ -64,7 +64,16 @@ int main(void)
         blank->st1=0;assert(!fdc_format(&lease,0,0,0xf6) && blank->formats==1);
         uint8_t data[512];assert(!fdc_transfer(&lease,0,1,data,false));
         for(unsigned i=0;i<512;i++)assert(data[i]==0xf6);
-        assert(!fdc_release(&lease));fixture_close(blank);free(blank);
+        assert(!fdc_release(&lease));
+        blank->blank=blank->changed=true;
+        unsigned formats=blank->formats,writes=blank->data_writes;
+        struct blkdev *raw;
+        assert(!fdc_native_blank(&blank->fdc,0,&raw));
+        assert(raw->capacity && blank->formats==formats && blank->data_writes==writes);
+        assert(!fdc_native_close(&blank->fdc,0));
+        blank->absent=blank->changed=true;
+        assert(fdc_native_blank(&blank->fdc,0,&raw)==-FS_EIO && !blank->fdc.drive[0].owner);
+        fixture_close(blank);free(blank);
     }
     struct floppy_fixture *m=calloc(1,sizeof(*m));assert(m);assert(!fixture_open(m,4));
     struct blkdev *b;assert(!fdc_native_open(&m->fdc,0,&b));uint8_t data[512];
@@ -73,4 +82,5 @@ int main(void)
     assert(!fdc_native_close(&m->fdc,0));assert(fdc_detach(&m->fdc)==-FS_EQUARANTINED);free(m->disk);free(m->disk_b);free(m);
     puts("floppy: PASS (rates, DMA, blank/absent/protected format, retries, media, exclusive leases, timeout, quarantine)");
     fflush(stdout);
+    return 0;
 }

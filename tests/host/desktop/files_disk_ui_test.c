@@ -51,7 +51,7 @@ static void lifetimes(void)
     assert(a->reading && !a->loading);
     assert(!files_disk_open(a,2,0) && !files_disk_busy(a) && a->disk_pending);
     __atomic_store_n(&released,1,__ATOMIC_RELEASE); disk_test_settle();
-    assert(du_dialog_id(u)==246); disk_test_press(DU_KEY_ESC); a->media_read=NULL;
+    assert(du_dialog_id(u)==213); disk_test_press(DU_KEY_ESC); a->media_read=NULL;
     entered=released=0;
     assert(!files_disk_open(a,2,0)); wait_entered();
     disk_test_press(DU_KEY_ESC); assert(files_disk_busy(a));
@@ -65,9 +65,9 @@ static void lifetimes(void)
     assert(!files_disk_open(a,4,1)); disk_test_settle(); du_set_text(&u->dialog.items[8],"GAMES");
     entered=released=0; disk_test_accept(0); disk_test_accept(0); wait_entered();
     assert(!files_close_request(a) && declined==1 && !a->close_pending);
-    disk_test_press(DU_KEY_ESC); assert(files_disk_busy(a) && du_dialog_id(u)==248);
+    disk_test_press(DU_KEY_ESC); assert(files_disk_busy(a) && du_dialog_id(u)==215);
     __atomic_store_n(&released,1,__ATOMIC_RELEASE); disk_test_settle();
-    assert(du_dialog_id(u)==252 && closed==1);
+    assert(du_dialog_id(u)==219 && closed==1);
     disk_test_press(DU_KEY_ESC);
     assert(!files_navigate(a,"/mnt/e")); disk_test_settle();
     assert(fm_select_name(&a->model,"ordinary.txt",0)>=0);
@@ -93,6 +93,9 @@ int main(int argc,char **argv)
     disk_ui_scenario(argc==2 ? review_frame : NULL,argc==2 ? argv[1] : NULL);
     maintenance_ui_scenario(argc==2 ? review_frame : NULL,argc==2 ? argv[1] : NULL);
     lifetimes();
+    copy_disk_scenario(argc==2 ? review_frame : NULL,argc==2 ? argv[1] : NULL);
+    backup_ui_scenario(argc==2 ? review_frame : NULL,argc==2 ? argv[1] : NULL);
+    blank_ui_scenario(argc==2 ? review_frame : NULL,argc==2 ? argv[1] : NULL);
     puts("PASS G29b maintenance dialogs: analysis/map/Settings, Start/Pause/Stop, write restart, busy, conversion warnings/refusal/cancel/success");
     puts("PASS G29 disk dialogs: worker-only I/O, drive scope, preview, Cancel, confirmation, cleanup, format choices/label/full, busy refusal, allocation warnings and Cleanup action");
     return 0;

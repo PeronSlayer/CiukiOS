@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: MIT */
 #include "internal.h"
 #include <string.h>
+#include <stdlib.h>
 
 /* A strong reference extracts native.o when applications link -ldisk.
  * Tests replace this backend at the same link boundary. */
@@ -727,3 +728,5 @@ int disk_release(unsigned disk)
     end_session();
     return r ? fail(DISK_ELEASE, r, disk, 0, 0, "DISK_LEASE_RELEASE") : 0;
 }
+
+#include "partition_tool.inc"

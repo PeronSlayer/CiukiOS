@@ -257,6 +257,18 @@ class DeskuiTests(unittest.TestCase):
                                                      "apps/files/model.c"])
         self.assertIn("PASS Files model", stdout)
 
+    def test_partition_tool(self):
+        stdout, _ = self.run_harness("partition-tool", ["tests/host/partition_tool_test.c",
+            "sdk/libdisk/disk.c", "sdk/libdisk/format.c", "sdk/libdisk/sha256.c"],
+            lambda folder: folder / "disk.img", cflags=("-I", str(ROOT / "sdk/libdisk/include")))
+        self.assertIn("PASS FDISK", stdout)
+
+    def test_backup(self):
+        stdout, _ = self.run_harness("backup", ["tests/host/desktop/backup_test.c",
+            "apps/files/backup.c", "apps/files/vfs.c", "apps/files/model.c"],
+            lambda folder: folder, cflags=("-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections"))
+        self.assertIn("PASS Backup", stdout)
+
     def test_files_disk_ui(self):
         stdout, _ = self.run_harness("files-disk-ui", ["tests/host/desktop/files_disk_ui_test.c",
             "tests/host/desktop/fake_vfs.c", "apps/files/app.c", "apps/files/model.c",

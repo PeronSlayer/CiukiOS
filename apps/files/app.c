@@ -23,10 +23,10 @@ enum {
     C_ADDRESS, C_GO_ROOT, C_GO_BIN, C_GO_SYSTEM, C_HELP, C_ABOUT, C_PASTE_INTO, C_TREE_OPEN, C_SAFE_REMOVE, C_FIND, C_FIND_STOP, C_FIND_FOLDER,
     W_ADDRESS = 100, W_ADDRESS_LABEL, W_PLACES_HEADER, W_PLACES, W_FOLDERS_HEADER, W_TREE, W_SPLIT,
     W_LIST, W_STATUS, W_RENAME, W_BAND1, W_BAND2, W_BAND3, W_TSEP1, W_TSEP2, W_TSEP3,
-    D_DELETE = 200, D_REPLACE, D_ERROR, D_PROPERTIES, D_INFO, D_PROGRESS, D_CANCEL_JOB, D_BIN_PURGE, D_BIN_EMPTY, D_BIN_PROPS, D_BIN_ITEM, D_INSERT, D_FIND,
+    D_DELETE = 200, D_REPLACE, D_ERROR, D_PROPERTIES, D_INFO, D_PROGRESS, D_CANCEL_JOB, D_BIN_PURGE, D_BIN_EMPTY, D_BIN_PROPS, D_BIN_ITEM, D_INSERT, D_FIND = 228,
     C_GO_DOCUMENTS = 300, C_GO_GAMES, C_GO_CONTROL, C_GO_DESKTOP, C_MUSIC, C_GO_RECYCLE, C_RESTORE, C_EMPTY_BIN, C_BIN_PROPS, C_DELETE_NOW,
     C_OPTIONS = 310, C_ATTRIBUTES = 311,
-    C_CLEANUP = 312, C_FORMAT = 313, C_DEFRAG = 314, C_CONVERT = 315,
+    C_CLEANUP = 312, C_FORMAT = 313, C_COPY_DISK = 314, C_BACKUP = 315, C_DEFRAG = 316, C_CONVERT = 317,
     T_JOB = 1, T_MEDIA, T_BROWSER, T_DRAG_REFRESH
 };
 #define PANE_TOP 92
@@ -188,7 +188,7 @@ static void insert_disk_prompt(struct files_app *a, int drive, const char *path)
 static int floppy_drive(const struct files_app *a, int d)
 { return d>=0 && d<2 && a->media.type[d]==CIUKI_MEDIA_FLOPPY; }
 static uint32_t floppy_slots(const struct files_app *a)
-{ return (floppy_drive(a,0) ? 1u : 0u) | (floppy_drive(a,1) ? 2u : 0u); }
+{ return (floppy_drive(a,0) ? 1u : 0u) | (floppy_drive(a,1) ? 2u : 0u) | a->media.removable_mask; }
 static void checkpoint(struct files_app *a, int stage)
 {
     if (!a->test || stage != a->stage + 1) return;
@@ -1148,8 +1148,12 @@ static void scan_poll(struct files_app *a)
     if (s->error) {
         int floppy = (s->kind == SCAN_NAVIGATE || s->kind == SCAN_HISTORY) ? media_drive(s->target) : -1;
         a->media = b->media; a->model.drive_slots = floppy_slots(a);
-        if (floppy_drive(a, floppy) && s->kind == SCAN_NAVIGATE) insert_disk_prompt(a, floppy, s->target);
-        else if (s->error != -ENOENT || s->kind != SCAN_HISTORY) error_box(a, "Files", s->kind == SCAN_SEARCH ? "Cannot search this location:" : "Cannot open the folder.", s->error);
+        if (floppy>=0 && (a->media.removable_mask&(1u<<floppy)) &&
+            (a->media.type[floppy]==CIUKI_MEDIA_FLOPPY || a->media.type[floppy]==CIUKI_MEDIA_USB) &&
+            fm_drive_root(s->target) && s->kind==SCAN_NAVIGATE) (void)files_disk_open(a,(unsigned)floppy,1);
+        else if (floppy_drive(a, floppy) && s->kind == SCAN_NAVIGATE) insert_disk_prompt(a, floppy, s->target);
+        else if (s->error != -ENOENT || s->kind != SCAN_HISTORY)
+            error_box(a, "Files", s->kind == SCAN_SEARCH ? "Cannot search this location:" : "Cannot open the folder.", s->error);
     } else {
         if (s->kind != SCAN_TREE && (s->kind != SCAN_MEDIA || (s->changed && !s->metadata_only))) {
             struct fm_model *m = &a->model, *n = &b->model;
@@ -1395,8 +1399,9 @@ static void property_page(struct files_app *a)
         struct du_widget *button=du_property_control(a->ui,9,DU_BUTTON,C_DEFRAG,(struct du_rect){24,252,190,25},"&Defragment Now...");
         button->hidden=!tools; button->disabled=!a->media_defrag;
     }
+    if (a->property_drive>=0 && a->backup_call && d->count>6) d->items[6].hidden=(uint8_t)!tools;
     snprintf(d->text,sizeof(d->text),"%s",tools ?
-        "Error-checking\nCheck Now: ScanDisk is not installed.\n\nBackup\nBackup Now: Backup is not installed.\n\nDefragmentation\nUse Defragment Now below." : version ? a->property_version : a->property_text);
+        (a->backup_call ? "Error-checking\nCheck Now: ScanDisk is not installed.\n\nBackup\n\n\nDefragmentation\nUse Defragment Now below." : "Error-checking\nCheck Now: ScanDisk is not installed.\n\nBackup\nBackup Now: Backup is not installed.\n\nDefragmentation\nUse Defragment Now below.") : version ? a->property_version : a->property_text);
 }
 static void property_changed(struct du_ui *u,const struct du_event *e,void *ctx)
 {
@@ -1406,6 +1411,10 @@ static void property_changed(struct du_ui *u,const struct du_event *e,void *ctx)
     }
     if (e->type==DU_EV_ACTIVATE && e->id==C_CLEANUP && a->property_drive>=0) {
         a->disk_drive=a->property_drive; a->disk_pending=1; du_dialog_close(u); return;
+    }
+    if (e->type==DU_EV_ACTIVATE && e->id==C_BACKUP && a->property_drive>=0) {
+        char source[16]; snprintf(source,sizeof(source),a->property_drive==2 ? "/" : "/mnt/%c",'a'+a->property_drive);
+        du_dialog_close(u); (void)files_backup_open(a,source,NULL,0); return;
     }
     if (e->type==DU_EV_SELECT && !a->property_options) property_page(a);
     if (e->type==DU_EV_CHANGE) { u->dialog.items[2].disabled=0; du_invalidate(u,u->dialog.box); }
@@ -1524,6 +1533,7 @@ static void properties_dialog(struct files_app *a)
         snprintf(a->property_text,sizeof(a->property_text),"Drive %c:\nType:\tDisk drive\n\nUsed space:\t%s (blue)\nFree space:\t%s (purple)\nCapacity:\t%s\n\nVolume label:",'A'+a->property_drive,used,free_text,capacity);
         struct du_widget *w=du_property_control(a->ui,4,DU_EDIT,400,(struct du_rect){24,178,220,23},a->property_label);
         w->disabled=!a->set_label || (have && (info->flags & CIUKI_FILE_INFO_READ_ONLY_MEDIUM));
+        if (a->backup_call) du_property_control(a->ui,6,DU_BUTTON,C_BACKUP,(struct du_rect){24,157,150,25},"&Backup Now...");
         w=du_property_control(a->ui,5,DU_BUTTON,C_CLEANUP,(struct du_rect){24,220,150,25},"Disk &Cleanup...");
         w->disabled=a->property_drive<2 || !a->property_have_space || (have && (info->flags & CIUKI_FILE_INFO_READ_ONLY_MEDIUM));
     } else {
@@ -1944,6 +1954,8 @@ static void context(struct files_app *a, const struct du_event *e)
             popup_add(a,"Disk &Defragmenter...",C_DEFRAG,a->media_defrag && a->media.type[drive]!=CIUKI_MEDIA_OPTICAL ? 0 : DU_ITEM_DISABLED);
             if (drive>=3 && a->media.type[drive]!=CIUKI_MEDIA_USB && a->media.type[drive]!=CIUKI_MEDIA_FLOPPY)
                 popup_add(a,"Drive &Converter (FAT32)...",C_CONVERT,a->media_convert && a->media.type[drive]!=CIUKI_MEDIA_OPTICAL ? 0 : DU_ITEM_DISABLED);
+            if (drive<2 && a->media.type[drive]==CIUKI_MEDIA_FLOPPY) popup_add(a,"&Copy Disk...",C_COPY_DISK,a->media_image ? 0 : DU_ITEM_DISABLED);
+            if (a->backup_call) popup_add(a,"&Backup...",C_BACKUP,0);
             if (drive>=2) popup_add(a,"Disk &Cleanup...",C_CLEANUP,a->media.type[drive]==CIUKI_MEDIA_OPTICAL ? DU_ITEM_DISABLED : 0);
             if (a->media.type[drive]==CIUKI_MEDIA_USB || a->media.type[drive]==CIUKI_MEDIA_FLOPPY)
                 popup_add(a,"&Format...",C_FORMAT,a->media_format ? 0 : DU_ITEM_DISABLED);
@@ -1951,6 +1963,7 @@ static void context(struct files_app *a, const struct du_event *e)
         if (kind != FM_KIND_FOLDER) popup_add(a, "Open &With...", FILES_OPEN_WITH, 0);
         if (n == 1 && m->path[0] && (kind == FM_KIND_FOLDER || kind == FM_KIND_AUDIO))
             popup_add(a, "Play in &Music Player", C_MUSIC, 0);
+        if (a->backup_call && n==1) popup_add(a,"&Backup / Restore...",C_BACKUP,0);
         popup_add(a, NULL, 0, DU_ITEM_SEPARATOR);
         popup_add(a, "Cu&t", C_CUT, 0); popup_add(a, "&Copy", C_COPY, 0);
         popup_add(a,"Create &Shortcut",FILES_SHORTCUT,0); popup_add(a,"Send &To...",FILES_SEND_TO,0);
@@ -2065,6 +2078,15 @@ static void command(struct files_app *a, int id)
         if (drive>=0) (void)files_maintenance_open(a,(unsigned)drive,id==C_CONVERT);
         break;
     }
+    case C_BACKUP: {
+        char source[FM_PATH];
+        if (a->model.active<a->model.count && !fm_entry_path(&a->model,a->model.active,source)) {
+            size_t n=strlen(source); int archive=n>4 && fm_same_path(source+n-4,".cbk");
+            (void)files_backup_open(a,archive ? NULL : source,archive ? source : NULL,archive ? 3 : 0);
+        }
+        break;
+    }
+    case C_COPY_DISK: { int drive=disk_target(a); if (drive>=0) (void)files_copy_disk_open(a,(unsigned)drive); break; }
     case C_CLEANUP: case C_FORMAT: {
         int drive=disk_target(a);
         if (drive>=0) (void)files_disk_open(a,(unsigned)drive,id==C_FORMAT);
@@ -2082,7 +2104,13 @@ static void command(struct files_app *a, int id)
             static const char *const buttons[]={"&OK"};
             du_message(a->ui,D_INFO,"Drive is in use",text,DU_DLG_ICON_WARNING,buttons,1,0,0);
         } else if (r) error_box(a,"Safely remove","The drive could not be safely removed:",r);
-        else { files_navigate(a,FM_COMPUTER); snprintf(a->note,sizeof(a->note),"%s",optical ? "The disc has been ejected." : "It is safe to unplug the USB device."); files_update(a); }
+        else {
+            /* Raw/blank-media slots outlive a missing /mnt directory. The
+             * acknowledged removal must expire this cached slot immediately. */
+            a->media.removable_mask&=~(1u<<(unsigned)d);
+            a->media.type[d]=optical ? CIUKI_MEDIA_NONE : CIUKI_MEDIA_SAFE_REMOVED;
+            a->model.drive_slots=floppy_slots(a);
+            files_navigate(a,FM_COMPUTER); snprintf(a->note,sizeof(a->note),"%s",optical ? "The disc has been ejected." : "It is safe to unplug the USB device."); files_update(a); }
         break;
     }
     case C_BACK: case C_FORWARD:

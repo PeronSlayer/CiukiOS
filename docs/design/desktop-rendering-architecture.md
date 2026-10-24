@@ -470,6 +470,10 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 73 | G14 Safe mode and Command prompt only: Windows 98 writes "Safe mode" in the four corners of the desktop; the command-prompt start shows no desktop icons until the Terminal's WIN | the whole background once (labels drawn with the icons into the background cache); afterwards a window over a label exposes it like any background | `recovery_view.c` `desk_recovery_paint` (from `draw_icons`), `desk_recovery_win`; `shell.c` `draw_icons` skips icons while `terminal_shell` | none | safe mode and command prompt |
 | 74 | G11B Stand by: notice for running DOS sessions | the notice rectangle | `standby_service`, `desk_power_policy_tick` | none | power suspend/resume: DOS notice |
 | 75 | G11B resume (including a failed firmware request) | entire desktop because firmware may have changed the scanout | `standby_service`, `desk_power_policy_tick` | resume previously retained stale scanout pixels | power suspend/resume: resume |
+| 76 | G29c Copy Disk source prompt, read progress, destination choice and swap/destruction confirmation; write/read-back progress, completion, source-still-inserted and I/O errors | dialog boxes and client content only | Files `disk_ui.inc` worker publication and `du_invalidate` | none new | copy disk (`WM_ROW=52`) |
+| 77 | G29c Backup full/differential/verify/restore job options, overwrite choices, confirmation, progress, completion and checksum/I/O error | dialog boxes and client content | Files `disk_ui.inc`, worker progress and completion invalidation | none new | backup (`WM_ROW=53`) |
+| 78 | G29c unformatted removable media appear in Computer; opening offers Format | drive list, Format dialog and exposed client area | retained media slots, navigation failure and format query worker | none new | blank media (`WM_ROW=54`) |
+| 79 | G29c Terminal FDISK large-disk/destructive prompts, partition information/result/refusal; BACKUP/RESTORE command output | existing Terminal content invalidation and client DAMAGE | `term_execute` grid invalidation, desktop client damage; command semantics tested separately | no Terminal layout or protocol change | disk terminal (`WM_ROW=55`) |
 
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with
@@ -491,8 +495,7 @@ main's indexes 0–32 stay unchanged, including G4 at `WM_ROW=24` through
 G7 appends executable scenario `row_find` at `WM_ROW=33`; G8 uses
 `row_g8_menus` at `WM_ROW=34`; G12 follows at `WM_ROW=35` and `WM_ROW=36`.
 G17 uses `WM_ROW=37`, printing 38, G32 logon 39, G24 40 and G29 41.
-G5b's DOS clipboard scenarios are appended after these rows. Existing
-executable scenario indexes stay unchanged.
+G5b uses executable rows 48–49; G11B uses row 50 and G29b uses row 51. G29c appends Copy Disk, Backup, blank-media and Terminal scenarios at rows 52–55. Existing main indexes 0–32 remain stable.
 
 ### One rule instead of one fix per path: the frame reconcile
 

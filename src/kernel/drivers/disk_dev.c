@@ -48,7 +48,7 @@ int disk_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, ui
     if (!file_fd_object(p, fd)) return -EBADF;
     struct file_description *d = file_fd(p, fd);
     if (!d || d->node->kind != PX_DISK) return -ENOTTY;
-    if (op < DISK_GET_INFO || op > DISK_RECHECK) return -ENOTTY;
+    if (op < DISK_GET_INFO || op > DISK_PARTITION_ACQUIRE) return -ENOTTY;
     union {
         struct ciuki_disk_info info;
         struct ciuki_disk_request request;
@@ -75,11 +75,10 @@ int disk_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, ui
     disk_control_free(o);
     return err;
 }
-/* Only a process with the capability can have acquired a lease, so other
- * exits (every exit of an ordinary boot) do no work here. */
+/* Also revoke an ordinary nonboot partition editor's lease at exit. */
 void disk_process_exit(struct process *p)
 {
-    if (p && p->setup_capability) storage_disk_exit(storage_get(), p->pid);
+    if (p) storage_disk_exit(storage_get(), p->pid);
 }
 /* Namespace lock held by the caller (posixpath.c, fdtable.c). */
 bool disk_write_denied(unsigned drive)

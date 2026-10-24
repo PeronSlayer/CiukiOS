@@ -5,6 +5,7 @@
 #define CIUKI_FILES_APP_H
 #include "model.h"
 #include "operations.h"
+#include "backup.h"
 #include <ciuki/abi.h>
 #include "../libdeskui/deskui.h"
 
@@ -90,6 +91,9 @@ struct files_app {
     int (*media_load)(unsigned drive);
     int (*media_space)(unsigned drive, struct ciuki_media_space *);
     int (*media_format)(int write, struct ciuki_media_format *);
+    int (*media_image)(int write, struct ciuki_floppy_image *, void *);
+    int (*backup_call)(int, const char *, const char *, const char *, const char *,
+                       enum bk_replace, const struct bk_callbacks *, struct bk_result *);
     struct files_disk *disk;
     struct files_maintenance *maintenance;
     int (*media_defrag)(int step, struct ciuki_media_defrag *);
@@ -129,6 +133,8 @@ void files_shell_action(struct files_app *, int action, const char *path);
 void files_properties_path(struct files_app *, const char *);
 /* G29: asynchronous disk dialogs; drive is zero-based (C: = 2). */
 int files_disk_open(struct files_app *, unsigned drive, int format);
+int files_backup_open(struct files_app *, const char *, const char *, int mode);
+int files_copy_disk_open(struct files_app *, unsigned drive);
 int files_disk_busy(const struct files_app *);
 void files_drop(struct files_app *, int x, int y, int copy);
 /* fx-19 drop target and source, driven by the desktop's drag session.

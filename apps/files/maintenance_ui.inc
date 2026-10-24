@@ -1,5 +1,5 @@
 /* G29b: maintenance UI. All device operations run on the worker. */
-enum { D_MAINT=220, D_CONVERT_WARNING, D_MAINT_RESULT };
+enum { D_MAINT=225, D_CONVERT_WARNING, D_MAINT_RESULT };
 enum { M_ANALYZE=1, M_DEFRAG, M_CONVERT_QUERY, M_CONVERT };
 enum { M_DETAILS=680, M_CHECK, M_REARRANGE, M_PAUSE };
 struct files_maintenance {

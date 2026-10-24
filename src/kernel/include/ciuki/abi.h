@@ -1219,7 +1219,7 @@ struct ciuki_media_label {
     uint32_t reserved;
 };
 _Static_assert(sizeof(struct ciuki_media_label) == 32, "media label ABI");
-/* G29: mounted removable FAT only; generation is the physical medium's
+/* G29/G29c: mounted FAT or retained unformatted removable media; generation is the physical medium's
  * MEDIA_GET_STATE generation. GET fills filesystem (12/16/32), sectors,
  * cluster_bytes, supported_filesystems and label. FORMAT accepts family,
  * flags and label; the other output fields are ignored and recomputed.
@@ -1232,6 +1232,25 @@ _Static_assert(sizeof(struct ciuki_media_label) == 32, "media label ABI");
 #define CIUKI_FORMAT_FAT12 1u
 #define CIUKI_FORMAT_FAT16 2u
 #define CIUKI_FORMAT_FAT32 4u
+/* G29c: query-only flag for a retained medium without a mounted FAT. */
+#define CIUKI_FORMAT_UNFORMATTED 2u
+#define CIUKI_FORMAT_LOW_LEVEL 4u /* floppy only; FORMAT TRACK, then FAT surface check */
+#define MEDIA_FLOPPY_READ 0x4d1cu
+#define MEDIA_FLOPPY_WRITE 0x4d1du
+/* Entire diskette snapshot; bytes=sectors*512, <=2880 KiB. Kernel takes
+ * exclusive ownership for each call. WRITE requires an exact capacity match,
+ * and flushes and reads back every sector. buffer is a copied user address. */
+struct ciuki_floppy_image {
+    uint32_t version;
+    uint32_t size;
+    uint32_t drive;
+    uint32_t generation;
+    uint32_t sectors;
+    uint32_t buffer;
+    uint32_t flags;
+    uint32_t reserved;
+};
+_Static_assert(sizeof(struct ciuki_floppy_image) == 32, "floppy image ABI");
 struct ciuki_media_format {
     uint32_t version;
     uint32_t size;
@@ -1458,6 +1477,7 @@ _Static_assert(sizeof(struct ciuki_media_cd_position) == 48, "media cd position 
 #define DISK_PUBLISH 0x4405u        /* struct ciuki_disk_lease (drive, reasons out) */
 #define DISK_LEASE_STATE 0x4406u    /* struct ciuki_disk_lease (out) */
 #define DISK_SET_PHASE 0x4407u      /* struct ciuki_disk_lease (phase in) */
+#define DISK_PARTITION_ACQUIRE 0x4409u /* ciuki_disk_info; exclusive nonboot disk editor */
 #define DISK_RECHECK 0x4408u        /* struct ciuki_disk_recheck */
 #define CIUKI_DISK_SLOTS 4u
 #define CIUKI_DISK_SECTOR 512u

@@ -4,6 +4,7 @@
 #define _DEFAULT_SOURCE 1
 #include "model.h"
 #include "cleanup.h"
+#include "backup.h"
 #include <sys/stat.h>
 #include <dirent.h>
 #include <fcntl.h>
@@ -124,6 +125,24 @@ const struct fm_vfs *fm_native_cleanup_vfs(void)
 {
     static const struct fm_vfs fs = {NULL, list, cleanup_metadata_stat, make_dir, move, remove_file, remove_dir,
                                      open_file, read_file, write_file, sync_file, close_file, NULL};
+    return &fs;
+}
+
+static int backup_metadata(void *ctx,const char *path,const struct fm_meta *m)
+{
+    (void)ctx;
+#if defined(__ciuki__) || defined(__i386__)
+    struct ciuki_file_info info={.modified=m->modified};
+    return ciuki_file_info_set(path,CIUKI_FILE_INFO_MODIFIED,&info) ? -errno : 0;
+#else
+    const struct timespec times[2]={{.tv_nsec=UTIME_OMIT},{.tv_sec=(time_t)m->modified}};
+    return utimensat(AT_FDCWD,path,times,AT_SYMLINK_NOFOLLOW) ? -errno : 0;
+#endif
+}
+const struct fm_vfs *fm_native_backup_vfs(void)
+{
+    static const struct fm_vfs fs={NULL,list,cleanup_metadata_stat,make_dir,move,remove_file,remove_dir,
+        open_file,read_file,write_file,sync_file,close_file,backup_metadata};
     return &fs;
 }
 

@@ -12,6 +12,9 @@ static void selection_frame(const char *name)
     char path[1200]; snprintf(path,sizeof(path),"%s-%s.xrgb",prefix,name); du_render(&ui);
     FILE *f=fopen(path,"wb"); assert(f && fwrite(pixels,4,TERM_WIDTH*TERM_HEIGHT,f)==TERM_WIDTH*TERM_HEIGHT && !fclose(f));
 }
+static unsigned disktool_calls;
+static int disktool(void *ctx,int n,char **a)
+{ (void)ctx; assert(n>=1 && (fm_same_path(a[0],"BACKUP") || fm_same_path(a[0],"RESTORE") || fm_same_path(a[0],"FDISK"))); disktool_calls++; return 0; }
 static int device_error, cancel_after, pumps, launches, kills, powers, exits;
 static char launched[64], argument[FM_PATH];
 static uint32_t killed, powered;
@@ -171,6 +174,9 @@ int main(void)
     struct term_host host={.fs=fake_vfs,.net=net,.mixer=mixer,.volume=volume,.processes=processes,.display=display,.launch=launch,.kill=kill,.power=power,.now=now,.pump=pump,.quit=quit};
     du_init(&ui,pixels,TERM_WIDTH,TERM_HEIGHT); assert(!term_attach(&app,&ui,&host)); assert(app.columns==80 && app.rows==25);
     builtins(); system_commands(); lua_and_ui();
+    app.host.disktool=disktool;
+    command("BACKUP FULL set.cbk one.txt",0,NULL); command("RESTORE set.cbk ORIGINAL OLDER",0,NULL); command("FDISK 1",0,NULL);
+    assert(disktool_calls==3);
     /* Deterministic review scene: the production fixed-cell painter, accents,
      * descenders, cursor and selection. Independent of previous command output. */
     term_execute(&app,"CLS"); term_write(&app,"CiukiOS Terminal\nClassic computing, one woof at a time.\nAVATAR To Wa 0123456789 gjpqy\n");

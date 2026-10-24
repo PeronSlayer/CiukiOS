@@ -1334,6 +1334,47 @@ static void row_disk_maintenance(unsigned m)
     maintenance_ui_scenario(disk_ui_present,a);
     app_close(a); step("disk maintenance close exposes desktop"); wm_end();
 }
+static void row_copy_disk(unsigned m)
+{
+    row_name="copy disk"; wm_begin(m,1);
+    struct fake_app *a=app_open("files",560,400,40,50);
+    copy_disk_scenario(disk_ui_present,a);
+    app_close(a); step("copy disk closes"); wm_end();
+}
+static void row_backup(unsigned m)
+{
+    row_name="backup"; wm_begin(m,1);
+    struct fake_app *a=app_open("files",560,400,40,50);
+    backup_ui_scenario(disk_ui_present,a);
+    app_close(a); step("backup closes"); wm_end();
+}
+static void row_blank_media(unsigned m)
+{
+    row_name="blank media"; wm_begin(m,1);
+    struct fake_app *a=app_open("files",560,400,40,50);
+    blank_ui_scenario(disk_ui_present,a);
+    app_close(a); step("blank media closes"); wm_end();
+}
+static void row_disk_terminal(unsigned m)
+{
+    row_name="disk terminal"; wm_begin(m,1);
+    struct fake_app *a=app_open("terminal",560,400,40,50);
+    uint32_t *pixels=calloc(560*400,4); struct du_ui *u=calloc(1,sizeof(*u)); assert(pixels && u);
+    du_init(u,pixels,560,400);
+    static const char *const states[]={"FDISK: Do you wish to enable large disk support (Y/N)?",
+        "FDISK: Number  Active  Type  Start LBA  Sectors", "FDISK: No changes written. Add YES to confirm.",
+        "FDISK: Partition table saved and verified. Restart before use.",
+        "BACKUP: Reading catalogue and file checksums...", "RESTORE: 3 files restored, 1 skipped.",
+        "FDISK: Boot disk is busy. No partition changes written."};
+    for (unsigned k=0;k<sizeof(states)/sizeof(*states);k++) {
+        du_fill(&u->canvas,(struct du_rect){0,0,560,400},DU_WINDOW);
+        du_text(&u->canvas,8,12,states[k],DU_INK);
+        /* Terminal's command completion invalidates its content rectangle;
+         * here the real desktop handles the same client DAMAGE publication. */
+        disk_ui_present(u,states[k],a);
+    }
+    free(u); free(pixels); app_close(a); step("disk terminal closes"); wm_end();
+}
 /* ---- G4: the taskbar menu, window arrangement and the Windows-key shortcuts ---- */
 static void win_chord(int code) { key(0x15b,1); tap(code); key(0x15b,0); }
 static void bar_right_click(int top) { click(top ? 300 : (int)d.width-60,top ? 10 : (int)d.height-16,CIUKI_BUTTON_RIGHT); }
@@ -1775,7 +1816,8 @@ static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overl
     row_input_text, row_dos_controls, row_printing, row_logon, row_regional, row_disk_tools,
     row_network_tools, row_g18_shortcuts, row_g18_tray, row_power, row_resources,
     row_browser_clipboard_raster, row_dos_clipboard_settings, row_clipboard_owner_display,
-    row_power_resume, row_disk_maintenance};
+    row_power_resume, row_disk_maintenance, row_copy_disk, row_backup, row_blank_media,
+    row_disk_terminal};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).

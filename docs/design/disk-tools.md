@@ -64,10 +64,7 @@ bootable rescue-media source and installation contract exist.
 
 ## Boundaries
 
-G29 does not change G14's ScanDisk/dirty-boot repair ownership. Copy Disk,
-application-start-optimised placement, boot-volume FAT16-to-FAT32 conversion,
-interactive partition editing, Backup and System Recovery remain gaps until
-their engines, UI and failure tests exist. The inventory and implementation
+G29 does not change G14's ScanDisk/dirty-boot repair ownership. G29c adds Copy Disk, partition editing and file Backup/Restore; their contracts and remaining limits are in `disk-tools-continuation.md`. G29b adds application-start-optimised defragmentation and FAT16-to-FAT32 conversion. System Recovery and bootable system-file copying remain gaps. The inventory and implementation report must keep these rows open.
 report must keep these rows open. The existing Setup whole-disk formatter
 must not be exposed as a user drive formatter: it deliberately writes an MBR
 and loader and has a different exclusive-access/capability contract.

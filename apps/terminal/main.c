@@ -50,6 +50,7 @@ static int power(void *ctx,unsigned action)
 { struct ciuki_message m; desk_message(&m,DESK_TERMINAL_POWER,12); desk_put32(m.data+8,action); return send(ctx,&m); }
 static int cwd(void *ctx,const char *path) { (void)ctx; return chdir(path) ? -errno : 0; }
 static time_t now(void *ctx) { (void)ctx; return time(NULL); }
+static int disktool(void *ctx,int n,char **a) { struct native_terminal *x=ctx; return term_disktool(&x->app,n,a); }
 static void quit(void *ctx) { struct native_terminal *x=ctx; x->app.quit=1; x->app.interrupted=1; du_window_close(&x->window); }
 static int close_request(struct du_window *w,void *ctx) { (void)w; quit(ctx); return 1; }
 /* G3: agree without interrupting the running command; END_SESSION(1) closes. */
@@ -82,7 +83,7 @@ int main(int argc,char **argv)
     if(du_window_open_resizable(&x->window,&x->ui,channel,TERM_WIDTH,TERM_HEIGHT,"Terminal",304,168)) { free(x); return 1; }
     du_help_topic(&x->ui, "terminal"); /* G15 */
     struct term_host h={.fs=*fm_native_vfs(),.ctx=x,.net=net,.network_command=term_network_command,.mixer=mixer,.volume=volume,.processes=processes,.display=display,
-        .launch=launch,.kill=kill,.power=power,.cwd=cwd,.now=now,.pump=pump,.quit=quit};
+        .launch=launch,.kill=kill,.power=power,.cwd=cwd,.now=now,.pump=pump,.quit=quit,.disktool=disktool};
     if(term_attach(&x->app,&x->ui,&h)) { du_window_destroy(&x->window); free(x); return 1; }
     x->window.user=x; x->window.message=message; x->window.close_request=close_request;
     x->window.query_end_session=query_end_session;
