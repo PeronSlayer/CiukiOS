@@ -35,7 +35,6 @@ void du_timer_stop(struct du_ui *u,int id) { (void)u; (void)id; UNEXPECTED("du_t
 int du_theme_use(struct du_ui *u,const char *name) { (void)u; (void)name; UNEXPECTED("du_theme_use"); }
 int du_ta_init(struct du_textarea *t,size_t cap) { (void)t; (void)cap; UNEXPECTED("du_ta_init"); }
 int du_ta_set_text(struct du_textarea *t,const char *s,size_t n) { (void)t; (void)s; (void)n; UNEXPECTED("du_ta_set_text"); }
-const char *desk_theme_preference(const char *name) { (void)name; UNEXPECTED("desk_theme_preference"); }
 static int inventory_query(void *ctx,struct ciuki_devices_info *out)
 { (void)ctx; *out=app.devices; return 0; }
 int main(void)

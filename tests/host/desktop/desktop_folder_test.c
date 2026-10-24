@@ -19,7 +19,7 @@ static pthread_t poll_frame;
 static int copy_hold, copy_entered, copy_release;
 static int folder_read(void *ctx,int fd,void *out,unsigned n)
 {
-    if (n>256) {
+    if (n>DESK_LINK_BYTES+1) {
         assert(!pthread_equal(pthread_self(),poll_frame));
         pthread_mutex_lock(&poll_lock);
         if (copy_hold) {
@@ -63,7 +63,7 @@ static int launch(struct desktop *desktop, const struct desk_program *p)
 static void key(int code) { desk_shell_key(&d,code,1); desk_shell_key(&d,code,0); }
 static void capture(const char *name)
 {
-    if (!strncmp(name,"desktop-",8)) desk_composite(&d,(struct desk_box){0,0,1024,768});
+    if (!strncmp(name,"desktop-",8) || !strncmp(name,"g19-",4)) desk_composite(&d,(struct desk_box){0,0,1024,768});
     else desk_shell_background(&d,(struct desk_box){0,0,1024,768});
     desk_shell_topbar(&d,(struct desk_box){0,0,1024,768});
     desk_shell_overlay(&d,(struct desk_box){0,0,1024,768});
@@ -107,6 +107,7 @@ static int in_bin(const char *original)
 }
 #include "desktop_dnd_test.h"
 #include "desktop_recycle_test.h"
+#include "desktop_g19_test.h"
 int main(int argc,char **argv)
 {
     setvbuf(stdout,NULL,_IOLBF,0); assert(argc==3); poll_frame=pthread_self(); out=argv[1]; fake_reset(); fake_image_tree();
@@ -123,12 +124,24 @@ int main(int argc,char **argv)
     FILE *p=fopen(argv[2],"rb"); assert(p && fread((void *)d.portrait,4,256*256,p)==256*256 && !fclose(p));
     struct fm_vfs fs=fake_vfs; fs.list=folder_list; fs.read=folder_read;
     desk_shell_enable(&d); assert(!desk_folder_init(&d,&fs));
-    assert(d.sh.icon_count==6 && !strcmp(d.sh.icons[0].label,"Computer") && !strcmp(d.sh.icons[1].label,"Documents") && !strcmp(d.sh.icons[2].label,"Recycle Bin") && !strcmp(d.sh.icons[2].argument,"Recycle Bin"));
+    assert(d.sh.icon_count==7 && !strcmp(d.sh.icons[0].label,"My Computer") && !strcmp(d.sh.icons[1].label,"My Documents") && !strcmp(d.sh.icons[2].label,"Recycle Bin") && !strcmp(d.sh.icons[2].argument,"Recycle Bin"));
     assert(named("Pictures")<0);
     d.pictures_exists=1; desk_folder_changed(&d);
-    int pictures=d.sh.icon_count-1;
-    assert(d.sh.icon_count==7 && !strcmp(d.sh.icons[pictures].label,"Pictures"));
+    int pictures=d.sh.icon_count-2;
+    assert(d.sh.icon_count==8 && !strcmp(d.sh.icons[pictures].label,"Pictures"));
     assert(!strcmp(d.sh.icons[pictures].argument,"/Documents/Pictures"));
+    d.sh.icon_selected=0; key(DU_KEY_F2); assert(d.sh.icon_editing==0);
+    snprintf(d.sh.icon_edit,sizeof(d.sh.icon_edit),"My Computer"); key(DU_KEY_ENTER);
+    assert(!strcmp(d.sh.icons[0].label,"My Computer"));
+    static char icon_cfg[CFG_TEXT_MAX]; static struct ciuki_settings icon_parsed;
+    size_t icon_cfg_n=cfg_format(&d.sh.cfg,icon_cfg,sizeof(icon_cfg)); assert(icon_cfg_n);
+    cfg_defaults(&icon_parsed); assert(!cfg_parse(&icon_parsed,icon_cfg,icon_cfg_n));
+    char renamed_system[64]; assert(cfg_icon_label(&icon_parsed,"/Computer",renamed_system,sizeof(renamed_system)) && !strcmp(renamed_system,"My Computer"));
+    cfg_icon_label_forget(&d.sh.cfg,"/Computer"); d.sh.icon_count=0; desk_shell_apply(&d);
+    d.sh.cfg.icon_sort=3; desk_folder_changed(&d);
+    for (unsigned k=1;k<d.sh.folder->model.count;k++)
+        assert(d.sh.folder->model.entries[k-1].meta.modified<=d.sh.folder->model.entries[k].meta.modified);
+    assert(d.sh.icon_count==8); d.sh.cfg.icon_sort=0; desk_folder_changed(&d); pictures=d.sh.icon_count-2;
     d.sh.icon_selected=pictures; key(DU_KEY_F2); key(DU_KEY_DELETE);
     assert(d.sh.folder->editing<0 && d.sh.folder->command==DF_NONE);
     key(DU_KEY_ENTER); assert(!strcmp(program,"files") && !strcmp(launched,"/Documents/Pictures"));
@@ -146,6 +159,15 @@ int main(int argc,char **argv)
     fake_short_io=1; command(DF_BITMAP,-1); fake_short_io=0;
     int bmp=fake_lookup(DESK_FOLDER "/New Bitmap Image.bmp"); assert(bmp>=0 && fake_nodes[bmp].meta.size==58 && !memcmp(fake_nodes[bmp].data,"BM",2)); key(DU_KEY_ESC);
     command(DF_BITMAP,-1); assert(fake_lookup(DESK_FOLDER "/New Bitmap Image (2).bmp")>=0); key(DU_KEY_ESC);
+    command(DF_SHORTCUT,-1); assert(d.sh.folder->wizard==1 && fake_lookup(DESK_FOLDER "/New Shortcut.lnk")<0);
+    strcpy(d.sh.folder->shortcut_target,"/Programs/files"); desk_folder_shortcut_action(&d,3);
+    assert(d.sh.folder->wizard==2); strcpy(d.sh.folder->shortcut_name,"New Shortcut");
+    desk_folder_shortcut_action(&d,3); desk_folder_service(&d);
+    int shortcut_node=fake_lookup(DESK_FOLDER "/New Shortcut.lnk");
+    assert(shortcut_node>=0 && !d.sh.folder->wizard);
+    static struct desk_launch_record shortcut_record;
+    assert(desk_link_decode(fake_nodes[shortcut_node].data,(unsigned)fake_nodes[shortcut_node].meta.size,&shortcut_record));
+    assert(!strcmp(shortcut_record.label,"New Shortcut") && !strcmp(shortcut_record.target,"/Programs/files"));
     int n=named("New Folder"); d.sh.icon_selected=n; key(DU_KEY_F2); assert(d.sh.folder->editing==n-3);
     strcpy(d.sh.folder->edit,"bad:name"); key(DU_KEY_ENTER); desk_folder_service(&d); assert(d.sh.folder->editing>=0 && fake_lookup(DESK_FOLDER "/New Folder")>=0); close_message();
     strcpy(d.sh.folder->edit,"trailing."); key(DU_KEY_ENTER); desk_folder_service(&d); assert(d.sh.folder->editing>=0); close_message();
@@ -155,10 +177,10 @@ int main(int argc,char **argv)
     n=named("Renamed = Folder"); struct desk_box b=d.sh.icons[n].box;
     d.mouse_x=b.x+40; d.mouse_y=b.y+20; d.now_ns=2000000000ull; desk_shell_button(&d,1,1);
     d.mouse_x=400; d.mouse_y=350; desk_shell_motion(&d); desk_shell_button(&d,1,0);
-    int x,y; assert(cfg_icon_position(&d.sh.cfg,"Renamed = Folder",&x,&y) && x==360 && y==330);
+    int x,y; assert(cfg_icon_position_at(&d.sh.cfg,"Renamed = Folder",d.width,d.height,&x,&y) && x==360 && y==330);
     static char text[CFG_TEXT_MAX]; static struct ciuki_settings parsed;
     size_t len=cfg_format(&d.sh.cfg,text,sizeof(text)); assert(len); cfg_defaults(&parsed); assert(!cfg_parse(&parsed,text,len));
-    assert(cfg_icon_position(&parsed,"Renamed = Folder",&x,&y) && x==360 && y==330);
+    assert(cfg_icon_position_at(&parsed,"Renamed = Folder",d.width,d.height,&x,&y) && x==360 && y==330);
     d.sh.cfg=parsed; desk_folder_changed(&d); n=named("Renamed = Folder"); assert(d.sh.icons[n].box.x==360); capture("positions");
     /* Rename carries the position to the new name. */
     desk_folder_rename(&d,n); strcpy(d.sh.folder->edit,"Moved name"); key(DU_KEY_ENTER); desk_folder_service(&d); n=named("Moved name"); assert(d.sh.icons[n].box.x==360);
@@ -210,9 +232,9 @@ int main(int argc,char **argv)
     d.mouse_x=650; d.mouse_y=200; d.sh.icon_selected=named("readme.txt");
     unsigned sent=fake_sent; desk_folder_drop(&d,-1,1); desk_flush(&d,client);
     assert(fake_sent>sent && fake_messages[fake_sent-1].data[1]==DESK_FILE_DROP && fake_destinations[fake_sent-1]==10);
-    struct desk_packet packet; assert(desk_parse(&fake_messages[fake_sent-1],0,NULL,&packet) && packet.flags==1);
+    static struct desk_packet packet; assert(desk_parse(&fake_messages[fake_sent-1],0,NULL,&packet) && packet.flags==1);
     assert(!fm_create(other,"Broker.txt",0) && !fm_clipboard(other,0) && !fm_clipboard_save(other));
-    struct ciuki_message msg; desk_message(&msg,DESK_FILE_DROP,16); msg.data[0]=2; msg.data[2]=1; msg.sender_pid=42;
+    static struct ciuki_message msg; desk_message(&msg,DESK_FILE_DROP,16); msg.data[0]=2; msg.data[2]=1; msg.sender_pid=42;
     struct desk_box content=desk_content(c); desk_put32(msg.data+4,1); desk_put32(msg.data+8,(uint32_t)(300-content.x)); desk_put32(msg.data+12,(uint32_t)(600-content.y));
     c->program=0; desk_receive(&d,client,&msg); assert(!d.sh.folder->busy);
     c->program=DESK_APP_FILES; desk_receive(&d,client,&msg); settle(); assert(fake_lookup(DESK_FOLDER "/Broker.txt")>=0);
@@ -252,13 +274,13 @@ int main(int argc,char **argv)
     }
     /* Arrange resets saved positions through the context action. */
     desk_menu_open(&d,SH_MENU_DESKTOP,500,300); key(DU_KEY_DOWN); key(DU_KEY_ENTER);
-    assert(!cfg_icon_position(&d.sh.cfg,"Moved name",&x,&y)); capture("arranged");
+    assert(!cfg_icon_position_at(&d.sh.cfg,"Moved name",d.width,d.height,&x,&y)); capture("arranged");
     /* A Desktop entry called Pictures has an independent position and actions. */
     fake_file(DESK_FOLDER "/Pictures",1,0); command(DF_REFRESH,-1);
-    pictures=d.sh.icon_count-1; int file_pictures=named("Pictures");
+    pictures=d.sh.icon_count-2; int file_pictures=named("Pictures");
     assert(file_pictures>=3 && file_pictures<pictures);
-    assert(cfg_icon_move(&d.sh.cfg,"Pictures",200,200));
-    assert(cfg_icon_move(&d.sh.cfg,"/Pictures",400,400)); desk_shell_apply(&d);
+    assert(cfg_icon_move_at(&d.sh.cfg,"Pictures",d.width,d.height,200,200));
+    assert(cfg_icon_move_at(&d.sh.cfg,"/Pictures",d.width,d.height,400,400)); desk_shell_apply(&d);
     assert(d.sh.icons[file_pictures].box.x==200 && d.sh.icons[pictures].box.x==400);
     d.sh.icon_selected=pictures; key(DU_KEY_F2); key(DU_KEY_DELETE);
     assert(d.sh.folder->editing<0 && d.sh.folder->command==DF_NONE);
@@ -354,6 +376,7 @@ int main(int argc,char **argv)
     assert(!fm_shell_selection_read(&fake_vfs,selection_manifest+1,&g8_selected,&g8_count) && g8_count==2);
     fm_drag_free(g8_selected,NULL,g8_count); assert(!fake_vfs.unlink(NULL,selection_manifest+1));
     puts("PASS G8 desktop: rename Undo, Create Shortcut, link drops and multi-selection hand-off without changing clipboard");
+    g19_cases();
     desk_render_release(&d);
     fake_assert_clean(); desk_folder_destroy(&d); free(d.sh.icons); free(d.sh.wall); free((void *)d.portrait); free(d.pixels);
     puts("PASS desktop folder: listing, scripted New Folder, unique folder/text/BMP, FAT rename/errors, Trash collisions, association launches, shared clipboard copy/move, positions/rename/reparse/Arrange, conditional Pictures isolation");

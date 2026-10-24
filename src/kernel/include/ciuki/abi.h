@@ -1269,9 +1269,10 @@ _Static_assert(sizeof(struct ciuki_media_format) == 52, "media format ABI");
  * Sequence changes by another writer return EAGAIN; analyze and restart.
  * Map cells aggregate bits over ceil(clusters/128) ranges, never exact
  * per-cluster squares. Pause/Stop simply stop issuing STEP requests. */
-#define MEDIA_DEFRAG_ANALYZE 0x4d1cu
-#define MEDIA_DEFRAG_STEP 0x4d1du
+#define MEDIA_DEFRAG_ANALYZE 0x4d20u
+#define MEDIA_DEFRAG_STEP 0x4d21u
 #define CIUKI_DEFRAG_CHECK 1u
+#define CIUKI_DEFRAG_STARTUP 2u
 #define CIUKI_DEFRAG_CELLS 128u
 #define CIUKI_DEFRAG_FREE 1u
 #define CIUKI_DEFRAG_USED 2u
@@ -1292,11 +1293,14 @@ struct ciuki_media_defrag {
     uint32_t free_clusters;
     uint32_t moved;
     uint32_t finished;
+    uint32_t placement; /* next physical cluster in the startup pass; initially 2 */
+    uint32_t profiled; /* files placed from observed image-read patterns */
     uint8_t map[CIUKI_DEFRAG_CELLS];
 };
-_Static_assert(sizeof(struct ciuki_media_defrag) == 184, "media defrag ABI");
+_Static_assert(sizeof(struct ciuki_media_defrag) == 192, "media defrag ABI");
 #define MEDIA_GET_CONVERT 0x4d1eu
 #define MEDIA_CONVERT 0x4d1fu
+#define CIUKI_CONVERT_NEXT_BOOT 1u
 struct ciuki_media_convert {
     uint32_t version;
     uint32_t size;
@@ -1305,7 +1309,7 @@ struct ciuki_media_convert {
     uint32_t cluster_bytes;
     uint32_t filesystem;
     uint32_t sectors;
-    uint32_t reserved;
+    uint32_t reserved; /* CIUKI_CONVERT_NEXT_BOOT: explicit deferred consent/status */
 };
 _Static_assert(sizeof(struct ciuki_media_convert) == 32, "media convert ABI");
 _Static_assert(sizeof(struct ciuki_media_space) == 32, "media space ABI");
@@ -1641,6 +1645,20 @@ _Static_assert(sizeof(struct ciuki_audio_capture_data)==536,"audio capture data"
  * retains its ownership across START/STOP until RELEASE or last close. */
 #define AUDIO_CAPTURE_ACQUIRE 0x410eu
 #define AUDIO_CAPTURE_RELEASE 0x410fu
+#define AUDIO_MIDI_WRITE 0x4110u
+#define CIUKI_MIDI_BYTES 128u
+/* Open /dev/audio O_WRONLY. The first MIDI batch selects the per-fd FM
+ * output port; PCM writes then fail with EBUSY until AUDIO_RESET. Partial
+ * batches report accepted bytes; EAGAIN accepts none. Close ends all notes.
+ * This is a software output port, not an external physical UART. */
+struct ciuki_midi_data {
+    uint32_t version;
+    uint32_t size;
+    uint32_t bytes;
+    uint32_t accepted;
+    uint8_t data[128];
+    uint32_t reserved[2];
+};
 #define MIXER_GET_LINE 0x4205u
 #define MIXER_SET_LINE 0x4206u
 #define CIUKI_MIXER_WAVE 1u
@@ -2051,6 +2069,120 @@ struct ciuki_file_info {
     uint32_t reserved; /* 68 */
     char short_name[16]; /* 72: 8.3 alias, NUL terminated */
 };
+
+/* G14: startup recovery (docs/design/startup-recovery.md), syscall 99
+ * (CIUKI_SYS_RECOVERY): EBX=operation, ECX=record, EDX=exact record size;
+ * 0 or -errno. STATUS and REPORT are open to every process; SET, ENABLE and
+ * SCANDISK need the recovery authority (desktop, Control Panel, Terminal,
+ * ScanDisk and System Configuration started by the desktop): EPERM
+ * otherwise. Class bits name driver classes the start can skip; SET
+ * replaces `disabled` (selective startup) and `request` from the record;
+ * ENABLE lets the Automatic Skip Driver agent load the classes in
+ * `skipped` again. Changes apply at the next start (ENODEV: no boot-status
+ * sector on this system volume). SCANDISK checks a mounted FAT drive
+ * (EINVAL drive, ENODEV not FAT, EBUSY in use by another check); with FIX
+ * and errors on a fixed volume the repair is scheduled for the next start
+ * (SCHEDULED). REPORT returns the check that ran at this start (RAN clear:
+ * none). boot_flags are this start's CIUKI_BOOT_* bits. */
+#define CIUKI_RECOVERY_VERSION 1u
+#define CIUKI_RECOVERY_STATUS 0u
+#define CIUKI_RECOVERY_SET 1u
+#define CIUKI_RECOVERY_ENABLE 2u
+#define CIUKI_RECOVERY_SCANDISK 3u
+#define CIUKI_RECOVERY_REPORT 4u
+#define CIUKI_RECOVERY_VALID 1u
+#define CIUKI_RECOVERY_AUTHORITY 2u
+#define CIUKI_RECOVERY_COMPLETE 4u
+#define CIUKI_RECOVERY_CLASSES 8u
+#define CIUKI_RECOVERY_DISPLAY 0x01u
+#define CIUKI_RECOVERY_SOUND 0x02u
+#define CIUKI_RECOVERY_NETWORK 0x04u
+#define CIUKI_RECOVERY_USB 0x08u
+#define CIUKI_RECOVERY_PORTS 0x10u
+#define CIUKI_RECOVERY_POWER 0x20u
+#define CIUKI_RECOVERY_STARTUP 0x40u
+#define CIUKI_RECOVERY_CLASS_MASK 0x7Fu
+#define CIUKI_RECOVERY_REQ_SCANDISK 1u
+#define CIUKI_RECOVERY_REQ_THOROUGH 2u
+#define CIUKI_RECOVERY_REQ_MENU 4u
+#define CIUKI_BOOT_SAFE_MODE 0x00000001u
+#define CIUKI_BOOT_VERBOSE 0x00000800u
+#define CIUKI_BOOT_HW_CHECK 0x00002000u
+#define CIUKI_BOOT_FAILED 0x00008000u
+#define CIUKI_BOOT_STEP 0x00010000u
+#define CIUKI_BOOT_CMD_ONLY 0x00020000u
+#define CIUKI_BOOT_SAFE_STORAGE 0x00040000u
+#define CIUKI_BOOT_SCANDISK 0x00080000u
+#define CIUKI_BOOT_SCANDISK_SKIP 0x00100000u
+#define CIUKI_BOOT_MENU_SHOWN 0x00400000u
+#define CIUKI_BOOT_SKIP_SHIFT 24u
+struct ciuki_recovery_status {
+    uint32_t version; /* 0 */
+    uint32_t size; /* 4 */
+    uint32_t flags; /* 8: CIUKI_RECOVERY_VALID/AUTHORITY/COMPLETE */
+    uint32_t boot_flags; /* 12: this start's CIUKI_BOOT_* */
+    uint8_t disabled; /* 16: classes off by selective startup */
+    uint8_t skipped; /* 17: classes skipped by the ASD agent */
+    uint8_t newly_skipped; /* 18: skipped at this start */
+    uint8_t request; /* 19: CIUKI_RECOVERY_REQ_* for the next start */
+    uint8_t failures; /* 20: consecutive failed starts before this one */
+    uint8_t blamed; /* 21: classes active when the last start failed */
+    uint8_t active; /* 22: activations in progress */
+    uint8_t reserved; /* 23 */
+    uint8_t fail_count[8]; /* 24: per class */
+    uint32_t boots; /* 32 */
+    uint32_t completed; /* 36 */
+    uint32_t skipped_at[8]; /* 40: boot number of each ASD skip */
+};
+_Static_assert(sizeof(struct ciuki_recovery_status) == 72, "recovery status ABI");
+#define CIUKI_SCANDISK_VERSION 1u
+#define CIUKI_SCANDISK_FIX 0x0001u
+#define CIUKI_SCANDISK_THOROUGH 0x0002u
+#define CIUKI_SCANDISK_FREE_LOST 0x0004u
+#define CIUKI_SCANDISK_NO_COPY 0x0008u
+#define CIUKI_SCANDISK_RAN 0x0100u
+#define CIUKI_SCANDISK_AT_START 0x0200u
+#define CIUKI_SCANDISK_ERRORS 0x0400u
+#define CIUKI_SCANDISK_FIXED 0x0800u
+#define CIUKI_SCANDISK_SCHEDULED 0x1000u
+#define CIUKI_SCANDISK_DIRTY 0x2000u
+#define CIUKI_SCANDISK_HARD_ERROR 0x4000u
+#define CIUKI_SCANDISK_TRUNCATED 0x8000u
+struct ciuki_scandisk {
+    uint32_t version; /* 0 */
+    uint32_t size; /* 4 */
+    uint32_t drive; /* 8: 0 = A: */
+    uint32_t flags; /* 12: FIX/THOROUGH/FREE_LOST/NO_COPY in, RAN.. out */
+    int32_t result; /* 16: 0 or -errno of the check */
+    uint32_t fat_type; /* 20: 12, 16 or 32 */
+    uint32_t cluster_bytes; /* 24 */
+    uint32_t clusters; /* 28 */
+    uint32_t free_clusters; /* 32 */
+    uint32_t bad_clusters; /* 36 */
+    uint32_t directories; /* 40 */
+    uint32_t files; /* 44 */
+    uint32_t directory_clusters; /* 48 */
+    uint32_t file_clusters; /* 52 */
+    uint32_t lost_chains; /* 56 */
+    uint32_t lost_clusters; /* 60 */
+    uint32_t salvaged_files; /* 64: FILEnnnn.CHK written */
+    uint32_t crosslinked_files; /* 68 */
+    uint32_t crosslinks_fixed; /* 72 */
+    uint32_t invalid_chains; /* 76: bad links and cycles ended */
+    uint32_t size_mismatches; /* 80: sizes beyond the chain adjusted */
+    uint32_t invalid_entries; /* 84: reserved attribute bits cleared */
+    uint32_t fat_mismatches; /* 88: sectors of the other FAT copy rewritten */
+    uint32_t excess_tails; /* 92: chains longer than the size, left to the FAT repair */
+    uint32_t surface_sectors; /* 96: data sectors read by THOROUGH */
+    uint32_t bad_sectors; /* 100 */
+    uint32_t bad_marked; /* 104: free clusters marked bad */
+    uint32_t relocated; /* 108: used clusters moved off bad sectors */
+    uint32_t unreadable_system; /* 112: boot/FAT/root sectors that failed */
+    uint32_t elapsed_ms; /* 116 */
+    char found[16]; /* 120: FOUND.nnn of the salvaged files */
+    char first_problem[64]; /* 136: path of the first damaged entry */
+};
+_Static_assert(sizeof(struct ciuki_scandisk) == 200, "ScanDisk report ABI");
 
 struct ciuki_spawn_fd {
     int32_t source; /* 0 */

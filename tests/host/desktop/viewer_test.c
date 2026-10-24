@@ -156,6 +156,19 @@ int main(int argc, char **argv)
         assert(!(app.view_items[6].flags & DU_ITEM_DISABLED));
         du_render(&ui);
         at_save(folder, "viewer-rotated", &ui);
+        char saved[1024];snprintf(saved,sizeof(saved),"%s/rotation.bmp",scratch);
+        assert(!viewer_save_bmp(&app.image,saved));
+        uint8_t *encoded=NULL;size_t length=0;
+        assert(!viewer_native_fs()->read(NULL,saved,&encoded,&length,VIEWER_MAX_FILE));
+        struct viewer_image back;assert(!viewer_decode(encoded,length,saved,&back));free(encoded);
+        assert(back.width==app.image.width && back.height==app.image.height && !memcmp(back.pixels,app.image.pixels,(size_t)back.width*back.height*4));
+        viewer_free(&back);
+        assert(viewer_save_bmp(&app.image,"/no-such-g27b-folder/picture.bmp")<0);
+        assert(viewer_save_bmp(NULL,saved)==-EINVAL);
+        struct viewer_image over_limit={.pixels=raw,.width=8192,.height=2048};
+        assert(viewer_save_bmp(&over_limit,saved)==-EFBIG);
+        viewer_event(&ui,&(struct du_event){.type=DU_EV_ACTIVATE,.id=V_M_SAVE_AS},&app);
+        assert(du_dialog_id(&ui)==V_D_SAVE);du_dialog_close(&ui);
         snprintf(path, sizeof(path), "%s/b-photo.jpg", scratch); viewer_open(&app, path); assert(app.rotation == 0);   /* a new picture starts upright */
     }
     /* Set As Wallpaper: the file as stored, for the formats the desktop decodes. */
@@ -163,7 +176,7 @@ int main(int argc, char **argv)
         app.wallpaper = NULL; du_render(&ui); viewer_event(&ui, &(struct du_event){.type = DU_EV_ACTIVATE, .id = V_M_WALL_TILE}, &app); assert(!calls);   /* no hook: nothing happens */
         app.wallpaper = record;
         snprintf(path, sizeof(path), "%s/b-photo.jpg", scratch); viewer_open(&app, path);
-        du_render(&ui); assert(!(app.file_items[4].flags & DU_ITEM_DISABLED));
+        du_render(&ui); assert(!(app.file_items[6].flags & DU_ITEM_DISABLED));
         viewer_event(&ui, &(struct du_event){.type = DU_EV_ACTIVATE, .id = V_M_WALL_TILE}, &app);
         assert(calls == 1 && last_mode == 1 && !strcmp(last_path, path) && ui.dialog.kind && strstr(ui.dialog.text, "tiled")); ui.dialog.kind = 0;
         viewer_event(&ui, &(struct du_event){.type = DU_EV_ACTIVATE, .id = V_M_WALL_STRETCH}, &app); assert(calls == 2 && last_mode == 2); ui.dialog.kind = 0;
@@ -190,7 +203,7 @@ int main(int argc, char **argv)
         assert(strstr(text, "wallpaper_mode=stretch") && strstr(text, "wallpaper=/x/y.JPG") && !strstr(text, "dog.png"));
         assert(acc_wallpaper_write(cfg, "relative.png", ACC_WALL_TILE) == -ENAMETOOLONG && acc_wallpaper_write(cfg, "/x/a.gif", ACC_WALL_TILE) == -EINVAL);
         assert(acc_wallpaper_write(cfg, "/x/a.png", 99) == -EINVAL);
-        char longp[300]; memset(longp, 'a', sizeof(longp)); longp[0] = '/'; strcpy(longp + 250, ".png");
+        char longp[300]; memset(longp, 'a', sizeof(longp)); longp[0] = '/'; strcpy(longp + 270, ".png");   /* longer than CFG_PATH_MAX (G20: 256) */
         assert(acc_wallpaper_write(cfg, longp, ACC_WALL_TILE) == -ENAMETOOLONG);
         char missing[1100]; snprintf(missing, sizeof(missing), "%s/new.cfg", scratch);
         assert(!acc_wallpaper_write(missing, "/a/b.bmp", ACC_WALL_CENTER));        /* no settings file yet: defaults, then the wallpaper */

@@ -36,6 +36,7 @@ static void edit(int id,const char *text)
 }
 static void frame(const char *dir,const char *name)
 {
+    if (app.network_tab==1) assert(!strcmp(du_get(&ui,1506)->text,"Default gateway:"));
     du_render(&ui);
     uint32_t *partial=malloc(sizeof(pixels));assert(partial);memcpy(partial,pixels,sizeof(pixels));
     ui.dirty=1;du_render(&ui);assert(!memcmp(partial,pixels,sizeof(pixels)));free(partial);

@@ -39,7 +39,7 @@
 /* The footprint fixture supplies CU_CALL in its generated raw.h. */
 #ifndef DESK_FOOTPRINT_TEST
 /* G10's raw DISPLAY controls share this fixture's absent display device. */
-static uint32_t shell_display_call(uint32_t op,uintptr_t argument,uint32_t b,uint32_t c,uint32_t d,uint32_t e)
+__attribute__((unused)) static uint32_t shell_display_call(uint32_t op,uintptr_t argument,uint32_t b,uint32_t c,uint32_t d,uint32_t e)
 { (void)op; (void)argument; (void)b; (void)c; (void)d; (void)e; return (uint32_t)-ENOSYS; }
 #define CU_CALL(name,...) shell_display_call(__VA_ARGS__)
 #endif
@@ -119,6 +119,7 @@ static FILE *sequence_fopen(const char *path,const char *mode)
 #ifdef __i386__
 static inline uint32_t shell_screen_unavailable(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t e,uintptr_t f)
 { (void)a;(void)b;(void)c;(void)d;(void)e;(void)f;return (uint32_t)-ENOSYS; }
+#undef CU_CALL
 #define CU_CALL(n,a,b,c,d,e,f) shell_screen_unavailable(a,b,c,d,e,f)
 #endif
 #include "../../../apps/desktop/desktop.c"
@@ -935,7 +936,7 @@ __attribute__((noinline)) static void test_help_launch(void)
     assert(help>=0); window(&d,help,d.clients[help].pid,105,"CiukiOS Help");
     drain(&d,help);
     expect_help_arg=NULL; assert(launch_request(&d,0,(uint32_t)hello,"help",NULL)>0 && help_spawns==before+1);
-    struct desk_packet forwarded[DESK_TX_MAX];
+    static struct desk_packet forwarded[DESK_TX_MAX];
     assert(queued(&d,help,DESK_LAUNCH,forwarded)==1 && !strcmp(forwarded[0].argument,"topic:welcome"));
     /* Nothing else is allowed from it: other arguments, other programs, other topic spellings. */
     assert(launch_request(&d,0,(uint32_t)hello,"help","/Documents/x.txt")==-EPERM && launch_request(&d,0,(uint32_t)hello,"help","topic:")==-EPERM);
@@ -1091,10 +1092,11 @@ __attribute__((noinline)) static void test_menu_icons(void)
             !strcmp(d.sh.menus[0].items[2].label,cp_applets[a].label));
     }
     desk_menu_open(&d,SH_MENU_DESKTOP,0,0);
-    static const char *const context[]={"Arrange icons","Line up","Refresh","New","Paste","Paste Shortcut","Undo    Ctrl+Z","","Properties"};
-    assert(d.sh.menus[0].count==9);
-    for (unsigned k=0;k<9;k++) assert(!strcmp(d.sh.menus[0].items[k].label,context[k]));
-    assert(d.sh.menus[0].items[8].action==SH_ACT_CONTROL && d.sh.menus[0].items[8].arg==CP_DISPLAY+1);
+    static const char *const context[]={"Arrange icons","Line up","Refresh","New","Paste","Paste Shortcut","Undo    Ctrl+Z","Show Desktop Icons","","Properties"};
+    assert(d.sh.menus[0].count==10);
+    for (unsigned k=0;k<10;k++) assert(!strcmp(d.sh.menus[0].items[k].label,context[k]));
+    assert(d.sh.menus[0].items[7].flags&SH_ITEM_CHECKED); /* the check mark is the item state, as in Windows menus */
+    assert(d.sh.menus[0].items[9].action==SH_ACT_CONTROL && d.sh.menus[0].items[9].arg==CP_DISPLAY+1);
     desk_menu_open(&d,SH_MENU_NEW,0,0);assert(d.sh.menus[0].count==5);
     /* Start > Settings > Input > Keyboard keeps keyboard submenu traversal. */
     desk_menu_open(&d,SH_MENU_START,0,0);d.sh.menus[0].hot=item_at(&d.sh.menus[0],"Settings");key(&d,DU_KEY_RIGHT);
@@ -1404,7 +1406,7 @@ __attribute__((noinline)) static void test_network_service(void)
 #endif
 static void test_g9_run(void)
 {
-    struct desktop d; desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d);
+    static struct desktop d; desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d);
     d.programs[0]=(struct desk_program){"hello","/Programs/hello"}; d.program_count=1; d.launch=launch_program;
     assert(!setenv("CIUKIRUN","C:\\PROGRAMS\\HELLO",1));
     char env_command[]="%ciukirun%"; assert(run_command(&d,env_command)>0);
@@ -1437,8 +1439,24 @@ static void test_g9_run(void)
     pthread_cond_destroy(&w->changed); pthread_mutex_destroy(&w->mutex); free(w);
     puts("PASS G9 production Run: case-insensitive environment, native launch/history, external worker queue/busy/completion, error correction, late native failure/success");
 }
+static void test_g26c_path_queue(void)
+{
+    struct desktop *d=calloc(1,sizeof(*d));struct links_worker *w=calloc(1,sizeof(*w));assert(d && w);
+    struct links_worker *previous=links_worker;
+    desk_init(d,&fake_ops,640,480);w->desktop=d;links_worker=w;d->open_path=shell_open_path;
+    assert(!pthread_mutex_init(&w->mutex,NULL) && !pthread_cond_init(&w->changed,NULL));
+    assert(!shell_open_path(d,"/Documents/download.txt") && w->launch_requested==4 && !strcmp(w->source,"/Documents/download.txt"));
+    struct desk_launch_record record={.label="Browser",.target="/Programs/netsurf",.arguments="\"https://ciuki.example/\"",.show=1};
+    assert(link_launch_async(d,&record)==-EBUSY);w->launch_requested=0;
+    assert(!link_launch_async(d,&record) && w->launch_requested==3 && !memcmp(&w->requested_record,&record,sizeof(record)));
+    w->launch_requested=0;strcpy(record.target,"https://ciuki.example/");record.arguments[0]=0;
+    assert(!desk_shell_open_record(d,&record,0) && w->launch_requested==4 && !strcmp(w->source,record.target));
+    links_worker=previous;pthread_cond_destroy(&w->changed);pthread_mutex_destroy(&w->mutex);free(w);free(d);
+    puts("PASS G26C shared path queue: saved document and URL use resolver mode 4; explicit records mode 3; busy refusal preserves record");
+}
 int main(int argc,char **argv)
 {
+    if (argc==2 && !strcmp(argv[1],"--g26c-path")) { test_g26c_path_queue();return 0; }
     if (argc==2 && !strcmp(argv[1],"--slow-media-panel")) { test_slow_media_panel(); return 0; }
 #ifdef DESK_POLL_LEDGER_TEST
     if (argc==2 && !strcmp(argv[1],"--poll-handles")) { test_poll_handles(); return 0; }
@@ -1462,7 +1480,7 @@ int main(int argc,char **argv)
     static struct desktop d;
     fake_reset(); desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d);
     struct desk_program program={"demo","/Programs/demo"};
-    struct launch_job regional_job;
+    static struct launch_job regional_job;
     reg_defaults(&d.sh.cfg.regional,1);
     assert(!launch_prepare(&d,&program,&regional_job) && !strcmp(regional_job.env[0],"LANG=it_IT"));
     reg_defaults(&d.sh.cfg.regional,0);

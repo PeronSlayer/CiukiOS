@@ -4,6 +4,11 @@ static int g19_external_count;
 static struct desk_launch_record g19_external_record;
 static int g19_external(struct desktop *desktop, const struct desk_launch_record *record)
 { (void)desktop; g19_external_count++; g19_external_record=*record; return 0; }
+/* An installed G26C resolver remains authoritative even when it is busy. */
+static int g19_busy_path(struct desktop *desktop, const char *path)
+{
+    (void)desktop; assert(!strcmp(path,"https://example.com/")); return -EBUSY;
+}
 static void g19_link(const char *name, const char *target)
 {
     static struct desk_launch_record record;
@@ -17,6 +22,8 @@ static void g19_open(const char *name, const char *expected_program, const char 
     int k=named(name); assert(k>=3); d.focus=-1; d.sh.icon_selected=k;
     for (int i=0;i<d.sh.icon_count;i++) d.sh.icons[i].selected=0;
     key(DU_KEY_ENTER);
+    if (strcmp(program,expected_program) || strcmp(launched,argument))
+        fprintf(stderr,"G19 open %s: got %s [%s], expected %s [%s]\n",name,program,launched,expected_program,argument);
     assert(!strcmp(program,expected_program) && !strcmp(launched,argument));
 }
 static void g19_context(int index, const char *item)
@@ -55,6 +62,11 @@ static void g19_cases(void)
     command(DF_SHORTCUT,-1); strcpy(d.sh.folder->shortcut_target,"https://example.com/"); desk_folder_shortcut_action(&d,3);
     strcpy(d.sh.folder->shortcut_name,"G19 web"); desk_folder_shortcut_action(&d,3); desk_folder_service(&d);
     g19_open("G19 web.lnk","netsurf","https://example.com/");
+    static struct desk_launch_record web;
+    assert(!desk_folder_link_read(&d,DESK_FOLDER "/G19 web.lnk",&web));
+    d.open_path=g19_busy_path; program[0]=launched[0]=0;
+    assert(desk_shell_open_record(&d,&web,0)==-EBUSY && !program[0] && !launched[0]);
+    d.open_path=NULL;
     /* Closing after Finish but before service cancels the queued create. */
     command(DF_SHORTCUT,-1); strcpy(d.sh.folder->shortcut_target,"/Documents"); desk_folder_shortcut_action(&d,3);
     strcpy(d.sh.folder->shortcut_name,"G19 cancelled"); desk_folder_shortcut_action(&d,3); desk_folder_shortcut_close(&d); desk_folder_service(&d);

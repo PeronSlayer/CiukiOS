@@ -27,15 +27,16 @@ ACCESSORIES = {
     "help": ["help_main.c", "help_view.c", "help_topics.c", "help_navigation.c", "help_wizard.c",
              "helpfile.c", "help_hlp.c", "help_chm.c", "help_markup.c",
              "../../sdk/win32/lz32/mspack/chmd.c", "../../sdk/win32/lz32/mspack/lzxd.c"],
+    "logview": ["logview_main.c", "logview_view.c", "logview_model.c"],   # G13: boot, NetSurf, Setup and crash logs
     "mixer": ["mixer_main.c", "mixer_view.c"],
     "recorder": ["recorder_main.c", "recorder.c"],
     "music": ["../music/main.c", "../music/view.c", "../music/player.c", "../music/runtime.c", "../music/decoder.c", "../music/playlist.c", "../music/vorbis.c"],
-    "paint": ["../paint/main.c", "../paint/paint.c", "../paint/io.c", "../paint/stb.c"],
-    "viewer": ["viewer_main.c", "viewer_view.c", "viewer_model.c", "viewer_stb.c"],
     "scandisk": ["scandisk_main.c", "scandisk_view.c", "../sysrecovery/scanreport.c"],
     "msconfig": ["msconfig_main.c", "msconfig_view.c", "msconfig_model.c", "../sysrecovery/regcheck.c", "../sysrecovery/sfc.c", "../sysrecovery/bootcfg.c", "../../src/kernel/lib/sha256.c"],
     # G28: WordPad (RTF editor); links libfont for the Liberation faces and shares CiukNote's file helpers.
+    # G28b adds the Word and Write importers, the picture codec (stb) and the shared printing code.
     "wordpad": ["../wordpad/main.c", "../wordpad/app.c", "../wordpad/rich.c", "../wordpad/rtf.c", "../wordpad/layout.c",
+                "../wordpad/ole.c", "../wordpad/msword.c", "../wordpad/write.c", "../wordpad/image.c",
                 "../wordpad/fonts.c", "../ciuknote/doc.c", "../ciuknote/vfs.c"],
     "paint": ["../paint/main.c", "../paint/paint.c", "../paint/io.c", "../paint/stb.c", "../paint/xform.c", "wallpaper.c", "../desktop/settings.c"],
     "viewer": ["viewer_main.c", "viewer_view.c", "viewer_model.c", "viewer_stb.c", "wallpaper.c", "../desktop/settings.c"],
@@ -44,7 +45,7 @@ ACCESSORIES = {
     "solitaire": ["../games/solitaire_main.c", "../games/solitaire_view.c", "../games/solitaire_model.c", "../games/cards.c"],
     "freecell": ["../games/freecell_main.c", "../games/freecell_view.c", "../games/freecell_model.c", "../games/cards.c"],
     # G27 Serial Terminal (HyperTerminal equivalent) on the native COM ports.
-    "serial": ["../serial/serial_main.c", "../serial/serial_view.c", "../serial/serial_model.c", "../serial/screen.c", "../serial/xmodem.c"],
+    "serial": ["../serial/serial_main.c", "../serial/serial_view.c", "../serial/serial_model.c", "../serial/screen.c", "../serial/xmodem.c", "../serial/transfer.c"],
     "hearts": ["../games/hearts_main.c", "../games/hearts_view.c", "../games/hearts_model.c", "../games/cards.c"],
 }
 # G30 system tools (apps/systools): Start > Programs > Accessories > System Tools.
@@ -71,7 +72,7 @@ def inputs():
     files = [p for directory in (ROOT / "apps/desktop", ROOT / "apps/demo", ROOT / "apps/gfxdemo", ROOT / "apps/dosbox", ROOT / "apps/libdeskui",
                                  ROOT / "apps/files", ROOT / "apps/tasks", ROOT / "apps/ciuknote", ROOT / "apps/control",
                                  ROOT / "apps/ciukide", ROOT / "apps/wordpad", ROOT / "apps/regedit", ROOT / "apps/hwreport", ROOT / "apps/systools", ROOT / "apps/accessories", ROOT / "apps/paint",
-                                 ROOT / "apps/music", ROOT / "apps/terminal", ROOT / "apps/printers", ROOT / "apps/libprint", ROOT / "apps/games", ROOT / "apps/serial", ROOT / "third_party/minimp3", ROOT / "third_party/stb", ROOT / "assets/fonts/native")
+                                 ROOT / "apps/music", ROOT / "apps/terminal", ROOT / "apps/printers", ROOT / "apps/libprint", ROOT / "apps/games", ROOT / "apps/serial", ROOT / "apps/sysrecovery", ROOT / "third_party/minimp3", ROOT / "third_party/stb", ROOT / "assets/fonts/native")
              for p in directory.rglob("*") if p.is_file() and "__pycache__" not in p.parts]
     files.extend(ROOT / name for name in ("scripts/build_sounds.py", "assets/sounds/LICENSE.txt",
                  "assets/sounds/CREDITS.TXT", "assets/sounds/kenney-interface/UPSTREAM.json",
@@ -201,8 +202,7 @@ def build():
     sources["ciuknote"] = ["../ciuknote/main.c", "../ciuknote/app.c", "../ciuknote/doc.c", "../ciuknote/vfs.c"]
     sources["ciukide"] = ["../ciukide/main.c", "../ciukide/app.c", "../ciukide/model.c", "../ciukide/job.c", "../ciukide/process.c",
                           "../ciuknote/doc.c", "../ciuknote/vfs.c"]
-    sources["terminal"] = ["../terminal/main.c", "../terminal/app.c", "../terminal/commands.c", "../terminal/network.c", "../terminal/disktools.c", "../files/backup.c", "../terminal/lua.c", "../files/model.c", "../files/transfer.c", "../files/clipboard.c", "../files/vfs.c", "../tasks/model.c", "../terminal/recovery.c", "../sysrecovery/regcheck.c", "../sysrecovery/sfc.c", "../sysrecovery/scanreport.c", "../../src/kernel/lib/sha256.c"]
-    sources["terminal"] = ["../terminal/main.c", "../terminal/app.c", "../terminal/commands.c", "../terminal/script.c", "../terminal/lua.c", "../files/model.c", "../files/transfer.c", "../files/vfs.c", "../tasks/model.c"]
+    sources["terminal"] = ["../terminal/main.c", "../terminal/app.c", "../terminal/commands.c", "../terminal/native_commands.c", "../terminal/format.c", "../terminal/network.c", "../terminal/disktools.c", "../files/backup.c", "../terminal/lua.c", "../files/model.c", "../files/transfer.c", "../files/clipboard.c", "../files/vfs.c", "../tasks/model.c", "../terminal/recovery.c", "../sysrecovery/regcheck.c", "../sysrecovery/sfc.c", "../sysrecovery/scanreport.c", "../../src/kernel/lib/sha256.c"]
     sources["hwreport"] = ["../hwreport/main.c", "../hwreport/native.c", "../hwreport/report.c", "../hwreport/archive.c", "../hwreport/textlink.c", "../accessories/acc.c"]
 
     systools = ["../systools/sysinfo.c", "../systools/resmeter.c", "../systools/monitor.c", "../systools/devctl.c", "../systools/sched.c", "../systools/profiles.c",
@@ -211,14 +211,14 @@ def build():
     sources["sysmon"] = ["../systools/sysmon_main.c", "../systools/sysmon_view.c", *systools, "../tasks/model.c"]
     sources["resmeter"] = ["../systools/resmeter_main.c", "../systools/resmeter_view.c", *systools]
     sources["schedtask"] = ["../systools/schedtask_main.c", "../systools/schedtask_ui.c", *systools]
-    sources["control"] = ["users.c", "users_io.c", "startup.c", "win32_syscall.c", "win32_native.c", "win32_registry.c", "win32_service.c", "win32_restart.c", "win32_launch.c", "autoplay_registry.c", "../control/main.c", "../control/decoder.c", "../control/programs.c", "../control/app.c", "../systools/devctl.c", "../systools/profiles.c", "../control/driver_pack_ui.c", "../control/driver_pack.c", "../control/driver_pack_io.c", "../../src/kernel/ndis/package.c", "../../src/kernel/lib/sha256.c", "../control/display.c", "../control/fonts.c", "sounds.c", "sound_storage.c", "settings.c", "power_policy.c", "settings_io.c", "wallpaper.c", "image.c"]
+    sources["control"] = ["../files/model.c", "users.c", "users_io.c", "startup.c", "win32_syscall.c", "win32_native.c", "win32_registry.c", "win32_service.c", "win32_restart.c", "win32_launch.c", "autoplay_registry.c", "../control/main.c", "../control/decoder.c", "../control/programs.c", "../control/app.c", "../systools/devctl.c", "../systools/profiles.c", "../control/driver_pack_ui.c", "../control/driver_pack.c", "../control/driver_pack_io.c", "../../src/kernel/ndis/package.c", "../../src/kernel/lib/sha256.c", "../control/display.c", "../control/fonts.c", "sounds.c", "sound_storage.c", "settings.c", "power_policy.c", "settings_io.c", "wallpaper.c", "image.c"]
     sources["regedit"] = ["../regedit/main.c", "../regedit/app.c", "../accessories/acc.c"]
     sources["gfxdemo"] = ["../gfxdemo/main.c", "../gfxdemo/app.c", "../gfxdemo/scene.c", "../accessories/acc.c"]
     sources["printers"] = ["../printers/main.c", "../libprint/print.c", "../accessories/acc.c"]
     sources["printspool"] = ["../printers/spool.c", "../libprint/print.c"]
     for name, files in ACCESSORIES.items():
         sources[name] = [f"../accessories/{p}" for p in (*files, "acc.c")]
-    for name in ("ciuknote", "paint", "viewer"):
+    for name in ("ciuknote", "paint", "viewer", "wordpad"):
         sources[name] += ["../libprint/print.c", "../libprint/render.c", "../libprint/dialog.c"]
     for name, files in sources.items():
         commands[name] = [str(SDK / "bin/ciuki-cc"), *CFLAGS, *(["-DDP_NATIVE_VFS"] if name == "control" else []), "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "sdk/win32/include"),
@@ -226,7 +226,7 @@ def build():
                           *(str(ROOT / "apps/desktop" / p) for p in files),
                           *([str(library)] if name in ("desktop", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", "gfxdemo", "hwreport", "printers", "printspool", *SYSTOOLS, *ACCESSORIES) else []),
                           *( ["-I", str(ROOT / "build/apps/lua/lua-5.4.8/src"), str(ROOT / "build/apps/lua/liblua.a")] if name == "terminal" else []),
-                          *( ["-ldisk"] if name == "terminal" else []), *( ["-lm"] if name in ACCESSORIES else []), *( ["-lgl"] if name == "gfxdemo" else []), *( ["-lfont"] if name in ("control", "wordpad") else []), *( ["-lreg"] if name in ("regedit", "desktop", "control") else []), "-o", str(OUT / name)]
+                          *( ["-ldisk"] if name == "terminal" else []), *( ["-lm"] if name in ACCESSORIES else []), *( ["-lgl"] if name == "gfxdemo" else []), *( ["-lfont"] if name in ("control", "wordpad") else []), *( ["-lreg"] if name in ("regedit", "desktop", "control", "terminal", "msconfig") else []), "-o", str(OUT / name)]
         subprocess.run(commands[name], check=True, cwd=ROOT, env=env)
         evidence[name] = lua.checker().inspect(OUT / name)
     # Toolkit/compositor remain integer-only; TinyGL's scene uses the SDK x87 ABI.

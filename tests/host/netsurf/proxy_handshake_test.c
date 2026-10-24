@@ -19,6 +19,9 @@ int main(void)
     assert(!ciuki_proxy_auth_valid("Basic abc\r\n") && !ciuki_proxy_auth_valid("Basic ab=c"));
     struct cp_internet_options o;internet_defaults(&o);assert(internet_valid(&o) && internet_zone(&o,"www.example")==0);
     assert(internet_zone(&o,"server")==1 && internet_zone(&o,"192.168.1.1")==1);
+    assert(internet_zone(&o,"10.attacker.example")==0 && internet_zone(&o,"192.168.attacker.example")==0);
+    assert(internet_zone(&o,"")==0 && internet_zone(&o,"172.16.1.2")==1 && internet_zone(&o,"172.32.1.2")==0);
+    assert(internet_zone(&o,"10.999.1.1")==0 && internet_zone(&o,"999")==0 && internet_zone(&o,"::1")==0);
     strcpy(o.trusted,"trusted.example;second.example");strcpy(o.restricted,"blocked.example;trusted.example");
     assert(internet_zone(&o,"TRUSTED.example")==3 && internet_zone(&o,"second.example")==2 && !o.scripts[3]);
     o.proxy_user[0]='x';o.proxy_user[1]=':';assert(!internet_valid(&o));

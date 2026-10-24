@@ -7,6 +7,7 @@
 #include <ciuki/task.h>
 /* f1-101: task.c; host audio harnesses without the scheduler see null hooks. */
 #pragma weak sched_audio_source_end
+#pragma weak audio_midi_close
 
 int audio_stream_open(struct audio_stream **out)
 {
@@ -36,6 +37,7 @@ int audio_stream_open(struct audio_stream **out)
 void audio_stream_close(struct audio_stream *s)
 {
     if (!s) return;
+    if (audio_midi_close) audio_midi_close(s);
     if (sched_audio_source_end) sched_audio_source_end(s); /* f1-101 */
     for (unsigned i = 0; i < AUDIO_STREAMS; i++) if (audio.streams[i] == s) audio.streams[i] = 0;
     audio.commitment_pages -= 2;
@@ -53,6 +55,8 @@ int audio_stream_format(struct audio_stream *s, struct ciuki_audio_format *f)
 }
 void audio_stream_reset(struct audio_stream *s)
 {
+    if (s->midi) s->source=CIUKI_MIXER_WAVE;
+    if (audio_midi_close) audio_midi_close(s);
     s->discarded += s->queued;
     s->head = s->queued = s->phase = 0;
     s->have_previous = false;
@@ -72,6 +76,7 @@ static int16_t decode(const uint8_t *p, uint32_t format)
 }
 int audio_stream_enqueue(struct audio_stream *s, const void *buffer, uint32_t bytes)
 {
+    if (s->midi) return -EBUSY;
     uint32_t sample = s->format == CIUKI_AUDIO_U8 ? 1 : 2;
     uint32_t frame = sample * s->channels;
     if (bytes % frame) return -EINVAL;

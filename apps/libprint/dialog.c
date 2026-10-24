@@ -1,7 +1,9 @@
 /* SPDX-License-Identifier: MIT
  * Native Print and Page Setup: points, inclusive page range, copy count and
  * an explicit output path. Rendering and disk writes run off the UI thread. */
+#include <unistd.h>
 #include "dialog.h"
+#include "internal.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,6 +11,19 @@
 enum { PRINT_DIALOG=31000, PAGE_DIALOG, PRINT_NOTICE };
 static void notice(struct du_ui *u, const char *text)
 { du_message(u,PRINT_NOTICE,"Printing",text,DU_DLG_ICON_INFO,NULL,0,0,0); }
+static void discard(struct cp_ui *p)
+{
+    free(p->snapshot);p->snapshot=NULL;
+    cp_doc_free(&p->doc);p->formatted=0;p->prepare=NULL;p->prepare_ctx=NULL;
+    if(p->release && p->document)p->release(p->document);
+    p->document=NULL;p->render=NULL;p->release=NULL;
+    if(p->source[0]) {
+        unlink(p->source);
+        char *slash=strrchr(p->source,'/');
+        if(slash && !strcmp(slash,"/data")) { *slash=0;rmdir(p->source); }
+        p->source[0]=0;
+    }
+}
 static int init(struct cp_ui *p)
 {
     int first=!p->initialized;
@@ -16,7 +31,7 @@ static int init(struct cp_ui *p)
     if (!p->config) p->config=malloc(sizeof(*p->config));
     if (!p->config) { errno=ENOMEM;return -1; }
     int e=cp_config_load(p->root,p->config);
-    if (!e && first) { p->page=p->config->printers[p->config->default_printer].page;p->initialized=1; }
+    if (!e && first) { if (!p->preset) p->page=p->config->printers[p->config->default_printer].page;p->initialized=1; }
     return e;
 }
 static struct du_widget *field(struct du_ui *u,unsigned n,enum du_kind kind,const char *text,int y)
@@ -97,7 +112,7 @@ void cp_ui_setup(struct cp_ui *p,struct du_ui *u)
 }
 static void print_dialog(struct cp_ui *p,struct du_ui *u)
 {
-    if (init(p)) { free(p->snapshot);p->snapshot=NULL;notice(u,strerror(errno));return; }
+    if (init(p)) { discard(p);notice(u,strerror(errno));return; }
     unsigned selected=p->printer<CP_PRINTERS?p->printer:p->config->default_printer;
     box(u,PRINT_DIALOG,"Print");du_set_text(&u->dialog.items[0],"&Print");
     struct du_widget *list=field(u,2,DU_LISTVIEW,"",34);list->box.h=60;list->view=DU_LIST;
@@ -121,7 +136,7 @@ void cp_ui_text(struct cp_ui *p,struct du_ui *u,const char *title,const char *te
     p->snapshot=malloc(bytes?bytes:1);
     if (!p->snapshot) { notice(u,"Not enough memory to print.");return; }
     if (bytes) memcpy(p->snapshot,text,bytes);
-    p->bytes=bytes;p->image=0;snprintf(p->title,sizeof(p->title),"%s",title?title:"Document");print_dialog(p,u);
+    p->formatted=0;p->preset=0;p->bytes=bytes;p->image=0;snprintf(p->title,sizeof(p->title),"%s",title?title:"Document");print_dialog(p,u);
 }
 void cp_ui_image(struct cp_ui *p,struct du_ui *u,const char *title,const uint32_t *pixels,unsigned width,unsigned height)
 {
@@ -129,15 +144,34 @@ void cp_ui_image(struct cp_ui *p,struct du_ui *u,const char *title,const uint32_
     if (!pixels || !width || !height || width>CP_MAX_BYTES/4/height) { notice(u,"The picture is too large to print.");return; }
     p->bytes=(size_t)width*height*4;p->snapshot=malloc(p->bytes);
     if (!p->snapshot) { notice(u,"Not enough memory to print.");return; }
-    memcpy(p->snapshot,pixels,p->bytes);p->width=width;p->height=height;p->image=1;
+    memcpy(p->snapshot,pixels,p->bytes);p->width=width;p->height=height;p->image=1;p->formatted=0;p->preset=0;
     snprintf(p->title,sizeof(p->title),"%s",title?title:"Picture");print_dialog(p,u);
+}
+void cp_ui_doc(struct cp_ui *p,struct du_ui *u,const char *title,const struct cp_page *initial,cp_prepare_fn prepare,void *ctx)
+{
+    if (p->active || p->job.started || !prepare) return;
+    p->formatted=1;p->image=0;p->prepare=prepare;p->prepare_ctx=ctx;
+    if (initial && cp_page_valid(initial)) { p->page=*initial;p->preset=1;p->printer=CP_PRINTERS; }
+    else p->preset=0;
+    snprintf(p->title,sizeof(p->title),"%s",title?title:"Document");print_dialog(p,u);
 }
 static void submit(void *arg)
 {
     struct cp_ui *p=arg;
-    if (p->image) p->result=cp_submit_image(p->root,p->printer,p->title,p->snapshot,p->width,p->height,&p->page,p->target[0]?p->target:NULL);
+    if (p->formatted) p->result=cp_submit_doc(p->root,p->printer,p->title,&p->doc,&p->page,p->target[0]?p->target:NULL);
+    else if (p->image==2) p->result=cp_submit_file(p->root,p->printer,p->title,p->source,&p->page,p->target[0]?p->target:NULL);
+    else if (p->image) p->result=cp_submit_image(p->root,p->printer,p->title,p->snapshot,p->width,p->height,&p->page,p->target[0]?p->target:NULL);
     else p->result=cp_submit_text(p->root,p->printer,p->title,p->snapshot,p->bytes,&p->page,p->target[0]?p->target:NULL);
     p->error=errno;
+}
+void cp_ui_document(struct cp_ui *p,struct du_ui *u,const char *title,void *document,
+                    int (*render)(void *,FILE *,unsigned,const struct cp_page *),void (*release)(void *))
+{
+    if(p->active || p->job.started || !document || !render || !release) {
+        if(document && release)release(document);return;
+    }
+    p->formatted=0;p->preset=0;p->document=document;p->render=render;p->release=release;p->image=2;
+    snprintf(p->title,sizeof(p->title),"%s",title?title:"Document");print_dialog(p,u);
 }
 int cp_ui_event(struct cp_ui *p,struct du_ui *u,const struct du_event *e)
 {
@@ -145,19 +179,36 @@ int cp_ui_event(struct cp_ui *p,struct du_ui *u,const struct du_event *e)
     if (e->id==PRINT_NOTICE) return 1;
     p->active=0;
     if (e->id==PAGE_DIALOG) return 1;
-    if (e->index!=0) { free(p->snapshot);p->snapshot=NULL;return 1; }
+    if (e->index!=0) { discard(p);return 1; }
+    if(p->render) {
+        FILE *f=cp_tempfile(p->root,p->source,sizeof(p->source));
+        int failed=!f;
+        if(!f)p->source[0]=0;
+        if(f) {
+            failed=p->render(p->document,f,p->config->printers[p->printer].driver,&p->page);
+            if(!failed && (ferror(f) || fflush(f) || fsync(fileno(f))))failed=-1;
+            int error=errno;if(fclose(f) && !failed) { failed=-1;error=errno; }errno=error;
+        }
+        int error=errno;
+        p->release(p->document);p->document=NULL;p->render=NULL;p->release=NULL;
+        if(failed) { discard(p);notice(u,strerror(error));return 1; }
+    } else if (p->formatted) { /* prepare on the UI owner; the worker only writes */
+        cp_doc_free(&p->doc);
+        int pr=p->prepare(p->prepare_ctx,&p->page,p->config->printers[p->printer].driver,&p->doc);
+        if (pr) { discard(p);notice(u,pr==-ENOMEM?"Not enough memory to print.":"The document could not be prepared for printing.");return 1; }
+    }
     int r=du_job_start_ui(&p->job,submit,p,u);
-    if (r) { free(p->snapshot);p->snapshot=NULL;notice(u,strerror(-r)); }
+    if (r) { discard(p);notice(u,strerror(-r)); }
     return 1;
 }
 void cp_ui_poll(struct cp_ui *p,struct du_ui *u)
 {
     if (!du_job_ready(&p->job) || u->dialog.kind) return;
-    du_job_finish(&p->job);free(p->snapshot);p->snapshot=NULL;
+    du_job_finish(&p->job);discard(p);
     char text[128];
     if (p->result<0) snprintf(text,sizeof(text),"The document could not be queued: %s",strerror(p->error));
     else snprintf(text,sizeof(text),"Document queued as job %d. Open Printers to view or cancel it.",p->result);
     notice(u,text);
 }
 void cp_ui_destroy(struct cp_ui *p)
-{ du_job_finish(&p->job);free(p->snapshot);free(p->config);p->snapshot=NULL;p->config=NULL; }
+{ du_job_finish(&p->job);discard(p);free(p->config);p->config=NULL; }

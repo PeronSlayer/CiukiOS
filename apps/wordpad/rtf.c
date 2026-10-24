@@ -9,7 +9,13 @@
  * \~ \- \_) and the bullet forms WordPad and Word write (\pntext with \pn
  * \pnlvlblt, \listtext). Pictures and objects are skipped and counted in the
  * report; unknown control words and destinations are ignored as the
- * specification requires. */
+ * specification requires.
+ *
+ * G28b: pictures (\pict with \pngblip, \jpegblip, \dibitmap, \emfblip,
+ * \wmetafile, \macpict; hex or \bin data, \picw \pich \picwgoal \pichgoal
+ * \picscalex \picscaley) and objects (\object \objemb \objlink \objautlink
+ * with \objclass, \objdata and the \result picture) are kept in the document
+ * and written back; \shppict is read, \nonshppict is skipped; \qj justifies. */
 #include "rich.h"
 #include <errno.h>
 #include <stdio.h>
@@ -18,17 +24,27 @@
 
 /* ---- reader ------------------------------------------------------------------ */
 
-enum { DEST_BODY, DEST_SKIP, DEST_FONT, DEST_COLOR, DEST_LIST, DEST_PN };
+enum { DEST_BODY, DEST_SKIP, DEST_FONT, DEST_COLOR, DEST_LIST, DEST_PN, DEST_PICT, DEST_OBJCLASS, DEST_OBJDATA, DEST_RESULT };
 #define DEPTH 64
 #define FONT_NUMBERS 256
 #define LIST_TEXT 48
 
 struct gstate {
-    int dest, uc, fnum, cf, fs;
+    int dest, uc, fnum, cf, fs, nonshp;
     unsigned flags;
     struct wp_pattr p;
 };
+#define PIC_MAX (48u << 20)
+struct blob { uint8_t *p; size_t n, cap; int nib; int over; };
+struct pict_build {
+    int active, depth; unsigned kind, unsupported; struct blob b;
+    int w, h, wg, hg, sx, sy;   /* \picw \pich (source units), \picwgoal \pichgoal (twips), scale percent */
+};
+struct obj_build {
+    int active, depth; unsigned kind; char cls[32]; size_t cls_len; struct blob data; struct wp_pic *result; int w, h, sx, sy;
+};
 struct rd {
+    struct pict_build pic; struct obj_build obj;
     struct wp_doc *doc; struct wp_report *rep;
     const unsigned char *s; size_t n, i;
     struct gstate st[DEPTH]; int depth, over;
@@ -47,7 +63,7 @@ static struct wp_cattr attr_of(struct rd *r)
 {
     const struct gstate *g = cur(r);
     int f = g->fnum >= 0 ? g->fnum : r->deff;
-    struct wp_cattr a = {0, 0, 0, 0, 0};
+    struct wp_cattr a = {0, 0, 0, 0, 0, 0};
     a.font = (uint8_t)(f >= 0 && f < FONT_NUMBERS && r->fmap[f] >= 0 ? r->fmap[f] : 0);
     a.color = (uint8_t)(g->cf >= 0 && g->cf < FONT_NUMBERS && r->cmap[g->cf] >= 0 ? r->cmap[g->cf] : 0);
     a.flags = (uint8_t)g->flags;
@@ -64,6 +80,93 @@ static void body(struct rd *r, const char *s, size_t n)
     r->last_par = 0;
 }
 static void emit_cp(struct rd *r, uint32_t cp);
+
+/* ---- pictures and objects ---- */
+static int blob_put(struct blob *b, uint8_t v)
+{
+    if (b->over) return 0;
+    if (b->n >= PIC_MAX) { b->over = 1; return 0; }
+    if (b->n == b->cap) {
+        size_t c = b->cap ? b->cap * 2 : 4096;
+        uint8_t *q = realloc(b->p, c);
+        if (!q) { b->over = 1; return -ENOMEM; }
+        b->p = q; b->cap = c;
+    }
+    b->p[b->n++] = v;
+    return 0;
+}
+static void blob_free(struct blob *b) { free(b->p); memset(b, 0, sizeof(*b)); }
+static int hexval(int c);
+static void blob_hex(struct blob *b, uint32_t cp)
+{
+    int v = cp < 128 ? hexval((int)cp) : -1;
+    if (v < 0) return;
+    if (b->nib < 0) b->nib = v;
+    else { blob_put(b, (uint8_t)(b->nib * 16 + v)); b->nib = -1; }
+}
+static void pict_start(struct rd *r)
+{
+    blob_free(&r->pic.b);
+    memset(&r->pic, 0, sizeof(r->pic));
+    r->pic.active = 1; r->pic.depth = r->depth; r->pic.b.nib = -1; r->pic.sx = r->pic.sy = 100;
+}
+/* The picture of the finished \pict group, or NULL (an unsupported kind or no data is counted). */
+static struct wp_pic *pict_finish(struct rd *r)
+{
+    struct pict_build *pb = &r->pic;
+    struct wp_pic *p = NULL;
+    pb->active = 0;
+    if (!pb->b.n || !pb->kind || pb->b.over) { r->rep->skipped_pictures++; if (pb->unsupported || (pb->b.n && !pb->kind)) r->rep->unsupported_pictures++; blob_free(&pb->b); return NULL; }
+    p = wp_pic_new(pb->kind, pb->b.p, pb->b.n);
+    blob_free(&pb->b);
+    if (!p) { r->err = -ENOMEM; return NULL; }
+    if (pb->wg > 0 && pb->hg > 0 && pb->wg <= (1 << 20) && pb->hg <= (1 << 20)) { p->goalw = pb->wg; p->goalh = pb->hg; }
+    else if (pb->w > 0 && pb->h > 0 && (pb->kind == WP_PIC_WMF || pb->kind == WP_PIC_EMF || pb->kind == WP_PIC_PICT)) {
+        p->goalw = (int32_t)((int64_t)pb->w * 1440 / 2540); p->goalh = (int32_t)((int64_t)pb->h * 1440 / 2540);   /* 0.01 mm */
+    }
+    p->scalex = (uint16_t)(pb->sx < 1 ? 100 : pb->sx > 1000 ? 1000 : pb->sx);
+    p->scaley = (uint16_t)(pb->sy < 1 ? 100 : pb->sy > 1000 ? 1000 : pb->sy);
+    return p;
+}
+static void put_pic(struct rd *r, struct wp_pic *p, int is_object)
+{
+    if (r->err) { wp_pic_unref(p); return; }
+    r->doc->paras[r->doc->npara - 1].a = cur(r)->p;
+    struct wp_cattr a = attr_of(r);
+    int id = wp_pic_attach(r->doc, p);
+    if (id == -EFBIG) { if (is_object) r->rep->skipped_objects++; else r->rep->skipped_pictures++; return; }
+    if (id < 0) { r->err = id; return; }
+    a.pic = (uint16_t)id;
+    int e = wp_append(r->doc, WP_PIC_MARK, WP_PIC_MARK_LEN, &a);
+    if (e) r->err = e;
+    else if (is_object) r->rep->kept_objects++; else r->rep->kept_pictures++;
+    r->last_par = 0;
+}
+static void obj_start(struct rd *r)
+{
+    blob_free(&r->obj.data); wp_pic_unref(r->obj.result);
+    memset(&r->obj, 0, sizeof(r->obj));
+    r->obj.active = 1; r->obj.depth = r->depth; r->obj.data.nib = -1; r->obj.kind = WP_OBJ_EMB; r->obj.sx = r->obj.sy = 100;
+}
+static void obj_finish(struct rd *r)
+{
+    struct obj_build *ob = &r->obj;
+    struct wp_pic *p = ob->result;
+    ob->active = 0; ob->result = NULL;
+    if (!p && !ob->data.n) { blob_free(&ob->data); r->rep->skipped_objects++; return; }
+    if (!p) {
+        p = wp_pic_new(WP_PIC_NONE, NULL, 0);
+        if (!p) { blob_free(&ob->data); r->err = -ENOMEM; return; }
+        p->goalw = ob->w > 0 ? ob->w : 1440; p->goalh = ob->h > 0 ? ob->h : 720;
+    }
+    if (ob->data.n && !ob->data.over) { p->objdata = ob->data.p; p->objlen = (uint32_t)ob->data.n; ob->data.p = NULL; }
+    blob_free(&ob->data);
+    p->objkind = (uint8_t)ob->kind;
+    memcpy(p->cls, ob->cls, sizeof(p->cls));
+    if (ob->w > 0 && ob->h > 0 && !p->goalw) { p->goalw = ob->w; p->goalh = ob->h; }
+    put_pic(r, p, 1);
+}
+
 /* \uN: UTF-16 code units; a surrogate pair is one character, a lone half is U+FFFD. */
 static void emit_u(struct rd *r, int v)
 {
@@ -86,6 +189,11 @@ static void emit_cp(struct rd *r, uint32_t cp)
     if (r->hi) { r->hi = 0; emit_cp(r, 0xfffd); }
     if ((cp < 32 && cp != '\t') || cp == 127) return;   /* control characters never reach the text */
     int d = cur(r)->dest;
+    if (d == DEST_PICT) { blob_hex(&r->pic.b, cp); return; }
+    if (d == DEST_OBJDATA) { blob_hex(&r->obj.data, cp); return; }
+    if (d == DEST_OBJCLASS) { if (cp >= 32 && cp < 127 && r->obj.cls_len < sizeof(r->obj.cls) - 1) r->obj.cls[r->obj.cls_len++] = (char)cp; return; }
+    if (d == DEST_RESULT) return;
+    if (cp == 0xfffc) return;   /* U+FFFC belongs to pictures */
     if (d == DEST_FONT) {
         if (cp == ';') {
             struct wp_doc *doc = r->doc;
@@ -93,7 +201,8 @@ static void emit_cp(struct rd *r, uint32_t cp)
             r->fname[r->flen] = 0;
             if (r->fnum >= 0 && r->fnum < FONT_NUMBERS) {
                 int idx = -1;
-                if (r->flen) {
+                if (r->flen && (r->flen == 6 && !strncmp(r->fname, "Symbol", 6))) idx = WP_SANS;   /* only bullets use it: not a font of the document */
+                else if (r->flen) {
                     unsigned fam = wp_family_for_name(r->fname);
                     if (fam == WP_SANS) fam = r->ffam == 1 ? WP_SERIF : r->ffam == 2 ? WP_MONO : WP_SANS;
                     idx = wp_font_add(doc, r->fname, fam);
@@ -141,15 +250,19 @@ static void destination(struct rd *r, const char *w)
 {
     static const char *const skip[] = {"stylesheet", "info", "header", "headerl", "headerr", "headerf", "footer", "footerl",
         "footerr", "footerf", "footnote", "listtable", "listoverridetable", "rsidtbl", "generator", "themedata",
-        "colorschememapping", "latentstyles", "datastore", "xmlnstbl", "pgptbl", "revtbl", "userprops", "nonshppict",
+        "colorschememapping", "latentstyles", "datastore", "xmlnstbl", "pgptbl", "revtbl", "userprops",
         "upr", "fldinst", "sp", "shp", "shpgrp", "pnseclvl", "fontemb", "filetbl", "private", "xe", "tc", "txe", "comment"};
     struct gstate *g = cur(r);
     if (!strcmp(w, "fonttbl")) { g->dest = DEST_FONT; r->flen = 0; r->fnum = -1; r->ffam = 0; return; }
     if (!strcmp(w, "colortbl")) { g->dest = DEST_COLOR; r->cred = r->cgreen = r->cblue = r->chave = 0; r->ccount = 0; return; }
     if (!strcmp(w, "pntext") || !strcmp(w, "listtext")) { g->dest = DEST_LIST; r->llen = 0; r->ltab = 0; return; }
     if (!strcmp(w, "pn")) { g->dest = DEST_PN; r->pn_parent = r->depth - 1; return; }
-    if (!strcmp(w, "pict")) { r->rep->skipped_pictures++; g->dest = DEST_SKIP; return; }
-    if (!strcmp(w, "object") || !strcmp(w, "shp")) { r->rep->skipped_objects++; g->dest = DEST_SKIP; return; }
+    if (!strcmp(w, "pict") && g->dest == DEST_SKIP) { if (!g->nonshp) r->rep->skipped_pictures++; return; }   /* inside a skipped part: nothing to build */
+    if (!strcmp(w, "nonshppict")) { g->dest = DEST_SKIP; g->nonshp = 1; return; }   /* the fallback copy of a \shppict picture */
+    if (!strcmp(w, "pict")) { pict_start(r); g->dest = DEST_PICT; return; }
+    if (!strcmp(w, "object")) { obj_start(r); g->dest = DEST_BODY; return; }
+    if (!strcmp(w, "result") && r->obj.active) { g->dest = DEST_RESULT; return; }
+    if (!strcmp(w, "shp")) { r->rep->skipped_objects++; g->dest = DEST_SKIP; return; }
     for (unsigned i = 0; i < sizeof(skip) / sizeof(*skip); i++) if (!strcmp(w, skip[i])) { g->dest = DEST_SKIP; return; }
 }
 
@@ -160,9 +273,30 @@ static void word(struct rd *r, const char *w, int has, int v)
     if (r->star) {
         r->star = 0;
         if (!strcmp(w, "pn")) { destination(r, w); return; }
+        if (!strcmp(w, "shppict")) return;   /* Word 2000 and later: the picture, with a \nonshppict fallback */
+        if (r->obj.active && !strcmp(w, "objclass")) { g->dest = DEST_OBJCLASS; r->obj.cls_len = 0; r->obj.cls[0] = 0; return; }
+        if (r->obj.active && !strcmp(w, "objdata")) { g->dest = DEST_OBJDATA; return; }
         if (g->dest != DEST_SKIP) g->dest = DEST_SKIP;   /* ignorable destination the reader does not know */
         return;
     }
+    if (g->dest == DEST_PICT) {
+        struct pict_build *pb = &r->pic;
+        if (!strcmp(w, "pngblip")) pb->kind = WP_PIC_PNG;
+        else if (!strcmp(w, "jpegblip")) pb->kind = WP_PIC_JPEG;
+        else if (!strcmp(w, "dibitmap")) pb->kind = WP_PIC_DIB;
+        else if (!strcmp(w, "emfblip")) pb->kind = WP_PIC_EMF;
+        else if (!strcmp(w, "wmetafile")) pb->kind = WP_PIC_WMF;
+        else if (!strcmp(w, "macpict")) pb->kind = WP_PIC_PICT;
+        else if (!strcmp(w, "wbitmap") || !strcmp(w, "pmmetafile")) pb->unsupported = 1;
+        else if (!strcmp(w, "picw")) pb->w = v;
+        else if (!strcmp(w, "pich")) pb->h = v;
+        else if (!strcmp(w, "picwgoal")) pb->wg = v;
+        else if (!strcmp(w, "pichgoal")) pb->hg = v;
+        else if (!strcmp(w, "picscalex")) pb->sx = v;
+        else if (!strcmp(w, "picscaley")) pb->sy = v;
+        return;
+    }
+    if (g->dest == DEST_RESULT) { destination(r, w); return; }
     if (g->dest == DEST_PN) {
         if (!strcmp(w, "pnlvlblt") && r->pn_parent >= 0) make_bullet(&r->st[r->pn_parent].p);
         return;
@@ -215,7 +349,8 @@ static void word(struct rd *r, const char *w, int has, int v)
     else if (!strcmp(w, "f")) g->fnum = has ? v : -1;
     else if (!strcmp(w, "fs")) g->fs = has ? v : 24;
     else if (!strcmp(w, "cf")) g->cf = has && v >= 0 ? v : 0;
-    else if (!strcmp(w, "ql") || !strcmp(w, "qj")) g->p.align = WP_LEFT;
+    else if (!strcmp(w, "ql")) g->p.align = WP_LEFT;
+    else if (!strcmp(w, "qj")) g->p.align = WP_JUSTIFY;
     else if (!strcmp(w, "qc")) g->p.align = WP_CENTER;
     else if (!strcmp(w, "qr")) g->p.align = WP_RIGHT;
     else if (!strcmp(w, "li") || !strcmp(w, "lin")) g->p.left = v < 0 ? 0 : v > WP_INDENT_MAX ? WP_INDENT_MAX : v;
@@ -228,6 +363,13 @@ static void word(struct rd *r, const char *w, int has, int v)
     else if (!strcmp(w, "deff")) r->deff = has ? v : 0;
     else if (!strcmp(w, "ansicpg")) { if (has && v != 1252) r->rep->unknown_charset++; }
     else if (!strcmp(w, "mac") || !strcmp(w, "pc") || !strcmp(w, "pca")) r->rep->unknown_charset++;
+    else if (r->obj.active && r->depth == r->obj.depth && !strcmp(w, "objemb")) r->obj.kind = WP_OBJ_EMB;
+    else if (r->obj.active && r->depth == r->obj.depth && !strcmp(w, "objlink")) r->obj.kind = WP_OBJ_LINK;
+    else if (r->obj.active && r->depth == r->obj.depth && !strcmp(w, "objautlink")) r->obj.kind = WP_OBJ_AUTLINK;
+    else if (r->obj.active && r->depth == r->obj.depth && !strcmp(w, "objw")) r->obj.w = v;
+    else if (r->obj.active && r->depth == r->obj.depth && !strcmp(w, "objh")) r->obj.h = v;
+    else if (r->obj.active && r->depth == r->obj.depth && !strcmp(w, "objscalex")) r->obj.sx = v;
+    else if (r->obj.active && r->depth == r->obj.depth && !strcmp(w, "objscaley")) r->obj.sy = v;
     else if (!strcmp(w, "bullet")) body(r, "\xe2\x80\xa2", 3);
     else if (!strcmp(w, "endash")) body(r, "\xe2\x80\x93", 3);
     else if (!strcmp(w, "emdash")) body(r, "\xe2\x80\x94", 3);
@@ -242,8 +384,15 @@ static void word(struct rd *r, const char *w, int has, int v)
 static void close_group(struct rd *r)
 {
     struct gstate done = *cur(r);
+    int ends_pict = r->pic.active && r->depth == r->pic.depth, ends_obj = r->obj.active && r->depth == r->obj.depth;
     r->depth--;
     r->skip = 0;
+    if (ends_pict) {
+        struct wp_pic *p = pict_finish(r);
+        if (p && r->obj.active) { wp_pic_unref(r->obj.result); r->obj.result = p; r->rep->skipped_pictures += 0; }
+        else if (p) put_pic(r, p, 0);
+    }
+    if (ends_obj) obj_finish(r);
     if (done.dest == DEST_LIST) {
         struct gstate *g = cur(r);
         if (is_bullet(r->lbuf, r->llen)) make_bullet(&g->p);
@@ -270,7 +419,7 @@ int wp_rtf_read(struct wp_doc *doc, const char *buf, size_t n, struct wp_report 
     if (e) { free(r); return e; }
     r->doc = &work; r->rep = rep; r->s = (const unsigned char *)buf; r->n = n; r->pn_parent = -1; r->deff = 0;
     for (int i = 0; i < FONT_NUMBERS; i++) r->fmap[i] = r->cmap[i] = -1;
-    r->st[0] = (struct gstate){DEST_BODY, 1, -1, 0, 24, 0, wp_default_pattr()};
+    r->st[0] = (struct gstate){DEST_BODY, 1, -1, 0, 24, 0, 0, wp_default_pattr()};
     while (r->i < r->n && !r->err) {
         unsigned c = r->s[r->i++];
         if (c == '{') {
@@ -302,6 +451,11 @@ int wp_rtf_read(struct wp_doc *doc, const char *buf, size_t n, struct wp_report 
                 if (r->i < r->n && r->s[r->i] == ' ') r->i++;
                 if (!strcmp(w, "bin") && has && v > 0) {
                     size_t skip = (size_t)v < r->n - r->i ? (size_t)v : r->n - r->i;
+                    int d = cur(r)->dest;
+                    if (d == DEST_PICT || d == DEST_OBJDATA) {
+                        struct blob *b = d == DEST_PICT ? &r->pic.b : &r->obj.data;
+                        for (size_t k = 0; k < skip; k++) blob_put(b, r->s[r->i + k]);
+                    }
                     r->i += skip;
                     continue;
                 }
@@ -321,6 +475,7 @@ int wp_rtf_read(struct wp_doc *doc, const char *buf, size_t n, struct wp_report 
         } else if (c >= 0x80) emit_cp(r, wp_cp1252(c));
         else if (c >= 32 || c == '\t') emit_cp(r, c);
     }
+    blob_free(&r->pic.b); blob_free(&r->obj.data); wp_pic_unref(r->obj.result);   /* a truncated file leaves partial pictures */
     e = r->err;
     if (!e && r->last_par && work.len && work.text[work.len - 1] == '\n') e = wp_delete(&work, work.len - 1, work.len);
     free(r);
@@ -417,6 +572,45 @@ static void delta(struct sb *b, struct wp_cattr *from, const struct wp_cattr *to
     *from = *to;
 }
 
+static void put_hex(struct sb *b, const uint8_t *p, size_t n)
+{
+    static const char digits[] = "0123456789abcdef";
+    char line[130];
+    for (size_t i = 0; i < n;) {
+        size_t k = 0;
+        for (; i < n && k < 128; i++) { line[k++] = digits[p[i] >> 4]; line[k++] = digits[p[i] & 15]; }
+        line[k++] = '\n';
+        put(b, line, k);
+    }
+    b->col = 0;
+}
+/* One \pict group for a picture's bytes (its own, or the result picture of an object). */
+static void put_picture(struct sb *b, const struct wp_pic *p)
+{
+    static const char *const kinds[] = {"", "\\pngblip", "\\jpegblip", "\\dibitmap0", "\\wmetafile8", "\\emfblip", "\\macpict"};
+    int gw = p->goalw, gh = p->goalh;
+    if (gw <= 0 || gh <= 0) { gw = p->pw ? (int)p->pw * 15 : 1440; gh = p->ph ? (int)p->ph * 15 : 1440; }
+    unsigned pw = p->pw, ph = p->ph;
+    if (p->kind == WP_PIC_WMF || p->kind == WP_PIC_EMF || p->kind == WP_PIC_PICT) { pw = (unsigned)((int64_t)gw * 2540 / 1440); ph = (unsigned)((int64_t)gh * 2540 / 1440); }
+    else if (!pw || !ph) { pw = (unsigned)gw / 15; ph = (unsigned)gh / 15; }
+    putf(b, "{\\pict%s\\picw%u\\pich%u\\picwgoal%d\\pichgoal%d", kinds[p->kind], pw, ph, gw, gh);
+    if (p->scalex != 100) putf(b, "\\picscalex%u", p->scalex);
+    if (p->scaley != 100) putf(b, "\\picscaley%u", p->scaley);
+    put(b, "\n", 1);
+    put_hex(b, p->data, p->len);
+    puts_(b, "}");
+}
+static void write_pic(struct sb *b, const struct wp_pic *p)
+{
+    if (!p->objkind) { if (p->kind && p->len) put_picture(b, p); return; }
+    int gw = p->goalw > 0 ? p->goalw : 1440, gh = p->goalh > 0 ? p->goalh : 720;
+    char cls[32]; clean_name(cls, p->cls);
+    putf(b, "{\\object%s{\\*\\objclass %s}\\objw%d\\objh%d", p->objkind == WP_OBJ_LINK ? "\\objlink" : p->objkind == WP_OBJ_AUTLINK ? "\\objautlink" : "\\objemb", cls, gw, gh);
+    if (p->objlen) { puts_(b, "{\\*\\objdata\n"); put_hex(b, p->objdata, p->objlen); puts_(b, "}"); }
+    if (p->kind && p->len) { puts_(b, "{\\result "); put_picture(b, p); puts_(b, "}"); }
+    puts_(b, "}");
+}
+
 int wp_rtf_write(const struct wp_doc *d, char **out, size_t *len)
 {
     struct sb b = {0};
@@ -430,14 +624,14 @@ int wp_rtf_write(const struct wp_doc *d, char **out, size_t *len)
     for (unsigned i = 1; i < d->ncolors; i++)
         putf(&b, "\\red%u\\green%u\\blue%u;", (d->colors[i] >> 16) & 255, (d->colors[i] >> 8) & 255, d->colors[i] & 255);
     puts_(&b, "}\n\\viewkind4\\uc1 ");
-    struct wp_cattr now = {0, 0, 0, 0, 24};
+    struct wp_cattr now = {0, 0, 0, 0, 24, 0};
     unsigned ri = 0; size_t roff = 0, at = 0;
     for (unsigned p = 0; p < d->npara; p++) {
         const struct wp_pattr *a = &d->paras[p].a;
         size_t plen = d->paras[p].len, tl = p + 1 < d->npara ? plen - 1 : plen;
         puts_(&b, "\\pard");
         if (a->bullet) putf(&b, "{\\pntext\\f%u\\'B7\\tab}{\\*\\pn\\pnlvlblt\\pnf%u\\pnindent0{\\pntxtb\\'B7}}", symbol, symbol);
-        if (a->align == WP_CENTER) puts_(&b, "\\qc"); else if (a->align == WP_RIGHT) puts_(&b, "\\qr");
+        if (a->align == WP_CENTER) puts_(&b, "\\qc"); else if (a->align == WP_RIGHT) puts_(&b, "\\qr"); else if (a->align == WP_JUSTIFY) puts_(&b, "\\qj");
         if (a->first) putf(&b, "\\fi%d", (int)a->first);
         if (a->left) putf(&b, "\\li%d", (int)a->left);
         if (a->right) putf(&b, "\\ri%d", (int)a->right);
@@ -449,8 +643,15 @@ int wp_rtf_write(const struct wp_doc *d, char **out, size_t *len)
             if (ri >= d->nruns) break;
             size_t take = d->runs[ri].len - roff;
             if (take > left) take = left;
-            delta(&b, &now, &d->runs[ri].a);
-            put_text(&b, d->text + at, take);
+            if (d->runs[ri].a.pic) {   /* a picture: whole U+FFFC characters, each written as its own group */
+                struct wp_cattr plain = d->runs[ri].a; plain.pic = 0;
+                delta(&b, &now, &plain);
+                const struct wp_pic *pic = d->runs[ri].a.pic <= d->npics ? d->pics[d->runs[ri].a.pic - 1] : NULL;
+                for (size_t k = 0; k + WP_PIC_MARK_LEN <= take; k += WP_PIC_MARK_LEN) if (pic) write_pic(&b, pic);
+            } else {
+                delta(&b, &now, &d->runs[ri].a);
+                put_text(&b, d->text + at, take);
+            }
             at += take; roff += take; left -= take;
         }
         if (p + 1 < d->npara) {   /* the paragraph mark carries a character format too */
@@ -516,6 +717,7 @@ int wp_text_write(const struct wp_doc *d, char **out, size_t *len, int crlf)
     size_t w = 0;
     for (size_t i = 0; i < d->len; i++) {
         char c = d->text[i];
+        if ((unsigned char)c == 0xef && i + 2 < d->len && !memcmp(d->text + i, WP_PIC_MARK, WP_PIC_MARK_LEN)) { i += 2; continue; }   /* pictures are not text */
         if (c == WP_SOFT_BREAK) c = '\n';
         if (c == '\n' && crlf) o[w++] = '\r';
         o[w++] = c;

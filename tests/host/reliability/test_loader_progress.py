@@ -241,7 +241,9 @@ class LoaderProgressTests(unittest.TestCase):
         for label in ('.chunk:', '.bss:'):
             self.assertIn(label+'\n    call progress_require', elf)
         disk = (ROOT / 'src/boot/ciukldr/disk.inc').read_text()
-        self.assertIn('disk_read:\n    call progress_require', disk)
+        self.assertIn('disk_raw:\n    call progress_require', disk)
+        self.assertIn('disk_read:\n', disk)
+        self.assertIn('    call disk_raw\n', disk)
         self.assertIn('.ok:\n    popad\n    call progress_require', disk)
         menu = (ROOT / 'src/boot/ciukldr/menu.inc').read_text().split('boot_menu:', 1)[1]
         self.assertIn('.poll:\n    call progress_check\n    jc .done', menu)

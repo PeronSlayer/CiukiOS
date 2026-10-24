@@ -207,7 +207,7 @@ static void ui_tests(void)
     command(&app,OP_SEND_BASE); wait_worker();
     assert(fake_lookup("/Documents/Desktop/Shortcut to changed.txt.lnk")>=0);
     fm_select(&app.model,row("/two/changed.txt"),0);
-    command(&app,FILES_COPY_TO); assert(ui.dialog.folders_only); du_dialog_close(&ui);
+    command(&app,FILES_COPY_TO); assert(ui.dialog.kind==DU_DLG_FOLDER); du_dialog_close(&ui);
     struct du_event dest={.type=DU_EV_DIALOG,.id=D_OP_DEST,.index=0,.text="C:\\out"};
     files_event(&ui,&dest,&app); wait_worker(); assert(fake_lookup("/out/changed.txt")>=0);
     command(&app,FILES_UNDO); wait_worker(); assert(fake_lookup("/out/changed.txt")<0);

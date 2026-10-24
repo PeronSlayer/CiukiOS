@@ -870,6 +870,11 @@ const struct fm_vfs *fm_native_vfs(void) { return &fake_vfs; }
  * supplying ordinary size/time/stat metadata. No PE fixture is installed. */
 int fm_native_version(const char *path,char *out,size_t cap)
 { (void)path; if (cap) out[0]=0; return -ENOENT; }
+/* The mixer-line and disk-tool native file systems have no kernel in the replay either. */
+int line_preference_save(const char *directory,const struct ciuki_mixer_line *line)
+{ (void)directory; (void)line; return 0; }
+const struct fm_vfs *fm_native_backup_vfs(void) { return &fake_vfs; }
+const struct fm_vfs *fm_native_cleanup_vfs(void) { return &fake_vfs; }
 int ciuki_file_info_get(const char *path,struct ciuki_file_info *out)
 { (void)path; (void)out; errno=ENOSYS; return -1; }
 int ciuki_set_attributes(const char *path,uint32_t attributes)
@@ -1295,3 +1300,7 @@ int ciuki_display_engine_info(int fd,uint32_t generation,struct ciuki_display_en
 int ciuki_display_commands(int fd,uint32_t generation,struct ciuki_command_info *out) { (void)fd;(void)generation;(void)out;return -ENOSYS; }
 int ciuki_display_batch(int fd,const void *blob,uint32_t bytes,struct ciuki_batch_reply *out) { (void)fd;(void)blob;(void)bytes;(void)out;return -ENOSYS; }
 int ciuki_display_fence(int fd,uint64_t fence,uint16_t action,uint32_t timeout,struct ciuki_batch_reply *out) { (void)fd;(void)fence;(void)action;(void)timeout;(void)out;return -ENOSYS; }
+
+/* The replay has no Win32 registry service: Files' shared HKCR requests fail like an absent server. */
+uint32_t files_registry_exchange(const void *input,uint32_t bytes,void *output,uint32_t capacity,uint32_t *used)
+{ (void)input; (void)bytes; (void)output; (void)capacity; if (used) *used=0; return 1; }

@@ -302,7 +302,7 @@ static int cv_find_table(struct cv_plan *p, uint8_t table[512])
     }
     return -FS_EOPNOTSUPP;
 }
-int fat_convert(struct fat_volume *v, struct blkdev *parent, uint64_t start)
+static int cv_run(struct fat_volume *v, struct blkdev *parent, uint64_t start, bool boot_volume)
 {
     uint32_t bytes; int e=fat_convert_plan(v,&bytes); if (e) return e;
     if (!parent || !parent->write || !blkdev_durable(parent) || start>UINT32_MAX ||
@@ -325,6 +325,7 @@ int fat_convert(struct fat_volume *v, struct blkdev *parent, uint64_t start)
     if (fs_rd32(boot+28)!=start) { e=-FS_EINVAL; goto out; }
     if ((e=cv_tree(p))) goto out;
     p->records=2*p->fat+p->directory_sectors+5;
+    if (boot_volume && p->records>8192) { e=-FS_EOPNOTSUPP; goto out; }
     p->journal_sectors=(2*p->records+v->spc-1)/v->spc*v->spc;
     if ((e=cv_free_run(p,p->root_sectors/v->spc,&p->root_old))) goto out;
     uint32_t journal;
@@ -352,4 +353,71 @@ int fat_convert(struct fat_volume *v, struct blkdev *parent, uint64_t start)
 out:
     for (unsigned i=0;i<CV_TAIL_PAGES;i++) if (p->tails[i]) fs_page_free(p->tails[i]);
     fs_page_free(p->map); fs_page_free(p); return e;
+}
+
+int fat_convert(struct fat_volume *v,struct blkdev *parent,uint64_t start)
+{ return cv_run(v,parent,start,false); }
+int fat_convert_boot(struct fat_volume *v,struct blkdev *parent,uint64_t start)
+{ return cv_run(v,parent,start,true); }
+/* The capability is carried by both stages. Check the same complete loader
+ * CRC as the native MBR, not merely a string in an otherwise foreign disk. */
+int fat_convert_boot_loader(struct blkdev *dev,uint64_t start,uint64_t sectors)
+{
+    uint8_t b[512]; int e=cv_read(dev,0,b); if (e) return e;
+    if (start!=2048 || memcmp(b+436,"CKD1",4) || fs_rd16(b+510)!=0xaa55 ||
+        fs_rd32(b+454)!=start || fs_rd32(b+458)!=sectors || !(b[446]&0x80)) return -FS_EOPNOTSUPP;
+    if ((e=cv_read(dev,1,b))) return e;
+    if (memcmp(b,"CLDR",4) || fs_rd16(b+4)!=1 || fs_rd16(b+6)!=48 ||
+        fs_rd16(b+14)!=16 || fs_rd16(b+12)<16 || fs_rd16(b+12)>=24576) return -FS_EOPNOTSUPP;
+    uint32_t expected=fs_rd32(b+8),crc=~0u;
+    for (unsigned sector=0;sector<48;sector++) {
+        if (sector && (e=cv_read(dev,sector+1,b))) return e;
+        for (unsigned i=sector ? 0 : 16;i<512;i++) {
+            crc^=b[i];
+            for (unsigned j=0;j<8;j++) crc=(crc>>1)^(0xedb88320u&(0u-(crc&1)));
+        }
+    }
+    return ~crc==expected && !memcmp(b+472,"G29DCVT1",8) ? 0 : -FS_EOPNOTSUPP;
+}
+int fat_convert_boot_schedule(struct fat_volume *v,struct blkdev *parent,uint64_t start)
+{
+    uint32_t bytes; int e=fat_convert_plan(v,&bytes); if (e) return e;
+    if (v->spc>64) return -FS_EOPNOTSUPP; /* Windows FAT16: at most 32 KiB clusters */
+    uint8_t b[512]; if ((e=cv_read(parent,0,b))) return e;
+    uint32_t partition_sectors=fs_rd32(b+458);
+    if (partition_sectors<v->sectors) return -FS_EINVAL;
+    if ((e=fat_convert_boot_loader(parent,start,partition_sectors))) return e;
+    if ((e=fat_commit(v))) return e;
+    if ((e=cv_read(parent,start,b))) return e;
+    memcpy(b+128,"CIUKINXT",8); fs_wr32(b+136,1); fs_wr32(b+140,v->volume_serial);
+    fs_wr32(b+144,partition_sectors); fs_wr32(b+148,(uint32_t)start);
+    fs_wr32(b+152,cv_crc(b+128,24));
+    if ((e=cv_write(parent,start,b))) return e;
+    return cv_flush(parent);
+}
+int fat_convert_boot_pending(struct blkdev *parent,uint64_t start,uint64_t sectors,bool *pending)
+{
+    if (!pending) return -FS_EINVAL;
+    *pending=false;
+    uint8_t b[512]; int e=cv_read(parent,start,b); if (e) return e;
+    if (memcmp(b+128,"CIUKINXT",8)) return 0;
+    if (fs_rd32(b+136)!=1 || fs_rd32(b+140)!=fs_rd32(b+39) ||
+        fs_rd32(b+144)!=sectors || fs_rd32(b+148)!=start ||
+        fs_rd32(b+152)!=cv_crc(b+128,24)) return -FS_EIO;
+    e=fat_convert_boot_loader(parent,start,sectors);
+    if (!e) *pending=true;
+    return e;
+}
+
+/* Only an intact FAT16 pre-commit state can cancel a failed offline job.
+ * A committed locator must instead be replayed; never erase its recovery path. */
+int fat_convert_boot_cancel(struct blkdev *parent,uint64_t start)
+{
+    uint8_t b[512]; int e=cv_read(parent,start,b); if (e) return e;
+    if (!memcmp(b+3,CV_MAGIC,8) || fs_rd16(b+11)!=512 || !fs_rd16(b+22) || fs_rd16(b+510)!=0xaa55 ||
+        memcmp(b+128,"CIUKINXT",8) || fs_rd32(b+148)!=start ||
+        fs_rd32(b+152)!=cv_crc(b+128,24)) return -FS_EBUSY;
+    memset(b+128,0,28);
+    if ((e=cv_write(parent,start,b))) return e;
+    return cv_flush(parent);
 }

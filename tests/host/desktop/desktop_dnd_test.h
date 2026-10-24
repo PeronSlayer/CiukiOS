@@ -17,7 +17,7 @@ static void dnd_layout(void)
 {
     static const char *names[]={"dnd-a.txt","dnd-b.txt","dnd-c.txt","DndFolder"};
     static const int xy[][2]={{300,200},{400,200},{300,300},{600,200}};
-    for (unsigned i=0;i<4;i++) assert(cfg_icon_move(&d.sh.cfg,names[i],xy[i][0],xy[i][1]));
+    for (unsigned i=0;i<4;i++) assert(cfg_icon_move_at(&d.sh.cfg,names[i],d.width,d.height,xy[i][0],xy[i][1]));
     command(DF_REFRESH,-1); desk_folder_changed(&d);
     for (unsigned i=0;i<4;i++) { int k=named(names[i]); assert(k>=0 && d.sh.icons[k].box.x==xy[i][0]); }
 }
@@ -38,6 +38,7 @@ static void fx19_desktop_cases(void)
 {
     close_message(); for (int k=0;k<d.sh.icon_count;k++) d.sh.icons[k].selected=0;
     d.sh.icon_selected=-1; d.sh.focus_unselected=0;
+    assert(cfg_icons_arrange_at(&d.sh.cfg,d.width,d.height)); /* isolate the marquee area from preceding manual drags */
     dnd_files();
     int ax,ay,bx,by,cx,cy,fx,fy; dnd_at("dnd-a.txt",&ax,&ay); dnd_at("dnd-b.txt",&bx,&by); dnd_at("dnd-c.txt",&cx,&cy); dnd_at("DndFolder",&fx,&fy);
     /* Click, Ctrl+click adds, Ctrl+click on a selected icon toggles it at release, Shift+click selects the rectangle. */
@@ -52,7 +53,7 @@ static void fx19_desktop_cases(void)
     puts("PASS fx-19 desktop selection: click, Ctrl toggle (deferred on a selected icon), Shift rectangle from the anchor, press keeps the selection");
 
     /* Rubber band from empty space: plain replaces, Ctrl toggles, Shift adds. */
-    d.now_ns+=1000000000ull; d.mouse_x=290; d.mouse_y=470; desk_shell_button(&d,1,1); assert(d.sh.band && dnd_count()==0);
+    d.now_ns+=1000000000ull; d.mouse_x=290; d.mouse_y=470; desk_shell_button(&d,1,1);     assert(d.sh.band); assert(dnd_count()==0);
     dnd_move(300,350); dnd_move(350,250);
     assert(dnd_marked("dnd-a.txt") && dnd_marked("dnd-c.txt") && !dnd_marked("dnd-b.txt") && !dnd_marked("DndFolder"));
     capture("desktop-fx19-marquee"); cache_equivalent();
@@ -115,8 +116,8 @@ static void fx19_desktop_cases(void)
     key(DU_KEY_ESC); assert(!d.sh.dnd.active); desk_shell_button(&d,1,0);
     assert(d.sh.icons[named("dnd-a.txt")].box.x==300);
     d.now_ns+=1000000000ull; d.mouse_x=ax; d.mouse_y=ay; desk_shell_button(&d,1,1); dnd_move(ax+40,ay+260); desk_shell_button(&d,1,0);
-    int x,y; assert(cfg_icon_position(&d.sh.cfg,"dnd-a.txt",&x,&y) && x==340 && y==460);
-    assert(cfg_icon_position(&d.sh.cfg,"dnd-b.txt",&x,&y) && x==440 && y==460);
+    int x,y; assert(cfg_icon_position_at(&d.sh.cfg,"dnd-a.txt",d.width,d.height,&x,&y) && x==340 && y==460);
+    assert(cfg_icon_position_at(&d.sh.cfg,"dnd-b.txt",d.width,d.height,&x,&y) && x==440 && y==460);
     /* Ctrl over free space copies beside the originals (Copy of). */
     dnd_layout(); dnd_at("dnd-a.txt",&ax,&ay); dnd_click(ax,ay,0,1);
     d.now_ns+=1000000000ull; d.mouse_x=ax; d.mouse_y=ay; desk_shell_button(&d,1,1); dnd_move(ax+300,ay+250);
@@ -186,7 +187,7 @@ static void fx19_desktop_cases(void)
     }
     assert(ended && routed && !d.sh.dnd.active); settle();
     assert(fake_lookup(DESK_FOLDER "/FromFiles.txt")>=0 && fake_lookup("/Documents/FromFiles.txt")<0);
-    assert(cfg_icon_position(&d.sh.cfg,"FromFiles.txt",&x,&y) && x==700-48 && y==320-24);
+    assert(cfg_icon_position_at(&d.sh.cfg,"FromFiles.txt",d.width,d.height,&x,&y) && x==700-48 && y==320-24);
     puts("PASS fx-19 Files source: DRAG_BEGIN authority, shell-owned pointer (no client motion), desktop drop at the pointer, DRAG_END effect and routed release");
 
     /* WM_DROPFILES applications: ACCEPT_FILES, the copy cursor, DROP_FILES and activation. */

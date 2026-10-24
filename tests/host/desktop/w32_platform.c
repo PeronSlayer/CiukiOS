@@ -5,12 +5,11 @@
 #include <ciuki/proc.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-/* The host socket header declares its own SOCK_RAW enum member. */
-#undef SOCK_RAW
+/* The host socket header declares the enum members the ABI header defines as macros. */
+#include "host_socket_undef.h"
 #include <sys/socket.h>
 #include <sys/prctl.h>
 #include <signal.h>

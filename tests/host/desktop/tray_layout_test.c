@@ -170,6 +170,7 @@ int main(void)
         d.portrait=portrait;
         d.icon = store; desk_shell_enable(&d);
         snprintf(d.sh.cfg.theme, sizeof(d.sh.cfg.theme), "%s", desk_theme_at(theme)->name);
+        d.sh.cfg.layout_switch=0;   /* G12's language indicator has its own rows; this one counts the fixed icons */
         desk_shell_apply(&d);
         d.lfb_bytes_per_pixel=rgb565 ? 2 : 4;
         d.pixels = calloc((size_t)d.width * d.height, 4); assert(d.pixels);

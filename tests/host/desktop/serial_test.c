@@ -275,6 +275,23 @@ static void cable_tests(const char *scratch)
     serial_xmodem_cancel(&a); for (int turn = 0; turn < 20 && (a.xm_active || b.xm_active); turn++) { serial_pump(&a, 20); serial_pump(&b, 20); }
     assert(!a.xm_active && !b.xm_active && strstr(a.message, "cancelled") && strstr(b.message, "cancelled"));
     serial_xmodem_cancel(&a);                                                                      /* nothing running: no effect */
+    /* G27B protocols use the same UART pump, staged destinations and partial writes. */
+    for(int protocol=TRANSFER_YMODEM;protocol<=TRANSFER_KERMIT;protocol++) {
+        data[6999]=0x1a;memset(data+20,24,8);write_file(src,data,sizeof(data));
+        write_file(dst,"old destination",15);fa.accept_limit=7;fb.accept_limit=3;
+        assert(!serial_transfer_start(&b,dst,protocol,0) && !serial_transfer_start(&a,src,protocol,1));
+        uint8_t got[8000];assert(read_file(dst,got,sizeof(got))==15 && !memcmp(got,"old destination",15));
+        for(int turn=0;turn<20000 && (a.xm_active || b.xm_active);turn++) { serial_pump(&a,20);serial_pump(&b,20); }
+        assert(!a.xm_active && !b.xm_active && strstr(a.message,"complete") && strstr(b.message,"complete"));
+        assert(read_file(dst,got,sizeof(got))==sizeof(data) && !memcmp(got,data,sizeof(data)));
+        write_file(dst,"preserve",8);
+        assert(!serial_transfer_start(&b,dst,protocol,0) && !serial_transfer_start(&a,src,protocol,1));
+        serial_pump(&a,20);serial_pump(&b,20);serial_xmodem_cancel(&a);
+        for(int turn=0;turn<12000 && (a.xm_active || b.xm_active);turn++) { serial_pump(&a,20);serial_pump(&b,20); }
+        assert(!a.xm_active && !b.xm_active);
+        assert(read_file(dst,got,sizeof(got))==8 && !memcmp(got,"preserve",8));
+        assert(!a.transfer && !b.transfer && !a.xm_file && !b.xm_file && !b.transfer_temp[0]);
+    }
     serial_disconnect(&a); serial_disconnect(&b);
     /* Disconnecting a running transfer cancels it. */
     assert(!serial_connect(&a) && !serial_xmodem_send(&a, src, 0) && a.xm_active); serial_disconnect(&a); assert(!a.xm_active && !a.connected);

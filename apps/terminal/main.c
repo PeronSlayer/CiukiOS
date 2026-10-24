@@ -22,6 +22,8 @@ static int device(const char *path,uint32_t op,void *record,unsigned bytes)
     int fd=open(path,O_RDONLY|O_CLOEXEC); if(fd<0)return -errno;
     int r=ciuki_devctl(fd,op,record,bytes); int error=errno; close(fd); return r ? -error : 0;
 }
+static int format(void *ctx,int write,struct ciuki_media_format *r)
+{ (void)ctx; return device("/dev/media",write ? MEDIA_FORMAT : MEDIA_GET_FORMAT,r,sizeof(*r)); }
 static int net(void *ctx,struct ciuki_net_state *s) { (void)ctx; return device("/dev/net",NET_GET_STATE,s,sizeof(*s)); }
 static int mixer(void *ctx,struct ciuki_mixer_master *s) { (void)ctx; return device("/dev/mixer",MIXER_GET_MASTER,s,sizeof(*s)); }
 static int processes(void *ctx,void *s,unsigned bytes) { (void)ctx; int n=ciuki_proc_list(s,bytes); return n<0 ? -errno : n; }
@@ -103,7 +105,7 @@ int main(int argc,char **argv)
     if(du_window_open_resizable(&x->window,&x->ui,channel,TERM_WIDTH,TERM_HEIGHT,"Terminal",304,168)) { free(x); return 1; }
     du_help_topic(&x->ui, "terminal"); /* G15 */
     struct term_host h={.fs=*fm_native_vfs(),.ctx=x,.net=net,.network_command=term_network_command,.mixer=mixer,.volume=volume,.processes=processes,.display=display,
-        .launch=launch,.kill=kill,.power=power,.cwd=cwd,.now=now,.pump=pump,.quit=quit,
+        .run=term_run_command,.registry=term_registry_command,.format=format,.launch=launch,.kill=kill,.power=power,.cwd=cwd,.now=now,.pump=pump,.quit=quit,
         .attributes=attributes,.label_get=label_get,.label_set=label_set,.space=space,.disktool=disktool};
     if(term_attach(&x->app,&x->ui,&h)) { du_window_destroy(&x->window); free(x); return 1; }
     x->window.user=x; x->window.message=message; x->window.close_request=close_request;

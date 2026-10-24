@@ -1,5 +1,38 @@
 # Disk Defragmenter and Drive Converter (G29b)
 
+## G29D implementation contract (2026-10-24)
+
+Research: the read-only Resource Kit `wrkc10_3.htm`, “Disk
+Defragmenter”, describes recording application startup accesses and placing
+program data in access order. `wrkc10_2.htm`, “Checks Made by FAT32 Drive
+Converter Wizard” and the CVT switches, requires offline conversion or an
+exclusive level-zero lock, checking and backup/compatibility warnings.
+Microsoft's [Windows 98 SE General.txt, Q234856](https://ftp.zx.net.nz/pub/archive/ftp.microsoft.com/MISC/KB/en-us/234/856.HTM)
+also ties launch optimisation to FAT32. The FAT specification linked below
+defines the logical chain: physical placement may follow observed read order
+while FAT links must continue to return the original logical file bytes.
+
+Use a bounded, checksummed, volume-serial-bound private startup log. Record
+actual executable/PE library snapshot reads, their first distinct logical
+clusters, and use counts; do not infer an access trace from filenames.
+The optional placement pass visits recorded files by use count and recent
+observation, placing observed clusters first and preserving logical FAT
+order. Unrecorded files retain ordinary defragmentation. Validate each log
+identity against its directory entry before using it; corrupt/stale logs
+are hints to discard, never disk addresses to trust. Logging failure must
+not fail application launch. A full-file free extent remains necessary.
+
+Boot-volume conversion must be requested durably while FAT16 is still
+usable and run before publishing C: on the next boot. The native MBR's
+loader lives outside the partition. Its FAT reader must accept both FAT16
+and converted FAT32 geometries. During a committed converter transaction,
+the loader must read the checksummed redo images as a read-only overlay;
+only the kernel performs durable replay. Never enable this request for an
+unrecognised loader. Invalid requests/journals fail closed without a panic.
+A pre-commit refusal clears the validated request and continues with intact
+FAT16; a committed locator remains mandatory recovery state. Conversion
+does not create a foreign DOS/Windows boot sector.
+
 ## References and required behaviour
 
 Microsoft's [FAT specification 1.03](https://www.pcjs.org/documents/papers/microsoft/MS_FAT_OVERVIEW_103-2000-12-06.pdf),
@@ -48,9 +81,9 @@ between steps detects other writers; the UI reports “Drive contents
 changed... restarting” and repeats analysis. Pause/Stop occur between files;
 no partially published move is cancelled by a UI action.
 
-Application-start placement remains unavailable until startup read profiles
-exist. The setting must explain that limit and must not report success for
-an unimplemented optimisation.
+G29D enables the application-start setting. The bounded log records actual
+image snapshot read clusters and per-image use counts; unrecorded files
+retain the ordinary defragmentation path.
 
 ## Converter transaction
 
@@ -80,7 +113,8 @@ This assumes atomic 512-byte sector writes and truthful flush completion,
 the same device contract as existing FAT publication. Torn-sector recovery
 and devices that acknowledge flush without durability are outside that
 contract. Refuse insufficient journal space, malformed/dirty ownership,
-removable media, unsupported cluster geometry, and the live boot volume.
+removable media and unsupported cluster geometry. The live boot volume uses
+the deferred G29D path and is never converted during the requesting session.
 
 
 ## Verification and current limits
@@ -106,11 +140,97 @@ The defragmenter requires a free run large enough for the entire file;
 it does not compact free space or relocate directories. An unscanned/fast-mounted volume always gets an ownership proof before
 source-chain reclamation, even when the optional early check is off. The error check
 uses the existing checker and refuses corruption rather than inventing a
-successful repair. Settings apply to the current invocation. Startup
-profiles, profile-driven application placement and the Start/System Tools
-launcher remain open. The converter supports fixed data partitions; it
-refuses the live system volume even when read-only, because this path does
-not install replacement boot-loader code. It requires a free contiguous
+successful repair. Settings apply to the current invocation. The Start/System Tools launcher
+remains open. G29D adds bounded persistent startup image profiles and their
+placement, plus deferred boot conversion under the recognised native MBR
+and recovery-aware loader. The existing FAT32 system image needs no
+conversion; FAT32 input is refused as already converted. It requires a free contiguous
 journal extent plus destination space for the root and displaced clusters.
 Failure leaves the volume detached; reboot resumes a committed locator.
 Neither ST-10 nor ST-12 is fully complete.
+
+
+## G29D bounds and qualification
+
+`CIUKIST.LOG` in the volume root is a private hidden/system, serial-bound,
+CRC32-checked hint file, at most 24 images and 16 distinct observed logical
+clusters per image. Each successful FAT-backed native/PE image snapshot
+records its actual storage reads; this includes PE library image snapshots.
+Use counts saturate and the bounded eviction clock ages at overflow.
+The log's open-file/identity sharing is checked before writing it under the
+volume reservation. A log write failure never fails a launch. This does
+not collect arbitrary post-start data reads, DOS VM startup reads or a
+Windows-compatible Applog file format. Placement is ordered by image use
+count/recency, not by an application/dependency graph. No launch-time
+improvement percentage is claimed without hardware measurements.
+
+Boot requests preserve FAT16 and open file handles until restart. The
+request is bound to serial, partition size and start, checksummed and
+flushed. On the next storage start, conversion runs before the C: VFS
+attachment and before raw boot-status/log binding. The loader validates all
+redo headers, payload CRCs, target bounds, partition-table preservation and
+the final boot record before enabling its read-only virtual FAT32 view.
+It never writes a BIOS sector during recovery. The kernel rechecks and
+replays the journal with its usual flush barriers.
+
+The supported boot layout is the native first active primary partition at
+LBA 2048, the 48-sector CRC-checked loader at LBA 1, source clusters of at
+most 32 KiB and at most 8192 redo records. The native MBR carries `CKD1`
+at byte 436; the compatible loader carries `G29DCVT1` at byte 24536.
+Older/foreign stages, larger clusters and bigger journals are refused.
+This extends one universal loader; it adds no per-machine image/build.
+Installing this loader on an existing foreign FAT16 system is a separate
+installation operation; the converter does not silently replace foreign
+boot code. Backup and older-DOS/dual-boot warnings remain mandatory.
+
+Focused verification commands: `nice -n 19 bash scripts/test/host_fs_tests.sh
+--startup`, `--startup-image`, `--boot-convert`, `--maintenance-mount`, `--defrag`, `--convert`.
+`--startup-image` exercises the actual native image snapshot hook and open-log
+sharing (including the FAT32 root-cluster/zero alias). The startup suite checks persisted use order, logical bytes versus physical
+permutation, corrupt/stale hints and every write/flush boundary under four
+persistence modes on FAT12/16/32. Boot tests execute assembled loader
+instructions with raw disk reads supplied from a production converter
+fixture: native FAT16, committed redo, partial replay, corrupt-record
+refusal, kernel replay and FAT32 file seeking. The assembled IEEE CRC is
+checked at each used input length; bulk journal scans substitute the same
+host CRC polynomial to bound interpreter time. These are host evidence;
+firmware/physical boot qualification remains the lead's responsibility.
+
+The loader reserves `[0x20000,0x38000)` (96 KiB) until kernel handoff: a
+32 KiB cluster buffer covers Windows FAT16 cluster sizes, and a separate
+GS segment holds the bounded journal index. The boot-info loader extent
+includes both. No physical-memory or cache admission limit is changed.
+
+## Integration correction: startup logging and short holds (2026-10-24)
+
+The standalone host filesystem suite reproduced the exec-image hold exactly:
+20 device commands at 106 ms each, or 2,120 ms, tagged `metadata/vfs`.
+The G29D hook used direct `fat_lookup`/`fat_startup_record` under one volume
+reservation after the executable snapshot. This was independent of fx-23's
+publication gate and of host scheduling load.
+
+Research: Linux's [iomap design, IOMAP_NOWAIT](https://www.kernel.org/doc/html/latest/filesystems/iomap/design.html)
+describes avoiding synchronous metadata I/O for a nonblocking best-effort path;
+its [readahead documentation](https://www.kernel.org/doc/html/v6.12/core-api/mm-api.html#readahead)
+allows advisory prefetch to fail without failing the demand read. These are
+supporting examples, not Windows compatibility claims. The Windows 98
+application-access recording requirement and the CiukiOS f1-93 short-hold
+contract both still apply.
+
+The hook now opens the private log with an ordinary exclusive read/write VFS
+handle. Lookup, create, write, truncate and commit use the existing bounded
+FAT transactions; log reads use the open-file reader path. Namespace and
+volume reservations are released across device commands. A pure serialization
+helper retains the same format, CRC, volume serial, record validation, bounded
+use/recency update and observed cluster order. A failed allocation, sharing
+check or log I/O remains advisory and never fails the image snapshot.
+The exclusive handle also protects the complete update against a log open
+while a transaction has temporarily released its volume guard.
+
+Host verification on the integrated tree: the same f1-93 exec-image row
+still issues 39 modeled commands but releases the reservation 28 times,
+with `logical_hold_max_ms=0`, `vfs_hold_records=0` and `cold_fallbacks=0`.
+The startup-image harness also passes persistent logging, native open-log
+sharing, launch success and descriptor/identity cleanup. The standalone
+filesystem run and its complete results are recorded in
+`build/codex/fixd-fs-final.log`.

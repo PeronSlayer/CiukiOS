@@ -574,9 +574,38 @@ static uint8_t sb_io(struct dosvm *v, unsigned offset, bool write, uint8_t value
 }
 
 /* ---- ports, lifecycle and timeline ---- */
+static void mpu_register(void *ctx,unsigned reg,uint8_t value)
+{
+    struct dosvm *v=ctx;
+    /* A distinct synthesizer: probing/resetting MPU must leave the guest's
+     * AdLib mode, address latch, registers and sounding voices untouched. */
+    v->audio.midi_regs[reg]=value;
+    v->audio.opl_writes++;
+    if ((reg&0xff)>=0xb0 && (reg&0xff)<=0xb8 && (value&32)) v->audio.opl_key_writes++;
+    dosvm_audio_event(v,DOSVM_EVENT_MIDI,(uint16_t)reg,value);
+}
+static uint8_t mpu_byte(struct dosvm *v,unsigned port,bool write,uint8_t value)
+{
+    struct dosvm_audio *a=&v->audio;
+    if (!write) {
+        if (port) return a->mpu_ack ? 0x3f : 0xbf; /* active-low ready bits */
+        bool ack=a->mpu_ack; a->mpu_ack=false;
+        return ack ? 0xfe : 0xff;
+    }
+    if (port) {
+        if (value==0xff) {
+            midi_fm_reset(&a->midi,mpu_register,v); a->mpu_uart=false; a->mpu_ack=true;
+        } else if (value==0x3f) { a->mpu_uart=true; a->mpu_ack=true; }
+        /* No false intelligent-mode responses; only Reset and UART acknowledge. */
+    } else if (a->mpu_uart) {
+        a->sb.midi_bytes++; midi_fm_byte(&a->midi,value,mpu_register,v);
+    }
+    return 0xff;
+}
 static uint8_t audio_byte(struct dosvm *v, uint16_t port, bool write, uint8_t value)
 {
     uint16_t base = v->audio.sb.base;
+    if (port==DOSVM_MPU_BASE || port==DOSVM_MPU_BASE+1) return mpu_byte(v,port-DOSVM_MPU_BASE,write,value);
     if (port <= 0x0F || (port >= 0x80 && port <= 0x8F) || (port >= 0xC0 && port <= 0xDF))
         return dosvm_dma_io(v, port, write, value);
     if (port >= DOSVM_OPL_BASE && port <= DOSVM_OPL_BASE + 3) return dosvm_opl_io(v, port - DOSVM_OPL_BASE, write, value);
@@ -613,12 +642,15 @@ int dosvm_audio_init(struct dosvm *v)
     for (unsigned i = 0; i < DOSVM_EVENT_PAGES; i++) a->q.events[i] = P2V(a->q.pages[DOSVM_PCM_PAGES + i]);
     dosvm_dma_init(v);
     dosvm_opl_init(v);
+    /* Initialise parser state without writes into a guest's OPL snapshot. */
+    for (unsigned c=0;c<16;c++) a->midi.channel[c]=(struct midi_fm_channel){8192,0,100,127,64,0};
     struct dosvm_sb16 *s = &a->sb;
     s->base = DOSVM_SB_BASE; s->irq = DOSVM_SB_IRQ; s->dma8 = DOSVM_SB_DMA8; s->dma16 = DOSVM_SB_DMA16;
     s->rate = 22050; s->block_units = 0x800;
     sb_mixer_reset(s);
     static const uint16_t ranges[][2] = {{0x00, 0x0F}, {0x80, 0x8F}, {0xC0, 0xDF},
-        {DOSVM_SB_BASE, DOSVM_SB_BASE + 0xF}, {DOSVM_OPL_BASE, DOSVM_OPL_BASE + 3}};
+        {DOSVM_SB_BASE, DOSVM_SB_BASE + 0xF}, {DOSVM_OPL_BASE, DOSVM_OPL_BASE + 3},
+        {DOSVM_MPU_BASE,DOSVM_MPU_BASE+1}};
     for (unsigned i = 0; i < ARRAY_SIZE(ranges); i++) {
         int e = dosvm_port_register(v->info.key, ranges[i][0], ranges[i][1], dosvm_audio_port, 0);
         if (e) return e;
@@ -829,6 +861,15 @@ bool dosvm_audio_opl_registers(struct dosvm_key key, uint8_t regs[512], uint64_t
     if (clock) *clock = dosvm_audio_now(v);
     irq_restore(flags);
     return true;
+}
+bool dosvm_audio_midi_registers(struct dosvm_key key,uint8_t regs[512],uint64_t *clock)
+{
+    struct dosvm *v=dosvm_lookup(key);
+    if (!regs || !v || v->info.state==DOSVM_DEAD) return false;
+    uint32_t flags=irq_save();
+    memcpy(regs,v->audio.midi_regs,512);
+    if (clock) *clock=dosvm_audio_now(v);
+    irq_restore(flags); return true;
 }
 
 /* f4-13: recording does no formatting or output and is safe in the device

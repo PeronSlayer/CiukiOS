@@ -325,7 +325,7 @@ class MusicTests(unittest.TestCase):
         self.assertIn('{"music", "Music Player", "audio-x-generic", "programs", NULL}',shell)
         self.assertIn('{"viewer", "Image Viewer", "image-x-generic", "programs", NULL}',shell)
         self.assertIn('{"viewer", "Image Viewer", "image-x-generic", "accessories", NULL}',shell)
-        self.assertIn('if (d->pictures_exists) icon_add(d, "Pictures"',shell)
+        self.assertRegex(shell,r'(?s)if \(d->pictures_exists\) \{.*?icon_add\(d,\s*"Pictures"')   # G19: under the profile's Documents
         image = (ROOT/'scripts/build_image.py').read_text()
         for token in ('"/Documents/Pictures"', '"/Documents/Music"', '"/Programs/music"'):
             self.assertIn(token,image)

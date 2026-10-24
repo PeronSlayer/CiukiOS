@@ -11,6 +11,7 @@ build_test() {
  -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread -I "$out" -I "$root/src/kernel/include" -I "$root/src/kernel/fs" \
  "$root/tests/host/audio/audio_test.c" "$root/tests/host/proc/signal_legacy.c" \
  "$root/src/kernel/audio/registry_master.c" \
+ "$root/src/kernel/audio/midi.c" "$root/src/kernel/audio/opl3.c" \
  "$root/src/kernel/lib/sha256.c" \
  "$root/tests/host/proc/desktop_legacy.c" "$root/src/kernel/fs/fs_port.c" \
  "$root/src/kernel/fs/blkreq.c" "$root/src/kernel/fs/cache.c" "$root/src/kernel/fs/path.c" "$root/src/kernel/fs/fat.c" \
@@ -42,6 +43,12 @@ clang -std=c17 -O2 -g -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L \
  -I "$root/src/kernel/include" "$root/tests/host/audio/vm_cost_test.c" \
  "$root/src/kernel/audio/opl3.c" -o "$out/vm_cost_test"
 "$out/vm_cost_test"
+# G22C bounded native MIDI byte queue and FM synthesis, independent of VMs.
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+ -fno-sanitize-recover=all -I "$root/src/kernel/include" \
+ "$root/tests/host/audio/midi_test.c" "$root/src/kernel/audio/midi.c" \
+ "$root/src/kernel/audio/opl3.c" -o "$out/midi_test"
+"$out/midi_test"
 # Inspect the actual kernel target: x86_64 host division timings alone hide
 # the i686 runtime-helper overhead that caused the double-refill misses.
 target_flags=(--target=i686-unknown-elf -march=pentiumpro -O2 -ffreestanding

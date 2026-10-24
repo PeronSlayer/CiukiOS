@@ -1,8 +1,18 @@
 /* SPDX-License-Identifier: MIT
  * Image Viewer decoding and integer scaling. */
 #include "viewer.h"
+#if !defined(__linux__) && !defined(__APPLE__)
+#include <unistd.h>
+#else
+/* Only these POSIX calls are needed; avoid host sysconf enums colliding with
+ * the deliberately freestanding CiukiOS ABI used by the model harness. */
+int close(int);
+int fsync(int);
+#endif
+
 #include <errno.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <strings.h>
 #include "../../third_party/stb/stb_image.h"
@@ -79,6 +89,44 @@ int viewer_rotate(struct viewer_image *im, int quarter_turns)
     }
     free(im->pixels); im->pixels = out; im->width = h; im->height = w;
     return 0;
+}
+
+static void bmp32(uint8_t *p, uint32_t n)
+{ for (unsigned i = 0; i < 4; i++) p[i] = (uint8_t)(n >> (8 * i)); }
+int viewer_save_bmp(const struct viewer_image *im, const char *path)
+{
+    if (!im || !im->pixels || !path || !*path || im->width <= 0 || im->height <= 0 ||
+        im->width > VIEWER_MAX_SIDE || im->height > VIEWER_MAX_SIDE ||
+        (uint64_t)im->width * im->height > VIEWER_MAX_PIXELS) return -EINVAL;
+    size_t output_stride = ((size_t)im->width * 3 + 3) & ~(size_t)3;
+    if (54 + output_stride * (size_t)im->height > VIEWER_MAX_FILE) return -EFBIG;
+    if (strlen(path) + 12 >= VIEWER_PATH) return -ENAMETOOLONG;
+    char temp[VIEWER_PATH]; snprintf(temp, sizeof(temp), "%s.XXXXXX", path);
+    int fd = mkstemp(temp);
+    if (fd < 0) return -errno;
+    FILE *f = fdopen(fd, "wb");
+    if (!f) { int e = errno; close(fd); remove(temp); return -e; }
+    size_t stride = ((size_t)im->width * 3 + 3) & ~(size_t)3;
+    uint8_t header[54] = {'B', 'M'}, *row = calloc(1, stride);
+    bmp32(header + 2, (uint32_t)(54 + stride * im->height)); bmp32(header + 10, 54);
+    bmp32(header + 14, 40); bmp32(header + 18, (uint32_t)im->width); bmp32(header + 22, (uint32_t)im->height);
+    header[26] = 1; header[28] = 24; bmp32(header + 34, (uint32_t)(stride * im->height));
+    int e = row ? 0 : -ENOMEM;
+    if (!e && fwrite(header, 1, sizeof(header), f) != sizeof(header)) e = -EIO;
+    for (int y = im->height - 1; !e && y >= 0; y--) {
+        for (int x = 0; x < im->width; x++) {
+            uint32_t rgb = im->pixels[(size_t)y * im->width + x];
+            row[3 * x] = (uint8_t)rgb; row[3 * x + 1] = (uint8_t)(rgb >> 8); row[3 * x + 2] = (uint8_t)(rgb >> 16);
+        }
+        if (fwrite(row, 1, stride, f) != stride) e = -EIO;
+    }
+    free(row);
+    if (fflush(f) && !e) e = -EIO;
+    if (!e && fsync(fd)) e = -errno;
+    if (fclose(f) && !e) e = -EIO;
+    if (!e && rename(temp, path)) e = -errno;
+    if (e) remove(temp);
+    return e;
 }
 
 static const int steps[] = { 10, 25, 33, 50, 67, 100, 150, 200, 300, 400, 800 };

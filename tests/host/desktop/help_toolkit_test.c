@@ -68,7 +68,8 @@ static void fresh(void)
     du_init(&u, pixels, W, H);
     u.event = handler; u.help_open = fake_launch;
     reset_events(); launches = 0; launched[0] = 0; launch_result = 0; consume_help = 0;
-    u.now = now;
+    /* Start the caret clock too: G12 adds its deadline alongside tooltips. */
+    du_tick(&u, now);
 }
 
 enum { B_OK = 1, B_PLAIN, E_NAME, B_TIPPED };
@@ -77,12 +78,12 @@ static void controls(void)
     struct du_widget *w;
     fresh();
     w = du_add(&u, DU_BUTTON, B_OK, (struct du_rect){20, 40, 80, 24}, "OK");
-    w->tip = "Accepts the changes"; w->help = "Saves what you changed and closes the page.";
+    du_set_tip(w, "Accepts the changes"); w->help = "Saves what you changed and closes the page.";
     du_add(&u, DU_BUTTON, B_PLAIN, (struct du_rect){120, 40, 80, 24}, "Plain");
     w = du_add(&u, DU_EDIT, E_NAME, (struct du_rect){20, 90, 200, 22}, "");
     w->help = "Type your name here.";
     w = du_add(&u, DU_BUTTON, B_TIPPED, (struct du_rect){300, 260, 90, 30}, "Corner");
-    w->tip = "A tip near the lower right corner of the window";
+    du_set_tip(w, "A tip near the lower right corner of the window");
     du_focus(&u, E_NAME);
     du_render(&u);
 }
@@ -91,7 +92,7 @@ static void test_defaults(void)
     fresh();
     for (int kind=DU_LABEL;kind<=DU_CANVAS;kind++) {
         struct du_widget *w=du_add(&u,(enum du_kind)kind,100+kind,(struct du_rect){0,0,1,1},kind==DU_EDIT ? "private entry" : "");
-        assert(w && w->tip && w->tip[0] && w->help && w->help[0]);
+        assert(w && w->tip[0] && w->help && w->help[0]);
         if (kind==DU_EDIT) assert(!strstr(w->tip,"private"));
     }
     struct du_widget *save=du_add(&u,DU_BUTTON,900,(struct du_rect){0,0,1,1},"&Save");
@@ -100,10 +101,10 @@ static void test_defaults(void)
     assert(!strcmp(save->tip,"A program-specific tooltip"));
     fresh();
     du_message(&u,1,"Default dialog help","The controls have defaults.",DU_DLG_ICON_INFO,NULL,0,0,0);
-    for (unsigned i=0;i<u.dialog.count;i++) assert(u.dialog.items[i].tip && u.dialog.items[i].tip[0] && u.dialog.items[i].help && u.dialog.items[i].help[0]);
+    for (unsigned i=0;i<u.dialog.count;i++) assert(u.dialog.items[i].tip[0] && u.dialog.items[i].help && u.dialog.items[i].help[0]);
     struct du_widget *button=&u.dialog.items[0];
-    move(button->box.x+5,button->box.y+5); at(u.tip.show_ns);
-    assert(u.tip.visible && !u.tip.context && u.tip.widget>=DU_WIDGETS);
+    move(button->box.x+5,button->box.y+5); at(u.tip.due);
+    assert(u.tip.visible && u.tip.w==button);
     du_tip_hide(&u); du_dialog_close(&u);
 }
 
@@ -111,50 +112,65 @@ static void test_tooltips(void)
 {
     controls();
     assert(du_tooltip(&u, B_PLAIN, "Plain button") && !strcmp(du_get(&u, B_PLAIN)->tip, "Plain button") && !du_tooltip(&u, 99, "x"));
-    du_get(&u, B_PLAIN)->tip = NULL;
-    assert(u.tip.widget == -1 && !u.tip.visible && du_next_deadline(&u) == UINT64_MAX);
+    du_get(&u, B_PLAIN)->tip[0] = 0;
+    assert(!u.tip.w && !u.tip.visible);
     /* Resting on a control with a tip arms the 500 ms delay and the deadline wakes the loop. */
-    move(40, 50); uint64_t armed = u.tip.show_ns;
-    assert(u.tip.widget == 0 && !u.tip.visible && armed == u.now + DU_TIP_DELAY_NS && du_next_deadline(&u) == armed);
+    move(40, 50); uint64_t armed = u.tip.due;
+    assert(u.tip.w == &u.widgets[0] && !u.tip.visible && armed == u.now + DU_TIP_DELAY_NS && du_next_deadline(&u) == armed);
     at(armed - 1); assert(!u.tip.visible);
-    at(armed); assert(u.tip.visible && !u.tip.context && !strcmp(u.tip.text, "Accepts the changes"));
+    at(armed); assert(u.tip.visible && !strcmp(u.tip.text, "Accepts the changes"));
     struct du_rect box = u.tip.box;
     assert(box.w == du_text_width("Accepts the changes") + 10 && box.h > 0 && box.x >= 0 && box.y >= 40 + 24 - 5 &&
            box.x + box.w <= W && box.y + box.h <= H);
-    assert(du_next_deadline(&u) == (u.input_caret_deadline < u.tip.hide_ns ? u.input_caret_deadline : u.tip.hide_ns) &&
-           u.tip.hide_ns == armed + DU_TIP_SHOW_NS);
+    assert(du_next_deadline(&u) == (u.input_caret_deadline < u.tip.due ? u.input_caret_deadline : u.tip.due) &&
+           u.tip.due == armed + DU_TIP_SHOW_NS);
     assert(u.dirty);
     du_render(&u);
     assert(pixels[box.y * W + box.x] == 0x000000u && pixels[(box.y + 2) * W + box.x + 2] != 0 && pixel_count(box, 0xffffe1u) > box.w * box.h / 2);
     frame("tooltip");
     /* The tip leaves by itself after five seconds. */
-    at(u.tip.hide_ns - 1); assert(u.tip.visible);
-    at(u.tip.hide_ns); assert(!u.tip.visible && u.tip.widget == -1 && u.dirty);
+    uint64_t gone = u.tip.due;
+    at(gone - 1); assert(u.tip.visible);
+    at(gone); assert(!u.tip.visible && u.tip.w && u.dirty);   /* G16 autopop: no new tip until the pointer leaves the tool */
     du_render(&u); assert(pixel_count(box, 0xffffe1u) == 0);
     /* Moving to another control hides the tip, and a control without one arms nothing. */
-    move(300, 200); move(40, 50); at(u.tip.show_ns); assert(u.tip.visible);
-    move(130, 50); assert(!u.tip.visible && u.tip.widget == -1);
-    move(40, 50); at(u.tip.show_ns); assert(u.tip.visible);
-    move(300, 200); assert(!u.tip.visible && u.tip.widget == -1);
+    move(300, 200); move(40, 50); at(u.tip.due); assert(u.tip.visible);
+    move(130, 50); assert(!u.tip.visible && !u.tip.w);
+    move(40, 50); at(u.tip.due); assert(u.tip.visible);
+    move(300, 200); assert(!u.tip.visible && !u.tip.w);
     /* Any button press, key press or wheel step hides it. */
-    move(40, 50); at(u.tip.show_ns); assert(u.tip.visible); press(1); assert(!u.tip.visible && u.tip.widget == -1); release(1);
-    move(300, 200); move(40, 50); at(u.tip.show_ns); assert(u.tip.visible);
+    move(40, 50); at(u.tip.due); assert(u.tip.visible); press(1); assert(!u.tip.visible && !u.tip.w); release(1);
+    move(300, 200); move(40, 50); at(u.tip.due); assert(u.tip.visible);
     key(DU_KEY_SPACE); assert(!u.tip.visible);
-    move(300, 200); move(40, 50); at(u.tip.show_ns); assert(u.tip.visible);
+    move(300, 200); move(40, 50); at(u.tip.due); assert(u.tip.visible);
     struct ciuki_input_event wheel = {.type = CIUKI_INPUT_WHEEL, .value = 1, .monotonic_ns = now}; du_input(&u, &wheel); assert(!u.tip.visible);
     /* Near the lower right corner the tip is kept inside the window, above the pointer when below does not fit. */
-    move(310, 270); at(u.tip.show_ns); assert(u.tip.visible);
+    move(310, 270); at(u.tip.due); assert(u.tip.visible);
     box = u.tip.box; assert(box.x + box.w <= W && box.y + box.h <= H && box.x >= 0 && box.y < 270);
     move(300, 200);
     /* No tip while a dialog, a menu or a capture is active, or the window is inactive. */
-    move(40, 50); du_message(&u, 7, "T", "Dialog", DU_DLG_ICON_INFO, NULL, 0, 0, 0); at(u.tip.show_ns + 10); assert(!u.tip.visible);
+    move(40, 50); uint64_t pending = u.tip.due;
+    du_message(&u, 7, "T", "Dialog", DU_DLG_ICON_INFO, NULL, 0, 0, 0); at(pending + 10); assert(!u.tip.visible);
     du_dialog_close(&u); reset_events();
-    move(300, 200); move(40, 50); du_window_focus(&u, 0); at(u.tip.show_ns); assert(!u.tip.visible);
+    move(300, 200); move(40, 50); pending = u.tip.due; du_window_focus(&u, 0); at(pending); assert(!u.tip.visible);
     du_window_focus(&u, 1);
+    /* G15 guards survive the G16 timer rewrite: motion in an inactive window
+     * cannot rearm a tip, and hiding a tool cancels an already armed one. */
+    du_window_focus(&u, 0); move(300, 200); move(40, 50);
+    at(u.now + DU_TIP_DELAY_NS); assert(!u.tip.visible && !u.tip.w);
+    du_window_focus(&u, 1);
+    move(300, 200); move(40, 50); pending = u.tip.due;
+    du_get(&u, B_OK)->hidden = 1; at(pending); assert(!u.tip.visible && !u.tip.w);
+    du_get(&u, B_OK)->hidden = 0;
+    /* Programmatic menus also suppress a pending tip without further input. */
+    static const struct du_menu_item popup[] = {{"Action", 20, 0, 0, 0}};
+    move(300, 200); move(40, 50); pending = u.tip.due;
+    du_popup(&u, popup, 1, 200, 100, 0); at(pending); assert(!u.tip.visible && !u.tip.w);
+    du_menu_close(&u);
     /* A resize or a focus loss drops a shown tip. */
-    move(300, 200); move(40, 50); at(u.tip.show_ns); assert(u.tip.visible);
+    move(300, 200); move(40, 50); at(u.tip.due); assert(u.tip.visible);
     du_window_focus(&u, 0); assert(!u.tip.visible); du_window_focus(&u, 1);
-    move(300, 200); move(40, 50); at(u.tip.show_ns); assert(u.tip.visible);
+    move(300, 200); move(40, 50); at(u.tip.due); assert(u.tip.visible);
     du_resize(&u, pixels, W, H); assert(!u.tip.visible);
     /* The tooltip is not an event of the program. */
     assert(!count_of(DU_EV_HELP) && !launches);
@@ -218,34 +234,45 @@ static void test_whats_this(void)
     assert(!u.whats_this && count_of(DU_EV_HELP) == 1 && !count_of(DU_EV_ACTIVATE));
     const struct du_event *e = last_of(DU_EV_HELP);
     assert(e->id == B_OK && e->index == DU_HELP_CONTEXT && e->x == 40 && e->y == 50 && !strcmp(e->text, "Saves what you changed and closes the page."));
-    assert(u.tip.visible && u.tip.context && u.tip.text == du_get(&u, B_OK)->help && u.tip.hide_ns == 0);
-    struct du_rect popup = u.tip.box; assert(popup.w > 0 && popup.x >= 0 && popup.y >= 0 && popup.x + popup.w <= W && popup.y + popup.h <= H);
-    release(1); assert(u.tip.visible && !du_get(&u, B_OK)->pressed);                    /* the release of the same click keeps it */
+    assert(u.help_tip.visible && u.help_tip.context && u.help_tip.text == du_get(&u, B_OK)->help && u.help_tip.hide_ns == 0);
+    struct du_rect popup = u.help_tip.box; assert(popup.w > 0 && popup.x >= 0 && popup.y >= 0 && popup.x + popup.w <= W && popup.y + popup.h <= H);
+    release(1); assert(u.help_tip.visible && !du_get(&u, B_OK)->pressed);                    /* the release of the same click keeps it */
     assert(du_next_deadline(&u) == (u.input_caret_deadline ? u.input_caret_deadline : UINT64_MAX));
     du_render(&u); assert(pixel_count(popup, 0xffffe1u) > popup.w * popup.h / 2);
     frame("whats-this");
-    move(300, 200); move(130, 50); assert(u.tip.visible);                                /* motion keeps it */
-    at(now + 60ull * 1000000000ull); assert(u.tip.visible);                              /* time never does */
-    press(1); assert(!u.tip.visible); release(1);                                        /* the next click or key hides it */
+    move(300, 200); move(130, 50); assert(u.help_tip.visible);                                /* motion keeps it */
+    at(now + 60ull * 1000000000ull); assert(u.help_tip.visible);                              /* time never does */
+    press(1); assert(!u.help_tip.visible); release(1);                                        /* the next click or key hides it */
     assert(count_of(DU_EV_HELP) == 1 && launches == 0);
     chord(DU_KEY_LSHIFT, DU_KEY_F1); move(300, 200); press(1); release(1);
-    assert(u.tip.visible == 0 && last_of(DU_EV_HELP)->id == 0 && !last_of(DU_EV_HELP)->text);   /* nothing under the pointer */
+    assert(u.help_tip.visible == 0 && last_of(DU_EV_HELP)->id == 0 && !last_of(DU_EV_HELP)->text);   /* nothing under the pointer */
     reset_events(); chord(DU_KEY_LSHIFT, DU_KEY_F1); move(40, 50); key(DU_KEY_ESC); press(1); release(1);
     assert(count_of(DU_EV_HELP) == 0 && count_of(DU_EV_ACTIVATE) == 1);                  /* Esc cancelled: a normal click */
     /* The default What's This? text also produces a popup. */
     reset_events(); chord(DU_KEY_LSHIFT, DU_KEY_F1); move(130, 50); press(1); release(1);
-    assert(last_of(DU_EV_HELP)->id == B_PLAIN && last_of(DU_EV_HELP)->text && u.tip.visible && !u.whats_this);
+    assert(last_of(DU_EV_HELP)->id == B_PLAIN && last_of(DU_EV_HELP)->text && u.help_tip.visible && !u.whats_this);
     /* The program shows its own help for the control. */
     reset_events(); consume_help = 1; chord(DU_KEY_LSHIFT, DU_KEY_F1); move(40, 50); press(1); release(1);
-    assert(count_of(DU_EV_HELP) == 1 && !u.tip.visible);
+    assert(count_of(DU_EV_HELP) == 1 && !u.help_tip.visible);
     consume_help = 0;
     /* The mode ends with a resync or a focus loss, and never survives a new dialog. */
     chord(DU_KEY_LSHIFT, DU_KEY_F1); assert(u.whats_this); du_window_focus(&u, 0); assert(!u.whats_this); du_window_focus(&u, 1);
     chord(DU_KEY_LSHIFT, DU_KEY_F1); du_message(&u, 6, "T", "x", DU_DLG_ICON_INFO, NULL, 0, 0, 0); assert(!u.whats_this); du_dialog_close(&u);
     /* The right button asks as well; the click is not delivered to the control. */
     reset_events(); chord(DU_KEY_LSHIFT, DU_KEY_F1); move(40, 50); press(2); release(2);
-    assert(count_of(DU_EV_HELP) == 1 && !u.whats_this && u.tip.visible);
+    assert(count_of(DU_EV_HELP) == 1 && !u.whats_this && u.help_tip.visible);
     press(1); release(1);
+    /* The split G16 hover state must not cover a G15B dialog help popup. */
+    du_message(&u, 10, "Help", "Choose an option.", DU_DLG_ICON_INFO, NULL, 0, 0, 0);
+    du_context_help(&u, 1);
+    struct du_widget *button = &u.dialog.items[0];
+    move(button->box.x + 5, button->box.y + 5); press(1); release(1);
+    assert(u.help_tip.visible);
+    move(button->box.x + 6, button->box.y + 5);
+    at(u.now + DU_TIP_DELAY_NS);
+    assert(u.help_tip.visible && !u.tip.visible && !u.tip.w);
+    du_resize(&u, pixels, W, H); assert(!u.help_tip.visible);
+    du_dialog_close(&u);
 }
 
 static void test_dialog_button(void)
@@ -270,10 +297,10 @@ static void test_dialog_button(void)
     assert(!u.whats_this && u.dialog.kind && !count_of(DU_EV_DIALOG) && count_of(DU_EV_HELP) == 1);
     const struct du_event *e = last_of(DU_EV_HELP);
     assert(e->id == u.dialog.items[0].id && e->index == DU_HELP_CONTEXT && !strcmp(e->text, "Accepts the choice and closes the dialog."));
-    assert(u.tip.visible && u.tip.context && !strcmp(u.tip.text, u.dialog.items[0].help));
+    assert(u.help_tip.visible && u.help_tip.context && !strcmp(u.help_tip.text, u.dialog.items[0].help));
     frame("dialog-whats-this");
     move(u.dialog.box.x + 6, u.dialog.box.y + 40);
-    press(1); release(1); assert(!u.tip.visible && u.dialog.kind);                      /* any click hides it (here on empty dialog face) */
+    press(1); release(1); assert(!u.help_tip.visible && u.dialog.kind);                      /* any click hides it (here on empty dialog face) */
     struct du_widget *hit = du_dialog_item_at(&u, ok.x + 4, ok.y + 4); assert(hit == &u.dialog.items[0]);
     assert(!du_dialog_item_at(&u, 0, 0));
     /* Without the "?" button a click on that spot does nothing special; Esc cancels the mode. */
@@ -289,7 +316,9 @@ static void test_dialog_button(void)
 /* The production client glue: F1 asks the desktop to LAUNCH "help" with "topic:<id>". */
 static void test_launch_wire(void)
 {
-    struct du_window win; struct du_ui client; struct ciuki_message m; struct desk_packet p;
+    static struct du_window win;
+    static struct du_ui client;
+    struct ciuki_message m; struct desk_packet p;
     rt_reset();
     assert(!du_window_open_resizable(&win, &client, 3, 400, 300, "Wire", 200, 160));
     while (rt_pop(&m)) for (unsigned i = 0; i < m.fd_count; i++) rt_close(m.fds[i]);

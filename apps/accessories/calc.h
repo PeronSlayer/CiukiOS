@@ -66,7 +66,9 @@ void calc_exp(struct calc *);                       /* Exp: type the exponent */
 void calc_dms(struct calc *);                       /* degrees to d.mmss (Inv: back) */
 void calc_int(struct calc *);                       /* Int (Inv: fraction) */
 void calc_not(struct calc *);
-void calc_stat_clear(struct calc *);                /* Sta */
+void calc_stat_clear(struct calc *);                /* CAD */
+int calc_stat_load(struct calc *, unsigned index);
+int calc_stat_delete(struct calc *, unsigned index);
 void calc_stat_data(struct calc *);                 /* Dat */
 void calc_stat_ave(struct calc *); void calc_stat_sum(struct calc *); void calc_stat_dev(struct calc *);
 void calc_memory_clear(struct calc *);
@@ -88,9 +90,13 @@ struct calc_app {
     struct du_ui *ui; struct calc calc;
     struct du_menu menus[3]; struct du_menu_item edit_items[2], view_items[4], help_items[2];
     int digit_grouping;
+    struct du_item stat_rows[CALC_STAT];
+    char stat_text[CALC_STAT][48];
 };
 enum { CALC_M_COPY = 1, CALC_M_PASTE, CALC_M_STANDARD, CALC_M_GROUPING, CALC_M_HELP, CALC_M_ABOUT, CALC_M_SCIENTIFIC };
 enum { CALC_R_HEX = 20, CALC_R_DEC, CALC_R_OCT, CALC_R_BIN, CALC_R_DEG, CALC_R_RAD, CALC_R_GRAD, CALC_C_INV, CALC_C_HYP };
+enum { CALC_D_STAT = 300, CALC_STAT_LIST, CALC_STAT_LOAD, CALC_STAT_CD, CALC_STAT_CAD };
+void calc_statistics_box(struct calc_app *);
 enum { CALC_B_FIRST = 100 };   /* button ids: CALC_B_FIRST + index in the key table */
 void calc_attach(struct calc_app *, struct du_ui *);
 void calc_event(struct du_ui *, const struct du_event *, void *);

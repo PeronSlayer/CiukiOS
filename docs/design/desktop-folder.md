@@ -199,3 +199,18 @@ defines `FOF_ALLOWUNDO` for preserving undo information with fully qualified
 source paths. The merged Files model keeps the fixed-volume Recycle Bin mask
 and the floppy-slot visibility mask separately; both are passed to browser
 listings, so showing an empty floppy drive does not make it eligible for the bin.
+
+## Integration C: URL shortcuts without a path resolver (2026-10-24)
+
+Research rechecked before implementation: Microsoft's
+[ShellExecute guidance](https://devblogs.microsoft.com/oldnewthing/20040901-00/?p=37993)
+opens a URL through the configured browser; the general
+[shell launch contract](https://learn.microsoft.com/en-us/windows/win32/shell/launch)
+dispatches an object's Open action to its associated application.
+The G19 folder replay exposes a regression in `desk_shell_open_record`: a URL
+returns ENOSYS when the optional `open_path` callback is absent, although the
+shell can launch its installed NetSurf entry. Restore that native fallback.
+When a callback is installed, keep G26C's shared resolver authoritative,
+including its errors (in particular EBUSY); never retry a refused request by
+launching NetSurf directly. The replay covers both callback absence and a
+refusal. Production desktop startup installs the asynchronous callback.

@@ -11,6 +11,7 @@
 #include <ciuki/audio_vm.h>
 #include <ciuki/dosvm_audio.h>
 #include <ciuki/opl3.h>
+#pragma weak dosvm_audio_midi_registers /* old renderer-only host fixtures */
 
 #define VM_WINDOW 256u                      /* source frames held for interpolation */
 #define VM_EVENTS 128u
@@ -20,7 +21,7 @@ _Static_assert(DOSVM_AUDIO_HZ == AUDIO_RATE && OPL3_RATE == AUDIO_RATE, "one 48 
 /* WAVE_TABLEMUL has S16 waves and U16 attenuation. At most 36 operators,
  * conservatively all doubled as drums, plus S16 PCM and a held DAC level.
  * CT1745's largest gain is < 8; these bounds also cover cancellation. */
-#define VM_RAW_BOUND (36u * 32768u * 2u + 65536u)
+#define VM_RAW_BOUND (36u * 32768u * 2u + 65536u + 32768u) /* MIDI port is S16 before VM gain */
 #define VM_MIX_BOUND (VM_RAW_BOUND * 8u)
 _Static_assert(VM_MIX_BOUND <= INT32_MAX / 100u, "VM diagnostic percentage fits int32");
 _Static_assert(VM_MIX_BOUND * DOSVM_LIMIT <= INT32_MAX / 2u, "VM resampler delta fits int32");
@@ -70,6 +71,9 @@ struct vm_slot {
     int16_t win[VM_WINDOW][2];
     /* OPL3 and direct DAC */
     struct opl3_chip chip;
+    struct opl3_chip midi_chip;
+    bool midi_used, midi_resync;
+    uint64_t midi_resync_clock;
     bool opl_used, resync;
     uint64_t resync_clock;
     struct dosvm_audio_event ev[VM_EVENTS];
@@ -87,6 +91,7 @@ static struct vm_level ring_level;
 static uint32_t rate_epoch;
 static volatile bool kick_armed = true;
 static int32_t pcm_buf[AUDIO_QUANTUM * 2], opl_buf[AUDIO_QUANTUM * 2];
+static int32_t midi_buf[AUDIO_QUANTUM * 2];
 static uint8_t resync_regs[512];
 /* A chip after DBOPL's Setup, built once in thread context (attach) and
  * copied by the worker: a reset costs a copy, not 1,500 register writes. */
@@ -304,6 +309,7 @@ static void slot_reset(struct vm_slot *s, uint32_t epoch)
     s->rate = s->frac = 0; s->origin = s->idx = s->win_first = 0; s->win_count = 0;
     s->seq_last = 0; s->ev_head = s->ev_count = 0; s->dac = 0; s->dac_until = 0;
     s->chip = chip_template;
+    s->midi_chip = chip_template; s->midi_used = s->midi_resync = false;
 }
 /* Both calls fail with -EINVAL once the token is revoked (VM stopped,
  * another consumer attached): the source then ends. */
@@ -530,31 +536,45 @@ static unsigned pcm_render(struct vm_slot *s, uint32_t token, const struct dosvm
     }
     return n;
 }
-static void opl_resync(struct vm_slot *s)
+static void chip_snapshot(struct opl3_chip *chip,const uint8_t *r)
 {
-    uint64_t clock = 0;
-    if (!dosvm_audio_opl_registers(s->key, resync_regs, &clock)) return;
-    const uint8_t *r = resync_regs;
-    opl3_write(&s->chip, 0x105, r[0x105]);
-    opl3_write(&s->chip, 0x104, r[0x104]);
-    opl3_write(&s->chip, 0x01, r[0x01]);
-    opl3_write(&s->chip, 0x08, r[0x08]);
+    opl3_write(chip, 0x105, r[0x105]);
+    opl3_write(chip, 0x104, r[0x104]);
+    opl3_write(chip, 0x01, r[0x01]);
+    opl3_write(chip, 0x08, r[0x08]);
     for (unsigned bank = 0; bank < 0x200; bank += 0x100) {
         static const uint8_t ranges[][2] = { {0x20, 0x35}, {0x40, 0x55}, {0x60, 0x75}, {0x80, 0x95},
                                              {0xE0, 0xF5}, {0xA0, 0xA8}, {0xC0, 0xC8} };
         for (unsigned i = 0; i < ARRAY_SIZE(ranges); i++)
-            for (unsigned reg = ranges[i][0]; reg <= ranges[i][1]; reg++) opl3_write(&s->chip, bank + reg, r[bank + reg]);
+            for (unsigned reg = ranges[i][0]; reg <= ranges[i][1]; reg++) opl3_write(chip, bank + reg, r[bank + reg]);
     }
-    opl3_write(&s->chip, 0xBD, r[0xBD]);
+    opl3_write(chip, 0xBD, r[0xBD]);
     for (unsigned bank = 0; bank < 0x200; bank += 0x100)
-        for (unsigned reg = 0xB0; reg <= 0xB8; reg++) opl3_write(&s->chip, bank + reg, r[bank + reg]);
-    s->opl_used = true; s->resync = true; s->resync_clock = clock;
-    s->stats.opl_resyncs++;
+        for (unsigned reg = 0xB0; reg <= 0xB8; reg++) opl3_write(chip, bank + reg, r[bank + reg]);
+}
+static void opl_resync(struct vm_slot *s)
+{
+    uint64_t clock=0;
+    if (dosvm_audio_opl_registers(s->key,resync_regs,&clock)) {
+        chip_snapshot(&s->chip,resync_regs);
+        s->opl_used=true; s->resync=true; s->resync_clock=clock;
+        s->stats.opl_resyncs++;
+    }
+    if (dosvm_audio_midi_registers && dosvm_audio_midi_registers(s->key,resync_regs,&clock)) {
+        chip_snapshot(&s->midi_chip,resync_regs);
+        s->midi_used=true; s->midi_resync=true; s->midi_resync_clock=clock;
+    }
 }
 static void apply_event(struct vm_slot *s, const struct dosvm_audio_event *e)
 {
     if (e->generation != s->key.generation) { s->stats.foreign_events++; return; }
     if (e->kind == DOSVM_EVENT_GAP) { opl_resync(s); return; }
+    if (e->kind==DOSVM_EVENT_MIDI) {
+        if (s->midi_resync && e->clock<=s->midi_resync_clock) return;
+        if (e->clock+s->stats.delay_frames<s->next_t) s->stats.late_events++;
+        opl3_write(&s->midi_chip,e->reg,e->value); s->midi_used=true;
+        return;
+    }
     if (s->resync && e->clock <= s->resync_clock) return; /* already in the register snapshot */
     uint64_t clock = e->clock + s->stats.delay_frames;
     if (clock < s->next_t) s->stats.late_events++;
@@ -598,6 +618,14 @@ static void skip_to(struct vm_slot *s, uint32_t token, uint64_t t)
     }
     s->stream = false; s->starving = false;
 }
+static void fm_render(struct vm_slot *s,int32_t *out,unsigned frames)
+{
+    if (s->opl_used) opl3_generate(&s->chip,out,frames);
+    if (s->midi_used) {
+        opl3_generate(&s->midi_chip,midi_buf,frames);
+        for (unsigned i=0;i<frames*2;i++) out[i]+=sat16(midi_buf[i]);
+    }
+}
 static bool mix_samples(struct vm_slot *s, const struct dosvm_audio_info *info, int64_t (*sums)[2], unsigned frames)
 {
     uint32_t gp[2], go[2];
@@ -621,7 +649,8 @@ static bool mix_samples(struct vm_slot *s, const struct dosvm_audio_info *info, 
             level_peak(&s->level.pending[0], p[c]);
             level_peak(&s->level.pending[1], o[c]);
             /* Conservative DBOPL bound: 36 operators * 32768 * 2 (drums),
-             * plus S16 PCM and DAC, amplified < 8: combined * 100 < 2^31.
+             * plus S16 PCM, DAC and clipped MIDI, amplified < 8:
+             * combined * 100 < 2^31.
              * Percentage truncation is toward zero, as before. */
             level_peak(&s->level.pending[2], combined * (int32_t)master[c] / 100);
         }
@@ -726,7 +755,7 @@ static void render(struct vm_slot *s, uint32_t token, uint32_t epoch, int64_t (*
         if (s->hold) {
             /* Output silence without consuming timeline; OPL voices keep sounding. */
             unsigned n = s->hold < frames - i ? s->hold : frames - i;
-            if (s->opl_used) opl3_generate(&s->chip, &opl_buf[i * 2], n);
+            fm_render(s,&opl_buf[i*2],n);
             s->hold -= n; s->stats.hold_frames += n; i += n;
             continue;
         }
@@ -748,7 +777,7 @@ static void render(struct vm_slot *s, uint32_t token, uint32_t epoch, int64_t (*
         if (next - s->next_t < n) n = (unsigned)(next - s->next_t);
         if (started == START_FUTURE && future - s->next_t < n) n = (unsigned)(future - s->next_t);
         n = pcm_render(s, token, &info, &pcm_buf[i * 2], n);
-        if (s->opl_used) opl3_generate(&s->chip, &opl_buf[i * 2], n);
+        fm_render(s,&opl_buf[i*2],n);
         s->next_t += n; i += n;
     }
     if (s->state == AUDIO_VM_FREE) return;
@@ -757,7 +786,8 @@ static void render(struct vm_slot *s, uint32_t token, uint32_t epoch, int64_t (*
 
     bool sound = mix_samples(s, &info, sums, frames);
     s->busy = sound || s->stream || s->hold || s->ev_count || s->dac_until > s->next_t ||
-              (s->opl_used && !opl3_silent(&s->chip)) || info.active || info.blocks_queued || info.events_queued;
+              (s->opl_used && !opl3_silent(&s->chip)) || (s->midi_used && !opl3_silent(&s->midi_chip)) ||
+              info.active || info.blocks_queued || info.events_queued;
 }
 static void vm_mix_48(int64_t (*sums)[2], unsigned frames, uint64_t output, uint64_t played)
 {

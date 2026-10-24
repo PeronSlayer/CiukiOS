@@ -7,6 +7,7 @@
  * not link the scheduler see null hooks. */
 #pragma weak sched_audio_producer
 #pragma weak sched_audio_lead
+#pragma weak audio_midi_mix
 struct audio_state audio;
 /* f4-05 DOS VM sources (audio/vm_source.c); weak so host harnesses that link
  * only the native mixer keep working. */
@@ -63,6 +64,10 @@ void audio_mix(struct audio_frame *out, unsigned frames)
     for (unsigned slot = 0; slot < AUDIO_STREAMS; slot++) {
         struct audio_stream *s = audio.streams[slot];
         if (!s || !s->started) continue;
+        if (s->midi) {
+            if (audio_midi_mix) audio_midi_mix(s,sums,frames);
+            continue;
+        }
         bool starved = false;
         for (unsigned i = 0; i < frames; i++) {
             /* Downsampling can owe a second source-frame advance when a

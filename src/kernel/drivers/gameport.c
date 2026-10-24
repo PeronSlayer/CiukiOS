@@ -1,3 +1,4 @@
+#include <ciuki/system_settings.h>
 /* Independent implementation of analog RC sampling. Behavioral references:
  * Linux drivers/input/{gameport/ns558.c,gameport/gameport.c,joystick/analog.c},
  * and gameport/emu10k1-gp.c; see peripheral-driver-coverage.md. No donor code.
@@ -153,6 +154,10 @@ int gameport_admit(uint16_t base, const struct pci_func *pci, const struct gamep
     }
     if (slot==GAMEPORTS) return -ENOSPC;
     struct gameport *p=&ports[slot];
+    if (!system_admit(0x72000u + slot, "gameport")) {
+        p->used = true; p->base = base; p->claim = -1; if (pci) p->pci = *pci;
+        p->reason = "Disabled by hardware profile; no game port probe."; return (int)slot;
+    }
     /* Only the analog register is accessed. Never MIDI/audio registers. */
     int h=registry_claim(RES_PORT,base,(uint32_t)base+1,"gameport",false);
     if (h<0) return h;

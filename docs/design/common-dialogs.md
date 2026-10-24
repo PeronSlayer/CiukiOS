@@ -166,13 +166,12 @@ messages of `MessageBeep` for every icon class and with the beep off;
 
 ## Gaps (reported, not delivered)
 
-- Open/Save As: multiple selection (`OFN_ALLOWMULTISELECT`), the Read Only check
-  box, a Network button, large icon views, an Explorer-style tree of Look in;
+- Open/Save As: a Network button, an Explorer-style tree of Look in;
   `OFN_CREATEPROMPT`.
-- Font: script selection, printer fonts; the sample uses the toolkit's faces
+- Font: scripts beyond Western, printer fonts; the sample uses the toolkit's faces
   unless the application supplies a painter. The three lists use the tree
   control's rows (indented) because the toolkit has no plain list box.
-- Browse for Folder: no in-place rename of a new folder, no edit box
+- Browse for Folder: no path edit box
   (`BIF_EDITBOX`), no network or special-folder roots.
 - Find and Replace: not modeless; CiukNote keeps its find bar.
 - Tooltips: no balloon style, no tracking tooltips, no tool rectangles inside
@@ -196,8 +195,112 @@ on shell32's `IShellBrowser`/`IShellView2` and a `FindFirstFileW` listing (the
 template), so a missing `template_stc32` resource also ends in an access
 violation. A crash before the first `ok()` points at one of these two places, but
 nothing here can tell which: the upper build (`scripts/win32/wine_upper.py
-conformance-build`) needs the Wine 10.0 source tree, which this workspace does not
-have, and a guest run needs QEMU, which G16 may not use. CD-8 therefore stays
+conformance-build`) needs the Wine 10.0 source tree, which the original G16 workspace did not
+have. G16B now builds it from the lead's fetched source tree; see below. A guest run needs QEMU, which these directives forbid. CD-8 therefore stays
 **open**; the next step is to build the unit, print the fault address from the
 adapter and either supply the `W32_FILE` list/open operations to the adapter or
 fix the resource staging, then run the same unit in the guest.
+
+## G16B expected behaviour (2026-10-24)
+
+Primary references rechecked before implementation:
+[OPENFILENAME](https://learn.microsoft.com/en-us/windows/win32/api/commdlg/ns-commdlg-openfilenamea),
+[CHOOSEFONT](https://learn.microsoft.com/en-us/windows/win32/api/commdlg/ns-commdlg-choosefonta),
+[BROWSEINFO](https://learn.microsoft.com/en-us/windows/win32/api/shlobj_core/ns-shlobj_core-browseinfoa),
+and the fetched Wine 10.0
+[file dialog tests](https://gitlab.winehq.org/wine/wine/-/blob/wine-10.0/dlls/comdlg32/tests/filedlg.c).
+The local Windows 98 Resource Kit `wrkapph_3.htm`, “Features for Making
+Keyboard and Mouse Input Easier”, specifies Tab focus navigation and arrow
+selection in dialog lists. Later-only shell options are not claimed as 98.
+
+- File selection is single by default; the optional multiple-selection mode
+  uses Ctrl to toggle and Shift to extend the selection. A multiple result
+  contains the directory followed by individual names, each NUL terminated,
+  and a final NUL, as Explorer-style OPENFILENAME. Quoted names can also be
+  entered in File name. The event text retains the first full path. Single results retain the
+  full-path text event. An optional caller-owned result receives the selection
+  and Read Only state before the event, including the required buffer size;
+  inadequate storage keeps the dialog open and reports the error. Save As
+  remains a single destination, matching GetSaveFileName. Large icons use the
+  existing deterministic 32-pixel icon conversions.
+- Read Only is an application request, returned to the caller; it does not
+  modify a file's filesystem attributes. It can be hidden and initially checked.
+- The Font Script box selects the character set supported by the offered
+  native fonts. These fonts currently expose Western text only, so the box
+  offers Western; no unsupported scripts are invented.
+- Browse for Folder starts inline renaming after creating a folder and on F2
+  for a selected non-root folder. Enter commits, Escape cancels; invalid or
+  duplicate names and failed filesystem operations keep the editor open.
+- CiukNote and WordPad use the shared Font controller; Paint's Edit Colors
+  uses the shared Color controller, retaining its indexed-image palette model.
+- CD-8 is diagnosed with the fetched upstream test and the production PE
+  loader/core on the host. Host execution is not guest qualification.
+
+G16B implementation notes:
+
+- `DU_FILE_ALLOW_MULTIPLE` requires a `du_file_result` with a caller-owned
+  buffer. `DU_FILE_READONLY_BOX` exposes the checkbox; `DU_FILE_READONLY`
+  initializes it and is returned in the event modifiers. Other callers keep
+  their single-file contract. File/result storage is bounded and no syscall,
+  desktop message or public SDK ABI changes.
+- CiukNote exposes its actual fixed-cell capabilities: Inconsolata 9 points
+  (12 pixels), Regular/Bold, with the unsupported size/face edits disabled
+  (`DU_FONT_FIXED_CELL`); no unsupported formatting is silently applied.
+  WordPad supplies a real-font sample and its 1–200 point size range; its
+  Font result applies family, style, size, color, underline and strikeout.
+- Paint's common Color dialog preserves sixteen custom RGB slots across
+  invocations. Acceptance maps the selected RGB into the existing indexed
+  image palette without changing colors already used in the picture. An
+  integration defect discovered by its fixture was also corrected: the two
+  wallpaper capability flags now target the wallpaper menu entries after the
+  Page Setup/Print insertion, so printing remains enabled without wallpaper.
+
+### G16B CD-8 host reproduction and validation limits
+
+The fetched source is now readable at the lead tree's
+`build/external/wine-10.0`. A focused invocation of
+`wine_upper.conformance_build` with `CONFORMANCE = {'comdlg32': ('filedlg',)}`
+built the upstream test and its resources in this worktree. The PE SHA-256
+is `353bc45045a9b6f8b591f61c47e91285ff6ca8de3bc239de83f5602625709207`;
+its only recorded test-runtime stub is `kernel32.dll!GetProcessId`.
+No Wine source or resource was patched.
+
+`build/codex/g16b-wine-repro.py` uses the existing H1 adapter/production
+loader sources and the lead's built core and upper PEs, read-only. The
+unused GDI generator import is isolated in scratch because the base
+`scripts/win32/gdi32.py:63-64` has a syntax error. H1's `exec ... filedlg`
+and `sandbox-check` both return **-31 (SIGSYS)** with empty output. The
+preflight maps no PE, so this is an execution-environment blocker and is
+not evidence about the original access violation. CD-8 remains open;
+reproduce outside this sandbox before selecting a production fix.
+
+G16B adds fx-15 rows 92–94 after the last table row and scenarios 93–95
+after all existing scenario indexes. The combined runner has inherited
+link failures (duplicate `fake_reset`, missing recovery/registry/Files
+fixture wiring). The isolated run of the three added rows compares 95
+frames on all five presenters successfully, then exits 1 because
+LeakSanitizer cannot run its ptrace-based scan in this sandbox. Leak
+detection was kept enabled. This is frame-comparison evidence, not a
+green sanitizer/combined-runner result.
+
+The ABI block was run unchanged from `host_kernel_tests.sh`; its i686
+compile stops at four inherited G11B `du_window` assertions: size
+5360 versus actual 5372, and power fields 5348/5352/5356 versus actual
+5360/5364/5368. G16B changes none of these records. New common-dialog
+records, fields and constants have separate literal assertions in
+`abi_layout_test.c`; the API reference was regenerated.
+
+### G16B integration resolution
+
+The integration retains G28b import, picture, printing, clipboard and undo
+features and replaces only WordPad's obsolete local Font-list builder with
+the shared Font controller and real-font sample. Its result still enters
+`apply_chars` through `D_FONT`, including family, size, colour and effects.
+This matches the initialization, effects and size-limit contracts rechecked
+in [CHOOSEFONT](https://learn.microsoft.com/en-us/windows/win32/api/commdlg/ns-commdlg-choosefonta).
+The shared file result retains the directory-plus-NUL-separated-names
+contract rechecked in
+[OPENFILENAME](https://learn.microsoft.com/en-us/windows/win32/api/commdlg/ns-commdlg-openfilenamea).
+Existing window-model scenario indexes are preserved; the three G16B
+scenarios follow them at indexes 101–103. Integration frame hashes are
+retained for overlapping names; the lead must review and re-pin changed frames.

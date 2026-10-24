@@ -1432,9 +1432,10 @@ Map cells aggregate bits over ceil(clusters/128) ranges, never exact
 per-cluster squares. Pause/Stop simply stop issuing STEP requests.
 
 ```c
-#define MEDIA_DEFRAG_ANALYZE 0x4d1cu
-#define MEDIA_DEFRAG_STEP 0x4d1du
+#define MEDIA_DEFRAG_ANALYZE 0x4d20u
+#define MEDIA_DEFRAG_STEP 0x4d21u
 #define CIUKI_DEFRAG_CHECK 1u
+#define CIUKI_DEFRAG_STARTUP 2u
 #define CIUKI_DEFRAG_CELLS 128u
 #define CIUKI_DEFRAG_FREE 1u
 #define CIUKI_DEFRAG_USED 2u
@@ -1455,11 +1456,24 @@ struct ciuki_media_defrag {
     uint32_t free_clusters;
     uint32_t moved;
     uint32_t finished;
-    uint8_t map[CIUKI_DEFRAG_CELLS];
+    uint32_t placement;
+```
+
+next physical cluster in the startup pass; initially 2
+
+```c
+uint32_t profiled;
+```
+
+files placed from observed image-read patterns
+
+```c
+uint8_t map[CIUKI_DEFRAG_CELLS];
 };
 
 #define MEDIA_GET_CONVERT 0x4d1eu
 #define MEDIA_CONVERT 0x4d1fu
+#define CIUKI_CONVERT_NEXT_BOOT 1u
 struct ciuki_media_convert {
     uint32_t version;
     uint32_t size;
@@ -1469,6 +1483,11 @@ struct ciuki_media_convert {
     uint32_t filesystem;
     uint32_t sectors;
     uint32_t reserved;
+```
+
+CIUKI_CONVERT_NEXT_BOOT: explicit deferred consent/status
+
+```c
 };
 ```
 
@@ -2136,6 +2155,24 @@ retains its ownership across START/STOP until RELEASE or last close.
 ```c
 #define AUDIO_CAPTURE_ACQUIRE 0x410eu
 #define AUDIO_CAPTURE_RELEASE 0x410fu
+#define AUDIO_MIDI_WRITE 0x4110u
+#define CIUKI_MIDI_BYTES 128u
+```
+
+Open /dev/audio O_WRONLY. The first MIDI batch selects the per-fd FM
+output port; PCM writes then fail with EBUSY until AUDIO_RESET. Partial
+batches report accepted bytes; EAGAIN accepts none. Close ends all notes.
+This is a software output port, not an external physical UART.
+
+```c
+struct ciuki_midi_data {
+    uint32_t version;
+    uint32_t size;
+    uint32_t bytes;
+    uint32_t accepted;
+    uint8_t data[128];
+    uint32_t reserved[2];
+};
 #define MIXER_GET_LINE 0x4205u
 #define MIXER_SET_LINE 0x4206u
 #define CIUKI_MIXER_WAVE 1u
@@ -2973,6 +3010,363 @@ char short_name[16];
 
 ```c
 };
+```
+
+G14: startup recovery (docs/design/startup-recovery.md), syscall 99
+(CIUKI_SYS_RECOVERY): EBX=operation, ECX=record, EDX=exact record size;
+0 or -errno. STATUS and REPORT are open to every process; SET, ENABLE and
+SCANDISK need the recovery authority (desktop, Control Panel, Terminal,
+ScanDisk and System Configuration started by the desktop): EPERM
+otherwise. Class bits name driver classes the start can skip; SET
+replaces `disabled` (selective startup) and `request` from the record;
+ENABLE lets the Automatic Skip Driver agent load the classes in
+`skipped` again. Changes apply at the next start (ENODEV: no boot-status
+sector on this system volume). SCANDISK checks a mounted FAT drive
+(EINVAL drive, ENODEV not FAT, EBUSY in use by another check); with FIX
+and errors on a fixed volume the repair is scheduled for the next start
+(SCHEDULED). REPORT returns the check that ran at this start (RAN clear:
+none). boot_flags are this start's CIUKI_BOOT_* bits.
+
+```c
+#define CIUKI_RECOVERY_VERSION 1u
+#define CIUKI_RECOVERY_STATUS 0u
+#define CIUKI_RECOVERY_SET 1u
+#define CIUKI_RECOVERY_ENABLE 2u
+#define CIUKI_RECOVERY_SCANDISK 3u
+#define CIUKI_RECOVERY_REPORT 4u
+#define CIUKI_RECOVERY_VALID 1u
+#define CIUKI_RECOVERY_AUTHORITY 2u
+#define CIUKI_RECOVERY_COMPLETE 4u
+#define CIUKI_RECOVERY_CLASSES 8u
+#define CIUKI_RECOVERY_DISPLAY 0x01u
+#define CIUKI_RECOVERY_SOUND 0x02u
+#define CIUKI_RECOVERY_NETWORK 0x04u
+#define CIUKI_RECOVERY_USB 0x08u
+#define CIUKI_RECOVERY_PORTS 0x10u
+#define CIUKI_RECOVERY_POWER 0x20u
+#define CIUKI_RECOVERY_STARTUP 0x40u
+#define CIUKI_RECOVERY_CLASS_MASK 0x7Fu
+#define CIUKI_RECOVERY_REQ_SCANDISK 1u
+#define CIUKI_RECOVERY_REQ_THOROUGH 2u
+#define CIUKI_RECOVERY_REQ_MENU 4u
+#define CIUKI_BOOT_SAFE_MODE 0x00000001u
+#define CIUKI_BOOT_VERBOSE 0x00000800u
+#define CIUKI_BOOT_HW_CHECK 0x00002000u
+#define CIUKI_BOOT_FAILED 0x00008000u
+#define CIUKI_BOOT_STEP 0x00010000u
+#define CIUKI_BOOT_CMD_ONLY 0x00020000u
+#define CIUKI_BOOT_SAFE_STORAGE 0x00040000u
+#define CIUKI_BOOT_SCANDISK 0x00080000u
+#define CIUKI_BOOT_SCANDISK_SKIP 0x00100000u
+#define CIUKI_BOOT_MENU_SHOWN 0x00400000u
+#define CIUKI_BOOT_SKIP_SHIFT 24u
+struct ciuki_recovery_status {
+    uint32_t version;
+```
+
+0
+
+```c
+uint32_t size;
+```
+
+4
+
+```c
+uint32_t flags;
+```
+
+8: CIUKI_RECOVERY_VALID/AUTHORITY/COMPLETE
+
+```c
+uint32_t boot_flags;
+```
+
+12: this start's CIUKI_BOOT_*
+
+```c
+uint8_t disabled;
+```
+
+16: classes off by selective startup
+
+```c
+uint8_t skipped;
+```
+
+17: classes skipped by the ASD agent
+
+```c
+uint8_t newly_skipped;
+```
+
+18: skipped at this start
+
+```c
+uint8_t request;
+```
+
+19: CIUKI_RECOVERY_REQ_* for the next start
+
+```c
+uint8_t failures;
+```
+
+20: consecutive failed starts before this one
+
+```c
+uint8_t blamed;
+```
+
+21: classes active when the last start failed
+
+```c
+uint8_t active;
+```
+
+22: activations in progress
+
+```c
+uint8_t reserved;
+```
+
+23
+
+```c
+uint8_t fail_count[8];
+```
+
+24: per class
+
+```c
+uint32_t boots;
+```
+
+32
+
+```c
+uint32_t completed;
+```
+
+36
+
+```c
+uint32_t skipped_at[8];
+```
+
+40: boot number of each ASD skip
+
+```c
+};
+
+#define CIUKI_SCANDISK_VERSION 1u
+#define CIUKI_SCANDISK_FIX 0x0001u
+#define CIUKI_SCANDISK_THOROUGH 0x0002u
+#define CIUKI_SCANDISK_FREE_LOST 0x0004u
+#define CIUKI_SCANDISK_NO_COPY 0x0008u
+#define CIUKI_SCANDISK_RAN 0x0100u
+#define CIUKI_SCANDISK_AT_START 0x0200u
+#define CIUKI_SCANDISK_ERRORS 0x0400u
+#define CIUKI_SCANDISK_FIXED 0x0800u
+#define CIUKI_SCANDISK_SCHEDULED 0x1000u
+#define CIUKI_SCANDISK_DIRTY 0x2000u
+#define CIUKI_SCANDISK_HARD_ERROR 0x4000u
+#define CIUKI_SCANDISK_TRUNCATED 0x8000u
+struct ciuki_scandisk {
+    uint32_t version;
+```
+
+0
+
+```c
+uint32_t size;
+```
+
+4
+
+```c
+uint32_t drive;
+```
+
+8: 0 = A:
+
+```c
+uint32_t flags;
+```
+
+12: FIX/THOROUGH/FREE_LOST/NO_COPY in, RAN.. out
+
+```c
+int32_t result;
+```
+
+16: 0 or -errno of the check
+
+```c
+uint32_t fat_type;
+```
+
+20: 12, 16 or 32
+
+```c
+uint32_t cluster_bytes;
+```
+
+24
+
+```c
+uint32_t clusters;
+```
+
+28
+
+```c
+uint32_t free_clusters;
+```
+
+32
+
+```c
+uint32_t bad_clusters;
+```
+
+36
+
+```c
+uint32_t directories;
+```
+
+40
+
+```c
+uint32_t files;
+```
+
+44
+
+```c
+uint32_t directory_clusters;
+```
+
+48
+
+```c
+uint32_t file_clusters;
+```
+
+52
+
+```c
+uint32_t lost_chains;
+```
+
+56
+
+```c
+uint32_t lost_clusters;
+```
+
+60
+
+```c
+uint32_t salvaged_files;
+```
+
+64: FILEnnnn.CHK written
+
+```c
+uint32_t crosslinked_files;
+```
+
+68
+
+```c
+uint32_t crosslinks_fixed;
+```
+
+72
+
+```c
+uint32_t invalid_chains;
+```
+
+76: bad links and cycles ended
+
+```c
+uint32_t size_mismatches;
+```
+
+80: sizes beyond the chain adjusted
+
+```c
+uint32_t invalid_entries;
+```
+
+84: reserved attribute bits cleared
+
+```c
+uint32_t fat_mismatches;
+```
+
+88: sectors of the other FAT copy rewritten
+
+```c
+uint32_t excess_tails;
+```
+
+92: chains longer than the size, left to the FAT repair
+
+```c
+uint32_t surface_sectors;
+```
+
+96: data sectors read by THOROUGH
+
+```c
+uint32_t bad_sectors;
+```
+
+100
+
+```c
+uint32_t bad_marked;
+```
+
+104: free clusters marked bad
+
+```c
+uint32_t relocated;
+```
+
+108: used clusters moved off bad sectors
+
+```c
+uint32_t unreadable_system;
+```
+
+112: boot/FAT/root sectors that failed
+
+```c
+uint32_t elapsed_ms;
+```
+
+116
+
+```c
+char found[16];
+```
+
+120: FOUND.nnn of the salvaged files
+
+```c
+char first_problem[64];
+```
+
+136: path of the first damaged entry
+
+```c
+};
+
 
 struct ciuki_spawn_fd {
     int32_t source;
@@ -5623,6 +6017,13 @@ SPDX-License-Identifier: MIT
 #include <ciuki/abi.h>
 #define __CIUKI_AUDIO_VERSION__ 1
 int ciuki_devctl(int fd, uint32_t op, void *record, uint32_t size);
+```
+
+MIDI software output on an O_WRONLY /dev/audio description. Returns the
+number of accepted bytes, or -1 and errno. Retain a short batch's suffix.
+
+```c
+int ciuki_midi_write(int fd, const uint8_t *bytes, uint32_t size);
 #endif
 ```
 
@@ -7961,10 +8362,22 @@ struct du_selection selection;
 buttons, edit prefix icon
 
 ```c
+int edit_up_down;
+```
+
+DU_EDIT: forward Up/Down as DU_EV_KEY for a spinner buddy
+
+```c
 int accepts_tab;
 ```
 
 DU_CANVAS: deliver Tab as DU_EV_KEY
+
+```c
+int wheel_events;
+```
+
+DU_CANVAS: deliver the wheel as DU_POINTER_WHEEL (G28; off keeps the old behaviour)
 
 ```c
 int dropdown;
@@ -8093,9 +8506,12 @@ dragged), RELEASE when that press ends without a drag (apply it now).
 DU_EV_POINTER: index is the phase, key is the captured button (1/2/3,
 zero on hover), x/y are client coordinates. CANCEL follows focus loss,
 input resynchronization or resize. The application paints DU_CANVAS.
+G28: DU_POINTER_WHEEL (only for canvases with wheel_events set) reports the
+wheel: x is the signed number of detents (positive scrolls up), y the pointer's
+client y.
 
 ```c
-enum du_pointer_phase { DU_POINTER_DOWN, DU_POINTER_MOVE, DU_POINTER_UP, DU_POINTER_CANCEL };
+enum du_pointer_phase { DU_POINTER_DOWN, DU_POINTER_MOVE, DU_POINTER_UP, DU_POINTER_CANCEL, DU_POINTER_WHEEL };
 enum { DU_HELP_F1 = 1, DU_HELP_CONTEXT = 2 };
 struct du_event {
     enum du_event_type type;
@@ -8142,6 +8558,12 @@ int dragging, drag_x, drag_y, capture;
 ```
 
 the pointer is over the close button
+
+```c
+int help_button, help_hot;
+```
+
+G15: "?" caption button (du_dialog_help_button), hover
 
 ```c
 const uint32_t *icon_pixels;
@@ -8378,6 +8800,30 @@ unsigned du_key_char(const struct du_ui *, unsigned code);
 void du_post(struct du_ui *, enum du_event_type, int id, int index);
 ```
 
+G15 help. du_help_topic names the program's Help topic (an id of
+apps/accessories/help_topics.c, the program name in /Programs). F1 opens
+it through du_help; Shift+F1 starts What's This? (du_context_help).
+du_help opens CiukiOS Help at `topic` (NULL: the program's topic, else
+the contents): 0 or -errno (-ENOSYS without a launcher).
+
+```c
+void du_help_topic(struct du_ui *, const char *topic);
+int du_help(struct du_ui *, const char *topic);
+void du_context_help(struct du_ui *, int on);
+```
+
+Hides the tooltip or What's This? popup (every key and button press does).
+
+```c
+void du_tip_hide(struct du_ui *);
+```
+
+The tooltip of a widget by id; returns the widget or NULL.
+
+```c
+struct du_widget *du_tooltip(struct du_ui *, int id, const char *tip);
+```
+
 Lists and trees
 
 ```c
@@ -8457,15 +8903,41 @@ Returns 0 or -errno (the folder could not be listed).
 ```c
 struct du_file_filter { const char *label, *pattern; };
 enum { DU_FILE_SAVE = 1, DU_FILE_OVERWRITE_PROMPT = 2, DU_FILE_FILE_MUST_EXIST = 4,
-       DU_FILE_PATH_MUST_EXIST = 8, DU_FILE_NO_NEW_FOLDER = 16 };
+       DU_FILE_PATH_MUST_EXIST = 8, DU_FILE_NO_NEW_FOLDER = 16,
+       DU_FILE_ALLOW_MULTIPLE = 32, DU_FILE_READONLY_BOX = 64, DU_FILE_READONLY = 128 };
 typedef int (*du_mkdir_fn)(void *ctx, const char *path);
+```
+
+Optional caller-owned output, valid until the dialog ends. files receives a
+full path plus two NULs for one file; directory\0name\0name\0\0 for several.
+required includes all terminators; insufficient capacity leaves the box open.
+Save As always returns one file. Read Only is a request, not an attribute.
+
+DU_EV_DIALOG.modifiers contains DU_FILE_READONLY when checked. Its text
+remains the first full path; multiple names are in this caller-owned buffer.
+
+```c
+struct du_file_result {
+    char *files;
+    size_t capacity;
+    size_t required;
+    unsigned count;
+    unsigned read_only;
+};
 struct du_file_options {
     unsigned flags;
-    const char *title, *folder, *name;
-    const struct du_file_filter *filters; unsigned filter_count, filter_index;
+    const char *title;
+    const char *folder;
+    const char *name;
+    const struct du_file_filter *filters;
+    unsigned filter_count;
+    unsigned filter_index;
     const char *default_ext;
-    du_lister lister; void *lister_ctx;
-    du_mkdir_fn make_dir; void *make_dir_ctx;
+    du_lister lister;
+    void *lister_ctx;
+    du_mkdir_fn make_dir;
+    void *make_dir_ctx;
+    struct du_file_result *result;
 };
 int du_file_open(struct du_ui *, int id, const struct du_file_options *);
 ```
@@ -8480,6 +8952,7 @@ int du_pattern_match(const char *patterns, const char *name);
 G16 Font dialog (ChooseFont). initial may be NULL. families lists the face
 names offered (NULL, 0: a built-in list of the UI faces). The result text of
 DU_EV_DIALOG index 0 is du_font_format()'s form; du_font_parse reads it. The
+Script lists the supported native character sets (currently Western). The
 sample line uses the UI face, bold for DU_FONT_BOLD, unless the application
 draws it: sample, when set, paints the preview in the given rectangle.
 
@@ -8488,10 +8961,22 @@ draws it: sample, when set, paints the preview in the given rectangle.
 #define DU_FONT_ITALIC 2u
 struct du_font_choice { char family[64]; unsigned style, points, underline, strikeout; uint32_t color; };
 #define DU_FONT_NO_EFFECTS 1u
+#define DU_FONT_FIXED_CELL 2u
+```
+
+only the initial size/face, Regular and Bold
+
+```c
 typedef void (*du_sample_fn)(struct du_canvas *, struct du_rect, const struct du_font_choice *, void *ctx);
 int du_font_dialog(struct du_ui *, int id, const struct du_font_choice *initial,
                    const char *const *families, unsigned family_count, unsigned flags,
                    du_sample_fn sample, void *sample_ctx);
+```
+
+Optional application-supported point range (default 1..1638).
+
+```c
+void du_font_size_limits(struct du_ui *, unsigned min, unsigned max);
 void du_font_format(char *out, size_t size, const struct du_font_choice *);
 int du_font_parse(const char *text, struct du_font_choice *out);
 ```
@@ -8530,19 +9015,29 @@ uint32_t du_hsl_to_rgb(unsigned h, unsigned s, unsigned l);
 
 G16 Browse for Folder (SHBrowseForFolder with BIF_RETURNONLYFSDIRS). The
 tree starts at root ("/" when NULL) and opens initial. prompt is shown above
-the tree. Result: DU_EV_DIALOG index 0, text the folder path.
+the tree. F2 and Make New Folder edit the selected non-root name in place;
+rename_dir defaults to POSIX rename, Enter commits and Escape cancels.
+Result: DU_EV_DIALOG index 0, text the folder path.
 
 ```c
+typedef int (*du_rename_fn)(void *ctx, const char *from, const char *to);
 struct du_folder_options {
-    const char *title, *prompt, *root, *initial;
+    const char *title;
+    const char *prompt;
+    const char *root;
+    const char *initial;
     unsigned flags;
 ```
 
 DU_FILE_NO_NEW_FOLDER
 
 ```c
-du_lister lister; void *lister_ctx;
-    du_mkdir_fn make_dir; void *make_dir_ctx;
+du_lister lister;
+    void *lister_ctx;
+    du_mkdir_fn make_dir;
+    void *make_dir_ctx;
+    du_rename_fn rename_dir;
+    void *rename_dir_ctx;
 };
 int du_folder_dialog(struct du_ui *, int id, const struct du_folder_options *);
 ```
@@ -8599,6 +9094,20 @@ void du_dialog_icon(struct du_ui *, const uint32_t *argb32);
 void du_dialog_close(struct du_ui *);
 int du_dialog_id(const struct du_ui *);
 struct du_rect du_dialog_button(const struct du_ui *, unsigned index);
+```
+
+G15: a "?" caption button left of the close button; clicking it starts
+What's This? for the dialog's controls (their `help` text).
+
+```c
+void du_dialog_help_button(struct du_ui *, int on);
+struct du_rect du_dialog_help_box(const struct du_ui *);
+```
+
+The dialog control under (x, y), or NULL.
+
+```c
+struct du_widget *du_dialog_item_at(struct du_ui *, int x, int y);
 ```
 
 Timers (monotonic nanoseconds) and the shared text clipboard.

@@ -1,3 +1,4 @@
+#include <ciuki/system_settings.h>
 /* f0-49 backing store (M4): fixed page slots in 16 MiB extents of one
  * dynamic file, page-out of f0-48's modified queue, demand page-in, idle
  * prewrite and trailing shrink. Numbers are CiukiOS policy (pager.h).
@@ -13,6 +14,17 @@
 #include <ciuki/ledger.h>
 #include <ciuki/reclaim.h>
 #include <ciuki/pager.h>
+static unsigned pager_min_extents(void)
+{
+    const struct system_perf *p = system_performance ? system_performance() : 0;
+    return p && p->vm == 1 ? p->min_mb / 16 : PAGER_MIN_EXTENTS;
+}
+static unsigned pager_max_extents(void)
+{
+    const struct system_perf *p = system_performance ? system_performance() : 0;
+    return p && p->vm == 1 ? p->max_mb / 16 : PAGER_MAX_EXTENTS;
+}
+
 #include <ciuki/sync.h>
 #include <ciuki/task.h>
 #include <ciuki/timing.h>
@@ -436,7 +448,7 @@ static bool map_valid(const struct pager_map *m)
 }
 static int publish_extent(uint32_t index, const struct pager_map *map)
 {
-    if (index != pager.extents || index >= PAGER_MAX_EXTENTS || !map_valid(map)) return -PAGER_EIO;
+    if (index != pager.extents || index >= pager_max_extents() || !map_valid(map)) return -PAGER_EIO;
     uint32_t phys = pmm_alloc();
     if (!phys) return -PAGER_ENOMEM;
     mm_claim(phys, 1, MM_PAGER);
@@ -475,7 +487,7 @@ static void retire_extent(uint32_t index)
 }
 static int grow_one(void)
 {
-    if (pager.extents >= PAGER_MAX_EXTENTS) return -PAGER_ENOSPC;
+    if (pager.extents >= pager_max_extents()) return -PAGER_ENOSPC;
     uint64_t free = 0, capacity = 0;
     int e = pager.backend->space ? pager.backend->space(pager.ctx, &free, &capacity) : -PAGER_EIO;
     if (!e && free < disk_reserve(capacity) + PAGER_EXTENT_BYTES) e = -PAGER_ENOSPC;
@@ -503,7 +515,17 @@ static bool open_store(void)
         klog("[pager] attach result=%d swap=none commit=ram", e);
         return false;
     }
-    if (existing > PAGER_MAX_EXTENTS) existing = PAGER_MAX_EXTENTS;
+    if (existing > pager_max_extents()) {
+        /* At boot no slot has an owner yet. Enforce a lowered manual maximum
+         * on the physical backing file before mapping any retained extent. */
+        e = pager.backend->shrink ? pager.backend->shrink(pager.ctx, pager_max_extents()) : -PAGER_EIO;
+        if (e) {
+            pager.opened = true; pager.state = PAGER_FAILED; publish();
+            klog("[pager] manual maximum resize result=%d swap=none commit=ram", e);
+            return false;
+        }
+        existing = pager_max_extents();
+    }
     /* Existing extents (kept across boots) are mapped, never trusted:
      * every slot starts FREE, newly exposed anonymous pages are zeroed. */
     for (uint32_t i = 0; i < existing; i++) {
@@ -514,7 +536,7 @@ static bool open_store(void)
     }
     pager.opened = true;
     pager.state = PAGER_ACTIVE;
-    while (!e && pager.extents < PAGER_MIN_EXTENTS) e = grow_one();
+    while (!e && pager.extents < pager_min_extents()) e = grow_one();
     if (!pager.extents) {
         pager.state = PAGER_FAILED; publish();
         klog("[pager] attach result=%d swap=none commit=ram", e ? e : -PAGER_ENOSPC);
@@ -527,7 +549,7 @@ static bool open_store(void)
 }
 static bool shrink_one(uint64_t now)
 {
-    if (pager.extents <= PAGER_MIN_EXTENTS || pager.want > pager.extents - 1) return false;
+    if (pager.extents <= pager_min_extents() || pager.want > pager.extents - 1) return false;
     uint32_t index = pager.extents - 1;
     struct pager_extent *x = pager.extent[index];
     /* Never relocate: only a trailing extent without live slots goes, and
@@ -558,7 +580,7 @@ bool pager_manager_step(uint64_t now)
     int64_t headroom = ledger_commit_headroom ? ledger_commit_headroom() : 0;
     bool wanted = pager.want > pager.extents || headroom < (int64_t)PAGER_EXTENT_SLOTS;
     if (wanted && pager.grow_blocked && now - pager.grow_retry >= GROW_RETRY_MS) pager.grow_blocked = false;
-    if (wanted && !pager.grow_blocked && pager.extents < PAGER_MAX_EXTENTS) {
+    if (wanted && !pager.grow_blocked && pager.extents < pager_max_extents()) {
         /* Grow before admission needs the slots: one extent per step. */
         int e = grow_one();
         if (e) { pager.grow_blocked = true; pager.grow_retry = now; }
@@ -586,7 +608,7 @@ bool pager_commit_wait(uint32_t pages)
     if (headroom >= (int64_t)pages) return true;
     uint64_t deficit = (uint64_t)((int64_t)pages - headroom);
     uint64_t want = pager.extents + (deficit + PAGER_EXTENT_SLOTS - 1) / PAGER_EXTENT_SLOTS;
-    if (want > PAGER_MAX_EXTENTS) want = PAGER_MAX_EXTENTS;
+    if (want > pager_max_extents()) want = pager_max_extents();
     /* A refused growth is retried only after GROW_RETRY_MS (no hammering). */
     if (want <= pager.extents || (pager.grow_blocked && start - pager.grow_retry < GROW_RETRY_MS)) return false;
     if (want > pager.want) pager.want = (uint32_t)want;

@@ -231,6 +231,7 @@ struct du_widget {
     const uint32_t *icon; int icon_size;    /* buttons, edit prefix icon */
     int edit_up_down;                       /* DU_EDIT: forward Up/Down as DU_EV_KEY for a spinner buddy */
     int accepts_tab;                        /* DU_CANVAS: deliver Tab as DU_EV_KEY */
+    int wheel_events;                       /* DU_CANVAS: deliver the wheel as DU_POINTER_WHEEL (G28; off keeps the old behaviour) */
     int dropdown;                           /* toolbutton split arrow width */
     const struct du_item *items;            /* list/tree */
     unsigned count, active;
@@ -290,8 +291,11 @@ enum du_event_type {
 #define DU_SELECT_RELEASE 0x2000u
 /* DU_EV_POINTER: index is the phase, key is the captured button (1/2/3,
  * zero on hover), x/y are client coordinates. CANCEL follows focus loss,
- * input resynchronization or resize. The application paints DU_CANVAS. */
-enum du_pointer_phase { DU_POINTER_DOWN, DU_POINTER_MOVE, DU_POINTER_UP, DU_POINTER_CANCEL };
+ * input resynchronization or resize. The application paints DU_CANVAS.
+ * G28: DU_POINTER_WHEEL (only for canvases with wheel_events set) reports the
+ * wheel: x is the signed number of detents (positive scrolls up), y the pointer's
+ * client y. */
+enum du_pointer_phase { DU_POINTER_DOWN, DU_POINTER_MOVE, DU_POINTER_UP, DU_POINTER_CANCEL, DU_POINTER_WHEEL };
 enum { DU_HELP_F1 = 1, DU_HELP_CONTEXT = 2 };
 struct du_event {
     enum du_event_type type;
@@ -322,6 +326,7 @@ struct du_dialog {
     struct du_dialog_places *places;        /* owned, live file-dialog Places observer */
     int dragging, drag_x, drag_y, capture;
     int close_hot;                          /* the pointer is over the close button */
+    int help_button, help_hot;              /* G15: "?" caption button (du_dialog_help_button), hover */
     const uint32_t *icon_pixels;            /* optional 32x32 replacement icon */
     struct du_event pending[4]; unsigned pending_count;
     /* Optional custom-controls validation before values are released. Zero
@@ -466,6 +471,19 @@ void du_release(struct du_ui *);
 unsigned du_key_char(const struct du_ui *, unsigned code);
 void du_post(struct du_ui *, enum du_event_type, int id, int index);
 
+/* G15 help. du_help_topic names the program's Help topic (an id of
+ * apps/accessories/help_topics.c, the program name in /Programs). F1 opens
+ * it through du_help; Shift+F1 starts What's This? (du_context_help).
+ * du_help opens CiukiOS Help at `topic` (NULL: the program's topic, else
+ * the contents): 0 or -errno (-ENOSYS without a launcher). */
+void du_help_topic(struct du_ui *, const char *topic);
+int du_help(struct du_ui *, const char *topic);
+void du_context_help(struct du_ui *, int on);
+/* Hides the tooltip or What's This? popup (every key and button press does). */
+void du_tip_hide(struct du_ui *);
+/* The tooltip of a widget by id; returns the widget or NULL. */
+struct du_widget *du_tooltip(struct du_ui *, int id, const char *tip);
+
 /* Lists and trees */
 int du_list_hit(const struct du_widget *, int x, int y);
 struct du_rect du_list_label(const struct du_widget *, unsigned index);
@@ -517,15 +535,36 @@ int du_file_dialog(struct du_ui *, int id, int save, const char *title, const ch
  * Returns 0 or -errno (the folder could not be listed). */
 struct du_file_filter { const char *label, *pattern; };
 enum { DU_FILE_SAVE = 1, DU_FILE_OVERWRITE_PROMPT = 2, DU_FILE_FILE_MUST_EXIST = 4,
-       DU_FILE_PATH_MUST_EXIST = 8, DU_FILE_NO_NEW_FOLDER = 16 };
+       DU_FILE_PATH_MUST_EXIST = 8, DU_FILE_NO_NEW_FOLDER = 16,
+       DU_FILE_ALLOW_MULTIPLE = 32, DU_FILE_READONLY_BOX = 64, DU_FILE_READONLY = 128 };
 typedef int (*du_mkdir_fn)(void *ctx, const char *path);
+/* Optional caller-owned output, valid until the dialog ends. files receives a
+ * full path plus two NULs for one file; directory\0name\0name\0\0 for several.
+ * required includes all terminators; insufficient capacity leaves the box open.
+ * Save As always returns one file. Read Only is a request, not an attribute. */
+/* DU_EV_DIALOG.modifiers contains DU_FILE_READONLY when checked. Its text
+ * remains the first full path; multiple names are in this caller-owned buffer. */
+struct du_file_result {
+    char *files;
+    size_t capacity;
+    size_t required;
+    unsigned count;
+    unsigned read_only;
+};
 struct du_file_options {
     unsigned flags;
-    const char *title, *folder, *name;
-    const struct du_file_filter *filters; unsigned filter_count, filter_index;
+    const char *title;
+    const char *folder;
+    const char *name;
+    const struct du_file_filter *filters;
+    unsigned filter_count;
+    unsigned filter_index;
     const char *default_ext;
-    du_lister lister; void *lister_ctx;
-    du_mkdir_fn make_dir; void *make_dir_ctx;
+    du_lister lister;
+    void *lister_ctx;
+    du_mkdir_fn make_dir;
+    void *make_dir_ctx;
+    struct du_file_result *result;
 };
 int du_file_open(struct du_ui *, int id, const struct du_file_options *);
 /* Case-insensitive wildcard match of one name against ';'-separated patterns
@@ -535,16 +574,20 @@ int du_pattern_match(const char *patterns, const char *name);
 /* G16 Font dialog (ChooseFont). initial may be NULL. families lists the face
  * names offered (NULL, 0: a built-in list of the UI faces). The result text of
  * DU_EV_DIALOG index 0 is du_font_format()'s form; du_font_parse reads it. The
+ * Script lists the supported native character sets (currently Western). The
  * sample line uses the UI face, bold for DU_FONT_BOLD, unless the application
  * draws it: sample, when set, paints the preview in the given rectangle. */
 #define DU_FONT_BOLD   1u
 #define DU_FONT_ITALIC 2u
 struct du_font_choice { char family[64]; unsigned style, points, underline, strikeout; uint32_t color; };
 #define DU_FONT_NO_EFFECTS 1u
+#define DU_FONT_FIXED_CELL 2u   /* only the initial size/face, Regular and Bold */
 typedef void (*du_sample_fn)(struct du_canvas *, struct du_rect, const struct du_font_choice *, void *ctx);
 int du_font_dialog(struct du_ui *, int id, const struct du_font_choice *initial,
                    const char *const *families, unsigned family_count, unsigned flags,
                    du_sample_fn sample, void *sample_ctx);
+/* Optional application-supported point range (default 1..1638). */
+void du_font_size_limits(struct du_ui *, unsigned min, unsigned max);
 void du_font_format(char *out, size_t size, const struct du_font_choice *);
 int du_font_parse(const char *text, struct du_font_choice *out);   /* 0, or -EINVAL */
 
@@ -562,12 +605,22 @@ uint32_t du_hsl_to_rgb(unsigned h, unsigned s, unsigned l);
 
 /* G16 Browse for Folder (SHBrowseForFolder with BIF_RETURNONLYFSDIRS). The
  * tree starts at root ("/" when NULL) and opens initial. prompt is shown above
- * the tree. Result: DU_EV_DIALOG index 0, text the folder path. */
+ * the tree. F2 and Make New Folder edit the selected non-root name in place;
+ * rename_dir defaults to POSIX rename, Enter commits and Escape cancels.
+ * Result: DU_EV_DIALOG index 0, text the folder path. */
+typedef int (*du_rename_fn)(void *ctx, const char *from, const char *to);
 struct du_folder_options {
-    const char *title, *prompt, *root, *initial;
+    const char *title;
+    const char *prompt;
+    const char *root;
+    const char *initial;
     unsigned flags;                         /* DU_FILE_NO_NEW_FOLDER */
-    du_lister lister; void *lister_ctx;
-    du_mkdir_fn make_dir; void *make_dir_ctx;
+    du_lister lister;
+    void *lister_ctx;
+    du_mkdir_fn make_dir;
+    void *make_dir_ctx;
+    du_rename_fn rename_dir;
+    void *rename_dir_ctx;
 };
 int du_folder_dialog(struct du_ui *, int id, const struct du_folder_options *);
 
@@ -609,6 +662,12 @@ void du_dialog_icon(struct du_ui *, const uint32_t *argb32);
 void du_dialog_close(struct du_ui *);
 int du_dialog_id(const struct du_ui *);
 struct du_rect du_dialog_button(const struct du_ui *, unsigned index);
+/* G15: a "?" caption button left of the close button; clicking it starts
+ * What's This? for the dialog's controls (their `help` text). */
+void du_dialog_help_button(struct du_ui *, int on);
+struct du_rect du_dialog_help_box(const struct du_ui *);
+/* The dialog control under (x, y), or NULL. */
+struct du_widget *du_dialog_item_at(struct du_ui *, int x, int y);
 
 /* Timers (monotonic nanoseconds) and the shared text clipboard. */
 /* DU_EV_TICK preserves dirty state; callbacks invalidate changed content. */

@@ -11,10 +11,10 @@ static const uint32_t standard_colors[] = {
 
 /* ---- defaults and small helpers ------------------------------------------ */
 
-struct wp_cattr wp_default_cattr(void) { return (struct wp_cattr){0, 0, 0, 0, WP_SIZE_DEFAULT}; }
+struct wp_cattr wp_default_cattr(void) { return (struct wp_cattr){0, 0, 0, 0, WP_SIZE_DEFAULT, 0}; }
 struct wp_pattr wp_default_pattr(void) { struct wp_pattr p; memset(&p, 0, sizeof(p)); return p; }
 int wp_cattr_eq(const struct wp_cattr *a, const struct wp_cattr *b)
-{ return a->font == b->font && a->flags == b->flags && a->color == b->color && a->size == b->size; }
+{ return !a->pic && !b->pic && a->font == b->font && a->flags == b->flags && a->color == b->color && a->size == b->size; }
 int wp_pattr_eq(const struct wp_pattr *a, const struct wp_pattr *b)
 {
     if (a->align != b->align || a->bullet != b->bullet || a->ntabs != b->ntabs || a->left != b->left ||
@@ -23,6 +23,7 @@ int wp_pattr_eq(const struct wp_pattr *a, const struct wp_pattr *b)
     return 1;
 }
 
+static void pics_compact(struct wp_doc *d);
 static int grow(void **p, unsigned *cap, size_t need, size_t item)
 {
     if (need <= *cap) return 0;
@@ -62,14 +63,22 @@ int wp_init(struct wp_doc *d)
     memset(d, 0, sizeof(*d));
     return wp_reset(d);
 }
+static void pics_release(struct wp_doc *d)
+{
+    for (unsigned i = 0; i < d->npics; i++) wp_pic_unref(d->pics[i]);
+    free(d->pics);
+    d->pics = NULL; d->npics = d->cpics = 0; d->pic_bytes = 0;
+}
 void wp_free(struct wp_doc *d)
 {
+    pics_release(d);
     free(d->text); free(d->runs); free(d->paras);
     memset(d, 0, sizeof(*d));
 }
 int wp_reset(struct wp_doc *d)
 {
     uint64_t revision = d->revision + 1;
+    pics_release(d);
     d->len = 0; d->nruns = 0; d->npara = 0;
     if (reserve(d, 0, 0, 1)) return -ENOMEM;
     d->text[0] = 0;
@@ -95,6 +104,13 @@ int wp_copy(struct wp_doc *dst, const struct wp_doc *src)
     if (src->nruns) memcpy(n.runs, src->runs, src->nruns * sizeof(*src->runs));
     memcpy(n.paras, src->paras, src->npara * sizeof(*src->paras));
     n.cruns = src->nruns ? src->nruns : 1; n.cpara = src->npara ? src->npara : 1;
+    n.pics = NULL; n.cpics = 0;
+    if (src->npics) {
+        n.pics = malloc(src->npics * sizeof(*n.pics));
+        if (!n.pics) { free(n.text); free(n.runs); free(n.paras); return -ENOMEM; }
+        for (unsigned i = 0; i < src->npics; i++) { n.pics[i] = src->pics[i]; wp_pic_ref(src->pics[i]); }
+        n.cpics = src->npics;
+    }
     wp_free(dst);
     *dst = n;
     return 0;
@@ -239,7 +255,7 @@ static size_t sanitize_into(const char *in, size_t n, char *out)
         if (!k) { if (out) memcpy(out + w, "\xef\xbf\xbd", 3); w += 3; i++; continue; }
         i += k;
         if (cp == '\r') { if (i < n && in[i] == '\n') i++; cp = '\n'; }
-        if ((cp < 32 && cp != '\n' && cp != '\t' && cp != WP_SOFT_BREAK) || cp == 127) continue;
+        if ((cp < 32 && cp != '\n' && cp != '\t' && cp != WP_SOFT_BREAK) || cp == 127 || cp == 0xfffc) continue;   /* U+FFFC is reserved for pictures */
         unsigned m = wp_utf8_put(tmp, cp);
         if (out) memcpy(out + w, tmp, m);
         w += m;
@@ -283,11 +299,14 @@ static unsigned run_find(const struct wp_doc *d, size_t at, size_t *start)
     if (start) *start = s;
     return d->nruns;
 }
+/* The text attribute: a picture character's own format without the picture, so that typed text never becomes a picture. */
 struct wp_cattr wp_attr_of(const struct wp_doc *d, size_t at)
 {
     if (!d->nruns) return wp_default_cattr();
     unsigned i = run_find(d, at, NULL);
-    return d->runs[i < d->nruns ? i : d->nruns - 1].a;
+    struct wp_cattr a = d->runs[i < d->nruns ? i : d->nruns - 1].a;
+    a.pic = 0;
+    return a;
 }
 struct wp_cattr wp_attr_at(const struct wp_doc *d, size_t at)
 {
@@ -451,7 +470,7 @@ int wp_style_paras(struct wp_doc *d, size_t from, size_t to, const struct wp_pst
     for (unsigned i = p0; i <= p1; i++) {
         struct wp_pattr *a = &d->paras[i].a;
         const struct wp_pattr *v = &st->v;
-        if (st->mask & WP_P_ALIGN) a->align = v->align > WP_RIGHT ? WP_LEFT : v->align;
+        if (st->mask & WP_P_ALIGN) a->align = v->align > WP_JUSTIFY ? WP_LEFT : v->align;
         if (st->mask & WP_P_BULLET) a->bullet = v->bullet != 0;
         if (st->mask & WP_P_LEFT) a->left = v->left < 0 ? 0 : v->left > WP_INDENT_MAX ? WP_INDENT_MAX : v->left;
         if (st->mask & WP_P_FIRST) a->first = v->first < -WP_INDENT_MAX ? -WP_INDENT_MAX : v->first > WP_INDENT_MAX ? WP_INDENT_MAX : v->first;
@@ -533,6 +552,15 @@ int wp_slice(struct wp_doc *dst, const struct wp_doc *src, size_t from, size_t t
         if (hi > lo) n.runs[n.nruns++] = (struct wp_run){(uint32_t)(hi - lo), src->runs[i].a};
         rs = re;
     }
+    for (unsigned i = 0; i < n.nruns; i++) {   /* the slice shares the pictures it uses */
+        unsigned id = n.runs[i].a.pic;
+        if (!id) continue;
+        struct wp_pic *p = id <= src->npics ? src->pics[id - 1] : NULL;
+        int at = -1;
+        if (p) { wp_pic_ref(p); at = wp_pic_attach(&n, p); }
+        if (at < 0) { wp_free(&n); return at < 0 && p ? at : -EINVAL; }
+        n.runs[i].a.pic = (uint16_t)at;
+    }
     wp_free(dst); *dst = n;
     return 0;
 }
@@ -550,10 +578,20 @@ int wp_insert_slice(struct wp_doc *d, size_t at, const struct wp_doc *sl)
         fmap[i] = f >= 0 ? f : (int)sl->fonts[i].family;   /* the table is full: the family's built-in face */
     }
     for (unsigned i = 0; i < sl->ncolors; i++) cmap[i] = i ? wp_color_add(d, sl->colors[i]) : 0;
+    size_t need = 0;
+    for (unsigned i = 0; i < sl->npics; i++) need += (size_t)sl->pics[i]->len + sl->pics[i]->objlen;
+    if (d->npics + sl->npics > WP_PICS_MAX || d->pic_bytes + need > WP_PIC_BYTES) { pics_compact(d); if (d->npics + sl->npics > WP_PICS_MAX || d->pic_bytes + need > WP_PIC_BYTES) return -EFBIG; }
     unsigned p_at = wp_para_at(d, at, NULL, NULL);
     size_t pos = at, run_at = 0;
     for (unsigned i = 0; i < sl->nruns; i++) {
         struct wp_cattr a = sl->runs[i].a;
+        if (a.pic) {
+            struct wp_pic *pic = a.pic <= sl->npics ? sl->pics[a.pic - 1] : NULL;
+            int id = -1;
+            if (pic) { wp_pic_ref(pic); id = wp_pic_attach(d, pic); }
+            if (id < 0) a.pic = 0;   /* cannot happen: the room was checked */
+            else a.pic = (uint16_t)id;
+        }
         a.font = (uint8_t)(a.font < sl->nfonts ? fmap[a.font] : 0);
         a.color = (uint8_t)(a.color < sl->ncolors ? cmap[a.color] : 0);
         r = wp_insert(d, pos, sl->text + run_at, sl->runs[i].len, &a);
@@ -562,4 +600,162 @@ int wp_insert_slice(struct wp_doc *d, size_t at, const struct wp_doc *sl)
     }
     for (unsigned i = 0; i < k; i++) d->paras[p_at + i].a = sl->paras[i].a;
     return 0;
+}
+
+/* ---- pictures ------------------------------------------------------------------ */
+
+static uint32_t be32(const uint8_t *p) { return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3]; }
+static uint32_t le32(const uint8_t *p) { return (uint32_t)p[3] << 24 | (uint32_t)p[2] << 16 | (uint32_t)p[1] << 8 | p[0]; }
+static uint32_t le16(const uint8_t *p) { return (uint32_t)p[1] << 8 | p[0]; }
+
+unsigned wp_pic_sniff(const uint8_t *d, size_t n, uint32_t *w, uint32_t *h)
+{
+    static const uint8_t png[8] = {0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a};
+    *w = *h = 0;
+    if (n >= 24 && !memcmp(d, png, 8) && !memcmp(d + 12, "IHDR", 4)) { *w = be32(d + 16); *h = be32(d + 20); return WP_PIC_PNG; }
+    if (n >= 4 && d[0] == 0xff && d[1] == 0xd8) {
+        size_t i = 2;
+        while (i + 9 < n) {
+            if (d[i] != 0xff) { i++; continue; }
+            unsigned m = d[i + 1];
+            if (m == 0xff) { i++; continue; }
+            if (m == 0xd8 || (m >= 0xd0 && m <= 0xd7) || m == 0x01 || m == 0) { i += 2; continue; }
+            if (m >= 0xc0 && m <= 0xcf && m != 0xc4 && m != 0xc8 && m != 0xcc) { *h = (uint32_t)d[i + 5] << 8 | d[i + 6]; *w = (uint32_t)d[i + 7] << 8 | d[i + 8]; return WP_PIC_JPEG; }
+            i += 2 + ((size_t)d[i + 2] << 8 | d[i + 3]);
+        }
+        return WP_PIC_JPEG;
+    }
+    if (n >= 16) {   /* a DIB: the BITMAPINFOHEADER (or the older core header) */
+        uint32_t size = le32(d);
+        if (size == 12) { *w = le16(d + 4); *h = le16(d + 6); return WP_PIC_DIB; }
+        if (size >= 40 && size <= 256 && n >= 40) {
+            int32_t hh = (int32_t)le32(d + 8);
+            *w = le32(d + 4); *h = hh < 0 ? (uint32_t)-hh : (uint32_t)hh;
+            if (le16(d + 12) == 1 && *w && *w < 65536 && *h && *h < 65536) return WP_PIC_DIB;
+            *w = *h = 0;
+        }
+    }
+    return 0;
+}
+uint8_t *wp_bmp_to_dib(const uint8_t *f, size_t n, size_t *out)
+{
+    if (n < 14 + 12 || f[0] != 'B' || f[1] != 'M') return NULL;
+    uint8_t *o = malloc(n - 14);
+    if (!o) return NULL;
+    memcpy(o, f + 14, n - 14); *out = n - 14;
+    return o;
+}
+/* A BMP file from a DIB: the 14-byte file header with the pixel offset computed from the header, palette and masks. */
+uint8_t *wp_dib_to_bmp(const uint8_t *dib, size_t n, size_t *out)
+{
+    if (n < 12) return NULL;
+    uint32_t size = le32(dib), bits, used = 0, comp = 0;
+    if (size == 12) bits = le16(dib + 10);
+    else if (size >= 40 && n >= 40) { bits = le16(dib + 14); comp = le32(dib + 16); used = le32(dib + 32); }
+    else return NULL;
+    size_t pal = 0;
+    if (bits && bits <= 8) pal = (size_t)(used && used <= (1u << bits) ? used : (1u << bits)) * (size == 12 ? 3 : 4);
+    if (size == 40 && (comp == 3 || comp == 6)) pal += comp == 3 ? 12 : 16;
+    size_t off = 14 + size + pal;
+    if (off > n + 14) return NULL;
+    uint8_t *o = malloc(n + 14);
+    if (!o) return NULL;
+    o[0] = 'B'; o[1] = 'M';
+    uint32_t total = (uint32_t)(n + 14);
+    for (unsigned i = 0; i < 4; i++) { o[2 + i] = (uint8_t)(total >> (8 * i)); o[10 + i] = (uint8_t)((uint32_t)off >> (8 * i)); o[6 + i] = 0; }
+    memcpy(o + 14, dib, n); *out = n + 14;
+    return o;
+}
+
+struct wp_pic *wp_pic_new(unsigned kind, const void *data, size_t len)
+{
+    struct wp_pic *p = calloc(1, sizeof(*p));
+    if (!p) return NULL;
+    p->refs = 1; p->kind = (uint8_t)kind; p->scalex = p->scaley = 100;
+    if (len) {
+        p->data = malloc(len);
+        if (!p->data) { free(p); return NULL; }
+        memcpy(p->data, data, len);
+        p->len = (uint32_t)len;
+        uint32_t w, h;
+        if (kind == WP_PIC_PNG || kind == WP_PIC_JPEG || kind == WP_PIC_DIB) { wp_pic_sniff(p->data, len, &w, &h); if (w <= 65535 && h <= 65535) { p->pw = w; p->ph = h; } }   /* an absurd header is no size */
+    }
+    return p;
+}
+void wp_pic_ref(struct wp_pic *p) { if (p) __atomic_add_fetch(&p->refs, 1, __ATOMIC_RELAXED); }
+void wp_pic_unref(struct wp_pic *p)
+{
+    if (!p || __atomic_sub_fetch(&p->refs, 1, __ATOMIC_ACQ_REL)) return;
+    free(p->data); free(p->objdata); free(p->px); free(p);
+}
+void wp_pic_size(const struct wp_pic *p, int *w, int *h)
+{
+    int64_t gw = p->goalw, gh = p->goalh;
+    if (gw <= 0 || gh <= 0) {
+        if (p->pw && p->ph) { gw = (int64_t)p->pw * 15; gh = (int64_t)p->ph * 15; }
+        else gw = gh = 1440;
+    }
+    int64_t sx = p->scalex ? p->scalex : 100, sy = p->scaley ? p->scaley : 100;
+    gw = gw * sx / 100; gh = gh * sy / 100;
+    if (gw < 15) gw = 15; if (gh < 15) gh = 15;
+    if (gw > WP_INDENT_MAX) gw = WP_INDENT_MAX; if (gh > WP_INDENT_MAX) gh = WP_INDENT_MAX;
+    *w = (int)gw; *h = (int)gh;
+}
+
+static void pics_compact(struct wp_doc *d)
+{
+    if (!d->npics) return;
+    unsigned old = d->npics;
+    unsigned *map = calloc(old + 1, sizeof(*map));
+    if (!map) return;
+    for (unsigned i = 0; i < d->nruns; i++) if (d->runs[i].a.pic && d->runs[i].a.pic <= old) map[d->runs[i].a.pic] = 1;
+    unsigned n = 0; size_t bytes = 0;
+    for (unsigned i = 1; i <= old; i++) {
+        struct wp_pic *p = d->pics[i - 1];
+        if (map[i]) { map[i] = ++n; d->pics[n - 1] = p; bytes += (size_t)p->len + p->objlen; }
+        else wp_pic_unref(p);
+    }
+    d->npics = n; d->pic_bytes = bytes;
+    for (unsigned i = 0; i < d->nruns; i++) if (d->runs[i].a.pic) d->runs[i].a.pic = (uint16_t)(d->runs[i].a.pic <= old ? map[d->runs[i].a.pic] : 0);
+    free(map);
+}
+int wp_pic_attach(struct wp_doc *d, struct wp_pic *p)
+{
+    for (unsigned i = 0; i < d->npics; i++) if (d->pics[i] == p) { wp_pic_unref(p); return (int)i + 1; }
+    size_t sz = (size_t)p->len + p->objlen;
+    if (d->npics >= WP_PICS_MAX || d->pic_bytes + sz > WP_PIC_BYTES) {
+        pics_compact(d);
+        if (d->npics >= WP_PICS_MAX || d->pic_bytes + sz > WP_PIC_BYTES) { wp_pic_unref(p); return -EFBIG; }
+    }
+    if (d->npics == d->cpics) {
+        void *q = d->pics; unsigned c = d->cpics;
+        if (grow(&q, &c, (size_t)d->npics + 1, sizeof(*d->pics))) { wp_pic_unref(p); return -ENOMEM; }
+        d->pics = q; d->cpics = c;
+    }
+    d->pics[d->npics++] = p; d->pic_bytes += sz;
+    return (int)d->npics;
+}
+int wp_insert_pic(struct wp_doc *d, size_t at, struct wp_pic *p, const struct wp_cattr *attr)
+{
+    if (at > d->len) { wp_pic_unref(p); return -EINVAL; }
+    struct wp_cattr a = attr ? *attr : wp_attr_at(d, at);
+    int id = wp_pic_attach(d, p);
+    if (id < 0) return id;
+    a.pic = (uint16_t)id;
+    return wp_insert(d, at, WP_PIC_MARK, WP_PIC_MARK_LEN, &a);
+}
+struct wp_pic *wp_pic_at(const struct wp_doc *d, size_t at)
+{
+    if (at + WP_PIC_MARK_LEN > d->len || memcmp(d->text + at, WP_PIC_MARK, WP_PIC_MARK_LEN)) return NULL;
+    size_t s;
+    unsigned i = run_find(d, at, &s);
+    if (i >= d->nruns) return NULL;
+    unsigned id = d->runs[i].a.pic;
+    return id && id <= d->npics ? d->pics[id - 1] : NULL;
+}
+unsigned wp_pic_count_used(const struct wp_doc *d)
+{
+    unsigned n = 0;
+    for (unsigned i = 0; i < d->nruns; i++) if (d->runs[i].a.pic) n += d->runs[i].len / WP_PIC_MARK_LEN;
+    return n;
 }

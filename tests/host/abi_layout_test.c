@@ -4,7 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ciuki/abi.h>
-#include <ciuki/recovery.h>
 #include <ciuki/bootstat.h>
 #include "../../sdk/win32/include/w32/screen_saver.h"
 _Static_assert(SC_SCREENSAVE==0xf140u,"G10 SC_SCREENSAVE");
@@ -33,11 +32,52 @@ _Static_assert(WM_HSCROLLCLIPBOARD==0x30eu,"G5b WM_HSCROLLCLIPBOARD");
 #include "../../apps/desktop/settings_catalog.h"
 _Static_assert(DESK_CLIP_DISPLAY==11 && DESK_CLIP_DISPLAY_REPLY==12 && DESK_CLIP_DISPLAY_EVENT==5,"G5b owner-display wire IDs");
 #include "../../apps/libdeskui/deskui.h"
+/* G16B native common-dialog contracts; no kernel or wire IDs added. */
+_Static_assert(DU_FILE_ALLOW_MULTIPLE==32u,"G16B DU_FILE_ALLOW_MULTIPLE");
+_Static_assert(DU_FILE_READONLY_BOX==64u,"G16B DU_FILE_READONLY_BOX");
+_Static_assert(DU_FILE_READONLY==128u,"G16B DU_FILE_READONLY");
+_Static_assert(DU_FONT_FIXED_CELL==2u,"G16B DU_FONT_FIXED_CELL");
 #if defined(__i386__)
-_Static_assert(sizeof(struct du_window)==5360,"G11B toolkit window extent");
-_Static_assert(__builtin_offsetof(struct du_window,power_event)==5348,"G11B toolkit power callback");
-_Static_assert(__builtin_offsetof(struct du_window,power_serial)==5352,"G11B toolkit power serial");
-_Static_assert(__builtin_offsetof(struct du_window,power_reply_pending)==5356,"G11B toolkit power reply");
+_Static_assert(sizeof(struct du_file_result)==20,"G16B du_file_result size");
+_Static_assert(__builtin_offsetof(struct du_file_result,files)==0,"G16B du_file_result.files");
+_Static_assert(__builtin_offsetof(struct du_file_result,capacity)==4,"G16B du_file_result.capacity");
+_Static_assert(__builtin_offsetof(struct du_file_result,required)==8,"G16B du_file_result.required");
+_Static_assert(__builtin_offsetof(struct du_file_result,count)==12,"G16B du_file_result.count");
+_Static_assert(__builtin_offsetof(struct du_file_result,read_only)==16,"G16B du_file_result.read_only");
+_Static_assert(sizeof(struct du_file_options)==52,"G16B du_file_options size");
+_Static_assert(__builtin_offsetof(struct du_file_options,flags)==0,"G16B du_file_options.flags");
+_Static_assert(__builtin_offsetof(struct du_file_options,title)==4,"G16B du_file_options.title");
+_Static_assert(__builtin_offsetof(struct du_file_options,folder)==8,"G16B du_file_options.folder");
+_Static_assert(__builtin_offsetof(struct du_file_options,name)==12,"G16B du_file_options.name");
+_Static_assert(__builtin_offsetof(struct du_file_options,filters)==16,"G16B du_file_options.filters");
+_Static_assert(__builtin_offsetof(struct du_file_options,filter_count)==20,"G16B du_file_options.filter_count");
+_Static_assert(__builtin_offsetof(struct du_file_options,filter_index)==24,"G16B du_file_options.filter_index");
+_Static_assert(__builtin_offsetof(struct du_file_options,default_ext)==28,"G16B du_file_options.default_ext");
+_Static_assert(__builtin_offsetof(struct du_file_options,lister)==32,"G16B du_file_options.lister");
+_Static_assert(__builtin_offsetof(struct du_file_options,lister_ctx)==36,"G16B du_file_options.lister_ctx");
+_Static_assert(__builtin_offsetof(struct du_file_options,make_dir)==40,"G16B du_file_options.make_dir");
+_Static_assert(__builtin_offsetof(struct du_file_options,make_dir_ctx)==44,"G16B du_file_options.make_dir_ctx");
+_Static_assert(__builtin_offsetof(struct du_file_options,result)==48,"G16B du_file_options.result");
+_Static_assert(sizeof(struct du_folder_options)==44,"G16B du_folder_options size");
+_Static_assert(__builtin_offsetof(struct du_folder_options,title)==0,"G16B du_folder_options.title");
+_Static_assert(__builtin_offsetof(struct du_folder_options,prompt)==4,"G16B du_folder_options.prompt");
+_Static_assert(__builtin_offsetof(struct du_folder_options,root)==8,"G16B du_folder_options.root");
+_Static_assert(__builtin_offsetof(struct du_folder_options,initial)==12,"G16B du_folder_options.initial");
+_Static_assert(__builtin_offsetof(struct du_folder_options,flags)==16,"G16B du_folder_options.flags");
+_Static_assert(__builtin_offsetof(struct du_folder_options,lister)==20,"G16B du_folder_options.lister");
+_Static_assert(__builtin_offsetof(struct du_folder_options,lister_ctx)==24,"G16B du_folder_options.lister_ctx");
+_Static_assert(__builtin_offsetof(struct du_folder_options,make_dir)==28,"G16B du_folder_options.make_dir");
+_Static_assert(__builtin_offsetof(struct du_folder_options,make_dir_ctx)==32,"G16B du_folder_options.make_dir_ctx");
+_Static_assert(__builtin_offsetof(struct du_folder_options,rename_dir)==36,"G16B du_folder_options.rename_dir");
+_Static_assert(__builtin_offsetof(struct du_folder_options,rename_dir_ctx)==40,"G16B du_folder_options.rename_dir_ctx");
+_Static_assert(sizeof(du_rename_fn)==4,"G16B folder rename callback");
+#endif
+#if defined(__i386__)
+/* Extent/offsets of the integrated toolkit; the older oracle was stale. */
+_Static_assert(sizeof(struct du_window)==5372,"G11B toolkit window extent");
+_Static_assert(__builtin_offsetof(struct du_window,power_event)==5360,"G11B toolkit power callback");
+_Static_assert(__builtin_offsetof(struct du_window,power_serial)==5364,"G11B toolkit power serial");
+_Static_assert(__builtin_offsetof(struct du_window,power_reply_pending)==5368,"G11B toolkit power reply");
 #endif
 _Static_assert(DESK_POWER_EVENT == 87, "G11B desktop power event");
 _Static_assert(DESK_POWER_REPLY == 88, "G11B desktop power reply");
@@ -183,7 +223,9 @@ _Static_assert(__builtin_offsetof(struct setup_erased_partition,label)==20,"eras
 
 _Static_assert(CP_MULTIMEDIA==15 && CP_USERS==16 && CP_PASSWORDS==17 && CP_REGIONAL==18,
                "integration Control Panel page IDs");
-_Static_assert(CP_INTERNET==19 && CP_PAGES==21,"G26 appended Internet page");
+_Static_assert(CP_INTERNET==19,"G26 appended Internet page");
+_Static_assert(CP_ADDHW==20 && CP_ACCESS==21 && CP_TASKBAR==22 && CP_PAGES==23,
+               "G30 Add New Hardware, G25 Accessibility and G20 Taskbar pages appended after Internet");
 
 _Static_assert(DESK_INPUT_SETTINGS==83 && DESK_INPUT_STATE==84 && DESK_INPUT_VALUES==11,"G12 input protocol");
 _Static_assert(DESK_INPUT_LAYOUT==1 && DESK_INPUT_DELAY==2 && DESK_INPUT_SPEED==3 &&
@@ -368,9 +410,13 @@ static const struct expectation expectations[] = {
     {"offsetof.ciuki_floppy_image.flags", __builtin_offsetof(struct ciuki_floppy_image, flags), 24u},
     {"offsetof.ciuki_floppy_image.reserved", __builtin_offsetof(struct ciuki_floppy_image, reserved), 28u},
     {"constant.MEDIA_FORMAT", MEDIA_FORMAT, 0x4d1bu},
-    {"constant.MEDIA_DEFRAG_ANALYZE", MEDIA_DEFRAG_ANALYZE, 0x4d1cu},
-    {"constant.MEDIA_DEFRAG_STEP", MEDIA_DEFRAG_STEP, 0x4d1du},
+    {"constant.MEDIA_DEFRAG_ANALYZE", MEDIA_DEFRAG_ANALYZE, 0x4d20u},
+    {"constant.MEDIA_DEFRAG_STEP", MEDIA_DEFRAG_STEP, 0x4d21u},
     {"constant.CIUKI_DEFRAG_CHECK", CIUKI_DEFRAG_CHECK, 1u},
+    {"constant.CIUKI_DEFRAG_STARTUP", CIUKI_DEFRAG_STARTUP, 2u},
+    {"constant.CIUKI_CONVERT_NEXT_BOOT", CIUKI_CONVERT_NEXT_BOOT, 1u},
+    {"offsetof.ciuki_media_defrag.placement", __builtin_offsetof(struct ciuki_media_defrag, placement), 56u},
+    {"offsetof.ciuki_media_defrag.profiled", __builtin_offsetof(struct ciuki_media_defrag, profiled), 60u},
     {"constant.CIUKI_DEFRAG_CELLS", CIUKI_DEFRAG_CELLS, 128u},
     {"constant.CIUKI_DEFRAG_FREE", CIUKI_DEFRAG_FREE, 1u},
     {"constant.CIUKI_DEFRAG_USED", CIUKI_DEFRAG_USED, 2u},
@@ -379,7 +425,7 @@ static const struct expectation expectations[] = {
     {"constant.CIUKI_DEFRAG_BAD", CIUKI_DEFRAG_BAD, 16u},
     {"constant.MEDIA_GET_CONVERT", MEDIA_GET_CONVERT, 0x4d1eu},
     {"constant.MEDIA_CONVERT", MEDIA_CONVERT, 0x4d1fu},
-    {"sizeof.ciuki_media_defrag", sizeof(struct ciuki_media_defrag), 184u},
+    {"sizeof.ciuki_media_defrag", sizeof(struct ciuki_media_defrag), 192u},
 #if UINTPTR_MAX == UINT32_MAX
     {"alignof.ciuki_media_defrag", _Alignof(struct ciuki_media_defrag), 4u},
 #else
@@ -398,7 +444,7 @@ static const struct expectation expectations[] = {
     {"offsetof.ciuki_media_defrag.free_clusters", __builtin_offsetof(struct ciuki_media_defrag, free_clusters), 44u},
     {"offsetof.ciuki_media_defrag.moved", __builtin_offsetof(struct ciuki_media_defrag, moved), 48u},
     {"offsetof.ciuki_media_defrag.finished", __builtin_offsetof(struct ciuki_media_defrag, finished), 52u},
-    {"offsetof.ciuki_media_defrag.map", __builtin_offsetof(struct ciuki_media_defrag, map), 56u},
+    {"offsetof.ciuki_media_defrag.map", __builtin_offsetof(struct ciuki_media_defrag, map), 64u},
     {"sizeof.ciuki_media_convert", sizeof(struct ciuki_media_convert), 32u},
     {"alignof.ciuki_media_convert", _Alignof(struct ciuki_media_convert), 4u},
     {"offsetof.ciuki_media_convert.version", __builtin_offsetof(struct ciuki_media_convert, version), 0u},
@@ -1160,7 +1206,7 @@ static const struct expectation expectations[] = {
     {"constant.SOCK_STREAM", SOCK_STREAM, 1u},
     {"constant.SOCK_DGRAM", SOCK_DGRAM, 2u},
     {"constant.SOCK_RAW", SOCK_RAW, 3u},
-    {"constant.CIUKI_SYS_NET_INFO", CIUKI_SYS_NET_INFO, 99u},
+    {"constant.CIUKI_SYS_NET_INFO", CIUKI_SYS_NET_INFO, 100u},
     {"constant.CIUKI_NET_INFO_CONFIG", CIUKI_NET_INFO_CONFIG, 0u},
     {"constant.CIUKI_NET_INFO_SOCKETS", CIUKI_NET_INFO_SOCKETS, 1u},
     {"constant.CIUKI_NET_SOCKET_CLOSED", CIUKI_NET_SOCKET_CLOSED, 0u},
@@ -2305,6 +2351,16 @@ static const struct expectation expectations[] = {
     {"offsetof.ciuki_audio_status.max_irq_us", __builtin_offsetof(struct ciuki_audio_status, max_irq_us), 100u},
     {"offsetof.ciuki_audio_status.transport_frames", __builtin_offsetof(struct ciuki_audio_status, transport_frames), 104u},
     {"offsetof.ciuki_audio_status.latency_frames", __builtin_offsetof(struct ciuki_audio_status, latency_frames), 108u},
+    {"constant.AUDIO_MIDI_WRITE", AUDIO_MIDI_WRITE, 16656u},
+    {"constant.CIUKI_MIDI_BYTES", CIUKI_MIDI_BYTES, 128u},
+    {"sizeof.ciuki_midi_data", sizeof(struct ciuki_midi_data), 152u},
+    {"alignof.ciuki_midi_data", _Alignof(struct ciuki_midi_data), 4u},
+    {"offsetof.ciuki_midi_data.version", __builtin_offsetof(struct ciuki_midi_data, version), 0u},
+    {"offsetof.ciuki_midi_data.size", __builtin_offsetof(struct ciuki_midi_data, size), 4u},
+    {"offsetof.ciuki_midi_data.bytes", __builtin_offsetof(struct ciuki_midi_data, bytes), 8u},
+    {"offsetof.ciuki_midi_data.accepted", __builtin_offsetof(struct ciuki_midi_data, accepted), 12u},
+    {"offsetof.ciuki_midi_data.data", __builtin_offsetof(struct ciuki_midi_data, data), 16u},
+    {"offsetof.ciuki_midi_data.reserved", __builtin_offsetof(struct ciuki_midi_data, reserved), 144u},
     {"constant.AUDIO_CAPTURE_CAPS", AUDIO_CAPTURE_CAPS, 16649u},
     {"constant.AUDIO_CAPTURE_START", AUDIO_CAPTURE_START, 16650u},
     {"constant.AUDIO_CAPTURE_READ", AUDIO_CAPTURE_READ, 16651u},

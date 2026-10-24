@@ -24,6 +24,9 @@ struct block_cache { int unused; };
 void cache_reclaim_step(struct block_cache *c, bool speculative, struct reclaim_result *r)
 { (void)c; (void)speculative; *r = (struct reclaim_result){ .scanned = 1, .done = true }; }
 #include "../../src/kernel/core/reclaim.c"
+#include <ciuki/system_settings.h>
+static struct system_perf g30_performance = {0,3,1,0,16,1024};
+const struct system_perf *system_performance(void) { return &g30_performance; }
 #define PAGER_HOST_MODEL 1
 #include "../../src/kernel/core/pager.c"
 
@@ -738,12 +741,28 @@ static void bounds(void)
            SCAN_WORDS, attempts, (unsigned long long)(worst / 1000), PAGER_RUNS, PAGER_BATCH);
 }
 
+static void manual_limits(void)
+{
+    g30_performance.vm = 1; g30_performance.min_mb = 32; g30_performance.max_mb = 64;
+    start(128, 4096, 2048, false);
+    CHECK(pager.extents == 2 && disk.extents == 2);
+    pager.want = 10;
+    for (unsigned i = 0; i < 10; i++) { g_ticks += 1000; manager(); }
+    CHECK(pager.extents == 4 && disk.extents == 4);
+    pager.want = 0; g_ticks += PAGER_SHRINK_IDLE_MS + 1;
+    for (unsigned i = 0; i < 10; i++) { g_ticks += 1000; manager(); }
+    CHECK(pager.extents == 2 && disk.extents == 2);
+    disk.extents = 6; /* a previous boot used a larger maximum */
+    start(128, 4096, 2048, true); CHECK(pager.extents == 4 && disk.extents == 4);
+    g30_performance = system_perf_default();
+    puts("PASS G30B manual backing file minimum/maximum and shrink floor on production pager");
+}
 int main(void)
 {
     setvbuf(stdout, 0, _IOLBF, 0);
     ram = calloc(1, 512u << 20); CHECK(ram);
     held = calloc(512u * 256u, sizeof(*held)); CHECK(held);
-    boot_order(); profile(128); profile(256); profile(512);
+    manual_limits(); boot_order(); profile(128); profile(256); profile(512);
     exhaustion(); io_failures(); prewrite_demand(); races(); order_control(); reboot(); bounds();
     keep_maxima();
     CHECK(worst_out_us < 1000 && worst_in_us < 1000 && worst_slice_us < 1000);

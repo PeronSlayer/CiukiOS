@@ -129,6 +129,7 @@ struct files_app {
 /* G8 shell actions can be requested by desktop icons without duplicating UI. */
 
 void files_shell_action(struct files_app *, int action, const char *path);
+void files_open_document(struct files_app *,const char *);
 
 void files_properties_path(struct files_app *, const char *);
 /* G29: asynchronous disk dialogs; drive is zero-based (C: = 2). */

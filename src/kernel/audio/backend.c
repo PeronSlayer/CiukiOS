@@ -1,3 +1,4 @@
+#include <ciuki/system_settings.h>
 /* Backend selection and cyclic DMA ownership.
  * References: docs/design/f4-audio-second-set.md. SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
@@ -469,7 +470,7 @@ static int backend_dma_init(struct audio_dma_device *d)
     if (!e) e = audio_dma_prove(d);
     if (!e && d->kind == AUDIO_CMIPCI) e=cmipci_capture_prove(d);
     if (!e && d->kind == AUDIO_CMIPCI)
-        klog("[audio] cmipci model=%u playback=stereo48k capture=private legacy=disabled",d->cmi.model);
+        klog("[audio] cmipci model=%u playback=stereo48k capture=copied legacy=disabled",d->cmi.model);
     if (!e) {
         d->state.ready = true;
         if (d->kind == AUDIO_SB16) { irq_set_handler(5, backend_isa_irq); d->irq_attached = true; pic_unmask(5); }
@@ -518,9 +519,11 @@ int audio_backend_init(void)
         else if (trident_match(p, &d->kind)) { d->ops = &trident_ops; d->name = "trident"; d->bytes = 256; }
         else if (ali5451_match(p, &d->kind)) { d->ops = &ali5451_ops; d->name = "ali5451"; d->bytes = 256; }
         else continue;
+        if (!system_admit(system_pci_id(p->bus, p->dev, p->fn), d->name)) { d->ops = 0; continue; }
         d->pci = *p; d->command = p->command; d->state.irq = p->irq_line;
         audio.backend_name=d->name; audio.backend_pci=d->pci; break;
     }
+    if (!d->ops && !system_admit(0x50001, "sb16")) return -ENODEV;
     if (!d->ops) { d->kind = AUDIO_SB16; d->ops = &sb16_ops; d->name = "sb16"; d->base = 0x220; d->bytes = 16; d->state.irq = 5; }
     else if (d->kind == AUDIO_YMFPCI) {
         audio.backend_name = d->name; audio.backend_pci = d->pci;

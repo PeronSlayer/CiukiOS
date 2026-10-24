@@ -15,6 +15,9 @@
 #include <ciuki/w32_diagnostics.h>
 #include "occlusion_test.c"
 #include "../../../apps/dosbox/window.h"
+#include <errno.h>
+/* libreg/hardware.c (linked for autoplay_registry.c) asks the kernel for the device inventory: none here. */
+int ciuki_devices(struct ciuki_devices_info *out) { (void)out; errno=ENODEV; return -1; }
 #define fake_reset disk_ui_vfs_reset
 #include "disk_ui_scenario.h"
 #undef fake_reset
@@ -307,18 +310,23 @@ static int fake_links(struct desktop *dd, struct desk_link_entry *out, unsigned 
  * taskbar hover and cancel are what this harness compares. */
 static const char drag_object[]="X\nF/Documents/report.txt\nD/Documents/Games\n";
 static unsigned drag_offset;
+static int g19_drop_fixture;
 static int vfs_list(void *ctx, const char *path, unsigned flags, fm_emit emit, void *arg)
 {
     (void)ctx; (void)flags;
     struct fm_meta dir={.type=FM_DIR};
     if (!strcmp(path,"/")) return emit("Documents",&dir,arg);
     if (!strcmp(path,"/Documents")) return emit("Desktop",&dir,arg);
+    if (g19_drop_fixture && !strcmp(path,DESK_FOLDER)) {
+        struct fm_meta app={.type=FM_FILE,.exec=1}; return emit("launcher.exe",&app,arg);
+    }
     return 0;
 }
 static int vfs_stat(void *ctx, const char *path, struct fm_meta *meta)
 {
     (void)ctx;
     if (!strcmp(path,"/") || !strcmp(path,"/Documents") || !strcmp(path,"/Documents/Desktop")) { *meta=(struct fm_meta){.type=FM_DIR}; return 0; }
+    if (g19_drop_fixture && !strcmp(path,DESK_FOLDER "/launcher.exe")) { *meta=(struct fm_meta){.type=FM_FILE,.exec=1}; return 0; }
     return -ENOENT;
 }
 static int vfs_refuse_path(void *ctx, const char *path) { (void)ctx; (void)path; return -EROFS; }
@@ -429,10 +437,10 @@ static void wm_frame(const char *what)
     if (wm_mode==WM_CACHE && !d.damage.count && !d.move_damage.count && !d.present_damage.count)
         for (unsigned k=0;k<64;k++) { wm_clock+=40000000ull; if (!desk_accel_cache_step(&d,wm_clock)) break; }
 }
-static const char *const wm_programs[]={"files","ciuknote","control","netsurf","dosbox","calc","tasks","terminal","gfxdemo","printers","mixer","resmeter"};
+static const char *const wm_programs[]={"files","ciuknote","control","netsurf","dosbox","calc","tasks","terminal","gfxdemo","printers","mixer","resmeter","viewer","serial"};
 static void wm_begin(unsigned m, int shell)
 {
-    wm_mode=m; wm_shell=shell;
+    wm_mode=m; wm_shell=shell; g19_drop_fixture=0;
     mode=m==WM_SOFTWARE ? MODE_SOFTWARE : m==WM_ENGINE || m==WM_CACHE ? MODE_ENGINE : m==WM_BATCH32 ? MODE_BATCH32 : MODE_BATCH16;
     fake_reset(); struct desk_ops ops=fake_ops; ops.present=m>=WM_BATCH32 ? packed_upload : upload;
     desk_init(&d,&ops,640,480); d.display=7; d.mouse_x=600; d.mouse_y=12;
@@ -971,8 +979,11 @@ static void row_resources(unsigned m)
     desk_shell_resources_update(&d,&r); step("Resource Meter icon appears: the tray widens");
     r.system=25; r.user=25; r.level=1; desk_shell_resources_update(&d,&r); step("level low: the bar changes");
     struct desk_box i=desk_shell_tray_icon_box(&d,SH_TRAY_RESOURCES); assert(i.w==SH_TRAY_ICON_SIZE);
+    const struct desk_theme *base_theme=desk_theme;
     pointer_to(i.x+4,i.y+4); step("hover the icon");
-    turn(700000000ull); assert(d.sh.tooltip==7); step("tooltip with the three values");
+    turn(700000000ull); assert(d.sh.tooltip==7);
+    assert(desk_theme==base_theme); /* tooltip measurement must restore its temporary role */
+    step("tooltip with the three values");
     r.system=10; r.level=2; desk_shell_resources_update(&d,&r); step("critical while the tooltip shows");
     click(i.x+4,i.y+4,CIUKI_BUTTON_LEFT); step("click raises the Resource Meter window");
     r.visible=0; desk_shell_resources_update(&d,&r); assert(!d.sh.tooltip || d.sh.tooltip!=7); step("Resource Meter closed: the icon is removed");
@@ -1375,6 +1386,7 @@ static void row_disk_terminal(unsigned m)
         disk_ui_present(u,states[k],a);
     }
     free(u); free(pixels); app_close(a); step("disk terminal closes"); wm_end();
+}
 static void row_appearance(unsigned m)
 {
     row_name="display appearance"; wm_begin(m,1);
@@ -1585,7 +1597,16 @@ static void row_g8_menus(unsigned m)
     row_name="G8 file operations"; wm_begin(m,1);
     desk_menu_open(&d,SH_MENU_DESKTOP,600,450); step("Undo and Paste Shortcut desktop menu");
     desk_menu_close(&d); step("desktop menu dismissed");
-    desk_menu_open(&d,SH_MENU_NEW,580,430); step("New Bitmap, Shortcut and registered document menu");
+    desk_menu_open(&d,SH_MENU_NEW,580,430);
+    unsigned marked=0;
+    for (int k=0;k<d.sh.menus[0].count;k++) {
+        const struct sh_item *it=&d.sh.menus[0].items[k];
+        if (it->action==SH_ACT_FILE && (it->arg==DF_BITMAP || it->arg==DF_SHORTCUT)) {
+            assert(it->mark==1); marked++;
+        }
+    }
+    assert(marked==2); /* G8/G19 labels must retain their access-key underlines. */
+    step("New Bitmap, Shortcut and registered document menu");
     desk_menu_close(&d); step("New menu dismissed");
     d.sh.dnd.allowed=FM_EFFECTS; d.sh.dnd.effect=FM_EFFECT_LINK;
     desk_menu_open(&d,SH_MENU_DRAG,600,430);
@@ -2195,6 +2216,353 @@ static void row_review_content(unsigned m)
     }
     wm_end();
 }
+static void row_icon_sort(unsigned m)
+{
+    row_name="G19 icon sorting"; wm_begin(m,1);
+    d.sh.cfg.icon_sort=3; d.sh.icon_count=0; desk_shell_apply(&d);
+    assert(d.sh.cfg.icon_sort==3); step("sort by Date selected and icons rebuilt");
+    wm_end();
+}
+static void row_icon_auto_arrange(unsigned m)
+{
+    row_name="G19 Auto Arrange"; wm_begin(m,1);
+    assert(cfg_icon_move(&d.sh.cfg,"/Computer",190,100));
+    d.sh.icon_count=0; desk_shell_apply(&d); step("manually positioned system icon");
+    d.sh.cfg.icon_auto_arrange=1; cfg_icons_arrange(&d.sh.cfg); d.sh.icon_count=0; desk_shell_apply(&d);
+    assert(d.sh.cfg.icon_auto_arrange); step("Auto Arrange returns icons to the grid");
+    wm_end();
+}
+static void row_icon_keyboard(unsigned m)
+{
+    row_name="G19 desktop keyboard"; wm_begin(m,1);
+    tap(DU_KEY_HOME); assert(d.sh.icon_selected==0); step("Home selects the first icon");
+    tap(DU_KEY_END); assert(d.sh.icon_selected==d.sh.icon_count-1); step("End selects the last icon");
+    tap(0x32); assert(d.sh.icon_typeahead_length==1 && d.sh.icon_typeahead[0]=='m');
+    assert(d.sh.icon_selected==0); step("type-ahead selects My Computer");
+    wm_end();
+}
+static void row_system_icon_rename(unsigned m)
+{
+    row_name="G19 system icon rename"; wm_begin(m,1);
+    tap(DU_KEY_HOME); tap(DU_KEY_F2); assert(d.sh.icon_editing==0);
+    snprintf(d.sh.icon_edit,sizeof(d.sh.icon_edit),"Renamed Computer");
+    d.sh.icon_edit_cursor=(unsigned)strlen(d.sh.icon_edit); tap(DU_KEY_ENTER);
+    assert(!strcmp(d.sh.icons[0].label,"Renamed Computer")); step("label edit is published");
+    wm_end();
+}
+static void row_wallpaper_change(unsigned m)
+{
+    row_name="G19 wallpaper change"; wm_begin(m,1);
+    snprintf(d.sh.cfg.wallpaper,sizeof(d.sh.cfg.wallpaper),"builtin:%s",desk_builtin_wallpapers[1].id);
+    d.sh.want_wallpaper=1; assert(!desk_shell_wallpaper_update(&d)); step("wallpaper settings publish a new background");
+    wm_end();
+}
+static void row_shortcut_wizard(unsigned m)
+{
+    row_name="G19 Create Shortcut"; wm_begin(m,1);
+    desk_folder_shortcut_begin(&d); assert(d.sh.folder->wizard==1); step("wizard target page");
+    strcpy(d.sh.folder->shortcut_target,"/missing-g19-target"); desk_folder_shortcut_action(&d,3);
+    assert(d.sh.folder->wizard==1 && d.sh.folder->wizard_error[0]); step("missing target stays on the target page with an error");
+    desk_folder_shortcut_action(&d,1); assert(d.sh.folder->wizard==3); step("Browse target picker");
+    desk_folder_shortcut_action(&d,4); step("Browse Cancel returns to target");
+    strcpy(d.sh.folder->shortcut_target,"/Documents"); desk_folder_shortcut_action(&d,3);
+    assert(d.sh.folder->wizard==2); step("wizard name page");
+    desk_folder_shortcut_action(&d,2); step("Back keeps target");
+    desk_folder_shortcut_close(&d); step("Cancel exposes desktop"); wm_end();
+}
+static void row_icon_metrics(unsigned m)
+{
+    row_name="G19 icon appearance"; wm_begin(m,1);
+    d.sh.cfg.icon_spacing_x=124; d.sh.cfg.icon_spacing_y=120; d.sh.cfg.icon_font=DESK_FONT_MONO;
+    desk_shell_apply(&d); step("Appearance Apply changes spacing and caption font");
+    d.sh.cfg.icon_spacing_x=60; d.sh.cfg.icon_spacing_y=60; d.sh.cfg.icon_font=DESK_FONT_LARGE;
+    desk_shell_apply(&d); step("minimum spacing clips large captions within each cell"); wm_end();
+}
+static void row_icon_visibility(unsigned m)
+{
+    row_name="G19 Show Desktop Icons"; wm_begin(m,1);
+    d.sh.cfg.desktop_icons=0; desk_shell_apply(&d); step("hide desktop icons");
+    d.sh.cfg.desktop_icons=1; desk_shell_apply(&d); step("show saved icons"); wm_end();
+}
+static void row_system_menus(unsigned m)
+{
+    row_name="G19 system icon menus"; wm_begin(m,1);
+    int system[]={0,1,2,d.sh.folder ? (int)d.sh.folder->model.count+3+(!!d.pictures_exists) : 3};
+    for (unsigned k=0;k<4;k++) {
+        d.sh.menu_owner=system[k]; desk_menu_open(&d,SH_MENU_ICON,300,160); step("system context menu");
+        tap(DU_KEY_ESC); step("context menu dismissed");
+    }
+    wm_end();
+}
+static void row_desktop_refresh(unsigned m)
+{
+    row_name="G19 Refresh"; wm_begin(m,1);
+    desk_menu_open(&d,SH_MENU_DESKTOP,300,160); step("desktop context menu");
+    tap(0x21); /* Refresh access key F */
+    step("Refresh rescans and repaints without discarding layout settings"); wm_end();
+}
+static void row_resolution_layout(unsigned m)
+{
+    row_name="G19 resolution positions"; wm_begin(m,1);
+    assert(cfg_icon_move_at(&d.sh.cfg,"/Computer",800,600,270,140));
+    assert(cfg_icon_move_at(&d.sh.cfg,"/Computer",d.width,d.height,170,90));
+    desk_shell_apply(&d); step("current resolution reads its own position");
+    assert(d.sh.icons[0].box.x==170);
+    assert(cfg_icons_arrange_at(&d.sh.cfg,d.width,d.height)); desk_shell_apply(&d); step("Arrange clears only current resolution");
+    int x,y; assert(cfg_icon_position_at(&d.sh.cfg,"/Computer",800,600,&x,&y) && x==270 && y==140);
+    wm_end();
+}
+static int g19_record_launch(struct desktop *dd, const struct desk_launch_record *record)
+{ (void)dd; assert(strstr(record->arguments,"report.txt")); return 0; }
+static void row_icon_drop_targets(unsigned m)
+{
+    row_name="G19 icon drop targets"; wm_begin(m,1);
+    g19_drop_fixture=1; d.sh.folder->command=DF_REFRESH; desk_folder_service(&d); d.v3_launch=g19_record_launch;
+    step("executable desktop icon");
+    struct fake_app *files=app_open("files",220,160,300,220);
+    assert(files_drag_begin(files,1)); int x,y; icon_point(3,&x,&y); pointer_to(x,y);
+    assert(d.sh.dnd.kind==SH_DROP_PROGRAM); step("program icon highlights as an open target");
+    press(CIUKI_BUTTON_LEFT,0); step("drop opens program with file arguments, leaving sources intact");
+    assert(files_drag_begin(files,2)); pointer_to(200,180); key(0x1d,1); key(0x2a,1);
+    assert(d.sh.dnd.effect==FM_EFFECT_LINK); step("Ctrl Shift creates a shortcut cursor");
+    press(CIUKI_BUTTON_RIGHT,0); step("right drag menu enables Create Shortcut(s) Here");
+    tap(DU_KEY_ESC); key(0x2a,0); key(0x1d,0); step("cancel link drop"); wm_end();
+}
+static void row_wallpaper_pattern(unsigned m)
+{
+    row_name="G19 wallpaper patterns"; wm_begin(m,1);
+    strcpy(d.sh.cfg.wallpaper,"none"); d.sh.cfg.wallpaper_pattern=3;
+    assert(!desk_shell_wallpaper_update(&d) || d.sh.wall_valid); /* invalidate below when replacing a retained frame */
+    d.sh.wall_valid=0; assert(!desk_shell_wallpaper_update(&d)); step("Pattern Apply paints desktop colour and mask");
+    d.sh.cfg.wallpaper_pattern=0; d.sh.wall_valid=0;
+    assert(!desk_shell_wallpaper_update(&d)); step("None restores solid desktop background"); wm_end();
+}
+static void row_recovery(unsigned m)
+{
+    /* G14: Safe mode labels the background's four corners; a Command prompt
+     * only start shows no desktop icons until the Terminal's WIN. Both are
+     * background content: windows over them and their removal repaint it. */
+    row_name="safe mode and command prompt"; wm_begin(m,1);
+    struct desk_box all={0,0,(int)d.width,(int)d.height};
+    d.safe_mode=1; d.sh.background_valid=0; desk_damage_add(&d.damage,all,d.width,d.height);
+    step("Safe mode labels in the four corners");
+    struct fake_app *a=app_open("files",300,200,0,DESK_BAR); step("a window over a corner label");
+    desk_move(&d,a->slot,200,200); step("the corner label exposed again");
+    d.terminal_shell=1; d.sh.background_valid=0; desk_damage_add(&d.damage,all,d.width,d.height);
+    step("command prompt only: no desktop icons");
+    assert(!desk_recovery_win(&d) && !d.terminal_shell); step("WIN: the icons return");
+    wm_end();
+}
+/* G29D appended events use the real maintenance controller and worker. */
+static void row_startup_disk_tools(unsigned m)
+{
+    row_name="startup disk tools"; wm_begin(m,1);
+    struct fake_app *a=app_open("files",560,400,0,DESK_BAR);
+    maintenance_ui_scenario(disk_ui_present,a);
+    app_close(a); step("startup disk tools close"); wm_end();
+}
+static void g30b_register(const char *name)
+{
+    snprintf(d.programs[d.program_count].name, sizeof(d.programs[0].name), "%s", name);
+    snprintf(d.programs[d.program_count].path, sizeof(d.programs[0].path), "/Programs/%s", name); d.program_count++;
+}
+static void row_g30b_performance(unsigned m)
+{
+    row_name="G30B Performance settings"; wm_begin(m,1);
+    struct fake_app *panel=app_open("control",440,330,40,60);
+    struct fake_app *cover=app_open("ciuknote",200,140,320,130); step("Performance partly covered");
+    app_paint(panel,20,45,390,250,0x113377); step("File System property sheet opens");
+    app_paint(panel,40,120,330,70,0x5577aa); step("role and read-ahead edited");
+    app_paint(panel,20,45,390,250,0x337755); step("Graphics Full/None and Virtual Memory settings");
+    app_paint(panel,30,245,350,40,0xaa3344); step("invalid sizes or failed save reported");
+    app_paint(panel,20,45,390,250,0x335588); step("Cancel or successful save closes sheet");
+    app_close(cover); step("property result exposed"); wm_end();
+}
+static void row_g30b_schedule(unsigned m)
+{
+    row_name="G30B Scheduler conditions and result"; wm_begin(m,1); g30b_register("schedtask");
+    struct fake_app *tasks=app_open("schedtask",440,330,80,60);
+    struct fake_app *cover=app_open("ciuknote",200,140,320,130); step("Scheduled Tasks partly covered");
+    app_paint(tasks,20,45,390,250,0x447799); step("Settings idle, deadline and power controls");
+    app_paint(tasks,30,130,350,100,0x889955); step("conditions edited and validated");
+    app_paint(tasks,20,45,390,250,0x335577); step("Apply or Cancel returns to task list");
+    app_paint(tasks,180,80,200,22,0x99aa22); step("running state from service");
+    app_paint(tasks,180,80,200,22,0x228855); step("completion exit code or start error");
+    app_close(cover); step("updated result exposed"); wm_end();
+}
+static void row_g30b_network(unsigned m)
+{
+    row_name="G30B System Monitor network"; wm_begin(m,1); g30b_register("sysmon");
+    struct fake_app *monitor=app_open("sysmon",440,330,80,60);
+    struct fake_app *cover=app_open("ciuknote",200,140,320,130); step("System Monitor partly covered");
+    app_paint(monitor,20,60,390,220,0x229955); step("Add adapter error counter");
+    app_paint(monitor,20,60,390,180,0x337766); step("receive/transmit/error sample and chart");
+    app_paint(monitor,20,245,390,35,0x779944); step("numeric and legend values");
+    app_paint(monitor,20,60,390,220,0x334455); step("adapter reset or unavailable source");
+    app_close(cover); step("counter changes exposed"); wm_end();
+}
+static void row_g26c_print(unsigned m)
+{
+    row_name="G26C paginated Print and Page Setup";wm_begin(m,1);
+    struct fake_app *a=app_open("netsurf",360,280,90,60);
+    app_paint(a,20,40,310,205,0x723416);step("browser Print dialog opens over the full document");
+    app_paint(a,40,100,260,22,0x819273);step("printer copies range and print-to-file edited");
+    app_paint(a,0,0,360,280,0x357111);step("Cancel exposes the document");
+    app_paint(a,20,40,310,205,0x635812);step("Page Setup opens");
+    app_paint(a,30,80,280,90,0x871234);step("paper landscape and margins edited");
+    app_paint(a,0,0,360,280,0x357111);step("Page Setup accepted");
+    app_paint(a,40,90,260,80,0x123678);step("queued or failed print status");wm_end();
+}
+static void row_g26c_download(unsigned m)
+{
+    row_name="G26C download Open and Open With";wm_begin(m,1);
+    int browser=wm_v3_window(DESK_V3_OVERLAPPED,-1,40,60,320,220);assert(browser>=0);
+    struct desk_client *c=&d.clients[browser];struct ciuki_message request;
+    const char *arg="--file-action=348:/Documents/a file.txt";unsigned n=strlen(arg);
+    v3msg(&request,DESK_V3_LAUNCH,13+n,c->v3_id,c->v3_generation);
+    desk_put32(request.data+16,5);memcpy(request.data+20,"files",5);
+    desk_put32(request.data+25,n);memcpy(request.data+29,arg,n);
+    strcpy(d.clients[v3_root].application,"other");assert(desk_v3_receive(&d,v3_root,&request)==-EPERM);
+    step("nonbrowser file launch refused");
+    strcpy(d.clients[v3_root].application,"netsurf");assert(!desk_v3_receive(&d,v3_root,&request));
+    struct fake_app *files=last_app;assert(files);app_spawned(files);app_create_window(files);step("Files opens for saved download");
+    app_paint(files,0,0,files->w,files->h,0x572903);step("Open With program and Always use chooser");
+    app_close(files);step("Open With closes exposing browser");wm_end();
+}
+static void row_g26c_programs(unsigned m)
+{
+    row_name="G26C Internet Programs actions";wm_begin(m,1);
+    struct fake_app *a=app_open("control",360,280,110,50);
+    app_paint(a,10,30,340,220,0x485793);step("Programs default and File Types actions enabled");
+    app_paint(a,10,244,340,22,0x673211);step("default browser success or error status");
+    struct fake_app *files=app_open("files",360,280,190,110);step("shared File Types opens");
+    app_paint(files,20,40,300,200,0x196547);step("shared browser association edited");
+    app_close(files);step("File Types closes");wm_end();
+}
+static void row_g26c_launch_error(unsigned m)
+{
+    row_name="G26C asynchronous new-window error";wm_begin(m,1);
+    struct fake_app *a=app_open("netsurf",360,240,90,70);
+    app_paint(a,0,218,360,22,0x351278);step("new-window request queued status");
+    app_paint(a,0,218,360,22,0x832170);step("desktop late launch refusal status without opener navigation");
+    wm_end();
+}
+/* G16B: append after all existing scenarios; actual toolkit pixels travel
+ * through the same client DAMAGE route as an application window. */
+static int common_lister(void *ctx,const char *path,struct du_file_entry *out,unsigned cap,unsigned *count)
+{
+    (void)ctx; (void)path; *count=0;
+    const char *names[]={"Folder","alpha.txt","beta.txt","gamma.txt"};
+    for (unsigned i=0;i<4 && i<cap;i++) {
+        memset(&out[i],0,sizeof(out[i])); snprintf(out[i].name,sizeof(out[i].name),"%s",names[i]);
+        out[i].directory=i==0; out[i].size=1234; (*count)++;
+    }
+    return 0;
+}
+static int common_mkdir(void *ctx,const char *path) { (void)ctx; (void)path; return 0; }
+static int common_rename(void *ctx,const char *from,const char *to) { (void)ctx; (void)from; (void)to; return 0; }
+static struct du_widget *common_widget(struct du_ui *u,int id)
+{
+    for (unsigned i=0;i<u->dialog.count;i++) if (u->dialog.items[i].id==id) return &u->dialog.items[i];
+    assert(0); return NULL;
+}
+static void common_input(struct du_ui *u,unsigned type,unsigned code,int value,int value2)
+{
+    struct ciuki_input_event event={.type=type,.code=code,.value=value,.value2=value2,.monotonic_ns=wm_clock};
+    du_input(u,&event);
+}
+static void common_click(struct du_ui *u,struct du_rect r)
+{
+    common_input(u,CIUKI_INPUT_MOTION,0,r.x+r.w/2,r.y+r.h/2);
+    common_input(u,CIUKI_INPUT_BUTTON,1,1,0); common_input(u,CIUKI_INPUT_BUTTON,1,0,0);
+}
+static void common_key(struct du_ui *u,unsigned key)
+{ common_input(u,CIUKI_INPUT_KEY,key,1,0); common_input(u,CIUKI_INPUT_KEY,key,0,0); }
+static void row_common_files(unsigned m)
+{
+    row_name="G16B file selection, Read Only and large icons"; wm_begin(m,1);
+    struct fake_app *a=app_open("files",560,440,20,40); static struct du_ui ui;
+    du_init(&ui,(uint32_t *)d.clients[a->slot].pixels,560,440);
+    static char files[1024]; struct du_file_result result={.files=files,.capacity=sizeof(files)};
+    struct du_file_options options={.flags=DU_FILE_ALLOW_MULTIPLE|DU_FILE_READONLY_BOX,.folder="/docs",.lister=common_lister,.result=&result};
+    assert(!du_file_open(&ui,1,&options)); wm_toolkit_damage(a,&ui); step("file dialog Read Only");
+    struct du_widget *list=common_widget(&ui,-3000);
+    common_click(&ui,du_list_label(list,1));
+    common_input(&ui,CIUKI_INPUT_KEY,DU_KEY_LCTRL,1,0); common_click(&ui,du_list_label(list,2)); common_input(&ui,CIUKI_INPUT_KEY,DU_KEY_LCTRL,0,0);
+    wm_toolkit_damage(a,&ui); step("multiple file selection");
+    common_click(&ui,common_widget(&ui,-9404)->box); wm_toolkit_damage(a,&ui); step("Read Only checked");
+    common_click(&ui,common_widget(&ui,-9403)->box); wm_toolkit_damage(a,&ui); step("large icon view");
+    common_key(&ui,DU_KEY_ESC); wm_toolkit_damage(a,&ui); step("file dialog removed"); wm_end();
+}
+static void row_common_script(unsigned m)
+{
+    row_name="G16B Font Script combo"; wm_begin(m,1);
+    struct fake_app *a=app_open("ciuknote",560,440,20,40); static struct du_ui ui;
+    du_init(&ui,(uint32_t *)d.clients[a->slot].pixels,560,440);
+    assert(!du_font_dialog(&ui,1,NULL,NULL,0,0,NULL,NULL)); wm_toolkit_damage(a,&ui); step("shared font dialog");
+    common_click(&ui,common_widget(&ui,-10490)->box); assert(ui.combo_open); wm_toolkit_damage(a,&ui); step("Script list open");
+    common_key(&ui,DU_KEY_ESC); wm_toolkit_damage(a,&ui); step("Script list closed");
+    common_key(&ui,DU_KEY_ESC); wm_toolkit_damage(a,&ui); step("Font cancelled"); wm_end();
+}
+static void row_common_folder_rename(unsigned m)
+{
+    row_name="G16B Browse for Folder inline rename"; wm_begin(m,1);
+    struct fake_app *a=app_open("files",560,440,20,40); static struct du_ui ui;
+    du_init(&ui,(uint32_t *)d.clients[a->slot].pixels,560,440);
+    struct du_folder_options options={.root="/docs",.initial="/docs/Folder",.lister=common_lister,.make_dir=common_mkdir,.rename_dir=common_rename};
+    assert(!du_folder_dialog(&ui,1,&options)); wm_toolkit_damage(a,&ui); step("folder dialog");
+    common_key(&ui,DU_KEY_F2); wm_toolkit_damage(a,&ui); step("inline rename editor");
+    common_key(&ui,0x1e); wm_toolkit_damage(a,&ui); step("inline rename typing");
+    common_key(&ui,DU_KEY_ESC); wm_toolkit_damage(a,&ui); step("inline rename cancelled");
+    common_click(&ui,common_widget(&ui,-10601)->box); wm_toolkit_damage(a,&ui); step("new folder inline editor");
+    common_key(&ui,DU_KEY_ENTER); wm_toolkit_damage(a,&ui); step("new folder name committed");
+    common_key(&ui,DU_KEY_ESC); wm_toolkit_damage(a,&ui); step("folder dialog removed"); wm_end();
+}
+
+static void row_g27b_statistics(unsigned m)
+{
+    row_name="G27B Statistics Box";wm_begin(m,1);
+    struct fake_app *a=app_open("calc",440,300,60,60);step("scientific calculator");
+    app_paint(a,40,30,320,230,0x224466);step("Sta opens Statistics Box with retained data");
+    app_paint(a,48,60,224,160,0x557799);step("select data and CD/CAD update rows");
+    struct fake_app *cover=app_open("files",200,170,160,120);step("cover statistics list");
+    app_paint(a,48,60,224,160,0x335577);step("statistics update while covered");
+    app_close(cover);step("expose statistics list");
+    app_paint(a,0,0,440,300,0x667788);step("RET/LOAD dismiss box and refresh display");
+    app_close(a);step("close calculator");wm_end();
+}
+static void row_g27b_viewer_save(unsigned m)
+{
+    row_name="G27B rotated picture Save As";wm_begin(m,1);
+    struct fake_app *a=app_open("viewer",400,300,60,60);step("rotated image");
+    app_paint(a,20,30,360,240,0x227744);step("Save As opens");
+    app_paint(a,60,80,280,100,0x446688);step("overwrite confirmation");
+    app_paint(a,0,0,400,300,0x884466);step("cancel or successful save exposes rotated image");
+    app_paint(a,80,80,240,100,0x778899);step("save failure message");
+    app_paint(a,0,0,400,300,0x884466);step("dismiss failure without losing image");
+    app_close(a);step("viewer closes");wm_end();
+}
+static void row_g27b_terminal(unsigned m)
+{
+    row_name="G27B terminal command output";wm_begin(m,1);
+    struct fake_app *a=app_open("terminal",400,300,60,60);step("terminal prompt");
+    app_paint(a,4,4,392,292,0x224466);step("FORMAT warning or refusal and summary");
+    struct fake_app *cover=app_open("files",200,170,160,120);step("cover command output");
+    app_paint(a,4,4,392,292,0x335577);step("RUN output or PING result while covered");
+    app_close(cover);step("expose output");
+    app_paint(a,4,4,392,292,0x446688);step("REG result and prompt");
+    app_close(a);step("terminal closes");wm_end();
+}
+static void row_g27b_serial(unsigned m)
+{
+    row_name="G27B serial protocol selection and result";wm_begin(m,1);
+    struct fake_app *a=app_open("serial",400,300,60,60);step("serial connection");
+    app_paint(a,4,4,340,270,0x224466);step("YMODEM ZMODEM Kermit menu");
+    app_paint(a,20,30,360,240,0x335577);step("send or receive file chooser");
+    app_paint(a,0,280,400,20,0x446688);step("transfer progress status");
+    app_paint(a,0,280,400,20,0x557799);step("complete cancel or error status");
+    app_close(a);step("serial closes");wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
     row_fullscreen, row_gfx, row_topbar, row_theme, row_strips, row_lease, row_selection, row_drag,
@@ -2208,7 +2576,15 @@ static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overl
     row_taskbar_customization, row_taskbar_dock, row_taskbar_autohide, row_taskbar_toolbars,
     row_start_custom, row_shell_custom_prompts, row_move_damaged, row_fault, row_saver,
     row_appearance, row_item_appearance, row_effects, row_dpi, row_desktop_themes,
-    row_background_browse, row_advanced_fonts, row_fixed_arrange, row_review_content};
+    row_background_browse, row_advanced_fonts, row_fixed_arrange, row_review_content,
+    row_icon_sort, row_icon_auto_arrange,
+    row_icon_keyboard, row_system_icon_rename, row_wallpaper_change, row_shortcut_wizard, row_icon_metrics,
+    row_icon_visibility, row_system_menus, row_desktop_refresh, row_resolution_layout,
+    row_icon_drop_targets, row_wallpaper_pattern, row_recovery, row_startup_disk_tools,
+    row_g30b_performance, row_g30b_schedule, row_g30b_network, row_g26c_print, row_g26c_download,
+    row_g26c_programs, row_g26c_launch_error, row_common_files, row_common_script,
+    row_common_folder_rename, row_g27b_statistics, row_g27b_viewer_save, row_g27b_terminal,
+    row_g27b_serial};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).

@@ -13,22 +13,32 @@ import unittest
 ROOT = Path(__file__).resolve().parents[3]
 
 class WindowModelTests(unittest.TestCase):
+    def test_g8_file_operation_dialogs_redraw(self):
+        from .test_file_operations import run_ui_replay
+        run_ui_replay(self)
+
     def test_every_row_equals_a_full_redraw(self):
-        sources = [*(ROOT / "apps/desktop" / n for n in ("protocol.c", "client.c", "input.c", "compositor.c", "theme.c", "shell.c", "access.c", "access_desktop.c", "autoplay.c", "autoplay_content.c", "autoplay_registry.c", "settings.c", "power_policy.c", "wallpaper.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c"))]
+        sources = [*(ROOT / "apps/desktop" / n for n in ("protocol.c", "client.c", "input.c", "compositor.c", "theme.c", "shell.c", "access.c", "access_desktop.c", "autoplay.c", "autoplay_content.c", "autoplay_registry.c", "settings.c", "power_policy.c", "wallpaper.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c", "../files/app.c", "recovery_view.c"))]   # G29 Files dialogs, G14 recovery window
         sources += [*(ROOT / "apps/libdeskui" / n for n in ("draw.c", "widgets.c", "list.c", "menu.c", "dialog.c", "controls.c", "commdlg.c", "textarea.c", "icons.c", "icon_map.c")),
-                    ROOT / "tests/host/desktop/fake.c", ROOT / "tests/host/desktop/fake_vfs.c",
-                    ROOT / "apps/accessories/mixer_view.c",
+                    ROOT / "tests/host/desktop/fake.c", ROOT / "tests/host/desktop/disk_ui_vfs.c",   # disk_ui_vfs.c renames the second fake_reset
+                    *sorted((ROOT / "sdk/libreg").glob("*.c")),   # reg_* for autoplay_registry.c
+                    ROOT / "apps/files/backup.c", ROOT / "apps/accessories/mixer_view.c",
                     ROOT / "src/kernel/drivers/video/swdib.c", ROOT / "src/kernel/drivers/video/batch.c",
                     ROOT / "tests/host/desktop/window_model_test.c"]
         parent = ROOT / "build/host"
         parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="window-model-", dir=parent) as temp:
             binary = Path(temp) / "window_model_test"
+            (Path(temp) / "include").mkdir()
+            (Path(temp) / "include/ciuki").symlink_to(ROOT / "sdk/sysroot-overlay/include/ciuki", target_is_directory=True)
             subprocess.run(["clang", "-std=c17", "-D_POSIX_C_SOURCE=200809L", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
                             "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
+                            "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections", "-pthread",
+                            "-I", str(Path(temp) / "include"), "-idirafter", str(ROOT / "sdk/sysroot-overlay/include"),
                             "-include", str(ROOT / "tests/host/desktop/replay_base.h"),
                             "-include", str(ROOT / "tests/host/desktop/paint_probe.h"),
-                            "-I", str(ROOT / "src/kernel/include"), "-I", str(ROOT / "apps/desktop"),
+                            "-include", str(ROOT / "sdk/sysroot-overlay/include/ciuki/devices.h"),
+                            "-Wno-macro-redefined", "-I", str(Path(temp) / "include"), "-I", str(ROOT / "src/kernel/include"), "-I", str(ROOT / "apps/desktop"),
                             *map(str, sources), "-o", str(binary)], check=True)
             runs = os.environ.get("CIUKI_WINDOW_MODEL_RUNS", "6")
             result = subprocess.run([str(binary), runs], text=True, capture_output=True)

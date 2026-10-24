@@ -267,7 +267,7 @@ static void test_clipboard_and_undo(void)
     press(0x153); assert(has_text("two three"));
     press(0x153); assert(has_text("wo three"));
     /* The clipboard holds a whole document, not the 1 KiB edit-box mirror. */
-    char big[4000]; memset(big, 'x', sizeof(big) - 1); big[sizeof(big) - 1] = 0;
+    static char big[4000]; memset(big, 'x', sizeof(big) - 1); big[sizeof(big) - 1] = 0;
     reset(0); fresh_text(big); CTRL(0x1e); CTRL(0x2e); assert(strlen(du_clipboard_get()) == sizeof(big) - 1);
     press(0x14f); CTRL(0x2f); assert(app.ta.len == 2 * (sizeof(big) - 1));
     /* A string copied in an edit box wins over the document clipboard. */
@@ -337,7 +337,7 @@ static void test_save_errors_and_replace(void)
 {
     reset(0);
     type("data"); CTRL(0x1f); type("/system/hello"); ENTER;                    /* default extension -> hello.txt exists */
-    assert(dialog_is(D_SAVE) && ui.dialog.sub == SUB_CONFIRM && ui.dialog.focus == 16);   /* the toolkit asks: default button No */
+    assert(dialog_is(D_SAVE) && ui.dialog.sub == SUB_CONFIRM && ui.dialog.items[ui.dialog.focus].id == -9401);   /* the toolkit asks: default button No */
     ENTER;                                                                      /* the default is No: back to the dialog */
     assert(dialog_is(D_SAVE) && !ui.dialog.sub && !strcmp(ui.dialog.items[5].text, "/system/hello") && expect_file("/system/hello.txt", "hello"));
     ENTER; assert(dialog_is(D_SAVE) && ui.dialog.sub == SUB_CONFIRM); press(0x15); assert(!ui.dialog.kind);  /* "&Yes" replaces */
@@ -397,7 +397,7 @@ static void test_find_replace(void)
     assert(has_text("bbbbbb") && !strcmp(app.note, "Replaced 3 occurrences")); du_focus(&ui, W_TEXT); CTRL(0x2c); assert(has_text("aaa"));
     reset(0); fresh_text("xyz"); CTRL(0x23); type("q"); click_widget(W_RALL); assert(dialog_is(D_INFO) && strstr(ui.dialog.text, "Cannot find \"q\"")); ENTER;
     /* Replace All beyond the limit changes nothing and says so. */
-    reset(0); char big[CN_LIMIT + 1]; memset(big, 'a', CN_LIMIT); big[CN_LIMIT] = 0; fresh_text(big);
+    reset(0); static char big[CN_LIMIT + 1]; memset(big, 'a', CN_LIMIT); big[CN_LIMIT] = 0; fresh_text(big);
     CTRL(0x23); type("a"); click_widget(W_REPL); type("bb"); click_widget(W_RALL);
     assert(dialog_is(D_INFO) && strstr(ui.dialog.text, "would be exceeded") && app.ta.len == CN_LIMIT && app.ta.text[0] == 'a'); ENTER;
     /* Enter in the replace edit replaces; Tab and Shift+Tab walk the bar. */
@@ -442,9 +442,10 @@ static void test_goto_wrap_status(void)
     press(0x44); assert(ui.menu == 0); press(0x44); assert(ui.menu == -1);
     /* Font, Help and About dialogs. */
     reset(0); fresh_text("x");
-    menu_pick(0x18, 1); assert(dialog_is(D_FONT) && ui.dialog.buttons == 3 && strstr(ui.dialog.text, "Style:\tRegular"));
-    press(0x0f); ENTER; assert(app.ta.bold == 1);
-    menu_pick(0x18, 1); assert(strstr(ui.dialog.text, "Style:\tBold") && ui.dialog.focus == 1); ESC; assert(app.ta.bold == 1);
+    menu_pick(0x18, 1); assert(dialog_is(D_FONT) && ui.dialog.kind == DU_DLG_FONT && ui.dialog.buttons == 2);
+    assert(ui.dialog.items[7].count == 2 && ui.dialog.items[9].disabled && ui.dialog.items[3].disabled);
+    press(DU_KEY_DOWN); ENTER; assert(app.ta.bold == 1);
+    menu_pick(0x18, 1); assert(ui.dialog.items[7].active == 1); ESC; assert(app.ta.bold == 1);
     screen("bold");
     menu_pick(0x23, 0); assert(dialog_is(D_INFO) && strstr(ui.dialog.title, "CiukNote Help") && strstr(ui.dialog.text, "F3 Find next")); screen("help"); ENTER;
     menu_pick(0x23, 1); assert(dialog_is(D_INFO) && !strcmp(ui.dialog.title, "About CiukNote") && strstr(ui.dialog.text, "Classic computing, one woof at a time.") &&

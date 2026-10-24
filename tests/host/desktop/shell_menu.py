@@ -25,12 +25,11 @@ import json
 from pathlib import Path
 import sys
 
-PROGRAM_ORDER = ["ciuknote", "files", "tasks", "dosbox", "demo", "lua", "printers", "control", "music", "viewer", "paint", "terminal"]
-ACCESSORIES = ["calc", "gfxdemo", "charmap", "clock", "help", "mixer", "viewer", "regedit", "wordpad"]
-SYSTEM_TOOLS = ["hwreport", "logview"]
-PROGRAM_ORDER = ["ciuknote", "files", "tasks", "dosbox", "demo", "lua", "control", "music", "viewer", "paint", "terminal"]
-ACCESSORIES = ["calc", "gfxdemo", "charmap", "clock", "help", "mixer", "viewer", "regedit"]
-SYSTEM_TOOLS = ["hwreport", "resmeter", "schedtask", "sysinfo", "sysmon"]
+# The tables of shell.c (programs[], category "programs", "accessories", "games", "system-tools") in menu order.
+PROGRAM_ORDER = ["ciuknote", "files", "netsurf", "tasks", "dosbox", "demo", "lua", "printers", "control", "music", "viewer", "paint", "terminal"]
+ACCESSORIES = ["calc", "gfxdemo", "charmap", "wordpad", "clock", "help", "mixer", "serial", "regedit", "viewer"]
+GAMES = ["mines", "solitaire", "freecell", "hearts"]
+SYSTEM_TOOLS = ["hwreport", "scandisk", "msconfig", "logview", "clipbrd", "resmeter", "schedtask", "sysinfo", "sysmon"]
 SCREEN_W, SCREEN_H = 1024, 768
 ORB = json.loads((Path(__file__).resolve().parents[3] / "apps/desktop/start-orb.json").read_text())
 TOP_BAR = ORB["bar_height"]
@@ -64,8 +63,8 @@ def submenu_height(programs):
     rows = sum(p in programs for p in PROGRAM_ORDER)
     rows += any(p in programs for p in ACCESSORIES)
     rows += any(p in programs for p in SYSTEM_TOOLS)
-    rows += "dosbox" in programs                  # Games (shell.c SH_MENU_GAMES)
-    developer = any(p not in PROGRAM_ORDER and p not in ACCESSORIES and p not in SYSTEM_TOOLS for p in programs)
+    rows += "dosbox" in programs or any(p in programs for p in GAMES)   # Games (shell.c SH_MENU_GAMES)
+    developer = any(p not in PROGRAM_ORDER and p not in ACCESSORIES and p not in SYSTEM_TOOLS and p not in GAMES for p in programs)
     return 6 + (rows + developer) * SUB_ROW + (SEPARATOR if developer else 0)
 
 

@@ -145,8 +145,9 @@ static int maint_defrag(int step,struct ciuki_media_defrag *r)
 }
 static int maint_convert(int run,struct ciuki_media_convert *r)
 {
-    assert(!pthread_equal(pthread_self(),disk_test_main)); assert(r->drive==4 && r->generation==17);
+    assert(!pthread_equal(pthread_self(),disk_test_main)); assert((r->drive==4 || r->drive==2) && r->generation==17);
     if (maint_error) return maint_error;
+    if (r->drive==2) r->reserved=CIUKI_CONVERT_NEXT_BOOT;
     if (run) maint_conversions++;
     r->cluster_bytes=4096; r->filesystem=run ? 32 : 16; r->sectors=1048576;
     return 0;
@@ -170,7 +171,9 @@ static void maintenance_ui_scenario(void (*present)(struct du_ui *,const char *,
     a->media.generation[4]=17;
     assert(!files_setup(a,u,&fake_vfs,"/Documents")); disk_test_settle();
     assert(!files_maintenance_open(a,4,0)); disk_test_settle(); assert(du_dialog_id(u)==225);
-    assert(strstr(u->dialog.text,"50%") && u->dialog.items[6].disabled);
+    assert(strstr(u->dialog.text,"50%") && !u->dialog.items[6].disabled);
+    maint_control(6,DU_KEY_SPACE); assert(u->dialog.items[6].value);
+    disk_test_frame(present,"startup placement enabled",ctx);
     disk_test_frame(present,"defrag analysis and Settings",ctx);
     maint_control(4,DU_KEY_SPACE); assert(u->dialog.items[4].value);
     disk_test_frame(present,"defrag Show Details and map legend",ctx);
@@ -200,7 +203,15 @@ static void maintenance_ui_scenario(void (*present)(struct du_ui *,const char *,
     maint_error=-EBUSY; assert(!files_maintenance_open(a,4,0)); disk_test_settle();
     assert(du_dialog_id(u)==202); disk_test_frame(present,"defrag busy error",ctx); disk_test_press(DU_KEY_ESC); maint_error=0;
     a->media.type[4]=CIUKI_MEDIA_USB; assert(files_maintenance_open(a,4,1)==-EROFS); a->media.type[4]=0;
-    assert(files_maintenance_open(a,2,1)==-EROFS);
+    a->media.generation[2]=17;
+    assert(!files_maintenance_open(a,2,1)); disk_test_settle();
+    assert(du_dialog_id(u)==226 && strstr(u->dialog.text,"next start"));
+    disk_test_frame(present,"boot conversion next start warning",ctx); disk_test_accept(1);
+    assert(!maint_conversions);
+    assert(!files_maintenance_open(a,2,1)); disk_test_settle(); disk_test_accept(0); disk_test_settle();
+    assert(du_dialog_id(u)==227 && strstr(u->dialog.text,"scheduled") && !strstr(u->dialog.text,"successfully converted"));
+    disk_test_frame(present,"boot conversion scheduled",ctx); disk_test_press(DU_KEY_ESC);
+    maint_conversions=0;
     assert(!files_maintenance_open(a,4,1)); disk_test_settle(); assert(du_dialog_id(u)==226);
     assert(strstr(u->dialog.text,"cannot return to FAT16") && strstr(u->dialog.text,"dual-boot"));
     disk_test_frame(present,"converter irreversible and compatibility warning",ctx);

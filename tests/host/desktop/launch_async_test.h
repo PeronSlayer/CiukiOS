@@ -124,7 +124,7 @@ static void test_launch_async(void)
     assert(desk_task_launch(&d,"control",NULL)==0);
     async_wait_entered(); slot=async_pending_slot(&d); assert(slot>=0);
     uint32_t exiting=(uint32_t)pid_source;
-    launch_note_exit(&d,exiting);               /* reaped by waitpid(-1) before completion */
+    launch_note_exit(&d,exiting,0);               /* reaped by waitpid(-1) before completion */
     async_release(); async_complete(&d,1);
     assert(d.clients[slot].channel<0);
     for (int i=0;i<DESK_CLIENTS;i++) assert(d.children[i].pid!=exiting && !d.children[i].pending);

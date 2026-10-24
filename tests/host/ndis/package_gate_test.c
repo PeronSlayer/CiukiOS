@@ -8,6 +8,9 @@
 #include <ciuki/net.h>
 #include <ciuki/sha256.h>
 #include "src/kernel/ndis/package.h"
+static int profile_enabled=1; static const char *profile_driver;
+bool system_device_allowed(uint32_t id,const char *driver)
+{ assert(id==0x10018); return profile_enabled && (!profile_driver || !driver || !strcmp(profile_driver,driver)); }
 static struct storage storage;
 static struct ndp_manifest manifest;
 static struct pci_func pci={.bus=0,.dev=3,.fn=0,.vendor=0x1234,.device=0x5678,.sub_vendor=0x1111,.sub_device=0x2222,.revision=7,.class_code=2};
@@ -75,6 +78,10 @@ int main(void)
     manifest.parameters[0].type=NDP_STRING; manifest.parameters[0].bytes=4; memcpy(manifest.parameters[0].data,"one",4);
     ndp_seal(&manifest); memcpy(approved_hash,manifest.files[0].hash,32); memcpy(approved_seal,manifest.seal,32);
     assert(!admit(NULL,NULL)); qualified=1; assert(admit(NULL,NULL)); assert(admit(&pci,approved_seal));
+    profile_enabled=0; assert(!admit(NULL,NULL) && !admit(&pci,approved_seal)); profile_enabled=1;
+    profile_driver="Other"; assert(!admit(NULL,NULL) && !admit(&pci,approved_seal));
+    profile_driver="Synthetic"; assert(admit(NULL,NULL) && admit(&pci,approved_seal)); profile_driver=NULL;
+    puts("PASS G30B NDIS package gate: disabled and wrong-service profiles refused before loading/binding");
     native_owned=1; assert(!admit(NULL,NULL)); assert(!admit(&pci,approved_seal)); native_owned=0;
     fail_read=1; assert(!admit(NULL,NULL)); fail_read=0;
     extra_manifest=1; assert(!admit(NULL,NULL)); extra_manifest=0;

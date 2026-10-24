@@ -25,11 +25,16 @@ struct wp_line {
     int indent, shift;      /* text origin before alignment, alignment shift (pixels) */
     int width;              /* used width from the origin, trailing spaces excluded */
     unsigned para, flags;
+    int64_t extra;          /* justified line: the width (1/64 pixel) shared by the first `gaps` space characters */
+    unsigned gaps;
 };
 struct wp_layout {
     struct wp_line *lines; unsigned n, cap;
     unsigned *pfirst; int *py; unsigned pcap, pcount;    /* first line and top of each paragraph */
     int width, height;
+    int nowrap;             /* set by the caller before wp_layout_build: lines break only at paragraph ends and soft breaks */
+    int built_nowrap;
+    int content_w;          /* widest line (indent, alignment shift and width), pixels */
 };
 void wp_layout_init(struct wp_layout *);
 void wp_layout_free(struct wp_layout *);
@@ -44,11 +49,13 @@ void wp_layout_caret(const struct wp_layout *, const struct wp_doc *, const stru
 /* Character boundary nearest to the point (layout coordinates). */
 size_t wp_layout_hit(const struct wp_layout *, const struct wp_doc *, const struct wp_text_ops *, int x, int y);
 
-enum { WP_PIECE_TEXT, WP_PIECE_TAB };
+enum { WP_PIECE_TEXT, WP_PIECE_TAB, WP_PIECE_PIC };
 struct wp_piece { size_t start, end; int x, w; struct wp_cattr a; int kind; };
 /* The drawable pieces of a line in order (text clipped to the line; a tab has no text). A nonzero return stops. */
 typedef int (*wp_piece_fn)(void *, const struct wp_piece *);
 void wp_layout_pieces(const struct wp_layout *, const struct wp_doc *, const struct wp_text_ops *, unsigned line, wp_piece_fn, void *);
+/* A picture character's drawn size in pixels (a piece of kind WP_PIECE_PIC). */
+void wp_layout_pic_size(const struct wp_doc *, const struct wp_cattr *, int *w, int *h);
 /* Bullet position of a line flagged WP_LINE_BULLET (pixels from the left margin). */
 int wp_layout_bullet_x(const struct wp_doc *, const struct wp_line *);
 int wp_twips_px(int twips);   /* rounded to the nearest pixel */

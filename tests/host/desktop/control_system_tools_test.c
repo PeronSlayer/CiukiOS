@@ -14,11 +14,15 @@ static const char *renders;
 /* in-memory hwprofiles.cfg */
 static char file[HW_TEXT_TEST];
 static int file_exists, file_saves, fail_save, fail_load, power_calls, catalog_pack;
+static uint32_t boot_count = 1;
+static uint32_t boot_serial(void *ctx) { (void)ctx; return boot_count; }
 static uint64_t mem_total = 512 * 1024, mem_free = 400 * 1024;
 static int hw_load(void *c, char *t, size_t cap, size_t *n)
 { (void)c; if (fail_load) return -EIO; if (!file_exists) return -ENOENT; *n = strlen(file); assert(*n < cap); memcpy(t, file, *n + 1); return 0; }
 static int hw_save(void *c, const char *t, size_t n)
 { (void)c; if (fail_save) return -ENOSPC; assert(n < sizeof(file)); memcpy(file, t, n); file[n] = 0; file_exists = 1; file_saves++; return 0; }
+static struct system_perf perf_saved;
+static int perf_save(void *c, const struct system_perf *p) { (void)c; if (fail_save) return -ENOSPC; perf_saved = *p; return 0; }
 static int devices(void *c, struct ciuki_devices_info *out) { (void)c; *out = sample; return 0; }
 static int power(void *c) { (void)c; power_calls++; return 0; }
 static int memory(void *c, uint64_t *t, uint64_t *f) { (void)c; *t = mem_total; *f = mem_free; return 0; }
@@ -54,11 +58,21 @@ static const char *row_name(unsigned device) { return app.tree_items[tree_row(de
 static void attach(int page)
 {
     memset(&app, 0, sizeof(app));
-    app.host = (struct cp_host){.load = settings_load, .devices = devices, .hw_load = hw_load, .hw_save = hw_save, .power = power,
+    app.host = (struct cp_host){.load = settings_load, .devices = devices, .hw_load = hw_load, .hw_save = hw_save, .boot_serial = boot_serial, .perf_save = perf_save, .power = power,
         .memory = memory, .engine_info = engine_info, .driver_catalog = catalog, .screen_w = 1024, .screen_h = 768,
         .mem_total_k = 512 * 1024, .mem_free_k = 400 * 1024, .version = "0.9.0", .build = "host", .machine = "i686"};
     du_init(&ui, pixels, CP_WIDTH, CP_HEIGHT); ui.focused_window = 1;
     assert(!cp_attach(&app, &ui, page));
+    struct du_widget *tabs=kind(DU_TABS);
+    if (tabs && tabs->count==7) {
+        unsigned seen=0;
+        for (int x=tabs->box.x;x<tabs->box.x+tabs->box.w;x++) {
+            int tab=du_tabs_hit(tabs,x,tabs->box.y+10);
+            if (tab>=0) seen|=1u<<(unsigned)tab;
+        }
+        assert(seen==127); /* every merged System page is reachable */
+        assert(du_tabs_hit(tabs,tabs->box.x+tabs->box.w-1,tabs->box.y+10)==-1);
+    }
 }
 static void reset_file(void) { power_calls = 0; file[0] = 0; file_exists = 0; file_saves = 0; fail_save = 0; }
 static void type_dialog(const char *text) { du_set_text(&ui.dialog.items[2], text); at_tap(&ui, DU_KEY_ENTER); }
@@ -200,9 +214,25 @@ static void performance(void)
     assert(find(DU_LABEL, "Managed automatically by the system") && find(DU_LABEL, "Not installed"));
     assert(find(DU_LABEL, "Hardware acceleration: software drawing") && find(DU_LABEL, "Your system is configured for optimal performance."));
     assert(find(DU_LABEL, "No PC Card sockets are installed."));
-    assert(find(DU_BUTTON, "File System...")->disabled && find(DU_BUTTON, "Graphics...")->disabled && find(DU_BUTTON, "Virtual Memory...")->disabled);
-    assert(find(DU_LABEL, "These settings are managed automatically in this release and cannot be changed."));
+    assert(!find(DU_BUTTON, "File System...")->disabled && !find(DU_BUTTON, "Graphics...")->disabled && !find(DU_BUTTON, "Virtual Memory...")->disabled);
+    assert(find(DU_LABEL, "Changes to these settings take effect after restarting the computer."));
     render("g30-performance");
+    click("File System..."); assert(ui.dialog.kind != DU_DLG_NONE && ui.dialog.sheet); render("g30-performance-filesystem");
+    ui.dialog.items[4].value = 0; ui.dialog.items[5].value = 1; ui.dialog.items[7].value = 0;
+    assert(ui.dialog.accept(&ui, 0, ui.dialog.accept_ctx) == 0 && perf_saved.role == 1 && !perf_saved.read_ahead);
+    at_tap(&ui, DU_KEY_ESC);
+    click("Graphics..."); render("g30-performance-graphics"); ui.dialog.items[4].value = 0;
+    assert(ui.dialog.accept(&ui, 0, ui.dialog.accept_ctx) == 0 && !perf_saved.graphics);
+    at_tap(&ui, DU_KEY_ESC);
+    click("Virtual Memory..."); render("g30-performance-vm"); ui.dialog.items[4].value = 0; ui.dialog.items[5].value = 1;
+    strcpy(ui.dialog.items[7].text, "32"); strcpy(ui.dialog.items[8].text, "128");
+    assert(ui.dialog.accept(&ui, 0, ui.dialog.accept_ctx) == 0 && perf_saved.vm == 1 && perf_saved.min_mb == 32 && perf_saved.max_mb == 128);
+    strcpy(ui.dialog.items[7].text, "129");
+    assert(ui.dialog.accept(&ui, 0, ui.dialog.accept_ctx) == 1 && perf_saved.min_mb == 32);
+    strcpy(ui.dialog.items[7].text, "64"); fail_save = 1;
+    assert(ui.dialog.accept(&ui, 0, ui.dialog.accept_ctx) == 1 && app.perf_settings.min_mb == 32);
+    fail_save = 0; at_tap(&ui, DU_KEY_ESC);
+
     /* acceleration from the accelerator record, a CardBus bridge counts as a PC Card socket */
     sample.devices[0].id = CIUKI_DEVICE_ACCELERATOR_ID; sample.devices[0].accel_ready = 1;
     strcpy(sample.devices[0].driver_display_name, "Savage display driver");
@@ -272,10 +302,27 @@ static void profiles(void)
     assert(hp_save(&app.hp, again, sizeof(again)) > 0);
 }
 
+static void reboot_state(void)
+{
+    device_fixture(&sample); reset_file();
+    struct hp_store hp; hp_init(&hp); hp.boot_serial = boot_count;
+    struct ciuki_device_record dev = {.id=123, .class_id=CIUKI_DEVICE_SOUND, .state=CIUKI_DEVICE_READY};
+    struct dc_result result;
+    dc_apply(&hp.p[0].devices, &dev, DC_REMOVE, NULL, &result); assert(!result.error);
+    dev.id=124; dc_apply(&hp.p[0].devices, &dev, DC_DISABLE, NULL, &result); assert(!result.error);
+    dev.id=125; dc_apply(&hp.p[0].devices, &dev, DC_UPDATE_DRIVER, "ac97", &result); assert(!result.error);
+    int n=hp_save(&hp, file, sizeof(file)); assert(n>0); file_exists=1;
+    attach(CP_DEVICES); assert(dc_status_of(&app.hp.p[0].devices,123)==DC_REMOVED);
+    boot_count++; attach(CP_DEVICES);
+    assert(dc_status_of(&app.hp.p[0].devices,123)==DC_ACTIVE && dc_status_of(&app.hp.p[0].devices,124)==DC_DISABLED);
+    assert(!strcmp(dc_driver_override(&app.hp.p[0].devices,125),"ac97") && app.hp.boot_serial==boot_count);
+    assert(!hp_copy(&hp,0,"Docked")); n=hp_save(&hp,file,sizeof(file)); assert(n>0);
+    strcpy(sample.boot_options,"hwprofile=1"); attach(CP_DEVICES); assert(app.hp.active==1);
+}
 int main(int argc, char **argv)
 {
     assert(argc == 2); renders = argv[1];
-    device_actions(); update_driver(); add_hardware(); add_hardware_more(); performance(); profiles();
+    device_actions(); update_driver(); add_hardware(); add_hardware_more(); performance(); profiles(); reboot_state();
     cp_detach(&app);
     puts("PASS G30 control: device actions, update driver, Add New Hardware, Performance and Hardware Profiles");
     return 0;

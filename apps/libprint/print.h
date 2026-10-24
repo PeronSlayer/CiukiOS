@@ -58,6 +58,30 @@ int cp_purge(const char *root, unsigned printer);
 int cp_submit_text(const char *root, unsigned printer, const char *title, const void *text, size_t bytes, const struct cp_page *, const char *target);
 int cp_submit_image(const char *root, unsigned printer, const char *title, const uint32_t *pixels, unsigned width, unsigned height, const struct cp_page *, const char *target);
 int cp_submit_raw(const char *root, unsigned printer, const char *title, const void *data, size_t bytes, const struct cp_page *, const char *target);
+/* G28b: a formatted document for word processors: pages of positioned text, rules and pictures. Coordinates are twips
+ * (1/20 point) from the top left of the paper, whatever the orientation; ops are in page order. family 0 sans, 1 serif,
+ * 2 mono; flags 1 bold, 2 italic; size in half-points; text is UTF-8 in `text` (the op's offset and length). PostScript
+ * prints the base-14 faces (Helvetica, Times, Courier), PCL its scalable Univers, CG Times and Courier, a text-only
+ * printer the `plain` rendering. The producer allocates every array with malloc; cp_doc_free releases them. */
+enum { CP_OP_TEXT, CP_OP_RULE, CP_OP_IMAGE };
+struct cp_op {
+    uint8_t kind, family, flags, pad;
+    uint16_t size, pad2;
+    uint32_t page;                      /* 1-based */
+    int32_t x, y, w, h;                 /* text: the baseline origin (x, y); rule and image: the rectangle */
+    uint32_t rgb;                       /* text and rule colour, 0xRRGGBB */
+    uint32_t offset, length;            /* text: bytes of cp_doc.text; image: offset is the index into cp_doc.images */
+};
+struct cp_image { uint32_t *pixels; unsigned width, height; };   /* 0x00RRGGBB, top-down */
+struct cp_doc {
+    struct cp_op *ops; unsigned nops, pages;
+    char *text; size_t text_bytes;
+    struct cp_image *images; unsigned nimages;
+    char *plain; size_t plain_bytes;
+};
+void cp_doc_free(struct cp_doc *);
+/* page selects paper, margins and the page range as for the other submitters (NULL: the printer's page). */
+int cp_submit_doc(const char *root, unsigned printer, const char *title, const struct cp_doc *, const struct cp_page *, const char *target);
 /* Stream large raw jobs without loading them into memory. */
 int cp_submit_file(const char *root, unsigned printer, const char *title, const char *source, const struct cp_page *, const char *target);
 /* One bounded (1024 bytes) background service step. Returns 1 progress, 0 idle,

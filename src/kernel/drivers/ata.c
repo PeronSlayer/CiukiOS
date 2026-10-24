@@ -1,3 +1,6 @@
+#include <ciuki/system_settings.h>
+#include <ciuki/setup_mode.h>
+#pragma weak setup_mode
 /* SFF ATA PIO/DMA, one sleepable transaction per channel, never BIOS/retry.
  * Research: T13 ATA/ATAPI-6 d1410r3a, sections 6.20, 7, 8.12-8.15,
  * 8.34-8.35, 8.62-8.63, 9.2, 9.5-9.6, 9.12 and 10.2.2 (table 67):
@@ -2044,6 +2047,9 @@ struct ata_device *ata_device_get(unsigned channel, unsigned unit)
     if (!initialized || channel >= ATA_CHANNELS || unit >= ATA_DEVICES)
         return 0;
     struct ata_device *d = &channels[channel].devices[unit];
+    /* PnP discovery may identify a disabled optical unit; binding/mounting
+     * must not publish it. Setup retains its boot optical dependency. */
+    if (d->atapi && !(setup_mode && setup_mode()) && !system_admit(0x40100u + channel * 2 + unit, "ata-pio")) return 0;
     return d->identified && !d->block.quarantined && !d->channel->quiescing ? d : 0;
 }
 

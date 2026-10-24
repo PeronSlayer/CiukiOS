@@ -62,6 +62,7 @@ entry:
     mov al, 0
     call progress_begin
     call boot_menu
+    call hwprofiles_boot
     call autoscan_check
     call bootstat_write
     call progress_end
@@ -108,6 +109,7 @@ fatal:
 %include "src/boot/ciukldr/disk.inc"
 %include "src/boot/ciukldr/menu.inc"
 %include "src/boot/ciukldr/startup.inc"
+%include "src/boot/ciukldr/hwprofiles.inc"
 %include "src/boot/ciukldr/video.inc"
 %include "src/boot/ciukldr/elf.inc"
 
@@ -161,7 +163,8 @@ image_end:
 %endif
 ; Private, versioned loader trail in the last 32 bytes of the fixed image.
 ; core/loader_progress.inc copies it before the loader extent is reclaimed.
-times 24544-($-$$) db 0
+times 24536-($-$$) db 0
+db "G29DCVT1"
 progress_trail db 'CLDRPRG1'
     dd 0,0,0,0 ; entered, completed, stalled, failed stage masks
     dq 0
@@ -181,9 +184,22 @@ cfg_buffer resb 512
 ; Every successful disk_read fills all 512 bytes before a consumer runs.
 ; Keep scratch out of the fixed file, leaving room for progress diagnostics.
 sector resb 512
-; G14: the 4 KiB cluster buffer leaves the fixed file for the Startup menu.
-; cluster_read fills all 4096 bytes before directory_find or file_getc read
-; any of them (file_offset starts at 4096, file_loaded at 0), so it needs no
+; G29D: the cluster buffer covers FAT16 through 32 KiB per cluster.
+; cluster_read fills the BPB cluster size before directory_find/file_getc
+; consume it (file_offset starts at cluster_bytes, file_loaded at 0), so it needs no
 ; initial zero fill; loader_end covers it.
-cluster resb 4096
-loader_bss_end:
+cluster resb 32768
+cv_header resb 512
+cv_data resb 512
+hw_line resb 160
+hw_names resb 256
+loader_segment_end:
+%if loader_segment_end-mode_scores > 40960
+%error Converter buffers must fit the loader segment
+%endif
+; A separate 32 KiB GS segment holds the journal target index. The boot-info
+; loader extent covers both segments until the protected-mode kernel reclaims it.
+cv_targets equ 0
+; Hardware-profile bytes occupy GS:8000..DFFF, after the converter index.
+hw_raw equ 0x8000
+loader_bss_end equ 0x1e000

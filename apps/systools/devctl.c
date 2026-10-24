@@ -30,7 +30,8 @@ const char *dc_driver_override(const struct dc_store *s, uint32_t id)
     return NULL;
 }
 int dc_critical(const struct ciuki_device_record *d)
-{ return d->class_id == CIUKI_DEVICE_SYSTEM || d->class_id == CIUKI_DEVICE_DISK; }
+{ return d->class_id == CIUKI_DEVICE_SYSTEM || d->class_id == CIUKI_DEVICE_DISK ||
+    (d->id >= 0x30000 && d->id <= 0x30003); /* boot framebuffer and PS/2 input */ }
 unsigned dc_resource_count(const struct dc_store *s, const struct ciuki_device_record *d)
 { return dc_status_of(s, d->id) == DC_ACTIVE ? d->resource_count : 0; }
 

@@ -289,16 +289,16 @@ static const char help[]=
 "NET                   AUDIO [volume 0..100|mute|unmute]\n"
 "TASKS [KILL pid]       DISPLAY            MEM\n"
 "DATE  TIME            SHUTDOWN            REBOOT\n"
-"LUA [script.lua args]  script.lua [args]   RUN (unavailable)\n"
+"LUA [script.lua args]  script.lua [args]   RUN native-program [args]\n"
 "SCANREG [/BACKUP] [/COMMENT=text] [/RESTORE [n]] [/FIX]   SFC [/UPDATE f | /RESTORE f src]\n"
 "SCANDISK [d:] [/A] [/THOROUGH] [/AUTOFIX]   WIN (after Command prompt only)\n"
 "SET [name=value]       ATTRIB [+R -R +H -H +S -S +A -A] [files]\n"
 "LABEL [d:] [text]      VOL [d:]            CHKDSK [d:]\n"
 "FIND [/I /V /C /N] \"text\" [files]   SORT [/R]   MORE\n"
-"IPCONFIG [/ALL]        PING, FORMAT (unavailable)\n"
+"IPCONFIG [/ALL]        FORMAT drive: [/Q] [/FS:FAT12|FAT16|FAT32] [/V:label] YES\n"
 "cmd | cmd   cmd > file   cmd >> file   cmd < file   name.bat [args]\n"
 "Batch: ECHO ON/OFF REM :label GOTO IF [NOT] EXIST/ERRORLEVEL/a==b FOR CALL SHIFT PAUSE EXIT [/B]\n"
-"REG is reserved. Quote paths with spaces; * and ? match names.\n"
+"REG QUERY|ADD|DELETE|IMPORT|EXPORT root\\key [name [literal]]. Quote paths with spaces; * and ? match names.\n"
 "Tab: complete path; Up/Down: history; PgUp/PgDn: scroll.\n"
 "Ctrl+C: copy selection or interrupt; Ctrl+V: paste.\n"
 "Disk tools: BACKUP, RESTORE, FDISK (type the command for help).\n"
@@ -317,10 +317,10 @@ int term_command(struct terminal *t,const char *line)
         if(n!=1)r=-EINVAL; else if(!t->capture) { for(unsigned i=0;i<t->count;i++)free(t->lines[(t->first+i)%TERM_SCROLLBACK]); t->first=t->count=t->used=t->top=0; t->pending[0]=0; t->selection_a=t->selection_b=0; }
     }
     else if(term_recovery && term_recovery(t,n,a,&r)) { } /* G14: SCANREG, SCANDISK, SFC, WIN */
-    else if(equal(a[0],"RUN"))term_write(t,"not available in this release\n");
+    else if(equal(a[0],"RUN"))r=t->host.run ? t->host.run(t,n-1,a+1) : -ENOSYS;
     else if(equal(a[0],"BACKUP") || equal(a[0],"RESTORE") || equal(a[0],"FDISK"))r=t->host.disktool ? t->host.disktool(t->host.ctx,n,a) : -ENOSYS;
-    else if(equal(a[0],"RUN"))term_write(t,"not available in this release\n");   /* needs a child process with redirected standard streams */
-    else if(equal(a[0],"REG"))term_write(t,"REG is reserved for a later release.\n");
+    else if(equal(a[0],"REG"))r=t->host.registry ? t->host.registry(t,n,a) : -ENOSYS;
+    else if(equal(a[0],"FORMAT"))r=term_format_command(t,n,a);
     else if(equal(a[0],"DIR") || equal(a[0],"ls"))r=n>2 ? -EINVAL : directory(t,n==2 ? a[1] : t->cwd[0] ? t->cwd : "Computer");
     else if(equal(a[0],"CD") || (n==1 && strlen(a[0])==2 && a[0][1]==':')) {
         if(equal(a[0],"CD") && n==1) { char display[FM_PATH]; if(fm_display_path(display,t->cwd))snprintf(display,sizeof(display),"%s",t->cwd); term_printf(t,"%s\n",display); }
@@ -363,7 +363,7 @@ int term_command(struct terminal *t,const char *line)
     }
     else if(term_extra(t,n,a,&r)) {}
     else r=system_cmd(t,n,a);
-    if(r)term_printf(t,"%s: %s (error %d)\n",n>0 ? a[0] : "Syntax",strerror(-r),-r);
+    if(r<0)term_printf(t,"%s: %s (error %d)\n",n>0 ? a[0] : "Syntax",strerror(-r),-r);
     if(t->ui)du_invalidate(t->ui,(struct du_rect){4,4,t->ui->canvas.width-8,t->ui->canvas.height-8}); return r;
 }
 int term_glob(struct terminal *t,const char *pattern,char ***names,unsigned *count)

@@ -228,8 +228,8 @@ static void test_rtf_edge(void)
     assert(!read_rtf(&d, "{\\rtf1 a\r\nb \\{x\\} \\\\ \\~ \\_ \\-z}", &rep) && !strcmp(d.text, "ab {x} \\ \xc2\xa0 - z"));
     assert(!read_rtf(&d, "{\\rtf1 \\bullet\\endash\\emdash\\lquote\\rquote\\ldblquote\\rdblquote}", &rep) &&
            !strcmp(d.text, "\xe2\x80\xa2\xe2\x80\x93\xe2\x80\x94\xe2\x80\x98\xe2\x80\x99\xe2\x80\x9c\xe2\x80\x9d"));
-    /* pictures and objects are skipped and counted; unknown and ignorable destinations vanish */
-    assert(!read_rtf(&d, "{\\rtf1 a{\\pict\\pngblip\\bin3 {}\\par}b{\\object{\\*\\objdata 00ff}}c{\\*\\unknown stuff}{\\info{\\author X}}{\\stylesheet{\\s1 Normal;}}d}", &rep));
+    /* pictures and objects without data are skipped and counted; unknown and ignorable destinations vanish */
+    assert(!read_rtf(&d, "{\\rtf1 a{\\pict\\pngblip}b{\\object}c{\\*\\unknown stuff}{\\info{\\author X}}{\\stylesheet{\\s1 Normal;}}d}", &rep));
     assert(!strcmp(d.text, "abcd") && rep.skipped_pictures == 1 && rep.skipped_objects == 1);
     assert(!read_rtf(&d, "{\\rtf1\\ansicpg1250 x}", &rep) && rep.unknown_charset == 1);
     /* \uc0 and \uc2 fallbacks */
@@ -451,7 +451,7 @@ static void test_layout_incremental(void)
     struct wp_layout inc, full; wp_layout_init(&inc); wp_layout_init(&full);
     for (unsigned i = 0; i < 300; i++) {
         char line[96]; snprintf(line, sizeof(line), "Paragraph %u has a few words that should wrap more than once in a narrow column.\n", i);
-        assert(!wp_append(&d, line, strlen(line), &(struct wp_cattr){0, (uint8_t)(i % 3 ? 0 : WP_BOLD), 0, 0, 20}));
+        assert(!wp_append(&d, line, strlen(line), &(struct wp_cattr){0, (uint8_t)(i % 3 ? 0 : WP_BOLD), 0, 0, 20, 0}));
     }
     check(&d);
     assert(!wp_layout_build(&inc, &d, &OPS, 200, 0));
@@ -479,7 +479,7 @@ static void test_layout_incremental(void)
 static void test_pages(void)
 {
     struct wp_doc d; assert(!wp_init(&d));
-    for (unsigned i = 0; i < 200; i++) { char s[64]; snprintf(s, sizeof(s), "Line number %u of the page test\n", i); assert(!wp_append(&d, s, strlen(s), &(struct wp_cattr){0, 0, 0, 0, 20})); }
+    for (unsigned i = 0; i < 200; i++) { char s[64]; snprintf(s, sizeof(s), "Line number %u of the page test\n", i); assert(!wp_append(&d, s, strlen(s), &(struct wp_cattr){0, 0, 0, 0, 20, 0})); }
     struct wp_layout l; wp_layout_init(&l); struct wp_pages pg = {0};
     struct wp_page_setup a4 = wp_default_page_setup(1), us = wp_default_page_setup(0);
     assert(a4.paper_w == 11906 && us.paper_h == 15840 && a4.left == 1080);
@@ -530,7 +530,7 @@ static void test_random_edits(void)
         while (at < rn && ((unsigned char)ref[at] & 0xc0) == 0x80) at++;
         if (op < 2 || !rn) {
             const char *s = pieces[(seed >> 9) % 8]; size_t n = strlen(s);
-            struct wp_cattr a = {(uint8_t)((seed >> 3) % 3), (uint8_t)((seed >> 5) & 15), (uint8_t)((seed >> 7) % 4), 0, (uint16_t)(20 + 2 * ((seed >> 11) % 4))};
+            struct wp_cattr a = {(uint8_t)((seed >> 3) % 3), (uint8_t)((seed >> 5) & 15), (uint8_t)((seed >> 7) % 4), 0, (uint16_t)(20 + 2 * ((seed >> 11) % 4)), 0};
             assert(!wp_insert(&d, at, s, n, &a));
             memmove(ref + at + n, ref + at, rn - at); memcpy(ref + at, s, n); rn += n;
         } else if (op == 2) {
@@ -550,11 +550,195 @@ static void test_random_edits(void)
     free(ref); wp_free(&d);
 }
 
+/* ---- G28b: pictures, objects, justification, no-wrap ---------------------------------------------------------------- */
+
+static const unsigned char PNGHEAD[] = {0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 'I', 'H', 'D', 'R', 0, 0, 0, 16, 0, 0, 0, 8, 8, 2, 0, 0, 0, 1, 2, 3, 4};
+static const char PNGHEX[] = "89504e470d0a1a0a0000000d4948445200000010000000080802000000 01020304";
+static struct wp_pic *png_pic(void)
+{
+    struct wp_pic *p = wp_pic_new(WP_PIC_PNG, PNGHEAD, sizeof(PNGHEAD));
+    assert(p && p->pw == 16 && p->ph == 8 && p->scalex == 100 && p->refs == 1);
+    return p;
+}
+static void test_pictures_model(void)
+{
+    struct wp_doc d, c, s, t; assert(!wp_init(&d) && !wp_init(&c) && !wp_init(&s) && !wp_init(&t));
+    insert(&d, 0, "ab");
+    struct wp_pic *p = png_pic();
+    wp_pic_ref(p);                                       /* ours, besides the one the document takes */
+    assert(!wp_insert_pic(&d, 1, p, NULL)); check(&d);
+    assert(d.len == 5 && !memcmp(d.text, "a\xef\xbf\xbc" "b", 5) && d.npics == 1 && p->refs == 2);
+    assert(wp_pic_at(&d, 1) == p && !wp_pic_at(&d, 0) && !wp_pic_at(&d, 2) && !wp_pic_at(&d, 4));
+    assert(wp_pic_count_used(&d) == 1);
+    /* typing after a picture never becomes a picture, and runs with pictures never merge */
+    assert(!wp_attr_at(&d, 4).pic && !wp_attr_of(&d, 1).pic);
+    insert(&d, 4, "x"); assert(!wp_pic_at(&d, 4) && d.runs[d.nruns - 1].a.pic == 0);
+    wp_pic_ref(p); assert(!wp_insert_pic(&d, 4, p, NULL)); wp_pic_ref(p); assert(!wp_insert_pic(&d, 7, p, NULL)); check(&d);
+    assert(d.npics == 1 && wp_pic_count_used(&d) == 3);    /* the same picture is registered once */
+    unsigned adjacent = 0; for (unsigned i = 0; i + 1 < d.nruns; i++) adjacent += d.runs[i].a.pic && d.runs[i + 1].a.pic;
+    assert(adjacent >= 1);                                 /* two neighbouring pictures stay two runs */
+    /* sizes: the natural size at 96 dpi, the goal, the scale */
+    int w, h; wp_pic_size(p, &w, &h); assert(w == 240 && h == 120);
+    p->goalw = 1440; p->goalh = 720; p->scalex = 50; p->scaley = 25; wp_pic_size(p, &w, &h); assert(w == 720 && h == 180);
+    p->scalex = p->scaley = 100; p->goalw = p->goalh = 0;
+    /* a copy shares the picture by reference; freeing it releases its share */
+    unsigned shared = p->refs;
+    assert(!wp_copy(&c, &d)); check(&c); assert(c.npics == 1 && c.pics[0] == p && p->refs == shared + 1);
+    wp_free(&c); assert(p->refs == shared);
+    /* slices carry pictures into another document */
+    assert(!wp_slice(&s, &d, 1, 4)); check(&s);
+    assert(s.len == 3 && s.npics == 1 && wp_pic_at(&s, 0) == p);
+    assert(!wp_insert_slice(&t, 0, &s)); check(&t);
+    assert(t.npics == 1 && wp_pic_at(&t, 0) == p && wp_pic_count_used(&t) == 1);
+    /* deleting the character leaves an orphan; plain text export drops pictures */
+    char *plain; size_t pn;
+    assert(!wp_text_write(&d, &plain, &pn, 0) && !strchr(plain, '\xef') && !strcmp(plain, "axb")); free(plain);
+    assert(!wp_delete(&t, 0, 3) && wp_pic_count_used(&t) == 0 && t.npics == 1);
+    /* U+FFFC from outside is dropped (pasted or read text): only a picture owns it */
+    char *clean; size_t cl;
+    assert(!wp_sanitize("a\xef\xbf\xbc" "b", 5, &clean, &cl) && !strcmp(clean, "ab")); free(clean);
+    /* limits: the picture count; compaction frees the orphans */
+    struct wp_doc big; assert(!wp_init(&big));
+    for (unsigned i = 0; i < WP_PICS_MAX; i++) { struct wp_pic *q = wp_pic_new(WP_PIC_DIB, "\x28\0\0\0\x01\0\0\0\x01\0\0\0\x01\0\x18\0", 16); assert(q); assert(!wp_insert_pic(&big, big.len, q, NULL)); }
+    check(&big); assert(big.npics == WP_PICS_MAX);
+    struct wp_pic *extra = wp_pic_new(WP_PIC_DIB, "\x28\0\0\0\x01\0\0\0\x01\0\0\0\x01\0\x18\0", 16);
+    assert(wp_insert_pic(&big, 0, extra, NULL) == -EFBIG && big.npics == WP_PICS_MAX); check(&big);   /* the document is unchanged; the picture was released */
+    assert(!wp_delete(&big, 0, 3 * 100)); check(&big);
+    extra = wp_pic_new(WP_PIC_DIB, "\x28\0\0\0\x01\0\0\0\x01\0\0\0\x01\0\x18\0", 16);
+    assert(!wp_insert_pic(&big, 0, extra, NULL) && big.npics <= WP_PICS_MAX - 99); check(&big);   /* compaction made room */
+    for (unsigned i = 0; i < big.nruns; i++) assert(!big.runs[i].a.pic || big.runs[i].a.pic <= big.npics);
+    wp_free(&big);
+    wp_pic_unref(p);
+    wp_free(&d); wp_free(&s); wp_free(&t);
+    /* sniffing and the DIB/BMP conversions */
+    uint32_t pw, ph;
+    assert(wp_pic_sniff(PNGHEAD, sizeof(PNGHEAD), &pw, &ph) == WP_PIC_PNG && pw == 16 && ph == 8);
+    const uint8_t jpg[] = {0xff, 0xd8, 0xff, 0xe0, 0, 4, 0, 0, 0xff, 0xc0, 0, 11, 8, 0, 20, 0, 30, 3, 0, 0, 0};
+    assert(wp_pic_sniff(jpg, sizeof(jpg), &pw, &ph) == WP_PIC_JPEG && pw == 30 && ph == 20);
+    uint8_t dib[40 + 12] = {40, 0, 0, 0, 5, 0, 0, 0, 3, 0, 0, 0, 1, 0, 24, 0};
+    assert(wp_pic_sniff(dib, sizeof(dib), &pw, &ph) == WP_PIC_DIB && pw == 5 && ph == 3);
+    assert(!wp_pic_sniff((const uint8_t *)"plain text of some length here", 30, &pw, &ph));
+    size_t bl, dl; uint8_t *bmp = wp_dib_to_bmp(dib, sizeof(dib), &bl);
+    assert(bmp && bl == sizeof(dib) + 14 && bmp[0] == 'B' && bmp[10] == 54);   /* the pixels start after the 40-byte header */
+    uint8_t *back = wp_bmp_to_dib(bmp, bl, &dl); assert(back && dl == sizeof(dib) && !memcmp(back, dib, dl)); free(back); free(bmp);
+    dib[14] = 8; assert(!wp_dib_to_bmp(dib, sizeof(dib), &bl));    /* the palette would lie outside the data */
+}
+
+static void test_rtf_pictures(void)
+{
+    struct wp_doc d, e; assert(!wp_init(&d) && !wp_init(&e));
+    struct wp_report rep;
+    char rtf[1024];
+    snprintf(rtf, sizeof(rtf), "{\\rtf1 a{\\pict\\pngblip\\picw16\\pich8\\picwgoal480\\pichgoal240\\picscalex50\\picscaley25 %s}b}", PNGHEX);
+    assert(!wp_rtf_read(&d, rtf, strlen(rtf), &rep)); check(&d);
+    assert(rep.kept_pictures == 1 && !rep.skipped_pictures && d.len == 5 && wp_pic_count_used(&d) == 1);
+    struct wp_pic *p = wp_pic_at(&d, 1);
+    assert(p && p->kind == WP_PIC_PNG && p->len == sizeof(PNGHEAD) && !memcmp(p->data, PNGHEAD, p->len) && p->goalw == 480 && p->goalh == 240 && p->scalex == 50 && p->scaley == 25);
+    /* binary data (\bin) and a metafile sized in 0.01 mm */
+    const char bin[] = "{\\rtf1 x{\\pict\\jpegblip\\bin4 \xff\xd8}\xff}y{\\pict\\wmetafile8\\picw2540\\pich1270 0102}z}";
+    assert(!wp_rtf_read(&d, bin, sizeof(bin) - 1, &rep)); check(&d);
+    p = wp_pic_at(&d, 1); assert(p && p->kind == WP_PIC_JPEG && p->len == 4 && p->data[2] == '}' && p->data[3] == (uint8_t)'\xff');
+    struct wp_pic *m = wp_pic_at(&d, 5); assert(m && m->kind == WP_PIC_WMF && m->len == 2 && m->goalw == 1440 && m->goalh == 720 && d.len == 1 + 3 + 1 + 3 + 1);
+    /* Word 2000 writes the picture twice: \shppict is read, \nonshppict is not */
+    const char shp[] = "{\\rtf1 a{\\*\\shppict{\\pict\\pngblip 0102}}{\\nonshppict{\\pict\\wmetafile8 0304}}b}";
+    assert(!wp_rtf_read(&d, shp, sizeof(shp) - 1, &rep) && rep.kept_pictures == 1 && wp_pic_count_used(&d) == 1 && wp_pic_at(&d, 1)->kind == WP_PIC_PNG && d.len == 5);
+    /* unsupported or empty pictures are counted */
+    const char bad[] = "{\\rtf1 a{\\pict\\wbitmap0 0102}b{\\pict\\pngblip}c{\\pict 0102}d}";
+    assert(!wp_rtf_read(&d, bad, sizeof(bad) - 1, &rep) && rep.skipped_pictures == 3 && rep.unsupported_pictures == 2 && !strcmp(d.text, "abcd"));
+    /* an embedded object: class, data, and the result picture shown */
+    snprintf(rtf, sizeof(rtf), "{\\rtf1 a{\\object\\objemb{\\*\\objclass Package}\\objw1440\\objh720{\\*\\objdata 0102ff}{\\result {\\pict\\pngblip %s}}}b"
+             "{\\object\\objlink{\\*\\objclass Word.Document.8}\\objw2000\\objh1000}c}", PNGHEX);
+    assert(!wp_rtf_read(&d, rtf, strlen(rtf), &rep)); check(&d);
+    assert(rep.kept_objects == 1 && rep.skipped_objects == 1 && d.len == 1 + 3 + 1 + 1);
+    p = wp_pic_at(&d, 1);
+    assert(p && p->objkind == WP_OBJ_EMB && !strcmp(p->cls, "Package") && p->objlen == 3 && p->objdata[2] == 0xff && p->kind == WP_PIC_PNG);
+    /* write and read again: the bytes, sizes, scales and objects survive */
+    assert(!wp_rtf_read(&d, (snprintf(rtf, sizeof(rtf), "{\\rtf1 a{\\pict\\pngblip\\picwgoal480\\pichgoal240\\picscalex50\\picscaley25 %s}b{\\object\\objemb{\\*\\objclass Package}\\objw1440\\objh720"
+                                      "{\\*\\objdata 0102ff}{\\result {\\pict\\pngblip %s}}}c}", PNGHEX, PNGHEX), rtf), strlen(rtf), &rep));
+    char *out; size_t n;
+    assert(!wp_rtf_write(&d, &out, &n) && strstr(out, "\\pngblip") && strstr(out, "{\\object\\objemb{\\*\\objclass Package}") && strstr(out, "\\picscalex50"));
+    assert(!wp_rtf_read(&e, out, n, &rep)); check(&e);
+    assert(e.len == d.len && rep.kept_pictures == 1 && rep.kept_objects == 1 && wp_pic_count_used(&e) == 2);   /* the result picture belongs to the object */
+    struct wp_pic *p1 = wp_pic_at(&e, 1), *o1 = wp_pic_at(&e, 5), *q1 = wp_pic_at(&d, 1), *r1 = wp_pic_at(&d, 5);
+    assert(p1 && o1 && q1 && r1 && p1->len == q1->len && !memcmp(p1->data, q1->data, p1->len) && p1->goalw == 480 && p1->scalex == 50 && p1->scaley == 25);
+    assert(o1->objkind == WP_OBJ_EMB && o1->objlen == 3 && !memcmp(o1->objdata, r1->objdata, 3) && !strcmp(o1->cls, "Package") && o1->len == r1->len);
+    char *again; size_t n2; assert(!wp_rtf_write(&e, &again, &n2) && n == n2 && !memcmp(out, again, n)); free(again);   /* stable */
+    free(out);
+    /* justified paragraphs round trip */
+    assert(!wp_reset(&d)); insert(&d, 0, "justified text");
+    struct wp_pstyle j = {WP_P_ALIGN, {WP_JUSTIFY, 0, 0, 0, 0, 0, 0, {0}}}; assert(!wp_style_paras(&d, 0, 0, &j));
+    assert(!wp_rtf_write(&d, &out, &n) && strstr(out, "\\qj") && !wp_rtf_read(&e, out, n, &rep) && e.paras[0].a.align == WP_JUSTIFY); free(out);
+    /* a truncated picture group and a huge \bin do not crash */
+    const char cut[] = "{\\rtf1 a{\\pict\\pngblip 8950"; assert(!wp_rtf_read(&e, cut, sizeof(cut) - 1, &rep));
+    const char hugebin[] = "{\\rtf1 a{\\pict\\pngblip\\bin999999999 12}b}"; assert(!wp_rtf_read(&e, hugebin, sizeof(hugebin) - 1, &rep));
+    /* mutation fuzzing of a document with pictures and an object */
+    snprintf(rtf, sizeof(rtf), "{\\rtf1 a{\\pict\\pngblip\\picw16\\pich8 %s}b{\\object\\objemb{\\*\\objclass X}{\\*\\objdata 0102}{\\result {\\pict\\wmetafile8 0304}}}c\\qj d}", PNGHEX);
+    size_t base = strlen(rtf); char *buf = malloc(base + 64); unsigned seed = 777;
+    for (unsigned it = 0; it < 3000; it++) {
+        memcpy(buf, rtf, base); size_t m2 = base;
+        for (unsigned k = 0; k < 1 + it % 5; k++) {
+            seed = seed * 1103515245u + 12345u; size_t at = (seed >> 8) % m2; seed = seed * 1103515245u + 12345u;
+            switch ((seed >> 16) % 3) { case 0: buf[at] = (char)(seed >> 3); break; case 1: m2 = at + 1; break; default: buf[at] = "{}\\;' 0f"[(seed >> 5) & 7]; }
+        }
+        int r = wp_rtf_read(&e, buf, m2, &rep); assert(r == 0 || r == -EINVAL); check(&e);
+        if (!r) { char *w2; size_t wn; assert(!wp_rtf_write(&e, &w2, &wn)); struct wp_doc f; assert(!wp_init(&f)); assert(!wp_rtf_read(&f, w2, wn, &rep)); check(&f); assert(f.len == e.len); wp_free(&f); free(w2); }
+    }
+    free(buf); wp_free(&d); wp_free(&e);
+}
+
+static const struct wp_doc *sw_doc;
+static int sum_widths(void *ctx, const struct wp_piece *pc)   /* the right edge of the last piece that is not a space */
+{ int *end = ctx; if (pc->kind != WP_PIECE_TEXT || sw_doc->text[pc->start] != ' ') { if (pc->x + pc->w > *end) *end = pc->x + pc->w; } return 0; }
+static void test_layout_justify_nowrap_pictures(void)
+{
+    struct wp_doc d; assert(!wp_init(&d));
+    struct wp_layout l; wp_layout_init(&l); sw_doc = &d;
+    /* justified: full lines reach the right edge exactly, the last line and soft-break lines do not */
+    insert(&d, 0, "aa bb cc dd ee ff gg hh ii jj\nshort one");
+    struct wp_pstyle j = {WP_P_ALIGN, {WP_JUSTIFY, 0, 0, 0, 0, 0, 0, {0}}}; assert(!wp_style_paras(&d, 0, d.len, &j));
+    assert(!wp_layout_build(&l, &d, &OPS, 100, 0) && l.n >= 4);
+    for (unsigned i = 0; i < l.n; i++) {
+        const struct wp_line *ln = &l.lines[i];
+        int right = 0; wp_layout_pieces(&l, &d, &OPS, i, sum_widths, &right);
+        if (ln->flags & WP_LINE_WRAPPED) assert(right == 100 && ln->gaps > 0 && ln->extra > 0 && ln->width == 100);
+        else assert(right < 100 && !ln->extra);
+    }
+    /* the extra width is shared as whole 1/64 pixels: no drift between caret and hit testing on a justified line */
+    for (size_t pos = 0; pos <= l.lines[0].end; pos++) {
+        int x, y, hh; wp_layout_caret(&l, &d, &OPS, pos, &x, &y, &hh);
+        size_t back = wp_layout_hit(&l, &d, &OPS, x, y); assert(back == pos || (d.text[pos] == ' ' && back + 1 >= pos));
+    }
+    /* left aligned paragraphs are not stretched */
+    struct wp_pstyle left = {WP_P_ALIGN, {WP_LEFT, 0, 0, 0, 0, 0, 0, {0}}}; assert(!wp_style_paras(&d, 0, 1, &left));
+    assert(!wp_layout_build(&l, &d, &OPS, 100, 0) && !l.lines[0].extra);
+    /* no wrap: one line per paragraph, the widest line is the content width, alignment refers to the window */
+    assert(!wp_reset(&d)); insert(&d, 0, "this line is much longer than the window\nshort");
+    l.nowrap = 1;
+    assert(!wp_layout_build(&l, &d, &OPS, 100, 0) && l.n == 2 && l.content_w == 400 && l.height > 0);
+    struct wp_pstyle right = {WP_P_ALIGN, {WP_RIGHT, 0, 0, 0, 0, 0, 0, {0}}}; assert(!wp_style_paras(&d, 41, 42, &right));
+    assert(!wp_layout_build(&l, &d, &OPS, 100, 0) && l.lines[1].shift == 100 - 50);   /* "short" is 50 px: right of the 100 px window */
+    l.nowrap = 0; assert(!wp_layout_build(&l, &d, &OPS, 100, 3) && l.n > 4 && l.content_w <= 100);    /* a mode change rebuilds from the top */
+    /* pictures: on the baseline, wrapping like words, the caret on either side */
+    assert(!wp_reset(&d)); insert(&d, 0, "ab");
+    struct wp_pic *p = wp_pic_new(WP_PIC_PNG, PNGHEAD, sizeof(PNGHEAD)); p->goalw = 1500; p->goalh = 900;   /* 100 x 60 px */
+    assert(!wp_insert_pic(&d, 1, p, NULL)); insert(&d, 4, "cd");
+    assert(!wp_layout_build(&l, &d, &OPS, 1000, 0) && l.n == 1 && l.lines[0].base >= 60 && l.lines[0].h >= 60);
+    int ends = 0; wp_layout_pieces(&l, &d, &OPS, 0, sum_widths, &ends); assert(ends == 140);
+    int x0, x1, y, hh; wp_layout_caret(&l, &d, &OPS, 1, &x0, &y, &hh); wp_layout_caret(&l, &d, &OPS, 4, &x1, &y, &hh);
+    assert(x1 - x0 == 100);
+    assert(wp_layout_hit(&l, &d, &OPS, x0 + 10, 5) == 1 && wp_layout_hit(&l, &d, &OPS, x0 + 90, 5) == 4);
+    assert(!wp_layout_build(&l, &d, &OPS, 100, 0) && l.n == 3);    /* "a", the picture, "cdb" each on their own line */
+    assert(l.lines[1].start == 1 && l.lines[1].end == 4 && (l.lines[1].flags & WP_LINE_WRAPPED) && l.lines[1].h >= 60 && l.lines[2].start == 4);
+    assert(!wp_layout_build(&l, &d, &OPS, 110, 0) && l.n == 2 && l.lines[1].start == 4);          /* the picture still fits after the "a" */
+    wp_layout_free(&l); wp_free(&d);
+}
+
 int main(void)
 {
     test_model(); test_slices(); test_limits(); test_sanitize();
     test_rtf_read(); test_rtf_edge(); test_rtf_round_trip(); test_rtf_fuzz(); test_text();
     test_layout(); test_layout_hit(); test_layout_incremental(); test_pages(); test_large(); test_random_edits();
+    test_pictures_model(); test_rtf_pictures(); test_layout_justify_nowrap_pictures();
     puts("PASS wordpad model");
     return 0;
 }

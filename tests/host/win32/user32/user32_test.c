@@ -3,6 +3,7 @@
 #define _GNU_SOURCE
 #include "../../../../sdk/win32/user32/internal.h"
 #include "../../../../apps/desktop/help_request.h"
+#include "../../../../apps/desktop/sounds.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>

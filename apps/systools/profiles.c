@@ -114,7 +114,7 @@ int hp_apply(struct hp_store *s, unsigned profile, const struct ciuki_device_rec
 int hp_save(const struct hp_store *s, char *out, size_t cap)
 {
     size_t at = 0;
-    int w = snprintf(out, cap, "version=1\nwait=%d\ndefault=%u\nactive=%u\n", s->wait_seconds, s->default_index, s->active);
+    int w = snprintf(out, cap, "version=1\nwait=%d\ndefault=%u\nactive=%u\nboot=%u\n", s->wait_seconds, s->default_index, s->active, s->boot_serial);
     if (w < 0 || (size_t)w >= cap) return -ENOSPC;
     at = (size_t)w;
     for (unsigned i = 0; i < s->count; i++) {
@@ -150,7 +150,8 @@ int hp_load(struct hp_store *s, const char *text)
         char line[200];
         if (len < sizeof(line)) {
             memcpy(line, p, len); line[len] = 0;
-            if (!strncmp(line, "wait=", 5)) wait = atoi(line + 5);
+            if (!strncmp(line, "boot=", 5)) s->boot_serial = (uint32_t)strtoul(line + 5, NULL, 10);
+            else if (!strncmp(line, "wait=", 5)) wait = atoi(line + 5);
             else if (!strncmp(line, "default=", 8)) def = (unsigned)atoi(line + 8);
             else if (!strncmp(line, "active=", 7)) active = (unsigned)atoi(line + 7);
             else if (!strncmp(line, "profile=", 8) && s->count < HP_MAX) {

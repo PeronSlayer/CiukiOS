@@ -24,7 +24,7 @@ struct desk_schedsvc_io {
     int (*load)(void *, char *text, size_t cap, size_t *length);
     int (*save)(void *, const char *text, size_t length);
     int64_t (*now_minutes)(void *);
-    int (*launch)(void *, const char *program, const char *argument);   /* frame thread; >0 pid or -errno */
+    int (*launch)(void *, const char *program, const char *argument);   /* frame thread; >0 pid, 0 deferred spawn, or -errno */
     void (*failed)(void *, const char *program, int error);             /* frame thread, after a launch error */
 };
 struct desk_schedsvc *desk_schedsvc_create(const struct desk_schedsvc_io *);
@@ -32,5 +32,10 @@ struct desk_schedsvc *desk_schedsvc_create(const struct desk_schedsvc_io *);
 int desk_schedsvc_step(struct desk_schedsvc *);
 /* One synchronous frame-thread step: launches every queued task through io->launch; returns how many. */
 unsigned desk_schedsvc_drain(struct desk_schedsvc *);
+int desk_schedsvc_run(struct desktop *, const char *name);
+void desk_schedsvc_bind(struct desk_schedsvc *, struct desktop *); /* before starting a worker */
+void desk_schedsvc_conditions(struct desk_schedsvc *, unsigned idle_minutes, int ac);
+void desk_schedsvc_completed(struct desktop *, unsigned token, int result);
+void desk_schedsvc_exited(struct desktop *, uint32_t pid, int status);
 void desk_schedsvc_destroy(struct desk_schedsvc *);
 #endif

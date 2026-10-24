@@ -35,9 +35,6 @@ struct sh_program_balloon {
     char title[64], text[160];
 };
 #define SH_ICONS (FM_ENTRIES + 4 + (int)DESK_LINKS)
-#define SH_TRAY_ICON_SIZE 16
-#define SH_TRAY_GAP 4
-#define SH_TRAY_MARGIN 6
 struct desktop;
 int desk_shell_program_icon(struct desktop *, int, const struct desk_packet *, const struct ciuki_surface_info *, int);
 int desk_shell_program_balloon(struct desktop *, int, const struct desk_packet *);
@@ -81,14 +78,14 @@ struct desk_run_ui {
 /* Built-in (internal) windows: desk_client.internal holds the kind. */
 enum { DESK_INTERNAL_NONE, DESK_INTERNAL_ABOUT, DESK_INTERNAL_RUN, DESK_INTERNAL_SHUTDOWN,
        DESK_INTERNAL_MESSAGE, DESK_INTERNAL_POWER, DESK_INTERNAL_AUTOPLAY, DESK_INTERNAL_TRANSFER, DESK_INTERNAL_PROGRAMS, DESK_INTERNAL_GAME_DATA,
-       DESK_INTERNAL_END_TASK /* G3: not responding or DOS warning (d->end_task) */, DESK_INTERNAL_SHORTCUT, DESK_INTERNAL_KINDS };
+       DESK_INTERNAL_END_TASK /* G3: not responding or DOS warning (d->end_task) */, DESK_INTERNAL_SHORTCUT, DESK_INTERNAL_SHORTCUT_WIZARD /* G19: the Create Shortcut wizard (G18 properties keep SHORTCUT) */, DESK_INTERNAL_KINDS };
 enum sh_menu_kind { SH_MENU_NONE, SH_MENU_START, SH_MENU_PROGRAMS, SH_MENU_DEVELOPER, SH_MENU_DOCUMENTS,
                     SH_MENU_SETTINGS, SH_MENU_HELP, SH_MENU_DESKTOP, SH_MENU_ICON, SH_MENU_TASK, SH_MENU_ACCESSORIES,
                     SH_MENU_GAMES, SH_MENU_NEW, SH_MENU_OPEN_WITH, SH_MENU_TRAY_SETTINGS,
                     SH_MENU_SYSTEM_TOOLS, SH_MENU_SETTINGS_CATEGORY, SH_MENU_SETTINGS_LAST = SH_MENU_SETTINGS_CATEGORY + CP_CATEGORIES - 1,
                     SH_MENU_DRAG, SH_MENU_TASKBAR, SH_MENU_FIND,
                     SH_MENU_POWER /* G11: tray scheme choice */, SH_MENU_POWER_METER /* G11: tray right click */,
-                    SH_MENU_TOOLBARS, SH_MENU_START_ITEM, SH_MENU_TOOLBAR_CONTEXT, SH_MENU_TOOLBAR_ALL, SH_MENU_FOLDER_BASE=100 };
+                    SH_MENU_TOOLBARS, SH_MENU_START_ITEM, SH_MENU_TOOLBAR_CONTEXT, SH_MENU_TOOLBAR_ALL, SH_MENU_ARRANGE, SH_MENU_FOLDER_BASE=100 };
 enum sh_action { SH_ACT_NONE, SH_ACT_SUBMENU, SH_ACT_LAUNCH, SH_ACT_ABOUT, SH_ACT_RUN, SH_ACT_SHUTDOWN,
                  SH_ACT_DOCUMENT, SH_ACT_CONTROL, SH_ACT_KEYS, SH_ACT_ARRANGE, SH_ACT_ICON_OPEN,
                  SH_ACT_ICON_PROPERTIES, SH_ACT_REFRESH, SH_ACT_TASK_RESTORE, SH_ACT_TASK_MINIMIZE,
@@ -104,20 +101,21 @@ enum sh_action { SH_ACT_NONE, SH_ACT_SUBMENU, SH_ACT_LAUNCH, SH_ACT_ABOUT, SH_AC
                  SH_ACT_POWER_SCHEME /* G11: arg is the scheme */, SH_ACT_POWER_METER,
                  SH_ACT_MAGNIFIER /* G25: Accessories > Magnifier: toggles the Magnifier */,
                  SH_ACT_FOLDER_OPTIONS, SH_ACT_SHELL_ITEM, SH_ACT_TOOLBAR, SH_ACT_ADDRESS, SH_ACT_NEW_TOOLBAR,
-                 SH_ACT_START_OPEN, SH_ACT_START_DELETE, SH_ACT_START_RENAME, SH_ACT_START_EXPLORE, SH_ACT_TOOLBAR_EXPLORE, SH_ACT_FOLDER_EXPLORE, SH_ACT_START_PROPERTIES };
+                 SH_ACT_START_OPEN, SH_ACT_START_DELETE, SH_ACT_START_RENAME, SH_ACT_START_EXPLORE, SH_ACT_TOOLBAR_EXPLORE, SH_ACT_FOLDER_EXPLORE, SH_ACT_START_PROPERTIES,
+                 SH_ACT_ICON_SORT /* G19: By Name/Type/Size/Date */, SH_ACT_ICON_AUTO, SH_ACT_ICONS_SHOW };
 #define SH_ITEM_SEPARATOR 1u
 #define SH_ITEM_DISABLED 2u
 #define SH_ITEM_DEFAULT 4u
+#define SH_ITEM_CHECKED 8u
 /* mark: 1 + the byte of label that is the underlined access key (0 none). */
 struct sh_item { char label[44]; const char *icon; uint8_t action, flags, mark; int16_t arg; };
-struct sh_menu { int kind, count, hot, row_h, icon,scroll,scroll_max; struct desk_box box; struct sh_item items[SH_ITEMS]; };
-struct sh_menu { uint64_t opened; unsigned animation_step; int kind, count, hot, row_h, icon; struct desk_box box; struct sh_item items[SH_ITEMS]; };
+struct sh_menu { uint64_t opened; unsigned animation_step; int kind, count, hot, row_h, icon,scroll,scroll_max; struct desk_box box; struct sh_item items[SH_ITEMS]; };
 /* Desktop shortcuts. action: SH_ACT_LAUNCH with a program name and an
  * optional argument (Files with a folder), or a built-in action. */
 struct sh_icon { char label[FM_NAME], program[24], argument[FM_PATH]; const char *icon; int action, ciuki, selected; struct desk_box box; };
 /* fx-19 shell drag session (DoDragDrop): the desktop owns the pointer from
  * the drag threshold until the drop, Esc or a right-drag menu choice. */
-enum { SH_DROP_NONE, SH_DROP_DESKTOP, SH_DROP_ICON, SH_DROP_TRASH, SH_DROP_FILES, SH_DROP_APP, SH_DROP_TASK, SH_DROP_START, SH_DROP_QUICK, SH_DROP_TOOLBAR };
+enum { SH_DROP_NONE, SH_DROP_DESKTOP, SH_DROP_ICON, SH_DROP_TRASH, SH_DROP_FILES, SH_DROP_APP, SH_DROP_TASK, SH_DROP_START, SH_DROP_QUICK, SH_DROP_TOOLBAR, SH_DROP_PROGRAM /* G19: folder and program icons */ };
 #define SH_DRAG_IMAGE_ITEMS 8
 struct sh_dnd {
     int active, menu;                 /* menu: right-drag menu waits for a choice */
@@ -134,6 +132,8 @@ struct sh_dnd {
     uint64_t hover_ns, repeat_ns,start_hover_ns;
     int opened_start;
     int hover_task, drop_index;
+    int resolved_icon, resolved_kind;
+    char resolved_destination[FM_PATH];
     int icons[SH_DRAG_IMAGE_ITEMS]; unsigned icon_count;   /* desktop source: dragged icons drawn */
     struct desk_box image;            /* drag image bounds as last painted */
 };
@@ -169,6 +169,8 @@ struct desk_shell {
      * (selected unless focus_unselected); anchor for Shift ranges; the
      * rubber band in screen coordinates and the selection it started from. */
     int focus_unselected, anchor, icon_button, icon_pending;
+    int icon_editing; char icon_edit[FM_NAME]; unsigned icon_edit_cursor;
+    char icon_typeahead[FM_NAME]; unsigned icon_typeahead_length; uint64_t icon_typeahead_ns;
     int band, band_x0, band_y0, band_x1, band_y1; unsigned band_modifiers;
     uint8_t *band_original; int band_capacity;
     struct sh_dnd dnd;
@@ -340,5 +342,7 @@ void desk_shell_drag_status(struct desktop *, int client, uint32_t serial, unsig
 int desk_shell_drag_motion(struct desktop *);
 int desk_shell_drag_button(struct desktop *, int button, int down);
 void desk_shell_drag_cancel(struct desktop *);
+struct desk_launch_record;
+int desk_shell_open_record(struct desktop *, const struct desk_launch_record *, unsigned);
 int desk_shell_icon_marked(const struct desktop *, int index);
 #endif

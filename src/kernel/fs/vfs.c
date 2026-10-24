@@ -2775,3 +2775,43 @@ int vfs_free_space(struct vfs_table *t, unsigned d, uint64_t *bytes, uint32_t *c
     if (v) { *cb=(uint32_t)v->spc*512; *bytes=(uint64_t)fat_free_estimate(v,0) * *cb; } /* fx-17b: bound while counting */
     vfs_unlock(t->vfs); return e;
 }
+
+/* Best-effort startup hints use ordinary exclusive handles and short FAT
+ * transactions. In particular, no volume reservation spans log device I/O. */
+void vfs_startup_record_locked(struct vfs *v,struct fat_volume *vol,const struct fat_entry *file,
+                              const uint32_t *order,unsigned count)
+{
+    if (!count || count>16 || vol->readonly) return;
+    uint32_t saved=v->active; unsigned drive=26;
+    for (unsigned d=0;d<26;d++) if (v->volumes[d]==vol) drive=d;
+    if (drive==26 || (saved && !(saved&vfs_drive_mask(drive)))) return;
+    /* The image owner pins its node/volume. Copy the advisory identity before
+     * dropping namespace; a concurrent image change invalidates the hint at use. */
+    struct fat_entry image=*file;
+    uint32_t observed[16]; memcpy(observed,order,count*sizeof(*order));
+    struct vfs_table *table=fs_contig_alloc(sizeof(*table));
+    void *data=fs_page_alloc();
+    if (!table || !data) { fs_contig_free(table,sizeof(*table)); fs_page_free(data); return; }
+    char path[]="A:/CIUKIST.LOG"; path[0]=(char)('A'+drive);
+    vfs_unlock(v);
+    if (!vfs_table_init(v,table,drive)) {
+        table->request=fs_request_current();
+        int fd=vfs_open(table,path,VFS_READ|VFS_WRITE|VFS_CREATE,VFS_DENY_ALL,FAT_ATTR_HIDDEN|FAT_ATTR_SYSTEM);
+        if (fd>=0) {
+            struct fat_entry log; size_t done=0, size=fat_startup_size(); uint64_t position;
+            int e=vfs_handle_stat(table,fd,&log,0);
+            if (!e && (log.attr&(FAT_ATTR_DIR|FAT_ATTR_HIDDEN|FAT_ATTR_SYSTEM))!=(FAT_ATTR_HIDDEN|FAT_ATTR_SYSTEM)) e=-FS_EACCES;
+            if (!e && log.size==size) e=vfs_read(table,fd,data,size,&done);
+            if (!e) e=fat_startup_prepare(vol,&image,observed,count,data,done);
+            if (!e) e=vfs_seek(table,fd,0,VFS_SEEK_SET,&position);
+            if (!e) e=vfs_write(table,fd,data,size,&done);
+            if (!e && done!=size) e=-FS_EIO;
+            if (!e && log.size>size) e=vfs_truncate(table,fd,size);
+            if (!e) (void)vfs_commit(table,fd);
+            (void)vfs_close(table,fd);
+        }
+        vfs_table_destroy(table);
+    }
+    vfs_lock(v,saved);
+    fs_contig_free(table,sizeof(*table)); fs_page_free(data);
+}

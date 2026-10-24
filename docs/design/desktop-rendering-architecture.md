@@ -476,6 +476,8 @@ after each of these transients (`equivalent()`).
 | 48 | fx-28 Display from Control Panel opens a fixed applet; monitor Settings opens Power Management | ordinary window create/focus (row 1); browser remains resizable | bounded Control Panel DESK_LAUNCH capability for display/power | OPEN_POWER is the shutdown confirmation, so it is not used | fixed-size arrange; real transport and `control_modes_test.c` |
 
 
+| 92 | G29D startup placement checkbox and its running/disabled state | the maintenance dialog controls and exposed client | Files `maintenance_ui.inc`, ordinary toolkit invalidation | no new paint or protocol path | startup disk tools (appended row) |
+| 93 | G29D boot-volume next-start warning, Cancel and scheduled confirmation | dialog bounds and client content | Files conversion query/worker completion | scheduling never claims conversion has already completed | startup disk tools (appended row) |
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with
 | 42 | Find entry points: Start > Find submenu, desktop F3, Win+F; Files criteria pages, validation, results publication, sorting, Stop and navigation | menu boxes, normal window/client damage; Files invalidates its changed client state | `desk_shell_find`, Files `find_dialog`, `scan_poll`, `files_update` | G7 adds no compositor special case | `row_find` in `test_window_model`; `files_search_test.c` compares every client transition with a full redraw |
@@ -546,6 +548,20 @@ caption animation of row 8 is the only window outline. Rows 25-30 came with
 | 46 | Desktop Theme package preview, Apply and rollback | complete desktop, icon and pointer state, menus and windows | `settings.c` package snapshots, Control Panel display transaction | G23: sound scheme accompanies the package and is restored on Cancel | desktop themes (`WM_ROW=37`) |
 | 47 | Background Browse result | wallpaper cache and complete desktop | existing background worker and display transaction | G23: Browse uses the same decode and repaint path as the picture list | background browse (`WM_ROW=38`) |
 | 48 | Settings > Advanced > General font-size sheet: small/large/custom, Apply and Cancel | client-owned modal contents; normal toolkit dialog and client damage | `control/app.c` Advanced property sheet; real controls in `control_modes_test.c` | G23: modal Cancel restores its entry snapshot, outer Display Cancel retains complete rollback | advanced font sheet (`WM_ROW=39`) |
+| 86 | G30B Performance File System/Graphics/Virtual Memory property sheets: open, edit, validation/save error, Apply/OK/Cancel and restart notice | modal client controls, changed status and exposed client bounds | Control Panel `perf_open`/`perf_accept`, toolkit invalidation and existing DAMAGE | none new | `row_g30b_performance` (appended index 93), real controls in `control_system_tools_test.c` |
+| 87 | G30B Scheduled Tasks idle/deadline and battery conditions, Run acceptance, running and actual executable exit result | Settings page, list result/status cells and exposed bounds | `schedtask_ui.c`, scheduler service reload and toolkit invalidation | queued acceptance no longer means successful execution | `row_g30b_schedule` (appended index 94), real controls and runtime models |
+| 88 | G30B System Monitor multi-adapter receive/transmit/error samples, adapter reset and availability | chart, legend and numeric client regions | existing `smv_sample` native DAMAGE; source from read-only NET_INFO_CONFIG | counters rebase on generation/MAC changes | `row_g30b_network` (appended index 95), `g30b_runtime_test.c` |
+| 97 | G26C full-document Print, printer/range/copies/file edits, Cancel, Page Setup paper/margins/orientation and queue/error status | native modal bounds, changed controls and exposed browser client | `cp_ui_document`, G31 dialog/event/poll and normal browser client damage | browser layout remains unchanged | `row_g26c_print` plus production document/controller fixtures |
+| 98 | G26C saved download completion Open/Open With/Close, shared Files chooser and Always use | download modal, new Files frame/task button, chooser and exposed browser | chrome saved-download event, constrained existing v3 launch, G8 chooser | other callers and path traversal refused | `row_g26c_download` and production chrome/association fixtures |
+| 99 | G26C Internet Programs Make Default result and shared File Types window | changed Programs controls/status, Files window and property sheet | Internet controller, shared HKCR, existing v2 launch | no additional ABI numbers | `row_g26c_programs` and Control Panel fixture |
+| 100 | G26C immediate or delayed new-window/file-handoff launch failure | browser status strip; opener content preserved | chrome `ciuki_chrome_launch_result` and existing surface result delivery | no fallback navigation | `row_g26c_launch_error` and production chrome launch fixture |
+| 101 | G16B Open multiple selection, Read Only changes and large icon view | changed list and checkbox; dialog bounds on open/close | `dialog.c` file hooks and normal toolkit damage | no new transport | `row_common_files` (`WM_ROW=101`), `common_dialogs_test.c` |
+| 102 | G16B Font Script list open/close | combo overlay and sample/dialog damage | `commdlg.c`, shared combo overlay | Western is the supported native character set | `row_common_script` (`WM_ROW=102`) |
+| 103 | G16B Browse for Folder inline rename begin, typing, commit, cancel and errors | editor and tree row; status text on error | `folder_rename_begin`, `folder_rename_end`; normal client damage | root is protected; failed rename retains editor | `row_common_folder_rename` (`WM_ROW=103`), `common_dialogs_test.c` |
+| 104 | G27B Calculator Sta opens Statistics Box; selection, CD and CAD refresh rows; RET/LOAD return to the display | modal box and shadow, changed data rows and exposed calculator display | `calc_statistics_box`, `stat_changed`, libdeskui client damage | no direct screen writes | `row_g27b_statistics`, production `calc_test.c` |
+| 105 | G27B Viewer Save As, overwrite confirmation, Cancel and save error | dialog bounds, exposed rotated image, error box | shared `du_file_open`, `viewer_event` | save leaves decoded picture unchanged | `row_g27b_viewer_save`, `viewer_test.c` |
+| 106 | G27B Terminal FORMAT warning/result, PING replies, RUN output and interruption, REG results | changed terminal output rows, exposed content | `term_write`, ordinary client damage | existing terminal renderer | `row_g27b_terminal`, native and network command fixtures |
+| 107 | G27B Serial YMODEM/ZMODEM/Kermit menus and file choice, progress, completion/cancel/error | menu, chooser and status bar bounds | `serial_event`, `serial_tick`, `status` | protocol engine never draws | `row_g27b_serial`, `serial_test.c`, `transfer_test.c` |
 A window drag shows the window contents by default; the Effects preference selects a deferred outline drag; the
 caption animation of row 8 remains independent of that drag preference. Rows 25-30 came with
 fx-19 (drag and drop, rubber-band and keyboard selection) and were added by
@@ -797,3 +813,60 @@ and the separate mixer-display refresh semantics of
 These references were rechecked against the merged implementation; no public
 ABI numbers change. G4's scenario indexes and inventory rows stay fixed,
 with fx-26 appended after them as described above.
+
+### Integration correction: desktop menu checks (2026-10-24)
+
+The system-string atlas audit found G19's U+2713 suffix in Auto Arrange and
+Show Desktop Icons, outside the pinned UI atlas. The two selected states now
+use an explicit menu checked flag and the shell's existing 7-by-7 check
+painter in the icon gutter. Their labels remain plain English, and disabled
+and hot rows use their existing theme ink. This follows Microsoft's
+[About Menus: Menu Item Check Marks](https://learn.microsoft.com/en-us/windows/win32/menurc/about-menus)
+separation of check state from item text and avoids extending the font atlas
+for a control mark. U+FFFC in WordPad is an embedded object anchor, not UI
+ink: [Unicode Specials](https://www.unicode.org/charts/PDF/UFFF0.pdf).
+The atlas audit excludes that exact internal picture marker.
+
+The package-invoked memory-footprint boot replay also exposed two consecutive
+`cfg_writer_start` calls on the same settings writer after the profile merge.
+The second call reinitialized live synchronization objects and lost the first
+thread handle: shutdown hung in `cfg_writer_stop` until the fixture alarm.
+[POSIX pthread_mutex_init](https://pubs.opengroup.org/onlinepubs/007904875/functions/pthread_mutex_destroy.html)
+defines reinitializing a live mutex as undefined behavior. Keep exactly the
+profile-aware startup call; the default profile already supplies the ordinary
+system settings paths. The existing six-case boot replay exercises startup,
+reload and shutdown of that one worker without relaxing its deadline.
+
+The seven merged System property tabs exceeded the fixed panel width and
+clipped Startup. Microsoft documents label-dependent tab sizes and adjustable
+margins in [About Tab Controls](https://learn.microsoft.com/en-us/windows/win32/controls/tab-controls).
+The toolkit keeps its existing 18-pixel total horizontal margin when tabs
+fit; when they overflow it reduces that margin uniformly, down to six pixels,
+using the same widths for paint and hit testing. This fits the complete merged
+System tab row without changing labels or page geometry.
+
+Network frame review caught a production page-scoping defect: the generic
+refresh wrote the Mouse pointer-scheme caption into widget 1506, which the
+Network TCP/IP page reuses for its Default gateway label. Restrict the G12
+advanced input refresh block to Mouse/Keyboard pages. The network fixture
+now asserts the gateway label on every TCP/IP frame; its existing goldens
+should remain valid. Control lookup is parent-local (the same rule described
+by [GetDlgItem](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getdlgitem));
+reusing a page-local ID does not authorize another page's refresh to write it.
+
+The scheduler's optional native boundary already supplies weak host-replay
+`start` and `tick` bindings in desktop.c. The new child-exit callback was
+called strongly by the merged service loop but lacked that companion host
+binding, breaking both footprint and app-case replay links. Add the matching
+weak `exited` no-op; the real schedsvc.c strong definition still wins in
+native builds ([GCC weak attribute](https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html)).
+Isolated platform replays continue to omit the scheduler worker; its dedicated
+service harness tests the real binding.
+
+The first Start-menu opening allocated a 4,112-byte 32px `system-search` cache
+entry and a temporary 2,509-byte decode buffer after the first frame. The
+Find icon was missing from `icons_prepare`; add it to the existing four-size
+bounded preparation list. The [Icon Theme Specification](https://specifications.freedesktop.org/icon-theme/)
+identifies icons by name and size, so preparing another icon or another size
+cannot cover this lookup. The footprint assertion stays at zero allocations
+and requires unchanged cache counts/bytes across all measured phases.

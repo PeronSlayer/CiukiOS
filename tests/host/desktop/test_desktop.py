@@ -41,15 +41,16 @@ SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "autoplay.c", "a
 # F2-83: shaded bars, coverage rims and task buttons; desktop-shell.md.
 # G16 (2026-10-24): the two dialogs frames show the toolkit Open dialog (New Folder, List/Details, Files of type).
 # F2-99: only the new software arrow/shadow footprint differs (integ-fix1 pixel comparison).
+# Fix C (2026-10-24): reviewed G16b/G28b dialogs in the G23 appearance tree; see build/codex/fixc-report.md.
 LOOK_GOLDENS = {
-    "ciuki-blue-desktop.ppm": "b46e3cc28c49d9f171e433dc001d0af13c3392e6e76fa64411aecc264d89d5e5",
-    "ciuki-blue-dialogs.ppm": "c730ef80c789f8072cec87c486ba25dd2e624d942084eab8443d7f1bd56c4995",
-    "ciuki-blue-tray-disabled.ppm": "e6448c5e6cff1af18be71510d8edc2898e309da6bf27daaf31e04f3de2551e3d",
-    "ciuki-blue-tray-media.ppm": "7908574c1328c6dc007c6915f686e58e245b020552f299dc6cbb0480e9a5cf83",
-    "platinum-desktop.ppm": "8748fdd63953ebd0ac92660d2d4770d26dd79ac7e2c5d05afc3d59d97564e8f6",
-    "platinum-dialogs.ppm": "de52ea8689005a78b6fb45f1d5790a3a4879c001185248dfe0fbf3c01a1a2a6b",
-    "platinum-tray-disabled.ppm": "5daa1a2a2ac41a643b565895372bdf6c541125397cec3cde3aecd0aa594a4fae",
-    "platinum-tray-media.ppm": "0f68811b59e9f824f299017d3895141bb6a927f4efd456f59d7f3db04aa397df"
+    "ciuki-blue-desktop.ppm": "1760a02cbf1a7b6e190956cb2224d90ebd16508b50b7ba32570cfb8c5d733aa8",
+    "ciuki-blue-dialogs.ppm": "6815007bbd7f345d7c7db6035f27d9c5f5605bd9fbf711bc84c096592a181c5a",
+    "ciuki-blue-tray-disabled.ppm": "c8dcf43112cfd62edcf26c4727c29a60a61fda7e32cd1df58992f220b0d70528",
+    "ciuki-blue-tray-media.ppm": "828d0b4e9b46ee6b22afbba57acc8db956240150ac2e1d20c66d129c02b54f1d",
+    "platinum-desktop.ppm": "ef553b4abf2d38e6438c311f7a144c8c031cc393c10af84fe48426207e7a9183",
+    "platinum-dialogs.ppm": "7abfd44a71dc421801a93e755df982e36304874c2105dd689c4147cfce074d16",
+    "platinum-tray-disabled.ppm": "a6ab48b6f04ebd95a095c71e99143ac24ace29adb52cf50fee6c56a0d86860e0",
+    "platinum-tray-media.ppm": "2433cbff5aa75196cfc469379569506e915db99c1e5ead753e1ca02eea41f11a"
 }
 
 # Public set-1 codes the kernel reports for the QMP qcodes of the desktop cases (E0 keys | 0x100).
@@ -283,7 +284,7 @@ class DesktopTests(unittest.TestCase):
             return raster
         icons, plain = pixels(icons_ppm), pixels(plain_ppm)
         row = 1024 * 3
-        x0, y0, cw, ch, label_top, cells = 8, 42, 96, 94, 54, 3
+        x0, y0, cw, ch, label_top, cells = 8, 42, 96, 94, 54, 4   # G19: Network Neighborhood is the fourth default icon
         for y in range(768):
             a, b = icons[y * row:(y + 1) * row], plain[y * row:(y + 1) * row]
             if y0 <= y < y0 + cells * ch:
@@ -400,7 +401,7 @@ class DesktopTests(unittest.TestCase):
             env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
             binary = folder / "control-test"
             icons = load("control_icon_assets", ROOT / "tests/host/desktop/icon_assets.py")   # the guest's /system/icons store
-            sources = ["tests/host/desktop/control_test.c", "apps/control/app.c", "apps/control/driver_pack_ui.c", "apps/control/display.c", "apps/control/fonts.c", "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c", "apps/desktop/protocol.c",
+            sources = ["tests/host/desktop/control_test.c", "apps/control/app.c", "apps/desktop/power_policy.c", "apps/systools/devctl.c", "apps/systools/profiles.c", "apps/control/driver_pack_ui.c", "apps/control/display.c", "apps/control/fonts.c", "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c", "apps/desktop/protocol.c",
                        *(f"apps/desktop/{n}.c" for n in ("settings", "sounds", "wallpaper", "image", "compositor", "theme")),
                        *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map"))]
             ft = load("control_freetype", ROOT / "sdk/freetype/build.py"); library = ft.host()
@@ -439,7 +440,7 @@ class DesktopTests(unittest.TestCase):
             env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
             binary = folder / "control-modes-test"
             icons = load("control_modes_icons", ROOT / "tests/host/desktop/icon_assets.py")
-            sources = ["tests/host/desktop/control_modes_test.c", "apps/control/app.c", "apps/control/driver_pack_ui.c", "apps/control/display.c", "apps/control/fonts.c", "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c",
+            sources = ["tests/host/desktop/control_modes_test.c", "apps/control/app.c", "apps/desktop/power_policy.c", "apps/systools/devctl.c", "apps/systools/profiles.c", "apps/control/driver_pack_ui.c", "apps/control/display.c", "apps/control/fonts.c", "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c",
                        *(f"apps/desktop/{n}.c" for n in ("protocol", "settings", "sounds", "wallpaper", "image", "compositor", "theme")),
                        *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map"))]
             ft = load("control_modes_freetype", ROOT / "sdk/freetype/build.py"); library = ft.host()
@@ -475,7 +476,7 @@ class DesktopTests(unittest.TestCase):
             env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
             binary = folder / "control-async-test"
             icons = load("control_async_icons", ROOT / "tests/host/desktop/icon_assets.py")
-            sources = ["tests/host/desktop/control_async_test.c", "tests/host/desktop/control_channel_host.c", "apps/control/decoder.c", "apps/control/app.c", "apps/control/driver_pack_ui.c", "apps/control/display.c", "apps/control/fonts.c", "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c",
+            sources = ["tests/host/desktop/control_async_test.c", "tests/host/desktop/control_channel_host.c", "apps/control/decoder.c", "apps/control/app.c", "apps/desktop/power_policy.c", "apps/systools/devctl.c", "apps/systools/profiles.c", "apps/control/driver_pack_ui.c", "apps/control/display.c", "apps/control/fonts.c", "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c",
                        *(f"apps/desktop/{n}.c" for n in ("protocol", "settings", "sounds", "wallpaper", "image", "compositor", "theme")),
                        *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map"))]
             ft = load("control_async_freetype", ROOT / "sdk/freetype/build.py"); library = ft.host()
@@ -529,7 +530,7 @@ class DesktopTests(unittest.TestCase):
             folder = Path(temp)
             inc = folder / "include/ciuki"
             inc.mkdir(parents=True)
-            for name in ("channel.h", "surface.h", "spawn.h", "proc.h", "audio.h", "net.h", "media.h", "power.h", "display.h", "registry.h", "audio_preference.h"):
+            for name in ("channel.h", "surface.h", "spawn.h", "proc.h", "audio.h", "net.h", "media.h", "power.h", "display.h", "registry.h", "audio_preference.h", "fileinfo.h"):
                 shutil.copy2(ROOT / "sdk/sysroot-overlay/include/ciuki" / name, inc / name)
             for name in ("runtime.h", "raw.h"):
                 (inc / name).write_text("/* supplied by host harness */\n")
@@ -537,6 +538,7 @@ class DesktopTests(unittest.TestCase):
             binary = folder / "launch-test"
             sources = [ROOT / "apps/desktop" / n for n in ("client.c", "protocol.c", "input.c", "compositor.c", "theme.c")] + SHELL_SOURCES
             sources += [ROOT / "tests/host/desktop" / n for n in ("fake.c", "shell_launch_test.c")]
+            sources += [ROOT / "apps/desktop/users.c", ROOT / "apps/desktop/users_io.c", ROOT / "apps/desktop/schedsvc.c"]
             sources += [ROOT / "apps/desktop/image.c", ROOT / "apps/desktop/wallpaper_io.c"]  # shell_service's workers
             sources += [ROOT / "apps/libdeskui" / n for n in ("icons.c", "icon_map.c")]
             bridge = folder / "kernel-poll.o"
@@ -552,6 +554,7 @@ class DesktopTests(unittest.TestCase):
                             "-I", str(folder / "include"), "-I", str(ROOT / "apps/desktop"),
                             "-I", str(ROOT / "src/kernel/include"), *(str(p) for p in sources), "-o", str(binary)],
                            check=True, env=env)
+            subprocess.run([str(binary), "--g26c-path"], check=True, env=env)
             subprocess.run([str(binary)], check=True, env=env)
             subprocess.run([str(binary), "--launch-input"], check=True, env=env)
             # fx-8: a 3891 ms spawn (T23 423b803a NetSurf) runs on the launcher
@@ -621,6 +624,21 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(set(record["icons"]), set(c.MEMBERS))
         self.assertEqual(record["archive_sha256"], c.ARCHIVE_SHA)
 
+    def test_power_policy_model(self):
+        """G11: Windows 98 power schemes, persistence, meter, alarms and the broadcast rule (power_policy_test.c)."""
+        parent = ROOT / "build/host"
+        parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="power-policy-", dir=parent) as temp:
+            out = Path(temp) / "power-policy-test"
+            subprocess.run(["clang", "-std=c17", "-D_POSIX_C_SOURCE=200809L", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
+                            "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
+                            "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "src/kernel/include"),
+                            str(ROOT / "tests/host/desktop/power_policy_test.c"), str(ROOT / "apps/desktop/power_policy.c"),
+                            "-o", str(out)], check=True, env=dict(os.environ, TMPDIR=temp))
+            result = subprocess.run([str(out)], capture_output=True, text=True, env=dict(os.environ, ASAN_OPTIONS="detect_leaks=0"))
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("PASS power policy: PBT_APMPOWERSTATUSCHANGE", result.stdout)
+
     def test_native_production_model(self):
         parent = ROOT / "build/host"
         parent.mkdir(parents=True, exist_ok=True)
@@ -666,8 +684,7 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(set(m["files"]), {"desktop", "shell-launch", "demo", "gfxdemo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", "libdeskui.a",
                                            "ciuki-portrait.xrgb",  # f3-02 /Programs/dosbox; desktop shell /Programs/control
                                            "tango.cis", "TANGO.TXT", "AUTHORS.TXT", "CREDITS.TXT",  # Tango store
-                                           "calc", "charmap", "clock", "help", "hwreport", "mixer", "music", "paint", "viewer",
-                                           "mines", "solitaire", "freecell", "hearts", "serial"})  # legacy-recovery accessories and the f9-07 Hardware Report
+                                           "calc", "charmap", "clock", "help", "hwreport", "mixer", "music", "paint", "viewer", "mines", "solitaire", "freecell", "hearts", "serial", "clipbrd", "logview", "printers", "printspool", "msconfig", "recorder", "resmeter", "schedtask", "scandisk", "sysinfo", "sysmon", "wordpad"})  # legacy-recovery accessories, the f9-07 Hardware Report, system tools and games
         self.assertEqual(m["icons"]["store_sha256"], m["files"]["tango.cis"])
         expected = build.inputs()
         self.assertTrue(build.current_build(expected))
@@ -676,9 +693,9 @@ class DesktopTests(unittest.TestCase):
         image = load("desktop_image_test", ROOT / "scripts/build_image.py")
         sources, directories, metadata = image.desktop_payloads()
         licenses = image.desktop_license_payloads()
-        accessories = {f"/Programs/{n}" for n in ("calc", "charmap", "clock", "help", "mixer", "viewer")}
+        accessories = {f"/Programs/{n}" for n in ("calc", "charmap", "clipbrd", "clock", "help", "mixer", "viewer")}
         expected_paths = {"/System/Win32/shell-launch", "/Programs/desktop", "/Programs/demo", "/Programs/gfxdemo", "/Programs/dosbox", "/Programs/files", "/Programs/tasks",
-                                        "/Programs/terminal", "/Programs/ciuknote", "/Programs/ciukide", "/Programs/control", "/Programs/regedit", "/Programs/paint", "/Programs/calc", "/Programs/charmap", "/Programs/clock", "/Programs/help", "/Programs/mixer", "/Programs/viewer", "/Programs/music", "/Programs/mines", "/Programs/solitaire", "/Programs/freecell", "/Programs/hearts", "/Programs/serial", "/Programs/hwreport",
+                                        "/Programs/terminal", "/Programs/ciuknote", "/Programs/ciukide", "/Programs/control", "/Programs/regedit", "/Programs/paint", "/Programs/calc", "/Programs/charmap", "/Programs/clock", "/Programs/help", "/Programs/mixer", "/Programs/viewer", "/Programs/music", "/Programs/mines", "/Programs/solitaire", "/Programs/freecell", "/Programs/hearts", "/Programs/serial", "/Programs/hwreport", "/Programs/clipbrd", "/Programs/logview", "/Programs/printers", "/System/printspool", "/Programs/msconfig", "/Programs/recorder", "/Programs/resmeter", "/Programs/scandisk", "/Programs/schedtask", "/Programs/sysinfo", "/Programs/sysmon", "/Programs/wordpad",
                                         "/system/assets/ciuki-portrait.xrgb",
                                         *licenses, "/system/fonts/LICENSES.TXT",
                                         *image.font_payloads()[0],
@@ -760,7 +777,13 @@ class DesktopTests(unittest.TestCase):
                 stream.write(b"grown payload start")
                 stream.seek(64 * 1024 * 1024 + 123)
                 stream.write(b"grown payload end")
-            sources = image.desktop_license_payloads()
+            # Generate the same real notices as the SDK, without requiring an
+            # installed target SDK for this independent FAT copier fixture.
+            notices = folder / "sdk" / "licenses"
+            load("fixture_freetype", ROOT / "sdk/freetype/build.py").notices(notices)
+            load("fixture_tinygl", ROOT / "sdk/libgl/build.py").notices(notices)
+            with patch.object(image, "SDK", notices.parent):
+                sources = image.desktop_license_payloads()
             self.assertEqual(sum(p.startswith("/system/licenses/lwip-") for p in sources), 3)
             sources["/Programs/grown.bin"] = payload
             directories = {"/Programs", "/System", "/system/licenses"}
@@ -811,7 +834,7 @@ class AppCaseReplayTests(unittest.TestCase):
         cls.env = dict(os.environ, TMPDIR=str(folder), ASAN_OPTIONS="detect_leaks=0")
         include = folder / "include/ciuki"
         include.mkdir(parents=True)
-        for name in ("channel.h", "surface.h", "spawn.h", "proc.h", "audio.h", "net.h", "media.h", "power.h", "display.h", "registry.h", "audio_preference.h"):
+        for name in ("channel.h", "surface.h", "spawn.h", "proc.h", "audio.h", "net.h", "media.h", "power.h", "display.h", "registry.h", "audio_preference.h", "fileinfo.h"):
             shutil.copy2(ROOT / "sdk/sysroot-overlay/include/ciuki" / name, include / name)
         # Host stand-ins: CU_PTR keeps the whole pointer, the report call takes it (desktop_gate_test.c does the same).
         (include / "runtime.h").write_text("/* app replay */\n#include <ciuki/abi.h>\n#include <stdint.h>\n"
@@ -829,13 +852,16 @@ class AppCaseReplayTests(unittest.TestCase):
         posix = ["-D_POSIX_C_SOURCE=200809L"]
         units = [("replay_desktop", os_calls, host / "replay_desktop.c"),
                  *((f"desktop_{n}", [], ROOT / f"apps/desktop/{n}.c") for n in ("client", "protocol", "input", "compositor", "theme",
-                                                                                  "shell", "autoplay", "autoplay_content", "sounds", "settings", "power_policy", "settings_io", "wallpaper", "wallpaper_io", "keymap", "image", "folder")),
+                                                                                  "shell", "autoplay", "autoplay_content", "sounds", "clipboard", "settings", "power_policy", "settings_io", "wallpaper", "wallpaper_io", "keymap", "image", "folder")),
                  *((f"deskui_{n}", posix, ROOT / f"apps/libdeskui/{n}.c") for n in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea")),
                  *((f"deskui_{n}", posix + icons.defines(), ROOT / f"apps/libdeskui/{n}.c") for n in ("icons", "icon_map")),
                  ("deskui_client", os_calls, ROOT / "apps/libdeskui/client.c"),
                  ("deskui_recent", os_calls, ROOT / "apps/libdeskui/recent.c"),   # CiukNote's recent list (off in --test runs)
+                 *((f"deskui_{n}", posix, ROOT / f"apps/libdeskui/{n}.c") for n in ("clipboard", "clipfile", "clipstore")),   # the shared clipboard (G5)
+                 *((f"libprint_{n}", posix, ROOT / f"apps/libprint/{n}.c") for n in ("dialog", "print", "render")),   # Page Setup and Print (G31) for CiukNote
                  ("files_main", os_calls + ["-Dmain=files_main"], ROOT / "apps/files/files.c"),
                  ("files_app", posix + ["-include", str(host / "replay_files_worker.h")], ROOT / "apps/files/app.c"), ("files_model", posix, ROOT / "apps/files/model.c"),
+                 ("files_backup", posix, ROOT / "apps/files/backup.c"),
                  ("files_transfer", posix + ["-include", str(host / "replay_files_worker.h")], ROOT / "apps/files/transfer.c"),
                  ("note_main", os_calls + ["-Dmain=ciuknote_main"], ROOT / "apps/ciuknote/main.c"),
                  ("note_app", posix, ROOT / "apps/ciuknote/app.c"), ("note_doc", posix, ROOT / "apps/ciuknote/doc.c"),
@@ -844,7 +870,10 @@ class AppCaseReplayTests(unittest.TestCase):
                  ("demo", os_calls + ["-Dmain=demo_main"], ROOT / "apps/demo/demo.c"),
                  ("survivor_demo", os_calls + ["-Dmain=survivor_demo_main"], ROOT / "apps/demo/demo.c"),
                  ("fake_vfs", posix, host / "fake_vfs.c"),
-                 ("harness", ["-D_DEFAULT_SOURCE"], host / "app_replay.c")]
+                 ("harness", ["-D_DEFAULT_SOURCE"], host / "app_replay.c"),
+                 ("users", posix, ROOT / "apps/desktop/users.c"),
+                 ("users_io", posix, ROOT / "apps/desktop/users_io.c"),
+                 ("sha256", posix, ROOT / "src/kernel/lib/sha256.c")]
         def compile_unit(unit):
             name, flags, source = unit
             target = folder / f"{name}.o"
@@ -880,7 +909,9 @@ class AppCaseReplayTests(unittest.TestCase):
         result = subprocess.run([str(self.binary), "--script", str(script), "--case", kind, "--bin", ",".join(self.programs),
                                  "--limit-s", "200", *(["--trace"] if kind == "files" else []),
                                  *(args if args is not None else SHELL_MODELS[model])],
-                                capture_output=True, text=True, env=self.env, timeout=300)
+                                # The app threads share the harness locale. Files opts into
+                                # it with setlocale(), so keep machine-readable timings in C.
+                                capture_output=True, text=True, env={**self.env, "LC_ALL": "C"}, timeout=300)
         self.assertEqual(result.returncode, 0, result.stdout[-4000:] + result.stderr[-4000:])
         out = {"checkpoints": [], "system": [], "text": result.stdout}
         for line in result.stdout.splitlines():

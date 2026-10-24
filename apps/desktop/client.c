@@ -1,15 +1,22 @@
+#include "schedsvc.h"
+#pragma weak desk_schedsvc_run
+#pragma weak desk_schedsvc_completed
+#pragma weak desk_schedsvc_exited
 /* SPDX-License-Identifier: MIT */
 #include "desktop.h"
 #include "gate.h"
 #include "help_request.h"
+#include "browser_launch.h"
 #include <errno.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/mman.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 extern void desk_clip_receive(struct desktop *, int, const struct ciuki_message *, const struct desk_packet *) __attribute__((weak));
 extern void desk_clip_drop(struct desktop *, int) __attribute__((weak));
+extern int desk_recovery_win(struct desktop *) __attribute__((weak)); /* G14 */
 static void power_target(struct desktop *, uint32_t, const char *, int);
 static void v3_configure(struct desktop *, int);
 static void session_answer(struct desktop *, int, uint32_t, uint32_t);
@@ -21,6 +28,24 @@ static void queued_attachments_close(struct desktop *d,const struct ciuki_messag
         for (unsigned k=0;k<m->fd_count && k<4;k++) if (m->fds[k]>=0) d->ops.close(m->fds[k]);
 }
 static uint64_t client_clock(struct desktop *);
+static int netsurf_wallpaper_request(const struct desk_client *c, const struct desk_packet *p)
+{
+    static const char prefix[] = "--set-wallpaper=";
+    const char *path;
+    size_t n;
+    if (!c || !p || (p->opcode != DESK_LAUNCH && p->opcode != DESK_V3_LAUNCH) ||
+        (strcmp(c->application,"netsurf") && strcmp(c->application,"paint") && strcmp(c->application,"viewer")) ||
+        strcmp(p->title,"control") || strncmp(p->argument,prefix,sizeof(prefix)-1)) return 0;
+    path=p->argument+sizeof(prefix)-1;
+    size_t length=strlen(path);
+    if (path[0]!='/' || strstr(path,"/../") || strstr(path,"/./") || !path[1] ||
+        (length>=3 && !strcmp(path+length-3,"/..")) || (length>=2 && !strcmp(path+length-2,"/.")) || length>=128) return 0;
+    n=length;
+    return (n>=4 && !strcasecmp(path+n-4,".png")) ||
+           (n>=4 && !strcasecmp(path+n-4,".bmp")) ||
+           (n>=4 && !strcasecmp(path+n-4,".jpg")) ||
+           (n>=5 && !strcasecmp(path+n-5,".jpeg"));
+}
 int desk_ignore_sigpipe(void)
 { return signal(SIGPIPE,SIG_IGN)==SIG_ERR ? -1 : 0; }
 void desk_init(struct desktop *d, const struct desk_ops *ops, uint32_t w, uint32_t h)
@@ -930,16 +955,23 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
                       !strcmp(p.title,"ciukide-run");
         int ide_guide = p.opcode == DESK_LAUNCH && c->program == DESK_APP_IDE && !c->taskman &&
                         !strcmp(p.title,"ciuknote") && !strcmp(p.argument,"/Documents/Developer/Guide.txt");
-        int panel_launch=p.opcode==DESK_LAUNCH && c->program==DESK_APP_CONTROL && !strcmp(p.title,"control") &&
-                         (!strcmp(p.argument,"--panel=display") || !strcmp(p.argument,"--panel=power"));
+        char file_types[40];snprintf(file_types,sizeof(file_types),"--file-action=%d:",FILES_TYPES);
+        int panel_launch=p.opcode==DESK_LAUNCH && c->program==DESK_APP_CONTROL &&
+                         ((!strcmp(p.title,"control") && (!strcmp(p.argument,"--panel=display") || !strcmp(p.argument,"--panel=power"))) ||
+                          (!strcmp(p.title,"files") && !strcmp(p.argument,file_types)));
         int install=p.opcode==DESK_LAUNCH && c->program==DESK_APP_CONTROL && !strcmp(p.title,"install") && p.argument[0];
         /* G15: every program's F1 and Help menu opens CiukiOS Help (topic:<id> or no argument). */
         int help_open = p.opcode == DESK_LAUNCH && !c->taskman && !strcmp(p.title, "help") && desk_help_argument(p.argument);
+        int browser_wallpaper=netsurf_wallpaper_request(c,&p);
         int terminal = c->program == DESK_APP_TERMINAL;
         int terminal_launch = terminal && p.opcode == DESK_LAUNCH && desk_program_graphical(p.title) &&
                               (!p.argument[0] || p.argument[0] == '/');
         int terminal_end = terminal && p.opcode == DESK_END_TASK && !p.window_id && p.pid;
+        int scheduled_run = c->sysapp && !strcmp(c->application, "schedtask") && p.opcode == DESK_LAUNCH &&
+            !strcmp(p.title, "schedtask") && !strncmp(p.argument, "run:", 4) && p.argument[4];
         int sysapp_launch = c->sysapp && p.opcode == DESK_LAUNCH && desk_program_graphical(p.title) && !p.argument[0];
+        /* G14: WIN at a Command prompt only start opens the normal desktop. */
+        int terminal_win = terminal && p.opcode == DESK_LAUNCH && !strcmp(p.title, "win") && !p.argument[0];
         /* fx-8: a queued launch owes this TASK_RESULT; it is sent when the
          * launcher worker completes, to this requester only. */
         d->launch_deferred = 0;
@@ -949,11 +981,13 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
             r->client = i; r->channel = c->channel; r->pid = c->pid; r->serial = p.serial; r->opcode = p.opcode;
             r->recent = files_open; snprintf(r->argument, sizeof(r->argument), "%s", p.argument);
         }
-        int32_t result = !c->taskman && !files_open && !shell_open && !note_wordpad && !ide_run && !ide_guide && !terminal_launch && !terminal_end && !install && !help_open && !sysapp_launch ? -EPERM :
+        int32_t result = terminal_win ? (desk_recovery_win ? desk_recovery_win(d) : -ENOSYS) :
+            !c->taskman && !files_open && !shell_open && !note_wordpad && !ide_run && !ide_guide && !terminal_launch && !terminal_end && !install && !panel_launch && !help_open && !sysapp_launch && !scheduled_run && !browser_wallpaper ? -EPERM :
             p.opcode == DESK_END_TASK ? (terminal_end && p.pid == 1 ? -EPERM : desk_task_end(d, p.window_id, p.pid)) :
             p.opcode == DESK_SWITCH_TO ? desk_task_switch(d, p.window_id) :
             shell_open ? (d->power.state ? -EBUSY : d->open_path ? d->open_path(d,p.argument) : -ENOSYS) :
             install ? (d->power.state ? -EBUSY : d->install_program ? d->install_program(d,p.argument) : -ENOSYS) :
+            scheduled_run ? (desk_schedsvc_run ? desk_schedsvc_run(d, p.argument + 4) : -ENOSYS) :
             c->taskman && p.argument[0] ? -EPERM : ide_run ? desk_ide_launch(d,p.argument) : desk_task_launch(d, p.title, p.argument);
         int deferred = p.opcode == DESK_LAUNCH && !result && d->launch_deferred;
         memset(&d->launch_request, 0, sizeof(d->launch_request)); d->launch_deferred = 0;
@@ -1604,6 +1638,7 @@ void desk_close_timeouts(struct desktop *d)
 }
 void desk_child_exited(struct desktop *d, uint32_t pid, int status)
 {
+    if (desk_schedsvc_exited) desk_schedsvc_exited(d, pid, status);
     if (pid && d->end_task.kind && d->end_task.pid==pid && !d->end_task.session) desk_end_task_choice(d,-1);
     for (unsigned i=0; i<d->power.count; i++)
         if (d->power.targets[i].pid==pid) d->power.targets[i].gone=1;
@@ -1874,6 +1909,10 @@ void desk_launch_completed(struct desktop *d, const struct desk_launch_request *
             snprintf(text,sizeof(text),"'%s' could not be started (error %d).",r->label[0] ? r->label : name,-result);
             desk_shell_message(d,"Games",text,1);
         }
+        return;
+    case DESK_LAUNCH_SCHEDULE:
+        if (desk_schedsvc_completed) desk_schedsvc_completed(d, r->serial, result);
+        if (result < 0) desk_shell_notify_error(d, "Scheduled task did not start", -result);
         return;
     case DESK_LAUNCH_AUTOPLAY:
         if (result<0) desk_shell_message(d,"AutoPlay","The selected program could not be started.",1);
@@ -2736,6 +2775,15 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
     struct desk_client *c=&d->clients[i];
     switch (p.opcode) {
     case DESK_LAUNCH: {
+        if (!strcmp(p.title,"netsurf")) {
+            /* G26: URL-only launch from NetSurf (a link opened in a new browser window). */
+            if (strcmp(anchor->application,"netsurf")) { error=-EPERM; break; }
+            const char *args[]={p.argument};
+            desk_launch_origin(d,DESK_LAUNCH_SHELL,NULL);
+            error=desk_task_launch_args(d,"netsurf",args,1);
+            if (error>0) error=0;
+            break;
+        }
         if (!desk_help_argument(p.argument)) { error=-EPERM; break; }
         struct desk_help_request request;
         int encoded=desk_help_decode(p.argument,&request);
@@ -2758,6 +2806,33 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
         int result=desk_task_launch(d,"help",p.argument); if (result<0) error=result;
         break;
     }
+    case DESK_V3_TRAY_ICON:
+        error=desk_shell_program_icon(d,i,&p,&info,m->fd_count ? m->fds[0] : -1);
+        if (!error && m->fd_count) d->ops.close(m->fds[0]);
+        break;
+    case DESK_V3_TRAY_BALLOON:
+        error=desk_shell_program_balloon(d,i,&p); break;
+    case DESK_ACCEPT_FILES:
+        c->accept_files=(int)p.flags; break;
+    case DESK_V3_FLASH:
+        c->flash=p.flags ? !c->flash : 0;
+        desk_damage_add(&d->damage,desk_outer(c),d->width,d->height);
+        desk_damage_add(&d->damage,desk_task_button(d,i),d->width,d->height); break;
+    case DESK_POWER_REPLY:
+        if (!p.serial) c->power_aware=1;
+        else desk_power_reply(d,i,p.serial,p.flags);
+        break;
+    case DESK_V3_LAUNCH:
+        error=(!netsurf_wallpaper_request(c,&p) &&
+               !( !strcmp(anchor->application,"netsurf") && !strcmp(p.title,"files") && desk_browser_file_argument(p.argument))) || !d->shell
+              ? -EPERM : desk_task_launch(d,p.title,p.argument);
+        if (error>0) error=0; /* A positive PID means the Control Panel was started. */
+        d->launch_deferred=0; /* V3 replies report accepted queueing, not a later v2 TASK_RESULT. */
+        break;
+    case DESK_INPUT_SETTINGS:
+        error=input_setting(d,&p);
+        if(!error)input_state(d,i,p.request);
+        break;
     case DESK_DAMAGE: case DESK_V3_PRESENT: {
         if (p.opcode==DESK_V3_PRESENT && (!p.request || c->gl_present_request || c->minimized || c->collapsed || !p.width || !p.height)) { error=-EAGAIN;break; }
         if (!p.width || !p.height) break;

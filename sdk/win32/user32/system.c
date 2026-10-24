@@ -276,6 +276,7 @@ void u32_input_refresh(void)
   if(busy || (read && now-last<1000))return;
   busy=1;read=1;last=now;
   DWORD error=GetLastError();(void)u32_input_setting(0,0,0);SetLastError(error);busy=0;
+}
 static void appearance_reset_metrics(void) {
     spi.ncm_set=spi.font_set=spi.icons_set=0; color_overrides=0;
 }
@@ -736,6 +737,7 @@ BOOL W32API SystemParametersInfoA(UINT action, UINT param, void *out,
     if(key==DESK_INPUT_DOUBLE_CLICK)value=value ? (value>5000 ? 5000 : value) : 500;
     BOOL result=u32_input_setting(key,value,flags);
     return result;
+  }
   u32_settings();
   if(appearance_set && (action==38 || action==74 || action==0x1002)) {
     if(!out) return u32_fail(87);

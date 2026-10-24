@@ -452,7 +452,7 @@ static struct {
     void *wake_ctx;
     struct launch_job jobs[DESK_CLIENTS];
     /* Input-thread only: exits reaped while a spawn was still unbound. */
-    uint32_t exited[LAUNCH_EXITS];
+    uint32_t exited[LAUNCH_EXITS]; int exited_status[LAUNCH_EXITS];
     unsigned exited_next;
 } launcher={.lock=PTHREAD_MUTEX_INITIALIZER,.changed=PTHREAD_COND_INITIALIZER};
 static struct launch_job launch_sync_job;
@@ -680,15 +680,16 @@ static void first_frame_record(struct desktop *d, const struct desk_client *c, u
 #endif
 }
 /* Input thread: an exit reaped while a spawn may still be unbound. */
-static void launch_note_exit(struct desktop *d, uint32_t pid)
+static void launch_note_exit(struct desktop *d, uint32_t pid, int status)
 {
     for (int i=0;i<DESK_CLIENTS;i++) if (d->children[i].pid==pid || d->clients[i].pid==pid) return;
     if (!launcher.started || !launcher_inflight()) return;
-    launcher.exited[launcher.exited_next++%LAUNCH_EXITS]=pid;
+    unsigned slot = launcher.exited_next++ % LAUNCH_EXITS;
+    launcher.exited[slot]=pid; launcher.exited_status[slot]=status;
 }
-static int launch_exited(uint32_t pid)
+static int launch_exited(uint32_t pid, int *status)
 {
-    for (unsigned i=0;i<LAUNCH_EXITS;i++) if (launcher.exited[i]==pid) { launcher.exited[i]=0; return 1; }
+    for (unsigned i=0;i<LAUNCH_EXITS;i++) if (launcher.exited[i]==pid) { *status=launcher.exited_status[i]; launcher.exited[i]=0; return 1; }
     return 0;
 }
 /* Input thread, every turn: bind the PIDs of completed spawns or report
@@ -724,13 +725,14 @@ static unsigned launch_service(struct desktop *d)
             continue;
         }
         uint32_t pid=(uint32_t)job->pid;
-        int gone=launch_exited(pid);
+        int exit_status=0, gone=launch_exited(pid,&exit_status);
         if (live) {
             c->spawn_pending=0; c->pid=pid;
             c->launched_ns=monotonic(); /* AppStarting runs from the process's creation */
         }
         if (!gone) d->children[job->child].pid=pid;
         desk_launch_completed(d,&job->request,job->program.name,(int)pid);
+        if (gone) desk_schedsvc_exited(d,pid,exit_status);
         if (gone && live) desk_drop_client(d,job->client);
     }
     if (count) desk_cursor_update(d);
@@ -1298,6 +1300,7 @@ static void wallpaper_load(struct desktop *d)
     wallpaper_request.width=d->width; wallpaper_request.height=d->height;
     wallpaper_request.top=wallpaper_request.bottom=DESK_BAR;
     wallpaper_request.mode=d->sh.cfg.wallpaper_mode;
+    wallpaper_request.pattern=d->sh.cfg.wallpaper_pattern;
     wallpaper_request.colour=d->sh.cfg.desktop_color==CFG_DESKTOP_COLOR ? desk_theme->desktop : d->sh.cfg.desktop_color;
     wallpaper_request.portrait=d->portrait;
     wallpaper_request.caption_font=desk_theme->font_large;
@@ -1326,7 +1329,7 @@ static void wallpaper_update(struct desktop *d)
     if (d->sh.gate) { desk_shell_wallpaper_update(d); return; }
     uint32_t colour=d->sh.cfg.desktop_color==CFG_DESKTOP_COLOR ? desk_theme->desktop : d->sh.cfg.desktop_color;
     if (strcmp(wallpaper_request.path,d->sh.cfg.wallpaper) || wallpaper_request.width!=d->width ||
-        wallpaper_request.height!=d->height || wallpaper_request.mode!=d->sh.cfg.wallpaper_mode || wallpaper_request.colour!=colour ||
+        wallpaper_request.height!=d->height || wallpaper_request.mode!=d->sh.cfg.wallpaper_mode || wallpaper_request.pattern!=d->sh.cfg.wallpaper_pattern || wallpaper_request.colour!=colour ||
         (!strcmp(wallpaper_request.path,"ciuki") && (wallpaper_request.caption_font!=desk_theme->font_large ||
             wallpaper_request.caption_colour!=desk_theme->desktop_label || wallpaper_request.caption_aa!=desk_theme->text_aa))) {
         wallpaper_load(d); return;
@@ -1905,6 +1908,8 @@ static int launch_pending(struct desktop *d)
 /* G30: the scheduled-tasks service is linked by build_desktop.py (schedsvc.c); host replays run without it. */
 __attribute__((weak)) int desk_schedsvc_start(struct desktop *d) { (void)d; return 0; }
 __attribute__((weak)) void desk_schedsvc_tick(struct desktop *d) { (void)d; }
+__attribute__((weak)) void desk_schedsvc_exited(struct desktop *d, uint32_t pid, int status)
+{ (void)d; (void)pid; (void)status; }
 __attribute__((weak)) void desk_resources_poll(struct desktop *d) { (void)d; }
 __attribute__((weak)) int desk_v3_fixture_active(void) { return 0; }
 __attribute__((weak)) int desk_v3_fixture_begin(struct desktop *d) { (void)d; return -ENOSYS; }
@@ -2107,14 +2112,13 @@ static void shell_service(struct desktop *d)
     if (sh->gate) { sh->want_save=sh->want_mixer=sh->want_power=sh->want_power_force=sh->want_standby=0; sh->want_reload&=~1; sh->want_run[0]=0; }
     if (d->power.state) {
         links_service(d);
+        custom_service(d);
+        if (sh->want_save && !custom_busy()) { sh->want_save=0;if (settings_save(d)) sh->want_save=1; }
         if (run_history_idle()) desk_power_tick(d);
         return;
     }
     user_service(d);
     if (sh->gate) { sh->want_save=sh->want_mixer=sh->want_power=0; sh->want_reload&=~1; sh->want_run[0]=0; }
-        custom_service(d);
-        if (sh->want_save && !custom_busy()) { sh->want_save=0;if (settings_save(d)) sh->want_save=1; }
-        desk_power_tick(d);return;
     desktop_wait("folder-service"); desk_folder_service(d);
     custom_service(d);
     if (sh->want_power) {
@@ -2155,7 +2159,8 @@ static void shell_service(struct desktop *d)
             int old_bar_top=sh->cfg.taskbar_top,old_bar_hide=sh->cfg.taskbar_autohide,old_start_small=sh->cfg.start_small;
             char old_wall[CFG_PATH_MAX], old_theme[sizeof(sh->cfg.theme)];
             memcpy(old_wall,sh->cfg.wallpaper,sizeof(old_wall)); snprintf(old_theme,sizeof(old_theme),"%s",cfg_effective_theme(&sh->cfg));   /* G25: high contrast changes the theme in force */
-            int old_mode=sh->cfg.wallpaper_mode, old_icons=sh->cfg.desktop_icons;
+            int old_mode=sh->cfg.wallpaper_mode, old_icons=sh->cfg.desktop_icons, old_pattern=sh->cfg.wallpaper_pattern;
+            int old_spacing_x=sh->cfg.icon_spacing_x, old_spacing_y=sh->cfg.icon_spacing_y, old_icon_font=sh->cfg.icon_font;
             uint32_t old_colour=sh->cfg.desktop_color;
             struct appearance old_appearance=sh->cfg.appearance; int old_appearance_set=sh->cfg.appearance_set, old_pointer=sh->cfg.pointer_scheme, old_document=sh->cfg.document_icon, old_recycle=sh->cfg.recycle_icon;
             uint16_t confirmed = sh->cfg.display_mode;
@@ -2171,15 +2176,15 @@ static void shell_service(struct desktop *d)
              * Control Panel display settings must not rescan its ELF files. */
             if (settings_reload_wallpaper) { desktop_wait("program-scan"); scan_programs(d); }
             int image_changed=strcmp(old_wall,sh->cfg.wallpaper) || settings_reload_wallpaper;
-            int visual=image_changed || strcmp(old_theme,cfg_effective_theme(&sh->cfg)) || old_mode!=sh->cfg.wallpaper_mode ||
             int appearance_changed=old_document!=sh->cfg.document_icon || old_recycle!=sh->cfg.recycle_icon || old_pointer!=sh->cfg.pointer_scheme || old_appearance_set!=sh->cfg.appearance_set || memcmp(&old_appearance,&sh->cfg.appearance,sizeof(old_appearance));
-            int visual=appearance_changed || image_changed || strcmp(old_theme,sh->cfg.theme) || old_mode!=sh->cfg.wallpaper_mode ||
-                       old_icons!=sh->cfg.desktop_icons || old_colour!=sh->cfg.desktop_color;
+            int icons_changed=old_icons!=sh->cfg.desktop_icons || old_spacing_x!=sh->cfg.icon_spacing_x ||
+                              old_spacing_y!=sh->cfg.icon_spacing_y || old_icon_font!=sh->cfg.icon_font;
+            int visual=appearance_changed || image_changed || old_pattern!=sh->cfg.wallpaper_pattern || strcmp(old_theme,cfg_effective_theme(&sh->cfg)) || old_mode!=sh->cfg.wallpaper_mode ||
+                       icons_changed || old_colour!=sh->cfg.desktop_color;
             if (visual) {
                 /* A wallpaper-only request leaves the retained desktop
                  * untouched until its complete replacement is ready. */
-                if (strcmp(old_theme,cfg_effective_theme(&sh->cfg)) || old_icons!=sh->cfg.desktop_icons || settings_reload_wallpaper) {
-                if (appearance_changed || strcmp(old_theme,sh->cfg.theme) || old_icons!=sh->cfg.desktop_icons || settings_reload_wallpaper) {
+                if (appearance_changed || strcmp(old_theme,cfg_effective_theme(&sh->cfg)) || icons_changed || settings_reload_wallpaper) {
                     desktop_wait("theme-apply"); sh->icon_count=0; desk_shell_apply(d);
                 }
                 if (image_changed) wallpaper_load(d); else wallpaper_update(d);
@@ -2418,6 +2423,7 @@ struct links_worker {
     char browse_path[260];
     struct du_file_entry browse_entries[DU_FILE_ENTRIES];
     unsigned browse_count;
+    struct desk_launch_record requested_record; /* G19: explicit target/argument launch */
     struct desk_link_entry published[DESK_LINKS], scratch[DESK_LINKS];
     struct link_stamp published_stamps[DESK_LINKS], scratch_stamps[DESK_LINKS];
 };
@@ -2542,13 +2548,14 @@ static void *links_thread(void *arg)
         } else if (launch) {
             struct desk_launch_record *r=malloc(sizeof(*r));
             int result=-ENOMEM;
-            if(r && launch==2){
+            if (r && launch==3) { *r=w->requested_record; result=0; }
+            else if(r && launch==2){
                 memset(r,0,sizeof(*r));snprintf(r->label,sizeof(r->label),"Install");
                 snprintf(r->target,sizeof(r->target),"%s",path);r->show=1;
                 snprintf(r->directory,sizeof(r->directory),"%s",path);
                 char *slash=strrchr(r->directory,'/');if(slash)*slash=0;
                 result=0;
-            }else if(r && launch==3) {
+            }else if(r && launch==4) {
                 result=fm_launch_resolve(fm_native_vfs(),path,NULL,r);
                 if (result==1) result=0; /* folder is a Files launch record */
                 if (!strncmp(path,"/system/settings/open-",22)) (void)unlink(path);
@@ -2664,8 +2671,9 @@ static int link_launch_async(struct desktop *d,const struct desk_launch_record *
     if (w->launch_requested || w->launch_busy || w->completed) { pthread_mutex_unlock(&w->mutex); return -EBUSY; }
     const char *source=NULL;
     for (unsigned k=0;k<d->v3_link_count;k++) if (!memcmp(record,&d->v3_links[k].launch,sizeof(*record))) source=d->v3_links[k].source;
-    if (!source) { pthread_mutex_unlock(&w->mutex); return -ENOENT; }
-    snprintf(w->source,sizeof(w->source),"%s",source); w->launch_requested=1;
+    if (!desk_launch_valid(record)) { pthread_mutex_unlock(&w->mutex); return -EINVAL; }
+    if (source) { snprintf(w->source,sizeof(w->source),"%s",source); w->launch_requested=1; }
+    else { w->requested_record=*record; w->launch_requested=3; }
     pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->mutex); return 0;
 }
 static int run_submit(struct desktop *d,const char *command)
@@ -2687,7 +2695,7 @@ static int shell_open_path(struct desktop *d,const char *path)
     if (!w || pthread_mutex_trylock(&w->mutex)) return -EBUSY;
     int e=0;
     if (w->launch_requested || w->launch_busy || w->completed) e=-EBUSY;
-    else { strcpy(w->source,path); w->launch_requested=3; pthread_cond_signal(&w->changed); }
+    else { strcpy(w->source,path); w->launch_requested=4; pthread_cond_signal(&w->changed); }
     pthread_mutex_unlock(&w->mutex); return e;
 }
 extern uint32_t desk_w32_exchange(const void *,uint32_t,void *,uint32_t,uint32_t *) __attribute__((weak));
@@ -2834,7 +2842,6 @@ static void shell_setup(struct desktop *d, int gate)
         settings_writer.notify=d->wake; settings_writer.notify_ctx=d->wake_ctx;
         settings_writer.run_job=mixer_job_run;
         settings_writer_started=!cfg_writer_start(&settings_writer,d->sh.profile.settings,d->sh.profile.temporary);
-        settings_writer_started=!cfg_writer_start(&settings_writer,CFG_FILE,CFG_DIR "/desktop.new");
 #ifdef __i386__
         /* The native bootstrap owns file-worker lifetime. Host models attach
          * storage adapters separately and never write the guest's root paths. */
@@ -3275,7 +3282,7 @@ int main(int argc, char **argv)
             int status, pid;
             launch_service(d);
             while ((pid=waitpid(-1,&status,WNOHANG))>0) {
-                launch_note_exit(d,(uint32_t)pid);
+                launch_note_exit(d,(uint32_t)pid,status);
                 desk_w32_child_exited(d,(uint32_t)pid,status); desk_child_exited(d,(uint32_t)pid,status);
             }
         }

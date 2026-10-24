@@ -29,7 +29,7 @@ struct desk_dirty_row { int32_t left, right; };   /* visible-span painter (compo
 #define DESK_TASK_X 4
 #define DESK_BACKGROUND 0x375564u
 #define DESK_PORTRAIT_SIZE 256
-#define DESK_MENU_MAX 32
+#define DESK_MENU_MAX 64   /* the integrated image's /Programs holds 39 programs; 32 hid Task Manager, Terminal, Image Viewer and WordPad */
 #define DESK_MENU_ROW 28
 #define DESK_CLOSE_NS 2000000000ull
 /* App scenarios (runtime-selected in the post-fault interaction stage): the
@@ -171,7 +171,7 @@ struct desk_program { char name[64], path[DESK_ARG_MAX + 1]; };
 /* fx-8: who asked for a launch, so that a launch completing on the launcher
  * worker reports its result the way the synchronous call did (Windows 9x
  * shell: ShellExecute returns at once, a failure is reported later). */
-enum { DESK_LAUNCH_SHELL, DESK_LAUNCH_RUN, DESK_LAUNCH_GAME, DESK_LAUNCH_AUTOPLAY, DESK_LAUNCH_CLIENT };
+enum { DESK_LAUNCH_SHELL, DESK_LAUNCH_RUN, DESK_LAUNCH_GAME, DESK_LAUNCH_AUTOPLAY, DESK_LAUNCH_CLIENT, DESK_LAUNCH_SCHEDULE };
 struct desk_launch_request {
     unsigned origin;
     char label[48];

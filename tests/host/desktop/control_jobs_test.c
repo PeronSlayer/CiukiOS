@@ -3,13 +3,7 @@
  * Only the desktop turn and clock/poll boundary are replaced. Native wait
  * scheduling is independently exercised by control_display_wait_test.c. */
 #include "replay_base.h"
-#undef IPPROTO_IP
-#undef IPPROTO_TCP
-#undef IPPROTO_UDP
-#undef IPPROTO_ICMP
-#undef SOCK_RAW
-#undef SOCK_STREAM
-#undef SOCK_NONBLOCK
+#include "host_socket_undef.h"
 #include <netdb.h>
 #include <assert.h>
 #include <poll.h>
@@ -132,7 +126,7 @@ static void idle_pages(void)
         /* f1-113: the Game controllers page samples live axes and save status once per second.
          * f1-110/f1-121: the Power page refreshes the cached ACPI/APM status once per second. */
         expected_timeout=m.app.page==CP_DATETIME || m.app.page==CP_SYSTEM || m.app.page==CP_SOUNDS ||
-            m.app.page==CP_JOYSTICK || m.app.page==CP_POWER ? 1000 : -1;
+            m.app.page==CP_JOYSTICK || m.app.page==CP_POWER || m.app.page==CP_ACCESS ? 1000 : -1;   /* G25: the Accessibility page samples its live status once per second */
         assert(!control_run(&m) && waits==1);
         finish_panel(&m);
     }

@@ -1,11 +1,11 @@
 {
-  "recycle-bin-confirm-empty.xrgb": "e99a1cb31cf8ca0b050e8570d5fa6e421c79561fc36d931ac5b6c8c3abdc0112",
-  "recycle-bin-details.xrgb": "38ba0da3065c85afa58d7598fc7964bdb64a4f2b0c126ad04c536e1c92c827b1",
-  "recycle-bin-empty.xrgb": "21ba3057acd0077bc9b0fc61097508504fa05e5bd3a406c79ab6a8e990e885a3",
-  "recycle-bin-item-properties.xrgb": "4807807b547453ad4f4613b00bd73147af2108267cf27847ad6d823d52ab8f14",
-  "recycle-bin-menu-file.xrgb": "404aa0be189f3483f65af5826b7779b201fa41060e36bc26ab7ab05118701a14",
-  "recycle-bin-properties-global.xrgb": "e482e2cef077757f083a833c2de0d64363593c0ef27263486b048cfdaf0b3d52",
-  "recycle-bin-properties.xrgb": "8e91b436516e7211b1a003eeb0d3176b9972e6043b0a91a54ff8112ad9fc0130",
-  "recycle-confirm-permanent.xrgb": "99eb78ab15b9b5e09faff18d6c48882e03d2f572fead3a91cd2780125fbd6f46",
-  "recycle-confirm-recycle.xrgb": "44559837e6a64708831ab4e405fd77cc794d85bd60335cfdeaa526a8c06b7ca5"
+  "recycle-bin-confirm-empty.xrgb": "60ac71fc6d255eed524c38b5e20eab50d662bbb85e9be5345fe59bf3a8c30079",
+  "recycle-bin-details.xrgb": "622de2f4e69486bb18bc4e82756c15af3eb4f15e4cabd1d55b0587d9e660006f",
+  "recycle-bin-empty.xrgb": "c13630f4f3c07d014459bdb40457b881ce96d004432ef65b0ce983350589bc05",
+  "recycle-bin-item-properties.xrgb": "43f5bc053748765afe402f579d3dbff6817fd7b398da91f88cba0cd3d3ebc9a5",
+  "recycle-bin-menu-file.xrgb": "4014713e2e53586ad6083ca96f607ccaad486886532c26656fc29a259306d059",
+  "recycle-bin-properties-global.xrgb": "36bcb8a404c4cc19a55a04a220d0372d69489cdb12afd21320fd70ce42977217",
+  "recycle-bin-properties.xrgb": "ce75288b4a3bf1f09b98ba74d5166576b4cc565b10cba6c3e00b78b31ad03e22",
+  "recycle-confirm-permanent.xrgb": "7ea8f40c18437fd9f7cc11cf9e2f223452d3d1a40384cd37e1369c06bae8fd04",
+  "recycle-confirm-recycle.xrgb": "9f5dacdf1f176900c771ca3a8a9779d374e38d80b235ec6bc06d2144bde87be7"
 }

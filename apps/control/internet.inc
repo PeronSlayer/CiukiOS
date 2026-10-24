@@ -1,6 +1,6 @@
 /* Internet Properties: General, History, Security, Connections and Programs. */
 enum { I_HOME=1700,I_PROXY,I_PORT,I_CACHE,I_APPLY,I_DAYS,I_CLEAR,I_TRUSTED,I_RESTRICTED,
-       I_SCRIPT0,I_SCRIPT1,I_SCRIPT2,I_SCRIPT3,I_USER,I_PASSWORD,I_BYPASS,I_DEFAULT,I_TAB0=1720 };
+       I_SCRIPT0,I_SCRIPT1,I_SCRIPT2,I_SCRIPT3,I_USER,I_PASSWORD,I_BYPASS,I_DEFAULT,I_PROGRAMS,I_TAB0=1720 };
 static int internet_capture(struct cp_app *a)
 {
     struct cp_internet_options *o=&a->internet;char *end;
@@ -72,6 +72,7 @@ static void internet_build(struct cp_app *a)
         add(a,DU_LABEL,1740,24,100,508,18,"Web browser: NetSurf");
         add(a,DU_BUTTON,I_DEFAULT,24,138,220,26,"Make NetSurf the default")->disabled=!a->host.internet_default;
         add(a,DU_LABEL,1741,24,186,508,18,a->host.internet_default?"Web and HTML file associations are shared with Files.":"Default program settings are not available.");
+        add(a,DU_BUTTON,I_PROGRAMS,24,222,220,26,"File Types / Open With...")->disabled=!a->host.internet_programs;
         break;
     }
     add(a,DU_LABEL,1749,24,306,508,18,"Saved settings apply to new browser windows.");
@@ -91,6 +92,9 @@ static int internet_event(struct cp_app *a,const struct du_event *e)
     }
     if(e->id==I_DEFAULT) {
         text(a,C_STATUS,a->host.internet_default && !a->host.internet_default(a->host.ctx)?"NetSurf is the default browser.":"Default browser could not be changed.");return 1;
+    }
+    if(e->id==I_PROGRAMS) {
+        text(a,C_STATUS,a->host.internet_programs && !a->host.internet_programs(a->host.ctx)?"File Types opened in Files.":"File Types could not be opened.");return 1;
     }
     if(e->id!=I_APPLY)return 0;
     if(internet_capture(a))text(a,C_STATUS,"Enter valid home, proxy, history and security settings.");

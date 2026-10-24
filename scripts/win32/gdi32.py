@@ -59,9 +59,8 @@ def build(out, base=0x72000000, flags=None):
                                         ' w32_shim_stub\n w32_shim_w_stub\n w32_server_exchange\n'),
                               ('kernel32', ' MapViewOfFile@20\n UnmapViewOfFile@4\n CreateFileA@28\n ReadFile@20\n GetFileSize@8\n'
                                            ' SetFilePointer@16\n CloseHandle@4\n FlushFileBuffers@4\n CopyFileA@12\n DeleteFileA@4\n'
-                                           ' CreateDirectoryA@8\n RemoveDirectoryA@4\n MoveFileA@8\n GetLastError@0\n GetCurrentProcessId@0\n GetFullPathNameA@16\n GetModuleHandleA@4\n LoadLibraryA@4\n GetProcAddress@8\n SetLastError@4\n WriteFile@20\n')]:
-                                           ' GetTickCount@0\n SetFilePointer@16\n CloseHandle@4\n CopyFileA@12\n DeleteFileA@4\n'
-                                           ' GetModuleHandleA@4\n LoadLibraryA@4\n GetProcAddress@8\n SetLastError@4\n WriteFile@20\n')]:
+                                           ' CreateDirectoryA@8\n RemoveDirectoryA@4\n MoveFileA@8\n GetLastError@0\n GetCurrentProcessId@0\n GetFullPathNameA@16\n GetModuleHandleA@4\n LoadLibraryA@4\n GetProcAddress@8\n SetLastError@4\n WriteFile@20\n'
+                                           ' GetTickCount@0\n')]:   # G31's file/path imports plus G23's GetTickCount
         definition = out/f'gdi32-{dll}.def'
         definition.write_text(f'LIBRARY {dll}.dll\nEXPORTS\n'+declarations)
         subprocess.run(['llvm-dlltool', '-m', 'i386', '-k', '-d', str(definition), '-l', str(out/f'gdi32-{dll}.lib')], check=True)

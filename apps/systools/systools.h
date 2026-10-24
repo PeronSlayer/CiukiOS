@@ -142,7 +142,15 @@ struct st_task {
     struct st_date start;             /* first day the schedule is in force */
     int64_t created, last_run;        /* minutes since 1970-01-01; last_run -1 never */
     int last_result;
+    unsigned conditions, idle_minutes, idle_deadline;
 };
+#define ST_IDLE 1u
+#define ST_AC_ONLY 2u
+#define ST_STOP_IDLE 4u
+#define ST_STOP_BATTERY 8u
+#define ST_RUNNING (-2147483647)
+struct st_conditions { unsigned idle_minutes; int ac; }; /* ac: 0 battery, 1 AC, 2 unknown */
+int st_allowed(const struct st_task *, const struct st_conditions *);
 struct st_store { struct st_task t[ST_MAX]; unsigned count; };
 void st_init(struct st_store *s);
 int64_t st_minutes(struct st_date d, unsigned minute_of_day);   /* since 1970-01-01 00:00 */
@@ -166,9 +174,14 @@ int mw_apply(struct st_store *s, const struct mw_choice *c, struct st_date start
 
 /* ---- Sources ---- */
 /* Call-70 cumulative KiB counters are 32 bits and wrap; accumulate the modular difference. */
-struct sm_source { uint32_t read_kib, write_kib; uint64_t read_total, write_total; int primed; };
+struct sm_source {
+    uint32_t read_kib, write_kib; uint64_t read_total, write_total; int primed;
+    struct { uint64_t rx, tx, errors; uint32_t generation; uint8_t mac[6]; int primed; } net[2];
+    uint64_t rx_total, tx_total, error_total;
+};
+void sm_network_sample(struct sm_raw *, struct sm_source *, const struct ciuki_net_control *, unsigned count);
 /* Fills `out` from a call-70 system record, the sum of process threads and the network frame counters
- * (rx/tx; `have_net` 0 when no adapter). Errors are not counted by the kernel, so SM_NET_ERRORS stays unavailable. */
+ * (rx/tx; `have_net` 0 when no adapter). sm_network_sample adds the multi-adapter error source. */
 void sm_raw_from_proc(struct sm_raw *out, struct sm_source *src, const struct ciuki_proc_system *sys,
                       unsigned threads, int have_net, uint64_t rx_frames, uint64_t tx_frames);
 /* Desktop-wide meter input: client slots in use of the desktop's table, and physical pages. */
@@ -179,7 +192,7 @@ void rm_from_desktop(struct rm_sample *out, const struct rm_desktop *in);
 #define HP_MAX 8
 #define HP_NAME 32
 struct hp_profile { char name[HP_NAME]; int portable; struct dc_store devices; };
-struct hp_store { struct hp_profile p[HP_MAX]; unsigned count, active, default_index; int wait_seconds; };
+struct hp_store { struct hp_profile p[HP_MAX]; unsigned count, active, default_index; int wait_seconds; uint32_t boot_serial; };
 #define HP_ORIGINAL "Original Configuration"
 void hp_init(struct hp_store *s);
 /* Copy: the new profile starts with the source's device settings. -EINVAL name, -EEXIST, -ENOSPC, -ENOENT. */
@@ -221,6 +234,10 @@ struct ss_host {
     int (*save)(void *, const char *text, size_t length);
     /* Starts one task. >0 pid, <0 -errno. `program` has any /Programs/ prefix removed, `argument` may be empty. */
     int (*launch)(void *, const char *program, const char *argument);
+    void (*conditions)(void *, struct st_conditions *);
+    int (*result)(void *, int token, int *result); /* 1 finished, 0 pending */
+    void (*stop)(void *, int token);
+    int (*manual)(void *, char name[32]); /* pop one explicit Run request, bypass start conditions */
 };
 struct ss_service {
     struct st_store store;
@@ -228,6 +245,9 @@ struct ss_service {
     size_t saved_length;
     int started, loaded;
     unsigned launched, failed, deferred;
+    struct { char name[32], command[ST_COMMAND]; int token; int64_t when; unsigned conditions, idle_minutes; int stopping, was_idle, was_ac; } running[ST_MAX];
+    char startup_done[ST_MAX][32]; unsigned startup_count;
+    struct { char name[32]; int64_t since, last_run; } waiting[ST_MAX];
 };
 /* Splits "/Programs/name arg..." into program and argument; 0, or -EINVAL for empty or oversize pieces. */
 int ss_split(const char *command, char *program, size_t program_cap, char *argument, size_t argument_cap);

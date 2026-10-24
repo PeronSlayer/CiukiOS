@@ -103,7 +103,7 @@ static void run(struct calc *c, const struct calc_key *k, int slot)
     case A_FE: calc_toggle_fe(c); break;
     case A_OPEN: calc_open_paren(c); break;
     case A_CLOSE: calc_close_paren(c); break;
-    case A_STA: calc_stat_clear(c); break;
+    case A_STA: break; /* the view opens Statistics Box; CAD owns clearing */
     case A_AVE: calc_stat_ave(c); break;
     case A_SUM: calc_stat_sum(c); break;
     case A_DEV: calc_stat_dev(c); break;
@@ -248,6 +248,51 @@ void calc_attach(struct calc_app *a, struct du_ui *u)
     build(a);   /* u->focus = -1: keys go to the calculator, not to a focused button */
 }
 
+static void stat_refresh(struct calc_app *a)
+{
+    struct du_widget *w = &a->ui->dialog.items[4];
+    for (int i = 0; i < a->calc.nstat; i++) {
+        snprintf(a->stat_text[i], sizeof(a->stat_text[i]), "%d: %.15g", i + 1, a->calc.stat[i]);
+        a->stat_rows[i] = (struct du_item){.text = {a->stat_text[i]}};
+    }
+    w->items = a->stat_rows; w->count = (unsigned)a->calc.nstat;
+    if (w->active >= w->count) w->active = w->count ? w->count - 1 : 0;
+    a->ui->dialog.items[5].disabled = a->ui->dialog.items[6].disabled = !w->count;
+    char count[32];snprintf(count,sizeof(count),"n = %d",a->calc.nstat);
+    du_set_text(&a->ui->dialog.items[8],count);
+    du_invalidate(a->ui, a->ui->dialog.box);
+}
+static void stat_changed(struct du_ui *u, const struct du_event *e, void *ctx)
+{
+    struct calc_app *a = ctx;
+    if (e->type != DU_EV_ACTIVATE) return;
+    unsigned row = u->dialog.items[4].active;
+    if (e->id == CALC_STAT_LOAD || e->id == CALC_STAT_LIST) {
+        if (calc_stat_load(&a->calc, row)) { du_dialog_close(u); du_invalidate(u, display_box); }
+        return;
+    }
+    if (e->id == CALC_STAT_CD) calc_stat_delete(&a->calc, row);
+    else if (e->id == CALC_STAT_CAD) calc_stat_clear(&a->calc);
+    else return;
+    stat_refresh(a);
+}
+void calc_statistics_box(struct calc_app *a)
+{
+    struct du_ui *u = a->ui;
+    du_property_sheet(u, CALC_D_STAT, "Statistics Box", 320, 230, NULL, 0);
+    u->dialog.changed = stat_changed; u->dialog.sheet_ctx = a;
+    du_set_text(&u->dialog.items[0], "&RET");
+    u->dialog.items[1].hidden = u->dialog.items[2].hidden = 1;
+    du_property_control(u, 4, DU_LISTVIEW, CALC_STAT_LIST, (struct du_rect){8, 8, 224, 160}, "");
+    du_property_control(u, 5, DU_BUTTON, CALC_STAT_LOAD, (struct du_rect){240, 8, 64, 26}, "&LOAD");
+    du_property_control(u, 6, DU_BUTTON, CALC_STAT_CD, (struct du_rect){240, 42, 64, 26}, "&CD");
+    du_property_control(u, 7, DU_BUTTON, CALC_STAT_CAD, (struct du_rect){240, 76, 64, 26}, "C&AD");
+    du_property_control(u, 8, DU_LABEL, CALC_D_STAT + 8, (struct du_rect){240, 114, 72, 20}, "");
+    u->dialog.items[3].hidden=1;
+    u->dialog.items[4].view = DU_LIST;
+    stat_refresh(a);
+}
+
 void calc_event(struct du_ui *u, const struct du_event *e, void *user)
 {
     struct calc_app *a=user;
@@ -258,7 +303,8 @@ void calc_event(struct du_ui *u, const struct du_event *e, void *user)
     case DU_EV_ACTIVATE:
         if (e->id >= CALC_B_FIRST && e->id < CALC_B_FIRST + (int)table_count(a)) {
             int slot = a->calc.scientific ? e->id - CALC_B_FIRST - SCI_SLOT0 : -1;
-            run(&a->calc, &table(a)[e->id - CALC_B_FIRST], slot >= 0 && slot < 6 ? slot : -1);
+            if (a->calc.scientific && a->calc.base == 10 && e->id == calc_sci_button_id("Sta")) calc_statistics_box(a);
+            else run(&a->calc, &table(a)[e->id - CALC_B_FIRST], slot >= 0 && slot < 6 ? slot : -1);
             sync(a); u->focus = -1; du_invalidate(u, (struct du_rect){0, 58, CALC_W, 100});
         }
         else if (e->id == CALC_M_COPY) {
@@ -285,7 +331,7 @@ void calc_event(struct du_ui *u, const struct du_event *e, void *user)
                        "Scientific: s sin  o cos  t tan  l log  n ln  q x^2  # x^3  y x^y  ! n!\n"
                        "p pi  x Exp  m dms  ; Int  i Inv  h Hyp  v F-E  ( )  % Mod  & And  | Or  ^ Xor  < Lsh  ~ Not\n"
                        "F2 Degrees  F3 Radians  F4 Grads  F5 Hex  F6 Dec  F7 Oct  F8 Bin\n"
-                       "Ctrl+A Ave  Ctrl+S Sum  Ctrl+T s  Ctrl+D Dat", DU_DLG_ICON_INFO, NULL, 0, 0, 0);
+                       "Ctrl+A Ave  Ctrl+S Statistics Box  Ctrl+T s  Ctrl+D Dat", DU_DLG_ICON_INFO, NULL, 0, 0, 0);
         else if (e->id == CALC_M_ABOUT)
             du_message(u, 2, "About Calculator", "CiukiOS Calculator - Classic computing, one woof at a time.\nStandard and Scientific views, double precision.\nCode: MIT.",
                        DU_DLG_ICON_INFO, NULL, 0, 0, 0);
@@ -300,6 +346,7 @@ void calc_event(struct du_ui *u, const struct du_event *e, void *user)
         sync(a); u->focus = -1; du_invalidate(u, (struct du_rect){0, 26, CALC_W, 160});
         break;
     case DU_EV_KEY:
+        if (a->calc.scientific && a->calc.base==10 && (u->modifiers & DU_CTRL) && e->key==0x1f) { calc_statistics_box(a);return; }
         if (!calc_key(&a->calc, e->key, e->ch, u->modifiers)) return;
         sync(a); du_invalidate(u, (struct du_rect){0, 58, CALC_W, 100});
         break;

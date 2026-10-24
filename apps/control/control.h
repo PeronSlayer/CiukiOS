@@ -27,6 +27,7 @@
 #include "../desktop/users.h"
 #include "internet_options.h"
 #include "../systools/systools.h"
+#include <ciuki/system_settings.h>
 #define CP_PACK_INSTALL 1450
 #define CP_PACK_REMOVE 1451
 #define CP_PACK_LOCATION 1452
@@ -93,6 +94,7 @@ struct cp_host {
     int (*user_poll)(void *,struct users_view *,int *);
     int (*internet_clear_history)(void *);
     int (*internet_default)(void *);
+    int (*internet_programs)(void *);
     int (*internet_load)(void *,struct cp_internet_options *);
     int (*internet_save)(void *,const struct cp_internet_options *);
     int (*menu_begin)(void *,const struct sh_edit_request *,const char *arguments);
@@ -174,6 +176,9 @@ struct cp_host {
      * save replaces the file atomically (temp file, fsync, rename). NULL: profiles live in memory only. */
     int (*hw_load)(void *, char *text, size_t size, size_t *length);
     int (*hw_save)(void *, const char *text, size_t length);
+    uint32_t (*boot_serial)(void *); /* existing recovery-status boots counter */
+    int (*perf_load)(void *, struct system_perf *);
+    int (*perf_save)(void *, const struct system_perf *);
     /* Installed driver-pack entries as Add New Hardware models (class NETWORK); count or -errno. NULL: none. */
     /* Current memory totals (call 70), KiB; NULL: the startup values mem_total_k and mem_free_k. */
     int (*memory)(void *, uint64_t *total_k, uint64_t *free_k);
@@ -357,6 +362,7 @@ struct cp_app {
     char aw_names[AW_FOUND_MAX][96];
     struct du_item profile_items[HP_MAX]; char profile_notes[HP_MAX][48];
     struct pf_status perf;
+    struct system_perf perf_settings; int perf_ready, perf_dialog;
     /* G25 Accessibility Options (access.inc): settings as last read, the sub-view's entry state, tab and view. */
     struct access_settings access_loaded, ac_backup;
     int ac_tab, ac_view;

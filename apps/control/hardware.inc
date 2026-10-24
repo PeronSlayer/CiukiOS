@@ -30,7 +30,16 @@ static void hw_load_state(struct cp_app *a)
     if (!a->host.hw_load) return;
     int r = a->host.hw_load(a->host.ctx, hw_text, sizeof(hw_text) - 1, &n);
     if (!r && n < sizeof(hw_text)) { hw_text[n] = 0; hp_load(&a->hp, hw_text); }
-    else if (r != -ENOENT) snprintf(a->hp_loaded_note, sizeof(a->hp_loaded_note), "Hardware profile settings could not be read; defaults are in use.");
+    uint32_t serial = a->host.boot_serial ? a->host.boot_serial(a->host.ctx) : 0;
+    if (serial && serial != a->hp.boot_serial) {
+        for (unsigned i = 0; i < a->hp.count; i++) dc_restart(&a->hp.p[i].devices);
+        a->hp.boot_serial = serial;
+    }
+    if (a->devices_ok) {
+        const char *tag = strstr(a->devices.boot_options, "hwprofile=");
+        if (tag && tag[10] >= '0' && tag[10] <= '7' && (unsigned)(tag[10] - '0') < a->hp.count) a->hp.active = (unsigned)(tag[10] - '0');
+    }
+    if (r && r != -ENOENT) snprintf(a->hp_loaded_note, sizeof(a->hp_loaded_note), "Hardware profile settings could not be read; defaults are in use.");
 }
 /* 0 or -errno; without a save seam the profiles live in memory only. */
 static int hw_persist(struct cp_app *a)
@@ -406,8 +415,76 @@ static int aw_event(struct cp_app *a, const struct du_event *e)
 }
 
 /* ---- Performance ---- */
+static const struct du_item perf_pages[] = {{.text = {"Settings"}}};
+static int perf_accept(struct du_ui *u, int button, void *ctx)
+{
+    struct cp_app *a = ctx;
+    if (button == 1) return 0;
+    struct system_perf p = a->perf_settings;
+    struct du_dialog *d = &u->dialog;
+    if (a->perf_dialog == H_PF_BTN_FILE) {
+        for (unsigned i = 0; i < 3; i++) if (d->items[4 + i].value) p.role = i;
+        p.read_ahead = (unsigned)d->items[7].value;
+    } else if (a->perf_dialog == H_PF_GFX) p.graphics = !!d->items[4].value;
+    else {
+        for (unsigned i = 0; i < 3; i++) if (d->items[4 + i].value) p.vm = i;
+        uint32_t min, max;
+        if (!system_uint(d->items[7].text, strlen(d->items[7].text), 10, &min) ||
+            !system_uint(d->items[8].text, strlen(d->items[8].text), 10, &max)) {
+            snprintf(d->text, sizeof(d->text), "Enter minimum and maximum sizes in MiB (multiples of 16)."); return 1;
+        }
+        p.min_mb = min; p.max_mb = max;
+    }
+    if (!system_perf_valid(&p)) { snprintf(d->text, sizeof(d->text), "Sizes must be multiples of 16 MiB, from 16 to 1024, minimum <= maximum."); return 1; }
+    int e = a->host.perf_save ? a->host.perf_save(a->host.ctx, &p) : -ENOSYS;
+    if (e) { snprintf(d->text, sizeof(d->text), "Cannot save performance settings (error %d).", e < 0 ? -e : e); return 1; }
+    a->perf_settings = p;
+    text(a, H_PF_NOTE, "Settings saved. Restart the computer for the changes to take effect.");
+    snprintf(d->text, sizeof(d->text), "Settings saved. Restart the computer to apply them.");
+    return button == 2;
+}
+static void perf_open(struct cp_app *a, int kind)
+{
+    a->perf_dialog = kind;
+    const char *title = kind == H_PF_BTN_FILE ? "File System Properties" : kind == H_PF_GFX ? "Graphics" : "Virtual Memory";
+    du_property_sheet(a->ui, kind, title, 450, 300, perf_pages, 1);
+    struct du_dialog *d = &a->ui->dialog;
+    d->accept = perf_accept; d->accept_ctx = a;
+    const struct system_perf *p = &a->perf_settings;
+    if (kind == H_PF_BTN_FILE) {
+        snprintf(d->text, sizeof(d->text), "Typical role of this computer; read-ahead: None, 16, 32 or 64 KiB.");
+        const char *names[] = {"Desktop computer", "Mobile or docking system", "Network server"};
+        for (unsigned i = 0; i < 3; i++) {
+            struct du_widget *w = du_property_control(a->ui, 4 + i, DU_RADIO, 1780 + (int)i, (struct du_rect){24, 74 + (int)i * 28, 360, 22}, names[i]);
+            if (w) { w->total = 1780; w->value = p->role == i; }
+        }
+        struct du_widget *w = du_property_control(a->ui, 7, DU_TRACKBAR, 1783, (struct du_rect){24, 180, 360, 26}, "Read-ahead");
+        if (w) { w->lo = 0; w->hi = 3; w->value = (int)p->read_ahead; }
+    } else if (kind == H_PF_GFX) {
+        snprintf(d->text, sizeof(d->text), "Full enables the qualified driver. None uses software drawing.\nIntermediate Windows driver levels are not supported.");
+        struct du_widget *w = du_property_control(a->ui, 4, DU_CHECKBOX, 1784, (struct du_rect){24, 110, 380, 24}, "Full hardware acceleration (unchecked: None)");
+        if (w) w->value = (int)p->graphics;
+    } else {
+        snprintf(d->text, sizeof(d->text), "Backing file: C:/SYSTEM/PAGEFILE.SWP. Restart required.\nDisabling virtual memory reduces available program memory.");
+        const char *names[] = {"Let the system manage virtual memory", "Let me specify my own settings", "Disable virtual memory"};
+        for (unsigned i = 0; i < 3; i++) {
+            struct du_widget *w = du_property_control(a->ui, 4 + i, DU_RADIO, 1785 + (int)i, (struct du_rect){24, 84 + (int)i * 28, 390, 22}, names[i]);
+            if (w) { w->total = 1785; w->value = p->vm == i; }
+        }
+        char min[16], max[16]; snprintf(min, sizeof(min), "%u", p->min_mb); snprintf(max, sizeof(max), "%u", p->max_mb);
+        du_property_control(a->ui, 7, DU_EDIT, 1788, (struct du_rect){24, 200, 90, 23}, min);
+        du_property_control(a->ui, 8, DU_EDIT, 1789, (struct du_rect){180, 200, 90, 23}, max);
+        du_property_control(a->ui, 9, DU_LABEL, 1790, (struct du_rect){24, 176, 390, 18}, "Minimum (MiB)          Maximum (MiB)");
+    }
+}
+
 static void perf_build(struct cp_app *a)
 {
+    snprintf(a->status, sizeof(a->status), "Performance settings apply after restarting the computer.");
+    if (!a->perf_ready) {
+        a->perf_settings = system_perf_default(); a->perf_ready = 1;
+        if (a->host.perf_load) (void)a->host.perf_load(a->host.ctx, &a->perf_settings);
+    }
     struct pf_input in;
     uint64_t total = a->host.mem_total_k, freek = a->host.mem_free_k;
     if (a->host.memory) a->host.memory(a->host.ctx, &total, &freek);
@@ -431,7 +508,9 @@ static void perf_build(struct cp_app *a)
         snprintf(in.accel_name, sizeof(in.accel_name), "%s", eng.display_name);
     }
     pf_summarize(&a->perf, &in);
-    snprintf(a->perf.virtual_memory, sizeof(a->perf.virtual_memory), "Managed automatically by the system");
+    if (a->perf_settings.vm == 2) snprintf(a->perf.virtual_memory, sizeof(a->perf.virtual_memory), "Configured: virtual memory disabled");
+    else if (a->perf_settings.vm == 1) snprintf(a->perf.virtual_memory, sizeof(a->perf.virtual_memory), "Configured: %u..%u MiB", a->perf_settings.min_mb, a->perf_settings.max_mb);
+    else snprintf(a->perf.virtual_memory, sizeof(a->perf.virtual_memory), "Managed automatically by the system");
     if (!total) snprintf(a->perf.resources, sizeof(a->perf.resources), "Unavailable");
     static const char *const names[7] = {"Memory:", "System Resources:", "File System:", "Virtual Memory:", "Disk Compression:", "PC Cards (PCMCIA):", "Graphics:"};
     const char *values[7] = {a->perf.memory, a->perf.resources, a->perf.file_system, a->perf.virtual_memory, a->perf.disk_compression, a->perf.pc_cards, a->perf.graphics};
@@ -441,11 +520,10 @@ static void perf_build(struct cp_app *a)
         add(a, DU_LABEL, H_PF_BASE + 10 + k, 168, 68 + k * 20, 360, 16, values[k]);
     }
     add(a, DU_LABEL, H_PF_VERDICT, 24, 220, 504, 16, a->perf.verdict);
-    struct du_widget *w;
-    w = add(a, DU_BUTTON, H_PF_BTN_FILE, 24, 252, 120, 24, "File System..."); w->disabled = 1;
-    w = add(a, DU_BUTTON, H_PF_GFX, 152, 252, 120, 24, "Graphics..."); w->disabled = 1;
-    w = add(a, DU_BUTTON, H_PF_VM, 280, 252, 140, 24, "Virtual Memory..."); w->disabled = 1;
-    add(a, DU_LABEL, H_PF_NOTE, 24, 286, 504, 16, "These settings are managed automatically in this release and cannot be changed.");
+    add(a, DU_BUTTON, H_PF_BTN_FILE, 24, 252, 120, 24, "File System...");
+    add(a, DU_BUTTON, H_PF_GFX, 152, 252, 120, 24, "Graphics...");
+    add(a, DU_BUTTON, H_PF_VM, 280, 252, 140, 24, "Virtual Memory...");
+    add(a, DU_LABEL, H_PF_NOTE, 24, 286, 504, 16, "Changes to these settings take effect after restarting the computer.");
 }
 
 /* ---- Hardware Profiles ---- */
@@ -626,6 +704,10 @@ static int hw_event(struct cp_app *a, const struct du_event *e)
             if (++a->aw_progress >= H_AW_TICKS) aw_search_done(a);
             else { struct du_widget *w = du_get(a->ui, H_AW_PROGRESS); if (w) { w->value = (int)a->aw_progress; du_invalidate_widget(a->ui, H_AW_PROGRESS); } }
         } else du_timer_stop(a->ui, H_AW_TIMER);
+        return 1;
+    }
+    if (a->page == CP_SYSTEM && (e->id == H_PF_BTN_FILE || e->id == H_PF_GFX || e->id == H_PF_VM)) {
+        if (e->type == DU_EV_ACTIVATE) perf_open(a, e->id);
         return 1;
     }
     if (e->id < H_DM_DISABLE || e->id > H_LAST) return 0;

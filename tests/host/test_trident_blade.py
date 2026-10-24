@@ -40,7 +40,7 @@ class TridentTests(unittest.TestCase):
         # app.c references the settings and sound tables; libdeskui is stubbed
         # in the test so an unexpected widget/dialog call fails.
         self.run_host('trident_device_ui_test.c', ['apps/control/display.c',
-            'apps/desktop/settings.c', 'apps/desktop/sounds.c', 'apps/systools/devctl.c', 'apps/systools/profiles.c'])
+            'apps/desktop/settings.c', 'apps/desktop/theme.c', 'apps/desktop/power_policy.c', 'apps/desktop/sounds.c', 'apps/systools/devctl.c', 'apps/systools/profiles.c'])
 
     def test_packaged_notices(self):
         spec = importlib.util.spec_from_file_location('tb_image_payloads', ROOT/'scripts/build_image.py')

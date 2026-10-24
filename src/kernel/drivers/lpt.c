@@ -1,3 +1,4 @@
+#include <ciuki/system_settings.h>
 /* PC parallel-port service, independent implementation of PC87338/97338
  * (November 1998), parallel-port register/protocol chapter. Behavioral checks:
  * Linux v6.12 drivers/parport/parport_pc.c (Phil Blundell, Tim Waugh et al.)
@@ -146,6 +147,7 @@ int lpt_admit(const struct lpt_resource *r, const struct lpt_io *io)
         .reason="Assigned resources; register service unavailable."};
     p->status=(struct ciuki_lpt_status){.version=1,.size=sizeof(p->status),.number=index+1,
         .base=r->base,.base_hi=r->base_hi,.origin=r->origin,.dma_channel=CIUKI_LPT_NO_DMA};
+    if (!system_admit(0x71000u + index, "lpt")) { p->reason = "Disabled by hardware profile; no LPT probe."; return (int)index; }
     if (lpt_claim(p,0,RES_PORT,r->base,r->base+r->length,lpt_names[index])) return (int)index;
     if (r->base_hi && lpt_claim(p,1,RES_PORT,r->base_hi,r->base_hi+3,lpt_names[index])) {
         lpt_unclaim(p); p->reason="ECP range conflict; no probe."; return (int)index;

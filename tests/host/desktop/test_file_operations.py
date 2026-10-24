@@ -14,7 +14,7 @@ def run_ui_replay(test):
         sources = ["tests/host/desktop/file_operations_ui_test.c", "tests/host/desktop/fake_vfs.c",
                    "apps/files/model.c", "apps/files/app.c", "apps/files/transfer.c", "apps/desktop/autoplay_content.c"]
         sources += ["apps/w32srv/" + n + ".c" for n in ("registry", "storage", "defaults", "directory", "protocol", "posix_io")]
-        sources += ["apps/libdeskui/" + n + ".c" for n in ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map")]
+        sources += ["apps/libdeskui/" + n + ".c" for n in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map")]
         sources += ["apps/desktop/compositor.c", "apps/desktop/theme.c"]
         binary = Path(tmp) / "ui"
         env = dict(os.environ, ASAN_OPTIONS="detect_leaks=1", TMPDIR=tmp)

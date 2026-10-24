@@ -103,6 +103,7 @@ int audio_backend_publish(const struct audio_frame *frames)
 int audio_backend_start(void) { transport.running=true; return 0; }
 int audio_backend_stop(void) { transport.running=false; return 0; }
 void audio_backend_shutdown(void) { transport.running=false; }
+bool audio_backend_capture_active(void) { return false; } /* G22: the replay models playback only */
 void audio_backend_deadline(void) { transport.deadline_misses++; }
 
 struct operation {

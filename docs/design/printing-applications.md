@@ -24,11 +24,30 @@ The controller joins its worker before the application frees its storage.
 Page Setup changes the controller's settings only on OK. No document is
 saved or marked clean by printing.
 
-NetSurf uses the same dialogs from Ctrl+P and Ctrl+Shift+P. The native
-frontend's current framebuffer supplies a viewport snapshot; this is explicitly
-a visible-page image, not full-document pagination or CSS paged-media output.
-Full browser document printing remains a gap until an upstream print plotter
-and its pagination engine are connected.
+NetSurf uses the same dialogs from Ctrl+P and Ctrl+Shift+P. G26C replaces the
+viewport snapshot with complete-layout raster pagination through the ordinary
+framebuffer plotters. The current document at Print confirmation is scaled to
+paper width and drawn into successive bounded page clips, independent of scroll,
+with selected pages emitted to one PostScript/PCL job. Copies and print-to-file
+retain G31 queue semantics. A failed render never publishes a partial job.
+
+The pinned NetSurf cache clone is unimplemented and the HTML clone asserts, so
+its generic print engine cannot safely supply CSS reformatting. The G26C bridge
+preserves the existing screen-media layout; print-media CSS, avoiding line cuts
+at page boundaries, asynchronous browser rendering and native/physical printer
+qualification remain gaps. See [browser-g26c.md](browser-g26c.md) for the source
+research, ownership and resource decisions.
 
 Shared queue, driver and retry semantics are specified in [printing.md](printing.md).
 There are no new system calls or desktop protocol messages.
+
+## Integration of formatted and streamed documents
+
+The merge rechecked Microsoft's linked Print and Page Setup specifications:
+printer/range/copies are selected before preparing a job, and Cancel submits
+nothing. WordPad's `cp_ui_doc` prepares a `cp_doc` on confirmation; NetSurf's
+`cp_ui_document` renders an owned document into a staging file on the UI owner.
+The controller keeps a separate formatted-document flag and browser document
+pointer, dispatches both worker submission paths, and frees both kinds of owned
+storage on cancellation, preparation/start failure, completion and destruction.
+Both APIs retain the existing dialog IDs and add no public ABI numbers.

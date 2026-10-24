@@ -1,3 +1,4 @@
+#include <ciuki/system_settings.h>
 /* UART service and aggregate ISA owner. Register facts: TI TL16C550D/750,
  * Exar ST16C650A; docs/design/peripheral-driver-coverage.md, COM v1.
  * Detection algorithm informed by Linux v6.12 8250_port.c (GPL-2.0+),
@@ -348,6 +349,7 @@ int com_admit(const struct com_resource *r, const struct com_io *io)
         p->reason="Reserved for kernel log; generation probing prohibited."; return (int)index;
     }
     p->reason="IRQ route unqualified; no UART probe performed.";
+    if (!system_admit(0x70000u + index, "uart")) { p->reason = "Disabled by hardware profile; no UART probe."; return (int)index; }
     if (!r->routed || r->irq>=16 || (r->origin!=CIUKI_COM_PCI && r->irq!=3 && r->irq!=4)) return (int)index;
     int h=registry_claim(RES_PORT,r->base,r->base+8,names[index],false);
     if (h<0) { p->reason="Port claim conflict; no UART probe performed."; return (int)index; }

@@ -14,6 +14,8 @@
 #include "../../../sdk/sysroot-overlay/include/ciuki/audio_preference.h"
 #include <ciuki/task.h>
 #pragma weak sched_audio_producer_stats /* f1-101: task.c, absent in audio-only hosts */
+#pragma weak audio_midi_write
+#pragma weak audio_midi_active
 static struct vfs *settings_vfs;
 static struct file_description *capture_reserved_owner;
 /* fx-26: poll readiness of /dev/mixer (Windows 98 mixer drivers notify a
@@ -243,7 +245,7 @@ static unsigned native_source_count(void)
     unsigned count = 0;
     for (unsigned i = 0; i < AUDIO_STREAMS; i++) {
         struct audio_stream *s = audio.streams[i];
-        if (s && s->started && s->queued) count++;
+        if (s && s->started && (s->queued || (audio_midi_active && audio_midi_active(s)))) count++;
     }
     return count;
 }
@@ -841,7 +843,7 @@ void audio_device_close(struct file_description *d)
             (void)audio_capture_close(&audio_dma,d->capture_generation);
             d->capture_generation=0; /* failed stop retains the driver's quarantine */
         }
-        if (capture_reserved_owner==d) capture_reserved_owner=NULL;
+        if (capture_reserved_owner==d) { capture_reserved_owner=NULL; audio_dma.capture_reserved=false; }
         kmutex_unlock(&audio_lock.control);
     }
     if (d->audio) { audio_stream_close(d->audio); d->audio = 0; }
@@ -957,6 +959,7 @@ static uint32_t record_size(uint32_t op)
     case AUDIO_DRAIN: case AUDIO_RESET: case AUDIO_REFILL_READ: return sizeof(struct ciuki_audio_command);
     case AUDIO_GET_PRODUCER: return sizeof(struct ciuki_audio_producer);
     case AUDIO_SET_SOURCE: return sizeof(struct ciuki_audio_route);
+    case AUDIO_MIDI_WRITE: return sizeof(struct ciuki_midi_data);
     case MIXER_GET_LINE: case MIXER_SET_LINE: return sizeof(struct ciuki_mixer_line);
     case AUDIO_CAPTURE_CAPS: case AUDIO_CAPTURE_START: case AUDIO_CAPTURE_STOP:
     case AUDIO_CAPTURE_ACQUIRE: case AUDIO_CAPTURE_RELEASE:
@@ -993,19 +996,26 @@ int audio_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, u
     if (!err && capture_op && (d->flags&O_ACCMODE)!=O_RDONLY) err=-EACCES;
     if (!err && s && !observation && (audio.error || !audio.ready)) err = -EIO;
     if (!err) switch (op) {
+    case AUDIO_MIDI_WRITE:
+        if (!audio_midi_write) { err=-EOPNOTSUPP; break; }
+        kmutex_lock(&audio_lock.service);
+        err=audio_midi_write(s,(struct ciuki_midi_data *)record);
+        kmutex_unlock(&audio_lock.service);
+        break;
     case AUDIO_CAPTURE_CAPS: case AUDIO_CAPTURE_START: case AUDIO_CAPTURE_STOP:
     case AUDIO_CAPTURE_ACQUIRE: case AUDIO_CAPTURE_RELEASE: {
         struct ciuki_audio_capture *c=(void *)record;
         kmutex_lock(&audio_lock.control);
         if (op==AUDIO_CAPTURE_ACQUIRE) {
             if (!audio_dma.capture_ops || !audio_dma.state.ready || audio_dma.state.quarantine) err=-EOPNOTSUPP;
-            else if ((capture_reserved_owner && capture_reserved_owner!=d) ||
+            else if (audio_dma.cmi.running || audio_dma.emu.capture_running ||
+                     (capture_reserved_owner && capture_reserved_owner!=d) ||
                      (audio_dma.capture.generation && audio_dma.capture.generation!=d->capture_generation)) err=-EBUSY;
-            else capture_reserved_owner=d;
+            else { capture_reserved_owner=d; audio_dma.capture_reserved=true; }
         } else if (op==AUDIO_CAPTURE_RELEASE) {
             if (capture_reserved_owner && capture_reserved_owner!=d) err=-EACCES;
             else if (d->capture_generation) err=-EBUSY;
-            else capture_reserved_owner=NULL;
+            else { capture_reserved_owner=NULL; audio_dma.capture_reserved=false; }
         } else if (op==AUDIO_CAPTURE_START) {
             if (capture_reserved_owner && capture_reserved_owner!=d) err=-EBUSY;
             else if (c->source>CIUKI_CAPTURE_MIX || c->gain>100 || c->rate!=AUDIO_RATE ||
@@ -1061,6 +1071,7 @@ int audio_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, u
         break;
     case AUDIO_SET_SOURCE:
         if (record[2]!=CIUKI_AUDIO_MIXED && (record[2]<CIUKI_MIXER_WAVE || record[2]>CIUKI_MIXER_CD)) err=-EINVAL;
+        else if (s->midi && record[2]!=CIUKI_MIXER_MIDI) err=-EBUSY;
         else s->source=record[2];
         break;
     case MIXER_GET_LINE: case MIXER_SET_LINE:
@@ -1105,6 +1116,7 @@ int audio_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, u
     }
     case AUDIO_RESET: audio_stream_reset(s); break;
     case AUDIO_DRAIN: {
+        if (s->midi) { err=-EOPNOTSUPP; break; } /* send note-offs or RESET */
         if (s->draining) { err = -EBUSY; break; }
         uint32_t generation = s->generation;
         s->draining = true; s->drain_goal = s->accepted;

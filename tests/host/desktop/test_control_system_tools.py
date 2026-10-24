@@ -31,11 +31,11 @@ class ControlSystemToolsTests(unittest.TestCase):
         icons = module("g30c_icons", ROOT / "tests/host/desktop/icon_assets.py")
         ft = module("g30c_ft", ROOT / "sdk/freetype/build.py")
         library = ft.host()
-        sources = ["tests/host/desktop/control_system_tools_test.c", "apps/control/app.c", "apps/systools/devctl.c", "apps/systools/profiles.c",
+        sources = ["tests/host/desktop/control_system_tools_test.c", "apps/control/app.c", "apps/desktop/power_policy.c", "apps/systools/devctl.c", "apps/systools/profiles.c",
                    "apps/control/driver_pack_ui.c", "apps/control/display.c", "apps/control/fonts.c",
                    "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c", "apps/desktop/protocol.c",
                    *(f"apps/desktop/{n}.c" for n in ("settings", "sounds", "wallpaper", "image", "compositor", "theme")),
-                   *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map"))]
+                   *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map"))]
         with tempfile.TemporaryDirectory(prefix="g30-control-", dir=parent) as tmp:
             work = Path(tmp)
             binary = work / "panel"
@@ -55,10 +55,10 @@ class ControlSystemToolsTests(unittest.TestCase):
             pins = ROOT / "tests/host/desktop/control-system-tools-goldens.json"
             if UPDATE:
                 pins.write_text(json.dumps(actual, indent=2, sort_keys=True) + "\n")
-            self.assertEqual(actual, json.loads(pins.read_text()))
             review = module("g30c_frame_review", ROOT / "tests/host/desktop/frame_review.py")
             for p in frames.glob("*.xrgb"):
                 review.capture(p.stem, p.read_bytes(), 560, 420)
+            self.assertEqual(actual, json.loads(pins.read_text()))
 
 
 if __name__ == "__main__":

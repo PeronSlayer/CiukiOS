@@ -223,6 +223,8 @@ screen_text:
 ; (fatgen103; Resource Kit "FAT32" reserved FAT entry). Unclean asks for
 ; ScanDisk (thorough after a hard error); the message lets Esc skip it.
 autoscan_check:
+    cmp byte [fat_type], 32
+    jne .done
     test dword [B(flags)], CBI_F_TEST_REQUEST
     jnz .done
     cmp byte [autoscan_mode], 0
@@ -270,6 +272,10 @@ autoscan_check:
 ; Partition sector 9 (bootstat.h): magic and version, then the previous
 ; start's state, the persistent disabled/skipped classes and the requests.
 bootstat_read:
+    cmp byte [fat_type], 32
+    jne .done
+    cmp byte [cv_active], 0
+    jne .done
     test dword [B(flags)], CBI_F_TEST_REQUEST
     jnz .done
     mov eax, [B(partition_lba)]

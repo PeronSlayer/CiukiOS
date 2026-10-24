@@ -77,6 +77,8 @@ int du_updown_buddy_key(struct du_ui *, struct du_widget *edit, unsigned code);
 void du_repeat_tick(struct du_ui *);
 void du_undo_note(struct du_ui *, const struct du_widget *, const char *old_text, size_t old_cursor, size_t old_anchor, int kind);
 void du_tip_hide(struct du_ui *);
+void du_help_tip_hide(struct du_ui *);
+void du_help_tip_show(struct du_ui *, const char *text);
 void du_tip_motion(struct du_ui *, struct du_widget *under);
 void du_tip_tick(struct du_ui *);
 uint64_t du_tip_deadline(const struct du_ui *);

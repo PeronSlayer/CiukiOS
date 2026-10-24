@@ -129,7 +129,7 @@ int main(int argc, char **argv)
     assert(app.page==CP_HOME && kind(DU_TREE)->count==CP_CATEGORIES);
     render(renders,"control-folder");
     unsigned seen[CP_PAGES]={0}, count=0;
-    static const char *const page_files[]={"display","mouse","keyboard","sounds","datetime","system","devices","drivers","network","power","adapter","fonts","autoplay","programs","joystick","multimedia","users","passwords","regional","internet","addhw","access"};
+    static const char *const page_files[]={"display","mouse","keyboard","sounds","datetime","system","devices","drivers","network","power","adapter","fonts","autoplay","programs","joystick","multimedia","users","passwords","regional","internet","addhw","access","taskbar"};
     _Static_assert(sizeof(page_files)/sizeof(*page_files)==CP_PAGES,"every applet has a render filename");
     for (int cat=0;cat<CP_CATEGORIES;cat++) {
         du_focus(&ui,CP_CATEGORY); at_tap(&ui,DU_KEY_HOME);

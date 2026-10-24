@@ -20,7 +20,12 @@ def module(name, path):
 class SystemSoundsTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        module("sound_build_initial", ROOT / "scripts/build_sounds.py").build()
+        sounds = module("sound_build_initial", ROOT / "scripts/build_sounds.py")
+        # Shared worktree assets may be read-only; verify an existing pack.
+        if (sounds.OUTPUT / "manifest.json").exists():
+            sounds.validate()
+        else:
+            sounds.build()
 
     def harness(self, name, sources, *args):
         scratch = ROOT / "build/host"; scratch.mkdir(parents=True, exist_ok=True)

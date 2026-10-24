@@ -49,6 +49,7 @@ unsigned footprint_end(void)
                phase,a->bytes,a->kind,path ? path : a->file,a->line,a->function);
     }
     printf("ALLOC_TOTAL phase=%s count=%u\n",phase,used);
+    fflush(stdout); /* Preserve the ledger when a following assertion aborts. */
     unsigned count=used; phase=NULL;
     pthread_mutex_unlock(&lock); return count;
 }

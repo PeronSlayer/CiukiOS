@@ -28,6 +28,7 @@ static void sync_menu(struct serial_app *a)
     a->transfer_items[3].flags = t->connected && !t->xm_active && !t->text ? 0 : DU_ITEM_DISABLED;
     a->transfer_items[4].flags = a->transfer_items[5].flags = a->transfer_items[3].flags;
     a->transfer_items[3].flags = (a->transfer_items[3].flags & DU_ITEM_DISABLED) | (t->capture ? DU_ITEM_CHECKED : 0);
+    for (int i=8;i<14;i++) a->transfer_items[i].flags=t->connected && !busy ? 0 : DU_ITEM_DISABLED;
     a->transfer_items[7].flags = t->xm_active ? 0 : DU_ITEM_DISABLED;
     a->view_items[0].flags = t->local_echo ? DU_ITEM_CHECKED : 0; a->view_items[1].flags = t->ansi ? DU_ITEM_CHECKED : 0;
     a->view_items[2].flags = t->send_lf ? DU_ITEM_CHECKED : 0; a->view_items[3].flags = t->receive_lf ? DU_ITEM_CHECKED : 0;
@@ -65,7 +66,10 @@ static const struct du_menu_item transfer_template[] = {
     {"Send &Text File...", SV_SEND_TEXT, 0, 0, DU_ITEM_DISABLED}, {"Send File (&XMODEM)...", SV_XM_SEND, 0, 0, DU_ITEM_DISABLED},
     {"Send File (XMODEM-&1K)...", SV_XM_SEND_1K, 0, 0, DU_ITEM_DISABLED}, {"&Capture Text...", SV_CAPTURE, 0, 0, DU_ITEM_DISABLED},
     {"&Receive File (XMODEM)...", SV_XM_RECEIVE, 0, 0, DU_ITEM_DISABLED}, {"", 0, 0, 0, DU_ITEM_SEPARATOR},
-    {"", 0, 0, 0, DU_ITEM_SEPARATOR}, {"Cancel &Transfer", SV_XM_CANCEL, 0, 0, DU_ITEM_DISABLED} };
+    {"", 0, 0, 0, DU_ITEM_SEPARATOR}, {"Cancel &Transfer", SV_XM_CANCEL, 0, 0, DU_ITEM_DISABLED},
+    {"Send File (YMODEM)...", SV_YM_SEND, 0, 0, DU_ITEM_DISABLED}, {"Receive File (YMODEM)...", SV_YM_RECEIVE, 0, 0, DU_ITEM_DISABLED},
+    {"Send File (ZMODEM)...", SV_ZM_SEND, 0, 0, DU_ITEM_DISABLED}, {"Receive File (ZMODEM)...", SV_ZM_RECEIVE, 0, 0, DU_ITEM_DISABLED},
+    {"Send File (Kermit)...", SV_KERMIT_SEND, 0, 0, DU_ITEM_DISABLED}, {"Receive File (Kermit)...", SV_KERMIT_RECEIVE, 0, 0, DU_ITEM_DISABLED} };
 static const struct du_menu_item view_template[] = {
     {"&Local echo", SV_ECHO, 0, 0, 0}, {"&ANSI terminal", SV_ANSI, 0, 0, DU_ITEM_CHECKED}, {"Send line &feed with return", SV_SEND_LF, 0, 0, 0},
     {"Add line feed to &incoming returns", SV_RECEIVE_LF, 0, 0, 0}, {"C&lear screen", SV_CLEAR, 0, 0, 0}, {"&DTR", SV_DTR, 0, 0, DU_ITEM_DISABLED}, {"&RTS", SV_RTS, 0, 0, DU_ITEM_DISABLED} };
@@ -76,7 +80,7 @@ void serial_attach(struct serial_app *a, struct du_ui *u)
     a->ui = u; u->event = serial_event; u->user = a; u->paint = serial_paint;
     memcpy(a->call_items, call_template, sizeof(call_template)); memcpy(a->transfer_items, transfer_template, sizeof(transfer_template));
     memcpy(a->view_items, view_template, sizeof(view_template)); memcpy(a->help_items, help_template, sizeof(help_template));
-    a->menus[0] = (struct du_menu){"&Call", a->call_items, 5}; a->menus[1] = (struct du_menu){"&Transfer", a->transfer_items, 8};
+    a->menus[0] = (struct du_menu){"&Call", a->call_items, 5}; a->menus[1] = (struct du_menu){"&Transfer", a->transfer_items, 14};
     a->menus[2] = (struct du_menu){"&View", a->view_items, 7}; a->menus[3] = (struct du_menu){"&Help", a->help_items, 1};
     u->menus = a->menus; u->menu_count = 4;
     du_add(u, DU_CANVAS, SV_CANVAS, grid_box(), "")->accepts_tab = 1;
@@ -155,6 +159,8 @@ void serial_event(struct du_ui *u, const struct du_event *e, void *user)
         if (e->id == SV_D_PROPS) { int r = apply_properties(a); if (r) { report(a, r == -EINVAL ? -EINVAL : r); } sync_menu(a); status(a); return; }
         if (e->id == SV_D_TEXT && e->text) report(a, serial_send_text_file(t, e->text));
         else if (e->id == SV_D_CAPTURE && e->text) report(a, serial_capture_start(t, e->text));
+        else if ((e->id == SV_D_SEND || e->id == SV_D_RECEIVE) && e->text && a->xm_kind >= 10)
+            report(a, serial_transfer_start(t,e->text,a->xm_kind-10,e->id==SV_D_SEND));
         else if (e->id == SV_D_SEND && e->text) report(a, serial_xmodem_send(t, e->text, a->xm_kind == 2));
         else if (e->id == SV_D_RECEIVE && e->text) report(a, serial_xmodem_receive(t, e->text, 1));
         sync_menu(a); status(a); return;
@@ -167,6 +173,11 @@ void serial_event(struct du_ui *u, const struct du_event *e, void *user)
         case SV_EXIT: if (a->quit) a->quit(a->host); break;
         case SV_SEND_TEXT: file_dialog(a, SV_D_TEXT, 0, "Send Text File", ""); break;
         case SV_CAPTURE: if (t->capture) serial_capture_stop(t); else file_dialog(a, SV_D_CAPTURE, 1, "Capture Text", "capture.txt"); break;
+        case SV_YM_SEND: case SV_YM_RECEIVE: case SV_ZM_SEND: case SV_ZM_RECEIVE: case SV_KERMIT_SEND: case SV_KERMIT_RECEIVE: {
+            int sending=(e->id-SV_YM_SEND)%2==0;
+            int protocol=(e->id-SV_YM_SEND)/2+1;a->xm_kind=10+protocol;
+            file_dialog(a,sending ? SV_D_SEND : SV_D_RECEIVE,!sending,sending ? "Send File" : "Receive File",sending ? "" : "received.bin");break;
+        }
         case SV_XM_SEND: case SV_XM_SEND_1K: a->xm_kind = e->id == SV_XM_SEND ? 1 : 2; file_dialog(a, SV_D_SEND, 0, "Send File", ""); break;
         case SV_XM_RECEIVE: a->xm_kind = 3; file_dialog(a, SV_D_RECEIVE, 1, "Receive File", "received.bin"); break;
         case SV_XM_CANCEL: serial_xmodem_cancel(t); break;
@@ -178,7 +189,7 @@ void serial_event(struct du_ui *u, const struct du_event *e, void *user)
         case SV_DTR: report(a, serial_set_modem(t, t->outputs ^ SERIAL_DTR)); break;
         case SV_RTS: report(a, serial_set_modem(t, t->outputs ^ SERIAL_RTS)); break;
         case SV_ABOUT:
-            du_message(u, SV_D_INFO, "About Serial Terminal", "CiukiOS Serial Terminal - Classic computing, one woof at a time.\nNative COM ports, TTY/ANSI, text capture, XMODEM.\nCode: MIT.", DU_DLG_ICON_INFO, NULL, 0, 0, 0);
+            du_message(u, SV_D_INFO, "About Serial Terminal", "CiukiOS Serial Terminal - Classic computing, one woof at a time.\nNative COM ports, TTY/ANSI, text capture, X/Y/ZMODEM, Kermit.\nCode: MIT.", DU_DLG_ICON_INFO, NULL, 0, 0, 0);
             break;
         default: return;
         }

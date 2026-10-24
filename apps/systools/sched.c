@@ -81,8 +81,9 @@ void st_mark_run(struct st_store *s, unsigned i, int64_t now, int result)
 static int valid(const struct st_task *t)
 {
     if (!t->name[0] || !t->command[0] || memchr(t->name, 0, sizeof(t->name)) == NULL || memchr(t->command, 0, sizeof(t->command)) == NULL) return 0;
-    for (const char *p = t->name; *p; p++) if (*p == '\n' || *p == '\r' || *p == '=') return 0;
+    for (const char *p = t->name; *p; p++) if (*p == '\n' || *p == '\r' || *p == '=' || *p == '|') return 0;
     for (const char *p = t->command; *p; p++) if (*p == '\n' || *p == '\r') return 0;
+    if (t->conditions & ~(ST_IDLE | ST_AC_ONLY | ST_STOP_IDLE | ST_STOP_BATTERY) || (t->idle_minutes > 999 || t->idle_deadline > 999)) return 0;
     if (t->kind < ST_DAILY || t->kind > ST_AT_START || t->minute_of_day > 1439) return 0;
     if (t->kind != ST_AT_START && !date_ok(t->start)) return 0;
     if (t->kind == ST_WEEKLY && !(t->weekday_mask & 0x7f)) return 0;
@@ -119,6 +120,9 @@ int st_save(const struct st_store *s, char *out, size_t cap)
                      t->last_result, t->command);
         if (w < 0 || (size_t)w >= cap - at) return -ENOSPC;
         at += (size_t)w;
+        w = snprintf(out + at, cap - at, "settings=%s|%u|%u|%u\n", t->name, t->conditions, t->idle_minutes, t->idle_deadline);
+        if (w < 0 || (size_t)w >= cap - at) return -ENOSPC;
+        at += (size_t)w;
     }
     return (int)at;
 }
@@ -149,6 +153,20 @@ int st_load(struct st_store *s, const char *text)
                         if (st_add(s, &t) == 0) s->t[s->count - 1].last_run = t.last_run;
                     }
                 }
+            }
+        }
+        if (len < sizeof(line) && !strncmp(text, "settings=", 9)) {
+            memcpy(line, text + 9, len - 9); line[len - 9] = 0;
+            char *bar = strchr(line, '|'); unsigned flags, idle, deadline = 0; char tail;
+            if (bar) {
+                *bar++ = 0;
+                int fields = sscanf(bar, "%u|%u|%u%c", &flags, &idle, &deadline, &tail);
+                if (fields == 2 && sscanf(bar, "%u|%u%c", &flags, &idle, &tail) != 2) fields = 0;
+                if ((fields == 2 || fields == 3) &&
+                    !(flags & ~(ST_IDLE | ST_AC_ONLY | ST_STOP_IDLE | ST_STOP_BATTERY)) && idle <= 999 && deadline <= 999)
+                    for (unsigned i = 0; i < s->count; i++) if (!strcmp(s->t[i].name, line)) {
+                        s->t[i].conditions = flags; s->t[i].idle_minutes = idle; s->t[i].idle_deadline = deadline;
+                    }
             }
         }
         text += len + (eol ? 1 : 0);
@@ -184,4 +202,11 @@ int mw_apply(struct st_store *s, const struct mw_choice *c, struct st_date start
         added++;
     }
     return added;
+}
+
+int st_allowed(const struct st_task *t, const struct st_conditions *c)
+{
+    if ((t->conditions & ST_IDLE) && c->idle_minutes < (t->idle_minutes ? t->idle_minutes : 1)) return 0;
+    if ((t->conditions & ST_AC_ONLY) && c->ac != 1) return 0;
+    return 1;
 }
