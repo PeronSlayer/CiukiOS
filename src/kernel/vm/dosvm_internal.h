@@ -238,6 +238,7 @@ struct dosvm {
     bool started, a20, table_ready, base_open, overlay_open, overlay_created;
     uint8_t midnight, disk_status;
     struct dosvm_lpt_state lpt[3];
+    struct dosvm_print_capture print_capture;
     uint32_t ports_changed;
     int printer_fd;
     bool printer_open;

@@ -44,6 +44,7 @@ int dosvm_game_ports_apply(struct dosvm *v)
         if (e) { klog("[game-ports] COM%u refused: %s (%d)",slot+1,reason,e);return e; }
     }
     for (unsigned i=0;i<3;i++) v->lpt[i].disabled=true;
+    v->print_capture.enabled=p.lpt_mode==GAME_LPT_PRINTER;
     if (p.lpt_mode==GAME_LPT_FILE) {
         char path[132];path[0]='C';path[1]=':';
         unsigned i=0;
@@ -57,7 +58,7 @@ int dosvm_game_ports_apply(struct dosvm *v)
             else vfs_close(&v->disk_table,fd);
         }
         if (!v->printer_open) v->ports_changed|=CIUKI_DOSVM_PORT_FALLBACK;
-    } else if (p.lpt_mode!=GAME_LPT_NONE) {
+    } else if (p.lpt_mode==GAME_LPT_RAW) {
         int physical=-1;
         for (unsigned i=0;i<CIUKI_LPT_MAX;i++) {
             struct ciuki_lpt_status s;

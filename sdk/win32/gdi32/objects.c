@@ -152,7 +152,7 @@ DWORD gdi_color(COLORREF c) {
   return ((c & 255) << 16) | (c & 0xff00) | ((c >> 16) & 255);
 }
 DWORD gdi_device_bpp(struct dc *d) {
-  return desktop.bpp ? desktop.bpp : gdi_target(d)->bpp;
+  return d->printer ? gdi_target(d)->bpp : desktop.bpp ? desktop.bpp : gdi_target(d)->bpp;
 }
 COLORREF gdi_colorref(DWORD c) { return gdi_color(c); }
 HGDIOBJ W32API GetStockObject(int n) {
@@ -256,35 +256,44 @@ BOOL W32API w32_gdi_set_desktop(const struct w32_dib *s) {
 HDC W32API CreateDCA(const char *driver, const char *device, const char *output,
                      const void *mode) {
   GDI_GUARD;
-  (void)device;
-  (void)mode;
-  if (!driver || w32_stricmp(driver, "DISPLAY") || output ||
-      !w32_dib_validate(&desktop))
+  if (!driver || w32_stricmp(driver, "DISPLAY"))
+    return gdi_printer_create(driver, device, output, mode, 0);
+  if (output || !w32_dib_validate(&desktop))
     return 0;
   return new_dc(0, &desktop);
 }
 HDC W32API CreateDCW(const WCHAR *driver, const WCHAR *device,
                      const WCHAR *output, const void *mode) {
-  (void)device;
-  char name[8];
-  unsigned i = 0;
-  if (!driver)
-    return 0;
-  for (; i < 7 && driver[i]; i++) {
-    if (driver[i] > 127)
-      return 0;
-    name[i] = (char)driver[i];
+  char names[3][260];
+  const WCHAR *input[3] = {driver, device, output};
+  for (unsigned n = 0; n < 3; n++) {
+    unsigned i = 0;
+    if (input[n]) {
+      for (; i < 259 && input[n][i]; i++) {
+        int c = gdi_cp1252_ansi(input[n][i]);
+        if (c < 0)
+          return 0;
+        names[n][i] = (char)c;
+      }
+      if (input[n][i])
+        return 0;
+    }
+    names[n][i] = 0;
   }
-  if (driver[i])
-    return 0;
-  name[i] = 0;
-  return CreateDCA(name, 0, output ? "" : 0, mode);
+  if (!driver || w32_stricmp(names[0], "DISPLAY")) {
+    GDI_GUARD;
+    return gdi_printer_create(driver ? names[0] : 0, device ? names[1] : 0,
+                              output ? names[2] : 0, mode, 1);
+  }
+  return CreateDCA(names[0], device ? names[1] : 0, output ? names[2] : 0, mode);
 }
+
 BOOL W32API DeleteDC(HDC h) {
   GDI_GUARD;
   struct dc *d = gdi_dc(h);
   if (!d)
     return 0;
+  gdi_printer_free(d);
   gdi_record_free(d);
   state_refs(&d->s, -1);
   gdi_region_free(&d->s.clip);
@@ -396,7 +405,7 @@ DWORD W32API GetObjectType(HGDIOBJ h) {
   /* f5-20B: a metafile DC reports OBJ_METADC. */
   return o ? (o->type == GDI_MEMDC && o->u.dc.record ? 4u : o->type) : 0;
 }
-#ifndef W32_HOST_MODEL
+#if defined(_WIN32) && !defined(W32_HOST_MODEL)
 __declspec(dllimport) BOOL W32API UnmapViewOfFile(const void *);
 #else
 extern BOOL W32API UnmapViewOfFile(const void *);
@@ -481,6 +490,7 @@ void W32API w32_gdi_process_exit(void) {
   gdi_font_exit();
   for (unsigned i = 0; i < sizeof(fonts) / sizeof(*fonts); i++)
     gdi_font_stock(fonts[i], &stocks[fonts[i]].u.font);
+  gdi_printer_exit();
   desktop = (struct w32_dib){0};
   gdi_palette_reset();
 }
@@ -569,6 +579,8 @@ int W32API GetDeviceCaps(HDC h, int cap) {
   struct w32_dib *s = gdi_target(d);
   if (!s)
     return 0;
+  if (d->printer)
+    return gdi_printer_caps(d, cap);
   DWORD width = desktop.width ? desktop.width : s->width,
         height = desktop.height ? desktop.height : s->height,
         bpp = desktop.bpp ? desktop.bpp : s->bpp;

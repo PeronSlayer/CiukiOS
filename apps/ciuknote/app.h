@@ -10,7 +10,7 @@
 
 /* Command, widget and dialog identifiers (shared with the host tests). */
 enum { M_NEW = 1, M_OPEN, M_SAVE, M_SAVEAS, M_EXIT, M_UNDO, M_CUT, M_COPY, M_PASTE, M_DELETE, M_FIND,
-       M_FINDNEXT, M_REPLACE, M_GOTO, M_SELALL, M_TIME, M_WRAP, M_FONT, M_STATUS, M_HELP, M_ABOUT };
+       M_FINDNEXT, M_REPLACE, M_GOTO, M_SELALL, M_TIME, M_WRAP, M_FONT, M_STATUS, M_HELP, M_ABOUT, M_PAGESETUP, M_PRINT };
 enum { W_TEXT = 100, W_STATUS, W_FLABEL, W_FIND, W_FNEXT, W_FDIR, W_FCASE, W_FCLOSE,
        W_RLABEL, W_REPL, W_RONE, W_RALL };
 enum { D_CHANGES = 200, D_REPLACE, D_INFO, D_GOTO, D_FONT, D_CREATE, D_OPEN, D_SAVE };
@@ -28,6 +28,7 @@ struct cn_app {
     int (*portrait)(uint32_t *pixels256);           /* the approved portrait (XRGB 256x256) */
     void (*recent)(const char *path);               /* recent documents list (libdeskui recent.h); NULL in tests */
     void (*declined)(void *);                       /* G3: the user cancelled an exit (decline the close / veto the session) */
+    void (*printing)(void *, int setup);             /* G31: print the unsaved document, or Page Setup */
     void *host;
     int test, stage;
     /* document */
@@ -44,7 +45,7 @@ struct cn_app {
     uint32_t ciuki32[1024]; int ciuki;
     /* menus */
     struct du_menu menus[5];
-    struct du_menu_item file_items[6], edit_items[14], format_items[2], view_items[1], help_items[3], popup[6];
+    struct du_menu_item file_items[9], edit_items[14], format_items[2], view_items[1], help_items[3], popup[6];
 };
 
 /* Builds menus and widgets on an initialised UI (call after du_window_open/du_init). */

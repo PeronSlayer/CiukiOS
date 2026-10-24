@@ -99,7 +99,7 @@ def inputs(host=False):
     return {"pins": json.loads((ROOT / "config/netsurf.json").read_text()), "features": FEATURES,
             "port": hashes(HERE), "sdk": digest(SDK / "manifest.json"), "epoch": EPOCH, "host": host,
             "tools": {name: tool(name) for name in ("clang", "llvm-ar", "llvm-ranlib", "make", "perl", "pkg-config", "patch", "gawk")},
-            "desktop": {str(p.relative_to(ROOT)): digest(p) for folder in ("apps/libdeskui", "apps/desktop")
+            "desktop": {str(p.relative_to(ROOT)): digest(p) for folder in ("apps/libdeskui", "apps/libprint", "apps/desktop")
                         for p in sorted((ROOT / folder).glob("*.[ch]"))},
             "fonts": hashes(ROOT / "assets/fonts/liberation"),
             "sdk_libraries": {p.name: digest(p) for p in sorted((SDK / "sysroot/lib").glob("*.a"))},
@@ -461,7 +461,7 @@ def build(host=False, clean=False, directory=None):
     browser = tree / "netsurf"
     # Build only the desktop toolkit, without its v1/v2 client transport.
     desk_objects=[]
-    for source in [p for p in sorted((ROOT / "apps/libdeskui").glob("*.c")) if p.name!="client.c"] + [ROOT / "apps/desktop" / n for n in ("protocol.c", "compositor.c", "theme.c")]:
+    for source in [p for p in sorted((ROOT / "apps/libdeskui").glob("*.c")) if p.name!="client.c"] + sorted((ROOT / "apps/libprint").glob("*.c")) + [ROOT / "apps/desktop" / n for n in ("protocol.c", "compositor.c", "theme.c")]:
         obj=folder / ("desk-" + source.stem + ".o")
         run([cc,*cflags,*host_header,"-I" + str(adapter_headers),"-I" + str(ROOT),"-c",source,"-o",obj],env=env)
         desk_objects.append(obj)

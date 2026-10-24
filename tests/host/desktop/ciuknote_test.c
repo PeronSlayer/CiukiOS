@@ -195,6 +195,16 @@ static int cell_y(int line) { return W(W_TEXT)->box.y + 4 + line * DU_TA_CELL_H 
 
 /* ---- scenarios ----------------------------------------------------------- */
 
+static unsigned print_requests,setup_requests;
+static void host_print(void *arg,int setup) { (void)arg;if(setup)setup_requests++;else print_requests++; }
+static void test_print_commands(void)
+{
+    reset(0);app.printing=host_print;
+    assert(!du_ta_insert(&app.ta,"unsaved",7,DU_TA_EDIT_TYPE));
+    chord(DU_KEY_LCTRL,0x19);assert(print_requests==1 && app.ta.len==7 && !memcmp(app.ta.text,"unsaved",7));
+    struct du_event e={.type=DU_EV_ACTIVATE,.id=M_PAGESETUP};cn_event(&ui,&e,&app);assert(setup_requests==1);
+    assert(!saves);puts("PASS G31 CiukNote: Ctrl+P and Page Setup callbacks preserve unsaved document");
+}
 static void test_startup(void)
 {
     reset(1);
@@ -776,7 +786,7 @@ int main(int argc, char **argv)
     test_startup(); test_typing(); test_clipboard_and_undo(); test_save_and_open(); test_unsaved_prompt();
     test_save_errors_and_replace(); test_find_replace(); test_goto_wrap_status(); test_time_log_encoding();
     test_limits(); test_open_argument(); test_file_dialogs(); test_menus_and_context(); test_mouse_text();
-    test_wrap_navigation(); test_screens(); test_resize(); test_random_input();
+    test_wrap_navigation(); test_screens(); test_resize(); test_random_input();test_print_commands();
     puts("PASS ciuknote: typing, shift/caps, clipboard, undo, prompts, save/open, replace prompt, find/replace, go to, wrap, status bar, "
          "time/date, .LOG, line endings, limits, argument, file dialogs, menus, context menu, mouse, scroll bars, screens");
     return 0;

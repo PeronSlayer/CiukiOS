@@ -29,6 +29,7 @@
 #include "apps/libdeskui/deskui.h"
 #include "apps/libdeskui/internal.h"
 #include "apps/libdeskui/keymap.h"
+#include "apps/libprint/dialog.h"
 #include "surface.h"
 void ciuki_font_prefetch(void); /* font.c (fx-15) */
 #include "profile.h"
@@ -40,6 +41,7 @@ void ciuki_font_prefetch(void); /* font.c (fx-15) */
 enum { BACK=1,FORWARD,RELOAD,STOP,BOOKMARK,URL,STATUS,HOME,OPEN=20,FILE_PICKER,NOTICE };
 static const int buttons[]={BACK,FORWARD,RELOAD,STOP,HOME,BOOKMARK};
 static struct du_ui ui;
+static struct cp_ui printing;
 static struct ciuki_browser_surface *surface;
 static bool active, loading, hotlist_ready, profile_ready, toolbar_keys;
 static bool status_dirty;
@@ -110,6 +112,7 @@ static void action(int id)
 static void event(struct du_ui *u,const struct du_event *e,void *unused)
 {
     (void)unused;
+    if(cp_ui_event(&printing,u,e)) { fbtk_request_redraw(fbtk);return; }
     if(e->type==DU_EV_ACTIVATE || e->type==DU_EV_COMMIT) {
         if(e->id==URL) { u->focus=-1;toolbar_keys=false;navigate(du_get(u,URL)->text); }
         else action(e->id);
@@ -167,6 +170,7 @@ void ciuki_chrome_pointer(unsigned shape)
 { content_cursor=ciuki_pointer_shape(shape);chrome_cursor(); }
 void ciuki_chrome_render(void)
 {
+    if(active)cp_ui_poll(&printing,&ui);
     chrome_cursor(); /* also retry a refused cursor send on an otherwise idle UI turn */
     if(!active || (!ui.dirty && !status_dirty))return;
     struct browser_window *bw=browser();
@@ -260,6 +264,18 @@ static void focus_address(void)
     struct du_widget *edit=du_get(&ui,URL);
     edit->anchor=0;edit->cursor=strlen(edit->text);edit->selection.ns=0;ui.dirty=1;
 }
+static bool print_key(int code)
+{
+    if(code!=0x19 || !(ui.modifiers&DU_CTRL))return false;
+    if(ui.modifiers&DU_SHIFT)cp_ui_setup(&printing,&ui);
+    else if(surface && surface->ready) {
+        unsigned w=surface->current.info.width,h=surface->current.info.height;
+        if(h>CIUKI_BROWSER_TOP+CIUKI_BROWSER_STATUS)
+            cp_ui_image(&printing,&ui,"NetSurf - visible page",surface->current.back+(size_t)CIUKI_BROWSER_TOP*w,
+                        w,h-CIUKI_BROWSER_TOP-CIUKI_BROWSER_STATUS);
+    }
+    return true;
+}
 bool ciuki_chrome_input(const struct ciuki_input_event *input)
 {
     if(!active)return false;
@@ -272,6 +288,7 @@ bool ciuki_chrome_input(const struct ciuki_input_event *input)
         }
         bool ctrl=ui.modifiers&DU_CTRL,alt=ui.modifiers&DU_ALT;
         if(e.value && !ui.dialog.kind) {
+            if(print_key(e.code))return true;
             if(ctrl && e.code==0x26) { focus_address();return true; }
             if(ctrl && e.code==0x13) { action(RELOAD);return true; }
             if(e.code==DU_KEY_ESC) { action(STOP);return true; }
@@ -443,6 +460,7 @@ int ciuki_chrome_start(void)
 }
 void ciuki_chrome_finish(void)
 {
+    cp_ui_destroy(&printing);
     if(profile_ready) {
         if(ciuki_profile_history_save() || ciuki_profile_replace("Choices",save_choices,NULL))
             fprintf(stderr,"NetSurf: unable to save profile; previous files retained.\n");

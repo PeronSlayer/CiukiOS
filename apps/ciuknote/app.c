@@ -19,7 +19,9 @@ _Static_assert(CN_LIMIT == 61440u, "CN_LIMIT_TEXT must name CN_LIMIT");
 
 static const struct du_menu_item file_template[] = {
     {"&New", M_NEW, 0x31, DU_CTRL, 0}, {"&Open...", M_OPEN, 0x18, DU_CTRL, 0}, {"&Save", M_SAVE, 0x1f, DU_CTRL, 0},
-    {"Save &As...", M_SAVEAS, 0, 0, 0}, {NULL, 0, 0, 0, DU_ITEM_SEPARATOR}, {"E&xit", M_EXIT, 0, 0, 0}};
+    {"Save &As...", M_SAVEAS, 0, 0, 0}, {NULL, 0, 0, 0, DU_ITEM_SEPARATOR},
+    {"Page Set&up...", M_PAGESETUP, 0, 0, 0}, {"&Print...", M_PRINT, 0x19, DU_CTRL, 0},
+    {NULL, 0, 0, 0, DU_ITEM_SEPARATOR}, {"E&xit", M_EXIT, 0, 0, 0}};
 static const struct du_menu_item edit_template[] = {
     {"&Undo", M_UNDO, 0x2c, DU_CTRL, 0}, {NULL, 0, 0, 0, DU_ITEM_SEPARATOR},
     {"Cu&t", M_CUT, 0x2d, DU_CTRL, 0}, {"&Copy", M_COPY, 0x2e, DU_CTRL, 0}, {"&Paste", M_PASTE, 0x2f, DU_CTRL, 0},
@@ -462,6 +464,7 @@ static void menu_command(struct cn_app *a, int id)
     case M_OPEN: guard(a, CN_AFTER_OPEN); break;
     case M_SAVE: command_save(a); break;
     case M_SAVEAS: file_dialog(a, 1, ""); break;
+    case M_PAGESETUP: case M_PRINT: if (a->printing) a->printing(a->host,id==M_PAGESETUP); break;
     case M_EXIT: guard(a, CN_AFTER_EXIT); break;
     case M_UNDO: du_ta_undo(&a->ta); after_edit(a); break;
     case M_CUT: if (du_ta_has_selection(&a->ta) && !copy_selection(a)) du_ta_delete_selection(&a->ta); after_edit(a); break;

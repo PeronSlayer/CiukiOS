@@ -9,6 +9,16 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class LptTests(unittest.TestCase):
+    def test_dos_spool_capture(self):
+        out = ROOT / "build/host/lpt"
+        out.mkdir(parents=True, exist_ok=True)
+        binary = out / "dos_print_test"
+        subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
+                        "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
+                        "-I", str(ROOT / "src/kernel/include"),
+                        str(ROOT / "tests/host/dos_print_test.c"), "-o", str(binary)], check=True)
+        subprocess.run([binary], check=True)
+
     def test_register_model(self):
         out = ROOT / "build/host/lpt"
         out.mkdir(parents=True, exist_ok=True)
@@ -24,7 +34,7 @@ class LptTests(unittest.TestCase):
         out = ROOT / "build/host/lpt"
         out.mkdir(parents=True, exist_ok=True)
         flags = runpy.run_path(str(ROOT / "scripts/build_kernel.py"))["CFLAGS"]
-        sources = ("drivers/lpt.c", "drivers/lpt_native.c", "vm/dosvm_lpt.c",
+        sources = ("drivers/lpt.c", "drivers/lpt_native.c", "vm/dosvm_lpt.c", "vm/dosvm_print.c",
                    "vm/dosvm_bios.c", "vm/dosvm_game_ports.c", "vm/dosvm_uart.c", "vm/dosvm_client.c", "vm/dosvm.c", "vm/dosvm_vga.c", "core/init.c", "core/devices.c",
                    "proc/posixpath.c", "proc/fdtable.c", "proc/syscalls_file.c")
         for rel in sources:

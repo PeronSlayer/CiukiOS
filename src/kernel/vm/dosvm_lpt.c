@@ -5,6 +5,7 @@
 #include "dosvm_internal.h"
 
 #pragma weak dosvm_game_printer_bios
+#pragma weak dosvm_print_byte
 static const uint16_t guest_lpt_bases[3]={0x378,0x278,0x3bc};
 static bool guest_lpt_cancelled(void *context)
 {
@@ -39,6 +40,24 @@ static int guest_lpt_port(struct dosvm *v, uint16_t port, unsigned width, bool w
     if (width!=1) return 0; /* never split word cycles into hardware transactions */
     /* Preserve the OUT operand before initializing an IN result. */
     uint8_t b=(uint8_t)*value;
+    if (!slot && v->print_capture.enabled) {
+        struct dosvm_print_capture *p=&v->print_capture;
+        unsigned reg=port-guest_lpt_bases[slot];
+        if (write) {
+            if (!reg) p->data=b;
+            else if (reg==2) {
+                if (!(p->control&1) && (b&1) && !(b&0x20) && dosvm_print_byte)
+                    p->ack=!dosvm_print_byte(v,p->data);
+                p->control=b&0x3f;
+            }
+        } else if (!reg) *value=p->data;
+        else if (reg==2) *value=p->control;
+        else if (reg==1) {
+            *value=p->failed ? 0x10 : p->busy || p->finish || p->used==sizeof(p->buffer) ? 0x58 : p->ack ? 0x98 : 0xd8;
+            p->ack=false;
+        }
+        return 0;
+    }
     int e=guest_lpt_acquire(v,slot);
     if (!e) e=lpt_raw_io(v->lpt[slot].index,v->lpt[slot].generation,
                          port-guest_lpt_bases[slot],write,&b);
@@ -49,7 +68,12 @@ int dosvm_lpt_bios(struct dosvm *v, struct v86_frame *f)
 {
     unsigned slot=(uint16_t)f->tf.edx, fn=(uint8_t)(f->tf.eax>>8);
     uint8_t status=1;
-    if (!slot && fn<=2 && v->printer_open && dosvm_game_printer_bios) {
+    if (!slot && fn<=2 && v->print_capture.enabled && dosvm_print_byte) {
+        struct dosvm_print_capture *p=&v->print_capture;
+        int e=fn==0 ? dosvm_print_byte(v,(uint8_t)f->tf.eax) :
+            p->failed || p->busy || p->finish || p->used==sizeof(p->buffer) ? -EAGAIN : 0;
+        status=e ? 1 : 0x90;
+    } else if (!slot && fn<=2 && v->printer_open && dosvm_game_printer_bios) {
         status=dosvm_game_printer_bios(v,fn,(uint8_t)f->tf.eax) ? 1 : 0x90;
     } else if (slot<3 && fn<=2 && !guest_lpt_acquire(v,slot)) {
         struct dosvm_lpt_state *s=&v->lpt[slot];
@@ -75,7 +99,7 @@ int dosvm_lpt_bda(struct dosvm *v)
     for (unsigned i=0;i<3;i++) {
         uint16_t base=0;
         struct ciuki_lpt_status s;
-        if ((!i && v->printer_open) || (!v->lpt[i].disabled &&
+        if ((!i && (v->printer_open || v->print_capture.enabled)) || (!v->lpt[i].disabled &&
             lpt_snapshot(v->lpt[i].index,&s,0) && (s.flags&CIUKI_LPT_READY))) {
             base=guest_lpt_bases[i];count++;
         }
@@ -88,6 +112,7 @@ int dosvm_lpt_bda(struct dosvm *v)
 }
 int dosvm_lpt_init(struct dosvm *v)
 {
+    v->print_capture=(struct dosvm_print_capture){.enabled=true,.control=0x0c};
     for (unsigned i=0;i<3;i++) {
         v->lpt[i]=(struct dosvm_lpt_state){.index=i};
         uint8_t timeout=20;

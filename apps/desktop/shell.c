@@ -252,6 +252,7 @@ static const struct program_info programs[] = {
     {"dosbox", "DOS Box", "utilities-terminal", "programs", NULL},
     {"demo", "Ciuki Demo", "preferences-desktop-peripherals", "programs", NULL},   /* the keyboard/mouse input demo */
     {"lua", "Lua", "text-x-script", "programs", NULL},
+    {"printers", "Printers", "printer", "programs", NULL},
     {"control", "Control Panel", "preferences-desktop", "programs", NULL},
     {"music", "Music Player", "audio-x-generic", "programs", NULL},
     {"viewer", "Image Viewer", "image-x-generic", "programs", NULL},
@@ -466,6 +467,7 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
     case SH_MENU_SETTINGS: {
         unsigned off = program_index(d, "control") < 0 ? SH_ITEM_DISABLED : 0;
         item(m, "Control Panel", "preferences-desktop", SH_ACT_CONTROL, 0, off);
+        item(m, "Printers", "printer", SH_ACT_LAUNCH, program_index(d,"printers"), program_index(d,"printers")<0?SH_ITEM_DISABLED:0);
         separator(m);
         for (int k=0;k<CP_CATEGORIES;k++)
             item(m,cp_categories[k].label,cp_categories[k].icon,SH_ACT_SUBMENU,SH_MENU_SETTINGS_CATEGORY+k,off);

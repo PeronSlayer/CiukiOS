@@ -12,6 +12,8 @@
 static struct du_ui ui;
 static uint32_t pixels[PAINT_W*PAINT_H+1];
 static int include_cursor;
+static unsigned print_requests,setup_requests;
+static void host_print(void *arg,int setup) { (void)arg;if(setup)setup_requests++;else print_requests++; }
 static struct paint_state state(void) { struct paint_state s; paint_snapshot(&s); return s; }
 static void button(int n,int down)
 { struct ciuki_input_event e={.type=CIUKI_INPUT_BUTTON,.code=n,.value=down}; du_input(&ui,&e); }
@@ -428,6 +430,9 @@ int main(int argc,char **argv)
 {
     assert(argc==3); pixels[PAINT_W*PAINT_H]=0xdeadbeefu;
     du_init(&ui,pixels,PAINT_W,PAINT_H); assert(!paint_attach(&ui));
+    paint_print_callback(host_print);paint_command(M_PAGESETUP);assert(setup_requests==1);
+    struct paint_state initial_print=state();at_chord(&ui,DU_KEY_LCTRL,0x19);assert(print_requests==1);
+    assert(state().width==initial_print.width && state().height==initial_print.height && state().dirty==initial_print.dirty);
     stroke_continuity();
     render(argv[2],"paint-initial"); tools(); render(argv[2],"paint-tools");
     selection_and_text(); render(argv[2],"paint-zoom-grid"); codecs(argv[1]); files(argv[1]);

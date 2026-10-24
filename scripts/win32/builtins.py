@@ -41,7 +41,10 @@ def build(out=None):
     # of the census DLLs only (never a title-private DLL).
     for dll,names in stubs.acceptance_extra(stubs.imports(research.read_text())).items():
         extra.setdefault(dll,set()).update(names)
-    stubs.generate([research],generated,extra={dll:sorted(names) for dll,names in extra.items()})
+    # G31: the original printer facade shares GDI's native spool producer.
+    from scripts.win32.printing import FORWARDERS
+    extra.setdefault('winspool.drv',set()).update(FORWARDERS)
+    stubs.generate([research],generated,implemented={'winspool.drv': FORWARDERS},extra={dll:sorted(names) for dll,names in extra.items()})
     store=stubs.build(generated,out/'ntdll.lib')
     import shutil
     for dll in store['dlls']:shutil.copyfile(generated/dll['path'],out/dll['path'])

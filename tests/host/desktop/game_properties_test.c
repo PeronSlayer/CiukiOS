@@ -124,7 +124,9 @@ int main(int argc,char **argv)
     click(1502);assert(app.game_ports.com[0]==0x3f8);click(1503);assert(app.game_ports.com[1]==0x2f8);click(1503);assert(app.game_ports.com[1]==0x3f8 && strstr(app.game_note,"two guest"));
     click(1503);assert(!app.game_ports.com[1]);
     click(1501);assert(app.game_joystick.device==CIUKI_JOY_DISABLED);click(1501);deliver();assert(app.game_joystick.device==257);
-    click(1506);assert(app.game_ports.lpt_mode==1);click(1506);assert(app.game_ports.lpt_mode==2);frame(argv[1],"game-raw");
+    click(1506);assert(app.game_ports.lpt_mode==1);
+    assert(strstr(du_get(&ui,1506)->text,"Native print spooler") && du_get(&ui,1507)->disabled);
+    click(1506);assert(app.game_ports.lpt_mode==2 && !du_get(&ui,1507)->disabled);frame(argv[1],"game-raw");
     click(1506);assert(app.game_ports.lpt_mode==3);du_set_text(du_get(&ui,1508),"/Documents/output.prn");frame(argv[1],"game-file");
     click(1509);assert(io_pending && app.game_busy && !joy_writes);
     assert(!cp_close(&app) && !app.quit);cp_open(&app,CP_HOME);assert(app.page==CP_JOYSTICK);cp_tick(&app);assert(joy_writes==1 && joy_pending);deliver();

@@ -205,7 +205,9 @@ void viewer_paint(struct du_ui *u, void *user)
 
 static const struct du_menu_item file_template[] = {
     {"&Open...", V_M_OPEN, 0x18, DU_CTRL, 0}, {"&Previous Image", V_M_PREV, DU_KEY_PGUP, 0, DU_ITEM_DISABLED},
-    {"&Next Image", V_M_NEXT, DU_KEY_PGDN, 0, DU_ITEM_DISABLED}, {"", 0, 0, 0, DU_ITEM_SEPARATOR}, {"E&xit", V_M_EXIT, 0, 0, 0} };
+    {"&Next Image", V_M_NEXT, DU_KEY_PGDN, 0, DU_ITEM_DISABLED}, {"", 0, 0, 0, DU_ITEM_SEPARATOR},
+    {"Page Set&up...", V_M_PAGESETUP, 0, 0, 0}, {"&Print...", V_M_PRINT, 0x19, DU_CTRL, 0},
+    {"", 0, 0, 0, DU_ITEM_SEPARATOR}, {"E&xit", V_M_EXIT, 0, 0, 0} };
 static const struct du_menu_item view_template[] = {
     {"Zoom &In", V_M_IN, 0, 0, 0}, {"Zoom &Out", V_M_OUT, 0, 0, 0}, {"", 0, 0, 0, DU_ITEM_SEPARATOR},
     {"&Best Fit", V_M_FIT, 0, 0, 0}, {"&Actual Size", V_M_ACTUAL, 0, 0, 0}, {"", 0, 0, 0, DU_ITEM_SEPARATOR} };
@@ -217,7 +219,7 @@ int viewer_attach(struct viewer_app *a, struct du_ui *u, const struct viewer_fs 
     memcpy(a->file_items, file_template, sizeof(file_template));
     memcpy(a->view_items, view_template, sizeof(view_template));
     memcpy(a->help_items, help_template, sizeof(help_template));
-    a->menus[0] = (struct du_menu){"&File", a->file_items, 5};
+    a->menus[0] = (struct du_menu){"&File", a->file_items, 8};
     a->menus[1] = (struct du_menu){"&View", a->view_items, 5};
     a->menus[2] = (struct du_menu){"&Help", a->help_items, 1};
     u->menus = a->menus; u->menu_count = 3;
@@ -263,6 +265,7 @@ void viewer_event(struct du_ui *u, const struct du_event *e, void *user)
         case V_M_FIT: case V_FIT: zoom(a, 0); break;
         case V_M_ACTUAL: case V_ACTUAL: zoom(a, 100); break;
         case V_M_EXIT: if (a->quit) a->quit(a->host); break;
+        case V_M_PAGESETUP: case V_M_PRINT: if (a->printing && (id==V_M_PAGESETUP || a->loaded)) a->printing(a->host,id==V_M_PAGESETUP); break;
         case V_M_ABOUT:
             du_message(u, V_D_INFO, "About Image Viewer", "CiukiOS Image Viewer - Classic computing, one woof at a time.\n"
                        "PNG, JPEG, BMP and GIF by stb_image v2.30\n(MIT or Public Domain). Viewer code: MIT.", DU_DLG_ICON_INFO, NULL, 0, 0, 0);

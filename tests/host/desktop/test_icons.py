@@ -205,8 +205,8 @@ class IconStoreTests(unittest.TestCase):
         catalog = (ROOT / "apps/desktop/catalog.h").read_text()
         programs = re.findall(r'\{"(\w+)", "[^"]+", "([a-z-]+)", "(?:programs|accessories|developer|system-tools)", (?:NULL|"[^"]*")\}', shell)
         accessories = re.findall(r'\{"(\w+)", "[^"]+", "([a-z-]+)", [01], "[^"]*"\}', catalog)
-        self.assertEqual(len(programs), 26)  # f5-22 system CD Player joins Accessories; f6-19 NetSurf
-        self.assertEqual(len(accessories), 11)  # f2-52 Graphics Demo
+        self.assertEqual(len(programs), 27)  # f5-22 system CD Player joins Accessories; f6-19 NetSurf
+        self.assertEqual(len(accessories), 12)  # f2-52 Graphics Demo
         for name, tango in programs + accessories:
             self.assertEqual(tango, table[f"program:{name}"], name)
         # f6-19: native application records (name, label, Tango icon, description) agree

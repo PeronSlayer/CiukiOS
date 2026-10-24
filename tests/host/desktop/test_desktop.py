@@ -667,7 +667,7 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(set(m["files"]), {"desktop", "shell-launch", "demo", "gfxdemo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", "libdeskui.a",
                                            "ciuki-portrait.xrgb",  # f3-02 /Programs/dosbox; desktop shell /Programs/control
                                            "tango.cis", "TANGO.TXT", "AUTHORS.TXT", "CREDITS.TXT",  # Tango store
-                                           "clipbrd", "calc", "charmap", "clock", "help", "hwreport", "logview", "mixer", "music", "paint", "viewer"})  # legacy-recovery accessories and the f9-07 Hardware Report
+                                           "calc", "charmap", "clipbrd", "clock", "help", "hwreport", "logview", "mixer", "music", "paint", "printers", "printspool", "viewer"})  # legacy-recovery accessories and the f9-07 Hardware Report
         self.assertEqual(m["icons"]["store_sha256"], m["files"]["tango.cis"])
         expected = build.inputs()
         self.assertTrue(build.current_build(expected))
@@ -676,9 +676,9 @@ class DesktopTests(unittest.TestCase):
         image = load("desktop_image_test", ROOT / "scripts/build_image.py")
         sources, directories, metadata = image.desktop_payloads()
         licenses = image.desktop_license_payloads()
-        accessories = {f"/Programs/{n}" for n in ("calc", "charmap", "clock", "help", "mixer", "viewer")}
-        expected_paths = {"/Programs/clipbrd", "/System/Win32/shell-launch", "/Programs/desktop", "/Programs/demo", "/Programs/gfxdemo", "/Programs/dosbox", "/Programs/files", "/Programs/tasks",
-                                        "/Programs/terminal", "/Programs/ciuknote", "/Programs/ciukide", "/Programs/control", "/Programs/regedit", "/Programs/paint", "/Programs/calc", "/Programs/charmap", "/Programs/clock", "/Programs/help", "/Programs/mixer", "/Programs/viewer", "/Programs/music", "/Programs/hwreport", "/Programs/logview",
+        accessories = {f"/Programs/{n}" for n in ("calc", "charmap", "clipbrd", "clock", "help", "mixer", "viewer")}
+        expected_paths = {"/System/Win32/shell-launch", "/Programs/desktop", "/Programs/demo", "/Programs/gfxdemo", "/Programs/dosbox", "/Programs/files", "/Programs/tasks",
+                                        "/Programs/terminal", "/Programs/ciuknote", "/Programs/ciukide", "/Programs/control", "/Programs/regedit", "/Programs/clipbrd", "/Programs/paint", "/Programs/calc", "/Programs/charmap", "/Programs/clock", "/Programs/help", "/Programs/mixer", "/Programs/viewer", "/Programs/music", "/Programs/hwreport", "/Programs/logview", "/Programs/printers", "/System/printspool",
                                         "/system/assets/ciuki-portrait.xrgb",
                                         *licenses, "/system/fonts/LICENSES.TXT",
                                         *image.font_payloads()[0],
@@ -819,6 +819,14 @@ class AppCaseReplayTests(unittest.TestCase):
                                            "static inline int ciuki_error(uint32_t r) { return r >= (uint32_t)-4095 ? -(int32_t)r : 0; }\n")
         (include / "raw.h").write_text("/* app replay */\n#include <stdint.h>\n"
                                        "uint32_t ciuki_raw_probe_report(uintptr_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);\n")
+        # This replay has no w32srv. Let the production registry transport
+        # report service-unavailable without issuing a syscall on the host.
+        registry_service = folder / "registry_service.c"
+        registry_service.write_text("#include <stdint.h>\n#include <errno.h>\n"
+                                    "uint32_t ciuki_syscall(uint32_t n,uint32_t a,uint32_t b,uint32_t c,"
+                                    "uint32_t d,uint32_t e,uint32_t f) {\n"
+                                    "(void)n;(void)a;(void)b;(void)c;(void)d;(void)e;(void)f;"
+                                    "return (uint32_t)-ENOSYS; }\n")
         common = ["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-Wno-macro-redefined",
                   "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
                   "-I", str(folder / "include"), "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "apps/libdeskui"),
@@ -840,8 +848,11 @@ class AppCaseReplayTests(unittest.TestCase):
                  ("files_app", posix + ["-include", str(host / "replay_files_worker.h")], ROOT / "apps/files/app.c"), ("files_model", posix, ROOT / "apps/files/model.c"),
                  ("files_clipboard", posix, ROOT / "apps/files/clipboard.c"),
                  ("files_transfer", posix + ["-include", str(host / "replay_files_worker.h")], ROOT / "apps/files/transfer.c"),
+                 ("files_registry", os_calls, ROOT / "apps/files/registry_transport.c"),
+                 ("registry_service", posix, registry_service),
                  ("note_main", os_calls + ["-Dmain=ciuknote_main"], ROOT / "apps/ciuknote/main.c"),
                  ("note_app", posix, ROOT / "apps/ciuknote/app.c"), ("note_doc", posix, ROOT / "apps/ciuknote/doc.c"),
+                 *((f"print_{n}", posix, ROOT / f"apps/libprint/{n}.c") for n in ("dialog", "print", "render")),
                  ("tasks_main", os_calls + ["-Dmain=tasks_main"], ROOT / "apps/tasks/tasks.c"),
                  ("tasks_model", posix, ROOT / "apps/tasks/model.c"), ("tasks_view", posix, ROOT / "apps/tasks/view.c"),
                  ("demo", os_calls + ["-Dmain=demo_main"], ROOT / "apps/demo/demo.c"),

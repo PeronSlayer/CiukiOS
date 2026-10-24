@@ -71,6 +71,7 @@ struct dc {
   POINT origin, screen_origin;
   void (*damage)(void *, const RECT *);
   void *opaque;
+  void *printer; /* G31 printer lifecycle, independent of saved DC state. */
   struct gdi_recorder *record; /* f5-20B: a metafile DC records its calls */
 };
 struct object {
@@ -136,7 +137,7 @@ int gdi_font_validate(const void *, DWORD);
 /* f5-10C2 PE-to-native font bridge (bridge.c): the guest's default backend. */
 extern const struct w32_gdi_face_backend gdi_bridge_backend;
 /* f5-20B. */
-#ifndef W32_HOST_MODEL
+#if defined(_WIN32) && !defined(W32_HOST_MODEL)
 __declspec(dllimport) void W32API SetLastError(DWORD);
 #else
 void W32API SetLastError(DWORD);
@@ -158,4 +159,9 @@ int gdi_record_dib(struct dc *, int, int, int, int, int, int, int, int,
 int gdi_record_bitmap(struct dc *, int, int, int, int, const struct w32_dib *,
                       int, int, int, int, DWORD);
 void gdi_record_free(struct dc *);
+HDC gdi_printer_create(const char *, const char *, const char *, const void *, int);
+void gdi_printer_free(struct dc *);
+int gdi_printer_caps(struct dc *, int);
+void gdi_printer_exit(void);
+int gdi_printer_text(struct dc *, int, int, unsigned, const RECT *, const void *, unsigned, const int *, int);
 #endif

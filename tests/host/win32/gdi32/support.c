@@ -159,3 +159,15 @@ void *W32API GetProcAddress(void *m, const char *a) {
   return 0;
 }
 void W32API SetLastError(DWORD e) { (void)e; }
+
+/* G31 additional kernel facade operations; individual spool tests replace I/O. */
+__attribute__((weak)) BOOL W32API CreateDirectoryA(const char *p, void *sa) { (void)p; (void)sa; return 0; }
+__attribute__((weak)) BOOL W32API RemoveDirectoryA(const char *p) { (void)p; return 0; }
+__attribute__((weak)) BOOL W32API MoveFileA(const char *a, const char *b) { (void)a; (void)b; return 0; }
+__attribute__((weak)) DWORD W32API GetLastError(void) { return 2; }
+
+__attribute__((weak)) DWORD W32API GetCurrentProcessId(void) { return 1; }
+
+__attribute__((weak)) DWORD W32API GetFullPathNameA(const char *s, DWORD n, char *p, char **f) { (void)s; (void)n; (void)p; (void)f; return 0; }
+
+__attribute__((weak)) BOOL W32API FlushFileBuffers(void *h) { (void)h; return 1; }

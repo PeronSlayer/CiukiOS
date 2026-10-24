@@ -192,6 +192,10 @@ int gdi_text(HDC h, int x, int y, unsigned flags, const RECT *rect,
       ((flags & (ETO_CLIPPED | ETO_OPAQUE)) && !rect) ||
       (flags & ~(ETO_CLIPPED | ETO_OPAQUE | ETO_GLYPH_INDEX)))
     return 0;
+  if (d->printer) {
+    int printed=gdi_printer_text(d,x,y,flags,rect,text,count,dx,wide);
+    if(printed>=0)return printed;
+  }
   if ((flags & ETO_GLYPH_INDEX) && !wide)
     return 1;
   RECT area = {0}, *clip = 0;
