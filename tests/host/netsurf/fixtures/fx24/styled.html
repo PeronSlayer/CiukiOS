@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Ciuki styled page</title>
+<!-- fx-24 fixture, authored for the test: external CSS, @import, a style
+     element and a style attribute; JPEG, PNG with alpha, GIF, WebP, SVG,
+     a tiled background and a JPEG larger than the bitmap admission. -->
+<link rel="stylesheet" href="styled.css">
+<style>#element { position: absolute; left: 20px; top: 100px; width: 60px; height: 20px; background: #c00000; }</style>
+</head><body>
+<div id="external"></div>
+<div id="imported"></div>
+<div id="element"></div>
+<div id="attribute" style="position: absolute; left: 20px; top: 140px; width: 60px; height: 20px; background: #e0a000"></div>
+<img id="jpeg" src="quadrants.jpg" alt="JPEG quadrants">
+<img id="png" src="disc.png" alt="PNG disc">
+<img id="gif" src="halves.gif" alt="GIF halves">
+<img id="webp" src="stripes.webp" alt="WebP stripes">
+<img id="svg" src="shapes.svg" width="96" height="96" alt="SVG shapes">
+<div id="tiled"></div>
+<img id="large" src="large.jpg" alt="Large JPEG">
+<img id="banner" src="banner.svg" alt="SVG banner">
+</body></html>

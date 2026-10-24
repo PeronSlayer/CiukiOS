@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- fx-24 fixture, authored for the test: a filled square, a circle made of
+     Bezier arcs, a stroked line, and a ring (non-zero rule, inner subpath
+     wound the other way) on a transparent field. 96x96 user units. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+  <rect x="8" y="8" width="32" height="32" fill="#2040c0"/>
+  <circle cx="68" cy="24" r="16" fill="#d02020"/>
+  <line x1="8" y1="60" x2="88" y2="60" stroke="#109030" stroke-width="6"/>
+  <path d="M 56 70 L 88 70 L 88 92 L 56 92 Z M 64 76 L 64 86 L 80 86 L 80 76 Z" fill="#202020"/>
+</svg>
