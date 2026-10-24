@@ -11,7 +11,8 @@
 #include <ciuki/audio_backend.h>
 
 uint32_t audio_voice_mask(const struct audio_dma_device *d)
-{ return d->kind == AUDIO_ALI5451 ? 0x7fffffffu : 0x3fffffffu; }
+{ return d->kind==AUDIO_CMIPCI || d->kind==AUDIO_EMU10K2 ? UINT32_MAX :
+    d->kind==AUDIO_ALI5451 || d->kind==AUDIO_EMU10K1 ? 0x7fffffffu : 0x3fffffffu; }
 
 /* All phases, including posted-write readback, share one 100-ms budget.
  * register_lock serializes transactions; IRQ paths never use this deadline. */
@@ -171,6 +172,8 @@ int audio_capture_open(struct audio_dma_device *d, uint32_t *generation)
     struct audio_capture *c = &d->capture;
     int e = !d->state.ready || d->state.quarantine ? -ENODEV :
             c->generation ? -EBUSY : 0;
+    if (!e && d->kind==AUDIO_CMIPCI && d->cmi.running) e=-EBUSY;
+    if (!e && (d->kind==AUDIO_EMU10K1 || d->kind==AUDIO_EMU10K2) && d->emu.capture_running) e=-EBUSY;
     if (e) { kmutex_unlock(&d->register_lock); return e; }
     if (!e && !c->phys) {
         unsigned pages = AUDIO_HW_BYTES / PAGE_SIZE + (d->kind == AUDIO_ICH ? 1u : 0u);
@@ -198,7 +201,8 @@ int audio_capture_open(struct audio_dma_device *d, uint32_t *generation)
     if (!e && mm_pin) {
         c->pin = (struct mm_pin){.generation=c->generation,.first_pfn=c->phys/PAGE_SIZE,
             .pages=AUDIO_HW_BYTES/PAGE_SIZE,.address_mask=audio_voice_mask(d),
-            .alignment=4,.direction=MM_PIN_FROM_DEVICE};
+            .alignment=(d->kind==AUDIO_EMU10K1 || d->kind==AUDIO_EMU10K2) ? PAGE_SIZE : 4,
+            .direction=MM_PIN_FROM_DEVICE};
         e = mm_pin(&c->pin);
         if (!e && d->kind == AUDIO_ICH) {
             c->descriptor_pin=(struct mm_pin){.generation=c->generation,
@@ -211,7 +215,8 @@ int audio_capture_open(struct audio_dma_device *d, uint32_t *generation)
     if (!e) e = d->voice_codec_read(d, 0x1c, &c->gain);
     if (!e) {
         c->codec_changed = true;
-        e = d->voice_codec_write(d, 0x1a, 0x0404); /* line-in L/R */
+        e = d->capture_source ? d->capture_source(d, CIUKI_CAPTURE_LINE) :
+            d->voice_codec_write(d, 0x1a, 0x0404); /* line-in L/R */
         if (!e) e = d->voice_codec_write(d, 0x1c, 0); /* unmuted 0 dB */
     }
     if (!e) {
@@ -230,9 +235,11 @@ int audio_capture_open(struct audio_dma_device *d, uint32_t *generation)
 int audio_capture_source(struct audio_dma_device *d, uint32_t generation, unsigned source)
 {
     if (!generation || source>CIUKI_CAPTURE_MIX) return -EINVAL;
+    if (!audio_capture_has_source(d,source)) return -EOPNOTSUPP;
     kmutex_lock(&d->register_lock);
     int e=generation!=d->capture.generation || !d->capture.running ? -EINVAL :
         d->state.quarantine ? -EIO :
+        d->capture_source ? d->capture_source(d,source) :
         d->voice_codec_write(d,0x1a,source==CIUKI_CAPTURE_MIC ? 0x0000 :
             source==CIUKI_CAPTURE_LINE ? 0x0404 : source==CIUKI_CAPTURE_CD ? 0x0101 : 0x0505);
     kmutex_unlock(&d->register_lock);

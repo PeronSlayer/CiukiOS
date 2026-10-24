@@ -26,6 +26,8 @@ int audio_line_control(struct ciuki_mixer_line *r, bool set)
     if (rec) {
         unsigned source=line==CIUKI_MIXER_MIC ? CIUKI_CAPTURE_MIC :
             line==CIUKI_MIXER_LINE ? CIUKI_CAPTURE_LINE : line==CIUKI_MIXER_CD ? CIUKI_CAPTURE_CD : CIUKI_CAPTURE_MIX;
+        available=available && audio_capture_has_source(d,source);
+        if (set && !available) return -EOPNOTSUPP;
         if (set) {
             /* Source/gain changes affect an active copied recording too. */
             if (r->selected && d->capture.generation) {

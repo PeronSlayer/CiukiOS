@@ -110,7 +110,7 @@ static int cmi_halt(struct audio_dma_device *d)
     if (!e) d->state.running=false;
     return e;
 }
-static int cmi_program(struct audio_dma_device *d, unsigned ch, unsigned rate, bool proof)
+static int cmi_program_buffer(struct audio_dma_device *d, unsigned ch, unsigned rate, bool proof, uint32_t phys)
 {
     int freq=cmi_rate(rate); if (freq<0) return freq;
     uint32_t f=irq_save();
@@ -126,7 +126,7 @@ static int cmi_program(struct audio_dma_device *d, unsigned ch, unsigned rate, b
         e=cmi_checked(d,0x90,(ext&~0x10000000u) | (rate>44100 ? 0x10000000u : 0),4,0x10000000);
     }
     if (!e) {
-        audio_hw_write(d,0x80+ch*8,ch ? d->cmi.phys : d->phys,4);
+        audio_hw_write(d,0x80+ch*8,phys,4);
         audio_hw_write(d,0x84+ch*8,CMI_FRAMES-1,2);
         audio_hw_write(d,0x86+ch*8,AUDIO_QUANTUM-1,2);
         __asm__ volatile("" ::: "memory");
@@ -138,6 +138,8 @@ static int cmi_program(struct audio_dma_device *d, unsigned ch, unsigned rate, b
     }
     irq_restore(f); return e;
 }
+static int cmi_program(struct audio_dma_device *d, unsigned ch, unsigned rate, bool proof)
+{ return cmi_program_buffer(d,ch,rate,proof,ch ? d->cmi.phys : d->phys); }
 static int cmi_start(struct audio_dma_device *d, bool proof)
 { return cmi_program(d,0,48000,proof); }
 static bool cmi_ack(struct audio_dma_device *d)
@@ -151,6 +153,44 @@ static bool cmi_ack(struct audio_dma_device *d)
     audio_hw_write(d,0xc,d->serial,4);
     if (status&2) d->cmi.irqs++;
     irq_restore(f); return true;
+}
+/* Public input uses the common separately pinned ring. No input IRQ and no
+ * peer-channel reset. The codec callbacks save raw selector bytes; source
+ * translation is explicit because this mixer is not an AC97 codec. */
+static int cmi_input_start(struct audio_dma_device *d)
+{
+    if (d->cmi.running) return -EBUSY;
+    return cmi_program_buffer(d,1,AUDIO_RATE,true,d->capture.phys);
+}
+static int cmi_input_halt(struct audio_dma_device *d)
+{ return cmi_stop_channel(d,1); }
+static int cmi_input_cursor(struct audio_dma_device *d,unsigned *frame)
+{ return cmi_cursor_channel(d,1,frame); }
+static int cmi_input_read(struct audio_dma_device *d,uint16_t reg,uint16_t *value)
+{
+    if (reg==0x1c) { *value=0; return 0; } /* copied gain, no fictitious ADC gain */
+    if (reg!=0x1a) return -EOPNOTSUPP;
+    *value=cmi_mixer_read(d,0x3d) | (uint16_t)cmi_mixer_read(d,0x3e)<<8;
+    return 0;
+}
+static int cmi_input_write(struct audio_dma_device *d,uint16_t reg,uint16_t value)
+{
+    if (reg==0x1c) return value ? -EOPNOTSUPP : 0;
+    if (reg!=0x1a) return -EOPNOTSUPP;
+    int e=cmi_mixer_write(d,0x3d,(uint8_t)value);
+    if (!e) e=cmi_mixer_write(d,0x3e,(uint8_t)(value>>8));
+    return e;
+}
+static int cmi_input_source(struct audio_dma_device *d,unsigned source)
+{
+    /* CT1745-compatible CD/Line L/R routes; microphone feeds both ADCs.
+     * No PCM loopback: do not offer the AC97 Stereo Mix source. */
+    unsigned left, right;
+    if (source==CIUKI_CAPTURE_MIC) left=right=1;
+    else if (source==CIUKI_CAPTURE_LINE) { left=0x10; right=8; }
+    else if (source==CIUKI_CAPTURE_CD) { left=4; right=2; }
+    else return -EOPNOTSUPP;
+    return cmi_input_write(d,0x1a,(uint16_t)(left | right<<8));
 }
 static int cmi_prepare(struct audio_dma_device *d)
 {
@@ -208,7 +248,12 @@ static int cmi_prepare(struct audio_dma_device *d)
     d->state.rate=48000; /* no external AC'97 ID; PCI identity is authoritative */
     if (e) { d->reason="mixer_prepare"; return e; }
     audio_pci_write(&d->io,&d->pci,4,d->command|5,2);
-    return (audio_pci_read(&d->io,&d->pci,4)&0xffff)==(d->command|5u) ? 0 : -EIO;
+    if ((audio_pci_read(&d->io,&d->pci,4)&0xffff)!=(d->command|5u)) return -EIO;
+    static const struct audio_capture_ops input={cmi_input_start,cmi_input_halt,cmi_input_cursor};
+    d->capture_ops=&input; d->capture_source=cmi_input_source;
+    d->capture_sources=(1u<<CIUKI_CAPTURE_MIC)|(1u<<CIUKI_CAPTURE_LINE)|(1u<<CIUKI_CAPTURE_CD);
+    d->voice_codec_read=cmi_input_read; d->voice_codec_write=cmi_input_write;
+    return 0;
 }
 const struct audio_dma_ops cmipci_ops={cmi_prepare,cmi_start,cmi_halt,cmi_cursor,cmi_mute,cmi_ack,cmi_inhibit};
 
@@ -218,7 +263,7 @@ int cmipci_capture_start(struct audio_dma_device *d, unsigned rate)
     kmutex_lock(&d->register_lock);
     int e=0;
     if (d->state.quarantine || (!d->state.ready && !d->proving) || !d->cmi.phys) e=-EIO;
-    else if (d->cmi.running) e=-EBUSY;
+    else if (d->cmi.running || d->capture.generation || d->capture_reserved) e=-EBUSY;
     else {
         memset(d->cmi.pcm,0,AUDIO_HW_BYTES);
         d->cmi.running=true; d->cmi.failed=false; d->cmi.rate=rate;
@@ -232,6 +277,7 @@ int cmipci_capture_start(struct audio_dma_device *d, unsigned rate)
 int cmipci_capture_stop(struct audio_dma_device *d)
 {
     if (d->kind!=AUDIO_CMIPCI) return -EINVAL;
+    if (d->capture.generation) return -EBUSY;
     if (!d->touched || !d->cmi.phys) return 0;
     kmutex_lock(&d->register_lock);
     int e=cmi_stop_channel(d,1);

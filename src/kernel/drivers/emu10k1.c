@@ -192,6 +192,7 @@ static int emu_mute(struct audio_dma_device *d, bool mute)
     }
     return e;
 }
+static void emu_input_attach(struct audio_dma_device *d);
 static int emu_prepare(struct audio_dma_device *d)
 {
     /* Exact original Audigy boards only: do not run an AC97 path on E-MU's
@@ -258,7 +259,9 @@ static int emu_prepare(struct audio_dma_device *d)
     if (!e) d->codec_saved_count=6;
     if (e) return e;
     d->state.rate=AUDIO_RATE;
-    return emu_mute(d,audio.master.mute);
+    e=emu_mute(d,audio.master.mute);
+    if (!e) emu_input_attach(d);
+    return e;
 }
 static int emu_start(struct audio_dma_device *d, bool proof)
 {
@@ -350,7 +353,7 @@ int emu10k1_capture_start(struct audio_dma_device *d, unsigned rate)
     int code=emu_capture_rate(d,rate); if (code<0) return code;
     kmutex_lock(&d->register_lock);
     if (!d->state.ready || d->state.quarantine || d->inhibited) { kmutex_unlock(&d->register_lock); return -EIO; }
-    if (d->emu.capture_running) { kmutex_unlock(&d->register_lock); return -EBUSY; }
+    if (d->emu.capture_running || d->capture.generation || d->capture_reserved) { kmutex_unlock(&d->register_lock); return -EBUSY; }
     int e=emu10k1_codec_write(d,0x1a,0x0404); /* line-in, independent L/R */
     if (!e) e=emu10k1_codec_write(d,0x1c,0); /* ADC unity, unmuted */
     if (!e) {
@@ -418,7 +421,60 @@ int emu10k1_capture_read(struct audio_dma_device *d, struct audio_frame *out, un
 int emu10k1_capture_stop(struct audio_dma_device *d)
 {
     if (!emu10k1_kind(d->kind) || d->state.quarantine) return -EIO;
+    if (d->capture.generation) return -EBUSY;
     /* Whole-transport stop supplies PCI/cursor proof and drains capture too. */
     return audio_dma_stop(d);
 }
 const struct audio_dma_ops emu10k1_ops={emu_prepare,emu_start,emu_halt,emu_cursor,emu_mute,emu_ack,emu_inhibit};
+
+/* Public ADC uses its own common pinned 32768-byte ring (ADCBS=1bh),
+ * distinct from the old diagnostic half-ring. Polling needs no ADC IRQ.
+ * No playback pitch, timer, DSP program, HCFG or BME changes on input stop. */
+static int emu_input_cursor(struct audio_dma_device *d,unsigned *frame)
+{
+    uint32_t pos=emu_read(d,emu_adc_index(d),0);
+    if (pos>=AUDIO_HW_BYTES || (pos&3)) return -EIO;
+    *frame=pos/sizeof(struct audio_frame); return 0;
+}
+static int emu_input_start(struct audio_dma_device *d)
+{
+    if (d->emu.capture_running) return -EBUSY;
+    if (emu_read(d,E_ADCBS,0) || emu_read(d,E_ADCCR,0)) return -EBUSY;
+    emu_write(d,E_ADCBA,0,d->capture.phys);
+    emu_write(d,emu_debug(d),0,0); /* ADC's existing AC97-to-DSP route */
+    int e=emu_busmaster(d,true);
+    if (e) return e;
+    uint32_t f=irq_save();
+    audio_hw_write(d,E_INTE,audio_hw_read(d,E_INTE,4)&~E_ADC_INTE,4);
+    audio_hw_write(d,E_IPR,E_ADC_IPR,4);
+    emu_write(d,E_ADCCR,0,d->kind==AUDIO_EMU10K2 ? 0x30 : 0x18);
+    __asm__ volatile("" ::: "memory");
+    emu_write(d,E_ADCBS,0,0x1b);
+    bool valid=emu_read(d,E_ADCBA,0)==d->capture.phys && emu_read(d,E_ADCBS,0)==0x1b &&
+        emu_read(d,E_ADCCR,0)==(d->kind==AUDIO_EMU10K2 ? 0x30u : 0x18u);
+    irq_restore(f); return valid ? 0 : -EIO;
+}
+static int emu_input_halt(struct audio_dma_device *d)
+{
+    uint32_t f=irq_save();
+    audio_hw_write(d,E_INTE,audio_hw_read(d,E_INTE,4)&~E_ADC_INTE,4);
+    emu_write(d,E_ADCBS,0,0); emu_write(d,E_ADCCR,0,0);
+    irq_restore(f);
+    uint64_t end=audio_hw_deadline(d,500);
+    unsigned last=UINT32_MAX,stable=0;
+    do {
+        unsigned now;
+        bool idle=emu_read(d,E_ADCBS,0)==0 && emu_read(d,E_ADCCR,0)==0 &&
+            !(audio_hw_read(d,E_INTE,4)&E_ADC_INTE) && !emu_input_cursor(d,&now);
+        if (idle && now==last) stable++; else stable=0;
+        if (stable==3) { audio_hw_write(d,E_IPR,E_ADC_IPR,4); return 0; }
+        last=idle ? now : UINT32_MAX; d->io.sleep(d->io.cookie,1);
+    } while ((int64_t)(d->io.now(d->io.cookie)-end)<0);
+    return -EIO;
+}
+static void emu_input_attach(struct audio_dma_device *d)
+{
+    static const struct audio_capture_ops input={emu_input_start,emu_input_halt,emu_input_cursor};
+    d->capture_ops=&input;
+    d->voice_codec_read=emu_codec_read; d->voice_codec_write=emu10k1_codec_write;
+}

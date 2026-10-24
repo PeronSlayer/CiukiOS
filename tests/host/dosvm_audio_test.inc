@@ -651,6 +651,42 @@ static void test_audio_clock_lifetime(void)
 
 #include "audio/vm_late_test.inc"
 
+static void test_mpu_uart(void)
+{
+    struct dosvm *v=audio_vm_create(),*w=create(); uint32_t token;
+    CHECK(!dosvm_audio_attach(v->info.key,&token));
+    uint8_t adlib[512]; memcpy(adlib,v->audio.opl.regs,sizeof(adlib));
+    CHECK(a_in(v,0x331)==0xbf);
+    a_out(v,0x331,0xac); CHECK(a_in(v,0x331)==0xbf); /* no intelligent mode */
+    a_out(v,0x331,0xff); CHECK(a_in(v,0x331)==0x3f && a_in(v,0x330)==0xfe);
+    CHECK(a_in(v,0x331)==0xbf && a_in(v,0x330)==0xff);
+    CHECK(!v->audio.mpu_uart && !w->audio.mpu_ack);
+    a_out(v,0x331,0x3f); CHECK(a_in(v,0x330)==0xfe && v->audio.mpu_uart);
+    a_out(v,0x388,0x40); unsigned address=v->audio.opl.address;
+    a_out(v,0x330,0x90); a_out(v,0x330,60);
+    CHECK(!v->audio.midi.voice[0].key);
+    a_out(v,0x330,0xf8); a_out(v,0x330,100);
+    CHECK(v->audio.midi.voice[0].key && v->audio.midi.voice[0].note==60);
+    CHECK(v->audio.midi_regs[0xb0]&32); CHECK(v->audio.opl.address==address);
+    CHECK(!memcmp(adlib,v->audio.opl.regs,sizeof(adlib)));
+    a_out(v,0x330,64); a_out(v,0x330,80); CHECK(v->audio.midi.voice[1].key);
+    CHECK(!w->audio.midi.voice[0].key && !w->audio.mpu_uart);
+    a_out(v,0x330,60); a_out(v,0x330,0); CHECK(!v->audio.midi.voice[0].key);
+    struct dosvm_audio_event events[128];
+    int n=dosvm_audio_events(v->info.key,token,events,128); CHECK(n>30);
+    bool key=false;
+    for (int i=0;i<n;i++) {
+        CHECK(events[i].kind==DOSVM_EVENT_MIDI && events[i].generation==v->info.key.generation);
+        CHECK(events[i].clock<=v->audio.clock+48);
+        if (events[i].reg==0xb0 && (events[i].value&32)) key=true;
+    }
+    CHECK(key);
+    a_out(v,0x331,0xff); CHECK(!v->audio.mpu_uart && !v->audio.midi.voice[1].key);
+    CHECK(a_in(v,0x330)==0xfe); CHECK(!memcmp(adlib,v->audio.opl.regs,sizeof(adlib)));
+    destroy(v,true); destroy(w,true); empty();
+    puts("DOS MPU-401 UART: reset/ACK/status/running MIDI/realtime/OPL events/VM isolation/no intelligent mode PASS");
+}
+
 static void test_audio(void)
 {
     /* A window presenter makes no calls during 300 ms of desktop work.
@@ -672,6 +708,7 @@ static void test_audio(void)
     printf("F1-87 window presenter absent=300ms SB16 blocks=%u IRQ_latency_max_us=%u parked=0 PASS\n",
         guest.serviced,busy->audio.sb.cadence.irq_latency_max_us);
     destroy(busy,true); empty();
+    test_mpu_uart();
     test_vm_late();
     test_audio_tiny_auto_init();
     test_audio_clock_lifetime();

@@ -9,8 +9,8 @@ unsigned emu10k1_aux_pages(enum audio_backend_kind);
 uint32_t emu10k1_dma_mask(enum audio_backend_kind);
 int emu10k1_codec_write(struct audio_dma_device *, uint16_t, uint16_t);
 int emu10k1_restore(struct audio_dma_device *);
-/* Kernel buffers only. Capture is deliberately absent from the public audio
- * and virtual SB16 ABIs. Halting the transport also halts capture. */
+/* Legacy diagnostic API, separate from the public copied capture adapter.
+ * Kernel buffers only. Halting the transport also halts capture. */
 int emu10k1_capture_start(struct audio_dma_device *, unsigned rate);
 int emu10k1_capture_read(struct audio_dma_device *, struct audio_frame *, unsigned frames);
 int emu10k1_capture_stop(struct audio_dma_device *);

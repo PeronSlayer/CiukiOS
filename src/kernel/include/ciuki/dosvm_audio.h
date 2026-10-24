@@ -46,6 +46,7 @@ struct dosvm_audio_block {
 #define DOSVM_EVENT_OPL 1u /* OPL3 register write: reg 000h-1FFh */
 #define DOSVM_EVENT_DAC 2u /* DSP 10h direct DAC level (8-bit unsigned) */
 #define DOSVM_EVENT_GAP 3u /* events were lost (overflow): resynchronise from the register file */
+#define DOSVM_EVENT_MIDI 4u /* independent MIDI FM register, never guest AdLib */
 struct dosvm_audio_event {
     uint64_t clock;      /* timeline frame of the guest write */
     uint32_t generation; /* VM generation */
@@ -88,4 +89,5 @@ int dosvm_audio_events(struct dosvm_key, uint32_t consumer, struct dosvm_audio_e
 bool dosvm_audio_info(struct dosvm_key, struct dosvm_audio_info *out);
 /* The authoritative OPL3 register file (index 000h-1FFh) at timeline *clock. */
 bool dosvm_audio_opl_registers(struct dosvm_key, uint8_t regs[512], uint64_t *clock);
+bool dosvm_audio_midi_registers(struct dosvm_key, uint8_t regs[512], uint64_t *clock);
 #endif
