@@ -28,6 +28,19 @@ class Kernel32Files(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         self.assertIn('PASS memory status edge matrix',result.stdout)
 
+    def test_local_time_views(self):
+        """G1: Win32 and DOS views of the system zone agree (localtime_views_test.c)."""
+        out=ROOT/'build/host/win32/local-time';out.mkdir(parents=True,exist_ok=True)
+        program=out/'views'
+        subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror','-DW32_HOST_MODEL',
+            '-fsanitize=address,undefined','-fno-sanitize-recover=all',
+            '-I'+str(ROOT/'sdk/win32/include'),'-I'+str(ROOT/'src/kernel/include'),
+            str(ROOT/'tests/host/win32/localtime_views_test.c'),str(ROOT/'sdk/win32/kernel32/time.c'),
+            '-o',str(program)],check=True)
+        result=subprocess.run([program],capture_output=True,text=True,env=dict(os.environ,ASAN_OPTIONS='detect_leaks=0'))
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn('PASS local time views',result.stdout)
+
     def test_file_wrapper_transport(self):
         out=ROOT/'build/host/win32/file-wrappers';out.mkdir(parents=True,exist_ok=True)
         program=out/'file-wrappers'

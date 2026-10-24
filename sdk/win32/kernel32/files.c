@@ -391,20 +391,33 @@ DWORD W32API GetTempFileNameA(const char *path, const char *prefix,
 extern BOOL W32API DosDateTimeToFileTime(uint16_t, uint16_t, FILETIME *);
 extern BOOL W32API FileTimeToDosDateTime(const FILETIME *, uint16_t *,
                                          uint16_t *);
-static FILETIME fattime(uint16_t d, uint16_t t) {
+extern BOOL W32API FileTimeToLocalFileTime(const FILETIME *, FILETIME *);
+/* G1: FAT holds local time; FindFirstFile and GetFileTime report UTC
+ * converted with the CURRENT time-zone and daylight-saving settings
+ * (Microsoft, "File Times"). bias: seconds east of UTC. */
+static FILETIME fattime_bias(uint16_t d, uint16_t t, int64_t bias) {
   FILETIME f = {0, 0};
-  if (d)
-    DosDateTimeToFileTime(d, t, &f);
+  if (d && DosDateTimeToFileTime(d, t, &f)) {
+    uint64_t n = (((uint64_t)f.high << 32) | f.low) - (uint64_t)(bias * 10000000);
+    f = (FILETIME){(DWORD)n, (DWORD)(n >> 32)};
+  }
   return f;
+}
+/* The FAT (local) fields of a UTC FILETIME, same current bias. */
+static BOOL fat_fields(const FILETIME *utc, uint16_t *date, uint16_t *time, SYSTEMTIME *local) {
+  FILETIME l;
+  return FileTimeToLocalFileTime(utc, &l) && FileTimeToDosDateTime(&l, date, time) &&
+         (!local || FileTimeToSystemTime(&l, local));
 }
 BOOL W32API GetFileTime(HANDLE h, FILETIME *create, FILETIME *access,
                         FILETIME *write) {
   struct ciuki_w32_file_info f;
   if (!stat_file(h, 0, &f))
     return 0;
-  FILETIME c = fattime(f.create_date, f.create_time),
-           a = fattime(f.access_date, 0),
-           w = fattime(f.write_date, f.write_time);
+  int64_t bias = k32_current_bias();
+  FILETIME c = fattime_bias(f.create_date, f.create_time, bias),
+           a = fattime_bias(f.access_date, 0, bias),
+           w = fattime_bias(f.write_date, f.write_time, bias);
   uint64_t n = ((uint64_t)c.high << 32) | c.low;
   n += (uint64_t)f.create_tenths * 100000;
   c = (FILETIME){(DWORD)n, (DWORD)(n >> 32)};
@@ -422,21 +435,19 @@ BOOL W32API SetFileTime(HANDLE h, const FILETIME *c, const FILETIME *a,
   DWORD mask = 0;
   uint16_t unused;
   if (c) {
-    if (!FileTimeToDosDateTime(c, &f.create_date, &f.create_time))
-      return 0;
     SYSTEMTIME s;
-    if (!FileTimeToSystemTime(c, &s))
+    if (!fat_fields(c, &f.create_date, &f.create_time, &s))
       return 0;
     f.create_tenths = (uint8_t)((s.second % 2) * 100 + s.milliseconds / 10);
     mask |= 1;
   }
   if (a) {
-    if (!FileTimeToDosDateTime(a, &f.access_date, &unused))
+    if (!fat_fields(a, &f.access_date, &unused, 0))
       return 0;
     mask |= 2;
   }
   if (w) {
-    if (!FileTimeToDosDateTime(w, &f.write_date, &f.write_time))
+    if (!fat_fields(w, &f.write_date, &f.write_time, 0))
       return 0;
     mask |= 4;
   }
@@ -452,9 +463,10 @@ static int find_data(const struct ciuki_w32_file_info *f,
   WIN32_FIND_DATAA d = {.attributes = f->attributes,
                         .size_high = f->size_high,
                         .size_low = f->size_low};
-  d.creation = fattime(f->create_date, f->create_time);
-  d.access = fattime(f->access_date, 0);
-  d.write = fattime(f->write_date, f->write_time);
+  int64_t bias = k32_current_bias();
+  d.creation = fattime_bias(f->create_date, f->create_time, bias);
+  d.access = fattime_bias(f->access_date, 0, bias);
+  d.write = fattime_bias(f->write_date, f->write_time, bias);
   if (!k32_from_utf8(f->name, d.name, sizeof(d.name)) ||
       !k32_from_utf8(f->alias, d.alternate, sizeof(d.alternate))) {
     SetLastError(1113);
@@ -606,12 +618,13 @@ DWORD W32API GetLongPathNameA(const char *path, char *out, DWORD n) {
 /* f5-20A: handle and attribute queries the reused Wine DLLs import. */
 static void info_times(const struct ciuki_w32_file_info *f, FILETIME *c,
                        FILETIME *a, FILETIME *w) {
-  *c = fattime(f->create_date, f->create_time);
+  int64_t bias = k32_current_bias();
+  *c = fattime_bias(f->create_date, f->create_time, bias);
   uint64_t n = (((uint64_t)c->high << 32) | c->low) +
                (f->create_date ? (uint64_t)f->create_tenths * 100000 : 0);
   *c = (FILETIME){(DWORD)n, (DWORD)(n >> 32)};
-  *a = fattime(f->access_date, 0);
-  *w = fattime(f->write_date, f->write_time);
+  *a = fattime_bias(f->access_date, 0, bias);
+  *w = fattime_bias(f->write_date, f->write_time, bias);
 }
 /* GetFileExInfoStandard (0) is the only information level. */
 BOOL W32API GetFileAttributesExA(const char *name, DWORD level, void *out) {

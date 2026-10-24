@@ -103,6 +103,7 @@ struct desk_client {
     uint32_t v3_cursor_pixels[4][1024];
     uint8_t v3_hot_x[4], v3_hot_y[4];
     uint32_t owner_id;           /* shell modal owner, stable across slot reuse */
+    uint32_t v3_limits[4];       /* G4: WM_GETMINMAXINFO track sizes (min w/h, max w/h), 0 default */
     int minimized, internal, closing, program;   /* internal: DESK_INTERNAL_* kind; program: 1 Files, 2 CiukNote, 3 Control Panel */
     int collapsed;                /* retained shade state, independent of maximize */
     int32_t shade_height;
@@ -117,6 +118,12 @@ struct desk_client {
     uint64_t window_ns, damage_ns; /* fx-15: its first CREATE_WINDOW and first frame (first-frame record) */
     int spawn_pending;            /* fx-8: slot reserved while the launcher worker creates its process */
     int accept_files;             /* fx-19: DragAcceptFiles (DESK_ACCEPT_FILES) */
+    /* G3: session_aware: the window registered for QUERY_END_SESSION;
+     * session_end: 1 send END_SESSION(1) at the end of the session, 2 the
+     * Win32 broker delivered WM_ENDSESSION (no close message); close_sent_ns:
+     * when the pending close request was sent (hung-program detection). */
+    int session_aware, session_end;
+    uint64_t close_sent_ns;
     uint32_t pid, serial, version, window_id;
     uint32_t minor, resize_serial, applied_serial;
     uint32_t min_width, min_height, max_width, max_height, step_width, step_height;
@@ -182,8 +189,77 @@ struct desk_power_sequence {
     struct desk_power_target targets[DESK_CLIENTS * 2];
     char text[320];
 };
+/* G4: the taskbar's window arrangement with its Undo (client.c). Windows 98
+ * keeps the previous positions of the windows an arrangement moved, so that
+ * the menu offers Undo Cascade, Undo Tile or Undo Minimize All until the
+ * next arrangement. Windows are identified by window_id (stable across
+ * slot reuse); windows that closed meanwhile are skipped by the undo. */
+enum { DESK_ARRANGE_NONE, DESK_ARRANGE_CASCADE, DESK_ARRANGE_TILE_H, DESK_ARRANGE_TILE_V, DESK_ARRANGE_MINIMIZE_ALL };
+struct desk_arrange_saved {
+    uint32_t window_id;
+    struct desk_box frame, restore;
+    int32_t shade_height;
+    uint8_t minimized, zoomed, collapsed;
+};
+struct desk_arrange_undo {
+    int kind;                       /* DESK_ARRANGE_*: the operation Undo reverses, or none */
+    unsigned count;
+    uint32_t focus_id;              /* window_id that was active before the operation */
+    struct desk_arrange_saved windows[DESK_CLIENTS];
+};
+/* G3 end of session (docs/design/desktop-shell.md, "End of session"):
+ * Windows 9x WM_QUERYENDSESSION / WM_ENDSESSION. Shut Down, Restart and Log
+ * Off ask every program in turn, topmost window first; a program may show
+ * its own prompt and the session waits for the user with no deadline while
+ * the program answers PINGs. A program unresponsive for DESK_HUNG_NS (the
+ * Windows 9x HungAppTimeout, 5000 ms) gets "This program is not responding"
+ * with End Task and Cancel; a running DOS program gets the Windows 98
+ * "cannot shut down this program automatically" warning. Any veto, No or
+ * Cancel ends the session with every program still running; only when all
+ * agreed does desk_power_begin run the fx-5 power sequence. */
+#define DESK_HUNG_NS 5000000000ull
+#define DESK_SESSION_POLL_NS 20000000ull  /* Win32 broker status cadence */
+enum { DESK_SESSION_IDLE, DESK_SESSION_QUERY };
+enum { DESK_PART_WINDOW, DESK_PART_LEGACY, DESK_PART_WIN32 };
+enum { DESK_PART_WAITING, DESK_PART_QUERIED, DESK_PART_ASKING, DESK_PART_AGREED, DESK_PART_GONE };
+struct desk_session_part {
+    int kind, state, answered;
+    uint32_t window_id, pid, serial, ping; /* ping: first PING serial sent after the query */
+    uint64_t sent_ns;
+};
+/* Win32 broker seam (w32srv W32R_ENDSESSION; the values are W32R_SESSION_*). */
+#define DESK_W32_SESSION_BEGIN 1u
+#define DESK_W32_SESSION_STATUS 4u
+#define DESK_W32_SESSION_RESET 5u
+#define DESK_W32_SESSION_CANCEL 6u
+#define DESK_W32_SESSION_COMMIT 7u
+#define DESK_W32_SESSION_HOLD 0x100u   /* BEGIN flag: wait for COMMIT/CANCEL after the queries */
+#define DESK_EWX_LOGOFF 0u
+#define DESK_EWX_SHUTDOWN 1u
+#define DESK_EWX_REBOOT 2u
+#define DESK_EWX_POWEROFF 8u
+enum { DESK_W32_PENDING, DESK_W32_ENDED, DESK_W32_VETOED, DESK_W32_HELD };
+struct desk_w32_status { uint32_t state, pid, hwnd, delivered; };
+struct desk_session {
+    int state, action;
+    unsigned count, at;
+    uint32_t flags, serial;
+    struct desk_session_part parts[DESK_CLIENTS + 1];
+    uint32_t w32_pid, w32_hwnd, w32_delivered;
+    uint64_t w32_since, w32_next;
+};
+/* The "This program is not responding" (End Task, Cancel) and DOS warning
+ * (Yes, No) dialogs: one at a time, for a window close, End Task or the session. */
+enum { DESK_HANG_NONE, DESK_HANG_NOT_RESPONDING, DESK_HANG_DOS };
+struct desk_end_task {
+    int kind, window, session;
+    uint32_t pid, target;          /* target: the program's window id, 0 for a Win32 broker target */
+    char name[DESK_TITLE_MAX + 1];
+};
 struct desk_render_cache;
+struct desk_clipboard;
 struct desktop {
+    struct desk_clipboard *clipboard;
     void (*wake)(void *);
     void *wake_ctx;
     uint64_t drain_ns;  /* f2-88: when the loop last drained every client channel (0: not tracked, host tests) */
@@ -295,6 +371,11 @@ struct desktop {
     int (*terminate)(uint32_t, int);
     uint64_t realtime_second;
     int realtime_source;
+    /* G1: the system time zone (syscall 97): local = realtime_second +
+     * local_offset; tz_env is the TZ handed to launched programs. */
+    int32_t local_offset;
+    uint32_t time_flags, time_generation;
+    char tz_env[8 + CIUKI_TIME_RULE_MAX];
     char build_identity[65], version[65], notice[64];
     struct desk_link_entry *v3_links;
     unsigned v3_link_count;
@@ -324,6 +405,10 @@ struct desktop {
     void (*media_sound)(struct desktop *, int connected);
     struct desk_shell sh;
     struct desk_power_sequence power;
+    struct desk_session session;   /* G3: the end-of-session queries before power */
+    struct desk_end_task end_task;
+    /* G3: the Win32 end-session broker; NULL or an error: no Win32 programs to ask. */
+    int (*w32_session)(struct desktop *, unsigned action, uint32_t flags, struct desk_w32_status *);
     /* Shutdown syscall seams; elapsed time is d->now_ns. alive: 0 gone,
      * 1 still present, -1 unknown (never infer exit from an IPC disconnect). */
     void (*sound_event)(struct desktop *, unsigned event);
@@ -341,6 +426,9 @@ struct desktop {
     int (*mixer_set)(struct desktop *, uint32_t left, uint32_t right, uint32_t mute);
     /* Title-bar double-click (maximize and restore). */
     uint64_t title_click_ns; int title_click_window; int32_t title_click_x, title_click_y;
+    /* G4: the caption icon's double click closes (WM-11); the taskbar's Undo record. */
+    uint64_t icon_click_ns; int icon_click_window;
+    struct desk_arrange_undo arrange;
     /* Title buttons (desk_title_code): under the pointer, and pressed with the left button. */
     int title_hot, title_down;
     uint32_t display_counter;
@@ -402,6 +490,7 @@ int desk_intersect(struct desk_box a, struct desk_box b, struct desk_box *out);
 struct desk_box desk_frame(uint32_t w, uint32_t h, int32_t x, int32_t y);
 struct desk_box desk_content(const struct desk_client *c);
 struct desk_box desk_close_box(const struct desk_client *c);
+struct desk_box desk_caption_icon_box(const struct desktop *, const struct desk_client *c);   /* zero when the theme draws none */
 struct desk_box desk_min_box(const struct desk_client *c);
 struct desk_box desk_shade_box(const struct desk_client *c);   /* zoom; zero box when too narrow */
 struct desk_box desk_outer(const struct desk_client *c);       /* frame plus drop shadow */
@@ -429,9 +518,27 @@ int desk_program_kind(const char *name);
 int desk_catalog_takes_file(const char *name);   /* catalog.h accessories that open a file argument */         /* 1 Files, 2 CiukNote, else 0 */
 void desk_shell_enable(struct desktop *);
 void desk_minimize(struct desktop *, int index);
+/* G4: Windows 98 taskbar arrangements (client.c). Each acts on the windows that
+ * have a task button, are not minimised, owned, built-in dialogs or topmost
+ * (cascade and tile), inside the work area between the two bars; the result
+ * is the number of windows moved. desk_arrange_undo reverses the last one. */
+int desk_arrangeable(const struct desktop *, int index);
+int desk_minimizable(const struct desktop *, int index);   /* has a task button, is shown and not owned */
+int desk_arrange(struct desktop *, int kind);   /* DESK_ARRANGE_CASCADE, _TILE_H, _TILE_V */
+int desk_minimize_all(struct desktop *);        /* Win+M, Minimize All Windows */
+int desk_show_desktop(struct desktop *);        /* Win+D: minimise all, again restores */
+int desk_arrange_undo_kind(const struct desktop *);   /* DESK_ARRANGE_* the Undo item reverses, 0 none */
+int desk_arrange_undo(struct desktop *);        /* Shift+Win+M, Undo Cascade/Tile/Minimize All */
 void desk_request_close(struct desktop *, int index);
 void desk_close_timeouts(struct desktop *);
 void desk_child_exited(struct desktop *, uint32_t pid, int status);
+void desk_session_begin(struct desktop *, int action);   /* 1 restart, 2 shut down, 3 log off */
+void desk_session_tick(struct desktop *);
+void desk_session_cancel(struct desktop *);
+uint64_t desk_session_deadline(const struct desktop *);  /* next session/hung-close turn, 0 none */
+int desk_session_busy(const struct desktop *);             /* a session query or the power sequence runs */
+void desk_end_task_open(struct desktop *, int kind, int session, uint32_t pid, uint32_t target, const char *name);
+void desk_end_task_choice(struct desktop *, int end);       /* 1 End Task / Yes, 0 Cancel / No */
 void desk_power_begin(struct desktop *, int action);
 void desk_power_tick(struct desktop *);
 void desk_power_cancel(struct desktop *);

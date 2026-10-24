@@ -20,13 +20,95 @@ _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,launch.reserved[3])
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,launch.reserved[4])==100,"launch second joystick generation");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,launch.reserved[5])==104,"launch joystick mode");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,launch.reserved[6])==108,"launch joystick session");
+#include "../../sdk/win32/include/w32/clipboard_formats.h"
+_Static_assert(CF_TEXT==1u,"G5 Win32 CF_TEXT");
+_Static_assert(CF_BITMAP==2u,"G5 Win32 CF_BITMAP");
+_Static_assert(CF_METAFILEPICT==3u,"G5 Win32 CF_METAFILEPICT");
+_Static_assert(CF_OEMTEXT==7u,"G5 Win32 CF_OEMTEXT");
+_Static_assert(CF_DIB==8u,"G5 Win32 CF_DIB");
+_Static_assert(CF_PALETTE==9u,"G5 Win32 CF_PALETTE");
+_Static_assert(CF_UNICODETEXT==13u,"G5 Win32 CF_UNICODETEXT");
+_Static_assert(CF_ENHMETAFILE==14u,"G5 Win32 CF_ENHMETAFILE");
+_Static_assert(CF_HDROP==15u,"G5 Win32 CF_HDROP");
+_Static_assert(CF_LOCALE==16u,"G5 Win32 CF_LOCALE");
+_Static_assert(CF_DIBV5==17u,"G5 Win32 CF_DIBV5");
+_Static_assert(WM_RENDERFORMAT==773u,"G5 Win32 WM_RENDERFORMAT");
+_Static_assert(WM_RENDERALLFORMATS==774u,"G5 Win32 WM_RENDERALLFORMATS");
+/* G5: append after G3; the byte protocol is independent of pointer width. */
+_Static_assert(DESK_CLIPBOARD==52u,"G5 DESK_CLIPBOARD");
+_Static_assert(DESK_CLIPBOARD_EVENT==53u,"G5 DESK_CLIPBOARD_EVENT");
+_Static_assert(DESK_DOS_CLIPBOARD==54u,"G5 DESK_DOS_CLIPBOARD");
+_Static_assert(DESK_V3_CLIPBOARD==80u,"G5 DESK_V3_CLIPBOARD");
+_Static_assert(DESK_V3_CLIPBOARD_EVENT==81u,"G5 DESK_V3_CLIPBOARD_EVENT");
+_Static_assert(DESK_CLIP_QUERY==1u,"G5 DESK_CLIP_QUERY");
+_Static_assert(DESK_CLIP_EMPTY==2u,"G5 DESK_CLIP_EMPTY");
+_Static_assert(DESK_CLIP_PUT==3u,"G5 DESK_CLIP_PUT");
+_Static_assert(DESK_CLIP_CLOSE==4u,"G5 DESK_CLIP_CLOSE");
+_Static_assert(DESK_CLIP_GET==5u,"G5 DESK_CLIP_GET");
+_Static_assert(DESK_CLIP_WATCH==6u,"G5 DESK_CLIP_WATCH");
+_Static_assert(DESK_CLIP_REGISTER==7u,"G5 DESK_CLIP_REGISTER");
+_Static_assert(DESK_CLIP_NAME==8u,"G5 DESK_CLIP_NAME");
+_Static_assert(DESK_CLIP_OPEN==9u,"G5 DESK_CLIP_OPEN");
+_Static_assert(DESK_CLIP_RELEASE==10u,"G5 DESK_CLIP_RELEASE");
+_Static_assert(DESK_CLIP_REPLY==1u,"G5 DESK_CLIP_REPLY");
+_Static_assert(DESK_CLIP_RENDER==2u,"G5 DESK_CLIP_RENDER");
+_Static_assert(DESK_CLIP_CHANGED==3u,"G5 DESK_CLIP_CHANGED");
+_Static_assert(DESK_CLIP_DESTROY==4u,"G5 DESK_CLIP_DESTROY");
+_Static_assert(DESK_CLIP_DELAYED==1u,"G5 DESK_CLIP_DELAYED");
+_Static_assert(DESK_CLIP_RENDERED==2u,"G5 DESK_CLIP_RENDERED");
+_Static_assert(DESK_CLIP_OWNER==1u,"G5 DESK_CLIP_OWNER");
+_Static_assert(DESK_CLIP_MINE==2u,"G5 DESK_CLIP_MINE");
+_Static_assert(DESK_CLIP_NAME_MAX==127u,"G5 DESK_CLIP_NAME_MAX");
+_Static_assert(DESK_CLIP_LIST_MAX==48u,"G5 DESK_CLIP_LIST_MAX");
+_Static_assert(DESK_CLIP_FORMATS_MAX==32u,"G5 DESK_CLIP_FORMATS_MAX");
+_Static_assert(DESK_CLIP_NAMES_MAX==256u,"G5 DESK_CLIP_NAMES_MAX");
+_Static_assert(DESK_CLIP_ITEM_MAX==16777216u,"G5 DESK_CLIP_ITEM_MAX");
+_Static_assert(DESK_CLIP_BYTES_MAX==16777216u,"G5 DESK_CLIP_BYTES_MAX");
+_Static_assert(DESK_CLIP_RENDER_NS==2000000000u,"G5 DESK_CLIP_RENDER_NS");
+_Static_assert(DESK_CF_TEXT==1u,"G5 DESK_CF_TEXT");
+_Static_assert(DESK_CF_BITMAP==2u,"G5 DESK_CF_BITMAP");
+_Static_assert(DESK_CF_METAFILEPICT==3u,"G5 DESK_CF_METAFILEPICT");
+_Static_assert(DESK_CF_SYLK==4u,"G5 DESK_CF_SYLK");
+_Static_assert(DESK_CF_DIF==5u,"G5 DESK_CF_DIF");
+_Static_assert(DESK_CF_TIFF==6u,"G5 DESK_CF_TIFF");
+_Static_assert(DESK_CF_OEMTEXT==7u,"G5 DESK_CF_OEMTEXT");
+_Static_assert(DESK_CF_DIB==8u,"G5 DESK_CF_DIB");
+_Static_assert(DESK_CF_PALETTE==9u,"G5 DESK_CF_PALETTE");
+_Static_assert(DESK_CF_PENDATA==10u,"G5 DESK_CF_PENDATA");
+_Static_assert(DESK_CF_RIFF==11u,"G5 DESK_CF_RIFF");
+_Static_assert(DESK_CF_WAVE==12u,"G5 DESK_CF_WAVE");
+_Static_assert(DESK_CF_UNICODETEXT==13u,"G5 DESK_CF_UNICODETEXT");
+_Static_assert(DESK_CF_ENHMETAFILE==14u,"G5 DESK_CF_ENHMETAFILE");
+_Static_assert(DESK_CF_HDROP==15u,"G5 DESK_CF_HDROP");
+_Static_assert(DESK_CF_LOCALE==16u,"G5 DESK_CF_LOCALE");
+_Static_assert(DESK_CF_DIBV5==17u,"G5 DESK_CF_DIBV5");
+_Static_assert(DESK_CF_OWNERDISPLAY==128u,"G5 DESK_CF_OWNERDISPLAY");
+_Static_assert(DESK_CF_DSPTEXT==129u,"G5 DESK_CF_DSPTEXT");
+_Static_assert(DESK_CF_PRIVATEFIRST==512u,"G5 DESK_CF_PRIVATEFIRST");
+_Static_assert(DESK_CF_PRIVATELAST==767u,"G5 DESK_CF_PRIVATELAST");
+_Static_assert(DESK_CF_REGISTERED==49152u,"G5 DESK_CF_REGISTERED");
+_Static_assert(sizeof(DESK_CLIP_PREFERRED_DROPEFFECT)==21,"Preferred DropEffect name size");
+_Static_assert(sizeof(struct desk_clip_wire)==232 && _Alignof(struct desk_clip_wire)==4,"clipboard decoded record");
+_Static_assert(__builtin_offsetof(struct desk_clip_wire,serial)==0,"clipboard serial");
+_Static_assert(__builtin_offsetof(struct desk_clip_wire,op)==4,"clipboard op");
+_Static_assert(__builtin_offsetof(struct desk_clip_wire,kind)==8,"clipboard kind");
+_Static_assert(__builtin_offsetof(struct desk_clip_wire,format)==12,"clipboard format");
+_Static_assert(__builtin_offsetof(struct desk_clip_wire,flags)==16,"clipboard flags");
+_Static_assert(__builtin_offsetof(struct desk_clip_wire,bytes)==20,"clipboard bytes");
+_Static_assert(__builtin_offsetof(struct desk_clip_wire,token)==24,"clipboard token");
+_Static_assert(__builtin_offsetof(struct desk_clip_wire,sequence)==28,"clipboard sequence");
+_Static_assert(__builtin_offsetof(struct desk_clip_wire,count)==32,"clipboard count");
+_Static_assert(__builtin_offsetof(struct desk_clip_wire,result)==36,"clipboard result");
+_Static_assert(__builtin_offsetof(struct desk_clip_wire,formats)==40,"clipboard formats");
+_Static_assert(__builtin_offsetof(struct desk_clip_wire,name)==40,"clipboard name");
+_Static_assert(__builtin_offsetof(struct desk_packet,clipboard_fd)==__builtin_offsetof(struct desk_packet,clip)+232,"clipboard attachment slot");
 #include "../../sdk/libsetup/include/setup_txn.h"
 _Static_assert(SETUP_TXN_VERSION==2u,"Setup interface version");
 _Static_assert(SETUP_ERASED_MAX==16u,"Setup preview capacity");
 #if defined(__i386__)
 _Static_assert(sizeof(struct setup_erased_partition)==32,"Setup erased record");
 _Static_assert(_Alignof(struct setup_erased_partition)==4,"Setup erased alignment");
-_Static_assert(sizeof(struct setup_plan)==1156,"Setup plan version 2");
+_Static_assert(sizeof(struct setup_plan)==1204,"Setup plan version 2");
 #define SETUP_OFFSET(field, expected) _Static_assert(__builtin_offsetof(struct setup_plan,field)==expected,"Setup plan " #field)
 SETUP_OFFSET(version,0);
 SETUP_OFFSET(disk,4);
@@ -42,8 +124,8 @@ SETUP_OFFSET(reserve_bytes,668);
 SETUP_OFFSET(free_after_bytes,676);
 SETUP_OFFSET(components,684);
 SETUP_OFFSET(answers,688);
-SETUP_OFFSET(source_image_sha,1024);
-SETUP_OFFSET(source_iso_sha,1089);
+SETUP_OFFSET(source_image_sha,1072);
+SETUP_OFFSET(source_iso_sha,1137);
 _Static_assert(__builtin_offsetof(struct setup_erased_partition,type)==0,"erased type");
 _Static_assert(__builtin_offsetof(struct setup_erased_partition,start)==4,"erased start");
 _Static_assert(__builtin_offsetof(struct setup_erased_partition,count)==12,"erased count");
@@ -68,6 +150,55 @@ _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,presentation.flags)
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,scanlines.bits)==72,"DOSVM row output ABI");
 _Static_assert(sizeof(((struct ciuki_dosvm_command *)0)->scanlines)==64,"DOSVM row tail ABI");
 static const struct expectation expectations[] = {
+    {"constant.CIUKI_SYS_FILE_INFO", CIUKI_SYS_FILE_INFO, 98u},
+    {"constant.MEDIA_GET_LABEL", MEDIA_GET_LABEL, 0x4d18u},
+    {"constant.MEDIA_SET_LABEL", MEDIA_SET_LABEL, 0x4d19u},
+    {"constant.CIUKI_MEDIA_LABEL_READ_ONLY", CIUKI_MEDIA_LABEL_READ_ONLY, 1u},
+    {"constant.CIUKI_MEDIA_LABEL_MAX", CIUKI_MEDIA_LABEL_MAX, 11u},
+    {"constant.CIUKI_FILE_INFO_VERSION", CIUKI_FILE_INFO_VERSION, 1u},
+    {"constant.CIUKI_FILE_INFO_GET", CIUKI_FILE_INFO_GET, 0u},
+    {"constant.CIUKI_FILE_INFO_SET", CIUKI_FILE_INFO_SET, 1u},
+    {"constant.CIUKI_ATTR_READONLY", CIUKI_ATTR_READONLY, 0x01u},
+    {"constant.CIUKI_ATTR_HIDDEN", CIUKI_ATTR_HIDDEN, 0x02u},
+    {"constant.CIUKI_ATTR_SYSTEM", CIUKI_ATTR_SYSTEM, 0x04u},
+    {"constant.CIUKI_ATTR_DIRECTORY", CIUKI_ATTR_DIRECTORY, 0x10u},
+    {"constant.CIUKI_ATTR_ARCHIVE", CIUKI_ATTR_ARCHIVE, 0x20u},
+    {"constant.CIUKI_ATTR_SETTABLE", CIUKI_ATTR_SETTABLE, 0x27u},
+    {"constant.CIUKI_FILE_INFO_ATTRIBUTES", CIUKI_FILE_INFO_ATTRIBUTES, 1u},
+    {"constant.CIUKI_FILE_INFO_CREATED", CIUKI_FILE_INFO_CREATED, 2u},
+    {"constant.CIUKI_FILE_INFO_ACCESSED", CIUKI_FILE_INFO_ACCESSED, 4u},
+    {"constant.CIUKI_FILE_INFO_MODIFIED", CIUKI_FILE_INFO_MODIFIED, 8u},
+    {"constant.CIUKI_FILE_INFO_SHORT_NAME", CIUKI_FILE_INFO_SHORT_NAME, 16u},
+    {"constant.CIUKI_FILE_INFO_ALLOCATED", CIUKI_FILE_INFO_ALLOCATED, 32u},
+    {"constant.CIUKI_FILE_INFO_SETTABLE", CIUKI_FILE_INFO_SETTABLE, 15u},
+    {"constant.CIUKI_FILE_INFO_READ_ONLY_MEDIUM", CIUKI_FILE_INFO_READ_ONLY_MEDIUM, 1u},
+    {"constant.CIUKI_FILE_INFO_VOLUME_ROOT", CIUKI_FILE_INFO_VOLUME_ROOT, 2u},
+    {"constant.CIUKI_SHORT_NAME_MAX", CIUKI_SHORT_NAME_MAX, 16u},
+    {"sizeof.ciuki_file_info", sizeof(struct ciuki_file_info), 88u},
+    {"alignof.ciuki_file_info", _Alignof(struct ciuki_file_info), 4u},
+    {"offsetof.ciuki_file_info.version", __builtin_offsetof(struct ciuki_file_info, version), 0u},
+    {"offsetof.ciuki_file_info.size", __builtin_offsetof(struct ciuki_file_info, size), 4u},
+    {"offsetof.ciuki_file_info.operation", __builtin_offsetof(struct ciuki_file_info, operation), 8u},
+    {"offsetof.ciuki_file_info.mask", __builtin_offsetof(struct ciuki_file_info, mask), 12u},
+    {"offsetof.ciuki_file_info.attributes", __builtin_offsetof(struct ciuki_file_info, attributes), 16u},
+    {"offsetof.ciuki_file_info.flags", __builtin_offsetof(struct ciuki_file_info, flags), 20u},
+    {"offsetof.ciuki_file_info.file_size", __builtin_offsetof(struct ciuki_file_info, file_size), 24u},
+    {"offsetof.ciuki_file_info.allocated", __builtin_offsetof(struct ciuki_file_info, allocated), 32u},
+    {"offsetof.ciuki_file_info.created", __builtin_offsetof(struct ciuki_file_info, created), 40u},
+    {"offsetof.ciuki_file_info.accessed", __builtin_offsetof(struct ciuki_file_info, accessed), 48u},
+    {"offsetof.ciuki_file_info.modified", __builtin_offsetof(struct ciuki_file_info, modified), 56u},
+    {"offsetof.ciuki_file_info.created_ms", __builtin_offsetof(struct ciuki_file_info, created_ms), 64u},
+    {"offsetof.ciuki_file_info.reserved", __builtin_offsetof(struct ciuki_file_info, reserved), 68u},
+    {"offsetof.ciuki_file_info.short_name", __builtin_offsetof(struct ciuki_file_info, short_name), 72u},
+    {"sizeof.ciuki_media_label", sizeof(struct ciuki_media_label), 32u},
+    {"alignof.ciuki_media_label", _Alignof(struct ciuki_media_label), 4u},
+    {"offsetof.ciuki_media_label.version", __builtin_offsetof(struct ciuki_media_label, version), 0u},
+    {"offsetof.ciuki_media_label.size", __builtin_offsetof(struct ciuki_media_label, size), 4u},
+    {"offsetof.ciuki_media_label.drive", __builtin_offsetof(struct ciuki_media_label, drive), 8u},
+    {"offsetof.ciuki_media_label.flags", __builtin_offsetof(struct ciuki_media_label, flags), 12u},
+    {"offsetof.ciuki_media_label.label", __builtin_offsetof(struct ciuki_media_label, label), 16u},
+    {"offsetof.ciuki_media_label.reserved", __builtin_offsetof(struct ciuki_media_label, reserved), 28u},
+    {"offsetof.ciuki_dirent.d_attributes", __builtin_offsetof(struct ciuki_dirent, d_attributes), 21u},
     {"constant.CIUKI_HARDWARE_VERSION", CIUKI_HARDWARE_VERSION, 3u},
     {"sizeof.ciuki_hardware_info", sizeof(struct ciuki_hardware_info), 4500u},
     {"alignof.ciuki_hardware_info", _Alignof(struct ciuki_hardware_info), 4u},
@@ -546,6 +677,39 @@ static const struct expectation expectations[] = {
     {"offsetof.ciuki_setup_clock.seconds", __builtin_offsetof(struct ciuki_setup_clock,seconds), 8u},
     {"offsetof.ciuki_setup_clock.offset_minutes", __builtin_offsetof(struct ciuki_setup_clock,offset_minutes), 16u},
     {"offsetof.ciuki_setup_clock.rtc_local", __builtin_offsetof(struct ciuki_setup_clock,rtc_local), 20u},
+    {"sizeof.ciuki_time_zone", sizeof(struct ciuki_time_zone), 208u},
+    {"alignof.ciuki_time_zone", _Alignof(struct ciuki_time_zone), 4u},
+    {"offsetof.ciuki_time_zone.version", __builtin_offsetof(struct ciuki_time_zone,version), 0u},
+    {"offsetof.ciuki_time_zone.size", __builtin_offsetof(struct ciuki_time_zone,size), 4u},
+    {"offsetof.ciuki_time_zone.operation", __builtin_offsetof(struct ciuki_time_zone,operation), 8u},
+    {"offsetof.ciuki_time_zone.flags", __builtin_offsetof(struct ciuki_time_zone,flags), 12u},
+    {"offsetof.ciuki_time_zone.utc_seconds", __builtin_offsetof(struct ciuki_time_zone,utc_seconds), 16u},
+    {"offsetof.ciuki_time_zone.local_seconds", __builtin_offsetof(struct ciuki_time_zone,local_seconds), 24u},
+    {"offsetof.ciuki_time_zone.milliseconds", __builtin_offsetof(struct ciuki_time_zone,milliseconds), 32u},
+    {"offsetof.ciuki_time_zone.offset_minutes", __builtin_offsetof(struct ciuki_time_zone,offset_minutes), 36u},
+    {"offsetof.ciuki_time_zone.standard_minutes", __builtin_offsetof(struct ciuki_time_zone,standard_minutes), 40u},
+    {"offsetof.ciuki_time_zone.daylight_minutes", __builtin_offsetof(struct ciuki_time_zone,daylight_minutes), 44u},
+    {"offsetof.ciuki_time_zone.rtc_bias_minutes", __builtin_offsetof(struct ciuki_time_zone,rtc_bias_minutes), 48u},
+    {"offsetof.ciuki_time_zone.generation", __builtin_offsetof(struct ciuki_time_zone,generation), 52u},
+    {"offsetof.ciuki_time_zone.next_change", __builtin_offsetof(struct ciuki_time_zone,next_change), 56u},
+    {"offsetof.ciuki_time_zone.zone", __builtin_offsetof(struct ciuki_time_zone,zone), 64u},
+    {"offsetof.ciuki_time_zone.rule", __builtin_offsetof(struct ciuki_time_zone,rule), 112u},
+    {"offsetof.ciuki_time_zone.standard_name", __builtin_offsetof(struct ciuki_time_zone,standard_name), 176u},
+    {"offsetof.ciuki_time_zone.daylight_name", __builtin_offsetof(struct ciuki_time_zone,daylight_name), 192u},
+    {"constant.CIUKI_TIME_VERSION", CIUKI_TIME_VERSION, 1u},
+    {"constant.CIUKI_TIME_GET", CIUKI_TIME_GET, 0u},
+    {"constant.CIUKI_TIME_SET_ZONE", CIUKI_TIME_SET_ZONE, 1u},
+    {"constant.CIUKI_TIME_SET_LOCAL", CIUKI_TIME_SET_LOCAL, 2u},
+    {"constant.CIUKI_TIME_SET_UTC", CIUKI_TIME_SET_UTC, 3u},
+    {"constant.CIUKI_TIME_ACKNOWLEDGE", CIUKI_TIME_ACKNOWLEDGE, 4u},
+    {"constant.CIUKI_TIME_AUTO_DST", CIUKI_TIME_AUTO_DST, 1u},
+    {"constant.CIUKI_TIME_RTC_LOCAL", CIUKI_TIME_RTC_LOCAL, 2u},
+    {"constant.CIUKI_TIME_DAYLIGHT", CIUKI_TIME_DAYLIGHT, 4u},
+    {"constant.CIUKI_TIME_ADJUSTED", CIUKI_TIME_ADJUSTED, 8u},
+    {"constant.CIUKI_TIME_AUTHORITY", CIUKI_TIME_AUTHORITY, 16u},
+    {"constant.CIUKI_TIME_ZONE_MAX", CIUKI_TIME_ZONE_MAX, 48u},
+    {"constant.CIUKI_TIME_RULE_MAX", CIUKI_TIME_RULE_MAX, 64u},
+    {"constant.CIUKI_TIME_NAME_MAX", CIUKI_TIME_NAME_MAX, 16u},
     {"constant.ENOTSOCK", ENOTSOCK, 88u},
     {"constant.EDESTADDRREQ", EDESTADDRREQ, 89u},
     {"constant.EPROTOTYPE", EPROTOTYPE, 91u},
@@ -634,6 +798,7 @@ static const struct expectation expectations[] = {
     {"constant.CIUKI_SYS_RESOLVE4", CIUKI_SYS_RESOLVE4, 89u},
     {"constant.CIUKI_SYS_NETCTL", CIUKI_SYS_NETCTL, 90u},
     {"constant.CIUKI_SYS_GETENTROPY", CIUKI_SYS_GETENTROPY, 91u},
+    {"constant.CIUKI_SYS_TIME", CIUKI_SYS_TIME, 97u},
     {"sizeof.ciuki_sockaddr_in", sizeof(struct ciuki_sockaddr_in), 16u},
     {"alignof.ciuki_sockaddr_in", _Alignof(struct ciuki_sockaddr_in), 4u},
     {"offsetof.ciuki_sockaddr_in.family", __builtin_offsetof(struct ciuki_sockaddr_in, family), 0u},
@@ -1220,7 +1385,7 @@ static const struct expectation expectations[] = {
     {"offsetof.ciuki_media_state.version", __builtin_offsetof(struct ciuki_media_state, version), 0u},
     {"offsetof.ciuki_media_state.size", __builtin_offsetof(struct ciuki_media_state, size), 4u},
     {"offsetof.ciuki_media_state.removable_mask", __builtin_offsetof(struct ciuki_media_state, removable_mask), 8u},
-    {"offsetof.ciuki_media_state.reserved", __builtin_offsetof(struct ciuki_media_state, reserved), 12u},
+    {"offsetof.ciuki_media_state.usb_unrecognized", __builtin_offsetof(struct ciuki_media_state, usb_unrecognized), 12u},
     {"offsetof.ciuki_media_state.generation", __builtin_offsetof(struct ciuki_media_state, generation), 16u},
     {"offsetof.ciuki_media_state.type", __builtin_offsetof(struct ciuki_media_state, type), 120u},
     {"sizeof.ciuki_media_remove", sizeof(struct ciuki_media_remove), 16u},
@@ -1528,6 +1693,9 @@ static const struct expectation expectations[] = {
     {"constant.CIUKI_DOSVM_PRESENT_SCANLINES", (uint32_t)(CIUKI_DOSVM_PRESENT_SCANLINES), 1u},
     {"constant.CIUKI_DOSVM_FULLSCREEN", (uint32_t)(CIUKI_DOSVM_FULLSCREEN), 9u},
     {"constant.CIUKI_DOSVM_BACKGROUND", (uint32_t)(CIUKI_DOSVM_BACKGROUND), 10u},
+    {"constant.CIUKI_DOSVM_TEXT", CIUKI_DOSVM_TEXT, 18u},
+    {"constant.CIUKI_DOSVM_MARK", CIUKI_DOSVM_MARK, 19u},
+    {"constant.CIUKI_DOSVM_TEXT_MAX", CIUKI_DOSVM_TEXT_MAX, 16000u},
     {"constant.CIUKI_DOSVM_WAIT_PRESENT", CIUKI_DOSVM_WAIT_PRESENT, 11u},
     {"constant.CIUKI_DOSVM_GAME_QUERY", CIUKI_DOSVM_GAME_QUERY, 12u},
     {"constant.CIUKI_DOSVM_GAME_REMOVE", CIUKI_DOSVM_GAME_REMOVE, 13u},
@@ -1555,6 +1723,15 @@ static const struct expectation expectations[] = {
     {"constant.CIUKI_DOSVM_BOOTING", (uint32_t)(CIUKI_DOSVM_BOOTING), 0u},
     {"constant.CIUKI_DOSVM_RUNNING", (uint32_t)(CIUKI_DOSVM_RUNNING), 1u},
     {"constant.CIUKI_DOSVM_STOPPED", (uint32_t)(CIUKI_DOSVM_STOPPED), 2u},
+    {"sizeof.ciuki_dosvm_text", sizeof(struct ciuki_dosvm_text), 40u},
+    {"alignof.ciuki_dosvm_text", _Alignof(struct ciuki_dosvm_text), 4u},
+    {"offsetof.ciuki_dosvm_text.buffer", __builtin_offsetof(struct ciuki_dosvm_text,buffer), 0u},
+    {"offsetof.ciuki_dosvm_text.capacity", __builtin_offsetof(struct ciuki_dosvm_text,capacity), 4u},
+    {"offsetof.ciuki_dosvm_text.columns", __builtin_offsetof(struct ciuki_dosvm_text,columns), 8u},
+    {"offsetof.ciuki_dosvm_text.rows", __builtin_offsetof(struct ciuki_dosvm_text,rows), 12u},
+    {"offsetof.ciuki_dosvm_text.cell_height", __builtin_offsetof(struct ciuki_dosvm_text,cell_height), 16u},
+    {"offsetof.ciuki_dosvm_text.reserved", __builtin_offsetof(struct ciuki_dosvm_text,reserved), 20u},
+    {"offsetof.ciuki_dosvm_command.text", __builtin_offsetof(struct ciuki_dosvm_command,text), 72u},
     {"sizeof.ciuki_dosvm_command", sizeof(struct ciuki_dosvm_command), 136u},
     {"alignof.ciuki_dosvm_command", _Alignof(struct ciuki_dosvm_command), 4u},
     {"offsetof.ciuki_dosvm_command.version", __builtin_offsetof(struct ciuki_dosvm_command, version), 0u},
@@ -2240,7 +2417,7 @@ static const struct expectation expectations[] = {
     {"offsetof.ciuki_dirent.d_reclen", (uint32_t)(__builtin_offsetof(struct ciuki_dirent, d_reclen)), 16u},
     {"offsetof.ciuki_dirent.d_namlen", (uint32_t)(__builtin_offsetof(struct ciuki_dirent, d_namlen)), 18u},
     {"offsetof.ciuki_dirent.d_type", (uint32_t)(__builtin_offsetof(struct ciuki_dirent, d_type)), 20u},
-    {"offsetof.ciuki_dirent.reserved", (uint32_t)(__builtin_offsetof(struct ciuki_dirent, reserved)), 21u},
+    {"offsetof.ciuki_dirent.reserved", (uint32_t)(__builtin_offsetof(struct ciuki_dirent, reserved)), 22u},
     {"offsetof.ciuki_dirent.d_name", (uint32_t)(__builtin_offsetof(struct ciuki_dirent, d_name)), 24u},
     {"offsetof.ciuki_dirent.d_size", (uint32_t)(__builtin_offsetof(struct ciuki_dirent, d_size)), 792u},
     {"offsetof.ciuki_dirent.d_mtime", (uint32_t)(__builtin_offsetof(struct ciuki_dirent, d_mtime)), 800u},

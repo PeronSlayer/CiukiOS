@@ -86,6 +86,7 @@ typedef struct {
 DWORD W32API GetLastError(void);
 void W32API SetLastError(DWORD);
 int k32_status(int32_t);
+int64_t k32_current_bias(void); /* G1: seconds east of UTC now, 0 without the service */
 int k32_profile_begin(void);
 void k32_profile_end(void);
 int k32_file(struct ciuki_w32_file_args *);

@@ -47,7 +47,9 @@
  * KEY/MOTION/BUTTON/RELATIVE: original 40-byte ciuki_input_event encoding;
  * CRASH: exception,address,module-byte-count,UTF-8 module; RESTART: flags;
  * POINTER_STATE (server): current pointer flags; zero revokes capture/clip.
- * CLOSE_ACK: disposition (0 declined, 1 deferred), per window.
+ * CLOSE_ACK: disposition (0 declined, 1 deferred), per window. A deferred
+ * close has no deadline while the window answers PINGs; an unresponsive one
+ * gets the desktop's "This program is not responding" dialog (G3).
  * WINDOW_ORDER: flags (Z=1,OWNER=2), insert-after id/sentinel,generation,
  * owner id,owner-generation. Unselected fields are zero; no descriptors.
  * CLOSE/CLOSE_REQUEST/CLOSED: empty; PING/PONG: UI progress token.
@@ -59,7 +61,16 @@ enum desk_v3_opcode {
     DESK_V3_ACTIVATE, DESK_V3_LEASE_EVENT, DESK_V3_RELATIVE_EVENT,
     DESK_V3_CRASH, DESK_V3_RESTART, DESK_V3_POINTER_STATE,
     DESK_V3_WINDOW_ORDER, DESK_V3_WIN32_HWND,
-    DESK_V3_PRESENT /* 16-byte damage; RESULT after frame, immediate if covered/identical */
+    DESK_V3_PRESENT, /* 16-byte damage; RESULT after frame, immediate if covered/identical */
+    /* G5 system clipboard on the v3 transport: window 0, generation 0,
+     * payload exactly as the v2 CLIPBOARD/CLIPBOARD_EVENT below. */
+    DESK_V3_CLIPBOARD, DESK_V3_CLIPBOARD_EVENT,
+    /* G4 (WM_GETMINMAXINFO): client to desktop, 16 bytes: minimum and maximum
+     * track size of the client area, min-w, min-h, max-w, max-h in unscaled
+     * pixels, each 0 (default) or 1..2048, max >= min when both are given.
+     * PLACE and CONFIGURE state word: 0 normal, 1 minimised, 2 hidden,
+     * 3 maximised (the desktop zooms the window; WM_SIZE SIZE_MAXIMIZED). */
+    DESK_V3_LIMITS
 };
 #define DESK_RESIZABLE 1u
 #define DESK_CONFIGURE_COMMITTED 1u
@@ -114,8 +125,11 @@ enum desk_opcode {
     DESK_GFX_FRAME, DESK_GFX_PRESENTED, /* f2-59: bounded scene region and completion */
     DESK_DOS_FULLSCREEN /* desktop to DOS client, no payload */,
     DESK_SET_CURSOR, /* v2 client to desktop: uint32 shape, own client area only */
-    /* v2 client to desktop, 8 bytes, no fds: uint32 disposition (0 declined,
-     * 1 closing later). One later reply within 2 s grants 30 s total. */
+    /* v2 client to desktop, 8 bytes, no fds: uint32 disposition
+     * (DESK_CLOSE_DECLINED, DESK_CLOSE_LATER, DESK_CLOSE_DOS_ACTIVE). G3:
+     * no close deadline while the program answers PINGs (Windows 9x
+     * WM_CLOSE); a program unresponsive for DESK_HUNG_NS gets the desktop's
+     * "This program is not responding" dialog with End Task and Cancel. */
     DESK_CLOSE_ACK,
     DESK_GFX_QUERY_ENGINE, DESK_GFX_INFO_ENGINE, /* v1 generic engine payload, 256 bytes */
     DESK_JOYSTICK, DESK_JOYSTICK_RESULT /* v2 Control Panel broker, serial + 100-byte record (+ result on reply) */,
@@ -134,8 +148,110 @@ enum desk_opcode {
      * DROP_FILES (desktop to an accepting client): serial, client x, y;
      *   WM_DROPFILES, the client reads the data object (du_drop_file). */
     DESK_DRAG_BEGIN, DESK_DRAG_OVER, DESK_DRAG_STATUS, DESK_DRAG_DROP, DESK_DRAG_END,
-    DESK_ACCEPT_FILES, DESK_DROP_FILES
+    DESK_ACCEPT_FILES, DESK_DROP_FILES,
+    /* G3 end of session (WM_QUERYENDSESSION / WM_ENDSESSION), version 2,
+     * no fds, all u32 after the 4-byte header:
+     * QUERY_END_SESSION (desktop to client, 12 bytes): serial (nonzero),
+     *   flags (DESK_ENDSESSION_*, the WM_QUERYENDSESSION lParam). The client
+     *   answers once with SESSION_ANSWER; it may show its own save prompt
+     *   first (answer ASKING, then AGREE or VETO when the user decides).
+     *   A registered client that answers a PING sent after the query
+     *   without answering it agrees, as DefWindowProc returns TRUE.
+     * END_SESSION (desktop to client, 16 bytes): serial, ending (1: every
+     *   program agreed, exit now without prompting; 0: the session goes
+     *   on), flags. Sent only to clients that answered the query.
+     * SESSION_ANSWER (client to desktop, 12 bytes): serial of the query,
+     *   answer (DESK_SESSION_*). Serial 0 with AGREE, sent once after
+     *   CREATE_WINDOW, registers the window for queries; the desktop never
+     *   sends QUERY_END_SESSION or END_SESSION to an unregistered client
+     *   (it agrees by default and gets CLOSE_REQUEST/CLOSED at the end). */
+    DESK_QUERY_END_SESSION, DESK_END_SESSION, DESK_SESSION_ANSWER,
+    /* G5 one system clipboard owned by the desktop (Windows 98 clipboard
+     * model; docs/design/system-clipboard.md), version 2, any client.
+     * CLIPBOARD (client to desktop), u32 after the header: serial (nonzero,
+     *   echoed), op (DESK_CLIP_QUERY..NAME), format, flags, byte count,
+     *   owner token, name byte count, name (REGISTER only, 1..127 UTF-8).
+     *   A PUT with bytes and without DELAYED carries one surface holding the
+     *   bytes from offset 0 (desk_clip_dims); other requests carry none.
+     * CLIPBOARD_EVENT (desktop to client): serial (0 unsolicited), kind
+     *   (DESK_CLIP_REPLY..DESTROY), op answered (REPLY) or 0, signed
+     *   result, format, byte count, sequence, owner token, item count,
+     *   items: count u32 formats, or count name bytes for a NAME reply.
+     *   A successful GET reply with bytes carries one read-only surface. */
+    DESK_CLIPBOARD, DESK_CLIPBOARD_EVENT,
+    DESK_DOS_CLIPBOARD /* v2 desktop to DOS window: u32 action 1 Mark, 2 Copy, 3 Paste, 4 toggle QuickEdit */
 };
+enum desk_clip_op { DESK_CLIP_QUERY = 1, DESK_CLIP_EMPTY, DESK_CLIP_PUT, DESK_CLIP_CLOSE,
+                    DESK_CLIP_GET, DESK_CLIP_WATCH, DESK_CLIP_REGISTER, DESK_CLIP_NAME, DESK_CLIP_OPEN, DESK_CLIP_RELEASE };
+enum desk_clip_kind { DESK_CLIP_REPLY = 1, DESK_CLIP_RENDER, DESK_CLIP_CHANGED, DESK_CLIP_DESTROY };
+#define DESK_CLIP_DELAYED 1u   /* PUT: SetClipboardData(format, NULL); owner only, no bytes */
+#define DESK_CLIP_RENDERED 2u  /* PUT: the owner's answer to RENDER; zero bytes declines */
+#define DESK_CLIP_OWNER 1u     /* QUERY reply flags in byte count: the clipboard has an owner */
+#define DESK_CLIP_MINE 2u      /* ... and it is the caller */
+#define DESK_CLIP_NAME_MAX 127u
+#define DESK_CLIP_LIST_MAX 48u
+#define DESK_CLIP_FORMATS_MAX 32u              /* stored formats */
+#define DESK_CLIP_NAMES_MAX 256u               /* registered formats */
+#define DESK_CLIP_ITEM_MAX 16777216u           /* one format: the surface limit */
+#define DESK_CLIP_BYTES_MAX 16777216u          /* all stored formats */
+#define DESK_CLIP_RENDER_NS 2000000000ull      /* WM_RENDERFORMAT answer */
+/* Windows clipboard format ids (Winuser.h). */
+#define DESK_CF_TEXT 1u
+#define DESK_CF_BITMAP 2u
+#define DESK_CF_METAFILEPICT 3u
+#define DESK_CF_SYLK 4u
+#define DESK_CF_DIF 5u
+#define DESK_CF_TIFF 6u
+#define DESK_CF_OEMTEXT 7u
+#define DESK_CF_DIB 8u
+#define DESK_CF_PALETTE 9u
+#define DESK_CF_PENDATA 10u
+#define DESK_CF_RIFF 11u
+#define DESK_CF_WAVE 12u
+#define DESK_CF_UNICODETEXT 13u
+#define DESK_CF_ENHMETAFILE 14u
+#define DESK_CF_HDROP 15u
+#define DESK_CF_LOCALE 16u
+#define DESK_CF_DIBV5 17u
+#define DESK_CF_OWNERDISPLAY 0x80u
+#define DESK_CF_DSPTEXT 0x81u
+#define DESK_CF_PRIVATEFIRST 0x200u
+#define DESK_CF_PRIVATELAST 0x2ffu
+#define DESK_CF_REGISTERED 0xc000u
+#define DESK_CLIP_PREFERRED_DROPEFFECT "Preferred DropEffect"
+struct desk_clip_wire {
+    uint32_t serial;
+    uint32_t op;
+    uint32_t kind;
+    uint32_t format;
+    uint32_t flags;
+    uint32_t bytes;
+    uint32_t token;
+    uint32_t sequence;
+    uint32_t count;
+    int32_t result;
+    union {   /* formats: QUERY reply; name: REGISTER request, NAME reply */
+        uint32_t formats[DESK_CLIP_LIST_MAX];
+        char name[DESK_CLIP_NAME_MAX + 1];
+    };
+};
+#define DESK_ENDSESSION_CLOSEAPP 0x00000001u   /* lParam bits, as WinUser.h */
+#define DESK_ENDSESSION_CRITICAL 0x40000000u
+#define DESK_ENDSESSION_LOGOFF 0x80000000u
+#define DESK_ENDSESSION_FLAGS 0xc0000001u
+#define DESK_SESSION_VETO 0u      /* WM_QUERYENDSESSION returned FALSE (the user cancelled) */
+#define DESK_SESSION_AGREE 1u     /* TRUE: data saved or discarded by the user */
+#define DESK_SESSION_ASKING 2u    /* the program shows its own prompt; the session waits */
+#define DESK_SESSION_DOS_ACTIVE 3u /* a DOS window whose program is running: "cannot shut down automatically" */
+#define DESK_SESSION_ANSWERS 4u
+/* CLOSE_ACK dispositions (v2): 0 declined (the user cancelled the program's
+ * own prompt), 1 the program asks the user and closes later (no deadline
+ * while it keeps answering PINGs), 2 a DOS window whose program is running
+ * (the desktop shows the Windows 98 "cannot shut down this program
+ * automatically" warning). V3 accepts 0 and 1 only. */
+#define DESK_CLOSE_DECLINED 0u
+#define DESK_CLOSE_LATER 1u
+#define DESK_CLOSE_DOS_ACTIVE 2u
 #define DESK_DRAG_FILE "/system/settings/files.drag"
 #define DESK_DRAG_ITEMS 4096u
 #define DESK_SETTINGS_RELOAD 1u   /* re-read /system/settings/desktop.cfg and apply it */
@@ -181,6 +297,8 @@ struct desk_packet {
     uint64_t completed_ns, next_frame_ns;
     uint32_t timing_serial,render_us,submit_us,wait_us; /* optional 84-byte FRAME */
     uint64_t convert_ns,copy_ns,slot_ns,refresh_ns; /* optional 64-byte PRESENTED */
+    struct desk_clip_wire clip; /* G5 CLIPBOARD / CLIPBOARD_EVENT */
+    int clipboard_fd; /* v3 GET reply only; receiver closes it */
 };
 int desk_utf8_valid(const uint8_t *, unsigned);
 void desk_v3_message(struct ciuki_message *, unsigned op, unsigned payload,
@@ -194,4 +312,12 @@ void desk_event_message(struct ciuki_message *m, unsigned opcode,
 int desk_parse(const struct ciuki_message *m, int from_client,
                const struct ciuki_surface_info *surface, struct desk_packet *out);
 int desk_surface_valid(const struct ciuki_surface_info *s);
+/* G5: encode a clipboard request (client) or event (desktop) for protocol
+ * version 2 or 3 (v3: window 0, generation 0, request token = serial for a
+ * request); fd < 0 for none. Returns 0, or -EINVAL when desk_parse would
+ * refuse the message. */
+int desk_clip_message(struct ciuki_message *, unsigned version, int client,
+                      const struct desk_clip_wire *, int fd);
+/* Surface geometry carrying n clipboard bytes from offset 0. */
+void desk_clip_dims(uint32_t n, uint32_t *width, uint32_t *height);
 #endif

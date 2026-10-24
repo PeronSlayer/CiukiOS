@@ -630,7 +630,7 @@ __attribute__((noinline)) static void test_tasks_scenario(void)
     assert(request(&d,0,300,DESK_END_TASK,0,77,0)==-EPERM && request(&d,0,300,DESK_END_TASK,0,50,0)==-EPERM);
     drain(&d,1);
     assert(request(&d,0,300,DESK_END_TASK,2,301,0)==0 && d.tasks_stage==5);
-    assert(d.clients[1].closing && queued(&d,1,DESK_CLOSE_REQUEST,0)==1 && d.children[1].close_ns);
+    assert(d.clients[1].closing && queued(&d,1,DESK_CLOSE_REQUEST,0)==1 && !d.children[1].close_ns); /* G3: WM_CLOSE, no deadline */
     struct ciuki_message m; desk_message(&m,DESK_PING,8); desk_put32(m.data+4,DESK_TASKS_CHECKPOINT);
     v2(&d,1,301,&m); assert(!d.tasks_checkpoint);   /* only the Task Manager reports */
     desk_child_exited(&d,301,9); assert(d.tasks_stage==5); /* a killed demo cannot qualify */
@@ -830,6 +830,30 @@ __attribute__((noinline)) static void test_cd_player_menu(void)
     assert(cd_player_launches==2 && strstr(d.sh.message_text,"could not be started"));
     cd_player_error=0; desk_render_release(&d); fake_reset();
     puts("PASS CD Player: Accessories catalogue, Tango icon, Windows target, Win32 launch and failure dialog; native inventory unchanged");
+}
+/* G1: a double-click on the tray clock opens Date/Time Properties; a single
+ * click or two clicks too far apart do not. */
+__attribute__((noinline)) static void test_clock_double_click(void)
+{
+    struct desktop d;
+    uint8_t elf[52]={0x7f,'E','L','F',1,1,1}; elf[16]=2; elf[18]=3; elf[20]=1; elf[40]=52;
+    fake_reset(); desk_init(&d,&fake_ops,1024,768); desk_shell_enable(&d);
+    d.launch=launch_program; d.terminate=fake_terminate; d.authority_fd=-1;
+    desk_program_add(&d,"control",elf,sizeof(elf));
+    struct desk_box b=desk_shell_clock_box(&d);
+    d.mouse_x=b.x+b.w/2; d.mouse_y=b.y+b.h/2;
+    expect_control_arg="--panel=datetime"; unsigned before=control_spawns;
+    uint64_t gap=(uint64_t)d.sh.cfg.double_click_ms*1000000ull;
+    d.now_ns=5000000000ull; assert(desk_shell_button(&d,CIUKI_BUTTON_LEFT,1)); desk_shell_button(&d,CIUKI_BUTTON_LEFT,0);
+    assert(control_spawns==before);
+    d.now_ns+=gap+1; assert(desk_shell_button(&d,CIUKI_BUTTON_LEFT,1)); desk_shell_button(&d,CIUKI_BUTTON_LEFT,0);
+    assert(control_spawns==before);                     /* too slow: a new first click */
+    d.now_ns+=gap/2; assert(desk_shell_button(&d,CIUKI_BUTTON_LEFT,1)); desk_shell_button(&d,CIUKI_BUTTON_LEFT,0);
+    assert(control_spawns==before+1);
+    d.now_ns+=gap/2; assert(desk_shell_button(&d,CIUKI_BUTTON_LEFT,1)); desk_shell_button(&d,CIUKI_BUTTON_LEFT,0);
+    assert(control_spawns==before+1);                   /* a third click starts over */
+    expect_control_arg=NULL; drop_all(&d); desk_render_release(&d); fake_reset();
+    puts("PASS G1 tray clock: double-click opens Date/Time Properties (--panel=datetime), single and slow clicks do not");
 }
 __attribute__((noinline)) static void test_games_menu(void)
 {
@@ -1141,6 +1165,7 @@ __attribute__((noinline)) static void test_launch_timing(void)
     puts("PASS launch timing: three policies/models, quiet mode, CREATE/DAMAGE/present distinction, failed present retry, no duplicate frames, bounded startup polling, shutdown blocks launch before tracing");
 }
 #include "shutdown_sequence_test.h"
+#include "end_session_test.h"
 static pthread_mutex_t wallpaper_test_lock=PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t wallpaper_test_changed=PTHREAD_COND_INITIALIZER;
 static int wallpaper_test_entered, wallpaper_test_release;
@@ -1280,6 +1305,7 @@ int main(int argc,char **argv)
     if (argc==2 && !strcmp(argv[1],"--launch-async")) { test_launch_async(); return 0; }
 #endif
     test_network_service();
+    test_clock_double_click();
     test_media_removal_service();
     test_music_mixer();
     struct desktop d;
@@ -1324,13 +1350,13 @@ int main(int argc,char **argv)
     desk_menu_close(&d);   /* as a menu launch does (shell.c activate): the menu drops over the demo's title now */
     assert(!d.menu_open && d.focus==0);
     struct ciuki_input_event e={.type=CIUKI_INPUT_BUTTON,.code=1,.value=1};
-    d.mouse_x=40; d.mouse_y=60; desk_input(&d,&e); assert(d.drag==0);
+    d.mouse_x=70; d.mouse_y=60; desk_input(&d,&e); assert(d.drag==0);   /* G4: x 40 would be the caption icon, whose click opens the window menu */
     e.type=CIUKI_INPUT_MOTION; e.code=0; e.value=60; e.value2=60; desk_input(&d,&e);
     assert(d.shell_stage==4 && d.clients[0].frame.x==80 && d.clients[0].frame.y==112);
     e.type=CIUKI_INPUT_BUTTON; e.code=1; e.value=e.value2=0; desk_input(&d,&e);
     struct desk_box close=desk_close_box(&d.clients[0]);
     d.mouse_x=close.x+4; d.mouse_y=close.y+4; e.value=1; desk_input(&d,&e);
-    assert(d.shell_stage==5 && d.children[0].close_ns==DESK_CLOSE_NS && d.clients[0].window);
+    assert(d.shell_stage==5 && !d.children[0].close_ns && d.clients[0].closing && d.clients[0].window); /* G3: no deadline for v2 */
     desk_flush(&d,0);
     message(&d,0,DESK_CLOSE,4);
     assert(!fake_live() && d.shell_stage==5); /* EOF alone cannot qualify exit. */
@@ -1403,6 +1429,7 @@ int main(int argc,char **argv)
     test_launch_timing();
     test_wallpaper_startup();
     test_shutdown_sequence();
+    test_end_session();
     return 0;
 }
 

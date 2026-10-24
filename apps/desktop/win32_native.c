@@ -124,7 +124,7 @@ static struct desk_w32_supervisor supervisor;
 static int spawn_service(void *ctx)
 {
     (void)ctx;char *argv[]={"/System/Win32/w32srv",__atomic_load_n(&service_registered_once,__ATOMIC_ACQUIRE)?NULL:"--fresh-clients",NULL};
-    char *env[]={"LC_ALL=C","TZ=UTC0","PATH=/Programs",NULL};
+    char *env[]={"LC_ALL=C","PATH=/Programs",NULL};
     int pid=ciuki_spawn(argv[0],argv,env,NULL,0,0);return pid<0 ? -errno : pid;
 }
 static void record_service(void *ctx,const char *event,int pid,uint64_t elapsed)
@@ -173,7 +173,7 @@ static int launch_execute(enum desk_w32_kind kind,const struct desk_launch_recor
     maps[count++]=(struct ciuki_spawn_fd){report[1],4};
     char type[8];snprintf(type,sizeof(type),"%u",(unsigned)kind);
     char *argv[]={"/System/Win32/shell-launch",type,(char *)r->target,(char *)r->arguments,(char *)r->directory,wait ? "--wait" : NULL,NULL};
-    char *env[]={"LC_ALL=C","TZ=UTC0","PATH=/Programs","HOME=/Documents",NULL};
+    char *env[]={"LC_ALL=C","PATH=/Programs","HOME=/Documents",NULL};
     helper=ciuki_spawn(argv[0],argv,env,maps,count,0);
     if(helper<0){result=-errno;goto done;}
     uint64_t deadline=clock_ns()+(wait ? UINT64_C(300000000000) : UINT64_C(1500000000));
@@ -354,7 +354,7 @@ static void *restart_launch_worker(void *unused)
     else{
         struct ciuki_spawn_fd map={report[1],4};
         char *argv[]={"/System/Win32/runonce.exe",restart_command,NULL};
-        char *env[]={"LC_ALL=C","TZ=UTC0","PATH=/Programs","HOME=/Documents",NULL};
+        char *env[]={"LC_ALL=C","PATH=/Programs","HOME=/Documents",NULL};
         int helper=ciuki_spawn(argv[0],argv,env,&map,1,0);
         if(helper<0)result=-errno;
         else{
@@ -450,13 +450,46 @@ static void restart_idle_poll(struct desktop *d,uint64_t now)
     }
     pthread_mutex_unlock(&idle_lock);
 }
+/* G3: the desktop's end-of-session turn for every Win32 window (broker
+ * HOLD session). The values of the desktop's seam are the W32R ones. */
+_Static_assert(DESK_W32_SESSION_BEGIN==W32R_SESSION_BEGIN && DESK_W32_SESSION_STATUS==W32R_SESSION_STATUS &&
+               DESK_W32_SESSION_RESET==W32R_SESSION_RESET && DESK_W32_SESSION_CANCEL==W32R_SESSION_CANCEL &&
+               DESK_W32_SESSION_COMMIT==W32R_SESSION_COMMIT && DESK_W32_SESSION_HOLD==W32R_SESSION_HOLD,"G3 seam values");
+static int w32_session_open;   /* a HOLD session may still deliver WM_ENDSESSION */
+static int w32_session(struct desktop *d,unsigned action,uint32_t flags,struct desk_w32_status *st)
+{
+    (void)d;
+    if(!authorized)return -ENODEV;
+    if(restart.stage)return -EBUSY;   /* an ExitWindowsEx restart owns the broker */
+    struct w32r_reply r;
+    if(action==W32R_SESSION_BEGIN){   /* a finished or abandoned earlier session is cleared first */
+        if(restart_call(NULL,W32R_ENDSESSION,W32R_SESSION_RESET,0,&r,NULL,0))return -EIO;
+    }
+    uint32_t e=restart_call(NULL,W32R_ENDSESSION,action,flags,&r,NULL,0);
+    if(e)return e==1115?-EBUSY:-EIO;
+    if(action==W32R_SESSION_BEGIN)w32_session_open=1;
+    st->state=r.key;st->pid=r.count;st->hwnd=r.type;st->delivered=r.disposition;
+    return 0;
+}
+/* After the desktop's session ended (cancelled, or a log off), free the
+ * broker once its WM_ENDSESSION deliveries are done. */
+static void w32_session_reap(struct desktop *d,uint64_t ms)
+{
+    static uint64_t next;
+    if(!w32_session_open || d->session.state || d->power.state || ms<next)return;
+    next=ms+DESK_SESSION_POLL_NS/1000000;
+    struct w32r_reply r;
+    if(restart_call(NULL,W32R_ENDSESSION,W32R_SESSION_STATUS,0,&r,NULL,0) || r.key==1 || r.key==2){
+        (void)restart_call(NULL,W32R_ENDSESSION,W32R_SESSION_RESET,0,&r,NULL,0);w32_session_open=0;
+    }else if(r.key==3)(void)restart_call(NULL,W32R_ENDSESSION,W32R_SESSION_CANCEL,0,&r,NULL,0);
+}
 int ciuki_win32_shell_restart(uint32_t pid,uint32_t flags)
 {return !authorized || !owner?-EPIPE:desk_restart_begin(&restart,&restart_ops,pid,flags,clock_ns()/1000000);}
 void desk_w32_start(struct desktop *d)
 {
     owner=d;struct w32r_service a;uint32_t e=service(1,1,&a);
     if(e || !a.result){fprintf(stderr,"[win32] desktop endpoint unavailable error=%u\n",e);return;}
-    authorized=1;desk_w32_supervise(&supervisor,&supervision,clock_ns());
+    authorized=1;d->w32_session=w32_session;desk_w32_supervise(&supervisor,&supervision,clock_ns());
 }
 void desk_w32_poll(struct desktop *d)
 {
@@ -470,6 +503,7 @@ void desk_w32_poll(struct desktop *d)
     uint64_t ms=clock_ns()/1000000;
     restart_idle_poll(d,ms);
     if(restart.stage)desk_restart_tick(&restart,&restart_ops,ms);
+    w32_session_reap(d,ms);
     uint64_t now=clock_ns();
     if(!d->power.state){
         shutdown_pending=shutdown_done=shutdown_error=0;

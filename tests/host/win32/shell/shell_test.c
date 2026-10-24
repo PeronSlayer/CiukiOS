@@ -167,6 +167,57 @@ static void session(void)
         for(unsigned i=0;i<20&&d.stage;i++)tick(&d,&ops,server.now+20);
         assert(!d.stage && last_notice==3);
     }
+    {   /* G3: the desktop's HOLD session: no deadline, the window in turn,
+         * held after the queries, COMMIT or CANCEL. */
+        struct w32r_reply st;
+        #define STATUS() assert(!desktop_call(NULL,W32R_ENDSESSION,W32R_SESSION_STATUS,0,&st,NULL,0))
+        assert(desktop_call(NULL,W32R_ENDSESSION,W32R_SESSION_COMMIT,0,&st,NULL,0)==87);   /* no session */
+        assert(rpc(10,W32R_ENDSESSION,W32R_SESSION_CANCEL,0,0,0,"","",NULL,0,&st,NULL,0)==5); /* desktop only */
+        assert(!desktop_call(NULL,W32R_ENDSESSION,W32R_SESSION_BEGIN,9|W32R_SESSION_HOLD,&r,NULL,0));
+        STATUS(); assert(st.key==0 && st.count==10 && st.type==hwnd && !st.disposition);
+        wr_tick(&server,server.now+60000);          /* far past the ExitWindowsEx 10 s bound */
+        STATUS(); assert(st.key==0 && st.count==10 && st.type==hwnd && !st.disposition);
+        assert(desktop_call(NULL,W32R_ENDSESSION,W32R_SESSION_COMMIT,0,&st,NULL,0)==87);   /* not all asked yet */
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_POLL,0,100,0,"","",NULL,0,&r,NULL,0)&&r.type==0x11&&r.key==hwnd&&!r.disposition);
+        STATUS(); assert(st.key==0 && st.disposition==1);   /* fetched: its handler (and save prompt) runs */
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_REPLY,hwnd,100,1,"","",NULL,0,&r,NULL,0));
+        STATUS(); assert(st.key==3 && !st.count);
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_POLL,0,100,0,"","",NULL,0,&r,NULL,0)&&!r.key);  /* no WM_ENDSESSION while held */
+        assert(!desktop_call(NULL,W32R_ENDSESSION,W32R_SESSION_COMMIT,0,&st,NULL,0));
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_POLL,0,100,0,"","",NULL,0,&r,NULL,0)&&r.type==0x16&&r.count==1);
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_REPLY,hwnd,100,1,"","",NULL,0,&r,NULL,0));
+        STATUS(); assert(st.key==1);
+        assert(!desktop_call(NULL,W32R_ENDSESSION,W32R_SESSION_RESET,0,&r,NULL,0));
+        /* Another program vetoed after this one agreed: WM_ENDSESSION(FALSE). */
+        assert(!desktop_call(NULL,W32R_ENDSESSION,W32R_SESSION_BEGIN,2|W32R_SESSION_HOLD,&r,NULL,0));
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_POLL,0,100,0,"","",NULL,0,&r,NULL,0)&&r.type==0x11);
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_REPLY,hwnd,100,1,"","",NULL,0,&r,NULL,0));
+        STATUS(); assert(st.key==3);
+        assert(!desktop_call(NULL,W32R_ENDSESSION,W32R_SESSION_CANCEL,0,&st,NULL,0));
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_POLL,0,100,0,"","",NULL,0,&r,NULL,0)&&r.type==0x16&&r.count==0);
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_REPLY,hwnd,100,1,"","",NULL,0,&r,NULL,0));
+        STATUS(); assert(st.key==2);
+        assert(!desktop_call(NULL,W32R_ENDSESSION,W32R_SESSION_RESET,0,&r,NULL,0));
+        /* Cancel while the window's save prompt is still open: its late answer is refused. */
+        assert(!desktop_call(NULL,W32R_ENDSESSION,W32R_SESSION_BEGIN,9|W32R_SESSION_HOLD,&r,NULL,0));
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_POLL,0,100,0,"","",NULL,0,&r,NULL,0)&&r.type==0x11);
+        assert(!desktop_call(NULL,W32R_ENDSESSION,W32R_SESSION_CANCEL,0,&st,NULL,0));
+        STATUS(); assert(st.key==2);
+        assert(rpc(10,W32R_ENDSESSION,W32R_SESSION_REPLY,hwnd,100,1,"","",NULL,0,&r,NULL,0)==6);
+        assert(!desktop_call(NULL,W32R_ENDSESSION,W32R_SESSION_RESET,0,&r,NULL,0));
+        /* A Win32 veto (WM_QUERYENDSESSION FALSE) ends a HOLD session at once. */
+        assert(!desktop_call(NULL,W32R_ENDSESSION,W32R_SESSION_BEGIN,9|W32R_SESSION_HOLD,&r,NULL,0));
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_POLL,0,100,0,"","",NULL,0,&r,NULL,0)&&r.type==0x11);
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_REPLY,hwnd,100,0,"","",NULL,0,&r,NULL,0));
+        STATUS(); assert(st.key==0 && !st.count);   /* no hold: WM_ENDSESSION(FALSE) follows */
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_POLL,0,100,0,"","",NULL,0,&r,NULL,0)&&r.type==0x16&&r.count==0);
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_REPLY,hwnd,100,1,"","",NULL,0,&r,NULL,0));
+        STATUS(); assert(st.key==2);
+        assert(!desktop_call(NULL,W32R_ENDSESSION,W32R_SESSION_RESET,0,&r,NULL,0));
+        assert(desktop_call(NULL,W32R_ENDSESSION,W32R_SESSION_BEGIN,0x200,&r,NULL,0)==87);
+        #undef STATUS
+        puts("PASS G3 HOLD end session: no deadline, window in turn and fetch, held until COMMIT, CANCEL/veto send FALSE, late answer refused, desktop authority");
+    }
     struct desk_restart d={.boot_checked=1};live=1;killed=0;
     assert(!desk_restart_begin(&d,&ops,10,1,server.now));
     tick(&d,&ops,server.now+9999);assert(!killed);tick(&d,&ops,server.now+21);assert(killed==1);

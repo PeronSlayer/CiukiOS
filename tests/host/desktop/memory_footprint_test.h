@@ -17,12 +17,16 @@ static int footprint_list(void *ctx,const char *path,unsigned flags,fm_emit emit
         struct fm_meta meta={.type=FM_FILE,.size=4};
         return emit("tune.wav",&meta,arg);
     }
+    if (!strcmp(path,"/Documents/Trash") || !strcmp(path,"/RECYCLED")) return -ENOENT;   /* G2: the Recycle Bin icon's poll */
     assert(!strcmp(path,"/mnt/e"));
     struct fm_meta meta={.type=FM_FILE,.size=4};
     return emit("tune.wav",&meta,arg);
 }
 static int footprint_stat(void *ctx,const char *path,struct fm_meta *meta)
-{ (void)ctx; assert(!strcmp(path,DESK_FOLDER)); *meta=(struct fm_meta){.type=FM_DIR}; return 0; }
+{
+    (void)ctx; if (!strcmp(path,"/RECYCLED/INFO2")) return -ENOENT;   /* G2: the Recycle Bin icon's poll */
+    assert(!strcmp(path,DESK_FOLDER)); *meta=(struct fm_meta){.type=FM_DIR}; return 0;
+}
 static const struct fm_vfs footprint_fs={.list=footprint_list,.stat_path=footprint_stat};
 static void footprint_wait_writer(void)
 {

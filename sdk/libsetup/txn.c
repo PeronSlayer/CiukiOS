@@ -2,6 +2,7 @@
  * Ordering: per-file commit -> volume flush -> raw verification -> marker;
  * libdisk seals the volume and publishes the canonical MBR LAST.
  * SPDX-License-Identifier: MIT */
+#include <ciuki/tzdata.h>
 #include "internal.h"
 #include <errno.h>
 #include <limits.h>
@@ -259,6 +260,7 @@ static int validate(const struct setup_answers *a)
         !setup_components_valid(a->components) || (a->lobby && !(a->components&SETUP_COMP_WINDOWS)) ||
         !setup_valid_user(a->user_name) || !setup_valid_computer(a->computer_name) ||
         (strcmp(a->keyboard,"us") && strcmp(a->keyboard,"it")) || a->tz_minutes<SETUP_TZ_MIN || a->tz_minutes>SETUP_TZ_MAX ||
+        !terminated(a->tz_zone,sizeof(a->tz_zone)) || (a->tz_zone[0] && (ciuki_tz_find(a->tz_zone)<0 || ciuki_tz_zones[ciuki_tz_find(a->tz_zone)].minutes!=a->tz_minutes)) ||
         (a->clock!=SETUP_CLOCK_LOCAL && a->clock!=SETUP_CLOCK_UTC) || a->network<SETUP_NET_DHCP || a->network>SETUP_NET_NONE ||
         a->restart<SETUP_RESTART_EJECT || a->restart>SETUP_RESTART_FORCE || a->ipx>1 || a->lobby>1 ||
         (a->log && (a->log->start>=SETUP_LOG_BYTES || a->log->length>SETUP_LOG_BYTES)) ||

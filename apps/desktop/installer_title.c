@@ -21,6 +21,7 @@
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include "tz_env.h"
 
 extern void desk_v3_fixture_report(const char *);
 #ifndef TITLE_MNT
@@ -367,7 +368,8 @@ static int spawn_win32(const char *native, const char *dos, const char *argument
     if (!getcwd(saved, sizeof(saved))) return -errno;
     if (directory[0] && chdir(directory)) return -errno;
     char *argv[] = {(char *)dos, command, NULL};
-    char *env[] = {"LC_ALL=C", "TZ=UTC0", "PATH=/Programs", "HOME=/Documents", NULL};
+    char tz[DESK_TZ_ENV_BYTES];
+    char *env[] = {"LC_ALL=C", desk_tz_env(tz, sizeof(tz)), "PATH=/Programs", "HOME=/Documents", NULL};
     /* A new process group: the installer tree is followed by group as well. */
     int pid = ciuki_spawn(native, argv, env, NULL, 0, CIUKI_SPAWN_NEW_GROUP);
     int error = pid < 0 ? -errno : 0;

@@ -19,7 +19,8 @@ KERNEL = dict(codecs.KERNEL, SetLastError=4, GetLastError=0,
     LoadLibraryExA=12, FreeLibrary=4, FindResourceA=12,
     LoadResource=8, SizeofResource=8)
 KERNEL.update(GlobalLock=4, GlobalUnlock=4, GlobalSize=4, GlobalFree=4,
-    HeapReAlloc=16, HeapSize=12)
+    HeapReAlloc=16, HeapSize=12,
+    GetDriveTypeA=4, GetSystemTime=4, SystemTimeToFileTime=8, Sleep=4)   # G2: SHFileOperation's Recycle Bin
 
 def build(out, base, flags):
     out = Path(out)

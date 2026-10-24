@@ -148,6 +148,8 @@ uint32_t vmm_kernel_pd(void) { return kpd_phys; }
 void panic(const char *fmt, ...) { fprintf(stderr,"unexpected panic: %s\n",fmt); abort(); }
 static unsigned dosvm_logs;
 static char last_dosvm_log[256];
+static char last_return_log[256];       /* fx-22: [dosvm] fullscreen_return */
+static unsigned destroy_display_failures; /* fx-22 */
 static char last_disk_log[256], last_launch_log[256];
 static unsigned log_sequence, launch_stages, launch_errors, launch_stage_sequence, launch_error_sequence;
 static unsigned launch_stage_pages;
@@ -189,6 +191,8 @@ void klog(const char *fmt, ...)
     if (!strncmp(fmt, "[dosvm] disk", 12)) strcpy(last_disk_log, last_dosvm_log);
     if (strstr(last_dosvm_log,"lifecycle stage=stop")) strcpy(lifecycle_stop,last_dosvm_log);
     if (strstr(last_dosvm_log,"lifecycle stage=cleanup")) strcpy(lifecycle_cleanup,last_dosvm_log);
+    if (strstr(last_dosvm_log,"fullscreen_return ")) strcpy(last_return_log,last_dosvm_log);
+    if (strstr(last_dosvm_log,"failure stage=destroy-display")) destroy_display_failures++;
     if (!strncmp(fmt,"[dosvm] create refused",22)) {
         strcpy(last_refusal_log,last_dosvm_log); refusal_logs++; refusal_sequence=log_sequence;
     }
@@ -1008,6 +1012,7 @@ static void test_memory_services(bool locked)
 #include "dosvm_uart_test.inc"
 #include "dosvm_fx4_test.inc"
 #include "dosvm_fx16_test.inc"     /* fx-16: T23 trial e831e685 replays */
+#include "dosvm_fx22_test.inc"     /* fx-22: T23 trial f441c5bd full-screen return */
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
@@ -1023,6 +1028,7 @@ int main(void)
         free(ram);fflush(stdout);return 0;
     }
     if (getenv("CIUKI_VM_FX16")) { test_fx16(); printf("fx-16 checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
+    if (getenv("CIUKI_VM_FX22")) { test_fx22(); printf("fx-22 checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
     if (getenv("CIUKI_VM_SERIAL")) { test_serial_uart(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_WAIT_PRESENT")) {
         test_wait_present(); test_client_boundary(); test_video_presenter(); test_fullscreen_vbe();
@@ -1073,6 +1079,7 @@ int main(void)
     test_fullscreen_service();
     test_fullscreen_more_modes();
     test_fullscreen_vbe();
+    test_fx22();
     test_startup();
     test_quake_start();
     CHECK(guest_enters==4 && deletes>1); /* includes f3-40 worker IRQ reentry */

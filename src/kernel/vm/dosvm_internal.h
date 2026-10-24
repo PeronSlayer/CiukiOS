@@ -229,6 +229,8 @@ struct dosvm {
     bool disk_busy; struct kwait disk_wait;
     uint64_t boot_deadline, input_since, ticks, timer_cycles, clock_ms, record_window;
     uint64_t parked_ms;              /* fx-16: virtual time discarded while parked */
+    int64_t time_offset;             /* G1: DOS TIME/DATE set inside this VM, seconds */
+    uint8_t cmos_index;              /* G1: last port 70h index (clock registers) */
     uint32_t bios_ticks, record_lines;
     bool started, a20, table_ready, base_open, overlay_open, overlay_created;
     uint8_t midnight, disk_status;
@@ -385,6 +387,7 @@ struct dosvm {
     unsigned console_length;
     cvga_geometry video_geometry;
     bool video_modex, video_chain4;
+    bool clipboard_mark;
     uint8_t video_dac_mask;
     uint16_t video_row_base[DOSVM_VIDEO_HEIGHT];
     uint8_t video_row_pan[DOSVM_VIDEO_HEIGHT];
@@ -501,6 +504,15 @@ int dosvm_vbe_flush(struct dosvm *, bool force);
 int dosvm_vbe_present(struct dosvm *, int (*)(void *, unsigned, const void *, unsigned),
                       void *, uint64_t, struct ciuki_rect *);
 void dosvm_fullscreen_mode_changed(struct dosvm *);
+/* fx-22: true when the calling task may use the physical aperture for this
+ * full-screen owner now (its continuation before the revoke, or the switch
+ * service); a write marks the pages it touches dirty. */
+bool dosvm_fullscreen_aperture(struct dosvm *, uint32_t linear, unsigned bytes, bool write);
+/* fx-22: a switch transaction holds this VM (entry/return in progress). */
+bool dosvm_fullscreen_pinned(const struct dosvm *);
+/* fx-22: the calling task is running the switch transaction itself. */
+bool dosvm_fullscreen_service(void);
+#define DOSVM_FULLSCREEN_PIN_WAIT_MS 3000u
 bool dosvm_shell_idle(const struct dosvm *);
 int dosvm_vga_fault(struct dosvm *, struct v86_frame *);
 void dosvm_vga_burst(struct dosvm *, struct v86_frame *);

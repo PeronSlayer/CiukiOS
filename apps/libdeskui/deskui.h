@@ -311,6 +311,11 @@ struct du_dialog {
      * the dialog while it is running. */
     int (*accept)(struct du_ui *, int button, void *);
     void *accept_ctx;
+    /* Property-sheet pages reuse the modal controls and their keyboard route. */
+    int sheet;
+    void (*changed)(struct du_ui *, const struct du_event *, void *);
+    void (*paint)(struct du_ui *, void *);
+    void *sheet_ctx;
 };
 
 struct du_timer { uint64_t deadline, interval; int id, active, repeat; };
@@ -416,6 +421,13 @@ void du_input_box(struct du_ui *, int id, const char *title, const char *prompt,
 int du_file_dialog(struct du_ui *, int id, int save, const char *title, const char *folder,
                    const char *name, du_lister, void *ctx);
 void du_progress(struct du_ui *, int id, const char *title, const char *text, unsigned value, unsigned total);
+/* OK=0, Cancel=1, Apply=2; accept may keep the sheet open after Apply/error.
+ * Control slots 4..9 are caller-owned, boxes relative to the sheet body.
+ * Page labels and callbacks remain valid until the sheet closes. */
+void du_property_sheet(struct du_ui *, int id, const char *title, int width, int height,
+                       const struct du_item *pages, unsigned count);
+struct du_widget *du_property_control(struct du_ui *, unsigned slot, enum du_kind, int id,
+                                     struct du_rect, const char *text);
 void du_dialog_icon(struct du_ui *, const uint32_t *argb32);
 void du_dialog_close(struct du_ui *);
 int du_dialog_id(const struct du_ui *);
@@ -462,7 +474,20 @@ struct du_window {
     void *user;
     /* f2-33: v2 messages the glue does not consume (WINDOW_INFO, TASK_RESULT). */
     void (*message)(struct du_window *, const struct desk_packet *, void *);
+    /* G3 end of session (WM_QUERYENDSESSION, protocol.h QUERY_END_SESSION).
+     * query_end_session, when set, answers the query: DU_SESSION_AGREE,
+     * DU_SESSION_VETO, or DU_SESSION_ASKING after showing a prompt (then
+     * du_window_session_reply). When NULL, the glue asks close_request: a
+     * nonzero result agrees; zero means the program shows its save prompt,
+     * and the program's later du_window_close() agrees (the window stays
+     * open until END_SESSION) while du_window_close_reply(w, 0) vetoes.
+     * END_SESSION(1) closes the window without asking again. */
+    int (*query_end_session)(struct du_window *, uint32_t flags, void *);
+    int session;                 /* DU_SESSION_* state, internal */
+    uint32_t session_serial, session_flags;
+    int session_reply_pending;   /* answer+1, retried if the queue is full */
 };
+enum { DU_SESSION_VETO = 0, DU_SESSION_AGREE = 1, DU_SESSION_ASKING = 2 };
 int du_window_open(struct du_window *, struct du_ui *, int channel, int width, int height, const char *title);
 int du_window_open_resizable(struct du_window *, struct du_ui *, int channel, int width, int height,
                              const char *title, int min_width, int min_height);
@@ -473,9 +498,13 @@ int du_window_queue(struct du_window *, struct ciuki_message *);  /* f2-33: any 
 int du_window_move(struct du_window *, int x, int y);
 int du_window_set_title(struct du_window *, const char *title);
 void du_window_close(struct du_window *);
-/* Reply to CLOSE_REQUEST: later=1 defers once to 30 s, later=0 declines it.
- * A close_request callback returning zero automatically queues later=1. */
+/* Reply to CLOSE_REQUEST: later=1 (the program asks the user; no deadline
+ * while it answers PINGs), later=0 declines it (the user cancelled). A
+ * close_request callback returning zero automatically queues later=1. While
+ * an end-of-session query waits for the user, later=0 vetoes the session. */
 void du_window_close_reply(struct du_window *, int later);
+/* G3: the answer to a query that returned DU_SESSION_ASKING (1 agree, 0 veto). */
+void du_window_session_reply(struct du_window *, int agree);
 /* fx-19 DragAcceptFiles: on=1 makes the window a WM_DROPFILES-style drop
  * target; dropped files arrive as DU_EV_DROPFILES. du_drop_file copies the
  * index-th dropped path (POSIX) and returns the number of dropped items, or

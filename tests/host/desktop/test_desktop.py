@@ -40,15 +40,16 @@ SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "autoplay.c", "a
 # F2-82: intentional orb geometry, well and sphere changes in shell frames.
 # F2-83: shaded bars, coverage rims and task buttons; desktop-shell.md.
 # F2-99: only the new software arrow/shadow footprint differs (integ-fix1 pixel comparison).
+# G4: the menus underline their access keys (the dialogs frames show menus).
 LOOK_GOLDENS = {
-    "ciuki-blue-desktop.ppm": "058a4fbb4c4e04bf6ac01288c495745c83337b5aa7e915ac484e05598703a0bd",
-    "ciuki-blue-dialogs.ppm": "c00e28e8dabc55a2ac0088b8742dd842a9676ebd86cddf80cd69601d88edbbef",
-    "ciuki-blue-tray-disabled.ppm": "3b0a7e9cc1586ca34dce02ce0426e05f083634fefeff1f650f0d1384b34f7239",
-    "ciuki-blue-tray-media.ppm": "a4e67c10442f7ff18bff873fc947e5152fab95e58c7062eef36ffd360025d530",
-    "platinum-desktop.ppm": "3f03a4849901fe6227d7d39794d87b1a7e3fe633203ed3eccc4e3a1d16637246",
-    "platinum-dialogs.ppm": "36daf4f99be6dbb9173e469ca1897597fa04818f7fecd9aabd84f861aca07a24",
-    "platinum-tray-disabled.ppm": "44f8b04ddc8ac22ad50af2812015343a74528121d2bf15a0dcdf71ee302d5844",
-    "platinum-tray-media.ppm": "7709f3264ee868c51a1ad09c848b3d2fe8dd45f2baf33ed6b1f8a6f8f221c8fb"
+    "ciuki-blue-desktop.ppm": "b46e3cc28c49d9f171e433dc001d0af13c3392e6e76fa64411aecc264d89d5e5",
+    "ciuki-blue-dialogs.ppm": "52080fc9dfaf9169ea707ff625e3a9944ab3b6c690cc6456c20e24ffa251e9e2",
+    "ciuki-blue-tray-disabled.ppm": "e6448c5e6cff1af18be71510d8edc2898e309da6bf27daaf31e04f3de2551e3d",
+    "ciuki-blue-tray-media.ppm": "7908574c1328c6dc007c6915f686e58e245b020552f299dc6cbb0480e9a5cf83",
+    "platinum-desktop.ppm": "8748fdd63953ebd0ac92660d2d4770d26dd79ac7e2c5d05afc3d59d97564e8f6",
+    "platinum-dialogs.ppm": "3301b55b981212981aa39174c449e35bfd8063ba5f790fcf7a4e93dac7d07570",
+    "platinum-tray-disabled.ppm": "5daa1a2a2ac41a643b565895372bdf6c541125397cec3cde3aecd0aa594a4fae",
+    "platinum-tray-media.ppm": "0f68811b59e9f824f299017d3895141bb6a927f4efd456f59d7f3db04aa397df"
 }
 
 # Public set-1 codes the kernel reports for the QMP qcodes of the desktop cases (E0 keys | 0x100).
@@ -581,7 +582,7 @@ class DesktopTests(unittest.TestCase):
             self.assertIn("PASS dosbox autorun", result.stdout)
 
     def test_dosbox_loading(self):
-        self.dosbox_loading_replay(range(22), True)  # fx-4b: 20 verify wait, 21 mismatch
+        self.dosbox_loading_replay(range(23), True)  # fx-4b: 20 verify wait, 21 mismatch; G3: 22 end of session
 
     def test_dosbox_save_quota(self):
         self.dosbox_loading_replay((18, 19), False)
@@ -809,7 +810,7 @@ class AppCaseReplayTests(unittest.TestCase):
         cls.env = dict(os.environ, TMPDIR=str(folder), ASAN_OPTIONS="detect_leaks=0")
         include = folder / "include/ciuki"
         include.mkdir(parents=True)
-        for name in ("channel.h", "surface.h", "spawn.h", "proc.h", "audio.h", "net.h", "media.h", "power.h", "display.h", "registry.h", "audio_preference.h"):
+        for name in ("channel.h", "surface.h", "spawn.h", "proc.h", "audio.h", "net.h", "media.h", "power.h", "display.h", "registry.h", "audio_preference.h", "fileinfo.h"):
             shutil.copy2(ROOT / "sdk/sysroot-overlay/include/ciuki" / name, include / name)
         # Host stand-ins: CU_PTR keeps the whole pointer, the report call takes it (desktop_gate_test.c does the same).
         (include / "runtime.h").write_text("/* app replay */\n#include <ciuki/abi.h>\n#include <stdint.h>\n"
@@ -827,10 +828,12 @@ class AppCaseReplayTests(unittest.TestCase):
         posix = ["-D_POSIX_C_SOURCE=200809L"]
         units = [("replay_desktop", os_calls, host / "replay_desktop.c"),
                  *((f"desktop_{n}", [], ROOT / f"apps/desktop/{n}.c") for n in ("client", "protocol", "input", "compositor", "theme",
-                                                                                  "shell", "autoplay", "autoplay_content", "sounds", "settings", "settings_io", "wallpaper", "wallpaper_io", "keymap", "image", "folder")),
+                                                                                  "clipboard", "shell", "autoplay", "autoplay_content", "sounds", "settings", "settings_io", "wallpaper", "wallpaper_io", "keymap", "image", "folder")),
                  *((f"deskui_{n}", posix, ROOT / f"apps/libdeskui/{n}.c") for n in ("draw", "widgets", "list", "menu", "dialog", "textarea")),
                  *((f"deskui_{n}", posix + icons.defines(), ROOT / f"apps/libdeskui/{n}.c") for n in ("icons", "icon_map")),
                  ("deskui_client", os_calls, ROOT / "apps/libdeskui/client.c"),
+                 ("deskui_clipboard", posix, ROOT / "apps/libdeskui/clipboard.c"),
+                 ("deskui_clipstore", posix, ROOT / "apps/libdeskui/clipstore.c"),
                  ("deskui_recent", os_calls, ROOT / "apps/libdeskui/recent.c"),   # CiukNote's recent list (off in --test runs)
                  ("files_main", os_calls + ["-Dmain=files_main"], ROOT / "apps/files/files.c"),
                  ("files_app", posix + ["-include", str(host / "replay_files_worker.h")], ROOT / "apps/files/app.c"), ("files_model", posix, ROOT / "apps/files/model.c"),

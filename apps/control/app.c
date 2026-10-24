@@ -43,6 +43,7 @@ static struct du_widget *add(struct cp_app *a, enum du_kind k, int id, int x, in
 { return du_add(a->ui, k, id, (struct du_rect){x, y, w, h}, text); }
 static void text(struct cp_app *a, int id, const char *s)
 { struct du_widget *w = du_get(a->ui, id); if (w && strcmp(w->text,s)) { du_set_text(w,s); du_invalidate(a->ui,w->box); } }
+#include "datetime.inc"   /* G1: Date/Time Properties */
 
 #include "network.inc"
 #include "game_properties.inc"
@@ -272,9 +273,7 @@ static void paint(struct du_ui *u, void *user)
             if (swatches[k] == a->cfg.desktop_color) du_outline(c, (struct du_rect){w->box.x - 1, w->box.y - 1, w->box.w + 2, w->box.h + 2}, DU_SELECT);
         }
     } else if (a->page == CP_DATETIME) {
-        du_well(c, (struct du_rect){24, 44, 452, 54}, DU_WINDOW);
-        int font = desk_theme->font_large;
-        du_text_font(c, font, 24 + (452 - du_text_width_font(font, a->clock_line)) / 2, 71 - desk_font_cap(font) / 2, a->clock_line, DU_SELECT);
+        dt_paint(a, c);
     } else if (a->page == CP_DISPLAY && a->display_tab == CP_APPEARANCE) {
         const struct desk_theme *t=chosen(a);
         uint32_t colours[]={t->face,t->window,t->title[0],t->select,t->accent};
@@ -411,7 +410,8 @@ void cp_tick(struct cp_app *a)
         for (unsigned i = 0; i < lines; i++) text(a,1800+(int)i,a->power_lines[i]);
         return;
     }
-    if (a->page!=CP_DATETIME && a->page!=CP_SYSTEM) return;
+    if (a->page==CP_DATETIME) { dt_tick(a); return; }
+    if (a->page!=CP_SYSTEM) return;
     char previous[sizeof(a->clock_line)]; memcpy(previous,a->clock_line,sizeof(previous));
     uint64_t t = a->host.now ? a->host.now(a->host.ctx) : 0;
     static const char *const wd[] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
@@ -482,6 +482,7 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
         a->preview_pending=2; a->preview_valid=0; du_invalidate(u,(struct du_rect){24,44,208,188});
         return;
     }
+    if (dt_event(a, e)) return;
     switch (e->id) {
     case 950:
         if (e->type==DU_EV_SELECT && e->index>=0 && (unsigned)e->index<a->autoplay_count) a->autoplay_selected=(unsigned)e->index;
@@ -1287,12 +1288,7 @@ static void build(struct cp_app *a)
     add(a,DU_BUTTON,C_HARDWARE,124,294,220,24,"Test audio hardware");
     add(a,DU_LABEL,C_AUDIO,24,326,452,14,"");
     } else if (a->page == CP_DATETIME) {
-    /* Date & Time */
-    add(a, DU_LABEL, C_DATE, 24, 106, 452, 14, "");
-    add(a, DU_BUTTON, C_H24, 24, 134, 200, 24, "");
-    add(a, DU_BUTTON, C_SECONDS, 24, 164, 200, 24, "");
-    add(a, DU_LABEL, C_TIME_NOTE1, 24, 202, 452, 14, "The clock reads the computer's real-time clock (UTC).");
-    add(a, DU_LABEL, C_TIME_NOTE2, 24, 216, 452, 14, "Setting it is not available yet: the kernel has no call for it.");
+    dt_build(a);
     } else if (a->page==CP_UNINSTALL) {
         int count=a->host.uninstall_list ? a->host.uninstall_list(a->host.ctx,a->uninstall,CP_PROGRAM_MAX) : -ENOSYS;
         a->uninstall_count=count>=0 && count<=(int)CP_PROGRAM_MAX ? (unsigned)count : 0;

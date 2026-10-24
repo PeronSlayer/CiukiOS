@@ -12,7 +12,8 @@
 #include <ciuki/dosvm.h>
 #include <ciuki/channel.h>
 #include <ciuki/surface.h>
-#include <ciuki/desktop.h>
+#include "../desktop/protocol.h"
+#include "clipboard.h"
 #include <errno.h>
 #include <poll.h>
 #include <signal.h>
@@ -37,6 +38,24 @@ static int send_packet(int fd, struct ciuki_message *m)
     int e;
     do { e = ciuki_channel_send(fd, m, 0); } while (e < 0 && errno == EINTR);
     return e;
+}
+/* G3 end of session: SESSION_ANSWER (serial 0 AGREE registers the window). */
+static int session_answer(int channel, uint32_t serial, uint32_t answer)
+{
+    struct ciuki_message m;
+    desk_message(&m, DESK_SESSION_ANSWER, 12);
+    desk_put32(m.data + 4, serial); desk_put32(m.data + 8, answer);
+    return send_packet(channel, &m);
+}
+/* A VM whose program runs (not at an idle DOS prompt, not stopped) cannot
+ * be shut down automatically (Windows 98 warns; the user decides). */
+static int dos_program_active(uint32_t id, uint32_t generation)
+{
+    if (!id) return 0;
+    struct ciuki_dosvm_command c;
+    command(&c, id, generation);
+    if (ciuki_dosvm(CIUKI_DOSVM_STATUS, &c)) return 0;   /* gone: nothing to lose */
+    return c.state != CIUKI_DOSVM_STOPPED && !(c.changed & CIUKI_DOSVM_SHELL_READY);
 }
 static uint64_t now_ms(void)
 {
@@ -94,7 +113,7 @@ static int pre_create_service(int channel, uint32_t *server, int *configured, in
 {
     for (unsigned budget = 0; budget < 32; budget++) {
         struct ciuki_message m;
-        int n = ciuki_channel_recv(channel, &m, DONTWAIT);
+        int n = dos_clip_recv(&m);
         if (n < 0 && (errno == EAGAIN || errno == EINTR)) return 0;
         if (n <= 0) return 1;                                     /* desktop gone */
         struct desk_packet packet;
@@ -104,6 +123,11 @@ static int pre_create_service(int channel, uint32_t *server, int *configured, in
         if (!valid) return -1;
         *server = m.sender_pid;
         if (packet.opcode == DESK_CLOSED || packet.opcode == DESK_CLOSE_REQUEST) return 1;
+        if (packet.opcode == DESK_END_SESSION && packet.focused) return 1;
+        if (packet.opcode == DESK_QUERY_END_SESSION) {          /* no VM yet: nothing to lose */
+            if (session_answer(channel, packet.serial, DESK_SESSION_AGREE)) return -1;
+            continue;
+        }
         if (packet.opcode == DESK_CONFIGURE) {
             if (packet.width != CIUKI_DOSVM_WIDTH || packet.height != CIUKI_DOSVM_HEIGHT) return -1;
             *configured = 1;
@@ -165,6 +189,7 @@ int main(int argc, char **argv)
     uint32_t id = 0, generation = 0, server = 0;
     uint32_t *pixels = ciuki_surface_map(surface, PROT_READ | PROT_WRITE);
     if (pixels == (void *)-1 || !pixels) { close(surface); return 1; }
+    dos_clip_init(channel,pixels);
     struct du_canvas canvas = {pixels, CIUKI_DOSVM_WIDTH, CIUKI_DOSVM_HEIGHT,
                               {0, 0, CIUKI_DOSVM_WIDTH, CIUKI_DOSVM_HEIGHT}};
     const char *icon = dosbox_launch_icon(typed);
@@ -192,6 +217,7 @@ int main(int argc, char **argv)
     desk_put32(m.data + 12, (uint32_t)len); memcpy(m.data + 16, name, len);
     m.fd_count = 1; m.fds[0] = surface;
     if (send_packet(channel, &m)) goto done;
+    if (session_answer(channel, 0, DESK_SESSION_AGREE)) goto done;   /* G3 registration */
     int configured = 0, focused = 0;
     /* fx-4b: after the desktop starts, the kernel checks the DOS system files
      * in the background. While it runs, show its progress and keep answering
@@ -258,6 +284,7 @@ int main(int argc, char **argv)
     }
     int running = 1, fullscreen = 0, fullscreen_painted = 0;
     while (running) {
+        dos_clip_vm(id,generation,server);
         for (unsigned budget = 0; budget < 32; budget++) {
             int n = ciuki_channel_recv(channel, &m, DONTWAIT);
             if (n < 0 && (errno == EAGAIN || errno == EINTR)) break;
@@ -269,22 +296,39 @@ int main(int argc, char **argv)
             if (!valid) goto done;
             server = m.sender_pid;
             if (packet.opcode == DESK_CLOSED) { running = 0; break; }
+            if (packet.opcode == DESK_QUERY_END_SESSION) {
+                /* G3: an idle prompt agrees; a running program gets the
+                 * desktop's "cannot shut down this program automatically". */
+                if (session_answer(channel, packet.serial, dos_program_active(id, generation) ?
+                                   DESK_SESSION_DOS_ACTIVE : DESK_SESSION_AGREE)) goto done;
+                continue;
+            }
+            if (packet.opcode == DESK_END_SESSION) {
+                if (packet.focused) { running = 0; break; }  /* every program agreed: close (forced if still running) */
+                continue;
+            }
             if (packet.opcode == DESK_CLOSE_REQUEST) {
                 command(&c,id,generation);
                 if (id && ciuki_dosvm(CIUKI_DOSVM_CLOSE,&c)) {
                     if (errno!=EBUSY) goto done;
-                    /* Decline before the desktop's forced-close deadline.
-                     * Keep forwarding input so the game can save and quit. */
-                    desk_message(&m,DESK_CLOSE_ACK,8); desk_put32(m.data+4,0);
+                    /* G3: the program is still running (it was asked to quit
+                     * through Ctrl+C and may decline): the desktop shows the
+                     * Windows 98 warning; Yes ends this process, No keeps the
+                     * session. Input is still forwarded so the game can save. */
+                    desk_message(&m,DESK_CLOSE_ACK,8); desk_put32(m.data+4,DESK_CLOSE_DOS_ACTIVE);
                     if (send_packet(channel,&m)) goto done;
-                    fullscreen_title="Game is still running";
-                    snprintf(fullscreen_notice,sizeof(fullscreen_notice),"Quit the game to close this window. Your session has been kept.");
-                    fullscreen_notice_until=now_ms()+5000; notice_painted=0;
                     continue;
                 }
                 id=0; running=0; break;
             }
+            if (packet.opcode==DESK_DOS_CLIPBOARD) {
+                int error=dos_clip_action(packet.flags);
+                if (error) { snprintf(fullscreen_notice,sizeof(fullscreen_notice),"Clipboard: %s",strerror(-error)); fullscreen_notice_until=now_ms()+3000; notice_painted=0; }
+                continue;
+            }
+            if (dos_clip_input(&packet)) continue;
             if (packet.opcode == DESK_DOS_FULLSCREEN && id) {
+                (void)dos_clip_action(0);
                 command(&c,id,generation); c.focused=!fullscreen;
                 if (ciuki_dosvm(CIUKI_DOSVM_FULLSCREEN,&c)) {
                     snprintf(fullscreen_notice,sizeof(fullscreen_notice),"%s",strerror(errno));
@@ -313,6 +357,12 @@ int main(int argc, char **argv)
             }
         }
         if (!running) break;
+        dos_clip_tick(focused);
+        if (configured && dos_clip_dirty()) {
+            desk_message(&m,DESK_DAMAGE,20); desk_put32(m.data+12,640); desk_put32(m.data+16,480);
+            if (send_packet(channel,&m)) goto done;
+            redraw=1;
+        }
         if (failure) goto panel;
         /* Producer events and the VM's fractional VGA deadline determine
          * the frame rate. This timeout bounds input/lifecycle service only. */
@@ -409,7 +459,7 @@ int main(int argc, char **argv)
             result = 1;
         }
         if (loading) goto panel;
-        if (configured && (redraw || (video_events&CIUKI_DOSVM_EVENT_VIDEO))) {
+        if (configured && !dos_clip_marking() && (redraw || (video_events&CIUKI_DOSVM_EVENT_VIDEO))) {
             command(&c, id, generation);
             c.presentation.redraw=redraw;
             c.presentation.flags=precise_rows ? CIUKI_DOSVM_PRESENT_SCANLINES : 0;
@@ -468,6 +518,7 @@ panel:
     }
     if (!failure) result = 0;
 done:
+    dos_clip_destroy();
     command(&c, id, generation);
     if (id && ciuki_dosvm(CIUKI_DOSVM_CLOSE, &c)) result = 1;
     desk_message(&m, DESK_CLOSE, 4); send_packet(channel, &m);

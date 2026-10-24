@@ -1379,6 +1379,7 @@ static __attribute__((noinline)) int logical_once(struct vfs *v,struct fat_volum
         return e;
     }
     case FAT_TX_SET_METADATA: return VFS_IO_MODE(v,m,fat_set_metadata(vol,a.entry,a.attr,a.times));
+    case FAT_TX_SET_LABEL: return VFS_IO_MODE(v,m,fat_set_label(vol,a.name));
     }
     return -FS_EINVAL;
 }

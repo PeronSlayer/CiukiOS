@@ -7,6 +7,8 @@
 /* fx-17b: the floppy platform is optional (no FDC, host tests). */
 bool floppy_drive_present(unsigned drive) __attribute__((weak));
 int floppy_mount(unsigned drive) __attribute__((weak));
+/* fx-21b: absent from storage-only host builds without the USB core. */
+uint32_t usb_unrecognized_devices(void) __attribute__((weak));
 static bool floppy_drive(unsigned d) { return d<2 && floppy_drive_present && floppy_drive_present(d); }
 /* f5-12B2: CD audio devctls (MEDIA_CD_*) live in media_cd.c. */
 int media_cd_devctl(struct process *p, struct storage *s, uint32_t op, uint32_t address, uint32_t bytes);
@@ -26,6 +28,73 @@ int media_poll_events(struct file_description *f)
 {
     return !f->observed_valid || f->observed != __atomic_load_n(&media_serial, __ATOMIC_ACQUIRE) ? POLLIN : 0;
 }
+/* G6: Win32 SetVolumeLabel / FAT 1.03 label rules: printable ASCII, upper
+ * case, no * ? . , ; : / \ | + = < > [ ] ", at most 11 bytes, space padded. */
+static int media_label_encode(const char *in, char out[11])
+{
+    unsigned n=0;
+    for (;n<12 && in[n];n++) {
+        unsigned char c=(unsigned char)in[n];
+        if (n==11 || c<32 || c>126) return -EINVAL;
+        for (const char *bad="*?.,;:/\\|+=<>[]\"";*bad;bad++) if (c==(unsigned char)*bad) return -EINVAL;
+        out[n]=(char)(c>='a' && c<='z' ? c-32 : c);
+    }
+    if (n==12) return -EINVAL;
+    for (unsigned k=n;k<11;k++) out[k]=' ';
+    return 0;
+}
+/* The label of drive r->drive in vfs: GET fills label/flags, SET (padded
+ * non-null) publishes the new label first. Takes the namespace lock. */
+static int media_label_locked_apply(struct vfs *vfs, struct ciuki_media_label *r, const char *padded)
+{
+    unsigned d=r->drive;
+    if (d>=26) return -EINVAL;
+    vfs_lock(vfs,0);
+    struct fat_volume *v=vfs->volumes[d];
+    struct fs_ro_volume *ro=vfs->ro_volumes[d];
+    bool readonly=!v || v->readonly || (disk_write_denied && disk_write_denied(d));
+    int e=v && v->mounted ? 0 : ro ? -EROFS : -ENOENT;
+    if (!e && padded) {
+        if (readonly) e=-EROFS;
+        else {
+            uint32_t turn=0;
+            e=px_error(vfs_turn_take_locked(vfs,vfs_drive_mask(d),&turn));
+            if (!e) {
+                vfs_reserve_locked(vfs,vfs_drive_mask(d));
+                vfs_tag_locked(vfs,"label"); vfs_site_locked(vfs,"native");
+                e=v==vfs->volumes[d] && v->mounted ? px_error(vfs_fat_transaction_locked(vfs,v,
+                    (struct fat_transaction_args){.op=FAT_TX_SET_LABEL,.name=padded})) : -EIO;
+            }
+            vfs_turn_drop_locked(vfs,turn);
+        }
+    }
+    if (!e || (e==-EROFS && !padded)) {
+        e=0;
+        memset(r->label,0,sizeof(r->label));
+        if (v) memcpy(r->label,v->volume_label,11);
+        else if (ro) memcpy(r->label,ro->volume_label,11);
+        r->flags=readonly ? CIUKI_MEDIA_LABEL_READ_ONLY : 0;
+    }
+    vfs_unlock(vfs);
+    return e;
+}
+static int media_label(struct storage *s,uint32_t op,uint32_t address,uint32_t bytes)
+{
+    struct ciuki_media_label r;
+    if (bytes!=sizeof(r)) return -EINVAL;
+    int e=copy_from_user(&r,address,sizeof(r)); if (e) return e;
+    if (r.version!=CIUKI_MEDIA_VERSION) return -EOPNOTSUPP;
+    if (r.size!=sizeof(r) || r.drive>=26 || r.reserved || r.flags) return -EINVAL;
+    char padded[11];
+    if (op==MEDIA_SET_LABEL) {
+        bool terminated=false; for (unsigned k=0;k<sizeof(r.label);k++) if (!r.label[k]) terminated=true;
+        if (!terminated) return -EINVAL;
+        if ((e=media_label_encode(r.label,padded))) return e;
+    }
+    if (!s || !s->ready) return -ENOENT;
+    e=media_label_locked_apply(&s->vfs,&r,op==MEDIA_SET_LABEL ? padded : 0);
+    return e ? e : op==MEDIA_SET_LABEL ? 0 : copy_to_user(address,&r,sizeof(r));
+}
 int media_devctl(struct process *p,int32_t fd,uint32_t op,uint32_t address,uint32_t bytes)
 {
     if (!file_fd_object(p,fd)) return -EBADF;
@@ -33,6 +102,7 @@ int media_devctl(struct process *p,int32_t fd,uint32_t op,uint32_t address,uint3
     if (!f || f->node->kind!=PX_MEDIA) return -ENOTTY;
     struct storage *s=storage_get();
     if (op>=MEDIA_CD_STATE && op<=MEDIA_CD_POSITION) return media_cd_devctl(p,s,op,address,bytes);
+    if (op==MEDIA_GET_LABEL || op==MEDIA_SET_LABEL) return media_label(s,op,address,bytes);
     /* Namespace publication selects immutable mount identity/label fields.
      * Queries never invoke filesystem/transport callbacks or reserve a drive. */
     if (op==MEDIA_GET_BLOCKERS) {
@@ -146,12 +216,14 @@ int media_devctl(struct process *p,int32_t fd,uint32_t op,uint32_t address,uint3
         int e=copy_from_user(&state,address,bytes); if (e) return e;
         uint32_t version=state.version;
         if (version!=CIUKI_MEDIA_VERSION && version!=CIUKI_MEDIA_VERSION_1) return -EOPNOTSUPP;
-        if (state.size!=bytes || state.reserved ||
+        if (state.size!=bytes || state.usb_unrecognized ||
             bytes!=(version==CIUKI_MEDIA_VERSION ? sizeof(state) : sizeof(struct ciuki_media_state_v1))) return -EINVAL;
         memset(&state,0,sizeof(state)); state.version=version; state.size=bytes;
         /* fx-26: the serial is taken before the state, so a change made
          * while this snapshot runs leaves the description readable. */
         f->observed=__atomic_load_n(&media_serial,__ATOMIC_ACQUIRE); f->observed_valid=true;
+        /* fx-21b: v1 keeps its reserved word zero. */
+        if (version==CIUKI_MEDIA_VERSION && usb_unrecognized_devices) state.usb_unrecognized=usb_unrecognized_devices();
         if (s && s->ready) {
             vfs_lock(&s->vfs,0);
             for (unsigned d=4;d<26;d++) {
