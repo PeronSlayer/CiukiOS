@@ -1163,13 +1163,15 @@ int cache_publish(struct cache_reservation *r, const struct cache_image *images,
         seen|=1u<<images[i].slot;
     }
     struct block_cache *c=r->cache;
-    /* Queue for metadata in the established VFS -> cache order (as peek
-     * does). A try-lock here livelocks two native FIFO publishers: each
-     * retry's cache_reservation_wait serves the other's queued ticket, so
-     * neither following try-lock can succeed. No device/credit/pin/barrier
-     * wait happens under this lock; those still return EAGAIN below. */
-    int admission=fs_lock_take_request(&c->lock,VFS_WAIT_CACHE);
-    if (admission) return admission;
+    /* Queue for metadata in the established VFS -> cache order, with the
+     * plain FIFO take as cache_peek does. A try-lock here livelocks two
+     * native FIFO publishers: each retry's cache_reservation_wait serves
+     * the other's queued ticket, so neither following try-lock can succeed.
+     * The request-scoped take would check the request's deadline and poll
+     * with sleeps while this caller holds the namespace lock (review of the
+     * T23 fix). No device/credit/pin/barrier wait happens under this lock;
+     * those still return EAGAIN below. */
+    fs_lock_take(&c->lock);
     struct cache_device *s; int e=reservation_status(r,&s);
     if (!e && (dependency>s->accepted || r->unassigned)) e=-FS_EINVAL;
     if (!e && (s->barrier_active || s->durable<dependency || s->durable<r->published)) e=-FS_EAGAIN;
