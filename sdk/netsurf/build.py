@@ -451,13 +451,8 @@ def build(host=False, clean=False, directory=None):
         shutil.copy2(hp / "lib/libpng.a",prefix / "lib/libpng.a")
         for header in ("png.h","pngconf.h","pnglibconf.h"):
             shutil.copy2(hp / "include" / header,prefix / "include" / header)
-    else:
-        png=folder / "target-png"
-        shutil.copytree(src["libpng"],png,dirs_exist_ok=True)
-        run(["sh","configure","--host=i686-unknown-elf","--disable-shared","--disable-dependency-tracking",
-             "--disable-hardware-optimizations","--prefix="+str(prefix),"CC="+str(cc),"AR=llvm-ar","RANLIB=llvm-ranlib",
-             "CFLAGS="+" ".join(cflags),"CPPFLAGS=-I"+str(prefix / "include"),"LDFLAGS=-L"+str(prefix / "lib")],png,env)
-        run(["make","-j1","install"],png,env)
+    # The target libpng is libpng() above (fx-24, the library list only); G26's
+    # autotools target build also compiled contrib/libtests (feenableexcept).
     common = ["make", "-j1", "CC=" + str(cc), "AR=llvm-ar", "RANLIB=llvm-ranlib", "ARFLAGS=rcsD", "CCACHE=",
               "BUILD=" + subprocess.check_output(["clang", "-dumpmachine"], text=True).strip(),
               "HOST=" + ("x86_64-unknown-linux-gnu" if host else "i686-unknown-elf"),
@@ -484,7 +479,9 @@ def build(host=False, clean=False, directory=None):
     # Build only the desktop toolkit, without its v1/v2 client transport.
     desk_objects=[]
     for source in [p for p in sorted((ROOT / "apps/libdeskui").glob("*.c")) if p.name!="client.c"] + sorted((ROOT / "apps/libprint").glob("*.c")) + [ROOT / "apps/desktop" / n for n in ("protocol.c", "compositor.c", "theme.c")]:
-        obj=folder / ("desk-" + source.stem + ".o")
+        # The folder is part of the name: libdeskui/dialog.c and libprint/dialog.c (G31)
+        # must not replace each other in the archive.
+        obj=folder / ("desk-" + source.parent.name + "-" + source.stem + ".o")
         run([cc,*cflags,*host_header,"-I" + str(adapter_headers),"-I" + str(ROOT),"-c",source,"-o",obj],env=env)
         desk_objects.append(obj)
     run(["llvm-ar","rcsD",prefix / "lib/libdeskui.a",*desk_objects],env=env)

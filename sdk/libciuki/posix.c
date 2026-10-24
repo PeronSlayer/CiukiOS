@@ -180,6 +180,19 @@ int mkstemp(char *name) {
     }
     if(pthread_mutex_unlock(&temp_lock)) { if(fd>=0)close(fd);errno=EIO;return -1; }return fd;
 }
+/* mkdtemp beside mkstemp: newlib defines both in one object (mktemp.c), so
+ * a program using mkdtemp would pull a second mkstemp into the link. */
+char *mkdtemp(char *name) {
+    size_t n=name?strlen(name):0;if(n<6||strcmp(name+n-6,"XXXXXX")) { errno=EINVAL;return NULL; }
+    if(pthread_mutex_lock(&temp_lock)) { errno=EIO;return NULL; }
+    int ok=0;for(unsigned attempt=0;attempt<10000;++attempt) {
+        unsigned k=(++temp_counter+(unsigned)getpid()*2654435761u);
+        for(unsigned i=0;i<6;++i) { name[n-1-i]="abcdefghijklmnopqrstuvwxyz0123456789"[k%36];k/=36; }
+        if(!mkdir(name,0700)) { ok=1;break; }if(errno!=EEXIST)break;
+    }
+    int e=errno;if(pthread_mutex_unlock(&temp_lock)) { if(ok)rmdir(name);errno=EIO;return NULL; }
+    if(!ok) { errno=e;return NULL; }return name;
+}
 FILE *tmpfile(void) {
     char name[]="/tmp/ciuki-XXXXXX";int fd=mkstemp(name);if(fd<0)return NULL;
     if(unlink(name)<0) { int e=errno;close(fd);errno=e;return NULL; }
