@@ -587,7 +587,9 @@ int main(void)
         self.assertIn('extern int32_t power_syscall(uint32_t action) __attribute__((weak));', syscall)
         power = (ROOT / 'src/kernel/core/power.c').read_text()
         body = power.split('int32_t power_syscall(uint32_t action)', 1)[1]
-        self.assertLess(body.index('caller->pid != supervisor_desktop_pid()'), body.index('CIUKI_POWER_QUERY'))
+        # G11b: the caller check is power_authorized() (the desktop, or Setup with its capability).
+        self.assertLess(body.index('if (!power_authorized(caller)) return -EPERM;'), body.index('CIUKI_POWER_QUERY'))
+        self.assertIn('caller->pid == supervisor_desktop_pid()', power.split('static bool power_authorized(', 1)[1].split('}', 1)[0])
         # fx-5: call 73 runs one serialized sequence after the caller check.
         self.assertLess(body.index('CIUKI_POWER_QUERY'), body.index('power_sequence(off)'))
         sequence = power.split('static int power_sequence(bool off)', 1)[1].split('int32_t power_syscall(uint32_t action)', 1)[0]
