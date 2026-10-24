@@ -288,6 +288,7 @@ void desk_shell_network_update(struct desktop *, const struct ciuki_net_state *)
 void desk_shell_clock_damage(struct desktop *, uint64_t previous_second);
 struct desk_box desk_shell_tray_box(const struct desktop *);
 struct desk_box desk_shell_tray_icon_box(const struct desktop *, enum sh_tray_icon);
+const char *desk_shell_language_label(const struct desktop *, int *x, int *y);
 struct desk_box desk_shell_clock_box(const struct desktop *);
 void desk_shell_clock_text_at(const struct desktop *, uint64_t, char *, size_t);
 int desk_shell_clock_width_at(const struct desktop *, uint64_t);
@@ -295,7 +296,6 @@ void desk_shell_tray_damage(struct desktop *, int previous_width);
 int desk_shell_power_update(struct desktop *, const struct ciuki_power_status *);
 /* G11: the power meter icon is shown (a valid record and "Show power meter
  * on taskbar"). */
-int desk_shell_power_shown(const struct desktop *);
 /* G11: after each status poll: EVENTS (NULL when unavailable) and QUERY's
  * bits (negative when unavailable): alarms, BIOS sleep requests,
  * PBT_APMPOWERSTATUSCHANGE, the monitor timeout. */

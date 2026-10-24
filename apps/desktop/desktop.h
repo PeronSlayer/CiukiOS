@@ -568,6 +568,15 @@ struct desktop {
     uint64_t vram_check_ns, vram_query_ns;
     int accel_lost;
 };
+/* Win98's meter is a battery gauge: no battery (desktop PC, QEMU), no icon.
+ * Inline so the tray geometry (compositor.c) and the painter share one rule. */
+static inline int desk_shell_power_shown(const struct desktop *d)
+{
+    const struct ciuki_power_status *p=&d->sh.power_status;
+    if (p->version != CIUKI_POWER_VERSION || d->sh.power_meter_hidden) return 0;
+    for (unsigned i=0;i<p->battery_count && i<CIUKI_POWER_BATTERIES;i++) if (p->batteries[i].present!=0) return 1;
+    return 0;
+}
 /* Worker publication only; never inspect live shell state from a worker. */
 static inline void desk_wake(struct desktop *d)
 { if (d && d->wake) d->wake(d->wake_ctx); }

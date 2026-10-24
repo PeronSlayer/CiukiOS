@@ -33,6 +33,9 @@ extern int desk_access_magnifier_on(const struct desktop *) __attribute__((weak)
 /* Every shell colour is a theme colour (desk_theme; DU_* are the same
  * fields under the toolkit's names). The tooltip keeps the classic paper. */
 #define SH_FACE      DU_FACE
+#define SH_LANG_BOX  0x000080u
+#define SH_LANG_TEXT 0xFFFFFFu
+#define SH_LANG_EDGE 0xC0C0C0u
 #define SH_INK       (desk_appearance_active ? desk_appearance.item[AP_MENU].text : DU_INK)
 #define SH_HOT       DU_SELECT
 #define SH_HOT_INK   DU_SELECT_INK
@@ -1791,8 +1794,6 @@ static void bar_text(struct du_canvas *c, int x, int y, const char *text)
     du_text(c,x,y,text,t->topbar_text);
 }
 /* ---- G11 power policy (docs/design/power-policy.md) ---------------------- */
-int desk_shell_power_shown(const struct desktop *d)
-{ return d->sh.power_status.version == CIUKI_POWER_VERSION && !d->sh.power_meter_hidden; }
 static void power_tooltip_damage(struct desktop *d, struct desk_box previous)
 {
     if (d->sh.tooltip != 6) return;
@@ -2062,12 +2063,27 @@ void desk_power_policy_tick(struct desktop *d)
     if (step != d->pbt.standby && !d->pbt.running) broadcast_service(d);   /* the next step starts at once */
 }
 
+/* Win98 internat-style indicator: navy box, white bold code, centred in the
+ * 16 px tray slot; the light edge keeps it visible on dark bars. */
+static int language_bold(const char *code)
+{ return bold_width(code) <= SH_TRAY_ICON_SIZE - 2; }
+const char *desk_shell_language_label(const struct desktop *d, int *x, int *y)
+{
+    const char *code = d->sh.cfg.keyboard==CFG_KEYS_IT ? "It" : "En";
+    struct desk_box b = desk_shell_tray_icon_box(d,SH_TRAY_LANGUAGE);
+    *x = b.x + (b.w - (language_bold(code) ? bold_width(code) : du_text_width(code))) / 2;
+    *y = b.y + (b.h - text_h()) / 2;
+    return code;
+}
 static void draw_tray(struct desktop *d, struct du_canvas *canvas)
 {
     struct du_canvas c = *canvas;
     if(d->sh.cfg.layout_switch) {
         struct desk_box li=desk_shell_tray_icon_box(d,SH_TRAY_LANGUAGE);
-        du_text(&c,li.x,li.y+12,d->sh.cfg.keyboard==CFG_KEYS_IT ? "IT" : "EN",SH_INK);
+        int lx,ly; const char *code=desk_shell_language_label(d,&lx,&ly);
+        du_fill(&c,R(li),SH_LANG_BOX);
+        du_outline(&c,R(li),SH_LANG_EDGE);
+        if(language_bold(code)) bold(&c,lx,ly,code,SH_LANG_TEXT); else du_text(&c,lx,ly,code,SH_LANG_TEXT);
     }
     for (unsigned k=0;k<SH_PROGRAM_TRAY;k++) if (d->sh.program_tray[k].window) {
         struct desk_box b=program_tray_box(d,k);
@@ -2108,9 +2124,9 @@ static void draw_tray(struct desktop *d, struct du_canvas *canvas)
         du_icon_blit(&c,bi.x,bi.y,desk_shell_icon(known && percent < 10 ? "battery-caution" : "battery",SH_TRAY_ICON_SIZE),SH_TRAY_ICON_SIZE,
                      known ? DU_ICON_NORMAL : DU_ICON_DISABLED);
         /* AC is separate from charge: '+' connected, '-' on battery (or APM
-         * backup power), '?' unknown. ACPI and APM records share this path. */
-        du_text(&c,bi.x+9,bi.y+4,p->ac_online == 1 ? "+" : p->ac_online == 0 || p->ac_online == CIUKI_POWER_AC_BACKUP ? "-" : "?",
-                desk_theme->topbar_text);
+         * backup power); unknown AC draws no glyph. ACPI and APM share this path. */
+        if (p->ac_online == 1 || p->ac_online == 0 || p->ac_online == CIUKI_POWER_AC_BACKUP)
+            du_text(&c,bi.x+9,bi.y+4,p->ac_online == 1 ? "+" : "-",desk_theme->topbar_text);
     }
     if (d->sh.resources.visible) {
         /* G30: Tango "applications-system" with a level bar: green, amber (low) or red (critical). */

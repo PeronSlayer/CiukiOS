@@ -259,7 +259,7 @@ static int tray_width_at(const struct desktop *d, uint64_t second)
 {
     unsigned icons = 3 + (d->sh.cfg.layout_switch != 0) +
         ((d->sh.media.removable_mask & ~7u) != 0) +
-        (d->sh.power_status.version == CIUKI_POWER_VERSION && !d->sh.power_meter_hidden) +
+        (desk_shell_power_shown(d) != 0) +
         (d->sh.resources.visible != 0) + d->acc.shown_visible;
     for (unsigned i=0;i<SH_PROGRAM_TRAY;i++) icons+=!!d->sh.program_tray[i].window;
     return 2 * SH_TRAY_MARGIN + (d->sh.cfg.taskbar_clock ? desk_shell_clock_width_at(d, second) : 0) +
@@ -279,7 +279,7 @@ struct desk_box desk_shell_clock_box(const struct desktop *d)
 struct desk_box desk_shell_tray_icon_box(const struct desktop *d, enum sh_tray_icon icon)
 {
     int has_media = (d->sh.media.removable_mask & ~7u) != 0;
-    int has_power = d->sh.power_status.version == CIUKI_POWER_VERSION && !d->sh.power_meter_hidden;
+    int has_power = desk_shell_power_shown(d) != 0;
     int has_resources = d->sh.resources.visible != 0;
     if (icon < SH_TRAY_VOLUME || icon > SH_TRAY_ACCESS ||
         (icon == SH_TRAY_LANGUAGE && !d->sh.cfg.layout_switch) ||

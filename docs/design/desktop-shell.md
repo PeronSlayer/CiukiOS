@@ -621,3 +621,28 @@ or 5 s after creation, as Windows' startup feedback does
 Gate scenarios keep the synchronous spawn. A spawn's channel is neither read
 nor polled before its PID is bound. Restart confirmation is UI-only; its adapter owns
 the separate service transaction and must not perform a machine reboot.
+
+## Tray: keyboard-language indicator and power meter (2026-10-24)
+
+Research. The Windows 98 input-locale indicator (internat.exe) is a small
+box in the notification area showing the two-letter code of the current input
+locale (mixed case, for example "En"), white on blue; a left click lists the
+installed locales to switch, and the Keyboard control panel's Language tab
+holds the settings and the "Enable indicator on taskbar" option. Sources found
+(no Microsoft KB was reachable; the Resource Kit book has no description of
+the indicator): Sony support article S500012595
+(https://www.sony.co.th/en/electronics/support/articles/S500012595),
+https://people.cs.umu.se/hegner/Misc/Windowskb/windowsse2.html (blue
+rectangle, text changes on the switch hotkey) and
+https://forums.anandtech.com/threads/what-is-internat-exe-in-windows-98-me.592487.
+The power meter is a battery gauge and only exists on machines with a battery.
+
+Decision. The indicator is a navy (0x000080) box with a light edge, exactly one
+tray slot (16 px, same vertical centre as the other icons), carrying "En" or
+"It" in white, centred, bold when it fits in the slot and regular otherwise
+(Inter 12 bold "En" is 14 px). Mixed case follows Windows 98 and keeps the
+code inside 16 px. The click still toggles the two layouts (there are only
+two); the hit-rect is the drawn box. The power icon is shown only when a
+battery record exists (present != 0) and the "Show power meter" option is on
+(`desk_shell_power_shown`, shared by tray geometry and painting); an unknown
+AC state draws no glyph instead of "?".

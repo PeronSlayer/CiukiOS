@@ -84,6 +84,49 @@ static void click(enum sh_tray_icon which)
     assert(desk_shell_button(&d, CIUKI_BUTTON_LEFT, 1));
     desk_shell_button(&d, CIUKI_BUTTON_LEFT, 0);
 }
+static void language_indicator(void)
+{
+    d.sh.cfg.layout_switch=1;
+    for (int it=0; it<2; it++) {
+        d.sh.cfg.keyboard = it ? CFG_KEYS_IT : CFG_KEYS_US;
+        struct desk_box b=desk_shell_tray_icon_box(&d,SH_TRAY_LANGUAGE), t=desk_shell_tray_box(&d);
+        struct desk_box v=desk_shell_tray_icon_box(&d,SH_TRAY_VOLUME);
+        assert(b.w==16 && b.h==16 && b.y==v.y);                 /* same size and centre as the other icons */
+        assert(b.x>=t.x && b.x+b.w<=t.x+t.w && b.y>=t.y && b.y+b.h<=t.y+t.h);
+        assert(b.y+b.h/2 == t.y+t.h/2 || b.y+b.h/2 == t.y+t.h/2-1 || b.y+b.h/2 == t.y+t.h/2+1);
+        int x,y; const char *code=desk_shell_language_label(&d,&x,&y);
+        assert(!strcmp(code,it?"It":"En"));
+        int w=du_text_width_font(desk_theme->font_bold,code); if(w>14) w=du_text_width(code);
+        assert(x>=b.x+1 && x+w<=b.x+b.w-1 && y>=b.y+1 && y+DU_GLYPH_H<=b.y+b.h-1);
+        assert(x-b.x == b.x+b.w-(x+w) || x-b.x == b.x+b.w-(x+w)-1 || x-b.x == b.x+b.w-(x+w)+1);
+        /* neighbours keep the tray gap */
+        struct desk_box n=desk_shell_tray_icon_box(&d,SH_TRAY_NETWORK);
+        assert(b.x+b.w+4==n.x || b.x+b.w+4<=n.x);
+        desk_composite(&d,(struct desk_box){0,0,d.width,d.height});
+        int white=0;
+        for (int yy=b.y+1; yy<b.y+b.h-1; yy++) for (int xx=b.x+1; xx<b.x+b.w-1; xx++) {
+            uint32_t px=d.pixels[yy*d.width+xx]&0xFFFFFFu;
+            if (px==0xFFFFFFu) white++;
+            else if (px!=0x000080u) { /* antialiased text pixel */ assert(px!=0); }
+        }
+        assert(d.pixels[(b.y+1)*d.width+b.x+1]==0x000080u || d.pixels[(b.y+1)*d.width+b.x+1]==0xFF000080u);
+        assert(white>=8);
+    }
+    d.sh.cfg.layout_switch=0;
+}
+static void power_indicator(void)
+{
+    struct ciuki_power_status keep=d.sh.power_status; int hidden=d.sh.power_meter_hidden;
+    d.sh.power_meter_hidden=0;
+    d.sh.power_status=(struct ciuki_power_status){.version=CIUKI_POWER_VERSION,.size=sizeof(d.sh.power_status),.ac_online=CIUKI_POWER_UNKNOWN};
+    assert(!desk_shell_power_shown(&d) && !desk_shell_tray_icon_box(&d,SH_TRAY_POWER).w);   /* AC-only, no battery: no icon */
+    d.sh.power_status.battery_count=1; d.sh.power_status.batteries[0].present=0;
+    assert(!desk_shell_power_shown(&d));                                                    /* empty bay */
+    d.sh.power_status.batteries[0].present=1;
+    assert(desk_shell_power_shown(&d) && desk_shell_tray_icon_box(&d,SH_TRAY_POWER).w==16);
+    d.sh.power_meter_hidden=1; assert(!desk_shell_power_shown(&d));                         /* the option still hides it */
+    d.sh.power_meter_hidden=hidden; d.sh.power_status=keep;
+}
 static void transitions(void)
 {
     /* An EC observation updates the existing volume UI, including an open
@@ -177,6 +220,7 @@ int main(void)
         for (int i = 0; i < DESK_CLIENTS; i++) { d.clients[i].window = 1; d.clients[i].minimized = 1; }
         d.realtime_second = 12 * 3600; d.sh.cfg.clock_24h = 1; d.sh.cfg.clock_seconds = 0;
         geometry("12:00", 0);
+        language_indicator(); power_indicator();
         printf("TRAY_GEOMETRY %s %u width=%d clock=%d\n", desk_theme->name, d.width,
                desk_shell_tray_box(&d).w, du_text_width("12:00"));
         icon(SH_TRAY_VOLUME, "audio-volume-high", 0); icon(SH_TRAY_NETWORK, "network-error", 1);
