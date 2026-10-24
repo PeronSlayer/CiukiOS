@@ -34,6 +34,18 @@ static int replay_poll(struct pollfd *,nfds_t,int);
 #undef clock_gettime
 #undef poll
 
+/* This replay covers DOSBox loading and session handling. Clipboard behaviour
+ * has its own production-client conformance test. */
+void dos_clip_init(int channel, uint32_t *pixels) { (void)channel; (void)pixels; }
+void dos_clip_vm(uint32_t id, uint32_t generation, uint32_t server) { (void)id; (void)generation; (void)server; }
+int dos_clip_recv(struct ciuki_message *message) { (void)message; return 0; }
+int dos_clip_action(unsigned action) { (void)action; return 0; }
+int dos_clip_input(const struct desk_packet *packet) { (void)packet; return 0; }
+void dos_clip_tick(int focused) { (void)focused; }
+int dos_clip_marking(void) { return 0; }
+int dos_clip_dirty(void) { return 0; }
+void dos_clip_destroy(void) { }
+
 static uint32_t screen[640 * 480];
 static uint64_t clock_ms, enter_ms, first_frame_ms;
 static int phase, scenario, armed, entered, presents, damage_count, error_seen, closed;

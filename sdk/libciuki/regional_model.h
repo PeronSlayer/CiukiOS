@@ -135,7 +135,9 @@ static inline int reg_assign(struct regional *r,const char *key,const char *v)
         char name[40]="regional_"; reg_copy(name+9,reg_keys[i]);
         if(reg_eq(key,name)) {
             if((i==REG_THOUSAND||i==REG_MON_THOUSAND) && reg_eq(v,"\\s")) v=" ";
-            if(!reg_valid(i,v)) return 0; reg_copy(r->value[i],v); return 1;
+            if(!reg_valid(i,v)) return 0;
+            reg_copy(r->value[i],v);
+            return 1;
         }
     }
     return -1;

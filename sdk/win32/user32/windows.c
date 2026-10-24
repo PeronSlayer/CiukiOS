@@ -411,6 +411,7 @@ BOOL u32_destroy(struct u32_window *w, UINT mode) {
   if (u32_foreground == h)
     u32_foreground = 0;
   u32_input_focus();
+  u32_clip_render_all(h,callbacks);
   if (callbacks) u32_invoke(h, WM_DESTROY, 0, 0);
   for (UINT i = 0; i < U32_TIMERS; i++)
     if (u32_timers[i].tid && u32_timers[i].hwnd == h)
@@ -609,7 +610,7 @@ BOOL W32API SetWindowPos(HWND h, HWND after, int x, int y, int cx, int cy,
     if (!(flags & SWP_NOSIZE)) {
       RECT client;
       GetClientRect(h, &client);
-      u32_invoke(h, WM_SIZE, IsIconic(h) ? 1 : 0,
+      u32_invoke(h, WM_SIZE, IsIconic(h) ? SIZE_MINIMIZED : IsZoomed(h) ? SIZE_MAXIMIZED : SIZE_RESTORED,
                  (uint16_t)client.right |
                      ((uint32_t)(uint16_t)client.bottom << 16));
       InvalidateRect(h, 0, 1);
@@ -651,10 +652,13 @@ BOOL W32API ShowWindow(HWND h, int cmd) {
   u32_sync_window(w);
   if (old != !!(w->style & WS_VISIBLE))
     u32_invoke(h, WM_SHOWWINDOW, !!cmd, 0);
-  if ((prev ^ w->style) & WS_MINIMIZE) {
+  /* A connected top-level window learns its maximised size from the desktop
+   * (DESK_CONFIGURE), which sends WM_SIZE with SIZE_MAXIMIZED itself. */
+  BOOL desktop_zoom = w->wire && !w->parent;
+  if ((prev ^ w->style) & (desktop_zoom ? WS_MINIMIZE : (WS_MINIMIZE | WS_MAXIMIZE))) {
     RECT r;
     GetClientRect(h, &r);
-    u32_invoke(h, WM_SIZE, IsIconic(h) ? 1 : 0,
+    u32_invoke(h, WM_SIZE, IsIconic(h) ? SIZE_MINIMIZED : IsZoomed(h) ? SIZE_MAXIMIZED : SIZE_RESTORED,
                IsIconic(h) ? 0
                            : ((uint16_t)r.right |
                               ((uint32_t)(uint16_t)r.bottom << 16)));

@@ -422,19 +422,28 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 26 | Rubber band (marquee): an XOR focus rectangle (`DrawFocusRect`) drawn and erased as the pointer moves | the band's old and new outline | `band_begin`, `band_update`, `band_end`, `draw_band` | fx-15b: a band ended by an icon-list rebuild (`icons_build`, run by a shortcut or folder refresh) vanished from the state without any repaint: its outline stayed on screen (the merge failure: `engine+cache ... fuzz run=0 step=49`) | selection |
 | 27 | Drag image (`ImageList_DragMove`/`DragShowNolock` in the Windows 98 shell): the image follows the pointer above every window | the image's old and new box; screen copies are cut by it | `dnd_image_box`, `dnd_image_damage`, `draw_drag_image`, `copy_region`, `desk_shell_chrome_intersects` | none reachable found; the "as painted" record that the copy cut and the direct client path use is updated by the input path only, so fx-15b's reconcile now keeps it equal to the painter's box whatever moves the pointer | drag and drop |
 | 28 | Drop-target highlight (`DROPEFFECT` feedback: the target item drawn selected while it would accept the drop) | the old and new target icon | `dnd_evaluate` (`drop_index`), `icon_repaint` | none | drag and drop |
-| 29 | Regional Settings (G24): region preset selected | client content; updates clipped by overlapping windows | `apps/control/regional.inc`, libdeskui invalidation, `DESK_DAMAGE` | none | regional settings: Italian preset; applet semantics in `regional_control_test.h` |
-| 30 | Regional Settings: tab changed | client content | `regional_event`, `regional_build`, `DESK_DAMAGE` | none | regional settings: tab change |
-| 31 | Regional Settings: format field edited | changed field and validation status | toolkit edits, `regional_pull`, `DESK_DAMAGE` | none | regional settings: field edit |
-| 32 | Regional Settings: Apply started | save status | `regional_save`, `DESK_DAMAGE` | none | regional settings: Apply status |
-| 33 | Regional Settings: save completed or failed | completion status and error dialog | `cp_settings_saved`, `DESK_DAMAGE` | none | regional settings: save failure; real applet retry/OK tested by `regional_control_test.h` |
 | 29 | Taskbar hover during a drag (Windows 98: holding a dragged object over a task button for about a second activates that window) | the restored window (rows 7, 8, 11) | `desk_shell_tick` drag hover | none (covered by the window rows) | drag and drop |
 | 30 | Right-drag menu, Esc and cancelled drags | the menu box (row 13); the image box when the drag ends | `desk_shell_drag_button`, `desk_shell_drag_cancel`, `dnd_finish` | none | drag and drop |
+
+| 31 | Taskbar menu (G4, WM-12): `TrackPopupMenu` at the cursor on the empty taskbar or the empty top bar; its Cascade/Tile/Minimize All items enable with the windows, and Undo Cascade/Undo Tile/Undo Minimize All replace or follow them | the menu's outer box on open, close and each hot row | `desk_shell_button` (empty bar), `build` `SH_MENU_TASKBAR`, `menu_key`/`menu_letter` (access keys) | none | taskbar menu |
+| 32 | `CascadeWindows`/`TileWindows` of the taskbar menu: `SetWindowPos` on every arranged window in one pass (`EndDeferWindowPos`); maximised and shaded windows are restored first | the old and new outer box of each window that moved or changed size; its client through the stretch of rows 2 and 5 | `desk_arrange`, `arrange_place`, `arrange_settle` (`client.c`) | none found; `desk_move` plans one screen copy for one moved window, so `arrange_prepare`/`arrange_settle` turn a pending copy into plain damage before and after the batch | arrange |
+| 33 | Minimize All Windows, Show Desktop (Win+D toggles), Win+M, Shift+Win+M, Alt+M and their Undo: the windows go to the taskbar at once (no caption animation), the desktop becomes active | every window's outer box, its task button, the caption of the window that loses the activation | `desk_minimize_all`, `desk_show_desktop`, `desk_arrange_undo` | none | minimize all |
+| 34 | Windows-key shortcuts and the taskbar's keyboard focus (Win+Tab, Ctrl+Esc then Esc, Tab/arrows, Enter, Esc): the focus rectangle on a task button or the lit Start orb | the old and the new button; the Start orb's bounds | `taskbar_set`, `taskbar_blur`, `logo_chord`, `desk_shell_reconcile` (flag 8, `start_focus_shown`) | none | windows keys |
+| 35 | Caption icon (Ciuki Blue): a click opens the window menu under it, a second click within the double-click time closes the window (`WM_SYSCOMMAND` `SC_CLOSE`) | the menu's outer box; the caption and task button ("Closing...") | `desk_shell_caption_icon` (`shell.c`), `desk_caption_icon_box` (`compositor.c`) | none | caption icon |
+| 36 | Regional Settings (G24): region preset selected | client content; updates clipped by overlapping windows | `apps/control/regional.inc`, libdeskui invalidation, `DESK_DAMAGE` | none | regional settings (WM_ROW=29): Italian preset; applet semantics in `regional_control_test.h` |
+| 37 | Regional Settings: tab changed | client content | `regional_event`, `regional_build`, `DESK_DAMAGE` | none | regional settings: tab change |
+| 38 | Regional Settings: format field edited | changed field and validation status | toolkit edits, `regional_pull`, `DESK_DAMAGE` | none | regional settings: field edit |
+| 39 | Regional Settings: Apply started | save status | `regional_save`, `DESK_DAMAGE` | none | regional settings: Apply status |
+| 40 | Regional Settings: save completed or failed | completion status and error dialog | `cp_settings_saved`, `DESK_DAMAGE` | none | regional settings: save failure; real applet retry/OK tested by `regional_control_test.h` |
 
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with
 fx-19 (drag and drop, rubber-band and keyboard selection) and were added by
 fx-15b after the merge, with the reconcile extended to the band and the
-drag image.
+drag image. Rows 31-35 came with G4 (`docs/design/taskbar-arrangement-windows-keys.md`);
+the G24 row runs at `WM_ROW=29`; the randomized sequences gained operations 42-47 (taskbar menu, Win+D/M and
+Alt+M, taskbar focus keys, Alt+F6/Menu key/Shift+F10/F3, caption icon,
+Win+E/R/F/Break/F1).
 
 ### One rule instead of one fix per path: the frame reconcile
 
