@@ -6,6 +6,8 @@
 #include <string.h>
 #include <ciuki/kernel.h>
 #include <ciuki/lpt.h>
+#include <ciuki/process.h>
+#include <ciuki/signal.h>
 #include "../../src/kernel/vm/dosvm_internal.h"
 #include "../../apps/libprint/print.h"
 volatile uint64_t g_ticks;
@@ -15,6 +17,10 @@ static bool spool_dir, config_present, backup_present, temp_present;
 static uint32_t config[3]={CP_CONFIG_MAGIC,1,2};
 static uint32_t backup_config[3]={CP_CONFIG_MAGIC,1,3},temp_config[3]={CP_CONFIG_MAGIC,1,4};
 static size_t temp_bytes;
+/* The spool worker's doorbell: worker.lock\owner names its PID. */
+static uint32_t owner_pid;
+static struct process worker;
+static unsigned rings, ring_signal;
 static struct { bool reserved, published; unsigned size; uint8_t data[8192]; struct cp_job job; } slots[CP_JOBS+1];
 static unsigned file_slot[16], file_kind[16], file_at[16];
 static bool opened_fd[16];
@@ -36,6 +42,14 @@ int vfs_mkdir(struct vfs_table *t,const char *path,uint8_t attr)
 int vfs_open(struct vfs_table *t,const char *path,unsigned flags,enum vfs_share share,uint8_t attr)
 {
     assert(t==&vm.disk_table && !attr); (void)share;
+    if (!strcmp(path,"C:\\WINDOWS\\SPOOL\\worker.lock\\owner")) {
+        assert(flags==VFS_READ);
+        if (!owner_pid) return -FS_ENOENT;
+        for (unsigned fd=1;fd<16;fd++) if (!opened_fd[fd]) {
+            opened_fd[fd]=true; file_at[fd]=0; file_slot[fd]=0; file_kind[fd]=5; active++; return (int)fd;
+        }
+        return -FS_ENOSPC;
+    }
     unsigned cfg=!strcmp(path,"C:\\WINDOWS\\SPOOL\\printers") ? 2 :
         !strcmp(path,"C:\\WINDOWS\\SPOOL\\printers.bak") ? 3 :
         !strcmp(path,"C:\\WINDOWS\\SPOOL\\printers.tmp") ? 4 : 0;
@@ -53,6 +67,10 @@ int vfs_seek(struct vfs_table *t,int fd,int64_t at,enum vfs_whence whence,uint64
 int vfs_read(struct vfs_table *t,int fd,void *p,size_t n,size_t *done)
 {
     assert(t==&vm.disk_table && opened_fd[fd] && file_kind[fd]>=2);
+    if (file_kind[fd]==5) {
+        assert(!file_at[fd] && n==sizeof(owner_pid));
+        memcpy(p,&owner_pid,n); file_at[fd]+=(unsigned)n; *done=n; return 0;
+    }
     size_t length=file_kind[fd]==4 ? temp_bytes : sizeof(struct cp_config);
     if (n>length-file_at[fd]) n=length-file_at[fd];
     memset(p,0,n);
@@ -102,13 +120,17 @@ int lpt_transfer(unsigned n,uint32_t gen,void *p,unsigned bytes,bool write,bool 
 { (void)n; (void)gen; (void)p; (void)bytes; (void)write; (void)nonblock; (void)cancel; (void)arg; return -ENODEV; }
 int lpt_control(unsigned n,uint32_t gen,uint32_t op,void *p,unsigned bytes,bool write)
 { (void)n; (void)gen; (void)op; (void)p; (void)bytes; (void)write; return -ENODEV; }
+struct process *proc_find(uint32_t pid) { return pid==worker.pid ? &worker : 0; }
+void proc_signal_post(struct process *p,struct proc_thread *t,uint32_t signo,uint32_t sender)
+{ assert(p==&worker && !t && !sender); rings++; ring_signal=signo; }
 #include "../../src/kernel/vm/dosvm_print.c"
 #include "../../src/kernel/vm/dosvm_lpt.c"
 static void reset(void)
 {
     assert(!active); memset(&vm,0,sizeof(vm)); memset(slots,0,sizeof(slots)); memset(opened_fd,0,sizeof(opened_fd));
     vm.info.key=(struct dosvm_key){1,10}; vm.info.state=DOSVM_RUNNABLE; vm.table_ready=true;
-    g_ticks=position=fail_write=short_write=fail_commit=fail_rename=0;
+    g_ticks=position=fail_write=short_write=fail_commit=fail_rename=rings=ring_signal=owner_pid=0;
+    worker=(struct process){0}; worker.pid=43; worker.state=PROC_LIVE;
     spool_dir=config_present=backup_present=temp_present=false; temp_bytes=sizeof(struct cp_config);
     assert(!dosvm_lpt_init(&vm));
 }
@@ -170,5 +192,15 @@ int main(void)
     assert(!dosvm_print_byte(&vm,'S') && dosvm_print_flush(&vm,true)==-ENOSPC && vm.print_capture.used==1);
     slots[7].reserved=false; assert(!dosvm_print_flush(&vm,true) && slots[7].published && !active);
     puts("PASS stopping VM retains last byte, recoverable queue-full, no hardware lease or handle leaks");
+    /* Doorbell: every publication rings the worker once (SIGCHLD); no worker,
+     * a dead owner or a failed publication rings nothing. */
+    reset(); assert(!dosvm_print_byte(&vm,'1') && !dosvm_print_flush(&vm,true) && slots[1].published && !rings && !active);
+    owner_pid=43; assert(!dosvm_print_byte(&vm,'2') && !dosvm_print_flush(&vm,true) && slots[2].published);
+    assert(rings==1 && ring_signal==SIGCHLD && !active);
+    assert(!dosvm_print_byte(&vm,'3')); fail_rename=1; assert(dosvm_print_flush(&vm,true)==-FS_EIO && rings==1);
+    assert(!dosvm_print_flush(&vm,true) && slots[3].published && rings==2);
+    worker.state=PROC_STOPPING; assert(!dosvm_print_byte(&vm,'4') && !dosvm_print_flush(&vm,true) && slots[4].published && rings==2);
+    owner_pid=44; worker.state=PROC_LIVE; assert(!dosvm_print_byte(&vm,'5') && !dosvm_print_flush(&vm,true) && rings==2 && !active);
+    puts("PASS published DOS job rings the spool worker once; no owner, dead or unknown owner and failed publication ring nothing");
     return 0;
 }

@@ -58,14 +58,17 @@ static int read_saved(const char *p,void *v,size_t n)
     if(!read_record(tmp,v,n))return 0;
     return read_record(backup,v,n);
 }
-static int acquire_lock(const char *r,const char *name)
+static int acquire_lock(const char *r,const char *name,int self_stale)
 {
     char p[CP_PATH+64],owner[CP_PATH+96];if(path(p,sizeof(p),r,0,name))return -1;
     snprintf(owner,sizeof(owner),"%s/owner",p);
     if(mkdir(p,0700)){
         uint32_t pid=0;
         if(errno!=EEXIST)return -1;
-        if(read_record(owner,&pid,sizeof(pid)) || !pid || !kill((pid_t)pid,0) || errno!=ESRCH){errno=EBUSY;return -1;}
+        /* The single worker's record naming this very process was left by an
+         * earlier boot (PIDs restart at every boot; a power loss keeps it). */
+        if(read_record(owner,&pid,sizeof(pid)) || !pid ||
+           ((!self_stale || pid!=(uint32_t)getpid()) && (!kill((pid_t)pid,0) || errno!=ESRCH))){errno=EBUSY;return -1;}
         unlink(owner);if(rmdir(p) || mkdir(p,0700)){errno=EBUSY;return -1;}
     }
     uint32_t pid=(uint32_t)getpid();int fd=open(owner,O_WRONLY|O_CREAT|O_TRUNC,0600);
@@ -79,10 +82,19 @@ static void release_lock(const char *r,const char *name)
     if(!path(p,sizeof(p),r,0,name)){size_t n=strlen(p);if(n+6<sizeof(p)){strcat(p,"/owner");unlink(p);p[n]=0;rmdir(p);}}
     errno=saved;
 }
-static int config_lock(const char *r){return acquire_lock(r,"config.lock");}
+static int config_lock(const char *r){return acquire_lock(r,"config.lock",0);}
 static void config_unlock(const char *r){release_lock(r,"config.lock");}
-int cp_service_lock(const char *r){return acquire_lock(r,"worker.lock");}
-void cp_service_unlock(const char *r){release_lock(r,"worker.lock");}
+static int worker_held;  /* this process holds worker.lock: its record is not stale */
+int cp_service_lock(const char *r){int e=acquire_lock(r,"worker.lock",!worker_held);if(!e)worker_held=1;return e;}
+/* The doorbell (print.h). kill() reaches the worker in the desktop's process
+ * group; a missing or dead owner is not the producer's failure. */
+int cp_service_notify(const char *r)
+{
+    int saved=errno;char p[CP_PATH+64];uint32_t pid=0;
+    int e=path(p,sizeof(p),r,0,CP_WORKER_OWNER) || read_record(p,&pid,sizeof(pid)) || !pid || kill((pid_t)pid,SIGCHLD) ? -1 : 0;
+    errno=saved;return e;
+}
+void cp_service_unlock(const char *r){release_lock(r,"worker.lock");worker_held=0;}
 
 void cp_page_default(struct cp_page *p) { *p=(struct cp_page){612,792,0,36,36,36,36,1,0,0}; }
 int cp_page_valid(const struct cp_page *p)
@@ -115,7 +127,7 @@ static int config_save(const char *r,const struct cp_config *c)
     return save_record(p,c,sizeof(*c));
 }
 int cp_config_save(const char *r,const struct cp_config *c)
-{if(config_lock(r))return -1;int e=config_save(r,c);config_unlock(r);return e;}
+{if(config_lock(r))return -1;int e=config_save(r,c);config_unlock(r);if(!e)cp_service_notify(r);return e;}
 
 int cp_init(const char *r)
 {
@@ -146,7 +158,8 @@ int cp_printer_pause(const char *r,unsigned i,int pause)
 {
     if(config_lock(r))return -1;
     struct cp_config *c=malloc(sizeof(*c));if(!c){config_unlock(r);return -1;}int e=cp_config_load(r,c);
-    if(!e && (i>=CP_PRINTERS || !c->printers[i].present)){errno=EINVAL;e=-1;}if(!e){c->printers[i].paused=!!pause;e=config_save(r,c);}free(c);config_unlock(r);return e;
+    if(!e && (i>=CP_PRINTERS || !c->printers[i].present)){errno=EINVAL;e=-1;}if(!e){c->printers[i].paused=!!pause;e=config_save(r,c);}free(c);config_unlock(r);
+    if(!e)cp_service_notify(r);return e;
 }
 int cp_job_read(const char *r,unsigned id,struct cp_job *j)
 {
@@ -176,7 +189,7 @@ int cp_job_ids(const char *r,unsigned ids[CP_JOBS])
 int cp_job_control(const char *r,unsigned id,enum cp_control ctl)
 {
     struct cp_job j;char p[CP_PATH+64];if(ctl<CP_PAUSE || ctl>CP_CANCEL){errno=EINVAL;return -1;}if(cp_job_read(r,id,&j) || path(p,sizeof(p),r,id,"ctl"))return -1;
-    char c=ctl==CP_PAUSE?'p':ctl==CP_RESUME?'r':'c';return save_record(p,&c,1);
+    char c=ctl==CP_PAUSE?'p':ctl==CP_RESUME?'r':'c';if(save_record(p,&c,1))return -1;cp_service_notify(r);return 0;
 }
 int cp_purge(const char *r,unsigned printer)
 {
@@ -206,7 +219,7 @@ static int submit(const char *r,unsigned printer,const char *title,FILE *source,
     while((n=fread(buf,1,sizeof(buf),source))){if(n>CP_MAX_BYTES-j.bytes){errno=EFBIG;e=-1;break;}if(write_all(fd,buf,n)){e=-1;break;}j.bytes+=(uint32_t)n;}
     if(ferror(source))e=-1;if(!e && fsync(fd))e=-1;if(close(fd))e=-1;
     if(!e && !path(p,sizeof(p),r,id,"job"))e=save_record(p,&j,sizeof(j));else e=-1;
-    if(e){int saved=errno;release(r,id);errno=saved;return -1;}return (int)id;
+    if(e){int saved=errno;release(r,id);errno=saved;return -1;}cp_service_notify(r);return (int)id;
 }
 int cp_submit_file(const char *r,unsigned printer,const char *title,const char *source,const struct cp_page *p,const char *target)
 {FILE *f=fopen(source,"rb");if(!f)return -1;int id=submit(r,printer,title,f,p,target);fclose(f);return id;}
@@ -216,8 +229,10 @@ int cp_submit_raw(const char *r,unsigned printer,const char *title,const void *d
     int id=-1;if(fwrite(data,1,n,f)==n)id=submit(r,printer,title,f,p,target);cp_tempclose(f,temp);return id;
 }
 const char *cp_state_name(unsigned s){static const char *const names[]={"Queued","Paused","Printing","Offline","Error"};return s<=CP_ERROR?names[s]:"Invalid";}
-int cp_service_step(const char *r)
+int cp_service_step(const char *r){return cp_service_next(r,NULL);}
+int cp_service_next(const char *r,unsigned *offline)
 {
+    if(offline)*offline=0;
     unsigned ids[CP_JOBS];int count=cp_job_ids(r,ids);if(count<=0)return count;  /* idle: no slot reserved */
     struct cp_config *c=malloc(sizeof(*c));if(!c)return -1;if(cp_config_load(r,c)){free(c);return -1;}
     for(int k=0;k<count;k++){
@@ -241,7 +256,7 @@ int cp_service_step(const char *r)
         if(!e && n>0){ssize_t wrote=write(out,buf,(size_t)n);if(wrote>0)j.offset+=(uint32_t)wrote;else e=-1;}
         if(in>=0)close(in);if(out>=0){if(strncmp(target,"/dev/",5) && fsync(out))e=-1;if(close(out))e=-1;}
         if(!e && j.offset==j.bytes){j.completed++;j.offset=0;if(j.completed>=j.page.copies){release(r,id);free(c);return 1;}}
-        j.state=e?CP_OFFLINE:CP_PRINTING;
+        j.state=e?CP_OFFLINE:CP_PRINTING;if(e && offline)(*offline)++;
         if(path(p,sizeof(p),r,id,"job") || save_record(p,&j,sizeof(j))){free(c);return -1;}
         /* An offline printer must not starve other printers in this pass. */
         if(!e){free(c);return 1;}

@@ -37,6 +37,25 @@ static inline unsigned audio_gap_lead(unsigned gap_us, unsigned rate)
         (AUDIO_QUANTUM * 10000u) + 2u;
     return periods > AUDIO_MAX_LEAD ? AUDIO_MAX_LEAD : periods;
 }
+/* 2026-10-24 lead decision (docs/design/f4-audio-media-contract.md): a lead
+ * grown by a late service or an underrun survives the transport's idle stop.
+ * The next session starts with it for AUDIO_LEAD_HOLD_MS after the stop; then
+ * it decays by AUDIO_LEAD_DECAY_STEP periods every AUDIO_LEAD_DECAY_MS until
+ * it is back at the nominal lead (28 -> 8 periods: 80 s), so the first sound
+ * after a long idle keeps the f4-31/f4-32 nominal latency. Returns the kept
+ * lead, or 0 for "nominal". 32-bit constant divisions only (i686 helpers). */
+#define AUDIO_LEAD_HOLD_MS 30000u
+#define AUDIO_LEAD_DECAY_MS 5000u
+#define AUDIO_LEAD_DECAY_STEP 2u
+static inline unsigned audio_held_lead(unsigned lead, unsigned nominal, uint32_t idle_ms)
+{
+    if (lead <= nominal) return 0;
+    if (idle_ms <= AUDIO_LEAD_HOLD_MS) return lead;
+    uint32_t steps = (idle_ms - AUDIO_LEAD_HOLD_MS + AUDIO_LEAD_DECAY_MS - 1u) / AUDIO_LEAD_DECAY_MS;
+    uint32_t excess = lead - nominal;
+    if (steps >= (excess + AUDIO_LEAD_DECAY_STEP - 1u) / AUDIO_LEAD_DECAY_STEP) return 0;
+    return lead - steps * AUDIO_LEAD_DECAY_STEP;
+}
 static inline unsigned audio_refill_lead(bool active, bool tail_start, bool vm_attached, unsigned *limit)
 {
     unsigned lead = active ? (vm_attached ? AUDIO_VM_LEAD : AUDIO_LEAD) : AUDIO_TAIL_LEAD;

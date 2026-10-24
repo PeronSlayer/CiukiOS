@@ -4,7 +4,9 @@
 #define CIUKI_NATIVE_PRINT_H
 #include <stddef.h>
 #include <stdint.h>
+#ifndef CP_ROOT                /* host tests point the queue at a scratch folder */
 #define CP_ROOT "/WINDOWS/SPOOL"
+#endif
 #define CP_PRINTERS 8u
 #define CP_JOBS 128u
 #define CP_TITLE 96u
@@ -90,6 +92,31 @@ int cp_submit_file(const char *root, unsigned printer, const char *title, const 
 /* One bounded (1024 bytes) background service step. Returns 1 progress, 0 idle,
  * -1 error; offline jobs remain queued and are retried on later calls. */
 int cp_service_step(const char *root);
+/* The same step; *offline (if not NULL) counts the published, runnable jobs
+ * whose output could not be opened or written in this pass (state Offline). */
+int cp_service_next(const char *root, unsigned *offline);
+/* The worker sleeps until a producer rings its doorbell (Windows: AddJob ->
+ * ScheduleJob hands the job to the spooler; it does not poll the folder).
+ * After a job, control, pause/resume or configuration change is published,
+ * producers send SIGCHLD to the PID in worker.lock/owner; the kernel's DOS
+ * capture does the same. SIGCHLD because its default action is to ignore:
+ * an owner record left by a crash or power loss names a PID that the next
+ * boot may give to another program, which must never be terminated by a
+ * doorbell (the worker has no children). Returns 0 when a worker was
+ * signalled, -1 when none runs (the job waits for the next worker start).
+ * An offline job is retried after CP_RETRY_MS (Windows 9x "Device not
+ * selected" default, 15 s), never by a polling loop. */
+#define CP_WORKER_OWNER "worker.lock/owner"
+#ifndef CP_RETRY_MS
+#define CP_RETRY_MS 15000u
+#endif
+/* Safety net for a producer path that publishes without ringing: an idle
+ * worker also reads the folder once every CP_IDLE_RESCAN_MS (one readdir;
+ * no slot is opened unless a published slot exists). */
+#ifndef CP_IDLE_RESCAN_MS
+#define CP_IDLE_RESCAN_MS 60000u
+#endif
+int cp_service_notify(const char *root);
 int cp_service_lock(const char *root);
 void cp_service_unlock(const char *root);
 const char *cp_state_name(unsigned state);

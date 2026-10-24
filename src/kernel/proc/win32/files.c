@@ -5,6 +5,9 @@
 #include <ciuki/w32_core.h>
 #include <ciuki/w32_objects.h>
 #include <ciuki/w32_fonts.h>
+/* fs/spool_ring.c; absent from host fixtures that include this file. */
+extern bool spool_publication(const char *) __attribute__((weak));
+extern void spool_ring(struct vfs *) __attribute__((weak));
 static uint32_t dos_error(int e) {
   switch (e) {
   case 0:
@@ -778,6 +781,11 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
   }
   vfs_unlock(s->vfs);
   error = error ? error : dos_error(e);
+  /* A published spool record (job, control, printer configuration) rings
+   * the print worker, which sleeps until then (fs/spool_ring.c). */
+  if (!error && a->action == W32_F_MOVE && spool_publication && spool_ring &&
+      spool_publication(full2))
+    spool_ring(s->vfs);
 done:
   if (error)
     a->error = error;

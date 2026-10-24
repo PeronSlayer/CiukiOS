@@ -38,6 +38,7 @@ static void late_setup(void)
     for(unsigned i=0;i<12;i++) ac97.claims[i]=-1;
     audio.ready=true; audio.master=(struct ciuki_mixer_master){.left=100,.right=100};
     idle_since=non_silent_end=0; first_playback=playback_logged=quantum_pending=quantum_mixed=false;
+    held_lead=0; held_since=0; /* no lead kept from an earlier case's idle stop */
     transport_next=g_ticks+5000;
     vm_active_hook=vm_attached_hook=vm_nonzero_hook=false;
     g_boot.flags=CBI_F_VERBOSE; g_ticks=hw.tick=1000;
@@ -134,17 +135,24 @@ static void test_publication_retry(void)
     CHECK(ac97.published==8 && hw.lvi_writes==writes && !memcmp(&before,&ac97.pcm[8][0],sizeof(before)));
     audio_service(); CHECK(s->consumed==AUDIO_QUANTUM && quantum_pending && ac97.published==8);
     /* The final fetch halts. Recovery publishes the retained PCM once,
-     * then silence; no second mix and no loss of its output position. */
+     * then silence; no second mix and no loss of its output position.
+     * 2026-10-24 lead decision: the underrun grows the lead to the gap
+     * budget (28 periods) and recovery primes it; an inactive source's
+     * drained tail is an idle halt, not an underrun, and keeps the nominal
+     * lead. */
     if(inactive) s->started=false;
     mock_advance(512); g_ticks+=6; hw.tick+=6; audio_service();
-    CHECK(!audio.error && audio.running && !quantum_pending && ac97.published==AUDIO_LEAD);
+    unsigned lead=audio.lead_periods;
+    CHECK(audio.adaptive_lead==(inactive ? 0 : audio_gap_lead(AUDIO_GAP_BUDGET_US,AUDIO_RATE)));
+    CHECK(lead==(inactive ? AUDIO_LEAD : audio.adaptive_lead));
+    CHECK(!audio.error && audio.running && !quantum_pending && ac97.published==lead);
     CHECK(s->consumed==AUDIO_QUANTUM && ac97.pcm[0][0].left==1000);
     CHECK(ac97.frame_base==8*AUDIO_QUANTUM && s->last_output==9*AUDIO_QUANTUM);
-    for(unsigned i=1;i<AUDIO_LEAD;i++) CHECK(!ac97.pcm[i][0].left && !ac97.pcm[i][0].right);
+    for(unsigned i=1;i<lead;i++) CHECK(!ac97.pcm[i][0].left && !ac97.pcm[i][0].right);
     mock_advance(512); g_ticks+=6; hw.tick+=6; audio_service();
     CHECK(hw.completed[8]==1000 && !audio.error);
     if(inactive) CHECK(s->consumed==AUDIO_QUANTUM);
-    else CHECK(s->consumed==2*AUDIO_QUANTUM && ac97.pcm[8][0].left==1001);
+    else CHECK(s->consumed==2*AUDIO_QUANTUM && ac97.pcm[lead%32][0].left==1001);
     audio_stream_close(s); late_cleanup();
     }
     puts("audio publication retry: CIV/PIV payload retention, single source consumption and pending PCM across DCH reset PASS");
