@@ -1066,7 +1066,7 @@ static void test_media_node(void)
     CHECK(!call(CIUKI_SYS_DEVCTL,fd,MEDIA_CD_STATE,USER,48,0) && media_cd_calls==1);
     CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_CD_POSITION,USER,48,0)==-ENOTTY && media_cd_calls==2);
     CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_LABEL,USER,48,0)==-EINVAL && media_cd_calls==2);
-    CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_SET_LABEL+1,USER,48,0)==-ENOTTY && media_cd_calls==2);
+    CHECK(call(CIUKI_SYS_DEVCTL,fd,UINT32_MAX,USER,48,0)==-ENOTTY && media_cd_calls==2);
     CHECK(!call(CIUKI_SYS_DEVCTL,fd,MEDIA_GET_BLOCKERS,USER,sizeof(blockers),0));
     CHECK(!ua_read(client->memory,&blockers,USER,sizeof(blockers)));
     CHECK(blockers.count==1 && blockers.programs[0].pid==client->pid && !strcmp(blockers.programs[0].name,client->name));

@@ -372,16 +372,28 @@ class MediaTests(unittest.TestCase):
         reserved = int(re.search(r"%define CIUKI_FAT_RESERVED_SECTORS (\d+)", source).group(1))
         body = source.split(".bpb:", 1)[1].split("call cluster_validate", 1)[0]
         pins = re.findall(r"cmp (byte|word) \[sector\+(\d+)\], (\w+)", body)
-        self.assertGreaterEqual(len(pins), 12)
+        # The FAT16-capable loader now range-checks cluster size and reserved
+        # sectors. Keep every remaining literal pin covered explicitly.
+        self.assertEqual({(width, int(offset)) for width, offset, _ in pins}, {
+            ("word", 510), ("word", 11), ("byte", 16), ("word", 17),
+            ("word", 40), ("word", 42), ("word", 48), ("word", 50),
+        })
         bpb = self.read(self.boot, 2048 * 512, 512)
         for width, offset, value in pins:
             expected = reserved if value == "CIUKI_FAT_RESERVED_SECTORS" else int(value, 0)
             actual = bpb[int(offset)] if width == "byte" else struct.unpack_from("<H", bpb, int(offset))[0]
             self.assertEqual(actual, expected, f"disk.inc pin {width} [sector+{offset}]")
+        spc = bpb[13]
+        self.assertTrue(0 < spc <= 64 and spc & (spc - 1) == 0)
+        actual_reserved = struct.unpack_from("<H", bpb, 14)[0]
+        self.assertGreaterEqual(actual_reserved, 32)
+        self.assertEqual((spc, actual_reserved), (8, reserved))  # canonical CD geometry
+        self.assertEqual(struct.unpack_from("<H", bpb, 19)[0], 0)  # FAT32 uses TotSec32
+        self.assertEqual(struct.unpack_from("<H", bpb, 22)[0], 0)  # FAT32 uses FATSz32
         total, fat = struct.unpack_from("<II", bpb, 32)
         mbr = self.read(self.boot, 0, 512)
         self.assertLessEqual(total, struct.unpack_from("<I", mbr, 458)[0])
-        clusters = (total - reserved - 2 * fat) // 8
+        clusters = (total - actual_reserved - 2 * fat) // spc
         self.assertTrue(65525 <= clusters <= 0x0FFFFFF5 and fat * 128 >= clusters + 2)
         self.assertEqual(clusters, self.manifest["boot_image"]["clusters"])
         self.assertEqual(struct.unpack_from("<I", bpb, 44)[0], 2)
