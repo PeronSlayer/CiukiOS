@@ -51,7 +51,8 @@ ACCESSORIES = {
 SYSTOOLS = ("resmeter", "schedtask", "sysinfo", "sysmon")
 PROGRAMS = ("desktop", "shell-launch", "demo", "gfxdemo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", "hwreport", "printers", "printspool", *SYSTOOLS, *ACCESSORIES)
 # Desktop shell (shell.c and friends): shell, startup, users, files, scheduler and resource meter.
-SHELL = ["users.c", "users_io.c", "../../src/kernel/lib/sha256.c", "startup.c", "firstboot.c", "firstboot_native.c", "firstboot_games.c", "sounds.c", "sound_storage.c", "master_storage.c", "sound_runtime.c", "shell.c", "autoplay.c", "autoplay_content.c", "autoplay_registry.c", "settings.c", "power_policy.c", "settings_io.c", "wallpaper.c", "wallpaper_io.c", "image.c", "keymap.c", "folder.c", "schedsvc.c", "resources.c", "../systools/sched.c", "../systools/service.c", "../systools/resmeter.c", "../files/model.c", "../files/transfer.c", "../files/clipboard.c", "../files/vfs.c"]
+SHELL = ["access.c", "access_desktop.c", "users.c", "users_io.c", "../../src/kernel/lib/sha256.c", "startup.c", "firstboot.c", "firstboot_native.c", "firstboot_games.c", "sounds.c", "sound_storage.c", "master_storage.c", "sound_runtime.c", "shell.c", "autoplay.c", "autoplay_content.c", "autoplay_registry.c", "settings.c", "power_policy.c", "settings_io.c", "wallpaper.c", "wallpaper_io.c", "image.c", "keymap.c", "folder.c", "schedsvc.c", "resources.c", "../systools/sched.c", "../systools/service.c", "../systools/resmeter.c", "../files/model.c", "../files/transfer.c", "../files/clipboard.c", "../files/vfs.c"]
+
 OUTPUTS = {*PROGRAMS, "libdeskui.a", "ciuki-portrait.xrgb", *ICON_FILES}
 
 

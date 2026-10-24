@@ -113,7 +113,7 @@ static void identical_frame(void)
     desk_composite(oracle,(struct desk_box){0,0,(int32_t)d.width,(int32_t)d.height});
     /* Hardware uses the same silhouette/hotspot without a soft shadow. */
     if (shown) {
-        struct desk_tool_cursor art=desk_tool_cursor(d.cursor_shape);
+        struct desk_tool_cursor art=desk_tool_cursor_scheme(d.cursor_shape,d.sh.cfg.access.pointer);
         for (int y=0;y<32;y++) for (int x=0;x<32;x++) {
             int px=d.mouse_x-art.hot_x+x, py=d.mouse_y-art.hot_y+y;
             uint32_t bit=0x80000000u>>x;

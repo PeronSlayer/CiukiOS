@@ -23,8 +23,8 @@ enum {
 };
 enum { C_REPEAT_DELAY=1500, C_REPEAT_SPEED, C_BLINK, C_SWAP, C_TRAILS,
        C_WHEEL, C_POINTER, C_LAYOUT_SWITCH, C_DOUBLE_TEST };
-static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts", "autoplay", "programs", "joystick", "multimedia", "users", "passwords", "regional", "internet", "addhw"};
-static const char *const page_labels[CP_PAGES] = {"Display Properties", "Mouse", "Keyboard", "Sounds and Audio", "Date and Time", "System", "System", "System", "Network", "Power", "Display Properties", "Display Properties", "Storage and removable devices", "Add/Remove Programs", "Game controllers", "Multimedia", "Users", "Passwords", "Regional Settings", "Internet Properties", "Add New Hardware"};
+static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts", "autoplay", "programs", "joystick", "multimedia", "users", "passwords", "regional", "internet", "addhw", "access"};
+static const char *const page_labels[CP_PAGES] = {"Display Properties", "Mouse", "Keyboard", "Sounds and Audio", "Date and Time", "System", "System", "System", "Network", "Power", "Display Properties", "Display Properties", "Storage and removable devices", "Add/Remove Programs", "Game controllers", "Multimedia", "Users", "Passwords", "Regional Settings", "Internet Properties", "Add New Hardware", "Accessibility Options"};
 static void build(struct cp_app *a);
 static unsigned power_read(struct cp_app *a);
 static void refresh(struct cp_app *a);
@@ -48,6 +48,10 @@ static struct du_widget *add(struct cp_app *a, enum du_kind k, int id, int x, in
 static void text(struct cp_app *a, int id, const char *s)
 { struct du_widget *w = du_get(a->ui, id); if (w && strcmp(w->text,s)) { du_set_text(w,s); du_invalidate(a->ui,w->box); } }
 #include "datetime.inc"   /* G1: Date/Time Properties */
+static void changed(struct cp_app *a);
+static void load(struct cp_app *a, struct ciuki_settings *out);
+static void list_style(struct du_widget *w, const char *title);
+#include "access.inc"     /* G25: Accessibility Options */
 
 #include "network.inc"
 #include "internet.inc"
@@ -89,6 +93,7 @@ static void changed(struct cp_app *a)
         now.cursor_blink_ms=a->cfg.cursor_blink_ms; now.layout_switch=a->cfg.layout_switch; }
     else if (a->page==CP_POWER) now.monitor_seconds=a->cfg.monitor_seconds;
     else if (a->page==CP_DATETIME) { now.clock_24h=a->cfg.clock_24h; now.clock_seconds=a->cfg.clock_seconds; }
+    else if (a->page==CP_ACCESS) ac_merge(a,&now);   /* G25: only the fields this panel changed */
     static char out[CFG_TEXT_MAX];
     size_t n = cfg_format(&now, out, sizeof(out));
     if (!n || !a->host.save || a->host.save(a->host.ctx, out, n)) { text(a, C_STATUS, "The settings could not be saved."); return; }
@@ -459,6 +464,7 @@ void cp_tick(struct cp_app *a)
     }
     if (a->page == CP_POWER) { pw_tick(a); return; }
     if (a->page==CP_DATETIME) { dt_tick(a); return; }
+    if (a->page==CP_ACCESS) { ac_tick(a); return; }
     if (a->page!=CP_SYSTEM) return;
     char previous[sizeof(a->clock_line)]; memcpy(previous,a->clock_line,sizeof(previous));
     uint64_t t = a->host.now ? a->host.now(a->host.ctx) : 0;
@@ -536,6 +542,7 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
     if (dt_event(a, e)) return;
     if (pw_event(a, e)) return;
     if (hw_event(a, e)) return;
+    if (ac_event(a, e)) return;
     switch (e->id) {
     case 950:
         if (e->type==DU_EV_SELECT && e->index>=0 && (unsigned)e->index<a->autoplay_count) a->autoplay_selected=(unsigned)e->index;
@@ -1568,6 +1575,8 @@ static void build(struct cp_app *a)
     } else if (a->page == CP_POWER) {
     pw_build(a);
 
+    } else if (a->page == CP_ACCESS) {
+    ac_build(a);
     } else if (a->page==CP_UNINSTALL) {
         int count=a->host.uninstall_list ? a->host.uninstall_list(a->host.ctx,a->uninstall,CP_PROGRAM_MAX) : -ENOSYS;
         a->uninstall_count=count>=0 && count<=(int)CP_PROGRAM_MAX ? (unsigned)count : 0;
@@ -1674,6 +1683,7 @@ void cp_open(struct cp_app *a, int page)
     a->page = page >= 0 && page < CP_PAGES ? page : CP_HOME;
     a->status[0] = 0;
     a->dm_updating = 0;
+    if (a->page == CP_ACCESS) { load(a,&a->cfg); a->access_loaded=a->cfg.access; a->ac_view=AC_V_MAIN; }
     if (a->page == CP_DRIVERS) { a->detail_list = C_DRIVERS; a->detail_index = 0; }
     if (a->page == CP_DEVICES || a->page == CP_DRIVERS || a->page == CP_SYSTEM || a->page == CP_AUTOPLAY) refresh(a);
     if (a->page == CP_POWER) pw_open(a);

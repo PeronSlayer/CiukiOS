@@ -258,7 +258,7 @@ static void budgets(const char *name)
      * merely the Files/Help toolbar. Defaults preserve explicit app copy. */
     for (unsigned i=0;i<ui.count;i++) {
         const struct du_widget *w=&ui.widgets[i];
-        assert(w->tip && *w->tip && w->help && *w->help);
+        assert(*w->tip && w->help && *w->help);
     }
     double cold_host=(cpu_ns()-before)/1e6, cold_model=100.0+model_us()/1000.0;
     assert(cold_model<=500.0);
@@ -301,7 +301,7 @@ int main(void)
 {
     setvbuf(stdout,NULL,_IONBF,0);
 #if defined(CASE_CONTROL)
-    static const char *names[]={"Display","Mouse","Keyboard","Sounds","Date and Time","System","Devices","Drivers","Network","Power","Adapter","Fonts","Storage","Programs","Game controllers","Add New Hardware"};
+    static const char *names[]={"Display","Mouse","Keyboard","Sounds","Date and Time","System","Devices","Drivers","Network","Power","Adapter","Fonts","Storage","Programs","Game controllers","Multimedia","Users","Passwords","Regional Settings","Internet Properties","Add New Hardware","Accessibility Options"};
     for (page=CP_HOME;page<CP_PAGES;page++) { memset(&app,0,sizeof(app)); budgets(page<0 ? "Control Panel Home" : names[page]); }
 #elif defined(CASE_GFX)
     for(gfx_page=0;gfx_page<3;gfx_page++)budgets(gfx_page==0 ? "Graphics Demo 2D" : gfx_page==1 ? "Graphics Demo paused cube" : "Graphics Demo paused tiles");

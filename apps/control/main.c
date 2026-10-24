@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  * /Programs/control: CiukiOS Control Panel. Usage: control [--channel-fd=N] [--panel=NAME]
- * NAME: home, display, mouse, keyboard, sounds, datetime, system, devices, drivers, network, power, adapter. */
+ * NAME: home, display, mouse, keyboard, sounds, datetime, system, devices, drivers, network, power, adapter, access. */
 #include <netdb.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -691,7 +691,7 @@ static void idle(void *arg)
      * Other pages have no heartbeat. Navigation/close also runs on input and
      * completion, even when the wall clock has not changed. */
     int ticking=m->app.page==CP_DATETIME || m->app.page==CP_SYSTEM || m->app.page==CP_SOUNDS || m->app.page==CP_JOYSTICK ||
-        m->app.page==CP_POWER;
+        m->app.page==CP_POWER || m->app.page==CP_ACCESS;
     if (ticking && (!m->tick_next || mono>=m->tick_next)) {
         cp_tick(&m->app); m->tick_next=mono+1000000000ull;
     } else if (!ticking) m->tick_next=0;

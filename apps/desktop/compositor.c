@@ -93,6 +93,10 @@ extern void desk_gfx_complete(struct desktop *,int,int,uint64_t,uint64_t) __attr
 #endif
 /* The shell (shell.c) is linked only into /Programs/desktop; the demo and the
  * libdeskui programs reuse this file for glyphs and frames without it. */
+/* G25: the SoundSentry flash and the Magnifier panel (access_desktop.c). */
+extern unsigned desk_access_overlay(const struct desktop *, struct desk_box *) __attribute__((weak));
+extern void access_mag_paint(uint32_t *, size_t, struct access_mag_box, const uint32_t *, size_t, struct access_mag_box, unsigned, int, uint32_t) __attribute__((weak));
+extern void desk_access_reconcile(struct desktop *) __attribute__((weak));
 extern void desk_shell_background(struct desktop *, struct desk_box) __attribute__((weak));
 extern void desk_shell_topbar(struct desktop *, struct desk_box) __attribute__((weak));
 extern void desk_shell_overlay(struct desktop *, struct desk_box) __attribute__((weak));
@@ -224,7 +228,7 @@ static int tray_width_at(const struct desktop *d, uint64_t second)
     unsigned icons = 3 + (d->sh.cfg.layout_switch != 0) +
         ((d->sh.media.removable_mask & ~7u) != 0) +
         (d->sh.power_status.version == CIUKI_POWER_VERSION && !d->sh.power_meter_hidden) +
-        (d->sh.resources.visible != 0);
+        (d->sh.resources.visible != 0) + d->acc.shown_visible;
     for (unsigned i=0;i<SH_PROGRAM_TRAY;i++) icons+=!!d->sh.program_tray[i].window;
     return 2 * SH_TRAY_MARGIN + desk_shell_clock_width_at(d, second) +
            (int)icons * (SH_TRAY_ICON_SIZE + SH_TRAY_GAP);
@@ -245,16 +249,18 @@ struct desk_box desk_shell_tray_icon_box(const struct desktop *d, enum sh_tray_i
     int has_media = (d->sh.media.removable_mask & ~7u) != 0;
     int has_power = d->sh.power_status.version == CIUKI_POWER_VERSION && !d->sh.power_meter_hidden;
     int has_resources = d->sh.resources.visible != 0;
-    if (icon < SH_TRAY_VOLUME || icon > SH_TRAY_RESOURCES ||
+    if (icon < SH_TRAY_VOLUME || icon > SH_TRAY_ACCESS ||
         (icon == SH_TRAY_LANGUAGE && !d->sh.cfg.layout_switch) ||
         (icon == SH_TRAY_POWER && !has_power) ||
         (icon == SH_TRAY_RESOURCES && !has_resources) ||
+        (icon == SH_TRAY_ACCESS && !d->acc.shown_visible) ||
         (icon == SH_TRAY_MEDIA && !has_media)) return (struct desk_box){0, 0, 0, 0};
     struct desk_box c = desk_shell_clock_box(d);
     int slot = icon == SH_TRAY_NOTIFICATION ? 0 :
         icon == SH_TRAY_MEDIA ? 3 : icon == SH_TRAY_POWER ? 3 + has_media :
         icon == SH_TRAY_RESOURCES ? 3 + has_media + has_power :
         icon == SH_TRAY_LANGUAGE ? 3 + has_media + has_power + has_resources :
+        icon == SH_TRAY_ACCESS ? 3 + has_media + has_power + has_resources + (d->sh.cfg.layout_switch != 0) :
         (int)icon + 1;
     return (struct desk_box){c.x - (slot + 1) * (SH_TRAY_ICON_SIZE + SH_TRAY_GAP),
                             c.y + (c.h - SH_TRAY_ICON_SIZE) / 2, SH_TRAY_ICON_SIZE, SH_TRAY_ICON_SIZE};
@@ -298,6 +304,9 @@ int desk_shell_chrome_intersects(const struct desktop *d, struct desk_box box)
     struct desk_box ignored;
     if(d->shell && d->sh.cfg.mouse_trails)for(unsigned k=0;k<d->pointer_trail_count;k++)
         if(desk_intersect(box,(struct desk_box){d->pointer_trail[k].x-64,d->pointer_trail[k].y-64,128,128},&ignored))return 1;
+    /* G25: the SoundSentry flash and the Magnifier panel are painted above everything. */
+    struct desk_box access[2]; unsigned access_n=desk_access_overlay ? desk_access_overlay(d,access) : 0;
+    for (unsigned i=0;i<access_n;i++) if (desk_intersect(box,access[i],&ignored)) return 1;
     return desk_notification_intersects(d,box) ||
         (d->shell && desk_intersect(box,desk_start_bounds(d),&ignored)) ||
         /* fx-19: the translucent drag image and the desktop marquee. */
@@ -756,6 +765,15 @@ void desk_shell_draw(struct desktop *d, struct desk_box clip)
 _Static_assert(sizeof(desk_cursors)/sizeof(desk_cursors[0])==DESK_CURSOR_PRECISION+1,"generic cursor inventory");
 _Static_assert(DESK_CURSOR_ERASER+1==DESK_CURSOR_OPEN_HAND,"paint cursor inventory");
 _Static_assert(sizeof(desk_extra_cursors)/sizeof(desk_extra_cursors[0])==DESK_CURSOR_COUNT-DESK_CURSOR_OPEN_HAND,"extra cursor inventory");
+/* G25 pointer schemes (WM-21): Large uses the pre-fx-13 scale of the same drawings (the 32x32 raster is the
+ * limit of every presenter), Inverted swaps black and white inside the pointer's mask. */
+static struct desk_cursor_raster scheme_raster(const struct desktop *d, struct desk_cursor_raster r, const struct desk_cursor_raster *large)
+{
+    unsigned scheme=d->sh.cfg.access.pointer;
+    if ((scheme&1u) && large) r=*large;
+    if (scheme&2u) for (unsigned y=0;y<32;y++) r.image[y]=r.mask[y]&~r.image[y];
+    return r;
+}
 static struct desk_cursor_raster cursor_raster(const struct desktop *d)
 {
     if (d->v3_cursor_id) {
@@ -764,13 +782,13 @@ static struct desk_cursor_raster cursor_raster(const struct desktop *d)
     }
     unsigned shape=d->cursor_shape;
     const struct desk_cursor_raster *generic=desk_generic_cursor(shape);
-    if (generic) return *generic;
-    if (shape>=DESK_CURSOR_COUNT) return desk_cursors[DESK_CURSOR_ARROW];
+    if (generic) return scheme_raster(d,*generic,desk_generic_cursor_large(shape));
+    if (shape>=DESK_CURSOR_COUNT) return scheme_raster(d,desk_cursors[DESK_CURSOR_ARROW],&desk_cursors_large[DESK_CURSOR_ARROW]);
     struct desk_tool_cursor tool=desk_tool_cursor(shape);
     struct desk_cursor_raster raster={.hot_x=(unsigned)tool.hot_x,.hot_y=(unsigned)tool.hot_y,.width=32,.height=32};
     memcpy(raster.mask,tool.mask,sizeof(raster.mask));
     memcpy(raster.image,tool.image,sizeof(raster.image));
-    return raster;
+    return scheme_raster(d,raster,NULL);
 }
 static uint32_t cursor_background(void)
 { return desk_cursors[0].shadow ? 0 : 0x101010u; }
@@ -1012,6 +1030,7 @@ void desk_scene_reconcile(struct desktop *d)
     }
     desk_stack_damage(d);
     if (d->shell && desk_shell_reconcile) desk_shell_reconcile(d);
+    if (desk_access_reconcile) desk_access_reconcile(d);
 }
 void desk_caption_damage(struct desktop *d,int index)
 {
@@ -1215,12 +1234,59 @@ static void pointer_under(struct desktop *d, struct desk_box box, const uint64_t
         }
     }
 }
+/* G25 Magnifier: the panel docked at the top or bottom edge shows the part of the screen around the pointer (or
+ * the keyboard focus) at an integer magnification, nearest neighbour, optionally inverted. It is painted last,
+ * after the software pointer, so what it reads is what the screen shows; the hardware pointer is not in RAM,
+ * so it is drawn into the panel at the same magnification. access_desktop.c decides when the panel is stale. */
+static void magnifier_compose(struct desktop *d)
+{
+    struct desk_access *x=&d->acc;
+    if (!x->mag_shown || !x->mag_pending || !access_mag_paint) return;
+    x->mag_pending=0;
+    struct access_mag_box p=x->mag_panel, s=x->mag_source;
+    if (p.x<0 || p.y<0 || p.x+p.w>(int)d->width || p.y+p.h>(int)d->height || s.x<0 || s.y<0 ||
+        s.x+s.w>(int)d->width || s.y+s.h>(int)d->height) return;
+    access_mag_paint(d->pixels,d->width,p,d->pixels,d->width,s,x->mag_level,0,desk_theme->desktop);
+    if (d->hw_cursor && !d->v3_cursor_hidden && !d->v3_cursor_id) {
+        /* The pointer exactly as cursor() draws it at 1x (shadow, then the black and white silhouette), every
+         * pixel magnified: a software pointer in RAM and this give the same panel. */
+        struct desk_cursor_raster r=cursor_raster(d);
+        unsigned level=x->mag_level;
+        int ox=p.x+(d->mouse_x-(int)r.hot_x-s.x)*(int)level, oy=p.y+(d->mouse_y-(int)r.hot_y-s.y)*(int)level;
+        uint32_t dark=cursor_background();
+        for (unsigned ry=0;ry<32;ry++) for (unsigned rx=0;rx<32;rx++) {
+            uint32_t bit=0x80000000u>>rx, colour=0;
+            unsigned alpha=0;
+            if (r.mask[ry]&bit) colour=r.image[ry]&bit ? 0xffffffu : dark;
+            else if (r.shadow && r.shadow[ry*32+rx]) alpha=r.shadow[ry*32+rx];
+            else continue;
+            for (unsigned yy=0;yy<level;yy++) for (unsigned xx=0;xx<level;xx++) {
+                int px=ox+(int)(rx*level+xx), py=oy+(int)(ry*level+yy);
+                if (px<p.x || px>=p.x+p.w || py<p.y || py>=p.y+p.h) continue;
+                if ((px-p.x)/(int)level>=s.w || (py-p.y)/(int)level>=s.h) continue;
+                uint32_t *dst=&d->pixels[(size_t)py*d->width+(size_t)px];
+                if (!alpha) { *dst=colour; continue; }
+                uint32_t under=cursor_display_rgb(d,*dst); unsigned inv=255-alpha;
+                *dst=((((under>>16)&255)*inv+127)/255)<<16|((((under>>8)&255)*inv+127)/255)<<8|(((under&255)*inv+127)/255);
+            }
+        }
+    }
+    if (x->mag_invert)   /* the whole magnified picture, pointer included */
+        for (int py=p.y;py<p.y+p.h;py++) for (int px=p.x;px<p.x+p.w;px++)
+            if ((px-p.x)/(int)x->mag_level<s.w && (py-p.y)/(int)x->mag_level<s.h) d->pixels[(size_t)py*d->width+(size_t)px]^=0xffffffu;
+    /* A two-pixel rule on the edge that faces the screen. */
+    struct desk_paint pt=paint_of(d,(struct desk_box){p.x,p.y,p.w,p.h});
+    int top=p.y+p.h/2<(int)d->height/2;
+    desk_paint_fill(&pt,p.x,top ? p.y+p.h-2 : p.y,p.w,2,desk_theme->accent);
+}
 /* Reference/capture renderer: the runtime keeps the pointer out of the scene. */
 void desk_composite(struct desktop *d, struct desk_box clip)
 {
     if (!desk_intersect(clip,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},&clip)) return;
     render_cache_prepare(d);
     scene(d,clip); DESK_PROFILE("cursor", cursor(d,clip));
+    d->acc.mag_pending=d->acc.mag_shown;   /* a full reference frame always draws the panel */
+    magnifier_compose(d);
 }
 void desk_render_release(struct desktop *d)
 {
@@ -1501,6 +1567,13 @@ static int region_uncovered(struct desktop *d,pixman_region32_t *region,int inde
             if(!region_cut(region,b))return 0;
         }
     }
+    {   /* G25: neither the SoundSentry flash nor the Magnifier panel may be carried or covered */
+        struct desk_box access[2];unsigned n=desk_access_overlay ? desk_access_overlay(d,access) : 0;
+        for(unsigned i=0;i<n;i++) {
+            struct desk_box b=access[i];b.x+=dx;b.y+=dy;
+            if(!region_cut(region,b))return 0;
+        }
+    }
     return 1;
 }
 static int copy_cut(pixman_region32_t *region,const struct ciuki_rect *r,struct desk_box b)
@@ -1537,6 +1610,8 @@ static int copy_region(struct desktop *d,pixman_region32_t *region,const struct 
             if(desk_theme->shadow_size) { b.x-=6;b.y-=6;b.w+=12;b.h+=12; }
             if(!copy_cut(region,r,b)) { pixman_region32_clear(region);return 0; }
         }
+        struct desk_box access[2];unsigned access_n=desk_access_overlay ? desk_access_overlay(d,access) : 0;
+        for(unsigned i=0;i<access_n;i++) if(!copy_cut(region,r,access[i])) { pixman_region32_clear(region);return 0; }
         struct desk_box notice=desk_shell_notification_bounds ? desk_shell_notification_bounds(d) : (struct desk_box){0};
         if(d->sh.dnd.active && d->sh.dnd.image.w && !copy_cut(region,r,d->sh.dnd.image)) { pixman_region32_clear(region);return 0; }
         if(!copy_cut(region,r,desk_start_bounds(d)) ||
@@ -2221,6 +2296,7 @@ int desk_redraw(struct desktop *d)
         if (d->cursor_dirty) desk_damage_add(&d->present_damage,b,d->width,d->height);
     } else d->cursor_valid=0;
     if (soft) d->cursor_dirty=0;
+    magnifier_compose(d);   /* G25: after the software pointer, over the composed damage */
     s->composite_ns=time_now(d)-begin;
     begin=time_now(d);
     int complete=1;

@@ -6,6 +6,7 @@
 #include "start-orb.h"
 #include "shell_link.h"
 #include "startup.h"
+#include "access.h"
 #include <stddef.h>
 #define DESK_CLIENTS 16
 #define DESK_DAMAGE_MAX 32
@@ -290,6 +291,21 @@ struct desk_end_task {
     uint32_t pid, target;          /* target: the program's window id, 0 for a Win32 broker target */
     char name[DESK_TITLE_MAX + 1];
 };
+/* G25 accessibility glue state (access_desktop.c); the engine is struct access (access.h). */
+#define DESK_ACCESS_SOURCE 0xACC0u  /* input event source of MouseKeys pointer events: not scaled by the mouse speed */
+struct desk_access {
+    struct access eng;
+    int started;
+    unsigned shown_bits;            /* tray indicator state last painted */
+    int shown_visible;
+    int flash_active; struct desk_box flash; uint64_t flash_until;
+    /* Magnifier (docs/design/accessibility.md): the panel and what it shows */
+    int mag_shown, mag_pending;
+    struct access_mag_box mag_panel, mag_source;
+    int mag_mx, mag_my, mag_hw; unsigned mag_shape, mag_level, mag_invert;
+    uint64_t mouse_stamp, focus_stamp; int focus_cx, focus_cy;
+    int mag_side;
+};
 struct desk_render_cache;
 struct desk_clipboard;
 struct desktop {
@@ -464,6 +480,7 @@ struct desktop {
     struct desk_shell sh;
     uint64_t resources_next_ns;     /* G30: next Resource Meter sample (resources.c) */
     struct desk_schedsvc *schedsvc; /* G30: scheduled tasks service (schedsvc.c), or NULL */
+    struct desk_access acc;
     struct desk_power_sequence power;
     struct desk_session session;   /* G3: the end-of-session queries before power */
     struct desk_end_task end_task;
@@ -482,6 +499,7 @@ struct desktop {
     int (*sound_request)(struct desktop *, int client, unsigned request, unsigned event, uint32_t serial);
     int (*sound_shutdown)(struct desktop *); /* 1 complete, 0 still within the 2 s allowance */
     void (*sound_cancel)(struct desktop *);
+    void (*sound_tone)(struct desktop *, unsigned tone);   /* G25: a synthesised accessibility tone (access.h ACC_TONE_*) */
     int (*power_request)(int action);
     int (*power_state)(void); /* query capabilities and irreversible progress */
     void (*power_prepare)(struct desktop *);
@@ -652,7 +670,14 @@ void desk_stack_damage(struct desktop *);
 void desk_scene_reconcile(struct desktop *); /* fx-15: before every frame decision and in desk_redraw */
 void desk_caption_damage(struct desktop *, int);
 unsigned desk_shell_occluders(const struct desktop *, struct desk_box *); /* SH_LEVELS+6 slots */
-static inline void desk_sound(struct desktop *d, unsigned e) { if (d->sound_event) d->sound_event(d,e); }
+/* G25: SoundSentry and ShowSounds follow every desktop sound (access_desktop.c; weak: tests may omit it). */
+/* G25 accessibility glue (access_desktop.c). Hosts that omit it get NULL from the weak references. */
+void desk_access_tick(struct desktop *);                   /* every service turn: SlowKeys, hot-key holds, MouseKeys, time-out, flash */
+uint64_t desk_access_wake(const struct desktop *, uint64_t now_ns);   /* next deadline, 0 none */
+void desk_access_settings_changed(struct desktop *);       /* desktop.cfg was reloaded or edited */
+void desk_access_sound_cue(struct desktop *, unsigned event) __attribute__((weak));
+static inline void desk_sound(struct desktop *d, unsigned e)
+{ if (d->sound_event) d->sound_event(d,e); if (desk_access_sound_cue) desk_access_sound_cue(d,e); }
 void desk_init(struct desktop *, const struct desk_ops *, uint32_t, uint32_t);
 int desk_v3_receive(struct desktop *, int, const struct ciuki_message *);
 void desk_v3_revoke(struct desktop *);
@@ -696,6 +721,7 @@ void desk_saver_tick(struct desktop *);
 int desk_saver_start(struct desktop *, unsigned kind);
 int desk_saver_input(struct desktop *, const struct ciuki_input_event *);
 void desk_input(struct desktop *, const struct ciuki_input_event *);
+void desk_input_unfiltered(struct desktop *, const struct ciuki_input_event *);   /* G25: after the accessibility filters */
 int desk_drain_input(struct desktop *, int (*read_events)(int, struct ciuki_input_event *, uint32_t));
 void desk_composite(struct desktop *, struct desk_box);
 void desk_accel_reset(struct desktop *, uint32_t generation);

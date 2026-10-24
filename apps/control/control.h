@@ -319,6 +319,10 @@ struct cp_app {
     char aw_names[AW_FOUND_MAX][96];
     struct du_item profile_items[HP_MAX]; char profile_notes[HP_MAX][48];
     struct pf_status perf;
+    /* G25 Accessibility Options (access.inc): settings as last read, the sub-view's entry state, tab and view. */
+    struct access_settings access_loaded, ac_backup;
+    int ac_tab, ac_view;
+    struct du_item ac_tabs[5], ac_items[8];
 };
 void cp_game_open(struct cp_app *, unsigned);
 void cp_joystick_result(struct cp_app *, const struct ciuki_joystick_control *, int);

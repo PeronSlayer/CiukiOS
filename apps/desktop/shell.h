@@ -41,9 +41,10 @@ int desk_shell_program_icon(struct desktop *, int, const struct desk_packet *, c
 int desk_shell_program_balloon(struct desktop *, int, const struct desk_packet *);
 void desk_shell_program_remove(struct desktop *, uint32_t);
 /* Tray identifiers; geometry places Notifications next to the clock. */
-enum sh_tray_icon { SH_TRAY_VOLUME, SH_TRAY_NETWORK, SH_TRAY_NOTIFICATION, SH_TRAY_MEDIA, SH_TRAY_POWER, SH_TRAY_LANGUAGE, SH_TRAY_RESOURCES };
+
 /* G30 Resource Meter: shown while a resmeter client has a window; levels as apps/systools rm_state (0 ok, 1 low, 2 critical). */
 struct sh_resources { int visible; unsigned system, user, gdi, level; };
+enum sh_tray_icon { SH_TRAY_VOLUME, SH_TRAY_NETWORK, SH_TRAY_NOTIFICATION, SH_TRAY_MEDIA, SH_TRAY_POWER, SH_TRAY_LANGUAGE, SH_TRAY_RESOURCES, SH_TRAY_ACCESS /* G25 */ };
 enum sh_notify_action { SH_NOTIFY_DETAILS, SH_NOTIFY_MEDIA, SH_NOTIFY_NETWORK, SH_NOTIFY_VOLUME };
 /* fx-21b: wording of the Windows notification (Microsoft KB 2654149, KB 314634). */
 #define DESK_USB_UNRECOGNIZED_TITLE "USB Device Not Recognized"
@@ -95,8 +96,8 @@ enum sh_action { SH_ACT_NONE, SH_ACT_SUBMENU, SH_ACT_LAUNCH, SH_ACT_ABOUT, SH_AC
                  SH_ACT_TASKBAR_PROPERTIES, SH_ACT_FIND,
                  SH_ACT_FILES_ACTION, /* G8: appended after G7 Find. */
                  SH_ACT_HELP /* G15: Start > Help */,
-                 SH_ACT_POWER_SCHEME /* G11: arg is the scheme */, SH_ACT_POWER_METER };
-
+                 SH_ACT_POWER_SCHEME /* G11: arg is the scheme */, SH_ACT_POWER_METER,
+                 SH_ACT_MAGNIFIER /* G25: Accessories > Magnifier: toggles the Magnifier */ };
 #define SH_ITEM_SEPARATOR 1u
 #define SH_ITEM_DISABLED 2u
 #define SH_ITEM_DEFAULT 4u
@@ -290,6 +291,7 @@ int desk_internal_open(struct desktop *, int kind);
 void desk_shell_message(struct desktop *, const char *title, const char *text, int error);
 /* G2: a Yes/No question in the message window; Yes runs desk_folder_confirmed(action), No or closing it desk_folder_cancelled. */
 enum { SH_CONFIRM_NONE, SH_CONFIRM_DELETE, SH_CONFIRM_EMPTY };
+#define SH_CONFIRM_ACCESS 100   /* G25: 100 + ACC_F_* feature: Yes keeps the feature the hot key switched on, No or closing it switches it off */
 void desk_shell_confirm(struct desktop *, const char *title, const char *text, int icon, int action);
 void desk_shell_bin_state(struct desktop *, int full);   /* the Recycle Bin icon's full or empty picture */
 void desk_shell_message_class(struct desktop *, const char *title, const char *text, int icon);

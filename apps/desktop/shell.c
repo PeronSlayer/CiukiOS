@@ -21,6 +21,13 @@
 static int shortcut_hotkey(struct desktop *,int,int);
 static void shortcut_programs_menu(struct desktop *,struct sh_menu *,int);
 
+/* G25 accessibility glue (access_desktop.c); weak so hosts that omit it keep working. */
+extern void desk_access_confirmed(struct desktop *, int feature, int yes) __attribute__((weak));
+extern void desk_access_indicator_draw(struct desktop *, struct du_canvas *, struct desk_box) __attribute__((weak));
+extern void desk_access_flash_draw(struct desktop *, struct desk_box) __attribute__((weak));
+extern void desk_access_magnifier_set(struct desktop *, int on) __attribute__((weak));
+extern int desk_access_magnifier_on(const struct desktop *) __attribute__((weak));
+
 /* ---- theme hooks ------------------------------------------------------- */
 /* Every shell colour is a theme colour (desk_theme; DU_* are the same
  * fields under the toolkit's names). The tooltip keeps the classic paper. */
@@ -474,6 +481,10 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
                 item(m, programs[k].label, programs[k].icon, SH_ACT_LAUNCH, at, 0);
         }
         shortcut_programs_menu(d,m,kind);
+        if (desk_access_magnifier_set) {   /* G25: Accessories > Accessibility > Magnifier, one entry here */
+            if (m->count) separator(m);
+            item(m, desk_access_magnifier_on(d) ? "Magnifier (on)" : "Magnifier", "preferences-desktop-accessibility", SH_ACT_MAGNIFIER, 0, 0);
+        }
         break;
     case SH_MENU_GAMES: {
         unsigned native = 0;   /* G27: the native games first (Minesweeper, Solitaire, FreeCell, Hearts), then the bundled DOS games */
@@ -1060,6 +1071,9 @@ static void act(struct desktop *d, const struct sh_item *it)
         }
         break;
     case SH_ACT_CLEAR_RECENT: d->sh.cfg.recent_count = 0; d->sh.want_save = 1; break;
+    case SH_ACT_MAGNIFIER:
+        if (desk_access_magnifier_set) desk_access_magnifier_set(d, !desk_access_magnifier_on(d));
+        break;
     default: break;
     }
 }
@@ -1781,6 +1795,7 @@ static void draw_tray(struct desktop *d, struct du_canvas *canvas)
         struct desk_box mi=media_icon_box(d);
         du_icon_blit(&c,mi.x,mi.y,desk_shell_icon("drive-removable-media",16),16,DU_ICON_NORMAL);
     }
+    if (desk_access_indicator_draw && desk_shell_tray_icon_box(d, SH_TRAY_ACCESS).w) desk_access_indicator_draw(d, &c, desk_shell_tray_icon_box(d, SH_TRAY_ACCESS));
     struct desk_box notification = notification_icon_box(d);
     du_icon_blit(&c,notification.x,notification.y,desk_shell_icon("dialog-information",16),16,
                  d->sh.notification.active ? DU_ICON_NORMAL : DU_ICON_GHOST);
@@ -3041,6 +3056,7 @@ void desk_shell_overlay(struct desktop *d, struct desk_box clip)
     if (d->sh.switcher) draw_switcher(d, clip);
     if (d->sh.dnd.active) draw_drag_image(d, clip);
     if (d->sh.user_gate>0) logon_paint(d,clip);
+    if (desk_access_flash_draw) desk_access_flash_draw(d, clip);   /* G25 SoundSentry: inverts what was painted */
 }
 /* Opaque overlay bodies, shared with foreign-surface clipping. Shadows and
  * the notification's tail remain dependent on the pixels underneath. */
@@ -3268,7 +3284,11 @@ void desk_internal_closed(struct desktop *d, int index)
         free(r->browser); free(r->pixels); free(r->entries); free(r); d->sh.run=NULL;
         d->sh.run_history_request=0;
     }
-    if (d->clients[index].internal==DESK_INTERNAL_MESSAGE && d->sh.confirm) { d->sh.confirm=0; desk_folder_cancelled(d); }   /* closing the question answers No */
+    if (d->clients[index].internal==DESK_INTERNAL_MESSAGE && d->sh.confirm) {   /* closing the question answers No */
+        int action=d->sh.confirm; d->sh.confirm=0;
+        if (action>=SH_CONFIRM_ACCESS) { if (desk_access_confirmed) desk_access_confirmed(d,action-SH_CONFIRM_ACCESS,0); }
+        else desk_folder_cancelled(d);
+    }
     if (d->clients[index].internal==DESK_INTERNAL_MESSAGE && d->v3_dialog_kind) {
         if(d->v3_dialog_kind==1)(void)desk_v3_dialog_accept(d);
         d->v3_dialog_kind=0; d->v3_dialog_pid=0;
@@ -3303,7 +3323,8 @@ void desk_shell_bin_state(struct desktop *d, int full)
 static void confirm_answer(struct desktop *d, int index, int yes)
 {
     int action = d->sh.confirm; d->sh.confirm = 0;
-    if (yes) desk_folder_confirmed(d, action); else desk_folder_cancelled(d);
+    if (action >= SH_CONFIRM_ACCESS) { if (desk_access_confirmed) desk_access_confirmed(d, action - SH_CONFIRM_ACCESS, yes); }
+    else if (yes) desk_folder_confirmed(d, action); else desk_folder_cancelled(d);
     desk_request_close(d, index);
 }
 void desk_shell_message_class(struct desktop *d, const char *title, const char *text, int error)
@@ -3953,6 +3974,7 @@ int desk_shell_button(struct desktop *d, int button, int down)
     }
     if (button==CIUKI_BUTTON_RIGHT) {
         int page=desk_contains(volume_icon_box(d),x,y) ? CP_SOUNDS :
+            desk_contains(desk_shell_tray_icon_box(d, SH_TRAY_ACCESS),x,y) ? CP_ACCESS :
             desk_contains(network_icon_box(d),x,y) ? CP_NETWORK :
             desk_contains(media_icon_box(d),x,y) ? CP_AUTOPLAY :
             desk_contains(desk_shell_clock_box(d),x,y) ? CP_DATETIME : CP_HOME;
@@ -4037,6 +4059,10 @@ int desk_shell_button(struct desktop *d, int button, int down)
             /* G11: Windows 98's meter: a click changes the power scheme. */
             struct desk_box bi=desk_shell_tray_icon_box(d, SH_TRAY_POWER);
             desk_menu_open(d,SH_MENU_POWER,bi.x,bi.y+bi.h);
+            return 1;
+        }
+        if (desk_contains(desk_shell_tray_icon_box(d, SH_TRAY_ACCESS),x,y) && button == CIUKI_BUTTON_LEFT) {   /* G25: the status indicator opens Accessibility Options */
+            if (program_index(d,"control")>=0) launch_named(d,"control","--panel=access");
             return 1;
         }
         if ((d->sh.media.removable_mask & ~7u) && desk_contains(media_icon_box(d),x,y) && (button==CIUKI_BUTTON_LEFT || button==CIUKI_BUTTON_RIGHT)) {
@@ -5038,7 +5064,7 @@ void desk_shell_apply(struct desktop *d)
     icons_layout(d);
     d->sh.wall_valid = 0;
     /* The theme named by desktop.cfg (default Ciuki Blue), at once. */
-    if (desk_theme_use(d->sh.cfg.theme)) desk_theme_use(DESK_THEME_DEFAULT);
+    if (desk_theme_use(cfg_effective_theme(&d->sh.cfg))) desk_theme_use(DESK_THEME_DEFAULT);   /* G25: high contrast names the scheme */
     if (d->sh.levels) desk_menu_close(d);
     d->shell_caret_next=0;d->shell_caret_hidden=0;
     d->input_volatile_mask=0;
