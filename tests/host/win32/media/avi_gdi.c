@@ -67,6 +67,13 @@ BOOL W32API DeleteFileA(const char *a) {
   return 0;
 }
 void W32API SetLastError(DWORD e) { (void)e; }
+/* The AVI model supplies media files, but no printer configuration/spool. */
+DWORD W32API GetLastError(void) { return 2; }
+DWORD W32API GetCurrentProcessId(void) { return (DWORD)getpid(); }
+BOOL W32API CreateDirectoryA(const char *p, void *sa) { (void)p; (void)sa; return 0; }
+BOOL W32API RemoveDirectoryA(const char *p) { (void)p; return 0; }
+BOOL W32API MoveFileA(const char *a, const char *b) { (void)a; (void)b; return 0; }
+BOOL W32API FlushFileBuffers(void *h) { (void)h; return 0; }
 int w32_stricmp(const char *a, const char *b) {
   while (*a && *b) {
     unsigned x = (unsigned char)*a++, y = (unsigned char)*b++;

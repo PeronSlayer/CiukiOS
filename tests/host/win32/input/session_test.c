@@ -61,8 +61,13 @@ static void layouts(void) {
       keys[165] = r[2] & 2 ? 128 : 0;
       keys[20] = r[2] & 4 ? 1 : 0;
       UINT vk = u32_scan_vk(layout, r[1]);
-      CHECK(ToAsciiEx(vk, r[1], keys, &out, 0, h) == 1 &&
+      /* G12: Italian Shift+^ is a dead key. Consume it with Space so each
+       * pinned scalar remains independent of the preceding table row. */
+      BOOL dead = layout == 1 && r[1] == 0x0d && (r[2] & 1);
+      CHECK(ToAsciiEx(vk, r[1], keys, &out, 0, h) == (dead ? -1 : 1) &&
             out == u32_ansi(r[3]));
+      if (dead)
+        CHECK(ToAsciiEx(' ', 0x39, keys, &out, 0, h) == 1 && out == r[3]);
     }
     CHECK(MapVirtualKeyA('Q', 0) == 0x10 && MapVirtualKeyA('Q', 2) == 'Q');
     CHECK(MapVirtualKeyA(0x36, 3) == 161 && MapVirtualKeyA(0xe01d, 3) == 163);
@@ -76,16 +81,16 @@ static void layouts(void) {
   u32_layout = 1;
   memset(keys, 0, 256);
   keys[16] = 128;
-  CHECK(ToAscii(0xdd, 0x0d, keys, &out, 0) == 1 && out == '^');
+  CHECK(ToAscii(0xdd, 0x0d, keys, &out, 0) == -1 && out == '^');
   keys[16] = 0;
-  CHECK(ToAscii('A', 0x1e, keys, &out, 0) == 1 && out == 'a');
+  CHECK(ToAscii('A', 0x1e, keys, &out, 0) == 1 && out == 0xe2); /* â */
   CHECK(VkKeyScanA((char)0x80) == ('E' | 0x600));
   CHECK(ActivateKeyboardLayout(0x04090409, 0) == 0x04100410 &&
         GetKeyboardLayout(0) == 0x04090409);
   CHECK(ToAscii(0x67, 0x47, keys, &out, 0) == 1 && out == '7');
   CHECK(ToAscii(0x24, 0x47, keys, &out, 0) == 0);
-  puts("PASS pinned US/Italian scan VK DIK lParam characters; spacing accents, "
-       "no dead keys");
+  puts("PASS pinned US/Italian scan VK DIK lParam characters; spacing accents "
+       "and dead-key composition");
 }
 static MSG next_key(HWND h) {
   MSG m;

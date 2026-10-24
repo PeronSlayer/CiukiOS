@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/syscall.h>
+#include <time.h>
 #include <unistd.h>
 #include <w32/services.h>
 long test_allocations, test_bytes, test_fail_after = -1;
@@ -159,6 +160,11 @@ void *W32API GetProcAddress(void *m, const char *a) {
   return 0;
 }
 void W32API SetLastError(DWORD e) { (void)e; }
+DWORD W32API GetTickCount(void) {
+  struct timespec now;
+  assert(!clock_gettime(CLOCK_MONOTONIC, &now));
+  return (DWORD)((uint64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000);
+}
 
 /* G31 additional kernel facade operations; individual spool tests replace I/O. */
 __attribute__((weak)) BOOL W32API CreateDirectoryA(const char *p, void *sa) { (void)p; (void)sa; return 0; }

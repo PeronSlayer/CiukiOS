@@ -113,7 +113,8 @@ class DialogTests(unittest.TestCase):
         subprocess.run([*flags, '-c', str(ROOT/'tests/host/win32/user32/kernel_bridge.c'), '-o', str(bridge)], check=True)
         objects.append(bridge)
         user_sources = sorted((ROOT/'sdk/win32/user32').glob('*.c')) + [
-            ROOT/'apps/libdeskui/v3.c', ROOT/'apps/desktop/protocol.c', ROOT/'apps/desktop/keymap.c',
+            ROOT/'apps/libdeskui/v3.c', ROOT/'apps/libdeskui/clipstore.c',
+            ROOT/'apps/desktop/protocol.c', ROOT/'apps/desktop/keymap.c',
             ROOT/'sdk/win32/services/bytes.c', HERE/'harness.c', EXERCISE/'exercise.c',
             *[ROOT/'apps/w32srv'/n for n in ('registry.c', 'storage.c', 'directory.c', 'defaults.c', 'protocol.c', 'posix_io.c', 'progman.c', 'restart.c', 'shell_fs.c')]]
         for i, source in enumerate(user_sources):

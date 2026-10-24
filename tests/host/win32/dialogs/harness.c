@@ -17,6 +17,7 @@ extern int gdi_host_fonts(const char *, const char *);
 #define GDI(type, name) ((type)gdi_symbol(#name))
 #define FIXTURE ((HINSTANCE)(uintptr_t)0x400000)
 static char fonts_dir[512], install_dir[512], drive_dir[512], out_dir[512];
+static char host_cwd[260] = "C:\\";
 
 /* ---- files: C:\WINDOWS\FONTS is the union of the read-only system faces
  * and the writable install directory; other C:\ paths map under drive_c. */
@@ -151,6 +152,40 @@ BOOL W32API DeleteFileA(const char *a) {
   if (!host_path(a, path, sizeof(path), 1))
     return 0;
   return !unlink(path);
+}
+BOOL W32API FlushFileBuffers(HANDLE h) {
+  int fd = fd_of(h);
+  if (fd >= 0 && !fsync(fd))
+    return 1;
+  SetLastError(fd < 0 ? 6 : 29);
+  return 0;
+}
+/* Printer configuration/spool operations are outside the dialog fixture. */
+BOOL W32API CreateDirectoryA(const char *p, SECURITY_ATTRIBUTES *sa) {
+  (void)p; (void)sa; SetLastError(120); return 0;
+}
+BOOL W32API RemoveDirectoryA(const char *p) {
+  (void)p; SetLastError(120); return 0;
+}
+BOOL W32API MoveFileA(const char *a, const char *b) {
+  (void)a; (void)b; SetLastError(120); return 0;
+}
+DWORD W32API GetFullPathNameA(const char *s, DWORD n, char *p, char **f) {
+  if (!s || !*s) { SetLastError(87); return 0; }
+  const char *prefix = s[1] == ':' ? "" : host_cwd;
+  const char *slash = *prefix && prefix[strlen(prefix) - 1] != '\\' ? "\\" : "";
+  DWORD length = (DWORD)(strlen(prefix) + strlen(slash) + strlen(s));
+  if (n <= length) return length + 1;
+  snprintf(p, n, "%s%s%s", prefix, slash, s);
+  if (f) { *f = strrchr(p, '\\'); if (*f) ++*f; }
+  return length;
+}
+static DWORD W32API file_attributes(const char *name) {
+  char path[1024]; struct stat st;
+  if (!host_path(name, path, sizeof(path), 0) || stat(path, &st)) {
+    SetLastError(2); return UINT32_MAX;
+  }
+  return S_ISDIR(st.st_mode) ? 16 : 32;
 }
 
 /* ---- registry and WIN.INI ------------------------------------------------ */
@@ -294,7 +329,6 @@ static const char *reg_string(const char *key, const char *name) {
 }
 
 /* ---- f5-20B: current directory, file search, icon module ------------------ */
-static char host_cwd[260] = "C:\\";
 static BOOL W32API fake_set_dir(const char *p) {
   char win[600], native[1024];
   struct stat st;
@@ -451,6 +485,8 @@ void *W32API GetProcAddress(HANDLE h, const char *s) {
     } kernel[] = {{"WaitForSingleObject", (void *)WaitForSingleObject},
                   {"GetProcessHeap", (void *)GetProcessHeap},
                   {"HeapAlloc", (void *)HeapAlloc},
+                  {"GetFullPathNameA", (void *)GetFullPathNameA},
+                  {"GetFileAttributesA", (void *)file_attributes},
                   {"LoadLibraryExA", (void *)fake_load_ex},
                   {"FreeLibrary", (void *)fake_free},
                   {"EnumResourceNamesA", (void *)fake_names},

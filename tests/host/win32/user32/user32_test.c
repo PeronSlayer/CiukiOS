@@ -92,6 +92,26 @@ BOOL W32API CloseHandle(HANDLE h) {
   (void)h;
   return 1;
 }
+/* Input reuses the USER fixture without gdi_host.c's file adapters. */
+__attribute__((weak)) BOOL W32API WriteFile(HANDLE h, const void *data,
+                                            DWORD bytes, DWORD *written,
+                                            OVERLAPPED *o) {
+  (void)o;
+  return host_appearance_write(h, data, bytes, written);
+}
+__attribute__((weak)) BOOL W32API FlushFileBuffers(HANDLE h) {
+  return host_appearance_flush(h);
+}
+__attribute__((weak)) BOOL W32API DeleteFileA(const char *name) {
+  if (g23_files_enabled &&
+      !strcmp(name, "C:\\system\\settings\\desktop.cfg.appearance.tmp") &&
+      g23_temporary) {
+    g23_temporary = 0;
+    return 1;
+  }
+  SetLastError(2);
+  return 0;
+}
 #endif
 HANDLE W32API GetProcessHeap(void) { return (HANDLE)1; }
 static unsigned allocations,allocation_calls;

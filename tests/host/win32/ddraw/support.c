@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/syscall.h>
+#include <time.h>
 #include <unistd.h>
 #include <w32/ddraw.h>
 #include <w32/services.h>
@@ -149,3 +150,18 @@ void *W32API GetProcAddress(void *m, const char *a) {
   return 0;
 }
 void W32API SetLastError(DWORD e) { (void)e; }
+/* Printing is outside this surface fixture; its file service refuses I/O. */
+DWORD W32API GetLastError(void) { return 2; }
+DWORD W32API GetCurrentProcessId(void) { return (DWORD)getpid(); }
+DWORD W32API GetTickCount(void) {
+  struct timespec now;
+  assert(!clock_gettime(CLOCK_MONOTONIC, &now));
+  return (DWORD)((uint64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000);
+}
+BOOL W32API CreateDirectoryA(const char *p, void *sa) { (void)p; (void)sa; return 0; }
+BOOL W32API RemoveDirectoryA(const char *p) { (void)p; return 0; }
+BOOL W32API MoveFileA(const char *a, const char *b) { (void)a; (void)b; return 0; }
+DWORD W32API GetFullPathNameA(const char *s, DWORD n, char *p, char **f) {
+  (void)s; (void)n; (void)p; (void)f; return 0;
+}
+BOOL W32API FlushFileBuffers(void *h) { (void)h; return 0; }
