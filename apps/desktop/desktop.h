@@ -5,6 +5,7 @@
 #include "theme.h"
 #include "start-orb.h"
 #include "shell_link.h"
+#include "startup.h"
 #include <stddef.h>
 #define DESK_CLIENTS 16
 #define DESK_DAMAGE_MAX 32
@@ -259,6 +260,7 @@ struct desk_end_task {
 struct desk_render_cache;
 struct desk_clipboard;
 struct desktop {
+    struct desk_startup_gate startup;
     struct desk_clipboard *clipboard;
     void (*wake)(void *);
     void *wake_ctx;
