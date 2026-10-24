@@ -4,6 +4,16 @@
 #define FD_TABLE_STACK_TEST
 #include "../proc/files_test.c"
 #undef main
+/* The descriptor fixture has no storage-maintenance backend. Keep the
+ * media dispatcher linked while explicitly refusing these operations. */
+int storage_convert(struct storage *s,struct ciuki_media_convert *r,bool apply)
+{ (void)s; (void)r; (void)apply; return -FS_EOPNOTSUPP; }
+int storage_defrag(struct storage *s,struct ciuki_media_defrag *r,bool step)
+{ (void)s; (void)r; (void)step; return -FS_EOPNOTSUPP; }
+int storage_format_removable(struct storage *s,struct ciuki_media_format *r,bool apply)
+{ (void)s; (void)r; (void)apply; return -FS_EOPNOTSUPP; }
+int storage_floppy_copy(struct storage *s,struct ciuki_floppy_image *r,storage_floppy_copy_fn fn,void *ctx,bool write)
+{ (void)s; (void)r; (void)fn; (void)ctx; (void)write; return -FS_EOPNOTSUPP; }
 static struct {
     struct proc_object object;
     unsigned references, flags, reads, writes;

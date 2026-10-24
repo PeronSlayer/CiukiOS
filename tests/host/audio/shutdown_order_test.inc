@@ -14,6 +14,17 @@ int net_power_quiesce(void)
     strcat(quiesce_order,"N"); return 0;
 }
 int usb_power_quiesce(void) { strcat(quiesce_order,"U"); return 0; }
+/* Reversible sleep of the other device owners is outside this shutdown
+ * fixture. Instrumentation retains these references even in an S5 replay. */
+bool net_power_resume_ready(void) { return false; }
+bool usb_power_resume_ready(void) { return false; }
+bool ata_power_resume_ready(void) { return false; }
+int net_power_suspend(void) { CHECK(false); return -ENOTSUP; }
+int net_power_resume(void) { CHECK(false); return -ENOTSUP; }
+int usb_power_suspend(void) { CHECK(false); return -ENOTSUP; }
+int usb_power_resume(void) { CHECK(false); return -ENOTSUP; }
+int ata_power_suspend(void) { CHECK(false); return -ENOTSUP; }
+int ata_power_resume(void) { CHECK(false); return -ENOTSUP; }
 static jmp_buf worker_turn;
 static void worker_turn_end(void) { longjmp(worker_turn,1); }
 static void test_shutdown_lock_order(void)

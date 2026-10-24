@@ -6,6 +6,11 @@
 #include "usb_test.c"
 #undef main
 volatile uint64_t g_ticks;
+/* No native PS/2 device is active in this merged-queue fixture. Any attempt
+ * to enter its command mutex would cross the fake hardware boundary. */
+struct task *g_current;
+void kmutex_lock(struct kmutex *m) { (void)m; assert(!"unexpected native command lock"); }
+void kmutex_unlock(struct kmutex *m) { (void)m; assert(!"unexpected native command unlock"); }
 uint64_t deadline_after_ms(uint32_t ms) { return m.now+ms; }
 
 #define REPORTS 24u
