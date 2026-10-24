@@ -9,12 +9,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#define GRID_X 172
+#define GRID_X 218
 #define GRID_Y 46
 #define CELL 20
-#define LEFT_W 154
+#define LEFT_W 200
 struct du_rect charmap_cell(int i) { return (struct du_rect){GRID_X + (i % CHARMAP_COLS) * CELL, GRID_Y + (i / CHARMAP_COLS) * CELL, CELL, CELL}; }
-static const struct du_rect preview_box = {486, 212, 64, 64};
+static const struct du_rect preview_box = {532, 212, 64, 64};
 
 static void draw_char(struct charmap_app *a, struct du_canvas *c, struct du_rect box, uint32_t cp, int large, uint32_t ink)
 {

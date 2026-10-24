@@ -2,6 +2,7 @@
  * Hearts window: your hand at the bottom, three computer players, the trick
  * in the middle, the score board and the passing button. */
 #include "hearts.h"
+#include "../libdeskui/internal.h"
 #include <stdio.h>
 #include <string.h>
 #define HAND_PITCH 24
@@ -72,11 +73,19 @@ void hearts_paint(struct du_ui *u, void *user)
         card_draw(c, r.x, r.y, h->trick[i], 0);
     }
     /* Names with the points of the round and the game scores. */
-    static const int nx[4] = {20, 10, 370, 540}, ny[4] = {HE_H - STATUS_H - CARD_H - 6, 30, 32, 30};
+    static const int nx[4] = {20, 10, 424, 540}, ny[4] = {HE_H - STATUS_H - CARD_H - 6, 30, 32, 30};
     for (int p = 0; p < 4; p++) {
         char text[40]; snprintf(text, sizeof(text), "%s  %d", names[p], h->score[p]);
         du_text(c, nx[p], ny[p], text, 0xffffffu);
         if (h->taken[p]) { snprintf(text, sizeof(text), "(+%d)", h->taken[p]); du_text(c, nx[p], ny[p] + 14, text, 0xffff00u); }
+    }
+    /* The table is painted after the widgets, so the Pass button is drawn again on top of it. */
+    struct du_widget *pass = du_get(u, HV_PASS);
+    if (pass && !pass->hidden) {
+        struct du_rect saved = c->clip;
+        c->clip = du_intersection(saved, pass->box);
+        if (c->clip.w > 0 && c->clip.h > 0) du_draw_widget(u, pass, u->focus >= 0 && &u->widgets[u->focus] == pass && !u->dialog.kind);
+        c->clip = saved;
     }
 }
 static const struct du_menu_item game_template[] = {
@@ -103,7 +112,7 @@ void hearts_attach(struct hearts_app *a, struct du_ui *u)
     a->menus[1] = (struct du_menu){"&Help", a->help_items, 2};
     u->menus = a->menus; u->menu_count = 2;
     du_add(u, DU_CANVAS, HV_CANVAS, (struct du_rect){0, 22, u->canvas.width, u->canvas.height - 42}, "");
-    du_add(u, DU_BUTTON, HV_PASS, (struct du_rect){HE_W / 2 - 55, 215, 110, 24}, "&Pass 3 Cards");
+    du_add(u, DU_BUTTON, HV_PASS, (struct du_rect){HE_W / 2 - 55, 238, 110, 24}, "&Pass 3 Cards");
     du_add(u, DU_STATUS, HV_STATUS, (struct du_rect){0, u->canvas.height - STATUS_H, u->canvas.width, STATUS_H}, "");
     u->focus = -1; begin_round(a); u->dirty = 1;
 }

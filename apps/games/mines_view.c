@@ -12,12 +12,16 @@
 
 struct du_rect mines_board_rect(const struct mines *m)
 {
-    return (struct du_rect){(MINES_W - m->w * MINES_CELL) / 2, BOARD_Y, m->w * MINES_CELL, m->h * MINES_CELL};
+    return (struct du_rect){((m->view_w ? m->view_w : MINES_W) - m->w * MINES_CELL) / 2, BOARD_Y, m->w * MINES_CELL, m->h * MINES_CELL};
 }
 struct du_rect mines_face_rect(const struct mines *m)
 {
     struct du_rect b = mines_board_rect(m);
     return (struct du_rect){b.x + b.w / 2 - 13, PANEL_Y + 6, 26, 26};
+}
+void mines_window_size(const struct mines *m, int *w, int *h)
+{
+    *w = m->w * MINES_CELL + 24; *h = BOARD_Y + m->h * MINES_CELL + 12;
 }
 static struct du_rect led_rect(const struct mines *m, int right)
 {
@@ -136,6 +140,7 @@ void mines_attach(struct mines_app *a, struct du_ui *u)
 {
     a->ui = u; u->event = mines_event; u->user = a; u->paint = mines_paint;
     if (!a->game.w) mines_init(&a->game, 1);
+    a->game.view_w = u->canvas.width;
     int w, h;
     acc_window_size(MINES_W, MINES_H, &w, &h);
     a->game.max_h = (h - BOARD_Y - 10) / MINES_CELL; if (a->game.max_h > MINES_MAX_H) a->game.max_h = MINES_MAX_H;
@@ -148,6 +153,18 @@ void mines_attach(struct mines_app *a, struct du_ui *u)
     u->menus = a->menus; u->menu_count = 2;
     du_add(u, DU_CANVAS, MN_CANVAS, (struct du_rect){0, PANEL_Y - 2, u->canvas.width, u->canvas.height - PANEL_Y + 2}, "");
     sync_menu(a); u->focus = -1; u->dirty = 1;
+}
+static void restart(struct mines_app *a);
+static void level_changed(struct mines_app *a)
+{
+    int w, h;
+    mines_window_size(&a->game, &w, &h);
+    if (a->relayout && (w != a->ui->canvas.width || h != a->ui->canvas.height)) {
+        mines_new(&a->game); a->holding = 0;
+        a->relayout(a->host, w, h);
+        return;
+    }
+    restart(a);
 }
 static void restart(struct mines_app *a)
 {
@@ -237,14 +254,14 @@ void mines_event(struct du_ui *u, const struct du_event *e, void *user)
             int h, w, n; char extra;
             if (sscanf(e->text, "%d %d %d %c", &h, &w, &n, &extra) == 3) {
                 mines_set_level(&a->game, MINES_CUSTOM, w, h, n);   /* clamped like Windows: 9-30 wide, 9-24 high (what the window shows), 10 to (w-1)(h-1) mines */
-                sync_menu(a); restart(a);
+                sync_menu(a); level_changed(a);
             } else du_message(u, MN_CUSTOM_BOX + 1, "Minesweeper", "Enter three numbers: height, width and mines.", DU_DLG_ICON_WARNING, NULL, 0, 0, 0);
         }
         return;
     case DU_EV_ACTIVATE:
         if (e->id == MN_NEW) restart(a);
         else if (e->id >= MN_BEGINNER && e->id <= MN_EXPERT) {
-            mines_set_level(&a->game, (enum mines_level)(e->id - MN_BEGINNER), 0, 0, 0); sync_menu(a); restart(a);
+            mines_set_level(&a->game, (enum mines_level)(e->id - MN_BEGINNER), 0, 0, 0); sync_menu(a); level_changed(a);
         } else if (e->id == MN_CUSTOM) {   /* Windows asks for the height, width and mines of a custom field */
             char initial[24]; const struct mines *m = &a->game;
             snprintf(initial, sizeof(initial), "%d %d %d", m->level == MINES_CUSTOM ? m->h : 16, m->level == MINES_CUSTOM ? m->w : 16, m->level == MINES_CUSTOM ? m->mines : 40);
