@@ -32,6 +32,46 @@ _Static_assert(WM_HSCROLLCLIPBOARD==0x30eu,"G5b WM_HSCROLLCLIPBOARD");
 #include "../../apps/desktop/settings_catalog.h"
 _Static_assert(DESK_CLIP_DISPLAY==11 && DESK_CLIP_DISPLAY_REPLY==12 && DESK_CLIP_DISPLAY_EVENT==5,"G5b owner-display wire IDs");
 #include "../../apps/libdeskui/deskui.h"
+/* G16B native common-dialog contracts; no kernel or wire IDs added. */
+_Static_assert(DU_FILE_ALLOW_MULTIPLE==32u,"G16B DU_FILE_ALLOW_MULTIPLE");
+_Static_assert(DU_FILE_READONLY_BOX==64u,"G16B DU_FILE_READONLY_BOX");
+_Static_assert(DU_FILE_READONLY==128u,"G16B DU_FILE_READONLY");
+_Static_assert(DU_FONT_FIXED_CELL==2u,"G16B DU_FONT_FIXED_CELL");
+#if defined(__i386__)
+_Static_assert(sizeof(struct du_file_result)==20,"G16B du_file_result size");
+_Static_assert(__builtin_offsetof(struct du_file_result,files)==0,"G16B du_file_result.files");
+_Static_assert(__builtin_offsetof(struct du_file_result,capacity)==4,"G16B du_file_result.capacity");
+_Static_assert(__builtin_offsetof(struct du_file_result,required)==8,"G16B du_file_result.required");
+_Static_assert(__builtin_offsetof(struct du_file_result,count)==12,"G16B du_file_result.count");
+_Static_assert(__builtin_offsetof(struct du_file_result,read_only)==16,"G16B du_file_result.read_only");
+_Static_assert(sizeof(struct du_file_options)==52,"G16B du_file_options size");
+_Static_assert(__builtin_offsetof(struct du_file_options,flags)==0,"G16B du_file_options.flags");
+_Static_assert(__builtin_offsetof(struct du_file_options,title)==4,"G16B du_file_options.title");
+_Static_assert(__builtin_offsetof(struct du_file_options,folder)==8,"G16B du_file_options.folder");
+_Static_assert(__builtin_offsetof(struct du_file_options,name)==12,"G16B du_file_options.name");
+_Static_assert(__builtin_offsetof(struct du_file_options,filters)==16,"G16B du_file_options.filters");
+_Static_assert(__builtin_offsetof(struct du_file_options,filter_count)==20,"G16B du_file_options.filter_count");
+_Static_assert(__builtin_offsetof(struct du_file_options,filter_index)==24,"G16B du_file_options.filter_index");
+_Static_assert(__builtin_offsetof(struct du_file_options,default_ext)==28,"G16B du_file_options.default_ext");
+_Static_assert(__builtin_offsetof(struct du_file_options,lister)==32,"G16B du_file_options.lister");
+_Static_assert(__builtin_offsetof(struct du_file_options,lister_ctx)==36,"G16B du_file_options.lister_ctx");
+_Static_assert(__builtin_offsetof(struct du_file_options,make_dir)==40,"G16B du_file_options.make_dir");
+_Static_assert(__builtin_offsetof(struct du_file_options,make_dir_ctx)==44,"G16B du_file_options.make_dir_ctx");
+_Static_assert(__builtin_offsetof(struct du_file_options,result)==48,"G16B du_file_options.result");
+_Static_assert(sizeof(struct du_folder_options)==44,"G16B du_folder_options size");
+_Static_assert(__builtin_offsetof(struct du_folder_options,title)==0,"G16B du_folder_options.title");
+_Static_assert(__builtin_offsetof(struct du_folder_options,prompt)==4,"G16B du_folder_options.prompt");
+_Static_assert(__builtin_offsetof(struct du_folder_options,root)==8,"G16B du_folder_options.root");
+_Static_assert(__builtin_offsetof(struct du_folder_options,initial)==12,"G16B du_folder_options.initial");
+_Static_assert(__builtin_offsetof(struct du_folder_options,flags)==16,"G16B du_folder_options.flags");
+_Static_assert(__builtin_offsetof(struct du_folder_options,lister)==20,"G16B du_folder_options.lister");
+_Static_assert(__builtin_offsetof(struct du_folder_options,lister_ctx)==24,"G16B du_folder_options.lister_ctx");
+_Static_assert(__builtin_offsetof(struct du_folder_options,make_dir)==28,"G16B du_folder_options.make_dir");
+_Static_assert(__builtin_offsetof(struct du_folder_options,make_dir_ctx)==32,"G16B du_folder_options.make_dir_ctx");
+_Static_assert(__builtin_offsetof(struct du_folder_options,rename_dir)==36,"G16B du_folder_options.rename_dir");
+_Static_assert(__builtin_offsetof(struct du_folder_options,rename_dir_ctx)==40,"G16B du_folder_options.rename_dir_ctx");
+_Static_assert(sizeof(du_rename_fn)==4,"G16B folder rename callback");
+#endif
 #if defined(__i386__)
 /* Extent/offsets of the integrated toolkit; the older oracle was stale. */
 _Static_assert(sizeof(struct du_window)==5372,"G11B toolkit window extent");

@@ -398,21 +398,21 @@ static void test_paragraph_formatting(void)
 static void test_font_dialog(void)
 {
     reset(); type("sample text"); select_range(0, 6);
-    cmd(M_FONT); assert(dialog_is(D_FONT) && ui.dialog.buttons == 3);
-    assert(ui.dialog.items[4].count == 3 && ui.dialog.items[5].count == 4 && ui.dialog.items[6].count == 16 && ui.dialog.items[7].count == 17);
-    assert(ui.dialog.items[6].active == 2);   /* 10 pt */
+    cmd(M_FONT); assert(dialog_is(D_FONT) && ui.dialog.kind == DU_DLG_FONT && ui.dialog.buttons == 2);
+    assert(ui.dialog.items[4].count == 3 && ui.dialog.items[7].count == 4 && ui.dialog.items[10].count == 16);
+    assert(ui.dialog.items[10].active == 2);
     screen("font-dialog");
-    ui.dialog.items[4].active = 2;            /* Courier New */
-    ui.dialog.items[5].active = 3;            /* Bold Italic */
-    ui.dialog.items[6].active = 7;            /* 18 pt */
-    ui.dialog.items[7].active = 13;           /* blue */
-    ui.dialog.items[8].value = 1;
-    ui.dialog.items[9].value = 1;
+    const int ids[] = {-10499, -10497, -10495, -10492, -10494, -10493};
+    const int indices[] = {2, 3, 7, 12, 1, 1};
+    for (unsigned i = 0; i < 6; i++) {
+        struct du_event e = {.type = i < 4 ? DU_EV_SELECT : DU_EV_CHANGE, .id = ids[i], .index = indices[i]};
+        assert(ui.dialog.on_event(&ui, &e));
+    }
     answer(0);
     struct wp_cattr a = attr_at(0);
     assert(!ui.dialog.kind && a.font == 2 && a.flags == (WP_BOLD | WP_ITALIC | WP_UNDERLINE | WP_STRIKE) && a.size == 36 && app.doc.colors[a.color] == 0x0000ff);
     assert(attr_at(8).flags == 0 && attr_at(8).font == 0);
-    cmd(M_FONT); assert(ui.dialog.items[4].active == 2 && ui.dialog.items[5].active == 3 && ui.dialog.items[6].active == 7 && ui.dialog.items[8].value && ui.dialog.items[9].value);
+    cmd(M_FONT); assert(ui.dialog.items[4].active == 2 && ui.dialog.items[7].active == 3 && ui.dialog.items[10].active == 7 && ui.dialog.items[12].value && ui.dialog.items[13].value);
     answer(1); assert(!ui.dialog.kind && attr_at(0).size == 36);
     /* a mixed selection leaves unspecified values alone in the format bar, and the dialog starts at the first run */
     select_range(0, app.doc.len); assert(app.cmix.font == -1 && app.cmix.size == -1 && !W(W_FONTBTN)->text[0]);

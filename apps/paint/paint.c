@@ -2018,7 +2018,8 @@ static struct du_item font_rows[32];
 static char font_files[32][256], font_names[32][40];
 static unsigned nfonts, candidate_font;
 static int candidate_scale, candidate_bold;
-static int candidate_stretch[4], candidate_rgb[3];     /* stretch % h/v, skew degrees h/v; red green blue */
+static int candidate_stretch[4];     /* stretch % h/v, skew degrees h/v; red green blue */
+static uint32_t custom_colors[16];
 static unsigned custom_next;                           /* the next of the 14 custom swatches Edit Colours replaces */
 static const char *format_ext(enum paint_format f)
 { return f==PAINT_PNG ? ".png" : f==PAINT_GIF ? ".gif" : f==PAINT_JPEG ? ".jpg" : ".bmp"; }
@@ -2090,10 +2091,6 @@ static int accept_controls(struct du_ui *u, int button, void *arg)
         for (int i=0;i<4;i++) if (!integer(d->items[3+i*2].text,lo[i],hi[i],&candidate_stretch[i])) {
             du_set_text(&d->items[2+i*2],"Out of range - see the limits:"); return 1;
         }
-    } else if (d->id==D_COLOURS) {
-        for (int i=0;i<3;i++) if (!integer(d->items[3+i*2].text,0,255,&candidate_rgb[i])) {
-            du_set_text(&d->items[9],"Red, green and blue are numbers from 0 to 255."); return 1;
-        }
     } else if (d->id==D_FORMAT) {
         for (int i=0;i<5;i++) if (d->items[2+i].value) candidate_format=(enum paint_format)i;
     } else if (d->id==D_FONT) {
@@ -2139,17 +2136,8 @@ static void stretch_dialog(void)
 }
 static void colours_dialog(void)
 {
-    custom_dialog(D_COLOURS,"Edit Colours",340,210);
-    static const char *const names[3]={"&Red (0-255):","&Green (0-255):","&Blue (0-255):"};
-    char value[3][8];
-    for (int i=0;i<3;i++) {
-        unsigned c=rgb(fg); int channel=i==0?(int)((c>>16)&255):i==1?(int)((c>>8)&255):(int)(c&255);
-        snprintf(value[i],sizeof(value[i]),"%d",channel);
-        control(2+(unsigned)i*2,DU_LABEL,names[i],14,36+i*30,130,22);
-        control(3+(unsigned)i*2,DU_EDIT,value[i],154,34+i*30,70,22);
-    }
-    control(9,DU_LABEL,"The colour replaces one of the custom boxes and becomes the foreground.",14,134,310,22);
-    ui->dialog.focus=3; ui->dialog.accept=accept_controls;
+    if (du_color_dialog(ui,D_COLOURS,rgb(fg),custom_colors,DU_COLOR_FULL_OPEN))
+        error_message(-ENOMEM);
 }
 static void format_dialog(void)
 {
@@ -2328,7 +2316,10 @@ static void dialog_result(const struct du_event *e)
     else if (e->id==D_ATTR && !e->index) { if (candidate_w!=cv.w || candidate_h!=cv.h) resize_canvas(candidate_w,candidate_h); }
     else if (e->id==D_FLIP && !e->index) transform(candidate_transform);
     else if (e->id==D_STRETCH && !e->index) stretch_skew_apply();
-    else if (e->id==D_COLOURS && !e->index) define_colour(candidate_rgb[0],candidate_rgb[1],candidate_rgb[2]);
+    else if (e->id==D_COLOURS && !e->index) {
+        uint32_t color;
+        if (!du_color_parse(e->text,&color)) define_colour((int)(color>>16)&255,(int)(color>>8)&255,(int)color&255);
+    }
     else if (e->id==D_FONT && !e->index) {
         if (candidate_font<nfonts) snprintf(font_file,sizeof(font_file),"%s",font_files[candidate_font]);
         text_scale=candidate_scale; text_bold=candidate_bold; font_load(); if (text_on) text_render();
@@ -2538,6 +2529,7 @@ int paint_attach(struct du_ui *u)
     if (!u || u->count) return -EINVAL;
     partial_layout=0; dx0=dy0=0; dx1=dy1=-1;
     ui=u; quit_cb=NULL; decline_cb=NULL; title_cb=NULL; callback_host=NULL; custom_next=0;
+    for (unsigned i=0;i<16;i++) custom_colors[i]=0xffffff;
     fg=BLACK; bg=WHITE; tool=prev_tool=T_PENCIL; tool_hot=-1; zoom=1;
     line_w=pen_size=1; fill_style=0; brush_kind=PEN_ROUND; brush_size=eraser_size=air_size=1;
     text_scale=1; text_bold=0; opaque=1; font_file[0]=0;

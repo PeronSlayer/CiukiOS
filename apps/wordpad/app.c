@@ -1478,94 +1478,35 @@ static void tabs_dialog(struct wp_app *a)
     du_property_control(a->ui, 4, DU_EDIT, 320, (struct du_rect){24, 60, 320, 22}, text);
 }
 
-/* Font: family, style, size, colour and the effects, with a sample.
- * G16 integration point: this dialog is opened by exactly one function, font_dialog(), from command() (Format > Font, the
- * context menu) and its result is applied by exactly one function, apply_chars() with a struct wp_cstyle (family index,
- * size in half-points, colour index, flag bits to set and to clear). The common Font dialog replaces the body of
- * font_dialog() and calls apply_chars() from its accept callback; nothing else in WordPad depends on this stop-gap. */
-static void build_font_lists(struct wp_app *a)
-{
-    for (unsigned i = 0; i < a->doc.nfonts; i++) a->font_items[i] = (struct du_item){.text = {a->doc.fonts[i].name}};
-    static const char *const styles[] = {"Regular", "Italic", "Bold", "Bold Italic"};
-    for (unsigned i = 0; i < 4; i++) a->style_items[i] = (struct du_item){.text = {styles[i]}};
-    for (unsigned i = 0; i < sizeof(sizes_hp) / sizeof(*sizes_hp); i++) {
-        snprintf(a->date_text[0], sizeof(a->date_text[0]), "%u", sizes_hp[i] / 2);
-    }
-    for (unsigned i = 0; i < a->doc.ncolors; i++) {
-        if (i < sizeof(color_names) / sizeof(*color_names)) snprintf(a->color_names[i], sizeof(a->color_names[i]), "%s", color_names[i]);
-        else snprintf(a->color_names[i], sizeof(a->color_names[i]), "#%06X", (unsigned)a->doc.colors[i]);
-        a->color_items[i] = (struct du_item){.text = {a->color_names[i]}};
-    }
-}
+/* The shared Font dialog paints its sample with WordPad's real font backend. */
 static char size_names[16][6];
-static int font_accept(struct du_ui *u, int button, void *ctx)
+static void font_sample(struct du_canvas *cv, struct du_rect r, const struct du_font_choice *c, void *ctx)
 {
     struct wp_app *a = ctx;
-    if (button != 0) return 0;
-    struct du_dialog *d = &u->dialog;
-    unsigned fam = d->items[4].active, sty = d->items[5].active, siz = d->items[6].active, col = d->items[7].active;
-    struct wp_cstyle st = {(int)fam, 0, (int)col, 0, 0};
-    if (siz < sizeof(sizes_hp) / sizeof(*sizes_hp)) st.size = (int)sizes_hp[siz];
-    st.set = ((sty & 2 ? WP_BOLD : 0) | (sty & 1 ? WP_ITALIC : 0) | (d->items[9].value ? WP_UNDERLINE : 0) | (d->items[8].value ? WP_STRIKE : 0));
-    st.clear = (unsigned)(WP_BOLD | WP_ITALIC | WP_UNDERLINE | WP_STRIKE) & ~st.set;
-    du_dialog_close(u);
-    apply_chars(a, &st);
-    return 0;
-}
-static void font_changed(struct du_ui *u, const struct du_event *e, void *ctx)
-{ (void)e; (void)ctx; du_invalidate(u, u->dialog.box); }
-static void font_paint(struct du_ui *u, void *ctx)
-{
-    struct wp_app *a = ctx; struct du_dialog *d = &u->dialog;
-    label_at(u, 4, "Font:", 0, -16); label_at(u, 5, "Font style:", 0, -16); label_at(u, 6, "Size:", 0, -16); label_at(u, 7, "Color:", 0, -16);
-    struct du_rect r = d->items[8].box;
-    struct du_rect sample = {d->box.x + 24, r.y + 30, d->box.w - 48, 52};
-    du_well(&u->canvas, sample, 0xffffffu);
-    unsigned fam = d->items[4].active, sty = d->items[5].active, siz = d->items[6].active, col = d->items[7].active;
-    if (fam >= a->doc.nfonts || siz >= sizeof(sizes_hp) / sizeof(*sizes_hp) || col >= a->doc.ncolors) return;
-    unsigned flags = (sty & 2 ? WP_BOLD : 0) | (sty & 1 ? WP_ITALIC : 0);
-    unsigned hp = sizes_hp[siz] > 48 ? 48 : sizes_hp[siz];
-    struct du_canvas cv = u->canvas; cv.clip = du_intersection(u->canvas.clip, (struct du_rect){sample.x + 2, sample.y + 2, sample.w - 4, sample.h - 4});
-    int asc, desc; tops(a)->vmetrics(tops(a)->ctx, a->doc.fonts[fam].family, flags, hp, &asc, &desc);
-    int base = sample.y + sample.h / 2 + (asc - desc) / 2, x = sample.x + 12;
-    uint32_t rgb = a->doc.colors[col];
+    int at = wp_font_find(&a->doc, c->family);
+    unsigned family = at >= 0 ? a->doc.fonts[at].family : WP_SANS;
+    unsigned flags = (c->style & DU_FONT_BOLD ? WP_BOLD : 0) | (c->style & DU_FONT_ITALIC ? WP_ITALIC : 0);
+    unsigned hp = c->points > 24 ? 48 : c->points * 2;
+    int asc, desc; tops(a)->vmetrics(tops(a)->ctx, family, flags, hp, &asc, &desc);
+    int base = r.y + r.h / 2 + (asc - desc) / 2, x = r.x + 8;
     const char *text = "AaBbYyZz";
-    a->draw->draw(a->draw->text.ctx, &cv, a->doc.fonts[fam].family, flags, wp_size_px64(hp), x, base, text, strlen(text), rgb);
-    int w = tops(a)->width(tops(a)->ctx, a->doc.fonts[fam].family, flags, hp, text, strlen(text)) >> 6;
-    if (d->items[9].value) du_fill(&cv, (struct du_rect){x, base + 1, w, 1}, rgb);
-    if (d->items[8].value) du_fill(&cv, (struct du_rect){x, base - asc / 3, w, 1}, rgb);
+    a->draw->draw(a->draw->text.ctx, cv, family, flags, wp_size_px64(hp), x, base, text, strlen(text), c->color);
+    int width = tops(a)->width(tops(a)->ctx, family, flags, hp, text, strlen(text)) >> 6;
+    if (c->underline) du_fill(cv, (struct du_rect){x, base + 1, width, 1}, c->color);
+    if (c->strikeout) du_fill(cv, (struct du_rect){x, base - asc / 3, width, 1}, c->color);
 }
 static void font_dialog(struct wp_app *a)
 {
-    build_font_lists(a);
-    for (unsigned i = 0; i < sizeof(sizes_hp) / sizeof(*sizes_hp); i++) {
-        snprintf(size_names[i], sizeof(size_names[i]), "%u", sizes_hp[i] / 2);
-        a->size_items[i] = (struct du_item){.text = {size_names[i]}};
-    }
-    sheet_open(a, D_FONT, "Font", 540, 360, "Font", font_accept, font_paint);
-    struct du_dialog *d = &a->ui->dialog; d->changed = font_changed;
-    static const char *const titles[] = {"Font", "Font style", "Size", "Color"};
-    static const int xs[] = {24, 200, 316, 382}, widths[] = {170, 110, 62, 118};
-    const struct du_item *items[] = {a->font_items, a->style_items, a->size_items, a->color_items};
-    unsigned counts[] = {a->doc.nfonts, 4, sizeof(sizes_hp) / sizeof(*sizes_hp), a->doc.ncolors};
-    struct wp_cmix m = a->cmix;
-    unsigned actives[4];
-    actives[0] = m.font >= 0 ? (unsigned)m.font : 0;
-    actives[1] = (m.bold == 1 ? 2u : 0u) | (m.italic == 1 ? 1u : 0u);
-    actives[2] = 2;
-    for (unsigned i = 0; i < sizeof(sizes_hp) / sizeof(*sizes_hp); i++) if ((int)sizes_hp[i] == m.size) actives[2] = i;
-    actives[3] = m.color >= 0 ? (unsigned)m.color : 0;
-    for (unsigned i = 0; i < 4; i++) {
-        struct du_widget *w = du_property_control(a->ui, 4 + i, DU_LISTVIEW, 330 + (int)i, (struct du_rect){xs[i], 52, widths[i], 140}, "");
-        w->items = items[i]; w->count = counts[i]; w->view = DU_DETAILS; w->column_count = 1;
-        w->columns[0] = (struct du_column){titles[i], widths[i] - 18, 0};
-        w->active = actives[i]; w->inactive_selection = 1; w->selection_active = 1;
-        du_list_ensure(w, w->active);
-    }
-    struct du_widget *s = du_property_control(a->ui, 8, DU_CHECKBOX, 340, (struct du_rect){24, 204, 100, 22}, "Stri&keout");
-    s->value = m.strike == 1;
-    struct du_widget *ul = du_property_control(a->ui, 9, DU_CHECKBOX, 341, (struct du_rect){140, 204, 100, 22}, "&Underline");
-    ul->value = m.underline == 1;
+    struct wp_cattr current = typing_attr(a);
+    const char *faces[WP_FONTS];
+    for (unsigned i = 0; i < a->doc.nfonts; i++) faces[i] = a->doc.fonts[i].name;
+    struct du_font_choice c = {.points = current.size / 2,
+        .style = (current.flags & WP_BOLD ? DU_FONT_BOLD : 0) | (current.flags & WP_ITALIC ? DU_FONT_ITALIC : 0),
+        .underline = !!(current.flags & WP_UNDERLINE), .strikeout = !!(current.flags & WP_STRIKE), .color = a->doc.colors[current.color]};
+    snprintf(c.family, sizeof(c.family), "%s", a->doc.fonts[current.font].name);
+    if (du_font_dialog(a->ui, D_FONT, &c, faces, a->doc.nfonts, 0, font_sample, a))
+        failure(a, "The Font dialog could not be opened:", "", ENOMEM);
+    else du_font_size_limits(a->ui, WP_SIZE_MIN / 2, WP_SIZE_MAX / 2);
 }
 
 /* Page Setup: paper, orientation and margins in inches. */
@@ -1993,6 +1934,21 @@ static void command(struct wp_app *a, int id)
 static void dialog_result(struct wp_app *a, int id, int index, const char *text)
 {
     switch (id) {
+    case D_FONT:
+        if (!index) {
+            struct du_font_choice c;
+            if (!du_font_parse(text, &c)) {
+                int font = wp_font_find(&a->doc, c.family);
+                if (font < 0) font = wp_font_add(&a->doc, c.family, WP_SANS);
+                if (font < 0) { failure(a, "The font table is full:", c.family, ENOMEM); break; }
+                unsigned flags = (c.style & DU_FONT_BOLD ? WP_BOLD : 0) | (c.style & DU_FONT_ITALIC ? WP_ITALIC : 0) |
+                                 (c.underline ? WP_UNDERLINE : 0) | (c.strikeout ? WP_STRIKE : 0);
+                struct wp_cstyle st = {font, (int)c.points * 2, wp_color_add(&a->doc, c.color), flags,
+                    (WP_BOLD | WP_ITALIC | WP_UNDERLINE | WP_STRIKE) & ~flags};
+                apply_chars(a, &st);
+            }
+        }
+        break;
     case D_CHANGES:
         if (index == 0) {
             if (!a->named || imported(a)) { file_dialog(a, 1, ""); return; }

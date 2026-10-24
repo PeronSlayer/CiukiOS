@@ -29,6 +29,16 @@ static void opt(int col,int row)
 { struct paint_state s=state(); at_click(&ui,s.options.x+2+col,s.options.y+2+row); }
 static void dialog_button(unsigned b)
 { struct du_rect r=du_dialog_button(&ui,b); at_click(&ui,r.x+r.w/2,r.y+r.h/2); }
+static void common_rgb(const char *red, const char *green, const char *blue)
+{
+    const char *values[] = {red, green, blue};
+    for (unsigned c = 0; c < 3; c++) {
+        int id = -10423 - (int)c; struct du_widget *w = NULL;
+        for (unsigned i = 0; i < ui.dialog.count; i++) if (ui.dialog.items[i].id == id) w = &ui.dialog.items[i];
+        assert(w); du_set_text(w, values[c]);
+        struct du_event e = {.type = DU_EV_CHANGE, .id = id}; assert(ui.dialog.on_event(&ui, &e));
+    }
+}
 static void attributes(int w,int h)
 {
     paint_command(M_ATTR); char buf[12];
@@ -150,7 +160,7 @@ static void cursors(const char *folder)
         paint_command(z==1?M_Z1:z==2?M_Z2:z==4?M_Z4:M_Z8);
         for(int t=T_ERASER;t<=T_BRUSH;t+=T_BRUSH-T_ERASER) {
             at_click_widget(&ui,P_TOOL+t); image_move(40,40);
-            uint8_t before[200*150]; struct paint_state s=state();
+            static uint8_t before[200*150]; struct paint_state s=state();
             assert(s.width==200 && s.height==150);
             for(int y=0;y<s.height;y++)for(int x=0;x<s.width;x++)before[y*s.width+x]=paint_pixel(x,y);
             char name[64]; snprintf(name,sizeof(name),"paint-footprint-%d-%dx",t,z); render(folder,name);
@@ -409,7 +419,10 @@ static void files(const char *scratch)
     assert(!ui.dialog.kind && !strcmp(paint_path(),path));
     FILE *exported=fopen(path,"rb"); uint8_t header[54];assert(exported && fread(header,1,54,exported)==54 && header[28]==24);fclose(exported);
     paint_command(M_SAVEAS); dialog_button(0); du_set_text(&ui.dialog.items[5],path); dialog_button(0);
-    assert(ui.dialog.kind==DU_DLG_SAVE && ui.dialog.sub==1); dialog_button(15); assert(!ui.dialog.kind);   /* the dialog's own "already exists" prompt: Yes */
+    assert(ui.dialog.kind==DU_DLG_SAVE && ui.dialog.sub==1); { struct du_widget *yes=NULL;
+        for (unsigned i=0;i<ui.dialog.count;i++) if (ui.dialog.items[i].id==-9400) yes=&ui.dialog.items[i];
+        assert(yes); at_click(&ui,yes->box.x+yes->box.w/2,yes->box.y+yes->box.h/2); }
+    assert(!ui.dialog.kind);   /* the dialog's own "already exists" prompt: Yes */
     /* Open and New from their menu accelerators. */
     at_chord(&ui,DU_KEY_LCTRL,0x18); assert(ui.dialog.kind==DU_DLG_OPEN);
     du_set_text(&ui.dialog.items[5],path); dialog_button(0); assert(!ui.dialog.kind && !state().dirty);
@@ -535,27 +548,26 @@ static void g27(const char *scratch)
     undo();
     /* Edit Colours: a colour the picture does not use takes a free palette entry and becomes the foreground. */
     paint_command(M_NEW); ui.dialog.kind=0; dialog_button(1); ui.dialog.kind=0;
-    paint_command(M_COLOURS); assert(ui.dialog.kind && ui.dialog.items[3].kind==DU_EDIT);
-    du_set_text(&ui.dialog.items[3],"300"); dialog_button(0); assert(ui.dialog.kind);            /* out of range */
-    du_set_text(&ui.dialog.items[3],"255"); du_set_text(&ui.dialog.items[5],"128"); du_set_text(&ui.dialog.items[7],"0");
+    paint_command(M_COLOURS); assert(ui.dialog.kind == DU_DLG_COLOR);
+    common_rgb("255","128","0");
     dialog_button(0); assert(!ui.dialog.kind);
     uint8_t custom=state().foreground; assert(paint_rgb(custom)==0xff8200u && custom>=16);
     foreground(2); assert(state().foreground!=custom);
     foreground(14); assert(state().foreground==custom);                                          /* the first custom box */
-    paint_command(M_COLOURS); du_set_text(&ui.dialog.items[3],"255"); du_set_text(&ui.dialog.items[5],"128"); du_set_text(&ui.dialog.items[7],"0"); dialog_button(0);
+    paint_command(M_COLOURS); common_rgb("255","128","0"); dialog_button(0);
     assert(state().foreground==custom);                                                          /* the same colour reuses its entry */
-    paint_command(M_COLOURS); du_set_text(&ui.dialog.items[3],"10"); du_set_text(&ui.dialog.items[5],"200"); du_set_text(&ui.dialog.items[7],"40"); dialog_button(0);
+    paint_command(M_COLOURS); common_rgb("10","200","40"); dialog_button(0);
     uint8_t second=state().foreground; assert(second!=custom && paint_rgb(custom)==0xff8200u);   /* a different entry; the first is untouched */
     foreground(15); assert(state().foreground==second);
     for(int i=0;i<16;i++) {                                                                        /* more colours than custom boxes: they cycle */
         paint_command(M_COLOURS); char v[8]; snprintf(v,sizeof(v),"%d",20+i*8);
-        du_set_text(&ui.dialog.items[3],v); du_set_text(&ui.dialog.items[5],"7"); du_set_text(&ui.dialog.items[7],"90"); dialog_button(0);
+        common_rgb(v,"7","90"); dialog_button(0);
     }
     /* A picture that uses a palette entry keeps its colours when new ones are defined. */
     foreground(2); at_click_widget(&ui,P_TOOL+T_RECT); opt(1,51); stroke(T_RECT,1,1,30,20,1);
     uint32_t used=paint_rgb(paint_pixel(10,10));
     for(int i=0;i<20;i++) { paint_command(M_COLOURS); char v[8]; snprintf(v,sizeof(v),"%d",3+i*7);
-        du_set_text(&ui.dialog.items[3],v); du_set_text(&ui.dialog.items[5],"211"); du_set_text(&ui.dialog.items[7],"13"); dialog_button(0); }
+        common_rgb(v,"211","13"); dialog_button(0); }
     assert(paint_rgb(paint_pixel(10,10))==used);
 }
 static int wallpaper_calls, wallpaper_mode; static char wallpaper_file[1100];

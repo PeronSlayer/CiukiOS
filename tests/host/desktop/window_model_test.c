@@ -2435,6 +2435,78 @@ static void row_g26c_launch_error(unsigned m)
     app_paint(a,0,218,360,22,0x832170);step("desktop late launch refusal status without opener navigation");
     wm_end();
 }
+/* G16B: append after all existing scenarios; actual toolkit pixels travel
+ * through the same client DAMAGE route as an application window. */
+static int common_lister(void *ctx,const char *path,struct du_file_entry *out,unsigned cap,unsigned *count)
+{
+    (void)ctx; (void)path; *count=0;
+    const char *names[]={"Folder","alpha.txt","beta.txt","gamma.txt"};
+    for (unsigned i=0;i<4 && i<cap;i++) {
+        memset(&out[i],0,sizeof(out[i])); snprintf(out[i].name,sizeof(out[i].name),"%s",names[i]);
+        out[i].directory=i==0; out[i].size=1234; (*count)++;
+    }
+    return 0;
+}
+static int common_mkdir(void *ctx,const char *path) { (void)ctx; (void)path; return 0; }
+static int common_rename(void *ctx,const char *from,const char *to) { (void)ctx; (void)from; (void)to; return 0; }
+static struct du_widget *common_widget(struct du_ui *u,int id)
+{
+    for (unsigned i=0;i<u->dialog.count;i++) if (u->dialog.items[i].id==id) return &u->dialog.items[i];
+    assert(0); return NULL;
+}
+static void common_input(struct du_ui *u,unsigned type,unsigned code,int value,int value2)
+{
+    struct ciuki_input_event event={.type=type,.code=code,.value=value,.value2=value2,.monotonic_ns=wm_clock};
+    du_input(u,&event);
+}
+static void common_click(struct du_ui *u,struct du_rect r)
+{
+    common_input(u,CIUKI_INPUT_MOTION,0,r.x+r.w/2,r.y+r.h/2);
+    common_input(u,CIUKI_INPUT_BUTTON,1,1,0); common_input(u,CIUKI_INPUT_BUTTON,1,0,0);
+}
+static void common_key(struct du_ui *u,unsigned key)
+{ common_input(u,CIUKI_INPUT_KEY,key,1,0); common_input(u,CIUKI_INPUT_KEY,key,0,0); }
+static void row_common_files(unsigned m)
+{
+    row_name="G16B file selection, Read Only and large icons"; wm_begin(m,1);
+    struct fake_app *a=app_open("files",560,440,20,40); static struct du_ui ui;
+    du_init(&ui,(uint32_t *)d.clients[a->slot].pixels,560,440);
+    static char files[1024]; struct du_file_result result={.files=files,.capacity=sizeof(files)};
+    struct du_file_options options={.flags=DU_FILE_ALLOW_MULTIPLE|DU_FILE_READONLY_BOX,.folder="/docs",.lister=common_lister,.result=&result};
+    assert(!du_file_open(&ui,1,&options)); wm_toolkit_damage(a,&ui); step("file dialog Read Only");
+    struct du_widget *list=common_widget(&ui,-3000);
+    common_click(&ui,du_list_label(list,1));
+    common_input(&ui,CIUKI_INPUT_KEY,DU_KEY_LCTRL,1,0); common_click(&ui,du_list_label(list,2)); common_input(&ui,CIUKI_INPUT_KEY,DU_KEY_LCTRL,0,0);
+    wm_toolkit_damage(a,&ui); step("multiple file selection");
+    common_click(&ui,common_widget(&ui,-9404)->box); wm_toolkit_damage(a,&ui); step("Read Only checked");
+    common_click(&ui,common_widget(&ui,-9403)->box); wm_toolkit_damage(a,&ui); step("large icon view");
+    common_key(&ui,DU_KEY_ESC); wm_toolkit_damage(a,&ui); step("file dialog removed"); wm_end();
+}
+static void row_common_script(unsigned m)
+{
+    row_name="G16B Font Script combo"; wm_begin(m,1);
+    struct fake_app *a=app_open("ciuknote",560,440,20,40); static struct du_ui ui;
+    du_init(&ui,(uint32_t *)d.clients[a->slot].pixels,560,440);
+    assert(!du_font_dialog(&ui,1,NULL,NULL,0,0,NULL,NULL)); wm_toolkit_damage(a,&ui); step("shared font dialog");
+    common_click(&ui,common_widget(&ui,-10490)->box); assert(ui.combo_open); wm_toolkit_damage(a,&ui); step("Script list open");
+    common_key(&ui,DU_KEY_ESC); wm_toolkit_damage(a,&ui); step("Script list closed");
+    common_key(&ui,DU_KEY_ESC); wm_toolkit_damage(a,&ui); step("Font cancelled"); wm_end();
+}
+static void row_common_folder_rename(unsigned m)
+{
+    row_name="G16B Browse for Folder inline rename"; wm_begin(m,1);
+    struct fake_app *a=app_open("files",560,440,20,40); static struct du_ui ui;
+    du_init(&ui,(uint32_t *)d.clients[a->slot].pixels,560,440);
+    struct du_folder_options options={.root="/docs",.initial="/docs/Folder",.lister=common_lister,.make_dir=common_mkdir,.rename_dir=common_rename};
+    assert(!du_folder_dialog(&ui,1,&options)); wm_toolkit_damage(a,&ui); step("folder dialog");
+    common_key(&ui,DU_KEY_F2); wm_toolkit_damage(a,&ui); step("inline rename editor");
+    common_key(&ui,0x1e); wm_toolkit_damage(a,&ui); step("inline rename typing");
+    common_key(&ui,DU_KEY_ESC); wm_toolkit_damage(a,&ui); step("inline rename cancelled");
+    common_click(&ui,common_widget(&ui,-10601)->box); wm_toolkit_damage(a,&ui); step("new folder inline editor");
+    common_key(&ui,DU_KEY_ENTER); wm_toolkit_damage(a,&ui); step("new folder name committed");
+    common_key(&ui,DU_KEY_ESC); wm_toolkit_damage(a,&ui); step("folder dialog removed"); wm_end();
+}
+
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
     row_fullscreen, row_gfx, row_topbar, row_theme, row_strips, row_lease, row_selection, row_drag,
@@ -2454,7 +2526,8 @@ static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overl
     row_icon_visibility, row_system_menus, row_desktop_refresh, row_resolution_layout,
     row_icon_drop_targets, row_wallpaper_pattern, row_recovery, row_startup_disk_tools,
     row_g30b_performance, row_g30b_schedule, row_g30b_network, row_g26c_print, row_g26c_download,
-    row_g26c_programs, row_g26c_launch_error};
+    row_g26c_programs, row_g26c_launch_error, row_common_files, row_common_script,
+    row_common_folder_rename};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).
