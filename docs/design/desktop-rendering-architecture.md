@@ -424,6 +424,7 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 28 | Drop-target highlight (`DROPEFFECT` feedback: the target item drawn selected while it would accept the drop) | the old and new target icon | `dnd_evaluate` (`drop_index`), `icon_repaint` | none | drag and drop |
 | 29 | Taskbar hover during a drag (Windows 98: holding a dragged object over a task button for about a second activates that window) | the restored window (rows 7, 8, 11) | `desk_shell_tick` drag hover | none (covered by the window rows) | drag and drop |
 | 30 | Right-drag menu, Esc and cancelled drags | the menu box (row 13); the image box when the drag ends | `desk_shell_drag_button`, `desk_shell_drag_cancel`, `dnd_finish` | none | drag and drop |
+| 31 | Power meter (G11, `power-policy.md`): the battery icon appears with the first record, changes with each reading, is hidden or shown by "Show power meter on taskbar"; its tooltip follows the readings; the scheme menu; a battery alarm's message window | the tray (re-laid out when the icon count changes), the old and new tooltip box, the menu box (row 13), the message window (row 17) | `desk_shell_power_update`, `desk_shell_power_config`, `power_tooltip_damage`, `desk_shell_tray_damage`, `SH_MENU_POWER`, `power_alarm` | none | power |
 
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with

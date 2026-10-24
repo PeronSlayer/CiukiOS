@@ -78,7 +78,7 @@ class SystemSoundsTests(unittest.TestCase):
         desktop = module("sounds_desktop_tests", ROOT / "tests/host/desktop/test_deskui.py")
         folder = ROOT / "build/codex"; folder.mkdir(parents=True, exist_ok=True)
         frame = folder / "f4-12-sounds.xrgb"
-        self.harness("sounds-control", ["tests/host/desktop/sounds_control_test.c", "apps/control/app.c", "apps/control/driver_pack_ui.c", "apps/control/display.c", "apps/desktop/protocol.c", "apps/desktop/sounds.c",
+        self.harness("sounds-control", ["tests/host/desktop/sounds_control_test.c", "apps/control/app.c", "apps/desktop/power_policy.c", "apps/control/driver_pack_ui.c", "apps/control/display.c", "apps/desktop/protocol.c", "apps/desktop/sounds.c",
                     "apps/desktop/settings.c", "apps/desktop/wallpaper.c", "apps/desktop/image.c", "apps/control/fonts.c",
                     "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c", *desktop.TOOLKIT], frame)
         self.assertEqual(frame.stat().st_size, 560*420*4)

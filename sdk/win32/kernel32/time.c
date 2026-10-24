@@ -450,6 +450,17 @@ BOOL W32API GlobalMemoryStatusEx(MEMORYSTATUSEX *m) {
       total,avail,total,avail,virt,reserved>virt ? 0 : virt-reserved,0};
   return 1;
 }
+/* G11 (docs/design/power-policy.md 24): the call-73 record through the
+ * Win32 system action; Reserved1 is zero (Windows 98). */
+BOOL W32API GetSystemPowerStatus(SYSTEM_POWER_STATUS *p) {
+  if (!p) { SetLastError(87); return 0; }
+  struct ciuki_w32_system_args a={.header={1,sizeof(a),W32_SYSTEM,0},.action=W32_S_POWER};
+  if (!k32_status(w32_ciuki_call(&a,sizeof(a)))) return 0;
+  if (a.error) { SetLastError(a.error); return 0; }
+  *p=(SYSTEM_POWER_STATUS){(uint8_t)(a.low>255 ? 255 : a.low),(uint8_t)(a.high>255 ? 255 : a.high),
+      (uint8_t)(a.value>100 ? 255 : a.value),0,a.extra,a.result};
+  return 1;
+}
 static DWORD mem32(uint64_t n) { return n>0x7fffffffu ? 0x7fffffffu : (DWORD)n; }
 void W32API GlobalMemoryStatus(MEMORYSTATUS *m) {
   if (!m) return;

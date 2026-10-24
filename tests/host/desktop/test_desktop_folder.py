@@ -30,7 +30,7 @@ class DesktopFolderTests(unittest.TestCase):
                     '-include',str(ROOT / 'tests/host/desktop/replay_base.h'),'-D_POSIX_C_SOURCE=200809L','-fsanitize=address,undefined','-fno-sanitize-recover=undefined',
                     *icon_assets.defines(),'-I',str(ROOT / 'apps/desktop'),'-I',str(ROOT / 'src/kernel/include')]
             sources=['tests/host/desktop/desktop_folder_test.c','tests/host/desktop/fake.c','tests/host/desktop/fake_vfs.c',
-                     *('apps/desktop/'+n+'.c' for n in ('client','protocol','input','compositor','theme','shell','autoplay','autoplay_content','settings','wallpaper','keymap','folder')),
+                     *('apps/desktop/'+n+'.c' for n in ('client','protocol','input','compositor','theme','shell','autoplay','autoplay_content','settings', 'power_policy','wallpaper','keymap','folder')),
                      'apps/files/model.c','apps/files/transfer.c','apps/libdeskui/draw.c','apps/libdeskui/widgets.c','apps/libdeskui/list.c','apps/libdeskui/menu.c','apps/libdeskui/dialog.c','apps/libdeskui/textarea.c','apps/libdeskui/icons.c','apps/libdeskui/icon_map.c']
             objects=[]
             for i,source in enumerate(sources):

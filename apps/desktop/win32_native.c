@@ -471,6 +471,25 @@ static int w32_session(struct desktop *d,unsigned action,uint32_t flags,struct d
     st->state=r.key;st->pid=r.count;st->hwnd=r.type;st->delivered=r.disposition;
     return 0;
 }
+/* G11 (docs/design/power-policy.md): WM_POWERBROADCAST through the same
+ * broker; the values of the desktop's seam are the W32R ones. */
+_Static_assert(DESK_W32_POWER_BEGIN==W32R_POWER_BEGIN && DESK_W32_POWER_STATUS==W32R_POWER_STATUS &&
+               DESK_W32_POWER_RESET==W32R_POWER_RESET,"G11 seam values");
+static int w32_power(struct desktop *d,unsigned action,uint32_t event,uint32_t lparam,struct desk_w32_status *st)
+{
+    (void)d;
+    if(!authorized)return -ENODEV;
+    if(restart.stage)return -EBUSY;   /* an ExitWindowsEx restart owns the broker */
+    struct {struct w32r_request r;char empty[2];} a={.r={.version=1,.op=W32R_ENDSESSION,.index=action,
+        .type=event,.flags=lparam,.path_bytes=1,.name_bytes=1}};
+    struct w32r_reply r;uint32_t used=0;
+    uint32_t e=desk_w32_exchange(&a,(uint32_t)sizeof(a.r)+2,&r,(uint32_t)sizeof(r),&used);
+    if(!e && (used!=sizeof(r) || r.version!=1 || r.name_bytes || r.data_bytes))e=13;
+    if(!e)e=r.error;
+    if(e)return e==1115?-EBUSY:-EIO;
+    st->state=r.key;st->pid=r.count;st->hwnd=0;st->delivered=0;
+    return 0;
+}
 /* After the desktop's session ended (cancelled, or a log off), free the
  * broker once its WM_ENDSESSION deliveries are done. */
 static void w32_session_reap(struct desktop *d,uint64_t ms)
@@ -489,7 +508,7 @@ void desk_w32_start(struct desktop *d)
 {
     owner=d;struct w32r_service a;uint32_t e=service(1,1,&a);
     if(e || !a.result){fprintf(stderr,"[win32] desktop endpoint unavailable error=%u\n",e);return;}
-    authorized=1;d->w32_session=w32_session;desk_w32_supervise(&supervisor,&supervision,clock_ns());
+    authorized=1;d->w32_session=w32_session;d->w32_power=w32_power;desk_w32_supervise(&supervisor,&supervision,clock_ns());
 }
 void desk_w32_poll(struct desktop *d)
 {

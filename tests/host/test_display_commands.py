@@ -23,7 +23,7 @@ class DisplayCommandTests(unittest.TestCase):
 
     def test_desktop_batches(self):
         root=model.ROOT
-        sources=[root/'apps/desktop'/n for n in ('protocol.c','client.c','input.c','compositor.c','theme.c','shell.c','autoplay.c','autoplay_content.c','settings.c','wallpaper.c','keymap.c','folder.c','../files/model.c','../files/transfer.c')]
+        sources=[root/'apps/desktop'/n for n in ('protocol.c','client.c','input.c','compositor.c','theme.c','shell.c','autoplay.c','autoplay_content.c','settings.c','power_policy.c','wallpaper.c','keymap.c','folder.c','../files/model.c','../files/transfer.c')]
         sources += [root/'apps/libdeskui'/n for n in ('draw.c','widgets.c','list.c','menu.c','dialog.c','textarea.c','icons.c','icon_map.c')]
         sources += [root/'tests/host/desktop/fake.c',root/'tests/host/desktop/commands_test.c',root/'src/kernel/drivers/video/swdib.c',root/'src/kernel/drivers/video/batch.c']
         folder=root/'build/host'; folder.mkdir(parents=True,exist_ok=True)

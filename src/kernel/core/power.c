@@ -36,6 +36,7 @@
 #include <ciuki/blackbox.h>
 #include <ciuki/uaddr.h>
 #include <ciuki/power_source.h>
+#include <ciuki/ata_power.h>
 #pragma weak blackbox_checkpoint
 #endif
 
@@ -347,18 +348,137 @@ static int power_sequence(bool off)
     klog("[power] %s soft-off returned error=%d; stopped devices and leases retained", name, e); power_checkpoint();
     return e;
 }
+/* The desktop, or Setup's capability holder in Setup mode, owns call 73's
+ * control actions. */
+static bool power_authorized(const struct process *caller)
+{
+    return caller && ((setup_mode && setup_mode() && caller->setup_capability) ||
+                      (supervisor_desktop_pid() && caller->pid == supervisor_desktop_pid()));
+}
+/* G11 (docs/design/power-policy.md): the drive standby timer (ATA IDLE
+ * E3h, programmed by drivers/ata.c on every fixed disk with the Power
+ * Management feature set) and the cached EVENTS record. */
+#pragma weak ata_standby_timer_all
+#define POWER_DISK_MAX (5u * 3600u + 1800u) /* ATA count 251: 5 h 30 min */
+static uint32_t disk_seconds = CIUKI_POWER_UNKNOWN;
+static int power_policy_check(const struct ciuki_power_policy *p)
+{
+    return p->version != CIUKI_POWER_POLICY_VERSION || p->size != sizeof(*p) || p->reserved ||
+           p->disk_seconds > POWER_DISK_MAX ? -EINVAL : 0;
+}
+int power_policy_apply(struct ciuki_power_policy *p)
+{
+    if (power_policy_check(p)) return -EINVAL;
+    p->disks = p->refused = p->applied_seconds = 0; p->error = 0;
+    if (!ata_standby_timer_all) return -ENODEV;
+    struct ata_standby_result r;
+    int fixed = ata_standby_timer_all(p->disk_seconds, &r);
+    p->disks = r.disks; p->refused = r.refused; p->applied_seconds = r.applied_seconds; p->error = r.error;
+    int e = fixed <= 0 ? -ENODEV : r.disks ? 0 : r.error;
+    if (r.disks) disk_seconds = r.applied_seconds;
+    klog("[power] policy disk_seconds=%u applied=%u disks=%u refused=%u error=%d result=%d",
+         p->disk_seconds, p->applied_seconds, p->disks, p->refused, p->error, e);
+    return e;
+}
+void power_events_fill(struct ciuki_power_events *out)
+{
+    struct power_source_counters c; power_source_counters(&c);
+    out->sleep_requests = c.sleep_requests; out->battery_low = c.battery_low; out->critical = c.critical;
+    out->resumes = c.resumes; out->status_changes = c.status_changes;
+    out->standby_reason = power_source_standby_reason();
+    out->disk_seconds = disk_seconds; out->reserved = 0;
+}
+/* Stand by only where the provider and every native DMA driver qualified
+ * (power_source_standby_reason); the provider's standby owns the device
+ * suspend/resume and must write dirty storage back without stopping it. */
+static uint32_t standby_refusals;
+static int32_t power_standby(void)
+{
+    uint32_t reason = power_source_standby_reason();
+    if (reason != CIUKI_POWER_STANDBY_AVAILABLE) {
+        if (standby_refusals++ < 4) klog("[power] standby refused reason=%u", reason);
+        return -ENOTSUP;
+    }
+    int e = power_source_standby();
+    klog("[power] standby result=%d", e);
+    return e;
+}
+#ifndef POWER_HOST
+/* POLICY returns at once: a drive in standby spins up for the IDLE command,
+ * which must not stall the desktop. The "power-policy" task applies the
+ * latest request; the call reports the last completed application and
+ * EVENTS.disk_seconds the programmed time. */
+static struct task *policy_worker;
+static struct kwait policy_wake;
+static bool policy_pending;
+static struct ciuki_power_policy policy_request, policy_done = {.applied_seconds = CIUKI_POWER_UNKNOWN};
+static bool policy_ready(void *arg) { (void)arg; return policy_pending; }
+static void policy_main(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        if (!kwait_wait_until(&policy_wake, policy_ready, NULL, UINT64_MAX)) continue;
+        uint32_t f = irq_save(); struct ciuki_power_policy p = policy_request; policy_pending = false; irq_restore(f);
+        int e = power_policy_apply(&p);
+        if (e && !p.error) p.error = e;
+        f = irq_save(); policy_done = p; irq_restore(f);
+    }
+}
+static int policy_queue(struct ciuki_power_policy *p)
+{
+    if (power_policy_check(p)) return -EINVAL;
+    uint32_t f = irq_save();
+    bool start = !policy_worker;
+    irq_restore(f);
+    if (start) {
+        kwait_init(&policy_wake);
+        struct task *t = task_create_kernel("power-policy", policy_main, NULL, P_DEVICE);
+        if (!t) return -ENOMEM;
+        policy_worker = t; task_start(t);
+    }
+    f = irq_save();
+    policy_request = *p; policy_pending = true;
+    struct ciuki_power_policy done = policy_done;
+    irq_restore(f);
+    kwait_wake_all(&policy_wake);
+    p->disks = done.disks; p->refused = done.refused;
+    p->applied_seconds = done.applied_seconds; p->error = done.error;
+    return 0;
+}
+int32_t power_record_call(uint32_t action, uint32_t address, uint32_t bytes)
+{
+    if (action == CIUKI_POWER_EVENTS) {
+        struct ciuki_power_events out;
+        if (bytes != sizeof(out)) return -EINVAL;
+        int e = copy_from_user(&out, address, 2 * sizeof(uint32_t));
+        if (e) return e;
+        if (out.version != CIUKI_POWER_EVENTS_VERSION || out.size != sizeof(out)) return -EINVAL;
+        power_events_fill(&out);
+        return copy_to_user(address, &out, sizeof(out));
+    }
+    if (action != CIUKI_POWER_POLICY) return -EINVAL;
+    if (!power_authorized(proc_current())) return -EPERM;
+    struct ciuki_power_policy p;
+    if (bytes != sizeof(p)) return -EINVAL;
+    int e = copy_from_user(&p, address, sizeof(p));
+    if (e) return e;
+    int r = policy_queue(&p);
+    if (r) return r;
+    return copy_to_user(address, &p, sizeof(p));
+}
+#endif
 int32_t power_syscall(uint32_t action)
 {
     struct process *caller = proc_current();
-    /* The desktop, or Setup's capability holder in Setup mode, owns call 73.
-     * Both take the same orderly path below: storage flush, native device
+    /* Both take the same orderly path below: storage flush, native device
      * quiesce, the stopped latch, then reset or the active provider's
      * soft-off (ACPI S5 or APM Off). */
-    if (!caller || (!(setup_mode && setup_mode() && caller->setup_capability) &&
-        (!supervisor_desktop_pid() || caller->pid != supervisor_desktop_pid())))
-        return -EPERM;
+    if (!power_authorized(caller)) return -EPERM;
     if (action == CIUKI_POWER_QUERY)
-        return power_progress | CIUKI_POWER_CAN_REBOOT | (power_source_can_off() ? CIUKI_POWER_CAN_OFF : 0);
+        return power_progress | CIUKI_POWER_CAN_REBOOT | (power_source_can_off() ? CIUKI_POWER_CAN_OFF : 0) |
+               (!(power_progress & (CIUKI_POWER_STOPPED | CIUKI_POWER_UNCERTAIN)) &&
+                power_source_standby_reason() == CIUKI_POWER_STANDBY_AVAILABLE ? CIUKI_POWER_CAN_STANDBY : 0);
+    if (action == CIUKI_POWER_STANDBY) return power_progress ? -EBUSY : power_standby();
     if (action != CIUKI_POWER_REBOOT && action != CIUKI_POWER_OFF) return -EINVAL;
     bool off = action == CIUKI_POWER_OFF;
     uint32_t f = irq_save();

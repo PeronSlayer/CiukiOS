@@ -26,6 +26,7 @@
 #define SH_WINDOW    DU_WINDOW
 #define SH_TIP       0xffffe1u      /* tooltip paper */
 static void tooltip_hide(struct desktop *d);
+static int internal_find(const struct desktop *d, int kind);
 /* fx-19 selection and drag session (defined after the icon painter). */
 static int drop_lit(const struct desktop *d, int k);
 static void dnd_commit(struct desktop *d, unsigned effect);
@@ -499,6 +500,18 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         item(m, "Close    Alt+F4", "process-stop", SH_ACT_TASK_CLOSE, owner, minimized ? 0 : SH_ITEM_DEFAULT);
         break;
     }
+    case SH_MENU_POWER: {   /* G11: "click the icon to change Power Schemes on-the-fly" */
+        int active=pp_active(&d->sh.power_cfg,&d->sh.power_summary);
+        for (unsigned k=0;k<d->sh.power_cfg.count;k++)
+            item(m,d->sh.power_cfg.schemes[k].name,(int)k==active ? "battery" : NULL,SH_ACT_POWER_SCHEME,(int)k,(int)k==active ? SH_ITEM_DEFAULT : 0);
+        break;
+    }
+    case SH_MENU_POWER_METER: {   /* G11: right click, the meter and the properties */
+        unsigned off=program_index(d,"control")<0 ? SH_ITEM_DISABLED : 0;
+        item(m,"Open Power Meter","battery",SH_ACT_POWER_METER,0,off|SH_ITEM_DEFAULT);
+        item(m,"Adjust Power Properties","preferences-system",SH_ACT_CONTROL,CP_POWER+1,off);
+        break;
+    }
     default:
         if (kind>=SH_MENU_SETTINGS_CATEGORY && kind<=SH_MENU_SETTINGS_LAST)
             for (unsigned k=0;k<CP_APPLETS;k++) if (cp_applets[k].category==kind-SH_MENU_SETTINGS_CATEGORY)
@@ -738,6 +751,8 @@ static void act(struct desktop *d, const struct sh_item *it)
         break;
     case SH_ACT_PROGRAMS_FOLDER: desk_internal_open(d,DESK_INTERNAL_PROGRAMS); break;
     case SH_ACT_TASKMAN: launch_named(d, "tasks", NULL); break;
+    case SH_ACT_POWER_SCHEME: desk_shell_power_scheme(d, it->arg); break;
+    case SH_ACT_POWER_METER: launch_named(d, "control", "--panel=power-meter"); break;
     case SH_ACT_GAME: launch_game(d, it->arg); break;
     case SH_ACT_KEYS:
         desk_shell_message(d, "Keyboard Shortcuts",
@@ -1076,6 +1091,11 @@ static void tooltip_text(const struct desktop *d, char *text, size_t size)
         return;
     }
     if (d->sh.tooltip==5) { snprintf(text,size,"Notifications"); return; }
+    if (d->sh.tooltip==6) {   /* G11: percent and time left, the scheme */
+        const struct pp_config *c=&d->sh.power_cfg;
+        pp_tooltip(&d->sh.power_summary,c->schemes[pp_active(c,&d->sh.power_summary)].name,text,size);
+        return;
+    }
     if (d->sh.tooltip != 2) { date_text(d, text, size, 1); return; }
     const struct ciuki_net_state *n = &d->sh.network;
     if (!n->present) snprintf(text, size, "No network adapter");
@@ -1113,7 +1133,8 @@ static struct desk_box tooltip_box(const struct desktop *d)
     if (h>(int)d->height-2*DESK_BAR-12) h=(int)d->height-2*DESK_BAR-12;
     struct desk_box anchor=d->sh.tooltip>=16 ? desk_task_button(d,d->sh.tooltip-16) :
         d->sh.tooltip==2 ? network_icon_box(d) : d->sh.tooltip==3 ? volume_icon_box(d) :
-        d->sh.tooltip==4 ? media_icon_box(d) : d->sh.tooltip==5 ? notification_icon_box(d) : clock_box(d);
+        d->sh.tooltip==4 ? media_icon_box(d) : d->sh.tooltip==5 ? notification_icon_box(d) :
+        d->sh.tooltip==6 ? desk_shell_tray_icon_box(d, SH_TRAY_POWER) : clock_box(d);
     return tray_popup(d,anchor,w,h);
 }
 static void damage_moved_popup(struct desktop *d, struct desk_box anchor, int dx, int w, int h)
@@ -1204,17 +1225,219 @@ static void bar_text(struct du_canvas *c, int x, int y, const char *text)
         du_text(c,x,y+1,text,desk_mix(0,t->topbar,100));
     du_text(c,x,y,text,t->topbar_text);
 }
+/* ---- G11 power policy (docs/design/power-policy.md) ---------------------- */
+int desk_shell_power_shown(const struct desktop *d)
+{ return d->sh.power_status.version == CIUKI_POWER_VERSION && !d->sh.power_meter_hidden; }
+static void power_tooltip_damage(struct desktop *d, struct desk_box previous)
+{
+    if (d->sh.tooltip != 6) return;
+    if (d->sh.tooltip_painted) damage(d,d->sh.tooltip_last);
+    damage(d,previous); damage(d,tooltip_box(d));
+}
+void desk_shell_power_config(struct desktop *d)
+{
+    int width = desk_shell_tray_box(d).w;
+    struct desk_box tip = d->sh.tooltip == 6 ? tooltip_box(d) : (struct desk_box){0};
+    (void)pp_load(&d->sh.power_cfg, d->sh.cfg.extra);
+    d->sh.power_meter_hidden = !d->sh.power_cfg.show_meter;
+    if (d->sh.tooltip == 6 && !desk_shell_power_shown(d)) tooltip_hide(d);
+    desk_shell_tray_damage(d,width);
+    power_tooltip_damage(d,tip);
+    d->sh.power_monitor_seconds = pp_timer(&d->sh.power_cfg,&d->sh.power_summary,PP_MONITOR);
+}
+void desk_shell_power_scheme(struct desktop *d, int scheme)
+{
+    if (scheme < 0 || (unsigned)scheme >= d->sh.power_cfg.count) return;
+    struct desk_box tip = d->sh.tooltip == 6 ? tooltip_box(d) : (struct desk_box){0};
+    struct pp_config next = d->sh.power_cfg;
+    next.active = scheme;
+    if (pp_store(&next, d->sh.cfg.extra, sizeof(d->sh.cfg.extra))) {
+        desk_shell_notify_error(d,"Power scheme not saved",ENOSPC); return;
+    }
+    d->sh.power_cfg = next; d->sh.want_save = 1;
+    d->sh.power_monitor_seconds = pp_timer(&d->sh.power_cfg,&d->sh.power_summary,PP_MONITOR);
+    power_tooltip_damage(d,tip);
+}
+/* Shut down (a G3 session) or Stand by where it is qualified. */
+static void power_choice(struct desktop *d, int action, int force)
+{
+    action = pp_action_effective(action, d->sh.power_can_standby);
+    if (action == PP_ACTION_NONE || d->sh.gate || desk_session_busy(d)) return;
+    if (action == PP_ACTION_STANDBY) { if (!d->sh.want_standby) d->sh.want_standby = 2; return; }
+    d->sh.want_power = 2; d->sh.want_power_force = force;
+}
 int desk_shell_power_update(struct desktop *d, const struct ciuki_power_status *p)
 {
     if (!p || p->version != CIUKI_POWER_VERSION || p->size != sizeof(*p) ||
         p->battery_count > CIUKI_POWER_BATTERIES || p->zone_count > CIUKI_POWER_ZONES || p->reserved) return -1;
     int width = desk_shell_tray_box(d).w;
+    struct desk_box tip = d->sh.tooltip == 6 ? tooltip_box(d) : (struct desk_box){0};
+    uint32_t lid = d->sh.power_status.version == CIUKI_POWER_VERSION ? d->sh.power_status.lid_open : CIUKI_POWER_UNKNOWN;
     d->sh.power_status = *p; desk_shell_tray_damage(d,width);
+    pp_summarize(p,&d->sh.power_summary);
+    power_tooltip_damage(d,tip);
+    /* G11: the power button (ACPI's coalesced request) and the lid run the
+     * Advanced choices; Stand by falls back to Shut down where unqualified. */
     if (p->shutdown_requests != d->sh.power_seen) {
         d->sh.power_seen = p->shutdown_requests;
-        if (!d->sh.gate && !d->power.state) d->sh.want_power = 2;
+        if (!d->sh.gate && !d->power.state)
+            power_choice(d,d->sh.power_cfg.power_button == PP_BUTTON_STANDBY ? PP_ACTION_STANDBY : PP_ACTION_SHUTDOWN,0);
     }
+    if (lid == 1 && p->lid_open == 0 && d->sh.power_cfg.lid != PP_LID_NONE)
+        power_choice(d,d->sh.power_cfg.lid == PP_LID_STANDBY ? PP_ACTION_STANDBY : PP_ACTION_SHUTDOWN,0);
     return 0;
+}
+static void power_alarm(struct desktop *d, int kind)
+{
+    const struct pp_alarm *a = kind == PP_ALARM_CRITICAL ? &d->sh.power_cfg.critical : &d->sh.power_cfg.low;
+    const struct pp_summary *s = &d->sh.power_summary;
+    int action = pp_action_effective(a->action, d->sh.power_can_standby);
+    fprintf(stderr,"[desktop] power alarm=%s percent=%d seconds=%d action=%d\n",
+            kind == PP_ALARM_CRITICAL ? "critical" : "low", s->percent, s->seconds, action);
+    /* One sound per alarm: the message window plays its warning sound. */
+    if (a->sound && !a->message) desk_sound(d, kind == PP_ALARM_CRITICAL ? SOUND_ERROR : SOUND_INFORMATION);
+    if (a->message) {
+        char level[40] = "low", text[256];
+        if (s->percent >= 0 && s->seconds >= 0)
+            snprintf(level,sizeof(level),"at %d%% (%d hr %02d min)",s->percent,s->seconds/3600,s->seconds/60%60);
+        else if (s->percent >= 0) snprintf(level,sizeof(level),"at %d%%",s->percent);
+        snprintf(text,sizeof(text),"The battery is %s.\n%s",level,
+                 action == PP_ACTION_SHUTDOWN ? "CiukiOS will now shut down. Programs are asked to save your work first." :
+                 action == PP_ACTION_STANDBY ? "CiukiOS will now stand by." :
+                 "Connect the computer to AC power, or save your work and shut down.");
+        desk_shell_message_class(d, kind == PP_ALARM_CRITICAL ? "Critical Battery Alarm" : "Low Battery Alarm", text, DU_DLG_ICON_WARNING);
+    }
+    if (kind == PP_ALARM_LOW) desk_power_broadcast(d, PP_PBT_BATTERYLOW, 0);
+    power_choice(d, action, a->force);
+}
+void desk_shell_power_events(struct desktop *d, const struct ciuki_power_events *e, int query)
+{
+    struct desk_shell *sh = &d->sh;
+    int could = sh->power_can_standby;
+    sh->power_can_standby = query >= 0 && (query & CIUKI_POWER_CAN_STANDBY) &&
+                            !(query & (CIUKI_POWER_STOPPED | CIUKI_POWER_UNCERTAIN));
+    if (could != sh->power_can_standby) {
+        int i = internal_find(d, DESK_INTERNAL_SHUTDOWN);
+        if (i >= 0) damage(d, desk_outer(&d->clients[i]));   /* the Stand by button */
+    }
+    if (e && e->version == CIUKI_POWER_EVENTS_VERSION && e->size == sizeof(*e)) {
+        if (!sh->power_events_valid) sh->power_alarm.battery_low_seen = e->battery_low;   /* no alarm for old events */
+        else if (e->sleep_requests != sh->power_events.sleep_requests && !sh->gate) {
+            /* APM standby/suspend requests (sleep key, lid, BIOS timers):
+             * honoured where Stand by is qualified, otherwise rejected by the
+             * kernel and reported once per burst. */
+            if (sh->power_can_standby) power_choice(d, PP_ACTION_STANDBY, 0);
+            else if (!sh->power_sleep_notice_ns || d->now_ns >= sh->power_sleep_notice_ns + 10000000000ull) {
+                sh->power_sleep_notice_ns = d->now_ns ? d->now_ns : 1;
+                desk_shell_notify(d,"Power","Stand by is not available on this computer.",DU_DLG_ICON_INFO,SH_NOTIFY_DETAILS);
+            }
+        }
+        sh->power_events = *e; sh->power_events_valid = 1;
+    }
+    sh->power_monitor_seconds = pp_timer(&sh->power_cfg, &sh->power_summary, PP_MONITOR);
+    if (sh->gate || d->power.state) return;
+    int alarm = pp_alarm_step(&sh->power_alarm, &sh->power_cfg, &sh->power_summary,
+                              sh->power_events_valid ? sh->power_events.battery_low : 0);
+    if (alarm) power_alarm(d, alarm);
+    if (pp_status_changed(&sh->power_broadcast, &sh->power_summary)) desk_power_broadcast(d, PP_PBT_POWERSTATUSCHANGE, 0);
+}
+/* WM_POWERBROADCAST queue: one broadcast at a time through the broker; a
+ * status change already waiting is not queued twice. */
+void desk_power_broadcast(struct desktop *d, uint32_t event, uint32_t lparam)
+{
+    struct desk_power_broadcast *b = &d->pbt;
+    if (!d->w32_power) return;
+    if (event == PP_PBT_POWERSTATUSCHANGE)
+        for (unsigned i = 0; i < b->count; i++) if (b->queue[i].event == event) return;
+    if (b->count == DESK_PBT_QUEUE) {   /* drop the oldest status change, never a sequence step */
+        unsigned i = 0;
+        while (i < b->count && b->queue[i].event != PP_PBT_POWERSTATUSCHANGE) i++;
+        if (i == b->count) return;
+        memmove(&b->queue[i], &b->queue[i + 1], (b->count - i - 1) * sizeof(b->queue[0])); b->count--;
+    }
+    b->queue[b->count++] = (struct desk_pbt){event, lparam};
+}
+static void broadcast_service(struct desktop *d)
+{
+    struct desk_power_broadcast *b = &d->pbt;
+    struct desk_w32_status st = {0};
+    if (b->running) {
+        int e = d->w32_power ? d->w32_power(d, DESK_W32_POWER_STATUS, 0, 0, &st) : -ENODEV;
+        int timeout = d->now_ns >= b->started_ns + DESK_POWER_QUERY_NS;
+        if (!e && st.state == DESK_W32_PENDING && !timeout) return;
+        /* A query left unanswered for 20 s counts as agreement. */
+        b->denied = !e && st.state == DESK_W32_VETOED;
+        b->running = 0; b->done = (struct desk_pbt){b->current.event + 1, b->current.lparam};
+        if (d->w32_power) (void)d->w32_power(d, DESK_W32_POWER_RESET, 0, 0, &st);
+    }
+    if (!b->count) return;
+    struct desk_pbt next = b->queue[0];
+    memmove(&b->queue[0], &b->queue[1], (b->count - 1) * sizeof(b->queue[0])); b->count--;
+    b->current = next; b->started_ns = d->now_ns; b->broadcasts++;
+    if (!d->w32_power || d->w32_power(d, DESK_W32_POWER_BEGIN, next.event, next.lparam, &st)) {
+        b->denied = 0; b->done = (struct desk_pbt){next.event + 1, next.lparam};   /* nobody to tell */
+        return;
+    }
+    b->running = 1;
+}
+static int broadcast_finished(const struct desktop *d, uint32_t event)
+{ return !d->pbt.running && !d->pbt.count && d->pbt.done.event == event + 1; }
+/* The Windows 98 Stand by sequence (power-policy.md 22): query, suspend,
+ * call 73 STANDBY, resume. Native and DOS windows are not queried yet. */
+static void standby_service(struct desktop *d)
+{
+    struct desk_power_broadcast *b = &d->pbt;
+    switch (b->standby) {
+    case DESK_STANDBY_IDLE:
+        if (!d->sh.want_standby) return;
+        b->standby_lparam = d->sh.want_standby == 1;
+        d->sh.want_standby = 0;
+        if (!d->sh.power_can_standby || desk_session_busy(d) || d->sh.gate) return;
+        fprintf(stderr,"[desktop] standby begin user=%d\n",b->standby_lparam);
+        b->done = (struct desk_pbt){0}; b->standby = DESK_STANDBY_QUERY;
+        desk_power_broadcast(d, PP_PBT_QUERYSUSPEND, (uint32_t)b->standby_lparam);
+        return;
+    case DESK_STANDBY_QUERY:
+        if (!broadcast_finished(d, PP_PBT_QUERYSUSPEND)) return;
+        if (b->denied) {
+            fprintf(stderr,"[desktop] standby denied by a program\n");
+            desk_power_broadcast(d, PP_PBT_QUERYSUSPENDFAILED, 0);
+            b->standby = DESK_STANDBY_IDLE; return;
+        }
+        b->done = (struct desk_pbt){0}; b->standby = DESK_STANDBY_SUSPEND;
+        desk_power_broadcast(d, PP_PBT_SUSPEND, 0);
+        return;
+    case DESK_STANDBY_SUSPEND: {
+        if (!broadcast_finished(d, PP_PBT_SUSPEND)) return;
+        errno = 0;
+        int r = d->power_standby ? d->power_standby() : (errno = ENOSYS, -1);
+        b->standby_error = r ? (errno ? errno : EIO) : 0; b->standbys++;
+        fprintf(stderr,"[desktop] standby result=%d\n",r ? -b->standby_error : 0);
+        uint32_t failure = r ? PP_PBTF_RESUMEFROMFAILURE : 0;
+        desk_power_broadcast(d, PP_PBT_RESUMEAUTOMATIC, failure);
+        desk_power_broadcast(d, PP_PBT_RESUMESUSPEND, failure);
+        d->last_input_ns = d->now_ns;   /* the idle timer restarts at resume */
+        b->standby = DESK_STANDBY_IDLE;
+        if (r) desk_shell_notify_error(d, "Stand by failed", b->standby_error);
+        return;
+    }
+    default: b->standby = DESK_STANDBY_IDLE; return;
+    }
+}
+void desk_power_policy_tick(struct desktop *d)
+{
+    if (!d->shell) return;
+    /* System standby after: no input for the current source's timer; display
+     * leases, sessions and the power sequence keep the computer awake. */
+    uint32_t idle = pp_timer(&d->sh.power_cfg, &d->sh.power_summary, PP_STANDBY);
+    if (idle && d->sh.power_can_standby && !d->sh.want_standby && d->pbt.standby == DESK_STANDBY_IDLE &&
+        !d->sh.gate && !desk_session_busy(d) && !d->v3_lease_state && d->last_input_ns &&
+        d->now_ns >= d->last_input_ns + (uint64_t)idle * 1000000000ull) d->sh.want_standby = 2;
+    standby_service(d);
+    broadcast_service(d);
+    int step = d->pbt.standby;
+    standby_service(d);
+    if (step != d->pbt.standby && !d->pbt.running) broadcast_service(d);   /* the next step starts at once */
 }
 static void draw_tray(struct desktop *d, struct du_canvas *canvas)
 {
@@ -1235,7 +1458,7 @@ static void draw_tray(struct desktop *d, struct du_canvas *canvas)
     struct desk_box notification = notification_icon_box(d);
     du_icon_blit(&c,notification.x,notification.y,desk_shell_icon("dialog-information",16),16,
                  d->sh.notification.active ? DU_ICON_NORMAL : DU_ICON_GHOST);
-    if (d->sh.power_status.version == CIUKI_POWER_VERSION) {
+    if (desk_shell_power_shown(d)) {
         const struct ciuki_power_status *p = &d->sh.power_status;
         struct desk_box bi = desk_shell_tray_icon_box(d, SH_TRAY_POWER);
         uint64_t full = 0, remaining = 0; unsigned unit = CIUKI_POWER_UNKNOWN, present = 0; int known = p->battery_count > 0;
@@ -3033,9 +3256,12 @@ void desk_internal_paint(struct desktop *d, int index, struct desk_box content, 
         du_icon_blit(&c, content.x + 30, content.y + 32, desk_shell_icon("ciuki", 20), 20, DU_ICON_NORMAL);
         bold(&c, content.x + 64, content.y + 18, "What do you want CiukiOS to do?", SH_INK);
         multiline(&c, content.x + 64, content.y + 38, "Your settings are saved first. Programs\nand virtual machines will be closed.", SH_INK);
-        static const char *const labels[] = {"&Restart", "&Shut Down", "Cancel"};
-        /* shutdown_choice 1: Restart is the default (Ctrl+Alt+Del pressed again in Task Manager). */
-        for (int k = 0; k < 3; k++) push_button(&c, button_box(content, k, 3), labels[k], k == (d->sh.shutdown_choice == 1 ? 0 : 1));
+        static const char *const labels[] = {"Stand &by", "&Restart", "&Shut Down", "Cancel"};
+        /* shutdown_choice 1: Restart is the default (Ctrl+Alt+Del pressed again in Task Manager).
+         * G11: Stand by comes first, as in Windows 98, only where it is qualified. */
+        int first = d->sh.power_can_standby ? 0 : 1, count = 4 - first;
+        for (int k = 0; k < count; k++)
+            push_button(&c, button_box(content, k, count), labels[k + first], k + first == (d->sh.shutdown_choice == 1 ? 1 : 2));
         break;
     }
     case DESK_INTERNAL_END_TASK:
@@ -3140,12 +3366,16 @@ int desk_internal_click(struct desktop *d, int index, int32_t x, int32_t y)
         if (desk_contains(button_box(content,0,2),x,y)) desk_end_task_choice(d,1);
         else if (desk_contains(button_box(content,1,2),x,y)) desk_end_task_choice(d,0);
         return 1;
-    case DESK_INTERNAL_SHUTDOWN:
-        for (int k = 0; k < 3; k++) if (desk_contains(button_box(content, k, 3), x, y)) {
-            if (k < 2) d->sh.want_power = k == 0 ? 1 : 2;
+    case DESK_INTERNAL_SHUTDOWN: {
+        int first = d->sh.power_can_standby ? 0 : 1, count = 4 - first;
+        for (int k = 0; k < count; k++) if (desk_contains(button_box(content, k, count), x, y)) {
+            int choice = k + first;   /* 0 Stand by, 1 Restart, 2 Shut Down, 3 Cancel */
+            if (!choice) d->sh.want_standby = 1;
+            else if (choice < 3) d->sh.want_power = choice;
             desk_request_close(d, index);
         }
         return 1;
+    }
     default:
         if (d->sh.confirm) {
             if (desk_contains(button_box(content,0,2),x,y)) confirm_answer(d,index,1);
@@ -3243,9 +3473,17 @@ int desk_shell_button(struct desktop *d, int button, int down)
         } else d->sh.clock_click_ns=d->now_ns ? d->now_ns : 1;
         return 1;
     }
+    if (button==CIUKI_BUTTON_RIGHT && desk_contains(desk_shell_tray_icon_box(d, SH_TRAY_POWER),x,y)) {
+        /* G11: right click on the power meter (Windows 98: the battery status
+         * and the properties). */
+        if (d->sh.volume_open) damage(d,outer(volume_popup(d)));
+        if (d->sh.network_open) damage(d,outer(network_popup(d)));
+        if (d->sh.media_open) damage(d,outer(media_popup(d)));
+        d->sh.volume_open=d->sh.network_open=d->sh.media_open=0;
+        desk_menu_open(d,SH_MENU_POWER_METER,x,y); return 1;
+    }
     if (button==CIUKI_BUTTON_RIGHT) {
         int page=desk_contains(volume_icon_box(d),x,y) ? CP_SOUNDS :
-            desk_contains(desk_shell_tray_icon_box(d, SH_TRAY_POWER),x,y) ? CP_POWER :
             desk_contains(network_icon_box(d),x,y) ? CP_NETWORK :
             desk_contains(media_icon_box(d),x,y) ? CP_AUTOPLAY :
             desk_contains(desk_shell_clock_box(d),x,y) ? CP_DATETIME : CP_HOME;
@@ -3321,7 +3559,9 @@ int desk_shell_button(struct desktop *d, int button, int down)
     struct desk_box bar = desk_taskbar(d);
     if (y >= 0 && y < DESK_BAR) {
         if (desk_contains(desk_shell_tray_icon_box(d, SH_TRAY_POWER),x,y) && button == CIUKI_BUTTON_LEFT) {
-            if (program_index(d,"control")>=0) launch_named(d,"control","--panel=power");
+            /* G11: Windows 98's meter: a click changes the power scheme. */
+            struct desk_box bi=desk_shell_tray_icon_box(d, SH_TRAY_POWER);
+            desk_menu_open(d,SH_MENU_POWER,bi.x,bi.y+bi.h);
             return 1;
         }
         if ((d->sh.media.removable_mask & ~7u) && desk_contains(media_icon_box(d),x,y) && (button==CIUKI_BUTTON_LEFT || button==CIUKI_BUTTON_RIGHT)) {
@@ -3410,6 +3650,7 @@ static int hover_target(const struct desktop *d)
     if (desk_contains(volume_icon_box(d),x,y)) return 3;
     if ((d->sh.media.removable_mask & ~7u) && desk_contains(media_icon_box(d),x,y)) return 4;
     if (desk_contains(notification_icon_box(d),x,y)) return 5;
+    if (desk_shell_power_shown(d) && desk_contains(desk_shell_tray_icon_box(d,SH_TRAY_POWER),x,y)) return 6;
     for (int i=0;i<DESK_CLIENTS;i++) if (d->clients[i].window && desk_contains(desk_task_button(d,i),x,y)) return 16+i;
     return 0;
 }
@@ -3451,6 +3692,7 @@ void desk_shell_tick(struct desktop *d)
 {
     if (!d->shell) return;
     dnd_tick(d);
+    desk_power_policy_tick(d);
     if (!d->sh.network_poll_ns || (d->now_ns >= d->sh.network_poll_ns &&
         d->now_ns - d->sh.network_poll_ns >= 2000000000ull)) {
         d->sh.network_poll_ns = d->now_ns ? d->now_ns : 1;
@@ -3646,6 +3888,7 @@ static int internal_key(struct desktop *d, int index, int code, int value)
         else if (code == DU_KEY_ENTER && d->sh.shutdown_choice == 1) { d->sh.want_power = 1; desk_request_close(d, index); }
         else if (code == DU_KEY_ENTER || code == 0x1f) { d->sh.want_power = 2; desk_request_close(d, index); }
         else if (code == 0x13) { d->sh.want_power = 1; desk_request_close(d, index); }
+        else if (code == 0x30 && d->sh.power_can_standby) { d->sh.want_standby = 1; desk_request_close(d, index); }   /* B */
         return 1;
     default:
         if (d->sh.confirm) {
@@ -3957,6 +4200,8 @@ void desk_shell_reset(struct desktop *d)
     bind(d);
     icons_prepare();
     cfg_defaults(&d->sh.cfg);
+    pp_defaults(&d->sh.power_cfg);
+    d->sh.power_disk_sent = CIUKI_POWER_UNKNOWN;
     d->sh.icon_selected = d->sh.click_icon = d->sh.icon_drag = -1;
     d->sh.anchor = -1; d->sh.dnd.drop_index = d->sh.dnd.target = d->sh.dnd.status_target = d->sh.dnd.hover_task = -1;
     d->sh.volume = 20;

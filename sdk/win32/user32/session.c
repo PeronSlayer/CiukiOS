@@ -1,4 +1,5 @@
-/* Session notifications run on the owning USER thread at message dispatch.
+/* Session notifications (WM_QUERYENDSESSION, WM_ENDSESSION and, G11,
+ * WM_POWERBROADCAST) run on the owning USER thread at message dispatch.
  * The service serializes windows and the desktop enforces a 10 s bound.
  * SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "internal.h"
@@ -32,7 +33,9 @@ void u32_session_pump(void)
             u32_backend.call(&reason,sizeof(reason));
         }
         if(w && w->tid==tid){
-            answer=!!u32_invoke(h,r.type,r.count,(LPARAM)(int32_t)r.disposition);
+            LRESULT result=u32_invoke(h,r.type,r.count,(LPARAM)(int32_t)r.disposition);
+            /* G11: WM_POWERBROADCAST denies a query only with BROADCAST_QUERY_DENY. */
+            answer=r.type==W32R_POWERBROADCAST ? (uint32_t)result!=0x424D5144u : !!result;
         }
         session_call(h,W32R_SESSION_REPLY,tid,answer,&r);
         now=u32_ticks();thread->session_fast=1;

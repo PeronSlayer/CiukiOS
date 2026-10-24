@@ -1237,7 +1237,8 @@ LRESULT W32API DefWindowProcA(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
   case WM_DESTROYCLIPBOARD:
     u32_clipboard_owned_clear();
     return 0;
-  case 0x11: /* WM_QUERYENDSESSION */
+  case 0x11:  /* WM_QUERYENDSESSION */
+  case 0x218: /* G11 WM_POWERBROADCAST: TRUE, a query is granted */
   case WM_NCCREATE:
     return 1;
   case WM_CLOSE:

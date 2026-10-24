@@ -13,6 +13,7 @@
 #include "folder.h"
 #include "autoplay.h"
 #include "wallpaper.h"
+#include "power_policy.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <ciuki/abi.h>
@@ -43,13 +44,15 @@ enum sh_menu_kind { SH_MENU_NONE, SH_MENU_START, SH_MENU_PROGRAMS, SH_MENU_DEVEL
                     SH_MENU_SETTINGS, SH_MENU_HELP, SH_MENU_DESKTOP, SH_MENU_ICON, SH_MENU_TASK, SH_MENU_ACCESSORIES,
                     SH_MENU_GAMES, SH_MENU_NEW, SH_MENU_OPEN_WITH, SH_MENU_TRAY_SETTINGS,
                     SH_MENU_SYSTEM_TOOLS, SH_MENU_SETTINGS_CATEGORY, SH_MENU_SETTINGS_LAST = SH_MENU_SETTINGS_CATEGORY + CP_CATEGORIES - 1,
-                    SH_MENU_DRAG };
+                    SH_MENU_DRAG,
+                    SH_MENU_POWER /* G11: tray scheme choice */, SH_MENU_POWER_METER /* G11: tray right click */ };
 enum sh_action { SH_ACT_NONE, SH_ACT_SUBMENU, SH_ACT_LAUNCH, SH_ACT_ABOUT, SH_ACT_RUN, SH_ACT_SHUTDOWN,
                  SH_ACT_DOCUMENT, SH_ACT_CONTROL, SH_ACT_KEYS, SH_ACT_ARRANGE, SH_ACT_ICON_OPEN,
                  SH_ACT_ICON_PROPERTIES, SH_ACT_REFRESH, SH_ACT_TASK_RESTORE, SH_ACT_TASK_MINIMIZE,
                  SH_ACT_TASK_CLOSE, SH_ACT_TASKMAN, SH_ACT_CLEAR_RECENT, SH_ACT_GAME, SH_ACT_EMPTY_RECYCLE, SH_ACT_FILE, SH_ACT_RENAME, SH_ACT_OPEN_WITH, SH_ACT_DOS_FULLSCREEN,
                  SH_ACT_TASK_MOVE, SH_ACT_TASK_SIZE, SH_ACT_TASK_MAXIMIZE, SH_ACT_WIN32_LINK, SH_ACT_PROGRAMS_FOLDER, SH_ACT_WIN32_PROGRAM,
-                 SH_ACT_DRAG /* fx-19 right-drag menu: arg is the DROPEFFECT, 0 Cancel */ };
+                 SH_ACT_DRAG /* fx-19 right-drag menu: arg is the DROPEFFECT, 0 Cancel */,
+                 SH_ACT_POWER_SCHEME /* G11: arg is the scheme */, SH_ACT_POWER_METER };
 #define SH_ITEM_SEPARATOR 1u
 #define SH_ITEM_DISABLED 2u
 #define SH_ITEM_DEFAULT 4u
@@ -107,6 +110,20 @@ struct desk_shell {
     struct ciuki_power_status power_status;
     uint64_t power_poll_ns;
     uint32_t power_seen;
+    /* G11 power policy (docs/design/power-policy.md): desktop.cfg's power_*
+     * lines, the meter summary, alarm and PBT_APMPOWERSTATUSCHANGE state,
+     * the call-73 EVENTS seen, QUERY's CAN_STANDBY, the monitor timeout
+     * of the current power source (consumed by G10's DPMS) and the drive
+     * timer last sent to the kernel. */
+    struct pp_config power_cfg;
+    struct pp_summary power_summary;
+    struct pp_alarm_state power_alarm;
+    struct pp_broadcast_state power_broadcast;
+    struct ciuki_power_events power_events;
+    int power_events_valid, power_can_standby;
+    int power_meter_hidden;   /* !show_meter; zero (shown) in a zeroed desktop */
+    uint32_t power_monitor_seconds, power_disk_sent;
+    uint64_t power_sleep_notice_ns;
     int network_open;
     struct ciuki_media_state media;
     char media_labels[26][33];
@@ -131,6 +148,9 @@ struct desk_shell {
     int32_t motion_rx, motion_ry;   /* sub-pixel remainders of the mouse speed */
     /* Requests served by desktop.c after each input batch. */
     int want_save, want_wallpaper, want_mixer, want_power, want_reload, want_programs;
+    /* G11: want_power_force ends programs that stop responding in that
+     * session (alarm "Force"); want_standby 1 from the user, 2 automatic. */
+    int want_power_force, want_standby;
     char want_run[192];
     /* Wallpaper cache: full screen, rebuilt when settings or size change. */
     uint32_t *wall; uint32_t wall_w, wall_h; int wall_valid;
@@ -170,6 +190,16 @@ void desk_shell_clock_text_at(const struct desktop *, uint64_t, char *, size_t);
 int desk_shell_clock_width_at(const struct desktop *, uint64_t);
 void desk_shell_tray_damage(struct desktop *, int previous_width);
 int desk_shell_power_update(struct desktop *, const struct ciuki_power_status *);
+/* G11: the power meter icon is shown (a valid record and "Show power meter
+ * on taskbar"). */
+int desk_shell_power_shown(const struct desktop *);
+/* G11: after each status poll: EVENTS (NULL when unavailable) and QUERY's
+ * bits (negative when unavailable): alarms, BIOS sleep requests,
+ * PBT_APMPOWERSTATUSCHANGE, the monitor timeout. */
+void desk_shell_power_events(struct desktop *, const struct ciuki_power_events *, int query);
+/* G11: desktop.cfg was (re)loaded into sh.cfg: parse its power_* lines. */
+void desk_shell_power_config(struct desktop *);
+void desk_shell_power_scheme(struct desktop *, int scheme);   /* tray menu: make active and save */
 void desk_shell_volume_damage(struct desktop *);
 void desk_internal_paint(struct desktop *, int index, struct desk_box content, struct desk_box clip);
 void desk_internal_closed(struct desktop *, int index);

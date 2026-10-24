@@ -13,6 +13,7 @@
 #include "../desktop/autoplay.h"
 #include "../desktop/wallpaper.h"
 #include "../desktop/settings_catalog.h"
+#include "../desktop/power_policy.h"
 #include <ciuki/display.h>
 #include <ciuki/abi.h>
 #include "../../src/kernel/include/ciuki/game_ports_settings.h"
@@ -114,6 +115,7 @@ struct cp_host {
     int (*log_read)(void *, uint32_t offset, char *, size_t cap, size_t *length, uint32_t *total);
     int (*power)(void *); /* opens the shell's safe shutdown dialog */
     int (*power_status)(void *, struct ciuki_power_status *);
+    int (*power_events)(void *, struct ciuki_power_events *);   /* G11: call-73 EVENTS; NULL: unavailable */
     int (*audio_diagnostics)(void *, struct ciuki_audio_diagnostics *);
     int (*autoplay_list)(void *, struct ap_preference *, unsigned);
     int (*autoplay_forget)(void *, const char *);
@@ -167,6 +169,17 @@ struct cp_app {
     struct du_ui *ui;
     struct cp_host host;
     char power_lines[20][128];
+    /* G11 Power Management (power.inc): the desktop.cfg power_* lines, the
+     * meter summary, EVENTS (standby availability), the tab and dropdowns. */
+    struct pp_config pw_cfg;
+    struct pp_summary pw_summary;
+    struct ciuki_power_events pw_events;
+    int pw_events_ok, pw_lid_known, pw_tab, pw_details, pw_popup_owner, pw_tab_count, pw_tabs_map[4];
+    struct du_item pw_tabs[4];
+    struct du_menu_item pw_menu[16];
+    char pw_menu_labels[16][PP_NAME_MAX];
+    int pw_menu_value[16];
+    char pw_cells[PP_SOURCES][PP_TIMERS][24], pw_text[3][128];
     struct ciuki_settings cfg;
     struct ciuki_settings display_original;
     int display_tab, display_session, display_dirty, display_preview, display_write;

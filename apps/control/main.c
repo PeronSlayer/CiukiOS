@@ -456,6 +456,8 @@ static int log_read(void *ctx,uint32_t offset,char *text,size_t cap,size_t *leng
 static int open_power(void *ctx) { return apply(ctx,DESK_SETTINGS_OPEN_POWER,0,0); }
 static int read_power_status(void *ctx, struct ciuki_power_status *out)
 { (void)ctx; return ciuki_power_status(out) ? -errno : 0; }
+static int read_power_events(void *ctx, struct ciuki_power_events *out)   /* G11 */
+{ (void)ctx; return ciuki_power_events(out) ? -errno : 0; }
 static int audio_query(void *ctx, struct ciuki_audio_diagnostics *out)
 {
     (void)ctx;
@@ -763,7 +765,7 @@ int main(int argc, char **argv)
     h->display = display_query;
     h->network_begin=network_begin; h->network_poll=network_poll;
     h->engine=engine_query; h->engine_info=generic_engine_query; h->accel_retry=accel_retry;
-    h->network=network_query; h->power=open_power; h->power_status=read_power_status; h->log_read=log_read;
+    h->network=network_query; h->power=open_power; h->power_status=read_power_status; h->power_events=read_power_events; h->log_read=log_read;
     h->autoplay_list=autoplay_list; h->autoplay_forget=autoplay_forget;
     h->save_async=1; h->fonts_async=1; h->job_notify=notify_completion;
     h->audio_diagnostics = audio_query;

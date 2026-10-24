@@ -977,10 +977,14 @@ static void settings_load(struct desktop *d)
 {
     cfg_defaults(&d->sh.cfg);
     uint8_t *text; size_t n;
-    if (read_file(CFG_FILE,CFG_TEXT_MAX,&text,&n)) return;   /* first boot: defaults */
-    int rejected=cfg_parse(&d->sh.cfg,(const char *)text,n);
-    free(text);
-    if (rejected) snprintf(d->notice,sizeof(d->notice),"desktop.cfg: %d line(s) ignored",rejected);
+    if (!read_file(CFG_FILE,CFG_TEXT_MAX,&text,&n)) {   /* first boot: defaults */
+        int rejected=cfg_parse(&d->sh.cfg,(const char *)text,n);
+        free(text);
+        if (rejected) snprintf(d->notice,sizeof(d->notice),"desktop.cfg: %d line(s) ignored",rejected);
+    }
+    (void)pp_load(&d->sh.power_cfg,d->sh.cfg.extra);   /* G11: the power_* lines */
+    d->sh.power_meter_hidden=!d->sh.power_cfg.show_meter;
+    d->sh.power_disk_sent=CIUKI_POWER_UNKNOWN;   /* the first poll programs the drive timer, Never included */
 }
 static int (*audio_shutdown_wait)(struct desktop *);
 static int theme_poll_async(uint64_t now)
@@ -1775,6 +1779,7 @@ static int power_request(int action)
     return ciuki_power(action==1 ? CIUKI_POWER_REBOOT : CIUKI_POWER_OFF);
 }
 static int power_state(void) { return ciuki_power(CIUKI_POWER_QUERY); }
+static int power_standby(void) { return ciuki_power(CIUKI_POWER_STANDBY); }   /* G11 */
 static int power_alive(struct desktop *d, uint32_t pid)
 {
     /* One syscall snapshot per loop, shared by all targets. Disconnecting
@@ -1821,6 +1826,18 @@ static void shell_service(struct desktop *d)
         sh->power_poll_ns = d->now_ns + 1000000000ull;
         struct ciuki_power_status status;
         if (!ciuki_power_status(&status)) (void)desk_shell_power_update(d,&status);
+        /* G11: cached EVENTS and QUERY (no firmware call), then the drive
+         * timer of the current power source when it changed. */
+        struct ciuki_power_events events;
+        int events_ok=!ciuki_power_events(&events), query=ciuki_power(CIUKI_POWER_QUERY);
+        desk_shell_power_events(d,events_ok ? &events : NULL,query);
+        uint32_t disks=pp_timer(&sh->power_cfg,&sh->power_summary,PP_DISKS);
+        if (disks!=sh->power_disk_sent && !sh->gate) {
+            struct ciuki_power_policy policy={.disk_seconds=disks};
+            int r=ciuki_power_policy(&policy);
+            sh->power_disk_sent=disks;   /* sent once per value; refusals are kernel records */
+            fprintf(stderr,"[desktop] power policy disk_seconds=%u result=%d\n",disks,r ? -errno : 0);
+        }
     }
     desktop_wait("mixer-result");
     struct mixer_job job; size_t job_size; int job_error;
@@ -1839,14 +1856,15 @@ static void shell_service(struct desktop *d)
     if (settings_writer_started && cfg_writer_result(&settings_writer,&save_error) && save_error) {
         desk_shell_notify_error(d,"Settings not saved",save_error);
     }
-    if (sh->gate) { sh->want_save=sh->want_mixer=sh->want_power=0; sh->want_reload&=~1; sh->want_run[0]=0; }
+    if (sh->gate) { sh->want_save=sh->want_mixer=sh->want_power=sh->want_power_force=sh->want_standby=0; sh->want_reload&=~1; sh->want_run[0]=0; }
     if (d->power.state) { desk_power_tick(d); return; }
     desktop_wait("folder-service"); desk_folder_service(d);
     if (sh->want_power) {
-        int action=sh->want_power; sh->want_power=0;
+        int action=sh->want_power, force=sh->want_power_force; sh->want_power=sh->want_power_force=0;
         if (d->session.state) return;   /* G3: the programs are being asked already */
         if (settings_save(d)) { /* still try: settings are a convenience */ }
         desk_session_begin(d,action);   /* G3: ask every program; power only when all agreed */
+        if (force && d->session.state) d->session.force=1;   /* G11 alarm "Force" */
         return;
     }
     if (sh->want_programs) {
@@ -1884,6 +1902,7 @@ static void shell_service(struct desktop *d)
             int rejected=reload_error ? 0 : cfg_parse(&sh->cfg,reload_text,reload_size);
             if (rejected) snprintf(d->notice,sizeof(d->notice),"desktop.cfg: %d line(s) ignored",rejected);
             sh->cfg.display_mode = confirmed;
+            desk_shell_power_config(d);   /* G11: Control Panel's power_* lines */
             /* Explicit desktop Refresh also updates the launch inventory;
              * Control Panel display settings must not rescan its ELF files. */
             if (settings_reload_wallpaper) { desktop_wait("program-scan"); scan_programs(d); }
@@ -2277,6 +2296,7 @@ static void shell_setup(struct desktop *d, int gate)
     d->authority_fd=fd>=3 && fcntl(fd,F_GETFD)>=0 ? fd : -1;
     terminate_authority=d->authority_fd;
     d->power_request=power_request; d->power_state=power_state; d->power_prepare=power_prepare; d->power_alive=power_alive;
+    d->power_standby=power_standby;
     const char *mixer=getenv("CIUKI_MIXER_FD");
     fd=mixer ? number(mixer,CIUKI_OPEN_MAX-1) : -1;
     d->mixer_fd=fd>=3 && fcntl(fd,F_GETFD)>=0 ? fd : -1;

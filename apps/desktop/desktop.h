@@ -221,6 +221,26 @@ struct desk_session_part {
 #define DESK_EWX_POWEROFF 8u
 enum { DESK_W32_PENDING, DESK_W32_ENDED, DESK_W32_VETOED, DESK_W32_HELD };
 struct desk_w32_status { uint32_t state, pid, hwnd, delivered; };
+/* G11 (docs/design/power-policy.md): WM_POWERBROADCAST through the same
+ * broker (W32R_ENDSESSION indices W32R_POWER_*). STATUS state: 0 running,
+ * 1 delivered, 2 denied (BROADCAST_QUERY_DENY); pid = windows that granted. */
+#define DESK_W32_POWER_BEGIN 8u
+#define DESK_W32_POWER_STATUS 9u
+#define DESK_W32_POWER_RESET 10u
+#define DESK_POWER_QUERY_NS 20000000000ull   /* PBT_APMQUERYSUSPEND: ~20 s, then agreement */
+#define DESK_PBT_QUEUE 4
+enum { DESK_STANDBY_IDLE, DESK_STANDBY_QUERY, DESK_STANDBY_SUSPEND };
+struct desk_pbt { uint32_t event, lparam; };
+struct desk_power_broadcast {
+    struct desk_pbt queue[DESK_PBT_QUEUE];
+    unsigned count;
+    int running, denied;            /* denied: the last finished query */
+    struct desk_pbt current, done;  /* done: the last finished broadcast (event + 1, 0 none) */
+    uint64_t started_ns;
+    int standby, standby_lparam;    /* DESK_STANDBY_* */
+    unsigned broadcasts, standbys;
+    int standby_error;
+};
 struct desk_session {
     int state, action;
     unsigned count, at;
@@ -228,6 +248,7 @@ struct desk_session {
     struct desk_session_part parts[DESK_CLIENTS + 1];
     uint32_t w32_pid, w32_hwnd, w32_delivered;
     uint64_t w32_since, w32_next;
+    int force;   /* G11 alarm "Force": a program that stops responding is ended */
 };
 /* The "This program is not responding" (End Task, Cancel) and DOS warning
  * (Yes, No) dialogs: one at a time, for a window close, End Task or the session. */
@@ -388,6 +409,11 @@ struct desktop {
     struct desk_end_task end_task;
     /* G3: the Win32 end-session broker; NULL or an error: no Win32 programs to ask. */
     int (*w32_session)(struct desktop *, unsigned action, uint32_t flags, struct desk_w32_status *);
+    /* G11: WM_POWERBROADCAST (action DESK_W32_POWER_*, event = PBT_*), and
+     * call 73 STANDBY (0 or -1 with errno). NULL: none. */
+    int (*w32_power)(struct desktop *, unsigned action, uint32_t event, uint32_t lparam, struct desk_w32_status *);
+    int (*power_standby)(void);
+    struct desk_power_broadcast pbt;
     /* Shutdown syscall seams; elapsed time is d->now_ns. alive: 0 gone,
      * 1 still present, -1 unknown (never infer exit from an IPC disconnect). */
     void (*sound_event)(struct desktop *, unsigned event);
@@ -497,6 +523,11 @@ void desk_request_close(struct desktop *, int index);
 void desk_close_timeouts(struct desktop *);
 void desk_child_exited(struct desktop *, uint32_t pid, int status);
 void desk_session_begin(struct desktop *, int action);   /* 1 restart, 2 shut down, 3 log off */
+/* G11: queue a WM_POWERBROADCAST to every Win32 window (coalesces status
+ * changes); desk_power_policy_tick drives the queue, the Stand by sequence
+ * and the idle standby timer (shell.c, from desk_shell_tick). */
+void desk_power_broadcast(struct desktop *, uint32_t event, uint32_t lparam);
+void desk_power_policy_tick(struct desktop *);
 void desk_session_tick(struct desktop *);
 void desk_session_cancel(struct desktop *);
 uint64_t desk_session_deadline(const struct desktop *);  /* next session/hung-close turn, 0 none */

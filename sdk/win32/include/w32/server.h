@@ -79,6 +79,19 @@ enum w32r_op {
 #define W32R_SESSION_CANCEL 6u
 #define W32R_SESSION_COMMIT 7u
 #define W32R_SESSION_HOLD 0x100u
+/* G11 WM_POWERBROADCAST (docs/design/power-policy.md), desktop only:
+ * POWER_BEGIN (type = PBT_* event, flags = lParam) sends it to every
+ * top-level window of a live client in turn, on the owning USER thread
+ * through the same POLL/REPLY (reply POLL: key = HWND, type = 0x0218,
+ * count = wParam, disposition = lParam; REPLY flags 0 = BROADCAST_QUERY_DENY,
+ * 1 otherwise). A query (PBT_APMQUERYSUSPEND/STANDBY) stops at the first
+ * denial. An end of session is always served first. POWER_STATUS: key 0
+ * running, 1 delivered, 2 denied; count = windows that granted. One
+ * broadcast at a time (1115 while one runs); POWER_RESET frees it. */
+#define W32R_POWER_BEGIN 8u
+#define W32R_POWER_STATUS 9u
+#define W32R_POWER_RESET 10u
+#define W32R_POWERBROADCAST 0x0218u
 #define W32R_FONT_BATCH 64u
 /* f5-07B end-session and virtual restart (W32R_SHUTDOWN; index selects the
  * action; key and data_bytes are zero, access is ignored).

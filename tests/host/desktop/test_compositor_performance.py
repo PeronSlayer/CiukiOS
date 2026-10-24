@@ -36,7 +36,7 @@ GOLDENS = {
     "Platinum": "e91633e9e4af420c1b4731cbcbfac1db3be921cd85759508ea1f00cffc20e482"
 }
 SOURCES = ["apps/desktop/" + n + ".c" for n in
-           ("client", "protocol", "input", "compositor", "theme", "shell", "autoplay", "autoplay_content", "settings",
+           ("client", "protocol", "input", "compositor", "theme", "shell", "autoplay", "autoplay_content", "settings", "power_policy",
             "settings_io", "wallpaper", "keymap", "folder")]
 SOURCES += ["apps/files/model.c", "apps/files/transfer.c", "apps/libdeskui/draw.c","apps/libdeskui/widgets.c","apps/libdeskui/list.c","apps/libdeskui/menu.c","apps/libdeskui/dialog.c","apps/libdeskui/textarea.c",
             "apps/libdeskui/icons.c", "apps/libdeskui/icon_map.c", "tests/host/desktop/fake.c",

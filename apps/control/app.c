@@ -33,9 +33,11 @@ static const uint32_t swatches[6] = {0x375564u, 0x2f6f6bu, 0x3a3f6bu, 0x6b4f3au,
 /* The Position buttons, in two rows of three: Center Tile Stretch / Fit Fill. */
 #define CP_POSITIONS 5
 static const int mode_order[CP_POSITIONS] = {CFG_WALL_CENTER, CFG_WALL_TILE, CFG_WALL_STRETCH, CFG_WALL_FIT, CFG_WALL_FILL};
+static int power_meter_requested;   /* G11: "--panel=power-meter" opens the Power Meter tab */
 int cp_page_index(const char *name)
 {
     if (name && !strcmp(name, "storage")) return CP_AUTOPLAY;
+    if (name && !strcmp(name, "power-meter")) { power_meter_requested = 1; return CP_POWER; }
     for (int i = 0; i < CP_PAGES; i++) if (name && !strcmp(name, page_names[i])) return i;
     return CP_HOME;
 }
@@ -69,6 +71,8 @@ static void changed(struct cp_app *a)
     int r = a->host.apply ? a->host.apply(a->host.ctx, DESK_SETTINGS_RELOAD, 0, 0) : -1;
     text(a, C_STATUS, a->host.save_async ? "Saving settings..." : r ? "Saved. The desktop applies it at its next start." : "Saved and applied.");
 }
+#include "power.inc"   /* G11: Power Management Properties */
+
 /* Display previews use the existing durable settings/reload path. Keep the
  * entry snapshot until OK; rollback merges only this applet's owned keys. */
 static void display_copy(struct ciuki_settings *to, const struct ciuki_settings *from)
@@ -405,11 +409,7 @@ void cp_tick(struct cp_app *a)
             a->volume = volume; a->muted = mute; sync(a);
         }
     }
-    if (a->page == CP_POWER) {
-        unsigned lines = power_read(a);
-        for (unsigned i = 0; i < lines; i++) text(a,1800+(int)i,a->power_lines[i]);
-        return;
-    }
+    if (a->page == CP_POWER) { pw_tick(a); return; }
     if (a->page==CP_DATETIME) { dt_tick(a); return; }
     if (a->page!=CP_SYSTEM) return;
     char previous[sizeof(a->clock_line)]; memcpy(previous,a->clock_line,sizeof(previous));
@@ -483,6 +483,7 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
         return;
     }
     if (dt_event(a, e)) return;
+    if (pw_event(a, e)) return;
     switch (e->id) {
     case 950:
         if (e->type==DU_EV_SELECT && e->index>=0 && (unsigned)e->index<a->autoplay_count) a->autoplay_selected=(unsigned)e->index;
@@ -1111,11 +1112,6 @@ static void system_pages(struct cp_app *a)
         add(a, DU_BUTTON, CP_REFRESH, 24, 324, 84, 24, "Refresh");
     } else if (a->page == CP_NETWORK) {
         network_build(a);
-    } else if (a->page == CP_POWER) {
-        add(a, DU_LABEL, C_SYS0, 24, 40, 500, 14, "Firmware power status (standby is unavailable)");
-        unsigned lines = power_read(a);
-        for (unsigned i = 0; i < 20; i++) add(a,DU_LABEL,1800+(int)i,24,64+(int)i*14,CP_WIDTH-48,14,i<lines ? a->power_lines[i] : "");
-        add(a, DU_BUTTON, CP_POWER_ACTION, 24, 350, 160, 24, "Shut Down...")->disabled=!a->host.power;
     }
 }
 
@@ -1289,6 +1285,8 @@ static void build(struct cp_app *a)
     add(a,DU_LABEL,C_AUDIO,24,326,452,14,"");
     } else if (a->page == CP_DATETIME) {
     dt_build(a);
+    } else if (a->page == CP_POWER) {
+    pw_build(a);
     } else if (a->page==CP_UNINSTALL) {
         int count=a->host.uninstall_list ? a->host.uninstall_list(a->host.ctx,a->uninstall,CP_PROGRAM_MAX) : -ENOSYS;
         a->uninstall_count=count>=0 && count<=(int)CP_PROGRAM_MAX ? (unsigned)count : 0;
@@ -1385,6 +1383,7 @@ void cp_open(struct cp_app *a, int page)
     a->status[0] = 0;
     if (a->page == CP_DRIVERS) { a->detail_list = C_DRIVERS; a->detail_index = 0; }
     if (a->page == CP_DEVICES || a->page == CP_DRIVERS || a->page == CP_SYSTEM || a->page == CP_AUTOPLAY) refresh(a);
+    if (a->page == CP_POWER) pw_open(a);
     build(a);
 }
 void cp_assets_ready(struct cp_app *a)

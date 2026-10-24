@@ -18,9 +18,20 @@ static unsigned dde_ack,dde_terminated;
 static int dde_initiating,session_answer=1,session_ended=-1;
 static unsigned session_queries,session_ends;
 static char dde_text[4096];
+/* G11 WM_POWERBROADCAST: power_deny = the message number that answers
+ * BROADCAST_QUERY_DENY, -2 lets DefWindowProc answer. */
+static unsigned power_messages;
+static int power_deny=-1;
+static WPARAM power_wparam;
+static LPARAM power_lparam;
 static LRESULT W32API shell_client(HWND h,UINT m,WPARAM wp,LPARAM lp)
 {
     if(m==0x11){session_queries++;return session_answer || session_queries!=8;}
+    if(m==0x218){
+        power_messages++;power_wparam=wp;power_lparam=lp;
+        if(power_deny==-2)return DefWindowProcA(h,m,wp,lp);
+        return power_deny>=0 && power_messages==(unsigned)power_deny ? (LRESULT)0x424D5144 : 1;
+    }
     if(m==0x16){session_ends++;session_ended=(int)wp;return 0;}
     if(m==0x3e4){
         if(dde_initiating){dde_server=(HWND)wp;return 0;}
@@ -44,6 +55,20 @@ static void session_action(unsigned action,unsigned flags,struct w32r_reply *r)
 {
     struct {struct w32r_request r;char empty[2];} a={.r={.version=1,.op=W32R_ENDSESSION,.index=action,.flags=flags,.path_bytes=1,.name_bytes=1}};
     size_t used=0;CHECK(!wr_dispatch(&server,99,&a,sizeof(a.r)+2,r,sizeof(*r),&used)&&used==sizeof(*r)&&!r->error);
+}
+static void power_action(unsigned action,unsigned event,unsigned lparam,struct w32r_reply *r)
+{
+    struct {struct w32r_request r;char empty[2];} a={.r={.version=1,.op=W32R_ENDSESSION,.index=action,.type=event,.flags=lparam,.path_bytes=1,.name_bytes=1}};
+    size_t used=0;CHECK(!wr_dispatch(&server,99,&a,sizeof(a.r)+2,r,sizeof(*r),&used)&&used==sizeof(*r)&&!r->error);
+}
+static void power_drain(unsigned expected)
+{
+    struct w32r_reply status;
+    for(unsigned i=0;i<570;i++){
+        u32_session_pump();ui_kernel_pause(1);
+        power_action(W32R_POWER_STATUS,0,0,&status);if(status.key)break;
+    }
+    CHECK(power_messages==expected);
 }
 static void shell_clients(const char *directory)
 {
@@ -111,6 +136,21 @@ static void shell_clients(const char *directory)
     for(unsigned i=0;i<1000;i++){ui_kernel_pause(1);u32_session_pump();}
     CHECK(session_polls==polls+4 && allocation_calls==allocs);
     puts("PASS USER idle 250 ms and zero allocations per poll, fast session drain");
+    {   /* G11 (docs/design/power-policy.md): WM_POWERBROADCAST on the owning
+         * USER thread through the same pump, eight top-level windows. */
+        struct w32r_reply status;
+        power_messages=0;power_deny=-1;power_action(W32R_POWER_BEGIN,10,0,&status);   /* PBT_APMPOWERSTATUSCHANGE */
+        power_drain(8);power_action(W32R_POWER_STATUS,0,0,&status);
+        CHECK(status.key==1 && status.count==8 && power_wparam==10 && power_lparam==0);
+        power_messages=0;power_deny=3;power_action(W32R_POWER_BEGIN,0,1,&status);    /* PBT_APMQUERYSUSPEND, UI allowed */
+        power_drain(3);power_action(W32R_POWER_STATUS,0,0,&status);
+        CHECK(status.key==2 && status.count==2 && power_wparam==0 && power_lparam==1);
+        power_messages=0;power_deny=-2;power_action(W32R_POWER_BEGIN,0,0,&status);   /* DefWindowProc grants */
+        power_drain(8);power_action(W32R_POWER_STATUS,0,0,&status);
+        CHECK(status.key==1 && status.count==8);
+        power_action(W32R_POWER_RESET,0,0,&status);power_deny=-1;
+        puts("PASS USER WM_POWERBROADCAST: every window on its thread, BROADCAST_QUERY_DENY stops a query, DefWindowProc grants");
+    }
     for(unsigned i=0;i<7;i++)CHECK(DestroyWindow(more[i]));
     puts("PASS USER owning-thread WM_QUERYENDSESSION WM_ENDSESSION accept veto force");
     CHECK(DestroyWindow(client)&&UnregisterClassA(cls.lpszClassName,0));
