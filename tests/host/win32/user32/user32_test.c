@@ -280,10 +280,20 @@ static void lease_event(DWORD id, DWORD generation, DWORD state, DWORD w,
   for (UINT i = 0; i < 18; i++)
     desk_put32(b + i * 4, words[i]);
 }
+static struct ciuki_screen_control saver_policy={.version=1,.size=sizeof(saver_policy),.timeout=600,.saver=1};
 #include "g5_clipboard_fixture.h"
 DWORD w32r_gate(DWORD call, DWORD a, DWORD b, DWORD c) {
   (void)a;
   (void)c;
+  if (call==CIUKI_SYS_DISPLAY && a==CIUKI_DISPLAY_SCREEN) {
+    struct ciuki_screen_control *q=(void *)(uintptr_t)b;
+    int old=(int)saver_policy.running;
+    if (q->action==15) saver_policy.timeout=(UINT)q->value;
+    if (q->action==17) saver_policy.enabled=q->value!=0;
+    if (q->action==97) saver_policy.running=q->value!=0;
+    if (q->action==0xf140 || q->action==0xf170) { saver_policy.command=q->action; saver_policy.argument=q->value; }
+    saver_policy.flags=q->flags; *q=saver_policy; q->value=old; return 0;
+  }
   if (call == CIUKI_SYS_CHANNEL_SEND) {
     CHECK(outgoing_count < 2048);
     struct ciuki_message *sent = (void *)(uintptr_t)b;
@@ -1358,6 +1368,21 @@ static void test_lifecycle(void) {
          "destruction, service identity teardown\n");
 }
 static void test_spi(void) {
+  UINT timeout=0; BOOL active=1;
+  CHECK(SystemParametersInfoA(14,0,&timeout,0) && timeout==600);
+  CHECK(SystemParametersInfoA(15,120,0,1) && saver_policy.flags==1);
+  CHECK(SystemParametersInfoA(14,0,&timeout,0) && timeout==120);
+  CHECK(SystemParametersInfoA(16,0,&active,0) && !active);
+  CHECK(SystemParametersInfoA(17,1,0,0) && SystemParametersInfoA(16,0,&active,0) && active);
+  CHECK(!SystemParametersInfoA(14,0,0,0) && GetLastError()==87);
+  CHECK(!SystemParametersInfoA(15,0x80000000u,0,0) && GetLastError()==87);
+  CHECK(!SystemParametersInfoA(119,1,0,0) && GetLastError()==120);
+  CHECK(SystemParametersInfoA(118,0,&active,0) && !active);
+  DefWindowProcA(windows[0],WM_SYSCOMMAND,0xf141,0);
+  CHECK(saver_policy.command==0xf140 && saver_policy.argument==-1);
+  DefWindowProcA(windows[0],WM_SYSCOMMAND,0xf170,2);
+  CHECK(saver_policy.command==0xf170 && saver_policy.argument==2);
+
   int mouse[3] = {0}, value = 0;
   CHECK(SystemParametersInfoA(3, 0, mouse, 0) && mouse[0] == 6 &&
         mouse[1] == 10 && mouse[2] == 1);

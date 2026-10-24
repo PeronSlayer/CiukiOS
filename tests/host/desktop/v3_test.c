@@ -549,6 +549,8 @@ static void frame(const char *folder,const char *theme,const char *name)
 }
 static int task_launch_record(struct desktop *p,const struct desk_program *program)
 { assert(p==&d && !strcmp(program->name,"tasks")); return 90; }
+static unsigned native_fault_closed;
+static int native_fault_close(uint32_t pid){native_fault_closed=pid;return 0;}
 static void frames(const char *folder)
 {
     const char *themes[]={"ciuki-blue","platinum"};
@@ -585,6 +587,18 @@ static void frames(const char *folder)
             assert(d.v3_dialog_kind==3);char name[32];snprintf(name,sizeof(name),"refuse-%u",reason);frame(folder,themes[t],name);
             key(0x1c,1);key(0x1c,0);assert(!d.v3_dialog_kind);flush();cleanup();
         }
+        /* G13 (ER-1): a native program's fault, Windows 9x wording, Details and the crash file text. */
+        setup();struct ciuki_w32_fault nf={.kind=W32_REPORT_NATIVE_FAULT,.pid=42,.tid=43,.code=14u|6u<<8,.eip=0x401234,.offset=0x10,.valid=3};
+        strcpy(nf.exe,"crasher");nf.registers[7]=0xbffffff0;nf.stack[0]=0xdeadbeef;nf.stack[1]=0x01020304;
+        native_fault_closed=0;d.v3_fault_close=native_fault_close;desk_w32_fault_dialog(&d,&nf);
+        assert(d.v3_dialog_kind==1&&d.v3_dialog_pid==42&&!d.v3_details_open);
+        assert(strstr(d.sh.message_text,"This program has performed an illegal operation and will be shut down."));
+        assert(strstr(d.sh.message_text,"contact the program vendor"));frame(folder,themes[t],"native-fault");
+        key(0x0f,1);key(0x0f,0);assert(d.v3_details_open);frame(folder,themes[t],"native-fault-details");
+        assert(strstr(d.v3_details,"Program: crasher (PID 42, thread 43)")&&strstr(d.v3_details,"Page fault: write of unmapped address 00000010"));
+        assert(strstr(d.v3_details,"Exception: 0E, error code 000006")&&strstr(d.v3_details,"EIP: 00401234")&&strstr(d.v3_details,"ESP: BFFFFFF0"));
+        assert(strstr(d.v3_details,"DEADBEEF 01020304 ???????? ????????"));
+        key(0x1c,1);key(0x1c,0);assert(!d.v3_dialog_kind&&native_fault_closed==42);flush();cleanup();
     }
 }
 #ifdef DESKTOP_GUEST_FIXTURE

@@ -42,6 +42,8 @@ static int mouse_error_function = -1;
 static uint16_t mouse_error_ax, mouse_error_flags;
 static unsigned mouse_calls;
 static bool video_rom;
+static unsigned dpms_caps=5, dpms_set;
+static bool dpms_set_failure;
 static uint16_t video_fail_ax, video_current_mode;
 static uint16_t video_calls[16];
 static unsigned video_call_count;
@@ -288,7 +290,7 @@ void v86_enter(const struct v86_frame *initial, uint32_t *saved)
     if (mouse_setup_call) mouse_calls++;
     if (video_rom && initial->tf.cs == 0xF000 && initial->tf.eip == 0x700) {
         unsigned ax = initial->tf.eax & 0xFFFF;
-        CHECK(video_active && firmware.max_call_ms == 2000 && request_ms > 0 && request_ms <= 2000);
+        CHECK(video_active && firmware.max_call_ms == (ax==0x4f10 ? 1000u : 2000u) && request_ms > 0 && request_ms <= 2000);
         CHECK(vm_memory(0, 0xA0000, 0x20000, true) == ram + 0xA0000);
         CHECK(video_call_count < ARRAY_SIZE(video_calls));
         video_calls[video_call_count++] = (uint16_t)ax;
@@ -307,6 +309,14 @@ void v86_enter(const struct v86_frame *initial, uint32_t *saved)
             }
         } else if (ax==0x0F00) { live.tf.eax=0x5000|video_current_mode; }
         else if (ax<=0x13) { video_current_mode=ax; }
+        else if (ax == 0x4f10) {
+            if ((initial->tf.ebx&255)==0) live.tf.ebx=dpms_caps<<8;
+            else {
+                CHECK((initial->tf.ebx&255)==1);
+                dpms_set=initial->tf.ebx>>8;
+                if (dpms_set_failure) live.tf.eax=0x014f;
+            }
+        }
         else if (ax == 0x4F02) {
             CHECK((initial->tf.ebx & 0xFE00) == 0x4000);
             video_current_mode = initial->tf.ebx & 0x1FF;
@@ -1445,6 +1455,27 @@ static void test_pm_timer(void)
     CHECK(!hw_reads && !hw_writes);
 }
 
+static void test_dpms(void)
+{
+    boot_fixture(true); video_rom=true;
+    ivt(0x10,0xf000,0x700); ram[0xf0700]=0xcf;
+    pci[0]=(struct pci_func){.vendor=0x1234,.device=0x1111,.class_code=3}; npci=1;
+    dpms_caps=5; dpms_set=99; dpms_set_failure=false;
+    CHECK(!biosvm_video_dpms(4) && dpms_set==4 && video_call_count==2);
+    CHECK(!video_active && !video_claimed && !firmware.io && !firmware.max_call_ms);
+    CHECK(!biosvm_video_dpms(0) && dpms_set==0);
+    CHECK(!biosvm_video_dpms(1) && dpms_set==1);
+    CHECK(biosvm_video_dpms(3)==-EINVAL);
+    dpms_caps=0; dpms_set=99;
+    CHECK(biosvm_video_dpms(4)==-EOPNOTSUPP && dpms_set==99);
+    CHECK(!video_active && !video_claimed);
+    dpms_caps=5; dpms_set_failure=true;
+    CHECK(biosvm_video_dpms(4)==-EIO && !video_active && !video_claimed);
+    dpms_set_failure=false;
+    video_fail_ax=0x4f10;
+    CHECK(biosvm_video_dpms(4)==-EOPNOTSUPP && !video_active && !video_claimed);
+    printf("PASS G10 real BIOS VM DPMS: capability query, on/standby/off registers, failures, VGA lease and aperture cleanup\n");
+}
 static void test_video_calls(void)
 {
     for (unsigned native = 0; native < 2; native++) {
@@ -1730,6 +1761,7 @@ int main(void)
     test_ebda_extents();
     test_input_fallback();
     test_pm_timer();
+    test_dpms();
     test_video_calls();
     test_fullscreen_calls();
     test_apm_probe();

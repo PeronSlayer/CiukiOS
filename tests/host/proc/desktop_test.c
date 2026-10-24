@@ -1089,6 +1089,98 @@ static void test_pager_boot_fallback(void)
     g_boot.flags = boot_flags; proc_set_file_ops(saved);
     puts("desktop pager boot: diagnostics bypass bootstrap; console fallback and death release manager; duplicate bootstrap is inert PASS");
 }
+static unsigned desktop_opens;
+static int desktop_open_error;
+static int desktop_open(void *cwd, const char *path, struct ciuki_file *file)
+{
+    (void)cwd;
+    CHECK(!strcmp(path, "/Programs/desktop"));
+    desktop_opens++;
+    if (desktop_open_error) return desktop_open_error;
+    *file = fixture_file();
+    return 0;
+}
+static int desktop_stdio(struct process *p) { (void)p; return 0; }
+/* G13 (ER-3): the supervisor restarts a crashed desktop, as Windows 9x
+ * restarts a crashed Explorer shell; a clean exit, a stand-in, a probe and
+ * four deaths in a minute leave the console. */
+static void test_desktop_restart(void)
+{
+    const struct ciuki_file_ops *saved_files = proc_get_file_ops();
+    const struct supervisor_io_ops *saved_io = supervisor_io;
+    struct ciuki_boot_info saved_boot = g_boot;
+    static const struct ciuki_file_ops files = { .open = desktop_open };
+    static const struct supervisor_io_ops io = { .stdio = desktop_stdio };
+    proc_set_file_ops(&files); supervisor_set_io_ops(&io);
+    g_boot.flags = 0; g_boot.options[0] = 0;
+    bootstrap_attempted = false; desktop_pid = 0; desktop_restartable = desktop_restarting = false;
+    desktop_restarts = 0; g_ticks = 100000;
+    fixture_focus = 0;                   /* an earlier fixture's freed task */
+    unsigned deaths = desktop_deaths, wakes = console_wakes;
+    CHECK(!supervisor_desktop_expected());
+    supervisor_bootstrap();
+    CHECK(bootstrap_attempted && desktop_pid && desktop_restartable && desktop_opens == 1);
+    CHECK(supervisor_desktop_expected());
+    g_current = &controller;
+    for (unsigned crash = 1; crash <= DESKTOP_RESTART_MAX; crash++) {
+        uint32_t old = desktop_pid;
+        struct process *p = proc_find(old);
+        struct desktop_ledger held; desktop_snapshot(&held);
+        CHECK(p && held.grants);
+        proc_stop(p, 0x10e, SIGSEGV);                      /* a fault kills it */
+        supervisor_poll();
+        CHECK(!desktop_pid && desktop_restarting && desktop_deaths == deaths + crash && console_wakes == wakes);
+        CHECK(supervisor_desktop_expected() && !supervisor_desktop_pid());
+        supervisor_poll();                                  /* grants still held: waits */
+        CHECK(!desktop_pid && desktop_restarting && desktop_opens == crash);
+        proc_collect(); fixture_focus = 0;                                     /* resources closed, zombie reaped */
+        supervisor_poll();
+        CHECK(desktop_pid && desktop_pid != old && !desktop_restarting && desktop_opens == crash + 1);
+        CHECK(desktop_restarts == crash && supervisor_desktop_restarts() == crash && console_wakes == wakes);
+    }
+    /* The fourth death inside the minute gives up: console, no restart. */
+    uint32_t last = desktop_pid;
+    proc_stop(proc_find(last), 0x10e, SIGSEGV);
+    supervisor_poll();
+    CHECK(!desktop_pid && !desktop_restarting && !supervisor_desktop_expected() && console_wakes == wakes + 1);
+    proc_collect(); fixture_focus = 0;
+    /* The minute passes: a new window, restarts allowed again. */
+    desktop_restartable = true; desktop_pid = 0;
+    g_ticks += DESKTOP_RESTART_WINDOW_MS;
+    CHECK(supervisor_restart_allowed(g_ticks) && desktop_restarts == 1);
+    desktop_restarts = 0;
+    /* A restart that cannot start falls back to the console. */
+    bootstrap_attempted = false; g_ticks += 1000;
+    supervisor_bootstrap();
+    CHECK(desktop_pid && desktop_restartable);
+    proc_stop(proc_find(desktop_pid), 0x10e, SIGSEGV);
+    supervisor_poll(); proc_collect(); fixture_focus = 0;
+    desktop_open_error = -ENOENT; wakes = console_wakes;
+    supervisor_poll();
+    CHECK(!desktop_pid && !desktop_restarting && console_wakes == wakes + 1);
+    desktop_open_error = 0;
+    /* A clean exit (status 0) is not a crash. */
+    desktop_restarts = 0; bootstrap_attempted = false;
+    supervisor_bootstrap();
+    CHECK(desktop_pid && desktop_restartable);
+    wakes = console_wakes;
+    proc_stop(proc_find(desktop_pid), 0, 0);
+    supervisor_poll(); proc_collect(); fixture_focus = 0;
+    CHECK(!desktop_pid && !desktop_restarting && console_wakes == wakes + 1);
+    /* A probe or stand-in desktop is never restarted. */
+    desktop_restartable = false; desktop_restarts = 0;
+    struct process *probe = 0;
+    CHECK(supervisor_spawn_desktop_probe(&probe) > 0 && desktop_pid == probe->pid);
+    wakes = console_wakes;
+    proc_stop(probe, 0x10e, SIGSEGV);
+    supervisor_poll(); proc_collect(); fixture_focus = 0;
+    CHECK(!desktop_pid && !desktop_restarting && console_wakes == wakes + 1);
+    desktop_restartable = false; desktop_restarting = false; desktop_pid = 0;
+    desktop_restarts = 0; desktop_deaths = deaths; bootstrap_attempted = false;
+    g_boot = saved_boot;
+    proc_set_file_ops(saved_files); supervisor_set_io_ops(saved_io);
+    puts("desktop restart: crash restarts the shell once its grants are free, three per minute, clean exit/probe/failed start leave the console PASS");
+}
 static void test_desktop_capture(void)
 {
     struct supervisor_capture c; supervisor_capture_init(&c);
@@ -1817,7 +1909,7 @@ int main(int argc, char **argv)
         test_captured_handshake(argv[2],argc==4 ? argv[3] : 0);
         CHECK(!pages_used && !g_user_mappings && heap_blocks==1); free(ram); return 0;
     }
-    test_desktop_surfaces(); test_desktop_channels(); test_desktop_scheduler_hints(); test_desktop_channel_rollback(); test_desktop_waits(); test_desktop_grants(); test_desktop_present(); test_setup_bootstrap(); test_pager_boot_fallback(); test_desktop_capture();
+    test_desktop_surfaces(); test_desktop_channels(); test_desktop_scheduler_hints(); test_desktop_channel_rollback(); test_desktop_waits(); test_desktop_grants(); test_desktop_present(); test_setup_bootstrap(); test_pager_boot_fallback(); test_desktop_restart(); test_desktop_capture();
     test_native_reports(); test_native_v3_reports(); test_native_input_records(); test_native_app_reports(); test_native_controller(); test_native_diagnostics();
 #ifdef CIUKI_DESKTOP_PAYLOAD_BIN
     test_standin_controller_records();

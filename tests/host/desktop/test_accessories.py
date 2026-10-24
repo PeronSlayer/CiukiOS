@@ -30,6 +30,7 @@ TESTS = {
     "clock": [ACC + "clock_model.c", ACC + "clock_view.c"],
     "viewer": [ACC + "viewer_model.c", ACC + "viewer_view.c", ACC + "viewer_stb.c"],
     "help": [ACC + "help_topics.c", ACC + "help_view.c"],
+    "logview": [ACC + "logview_model.c", ACC + "logview_view.c"],
     "mixer": [ACC + "mixer_view.c"],
     "charmap": [ACC + "charmap_view.c"],
     "keymap": [],
@@ -45,6 +46,8 @@ RENDERS = {
     "clock-noon.xrgb": "PIN-FROM-FIRST-RUN",
     "help-shortcuts.xrgb": "PIN-FROM-FIRST-RUN",
     "help-welcome.xrgb": "PIN-FROM-FIRST-RUN",
+    "logview-boot.xrgb": "PIN-FROM-FIRST-RUN",
+    "logview-crash.xrgb": "PIN-FROM-FIRST-RUN",
     "mixer-default.xrgb": "PIN-FROM-FIRST-RUN",
     "mixer-muted.xrgb": "PIN-FROM-FIRST-RUN",
     "viewer-empty.xrgb": "PIN-FROM-FIRST-RUN",
@@ -79,7 +82,7 @@ class AccessoriesTests(unittest.TestCase):
             subprocess.run([*FLAGS, *icons.defines(), *INCLUDES, *(str(ROOT / s) for s in sources), "-lm", "-o", str(binary)],
                            check=True, env=env)
             args = {"viewer": [str(scratch), str(ROOT / "misc/CiukiOS_SplashScreen.png"), str(renders)],
-                    "help": [str(scratch), str(renders)], "keymap": []}.get(name, [str(renders)])
+                    "help": [str(scratch), str(renders)], "logview": [str(scratch), str(renders)], "keymap": []}.get(name, [str(renders)])
             result = subprocess.run([str(binary), *args], check=True, env=env, capture_output=True, text=True)
             self.assertIn("PASS", result.stdout)
             # The tests write the recent list only under the scratch HOME.
@@ -100,6 +103,7 @@ class AccessoriesTests(unittest.TestCase):
     def test_clock(self): self.check_renders(self.run_native("clock"))
     def test_viewer(self): self.check_renders(self.run_native("viewer"))
     def test_help(self): self.check_renders(self.run_native("help"))
+    def test_logview(self): self.check_renders(self.run_native("logview"))
     def test_mixer(self): self.check_renders(self.run_native("mixer"))
     def test_charmap(self): self.check_renders(self.run_native("charmap"))
     def test_keymap_and_recent(self): self.run_native("keymap")
@@ -113,7 +117,7 @@ class AccessoriesTests(unittest.TestCase):
         entries = re.findall(r'\{"([a-z]+)", "([^"]+)", "([a-z-]+)", ([01]),', catalog)
         names = [e[0] for e in entries]
         # Catalogue order selects defaults: Viewer precedes its Paint alternative.
-        self.assertEqual(sorted(names), ["calc", "charmap", "clock", "gfxdemo", "help", "hwreport", "mixer", "music", "paint", "regedit", "viewer"])
+        self.assertEqual(sorted(names), ["calc", "charmap", "clock", "gfxdemo", "help", "hwreport", "logview", "mixer", "music", "paint", "regedit", "viewer"])
         build = load("acc_build", ROOT / "apps/desktop/build_desktop.py")
         self.assertEqual(set(build.ACCESSORIES) | {"regedit", "gfxdemo", "hwreport"}, set(names))
         self.assertIn("regedit", build.PROGRAMS)
