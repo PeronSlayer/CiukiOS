@@ -41,7 +41,7 @@
   "components": [
     {"id": "system", "title": "CiukiOS system (kernel, loader, native programs, desktop, libdeskui, SDK runtime)", "class": "copyleft",
      "licence": "GPL-2.0-only (kernel SPDX identifiers); MIT (SDK runtime, apps/build tooling); bundled permissive notices in \\system\\licenses",
-     "paths": ["/system/VMM.ELF", "/system/BOOT.CFG", "/system/RELEASE.JSON", "/System/BUILD.TXT", "/Programs/", "/Documents/", "/System/Registry/", "/System/hwids/",
+     "paths": ["/system/VMM.ELF", "/system/BOOT.CFG", "/system/RELEASE.JSON", "/System/BUILD.TXT", "/System/SFC.LST", "/Programs/", "/Documents/", "/System/Registry/", "/System/hwids/",
                "/System/cache/", "/System/fonts/", "/system/assets/", "/system/icons/", "/system/fonts/", "/system/sounds/", "/system/wallpapers/",
                "/system/licenses/", "/system/tests/", "/WINDOWS/FONTS/", "/WINDOWS/USER.CRG.0", "/WINDOWS/SYSTEM.CRG.0"],
      "archives": ["CIUKIOS.ZIP"], "licence_files": ["LICENSE", "sdk/LICENSE"], "decision": "plan 10, row System"},
