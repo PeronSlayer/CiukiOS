@@ -435,12 +435,15 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 39 | Screen saver idle/SC_SCREENSAVE/preview start and animation | full screen with pointer hidden; application backing stores remain untouched | `desk_saver_start`, `desk_saver_tick`, `saver_scene` | G10: dedicated overlay bypasses window copies and caches | saver |
 | 40 | Saver input dismissal and monitor wake | full desktop, windows, overlays and pointer | `desk_saver_input`, `saver_wake`, full invalidation | G10: dismissing input consumed, failed wake remains retryable | saver |
 | 41 | Monitor off after idle or SC_MONITORPOWER | no presentation while off; wake invalidates the complete scene (row 37) | `desk_saver_tick`, `monitor_power`, `desk_redraw` | G10: suspend drawing until firmware wake succeeds | saver |
+| 42 | Display appearance settings: desktop colour or pattern and theme are applied | the full screen, including wallpaper, desktop icons, bars, windows, menus and tooltips | Control Panel saves `desktop.cfg`; desktop settings reload → `desk_theme_changed`, wallpaper redraw | G23: background patterns and RGB colour controls are persisted through the display preview; hardware refresh/EDID and coherent DPI scaling remain unsupported by the current display ABI and fixed-pixel UI | display appearance |
 
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with
 fx-19 (drag and drop, rubber-band and keyboard selection) and were added by
 fx-15b after the merge, with the reconcile extended to the band and the
-drag image. Rows 31-35 came with G4 (`docs/design/taskbar-arrangement-windows-keys.md`),
+drag image. Row 42 records G23's settings reload: changes to the desktop
+colour, pattern, palette or visual metrics invalidate the full scene. Rows
+31-35 came with G4 (`docs/design/taskbar-arrangement-windows-keys.md`),
 row 36 with G21, row 37 with fx-26, row 38 with G13 (`docs/directives/g13-g16-os-gaps-batch-3.md`)
 and rows 39-41 with G10 (`docs/directives/g7-g12-os-gaps-batch-2.md`);
 the randomized sequences gained operations 42-47 (taskbar menu, Win+D/M and

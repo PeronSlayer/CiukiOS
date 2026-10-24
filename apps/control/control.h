@@ -197,8 +197,8 @@ struct cp_app {
     struct du_item sound_items[SOUND_EVENTS], scheme_items[3];
     char sound_volume_label[24];
     char wall_names[CP_WALLPAPERS][CFG_PATH_MAX]; unsigned wall_count;
-    struct du_item theme_items[CFG_THEMES], wall_items[CP_WALLPAPERS + 8], key_items[CFG_KEYS_COUNT], tab_items[CP_PAGES];
-    char wall_labels[CP_WALLPAPERS + 8][48];
+    struct du_item theme_items[CFG_THEMES], wall_items[CP_WALLPAPERS + 16], key_items[CFG_KEYS_COUNT], tab_items[CP_PAGES];
+    char wall_labels[CP_WALLPAPERS + 16][48];
     uint32_t preview[192 * 144];
     int preview_valid;
     struct desk_image image;

@@ -245,6 +245,20 @@ int main(int argc, char **argv)
     cp_settings_message(&wire,46,DESK_SETTINGS_OPEN_POWER,0,0);
     assert(desk_parse(&wire,1,NULL,&p) && p.request==DESK_SETTINGS_OPEN_POWER);
     desk_put32(wire.data+12,1);assert(!desk_parse(&wire,1,NULL,&p));
+    init(); cp_open(&a,CP_DISPLAY); select(CP_DISPLAY_TABS_ID,CP_BACKGROUND);
+    struct du_widget *wall=NULL,*red=NULL;
+    for (unsigned i=0;i<u.count;i++) {
+        struct du_widget *w=&u.widgets[i];
+        if (w->kind==DU_LISTVIEW && w->box.x==248 && w->box.y==64) wall=w;
+        if (w->kind==DU_SCROLLBAR && w->box.x==292 && w->box.y==256) red=w;
+    }
+    assert(wall && wall->count==16 && red && red->total==256);
+    select(wall->id,8); assert(!strcmp(a.cfg.wallpaper,"pattern:0") && a.display_dirty);
+    struct du_event colour={.type=DU_EV_CHANGE,.id=red->id,.index=18}; u.event(&u,&colour,u.user);
+    assert(a.cfg.desktop_color==0x125564u && a.display_dirty);
+    at_click_widget(&u,CP_APPLY);
+    assert(strstr(saved,"wallpaper=pattern:0\n") && strstr(saved,"desktop_color=125564\n"));
+    cp_detach(&a);
     puts("PASS Control Panel wire coexistence: display, sound reload/preview, hardware test, reserved fields");
     puts("PASS control display modes: ABI, synthetic mode lists, filtering, layout, Apply/ack/Keep/Revert/Esc, monotonic timeout, save/queue/query failures, close rollback, settings merge, wire validation, adapter lookup/render/refresh, System summary");
     return 0;

@@ -1204,6 +1204,14 @@ static void row_saver(unsigned m)
     d.portrait=NULL; free(portrait);
     wm_end();
 }
+static void row_appearance(unsigned m)
+{
+    row_name="display appearance"; wm_begin(m,1);
+    (void)app_open("files",300,200,40,50);
+    desk_theme_changed(&d); step("custom desktop colour applied");
+    assert(!desk_theme_use("Platinum")); desk_theme_changed(&d); step("appearance scheme applied");
+    wm_end();
+}
 /* ---- G4: the taskbar menu, window arrangement and the Windows-key shortcuts ---- */
 static void win_chord(int code) { key(0x15b,1); tap(code); key(0x15b,0); }
 static void bar_right_click(int top) { click(top ? 300 : (int)d.width-60,top ? 10 : (int)d.height-16,CIUKI_BUTTON_RIGHT); }
@@ -1326,7 +1334,7 @@ static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overl
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
     row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,
     row_taskbar_menu, row_arrange, row_minimize_all, row_win_keys, row_caption_icon, row_startup,
-    row_move_damaged, row_fault, row_saver};
+    row_move_damaged, row_fault, row_saver, row_appearance};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).

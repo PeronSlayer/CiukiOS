@@ -230,6 +230,24 @@ int desk_wallpaper_render_styled(uint32_t *out, uint32_t width, uint32_t height,
 {
     colour &= 0xffffffu;
     for (size_t i = 0; i < (size_t)width * height; i++) out[i] = colour;
+    if (spec && !strncmp(spec, "pattern:", 8) && spec[8] >= '0' && spec[8] <= '7' && !spec[9]) {
+        static const uint8_t patterns[8][8] = {
+            {0x80,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
+            {0x11,0x00,0x44,0x00,0x11,0x00,0x44,0x00},
+            {0x55,0xaa,0x55,0xaa,0x55,0xaa,0x55,0xaa},
+            {0x80,0x40,0x20,0x10,0x08,0x04,0x02,0x01},
+            {0x01,0x02,0x04,0x08,0x10,0x20,0x40,0x80},
+            {0xff,0x00,0xff,0x00,0xff,0x00,0xff,0x00},
+            {0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11},
+            {0x81,0x42,0x24,0x18,0x18,0x24,0x42,0x81},
+        };
+        uint32_t alternate = shade(colour, (colour & 0xffffffu) < 0x808080u ? 24 : -24);
+        unsigned pattern = (unsigned)(spec[8] - '0');
+        for (uint32_t y = top; y < height - (bottom < height ? bottom : 0); y++)
+            for (uint32_t x = 0; x < width; x++)
+                if (patterns[pattern][y & 7] & (0x80u >> (x & 7))) out[(size_t)y * width + x] = alternate;
+        return 0;
+    }
     if (!spec || !strcmp(spec, "none")) return 0;
     if (!strcmp(spec, "ciuki")) {
         /* Exactly where the plain compositor puts the approved portrait. */

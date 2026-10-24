@@ -19,7 +19,8 @@ enum {
     C_SYS0, C_SYS1, C_SYS2, C_SYS3, C_SYS4,
     C_BACK = 100, C_APPLETS, C_TREE, C_REFRESH, C_PROPERTIES, C_DRIVERS, C_LEASES,
     C_SYSTEM_TABS, C_CPU, C_UPTIME, C_SYSTEM_HARDWARE, C_FLAGS, C_BOOT_OPTIONS, C_SERIAL, C_BOOT_APPLY,
-    C_DETAILS = 130, C_FIRMWARE = 131, D_FIRMWARE = 199, D_PROPERTIES = 200, D_INFO, C_SCHEME, C_UI_VOL, C_UI_VOL_V
+    C_DETAILS = 130, C_FIRMWARE = 131, D_FIRMWARE = 199, D_PROPERTIES = 200, D_INFO, C_SCHEME, C_UI_VOL, C_UI_VOL_V,
+    C_RGB_R = 4000, C_RGB_G, C_RGB_B
 };
 static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts", "autoplay", "programs", "joystick"};
 static const char *const page_labels[CP_PAGES] = {"Display Properties", "Mouse", "Keyboard", "Sounds and Audio", "Date and Time", "System", "System", "System", "Network", "Power", "Display Properties", "Display Properties", "Storage and removable devices", "Add/Remove Programs", "Game controllers"};
@@ -310,16 +311,21 @@ static void sync(struct cp_app *a)
     for (int k = 0; k < CFG_THEMES; k++) a->theme_items[k].selected = k == t;
     if ((w = du_get(u, C_THEME))) w->active = t < 0 ? 0 : (unsigned)t;
     unsigned wall = 0;
-    for (unsigned k = 0; k < 2 + DESK_BUILTIN_WALLPAPERS + a->wall_count; k++) {
+    for (unsigned k = 0; k < 2 + DESK_BUILTIN_WALLPAPERS + a->wall_count + 8; k++) {
         const char *spec = k == 0 ? "none" : k == 1 ? "ciuki" : NULL;
         char built[48];
         if (!spec && k < 2 + DESK_BUILTIN_WALLPAPERS) { snprintf(built, sizeof(built), "builtin:%s", desk_builtin_wallpapers[k - 2].id); spec = built; }
-        if (!spec) spec = a->wall_names[k - 2 - DESK_BUILTIN_WALLPAPERS];
+        unsigned file_end = 2 + DESK_BUILTIN_WALLPAPERS + a->wall_count;
+        if (!spec && k < file_end) spec = a->wall_names[k - 2 - DESK_BUILTIN_WALLPAPERS];
+        char pattern[16];
+        if (!spec) { snprintf(pattern, sizeof(pattern), "pattern:%u", k - file_end); spec = pattern; }
         a->wall_items[k].selected = !strcmp(spec, a->cfg.wallpaper);
         if (a->wall_items[k].selected) wall = k;
     }
     if ((w = du_get(u, C_WALL))) { w->active = wall; du_list_ensure(w, wall); }
     for (int k = 0; k < CP_POSITIONS; k++) if ((w = du_get(u, C_POS0 + k))) w->def = mode_order[k] == a->cfg.wallpaper_mode;
+    static const int rgb_ids[3]={C_RGB_R,C_RGB_G,C_RGB_B};
+    for (unsigned k=0;k<3;k++) if ((w=du_get(u,rgb_ids[k]))) w->value=(int)((a->cfg.desktop_color>>(16-k*8))&255u);
     toggle_label(a, C_ICONS, "Desktop icons", a->cfg.desktop_icons);
     char s[64];
     if ((w = du_get(u, C_SPEED))) w->value = a->cfg.mouse_speed - CFG_MOUSE_MIN;
@@ -696,8 +702,10 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
             if (k == 0) strcpy(a->cfg.wallpaper, "none");
             else if (k == 1) strcpy(a->cfg.wallpaper, "ciuki");
             else if (k < 2 + DESK_BUILTIN_WALLPAPERS) snprintf(a->cfg.wallpaper, sizeof(a->cfg.wallpaper), "builtin:%s", desk_builtin_wallpapers[k - 2].id);
-            else if (k - 2 - DESK_BUILTIN_WALLPAPERS < a->wall_count) {
+            else if (k < 2 + DESK_BUILTIN_WALLPAPERS + a->wall_count) {
                 snprintf(a->cfg.wallpaper, sizeof(a->cfg.wallpaper), "%s", a->wall_names[k - 2 - DESK_BUILTIN_WALLPAPERS]);
+            } else if (k < 2 + DESK_BUILTIN_WALLPAPERS + a->wall_count + 8) {
+                snprintf(a->cfg.wallpaper,sizeof(a->cfg.wallpaper),"pattern:%u",k-2-DESK_BUILTIN_WALLPAPERS-a->wall_count);
             } else break;
             save = 1; a->preview_valid = 0;
         }
@@ -707,6 +715,13 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
         break;
     case C_COL0: case C_COL1: case C_COL2: case C_COL3: case C_COL4: case C_COL5:
         if (e->type == DU_EV_ACTIVATE) { a->cfg.desktop_color = swatches[e->id - C_COL0]; save = 1; a->preview_valid = 0; }
+        break;
+    case C_RGB_R: case C_RGB_G: case C_RGB_B:
+        if (e->type == DU_EV_CHANGE && e->index >= 0 && e->index <= 255) {
+            unsigned shift=(unsigned)(C_RGB_B-e->id)*8u;
+            a->cfg.desktop_color=(a->cfg.desktop_color&~(0xffu<<shift))|((uint32_t)e->index<<shift);
+            save=1; a->preview_valid=0;
+        }
         break;
     case C_ICONS: if (e->type == DU_EV_ACTIVATE) { a->cfg.desktop_icons = !a->cfg.desktop_icons; save = 1; } break;
     case C_SPEED: if (e->type == DU_EV_CHANGE) { a->cfg.mouse_speed = CFG_MOUSE_MIN + e->index; save = 1; } break;
@@ -781,7 +796,13 @@ static const char *wall_label(struct cp_app *a, unsigned k)
     if (k == 0) return "(None)";
     if (k == 1) return "Ciuki portrait";
     if (k < 2 + DESK_BUILTIN_WALLPAPERS) return desk_builtin_wallpapers[k - 2].label;
-    const char *path = a->wall_names[k - 2 - DESK_BUILTIN_WALLPAPERS], *base = strrchr(path, '/');
+    unsigned file_start = 2 + DESK_BUILTIN_WALLPAPERS;
+    if (k >= file_start + a->wall_count) {
+        static const char *const names[] = {"Pattern: dots", "Pattern: sparse", "Pattern: checker",
+            "Pattern: diagonal /", "Pattern: diagonal \\", "Pattern: horizontal", "Pattern: vertical", "Pattern: lattice"};
+        return names[k - file_start - a->wall_count];
+    }
+    const char *path = a->wall_names[k - file_start], *base = strrchr(path, '/');
     return base ? base + 1 : path;
 }
 /* Device inventory validation precedes every use of counted arrays/strings. */
@@ -1285,7 +1306,7 @@ static void build(struct cp_app *a)
         w->count=CP_DISPLAY_TABS; w->active=(unsigned)a->display_tab; w->disabled=a->mode_state!=0;
         if (a->display_tab==CP_BACKGROUND) {
             add(a,DU_LABEL,C_WALL_L,248,44,240,16,"&Picture:");
-            unsigned walls=2+DESK_BUILTIN_WALLPAPERS+a->wall_count;
+            unsigned walls=2+DESK_BUILTIN_WALLPAPERS+a->wall_count+8;
             items(a->wall_items,a->wall_labels,walls,wall_label,a);
             for (unsigned k=0;k<walls;k++) a->wall_items[k].icon16=NULL;
             w=add(a,DU_LISTVIEW,C_WALL,248,64,CP_WIDTH-272,138,"");
@@ -1296,6 +1317,15 @@ static void build(struct cp_app *a)
             add(a,DU_LABEL,C_COL_L,24,296,180,14,"Desktop colour:");
             for (int k=0;k<6;k++) add(a,DU_BUTTON,C_COL0+k,24+k*34,312,30,24,"");
             add(a,DU_BUTTON,C_ICONS,248,224,CP_WIDTH-272,24,"")->anchors=DU_ANCHOR_GROW_X;
+            static const int rgb_ids[3]={C_RGB_R,C_RGB_G,C_RGB_B};
+            static const char *const rgb_names[]={"Red", "Green", "Blue"};
+            uint32_t colour=a->cfg.desktop_color;
+            for (unsigned k=0;k<3;k++) {
+                add(a,DU_LABEL,4010+(int)k,248,258+(int)k*25,44,16,rgb_names[k]);
+                w=add(a,DU_SCROLLBAR,rgb_ids[k],292,256+(int)k*25,CP_WIDTH-316,18,"");
+                w->vertical=0; w->total=256; w->page=1;
+                w->value=(int)((colour>>(16-k*8))&255u);
+            }
         } else if (a->display_tab==CP_APPEARANCE) {
             add(a,DU_LABEL,C_THEME_L,24,44,200,16,"&Theme:");
             for (int k=0;k<CFG_THEMES;k++) a->theme_items[k]=(struct du_item){.text={cfg_theme_names[k]}};

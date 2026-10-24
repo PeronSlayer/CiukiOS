@@ -67,6 +67,7 @@ static int printable(const char *v)
 static int wallpaper_value(const char *v)
 {
     if (!strcmp(v, "ciuki") || !strcmp(v, "none")) return 1;
+    if (!strncmp(v, "pattern:", 8) && v[8] >= '0' && v[8] <= '7' && !v[9]) return 1;
     if (!strncmp(v, "builtin:", 8)) return v[8] != 0 && strlen(v) < 48;
     return v[0] == '/' && !strstr(v, "/../") && printable(v);
 }
