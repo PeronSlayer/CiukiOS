@@ -25,6 +25,11 @@ static void test_dos_properties(void)
     CHECK(!dosvm_call(CIUKI_DOSVM_POLICY,&c,sizeof(c)) && v->window_marking && v->window_idle==101 && !dosvm_task_focus());
     CHECK(!park_released(v)); g17_held=v; sleep_hook=g17_unmark;
     dosvm_fullscreen_checkpoint(v); CHECK(!v->window_marking && !v->fullscreen_parked); sleep_hook=NULL;
+    /* Either independent UI can still hold the same guest at the checkpoint. */
+    v->window_marking=true; v->clipboard_mark=true; CHECK(!park_released(v));
+    v->window_marking=false; CHECK(!park_released(v));
+    v->window_marking=true; v->clipboard_mark=false; CHECK(!park_released(v));
+    v->window_marking=false; CHECK(park_released(v));
     CHECK(cvga_set_bios_mode(&v->vga,3,0));
     /* The CRTC start and pitch determine the copied cells, not B800:0000. */
     v->vga.crtc[12]=0; v->vga.crtc[13]=32;

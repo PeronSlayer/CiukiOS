@@ -328,6 +328,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
     }
     if (!p->dosvm_capability) return -EPERM;
     if (op < CIUKI_DOSVM_CREATE || (op > CIUKI_DOSVM_WAIT_PRESENT &&
+        op != CIUKI_DOSVM_TEXT && op != CIUKI_DOSVM_MARK &&
         op != CIUKI_DOSVM_TEXT_CHUNK && op != CIUKI_DOSVM_POLICY)) return -EINVAL;
     if (tf->edx != sizeof(struct ciuki_dosvm_command)) return -EINVAL;
     struct ciuki_dosvm_command c, allowed;
@@ -366,9 +367,13 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         }
         if (!n || n > CIUKI_DOSVM_NAME_MAX) return -EINVAL;
     } else { allowed.id = c.id; allowed.generation = c.generation; }
-    if (op == CIUKI_DOSVM_FOCUS || op == CIUKI_DOSVM_FULLSCREEN || op == CIUKI_DOSVM_BACKGROUND) {
+    if (op == CIUKI_DOSVM_FOCUS || op == CIUKI_DOSVM_FULLSCREEN || op == CIUKI_DOSVM_BACKGROUND || op == CIUKI_DOSVM_MARK) {
         if (c.focused > 1) return -EINVAL;
         allowed.focused = c.focused;
+    }
+    if (op==CIUKI_DOSVM_TEXT) {
+        if (!c.text.buffer || !c.text.capacity || c.text.capacity>CIUKI_DOSVM_TEXT_MAX || c.text.buffer>UINT32_MAX-c.text.capacity) return -EINVAL;
+        allowed.text.buffer=c.text.buffer; allowed.text.capacity=c.text.capacity;
     }
     if (op == CIUKI_DOSVM_INPUT) {
         if (!event_valid(&c.event)) return -EINVAL;
@@ -528,6 +533,33 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
                 c.text_chunk.column,c.text_chunk.characters,CIUKI_DOSVM_TEXT_BYTES,&rows);
             c.text_chunk.rows=rows;
             if (!c.text_chunk.columns) e=-EOPNOTSUPP;
+        }
+        else if (op==CIUKI_DOSVM_MARK) {
+            if (c.focused && (!b->focused || v->fullscreen)) e=-EACCES;
+            else { v->clipboard_mark=c.focused!=0; dosvm_idle_wake(v); }
+        } else if (op==CIUKI_DOSVM_TEXT) {
+            /* BIOS data-area layout: V7 VGA Technical Reference, table 4-4.
+             * Validate guest-controlled geometry before accessing the text aperture. */
+            uint8_t mode=0,rows=0; uint16_t columns=0,page=0,height=0;
+            e=dosvm_read(v,0x449,&mode,1);
+            if (!e) e=dosvm_read(v,0x44a,&columns,2);
+            if (!e) e=dosvm_read(v,0x44e,&page,2);
+            if (!e) e=dosvm_read(v,0x484,&rows,1);
+            if (!e) e=dosvm_read(v,0x485,&height,2);
+            unsigned count=(unsigned)columns*(rows+1u);
+            if (!e && (v->vbe_mode || (mode>3 && mode!=7))) e=-EOPNOTSUPP;
+            if (!e && (!columns || columns>160 || rows>=100 || !height || height>32 || (page&1) || page>32768 || count>16384-page/2)) e=-EINVAL;
+            if (!e && count>c.text.capacity) e=-ENOSPC;
+            if (!e) {
+                /* copy_to_user validates each bounded row. The command is
+                 * pinned separately; no nested pin is needed for this snapshot. */
+                uint8_t raw[320],line[160];
+                for (unsigned y=0;y<=rows && !e;y++) {
+                    e=dosvm_read(v,(mode==7 ? 0xb0000 : 0xb8000)+page+y*columns*2,raw,columns*2);
+                    if (!e) { for (unsigned x=0;x<columns;x++) line[x]=raw[2*x]; e=copy_to_user(c.text.buffer+y*columns,line,columns); }
+                }
+                if (!e) { c.text.columns=columns; c.text.rows=rows+1; c.text.cell_height=height; c.changed=count; }
+            }
         }
         else if (op == CIUKI_DOSVM_LAUNCH) {
             if (v->launch_armed) e = -EBUSY;

@@ -721,6 +721,11 @@ static void test_input_decoders(void)
     static const uint8_t pause[] = {0xE1,0x1D,0x45,0xE1,0x9D,0xC5};
     for (unsigned i = 0; i < sizeof(pause); i++) fwinput_decode_scan(&d, pause[i], 6);
     CHECK(fwinput_decode_poll(&d, ev, 10) == 2 && ev[0].code == 0x145 && ev[1].value == 0);
+    /* G4 (KB-12): the firmware's set-1 Windows and Application keys, E0 5B, E0 5C, E0 5D. */
+    static const uint8_t windows[] = {0xE0,0x5B,0xE0,0xDB,0xE0,0x5C,0xE0,0xDC,0xE0,0x5D,0xE0,0xDD};
+    for (unsigned i = 0; i < sizeof(windows); i++) fwinput_decode_scan(&d, windows[i], 6);
+    CHECK(fwinput_decode_poll(&d, ev, 10) == 6 && ev[0].code == 0x15B && ev[0].value == 1 && ev[1].code == 0x15B &&
+          ev[1].value == 0 && ev[2].code == 0x15C && ev[4].code == 0x15D && ev[5].value == 0);
     fwinput_decode_scan(&d, 0xFA, 7); fwinput_decode_scan(&d, 0xFE, 7);
     fwinput_decode_scan(&d, 0xE0, 7); fwinput_decode_scan(&d, 0x2A, 7);
     fwinput_decode_bios(&d, 0x8500, 7); fwinput_decode_bios(&d, 0x48E0, 7);

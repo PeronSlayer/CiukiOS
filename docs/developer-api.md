@@ -4347,13 +4347,26 @@ reason = positive errno when FAILED. No VM capability is required.
 
 ```c
 #define CIUKI_DOSVM_IMAGE_QUERY 17u
+#define CIUKI_DOSVM_TEXT 18u
+```
+
+owner-only snapshot of visible BIOS text cells
+
+```c
+#define CIUKI_DOSVM_MARK 19u
+```
+
+focused=1 pause for Mark, 0 resume
+
+```c
+#define CIUKI_DOSVM_TEXT_MAX 16000u
 ```
 
 G17 owner-bound visible OEM text and window execution policy. No pointers.
 
 ```c
-#define CIUKI_DOSVM_TEXT_CHUNK 18u
-#define CIUKI_DOSVM_POLICY 19u
+#define CIUKI_DOSVM_TEXT_CHUNK 20u
+#define CIUKI_DOSVM_POLICY 21u
 #define CIUKI_DOSVM_TEXT_BYTES 48u
 struct ciuki_dosvm_text_chunk {
     uint32_t row;
@@ -4463,6 +4476,14 @@ armed EXEC returned to its shell
 #define CIUKI_DOSVM_BOOTING 0u
 #define CIUKI_DOSVM_RUNNING 1u
 #define CIUKI_DOSVM_STOPPED 2u
+struct ciuki_dosvm_text {
+    uint32_t buffer;
+    uint32_t capacity;
+    uint32_t columns;
+    uint32_t rows;
+    uint32_t cell_height;
+    uint32_t reserved[5];
+};
 struct ciuki_dosvm_command {
     uint32_t version;
 ```
@@ -4537,6 +4558,12 @@ union {
 ```
 
 72: INPUT
+
+```c
+struct ciuki_dosvm_text text;
+```
+
+TEXT input buffer/capacity; output OEM cells
 
 ```c
 struct ciuki_dosvm_policy policy;
@@ -5164,12 +5191,26 @@ enum desk_v3_opcode {
     DESK_V3_ACTIVATE, DESK_V3_LEASE_EVENT, DESK_V3_RELATIVE_EVENT,
     DESK_V3_CRASH, DESK_V3_RESTART, DESK_V3_POINTER_STATE,
     DESK_V3_WINDOW_ORDER, DESK_V3_WIN32_HWND,
-    DESK_V3_PRESENT
+    DESK_V3_PRESENT,
 ```
 
 16-byte damage; RESULT after frame, immediate if covered/identical
 
+G5 system clipboard on the v3 transport: window 0, generation 0,
+payload exactly as the v2 CLIPBOARD/CLIPBOARD_EVENT below.
+
 ```c
+DESK_V3_CLIPBOARD, DESK_V3_CLIPBOARD_EVENT,
+```
+
+G4 (WM_GETMINMAXINFO): client to desktop, 16 bytes: minimum and maximum
+track size of the client area, min-w, min-h, max-w, max-h in unscaled
+pixels, each 0 (default) or 1..2048, max >= min when both are given.
+PLACE and CONFIGURE state word: 0 normal, 1 minimised, 2 hidden,
+3 maximised (the desktop zooms the window; WM_SIZE SIZE_MAXIMIZED).
+
+```c
+DESK_V3_LIMITS
 };
 #define DESK_RESIZABLE 1u
 #define DESK_CONFIGURE_COMMITTED 1u
@@ -5358,7 +5399,135 @@ SESSION_ANSWER (client to desktop, 12 bytes): serial of the query,
   (it agrees by default and gets CLOSE_REQUEST/CLOSED at the end).
 
 ```c
-DESK_QUERY_END_SESSION, DESK_END_SESSION, DESK_SESSION_ANSWER
+DESK_QUERY_END_SESSION, DESK_END_SESSION, DESK_SESSION_ANSWER,
+```
+
+G5 one system clipboard owned by the desktop (Windows 98 clipboard
+model; docs/design/system-clipboard.md), version 2, any client.
+CLIPBOARD (client to desktop), u32 after the header: serial (nonzero,
+  echoed), op (DESK_CLIP_QUERY..NAME), format, flags, byte count,
+  owner token, name byte count, name (REGISTER only, 1..127 UTF-8).
+  A PUT with bytes and without DELAYED carries one surface holding the
+  bytes from offset 0 (desk_clip_dims); other requests carry none.
+CLIPBOARD_EVENT (desktop to client): serial (0 unsolicited), kind
+  (DESK_CLIP_REPLY..DESTROY), op answered (REPLY) or 0, signed
+  result, format, byte count, sequence, owner token, item count,
+  items: count u32 formats, or count name bytes for a NAME reply.
+  A successful GET reply with bytes carries one read-only surface.
+
+```c
+DESK_CLIPBOARD, DESK_CLIPBOARD_EVENT,
+    DESK_DOS_CLIPBOARD
+```
+
+v2 desktop to DOS window: u32 action 1 Mark, 2 Copy, 3 Paste, 4 toggle QuickEdit
+
+```c
+};
+enum desk_clip_op { DESK_CLIP_QUERY = 1, DESK_CLIP_EMPTY, DESK_CLIP_PUT, DESK_CLIP_CLOSE,
+                    DESK_CLIP_GET, DESK_CLIP_WATCH, DESK_CLIP_REGISTER, DESK_CLIP_NAME, DESK_CLIP_OPEN, DESK_CLIP_RELEASE };
+enum desk_clip_kind { DESK_CLIP_REPLY = 1, DESK_CLIP_RENDER, DESK_CLIP_CHANGED, DESK_CLIP_DESTROY };
+#define DESK_CLIP_DELAYED 1u
+```
+
+PUT: SetClipboardData(format, NULL); owner only, no bytes
+
+```c
+#define DESK_CLIP_RENDERED 2u
+```
+
+PUT: the owner's answer to RENDER; zero bytes declines
+
+```c
+#define DESK_CLIP_OWNER 1u
+```
+
+QUERY reply flags in byte count: the clipboard has an owner
+
+```c
+#define DESK_CLIP_MINE 2u
+```
+
+... and it is the caller
+
+```c
+#define DESK_CLIP_NAME_MAX 127u
+#define DESK_CLIP_LIST_MAX 48u
+#define DESK_CLIP_FORMATS_MAX 32u
+```
+
+stored formats
+
+```c
+#define DESK_CLIP_NAMES_MAX 256u
+```
+
+registered formats
+
+```c
+#define DESK_CLIP_ITEM_MAX 16777216u
+```
+
+one format: the surface limit
+
+```c
+#define DESK_CLIP_BYTES_MAX 16777216u
+```
+
+all stored formats
+
+```c
+#define DESK_CLIP_RENDER_NS 2000000000ull
+```
+
+WM_RENDERFORMAT answer
+
+Windows clipboard format ids (Winuser.h).
+
+```c
+#define DESK_CF_TEXT 1u
+#define DESK_CF_BITMAP 2u
+#define DESK_CF_METAFILEPICT 3u
+#define DESK_CF_SYLK 4u
+#define DESK_CF_DIF 5u
+#define DESK_CF_TIFF 6u
+#define DESK_CF_OEMTEXT 7u
+#define DESK_CF_DIB 8u
+#define DESK_CF_PALETTE 9u
+#define DESK_CF_PENDATA 10u
+#define DESK_CF_RIFF 11u
+#define DESK_CF_WAVE 12u
+#define DESK_CF_UNICODETEXT 13u
+#define DESK_CF_ENHMETAFILE 14u
+#define DESK_CF_HDROP 15u
+#define DESK_CF_LOCALE 16u
+#define DESK_CF_DIBV5 17u
+#define DESK_CF_OWNERDISPLAY 0x80u
+#define DESK_CF_DSPTEXT 0x81u
+#define DESK_CF_PRIVATEFIRST 0x200u
+#define DESK_CF_PRIVATELAST 0x2ffu
+#define DESK_CF_REGISTERED 0xc000u
+#define DESK_CLIP_PREFERRED_DROPEFFECT "Preferred DropEffect"
+struct desk_clip_wire {
+    uint32_t serial;
+    uint32_t op;
+    uint32_t kind;
+    uint32_t format;
+    uint32_t flags;
+    uint32_t bytes;
+    uint32_t token;
+    uint32_t sequence;
+    uint32_t count;
+    int32_t result;
+    union {
+```
+
+formats: QUERY reply; name: REGISTER request, NAME reply
+
+```c
+uint32_t formats[DESK_CLIP_LIST_MAX];
+        char name[DESK_CLIP_NAME_MAX + 1];
+    };
 };
 #define DESK_ENDSESSION_CLOSEAPP 0x00000001u
 ```
@@ -5516,6 +5685,18 @@ uint64_t convert_ns,copy_ns,slot_ns,refresh_ns;
 optional 64-byte PRESENTED
 
 ```c
+struct desk_clip_wire clip;
+```
+
+G5 CLIPBOARD / CLIPBOARD_EVENT
+
+```c
+int clipboard_fd;
+```
+
+v3 GET reply only; receiver closes it
+
+```c
 };
 int desk_utf8_valid(const uint8_t *, unsigned);
 void desk_v3_message(struct ciuki_message *, unsigned op, unsigned payload,
@@ -5533,6 +5714,22 @@ Surface info is required for CREATE and DAMAGE (the attachment on a swap).
 int desk_parse(const struct ciuki_message *m, int from_client,
                const struct ciuki_surface_info *surface, struct desk_packet *out);
 int desk_surface_valid(const struct ciuki_surface_info *s);
+```
+
+G5: encode a clipboard request (client) or event (desktop) for protocol
+version 2 or 3 (v3: window 0, generation 0, request token = serial for a
+request); fd < 0 for none. Returns 0, or -EINVAL when desk_parse would
+refuse the message.
+
+```c
+int desk_clip_message(struct ciuki_message *, unsigned version, int client,
+                      const struct desk_clip_wire *, int fd);
+```
+
+Surface geometry carrying n clipboard bytes from offset 0.
+
+```c
+void desk_clip_dims(uint32_t n, uint32_t *width, uint32_t *height);
 #endif
 ```
 

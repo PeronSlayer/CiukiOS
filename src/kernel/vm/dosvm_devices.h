@@ -32,6 +32,8 @@ struct dosvm_kbd {
     uint8_t command, output, controller_pending, keyboard_pending, scan_set, leds, last;
     bool scanning, enabled;
     uint8_t bios_prefix, shift;
+    uint8_t alt_value;
+    bool alt_digits;
     uint32_t reads; /* bytes consumed from port 60h, including synthetic INT 9 */
     uint64_t overflows;
 };

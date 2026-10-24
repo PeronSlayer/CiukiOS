@@ -186,11 +186,11 @@ static void unhold(struct dosvm *v)
 static bool park_released(void *arg)
 {
     const struct dosvm *v=arg;
-    return (!v->fullscreen_hold && !v->fullscreen_suspended && !v->window_marking) || v->info.state>=DOSVM_STOPPING;
+    return (!v->fullscreen_hold && !v->fullscreen_suspended && !v->window_marking && !v->clipboard_mark) || v->info.state>=DOSVM_STOPPING;
 }
 void dosvm_fullscreen_checkpoint(struct dosvm *v)
 {
-    if (!v->fullscreen_hold && !v->fullscreen_suspended && !v->window_marking) return;
+    if (!v->fullscreen_hold && !v->fullscreen_suspended && !v->window_marking && !v->clipboard_mark) return;
     v->fullscreen_parked=true;
     /* fx-22: a suspended VM is not scheduled (VMM Suspend_VM; VPICD
      * simulates no interrupt into it). The former 1 ms sleep loop kept the

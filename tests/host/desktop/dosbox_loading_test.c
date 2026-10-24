@@ -37,6 +37,19 @@ static int replay_poll(struct pollfd *,nfds_t,int);
 
 static uint32_t screen[640 * 480];
 static uint32_t guest_screen[640 * 480];
+/* Clipboard transport/selection has its own G5 production fixture. This
+ * lifecycle replay keeps it idle while checking G17 and G3 launch/close. */
+void dos_clip_init(int channel,uint32_t *pixels) { assert(channel==3 && pixels==guest_screen); }
+void dos_clip_vm(uint32_t id,uint32_t generation,uint32_t server) { (void)id; (void)generation; (void)server; }
+int dos_clip_recv(struct ciuki_message *m) { return ciuki_channel_recv(3,m,DONTWAIT); }
+int dos_clip_action(unsigned action) { assert(!action); return 0; }
+int dos_clip_input(const struct desk_packet *p) { (void)p; return 0; }
+void dos_clip_tick(int focused) { (void)focused; }
+int dos_clip_marking(void) { return 0; }
+int dos_clip_pasting(void) { return 0; }
+int dos_clip_dirty(void) { return 0; }
+void dos_clip_destroy(void) {}
+
 static unsigned surfaces;
 static uint64_t clock_ms, enter_ms, first_frame_ms;
 static int phase, scenario, armed, entered, presents, damage_count, error_seen, closed;

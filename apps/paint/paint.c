@@ -4,6 +4,11 @@
  * 0.8 implementation. Flat heap images and libdeskui replace DOS/XMS and CAPP.
  * One editor per process, with the same implementation in the host harness. */
 #include "paint.h"
+#if defined(__i386__) || defined(CIUKI_SYSTEM_CLIPBOARD)
+#define SYSTEM_CLIPBOARD 1
+#include "../libdeskui/clipboard.h"
+#include "../libdeskui/clipstore.h"
+#endif
 #include "../libdeskui/textarea.h"
 #include "default_font.h"
 #include "../libdeskui/job.h"
@@ -762,6 +767,23 @@ static int copy_selection(void)
         memcpy(rowp(&clip, y), rowp(src, y0 + y) + x0, (size_t)selw);
     if (!floating && selection_mask.pixels) for (y=0;y<selh;y++) for (int x=0;x<selw;x++)
         if (!selection_mask.pixels[y*selw+x])rowp(&clip,y)[x]=MASKED_PIXEL;
+#ifdef SYSTEM_CLIPBOARD
+    uint32_t *rgb=malloc((size_t)clip.w*clip.h*4);
+    void *dib=NULL; uint32_t bytes=0; int error=-ENOMEM;
+    if (rgb) {
+        for (int yy=0;yy<clip.h;yy++) for (int x=0;x<clip.w;x++) {
+            unsigned c=rowp(&clip,yy)[x]; if (c==MASKED_PIXEL) c=bg;
+            rgb[yy*clip.w+x]=(((pal[c*3]*255+31)/63)<<16)|(((pal[c*3+1]*255+31)/63)<<8)|((pal[c*3+2]*255+31)/63);
+        }
+        error=clip_dib_encode(rgb,clip.w,clip.w,clip.h,&dib,&bytes); free(rgb);
+    }
+    if (!error) {
+        error=du_clip_open();
+        if (!error) { error=du_clip_empty(); if (!error) error=du_clip_put(DESK_CF_DIB,dib,bytes); int closed=du_clip_close(); if (!error) error=closed; }
+    }
+    free(dib);
+    if (error) { du_message(ui,999,"Clipboard","The picture could not be copied to the clipboard.",DU_DLG_ICON_INFO,NULL,0,0,0); return 0; }
+#endif
     return 1;
 }
 static void clear_selection(void)
@@ -1290,8 +1312,38 @@ static void undo(int redo)
     dirty = 1;
     dmg_all();
 }
+static int text_paste_available(void)
+{
+#ifdef SYSTEM_CLIPBOARD
+    return du_clip_available(DESK_CF_UNICODETEXT)>0;
+#else
+    return !!du_clipboard_get()[0];
+#endif
+}
+static int bitmap_paste_available(void)
+{
+#ifdef SYSTEM_CLIPBOARD
+    return du_clip_available(DESK_CF_DIB)>0;
+#else
+    return !!clip.pixels;
+#endif
+}
 static void paste(void)
 {
+#ifdef SYSTEM_CLIPBOARD
+    void *dib=NULL; uint32_t bytes=0,*rgb=NULL; unsigned width=0,height=0;
+    int error=du_clip_open(); if (error) return;
+    error=du_clip_get(DESK_CF_DIB,&dib,&bytes); du_clip_close();
+    if (!error) error=clip_dib_decode(dib,bytes,&rgb,&width,&height);
+    free(dib);
+    if (error || width>MAX_W || height>MAX_H) { free(rgb); return; }
+    struct paint_image image={0};
+    if (!alloc_retry(&image,width,height)) { free(rgb); no_memory(); return; }
+    for (unsigned yy=0;yy<height;yy++) for (unsigned x=0;x<width;x++) {
+        unsigned c=rgb[yy*width+x]; rowp(&image,yy)[x]=nearest((((c>>16)&255)*63+127)/255,(((c>>8)&255)*63+127)/255,((c&255)*63+127)/255);
+    }
+    free(rgb); img_free(&clip); clip=image;
+#endif
     int y;
     if (!clip.pixels) return;
     finish_pending();
@@ -1600,7 +1652,7 @@ static void update_menus(void)
     flag(&edit_items[0], DU_ITEM_DISABLED, !(op_open || (undo_kind && !undone)));
     flag(&edit_items[1], DU_ITEM_DISABLED, !(undo_kind && undone && !op_open));
     for (int i = 3; i <= 6; i++) flag(&edit_items[i], DU_ITEM_DISABLED,
-        i == 5 ? (text_on ? !du_clipboard_get()[0] : !clip.pixels) : (text_on ? !du_ta_has_selection(&text_edit) : !sel_on));
+        i == 5 ? (text_on ? !text_paste_available() : !bitmap_paste_available()) : (text_on ? !du_ta_has_selection(&text_edit) : !sel_on));
     for (int i = 0; i < 5; i++) context_items[i].flags = edit_items[i + 3].flags;
     flag(&view_items[0], DU_ITEM_CHECKED, show_tools); flag(&view_items[1], DU_ITEM_CHECKED, show_colors);
     flag(&view_items[2], DU_ITEM_CHECKED, show_status);

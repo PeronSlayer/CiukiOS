@@ -2390,9 +2390,12 @@ struct ciuki_pthread_condattr {
  * size are inputs. Returns state (below), changed = progress in per mille,
  * reason = positive errno when FAILED. No VM capability is required. */
 #define CIUKI_DOSVM_IMAGE_QUERY 17u
+#define CIUKI_DOSVM_TEXT 18u /* owner-only snapshot of visible BIOS text cells */
+#define CIUKI_DOSVM_MARK 19u /* focused=1 pause for Mark, 0 resume */
+#define CIUKI_DOSVM_TEXT_MAX 16000u
 /* G17 owner-bound visible OEM text and window execution policy. No pointers. */
-#define CIUKI_DOSVM_TEXT_CHUNK 18u
-#define CIUKI_DOSVM_POLICY 19u
+#define CIUKI_DOSVM_TEXT_CHUNK 20u
+#define CIUKI_DOSVM_POLICY 21u
 #define CIUKI_DOSVM_TEXT_BYTES 48u
 struct ciuki_dosvm_text_chunk {
     uint32_t row;
@@ -2439,6 +2442,14 @@ struct ciuki_dosvm_policy {
 #define CIUKI_DOSVM_BOOTING 0u
 #define CIUKI_DOSVM_RUNNING 1u
 #define CIUKI_DOSVM_STOPPED 2u
+struct ciuki_dosvm_text {
+    uint32_t buffer;
+    uint32_t capacity;
+    uint32_t columns;
+    uint32_t rows;
+    uint32_t cell_height;
+    uint32_t reserved[5];
+};
 struct ciuki_dosvm_command {
     uint32_t version; /* 0 */
     uint32_t size; /* 4 */
@@ -2455,6 +2466,7 @@ struct ciuki_dosvm_command {
       struct {
        union {
         struct ciuki_input_event event; /* 72: INPUT */
+        struct ciuki_dosvm_text text; /* TEXT input buffer/capacity; output OEM cells */
         struct ciuki_dosvm_policy policy;
         struct { uint32_t kernel, game, memory, reserved[7]; } launch; /* CREATE input */
         struct { uint32_t bands[2], redraw, flags, reserved[6]; } presentation; /* bands output; redraw input 0/1 */

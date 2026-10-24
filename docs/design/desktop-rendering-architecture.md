@@ -424,17 +424,25 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 28 | Drop-target highlight (`DROPEFFECT` feedback: the target item drawn selected while it would accept the drop) | the old and new target icon | `dnd_evaluate` (`drop_index`), `icon_repaint` | none | drag and drop |
 | 29 | Taskbar hover during a drag (Windows 98: holding a dragged object over a task button for about a second activates that window) | the restored window (rows 7, 8, 11) | `desk_shell_tick` drag hover | none (covered by the window rows) | drag and drop |
 | 30 | Right-drag menu, Esc and cancelled drags | the menu box (row 13); the image box when the drag ends | `desk_shell_drag_button`, `desk_shell_drag_cancel`, `dnd_finish` | none | drag and drop |
-| 31 | G17 DOS toolbar initial frame and pressed buttons | toolbar; first frame also includes the scaled guest viewport | `dosbox/window.h` `db_paint_rows`, client `DESK_DAMAGE` | guest surface kept separate from window controls | DOS toolbar/properties/selection |
-| 32 | G17 Mark/QuickEdit begin, rectangle grows, Copy/Enter/Esc clears it | old/new selected cells (client invalidates the viewport); notices | `db_select`, `db_mark`, `db_copy`, `db_end_mark` | none | DOS toolbar/properties/selection |
-| 33 | G17 Properties opens, changes tab/value, Apply/OK/Cancel closes | property sheet and exposed viewport | `db_properties`, `db_page`, `db_input`, `db_apply` | none | DOS toolbar/properties/selection |
-| 34 | G17 Font size, Background label, clipboard/error notice and viewport scroll; incremental guest frame | toolbar/viewport for control changes; only scaled destination rows sampling changed VGA rows for video | `db_source_x/y`, `db_paint_rows`, `dosbox.c` damage mapping | hidden property-sheet backing is not uploaded over the sheet | DOS toolbar/properties/selection |
-| 35 | G17 font-size dropdown opens, changes highlighted choice, selects or cancels | list box and exposed guest rows | `db_input` font menu, `db_paint_rows` | guest updates do not overwrite the open list | DOS toolbar/properties/selection |
+| 31 | Taskbar menu (G4, WM-12): `TrackPopupMenu` at the cursor on the empty taskbar or the empty top bar; its Cascade/Tile/Minimize All items enable with the windows, and Undo Cascade/Undo Tile/Undo Minimize All replace or follow them | the menu's outer box on open, close and each hot row | `desk_shell_button` (empty bar), `build` `SH_MENU_TASKBAR`, `menu_key`/`menu_letter` (access keys) | none | taskbar menu |
+| 32 | `CascadeWindows`/`TileWindows` of the taskbar menu: `SetWindowPos` on every arranged window in one pass (`EndDeferWindowPos`); maximised and shaded windows are restored first | the old and new outer box of each window that moved or changed size; its client through the stretch of rows 2 and 5 | `desk_arrange`, `arrange_place`, `arrange_settle` (`client.c`) | none found; `desk_move` plans one screen copy for one moved window, so `arrange_prepare`/`arrange_settle` turn a pending copy into plain damage before and after the batch | arrange |
+| 33 | Minimize All Windows, Show Desktop (Win+D toggles), Win+M, Shift+Win+M, Alt+M and their Undo: the windows go to the taskbar at once (no caption animation), the desktop becomes active | every window's outer box, its task button, the caption of the window that loses the activation | `desk_minimize_all`, `desk_show_desktop`, `desk_arrange_undo` | none | minimize all |
+| 34 | Windows-key shortcuts and the taskbar's keyboard focus (Win+Tab, Ctrl+Esc then Esc, Tab/arrows, Enter, Esc): the focus rectangle on a task button or the lit Start orb | the old and the new button; the Start orb's bounds | `taskbar_set`, `taskbar_blur`, `logo_chord`, `desk_shell_reconcile` (flag 8, `start_focus_shown`) | none | windows keys |
+| 35 | Caption icon (Ciuki Blue): a click opens the window menu under it, a second click within the double-click time closes the window (`WM_SYSCOMMAND` `SC_CLOSE`) | the menu's outer box; the caption and task button ("Closing...") | `desk_shell_caption_icon` (`shell.c`), `desk_caption_icon_box` (`compositor.c`) | none | caption icon |
+| 36 | G17 DOS toolbar initial frame and pressed buttons | toolbar; first frame also includes the scaled guest viewport | `dosbox/window.h` `db_paint_rows`, client `DESK_DAMAGE` | guest surface kept separate from window controls | DOS toolbar/properties/selection |
+| 37 | G17 Mark/QuickEdit begin, rectangle grows, Copy/Enter/Esc clears it | old/new selected cells (client invalidates the viewport); notices | `db_select`, `db_mark`, `db_copy`, `db_end_mark` | none | DOS toolbar/properties/selection |
+| 38 | G17 Properties opens, changes tab/value, Apply/OK/Cancel closes | property sheet and exposed viewport | `db_properties`, `db_page`, `db_input`, `db_apply` | none | DOS toolbar/properties/selection |
+| 39 | G17 Font size, Background label, clipboard/error notice and viewport scroll; incremental guest frame | toolbar/viewport for control changes; only scaled destination rows sampling changed VGA rows for video | `db_source_x/y`, `db_paint_rows`, `dosbox.c` damage mapping | hidden property-sheet backing is not uploaded over the sheet | DOS toolbar/properties/selection |
+| 40 | G17 font-size dropdown opens, changes highlighted choice, selects or cancels | list box and exposed guest rows | `db_input` font menu, `db_paint_rows` | guest updates do not overwrite the open list | DOS toolbar/properties/selection |
 
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with
 fx-19 (drag and drop, rubber-band and keyboard selection) and were added by
 fx-15b after the merge, with the reconcile extended to the band and the
-drag image.
+drag image. Rows 31-35 came with G4 (`docs/design/taskbar-arrangement-windows-keys.md`);
+the randomized sequences gained operations 42-47 (taskbar menu, Win+D/M and
+Alt+M, taskbar focus keys, Alt+F6/Menu key/Shift+F10/F3, caption icon,
+Win+E/R/F/Break/F1).
 
 ### One rule instead of one fix per path: the frame reconcile
 

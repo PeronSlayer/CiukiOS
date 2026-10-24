@@ -32,7 +32,7 @@ surface stays intact; the client scales it into the area below the toolbar.
 Toolbar actions are Mark, Copy, Paste, Full screen, Properties, Background
 and font size. Mark/QuickEdit freezes guest execution at its existing safe
 checkpoint, obtains visible text from the VGA model (not OCR), highlights a
-rectangle, and copies trimmed rows separated by CR/LF. Graphics selection is
+rectangle, and copies trimmed rows separated by CR/LF. Toolbar graphics selection is
 refused explicitly. Paste uses the toolkit clipboard provider and bounded
 guest key events, preserves queue backpressure and releases held keys when
 focus changes. Unsupported pasted characters are refused before any typing.
@@ -63,3 +63,25 @@ desktop/kernel interfaces. Screen restore and fast ROM/dynamic video memory
 are managed by the existing VGA/VMM implementation, without user toggles.
 Host tests establish source behaviour only; the lead owns integration and
 runtime qualification.
+
+## Integration with the G5 system clipboard
+
+The merge rechecked [Microsoft Clipboard Operations](https://learn.microsoft.com/en-us/windows/win32/dataxchg/clipboard-operations)
+and [Standard Clipboard Formats](https://learn.microsoft.com/en-us/windows/win32/dataxchg/standard-clipboard-formats).
+Both DOS interfaces use G5's desktop-owned store and its exclusive open/close
+protocol; the toolbar's toolkit text provider is bound to that transport.
+G17's toolbar keeps its rectangular text selection, UTF-8 conversion and
+bounded ASCII paste with the persisted fast-paste option. G5's window menu
+also retains graphics selection/DIB copy and Unicode-to-CP437 paced paste.
+The two marking modes cancel each other when changing interface, and paste
+and autorun are serialized. Menu selection coordinates and pixels pass
+through G17's guest viewport mapping, keeping the toolbar intact at every
+zoom. Deferred desktop messages from clipboard RPC are drained before
+reading the channel again.
+
+Main's `CIUKI_DOSVM_TEXT=18` and `CIUKI_DOSVM_MARK=19` remain fixed.
+G17's `CIUKI_DOSVM_TEXT_CHUNK=20` and `CIUKI_DOSVM_POLICY=21` follow them;
+all four commands retain their payloads in the unchanged 136-byte command.
+The VM checkpoint waits while either marking policy holds the guest.
+The fx-15 G4 rows remain 31–35 and G17 follows at 36–40; the executable
+scenario `row_dos_controls` is `WM_ROW=29` (zero-based).

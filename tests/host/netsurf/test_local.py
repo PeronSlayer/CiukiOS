@@ -71,6 +71,25 @@ class LocalTests(unittest.TestCase):
                 self.assertGreater(len(set(raw)),100)
                 out.unlink()
 
+    def test_styled_page_css_and_images(self):
+        """fx-24, T23 trial f441c5bd ('CSS and images are not shown'): the
+        port compiled no PNG, JPEG, WebP or SVG handler (upstream's
+        framebuffer front end enables them; f6-14 deferred them) and the
+        framebuffer plotters drew no SVG path. The authored page must show
+        its linked, @import, element and attribute CSS and every image kind,
+        sampled at fixed positions (styled.py)."""
+        import styled
+        with tempfile.TemporaryDirectory(dir=self.out) as directory:
+            out=Path(directory) / "styled.xrgb"
+            completed=subprocess.run([str(self.base / "stage/Programs/netsurf"),"-w","640","-h","480",
+                "--ciuki-resources="+str(self.base / "stage/system/netsurf"),"--ciuki-capture="+str(out),
+                (HERE / "fixtures/fx24/styled.html").as_uri()],capture_output=True,text=True,timeout=30)
+            self.assertEqual(completed.returncode,0,completed.stdout+completed.stderr)
+            self.assertIn("NetSurf local title: Ciuki styled page",completed.stderr)
+            self.assertNotIn("NetSurf error page:",completed.stderr)
+            self.assertEqual(styled.failures(out.read_bytes(),640),[])
+            self.assert_exit_reason(completed,"capture")
+
     def test_streaming_file(self):
         with tempfile.TemporaryDirectory(dir=self.out) as directory:
             page=Path(directory) / "stream.html"

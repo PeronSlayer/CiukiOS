@@ -24,6 +24,13 @@ static int model_clock(clockid_t,struct timespec *);
 #undef main
 #undef clock_gettime
 
+/* G5's independent RPC/selection implementation has its own production
+ * fixture. Model its lifecycle here to exercise toolbar arbitration. */
+static int system_marking,system_pasting;
+int dos_clip_marking(void) { return system_marking; }
+int dos_clip_pasting(void) { return system_pasting; }
+int dos_clip_action(unsigned action)
+{ assert(action==0 || action==2); system_marking=0; return 0; }
 static uint64_t tick;
 static unsigned input_events, queue_full, focus_refused, calls, marking, sensitivity, background, fs;
 static struct dosbox_key observed[10000];
@@ -165,7 +172,12 @@ static void clipboard_tests(void)
     assert(db_paste_keys("a\x01",paste_keys,DOSBOX_PASTE_KEYS)<0);
     assert(db_paste_keys("abc",paste_keys,4)<0);
     paste_count=(unsigned)db_paste_keys("A\r\nb\tc",paste_keys,DOSBOX_PASTE_KEYS); paste_next=0;
-    assert(paste_count==12); tick=100; queue_full=1;
+    assert(paste_count==12); tick=100;
+    system_pasting=1; assert(!paste_step(7,3,1) && !paste_next && !input_events);
+    system_pasting=0; system_marking=1;
+    assert(!paste_step(7,3,1) && !paste_next && !input_events);
+    assert(!window_action(DB_COPY,7,3,0) && !system_marking);
+    queue_full=1;
     assert(!paste_step(7,3,1) && paste_next==0 && input_events==0);
     focus_refused=1; assert(!paste_step(7,3,1) && !paste_next);
     assert(!paste_step(7,3,0) && !paste_next);
