@@ -289,6 +289,8 @@ int main(int argc, char **argv)
     char detail[80] = "Preparing...";
     char fullscreen_notice[128]="";
     const char *fullscreen_title="Full screen unavailable";
+    char finished[DESK_TITLE_MAX+1];
+    const char *frame_title=name;
     uint64_t fullscreen_notice_until=0;
     uint32_t fullscreen_error_seen=0;
     if (loading) {
@@ -605,6 +607,18 @@ int main(int argc, char **argv)
         if (c.state == CIUKI_DOSVM_STOPPED) {
             if (shown && !dosbox_stop_reported(c.reason) && window.profile.close_on_exit) break;
             if (shown && !dosbox_stop_reported(c.reason)) {
+                /* The shell ended through EXIT (control port, reason EXIT) with
+                 * "Close on exit" off: Windows 98 keeps the window and titles it
+                 * "Finished - <name>". */
+                snprintf(finished,sizeof(finished),"Finished - %s",name);
+                frame_title=finished;
+                if (!c.reason) {
+                    struct ciuki_message t;
+                    size_t n=strlen(finished);
+                    desk_message(&t,DESK_SET_TITLE,8+(unsigned)n);
+                    desk_put32(t.data+4,(uint32_t)n); memcpy(t.data+8,finished,n);
+                    if (send_packet(channel,&t)) goto done;
+                }
                 failure="The DOS session has ended";
                 snprintf(detail,sizeof(detail),"Close this window when you have finished reading it.");
                 result=0; goto panel;
@@ -699,7 +713,7 @@ panel:
         if (configured && (failure ? !failure_painted : !panel_sent || now_ms() - panel_at >= DOSBOX_PULSE_MS)) {
             struct du_rect damage={0,0,CIUKI_DOSVM_WIDTH,CIUKI_DOSVM_HEIGHT};
             if (failure || panel_redraw) {
-                if (failure && shown) dosbox_panel_framed(&canvas, name, name, icon, failure, detail, now_ms() - started);
+                if (failure && shown) dosbox_panel_framed(&canvas, frame_title, name, icon, failure, detail, now_ms() - started);
                 else dosbox_panel(&canvas, name, icon, failure, detail, now_ms() - started);
                 panel_redraw=0;
             } else if (panel_sent) damage=dosbox_panel_pulse(&canvas,now_ms()-started);
