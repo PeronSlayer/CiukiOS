@@ -155,3 +155,16 @@ DF6 measurements (H57-07).
   matrix. Entry/return trace records (v1 trace ring) are not emitted by the
   IFS backend; the counters in `struct dfv2_ifs_stats` are its only ledger.
 - E: removable media is read-only; a writable policy is not wired.
+
+## 1112h free space: AX is sectors per cluster only (2026-10-24)
+
+FreeCOM `DIR` calls 7303h. K2043 `DosGetExtFree()` (kernel/dosfns.c:887-892)
+has no 11A3h extension, so for a redirected drive it copies the raw 1112h
+AX into `xfs_clussize`; `do_space` put the media id in AH, making every
+cluster 0xF8xx times larger ("801,637 Mega bytes free"). `do_space` now
+returns AX = sectors per cluster (the 36h path masks AH itself). AH=36h
+values stay clamped to 2 GB - 32 KB (16-bit fields, spc up to 64), as on
+Win95 OSR2/98 FAT32 (RBIL Int 21/AH=36h and AX=7303h,
+https://mirror.cs.msu.ru/oldlinux.org/Linux.old/docs/interrupts/int-html/rb-2751.htm).
+H57 `space` now also checks 7303h. Limit: K2043 offers no 32-bit 7303h
+counts for redirected drives; sizes above 2 GB are clamped.

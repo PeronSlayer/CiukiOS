@@ -512,6 +512,35 @@ t_space:
     EXPECT jbe, 3
     or dx, dx
     EXPECT jnz, 4
+    ; 36h: Win98 caps total/free at 2 GB - 32 KB (spc*bps*clusters).
+    mov ax, 0x7303                  ; FreeCOM DIR's call; network drive path
+    mov dx, sp_root
+    push ds
+    pop es
+    mov di, xfs_buf
+    mov cx, 44
+    stc
+    int 0x21
+    EXPECT jnc, 5
+    mov ax, [xfs_buf+4]             ; sectors per cluster (low word)
+    cmp ax, 128                     ; media byte leaking into AH gave 0xF8xx
+    EXPECT jbe, 6
+    cmp word [xfs_buf+6], 0
+    EXPECT je, 7
+    mov ax, [xfs_buf+8]
+    cmp ax, 512
+    EXPECT je, 8
+    mov ax, [xfs_buf+12]            ; free clusters (low word)
+    or ax, [xfs_buf+14]
+    EXPECT jnz, 9
+    mov ax, [xfs_buf+16]            ; total clusters
+    cmp ax, [xfs_buf+12]
+    EXPECT jae, 10                  ; total >= free (volume <= 2 GB here)
+    ; free bytes = free_clusters * spc * 512 must stay below 2 GB.
+    mov ax, [xfs_buf+12]
+    mul word [xfs_buf+4]            ; dx:ax = clusters*spc (sectors)
+    cmp dx, 0x4000                  ; sectors < 2^22 -> bytes < 2 GB
+    EXPECT jb, 11
     xor ax, ax
     ret
 
@@ -988,6 +1017,8 @@ p_dir db 'C:\H57', 0
 p_sub db 'C:\H57\SUB', 0
 s_sub db 'H57\SUB', 0
 p_root db 'C:\', 0
+sp_root db 'C:\', 0
+xfs_buf times 44 db 0
 p_a db 'C:\H57\A.TXT', 0
 p_b db 'C:\H57\B.TXT', 0
 p_c db 'C:\H57\C.TXT', 0

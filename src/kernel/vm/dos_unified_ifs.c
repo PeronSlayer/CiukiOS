@@ -243,7 +243,13 @@ static int do_space(struct dfv2_ifs *s,struct dfv2_call *k) {
     while ((total>0xffff || avail>0xffff) && spc<=64) { spc*=2; total/=2; avail/=2; }  /* 16-bit fields */
     if (total>0xffff) total=0xffff;
     if (avail>0xffff) avail=0xffff;
-    k->ax=(uint16_t)(media<<8|(spc&255)); k->bx=(uint16_t)total; k->cx=512; k->dx=(uint16_t)avail; return 0;
+    /* AX is sectors per cluster only. FreeDOS K2043 DosGetExtFree() (7303h on a
+     * network drive) copies the raw AX into xfs_clussize without clearing a
+     * media byte in AH, so 0xF8 in AH made every cluster 0xF8xx times larger
+     * ("801,637 Mega bytes free" in DIR). The 36h path masks AH; we need not
+     * carry the media id here (redirector convention: AX = spc). */
+    (void)media;
+    k->ax=(uint16_t)(spc&255); k->bx=(uint16_t)total; k->cx=512; k->dx=(uint16_t)avail; return 0;
 }
 static int do_attr(struct dfv2_ifs *s,struct dfv2_call *k,bool set) {
     char native[FS_PATH_BYTES]; unsigned g; int e=path(s,DFV2_SDA_FN1,native,&g); if (e) return e;
