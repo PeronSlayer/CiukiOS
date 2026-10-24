@@ -21,8 +21,9 @@ static int autoplay_list(void *ctx,struct ap_preference *out,unsigned cap)
 static int autoplay_forget(void *ctx,const char *id)
 { (void)ctx; assert(!strcmp(id,"iso-1234567890123456")); autoplay_count--; return 0; }
 static char saved[CFG_TEXT_MAX]; static size_t saved_n; static unsigned saves, applies, decodes; static const char *folder;
+static int save_error;
 static int load(void *c, char *t, size_t s, size_t *n) { (void)c; if (!saved_n || saved_n > s) return -1; memcpy(t, saved, saved_n); *n = saved_n; return 0; }
-static int save(void *c, const char *t, size_t n) { (void)c; if (n >= sizeof(saved)) return -1; memcpy(saved, t, n); saved[n] = 0; saved_n = n; saves++; return 0; }
+static int save(void *c, const char *t, size_t n) { (void)c; if (save_error || n >= sizeof(saved)) return -1; memcpy(saved, t, n); saved[n] = 0; saved_n = n; saves++; return 0; }
 static int apply(void *c, unsigned r, int v, int m) { (void)c; (void)v; (void)m; assert(r == DESK_SETTINGS_RELOAD); applies++; return 0; }
 static int mixer_volume=70;
 static int mixer(void *c, int *v, int *m) { (void)c; *v = mixer_volume; *m = 0; return 0; }
@@ -290,6 +291,7 @@ static void users_controls(void)
     puts("PASS G32 Users and Passwords: list, masked secret canvases, create, delete Cancel, options, old/new/confirm, asynchronous failure");
 }
 
+#include "regional_control_test.h"
 int main(int argc, char **argv)
 {
     users_controls();
@@ -456,6 +458,7 @@ int main(int argc, char **argv)
     at_click_widget(&u,find(DU_BUTTON,"Fit")->id); at_click_widget(&u,CP_OK);
     cp_settings_saved(&a,EROFS); assert(!a.quit && !a.display_accept && a.display_dirty && a.display_session);
     du_dialog_close(&u); a.host.save_async=0; cp_close(&a); cp_detach(&a);
+    regional_page();
     puts("PASS Display Properties: staged edits, preview/Cancel merge, durable OK, pending-close rollback and failed save");
     puts("PASS F1-63 Control Panel: two Tab presses and Space apply master preference 20/20/muted");
     printf("PASS control display: five positions, layout, desktop.cfg modes, preview\n");

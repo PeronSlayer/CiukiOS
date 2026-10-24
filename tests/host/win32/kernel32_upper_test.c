@@ -1096,6 +1096,7 @@ static void search_and_legacy_files(void) {
   CHECK(_lread(0x77, buffer, 1) == ~0u && last_error == 6);
   puts("PASS kernel32 upper SearchPath GetBinaryType ExpandEnvironmentStrings Win16 file API");
 }
+#include "regional_test.h"
 static BOOL W32API enum_locale(WCHAR *name, DWORD flags, intptr_t param) {
   int *count = (int *)param;
   (*count)++;
@@ -1142,9 +1143,9 @@ static void locale_tests(void) {
   CHECK(GetUserDefaultLocaleName(w, 85) == 6 && wide_equal(w, "en-US"));
   CHECK(!GetUserDefaultLocaleName(w, 2) && last_error == 122 && !GetUserDefaultLocaleName(0, 5));
   int count = 0;
-  CHECK(EnumSystemLocalesEx(enum_locale, 0, (intptr_t)&count, 0) && count == 2);
+  CHECK(EnumSystemLocalesEx(enum_locale, 0, (intptr_t)&count, 0) && count == 4);
   count = 0;
-  CHECK(EnumSystemLocalesEx(enum_locale, 0x20, (intptr_t)&count, 0) && count == 1);
+  CHECK(EnumSystemLocalesEx(enum_locale, 0x20, (intptr_t)&count, 0) && count == 2);
   CHECK(!EnumSystemLocalesEx(0, 0, 0, 0) && last_error == 87);
   CHECK(!EnumSystemLocalesEx(enum_locale, 0, 0, (void *)1) && last_error == 87);
   struct {
@@ -1244,6 +1245,7 @@ static void locale_tests(void) {
   CHECK(!GetCurrencyFormatA(0x409, 0, "-5", &cf, a, 64) && last_error == 87);
   CHECK(GetCurrencyFormatW(0x409, 0, W("0.5"), 0, w, 300) == 6 && wide_equal(w, "$0.50"));
   CHECK(!GetCurrencyFormatW(0x409, 0, W("x"), 0, w, 300) && last_error == 87);
+  regional_nls_tests();
   puts("PASS kernel32 upper NLS LCID names locale info code pages types dates times numbers");
 }
 static void message_tests(void) {

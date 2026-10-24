@@ -430,7 +430,7 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 34 | Windows-key shortcuts and the taskbar's keyboard focus (Win+Tab, Ctrl+Esc then Esc, Tab/arrows, Enter, Esc): the focus rectangle on a task button or the lit Start orb | the old and the new button; the Start orb's bounds | `taskbar_set`, `taskbar_blur`, `logo_chord`, `desk_shell_reconcile` (flag 8, `start_focus_shown`) | none | windows keys |
 | 35 | Caption icon (Ciuki Blue): a click opens the window menu under it, a second click within the double-click time closes the window (`WM_SYSCOMMAND` `SC_CLOSE`) | the menu's outer box; the caption and task button ("Closing...") | `desk_shell_caption_icon` (`shell.c`), `desk_caption_icon_box` (`compositor.c`) | none | caption icon |
 | 36 | Startup programs (G21): background logon batch shows, activates and closes ordinary windows | existing CREATE_WINDOW, activation and close damage; no batch-wide repaint | startup worker → shared launcher → `client.c` | none new | startup programs |
-| 37 | Window move while other windows repaint (fx-26): preserve valid client bits while repainting damage outside the carried rectangle | the exposed area, damage from the other window, and the moving window's damaged pixels | `desk_move`, `copy_region`, `window_damage` | unrelated damage disabled new move copies; damage on the shadow ring cancelled continuing copies | move with other damage (`WM_ROW=29`) |
+| 37 | Window move while other windows repaint (fx-26): preserve valid client bits while repainting damage outside the carried rectangle | the exposed area, damage from the other window, and the moving window's damaged pixels | `desk_move`, `copy_region`, `window_damage` | unrelated damage disabled new move copies; damage on the shadow ring cancelled continuing copies | move with other damage (`WM_ROW=30`) |
 | 38 | Native program fault dialog (G13, ER-1; Windows 98 "This program has performed an illegal operation" box): a message window with Close and a Details panel that opens and closes in place | the dialog's outer box, its task button, the Details text swap | `desk_w32_fault_dialog` (`client.c`), `fault_text.h`, `shell.c` message window | none (the Win32 crash dialog already used the same message window; this adds the native record) | native fault dialog |
 | 39 | Screen saver idle/SC_SCREENSAVE/preview start and animation | full screen with pointer hidden; application backing stores remain untouched | `desk_saver_start`, `desk_saver_tick`, `saver_scene` | G10: dedicated overlay bypasses window copies and caches | saver |
 | 40 | Saver input dismissal and monitor wake | full desktop, windows, overlays and pointer | `desk_saver_input`, `saver_wake`, full invalidation | G10: dismissing input consumed, failed wake remains retryable | saver |
@@ -450,6 +450,11 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 54 | G22 volume-tray double-click: close the single-click popup and launch Volume Control | old volume popup and the newly created window (rows 1, 6) | `shell.c` double-click before popup outside-click dismissal | popup footprint explicitly invalidated | tray popups |
 | 55 | G31 Printers folder/Add Printer, default selection and queue refresh (queued, paused, resumed, cancelled or purged); Print and Page Setup opening, changing fields, cancelling or accepting | dialog/client damage; old dialog area exposed on close; covered queue damage retained until exposure | `apps/printers/main.c`, `apps/libprint/dialog.c`, libdeskui `du_invalidate`/`DAMAGE` | completion notices wait while another modal dialog (such as an unsaved-document prompt) is open | printing |
 | 56 | G32 logon / user selection / masked password / checking / failure / Cancel / password lock and unlock | whole screen for the opaque gate and its removal; application input is consumed before routing | `desk_logon_*`, `desk_session_lock`, `input.c`, `desk_shell_chrome_intersects` | none in the host model | `row_logon` in `test_window_model` (all five presenters) |
+| 57 | Regional Settings (G24): region preset selected | client content; updates clipped by overlapping windows | `apps/control/regional.inc`, libdeskui invalidation, `DESK_DAMAGE` | none | regional settings (WM_ROW=40): Italian preset; applet semantics in `regional_control_test.h` |
+| 58 | Regional Settings: tab changed | client content | `regional_event`, `regional_build`, `DESK_DAMAGE` | none | regional settings: tab change |
+| 59 | Regional Settings: format field edited | changed field and validation status | toolkit edits, `regional_pull`, `DESK_DAMAGE` | none | regional settings: field edit |
+| 60 | Regional Settings: Apply started | save status | `regional_save`, `DESK_DAMAGE` | none | regional settings: Apply status |
+| 61 | Regional Settings: save completed or failed | completion status and error dialog | `cp_settings_saved`, `DESK_DAMAGE` | none | regional settings: save failure; real applet retry/OK tested by `regional_control_test.h` |
 
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with
@@ -471,6 +476,7 @@ G8 appends inventory rows 43–46. Its desktop-menu scenario is
 `row_g8_menus`, selected by `WM_ROW=34`; rows 44–46 use the production
 Files dialog replay. G12 follows at `WM_ROW=35` and `WM_ROW=36`, G17 at
 `WM_ROW=37`, printing at `WM_ROW=38` and G32 logon at `WM_ROW=39`.
+G24 Regional Settings follows at `WM_ROW=40` (inventory rows 57–61).
 Existing executable scenario indexes stay unchanged.
 
 ### One rule instead of one fix per path: the frame reconcile

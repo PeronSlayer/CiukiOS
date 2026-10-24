@@ -291,7 +291,7 @@ ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],
                       const struct ciuki_spawn_fd *mapping,uint32_t count,uint32_t flags)
 {
     spawn_hold();
-    assert(!strcmp(env[0],"LC_ALL=C") && !strcmp(env[1],"TZ=UTC0") && !strncmp(env[5],"CIUKI_DISPLAY=",14) && !strcmp(env[6],"CIUKI_KEYMAP=us") && !strcmp(env[7],"USER=") && !strcmp(env[8],"CIUKI_SETTINGS=/system/settings/desktop.cfg") && !strcmp(env[9],"CIUKI_PROFILE=") && !env[10]);
+    assert(!strcmp(env[0],"LANG=en_US") && !strcmp(env[1],"TZ=UTC0") && !strncmp(env[5],"CIUKI_DISPLAY=",14) && !strcmp(env[6],"CIUKI_KEYMAP=us") && !strcmp(env[7],"USER=") && !strcmp(env[8],"CIUKI_SETTINGS=/system/settings/desktop.cfg") && !strcmp(env[9],"CIUKI_PROFILE=") && !env[10]);
     assert(!strcmp(env[2],"HOME=/Documents") && !strcmp(env[3],"TMPDIR=/tmp") && !strcmp(env[4],"PATH=/Programs"));
     assert(count>=1 && mapping[0].source==last_child && mapping[0].target==3 && !flags);
     if (!strcmp(path,"/Programs/files")) {
@@ -1341,6 +1341,11 @@ int main(int argc,char **argv)
     struct desktop d;
     fake_reset(); desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d);
     struct desk_program program={"demo","/Programs/demo"};
+    struct launch_job regional_job;
+    reg_defaults(&d.sh.cfg.regional,1);
+    assert(!launch_prepare(&d,&program,&regional_job) && !strcmp(regional_job.env[0],"LANG=it_IT"));
+    reg_defaults(&d.sh.cfg.regional,0);
+    assert(!strcmp(regional_job.env[0],"LANG=it_IT")); /* queued spawn owns its environment snapshot */
     struct desk_program long_program;
     memset(&long_program,'a',sizeof(long_program));
     long_program.name[sizeof(long_program.name)-1]=0;long_program.path[sizeof(long_program.path)-1]=0;

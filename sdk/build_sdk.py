@@ -129,7 +129,10 @@ def main():
     for family in ('crt','libciuki','libpthread','libfont','libreg'):
         objects[family]=[]
         for path in sorted((ROOT/'sdk'/family).glob('*.c')):
-            obj=work/(family+'_'+path.stem+'.o'); compile(path,obj,ft.includes(ft_src) if family=='libfont' else ()); objects[family].append(obj)
+            extra=ft.includes(ft_src) if family=='libfont' else ()
+            if family=='libciuki' and path.name=='locale.c':
+                extra=('-I',src/'newlib/libc/locale')
+            obj=work/(family+'_'+path.stem+'.o'); compile(path,obj,extra); objects[family].append(obj)
     # Preserve applications' -lfont link interface: its archive owns the minimal
     # engine as well. libfreetype.a is available for future validated GDI users.
     objects['libfont'].extend(work/'freetype'/(Path(name).stem+'.o') for name in ft.SOURCES)

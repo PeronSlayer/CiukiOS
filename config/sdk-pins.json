@@ -36,7 +36,8 @@
       "0005-reent-wire-records.patch": "a5fe30eff9b4982d83b98a381a88f91485148d25823078efcc359183f5cf456e",
       "0006-vfscanf-alloca.patch": "07ade98b5b5f6a2e1d0a8fda242b840c984c88c9f3f8e1062bcdc95cdcb06fad",
       "0007-once-exit-guard.patch": "56902e9920f30eb6272121dbd54fbd34a9ee6ea8b662936f764c6a21875396da",
-      "0008-x87-only-fenv.patch": "317319a42b6006adbeeb6f298e0980c451eaa8e98eb33e7b27ea25aade0c1b9b"
+      "0008-x87-only-fenv.patch": "317319a42b6006adbeeb6f298e0980c451eaa8e98eb33e7b27ea25aade0c1b9b",
+      "0009-regional-formatting.patch": "58e1f0e851375693c888ed09d49fd4f2b01d4303c83875891828678a4f2600df"
     },
     "sha256": "33f12605e0054965996c25c1382b3e463b0af91799001f5bb8c0630f2ec8c852",
     "source_date_epoch": 1735603200,

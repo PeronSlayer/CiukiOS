@@ -1580,16 +1580,28 @@ static void row_logon(unsigned m)
     v.authenticated=1; desk_logon_result(&d,&v,0); assert(!d.sh.user_gate); step("authenticated unlock exposes desktop");
     wm_end();
 }
+static void row_regional(unsigned m)
+{
+    row_name="regional settings"; wm_begin(m,1);
+    struct fake_app *panel=app_open("control",420,300,40,60);
+    app_open("ciuknote",200,180,280,120); step("Regional Settings partially covered");
+    app_paint(panel,0,0,420,300,0x410u); step("Italian preset selected");
+    app_paint(panel,0,0,420,300,0x24u); step("regional tab change");
+    app_paint(panel,180,60,180,24,0x409u); step("format field edit");
+    app_paint(panel,12,250,390,20,0x25u); step("regional Apply/save status");
+    app_paint(panel,12,250,390,20,0x26u); step("regional save failure status");
+    wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
     row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,
     row_taskbar_menu, row_arrange, row_minimize_all, row_win_keys, row_caption_icon, row_startup,
     row_move_damaged, row_fault, row_saver, row_find, row_g8_menus, row_input_preferences,
-    row_input_text, row_dos_controls, row_printing, row_logon};
+    row_input_text, row_dos_controls, row_printing, row_logon, row_regional};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).
-     * Main keeps indexes 0..28; fx-26 move-with-other-damage is index 29. */
+     * Integration keeps indexes 0..39; Regional Settings follows at 40. */
     const char *one=getenv("WM_ROW");
     for (unsigned k=0;k<sizeof(rows)/sizeof(*rows);k++) if (!one || (unsigned)atoi(one)==k) rows[k](m);
 }

@@ -20,8 +20,9 @@ def build(lua_files=False):
     source=SDK/'work/newlib-4.5.0.20241231'
     if not source.is_dir():raise RuntimeError('build the SDK before the native libc reference')
     inputs=[ROOT/'sdk/newlib/recipe.json',ROOT/'sdk/crt/start.c',ROOT/'sdk/libpthread/pthread.c',
-            ROOT/'sdk/tests/libc_host.c',ROOT/'sdk/tests/libc_smoke.c',ROOT/'sdk/tests/libc_start64.S',
-            ROOT/'sdk/tests/host_runtime.h',Path(__file__),*sorted((ROOT/'sdk/libciuki').glob('*.c'))]
+            ROOT/'sdk/tests/libc_host.c',ROOT/'sdk/tests/libc_smoke.c',ROOT/'sdk/tests/regional_smoke.inc',ROOT/'sdk/tests/libc_start64.S',
+            ROOT/'sdk/tests/host_runtime.h',Path(__file__),*sorted((ROOT/'sdk/libciuki').glob('*.c')),
+            ROOT/'sdk/libciuki/regional_model.h',*sorted((ROOT/'sdk/newlib/patches').glob('*.patch'))]
     program='lua-files-host' if lua_files else 'libc-host'
     lua_source=None
     if lua_files:
@@ -62,7 +63,7 @@ def build(lua_files=False):
     types.write_text('#ifndef __ASSEMBLER__\ntypedef int _ssize_t;\n#define __machine_ssize_t_defined 1\n#endif\n')
     cc=OUT/'host-cc'
     flags=['-m64','-std=c17','-ffreestanding','-fno-builtin','-fno-pie','-fno-pic','-fno-stack-protector',
-           '-ffunction-sections','-fdata-sections','-O2','-g','-D_DEFAULT_SOURCE','-D__DYNAMIC_REENT__',
+           '-ffunction-sections','-fdata-sections','-O2','-g','-D_DEFAULT_SOURCE','-D__DYNAMIC_REENT__','-D__CIUKIOS__=1',
            '-nostdinc','-isystem',resource+'/include','-include',str(types)]
     cc.write_text('#!/bin/sh\nexec '+shlex.join([clang,'--target=x86_64-unknown-elf',*flags,
         '-isystem',str(source/'newlib/libc/include'),'-Wno-error','-Wno-deprecated-non-prototype','-Dasm=__asm__'])+' "$@"\n')
@@ -98,6 +99,10 @@ def build(lua_files=False):
             obj=OUT/f'{index}.o';objects.append(obj)
             compile_flags=[*flags,'-I',str(native),'-I',str(SDK/'sysroot/include'),
                            '-include',str(ROOT/'sdk/tests/host_runtime.h')] if path.suffix=='.c' else ['-m64']
+            if path.name=='locale.c' and path.parent.name=='libciuki':
+                compile_flags += ['-I',str(source/'newlib/libc/locale')]
+            if path.name=='libc_smoke.c':
+                compile_flags += ['-DCIUKI_LIBC_HOST_REGIONAL=1']
             if lua_files and path.suffix=='.c':
                 compile_flags += ['-DLUA_COMPAT_5_3','-I',str(lua_source),'-I',str(OUT)]
             subprocess.run([clang,*compile_flags,'-c',str(path),'-o',str(obj)],env=env,stdout=log,stderr=subprocess.STDOUT,check=True)

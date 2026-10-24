@@ -84,6 +84,7 @@ FILES_FRAMES = {
 # are re-pinned by the lead after a visual review; pinned entries still compare.
 PIN = "PIN-FROM-FIRST-RUN"
 
+# G24 merge: retain integration frame hashes; lead reviews and re-pins regional text.
 # G6: reviewed property sheets, drive pie/counting, Version and Attributes.
 G6_FRAMES = {
     "g6-attributes.xrgb": "4ec32dfe992e81b6410a27d69633378555a5ba2ace43694a2f3b01d43df7c3a5",

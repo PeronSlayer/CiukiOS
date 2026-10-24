@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <locale.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include "../desktop/tz_env.h"
@@ -90,7 +91,7 @@ static int launch(struct files_app *a, const char *program, char *const argv[])
     if ((!strcmp(program, "/Programs/ciuknote") || !strcmp(program, "/Programs/control") || (entry && entry->takes_file)) && argv[0] && argv[1] && !argv[2])
         return launch_window(a->user, program + sizeof("/Programs/") - 1, argv[1]);
     char tz[DESK_TZ_ENV_BYTES];
-    char *env[] = {"LC_ALL=C", desk_tz_env(tz, sizeof(tz)), "HOME=/Documents", "TMPDIR=/tmp", "PATH=/Programs", NULL};
+    char *env[] = {desk_tz_env(tz, sizeof(tz)), "HOME=/Documents", "TMPDIR=/tmp", "PATH=/Programs", NULL};
     ciuki_pid_t pid = ciuki_spawn(program, argv, env, NULL, 0, 0);
     return pid < 0 ? -errno : (int)pid;
 }
@@ -230,6 +231,7 @@ static int media_blockers(unsigned drive,uint32_t generation,struct ciuki_media_
 }
 int main(int argc, char **argv)
 {
+    (void)setlocale(LC_ALL, ""); /* G24: opt into the user's regional formats. */
     int channel = 3, test = 0, bin_properties = 0, find = 0, shell_action=0;
     const char *shell_path=NULL; char shell_parent[FM_PATH];
     char **shell_paths=NULL; unsigned shell_count=0;

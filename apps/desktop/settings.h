@@ -8,6 +8,7 @@
 #define CIUKI_DESKTOP_SETTINGS_H
 #include <stddef.h>
 #include <stdint.h>
+#include "../../sdk/libciuki/regional_model.h"
 #define CFG_DIR "/system/settings"
 #define CFG_FILE "/system/settings/desktop.cfg"
 #define CFG_WALLPAPER_DIR "/system/wallpapers"
@@ -28,6 +29,7 @@ enum { CFG_KEYS_US, CFG_KEYS_IT, CFG_KEYS_COUNT };
 #define CFG_MOUSE_MAX 10
 #define CFG_MOUSE_NORMAL 5
 struct ciuki_settings {
+    struct regional regional;
     char theme[32];                 /* "Platinum", "Ciuki Blue" */
     char wallpaper[CFG_PATH_MAX];   /* "ciuki", "none", "builtin:<name>" or an absolute file path */
     int wallpaper_mode;             /* CFG_WALL_* */

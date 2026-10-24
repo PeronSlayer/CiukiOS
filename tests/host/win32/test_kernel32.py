@@ -6,6 +6,17 @@ import subprocess
 import unittest
 ROOT=Path(__file__).resolve().parents[3]
 class Kernel32Files(unittest.TestCase):
+    def test_regional_settings_reader(self):
+        out=ROOT/'build/host/win32/regional';out.mkdir(parents=True,exist_ok=True)
+        program=out/'reader'
+        subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror',
+            '-fsanitize=address,undefined','-fno-sanitize-recover=all',
+            '-I'+str(ROOT/'sdk/win32/include'),'-I'+str(ROOT/'src/kernel/include'),
+            str(ROOT/'tests/host/win32/regional_io_test.c'),'-o',str(program)],check=True)
+        result=subprocess.run([program],capture_output=True,text=True,timeout=30)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        print(result.stdout,end='')
+
     def test_i386_fiber_and_apc_runtime(self):
         from tests.host.win32.adapter import build
         program=build.build_kernel32_runtime(ROOT/'build/host/win32/kernel32-i386')

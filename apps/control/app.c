@@ -23,8 +23,8 @@ enum {
 };
 enum { C_REPEAT_DELAY=1500, C_REPEAT_SPEED, C_BLINK, C_SWAP, C_TRAILS,
        C_WHEEL, C_POINTER, C_LAYOUT_SWITCH, C_DOUBLE_TEST };
-static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts", "autoplay", "programs", "joystick", "multimedia", "users", "passwords"};
-static const char *const page_labels[CP_PAGES] = {"Display Properties", "Mouse", "Keyboard", "Sounds and Audio", "Date and Time", "System", "System", "System", "Network", "Power", "Display Properties", "Display Properties", "Storage and removable devices", "Add/Remove Programs", "Game controllers", "Multimedia", "Users", "Passwords"};
+static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts", "autoplay", "programs", "joystick", "multimedia", "users", "passwords", "regional"};
+static const char *const page_labels[CP_PAGES] = {"Display Properties", "Mouse", "Keyboard", "Sounds and Audio", "Date and Time", "System", "System", "System", "Network", "Power", "Display Properties", "Display Properties", "Storage and removable devices", "Add/Remove Programs", "Game controllers", "Multimedia", "Users", "Passwords", "Regional Settings"};
 static void build(struct cp_app *a);
 static void refresh(struct cp_app *a);
 static unsigned power_read(struct cp_app *a);
@@ -88,6 +88,7 @@ static void changed(struct cp_app *a)
     int r = a->host.apply ? a->host.apply(a->host.ctx, DESK_SETTINGS_RELOAD, 0, 0) : -1;
     text(a, C_STATUS, a->host.save_async ? "Saving settings..." : r ? "Saved. The desktop applies it at its next start." : "Saved and applied.");
 }
+#include "regional.inc"
 /* Display previews use the existing durable settings/reload path. Keep the
  * entry snapshot until OK; rollback merges only this applet's owned keys. */
 static void display_copy(struct ciuki_settings *to, const struct ciuki_settings *from)
@@ -152,6 +153,7 @@ int cp_display_leave(struct cp_app *a)
 }
 int cp_close(struct cp_app *a)
 {
+    if (a->regional_saving) { text(a,C_STATUS,"Waiting for regional settings to finish saving..."); return 0; }
     if (a->game_save) {
         game_note(a,"Waiting for game properties to finish saving...");return 0;
     }
@@ -161,6 +163,12 @@ int cp_close(struct cp_app *a)
 }
 void cp_settings_saved(struct cp_app *a, int error)
 {
+    if (a->regional_saving) {
+        a->regional_saving=0;
+        if (!error && a->regional_accept) a->quit=1;
+        if (!error) a->cfg.regional=a->regional_edit;
+        a->regional_accept=0;
+    }
     if (a->display_write) {
         a->display_write = 0;
         if (error) {
@@ -500,6 +508,7 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
 {
     struct cp_app *a = user;
     if (user_event(a,e)) return;
+    if (regional_event(a,e)) return;
     if (cp_pack_event(a, e)) return;
     int save = 0;
     if (e->type == DU_EV_KEY && e->key == DU_KEY_ESC) { cp_close(a); return; }
@@ -1510,6 +1519,8 @@ static void build(struct cp_app *a)
     add(a,DU_LABEL,C_AUDIO,24,342,500,14,"");
     } else if (a->page == CP_DATETIME) {
     dt_build(a);
+    } else if (a->page == CP_REGIONAL) {
+    regional_build(a);
     } else if (a->page==CP_UNINSTALL) {
         int count=a->host.uninstall_list ? a->host.uninstall_list(a->host.ctx,a->uninstall,CP_PROGRAM_MAX) : -ENOSYS;
         a->uninstall_count=count>=0 && count<=(int)CP_PROGRAM_MAX ? (unsigned)count : 0;
@@ -1585,6 +1596,11 @@ static void build(struct cp_app *a)
 }
 void cp_open(struct cp_app *a, int page)
 {
+    if (a->regional_saving) { text(a,C_STATUS,"Waiting for regional settings to finish saving..."); return; }
+    if (page==CP_REGIONAL && a->page!=CP_REGIONAL) {
+        load(a,&a->cfg); a->regional_edit=a->cfg.regional;
+        reg_sanitize(&a->regional_edit); a->regional_tab=0;
+    }
     user_wipe(a);
     if (page==CP_USERS || page==CP_PASSWORDS) a->user_loaded=0;
     if (a->game_save) { game_note(a,"Waiting for game properties to finish saving...");return; }
