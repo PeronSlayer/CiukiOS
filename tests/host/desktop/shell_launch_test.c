@@ -1139,7 +1139,7 @@ static void test_hwreport_menu(void)
     desk_menu_close(&d); desk_menu_open(&d,SH_MENU_SYSTEM_TOOLS,0,0);
     row=item_at(&d.sh.menus[0],"Hardware Report");
     assert(row>=0 && d.sh.menus[0].items[row].action==SH_ACT_LAUNCH);
-    assert(!strcmp(d.sh.menus[0].items[row].icon,"preferences-system"));
+    assert(!strcmp(d.sh.menus[0].items[row].icon,"preferences-desktop-peripherals"));
     desk_menu_close(&d); desk_menu_open(&d,SH_MENU_DEVELOPER,0,0);
     assert(item_at(&d.sh.menus[0],"Hardware Report")<0);
     desk_menu_close(&d); desk_render_release(&d); fake_reset();

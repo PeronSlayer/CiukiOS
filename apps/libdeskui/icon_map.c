@@ -16,15 +16,15 @@
 
 const struct du_icon_map du_icon_map[] = {
     /* /Programs programs (the desktop menu lists /Programs) */
-    {"program:hwreport", "preferences-system"},
+    {"program:hwreport", "preferences-desktop-peripherals"},
     {"program:scandisk", "drive-harddisk"},
     {"program:msconfig", "preferences-system"},
     {"program:printers", "printer"},
     {"program:resmeter", "applications-system"},
     {"program:schedtask", "x-office-calendar"},
     {"program:sysinfo", "document-properties"},
-    {"program:sysmon", "utilities-system-monitor"},
-    {"program:regedit", "preferences-system"},
+    {"program:sysmon", "network-transmit-receive"},
+    {"program:regedit", "x-office-address-book"},
     {"program:*", "application-x-executable"},
     {"program:files", "system-file-manager"},
     {"program:control", "preferences-desktop"},
@@ -33,12 +33,12 @@ const struct du_icon_map du_icon_map[] = {
     {"program:tcc", "text-x-script"},
     {"program:tasks", "utilities-system-monitor"},
     {"program:terminal", "utilities-terminal"},
-    {"program:dosbox", "utilities-terminal"},          /* MS-DOS Prompt class VM window */
-    {"program:demo", "preferences-desktop-peripherals"}, /* keyboard/mouse input demo window */
-    {"program:gfxdemo", "applications-graphics"},
-    {"program:hello", "face-smile"},                   /* prints a greeting */
-    {"program:lua", "text-x-script"},                  /* Lua interpreter (runs scripts; the Developer folder is applications-development) */
-    {"program:libc_smoke", "applications-system"},     /* C library self-test */
+    {"program:dosbox", "media-floppy"},          /* MS-DOS Prompt class VM window */
+    {"program:demo", "input-keyboard"}, /* keyboard/mouse input demo window */
+    {"program:gfxdemo", "video-display"},
+    {"program:hello", "face-wink"},                   /* prints a greeting */
+    {"program:lua", "weather-clear-night"},                  /* Lua interpreter (runs scripts; the Developer folder is applications-development) */
+    {"program:libc_smoke", "package-x-generic"},     /* C library self-test */
     {"program:desktop", "user-desktop"},
     {"program:setup", "system-installer"},
     {"program:netsurf", "internet-web-browser"},       /* NetSurf, the browser application (apps/desktop/catalog.h) */
@@ -50,7 +50,7 @@ const struct du_icon_map du_icon_map[] = {
     {"program:charmap", "accessories-character-map"},
     {"program:clock", "appointment-new"},              /* a clock face (Tango 0.8.90 has no clock app icon) */
     {"program:help", "help-browser"},
-    {"program:logview", "text-x-generic"},             /* Log Viewer (G13) */
+    {"program:logview", "x-office-spreadsheet"},             /* Log Viewer (G13) */
     {"program:music", "audio-x-generic"},
     {"program:mixer", "audio-volume-high"},
     {"program:viewer", "image-x-generic"},
@@ -58,7 +58,7 @@ const struct du_icon_map du_icon_map[] = {
     {"program:wordpad", "x-office-document"},                  /* G28 */
     {"program:mines", "face-smile"},                   /* G27 Minesweeper */
     {"program:solitaire", "applications-games"},       /* G27 Solitaire */
-    {"program:freecell", "applications-games"},        /* G27 FreeCell */
+    {"program:freecell", "face-glasses"},        /* G27 FreeCell */
     {"program:hearts", "emblem-favorite"},             /* G27 Hearts */
     {"program:serial", "network-wired"},               /* G27 Serial Terminal */
 

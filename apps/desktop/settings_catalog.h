@@ -23,7 +23,7 @@ static const struct cp_applet cp_applets[] = {
     {CP_DISPLAY, CP_CAT_APPEARANCE, "display", "Display", "preferences-desktop-wallpaper"},
     {CP_TASKBAR, CP_CAT_APPEARANCE, "taskbar", "Taskbar & Start Menu", "preferences-system-windows"},
     {CP_SOUNDS, CP_CAT_SOUND, "sounds", "Sounds and Audio", "audio-card"},
-    {CP_MULTIMEDIA, CP_CAT_SOUND, "multimedia", "Multimedia", "audio-card"},
+    {CP_MULTIMEDIA, CP_CAT_SOUND, "multimedia", "Multimedia", "preferences-desktop-multimedia"},
     {CP_KEYBOARD, CP_CAT_INPUT, "keyboard", "Keyboard", "input-keyboard"},
     {CP_MOUSE, CP_CAT_INPUT, "mouse", "Mouse", "input-mouse"},
     {CP_JOYSTICK, CP_CAT_INPUT, "joystick", "Game controllers", "input-gaming"},
@@ -34,10 +34,10 @@ static const struct cp_applet cp_applets[] = {
     {CP_NETWORK, CP_CAT_CONNECTIONS, "network", "Network", "network-wired"},
     {CP_POWER, CP_CAT_DEVICES, "power", "Power", "system-shutdown"},
     {CP_AUTOPLAY, CP_CAT_DEVICES, "storage", "Storage and removable devices", "drive-removable-media"},
-    {CP_ADDHW, CP_CAT_DEVICES, "addhw", "Add New Hardware", "computer"},
-    {CP_UNINSTALL, CP_CAT_SYSTEM, "programs", "Add/Remove Programs", "application-x-executable"},
+    {CP_ADDHW, CP_CAT_DEVICES, "addhw", "Add New Hardware", "preferences-desktop-peripherals"},
+    {CP_UNINSTALL, CP_CAT_SYSTEM, "programs", "Add/Remove Programs", "system-installer"},
     {CP_USERS, CP_CAT_SYSTEM, "users", "Users", "system-users"},
-    {CP_PASSWORDS, CP_CAT_SYSTEM, "passwords", "Passwords", "system-users"},
+    {CP_PASSWORDS, CP_CAT_SYSTEM, "passwords", "Passwords", "system-lock-screen"},
     {CP_SYSTEM, CP_CAT_SYSTEM, "system", "System", "ciuki"}
 };
 #define CP_APPLETS (sizeof(cp_applets) / sizeof(cp_applets[0]))

@@ -290,9 +290,9 @@ static const struct program_info programs[] = {
     /* f6-19: the browser application (catalog.h desk_applications record). */
     {"netsurf", "NetSurf", "internet-web-browser", "programs", NULL},
     {"tasks", "Task Manager", "utilities-system-monitor", "programs", NULL},
-    {"dosbox", "DOS Box", "utilities-terminal", "programs", NULL},
-    {"demo", "Ciuki Demo", "preferences-desktop-peripherals", "programs", NULL},   /* the keyboard/mouse input demo */
-    {"lua", "Lua", "text-x-script", "programs", NULL},
+    {"dosbox", "DOS Box", "media-floppy", "programs", NULL},
+    {"demo", "Ciuki Demo", "input-keyboard", "programs", NULL},   /* the keyboard/mouse input demo */
+    {"lua", "Lua", "weather-clear-night", "programs", NULL},
     {"printers", "Printers", "printer", "programs", NULL},
     {"control", "Control Panel", "preferences-desktop", "programs", NULL},
     {"music", "Music Player", "audio-x-generic", "programs", NULL},
@@ -301,7 +301,7 @@ static const struct program_info programs[] = {
     {"terminal", "Terminal", "utilities-terminal", "programs", NULL},
     {"cdplayer", "CD Player", "media-optical", "accessories", "C:\\WINDOWS\\CDPLAYER.EXE"},
     {"calc", "Calculator", "accessories-calculator", "accessories", NULL},
-    {"gfxdemo", "Graphics Demo", "applications-graphics", "accessories", NULL},
+    {"gfxdemo", "Graphics Demo", "video-display", "accessories", NULL},
     {"charmap", "Character Map", "accessories-character-map", "accessories", NULL},
     {"wordpad", "WordPad", "x-office-document", "accessories", NULL},
     {"clock", "Clock", "appointment-new", "accessories", NULL},
@@ -310,23 +310,23 @@ static const struct program_info programs[] = {
     {"serial", "Serial Terminal", "network-wired", "accessories", NULL},
     {"mines", "Minesweeper", "face-smile", "games", NULL},
     {"solitaire", "Solitaire", "applications-games", "games", NULL},
-    {"freecell", "FreeCell", "applications-games", "games", NULL},
+    {"freecell", "FreeCell", "face-glasses", "games", NULL},
     {"hearts", "Hearts", "emblem-favorite", "games", NULL},
-    {"hwreport", "Hardware Report", "preferences-system", "system-tools", NULL},
+    {"hwreport", "Hardware Report", "preferences-desktop-peripherals", "system-tools", NULL},
     {"scandisk", "ScanDisk", "drive-harddisk", "system-tools", NULL},
     {"msconfig", "System Configuration", "preferences-system", "system-tools", NULL},
-    {"logview", "Log Viewer", "text-x-generic", "system-tools", NULL},
+    {"logview", "Log Viewer", "x-office-spreadsheet", "system-tools", NULL},
     {"clipbrd", "Clipboard Viewer", "edit-paste", "system-tools", NULL},
     {"resmeter", "Resource Meter", "applications-system", "system-tools", NULL},
     {"schedtask", "Scheduled Tasks", "x-office-calendar", "system-tools", NULL},
     {"sysinfo", "System Information", "document-properties", "system-tools", NULL},
-    {"sysmon", "System Monitor", "utilities-system-monitor", "system-tools", NULL},
-    {"regedit", "Registry Editor", "preferences-system", "accessories", NULL},
+    {"sysmon", "System Monitor", "network-transmit-receive", "system-tools", NULL},
+    {"regedit", "Registry Editor", "x-office-address-book", "accessories", NULL},
     {"viewer", "Image Viewer", "image-x-generic", "accessories", NULL},
-    {"hello", "Hello", "face-smile", "developer", NULL},
+    {"hello", "Hello", "face-wink", "developer", NULL},
     {"ciukide", "CiukIDE", "applications-development", "developer", NULL},
     {"tcc", "Tiny C Compiler", "text-x-script", "developer", NULL},
-    {"libc_smoke", "libc smoke test", "applications-system", "developer", NULL},
+    {"libc_smoke", "libc smoke test", "package-x-generic", "developer", NULL},
 };
 static const struct program_info *program_find(const char *name)
 {
@@ -353,23 +353,32 @@ static const char *client_icon(const struct desktop *d, int i)
     if (c->internal == DESK_INTERNAL_TRANSFER || c->internal==DESK_INTERNAL_PROGRAMS) return "folder";
     if (c->internal == DESK_INTERNAL_SHUTDOWN || c->internal == DESK_INTERNAL_POWER) return "system-shutdown";
     if (c->internal) return du_message_icon_name(d->sh.message_kind) ? du_message_icon_name(d->sh.message_kind) : "dialog-information";
-    if (c->program == DESK_APP_TERMINAL) return "utilities-terminal";
-    if (c->program == DESK_APP_FILES) return "system-file-manager";
-    if (c->program == DESK_APP_NOTE) return "accessories-text-editor";
     if (c->program == DESK_APP_CONTROL) {
         if (!strcmp(c->title,"Display Properties")) return cp_applets[0].icon;
         for (unsigned k=0;k<CP_APPLETS;k++) if (!strcmp(c->title,cp_applets[k].label)) return cp_applets[k].icon;
         return "preferences-desktop";
     }
-    if (c->taskman) return "utilities-system-monitor";
-    /* Applications by their launch-bound identity: the page title replaces the window title. */
+    /* Programs > Games: the DOS Box window carries the game's title. */
+    for (unsigned k = 0; k < DESK_GAME_COUNT; k++)
+        if (!strcmp(c->title, desk_games[k].title)) return desk_games[k].tango;
+    /* The launch-bound program identity (never the window title) names the icon: caption, taskbar button,
+     * Alt+Tab and Task Manager show the same Tango icon as the Start menu and Files for that program. */
     const struct desk_application_entry *app = desk_application_find(c->application);
     if (app) return app->tango;
-    for (unsigned k = 0; k < DESK_CATALOG_COUNT; k++)   /* accessories: the launcher's Tango name by window title */
+    if (c->application[0]) {
+        const struct program_info *p = program_find(c->application);
+        if (p) return p->icon;
+        const struct desk_catalog_entry *e = desk_catalog_find(c->application);
+        if (e) return e->tango;
+    }
+    if (c->program == DESK_APP_TERMINAL) return desk_program_icon_name("terminal");
+    if (c->program == DESK_APP_FILES) return desk_program_icon_name("files");
+    if (c->program == DESK_APP_NOTE) return desk_program_icon_name("ciuknote");
+    if (c->program == DESK_APP_IDE) return desk_program_icon_name("ciukide");
+    if (c->taskman) return desk_program_icon_name("tasks");
+    if (c->dosbox || !strncmp(c->title, "DOS", 3)) return desk_program_icon_name("dosbox");
+    for (unsigned k = 0; k < DESK_CATALOG_COUNT; k++)   /* a window title naming a launcher entry */
         if (strstr(c->title, desk_catalog[k].label)) return desk_catalog[k].tango;
-    for (unsigned k = 0; k < DESK_GAME_COUNT; k++)   /* Programs > Games: the DOS Box window carries the game's title */
-        if (!strcmp(c->title, desk_games[k].title)) return desk_games[k].tango;
-    if (!strncmp(c->title, "DOS", 3)) return "utilities-terminal";
     if (strstr(c->title, "Demo") || strstr(c->title, "demo")) return desk_program_icon_name("demo");
     return "application-x-executable";
 }
@@ -465,7 +474,7 @@ static void custom_folder_items(struct desktop *d,struct sh_menu *m,int folder)
     for (unsigned k=0;k<s->count;k++) if (s->entries[k].parent==folder) {
         if (shown++>=limit) { extra=1;continue; }
         const struct sh_folder_item *e=&s->entries[k];
-        item(m,e->label,e->folder>=0 ? "folder" : "application-x-executable",
+        item(m,e->label,e->icon[0] ? du_icon_name(e->icon) : e->folder>=0 ? "folder" : "application-x-executable",
              e->folder>=0 ? SH_ACT_SUBMENU : SH_ACT_SHELL_ITEM,e->folder>=0 ? SH_MENU_FOLDER_BASE+e->folder : (int)k,0);
     }
     if (extra || s->truncated) item(m,"More... Open Folder","folder",SH_ACT_FOLDER_EXPLORE,folder,0);
@@ -613,14 +622,14 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         for (unsigned k = 0; k < d->program_count && m->count < SH_ITEMS; k++) {
             const struct program_info *p = program_find(d->programs[k].name);
             if (p && strcmp(p->category, "developer")) continue;   /* Programs and Accessories list theirs */
-            item(m, p ? p->label : d->programs[k].name, p ? p->icon : "application-x-executable", SH_ACT_LAUNCH, (int)k, 0);
+            item(m, p ? p->label : d->programs[k].name, p ? p->icon : du_icon_file(d->programs[k].name, 0, 1), SH_ACT_LAUNCH, (int)k, 0);
         }
         break;
     case SH_MENU_DOCUMENTS:
         d->sh.custom_refresh=1;
         for (unsigned k = 0; k < d->sh.cfg.recent_count && k < CFG_RECENT_MAX; k++) {
             const char *path = d->sh.cfg.recent[k], *base = strrchr(path, '/');
-            item(m, base && base[1] ? base + 1 : path, "text-x-generic", SH_ACT_DOCUMENT, (int)k, 0);
+            item(m, base && base[1] ? base + 1 : path, du_icon_file(path, 0, 0), SH_ACT_DOCUMENT, (int)k, 0);
         }
         if (!d->sh.cfg.recent_count) item(m, "(Empty)", NULL, SH_ACT_NONE, 0, SH_ITEM_DISABLED);
         separator(m);
@@ -2302,6 +2311,16 @@ static void draw_notification(struct desktop *d,struct desk_box clip)
 #define LABEL_PITCH (desk_font_line(d->sh.cfg.icon_font)-1)
 #define HALO_GAIN 48                                   /* sixteenths: 3x the blurred coverage */
 #define HALO_PEAK 210                                  /* at most 82 % black */
+/* A desktop shortcut shows its target's icon (with the link arrow drawn over it): the Start menu worker's
+ * snapshot of the Desktop folder carries the icon object resolved from each .lnk (customize_io.h). */
+static const char *shortcut_icon(const struct desktop *d, const char *path)
+{
+    const struct sh_folder_snapshot *s = d->sh.custom;
+    if (!s || !path) return NULL;
+    for (unsigned k = 0; k < s->count; k++)
+        if (s->entries[k].parent == SH_ROOT_DESKTOP && s->entries[k].icon[0] && !strcmp(s->entries[k].path, path)) return du_icon_name(s->entries[k].icon);
+    return NULL;
+}
 static void icon_add(struct desktop *d, const char *label, const char *program, const char *argument,
                      const char *icon, int action, int ciuki)
 {
@@ -2385,7 +2404,7 @@ static void icons_build(struct desktop *d)
         char path[FM_PATH]; if (fm_join(path,d->sh.profile.desktop[0] ? d->sh.profile.desktop : DESK_FOLDER,e->name)) return;
         const struct desk_catalog_entry *cat=desk_catalog_file(path);
         icon_add(d,e->name,e->meta.type==FM_DIR ? "files" : cat ? cat->name : "ciuknote",path,
-            e->meta.type==FM_DIR ? "folder" : strlen(e->name)>4 && fm_same_path(e->name+strlen(e->name)-4,".lnk") ? "emblem-symbolic-link" : cat ? cat->tango : "text-x-generic", SH_ACT_LAUNCH,0);
+            e->meta.type==FM_DIR ? "folder" : strlen(e->name)>4 && fm_same_path(e->name+strlen(e->name)-4,".lnk") ? "emblem-symbolic-link" : e->meta.exec ? du_icon_file(e->name,0,1) : cat ? cat->tango : du_icon_file(e->name,0,0), SH_ACT_LAUNCH,0);
         if (d->sh.icon_count!=(int)i+4) return;
         d->sh.icons[i+3].selected=(uint8_t)!!e->selected;
     }
@@ -2629,7 +2648,11 @@ static void draw_icons(struct desktop *d, struct desk_box clip)
             if (link<d->v3_link_count) custom=d->v3_link_icon(d,d->v3_links[link].source,32);
         }
         if (custom) du_icon_blit(&c,ix+(icon_size-32)/2,iy+(icon_size-32)/2,custom,32,selected ? DU_ICON_SELECTED : DU_ICON_NORMAL);
-        else du_icon_blit(&c, ix, iy, desk_shell_icon(ic->icon, icon_size), icon_size, selected ? DU_ICON_SELECTED : DU_ICON_NORMAL);
+        else {
+            const char *target=!strcmp(ic->icon,"emblem-symbolic-link") ? shortcut_icon(d,ic->argument) : NULL;
+            du_icon_blit(&c, ix, iy, desk_shell_icon(target ? target : ic->icon, icon_size), icon_size, selected ? DU_ICON_SELECTED : DU_ICON_NORMAL);
+            if (target) du_icon_blit(&c,ix+icon_size-16,iy+icon_size-16,desk_shell_icon("emblem-symbolic-link",16),16,DU_ICON_NORMAL);
+        }
         const char *extension=strrchr(ic->argument,'.');
         if (strcmp(ic->icon,"emblem-symbolic-link") && (ic->action==SH_ACT_WIN32_LINK || (extension && !strcasecmp(extension,".lnk"))))
             du_icon_blit(&c,ix+icon_size-16,iy+icon_size-16,desk_shell_icon("emblem-symbolic-link",16),16,DU_ICON_NORMAL);   /* G19: the link arrow */
@@ -3354,7 +3377,7 @@ static void draw_drag_image(struct desktop *d, struct desk_box clip)
     unsigned rows = g->count < 4 ? g->count : 4;
     for (unsigned r = 0; r < rows; r++) {
         const struct desk_catalog_entry *cat = g->types[r] == 'D' ? NULL : desk_catalog_file(g->paths[r]);
-        const char *icon = g->types[r] == 'D' ? "folder" : cat ? cat->tango : "text-x-generic";
+        const char *icon = g->types[r] == 'D' ? "folder" : cat ? cat->tango : du_icon_file(g->paths[r], 0, 0);
         int x = image.x, y = image.y + (int)r * 36;
         du_icon_blit(&c, x, y, desk_shell_icon(icon, 32), 32, DU_ICON_GHOST);
         char label[40]; snprintf(label, sizeof(label), "%.39s", fm_basename(g->paths[r]));
