@@ -91,7 +91,9 @@ int main(int argc,char **argv)
 {
     assert(argc<=2);
     disk_ui_scenario(argc==2 ? review_frame : NULL,argc==2 ? argv[1] : NULL);
+    maintenance_ui_scenario(argc==2 ? review_frame : NULL,argc==2 ? argv[1] : NULL);
     lifetimes();
+    puts("PASS G29b maintenance dialogs: analysis/map/Settings, Start/Pause/Stop, write restart, busy, conversion warnings/refusal/cancel/success");
     puts("PASS G29 disk dialogs: worker-only I/O, drive scope, preview, Cancel, confirmation, cleanup, format choices/label/full, busy refusal, allocation warnings and Cleanup action");
     return 0;
 }

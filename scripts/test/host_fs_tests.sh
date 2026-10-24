@@ -48,6 +48,74 @@ run_format_tests() {
     for type in 12 16 32; do fsck.fat -n "$out/fat$type.img"; done
     rm "$out/test_format" "$out/fat12.img" "$out/fat16.img" "$out/fat32.img"
 }
+run_maintenance_mount_tests() {
+    ((missing == 0)) || exit 1
+    local out=build/host/fs/maintenance-mount
+    mkdir -p "$out"
+    truncate -s $(((66640+2048)*512)) "$out/fixed.img"
+    mkfs.fat -F 16 -s 2 -h 2048 --offset 2048 "$out/fixed.img" 33320
+    clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+        -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+        -ffunction-sections -fdata-sections -Wl,--gc-sections \
+        -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c \
+        src/kernel/fs/cache.c src/kernel/fs/partition.c src/kernel/fs/path.c src/kernel/fs/fat.c \
+        src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c src/kernel/fs/iso9660.c src/kernel/fs/ntfs_ro.c \
+        src/kernel/fs/ntfs_fs.c src/kernel/fs/mount.c src/kernel/drivers/blkpart.c \
+        src/kernel/lib/fmt.c tests/host/fs/fake.c tests/host/fs/test_maintenance_mount.c -o "$out/test_mount"
+    "$out/test_mount" "$out/fixed.img"
+    rm "$out/test_mount" "$out/fixed.img"
+}
+if [[ ${1:-} == --maintenance-mount ]]; then
+    run_maintenance_mount_tests
+    exit 0
+fi
+run_convert_tests() {
+    ((missing == 0)) || exit 1
+    local out=build/host/fs/convert
+    mkdir -p "$out"
+    truncate -s $(((66640+2048)*512)) "$out/fixed.img"
+    mkfs.fat -F 16 -s 2 -h 2048 --offset 2048 "$out/fixed.img" 33320
+    clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+        -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+        -ffunction-sections -fdata-sections -Wl,--gc-sections \
+        -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c \
+        src/kernel/fs/cache.c src/kernel/fs/path.c src/kernel/fs/fat.c \
+        tests/host/fs/fake.c tests/host/fs/test_convert.c -o "$out/test_convert"
+    "$out/test_convert" "$out/fixed.img"
+    # Extract only the small fixture partition for the independent checker.
+    dd if="$out/fixed.img" of="$out/volume.img" bs=512 skip=2048 count=66640 status=none
+    fsck.fat -n "$out/volume.img"
+    mdir -i "$out/volume.img" ::
+    rm "$out/test_convert" "$out/fixed.img" "$out/volume.img"
+    run_maintenance_mount_tests
+}
+if [[ ${1:-} == --convert ]]; then
+    run_convert_tests
+    exit 0
+fi
+run_defrag_tests() {
+    ((missing == 0)) || exit 1
+    local out=build/host/fs/defrag type size
+    mkdir -p "$out"
+    for type in 12 16 32; do
+        case $type in 12) size=1440K;; 16) size=16M;; 32) size=64M;; esac
+        truncate -s "$size" "$out/fat$type.img"
+        mkfs.fat -F "$type" -s 1 "$out/fat$type.img"
+    done
+    clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+        -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+        -ffunction-sections -fdata-sections -Wl,--gc-sections \
+        -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c \
+        src/kernel/fs/cache.c src/kernel/fs/path.c src/kernel/fs/fat.c \
+        tests/host/fs/fake.c tests/host/fs/scan.c tests/host/fs/test_defrag.c -o "$out/test_defrag"
+    "$out/test_defrag" "$out/fat12.img" "$out/fat16.img" "$out/fat32.img"
+    for type in 12 16 32; do fsck.fat -n "$out/fat$type.img"; done
+    rm "$out/test_defrag" "$out/fat12.img" "$out/fat16.img" "$out/fat32.img"
+}
+if [[ ${1:-} == --defrag ]]; then
+    run_defrag_tests
+    exit 0
+fi
 if [[ ${1:-} == --format ]]; then
     run_format_tests
     exit 0
@@ -393,6 +461,8 @@ done
 python3 tests/host/fs/test_crash_classifier.py
 python3 tests/host/fs/classify_crashes.py
 run_format_tests
+run_defrag_tests
+run_convert_tests
 python3 - <<'PY'
 from pathlib import Path
 root=Path('build/host/fs')

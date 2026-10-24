@@ -2676,3 +2676,135 @@ int fat_transaction_run(struct fat_volume *source, const struct fat_transaction_
     transaction_free(t);
     return e;
 }
+
+/* G29b: whole-file COW relocation, under the caller's exclusive volume
+ * reservation. The old chain remains owned until update() is durable. */
+static void defrag_mark(struct fat_volume *v, struct fat_defrag_info *info, uint32_t c, uint8_t bits)
+{
+    unsigned cell=(unsigned)(((uint64_t)(c-2)*FAT_DEFRAG_CELLS)/v->clusters);
+    info->map[cell]|=bits;
+}
+static int defrag_chain(struct fat_volume *v, uint32_t first, uint32_t *count,
+                        bool *fragmented, struct fat_defrag_info *info, uint8_t bits)
+{
+    *count=0; *fragmented=false;
+    if (!first) return 0;
+    for (uint32_t c=first;*count<v->clusters;) {
+        if (!valid(v,c)) return -FS_EIO;
+        if (!(*count&127)) fs_service();
+        uint32_t n; int e=fat_get_cluster(v,c,&n); if (e) return e;
+        (*count)++;
+        if (info) defrag_mark(v,info,c,bits);
+        if (eoc(v,n)) return 0;
+        if (n!=c+1) *fragmented=true;
+        c=n;
+    }
+    return -FS_EIO;
+}
+/* Ordinal traversal never accepts a directory slot or cluster from userspace.
+ * Rewalking is deliberate: other callers cannot forge a target directory. */
+static int defrag_walk(struct fat_volume *v, struct fat_defrag_info *info,
+                        uint32_t ordinal, struct fat_entry *target)
+{
+    struct { uint32_t dir, cursor; } stack[SCAN_DEPTH];
+    unsigned depth=1; uint32_t index=0;
+    stack[0].dir=0; stack[0].cursor=0;
+    while (depth) {
+        fs_service();
+        struct fat_entry file;
+        int e=fat_next(v,stack[depth-1].dir,&stack[depth-1].cursor,&file);
+        if (e==-FS_ENOENT) { depth--; continue; }
+        if (e) return e;
+        if (path_equal(file.alias,".") || path_equal(file.alias,"..")) continue;
+        if (!(file.attr&FAT_ATTR_DIR) && target && index++==ordinal) { *target=file; return 0; }
+        if (info) {
+            uint32_t count; bool fragmented;
+            e=defrag_chain(v,file.first,&count,&fragmented,info,
+                file.attr&FAT_ATTR_DIR ? FAT_MAP_DIRECTORY : FAT_MAP_USED);
+            if (e) return e;
+            if (!(file.attr&FAT_ATTR_DIR) && file.size) {
+                info->files++;
+                if (fragmented) {
+                    info->fragmented++;
+                    e=defrag_chain(v,file.first,&count,&fragmented,info,FAT_MAP_FRAGMENTED);
+                    if (e) return e;
+                }
+            }
+        }
+        if (file.attr&FAT_ATTR_DIR) {
+            if (depth==SCAN_DEPTH) return -FS_EIO;
+            stack[depth].dir=file.first; stack[depth++].cursor=0;
+        }
+    }
+    return target ? 1 : 0;
+}
+int fat_defrag_analyze(struct fat_volume *v, struct fat_defrag_info *info)
+{
+    if (!v || !info || !v->mounted || !v->clusters) return -FS_EINVAL;
+    memset(info,0,sizeof(*info)); info->clusters=v->clusters;
+    for (uint32_t c=2;c<v->clusters+2;c++) {
+        if (!(c&127)) fs_service();
+        uint32_t n; int e=fat_get_cluster(v,c,&n); if (e) return e;
+        if (!n) info->free_clusters++;
+        defrag_mark(v,info,c,!n ? FAT_MAP_FREE : n==mask(v)-8 ? FAT_MAP_BAD : FAT_MAP_USED);
+    }
+    if (v->type==32) {
+        uint32_t count; bool fragmented;
+        int e=defrag_chain(v,v->root,&count,&fragmented,info,FAT_MAP_DIRECTORY); if (e) return e;
+    }
+    return defrag_walk(v,info,0,0);
+}
+int fat_defrag_step(struct fat_volume *v, uint32_t ordinal, uint64_t expected, bool *moved)
+{
+    if (!v || !moved || !v->mounted || v->transaction || v->transactions) return -FS_EINVAL;
+    *moved=false;
+    if (expected!=v->mutation_sequence) return -FS_EAGAIN;
+    int e=writable(v); if (e) return e;
+    /* A cheap clean mount/removable insertion has not proved ownership.
+     * Even with the optional early check off, reclaiming a source chain
+     * requires that proof (a cross-link must never free another file). */
+    if (v->scan_deferred || v->scan_fast || !v->scan_complete) {
+        if ((e=fat_scan(v))) return e;
+        if (v->ro_reasons&(FAT_RO_CORRUPT|FAT_RO_COPIES|FAT_RO_LOST)) return -FS_EROFS;
+        fat_census_end(v); v->free_unknown=false;
+    }
+    struct fat_entry file;
+    e=defrag_walk(v,0,ordinal,&file); if (e) return e;
+    if (!file.size || !file.first) return 0;
+    uint32_t count; bool fragmented;
+    if ((e=defrag_chain(v,file.first,&count,&fragmented,0,0))) return e;
+    if (!fragmented) return 0;
+    uint32_t bytes=(uint32_t)v->spc*512;
+    /* Preallocated/excess-tail files belong to the checker, not this tool. */
+    if (count!=file.size/bytes+(file.size%bytes!=0)) return -FS_EIO;
+    uint32_t run=0, first=0;
+    for (uint32_t c=2;c<v->clusters+2;c++) {
+        if (!(c&127)) fs_service();
+        uint32_t n; if ((e=fat_get_cluster(v,c,&n))) return e;
+        run=n ? 0 : run+1;
+        if (run==count) { first=c-count+1; break; }
+    }
+    if (!first) return 0; /* Fragmentation is still reported after the pass. */
+    uint8_t data[512]; uint32_t old=file.first;
+    if ((e=publication_stage(v,FAT_P_DATA))) return e;
+    for (uint32_t i=0,c=old;i<count;i++) {
+        for (unsigned s=0;s<v->spc;s++) {
+            if ((e=readsec(v,cluster_sector(v,c)+s,data)) ||
+                (e=writesec(v,cluster_sector(v,first+i)+s,data))) return e;
+        }
+        uint32_t n; if ((e=fat_get_cluster(v,c,&n))) return e; c=n;
+    }
+    if ((e=barrier(v)) || (e=publication_stage(v,FAT_P_CHAIN))) return e;
+    for (uint32_t i=0;i<count;i++)
+        if ((e=set_cluster(v,first+i,i+1==count ? mask(v) : first+i+1))) return e;
+    if ((e=barrier(v))) return e;
+    v->free_clusters-=count;
+    file.first=first;
+    if ((e=update(v,&file))) return e;
+    /* Directory publication has completed. Reclaim cannot damage its data. */
+    if ((e=release_chain(v,old)) || (e=hints(v))) return e;
+    *moved=true;
+    return 0;
+}
+
+#include "fat_convert.inc"

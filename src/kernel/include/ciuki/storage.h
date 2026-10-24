@@ -124,6 +124,10 @@ int storage_remove_removable_locked(struct storage *, struct blkdev *, bool surp
  * Record is already copied, returns FS errors; physical generation required. */
 struct ciuki_media_format;
 int storage_format_removable(struct storage *, struct ciuki_media_format *, bool execute);
+struct ciuki_media_defrag;
+int storage_defrag(struct storage *, struct ciuki_media_defrag *, bool step);
+struct ciuki_media_convert;
+int storage_convert(struct storage *, struct ciuki_media_convert *, bool execute);
 int storage_add_ro(struct storage *, unsigned slot, struct blkdev *, uint64_t session);
 int storage_add_ro_locked(struct storage *, unsigned slot, struct blkdev *, uint64_t session);
 void storage_refresh_ro(struct storage *);

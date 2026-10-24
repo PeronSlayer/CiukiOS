@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT
  * G29 disk dialogs. Included by app.c; no filesystem I/O in a UI callback. */
 #include "cleanup.h"
+#include "maintenance_ui.inc"
 
 enum {
     D_DISK_SCAN=212, D_CLEANUP, D_CLEAN_CONFIRM, D_DISK_PROGRESS,
@@ -29,7 +30,7 @@ static const char *const disk_categories[]={"Temporary files (older than one wee
 static int disk_cancelled(void *ctx)
 { struct files_disk *w=ctx; return __atomic_load_n(&w->cancel,__ATOMIC_ACQUIRE); }
 int files_disk_busy(const struct files_app *a)
-{ return a->disk && a->disk->started; }
+{ return (a->disk && a->disk->started) || maintenance_busy(a); }
 static void disk_publish(struct files_disk *w)
 {
     struct fm_cleanup_progress p; fm_cleanup_progress(w->cleanup,&p);
@@ -82,6 +83,7 @@ static int disk_launch(struct files_app *a,int mode)
 }
 static void disk_stop(struct files_app *a)
 {
+    maintenance_stop(a);
     struct files_disk *w=a->disk;
     if (!w) return;
     __atomic_store_n(&w->cancel,1,__ATOMIC_RELEASE);
@@ -91,6 +93,15 @@ static void disk_stop(struct files_app *a)
 }
 static int disk_close_request(struct files_app *a)
 {
+    if (maintenance_busy(a)) {
+        struct files_maintenance *m=a->maintenance;
+        if (m->mode==M_CONVERT) { if (a->close_declined) a->close_declined(a); }
+        else {
+            a->close_pending=1; pthread_mutex_lock(&m->lock); m->stop=1; m->pause=0;
+            pthread_cond_broadcast(&m->changed); pthread_mutex_unlock(&m->lock);
+        }
+        return 0;
+    }
     struct files_disk *w=a->disk;
     if (w->mode==DISK_FORMAT_RUN) {
         if (a->close_declined) a->close_declined(a);
@@ -209,6 +220,7 @@ static void disk_format_options(struct files_app *a)
 }
 static int disk_dialog_result(struct files_app *a,const struct du_event *e)
 {
+    if (maintenance_result(a,e)) return 1;
     struct files_disk *w=a->disk;
     if (!w || e->id<D_DISK_SCAN || e->id>D_DISK_SUMMARY) return 0;
     switch (e->id) {
@@ -241,6 +253,7 @@ static void disk_allocation_completed(struct files_app *a)
 }
 static void disk_service(struct files_app *a)
 {
+    maintenance_service(a);
     struct files_disk *w=a->disk;
     if (w && w->started) {
         pthread_mutex_lock(&w->lock); int done=w->done,error=w->error; struct fm_cleanup_progress view=w->view; pthread_mutex_unlock(&w->lock);
@@ -279,7 +292,8 @@ static void disk_service(struct files_app *a)
     }
     if (a->disk_pending && !a->reading && !a->loading && !a->job_active && !du_dialog_id(a->ui) && !files_disk_busy(a)) {
         int pending=a->disk_pending; unsigned drive=(unsigned)a->disk_drive; a->disk_pending=0;
-        if (pending!=3) (void)files_disk_open(a,drive,pending==2);
+        if (pending==4 || pending==5) (void)files_maintenance_open(a,drive,pending==5);
+        else if (pending!=3) (void)files_disk_open(a,drive,pending==2);
         else {
             disk_stop(a); w=calloc(1,sizeof(*w)); if (!w) return;
             int e=pthread_mutex_init(&w->lock,NULL); if (e) { free(w); return; }
