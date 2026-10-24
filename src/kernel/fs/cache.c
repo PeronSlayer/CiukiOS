@@ -1163,7 +1163,13 @@ int cache_publish(struct cache_reservation *r, const struct cache_image *images,
         seen|=1u<<images[i].slot;
     }
     struct block_cache *c=r->cache;
-    if (!fs_lock_try_take(&c->lock)) return -FS_EAGAIN;
+    /* Queue for metadata in the established VFS -> cache order (as peek
+     * does). A try-lock here livelocks two native FIFO publishers: each
+     * retry's cache_reservation_wait serves the other's queued ticket, so
+     * neither following try-lock can succeed. No device/credit/pin/barrier
+     * wait happens under this lock; those still return EAGAIN below. */
+    int admission=fs_lock_take_request(&c->lock,VFS_WAIT_CACHE);
+    if (admission) return admission;
     struct cache_device *s; int e=reservation_status(r,&s);
     if (!e && (dependency>s->accepted || r->unassigned)) e=-FS_EINVAL;
     if (!e && (s->barrier_active || s->durable<dependency || s->durable<r->published)) e=-FS_EAGAIN;

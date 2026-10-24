@@ -204,6 +204,7 @@ int shell_fcntl(int fd, int command, ...)
 static int media_available, media_error, media_query_error;
 static struct ciuki_media_state media_fixture;
 static struct ciuki_media_volume media_volumes[26];
+static unsigned media_fixture_serial=1,media_observed_serial;
 #define MEDIA_FD 1002
 static int network_available, network_error;
 static unsigned network_opens, network_closes, network_queries;
@@ -387,6 +388,7 @@ int ciuki_devctl(int fd,uint32_t op,void *record,uint32_t size)
         if (op==MEDIA_GET_STATE) {
             assert(size==sizeof(media_fixture));
             if (media_query_error) { errno=EIO;return -1; }
+            __atomic_store_n(&media_observed_serial,__atomic_load_n(&media_fixture_serial,__ATOMIC_ACQUIRE),__ATOMIC_RELEASE);
             memcpy(record,&media_fixture,size);return 0;
         }
         if (op==MEDIA_GET_VOLUME) {
@@ -1458,6 +1460,7 @@ int main(int argc,char **argv)
 {
     if (argc==2 && !strcmp(argv[1],"--g26c-path")) { test_g26c_path_queue();return 0; }
     if (argc==2 && !strcmp(argv[1],"--slow-media-panel")) { test_slow_media_panel(); return 0; }
+    if (argc==2 && !strcmp(argv[1],"--late-media")) { test_late_media(); return 0; }
 #ifdef DESK_POLL_LEDGER_TEST
     if (argc==2 && !strcmp(argv[1],"--poll-handles")) { test_poll_handles(); return 0; }
 #endif

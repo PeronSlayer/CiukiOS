@@ -383,6 +383,7 @@ static void test_irq_restore(uint32_t f) {
                 ('control_display_wait_test.c', ['apps/control/display.c']),
                 ('timer_audio_load_test.c', []),
                 ('fs/wait_latency_test.c', []),
+                ('fs/publish_fifo_test.c', []),
                 # f1-98: desktop minimum share and reservation-holder boost
                 # on the T23 b453bc92 replay model (negative controls inside).
                 ('t23_desktop_share_test.c', []),

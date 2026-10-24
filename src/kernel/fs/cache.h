@@ -181,8 +181,9 @@ struct cache_reservation {
 struct cache_image { unsigned slot; const void *data; };
 int cache_reserve(struct block_cache *, struct blkdev *,
                   const struct cache_reserve_sector *, unsigned, struct cache_reservation *);
-/* All-or-nothing, including failures. EAGAIN means leave the guard before
- * cache_reservation_wait/retry. No event wait, service point or transport.
+/* All-or-nothing, including failures. FIFO admission to the bookkeeping
+ * mutex follows VFS -> cache order. EAGAIN means leave the guard before
+ * cache_reservation_wait/retry; no credit/pin/barrier wait or transport.
  * dependency is an accepted frontier from this reservation's device epoch.
  * Success returns the new accepted frontier in reservation->published. */
 int cache_publish(struct cache_reservation *, const struct cache_image *, unsigned, uint64_t dependency);

@@ -24,6 +24,14 @@ static int flush_disk(struct blkdev *d) { (void)d; commands++; return 0; }
 static struct blkdev dev={.read=read_disk,.write=write_disk,.flush=flush_disk,
     .capacity=64,.sector_size=512,.write_cache_state=BLKDEV_CACHE_ENABLED};
 static void *barrier_thread(void *arg) { (void)arg; assert(!cache_barrier(&cache,&dev)); return 0; }
+struct publication_call { struct cache_reservation *reservation; const struct cache_image *images;
+    unsigned count; int result; atomic_bool started,done; };
+static void *publication_thread(void *arg) {
+    struct publication_call *call=arg;
+    atomic_store(&call->started,true);
+    call->result=cache_publish(call->reservation,call->images,call->count,0);
+    atomic_store(&call->done,true); return 0;
+}
 int main(void) {
     assert(!cache_init(&cache,8192));
     uint8_t before[512],first[512],second[512],readback[512];
@@ -38,11 +46,16 @@ int main(void) {
     assert(r.blocks[0]->lba==3 && r.blocks[1]->lba==5);
     struct cache_image images[]={{0,first},{1,second}};
     unsigned old=commands;
+    /* Publication queues for another task's metadata mutex. Recursive
+     * cache acquisition is invalid; it is not a publication retry reason. */
     fs_lock_take(&cache.lock);
-    assert(cache_publish(&r,images,2,0)==-FS_EAGAIN);
-    fs_lock_drop(&cache.lock);
+    struct publication_call publication={.reservation=&r,.images=images,.count=2}; pthread_t publisher;
+    assert(!pthread_create(&publisher,0,publication_thread,&publication));
+    while (!atomic_load(&publication.started)) sched_yield();
+    assert(!atomic_load(&publication.done));
     assert(commands==old && !cache.dirty_bytes && !memcmp(r.blocks[0]->data,before,512));
-    assert(!cache_publish(&r,images,2,0) && commands==old);
+    fs_lock_drop(&cache.lock); assert(!pthread_join(publisher,0));
+    assert(!publication.result && atomic_load(&publication.done) && commands==old);
     assert(cache.dirty_bytes==1024 && !cache.reserved_bytes);
     assert(r.blocks[0]->order==r.group && r.blocks[1]->order==r.group);
     uint64_t detached=r.published;
@@ -100,6 +113,6 @@ int main(void) {
     assert(!cache_publish(&r,chunk2,1,0) && r.group>group); cache_release(&r);
     assert(!cache_barrier(&cache,&dev) && !memcmp(disk[41],fill_image,512) && !memcmp(disk[40],fill_image,512));
     cache_destroy(&cache); assert(!blk_request_pool_host_cleanup());
-    puts("PASS reserved cache: cold pins, eviction, atomic failure, no-wait publication, active barrier, repeated-sector dependency, credits, abort and generation fencing, fill without read, shared group only while latest");
+    puts("PASS reserved cache: cold pins, eviction, atomic failure, FIFO metadata admission, active barrier, repeated-sector dependency, credits, abort and generation fencing, fill without read, shared group only while latest");
     return 0;
 }
