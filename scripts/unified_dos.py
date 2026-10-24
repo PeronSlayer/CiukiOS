@@ -619,13 +619,31 @@ def reference_module():
 FORK_QUALIFIED = ROOT / "build/unified-dos/fork-qualified.json"
 
 
+SESSION_SHELL_REFERENCE = b"C:\\COMMAND.COM C:\\ /P=C:\\FDAUTO.BAT /E:1024\r\n"
+SESSION_SHELL_LINE = b"C:\\CIUKISH.COM\r\n"
+
+
+def session_shell():
+    """CIUKISH.COM, assembled from src/com/dossh.asm (deterministic nasm -f bin)."""
+    import subprocess, tempfile
+    with tempfile.TemporaryDirectory(prefix="dossh-") as temporary:
+        out = Path(temporary) / "CIUKISH.COM"
+        subprocess.run(["nasm", "-f", "bin", str(ROOT / "src/com/dossh.asm"), "-o", str(out)], cwd=ROOT, check=True)
+        return out.read_bytes()
+
+
 def fork_config(ref):
     """kernel=unified CONFIG for the fork: the reference profile plus the
     DFV2 control driver (f3-57). DOS=LOW stays required (f3-56 Amendment 1)."""
     marker = b"SHELL="
     if ref.CONFIG.count(marker) != 1 or not ref.CONFIG.startswith(b"DOS=LOW\r\n"):
         raise ValueError("reference CONFIG layout changed")
-    return ref.CONFIG.replace(marker, b"DEVICE=C:\\CIUKIDF.SYS\r\n" + marker)
+    head, shell_line = ref.CONFIG.split(marker)
+    if shell_line != SESSION_SHELL_REFERENCE:
+        raise ValueError("reference SHELL= line changed")
+    # DOS Box session: the primary FreeCOM with /P ignores EXIT, so the guest
+    # boots the CIUKISH.COM wrapper that runs it non-permanently (/K FDAUTO.BAT).
+    return head + b"DEVICE=C:\\CIUKIDF.SYS\r\n" + marker + SESSION_SHELL_LINE
 
 
 def fork_guest_files(qualified=FORK_QUALIFIED):
@@ -659,6 +677,7 @@ def fork_guest_files(qualified=FORK_QUALIFIED):
     files["/KERNEL.SYS"] = kernel
     files["/CIUKIDF.SYS"] = driver
     files["/FDCONFIG.SYS"] = config
+    files["/CIUKISH.COM"] = session_shell()
     files["/D48/KERNEL.LIC"] = sources()["COPYING"]
     identity["kernel"] = dict(version="2043", personality="ciukidos-fork", sha256=sha(kernel),
                               license="GPL-2.0-or-later", license_sha256=sha(files["/D48/KERNEL.LIC"]),
@@ -853,6 +872,8 @@ def readback(read, identity, license_files):
     config = fork_config(ref) if identity.get("profile", {}).get("ifs") else ref.CONFIG
     if read("/FDCONFIG.SYS") != config or read("/FDAUTO.BAT") != ref.AUTO:
         raise ValueError("unified profile read-back mismatch")
+    if identity.get("profile", {}).get("ifs") and read("/CIUKISH.COM") != session_shell():
+        raise ValueError("unified read-back mismatch: CIUKISH.COM")
     driver = identity["kernel"].get("driver")
     if driver and sha(read("/" + driver["name"])) != driver["sha256"]:
         raise ValueError("unified read-back mismatch: CIUKIDF.SYS")
