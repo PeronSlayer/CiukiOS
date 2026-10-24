@@ -1998,6 +1998,29 @@ struct ciuki_surface_info {
 #define CIUKI_DISPLAY_VERSION 1
 #define CIUKI_DISPLAY_QUERY 0u
 #define CIUKI_DISPLAY_SET 1u
+/* G10: shared screen policy and serialized monitor power, syscall 74. */
+#define CIUKI_DISPLAY_SCREEN 2u
+#define CIUKI_DISPLAY_DPMS 3u
+#define CIUKI_SCREEN_VERSION 1u
+#define CIUKI_SCREEN_CONFIG 1u
+#define CIUKI_SCREEN_STATUS 2u
+#define CIUKI_SCREEN_PERSIST 1u
+struct ciuki_screen_control {
+    uint32_t version;
+    uint32_t size;
+    uint32_t action;
+    int32_t value;
+    uint32_t flags;
+    uint32_t enabled;
+    uint32_t timeout;
+    uint32_t saver;
+    uint32_t monitor_seconds;
+    uint32_t running;
+    uint32_t sequence;
+    uint32_t command;
+    int32_t argument;
+    uint32_t inhibited; /* DOS or delegated game display ownership */
+};
 struct ciuki_display_mode {
     uint16_t id;
     uint16_t width;

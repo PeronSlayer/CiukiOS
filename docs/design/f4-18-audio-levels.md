@@ -217,7 +217,38 @@ amplifier are one volume.
   popup refresh): the system volume is the codec/software master only and
   the keys drive the amplifier under firmware control, unmirrored.
 - No CMOS NVRAM checkpoint (Linux `tpacpi_volume_checkpoint_nvram`, byte
-  60h): the saved master re-applies the level at every boot instead.
+  60h): the saved master re-applies the level at every boot instead
+  (fx-26 reads the byte as a key trigger only).
+
+Amendment fx-26 (2026-10-23, T23 trial f441c5bd: the volume popup and its
+notification always lagged). A key press reached the master only at the
+next 2 s RD_EC, and the desktop read the master every 250 ms. Now:
+
+- Key watch: the EC worker reads CMOS NVRAM byte 60h every 100 ms through
+  the platform's CMOS accessor (`fs_cmos_read`, fs_port.c; two port
+  accesses in a short irq-save section, no EC transaction, so no EC event
+  SMI). IBM firmware keeps its mixer state there in the layout of register
+  30h, and bit 7 toggles on every volume key (Linux v6.12 thinkpad_acpi.c
+  `TP_NVRAM_ADDR_MIXER`, `TPACPI_VOL_MODE_ECNVRAM`, 10 Hz hotkey poll).
+  Any change of the byte triggers one RD_EC at once; register 30h stays the
+  truth (the byte is only a trigger, never written).
+- Active cadence: after any mirrored key change the EC is read every
+  250 ms for 3 s, so a burst the NVRAM does not show still follows quickly;
+  then the 2 s poll alone. Key-driven reads are spaced by at least 100 ms
+  (at most ten RD_EC, about 21 ms of SMI per second on the T23, only while
+  keys are pressed). Idle traffic is unchanged: one RD_EC per 2 s.
+- The master is pollable (`/dev/mixer` POLLIN until a description has read
+  it, execution ABI fx-26 amendment) and every change wakes `poll()`: the
+  tray reads it on that loop turn and draws the popup and the notification
+  on the next frame.
+- `ecpoll=0` keeps no watch and no EC traffic; the boot probe and the
+  f1-100 bounds are unchanged.
+- Records: `[ec] thinkpad keys watch_ms=100 source=nvram active_ms=250
+  hold_ms=3000 trigger_ms=100` at start and `[ec] thinkpad keys
+  nvram_polls=... nvram_changes=... triggered=... active_reads=...
+  missed=... nvram=.. ec=..` in windows with key activity (`missed`: a
+  change found by a poll the NVRAM did not show first). Whether the T23
+  updates byte 60h in legacy (non-ACPI) mode is for the next trial to show.
 
 The worker survives runtime deactivation. Initial identity, resource-claim and
 stable-handshake gates remain fail-closed; this change recovers an EC already

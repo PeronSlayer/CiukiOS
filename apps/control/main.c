@@ -58,6 +58,15 @@ struct cp_main { struct cp_network_worker network_worker; struct cp_app app; str
     uint64_t tick_next;
 };
 
+/* Optional in host-only panel harnesses; production links startup.c. */
+__attribute__((weak)) int desk_startup_list_at(const char *folder,const char *registry,struct desk_startup_entry *out,unsigned cap)
+{ (void)folder; (void)registry; (void)out; (void)cap; return -ENOSYS; }
+__attribute__((weak)) int desk_startup_enable_at(const char *registry,const struct desk_startup_entry *entry,int enabled)
+{ (void)registry; (void)entry; (void)enabled; return -ENOSYS; }
+static int startup_list(void *ctx,struct desk_startup_entry *out,unsigned cap)
+{ (void)ctx; return desk_startup_list_at(DESK_STARTUP_FOLDER,"/System/Registry",out,cap); }
+static int startup_enable(void *ctx,const struct desk_startup_entry *entry,int enabled)
+{ (void)ctx; return desk_startup_enable_at("/System/Registry",entry,enabled); }
 static void programs_poll(struct cp_main *);
 /* All applet jobs share one bounded notification channel. Queue saturation
  * already means readable; other send failures close the peer and wake HUP.
@@ -782,6 +791,7 @@ int main(int argc, char **argv)
     struct cp_host *h = &m->app.host;
     h->pack_scan=pack_scan; h->pack_preview=pack_preview;
     h->pack_install=pack_install; h->pack_remove=pack_remove;
+    h->startup_list=startup_list; h->startup_enable=startup_enable;
     h->uninstall_list=win32_uninstall_list; h->program_remove=program_remove;
     h->program_install=program_install;h->programs_changed=programs_changed;
     h->sound_validate=sound_validate; h->sound_schemes=sound_schemes; h->sound_scheme=sound_scheme;

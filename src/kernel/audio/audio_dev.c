@@ -14,6 +14,26 @@
 #include <ciuki/task.h>
 #pragma weak sched_audio_producer_stats /* f1-101: task.c, absent in audio-only hosts */
 static struct vfs *settings_vfs;
+/* fx-26: poll readiness of /dev/mixer (Windows 98 mixer drivers notify a
+ * mixerOpen(CALLBACK_WINDOW) client with MM_MIXM_CONTROL_CHANGE when a
+ * control changes; here POLLIN tells the tray to read the master now). The
+ * fingerprint covers the whole record, so every writer of audio.master is
+ * seen; master_changed wakes poll() at once on the paths that change it. */
+extern void net_input_changed(void) __attribute__((weak));
+static uint32_t master_fingerprint(const struct ciuki_mixer_master *m)
+{
+    const uint8_t *p = (const uint8_t *)m; uint32_t h = 2166136261u;
+    for (unsigned i = 0; i < sizeof(*m); i++) h = (h ^ p[i]) * 16777619u;
+    return h;
+}
+static void master_changed(void) { if (net_input_changed) net_input_changed(); }
+int audio_mixer_poll_events(struct file_description *d)
+{
+    struct ciuki_mixer_master m = audio.master;
+    return !d->observed_valid || d->observed != master_fingerprint(&m) ? POLLIN : 0;
+}
+static void master_observed(struct file_description *d, const struct ciuki_mixer_master *m)
+{ d->observed = master_fingerprint(m); d->observed_valid = true; }
 /* fx-5: service nests control (power quiesce, worker error path, refill
  * failure). sync.h orders mutexes by increasing (level, address), so both
  * live in one struct declared in acquisition order. As two statics, the T23
@@ -147,12 +167,13 @@ int audio_master_set(struct ciuki_mixer_master *m)
     audio.master.save_error = err;
     *m = audio.master;
     kmutex_unlock(&audio_lock.control);
+    master_changed();
     return 0;
 }
 static void master_refresh(bool requested)
 {
     kmutex_lock(&audio_lock.control);
-    struct ciuki_mixer_master m = audio.master;
+    struct ciuki_mixer_master m = audio.master, before = audio.master;
     bool hardware = audio.master_in_hardware;
     int changed = requested ? thinkpad_ec_master_refresh(&m) : thinkpad_ec_master_poll(&m);
     if (changed > 0 || hardware != audio.master_in_hardware) {
@@ -179,7 +200,9 @@ static void master_refresh(bool requested)
             audio.master = m;
         }
     }
+    bool changed_master = memcmp(&before, &audio.master, sizeof(before)) != 0;
     kmutex_unlock(&audio_lock.control);
+    if (changed_master) master_changed(); /* fx-26: the tray reads it on its next turn */
 }
 /* fx-9b: orderly shutdown (power.c, before the storage flush), in the
  * caller's context (the desktop's call 73, normal priority): a key-applied
@@ -198,6 +221,7 @@ int audio_settings_flush(void)
         }
     }
     kmutex_unlock(&audio_lock.control);
+    if (!err) master_changed();
     return err;
 }
 void audio_master_refresh(void) { master_refresh(false); }
@@ -1036,17 +1060,19 @@ int audio_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, u
         }
         break;
     }
-    case MIXER_GET_MASTER: memcpy(record, &audio.master, size); break;
+    case MIXER_GET_MASTER: memcpy(record, &audio.master, size); master_observed(d, (struct ciuki_mixer_master *)record); break;
     case MIXER_REFRESH_MASTER:
         /* f1-100: an explicit user action (volume popup) asks the EC worker
          * for one hardware read; no periodic EC traffic. The reply is the
          * current master; the refreshed one follows in later reads. */
         if (!d->mixer_control) { err = -EACCES; break; }
         thinkpad_ec_refresh_request();
-        memcpy(record, &audio.master, size); break;
+        memcpy(record, &audio.master, size); master_observed(d, (struct ciuki_mixer_master *)record); break;
     case MIXER_GET_DIAGNOSTICS: audio_diagnostics((struct ciuki_audio_diagnostics *)record); break;
     case MIXER_SET_MASTER:
-        err = !d->mixer_control ? -EACCES : audio_master_set((struct ciuki_mixer_master *)record); break;
+        err = !d->mixer_control ? -EACCES : audio_master_set((struct ciuki_mixer_master *)record);
+        if (!err) master_observed(d, (struct ciuki_mixer_master *)record);
+        break;
     }
     if (!err) err = copy_to_user(address, record, size);
     operation_end(o); return err;

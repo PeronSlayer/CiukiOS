@@ -9,6 +9,7 @@
 #include "../libdeskui/textarea.h"
 #include "../desktop/settings.h"
 #include "../desktop/shell_link.h"
+#include "../desktop/startup.h"
 #include "../desktop/sounds.h"
 #include "../desktop/autoplay.h"
 #include "../desktop/wallpaper.h"
@@ -27,12 +28,17 @@
 #define CP_PACK_PREVIEW 1453
 #define CP_PACK_CONFIRM_REMOVE 1454
 #define CP_PACK_FILES 1455
+#define CP_STARTUP_LIST 1470
+#define CP_STARTUP_ENABLED 1471
+#define CP_STARTUP_REFRESH 1472
+#define CP_STARTUP_NOTE 1473
 #define CP_PROGRAM_MAX 96u
 #define CP_WIDTH 560
 #define CP_HEIGHT 420
 #define CP_WALLPAPERS 40
-enum { CP_BACKGROUND, CP_APPEARANCE, CP_SCREEN_SETTINGS, CP_DISPLAY_TABS };
+enum { CP_BACKGROUND, CP_APPEARANCE, CP_SCREEN_SETTINGS, CP_SCREEN_SAVER, CP_DISPLAY_TABS };
 enum { CP_DISPLAY_TABS_ID = 960, CP_OK, CP_CANCEL, CP_CATEGORY, CP_POWER_ACTION, CP_OPEN_LOG, CP_LOG_PREV, CP_LOG_NEXT, CP_LOG_VIEW, CP_LOG_STATUS };
+enum { CP_SAVER_KIND=1980, CP_SAVER_ENABLE, CP_SAVER_WAIT, CP_SAVER_PREVIEW, CP_MONITOR_WAIT, CP_SAVER_NOTE, CP_SAVER_SETTINGS };
 #define CP_LOG_BYTES 8192u
 #define CP_LOG_FILE "/system/logs/BOOT.LOG"
 #define CP_FONTS_MAX 32
@@ -124,6 +130,8 @@ struct cp_host {
     int (*autoplay_forget)(void *, const char *);
     /* f5-07A RPC adapter; enumerate HKLM and HKCU Uninstall, never open hives.
      * Run re-resolves the selected key and command at the service. */
+    int (*startup_list)(void *, struct desk_startup_entry *, unsigned);
+    int (*startup_enable)(void *, const struct desk_startup_entry *, int);
     int (*uninstall_list)(void *, struct desk_uninstall_entry *, unsigned);
     int (*uninstall_run)(void *, const char *key);
     int (*program_remove)(void *,const struct desk_uninstall_entry *);
@@ -155,6 +163,7 @@ struct cp_app {
 
     struct cp_network_result network;
     struct ciuki_net_config network_edit;
+    struct du_item saver_items[3];
     struct du_item network_items[2], network_tabs[3];
     char network_names[2][64], network_message[96], network_test_name[128];
     unsigned network_selected, network_tab;
@@ -216,13 +225,16 @@ struct cp_app {
     uint64_t snapshot_time;
     unsigned collapsed;
     uint32_t selected_device_id;
-    struct du_item applet_items[CP_PAGES], system_tabs[4];
+    struct du_item applet_items[CP_PAGES], system_tabs[5];
     struct du_item tree_items[CP_TREE_MAX], driver_items[CIUKI_DRIVERS_MAX], lease_items[CIUKI_LEASES_MAX];
     int tree_device[CP_TREE_MAX]; unsigned tree_count;
     char device_names[CIUKI_DEVICES_MAX][96];
     char driver_bound[CIUKI_DRIVERS_MAX][16], lease_range[CIUKI_LEASES_MAX][48], lease_gen[CIUKI_LEASES_MAX][16];
     char boot_text[CP_BOOT_MAX]; size_t boot_length;
     int boot_ok, serial_next;
+    struct desk_startup_entry *startup;
+    struct du_item startup_items[DESK_STARTUP_MAX];
+    int startup_count, startup_selected;
     int quit;
     struct ciuki_display_info display;
     struct du_item area_items[32], depth_items[3];

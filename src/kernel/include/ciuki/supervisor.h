@@ -21,6 +21,10 @@ void supervisor_capture_tail(const struct supervisor_capture *c, uint8_t *out);
 void supervisor_bootstrap(void);
 void supervisor_poll(void);
 uint32_t supervisor_desktop_deaths(void);
+/* G13: restarts of the crashed desktop in the current window; a desktop is
+ * running or being restarted. */
+uint32_t supervisor_desktop_restarts(void);
+bool supervisor_desktop_expected(void);
 /* PID of the live bootstrap/probe desktop, 0 when none (f2-33 protection). */
 uint32_t supervisor_desktop_pid(void);
 /* f2-03 registers console/null installation and a retained cwd resolver.

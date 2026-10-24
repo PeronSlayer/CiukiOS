@@ -103,9 +103,43 @@ static void io_and_refusals(void){
     struct ciuki_file f={pe_data,sizeof(pe_data),pe_read,0};struct w32_image im;CHECK(w32_pe_validate(&f,&im)==-ENOEXEC&&!strcmp(im.failure,"unsupported-runtime"));
     puts("PASS virtual PIT/gameport allowlist and monotonic latch, fpu policy and MSI/driver/runtime/loader/server refusals");
 }
+/* G13 (ER-1, SY-8): a native program killed by a processor fault reaches the
+ * desktop mailbox with its registers, stack words and faulting address. */
+static void native_faults(void){
+    struct process *p;CHECK(!proc_prepare(proc_supervisor(),&p));proc_set_name(p,"/Programs/Crash Test");
+    struct proc_thread *t;CHECK(!proc_thread_prepare(p,0x400000,0,0,0,0,0,true,&t));
+    p->published=true;p->state=PROC_LIVE;t->task->state=T_RUNNING;g_current=t->task;
+    uint32_t stack=t->stack_base+t->stack_bytes-32;uint32_t words[8]={9,8,7,6,5,4,3,2};
+    CHECK(!ua_write(p->memory,stack,words,sizeof(words)));
+    struct trap_frame tf={.vector=14,.err=6,.eip=0x401234,.cs=0x1b,.user_esp=stack,.eax=1,.ebx=2,.ecx=3,.edx=4,.esi=5,.edi=6,.ebp=7,.eflags=0x10246};
+    diagnostic_log[0]=0;w32_fault_count=w32_fault_head=0;
+    fake_desktop_pid=0;native_fault_report(t,&tf,0x10);
+    CHECK(!w32_fault_count&&strstr(diagnostic_log,"[fault] native")&&strstr(diagnostic_log,"vector=14")&&strstr(diagnostic_log,"eip=00401234"));
+    fake_desktop_pid=2;native_fault_report(t,&tf,0x10);
+    CHECK(w32_fault_count==1);const struct ciuki_w32_fault *f=&w32_fault_queue[w32_fault_head];
+    CHECK(f->kind==W32_REPORT_NATIVE_FAULT&&f->pid==p->pid&&f->tid==t->tid&&f->code==(14u|6u<<8)&&f->eip==0x401234&&f->offset==0x10&&f->valid==255);
+    CHECK(!strcmp(f->exe,"Crash_Test")&&!f->module[0]);
+    CHECK(f->registers[0]==1&&f->registers[1]==2&&f->registers[2]==3&&f->registers[3]==4&&f->registers[4]==5&&f->registers[5]==6&&
+        f->registers[6]==7&&f->registers[7]==stack&&f->registers[8]==0x10246&&!memcmp(f->stack,words,sizeof(words)));
+    native_fault_report(t,&tf,0x10);CHECK(w32_fault_count==1);   /* one record per process */
+    tf.user_esp=0xfffffffc;                                         /* unreadable stack: valid mask clear */
+    struct process *q;CHECK(!proc_prepare(proc_supervisor(),&q));struct proc_thread *u;CHECK(!proc_thread_prepare(q,0x400000,0,0,0,0,0,true,&u));
+    q->published=true;q->state=PROC_LIVE;
+    native_fault_report(u,&tf,0);CHECK(w32_fault_count==2);
+    f=&w32_fault_queue[(w32_fault_head+1)%16];CHECK(f->valid==0&&f->stack[0]==0&&f->registers[7]==0xfffffffc);
+    tf.cs=8;tf.user_esp=stack;native_fault_report(u,&tf,0);CHECK(w32_fault_count==2);  /* kernel mode frame: ignored */
+    tf.cs=0x1b;q->personality=PROC_WIN32;native_fault_report(u,&tf,0);CHECK(w32_fault_count==2);   /* Win32 has its own path */
+    q->personality=PROC_NATIVE;w32_fault_count=w32_fault_head=0;
+    for(unsigned i=0;i<16;i++){struct ciuki_w32_fault x={.kind=W32_REPORT_NATIVE_FAULT,.pid=5000+i};diag_enqueue(&x);}
+    diagnostic_log[0]=0;native_fault_report(u,&tf,0);
+    CHECK(w32_fault_count==16&&strstr(diagnostic_log,"dialog-queue-full"));
+    w32_fault_count=w32_fault_head=0;
+    g_current=&controller;proc_stop(q,0,0);proc_stop(p,0,0);proc_collect();fake_desktop_pid=0;diagnostic_log[0]=0;
+    puts("PASS native fault record: registers, stack, address, vector/error packing, one per process, no desktop = log only");
+}
 int main(void){
     ram=calloc(HOST_PAGES,PAGE_SIZE);CHECK(ram);g_current=&controller;controller.state=T_RUNNING;proc_init();
-    fault_classes();malformed_and_budgets();io_and_refusals();
+    fault_classes();malformed_and_budgets();io_and_refusals();native_faults();
     printf("diagnostic teardown pages=%u mappings=%u heap=%u\n",pages_used,g_user_mappings,heap_blocks);
     CHECK(!pages_used&&!g_user_mappings&&heap_blocks==1);free(ram);return 0;
 }

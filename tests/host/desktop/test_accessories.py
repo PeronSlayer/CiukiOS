@@ -30,6 +30,7 @@ TESTS = {
     "clock": [ACC + "clock_model.c", ACC + "clock_view.c"],
     "viewer": [ACC + "viewer_model.c", ACC + "viewer_view.c", ACC + "viewer_stb.c"],
     "help": [ACC + "help_topics.c", ACC + "help_view.c"],
+    "logview": [ACC + "logview_model.c", ACC + "logview_view.c"],
     "mixer": [ACC + "mixer_view.c"],
     "recorder": [ACC + "recorder.c"],
     "cdplayer": [],
@@ -47,6 +48,8 @@ RENDERS = {
     "clock-noon.xrgb": "PIN-FROM-FIRST-RUN",
     "help-shortcuts.xrgb": "PIN-FROM-FIRST-RUN",
     "help-welcome.xrgb": "PIN-FROM-FIRST-RUN",
+    "logview-boot.xrgb": "PIN-FROM-FIRST-RUN",
+    "logview-crash.xrgb": "PIN-FROM-FIRST-RUN",
     "mixer-default.xrgb": "PIN-FROM-FIRST-RUN",
     "mixer-muted.xrgb": "PIN-FROM-FIRST-RUN",
     "viewer-empty.xrgb": "PIN-FROM-FIRST-RUN",
@@ -81,9 +84,8 @@ class AccessoriesTests(unittest.TestCase):
             subprocess.run([*FLAGS, *(["-include", str(ROOT / "tests/host/desktop/replay_base.h")] if name == "recorder" else []), *icons.defines(), *INCLUDES, *(str(ROOT / s) for s in sources), "-lm", "-o", str(binary)],
                            check=True, env=env)
             args = {"viewer": [str(scratch), str(ROOT / "misc/CiukiOS_SplashScreen.png"), str(renders)],
-                    "help": [str(scratch), str(renders)], "keymap": []}.get(name, [str(renders)])
-            result = subprocess.run([str(binary), *args], env=env, capture_output=True, text=True)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    "help": [str(scratch), str(renders)], "logview": [str(scratch), str(renders)], "keymap": []}.get(name, [str(renders)])
+            result = subprocess.run([str(binary), *args], check=True, env=env, capture_output=True, text=True)
             self.assertIn("PASS", result.stdout)
             # The tests write the recent list only under the scratch HOME.
             self.assertFalse((Path.home() / "recent.lst").exists() and name in ("viewer", "help") and
@@ -103,6 +105,7 @@ class AccessoriesTests(unittest.TestCase):
     def test_clock(self): self.check_renders(self.run_native("clock"))
     def test_viewer(self): self.check_renders(self.run_native("viewer"))
     def test_help(self): self.check_renders(self.run_native("help"))
+    def test_logview(self): self.check_renders(self.run_native("logview"))
     def test_mixer(self): self.check_renders(self.run_native("mixer"))
     def test_recorder(self): self.run_native("recorder")
     def test_cdplayer(self): self.run_native("cdplayer")
@@ -118,7 +121,7 @@ class AccessoriesTests(unittest.TestCase):
         entries = re.findall(r'\{"([a-z]+)", "([^"]+)", "([a-z-]+)", ([01]),', catalog)
         names = [e[0] for e in entries]
         # Catalogue order selects defaults: Viewer precedes its Paint alternative.
-        self.assertEqual(sorted(names), ["calc", "charmap", "clock", "gfxdemo", "help", "hwreport", "mixer", "music", "paint", "recorder", "regedit", "viewer"])
+        self.assertEqual(sorted(names), ["calc", "charmap", "clipbrd", "clock", "gfxdemo", "help", "hwreport", "logview", "mixer", "music", "paint", "recorder", "regedit", "viewer"])
         build = load("acc_build", ROOT / "apps/desktop/build_desktop.py")
         self.assertEqual(set(build.ACCESSORIES) | {"regedit", "gfxdemo", "hwreport"}, set(names))
         self.assertIn("regedit", build.PROGRAMS)
@@ -132,7 +135,7 @@ class AccessoriesTests(unittest.TestCase):
         for _, _, icon, _ in entries:
             self.assertRegex(listing, rf"/32x32/[a-z]+/{re.escape(icon)}\.png")
         # File-taking accessories are exactly the ones the desktop passes LAUNCH arguments to.
-        self.assertEqual({e[0] for e in entries if e[3] == "1"}, {"help", "music", "paint", "viewer"})
+        self.assertEqual({e[0] for e in entries if e[3] == "1"}, {"clipbrd", "help", "music", "paint", "viewer"})
 
     def test_stb_provenance(self):
         data = (ROOT / "third_party/stb/stb_image.h").read_bytes()
