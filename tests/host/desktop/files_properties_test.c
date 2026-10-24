@@ -42,7 +42,7 @@ static void finish_job(void)
 {
     for (unsigned i=0;i<5000 && app.job_active;i++) {
         struct du_event tick={.type=DU_EV_TICK,.id=1}; files_event(&ui,&tick,&app);
-        struct timespec pause={0,1000000}; nanosleep(&pause,NULL);
+        struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL);
     }
     assert(!app.job_active && ui.dialog.sheet);
 }
@@ -73,6 +73,8 @@ int main(int argc,char **argv)
     fake_nodes[hidden].meta.allocated=4096; fake_nodes[hidden].meta.allocated_known=1;
     du_init(&ui,pixels,760,520); assert(!files_setup(&app,&ui,&fake_vfs,"/Documents"));
     app.file_info=info; app.set_attributes=attributes; app.media_space=space; app.media_label=get_label; app.set_label=set_label; app.version_info=version_info;
+    files_test_wait(&app);app.show_folder_options=1;assert(ui.service);ui.service(&ui,ui.user);
+    assert(!app.show_folder_options && ui.dialog.sheet && app.property_options);cancel();
     sheet("/Documents/Long name.txt");
     assert(strstr(ui.dialog.text,"LONGNA~1.TXT") && strstr(ui.dialog.text,"4.00 KB") && strstr(ui.dialog.text,"Created:"));
     assert(ui.dialog.items[6].value==1 && !ui.dialog.items[4].disabled);

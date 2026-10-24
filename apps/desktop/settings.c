@@ -19,6 +19,10 @@ void cfg_defaults(struct ciuki_settings *s)
     s->wallpaper_mode = CFG_WALL_FILL;     /* the adaptive scenes are made for a centred, aspect-preserving fill */
     s->desktop_color = CFG_DESKTOP_COLOR;          /* DESK_BACKGROUND */
     s->clock_24h = 1;
+    s->taskbar_clock = 1;
+    s->quick_launch = 1;
+    s->taskbar_top = 1;
+    s->taskbar_size = 32;
     s->desktop_icons = 1;
     s->mouse_spi_speed=10;
     s->mouse_speed = CFG_MOUSE_NORMAL;
@@ -205,6 +209,25 @@ static int assign(struct ciuki_settings *s, const char *key, const char *v, int 
     if (!strcmp(key, "mouse_speed")) {int ok=number(v, CFG_MOUSE_MIN, CFG_MOUSE_MAX, &s->mouse_speed);if(ok)s->mouse_spi_speed=s->mouse_speed*2;return ok;}
     if (!strcmp(key, "mouse_spi_speed")) return number(v, 1, 20, &s->mouse_spi_speed);
     if (!strcmp(key, "double_click_ms")) return number(v, 0, 5000, &s->double_click_ms);
+    if (!strcmp(key, "taskbar_clock")) return flag(v, &s->taskbar_clock);
+    if (!strcmp(key, "quick_launch")) return flag(v, &s->quick_launch);
+    if (!strcmp(key,"taskbar_top")) return flag(v,&s->taskbar_top);
+    if (!strcmp(key,"taskbar_autohide")) return flag(v,&s->taskbar_autohide);
+    if (!strcmp(key,"start_small")) return flag(v,&s->start_small);
+    if (!strcmp(key,"taskbar_edge")) return number(v,0,3,&s->taskbar_edge);
+    if (!strcmp(key,"taskbar_size")) return number(v,32,512,&s->taskbar_size);
+    if (!strcmp(key,"toolbar_address")) return flag(v,&s->toolbar_address);
+    if (!strcmp(key,"toolbar_links")) return flag(v,&s->toolbar_links);
+    if (!strcmp(key,"toolbar_desktop")) return flag(v,&s->toolbar_desktop);
+    for (unsigned k=0;k<CFG_TOOLBARS;k++) {
+        char name[24]; snprintf(name,sizeof(name),"toolbar_folder%u",k);
+        if (!strcmp(key,name)) {
+            if (*v && (v[0]!='/' || strlen(v)>=CFG_PATH_MAX || !printable(v) || strstr(v,"/../"))) return 0;
+            snprintf(s->toolbar_folder[k],CFG_PATH_MAX,"%s",v); return 1;
+        }
+    }
+    if (!strcmp(key, "mouse_speed")) return number(v, CFG_MOUSE_MIN, CFG_MOUSE_MAX, &s->mouse_speed);
+    if (!strcmp(key, "double_click_ms")) return number(v, 200, 900, &s->double_click_ms);
 
     if (!strcmp(key,"saver_enabled")) return flag(v,&s->saver_enabled);
     if (!strcmp(key,"saver_seconds")) return number(v,0,2147483647,&s->saver_seconds);
@@ -267,10 +290,16 @@ size_t cfg_format(const struct ciuki_settings *s, char *out, size_t size)
     int n = snprintf(out, size,
         "# CiukiOS desktop settings (key=value). Written by the desktop and Control Panel.\n"
         "version=%d\ntheme=%s\naccess_contrast=%x,%s\nwallpaper=%s\nwallpaper_mode=%s\ndesktop_color=%06x\n"
-        "clock_24h=%d\nclock_seconds=%d\ndesktop_icons=%d\nmouse_speed=%d\ndouble_click_ms=%d\nkeyboard=%s\ndisplay_mode=%u\n",
-        CFG_VERSION, s->theme, (unsigned)(s->access.contrast & 0x7fu), access_scheme_valid(s->access.scheme) ? s->access.scheme : acc_high_contrast_names[0], s->wallpaper,
+        "clock_24h=%d\nclock_seconds=%d\ndesktop_icons=%d\n"
+        "taskbar_clock=%d\nquick_launch=%d\ntaskbar_top=%d\ntaskbar_autohide=%d\nstart_small=%d\n"
+        "taskbar_edge=%d\ntaskbar_size=%d\ntoolbar_address=%d\ntoolbar_links=%d\ntoolbar_desktop=%d\n"
+        "mouse_speed=%d\ndouble_click_ms=%d\nkeyboard=%s\ndisplay_mode=%u\n",
+        CFG_VERSION, s->theme, (unsigned)(s->access.contrast & 0x7fu),
+        access_scheme_valid(s->access.scheme) ? s->access.scheme : acc_high_contrast_names[0], s->wallpaper,
         cfg_mode_names[s->wallpaper_mode >= 0 && s->wallpaper_mode < CFG_WALL_MODES ? s->wallpaper_mode : 0],
         (unsigned)(s->desktop_color & 0xffffffu), !!s->clock_24h, !!s->clock_seconds, !!s->desktop_icons,
+        !!s->taskbar_clock, !!s->quick_launch, !!s->taskbar_top, !!s->taskbar_autohide, !!s->start_small,
+        s->taskbar_edge, s->taskbar_size, !!s->toolbar_address, !!s->toolbar_links, !!s->toolbar_desktop,
         s->mouse_speed, s->double_click_ms,
         cfg_keyboard_names[s->keyboard >= 0 && s->keyboard < CFG_KEYS_COUNT ? s->keyboard : 0], (unsigned)s->display_mode);
     if (n <= 0 || (size_t)n >= size) return 0;
@@ -306,6 +335,17 @@ size_t cfg_format(const struct ciuki_settings *s, char *out, size_t size)
         (unsigned)!!a->mag_invert, (unsigned)a->mag_dock, (unsigned)a->mag_percent);
     if (n <= 0 || (size_t)n >= size - used) return 0;
     used += (size_t)n;
+    n=snprintf(out+used,size-used,"taskbar_top=%d\ntaskbar_autohide=%d\nstart_small=%d\ntaskbar_edge=%d\ntaskbar_size=%d\n"
+               "toolbar_address=%d\ntoolbar_links=%d\ntoolbar_desktop=%d\n",
+               !!s->taskbar_top,!!s->taskbar_autohide,!!s->start_small,s->taskbar_edge,s->taskbar_size,
+               !!s->toolbar_address,!!s->toolbar_links,!!s->toolbar_desktop);
+    if (n<0 || (size_t)n>=size-used) return 0;
+    used+=(size_t)n;
+    for (unsigned k=0;k<CFG_TOOLBARS;k++) {
+        n=snprintf(out+used,size-used,"toolbar_folder%u=%s\n",k,s->toolbar_folder[k]);
+        if (n<0 || (size_t)n>=size-used) return 0;
+        used+=(size_t)n;
+    }
     for (unsigned i = 0; i < s->recent_count && i < CFG_RECENT_MAX; i++) {
         n = snprintf(out + used, size - used, "recent=%s\n", s->recent[i]);
         if (n <= 0 || (size_t)n >= size - used) return 0;

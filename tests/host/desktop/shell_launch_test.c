@@ -3,10 +3,12 @@
 #define _DEFAULT_SOURCE 1
 #define _POSIX_C_SOURCE 200809L
 #include "fake.h"
+#ifndef __i386__
 #undef DT_UNKNOWN
 #undef DT_CHR
 #undef DT_DIR
 #undef DT_REG
+#endif
 #include <dirent.h>
 #undef ILL_ILLOPC
 #undef FPE_INTDIV
@@ -28,6 +30,7 @@
 #include <string.h>
 #include <time.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 /* Keep the cfg_writer.write member out of the write() syscall macro below. */
 #include "../../../apps/desktop/settings_io.h"
 #define CIUKI_RUNTIME_H
@@ -41,6 +44,7 @@ static uint32_t shell_display_call(uint32_t op,uintptr_t argument,uint32_t b,uin
 #define CU_CALL(name,...) shell_display_call(__VA_ARGS__)
 #endif
 static int ciuki_error(uint32_t r) { return r >= (uint32_t)-4095 ? -(int32_t)r : 0; }
+uint32_t ciuki_raw_debug_write(uintptr_t,uint32_t,uint32_t,uint32_t,uint32_t,uint32_t);
 uint32_t ciuki_raw_probe_report(uintptr_t,uint32_t,uint32_t,uint32_t,uint32_t,uint32_t);
 int shell_close(int);
 int shell_open(const char *, int, ...);
@@ -110,6 +114,12 @@ static FILE *sequence_fopen(const char *path,const char *mode)
     return fopen(path,mode);
 }
 #define fopen sequence_fopen
+#endif
+/* The model has no BIOS display service, including in i686 compile checks. */
+#ifdef __i386__
+static inline uint32_t shell_screen_unavailable(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t e,uintptr_t f)
+{ (void)a;(void)b;(void)c;(void)d;(void)e;(void)f;return (uint32_t)-ENOSYS; }
+#define CU_CALL(n,a,b,c,d,e,f) shell_screen_unavailable(a,b,c,d,e,f)
 #endif
 #include "../../../apps/desktop/desktop.c"
 #undef CU_CALL
@@ -371,7 +381,7 @@ int ciuki_devctl(int fd,uint32_t op,void *record,uint32_t size)
         if (media_slow) {
             assert(!pthread_equal(pthread_self(),media_frame_thread));
             __atomic_add_fetch(&media_slow_queries,1,__ATOMIC_RELAXED);
-            struct timespec pause={0,25000000};nanosleep(&pause,NULL);
+            struct timespec pause={.tv_sec=0,.tv_nsec=25000000};nanosleep(&pause,NULL);
         }
         if (op==MEDIA_GET_STATE) {
             assert(size==sizeof(media_fixture));
@@ -438,7 +448,7 @@ static int media_wait_read(struct desktop *d)
         int ok=media_worker.ok;
         pthread_mutex_unlock(&media_worker.lock);
         if (ready) { media_poll(d); return ok; }
-        struct timespec pause={0,1000000};nanosleep(&pause,NULL);
+        struct timespec pause={.tv_sec=0,.tv_nsec=1000000};nanosleep(&pause,NULL);
     }
     assert(!"media worker timeout");return 0;
 }
@@ -486,7 +496,7 @@ static int32_t request(struct desktop *d,int index,uint32_t pid,unsigned opcode,
     if (opcode==DESK_SWITCH_TO) desk_put32(m.data+12,0);
     if (opcode==DESK_WINDOWS_QUERY) desk_put32(m.data+8,0);
     drain(d,index); v2(d,index,pid,&m);
-    struct desk_packet r[DESK_TX_MAX];
+    static struct desk_packet r[DESK_TX_MAX];
     if (opcode==DESK_WINDOWS_QUERY && !queued(d,index,DESK_TASK_RESULT,r)) return 0;
     assert(queued(d,index,DESK_TASK_RESULT,r)==1 && r[0].serial==0x1234 && r[0].request==opcode);
     return r[0].result;
@@ -533,7 +543,7 @@ static int install_fixture(struct desktop *d,const char *path)
 /* Each scenario owns a struct desktop (~600 KiB): keep frames out of main. */
 __attribute__((noinline)) static void test_display_settings(void)
 {
-    struct desktop d; struct ciuki_message m; struct desk_packet reply[DESK_TX_MAX];
+    static struct desktop d; struct ciuki_message m; static struct desk_packet reply[DESK_TX_MAX];
     fake_reset(); desk_init(&d, &fake_ops, 1024, 768); desk_shell_enable(&d);
     fake_channel(60); assert(desk_add_client(&d, 60) == 0); window(&d, 0, 500, 70, "Control Panel");
     d.display_set = display_set; display_calls = 0; display_result = 0;
@@ -638,7 +648,7 @@ static void test_task_protocol(void)
 /* f2-33: the Task Manager scenario through the production desktop paths. */
 __attribute__((noinline)) static void test_tasks_scenario(void)
 {
-    struct desktop d;
+    static struct desktop d;
     fake_reset(); next_pair=40; desk_init(&d,&fake_ops,1024,768); desk_shell_enable(&d);
     d.launch=launch_program; d.terminate=fake_terminate; d.self_pid=50; d.authority_fd=6; d.tasks_test=1;
     uint8_t elf[52]={0x7f,'E','L','F',1,1,1}; elf[16]=2; elf[18]=3; elf[20]=1; elf[40]=52;
@@ -649,7 +659,7 @@ __attribute__((noinline)) static void test_tasks_scenario(void)
     assert(tasks==300 && d.clients[0].taskman && d.children[0].pid==300);
     d.tasks_pid=300; d.tasks_stage=1;                 /* main loop: menu action on "tasks" */
     window(&d,0,300,60,"Task Manager"); assert(d.tasks_stage==2 && d.clients[0].window_id==1);
-    struct desk_packet r[DESK_TX_MAX];
+    static struct desk_packet r[DESK_TX_MAX];
     assert(!request(&d,0,300,DESK_WINDOWS_QUERY,0,0,0) && queued(&d,0,DESK_WINDOW_INFO,r)==1);
     assert(r[0].count==1 && r[0].window_id==1 && r[0].pid==300 && r[0].flags==DESK_WINDOW_FOCUSED && !strcmp(r[0].title,"Task Manager"));
     assert(request(&d,0,300,DESK_LAUNCH,0,0,"nothing")==-ENOENT && d.tasks_stage==2);
@@ -740,13 +750,13 @@ static int32_t launch_request(struct desktop *d,int index,uint32_t pid,const cha
     desk_put32(m.data+4,0x4321); desk_put32(m.data+8,n); memcpy(m.data+12,name,n);
     if (a) { desk_put32(m.data+12+n,a); memcpy(m.data+16+n,arg,a); }
     drain(d,index); v2(d,index,pid,&m);
-    struct desk_packet r[DESK_TX_MAX];
+    static struct desk_packet r[DESK_TX_MAX];
     assert(queued(d,index,DESK_TASK_RESULT,r)==1 && r[0].serial==0x4321 && r[0].request==DESK_LAUNCH);
     return r[0].result;
 }
 __attribute__((noinline)) static void test_note_scenario(void)
 {
-    struct desktop d;
+    static struct desktop d;
     fake_reset(); next_pair=60; pid_source=400; desk_init(&d,&fake_ops,1024,768); desk_shell_enable(&d);
     d.launch=launch_program; d.terminate=fake_terminate; d.self_pid=50; d.authority_fd=-1;
     uint8_t elf[52]={0x7f,'E','L','F',1,1,1}; elf[16]=2; elf[18]=3; elf[20]=1; elf[40]=52;
@@ -852,7 +862,7 @@ static int launch_cd_player(struct desktop *d,const struct desk_launch_record *r
 }
 __attribute__((noinline)) static void test_cd_player_menu(void)
 {
-    struct desktop d;
+    static struct desktop d;
     fake_reset(); desk_init(&d,&fake_ops,1024,768); desk_shell_enable(&d);
     d.v3_launch=launch_cd_player;
     desk_menu_open(&d,SH_MENU_PROGRAMS,0,0);
@@ -876,7 +886,7 @@ __attribute__((noinline)) static void test_cd_player_menu(void)
  * click or two clicks too far apart do not. */
 __attribute__((noinline)) static void test_clock_double_click(void)
 {
-    struct desktop d;
+    static struct desktop d;
     uint8_t elf[52]={0x7f,'E','L','F',1,1,1}; elf[16]=2; elf[18]=3; elf[20]=1; elf[40]=52;
     fake_reset(); desk_init(&d,&fake_ops,1024,768); desk_shell_enable(&d);
     d.launch=launch_program; d.terminate=fake_terminate; d.authority_fd=-1;
@@ -963,7 +973,7 @@ __attribute__((noinline)) static void test_help_launch(void)
 
 __attribute__((noinline)) static void test_games_menu(void)
 {
-    struct desktop d;
+    static struct desktop d;
     uint8_t elf[52]={0x7f,'E','L','F',1,1,1}; elf[16]=2; elf[18]=3; elf[20]=1; elf[40]=52;
     fake_reset(); desk_init(&d,&fake_ops,1024,768); desk_shell_enable(&d);
     d.launch=launch_program; d.terminate=fake_terminate; d.authority_fd=-1;
@@ -1035,7 +1045,7 @@ __attribute__((noinline)) static void test_games_menu(void)
  * Ciuki Demo no longer borrow the icons of programs and games. */
 __attribute__((noinline)) static void test_menu_icons(void)
 {
-    struct desktop d;
+    static struct desktop d;
     uint8_t elf[52]={0x7f,'E','L','F',1,1,1}; elf[16]=2; elf[18]=3; elf[20]=1; elf[40]=52;
     static const char *const bin[]={"calc","charmap","ciukide","ciuknote","clock","control","demo","dosbox","files","hello","help",
                                     "libc_smoke","lua","mixer","netsurf","tasks","tcc","viewer","newtool"};
@@ -1047,7 +1057,7 @@ __attribute__((noinline)) static void test_menu_icons(void)
     for (unsigned k=0;k<sizeof(kinds)/sizeof(kinds[0]);k++) {
         d.sh.menu_owner=0; desk_menu_open(&d,kinds[k],0,0);
         const struct sh_menu *m=&d.sh.menus[0];
-        assert(m->icon==16);
+        assert(m->icon==(kinds[k]==SH_MENU_START && !d.sh.cfg.start_small ? 32 : 16));
         for (int a=0;a<m->count;a++) for (int b=a+1;b<m->count;b++) {
             const struct sh_item *x=&m->items[a], *y=&m->items[b];
             if (x->icon && y->icon && !(x->action==SH_ACT_GAME && y->action==SH_ACT_GAME)) assert(strcmp(x->icon,y->icon));
@@ -1098,7 +1108,7 @@ __attribute__((noinline)) static void test_menu_icons(void)
     for (unsigned i=0;i<sizeof(bin)/sizeof(bin[0]);i++) assert(strcmp(run,desk_program_icon_name(bin[i])));
     assert(strcmp(desk_program_icon_name("demo"),"applications-games") && strcmp(desk_program_icon_name("demo"),desk_games[0].tango));
     drop_all(&d); fake_reset();
-    puts("PASS menu icons: every menu 16 px, no two rows of a menu share an icon, Run.../Demo/Settings distinct, Developer lists only its programs");
+    puts("PASS menu icons: Start 32/16 px, submenus 16 px, no two rows of a menu share an icon, Run.../Demo/Settings distinct, Developer lists only its programs");
 }
 /* f6-19 (T23 1.0.0 alpha: "[console] Unable to initialise framebuffer" after
  * a Programs-menu launch): NetSurf is the browser application. Its catalog.h
@@ -1140,7 +1150,7 @@ __attribute__((noinline)) static void test_netsurf_record(void)
     assert(!strcmp(desk_program_label("netsurf"),"NetSurf") && !strcmp(desk_program_description("netsurf"),"Web browser"));
     assert(!desk_program_description("files") && !desk_program_description("hello"));
     assert(!strcmp(desk_program_icon_name("netsurf"),app->tango) && !strcmp(desk_program_category("netsurf"),"programs"));
-    struct desktop d;
+    static struct desktop d;
     uint8_t elf[52]={0x7f,'E','L','F',1,1,1}; elf[16]=2; elf[18]=3; elf[20]=1; elf[40]=52;
     fake_reset(); desk_init(&d,&fake_ops,1024,768); desk_shell_enable(&d);
     d.launch=launch_program; d.terminate=fake_terminate; d.authority_fd=-1;
@@ -1190,14 +1200,14 @@ static int music_mixer_set(struct desktop *d,uint32_t l,uint32_t r,uint32_t mute
 { (void)d; assert(l==30 && r==60 && !mute); music_mixer_calls++; return 0; }
 __attribute__((noinline)) static void test_music_mixer(void)
 {
-    struct desktop d; fake_reset(); next_pair=20; desk_init(&d,&fake_ops,640,480);
+    static struct desktop d; fake_reset(); next_pair=20; desk_init(&d,&fake_ops,640,480);
     d.mixer_set=music_mixer_set; music_mixer_calls=0;
     struct desk_program program={"music","/Programs/music"};
     int pid=launch_program(&d,&program); assert(pid>0 && d.clients[0].mixer);
     window(&d,0,(uint32_t)pid,60,"Music Player");
     struct ciuki_message m; desk_message(&m,DESK_MIXER_SET,20);
     desk_put32(m.data+4,42); desk_put32(m.data+8,30); desk_put32(m.data+12,60); desk_put32(m.data+16,0);
-    struct desk_packet reply[DESK_TX_MAX]; drain(&d,0); v2(&d,0,(uint32_t)pid,&m);
+    static struct desk_packet reply[DESK_TX_MAX]; drain(&d,0); v2(&d,0,(uint32_t)pid,&m);
     assert(queued(&d,0,DESK_TASK_RESULT,reply)==1 && !reply[0].result && music_mixer_calls==1);
     d.power.state=DESK_POWER_CLOSING; drain(&d,0); v2(&d,0,(uint32_t)pid,&m);
     assert(queued(&d,0,DESK_TASK_RESULT,reply)==1 && reply[0].result==-EBUSY && music_mixer_calls==1);
@@ -1215,7 +1225,7 @@ __attribute__((noinline)) static void test_launch_timing(void)
     uint64_t totals[2][3];
     trace_verbose=timing_model=1;
     for(unsigned mode=0;mode<2;mode++) for(unsigned program=0;program<3;program++) {
-        struct desktop d; fake_reset(); next_pair=20; desk_init(&d,&fake_ops,640,480);
+        static struct desktop d; fake_reset(); next_pair=20; desk_init(&d,&fake_ops,640,480);
         d.pixels=calloc(640*480,4); assert(d.pixels);
         model_us=1000000; d.launch_click_ns=model_us*1000;
         memset(&launch_timing,0,sizeof(launch_timing)); model_elf_bytes=bytes[program];
@@ -1251,7 +1261,7 @@ __attribute__((noinline)) static void test_launch_timing(void)
     for(unsigned i=0;i<3;i++) assert(totals[1][i]<totals[0][i]);
     trace_verbose=timing_model=0;
     fake_reset(); next_pair=20;
-    struct desktop d; desk_init(&d,&fake_ops,640,480);
+    static struct desktop d; desk_init(&d,&fake_ops,640,480);
     struct desk_program p={"files","/Programs/files"};
     assert(launch_program(&d,&p)>0 && !d.launch_mark); drop_all(&d); fake_reset(); next_pair=20;
     timing_model=trace_verbose=1; model_us=1000000;
@@ -1293,7 +1303,7 @@ __attribute__((noinline)) static void test_wallpaper_startup(void)
     for (unsigned i=54;i<70;i++) bmp[i]=(unsigned char)(i*3);
     char path[]="/tmp/f2-44-XXXXXX"; int fd=mkstemp(path); assert(fd>=0);
     assert(write(fd,bmp,sizeof(bmp))==sizeof(bmp)); assert(!close(fd));
-    struct desktop d; fake_reset(); desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d);
+    static struct desktop d; fake_reset(); desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d);
     d.pixels=calloc(640*480,4); assert(d.pixels);
     snprintf(d.sh.cfg.wallpaper,sizeof(d.sh.cfg.wallpaper),"%s",path);
     memset(startup_us,0,sizeof(startup_us)); startup_cached=startup_sent=0;
@@ -1318,7 +1328,7 @@ __attribute__((noinline)) static void test_wallpaper_startup(void)
     pthread_cond_signal(&wallpaper_test_changed); pthread_mutex_unlock(&wallpaper_test_lock);
     for (unsigned i=0;i<10000 && d.sh.wallpaper_pending;i++) {
         wallpaper_poll(&d);
-        if (d.sh.wallpaper_pending) { struct timespec pause={0,1000000}; nanosleep(&pause,NULL); }
+        if (d.sh.wallpaper_pending) { struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL); }
     }
     assert(!d.sh.wallpaper_pending && !d.sh.image_failed && startup_us[7]);
     assert(!d.sh.image.pixels && d.sh.wall_valid && d.menu_open);
@@ -1354,7 +1364,7 @@ static void test_media_removal_service(void)
 }
 __attribute__((noinline)) static void test_network_service(void)
 {
-    struct desktop d; fake_reset(); desk_init(&d, &fake_ops, 640, 480); desk_shell_enable(&d);
+    static struct desktop d; fake_reset(); desk_init(&d, &fake_ops, 640, 480); desk_shell_enable(&d);
     network_fixture = (struct ciuki_net_state){ .version = 1, .size = sizeof(network_fixture),
         .present = 1, .link = CIUKI_NET_LINK_UP, .state = CIUKI_NET_RUNNING, .driver = "e100" };
     network_available = 1; network_error = 0; network_opens = network_closes = network_queries = 0;
@@ -1449,7 +1459,7 @@ int main(int argc,char **argv)
     test_clock_double_click();
     test_media_removal_service();
     test_music_mixer();
-    struct desktop d;
+    static struct desktop d;
     fake_reset(); desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d);
     struct desk_program program={"demo","/Programs/demo"};
     struct launch_job regional_job;

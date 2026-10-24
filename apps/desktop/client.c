@@ -328,10 +328,11 @@ void desk_resize(struct desktop *d, int i, struct desk_box f)
     int left=d->drag==i && (d->resize_edges&DESK_EDGE_LEFT);
     int top=d->drag==i && (d->resize_edges&DESK_EDGE_TOP);
     int right=c->frame.x+c->frame.w, bottom=c->frame.y+c->frame.h;
-    int work_bottom=(int)d->height-(d->shell ? DESK_BAR : 0);
+    struct desk_box work=desk_work_area(d);
+    int work_bottom=work.y+work.h;
     if (f.x<0 && !left) f.x=0;
     if (f.y<DESK_BAR && !top) f.y=DESK_BAR;
-    int available_w=(left ? right : (int)d->width-f.x)-2*DESK_BORDER;
+    int available_w=(left ? right-work.x : work.x+work.w-f.x)-2*DESK_BORDER;
     int available_h=(top ? bottom-DESK_BAR : work_bottom-f.y)-DESK_TITLE-DESK_BORDER;
     uint32_t max_w=c->max_width, max_h=c->max_height;
     /* A client minimum can exceed a newly selected display. Honour that
@@ -415,7 +416,8 @@ void desk_display_relayout(struct desktop *d, uint32_t width, uint32_t height)
     d->title_hot = d->title_down = 0;
     if (d->mouse_x >= (int32_t)width) d->mouse_x = (int32_t)width - 1;
     if (d->mouse_y >= (int32_t)height) d->mouse_y = (int32_t)height - 1;
-    int32_t work = (int32_t)height - DESK_BAR - (d->shell ? DESK_BAR : 0);
+    struct desk_box area=desk_work_area(d);
+    int32_t work=area.h;
     for (int i = 0; i < DESK_CLIENTS; i++) {
         struct desk_client *c = &d->clients[i];
         if (!c->window) continue;
@@ -424,8 +426,8 @@ void desk_display_relayout(struct desktop *d, uint32_t width, uint32_t height)
             struct desk_box f = c->frame;
             /* Size against the new work area, not the old window position:
              * desk_resize clamps sizes using the requested origin. */
-            if (c->zoomed) { f.x = 0; f.y = DESK_BAR; }
-            if (c->zoomed || f.w > (int32_t)width) f.w = (int32_t)width;
+            if (c->zoomed) { f.x=area.x;f.y=area.y; }
+            if (c->zoomed || f.w>area.w) f.w=area.w;
             if (c->zoomed || f.h > work) f.h = work;
             uint32_t serial = c->resize_serial;
             desk_resize(d, i, f);
@@ -436,7 +438,7 @@ void desk_display_relayout(struct desktop *d, uint32_t width, uint32_t height)
                 configure(d, i, 0);
             }
         }
-        desk_move(d, i, c->zoomed ? 0 : c->frame.x, c->zoomed ? DESK_BAR : c->frame.y);
+        desk_move(d, i, c->zoomed ? area.x : c->frame.x, c->zoomed ? area.y : c->frame.y);
         int32_t max_x = (int32_t)width - c->restore.w, max_y = (int32_t)height - c->restore.h - (d->shell ? DESK_BAR : 0);
         if (max_x < 0) max_x = 0;
         if (max_y < DESK_BAR) max_y = DESK_BAR;
@@ -459,7 +461,7 @@ void desk_zoom(struct desktop *d, int i)
     if (c->zoomed) f = c->restore;
     else {
         c->restore = c->frame;
-        f = (struct desk_box){0, DESK_BAR, (int32_t)d->width, (int32_t)d->height - DESK_BAR - (d->shell ? DESK_BAR : 0)};
+        f = desk_work_area(d);
     }
     struct desk_box old=c->frame;
     c->zoomed = !c->zoomed; desk_resize(d, i, f);
@@ -469,7 +471,8 @@ void desk_move(struct desktop *d, int i, int32_t x, int32_t y)
 {
     struct desk_client *c = &d->clients[i];
     int32_t max_x = (int32_t)d->width - c->frame.w;
-    int32_t max_y = (int32_t)d->height - c->frame.h - (d->shell ? DESK_BAR : 0);
+    struct desk_box work=desk_work_area(d);
+    int32_t max_y=work.y+work.h-c->frame.h;
     if (max_x < 0) max_x = 0;
     if (max_y < DESK_BAR) max_y = DESK_BAR;
     if (x < 0) x = 0;
@@ -1287,8 +1290,7 @@ void desk_minimize(struct desktop *d, int i)
 static struct desk_box arrange_work(const struct desktop *d)
 {
     /* The area between the top bar and the taskbar: windows never cover a bar. */
-    int32_t h=(int32_t)d->height-DESK_BAR-(d->shell ? DESK_BAR : 0);
-    return (struct desk_box){0,DESK_BAR,(int32_t)d->width,h>0 ? h : 0};
+    return desk_work_area(d);
 }
 /* Which windows an arrangement moves. Cascade and tile leave alone what
  * Windows leaves alone: minimised windows, owned windows (dialogs and
@@ -2491,7 +2493,7 @@ static void v3_place(struct desktop *d, int i, const struct desk_packet *p)
     c->minimized=p->flags==3 ? 0 : (int)p->flags; c->resize_serial++; if (!c->resize_serial) c->resize_serial++;
     if (p->flags==3 && !c->zoomed && c->resizable && !c->collapsed && !c->internal && desk_modal_target(d,i)==i) {
         c->restore=c->frame; c->zoomed=1;
-        desk_resize(d,i,(struct desk_box){0,DESK_BAR,(int32_t)d->width,(int32_t)d->height-DESK_BAR-(d->shell ? DESK_BAR : 0)});
+        desk_resize(d,i,desk_work_area(d));
     }
     desk_damage_add(&d->damage,desk_outer(c),d->width,d->height);
     v3_configure(d,i); desk_v3_restack(d);

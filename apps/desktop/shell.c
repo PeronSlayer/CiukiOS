@@ -309,6 +309,8 @@ static const struct program_info *program_find(const char *name)
 }
 const char *desk_program_icon_name(const char *name)
 { const struct program_info *p = program_find(name); return p ? p->icon : "application-x-executable"; }
+const char *desk_program_menu_label(const char *name)
+{ const struct program_info *p=program_find(name);return p ? p->label : name; }
 const char *desk_program_category(const char *name)
 { const struct program_info *p = program_find(name); return p ? p->category : "developer"; }
 static int program_index(const struct desktop *d, const char *name)
@@ -375,7 +377,9 @@ static const struct { int kind; const char *label; char key; } access_keys[] = {
     {SH_MENU_START,"Programs",'p'},{SH_MENU_START,"Documents",'d'},{SH_MENU_START,"Settings",'s'},
     {SH_MENU_START,"Find",'f'},{SH_MENU_FIND,"Files or Folders...",'f'},
     {SH_MENU_START,"Help",'h'},{SH_MENU_START,"Run...",'r'},{SH_MENU_START,"Shut Down...",'u'},
+    {SH_MENU_START,"Favorites",'a'},{SH_MENU_START,"Find",'f'},{SH_MENU_START,"Help",'h'},{SH_MENU_START,"Run...",'r'},{SH_MENU_START,"Shut Down...",'u'},
     {SH_MENU_SETTINGS,"Control Panel",'c'},{SH_MENU_SETTINGS,"Task Manager",'t'},
+    {SH_MENU_SETTINGS,"Taskbar & Start Menu",'k'},
     {SH_MENU_HELP,"Keyboard Shortcuts",'k'},{SH_MENU_HELP,"About CiukiOS",'a'},
     {SH_MENU_DOCUMENTS,"My Documents",'m'},{SH_MENU_DOCUMENTS,"Clear Recent Documents",'c'},
     {SH_MENU_DESKTOP,"Arrange icons",'i'},{SH_MENU_DESKTOP,"Line up",'u'},{SH_MENU_DESKTOP,"Refresh",'f'},
@@ -406,6 +410,70 @@ static void assign_marks(struct sh_menu *m)
         }
     }
 }
+static int toolbar_hit(const struct desktop *,int,int);
+static void toolbar_activate(struct desktop *,int);
+static void draw_toolbars(struct desktop *,struct desk_box);
+static void bar_motion(struct desktop *);
+static void bar_reveal(struct desktop *);
+static void bar_autohide(struct desktop *);
+static int address_key(struct desktop *,int,int);
+static const char *custom_basename(const char *path)
+{ const char *p=strrchr(path,'/'); return p ? p+1 : path; }
+static void custom_folder_items(struct desktop *d,struct sh_menu *m,int folder)
+{
+    const struct sh_folder_snapshot *s=d->sh.custom;
+    if (!s) return;
+    unsigned shown=0;int extra=0;unsigned limit=m->kind==SH_MENU_START ? SH_ITEMS-11 : SH_FOLDER_ITEMS;
+    for (unsigned k=0;k<s->count;k++) if (s->entries[k].parent==folder) {
+        if (shown++>=limit) { extra=1;continue; }
+        const struct sh_folder_item *e=&s->entries[k];
+        item(m,e->label,e->folder>=0 ? "folder" : "application-x-executable",
+             e->folder>=0 ? SH_ACT_SUBMENU : SH_ACT_SHELL_ITEM,e->folder>=0 ? SH_MENU_FOLDER_BASE+e->folder : (int)k,0);
+    }
+    if (extra || s->truncated) item(m,"More... Open Folder","folder",SH_ACT_FOLDER_EXPLORE,folder,0);
+}
+static int custom_index(const struct desktop *d,const struct sh_item *it)
+{
+    if (!d->sh.custom) return -1;
+    if (it->action==SH_ACT_SHELL_ITEM && it->arg>=0 && (unsigned)it->arg<d->sh.custom->count) return it->arg;
+    if (it->action==SH_ACT_SUBMENU && it->arg>=SH_MENU_FOLDER_BASE) {
+        for (unsigned k=0;k<d->sh.custom->count;k++) if (d->sh.custom->entries[k].folder==it->arg-SH_MENU_FOLDER_BASE) return (int)k;
+    }
+    return -1;
+}
+static void custom_request(struct desktop *d,int op,const char *path,const char *dest,const char *name)
+{
+    if ((path && strlen(path)>=CFG_PATH_MAX) || (dest && strlen(dest)>=CFG_PATH_MAX) || (name && strlen(name)>=sizeof(d->sh.edit.name))) {
+        desk_shell_message(d,"Start Menu","The name or path is too long.",1);return;
+    }
+    if (d->sh.edit.operation) { desk_shell_message(d,"Start Menu","Another shell operation is in progress. Try again shortly.",1); return; }
+    memset(&d->sh.edit,0,sizeof(d->sh.edit)); d->sh.edit.operation=op;
+    if (path) snprintf(d->sh.edit.path,sizeof(d->sh.edit.path),"%s",path);
+    if (dest) snprintf(d->sh.edit.destination,sizeof(d->sh.edit.destination),"%s",dest);
+    if (name) snprintf(d->sh.edit.name,sizeof(d->sh.edit.name),"%s",name);
+}
+static void custom_prompt(struct desktop *d,int mode,const char *initial)
+{
+    int i=desk_internal_open(d,DESK_INTERNAL_RUN);
+    if (i<0) return;
+    d->sh.prompt_mode=mode;
+    snprintf(d->clients[i].title,sizeof(d->clients[i].title),"%s",mode==1 ? "Address" : mode==2 ? "New Toolbar" : "Rename");
+    snprintf(d->sh.run_text,sizeof(d->sh.run_text),"%s",initial ? initial : "");
+    d->sh.run_length=(unsigned)strlen(d->sh.run_text); damage_all(d);
+}
+static void custom_reorder(struct desktop *d,int from,int to)
+{
+    struct sh_folder_snapshot *s=d->sh.custom;
+    if (!s || from<0 || to<0 || (unsigned)from>=s->count || (unsigned)to>=s->count || from==to || s->entries[from].parent!=s->entries[to].parent || d->sh.edit.operation) return;
+    int parent=s->entries[from].parent;
+    struct sh_folder_item e=s->entries[from];
+    if (from<to) memmove(s->entries+from,s->entries+from+1,(size_t)(to-from)*sizeof(e));
+    else memmove(s->entries+to+1,s->entries+to,(size_t)(from-to)*sizeof(e));
+    s->entries[to]=e;
+    custom_request(d,SH_EDIT_ORDER,s->folders[parent],NULL,NULL);
+    for (unsigned k=0;k<s->count && d->sh.edit.count<SH_FOLDER_ITEMS;k++) if (s->entries[k].parent==parent)
+        snprintf(d->sh.edit.order[d->sh.edit.count++],CFG_PATH_MAX,"%s",custom_basename(s->entries[k].path));
+}
 static void build(struct desktop *d, struct sh_menu *m, int kind)
 {
     memset(m, 0, sizeof(*m));
@@ -413,13 +481,20 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
     m->row_h = kind == SH_MENU_START ? SH_START_ROW : SH_SUB_ROW;
     m->icon = 16;   /* every menu: the Tango 16 px artwork (the Start menu too) */
     if (kind>=128) { shortcut_programs_menu(d,m,kind); return; }
+    m->row_h = kind == SH_MENU_START ? desk_menu_row(d) : SH_SUB_ROW;
+    m->icon = kind==SH_MENU_START && !d->sh.cfg.start_small ? 32 : 16;
     switch (kind) {
     case SH_MENU_START:
+        custom_folder_items(d,m,SH_ROOT_START);
+        if (m->count) separator(m);
         item(m, "Programs", "applications-other", SH_ACT_SUBMENU, SH_MENU_PROGRAMS, 0);
+        item(m,"Favorites","folder",SH_ACT_SUBMENU,SH_MENU_FOLDER_BASE+SH_ROOT_FAVORITES,0);
         item(m, "Documents", "document-open", SH_ACT_SUBMENU, SH_MENU_DOCUMENTS, 0);
         item(m, "Settings", "preferences-system", SH_ACT_SUBMENU, SH_MENU_SETTINGS, 0);
         item(m, "Find", "system-search", SH_ACT_SUBMENU, SH_MENU_FIND, 0);
         item(m, "Help", "help-browser", SH_ACT_HELP, 0, 0); /* G15: launch Help directly */
+        item(m,"Find","system-search",SH_ACT_FIND,0,0);
+        item(m, "Help", "help-browser", SH_ACT_SUBMENU, SH_MENU_HELP, 0);
         item(m, "Run...", "go-jump", SH_ACT_RUN, 0, 0);
         item(m, "About CiukiOS", "ciuki", SH_ACT_ABOUT, 0, 0);   /* G15: it left the Help submenu */
         separator(m);
@@ -436,6 +511,12 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
     case SH_MENU_PROGRAMS: {
         /* f2-95: opening the menu asks for a fresh scan; the menu shows the
          * current snapshot and the next refresh publishes any change. */
+        d->sh.custom_refresh=1;
+        if (d->sh.custom && d->sh.custom->native_seeded) {
+            custom_folder_items(d,m,SH_ROOT_PROGRAMS);
+            if (!m->count) item(m,"(Empty)",NULL,SH_ACT_NONE,0,SH_ITEM_DISABLED);
+            break;
+        }
         d->v3_links_force|=DESK_LINKS_SCAN;
         desk_links_refresh(d);
         if (d->v3_link_count) item(m,"Programs folder","folder",SH_ACT_PROGRAMS_FOLDER,0,0);
@@ -505,6 +586,7 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         }
         break;
     case SH_MENU_DOCUMENTS:
+        d->sh.custom_refresh=1;
         for (unsigned k = 0; k < d->sh.cfg.recent_count && k < CFG_RECENT_MAX; k++) {
             const char *path = d->sh.cfg.recent[k], *base = strrchr(path, '/');
             item(m, base && base[1] ? base + 1 : path, "text-x-generic", SH_ACT_DOCUMENT, (int)k, 0);
@@ -522,6 +604,8 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         for (int k=0;k<CP_CATEGORIES;k++)
             item(m,cp_categories[k].label,cp_categories[k].icon,SH_ACT_SUBMENU,SH_MENU_SETTINGS_CATEGORY+k,off);
         separator(m);
+        item(m,"Taskbar & Start Menu","preferences-system-windows",SH_ACT_CONTROL,CP_TASKBAR+1,off);
+        item(m,"Folder Options","folder",SH_ACT_FOLDER_OPTIONS,0,program_index(d,"files")<0 ? SH_ITEM_DISABLED : 0);
         item(m, "Task Manager", "utilities-system-monitor", SH_ACT_TASKMAN, 0, program_index(d, "tasks") < 0 ? SH_ITEM_DISABLED : 0);
         break;
     }
@@ -642,6 +726,7 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         }
         separator(m);
         item(m,"Properties","document-properties",SH_ACT_TASKBAR_PROPERTIES,0,program_index(d,"control")<0 ? SH_ITEM_DISABLED : 0);
+        item(m,"Toolbars",NULL,SH_ACT_SUBMENU,SH_MENU_TOOLBARS,0);
         break;
     }
     case SH_MENU_POWER: {   /* G11: "click the icon to change Power Schemes on-the-fly" */
@@ -650,14 +735,45 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
             item(m,d->sh.power_cfg.schemes[k].name,(int)k==active ? "battery" : NULL,SH_ACT_POWER_SCHEME,(int)k,(int)k==active ? SH_ITEM_DEFAULT : 0);
         break;
     }
-    case SH_MENU_POWER_METER: {   /* G11: right click, the meter and the properties */
+    case SH_MENU_POWER_METER: {
         unsigned off=program_index(d,"control")<0 ? SH_ITEM_DISABLED : 0;
         item(m,"Open Power Meter","battery",SH_ACT_POWER_METER,0,off|SH_ITEM_DEFAULT);
         item(m,"Adjust Power Properties","preferences-system",SH_ACT_CONTROL,CP_POWER+1,off);
-
         break;
     }
+    case SH_MENU_TOOLBARS:
+        item(m,d->sh.cfg.quick_launch ? "Quick Launch (on)" : "Quick Launch",NULL,SH_ACT_TOOLBAR,0,0);
+        item(m,d->sh.cfg.toolbar_address ? "Address (on)" : "Address",NULL,SH_ACT_TOOLBAR,1,0);
+        item(m,d->sh.cfg.toolbar_links ? "Links (on)" : "Links",NULL,SH_ACT_TOOLBAR,2,0);
+        item(m,d->sh.cfg.toolbar_desktop ? "Desktop (on)" : "Desktop",NULL,SH_ACT_TOOLBAR,3,0);
+        for (unsigned k=0;k<CFG_TOOLBARS;k++) if (d->sh.cfg.toolbar_folder[k][0])
+            item(m,custom_basename(d->sh.cfg.toolbar_folder[k]),"folder",SH_ACT_TOOLBAR,4+(int)k,0);
+        separator(m); item(m,"New Toolbar...","folder-new",SH_ACT_NEW_TOOLBAR,0,0);
+        break;
+    case SH_MENU_TOOLBAR_CONTEXT:
+        item(m,"Close",NULL,SH_ACT_TOOLBAR,d->sh.custom_menu_root,0);
+        if (d->sh.custom_menu_root!=1) item(m,"Open Folder","folder",SH_ACT_TOOLBAR_EXPLORE,d->sh.custom_menu_root,0);
+        break;
+    case SH_MENU_TOOLBAR_ALL:
+        if (d->sh.cfg.toolbar_address) item(m,"Address",NULL,SH_ACT_ADDRESS,0,0);
+        if (d->sh.cfg.quick_launch) item(m,"Quick Launch",NULL,SH_ACT_SUBMENU,SH_MENU_FOLDER_BASE+SH_ROOT_QUICK,0);
+        if (d->sh.cfg.toolbar_links) item(m,"Links",NULL,SH_ACT_SUBMENU,SH_MENU_FOLDER_BASE+SH_ROOT_LINKS,0);
+        if (d->sh.cfg.toolbar_desktop) item(m,"Desktop",NULL,SH_ACT_SUBMENU,SH_MENU_FOLDER_BASE+SH_ROOT_DESKTOP,0);
+        for (unsigned k=0;k<CFG_TOOLBARS;k++) if (d->sh.cfg.toolbar_folder[k][0])
+            item(m,custom_basename(d->sh.cfg.toolbar_folder[k]),"folder",SH_ACT_SUBMENU,SH_MENU_FOLDER_BASE+SH_ROOT_CUSTOM+(int)k,0);
+        break;
+    case SH_MENU_START_ITEM:
+        item(m,"Open",NULL,SH_ACT_START_OPEN,0,SH_ITEM_DEFAULT);
+        item(m,"Delete",NULL,SH_ACT_START_DELETE,0,0);
+        item(m,"Rename",NULL,SH_ACT_START_RENAME,0,0);
+        item(m,"Explore",NULL,SH_ACT_START_EXPLORE,0,0);
+        item(m,"Properties","document-properties",SH_ACT_START_PROPERTIES,0,0);
+        break;
     default:
+        if (kind>=SH_MENU_FOLDER_BASE && kind<SH_MENU_FOLDER_BASE+SH_FOLDERS) {
+            custom_folder_items(d,m,kind-SH_MENU_FOLDER_BASE);
+            if (!m->count) item(m,"(Empty)",NULL,SH_ACT_NONE,0,SH_ITEM_DISABLED);
+        }
         if (kind>=SH_MENU_SETTINGS_CATEGORY && kind<=SH_MENU_SETTINGS_LAST)
             for (unsigned k=0;k<CP_APPLETS;k++) if (cp_applets[k].category==kind-SH_MENU_SETTINGS_CATEGORY)
                 item(m,cp_applets[k].label,cp_applets[k].icon,SH_ACT_CONTROL,cp_applets[k].page+1,program_index(d,"control")<0 ? SH_ITEM_DISABLED : 0);
@@ -667,7 +783,7 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
 }
 static int32_t item_y(const struct sh_menu *m, int index)
 {
-    int32_t y = m->box.y + 3;
+    int32_t y = m->box.y + 3 + (m->scroll_max ? 12 : 0) - m->scroll;
     for (int k = 0; k < index && k < m->count; k++) y += m->items[k].flags & SH_ITEM_SEPARATOR ? SH_SEPARATOR : m->row_h;
     return y;
 }
@@ -686,12 +802,25 @@ static void layout(struct desktop *d, struct sh_menu *m, int32_t x, int32_t y, i
     if (w < 150) w = 150;
     for (int k = 0; k < m->count; k++) h += item_h(m, k);
     int32_t limit = (int32_t)d->height - (d->shell ? DESK_BAR : 0);
+    if (h>limit) { m->scroll_max=h-limit+24;h=limit; }
     if (above) y -= h;
     if (x + w > (int32_t)d->width) x = (int32_t)d->width - w;
     if (y + h > limit) y = limit - h;
     if (x < 0) x = 0;
     if (y < 0) y = 0;
     m->box = (struct desk_box){x, y, w, h};
+}
+void desk_shell_custom_updated(struct desktop *d)
+{
+    int refresh=d->sh.custom_refresh;
+    for (int l=0;l<d->sh.levels;l++) {
+        struct sh_menu *m=&d->sh.menus[l];struct desk_box b=m->box;int kind=m->kind,hot=m->hot;
+        damage(d,outer(b));build(d,m,kind);layout(d,m,b.x,b.y,0);
+        if (hot<m->count) m->hot=hot;
+        damage(d,outer(m->box));
+    }
+    d->sh.custom_refresh=refresh;
+    damage(d,desk_taskbar(d));
 }
 static void menus_damage(struct desktop *d)
 {
@@ -700,6 +829,7 @@ static void menus_damage(struct desktop *d)
 void desk_menu_open(struct desktop *d, int kind, int32_t x, int32_t y)
 {
     d->sh.start_keyboard = 0;
+    if (kind==SH_MENU_START || kind>=SH_MENU_FOLDER_BASE) d->sh.custom_refresh=1;
     desk_v3_revoke(d); desk_v3_pointer_release(d);
     tooltip_hide(d);
     if (d->sh.icon_selected>=0) damage(d,d->sh.icons[d->sh.icon_selected].box);
@@ -757,6 +887,8 @@ static void submenu(struct desktop *d, int level, int index)
 static int menu_hit(const struct sh_menu *m, int32_t x, int32_t y)
 {
     if (!desk_contains(m->box, x, y)) return -1;
+    if (m->scroll_max && y<m->box.y+15) return -3;
+    if (m->scroll_max && y>=m->box.y+m->box.h-15) return -4;
     for (int k = 0; k < m->count; k++) {
         int32_t top = item_y(m, k);
         if (y >= top && y < top + item_h(m, k))
@@ -764,8 +896,20 @@ static int menu_hit(const struct sh_menu *m, int32_t x, int32_t y)
     }
     return -2;
 }
+static void menu_scroll(struct desktop *d,struct sh_menu *m,int delta)
+{
+    int scroll=m->scroll+delta;
+    if (scroll<0) scroll=0;
+    if (scroll>m->scroll_max) scroll=m->scroll_max;
+    if (scroll!=m->scroll) { m->scroll=scroll;damage(d,m->box); }
+}
 static void menu_highlight(struct desktop *d,struct sh_menu *m,int hot)
 {
+    if (hot>=0 && hot<m->count && m->scroll_max) {
+        int y=item_y(m,hot),top=m->box.y+15,bottom=m->box.y+m->box.h-15;
+        if (y<top) menu_scroll(d,m,y-top);
+        else if (y+item_h(m,hot)>bottom) menu_scroll(d,m,y+item_h(m,hot)-bottom);
+    }
     if(hot==m->hot)return;
     int rows[]={m->hot,hot};
     for(unsigned i=0;i<2;i++)if(rows[i]>=0 && rows[i]<m->count)
@@ -860,6 +1004,40 @@ static void act(struct desktop *d, const struct sh_item *it)
     char argument[24];
     switch (it->action) {
     case SH_ACT_FIND: desk_shell_find(d, 0); break;
+    case SH_ACT_FOLDER_EXPLORE:
+        if (d->sh.custom && it->arg>=0 && (unsigned)it->arg<d->sh.custom->folders_count) launch_named(d,"files",d->sh.custom->folders[it->arg]);
+        break;
+    case SH_ACT_FOLDER_OPTIONS: launch_named(d,"files","--folder-options"); break;
+    case SH_ACT_SHELL_ITEM:
+        if (d->sh.custom && it->arg>=0 && (unsigned)it->arg<d->sh.custom->count)
+            snprintf(d->sh.custom_open,sizeof(d->sh.custom_open),"%s",d->sh.custom->entries[it->arg].path);
+        break;
+    case SH_ACT_TOOLBAR: {
+        int *flags[]={&d->sh.cfg.quick_launch,&d->sh.cfg.toolbar_address,&d->sh.cfg.toolbar_links,&d->sh.cfg.toolbar_desktop};
+        if (it->arg>=0 && it->arg<4) *flags[it->arg]=!*flags[it->arg];
+        else if (it->arg>=4 && it->arg<4+CFG_TOOLBARS) d->sh.cfg.toolbar_folder[it->arg-4][0]=0;
+        d->sh.want_save=1; d->sh.custom_refresh=1; damage_all(d); break;
+    }
+    case SH_ACT_TOOLBAR_EXPLORE: {
+        const char *path=it->arg==0 ? SH_QUICK_FOLDER : it->arg==2 ? SH_LINKS_FOLDER : it->arg==3 ? SH_DESKTOP_FOLDER : it->arg>=4 && it->arg<4+CFG_TOOLBARS ? d->sh.cfg.toolbar_folder[it->arg-4] : NULL;
+        if (path) launch_named(d,"files",path);
+        break;
+    }
+    case SH_ACT_ADDRESS: d->sh.address_focus=1;d->sh.bar_hidden=0;desk_focus(d,-1);damage(d,desk_taskbar(d));break;
+    case SH_ACT_NEW_TOOLBAR: custom_prompt(d,2,"/"); break;
+    case SH_ACT_START_OPEN: case SH_ACT_START_DELETE: case SH_ACT_START_RENAME: case SH_ACT_START_EXPLORE: case SH_ACT_START_PROPERTIES:
+        if (d->sh.custom && d->sh.custom_item>=0 && (unsigned)d->sh.custom_item<d->sh.custom->count) {
+            const struct sh_folder_item *e=&d->sh.custom->entries[d->sh.custom_item];
+            if (it->action==SH_ACT_START_OPEN) snprintf(d->sh.custom_open,sizeof(d->sh.custom_open),"%s",e->path);
+            else if (it->action==SH_ACT_START_DELETE) custom_request(d,SH_EDIT_DELETE,e->path,NULL,NULL);
+            else if (it->action==SH_ACT_START_RENAME) { strcpy(d->sh.prompt_path,e->path);custom_prompt(d,3,e->label); }
+            else if (it->action==SH_ACT_START_PROPERTIES) {
+                int game=-1;for (unsigned k=0;k<DESK_GAME_COUNT;k++) if (!strcmp(e->label,desk_games[k].label)) game=(int)k;
+                if (game>=0) desk_game_properties(d,(unsigned)game+1);
+                else { char arg[CFG_PATH_MAX+16];snprintf(arg,sizeof(arg),"--properties=%s",e->path);launch_named(d,"files",arg); }
+            } else launch_named(d,"files",d->sh.custom->folders[e->parent]);
+        }
+        break;
     case SH_ACT_LAUNCH: d->action = it->arg; break;
     case SH_ACT_ABOUT: desk_about(d); break;
     case SH_ACT_HELP: launch_named(d, "help", NULL); break;
@@ -929,9 +1107,9 @@ static void act(struct desktop *d, const struct sh_item *it)
     case SH_ACT_TILE_V: (void)desk_arrange(d, DESK_ARRANGE_TILE_V); break;
     case SH_ACT_MINIMIZE_ALL: (void)desk_minimize_all(d); break;
     case SH_ACT_ARRANGE_UNDO: (void)desk_arrange_undo(d); break;
-    /* Taskbar Properties (always on top, auto hide, clock) is G20's dialog;
-     * until then the entry opens the Control Panel, where it will live. */
-    case SH_ACT_TASKBAR_PROPERTIES: launch_named(d, "control", NULL); break;
+    /* G20 routes the taskbar context-menu Properties command to its dedicated
+     * Taskbar & Start Menu Control Panel page. */
+    case SH_ACT_TASKBAR_PROPERTIES: launch_named(d, "control", "--panel=taskbar"); break;
     case SH_ACT_ARRANGE: {
         if (!it->arg) cfg_icons_arrange(&d->sh.cfg);
         else {
@@ -1070,10 +1248,10 @@ static void act(struct desktop *d, const struct sh_item *it)
             desk_queue(d,it->arg,&message);
         }
         break;
-    case SH_ACT_CLEAR_RECENT: d->sh.cfg.recent_count = 0; d->sh.want_save = 1; break;
     case SH_ACT_MAGNIFIER:
         if (desk_access_magnifier_set) desk_access_magnifier_set(d, !desk_access_magnifier_on(d));
         break;
+    case SH_ACT_CLEAR_RECENT: custom_request(d,SH_EDIT_CLEAR,NULL,NULL,NULL); break;
     default: break;
     }
 }
@@ -1144,6 +1322,11 @@ static void draw_menu(struct desktop *d, const struct sh_menu *m, struct desk_bo
     if (banner) draw_banner(&c, (struct desk_box){m->box.x + 2, m->box.y + 2, banner + 1, m->box.h - 4});
     int platinum = desk_theme->control_style == DESK_CONTROLS_PLATINUM;
     int32_t x0 = m->box.x + 3 + banner, w = m->box.w - 6 - banner;
+    if (m->scroll_max) {
+        du_triangle(&c,x0+w/2,m->box.y+8,0,3,m->scroll ? SH_INK : DU_GRAY);
+        du_triangle(&c,x0+w/2,m->box.y+m->box.h-8,1,3,m->scroll<m->scroll_max ? SH_INK : DU_GRAY);
+    }
+    c.clip=du_intersection(c.clip,(struct du_rect){x0,m->box.y+3+(m->scroll_max ? 12 : 0),w,m->box.h-6-(m->scroll_max ? 24 : 0)});
     for (int k = 0; k < m->count; k++) {
         const struct sh_item *it = &m->items[k];
         int32_t y = item_y(m, k), h = item_h(m, k);
@@ -1462,7 +1645,16 @@ static void draw_taskbar(struct desktop *d, struct desk_box clip)
 {
     const struct desk_theme *t = desk_theme;
     struct desk_box bar = desk_taskbar(d), b;
+    if (d->sh.cfg.taskbar_autohide && d->sh.bar_hidden) return;
     if (!desk_intersect(bar, clip, &b)) return;
+    struct desk_box quick=desk_quick_launch_button(d), part;
+    if (desk_intersect(quick,b,&part)) {
+        struct du_canvas qc=canvas(d,part); struct desk_paint qp=painter(&qc);
+        desk_paint_task(&qp,quick.x+1,quick.y,quick.w-2,quick.h,0,d->lfb_bytes_per_pixel==2);
+        const uint32_t *icon=desk_shell_icon("user-desktop",16);
+        if (icon) du_icon_blit(&qc,quick.x+(quick.w-16)/2,quick.y+(quick.h-16)/2,icon,16,DU_ICON_NORMAL);
+    }
+    draw_toolbars(d,b);
     /* Both themes align tasks from the left; the whole bar belongs to windows. */
     for (int i = 0; i < DESK_CLIENTS; i++) {
         struct desk_box button = desk_task_button(d, i), part;
@@ -1831,6 +2023,7 @@ static void draw_tray(struct desktop *d, struct du_canvas *canvas)
         du_fill(&c, (struct du_rect){ri.x, ri.y + SH_TRAY_ICON_SIZE - 3, SH_TRAY_ICON_SIZE, 3}, 0x202020u);
         if (filled) du_fill(&c, (struct du_rect){ri.x, ri.y + SH_TRAY_ICON_SIZE - 3, filled, 3}, level_colors[level]);
     }
+    if (!d->sh.cfg.taskbar_clock) return;
     char clock[24];
     clock_text(d, clock, sizeof(clock));
     struct desk_box cb = clock_box(d);
@@ -2236,6 +2429,15 @@ static void draw_icons(struct desktop *d, struct desk_box clip)
 }
 unsigned desk_shell_cursor(const struct desktop *d)
 {
+    struct desk_box bar=desk_taskbar(d);
+    if (d->sh.bar_resize) return d->sh.cfg.taskbar_edge>=CFG_BAR_LEFT ? DESK_CURSOR_RESIZE_EW : DESK_CURSOR_RESIZE_NS;
+    if (desk_contains(bar,d->mouse_x,d->mouse_y) && (desk_taskbar_front(d) || desk_hit(d,d->mouse_x,d->mouse_y)<0)) {
+        int edge=d->sh.cfg.taskbar_edge;
+        if (edge==CFG_BAR_BOTTOM ? d->mouse_y<bar.y+4 : edge==CFG_BAR_TOP ? d->mouse_y>=bar.y+bar.h-4 : edge==CFG_BAR_LEFT ? d->mouse_x>=bar.x+bar.w-4 : d->mouse_x<bar.x+4)
+            return edge>=CFG_BAR_LEFT ? DESK_CURSOR_RESIZE_EW : DESK_CURSOR_RESIZE_NS;
+        int slot=toolbar_hit(d,d->mouse_x,d->mouse_y);struct desk_toolbar_slot slots[DESK_TOOLBAR_SLOTS];int n=desk_toolbar_slots(d,slots);
+        if (slot>=0 && slot<n && slots[slot].kind==DESK_TOOLBAR_ADDRESS) return DESK_CURSOR_TEXT;
+    }
     int i=desk_hit(d,d->mouse_x,d->mouse_y);
     if (i>=0 && d->clients[i].internal==DESK_INTERNAL_RUN) {
         struct desk_box b=desk_content(&d->clients[i]);
@@ -2501,10 +2703,45 @@ static void dnd_evaluate(struct desktop *d)
     char destination[FM_PATH] = "";
     g->keys = dnd_keys(d);
     int window = desk_hit(d, x, y);
-    if (y < DESK_BAR) kind = SH_DROP_NONE;
+    int menu_folder=-1;
+    if (g->count && desk_start_contains(d,x,y)) { if (!g->start_hover_ns) g->start_hover_ns=d->now_ns ? d->now_ns : 1; }
+    else g->start_hover_ns=0;
+    for (int l=d->sh.levels-1;l>=0;l--) if (desk_contains(d->sh.menus[l].box,x,y)) {
+        int mk=d->sh.menus[l].kind;
+        menu_folder=mk==SH_MENU_START ? SH_ROOT_START : mk==SH_MENU_PROGRAMS ? SH_ROOT_PROGRAMS : mk>=SH_MENU_FOLDER_BASE ? mk-SH_MENU_FOLDER_BASE : -1;
+        int hit=menu_hit(&d->sh.menus[l],x,y);
+        if (hit>=0) {
+            menu_highlight(d,&d->sh.menus[l],hit);
+            const struct sh_item *it=&d->sh.menus[l].items[hit];
+            if (it->action==SH_ACT_SUBMENU && (it->arg==SH_MENU_PROGRAMS || it->arg>=SH_MENU_FOLDER_BASE)) {
+                menu_folder=it->arg==SH_MENU_PROGRAMS ? SH_ROOT_PROGRAMS : it->arg-SH_MENU_FOLDER_BASE;
+                submenu(d,l,hit);
+            }
+        }
+        break;
+    }
+    if (g->count && (desk_start_contains(d,x,y) || menu_folder>=0)) {
+        kind=SH_DROP_START;allowed=effect=FM_EFFECT_LINK;
+        const char *path=menu_folder>=0 && d->sh.custom ? d->sh.custom->folders[menu_folder] :
+            menu_folder==SH_ROOT_PROGRAMS ? SH_PROGRAMS_FOLDER : menu_folder==SH_ROOT_FAVORITES ? SH_FAVORITES_FOLDER : SH_START_FOLDER;
+        snprintf(destination,sizeof(destination),"%s",path);
+    } else if (y < DESK_BAR) kind = SH_DROP_NONE;
     else if (d->shell && desk_contains(desk_taskbar(d), x, y)) {
         for (int i = 0; i < DESK_CLIENTS; i++) if (desk_task_visible(&d->clients[i]) && desk_contains(desk_task_button(d, i), x, y)) task = i;
         kind = SH_DROP_TASK;
+        int slot=toolbar_hit(d,x,y),root=-1;
+        if (desk_contains(desk_quick_launch_button(d),x,y)) root=SH_ROOT_QUICK;
+        if (slot>=0) {
+            struct desk_toolbar_slot slots[DESK_TOOLBAR_SLOTS];int n=desk_toolbar_slots(d,slots);
+            if (slot<n && slots[slot].kind==DESK_TOOLBAR_FOLDER) root=slots[slot].arg;
+            else if (slot<n && slots[slot].kind==DESK_TOOLBAR_ITEM && d->sh.custom) root=d->sh.custom->entries[slots[slot].arg].parent;
+        }
+        if (g->count && root>=0) {
+            kind=SH_DROP_QUICK;allowed=effect=FM_EFFECT_LINK;
+            snprintf(destination,sizeof(destination),"%s",root==SH_ROOT_QUICK ? SH_QUICK_FOLDER : d->sh.custom ? d->sh.custom->folders[root] : "");
+        } else if (task<0 && g->count==1 && g->types[0]=='D') {
+            kind=SH_DROP_TOOLBAR;allowed=effect=FM_EFFECT_LINK;
+        }
     } else if (window >= 0) {
         const struct desk_client *c = &d->clients[window];
         if (desk_modal_target(d, window) == window && desk_contains(desk_content(c), x, y) && g->count) {
@@ -2568,6 +2805,7 @@ static void dnd_evaluate(struct desktop *d)
 static void dnd_start(struct desktop *d)
 {
     struct sh_dnd *g = &d->sh.dnd;
+    g->start_hover_ns=0;g->opened_start=0;
     g->active = 1; g->menu = 0; g->serial = ++dnd_counter ? dnd_counter : ++dnd_counter;
     g->kind = SH_DROP_NONE; g->target = -1; g->status_target = -1; g->hover_task = -1; g->drop_index = -1;
     g->start_x = d->mouse_x; g->start_y = d->mouse_y; g->image = (struct desk_box){0, 0, 0, 0};
@@ -2627,10 +2865,14 @@ static void dnd_finish(struct desktop *d, unsigned performed)
         uint32_t w[1] = {performed};
         dnd_send(d, g->source, DESK_DRAG_END, 8, w, 1);
     }
-    int old = g->drop_index;
+    int old = g->drop_index,opened_start=g->opened_start;
     if (g->image.w) damage(d, g->image);
     dnd_free(d);
     memset(g, 0, sizeof(*g)); g->drop_index = -1; g->hover_task = -1; g->target = -1; g->status_target = -1; g->source = -1;
+    if (opened_start) {
+        desk_menu_close(d);
+        if (d->menu_open) { d->menu_open=0;desk_focus(d,d->menu_focus);damage(d,desk_start_bounds(d)); }
+    }
     icon_repaint(d, old);
     desk_cursor_update(d);
 }
@@ -2667,6 +2909,20 @@ static void dnd_commit(struct desktop *d, unsigned effect)
     int x = g->menu ? g->menu_x : d->mouse_x, y = g->menu ? g->menu_y : d->mouse_y;
     unsigned performed = FM_EFFECT_NONE;
     if (effect && (effect & g->allowed) == effect) switch (g->kind) {
+    case SH_DROP_START: case SH_DROP_QUICK: {
+        int paths_fit=1;for (unsigned k=0;k<g->count;k++) if (strlen(g->paths[k])>=CFG_PATH_MAX) paths_fit=0;
+        if (!paths_fit) { desk_shell_message(d,"Shortcuts","One of the paths is too long to create a shortcut.",1);break; }
+        if (!d->sh.edit.operation && g->count && g->count<=SH_FOLDER_ITEMS) {
+            custom_request(d,SH_EDIT_ADD,NULL,g->destination,NULL);
+            d->sh.edit.sources_count=g->count;
+            for (unsigned k=0;k<g->count;k++) snprintf(d->sh.edit.sources[k],CFG_PATH_MAX,"%s",g->paths[k]);
+            performed=FM_EFFECT_LINK;
+        } else desk_shell_message(d,"Shortcuts","Another shell operation is in progress, or too many items were selected. Try a smaller selection.",1);
+        break;
+    }
+    case SH_DROP_TOOLBAR:
+        if (g->count==1 && !d->sh.edit.operation) { custom_request(d,SH_EDIT_TOOLBAR,g->paths[0],NULL,NULL);performed=FM_EFFECT_LINK; }
+        break;
     case SH_DROP_FILES:
         if (g->target >= 0 && files_target(d, g->target)) {
             struct desk_box b = desk_content(&d->clients[g->target]);
@@ -2751,6 +3007,9 @@ static void dnd_tick(struct desktop *d)
 {
     struct sh_dnd *g = &d->sh.dnd;
     if (!g->active || g->menu) return;
+    if (g->start_hover_ns && d->now_ns-g->start_hover_ns>=500000000ull && !d->menu_open) {
+        g->opened_start=1;desk_menu_open(d,SH_MENU_START,0,0);dnd_evaluate(d);
+    }
     /* OLE repeats DragOver while the pointer rests (auto-scroll, hover). */
     if (g->kind == SH_DROP_FILES && d->now_ns - g->repeat_ns >= 100000000ull) dnd_over(d, 0);
     /* Windows 98: resting on a taskbar button brings its window forward. */
@@ -3025,6 +3284,12 @@ static void draw_start(struct desktop *d, struct du_canvas *c)
         desk_paint_blend(&p,x+xx,y+yy,1,1,src,(src>>24)*coverage/16);
     }
 }
+void desk_shell_bar(struct desktop *d,struct desk_box clip)
+{
+    struct desk_box b=desk_taskbar(d);struct du_canvas c=canvas(d,clip);struct desk_paint p=painter(&c);
+    desk_paint_bar(&p,b.x,b.y,b.w,b.h,desk_theme->taskbar,d->lfb_bytes_per_pixel==2);
+    draw_taskbar(d,clip);
+}
 void desk_shell_topbar(struct desktop *d, struct desk_box clip)
 {
     /* Free space separates the orb and system status; captions stay in frames. */
@@ -3046,7 +3311,6 @@ void desk_shell_start(struct desktop *d, struct desk_box clip)
 void desk_shell_overlay(struct desktop *d, struct desk_box clip)
 {
     bind(d);
-    draw_taskbar(d, clip);
     if (d->sh.notification.active) draw_notification(d,clip);
     for (int l = 0; l < d->sh.levels; l++) draw_menu(d, &d->sh.menus[l], clip);
     if (d->sh.volume_open) draw_volume(d, clip);
@@ -3260,6 +3524,7 @@ int desk_internal_open(struct desktop *d, int kind)
         if (!d->sh.run) { c->internal=0; c->window=0; return -1; }
         d->sh.run->selected=-1; d->sh.run_history_request=1;
     }
+    if (kind == DESK_INTERNAL_RUN) { d->sh.prompt_mode=0; d->sh.run_length = 0; d->sh.run_text[0] = 0; }
     if (kind == DESK_INTERNAL_SHUTDOWN) d->sh.shutdown_choice = 0;
     int32_t x = ((int32_t)d->width - c->frame.w) / 2, y = DESK_BAR + 20;
     if (kind == DESK_INTERNAL_RUN) { x = 8; y = DESK_BAR + 8; }   /* under the Ciuki button and its menu */
@@ -3660,6 +3925,7 @@ void desk_internal_paint(struct desktop *d, int index, struct desk_box content, 
         if (r && r->browser) { run_browser_paint(d,content,clip); break; }
         du_icon_blit(&c, content.x + 12, content.y + 12, desk_shell_icon("go-jump", 32), 32, DU_ICON_NORMAL);
         multiline(&c, content.x + 56, content.y + 14, "Type the name of a program, folder, document,\nor Internet address, and CiukiOS will open it.", SH_INK);
+        multiline(&c, content.x + 56, content.y + 14, d->sh.prompt_mode==1 ? "Type an address, folder or file to open." : d->sh.prompt_mode==2 ? "Type the existing folder to use as a new toolbar." : d->sh.prompt_mode==3 ? "Type a new name for this Start menu item." : "Type the name of a program in /Programs, followed by\nits arguments, and CiukiOS will start it.", SH_INK);
         du_label(&c, content.x + 12, content.y + 52 + (22 - DU_GLYPH_H) / 2, "&Open:", SH_INK, 1);
         struct du_rect field = {content.x + 56, content.y + 52, content.w - 88, 22};
         du_well(&c, field, SH_WINDOW);
@@ -3742,6 +4008,13 @@ static void run_commit(struct desktop *d, int index)
     if (!*p) return;
     snprintf(d->sh.want_run, sizeof(d->sh.want_run), "%s", d->sh.run_text);
     r->busy=1;
+    if (!d->sh.run_length) return;
+    if (d->sh.prompt_mode==1) snprintf(d->sh.custom_open,sizeof(d->sh.custom_open),"%s",d->sh.run_text);
+    else if (d->sh.prompt_mode==2) custom_request(d,SH_EDIT_TOOLBAR,d->sh.run_text,NULL,NULL);
+    else if (d->sh.prompt_mode==3)
+        custom_request(d,SH_EDIT_RENAME,d->sh.prompt_path,NULL,d->sh.run_text);
+    else snprintf(d->sh.want_run, sizeof(d->sh.want_run), "%s", d->sh.run_text);
+    desk_request_close(d, index);
 }
 /* Modal shutdown input never reaches a client, the menu, or title dragging. */
 int desk_power_input(struct desktop *d, const struct ciuki_input_event *e)
@@ -3880,6 +4153,23 @@ static void tooltip_hide(struct desktop *d)
 int desk_shell_button(struct desktop *d, int button, int down)
 {
     if (!d->shell) return 0;
+    if (!down && button==CIUKI_BUTTON_LEFT && d->sh.bar_drag) {
+        d->sh.bar_drag=d->sh.bar_resize=0;d->sh.want_save=1;desk_shell_geometry(d);return 1;
+    }
+    if (!down && button==CIUKI_BUTTON_LEFT && d->sh.custom_drag>=0) {
+        int from=d->sh.custom_drag, dragging=d->sh.custom_dragging;
+        d->sh.custom_drag=-1;d->sh.custom_dragging=0;
+        for (int l=d->sh.levels-1;l>=0;l--) {
+            int hit=menu_hit(&d->sh.menus[l],d->mouse_x,d->mouse_y);
+            if (hit>=0) {
+                int to=custom_index(d,&d->sh.menus[l].items[hit]);
+                if (dragging) { custom_reorder(d,from,to);desk_menu_close(d); }
+                else activate(d,l,hit);
+                break;
+            }
+        }
+        return 1;
+    }
     /* fx-19: a drag session sees the buttons first (drop, right-drag menu);
      * a release still reaches the source window that holds the button. */
     if (d->sh.dnd.active && !d->sh.dnd.menu) return desk_shell_drag_button(d, button, down) && down;
@@ -3894,6 +4184,10 @@ int desk_shell_button(struct desktop *d, int button, int down)
             } else t->click_ns=d->now_ns ? d->now_ns : 1;
         }
         program_tray_event(d,k,message); return 1;
+    }
+    if (down && d->sh.address_focus) {
+        int slot=toolbar_hit(d,x,y);struct desk_toolbar_slot slots[DESK_TOOLBAR_SLOTS];int n=desk_toolbar_slots(d,slots);
+        if (slot<0 || slot>=n || slots[slot].kind!=DESK_TOOLBAR_ADDRESS) { d->sh.address_focus=0;damage(d,desk_taskbar(d)); }
     }
     if (down && d->focus<0 && d->sh.folder && d->sh.folder->editing>=0) {
         struct desk_folder *f=d->sh.folder;
@@ -3931,6 +4225,14 @@ int desk_shell_button(struct desktop *d, int button, int down)
         for (int l = d->sh.levels - 1; l >= 0; l--) {
             int k = menu_hit(&d->sh.menus[l], x, y);
             if (k == -1) continue;
+            if (k==-3 || k==-4) { menu_scroll(d,&d->sh.menus[l],k==-3 ? -SH_SUB_ROW : SH_SUB_ROW);return 1; }
+            int ci=k>=0 ? custom_index(d,&d->sh.menus[l].items[k]) : -1;
+            if (ci>=0 && button==CIUKI_BUTTON_RIGHT) {
+                d->sh.custom_item=ci; desk_menu_close(d); desk_menu_open(d,SH_MENU_START_ITEM,x,y); return 1;
+            }
+            if (ci>=0 && button==CIUKI_BUTTON_LEFT) {
+                d->sh.custom_drag=ci; d->sh.custom_dragging=0; d->sh.custom_press_x=x;d->sh.custom_press_y=y;return 1;
+            }
             if (k>=0 && button==CIUKI_BUTTON_RIGHT && d->sh.menus[l].items[k].action==SH_ACT_GAME)
                 desk_game_properties(d,(unsigned)d->sh.menus[l].items[k].arg+1);
             else if (k>=0 && button==CIUKI_BUTTON_RIGHT && d->sh.menus[l].items[k].action==SH_ACT_WIN32_LINK)
@@ -4090,8 +4392,27 @@ int desk_shell_button(struct desktop *d, int button, int down)
         if (button==CIUKI_BUTTON_RIGHT) { d->sh.menu_owner=-1; desk_menu_open(d, SH_MENU_TASKBAR, x, DESK_BAR); }
         return 1;
     }
-    if (desk_contains(bar,x,y)) {
+    if (desk_contains(bar,x,y) && (desk_taskbar_front(d) || desk_hit(d,x,y)<0)) {
+        if (button==CIUKI_BUTTON_LEFT) d->sh.bar_raised=1;
+        int tool=toolbar_hit(d,x,y);
+        if (button==CIUKI_BUTTON_RIGHT && (tool>=0 || desk_contains(desk_quick_launch_button(d),x,y))) {
+            int code=0;
+            if (tool>=0) {
+                struct desk_toolbar_slot slots[DESK_TOOLBAR_SLOTS];int n=desk_toolbar_slots(d,slots);
+                if (tool<n) {
+                    int root=slots[tool].kind==DESK_TOOLBAR_ITEM && d->sh.custom ? d->sh.custom->entries[slots[tool].arg].parent : slots[tool].arg;
+                    code=slots[tool].kind==DESK_TOOLBAR_ADDRESS ? 1 : root==SH_ROOT_QUICK ? 0 : root==SH_ROOT_LINKS ? 2 : root==SH_ROOT_DESKTOP ? 3 : root-SH_ROOT_CUSTOM+4;
+                }
+            }
+            d->sh.custom_menu_root=code;desk_menu_open(d,SH_MENU_TOOLBAR_CONTEXT,x,y);return 1;
+        }
+        if (tool>=0 && button==CIUKI_BUTTON_LEFT) { toolbar_activate(d,tool);return 1; }
         int on_button = 0;
+        if (desk_contains(desk_quick_launch_button(d),x,y)) {
+            if (button==CIUKI_BUTTON_LEFT) (void)desk_show_desktop(d);
+            else if (button==CIUKI_BUTTON_RIGHT) { d->sh.menu_owner=-1; desk_menu_open(d,SH_MENU_TASKBAR,x,bar.y); }
+            return 1;
+        }
         for (int i = 0; i < DESK_CLIENTS; i++) if (desk_contains(desk_task_button(d, i), x, y)) {
             on_button = 1;
             if (button == CIUKI_BUTTON_RIGHT) {
@@ -4105,6 +4426,12 @@ int desk_shell_button(struct desktop *d, int button, int down)
         }
         /* WM-12: Cascade, Tile, Minimize All and Undo, on the empty part of the taskbar. */
         if (!on_button && button == CIUKI_BUTTON_RIGHT) { d->sh.menu_owner = -1; desk_menu_open(d, SH_MENU_TASKBAR, x, bar.y); }
+        if (!on_button && button==CIUKI_BUTTON_LEFT) {
+            d->sh.bar_drag=1;d->sh.bar_origin_edge=d->sh.cfg.taskbar_edge;d->sh.bar_origin_size=d->sh.cfg.taskbar_size;
+            d->sh.bar_press_x=x;d->sh.bar_press_y=y;
+            int edge=d->sh.cfg.taskbar_edge;
+            d->sh.bar_resize=edge==CFG_BAR_BOTTOM ? y<bar.y+4 : edge==CFG_BAR_TOP ? y>=bar.y+bar.h-4 : edge==CFG_BAR_LEFT ? x>=bar.x+bar.w-4 : x<bar.x+4;
+        }
         return 1;
     }
     if (desk_hit(d, x, y) >= 0) return 0;
@@ -4167,6 +4494,9 @@ void desk_shell_motion(struct desktop *d)
 {
     if (!d->shell) return;
     int32_t x = d->mouse_x, y = d->mouse_y;
+    if (d->sh.bar_drag) { bar_motion(d);return; }
+    if (d->sh.custom_drag>=0 && (abs(x-d->sh.custom_press_x)>4 || abs(y-d->sh.custom_press_y)>4)) d->sh.custom_dragging=1;
+    bar_reveal(d);
     if (d->sh.dnd.active && !d->sh.dnd.menu) { desk_shell_drag_motion(d); return; }
     /* SM_CXDRAG/SM_CYDRAG: 4 pixels on either side of the press point. */
     if (d->sh.icon_drag>=0 && !d->sh.icon_dragged && (abs(x-d->sh.drag_start_x)>4 || abs(y-d->sh.drag_start_y)>4)) {
@@ -4220,6 +4550,7 @@ void desk_shell_tick(struct desktop *d)
         unsigned k=--d->pointer_trail_count;
         damage(d,(struct desk_box){d->pointer_trail[k].x-64,d->pointer_trail[k].y-64,128,128});
     }
+    bar_autohide(d);
     dnd_tick(d);
     desk_power_policy_tick(d);
     if (!d->sh.network_poll_ns || (d->now_ns >= d->sh.network_poll_ns &&
@@ -4382,6 +4713,11 @@ int desk_shell_wheel(struct desktop *d, int detents)
         if (d->sh.run->browser) { struct ciuki_input_event e={.type=CIUKI_INPUT_WHEEL,.value=detents}; run_browser_input(d,&e); }
         else { run_select(d,d->sh.run->selected-detents); damage(d,desk_outer(&d->clients[d->focus])); }
         return 1;
+    }
+    if (d->sh.levels) {
+        for (int l=d->sh.levels-1;l>=0;l--) if (desk_contains(d->sh.menus[l].box,d->mouse_x,d->mouse_y)) {
+            menu_scroll(d,&d->sh.menus[l],-detents*SH_SUB_ROW*3);return 1;
+        }
     }
     if (!d->shell || d->focus < 0 || d->clients[d->focus].internal != DESK_INTERNAL_ABOUT || d->sh.about_tab != 2) return 0;
     unsigned lines=(unsigned)d->sh.cfg.wheel_lines;
@@ -4560,6 +4896,8 @@ static void taskbar_damage(struct desktop *d, int pick)
 }
 static void taskbar_set(struct desktop *d, int pick)
 {
+    if (d->sh.bar_hidden) { d->sh.bar_hidden=0;damage_all(d); }
+    d->sh.bar_raised=1;
     if (d->sh.taskbar_key) taskbar_damage(d, d->sh.task_pick);
     else {
         d->sh.task_return = d->focus >= 0 ? d->clients[d->focus].window_id : 0;
@@ -4735,6 +5073,14 @@ int desk_shell_key(struct desktop *d, int code, int value)
     }
 
     if (!d->shell) return 0;
+    if (value && code==DU_KEY_ESC && d->sh.bar_drag) {
+        d->sh.cfg.taskbar_edge=d->sh.bar_origin_edge;d->sh.cfg.taskbar_size=d->sh.bar_origin_size;
+        d->sh.bar_drag=d->sh.bar_resize=0;desk_shell_geometry(d);return 1;
+    }
+    if (value && code==DU_KEY_ESC && d->sh.custom_drag>=0) {
+        d->sh.custom_drag=-1;d->sh.custom_dragging=0;return 1;
+    }
+    if (d->sh.address_focus && address_key(d,code,value)) return 1;
     if (value && d->sh.tooltip) { tooltip_hide(d); d->sh.hover_since=0; }
     int alt = code == 0x38 || code == 0x138, ctrl = code == 0x1d || code == 0x11d, shift = code == 0x2a || code == 0x36;
     if (d->sh.dnd.active && !d->sh.dnd.menu) {
@@ -5053,6 +5399,8 @@ void desk_shell_reset(struct desktop *d)
     cfg_defaults(&d->sh.cfg);
     pp_defaults(&d->sh.power_cfg);
     d->sh.power_disk_sent = CIUKI_POWER_UNKNOWN;
+    d->sh.custom_drag=d->sh.custom_item=-1;
+    d->sh.custom_refresh=1;
     d->sh.icon_selected = d->sh.click_icon = d->sh.icon_drag = -1;
     d->sh.anchor = -1; d->sh.dnd.drop_index = d->sh.dnd.target = d->sh.dnd.status_target = d->sh.dnd.hover_task = -1;
     d->sh.volume = 20;
@@ -5149,3 +5497,4 @@ int desk_link_launch(struct desktop *d, unsigned index)
 }
 
 #include "logon.inc"
+#include "taskbar_custom.inc"

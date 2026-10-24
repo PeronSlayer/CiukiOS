@@ -1654,6 +1654,7 @@ static void files_service(struct du_ui *u,void *ctx)
     (void)u; struct files_app *a=ctx;
     scan_poll(a); job_tick(a);
     disk_service(a);
+    if (a->show_folder_options && !a->loading && !a->job_active && !du_dialog_id(a->ui)) { a->show_folder_options=0;folder_options(a); }
     if (a->property_request[0] && !a->loading && !a->job_active && !du_dialog_id(a->ui)) {
         files_properties_path(a,a->property_request); a->property_request[0]=0;
     }
@@ -2632,7 +2633,7 @@ int files_setup(struct files_app *a, struct du_ui *u, const struct fm_vfs *fs, c
     for (unsigned i = 0; i < sizeof(toolbar) / sizeof(toolbar[0]); i++) {
         struct du_widget *b = du_add(u, DU_TOOLBUTTON, toolbar[i].id, zero, toolbar[i].label);
         b->icon = named(toolbar[i].icon, 22); b->icon_size = 22;
-        b->tip = toolbar[i].label;   /* G15: tooltip after the pointer rests on the button */
+        snprintf(b->tip, sizeof(b->tip), "%s", toolbar[i].label);   /* G15: tooltip after the pointer rests on the button */
         if (toolbar[i].id == C_VIEWS) b->dropdown = 12;
     }
     du_add(u, DU_SEPARATOR, W_TSEP1, zero, ""); du_add(u, DU_SEPARATOR, W_TSEP2, zero, ""); du_add(u, DU_SEPARATOR, W_TSEP3, zero, "");

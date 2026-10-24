@@ -79,6 +79,9 @@ static void test_launch_input(void)
     /* Follow Run by identity: G7 inserts Find before Help/Run. */
     int run=item_at(&d.sh.menus[0],"Run..."); assert(run>=0);
     for (unsigned i=0;i<SH_ITEMS && d.sh.menus[0].hot!=run;i++) input_tap(&d,DU_KEY_DOWN);
+    /* Walk to Run by action: Favorites and Find are ordinary G20 rows, so
+     * a fixed count would test the wrong command after menu customization. */
+    for (unsigned i=0;i<SH_ITEMS && d.sh.menus[0].items[d.sh.menus[0].hot].action!=SH_ACT_RUN;i++) input_tap(&d,DU_KEY_DOWN);
     assert(d.sh.menus[0].items[d.sh.menus[0].hot].action==SH_ACT_RUN);
     input_tap(&d,DU_KEY_ENTER);
     assert(d.focus>=0 && d.clients[d.focus].internal==DESK_INTERNAL_RUN);

@@ -273,7 +273,7 @@ static int operations_command(struct files_app *a,int id)
         char name[FM_NAME]; e=fm_unique(&a->model,"New Bitmap Image",".bmp",name); if (!e) e=fm_bitmap(&a->model,name);
     } else if (id==FILES_COPY_TO || id==FILES_MOVE_TO) {
         operations_paths_free(o); e=selection_paths(a,&o->paths,&o->count);
-        if (!e) { o->action=id; e=du_folder_dialog(a->ui,D_OP_DEST,id==FILES_COPY_TO?"Copy To Folder":"Move To Folder",a->model.path,operation_list,a); }
+        if (!e) { o->action=id; struct du_folder_options options={.title=id==FILES_COPY_TO?"Copy To Folder":"Move To Folder",.prompt="Select a destination folder:",.root="/",.initial=a->model.path,.lister=operation_list,.lister_ctx=a}; e=du_folder_dialog(a->ui,D_OP_DEST,&options); }
         if (!e) return 1;
     } else if (id==FILES_OPEN_WITH) {
         if (a->model.active<a->model.count && !fm_entry_path(&a->model,a->model.active,o->selected)) open_with(a,o->selected);

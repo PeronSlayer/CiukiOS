@@ -3,7 +3,9 @@
  * (docs/design/os-feature-inventory.md WM-11, WM-12, WM-13, KB-5, KB-8, KB-9,
  * KB-12, KB-13, SM-9). Every state is also compared with a full redraw.
  * SPDX-License-Identifier: MIT */
+#define _POSIX_C_SOURCE 200809L
 #include "fake.h"
+#include "replay_base.h"
 #include <deskui.h>
 #include <assert.h>
 #include <stdio.h>
@@ -278,7 +280,7 @@ static void taskbar_menu(void)
     setup();
     /* no windows: arrangements are disabled, Properties is enabled */
     right(empty_bar_x(),H-16);
-    assert(task_menu_visible() && d.sh.menus[0].count==6);
+    assert(task_menu_visible() && d.sh.menus[0].count==7);
     assert(d.sh.menus[0].items[0].flags&SH_ITEM_DISABLED && d.sh.menus[0].items[menu_item("Minimize All Windows")].flags&SH_ITEM_DISABLED);
     assert(!(d.sh.menus[0].items[menu_item("Properties")].flags&SH_ITEM_DISABLED));
     frame_matches("taskbar menu, no windows");
@@ -617,8 +619,11 @@ static void v3_zoom_limits(void)
     clean(); v3_root=-1;
 }
 
+
+#include "taskbar_custom_test.h"
 int main(void)
 {
+    g20_all();
     cascade(); tile(); exclusions(); minimize_all(); taskbar_menu(); mnemonics(); windows_keys(); taskbar_focus();
     alt_keys(); context_keys(); caption_icon(); v3_zoom_limits();
     printf("PASS G4 taskbar: cascade and tile geometry, exclusions, undo, minimize all and Show Desktop, taskbar menu, access keys, Windows-key shortcuts, taskbar keyboard focus, Alt shortcuts, context-menu keys, caption icon, Win32 maximised state and track limits; %u frames equal to a full redraw\n",checked);

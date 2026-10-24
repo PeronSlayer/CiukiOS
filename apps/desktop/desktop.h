@@ -585,6 +585,13 @@ struct desk_box desk_outer(const struct desk_client *c);       /* frame plus dro
 void desk_collapse(struct desktop *, int index);                /* toggle windowshade */
 void desk_theme_changed(struct desktop *);                       /* repaint after desk_theme_use */
 struct desk_box desk_taskbar(const struct desktop *);
+struct desk_box desk_work_area(const struct desktop *);
+int desk_taskbar_front(const struct desktop *);
+#define DESK_TOOLBAR_SLOTS 32
+enum { DESK_TOOLBAR_ITEM, DESK_TOOLBAR_FOLDER, DESK_TOOLBAR_ADDRESS, DESK_TOOLBAR_OVERFLOW };
+struct desk_toolbar_slot { struct desk_box box; int kind,arg; };
+int desk_toolbar_slots(const struct desktop *,struct desk_toolbar_slot *);
+int desk_toolbar_extent(const struct desktop *);
 struct desk_box desk_start_button(const struct desktop *);       /* top bar, left end */
 struct desk_box desk_start_bounds(const struct desktop *);       /* includes soft shadow */
 int desk_start_contains(const struct desktop *, int32_t, int32_t);
@@ -592,6 +599,7 @@ int desk_shell_chrome_intersects(const struct desktop *, struct desk_box);
 int desk_title_code(const struct desktop *, int32_t x, int32_t y);   /* title button under (x, y): index*4+k+1, or 0 */
 struct desk_box desk_title_code_box(const struct desktop *, int code);
 struct desk_box desk_task_button(const struct desktop *, int index);
+struct desk_box desk_quick_launch_button(const struct desktop *);
 struct desk_box desk_menu_box(const struct desktop *);
 int32_t desk_menu_row(const struct desktop *);
 int desk_contains(struct desk_box, int32_t, int32_t);

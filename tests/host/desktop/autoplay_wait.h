@@ -11,7 +11,7 @@ static void autoplay_drain(struct desktop *d)
         (void)desk_autoplay_launch(d);
         int phase=d->sh.autoplay.phase;
         if (phase==AP_IDLE || phase==AP_READY) return;
-        struct timespec pause={0,1000000}; nanosleep(&pause,NULL);
+        struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL);
     }
     assert(!"AutoPlay worker did not complete");
 }

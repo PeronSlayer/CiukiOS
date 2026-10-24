@@ -1399,7 +1399,7 @@ static void row_taskbar_menu(unsigned m)
     bar_right_click(1); assert(d.sh.levels); step("menu on the top bar");
     click(500,300,CIUKI_BUTTON_LEFT); step("dismissed by a click");
     bar_right_click(0); menu_item_click(0); assert(!d.sh.levels); step("Cascade Windows");
-    bar_right_click(0); assert(d.sh.menus[0].count==7); step("menu with Undo Cascade");
+    bar_right_click(0); assert(d.sh.menus[0].count==8); step("menu with Undo Cascade");
     menu_item_click(1); step("Tile Windows Horizontally");
     bar_right_click(0); tap(0x2f); assert(!d.sh.levels); step("Tile Windows Vertically by its access key");
     bar_right_click(0); tap(0x32); step("Minimize All Windows by its access key");
@@ -2054,6 +2054,27 @@ static void row_access(unsigned m)
     d.sh.cfg.access.mag_on=0; access_settings(); step("Magnifier off"); assert(!d.acc.mag_shown);
     wm_end();
 }
+static void row_taskbar_customization(unsigned m)
+{
+    row_name="G20 taskbar customization"; wm_begin(m,1);
+    (void)app_open("files",300,200,40,60); (void)app_open("calc",220,150,260,140);
+    struct desk_box quick=desk_quick_launch_button(&d); assert(quick.w && quick.h);
+    click(quick.x+quick.w/2,quick.y+quick.h/2,CIUKI_BUTTON_LEFT);
+    assert(d.focus<0); step("Quick Launch Show Desktop");
+    assert(desk_show_desktop(&d)>0); step("Show Desktop undo restores the windows");
+    wm_end(); wm_begin(m,1);
+    d.sh.cfg.quick_launch=0; desk_damage_add(&d.damage,(struct desk_box){0,0,(int)d.width,(int)d.height},d.width,d.height);
+    assert(!desk_quick_launch_button(&d).w);
+    step("Quick Launch hidden and taskbar repainted");
+    d.sh.cfg.quick_launch=1; d.sh.cfg.taskbar_clock=0;
+    desk_damage_add(&d.damage,(struct desk_box){0,0,(int)d.width,(int)d.height},d.width,d.height);
+    assert(desk_quick_launch_button(&d).w && desk_shell_clock_box(&d).w==0);
+    step("Quick Launch restored and clock hidden");
+    d.sh.cfg.taskbar_clock=1; desk_damage_add(&d.damage,(struct desk_box){0,0,(int)d.width,(int)d.height},d.width,d.height);
+    step("clock restored");
+    wm_end();
+}
+#include "window_custom_test.h"
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
     row_fullscreen, row_gfx, row_topbar, row_theme, row_strips, row_lease, row_selection, row_drag,
@@ -2063,7 +2084,9 @@ static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overl
     row_network_tools, row_g18_shortcuts, row_g18_tray, row_power, row_resources,
     row_browser_clipboard_raster, row_dos_clipboard_settings, row_clipboard_owner_display,
     row_power_resume, row_disk_maintenance, row_copy_disk, row_backup, row_blank_media,
-    row_disk_terminal, row_multimedia, row_run, row_help, row_g26b_network_ui, row_access};
+    row_disk_terminal, row_multimedia, row_run, row_help, row_g26b_network_ui, row_access,
+    row_taskbar_customization, row_taskbar_dock, row_taskbar_autohide, row_taskbar_toolbars,
+    row_start_custom, row_shell_custom_prompts};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).

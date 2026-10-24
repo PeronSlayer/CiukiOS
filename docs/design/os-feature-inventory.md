@@ -1,5 +1,4 @@
 # Operating-system feature inventory (fx-20)
-
 - **Written:** 2026-10-23 18:00 CEST for directive fx-20
   (`docs/directives/t23-e831e685-trial-fixes.md`). This is read-only research on
   source state `e5d40038` (branch `wt/fx-20`). No code or tests were changed.
@@ -31,12 +30,9 @@
     out; it still counts as absent.
 - **Paths** are relative to the repository root, with `file:line` where the
   line matters. The line numbers belong to source state `e5d40038`.
-
 ## Reference keys
-
 Windows 98 Resource Kit sections are cited by chapter or appendix and section
 title. The file in brackets names the page in the extracted copy.
-
 | Key | Source |
 | --- | --- |
 | RK-start | Ch. 5, "Troubleshooting Setup", Table 5.15 *Startup menu options* and Table 5.16 (`wrkc05_8.htm`); "Windows 98 Startup Process" (`wrkc05_3.htm`); "Using a Windows 98 Startup Disk" (`wrkc05_6.htm`) |
@@ -75,17 +71,13 @@ title. The file in brackets names the page in the extracted copy.
 | MS-kbd | [About Keyboard Input](https://learn.microsoft.com/en-us/windows/win32/inputdev/about-keyboard-input) |
 | MS-print | [Print Spooler API](https://learn.microsoft.com/en-us/windows/win32/printdocs/print-spooler-api) |
 | MS-time | [GetTimeZoneInformation](https://learn.microsoft.com/en-us/windows/win32/api/timezoneapi/nf-timezoneapi-gettimezoneinformation), [SetLocalTime](https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/nf-sysinfoapi-setlocaltime), [National Language Support](https://learn.microsoft.com/en-us/windows/win32/intl/national-language-support) |
-
 ## Layout note
-
 The CiukiOS shell does not copy the Windows 98 layout one for one. The Ciuki
 (Start) button, the tray and the clock sit in a 32 px top bar (`DESK_BAR`). The
 bottom bar holds only the window buttons (`docs/desktop.md`,
 `apps/desktop/compositor.c:184`). The rows below judge behaviour, not
 placement: a feature is done when the user can do the same thing.
-
 ## 1. Boot, startup menu and recovery
-
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
 | BT-1 | Boot loader that starts the OS from the hard disk | RK-start | done | MBR → `src/boot/ciukldr.asm` (+ `ciukldr/*.inc`) → FAT32 kernel; `tests/host/test_loader_model.py`, `test_boot_modes.py` |
@@ -103,9 +95,7 @@ placement: a feature is done when the user can do the same thing.
 | BT-13 | Setup: install to the hard disk with hardware detection, a setup log, Safe Recovery after a failed setup, unattended scripts (`msbatch.inf`) | RK-start, RK-comp | done | `apps/setup/*` wizard, `sdk/libsetup/txn.c` (`SETUP.LOG`), `apps/setup/inf.c` (`SETUP.INF`), hardware page `apps/setup/hw.c`; `tests/host/setup/run.py`. Limits: whole disk 0 only, no GPT (`sdk/libdisk`) |
 | BT-14 | First-run welcome ("Welcome to Windows 98": registration, tour, maintenance) | RK-start | partial | Seven-step "Finishing your installation" wizard (`apps/desktop/firstboot.c`, `firstboot_native.c`); `tests/host/desktop/firstboot_test.c`. Missing: a welcome or tour screen and Tip of the Day on the desktop (tips exist only in Setup, `apps/setup/catalog.c:52-59`) |
 | BT-15 | Uninstall the OS (Add/Remove Programs → "Uninstall Windows 98") | RK-start ("Removing Windows 98") | absent | Out of the current Setup design |
-
 ## 2. Shutdown, restart, standby and session end
-
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
 | SD-1 | Shut Down dialog: Stand by, Shut down, Restart, Restart in MS-DOS mode | RK-power, RK-apps | partial | `apps/desktop/shell.c` offers Restart, Shut Down and Cancel; G3: both ask every program first (`desk_session_begin`), and Restart is the default button when the dialog comes from a second Ctrl+Alt+Del. G11: "Stand by" is listed first where call 73 QUERY reports `CIUKI_POWER_CAN_STANDBY` (key B), as Windows 98 lists it only when supported; G11B adds the qualified APM device transaction (PW-6; hardware evidence pending). Missing: hardware qualification of Stand by and an equivalent of Restart in MS-DOS mode (see DOS-9) |
@@ -115,9 +105,7 @@ placement: a feature is done when the user can do the same thing.
 | SD-5 | Ctrl+Alt+Del: Close Program dialog (task list, End Task, Shut Down); pressed again, restarts | RK-keys, RK-tools | done | Ctrl+Alt+Del opens Task Manager, or brings it to the front; pressed again with Task Manager in front it opens Shut Down with Restart the default (G3: the orderly restart, so nothing unsaved is lost, unlike Windows 98's immediate restart); Task Manager File > Shut Down; End Task asks the program to close and offers "not responding" End Task (`client.c` `desk_task_end`); End Process warns about unsaved data (`apps/tasks/tasks.c`) |
 | SD-6 | Log Off *user* (Start menu), returning to the logon dialog | RK-users | done | G32: Start Log Off uses G3 query/veto/end and process close, then the desktop-owned logon gate; Cancel selects the default profile. `apps/desktop/client.c`, `desktop.c:user_logoff`, `logon.inc`; G3 callback regression in `end_session_test.h`, gate in `test_window_model` Earlier merge-side evidence (superseded where completed above): No users (see SS-1) |
 | SD-7 | Power-button press runs the configured action (shut down, standby) | RK-power | done (host) | G11: Advanced tab "When I press the power button" (Shut down, Stand by where qualified); `desk_shell_power_update` runs it on ACPI's coalesced request (`docs/design/power-policy.md` 17); tests `desktop_test.c` `test_power_policy` |
-
 ## 3. Sessions, logon, users and security
-
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
 | SS-1 | Logon dialog (user name and password), Microsoft Family Logon, per-user profiles (Desktop, Start Menu, My Documents, Favorites, settings) | RK-users, RK-net (`wrkc18_2`) | partial | G32: optional user/password gate with user-list selection and default-profile Cancel; stable per-user Desktop, Documents (including Music/Pictures), Favorites and Start Menu/Programs directories, copied desktop settings, worker activation, native child environment, Files/desktop and common-dialog places. `apps/desktop/users*`, `profile.h`, `logon.inc`; `test_users`, `control_test`, `test_window_model`. Remaining: G20 native Start Menu editing; Win32 HKCU, GetUserName and CSIDL rebinding; roaming/network logon and Favorites browser integration Earlier merge-side evidence (superseded where completed above): The desktop opens straight to the shell. Setup's "Your name" is stored in `System\Identity` (`apps/control/configuration.c:30`) and used nowhere; Win32 `GetUserName` returns "Ciuki" (`apps/w32srv/registry.c:396-398`) |
@@ -126,9 +114,7 @@ placement: a feature is done when the user can do the same thing.
 | SS-4 | Users applet: create and manage users | RK-cpl | done | G32: reachable Users applet lists, creates and deletes local users, confirms deletion, refuses active-account deletion, preserves profile files and never reuses identifiers; optional logon and personalisation settings. `apps/control/users.inc`, `apps/desktop/users*`; `test_users`, Users/Passwords scenarios in `control_test.c` |
 | SS-5 | StartUp folder and the `Run`/`RunServices` registry keys start programs at logon; `RunOnce` once | RK-apps | done | G21: each ordinary desktop start snapshots HKLM RunServices/RunServicesOnce, HKLM/HKCU Run/RunOnce and `/WINDOWS/Start Menu/Programs/StartUp`; a background worker uses the shared native/DOS/Win32 launcher. Shift bypasses the session batch; Safe Mode/test boots suppress it. One-shot values are compared and deleted/flushed before dispatch; disabled entries remain registered. Bound: 128 entries; CiukiOS `.lnk` format and regular executables. See `docs/design/startup-programs.md`; host `test_startup.py`, `test_game_properties.py`, `test_window_model.py`. Existing virtual-restart handling remains. |
 | SS-6 | System policies (Policy Editor) | RK-comp, ch. 8 | absent (scope) | Enterprise feature; no counterpart planned |
-
 ## 4. Window manager
-
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
 | WM-1 | Create, show and hide windows; focus and activation follow a click; active and inactive caption colours | MS-winfeat | done | `apps/desktop/client.c:~690-720`, `input.c:100-137`, `theme.c:26-47,666-731`; `tests/host/desktop/interaction_test.c` |
@@ -142,8 +128,8 @@ placement: a feature is done when the user can do the same thing.
 | WM-9 | Minimise to the taskbar; click the button to restore; click the active button to minimise | MS-taskbar | done | `client.c:1027`, `shell.c:2619-2625`; `desktop_test.c:581-592` |
 | WM-10 | Close button with a cooperative close (WM_CLOSE) | MS-syscmd | done | `client.c:1051` (`desk_request_close`); Win32 WM_CLOSE (`user32/desktop.c:256`) |
 | WM-11 | Window menu (Alt+Space or a caption icon click): Restore, Move, Size, Minimize, Maximize, Close, with keyboard Move and Size by arrows | MS-syscmd, RK-keys | done (host) | `shell.c` `SH_MENU_TASK`, keyboard geometry `input.c`; G4: access keys (R M S N X C), caption icon click opens the menu and a second click closes (`desk_shell_caption_icon`, `desk_caption_icon_box`; drawn in the themes with a caption icon, not Platinum); `tests/host/desktop/taskbar_test.c` (`mnemonics`, `caption_icon`). Open: Win32 programs' own system menus are unreachable because Alt+Space is taken first |
-| WM-12 | Taskbar context menu: Cascade Windows, Tile Windows Horizontally, Tile Windows Vertically, Minimize All Windows, Undo Minimize All, Properties | MS-arrange, MS-taskbar | done (host) | G4: `SH_MENU_TASKBAR` on the empty bottom or top bar (`shell.c`), `desk_arrange`/`desk_minimize_all`/`desk_arrange_undo` (`client.c`); Win32 `CascadeWindows`, `TileWindows`, `ArrangeIconicWindows` (`sdk/win32/user32/arrange.c`); `taskbar_test.c`, window-model rows 31-33, `user32_test.c` `test_arrange`. `Properties` opens the Control Panel until G20's Taskbar Properties; Toolbars is G20's |
-| WM-13 | Show Desktop (Quick Launch button, Win+D) / minimise all | RK-tb | partial | G4: `desk_show_desktop` (Win+D toggles), Win+M, Shift+Win+M, Alt+M, the taskbar menu. The Quick Launch button is G20's (no Quick Launch yet): it will call `desk_show_desktop` |
+| WM-12 | Taskbar context menu: Cascade Windows, Tile Windows Horizontally, Tile Windows Vertically, Minimize All Windows, Undo Minimize All, Properties | MS-arrange, MS-taskbar | done (host) | G4 arrangement and undo; G20 Properties opens its dedicated Taskbar & Start Menu page and adds Toolbars. `test_taskbar.py`, fx-15 rows 31–33, 43–47. |
+| WM-13 | Show Desktop (Quick Launch button, Win+D) / minimise all | RK-tb | done (host) | G4 reversible `desk_show_desktop`, Win+D/M and undo; G20 Quick Launch Show Desktop button uses the same action. `test_taskbar.py`, window-model row 42. |
 | WM-14 | Minimise and restore animation (zoom rectangles) | MS-spi (SPI_SETANIMATION) | done | `desk_animate` (`client.c:335-360`), a 150 ms outline; `interaction_test.c` |
 | WM-15 | MDI (multiple document windows inside a frame, Ctrl+F4, Ctrl+F6) | MS-winfeat (MDI) | absent | No `DefFrameProc` or `CreateMDIWindow` in `sdk/win32/user32` |
 | WM-16 | Hung-program detection ("Not responding"), end a hung task | RK-tools | done | PING/PONG with a 5 s mark, "Not responding" caption and busy cursor (`client.c`, `compositor.c`); G3: closing a window that does not answer for 5 s, End Task on a closing or hung window, and a hung program during Shut Down get "This program is not responding" with End Task (SIGKILL) and Cancel (`desk_end_task_open`, `DESK_INTERNAL_END_TASK`); no close deadline otherwise |
@@ -153,12 +139,9 @@ placement: a feature is done when the user can do the same thing.
 | WM-20 | Cursors: arrow, I-beam, hourglass, AppStarting, resize, move, hand, no-drop, help | MS-cursor | done | 22 shapes (`apps/desktop/protocol.h:67-77`), routing `input.c:166-218`; `tests/host/desktop/cursor_set_test.c` |
 | WM-21 | Pointer schemes (large, inverted, animated cursors) chosen in Mouse properties | RK-acc | partial | G12: selectable Ciuki, 2x Large and Inverted schemes, derived deterministically from the fx-13 rasters; custom app cursors retain their pixels. `row_input_preferences` in `test_window_model` checks hardware/software ownership, clipping and repaint. Animated cursor import remains absent Earlier merge-side evidence (superseded where completed above): One fixed set in `assets/cursors/`; G25: Ciuki Standard, Large, Inverted and Large Inverted (`access_general` pointer index; `assets/cursors/cursors.h` Large set from `scripts/cursors/build_ciuki.py`; inversion at run time), chosen in Accessibility Options > Display. Missing: the Mouse page's own scheme list (G12), extra-large and animated cursors (the 32x32 raster is the limit of every presenter) |
 | WM-22 | Window opening is fast: the frame appears promptly after a click, with the AppStarting cursor in between | RK-perf | partial | AppStarting from click to the first frame (`input.c:190-197`); `[desktop] launch … spawn_ms` records (`desktop.c:566-581`). The T23 still reports slow opening; fx-15 measures and fixes it |
-
 ## 5. Keyboard shortcuts (system-wide)
-
 Each row is one shortcut from RK-keys. Shortcuts that belong to one
 application are in that application's section.
-
 | ID | Shortcut: Windows 98 action | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
 | KB-1 | Alt+Tab / Alt+Shift+Tab: switcher with icons | RK-keys | done | `shell.c:1612-1675,2996-3000`; `interaction_test.c` |
@@ -178,9 +161,7 @@ application are in that application's section.
 | KB-15 | Shift while inserting a CD: bypass AutoPlay | RK-keys | absent | `apps/desktop/autoplay.c` has no modifier check |
 | KB-16 | Ctrl+Tab / Ctrl+Shift+Tab: next or previous tab in a property sheet | RK-keys | done | `widgets.c:1209-1216` (first tab control) |
 | KB-17 | Accessibility hotkeys: Shift×5 StickyKeys, right Shift 8 s FilterKeys, NumLock 5 s ToggleKeys, Left Alt+Left Shift+NumLock MouseKeys, Left Alt+Left Shift+PrintScreen High Contrast | RK-keys (`wrkappg_3`) | done | G25 (2026-10-24): all five on the raw input stream with sirens, a Yes/No confirmation and persisted state (`apps/desktop/access.c`, `access_desktop.c`; `access_test.c`, `window_model_test.c` row `accessibility`). Hold times: FilterKeys 8 s with the 4/12/16 s steps, ToggleKeys 5 s (the Resource Kit's own text also says 8; `docs/design/accessibility.md`). Not seen: keys of a full-screen DOS session |
-
 ## 6. Desktop
-
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
 | DT-1 | System icons: My Computer, My Documents, Recycle Bin, Network Neighborhood (and optionally Internet Explorer, Outlook Express, My Briefcase) | RK-vmm ("User Interface"), RK-comp | partial | Computer, Documents, Recycle Bin (G2: full and empty picture, `shell.c` icons_build, `folder.c` bin state), optional Pictures. Missing: Network Neighborhood (no file sharing, see NW-12) |
@@ -194,29 +175,25 @@ application are in that application's section.
 | DT-9 | Wallpaper: picture centred, tiled or stretched; patterns; Browse | RK-cpl (Display) | partial | Center, stretch, tile, fit, fill; PNG, JPEG and BMP (`apps/desktop/wallpaper.c`, `settings.h:23`). Missing: Browse (the list only scans `/system/wallpapers`, `apps/control/main.c:286-295`) and "Set as Wallpaper" from Paint, the Viewer and the browser |
 | DT-10 | Active Desktop (HTML desktop, web items, channel bar) | RK-tb | absent (scope) | No HTML desktop planned |
 | DT-11 | Drag and drop between the desktop, windows, folders and the Recycle Bin, with copy/move/link rules | MS-dnd, RK-keys | partial | See the DnD section. Directive fx-19 |
-
 ## 7. Start menu
-
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
-| SM-1 | Top level: Windows Update, Programs, Favorites, Documents, Settings, Find, Help, Run, Log Off, Shut Down | RK-tb | partial | `shell.c:333-341`: Programs, Documents, Settings, Help, Run, Shut Down. Missing: Find, Log Off, Favorites (Windows Update is out of scope, `docs/design/win32-personality-contract.md:89`) |
-| SM-2 | Programs: a tree of folders built from the Start Menu folder, with Accessories, System Tools, Games and StartUp | RK-tb | partial | G18: installed Start Menu/Programs folders become alphabetically ordered cascading submenus, merged with native Accessories/System Tools/Games categories (`shell_g18.h`, G18/fx-15 tests); bounded 64-link worker snapshot. Empty StartUp folder display and startup execution remain G21. Earlier merge-side evidence (superseded where completed above): Compiled-in catalogue (`shell.c:233-259`) with Accessories, System Tools, Games and Developer; up to 8 Win32 shortcuts listed flat (`shell.c:349-351`). Missing: Win32 `Start Menu\Programs` folders as submenus, a StartUp folder |
-| SM-3 | Start menu customisation: drag items into the menu, Taskbar & Start Menu properties (Add, Remove, Advanced, Clear Documents), Show small icons | RK-tb | absent | No Taskbar & Start Menu page |
-| SM-4 | Documents: the 15 most recent documents, cleared from the properties | RK-tb | partial | `shell.c:397-405`, 8 items from `cfg.recent`. The apps' own `recent.lst` (`apps/libdeskui/recent.c`) is never read by the shell, although the header says it is |
-| SM-5 | Settings: Control Panel, Printers, Taskbar & Start Menu, Folder Options, Active Desktop | RK-cpl | partial | `shell.c:407-416`: Control Panel, its categories, Task Manager. G31 adds Printers under Settings. Missing: Taskbar & Start Menu, Folder Options Earlier incoming evidence (superseded where completed above): `shell.c:407-416`: Control Panel, its categories, Task Manager. Missing: Printers, Taskbar & Start Menu, Folder Options |
+| SM-1 | Top level: Windows Update, Programs, Favorites, Documents, Settings, Find, Help, Run, Log Off, Shut Down | RK-tb | partial | G20 adds folder-backed Favorites and the existing Find hook. Programs, Documents, Settings, Help, Run and Shut Down remain. Log Off belongs to G32; full Find functionality to G7. Windows Update remains out of scope (`win32-personality-contract.md`). |
+| SM-2 | Programs: a tree of folders built from the Start Menu folder, with Accessories, System Tools, Games and StartUp | RK-tb | partial | G18: installed Start Menu/Programs folders become alphabetically ordered cascading submenus, merged with native Accessories/System Tools/Games categories (`shell_g18.h`, G18/fx-15 tests); bounded 64-link worker snapshot. Empty StartUp folder display and startup execution remain G21. Earlier merge-side evidence (superseded where completed above): Compiled-in catalogue (`shell.c:233-259`) with Accessories, System Tools, Games and Developer; up to 8 Win32 shortcuts listed flat (`shell.c:349-351`). Missing: Win32 `Start Menu\Programs` folders as submenus, a StartUp folder; G20 folder snapshots build submenus from `/Windows/Start Menu/Programs`; native defaults (including Accessories/System Tools, Games and StartUp) are populated once as CIUKLNK3 shortcuts. Installed shortcuts share that tree. Bounded snapshots and More... Open Folder are documented in `taskbar-start-customization.md`; G18 owns further shortcut-format/property extensions. |
+| SM-3 | Start menu customisation: drag items into the menu, Taskbar & Start Menu properties (Add, Remove, Advanced, Clear Documents), Show small icons | RK-tb | done (host) | G20 Programs tab Add wizard, Remove/confirmation, Advanced, Clear; Start drops add shortcuts, Start/Programs drag ordering persists in folder `.order` files; item Open/Delete/Rename/Explore/Properties; 32/16-pixel Start icons. `test_taskbar.py`, Control Panel host cases, fx-15 rows 46–47. |
+| SM-4 | Documents: the 15 most recent documents, cleared from the properties | RK-tb | done (host) | G20 merges the apps’ shared `/Documents/recent.lst` newest-first with unique older shell entries, capped at 15. Clear from the menu or Properties clears the shared file and shell/persisted list after successful I/O. Storage and Control Panel error tests cover retention on failure. |
+| SM-5 | Settings: Control Panel, Printers, Taskbar & Start Menu, Folder Options, Active Desktop | RK-cpl | partial | `shell.c:407-416`: Control Panel, its categories, Task Manager. G31 adds Printers under Settings. Missing: Taskbar & Start Menu, Folder Options Earlier incoming evidence (superseded where completed above): `shell.c:407-416`: Control Panel, its categories, Task Manager. Missing: Printers, Taskbar & Start Menu, Folder Options; Control Panel categories and Task Manager; G20 Taskbar & Start Menu and a direct Folder Options request opening Files’ existing property sheet after its initial scan. Printers (G31) and Active Desktop remain gaps. |
 | SM-6 | Find ▸ Files or Folders, Computer, On the Internet, People | RK-keys | partial | G7: Start ▸ Find ▸ Files or Folders opens the Files criteria window (`desk_shell_find`). Computer, On the Internet and People remain absent Earlier main evidence: See FM-30. |
 | SM-7 | Help opens Windows Help | RK-keys | done | Start > Help launches CiukiOS Help (`SH_ACT_HELP`); F1 on the empty desktop opens its topic; About CiukiOS moved to the Start root. Earlier integration evidence: Help remained a submenu |
 | SM-8 | Run dialog: command line with history drop-down, Browse; accepts programs, documents, folders and URLs | RK-keys | done (host; sanitizer exit blocked) | G9: Start > Run and Win+R use the shared G8 launcher; editable 26-entry HKCU RunMRU, Browse with asynchronous directory snapshots, absolute POSIX/drive paths, HKCR documents, folders, HTTP(S), native/DOS/Win32 programs, case-insensitive environment expansion, PATH/suffix search and corrective launch errors. `docs/design/run-dialog.md`; G9 production launcher/model assertions and fx-15 rows 54–55 pass; leak-enabled model/redraw suites reach PASS assertions but LeakSanitizer cannot exit under sandbox ptrace. |
 | SM-9 | Keyboard: arrows, Enter, Esc, and underlined letters in menus | RK-keys | done (host) | `shell.c`: arrows, Home/End, Enter, Space, Esc; G4: access keys and underlines in the fixed shell menus, type-ahead in the others (`access_keys`, `menu_letter`); `taskbar_test.c` `mnemonics` Previous G8-branch evidence (superseded where completed above): `shell.c:2777-2808`: arrows, Enter, Space, Esc. Missing: mnemonic letters, Home/End |
-
 ## 8. Taskbar and notification area
-
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
 | TB-1 | One button per top-level window, with icon and title; the active one pressed; tooltip with the full title | MS-taskbar | done | `shell.c:1129-1159`; `tests/host/desktop/bars_test.c`, `tray_layout_test.c` |
-| TB-2 | Taskbar Properties: Always on top, Auto hide, Show small icons in Start menu, Show clock | RK-tb | absent | Fixed bars (`compositor.c:184`) |
-| TB-3 | Move the taskbar to any screen edge and resize it | RK-tb | absent | — |
-| TB-4 | Toolbars: Quick Launch (with Show Desktop), Address, Links, Desktop, New Toolbar from a folder | RK-tb | absent | — |
+| TB-2 | Taskbar Properties: Always on top, Auto hide, Show small icons in Start menu, Show clock | RK-tb | done (host) | G20 persists and applies all four choices. Compositor stacking/hit testing honors Always on Top; Auto hide leaves a two-pixel reveal edge; Start icons switch between 32 and 16 pixels; clock visibility reflows the tray. `test_taskbar.py`, Control Panel host tests, fx-15 rows 42–44, 46. |
+| TB-3 | Move the taskbar to any screen edge and resize it | RK-tb | done (host) | G20 empty-area dragging docks to bottom, top, left or right; dragging the inner border resizes rows/columns; Esc and RESYNC cancel. Work area/maximize/arrange share geometry. The approved Start/tray top bar remains CiukiOS’s existing layout. Four-edge gesture and redraw host cases; fx-15 row 43. |
+| TB-4 | Toolbars: Quick Launch (with Show Desktop), Address, Links, Desktop, New Toolbar from a folder | RK-tb | done (host) | G20 dedicated Quick Launch folder, one-click shortcuts and Show Desktop; inline Address field; Links, Desktop and four custom folder toolbars with content and overflow menus. Drag-in shortcuts, folder-to-taskbar New Toolbar, persisted folder choices, right-click Close/Open Folder. `test_taskbar.py`, fx-15 rows 45, 47. |
 | TB-5 | Notification area: programs add icons with tooltips and menus (Shell_NotifyIcon) | MS-taskbar | done (host) | G18: authenticated v3 tray add/modify/delete, copied 16 px icons, ANSI/Unicode tooltips and application mouse callbacks, with window-death cleanup (`shell_tray.h`, `user32/shell_integration.c`; G18 USER and five-presenter shell tests). Bounded to 8 program icons. Earlier merge-side evidence (superseded where completed above): Fixed system icons for network, volume, removable media, notifications and battery (`shell.c:1179-1226`). Missing: a protocol message for program icons; Win32 `Shell_NotifyIconA` only logs (`sdk/win32/shell/execute.c:104`) |
 | TB-6 | Clock: time in the tray, date in the tooltip, double-click opens Date/Time properties | RK-cpl | done | G1: the tray clock shows local time; a double-click opens Date/Time Properties (`shell.c`); date tooltip and right-click entry unchanged |
 | TB-7 | Volume icon: click for a master slider and mute; double-click for Volume Control | RK-mm | done | G22 adds configured-interval double-click to open Volume Control and invalidate the closed popup (`shell.c`, `window_model_test.c`, fx-15 row 30); slider, mute, tooltip and media keys retained Earlier integration evidence before G22 (retained): Slider, mute, tooltip, media keys (`shell.c:1234+,2528`; `desktop_test.c:914`). Missing: double-click to open the mixer |
@@ -224,9 +201,7 @@ application are in that application's section.
 | TB-9 | Network and removable-media icons | — | done | `shell.c:923,1040-1049,1104`; `tests/host/desktop/network_tray_test.c`, `media_tray_test.c` |
 | TB-10 | Balloon notifications from programs | MS-taskbar | done (host) | G18: client NIF_INFO, bounded FIFO of 8 waiting balloons, timeout/click/hide callbacks, cancellation and owner cleanup. This explicitly requested extension postdates the base Windows 98 Shell API; see `docs/design/g18-shell-integration.md`. Earlier merge-side evidence (superseded where completed above): One shell-internal balloon slot (`shell.c:1327-1400`); no client API and no queue |
 | TB-11 | Keyboard-language indicator in the tray (when more than one layout is installed) | RK-intl | done (host model) | G12: EN/IT tray indicator, clickable and updated by Left Alt+Shift; enabled with the two-layout switch in Keyboard properties. `row_input_preferences` in `test_window_model` Earlier merge-side evidence (superseded where completed above): See IN-3 |
-
 ## 9. File manager (My Computer and Windows Explorer)
-
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
 | FM-1 | Views: Large Icons, Small Icons, List, Details, Thumbnails, as Web Page | MS-shell, RK-keys | partial | Large Icons, List and Details (`apps/libdeskui/deskui.h:187`, `apps/files/app.c:72,497`). Missing: Small Icons and Thumbnails (Web view is out of scope) |
@@ -267,9 +242,7 @@ application are in that application's section.
 | FM-36 | Map Network Drive / Disconnect; Sharing tab | RK-net | absent | No file sharing (NW-12) |
 | FM-37 | Favorites menu and folder | RK-tb | absent | — |
 | FM-38 | Shift+click on Close closes the folder and all its parents; Ctrl+double-click opens in a new window | RK-keys | absent | Files is one window per path |
-
 ## 10. Drag and drop
-
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
 | DD-1 | Drag between Files windows, the desktop and folders | MS-dnd | done | `client.c:747-754`, `apps/desktop/folder.c:219-231`, `apps/files/app.c:1682-1697`; `files_ui_test.c:354-379` |
@@ -279,15 +252,12 @@ application are in that application's section.
 | DD-5 | Drop files onto programs (Notepad, Paint, media player, DOS window) and onto Win32 windows (WM_DROPFILES) | MS-dnd | partial | Native CiukNote, Paint, Viewer and Music accept the shared native file data object (fx-19). G18 adds Win32 DragAcceptFiles and v3 WM_DROPFILES with an immutable per-drop surface grant, UTF-16 drive paths and HDROP lifetime until DragFinish. DOS-window drop remains absent (G17). Earlier merge-side evidence (superseded where completed above): `protocol.h:103` ("Files only"); `DragAcceptFiles` only sets a style (`sdk/win32/shell/utility.c:34-37`) |
 | DD-6 | Drop onto the Recycle Bin, onto a printer, onto a taskbar button (the window comes forward after a hover) | MS-dnd | partial | Recycle Bin: the desktop icon and the bin window accept a move (confirmation, never a copy; CDs and the bin's own items refused), G2. Taskbar button hover is fx-19. Printer drop remains absent (G31 provides printing without a desktop printer drop target) Earlier incoming evidence (superseded where completed above): Recycle Bin: the desktop icon and the bin window accept a move (confirmation, never a copy; CDs and the bin's own items refused), G2. Taskbar button hover is fx-19. Printer: absent (no printing, see G31) |
 | DD-7 | A move whose source cannot be deleted keeps both copies and says so | MS-shell | absent | Directive fx-17 |
-
 ## 11. Clipboard
-
 G5/G17 integration retains both evidence texts below. Text introduced by
 "Previous/G17 evidence" records the earlier implementation; gaps superseded
 by the G5 evidence or the combined toolbar/properties implementation are
 historical. The two DOS interfaces now share the G5 clipboard transport;
 see `dos-program-properties.md` for their respective selection/paste paths.
-
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
 | CB-1 | One system clipboard shared by every program, with several formats at once (text, bitmap, files, private formats) | MS-clip | done | Main-side G5 evidence: one desktop-owned store with several formats, global sequence, owner, exclusive open, watchers and delayed render (2 s deadline) (`apps/libdeskui/clipstore.c`, `apps/desktop/clipboard.c`, `docs/design/system-clipboard.md`); `tests/host/desktop/test_system_clipboard.py`. DOS INT 2Fh AX=1700h was then missing. G5b evidence: one desktop-owned multi-format store and bounded WINOLDAP INT 2Fh 1700h–1705h/1708h–1709h request/completion bridge; no DOS mirror (`dosvm_clipboard.inc`); host clipboard and VM tests, guest integration pending. |
@@ -298,9 +268,7 @@ see `dos-program-properties.md` for their respective selection/paste paths.
 | CB-6 | Bitmaps between Paint and other programs | MS-clip | done | G5: Paint copies and pastes DIBs through the system clipboard, palette preserved (`apps/paint/paint.c`); `paint_clipboard_test.c`. Earlier G17 evidence: Paint kept an in-process clip (`apps/paint/paint.c:751,1292`); superseded. RLE DIBs are refused. |
 | CB-7 | Print Screen and Alt+Print Screen put a bitmap on the clipboard | RK-keys | partial | G5 desktop/active-frame DIB capture; G5b adds Windows 98 full-screen DOS text copying and graphics-mode no-op. Earlier G17 evidence: see KB-10. Exclusive Win32 framebuffer capture remains missing. |
 | CB-8 | Clipboard Viewer accessory (view and save the clipboard as `.clp`) | RK-comp | done | G5: Clipboard Viewer accessory with text, image and file previews and Windows 3.1/9x `.clp` Open/Save As (`apps/accessories/clipbrd_main.c`, `apps/libdeskui/clipfile.c`); `clipboard_viewer_test.c`. Earlier G17 evidence: no separate viewer; superseded. |
-
 ## 12. Common dialogs, message boxes and controls
-
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
 | CD-1 | Message boxes with icon, default button, sound (MessageBeep) | MS-cdlg | done | Native `du_message` (`apps/libdeskui/dialog.c`) with icon sounds; Win32 `MessageBox` (`sdk/win32/user32/msgbox.c`); G16: Win32 `MessageBeep` queues the icon's system sound through the new v3 request `DESK_V3_SOUND` (`sdk/win32/user32/system.c`, `apps/desktop/client.c`), honouring `SPI_SETBEEP`; `tests/host/win32/user32/user32_test.c` (`test_spi`), `tests/host/desktop/v3_test.c` (`docs/design/common-dialogs.md`) |
@@ -313,9 +281,7 @@ see `dos-program-properties.md` for their respective selection/paste paths.
 | CD-8 | Win32 comdlg32 working for real programs | MS-cdlg | partial | Wine's comdlg32 is staged (`config/wine-upper.json`); host adapter run: filedlg crashed, finddlg 18 failures out of 43 (`wine-upper.json:2538+`); no guest run. G16 analysed the unit (`docs/design/common-dialogs.md`, "CD-8"): the crash precedes any check; the candidates are the shell32 view creation and an unchecked `FindResourceA`; neither could be run without the Wine source tree and QEMU, so the row stays open |
 | CD-9 | Controls: button, check, radio, edit, list box, combo box, tree view, list view, tabs, progress, trackbar, up-down, tooltips, status bar, toolbar, rich edit, scroll bars, property sheets, wizards | RK-vmm ("User Interface") | partial | Native toolkit has buttons, check, radio, edit, text area, list view, tree, tabs, progress, status bar, toolbar and scroll bars (`deskui.h`); G16 adds the combo box (drop-down and editable), the trackbar (horizontal and vertical, ticks), the up-down with buddy edit and acceleration, and tooltips on every widget and in dialogs (`controls.c`; `common_dialogs_test.c`). Missing natively: rich edit and a wizard framework (property sheets: G6). Win32: USER classes in `sdk/win32/user32/controls.c`; comctl32 and riched20 come from Wine with host-only evidence |
 | CD-10 | Single-level undo in edit controls | MS-cdlg | done | Text area and Win32 edit have one level (`textarea.h:45`, `controls.c:971`); G16: the single-line native edit has `EM_UNDO` semantics (Ctrl+Z, Alt+Backspace; typing and delete runs are one step, a second undo redoes; `du_edit_undo`); `common_dialogs_test.c` |
-
 ## 13. Fonts
-
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
 | FT-1 | TrueType rendering for the screen and programs | RK-print (Fonts) | done | FreeType 2.13.3 (`docs/design/fonts-contract.md`), `apps/libdeskui/text_ttf.c`, Win32 `sdk/win32/gdi32/font.c`; `tests/host/font/*` |
@@ -325,9 +291,7 @@ see `dos-program-properties.md` for their respective selection/paste paths.
 | FT-5 | Large Fonts / custom DPI | RK-acc | absent | Fixed 96 dpi (`apps/control/fonts.c:36`) |
 | FT-6 | Font fallback and symbol fonts | RK-print | absent | No fallback family (`fonts-contract.md:63`) |
 | FT-7 | Character Map: any font, full character set, copy | RK-comp | done (G27) | `apps/accessories/charmap_*.c`: the built-in face and every TrueType face of /System/fonts, 17 Unicode subsets (Basic Latin, Latin-1 Supplement with the Italian accented letters, Latin Extended, IPA, Greek, Cyrillic, punctuation, currency, letterlike, number forms, arrows, mathematics, box drawing, block elements, shapes, symbols), a scrolling grid, Go to Unicode, the Alt+0nnn keystroke, copy as UTF-8; `tests/host/desktop/charmap_test.c`. Gaps: Search for, Group by Unicode block names beyond the listed subsets, code-page character sets (Windows: Western, DOS: Latin US) |
-
 ## 14. Printing
-
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
 | PR-1 | Printers folder with Add Printer wizard and a default printer | RK-print, RK-cpl | done (host) | G31: `/Programs/printers`, Start > Settings > Printers, Add Printer flow (name, port/file, Text/PostScript/PCL), persistent default selection. `apps/printers/main.c`, `tests/host/desktop/printers_test.c`; [printing.md](printing.md). Host assertions complete; LeakSanitizer finalization needs an unrestricted host. |
@@ -336,9 +300,7 @@ see `dos-program-properties.md` for their respective selection/paste paths.
 | PR-4 | Print and Page Setup from every program (Notepad, WordPad, Paint, Imaging, browser) | RK-print | partial | G31: native Print and Page Setup in CiukNote, Paint and Image Viewer, including unsaved snapshots, worker submission, printer/copies/page range, print-to-file, custom paper/orientation/margins. `apps/libprint/dialog.c`, `tests/host/desktop/test_printing.py` and app fixtures. NetSurf Ctrl+P prints the visible page image; Ctrl+Shift+P opens Page Setup. G28 adds WordPad Page Setup and print preview built on `wp_paginate` (`apps/wordpad/layout.c`); WordPad Print remains disabled. Remaining: full browser document/CSS pagination, WordPad printing, Win32 common-dialog guest qualification. Earlier integration evidence: no print implementation in `apps/` before G31.
 | PR-5 | Win32 printing (`CreateDC` for a printer, `StartDoc`, `EnumPrinters`) | MS-print | partial | G31: real ANSI/Unicode printer DCs and StartDoc/StartPage/EndPage/EndDoc/AbortDoc, 96-DPI monochrome PS/PCL, Generic Text; shared winspool RAW streaming, EnumPrinters/GetPrinter levels 1/2/4/5, defaults, EnumJobs level 1, queue controls. `sdk/win32/gdi32/printing.c`, `scripts/win32/printing.py`, `tests/host/win32/test_printing.py`; [printing-win32.md](printing-win32.md). Remaining: EMF, DeviceCapabilities/DocumentProperties/GetPrinterDriver, ResetDC/SetAbortProc, network and driver-specific options; original applications and hardware unqualified. Earlier merge-side evidence (superseded where completed above): `StartDocW` returns SP_ERROR (`sdk/win32/gdi32/upper.c:298-309`); winspool is stubs |
 | PR-6 | Parallel port (ECP/EPP) and printing from MS-DOS programs, spooled | RK-print | partial | Existing LPT SPP/PS2/EPP/ECP driver retained. G31: DOS LPT1 INT17 and trapped byte SPP strobes feed the shared RAW spooler (FF/idle/teardown publication), default-printer/print-to-file routing and bounded backpressure/retry. `src/kernel/vm/dosvm_print.c`, `tests/host/dos_print_test.c`. Explicit None/File/Raw game policies preserved. Remaining: virtual EPP/ECP/DMA capture, LPT2/3 shared redirection, unpublished-job recovery and physical qualification. Earlier incoming evidence (superseded where completed above): LPT driver with SPP/PS2/EPP/ECP (`src/kernel/drivers/lpt.c`); DOS INT 17h and virtual LPT (`src/kernel/vm/dosvm_lpt.c`); `tests/host/lpt_test.c`. Missing: spooling, print to file, hardware qualification |
-
 ## 15. Input devices and keyboard languages
-
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
 | IN-1 | PS/2 and USB keyboard and mouse, wheel | RK-dev | done (host) | `src/kernel/drivers/i8042.c`, `src/kernel/usb/usb_hid.c`; `tests/host/i8042_test.c`, USB tests |
@@ -349,9 +311,7 @@ see `dos-program-properties.md` for their respective selection/paste paths.
 | IN-6 | Mouse properties: swap buttons, double-click speed with test area, pointer speed, pointer trails, pointer schemes | RK-cpl, RK-acc | done (host model) | G12: saved swap, trails, wheel lines/page scrolling and Ciuki/Large/Inverted schemes; double-click test button. Enumerated input SPI settings use the desktop session broker and requested durable writes, retaining session-only overrides across unrelated saves. Control Panel `input_properties`, window-model rows 36/37 and USER host suite; animated cursor import is tracked in WM-21 Earlier incoming evidence (superseded where completed above): Pointer speed and double-click time (`apps/desktop/settings.h:27-37,60`). Missing: button swap, trails, schemes, wheel lines; Win32 SPI values are per process and never saved |
 | IN-7 | Game Controllers: add, calibrate, test | RK-cpl | done | `apps/control/joystick.inc` with three-point calibration; `tests/host/joystick/*` |
 | IN-8 | Touchpad tapping and scrolling | RK-dev | partial | i8042 touchpad support (`tests/host/i8042_touchpad_test.inc`); no settings page |
-
 ## 16. Accessibility
-
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
 | AC-1 | Accessibility Options applet (Keyboard, Sound, Display, Mouse, General tabs) | RK-acc, RK-cpl | done | G25: five tabs and a Settings page with OK and Cancel per feature (`apps/control/access.inc`; `access_control_test.c`; renders reviewed). Saves on each change, merges only the fields it changed, refreshes once a second. SerialKeys is shown disabled (AC-6) |
@@ -362,9 +322,7 @@ see `dos-program-properties.md` for their respective selection/paste paths.
 | AC-6 | SerialKeys and alternative input devices | RK-acc | absent | Not provided: `SPI_GETSERIALKEYS` fails with ERROR_CALL_NOT_IMPLEMENTED; the applet shows the option disabled |
 | AC-7 | Accessibility Wizard, Magnifier, large and inverted pointers, scalable interface elements | RK-acc | partial | G25: Magnifier (levels 1-9, follows pointer and focus, invert, panel top or bottom, Windows+Up/Down/Page Up/Page Down; Start > Accessories) and large/inverted pointers (WM-21). Missing: the Wizard, large fonts and scalable elements (G23), "follow text editing" (no caret channel), High Contrast switch inside the Magnifier dialog (the applet has it) |
 | AC-8 | Automatic reset after an idle time and the status indicator in the tray | RK-acc | done | G25: idle time-out (5 to 30 minutes in the applet, 1 to 60 in the file) switches the five features off with an optional falling siren; the tray indicator shows Shift/Ctrl/Alt latch and lock, mouse buttons and the FilterKeys stopwatch. Missing: the free-floating indicator window |
-
 ## 17. Display
-
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
 | DS-1 | Display properties tabs: Background, Screen Saver, Appearance, Effects, Web, Settings | RK-cpl | partial | Background, Appearance and Settings (`apps/control/app.c:1203-1245`) |
@@ -378,9 +336,7 @@ see `dos-program-properties.md` for their respective selection/paste paths.
 | DS-9 | Advanced: refresh rate, monitor type (EDID), font size (DPI), adapter and driver change, hardware acceleration slider | RK-cpl, RK-perf ("Setting Graphics Compatibility Options") | partial | Adapter information read-only and "Retry acceleration" (`display.c:78-95`, `app.c:1239-1245`). Missing: refresh rate (no field in `ciuki_display_mode`, `abi.h:1825-1833`), monitor, DPI, driver change, the acceleration slider |
 | DS-10 | Desktop Themes (wallpaper, sounds, pointers, screen saver and icons as one package) | RK-comp | absent | — |
 | DS-11 | Display drivers for the common adapters of the period, with software fallback | RK-dev | done (host) | `docs/design/display-driver-model.md`, `video-driver-families.md`, `tests/host/*driver_test.c` |
-
 ## 18. Multimedia
-
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
 | MM-1 | Sounds applet: events list, sound per event with Browse and preview, named schemes (save, delete) | RK-cpl, RK-comp ("Multimedia Sound Schemes") | done | G22: Browse validates bounded PCM WAV before assignment; None disables one event; Save As/load/delete named schemes, Default and No sounds, preview, registry persistence and failed-save rollback (`apps/control/app.c`, `apps/desktop/sounds.c`, `sound_storage.c`; `sounds_control_test.c`, `sound_storage_test.c`). Clips retain the existing 22050 Hz mono S16LE/two-second format and 63-character path bound; see `docs/design/g22-multimedia.md` Earlier integration evidence before G22 (retained): 18 events with preview, Default and No sounds (`apps/desktop/sounds.h:20-24`, `apps/control/app.c:1262-1286`); `sounds_control_test.c`. Missing: Browse and per-event assignment, Custom and named schemes |
@@ -393,9 +349,7 @@ see `dos-program-properties.md` for their respective selection/paste paths.
 | MM-8 | Audio compression (ACM) and video codecs (VfW) for programs | RK-comp, RK-mm | partial | ADPCM, Cinepak, MS RLE and MS Video 1 in `sdk/win32/audio/mciavi.c`; no MPEG |
 | MM-9 | MIDI synthesis for Windows and DOS programs | RK-mm | partial | Win32 TinySoundFont synth (`sdk/win32/audio/synth.c`), DOS OPL3 (`src/kernel/audio/opl3.c`). No MPU-401 for DOS, no system MIDI port for native programs |
 | MM-10 | DirectX (DirectDraw, DirectSound, DirectInput, Direct3D) for games | RK-mm | partial | DirectDraw, DirectSound (playback) and DirectInput on the host (`sdk/win32/ddraw`, `audio/dsound.c`, `input/directinput.c`); Direct3D absent (F7) |
-
 ## 19. Power management
-
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
 | PW-1 | APM 1.2 with the BIOS in charge (battery status, suspend requests, standby only when supported) | RK-power | partial | `src/kernel/core/apm.c` connects only when no ACPI RSDP exists (`apm.c:68,96,104,184`); `tests/host/apm_test.c`. Directive fx-18 extends it to firmware-owned ACPI machines (the T23) |
@@ -408,18 +362,14 @@ see `dos-program-properties.md` for their respective selection/paste paths.
 | PW-8 | Password on resume; power-button and lid-close actions | RK-power | partial | G11: power-button and lid choices (`power-policy.md` 17-19; the lid acts on ACPI's `lid_open`, APM lid requests are reported). Missing: password on resume (logon passwords, G32) |
 | PW-9 | Applications are told of power changes (WM_POWERBROADCAST) | MS-power | done (host) | G11/G11B: Win32 WM_POWERBROADCAST and native toolkit query/veto, suspend, automatic and interactive resume, status changes; visible notice for DOS sessions. Per-window dequeue deadline, delivered handlers may wait, failure notices to agreeing clients; KERNEL32 GetSystemPowerStatus. Native channel opcodes 87/88; hardware qualification remains pending |
 | PW-10 | Soft power-off at shutdown | RK-power | done | SD-3 |
-
 ## 20. Date, time and regional settings
-
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
 | TM-1 | Date/Time applet: calendar and clock to set date and time | RK-cpl, MS-time (SetLocalTime) | done | G1: Date/Time Properties, Date & Time tab (calendar, clock, time edit, Apply = SetLocalTime through call 97, RTC written in local time); `apps/control/datetime.inc`, `tests/host/desktop/datetime_control_test.c`; [local-time.md](local-time.md) |
 | TM-2 | Time Zone tab with a map and "Automatically adjust clock for daylight saving changes"; local time everywhere | RK-cpl, MS-time (GetTimeZoneInformation) | partial | G1: Time Zone tab (60 bundled IANA zones with their POSIX rules, "Automatically adjust clock for daylight saving changes"); the zone applies to the kernel, every launched program (`TZ`), libc, FAT stamps, kernel32 GetTimeZoneInformation/GetLocalTime and DOS INT 1Ah. No map |
 | TM-3 | RTC kept in local time, with time synchronisation tools | RK-cpl | partial | G1: the RTC keeps local time (or UTC) with the bias recorded in clock.cfg version 2 and moved at every daylight-saving change, also after a change while switched off (`tests/host/proc/localtime_test.c`). No network time |
 | TM-4 | Regional Settings: locale with number, currency, time and date formats, used by programs (GetLocaleInfo, GetDateFormat) | RK-intl, MS-time (NLS) | done (host; sanitizer completion pending) | Previously: programs ran with `LC_ALL=C`; `sdk/win32/kernel32/locale.c` had no user setting feeding it. G24: shared persisted English/Italian formats, native LC_* selection/localeconv/printf/scanf/strtod/strftime through the pinned newlib port, Files dates and numbers, Win32 default/explicit LCIDs and A/W NLS with NOUSEROVERRIDE. `docs/design/regional-settings.md`. Remaining: other locales/calendars, native multibyte classification/localized collation, registry mirror/SetLocaleInfo/thread locales and change broadcast; existing native processes reselect with setlocale. Host behavioral checks pass; NLS file-reader and window/job leak-check completion require a host permitting LeakSanitizer ptrace. Earlier merge-side evidence (superseded where completed above): Programs run with `LC_ALL=C`; Win32 locale code exists in `sdk/win32/kernel32/locale.c` but no user setting feeds it |
-
 ## 21. Storage and file systems
-
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
 | ST-1 | FAT12, FAT16 and FAT32 read and write, long file names | RK-disk | done | `src/kernel/fs/fat.c`; `tests/host/fs/test_fs.c`, `test_fat12.c`, `test_powercuts.c` |
@@ -438,9 +388,7 @@ see `dos-program-properties.md` for their respective selection/paste paths.
 | ST-14 | Microsoft Backup and System Recovery | RK-tools | partial | G29c: Files Backup/Restore and drive Tools Backup Now; Terminal BACKUP/RESTORE supports multiple selections. Full/differential jobs, versioned catalogue with per-file/record/catalogue CRC32, verify before restore, original/alternate location, never/older/always overwrite choices, staged synced replacement, worker progress/cancel and error reports. `backup_test.c`, disk UI tests, fx-15 row 43. Differential uses a full catalogue's fixed file set (new names excluded); apply the full archive then a chosen differential. Gaps: QIC/MS Backup file interoperability, tape/spanning/compression, coherent live registry/system recovery and rescue startup environment; no bare-metal recovery claim. |
 | ST-15 | Virtual memory: swap file managed by the system, with a manual setting (System ▸ Performance) | RK-perf | partial | `src/kernel/fs/pagefile.c`, `C:/SYSTEM/PAGEFILE.SWP` (`mount.c:1094`); `tests/host/fs/test_pagefile.c`. No UI |
 | ST-16 | Read other file systems (NTFS read-only is a CiukiOS goal, not Windows 98) | — | done | `src/kernel/fs/ntfs_ro.c`; `tests/host/fs/test_ntfs.c` |
-
 ## 22. Networking and Internet
-
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
 | NW-1 | Network adapter drivers (NDIS) | RK-net | partial | Native e100, rtl8139, ne2000, e1000, pcnet, tulip, 3c90x, rhine (`src/kernel/drivers/net.c:99-102`). The NDIS host has no qualified miniport (`src/kernel/ndis/profiles.c:7`) |
@@ -458,9 +406,7 @@ see `dos-program-properties.md` for their respective selection/paste paths.
 | NW-13 | IPX/SPX and NetBIOS for games and LANs | RK-net | partial | Existing DOS NE2000/IPX bridge; G26B adds LMHOSTS/B-node NBNS name resolution to native libc and synchronous Winsock. No NetBIOS name registration, datagram/session transport, WINS or native IPX. |
 | NW-14 | Internet Connection Sharing (Windows 98 SE) | — | absent (scope) | Routing and NAT excluded (`network-contract.md:32`) |
 | NW-15 | Network status in the tray | — | done | TB-9 |
-
 ## 23. MS-DOS programs
-
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
 | DOS-1 | MS-DOS Prompt in a window and full screen, Alt+Enter switches | RK-apps, RK-vmm | done (host) | `apps/dosbox/dosbox.c`, `src/kernel/vm/dosvm_client.c:401`; `tests/host/dosvm_fullscreen_test.inc`. Defects on the T23 are tracked in fx-16 |
@@ -475,9 +421,7 @@ see `dos-program-properties.md` for their respective selection/paste paths.
 | DOS-10 | Mouse in DOS programs; copy/paste of text | RK-apps | partial | G17: window wheel input reaches INT 33h through the upstream CuteMouse Wheel API (0011h capability, 0003h BH counter, 0005h/0006h BX=FFFFh, callback mask bit 7, independent/reset/saturated counters). Text selection/copy and ASCII paste use the native clipboard (CB-5). G5 adds shared Win32/native clipboard access, graphics copy and CP437 paste through the window menu. Missing: guest code-page selection, non-ASCII toolbar paste, clean leak-enabled sanitizer completion and runtime qualification. Earlier incoming evidence (superseded where completed above): INT 33h (`dosvm_mouse.c`); the wheel is dropped (`dosbox.c:302`); no clipboard (CB-5) |
 | DOS-11 | Printing from DOS through the Windows spooler | RK-print | partial | G31 shared RAW spool capture for LPT1 INT17 and trapped byte SPP, with default printer, FF/idle/VM-close boundaries and retry-safe buffer publication; explicit per-game None/File/Raw preserved (`dosvm_print.c`, `dos_print_test.c`). Remaining: virtual EPP/ECP/DMA and LPT2/3 capture, power-failure recovery of unpublished jobs, physical qualification. Earlier incoming evidence (superseded where completed above): INT 17h to a file or a physical LPT lease (`dosvm_lpt.c`); no spooler |
 | DOS-12 | Serial ports and modems for DOS programs | RK-net (ch. 21) | partial | `dosvm_uart.c`; no modem |
-
 ## 24. Windows programs (Win32)
-
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
 | W32-1 | PE loader with DLLs and imports | RK-vmm ("Application Support") | done (host) | `sdk/win32/ldr/*`; `tests/host/win32/test_loader.py`. No original Windows game, installer or application has run yet (`README.md:185-186`) |
@@ -491,13 +435,10 @@ see `dos-program-properties.md` for their respective selection/paste paths.
 | W32-9 | Integration: taskbar, Alt+Tab, clipboard, file drops, tray icons, taskbar flashing, shell folders | MS-taskbar, MS-dnd | partial | Taskbar, Alt+Tab and z-order remain v3. G18 adds immutable WM_DROPFILES, program tray icons and balloons, FlashWindow, CSIDL_SENDTO and CSIDL_RECENT/default registry mappings. Clipboard bridge remains G5; guest/application qualification remains W32-11. Earlier merge-side evidence (superseded where completed above): Taskbar, Alt+Tab, z-order and hotkeys through protocol v3 (`tests/host/desktop/test_v3.py`). Missing: clipboard bridge (CB-3), WM_DROPFILES (DD-5), tray (TB-5), flashing (WM-17), SendTo and Recent shell folders (`apps/w32srv/defaults.c:35-42`) |
 | W32-10 | Shortcut (.lnk) properties: Target, Start in, Shortcut key, Run (normal, minimised, maximised), Change Icon, Find Target | MS-shell (Shell Links) | partial | G18: editable Target/Arguments/Start in/hotkey/Run/icon sheet, Find Target parent folder, explicit repaired Target save, IShellLink hotkey round-trip, global shortcut hotkeys, Run normal/minimized/maximized, classic DIB .ico snapshots. Remaining: automatic moved-target search/tracking, Find Target selection/non-C: drives, PE/DLL/PNG icon extraction, distinct native cwd (explicitly refused). See `docs/design/g18-shortcut-shell.md` and `g18-launch.md`. Earlier merge-side evidence (superseded where completed above): CIUKLNK3 format (`apps/desktop/shell_link.h`), Start in honoured (`win32_native.c:175,238-240`). Missing: the dialog, hotkeys (IShellLink stubs, `sdk/win32/shell/link.c:62-72`), the stored `show` value is never applied (`win32_native.c:137,191`), `.ico` icons, target repair |
 | W32-11 | Real applications and games run | RK-apps | absent | Every row of `docs/design/win32-compatibility-matrix.md` is unqualified |
-
 ## 25. Control Panel applets
-
 The applet list is RK-cpl Table 23.1. The CiukiOS Control Panel has seven
 categories and eleven applets (`apps/desktop/settings_catalog.h:13-36`). Each
 row's detail is in the area section it points to.
-
 | ID | Windows 98 applet | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
 | CP-1 | Accessibility Options | RK-cpl | done | G25: `apps/control/access.inc`, Input category; AC-1 |
@@ -522,15 +463,11 @@ row's detail is in the area section it points to.
 | CP-20 | Telephony | RK-cpl | absent (scope) | NW-11 |
 | CP-21 | Users | RK-cpl | done | G32 Users applet (SS-4), shared Control Panel/Start settings catalogue |
 | CP-22 | Scanners and Cameras, Infrared | RK-cpl | absent (scope) | No such device class in the hardware baseline (`docs/design/hardware-baseline.md`) |
-
 CiukiOS has applets that Windows 98 lacks: Storage and removable devices
 (AutoPlay choices, `app.c:1323-1350`), per-game properties, and the Logs and
 Hardware check tabs.
-
 ## 26. Accessories and games
-
 The component list is RK-comp `[OptionalComponents]`.
-
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
 | AX-1 | Notepad: New, Open, Save, Save As, Page Setup, Print, Undo, Cut/Copy/Paste/Delete, Select All, Time/Date (F5), Word Wrap, Set Font, Find, Find Next; offers WordPad for files too large | RK-comp | partial | CiukNote provides New/Open/Save/Save As, Undo, Cut/Copy/Paste, Find/Replace, Go To, Select All, F5, Word Wrap, Font and Status Bar (`apps/ciuknote/app.c:20-32`; `tests/host/desktop/ciuknote_test.c`). G31 adds Page Setup and Print of the unsaved document through the shared native spooler, covered by callback and dialog host tests. G28 adds a WordPad handoff above CiukNote's 61,440-byte limit (`cn_offer_wordpad`, `D_BIG`, desktop LAUNCH authorization, `test_wordpad_handoff`). Remaining: font selection beyond Regular/Bold of one face. Earlier integration evidence: Page Setup, Print and the large-file editor handoff were missing. |
@@ -550,11 +487,8 @@ The component list is RK-comp `[OptionalComponents]`.
 | AX-15 | Clock (a Windows 3.x leftover, not in Windows 98) | — | done | `apps/accessories/clock_*`; local time of the system zone since G1 |
 | AX-16 | MS-DOS Prompt | RK-comp | done | DOS-1 |
 | AX-17 | Command prompt for the native system | — | partial (G27) | Terminal (`apps/terminal/`, `docs/terminal.md`) now has pipes (`|`), redirection (`>`, `>>`, `<`), %VARIABLES% and SET, batch files (`.bat`/`.cmd`: ECHO, REM, labels and GOTO, IF EXIST/ERRORLEVEL/==, FOR, CALL, SHIFT, PAUSE, EXIT /B, %0-%9 and %*), the filters FIND, SORT and MORE, and ATTRIB, LABEL, VOL, CHKDSK (read-only survey) and IPCONFIG; `apps/terminal/script.c`, `tests/host/desktop/terminal_test.c`. Missing: FORMAT (no kernel format service; G29), PING (no raw ICMP; G26), real `RUN` and `REG`, PAUSE waiting for a key |
-
 ## 27. System tools
-
 The tool list is RK-tools Table 27.1 plus the System Tools menu of RK-comp.
-
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
 | SY-1 | System Information (MSInfo): System summary, Hardware Resources (conflicts, DMA, I/O, IRQ, memory), Components, Software Environment, Tools menu | RK-tools | done | G30: `apps/systools/sysinfo_main.c`/`sysinfo_view.c` (System Information window: category tree, item list, File > Save As Text File, View > Refresh, Tools menu launching Hardware Report, System Monitor, Resource Meter, Task Manager, Control Panel; Start > Programs > Accessories > System Tools); the tree and conflict detection come from `sysinfo.c`; `tests/host/desktop/systools_test.c`, `systools_ui_test.c`. Limits: IRQ/DMA come from the retained call-76 resources only; Save As does not confirm an overwrite |
@@ -572,9 +506,7 @@ The tool list is RK-tools Table 27.1 plus the System Tools menu of RK-comp.
 | SY-13 | Disk tools (ScanDisk, Defragmenter, Cleanup, Drive Converter, Backup) | RK-disk | partial | ST-9 to ST-14 |
 | SY-14 | Windows Update | RK-tools | absent (scope) | `docs/design/win32-personality-contract.md:89` |
 | SY-15 | Developer tools (not in Windows 98): C compiler, IDE | — | done | `apps/tcc`, `apps/ciukide`; `tests/host/desktop/ciukide_test.c` |
-
 ## 28. Help
-
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
 | HP-1 | Windows Help: Contents, Index, Search, with topics for every component and troubleshooters | RK-tools ("Troubleshooting Procedures") | done | Contents tree, Index, Search, Back and 37 topics incl. every program and a Troubleshooting book (`apps/accessories/help*.c`, `help_test.c`). Missing: interactive troubleshooter wizards, cross-links. Earlier integration evidence: CiukiOS Help with 10 topics (`apps/accessories/help_topics.c`); missing index, search, troubleshooters and topics for each program; 42 built-in topics, Contents/Index/Search/Back, related-topic links and 11 question-driven troubleshooters with Back/Next/Finish/Cancel (`help_wizard.c`, `help_navigation.c`, `help_formats_test.c`). Functional/frame checks reach PASS; LSan rerun pending (`help-everywhere.md`) |
@@ -582,9 +514,7 @@ The tool list is RK-tools Table 27.1 plus the System Tools menu of RK-comp.
 | HP-3 | What's This? (Shift+F1, the "?" caption button in dialogs) | RK-keys, MS-syscmd (SC_CONTEXTHELP) | done | Toolkit mode and dialog "?" button; v3 `DESK_V3_CONTEXTHELP` caption button; Win32 `SC_CONTEXTHELP`/`WM_HELP`. Controls carry `help` text only where programs set it. Earlier integration evidence: absent; Toolkit mode and dialog "?" button; v3 `DESK_V3_CONTEXTHELP`; Win32 `SC_CONTEXTHELP`/`WM_HELP`. Every toolkit control gets type/action help unless the program supplies its own string (`du_control_help`, `help_toolkit_test.c`) |
 | HP-4 | Tooltips on toolbar buttons and controls | RK-vmm | done | libdeskui `widget.tip` (500 ms, 5 s) set on the Files and Help toolbars; other programs' controls need tips added. Earlier integration evidence: taskbar and tray only; no tooltips in `apps/libdeskui`; Default strings for all toolkit control types and modal controls, explicit program overrides, 500 ms delay and 5 s dismissal; typed text is excluded. `help_toolkit_test.c`; control-string assertions in all 18 native application cases (functional PASS, LSan rerun pending) |
 | HP-5 | WinHelp/HTML Help for Windows programs (`WinHelp`, `.hlp`, `.chm`) | RK-apps | partial | HLP phrase/topic/context/keyword reader, navigation macros; CHM ITSF/LZX/HHC/HHK reader with anchors; WinHelpA/W and hhctrl.ocx HtmlHelpA/W requests reuse one Help window. Owner-local CHM/HLP streams decode. Remaining: original layout/popups, advanced macros, binary CHM indexes/active HTML and true foreign HWND/embedding; `docs/design/help-everywhere.md` |
-
 ## 29. Error reporting and logging
-
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
 | ER-1 | A faulting program shows a dialog ("…has performed an illegal operation", Details) and the system keeps running | RK-tools | done | G13: `native_fault_report` (`src/kernel/proc/win32/diagnostics.c`) queues the fault for the desktop, which shows "This program has performed an illegal operation and will be shut down." with Close and Details (`apps/desktop/client.c` `desk_w32_fault_dialog`, `fault_text.h`); Win32 programs: W32-8 |
@@ -593,21 +523,16 @@ The tool list is RK-tools Table 27.1 plus the System Tools menu of RK-comp.
 | ER-4 | Startup and setup logs (`BOOTLOG.TXT`, `SETUPLOG.TXT`, `DETLOG.TXT`) | RK-start | done | BT-6, BT-13 (`SYSTEM/SETUP.LOG`) |
 | ER-5 | Log viewer for the user | RK-tools | done | G13: Log Viewer accessory (`apps/accessories/logview_*.c`, Start > Programs > System Tools): boot log, NetSurf log, Setup log and the native and Win32 crash files, last 60 KB of large files, refresh, copy |
 | ER-6 | Low-resource and low-disk warnings | RK-disk | partial | G29 supplies Files copy/move low/full-disk warnings with a Cleanup action (ST-11). Low-resource warnings and a session-wide broker for allocations by all programs remain gaps. |
-
 ## Summary of the inventory
-
 There are 344 rows. The Control Panel table (22 rows) mostly points back to
 rows in the area sections, so the counts are given with and without it.
-
 | Status | All rows | Without the Control Panel table |
 | --- | ---: | ---: |
 | done | 76 | 75 |
 | partial | 143 | 132 |
 | absent | 125 (15 of them out of scope by an existing decision) | 115 (12 out of scope) |
 | **total** | **344** | **322** |
-
 The pattern across areas:
-
 - **Strong:** the kernel services under the desktop. That means storage,
   caching, the FAT, ISO and NTFS file systems, display modes with the revert
   timer, TCP/IP and DHCP, the DOS memory managers and DPMI, the window
@@ -618,12 +543,9 @@ The pattern across areas:
   saver, and power policy.
 - **Missing:** whole subsystems. Printing, accessibility, users and logon,
   regional settings and file sharing do not exist yet.
-
 ## Stale statements found while surveying
-
 These statements contradict the code. The directive that next touches each
 area should correct it.
-
 - `apps/desktop/shell.c:1468`: an unreachable branch of `icon_open` says
   "CiukiOS does not keep deleted files yet: Files deletes them permanently".
   Every built-in icon is `SH_ACT_LAUNCH`, so this text never shows. The desktop
@@ -642,14 +564,10 @@ area should correct it.
 - `docs/design/desktop-interaction-audit.md` (2026-10-15) marks the desktop
   icons and taskbar rows "ok". The rows DT-3 to DT-7 and TB-2 to TB-5 above
   are not.
-
 ## Prioritised gap list (directive-sized work items)
-
 ### How the list is ordered
-
 Items are ranked by what a user on the T23 meets in the first ten minutes.
 The session that sets the order is:
-
 1. boot, then the desktop appears;
 2. look at the clock;
 3. open Files and a few programs, move and arrange the windows;
@@ -662,24 +580,17 @@ The session that sets the order is:
 10. play DOOM;
 11. unplug the charger;
 12. shut down.
-
 Within the same moment, an item that can lose data or show wrong information
 comes before an item that is only missing.
-
 ### Size scale
-
 Sizes include the host tests:
-
 - **S:** one directive, up to about 800 changed lines.
 - **M:** one directive, about 800 to 2,500 lines.
 - **L:** two or three directives.
 - **XL:** a programme of several directives.
-
 ### Already written (do not duplicate)
-
 These directives were written from the trial of image `e831e685`. The items
 below assume they land first.
-
 | Directive | Covers rows |
 | --- | --- |
 | fx-14 NetSurf parser admission limits | NW-8 (real pages) |
@@ -688,9 +599,7 @@ below assume they land first.
 | fx-17 USB read-write mount, cross-drive copy/move, write errors | ST-6, DD-2, DD-7 |
 | fx-18 Battery, AC and power data through APM when ACPI is not owned | PW-1, TB-8, PW-4 (data) |
 | fx-19 Drag and drop everywhere, rubber-band selection | DT-4, DT-11, FM-19, DD-1 to DD-6 |
-
 ### New work items, highest user impact first
-
 | # | Title | Scope (rows) | Dependencies | Size | Why it ranks here |
 | ---: | --- | --- | --- | --- | --- |
 | G1 | Local time, time zone and DST; set date and time | TM-1, TM-2, TB-6 (double-click, calendar), AX-15, FM-2 (local dates). A kernel or desktop call to set the RTC outside Setup; a tz database subset with EU and US DST rules applied to the `TZ` of every launched program, including Win32 `GetTimeZoneInformation`; a Date/Time page with calendar, time and time-zone tabs; the tray double-click | none | M | The clock is wrong on first sight: it shows UTC, which is two hours off in Italy in summer, and the user cannot fix it |
@@ -712,9 +621,9 @@ below assume they land first.
 | G18 | Win32 shell integration | Delivered (host; `build/codex/g18-report.md`): tray/balloons, flashing, immutable Win32 file drops, nested installed menus, shortcut sheet/hotkeys/Run modes/classic ICO/explicit repair, SendTo and Recent folder mappings. Remaining advanced shortcut limits are listed in W32-10; clipboard is G5 and startup is G21. TB-5, TB-10, WM-17, W32-9, W32-10, DD-5, SM-2. A tray icon protocol and `Shell_NotifyIcon`; `FlashWindow` and taskbar flashing; WM_DROPFILES from desktop drags; Win32 Start Menu folders as submenus; shortcut properties, hotkeys, Run minimised/maximised, `.ico` icons, target repair; the SendTo and Recent shell folders | fx-19, G8 | L |Installed Windows programs appear flat in the menu and lose their tray icons Earlier merge-side evidence (G18): Installed Windows programs appear flat in the menu and lose their tray icons; earlier scope: TB-5, TB-10, WM-17, W32-9, W32-10, DD-5, SM-2. A tray icon protocol and `Shell_NotifyIcon`; `FlashWindow` and taskbar flashing; WM_DROPFILES from desktop drags; Win32 Start Menu folders as submenus; shortcut properties, hotkeys, Run minimised/maximised, `.ico` icons, target repair; the SendTo and Recent shell folders|
 | G17 | DOS window and program properties | DOS-2, DOS-3, DOS-4, DOS-10, CB-5, DOS-9 (CiukiOS equivalent). Window toolbar (Mark, Copy, Paste, Full screen, Properties, Background, font size); a properties sheet for any DOS program (Program, Font, Memory, Screen, Misc), stored per program; mouse wheel; an exclusive full-screen session with its own configuration as the MS-DOS mode equivalent **Core implementation supplied by G17**; the unimplemented PIF controls and validation restrictions are listed in `docs/design/dos-program-properties.md` and `build/codex/g17-report.md`. | G5 for Copy/Paste | L |Core DOS window settings are implemented; advanced PIF controls and the G5 provider bridge remain Earlier merge-side evidence (superseded where completed above): DOS games cannot be configured unless they are in the catalogue Earlier merge-side evidence (G17): DOS games cannot be configured unless they are in the catalogue; earlier scope: DOS-2, DOS-3, DOS-4, DOS-10, CB-5, DOS-9 (CiukiOS equivalent). Window toolbar (Mark, Copy, Paste, Full screen, Properties, Background, font size); a properties sheet for any DOS program (Program, Font, Memory, Screen, Misc), stored per program; mouse wheel; an exclusive full-screen session with its own configuration as the MS-DOS mode equivalent|
 | G19 | Desktop icon management beyond fx-19 | DT-3, DT-5, DT-6, DT-8, DT-9. Arrange by name, type, size and date; Auto Arrange; type-ahead, Home/End and Ctrl+A on the desktop; New ▸ Bitmap and Shortcut on the menu; renaming system icons; wallpaper Browse and "Set as wallpaper" from Paint, the Viewer and NetSurf | fx-19 | M | Icons cannot be sorted, and pictures cannot become the wallpaper |
-| G20 | Taskbar and Start menu customisation | TB-2, TB-3, TB-4, SM-1, SM-3, SM-4, SM-5. Taskbar Properties (always on top, auto-hide, clock, small icons); Quick Launch with Show Desktop; Start menu editing (add, remove, drag, Clear Documents, 15 items read from the apps' recent lists); Settings ▸ Taskbar & Start Menu and Folder Options | G4 | M | The user cannot pin a favourite program |
-| G21 | Startup programs | Implemented (G21; `docs/design/startup-programs.md`); BT-11 configuration-file/boot-menu controls remain G14. SS-5, BT-11. A StartUp folder and the Run and RunServices keys at every desktop start, with Shift held to skip; an msconfig-like startup page in System | G18 for Win32 entries | S |Programs that expect to start at logon (tray tools, players) do not Earlier merge-side evidence (G21): Programs that expect to start at logon (tray tools, players) do not; earlier scope: SS-5, BT-11. A StartUp folder and the Run and RunServices keys at every desktop start, with Shift held to skip; an msconfig-like startup page in System|
-| G22 | Multimedia completion | MM-1, MM-3, MM-4, MM-5, MM-6, MM-7, MM-9, AX-9. G22 schemes/Recorder/CD transport/tray; G22B source mixer and recording controls, persistence, CD volume/names, ICH capture and Win32 waveIn. Earlier integration-side contract: native Media Player front-end for MIDI/AVI, preferred-device routing, native/DOS MPU MIDI, broad capture and CD database. Remaining: alternate device routing, native MIDI/AVI front-end over MCI, native/DOS MPU MIDI, other capture families and recording gain limitations; `docs/design/g22-multimedia.md`, `build/codex/g22b-report.md` | capture adapters and native MCI/MIDI bridge | L | **Partially delivered**: G22 schemes/Browse, capture ABI and Recorder on Trident/ALi, Multimedia page, CD track/time/modes and tray double-click. G22B adds source mixer/recording controls, persistent routing, CD volume/names, ICH capture and Win32 waveIn. Remaining obligations are explicit in the G22B report. Earlier integration evidence: Only the master volume could be changed; remaining G22 work was per-source mixer, preferred-device/CD routing, native MIDI/AVI and additional capture families. |
+| G20 | Taskbar and Start menu customisation | Implemented (host; `taskbar-start-customization.md`): TB-2, TB-3, TB-4, SM-3, SM-4 and the G20 portions of SM-1/SM-5. All taskbar properties, four-edge move/resize, folder-backed toolbars, Start/Programs editing and drag ordering, shared 15-document history/clear, Settings shortcuts. SM-1 Log Off and full Find remain G32/G7; SM-5 Printers and Active Desktop remain separate gaps. The completed scope also covers the original request: Taskbar Properties (Always on Top, Auto hide, clock and small Start icons), Quick Launch with Show Desktop, Start menu Add/Remove/drag editing, Clear Documents, Settings ▸ Taskbar & Start Menu and Folder Options. | G4 | L | Host implementation complete; lead integration/build and permitted runtime qualification remain. Earlier integration-side evidence: The user cannot pin a favourite program; the prior completion claim covered TB-2, TB-3, TB-4, SM-1, SM-3, SM-4 and SM-5. |
+| G21 | Startup programs | Implemented (G21; `docs/design/startup-programs.md`); BT-11 configuration-file/boot-menu controls remain G14. SS-5, BT-11. A StartUp folder and the Run and RunServices keys at every desktop start, with Shift held to skip; an msconfig-like startup page in System | G18 for Win32 entries | S | Programs that expect to start at logon (tray tools, players) do not Earlier merge-side evidence (G21): Programs that expect to start at logon (tray tools, players) do not; earlier scope: SS-5, BT-11. A StartUp folder and the Run and RunServices keys at every desktop start, with Shift held to skip; an msconfig-like startup page in System Earlier merge-side evidence: Programs that expect to start at logon (tray tools, players) do not |
+| G22 | Multimedia completion | MM-1, MM-3, MM-4, MM-5, MM-6, MM-7, MM-9, AX-9. G22 schemes/Recorder/CD transport/tray; G22B source mixer and recording controls, persistence, CD volume/names, ICH capture and Win32 waveIn. Earlier integration-side contract: native Media Player front-end for MIDI/AVI, preferred-device routing, native/DOS MPU MIDI, broad capture and CD database. Remaining: alternate device routing, native MIDI/AVI front-end over MCI, native/DOS MPU MIDI, other capture families and recording gain limitations; `docs/design/g22-multimedia.md`, `build/codex/g22b-report.md` | capture adapters and native MCI/MIDI bridge | L | **Partially delivered**: G22 schemes/Browse, capture ABI and Recorder on Trident/ALi, Multimedia page, CD track/time/modes and tray double-click. G22B adds source mixer/recording controls, persistent routing, CD volume/names, ICH capture and Win32 waveIn. Remaining obligations are explicit in the G22B report. Earlier integration evidence: Only the master volume could be changed; remaining G22 work was per-source mixer, preferred-device/CD routing, native MIDI/AVI and additional capture families. Earlier merge-side evidence: Only the master volume can be changed |
 | G23 | Display appearance and DPI | DS-2, DS-5, DS-6, DS-9, DS-10, FT-4, FT-5. A scheme editor (per-item colours, sizes, fonts), saved schemes; Effects (full-window drag, smoothing, large icons); refresh rate and EDID monitor; Large Fonts / DPI; a desktop colour picker and patterns | none | L | The desktop cannot be personalised beyond two themes |
 | G25 | Accessibility | AC-1 to AC-8, KB-17, WM-21. Accessibility Options applet: StickyKeys, FilterKeys, ToggleKeys, MouseKeys, SoundSentry, ShowSounds, High Contrast schemes and hotkeys, idle reset, tray indicator; large and inverted pointers; a Magnifier | G12, G23 | L |Required for users with disabilities; nothing exists. **Delivered by G25 on 2026-10-24** (`docs/design/accessibility.md`, `build/codex/g25-report.md`); remaining: Accessibility Wizard, SerialKeys, scalable UI (G23), caret tracking, Win32 persistence of the SPI records (G12), DOS full-screen sessions Earlier merge-side evidence (G25): Required for users with disabilities; nothing exists; earlier scope: AC-1 to AC-8, KB-17, WM-21. Accessibility Options applet: StickyKeys, FilterKeys, ToggleKeys, MouseKeys, SoundSentry, ShowSounds, High Contrast schemes and hotkeys, idle reset, tray indicator; large and inverted pointers; a Magnifier|
 | G24 | Regional Settings | TM-4, CP-17. Locale with number, currency, date and time formats; `LC_*` for native programs and NLS for Win32 (`GetLocaleInfo`, `GetDateFormat`); Italian and English defaults. **Implemented by G24** (`docs/design/regional-settings.md`, `build/codex/g24-report.md`); remaining limits and sanitizer/guest qualification are recorded at TM-4. | G1 | M |Regional formats now feed native and Win32 programs; see TM-4 for remaining qualification. Earlier merge-side evidence (superseded where completed above): Dates and numbers follow neither the Italian nor the US convention Earlier merge-side evidence (G24): Dates and numbers follow neither the Italian nor the US convention; earlier scope: TM-4, CP-17. Locale with number, currency, date and time formats; `LC_*` for native programs and NLS for Win32 (`GetLocaleInfo`, `GetDateFormat`); Italian and English defaults|
@@ -725,7 +634,6 @@ below assume they land first.
 | G30 | System tools | SY-1, SY-2, SY-3, SY-7, CP-2, CP-19. A browsable System Information; selectable System Monitor counters; Resource Meter; Device Manager disable, enable, remove and update; an Add New Hardware wizard; Scheduled Tasks and a Maintenance wizard | G29 for maintenance tasks | L | For advanced users; lower first-hour impact; **Status (G30 implementation):** windows, tray icon, scheduler service, kernel disk counters, `GetFreeSystemResources`, Performance and Hardware Profiles delivered; kernel/loader consumption of stored device and profile state and the G29 maintenance tools remain. |
 | G32 | Users, logon and passwords | SS-1, SS-2, SS-3, SS-4, SD-6. An optional logon dialog, per-user profiles (Desktop, Start Menu, Documents, settings), Passwords and Users applets, Log Off, screen-saver password **Local core implemented by G32** (`docs/design/users-and-logon.md`, `build/codex/g32-report.md`); remaining: G10 saver hook integration, G20 menu editing, Win32 user/HKCU/CSIDL rebinding, network/remote password providers | G10, G20 | XL | Needed for shared machines; single-user use works without it |
 | G31 | Printing | PR-1 to PR-6, CD-3, AX-1/AX-3 print. Printers folder and Add Printer; a spooler with a queue window; native generic text, PostScript and PCL drivers over LPT and print-to-file; Print and Page Setup in CiukNote, Paint, Viewer and NetSurf; Win32 printer DCs and winspool; DOS LPT capture to the spooler. **Partially delivered by G31**: native RAW service/drivers/UI, application dialogs, Win32 DC/winspool and DOS LPT1 capture; remaining EMF, full browser pagination and compatibility/qualification gaps are listed in PR-3–PR-6 and [printing.md](printing.md) | G16 | XL | Few period users print in the first hour, but every application expects it |
-
 G29 remains partial. G29c adds blank-media discovery/Format, Copy Disk,
 partition editing and Backup file jobs (see their evidence cells). Copy system
 files and bare-metal System Recovery remain gaps; Defragmenter and Drive
@@ -738,12 +646,9 @@ on FM-29; their remaining gaps are listed in the evidence cells.
 Unformatted-media discovery, Copy Disk (FM-34), partition editing (ST-8),
 Defragmenter (ST-10), Drive Converter (ST-12) and Backup/System Recovery
 (ST-14) remain open. `docs/design/disk-tools.md` records these boundaries.
-
 Two areas are not new directives. They stay inside the existing programmes:
-
 - **F5:** real Win32 applications and games (W32-3, W32-5, W32-11).
 - **F7:** Direct3D (MM-10).
-
 The out-of-scope rows are listed so that the decisions stay visible. They are
 Active Desktop, multiple monitors, DriveSpace, dial-up, FTP and Telnet, ICS,
 Win16, Windows Update, policies, Phone Dialer, the Microsoft Internet suite

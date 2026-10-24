@@ -8,7 +8,7 @@
 #define DESK_SETTINGS_OPEN_POWER 7u /* values zero; open the shell confirmation */
 enum { CP_HOME = -1, CP_DISPLAY, CP_MOUSE, CP_KEYBOARD, CP_SOUNDS, CP_DATETIME, CP_SYSTEM,
        CP_DEVICES, CP_DRIVERS, CP_NETWORK, CP_POWER, CP_ADAPTER, CP_FONTS, CP_AUTOPLAY, CP_UNINSTALL,
-       CP_JOYSTICK, CP_MULTIMEDIA, CP_USERS, CP_PASSWORDS, CP_REGIONAL, CP_INTERNET, CP_ADDHW, CP_ACCESS, CP_PAGES };
+       CP_JOYSTICK, CP_MULTIMEDIA, CP_USERS, CP_PASSWORDS, CP_REGIONAL, CP_INTERNET, CP_ADDHW, CP_ACCESS, CP_TASKBAR, CP_PAGES };
 enum { CP_CAT_APPEARANCE, CP_CAT_SOUND, CP_CAT_INPUT, CP_CAT_TIME,
        CP_CAT_CONNECTIONS, CP_CAT_DEVICES, CP_CAT_SYSTEM, CP_CATEGORIES };
 struct cp_category { const char *label, *icon; };
@@ -21,6 +21,7 @@ static const struct cp_category cp_categories[CP_CATEGORIES] = {
 struct cp_applet { int page, category; const char *name, *label, *icon; };
 static const struct cp_applet cp_applets[] = {
     {CP_DISPLAY, CP_CAT_APPEARANCE, "display", "Display", "preferences-desktop-wallpaper"},
+    {CP_TASKBAR, CP_CAT_APPEARANCE, "taskbar", "Taskbar & Start Menu", "preferences-system-windows"},
     {CP_SOUNDS, CP_CAT_SOUND, "sounds", "Sounds and Audio", "audio-card"},
     {CP_MULTIMEDIA, CP_CAT_SOUND, "multimedia", "Multimedia", "audio-card"},
     {CP_KEYBOARD, CP_CAT_INPUT, "keyboard", "Keyboard", "input-keyboard"},

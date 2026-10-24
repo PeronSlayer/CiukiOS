@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT
  * Production Control Panel display model, widgets and protocol; host evidence. */
-#include "control.h"
+#include "../../../apps/control/control.h"
 #include "acc_test.h"
 #include "display_fixture.h"
 #include <errno.h>
@@ -69,6 +69,48 @@ static void init(void)
     strcpy(saved, "wallpaper=none\ndisplay_mode=280\nfuture_key=kept\nrecent=/Documents/note.txt\n"); saved_n = strlen(saved);
     attach(CP_ADAPTER);
 }
+static struct sh_edit_request menu_request;
+static char menu_arguments[1024],explored[CFG_PATH_MAX];
+static int menu_pending,menu_error;
+static int menu_begin_fake(void *ctx,const struct sh_edit_request *r,const char *args)
+{ (void)ctx;if (menu_pending) return -EBUSY;menu_request=*r;snprintf(menu_arguments,sizeof(menu_arguments),"%s",args);menu_pending=1;return 0; }
+static int menu_poll_fake(void *ctx,struct cp_menu_result *r)
+{
+    (void)ctx;if (!menu_pending) return 0;menu_pending=0;memset(r,0,sizeof(*r));r->operation=menu_request.operation;r->error=menu_error;
+    r->count=1;strcpy(r->entries[0].label,"Test shortcut");strcpy(r->entries[0].path,SH_PROGRAMS_FOLDER "/Test.lnk");r->entries[0].folder=-1;return 1;
+}
+static int menu_explore_fake(void *ctx,const char *path)
+{ (void)ctx;snprintf(explored,sizeof(explored),"%s",path);return 0; }
+static void menu_dialog(int id,int button,const char *value)
+{ du_dialog_close(&u);struct du_event e={.type=DU_EV_DIALOG,.id=id,.index=button,.text=value};u.event(&u,&e,u.user); }
+static void taskbar_settings(void)
+{
+    enum { TASKBAR_CLOCK_WIDGET=1960, QUICK_LAUNCH_WIDGET=1961 };
+    init(); cp_open(&a,CP_TASKBAR);
+    assert(du_get(&u,TASKBAR_CLOCK_WIDGET) && du_get(&u,QUICK_LAUNCH_WIDGET));
+    assert(du_get(&u,TASKBAR_CLOCK_WIDGET)->value && du_get(&u,QUICK_LAUNCH_WIDGET)->value);
+    at_click_widget(&u,TASKBAR_CLOCK_WIDGET); at_click_widget(&u,QUICK_LAUNCH_WIDGET);
+    assert(strstr(saved,"taskbar_clock=0\n") && strstr(saved,"quick_launch=0\n"));
+    assert(strstr(saved,"future_key=kept\n") && strstr(saved,"recent=/Documents/note.txt\n"));
+    static struct ciuki_settings roundtrip; cfg_defaults(&roundtrip); assert(!cfg_parse(&roundtrip,saved,saved_n));
+    assert(!roundtrip.taskbar_clock && !roundtrip.quick_launch);
+    at_click_widget(&u,1962);at_click_widget(&u,1963);at_click_widget(&u,1964);
+    assert(strstr(saved,"taskbar_top=0\n") && strstr(saved,"taskbar_autohide=1\n") && strstr(saved,"start_small=1\n"));
+    a.host.menu_begin=menu_begin_fake;a.host.menu_poll=menu_poll_fake;a.host.menu_explore=menu_explore_fake;
+    menu_pending=menu_error=0;select(CP_TASKBAR_TABS,1);assert(a.menu_busy && menu_request.operation==SH_EDIT_REFRESH);cp_menu_poll(&a);
+    assert(du_get(&u,CP_START_ADD) && du_get(&u,CP_START_REMOVE) && du_get(&u,CP_START_ADVANCED) && du_get(&u,CP_START_CLEAR) && du_get(&u,CP_START_LIST)->count==1);
+    at_click_widget(&u,CP_START_ADD);assert(du_dialog_id(&u)==CP_ADD_TARGET);
+    menu_dialog(CP_ADD_TARGET,0,"/Programs/ciuknote");assert(du_dialog_id(&u)==CP_ADD_ARGS);
+    menu_dialog(CP_ADD_ARGS,0,"/Documents/note.txt");menu_dialog(CP_ADD_FOLDER,0,SH_PROGRAMS_FOLDER "/Accessories");menu_dialog(CP_ADD_NAME,0,"My Note");
+    assert(a.menu_busy && menu_request.operation==SH_EDIT_ADD && !strcmp(menu_request.path,"/Programs/ciuknote") && !strcmp(menu_request.destination,SH_PROGRAMS_FOLDER "/Accessories") && !strcmp(menu_request.name,"My Note") && !strcmp(menu_arguments,"/Documents/note.txt"));cp_menu_poll(&a);
+    at_click_widget(&u,CP_START_REMOVE);assert(du_dialog_id(&u)==CP_REMOVE_CONFIRM);menu_dialog(CP_REMOVE_CONFIRM,1,NULL);assert(!a.menu_busy);
+    at_click_widget(&u,CP_START_REMOVE);menu_dialog(CP_REMOVE_CONFIRM,0,NULL);assert(menu_request.operation==SH_EDIT_DELETE && !strcmp(menu_request.path,SH_PROGRAMS_FOLDER "/Test.lnk"));cp_menu_poll(&a);
+    at_click_widget(&u,CP_START_ADVANCED);assert(!strcmp(explored,SH_START_FOLDER));
+    menu_error=-EIO;at_click_widget(&u,CP_START_CLEAR);cp_menu_poll(&a);assert(strstr(saved,"recent=/Documents/note.txt\n"));
+    menu_error=0;at_click_widget(&u,CP_START_CLEAR);assert(menu_request.operation==SH_EDIT_CLEAR);cp_menu_poll(&a);assert(!strstr(saved,"recent=") && !a.cfg.recent_count);
+    puts("PASS G20 Control Panel: all four taskbar options, Programs Add wizard/arguments/folder/title, Remove/cancel, Advanced, Clear/error preserving history");
+    cp_detach(&a);
+}
 static void start(void)
 {
     select(CP_AREA, 0); /* 640 x 480 only has 16-bit */
@@ -96,6 +138,7 @@ static void check_layout(void)
 }
 int main(int argc, char **argv)
 {
+    taskbar_settings();
     assert(argc == 3);
     FILE *f = fopen(argv[2], "rb"); assert(f && fread(portrait, 4, 256 * 256, f) == 256 * 256); fclose(f);
     init(); cp_open(&a,CP_DISPLAY); select(CP_DISPLAY_TABS_ID,CP_SCREEN_SAVER);
@@ -142,7 +185,7 @@ int main(int argc, char **argv)
     init(); start(); ack(); choose(0); assert(a.mode_state == CP_MODE_IDLE && saves == 1);
     assert(strstr(saved, "display_mode=273\n") && strstr(saved, "future_key=kept\n") && strstr(saved, "recent=/Documents/note.txt\n"));
     assert(desk_get32(wire.data + 8) == DESK_SETTINGS_RELOAD);
-    struct ciuki_settings cfg; cfg_defaults(&cfg); assert(!cfg_parse(&cfg, saved, saved_n) && cfg.display_mode == 0x111);
+    static struct ciuki_settings cfg; cfg_defaults(&cfg); assert(!cfg_parse(&cfg, saved, saved_n) && cfg.display_mode == 0x111);
     assert(cfg_parse(&cfg, "display_mode=65536\n", 19) == 1 && cfg.display_mode == 0x111);
     cp_detach(&a);
     /* f1-67: the existing 1024x768 RGB565 alternative must be selectable,

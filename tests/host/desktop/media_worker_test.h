@@ -25,7 +25,7 @@ static void test_slow_media_panel(void)
         assert(elapsed<100000000ull);
         char stall[512];assert(!desktop_stall_record((uint32_t)(monotonic()/1000000ull),stall,sizeof(stall)));
         if (++frames%60==0)d.sh.want_reload|=32;
-        struct timespec pause={0,10000000};nanosleep(&pause,NULL);
+        struct timespec pause={.tv_sec=0,.tv_nsec=10000000};nanosleep(&pause,NULL);
     }
     assert(frames>100 && __atomic_load_n(&media_slow_queries,__ATOMIC_RELAXED)>=24);
     assert(d.sh.media.removable_mask==(1u<<4) && d.sh.media_open);
