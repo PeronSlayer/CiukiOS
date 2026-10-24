@@ -167,6 +167,7 @@ void du_text_fit(struct du_canvas *c, int x, int y, int w, const char *s, uint32
     if (seen_count < 32) snprintf(seen_text[seen_count++], sizeof(seen_text[0]), "%s", s);
     printf("app: window text \"%s\" at t=%llu ms\n", s, (unsigned long long)game_now_ms());
 }
+int du_text_width(const char *s) { return (int)strlen(s) * 7; }
 const char *du_icon_name(const char *name) { (void)name; return "utilities-terminal"; }
 const struct du_icon *du_icon(const char *name, unsigned size) { (void)name; (void)size; return NULL; }
 void du_icon_draw(struct du_canvas *c, int x, int y, const struct du_icon *icon, enum du_icon_mode mode)

@@ -66,6 +66,10 @@ void du_fill(struct du_canvas *c,struct du_rect r,uint32_t colour)
     for (int y=r.y;y<r.y+r.h;y++) for (int x=r.x;x<r.x+r.w;x++) c->pixels[y*640+x]=colour;
 }
 void du_edge(struct du_canvas *c,struct du_rect r,enum du_edge edge) { (void)c;(void)r;(void)edge; }
+void du_icon_draw(struct du_canvas *c,int x,int y,const struct du_icon *i,enum du_icon_mode m)
+{ (void)c;(void)x;(void)y;(void)i;(void)m; }
+const struct du_icon *du_icon(const char *name,unsigned size) { assert(name && size==16); return NULL; }
+int du_text_width(const char *s) { return (int)strlen(s)*7; }
 static unsigned labels;
 void du_text_fit(struct du_canvas *c,int x,int y,int width,const char *s,uint32_t ink)
 { (void)c;(void)x;(void)y;(void)width;(void)ink; assert(s); labels++; }
@@ -147,8 +151,25 @@ static void ui_tests(void)
     for (unsigned y=28;y<480;y++) assert(!!(damage[y/32]&(1u<<(y%32)))==((y-28)*480/452==17));
     window.properties=1; memset(damage,0,sizeof(damage)); db_paint_rows(&window,&canvas,guest,src,damage);
     for (unsigned i=0;i<15;i++) assert(!damage[i]);
+    /* Win98-style toolbar: ids by position, hover tooltip, sheet hit-testing. */
+    assert(db_tool_at(4,10)==DB_TOOL_ZOOM && db_tool_at(112,10)==DB_TOOL_MARK && db_tool_at(185,10)==-1);
+    assert(db_tool_at(224,10)==DB_TOOL_PROPS && db_tool_at(290,10)==DB_TOOL_FONT && db_tool_at(300,10)==-1);
+    window.properties=0; window.dirty=0; event(CIUKI_INPUT_MOTION,0,136,10); assert(window.hover==DB_TOOL_COPY+1 && window.dirty && db_tip_visible(&window));
+    event(CIUKI_INPUT_MOTION,0,300,10); assert(!window.hover);
+    window.properties=1; window.page=3; window.field=0;
+    {   int x=db_button_rect(1).x+3,y=db_button_rect(1).y+3;
+        event(CIUKI_INPUT_MOTION,0,x,y); event(CIUKI_INPUT_BUTTON,CIUKI_BUTTON_LEFT,1,0); assert(!window.properties);
+        db_properties(&window); event(CIUKI_INPUT_MOTION,0,DB_TAB_X+DB_TAB_W*4+5,DB_TAB_Y+5);
+        event(CIUKI_INPUT_BUTTON,CIUKI_BUTTON_LEFT,1,0); assert(window.page==4);
+        unsigned idle=0; for (unsigned i=0;i<DB_FIELD_COUNT;i++) if (db_kind(i)==DB_KIND_SLIDER) idle=i;
+        struct du_rect t=db_control(idle);
+        event(CIUKI_INPUT_MOTION,0,t.x+6+(t.w-12)/2,t.y+10); event(CIUKI_INPUT_BUTTON,CIUKI_BUTTON_LEFT,1,0);
+        assert(window.draft.idle==50);
+        event(CIUKI_INPUT_MOTION,0,t.x+t.w,t.y+10); event(CIUKI_INPUT_BUTTON,CIUKI_BUTTON_LEFT,1,0); assert(window.draft.idle==100);
+        window.properties=0;
+    }
     window.properties=0;
-    window.mouse_x=500; window.mouse_y=10;
+    window.mouse_x=20; window.mouse_y=10;
     event(CIUKI_INPUT_BUTTON,CIUKI_BUTTON_LEFT,1,0);
     event(CIUKI_INPUT_BUTTON,CIUKI_BUTTON_LEFT,0,0);
     assert(window.font_menu && window.font_choice==0);
