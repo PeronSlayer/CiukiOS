@@ -733,8 +733,13 @@ static bool pending(void *arg)
     (void)arg;
     for (unsigned i = 0; i < DOSVM_LIMIT; i++) {
         const struct cd_slot *s = &slots[i];
-        if (s->used && (s->closing || s->ev_count || s->want_seq != s->have_seq ||
-                        (s->scanned && !s->disc_seq))) return true;
+        /* A closing slot is work only once vm-cdread has released it: until
+         * then service_slot waits for the reader's wake (or its feed deadline).
+         * Reporting it pending made the wait return at once, so vm-cdaudio spun
+         * without yielding and starved vm-cdread, the desktop and the serial
+         * log (QEMU: closing DOOM hung the system after "cdaudio close"). */
+        if (s->used && ((s->closing && s->released && !s->reader_busy) || s->ev_count ||
+                        s->want_seq != s->have_seq || (s->scanned && !s->disc_seq))) return true;
         if (s->used && s->disc_seq && drive.seq != s->source_seq) return true;
     }
     return false;

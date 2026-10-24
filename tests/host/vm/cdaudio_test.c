@@ -546,6 +546,17 @@ int main(void)
     pump(2);
     CHECK(!slots[1].stream && !slots[1].job_active);
 
+    /* ---- 6a. Closing while vm-cdread still owns its file: the service step
+     * stops the stream and then waits for the reader instead of reporting
+     * pending work (pending() stayed true, vm-cdaudio spun without yielding
+     * and the system hung when DOOM's DOS Box was closed in QEMU) ---- */
+    slots[0].closing = true;
+    CHECK(dosvm_cdaudio_step());
+    CHECK(slots[0].used && !slots[0].released && !slots[0].stream);
+    CHECK(!pending(0));
+    (void)dosvm_cdaudio_read_step();
+    CHECK(slots[0].released && pending(0));
+
     /* ---- 6. Close: streams stop, files close, slots free ---- */
     dosvm_cdaudio_close(v);
     CHECK(!slots[0].used && !slots[0].stream && !slots[0].res && !audio.streams[0]);
