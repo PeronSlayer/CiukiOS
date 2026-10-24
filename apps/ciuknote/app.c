@@ -38,7 +38,6 @@ static const struct du_menu_item popup_template[] = {
 
 static const char *const yes_no_cancel[] = {"&Yes", "&No", "Cancel"};
 static const char *const yes_no[] = {"&Yes", "&No"};
-static const char *const font_buttons[] = {"&Regular", "&Bold", "Cancel"};
 
 /* ---- small helpers ------------------------------------------------------ */
 
@@ -473,8 +472,12 @@ static void menu_command(struct cn_app *a, int id)
     case M_TIME: insert_time(a); after_edit(a); break;
     case M_WRAP: du_ta_set_wrap(&a->ta, !a->ta.wrap); cn_layout(a); break;
     case M_FONT:
-        box(a, D_FONT, "Font", DU_DLG_ICON_INFO, font_buttons, 3, a->ta.bold ? 1 : 0, 2,
-            "Font:\tInconsolata 12 px (FreeType)\nStyle:\t%s\n---\nOther faces and sizes are not available.", a->ta.bold ? "Bold" : "Regular");
+        {
+            static const char *const faces[] = {"Inconsolata"};
+            struct du_font_choice c = {.family = "Inconsolata", .points = 9, .style = a->ta.bold ? DU_FONT_BOLD : 0};
+            if (du_font_dialog(a->ui, D_FONT, &c, faces, 1, DU_FONT_NO_EFFECTS | DU_FONT_FIXED_CELL, NULL, NULL))
+                failure(a, "The Font dialog could not be opened:", "", ENOMEM);
+        }
         break;
     case M_STATUS: a->show_status = !a->show_status; cn_layout(a); break;
     case M_HELP:
@@ -534,7 +537,9 @@ static void dialog_result(struct cn_app *a, int id, int index, const char *text)
             if (r) failure(a, "WordPad could not be started for:", cn_basename(a->pending), r);
         }
         break;
-    case D_FONT: if (index < 2) a->ta.bold = index; break;
+    case D_FONT:
+        if (!index) { struct du_font_choice c; if (!du_font_parse(text, &c)) a->ta.bold = !!(c.style & DU_FONT_BOLD); }
+        break;
     case D_CREATE:
         if (index == 0) {
             int r = a->fs->save(a->fs->ctx, a->pending, "", 0);

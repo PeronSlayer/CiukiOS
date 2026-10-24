@@ -28,7 +28,7 @@ APP_SCREENS = {
     'wp-context.xrgb': '29b1d0410cd0be779de08745e21ed093918e833cb9e9f3cdab1046a5fa47cace',
     'wp-empty.xrgb': '35837779bd6597aaa3103a098d412fcee0d71fe105285e76af95b1bd2795d47f',
     'wp-find.xrgb': '2fafbf33988ad291f70c253fbebff07d04e0bfebf23d0bb860be380f1ed62fe6',
-    'wp-font-dialog.xrgb': 'be98b861edda8a12d9a6072601150f86d068844de23ed88966a74c7a9d61e15e',
+    'wp-font-dialog.xrgb': 'b7afd496dd3802defb3a5090b1fafbec82886ff0d3ebf44695fd166f3485d71c',
     'wp-formatted.xrgb': '49569d74571647c173c59742a5b145017e85040adbfdb94aaf6a05d0ae0c5619',
     'wp-opened.xrgb': 'f980de8c3eb240b5fd30f6e8291289696950dbb54ce570043fa0aa1c13ff836c',
     'wp-paragraphs.xrgb': '211378946faf2f643009248f5de6a19622238a3217a8bebbca9193d90a195e87',
@@ -41,7 +41,7 @@ FLAGS = ["-std=c17", "-D_POSIX_C_SOURCE=200809L", "-O1", "-g", "-Wall", "-Wextra
 INCLUDES = ["-I", str(ROOT / "apps/wordpad"), "-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "apps/desktop"),
             "-I", str(ROOT / "src/kernel/include")]
 TOOLKIT = ["apps/libdeskui/draw.c", "apps/libdeskui/widgets.c", "apps/libdeskui/list.c", "apps/libdeskui/menu.c",
-           "apps/libdeskui/dialog.c", "apps/libdeskui/textarea.c", "apps/libdeskui/recent.c", "apps/libdeskui/keymap.c",
+           "apps/libdeskui/dialog.c", "apps/libdeskui/controls.c", "apps/libdeskui/commdlg.c", "apps/libdeskui/textarea.c", "apps/libdeskui/recent.c", "apps/libdeskui/keymap.c",
            "apps/desktop/compositor.c", "apps/desktop/theme.c", "apps/libdeskui/icons.c", "apps/libdeskui/icon_map.c"]
 CORE = ["apps/wordpad/rich.c", "apps/wordpad/rtf.c", "apps/wordpad/layout.c"]
 

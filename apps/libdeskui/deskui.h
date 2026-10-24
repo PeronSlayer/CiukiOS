@@ -535,15 +535,36 @@ int du_file_dialog(struct du_ui *, int id, int save, const char *title, const ch
  * Returns 0 or -errno (the folder could not be listed). */
 struct du_file_filter { const char *label, *pattern; };
 enum { DU_FILE_SAVE = 1, DU_FILE_OVERWRITE_PROMPT = 2, DU_FILE_FILE_MUST_EXIST = 4,
-       DU_FILE_PATH_MUST_EXIST = 8, DU_FILE_NO_NEW_FOLDER = 16 };
+       DU_FILE_PATH_MUST_EXIST = 8, DU_FILE_NO_NEW_FOLDER = 16,
+       DU_FILE_ALLOW_MULTIPLE = 32, DU_FILE_READONLY_BOX = 64, DU_FILE_READONLY = 128 };
 typedef int (*du_mkdir_fn)(void *ctx, const char *path);
+/* Optional caller-owned output, valid until the dialog ends. files receives a
+ * full path plus two NULs for one file; directory\0name\0name\0\0 for several.
+ * required includes all terminators; insufficient capacity leaves the box open.
+ * Save As always returns one file. Read Only is a request, not an attribute. */
+/* DU_EV_DIALOG.modifiers contains DU_FILE_READONLY when checked. Its text
+ * remains the first full path; multiple names are in this caller-owned buffer. */
+struct du_file_result {
+    char *files;
+    size_t capacity;
+    size_t required;
+    unsigned count;
+    unsigned read_only;
+};
 struct du_file_options {
     unsigned flags;
-    const char *title, *folder, *name;
-    const struct du_file_filter *filters; unsigned filter_count, filter_index;
+    const char *title;
+    const char *folder;
+    const char *name;
+    const struct du_file_filter *filters;
+    unsigned filter_count;
+    unsigned filter_index;
     const char *default_ext;
-    du_lister lister; void *lister_ctx;
-    du_mkdir_fn make_dir; void *make_dir_ctx;
+    du_lister lister;
+    void *lister_ctx;
+    du_mkdir_fn make_dir;
+    void *make_dir_ctx;
+    struct du_file_result *result;
 };
 int du_file_open(struct du_ui *, int id, const struct du_file_options *);
 /* Case-insensitive wildcard match of one name against ';'-separated patterns
@@ -553,16 +574,20 @@ int du_pattern_match(const char *patterns, const char *name);
 /* G16 Font dialog (ChooseFont). initial may be NULL. families lists the face
  * names offered (NULL, 0: a built-in list of the UI faces). The result text of
  * DU_EV_DIALOG index 0 is du_font_format()'s form; du_font_parse reads it. The
+ * Script lists the supported native character sets (currently Western). The
  * sample line uses the UI face, bold for DU_FONT_BOLD, unless the application
  * draws it: sample, when set, paints the preview in the given rectangle. */
 #define DU_FONT_BOLD   1u
 #define DU_FONT_ITALIC 2u
 struct du_font_choice { char family[64]; unsigned style, points, underline, strikeout; uint32_t color; };
 #define DU_FONT_NO_EFFECTS 1u
+#define DU_FONT_FIXED_CELL 2u   /* only the initial size/face, Regular and Bold */
 typedef void (*du_sample_fn)(struct du_canvas *, struct du_rect, const struct du_font_choice *, void *ctx);
 int du_font_dialog(struct du_ui *, int id, const struct du_font_choice *initial,
                    const char *const *families, unsigned family_count, unsigned flags,
                    du_sample_fn sample, void *sample_ctx);
+/* Optional application-supported point range (default 1..1638). */
+void du_font_size_limits(struct du_ui *, unsigned min, unsigned max);
 void du_font_format(char *out, size_t size, const struct du_font_choice *);
 int du_font_parse(const char *text, struct du_font_choice *out);   /* 0, or -EINVAL */
 
@@ -580,12 +605,22 @@ uint32_t du_hsl_to_rgb(unsigned h, unsigned s, unsigned l);
 
 /* G16 Browse for Folder (SHBrowseForFolder with BIF_RETURNONLYFSDIRS). The
  * tree starts at root ("/" when NULL) and opens initial. prompt is shown above
- * the tree. Result: DU_EV_DIALOG index 0, text the folder path. */
+ * the tree. F2 and Make New Folder edit the selected non-root name in place;
+ * rename_dir defaults to POSIX rename, Enter commits and Escape cancels.
+ * Result: DU_EV_DIALOG index 0, text the folder path. */
+typedef int (*du_rename_fn)(void *ctx, const char *from, const char *to);
 struct du_folder_options {
-    const char *title, *prompt, *root, *initial;
+    const char *title;
+    const char *prompt;
+    const char *root;
+    const char *initial;
     unsigned flags;                         /* DU_FILE_NO_NEW_FOLDER */
-    du_lister lister; void *lister_ctx;
-    du_mkdir_fn make_dir; void *make_dir_ctx;
+    du_lister lister;
+    void *lister_ctx;
+    du_mkdir_fn make_dir;
+    void *make_dir_ctx;
+    du_rename_fn rename_dir;
+    void *rename_dir_ctx;
 };
 int du_folder_dialog(struct du_ui *, int id, const struct du_folder_options *);
 

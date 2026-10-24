@@ -510,12 +510,14 @@ int du_color_dialog(struct du_ui *u, int id, uint32_t initial, uint32_t *custom,
 /* Font                                                                    */
 /* ======================================================================= */
 enum { FN_OK, FN_CANCEL, FN_FACE_L, FN_FACE, FN_FACES, FN_STYLE_L, FN_STYLE, FN_STYLES, FN_SIZE_L, FN_SIZE, FN_SIZES,
-       FN_EFFECTS, FN_STRIKE, FN_UNDER, FN_COLOR_L, FN_COLOR, FN_SAMPLE_G, FN_SAMPLE, FN_STATUS, FN_ITEMS };
-enum { NID_FACE = -10500, NID_FACES, NID_STYLE, NID_STYLES, NID_SIZE, NID_SIZES, NID_STRIKE, NID_UNDER, NID_COLOR, NID_SAMPLE };
+       FN_EFFECTS, FN_STRIKE, FN_UNDER, FN_COLOR_L, FN_COLOR, FN_SAMPLE_G, FN_SAMPLE, FN_SCRIPT_L, FN_SCRIPT, FN_STATUS, FN_ITEMS };
+enum { NID_FACE = -10500, NID_FACES, NID_STYLE, NID_STYLES, NID_SIZE, NID_SIZES, NID_STRIKE, NID_UNDER, NID_COLOR, NID_SAMPLE, NID_SCRIPT };
 #define FACE_MAX 32
 struct font_state {
     struct du_font_choice c;
+    unsigned flags, min_points, max_points;
     char faces[FACE_MAX][64]; struct du_item face_rows[FACE_MAX]; unsigned face_count;
+    struct du_item script_rows[1];
     struct du_item style_rows[4]; struct du_item size_rows[16]; char size_text[16][8]; struct du_item color_rows[16];
     du_sample_fn sample; void *sample_ctx;
 };
@@ -560,7 +562,7 @@ static void font_sync(struct du_ui *u)
     struct du_dialog *d = &u->dialog; struct font_state *f = font_of(u);
     du_set_text(&d->items[FN_FACE], f->c.family);
     du_set_text(&d->items[FN_STYLE], style_names[style_index(f->c.style)]);
-    font_select_row(&d->items[FN_STYLES], (unsigned)style_index(f->c.style));
+    font_select_row(&d->items[FN_STYLES], (f->flags & DU_FONT_FIXED_CELL) ? !!(f->c.style & DU_FONT_BOLD) : (unsigned)style_index(f->c.style));
     char t[12]; snprintf(t, sizeof(t), "%u", f->c.points); du_set_text(&d->items[FN_SIZE], t);
     unsigned srow = 0; int sfound = 0;
     for (unsigned i = 0; i < 16; i++) if (size_values[i] == f->c.points) { srow = i; sfound = 1; }
@@ -586,7 +588,14 @@ static int font_accept(struct du_ui *u, int button, void *arg)
     char face[64]; copy_str(face, sizeof(face), d->items[FN_FACE].text); trim(face);
     char *end; unsigned long pts = strtoul(d->items[FN_SIZE].text, &end, 10);
     if (!face[0]) { font_status(u, "Choose a font name."); return 1; }
-    if (!d->items[FN_SIZE].text[0] || *end || pts < 1 || pts > 1638) { font_status(u, "The font size must be between 1 and 1638."); return 1; }
+    if (!d->items[FN_SIZE].text[0] || *end || pts < f->min_points || pts > f->max_points) {
+        char message[96]; snprintf(message, sizeof(message), "The font size must be between %u and %u.", f->min_points, f->max_points);
+        font_status(u, message); return 1;
+    }
+    int style = -1;
+    for (unsigned i = 0; i < 4; i++) if (!ci_cmp(d->items[FN_STYLE].text, style_names[i])) style = (int)i;
+    if (style < 0) { font_status(u, "Choose a font style."); return 1; }
+    c.style = style_values[style];
     snprintf(c.family, sizeof(c.family), "%s", face); c.points = (unsigned)pts;
     char text[160]; du_font_format(text, sizeof(text), &c);
     du_dialog_finish(u, 0, text);
@@ -607,7 +616,7 @@ static int font_event(struct du_ui *u, const struct du_event *e)
     if (e->type == DU_EV_OPEN) { (void)font_accept(u, 0, NULL); return 1; }   /* Enter in a list is the default button */
     if (e->type == DU_EV_SELECT && e->index >= 0) {
         if (e->id == NID_FACES && (unsigned)e->index < f->face_count) { copy_str(f->c.family, sizeof(f->c.family), f->faces[e->index]); du_set_text(&d->items[FN_FACE], f->c.family); font_select_row(&d->items[FN_FACES], (unsigned)e->index); }
-        else if (e->id == NID_STYLES && e->index < 4) { f->c.style = style_values[e->index]; du_set_text(&d->items[FN_STYLE], style_names[e->index]); font_select_row(&d->items[FN_STYLES], (unsigned)e->index); }
+        else if (e->id == NID_STYLES && e->index < 4) { f->c.style = (f->flags & DU_FONT_FIXED_CELL) ? (e->index ? DU_FONT_BOLD : 0) : style_values[e->index]; du_set_text(&d->items[FN_STYLE], style_names[style_index(f->c.style)]); font_select_row(&d->items[FN_STYLES], (unsigned)e->index); }
         else if (e->id == NID_SIZES && e->index < 16) { f->c.points = size_values[e->index]; du_set_text(&d->items[FN_SIZE], f->size_text[e->index]); font_select_row(&d->items[FN_SIZES], (unsigned)e->index); }
         else if (e->id == NID_COLOR && e->index < 16) f->c.color = font_colors[e->index].rgb;
         else return 0;
@@ -647,6 +656,12 @@ static void font_draw(struct du_ui *u)
     cv->clip = keep;
 }
 
+void du_font_size_limits(struct du_ui *u, unsigned min, unsigned max)
+{
+    if (u->dialog.kind != DU_DLG_FONT || !min || max < min || max > 1638) return;
+    struct font_state *f = font_of(u); f->min_points = min; f->max_points = max;
+}
+
 int du_font_dialog(struct du_ui *u, int id, const struct du_font_choice *initial,
                    const char *const *families, unsigned family_count, unsigned flags,
                    du_sample_fn sample, void *sample_ctx)
@@ -660,13 +675,14 @@ int du_font_dialog(struct du_ui *u, int id, const struct du_font_choice *initial
     if (initial) f->c = *initial;
     else { snprintf(f->c.family, sizeof(f->c.family), "%s", families[0]); f->c.points = 10; }
     if (!f->c.points) f->c.points = 10;
+    f->flags = flags; f->min_points = 1; f->max_points = 1638;
     f->sample = sample; f->sample_ctx = sample_ctx;
     for (unsigned i = 0; i < family_count && i < FACE_MAX; i++) { snprintf(f->faces[i], sizeof(f->faces[i]), "%s", families[i] ? families[i] : ""); f->face_rows[i].text[0] = f->faces[i]; f->face_count++; }
     for (int i = 0; i < 4; i++) f->style_rows[i].text[0] = style_names[i];
     for (int i = 0; i < 16; i++) { snprintf(f->size_text[i], sizeof(f->size_text[i]), "%u", size_values[i]); f->size_rows[i].text[0] = f->size_text[i]; f->color_rows[i].text[0] = font_colors[i].name; }
     d->state = f; d->free_state = free;
     d->buttons = 2; d->cancel = 1; d->focus = FN_FACE; d->accept = font_accept; d->on_event = font_event; d->on_draw = font_draw;
-    du_dialog_place(u, 490, 3 + 24 + 10 + 156 + 84 + 8 + 20 + 12);
+    du_dialog_place(u, 490, 3 + 24 + 10 + 156 + 84 + 40 + 8 + 20 + 12);
     struct du_rect b = d->box; int y = du_dialog_body_y(d) + 10, x = b.x + 14;
     du_dialog_item(u, FN_OK, DU_BUTTON, CD_BUTTON, "OK")->box = (struct du_rect){b.x + b.w - 14 - BTN_W, y + 16, BTN_W, BTN_H};
     du_dialog_item(u, FN_CANCEL, DU_BUTTON, CD_BUTTON - 1, "Cancel")->box = (struct du_rect){b.x + b.w - 14 - BTN_W, y + 44, BTN_W, BTN_H};
@@ -694,6 +710,19 @@ int du_font_dialog(struct du_ui *u, int id, const struct du_font_choice *initial
     d->items[FN_SAMPLE].disabled = 1;
     du_dialog_item(u, FN_STATUS, DU_LABEL, 0, "")->box = (struct du_rect){x, b.y + b.h - 3 - 24, b.w - 28, 16};
     if (flags & DU_FONT_NO_EFFECTS) { d->items[FN_EFFECTS].hidden = d->items[FN_STRIKE].hidden = d->items[FN_UNDER].hidden = d->items[FN_COLOR_L].hidden = d->items[FN_COLOR].hidden = 1; }
+    if (flags & DU_FONT_FIXED_CELL) {
+        d->items[FN_FACE].disabled = d->items[FN_FACES].disabled = 1;
+        d->items[FN_SIZE].disabled = d->items[FN_SIZES].disabled = 1;
+        d->items[FN_STYLE].disabled = 1;
+        f->style_rows[1].text[0] = "Bold"; d->items[FN_STYLES].count = 2;
+        d->focus = FN_STYLES;
+    }
+    f->script_rows[0].text[0] = "Western";
+    du_dialog_item(u, FN_SCRIPT_L, DU_LABEL, 0, "Sc&ript:")->box = (struct du_rect){x, ey + 94, 60, 22};
+    struct du_widget *script = du_dialog_item(u, FN_SCRIPT, DU_COMBO, NID_SCRIPT, "");
+    script->box = (struct du_rect){x + 64, ey + 92, 160, 22};
+    du_combo_set(script, f->script_rows, 1, 0);
+    du_set_tip(script, "Character sets supported by this font");
     font_sync(u);
     return 0;
 }
@@ -702,8 +731,8 @@ int du_font_dialog(struct du_ui *u, int id, const struct du_font_choice *initial
 /* Browse for Folder                                                       */
 /* ======================================================================= */
 #define NODE_MAX 384
-enum { BF_OK, BF_CANCEL, BF_TREE, BF_NEW, BF_STATUS, BF_ITEMS };
-enum { BID_TREE = -10600, BID_NEW = -10601 };
+enum { BF_OK, BF_CANCEL, BF_TREE, BF_NEW, BF_STATUS, BF_RENAME, BF_ITEMS };
+enum { BID_TREE = -10600, BID_NEW = -10601, BID_RENAME = -10602 };
 struct node { int parent; uint8_t depth, expanded, loaded, has_children; char name[72]; };
 struct folder_state {
     struct node nodes[NODE_MAX]; unsigned count;
@@ -711,6 +740,8 @@ struct folder_state {
     struct du_item rows[NODE_MAX];
     char root[DU_TEXT_MAX];
     du_lister lister; void *lister_ctx; du_mkdir_fn make_dir; void *make_dir_ctx;
+    du_rename_fn rename_dir; void *rename_dir_ctx;
+    int renaming;
     int selected;                            /* node index */
 };
 
@@ -809,11 +840,71 @@ static void folder_toggle(struct du_ui *u, int node)
     folder_rebuild(u);
 }
 
+static void folder_rename_begin(struct du_ui *u)
+{
+    struct folder_state *s = folder_of(u); struct du_dialog *d = &u->dialog;
+    if (!s->selected) return; /* the caller's root cannot be renamed */
+    struct du_widget *tree = &d->items[BF_TREE], *edit = &d->items[BF_RENAME];
+    du_list_ensure(tree, tree->active);
+    edit->box = du_list_label(tree, tree->active);
+    edit->box.w = tree->box.x + tree->box.w - 20 - edit->box.x;
+    if (edit->box.w < 32) return;
+    edit->box.h = 22;
+    du_set_text(edit, s->nodes[s->selected].name); edit->anchor = 0;
+    edit->hidden = 0; s->renaming = 1; d->focus = BF_RENAME;
+    du_invalidate(u, tree->box);
+}
+
+static int folder_rename_end(struct du_ui *u, int commit)
+{
+    struct folder_state *s = folder_of(u); struct du_dialog *d = &u->dialog;
+    struct du_widget *edit = &d->items[BF_RENAME];
+    if (!s->renaming) return 0;
+    if (commit) {
+        char name[72]; copy_str(name, sizeof(name), edit->text); trim(name);
+        const char *error = NULL;
+        if (!name[0] || strlen(edit->text) >= sizeof(name) || !strcmp(name, ".") || !strcmp(name, "..") || strpbrk(name, "/\\:*?\"<>|")) error = "The folder name is not valid.";
+        if (!error) for (const unsigned char *c = (const unsigned char *)name; *c; c++)
+            if (*c < 32 || *c == 127) { error = "The folder name is not valid."; break; }
+        int parent = s->nodes[s->selected].parent;
+        for (unsigned i = 1; !error && i < s->count; i++)
+            if ((int)i != s->selected && s->nodes[i].parent == parent && !ci_cmp(s->nodes[i].name, name)) error = "A folder with that name already exists.";
+        if (!error && strcmp(name, s->nodes[s->selected].name)) {
+            char old[DU_TEXT_MAX], path[DU_TEXT_MAX];
+            node_path(s, s->selected, old, sizeof(old)); node_path(s, parent, path, sizeof(path));
+            size_t at = strlen(path);
+            if (at + strlen(name) + 2 > sizeof(path)) error = "The folder name is too long.";
+            else {
+                if (at && path[at - 1] != '/') path[at++] = '/';
+                strcpy(path + at, name);
+                int r = s->rename_dir(s->rename_dir_ctx, old, path);
+                if (r) error = "The folder could not be renamed.";
+                else copy_str(s->nodes[s->selected].name, sizeof(s->nodes[s->selected].name), name);
+            }
+        }
+        if (error) { d->focus = BF_RENAME; folder_rebuild(u); du_set_text(&d->items[BF_STATUS], error); du_invalidate(u, d->box); return 1; }
+    }
+    s->renaming = 0; edit->hidden = 1; d->focus = BF_TREE;
+    du_set_text(&d->items[BF_STATUS], ""); folder_rebuild(u);
+    return 0;
+}
+
+static int folder_key(struct du_ui *u, unsigned code)
+{
+    struct folder_state *s = folder_of(u);
+    if (s->renaming && (code == DU_KEY_ENTER || code == DU_KEY_ESC)) {
+        (void)folder_rename_end(u, code == DU_KEY_ENTER); return 1;
+    }
+    if (!s->renaming && code == DU_KEY_F2) { folder_rename_begin(u); return 1; }
+    return 0;
+}
+
 static int folder_accept(struct du_ui *u, int button, void *arg)
 {
     (void)arg;
     if (button) return 0;
     struct folder_state *s = folder_of(u);
+    if (folder_rename_end(u, 1)) return 1;
     char path[DU_TEXT_MAX]; node_path(s, s->selected, path, sizeof(path));
     du_dialog_finish(u, 0, path);
     return 1;
@@ -822,6 +913,9 @@ static int folder_accept(struct du_ui *u, int button, void *arg)
 static int folder_event(struct du_ui *u, const struct du_event *e)
 {
     struct folder_state *s = folder_of(u);
+    if (e->id == BID_RENAME && e->type == DU_EV_COMMIT) { (void)folder_rename_end(u, 1); return 1; }
+    if (e->id == BID_RENAME && e->type == DU_EV_CANCEL) { (void)folder_rename_end(u, 0); return 1; }
+    if (s->renaming && e->type != DU_EV_CHANGE && folder_rename_end(u, 1)) return 1;
     if (e->id == BID_TREE && e->index >= 0 && (unsigned)e->index < s->shown) {
         int node = (int)s->visible[e->index];
         if (e->type == DU_EV_SELECT) { folder_select(u, node); return 1; }
@@ -847,7 +941,7 @@ static int folder_event(struct du_ui *u, const struct du_event *e)
         snprintf(c->name, sizeof(c->name), "%s", name);
         s->nodes[s->selected].has_children = 1; s->nodes[s->selected].expanded = 1;
         s->selected = (int)s->count - 1;
-        folder_rebuild(u);
+        folder_rebuild(u); folder_rename_begin(u);
         return 1;
     }
     return 0;
@@ -862,6 +956,9 @@ static void folder_draw(struct du_ui *u)
 static int fd_posix_mkdir(void *ctx, const char *path)
 { (void)ctx; return mkdir(path, 0777) ? -errno : 0; }
 
+static int fd_posix_rename(void *ctx, const char *from, const char *to)
+{ (void)ctx; return rename(from, to) ? -errno : 0; }
+
 int du_folder_dialog(struct du_ui *u, int id, const struct du_folder_options *o)
 {
     du_dialog_begin(u, DU_DLG_FOLDER, id, o->title ? o->title : "Browse For Folder", o->prompt ? o->prompt : "Select a folder:");
@@ -870,13 +967,14 @@ int du_folder_dialog(struct du_ui *u, int id, const struct du_folder_options *o)
     if (!s) { du_dialog_close(u); return -ENOMEM; }
     s->lister = o->lister ? o->lister : du_posix_lister; s->lister_ctx = o->lister_ctx;
     s->make_dir = o->make_dir ? o->make_dir : fd_posix_mkdir; s->make_dir_ctx = o->make_dir_ctx;
+    s->rename_dir = o->rename_dir ? o->rename_dir : fd_posix_rename; s->rename_dir_ctx = o->rename_dir_ctx;
     snprintf(s->root, sizeof(s->root), "%s", o->root && o->root[0] ? o->root : "/");
     while (strlen(s->root) > 1 && s->root[strlen(s->root) - 1] == '/') s->root[strlen(s->root) - 1] = 0;
     struct node *root = &s->nodes[s->count++];
     copy_str(root->name, sizeof(root->name), !strcmp(s->root, "/") ? "CiukiOS (C:)" : strrchr(s->root, '/') ? strrchr(s->root, '/') + 1 : s->root);
     root->has_children = 1;
     d->state = s; d->free_state = free;
-    d->buttons = 2; d->cancel = 1; d->focus = BF_TREE; d->accept = folder_accept; d->on_event = folder_event; d->on_draw = folder_draw;
+    d->buttons = 2; d->cancel = 1; d->focus = BF_TREE; d->accept = folder_accept; d->on_event = folder_event; d->on_key = folder_key; d->on_draw = folder_draw;
     du_dialog_place(u, 380, 360);
     struct du_rect b = d->box; int y = du_dialog_body_y(d) + 10;
     int row = b.y + b.h - 3 - 10 - BTN_H;
@@ -888,9 +986,11 @@ int du_folder_dialog(struct du_ui *u, int id, const struct du_folder_options *o)
     mk->box = (struct du_rect){b.x + 14, row, 120, BTN_H};
     mk->hidden = (o->flags & DU_FILE_NO_NEW_FOLDER) != 0;
     du_dialog_item(u, BF_STATUS, DU_LABEL, 0, "")->box = (struct du_rect){b.x + 14, row - 26, b.w - 28, 16};
+    du_dialog_item(u, BF_RENAME, DU_EDIT, BID_RENAME, "")->hidden = 1;
     /* Open the chain down to the initial folder, then select it. */
     s->nodes[0].expanded = 1; folder_load(u, 0); s->selected = 0;
-    if (o->initial && !strncmp(o->initial, s->root, strlen(s->root))) {
+    if (o->initial && !strncmp(o->initial, s->root, strlen(s->root)) &&
+        (strlen(s->root) == 1 || !o->initial[strlen(s->root)] || o->initial[strlen(s->root)] == '/')) {
         const char *rest = o->initial + strlen(s->root);
         int at = 0;
         while (*rest) {

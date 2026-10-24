@@ -40,7 +40,7 @@ TOOLKIT_FRAMES = {
     'deskui-input.xrgb': '72e8a91f02bdb8b2b5ef0bafe23a9dc1332152aef2280790299cfb5951c16da6',
     'deskui-menu.xrgb': 'a9ffa04ca2ea5565a6a7ca8a99b32dc3c3b3d7e0edba6646be7d7ee31946cea9',
     'deskui-message.xrgb': '23bca4045904f0bdc3311b8578b025328a1baa30b2b202b2f872ec8242f36f41',
-    'deskui-open.xrgb': 'dfc6242164e8cc9c9dc4405d3b5f71bf8ffbf83d919eda20f20bd7315889ce15',
+    'deskui-open.xrgb': '87d1b4b0fc59a2d363df121ffc330b4d4d761fd730b6a0e633607f2939e34e7f',
     'deskui-popup.xrgb': '0d67abb32369b6a755ed7f5247dea1389049a56297cef185087485cd8ec8035c',
     'deskui-progress.xrgb': 'af6ac5d3e8525d71376d9d0768b53a9d45c4b0403e0289a1d2aab3837e7c9b76',
     'deskui-view0.xrgb': '9269da40f4bd59ba2b6331b8382dcd432b1dd1089456a608fbeef7986f823c05',

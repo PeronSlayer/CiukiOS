@@ -116,7 +116,7 @@ static void click_row(struct du_widget *list, unsigned row)
 }
 
 enum { ID_ACCEPT = -1000, ID_CANCEL = -1001, ID_UP = -2000, ID_LIST = -3000, ID_NAME = -4000, ID_FOLDER = -5000, ID_PLACES = -8000,
-       ID_NEWDIR = -9000, ID_VLIST = -9100, ID_VDETAILS = -9200, ID_TYPE = -9300, ID_SUB_YES = -9400, ID_SUB_NO = -9401, ID_SUB_EDIT = -9402 };
+       ID_NEWDIR = -9000, ID_VLIST = -9100, ID_VDETAILS = -9200, ID_TYPE = -9300, ID_SUB_YES = -9400, ID_SUB_NO = -9401, ID_SUB_EDIT = -9402, ID_VICONS = -9403, ID_READONLY = -9404 };
 
 static void patterns(void)
 {
@@ -450,6 +450,51 @@ static void file_dialog(void)
     puts("PASS G16 Open/Save As: filters and type combo, default extension, overwrite confirmation, existence messages, New Folder, wildcard filter, views, tooltips, legacy entry");
 }
 
+/* G16B: modifiers, buffer lifetime/overflow, read-only and the icon renderer. */
+static void file_multiple(void)
+{
+    fs_reset(); char files[1024];
+    struct du_file_result result = {.files = files, .capacity = sizeof(files)};
+    struct du_file_options o = {.flags = DU_FILE_ALLOW_MULTIPLE | DU_FILE_READONLY_BOX | DU_FILE_READONLY | DU_FILE_FILE_MUST_EXIST,
+        .folder = "/docs", .lister = fs_lister, .result = &result};
+    count = 0; assert(!du_file_open(&u, 101, &o));
+    struct du_widget *list = dlg(ID_LIST);
+    assert(!dlg(ID_READONLY)->hidden && dlg(ID_READONLY)->value);
+    click_row(list, 1); hold(DU_KEY_LCTRL, 1); click_row(list, 2); hold(DU_KEY_LCTRL, 0);
+    assert(list->items[1].selected && list->items[2].selected);
+    equivalent("multiple selection"); frame("file-multiple");
+    result.capacity = 2; click_widget(dlg(ID_ACCEPT));
+    assert(u.dialog.kind && u.dialog.sub && !result.count && result.required > 2);
+    key(DU_KEY_ENTER); result.capacity = sizeof(files); click_widget(dlg(ID_ACCEPT));
+    assert(!u.dialog.kind && result.count == 2 && result.read_only && last()->modifiers == DU_FILE_READONLY);
+    assert(!strcmp(files, "/docs") && !strcmp(files + 6, "a.txt") && !strcmp(files + 12, "b.log") && !files[18]);
+    assert(result.required == 19);
+    assert(!du_file_open(&u, 102, &o)); list = dlg(ID_LIST);
+    click_row(list, 1); hold(DU_KEY_LSHIFT, 1); click_row(list, 3); hold(DU_KEY_LSHIFT, 0);
+    assert(list->items[1].selected && list->items[2].selected && list->items[3].selected);
+    hold(DU_KEY_LCTRL, 1); click_row(list, 2); hold(DU_KEY_LCTRL, 0);
+    assert(list->items[1].selected && !list->items[2].selected && list->items[3].selected);
+    click_widget(dlg(ID_READONLY)); click_widget(dlg(ID_VICONS));
+    assert(list->view == DU_ICONS && list->items[1].icon32);
+    equivalent("file large icons"); frame("file-icons");
+    click_widget(dlg(ID_ACCEPT)); assert(result.count == 2 && !result.read_only);
+    /* Quoted names typed in File name, including failure without closing. */
+    assert(!du_file_open(&u, 106, &o));
+    du_set_text(dlg(ID_NAME), "\"a.txt\" \"missing.txt\"");
+    u.dialog.focus = (int)(dlg(ID_NAME) - u.dialog.items); key(DU_KEY_ENTER);
+    assert(u.dialog.sub && !result.count); key(DU_KEY_ENTER);
+    du_set_text(dlg(ID_NAME), "\"a.txt\" \"c.TXT\"");
+    u.dialog.focus = (int)(dlg(ID_NAME) - u.dialog.items); key(DU_KEY_ENTER);
+    assert(!u.dialog.kind && result.count == 2 && !strcmp(files + 12, "c.TXT"));
+    /* Save ignores multiple selection, a single file retains the full path. */
+    o.flags = DU_FILE_SAVE | DU_FILE_ALLOW_MULTIPLE; o.name = "new.txt";
+    assert(!du_file_open(&u, 103, &o) && dlg(ID_READONLY)->hidden);
+    click_widget(dlg(ID_ACCEPT)); assert(result.count == 1 && !strcmp(files, "/docs/new.txt") && !files[strlen(files) + 1]);
+    o.flags = DU_FILE_ALLOW_MULTIPLE; o.result = NULL;
+    assert(du_file_open(&u, 104, &o) == -EINVAL);
+    puts("PASS G16B file selection: Ctrl/Shift, overflow retry, readonly result, 32px icons, Save single result");
+}
+
 struct find_log { unsigned calls; int action; struct du_find f; };
 static struct find_log fl;
 static void find_cb(struct du_ui *ui, int action, const struct du_find *f, void *ctx)
@@ -491,7 +536,7 @@ static void find_dialogs(void)
     puts("PASS G16 Find and Replace: initial flags, Find Next/Replace/Replace All keep the dialog open, direction and options, status text, disabled without text, Close and Esc");
 }
 
-enum { NID_FACE = -10500, NID_FACES, NID_STYLE, NID_STYLES, NID_SIZE, NID_SIZES, NID_STRIKE, NID_UNDER, NID_COLOR };
+enum { NID_FACE = -10500, NID_FACES, NID_STYLE, NID_STYLES, NID_SIZE, NID_SIZES, NID_STRIKE, NID_UNDER, NID_COLOR, NID_SAMPLE, NID_SCRIPT };
 static void font_dialog(void)
 {
     struct du_font_choice init = {.family = "Liberation Serif", .style = DU_FONT_BOLD, .points = 14, .underline = 1};
@@ -499,6 +544,7 @@ static void font_dialog(void)
     assert(!strcmp(dlg(NID_FACE)->text, "Liberation Serif") && !strcmp(dlg(NID_STYLE)->text, "Bold") && !strcmp(dlg(NID_SIZE)->text, "14"));
     assert(dlg(NID_UNDER)->value && !dlg(NID_STRIKE)->value && dlg(NID_FACES)->count == 3 && dlg(NID_STYLES)->count == 4 && dlg(NID_SIZES)->count == 16);
     assert(dlg(NID_FACES)->active == 2 && dlg(NID_FACES)->items[2].selected && dlg(NID_STYLES)->active == 2 && dlg(NID_SIZES)->active == 5);
+    assert(dlg(NID_SCRIPT)->count == 1 && !strcmp(du_combo_text(dlg(NID_SCRIPT)), "Western"));
     frame("font");
     click_widget(dlg(-1000));
     assert(!u.dialog.kind && last()->type == DU_EV_DIALOG && last()->index == 0 && !strcmp(last()->text, "Liberation Serif|1|14|1|0|000000"));
@@ -564,6 +610,37 @@ static void color_dialog(void)
 }
 
 enum { BID_TREE = -10600, BID_NEW = -10601 };
+static int fs_rename(void *ctx, const char *from, const char *to)
+{
+    (void)ctx;
+    if (!strcmp(to, "/docs/Denied")) return -EACCES;
+    if (fs_find(to) >= 0) return -EEXIST;
+    size_t len = strlen(from);
+    for (unsigned i = 0; i < fs_count; i++) if (!strncmp(fs[i].path, from, len) && (!fs[i].path[len] || fs[i].path[len] == '/')) {
+        char old[DU_TEXT_MAX]; snprintf(old, sizeof(old), "%s", fs[i].path + len);
+        snprintf(fs[i].path, sizeof(fs[i].path), "%s%s", to, old);
+    }
+    return 0;
+}
+static void folder_rename(void)
+{
+    fs_reset();
+    struct du_folder_options o = {.root = "/docs", .initial = "/docs/sub", .lister = fs_lister, .make_dir = fs_mkdir, .rename_dir = fs_rename};
+    assert(!du_folder_dialog(&u, 105, &o));
+    key(DU_KEY_F2); struct du_widget *edit = dlg(-10602);
+    assert(edit && !edit->hidden && !strcmp(edit->text, "sub"));
+    du_set_text(edit, "../escape"); key(DU_KEY_ENTER); assert(!edit->hidden && fs_find("/docs/sub") >= 0);
+    du_set_text(edit, "Denied"); key(DU_KEY_ENTER); assert(!edit->hidden && fs_find("/docs/sub") >= 0);
+    du_set_text(edit, "Renamed"); equivalent("inline folder rename"); frame("folder-rename"); key(DU_KEY_ENTER);
+    assert(edit->hidden && fs_find("/docs/Renamed/inner") >= 0);
+    key(DU_KEY_F2); du_set_text(edit, "Cancelled"); key(DU_KEY_ESC);
+    assert(u.dialog.kind && edit->hidden && fs_find("/docs/Cancelled") < 0);
+    click_widget(dlg(-10601)); assert(!edit->hidden && !strcmp(edit->text, "New Folder"));
+    du_set_text(edit, "Child"); key(DU_KEY_ENTER); click_widget(dlg(-1000));
+    assert(!strcmp(last()->text, "/docs/Renamed/Child") && fs_find(last()->text) >= 0);
+    puts("PASS G16B folder rename: F2, inline new folder, invalid and denied retry, cancel, descendants");
+}
+
 static void folder_dialog(void)
 {
     fs_reset();
@@ -601,8 +678,8 @@ int main(int argc, char **argv)
     du_init(&u, pixels, W, H); u.event = handler;
     patterns(); colours_and_fonts(); find_search();
     controls();
-    file_dialog();
-    dialogs();
+    file_dialog(); file_multiple();
+    dialogs(); folder_rename();
     puts("PASS G16 common controls and dialogs");
     return 0;
 }
