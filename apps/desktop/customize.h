@@ -15,7 +15,9 @@
 #define SH_FOLDER_ITEMS 24
 /* root slots stay stable across refreshes, children are assigned after them. */
 enum { SH_ROOT_START, SH_ROOT_PROGRAMS, SH_ROOT_QUICK, SH_ROOT_LINKS, SH_ROOT_DESKTOP, SH_ROOT_CUSTOM, SH_ROOT_FAVORITES=SH_ROOT_CUSTOM+CFG_TOOLBARS, SH_ROOTS };
-struct sh_folder_item { char label[64], path[CFG_PATH_MAX]; int folder, parent; };
+/* icon: the du_icon_name() object of the entry ("program:calc", "menu:games", "type:.txt"), resolved by
+ * sh_folder_scan from the shortcut target; empty means the generic folder/program icon. */
+struct sh_folder_item { char label[64], path[CFG_PATH_MAX], icon[40]; int folder, parent; };
 struct sh_folder_snapshot {
     char folders[SH_FOLDERS][CFG_PATH_MAX];
     struct sh_folder_item entries[SH_ENTRIES];

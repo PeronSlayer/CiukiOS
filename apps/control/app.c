@@ -1818,6 +1818,23 @@ static unsigned power_read(struct cp_app *a)
     /* Stable widget count lets a failed refresh clear previous values. */
     return 20;
 }
+/* Add/Remove Programs: the icon of the program's own entry (same Tango names as the Start menu): a bundled game,
+ * a /Programs application by its name, a DOS program through the DOS box, any other installed program generic. */
+static const char *uninstall_icon(const struct desk_uninstall_entry *r)
+{
+    static char object[48];
+    if (r->kind==DESK_PROGRAM_GAME) return du_icon_name("menu:game");
+    if (r->system_component) return "package-x-generic";
+    if (!strncmp(r->location,"/Programs/",10)) {
+        size_t n=strcspn(r->location+10,"/");
+        if (n && n<sizeof(object)-9 && !memchr(r->location+10,'.',n)) {
+            memcpy(object,"program:",8); memcpy(object+8,r->location+10,n); object[8+n]=0;
+            return du_icon_name(object);
+        }
+    }
+    if (r->kind==DESK_PROGRAM_DOS) return du_icon_name("program:dosbox");
+    return du_icon_name("type:executable");
+}
 static void build(struct cp_app *a)
 {
     a->building=1;
@@ -2084,6 +2101,8 @@ static void build(struct cp_app *a)
             struct desk_uninstall_entry *r=&a->uninstall[k];
             r->name[sizeof(r->name)-1]=0; r->key[sizeof(r->key)-1]=0;
             memset(&a->uninstall_items[k],0,sizeof(a->uninstall_items[k]));
+            a->uninstall_items[k].icon16=du_icon_argb(uninstall_icon(r),16);
+            a->uninstall_items[k].icon32=du_icon_argb(uninstall_icon(r),32);
             a->uninstall_items[k].text[0]=r->name;
             a->uninstall_items[k].text[1]=r->version;
             a->uninstall_items[k].text[2]=r->publisher;

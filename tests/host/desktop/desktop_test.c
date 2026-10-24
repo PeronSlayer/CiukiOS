@@ -672,7 +672,7 @@ static void test_media_shell(void)
     assert(music==1 && viewer==1);
     strcpy(d.programs[3].name,"regedit"); d.program_count=4;
     assert(!strcmp(desk_program_category("regedit"),"accessories"));
-    assert(!strcmp(desk_program_icon_name("regedit"),"preferences-system"));
+    assert(!strcmp(desk_program_icon_name("regedit"),"x-office-address-book"));
     desk_menu_open(&d,SH_MENU_ACCESSORIES,4,32); viewer=0;
     int registry=0;
     for (int i=0;i<d.sh.menus[0].count;i++) registry+=!strcmp(d.sh.menus[0].items[i].label,"Registry Editor");
@@ -704,7 +704,7 @@ static void test_graphics_menu(void)
     setup(1024,768); strcpy(d.programs[0].name,"gfxdemo"); d.program_count=1; desk_shell_enable(&d);
     assert(desk_program_graphical("gfxdemo"));
     assert(!strcmp(desk_program_category("gfxdemo"),"accessories"));
-    assert(!strcmp(desk_program_icon_name("gfxdemo"),"applications-graphics"));
+    assert(!strcmp(desk_program_icon_name("gfxdemo"),"video-display"));
     desk_menu_open(&d,SH_MENU_ACCESSORIES,4,32); int graphics=0;
     for (int i=0;i<d.sh.menus[0].count;i++) graphics+=!strcmp(d.sh.menus[0].items[i].label,"Graphics Demo");
     assert(graphics==1); cleanup(); puts("PASS Graphics Demo in Accessories");

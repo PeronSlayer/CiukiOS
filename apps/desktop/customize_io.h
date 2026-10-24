@@ -142,6 +142,60 @@ static inline int sh_order_write(const struct sh_edit_request *r)
     if (!error) error=sh_write_atomic(path,buf,n);
     free(buf);return error;
 }
+/* The icon object of a Start menu / toolbar entry (libdeskui icon_map.c keys): folders by their well-known
+ * name, shortcuts by their target (/Programs/<name> or a Windows path), documents by extension. */
+static inline void sh_object_set(char *out,const char *kind,const char *name)
+{
+    int n=snprintf(out,sizeof(((struct sh_folder_item *)0)->icon),"%s%s",kind,name);
+    if (n<0 || (size_t)n>=sizeof(((struct sh_folder_item *)0)->icon)) out[0]=0;
+}
+static inline void sh_object_ext(char *out,const char *name)
+{
+    const char *base=name,*p;
+    for (p=name;*p;p++) if (*p=='/' || *p=='\\') base=p+1;
+    const char *dot=strrchr(base,'.');
+    if (!dot || dot==base || !dot[1] || strlen(dot)>10) { out[0]=0; return; }
+    char ext[16]; size_t k=0;
+    for (;dot[k] && k<sizeof(ext)-1;k++) ext[k]=(char)(dot[k]>='A' && dot[k]<='Z' ? dot[k]+32 : dot[k]);
+    ext[k]=0; sh_object_set(out,"type:",ext);
+}
+static inline void sh_item_icon(struct sh_folder_item *e,int is_dir,size_t len)
+{
+    e->icon[0]=0;
+    if (is_dir) {
+        static const struct { const char *label,*object; } known[]={
+            {"Accessories","menu:accessories"},{"System Tools","menu:system-tools"},{"Games","menu:games"},
+            {"Developer","menu:development"},{"Multimedia","menu:multimedia"},{"Internet","menu:internet"},{"Office","menu:office"}};
+        for (unsigned k=0;k<sizeof(known)/sizeof(*known);k++) if (!strcasecmp(e->label,known[k].label)) { strcpy(e->icon,known[k].object);return; }
+        return;
+    }
+    const char *name=sh_basename(e->path);
+    if (len<4 || strcasecmp(name+len-4,".lnk")) {
+        if (len>4 && !strcasecmp(name+len-4,".url")) strcpy(e->icon,"program:netsurf"); else sh_object_ext(e->icon,name);
+        return;
+    }
+    struct desk_launch_record *r=calloc(1,sizeof(*r));
+    if (!r) return;
+    if (!sh_shortcut_read(e->path,r)) {
+        const char *t=r->target;
+        if (!strncasecmp(t,"http://",7) || !strncasecmp(t,"https://",8) || !strncasecmp(t,"ftp://",6)) strcpy(e->icon,"program:netsurf");
+        else {
+            const char *base=t; for (const char *p=t;*p;p++) if (*p=='/' || *p=='\\') base=p+1;
+            char program[32]; size_t k=0;
+            const char *dot=strrchr(base,'.');
+            int native=!strncmp(t,"/Programs/",10);
+            int executable=native || (dot && (!strcasecmp(dot,".exe") || !strcasecmp(dot,".com") || !strcasecmp(dot,".elf")));
+            if (!dot && !native) strcpy(e->icon,"type:folder");   /* a folder shortcut */
+            else if (executable) {
+                for (const char *p=base;*p && *p!='.' && k<sizeof(program)-1;p++) program[k++]=(char)(*p>='A' && *p<='Z' ? *p+32 : *p);
+                program[k]=0;
+                if (!strcmp(program,"dosbox") && r->arguments[0]) sh_object_set(e->icon,"menu:","game");   /* a bundled DOS game */
+                else if (k) sh_object_set(e->icon,"program:",program);
+            } else sh_object_ext(e->icon,base);
+        }
+    }
+    free(r);
+}
 static inline void sh_folder_scan(struct sh_folder_snapshot *s,unsigned folder)
 {
     const char *path=s->folders[folder]; if (!*path) return;
@@ -163,6 +217,7 @@ static inline void sh_folder_scan(struct sh_folder_snapshot *s,unsigned folder)
             e->folder=(int)s->folders_count;
             strcpy(s->folders[s->folders_count++],e->path);
         }
+        sh_item_icon(e,is_dir,len);
         s->count++;
     }
     closedir(dir);

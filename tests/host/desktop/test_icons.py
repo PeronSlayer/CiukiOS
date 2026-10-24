@@ -34,7 +34,7 @@ FLAGS = ["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_PO
 REQUIRED = {
     "program:cdplayer": "media-optical", "program:netsurf": "internet-web-browser",  # f6-19 the browser application
     "program:files": "system-file-manager", "program:ciuknote": "accessories-text-editor",
-    "program:tasks": "utilities-system-monitor", "program:dosbox": "utilities-terminal", "program:terminal": "utilities-terminal",
+    "program:tasks": "utilities-system-monitor", "program:dosbox": "media-floppy", "program:terminal": "utilities-terminal",
     "program:demo": None, "program:hello": None, "program:lua": None, "program:libc_smoke": None,
     "menu:settings": None, "menu:run": None, "menu:help": None, "menu:about": "ciuki", "menu:shutdown": None,
     "menu:restart": None, "menu:logout": None, "menu:start": "ciuki",
@@ -191,6 +191,13 @@ class IconStoreTests(unittest.TestCase):
                 self.assertEqual(table[obj], tango, obj)
         programs = set(re.findall(r'"/Programs/([A-Za-z0-9_.-]+)"', (ROOT / "scripts/build_image.py").read_text()))
         self.assertEqual({p for p in programs if f"program:{p}" not in table}, set())
+        # Owner report 2026-10-24: every program has its own icon, none falls back to the generic executable.
+        owners = {}
+        for obj, tango in table.items():
+            if obj.startswith("program:") and obj != "program:*":
+                self.assertNotEqual(tango, table["type:executable"], obj)
+                owners.setdefault(tango, []).append(obj)
+        self.assertEqual({t: o for t, o in owners.items() if len(o) > 1}, {})
         for obj, tango in table.items():
             if tango == "ciuki":
                 self.assertTrue(obj.endswith((":computer", ":about", ":start")), obj)
@@ -228,7 +235,7 @@ class IconStoreTests(unittest.TestCase):
         objects = {"Programs": "menu:programs", "Documents": "menu:documents", "Settings": "menu:settings", "Help": "menu:help",
                    "System Tools": "menu:system-tools", "Run...": "menu:run", "Shut Down...": "menu:shutdown", "Accessories": "menu:accessories", "Games": "menu:games",
                    "Developer": "menu:development", "Control Panel": "menu:control-panel", "My Documents": "place:home",
-                   "Add/Remove Programs": "type:executable", "Display": "settings:display", "Mouse": "settings:mouse", "Keyboard": "settings:keyboard",
+                   "Add/Remove Programs": "settings:installer", "Display": "settings:display", "Mouse": "settings:mouse", "Keyboard": "settings:keyboard",
                    "Sounds and Audio": "settings:sound", "Accessibility Options": "settings:accessibility", "Date and Time": "settings:date-time", "Task Manager": "program:tasks",
                    "Keyboard Shortcuts": "settings:shortcuts", "Refresh": "action:refresh", "Properties": "action:properties",
                    "Close    Alt+F4": "action:stop", "About CiukiOS": "menu:about"}
@@ -244,7 +251,7 @@ class IconStoreTests(unittest.TestCase):
             self.assertRegex(shell, r'(?s)if \(d->pictures_exists\) \{.*?icon_add\(d,\s*"Pictures",\s*"files",\s*path,\s*"folder"')   # G19: under the profile's Documents
         for label, obj in {"My Documents": "place:home", "Recycle Bin": "place:trash", "Network Neighborhood": "place:network"}.items():
             self.assertEqual(icons[label], table[obj], label)
-        self.assertIn('e->meta.type==FM_DIR ? "folder" : strlen(e->name)>4 && fm_same_path(e->name+strlen(e->name)-4,".lnk") ? "emblem-symbolic-link" : cat ? cat->tango : "text-x-generic"', shell)
+        self.assertIn('e->meta.type==FM_DIR ? "folder" : strlen(e->name)>4 && fm_same_path(e->name+strlen(e->name)-4,".lnk") ? "emblem-symbolic-link" : e->meta.exec ? du_icon_file(e->name,0,1) : cat ? cat->tango : du_icon_file(e->name,0,0)', shell)
         self.assertEqual(icons["My Computer"], "ciuki-computer")    # identity: Tango computer with the approved portrait
         # The shell draws only store sizes: menus and the taskbar 16, dialogs and Alt+Tab 32, desktop icons 48.
         self.assertIn("#define SH_DESKTOP_ICON 48", shell)
