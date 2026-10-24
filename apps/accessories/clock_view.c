@@ -94,8 +94,7 @@ void clock_paint(struct du_ui *u, void *user)
         int r = FACE_R - 24, x = FACE_X + acc_sin60(q * 15) * r / 1024, y = FACE_Y - acc_cos60(q * 15) * r / 1024;
         du_text(c, x - du_text_width(numbers[q]) / 2, y - DU_GLYPH_H / 2, numbers[q], DU_INK);
     }
-    /* Ciuki's tagline on the dial, as the 0.8 identity. */
-    du_text(c, FACE_X - du_text_width("CiukiOS") / 2, FACE_Y + 26, "CiukiOS", DU_GRAY);
+    /* No caption on the dial: the Windows 98 Clock has none, and one drawn under the hands was unreadable. */
     hand(c, ((h % 12) * 60 + m) * 12 / 12, FACE_R * 52 / 100, 4, HAND_COLOR);     /* hour: 720 units per 12 h */
     hand(c, m * 12 + s / 5, FACE_R * 78 / 100, 3, HAND_COLOR);
     if (a->seconds_hand) hand(c, s * 12, FACE_R * 86 / 100, 1, SECOND_COLOR);

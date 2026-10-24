@@ -241,7 +241,7 @@ static void test_startup(void)
         struct du_widget *w = &ui.widgets[i];
         if (w->hidden || w->kind != DU_TOOLBUTTON) continue;
         assert(w->box.x >= 0 && w->box.x + w->box.w <= NW && w->box.w > 0 && w->box.h > 0);
-        assert(w->icon && w->icon_size == 22);
+        assert(w->id == M_BOLD || w->id == M_ITALIC || w->id == M_UNDERLINE || (w->icon && w->icon_size == 22));   /* B, I, U are drawn letters */
     }
     /* Print, the preview and page setup are present (G31: Print goes to the host's print hook) */
     assert(!(app.file_items[5].flags & DU_ITEM_DISABLED) && !(app.file_items[6].flags & DU_ITEM_DISABLED));
@@ -341,9 +341,17 @@ static void test_character_formatting(void)
     select_range(0, 11); cmd(M_BOLD); select_range(3, 8); cmd(M_BOLD); select_range(0, 11); assert(app.cmix.bold == -1); cmd(M_BOLD); assert(app.cmix.bold == 1 && attr_at(5).flags & WP_BOLD);
     /* font, size and colour popups */
     select_range(0, 5);
-    click_widget(W_FONTBTN); assert(ui.popup && ui.popup_count == 3); ESC; assert(!ui.popup);
+    /* Win98 format bar: editable combo boxes with drop-down arrows; the list opens from the arrow and a pick applies */
+    assert(W(W_FONTBTN)->kind == DU_COMBO && W(W_FONTBTN)->editable && W(W_SIZEBTN)->kind == DU_COMBO && W(W_SIZEBTN)->editable);
+    assert(W(W_FONTBTN)->count == 3 && W(W_SIZEBTN)->count == 16 && !strcmp(W(W_SIZEBTN)->items[0].text[0], "8") && !strcmp(W(W_SIZEBTN)->items[13].text[0], "36"));
+    click(W(W_FONTBTN)->box.x + W(W_FONTBTN)->box.w - 8, centre_y(W_FONTBTN)); assert(ui.combo_open == W(W_FONTBTN)); ESC; assert(!ui.combo_open);
+    du_post(&ui, DU_EV_SELECT, W_FONTBTN, 1); settle(); assert(!strcmp(app.doc.fonts[attr_at(0).font].name, "Times New Roman"));
+    du_post(&ui, DU_EV_SELECT, W_FONTBTN, 0); settle();
+    du_set_text(W(W_SIZEBTN), "13.5"); du_post(&ui, DU_EV_COMMIT, W_SIZEBTN, 0); settle(); assert(attr_at(0).size == 27 && !strcmp(W(W_SIZEBTN)->text, "13.5"));
+    du_set_text(W(W_SIZEBTN), "x"); du_post(&ui, DU_EV_COMMIT, W_SIZEBTN, 0); settle(); assert(attr_at(0).size == 27);
+    du_set_text(W(W_FONTBTN), "times new roman"); du_post(&ui, DU_EV_COMMIT, W_FONTBTN, 0); settle(); assert(!strcmp(W(W_FONTBTN)->text, "Times New Roman"));
     cmd(P_FONT + 1); assert(!strcmp(app.doc.fonts[attr_at(0).font].name, "Times New Roman") && !strcmp(W(W_FONTBTN)->text, "Times New Roman"));
-    click_widget(W_SIZEBTN); assert(ui.popup); ESC;
+    click(W(W_SIZEBTN)->box.x + W(W_SIZEBTN)->box.w - 8, centre_y(W_SIZEBTN)); assert(ui.combo_open == W(W_SIZEBTN)); ESC;
     cmd(P_SIZE + 9); assert(attr_at(0).size == 44 && !strcmp(W(W_SIZEBTN)->text, "22"));
     click_widget(W_COLORBTN); assert(ui.popup && ui.popup_count == 17); ESC;
     cmd(P_COLOR + 10); assert(app.doc.colors[attr_at(0).color] == 0xff0000);
