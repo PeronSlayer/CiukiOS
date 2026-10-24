@@ -96,8 +96,8 @@ PIN = "PIN-FROM-FIRST-RUN"
 # G6: reviewed property sheets, drive pie/counting, Version and Attributes.
 G6_FRAMES = {
     "g6-attributes.xrgb": "36c4b31cf29863de56400ecf085ed32903fd69f2cfc9eb64683fbdf24568fd40",
-    "g6-counting.xrgb": "314c76655d44debb66e227c9842fd19547e279876106e98b34660abbf922ef08",
-    "g6-drive.xrgb": "9137e28a12bbf353e84e493e10f88daf5628e79507bd0c59dd174f7657ffb4cd",
+    "g6-counting.xrgb": "ee3d760c0609ee2cbeaff3cd8845687e3a61c7f216256a1f0e82901fac2f97d2",
+    "g6-drive.xrgb": "44e70c1c971f2e8cc9caf125425b222b54eb8efc5c6705cc4cd5ee29ce915923",
     "g6-file.xrgb": "78f6614dd348b74028bed3ae0c3d247d27d6dc762a2a61b41683dd302538e2f7",
     "g6-folder.xrgb": "bfb0324a30b2e80c88d939ea5455cda68e60b14c71adffbd06223f9c9198b9f5",
     "g6-tools.xrgb": "9015ae71bb47c53f390ba462a3717303d3c1ee9895ec7b72f7d9308402419539",

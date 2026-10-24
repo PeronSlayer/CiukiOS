@@ -599,7 +599,7 @@ static void test_shell(void)
     desk_focus(&d,a); pointer(DESK_START_X+DESK_START_W/2,DESK_START_Y+DESK_START_H/2); event(CIUKI_INPUT_BUTTON,1,1,0);
     assert(d.menu_open && d.focus<0);
     { struct desk_box m=desk_menu_box(&d), s=desk_start_button(&d);
-      assert(s.x==DESK_START_X && s.y+s.h>DESK_BAR && s.w==38 && m.x==s.x && m.y==DESK_BAR && m.y+m.h<=448); }
+      assert(s.x==DESK_START_X && s.y+s.h>DESK_BAR && s.w==38 && m.x==s.x && m.y==s.y+s.h+DESK_START_SHADOW && m.y>=DESK_BAR && m.y+m.h<=448); }
     event(CIUKI_INPUT_KEY,1,1,0); assert(!d.menu_open && d.focus==a);
     event(CIUKI_INPUT_BUTTON,1,0,0);
     /* Negotiated v2, request survives backlog. G3: no close deadline for a
@@ -1215,10 +1215,11 @@ static void test_power_policy(void)
     /* The Shut Down dialog offers Stand by only where qualified. */
     int index=desk_internal_open(&d,DESK_INTERNAL_SHUTDOWN); assert(index>=0);
     struct desk_box c=desk_content(&d.clients[index]);
-    desk_internal_click(&d,index,c.x+c.w-10-4*81+6+10,c.y+c.h-33+10); assert(!d.sh.want_standby && !d.sh.want_power);
+    desk_internal_click(&d,index,c.x+SD_RADIO_X+10,c.y+SD_RADIO_Y+4); assert(!d.sh.want_standby && !d.sh.want_power && d.sh.shutdown_sel==SD_SHUTDOWN);   /* no Stand by radio: first row is Shut down */
     power_poll(p,3|CIUKI_POWER_CAN_STANDBY); power_drain();
     index=desk_internal_open(&d,DESK_INTERNAL_SHUTDOWN); assert(index>=0); c=desk_content(&d.clients[index]);
-    desk_internal_click(&d,index,c.x+c.w-10-4*81+6+10,c.y+c.h-33+10); assert(d.sh.want_standby==1);
+    desk_internal_click(&d,index,c.x+SD_RADIO_X+10,c.y+SD_RADIO_Y+4); assert(d.sh.shutdown_sel==SD_STANDBY && !d.sh.want_standby);
+    desk_internal_click(&d,index,c.x+c.w-10-3*81+6+10,c.y+c.h-33+10); assert(d.sh.want_standby==1);   /* OK */
     /* The Stand by sequence: query (denied), then query, suspend, STANDBY, resume. */
     power_call_count=0; power_w32_state=DESK_W32_PENDING;
     desk_power_policy_tick(&d);

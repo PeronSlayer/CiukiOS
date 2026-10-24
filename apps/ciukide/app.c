@@ -132,15 +132,31 @@ int ide_new_project(struct ide_app *a,const char *folder,int window)
     free(data);
     return ide_open_project(a,folder);
 }
+/* Win98-style frame: icon toolbar, captioned panes, tabbed status bar. */
+static const struct { int id; const char *icon; const char *tip; } ide_tools[]={
+    {IDE_OPEN,"document-open","Open Project (Ctrl+O)"}, {IDE_SAVE,"document-save","Save (Ctrl+S)"},
+    {IDE_BUILD,"applications-system","Build (F7)"}, {IDE_RUN,"media-playback-start","Run (F5)"},
+    {IDE_GUIDE,"help-browser","Developer Guide"}};
 static void layout(struct du_ui *u,void *ctx)
 {
     (void)ctx; int w=u->canvas.width,h=u->canvas.height;
-    du_get(u,IDE_FILES)->box=(struct du_rect){4,51,116,h-76};
-    du_get(u,IDE_EDITOR)->box=(struct du_rect){124,51,w-128,h-202};
-    du_get(u,IDE_ERROR_LIST)->box=(struct du_rect){124,h-147,w-128,65};
-    du_get(u,IDE_OUTPUT)->box=(struct du_rect){124,h-78,w-128,53};
+    const int top=73,bottom=h-25,strip=87,right=124,rw=w-128,half=(rw-4)/2,y0=bottom-strip;
+    du_get(u,IDE_BAND1)->box=(struct du_rect){0,20,w,2};
+    du_get(u,IDE_BAND2)->box=(struct du_rect){0,52,w,2};
+    int x=4;
+    for (unsigned i=0;i<sizeof(ide_tools)/sizeof(ide_tools[0]);++i) {
+        du_get(u,ide_tools[i].id)->box=(struct du_rect){x,23,32,28}; x+=33;
+        if (i==1 || i==3) { du_get(u,i==1 ? IDE_TSEP1 : IDE_TSEP2)->box=(struct du_rect){x+2,25,2,24}; x+=7; }
+    }
+    du_get(u,IDE_HDR_PROJECT)->box=(struct du_rect){4,56,116,17};
+    du_get(u,IDE_FILES)->box=(struct du_rect){4,top,116,bottom-top};
+    du_get(u,IDE_HDR_EDITOR)->box=(struct du_rect){right,56,rw,17};
+    du_get(u,IDE_EDITOR)->box=(struct du_rect){right,top,rw,y0-3-top};
+    du_get(u,IDE_HDR_ERRORS)->box=(struct du_rect){right,y0,half,17};
+    du_get(u,IDE_ERROR_LIST)->box=(struct du_rect){right,y0+17,half,strip-17};
+    du_get(u,IDE_HDR_OUTPUT)->box=(struct du_rect){right+half+4,y0,rw-half-4,17};
+    du_get(u,IDE_OUTPUT)->box=(struct du_rect){right+half+4,y0+17,rw-half-4,strip-17};
     du_get(u,IDE_STATUS)->box=(struct du_rect){0,h-21,w,21};
-    for (int id=IDE_OPEN;id<=IDE_GUIDE;++id) du_get(u,id)->box=(struct du_rect){4+(id-IDE_OPEN)*80,23,76,24};
     u->dirty=1;
 }
 void ide_refresh(struct ide_app *a)
@@ -155,8 +171,9 @@ void ide_refresh(struct ide_app *a)
     if (list->active>=count) list->active=0;
     static const char *states[]={"Open or create a project", "Building...", "Build succeeded - F5 to run", "Build failed", "Starting...", "Program launched"};
     unsigned line,col; du_ta_line_col(&a->editor,a->editor.cursor,&line,&col);
-    char status[DU_TEXT_MAX]; snprintf(status,sizeof(status),"%s | %.80s%s | Ln %u, Col %u | %u errors, %u warnings%s",
-        states[m->state],a->file,a->editor.modified ? " *" : "",line,col,m->errors,m->warnings,
+    /* Panels: build state, document, cursor, diagnostics (tab separated). */
+    char status[DU_TEXT_MAX]; snprintf(status,sizeof(status),"%s\t%.60s%s\tLn %u, Col %u\t%u errors, %u warnings%s",
+        states[m->state],a->file[0] ? a->file : "No file",a->editor.modified ? " *" : "",line,col,m->errors,m->warnings,
         m->log_truncated || m->dropped ? " (output limited)" : "");
     if (strcmp(du_get(a->ui,IDE_STATUS)->text,status)) { du_set_text(du_get(a->ui,IDE_STATUS),status); du_invalidate_widget(a->ui,IDE_STATUS); }
     int busy=m->state==IDE_BUILDING || m->state==IDE_LAUNCHING;
@@ -264,13 +281,21 @@ int ide_attach(struct ide_app *a,struct du_ui *u)
     a->menus[0]=(struct du_menu){"&Project",a->project_menu,8};
     a->menus[1]=(struct du_menu){"&Edit",a->edit_menu,5}; a->menus[2]=(struct du_menu){"&Help",a->help_menu,1};
     u->menus=a->menus; u->menu_count=3;
-    static const char *buttons[]={"Open...","Save","Build (F7)","Run (F5)","Guide"};
-    for (int id=IDE_OPEN;id<=IDE_GUIDE;++id) du_add(u,DU_BUTTON,id,(struct du_rect){0},buttons[id-IDE_OPEN]);
+    du_add(u,DU_SEPARATOR,IDE_BAND1,(struct du_rect){0},""); du_add(u,DU_SEPARATOR,IDE_BAND2,(struct du_rect){0},"");
+    for (unsigned i=0;i<sizeof(ide_tools)/sizeof(ide_tools[0]);++i) {
+        struct du_widget *b=du_add(u,DU_TOOLBUTTON,ide_tools[i].id,(struct du_rect){0},"");
+        b->icon=du_icon_argb(ide_tools[i].icon,22); b->icon_size=22;
+        snprintf(b->tip,sizeof(b->tip),"%s",ide_tools[i].tip);
+    }
+    du_add(u,DU_SEPARATOR,IDE_TSEP1,(struct du_rect){0},""); du_add(u,DU_SEPARATOR,IDE_TSEP2,(struct du_rect){0},"");
+    du_add(u,DU_HEADER,IDE_HDR_PROJECT,(struct du_rect){0},"Project"); du_add(u,DU_HEADER,IDE_HDR_EDITOR,(struct du_rect){0},"Editor");
+    du_add(u,DU_HEADER,IDE_HDR_ERRORS,(struct du_rect){0},"Errors"); du_add(u,DU_HEADER,IDE_HDR_OUTPUT,(struct du_rect){0},"Output");
     du_add(u,DU_LISTVIEW,IDE_FILES,(struct du_rect){0},"")->view=DU_LIST;
     du_add(u,DU_TEXTAREA,IDE_EDITOR,(struct du_rect){0},"")->data=&a->editor;
     du_add(u,DU_LISTVIEW,IDE_ERROR_LIST,(struct du_rect){0},"")->view=DU_LIST;
     du_add(u,DU_TEXTAREA,IDE_OUTPUT,(struct du_rect){0},"")->data=&a->output;
-    du_add(u,DU_STATUS,IDE_STATUS,(struct du_rect){0},"");
+    struct du_widget *st=du_add(u,DU_STATUS,IDE_STATUS,(struct du_rect){0},"");
+    st->panels[0]=190; st->panels[1]=170; st->panels[2]=90;
     layout(u,a); du_focus(u,IDE_EDITOR); ide_refresh(a); return 0;
 }
 void ide_detach(struct ide_app *a) { du_ta_free(&a->editor); du_ta_free(&a->output); }

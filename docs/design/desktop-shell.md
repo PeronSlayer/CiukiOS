@@ -646,3 +646,27 @@ two); the hit-rect is the drawn box. The power icon is shown only when a
 battery record exists (present != 0) and the "Show power meter" option is on
 (`desk_shell_power_shown`, shared by tray geometry and painting); an unknown
 AC state draws no glyph instead of "?".
+
+## Visual audit, group E (2026-10-24)
+
+Reference: the Windows 98 Resource Kit's descriptions of the Shut Down
+Windows dialog, drive Properties (General tab with used/free space swatches
+and pie chart), Task Manager-class list headers and Start menu program groups
+(folder icon). Decisions, CiukiOS naming and Tango/Ciuki artwork throughout:
+
+- Shut Down CiukiOS: computer icon, "What do you want CiukiOS to do?" and a
+  radio group (Stand by only where qualified, Shut down, Restart), OK /
+  Cancel / Help. "Restart in MS-DOS mode" is not offered: CiukiOS has no
+  real-mode restart. Arrow keys, B/S/R, Enter and Esc work; OK performs the
+  selected action through the same session path as the former buttons.
+- Drive Properties General page: drive icon with the label edit, Type and
+  File system, Used and Free space rows with coloured swatches, bytes and MB
+  columns, Capacity, the 3D pie with its "Drive C" caption and Disk Cleanup.
+- Start menu: it opens below the protruding Ciuki orb; program groups
+  (System Tools, Accessories, Games, Developer, Programs folders) use the
+  folder icon.
+- Close-program texts use the product name ("CiukiOS cannot shut down this
+  program automatically").
+- Log Viewer wraps long lines by default (View > Word Wrap toggles the
+  horizontal scrolling mode); CiukIDE has an icon toolbar with tooltips,
+  captioned panes and a tabbed status bar.

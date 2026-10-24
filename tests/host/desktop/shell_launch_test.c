@@ -989,7 +989,7 @@ __attribute__((noinline)) static void test_games_menu(void)
     const struct sh_menu *programs=&d.sh.menus[0];
     int games=item_at(programs,"Games"), accessories=item_at(programs,"Accessories");
     assert(games==accessories+1 && programs->items[games].action==SH_ACT_SUBMENU &&
-           programs->items[games].arg==SH_MENU_GAMES && !strcmp(programs->items[games].icon,"applications-games"));
+           programs->items[games].arg==SH_MENU_GAMES && !strcmp(programs->items[games].icon,"folder"));
     for (unsigned g=0; g<DESK_GAME_COUNT; g++) assert(!strcmp(desk_games[g].tango,"input-gaming"));   /* a game, not the Games folder */
     desk_menu_close(&d);
     for (unsigned g=0; g<DESK_GAME_COUNT; g++) {
@@ -1063,7 +1063,9 @@ __attribute__((noinline)) static void test_menu_icons(void)
         assert(m->icon==(kinds[k]==SH_MENU_START && !d.sh.cfg.start_small ? 32 : 16));
         for (int a=0;a<m->count;a++) for (int b=a+1;b<m->count;b++) {
             const struct sh_item *x=&m->items[a], *y=&m->items[b];
-            if (x->icon && y->icon && !(x->action==SH_ACT_GAME && y->action==SH_ACT_GAME)) assert(strcmp(x->icon,y->icon));
+            /* Games share input-gaming; program groups (submenus) share the folder icon, as in Windows 98. */
+            if (x->icon && y->icon && !(x->action==SH_ACT_GAME && y->action==SH_ACT_GAME) &&
+                !(x->action==SH_ACT_SUBMENU && y->action==SH_ACT_SUBMENU && !strcmp(x->icon,"folder"))) assert(strcmp(x->icon,y->icon));
         }
         if (kinds[k]==SH_MENU_DEVELOPER) {   /* only programs outside Programs and Accessories */
             assert(m->count==5 && item_at(m,"Hello")>=0 && item_at(m,"libc smoke test")>=0 && item_at(m,"newtool")>=0 &&

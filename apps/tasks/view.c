@@ -5,8 +5,8 @@
 static const char *const tab_labels[TV_PAGES] = { "Applications", "Processes", "Performance" };
 static const struct du_column app_columns[] = { { "Task", 250, 0 }, { "Status", 106, 0 } };
 static const struct du_column proc_columns[TM_COLUMNS] = {
-    { "Image Name", 112, 0 }, { "PID", 40, 1 }, { "PPID", 40, 1 },
-    { "Threads", 54, 1 }, { "Mem Usage", 70, 1 }, { "CPU", 40, 1 } };
+    { "Image Name", 90, 0 }, { "PID", 36, 1 }, { "PPID", 42, 1 },
+    { "Threads", 62, 1 }, { "Mem Usage", 84, 1 }, { "CPU", 40, 1 } };
 static const int page_widgets[TV_PAGES][18] = {
     { A_APPS, A_END_TASK, A_SWITCH, A_NEW, 0 },
     { A_PROCS, A_END_PROCESS, 0 },

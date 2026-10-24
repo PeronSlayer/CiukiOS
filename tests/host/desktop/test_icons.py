@@ -233,14 +233,15 @@ class IconStoreTests(unittest.TestCase):
         self.assertEqual(len(applets),19)  # Display, Taskbar, Sounds, Multimedia, Keyboard, Mouse, Game controllers, Accessibility, Date/Time, Regional, Internet, Network, Power, Storage, Add Hardware, Add/Remove Programs, Users, Passwords, System
         rows.update(applets)
         objects = {"Programs": "menu:programs", "Documents": "menu:documents", "Settings": "menu:settings", "Help": "menu:help",
-                   "System Tools": "menu:system-tools", "Run...": "menu:run", "Shut Down...": "menu:shutdown", "Accessories": "menu:accessories", "Games": "menu:games",
-                   "Developer": "menu:development", "Control Panel": "menu:control-panel", "My Documents": "place:home",
+                   "Run...": "menu:run", "Shut Down...": "menu:shutdown", "Control Panel": "menu:control-panel", "My Documents": "place:home",
                    "Add/Remove Programs": "settings:installer", "Display": "settings:display", "Mouse": "settings:mouse", "Keyboard": "settings:keyboard",
                    "Sounds and Audio": "settings:sound", "Accessibility Options": "settings:accessibility", "Date and Time": "settings:date-time", "Task Manager": "program:tasks",
                    "Keyboard Shortcuts": "settings:shortcuts", "Refresh": "action:refresh", "Properties": "action:properties",
                    "Close    Alt+F4": "action:stop", "About CiukiOS": "menu:about"}
         for label, obj in objects.items():
             self.assertEqual(rows[label], table[obj], label)
+        for label in ("System Tools", "Accessories", "Games", "Developer"):   # program groups use the folder icon (Windows 98)
+            self.assertEqual(rows[label], table["place:folder"], label)
         # G19: the icon argument may be a setting-dependent expression (My Documents, Recycle Bin): the default is the last literal.
         icons = dict(re.findall(r'icon_add\(d,\s*"([^"]+)",\s*"[^"]*",\s*[^;]*?"([a-z-]+)"\s*,\s*SH_ACT_', shell))
         # f2-42: three fixed icons precede the real Desktop folder entries.

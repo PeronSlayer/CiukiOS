@@ -271,7 +271,8 @@ static void fill_rows(struct stui *s)
     if (h != s->list_hash) { s->list_hash = h; du_invalidate_widget(s->ui, A_LIST); }
     update_menus(s);
     if (s->status[0]) sysui_text(s->ui, A_STATUS, s->status);
-    else { char t[48]; snprintf(t, sizeof(t), "%u scheduled task%s", s->store.count, s->store.count == 1 ? "" : "s"); sysui_text(s->ui, A_STATUS, t); }
+    else { char t[96]; snprintf(t, sizeof(t), "%u scheduled task%s%s", s->store.count, s->store.count == 1 ? "" : "s",
+                                s->store.count ? "" : " - double-click Add Scheduled Task to create one"); sysui_text(s->ui, A_STATUS, t); }
 }
 static void build_folder(struct stui *s)
 {

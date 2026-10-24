@@ -38,7 +38,7 @@ struct sysinfo_app {
     char summary[SI_NODES][32];
     struct du_menu_item file_items[4], view_items[1], tools_items[5];
     struct du_menu menus[3];
-    const uint32_t *folder_icon, *warning_icon, *error_icon, *info_icon;
+    const uint32_t *root_icon, *folder_icon, *warning_icon, *error_icon, *info_icon;
     char folder[DU_TEXT_MAX];                 /* Save As starting folder */
     char message[96];
     uint32_t launch_serial; char launch_label[32];
