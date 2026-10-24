@@ -4,14 +4,9 @@ handler uses the project's existing pinned libpng and stb JPEG sources.
 
 --- a/netsurf/frontends/framebuffer/Makefile
 +++ b/netsurf/frontends/framebuffer/Makefile
-@@ -179,6 +179,7 @@
- S_FRAMEBUFFER_FBTK := fbtk.c event.c fill.c bitmap.c user.c window.c 	\
- 	text.c scroll.c osk.c 
- 
+@@ -182,1 +182,2 @@
 +S_FRONTEND += ciuki/download_store.c ciuki/raster.c ciuki/raster_content.c
  S_FRONTEND += ciuki/net.c ciuki/http.c ciuki/tls.c ciuki/dns.c
- S_FRONTEND += ciuki/file.c ciuki/images.c ciuki/font.c ciuki/charset.c ciuki/chrome.c ciuki/profile.c ciuki/budget.c
- 
 --- a/netsurf/content/handlers/image/image.c
 +++ b/netsurf/content/handlers/image/image.c
 @@ -45,9 +45,11 @@

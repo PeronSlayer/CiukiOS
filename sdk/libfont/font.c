@@ -23,7 +23,20 @@ struct cache_entry {
     int valid;
     FT_Pos lsb_delta, rsb_delta;
     struct ciuki_font_bitmap bitmap;
+    int next;                                     /* bucket chain, -1 ends */
 };
+/* fx-24: measuring (layout) needs only a glyph's hinted advance and its
+ * lsb/rsb deltas, not its coverage. NetSurf's layout of one encyclopedia
+ * article measured 13,000 strings; through the 128-glyph bitmap cache every
+ * miss loaded, hinted and rendered a glyph, and every lookup scanned all 128
+ * entries. Measures now use a direct-mapped metrics cache (hinted
+ * FT_Load_Glyph with the same flags, no rendering: FT_Render_Glyph changes
+ * neither the advance nor the deltas, so measure and paint still agree
+ * exactly), Latin-1 code points skip the cmap search, and bitmap lookups use
+ * bucket chains instead of a linear scan. */
+#define METRIC_SLOTS 512u
+#define BITMAP_BUCKETS 64u
+struct metric_entry { unsigned glyph, size; int32_t advance; FT_Pos lsb_delta, rsb_delta; };
 struct ciuki_font_face {
     pthread_mutex_t mutex;
     uint8_t *data;
@@ -37,7 +50,18 @@ struct ciuki_font_face {
     struct ciuki_font_cache_stats stats;
     uint64_t clock;
     struct cache_entry cache[CIUKI_FONT_CACHE_GLYPHS];
+    int bucket[BITMAP_BUCKETS];                   /* first cache index, -1 empty */
+    struct metric_entry metric[METRIC_SLOTS];     /* size 0: empty */
+    uint32_t latin[256];                          /* glyph+1 for U+0000..U+00FF, 0 unknown */
+    int kerning;                                  /* FT_HAS_KERNING */
 };
+static unsigned bucket_of(unsigned glyph, unsigned size) { return (glyph * 31u + size) % BITMAP_BUCKETS; }
+static void index_reset(struct ciuki_font_face *f)
+{
+    for (unsigned i = 0; i < BITMAP_BUCKETS; i++) f->bucket[i] = -1;
+    for (unsigned i = 0; i < CIUKI_FONT_CACHE_GLYPHS; i++) f->cache[i].next = -1;
+    memset(f->metric, 0, sizeof(f->metric));
+}
 static int fail(int e) { errno = e; return -1; }
 static int ft_fail(FT_Error e) { return fail(e == FT_Err_Out_Of_Memory ? ENOMEM : EINVAL); }
 static void *ft_alloc(FT_Memory memory, long size)
@@ -193,12 +217,15 @@ int ciuki_font_open(const char *path, struct ciuki_font_face **out)
     if (initialise(f)) { int e = errno; if (f->ft) FT_Done_Face(f->ft); if (f->library) FT_Done_Library(f->library); free(f->data); free(f); return fail(e); }
     int e = pthread_mutex_init(&f->mutex, NULL);
     if (e) { FT_Done_Face(f->ft); FT_Done_Library(f->library); free(f->data); free(f); return fail(e); }
+    f->kerning = FT_HAS_KERNING(f->ft) ? 1 : 0;
+    index_reset(f);
     *out = f; return 0;
 }
 static void clear_locked(struct ciuki_font_face *f)
 {
     for (unsigned i = 0; i < CIUKI_FONT_CACHE_GLYPHS; i++) { free(f->cache[i].bitmap.coverage); memset(&f->cache[i], 0, sizeof(f->cache[i])); }
     f->stats.glyphs = 0; f->stats.bytes = 0;
+    index_reset(f);
 }
 void ciuki_font_close(struct ciuki_font_face *f)
 {
@@ -256,12 +283,15 @@ static struct cache_entry *oldest(struct ciuki_font_face *f)
 }
 static void evict(struct ciuki_font_face *f, struct cache_entry *e)
 {
+    int index = (int)(e - f->cache);
+    for (int *link = &f->bucket[bucket_of(e->glyph, e->size)]; *link >= 0; link = &f->cache[*link].next)
+        if (*link == index) { *link = e->next; break; }
     f->stats.bytes -= (size_t)e->bitmap.width * e->bitmap.height; f->stats.glyphs--; f->stats.evictions++;
-    free(e->bitmap.coverage); memset(e, 0, sizeof(*e));
+    free(e->bitmap.coverage); memset(e, 0, sizeof(*e)); e->next = -1;
 }
 static struct cache_entry *cached(struct ciuki_font_face *f, unsigned glyph, unsigned size)
 {
-    for (unsigned i = 0; i < CIUKI_FONT_CACHE_GLYPHS; i++) {
+    for (int i = f->bucket[bucket_of(glyph, size)]; i >= 0; i = f->cache[i].next) {
         struct cache_entry *e = &f->cache[i];
         if (e->valid && e->glyph == glyph && e->size == size) { e->used = ++f->clock; f->stats.hits++; return e; }
     }
@@ -288,8 +318,32 @@ static struct cache_entry *cached(struct ciuki_font_face *f, unsigned glyph, uns
     entry->glyph = glyph; entry->size = size; entry->valid = 1; entry->used = ++f->clock;
     entry->lsb_delta = slot->lsb_delta; entry->rsb_delta = slot->rsb_delta;
     entry->bitmap = (struct ciuki_font_bitmap){b->width, b->rows, b->width, slot->bitmap_left, -slot->bitmap_top, (int32_t)slot->advance.x, pixels};
+    unsigned bucket = bucket_of(glyph, size);
+    entry->next = f->bucket[bucket]; f->bucket[bucket] = (int)(entry - f->cache);
     f->stats.bytes += bytes; f->stats.glyphs++;
     return entry;
+}
+/* The metrics of one glyph at one size, as cached() would record them. */
+static int metrics(struct ciuki_font_face *f, unsigned glyph, unsigned size, int32_t *advance, FT_Pos *lsb, FT_Pos *rsb)
+{
+    struct metric_entry *m = &f->metric[(glyph * 2654435761u ^ size * 40503u) % METRIC_SLOTS];
+    if (m->size != size || m->glyph != glyph) {
+        if (set_size(f, size)) return -1;
+        f->allocation_failed = 0;
+        FT_Error error = FT_Load_Glyph(f->ft, glyph, FT_LOAD_NO_BITMAP | FT_LOAD_TARGET_NORMAL);
+        if (error || f->allocation_failed) return face_error(f, error);
+        FT_GlyphSlot slot = f->ft->glyph;
+        if (slot->advance.x < INT32_MIN || slot->advance.x > INT32_MAX) return fail(EOVERFLOW);
+        *m = (struct metric_entry){glyph, size, (int32_t)slot->advance.x, slot->lsb_delta, slot->rsb_delta};
+    }
+    *advance = m->advance; *lsb = m->lsb_delta; *rsb = m->rsb_delta;
+    return 0;
+}
+static unsigned char_index(struct ciuki_font_face *f, uint32_t cp)
+{
+    if (cp >= 256) return FT_Get_Char_Index(f->ft, cp);
+    if (!f->latin[cp]) f->latin[cp] = FT_Get_Char_Index(f->ft, cp) + 1u;
+    return f->latin[cp] - 1u;
 }
 int ciuki_font_raster(struct ciuki_font_face *f, unsigned glyph, unsigned size, struct ciuki_font_bitmap *out)
 {
@@ -329,27 +383,32 @@ static int run(struct ciuki_font_face *f, unsigned size, const char *text, size_
     const unsigned char *s = (const unsigned char *)text;
     int64_t pen = 0; FT_Pos previous_rsb = 0; int previous = -1, result = 0;
     while (length) {
-        unsigned glyph = FT_Get_Char_Index(f->ft, decode(&s, &length));
-        if (previous >= 0) {
+        unsigned glyph = char_index(f, decode(&s, &length));
+        /* A face without a kern table returns a zero vector; skip the call. */
+        if (previous >= 0 && f->kerning) {
             FT_Vector kern;
             FT_Error error = FT_Get_Kerning(f->ft, (unsigned)previous, glyph, FT_KERNING_UNFITTED, &kern);
             if (error) { result = ft_fail(error); break; }
             pen += kern.x;
         }
-        struct cache_entry *entry = cached(f, glyph, size);
-        if (!entry) { result = -1; break; }
-        struct ciuki_font_bitmap *b = &entry->bitmap;
-        FT_Pos delta = previous_rsb - entry->lsb_delta;
+        struct ciuki_font_bitmap *b = NULL;
+        int32_t advance; FT_Pos lsb_delta, rsb_delta;
+        if (painter) {
+            struct cache_entry *entry = cached(f, glyph, size);
+            if (!entry) { result = -1; break; }
+            b = &entry->bitmap; advance = b->advance; lsb_delta = entry->lsb_delta; rsb_delta = entry->rsb_delta;
+        } else if (metrics(f, glyph, size, &advance, &lsb_delta, &rsb_delta)) { result = -1; break; }
+        FT_Pos delta = previous_rsb - lsb_delta;
         if (delta > 32) pen -= 64;
         else if (delta < -31) pen += 64;
-        previous_rsb = entry->rsb_delta;
+        previous_rsb = rsb_delta;
         if (pen < INT32_MIN || pen > INT32_MAX) { result = fail(EOVERFLOW); break; }
         if (painter) {
             int64_t gx = x + (pen < 0 ? pen - 32 : pen + 32) / 64 + b->left, gy = (int64_t)baseline + b->top;
             if (gx < INT_MIN || gx > INT_MAX || gy < INT_MIN || gy > INT_MAX) { result = fail(EOVERFLOW); break; }
             if (b->width && b->height) { result = painter(ctx, (int)gx, (int)gy, b); if (result) break; }
         }
-        pen += b->advance; previous = (int)glyph;
+        pen += advance; previous = (int)glyph;
     }
     if (!result && (pen < INT32_MIN || pen > INT32_MAX)) result = fail(EOVERFLOW);
     if (!result) *out = (int32_t)pen;

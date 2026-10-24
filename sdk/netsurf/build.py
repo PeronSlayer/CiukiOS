@@ -7,10 +7,12 @@ import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import shutil
 import subprocess
 import sys
 import tarfile
+import time
 import zlib as host_zlib
 sys.dont_write_bytecode = True
 
@@ -19,10 +21,17 @@ HERE = Path(__file__).resolve().parent
 SDK = ROOT / "build/tools/ciuki-sdk"
 EXTERNAL = ROOT / "build/external"
 LIBRARIES = ("libwapcaplet", "libparserutils", "libcss", "libhubbub", "libdom",
-             "libnsutils", "libutf8proc", "libnslog", "libnspsl", "libnsgif", "libnsbmp", "libnsfb")
-FEATURES = {key: "NO" for key in ("CURL", "OPENSSL", "DUKTAPE", "PNG", "JPEG", "JPEGXL", "WEBP",
-                                  "NSSVG", "ROSPRITE", "HARU_PDF", "VIDEO", "FS_BACKING_STORE")}
-FEATURES.update({key: "YES" for key in ("GIF", "BMP", "UTF8PROC", "NSLOG", "NSPSL", "LIBICONV_PLUG")})
+             "libnsutils", "libutf8proc", "libnslog", "libnspsl", "libnsgif", "libnsbmp", "libsvgtiny", "libnsfb")
+# fx-24: the content handlers of upstream NetSurf's framebuffer front end
+# (frontends/framebuffer/Makefile.defaults: JPEG YES, PNG/GIF/BMP/WEBP/NSSVG
+# AUTO, i.e. enabled when the library is present). JPEG XL (libjxl, C++),
+# RISC OS sprites and video stay off; see docs/design/netsurf-port-plan.md.
+FEATURES = {key: "NO" for key in ("CURL", "OPENSSL", "DUKTAPE", "JPEGXL",
+                                  "ROSPRITE", "HARU_PDF", "VIDEO", "FS_BACKING_STORE")}
+FEATURES.update({key: "YES" for key in ("GIF", "BMP", "PNG", "JPEG", "WEBP", "NSSVG",
+                                        "UTF8PROC", "NSLOG", "NSPSL", "LIBICONV_PLUG")})
+# Pinned archives (config/netsurf.json), verified on every run.
+PINNED = ("archive", "zlib", "libpng", "libjpeg", "expat", "libwebp")
 EPOCH = "1703721600"  # release date, independent of the checkout and build clock
 
 
@@ -42,7 +51,7 @@ def sources():
     """Verify even cache hits; extract regular files only, never archive links."""
     pins = json.loads((ROOT / "config/netsurf.json").read_text())
     result = {}
-    for key in ("archive", "zlib", "libpng"):
+    for key in PINNED:
         pin = pins[key]
         archive = ROOT / pin["file"]
         if archive.stat().st_size != pin["size"] or digest(archive) != pin["sha256"]:
@@ -141,6 +150,140 @@ def bearssl(folder, prefix, cc, env, cflags):
     return archive
 
 
+def static_archive(name, files, folder, prefix, cc, env, cflags, options=(), includes=()):
+    """Compile a fixed upstream source list into prefix/lib/lib<name>.a."""
+    folder.mkdir(parents=True, exist_ok=True)
+    (prefix / "lib").mkdir(parents=True, exist_ok=True)
+    objects = []
+    for path in files:
+        obj = folder / (path.parent.name + "_" + path.stem + ".o")
+        if obj in objects:
+            raise ValueError("duplicate object name " + str(obj))
+        run([cc, *cflags, *options, *["-I" + str(p) for p in includes], "-c", path, "-o", obj], env=env)
+        objects.append(obj)
+    archive = prefix / "lib" / ("lib" + name + ".a")
+    archive.unlink(missing_ok=True)
+    run(["llvm-ar", "rcsD", archive, *objects], env=env)
+    return archive
+
+
+def pkgconfig(prefix, name, version, libs, description, requires=None):
+    folder = prefix / "lib/pkgconfig"
+    folder.mkdir(parents=True, exist_ok=True)
+    text = (f"prefix={prefix}\nexec_prefix=${{prefix}}\nlibdir=${{prefix}}/lib\nincludedir=${{prefix}}/include\n\n"
+            f"Name: {name}\nDescription: {description}\nVersion: {version}\n"
+            + (f"Requires.private: {requires}\n" if requires else "")
+            + f"Libs: -L${{libdir}} {libs}\nCflags: -I${{includedir}}\n")
+    (folder / (name + ".pc")).write_text(text)
+
+
+def version_of(src):
+    return src.name.rsplit("-", 1)[1]
+
+
+def configure_template(text, values, defines):
+    """CMake configure_file subset: @VAR@ and #cmakedefine, nothing left over."""
+    for key, value in values.items():
+        text = text.replace("@" + key + "@", value)
+    lines = []
+    for line in text.splitlines():
+        if line.startswith("#cmakedefine "):
+            name = line.split()[1]
+            line = ("#define " + line[len("#cmakedefine "):]) if name in defines else "/* #undef " + name + " */"
+        lines.append(line)
+    text = "\n".join(lines) + "\n"
+    if re.search(r"@[A-Z_]+@", text) or "#cmakedefine" in text:
+        raise ValueError("unresolved configure template value")
+    return text
+
+
+def libpng(src, folder, prefix, cc, env, cflags):
+    """libpng's own library list (Makefile.am), its prebuilt default
+    configuration, no architecture-specific filter code."""
+    folder.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src / "scripts/pnglibconf.h.prebuilt", folder / "pnglibconf.h")
+    names = ("png", "pngerror", "pngget", "pngmem", "pngpread", "pngread", "pngrio", "pngrtran",
+             "pngrutil", "pngset", "pngtrans", "pngwio", "pngwrite", "pngwtran", "pngwutil")
+    options = ["-DPNG_ARM_NEON_OPT=0", "-DPNG_MIPS_MSA_OPT=0", "-DPNG_MIPS_MMI_OPT=0", "-DPNG_POWERPC_VSX_OPT=0",
+               "-DPNG_INTEL_SSE_OPT=0", "-DPNG_LOONGARCH_LSX_OPT=0", "-DPNG_RISCV_RVV_OPT=0"]
+    static_archive("png", [src / (n + ".c") for n in names], folder, prefix, cc, env, cflags, options,
+                   [folder, src, prefix / "include"])
+    for header in (src / "png.h", src / "pngconf.h", folder / "pnglibconf.h"):
+        shutil.copy2(header, prefix / "include" / header.name)
+    pkgconfig(prefix, "libpng", version_of(src), "-lpng", "Loads and saves PNG files", "zlib")
+
+
+def libjpeg(src, folder, prefix, cc, env, cflags, host):
+    """libjpeg-turbo's JPEG_SOURCES (CMakeLists.txt, with the release's
+    pre-generated 8/12/16-bit wrappers) plus arithmetic coding, as its
+    default static build; C only (WITH_SIMD off: no NASM in the recipe)."""
+    folder.mkdir(parents=True, exist_ok=True)
+    cmake = (src / "CMakeLists.txt").read_text()
+    block = cmake.split("set(JPEG_SOURCES ", 1)[1].split(")", 1)[0]
+    files = [src / name for name in block.split()] + [src / "src" / n for n in ("jaricom.c", "jcarith.c", "jdarith.c")]
+    version = version_of(src)
+    major, minor, revision = version.split(".")[:3]
+    values = {"JPEG_LIB_VERSION": "62", "VERSION": version,
+              "LIBJPEG_TURBO_VERSION_NUMBER": major + minor.zfill(3) + revision.zfill(3),
+              "BUILD": time.strftime("%Y%m%d", time.gmtime(int(EPOCH))),
+              "HIDDEN": '__attribute__((visibility("hidden")))', "INLINE": "__inline__ __attribute__((always_inline))",
+              "THREAD_LOCAL": "", "CMAKE_PROJECT_NAME": "libjpeg-turbo", "SIZE_T": "8" if host else "4",
+              "COPYRIGHT_YEAR": cmake.split('set(COPYRIGHT_YEAR "', 1)[1].split('"', 1)[0]}
+    defines = {"C_ARITH_CODING_SUPPORTED", "D_ARITH_CODING_SUPPORTED", "HAVE_BUILTIN_CTZL"}
+    for name in ("jconfig.h", "jconfigint.h", "jversion.h"):
+        (folder / name).write_text(configure_template((src / "src" / (name + ".in")).read_text(), values, defines))
+    static_archive("jpeg", files, folder, prefix, cc, env, cflags, [], [folder, src / "src"])
+    for header in (src / "src/jpeglib.h", src / "src/jmorecfg.h", src / "src/jerror.h", folder / "jconfig.h"):
+        shutil.copy2(header, prefix / "include" / header.name)
+    pkgconfig(prefix, "libjpeg", version, "-ljpeg", "A SIMD-accelerated JPEG codec that provides the libjpeg API")
+
+
+def expat(src, folder, prefix, cc, env, cflags):
+    """Expat's library sources (lib/Makefile.am) with the configure defaults
+    (XML_DTD, XML_GE, XML_NS, 1024 context bytes); hash salt from
+    getentropy (CiukiOS call, f6-16), expat's own fallback if unavailable."""
+    folder.mkdir(parents=True, exist_ok=True)
+    version = version_of(src)
+    (folder / "expat_config.h").write_text("\n".join([
+        "#ifndef EXPAT_CONFIG_H", "#define EXPAT_CONFIG_H 1", "#define BYTEORDER 1234", "#define HAVE_GETENTROPY 1",
+        "#define HAVE_FCNTL_H 1", "#define HAVE_INTTYPES_H 1", "#define HAVE_STDINT_H 1", "#define HAVE_STDIO_H 1",
+        "#define HAVE_STDLIB_H 1", "#define HAVE_STRINGS_H 1", "#define HAVE_STRING_H 1", "#define HAVE_SYS_STAT_H 1",
+        "#define HAVE_SYS_TYPES_H 1", "#define HAVE_UNISTD_H 1", '#define PACKAGE "expat"',
+        '#define PACKAGE_BUGREPORT "https://github.com/libexpat/libexpat/issues"', '#define PACKAGE_NAME "expat"',
+        f'#define PACKAGE_STRING "expat {version}"', '#define PACKAGE_TARNAME "expat"', '#define PACKAGE_URL ""',
+        f'#define PACKAGE_VERSION "{version}"', "#define STDC_HEADERS 1", f'#define VERSION "{version}"',
+        "#define XML_CONTEXT_BYTES 1024", "#define XML_DTD 1", "#define XML_GE 1", "#define XML_NS 1", "#endif", ""]))
+    files = [src / "lib" / (n + ".c") for n in ("xcs", "xmlparse", "xmltok", "xmlrole", "random_getentropy")]
+    static_archive("expat", files, folder, prefix, cc, env, cflags, ["-DXML_STATIC"], [folder, src / "lib"])
+    for name in ("expat.h", "expat_external.h"):
+        shutil.copy2(src / "lib" / name, prefix / "include" / name)
+    pkgconfig(prefix, "expat", version, "-lexpat", "expat XML parser")
+
+
+def libwebp(src, folder, prefix, cc, env, cflags):
+    """The decoder library (makefile.unix LIBWEBPDECODER_OBJS); single
+    threaded (no WEBP_USE_THREAD), SIMD only where the compiler targets it."""
+    folder.mkdir(parents=True, exist_ok=True)
+    make = (src / "makefile.unix").read_text()
+    files = []
+    for group in ("DEC_OBJS", "DSP_DEC_OBJS", "UTILS_DEC_OBJS"):
+        block = make.split("\n" + group + " = \\\n", 1)[1].split("\n\n", 1)[0]
+        files += [src / name.rstrip("\\").strip().replace(".o", ".c") for name in block.split("\n") if name.strip(" \\")]
+    static_archive("webp", files, folder, prefix, cc, env, cflags, [], [src, src / "src"])
+    (prefix / "include/webp").mkdir(parents=True, exist_ok=True)
+    for name in ("decode.h", "types.h"):
+        shutil.copy2(src / "src/webp" / name, prefix / "include/webp" / name)
+    pkgconfig(prefix, "libwebp", version_of(src), "-lwebp", "Library for the WebP graphics format")
+
+
+def codecs(src, folder, prefix, cc, env, cflags, host):
+    """fx-24: image libraries for NetSurf's PNG, JPEG, WebP and SVG handlers."""
+    libpng(src["libpng"], folder / "png", prefix, cc, env, cflags)
+    libjpeg(src["libjpeg"], folder / "jpeg", prefix, cc, env, cflags, host)
+    expat(src["expat"], folder / "expat", prefix, cc, env, cflags)
+    libwebp(src["libwebp"], folder / "webp", prefix, cc, env, cflags)
+
+
 TEST_CA=ROOT / "tests/suites/fixtures/f6-browser/ca.pem"   # f6-18 test-profile anchor, gated by the f6:browser selector
 def anchors(folder, host_prefix, destination, env, bundle=None, prefix=None):
     if bundle is None:
@@ -192,6 +335,28 @@ def prepare(folder, src):
 }
 '''
     (lookup / "autogenerated-element-type.c").write_text(text)
+    # fx-24: libsvgtiny's named colours, the same lookup without host gperf
+    # (src/Makefile: gperf output made static; exact, case-sensitive keys).
+    table=(tree / "libsvgtiny/src/colors.gperf").read_text().split("%%")[1]
+    colours=sorted(tuple(part.strip() for part in line.split(",",1)) for line in table.splitlines() if "svgtiny_RGB" in line)
+    text='#include <string.h>\n#include "svgtiny.h"\n#include "svgtiny_internal.h"\n'
+    text+="static const struct svgtiny_named_color svgtiny_color_words[] = {\n"
+    text+="".join('{"'+name+'",'+value+'},\n' for name,value in colours)+"};\n"
+    text+='''static const struct svgtiny_named_color *svgtiny_color_lookup(const char *s, size_t n)
+{
+    size_t lo=0, hi=sizeof(svgtiny_color_words)/sizeof(svgtiny_color_words[0]);
+    while (lo<hi) {
+        size_t mid=lo+(hi-lo)/2;
+        const char *key=svgtiny_color_words[mid].name;
+        int cmp=strncmp(s,key,n);
+        if (!cmp) cmp=key[n] ? -1 : 0;
+        if (!cmp) return &svgtiny_color_words[mid];
+        if (cmp<0) hi=mid; else lo=mid+1;
+    }
+    return NULL;
+}
+'''
+    (tree / "libsvgtiny/src/autogenerated_colors.c").write_text(text)
     generate_images(tree)
     return tree
 
@@ -262,6 +427,7 @@ def build(host=False, clean=False, directory=None):
     cflags = flags(folder)
     host_header=["-include",str(ROOT / "tests/host/desktop/replay_base.h")] if host else []
     zlib(src["zlib"], folder / "zlib", prefix, cc, env, cflags)
+    codecs(src, folder, prefix, cc, env, cflags, host)
     # Pinned host libraries for the release's image/message generators.
     hp = folder / "host-prefix"
     zlib(src["zlib"], folder / "host-zlib", hp, shutil.which("clang"), env, flags(folder))
@@ -296,7 +462,7 @@ def build(host=False, clean=False, directory=None):
               "HOST=" + ("x86_64-unknown-linux-gnu" if host else "i686-unknown-elf"),
               "PREFIX=" + str(prefix), "NSSHARED=" + str(tree / "buildsystem"), "PKGCONFIG=pkg-config",
               "PKG_CONFIG=pkg-config", "BUILD_CC=clang", "COMPONENT_TYPE=lib-static", "toolchain=clang",
-              "WITH_LIBXML_BINDING=no", "WITH_EXPAT_BINDING=no", "WITH_HUBBUB_BINDING=yes",
+              "WITH_LIBXML_BINDING=no", "WITH_EXPAT_BINDING=yes", "WITH_HUBBUB_BINDING=yes",
               "NSFB_SDL_AVAILABLE=no", "NSFB_XCB_AVAILABLE=no", "NSFB_VNC_AVAILABLE=no", "NSFB_WLD_AVAILABLE=no"]
     env["CFLAGS"] = " ".join([*cflags, "-DWITHOUT_ICONV_FILTER", "-I" + str(prefix / "include"),
                                 "-DCIUKI_NETSURF", "-D__ciuki__", "-I" + str(ROOT), "-I" + str(adapter_headers)])
@@ -362,8 +528,15 @@ def build(host=False, clean=False, directory=None):
     shutil.copy2(ROOT / "third_party/cacert/README.md",notices / "CACERT-SOURCE.txt")
     shutil.copy2(ROOT / "third_party/cacert/CACERT.PEM",resource / "CACERT.PEM")
     (notices / "netsurf-trust.json").write_text(json.dumps(trust,indent=2,sort_keys=True)+"\n")
-    shutil.copy2(src["libpng"] / "LICENSE", notices / "libpng.txt")
+    shutil.copy2(src["libpng"] / "LICENSE", notices / "libpng-host.txt")
     shutil.copy2(ROOT / "third_party/stb/LICENSE", notices / "stb_image.txt")
+    # fx-24 image libraries linked into the browser.
+    shutil.copy2(src["libpng"] / "LICENSE", notices / "libpng.txt")
+    shutil.copy2(src["libjpeg"] / "LICENSE.md", notices / "libjpeg-turbo.txt")
+    shutil.copy2(src["libjpeg"] / "README.ijg", notices / "libjpeg-turbo-README.ijg.txt")
+    shutil.copy2(src["expat"] / "COPYING", notices / "expat.txt")
+    shutil.copy2(src["libwebp"] / "COPYING", notices / "libwebp.txt")
+    shutil.copy2(src["libwebp"] / "PATENTS", notices / "libwebp-PATENTS.txt")
     for name in ("COPYING.NEWLIB","SDK-MIT.txt","FreeType-FTL.txt","FreeType-LICENSE.txt","FreeType-NOTICE.txt"):
         shutil.copy2(SDK / "licenses" / name,notices / name)
     shutil.copy2(ROOT / "assets/fonts/liberation/LICENSE",notices / "Liberation.txt")

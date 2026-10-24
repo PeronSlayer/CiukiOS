@@ -20,6 +20,88 @@ _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,launch.reserved[3])
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,launch.reserved[4])==100,"launch second joystick generation");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,launch.reserved[5])==104,"launch joystick mode");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,launch.reserved[6])==108,"launch joystick session");
+#include "../../sdk/win32/include/w32/clipboard_formats.h"
+_Static_assert(CF_TEXT==1u,"G5 Win32 CF_TEXT");
+_Static_assert(CF_BITMAP==2u,"G5 Win32 CF_BITMAP");
+_Static_assert(CF_METAFILEPICT==3u,"G5 Win32 CF_METAFILEPICT");
+_Static_assert(CF_OEMTEXT==7u,"G5 Win32 CF_OEMTEXT");
+_Static_assert(CF_DIB==8u,"G5 Win32 CF_DIB");
+_Static_assert(CF_PALETTE==9u,"G5 Win32 CF_PALETTE");
+_Static_assert(CF_UNICODETEXT==13u,"G5 Win32 CF_UNICODETEXT");
+_Static_assert(CF_ENHMETAFILE==14u,"G5 Win32 CF_ENHMETAFILE");
+_Static_assert(CF_HDROP==15u,"G5 Win32 CF_HDROP");
+_Static_assert(CF_LOCALE==16u,"G5 Win32 CF_LOCALE");
+_Static_assert(CF_DIBV5==17u,"G5 Win32 CF_DIBV5");
+_Static_assert(WM_RENDERFORMAT==773u,"G5 Win32 WM_RENDERFORMAT");
+_Static_assert(WM_RENDERALLFORMATS==774u,"G5 Win32 WM_RENDERALLFORMATS");
+/* G5: append after G3; the byte protocol is independent of pointer width. */
+_Static_assert(DESK_CLIPBOARD==52u,"G5 DESK_CLIPBOARD");
+_Static_assert(DESK_CLIPBOARD_EVENT==53u,"G5 DESK_CLIPBOARD_EVENT");
+_Static_assert(DESK_DOS_CLIPBOARD==54u,"G5 DESK_DOS_CLIPBOARD");
+_Static_assert(DESK_V3_CLIPBOARD==80u,"G5 DESK_V3_CLIPBOARD");
+_Static_assert(DESK_V3_CLIPBOARD_EVENT==81u,"G5 DESK_V3_CLIPBOARD_EVENT");
+_Static_assert(DESK_CLIP_QUERY==1u,"G5 DESK_CLIP_QUERY");
+_Static_assert(DESK_CLIP_EMPTY==2u,"G5 DESK_CLIP_EMPTY");
+_Static_assert(DESK_CLIP_PUT==3u,"G5 DESK_CLIP_PUT");
+_Static_assert(DESK_CLIP_CLOSE==4u,"G5 DESK_CLIP_CLOSE");
+_Static_assert(DESK_CLIP_GET==5u,"G5 DESK_CLIP_GET");
+_Static_assert(DESK_CLIP_WATCH==6u,"G5 DESK_CLIP_WATCH");
+_Static_assert(DESK_CLIP_REGISTER==7u,"G5 DESK_CLIP_REGISTER");
+_Static_assert(DESK_CLIP_NAME==8u,"G5 DESK_CLIP_NAME");
+_Static_assert(DESK_CLIP_OPEN==9u,"G5 DESK_CLIP_OPEN");
+_Static_assert(DESK_CLIP_RELEASE==10u,"G5 DESK_CLIP_RELEASE");
+_Static_assert(DESK_CLIP_REPLY==1u,"G5 DESK_CLIP_REPLY");
+_Static_assert(DESK_CLIP_RENDER==2u,"G5 DESK_CLIP_RENDER");
+_Static_assert(DESK_CLIP_CHANGED==3u,"G5 DESK_CLIP_CHANGED");
+_Static_assert(DESK_CLIP_DESTROY==4u,"G5 DESK_CLIP_DESTROY");
+_Static_assert(DESK_CLIP_DELAYED==1u,"G5 DESK_CLIP_DELAYED");
+_Static_assert(DESK_CLIP_RENDERED==2u,"G5 DESK_CLIP_RENDERED");
+_Static_assert(DESK_CLIP_OWNER==1u,"G5 DESK_CLIP_OWNER");
+_Static_assert(DESK_CLIP_MINE==2u,"G5 DESK_CLIP_MINE");
+_Static_assert(DESK_CLIP_NAME_MAX==127u,"G5 DESK_CLIP_NAME_MAX");
+_Static_assert(DESK_CLIP_LIST_MAX==48u,"G5 DESK_CLIP_LIST_MAX");
+_Static_assert(DESK_CLIP_FORMATS_MAX==32u,"G5 DESK_CLIP_FORMATS_MAX");
+_Static_assert(DESK_CLIP_NAMES_MAX==256u,"G5 DESK_CLIP_NAMES_MAX");
+_Static_assert(DESK_CLIP_ITEM_MAX==16777216u,"G5 DESK_CLIP_ITEM_MAX");
+_Static_assert(DESK_CLIP_BYTES_MAX==16777216u,"G5 DESK_CLIP_BYTES_MAX");
+_Static_assert(DESK_CLIP_RENDER_NS==2000000000u,"G5 DESK_CLIP_RENDER_NS");
+_Static_assert(DESK_CF_TEXT==1u,"G5 DESK_CF_TEXT");
+_Static_assert(DESK_CF_BITMAP==2u,"G5 DESK_CF_BITMAP");
+_Static_assert(DESK_CF_METAFILEPICT==3u,"G5 DESK_CF_METAFILEPICT");
+_Static_assert(DESK_CF_SYLK==4u,"G5 DESK_CF_SYLK");
+_Static_assert(DESK_CF_DIF==5u,"G5 DESK_CF_DIF");
+_Static_assert(DESK_CF_TIFF==6u,"G5 DESK_CF_TIFF");
+_Static_assert(DESK_CF_OEMTEXT==7u,"G5 DESK_CF_OEMTEXT");
+_Static_assert(DESK_CF_DIB==8u,"G5 DESK_CF_DIB");
+_Static_assert(DESK_CF_PALETTE==9u,"G5 DESK_CF_PALETTE");
+_Static_assert(DESK_CF_PENDATA==10u,"G5 DESK_CF_PENDATA");
+_Static_assert(DESK_CF_RIFF==11u,"G5 DESK_CF_RIFF");
+_Static_assert(DESK_CF_WAVE==12u,"G5 DESK_CF_WAVE");
+_Static_assert(DESK_CF_UNICODETEXT==13u,"G5 DESK_CF_UNICODETEXT");
+_Static_assert(DESK_CF_ENHMETAFILE==14u,"G5 DESK_CF_ENHMETAFILE");
+_Static_assert(DESK_CF_HDROP==15u,"G5 DESK_CF_HDROP");
+_Static_assert(DESK_CF_LOCALE==16u,"G5 DESK_CF_LOCALE");
+_Static_assert(DESK_CF_DIBV5==17u,"G5 DESK_CF_DIBV5");
+_Static_assert(DESK_CF_OWNERDISPLAY==128u,"G5 DESK_CF_OWNERDISPLAY");
+_Static_assert(DESK_CF_DSPTEXT==129u,"G5 DESK_CF_DSPTEXT");
+_Static_assert(DESK_CF_PRIVATEFIRST==512u,"G5 DESK_CF_PRIVATEFIRST");
+_Static_assert(DESK_CF_PRIVATELAST==767u,"G5 DESK_CF_PRIVATELAST");
+_Static_assert(DESK_CF_REGISTERED==49152u,"G5 DESK_CF_REGISTERED");
+_Static_assert(sizeof(DESK_CLIP_PREFERRED_DROPEFFECT)==21,"Preferred DropEffect name size");
+_Static_assert(sizeof(struct desk_clip_wire)==232 && _Alignof(struct desk_clip_wire)==4,"clipboard decoded record");
+_Static_assert(__builtin_offsetof(struct desk_clip_wire,serial)==0,"clipboard serial");
+_Static_assert(__builtin_offsetof(struct desk_clip_wire,op)==4,"clipboard op");
+_Static_assert(__builtin_offsetof(struct desk_clip_wire,kind)==8,"clipboard kind");
+_Static_assert(__builtin_offsetof(struct desk_clip_wire,format)==12,"clipboard format");
+_Static_assert(__builtin_offsetof(struct desk_clip_wire,flags)==16,"clipboard flags");
+_Static_assert(__builtin_offsetof(struct desk_clip_wire,bytes)==20,"clipboard bytes");
+_Static_assert(__builtin_offsetof(struct desk_clip_wire,token)==24,"clipboard token");
+_Static_assert(__builtin_offsetof(struct desk_clip_wire,sequence)==28,"clipboard sequence");
+_Static_assert(__builtin_offsetof(struct desk_clip_wire,count)==32,"clipboard count");
+_Static_assert(__builtin_offsetof(struct desk_clip_wire,result)==36,"clipboard result");
+_Static_assert(__builtin_offsetof(struct desk_clip_wire,formats)==40,"clipboard formats");
+_Static_assert(__builtin_offsetof(struct desk_clip_wire,name)==40,"clipboard name");
+_Static_assert(__builtin_offsetof(struct desk_packet,clipboard_fd)==__builtin_offsetof(struct desk_packet,clip)+232,"clipboard attachment slot");
 #include "../../sdk/libsetup/include/setup_txn.h"
 _Static_assert(SETUP_TXN_VERSION==2u,"Setup interface version");
 _Static_assert(SETUP_ERASED_MAX==16u,"Setup preview capacity");
@@ -1638,6 +1720,9 @@ static const struct expectation expectations[] = {
     {"constant.CIUKI_DOSVM_PRESENT_SCANLINES", (uint32_t)(CIUKI_DOSVM_PRESENT_SCANLINES), 1u},
     {"constant.CIUKI_DOSVM_FULLSCREEN", (uint32_t)(CIUKI_DOSVM_FULLSCREEN), 9u},
     {"constant.CIUKI_DOSVM_BACKGROUND", (uint32_t)(CIUKI_DOSVM_BACKGROUND), 10u},
+    {"constant.CIUKI_DOSVM_TEXT", CIUKI_DOSVM_TEXT, 18u},
+    {"constant.CIUKI_DOSVM_MARK", CIUKI_DOSVM_MARK, 19u},
+    {"constant.CIUKI_DOSVM_TEXT_MAX", CIUKI_DOSVM_TEXT_MAX, 16000u},
     {"constant.CIUKI_DOSVM_WAIT_PRESENT", CIUKI_DOSVM_WAIT_PRESENT, 11u},
     {"constant.CIUKI_DOSVM_GAME_QUERY", CIUKI_DOSVM_GAME_QUERY, 12u},
     {"constant.CIUKI_DOSVM_GAME_REMOVE", CIUKI_DOSVM_GAME_REMOVE, 13u},
@@ -1665,6 +1750,15 @@ static const struct expectation expectations[] = {
     {"constant.CIUKI_DOSVM_BOOTING", (uint32_t)(CIUKI_DOSVM_BOOTING), 0u},
     {"constant.CIUKI_DOSVM_RUNNING", (uint32_t)(CIUKI_DOSVM_RUNNING), 1u},
     {"constant.CIUKI_DOSVM_STOPPED", (uint32_t)(CIUKI_DOSVM_STOPPED), 2u},
+    {"sizeof.ciuki_dosvm_text", sizeof(struct ciuki_dosvm_text), 40u},
+    {"alignof.ciuki_dosvm_text", _Alignof(struct ciuki_dosvm_text), 4u},
+    {"offsetof.ciuki_dosvm_text.buffer", __builtin_offsetof(struct ciuki_dosvm_text,buffer), 0u},
+    {"offsetof.ciuki_dosvm_text.capacity", __builtin_offsetof(struct ciuki_dosvm_text,capacity), 4u},
+    {"offsetof.ciuki_dosvm_text.columns", __builtin_offsetof(struct ciuki_dosvm_text,columns), 8u},
+    {"offsetof.ciuki_dosvm_text.rows", __builtin_offsetof(struct ciuki_dosvm_text,rows), 12u},
+    {"offsetof.ciuki_dosvm_text.cell_height", __builtin_offsetof(struct ciuki_dosvm_text,cell_height), 16u},
+    {"offsetof.ciuki_dosvm_text.reserved", __builtin_offsetof(struct ciuki_dosvm_text,reserved), 20u},
+    {"offsetof.ciuki_dosvm_command.text", __builtin_offsetof(struct ciuki_dosvm_command,text), 72u},
     {"sizeof.ciuki_dosvm_command", sizeof(struct ciuki_dosvm_command), 136u},
     {"alignof.ciuki_dosvm_command", _Alignof(struct ciuki_dosvm_command), 4u},
     {"offsetof.ciuki_dosvm_command.version", __builtin_offsetof(struct ciuki_dosvm_command, version), 0u},
