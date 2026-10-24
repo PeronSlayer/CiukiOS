@@ -165,3 +165,21 @@ positions](https://learn.microsoft.com/en-us/windows/win32/menurc/about-menus#me
 Command identifiers remain associated with commands as menu positions change.
 Paint retains command-ID-based enablement for both the print and wallpaper
 providers, preserving the existing G31 menu layout without hard-coded offsets.
+
+## Visual audit fixes, group C (2026-10-24)
+
+Decisions from the owner's QEMU visual audit; each item targets Windows 98 layout quality, not Microsoft artwork.
+
+- **Music Player sliders.** Seek (0..1000) and Master volume (0..100) are `DU_TRACKBAR` widgets (as the Volume Control)
+  instead of arrow-button scrollbars; the seek/volume event semantics and tests are unchanged.
+- **Paint colour box.** The 28 swatches are the Windows 98 Paint default palette, now exact in the indexed palette:
+  black and white keep indices 79/80, the other 26 colours replace the last 26 icon-derived palette entries (118..143).
+  Values (R,G,B hex): 000000 808080 800000 808000 008000 008080 000080 800080 808040 004040 0080FF 004080 4000FF 804000 /
+  FFFFFF C0C0C0 FF0000 FFFF00 00FF00 00FFFF 0000FF FF00FF FFFF80 00FF80 80FFFF 8080FF FF0080 FF8040. Source: the old-style
+  (Windows 95/98) Paint default colour box as reproduced by open-source Paint reimplementations; all components are
+  multiples of 0x40 (0xFF), hence exact in the 6-bit palette. No Microsoft documentation lists the values.
+- **WordPad format bar.** Font and Size are editable combo boxes with drop-down lists (installed font names; sizes 8..72);
+  Enter applies a known font name or a size in points (half points allowed). Bold/Italic/Underline are drawn letters
+  (B bold face, I slanted, U underlined) with the Win98 dithered, sunken pressed state.
+- **Cards.** The suit pip sits on the rank's line (top-left), so overlapped cards (16 px visible) show rank and suit.
+- **Clock.** The "CiukiOS" caption on the dial is removed: the Windows 98 Clock face has none and it was unreadable under the hands.

@@ -8,11 +8,11 @@ static void layout(struct du_ui *u, void *ctx)
     (void)ctx; int w=u->canvas.width,h=u->canvas.height;
     du_get(u,M_TITLE)->box=(struct du_rect){12,28,w-24,20};
     du_get(u,M_TIME)->box=(struct du_rect){12,53,w-24,18};
-    du_get(u,M_SEEK)->box=(struct du_rect){12,77,w-24,18};
+    du_get(u,M_SEEK)->box=(struct du_rect){12,74,w-24,24};
     int ids[]={M_PREV,M_PLAY,M_PAUSE,M_STOP,M_NEXT};
     for (unsigned i=0;i<5;i++) du_get(u,ids[i])->box=(struct du_rect){12+(int)i*78,104,74,24};
     du_get(u,M_LEVEL)->box=(struct du_rect){12,139,110,18};
-    du_get(u,M_VOLUME)->box=(struct du_rect){130,139,w-142,18};
+    du_get(u,M_VOLUME)->box=(struct du_rect){130,136,w-142,24};
     du_get(u,M_LIST)->box=(struct du_rect){12,170,w-24,h-202};
     du_get(u,M_LIST)->columns[0].width=w-44;
     du_get(u,M_STATUS)->box=(struct du_rect){0,h-22,w,22};
@@ -37,11 +37,9 @@ static void text_changed(struct du_ui *u, int id, const char *text)
 }
 static int seek_pixel(const struct du_widget *w, int value)
 {
-    /* Match the horizontal scrollbar's track and minimum thumb geometry. */
-    int arrow=w->box.h; if (2*arrow>w->box.w) arrow=w->box.w/2;
-    int track=w->box.w-2*arrow, thumb=track*w->page/w->total;
-    if (thumb<8) thumb=track<8 ? track : 8;
-    return (track-thumb)*value/(w->total-w->page);
+    /* Thumb travel of the horizontal trackbar (box width less thumb and margins). */
+    int track=w->box.w-14; if (track<1) track=1;
+    return track*(value-w->lo)/(w->hi-w->lo);
 }
 void music_update(struct music_app *a, const struct music_snapshot *s)
 {
@@ -115,10 +113,10 @@ void music_attach(struct music_app *a, struct du_ui *u, const struct music_ui_ba
     a->menus[2]=(struct du_menu){"&Help",a->help_items,1}; u->menus=a->menus; u->menu_count=3;
     struct du_rect zero={0};
     du_add(u,DU_LABEL,M_TITLE,zero,""); du_add(u,DU_LABEL,M_TIME,zero,"");
-    struct du_widget *seek=du_add(u,DU_SCROLLBAR,M_SEEK,zero,""); seek->vertical=0; seek->total=1010; seek->page=10;
+    struct du_widget *seek=du_add(u,DU_TRACKBAR,M_SEEK,zero,""); du_trackbar_set(seek,0,1000,0,10,100,0);
     const char *labels[]={"< &Prev","&Play","Pa&use","&Stop","&Next >"}; int ids[]={M_PREV,M_PLAY,M_PAUSE,M_STOP,M_NEXT};
     for (unsigned i=0;i<5;i++) du_add(u,DU_BUTTON,ids[i],zero,labels[i]);
-    du_add(u,DU_LABEL,M_LEVEL,zero,""); struct du_widget *v=du_add(u,DU_SCROLLBAR,M_VOLUME,zero,""); v->vertical=0; v->total=110; v->page=10;
+    du_add(u,DU_LABEL,M_LEVEL,zero,""); struct du_widget *v=du_add(u,DU_TRACKBAR,M_VOLUME,zero,""); du_trackbar_set(v,0,100,0,2,10,0);
     struct du_widget *list=du_add(u,DU_LISTVIEW,M_LIST,zero,""); list->view=DU_DETAILS; list->inactive_selection=1;
     list->column_count=1; list->columns[0]=(struct du_column){"Playlist",360,0};
     du_add(u,DU_STATUS,M_STATUS,zero,""); layout(u,a); music_update(a,&a->snapshot); volume(a); u->focus=-1;

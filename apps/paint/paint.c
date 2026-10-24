@@ -122,31 +122,31 @@ static u8 nearest(int r, int g, int b)
     return (u8)bi;
 }
 
-/* The colour box: 28 swatches, the nearest indices to these colours. */
+/* The colour box: the Windows 98 Paint default 28-colour palette (6-bit RGB; 0x80 = 32, 0xC0 = 48,
+ * 0x40 = 16, 0xFF = 63, so every entry is exact). Row 1 is the 16-colour VGA set's dark half plus six
+ * extras, row 2 its bright half plus six; see docs/design/accessories-visual-audit.md for the source. */
 #define NSWATCH 28
 static const u8 swatch_rgb[NSWATCH * 3] = {
-    0, 0, 0,   30, 30, 30,  34, 6, 6,    34, 26, 10,  10, 28, 14,  8, 24, 24,  10, 14, 32,
-    30, 18, 38, 16, 24, 40,  22, 24, 8,   42, 26, 12,  46, 20, 12,  36, 28, 20,  20, 24, 28,
-    63, 63, 63, 48, 48, 48,  50, 12, 12,  60, 50, 22,  22, 42, 26,  26, 44, 44,  28, 40, 56,
-    44, 34, 48, 40, 50, 50,  52, 28, 26,  60, 48, 32,  63, 60, 50,  46, 46, 34,  56, 56, 56 };
+    0, 0, 0,    32, 32, 32,  32, 0, 0,    32, 32, 0,   0, 32, 0,    0, 32, 32,  0, 0, 32,
+    32, 0, 32,  32, 32, 16,  0, 16, 16,   0, 32, 63,   0, 16, 32,   16, 0, 63,  32, 16, 0,
+    63, 63, 63, 48, 48, 48,  63, 0, 0,    63, 63, 0,   0, 63, 0,    0, 63, 63,  0, 0, 63,
+    63, 0, 63,  63, 63, 32,  0, 63, 32,   32, 63, 63,  32, 32, 63,  63, 0, 32,  63, 32, 16 };
 static u8 swatch[NSWATCH];
 static u8 fg = BLACK, bg = WHITE;
+/* Palette index of swatch i: black and white keep BLACK and WHITE; the other 26 take the last 26
+ * entries of the picture palette (those icon-derived colours are replaced by the exact swatch colours). */
+static u8 swatch_index(int i)
+{
+    if (i == 0) return BLACK;
+    if (i == 14) return WHITE;
+    return (u8)(NCOL - 26 + i - 1 - (i > 14));
+}
 static void choose_swatches(void)
 {
-    int i, k;
+    int i;
     for (i = 0; i < NSWATCH; i++) {
-        u8 c = nearest(swatch_rgb[i * 3], swatch_rgb[i * 3 + 1], swatch_rgb[i * 3 + 2]);
-        for (k = 0; k < i; k++) if (swatch[k] == c) break;
-        if (k < i) {                            /* taken: the next closest */
-            u16 best = 0xFFFF, d;
-            int j;
-            for (j = 16; j < NCOL; j++) {
-                for (k = 0; k < i && swatch[k] != j; k++) ;
-                if (k < i) continue;
-                d = cdist(j, swatch_rgb[i * 3], swatch_rgb[i * 3 + 1], swatch_rgb[i * 3 + 2]);
-                if (d < best) { best = d; c = (u8)j; }
-            }
-        }
+        u8 c = swatch_index(i);
+        memcpy(pal + c * 3, swatch_rgb + i * 3, 3);
         swatch[i] = c;
     }
 }

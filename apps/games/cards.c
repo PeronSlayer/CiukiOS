@@ -83,8 +83,10 @@ void card_draw(struct du_canvas *c, int x, int y, card_t card, int selected)
     uint32_t ink = CARD_RED(card) ? 0xc00000u : 0x000000u;
     body(c, x, y, selected ? 0x8080ffu : 0xffffffu);
     const char *rank = card_rank_name(CARD_RANK(card));
+    int rw = du_text_width(rank);
     du_text(c, x + 4, y + 3, rank, ink);
-    card_draw_suit(c, x + 8, y + 22, 4, CARD_SUIT(card), ink);
+    /* The pip sits on the rank's line so an overlapped card (16 px visible) still shows rank and suit. */
+    card_draw_suit(c, x + 4 + rw + 6, y + 9, 4, CARD_SUIT(card), ink);
     card_draw_suit(c, x + CARD_W / 2, y + CARD_H / 2 + 6, 10, CARD_SUIT(card), ink);
     int w = du_text_width(rank);
     du_text(c, x + CARD_W - 4 - w, y + CARD_H - 14, rank, ink);

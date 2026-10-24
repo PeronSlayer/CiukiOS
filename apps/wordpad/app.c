@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include "../desktop/tz_env.h"
 
 enum { K_N = 0x31, K_O = 0x18, K_S = 0x1f, K_P = 0x19, K_Z = 0x2c, K_Y = 0x15, K_X = 0x2d, K_C = 0x2e, K_V = 0x2f,
@@ -32,6 +33,7 @@ static const char *const yes_no_cancel[] = {"&Yes", "&No", "Cancel"};
 static const char *const yes_no[] = {"&Yes", "&No"};
 static const char *const color_names[] = {"Automatic", "Black", "Maroon", "Green", "Olive", "Navy", "Purple", "Teal", "Gray",
                                           "Silver", "Red", "Lime", "Yellow", "Blue", "Fuchsia", "Aqua", "White"};
+static char size_names[16][6];
 static const unsigned sizes_hp[] = {16, 18, 20, 22, 24, 28, 32, 36, 40, 44, 48, 52, 56, 72, 96, 144};   /* 8..72 pt */
 static const int zoom_steps[] = {25, 35, 50, 70, 100, 140};
 
@@ -180,8 +182,21 @@ static void format_state(struct wp_app *a)
     if (a->cmix.size > 0) snprintf(a->size_label, sizeof(a->size_label), "%d%s", a->cmix.size / 2, a->cmix.size & 1 ? ".5" : "");
     else a->size_label[0] = 0;
     struct du_widget *f = W(a, W_FONTBTN), *s = W(a, W_SIZEBTN);
-    if (f && strcmp(f->text, a->font_label)) { du_set_text(f, a->font_label); du_invalidate(a->ui, f->box); }
-    if (s && strcmp(s->text, a->size_label)) { du_set_text(s, a->size_label); du_invalidate(a->ui, s->box); }
+    for (unsigned i = 0; i < a->doc.nfonts; i++) a->font_items[i] = (struct du_item){.text = {a->doc.fonts[i].name}};
+    unsigned nsizes = sizeof(sizes_hp) / sizeof(*sizes_hp);
+    for (unsigned i = 0; i < nsizes; i++) {
+        snprintf(size_names[i], sizeof(size_names[i]), "%u", sizes_hp[i] / 2);
+        a->size_items[i] = (struct du_item){.text = {size_names[i]}};
+    }
+    int size_index = -1;
+    for (unsigned i = 0; i < nsizes; i++) if (a->cmix.size == (int)sizes_hp[i]) size_index = (int)i;
+    /* A box the user is typing in keeps its text until Enter or Escape. */
+    int f_busy = f && a->ui->focus >= 0 && a->ui->focus < (int)a->ui->count && &a->ui->widgets[a->ui->focus] == f;
+    int s_busy = s && a->ui->focus >= 0 && a->ui->focus < (int)a->ui->count && &a->ui->widgets[a->ui->focus] == s;
+    if (f) { f->items = a->font_items; f->count = a->doc.nfonts; f->value = a->cmix.font >= 0 && (unsigned)a->cmix.font < a->doc.nfonts ? a->cmix.font : -1; }
+    if (s) { s->items = a->size_items; s->count = nsizes; s->value = size_index; }
+    if (f && !f_busy && strcmp(f->text, a->font_label)) { du_set_text(f, a->font_label); du_invalidate(a->ui, f->box); }
+    if (s && !s_busy && strcmp(s->text, a->size_label)) { du_set_text(s, a->size_label); du_invalidate(a->ui, s->box); }
 }
 
 void wp_refresh(struct wp_app *a)
@@ -839,6 +854,27 @@ static void paint_preview(struct wp_app *a, struct du_canvas *c)
     }
 }
 
+/* The B, I and U of the format bar: bold face, slanted regular face, underlined regular face. */
+static void draw_style_letter(struct du_canvas *c, const struct du_widget *w, unsigned which, int down)
+{
+    static const char *const letters[3] = {"B", "I", "U"};
+    int font = which == 0 ? DESK_FONT_BOLD : desk_theme->font_ui, off = down ? 1 : 0;
+    int tw = du_text_width_font(font, letters[which]);
+    int x = w->box.x + (w->box.w - tw) / 2 + off, y = w->box.y + (w->box.h - DU_GLYPH_H) / 2 + off;
+    uint32_t ink = DU_INK;
+    struct du_rect keep = c->clip;
+    if (which == 1) {   /* slant: each 3-pixel band of rows moves one pixel right going up */
+        int bands = (DU_GLYPH_H + 2) / 3;
+        for (int k = 0; k < bands; k++) {
+            struct du_rect band = {w->box.x, y + k * 3, w->box.w, 3};
+            c->clip = du_intersection(keep, band);
+            du_text_font(c, font, x + (bands - 1 - k) * 1 - bands / 2, y, letters[which], ink);
+        }
+        c->clip = keep;
+    } else du_text_font(c, font, x, y, letters[which], ink);
+    if (which == 2) du_fill(c, (struct du_rect){x, y + DU_GLYPH_H + 1, tw, 1}, ink);
+}
+
 static void paint_hook(struct du_ui *u, void *user)
 {
     struct wp_app *a = user;
@@ -847,12 +883,24 @@ static void paint_hook(struct du_ui *u, void *user)
     paint_ruler(a, c);
     /* Pressed look of the toggled format buttons. */
     if (a->preview || !a->show_format) return;
+    struct du_rect keep_clip = c->clip;
     struct { int id, on; } tog[] = {{M_BOLD, a->cmix.bold == 1}, {M_ITALIC, a->cmix.italic == 1}, {M_UNDERLINE, a->cmix.underline == 1},
         {M_LEFT, a->pmix.align == WP_LEFT}, {M_CENTER, a->pmix.align == WP_CENTER}, {M_RIGHT, a->pmix.align == WP_RIGHT}, {M_BULLET, a->pmix.bullet == 1}};
     for (unsigned i = 0; i < sizeof(tog) / sizeof(*tog); i++) {
         struct du_widget *w = W(a, tog[i].id);
-        if (w && tog[i].on && !w->hidden) du_edge(c, w->box, DU_SUNKEN_THIN);
+        if (!w || w->hidden) continue;
+        c->clip = keep_clip;
+        int letter = i < 3, down = w->pressed && w->hot && !w->disabled;
+        if (tog[i].on || (letter && down)) {
+            /* Win98 toggle: dithered face and a sunken edge while the format is on. */
+            c->clip = du_intersection(c->clip, w->box);
+            if (letter) for (int y = w->box.y + 1; y < w->box.y + w->box.h - 1; y++)
+                for (int x = w->box.x + 1 + (y & 1); x < w->box.x + w->box.w - 1; x += 2) du_fill(c, (struct du_rect){x, y, 1, 1}, DU_LIGHT);
+            du_edge(c, w->box, DU_SUNKEN_THIN);
+        }
+        if (letter) draw_style_letter(c, w, i, down || tog[i].on);
     }
+    c->clip = keep_clip;
 }
 
 /* ---- layout of the window ----------------------------------------------------------------------- */
@@ -884,7 +932,7 @@ void wp_layout_ui(struct wp_app *a)
     struct du_widget *fb = W(a, W_FORMATBAR);
     int show_fb = a->show_format && !preview;
     fb->hidden = !show_fb; fb->box = (struct du_rect){0, y, w, FORMATBAR_H};
-    static const struct { int id, width; } fbar[] = {{W_FONTBTN, 150}, {W_SIZEBTN, 46}, {W_COLORBTN, 24}, {W_SEP1 + 10, 0}, {M_BOLD, 26},
+    static const struct { int id, width; } fbar[] = {{W_FONTBTN, 150}, {W_SIZEBTN, 52}, {W_COLORBTN, 24}, {W_SEP1 + 10, 0}, {M_BOLD, 26},
         {M_ITALIC, 26}, {M_UNDERLINE, 26}, {W_SEP1 + 11, 0}, {M_LEFT, 26}, {M_CENTER, 26}, {M_RIGHT, 26}, {M_BULLET, 26}};
     x = 6;
     for (unsigned i = 0; i < sizeof(fbar) / sizeof(*fbar); i++) {
@@ -1479,7 +1527,6 @@ static void tabs_dialog(struct wp_app *a)
 }
 
 /* The shared Font dialog paints its sample with WordPad's real font backend. */
-static char size_names[16][6];
 static void font_sample(struct du_canvas *cv, struct du_rect r, const struct du_font_choice *c, void *ctx)
 {
     struct wp_app *a = ctx;
@@ -2340,6 +2387,25 @@ static void handle_ruler_pointer(struct wp_app *a, const struct du_event *e)
     if (e->index == DU_POINTER_UP) a->rdrag.active = 0;
 }
 
+/* Enter in the editable font or size box: a known font name or a size in points (half points allowed) is applied;
+ * anything else restores the box from the selection. */
+static void format_combo_commit(struct wp_app *a, int id)
+{
+    struct du_widget *w = W(a, id);
+    if (!w) return;
+    if (id == W_FONTBTN) {
+        for (unsigned i = 0; i < a->doc.nfonts; i++)
+            if (!strcasecmp(a->doc.fonts[i].name, w->text)) { struct wp_cstyle st = {(int)i, 0, -1, 0, 0}; apply_chars(a, &st); return; }
+    } else {
+        const char *p = w->text; int whole = 0, digits = 0, half = 0;
+        while (*p >= '0' && *p <= '9' && digits < 4) { whole = whole * 10 + (*p++ - '0'); digits++; }
+        if (digits && p[0] == '.' && (p[1] == '5' || p[1] == '0') && !p[2]) { half = p[1] == '5'; p += 2; }
+        int hp = whole * 2 + half;
+        if (digits && !*p && hp >= WP_SIZE_MIN && hp <= WP_SIZE_MAX) { struct wp_cstyle st = {-1, hp, -1, 0, 0}; apply_chars(a, &st); return; }
+    }
+    w->text[0] = 0;   /* refreshed from the selection by format_state */
+}
+
 void wp_event(struct du_ui *u, const struct du_event *e, void *ctx)
 {
     struct wp_app *a = ctx; int id = e->id;
@@ -2361,7 +2427,14 @@ void wp_event(struct du_ui *u, const struct du_event *e, void *ctx)
             int x, y, h; caret_xy(a, a->cursor, &x, &y, &h);
             du_invalidate(u, du_intersection(a->doc_box, (struct du_rect){a->doc_box.x + PAD - a->left + x - 1, a->doc_box.y - a->top + y, 3, h})); } }
         return;
+    case DU_EV_SELECT:
+        if (id == W_FONTBTN && e->index >= 0 && (unsigned)e->index < a->doc.nfonts) { struct wp_cstyle st = {e->index, 0, -1, 0, 0}; apply_chars(a, &st); }
+        else if (id == W_SIZEBTN && e->index >= 0 && (unsigned)e->index < sizeof(sizes_hp) / sizeof(*sizes_hp)) { struct wp_cstyle st = {-1, (int)sizes_hp[e->index], -1, 0, 0}; apply_chars(a, &st); }
+        else return;
+        du_focus(u, W_DOC);
+        break;
     case DU_EV_COMMIT:
+        if (id == W_FONTBTN || id == W_SIZEBTN) { format_combo_commit(a, id); du_focus(u, W_DOC); break; }
         if (id == W_FIND) find_next(a);
         else if (id == W_REPL) replace_one(a);
         return;
@@ -2387,7 +2460,7 @@ static void add_tool(struct wp_app *a, int id, const char *object, unsigned size
 {
     struct du_widget *b = du_add(a->ui, DU_TOOLBUTTON, id, (struct du_rect){0}, "");
     if (!b) return;
-    b->icon = icon(object, size); b->icon_size = (int)size; b->dropdown = dropdown;
+    b->icon = object ? icon(object, size) : NULL; b->icon_size = (int)size; b->dropdown = dropdown;
     du_set_tip(b, tip); b->help = help;   /* G15: the tooltip and the What's This? text */
     if (!b->icon) b->icon_size = 0;
 }
@@ -2425,12 +2498,14 @@ int wp_attach(struct wp_app *a, struct du_ui *u)
         } else du_add(u, DU_SEPARATOR, toolbar_buttons[i].id, zero, "");
     }
     du_add(u, DU_TOOLBAR, W_FORMATBAR, zero, "");
-    struct du_widget *f = du_add(u, DU_BUTTON, W_FONTBTN, zero, ""); if (f) { f->dropdown = 0; du_set_tip(f, "Font"); f->help = "Changes the font of the selected text."; }
-    struct du_widget *sz = du_add(u, DU_BUTTON, W_SIZEBTN, zero, ""); if (sz) { du_set_tip(sz, "Font Size"); sz->help = "Changes the size of the selected text."; }
+    /* Win98 WordPad: the font name and size are editable combo boxes with drop-down lists. */
+    struct du_widget *f = du_add(u, DU_COMBO, W_FONTBTN, zero, ""); if (f) { f->editable = 1; du_set_tip(f, "Font"); f->help = "Changes the font of the selected text."; }
+    struct du_widget *sz = du_add(u, DU_COMBO, W_SIZEBTN, zero, ""); if (sz) { sz->editable = 1; du_set_tip(sz, "Font Size"); sz->help = "Changes the size of the selected text."; }
     add_tool(a, W_COLORBTN, "preferences-desktop-theme", 22, 0, "Color", "Changes the color of the selected text.");
     du_add(u, DU_SEPARATOR, W_SEP1 + 10, zero, ""); du_add(u, DU_SEPARATOR, W_SEP1 + 11, zero, "");
-    add_tool(a, M_BOLD, "action:bold", 22, 0, "Bold", "Makes the selected text bold, or turns bold off."); add_tool(a, M_ITALIC, "action:italic", 22, 0, "Italic", "Makes the selected text italic, or turns italic off.");
-    add_tool(a, M_UNDERLINE, "action:underline", 22, 0, "Underline", "Underlines the selected text, or removes the underline.");
+    /* B, I and U are drawn as letters by paint_hook (bold, slanted, underlined), not as an icon. */
+    add_tool(a, M_BOLD, NULL, 22, 0, "Bold", "Makes the selected text bold, or turns bold off."); add_tool(a, M_ITALIC, NULL, 22, 0, "Italic", "Makes the selected text italic, or turns italic off.");
+    add_tool(a, M_UNDERLINE, NULL, 22, 0, "Underline", "Underlines the selected text, or removes the underline.");
     add_tool(a, M_LEFT, "action:align-left", 22, 0, "Align Left", "Aligns the paragraph with the left margin."); add_tool(a, M_CENTER, "action:align-center", 22, 0, "Center", "Centers the paragraph between the margins.");
     add_tool(a, M_RIGHT, "action:align-right", 22, 0, "Align Right", "Aligns the paragraph with the right margin.");
     add_tool(a, M_BULLET, "format-indent-more", 22, 0, "Bullets", "Starts or ends a bulleted list.");
