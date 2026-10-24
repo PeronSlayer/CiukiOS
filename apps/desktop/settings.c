@@ -13,6 +13,7 @@ const char *const cfg_keyboard_labels[CFG_KEYS_COUNT] = {"English (US)", "Italia
 void cfg_defaults(struct ciuki_settings *s)
 {
     memset(s, 0, sizeof(*s));
+    reg_defaults(&s->regional, 0);
     strcpy(s->theme, DESK_THEME_DEFAULT);
     strcpy(s->wallpaper, "/system/wallpapers/Ciuk2.png");   /* owner's Ciuk2 scene (assets/wallpapers/ciuki) */
     s->wallpaper_mode = CFG_WALL_FILL;     /* the adaptive scenes are made for a centred, aspect-preserving fill */
@@ -82,6 +83,8 @@ static void extra_add(struct ciuki_settings *s, const char *line)
 static int assign(struct ciuki_settings *s, const char *key, const char *v, int *recent_reset)
 {
     int n;
+    int regional = reg_assign(&s->regional, key, v);
+    if (regional >= 0) return regional;
     if (!strcmp(key, "version")) return number(v, 1, 1000, &n);
     if (!strcmp(key, "theme")) {
         const char *name = desk_theme_preference(v);
@@ -162,6 +165,7 @@ int cfg_parse(struct ciuki_settings *s, const char *text, size_t length)
             if (printable(kept)) extra_add(s, kept); else rejected++;
         } else if (!r) rejected++;
     }
+    reg_sanitize(&s->regional);
     return rejected;
 }
 
@@ -178,6 +182,15 @@ size_t cfg_format(const struct ciuki_settings *s, char *out, size_t size)
         cfg_keyboard_names[s->keyboard >= 0 && s->keyboard < CFG_KEYS_COUNT ? s->keyboard : 0], (unsigned)s->display_mode);
     if (n <= 0 || (size_t)n >= size) return 0;
     size_t used = (size_t)n;
+    n = snprintf(out + used, size - used, "regional_locale=%s\n", reg_locale(&s->regional));
+    if (n <= 0 || (size_t)n >= size - used) return 0;
+    used += (size_t)n;
+    for (unsigned i = 0; i < REG_FIELDS; i++) {
+        const char *v=s->regional.value[i];
+        n = snprintf(out + used, size - used, "regional_%s=%s\n", reg_keys[i], reg_eq(v," ") ? "\\s" : v);
+        if (n <= 0 || (size_t)n >= size - used) return 0;
+        used += (size_t)n;
+    }
     for (unsigned i = 0; i < s->recent_count && i < CFG_RECENT_MAX; i++) {
         n = snprintf(out + used, size - used, "recent=%s\n", s->recent[i]);
         if (n <= 0 || (size_t)n >= size - used) return 0;

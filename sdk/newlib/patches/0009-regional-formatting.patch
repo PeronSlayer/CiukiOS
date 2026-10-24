@@ -1,0 +1,137 @@
+--- a/newlib/libc/locale/locale.c
++++ b/newlib/libc/locale/locale.c
+@@ -301,6 +301,10 @@
+        const char *locale)
+ {
+ #ifndef _MB_CAPABLE
++#ifdef __CIUKIOS__
++  extern char *__ciuki_setlocale_r (struct _reent *, int, const char *);
++  return __ciuki_setlocale_r (p, category, locale);
++#else
+   if (locale)
+     { 
+       if (strcmp (locale, "POSIX") && strcmp (locale, "C")
+@@ -308,6 +312,7 @@
+         return NULL;
+     }
+   return "C";
++#endif
+ #else /* _MB_CAPABLE */
+   static char new_categories[_LC_LAST][ENCODING_LEN + 1];
+   static char saved_categories[_LC_LAST][ENCODING_LEN + 1];
+--- a/newlib/libc/locale/setlocale.h
++++ b/newlib/libc/locale/setlocale.h
+@@ -364,25 +364,45 @@
+ _ELIDABLE_INLINE const struct lc_numeric_T *
+ __get_numeric_locale (struct __locale_t *locale)
+ {
++#ifdef __CIUKIOS__
++  extern const struct lc_numeric_T *__ciuki_numeric_locale (void);
++  return __ciuki_numeric_locale ();
++#else
+   return &_C_numeric_locale;
++#endif
+ }
+ 
+ _ELIDABLE_INLINE const struct lc_numeric_T *
+ __get_current_numeric_locale (void)
+ {
++#ifdef __CIUKIOS__
++  extern const struct lc_numeric_T *__ciuki_numeric_locale (void);
++  return __ciuki_numeric_locale ();
++#else
+   return &_C_numeric_locale;
++#endif
+ }
+ 
+ _ELIDABLE_INLINE const struct lc_time_T *
+ __get_time_locale (struct __locale_t *locale)
+ {
++#ifdef __CIUKIOS__
++  extern const struct lc_time_T *__ciuki_time_locale (void);
++  return __ciuki_time_locale ();
++#else
+   return &_C_time_locale;
++#endif
+ }
+ 
+ _ELIDABLE_INLINE const struct lc_time_T *
+ __get_current_time_locale (void)
+ {
++#ifdef __CIUKIOS__
++  extern const struct lc_time_T *__ciuki_time_locale (void);
++  return __ciuki_time_locale ();
++#else
+   return &_C_time_locale;
++#endif
+ }
+ 
+ _ELIDABLE_INLINE const struct lc_messages_T *
+--- a/newlib/libc/time/strftime.c
++++ b/newlib/libc/time/strftime.c
+@@ -715,6 +715,43 @@
+          slightly different semantics. */
+       if (*format == CQ('0') || *format == CQ('+'))
+ 	pad = *format++;
++
++#ifdef __CIUKIOS__
++      /* Regional pictures need unpadded Windows d/M/y/H/h/m/s fields.
++         Handle before writing so an exact-size output buffer also works. */
++      if (*format == CQ('-'))
++        {
++          int value;
++          switch (*++format)
++            {
++            case CQ('d'): value = tim_p->tm_mday; break;
++            case CQ('m'): value = tim_p->tm_mon + 1; break;
++            case CQ('y'): value = (tim_p->tm_year + 1900) % 100; break;
++            case CQ('H'): value = tim_p->tm_hour; break;
++            case CQ('I'): value = tim_p->tm_hour % 12;
++              if (!value) value = 12;
++              break;
++            case CQ('M'): value = tim_p->tm_min; break;
++            case CQ('S'): value = tim_p->tm_sec; break;
++            default: return 0;
++            }
++          len = snprintf (&s[count], maxsize - count, CQ("%d"), value);
++          CHECK_LENGTH ();
++          ++format;
++          continue;
++        }
++      if (*format == CQ('v'))
++        {
++          /* Private regional-picture conversion of a single Windows t. */
++          _ctloc (am_pm[tim_p->tm_hour < 12 ? 0 : 1]);
++          if (ctloclen) {
++            if (count >= maxsize - 1) return 0;
++            s[count++] = ctloc[0];
++          }
++          ++format;
++          continue;
++        }
++#endif
+ 
+       /* POSIX-1.2008 feature: A minimum field width can be specified. */
+       if (*format >= CQ('1') && *format <= CQ('9'))
+--- a/newlib/libc/stdlib/strtod.c
++++ b/newlib/libc/stdlib/strtod.c
+@@ -263,7 +263,7 @@
+ #ifdef Honor_FLT_ROUNDS
+ 	int rounding;
+ #endif
+-#ifdef __HAVE_LOCALE_INFO__
++#if defined(__HAVE_LOCALE_INFO__) || defined(__CIUKIOS__)
+ 	const char *decimal_point = __get_numeric_locale(loc)->decimal_point;
+ 	const int dec_len = strlen (decimal_point);
+ #else
+--- a/newlib/libc/stdlib/gdtoa-gethex.c
++++ b/newlib/libc/stdlib/gdtoa-gethex.c
+@@ -149,7 +149,7 @@
+ 	int esign, havedig, irv, k, n, nbits, up, zret;
+ 	__ULong L, lostbits, *x;
+ 	Long e, e1;
+-#ifdef __HAVE_LOCALE_INFO__
++#if defined(__HAVE_LOCALE_INFO__) || defined(__CIUKIOS__)
+ 	const unsigned char *decimalpoint = (const unsigned char *)
+ 				      __get_numeric_locale(loc)->decimal_point;
+ 	const size_t decp_len = strlen ((const char *) decimalpoint);

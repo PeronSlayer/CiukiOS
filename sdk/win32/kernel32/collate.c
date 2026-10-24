@@ -205,7 +205,7 @@ static DWORD sort_key(const WCHAR *w, const char *a, int count, DWORD flags,
 }
 static BOOL valid_locale(DWORD lcid) {
   DWORD l = ConvertDefaultLocale(lcid) & 0xffffu;
-  if (l == 0x0409u || l == 0x007fu)
+  if (l == 0x0409u || l == 0x0410u || l == 0x007fu)
     return 1;
   SetLastError(87);
   return 0;

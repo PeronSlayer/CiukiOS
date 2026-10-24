@@ -310,7 +310,8 @@ static int spawn_demo(struct desktop *d, const char *kind, int gate)
     char fault[48];
     snprintf(fault,sizeof(fault),"--fault=%s",kind);
     char *argv[] = {"demo","--channel-fd=3",fault,gate ? "--test=crash-isolation" : NULL,NULL};
-    char *env[] = {"LC_ALL=C",d->tz_env[0] ? d->tz_env : "TZ=UTC0",NULL};
+    char language[20]; snprintf(language,sizeof(language),"LANG=%s",reg_locale(&d->sh.cfg.regional));
+    char *env[] = {language,d->tz_env[0] ? d->tz_env : "TZ=UTC0",NULL};
     struct ciuki_spawn_fd mapping = {pair[1],3};
     int i = -1;
     ciuki_pid_t pid = -1;
@@ -397,7 +398,7 @@ struct launch_job {
     uint64_t click_ns, begin_ns, end_ns;
     struct desk_program program;
     char *argv[LAUNCH_ARGV], *env[8];
-    char strings[LAUNCH_STRINGS], display[40], keymap[24], tz[8 + CIUKI_TIME_RULE_MAX];
+    char strings[LAUNCH_STRINGS], display[40], keymap[24], tz[8 + CIUKI_TIME_RULE_MAX], language[20];
     struct ciuki_spawn_fd mapping[2];
     uint32_t mappings;
     int (*mark)(uint32_t, ciuki_pid_t, uint64_t);
@@ -505,7 +506,8 @@ static int launch_prepare(struct desktop *d, const struct desk_program *program,
     /* The Control Panel's keyboard layout, for libdeskui programs. */
     snprintf(job->keymap,sizeof(job->keymap),"CIUKI_KEYMAP=%s",cfg_keyboard_names[d->sh.cfg.keyboard==CFG_KEYS_IT ? CFG_KEYS_IT : CFG_KEYS_US]);
     snprintf(job->tz,sizeof(job->tz),"%s",d->tz_env[0] ? d->tz_env : "TZ=UTC0");
-    char *env[]={"LC_ALL=C",job->tz,"HOME=/Documents","TMPDIR=/tmp","PATH=/Programs",job->display,job->keymap,NULL};
+    snprintf(job->language,sizeof(job->language),"LANG=%s",reg_locale(&d->sh.cfg.regional));
+    char *env[]={job->language,job->tz,"HOME=/Documents","TMPDIR=/tmp","PATH=/Programs",job->display,job->keymap,NULL};
     memcpy(job->env,env,sizeof(env));
     job->mappings=tasks && d->authority_fd>=0 ? 2 : 1;
     job->mapping[1]=(struct ciuki_spawn_fd){d->authority_fd,4};

@@ -106,6 +106,9 @@ int main(void) {
     CHECK(fork()==-1&&errno==ENOSYS);CHECK(vfork()==-1&&errno==ENOSYS);CHECK(_Fork()==-1&&errno==ENOSYS);CHECK(execv("/bin/x",NULL)==-1&&errno==ENOSYS);
     CHECK(system(NULL)==0);CHECK(system("x")==-1&&errno==ENOSYS);CHECK(popen("x","r")==NULL&&errno==ENOSYS);
     CHECK(isatty(1)==0&&errno==ENOTTY);CHECK(isatty(-1)==0&&errno==EBADF);CHECK(setlocale(LC_ALL,"C")!=NULL);CHECK(setlocale(LC_ALL,"ciuki-invalid")==NULL);
+#ifdef CIUKI_LIBC_HOST_REGIONAL
+#include "regional_smoke.inc"
+#endif
     CHECK(sysconf(_SC_PAGESIZE)==CIUKI_PAGE_SIZE);CHECK(sysconf(-1)==-1&&errno==EINVAL);
     struct utsname u;CHECK(!uname(&u)&&!strcmp(u.sysname,"CiukiOS"));
     report("libc-smoke");return failures?1:0;

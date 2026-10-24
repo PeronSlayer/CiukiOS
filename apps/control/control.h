@@ -137,6 +137,10 @@ struct cp_host {
     const char *fonts_path;                                          /* trusted installed store; NULL = /System/fonts */
 };
 struct cp_app {
+    struct regional regional_edit;
+    struct du_item regional_tabs[5], regional_presets[2];
+    unsigned regional_tab;
+    int regional_saving, regional_accept;
     struct game_ports_settings game_ports;
     struct ciuki_joystick_control game_joystick;
     int game_open, game_busy, game_loaded, game_joy_ready, game_joy_dirty, game_save;

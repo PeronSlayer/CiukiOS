@@ -48,6 +48,18 @@ static uint32_t heap_end;
 struct host_file { char name[128];unsigned char data[65536];unsigned size,refs; };
 struct host_fd { int used,file;uint64_t position;unsigned flags,cookie; };
 static struct host_file files[8];
+/* G24: seed the modeled system file, including the original/read-only run.
+ * This touches only this harness's memory, never a host or guest file. */
+int ciuki_host_regional_file(const char *data)
+{
+    for(unsigned i=0;i<8;i++) if(!strcmp(files[i].name,"/system/settings/desktop.cfg") || (!files[i].name[0]&&!files[i].refs)) {
+        if(files[i].refs) return -1;
+        if(!data) { files[i].name[0]=0; files[i].size=0; return 0; }
+        strcpy(files[i].name,"/system/settings/desktop.cfg");
+        files[i].size=(unsigned)strlen(data); memcpy(files[i].data,data,files[i].size); return 0;
+    }
+    return -1;
+}
 static struct host_fd fds[128]={{1,-1,0,O_RDONLY,0},{1,-2,0,O_WRONLY,0},{1,-2,0,O_WRONLY,0}};
 static int fd_slot(void) { for(int f=0;f<128;++f)if(!fds[f].used)return f;return -EMFILE; }
 static uint64_t mono,cpu;

@@ -8,6 +8,7 @@
 #include "../desktop/sounds.h"
 #include <errno.h>
 #include <stdio.h>
+#include <locale.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -104,12 +105,17 @@ static const char *const yes_no[] = {"&Yes", "&No"};
 /* ---- formatting ---- */
 static void group(char *out, size_t n, uint64_t v)
 {
+    const struct lconv *locale=localeconv();
+    unsigned grouping=(unsigned char)locale->grouping[0];
+    const char *sep=locale->thousands_sep; size_t sep_n=strlen(sep);
     char digits[32]; int len = snprintf(digits, sizeof(digits), "%llu", (unsigned long long)v), k = 0;
     size_t at = 0;
     for (int i = 0; i < len && at + 2 < n; i++) {
         out[at++] = digits[i];
         k = len - i - 1;
-        if (k && k % 3 == 0) out[at++] = ',';
+        if (k && grouping && grouping<10 && k % (int)grouping == 0 && sep_n<n-at) {
+            memcpy(out+at,sep,sep_n); at+=sep_n;
+        }
     }
     out[at] = 0;
 }
@@ -121,8 +127,8 @@ void files_size_text(char *out, size_t n, uint64_t bytes)
     uint64_t scaled = bytes; unsigned u = 0;
     while (scaled >= 1024 * 1024 && u < 3) { scaled /= 1024; u++; }
     uint64_t hundredths = scaled * 100 / 1024;
-    if (hundredths < 1000) snprintf(out, n, "%llu.%02llu %s", (unsigned long long)(hundredths / 100), (unsigned long long)(hundredths % 100), units[u]);
-    else if (hundredths < 10000) snprintf(out, n, "%llu.%llu %s", (unsigned long long)(hundredths / 100), (unsigned long long)(hundredths % 100 / 10), units[u]);
+    if (hundredths < 1000) snprintf(out, n, "%llu%s%02llu %s", (unsigned long long)(hundredths / 100), localeconv()->decimal_point, (unsigned long long)(hundredths % 100), units[u]);
+    else if (hundredths < 10000) snprintf(out, n, "%llu%s%llu %s", (unsigned long long)(hundredths / 100), localeconv()->decimal_point, (unsigned long long)(hundredths % 100 / 10), units[u]);
     else snprintf(out, n, "%llu %s", (unsigned long long)(hundredths / 100), units[u]);
 }
 
@@ -136,7 +142,7 @@ static void time_text(char *out, size_t n, int64_t when)
 {
     time_t t = (time_t)when; struct tm tm;
     if (when <= 0 || !desk_localtime(&t, &tm)) { snprintf(out, n, "%s", ""); return; }   /* G1: local */
-    snprintf(out, n, "%04d-%02d-%02d %02d:%02d", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min);
+    if (!strftime(out, n, "%x %X", &tm) && n) out[0]=0;
 }
 
 static const char *reason(int error) { return fm_error_reason(error); }
