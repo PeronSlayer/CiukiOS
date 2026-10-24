@@ -46,6 +46,7 @@ TOOLKIT_FRAMES = {
     'deskui-view1.xrgb': '26cc77326b0cc117215cd2389e275852a86b5a4a34109881bb8bb99e5e05758b',
     'deskui-view2.xrgb': 'dc03906560ba1b1543e63a6d5959f7541d75651eecde32496f6c21eb0d2fc8d0',
 }
+# Merge G7: retain main's reviewed frame hashes; the lead re-pins combined UI changes.
 FILES_FRAMES = {
     'files-drop-target.xrgb': 'fa3e0f26a2db9c30dd775cd57bdf5925669e1d72872289e5c9e0dff9a778a977',
     'files-band-details.xrgb': '4080b44e53eef99b7c25e4662588fe20350324862aa8a6900b9a72860ce94ece',
@@ -210,6 +211,13 @@ class DeskuiTests(unittest.TestCase):
             "apps/files/model.c", "apps/files/transfer.c", "apps/files/vfs.c", *TOOLKIT,
             "apps/desktop/protocol.c", "tests/host/desktop/resize_transport.c", "apps/libdeskui/clipboard.c", "apps/libdeskui/clipstore.c", "tests/host/desktop/resize_client.c"], directory)
         self.assertIn("PASS Files idle", stdout)
+
+    def test_find_files(self):
+        stdout, _ = self.run_harness("files-search", ["tests/host/desktop/files_search_test.c",
+            "tests/host/desktop/fake_vfs.c", "apps/files/model.c", "apps/files/transfer.c", *TOOLKIT,
+            "apps/desktop/protocol.c", "tests/host/desktop/resize_transport.c", "apps/libdeskui/clipboard.c", "apps/libdeskui/clipstore.c", "tests/host/desktop/resize_client.c"])
+        self.assertIn("PASS G7 model", stdout)
+        self.assertIn("PASS G7 UI", stdout)
 
     def test_files_version(self):
         stdout, _ = self.run_harness("files-version", ["tests/host/desktop/files_version_test.c", "apps/files/vfs.c", "apps/files/model.c"])

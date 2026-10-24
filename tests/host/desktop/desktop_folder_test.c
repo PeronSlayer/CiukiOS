@@ -50,7 +50,7 @@ static void poll_folder(struct desktop *desk)
 {
     desk_folder_service(desk);
     for (unsigned i=0;desk_folder_busy(desk);i++) {
-        assert(i<3000); struct timespec pause={0,1000000}; nanosleep(&pause,NULL);
+        assert(i<3000); struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL);
         desk_folder_service(desk);
     }
     desk_folder_service(desk); /* consume a completion published after the last service */
@@ -89,7 +89,7 @@ static void settle(void)
 {
     for (unsigned i=0;d.sh.folder->busy;i++) {
         assert(i<5000); d.now_ns+=1000000; desk_folder_service(&d);
-        struct timespec t={0,1000000}; nanosleep(&t,NULL);
+        struct timespec t={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&t,NULL);
     }
 }
 #include "folder_transfer_test.h"
@@ -230,8 +230,13 @@ int main(int argc,char **argv)
     /* Shutdown cancels the job before the shell stops serving filesystem work. */
     fake_file("/Documents/Cancel.txt",30000,10); assert(!fm_refresh(other));
     assert(fm_select_name(other,"Cancel.txt",0)>=0 && !fm_clipboard(other,0) && !fm_clipboard_save(other));
+    /* The copy must still be pending when shutdown asks it to cancel. */
+    pthread_mutex_lock(&poll_lock); copy_hold=1; copy_entered=copy_release=0; pthread_mutex_unlock(&poll_lock);
     command(DF_PASTE,-1); assert(d.sh.folder->busy);
-    d.sh.want_power=2; desk_folder_service(&d); settle(); d.sh.want_power=0;
+    d.sh.want_power=2; desk_folder_service(&d);
+    pthread_mutex_lock(&poll_lock); copy_release=1; pthread_cond_broadcast(&poll_changed); pthread_mutex_unlock(&poll_lock);
+    settle(); d.sh.want_power=0;
+    pthread_mutex_lock(&poll_lock); copy_hold=0; pthread_mutex_unlock(&poll_lock);
     assert(!d.sh.folder->busy && d.sh.folder->job.state==FM_CANCELLED && fake_lookup("/Documents/Cancel.txt")>=0);
     folder_transfer_cases(other);
     fx19_desktop_cases();
@@ -301,7 +306,7 @@ int main(int argc,char **argv)
     for (unsigned i=0;;i++) {
         pthread_mutex_lock(&poll_lock); int entered=poll_entered; pthread_mutex_unlock(&poll_lock);
         if (entered) break;
-        assert(i<3000); struct timespec pause={0,1000000}; nanosleep(&pause,NULL);
+        assert(i<3000); struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL);
     }
     command(DF_TEXT,-1); key(DU_KEY_ESC); original=d.sh.folder->model.entries;
     pthread_mutex_lock(&poll_lock); poll_release=1; pthread_cond_broadcast(&poll_changed); pthread_mutex_unlock(&poll_lock);

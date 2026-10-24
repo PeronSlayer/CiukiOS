@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <string.h>
+#include <pthread.h>
 
 static void raw_files_event(struct du_ui *u,const struct du_event *e,void *arg)
 { files_event(u,e,arg); }
@@ -52,9 +53,21 @@ static void click(int x, int y) { motion(x, y); press(1); release(1); clock_ns +
 static void rclick(int x, int y) { motion(x, y); press(2); release(2); clock_ns += 600000000ull; }
 static void key(int code) { event(CIUKI_INPUT_KEY, code, 1, 0); event(CIUKI_INPUT_KEY, code, 0, 0); }
 static void chord(int mod, int code) { event(CIUKI_INPUT_KEY, mod, 1, 0); key(code); event(CIUKI_INPUT_KEY, mod, 0, 0); }
-static void tick(void) { for (int i = 0; i < 200 && app.job_active; i++) { clock_ns += 100000000ull; du_tick(&ui, clock_ns); files_test_wait(&app); struct timespec pause={0,1000000}; nanosleep(&pause,NULL); } }
+static void tick(void) { for (int i = 0; i < 200 && app.job_active; i++) { clock_ns += 100000000ull; du_tick(&ui, clock_ns); files_test_wait(&app); struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL); } }
 static void on_checkpoint(struct files_app *a, int stage) { (void)a; checkpoints[checkpoint_count++] = stage; }
 static void on_close(struct files_app *a) { (void)a; closed = 1; }
+/* Keep the worker's copy pending until the UI has requested cancellation.
+ * The UI's clipboard reads continue, so timing cannot turn this into a completed copy. */
+static int hold_cancel_read;
+static pthread_t cancel_ui_thread;
+static int cancel_read(void *ctx, int fd, void *buffer, unsigned count)
+{
+    if (!pthread_equal(pthread_self(),cancel_ui_thread))
+        while (__atomic_load_n(&hold_cancel_read,__ATOMIC_ACQUIRE)) {
+            struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL);
+        }
+    return fake_vfs.read(ctx,fd,buffer,count);
+}
 static int control_spawned;
 static int control_spawn(struct files_app *a, const char *program, char *const argv[])
 {
@@ -733,18 +746,23 @@ int main(int argc, char **argv)
     key(DU_KEY_ENTER); assert(!ui.dialog.kind);
     /* Help and About dialogs. */
     key(DU_KEY_F1); dump("help"); key(DU_KEY_ESC);
-    struct du_rect help = du_menu_title(&ui, 4); click(help.x + 5, help.y + 5);
+    struct du_rect help = du_menu_title(&ui, ui.menu_count - 1); click(help.x + 5, help.y + 5);
     struct du_rect hbox = du_menu_box(&ui, app.help_items, 3, help.x, help.y + help.h);
     click(hbox.x + 20, hbox.y + 3 + 17 + 9 + 8);
     dump("about"); key(DU_KEY_ENTER);
     /* A close request during a job cancels it, cleans up, then closes. */
     chord(DU_KEY_LCTRL, 0x1e); chord(DU_KEY_LCTRL, 0x2e);
-    assert(!files_navigate(&app, "/system/Ciuki")); chord(DU_KEY_LCTRL, 0x2f); assert(app.job_active);
+    assert(!files_navigate(&app, "/system/Ciuki")); files_test_wait(&app);
+    cancel_ui_thread=pthread_self(); app.model.fs.read=cancel_read;
+    __atomic_store_n(&hold_cancel_read,1,__ATOMIC_RELEASE);
+    chord(DU_KEY_LCTRL, 0x2f); assert(app.job_active);
     assert(!files_close_request(&app) && !closed);
     assert(strstr(ui.dialog.title,"Cancel Operation"));
     struct du_event confirm={.type=DU_EV_DIALOG,.id=ui.dialog.id,.index=0};
     du_dialog_close(&ui); files_event(&ui,&confirm,&app);
+    __atomic_store_n(&hold_cancel_read,0,__ATOMIC_RELEASE);
     tick(); assert(closed && !app.job_active && app.job.state == FM_CANCELLED);
+    app.model.fs.read=fake_vfs.read;
     closed = 0;
     /* Alt+F4 closes. */
     chord(DU_KEY_LALT, DU_KEY_F4); assert(closed);

@@ -115,10 +115,12 @@ static void app_answer_pings(void)
 }
 static struct fake_app *last_app;
 static int next_size_w, next_size_h;
+static unsigned find_launches;
 /* d->launch: the fx-8 asynchronous launcher (desktop.c launch_program):
  * the slot exists at once, AppStarting shows, the process comes later. */
 static int fake_launch(struct desktop *dd, const struct desk_program *program)
 {
+    if (!strcmp(program->name,"files") && dd->launch_arg && !strcmp(dd->launch_arg,"find:")) find_launches++;
     int k=0; while (k<DESK_CLIENTS && apps[k].stage!=APP_FREE) k++;
     if (k==DESK_CLIENTS || fds_left()<8) { errno=EAGAIN; return -1; }
     struct fake_app *a=&apps[k]; memset(a,0,sizeof(*a));
@@ -1204,6 +1206,39 @@ static void row_saver(unsigned m)
     d.portrait=NULL; free(portrait);
     wm_end();
 }
+static void row_find(unsigned m)
+{
+    row_name="Find entry points"; wm_begin(m,1);
+    /* Start > Find menu damage, F3 on the desktop, Win+F without a stray
+     * Start toggle on release. Real Files controls/results are exercised
+     * against full client redraws in files_search_test.c. */
+    unsigned launched=find_launches;
+    tap(0x15b); step("Start menu opens with Find");
+    struct sh_menu *menu=&d.sh.menus[0]; int find=-1;
+    for (int i=0;i<menu->count;i++) if (menu->items[i].action==SH_ACT_SUBMENU && menu->items[i].arg==SH_MENU_FIND) find=i;
+    assert(find>=0 && menu->items[find].mark==1);
+    for (unsigned i=0; menu->hot!=find && i<SH_ITEMS; i++) tap(DU_KEY_DOWN);
+    assert(menu->hot==find);
+    tap(DU_KEY_RIGHT); step("Find submenu opens");
+    assert(d.sh.levels==2 && d.sh.menus[1].kind==SH_MENU_FIND && d.sh.menus[1].items[0].mark==1);
+    tap(DU_KEY_ENTER); step("Find submenu launches Files"); assert(!d.sh.levels && find_launches==launched+1);
+    launched=find_launches;
+    d.focus=-1; tap(FM_FIND_KEY); step("F3 queues Files Find"); assert(find_launches==launched+1);
+    tap(0x15b); step("Start open before Win+F");
+    key(0x15b,1); tap(0x21); key(0x15b,0); step("Win+F launches and closes Start");
+    assert(!d.sh.levels && find_launches==launched+2);
+    key(0x15b,1); key(0x1d,1); tap(0x21); key(0x1d,0); key(0x15b,0);
+    assert(find_launches==launched+2); step("Win+Ctrl+F is separate from file search");
+    key(0x15b,1); tap(0x20); key(0x15b,0); tap(0x21);
+    assert(find_launches==launched+2); step("released Windows key does not latch Find");
+    key(0x15b,1); struct ciuki_input_event reset={.type=CIUKI_INPUT_RESYNC}; desk_input(&d,&reset); tap(0x21);
+    assert(find_launches==launched+2); step("input reset clears Windows-key state");
+    tap(0x15b); tap(0x21); step("Start Find by its access key");
+    assert(d.sh.levels==2 && d.sh.menus[1].kind==SH_MENU_FIND);
+    tap(0x21); step("Files or Folders by its access key");
+    assert(!d.sh.levels && find_launches==launched+3);
+    wm_end();
+}
 /* ---- G4: the taskbar menu, window arrangement and the Windows-key shortcuts ---- */
 static void win_chord(int code) { key(0x15b,1); tap(code); key(0x15b,0); }
 static void bar_right_click(int top) { click(top ? 300 : (int)d.width-60,top ? 10 : (int)d.height-16,CIUKI_BUTTON_RIGHT); }
@@ -1326,7 +1361,7 @@ static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overl
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
     row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,
     row_taskbar_menu, row_arrange, row_minimize_all, row_win_keys, row_caption_icon, row_startup,
-    row_move_damaged, row_fault, row_saver};
+    row_move_damaged, row_fault, row_saver, row_find};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).

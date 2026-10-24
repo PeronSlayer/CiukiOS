@@ -339,12 +339,13 @@ static const char *icon_position_name(const struct desktop *d, int index)
     return icon_is_entry(d, index) ? d->sh.icons[index].label : "/Pictures";
 }
 /* SM-9: the underlined access keys of the shell's fixed menus, the Windows 98
- * assignments (Start: P D S H R and Sh&ut Down; the window menu: R M S Mi&nimize
+ * assignments (Start: P D S F H R and Sh&ut Down; the window menu: R M S Mi&nimize
  * Ma&ximize C). A label may end with a shortcut after two spaces. Menus built
  * from the installed programs have none: a letter jumps to the next entry that
  * starts with it, as in Windows. */
 static const struct { int kind; const char *label; char key; } access_keys[] = {
     {SH_MENU_START,"Programs",'p'},{SH_MENU_START,"Documents",'d'},{SH_MENU_START,"Settings",'s'},
+    {SH_MENU_START,"Find",'f'},{SH_MENU_FIND,"Files or Folders...",'f'},
     {SH_MENU_START,"Help",'h'},{SH_MENU_START,"Run...",'r'},{SH_MENU_START,"Shut Down...",'u'},
     {SH_MENU_SETTINGS,"Control Panel",'c'},{SH_MENU_SETTINGS,"Task Manager",'t'},
     {SH_MENU_HELP,"Keyboard Shortcuts",'k'},{SH_MENU_HELP,"About CiukiOS",'a'},
@@ -388,10 +389,14 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         item(m, "Programs", "applications-other", SH_ACT_SUBMENU, SH_MENU_PROGRAMS, 0);
         item(m, "Documents", "document-open", SH_ACT_SUBMENU, SH_MENU_DOCUMENTS, 0);
         item(m, "Settings", "preferences-system", SH_ACT_SUBMENU, SH_MENU_SETTINGS, 0);
+        item(m, "Find", "system-search", SH_ACT_SUBMENU, SH_MENU_FIND, 0);
         item(m, "Help", "help-browser", SH_ACT_SUBMENU, SH_MENU_HELP, 0);
         item(m, "Run...", "go-jump", SH_ACT_RUN, 0, 0);
         separator(m);
         item(m, "Shut Down...", "system-shutdown", SH_ACT_SHUTDOWN, 0, 0);
+        break;
+    case SH_MENU_FIND:
+        item(m, "Files or Folders...", "system-search", SH_ACT_FIND, 0, 0);
         break;
     case SH_MENU_PROGRAMS: {
         /* f2-95: opening the menu asks for a fresh scan; the menu shows the
@@ -774,6 +779,7 @@ static void act(struct desktop *d, const struct sh_item *it)
 {
     char argument[24];
     switch (it->action) {
+    case SH_ACT_FIND: desk_shell_find(d, 0); break;
     case SH_ACT_LAUNCH: d->action = it->arg; break;
     case SH_ACT_ABOUT: desk_about(d); break;
     case SH_ACT_EMPTY_RECYCLE: desk_folder_empty_request(d); break;
@@ -3982,12 +3988,11 @@ static int swallowed(struct desktop *d, int code, int release)
 }
 void desk_shell_find(struct desktop *d, int computer)
 {
-    /* G7 (Find Files or Folders) is not part of this build: the entry points
-     * (Win+F, Win+Ctrl+F, F3 on the desktop) already exist and reach this one
-     * function, which G7 replaces by the Find window. */
-    desk_shell_message(d, computer ? "Find: Computer" : "Find: Files or Folders",
-        computer ? "Finding a computer on the network is not available in this version of CiukiOS yet."
-                 : "Finding files and folders is not available in this version of CiukiOS yet.\n\nOpen Computer or Documents to browse for the file.", 0);
+    desk_menu_close(d);
+    if (computer) {
+        desk_shell_message(d, "Find: Computer",
+            "Finding a computer on the network is not available in this version of CiukiOS yet.", 0);
+    } else launch_named(d, "files", "find:");
 }
 /* Win+key shortcuts of the Microsoft Natural Keyboard (Windows 98 Resource Kit,
  * Appendix G): D, M, Shift+M, E, F, Ctrl+F, R, Tab, Break and F1. */

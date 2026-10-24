@@ -48,16 +48,16 @@ enum sh_menu_kind { SH_MENU_NONE, SH_MENU_START, SH_MENU_PROGRAMS, SH_MENU_DEVEL
                     SH_MENU_SETTINGS, SH_MENU_HELP, SH_MENU_DESKTOP, SH_MENU_ICON, SH_MENU_TASK, SH_MENU_ACCESSORIES,
                     SH_MENU_GAMES, SH_MENU_NEW, SH_MENU_OPEN_WITH, SH_MENU_TRAY_SETTINGS,
                     SH_MENU_SYSTEM_TOOLS, SH_MENU_SETTINGS_CATEGORY, SH_MENU_SETTINGS_LAST = SH_MENU_SETTINGS_CATEGORY + CP_CATEGORIES - 1,
-                    SH_MENU_DRAG, SH_MENU_TASKBAR };
+                    SH_MENU_DRAG, SH_MENU_TASKBAR, SH_MENU_FIND };
 enum sh_action { SH_ACT_NONE, SH_ACT_SUBMENU, SH_ACT_LAUNCH, SH_ACT_ABOUT, SH_ACT_RUN, SH_ACT_SHUTDOWN,
                  SH_ACT_DOCUMENT, SH_ACT_CONTROL, SH_ACT_KEYS, SH_ACT_ARRANGE, SH_ACT_ICON_OPEN,
                  SH_ACT_ICON_PROPERTIES, SH_ACT_REFRESH, SH_ACT_TASK_RESTORE, SH_ACT_TASK_MINIMIZE,
                  SH_ACT_TASK_CLOSE, SH_ACT_TASKMAN, SH_ACT_CLEAR_RECENT, SH_ACT_GAME, SH_ACT_EMPTY_RECYCLE, SH_ACT_FILE, SH_ACT_RENAME, SH_ACT_OPEN_WITH, SH_ACT_DOS_FULLSCREEN, SH_ACT_DOS_MARK, SH_ACT_DOS_COPY, SH_ACT_DOS_PASTE, SH_ACT_DOS_QUICKEDIT,
                  SH_ACT_TASK_MOVE, SH_ACT_TASK_SIZE, SH_ACT_TASK_MAXIMIZE, SH_ACT_WIN32_LINK, SH_ACT_PROGRAMS_FOLDER, SH_ACT_WIN32_PROGRAM,
                  SH_ACT_DRAG /* fx-19 right-drag menu: arg is the DROPEFFECT, 0 Cancel */,
-                 /* G4 taskbar menu */
+                 /* G4 taskbar menu: retain main's action values. */
                  SH_ACT_CASCADE, SH_ACT_TILE_H, SH_ACT_TILE_V, SH_ACT_MINIMIZE_ALL, SH_ACT_ARRANGE_UNDO,
-                 SH_ACT_TASKBAR_PROPERTIES };
+                 SH_ACT_TASKBAR_PROPERTIES, SH_ACT_FIND };
 #define SH_ITEM_SEPARATOR 1u
 #define SH_ITEM_DISABLED 2u
 #define SH_ITEM_DEFAULT 4u
@@ -203,7 +203,7 @@ void desk_shell_notify_error(struct desktop *, const char *title, int error);
 void desk_shell_media_labels(struct desktop *, const struct ciuki_media_volume volumes[26]);
 void desk_menu_open(struct desktop *, int kind, int32_t x, int32_t y);
 void desk_menu_close(struct desktop *);
-void desk_shell_find(struct desktop *, int computer);   /* Win+F, Win+Ctrl+F, F3: Find (G7 replaces this body) */
+void desk_shell_find(struct desktop *, int computer);   /* G7 Files Find; computer selects the separate network-search placeholder. */
 void desk_shell_taskbar_leave(struct desktop *);        /* the taskbar loses the keyboard focus (a window took it) */
 int desk_shell_caption_icon(struct desktop *, int client, uint64_t stamp, int menu_was_open);   /* click on the caption icon: window menu, second click closes */
 int desk_task_count(const struct desktop *);

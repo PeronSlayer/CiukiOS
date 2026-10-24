@@ -383,9 +383,10 @@ static void windows_keys(void)
     win(0x12); assert(!strcmp(launched,"files") && !strcmp(launched_arg,"Computer"));
     /* Win+R */
     win(0x13); assert(d.focus>=0 && d.clients[d.focus].internal==DESK_INTERNAL_RUN); desk_request_close(&d,d.focus);
-    /* Win+F and Win+Ctrl+F: Find is G7's; a message says so */
-    win(0x21); assert(d.focus>=0 && d.clients[d.focus].internal==DESK_INTERNAL_MESSAGE && strstr(d.clients[d.focus].title,"Find"));
-    assert(strstr(d.sh.message_title,"Files or Folders")); desk_request_close(&d,d.focus);
+    /* G4's chord reaches G7 Files Find; Find Computer stays separate. */
+    unsigned before=launch_count;
+    win(0x21); assert(launch_count==before+1 && !strcmp(launched,"files") && !strcmp(launched_arg,"find:"));
+    assert(!d.sh.levels && !d.sh.logo_keys);
     key(KEY_WIN,1); key(DU_KEY_LCTRL,1); tap(0x21); key(DU_KEY_LCTRL,0); key(KEY_WIN,0);
     assert(strstr(d.sh.message_title,"Computer") && d.focus>=0 && d.clients[d.focus].internal==DESK_INTERNAL_MESSAGE);
     desk_request_close(&d,d.focus);
@@ -496,8 +497,8 @@ static void context_keys(void)
     struct desk_box icon=d.sh.icons[0].box; left(icon.x+icon.w/2,icon.y+20); assert(d.sh.icon_selected==0);
     tap(KEY_MENU); assert(d.sh.levels && d.sh.menus[0].kind==SH_MENU_ICON && d.sh.menu_owner==0);
     frame_matches("icon menu by key"); tap(DU_KEY_ESC);
-    tap(KEY_F3); assert(d.focus>=0 && d.clients[d.focus].internal==DESK_INTERNAL_MESSAGE && strstr(d.sh.message_title,"Find"));
-    desk_request_close(&d,d.focus);
+    unsigned before=launch_count;
+    tap(KEY_F3); assert(launch_count==before+1 && !strcmp(launched,"files") && !strcmp(launched_arg,"find:"));
     clean();
 }
 

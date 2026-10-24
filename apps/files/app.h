@@ -11,7 +11,7 @@
 #define FILES_TREE 256
 #define FILES_CACHE 64
 
-struct files_row { char label[80], size[32], type[40], modified[24], attributes[8]; };
+struct files_row { char label[80], size[32], type[40], modified[24], attributes[8], location[FM_PATH]; };
 /* G2: the Recycle Bin view's extra columns. */
 struct files_bin_row { char name[FM_NAME], where[RB_PATH], deleted[24]; };
 struct files_place { char name[64], path[FM_PATH]; };
@@ -51,7 +51,11 @@ struct files_app {
     uint32_t ciuki16[256], ciuki32[1024]; int ciuki;
     int width, height, split, test, stage, rename_index, rename_new, job_active, close_pending, context_folder, tree_dirty;
     char note[160], rename_original[FM_NAME];
-    struct du_menu menus[5];
+    struct du_menu menus[6];
+    struct du_menu_item tools_items[2];
+    struct fm_search_query find_edit;
+    int find_page, find_initial, find_again, find_running;
+    char find_from[16], find_to[16], find_size[32];
     struct du_menu_item file_items[12], edit_items[6], view_items[12], go_items[14], help_items[3];
     struct du_menu_item popup[18]; unsigned popup_count;
     int (*spawn)(struct files_app *, const char *program, char *const argv[]);
@@ -117,6 +121,7 @@ void files_destroy(struct files_app *);
 void files_event(struct du_ui *, const struct du_event *, void *);
 int files_close_request(struct files_app *);
 /* The desktop refused or failed to start the program requested through LAUNCH (error is positive). */
+void files_find(struct files_app *);
 void files_launch_failed(struct files_app *, int error);
 void files_layout(struct files_app *);
 void files_update(struct files_app *);

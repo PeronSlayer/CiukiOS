@@ -11,6 +11,8 @@
 #define FM_HISTORY 32
 #define FM_DEPTH 32
 #define FM_CHUNK 65536
+#define FM_SORT_LOCATION 6u /* G7: after main's Attributes (4) and bin Date Deleted (5). */
+#define FM_FIND_KEY 0x3d /* F3, AT set-1 key code; private Files/shell shortcut. */
 /* fx-17: a copy reads FM_CHUNK at a time (cancel and progress stay
  * responsive) but writes up to FM_WRITE_BATCH per write(): each write() on
  * FAT is one durable growth group (data, chain, link, entry, each closed by
@@ -26,7 +28,7 @@ struct fm_meta { enum fm_type type; uint64_t size, ino; uint32_t dev, mode; int6
 /* bin: 0, or index + 1 of the entry's record in fm_model.bin (G2: the Recycle
  * Bin view lists stored items under their stored names; the record has the
  * original name, location and deletion date). */
-struct fm_entry { char name[FM_NAME]; struct fm_meta meta; unsigned selected; uint32_t bin; };
+struct fm_entry { char name[FM_NAME]; struct fm_meta meta; unsigned selected; uint32_t bin; unsigned result; };
 typedef int (*fm_emit)(const char *, const struct fm_meta *, void *);
 /* Cheap enumeration metadata (type/size/mtime/ino); METADATA fills missing
  * portable-host metadata without opening contents. SNIFF also classifies ELF.
@@ -48,6 +50,13 @@ struct fm_vfs {
     int (*close)(void *, int);
     int (*metadata)(void *, const char *, const struct fm_meta *); /* optional: no setter in the F2 ABI */
 };
+/* G7: private Files search criteria, never a public ABI record. */
+struct fm_search_query {
+    char named[FM_NAME], containing[256], look_in[FM_PATH], type[80];
+    int recursive, date_from_set, date_to_set, size_mode;
+    int64_t date_from, date_to;
+    uint64_t size_bytes;
+};
 struct rb_item;
 struct rb_job;
 struct fm_model {
@@ -59,6 +68,9 @@ struct fm_model {
     /* G2: records behind the Recycle Bin view's entries, and the drives whose
      * volumes are fixed disks (bit 0 = A:; C: always counts). */
     struct rb_item *bin; unsigned bin_count; uint32_t fixed;
+    struct fm_search_query query;
+    int searching, search_incomplete, search_error;
+    char (*result_paths)[FM_PATH]; unsigned result_count;
     uint32_t clipboard_sequence;
     uint32_t drive_slots; /* fx-17b: drives listed in Computer without a medium (floppies) */
 };
@@ -119,6 +131,10 @@ void fm_init(struct fm_model *, const struct fm_vfs *);
 void fm_destroy(struct fm_model *);
 int fm_navigate(struct fm_model *, const char *);
 int fm_refresh(struct fm_model *);
+int fm_search(struct fm_model *, const struct fm_search_query *);
+int fm_search_name(const char *pattern, const char *name);
+int fm_search_date(const char *text, int end_of_day, int64_t *out);
+int fm_search_size(const char *text, uint64_t *out);
 int fm_history(struct fm_model *, int);
 int fm_up(struct fm_model *);
 void fm_sort(struct fm_model *, unsigned, int);

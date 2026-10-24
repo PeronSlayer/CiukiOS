@@ -18,10 +18,10 @@ enum {
     C_BACK = 1, C_FORWARD, C_UP, C_CUT, C_COPY, C_PASTE, C_DELETE, C_PROPERTIES, C_VIEWS,
     C_OPEN, C_OPEN_NOTE, C_NEW_FOLDER, C_NEW_TEXT, C_RENAME, C_CLOSE, C_SELECT_ALL, C_INVERT,
     C_ICONS, C_LIST, C_DETAILS, C_SORT_NAME, C_SORT_SIZE, C_SORT_TYPE, C_SORT_MODIFIED, C_REFRESH,
-    C_ADDRESS, C_GO_ROOT, C_GO_BIN, C_GO_SYSTEM, C_HELP, C_ABOUT, C_PASTE_INTO, C_TREE_OPEN, C_SAFE_REMOVE,
+    C_ADDRESS, C_GO_ROOT, C_GO_BIN, C_GO_SYSTEM, C_HELP, C_ABOUT, C_PASTE_INTO, C_TREE_OPEN, C_SAFE_REMOVE, C_FIND, C_FIND_STOP, C_FIND_FOLDER,
     W_ADDRESS = 100, W_ADDRESS_LABEL, W_PLACES_HEADER, W_PLACES, W_FOLDERS_HEADER, W_TREE, W_SPLIT,
     W_LIST, W_STATUS, W_RENAME, W_BAND1, W_BAND2, W_BAND3, W_TSEP1, W_TSEP2, W_TSEP3,
-    D_DELETE = 200, D_REPLACE, D_ERROR, D_PROPERTIES, D_INFO, D_PROGRESS, D_CANCEL_JOB, D_BIN_PURGE, D_BIN_EMPTY, D_BIN_PROPS, D_BIN_ITEM, D_INSERT,
+    D_DELETE = 200, D_REPLACE, D_ERROR, D_PROPERTIES, D_INFO, D_PROGRESS, D_CANCEL_JOB, D_BIN_PURGE, D_BIN_EMPTY, D_BIN_PROPS, D_BIN_ITEM, D_INSERT, D_FIND,
     C_GO_DOCUMENTS = 300, C_GO_GAMES, C_GO_CONTROL, C_GO_DESKTOP, C_MUSIC, C_GO_RECYCLE, C_RESTORE, C_EMPTY_BIN, C_BIN_PROPS, C_DELETE_NOW,
     C_OPTIONS = 310, C_ATTRIBUTES = 311,
     T_JOB = 1, T_MEDIA, T_BROWSER, T_DRAG_REFRESH
@@ -29,7 +29,7 @@ enum {
 #define PANE_TOP 92
 #define STATUS_H 20
 
-enum scan_kind { SCAN_NAVIGATE, SCAN_REFRESH, SCAN_HISTORY, SCAN_TREE, SCAN_MEDIA, SCAN_OPEN };
+enum scan_kind { SCAN_NAVIGATE, SCAN_REFRESH, SCAN_HISTORY, SCAN_TREE, SCAN_MEDIA, SCAN_OPEN, SCAN_SEARCH };
 struct files_scan {
     struct files_app state; /* Owned data only; never a UI or live model. */
     struct fm_vfs source;
@@ -61,6 +61,7 @@ static void drop_free(struct files_app *);
 static void bin_properties(struct files_app *);
 static void command(struct files_app *, int);
 static int scan_cancelled(const struct files_scan *);
+static void find_dialog(struct files_app *);
 
 static const struct du_menu_item file_template[] = {
     {"&Open", C_OPEN, 0, 0, DU_ITEM_DEFAULT}, {"Open with &CiukNote", C_OPEN_NOTE, 0, 0, 0},
@@ -265,6 +266,9 @@ void files_layout(struct files_app *a)
             if (list->columns[0].width>=190) list->columns[0].width -= 70;
             list->columns[4] = (struct du_column){"Attributes", 70, 0}; list->column_count = 5;
         }
+        if (a->model.searching) {
+            list->columns[list->column_count++] = (struct du_column){"In Folder", 200, 0};
+        }
         if (!a->model.path[0]) {
             list->columns[1].title = "Capacity"; list->columns[3].title = "Free Space";
         }
@@ -431,11 +435,11 @@ static void tree_items(struct files_app *a)
 }
 
 /* ---- model to widgets ---- */
-static int in_clipboard(const struct files_app *a, const char *name)
+static int in_clipboard(const struct files_app *a, unsigned index)
 {
     if (!a->model.cut) return 0;
     char path[FM_PATH];
-    if (fm_join(path, a->model.path, name)) return 0;
+    if (fm_entry_path(&a->model, index, path)) return 0;
     for (unsigned i = 0; i < a->model.clipboard_count; i++) if (fm_same_path(a->model.clipboard[i], path)) return 1;
     return 0;
 }
@@ -509,6 +513,7 @@ static const unsigned bin_key_of_header[6] = {0, 4, 5, 2, 1, 3};
 void files_update(struct files_app *a)
 {
     struct fm_model *m = &a->model;
+    set_flag(a->tools_items, 2, C_FIND_STOP, DU_ITEM_DISABLED, !a->find_running);
     int computer = !(a->loading ? a->loading_path : m->path)[0];
     m->fixed = files_fixed(a);
     int bin = !a->loading && fm_is_recycle(m->path);
@@ -541,6 +546,8 @@ void files_update(struct files_app *a)
         const char *drive_icon=floppy ? "place:floppy" : optical ? "place:optical" : removable ? "place:removable" : "place:volume";
         char buffer[40]; snprintf(t->type, sizeof(t->type), "%s", computer ? (floppy ? "3.5-Inch Floppy Disk" : optical ? "CD-ROM Drive" : removable ? "Removable Drive" : "Disk Drive") : fm_type_name(e, buffer, sizeof(buffer)));
         time_text(t->modified, sizeof(t->modified), computer ? 0 : e->meta.modified);
+        t->location[0] = 0;
+        if (m->searching && e->result) { char parent[FM_PATH]; if (!fm_parent(parent, m->result_paths[e->result-1])) fm_display_path(t->location, parent); }
         const char *volume_label=drive_label(a,drive);
         if (computer && a->media_space) {
             int letter=e->name[0]>='A' && e->name[0]<='Z' ? e->name[0]-'A' : -1;
@@ -570,15 +577,19 @@ void files_update(struct files_app *a)
                                           icon16(e), icon32(e), (uint8_t)e->selected, 0, 0, 0, 0};
             continue;
         }
-        a->rows[i] = (struct du_item){{t->label[0] ? t->label : e->name, t->size, t->type, t->modified, t->attributes},
+        a->rows[i] = (struct du_item){{t->label[0] ? t->label : e->name, t->size, t->type, t->modified,
+                                      a->attribute_column ? t->attributes : m->searching ? t->location : t->attributes,
+                                      a->attribute_column && m->searching ? t->location : NULL},
                                       computer ? named(drive_icon, 16) : icon16(e), computer ? named(drive_icon, 32) : icon32(e),
-                                      (uint8_t)e->selected, (uint8_t)in_clipboard(a, e->name), 0, 0, 0};
+                                      (uint8_t)e->selected, (uint8_t)in_clipboard(a, i), 0, 0, 0};
     }
     struct du_widget *list = W(a, W_LIST);
     list->items = a->rows; list->count = count;
     list->active = m->active < count ? m->active : 0;
-    list->sort = bin ? bin_header_of_key[m->sort < 6 ? m->sort : 0] : (int)m->sort; list->descending = m->descending;
-    du_set_text(list, a->loading ? "Loading..." : bin ? "The Recycle Bin is empty." : "This folder is empty.");
+    list->sort = bin ? bin_header_of_key[m->sort < 6 ? m->sort : 0] :
+        m->sort == FM_SORT_LOCATION ? 4 + a->attribute_column :
+        m->searching && !a->attribute_column && m->sort == 4 ? -1 : (int)m->sort; list->descending = m->descending;
+    du_set_text(list, a->loading ? "Loading..." : bin ? "The Recycle Bin is empty." : m->searching ? "No files or folders were found." : "This folder is empty.");
     struct du_widget *address = W(a, W_ADDRESS);
     if (du_focused(a->ui) != W_ADDRESS) du_set_text(address, display);
     address->icon = computer ? (a->ciuki ? a->ciuki16 : named("place:computer", 16)) : bin ? named(count ? "place:trash-full" : "place:trash", 16) : named("type:folder", 16);
@@ -590,7 +601,9 @@ void files_update(struct files_app *a)
     if (selected_files) files_size_text(size, sizeof(size), bytes);
     (void)folder_bytes;
     if (a->loading) snprintf(left, sizeof(left), "Loading...");
+    else if (m->searching && m->search_incomplete) snprintf(left, sizeof(left), "%u result(s); incomplete: %s", count, m->search_error == -E2BIG ? "Search limit reached; narrow the search." : reason(m->search_error));
     else if (a->note[0]) snprintf(left, sizeof(left), "%s", a->note);
+    else if (m->searching && !selected) snprintf(left, sizeof(left), "%u file(s) or folder(s) found", count);
     else if (selected == 1 && computer && m->active < count && m->entries[m->active].selected && a->media_space) {
         /* fx-17b: Windows 98 My Computer shows the selected drive's free
          * space and capacity; "calculating..." during a background count. */
@@ -623,8 +636,8 @@ void files_update(struct files_app *a)
     W(a, C_UP)->disabled = (uint8_t)root;
     W(a, C_CUT)->disabled = W(a, C_COPY)->disabled = computer || bin || !selected;
     W(a, C_DELETE)->disabled = computer || !selected;
-    W(a, C_PASTE)->disabled = computer || bin || !m->clipboard_count;
-    W(a, C_PROPERTIES)->disabled = (uint8_t)(a->loading || (computer && !selected));
+    W(a, C_PASTE)->disabled = computer || bin || m->searching || !m->clipboard_count;
+    W(a, C_PROPERTIES)->disabled = (uint8_t)(a->loading || ((computer || m->searching) && !selected));
     /* G2: the File menu is the Recycle Bin's while it is shown. */
     if (bin != a->bin_menu) {
         a->bin_menu = bin;
@@ -643,12 +656,12 @@ void files_update(struct files_app *a)
     set_flag(a->file_items, 11, C_OPEN_NOTE, DU_ITEM_DISABLED, computer || !selected);
     set_flag(a->file_items, 11, C_DELETE, DU_ITEM_DISABLED, computer || !selected);
     set_flag(a->file_items, 11, C_RENAME, DU_ITEM_DISABLED, computer || selected != 1);
-    set_flag(a->file_items, 11, C_NEW_FOLDER, DU_ITEM_DISABLED, a->loading || computer);
-    set_flag(a->file_items, 11, C_NEW_TEXT, DU_ITEM_DISABLED, a->loading || computer);
-    set_flag(a->file_items, 11, C_PROPERTIES, DU_ITEM_DISABLED, a->loading || (computer && !selected));
+    set_flag(a->file_items, 11, C_NEW_FOLDER, DU_ITEM_DISABLED, a->loading || computer || m->searching);
+    set_flag(a->file_items, 11, C_NEW_TEXT, DU_ITEM_DISABLED, a->loading || computer || m->searching);
+    set_flag(a->file_items, 11, C_PROPERTIES, DU_ITEM_DISABLED, a->loading || ((computer || m->searching) && !selected));
     set_flag(a->edit_items, 6, C_CUT, DU_ITEM_DISABLED, computer || bin || !selected);
     set_flag(a->edit_items, 6, C_COPY, DU_ITEM_DISABLED, computer || bin || !selected);
-    set_flag(a->edit_items, 6, C_PASTE, DU_ITEM_DISABLED, computer || bin || !m->clipboard_count);
+    set_flag(a->edit_items, 6, C_PASTE, DU_ITEM_DISABLED, computer || bin || m->searching || !m->clipboard_count);
     set_flag(a->go_items, 14, C_BACK, DU_ITEM_DISABLED, !m->history_at);
     set_flag(a->go_items, 14, C_FORWARD, DU_ITEM_DISABLED, m->history_at + 1 >= m->history_count);
     set_flag(a->go_items, 14, C_UP, DU_ITEM_DISABLED, root);
@@ -665,7 +678,7 @@ void files_update(struct files_app *a)
         if (a->place_items[i].selected) place = (int)i;
     }
     if (place >= 0) places->active = (unsigned)place;
-    if (a->tree_dirty && !a->loading && a->worker && !a->job_active)
+    if (a->tree_dirty && !a->loading && !m->searching && a->worker && !a->job_active)
         scan_submit(a, SCAN_TREE, NULL, 0);
     tree_items(a);
     a->ui->dirty = 1;
@@ -706,7 +719,7 @@ static void rename_commit(struct files_app *a)
         if (r) {
             char what[FM_NAME + 40]; snprintf(what, sizeof(what), "Cannot rename %s:", original);
             error_box(a, "Error Renaming File or Folder", what, r);
-        } else { a->tree_dirty = 1; checkpoint(a, 3); }
+        } else { a->tree_dirty = 1; if (a->model.searching) scan_submit(a, SCAN_REFRESH, NULL, 0); checkpoint(a, 3); }
     }
     files_update(a);
 }
@@ -744,7 +757,7 @@ static int scan_stat(void *ctx, const char *path, struct fm_meta *meta)
 static int scan_open(void *ctx, const char *path, int make)
 { struct files_scan *s = ctx; if (!make && scan_cancelled(s)) return -ECANCELED; return s->source.open(s->source.ctx, path, make); }
 static int scan_read(void *ctx, int fd, void *buffer, unsigned n)
-{ struct files_scan *s = ctx; return s->source.read(s->source.ctx, fd, buffer, n); }
+{ struct files_scan *s = ctx; return scan_cancelled(s) ? -ECANCELED : s->source.read(s->source.ctx, fd, buffer, n); }
 static int scan_write(void *ctx, int fd, const void *buffer, unsigned n)
 { struct files_scan *s = ctx; return s->source.write(s->source.ctx, fd, buffer, n); }
 static int scan_sync(void *ctx, int fd) { struct files_scan *s = ctx; return s->source.sync(s->source.ctx, fd); }
@@ -904,7 +917,8 @@ static void *scan_run(void *arg)
             s->clipboard_valid=!fm_clipboard_load(&a->model); a->model.fs=adapter;
         }
 #endif
-        if (s->kind == SCAN_OPEN) s->error = scan_sniff(s);
+        if (s->kind == SCAN_SEARCH) s->error = fm_search(&a->model, &a->find_edit);
+        else if (s->kind == SCAN_OPEN) s->error = scan_sniff(s);
         else {
             if (s->kind == SCAN_MEDIA || s->kind == SCAN_REFRESH ||
                 (s->kind == SCAN_NAVIGATE && !a->model.history_count)) {
@@ -986,7 +1000,10 @@ static int scan_submit(struct files_app *a, enum scan_kind kind, const char *pat
     fm_init(&b->model, &a->model.fs);
     memcpy(b->model.path, a->model.path, FM_PATH);
     memcpy(b->model.history, a->model.history, sizeof(b->model.history));
+    b->model.clipboard_sequence = a->model.clipboard_sequence;
     b->model.history_count = a->model.history_count; b->model.history_at = a->model.history_at;
+    b->find_edit = a->find_edit;
+    b->model.query = a->model.query; b->model.searching = a->model.searching;
     b->model.sort = a->model.sort; b->model.descending = a->model.descending;
     memcpy(b->expanded, a->expanded, sizeof(b->expanded)); b->expanded_count = a->expanded_count;
     memcpy(b->collapsed, a->collapsed, sizeof(b->collapsed)); b->collapsed_count = a->collapsed_count;
@@ -1019,9 +1036,10 @@ static int scan_submit(struct files_app *a, enum scan_kind kind, const char *pat
     scan_free(old); scan_free(result);
     a->tree_dirty = 0;
     a->reading = 1;
-    if (kind == SCAN_NAVIGATE || kind == SCAN_HISTORY || kind == SCAN_REFRESH) {
+    a->find_running = kind == SCAN_SEARCH || (kind == SCAN_REFRESH && a->model.searching);
+    if (kind == SCAN_NAVIGATE || kind == SCAN_HISTORY || kind == SCAN_REFRESH || kind == SCAN_SEARCH) {
         a->loading = 1;
-        snprintf(a->loading_path, sizeof(a->loading_path), "%s", kind == SCAN_REFRESH ? a->model.path : s->target);
+        snprintf(a->loading_path, sizeof(a->loading_path), "%s", (kind == SCAN_REFRESH || kind == SCAN_SEARCH) ? a->model.path : s->target);
         if (kind == SCAN_HISTORY) {
             int at = (int)a->model.history_at + delta;
             if (at >= 0 && (unsigned)at < a->model.history_count) strcpy(a->loading_path, a->model.history[at]);
@@ -1029,6 +1047,18 @@ static int scan_submit(struct files_app *a, enum scan_kind kind, const char *pat
         files_update(a);
     }
     return 0;
+}
+/* A results view can contain another file with the created file's name. */
+__attribute__((noinline)) static void select_created_results(struct files_app *a)
+{
+    struct fm_model *m = &a->model; char target[FM_PATH];
+    for (unsigned i = 0; i < a->job.created_count; i++) {
+        if (fm_join(target, a->job.destination, a->job.created[i])) continue;
+        for (unsigned j = 0; j < m->count; j++) if (m->entries[j].result &&
+            fm_same_path(target, m->result_paths[m->entries[j].result-1])) {
+            m->entries[j].selected = 1; m->active = m->anchor = j;
+        }
+    }
 }
 static void scan_poll(struct files_app *a)
 {
@@ -1051,11 +1081,12 @@ static void scan_poll(struct files_app *a)
         a->model.show_hidden=b->model.show_hidden; a->model.hide_system=b->model.hide_system;
         a->model.hide_extensions=b->model.hide_extensions;
     }
-    a->reading = 0;
+    a->reading = a->find_running = 0;
     du_timer_stop(a->ui, T_BROWSER);
     if (s->clipboard_valid && s->clipboard_key==clipboard_key(&a->model) && clipboard_key(&a->model)!=clipboard_key(&b->model)) {
         fm_clipboard_clear(&a->model);
         a->model.clipboard=b->model.clipboard; a->model.clipboard_count=b->model.clipboard_count; a->model.cut=b->model.cut;
+        a->model.clipboard_sequence=b->model.clipboard_sequence;
         b->model.clipboard=NULL; b->model.clipboard_count=0;
         files_update(a);
     }
@@ -1083,28 +1114,36 @@ static void scan_poll(struct files_app *a)
         int floppy = (s->kind == SCAN_NAVIGATE || s->kind == SCAN_HISTORY) ? media_drive(s->target) : -1;
         a->media = b->media; a->model.drive_slots = floppy_slots(a);
         if (floppy_drive(a, floppy) && s->kind == SCAN_NAVIGATE) insert_disk_prompt(a, floppy, s->target);
-        else if (s->error != -ENOENT || s->kind != SCAN_HISTORY) error_box(a, "Files", "Cannot open the folder.", s->error);
+        else if (s->error != -ENOENT || s->kind != SCAN_HISTORY) error_box(a, "Files", s->kind == SCAN_SEARCH ? "Cannot search this location:" : "Cannot open the folder.", s->error);
     } else {
         if (s->kind != SCAN_TREE && (s->kind != SCAN_MEDIA || (s->changed && !s->metadata_only))) {
             struct fm_model *m = &a->model, *n = &b->model;
             int refresh = s->kind == SCAN_REFRESH || s->kind == SCAN_MEDIA;
-            char active[FM_NAME] = "";
-            if (refresh && m->active < m->count) strcpy(active, m->entries[m->active].name);
+            char active[FM_PATH] = "";
+            if (refresh && m->searching && m->active < m->count) fm_entry_path(m, m->active, active);
+            else if (refresh && m->active < m->count) strcpy(active, m->entries[m->active].name);
             if (refresh) for (unsigned i = 0; i < n->count; i++) for (unsigned j = 0; j < m->count; j++)
-                if (!strcmp(n->entries[i].name, m->entries[j].name)) n->entries[i].selected = m->entries[j].selected;
+                if (!strcmp(n->entries[i].name, m->entries[j].name) &&
+                    (!m->searching || (n->entries[i].result && m->entries[j].result &&
+                    !strcmp(n->result_paths[n->entries[i].result-1], m->result_paths[m->entries[j].result-1]))))
+                    n->entries[i].selected = m->entries[j].selected;
             free(m->entries); m->entries = n->entries; n->entries = NULL;
+            free(m->result_paths); m->result_paths = n->result_paths; n->result_paths = NULL;
+            m->result_count = n->result_count; m->searching = n->searching; m->query = n->query;
+            m->search_incomplete = n->search_incomplete; m->search_error = n->search_error;
             free(m->bin); m->bin = n->bin; n->bin = NULL; m->bin_count = n->bin_count; m->fixed = n->fixed;
             m->count = n->count; m->capacity = n->capacity; m->active = n->active; m->anchor = n->anchor;
             if (m->sort > 3 && fm_is_recycle(m->path) != fm_is_recycle(n->path)) m->sort = 0;
             memcpy(m->path, n->path, FM_PATH); memcpy(m->history, n->history, sizeof(m->history));
             m->history_count = n->history_count; m->history_at = n->history_at;
             m->find_length = 0; m->find[0] = 0;
-            if (refresh) for (unsigned i = 0; i < m->count; i++) if (!strcmp(active, m->entries[i].name)) m->active = m->anchor = i;
+            if (refresh) for (unsigned i = 0; i < m->count; i++) if (!strcmp(active, m->searching && m->entries[i].result ? m->result_paths[m->entries[i].result-1] : m->entries[i].name)) m->active = m->anchor = i;
             fm_sort(m, m->sort, m->descending);
             if (!refresh) W(a, W_LIST)->scroll = W(a, W_LIST)->hscroll = 0;
             if (a->select_created) {
                 fm_select_none(m);
-                for (unsigned i = 0; i < a->job.created_count; i++) fm_select_name(m, a->job.created[i], 1);
+                if (m->searching) select_created_results(a);
+                else for (unsigned i = 0; i < a->job.created_count; i++) fm_select_name(m, a->job.created[i], 1);
             }
         }
         a->media = b->media; memcpy(a->drive_labels, b->drive_labels, sizeof(a->drive_labels));
@@ -1125,6 +1164,7 @@ static void scan_poll(struct files_app *a)
     a->pending_command = 0;
     scan_free(s);
     if (pending) command(a, pending);
+    if (a->find_initial) { a->find_initial = 0; files_find(a); }
 }
 static void scan_stop(struct files_app *a)
 {
@@ -1796,6 +1836,8 @@ static void bin_properties(struct files_app *a)
     bin_scope_show(a);
 }
 
+#include "search_ui.inc"
+
 static void properties(struct files_app *a)
 {
     if (fm_is_recycle(a->model.path)) {
@@ -1858,6 +1900,7 @@ static void context(struct files_app *a, const struct du_event *e)
             return;
         }
         popup_add(a, "&Open", C_OPEN, DU_ITEM_DEFAULT);
+        if (m->searching) popup_add(a, "Open Containing &Folder", C_FIND_FOLDER, 0);
         int target=removal_target(a);
         if (target>=3) popup_add(a, removal_label(a,target), C_SAFE_REMOVE, 0);
         if (kind != FM_KIND_FOLDER) popup_add(a, "Open with &CiukNote", C_OPEN_NOTE, 0);
@@ -1898,15 +1941,15 @@ static void context(struct files_app *a, const struct du_event *e)
         popup_add(a, NULL, 0, DU_ITEM_SEPARATOR);
         popup_add(a, "Refres&h", C_REFRESH, 0);
         popup_add(a, NULL, 0, DU_ITEM_SEPARATOR);
-        popup_add(a, "&Paste", C_PASTE, m->clipboard_count ? 0 : DU_ITEM_DISABLED);
+        popup_add(a, "&Paste", C_PASTE, !m->searching && m->clipboard_count ? 0 : DU_ITEM_DISABLED);
         popup_add(a, NULL, 0, DU_ITEM_SEPARATOR);
-        popup_add(a, "New &Folder", C_NEW_FOLDER, 0); popup_add(a, "New &Text Document", C_NEW_TEXT, 0);
+        popup_add(a, "New &Folder", C_NEW_FOLDER, m->searching ? DU_ITEM_DISABLED : 0); popup_add(a, "New &Text Document", C_NEW_TEXT, m->searching ? DU_ITEM_DISABLED : 0);
         popup_add(a, NULL, 0, DU_ITEM_SEPARATOR);
-        popup_add(a, "P&roperties", C_PROPERTIES, 0);
+        popup_add(a, "P&roperties", C_PROPERTIES, m->searching ? DU_ITEM_DISABLED : 0);
         files_update(a);
     } else if ((e->id == W_TREE || e->id == W_PLACES) && e->index >= 0) {
         const char *path = e->id == W_TREE ? a->tree[e->index].path : a->places[e->index].path;
-        if (!fm_same_path(path, a->model.path)) files_navigate(a, path);
+        if (m->searching || !fm_same_path(path, a->model.path)) files_navigate(a, path);
         popup_add(a, "&Open", C_TREE_OPEN, DU_ITEM_DEFAULT);
         int target=removal_target(a);
         if (target>=3) popup_add(a, removal_label(a,target), C_SAFE_REMOVE, 0);
@@ -1956,12 +1999,16 @@ static void command(struct files_app *a, int id)
     if (!m->path[0] && (id == C_OPEN_NOTE || id == C_CUT || id == C_COPY || id == C_PASTE ||
         id == C_PASTE_INTO || id == C_DELETE || id == C_DELETE_NOW || id == C_RENAME || id == C_NEW_FOLDER || id == C_NEW_TEXT ||
         id == C_RESTORE || id == C_EMPTY_BIN || id == C_BIN_PROPS)) return;
+    if (m->searching && (id == C_PASTE || id == C_NEW_FOLDER || id == C_NEW_TEXT || (id == C_PROPERTIES && !fm_selected(m, NULL)))) return;
     int in_bin = fm_is_recycle(m->path);
     /* G2: the bin keeps its items as stored; nothing is created, renamed, cut or pasted there. */
     if (in_bin && (id == C_OPEN_NOTE || id == C_CUT || id == C_COPY || id == C_PASTE || id == C_PASTE_INTO || id == C_RENAME ||
                    id == C_NEW_FOLDER || id == C_NEW_TEXT || id == C_MUSIC || id == C_SAFE_REMOVE)) return;
     if (!in_bin && (id == C_RESTORE || id == C_EMPTY_BIN || id == C_BIN_PROPS)) return;
     switch (id) {
+    case C_FIND: files_find(a); break;
+    case C_FIND_STOP: if (a->find_running) files_find(a); break;
+    case C_FIND_FOLDER: { char p[FM_PATH]; if (m->searching && m->active < m->count && !fm_entry_path(m, m->active, p) && !fm_parent(p, p)) files_navigate(a, p); break; }
     case C_SAFE_REMOVE: {
         int d=removal_target(a);
         if (d<3) break;
@@ -2009,7 +2056,7 @@ static void command(struct files_app *a, int id)
     case C_PASTE: paste(a, m->path); break;
     case C_PASTE_INTO: {
         char p[FM_PATH];
-        if (m->active < m->count && m->entries[m->active].meta.type == FM_DIR && !fm_join(p, m->path, m->entries[m->active].name)) paste(a, p);
+        if (m->active < m->count && m->entries[m->active].meta.type == FM_DIR && !fm_entry_path(m, m->active, p)) paste(a, p);
         break;
     }
     case C_DELETE: if (in_bin) confirm_purge(a); else confirm_delete(a, 0); break;
@@ -2062,6 +2109,10 @@ static void command(struct files_app *a, int id)
 static void dialog_result(struct files_app *a, const struct du_event *e)
 {
     switch (e->id) {
+    case D_FIND:
+        if (e->index == 2) { a->find_page = (a->find_page + 1) % 3; find_dialog(a); }
+        else if (e->index == 0) { a->note[0] = 0; int r = scan_submit(a, SCAN_SEARCH, NULL, 0); if (r) error_box(a, "Find", "Cannot start the search:", r); }
+        break;
     case D_DELETE:
         if (a->drop_count) { if (e->index == 0) start_bin_job(a, BIN_DELETE, a->drop_paths, a->drop_count, 0); drop_free(a); }
         else if (e->index == 0) run_delete(a);
@@ -2124,6 +2175,7 @@ static void list_select(struct files_app *a, const struct du_event *e)
 
 static void key(struct files_app *a, const struct du_event *e)
 {
+    if (e->key == FM_FIND_KEY && !e->modifiers) { files_find(a); return; }
     int focus = du_focused(a->ui);
     if (e->key == DU_KEY_F4 && !(e->modifiers & (DU_CTRL | DU_ALT | DU_SHIFT))) { command(a, C_ADDRESS); return; }
     /* G2: Shift+Delete bypasses the Recycle Bin (the plain Delete is a menu accelerator). */
@@ -2251,7 +2303,7 @@ static int drag_destination(struct files_app *a, int x, int y, char destination[
             *widget = W_LIST; *index = i;
             return fm_entry_path(&a->model, (unsigned)i, destination);
         }
-        if (!a->model.path[0]) return -EPERM;
+        if (!a->model.path[0] || a->model.searching) return -EPERM;
         *widget = W_LIST;
         snprintf(destination, FM_PATH, "%s", a->model.path); return 0;
     }
@@ -2396,7 +2448,7 @@ void files_event(struct du_ui *u, const struct du_event *e, void *arg)
         if (e->id == T_JOB) job_tick(a);
         else if (e->id == T_DRAG_REFRESH) drag_refresh(a);
         else if (e->id == T_BROWSER) scan_poll(a);
-        else if (e->id == T_MEDIA && a->media_read && !a->loading && !a->job_active && a->rename_index<0 && !du_dialog_id(a->ui)) {
+        else if (e->id == T_MEDIA && a->media_read && !a->loading && !a->job_active && !a->model.searching && a->rename_index<0 && !du_dialog_id(a->ui)) {
             struct files_worker *w = a->worker;
             if (w && !pthread_mutex_trylock(&w->lock)) {
                 int idle = !w->busy && !w->pending && !w->result;
@@ -2429,11 +2481,11 @@ void files_event(struct du_ui *u, const struct du_event *e, void *arg)
     case DU_EV_SELECT:
         if (e->id == W_LIST) list_select(a, e);
         else if (e->id == W_TREE && e->index >= 0 && (unsigned)e->index < a->tree_count) {
-            if (!fm_same_path(a->tree[e->index].path, a->model.path)) { char p[FM_PATH]; strcpy(p, a->tree[e->index].path); files_navigate(a, p); }
+            if (a->model.searching || !fm_same_path(a->tree[e->index].path, a->model.path)) { char p[FM_PATH]; strcpy(p, a->tree[e->index].path); files_navigate(a, p); }
             du_focus(a->ui, W_TREE);
         } else if (e->id == W_PLACES && e->index >= 0 && (unsigned)e->index < a->place_count) {
             if (!strcmp(a->places[e->index].path, "control:")) open_control(a);
-            else if (!fm_same_path(a->places[e->index].path, a->model.path)) files_navigate(a, a->places[e->index].path);
+            else if (a->model.searching || !fm_same_path(a->places[e->index].path, a->model.path)) files_navigate(a, a->places[e->index].path);
         }
         break;
     case DU_EV_OPEN:
@@ -2442,7 +2494,8 @@ void files_event(struct du_ui *u, const struct du_event *e, void *arg)
         break;
     case DU_EV_SORT: {
         unsigned column = (unsigned)e->index;
-        if (fm_is_recycle(a->model.path)) column = column < 6 ? bin_key_of_header[column] : 0;   /* G2: the bin's Details order differs */
+        if (a->model.searching && column == 4u + (unsigned)a->attribute_column) column = FM_SORT_LOCATION;
+        else if (fm_is_recycle(a->model.path)) column = column < 6 ? bin_key_of_header[column] : 0;   /* G2: the bin's Details order differs */
         fm_sort(&a->model, column, a->model.sort == column ? !a->model.descending : 0);
         files_update(a);
         break;
@@ -2473,7 +2526,10 @@ int files_setup(struct files_app *a, struct du_ui *u, const struct fm_vfs *fs, c
     a->menus[2] = (struct du_menu){"&View", a->view_items, 12};
     a->menus[3] = (struct du_menu){"&Go", a->go_items, 14};
     a->menus[4] = (struct du_menu){"&Help", a->help_items, 3};
-    u->menus = a->menus; u->menu_count = 5;
+    a->tools_items[0] = (struct du_menu_item){"&Find Files or Folders...", C_FIND, FM_FIND_KEY, 0, 0};
+    a->tools_items[1] = (struct du_menu_item){"&Stop Search", C_FIND_STOP, 0, 0, 0};
+    a->menus[5] = a->menus[4]; a->menus[4] = (struct du_menu){"&Tools", a->tools_items, 2};
+    u->menus = a->menus; u->menu_count = 6;
     struct du_rect zero = {0, 0, 0, 0};
     du_add(u, DU_SEPARATOR, W_BAND1, zero, "");
     for (unsigned i = 0; i < sizeof(toolbar) / sizeof(toolbar[0]); i++) {
@@ -2547,7 +2603,7 @@ void files_drop(struct files_app *a, int x, int y, int copy)
     else {
         index=du_list_hit(W(a,W_TREE),x,y);
         if (index>=0 && (unsigned)index<a->tree_count) snprintf(destination,sizeof(destination),"%s",a->tree[index].path);
-        else if (!du_contains(du_list_body(W(a,W_LIST)),x,y)) return;
+        else if (a->model.searching || !du_contains(du_list_body(W(a,W_LIST)),x,y)) return;
     }
     int r=fm_clipboard_load(&a->model);
     if (r) { error_box(a,"Paste","Cannot read the file clipboard:",r); return; }
