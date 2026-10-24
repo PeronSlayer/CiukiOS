@@ -527,7 +527,8 @@ root=Path('build/host/fs')
 files=[p for p in root.rglob('*') if p.is_file()]
 logical=sum(p.stat().st_size for p in files)
 allocated=sum(p.stat().st_blocks*512 for p in files)
-assert logical<200_000_000 and allocated<200_000_000,(logical,allocated)
-print(f'ARTIFACTS files={len(files)} logical_bytes={logical} allocated_bytes={allocated} limit=200000000')
+# 2026-10-24: 240 MB; fx-23 and G29b-d added ASan test binaries (about 7 MB each).
+assert logical<240_000_000 and allocated<240_000_000,(logical,allocated)
+print(f'ARTIFACTS files={len(files)} logical_bytes={logical} allocated_bytes={allocated} limit=240000000')
 print('PASS host filesystem suite: 16 legacy groups plus FAT mount-budget cases, 3 fsck checks, 3 independent mtools comparisons')
 PY
