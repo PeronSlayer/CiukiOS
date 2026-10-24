@@ -4,7 +4,20 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ciuki/abi.h>
+#include "../../sdk/win32/include/w32/screen_saver.h"
+_Static_assert(SC_SCREENSAVE==0xf140u,"G10 SC_SCREENSAVE");
+_Static_assert(SC_MONITORPOWER==0xf170u,"G10 SC_MONITORPOWER");
+_Static_assert(SPI_GETSCREENSAVETIMEOUT==0xeu,"G10 SPI_GETSCREENSAVETIMEOUT");
+_Static_assert(SPI_SETSCREENSAVETIMEOUT==0xfu,"G10 SPI_SETSCREENSAVETIMEOUT");
+_Static_assert(SPI_GETSCREENSAVEACTIVE==0x10u,"G10 SPI_GETSCREENSAVEACTIVE");
+_Static_assert(SPI_SETSCREENSAVEACTIVE==0x11u,"G10 SPI_SETSCREENSAVEACTIVE");
+_Static_assert(SPI_SETSCREENSAVERRUNNING==0x61u,"G10 SPI_SETSCREENSAVERRUNNING");
+_Static_assert(SPI_GETSCREENSAVERRUNNING==0x72u,"G10 SPI_GETSCREENSAVERRUNNING");
+_Static_assert(SPI_GETSCREENSAVESECURE==0x76u,"G10 SPI_GETSCREENSAVESECURE");
+_Static_assert(SPI_SETSCREENSAVESECURE==0x77u,"G10 SPI_SETSCREENSAVESECURE");
+
 #include "../../apps/desktop/protocol.h"
+#include "../../apps/desktop/settings_catalog.h"
 /* Appended after the display-engine pair (DESK_GFX_*_ENGINE 38/39) at staging. */
 _Static_assert(DESK_JOYSTICK==40 && DESK_JOYSTICK_RESULT==41,"joystick desktop opcodes");
 _Static_assert(__builtin_offsetof(struct desk_packet,joystick)==0 && sizeof(((struct desk_packet *)0)->joystick)==100,"joystick decoded payload");
@@ -20,6 +33,15 @@ _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,launch.reserved[3])
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,launch.reserved[4])==100,"launch second joystick generation");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,launch.reserved[5])==104,"launch joystick mode");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,launch.reserved[6])==108,"launch joystick session");
+/* G13: a native program fault reuses the 224-byte Win32 fault record (kind 6, appended to w32_report_action). */
+#include <ciuki/w32_diagnostics.h>
+_Static_assert(W32_REPORT_CRASH==1 && W32_REPORT_REFUSE==2 && W32_REPORT_NEXT==3 && W32_REPORT_CLOSE==4 &&
+               W32_REPORT_REASON==5 && W32_REPORT_NATIVE_FAULT==6,"native fault record kind");
+_Static_assert(sizeof(struct ciuki_w32_fault)==224,"fault record size");
+_Static_assert(__builtin_offsetof(struct ciuki_w32_fault,code)==12 && __builtin_offsetof(struct ciuki_w32_fault,eip)==16 &&
+               __builtin_offsetof(struct ciuki_w32_fault,offset)==20 && __builtin_offsetof(struct ciuki_w32_fault,valid)==24 &&
+               __builtin_offsetof(struct ciuki_w32_fault,registers)==28 && __builtin_offsetof(struct ciuki_w32_fault,stack)==64 &&
+               __builtin_offsetof(struct ciuki_w32_fault,exe)==96 && __builtin_offsetof(struct ciuki_w32_fault,module)==160,"fault record fields");
 #include "../../sdk/win32/include/w32/clipboard_formats.h"
 _Static_assert(CF_TEXT==1u,"G5 Win32 CF_TEXT");
 _Static_assert(CF_BITMAP==2u,"G5 Win32 CF_BITMAP");
@@ -156,7 +178,30 @@ _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,presentation.redraw
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,presentation.flags)==84,"DOSVM row opt-in ABI");
 _Static_assert(__builtin_offsetof(struct ciuki_dosvm_command,scanlines.bits)==72,"DOSVM row output ABI");
 _Static_assert(sizeof(((struct ciuki_dosvm_command *)0)->scanlines)==64,"DOSVM row tail ABI");
+_Static_assert(DESK_SETTINGS_SAVER_PREVIEW==10u,"G10 settings request");
 static const struct expectation expectations[] = {
+    {"constant.CIUKI_DISPLAY_SCREEN",CIUKI_DISPLAY_SCREEN,2u},
+    {"constant.CIUKI_DISPLAY_DPMS",CIUKI_DISPLAY_DPMS,3u},
+    {"constant.CIUKI_SCREEN_VERSION",CIUKI_SCREEN_VERSION,1u},
+    {"constant.CIUKI_SCREEN_CONFIG",CIUKI_SCREEN_CONFIG,1u},
+    {"constant.CIUKI_SCREEN_STATUS",CIUKI_SCREEN_STATUS,2u},
+    {"constant.CIUKI_SCREEN_PERSIST",CIUKI_SCREEN_PERSIST,1u},
+    {"offsetof.ciuki_screen_control.version",__builtin_offsetof(struct ciuki_screen_control,version),0u},
+    {"offsetof.ciuki_screen_control.size",__builtin_offsetof(struct ciuki_screen_control,size),4u},
+    {"offsetof.ciuki_screen_control.action",__builtin_offsetof(struct ciuki_screen_control,action),8u},
+    {"offsetof.ciuki_screen_control.value",__builtin_offsetof(struct ciuki_screen_control,value),12u},
+    {"offsetof.ciuki_screen_control.flags",__builtin_offsetof(struct ciuki_screen_control,flags),16u},
+    {"offsetof.ciuki_screen_control.enabled",__builtin_offsetof(struct ciuki_screen_control,enabled),20u},
+    {"offsetof.ciuki_screen_control.timeout",__builtin_offsetof(struct ciuki_screen_control,timeout),24u},
+    {"offsetof.ciuki_screen_control.saver",__builtin_offsetof(struct ciuki_screen_control,saver),28u},
+    {"offsetof.ciuki_screen_control.monitor_seconds",__builtin_offsetof(struct ciuki_screen_control,monitor_seconds),32u},
+    {"offsetof.ciuki_screen_control.running",__builtin_offsetof(struct ciuki_screen_control,running),36u},
+    {"offsetof.ciuki_screen_control.sequence",__builtin_offsetof(struct ciuki_screen_control,sequence),40u},
+    {"offsetof.ciuki_screen_control.command",__builtin_offsetof(struct ciuki_screen_control,command),44u},
+    {"offsetof.ciuki_screen_control.argument",__builtin_offsetof(struct ciuki_screen_control,argument),48u},
+    {"offsetof.ciuki_screen_control.inhibited",__builtin_offsetof(struct ciuki_screen_control,inhibited),52u},
+    {"sizeof.ciuki_screen_control",sizeof(struct ciuki_screen_control),56u},
+    {"alignof.ciuki_screen_control",_Alignof(struct ciuki_screen_control),4u},
     {"constant.INPUT_KEYBOARD_SET", INPUT_KEYBOARD_SET, 0x4905u},
     {"sizeof.ciuki_keyboard_settings", sizeof(struct ciuki_keyboard_settings), 16u},
     {"alignof.ciuki_keyboard_settings", _Alignof(struct ciuki_keyboard_settings), 4u},

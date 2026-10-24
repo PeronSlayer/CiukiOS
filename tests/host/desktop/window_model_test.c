@@ -12,6 +12,7 @@
  * 16 bpp. The fx-2 occlusion harness (occlusion_test.c) supplies the
  * presenters, the full-composite comparison and the per-pixel oracle. */
 #define DESKTOP_OCCLUSION_NO_MAIN
+#include <ciuki/w32_diagnostics.h>
 #include "occlusion_test.c"
 
 enum { WM_SOFTWARE, WM_ENGINE, WM_CACHE, WM_BATCH32, WM_BATCH16, WM_MODES };
@@ -407,7 +408,8 @@ static void wm_frame(const char *what)
     }
     snprintf(step_name,sizeof(step_name),"%s",what);
     if (wm_mode>=WM_BATCH32) batch_frame(); else redraw();
-    if (!d.animation.active) visible_oracle();
+    /* A saver intentionally covers every application. Full-scene oracle still runs. */
+    if (!d.animation.active && !d.saver_active) visible_oracle();
     frames_checked++; wm_frames++;
     if (wm_mode==WM_CACHE && !d.damage.count && !d.move_damage.count && !d.present_damage.count)
         for (unsigned k=0;k<64;k++) { wm_clock+=40000000ull; if (!desk_accel_cache_step(&d,wm_clock)) break; }
@@ -779,6 +781,33 @@ static void row_move(unsigned m)
     for (unsigned k=0;k<5;k++) { desk_move(&d,v,d.clients[v].frame.x+23,d.clients[v].frame.y); step("tall window moved across the taskbar"); }
     wm_end();
 }
+/* fx-26: a drag while other things repaint (a DOS window playing, the
+ * dragged program's own update, the clock, a notification sliding in): the
+ * window moves by BitBlt with the damaged parts cut out and repainted
+ * (Windows 98 SetWindowPos without SWP_NOCOPYBITS), never a software
+ * recomposition of both outer boxes per frame; every frame still equals a
+ * full redraw. */
+static void row_move_damaged(unsigned m)
+{
+    row_name="move with other damage"; wm_begin(m,1);
+    struct fake_app *a=app_open("files",300,200,60,60), *b=app_open("ciuknote",240,160,420,300); step("two windows");
+    struct desk_box f=d.clients[a->slot].frame; pointer_to(f.x+60,f.y+8); press(CIUKI_BUTTON_LEFT,1);
+    uint64_t copies=d.stats.accel_copies, copied=d.stats.copy_bytes;
+    for (unsigned k=0;k<12;k++) {
+        app_paint(b,10,10,60,20,k);                       /* another window repaints every frame */
+        if (k%4==1) app_paint(a,5,30,40,10,k);             /* the dragged program updates itself */
+        if (k==5) { uint64_t previous=d.realtime_second; d.realtime_second++; desk_shell_clock_damage(&d,previous); }
+        if (k==7) desk_shell_notify(&d,"Volume","Volume: 40%",DU_DLG_ICON_INFO,SH_NOTIFY_VOLUME);
+        pointer_to(d.mouse_x+(k<6 ? 13 : -9),d.mouse_y+7);
+        if (k==3) pointer_to(d.mouse_x+5,d.mouse_y+2);    /* two motions in one frame */
+        step("dragged while other windows paint");
+    }
+    press(CIUKI_BUTTON_LEFT,0); step("drop");
+    /* The move was copied (RAM; engine presenters also in scanout). */
+    assert(d.stats.copy_bytes>copied);
+    if (m==WM_ENGINE || m==WM_CACHE) assert(d.stats.accel_copies>copies);
+    wm_end();
+}
 static void row_show_hide(unsigned m)
 {
     /* ShowWindow: SW_HIDE exposes, SW_SHOW/activation paints, also when the
@@ -916,6 +945,18 @@ static void row_internal(unsigned m)
     app_close(a); step("a window closes");
     desk_shell_message(&d,"Programs","A message.",1); step("message box");
     desk_shell_message(&d,"Programs","A second message replaces the first.",0); step("message replaced");
+    wm_end();
+}
+static void row_fault(unsigned m)
+{
+    /* G13: the native program fault dialog is a message window with a Details panel. */
+    row_name="native fault dialog"; wm_begin(m,1);
+    struct ciuki_w32_fault f={.kind=W32_REPORT_NATIVE_FAULT,.pid=42,.tid=43,.code=14u|6u<<8,.eip=0x401234,.offset=0x10,.valid=3};
+    strcpy(f.exe,"crasher"); f.stack[0]=0xdeadbeef; f.stack[1]=0x01020304;
+    desk_w32_fault_dialog(&d,&f); step("illegal operation dialog");
+    tap(DU_KEY_TAB); step("Details panel opens");
+    tap(DU_KEY_TAB); step("Details panel closes");
+    tap(DU_KEY_ENTER); step("Close");
     wm_end();
 }
 static void row_icons(unsigned m)
@@ -1072,6 +1113,95 @@ static void row_drag(unsigned m)
     press(CIUKI_BUTTON_LEFT,0); step("dropped on the window (DROPFILES, no transfer)");
     assert(files_drag_begin(files,2)); pointer_to(200,10); step("right drag from Files over the top bar");
     tap(DU_KEY_ESC); press(CIUKI_BUTTON_RIGHT,0); step("cancelled");
+    wm_end();
+}
+static void row_startup(unsigned m)
+{
+    row_name="startup programs"; wm_begin(m,1);
+    struct fake_app *a=app_open("files",300,180,80,100); step("startup program shows a window");
+    struct fake_app *b=app_open("ciuknote",350,240,210,160); step("next startup program activates");
+    app_close(b); step("startup program closes and exposes previous window");
+    app_close(a); step("startup batch windows closed");
+    wm_end();
+}
+static int saver_monitor_error;
+static unsigned saver_monitor_calls;
+static int saver_monitor(int state)
+{
+    assert(state==-1 || state==1 || state==2);
+    saver_monitor_calls++; return saver_monitor_error;
+}
+static struct ciuki_screen_control saver_shared;
+static int saver_control(struct ciuki_screen_control *q)
+{
+    assert(q->version==CIUKI_SCREEN_VERSION && q->size==sizeof(*q));
+    if (q->action==CIUKI_SCREEN_CONFIG) {
+        saver_shared=*q; saver_shared.sequence++;
+    } else if (q->action==CIUKI_SCREEN_STATUS) {
+        saver_shared.running=(unsigned)q->value;
+        if (q->sequence==saver_shared.sequence) saver_shared.flags=saver_shared.command=0;
+    } else assert(!q->action);
+    *q=saver_shared; return 0;
+}
+static void row_saver(unsigned m)
+{
+    row_name="G10 saver"; wm_begin(m,1);
+    (void)app_open("ciuknote",240,160,100,100); step("application before saver");
+    uint32_t *portrait=malloc(256*256*4); assert(portrait);
+    for (unsigned i=0;i<256*256;i++) portrait[i]=i*31u&0xffffffu;
+    d.portrait=portrait;
+    assert(desk_saver_start(&d,3)==-EINVAL);
+    for (unsigned k=0;k<3;k++) {
+        assert(!desk_saver_start(&d,k)); step("preview start");
+        for (unsigned frame=0;frame<3;frame++) { turn(50000000ull); wm_frame("animated saver"); }
+        unsigned sent=fake_sent;
+        struct ciuki_input_event e={.type=CIUKI_INPUT_BUTTON,.code=CIUKI_BUTTON_LEFT,.value=1};
+        desk_input(&d,&e); assert(!d.saver_active); step("input dismisses and restores desktop");
+        for (unsigned n=sent;n<fake_sent;n++) assert(fake_messages[n].data[1]!=DESK_BUTTON);
+    }
+    d.sh.cfg.saver_enabled=1; d.sh.cfg.saver_seconds=1;
+    d.now_ns=wm_clock; d.saver_idle=d.now_ns; turn(999000000ull); assert(!d.saver_active);
+    turn(1000000ull); assert(d.saver_active); wm_frame("idle activation");
+    tap(DU_KEY_ESC); step("keyboard dismisses");
+    d.v3_lease_state=1; d.saver_idle=d.now_ns-2000000000ull;
+    desk_saver_tick(&d); assert(!d.saver_active); assert(desk_saver_start(&d,0)==-EBUSY);
+    d.v3_lease_state=0; d.sh.cfg.saver_enabled=0;
+    d.monitor_power=saver_monitor; saver_monitor_error=0; saver_monitor_calls=0;
+    d.sh.cfg.monitor_seconds=1; d.saver_idle=d.now_ns-2000000000ull;
+    desk_saver_tick(&d); assert(d.monitor_off && saver_monitor_calls==1);
+    uint64_t before_present=d.presents;
+    desk_damage_add(&d.damage,(struct desk_box){0,0,640,480},640,480);
+    assert(!desk_redraw(&d) && d.presents==before_present && d.damage.count);
+
+    saver_monitor_error=-EIO;
+    struct ciuki_input_event motion={.type=CIUKI_INPUT_MOTION,.value=1};
+    desk_input(&d,&motion); assert(d.monitor_off);
+    saver_monitor_error=0; desk_input(&d,&motion); assert(!d.monitor_off);
+    step("monitor wake repaints scene");
+    saver_monitor_error=-EOPNOTSUPP; d.saver_idle=d.now_ns-2000000000ull;
+    desk_saver_tick(&d); assert(!d.monitor_off && d.monitor_failed);
+    unsigned calls=saver_monitor_calls; desk_saver_tick(&d); assert(calls==saver_monitor_calls);
+    d.sh.cfg.monitor_seconds=0;
+    d.screen_control=saver_control; memset(&saver_shared,0,sizeof(saver_shared));
+    desk_saver_config(&d); assert(saver_shared.timeout==1 && !saver_shared.enabled);
+    saver_shared.enabled=1; saver_shared.timeout=120;
+    saver_shared.command=0xf140; saver_shared.argument=2;
+    saver_shared.flags=CIUKI_SCREEN_PERSIST; saver_shared.sequence++;
+    d.saver_poll=0; desk_saver_tick(&d);
+    assert(d.saver_active && d.saver_kind==2 && d.sh.want_save);
+    assert(!saver_shared.flags && !saver_shared.command);
+    step("shared SC_SCREENSAVE request");
+    desk_input(&d,&motion); desk_saver_tick(&d); assert(!saver_shared.running);
+    saver_shared.running=1; d.saver_poll=0; desk_saver_tick(&d);
+    assert(d.saver_external_running && desk_saver_start(&d,0)==-EBUSY);
+    saver_shared.running=0; d.saver_poll=0; desk_saver_tick(&d);
+    assert(!d.saver_external_running);
+    saver_shared.inhibited=1; d.saver_poll=0; desk_saver_tick(&d);
+    assert(d.saver_display_inhibited && desk_saver_start(&d,0)==-EBUSY);
+    saver_shared.inhibited=0; d.saver_poll=0; desk_saver_tick(&d);
+    assert(!d.saver_display_inhibited);
+    d.sh.cfg.saver_enabled=0; d.screen_control=NULL;
+    d.portrait=NULL; free(portrait);
     wm_end();
 }
 /* ---- G4: the taskbar menu, window arrangement and the Windows-key shortcuts ---- */
@@ -1299,11 +1429,12 @@ static void row_input_preferences(unsigned m)
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
     row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,
-    row_taskbar_menu,row_arrange,row_minimize_all,row_win_keys,row_caption_icon,
-    row_input_preferences,row_input_text};
+    row_taskbar_menu, row_arrange, row_minimize_all, row_win_keys, row_caption_icon, row_startup,
+    row_move_damaged, row_fault, row_saver, row_input_preferences, row_input_text};
 static void wm_rows(unsigned m)
 {
-    /* WM_ROW=<index> runs one row (the per-row evidence against older code). */
+    /* WM_ROW=<index> runs one row (the per-row evidence against older code).
+     * Main keeps indexes 0..28; fx-26 move-with-other-damage is index 29. */
     const char *one=getenv("WM_ROW");
     for (unsigned k=0;k<sizeof(rows)/sizeof(*rows);k++) if (!one || (unsigned)atoi(one)==k) rows[k](m);
 }

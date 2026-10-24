@@ -7,5 +7,7 @@
   "game-raw.xrgb": "05288202676507be0f3a6f463e5cb32bf529f75b6eb49f4cdd54d94bccf6a588",
   "game-save-error.xrgb": "b17da339d689dffd64d6668dc10c2c3a5958bc306e59dc3f0cf2f861ce58274f",
   "game-saved.xrgb": "3bfc5f544b01fd8b26db4c64949a7138d29fadf25a714dcb35f2c11424cf0149",
-  "game-second.xrgb": "aa2f6b6ad03ab2a303d81f1eeecd8c2b28a957fed42bcf61487ec735aae74466"
+  "game-second.xrgb": "aa2f6b6ad03ab2a303d81f1eeecd8c2b28a957fed42bcf61487ec735aae74466",
+  "startup-enabled.xrgb": "604b4550d9eb0137fa83210f22f8b983b9f2a7a07ee7822d5c8a3d5a0da49ba5",
+  "startup-unavailable.xrgb": "3b447f9986bd1a5880423c11398c484ae2c95aa0f268be3827e598a6696dd12c"
 }

@@ -408,9 +408,103 @@ int display_set(struct process *p, uint16_t id)
     return e;
 }
 
+/* G10: policy state is shared by native and Win32 clients. No firmware under
+ * the IRQ guard; CONFIG/STATUS and real DPMS require the desktop authority. */
+static struct ciuki_screen_control screen_policy = {
+    .version=CIUKI_SCREEN_VERSION,.size=sizeof(struct ciuki_screen_control),
+    .timeout=600,.saver=1
+};
+static int screen_control(struct process *p, struct ciuki_screen_control *q)
+{
+    if (q->version!=CIUKI_SCREEN_VERSION || q->size!=sizeof(*q) ||
+        (q->flags&~CIUKI_SCREEN_PERSIST)) return -EINVAL;
+    bool desktop=p && p->pid==supervisor_desktop_pid();
+    if ((q->action==CIUKI_SCREEN_CONFIG || q->action==CIUKI_SCREEN_STATUS) && !desktop) return -EPERM;
+    uint32_t action=q->action;
+    bool inhibited=fullscreen_display || (display_present_active && display_present_active());
+    if (action==0xf140 && inhibited) return -EBUSY;
+    int32_t old=0;
+    uint32_t irq=irq_save();
+    switch (action) {
+    case 0: break;
+    case CIUKI_SCREEN_CONFIG:
+        if (q->enabled>1 || q->saver>2 || q->timeout>INT32_MAX || q->monitor_seconds>INT32_MAX) goto invalid;
+        screen_policy.enabled=q->enabled; screen_policy.timeout=q->timeout;
+        screen_policy.saver=q->saver; screen_policy.monitor_seconds=q->monitor_seconds;
+        break;
+    case CIUKI_SCREEN_STATUS:
+        if (q->value<0 || q->value>1) goto invalid;
+        screen_policy.running=(uint32_t)q->value;
+        /* Acknowledge persistence only for the revision the desktop read. */
+        if (q->sequence==screen_policy.sequence) { screen_policy.flags=0; screen_policy.command=0; }
+        break;
+    case 15:
+        if (q->value<0) goto invalid;
+        screen_policy.timeout=(uint32_t)q->value; break;
+    case 17: screen_policy.enabled=q->value!=0; break;
+    case 97:
+        old=(int32_t)screen_policy.running; screen_policy.running=q->value!=0; break;
+    case 0xf140:
+        if (q->value < -1 || q->value>2) goto invalid;
+        screen_policy.command=action; screen_policy.argument=q->value; break;
+    case 0xf170:
+        if (q->value!=-1 && q->value!=1 && q->value!=2) goto invalid;
+        screen_policy.command=action; screen_policy.argument=q->value; break;
+    default: goto invalid;
+    }
+    if (action && action!=CIUKI_SCREEN_STATUS) {
+        if (!++screen_policy.sequence) ++screen_policy.sequence;
+        screen_policy.flags|=q->flags;
+    }
+    *q=screen_policy; q->value=old; q->inhibited=inhibited;
+    irq_restore(irq); return 0;
+invalid:
+    irq_restore(irq); return -EINVAL;
+}
+
+static bool monitor_asleep;
+static struct fb_device monitor_previous;
+static int monitor_power(struct process *p, int state)
+{
+    if (!p || p->pid!=supervisor_desktop_pid() || !grants_display_owner(p)) return -EPERM;
+    if (state!=-1 && state!=1 && state!=2) return -EINVAL;
+    if (fullscreen_display || check_display || awaiting_frame ||
+        (display_present_active && display_present_active()) || (switching && !monitor_asleep)) return -EBUSY;
+    if (state==-1 && !monitor_asleep) return 0;
+    if (state!=-1 && monitor_asleep) return 0;
+    int e=biosvm_video_prepare();
+    if (e) return e;
+    if (!monitor_asleep) {
+        monitor_previous=*fbdev_get();
+        e=grants_display_suspend(true);
+        if (e) return e;
+        e=fbdev_change_begin();
+        if (e) { (void)grants_display_suspend(false); return e; }
+        switching=true;
+    }
+    e=biosvm_video_dpms(state==-1 ? 0 : state==1 ? 1 : 4);
+    if (!e && state!=-1) { monitor_asleep=true; return 0; }
+    /* Never discard the suspended transaction on a failed wake: input can
+     * retry it. Failed entry restores the on state before resuming drawing. */
+    if (e && monitor_asleep) return e;
+    if (e) (void)biosvm_video_dpms(0);
+    int restored=fbdev_change_commit(&monitor_previous);
+    if (restored) { monitor_asleep=true; return restored; }
+    monitor_asleep=false; switching=false;
+    fbdev_change_end(); (void)grants_display_suspend(false); changed();
+    return e;
+}
+
 int32_t display_syscall(struct trap_frame *tf)
 {
     if (tf->edx || tf->esi || tf->edi || tf->ebp) return -EINVAL;
+    if (tf->ebx == CIUKI_DISPLAY_SCREEN) {
+        struct ciuki_screen_control q;
+        int e=copy_from_user(&q,tf->ecx,sizeof(q));
+        if (!e) e=screen_control(proc_current(),&q);
+        return e ? e : copy_to_user(tf->ecx,&q,sizeof(q));
+    }
+    if (tf->ebx == CIUKI_DISPLAY_DPMS) return monitor_power(proc_current(),(int32_t)tf->ecx);
     if (tf->ebx == CIUKI_DISPLAY_SET) {
         if (tf->ecx > UINT16_MAX) return -EINVAL;
         return display_set(proc_current(), (uint16_t)tf->ecx);

@@ -5,6 +5,7 @@
 #include "theme.h"
 #include "start-orb.h"
 #include "shell_link.h"
+#include "startup.h"
 #include <stddef.h>
 #define DESK_CLIENTS 16
 #define DESK_DAMAGE_MAX 32
@@ -259,6 +260,7 @@ struct desk_end_task {
 struct desk_render_cache;
 struct desk_clipboard;
 struct desktop {
+    struct desk_startup_gate startup;
     struct desk_clipboard *clipboard;
     void (*wake)(void *);
     void *wake_ctx;
@@ -290,6 +292,12 @@ struct desktop {
     int (*v3_fault_close)(uint32_t);
     uint32_t width, height, *pixels;
     const uint32_t *portrait;
+    uint64_t saver_idle, saver_frame, saver_poll;
+    unsigned saver_active, saver_kind, saver_sequence, saver_reported;
+    int monitor_off, monitor_failed, saver_external_running, saver_display_inhibited;
+    int (*screen_control)(struct ciuki_screen_control *);
+    int (*monitor_power)(int);
+
     /* Shell icons (desktop.c: libdeskui's Tango store, icon_map.c keys such as
      * "program:files"); NULL draws none. */
     const uint32_t *(*icon)(const char *object, unsigned size);
@@ -614,6 +622,10 @@ int desk_display_frame_commit(struct desktop *, int redraw_result);
 void desk_display_relayout(struct desktop *, uint32_t width, uint32_t height);
 void desk_zoom(struct desktop *, int index);
 unsigned desk_resize_hit(const struct desk_client *, int32_t x, int32_t y);
+void desk_saver_config(struct desktop *);
+void desk_saver_tick(struct desktop *);
+int desk_saver_start(struct desktop *, unsigned kind);
+int desk_saver_input(struct desktop *, const struct ciuki_input_event *);
 void desk_input(struct desktop *, const struct ciuki_input_event *);
 int desk_drain_input(struct desktop *, int (*read_events)(int, struct ciuki_input_event *, uint32_t));
 void desk_composite(struct desktop *, struct desk_box);

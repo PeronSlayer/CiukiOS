@@ -205,6 +205,7 @@ void u32_input_focus(void);
 BOOL u32_input_pointer(HWND, BOOL);
 extern HWND u32_input_exclusive;
 void u32_settings(void);
+BOOL u32_saver_command(UINT, int);
 extern UINT u32_pointer_changing;
 void u32_activate(struct u32_window *, BOOL, BOOL);
 POINT u32_origin(struct u32_window *);

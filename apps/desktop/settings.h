@@ -37,6 +37,7 @@ struct ciuki_settings {
     int mouse_speed;                /* 1..10, 5 = one screen pixel per mouse count */
     int double_click_ms;            /* 1..5000; Control Panel slider 200..900 */
     uint16_t display_mode;         /* confirmed VBE mode id; 0 keeps loader default */
+    int saver_enabled, saver_seconds, saver_kind, monitor_seconds; /* G10: 0..INT32_MAX seconds; kinds 0..2 */
     int keyboard;                   /* CFG_KEYS_* */
     int repeat_delay, repeat_speed; /* Windows 0..3, 0..31 */
     int cursor_blink_ms;            /* 0 = steady; otherwise 100..1200 */

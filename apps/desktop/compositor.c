@@ -1002,8 +1002,38 @@ void desk_caption_damage(struct desktop *d,int index)
 static void visible_window(struct desktop *d, int index, struct desk_box clip)
 { DESK_PROFILE("windows", window(d,index,clip)); }
 static void cursor(struct desktop *, struct desk_box);
+static void saver_scene(struct desktop *d, struct desk_box clip)
+{
+    fill(d,clip,clip,0);
+    uint64_t frame=d->now_ns/50000000ull;
+    if (d->saver_kind==1 && d->portrait) {
+        unsigned size=d->width<256 ? d->width : 256;
+        if (size>d->height) size=d->height;
+        unsigned wx=d->width-size, hy=d->height-size;
+        unsigned x=wx ? (unsigned)(frame%((uint64_t)wx*2)) : 0;
+        unsigned y=hy ? (unsigned)(frame%((uint64_t)hy*2)) : 0;
+        if (x>wx) x=wx*2-x;
+        if (y>hy) y=hy*2-y;
+        /* Nearest-neighbour size conversion of the pinned approved raster. */
+        struct desk_box b;
+        if (size && desk_intersect((struct desk_box){(int)x,(int)y,(int)size,(int)size},clip,&b))
+            for (int yy=b.y;yy<b.y+b.h;yy++) for (int xx=b.x;xx<b.x+b.w;xx++)
+                d->pixels[(size_t)yy*d->width+xx]=d->portrait[((unsigned)yy-y)*DESK_PORTRAIT_SIZE/size*DESK_PORTRAIT_SIZE+
+                    ((unsigned)xx-x)*DESK_PORTRAIT_SIZE/size];
+    } else if (d->saver_kind==2 && d->width && d->height) {
+        /* Fixed seeds, bounded integer projection; no allocations or FPU. */
+        for (unsigned i=0;i<96;i++) {
+            unsigned z=1+(unsigned)((i*53u+255u-(unsigned)(frame%255))%255);
+            int x=(int)d->width/2+((int)(i*7919u%2049)-1024)*128/(int)z;
+            int y=(int)d->height/2+((int)(i*3571u%1537)-768)*128/(int)z;
+            unsigned c=255-z/2;
+            fill(d,clip,(struct desk_box){x,y,z<64 ? 2 : 1,z<64 ? 2 : 1},c*0x010101u);
+        }
+    }
+}
 static void scene(struct desktop *d, struct desk_box clip)
 {
+    if (d->saver_active) { saver_scene(d,clip); return; }
     if (!desk_intersect(clip,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},&clip)) return;
     /* A client-only update writes its opaque backing store directly. Higher
      * windows' shadows and shell overlays still need the ordinary painter. */
@@ -1074,7 +1104,7 @@ static void cursor(struct desktop *d, struct desk_box clip)
     struct desk_box b;
     struct desk_box box=pointer_box(d);
     struct desk_cursor_raster r=cursor_raster(d);
-    if (d->hw_cursor || d->v3_cursor_hidden || !desk_intersect(box,clip,&b)) return;
+    if (d->saver_active || d->hw_cursor || d->v3_cursor_hidden || !desk_intersect(box,clip,&b)) return;
     unsigned scale=pointer_scale(d);
     int inverted=d->shell && !d->v3_cursor_id && d->sh.cfg.pointer_scheme==2;
     if (!d->v3_cursor_id && scale==1 && !inverted && !r.shadow && du_commands) {
@@ -2031,6 +2061,21 @@ int desk_redraw(struct desktop *d)
     /* f2-95: while a leased program owns the display, retained damage waits
      * at the frame cadence (it is drawn when the lease ends). */
     if (d->v3_lease_state) { d->next_frame_ns=time_now(d)+DESK_FRAME_NS; return 0; }
+    if (d->monitor_off) { d->next_frame_ns=time_now(d)+DESK_FRAME_NS; return 0; }
+    if (d->saver_active) {
+        d->hw_cursor=0; pointer_hide(d);
+        if (d->hw_cursor_shown || d->recovering_fence) { d->next_frame_ns=time_now(d)+DESK_FRAME_NS; return 0; }
+        struct desk_box b={0,0,(int)d->width,(int)d->height};
+        saver_scene(d,b);
+        struct ciuki_rect r={0,0,0,0,d->width,d->height};
+        int e=d->ops.present(d->display,d->output,&r);
+        if (!e) {
+            d->presents++; d->damage.count=d->move_damage.count=d->present_damage.count=0;
+            d->cursor_dirty=0;
+        }
+        d->next_frame_ns=time_now(d)+50000000ull;
+        return e ? -1 : 0;
+    }
     /* A shell caller can move the pointer while damaging the scene rather
      * than sending a motion event. Its old save-under still needs restoring
      * and both footprints need presentation, including the shadow. */
@@ -2249,7 +2294,17 @@ int desk_redraw(struct desktop *d)
      * slots and wake-up lateness still preserve the absolute next-slot phase. */
     uint64_t budget=frame_begin+DESK_FRAME_NS;
     if (end>budget) { s->overruns=1;s->dropped=(end-budget)/DESK_FRAME_NS+1; }
-    if (end>=deadline) deadline+=((end-deadline)/DESK_FRAME_NS+1)*DESK_FRAME_NS;
+    /* fx-26: a frame that ends after the next boundary lets the next frame
+     * start at once instead of waiting for the boundary after (there is no
+     * vertical retrace to lock to: VBE reports no refresh, DESK_FRAME_NS).
+     * The lost slot turned every frame that started late in its slot
+     * (scheduler wake-up lateness, the first motion after an idle slot) and
+     * ran past the boundary into a 33 ms gap, halving a drag on the T23
+     * (f441c5bd: 25-47 frames a second with the CPU 40-50 % idle). Windows
+     * 98 draws as soon as the window moved. The next frame still starts at
+     * least one slot after this one started (the rate cap), never later than
+     * the old rule; the phase then follows that start. */
+    if (end>deadline) deadline=end>budget ? end : budget;
     d->stats.overruns+=s->overruns; d->stats.dropped+=s->dropped;
     s->frame_p95_ns=d->stats.frame_p95_ns; s->frame_max_ns=d->stats.frame_max_ns;
     d->next_frame_ns=deadline;

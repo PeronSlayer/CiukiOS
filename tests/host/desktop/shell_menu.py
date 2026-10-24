@@ -27,7 +27,7 @@ import sys
 
 PROGRAM_ORDER = ["ciuknote", "files", "tasks", "dosbox", "demo", "lua", "control", "music", "viewer", "paint", "terminal"]
 ACCESSORIES = ["calc", "gfxdemo", "charmap", "clock", "help", "mixer", "viewer", "regedit"]
-SYSTEM_TOOLS = ["hwreport"]
+SYSTEM_TOOLS = ["hwreport", "logview"]
 SCREEN_W, SCREEN_H = 1024, 768
 ORB = json.loads((Path(__file__).resolve().parents[3] / "apps/desktop/start-orb.json").read_text())
 TOP_BAR = ORB["bar_height"]
