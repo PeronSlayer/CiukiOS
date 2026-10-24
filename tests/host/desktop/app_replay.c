@@ -810,13 +810,13 @@ int rp_kill(pid_t pid, int sig)
 pid_t rp_getpid(void) { return cur->pid; }
 
 /* /Programs as the desktop scans it: the image's programs (scripts/build_image.py). */
-struct rp_dir { char names[24][64]; unsigned count, at; struct dirent entry; };
+struct rp_dir { char names[DESK_MENU_MAX + 1][64]; unsigned count, at; struct dirent entry; };
 DIR *rp_opendir(const char *path)
 {
     if (strcmp(path, "/Programs")) { errno = ENOENT; return NULL; }
     struct rp_dir *d = calloc(1, sizeof(*d)); assert(d);
     char list[512]; snprintf(list, sizeof(list), "%s", bin_list);
-    for (char *s = strtok(list, ","); s && d->count < 24; s = strtok(NULL, ",")) snprintf(d->names[d->count++], 64, "%s", s);
+    for (char *s = strtok(list, ","); s && d->count < DESK_MENU_MAX + 1; s = strtok(NULL, ",")) snprintf(d->names[d->count++], 64, "%s", s);
     return (DIR *)d;
 }
 struct dirent *rp_readdir(DIR *dir)

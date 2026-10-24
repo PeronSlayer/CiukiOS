@@ -477,11 +477,14 @@ def build(host=False, clean=False, directory=None):
         shutil.copy2(library,prefix / "lib/libfreetype.a")
         font_flags+=" -lpthread"
     config = [f"override NETSURF_USE_{key} := {value}" for key, value in FEATURES.items()]
+    # G5: libdeskui widgets reference the system clipboard weakly; -u pulls
+    # clipboard.o out of the archive, so the static ELF has no weak undefined
+    # symbol (sdk/tests/check_sdk.py).
     config += ["override NETSURF_FB_FRONTEND := " + ("ram" if host else "ciuki"),
                "override NETSURF_FB_FONTLIB := ciuki", "override NETSURF_FB_RESPATH := /system/netsurf",
                "override NETSURF_FB_FONTPATH := /system/fonts", "override MESSAGES_LANGUAGES := en",
                "CFLAGS += " + " ".join([*cflags,*(["-include",str(HERE / "port/host_network.h")] if host else [])]) + " -DCIUKI_NETSURF -D__ciuki__ -I" + str(ROOT) + " -I" + str(adapter_headers) + (" -DCIUKI_HOST" if host else "") + " -DCIUKI_ROOT=\\\"" + str(ROOT) + "\\\"",
-               "LDFLAGS += -L" + str(prefix / "lib") + " -ldeskui -lbearssl " + font_flags]
+               "LDFLAGS += -L" + str(prefix / "lib") + " -Wl,-u,du_system_clipboard_text_set -Wl,-u,du_system_clipboard_text_get -ldeskui -lbearssl " + font_flags]
     (browser / "Makefile.config").write_text("\n".join(config) + "\n")
     run(["make", "-j1", "TARGET=framebuffer", "HOST=" + ("Linux" if host else "CiukiOS"), "CC=" + str(cc),
          "CCACHE=", "CC_VERSION=17.0.0", "PKG_CONFIG=pkg-config", "BUILD_CC=clang",

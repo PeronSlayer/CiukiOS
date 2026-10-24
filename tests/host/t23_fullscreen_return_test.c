@@ -54,7 +54,7 @@ void klog(const char *fmt,...) { (void)fmt; }
 
 /* ---- the production fx-22 policy ---- */
 #define DOSVM_STOPPING 3u
-struct dosvm { struct { unsigned state; } info; bool fullscreen_hold, fullscreen_suspended, fullscreen_parked; struct kwait wake; };
+struct dosvm { struct { unsigned state; } info; bool fullscreen_hold, fullscreen_suspended, fullscreen_parked, clipboard_mark; /* G5: a mark selection also parks the VM */ struct kwait wake; };
 #include "fullscreen_return_policy.inc"
 /* Negative control: the pre-fx-22 checkpoint of dosvm_fullscreen.c. */
 static void pre_checkpoint(struct dosvm *v)
