@@ -60,6 +60,7 @@ RENDERS = {
     "logview-crash.xrgb": "PIN-FROM-FIRST-RUN",
     "mixer-default.xrgb": "PIN-FROM-FIRST-RUN",
     "mixer-muted.xrgb": "PIN-FROM-FIRST-RUN",
+    "recorder-recording.xrgb": "PIN-FROM-FIRST-RUN",
     "viewer-empty.xrgb": "PIN-FROM-FIRST-RUN",
     "viewer-rotated.xrgb": "PIN-FROM-FIRST-RUN",
     "viewer-jpeg-300.xrgb": "PIN-FROM-FIRST-RUN",
@@ -127,7 +128,7 @@ class AccessoriesTests(unittest.TestCase):
     def test_logview(self): self.check_renders(self.run_native("logview"))
     def test_mixer(self): self.check_renders(self.run_native("mixer"))
     def test_mixer_queue(self): self.run_native("mixer_queue")
-    def test_recorder(self): self.run_native("recorder")
+    def test_recorder(self): self.check_renders(self.run_native("recorder"))
     def test_cdplayer(self): self.run_native("cdplayer")
     def test_charmap(self): self.check_renders(self.run_native("charmap"))
     def test_keymap_and_recent(self): self.run_native("keymap")

@@ -147,8 +147,8 @@ static void chrome_checks(void)
     assert(!toolbar_keys && !strcmp(url->text,"editing"));
     /* A page drag crossing chrome retains its release, then bar input works. */
     input(CIUKI_INPUT_BUTTON,1,1,0);drain();
-    input(CIUKI_INPUT_MOTION,0,220,16);input(CIUKI_INPUT_BUTTON,1,0,0);drain();
-    assert(!s->buttons);click_at(220,16);assert(toolbar_keys);
+    input(CIUKI_INPUT_MOTION,0,url->box.x+40,16);input(CIUKI_INPUT_BUTTON,1,0,0);drain();
+    assert(!s->buttons);click_at(url->box.x+40,16);assert(toolbar_keys);
     /* Conversely, a URL selection drag never presses the page. */
     input(CIUKI_INPUT_BUTTON,1,1,0);input(CIUKI_INPUT_MOTION,0,400,200);
     input(CIUKI_INPUT_BUTTON,1,0,0);assert(!s->buttons && !s->count && ui.capture<0);
