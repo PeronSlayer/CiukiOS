@@ -203,17 +203,17 @@ class IconStoreTests(unittest.TestCase):
         table = {l.split()[0]: l.split()[1] for l in self.harness("map").splitlines()}
         shell = (ROOT / "apps/desktop/shell.c").read_text()
         catalog = (ROOT / "apps/desktop/catalog.h").read_text()
-        programs = re.findall(r'\{"(\w+)", "[^"]+", "([a-z-]+)", "(?:programs|accessories|developer|system-tools)", (?:NULL|"[^"]*")\}', shell)
+        programs = re.findall(r'\{"(\w+)", "[^"]+", "([a-z-]+)", "(?:programs|accessories|developer|system-tools|games)", (?:NULL|"[^"]*")\}', shell)
         accessories = re.findall(r'\{"(\w+)", "[^"]+", "([a-z-]+)", [01], "[^"]*"\}', catalog)
-        self.assertEqual(len(programs), 26)  # f5-22 system CD Player joins Accessories; f6-19 NetSurf
-        self.assertEqual(len(accessories), 11)  # f2-52 Graphics Demo
+        self.assertEqual(len(programs), 31)  # f5-22 system CD Player joins Accessories; f6-19 NetSurf; G27 Serial Terminal and the four games
+        self.assertEqual(len(accessories), 16)  # f2-52 Graphics Demo; G27 Minesweeper, Solitaire, FreeCell, Hearts, Serial Terminal
         for name, tango in programs + accessories:
             self.assertEqual(tango, table[f"program:{name}"], name)
         # f6-19: native application records (name, label, Tango icon, description) agree
         # with the shell's menu row (Programs root) and the icon map; NetSurf is the browser.
         applications = re.findall(r'\{"(\w+)", "([^"]+)", "([a-z-]+)", "([^"]+)"\},', catalog.split("desk_applications[]", 1)[1].split("};", 1)[0])
         self.assertEqual(applications, [("netsurf", "NetSurf", "internet-web-browser", "Web browser")])
-        rows_by_name = {m[0]: m for m in re.findall(r'\{"(\w+)", "([^"]+)", "([a-z-]+)", "(programs|accessories|developer|system-tools)", (?:NULL|"[^"]*")\}', shell)}
+        rows_by_name = {m[0]: m for m in re.findall(r'\{"(\w+)", "([^"]+)", "([a-z-]+)", "(programs|accessories|developer|system-tools|games)", (?:NULL|"[^"]*")\}', shell)}
         for name, label, tango, _ in applications:
             self.assertEqual(rows_by_name[name], (name, label, tango, "programs"), name)
             self.assertEqual(table[f"program:{name}"], tango, name)

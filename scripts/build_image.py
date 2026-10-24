@@ -329,6 +329,7 @@ def desktop_payloads():
                "/Programs/control": DESKTOP / "control", "/Programs/ciukide": DESKTOP / "ciukide",
                "/Programs/calc": DESKTOP / "calc", "/Programs/charmap": DESKTOP / "charmap", "/Programs/clock": DESKTOP / "clock",
                "/Programs/help": DESKTOP / "help", "/Programs/mixer": DESKTOP / "mixer", "/Programs/viewer": DESKTOP / "viewer",
+               "/Programs/mines": DESKTOP / "mines", "/Programs/solitaire": DESKTOP / "solitaire", "/Programs/freecell": DESKTOP / "freecell", "/Programs/hearts": DESKTOP / "hearts", "/Programs/serial": DESKTOP / "serial",
                "/Programs/terminal": DESKTOP / "terminal",
                "/Programs/paint": DESKTOP / "paint", "/Programs/music": DESKTOP / "music",
                "/system/assets/ciuki-portrait.xrgb": DESKTOP / "ciuki-portrait.xrgb"}

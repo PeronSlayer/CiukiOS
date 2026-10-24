@@ -362,5 +362,5 @@ int term_attach(struct terminal *t,struct du_ui *u,const struct term_host *h)
 void term_detach(struct terminal *t)
 {
     term_lua_close(t); for(unsigned i=0;i<t->count;i++)free(t->lines[(t->first+i)%TERM_SCROLLBACK]);
-    for(unsigned i=0;i<t->history_count;i++)free(t->history[i]); free(t->chunk); t->chunk=NULL;
+    for(unsigned i=0;i<t->history_count;i++)free(t->history[i]); free(t->chunk); t->chunk=NULL; term_env_free(t);
 }

@@ -2,6 +2,7 @@
  * /Programs/paint [--channel-fd=N] [--test=paint] [BMP/PNG path]. */
 #include "paint.h"
 #include "../accessories/acc.h"
+#include "../accessories/wallpaper.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,6 +14,8 @@ static void title(void *arg, const char *text) { du_window_set_title(&((struct p
  * showed the save prompt (G3: before, the window closed under the prompt
  * and a clean picture never closed until the desktop's deadline). */
 static int closing(struct du_window *w, void *arg) { (void)w; (void)arg; return !paint_request_close(); }
+static int wallpaper(void *arg, const char *file, int mode)
+{ return acc_wallpaper_apply(&((struct paint_main *)arg)->window,file,mode==PAINT_WALL_TILE ? ACC_WALL_TILE : ACC_WALL_CENTER); }
 static void declined(void *arg) { du_window_close_reply(&((struct paint_main *)arg)->window,0); }
 static void idle(void *arg)
 {
@@ -35,6 +38,7 @@ int main(int argc, char **argv)
     }
     if (paint_attach(&m->ui)) { du_window_destroy(&m->window); free(m); return 1; }
     paint_callbacks(quit,title,m); paint_decline_callback(declined); m->window.close_request=closing;
+    paint_wallpaper_callback(wallpaper,m,CFG_WALLPAPER_DIR);
     m->path=path;
     du_window_accept_files(&m->window,1);   /* fx-19: DragAcceptFiles */
     if (test) du_window_move(&m->window,24,48);

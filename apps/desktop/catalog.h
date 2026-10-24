@@ -19,6 +19,12 @@ static const struct desk_catalog_entry desk_catalog[] = {
     {"mixer", "Volume Control", "audio-volume-high", 0, ""},
     {"music", "Music Player", "audio-x-generic", 1, "wav|mp3|ogg|m3u"},
     {"viewer", "Image Viewer", "image-x-generic", 1, "bmp|png|jpg|jpeg|jpe|gif|xrgb"},
+    /* G27 card and board games (Programs > Games). */
+    {"mines", "Minesweeper", "face-smile", 0, ""},
+    {"solitaire", "Solitaire", "applications-games", 0, ""},
+    {"freecell", "FreeCell", "applications-games", 0, ""},
+    {"hearts", "Hearts", "emblem-favorite", 0, ""},
+    {"serial", "Serial Terminal", "network-wired", 0, ""},   /* G27: Accessories > Serial Terminal */
     /* Viewer is the default; keep Paint available in the shell's Open With. */
     {"paint", "CiukPaint", "applications-graphics", 1, "bmp|png"},
 };

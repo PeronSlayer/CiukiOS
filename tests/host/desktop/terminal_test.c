@@ -36,6 +36,13 @@ static int power(void *ctx,unsigned action) { (void)ctx; powers++; powered=actio
 static time_t now(void *ctx) { (void)ctx; return 1791892800; }
 static void quit(void *ctx) { (void)ctx; exits++; }
 static void pump(void *ctx) { (void)ctx; if(cancel_after && ++pumps==cancel_after)at_chord(&ui,DU_KEY_LCTRL,0x2e); }
+/* G27 fakes: attribute bits on the fake nodes, volume labels and drive space. */
+static char labels[26][33]={"","","CIUKI"}; static int label_sets;
+static int attributes(void *ctx,const char *path,uint32_t value)
+{ (void)ctx; int n=fake_lookup(path); if(n<0)return -ENOENT; fake_nodes[n].meta.attributes=value; return 0; }
+static int label_get(void *ctx,unsigned drive,char out[33]) { (void)ctx; if(drive>=26)return -EINVAL; strcpy(out,labels[drive]); return 0; }
+static int label_set(void *ctx,unsigned drive,const char *label) { (void)ctx; if(drive>=26)return -EINVAL; strcpy(labels[drive],label); label_sets++; return 0; }
+static int space(void *ctx,unsigned drive,uint64_t *total,uint64_t *free_bytes) { (void)ctx; if(drive>=26)return -EINVAL; *total=1000000; *free_bytes=400000; return 0; }
 static void file(const char *path,const char *s)
 { int n=fake_file(path,(unsigned)strlen(s),0); memcpy(fake_nodes[n].data,s,strlen(s)); }
 static void command(const char *s,int expected,const char *part)
@@ -47,6 +54,114 @@ static void command(const char *s,int expected,const char *part)
 static void submit(const char *s) { assert(strlen(s)<sizeof(app.input)); strcpy(app.input,s); app.cursor=strlen(s); at_tap(&ui,DU_KEY_ENTER); }
 static int output_has(const char *s)
 { for(unsigned i=0;i<app.count;i++)if(strstr(app.lines[(app.first+i)%TERM_SCROLLBACK],s))return 1; return strstr(app.pending,s)!=NULL; }
+/* The output of one command line exactly as the grid receives it. */
+static char *run(const char *line,int expected)
+{
+    int error; char *out=term_capture(&app,line,&error);
+    if(error!=expected || !out) { fprintf(stderr,"run [%s]: error=%d expected=%d output=[%s]\n",line,error,expected,out ? out : "NULL"); abort(); }
+    fake_assert_clean(); return out;
+}
+static void exact(const char *line,int expected,const char *want)
+{
+    char *out=run(line,expected);
+    if(strcmp(out,want)) { fprintf(stderr,"exact [%s]: got [%s] want [%s]\n",line,out,want); abort(); }
+    free(out);
+}
+static void contains(const char *line,int expected,const char *part,int present)
+{
+    char *out=run(line,expected);
+    if((strstr(out,part)!=NULL)!=present) { fprintf(stderr,"contains [%s]: [%s] %s [%s]\n",line,part,present ? "missing from" : "found in",out); abort(); }
+    free(out);
+}
+static const char *contents(const char *path)
+{ static char buffer[4096]; int n=fake_lookup(path); assert(n>=0); size_t size=(size_t)fake_nodes[n].meta.size; assert(size<sizeof(buffer)); memcpy(buffer,fake_nodes[n].data,size); buffer[size]=0; return buffer; }
+static void scripting(void)
+{
+    command("CD /Documents",0,NULL);
+    /* Environment: SET, %VAR%, unknown names, deletion. */
+    exact("SET GREETING=hello world",0,""); exact("ECHO %GREETING%",0,"hello world\n"); exact("echo %greeting%!",0,"hello world!\n");
+    contains("SET",0,"GREETING=hello world",1); exact("SET GREETING",0,"GREETING=hello world\n");
+    exact("ECHO %NOPE%",0,"%NOPE%\n"); command("SET NOPE",-ENOENT,"not defined");
+    exact("SET GREETING=",0,""); exact("ECHO %GREETING%",0,"%GREETING%\n"); exact("ECHO 100%",0,"100%\n");
+    exact("SET A=1",0,""); exact("SET B=%A%2",0,""); exact("ECHO %B% %ERRORLEVEL%",0,"12 0\n");
+    /* Redirection. */
+    exact("ECHO one > s_out.txt",0,""); assert(!strcmp(contents("/Documents/s_out.txt"),"one\n"));
+    exact("ECHO two >> s_out.txt",0,""); assert(!strcmp(contents("/Documents/s_out.txt"),"one\ntwo\n"));
+    exact("ECHO three > s_out.txt",0,""); assert(!strcmp(contents("/Documents/s_out.txt"),"three\n"));
+    exact("ECHO more>>s_out.txt",0,""); assert(!strcmp(contents("/Documents/s_out.txt"),"three\nmore\n"));
+    exact("ECHO \"a > b\"",0,"a > b\n");
+    exact("TYPE < s_out.txt",0,"three\nmore\n"); exact("ECHO ignored < s_out.txt",0,"ignored\n");
+    exact("ECHO x > sub\\s_deep.txt",0,""); assert(!strcmp(contents("/Documents/sub/s_deep.txt"),"x\n"));
+    command("ECHO bad > ",-EINVAL,"Syntax error"); command("TYPE < missing.txt",-ENOENT,"missing.txt: No such file");
+    command("ECHO x > sub",-EISDIR,"Is a directory");
+    { int n=fake_lookup("/Documents/s_out.txt"); assert(n>=0); }
+    /* Pipes and the filters. */
+    file("/Documents/s_list.txt","pear\napple\nfig\nbanana\n");
+    exact("TYPE s_list.txt | SORT",0,"apple\nbanana\nfig\npear\n"); exact("TYPE s_list.txt | SORT /R",0,"pear\nfig\nbanana\napple\n");
+    exact("TYPE s_list.txt | FIND \"an\"",0,"banana\n"); exact("FIND /C \"a\" s_list.txt",0,"3\n");
+    exact("FIND /V /I \"A\" s_list.txt",0,"fig\n"); exact("TYPE s_list.txt | SORT | FIND /N \"fig\"",0,"[3]fig\n");
+    exact("SORT < s_list.txt",0,"apple\nbanana\nfig\npear\n"); exact("SORT s_list.txt",0,"apple\nbanana\nfig\npear\n");
+    exact("TYPE s_list.txt | SORT > s_sorted.txt",0,""); assert(!strcmp(contents("/Documents/s_sorted.txt"),"apple\nbanana\nfig\npear\n"));
+    exact("TYPE s_list.txt | MORE",0,"pear\napple\nfig\nbanana\n"); exact("MORE s_list.txt",0,"pear\napple\nfig\nbanana\n");
+    exact("ECHO a b c | FIND \"b\"",0,"a b c\n"); exact("ECHO one | ECHO two",0,"two\n");
+    contains("DIR | FIND \"s_list\"",0,"s_list.txt",1); contains("DIR | FIND \"s_list\"",0,"s_sorted",0);
+    command("FIND \"x\"",-EINVAL,"no input"); command("SORT",-EINVAL,"no input"); command("FIND",-EINVAL,"missing");
+    command("FIND /Q \"x\" s_list.txt",-EINVAL,NULL); command("TYPE nothing | SORT",0,"No such file");   /* the failing first stage's message becomes data */
+    exact("ECHO \"a|b\"",0,"a|b\n");
+    /* Batch files. */
+    file("/Documents/s_b.bat","ECHO called %1\r\nEXIT /B 3\r\nECHO never\r\n");
+    file("/Documents/s_a.bat","@ECHO OFF\r\nREM a comment\r\n:: another\r\nSET X=%1\r\nIF \"%X%\"==\"go\" GOTO yes\r\nECHO no\r\nGOTO end\r\n:yes\r\n"
+         "ECHO going %1 %2 [%*]\r\nFOR %%f IN (alpha beta) DO ECHO item %%f\r\nIF EXIST s_list.txt ECHO exists\r\nIF NOT EXIST nothing.txt ECHO missing\r\n"
+         "IF EXIST s_*.txt ECHO globbed\r\nCALL s_b.bat from_a\r\nIF ERRORLEVEL 3 ECHO level3\r\nIF ERRORLEVEL 4 ECHO level4\r\nIF NOT ERRORLEVEL 4 ECHO below4\r\n"
+         "ECHO 100%%\r\n:end\r\nECHO done\r\n");
+    exact("s_a go two",0,"going go two [go two]\nitem alpha\nitem beta\nexists\nmissing\nglobbed\ncalled from_a\nlevel3\nbelow4\n100%\ndone\n");
+    exact("s_a.bat stop",0,"no\ndone\n"); exact("s_a",0,"no\ndone\n"); exact("CALL s_a go",0,"going go [go]\nitem alpha\nitem beta\nexists\nmissing\nglobbed\ncalled from_a\nlevel3\nbelow4\n100%\ndone\n");
+    exact("ECHO %ERRORLEVEL%",0,"0\n");
+    char *out=run("s_a go",0); free(out);
+    file("/Documents/s_c.bat","ECHO hi\r\nECHO OFF\r\nECHO quiet\r\nECHO ON\r\n@ECHO shown\r\nECHO %0\r\n");
+    exact("s_c",0,"C:\\Documents>ECHO hi\nhi\nC:\\Documents>ECHO OFF\nquiet\nshown\nC:\\Documents>ECHO C:\\Documents\\s_c.bat\nC:\\Documents\\s_c.bat\n");
+    file("/Documents/s_shift.bat","@ECHO OFF\r\nECHO %1 %2\r\nSHIFT\r\nECHO %1 %2\r\nSHIFT\r\nECHO [%1] %*\r\n");
+    exact("s_shift a b c d",0,"a b\nb c\n[c] c d\n");
+    file("/Documents/s_for.bat","@ECHO OFF\r\nFOR %%a IN (*.bat) DO IF %%a==s_b.bat ECHO found %%a\r\nFOR %%x IN (1 2 3) DO ECHO n%%x\r\nFOR %%y IN (nothing*.zzz) DO ECHO none\r\n");
+    exact("s_for",0,"found s_b.bat\nn1\nn2\nn3\n");
+    file("/Documents/s_redir.bat","@ECHO OFF\r\nECHO from batch > s_made.txt\r\nTYPE s_made.txt | FIND \"batch\"\r\nPAUSE\r\n");
+    exact("s_redir",0,"from batch\nPress any key to continue . . .\n"); assert(!strcmp(contents("/Documents/s_made.txt"),"from batch\n"));
+    file("/Documents/s_loop.bat","@ECHO OFF\r\n:again\r\nGOTO again\r\n");
+    contains("s_loop",-EIO,"ran too long",1);
+    file("/Documents/s_rec.bat","@ECHO OFF\r\nCALL s_rec.bat\r\n");
+    contains("s_rec",-EIO,"nested too deeply",1);
+    file("/Documents/s_label.bat","@ECHO OFF\r\nGOTO nowhere\r\nECHO skipped\r\n");
+    contains("s_label",-ENOENT,"Label not found - nowhere",1);
+    file("/Documents/s_eof.bat","@ECHO OFF\r\nECHO before\r\nGOTO :EOF\r\nECHO after\r\n");
+    exact("s_eof",0,"before\n");
+    command("nosuch.bat",-ENOENT,"nosuch.bat"); command("GOTO x",-EINVAL,"only in a batch"); command("SHIFT",-EINVAL,NULL);
+    command("CALL",-EINVAL,NULL); command("CALL nosuch",-ENOENT,NULL); command("IF",-EINVAL,NULL); command("IF EXIST",-EINVAL,NULL);
+    exact("IF EXIST s_list.txt ECHO yes",0,"yes\n"); exact("IF NOT EXIST s_list.txt ECHO yes",0,""); exact("IF a==a ECHO same",0,"same\n"); exact("IF a==b ECHO same",0,"");
+    exact("IF \"a b\"==\"a b\" ECHO quoted",0,"quoted\n"); exact("IF NOT a==b ECHO differs",0,"differs\n"); exact("IF a == a ECHO spaced",0,"spaced\n");
+    exact("FOR %v IN (x y) DO ECHO [%v]",0,"[x]\n[y]\n"); command("FOR %v IN x DO ECHO",-EINVAL,NULL);
+    exact("ECHO ok",0,"ok\n"); exact("ECHO %ERRORLEVEL%",0,"0\n"); term_execute(&app,"TYPE missing"); exact("ECHO %ERRORLEVEL%",0,"2\n");
+    command("IF ERRORLEVEL x ECHO",-EINVAL,NULL);
+    /* New commands. */
+    contains("ATTRIB s_list.txt",0,"s_list.txt",1); contains("ATTRIB s_list.txt",0,"   C:\\Documents\\s_list.txt",1);
+    exact("ATTRIB +R +H s_list.txt",0,"    HR     C:\\Documents\\s_list.txt\n");
+    assert((fake_nodes[fake_lookup("/Documents/s_list.txt")].meta.attributes&3)==3);
+    exact("ATTRIB -R s_list.txt",0,"    H      C:\\Documents\\s_list.txt\n"); exact("ATTRIB +A -H s_list.txt",0,"A          C:\\Documents\\s_list.txt\n");
+    exact("ATTRIB -A s_list.txt",0,"           C:\\Documents\\s_list.txt\n");
+    command("ATTRIB +X s_list.txt",-EINVAL,NULL); command("ATTRIB a b",-EINVAL,NULL); command("ATTRIB nothing.txt",-ENOENT,NULL);
+    contains("ATTRIB +R sub",0,"folders keep their attributes",1);
+    contains("ATTRIB",0,"one.txt",1);
+    exact("VOL",0," Volume in drive C is CIUKI\n"); exact("VOL D:",0," Volume in drive D has no label\n");
+    exact("LABEL D: DATA DISK",0,""); exact("VOL D:",0," Volume in drive D is DATA DISK\n"); assert(label_sets==1);
+    exact("LABEL",0," Volume in drive C is CIUKI\n"); command("LABEL Z: x",0,NULL); command("VOL 1",-EINVAL,NULL);
+    contains("CHKDSK",0,"bytes total disk space",1); contains("CHKDSK",0,"user files",1); contains("CHKDSK",0,"400000 bytes available",1);
+    contains("CHKDSK D:",0,"Volume DATA DISK",1); contains("CHKDSK /F",-EINVAL,"nothing is repaired",1); command("CHKDSK X:",-ENOENT,NULL);
+    contains("IPCONFIG",0,"IP Address. . . . . . . . . : 0.0.0.0",1); contains("IPCONFIG",0,"Connected",1); contains("IPCONFIG /ALL",0,"52-00-00-00-00-AB",1);
+    contains("IPCONFIG /ALL",0,"rtl8139",1); command("IPCONFIG /X",-EINVAL,NULL);
+    contains("PING 10.0.0.1",-ENOSYS,"raw ICMP",1); contains("FORMAT A:",-ENOSYS,"format service",1);
+    contains("HELP",0,"ATTRIB",1); contains("HELP",0,"IPCONFIG",1);
+    /* Interrupting a long redirection and the capture limits stay clean. */
+    fake_assert_clean();
+}
 static void builtins(void)
 {
     assert(!term_execute(&app,"EXIT") && exits==1); app.quit=0;
@@ -168,9 +283,9 @@ int main(void)
 {
     fake_reset(); assert(fake_create("/Documents",FM_DIR)>=0); assert(fake_create("/Documents/sub",FM_DIR)>=0);
     assert(fake_create("/mnt",FM_DIR)>=0); assert(fake_create("/mnt/d",FM_DIR)>=0); file("/Documents/one.txt","first\n"); file("/Documents/space name.txt","spaces\n"); file("/Documents/plain","plain"); file("/Documents/sub/child","child");
-    struct term_host host={.fs=fake_vfs,.net=net,.mixer=mixer,.volume=volume,.processes=processes,.display=display,.launch=launch,.kill=kill,.power=power,.now=now,.pump=pump,.quit=quit};
+    struct term_host host={.fs=fake_vfs,.attributes=attributes,.label_get=label_get,.label_set=label_set,.space=space,.net=net,.mixer=mixer,.volume=volume,.processes=processes,.display=display,.launch=launch,.kill=kill,.power=power,.now=now,.pump=pump,.quit=quit};
     du_init(&ui,pixels,TERM_WIDTH,TERM_HEIGHT); assert(!term_attach(&app,&ui,&host)); assert(app.columns==80 && app.rows==25);
-    builtins(); system_commands(); lua_and_ui();
+    builtins(); system_commands(); scripting(); lua_and_ui();
     /* Deterministic review scene: the production fixed-cell painter, accents,
      * descenders, cursor and selection. Independent of previous command output. */
     term_execute(&app,"CLS"); term_write(&app,"CiukiOS Terminal\nClassic computing, one woof at a time.\nAVATAR To Wa 0123456789 gjpqy\n");

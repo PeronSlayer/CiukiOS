@@ -2,12 +2,15 @@
  * /Programs/viewer: the CiukiOS Image Viewer (desktop client, protocol v2).
  * Usage: viewer [--channel-fd=N] [--test=viewer] [path] */
 #include "viewer.h"
+#include "wallpaper.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 struct viewer_main { struct du_window window; struct du_ui ui; struct viewer_app app; const char *path; };
 static void quit(void *host) { du_window_close(&((struct viewer_main *)host)->window); }
+static int wallpaper(void *host, const char *path, int mode)
+{ return acc_wallpaper_apply(&((struct viewer_main *)host)->window, path, mode == 1 ? ACC_WALL_TILE : mode == 2 ? ACC_WALL_STRETCH : ACC_WALL_CENTER); }
 static void idle(void *arg)
 {
     struct viewer_main *m=arg;
@@ -30,7 +33,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "viewer: desktop connection failed: %s\n", strerror(errno)); free(m); return 1;
     }
     viewer_attach(&m->app, &m->ui, viewer_native_fs());
-    m->app.quit = quit; m->app.host = m;
+    m->app.quit = quit; m->app.host = m; m->app.wallpaper = wallpaper;
     m->app.asynchronous=1; m->path=path;
     du_window_accept_files(&m->window, 1);   /* fx-19: DragAcceptFiles */
     if (test) du_window_move(&m->window, 24, 48);

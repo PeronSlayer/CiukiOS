@@ -89,4 +89,36 @@ Lua file I/O uses the real filesystem and current directory. Standard `io`
 file handles retain the port's behavior; use `print` or `term.print` for grid
 output. Nested Lua invocation through `term.run`, EXIT and power confirmations
 inside an output capture are refused. Captures and script input have a 1 MiB
-limit. Pipelines, redirection and batch files are outside this release.
+limit.
+
+## Pipes, redirection, variables and batch files (G27)
+
+A command line may be several commands joined by `|`; each command's output is
+the next one's input. `> file` replaces a file with the output, `>> file`
+appends, and `< file` supplies the input. Quotes protect `|`, `<` and `>`.
+Only the filters FIND, SORT, MORE and TYPE (without a file name) read the
+input; other commands ignore it. A stage that fails still passes what it
+printed (its error text) on, as COMMAND.COM did, and the line's status is that
+of the last stage. Output is held in memory up to 1 MiB per stage.
+
+`SET NAME=value` defines a variable, `SET` lists them, `SET NAME=` deletes one.
+`%NAME%` and `%ERRORLEVEL%` are replaced before a line runs; an unknown name stays
+as typed at the prompt and is empty in a batch file. ERRORLEVEL is the error number
+of the last command (0 on success).
+
+A command that names a `.BAT` or `.CMD` file (the extension may be left out)
+runs it as a batch file with `%0` to `%9` and `%*`; `SHIFT` moves the arguments.
+Supported: `@` and `ECHO ON/OFF` (the echoed line shows the folder and a `>`),
+`REM` and `::`, `:label` with `GOTO label` and `GOTO :EOF`, `IF [NOT] EXIST name`
+(wildcards allowed), `IF [NOT] ERRORLEVEL n`, `IF [NOT] a==b`, `FOR %v IN (items
+and wildcards) DO command` (`%%v` in a file), `CALL file args`, `PAUSE` (prints the
+message and goes on: no key is awaited), `EXIT /B n`. Batch files nest 16 deep,
+stop after 100000 steps and end with Ctrl+C.
+
+`ATTRIB [+R -R +H -H +S -S +A -A] [files]` shows or changes the FAT attribute bits
+of files (folders keep theirs). `LABEL [d:] [text]` and `VOL [d:]` read and set the
+volume label. `CHKDSK [d:]` is a read-only survey: capacity and free space, folders,
+files and hidden files; it repairs nothing (`/F` is refused; ScanDisk does the
+repairs). `IPCONFIG [/ALL]` shows the adapter, link state and IPv4 address. `FORMAT`
+and `PING` print that they are unavailable (they need a kernel format service and
+raw ICMP sockets). `RUN` and `REG` are still reserved.

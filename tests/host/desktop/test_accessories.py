@@ -28,10 +28,10 @@ ACC = "apps/accessories/"
 TESTS = {
     "calc": [ACC + "calc_model.c", ACC + "calc_view.c"],
     "clock": [ACC + "clock_model.c", ACC + "clock_view.c"],
-    "viewer": [ACC + "viewer_model.c", ACC + "viewer_view.c", ACC + "viewer_stb.c"],
+    "viewer": [ACC + "viewer_model.c", ACC + "viewer_view.c", ACC + "viewer_stb.c", ACC + "wallpaper.c", "apps/desktop/settings.c", "apps/desktop/protocol.c"],
     "help": [ACC + "help_topics.c", ACC + "help_view.c"],
     "mixer": [ACC + "mixer_view.c"],
-    "charmap": [ACC + "charmap_view.c"],
+    "charmap": [ACC + "charmap_view.c", ACC + "charmap_model.c", "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c"],
     "keymap": [],
 }
 # Renders of the current libdeskui look (f2-31 toolkit plus the paint hook), from
@@ -40,7 +40,11 @@ TESTS = {
 RENDERS = {
     "calc-grouped-memory.xrgb": "PIN-FROM-FIRST-RUN",
     "calc-initial.xrgb": "PIN-FROM-FIRST-RUN",
+    "calc-scientific.xrgb": "PIN-FROM-FIRST-RUN",
+    "calc-scientific-bin.xrgb": "PIN-FROM-FIRST-RUN",
     "charmap.xrgb": "PIN-FROM-FIRST-RUN",
+    "charmap-latin1.xrgb": "PIN-FROM-FIRST-RUN",
+    "charmap-cyrillic-serif.xrgb": "PIN-FROM-FIRST-RUN",
     "clock-initial.xrgb": "PIN-FROM-FIRST-RUN",
     "clock-noon.xrgb": "PIN-FROM-FIRST-RUN",
     "help-shortcuts.xrgb": "PIN-FROM-FIRST-RUN",
@@ -48,6 +52,7 @@ RENDERS = {
     "mixer-default.xrgb": "PIN-FROM-FIRST-RUN",
     "mixer-muted.xrgb": "PIN-FROM-FIRST-RUN",
     "viewer-empty.xrgb": "PIN-FROM-FIRST-RUN",
+    "viewer-rotated.xrgb": "PIN-FROM-FIRST-RUN",
     "viewer-jpeg-300.xrgb": "PIN-FROM-FIRST-RUN",
     "viewer-wallpaper-fit.xrgb": "PIN-FROM-FIRST-RUN",
 }
@@ -76,11 +81,20 @@ class AccessoriesTests(unittest.TestCase):
             if name != "keymap":
                 sources.append(ACC + "acc.c")
             icons = load("acc_icon_assets", ROOT / "tests/host/desktop/icon_assets.py")   # the guest's /system/icons store
-            subprocess.run([*FLAGS, *icons.defines(), *INCLUDES, *(str(ROOT / s) for s in sources), "-lm", "-o", str(binary)],
+            extra, tail = [], []
+            if name == "charmap":      # real TrueType faces: the host FreeType build and the sdk/libfont backend
+                ft = load("acc_freetype", ROOT / "sdk/freetype/build.py")
+                (folder / "include").mkdir()
+                (folder / "include/ciuki").symlink_to(ROOT / "sdk/sysroot-overlay/include/ciuki", target_is_directory=True)
+                extra = ["-I", str(folder / "include"), *ft.includes()]
+                tail = [str(ft.host()), "-pthread"]
+            subprocess.run([*FLAGS, *icons.defines(), *INCLUDES, *extra, *(str(ROOT / s) for s in sources), *tail, "-lm", "-o", str(binary)],
                            check=True, env=env)
             args = {"viewer": [str(scratch), str(ROOT / "misc/CiukiOS_SplashScreen.png"), str(renders)],
-                    "help": [str(scratch), str(renders)], "keymap": []}.get(name, [str(renders)])
-            result = subprocess.run([str(binary), *args], check=True, env=env, capture_output=True, text=True)
+                    "help": [str(scratch), str(renders)], "keymap": [],
+                    "charmap": [str(ROOT / "assets/fonts/liberation"), str(renders)]}.get(name, [str(renders)])
+            result = subprocess.run([str(binary), *args], env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("PASS", result.stdout)
             # The tests write the recent list only under the scratch HOME.
             self.assertFalse((Path.home() / "recent.lst").exists() and name in ("viewer", "help") and
@@ -113,7 +127,7 @@ class AccessoriesTests(unittest.TestCase):
         entries = re.findall(r'\{"([a-z]+)", "([^"]+)", "([a-z-]+)", ([01]),', catalog)
         names = [e[0] for e in entries]
         # Catalogue order selects defaults: Viewer precedes its Paint alternative.
-        self.assertEqual(sorted(names), ["calc", "charmap", "clock", "gfxdemo", "help", "hwreport", "mixer", "music", "paint", "regedit", "viewer"])
+        self.assertEqual(sorted(names), ["calc", "charmap", "clock", "freecell", "gfxdemo", "hearts", "help", "hwreport", "mines", "mixer", "music", "paint", "regedit", "serial", "solitaire", "viewer"])
         build = load("acc_build", ROOT / "apps/desktop/build_desktop.py")
         self.assertEqual(set(build.ACCESSORIES) | {"regedit", "gfxdemo", "hwreport"}, set(names))
         self.assertIn("regedit", build.PROGRAMS)

@@ -1,6 +1,7 @@
 /* CiukPaint production-code harness: real libdeskui input and pixel assertions.
  * SPDX-License-Identifier: MIT */
 #include "../../../apps/paint/paint.h"
+#include "../../../apps/paint/xform.h"
 #include "../../../apps/desktop/catalog.h"
 #include "../../../assets/cursors/paint.h"
 #include "acc_test.h"
@@ -424,6 +425,160 @@ static void files(const char *scratch)
     snprintf(path,sizeof(path),"%s/close-save.bmp",scratch);du_set_text(&ui.dialog.items[5],path);dialog_button(0);assert(!state().dirty);
     free(reference);
 }
+
+/* G27: Stretch/Skew, Edit Colours, GIF and JPEG, Set As Wallpaper. */
+static void palette6(uint8_t *pal) { for(int i=0;i<PAINT_COLORS;i++) { uint32_t c=paint_rgb((uint8_t)i); pal[i*3]=(uint8_t)(((c>>16)&255)>>2); pal[i*3+1]=(uint8_t)(((c>>8)&255)>>2); pal[i*3+2]=(uint8_t)((c&255)>>2); } }
+static void expect_pixels(const struct paint_image *im,int w,int h,const uint8_t *want)
+{
+    if(im->w!=w || im->h!=h) { fprintf(stderr,"xform: %dx%d, want %dx%d\n",im->w,im->h,w,h); abort(); }
+    for(int i=0;i<w*h;i++) if(im->pixels[i]!=want[i]) { fprintf(stderr,"xform: pixel %d is %u, want %u\n",i,im->pixels[i],want[i]); abort(); }
+}
+static void xform_tests(void)
+{
+    uint8_t data[8]={1,2,3,4,5,6,7,8}; struct paint_image src={4,2,data},out;
+    assert(!paint_stretch_skew(&src,&out,100,100,0,0,9)); expect_pixels(&out,4,2,data); free(out.pixels);
+    assert(!paint_stretch_skew(&src,&out,200,100,0,0,9)); expect_pixels(&out,8,2,(uint8_t[]){1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8}); free(out.pixels);
+    assert(!paint_stretch_skew(&src,&out,50,100,0,0,9)); expect_pixels(&out,2,2,(uint8_t[]){1,3,5,7}); free(out.pixels);
+    assert(!paint_stretch_skew(&src,&out,100,200,0,0,9)); expect_pixels(&out,4,4,(uint8_t[]){1,2,3,4,1,2,3,4,5,6,7,8,5,6,7,8}); free(out.pixels);
+    assert(!paint_stretch_skew(&src,&out,1,1,0,0,9)); expect_pixels(&out,1,1,(uint8_t[]){1}); free(out.pixels);       /* never smaller than a pixel */
+    /* Horizontal skew: the top leans right for a positive angle, left for a negative one (45 degrees: one pixel per row). */
+    assert(!paint_stretch_skew(&src,&out,100,100,45,0,9)); expect_pixels(&out,5,2,(uint8_t[]){9,1,2,3,4,5,6,7,8,9}); free(out.pixels);
+    assert(!paint_stretch_skew(&src,&out,100,100,-45,0,9)); expect_pixels(&out,5,2,(uint8_t[]){1,2,3,4,9,9,5,6,7,8}); free(out.pixels);
+    /* Vertical skew: a positive angle lifts the right edge; 45 degrees lifts one row per column. */
+    assert(!paint_stretch_skew(&src,&out,100,100,0,45,9));
+    expect_pixels(&out,4,5,(uint8_t[]){9,9,9,4, 9,9,3,8, 9,2,7,9, 1,6,9,9, 5,9,9,9}); free(out.pixels);
+    assert(!paint_stretch_skew(&src,&out,100,100,0,-45,9));
+    expect_pixels(&out,4,5,(uint8_t[]){1,9,9,9, 5,2,9,9, 9,6,3,9, 9,9,7,4, 9,9,9,8}); free(out.pixels);
+    /* Both skews and the stretch together stay inside the output. */
+    assert(!paint_stretch_skew(&src,&out,300,200,30,-20,9)); assert(out.w>12 && out.h>4); free(out.pixels);
+    /* A small angle: 10 degrees over 100 rows moves the top by 17 columns. */
+    uint8_t *tall=calloc(10*100,1); struct paint_image t={10,100,tall};
+    assert(!paint_stretch_skew(&t,&out,100,100,10,0,9) && out.w==10+17 && out.h==100); free(out.pixels); free(tall);
+    /* Limits. */
+    assert(paint_stretch_skew(&src,&out,0,100,0,0,9)==-EINVAL && paint_stretch_skew(&src,&out,501,100,0,0,9)==-EINVAL);
+    assert(paint_stretch_skew(&src,&out,100,100,90,0,9)==-EINVAL && paint_stretch_skew(&src,&out,100,100,0,-90,9)==-EINVAL);
+    uint8_t *wide=calloc(2048,1); struct paint_image big={2048,1,wide};
+    assert(paint_stretch_skew(&big,&out,500,100,0,0,9)==-EFBIG); assert(paint_stretch_skew(&big,&out,100,500,0,0,9)==0); free(out.pixels);   /* 2048x5 fits */
+    free(wide);
+}
+static void gif_round_trip(const char *scratch)
+{
+    uint8_t pal[PAINT_COLORS*3]; palette6(pal);
+    char path[1100]; snprintf(path,sizeof(path),"%s/g27.gif",scratch);
+    static const int dims[][2]={{1,1},{2,1},{3,3},{17,9},{200,150},{640,100}};
+    for(unsigned d=0;d<sizeof(dims)/sizeof(dims[0]);d++) for(int colours=1;colours<=3;colours++) {
+        int w=dims[d][0],h=dims[d][1]; size_t n=(size_t)w*(size_t)h;
+        uint8_t *px=malloc(n); assert(px);
+        unsigned seed=1234u+(unsigned)d*7u; static const int counts[3]={1,2,120};
+        for(size_t i=0;i<n;i++) { seed=seed*1103515245u+12345u; px[i]=(uint8_t)(counts[colours-1]==1 ? 40 : 16+(seed>>16)%(unsigned)counts[colours-1]); }
+        struct paint_image im={w,h,px},back={0};
+        assert(!paint_write_image(path,PAINT_GIF,&im,pal));
+        FILE *f=fopen(path,"rb"); uint8_t head[6]; assert(f && fread(head,1,6,f)==6 && !memcmp(head,"GIF89a",6)); fclose(f);
+        int r=paint_read_image(path,pal,&back);
+        if(r) fprintf(stderr,"gif %dx%d colours=%d: error %d (%s)\n",w,h,counts[colours-1],r,stbi_failure_reason());
+        assert(!r && back.w==w && back.h==h);
+        for(size_t i=0;i<n;i++) if(paint_rgb(back.pixels[i])!=paint_rgb(px[i])) { fprintf(stderr,"gif %dx%d colours=%d: pixel %zu differs\n",w,h,counts[colours-1],i); abort(); }
+        free(back.pixels); free(px);
+    }
+    remove(path);
+}
+static void g27(const char *scratch)
+{
+    xform_tests();
+    gif_round_trip(scratch);
+    uint8_t pal[PAINT_COLORS*3]; palette6(pal);
+    /* JPEG: lossy, but the size and the overall colours survive. */
+    {
+        char path[1100]; snprintf(path,sizeof(path),"%s/g27.jpg",scratch);
+        uint8_t *px=malloc(64*48); assert(px); for(int i=0;i<64*48;i++) px[i]=(i%64)<32 ? 79 : 80;   /* black left, white right */
+        struct paint_image im={64,48,px},back={0};
+        assert(!paint_write_image(path,PAINT_JPEG,&im,pal));
+        FILE *f=fopen(path,"rb"); uint8_t head[3]; assert(f && fread(head,1,3,f)==3 && head[0]==0xff && head[1]==0xd8); fclose(f);
+        assert(!paint_read_image(path,pal,&back) && back.w==64 && back.h==48);
+        int dark=0,light=0; for(int y=0;y<48;y++) { dark+=paint_rgb(back.pixels[y*64+5])==paint_rgb(79); light+=paint_rgb(back.pixels[y*64+58])==paint_rgb(80); }
+        assert(dark>=44 && light>=44);
+        free(back.pixels); free(px); remove(path);
+    }
+    /* The application: Save As with .gif/.jpg names, format choice, and reopening. */
+    paint_command(M_NEW); dialog_button(1);                         /* a clean picture: any "save changes" question answered No */
+    ui.dialog.kind=0;
+    paint_command(M_CLEARIMG); foreground(2); at_click_widget(&ui,P_TOOL+T_RECT); opt(1,51); stroke(T_RECT,5,5,60,40,1);
+    char path[1100]; snprintf(path,sizeof(path),"%s/g27-app.gif",scratch);
+    assert(!paint_save(path,PAINT_GIF)); assert(!paint_open(path) && state().width>0);
+    paint_command(M_SAVEAS); assert(ui.dialog.items[2+3].kind==DU_RADIO && ui.dialog.items[2+4].kind==DU_RADIO);   /* GIF and JPEG choices */
+    struct du_rect r=ui.dialog.items[2+4].box; at_click(&ui,r.x+12,r.y+9);
+    assert(ui.dialog.items[2+4].value && !ui.dialog.items[2+3].value);
+    dialog_button(1); ui.dialog.kind=0;
+    remove(path);
+    /* Stretch/Skew through the dialog: whole picture, undo, validation. */
+    paint_command(M_Z1); attributes(40,20); paint_command(M_CLEARIMG); foreground(2); at_click_widget(&ui,P_TOOL+T_RECT); opt(1,51); stroke(T_RECT,2,2,30,15,1);
+    uint8_t before=paint_pixel(10,10);
+    paint_command(M_STRETCH); assert(ui.dialog.kind && ui.dialog.items[3].kind==DU_EDIT && !strcmp(ui.dialog.items[3].text,"100") && !strcmp(ui.dialog.items[7].text,"0"));
+    du_set_text(&ui.dialog.items[3],"0"); dialog_button(0); assert(ui.dialog.kind && state().width==40);   /* out of range: the dialog stays */
+    du_set_text(&ui.dialog.items[3],"200"); du_set_text(&ui.dialog.items[5],"50"); du_set_text(&ui.dialog.items[7],"0"); du_set_text(&ui.dialog.items[9],"0");
+    dialog_button(0); assert(!ui.dialog.kind && state().width==80 && state().height==10 && state().dirty);
+    assert(paint_pixel(20,5)==before);                                                           /* the filled rectangle scaled with the picture */
+    undo(); assert(state().width==40 && state().height==20 && paint_pixel(10,10)==before);
+    paint_command(M_STRETCH); du_set_text(&ui.dialog.items[3],"100"); du_set_text(&ui.dialog.items[5],"100");
+    du_set_text(&ui.dialog.items[7],"45"); du_set_text(&ui.dialog.items[9],"0"); dialog_button(0);
+    assert(state().width==40+19 && state().height==20);                                          /* 45 degrees over 20 rows */
+    undo();
+    paint_command(M_STRETCH); du_set_text(&ui.dialog.items[7],"90"); dialog_button(0); assert(ui.dialog.kind); dialog_button(1);
+    paint_command(M_STRETCH); du_set_text(&ui.dialog.items[3],"500"); du_set_text(&ui.dialog.items[5],"500"); dialog_button(0);
+    assert(state().width==200 && state().height==100); undo();
+    /* The selection is stretched, not the picture. */
+    paint_command(M_SELALL); assert(state().selection);
+    paint_command(M_STRETCH); du_set_text(&ui.dialog.items[3],"150"); du_set_text(&ui.dialog.items[5],"100"); dialog_button(0);
+    assert(state().width==40 && state().selection_w==60 && state().selection_h==20);
+    undo();
+    /* Edit Colours: a colour the picture does not use takes a free palette entry and becomes the foreground. */
+    paint_command(M_NEW); ui.dialog.kind=0; dialog_button(1); ui.dialog.kind=0;
+    paint_command(M_COLOURS); assert(ui.dialog.kind && ui.dialog.items[3].kind==DU_EDIT);
+    du_set_text(&ui.dialog.items[3],"300"); dialog_button(0); assert(ui.dialog.kind);            /* out of range */
+    du_set_text(&ui.dialog.items[3],"255"); du_set_text(&ui.dialog.items[5],"128"); du_set_text(&ui.dialog.items[7],"0");
+    dialog_button(0); assert(!ui.dialog.kind);
+    uint8_t custom=state().foreground; assert(paint_rgb(custom)==0xff8200u && custom>=16);
+    foreground(2); assert(state().foreground!=custom);
+    foreground(14); assert(state().foreground==custom);                                          /* the first custom box */
+    paint_command(M_COLOURS); du_set_text(&ui.dialog.items[3],"255"); du_set_text(&ui.dialog.items[5],"128"); du_set_text(&ui.dialog.items[7],"0"); dialog_button(0);
+    assert(state().foreground==custom);                                                          /* the same colour reuses its entry */
+    paint_command(M_COLOURS); du_set_text(&ui.dialog.items[3],"10"); du_set_text(&ui.dialog.items[5],"200"); du_set_text(&ui.dialog.items[7],"40"); dialog_button(0);
+    uint8_t second=state().foreground; assert(second!=custom && paint_rgb(custom)==0xff8200u);   /* a different entry; the first is untouched */
+    foreground(15); assert(state().foreground==second);
+    for(int i=0;i<16;i++) {                                                                        /* more colours than custom boxes: they cycle */
+        paint_command(M_COLOURS); char v[8]; snprintf(v,sizeof(v),"%d",20+i*8);
+        du_set_text(&ui.dialog.items[3],v); du_set_text(&ui.dialog.items[5],"7"); du_set_text(&ui.dialog.items[7],"90"); dialog_button(0);
+    }
+    /* A picture that uses a palette entry keeps its colours when new ones are defined. */
+    foreground(2); at_click_widget(&ui,P_TOOL+T_RECT); opt(1,51); stroke(T_RECT,1,1,30,20,1);
+    uint32_t used=paint_rgb(paint_pixel(10,10));
+    for(int i=0;i<20;i++) { paint_command(M_COLOURS); char v[8]; snprintf(v,sizeof(v),"%d",3+i*7);
+        du_set_text(&ui.dialog.items[3],v); du_set_text(&ui.dialog.items[5],"211"); du_set_text(&ui.dialog.items[7],"13"); dialog_button(0); }
+    assert(paint_rgb(paint_pixel(10,10))==used);
+}
+static int wallpaper_calls, wallpaper_mode; static char wallpaper_file[1100];
+static int wallpaper_set(void *host,const char *file,int mode) { (void)host; wallpaper_calls++; wallpaper_mode=mode; snprintf(wallpaper_file,sizeof(wallpaper_file),"%s",file); return 0; }
+static void wallpaper_tests(const char *scratch)
+{
+    /* Without a hook the commands do nothing. */
+    paint_command(M_WALL_TILE); assert(!wallpaper_calls && !ui.dialog.kind);
+    paint_wallpaper_callback(wallpaper_set,NULL,scratch);
+    paint_command(M_NEW); ui.dialog.kind=0; dialog_button(1); ui.dialog.kind=0;
+    paint_command(M_CLEARIMG); foreground(2); at_click_widget(&ui,P_TOOL+T_RECT); opt(1,51); stroke(T_RECT,5,5,50,40,1);
+    paint_command(M_WALL_TILE);
+    char want[1100]; snprintf(want,sizeof(want),"%s/CiukPaint.bmp",scratch);
+    assert(wallpaper_calls==1 && wallpaper_mode==PAINT_WALL_TILE && !strcmp(wallpaper_file,want) && ui.dialog.kind);
+    dialog_button(0);
+    struct paint_image back={0}; uint8_t pal[PAINT_COLORS*3]; palette6(pal);
+    assert(!paint_read_image(want,pal,&back) && back.w==state().width && back.h==state().height);
+    assert(paint_rgb(back.pixels[10*back.w+20])==paint_rgb(paint_pixel(20,10))); free(back.pixels);
+    FILE *f=fopen(want,"rb"); uint8_t head[30]; assert(f && fread(head,1,30,f)==30 && head[0]=='B' && head[28]==24); fclose(f);   /* a 24-bit bitmap */
+    paint_command(M_WALL_CENTER); assert(wallpaper_calls==2 && wallpaper_mode==PAINT_WALL_CENTER); dialog_button(0);
+    remove(want);
+    paint_wallpaper_callback(wallpaper_set,NULL,"/nonexistent-folder");
+    paint_command(M_WALL_CENTER); assert(wallpaper_calls==2 && ui.dialog.kind); dialog_button(0);    /* the picture could not be saved: no wallpaper change */
+    paint_wallpaper_callback(NULL,NULL,NULL);
+}
 int main(int argc,char **argv)
 {
     assert(argc==3); pixels[PAINT_W*PAINT_H]=0xdeadbeefu;
@@ -447,5 +602,5 @@ int main(int argc,char **argv)
     render(argv[2],"paint-resized"); du_resize(&ui,pixels,PAINT_W,PAINT_H); free(large);
     paint_command(M_HELP); render(argv[2],"paint-help"); dialog_button(0);
     paint_command(M_ABOUT); render(argv[2],"paint-about"); dialog_button(0);
-    cursors(argv[2]); footprint_matches_stamp(); freeform_and_text(argv[2]); paint_detach(); assert(!ui.count); puts("paint: PASS"); return 0;
+    cursors(argv[2]); footprint_matches_stamp(); freeform_and_text(argv[2]); g27(argv[1]); wallpaper_tests(argv[1]); paint_detach(); assert(!ui.count); puts("paint: PASS"); return 0;
 }

@@ -45,6 +45,11 @@ const struct du_icon_map du_icon_map[] = {
     {"program:mixer", "audio-volume-high"},
     {"program:viewer", "image-x-generic"},
     {"program:paint", "applications-graphics"},
+    {"program:mines", "face-smile"},                   /* G27 Minesweeper */
+    {"program:solitaire", "applications-games"},       /* G27 Solitaire */
+    {"program:freecell", "applications-games"},        /* G27 FreeCell */
+    {"program:hearts", "emblem-favorite"},             /* G27 Hearts */
+    {"program:serial", "network-wired"},               /* G27 Serial Terminal */
 
     /* Start menu */
     {"menu:*", "application-x-executable"},

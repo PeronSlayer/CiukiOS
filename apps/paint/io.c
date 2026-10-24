@@ -124,9 +124,80 @@ static int write_bmp8(struct writer *wr, const struct paint_image *im, const uin
     free(row); return wr->failed ? -EIO : 0;
 }
 
+/* GIF89a, one global colour table of the indices the picture uses, one LZW-compressed frame. */
+struct gif_bits { struct writer *wr; uint8_t block[255]; unsigned used; uint32_t accum; unsigned bits; };
+static void gif_flush(struct gif_bits *g)
+{
+    if (!g->used) return;
+    uint8_t length = (uint8_t)g->used;
+    write_bytes(g->wr, &length, 1); write_bytes(g->wr, g->block, (int)g->used); g->used = 0;
+}
+static void gif_emit(struct gif_bits *g, unsigned code, unsigned size)
+{
+    g->accum |= (uint32_t)code << g->bits; g->bits += size;
+    while (g->bits >= 8) {
+        g->block[g->used++] = (uint8_t)g->accum; g->accum >>= 8; g->bits -= 8;
+        if (g->used == sizeof(g->block)) gif_flush(g);
+    }
+}
+#define GIF_HASH 8209u
+static int write_gif(struct writer *wr, const struct paint_image *im, const uint8_t *pal)
+{
+    uint8_t used[PAINT_COLORS] = {0}, map[PAINT_COLORS] = {0};
+    size_t n = (size_t)im->w * (size_t)im->h;
+    for (size_t i = 0; i < n; i++) { if (im->pixels[i] >= PAINT_COLORS) return -EINVAL; used[im->pixels[i]] = 1; }
+    unsigned colors = 0;
+    for (int i = 0; i < PAINT_COLORS; i++) if (used[i]) map[i] = (uint8_t)colors++;
+    unsigned table_bits = 1;
+    while ((1u << table_bits) < colors) table_bits++;
+    uint8_t header[13] = {'G', 'I', 'F', '8', '9', 'a'};
+    put16(header + 6, (unsigned)im->w); put16(header + 8, (unsigned)im->h);
+    header[10] = (uint8_t)(0x80 | (7 << 4) | (table_bits - 1));
+    write_bytes(wr, header, sizeof(header));
+    for (int i = 0; i < PAINT_COLORS; i++) if (used[i]) {
+        uint8_t rgb[3] = {dac8(pal[i * 3]), dac8(pal[i * 3 + 1]), dac8(pal[i * 3 + 2])};
+        write_bytes(wr, rgb, 3);
+    }
+    for (unsigned pad = colors; pad < (1u << table_bits); pad++) { uint8_t rgb[3] = {0, 0, 0}; write_bytes(wr, rgb, 3); }
+    uint8_t descriptor[10] = {0x2c}; put16(descriptor + 5, (unsigned)im->w); put16(descriptor + 7, (unsigned)im->h);
+    write_bytes(wr, descriptor, sizeof(descriptor));
+    unsigned min_size = table_bits < 2 ? 2 : table_bits;
+    uint8_t first = (uint8_t)min_size; write_bytes(wr, &first, 1);
+    uint32_t *keys = malloc(GIF_HASH * sizeof(*keys)); uint16_t *codes = malloc(GIF_HASH * sizeof(*codes));
+    if (!keys || !codes) { free(keys); free(codes); return -ENOMEM; }
+    struct gif_bits g = {wr, {0}, 0, 0, 0};
+    unsigned clear = 1u << min_size, end = clear + 1, next = end + 1, size = min_size + 1;
+    memset(keys, 0xff, GIF_HASH * sizeof(*keys));
+    gif_emit(&g, clear, size);
+    unsigned prefix = map[im->pixels[0]];
+    for (size_t i = 1; i < n; i++) {
+        unsigned c = map[im->pixels[i]]; uint32_t key = (uint32_t)prefix << 8 | c;
+        unsigned slot = (key * 2654435761u) % GIF_HASH;
+        while (keys[slot] != 0xffffffffu && keys[slot] != key) slot = (slot + 1) % GIF_HASH;
+        if (keys[slot] == key) { prefix = codes[slot]; continue; }
+        gif_emit(&g, prefix, size);
+        if (next < 4096) {
+            keys[slot] = key; codes[slot] = (uint16_t)next;
+            if (next == (1u << size)) size++;
+            next++;
+        } else {                               /* the table is full: start over */
+            gif_emit(&g, clear, size);
+            memset(keys, 0xff, GIF_HASH * sizeof(*keys));
+            next = end + 1; size = min_size + 1;
+        }
+        prefix = c;
+    }
+    gif_emit(&g, prefix, size); gif_emit(&g, end, size);
+    if (g.bits) gif_emit(&g, 0, 8 - g.bits);
+    gif_flush(&g);
+    uint8_t trailer[2] = {0, 0x3b}; write_bytes(wr, trailer, 2);
+    free(keys); free(codes);
+    return wr->failed ? -EIO : 0;
+}
+
 int paint_write_image(const char *path, enum paint_format format, const struct paint_image *im, const uint8_t *pal)
 {
-    if (!dimensions(im->w, im->h) || !im->pixels || format < PAINT_BMP8 || format > PAINT_PNG) return -EINVAL;
+    if (!dimensions(im->w, im->h) || !im->pixels || format < PAINT_BMP8 || format > PAINT_JPEG) return -EINVAL;
     char temp[PAINT_PATH_MAX]; static unsigned serial;
     int fd = -1;
     for (int i = 0; i < 32; i++) {
@@ -141,6 +212,7 @@ int paint_write_image(const char *path, enum paint_format format, const struct p
     if (!f) { int r = -errno; close(fd); unlink(temp); return r; }
     struct writer wr = {f, 0}; int r = 0;
     if (format == PAINT_BMP8) r = write_bmp8(&wr, im, pal);
+    else if (format == PAINT_GIF) r = write_gif(&wr, im, pal);
     else {
         size_t n = (size_t)im->w * (size_t)im->h;
         uint8_t *rgb = malloc(n * 3);
@@ -151,6 +223,7 @@ int paint_write_image(const char *path, enum paint_format format, const struct p
                 for (int k = 0; k < 3; k++) rgb[i * 3 + (unsigned)k] = dac8(pal[c * 3 + (unsigned)k]);
             }
             if (!r && !(format == PAINT_PNG ? stbi_write_png_to_func(write_bytes, &wr, im->w, im->h, 3, rgb, im->w * 3) :
+                        format == PAINT_JPEG ? stbi_write_jpg_to_func(write_bytes, &wr, im->w, im->h, 3, rgb, 90) :
                                             stbi_write_bmp_to_func(write_bytes, &wr, im->w, im->h, 3, rgb))) r = -ENOMEM;
             free(rgb);
         }
