@@ -425,21 +425,31 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 29 | Taskbar hover during a drag (Windows 98: holding a dragged object over a task button for about a second activates that window) | the restored window (rows 7, 8, 11) | `desk_shell_tick` drag hover | none (covered by the window rows) | drag and drop |
 | 30 | Right-drag menu, Esc and cancelled drags | the menu box (row 13); the image box when the drag ends | `desk_shell_drag_button`, `desk_shell_drag_cancel`, `dnd_finish` | none | drag and drop |
 | 36 | G26: browser New Window (toolbar or Ctrl+N), download Save/cancel dialog, Internet Properties edits and Apply status | new window frame/client/task button, dialog box when shown/erased, edited widgets and status | v3 `DESK_LAUNCH` URL request uses the existing desktop launcher; browser `downloads_poll`/`event`; Control Panel `internet_event` | new transitions; no alternate drawing path | `row_network_tools` (`WM_ROW=29`) plus `test_user_tools`, Internet page host assertions and NetSurf chrome test |
-
 | 31 | Taskbar menu (G4, WM-12): `TrackPopupMenu` at the cursor on the empty taskbar or the empty top bar; its Cascade/Tile/Minimize All items enable with the windows, and Undo Cascade/Undo Tile/Undo Minimize All replace or follow them | the menu's outer box on open, close and each hot row | `desk_shell_button` (empty bar), `build` `SH_MENU_TASKBAR`, `menu_key`/`menu_letter` (access keys) | none | taskbar menu |
 | 32 | `CascadeWindows`/`TileWindows` of the taskbar menu: `SetWindowPos` on every arranged window in one pass (`EndDeferWindowPos`); maximised and shaded windows are restored first | the old and new outer box of each window that moved or changed size; its client through the stretch of rows 2 and 5 | `desk_arrange`, `arrange_place`, `arrange_settle` (`client.c`) | none found; `desk_move` plans one screen copy for one moved window, so `arrange_prepare`/`arrange_settle` turn a pending copy into plain damage before and after the batch | arrange |
 | 33 | Minimize All Windows, Show Desktop (Win+D toggles), Win+M, Shift+Win+M, Alt+M and their Undo: the windows go to the taskbar at once (no caption animation), the desktop becomes active | every window's outer box, its task button, the caption of the window that loses the activation | `desk_minimize_all`, `desk_show_desktop`, `desk_arrange_undo` | none | minimize all |
 | 34 | Windows-key shortcuts and the taskbar's keyboard focus (Win+Tab, Ctrl+Esc then Esc, Tab/arrows, Enter, Esc): the focus rectangle on a task button or the lit Start orb | the old and the new button; the Start orb's bounds | `taskbar_set`, `taskbar_blur`, `logo_chord`, `desk_shell_reconcile` (flag 8, `start_focus_shown`) | none | windows keys |
 | 35 | Caption icon (Ciuki Blue): a click opens the window menu under it, a second click within the double-click time closes the window (`WM_SYSCOMMAND` `SC_CLOSE`) | the menu's outer box; the caption and task button ("Closing...") | `desk_shell_caption_icon` (`shell.c`), `desk_caption_icon_box` (`compositor.c`) | none | caption icon |
+| 36 | Startup programs (G21): background logon batch shows, activates and closes ordinary windows | existing CREATE_WINDOW, activation and close damage; no batch-wide repaint | startup worker → shared launcher → `client.c` | none new | startup programs |
+| 37 | Window move while other windows repaint (fx-26): preserve valid client bits while repainting damage outside the carried rectangle | the exposed area, damage from the other window, and the moving window's damaged pixels | `desk_move`, `copy_region`, `window_damage` | unrelated damage disabled new move copies; damage on the shadow ring cancelled continuing copies | move with other damage (`WM_ROW=29`) |
+| 38 | Native program fault dialog (G13, ER-1; Windows 98 "This program has performed an illegal operation" box): a message window with Close and a Details panel that opens and closes in place | the dialog's outer box, its task button, the Details text swap | `desk_w32_fault_dialog` (`client.c`), `fault_text.h`, `shell.c` message window | none (the Win32 crash dialog already used the same message window; this adds the native record) | native fault dialog |
+| 39 | Screen saver idle/SC_SCREENSAVE/preview start and animation | full screen with pointer hidden; application backing stores remain untouched | `desk_saver_start`, `desk_saver_tick`, `saver_scene` | G10: dedicated overlay bypasses window copies and caches | saver |
+| 40 | Saver input dismissal and monitor wake | full desktop, windows, overlays and pointer | `desk_saver_input`, `saver_wake`, full invalidation | G10: dismissing input consumed, failed wake remains retryable | saver |
+| 41 | Monitor off after idle or SC_MONITORPOWER | no presentation while off; wake invalidates the complete scene (row 37) | `desk_saver_tick`, `monitor_power`, `desk_redraw` | G10: suspend drawing until firmware wake succeeds | saver |
 
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with
 fx-19 (drag and drop, rubber-band and keyboard selection) and were added by
 fx-15b after the merge, with the reconcile extended to the band and the
-drag image. Rows 31-35 came with G4 (`docs/design/taskbar-arrangement-windows-keys.md`);
+drag image. Rows 31-35 came with G4 (`docs/design/taskbar-arrangement-windows-keys.md`),
+row 36 with G21, row 37 with fx-26, row 38 with G13 (`docs/directives/g13-g16-os-gaps-batch-3.md`)
+and rows 39-41 with G10 (`docs/directives/g7-g12-os-gaps-batch-2.md`);
 the randomized sequences gained operations 42-47 (taskbar menu, Win+D/M and
 Alt+M, taskbar focus keys, Alt+F6/Menu key/Shift+F10/F3, caption icon,
-Win+E/R/F/Break/F1).
+Win+E/R/F/Break/F1). Row 36 adds fx-26's drag with concurrent damage.
+The executable row table groups several inventory events into one scenario:
+main's indexes 0-28 stay unchanged, including G4 at `WM_ROW=24` through
+`WM_ROW=28`; fx-26's appended scenario moves from `WM_ROW=24` to `WM_ROW=29`.
 
 ### One rule instead of one fix per path: the frame reconcile
 
@@ -530,3 +540,141 @@ Sources:
   (Core System Components): User manages output to the user interface
   (windows, icons, menus) and keeps the window management code 16-bit; GDI's
   DIB engine draws, display minidrivers accelerate.
+
+## fx-26: events on the next frame, window operations at the frame rate (2026-10-23)
+
+T23 trial of preview `f441c5bd` (source `18dcfcb7`): the owner found that
+notifications and the volume popup always lag and that window management
+still feels slow. Records read (serial capture and `LOGS/BOOT.LOG`):
+
+* Volume keys. `[ec] thinkpad poll_ms=2000 source=default`, one
+  `[ec] thinkpad io=7..9 transactions=1` per 2 s window, and in the same
+  windows `[kernel] smi ... gaps=1` with `smi_coincide ... ec_near=1`: one
+  2,094-2,121 us SMI per RD_EC (two in 5a10eef4). Across the whole session
+  every SMI gap lies within 1 ms of our own EC access; the keys raise no
+  SMI of their own that the tick sampler sees. A press therefore reached
+  `audio.master` only at the next 2 s RD_EC, and the desktop read the master
+  every 250 ms (`mixer_poll`): key to popup/notification 0-2.25 s plus a
+  frame. The tray's own changes (slider, multimedia keys) were immediate.
+* Notifications. Volume as above. Media (USB stick, CD, floppy) and network
+  state were read on the shell's 2 s tick (`want_reload` 16|32), the media
+  query on its worker: up to 2 s plus the query.
+* Frames while interacting: `[desktop] accel ... frames=` 41-103 per 2 s
+  window (20-52 fps, never the 120 of a 60 Hz drag). In most of those
+  windows `[cpu] idle_pm` was 200-800 with `desktop#34` at 100-340 per
+  mille: the desktop was not CPU-bound; in the others (NetSurf laying out,
+  a DOS VM running) idle was 0.
+  `[kernel] stretch_max_ms`/`resched_lat_max_ms` 3 for the desktop, 9 with a
+  DOS VM running (`resched_task=desktop`). With DOS Box busy (fx-23) the
+  desktop group held `desktop_share group_pm` 95-127 and drew 2-3 frames
+  per 2 s; Quake in a window drew 5-21 frames per 2 s at up to 127 engine
+  copies per frame (both fx-23/fx-27 subjects).
+
+### Windows 98 reference behaviour
+
+* A mixer driver notifies every client that opened it with a callback
+  window: [MM_MIXM_CONTROL_CHANGE](https://learn.microsoft.com/en-us/windows/win32/multimedia/mm-mixm-control-change)
+  "is sent by a mixer device to notify an application that the state of a
+  control ... has changed. The application should refresh its display";
+  a volume display opens the mixer with a callback window and follows the
+  change when it happens, instead of polling the control.
+  (Learn lists Windows 2000 as the minimum for every pre-2000 API; the
+  mixer API shipped in Windows 95's MMSYSTEM.)
+* The ThinkPad volume buttons have no scancode: the firmware drives the
+  console amplifier itself ([Linux thinkpad-acpi, v6.12](https://raw.githubusercontent.com/torvalds/linux/v6.12/Documentation/admin-guide/laptops/thinkpad-acpi.rst):
+  "the firmware also handles volume control for the headphone and speakers
+  on these ThinkPads"; on models whose keys raise no ACPI event the driver
+  polls "the CMOS NVRAM at least 10 times per second", "the volume up/down/
+  mute keys are synthesized according to changes in the mixer").
+  [thinkpad_acpi.c v6.12](https://github.com/torvalds/linux/blob/v6.12/drivers/platform/x86/thinkpad_acpi.c):
+  `TP_NVRAM_ADDR_MIXER` 60h, level bits 0-3, mute bit 6, bit 7 toggled by
+  every volume key (`TP_NVRAM_MASK_HKT_VOLUME`); `hotkey_poll_freq = 10`;
+  the default `TPACPI_VOL_MODE_ECNVRAM` keeps this byte and EC register 30h
+  in the same layout; the T23 is an IBM `\CMOS` model there. IBM's own
+  Windows 98 on-screen display is a vendor utility; the operating-system
+  part is the mixer notification above.
+* Device arrival and removal are broadcast as
+  [WM_DEVICECHANGE](https://learn.microsoft.com/en-us/windows/win32/devio/wm-devicechange)
+  (`DBT_DEVICEARRIVAL` "a device or piece of media has been inserted and is
+  now available", `DBT_DEVICEREMOVECOMPLETE`) when they happen, not found
+  by a periodic scan of the shell.
+* A moved window keeps its bits:
+  [SetWindowPos](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowpos)
+  copies the valid client area unless `SWP_NOCOPYBITS`, and only the
+  invalid parts are repainted (WM_PAINT). Other windows' updates do not
+  stop the copy. Windows 98 has no compositor frame clock: User and GDI
+  draw a move as soon as it happens; nothing waits for a refresh phase.
+
+### What changed
+
+| Event | Before fx-26 | fx-26 | Host evidence |
+| --- | --- | --- | --- |
+| ThinkPad volume key -> `audio.master` | next 2 s RD_EC: 1,992 ms worst | NVRAM byte 60h read every 100 ms (two CMOS port accesses, no EC transaction); a change triggers one RD_EC at once: <= 100 ms at every phase of the 2 s poll. After a mirrored change the EC is read every 250 ms for 3 s, so presses the NVRAM does not show still follow within 250 ms (counted `missed`). Key-driven reads at most one per 100 ms | `thinkpad_ec_test.inc` `test_thinkpad_ec_keys` |
+| `audio.master` -> popup and notification frame | 250 ms observation: 4-249 ms, 249 ms with other updates running | `/dev/mixer` is pollable: POLLIN until the description has read the current master (fingerprint of the whole record); every master change wakes `poll()`; the desktop polls its mixer description and reads it on that turn: 0 us idle, <= 9 ms with frames running (the next frame) | `event_latency_test.h` (`test_event_latency`), `audio_test.c` readiness |
+| Idle cost of the volume mirror | 41 mixer queries and 42 loop turns per 10 s | 0 queries, 12 turns (one deadline left: the quiet-period save of a key-applied master) | `event_latency_test.h` |
+| Drive published or withdrawn -> media notification | shell 2 s tick, then the worker query | `/dev/media` is pollable: every `generation[d]` change in `vfs.c`/`mount.c` bumps one serial and wakes `poll()`; the loop polls the media worker's own description while the worker is idle and starts the query on that turn (the 2 s tick stays for CD and floppy changes, which no path publishes) | `test_storage_namespace.c` readiness |
+| Drag while another window draws | any pending damage disabled a new move copy; damage touching the moved window's shadow ring cancelled a continuing copy: an 800x560 drag over a playing DOS window recomposed both outer boxes in software, 34-71 ms frames | a new copy starts unless damage lies inside the window's own carried rectangle; a continuing copy is cancelled only by damage inside the carried rectangle at the intermediate position (the compositor already cuts every damage box and its source image out of the copy) | `t23_cpu_model_test.c` TIMED drag rows, `window_model_test.c` row `move with other damage` |
+| Frame after an overrun | a frame that ran past the next 60 Hz boundary made the next one wait for the boundary after (a lost slot: a frame started 8 ms late with 10 ms of work left 15 ms idle) | the next frame starts one slot after this one started, or when it ended if later (never later than before); frames that end before the boundary keep the absolute phase | `compositor_rows_test.c`, TIMED rows |
+
+T23 timed model (`t23_cpu_model_test.c`, the f2-95 rates; the virtual clock
+advances by each frame's modeled cost; the desktop's wake-ups late by up to
+the trial's 0/4/9 ms):
+
+| Drag | wake late | HEAD fps | HEAD motion->frame mean/max ms | fx-26 fps | fx-26 mean/max ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 800x560 over a DOS window at 70 Hz | 0 | 65.8 | 15.8 / 76.0 | 68.2 | 14.5 / 21.0 |
+| 800x560 over a DOS window at 70 Hz | 4 | 51.1 | 56.5 / 82.7 | 68.2 | 14.5 / 23.4 |
+| 800x560 over a DOS window at 70 Hz | 9 | 39.6 | 60.8 / 81.9 | 68.2 | 15.1 / 27.6 |
+| 560x420, software presenter | 9 | 54.7 | 23.0 / 39.9 | 57.0 | 22.7 / 32.4 |
+| 560x420, 800x560, 1000x680 alone (engine) | 0-9 | 59.9-60.0 | <= 28.3 | 59.9-60.0 | <= 28.0 |
+
+The DOS rows reproduce the trial's 25-47 fps drags with the CPU idle.
+Minimise, restore and maximise of an 800x560 window over a playing DOS
+window: operation to first frame 21-25 ms mean, 45-51 ms worst, the first
+frame itself 17.6 ms (exposed area composed and sent to the LFB), the
+150 ms caption animation in 5-6 frames; unchanged by fx-26 (gap below).
+
+Interfaces: `MIXER_GET_MASTER`, `MIXER_REFRESH_MASTER` and a successful
+`MIXER_SET_MASTER` record what the description has seen; `MEDIA_GET_STATE`
+records the media serial before it builds the state
+([execution ABI](execution-abi.md), fx-26 amendment). A kernel that answers
+POLLNVAL for these descriptions leaves the desktop on its former 250 ms
+mixer observation (`mixer_events=0`).
+
+Records for the next trial: `[ec] thinkpad keys watch_ms=100 source=nvram
+active_ms=250 hold_ms=3000 trigger_ms=100` once at start, and in windows
+with key activity `[ec] thinkpad keys nvram_polls=<n> nvram_changes=<n>
+triggered=<n> active_reads=<n> missed=<n> nvram=<byte> ec=<byte>`.
+
+| Observation | Meaning |
+| --- | --- |
+| `nvram_changes` and `triggered` grow with each press, `missed=0` | the T23 firmware keeps byte 60h: keys on screen within 100 ms plus a frame |
+| `missed` equals the presses, `nvram_changes=0` | byte 60h does not follow the keys in legacy mode: the first press of a burst waits for the 2 s poll, the next ones follow at 250 ms |
+| `smi` gaps with `ec_near` below `gaps` at about 10/s | CMOS reads would be trapped (none armed per f1-100's `smi_config`): report |
+
+Gaps, explicit:
+
+* Network state notifications stay on the 2 s shell tick (Windows 98 shows
+  none; `/dev/net` is not pollable).
+* CD and floppy media changes still need the 2 s tick (no kernel path
+  publishes them before the query).
+* The first frame of a minimise/restore/maximise of a large window costs
+  about one frame period on the T23 (composition plus LFB upload of the
+  exposed area); serving exposed windows from the offscreen caches is not
+  done here.
+* DOS Box busy loops and Quake's windowed presentation (frames per 2 s in
+  single digits) are fx-23 and fx-27.
+
+### fx-26 merge compatibility validation
+
+The merge preserves both the namespace serial/readiness added by fx-26 and
+main's G6 volume-label controls and fx-21b USB-unrecognised count. The serial
+is sampled before the media snapshot; only the current media version reports
+the USB count, leaving the v1 reserved word zero. This keeps the event-driven
+arrival/removal semantics of
+[WM_DEVICECHANGE](https://learn.microsoft.com/en-us/windows/win32/devio/wm-devicechange)
+and the separate mixer-display refresh semantics of
+[MM_MIXM_CONTROL_CHANGE](https://learn.microsoft.com/en-us/windows/win32/multimedia/mm-mixm-control-change).
+These references were rechecked against the merged implementation; no public
+ABI numbers change. G4's scenario indexes and inventory rows stay fixed,
+with fx-26 appended after them as described above.

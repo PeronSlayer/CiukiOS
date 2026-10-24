@@ -28,6 +28,44 @@ BOOT_GOLDENS = {
     "wallpaper-change": "b0d613e4f31f67833293a797ba9bed741e822edc9417e741d34663a667f08bfd"
 }
 
+def build_footprint(folder, env):
+    """The production desktop.c launcher harness (DESK_FOOTPRINT_TEST)."""
+    from . import icon_assets
+    inc = folder / "include/ciuki"
+    inc.mkdir(parents=True)
+    for name in ("channel.h", "surface.h", "spawn.h", "proc.h", "audio.h", "net.h", "media.h", "power.h", "display.h", "registry.h", "audio_preference.h", "devices.h"):
+        shutil.copy2(ROOT / "sdk/sysroot-overlay/include/ciuki" / name, inc / name)
+    for name in ("runtime.h", "raw.h"):
+        (inc / name).write_text("/* supplied by host harness */\n")
+    common = ["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
+              "-D_POSIX_C_SOURCE=200809L", "-DDESK_FOOTPRINT_TEST", "-Wno-macro-redefined",
+              "-include", str(ROOT / "tests/host/desktop/replay_base.h"),
+              "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
+              "-ffunction-sections", "-fdata-sections", "-I", str(folder / "include"),
+              "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "src/kernel/include"),
+              *icon_assets.defines()]
+    sources = [ROOT / "apps/desktop" / n for n in ("client.c", "protocol.c", "input.c", "compositor.c", "theme.c")]
+    sources += SHELL_SOURCES + [ROOT / "apps/desktop" / n for n in ("image.c", "wallpaper_io.c", "sounds.c", "sound_storage.c", "master_storage.c", "sound_runtime.c")]
+    sources += [ROOT / name for name in icon_assets.SOURCES]
+    sources += [ROOT / "sdk/libreg" / name for name in ("registry.c", "storage.c", "hardware.c")]
+    host = ROOT / "tests/host/desktop"
+    sources += [host / n for n in ("fake.c", "shell_launch_test.c", "footprint_alloc.c")]
+    objects = []
+    for i, source in enumerate(sources):
+        target = folder / f"{i}.o"
+        # The desktop.c included by the launcher is production code;
+        # setup in memory_footprint_test.h explicitly undefines hooks.
+        trace = source.is_relative_to(ROOT / "apps") or source.is_relative_to(ROOT / "sdk/libreg") or source.name == "shell_launch_test.c"
+        flags = ["-include", str(host / "footprint_alloc.h")] if trace else []
+        subprocess.run([*common, *flags, "-c", str(source), "-o", str(target)], check=True, env=env)
+        objects.append(str(target))
+    binary = folder / "footprint"
+    subprocess.run(["clang", "-fsanitize=address,undefined", "-Wl,--gc-sections",
+                    "-Wl,--wrap=desk_wallpaper_render,--wrap=open,--wrap=mkdir,--wrap=write,--wrap=fsync",
+                    *objects, "-pthread", "-o", str(binary)], check=True, env=env)
+    return binary
+
+
 class MemoryFootprintTests(unittest.TestCase):
     def test_sound_storage_prepared_before_worker(self):
         from .test_system_sounds import module
@@ -65,44 +103,12 @@ class MemoryFootprintTests(unittest.TestCase):
                 self.assertIn("ALLOC_TOTAL phase=sound_after_init count=0", result.stdout)
 
     def test_no_allocation_after_first_frame(self):
-        from . import icon_assets
         parent = ROOT / "build/host"
         parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="desktop-footprint-", dir=parent) as temp:
             folder = Path(temp)
-            inc = folder / "include/ciuki"
-            inc.mkdir(parents=True)
-            for name in ("channel.h", "surface.h", "spawn.h", "proc.h", "audio.h", "net.h", "media.h", "power.h", "display.h", "registry.h", "audio_preference.h", "devices.h"):
-                shutil.copy2(ROOT / "sdk/sysroot-overlay/include/ciuki" / name, inc / name)
-            for name in ("runtime.h", "raw.h"):
-                (inc / name).write_text("/* supplied by host harness */\n")
             env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
-            common = ["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
-                      "-D_POSIX_C_SOURCE=200809L", "-DDESK_FOOTPRINT_TEST", "-Wno-macro-redefined",
-                      "-include", str(ROOT / "tests/host/desktop/replay_base.h"),
-                      "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined",
-                      "-ffunction-sections", "-fdata-sections", "-I", str(folder / "include"),
-                      "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "src/kernel/include"),
-                      *icon_assets.defines()]
-            sources = [ROOT / "apps/desktop" / n for n in ("client.c", "protocol.c", "input.c", "compositor.c", "theme.c")]
-            sources += SHELL_SOURCES + [ROOT / "apps/desktop" / n for n in ("image.c", "wallpaper_io.c", "sounds.c", "sound_storage.c", "master_storage.c", "sound_runtime.c")]
-            sources += [ROOT / name for name in icon_assets.SOURCES]
-            sources += [ROOT / "sdk/libreg" / name for name in ("registry.c", "storage.c", "hardware.c")]
-            host = ROOT / "tests/host/desktop"
-            sources += [host / n for n in ("fake.c", "shell_launch_test.c", "footprint_alloc.c")]
-            objects = []
-            for i, source in enumerate(sources):
-                target = folder / f"{i}.o"
-                # The desktop.c included by the launcher is production code;
-                # setup in memory_footprint_test.h explicitly undefines hooks.
-                trace = source.is_relative_to(ROOT / "apps") or source.is_relative_to(ROOT / "sdk/libreg") or source.name == "shell_launch_test.c"
-                flags = ["-include", str(host / "footprint_alloc.h")] if trace else []
-                subprocess.run([*common, *flags, "-c", str(source), "-o", str(target)], check=True, env=env)
-                objects.append(str(target))
-            binary = folder / "footprint"
-            subprocess.run(["clang", "-fsanitize=address,undefined", "-Wl,--gc-sections",
-                            "-Wl,--wrap=desk_wallpaper_render,--wrap=open,--wrap=mkdir,--wrap=write,--wrap=fsync",
-                            *objects, "-pthread", "-o", str(binary)], check=True, env=env)
+            binary = build_footprint(folder, env)
             boot_review = ROOT / "build/host/f2-73"
             boot_review.mkdir(parents=True, exist_ok=True)
             boot = subprocess.run([str(binary), "--wallpaper-boot", str(folder)], capture_output=True, text=True,

@@ -838,6 +838,10 @@ int net_socket_option(struct process *p, int fd, unsigned set, int level, int na
 }
 
 extern int channel_poll_events(struct desktop_description *) __attribute__((weak));
+/* fx-26: state-change readiness of /dev/mixer (audio_dev.c) and /dev/media
+ * (media_dev.c): POLLIN while the description has not read the current state. */
+extern int audio_mixer_poll_events(struct file_description *) __attribute__((weak));
+extern int media_poll_events(struct file_description *) __attribute__((weak));
 static unsigned mailbox_count(sys_mbox_t box)
 {
     extern unsigned cu_mbox_count(sys_mbox_t); return box ? cu_mbox_count(box) : 0;
@@ -857,6 +861,8 @@ static int readiness(struct process *p, int fd, struct proc_object *o)
     }
     struct file_description *file = file_fd(p, fd);
     if (file) {
+        if (file->node->kind == PX_MIXER) return audio_mixer_poll_events ? audio_mixer_poll_events(file) : POLLNVAL;
+        if (file->node->kind == PX_MEDIA) return media_poll_events ? media_poll_events(file) : POLLNVAL;
         if (file->node->kind != PX_FILE && file->node->kind != PX_DIRECTORY &&
             file->node->kind != PX_MNT && file->node->kind != PX_DEV) return POLLNVAL;
         unsigned mode = file->flags & O_ACCMODE;

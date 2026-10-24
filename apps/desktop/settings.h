@@ -36,6 +36,7 @@ struct ciuki_settings {
     int mouse_speed;                /* 1..10, 5 = one screen pixel per mouse count */
     int double_click_ms;            /* 200..900 */
     uint16_t display_mode;         /* confirmed VBE mode id; 0 keeps loader default */
+    int saver_enabled, saver_seconds, saver_kind, monitor_seconds; /* G10: 0..INT32_MAX seconds; kinds 0..2 */
     int keyboard;                   /* CFG_KEYS_* */
     char recent[CFG_RECENT_MAX][CFG_PATH_MAX];
     unsigned recent_count;          /* newest first */

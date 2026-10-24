@@ -22,6 +22,16 @@ static const struct supervisor_io_ops *supervisor_io;
 extern void w32_service_delegate(struct process *,struct process *,const char *) __attribute__((weak));
 static uint32_t desktop_pid, desktop_deaths;
 static bool bootstrap_attempted;
+/* G13 (ER-3): an abnormal death of the bootstrap desktop restarts it, as
+ * Windows 9x restarts a crashed Explorer shell. At most three restarts in a
+ * minute; after that (or when the restart cannot start) the console takes
+ * over as before. Probe and stand-in desktops are never restarted. */
+#define DESKTOP_RESTART_MAX 3u
+#define DESKTOP_RESTART_WINDOW_MS 60000u
+#define DESKTOP_RESTART_WAIT_MS 5000u
+static bool desktop_restartable, desktop_restarting;
+static uint32_t desktop_restarts, desktop_restart_old;
+static uint64_t desktop_restart_first, desktop_restart_deadline;
 static char observed_probe[24];
 static uint32_t observed_pid;
 static uint64_t report_bytes;
@@ -71,6 +81,10 @@ void supervisor_capture_tail(const struct supervisor_capture *c, uint8_t *out)
 void supervisor_set_io_ops(const struct supervisor_io_ops *ops) { supervisor_io = ops; }
 uint32_t supervisor_desktop_deaths(void) { return desktop_deaths; }
 uint32_t supervisor_desktop_pid(void) { return desktop_pid; }
+uint32_t supervisor_desktop_restarts(void) { return desktop_restarts; }
+/* A desktop is running or about to be restarted: faults of other programs
+ * still have somebody to tell (proc/win32/diagnostics.c). */
+bool supervisor_desktop_expected(void) { return desktop_pid || desktop_restarting; }
 
 static int spawn_process(const char *path, const char *const argv[], const char *cwd,
                          bool desktop, bool setup, struct process **out);
@@ -236,10 +250,12 @@ void supervisor_bootstrap(void)
     }
     const char *argv[] = { "desktop", 0 };
     struct process *p = 0;
+    bool stand_in = false;
     klog("[supervisor] bootstrap: spawning /Programs/desktop");
     if (console_splash_phase) console_splash_phase(SPLASH_PHASE_SUPERVISOR);
     int result = supervisor_spawn("/Programs/desktop", argv, 0, true, &p);
     if (result == -ENOENT) {
+        stand_in = true;
         result = supervisor_spawn_standin(proc_supervisor(), &p);
         if (result >= 0 && pager_bootstrap_complete) pager_bootstrap_complete();
         if (result >= 0 && entropy_desktop_presented) entropy_desktop_presented();
@@ -254,22 +270,88 @@ void supervisor_bootstrap(void)
         return;
     }
     desktop_pid = p->pid;
+    desktop_restartable = !stand_in;
     klog("[supervisor] desktop pid=%u pgid=%u", p->pid, p->pgid);
+}
+
+/* The console takes over: the pager, the entropy collector and the log
+ * screen learn that no desktop frame will come. */
+static void desktop_gone(uint32_t pid, int status)
+{
+    if (pager_bootstrap_complete) pager_bootstrap_complete();
+    if (entropy_desktop_presented) entropy_desktop_presented();
+    console_wake();
+    klog("[supervisor] desktop stopped; console ready pid=%u status=%d deaths=%u", pid, status, desktop_deaths);
+}
+
+/* Throttle: the window opens at the first restart and closes after a
+ * minute; the fourth abnormal death inside it gives up. */
+static bool supervisor_restart_allowed(uint64_t now_ms)
+{
+    if (!desktop_restarts || now_ms - desktop_restart_first >= DESKTOP_RESTART_WINDOW_MS) {
+        desktop_restarts = 0;
+        desktop_restart_first = now_ms;
+    }
+    if (desktop_restarts >= DESKTOP_RESTART_MAX) return false;
+    desktop_restarts++;
+    return true;
+}
+
+/* Runs on every pass of PID 1 while a restart is pending. The old desktop
+ * must have released its display and input grants (close_resources, which
+ * the collection after this poll performs) before the new one can take them. */
+static void desktop_restart_step(void)
+{
+    struct process *old = proc_find(desktop_restart_old);
+    bool released = !old || old->state == PROC_ZOMBIE;
+    if (!released && g_ticks < desktop_restart_deadline) {
+        task_sleep_ms(1);
+        proc_notify();
+        return;
+    }
+    int result = -EBUSY;
+    struct process *p = 0;
+    if (released) {
+        const char *argv[] = { "desktop", 0 };
+        result = supervisor_spawn("/Programs/desktop", argv, 0, true, &p);
+        if (result == -EPERM && g_ticks < desktop_restart_deadline) {
+            task_sleep_ms(1);       /* the grants are still being released */
+            proc_notify();
+            return;
+        }
+    }
+    desktop_restarting = false;
+    if (result > 0) {
+        desktop_pid = p->pid;
+        klog("[supervisor] desktop restarted pid=%u pgid=%u restarts=%u", p->pid, p->pgid, desktop_restarts);
+        return;
+    }
+    klog("[supervisor] desktop restart failed: %d", result);
+    desktop_gone(desktop_restart_old, -1);
 }
 
 void supervisor_poll(void)
 {
     if (dosvm_client_poll) dosvm_client_poll();
+    if (desktop_restarting) desktop_restart_step();
     if (desktop_pid) {
         struct process *p = proc_find(desktop_pid);
         if (!p || p->state == PROC_STOPPING || p->state == PROC_ZOMBIE) {
             uint32_t pid=desktop_pid;
             desktop_pid = 0;
-            if (pager_bootstrap_complete) pager_bootstrap_complete();
-            if (entropy_desktop_presented) entropy_desktop_presented();
             desktop_deaths++;
-            console_wake();
-            klog("[supervisor] desktop stopped; console ready pid=%u status=%d deaths=%u", pid, p ? p->status : -1, desktop_deaths);
+            int status = p ? p->status : -1;
+            /* A clean exit (status 0) leaves the console; a fault, a signal
+             * or an unknown end restarts the shell. */
+            if (desktop_restartable && status != 0 && supervisor_restart_allowed(g_ticks)) {
+                desktop_restarting = true;
+                desktop_restart_old = pid;
+                desktop_restart_deadline = g_ticks + DESKTOP_RESTART_WAIT_MS;
+                klog("[supervisor] desktop died pid=%u status=%d deaths=%u; restarting", pid, status, desktop_deaths);
+                proc_notify();
+                return;
+            }
+            desktop_gone(pid, status);
         }
     }
 }

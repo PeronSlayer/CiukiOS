@@ -91,6 +91,18 @@ int main(void)
     d.display_mode=d.display_pending=0x118;
     assert(desk_display_frame_commit(&d,0)==DESK_DISPLAY_PERSIST_FRAME && d.sh.cfg.display_mode==0x118);
     puts("PASS display persistence: failed allocation/partial/failed frame retains saved id; successful confirmed frame commits once");
+    static struct ciuki_settings saver_config, saver_roundtrip;
+    static char saver_text[CFG_TEXT_MAX];
+    cfg_defaults(&saver_config);
+    const char *saver_values="saver_enabled=1\nsaver_seconds=2147483647\nsaver_kind=2\nmonitor_seconds=300\nfuture=preserved\n";
+    assert(!cfg_parse(&saver_config,saver_values,strlen(saver_values)));
+    size_t saver_n=cfg_format(&saver_config,saver_text,sizeof(saver_text)); assert(saver_n);
+    cfg_defaults(&saver_roundtrip); assert(!cfg_parse(&saver_roundtrip,saver_text,saver_n));
+    assert(saver_roundtrip.saver_enabled && saver_roundtrip.saver_seconds==2147483647 &&
+           saver_roundtrip.saver_kind==2 && saver_roundtrip.monitor_seconds==300 && strstr(saver_roundtrip.extra,"future=preserved"));
+    const char *invalid="saver_seconds=2147483648\nsaver_kind=3\nmonitor_seconds=-1\n";
+    assert(cfg_parse(&saver_roundtrip,invalid,strlen(invalid))==3);
+    puts("PASS G10 settings: seconds, signed-INT bound, enable/type, monitor interval, unknown-key preservation and invalid values");
     struct ciuki_settings s, after; cfg_defaults(&s); s.display_mode = 0x118;
     char text[CFG_TEXT_MAX]; size_t n = cfg_format(&s,text,sizeof(text));
     assert(n && strstr(text,"display_mode=280\n")); cfg_defaults(&after);
