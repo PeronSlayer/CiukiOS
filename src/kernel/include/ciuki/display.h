@@ -31,6 +31,8 @@ int display_fullscreen_write(uint32_t offset, const void *, uint32_t bytes);
 bool display_fullscreen_active(void);
 /* IRQ safe, records the hotkey/fault time without doing any I/O. */
 void display_fullscreen_return_request(void);
+/* fx-22: records a return step that has lasted 1 s (cpustat, each second). */
+void display_fullscreen_stall_poll(void);
 /* Boot check only, no grants/desktop; end verifies the original VBE mode. */
 int display_check_begin(uint16_t mode);
 int display_check_end(void);

@@ -1100,3 +1100,126 @@ SET_ADDRESS, descriptors, configuration, the BOT bind, the E: mount and a
   The next suspects are the stick itself (replug test) and the 500 ms
   per-stage budget: USB 2.0 §9.2.6.4 allows 500 ms, Linux
   `USB_CTRL_GET_TIMEOUT` waits 5 s.
+
+## fx-21b: enumeration message bound, "USB Device Not Recognized", re-plug (2026-10-23)
+
+Lead decisions after fx-21: enumeration control transfers get Linux's
+bound; a device quarantined at enumeration is reported to the user; a
+re-plug retries the port.
+
+### Research
+
+- **Linux v6.12**
+  [`include/linux/usb.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/plain/include/linux/usb.h?h=v6.12):
+  `USB_CTRL_GET_TIMEOUT` and `USB_CTRL_SET_TIMEOUT` are both 5000 ms ("USB
+  identifies 5 second timeouts").
+  - The bound applies to a whole `usb_control_msg()`: SETUP, data and
+    status.
+  - [`hub.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/plain/drivers/usb/core/hub.c?h=v6.12)
+    also uses it for the first descriptor read at address 0
+    (`initial_descriptor_timeout`, "default 5000 - 5.0 seconds").
+- **USB 2.0 §9.2.6.4** asks a device to return the first data packet
+  within 500 ms. The previous CiukiOS bound was this 500 ms, applied to
+  each stage separately.
+- **Microsoft**, ["USB Device not recognized" error](https://learn.microsoft.com/en-us/previous-versions/troubleshoot/windows-server/usb-device-not-recognized-error)
+  (KB 2654149, Windows 7/10):
+  - The text is "USB Device not recognized: One of the devices attached to
+    this computer has malfunctioned and windows does not recognize it".
+  - Its first resolution is to uninstall the device, unplug the cable,
+    wait and reconnect.
+  - The [Windows 7 support blog](https://learn.microsoft.com/en-us/archive/blogs/win7/error-message-one-of-the-usb-device-attached-to-this-computer-has-malfunctioned-and-windows-does-not-recognize-it)
+    describes the same pop-up and Device Manager code 43.
+- **Windows 98** itself has no notification-area balloon. A device that
+  fails enumeration appears in Device Manager, and no Microsoft document
+  of that wording was found. The balloon is the later Windows behaviour,
+  adopted here at the lead's request.
+
+### Decision
+
+**Enumeration message bound:**
+- `usb_control()` on a device that is not yet configured (every request up
+  to and including SET_CONFIGURATION) sets one 5000 ms deadline
+  (`USB_CTRL_TIMEOUT_MS`) for the whole message.
+- `usb_packet_budget()` gives each stage the time left.
+- Configured devices keep 500 ms per stage. The BOT class reset keeps its
+  f1-96b 5 s per stage.
+- The 2 series × 3 attempts structure of `usb_enumerate()` is unchanged.
+
+**Worst case to quarantine** for a device that ACKs SETUP and NAKs every
+data stage (the f441c5bd stick):
+- From the first attempt: 6 × (5000 + at most 20 ms two-frame retirement)
+  + 4 × 100 ms pauses + one 60 ms reset = **30 580 ms**. The host model
+  measures 30 472 ms.
+- Add the debounce before the first attempt (100 ms stable, at most 2 s)
+  and the 60 ms first reset.
+- A device that answers addr 0 and then stalls later can take up to five
+  more 5 s messages (SET_ADDRESS, three descriptors, SET_CONFIGURATION), so
+  at most about 56 s in all.
+- A device that does not answer at all (CRC/timeout) fails in a few frames
+  per attempt.
+
+**Where the wait runs:**
+- Enumeration runs only in `usb_step()` on the controller's usb-host
+  worker, never on a desktop, audio or input task.
+- While a message waits, the transfer mutex is released every millisecond.
+  HID interrupt pipes on the same controller keep being serviced, and
+  other controllers are independent.
+- Storage I/O on the same controller waits for the reservation, within the
+  bound above.
+
+**Power quiesce:**
+- `usb_power_quiesce()` first sets `quiescing` on every host.
+- A waiting enumeration message then ends at once (`usb_control_cancelled()`
+  in the UHCI/OHCI/EHCI packet loops), with no unrecognized count, so the
+  existing 2 s reservation bound still holds.
+- A refused quiesce clears the flag again.
+
+**Count and record:**
+- A device quarantined in `usb_enumerate()` is counted, and so is a failed
+  root-port reset.
+- It counts only while the port still reports a connection on a working,
+  not quiescing controller. An unplug during enumeration is not a
+  malfunction.
+- Record: `[usb] unrecognized controller=… port=… parent=… reason=… count=… notify=desktop tick=…`.
+
+**ABI and desktop:**
+- `/dev/media` `MEDIA_GET_STATE` v2 reports the count in
+  `ciuki_media_state.usb_unrecognized`, formerly `reserved`. The offset is
+  unchanged, the field must be zero on input, and v1 keeps its reserved
+  word zero.
+- The desktop shows one warning balloon in the notification area per
+  increase of that count, including a failure from before the desktop
+  started:
+  - Title: "USB Device Not Recognized".
+  - Text: "One of the USB devices attached to this computer has
+    malfunctioned, and CiukiOS does not recognize it. Unplug the device,
+    wait a few seconds and plug it in again. If the problem continues, try
+    another USB port."
+  - An unchanged count never raises it again.
+
+**Re-plug:**
+- A port blocked by a quarantine was already released when a scan
+  observed the disconnect (f1-96b).
+- fx-21b also releases it when a scan sees a new connect change with CCS
+  still set, after the quarantined connection was reported. That is a
+  re-plug faster than the 250 ms scan, recorded as `[usb] release … reason=reconnect`.
+- The next scan debounces, resets and enumerates the port as a new device.
+- Hub ports release on disconnect as before (`usb_hub.c`).
+
+### Host evidence
+
+`tests/host/usb/fx21_test.c`:
+
+| Device | Result |
+| --- | --- |
+| Slow stick: every enumeration request answers after 1.5 s | Enumerates and mounts, no count. With the previous 500 ms per stage: six `result=-110`, quarantine. |
+| Dead stick | Quarantined within the bound, exactly one count and record. Still none after 3 s more. |
+| Dead stick, unplug then a healthy stick | Released, enumerated and mounted. |
+| Dead stick, re-plug between two scans | Released, enumerated and mounted. |
+| Dead stick, quiesce during the wait | Ends within 500 ms, no count. |
+
+`tests/host/desktop/media_notification_test.c`:
+- One balloon per increase, including at desktop start.
+- None for an unchanged count.
+- The re-plugged stick gets the ordinary media notice.
+- The text fits the notification body at 640×480 and 1024×768.

@@ -167,9 +167,52 @@ BOOL u32_resize(struct u32_window *w) {
   InvalidateRect(w->handle, 0, 1);
   return 1;
 }
+/* WM_GETMINMAXINFO: the window procedure may set the smallest and largest
+ * track size (outer sizes, zero keeps the default); the desktop holds the
+ * window to them as client-area sizes (DESK_V3_LIMITS) and maximises within
+ * the largest. Sent only when they changed. */
+static BOOL u32_limits(struct u32_window *w) {
+  if (w->parent || !w->wire || !w->proc)
+    return 1;
+  MINMAXINFO mmi;
+  w32_fill(&mmi, 0, sizeof(mmi));
+  u32_invoke(w->handle, WM_GETMINMAXINFO, 0, (LPARAM)&mmi);
+  int bx, by;
+  u32_frame(w->style, w->exstyle, &bx, &by);
+  uint32_t limits[4] = {0, 0, 0, 0};
+  const POINT *track[2] = {&mmi.ptMinTrackSize, &mmi.ptMaxTrackSize};
+  for (UINT k = 0; k < 2; k++) {
+    if (track[k]->x > 0) {
+      int c = track[k]->x - 2 * bx;
+      limits[k * 2] = (uint32_t)(c < 1 ? 1 : c > 2048 ? 2048 : c);
+    }
+    if (track[k]->y > 0) {
+      int c = track[k]->y - by - bx;
+      limits[k * 2 + 1] = (uint32_t)(c < 1 ? 1 : c > 2048 ? 2048 : c);
+    }
+  }
+  if (limits[2] && limits[0] > limits[2])
+    limits[0] = limits[2];
+  if (limits[3] && limits[1] > limits[3])
+    limits[1] = limits[3];
+  BOOL same = 1;
+  for (UINT k = 0; k < 4; k++)
+    same &= limits[k] == w->limits[k];
+  if (same)
+    return 1;
+  uint8_t b[16];
+  for (UINT k = 0; k < 4; k++)
+    desk_put32(b + k * 4, limits[k]);
+  if (!u32_wire(w, DESK_V3_LIMITS, b, sizeof(b), -1))
+    return 0;
+  w32_copy(w->limits, limits, sizeof(limits));
+  return 1;
+}
 BOOL u32_place(struct u32_window *w) {
   if (!w->wire)
     return 1;
+  if (!u32_limits(w))
+    return 0;
   UINT width, height;
   u32_surface_size(w, &width, &height);
   POINT p = u32_surface_origin(w);
@@ -181,6 +224,7 @@ BOOL u32_place(struct u32_window *w) {
   desk_put32(b + 16, 1);
   desk_put32(b + 20, !(w->style & WS_VISIBLE) ? 2
                      : IsIconic(w->handle)    ? 1
+                     : IsZoomed(w->handle)    ? 3
                                               : 0);
   desk_put32(b + 24, u32_style(w));
   return u32_wire(w, DESK_V3_PLACE, b, 28, -1);
@@ -206,6 +250,7 @@ BOOL u32_order_wire(struct u32_window *w, HWND after, HWND owner, UINT flags) {
   return u32_wire(w, DESK_V3_WINDOW_ORDER, b, sizeof(b), -1);
 }
 void u32_event(const struct desk_packet *p) {
+  if (p->opcode==DESK_V3_CLIPBOARD_EVENT) { u32_clip_event(p); return; }
   if (p->opcode == DESK_V3_RESULT) {
     for (struct request *r = requests; r; r = r->next)
       if (r->token == p->request && r->window == p->window_id &&
@@ -283,10 +328,17 @@ void u32_event(const struct desk_packet *p) {
     u32_frame(w->style, w->exstyle, &bx, &by);
     w->rect = (RECT){p->x - bx, p->y - by, p->x + (LONG)p->width + bx,
                      p->y + (LONG)p->height + bx};
+    BOOL zoomed = !!(w->style & WS_MAXIMIZE);
+    /* 3: maximised by the desktop (title button, double click). Minimising or
+     * hiding keeps the maximised state, only the normal state clears it. */
     if (p->flags == 1)
       w->style |= WS_MINIMIZE;
     else
       w->style &= ~WS_MINIMIZE;
+    if (p->flags == 3)
+      w->style |= WS_MAXIMIZE;
+    else if (p->flags == 0)
+      w->style &= ~WS_MAXIMIZE;
     if (p->flags == 2)
       w->style &= ~WS_VISIBLE;
     else
@@ -299,10 +351,10 @@ void u32_event(const struct desk_packet *p) {
       SendMessageA(h, WM_MOVE, 0,
                    (uint16_t)w->rect.left |
                        ((uint32_t)(uint16_t)w->rect.top << 16));
-    if (minimized != IsIconic(h) ||
+    if (minimized != IsIconic(h) || zoomed != IsZoomed(h) ||
         old.right - old.left != w->rect.right - w->rect.left ||
         old.bottom - old.top != w->rect.bottom - w->rect.top)
-      SendMessageA(h, WM_SIZE, IsIconic(h) ? 1 : 0,
+      SendMessageA(h, WM_SIZE, IsIconic(h) ? SIZE_MINIMIZED : IsZoomed(h) ? SIZE_MAXIMIZED : SIZE_RESTORED,
                    IsIconic(h) ? 0 : ((uint16_t)p->width | (p->height << 16)));
     if (shown != IsWindowVisible(h))
       SendMessageA(h, WM_SHOWWINDOW, IsWindowVisible(h), 0);

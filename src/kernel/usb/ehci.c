@@ -305,7 +305,7 @@ static int packet(struct usb_device *d, unsigned ep, unsigned pid, unsigned togg
     for (unsigned i = 0; i <= budget; i++) {
         if (!healthy(h)) return -USB_EIO;
         usb_barrier();
-        if (!(td[2] & ACTIVE) || usb_expired(h, end)) break;
+        if (!(td[2] & ACTIVE) || usb_expired(h, end) || usb_control_cancelled(d)) break;
         usb_poll_pause(h, 1);
     }
     int retired = unlink_async(h);
