@@ -327,7 +327,7 @@ def desktop_payloads():
                "/Programs/regedit": DESKTOP / "regedit",
                "/Programs/hwreport": DESKTOP / "hwreport",
                "/Programs/control": DESKTOP / "control", "/Programs/ciukide": DESKTOP / "ciukide",
-               "/Programs/calc": DESKTOP / "calc", "/Programs/charmap": DESKTOP / "charmap", "/Programs/clock": DESKTOP / "clock",
+               "/Programs/clipbrd": DESKTOP / "clipbrd", "/Programs/calc": DESKTOP / "calc", "/Programs/charmap": DESKTOP / "charmap", "/Programs/clock": DESKTOP / "clock",
                "/Programs/help": DESKTOP / "help", "/Programs/mixer": DESKTOP / "mixer", "/Programs/recorder": DESKTOP / "recorder", "/Programs/viewer": DESKTOP / "viewer",
                "/Programs/terminal": DESKTOP / "terminal",
                "/Programs/paint": DESKTOP / "paint", "/Programs/music": DESKTOP / "music",

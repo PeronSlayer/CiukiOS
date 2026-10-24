@@ -72,6 +72,20 @@ static void hid_extension_test(struct process *p, int fd)
     uint8_t boot[]={2,0xff,4,0,0,0,0,0}; CHECK(!usb_hid_report(d,h,boot,8)); drain_hid(p,fd,e);
     boot[0]=0; boot[2]=1; CHECK(!usb_hid_report(d,h,boot,8) && !drain_hid(p,fd,e));
     CHECK(h->reports->state.keyboard[0]==16 && h->reports->state.keyboard[28]==2);
+    /* G4 (KB-12): both Windows keys (modifier bits 3 and 7), the Application key
+     * (usage 0x65) and Pause/Break (usage 0x48) reach the desktop as set-1 positions
+     * 0x15b, 0x15c, 0x15d and 0x200. */
+    {
+        uint8_t windows[]={0x88,0,0x65,0x48,0,0,0,0};
+        CHECK(!usb_hid_report(d,h,windows,8));
+        n=drain_hid(p,fd,e);
+        unsigned seen=0;
+        for (unsigned i=0;i<n;i++) if (e[i].type==CIUKI_INPUT_KEY && e[i].value==1)
+            seen|=e[i].code==0x15b ? 1u : e[i].code==0x15c ? 2u : e[i].code==0x15d ? 4u : e[i].code==0x200 ? 8u : 0u;
+        CHECK(seen==15);
+        windows[0]=0; windows[2]=windows[3]=0;
+        CHECK(!usb_hid_report(d,h,windows,8)); drain_hid(p,fd,e);
+    }
     fixture_detach(&host); drain_hid(p,fd,e);
     /* SET_PROTOCOL STALL keeps the advertised boot keyboard usable. */
     *d=(struct usb_device){.host=&host,.generation=78,.address=1,

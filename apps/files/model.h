@@ -59,6 +59,7 @@ struct fm_model {
     /* G2: records behind the Recycle Bin view's entries, and the drives whose
      * volumes are fixed disks (bit 0 = A:; C: always counts). */
     struct rb_item *bin; unsigned bin_count; uint32_t fixed;
+    uint32_t clipboard_sequence;
     uint32_t drive_slots; /* fx-17b: drives listed in Computer without a medium (floppies) */
 };
 enum fm_job_kind { FM_COPY, FM_MOVE, FM_DELETE, FM_PROPERTIES };

@@ -22,6 +22,9 @@
  * keeps reading the channel so the desktop never drops the client; input
  * beyond 64 held packets is dropped and counted (surface.c). */
 #define CIUKI_LAYOUT_LIMIT_NS 75000000u
+/* fx-24: ciuki_layout_expired reads the clock (a system call on CiukiOS) on
+ * the first check of a span and every CIUKI_LAYOUT_CLOCK_STRIDE checks. */
+#define CIUKI_LAYOUT_CLOCK_STRIDE 16u
 #define CIUKI_LAYOUT_DOCUMENT_LIMIT_NS 10000000000ull
 enum ciuki_layout_cause { CIUKI_LAYOUT_ACCEPTED, CIUKI_LAYOUT_ADMISSION, CIUKI_LAYOUT_TIME };
 struct ciuki_layout_span {

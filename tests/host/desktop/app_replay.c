@@ -571,6 +571,11 @@ static uint32_t proc_records(void *buffer, uint32_t bytes)
 int ciuki_devctl(int fd, uint32_t op, void *record, uint32_t size)
 { (void)fd; (void)op; (void)record; (void)size; errno = ENODEV; return -1; }
 int ciuki_power(uint32_t action) { (void)action; errno = ENOSYS; return -1; }
+/* G6 file information (call 98): not modelled; Files' Properties falls back. */
+int ciuki_file_info_get(const char *path, struct ciuki_file_info *out) { (void)path; (void)out; errno = ENOSYS; return -1; }
+int ciuki_file_info_set(const char *path, uint32_t mask, const struct ciuki_file_info *in) { (void)path; (void)mask; (void)in; errno = ENOSYS; return -1; }
+int ciuki_set_attributes(const char *path, uint32_t attributes) { (void)path; (void)attributes; errno = ENOSYS; return -1; }
+int fm_native_version(const char *path, char *out, size_t cap) { (void)path; (void)out; (void)cap; return -ENOSYS; }
 int ciuki_power_status(struct ciuki_power_status *out) { (void)out; errno=ENOSYS; return -1; }
 int ciuki_launch_mark(uint32_t event, ciuki_pid_t pid, uint64_t click_us)
 { (void)event; (void)pid; (void)click_us; return 0; } /* quiet replay */
