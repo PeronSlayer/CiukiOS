@@ -10,6 +10,7 @@
 #undef munmap
 #define close rp_close
 #define munmap rp_munmap
+#include "replay_display.h"
 #include "../../../apps/desktop/desktop.c"
 #undef desk_init
 #undef main

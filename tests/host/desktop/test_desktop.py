@@ -529,16 +529,16 @@ class DesktopTests(unittest.TestCase):
             folder = Path(temp)
             inc = folder / "include/ciuki"
             inc.mkdir(parents=True)
-            for name in ("channel.h", "surface.h", "spawn.h", "proc.h", "audio.h", "net.h", "media.h", "power.h", "display.h", "registry.h", "audio_preference.h"):
+            for name in ("channel.h", "surface.h", "spawn.h", "proc.h", "audio.h", "net.h", "media.h", "power.h", "display.h", "registry.h", "audio_preference.h", "fileinfo.h"):
                 shutil.copy2(ROOT / "sdk/sysroot-overlay/include/ciuki" / name, inc / name)
             for name in ("runtime.h", "raw.h"):
                 (inc / name).write_text("/* supplied by host harness */\n")
             env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
             binary = folder / "launch-test"
-            sources = [ROOT / "apps/desktop" / n for n in ("client.c", "protocol.c", "input.c", "compositor.c", "theme.c")] + SHELL_SOURCES
+            sources = [ROOT / "apps/desktop" / n for n in ("client.c", "protocol.c", "input.c", "compositor.c", "theme.c", "clipboard.c")] + SHELL_SOURCES
             sources += [ROOT / "tests/host/desktop" / n for n in ("fake.c", "shell_launch_test.c")]
             sources += [ROOT / "apps/desktop/image.c", ROOT / "apps/desktop/wallpaper_io.c"]  # shell_service's workers
-            sources += [ROOT / "apps/libdeskui" / n for n in ("icons.c", "icon_map.c")]
+            sources += [ROOT / "apps/libdeskui" / n for n in ("icons.c", "icon_map.c", "clipboard.c", "clipstore.c")]
             bridge = folder / "kernel-poll.o"
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
                             "-fsanitize=address,undefined", "-ffunction-sections", "-fdata-sections",
@@ -599,8 +599,10 @@ class DesktopTests(unittest.TestCase):
             shutil.copy2(ROOT / "apps/desktop/protocol.h", inc / "desktop.h")
             binary = folder / "loading-test"
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-fsanitize=address,undefined",
+                            "-D_POSIX_C_SOURCE=200809L", "-include", str(ROOT / "tests/host/desktop/replay_base.h"),
                             '-DDOSBOX_SETTINGS_DIR="'+str(folder/"prefs")+'"', "-I", str(folder / "include"), "-I", str(ROOT / "src/kernel/include"),
-                            str(ROOT / "tests/host/desktop/dosbox_loading_test.c"), str(ROOT / "apps/desktop/protocol.c"),
+                            str(ROOT / "tests/host/desktop/dosbox_loading_test.c"), str(ROOT / "apps/dosbox/clipboard.c"), str(ROOT / "apps/desktop/protocol.c"),
+                            *(str(ROOT / "apps/libdeskui" / n) for n in ("clipboard.c", "clipstore.c")),
                             "-o", str(binary)], check=True)
             for scenario in scenarios:
                 result = subprocess.run([str(binary), str(scenario)], capture_output=True, text=True,
@@ -666,7 +668,7 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(set(m["files"]), {"desktop", "shell-launch", "demo", "gfxdemo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", "libdeskui.a",
                                            "ciuki-portrait.xrgb",  # f3-02 /Programs/dosbox; desktop shell /Programs/control
                                            "tango.cis", "TANGO.TXT", "AUTHORS.TXT", "CREDITS.TXT",  # Tango store
-                                           "calc", "charmap", "clock", "help", "hwreport", "logview", "mixer", "music", "paint", "viewer"})  # legacy-recovery accessories and the f9-07 Hardware Report
+                                           "clipbrd", "calc", "charmap", "clock", "help", "hwreport", "logview", "mixer", "music", "paint", "viewer"})  # legacy-recovery accessories and the f9-07 Hardware Report
         self.assertEqual(m["icons"]["store_sha256"], m["files"]["tango.cis"])
         expected = build.inputs()
         self.assertTrue(build.current_build(expected))
@@ -676,7 +678,7 @@ class DesktopTests(unittest.TestCase):
         sources, directories, metadata = image.desktop_payloads()
         licenses = image.desktop_license_payloads()
         accessories = {f"/Programs/{n}" for n in ("calc", "charmap", "clock", "help", "mixer", "viewer")}
-        expected_paths = {"/System/Win32/shell-launch", "/Programs/desktop", "/Programs/demo", "/Programs/gfxdemo", "/Programs/dosbox", "/Programs/files", "/Programs/tasks",
+        expected_paths = {"/Programs/clipbrd", "/System/Win32/shell-launch", "/Programs/desktop", "/Programs/demo", "/Programs/gfxdemo", "/Programs/dosbox", "/Programs/files", "/Programs/tasks",
                                         "/Programs/terminal", "/Programs/ciuknote", "/Programs/ciukide", "/Programs/control", "/Programs/regedit", "/Programs/paint", "/Programs/calc", "/Programs/charmap", "/Programs/clock", "/Programs/help", "/Programs/mixer", "/Programs/viewer", "/Programs/music", "/Programs/hwreport", "/Programs/logview",
                                         "/system/assets/ciuki-portrait.xrgb",
                                         *licenses, "/system/fonts/LICENSES.TXT",
@@ -837,6 +839,7 @@ class AppCaseReplayTests(unittest.TestCase):
                  ("deskui_recent", os_calls, ROOT / "apps/libdeskui/recent.c"),   # CiukNote's recent list (off in --test runs)
                  ("files_main", os_calls + ["-Dmain=files_main"], ROOT / "apps/files/files.c"),
                  ("files_app", posix + ["-include", str(host / "replay_files_worker.h")], ROOT / "apps/files/app.c"), ("files_model", posix, ROOT / "apps/files/model.c"),
+                 ("files_clipboard", posix, ROOT / "apps/files/clipboard.c"),
                  ("files_transfer", posix + ["-include", str(host / "replay_files_worker.h")], ROOT / "apps/files/transfer.c"),
                  ("note_main", os_calls + ["-Dmain=ciuknote_main"], ROOT / "apps/ciuknote/main.c"),
                  ("note_app", posix, ROOT / "apps/ciuknote/app.c"), ("note_doc", posix, ROOT / "apps/ciuknote/doc.c"),
