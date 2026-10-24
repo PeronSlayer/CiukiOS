@@ -57,6 +57,53 @@ static const struct desk_theme themes[] = {
 #define THEMES (int)(sizeof(themes) / sizeof(themes[0]))
 const struct desk_theme *desk_theme = &themes[1];
 
+struct appearance desk_appearance;
+int desk_appearance_active;
+static int logical;
+static struct desk_theme customised;
+void desk_theme_logical(int on) { logical=on; }
+int desk_scale(int x) { return desk_appearance_active && !logical ? ap_scale(&desk_appearance,x) : x; }
+int desk_metric(int item,int fallback) { return desk_scale(desk_appearance_active ? desk_appearance.item[item].size : fallback); }
+int desk_item_font(int item) { return desk_appearance_active ? DESK_FONTS+item : desk_theme->font_ui; }
+void desk_appearance_apply(const struct appearance *a)
+{
+    if(!a || !ap_valid(a)) { desk_appearance_active=0; return; }
+    desk_appearance=*a; desk_appearance_active=1; customised=*desk_theme;
+    const struct ap_item *v=a->item;
+    customised.desktop=v[AP_DESKTOP].colour; customised.desktop_label=v[AP_ICON].text;
+    customised.title[0]=v[AP_ACTIVE_TITLE].colour; customised.title[1]=v[AP_ACTIVE_TITLE].gradient;
+    customised.title_inactive[0]=v[AP_INACTIVE_TITLE].colour; customised.title_inactive[1]=v[AP_INACTIVE_TITLE].gradient;
+    customised.title_text=v[AP_ACTIVE_TITLE].text; customised.title_text_inactive=v[AP_INACTIVE_TITLE].text;
+    customised.title_style=DESK_TITLE_HGRADIENT;
+    customised.face=customised.face_top=customised.face_bottom=v[AP_3D].colour;
+    customised.taskbar=customised.topbar=v[AP_3D].colour;
+    customised.taskbar_text=customised.topbar_text=v[AP_3D].text;
+    customised.window=v[AP_WINDOW].colour; customised.ink=v[AP_WINDOW].text;
+    customised.frame=v[AP_ACTIVE_BORDER].colour; customised.frame_inactive=v[AP_INACTIVE_BORDER].colour;
+    customised.gray=v[AP_DISABLED].text; customised.select=v[AP_SELECTED].colour;
+    customised.select_ink=v[AP_SELECTED].text;
+    customised.font_ui=(uint8_t)desk_item_font(AP_MESSAGE);
+    customised.font_title=(uint8_t)desk_item_font(AP_ACTIVE_TITLE);
+    customised.font_bold=(uint8_t)desk_item_font(AP_MENU);
+    customised.text_aa=!!(a->effects&AP_SMOOTH);
+    customised.icon_large=(a->effects&AP_LARGE_ICONS) ? 48 : 32;
+    desk_theme=&customised;
+}
+
+const struct desk_theme *desk_theme_role(struct desk_theme *storage,int item)
+{
+    const struct desk_theme *old=desk_theme;
+    if(desk_appearance_active) {
+        *storage=*old; storage->font_ui=(uint8_t)desk_item_font(item); storage->font_bold=storage->font_ui;
+        if(item==AP_MESSAGE) {
+            storage->ink=desk_appearance.item[item].text;
+            storage->face=storage->face_top=storage->face_bottom=desk_appearance.item[item].colour;
+            storage->window=storage->face;
+        }
+        desk_theme=storage;
+    }
+    return old;
+}
 int desk_theme_count(void) { return THEMES; }
 const struct desk_theme *desk_theme_at(int i) { return i >= 0 && i < THEMES ? &themes[i] : NULL; }
 
@@ -81,7 +128,7 @@ int desk_theme_use(const char *name)
 {
     const struct desk_theme *t = desk_theme_named(name);
     if (!t) return -1;
-    desk_theme = t;
+    desk_theme = t; desk_appearance_active=0;
     return 0;
 }
 
@@ -100,7 +147,22 @@ const char *desk_theme_preference(const char *name)
 }
 
 /* ---- fonts ---- */
-const struct desk_font *desk_font(int id) { return &desk_fonts[id >= 0 && id < DESK_FONTS ? id : DESK_FONT_UI]; }
+const struct desk_font *desk_font(int id) {
+    if(desk_appearance_active && id>=DESK_FONTS && id<DESK_FONTS+AP_ITEMS) {
+        const struct ap_item *v=&desk_appearance.item[id-DESK_FONTS];
+        id=v->font;
+        if(v->style&1) { if(id==DESK_FONT_UI) id=DESK_FONT_BOLD; else if(id==DESK_FONT_MONO) id=DESK_FONT_MONO_BOLD; }
+    }
+    return &desk_fonts[id >= 0 && id < DESK_FONTS ? id : DESK_FONT_UI];
+}
+int desk_font_scale(int id,int x) {
+    if(!desk_appearance_active) return x;
+    int points=id>=DESK_FONTS && id<DESK_FONTS+AP_ITEMS ? desk_appearance.item[id-DESK_FONTS].points : 0;
+    int pixels=points ? (points*96+36)/72 : desk_font(id)->size;
+    if(!logical) pixels=desk_scale(pixels);
+    int size=desk_font(id)->size;
+    return x<0 ? -((-x*pixels+size/2)/size) : (x*pixels+size/2)/size;
+}
 
 static int glyph_index(unsigned c)
 {
@@ -111,9 +173,9 @@ static int glyph_index(unsigned c)
     return '?' - 0x20;
 }
 
-int desk_font_cap(int id) { return -desk_font(id)->glyphs['H' - 0x20].top; }
-int desk_font_line(int id) { return desk_font(id)->ascent + desk_font(id)->descent; }
-int desk_text_advance(int font, unsigned c) { return desk_font(font)->glyphs[glyph_index(c)].advance; }
+int desk_font_cap(int id) { return desk_font_scale(id,-desk_font(id)->glyphs['H' - 0x20].top); }
+int desk_font_line(int id) { return desk_font_scale(id,desk_font(id)->ascent + desk_font(id)->descent); }
+int desk_text_advance(int font, unsigned c) { return desk_font_scale(font,desk_font(font)->glyphs[glyph_index(c)].advance); }
 
 unsigned desk_utf8_decode(const char *s, size_t *used)
 {
@@ -281,7 +343,15 @@ int desk_paint_text_n_aa(struct desk_paint *p, int font, int x, int baseline, co
         size_t used; unsigned c = desk_utf8_decode(s, &used);
         s += used;
         const struct desk_glyph *g = &f->glyphs[glyph_index(c)];
-        int gx = x + g->left, gy = baseline + g->top, w = g->w, h = g->h;
+        int gx = x + desk_font_scale(font,g->left), gy = baseline + desk_font_scale(font,g->top), w = desk_font_scale(font,g->w), h = desk_font_scale(font,g->h);
+        if(desk_appearance_active && font>=DESK_FONTS && font<DESK_FONTS+AP_ITEMS && (desk_appearance.item[font-DESK_FONTS].style&2)) {
+            for(int yy=0;yy<h;yy++) for(int xx=0;xx<w;xx++) {
+                unsigned a=f->alpha[g->offset+(size_t)(yy*g->h/h)*g->w+xx*g->w/w];
+                if(!aa) a=a>=104 ? 255 : 0;
+                if(a) desk_paint_blend(p,gx+xx+(h-yy)/4,gy+yy,1,1,colour,a);
+            }
+            x+=desk_text_advance(font,c); continue;
+        }
         int vx = gx, vy = gy, vw = w, vh = h;
         /* fx-15: the glyph's own box decides, not the pen: a negative left
          * bearing ('j', 'p') reaches left of the pen, and a clip ending
@@ -289,16 +359,16 @@ int desk_paint_text_n_aa(struct desk_paint *p, int font, int x, int baseline, co
          * a repainted strip differs from a full repaint. */
         if (w && h && gx < p->cx + p->cw && clip(p, &vx, &vy, &vw, &vh)) {
             for (int r = vy; r < vy + vh; r++) {
-                const uint8_t *src = f->alpha + g->offset + (size_t)(r - gy) * (size_t)w + (size_t)(vx - gx);
+                const uint8_t *src = f->alpha + g->offset + (size_t)((r-gy)*g->h/h)*g->w;
                 uint32_t *dst = p->pixels + (size_t)r * (size_t)p->width + (size_t)vx;
                 for (int i = 0; i < vw; i++) {
-                    unsigned a = src[i];
+                    unsigned a = src[(vx+i-gx)*g->w/w];
                     if (!aa) a = a >= 104 ? 255 : 0;
                     if (a) dst[i] = desk_mix(colour, dst[i], a);
                 }
             }
         }
-        x += g->advance;
+        x += desk_font_scale(font,g->advance);
         if (x > p->cx + p->cw + 64) break;
     }
     return x - start;
@@ -787,19 +857,30 @@ int desk_theme_poll(const char *path, uint64_t now)
      * still seen. Missing file or key: the default theme. */
     static uint64_t next; static int started;
     static char last[32] = "\001";
-    static char text[4096];
+    static char text[32768];
+    static uint32_t last_hash;
     if (started && now < next) return 0;
     started = 1; next = now + 2000000000ull;
     char name[32] = "";
+    struct appearance appearance; int found=0; uint32_t hash=2166136261u;
     FILE *f = fopen(path, "rb");
     if (f) {
         size_t n = fread(text, 1, sizeof(text), f);
-        if (!ferror(f) && desk_settings_theme(text, n, name, sizeof(name))) name[0] = 0;
+        if (!ferror(f)) {
+            if(desk_settings_theme(text,n,name,sizeof(name))) name[0]=0;
+            for(size_t i=0;i<n;i++) hash=(hash^(unsigned char)text[i])*16777619u;
+            found=ap_settings_decode(&appearance,text,(unsigned)n);
+        }
         fclose(f);
     }
-    if (!strcmp(name, last)) return 0;
+    if (!strcmp(name, last) && last_hash==hash) return 0;
+    last_hash=hash;
     snprintf(last, sizeof(last), "%s", name);
-    const struct desk_theme *before = desk_theme;
+
+    struct desk_theme before=*desk_theme;
+    struct appearance old=desk_appearance; int was_active=desk_appearance_active;
     if (!name[0] || desk_theme_use(name)) desk_theme_use(DESK_THEME_DEFAULT);
-    return desk_theme != before;
+    if(found) desk_appearance_apply(&appearance);
+    return memcmp(&before,desk_theme,sizeof(before)) || was_active!=desk_appearance_active ||
+        (found && memcmp(&old,&desk_appearance,sizeof(old)));
 }

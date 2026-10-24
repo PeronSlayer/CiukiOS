@@ -3,6 +3,7 @@
 #include "control.h"
 #include "acc_test.h"
 #include "display_fixture.h"
+#include "../../../apps/libdeskui/internal.h"
 #include <errno.h>
 #include <stddef.h>
 _Static_assert(sizeof(struct ciuki_display_mode) == 12, "f1-23 mode ABI");
@@ -90,6 +91,8 @@ static void check_layout(void)
         for (unsigned j = i + 1; j < u.count; j++) {
             const struct du_widget *q = &u.widgets[j];
             if (q->hidden || q->kind == DU_TABS) continue;
+            if(p->box.x < q->box.x + q->box.w && q->box.x < p->box.x + p->box.w && p->box.y < q->box.y + q->box.h && q->box.y < p->box.y + p->box.h)
+                fprintf(stderr,"overlapping widgets: %d and %d\n",p->id,q->id);
             assert(!(p->box.x < q->box.x + q->box.w && q->box.x < p->box.x + p->box.w && p->box.y < q->box.y + q->box.h && q->box.y < p->box.y + p->box.h));
         }
     }
@@ -118,6 +121,59 @@ int main(int argc, char **argv)
     assert(strstr(saved,"monitor_seconds=300\n"));
     du_render(&u); at_save(argv[1],"control-monitor-power",&u); cp_detach(&a);
     puts("PASS G10 Control Panel: saver choice, enable, minutes, preview wire, Apply/Cancel rollback, Power monitor timeout");
+    /* G23: real controls, all items, save/delete, effects and Advanced DPI. */
+    init(); cp_open(&a,CP_DISPLAY);
+    for(int tab=0;tab<CP_DISPLAY_TABS;tab++) {
+        select(CP_DISPLAY_TABS_ID,tab); check_layout(); du_render(&u);
+        if(tab==CP_APPEARANCE) at_save(argv[1],"control-appearance",&u);
+        if(tab==CP_EFFECTS) at_save(argv[1],"control-effects",&u);
+        if(tab==CP_THEMES) at_save(argv[1],"control-desktop-themes",&u);
+    }
+    select(CP_DISPLAY_TABS_ID,CP_APPEARANCE); select(4100,0);
+    assert(a.cfg.appearance_set && !strcmp(a.cfg.scheme,"Windows Standard"));
+    for(int item=0;item<AP_ITEMS;item++) {
+        select(4104,item); assert(a.appearance_item==item);
+        struct du_event size={.type=DU_EV_CHANGE,.id=4108,.index=2}; u.event(&u,&size,u.user);
+        assert(a.cfg.appearance.item[item].size==ap_size_min(item)+2);
+    }
+    select(4104,AP_SCROLLBAR);
+    struct du_widget *slider=du_get(&u,4108);
+    struct du_sb sb={slider->box,slider->vertical,slider->value,slider->total,slider->page};
+    int grab=slider->box.x;
+    while(grab<slider->box.x+slider->box.w && du_sb_part(&sb,grab,slider->box.y+8)!=3) grab++;
+    assert(grab<slider->box.x+slider->box.w);
+    at_move(&u,grab,slider->box.y+8);
+    struct ciuki_input_event down={.type=CIUKI_INPUT_BUTTON,.code=1,.value=1}; du_input(&u,&down);
+    unsigned old_size=a.cfg.appearance.item[AP_SCROLLBAR].size;
+    at_move(&u,grab+30,slider->box.y+8);
+    assert(a.cfg.appearance.item[AP_SCROLLBAR].size>old_size && u.capture>=0 && u.widgets[u.capture].id==4108);
+    down.value=0; du_input(&u,&down);
+    struct du_event save_scheme={.type=DU_EV_DIALOG,.id=4120,.index=0,.text="My Appearance"};
+    u.event(&u,&save_scheme,u.user);
+    assert(!strcmp(a.cfg.schemes[0].name,"My Appearance"));
+    at_click_widget(&u,4102); assert(!a.cfg.schemes[0].name[0]);
+    /* Save As uses a modal response through its own ID. */
+    select(CP_DISPLAY_TABS_ID,CP_EFFECTS);
+    for(int i=0;i<4;i++) { unsigned old=a.cfg.appearance.effects; at_click_widget(&u,4113+i); assert((a.cfg.appearance.effects^old)==(1u<<i)); }
+    select(CP_DISPLAY_TABS_ID,CP_SCREEN_SETTINGS);
+    at_click_widget(&u,4133); assert(du_dialog_id(&u)==4134);
+    struct du_rect large_font=u.dialog.items[6].box;
+    at_click(&u,large_font.x+10,large_font.y+10); assert(a.cfg.appearance.dpi==120 && du_dialog_id(&u)==4134);
+    du_render(&u); at_save(argv[1],"control-advanced-fonts",&u);
+    struct du_rect cancel_font=du_dialog_button(&u,1); at_click(&u,cancel_font.x+5,cancel_font.y+5);
+    assert(!du_dialog_id(&u) && a.cfg.appearance.dpi==96);
+    at_click_widget(&u,4133);
+    large_font=u.dialog.items[6].box; at_click(&u,large_font.x+10,large_font.y+10);
+    save_error=1; choose(2); assert(du_dialog_id(&u)==4134 && a.cfg.appearance.dpi==120);
+    save_error=0; choose(2); assert(du_dialog_id(&u)==4134 && a.cfg.appearance.dpi==120);
+    choose(1); assert(!du_dialog_id(&u) && a.cfg.appearance.dpi==120);
+    at_click_widget(&u,4133); choose(0); assert(!du_dialog_id(&u));
+    at_click_widget(&u,4118); assert(a.cfg.appearance.dpi==120);
+    at_click_widget(&u,4117); assert(a.cfg.appearance.dpi==96);
+    struct du_event custom={.type=DU_EV_CHANGE,.id=4119,.index=96}; u.event(&u,&custom,u.user);
+    assert(a.cfg.appearance.dpi==144);
+    assert(cp_close(&a)); cp_detach(&a);
+    puts("PASS G23 Control Panel: every Appearance item, Effects toggles, Advanced 96/120/custom DPI and tab geometry");
     init(); check_layout();
     assert(a.area_count == 4 && !strcmp(a.area_items[2].text[0], "1024 x 768") && a.area == 2);
     assert(a.depth_count == 2 && a.depths[0] == 16 && a.depths[1] == 32 && a.depth == 1);

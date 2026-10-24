@@ -32,9 +32,9 @@
  * height of the UI face, so (h - DU_GLYPH_H) / 2 centres a line in h rows.
  * DU_CHAR_W is only an average advance for rough sizing. */
 #define DU_CHAR_W  7
-#define DU_GLYPH_H 9
-#define DU_ROW     17   /* list, tree and menu-bar rows */
-#define DU_MENU_ITEM_H 19
+#define DU_GLYPH_H (desk_appearance_active ? desk_font_cap(desk_theme->font_ui) : 9)
+#define DU_ROW     (desk_appearance_active ? desk_font_line(desk_theme->font_ui)+4 : 17)   /* list, tree and menu-bar rows */
+#define DU_MENU_ITEM_H (desk_appearance_active ? desk_metric(AP_MENU,19) : 19)
 #define DU_MENU_SEP_H  9
 /* Icon slots (16 menus/lists, 22 toolbars, 32 large icons and dialogs). */
 #define DU_ICON_SMALL   (desk_theme->icon_small)
@@ -327,6 +327,7 @@ struct du_ui {
     struct du_widget widgets[DU_WIDGETS];
     unsigned count;
     int focus, capture, hover;
+    uint64_t menu_opened; unsigned menu_animation_step;
     struct du_menu *menus; unsigned menu_count;
     int menu, menu_item, menu_keyboard, menu_armed, menu_track;
     const struct du_menu_item *popup; unsigned popup_count; int popup_x, popup_y, popup_owner;
@@ -455,6 +456,8 @@ struct du_window {
     /* Explicit presenters opt in to the last render regions. The normal
      * du_window_turn path always presents those regions. */
     int present_rendered;
+    int old_logical_width, old_logical_height;
+    unsigned dpi; /* G23: physical surface pixels per 96 logical units; fixed until reopen. */
     uint32_t server_pid, ping_serial;
     struct ciuki_surface_info info;
     uint32_t *pixels, *back;

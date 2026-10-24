@@ -1969,6 +1969,53 @@ struct ciuki_surface_info {
 /* G10: shared screen policy and serialized monitor power, syscall 74. */
 #define CIUKI_DISPLAY_SCREEN 2u
 #define CIUKI_DISPLAY_DPMS 3u
+/* G23: additive queries. Existing display records remain unchanged.
+ * DEVCTL numbers follow main's highest allocated request, 0x53540004.
+ * Display authority may query via syscall 74 operations 4/5 as well. */
+#define CIUKI_DISPLAY_MONITOR 4u
+#define CIUKI_DISPLAY_REFRESH 5u
+#define DISPLAY_GET_MONITOR 0x53540005u
+#define DISPLAY_GET_REFRESH 0x53540006u
+#define CIUKI_MONITOR_VERSION 1u
+#define CIUKI_MONITOR_EDID_VALID 1u
+#define CIUKI_MONITOR_DDC 2u
+#define CIUKI_TIMING_PREFERRED 1u
+#define CIUKI_TIMING_INTERLACED 2u
+struct ciuki_monitor_timing {
+    uint32_t width;
+    uint32_t height;
+    uint32_t pixel_clock_khz;
+    uint32_t horizontal_total;
+    uint32_t vertical_total;
+    uint32_t refresh_millihz;
+    uint32_t flags;
+};
+struct ciuki_monitor_info {
+    uint32_t version;
+    uint32_t size;
+    uint32_t flags;
+    char manufacturer[4];
+    uint32_t product;
+    uint32_t serial;
+    char name[32];
+    uint32_t manufacture_week;
+    uint32_t manufacture_year;
+    uint32_t minimum_hz;
+    uint32_t maximum_hz;
+    uint32_t timing_count;
+    struct ciuki_monitor_timing timings[4];
+    uint8_t edid[128];
+};
+struct ciuki_display_refresh {
+    uint32_t version;
+    uint32_t size;
+    uint32_t mode_id;
+    uint32_t width;
+    uint32_t height;
+    uint32_t current_millihz; /* 0: firmware default, actual rate unknown */
+    uint32_t supported_count;
+    uint32_t rates_millihz[16]; /* monitor timings, not a mode-setting promise */
+};
 #define CIUKI_SCREEN_VERSION 1u
 #define CIUKI_SCREEN_CONFIG 1u
 #define CIUKI_SCREEN_STATUS 2u

@@ -251,7 +251,7 @@ struct desk_box desk_task_button(const struct desktop *d, int index)
     int32_t available=(int32_t)d->width-2*DESK_TASK_X;
     if (available<=0 || !count) return (struct desk_box){0,0,0,0};
     int32_t w=available/(int32_t)count;
-    if (w>160) w=160;
+    if (w>desk_scale(160)) w=desk_scale(160);
     int32_t left=DESK_TASK_X+(int32_t)position*w;
     return (struct desk_box){left,(int32_t)d->height-DESK_BAR+3,w,DESK_BAR-6};
 }
@@ -259,7 +259,7 @@ int32_t desk_menu_row(const struct desktop *d)
 { (void)d; return SH_START_ROW; }
 /* The Ciuki (Start) button at the left end of the top bar. */
 struct desk_box desk_start_button(const struct desktop *d)
-{ (void)d; return (struct desk_box){DESK_START_X,DESK_START_Y,DESK_START_W,DESK_START_H}; }
+{ (void)d; return (struct desk_box){desk_scale(DESK_START_X),desk_scale(DESK_START_Y),desk_scale(DESK_START_W),desk_scale(DESK_START_H)}; }
 struct desk_box desk_start_bounds(const struct desktop *d)
 {
     struct desk_box b=desk_start_button(d);
@@ -741,12 +741,29 @@ static struct desk_cursor_raster cursor_raster(const struct desktop *d)
     }
     unsigned shape=d->cursor_shape;
     const struct desk_cursor_raster *generic=desk_generic_cursor(shape);
-    if (generic) return *generic;
-    if (shape>=DESK_CURSOR_COUNT) return desk_cursors[DESK_CURSOR_ARROW];
-    struct desk_tool_cursor tool=desk_tool_cursor(shape);
-    struct desk_cursor_raster raster={.hot_x=(unsigned)tool.hot_x,.hot_y=(unsigned)tool.hot_y,.width=32,.height=32};
-    memcpy(raster.mask,tool.mask,sizeof(raster.mask));
-    memcpy(raster.image,tool.image,sizeof(raster.image));
+    struct desk_cursor_raster raster;
+    if(generic) raster=*generic;
+    else if(shape>=DESK_CURSOR_COUNT) raster=desk_cursors[DESK_CURSOR_ARROW];
+    else {
+        struct desk_tool_cursor tool=desk_tool_cursor(shape);
+        raster=(struct desk_cursor_raster){.hot_x=(unsigned)tool.hot_x,.hot_y=(unsigned)tool.hot_y,.width=32,.height=32};
+        memcpy(raster.mask,tool.mask,sizeof(raster.mask)); memcpy(raster.image,tool.image,sizeof(raster.image));
+    }
+    if(d->shell && d->sh.cfg.pointer_scheme==2) {
+        for(unsigned y=0;y<32;y++) raster.image[y]^=raster.mask[y];
+    } else if(d->shell && d->sh.cfg.pointer_scheme==1 && generic) {
+        struct desk_cursor_raster source=raster;
+        unsigned width=source.width*3/2, height=source.height*3/2;
+        if(width>32) width=32;
+        if(height>32) height=32;
+        raster=(struct desk_cursor_raster){.width=width,.height=height,.hot_x=source.hot_x*width/source.width,.hot_y=source.hot_y*height/source.height};
+        for(unsigned y=0;y<height;y++) for(unsigned x=0;x<width;x++) {
+            unsigned sy=y*source.height/height, sx=x*source.width/width;
+            uint32_t from=0x80000000u>>sx,to=0x80000000u>>x;
+            if(source.mask[sy]&from) raster.mask[y]|=to;
+            if(source.image[sy]&from) raster.image[y]|=to;
+        }
+    }
     return raster;
 }
 static uint32_t cursor_background(void)
@@ -1030,7 +1047,7 @@ static void scene(struct desktop *d, struct desk_box clip)
     if (!desk_intersect(clip,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},&clip)) return;
     /* A client-only update writes its opaque backing store directly. Higher
      * windows' shadows and shell overlays still need the ordinary painter. */
-    if (!d->animation.active && !d->menu_open && !d->sh.levels && !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open && !d->sh.tooltip && !desk_shell_chrome_intersects(d,clip) && !d->sh.switcher &&
+    if (!d->geometry_outline && !d->animation.active && !d->menu_open && !d->sh.levels && !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open && !d->sh.tooltip && !desk_shell_chrome_intersects(d,clip) && !d->sh.switcher &&
         clip.y>=DESK_BAR && (!d->shell || clip.y+clip.h<=(int)d->height-DESK_BAR)) {
         for (int i=0;i<DESK_CLIENTS;i++) {
             struct desk_client *c=&d->clients[i];
@@ -1075,6 +1092,17 @@ static void scene(struct desktop *d, struct desk_box clip)
         struct desk_box b=d->animation.box;
         struct desk_paint p=paint_of(d,clip);
         for (int k=0;k<3;k++) {
+            uint32_t ink=k==1 ? 0xffffffu : 0x101010u;
+            desk_paint_fill(&p,b.x+k,b.y+k,b.w-2*k,1,ink);
+            desk_paint_fill(&p,b.x+k,b.y+b.h-1-k,b.w-2*k,1,ink);
+            desk_paint_fill(&p,b.x+k,b.y+k,1,b.h-2*k,ink);
+            desk_paint_fill(&p,b.x+b.w-1-k,b.y+k,1,b.h-2*k,ink);
+        }
+    }
+    if(d->geometry_outline) {
+        struct desk_box b=d->geometry_preview;
+        struct desk_paint p=paint_of(d,clip);
+        for(int k=0;k<3;k++) {
             uint32_t ink=k==1 ? 0xffffffu : 0x101010u;
             desk_paint_fill(&p,b.x+k,b.y+k,b.w-2*k,1,ink);
             desk_paint_fill(&p,b.x+k,b.y+b.h-1-k,b.w-2*k,1,ink);
@@ -1481,6 +1509,7 @@ static int copy_region(struct desktop *d,pixman_region32_t *region,const struct 
     /* fx-15: everything scene() paints above the windows: the taskbar and
      * its overlays, the zoom/minimise outline, the Start orb, notifications.
      * A copy may neither carry those pixels away nor cover them. */
+    if(d->geometry_outline && !copy_cut(region,r,d->geometry_preview)) { pixman_region32_clear(region);return 0; }
     if (d->animation.active) {
         struct desk_box a=d->animation.box;
         struct desk_box edges[4]={{a.x,a.y,a.w,3},{a.x,a.y+a.h-3,a.w,3},{a.x,a.y,3,a.h},{a.x+a.w-3,a.y,3,a.h}};

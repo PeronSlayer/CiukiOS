@@ -127,6 +127,7 @@ int gdi_info(HDC, const BITMAPINFO *, unsigned, void *, struct w32_dib *);
 void gdi_system_palette(DWORD *);
 void gdi_palette_targets(void);
 void gdi_palette_reset(void);
+int gdi_smoothing(void);
 int gdi_text(HDC, int, int, unsigned, const RECT *, const void *, unsigned,
              const int *, int);
 /* f5-10C selection layer (font.c). */
@@ -136,7 +137,7 @@ int gdi_font_validate(const void *, DWORD);
 /* f5-10C2 PE-to-native font bridge (bridge.c): the guest's default backend. */
 extern const struct w32_gdi_face_backend gdi_bridge_backend;
 /* f5-20B. */
-#ifndef W32_HOST_MODEL
+#if defined(_WIN32) && !defined(W32_HOST_MODEL)
 __declspec(dllimport) void W32API SetLastError(DWORD);
 #else
 void W32API SetLastError(DWORD);

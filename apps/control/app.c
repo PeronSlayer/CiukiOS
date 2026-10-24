@@ -23,8 +23,9 @@ enum {
     C_RGB_R = 4000, C_RGB_G, C_RGB_B
 };
 static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts", "autoplay", "programs", "joystick"};
-static const char *const page_labels[CP_PAGES] = {"Display Properties", "Mouse", "Keyboard", "Sounds and Audio", "Date and Time", "System", "System", "System", "Network", "Power", "Display Properties", "Display Properties", "Storage and removable devices", "Add/Remove Programs", "Game controllers"};
+static const char *const page_labels[CP_PAGES] = {"Display Properties", "Mouse", "Keyboard", "Sounds and Audio", "Date and Time", "System", "System", "System", "Network", "Power", "Display Properties", "Fonts", "Storage and removable devices", "Add/Remove Programs", "Game controllers"};
 static void build(struct cp_app *a);
+static void list_style(struct du_widget *,const char *);
 static void refresh(struct cp_app *a);
 static unsigned power_read(struct cp_app *a);
 static void properties(struct cp_app *a, int resources);
@@ -75,6 +76,12 @@ static void changed(struct cp_app *a)
  * entry snapshot until OK; rollback merges only this applet's owned keys. */
 static void display_copy(struct ciuki_settings *to, const struct ciuki_settings *from)
 {
+    strcpy(to->desktop_theme_name,from->desktop_theme_name);
+    to->pointer_scheme=from->pointer_scheme; to->document_icon=from->document_icon; to->recycle_icon=from->recycle_icon;
+    memcpy(to->desktop_themes,from->desktop_themes,sizeof(to->desktop_themes));
+    to->appearance=from->appearance; to->appearance_set=from->appearance_set;
+    memcpy(to->scheme,from->scheme,sizeof(to->scheme));
+    memcpy(to->schemes,from->schemes,sizeof(to->schemes));
     memcpy(to->theme, from->theme, sizeof(to->theme));
     memcpy(to->wallpaper, from->wallpaper, sizeof(to->wallpaper));
     to->wallpaper_mode = from->wallpaper_mode; to->desktop_color = from->desktop_color;
@@ -86,10 +93,24 @@ int cp_display_store(struct cp_app *a)
 {
     static struct ciuki_settings current; static char out[CFG_TEXT_MAX];
     load(a, &current); display_copy(&current, &a->cfg);
+    if(a->display_sounds_dirty && a->host.save_sounds) {
+        size_t sounds=sound_format(&a->sounds,a->sound_text,sizeof(a->sound_text));
+        if(!sounds || a->host.save_sounds(a->host.ctx,a->sound_text,sounds)) {
+            text(a,C_STATUS,"The theme sound scheme could not be saved."); return -1;
+        }
+    }
     size_t n = cfg_format(&current, out, sizeof(out));
     if (!n || !a->host.save || a->host.save(a->host.ctx, out, n)) {
+        if(a->display_sounds_dirty && a->host.save_sounds) {
+            size_t restore=sound_format(&a->display_original_sounds,a->sound_text,sizeof(a->sound_text));
+            if(restore) (void)a->host.save_sounds(a->host.ctx,a->sound_text,restore);
+            if(a->host.apply) a->host.apply(a->host.ctx,DESK_SETTINGS_SOUND_RELOAD,0,0);
+        }
         text(a, C_STATUS, "Display settings could not be saved."); return -1;
     }
+    if(a->display_sounds_dirty && a->host.apply) a->host.apply(a->host.ctx,DESK_SETTINGS_SOUND_RELOAD,0,0);
+    du_theme_use(a->ui,a->cfg.theme);
+    if(a->cfg.appearance_set) desk_appearance_apply(&a->cfg.appearance);
     a->display_preview = 1; a->display_dirty = 0;
     a->display_write = a->host.save_async;
     if (a->host.apply) a->host.apply(a->host.ctx, DESK_SETTINGS_RELOAD, 0, 0);
@@ -110,6 +131,7 @@ int cp_display_leave(struct cp_app *a)
     }
     if (a->mode_state) { cp_display_cancel(a); return 0; }
     if (a->display_preview) {
+        a->sounds=a->display_original_sounds;
         display_copy(&a->cfg, &a->display_original);
         a->display_dirty=1;
         if (cp_display_store(a)) return 0;
@@ -128,8 +150,10 @@ int cp_display_leave(struct cp_app *a)
         }
     }
     if (a->mode_state) return 0;
+    a->sounds=a->display_original_sounds; a->display_sounds_dirty=0;
     display_copy(&a->cfg, &a->display_original);
     du_theme_use(a->ui, a->cfg.theme);
+    if(a->cfg.appearance_set) desk_appearance_apply(&a->cfg.appearance);
     a->display_session = a->display_leaving = a->display_dirty = 0;
     return 1;
 }
@@ -279,13 +303,12 @@ static void paint(struct du_ui *u, void *user)
     } else if (a->page == CP_DATETIME) {
         dt_paint(a, c);
     } else if (a->page == CP_DISPLAY && a->display_tab == CP_APPEARANCE) {
-        const struct desk_theme *t=chosen(a);
-        uint32_t colours[]={t->face,t->window,t->title[0],t->select,t->accent};
-        for (unsigned k=0;k<5;k++) { put(c,240+(int)k*42,112,34,18,colours[k]); du_outline(c,(struct du_rect){240+(int)k*42,112,34,18},t->outline); }
-        char roles[128]; snprintf(roles,sizeof(roles),"UI: %s; captions: %s",desk_font(t->font_ui)->name,desk_font(t->font_title)->name);
-        du_text_fit(c,240,138,CP_WIDTH-264,roles,t->ink);
-        cp_fonts_paint(a,c);
+        const struct ap_item *v=&a->cfg.appearance.item[a->appearance_item];
+        struct desk_paint target={c->pixels,c->width,c->height,c->clip.x,c->clip.y,c->clip.w,c->clip.h};
+        desk_paint_hgradient(&target,244,72,278,40,v->colour,v->gradient);
+        du_text_fit(c,252,86,260,"Appearance sample",v->text);
     }
+    else if(a->page==CP_FONTS) cp_fonts_paint(a,c);
     else if (a->page == CP_SYSTEM && a->system_tab == 0 && a->host.portrait) {
         du_edge(c, (struct du_rect){22, 46, 100, 100}, DU_SUNKEN);
         struct du_rect r=du_intersection(c->clip,(struct du_rect){24,48,96,96});
@@ -471,6 +494,166 @@ static void log_refresh(struct cp_app *a)
     w=du_get(a->ui,CP_LOG_NEXT); if (w) w->disabled=!a->log_total || a->log_offset+a->log.len>=a->log_total;
     du_invalidate_widget(a->ui,CP_LOG_VIEW); du_invalidate_widget(a->ui,CP_LOG_PREV); du_invalidate_widget(a->ui,CP_LOG_NEXT);
 }
+enum { A_SCHEME=4100,A_SAVE,A_DELETE,A_NAME,A_ITEMS,A_COLOUR,A_GRADIENT,A_TEXT,A_SIZE,A_FONT,A_POINTS,A_BOLD,A_ITALIC,
+       A_EFFECT0,A_EFFECT1,A_EFFECT2,A_EFFECT3,A_SMALL,A_LARGE,A_DPI,A_SAVE_NAME,A_DOC_ICON,A_BIN_ICON };
+static void appearance_build(struct cp_app *a)
+{
+    struct du_widget *w; struct du_ui *u=a->ui;
+    a->appearance_count=0;
+    int catalogue=a->display_tab==CP_THEMES ? CFG_DESKTOP_THEMES : AP_SCHEMES;
+    for(int i=0;i<AP_BUILTINS+catalogue;i++) {
+        const char *name=i<AP_BUILTINS ? ap_builtin_name(i) : a->display_tab==CP_THEMES ? a->cfg.desktop_themes[i-AP_BUILTINS].name : a->cfg.schemes[i-AP_BUILTINS].name;
+        if(!*name) continue;
+        unsigned n=a->appearance_count++;
+        snprintf(a->appearance_names[n],32,"%s",name);
+        a->appearance_schemes[n]=(struct du_item){.text={a->appearance_names[n]},.selected=!strcmp(name,a->display_tab==CP_THEMES ? a->cfg.desktop_theme_name : a->cfg.scheme)};
+    }
+    add(a,DU_LABEL,4190,24,44,190,16,"Scheme:");
+    w=add(a,DU_LISTVIEW,A_SCHEME,24,64,200,80,"");
+    w->items=a->appearance_schemes; w->count=a->appearance_count; list_style(w,"Scheme");
+    for(unsigned i=0;i<a->appearance_count;i++) if(a->appearance_schemes[i].selected) w->active=i;
+    du_list_ensure(w,w->active);
+    add(a,DU_BUTTON,A_SAVE,24,150,96,24,"Save As...");
+    if(a->display_tab==CP_APPEARANCE) add(a,DU_BUTTON,4132,244,114,278,20,"Installed Fonts...");
+    add(a,DU_BUTTON,A_DELETE,128,150,96,24,"Delete");
+    if(a->display_tab==CP_THEMES) {
+        add(a,DU_LABEL,4191,24,194,490,18,"A package includes appearance, wallpaper, sounds, pointers,");
+        add(a,DU_LABEL,4192,24,222,490,18,"screen saver and icon sizes. Save As captures current choices.");
+        return;
+    }
+    for(int i=0;i<AP_ITEMS;i++) a->appearance_items[i]=(struct du_item){.text={ap_item_name(i)},.selected=i==a->appearance_item};
+    w=add(a,DU_LISTVIEW,A_ITEMS,24,198,200,144,""); w->items=a->appearance_items; w->count=AP_ITEMS;
+    w->active=(unsigned)a->appearance_item; list_style(w,"Item"); du_list_ensure(w,w->active);
+    struct ap_item *v=&a->cfg.appearance.item[a->appearance_item];
+    const char *const labels[]={"Colour 1","Colour 2","Text colour"};
+    const uint32_t colours[]={v->colour,v->gradient,v->text}; char value[32];
+    for(int i=0;i<3;i++) {
+        add(a,DU_LABEL,4193+i,244,142+i*26,100,18,labels[i]);
+        snprintf(value,sizeof(value),"%06x",(unsigned)colours[i]);
+        add(a,DU_EDIT,A_COLOUR+i,352,138+i*26,170,24,value);
+    }
+    snprintf(value,sizeof(value),"Size: %u pixels",v->size); add(a,DU_LABEL,4196,244,222,278,18,value);
+    w=add(a,DU_SCROLLBAR,A_SIZE,244,244,278,18,""); w->vertical=0; w->total=ap_size_max(a->appearance_item)-ap_size_min(a->appearance_item)+1; w->page=1; w->value=v->size-ap_size_min(a->appearance_item);
+    snprintf(value,sizeof(value),"Font: %s",desk_font(v->font)->name); add(a,DU_BUTTON,A_FONT,244,270,278,24,value);
+    snprintf(value,sizeof(value),"Point size: %u",v->points); add(a,DU_LABEL,4197,244,300,278,16,value);
+    w=add(a,DU_SCROLLBAR,A_POINTS,244,320,140,18,""); w->vertical=0; w->total=31; w->page=1; w->value=v->points-6;
+    add(a,DU_BUTTON,A_BOLD,390,316,64,24,(v->style&1) ? "Bold: On" : "Bold");
+    add(a,DU_BUTTON,A_ITALIC,458,316,64,24,(v->style&2) ? "Italic: On" : "Italic");
+    (void)u;
+}
+static int appearance_event(struct cp_app *a,const struct du_event *e)
+{
+    if(e->id<A_SCHEME || e->id>A_BIN_ICON) return 0;
+    struct appearance *p=&a->cfg.appearance;
+    struct ap_item *v=&p->item[a->appearance_item]; int changed=0, rebuild=0;
+    if((e->id==A_DOC_ICON || e->id==A_BIN_ICON) && e->type==DU_EV_ACTIVATE) {
+        if(e->id==A_DOC_ICON) a->cfg.document_icon^=1; else a->cfg.recycle_icon^=1;
+        changed=rebuild=1;
+    } else if(e->id==A_SCHEME && e->type==DU_EV_SELECT && e->index>=0 && (unsigned)e->index<a->appearance_count) {
+        const char *name=a->appearance_names[e->index];
+        if(a->display_tab==CP_THEMES) {
+            if(e->index<AP_BUILTINS) {
+                changed=!cfg_scheme_use(&a->cfg,name); sound_defaults(&a->sounds);
+                strcpy(a->cfg.wallpaper,e->index==5 ? "/system/wallpapers/Ciuk2.png" : "ciuki");
+                a->cfg.wallpaper_mode=CFG_WALL_CENTER;
+                a->cfg.saver_kind=1; a->cfg.saver_enabled=1; a->cfg.saver_seconds=600;
+                a->cfg.pointer_scheme=e->index==1 || e->index==2 ? 1 : 0;
+                if(a->cfg.pointer_scheme) a->cfg.appearance.effects|=AP_LARGE_ICONS;
+            } else changed=!cfg_desktop_theme_use(&a->cfg,name,&a->sounds);
+            if(changed) { a->display_sounds_dirty=1; snprintf(a->cfg.desktop_theme_name,sizeof(a->cfg.desktop_theme_name),"%s",name); }
+        } else changed=!cfg_scheme_use(&a->cfg,name);
+        rebuild=1;
+    } else if(e->id==A_ITEMS && e->type==DU_EV_SELECT && e->index>=0 && e->index<AP_ITEMS) {
+        a->appearance_item=e->index; rebuild=1;
+    } else if(e->id==A_SAVE && e->type==DU_EV_ACTIVATE) {
+        du_input_box(a->ui,A_SAVE_NAME,"Save Scheme","Type a name for this scheme:","My Scheme");
+    } else if(e->id==A_SAVE_NAME && e->type==DU_EV_DIALOG && !e->index && e->text) {
+        changed=!(a->display_tab==CP_THEMES ? cfg_desktop_theme_save(&a->cfg,e->text,&a->sounds) : cfg_scheme_save(&a->cfg,e->text));
+        if(changed && a->display_tab==CP_THEMES) snprintf(a->cfg.desktop_theme_name,sizeof(a->cfg.desktop_theme_name),"%s",e->text);
+        rebuild=1;
+        if(!changed) text(a,C_STATUS,"Choose a unique name; the user scheme catalogue may be full.");
+    } else if(e->id==A_DELETE && e->type==DU_EV_ACTIVATE) {
+        changed=!(a->display_tab==CP_THEMES ? cfg_desktop_theme_delete(&a->cfg,a->cfg.desktop_theme_name) : cfg_scheme_delete(&a->cfg,a->cfg.scheme)); rebuild=1;
+        if(!changed) text(a,C_STATUS,"Built-in schemes cannot be deleted.");
+    } else if(e->id>=A_COLOUR && e->id<=A_TEXT && (e->type==DU_EV_CHANGE || e->type==DU_EV_COMMIT)) {
+        struct du_widget *w=du_get(a->ui,e->id); uint32_t value;
+        if(w && strlen(w->text)==6 && ap_unhex(w->text,6,&value)) {
+            if(e->id==A_COLOUR) v->colour=value;
+            else if(e->id==A_GRADIENT) v->gradient=value;
+            else v->text=value;
+            changed=1;
+        }
+    } else if((e->id==A_SIZE || e->id==A_POINTS) && e->type==DU_EV_CHANGE) {
+        if(e->index>=0 && e->index<(e->id==A_SIZE ? ap_size_max(a->appearance_item)-ap_size_min(a->appearance_item)+1 : 31)) {
+            if(e->id==A_SIZE) v->size=(uint8_t)(e->index+ap_size_min(a->appearance_item)); else v->points=(uint8_t)(e->index+6);
+            char label[64];
+            snprintf(label,sizeof(label),e->id==A_SIZE ? "Size: %u pixels" : "Point size: %u",e->id==A_SIZE ? v->size : v->points);
+            text(a,e->id==A_SIZE ? 4196 : 4197,label); changed=1;
+        }
+    } else if(e->id==A_FONT && e->type==DU_EV_ACTIVATE) { v->font=(v->font+1)%DESK_FONTS; changed=rebuild=1; }
+    else if((e->id==A_BOLD || e->id==A_ITALIC) && e->type==DU_EV_ACTIVATE) { v->style^=e->id==A_BOLD ? 1 : 2; changed=rebuild=1; }
+    else if(e->id>=A_EFFECT0 && e->id<=A_EFFECT3 && e->type==DU_EV_ACTIVATE) { p->effects^=1u<<(e->id-A_EFFECT0); changed=rebuild=1; }
+    else if((e->id==A_SMALL || e->id==A_LARGE) && e->type==DU_EV_ACTIVATE) { p->dpi=e->id==A_SMALL ? 96 : 120; changed=rebuild=1; }
+    else if(e->id==A_DPI && e->type==DU_EV_CHANGE && e->index>=0 && e->index<=192) {
+        char label[64]; p->dpi=(uint16_t)(48+e->index);
+        snprintf(label,sizeof(label),"Custom: %u dpi",p->dpi); text(a,4198,label); changed=1;
+    }
+    if(changed) {
+        a->cfg.appearance_set=1; a->cfg.desktop_color=p->item[AP_DESKTOP].colour;
+        a->display_dirty=1; a->preview_valid=0;
+    }
+    if(rebuild) build(a);
+    if(changed) du_invalidate(a->ui,(struct du_rect){0,0,a->ui->canvas.width,a->ui->canvas.height});
+    return 1;
+}
+static void advanced_snapshot(struct cp_app *a)
+{
+    a->advanced_original=a->cfg.appearance; a->advanced_original_set=a->cfg.appearance_set;
+    a->advanced_dirty=a->display_dirty; a->advanced_colour=a->cfg.desktop_color;
+}
+static void advanced_change(struct du_ui *u,const struct du_event *e,void *ctx)
+{
+    struct cp_app *a=ctx; struct du_event changed=*e;
+    if((e->id==A_SMALL || e->id==A_LARGE) && e->type==DU_EV_ACTIVATE) {
+        changed=(struct du_event){.type=DU_EV_CHANGE,.id=A_DPI,.index=(e->id==A_SMALL ? 96 : 120)-48};
+    }
+    if(changed.id!=A_DPI || changed.type!=DU_EV_CHANGE) return;
+    (void)appearance_event(a,&changed);
+    u->dialog.items[7].value=a->cfg.appearance.dpi-48;
+    char label[64]; snprintf(label,sizeof(label),"Custom font size: %u dpi",a->cfg.appearance.dpi);
+    du_set_text(&u->dialog.items[8],label);
+}
+static int advanced_accept(struct du_ui *u,int button,void *ctx)
+{
+    struct cp_app *a=ctx;
+    if(a->display_write) { du_set_text(&u->dialog.items[9],"Waiting for settings to finish saving..."); return 1; }
+    if(button==1) {
+        a->cfg.appearance=a->advanced_original; a->cfg.appearance_set=a->advanced_original_set;
+        a->display_dirty=a->advanced_dirty; a->cfg.desktop_color=a->advanced_colour;
+        build(a);
+    } else if(button==2) {
+        if(cp_display_store(a)) du_set_text(&u->dialog.items[9],"The font settings could not be saved.");
+        else advanced_snapshot(a);
+        return 1;
+    } else build(a);
+    return 1;
+}
+static void advanced_open(struct cp_app *a)
+{
+    static const struct du_item pages[]={{.text={"General"}}};
+    advanced_snapshot(a);
+    du_property_sheet(a->ui,4134,"Advanced Display Properties",500,280,pages,1);
+    a->ui->dialog.changed=advanced_change; a->ui->dialog.accept=advanced_accept;
+    a->ui->dialog.accept_ctx=a; a->ui->dialog.sheet_ctx=a;
+    du_property_control(a->ui,4,DU_LABEL,4150,(struct du_rect){24,42,440,20},"Font size:");
+    du_property_control(a->ui,5,DU_BUTTON,A_SMALL,(struct du_rect){24,70,204,26},"Small Fonts (96 dpi)");
+    du_property_control(a->ui,6,DU_BUTTON,A_LARGE,(struct du_rect){244,70,224,26},"Large Fonts (120 dpi)");
+    struct du_widget *w=du_property_control(a->ui,7,DU_SCROLLBAR,A_DPI,(struct du_rect){24,112,444,20},"");
+    w->vertical=0; w->total=193; w->page=1; w->value=a->cfg.appearance.dpi-48;
+    char label[64]; snprintf(label,sizeof(label),"Custom font size: %u dpi",a->cfg.appearance.dpi);
+    du_property_control(a->ui,8,DU_LABEL,4151,(struct du_rect){24,142,444,20},label);
+    du_property_control(a->ui,9,DU_LABEL,4152,(struct du_rect){24,170,444,20},"Reopen windows after applying the new font size.");
+}
 static void event(struct du_ui *u, const struct du_event *e, void *user)
 {
     struct cp_app *a = user;
@@ -487,6 +670,7 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
     if (game_event(a,e)) return;
     if (cp_display_event(a, e)) return;
     if (cp_fonts_event(a, e)) return;
+    if (appearance_event(a,e)) return;
     if (e->type == DU_EV_TICK && e->id == CP_T_PREVIEW) {   /* deferred wallpaper decode */
         a->preview_pending=2; a->preview_valid=0; du_invalidate(u,(struct du_rect){24,44,208,188});
         return;
@@ -691,6 +875,20 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
         }
         break;
     case C_CLOSE: if (e->type == DU_EV_ACTIVATE) cp_close(a); break;
+    case 4133:
+        if(e->type==DU_EV_ACTIVATE) advanced_open(a);
+        break;
+    case 4132:
+        if(e->type==DU_EV_ACTIVATE) cp_open(a,CP_FONTS);
+        break;
+    case 4130:
+        if(e->type==DU_EV_ACTIVATE) du_file_dialog(u,4131,0,"Choose a desktop background","/system/wallpapers","",NULL,NULL);
+        break;
+    case 4131:
+        if(e->type==DU_EV_DIALOG && !e->index && e->text && e->text[0]=='/' && strlen(e->text)<sizeof(a->cfg.wallpaper) && !strstr(e->text,"/../")) {
+            snprintf(a->cfg.wallpaper,sizeof(a->cfg.wallpaper),"%s",e->text); a->preview_valid=0; save=1;
+        }
+        break;
     case C_THEME:
         if (e->type == DU_EV_SELECT && e->index >= 0 && e->index < CFG_THEMES) {
             snprintf(a->cfg.theme, sizeof(a->cfg.theme), "%s", cfg_theme_names[e->index]); save = 1; a->preview_valid = 0;
@@ -773,6 +971,7 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
     default: break;
     }
     if (save && a->page == CP_DISPLAY) {
+        a->cfg.appearance.item[AP_DESKTOP].colour=a->cfg.desktop_color;
         a->display_dirty = 1;
         text(a,C_STATUS,"Choose Apply to preview, OK to keep, or Cancel to restore.");
     } else if (save) changed(a);
@@ -1300,7 +1499,7 @@ static void build(struct cp_app *a)
     add(a, DU_LABEL, C_STATUS, 12, CP_HEIGHT - 52, 476, 16, a->status)->anchors = DU_ANCHOR_GROW_X | DU_ANCHOR_BOTTOM;
     if (a->page == CP_HOME) text(a, C_STATUS, "Open an applet to change its settings.");
     if (a->page == CP_DISPLAY) {
-        static const char *const tabs[]={"Background","Appearance","Settings","Screen Saver"};
+        static const char *const tabs[]={"Background","Appearance","Settings","Screen Saver","Effects","Themes"};
         for (int k=0;k<CP_DISPLAY_TABS;k++) a->display_tabs[k].text[0]=tabs[k];
         w=du_get(u,C_TABS); w->id=CP_DISPLAY_TABS_ID; w->items=a->display_tabs;
         w->count=CP_DISPLAY_TABS; w->active=(unsigned)a->display_tab; w->disabled=a->mode_state!=0;
@@ -1317,6 +1516,7 @@ static void build(struct cp_app *a)
             add(a,DU_LABEL,C_COL_L,24,296,180,14,"Desktop colour:");
             for (int k=0;k<6;k++) add(a,DU_BUTTON,C_COL0+k,24+k*34,312,30,24,"");
             add(a,DU_BUTTON,C_ICONS,248,224,CP_WIDTH-272,24,"")->anchors=DU_ANCHOR_GROW_X;
+            add(a,DU_BUTTON,4130,248,342,CP_WIDTH-272,24,"Browse...");
             static const int rgb_ids[3]={C_RGB_R,C_RGB_G,C_RGB_B};
             static const char *const rgb_names[]={"Red", "Green", "Blue"};
             uint32_t colour=a->cfg.desktop_color;
@@ -1327,13 +1527,18 @@ static void build(struct cp_app *a)
                 w->value=(int)((colour>>(16-k*8))&255u);
             }
         } else if (a->display_tab==CP_APPEARANCE) {
-            add(a,DU_LABEL,C_THEME_L,24,44,200,16,"&Theme:");
-            for (int k=0;k<CFG_THEMES;k++) a->theme_items[k]=(struct du_item){.text={cfg_theme_names[k]}};
-            w=add(a,DU_LISTVIEW,C_THEME,24,64,200,84,""); w->items=a->theme_items; w->count=CFG_THEMES;
-            list_style(w,"Theme");
-            add(a,DU_LABEL,970,240,64,292,16,"Colours and UI fonts follow the theme.");
-            add(a,DU_LABEL,971,240,88,292,16,"Installed fonts can be previewed below.");
-            cp_fonts_build(a);
+            appearance_build(a);
+        } else if(a->display_tab==CP_THEMES) {
+            appearance_build(a);
+        } else if(a->display_tab==CP_EFFECTS) {
+            static const char *const names[]={"Use large icons","Show window contents while dragging","Smooth edges of screen fonts","Animate menus"};
+            for(int i=0;i<4;i++) {
+                char label[128]; snprintf(label,sizeof(label),"[%c] %s",(a->cfg.appearance.effects&(1u<<i)) ? 'X' : ' ',names[i]);
+                add(a,DU_BUTTON,A_EFFECT0+i,24,56+i*44,490,30,label);
+            }
+            add(a,DU_BUTTON,A_DOC_ICON,24,244,490,30,a->cfg.document_icon ? "Documents icon: Folder" : "Documents icon: Home");
+            add(a,DU_BUTTON,A_BIN_ICON,24,286,490,30,a->cfg.recycle_icon ? "Recycle Bin icon: Delete" : "Recycle Bin icon: Trash");
+            add(a,DU_LABEL,4189,24,330,490,18,"Computer and About use the approved Ciuki portrait.");
         } else if (a->display_tab==CP_SCREEN_SAVER) {
             static const char *const names[]={"Blank","Ciuki logo","Starfield"};
             add(a,DU_LABEL,1979,24,44,200,16,"Screen saver:");
@@ -1358,14 +1563,22 @@ static void build(struct cp_app *a)
             add(a,DU_LABEL,CP_MODE_NOTE,24,174,400,16,"");
             add(a,DU_LABEL,972,24,202,CP_WIDTH-48,16,a->adapter_lines[4]);
             add(a,DU_LABEL,973,24,228,CP_WIDTH-48,16,a->adapter_lines[2]);
-            add(a,DU_LABEL,974,24,254,CP_WIDTH-48,16,a->engine_line);
-            add(a,DU_LABEL,975,24,280,CP_WIDTH-48,16,"Engine information is read-only.");
-            add(a,DU_BUTTON,CP_REFRESH,24,316,88,24,"Refresh");
+            add(a,DU_LABEL,974,24,254,CP_WIDTH-48,16,a->monitor_line);
+            add(a,DU_LABEL,975,24,280,232,18,"Advanced font size:");
+            add(a,DU_BUTTON,A_SMALL,24,306,112,24,"Small (96 dpi)");
+            add(a,DU_BUTTON,A_LARGE,142,306,112,24,"Large (120 dpi)");
+            char dpi[64]; snprintf(dpi,sizeof(dpi),"Custom: %u dpi",a->cfg.appearance.dpi);
+            add(a,DU_LABEL,4198,272,286,240,18,dpi);
+            w=add(a,DU_SCROLLBAR,A_DPI,272,310,240,18,""); w->vertical=0; w->total=193; w->page=1; w->value=a->cfg.appearance.dpi-48;
+            add(a,DU_BUTTON,CP_REFRESH,24,342,88,24,"Refresh");
+            add(a,DU_BUTTON,4133,400,342,112,24,"Advanced...");
             if(a->host.accel_retry){
                 text(a,975,"Retry re-arms the boot test; restart is required.");
-                add(a,DU_BUTTON,976,128,316,252,24,"Retry acceleration after restart");
+                add(a,DU_BUTTON,976,128,342,252,24,"Retry acceleration after restart");
             }
         }
+    } else if(a->page==CP_FONTS) {
+        add(a,DU_LABEL,4199,24,60,490,20,"Installed fonts and preview"); cp_fonts_build(a);
     } else if (a->page == CP_JOYSTICK) {
         joystick_build(a);
     } else if (a->page == CP_MOUSE) {
@@ -1491,14 +1704,14 @@ void cp_open(struct cp_app *a, int page)
         a->next_page=page; a->navigation_pending=1; return;
     }
     if (page == CP_ADAPTER) { page=CP_DISPLAY; a->display_tab=CP_SCREEN_SETTINGS; }
-    if (page == CP_FONTS) { page=CP_DISPLAY; a->display_tab=CP_APPEARANCE; }
+
     /* Preview state cancels immediately; installed fonts remain owned until detach. */
     if (a->page == CP_DISPLAY && page != CP_DISPLAY) cp_preview_cancel(a);
     if (page==CP_DEVICES) a->system_tab=1;
     if (page==CP_DRIVERS) a->system_tab=3;
     if (page==CP_SYSTEM && a->system_tab!=2 && a->system_tab!=4) a->system_tab=0;
     if (page==CP_DISPLAY && !a->display_session) {
-        load(a,&a->cfg); a->display_original=a->cfg; a->display_session=1; a->display_original_mode=0;
+        load(a,&a->cfg); a->display_original=a->cfg; a->display_original_sounds=a->sounds; a->display_sounds_dirty=0; a->display_session=1; a->display_original_mode=0;
         cp_display_refresh(a);
         for (unsigned i=0;i<a->display.mode_count;i++) if (a->display.modes[i].current) a->display_original_mode=a->display.modes[i].id;
     }

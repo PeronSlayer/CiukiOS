@@ -37,11 +37,25 @@ void W32API SetLastError(DWORD n) { errors[ui_kernel_current()] = n; }
 DWORD W32API GetCurrentThreadId(void) { return ui_kernel_tid(); }
 DWORD W32API GetCurrentProcessId(void) { return ui_kernel_pid(); }
 DWORD W32API GetTickCount(void) { return ui_kernel_ticks(); }
+static int g23_files_enabled,g23_temporary,g23_flush_failure,g23_rename_failure;
+static char g23_config[34000],g23_pending[34000];
+BOOL host_appearance_write(void *h,const void *data,DWORD bytes,DWORD *written) {
+  if(!g23_files_enabled || (uintptr_t)h!=0x732 || bytes>=sizeof(g23_pending)) return 0;
+  w32_copy(g23_pending,data,bytes);g23_pending[bytes]=0;if(written)*written=bytes;return 1;
+}
+BOOL host_appearance_flush(void *h) {
+  return g23_files_enabled && (uintptr_t)h==0x732 && !g23_flush_failure;
+}
 #ifndef U32_TEST_EXTERNAL_MODULES
 /* tests/host/win32/dialogs supplies file, module and resource services. */
 HANDLE W32API CreateFileA(const char *name, DWORD access, DWORD share,
                           SECURITY_ATTRIBUTES *security, DWORD creation,
                           DWORD flags, HANDLE template) {
+  if(g23_files_enabled && !strcmp(name,"C:\\system\\settings\\desktop.cfg")) return (HANDLE)0x731;
+  if(g23_files_enabled && !strcmp(name,"C:\\system\\settings\\desktop.cfg.appearance.tmp")) {
+    if(creation!=1 || g23_temporary) {SetLastError(183);return K32_INVALID;}
+    g23_temporary=1;g23_pending[0]=0;return (HANDLE)0x732;
+  }
   (void)name;
   (void)access;
   (void)share;
@@ -53,6 +67,9 @@ HANDLE W32API CreateFileA(const char *name, DWORD access, DWORD share,
 }
 BOOL W32API ReadFile(HANDLE h, void *data, DWORD bytes, DWORD *count,
                      OVERLAPPED *o) {
+  if(g23_files_enabled && (uintptr_t)h==0x731) {
+    DWORD n=(DWORD)strlen(g23_config); if(n>bytes)n=bytes;w32_copy(data,g23_config,n);*count=n;return 1;
+  }
   (void)h;
   (void)data;
   (void)bytes;
@@ -283,6 +300,12 @@ static void lease_event(DWORD id, DWORD generation, DWORD state, DWORD w,
 static struct ciuki_screen_control saver_policy={.version=1,.size=sizeof(saver_policy),.timeout=600,.saver=1};
 #include "g5_clipboard_fixture.h"
 DWORD w32r_gate(DWORD call, DWORD a, DWORD b, DWORD c) {
+  if(call==CIUKI_SYS_RENAME && g23_files_enabled) {
+    CHECK(!strcmp((const char *)(uintptr_t)a,"/system/settings/desktop.cfg.appearance.tmp"));
+    CHECK(!strcmp((const char *)(uintptr_t)b,"/system/settings/desktop.cfg"));
+    if(g23_rename_failure) return (DWORD)-5;
+    strcpy(g23_config,g23_pending);g23_temporary=0;return 0;
+  }
   (void)a;
   (void)c;
   if (call==CIUKI_SYS_DISPLAY && a==CIUKI_DISPLAY_SCREEN) {
@@ -1367,6 +1390,57 @@ static void test_lifecycle(void) {
          "dependent WM_DESTROY, timers hooks clipboard released, thread detach "
          "destruction, service identity teardown\n");
 }
+static void test_g23_appearance(void) {
+  struct appearance value; ap_default(&value,0); value.dpi=144;
+  value.item[AP_SELECTED].colour=0x112233;
+  char encoded[AP_HEX_BYTES+1]; ap_encode(&value,encoded); u32_appearance_load(encoded);
+  BOOL colour_notice=0,metric_notice=0; MSG notice;
+  for(unsigned i=0;i<64 && PeekMessageA(&notice,0,0,0,1);i++) {
+    colour_notice|=notice.message==21; metric_notice|=notice.message==0x1a;
+    DispatchMessageA(&notice);
+  }
+  CHECK(colour_notice && metric_notice);
+  CHECK(GetSysColor(13)==0x332211);
+  CHECK(GetSystemMetrics(2)==24 && GetSystemMetrics(4)==36 && GetSystemMetrics(38)==144);
+  uint8_t ncm[340]={0}; w32_put32(ncm,340);
+  CHECK(SystemParametersInfoA(41,340,ncm,0));
+  CHECK(w32_u32(ncm+8)==24 && w32_u32(ncm+20)==36 && !strcmp((char *)ncm+52,"Inter"));
+  CHECK((int32_t)w32_u32(ncm+280)==-18);
+  BOOL enabled=0;
+  CHECK(SystemParametersInfoA(38,0,&enabled,0) && enabled);
+  CHECK(SystemParametersInfoA(74,0,&enabled,0) && enabled);
+  CHECK(SystemParametersInfoA(0x1002,0,&enabled,0) && enabled);
+  /* The fixture refuses disk writes: failed shared setters retain the value. */
+  CHECK(!SystemParametersInfoA(37,0,0,1));
+  CHECK(SystemParametersInfoA(38,0,&enabled,0) && enabled);
+  w32_put32(ncm,339); CHECK(!SystemParametersInfoA(42,339,ncm,0) && GetLastError()==87);
+#ifndef U32_TEST_EXTERNAL_MODULES
+  g23_files_enabled=1; strcpy(g23_config,"keyboard=it\nfuture_key=kept\n");
+  CHECK(SystemParametersInfoA(37,0,0,1));
+  CHECK(strstr(g23_config,"future_key=kept\n") && strstr(g23_config,"appearance="));
+  CHECK(SystemParametersInfoA(38,0,&enabled,0) && !enabled);
+  w32_put32(ncm,340); CHECK(SystemParametersInfoA(41,340,ncm,0));
+  CHECK(SystemParametersInfoA(42,340,ncm,1));
+  CHECK(GetSystemMetrics(2)==24 && GetSystemMetrics(4)==36);
+  g23_flush_failure=1;
+  CHECK(!SystemParametersInfoA(37,1,0,1));
+  CHECK(SystemParametersInfoA(38,0,&enabled,0) && !enabled);
+  g23_flush_failure=0; g23_temporary=0;g23_rename_failure=1;
+  CHECK(!SystemParametersInfoA(37,1,0,1));
+  CHECK(SystemParametersInfoA(38,0,&enabled,0) && !enabled);
+  g23_rename_failure=0;g23_temporary=0;g23_files_enabled=0;
+#endif
+  u32_appearance_load("");
+  colour_notice=metric_notice=0;
+  for(unsigned i=0;i<64 && PeekMessageA(&notice,0,0,0,1);i++) {
+    colour_notice|=notice.message==21; metric_notice|=notice.message==0x1a;
+    DispatchMessageA(&notice);
+  }
+  CHECK(colour_notice && metric_notice);
+  w32_put32(ncm,340); CHECK(SystemParametersInfoA(41,340,ncm,0));
+  CHECK(w32_u32(ncm+8)!=24); /* Rollback also drops cached scaled metrics. */
+  puts("TRACE G23 shared palette, DPI metrics, NONCLIENTMETRICS fonts, Effects and failed-write rollback");
+}
 static void test_spi(void) {
   UINT timeout=0; BOOL active=1;
   CHECK(SystemParametersInfoA(14,0,&timeout,0) && timeout==600);
@@ -1801,6 +1875,7 @@ static void run(void) {
   test_zoom_limits();
   test_display();
   test_production_gdi();
+  test_g23_appearance();
   traces = 0;
   CHECK(DestroyWindow(windows[0]));
   UINT child_destroy = 999, parent_destroy = 999;

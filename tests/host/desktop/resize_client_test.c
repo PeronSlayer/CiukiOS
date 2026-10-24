@@ -23,6 +23,40 @@ static void open_window(struct du_window *w,struct du_ui *u)
     configured(400,300,0,1); assert(du_window_turn(w,1)==1); drain();
     assert(rt_surfaces()==1 && rt_mappings()==1 && rt_handles()==1);
 }
+static unsigned dpi_activations;
+static void dpi_event(struct du_ui *ui,const struct du_event *event,void *arg)
+{ (void)ui;(void)arg; if(event->type==DU_EV_ACTIVATE && event->id==77) dpi_activations++; }
+static void dpi_windows(void)
+{
+    static const unsigned dpi_values[]={96,120,144,192,48};
+    for(unsigned n=0;n<sizeof(dpi_values)/sizeof(*dpi_values);n++) {
+        uint64_t now=du_now(); (void)desk_theme_poll(DESK_SETTINGS_PATH,now);
+        struct appearance a; ap_default(&a,0); a.dpi=(uint16_t)dpi_values[n]; desk_appearance_apply(&a);
+        struct du_window w; struct du_ui u; rt_reset();
+        assert(!du_window_open_resizable(&w,&u,3,401,301,"DPI",201,151)); drain();
+        assert(w.info.width==(401*dpi_values[n]+48)/96 && w.info.height==(301*dpi_values[n]+48)/96);
+        assert(u.canvas.width==401 && u.canvas.height==301);
+        du_add(&u,DU_BUTTON,77,(struct du_rect){50,60,80,24},"DPI hit target"); u.event=dpi_event;
+        configured(w.info.width,w.info.height,0,1); assert(du_window_turn(&w,now)==1); drain();
+        unsigned before=dpi_activations;
+        struct ciuki_input_event e={.type=CIUKI_INPUT_MOTION,.monotonic_ns=now+1,
+            .value=(int)(60*w.info.width/401),.value2=(int)(70*w.info.height/301)};
+        struct ciuki_message message; desk_event_message(&message,DESK_MOTION,&e);
+        message.data[0]=DESK_SHELL_VERSION; message.data[2]=DESK_RESIZE_MINOR; rt_push(&message);
+        e.type=CIUKI_INPUT_BUTTON; e.code=CIUKI_BUTTON_LEFT; e.value=1; e.value2=0;
+        desk_event_message(&message,DESK_BUTTON,&e); message.data[0]=DESK_SHELL_VERSION; message.data[2]=DESK_RESIZE_MINOR; rt_push(&message);
+        e.value=0; desk_event_message(&message,DESK_BUTTON,&e); message.data[0]=DESK_SHELL_VERSION; message.data[2]=DESK_RESIZE_MINOR; rt_push(&message);
+        assert(du_window_turn(&w,now+2)==1); drain(); assert(dpi_activations==before+1);
+        w.present_pending=0; w.swap_sent=0; w.present_rendered=0;
+        u.canvas.pixels[0]=0x123456; u.canvas.pixels[401*301-1]=0xabcdef;
+        du_window_present(&w);
+        assert(w.pixels[0]==0x123456);
+        assert(w.pixels[(size_t)(w.info.height-1)*(w.info.stride/4)+w.info.width-1]==0xabcdef);
+        du_window_destroy(&w); assert(!rt_surfaces() && !rt_mappings() && !rt_handles());
+        desk_theme_use(DESK_THEME_DEFAULT);
+    }
+    puts("PASS G23 toolkit DPI: 48/96/120/144/192, logical layout, physical surfaces, pointer hit targets, scaled presentation and lifetime");
+}
 void rt_client_tests(void)
 {
     struct du_window w; struct du_ui u;
@@ -80,4 +114,5 @@ void rt_client_tests(void)
     }
     rt_reset();
     puts("PASS deskui resize transport: supersession, backpressure, in-flight serials, read-only transfers, EOF/failure cleanup, bounded surfaces, cursor FIFO and unchanged-shape suppression");
+    dpi_windows();
 }

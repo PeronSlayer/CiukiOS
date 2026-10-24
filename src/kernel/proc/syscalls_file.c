@@ -10,6 +10,10 @@
 #include <ciuki/net.h>
 #include <ciuki/version.h>
 #include <ciuki/com.h>
+#include <ciuki/display.h>
+#pragma weak display_monitor_query
+#pragma weak display_refresh_query
+#pragma weak grant_display_info
 #pragma weak com_devctl
 #pragma weak com_rw_user
 #include <ciuki/lpt.h>
@@ -364,6 +368,24 @@ static int file_dispatch(struct process *p, struct trap_frame *tf)
 {
     uint32_t nr = tf->eax;
     if (nr == CIUKI_SYS_DEVCTL) {
+        if(tf->ecx==DISPLAY_GET_MONITOR || tf->ecx==DISPLAY_GET_REFRESH) {
+            if(tf->edi || tf->ebp) return -EINVAL;
+            struct ciuki_framebuffer_info fb;
+            int e=grant_display_info ? grant_display_info(p,(int32_t)tf->ebx,&fb) : -ENOTTY;
+            if(e) return e;
+            if(tf->ecx==DISPLAY_GET_MONITOR) {
+                struct ciuki_monitor_info q;
+                if(tf->esi!=sizeof(q)) return -EINVAL;
+                e=copy_from_user(&q,tf->edx,8);
+                if(!e) e=display_monitor_query ? display_monitor_query(&q) : -ENOTTY;
+                return e ? e : copy_to_user(tf->edx,&q,sizeof(q));
+            }
+            struct ciuki_display_refresh q;
+            if(tf->esi!=sizeof(q)) return -EINVAL;
+            e=copy_from_user(&q,tf->edx,12);
+            if(!e) e=display_refresh_query ? display_refresh_query(&q) : -ENOTTY;
+            return e ? e : copy_to_user(tf->edx,&q,sizeof(q));
+        }
         if (tf->ecx==INPUT_HID_GET_CAPS || tf->ecx==INPUT_HID_GET_STATE || tf->ecx==INPUT_HID_CALIBRATE || tf->ecx==INPUT_JOY_CONTROL)
             return grant_input_devctl ? grant_input_devctl(p,(int32_t)tf->ebx,tf->ecx,tf->edx,tf->esi) : -ENOTTY;
         struct file_description *d = file_fd(p, (int32_t)tf->ebx);

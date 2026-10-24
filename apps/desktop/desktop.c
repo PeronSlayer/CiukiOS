@@ -996,7 +996,7 @@ static void settings_load(struct desktop *d)
     if (rejected) snprintf(d->notice,sizeof(d->notice),"desktop.cfg: %d line(s) ignored",rejected);
 }
 static int (*audio_shutdown_wait)(struct desktop *);
-static int theme_poll_async(uint64_t now)
+static int theme_poll_async(struct desktop *d,uint64_t now)
 {
     static uint64_t next;
     static char text[CFG_TEXT_MAX]; size_t n; int error;
@@ -1007,11 +1007,17 @@ static int theme_poll_async(uint64_t now)
     if (!cfg_writer_read_result(&settings_writer,text,&n,&error)) return 0;
     theme_read_pending=0;
     if (error && error!=ENOENT) return 0;
-    char name[32]="";
-    if (!error && desk_settings_theme(text,n,name,sizeof(name))) name[0]=0;
-    const struct desk_theme *before=desk_theme;
-    if (!name[0] || desk_theme_use(name)) desk_theme_use(DESK_THEME_DEFAULT);
-    return desk_theme!=before;
+    static struct ciuki_settings incoming;
+    cfg_defaults(&incoming);
+    if(!error) (void)cfg_parse(&incoming,text,n);
+    int changed=strcmp(d->sh.cfg.theme,incoming.theme) || d->sh.cfg.document_icon!=incoming.document_icon || d->sh.cfg.recycle_icon!=incoming.recycle_icon || d->sh.cfg.pointer_scheme!=incoming.pointer_scheme || d->sh.cfg.desktop_color!=incoming.desktop_color || d->sh.cfg.appearance_set!=incoming.appearance_set ||
+        memcmp(&d->sh.cfg.appearance,&incoming.appearance,sizeof(incoming.appearance));
+    if(!changed) return 0;
+    strcpy(d->sh.cfg.theme,incoming.theme); d->sh.cfg.appearance=incoming.appearance;
+    d->sh.cfg.appearance_set=incoming.appearance_set; d->sh.cfg.desktop_color=incoming.desktop_color;
+    d->sh.cfg.pointer_scheme=incoming.pointer_scheme; d->sh.cfg.document_icon=incoming.document_icon; d->sh.cfg.recycle_icon=incoming.recycle_icon;
+    desk_shell_apply(d);
+    return 1;
 }
 static int settings_save(struct desktop *d)
 {
@@ -1316,7 +1322,7 @@ static void wallpaper_poll(struct desktop *d)
          * do not upload that same photograph a second time. */
         desktop_wait("wallpaper-compare");
         if (d->scanout_valid && d->sh.wall_valid && d->sh.background_valid && d->sh.wall &&
-            d->sh.wall_w==d->width && d->sh.wall_h==d->height && d->height>2*DESK_BAR)
+            d->sh.wall_w==d->width && d->sh.wall_h==d->height && d->height>(uint32_t)(2*DESK_BAR))
             changed=memcmp(d->sh.wall+(size_t)DESK_BAR*d->width,pixels+(size_t)DESK_BAR*d->width,
                            (size_t)d->width*(d->height-2*DESK_BAR)*4)!=0;
         desktop_wait("wallpaper-publish");
@@ -1944,6 +1950,7 @@ static void shell_service(struct desktop *d)
             memcpy(old_wall,sh->cfg.wallpaper,sizeof(old_wall)); memcpy(old_theme,sh->cfg.theme,sizeof(old_theme));
             int old_mode=sh->cfg.wallpaper_mode, old_icons=sh->cfg.desktop_icons;
             uint32_t old_colour=sh->cfg.desktop_color;
+            struct appearance old_appearance=sh->cfg.appearance; int old_appearance_set=sh->cfg.appearance_set, old_pointer=sh->cfg.pointer_scheme, old_document=sh->cfg.document_icon, old_recycle=sh->cfg.recycle_icon;
             uint16_t confirmed = sh->cfg.display_mode;
             cfg_defaults(&sh->cfg);
             int rejected=reload_error ? 0 : cfg_parse(&sh->cfg,reload_text,reload_size);
@@ -1954,12 +1961,13 @@ static void shell_service(struct desktop *d)
              * Control Panel display settings must not rescan its ELF files. */
             if (settings_reload_wallpaper) { desktop_wait("program-scan"); scan_programs(d); }
             int image_changed=strcmp(old_wall,sh->cfg.wallpaper) || settings_reload_wallpaper;
-            int visual=image_changed || strcmp(old_theme,sh->cfg.theme) || old_mode!=sh->cfg.wallpaper_mode ||
+            int appearance_changed=old_document!=sh->cfg.document_icon || old_recycle!=sh->cfg.recycle_icon || old_pointer!=sh->cfg.pointer_scheme || old_appearance_set!=sh->cfg.appearance_set || memcmp(&old_appearance,&sh->cfg.appearance,sizeof(old_appearance));
+            int visual=appearance_changed || image_changed || strcmp(old_theme,sh->cfg.theme) || old_mode!=sh->cfg.wallpaper_mode ||
                        old_icons!=sh->cfg.desktop_icons || old_colour!=sh->cfg.desktop_color;
             if (visual) {
                 /* A wallpaper-only request leaves the retained desktop
                  * untouched until its complete replacement is ready. */
-                if (strcmp(old_theme,sh->cfg.theme) || old_icons!=sh->cfg.desktop_icons || settings_reload_wallpaper) {
+                if (appearance_changed || strcmp(old_theme,sh->cfg.theme) || old_icons!=sh->cfg.desktop_icons || settings_reload_wallpaper) {
                     desktop_wait("theme-apply"); sh->icon_count=0; desk_shell_apply(d);
                 }
                 if (image_changed) wallpaper_load(d); else wallpaper_update(d);
@@ -2662,7 +2670,7 @@ int main(int argc, char **argv)
         desktop_stage(STALL_DISPLAY); display_poll(d);
         if (!gate && d->inputs) startup_stage("first_input_handled");
         desktop_stage(STALL_THEME);
-        if (d->shell && !gate && !d->power.state && !(d->sh.want_reload&1) && theme_poll_async(now)) {
+        if (d->shell && !gate && !d->power.state && !(d->sh.want_reload&1) && theme_poll_async(d,now)) {
             snprintf(d->sh.cfg.theme,sizeof(d->sh.cfg.theme),"%s",desk_theme->name);
             desk_theme_changed(d); d->sh.wall_valid=0; wallpaper_update(d);
         }

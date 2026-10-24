@@ -4,6 +4,9 @@
 #include "protocol.h"
 #include "theme.h"
 #include "start-orb.h"
+/* Generated geometry remains the 96 dpi source of truth. */
+#undef DESK_BAR
+#define DESK_BAR desk_scale(32)
 #include "shell_link.h"
 #include "startup.h"
 #include <stddef.h>
@@ -304,6 +307,8 @@ struct desktop {
     int32_t mouse_x, mouse_y, drag_x, drag_y;
     unsigned resize_edges;
     struct desk_box resize_start;
+    struct desk_box geometry_preview;
+    int geometry_outline;
     int keyboard_geometry;       /* 1 move, 2 size; drag identifies the window */
     int geometry_zoomed;
     struct desk_box geometry_restore;

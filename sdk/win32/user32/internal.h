@@ -4,6 +4,9 @@
 #include "../../../apps/libdeskui/v3.h"
 #include <w32/server.h>
 #include <w32/user_surface.h>
+#include "../../../apps/desktop/appearance.h"
+void u32_appearance_load(const char *);
+BOOL u32_appearance_commit(const struct appearance *);
 BOOL u32_clip_call(UINT, HWND, UINT, DWORD, const void *, DWORD, struct w32r_reply *, void *, DWORD);
 void u32_clip_event(const struct desk_packet *);
 BOOL u32_clip_rendering(void);

@@ -33,7 +33,7 @@ void desk_init(struct desktop *d, const struct desk_ops *ops, uint32_t w, uint32
     desk_damage_add(&d->damage, (struct desk_box){0, 0, (int32_t)w, (int32_t)h}, w, h);
 }
 void desk_theme_changed(struct desktop *d)
-{ d->sh.background_valid=0; desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height); }
+{ desk_render_release(d); d->sh.background_valid=0; desk_damage_add(&d->damage,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},d->width,d->height); }
 int desk_add_client(struct desktop *d, int fd)
 {
     for (unsigned i = 0; i < DESK_CLIENTS; i++) if (d->clients[i].channel == fd) return -1;
@@ -60,6 +60,7 @@ void desk_drop_client(struct desktop *d, int i)
     char application[sizeof(c->application)]; memcpy(application,c->application,sizeof(application));
     int was_focused=d->focus==i;
     if (d->focus == i) desk_focus(d, -1);
+    if(d->drag==i && d->geometry_outline) desk_geometry_end(d,1);
     if (d->drag == i) { d->drag = -1; d->resize_edges=0; d->keyboard_geometry=0; }
     /* fx-19: a drag whose source window closes ends; a target that closes is left. */
     if (d->shell && d->sh.dnd.active) {
@@ -397,7 +398,7 @@ void desk_display_relayout(struct desktop *d, uint32_t width, uint32_t height)
 {
     desk_render_release(d);
     d->width = width; d->height = height;
-    d->drag = -1; d->resize_edges = 0;
+    d->drag = -1; d->resize_edges = 0; d->geometry_outline=0;
     d->title_hot = d->title_down = 0;
     if (d->mouse_x >= (int32_t)width) d->mouse_x = (int32_t)width - 1;
     if (d->mouse_y >= (int32_t)height) d->mouse_y = (int32_t)height - 1;
@@ -501,7 +502,7 @@ void desk_move(struct desktop *d, int i, int32_t x, int32_t y)
      * (SetWindowPos without SWP_NOCOPYBITS). Requiring no damage at all made
      * every drag frame a software recomposition of both outer boxes while
      * anything else on screen changed (T23 f441c5bd). */
-    int copy = d->frame_valid && !d->present_damage.count && (continuing || (!d->copy_pending && clean)) && !d->power.state && !d->animation.active &&
+    int copy = d->frame_valid && !d->present_damage.count && (continuing || (!d->copy_pending && clean)) && !d->power.state && !d->geometry_outline && !d->animation.active &&
         !c->internal && !c->collapsed && !c->minimized && c->order>0;
 
     if (frame.x < 0 || frame.y < 0 || frame.x+frame.w > (int32_t)d->width ||
@@ -1225,6 +1226,7 @@ void desk_minimize(struct desktop *d, int i)
     int modal=desk_modal_target(d,i);
     if (modal!=i) { desk_focus(d,modal); return; }
     if (c->owner_id) return;
+    if(d->drag==i && d->geometry_outline) desk_geometry_end(d,1);
     struct desk_box from=c->minimized ? desk_task_button(d,i) : c->frame;
     desk_sound(d,c->minimized ? SOUND_RESTORE : SOUND_MINIMISE);
     if (c->minimized) { c->minimized=0; desk_focus(d,i); }
@@ -1312,7 +1314,7 @@ static void arrange_settle(struct desktop *d)
 static int arrange_prepare(struct desktop *d)
 {
     if (!d->shell || d->power.state) return 0;
-    if (d->keyboard_geometry) desk_geometry_end(d,1);
+    if (d->keyboard_geometry || d->geometry_outline) desk_geometry_end(d,1);
     d->drag=-1; d->resize_edges=0;
     if (d->copy_pending) {
         for (unsigned k=0;k<d->move_damage.count;k++)
@@ -1808,7 +1810,7 @@ void desk_power_begin(struct desktop *d, int action)
     desk_menu_close(d);
     d->sh.volume_open=d->sh.volume_drag=d->sh.switcher=d->sh.tooltip=0;
     d->sh.want_run[0]=0; d->action=-1;
-    d->drag=-1; d->resize_edges=0; d->title_down=d->title_hot=0;
+    d->drag=-1; d->resize_edges=0; d->geometry_outline=0; d->title_down=d->title_hot=0;
     for (int i=0; i<DESK_CLIENTS; i++) {
         struct desk_client *c=&d->clients[i];
         if (!c->internal && c->channel>=0) power_target(d,c->pid,c->title,0);

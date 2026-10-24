@@ -8,6 +8,7 @@
 #ifndef CIUKI_DESKTOP_SHELL_H
 #define CIUKI_DESKTOP_SHELL_H
 #include "settings.h"
+#include "theme.h"
 #include "shell_link.h"
 #include "settings_catalog.h"
 #include "folder.h"
@@ -19,9 +20,9 @@
 #define SH_LEVELS 3
 #define SH_ITEMS 20
 #define SH_ICONS (FM_ENTRIES + 4 + (int)DESK_LINKS)
-#define SH_TRAY_ICON_SIZE 16
-#define SH_TRAY_GAP 4
-#define SH_TRAY_MARGIN 6
+#define SH_TRAY_ICON_SIZE desk_scale(16)
+#define SH_TRAY_GAP desk_scale(4)
+#define SH_TRAY_MARGIN desk_scale(6)
 /* Tray identifiers; geometry places Notifications next to the clock. */
 enum sh_tray_icon { SH_TRAY_VOLUME, SH_TRAY_NETWORK, SH_TRAY_NOTIFICATION, SH_TRAY_MEDIA, SH_TRAY_POWER };
 enum sh_notify_action { SH_NOTIFY_DETAILS, SH_NOTIFY_MEDIA, SH_NOTIFY_NETWORK, SH_NOTIFY_VOLUME };
@@ -63,7 +64,7 @@ enum sh_action { SH_ACT_NONE, SH_ACT_SUBMENU, SH_ACT_LAUNCH, SH_ACT_ABOUT, SH_AC
 #define SH_ITEM_DEFAULT 4u
 /* mark: 1 + the byte of label that is the underlined access key (0 none). */
 struct sh_item { char label[44]; const char *icon; uint8_t action, flags, mark; int16_t arg; };
-struct sh_menu { int kind, count, hot, row_h, icon; struct desk_box box; struct sh_item items[SH_ITEMS]; };
+struct sh_menu { uint64_t opened; unsigned animation_step; int kind, count, hot, row_h, icon; struct desk_box box; struct sh_item items[SH_ITEMS]; };
 /* Desktop shortcuts. action: SH_ACT_LAUNCH with a program name and an
  * optional argument (Files with a folder), or a built-in action. */
 struct sh_icon { char label[FM_NAME], program[24], argument[FM_PATH]; const char *icon; int action, ciuki, selected; struct desk_box box; };

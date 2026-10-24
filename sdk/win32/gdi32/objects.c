@@ -1,6 +1,16 @@
 /* Generational process-local objects, recursive serialization and DC state.
  * SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "internal.h"
+#include "../../../apps/desktop/appearance.h"
+#if defined(_WIN32) && !defined(W32_HOST_MODEL)
+#define G23_IMPORT __declspec(dllimport)
+#else
+#define G23_IMPORT extern
+#endif
+G23_IMPORT void *W32API CreateFileA(const char *,DWORD,DWORD,void *,DWORD,DWORD,void *);
+G23_IMPORT BOOL W32API ReadFile(void *,void *,DWORD,DWORD *,void *);
+G23_IMPORT BOOL W32API CloseHandle(void *);
+G23_IMPORT DWORD W32API GetTickCount(void);
 #define SLOTS 4095u
 static struct {
   struct object *object;
@@ -396,7 +406,7 @@ DWORD W32API GetObjectType(HGDIOBJ h) {
   /* f5-20B: a metafile DC reports OBJ_METADC. */
   return o ? (o->type == GDI_MEMDC && o->u.dc.record ? 4u : o->type) : 0;
 }
-#ifndef W32_HOST_MODEL
+#if defined(_WIN32) && !defined(W32_HOST_MODEL)
 __declspec(dllimport) BOOL W32API UnmapViewOfFile(const void *);
 #else
 extern BOOL W32API UnmapViewOfFile(const void *);
@@ -563,6 +573,28 @@ int W32API GetObjectW(HGDIOBJ h, int bytes, void *out) {
                : 0;
   return GetObjectA(h, bytes, out);
 }
+/* Windows 98 font DPI is established when a GUI process starts. */
+static unsigned display_effects=AP_SMOOTH;
+static unsigned display_dpi(void) {
+  static unsigned dpi; static DWORD last;
+  DWORD now=GetTickCount();
+  if(dpi && (DWORD)(now-last)<1000) return dpi;
+  if(!dpi) dpi=96;
+  last=now;
+  char *text=gdi_alloc(32769); if(!text) return dpi;
+  void *file=CreateFileA("C:\\system\\settings\\desktop.cfg",0x80000000u,7,0,3,0,0);
+  DWORD n=0;
+  if(file!=(void *)(intptr_t)-1) {
+    if(ReadFile(file,text,32768,&n,0) && n<=32768) {
+      text[n]=0;
+      struct appearance a;
+      if(ap_settings_decode(&a,text,n)) { dpi=a.dpi; display_effects=a.effects; }
+    }
+    CloseHandle(file);
+  }
+  gdi_free(text,32769); return dpi;
+}
+int gdi_smoothing(void) { (void)display_dpi(); return !!(display_effects&AP_SMOOTH); }
 int W32API GetDeviceCaps(HDC h, int cap) {
   GDI_GUARD;
   struct dc *d = gdi_dc(h);
@@ -578,9 +610,9 @@ int W32API GetDeviceCaps(HDC h, int cap) {
   case 2:
     return 1;
   case 4:
-    return (int)(width * 254 / 960);
+    return (int)(width * 254 / (display_dpi()*10));
   case 6:
-    return (int)(height * 254 / 960);
+    return (int)(height * 254 / (display_dpi()*10));
   case 8:
     return (int)width;
   case 10:
@@ -610,7 +642,7 @@ int W32API GetDeviceCaps(HDC h, int cap) {
     return bpp <= 8 ? 0xbf99 : 0xbe99;
   case 88:
   case 90:
-    return 96;
+    return (int)display_dpi();
   case 104:
     return bpp <= 8 ? 256 : 0;
   case 106:
@@ -618,7 +650,7 @@ int W32API GetDeviceCaps(HDC h, int cap) {
   case 108:
     return (int)bpp;
   case 116:
-    return 60;
+    return 0; /* VBE firmware default; an EDID timing is not scanout state. */
   case 117:
     return (int)height;
   case 118:

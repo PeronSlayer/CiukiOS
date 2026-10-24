@@ -6,4 +6,6 @@
  * Query requires version=CIUKI_DISPLAY_VERSION and size=sizeof(*info). */
 int ciuki_display_query(struct ciuki_display_info *);
 int ciuki_display_set(uint16_t mode_id);
+int ciuki_display_monitor(struct ciuki_monitor_info *);
+int ciuki_display_refresh(struct ciuki_display_refresh *);
 #endif

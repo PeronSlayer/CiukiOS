@@ -111,14 +111,26 @@ static void identical_frame(void)
     struct desktop *oracle=malloc(sizeof(d)); assert(oracle); *oracle=d;
     oracle->pixels=expected; oracle->hw_cursor=shown;
     desk_composite(oracle,(struct desk_box){0,0,(int32_t)d.width,(int32_t)d.height});
-    /* Hardware uses the same silhouette/hotspot without a soft shadow. */
+    /* Derive expected pixels from the pinned source artwork, independently
+     * of the mask submitted to the presenter. Mono hardware has no shadow. */
     if (shown) {
         struct desk_tool_cursor art=desk_tool_cursor(d.cursor_shape);
-        for (int y=0;y<32;y++) for (int x=0;x<32;x++) {
-            int px=d.mouse_x-art.hot_x+x, py=d.mouse_y-art.hot_y+y;
-            uint32_t bit=0x80000000u>>x;
-            if (px>=0 && py>=0 && (unsigned)px<d.width && (unsigned)py<d.height && (art.mask[y]&bit))
-                expected[(unsigned)py*d.width+(unsigned)px]=art.image[y]&bit ? 0xffffffu : 0;
+        const struct desk_cursor_raster *source=desk_generic_cursor(d.cursor_shape);
+        unsigned width=32,height=32; int hx=art.hot_x,hy=art.hot_y;
+        if(d.shell && d.sh.cfg.pointer_scheme==1 && source) {
+            width=source->width*3/2; if(width>32) width=32;
+            height=source->height*3/2; if(height>32) height=32;
+            hx=(int)(source->hot_x*width/source->width); hy=(int)(source->hot_y*height/source->height);
+        }
+        for(unsigned y=0;y<height;y++) for(unsigned x=0;x<width;x++) {
+            unsigned sx=x,sy=y;
+            if(d.shell && d.sh.cfg.pointer_scheme==1 && source) { sx=x*source->width/width; sy=y*source->height/height; }
+            int px=d.mouse_x-hx+(int)x,py=d.mouse_y-hy+(int)y;
+            uint32_t bit=0x80000000u>>sx;
+            if(px<0 || py<0 || (unsigned)px>=d.width || (unsigned)py>=d.height || !(art.mask[sy]&bit)) continue;
+            int white=!!(art.image[sy]&bit);
+            if(d.shell && d.sh.cfg.pointer_scheme==2) white=!white;
+            expected[(unsigned)py*d.width+(unsigned)px]=white ? 0xffffffu : 0;
         }
     }
     memcpy(visible,scanout,(size_t)d.width*d.height*4);

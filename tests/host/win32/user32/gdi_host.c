@@ -67,6 +67,8 @@ int w32_stricmp(const char *a, const char *b) {
   }
   return (unsigned char)*a - (unsigned char)*b;
 }
+extern BOOL host_appearance_write(void *,const void *,DWORD,DWORD *);
+extern BOOL host_appearance_flush(void *);
 /* f5-10C font-store imports. user32_test.c supplies CreateFileA (always
  * INVALID_HANDLE_VALUE) and ReadFile/CloseHandle, so the font files are never
  * opened here; the remaining file imports of gdi32/font.c refuse. The font
@@ -85,6 +87,7 @@ DWORD W32API SetFilePointer(void *h, LONG at, LONG *high, DWORD how) {
 }
 BOOL W32API WriteFile(void *h, const void *data, DWORD bytes, DWORD *put,
                       void *o) {
+  if(host_appearance_write(h,data,bytes,put)) return 1;
   (void)h;
   (void)data;
   (void)bytes;
@@ -98,6 +101,7 @@ BOOL W32API CopyFileA(const char *from, const char *to, BOOL fail_exists) {
   (void)fail_exists;
   return 0;
 }
+BOOL W32API FlushFileBuffers(void *h) { return host_appearance_flush(h); }
 BOOL W32API DeleteFileA(const char *name) {
   (void)name;
   return 0;

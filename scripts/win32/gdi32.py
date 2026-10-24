@@ -58,7 +58,7 @@ def build(out, base=0x72000000, flags=None):
     for dll, declarations in [('ntdll', ' w32_stub_hit\n w32_get_services\n w32_stricmp\n memcpy\n memset\n'
                                         ' w32_shim_stub\n w32_shim_w_stub\n w32_server_exchange\n'),
                               ('kernel32', ' MapViewOfFile@20\n UnmapViewOfFile@4\n CreateFileA@28\n ReadFile@20\n GetFileSize@8\n'
-                                           ' SetFilePointer@16\n CloseHandle@4\n CopyFileA@12\n DeleteFileA@4\n'
+                                           ' GetTickCount@0\n SetFilePointer@16\n CloseHandle@4\n CopyFileA@12\n DeleteFileA@4\n'
                                            ' GetModuleHandleA@4\n LoadLibraryA@4\n GetProcAddress@8\n SetLastError@4\n WriteFile@20\n')]:
         definition = out/f'gdi32-{dll}.def'
         definition.write_text(f'LIBRARY {dll}.dll\nEXPORTS\n'+declarations)

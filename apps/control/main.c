@@ -410,6 +410,8 @@ static int autoplay_list(void *ctx,struct ap_preference *out,unsigned capacity)
 { (void)ctx; return ap_preference_list(NULL,out,capacity); }
 static int autoplay_forget(void *ctx,const char *id)
 { (void)ctx; return ap_preference_forget(NULL,id); }
+static int monitor_query(void *ctx,struct ciuki_monitor_info *q) { (void)ctx; return ciuki_display_monitor(q); }
+static int refresh_query(void *ctx,struct ciuki_display_refresh *q) { (void)ctx; return ciuki_display_refresh(q); }
 static int display_query(void *ctx, struct ciuki_display_info *info)
 { (void)ctx; return ciuki_display_query(info); }
 static int generic_engine_query(void *ctx,struct ciuki_display_engine_info *info)
@@ -770,7 +772,7 @@ int main(int argc, char **argv)
     h->uninstall_list=win32_uninstall_list; h->program_remove=program_remove;
     h->program_install=program_install;h->programs_changed=programs_changed;
     h->load_sounds = load_sounds; h->save_sounds = save_sounds; h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode_begin = decode_begin; h->decode_poll = decode_poll; h->decode_cancel = decode_cancel; h->mixer = mixer; h->apply = apply; h->now = now; h->time_zone = time_zone; h->ctx = m;
-    h->display = display_query;
+    h->display = display_query; h->monitor=monitor_query; h->refresh_rates=refresh_query;
     h->network_begin=network_begin; h->network_poll=network_poll;
     h->engine=engine_query; h->engine_info=generic_engine_query; h->accel_retry=accel_retry;
     h->network=network_query; h->power=open_power; h->power_status=read_power_status; h->log_read=log_read;

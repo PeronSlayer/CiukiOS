@@ -680,6 +680,8 @@ void du_draw_dialog(struct du_ui *u)
 {
     struct du_dialog *d = &u->dialog;
     if (!d->kind) return;
+    struct desk_theme role; const struct desk_theme *saved=desk_theme;
+    if(d->kind==DU_DLG_MESSAGE) saved=desk_theme_role(&role,AP_MESSAGE);
     struct du_canvas *c = &u->canvas;
     struct du_rect b = d->box;
     const struct desk_theme *t = desk_theme;
@@ -721,4 +723,5 @@ void du_draw_dialog(struct du_ui *u)
         du_draw_widget(u, w, d->focus == (int)i && u->focused_window);
         c->clip = old;
     }
+    desk_theme=saved;
 }

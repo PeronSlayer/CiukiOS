@@ -435,10 +435,18 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 39 | Screen saver idle/SC_SCREENSAVE/preview start and animation | full screen with pointer hidden; application backing stores remain untouched | `desk_saver_start`, `desk_saver_tick`, `saver_scene` | G10: dedicated overlay bypasses window copies and caches | saver |
 | 40 | Saver input dismissal and monitor wake | full desktop, windows, overlays and pointer | `desk_saver_input`, `saver_wake`, full invalidation | G10: dismissing input consumed, failed wake remains retryable | saver |
 | 41 | Monitor off after idle or SC_MONITORPOWER | no presentation while off; wake invalidates the complete scene (row 37) | `desk_saver_tick`, `monitor_power`, `desk_redraw` | G10: suspend drawing until firmware wake succeeds | saver |
-| 42 | Display appearance settings: desktop colour or pattern and theme are applied | the full screen, including wallpaper, desktop icons, bars, windows, menus and tooltips | Control Panel saves `desktop.cfg`; desktop settings reload → `desk_theme_changed`, wallpaper redraw | G23: background patterns and RGB colour controls are persisted through the display preview; hardware refresh/EDID and coherent DPI scaling remain unsupported by the current display ABI and fixed-pixel UI | display appearance |
+| 42 | Display appearance settings: desktop colour or pattern and theme are applied | the full screen, including wallpaper, desktop icons, bars, windows, menus and tooltips | Control Panel saves `desktop.cfg`; desktop settings reload → `desk_theme_changed`, wallpaper redraw | G23: background settings use the durable preview; the continuation adds Appearance, Effects, DPI, themes and additive monitor queries in rows 43–48 | display appearance |
 
-A window drag shows the window contents, as Windows 98 does by default; the
-caption animation of row 8 is the only window outline. Rows 25-30 came with
+| 43 | Appearance item colours, gradients, sizes, fonts and named schemes | complete desktop, frame caches, menus, icons and tooltips | `desk_shell_apply`, `desk_theme_changed`, `desk_appearance_apply` | G23: invalidate cached chrome even when the scheme name is unchanged | appearance items (`WM_ROW=34`) |
+| 44 | Effects: large icons, smoothing, outline drag and menu reveal animation | old/new outline, exposed desktop, each menu reveal, icon cells | `input.c`, `compositor.c`, `shell.c`, `libdeskui/menu.c` | G23: copies exclude outline bounds; every animation step invalidates menu | display effects (`WM_ROW=35`) |
+| 45 | Advanced small, large and custom font DPI | complete desktop; newly opened toolkit surfaces scale as a unit | `theme.c`, `shell.c`, `libdeskui/client.c` | G23: invalidate chrome and wallpaper; scale pointer input into logical coordinates | display dpi (`WM_ROW=36`) |
+| 46 | Desktop Theme package preview, Apply and rollback | complete desktop, icon and pointer state, menus and windows | `settings.c` package snapshots, Control Panel display transaction | G23: sound scheme accompanies the package and is restored on Cancel | desktop themes (`WM_ROW=37`) |
+| 47 | Background Browse result | wallpaper cache and complete desktop | existing background worker and display transaction | G23: Browse uses the same decode and repaint path as the picture list | background browse (`WM_ROW=38`) |
+
+| 48 | Settings > Advanced > General font-size sheet: small/large/custom, Apply and Cancel | client-owned modal contents; normal toolkit dialog and client damage | `control/app.c` Advanced property sheet; real controls in `control_modes_test.c` | G23: modal Cancel restores its entry snapshot, outer Display Cancel retains complete rollback | advanced font sheet (`WM_ROW=39`) |
+
+A window drag shows the window contents by default; the Effects preference selects a deferred outline drag; the
+caption animation of row 8 remains independent of that drag preference. Rows 25-30 came with
 fx-19 (drag and drop, rubber-band and keyboard selection) and were added by
 fx-15b after the merge, with the reconcile extended to the band and the
 drag image. Row 42 records G23's settings reload: changes to the desktop

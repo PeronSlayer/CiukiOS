@@ -43,6 +43,10 @@ static void visible_oracle(void)
         for (int y=b.y;y<b.y+b.h;y++) for (int x=b.x;x<b.x+b.w;x++) {
             if (x<0 || y<DESK_BAR || x>=(int)d.width || y>=(int)d.height-(d.shell ? DESK_BAR : 0) ||
                 desk_contains(pointer,x,y)) continue;
+            if(d.geometry_outline) {
+                struct desk_box q=d.geometry_preview;
+                if(desk_contains(q,x,y) && (x<q.x+3 || x>=q.x+q.w-3 || y<q.y+3 || y>=q.y+q.h-3)) continue;
+            }
             int covered=0;
             for (int j=0;j<DESK_CLIENTS && !covered;j++) if (j!=i && d.clients[j].window && !d.clients[j].minimized &&
                 d.clients[j].order>c->order && desk_contains(desk_outer(&d.clients[j]),x,y)) covered=1;

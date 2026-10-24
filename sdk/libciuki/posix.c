@@ -196,4 +196,6 @@ int ciuki_devices(struct ciuki_devices_info *i) { return RET(CU_CALL(DEVICES,CU_
 int ciuki_firmware_inventory(struct ciuki_firmware_page *i) { return RET(CU_CALL(DEVICES,CU_PTR(i),sizeof(*i),0,0,0,0)); }
 int ciuki_hardware_inventory(struct ciuki_hardware_info *i) { return RET(CU_CALL(DEVICES,CU_PTR(i),sizeof(*i),0,0,0,0)); }
 int ciuki_display_query(struct ciuki_display_info *i) { return (int32_t)CU_CALL(DISPLAY,CIUKI_DISPLAY_QUERY,CU_PTR(i),0,0,0,0); }
+int ciuki_display_monitor(struct ciuki_monitor_info *i) { return (int32_t)CU_CALL(DISPLAY,CIUKI_DISPLAY_MONITOR,CU_PTR(i),0,0,0,0); }
+int ciuki_display_refresh(struct ciuki_display_refresh *i) { return (int32_t)CU_CALL(DISPLAY,CIUKI_DISPLAY_REFRESH,CU_PTR(i),0,0,0,0); }
 int ciuki_display_set(uint16_t id) { return (int32_t)CU_CALL(DISPLAY,CIUKI_DISPLAY_SET,id,0,0,0,0); }
