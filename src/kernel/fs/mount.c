@@ -449,7 +449,7 @@ static int add_removable(struct storage *s, struct blkdev *dev,
          * pointers without issuing a flush or presenting an uncertain medium. */
         if (e) for (unsigned i=0;i<count;i++) {
             unsigned d=prepared[i];struct storage_volume *v=&s->volumes[d];
-            if (s->vfs.volumes[d]==&v->fat) {s->vfs.volumes[d]=0;s->vfs.generation[d]++;s->vfs.drive_flags[d]=0;}
+            if (s->vfs.volumes[d]==&v->fat) {s->vfs.volumes[d]=0;s->vfs.generation[d]++;s->vfs.drive_flags[d]=0;namespace_changed();}
             v->present=false;
         }
         vfs_unlock(&s->vfs);
@@ -520,7 +520,7 @@ int storage_remove_removable_locked(struct storage *s, struct blkdev *dev, bool 
         if (s->vfs.volumes[d]) {
             if (surprise) {
                 if (px_volume_detached) px_volume_detached(&s->vfs,d);
-                s->vfs.volumes[d]=0; s->vfs.generation[d]++;
+                s->vfs.volumes[d]=0; s->vfs.generation[d]++; namespace_changed();
                 v->fat.mounted=false; v->fat.readonly=true; v->io.quarantined=true;
                 for (unsigned i=0;i<VFS_TABLES;i++) if (s->vfs.tables[i]) {
                     memcpy(s->vfs.tables[i]->cwd[d],"/",2); s->vfs.tables[i]->cwd_cluster[d]=0;

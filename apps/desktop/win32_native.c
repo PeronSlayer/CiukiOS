@@ -27,7 +27,9 @@ static pthread_mutex_t crash_disk_lock=PTHREAD_MUTEX_INITIALIZER;
 static void *crash_disk_worker(void *p)
 {
     pthread_mutex_lock(&crash_disk_lock);
-    int error=desk_w32_crash_store?desk_w32_crash_store("/WINDOWS/CRASH",p):-ENOSYS;
+    /* G13: native program faults live with the other logs (BOOT.LOG, NETSURF.LOG). */
+    const struct ciuki_w32_fault *f=p;
+    int error=desk_w32_crash_store?desk_w32_crash_store(f->kind==W32_REPORT_NATIVE_FAULT?"/system/logs":"/WINDOWS/CRASH",p):-ENOSYS;
     pthread_mutex_unlock(&crash_disk_lock);
     if(error)fprintf(stderr,"[win32] warning check=crash-file-write error=%d\n",error);
     free(p);return NULL;
@@ -44,7 +46,7 @@ static void fault_poll(struct desktop *d)
     struct ciuki_w32_report_args a={.header={1,sizeof(a),W32_REPORT,0},.action=W32_REPORT_NEXT,
         .buffer=(uint32_t)(uintptr_t)&f,.bytes=sizeof(f)};
     if(desk_w32_record(&a,sizeof(a))||!a.result)return;
-    if(f.kind==W32_REPORT_CRASH){
+    if(f.kind==W32_REPORT_CRASH||f.kind==W32_REPORT_NATIVE_FAULT){
         struct ciuki_w32_fault *copy=malloc(sizeof(*copy));
         if(copy){*copy=f;pthread_t thread;if(pthread_create(&thread,NULL,crash_disk_worker,copy)){free(copy);fprintf(stderr,"[win32] warning check=crash-file-worker\n");}else pthread_detach(thread);}
         else fprintf(stderr,"[win32] warning check=crash-file-allocation\n");

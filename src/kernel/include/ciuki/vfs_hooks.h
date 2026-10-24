@@ -24,4 +24,8 @@ extern bool px_volume_busy(struct vfs *, struct fat_volume *) __attribute__((wea
 extern int px_ro_share(struct vfs *, unsigned, uint64_t, unsigned, unsigned, unsigned, uint64_t) __attribute__((weak));
 extern bool px_ro_busy(struct vfs *, struct fs_ro_volume *) __attribute__((weak));
 extern void px_volume_detached(struct vfs *, unsigned) __attribute__((weak));
+/* fx-26: a drive was published or withdrawn (generation[d] changed);
+ * media_dev.c wakes /dev/media pollers (the tray's media notification). */
+extern void vfs_namespace_changed(void) __attribute__((weak));
+static inline void namespace_changed(void) { if (vfs_namespace_changed) vfs_namespace_changed(); }
 #endif

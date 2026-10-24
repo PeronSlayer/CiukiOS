@@ -5,8 +5,9 @@
 #include <time.h>
 #include "sdk/netsurf/port/budget.h"
 static uint64_t clock_ns=1000000000u;
+static unsigned clock_reads;
 int __wrap_clock_gettime(clockid_t clock,struct timespec *out)
-{ assert(clock==CLOCK_MONOTONIC);out->tv_sec=clock_ns/1000000000u;out->tv_nsec=clock_ns%1000000000u;return 0; }
+{ assert(clock==CLOCK_MONOTONIC);clock_reads++;out->tv_sec=clock_ns/1000000000u;out->tv_nsec=clock_ns%1000000000u;return 0; }
 int main(void)
 {
     /* Remote (timed) layouts: rejection timing, deadline and next-operation reset. */
@@ -83,6 +84,20 @@ int main(void)
     span=ciuki_layout_begin(true);clock_ns+=200000000u;
     assert(!ciuki_layout_end(span,true));
     ciuki_layout_clock_scale=1;
+    /* fx-24: clock_gettime is a system call on CiukiOS. A remote layout pass
+     * read it at every expiry check (~30,000 reads for an encyclopedia main
+     * page); now on a span's first check and every CIUKI_LAYOUT_CLOCK_STRIDE-th. */
+    span=ciuki_layout_begin(true);
+    unsigned reads=clock_reads;
+    for(unsigned i=0;i<1600;i++)assert(!ciuki_layout_expired());
+    assert(clock_reads-reads<=1600/CIUKI_LAYOUT_CLOCK_STRIDE+1);
+    /* An expiry is still seen within a stride and holds to the span's end. */
+    clock_ns+=75000001;
+    unsigned checks=0;while(!ciuki_layout_expired())assert(++checks<CIUKI_LAYOUT_CLOCK_STRIDE);
+    clock_ns-=75000001;assert(ciuki_layout_expired());
+    clock_ns+=75000001;assert(!ciuki_layout_end(span,true) && ciuki_layout_last_cause()==CIUKI_LAYOUT_TIME);
+    assert(!ciuki_layout_expired());
+    printf("NetSurf layout budget fx-24: 1600 expiry checks, %u clock reads\n",clock_reads-reads);
     puts("NetSurf layout budget: remote deadline/reset, local never time-limited, nesting, T23 clock scale and classification passed");
     puts("NetSurf layout budget fx-11: top-level document 10 s, nested objects inherit it, other spans 75 ms");fflush(stdout);
 }

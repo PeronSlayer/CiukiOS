@@ -237,7 +237,9 @@ static void pacing_latency(void)
     desk_damage_add(&d.damage,(struct desk_box){0,0,64,48},64,48);
     uint64_t begin=clock_ns; assert(!desk_redraw(&d));
     assert(d.frame_stats.overruns==1 && d.frame_stats.dropped==2);
-    assert(d.next_frame_ns==begin+3*DESK_FRAME_NS && d.next_frame_ns>clock_ns);
+    /* fx-26: a frame that ran past the next boundary lets the next one
+     * start when it ended (formerly the boundary after: begin+3 slots). */
+    assert(d.next_frame_ns==clock_ns && clock_ns==begin+40000000ull);
     assert(d.stats.completed==1 && d.stats.frame_p95_ns==41000000);
     /* Long waits retain their exact maximum beyond the histogram range. */
     clock_ns=d.next_frame_ns; d.frame_input_ns=clock_ns-300000000ull; present_cost=0;
@@ -253,7 +255,14 @@ static void pacing_latency(void)
     phase=d.next_frame_ns;clock_ns=phase+1000*DESK_FRAME_NS-1000;present_cost=5000000;
     desk_damage_add(&d.damage,(struct desk_box){0,0,1,1},64,48);assert(!desk_redraw(&d));
     assert(!d.frame_stats.overruns && !d.frame_stats.dropped);
-    assert(d.next_frame_ns==phase+1001*DESK_FRAME_NS);
+    /* fx-26: it ran past the boundary; the next one waits one slot from
+     * its start (formerly the following boundary, 1 us later here). */
+    assert(d.next_frame_ns==phase+1001*DESK_FRAME_NS-1000);
+    /* A late start that runs past the boundary no longer loses a slot:
+     * 8 ms late, 10 ms of work -> next at start+16.7 ms, not boundary+16.7. */
+    phase=d.next_frame_ns;clock_ns=phase+8000000ull;present_cost=10000000;
+    desk_damage_add(&d.damage,(struct desk_box){0,0,1,1},64,48);assert(!desk_redraw(&d));
+    assert(!d.frame_stats.overruns && d.next_frame_ns==phase+8000000ull+DESK_FRAME_NS);
     desk_render_release(&d); free(d.pixels);
 }
 

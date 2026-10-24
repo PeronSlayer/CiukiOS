@@ -65,6 +65,7 @@ void biosvm_last_failure(struct biosvm_failure *out);
  * resources after acceleration stops, then releases on completed calls. */
 int biosvm_video_prepare(void);
 int biosvm_video_switch(uint16_t mode, uint8_t info[256]);
+int biosvm_video_dpms(unsigned state); /* VBE states 0, 1, 4 */
 /* Full-screen transaction, only after LFB revocation. Retains VGA leases;
  * save/restore VBE state mask 000Fh, bounded private scratch, no guest API. */
 int biosvm_video_fullscreen_begin(uint8_t mode);

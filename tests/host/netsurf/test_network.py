@@ -293,12 +293,12 @@ class NetworkTests(unittest.TestCase):
         for mode in ("stale-retry","post-no-replay","tls-stale-retry","tls-post-no-replay"):
             with self.subTest(mode=mode):self.engine(mode)
 
-    def browser(self,path,mode="browser",scheme="http",host="fixture.example",error=None,expected=None,port=None,inspect=None,test_mode=False):
+    def browser(self,path,mode="browser",scheme="http",host="fixture.example",error=None,expected=None,port=None,inspect=None,test_mode=False,extra_env=None):
         with tempfile.TemporaryDirectory(dir=OUT) as folder:
             capture=Path(folder) / "page.xrgb"
             log=Path(folder) / "NETSURF.LOG"
             url=f"{scheme}://{host}:{port or (8443 if scheme=='https' else 8080)}{path}"
-            env=dict(SAN,CIUKI_FIXTURE_MODE=mode,CIUKI_FIXTURE_CERT=str(self.folder / "valid.der"),CIUKI_FIXTURE_KEY=str(self.folder / "valid-key.der"))
+            env=dict(SAN,CIUKI_FIXTURE_MODE=mode,CIUKI_FIXTURE_CERT=str(self.folder / "valid.der"),CIUKI_FIXTURE_KEY=str(self.folder / "valid-key.der"),**(extra_env or {}))
             # f6-18 test profile: --test=browser plus the kernel test request
             # (probe call 5 on CiukiOS; this environment variable on the host).
             if test_mode:env["CIUKI_TEST_REQUEST"]="f6:browser run=0123abcd url="+url;self.assertLessEqual(len(env["CIUKI_TEST_REQUEST"]),64)
@@ -308,6 +308,7 @@ class NetworkTests(unittest.TestCase):
             result.netsurf_log=log.read_text() if log.exists() else ""
             self.assertTrue(capture.exists(),result.stdout+result.stderr)
             self.assertEqual(capture.stat().st_size,640*480*4)
+            result.capture=capture.read_bytes()
             if error:self.assert_page_error(result,error)
             if expected:self.assertIn(expected,result.stdout,result.stdout+result.stderr)
             if inspect:inspect(result)
@@ -401,13 +402,33 @@ class NetworkTests(unittest.TestCase):
         """fx-11, lead decision 2026-10-23: the top-level remote document gets a
         10 s layout limit; an iframe's document (a sub-resource window) keeps
         75 ms. The budget clock is charged x20000, so both small documents
-        cost far more than 75 ms and far less than 10 s."""
+        cost far more than 75 ms and far less than 10 s. fx-24: the iframe's
+        document is 200 short lines (/frame-content); a single heading now
+        lays out in about 3.6 us of host time, 72 ms charged."""
         result=self.browser("/framed",mode="browser-document",expected="<h1>Ciuki</h1>")
         page=result.stdout.split("fixture_page_begin\n",1)[1].split("\nfixture_page_end",1)[0]
-        self.assertIn("<iframe src=\"/page\"",page)
+        self.assertIn("<iframe src=\"/frame-content\"",page)
         self.assertNotIn("needs more layout time",page)
         self.assertRegex(result.stderr,r"\[netsurf\] layout slow elapsed_us=\d+ class=remote accepted=1")
         self.assertIn("NetSurf layout rejected: remote page, time limit",result.stderr)
+
+    def test_styled_page_over_http(self):
+        """fx-24, T23 trial f441c5bd: remote pages showed no images (and the
+        owner saw no styling) although every image was fetched with 200.
+        The styled fixture over HTTP, as a server sends it (HTML/CSS/SVG
+        gzip-encoded, images chunked, media types in Content-Type): linked
+        and @import stylesheets, a style element and attribute apply; JPEG,
+        PNG, GIF, WebP and SVG images are fetched, decoded and drawn."""
+        import styled
+        site=str(HERE / "fixtures/fx24")
+        def inspect(result):
+            records=self.fetch_records(result)
+            done=[line for line in records if " stage=done " in line]
+            for name in ("styled.html","styled.css","imported.css","quadrants.jpg","disc.png","halves.gif","stripes.webp",
+                         "shapes.svg","tile.png","large.jpg","banner.svg"):
+                self.assertTrue(any(f"/fx24/{name} stage=done code=200 " in line for line in done),name+"\n"+"\n".join(records))
+            self.assertEqual(styled.failures(result.capture,640),[])
+        self.browser("/fx24/styled.html",inspect=inspect,extra_env={"CIUKI_FIXTURE_SITE":site})
 
     def test_navigation_during_blocked_lookup(self):
         self.browser("/",mode="browser-blocked",host="blocked.example",expected="fixture_navigation_blocked=1 completed=1 late_ignored=1")
