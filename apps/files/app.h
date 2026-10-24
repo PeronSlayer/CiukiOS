@@ -100,7 +100,7 @@ struct files_app {
     struct rb_policy policy, bin_edit;
     struct files_bin_row *bin_rows; unsigned bin_row_capacity;
     struct du_menu_item bin_items[8];
-    int bin_menu, bin_scope, delete_flags, show_bin_properties, bin_op;
+    int bin_menu, bin_scope, delete_flags, show_bin_properties, bin_op,show_folder_options;
     char **drop_paths; unsigned drop_count;   /* items dropped on the bin window, awaiting the confirmation */
     void *user;
 };

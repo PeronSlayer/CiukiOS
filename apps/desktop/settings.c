@@ -20,6 +20,8 @@ void cfg_defaults(struct ciuki_settings *s)
     s->clock_24h = 1;
     s->taskbar_clock = 1;
     s->quick_launch = 1;
+    s->taskbar_top = 1;
+    s->taskbar_size = 32;
     s->desktop_icons = 1;
     s->mouse_speed = CFG_MOUSE_NORMAL;
     s->double_click_ms = 500;
@@ -116,6 +118,21 @@ static int assign(struct ciuki_settings *s, const char *key, const char *v, int 
     if (!strcmp(key, "desktop_icons")) return flag(v, &s->desktop_icons);
     if (!strcmp(key, "taskbar_clock")) return flag(v, &s->taskbar_clock);
     if (!strcmp(key, "quick_launch")) return flag(v, &s->quick_launch);
+    if (!strcmp(key,"taskbar_top")) return flag(v,&s->taskbar_top);
+    if (!strcmp(key,"taskbar_autohide")) return flag(v,&s->taskbar_autohide);
+    if (!strcmp(key,"start_small")) return flag(v,&s->start_small);
+    if (!strcmp(key,"taskbar_edge")) return number(v,0,3,&s->taskbar_edge);
+    if (!strcmp(key,"taskbar_size")) return number(v,32,512,&s->taskbar_size);
+    if (!strcmp(key,"toolbar_address")) return flag(v,&s->toolbar_address);
+    if (!strcmp(key,"toolbar_links")) return flag(v,&s->toolbar_links);
+    if (!strcmp(key,"toolbar_desktop")) return flag(v,&s->toolbar_desktop);
+    for (unsigned k=0;k<CFG_TOOLBARS;k++) {
+        char name[24]; snprintf(name,sizeof(name),"toolbar_folder%u",k);
+        if (!strcmp(key,name)) {
+            if (*v && (v[0]!='/' || strlen(v)>=CFG_PATH_MAX || !printable(v) || strstr(v,"/../"))) return 0;
+            snprintf(s->toolbar_folder[k],CFG_PATH_MAX,"%s",v); return 1;
+        }
+    }
     if (!strcmp(key, "mouse_speed")) return number(v, CFG_MOUSE_MIN, CFG_MOUSE_MAX, &s->mouse_speed);
     if (!strcmp(key, "double_click_ms")) return number(v, 200, 900, &s->double_click_ms);
 
@@ -194,6 +211,17 @@ size_t cfg_format(const struct ciuki_settings *s, char *out, size_t size)
                !!s->saver_enabled,s->saver_seconds,s->saver_kind,s->monitor_seconds);
     if (n<0 || (size_t)n>=size-used) return 0;
     used+=(size_t)n;
+    n=snprintf(out+used,size-used,"taskbar_top=%d\ntaskbar_autohide=%d\nstart_small=%d\ntaskbar_edge=%d\ntaskbar_size=%d\n"
+               "toolbar_address=%d\ntoolbar_links=%d\ntoolbar_desktop=%d\n",
+               !!s->taskbar_top,!!s->taskbar_autohide,!!s->start_small,s->taskbar_edge,s->taskbar_size,
+               !!s->toolbar_address,!!s->toolbar_links,!!s->toolbar_desktop);
+    if (n<0 || (size_t)n>=size-used) return 0;
+    used+=(size_t)n;
+    for (unsigned k=0;k<CFG_TOOLBARS;k++) {
+        n=snprintf(out+used,size-used,"toolbar_folder%u=%s\n",k,s->toolbar_folder[k]);
+        if (n<0 || (size_t)n>=size-used) return 0;
+        used+=(size_t)n;
+    }
     for (unsigned i = 0; i < s->recent_count && i < CFG_RECENT_MAX; i++) {
         n = snprintf(out + used, size - used, "recent=%s\n", s->recent[i]);
         if (n <= 0 || (size_t)n >= size - used) return 0;

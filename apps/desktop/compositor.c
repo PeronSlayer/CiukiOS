@@ -95,6 +95,7 @@ extern void desk_gfx_complete(struct desktop *,int,int,uint64_t,uint64_t) __attr
  * libdeskui programs reuse this file for glyphs and frames without it. */
 extern void desk_shell_background(struct desktop *, struct desk_box) __attribute__((weak));
 extern void desk_shell_topbar(struct desktop *, struct desk_box) __attribute__((weak));
+extern void desk_shell_bar(struct desktop *, struct desk_box) __attribute__((weak));
 extern void desk_shell_overlay(struct desktop *, struct desk_box) __attribute__((weak));
 extern unsigned desk_shell_occluders(const struct desktop *,struct desk_box *) __attribute__((weak));
 extern void desk_shell_start(struct desktop *, struct desk_box) __attribute__((weak));
@@ -189,8 +190,37 @@ void desk_collapse(struct desktop *d, int i)
     desk_damage_add(&d->damage,desk_outer(c),d->width,d->height);
     if (d->shell) desk_damage_add(&d->damage,desk_taskbar(d),d->width,d->height);
 }
+int desk_taskbar_front(const struct desktop *d)
+{ return d->sh.cfg.taskbar_top || d->sh.cfg.taskbar_autohide || d->sh.bar_raised || d->sh.bar_drag; }
 struct desk_box desk_taskbar(const struct desktop *d)
-{ return (struct desk_box){0,(int32_t)d->height-DESK_BAR,(int32_t)d->width,DESK_BAR}; }
+{
+    int size=d->sh.cfg.taskbar_size;
+    if (size<DESK_BAR) size=DESK_BAR;
+    int edge=d->sh.cfg.taskbar_edge;
+    int limit=(edge>=CFG_BAR_LEFT ? (int)d->width : (int)d->height-DESK_BAR)/2;
+    if (size>limit) size=limit;
+    if (d->sh.cfg.taskbar_autohide && d->sh.bar_hidden) size=2;
+    switch (edge) {
+    case CFG_BAR_TOP: return (struct desk_box){0,DESK_BAR,(int)d->width,size};
+    case CFG_BAR_LEFT: return (struct desk_box){0,DESK_BAR,size,(int)d->height-DESK_BAR};
+    case CFG_BAR_RIGHT: return (struct desk_box){(int)d->width-size,DESK_BAR,size,(int)d->height-DESK_BAR};
+    default: return (struct desk_box){0,(int)d->height-size,(int)d->width,size};
+    }
+}
+struct desk_box desk_work_area(const struct desktop *d)
+{
+    struct desk_box w={0,DESK_BAR,(int)d->width,(int)d->height-DESK_BAR};
+    if (!d->shell || (!d->sh.cfg.taskbar_top && !d->sh.cfg.taskbar_autohide)) return w;
+    struct desk_box b=desk_taskbar(d);
+    int size=d->sh.cfg.taskbar_autohide ? 2 : d->sh.cfg.taskbar_edge>=CFG_BAR_LEFT ? b.w : b.h;
+    switch (d->sh.cfg.taskbar_edge) {
+    case CFG_BAR_TOP: w.y+=size; w.h-=size; break;
+    case CFG_BAR_LEFT: w.x+=size; w.w-=size; break;
+    case CFG_BAR_RIGHT: w.w-=size; break;
+    default: w.h-=size; break;
+    }
+    return w;
+}
 /* Shared top-bar tray geometry: non-shell programs also
  * link this compositor for frames and glyphs. Text is measured in the UI face. */
 void desk_shell_clock_text_at(const struct desktop *d, uint64_t s, char *out, size_t size)
@@ -241,6 +271,51 @@ struct desk_box desk_shell_tray_icon_box(const struct desktop *d, enum sh_tray_i
     return (struct desk_box){c.x - (slot + 1) * (SH_TRAY_ICON_SIZE + SH_TRAY_GAP),
                             c.y + (c.h - SH_TRAY_ICON_SIZE) / 2, SH_TRAY_ICON_SIZE, SH_TRAY_ICON_SIZE};
 }
+static int toolbar_push(const struct desktop *d,struct desk_toolbar_slot *out,int *n,int *offset,int width,int kind,int arg)
+{
+    struct desk_box b=desk_taskbar(d);int vertical=d->sh.cfg.taskbar_edge>=CFG_BAR_LEFT;
+    int length=vertical ? b.h : b.w;
+    if (*n>=DESK_TOOLBAR_SLOTS || *offset+(vertical ? 26 : width)>length*2/3) return 0;
+    out[*n]=(struct desk_toolbar_slot){vertical ? (struct desk_box){b.x+4,b.y+*offset,b.w-8,26} :
+        (struct desk_box){b.x+*offset,b.y+3,width,26},kind,arg};
+    (*n)++;*offset+=vertical ? 26 : width;return 1;
+}
+int desk_toolbar_slots(const struct desktop *d,struct desk_toolbar_slot *out)
+{
+    if (d->sh.cfg.taskbar_autohide && d->sh.bar_hidden) return 0;
+    int n=0,offset=d->sh.cfg.quick_launch ? 30 : 4,overflow=0;
+    const struct sh_folder_snapshot *s=d->sh.custom;
+    if (d->sh.cfg.quick_launch && s) {
+        unsigned seen=0;
+        for (unsigned k=0;k<s->count;k++) if (s->entries[k].parent==SH_ROOT_QUICK && seen++<4)
+            toolbar_push(d,out,&n,&offset,26,DESK_TOOLBAR_ITEM,(int)k);
+        if (seen>4 && !toolbar_push(d,out,&n,&offset,30,DESK_TOOLBAR_FOLDER,SH_ROOT_QUICK)) overflow=1;
+    }
+    if (d->sh.cfg.toolbar_address && !toolbar_push(d,out,&n,&offset,160,DESK_TOOLBAR_ADDRESS,0)) overflow=1;
+    for (int root=SH_ROOT_LINKS;root<SH_ROOT_CUSTOM+CFG_TOOLBARS;root++) {
+        int enabled=root==SH_ROOT_LINKS ? d->sh.cfg.toolbar_links : root==SH_ROOT_DESKTOP ? d->sh.cfg.toolbar_desktop : d->sh.cfg.toolbar_folder[root-SH_ROOT_CUSTOM][0]!=0;
+        if (!enabled) continue;
+        if (!toolbar_push(d,out,&n,&offset,80,DESK_TOOLBAR_FOLDER,root)) { overflow=1;continue; }
+        unsigned seen=0;
+        if (s) for (unsigned k=0;k<s->count;k++) if (s->entries[k].parent==root && seen++<2)
+            toolbar_push(d,out,&n,&offset,26,DESK_TOOLBAR_ITEM,(int)k);
+    }
+    if (overflow) {
+        if (n) {
+            struct desk_box b=desk_taskbar(d),last=out[n-1].box;
+            offset=d->sh.cfg.taskbar_edge>=CFG_BAR_LEFT ? last.y-b.y : last.x-b.x;n--;
+        }
+        toolbar_push(d,out,&n,&offset,26,DESK_TOOLBAR_OVERFLOW,0);
+    }
+    return n;
+}
+int desk_toolbar_extent(const struct desktop *d)
+{
+    struct desk_toolbar_slot slots[DESK_TOOLBAR_SLOTS];int n=desk_toolbar_slots(d,slots);
+    if (!n) return d->sh.cfg.quick_launch ? 30 : 0;
+    struct desk_box b=desk_taskbar(d),last=slots[n-1].box;
+    return d->sh.cfg.taskbar_edge>=CFG_BAR_LEFT ? last.y+last.h-b.y : last.x+last.w-b.x;
+}
 struct desk_box desk_task_button(const struct desktop *d, int index)
 {
     unsigned count=0, position=0;
@@ -249,18 +324,31 @@ struct desk_box desk_task_button(const struct desktop *d, int index)
         if (i<index) position++;
         count++;
     }
-    int32_t left=DESK_TASK_X+(d->sh.cfg.quick_launch ? 30 : 0);
-    int32_t available=(int32_t)d->width-left-DESK_TASK_X;
-    if (available<=0 || !count) return (struct desk_box){0,0,0,0};
-    int32_t w=available/(int32_t)count;
-    if (w>160) w=160;
-    int32_t x=left+(int32_t)position*w;
-    return (struct desk_box){x,(int32_t)d->height-DESK_BAR+3,w,DESK_BAR-6};
+    if (d->sh.cfg.taskbar_autohide && d->sh.bar_hidden) return (struct desk_box){0};
+    struct desk_box b=desk_taskbar(d);
+    int vertical=d->sh.cfg.taskbar_edge>=CFG_BAR_LEFT;
+    int offset=desk_toolbar_extent(d)+DESK_TASK_X;
+    int rows=vertical ? (b.w-6)/120 : (b.h-6)/26;
+    if (rows<1) rows=1;
+    int columns=((int)count+rows-1)/rows;
+    int available=(vertical ? b.h : b.w)-offset-DESK_TASK_X;
+    if (available<=0) return (struct desk_box){0};
+    int w=vertical ? (b.w-6)/rows : available/columns;
+    int h=vertical ? available/columns : (b.h-6)/rows;
+    if (!vertical && w>160) w=160;
+    if (vertical && h>26) h=26;
+    int col=(int)position/rows, row=(int)position%rows;
+    return vertical ? (struct desk_box){b.x+3+row*w,b.y+offset+col*h,w,h} :
+                      (struct desk_box){b.x+offset+col*w,b.y+3+row*h,w,h};
 }
 struct desk_box desk_quick_launch_button(const struct desktop *d)
-{ return d->sh.cfg.quick_launch ? (struct desk_box){4,(int32_t)d->height-DESK_BAR+3,26,DESK_BAR-6} : (struct desk_box){0,0,0,0}; }
+{
+    if (!d->sh.cfg.quick_launch || (d->sh.cfg.taskbar_autohide && d->sh.bar_hidden)) return (struct desk_box){0};
+    struct desk_box b=desk_taskbar(d);
+    return (struct desk_box){b.x+4,b.y+3,26,26};
+}
 int32_t desk_menu_row(const struct desktop *d)
-{ (void)d; return SH_START_ROW; }
+{ return d->sh.cfg.start_small ? SH_SUB_ROW : SH_START_ROW; }
 /* The Ciuki (Start) button at the left end of the top bar. */
 struct desk_box desk_start_button(const struct desktop *d)
 { (void)d; return (struct desk_box){DESK_START_X,DESK_START_Y,DESK_START_W,DESK_START_H}; }
@@ -292,6 +380,7 @@ struct desk_box desk_menu_box(const struct desktop *d)
 {
     if (d->sh.levels && d->sh.menus[0].kind == SH_MENU_START) return d->sh.menus[0].box;
     int32_t h = 6 + 6 * SH_START_ROW + SH_SEPARATOR, y = DESK_BAR, limit = (int32_t)d->height - DESK_BAR;
+    if (h>limit) h=limit;
     if (y + h > limit) y = limit - h;
     return (struct desk_box){DESK_START_X, y < 0 ? 0 : y, 184, h};
 }
@@ -728,10 +817,7 @@ void desk_shell_draw(struct desktop *d, struct desk_box clip)
     /* Shared shaded surface; the
      * shell (shell.c) adds the task buttons, the tray, menus and popups.
      * The Ciuki (Start) button lives in the top bar (desk_shell_topbar). */
-    const struct desk_theme *t=desk_theme;
-    struct desk_box bar=desk_taskbar(d);
-    struct desk_paint p=paint_of(d,clip);
-    desk_paint_bar(&p,bar.x,bar.y,bar.w,bar.h,t->taskbar,d->lfb_bytes_per_pixel==2);
+    if (desk_shell_bar) desk_shell_bar(d,clip);
     if (desk_shell_overlay) desk_shell_overlay(d,clip);
 }
 _Static_assert(sizeof(desk_cursors)/sizeof(desk_cursors[0])==DESK_CURSOR_PRECISION+1,"generic cursor inventory");
@@ -852,7 +938,7 @@ static int window_damage(struct desktop *d, int index, struct desk_box box)
      * rows were dropped and stayed stale on screen. */
     if (!c->window || c->minimized ||
         !desk_intersect(box,(struct desk_box){0,0,(int)d->width,
-            (int)d->height-(d->shell ? DESK_BAR : 0)},&box)) return 0;
+            (int)d->height},&box)) return 0;
     int windows[DESK_CLIENTS]; unsigned count=0;
     for (int i=0;i<DESK_CLIENTS;i++) if (i!=index && d->clients[i].window &&
         !d->clients[i].minimized && d->clients[i].order>c->order) windows[count++]=i;
@@ -1035,7 +1121,7 @@ static void scene(struct desktop *d, struct desk_box clip)
     /* A client-only update writes its opaque backing store directly. Higher
      * windows' shadows and shell overlays still need the ordinary painter. */
     if (!d->animation.active && !d->menu_open && !d->sh.levels && !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open && !d->sh.tooltip && !desk_shell_chrome_intersects(d,clip) && !d->sh.switcher &&
-        clip.y>=DESK_BAR && (!d->shell || clip.y+clip.h<=(int)d->height-DESK_BAR)) {
+        clip.y>=DESK_BAR && (!d->shell || (clip.x+clip.w<=desk_taskbar(d).x || clip.x>=desk_taskbar(d).x+desk_taskbar(d).w || clip.y+clip.h<=desk_taskbar(d).y || clip.y>=desk_taskbar(d).y+desk_taskbar(d).h))) {
         for (int i=0;i<DESK_CLIENTS;i++) {
             struct desk_client *c=&d->clients[i];
             if (!c->window || c->minimized || c->collapsed || c->internal || !c->pixels) continue;
@@ -1072,9 +1158,11 @@ static void scene(struct desktop *d, struct desk_box clip)
     uint64_t s = d->now_ns / 1000000000ull;
     snprintf(clock,sizeof(clock),"%02u:%02u:%02u",(unsigned)(s/3600%100),(unsigned)(s/60%60),(unsigned)(s%60));
     if (!d->shell) desk_paint_text(&p,t->font_ui,(int)d->width-12-desk_text_measure(t->font_ui,clock),20,clock,t->topbar_text);
+    if (d->shell && !desk_taskbar_front(d) && desk_shell_bar) desk_shell_bar(d,clip);
     for (unsigned n=0; n<count; n++)
         visible_paint(d,clip,windows+n+1,count-n-1,visible_window,windows[n]);
-    if (d->shell) DESK_PROFILE("bars_menus", desk_shell_draw(d,clip));
+    if (d->shell && desk_taskbar_front(d)) DESK_PROFILE("bars_menus", desk_shell_draw(d,clip));
+    else if (d->shell && desk_shell_overlay) desk_shell_overlay(d,clip);
     if (d->animation.active) {
         struct desk_box b=d->animation.box;
         struct desk_paint p=paint_of(d,clip);

@@ -32,7 +32,7 @@ static void es_register(int i, uint32_t pid)
 static unsigned es_count(int i, unsigned op) { return queued(&shutdown_desktop,i,op,NULL); }
 static struct desk_packet es_last(int i, unsigned op)
 {
-    struct desk_packet p[DESK_TX_MAX]; unsigned n=queued(&shutdown_desktop,i,op,p);
+    static struct desk_packet p[DESK_TX_MAX]; unsigned n=queued(&shutdown_desktop,i,op,p);
     assert(n); return p[n-1];
 }
 /* The answer to the query in turn (its serial survives drained rings). */

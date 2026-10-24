@@ -1570,6 +1570,7 @@ static void files_service(struct du_ui *u,void *ctx)
 {
     (void)u; struct files_app *a=ctx;
     scan_poll(a); job_tick(a);
+    if (a->show_folder_options && !a->loading && !a->job_active && !du_dialog_id(a->ui)) { a->show_folder_options=0;folder_options(a); }
     if (a->property_request[0] && !a->loading && !a->job_active && !du_dialog_id(a->ui)) {
         files_properties_path(a,a->property_request); a->property_request[0]=0;
     }

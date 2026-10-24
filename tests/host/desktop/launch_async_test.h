@@ -29,7 +29,7 @@ static void async_complete(struct desktop *d, unsigned n)
         done+=launch_service(d);
         if (done>=n) break;
         assert(async_wall_ms()<until);
-        struct timespec pause={0,1000000}; nanosleep(&pause,NULL);
+        struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL);
     }
 }
 static int async_pending_slot(const struct desktop *d)

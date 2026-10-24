@@ -8,6 +8,7 @@
 #include "../libdeskui/deskui.h"
 #include "../libdeskui/textarea.h"
 #include "../desktop/settings.h"
+#include "../desktop/customize.h"
 #include "../desktop/shell_link.h"
 #include "../desktop/startup.h"
 #include "../desktop/sounds.h"
@@ -76,7 +77,15 @@ struct cp_game_result {
     unsigned game;
     int saved, error, rejected;
 };
+#define CP_MENU_MAX 96
+enum { CP_TASKBAR_TABS=1970, CP_START_ADD, CP_START_REMOVE, CP_START_ADVANCED, CP_START_CLEAR, CP_START_LIST,
+       CP_ADD_TARGET=2000, CP_ADD_ARGS, CP_ADD_FOLDER, CP_ADD_NAME, CP_REMOVE_CONFIRM };
+struct cp_menu_result { struct sh_folder_item entries[CP_MENU_MAX]; unsigned count; int error,operation; };
 struct cp_host {
+    int (*menu_begin)(void *,const struct sh_edit_request *,const char *arguments);
+    int (*menu_poll)(void *,struct cp_menu_result *);
+    int (*menu_explore)(void *,const char *);
+
     int (*pack_scan)(void *, const char *, char names[][192], unsigned);
     int (*pack_preview)(void *, struct dp_plan *, const char *, const char *, const struct ndp_device *, char reason[160]);
     int (*pack_install)(void *, const struct dp_plan *, const char *, char reason[160]);
@@ -145,6 +154,13 @@ struct cp_host {
     const char *fonts_path;                                          /* trusted installed store; NULL = /System/fonts */
 };
 struct cp_app {
+    struct cp_menu_result menu;
+    struct du_item taskbar_tabs[2],menu_items[CP_MENU_MAX];
+    struct sh_edit_request menu_edit;
+    char menu_target[CFG_PATH_MAX],menu_args[1024],menu_folder[CFG_PATH_MAX];
+    int taskbar_tab,menu_busy,menu_cleared;
+    unsigned menu_selected;
+
     struct game_ports_settings game_ports;
     struct ciuki_joystick_control game_joystick;
     int game_open, game_busy, game_loaded, game_joy_ready, game_joy_dirty, game_save;
@@ -256,6 +272,7 @@ struct cp_app {
 };
 void cp_game_open(struct cp_app *, unsigned);
 void cp_joystick_result(struct cp_app *, const struct ciuki_joystick_control *, int);
+void cp_menu_poll(struct cp_app *);
 void cp_assets_ready(struct cp_app *);
 int cp_attach(struct cp_app *, struct du_ui *, int page);
 void cp_detach(struct cp_app *);

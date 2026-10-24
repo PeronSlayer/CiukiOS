@@ -17,7 +17,7 @@ enum {
     C_VOL_L, C_VOL, C_VOL_V, C_MUTE, C_SOUND_LIST, C_SOUND_TEST, C_SOUND_ENABLED, C_HARDWARE, C_AUDIO,
     C_DATE, C_H24, C_SECONDS, C_TIME_NOTE1, C_TIME_NOTE2,
     C_SYS0, C_SYS1, C_SYS2, C_SYS3, C_SYS4,
-    C_TASKBAR_CLOCK=1960, C_QUICK_LAUNCH,
+    C_TASKBAR_CLOCK=1960, C_QUICK_LAUNCH, C_TASKBAR_TOP, C_TASKBAR_AUTOHIDE, C_START_SMALL,
     C_BACK = 100, C_APPLETS, C_TREE, C_REFRESH, C_PROPERTIES, C_DRIVERS, C_LEASES,
     C_SYSTEM_TABS, C_CPU, C_UPTIME, C_SYSTEM_HARDWARE, C_FLAGS, C_BOOT_OPTIONS, C_SERIAL, C_BOOT_APPLY,
     C_DETAILS = 130, C_FIRMWARE = 131, D_FIRMWARE = 199, D_PROPERTIES = 200, D_INFO, C_SCHEME, C_UI_VOL, C_UI_VOL_V
@@ -68,10 +68,13 @@ static void changed(struct cp_app *a)
     else if (a->page==CP_TASKBAR) {
         now.taskbar_clock=a->cfg.taskbar_clock;
         now.quick_launch=a->cfg.quick_launch;
+        now.taskbar_top=a->cfg.taskbar_top;now.taskbar_autohide=a->cfg.taskbar_autohide;now.start_small=a->cfg.start_small;
+        if (a->menu_cleared) now.recent_count=0;
     }
     static char out[CFG_TEXT_MAX];
     size_t n = cfg_format(&now, out, sizeof(out));
     if (!n || !a->host.save || a->host.save(a->host.ctx, out, n)) { text(a, C_STATUS, "The settings could not be saved."); return; }
+    a->menu_cleared=0;
     int r = a->host.apply ? a->host.apply(a->host.ctx, DESK_SETTINGS_RELOAD, 0, 0) : -1;
     text(a, C_STATUS, a->host.save_async ? "Saving settings..." : r ? "Saved. The desktop applies it at its next start." : "Saved and applied.");
 }
@@ -354,6 +357,9 @@ static void sync(struct cp_app *a)
     toggle_label(a, C_SECONDS, "Show seconds", a->cfg.clock_seconds);
     if ((w = du_get(u,C_TASKBAR_CLOCK))) w->value = a->cfg.taskbar_clock;
     if ((w = du_get(u,C_QUICK_LAUNCH))) w->value = a->cfg.quick_launch;
+    if ((w=du_get(u,C_TASKBAR_TOP))) w->value=a->cfg.taskbar_top;
+    if ((w=du_get(u,C_TASKBAR_AUTOHIDE))) w->value=a->cfg.taskbar_autohide;
+    if ((w=du_get(u,C_START_SMALL))) w->value=a->cfg.start_small;
     cp_display_sync(a);
     for (unsigned i=0;i<u->count;i++) {
         struct du_widget *v=&u->widgets[i];
@@ -472,10 +478,96 @@ static void log_refresh(struct cp_app *a)
     w=du_get(a->ui,CP_LOG_NEXT); if (w) w->disabled=!a->log_total || a->log_offset+a->log.len>=a->log_total;
     du_invalidate_widget(a->ui,CP_LOG_VIEW); du_invalidate_widget(a->ui,CP_LOG_PREV); du_invalidate_widget(a->ui,CP_LOG_NEXT);
 }
+static void menu_begin(struct cp_app *a)
+{
+    int r=a->host.menu_begin ? a->host.menu_begin(a->host.ctx,&a->menu_edit,a->menu_args) : -ENOSYS;
+    if (r) text(a,C_STATUS,"The Start menu operation could not be started. Try again.");
+    else { a->menu_busy=1;text(a,C_STATUS,"Updating Start menu..."); }
+}
+void cp_menu_poll(struct cp_app *a)
+{
+    if (!a->menu_busy || !a->host.menu_poll || !a->host.menu_poll(a->host.ctx,&a->menu)) return;
+    a->menu_busy=0;
+    if (!a->menu.error && a->menu.operation==SH_EDIT_CLEAR) { a->menu_cleared=1;a->cfg.recent_count=0;changed(a); }
+    if (!a->menu.error && a->host.programs_changed && a->menu.operation!=SH_EDIT_REFRESH) a->host.programs_changed(a->host.ctx);
+    if (a->page==CP_TASKBAR && a->taskbar_tab==1) build(a);
+    text(a,C_STATUS,a->menu.error ? "The Start menu operation failed. Check the path and try again." : "Start menu updated.");
+}
+static void menu_refresh(struct cp_app *a)
+{
+    if (a->menu_busy) return;
+    memset(&a->menu_edit,0,sizeof(a->menu_edit));a->menu_edit.operation=SH_EDIT_REFRESH;menu_begin(a);
+}
+static int taskbar_event(struct cp_app *a,const struct du_event *e)
+{
+    if (a->page!=CP_TASKBAR) return 0;
+    struct du_ui *u=a->ui;
+    if (e->id==CP_TASKBAR_TABS && e->type==DU_EV_SELECT && e->index>=0 && e->index<2) {
+        a->taskbar_tab=e->index;build(a);if (a->taskbar_tab) menu_refresh(a);return 1;
+    }
+    if (a->menu_busy) {
+        if (e->id>=CP_START_ADD && e->id<=CP_START_LIST) return 1;
+        return 0;
+    }
+    switch (e->id) {
+    case CP_START_LIST:
+        if (e->type==DU_EV_SELECT && e->index>=0 && (unsigned)e->index<a->menu.count) {
+            a->menu_selected=(unsigned)e->index;
+            for (unsigned k=0;k<a->menu.count;k++) a->menu_items[k].selected=k==a->menu_selected;
+        }return 1;
+    case CP_START_ADD:
+        if (e->type==DU_EV_ACTIVATE) du_file_dialog(u,CP_ADD_TARGET,0,"Create Shortcut - select a program or document","/","",NULL,NULL);
+        return 1;
+    case CP_ADD_TARGET:
+        if (e->type==DU_EV_DIALOG && !e->index && e->text) {
+            if (strlen(e->text)>=sizeof(a->menu_target)) { text(a,C_STATUS,"The target path is too long.");return 1; }
+            strcpy(a->menu_target,e->text);
+            du_input_box(u,CP_ADD_ARGS,"Create Shortcut","Arguments (leave empty for none):","");
+        }return 1;
+    case CP_ADD_ARGS:
+        if (e->type==DU_EV_DIALOG && !e->index && e->text) {
+            snprintf(a->menu_args,sizeof(a->menu_args),"%s",e->text);
+            du_input_box(u,CP_ADD_FOLDER,"Select Program Folder","Choose a folder in Start Menu/Programs (subfolders are allowed):",SH_PROGRAMS_FOLDER);
+        }return 1;
+    case CP_ADD_FOLDER:
+        if (e->type==DU_EV_DIALOG && !e->index && e->text) {
+            size_t prefix=strlen(SH_PROGRAMS_FOLDER);
+            if (strlen(e->text)>=sizeof(a->menu_folder) || strncmp(e->text,SH_PROGRAMS_FOLDER,prefix) || (e->text[prefix] && e->text[prefix]!='/') || strstr(e->text,"/../")) {
+                text(a,C_STATUS,"Choose a folder inside Start Menu/Programs.");return 1;
+            }
+            strcpy(a->menu_folder,e->text);
+            const char *name=strrchr(a->menu_target,'/');
+            du_input_box(u,CP_ADD_NAME,"Select a Title","Type a name for the shortcut:",name ? name+1 : a->menu_target);
+        }return 1;
+    case CP_ADD_NAME:
+        if (e->type==DU_EV_DIALOG && !e->index && e->text) {
+            if (strlen(e->text)>58 || !*e->text || strchr(e->text,'/') || strchr(e->text,'\\')) { text(a,C_STATUS,"Choose a shorter name without slashes.");return 1; }
+            memset(&a->menu_edit,0,sizeof(a->menu_edit));a->menu_edit.operation=SH_EDIT_ADD;
+            strcpy(a->menu_edit.path,a->menu_target);strcpy(a->menu_edit.destination,a->menu_folder);strcpy(a->menu_edit.name,e->text);menu_begin(a);
+        }return 1;
+    case CP_START_REMOVE:
+        if (e->type==DU_EV_ACTIVATE && a->menu_selected<a->menu.count) {
+            static const char *const buttons[]={"Remove","Cancel"};
+            du_message(u,CP_REMOVE_CONFIRM,"Remove Shortcuts/Folders","Remove the selected shortcut from the Start menu? The program is kept installed.",DU_DLG_ICON_QUESTION,buttons,2,1,1);
+        }return 1;
+    case CP_REMOVE_CONFIRM:
+        if (e->type==DU_EV_DIALOG && !e->index && a->menu_selected<a->menu.count) {
+            memset(&a->menu_edit,0,sizeof(a->menu_edit));a->menu_edit.operation=SH_EDIT_DELETE;
+            strcpy(a->menu_edit.path,a->menu.entries[a->menu_selected].path);menu_begin(a);
+        }return 1;
+    case CP_START_ADVANCED:
+        if (e->type==DU_EV_ACTIVATE && (!a->host.menu_explore || a->host.menu_explore(a->host.ctx,SH_START_FOLDER))) text(a,C_STATUS,"The Start Menu folder could not be opened.");
+        return 1;
+    case CP_START_CLEAR:
+        if (e->type==DU_EV_ACTIVATE) { memset(&a->menu_edit,0,sizeof(a->menu_edit));a->menu_edit.operation=SH_EDIT_CLEAR;menu_begin(a); }
+        return 1;
+    default:return 0;
+    }
+}
 static void event(struct du_ui *u, const struct du_event *e, void *user)
 {
     struct cp_app *a = user;
-    if (cp_pack_event(a, e)) return;
+    if (cp_pack_event(a, e) || taskbar_event(a,e)) return;
     int save = 0;
     if (e->type == DU_EV_KEY && e->key == DU_KEY_ESC) { cp_close(a); return; }
     if (e->type == DU_EV_KEY && e->key == DU_KEY_ENTER && a->page == CP_DISPLAY) {
@@ -762,6 +854,9 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
         break;
     case C_H24: if (e->type == DU_EV_ACTIVATE) { a->cfg.clock_24h = !a->cfg.clock_24h; save = 1; cp_tick(a); } break;
     case C_SECONDS: if (e->type == DU_EV_ACTIVATE) { a->cfg.clock_seconds = !a->cfg.clock_seconds; save = 1; cp_tick(a); } break;
+    case C_TASKBAR_TOP: if (e->type==DU_EV_CHANGE || e->type==DU_EV_ACTIVATE) { a->cfg.taskbar_top=!a->cfg.taskbar_top;save=1; }break;
+    case C_TASKBAR_AUTOHIDE: if (e->type==DU_EV_CHANGE || e->type==DU_EV_ACTIVATE) { a->cfg.taskbar_autohide=!a->cfg.taskbar_autohide;save=1; }break;
+    case C_START_SMALL: if (e->type==DU_EV_CHANGE || e->type==DU_EV_ACTIVATE) { a->cfg.start_small=!a->cfg.start_small;save=1; }break;
     case C_TASKBAR_CLOCK: if (e->type == DU_EV_CHANGE || e->type == DU_EV_ACTIVATE) { a->cfg.taskbar_clock = !a->cfg.taskbar_clock; save = 1; } break;
     case C_QUICK_LAUNCH: if (e->type == DU_EV_CHANGE || e->type == DU_EV_ACTIVATE) { a->cfg.quick_launch = !a->cfg.quick_launch; save = 1; } break;
     default: break;
@@ -1366,9 +1461,27 @@ static void build(struct cp_app *a)
     add(a, DU_LABEL, C_KEY_NOTE1, 24, 126, 452, 14, "The Run dialog uses the new layout at once; programs started");
     add(a, DU_LABEL, C_KEY_NOTE2, 24, 140, 452, 14, "afterwards receive it in CIUKI_KEYMAP.");
     } else if (a->page == CP_TASKBAR) {
-    add(a,DU_CHECKBOX,C_TASKBAR_CLOCK,24,52,452,24,"Show the clock in the taskbar");
-    add(a,DU_CHECKBOX,C_QUICK_LAUNCH,24,84,452,24,"Show Quick Launch (Show Desktop)");
-    add(a,DU_LABEL,1970,24,126,452,42,"Start menu pins and Folder Options are managed from their shell and Files views.");
+    a->taskbar_tabs[0]=(struct du_item){.text={"Taskbar Options"},.selected=!a->taskbar_tab};
+    a->taskbar_tabs[1]=(struct du_item){.text={"Start Menu Programs"},.selected=a->taskbar_tab==1};
+    w=add(a,DU_TABS,CP_TASKBAR_TABS,16,40,CP_WIDTH-32,32,"");w->items=a->taskbar_tabs;w->count=2;w->active=(unsigned)a->taskbar_tab;
+    if (!a->taskbar_tab) {
+        add(a,DU_CHECKBOX,C_TASKBAR_TOP,24,84,452,24,"Always on top");
+        add(a,DU_CHECKBOX,C_TASKBAR_AUTOHIDE,24,116,452,24,"Auto hide");
+        add(a,DU_CHECKBOX,C_START_SMALL,24,148,452,24,"Show small icons in Start menu");
+        add(a,DU_CHECKBOX,C_TASKBAR_CLOCK,24,180,452,24,"Show clock");
+        add(a,DU_CHECKBOX,C_QUICK_LAUNCH,24,212,452,24,"Show Quick Launch");
+    } else {
+        add(a,DU_LABEL,1978,24,80,CP_WIDTH-48,18,"Customize the Programs menu:");
+        add(a,DU_BUTTON,CP_START_ADD,24,106,88,24,"Add...");
+        add(a,DU_BUTTON,CP_START_REMOVE,120,106,88,24,"Remove...");
+        add(a,DU_BUTTON,CP_START_ADVANCED,216,106,100,24,"Advanced...");
+        if (a->menu_selected>=a->menu.count) a->menu_selected=0;
+        for (unsigned k=0;k<a->menu.count;k++) a->menu_items[k]=(struct du_item){.text={a->menu.entries[k].label,a->menu.entries[k].path},.selected=k==a->menu_selected};
+        w=add(a,DU_LISTVIEW,CP_START_LIST,24,142,CP_WIDTH-48,124,"");w->items=a->menu_items;w->count=a->menu.count;w->active=a->menu_selected;list_style(w,"Shortcut");
+        w->column_count=2;w->columns[0]=(struct du_column){"Shortcut",160,0};w->columns[1]=(struct du_column){"Location",CP_WIDTH-224,0};
+        add(a,DU_LABEL,1979,24,282,CP_WIDTH-48,18,"Documents menu - clear the list of recently opened documents:");
+        add(a,DU_BUTTON,CP_START_CLEAR,24,308,88,24,"Clear");
+    }
     } else if (a->page == CP_SOUNDS) {
     /* Sounds */
     add(a, DU_LABEL, C_VOL_L, 24, 44, 180, 14, "Master &volume:");

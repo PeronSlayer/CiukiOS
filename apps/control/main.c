@@ -43,6 +43,10 @@ struct cp_main { struct cp_network_worker network_worker; struct cp_app app; str
     struct ciuki_display_engine_info generic_engine;
     struct ciuki_accel_info engine; int engine_ok; uint64_t engine_next; int title_page;
     uint32_t joystick_serial;
+    struct cp_job menu_job;
+    struct cp_menu_result menu_result;
+    struct sh_edit_request menu_edit;
+    char menu_args[1024];
     struct cp_job game_job;
     struct cp_game_result game_result;
     int saved_w, saved_h;
@@ -387,6 +391,7 @@ static int game_begin(void *ctx,unsigned game,const struct game_ports_settings *
 static int game_poll_result(void *ctx,struct cp_game_result *r)
 {
     struct cp_main *m=ctx;if (!cp_job_ready(&m->game_job)) return 0;
+    cp_job_finish(&m->menu_job);
     cp_job_finish(&m->game_job);*r=m->game_result;return 1;
 }
 static int joystick_request(void *ctx, const struct ciuki_joystick_control *c)
@@ -563,7 +568,7 @@ static void idle(void *arg)
     } else if (m->assets_requested && !m->assets_ready && !m->assets.started && m->window.configured && !m->ui.dirty && m->ui.frame_count) {
         if (cp_job_start(&m->assets,read_assets,m,notify_completion,m)) m->assets_ready=1;
     }
-    if (m->window.configured && m->ui.frame_count) cp_fonts_poll(&m->app);
+    if (m->window.configured && m->ui.frame_count) { cp_fonts_poll(&m->app);cp_menu_poll(&m->app); }
     if (m->title_page!=m->app.page) {
         m->title_page=m->app.page;
         const char *title=m->app.page==CP_DISPLAY ? "Display Properties" :
@@ -699,6 +704,7 @@ static int program_install(void *ctx,const char *path)
     memcpy(request.data+16+t,path,n);
     int result=du_window_queue(&m->window,&request);if(!result)m->install_serial=m->serial;return result;
 }
+#include "start_menu_io.inc"
 static uint64_t control_deadline(struct cp_main *m)
 {
     uint64_t next=du_next_deadline(&m->ui);
@@ -764,6 +770,7 @@ int main(int argc, char **argv)
     m->writer.notify=notify_completion; m->writer.notify_ctx=m;
     m->writer_started=!cfg_writer_start(&m->writer,CFG_FILE,CFG_DIR "/desktop.cpl");
     struct cp_host *h = &m->app.host;
+    h->menu_begin=menu_begin_io;h->menu_poll=menu_poll_io;h->menu_explore=menu_explore;
     h->pack_scan=pack_scan; h->pack_preview=pack_preview;
     h->pack_install=pack_install; h->pack_remove=pack_remove;
     h->startup_list=startup_list; h->startup_enable=startup_enable;
@@ -806,6 +813,7 @@ int main(int argc, char **argv)
     if (game) cp_game_open(&m->app,game);
     int r = control_run(m);
     cp_decoder_stop();
+    cp_job_finish(&m->menu_job);
     cp_job_finish(&m->game_job);
     cp_job_finish(&m->program_scan); free(m->program_next);
     cp_job_finish(&m->assets);

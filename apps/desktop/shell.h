@@ -8,6 +8,7 @@
 #ifndef CIUKI_DESKTOP_SHELL_H
 #define CIUKI_DESKTOP_SHELL_H
 #include "settings.h"
+#include "customize.h"
 #include "shell_link.h"
 #include "settings_catalog.h"
 #include "folder.h"
@@ -16,8 +17,8 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <ciuki/abi.h>
-#define SH_LEVELS 3
-#define SH_ITEMS 20
+#define SH_LEVELS 8
+#define SH_ITEMS 32
 #define SH_ICONS (FM_ENTRIES + 4 + (int)DESK_LINKS)
 #define SH_TRAY_ICON_SIZE 16
 #define SH_TRAY_GAP 4
@@ -35,7 +36,7 @@ struct sh_notification {
     uint64_t started, expires;
     int active, icon, action, balloon, slide;
 };
-#define SH_START_ROW 30
+#define SH_START_ROW 36
 #define SH_SUB_ROW 22
 #define SH_BANNER 24
 #define SH_SEPARATOR 8
@@ -48,7 +49,7 @@ enum sh_menu_kind { SH_MENU_NONE, SH_MENU_START, SH_MENU_PROGRAMS, SH_MENU_DEVEL
                     SH_MENU_SETTINGS, SH_MENU_HELP, SH_MENU_DESKTOP, SH_MENU_ICON, SH_MENU_TASK, SH_MENU_ACCESSORIES,
                     SH_MENU_GAMES, SH_MENU_NEW, SH_MENU_OPEN_WITH, SH_MENU_TRAY_SETTINGS,
                     SH_MENU_SYSTEM_TOOLS, SH_MENU_SETTINGS_CATEGORY, SH_MENU_SETTINGS_LAST = SH_MENU_SETTINGS_CATEGORY + CP_CATEGORIES - 1,
-                    SH_MENU_DRAG, SH_MENU_TASKBAR };
+                    SH_MENU_DRAG, SH_MENU_TASKBAR, SH_MENU_TOOLBARS, SH_MENU_START_ITEM, SH_MENU_TOOLBAR_CONTEXT, SH_MENU_TOOLBAR_ALL, SH_MENU_FOLDER_BASE=100 };
 enum sh_action { SH_ACT_NONE, SH_ACT_SUBMENU, SH_ACT_LAUNCH, SH_ACT_ABOUT, SH_ACT_RUN, SH_ACT_SHUTDOWN,
                  SH_ACT_DOCUMENT, SH_ACT_CONTROL, SH_ACT_KEYS, SH_ACT_ARRANGE, SH_ACT_ICON_OPEN,
                  SH_ACT_ICON_PROPERTIES, SH_ACT_REFRESH, SH_ACT_TASK_RESTORE, SH_ACT_TASK_MINIMIZE,
@@ -57,19 +58,20 @@ enum sh_action { SH_ACT_NONE, SH_ACT_SUBMENU, SH_ACT_LAUNCH, SH_ACT_ABOUT, SH_AC
                  SH_ACT_DRAG /* fx-19 right-drag menu: arg is the DROPEFFECT, 0 Cancel */,
                  /* G4 taskbar menu */
                  SH_ACT_CASCADE, SH_ACT_TILE_H, SH_ACT_TILE_V, SH_ACT_MINIMIZE_ALL, SH_ACT_ARRANGE_UNDO,
-                 SH_ACT_TASKBAR_PROPERTIES };
+                 SH_ACT_TASKBAR_PROPERTIES, SH_ACT_FOLDER_OPTIONS, SH_ACT_SHELL_ITEM, SH_ACT_TOOLBAR, SH_ACT_ADDRESS, SH_ACT_NEW_TOOLBAR,
+                 SH_ACT_START_OPEN, SH_ACT_START_DELETE, SH_ACT_START_RENAME, SH_ACT_START_EXPLORE, SH_ACT_TOOLBAR_EXPLORE, SH_ACT_FOLDER_EXPLORE, SH_ACT_START_PROPERTIES, SH_ACT_FIND };
 #define SH_ITEM_SEPARATOR 1u
 #define SH_ITEM_DISABLED 2u
 #define SH_ITEM_DEFAULT 4u
 /* mark: 1 + the byte of label that is the underlined access key (0 none). */
 struct sh_item { char label[44]; const char *icon; uint8_t action, flags, mark; int16_t arg; };
-struct sh_menu { int kind, count, hot, row_h, icon; struct desk_box box; struct sh_item items[SH_ITEMS]; };
+struct sh_menu { int kind, count, hot, row_h, icon,scroll,scroll_max; struct desk_box box; struct sh_item items[SH_ITEMS]; };
 /* Desktop shortcuts. action: SH_ACT_LAUNCH with a program name and an
  * optional argument (Files with a folder), or a built-in action. */
 struct sh_icon { char label[FM_NAME], program[24], argument[FM_PATH]; const char *icon; int action, ciuki, selected; struct desk_box box; };
 /* fx-19 shell drag session (DoDragDrop): the desktop owns the pointer from
  * the drag threshold until the drop, Esc or a right-drag menu choice. */
-enum { SH_DROP_NONE, SH_DROP_DESKTOP, SH_DROP_ICON, SH_DROP_TRASH, SH_DROP_FILES, SH_DROP_APP, SH_DROP_TASK };
+enum { SH_DROP_NONE, SH_DROP_DESKTOP, SH_DROP_ICON, SH_DROP_TRASH, SH_DROP_FILES, SH_DROP_APP, SH_DROP_TASK, SH_DROP_START, SH_DROP_QUICK, SH_DROP_TOOLBAR };
 #define SH_DRAG_IMAGE_ITEMS 8
 struct sh_dnd {
     int active, menu;                 /* menu: right-drag menu waits for a choice */
@@ -83,7 +85,8 @@ struct sh_dnd {
     int status_target; uint32_t status_serial; /* DRAG_STATUS of the current Files target */
     int32_t start_x, start_y, menu_x, menu_y;
     char destination[FM_PATH];
-    uint64_t hover_ns, repeat_ns;
+    uint64_t hover_ns, repeat_ns,start_hover_ns;
+    int opened_start;
     int hover_task, drop_index;
     int icons[SH_DRAG_IMAGE_ITEMS]; unsigned icon_count;   /* desktop source: dragged icons drawn */
     struct desk_box image;            /* drag image bounds as last painted */
@@ -133,7 +136,7 @@ struct desk_shell {
     int switcher, switch_pick, switch_count, switch_list[16];
     int about_tab, about_scroll, shutdown_choice, message_kind;
     int confirm;                    /* G2: SH_CONFIRM_*, the message window asks Yes or No */
-    char run_text[160]; unsigned run_length;
+    char run_text[CFG_PATH_MAX]; unsigned run_length;
     char message_title[48], message_text[320];
     unsigned modifiers;             /* DU_SHIFT | DU_CTRL | DU_ALT from the raw key stream */
     int logo_down, alt_routed, alt_used, alt_code;
@@ -143,11 +146,21 @@ struct desk_shell {
      * slot or DESK_CLIENTS for the Start button, task_return the window id that
      * had the focus before; start_keyboard: the Start menu was opened by key. */
     unsigned logo_keys; uint16_t chord[4];
+    struct sh_folder_snapshot *custom;
+    struct sh_edit_request edit;
+    int custom_refresh, custom_item, custom_menu_root, custom_drag, custom_dragging;
+    int custom_press_x, custom_press_y, prompt_mode;
+    char custom_open[CFG_PATH_MAX],prompt_path[CFG_PATH_MAX];
+    unsigned recent_serial;
+    int address_focus;unsigned address_length;char address_text[CFG_PATH_MAX];
+    int bar_drag, bar_resize, bar_hidden, bar_raised;
+    int bar_origin_edge, bar_origin_size, bar_press_x, bar_press_y;
+    uint64_t bar_leave_ns;
     int taskbar_key, task_pick, start_keyboard, start_focus_shown; uint32_t task_return;
     int32_t motion_rx, motion_ry;   /* sub-pixel remainders of the mouse speed */
     /* Requests served by desktop.c after each input batch. */
     int want_save, want_wallpaper, want_mixer, want_power, want_reload, want_programs;
-    char want_run[192];
+    char want_run[CFG_PATH_MAX];
     /* Wallpaper cache: full screen, rebuilt when settings or size change. */
     uint32_t *wall; uint32_t wall_w, wall_h; int wall_valid;
     uint32_t *background; int background_valid, background_selected, background_outline;
@@ -162,10 +175,14 @@ struct desk_shell {
 };
 struct desktop;
 struct desk_client;
+const char *desk_program_menu_label(const char *);
 void desk_shell_reset(struct desktop *);
 void desk_shell_apply(struct desktop *);
 void desk_shell_background(struct desktop *, struct desk_box clip);
 void desk_shell_topbar(struct desktop *, struct desk_box clip);
+void desk_shell_bar(struct desktop *, struct desk_box);
+void desk_shell_geometry(struct desktop *);
+void desk_shell_custom_updated(struct desktop *);
 void desk_shell_overlay(struct desktop *, struct desk_box clip);
 int desk_shell_button(struct desktop *, int button, int down);
 void desk_shell_motion(struct desktop *);

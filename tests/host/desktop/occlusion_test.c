@@ -41,7 +41,8 @@ static void visible_oracle(void)
         struct desk_box b=desk_content(c);
         if (b.w!=(int)c->info.width || b.h!=(int)c->info.height || c->gfx_width) continue;
         for (int y=b.y;y<b.y+b.h;y++) for (int x=b.x;x<b.x+b.w;x++) {
-            if (x<0 || y<DESK_BAR || x>=(int)d.width || y>=(int)d.height-(d.shell ? DESK_BAR : 0) ||
+            if (x<0 || y<DESK_BAR || x>=(int)d.width || y>=(int)d.height ||
+                (d.shell && desk_taskbar_front(&d) && desk_contains(desk_taskbar(&d),x,y)) ||
                 desk_contains(pointer,x,y)) continue;
             int covered=0;
             for (int j=0;j<DESK_CLIENTS && !covered;j++) if (j!=i && d.clients[j].window && !d.clients[j].minimized &&

@@ -102,6 +102,10 @@ void desk_focus(struct desktop *d, int i)
     i=desk_modal_target(d,i);
     if (d->power.state && i>=0 && i<DESK_CLIENTS && d->clients[i].internal!=DESK_INTERNAL_POWER) return;
     if (i >= 0 && (i >= DESK_CLIENTS || !d->clients[i].window || d->clients[i].minimized)) return;
+    if (i>=0 && d->sh.address_focus) { d->sh.address_focus=0;desk_damage_add(&d->damage,desk_taskbar(d),d->width,d->height); }
+    if (i>=0 && d->sh.bar_raised && !desk_contains(desk_taskbar(d),d->mouse_x,d->mouse_y)) {
+        d->sh.bar_raised=0;desk_damage_add(&d->damage,desk_taskbar(d),d->width,d->height);
+    }
     if (i == d->focus) return;
     if (i >= 0 && d->shell && d->sh.taskbar_key) desk_shell_taskbar_leave(d);   /* a window took the focus from the taskbar */
     if (d->v3_lease_state) desk_v3_revoke(d);
@@ -140,7 +144,7 @@ int desk_contains(struct desk_box b, int32_t x, int32_t y)
 { return x >= b.x && y >= b.y && (int64_t)x < (int64_t)b.x+b.w && (int64_t)y < (int64_t)b.y+b.h; }
 int desk_hit(const struct desktop *d, int32_t x, int32_t y)
 {
-    if (d->shell && desk_start_contains(d,x,y)) return -1;
+    if (d->shell && (desk_start_contains(d,x,y) || (desk_taskbar_front(d) && desk_contains(desk_taskbar(d),x,y)))) return -1;
     int best = -1;
     for (int i = 0; i < DESK_CLIENTS; i++) if (d->clients[i].window && !d->clients[i].minimized &&
         (desk_contains(d->clients[i].frame, x, y) || desk_resize_hit(&d->clients[i], x, y)) &&
@@ -332,6 +336,11 @@ static void input(struct desktop *d, const struct ciuki_input_event *in)
          * check needs one whole-screen present, so distrust the scanout. */
         d->scanout_valid = 0;
         if (d->keyboard_geometry) desk_geometry_end(d,1);
+        if (d->shell && d->sh.bar_drag) {
+            d->sh.cfg.taskbar_edge=d->sh.bar_origin_edge;d->sh.cfg.taskbar_size=d->sh.bar_origin_size;
+            d->sh.bar_drag=d->sh.bar_resize=0;desk_shell_geometry(d);
+        }
+        d->sh.custom_drag=-1;d->sh.custom_dragging=0;d->sh.address_focus=0;
         if (d->shell && d->sh.dnd.active) desk_shell_drag_cancel(d);   /* fx-19: a cut input stream ends a drag */
         release(d, &e); d->drag = -1; d->resize_edges=0;
         if (d->shell) {

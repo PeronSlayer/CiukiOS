@@ -17,6 +17,8 @@
 #define CFG_PATH_MAX 256
 #define CFG_RECENT_MAX 15
 #define CFG_EXTRA_MAX 16384
+#define CFG_TOOLBARS 4
+enum { CFG_BAR_BOTTOM, CFG_BAR_TOP, CFG_BAR_LEFT, CFG_BAR_RIGHT };
 /* Wallpaper placement (wallpaper_mode). The values are the order of
  * cfg_mode_names; new modes are appended so existing files keep parsing.
  * Fill: uniform scale that covers the area, centred crop of the overflow. */
@@ -34,6 +36,9 @@ struct ciuki_settings {
     uint32_t desktop_color;         /* 0xRRGGBB behind and around the wallpaper */
     int clock_24h, clock_seconds, desktop_icons;
     int taskbar_clock, quick_launch;
+    int taskbar_top, taskbar_autohide, start_small, taskbar_edge, taskbar_size;
+    int toolbar_address, toolbar_links, toolbar_desktop;
+    char toolbar_folder[CFG_TOOLBARS][CFG_PATH_MAX];
     int mouse_speed;                /* 1..10, 5 = one screen pixel per mouse count */
     int double_click_ms;            /* 200..900 */
     uint16_t display_mode;         /* confirmed VBE mode id; 0 keeps loader default */

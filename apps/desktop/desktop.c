@@ -50,9 +50,21 @@
 #include <time.h>
 #include <unistd.h>
 static int screen_control(struct ciuki_screen_control *q)
-{ return (int32_t)CU_CALL(DISPLAY,CIUKI_DISPLAY_SCREEN,CU_PTR(q),0,0,0,0); }
+{
+#ifdef __i386__
+    return (int32_t)CU_CALL(DISPLAY,CIUKI_DISPLAY_SCREEN,CU_PTR(q),0,0,0,0);
+#else
+    (void)q;return -ENOSYS;
+#endif
+}
 static int monitor_power(int state)
-{ return (int32_t)CU_CALL(DISPLAY,CIUKI_DISPLAY_DPMS,(uint32_t)state,0,0,0,0); }
+{
+#ifdef __i386__
+    return (int32_t)CU_CALL(DISPLAY,CIUKI_DISPLAY_DPMS,(uint32_t)state,0,0,0,0);
+#else
+    (void)state;return -ENOSYS;
+#endif
+}
 static uint64_t monotonic(void)
 {
     struct timespec t;
@@ -1029,11 +1041,13 @@ static int settings_save(struct desktop *d)
 static int media_busy(void);
 static void media_stop(void);
 static void master_candidate_latest(struct desktop *d);
+static int custom_busy(void);
+static void custom_stop(void);
 static int shutdown_wait(struct desktop *d)
 {
     master_candidate_latest(d); /* fx-9b: a press after the last mixer poll too */
     if (master_candidate_save(d->mixer_fd)) return 0; /* fx-9b: the last key change first */
-    if (media_busy()) return 0;
+    if (custom_busy() || media_busy()) return 0;
     if (desk_autoplay_busy(d)) return 0;
     if (desk_folder_busy(d)) return 0;
     if (wallpaper_worker_started && desk_wall_worker_busy(&wallpaper_worker)) return 0;
@@ -1369,6 +1383,7 @@ static void observers_prepare(struct desktop *d)
 }
 static void observers_close(struct desktop *d)
 {
+    custom_stop();
     media_stop();
     observer_close(&d->media_fd);
     observer_close(&d->network_fd);
@@ -1878,6 +1893,8 @@ static void power_prepare(struct desktop *d)
     }
 }
 /* Serves the requests that shell.c raised while handling input. */
+int ciuki_win32_shell_launch(const struct desk_launch_record *);
+#include "customize_runtime.inc"
 static void shell_service(struct desktop *d)
 {
     struct desk_shell *sh=&d->sh;
@@ -1905,8 +1922,13 @@ static void shell_service(struct desktop *d)
         desk_shell_notify_error(d,"Settings not saved",save_error);
     }
     if (sh->gate) { sh->want_save=sh->want_mixer=sh->want_power=0; sh->want_reload&=~1; sh->want_run[0]=0; }
-    if (d->power.state) { desk_power_tick(d); return; }
+    if (d->power.state) {
+        custom_service(d);
+        if (sh->want_save && !custom_busy()) { sh->want_save=0;if (settings_save(d)) sh->want_save=1; }
+        desk_power_tick(d);return;
+    }
     desktop_wait("folder-service"); desk_folder_service(d);
+    custom_service(d);
     if (sh->want_power) {
         int action=sh->want_power; sh->want_power=0;
         if (d->session.state) return;   /* G3: the programs are being asked already */
@@ -1940,11 +1962,14 @@ static void shell_service(struct desktop *d)
             settings_reload_wallpaper=0;
         } else {
             int old_tray_width = desk_shell_tray_box(d).w;
+            int old_bar_edge=sh->cfg.taskbar_edge,old_bar_size=sh->cfg.taskbar_size;
+            int old_bar_top=sh->cfg.taskbar_top,old_bar_hide=sh->cfg.taskbar_autohide,old_start_small=sh->cfg.start_small;
             char old_wall[CFG_PATH_MAX], old_theme[sizeof(sh->cfg.theme)];
             memcpy(old_wall,sh->cfg.wallpaper,sizeof(old_wall)); memcpy(old_theme,sh->cfg.theme,sizeof(old_theme));
             int old_mode=sh->cfg.wallpaper_mode, old_icons=sh->cfg.desktop_icons;
             uint32_t old_colour=sh->cfg.desktop_color;
             uint16_t confirmed = sh->cfg.display_mode;
+            sh->recent_serial++;
             cfg_defaults(&sh->cfg);
             int rejected=reload_error ? 0 : cfg_parse(&sh->cfg,reload_text,reload_size);
             if (rejected) snprintf(d->notice,sizeof(d->notice),"desktop.cfg: %d line(s) ignored",rejected);
@@ -1964,6 +1989,10 @@ static void shell_service(struct desktop *d)
                 }
                 if (image_changed) wallpaper_load(d); else wallpaper_update(d);
             }
+            if (old_bar_edge!=sh->cfg.taskbar_edge || old_bar_size!=sh->cfg.taskbar_size ||
+                old_bar_top!=sh->cfg.taskbar_top || old_bar_hide!=sh->cfg.taskbar_autohide) desk_shell_geometry(d);
+            else if (old_start_small!=sh->cfg.start_small) desk_shell_custom_updated(d);
+            sh->custom_refresh=1;
             desk_shell_tray_damage(d,old_tray_width);
             settings_reload_wallpaper=0;
         }
@@ -2376,6 +2405,12 @@ static void shell_setup(struct desktop *d, int gate)
         settings_writer.notify=d->wake; settings_writer.notify_ctx=d->wake_ctx;
         settings_writer.run_job=mixer_job_run;
         settings_writer_started=!cfg_writer_start(&settings_writer,CFG_FILE,CFG_DIR "/desktop.new");
+#ifdef __i386__
+        /* The native bootstrap owns file-worker lifetime. Host models attach
+         * storage adapters separately and never write the guest's root paths. */
+        int custom_error=custom_prepare(d);
+        if (custom_error) desk_shell_notify_error(d,"Shell worker unavailable",custom_error);
+#endif
         int autoplay_error=desk_autoplay_prepare(d);
         if (autoplay_error) desk_shell_notify_error(d,"AutoPlay worker unavailable",autoplay_error);
         audio_shutdown_wait=d->sound_shutdown; d->sound_shutdown=shutdown_wait;
