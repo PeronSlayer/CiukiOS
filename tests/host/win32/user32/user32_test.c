@@ -302,6 +302,7 @@ static void lease_event(DWORD id, DWORD generation, DWORD state, DWORD w,
   for (UINT i = 0; i < 18; i++)
     desk_put32(b + i * 4, words[i]);
 }
+#include "g5_clipboard_fixture.h"
 DWORD w32r_gate(DWORD call, DWORD a, DWORD b, DWORD c) {
   (void)a;
   (void)c;
@@ -324,6 +325,7 @@ DWORD w32r_gate(DWORD call, DWORD a, DWORD b, DWORD c) {
     CHECK(outgoing_count < 2048);
     struct ciuki_message *sent = (void *)(uintptr_t)b;
     outgoing[outgoing_count++] = *sent;
+    if (sent->data[1]==DESK_V3_CLIPBOARD) { fixture_clipboard(sent); return 0; }
     if (sent->data[1] == DESK_V3_LEASE && sent->data[1] != reject_opcode) {
       DWORD flags = desk_get32(sent->data + 16);
       lease_event(desk_get32(sent->data + 8), desk_get32(sent->data + 12),
@@ -365,6 +367,11 @@ DWORD w32r_gate(DWORD call, DWORD a, DWORD b, DWORD c) {
       }
     return (DWORD)-9;
   }
+  if (call == CIUKI_SYS_SURFACE_MAP) {
+    for (UINT i=0;i<64;i++) if (surfaces[i].fd==(int)a) return U32_PTR(surfaces[i].s.pixels);
+    return (DWORD)-9;
+  }
+  if (call == CIUKI_SYS_MUNMAP) return 0;
   if (call == CIUKI_SYS_W32 && host_modules) {
     struct ciuki_w32_display_args *r = (void *)(uintptr_t)a;
     if (r->header.operation != W32_DISPLAY)
@@ -404,8 +411,10 @@ DWORD w32r_gate(DWORD call, DWORD a, DWORD b, DWORD c) {
     info->modes[1] = (struct ciuki_display_mode){2, 800, 600, 32, 3200, 1, 1};
     return 0;
   }
-  if (call == CIUKI_SYS_CLOSE)
+  if (call == CIUKI_SYS_CLOSE) {
+    for (UINT i=0;i<64;i++) if (surfaces[i].fd==(int)a && clip_temp[i]) { clip_temp[i]=0; drop(&surfaces[i].s); }
     return 0;
+  }
   if (call == CIUKI_SYS_SLEEP_MS) {
     ui_kernel_pause(a);
     return 0;
@@ -474,8 +483,21 @@ static struct {
 } trace[2048];
 static UINT traces;
 static int nesting;
+static int minmax_set;
 static int keep_on_close; /* G3: WM_CLOSE answered by a cancelled "Save changes?" */
+static unsigned g5_render_count,g5_all_count;
+static HWND g5_all_window;
 static LRESULT W32API procedure(HWND h, UINT m, WPARAM wp, LPARAM lp) {
+  if (m==WM_RENDERALLFORMATS && h==g5_all_window) {
+    CHECK(OpenClipboard(h));
+    CHECK(GetClipboardOwner()==h);
+    HANDLE text=GlobalAlloc(2,5); CHECK(text); memcpy(GlobalLock(text),"all!",5);
+    CHECK(SetClipboardData(CF_TEXT,text)==text); CHECK(CloseClipboard()); g5_all_count++; return 0;
+  }
+  if (m==0x305) {
+    HANDLE text=GlobalAlloc(2,6); CHECK(text); memcpy(GlobalLock(text),"later",6);
+    CHECK(SetClipboardData((UINT)wp,text)==text); g5_render_count++; return 0;
+  }
   CHECK(traces < 2048);
   trace[traces].h = h;
   trace[traces].m = m;
@@ -505,6 +527,12 @@ static LRESULT W32API procedure(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     const COPYDATASTRUCT *c = (void *)lp;
     CHECK(c->dwData == 7 && c->cbData == 3 && !memcmp(c->lpData, "hi", 3));
     return 66;
+  }
+  if (m == WM_GETMINMAXINFO && minmax_set) {
+    MINMAXINFO *info = (MINMAXINFO *)lp;
+    info->ptMinTrackSize = (POINT){200, 100};
+    info->ptMaxTrackSize = (POINT){500, 400};
+    return 0;
   }
   if (m == WM_PAINT) {
     PAINTSTRUCT ps;
@@ -786,6 +814,50 @@ static void test_clipboard(void) {
   CHECK(OpenClipboard(windows[0]));
   CHECK(EmptyClipboard());
   CHECK(CloseClipboard());
+  /* A native producer uses the very same store as USER. */
+  DWORD sequence=GetClipboardSequenceNumber();
+  struct desk_clip_wire request={.op=DESK_CLIP_OPEN},reply; void *data=NULL;
+  CHECK(!clip_request(&fixture_clip_store,999,&request,NULL,&reply,&data));
+  request.op=DESK_CLIP_EMPTY; CHECK(!clip_request(&fixture_clip_store,999,&request,NULL,&reply,&data));
+  static const uint8_t native_text[]={'n',0,'a',0,'t',0,'i',0,'v',0,'e',0,0xe8,0,0,0};
+  request=(struct desk_clip_wire){.op=DESK_CLIP_PUT,.format=13,.bytes=sizeof(native_text)};
+  CHECK(!clip_request(&fixture_clip_store,999,&request,native_text,&reply,&data));
+  request=(struct desk_clip_wire){.op=DESK_CLIP_CLOSE}; CHECK(!clip_request(&fixture_clip_store,999,&request,NULL,&reply,&data));
+  CHECK(GetClipboardSequenceNumber()>sequence && OpenClipboard(windows[0]));
+  HANDLE native=GetClipboardData(CF_TEXT); CHECK(native && !strcmp(GlobalLock(native),"native\xe8")); CHECK(CloseClipboard());
+  /* Registered formats are mapped by name across independent ID tables. */
+  UINT registered=RegisterClipboardFormatA("G5 format"); CHECK(registered>=0xc000);
+  CHECK(OpenClipboard(windows[0]) && EmptyClipboard());
+  HANDLE bytes=GlobalAlloc(2,4); memcpy(GlobalLock(bytes),"g5!",4);
+  CHECK(SetClipboardData(registered,bytes)==bytes && IsClipboardFormatAvailable(registered));
+  CHECK(CloseClipboard() && OpenClipboard(windows[0]));
+  HANDLE got=GetClipboardData(registered); CHECK(got && !strcmp(GlobalLock(got),"g5!"));
+  CHECK(CloseClipboard());
+  CHECK(OpenClipboard(windows[0]) && EmptyClipboard());
+  SetLastError(0); CHECK(!SetClipboardData(CF_TEXT,0) && !GetLastError()); CHECK(CloseClipboard());
+  peer=2; ui_kernel_schedule(schedule_peer);
+  ui_kernel_switch(2); CHECK(OpenClipboard(windows[2]));
+  HANDLE delayed=GetClipboardData(CF_TEXT); CHECK(delayed && !strcmp(GlobalLock(delayed),"later") && g5_render_count==1);
+  CHECK(CloseClipboard()); ui_kernel_switch(0); ui_kernel_schedule(0); peer=1;
+  CHECK(OpenClipboard(windows[0]) && EmptyClipboard() && CloseClipboard());
+  UINT promised=RegisterClipboardFormatA("G5 delayed"); CHECK(promised>=0xc000);
+  CHECK(OpenClipboard(windows[0]) && EmptyClipboard());
+  SetLastError(0); CHECK(!SetClipboardData(promised,0) && !GetLastError());
+  CHECK(!SetClipboardData(CF_TEXT,0) && !GetLastError()); CHECK(CloseClipboard());
+  CHECK(OpenClipboard(windows[0]));
+  CHECK(GetClipboardData(promised) && GetClipboardData(CF_TEXT) && !u32_clip_has_delayed());
+  CHECK(g5_render_count==3 && EmptyClipboard() && CloseClipboard());
+  g5_all_window=CreateWindowExA(0,"USER fixture","Clipboard owner",WS_VISIBLE,50,50,100,100,0,0,0,0);
+  CHECK(g5_all_window && OpenClipboard(g5_all_window) && EmptyClipboard());
+  SetLastError(0); CHECK(!SetClipboardData(CF_TEXT,0) && !GetLastError()); CHECK(CloseClipboard());
+  CHECK(DestroyWindow(g5_all_window) && g5_all_count==1 && !GetClipboardOwner());
+  g5_all_window=0;
+  CHECK(OpenClipboard(windows[0])); HANDLE all=GetClipboardData(CF_TEXT);
+  CHECK(all && !strcmp(GlobalLock(all),"all!")); CHECK(EmptyClipboard() && CloseClipboard());
+  printf("TRACE G5 WM_RENDERALLFORMATS owner destruction preserves rendered bytes and releases original blocks\n");
+  struct w32r_reply retired;
+  CHECK(!u32_directory(W32R_CLIP_GET,0,u32_tid(),CF_TEXT,0,"",0,0,&retired,0,0) && GetLastError()==120);
+  printf("TRACE G5 native to Win32 text, shared sequence, registered formats, cross-thread delayed WM_RENDERFORMAT, retired second store refused\n");
   printf("TRACE clipboard ownership copied UTF-16 and cross-process text\n");
 }
 static UINT hook_order[8], hook_calls, timer_calls, enum_count;
@@ -969,6 +1041,144 @@ static void test_order(void) {
          "cycle refusal cross-thread owned destruction\n");
 }
 
+static RECT local_rect(HWND h) { return u32_window(h)->rect; }
+/* G4: CascadeWindows, TileWindows and ArrangeIconicWindows (Microsoft Learn,
+ * winuser.h): explicit lists keep their order, MDITILE_ZORDER follows the
+ * stacking, disabled/minimised/tool windows are left alone, a maximised
+ * window is restored, minimised children line up along the bottom. */
+static void test_arrange(void) {
+  HWND p = CreateWindowExA(0, "USER fixture", "arrange", WS_VISIBLE | WS_CAPTION,
+                           0, 0, 400, 300, 0, 0, 0, 0);
+  CHECK(p);
+  HWND k[3];
+  for (UINT i = 0; i < 3; i++) {
+    k[i] = CreateWindowExA(0, "USER fixture", "kid", WS_CHILD | WS_VISIBLE, 0,
+                           0, 50, 50, p, (HANDLE)(uintptr_t)(20 + i), 0, 0);
+    CHECK(k[i]);
+  }
+  RECT area = {0, 0, 400, 200}, r0, r1, r2;
+  CHECK(CascadeWindows(p, 0, &area, 3, k) == 3);
+  r0 = local_rect(k[0]); r1 = local_rect(k[1]); r2 = local_rect(k[2]);
+  CHECK(r0.left == 0 && r0.top == 0 && r0.right == 300 && r0.bottom == 150);
+  CHECK(r1.left == 24 && r1.top == 24 && r2.left == 48 && r2.top == 48);
+  CHECK(r2.right - r2.left == 300 && r2.bottom - r2.top == 150);
+  /* side by side, stacked, and the stacking decides with MDITILE_ZORDER */
+  CHECK(TileWindows(p, MDITILE_VERTICAL, &area, 3, k) == 3);
+  r0 = local_rect(k[0]); r1 = local_rect(k[1]); r2 = local_rect(k[2]);
+  CHECK(r0.left == 0 && r0.right == 133 && r1.left == 133 && r1.right == 266 &&
+        r2.left == 266 && r2.right == 400 && r0.top == 0 && r0.bottom == 200);
+  CHECK(TileWindows(p, MDITILE_HORIZONTAL, &area, 3, k) == 3);
+  r0 = local_rect(k[0]); r1 = local_rect(k[1]); r2 = local_rect(k[2]);
+  CHECK(r0.top == 0 && r0.bottom == 66 && r1.top == 66 && r1.bottom == 133 &&
+        r2.top == 133 && r2.bottom == 200 && r0.left == 0 && r0.right == 400);
+  CHECK(SetWindowPos(k[2], HWND_TOP, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE));
+  CHECK(TileWindows(p, MDITILE_VERTICAL | MDITILE_ZORDER, &area, 3, 0) == 3);
+  CHECK(local_rect(k[2]).left == 0);   /* the window in front takes the first cell */
+  /* four and five windows fill a grid; the short last line shares its width */
+  HWND more[2];
+  for (UINT i = 0; i < 2; i++)
+    more[i] = CreateWindowExA(0, "USER fixture", "more", WS_CHILD | WS_VISIBLE,
+                              0, 0, 50, 50, p, (HANDLE)(uintptr_t)(30 + i), 0, 0);
+  HWND five[5] = {k[0], k[1], k[2], more[0], more[1]};
+  CHECK(TileWindows(p, MDITILE_VERTICAL, &area, 5, five) == 5);
+  r0 = local_rect(five[0]); r2 = local_rect(five[2]);
+  RECT r3 = local_rect(five[3]), r4 = local_rect(five[4]);
+  CHECK(r0.right == 133 && r2.right == 400 && r0.bottom == 100 &&
+        r3.top == 100 && r3.left == 0 && r3.right == 200 && r4.left == 200 &&
+        r4.right == 400 && r4.bottom == 200);
+  /* disabled, minimised and a maximised window */
+  EnableWindow(k[1], 0);
+  CHECK(CascadeWindows(p, MDITILE_SKIPDISABLED, &area, 3, k) == 2);
+  EnableWindow(k[1], 1);
+  ShowWindow(k[0], 3);
+  CHECK(IsZoomed(k[0]));
+  CHECK(TileWindows(p, 0, &area, 3, k) == 3 && !IsZoomed(k[0]));
+  ShowWindow(k[2], 6);
+  CHECK(IsIconic(k[2]) && TileWindows(p, 0, &area, 3, k) == 2);
+  /* minimised children line up along the bottom of the parent */
+  ShowWindow(k[1], 6);
+  RECT client;
+  CHECK(GetClientRect(p, &client) && ArrangeIconicWindows(p) == 24);
+  r1 = local_rect(k[1]); r2 = local_rect(k[2]);
+  CHECK(r2.left == 0 && r2.top == client.bottom - 24 && r1.left == 160 &&
+        r1.top == client.bottom - 24);
+  CHECK(ArrangeIconicWindows(U32_DESKTOP) == 24);
+  CHECK(!CascadeWindows((HWND)(uintptr_t)0x7777, 0, 0, 0, 0) &&
+        GetLastError() == 1400);
+  /* top-level windows: the tool window and the topmost one are not arranged */
+  HWND top[3];
+  for (UINT i = 0; i < 3; i++)
+    top[i] = CreateWindowExA(i == 1 ? WS_EX_TOOLWINDOW : 0, "USER fixture", "top",
+                             WS_VISIBLE | WS_CAPTION, 5, 40, 60, 60, 0, 0, 0, 0);
+  CHECK(SetWindowPos(top[2], HWND_TOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE));
+  RECT work = {0, 32, 800, 600};
+  CHECK(TileWindows(0, 0, &work, 3, top) == 1);
+  CHECK(local_rect(top[0]).left == 0 && local_rect(top[0]).top == 32 &&
+        local_rect(top[0]).right == 800 && local_rect(top[1]).left == 5);
+  for (UINT i = 0; i < 3; i++) CHECK(DestroyWindow(top[i]));
+  CHECK(DestroyWindow(p));
+  printf("TRACE arrange: cascade tile zorder grid skip restore iconic "
+         "toplevel\n");
+}
+/* G4 (WM-7, WM-8): the maximised state travels with the placement (state 3),
+ * the desktop's zoom reaches the program as WM_SIZE SIZE_MAXIMIZED, and the
+ * track sizes of WM_GETMINMAXINFO go to the desktop once and when they change. */
+static UINT sent_count(UINT opcode);
+static const struct ciuki_message *last_sent(UINT opcode) {
+  for (UINT i = outgoing_count; i-- > 0;)
+    if (outgoing[i].data[1] == opcode)
+      return &outgoing[i];
+  return 0;
+}
+static void test_zoom_limits(void) {
+  HWND h = CreateWindowExA(0, "USER fixture", "zoom", WS_VISIBLE | WS_CAPTION,
+                           30, 40, 220, 160, 0, 0, 0, 0);
+  CHECK(h);
+  struct u32_window *w = u32_window(h);
+  ValidateRect(h, 0);
+  outgoing_count = 0;
+  minmax_set = 0;
+  CHECK(SetWindowPos(h, 0, 31, 41, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE));
+  CHECK(last_sent(DESK_V3_PLACE) && !sent_count(DESK_V3_LIMITS));   /* defaults are not sent */
+  minmax_set = 1;
+  CHECK(SetWindowPos(h, 0, 32, 41, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE));
+  const struct ciuki_message *l = last_sent(DESK_V3_LIMITS);
+  CHECK(l && sent_count(DESK_V3_LIMITS) == 1 && l->length == 32 &&
+        desk_get32(l->data + 16) == 194 && desk_get32(l->data + 20) == 73 &&
+        desk_get32(l->data + 24) == 494 && desk_get32(l->data + 28) == 373);
+  CHECK(SetWindowPos(h, 0, 33, 41, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE));
+  CHECK(sent_count(DESK_V3_LIMITS) == 1);   /* unchanged */
+  minmax_set = 0;
+  /* ShowWindow(SW_MAXIMIZE): the placement asks for state 3 */
+  traces = 0;
+  ShowWindow(h, 3);
+  const struct ciuki_message *pl = last_sent(DESK_V3_PLACE);
+  CHECK(IsZoomed(h) && pl && desk_get32(pl->data + 16 + 20) == 3);
+  /* the desktop zoomed the window: WM_SIZE with SIZE_MAXIMIZED */
+  UINT zoomed[] = {700, 500, 1, 9, 0, 32, 3, 0};
+  event(w, DESK_CONFIGURE, zoomed, 8);
+  u32_pump();
+  UINT size_zoom = 0;
+  for (UINT i = 0; i < traces; i++)
+    if (trace[i].h == h && trace[i].m == WM_SIZE && trace[i].wp == SIZE_MAXIMIZED)
+      size_zoom++;
+  CHECK(size_zoom == 1 && IsZoomed(h) && !IsIconic(h));
+  /* the desktop restores it (title button): state 0 clears the maximised state */
+  traces = 0;
+  UINT normal[] = {220, 160, 1, 10, 30, 40, 0, 0};
+  event(w, DESK_CONFIGURE, normal, 8);
+  u32_pump();
+  UINT size_restore = 0;
+  for (UINT i = 0; i < traces; i++)
+    if (trace[i].h == h && trace[i].m == WM_SIZE && trace[i].wp == SIZE_RESTORED)
+      size_restore++;
+  CHECK(size_restore == 1 && !IsZoomed(h));
+  CHECK(DestroyWindow(h));
+  printf("TRACE zoom: placement state 3, SIZE_MAXIMIZED, SIZE_RESTORED, "
+         "WM_GETMINMAXINFO track sizes sent once\n");
+}
 #define SEAM_INVALID ((int32_t)0x80070057u)
 #define SEAM_NOCLIP ((int32_t)0x887602cdu)
 #define SEAM_MORE ((int32_t)0x887602b2u)
@@ -1603,6 +1813,8 @@ static void run(void) {
   test_g18_shell();
 #endif
   test_order();
+  test_arrange();
+  test_zoom_limits();
   test_display();
   test_production_gdi();
   traces = 0;
@@ -1629,6 +1841,7 @@ static void run(void) {
   #ifndef U32_TEST_EXTERNAL_MODULES
   shell_clients(dir);
   #endif
+  clip_destroy(&fixture_clip_store);
   wr_destroy(&server);
   for (unsigned i = 0; i < 2; i++) {
     char path[256];

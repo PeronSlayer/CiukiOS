@@ -70,6 +70,7 @@ void dosvm_kbd_release(struct dosvm *v)
     v->kbd.head = v->kbd.count = 0;
     v->monitor.pic[0].irr &= ~2u;
     v->kbd.bios_prefix = 0;
+    v->kbd.alt_value=0; v->kbd.alt_digits=false;
     for (unsigned code = 1; code < 512; code++) if (v->kbd.held[code >> 3] & (1u << (code & 7)))
         kbd_emit(v, code, false);
     memset(v->kbd.held, 0, sizeof(v->kbd.held));
@@ -224,13 +225,28 @@ int dosvm_kbd_bios(struct dosvm *v)
     unsigned scan = b & 127;
     bool up = b & 0x80;
     uint8_t mask = !extended && scan == 0x2A ? 2 : !extended && scan == 0x36 ? 1 : scan == 0x1D ? 4 : scan == 0x38 ? 8 : 0;
-    if (mask) { if (up) k->shift &= ~mask; else k->shift |= mask; }
+    if (mask) {
+        if (!extended && scan==0x38) {
+            if (up && k->alt_digits && k->alt_value) dosvm_keyboard(v->info.key,k->alt_value);
+            k->alt_value=0; k->alt_digits=false;
+        }
+        if (up) k->shift &= ~mask; else k->shift |= mask;
+    }
     else if (!up && !extended && scan == 0x3A) k->shift ^= 0x40;   /* Caps Lock */
     else if (!up && !extended && scan == 0x45) k->shift ^= 0x20;   /* Num Lock */
     else if (!up && !extended && scan == 0x46) k->shift ^= 0x10;   /* Scroll Lock */
     else if (!up && b < 0x80 && !(extended && scan == 0x2A)) {
-        uint16_t word = bios_word(scan, extended, k->shift);
-        if (word) dosvm_keyboard(v->info.key, word);
+        /* Phoenix BIOS character tables: Alt+decimal keypad generates a
+         * single scan-zero OEM character on release, using BDA 40:19. */
+        static const int8_t digits[13]={7,8,9,-1,4,5,6,-1,1,2,3,0,-1};
+        int digit=!extended && scan>=0x47 && scan<=0x53 ? digits[scan-0x47] : -1;
+        if ((k->shift&8) && digit>=0) {
+            k->alt_value=(uint8_t)(k->alt_value*10+(unsigned)digit); k->alt_digits=true;
+        } else {
+            uint16_t word = bios_word(scan, extended, k->shift);
+            if (word) dosvm_keyboard(v->info.key, word);
+        }
     }
-    return dosvm_write(v, 0x417, &k->shift, 1);
+    int error=dosvm_write(v,0x419,&k->alt_value,1);
+    return error ? error : dosvm_write(v, 0x417, &k->shift, 1);
 }

@@ -487,7 +487,7 @@ static void wm_fuzz(unsigned m, unsigned run)
     wm_begin(m,1);
     char what[96];
     for (unsigned step=0;step<240;step++) {
-        unsigned op=rnd(42);
+        unsigned op=rnd(48);
         snprintf(what,sizeof(what),"fuzz run=%u step=%u op=%u",run,step,op);
         snprintf(step_name,sizeof(step_name),"%s",what);
         if (getenv("WM_TRACE")) fprintf(stderr,"%s %s focus=%d levels=%d\n",wm_names[m],what,d.focus,d.sh.levels);
@@ -622,6 +622,55 @@ static void wm_fuzz(unsigned m, unsigned run)
             } break;
         case 40: if ((a=random_app(APP_PAINTED))) app_accept_files(a,rnd(2)); break;
         case 41: if (d.sh.dnd.active || d.sh.band) turn(1100000000ull); break; /* taskbar hover during a drag */
+        case 42: /* G4: the taskbar menu on the empty bar or the top bar; an item by arrow, access key, click or none */
+            if (!d.sh.dnd.active) {
+                x=(int)rnd(d.width); y=rnd(2) ? (int)d.height-DESK_BAR+(int)rnd(DESK_BAR) : (int)rnd(DESK_BAR);
+                click(x,y,CIUKI_BUTTON_RIGHT);
+                if (d.sh.levels && d.sh.menus[0].kind==SH_MENU_TASKBAR) {
+                    static const int letters[]={0x2e,0x23,0x2f,0x32,0x16,0x13};
+                    switch (rnd(5)) {
+                    case 0: tap(DU_KEY_DOWN); tap(DU_KEY_DOWN); wm_frame(what); tap(DU_KEY_ENTER); break;
+                    case 1: tap(letters[rnd(6)]); break;
+                    case 2: { struct sh_menu *menu=&d.sh.menus[0]; unsigned k=rnd((unsigned)menu->count); y=menu->box.y+3;
+                              for (unsigned j=0;j<k;j++) y+=menu->items[j].flags&SH_ITEM_SEPARATOR ? SH_SEPARATOR : menu->row_h;
+                              pointer_to(menu->box.x+20,y+4); wm_frame(what); press(CIUKI_BUTTON_LEFT,1); press(CIUKI_BUTTON_LEFT,0); } break;
+                    default: tap(DU_KEY_ESC); break;
+                    }
+                }
+            } break;
+        case 43: /* G4: Win+D, Win+M, Shift+Win+M, Alt+M */
+            if (!d.sh.dnd.active) { switch (rnd(4)) {
+            case 0: key(0x15b,1); tap(0x20); key(0x15b,0); break;
+            case 1: key(0x15c,1); tap(0x32); key(0x15c,0); break;
+            case 2: key(0x2a,1); key(0x15b,1); tap(0x32); key(0x15b,0); key(0x2a,0); break;
+            default: key(0x38,1); tap(0x32); key(0x38,0); break;
+            } } break;
+        case 44: /* G4: the taskbar's keyboard focus */
+            if (!d.sh.dnd.active) { switch (rnd(6)) {
+            case 0: key(0x15b,1); tap(DU_KEY_TAB); key(0x15b,0); break;
+            case 1: key(0x1d,1); tap(DU_KEY_ESC); key(0x1d,0); tap(DU_KEY_ESC); break;
+            case 2: tap(rnd(2) ? DU_KEY_TAB : DU_KEY_RIGHT); break;
+            case 3: tap(DU_KEY_ENTER); break;
+            case 4: tap(DU_KEY_ESC); break;
+            default: tap(0x15d); break;
+            } } break;
+        case 45: /* G4: Alt+F6, the Menu key, Shift+F10, F3 */
+            if (!d.sh.dnd.active) { switch (rnd(4)) {
+            case 0: key(0x38,1); tap(0x40); key(0x38,0); break;
+            case 1: tap(0x15d); break;
+            case 2: key(0x2a,1); tap(DU_KEY_F10); key(0x2a,0); break;
+            default: tap(0x3d); break;
+            } } break;
+        case 46: /* G4: the caption icon (Ciuki Blue draws one): menu, or a double click closes */
+            if ((w=random_window())>=0 && !d.sh.dnd.active) {
+                struct desk_box icon=desk_caption_icon_box(&d,&d.clients[w]);
+                if (icon.w) { click(icon.x+8,icon.y+8,CIUKI_BUTTON_LEFT); if (!rnd(3)) click(icon.x+8,icon.y+8,CIUKI_BUTTON_LEFT); }
+            } break;
+        case 47: /* G4: Win+E, Win+R, Win+F, Win+Break, Win+F1 */
+            if (!d.sh.dnd.active) {
+                static const int chords[]={0x12,0x13,0x21,0x200,0x3b};
+                key(0x15b,1); tap(chords[rnd(5)]); key(0x15b,0);
+            } break;
         
         default: break;
         }
@@ -1027,9 +1076,128 @@ static void row_drag(unsigned m)
 }
 #include "g18_shortcut_test.h"
 #include "g18_tray_test.h"
+/* ---- G4: the taskbar menu, window arrangement and the Windows-key shortcuts ---- */
+static void win_chord(int code) { key(0x15b,1); tap(code); key(0x15b,0); }
+static void bar_right_click(int top) { click(top ? 300 : (int)d.width-60,top ? 10 : (int)d.height-16,CIUKI_BUTTON_RIGHT); }
+static void menu_item_click(int k)
+{
+    struct sh_menu *menu=&d.sh.menus[0]; int y=menu->box.y+3;
+    for (int j=0;j<k;j++) y+=menu->items[j].flags&SH_ITEM_SEPARATOR ? SH_SEPARATOR : menu->row_h;
+    pointer_to(menu->box.x+20,y+menu->row_h/2); press(CIUKI_BUTTON_LEFT,1); press(CIUKI_BUTTON_LEFT,0);
+}
+static void row_taskbar_menu(unsigned m)
+{
+    /* The empty taskbar and the empty top bar open the Windows 98 taskbar
+     * menu (TrackPopupMenu at the cursor, above the bar when it would leave
+     * the screen); hot rows and the menu's box are repainted; an item runs
+     * through the mouse or its access key and the menu goes. */
+    row_name="taskbar menu"; wm_begin(m,1);
+    struct fake_app *a=app_open("files",300,200,40,60); struct fake_app *b=app_open("calc",220,150,260,140); (void)a; (void)b;
+    bar_right_click(0); assert(d.sh.levels && d.sh.menus[0].kind==SH_MENU_TASKBAR); step("menu on the empty taskbar");
+    pointer_to(d.sh.menus[0].box.x+20,d.sh.menus[0].box.y+30); step("hot row"); pointer_to(d.sh.menus[0].box.x+20,d.sh.menus[0].box.y+60); step("next hot row");
+    tap(DU_KEY_ESC); step("dismissed");
+    bar_right_click(1); assert(d.sh.levels); step("menu on the top bar");
+    click(500,300,CIUKI_BUTTON_LEFT); step("dismissed by a click");
+    bar_right_click(0); menu_item_click(0); assert(!d.sh.levels); step("Cascade Windows");
+    bar_right_click(0); assert(d.sh.menus[0].count==7); step("menu with Undo Cascade");
+    menu_item_click(1); step("Tile Windows Horizontally");
+    bar_right_click(0); tap(0x2f); assert(!d.sh.levels); step("Tile Windows Vertically by its access key");
+    bar_right_click(0); tap(0x32); step("Minimize All Windows by its access key");
+    bar_right_click(0); tap(0x16); step("Undo Minimize All by its access key");
+    bar_right_click(0); tap(0x13); step("Properties launches the Control Panel");
+    wm_end();
+}
+static void row_arrange(unsigned m)
+{
+    /* CascadeWindows / TileWindows: SetWindowPos on every window in one
+     * pass (EndDeferWindowPos): the old and the new boxes of all of them
+     * are repainted; maximised and shaded windows are restored first; a
+     * window under a modal question, a minimised one and a topmost one keep
+     * their place; Undo puts everything back. */
+    row_name="arrange"; wm_begin(m,1);
+    struct fake_app *a=app_open("files",300,200,40,60), *b=app_open("calc",220,150,260,140), *c=app_open("ciuknote",260,180,120,220);
+    struct fake_app *e=app_open("terminal",240,160,360,80);
+    int v=wm_v3_window(DESK_V3_OVERLAPPED|DESK_V3_TOPMOST,-1,400,300,200,150); assert(v>=0); step("four windows and a topmost Win32 window");
+    desk_zoom(&d,c->slot); desk_collapse(&d,e->slot); step("one maximised, one shaded");
+    assert(desk_arrange(&d,DESK_ARRANGE_CASCADE)>=3); step("Cascade Windows");
+    assert(desk_arrange_undo(&d)>0); step("Undo Cascade");
+    assert(desk_arrange(&d,DESK_ARRANGE_TILE_V)>=3); step("Tile Windows Vertically");
+    for (unsigned k=0;k<8;k++) { app_paint(a,0,0,(unsigned)a->w,(unsigned)a->h,k*0x090909u); app_paint(b,0,0,40,40,k); turn(25000000ull); wm_frame("windows repaint while tiled"); }
+    assert(desk_arrange(&d,DESK_ARRANGE_TILE_H)>=3); step("Tile Windows Horizontally");
+    app_paint(a,0,0,(unsigned)a->w,(unsigned)a->h,0x3a3a3a); step("the first frame after the resize");
+    desk_minimize(&d,b->slot); assert(desk_arrange(&d,DESK_ARRANGE_CASCADE)>=1); step("Cascade with a minimised window");
+    desk_focus(&d,a->slot); desk_shell_message(&d,"Question","A modal question.",0); step("a window with a modal question");
+    assert(desk_arrange(&d,DESK_ARRANGE_TILE_V)>=1); step("Tile: the owner and its question stay");
+    desk_request_close(&d,d.focus); step("question closed");
+    app_close(c); assert(desk_arrange_undo(&d)>=0); step("Undo after a window closed");
+    wm_end();
+}
+static void row_minimize_all(unsigned m)
+{
+    /* Minimize All Windows, Show Desktop (Win+D toggles), Win+M and
+     * Shift+Win+M, Alt+M: windows leave to the taskbar at once (no
+     * caption animation), the desktop is active, the undo brings them back
+     * with the window that was active. */
+    row_name="minimize all"; wm_begin(m,1);
+    struct fake_app *a=app_open("files",300,200,40,60), *b=app_open("calc",220,150,260,140), *c=app_open("ciuknote",260,180,120,220);
+    (void)a; (void)b; (void)c;
+    desk_shell_message(&d,"Owned","A dialog.",0); step("a dialog owned by the active window");
+    win_chord(0x20); assert(d.focus<0 && !d.sh.levels); step("Win+D");
+    win_chord(0x20); assert(d.focus>=0); step("Win+D again");
+    win_chord(0x32); step("Win+M");
+    key(0x2a,1); win_chord(0x32); key(0x2a,0); step("Shift+Win+M");
+    click(DESK_START_X+DESK_START_W/2,DESK_START_Y+DESK_START_H/2,CIUKI_BUTTON_LEFT); assert(d.sh.levels); win_chord(0x20); assert(!d.sh.levels); step("Win+D with the Start menu open");
+    key(0x38,1); tap(0x32); key(0x38,0); step("Alt+M on the desktop");
+    desk_arrange_undo(&d); step("Undo Minimize All");
+    int v=wm_v3_window(DESK_V3_OVERLAPPED,-1,300,200,180,120); assert(v>=0); step("a Win32 window");
+    win_chord(0x20); step("Win+D with a Win32 window"); win_chord(0x20); step("and back");
+    wm_end();
+}
+static void row_win_keys(unsigned m)
+{
+    /* The other Windows-key shortcuts, the taskbar's keyboard focus and
+     * the access keys: each opens or moves something the screen shows. */
+    row_name="windows keys"; wm_begin(m,1);
+    struct fake_app *a=app_open("files",300,200,40,60), *b=app_open("calc",220,150,260,140), *c=app_open("ciuknote",260,180,120,220);
+    (void)a; (void)b; (void)c;
+    win_chord(0x13); assert(d.focus>=0 && d.clients[d.focus].internal==DESK_INTERNAL_RUN); step("Win+R");
+    desk_request_close(&d,d.focus); step("Run closed");
+    win_chord(0x21); step("Win+F: Find"); desk_request_close(&d,d.focus);
+    win_chord(0x12); step("Win+E"); win_chord(0x200); step("Win+Break"); win_chord(0x3b); step("Win+F1");
+    win_chord(DU_KEY_TAB); assert(d.sh.taskbar_key); step("Win+Tab: a task button in focus");
+    win_chord(DU_KEY_TAB); step("Win+Tab again"); tap(DU_KEY_ENTER); step("Enter activates");
+    key(0x1d,1); tap(DU_KEY_ESC); key(0x1d,0); assert(d.sh.levels); step("Ctrl+Esc");
+    tap(DU_KEY_ESC); assert(d.sh.taskbar_key && d.sh.task_pick==DESK_CLIENTS); step("Esc: the Start button in focus");
+    tap(DU_KEY_TAB); step("Tab: the first task button"); tap(DU_KEY_RIGHT); step("Right");
+    tap(0x15d); assert(d.sh.levels); step("Menu key: the button's menu"); tap(DU_KEY_ESC); step("menu closed");
+    tap(DU_KEY_HOME); tap(DU_KEY_ENTER); assert(d.sh.levels); step("Enter on Start"); tap(0x13); step("Run by its access key");
+    desk_request_close(&d,d.focus); step("Run closed");
+    key(0x38,1); tap(0x40); key(0x38,0); step("Alt+F6");
+    click(600,300,CIUKI_BUTTON_LEFT); tap(0x15d); assert(d.sh.levels); step("Menu key on the desktop"); tap(DU_KEY_ESC);
+    key(0x2a,1); tap(DU_KEY_F10); key(0x2a,0); step("Shift+F10"); tap(DU_KEY_ESC);
+    tap(0x3d); step("F3: Find"); desk_request_close(&d,d.focus);
+    wm_end();
+}
+static void row_caption_icon(unsigned m)
+{
+    /* The caption icon of the Ciuki Blue theme: a click opens the window
+     * menu under it, a double click closes the window. */
+    row_name="caption icon"; wm_begin(m,1);
+    assert(!desk_theme_use("Ciuki Blue")); desk_theme_changed(&d); step("Ciuki Blue");
+    struct fake_app *a=app_open("files",300,200,40,60), *b=app_open("calc",220,150,260,140); (void)b;
+    struct desk_box icon=desk_caption_icon_box(&d,&d.clients[a->slot]); assert(icon.w==16);
+    click(icon.x+8,icon.y+8,CIUKI_BUTTON_LEFT); assert(d.sh.levels && d.sh.menus[0].kind==SH_MENU_TASK); step("the window menu under the icon");
+    tap(0x2d); step("Maximize by its access key"); desk_zoom(&d,a->slot); step("restored");
+    icon=desk_caption_icon_box(&d,&d.clients[a->slot]);
+    click(icon.x+8,icon.y+8,CIUKI_BUTTON_LEFT); click(icon.x+8,icon.y+8,CIUKI_BUTTON_LEFT); step("double click: Closing");
+    app_close(a); step("destroyed");
+    assert(!desk_theme_use("Platinum")); desk_theme_changed(&d); step("Platinum");
+    wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
-    row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,row_g18_shortcuts,row_g18_tray};
+    row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,
+    row_taskbar_menu,row_arrange,row_minimize_all,row_win_keys,row_caption_icon,row_g18_shortcuts,row_g18_tray};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code). */

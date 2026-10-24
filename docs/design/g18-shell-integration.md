@@ -37,8 +37,9 @@ alphabetical cascading program groups backed by folders. G18 retains those
 folders instead of flattening the first eight links. Native built-in menu
 categories remain available. Startup execution belongs to G21.
 
-Wire additions follow DESK_V3_PRESENT (79): TRAY_ICON=80, TRAY_BALLOON=81,
-TRAY_EVENT=82, FLASH=83. Existing ACCEPT_FILES=47 and DROP_FILES=48 gain v3
+Wire additions follow DESK_V3_PRESENT (79), G5 clipboard (80/81) and G4 limits
+(82): TRAY_ICON=83, TRAY_BALLOON=84, TRAY_EVENT=85, FLASH=86. Existing
+ACCEPT_FILES=47 and DROP_FILES=48 gain v3
 envelopes. Requests remain bound to the authenticated peer, window ID and
 generation. No pointer/Win32 handle is interpreted by the shell. Icon pixels
 travel through a read-only mapped 16×16 surface and are copied before release.

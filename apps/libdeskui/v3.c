@@ -34,9 +34,10 @@ int du3_next(struct du3_connection *c, struct desk_packet *p)
     if (r==0) c->disconnected=1;
     if (r!=1) return r;
     int valid=m.data[0]==DESK_V3_VERSION && desk_parse(&m,0,NULL,p);
-    p->attachment_fd=-1;
+    p->attachment_fd=-1; p->clipboard_fd=-1;
     for (unsigned k=0;k<m.fd_count && k<4;k++) if (m.fds[k]>=0) {
         if (valid && p->opcode==DESK_DROP_FILES && !k) p->attachment_fd=m.fds[k];
+        else if (valid && p->opcode==DESK_V3_CLIPBOARD_EVENT && m.fd_count==1 && !k) p->clipboard_fd=m.fds[k];
         else c->transport.close(m.fds[k]);
     }
     if (!valid) { c->disconnected=1; errno=EINVAL; return -1; }

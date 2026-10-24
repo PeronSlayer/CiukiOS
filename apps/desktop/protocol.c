@@ -2,6 +2,7 @@
 #include "protocol.h"
 #include "settings_catalog.h"
 #include "sounds.h"
+#include <errno.h>
 #include <limits.h>
 #include <string.h>
 /* Bounded NUL check; the freestanding Win32 user32 build of this file has
@@ -99,6 +100,106 @@ void desk_v3_message(struct ciuki_message *m, unsigned op, unsigned payload,
     desk_message(m,op,DESK_V3_HEADER+payload); m->data[0]=DESK_V3_VERSION;
     desk_put32(m->data+4,request); desk_put32(m->data+8,id); desk_put32(m->data+12,generation);
 }
+/* G5 clipboard payload (after the 4- or 16-byte header). Every field an
+ * operation does not take is zero; fds are exact. */
+static int clip_parse(const uint8_t *b, unsigned n, int client, unsigned fds, struct desk_clip_wire *w)
+{
+    memset(w,0,sizeof(*w));
+    if (client) {
+        if (n<28) return 0;
+        w->serial=desk_get32(b); w->op=desk_get32(b+4); w->format=desk_get32(b+8); w->flags=desk_get32(b+12);
+        w->bytes=desk_get32(b+16); w->token=desk_get32(b+20); w->count=desk_get32(b+24);
+        if (!w->serial || w->op<DESK_CLIP_QUERY || w->op>DESK_CLIP_RELEASE || w->count>DESK_CLIP_NAME_MAX || n!=28+w->count) return 0;
+        unsigned want_fd=0;
+        switch (w->op) {
+        case DESK_CLIP_PUT:
+            if (!w->format || w->token || w->count || (w->flags&~3u) || w->flags==3 ||
+                w->bytes>DESK_CLIP_ITEM_MAX || ((w->flags&DESK_CLIP_DELAYED) && w->bytes)) return 0;
+            want_fd=w->bytes ? 1 : 0; break;
+        case DESK_CLIP_GET: case DESK_CLIP_NAME:
+            if (!w->format || w->flags || w->bytes || w->token || w->count) return 0;
+            break;
+        case DESK_CLIP_EMPTY: case DESK_CLIP_OPEN: case DESK_CLIP_RELEASE:
+            if (w->format || w->flags || w->bytes || w->count) return 0;
+            break;
+        case DESK_CLIP_WATCH:
+            if (w->format || w->flags>1 || w->bytes || w->token || w->count) return 0;
+            break;
+        case DESK_CLIP_REGISTER:
+            if (w->format || w->flags || w->bytes || w->token || !w->count || !desk_utf8_valid(b+28,w->count) ||
+                has_nul((const char *)b+28,w->count)) return 0;
+            memcpy(w->name,b+28,w->count); break;
+        default: /* QUERY, CLOSE */
+            if (w->format || w->flags || w->bytes || w->token || w->count) return 0;
+            break;
+        }
+        return fds==want_fd;
+    }
+    if (n<36) return 0;
+    w->serial=desk_get32(b); w->kind=desk_get32(b+4); w->op=desk_get32(b+8); w->result=(int32_t)desk_get32(b+12);
+    w->format=desk_get32(b+16); w->bytes=desk_get32(b+20); w->sequence=desk_get32(b+24); w->token=desk_get32(b+28);
+    w->count=desk_get32(b+32);
+    if (w->kind<DESK_CLIP_REPLY || w->kind>DESK_CLIP_DESTROY || w->result>0 || w->result < -4095) return 0;
+    if (w->kind!=DESK_CLIP_REPLY) {
+        if (w->serial || w->op || w->result || w->count || n!=36 || fds) return 0;
+        if (w->kind==DESK_CLIP_RENDER ? !w->format || w->bytes : w->format || w->bytes) return 0;
+        return 1;
+    }
+    if (!w->serial || w->op<DESK_CLIP_QUERY || w->op>DESK_CLIP_RELEASE) return 0;
+    if (w->op==DESK_CLIP_NAME) {
+        if (w->count>DESK_CLIP_NAME_MAX || n!=36+w->count || !desk_utf8_valid(b+36,w->count) ||
+            has_nul((const char *)b+36,w->count)) return 0;
+        memcpy(w->name,b+36,w->count);
+    } else {
+        if (w->count>DESK_CLIP_LIST_MAX || n!=36+4*w->count || (w->count && w->op!=DESK_CLIP_QUERY)) return 0;
+        for (unsigned i=0;i<w->count;i++) w->formats[i]=desk_get32(b+36+4*i);
+    }
+    if (w->bytes>DESK_CLIP_ITEM_MAX && w->op!=DESK_CLIP_QUERY) return 0;
+    return fds==(w->op==DESK_CLIP_GET && !w->result && w->bytes ? 1u : 0u);
+}
+int desk_clip_message(struct ciuki_message *m, unsigned version, int client,
+                      const struct desk_clip_wire *w, int fd)
+{
+    uint8_t b[240]; unsigned n;
+    memset(b,0,sizeof(b));
+    if (client) {
+        unsigned names=w->op==DESK_CLIP_REGISTER ? w->count : 0;
+        if (names>DESK_CLIP_NAME_MAX) return -EINVAL;
+        desk_put32(b,w->serial); desk_put32(b+4,w->op); desk_put32(b+8,w->format); desk_put32(b+12,w->flags);
+        desk_put32(b+16,w->bytes); desk_put32(b+20,w->token); desk_put32(b+24,names);
+        memcpy(b+28,w->name,names); n=28+names;
+    } else {
+        unsigned count=w->kind==DESK_CLIP_REPLY ? w->count : 0;
+        unsigned extra=w->op==DESK_CLIP_NAME ? count : 4*count;
+        if (count>(w->op==DESK_CLIP_NAME ? DESK_CLIP_NAME_MAX : DESK_CLIP_LIST_MAX)) return -EINVAL;
+        desk_put32(b,w->serial); desk_put32(b+4,w->kind); desk_put32(b+8,w->op); desk_put32(b+12,(uint32_t)w->result);
+        desk_put32(b+16,w->format); desk_put32(b+20,w->bytes); desk_put32(b+24,w->sequence); desk_put32(b+28,w->token);
+        desk_put32(b+32,count);
+        if (w->op==DESK_CLIP_NAME) memcpy(b+36,w->name,count);
+        else for (unsigned i=0;i<count;i++) desk_put32(b+36+4*i,w->formats[i]);
+        n=36+extra;
+    }
+    if (version==DESK_V3_VERSION) {
+        if (n>240) return -EINVAL;
+        desk_v3_message(m,client ? DESK_V3_CLIPBOARD : DESK_V3_CLIPBOARD_EVENT,n,client ? w->serial : 0,0,0);
+        memcpy(m->data+16,b,n);
+    } else {
+        if (n>252) return -EINVAL;
+        desk_message(m,client ? DESK_CLIPBOARD : DESK_CLIPBOARD_EVENT,4+n); m->data[0]=DESK_SHELL_VERSION;
+        memcpy(m->data+4,b,n);
+    }
+    if (fd>=0) { m->fd_count=1; m->fds[0]=fd; }
+    struct desk_packet p;
+    struct ciuki_message check=*m;
+    if (version!=DESK_V3_VERSION) check.data[2]=0;
+    return desk_parse(&check,client,NULL,&p) ? 0 : -EINVAL;
+}
+void desk_clip_dims(uint32_t n, uint32_t *width, uint32_t *height)
+{
+    uint32_t pixels=n ? (n+3)/4 : 1;
+    uint32_t w=pixels<2048 ? pixels : 2048;
+    *width=w; *height=(pixels+w-1)/w;
+}
 static int v3_parse(const struct ciuki_message *m, int client,
                     const struct ciuki_surface_info *s, struct desk_packet *p)
 {
@@ -110,6 +211,11 @@ static int v3_parse(const struct ciuki_message *m, int client,
     p->request=desk_get32(m->data+4); p->window_id=desk_get32(m->data+8); p->generation=desk_get32(m->data+12);
     const uint8_t *b=m->data+16; unsigned n=m->length-16, expected=0, fd=0;
     if (p->opcode==DESK_HELLO) return client && !n && !m->fd_count && !p->window_id && !p->generation && !p->request;
+    if (p->opcode==DESK_V3_CLIPBOARD || p->opcode==DESK_V3_CLIPBOARD_EVENT) {
+        if (p->window_id || p->generation || client!=(p->opcode==DESK_V3_CLIPBOARD) ||
+            !clip_parse(b,n,client,m->fd_count,&p->clip)) return 0;
+        return client ? p->request==p->clip.serial : !p->request;
+    }
     if (!p->window_id || !p->generation) return 0;
     switch (p->opcode) {
     case DESK_V3_TRAY_ICON:
@@ -160,8 +266,14 @@ static int v3_parse(const struct ciuki_message *m, int client,
         p->x=(int32_t)desk_get32(b); p->y=(int32_t)desk_get32(b+4);
         p->width=desk_get32(b+8); p->height=desk_get32(b+12); p->scale=desk_get32(b+16);
         p->flags=desk_get32(b+20); p->style=desk_get32(b+24);
-        if (p->flags>2 || (p->style&~DESK_V3_STYLES) || (p->style&3)>DESK_V3_TOOL) return 0;
+        if (p->flags>3 || (p->style&~DESK_V3_STYLES) || (p->style&3)>DESK_V3_TOOL) return 0;
         expected=28; break;
+    case DESK_V3_LIMITS:
+        if (!client || n!=16) return 0;
+        p->min_width=desk_get32(b); p->min_height=desk_get32(b+4); p->max_width=desk_get32(b+8); p->max_height=desk_get32(b+12);
+        if (p->min_width>2048 || p->min_height>2048 || p->max_width>2048 || p->max_height>2048 ||
+            (p->max_width && p->min_width>p->max_width) || (p->max_height && p->min_height>p->max_height)) return 0;
+        expected=16; break;
     case DESK_V3_WIN32_HWND:
         if(!client || n!=4 || !(p->flags=desk_get32(b)))return 0;
         expected=4;break;
@@ -251,7 +363,7 @@ static int v3_parse(const struct ciuki_message *m, int client,
         p->width=desk_get32(b); p->height=desk_get32(b+4); p->scale=desk_get32(b+8); p->serial=desk_get32(b+12);
         p->x=(int32_t)desk_get32(b+16); p->y=(int32_t)desk_get32(b+20);
         p->flags=desk_get32(b+24); p->style=desk_get32(b+28);
-        if (!p->serial || p->flags>2 || (p->style&~DESK_V3_STYLES) || (p->style&3)>DESK_V3_TOOL) return 0;
+        if (!p->serial || p->flags>3 || (p->style&~DESK_V3_STYLES) || (p->style&3)>DESK_V3_TOOL) return 0;
         expected=32; break;
     case DESK_V3_RESULT:
         if (client || n!=8) return 0;
@@ -318,11 +430,18 @@ int desk_parse(const struct ciuki_message *m, int client,
     memset(p, 0, sizeof(*p));
     p->opcode = m->data[1];
     int resize = m->data[2] == DESK_RESIZE_MINOR;
+    if (p->opcode==DESK_CLIPBOARD || p->opcode==DESK_CLIPBOARD_EVENT)
+        return m->data[0]==DESK_SHELL_VERSION && client==(p->opcode==DESK_CLIPBOARD) &&
+               clip_parse(m->data+4,m->length-4,client,m->fd_count,&p->clip);
     unsigned fds = client && p->opcode == DESK_CREATE_WINDOW ? 1u : 0u;
     if (client && resize && p->opcode == DESK_DAMAGE && m->length == 24 && desk_get32(m->data + 20)) fds = 1;
     if (client && resize && p->opcode==DESK_GFX_FRAME && (m->length==68 || m->length==84) && desk_get32(m->data+64)) fds=1;
     if (m->fd_count != fds) return 0;
     unsigned n = 4;
+    if (p->opcode==DESK_DOS_CLIPBOARD) {
+        p->flags=desk_get32(m->data+4);
+        return !client && m->data[0]==DESK_SHELL_VERSION && m->length==8 && !m->fd_count && !resize && p->flags>=1 && p->flags<=4;
+    }
     if (p->opcode==DESK_DOS_FULLSCREEN)
         return !client && m->data[0]==DESK_SHELL_VERSION && m->length==4 && !m->fd_count && !resize;
     switch (p->opcode) {
