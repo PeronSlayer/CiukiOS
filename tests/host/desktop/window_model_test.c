@@ -1057,9 +1057,21 @@ static void row_power(unsigned m)
     assert(!strcmp(d.sh.message_title,"Low Battery Alarm")); step("low battery alarm message");
     wm_end();
 }
+static int row_standby(void) { return 0; }
+static void row_power_resume(unsigned m)
+{
+    row_name="power suspend/resume"; wm_begin(m,1);
+    struct fake_app *app=app_open("files",320,220,40,50);
+    d.clients[app->slot].dosbox=1; d.sh.power_can_standby=1; d.power_standby=row_standby;
+    d.sh.want_standby=1; desk_power_policy_tick(&d);
+    assert(d.sh.notification.active); step("DOS suspend notice");
+    for (unsigned n=0;n<8 && !d.pbt.standbys;n++) desk_power_policy_tick(&d);
+    assert(d.pbt.standbys==1); step("resume repaints the entire desktop");
+    wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
-    row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,row_power};
+    row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,row_power,row_power_resume};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code). */

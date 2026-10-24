@@ -5,6 +5,15 @@
 #include <string.h>
 #include <ciuki/abi.h>
 #include "../../apps/desktop/protocol.h"
+#include "../../apps/libdeskui/deskui.h"
+#if defined(__i386__)
+_Static_assert(sizeof(struct du_window)==5360,"G11B toolkit window extent");
+_Static_assert(__builtin_offsetof(struct du_window,power_event)==5348,"G11B toolkit power callback");
+_Static_assert(__builtin_offsetof(struct du_window,power_serial)==5352,"G11B toolkit power serial");
+_Static_assert(__builtin_offsetof(struct du_window,power_reply_pending)==5356,"G11B toolkit power reply");
+#endif
+_Static_assert(DESK_POWER_EVENT == 87, "G11B desktop power event");
+_Static_assert(DESK_POWER_REPLY == 88, "G11B desktop power reply");
 /* Appended after the display-engine pair (DESK_GFX_*_ENGINE 38/39) at staging. */
 _Static_assert(DESK_JOYSTICK==40 && DESK_JOYSTICK_RESULT==41,"joystick desktop opcodes");
 _Static_assert(__builtin_offsetof(struct desk_packet,joystick)==0 && sizeof(((struct desk_packet *)0)->joystick)==100,"joystick decoded payload");
@@ -26,7 +35,7 @@ _Static_assert(SETUP_ERASED_MAX==16u,"Setup preview capacity");
 #if defined(__i386__)
 _Static_assert(sizeof(struct setup_erased_partition)==32,"Setup erased record");
 _Static_assert(_Alignof(struct setup_erased_partition)==4,"Setup erased alignment");
-_Static_assert(sizeof(struct setup_plan)==1156,"Setup plan version 2");
+_Static_assert(sizeof(struct setup_plan)==1204,"Setup plan version 2");
 #define SETUP_OFFSET(field, expected) _Static_assert(__builtin_offsetof(struct setup_plan,field)==expected,"Setup plan " #field)
 SETUP_OFFSET(version,0);
 SETUP_OFFSET(disk,4);
@@ -42,8 +51,8 @@ SETUP_OFFSET(reserve_bytes,668);
 SETUP_OFFSET(free_after_bytes,676);
 SETUP_OFFSET(components,684);
 SETUP_OFFSET(answers,688);
-SETUP_OFFSET(source_image_sha,1024);
-SETUP_OFFSET(source_iso_sha,1089);
+SETUP_OFFSET(source_image_sha,1072);
+SETUP_OFFSET(source_iso_sha,1137);
 _Static_assert(__builtin_offsetof(struct setup_erased_partition,type)==0,"erased type");
 _Static_assert(__builtin_offsetof(struct setup_erased_partition,start)==4,"erased start");
 _Static_assert(__builtin_offsetof(struct setup_erased_partition,count)==12,"erased count");
@@ -274,6 +283,7 @@ static const struct expectation expectations[] = {
     {"constant.CIUKI_POWER_STANDBY", CIUKI_POWER_STANDBY, 5u},
     {"constant.CIUKI_POWER_POLICY", CIUKI_POWER_POLICY, 6u},
     {"constant.CIUKI_POWER_EVENTS", CIUKI_POWER_EVENTS, 7u},
+    {"constant.CIUKI_POWER_CANCEL_STANDBY", CIUKI_POWER_CANCEL_STANDBY, 8u},
     {"constant.CIUKI_POWER_CAN_STANDBY", CIUKI_POWER_CAN_STANDBY, 16u},
     {"constant.CIUKI_POWER_POLICY_VERSION", CIUKI_POWER_POLICY_VERSION, 1u},
     {"constant.CIUKI_POWER_EVENTS_VERSION", CIUKI_POWER_EVENTS_VERSION, 1u},

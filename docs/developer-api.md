@@ -2264,6 +2264,7 @@ call.
 #define CIUKI_POWER_STANDBY 5u
 #define CIUKI_POWER_POLICY 6u
 #define CIUKI_POWER_EVENTS 7u
+#define CIUKI_POWER_CANCEL_STANDBY 8u
 #define CIUKI_POWER_CAN_STANDBY 16u
 #define CIUKI_POWER_POLICY_VERSION 1u
 #define CIUKI_POWER_EVENTS_VERSION 1u
@@ -5266,7 +5267,16 @@ SESSION_ANSWER (client to desktop, 12 bytes): serial of the query,
   (it agrees by default and gets CLOSE_REQUEST/CLOSED at the end).
 
 ```c
-DESK_QUERY_END_SESSION, DESK_END_SESSION, DESK_SESSION_ANSWER
+DESK_QUERY_END_SESSION, DESK_END_SESSION, DESK_SESSION_ANSWER,
+```
+
+G11B: highest visible opcode was 86 (wt/g18). v2, no descriptors.
+EVENT: serial,event (PBT),lParam; REPLY: serial,answer (0 veto,1
+agree,2 removed from queue). REPLY serial=0,answer=1 registers.
+
+```c
+DESK_POWER_EVENT = 87,
+    DESK_POWER_REPLY = 88
 };
 #define DESK_ENDSESSION_CLOSEAPP 0x00000001u
 ```
@@ -5740,7 +5750,8 @@ SPDX-License-Identifier: MIT
 #define __CIUKI_POWER_VERSION__ 2
 ```
 
-action: CIUKI_POWER_REBOOT, CIUKI_POWER_OFF or CIUKI_POWER_QUERY.
+action: CIUKI_POWER_REBOOT, CIUKI_POWER_OFF, CIUKI_POWER_QUERY,
+CIUKI_POWER_STANDBY or CIUKI_POWER_CANCEL_STANDBY.
 QUERY returns CIUKI_POWER_CAN_* and CIUKI_POWER_STOPPED/UNCERTAIN bits.
 Either progress bit means the session cannot resume. REBOOT does not return on
 success. OFF flushes storage and powers off through the active provider
@@ -5750,6 +5761,9 @@ after storage has stopped: show "It is now safe to turn off your
 computer" only when QUERY also reports STOPPED. EBUSY with no progress
 bit means open files prevented flushing; UNCERTAIN means a stop proof
 failed after shutdown began: retain a terminal diagnostic and require reset.
+
+G11B: CANCEL_STANDBY rejects a pending APM BIOS sleep request after an
+application veto. Desktop only, idempotent, EBUSY once sleep starts.
 
 ```c
 int ciuki_power(uint32_t action);
@@ -7340,7 +7354,13 @@ uint32_t session_serial, session_flags;
 
 answer+1, retried if the queue is full
 
+G11B: PBT event and lParam; query (event 0) returns 0 to veto,
+nonzero to agree. Other events ignore the return. NULL agrees.
+
 ```c
+int (*power_event)(struct du_window *, uint32_t event, uint32_t flags, void *);
+    uint32_t power_serial;
+    int power_reply_pending;
 };
 enum { DU_SESSION_VETO = 0, DU_SESSION_AGREE = 1, DU_SESSION_ASKING = 2 };
 int du_window_open(struct du_window *, struct du_ui *, int channel, int width, int height, const char *title);
@@ -7667,6 +7687,15 @@ int du3_ui_progress(struct du3_connection *, uint32_t window, uint32_t generatio
 uint32_t du3_window_order(struct du3_connection *, uint32_t window,
     uint32_t generation, uint32_t flags, uint32_t after, uint32_t after_generation,
     uint32_t owner, uint32_t owner_generation);
+```
+
+G11B: serial 0 / answer 1 registers this native window; for a power
+EVENT, answer 2 marks dequeue, 0 vetoes a query, 1 agrees/completes.
+Explicit UI-thread replies; no acknowledgement is hidden in du3_next.
+
+```c
+uint32_t du3_power_reply(struct du3_connection *, uint32_t window,
+    uint32_t generation, uint32_t serial, uint32_t answer);
 #endif
 ```
 

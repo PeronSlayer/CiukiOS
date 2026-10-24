@@ -1346,7 +1346,6 @@ void desk_shell_power_events(struct desktop *d, const struct ciuki_power_events 
 void desk_power_broadcast(struct desktop *d, uint32_t event, uint32_t lparam)
 {
     struct desk_power_broadcast *b = &d->pbt;
-    if (!d->w32_power) return;
     if (event == PP_PBT_POWERSTATUSCHANGE)
         for (unsigned i = 0; i < b->count; i++) if (b->queue[i].event == event) return;
     if (b->count == DESK_PBT_QUEUE) {   /* drop the oldest status change, never a sequence step */
@@ -1357,33 +1356,74 @@ void desk_power_broadcast(struct desktop *d, uint32_t event, uint32_t lparam)
     }
     b->queue[b->count++] = (struct desk_pbt){event, lparam};
 }
+void desk_power_reply(struct desktop *d, int i, uint32_t serial, uint32_t answer)
+{
+    struct desk_client *c=&d->clients[i];
+    if (!d->pbt.running || serial!=d->pbt.serial || c->power_serial!=serial || !c->power_pending) return;
+    if (answer==2) { c->power_pending=2; return; }
+    c->power_pending=0;
+    if (d->pbt.current.event==PP_PBT_QUERYSUSPEND) {
+        if (!answer) d->pbt.denied=1;
+        else c->power_granted=1;
+    }
+}
+static int native_power_pending(struct desktop *d)
+{
+    int pending=0;
+    for (int i=0;i<DESK_CLIENTS;i++) {
+        struct desk_client *c=&d->clients[i];
+        if (c->channel<0 || c->internal || !c->power_pending || c->power_serial!=d->pbt.serial) continue;
+        uint64_t limit=d->pbt.current.event==PP_PBT_QUERYSUSPEND ? DESK_POWER_QUERY_NS : 2000000000ull;
+        if ((c->power_pending==1 || d->pbt.current.event!=PP_PBT_QUERYSUSPEND) && d->now_ns>=d->pbt.started_ns+limit) {
+            c->power_pending=0; c->power_granted=1;
+        } else pending=1;
+    }
+    return pending;
+}
 static void broadcast_service(struct desktop *d)
 {
-    struct desk_power_broadcast *b = &d->pbt;
-    struct desk_w32_status st = {0};
+    struct desk_power_broadcast *b=&d->pbt;
+    struct desk_w32_status st={0};
     if (b->running) {
-        int e = d->w32_power ? d->w32_power(d, DESK_W32_POWER_STATUS, 0, 0, &st) : -ENODEV;
-        int timeout = d->now_ns >= b->started_ns + DESK_POWER_QUERY_NS;
-        if (!e && st.state == DESK_W32_PENDING && !timeout) return;
-        /* A query left unanswered for 20 s counts as agreement. */
-        b->denied = !e && st.state == DESK_W32_VETOED;
-        b->running = 0; b->done = (struct desk_pbt){b->current.event + 1, b->current.lparam};
-        if (d->w32_power) (void)d->w32_power(d, DESK_W32_POWER_RESET, 0, 0, &st);
+        if (b->w32_running) {
+            int e=d->w32_power ? d->w32_power(d,DESK_W32_POWER_STATUS,0,0,&st) : -ENODEV;
+            if (e || st.state!=DESK_W32_PENDING) {
+                if (!e && st.state==DESK_W32_VETOED) b->denied=1;
+                b->w32_running=0;
+            }
+        }
+        int pending=native_power_pending(d);
+        if (!b->denied && (b->w32_running || pending)) return;
+        if (d->w32_power) (void)d->w32_power(d,DESK_W32_POWER_RESET,0,0,&st);
+        b->w32_running=0; b->running=0;
+        b->done=(struct desk_pbt){b->current.event+1,b->current.lparam};
+        if (b->current.event==PP_PBT_QUERYSUSPEND || b->current.event==PP_PBT_SUSPEND) {
+            b->sequence_done=b->current.event+1;
+            if (b->current.event==PP_PBT_QUERYSUSPEND) b->sequence_denied=b->denied;
+        }
     }
     if (!b->count) return;
-    struct desk_pbt next = b->queue[0];
-    memmove(&b->queue[0], &b->queue[1], (b->count - 1) * sizeof(b->queue[0])); b->count--;
-    b->current = next; b->started_ns = d->now_ns; b->broadcasts++;
-    if (!d->w32_power || d->w32_power(d, DESK_W32_POWER_BEGIN, next.event, next.lparam, &st)) {
-        b->denied = 0; b->done = (struct desk_pbt){next.event + 1, next.lparam};   /* nobody to tell */
-        return;
+    struct desk_pbt next=b->queue[0];
+    memmove(&b->queue[0],&b->queue[1],(--b->count)*sizeof(b->queue[0]));
+    b->current=next; b->started_ns=d->now_ns; b->broadcasts++; b->denied=0;
+    if (!++b->serial) ++b->serial;
+    for (int i=0;i<DESK_CLIENTS;i++) {
+        struct desk_client *c=&d->clients[i];
+        if (c->channel<0 || c->internal || !c->power_aware) continue;
+        c->power_pending=0;
+        if (next.event==PP_PBT_QUERYSUSPENDFAILED && !c->power_granted) continue;
+        if (next.event==PP_PBT_QUERYSUSPEND) c->power_granted=0;
+        struct ciuki_message m; desk_message(&m,DESK_POWER_EVENT,16);
+        desk_put32(m.data+4,b->serial); desk_put32(m.data+8,next.event); desk_put32(m.data+12,next.lparam);
+        c->power_serial=b->serial; c->power_pending=1; desk_queue(d,i,&m);
     }
-    b->running = 1;
+    b->w32_running=d->w32_power && !d->w32_power(d,DESK_W32_POWER_BEGIN,next.event,next.lparam,&st);
+    b->running=1;
 }
 static int broadcast_finished(const struct desktop *d, uint32_t event)
-{ return !d->pbt.running && !d->pbt.count && d->pbt.done.event == event + 1; }
+{ return d->pbt.sequence_done == event + 1; }
 /* The Windows 98 Stand by sequence (power-policy.md 22): query, suspend,
- * call 73 STANDBY, resume. Native and DOS windows are not queried yet. */
+ * call 73 STANDBY, resume. Native queries share the same veto policy. */
 static void standby_service(struct desktop *d)
 {
     struct desk_power_broadcast *b = &d->pbt;
@@ -1394,29 +1434,40 @@ static void standby_service(struct desktop *d)
         d->sh.want_standby = 0;
         if (!d->sh.power_can_standby || desk_session_busy(d) || d->sh.gate) return;
         fprintf(stderr,"[desktop] standby begin user=%d\n",b->standby_lparam);
+        for (int i=0;i<DESK_CLIENTS;i++) if (d->clients[i].dosbox && d->clients[i].channel>=0) {
+            desk_shell_notify(d,"Stand by","DOS sessions will pause while the computer is in Stand by.",DU_DLG_ICON_INFO,SH_NOTIFY_DETAILS);
+            break;
+        }
+        b->sequence_done=0; b->sequence_denied=0;
         b->done = (struct desk_pbt){0}; b->standby = DESK_STANDBY_QUERY;
         desk_power_broadcast(d, PP_PBT_QUERYSUSPEND, (uint32_t)b->standby_lparam);
         return;
     case DESK_STANDBY_QUERY:
         if (!broadcast_finished(d, PP_PBT_QUERYSUSPEND)) return;
-        if (b->denied) {
+        if (b->sequence_denied || desk_session_busy(d) || d->sh.gate) {
             fprintf(stderr,"[desktop] standby denied by a program\n");
+            if (d->power_cancel_standby) (void)d->power_cancel_standby();
             desk_power_broadcast(d, PP_PBT_QUERYSUSPENDFAILED, 0);
             b->standby = DESK_STANDBY_IDLE; return;
         }
+        b->sequence_done=0;
         b->done = (struct desk_pbt){0}; b->standby = DESK_STANDBY_SUSPEND;
         desk_power_broadcast(d, PP_PBT_SUSPEND, 0);
         return;
     case DESK_STANDBY_SUSPEND: {
         if (!broadcast_finished(d, PP_PBT_SUSPEND)) return;
         errno = 0;
-        int r = d->power_standby ? d->power_standby() : (errno = ENOSYS, -1);
+        int r = desk_session_busy(d) || d->sh.gate ? (errno=EBUSY,-1) :
+            d->power_standby ? d->power_standby() : (errno = ENOSYS, -1);
         b->standby_error = r ? (errno ? errno : EIO) : 0; b->standbys++;
         fprintf(stderr,"[desktop] standby result=%d\n",r ? -b->standby_error : 0);
         uint32_t failure = r ? PP_PBTF_RESUMEFROMFAILURE : 0;
-        desk_power_broadcast(d, PP_PBT_RESUMEAUTOMATIC, failure);
-        desk_power_broadcast(d, PP_PBT_RESUMESUSPEND, failure);
+        desk_power_broadcast(d, PP_PBT_RESUMEAUTOMATIC, 0);
+        if (r) { if (d->power_cancel_standby) (void)d->power_cancel_standby(); b->resume_pending=0; desk_power_broadcast(d, PP_PBT_RESUMESUSPEND, failure); }
+        else { b->resume_pending=1; b->resume_input_ns=d->last_input_ns; }
+        damage(d,(struct desk_box){0,0,d->width,d->height});
         d->last_input_ns = d->now_ns;   /* the idle timer restarts at resume */
+        b->resume_input_ns=d->last_input_ns;
         b->standby = DESK_STANDBY_IDLE;
         if (r) desk_shell_notify_error(d, "Stand by failed", b->standby_error);
         return;
@@ -1426,6 +1477,10 @@ static void standby_service(struct desktop *d)
 }
 void desk_power_policy_tick(struct desktop *d)
 {
+    if (d->pbt.resume_pending && d->last_input_ns>d->pbt.resume_input_ns) {
+        d->pbt.resume_pending=0;
+        desk_power_broadcast(d,PP_PBT_RESUMESUSPEND,0);
+    }
     if (!d->shell) return;
     /* System standby after: no input for the current source's timer; display
      * leases, sessions and the power sequence keep the computer awake. */

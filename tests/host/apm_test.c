@@ -12,7 +12,8 @@ static unsigned checks, failures;
 #define CHECK(x) do { checks++; if (!(x)) { fprintf(stderr, "FAIL %d: %s\n", __LINE__, #x); failures++; } } while (0)
 struct model {
     uint64_t now, flush_until, stop_until, ack_at;
-    uint16_t version, flags, signature, negotiated, fault_function;
+    uint16_t version, flags, signature, negotiated, fault_function, capabilities;
+    unsigned standbys, processings;
     uint8_t bios_error;
     int transport_error, reserve_error, prepare_error, flush_error, stop_error, resume_error;
     unsigned probes, connects, disconnects, calls, reserves, prepared, releases, quarantines;
@@ -85,6 +86,7 @@ static int pm(void *p, struct biosvm_regs *r, uint32_t ms)
     if (fault(m, r)) return m->transport_error;
     r->flags = 0;
     switch (fn) {
+    case 0x5310: CHECK(!r->ebx); r->ecx=m->capabilities; break;
     case 0x530e:
         CHECK(!r->ebx && r->ecx == 0x0102); r->eax = m->negotiated; trace(m, 'V'); break;
     case 0x5308: case 0x530f:
@@ -105,10 +107,12 @@ static int pm(void *p, struct biosvm_regs *r, uint32_t ms)
     case 0x5307:
         CHECK(r->ebx == 1);
         if (r->ecx == 5) m->rejects++;
+        else if (r->ecx == 4) m->processings++;
         else {
             CHECK(m->flushes && m->stops);
             m->ack_at = m->now; m->ack_bx = (uint16_t)r->ebx; m->ack_cx = (uint16_t)r->ecx;
-            if (r->ecx == 2) { m->suspends++; trace(m, 'S'); }
+            if (r->ecx == 1) { m->standbys++; trace(m, 'B'); }
+            else if (r->ecx == 2) { m->suspends++; trace(m, 'S'); }
             else if (r->ecx == 3) { m->offs++; trace(m, 'O'); }
             else CHECK(false);
         }
@@ -385,9 +389,34 @@ static void test_busy_and_handoff(void)
     CHECK(apm_backend_service(&b) == -EIO && b.state == APM_EXCLUDED && m.quarantines == 1 && m.leased);
     puts("APM: busy EC hold skips without failing, rejection retried, ACPI handoff (clean and uncertain) PASS");
 }
+static void test_qualified_sleep(void)
+{
+    struct model m; struct apm_backend b;
+    connected(&m,&b); CHECK(!apm_backend_can_standby(&b));
+    CHECK(apm_backend_standby(&b)==-ENOTSUP);
+    m.capabilities=3; b.capabilities_due=true; CHECK(!apm_backend_service(&b));
+    CHECK(apm_backend_can_standby(&b) && b.capabilities==3);
+    m.flushes=m.stops=1; unsigned resumed=m.resumes;
+    CHECK(!apm_backend_standby(&b) && m.standbys==1 && m.resumes==resumed+1);
+    b.capabilities=2; CHECK(!apm_backend_standby(&b) && m.suspends==1);
+    b.capabilities=3; m.events[m.event_tail++]=2; m.now+=1000;
+    CHECK(!apm_backend_service(&b) && b.sleep_request==2 && m.processings==1 && !m.rejects);
+    m.now+=1000; CHECK(!apm_backend_service(&b) && m.processings==2);
+    CHECK(!apm_backend_standby(&b) && !b.sleep_request && m.suspends==2);
+    m.events[m.event_tail++]=1; m.now+=1000; CHECK(!apm_backend_service(&b));
+    for(unsigned i=0;i<65;i++) {m.now+=1000;CHECK(!apm_backend_service(&b));}
+    CHECK(b.sleep_request==1); /* a delivered application query may take >60 s */
+    CHECK(!apm_backend_cancel_standby(&b) && !b.sleep_request && m.rejects==1);
+    unsigned rejected=m.rejects;CHECK(!apm_backend_cancel_standby(&b) && m.rejects==rejected);
+    m.fault_function=0x5307; m.bios_error=0x60; resumed=m.resumes;
+    CHECK(apm_backend_standby(&b)<0 && b.state==APM_CONNECTED && m.resumes==resumed+1);
+    m.fault_function=0; m.capabilities=0; b.capabilities_due=true;
+    CHECK(!apm_backend_service(&b) && !apm_backend_can_standby(&b));
+    puts("APM G11B: BX=0 capabilities, standby/suspend selection, processing heartbeat, resume on BIOS refusal PASS");
+}
 int main(void)
 {
-    test_probe_connection(); test_descriptors_status(); test_events(); test_emergency_off();
+    test_qualified_sleep(); test_probe_connection(); test_descriptors_status(); test_events(); test_emergency_off();
     test_t23_units(); test_busy_and_handoff(); benchmark_poll();
     printf("APM model: %u checks, %u failures\n", checks, failures);
     return failures != 0;

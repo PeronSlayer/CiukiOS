@@ -668,6 +668,11 @@ static void test_ich3_bringup(void)
         CHECK(trace_at(0x12a,variant==1?1:0)<trace_at(0x215,1));
         CHECK(trace_at(0x215,1)<trace_at(0xcfc,5) && trace_at(0xcfc,5)<trace_at(0x21b,1));
         for(unsigned i=0;i<hw.trace_count;i++) if(hw.trace[i].port==0x21b)CHECK(!(hw.trace[i].value&0x1c));
+        bool selected=dma_selected; dma_selected=false; ac97.ready=audio.ready=true;
+        uint32_t phys=ac97.bdl_phys; uint16_t master=ac97.saved_master;
+        CHECK(!audio_backend_suspend() && !ac97.ready);
+        CHECK(!audio_backend_resume() && ac97.ready && ac97.bdl_phys==phys && ac97.saved_master==master);
+        dma_selected=selected;
     }
     /* Sample requests absent (zero-rate VRA) cannot prove a start. */
     ich3_setup();hw.pci_command=1;ac97.activation_deadline=30;

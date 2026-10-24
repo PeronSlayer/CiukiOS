@@ -267,7 +267,7 @@ static void power_policy_page(void)
     /* Turn off monitor: After 25 mins, saved as the user's scheme. */
     at_click_widget(&u,PW_CELL+PP_MONITOR); assert(u.popup_count==16 && popup_has("Never") && popup_has("After 5 hours"));
     power_pick("After 25 mins");
-    assert(saves==1 && applies==1 && strstr(saved,"power_scheme=0\n") && strstr(saved,"power_scheme0=Home/Office Desk,1200,1500,1800,1200,900,1800\n"));
+    assert(saves==1 && applies==1 && strstr(saved,"power_scheme=0\n") && strstr(saved,"power_scheme0=Home/Office Desk,1200,1500,0,1200,900,0\n"));
     assert(!strcmp(du_get(&u,PW_CELL+PP_MONITOR)->text,"After 25 mins"));
     /* Save As, then Delete (built-ins cannot be deleted). */
     at_click_widget(&u,PW_SAVE_AS); assert(du_dialog_id(&u)==PW_SAVE_NAME);
@@ -275,9 +275,9 @@ static void power_policy_page(void)
     assert(saves==1 && strstr(du_get(&u,3)->text,"Type a new name"));
     power_emit(DU_EV_DIALOG,PW_SAVE_NAME,0,"Presentation");
     assert(saves==2 && !strcmp(du_get(&u,PW_SCHEME)->text,"Presentation") && !du_get(&u,PW_DELETE)->disabled);
-    assert(strstr(saved,"power_scheme=3\n") && strstr(saved,"power_scheme3=Presentation,1200,1500,1800,1200,900,1800\n"));
+    assert(strstr(saved,"power_scheme=3\n") && strstr(saved,"power_scheme3=Presentation,1200,1500,0,1200,900,0\n"));
     at_click_widget(&u,PW_SCHEME); assert(u.popup_count==4); power_pick("Always On");
-    assert(saves==3 && !strcmp(du_get(&u,PW_SCHEME)->text,"Always On") && !strcmp(du_get(&u,PW_CELL+PP_DISKS)->text,"After 1 hour"));
+    assert(saves==3 && !strcmp(du_get(&u,PW_SCHEME)->text,"Always On") && !strcmp(du_get(&u,PW_CELL+PP_DISKS)->text,"Never"));
     at_click_widget(&u,PW_SCHEME); power_pick("Presentation");
     at_click_widget(&u,PW_DELETE); assert(du_dialog_id(&u)==PW_DELETE_CONFIRM);
     du_dialog_close(&u); power_emit(DU_EV_DIALOG,PW_DELETE_CONFIRM,0,NULL);

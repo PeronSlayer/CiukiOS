@@ -214,23 +214,26 @@
       including NDIS, audio, USB host controllers) has a suspend and a
       resume path that restores it.
 
-    None of these drivers has a resume path today (`power_devices_quiesce`
-    is the terminal S5 barrier and quarantines its claims), the f1-121 APM
-    broker stops at 530Fh, and ACPI never offers S1/S3. So the kernel
-    reports `CIUKI_POWER_STANDBY_NO_RESUME` (or an earlier reason) on every
-    machine and `CIUKI_POWER_STANDBY` returns ENOTSUP. This is the honest
-    state required by the Resource Kit ("the operating system uses standby
-    only if the computer supports it"); the device resume work is the
-    remaining gap of this item.
+    G11B supplies reversible paths for the loaded network (including NDIS
+    PnP OIDs), audio and USB drivers and the ATA layer. Failed or unqualified
+    controllers refuse qualification. APM now probes 5310h; its contained
+    broker admits that function. ACPI S1/S3 remains unavailable without a
+    wake trampoline. Host models exercise the software contract; the lead
+    must qualify each hardware configuration before claiming hardware
+    evidence. Add-in ATA controllers remain unqualified.
 22. When available, the Shut Down dialog lists "Stand by" first, like
     Windows 98, and the desktop's Stand by sequence is:
     PBT_APMQUERYSUSPEND to every Win32 window (lParam 1 when the user asked,
     0 for timers, alarms, buttons and the lid); a `BROADCAST_QUERY_DENY`
     ends it with PBT_APMQUERYSUSPENDFAILED to the windows that agreed; else
-    PBT_APMSUSPEND, call 73 STANDBY, then PBT_APMRESUMEAUTOMATIC and
+    PBT_APMSUSPEND, call 73 STANDBY, then PBT_APMRESUMEAUTOMATIC and, on console input,
     PBT_APMRESUMESUSPEND (lParam `PBTF_APMRESUMEFROMFAILURE` when the call
-    failed). A query left unanswered for 20 s counts as agreement. Native
-    and DOS windows are not queried (gap: no native message yet).
+    failed). Each Win32 window gets 20 s to dequeue a query; once delivered its
+    handler may wait for user interaction. Native toolkit windows have the
+    same query/veto sequence. A DOS session receives a visible notice and
+    continues with its VM state retained. A failed firmware request sends
+    RESUMESUSPEND with PBTF_APMRESUMEFROMFAILURE immediately; automatic
+    resume always has lParam zero.
 
 ### Applications (PW-9)
 
@@ -239,7 +242,7 @@
     message loop): PBT_APMPOWERSTATUSCHANGE on a change of AC state, of the
     SYSTEM_POWER_STATUS battery flag, on the remaining time falling below
     5 minutes, on the percentage falling below 10 % and on a change of 3 %
-    or more since the last broadcast; PBT_APMBATTERYLOW (16); the Stand by
+    or more since the last broadcast; PBT_APMBATTERYLOW (9); the Stand by
     sequence (22). DefWindowProc returns TRUE. One broadcast runs at a time;
     a status change arriving during one is coalesced into one more.
 24. GetSystemPowerStatus (KERNEL32) returns SYSTEM_POWER_STATUS from the
@@ -255,21 +258,84 @@
 - Turn off hard disks starts at Never in every built-in scheme until the ATA
   standby and wake path is qualified on hardware; the user can still choose a
   time. The other Resource Kit relations are unchanged.
-- Stand by stays unqualified on every machine until a separate directive adds
-  suspend and resume to the network (NDIS), audio and USB drivers, APM Get
-  Capabilities (5310h) and the provider standby operation.
+- The first part left Stand by unqualified pending a separate directive.
+  `second-parts-2026-10-24.md` supplies that directive (G11B); its software
+  implementation is described below. Hardware evidence remains lead-owned.
 
 ## Interfaces
 
+### G11B suspend contract (2026-10-24)
+
+The second-parts directive supersedes the missing-driver boundary above.
+The Resource Kit chapter 30 (local `build/rskt/wrkc30_4.htm`, paragraphs
+about device context and APM capabilities) requires class owners to save
+context and reverse the device transition on resume. Suspend must retain
+open files, DMA allocations, registry claims and process identity; the S5
+quarantine/release path is not reusable.
+
+Primary-source checks for this implementation:
+
+- [Intel/Microsoft APM 1.2, 4.6.17 and 4.6.8](https://intel-vintage-developer.eu5.org/IAL/POWERMGM/APMV12.PDF):
+  5310h uses BX=0, CX bits 0/1 advertise global standby/suspend. A refusal
+  disables sleep without disabling power-status reporting. 5307h BX=1,
+  CX=1/2 returns only on resume or failure. Device context may be lost.
+- [Microsoft query](https://learn.microsoft.com/en-us/windows/win32/power/pbt-apmquerysuspend),
+  [suspend](https://learn.microsoft.com/en-us/windows/win32/power/pbt-apmsuspend),
+  [automatic resume](https://learn.microsoft.com/en-us/windows/win32/power/pbt-apmresumeautomatic)
+  and [interactive resume](https://learn.microsoft.com/en-us/windows/win32/power/pbt-apmresumesuspend):
+  query permits a veto, query delivery times out after approximately 20 s;
+  the automatic resume precedes the interactive resume. A delivered query
+  waits for its handler; timing out the entire broadcast can miss windows.
+- [NDIS query power](https://learn.microsoft.com/en-us/windows-hardware/drivers/network/oid-pnp-query-power)
+  and [set power](https://learn.microsoft.com/en-us/windows-hardware/drivers/network/oid-pnp-set-power):
+  the miniport receives QUERY_POWER then SET_POWER D3; D0 cancels a query
+  and restores operation. Pending sends/receive ownership must drain first.
+  These are device-driver calls in CiukiOS's contained NDIS host, not NTVDM.
+- Linux upstream [UHCI](https://github.com/torvalds/linux/blob/v6.12/drivers/usb/host/uhci-hcd.c),
+  [OHCI](https://github.com/torvalds/linux/blob/v6.12/drivers/usb/host/ohci-hub.c),
+  [EHCI](https://raw.githubusercontent.com/torvalds/linux/master/drivers/usb/host/ehci-hub.c):
+  preserve schedules/endpoint toggles and explicitly signal bus resume;
+  controller halt alone is not USB suspend. Loss of controller/device
+  context must fail qualification rather than silently reuse stale DMA.
+
+- [ACPI 6.5, 4.8.2.2.2](https://uefi.org/specs/ACPI/6.5/04_ACPI_Hardware_Specification.html#sleep-button):
+  fixed PM1 status bit 9 and PNP0C0E Notify(80h) both request sleep.
+- [ATA/ATAPI-6 r3a, power-management states](https://www.read.seas.harvard.edu/~kohler/class/04f-aos/ref/hardware/ATA-d1410r3a.pdf):
+  STANDBY IMMEDIATE E0h stops the spindle; IDLE IMMEDIATE E1h wakes it.
+  Flush precedes standby; SLEEP E6h would require reset and is not used.
+- [Linux Intel8x0 suspend/resume](https://raw.githubusercontent.com/torvalds/linux/v6.12/sound/pci/intel8x0.c):
+  restore the controller, codec and DMA address context after power loss;
+  a halt alone is insufficient. CiukiOS reuses each family's existing
+  prepare and silent-DMA proof against its retained allocations.
+
+The kernel performs a reversible transaction: durable storage flush,
+network, audio, USB, ATA standby, firmware sleep; time restoration, ATA
+wake, USB, audio, network on return. A failure unwinds completed stages
+in reverse order. A failed resume retains uncertain allocations and
+disables subsequent standby. No panic is part of this path. The device
+gate examines every inventoried controller, including failed/quarantined
+ones; absent classes succeed vacuously. APM is the implemented sleep
+provider; ACPI S1/S3 remains unavailable until it has a wake trampoline.
+Both ACPI sleep-button forms publish the existing sleep-request counter.
+
+Native toolkit windows receive the same power query/event sequence over
+their desktop channel and may veto; DOS sessions receive a visible notice
+before suspension. Native query replies carry a sequence token so late
+answers cannot veto a later request. Status notifications use the same
+coalescing rule as Win32. Stand by stays hidden if any present driver
+lacks a proved suspend/resume implementation. Host register models prove
+software sequencing only; the lead still owns hardware qualification.
+
 ### Call 73 (no new syscall number)
 
-The highest call-73 action on `main` is STATUS (4). G11 adds:
+At G11 allocation the highest call-73 action on `main` was STATUS (4). G11 adds:
 
 | Action | Value | Arguments | Result |
 | --- | --- | --- | --- |
-| `CIUKI_POWER_STANDBY` | 5 | none | ENOTSUP while not qualified (always, today); desktop only |
+| `CIUKI_POWER_STANDBY` | 5 | none | 0 on resume; ENOTSUP while not qualified; desktop only |
 | `CIUKI_POWER_POLICY` | 6 | C = `struct ciuki_power_policy`, D = its size | 0, EINVAL, EFAULT, ENODEV (no ATA disk); desktop only |
 | `CIUKI_POWER_EVENTS` | 7 | C = `struct ciuki_power_events`, D = its size | 0; any native client, cached, no firmware call |
+| `CIUKI_POWER_CANCEL_STANDBY` (G11B) | 8 | none | 0 if no pending BIOS request; rejects it otherwise; desktop only; EBUSY during sleep/shutdown |
 
 QUERY gains `CIUKI_POWER_CAN_STANDBY` (16).
 
@@ -278,7 +344,7 @@ QUERY gains `CIUKI_POWER_CAN_STANDBY` (16).
 (negative errno of the first failure) (out), `reserved` (zero).
 
 `struct ciuki_power_events` (version 1, 40 bytes): `version`, `size`,
-`sleep_requests` (APM 0001h, 0002h, 0009h, 000Ah), `battery_low` (0005h),
+`sleep_requests` (APM 0001h, 0002h, 0009h, 000Ah; ACPI sleep button), `battery_low` (0005h),
 `critical` (0008h), `resumes` (0003h, 0004h, 000Bh), `status_changes`
 (0006h, 000Ch), `standby_reason` (`CIUKI_POWER_STANDBY_*`: AVAILABLE 0,
 NO_PROVIDER 1, NO_FIRMWARE 2, NO_RESUME 3), `disk_seconds` (the last
@@ -305,7 +371,7 @@ flag, value = percent (255 unknown), extra = remaining seconds
 
 Host tests only (no QEMU, no image): `tests/host/desktop/power_policy_test.c`
 (schemes, persistence, tooltip, alarms, idle, broadcast rules),
-`tests/host/power_g11_test.c` (call-73 actions, counters, standby reasons),
+`tests/host/power_runtime_test.c` (call-73 actions, counters, standby reasons),
 `tests/host/ata_test.c` (IDLE timer encoding, ABRT without quarantine),
 the desktop and Control Panel tests and the window-model row "power". The
 hardware behaviour (drive spin-down on the T23, the APM counters) needs the
@@ -316,7 +382,7 @@ lead's T23 qualification.
 - Kernel: `core/power.c` (POLICY on the `power-policy` task, EVENTS,
   STANDBY), `core/power_source.c` (APM event counters, standby reason,
   `power_source_win32_status`), `core/power_quiesce.c`
-  (`power_devices_resume_ready`, false), `drivers/ata.c` (`ata_standby_timer`,
+  (`power_devices_resume_ready`, reversible transaction), `drivers/ata.c` (`ata_standby_timer`,
   ABRT classification), `include/ciuki/ata_power.h` (count encoding),
   `proc/win32/system.c` (`W32_S_POWER`).
 - SDK: `ciuki_power_events`, `ciuki_power_policy` (`<ciuki/power.h>`
@@ -329,3 +395,47 @@ lead's T23 qualification.
   `win32_native.c` (broker seam), `client.c` (alarm Force).
 - Control Panel: `apps/control/power.inc`; `--panel=power-meter` opens the
   Power Meter tab (the tray's "Open Power Meter").
+
+### G11B firmware query cancellation
+
+APM 1.2 sections 4.3.2/4.3.3 require CX=4 processing notifications at
+least every five seconds until a sleep request is accepted or rejected.
+A delivered application query can wait without a deadline. Therefore the
+APM worker sends processing once per second while a qualified request
+waits; it must not substitute a 60-second rejection timer. On a veto the
+desktop sends call-73 CANCEL_STANDBY (8), which marshals CX=5 onto the
+same APM worker. Highest visible call-73 action at allocation was EVENTS
+(7), including main and all local branches. Cancellation is desktop-only,
+idempotent without a pending BIOS request, and cannot cancel a firmware
+call that already entered sleep. No new syscall number or record is added.
+
+### G11B native channel extension
+
+The highest desktop opcode across visible branches at allocation was 86
+(`wt/g18`, DESK_V3_FLASH). G11B adds 87 DESK_POWER_EVENT and 88
+DESK_POWER_REPLY, without a new syscall or devctl. Call 73 separately gains action 8 for firmware query cancellation. Both are v2 messages,
+with no descriptors; registration is a REPLY with serial 0 and answer 1.
+An EVENT contains serial, PBT event and lParam (16 bytes including header).
+A REPLY contains serial and answer (12 bytes): 0 veto, 1 agreement, 2
+query removed from the queue. A delivered query has no handler deadline; other native/Win32
+notifications have a two-second per-window bound. Late replies with a different serial are ignored. Unregistered clients
+continue to agree implicitly. Failure notices go only to clients that
+agreed. Status notices use the existing power-status change policy.
+
+Additional host evidence: `power_sleep_test.c` exercises qualification and
+rollback at every class boundary; the APM provider test covers the flush,
+retained device transaction and firmware mailbox; all eight network and
+all audio families use their production register models; UHCI/OHCI/EHCI
+retain schedules and claims. `resize_client_test.c` and `desktop_test.c`
+cover native queries and status notices; `win32/shell/shell_test.c`
+covers delivered-query waits, dequeue timeouts and failure recipients.
+The fx-15 table's appended rows 42 and 43 (after main's last row 41)
+cover the DOS notice and resume repaint respectively; the model compares
+both transitions with full redraws in its power suspend/resume scenario.
+
+The same EVENT/REPLY payloads are accepted inside a v3 window envelope;
+window id and generation keep replies bound to that native window.
+`du3_power_reply` registers a v3 client (serial 0, answer 1) and sends its
+explicit dequeue/decision replies. The bridge never acknowledges a power
+query from an I/O thread implicitly; the owning UI decides, just as for
+its explicit PONG. Win32 windows continue using WM_POWERBROADCAST.

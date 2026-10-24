@@ -15,6 +15,7 @@
 #include <ciuki/work.h>
 #include <ciuki/ata.h>
 #include <ciuki/ata_power.h>
+#include <ciuki/power_sleep.h>
 #include <ciuki/timing.h>
 #include <ciuki/mm.h>
 
@@ -36,7 +37,13 @@ static struct kmutex addin_mutex;
 static bool addin_mutex_ready;
 static void ata_lock(struct ata_channel *c)
 {
-    if(!ata_addin_match(c->pci)) {kmutex_lock(&c->mutex);return;}
+retry:
+    while (c->sleeping && !c->stopped && c->sleep_owner != g_current) task_sleep_ms(1);
+    if(!ata_addin_match(c->pci)) {
+        kmutex_lock(&c->mutex);
+        if (c->sleeping && !c->stopped && c->sleep_owner != g_current) { kmutex_unlock(&c->mutex); goto retry; }
+        return;
+    }
     if((uintptr_t)&addin_mutex<(uintptr_t)&c->mutex) {
         kmutex_lock(&addin_mutex);kmutex_lock(&c->mutex);
     } else {kmutex_lock(&c->mutex);kmutex_lock(&addin_mutex);}
@@ -1641,6 +1648,84 @@ int ata_standby_timer_all(uint32_t seconds, struct ata_standby_result *out)
         klog("[ata%u] standby_timer unit=%u count=%u seconds=%u result=%d", c->index, u, count, applied, e);
     }
     return (int)fixed;
+}
+
+/* ATA-6 STANDBY IMMEDIATE E0h / IDLE IMMEDIATE E1h. No SRST and no
+ * allocation/claim retirement; ordinary I/O waits at channel admission. */
+static bool power_asleep[ATA_CHANNELS][ATA_DEVICES];
+bool ata_power_resume_ready(void)
+{
+    for (unsigned i = 0; i < ATA_CHANNELS; i++) {
+        struct ata_channel *c = &channels[i];
+        if (!c->discovered) continue;
+        if (c->stopped || c->quiescing || ata_addin_match(c->pci)) return false;
+        for (unsigned u = 0; u < ATA_DEVICES; u++) {
+            struct ata_device *d = &c->devices[u];
+            if (d->present && (!d->identified || d->block.quarantined || d->power_sleep_refused ||
+                (!d->atapi && !d->power_mgmt))) return false;
+        }
+    }
+    return true;
+}
+static int ata_power_command(struct ata_device *d, uint8_t command)
+{
+    struct ata_channel *c = d->channel;
+    uint64_t start = now(c), end = start + ATA_COMMAND_MS;
+    uint32_t sequence;
+    d->issued = false;
+    int e = select_device(d, start, end, 0);
+    if (!e) {
+        device_control(c, (uint8_t)(c->control_shadow & ~ATA_NIEN));
+        e = issue(d, command, start, &sequence);
+    }
+    if (!e) e = wait_irq_result(d, &sequence, start, end, ATA_CLASSIFY_ABORT);
+    if (!e) e = poll_status_result(d, start, end, 0, ATA_DRQ, ATA_CLASSIFY_ABORT);
+    disarm(c);
+    if (e==1) {d->power_sleep_refused=true;e=-FS_EOPNOTSUPP;}
+    return e;
+}
+int ata_power_resume(void)
+{
+    int first = 0;
+    for (unsigned i = 0; i < ATA_CHANNELS; i++) {
+        struct ata_channel *c = &channels[i];
+        if (!c->sleeping) continue;
+        ata_lock(c);
+        for (unsigned u = 0; u < ATA_DEVICES; u++) if (power_asleep[i][u]) {
+            int e = ata_power_command(&c->devices[u], 0xe1);
+            if (e && !first) first = e;
+            power_asleep[i][u] = false;
+        }
+        c->sleeping = false; c->sleep_owner = NULL;
+        ata_unlock(c);
+    }
+    return first;
+}
+int ata_power_suspend(void)
+{
+    if (!ata_power_resume_ready()) return -FS_EOPNOTSUPP;
+    int e = 0;
+    for (unsigned i = 0; !e && i < ATA_CHANNELS; i++) {
+        struct ata_channel *c = &channels[i];
+        if (!c->discovered) continue;
+        for (unsigned u = 0; !e && u < ATA_DEVICES; u++) {
+            struct ata_device *d = &c->devices[u];
+            if (d->identified && !d->atapi) e = ata_flush(&d->block);
+        }
+        if (e) break;
+        ata_lock(c);
+        c->sleep_owner = g_current; c->sleeping = true;
+        for (unsigned u = 0; !e && u < ATA_DEVICES; u++) {
+            struct ata_device *d = &c->devices[u];
+            if (!d->identified || d->atapi) continue;
+            /* Also wake a disk whose standby command returned uncertain. */
+            power_asleep[i][u] = true;
+            e = ata_power_command(d, 0xe0);
+        }
+        ata_unlock(c);
+    }
+    if (e) { int r = ata_power_resume(); return r ? r : e; }
+    return 0;
 }
 
 /* Emergency recorder: no mutex, scheduler, DMA, logging or command replay.

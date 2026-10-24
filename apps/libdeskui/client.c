@@ -94,6 +94,7 @@ static int window_open(struct du_window *w, struct du_ui *u, int channel, int wi
     queue(w, &m);
     /* G3: this window answers QUERY_END_SESSION (registration: serial 0, AGREE). */
     desk_message(&m, DESK_SESSION_ANSWER, 12); desk_put32(m.data + 8, DU_SESSION_AGREE); queue(w, &m);
+    desk_message(&m, DESK_POWER_REPLY, 12); desk_put32(m.data+8,1); queue(w,&m);
     return flush(w);
 fail: { int error = errno ? errno : EINVAL; du_window_destroy(w); errno = error; return -1; }
 }
@@ -201,6 +202,12 @@ int du_window_move(struct du_window *w, int x, int y)
     return queue(w, &m);
 }
 
+static void power_answer(struct du_window *w, int answer)
+{
+    struct ciuki_message m; desk_message(&m,DESK_POWER_REPLY,12);
+    desk_put32(m.data+4,w->power_serial); desk_put32(m.data+8,(uint32_t)answer);
+    w->power_reply_pending=queue(w,&m) ? answer+1 : 0;
+}
 /* G3 session states: 0 none, 1 inside the query callback, 2 the program
  * asks the user, 3 agreed (waiting for END_SESSION). */
 enum { SESSION_NONE, SESSION_QUERY, SESSION_ASKING, SESSION_AGREED };
@@ -283,7 +290,15 @@ int du_window_turn(struct du_window *w, uint64_t now)
                 w->request_width = p.width; w->request_height = p.height;
             }
             break;
+        case DESK_POWER_EVENT: {
+            w->power_serial=p.serial;
+            power_answer(w,2); (void)flush(w); /* handler owns the query from here */
+            int agree=w->power_event ? w->power_event(w,p.index,p.flags,w->user) : 1;
+            power_answer(w,p.index==0 && !agree ? 0 : 1);
+            break;
+        }
         case DESK_PING:
+            if (w->power_reply_pending) power_answer(w,w->power_reply_pending-1);
             if (w->session_reply_pending) session_answer(w, w->session_reply_pending - 1);   /* answer before PONG */
             desk_message(&m, DESK_PONG, 8); desk_put32(m.data + 4, p.serial); queue(w, &m); break;
         case DESK_PONG: break;
@@ -320,6 +335,7 @@ int du_window_turn(struct du_window *w, uint64_t now)
         default: if (w->message) w->message(w, &p, w->user); break;
         }
     }
+    if (w->power_reply_pending && w->count<16) power_answer(w,w->power_reply_pending-1);
     if (w->session_reply_pending && w->count<16) session_answer(w, w->session_reply_pending - 1);
     if (w->close_reply_pending && w->count<16) {
         struct ciuki_message m; desk_message(&m,DESK_CLOSE_ACK,8);

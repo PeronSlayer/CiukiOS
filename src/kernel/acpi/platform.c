@@ -209,9 +209,10 @@ static int provider_reserve(void)
 static int provider_activate(void) { return power_source_activate(POWER_SOURCE_ACPI); }
 static void provider_retire(bool uncertain) { power_source_release(POWER_SOURCE_ACPI, uncertain, uncertain ? -EIO : 0); }
 static void provider_publish(const struct ciuki_power_status *p) { power_source_publish_record(POWER_SOURCE_ACPI, p); }
+static void provider_sleep_request(void) { power_source_event(POWER_SOURCE_ACPI, 1, 0); }
 const struct fw_ops fw_kernel_ops = {allocate, release, charge, map, unmap, clock100ns, pause_ms, udelay, thread, lock, unlock, access,
     write_access, claim_port, sci, unsci, finish, provider_reserve, provider_activate, provider_retire, provider_publish,
-    run_clock100ns};
+    run_clock100ns, provider_sleep_request};
 static void com_pnp_thread(void *unused)
 {
     (void)unused;

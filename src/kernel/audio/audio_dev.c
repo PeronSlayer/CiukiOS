@@ -5,6 +5,7 @@
 #include <ciuki/audio.h>
 #include <ciuki/ac97.h>
 #include <ciuki/audio_backend.h>
+#include <ciuki/power_sleep.h>
 #include <ciuki/files.h>
 #include <ciuki/signal.h>
 #include <ciuki/timing.h>
@@ -35,12 +36,12 @@ static void audio_locks_init(void)
     kmutex_init_level(&audio_lock.service, "audio.service", KMUTEX_LEVEL_OUTER);
     kmutex_init_level(&audio_lock.control, "audio.control", KMUTEX_LEVEL_OUTER);
 }
-static bool power_stopped;
+static bool power_stopped, power_suspended;
 void audio_ec_attach(void)
 {
     if (!__atomic_load_n(&audio.initialized, __ATOMIC_ACQUIRE) ||
         !kmutex_lock_until(&audio_lock.control,deadline_after_ms(2000))) return;
-    if (!power_stopped) { thinkpad_ec_init(); thinkpad_ec_start(); }
+    if (!power_stopped && !power_suspended) { thinkpad_ec_init(); thinkpad_ec_start(); }
     kmutex_unlock(&audio_lock.control);
 }
 static struct vfs_table settings_table; /* bounded, never on a kernel stack */
@@ -135,6 +136,7 @@ int audio_master_set(struct ciuki_mixer_master *m)
 {
     if (m->left > 100 || m->right > 100 || m->mute > 1 || m->save_state || m->save_error) return -EINVAL;
     kmutex_lock(&audio_lock.control);
+    if (power_suspended) { kmutex_unlock(&audio_lock.control); return -EAGAIN; }
     /* The EC wrapper also clears delegation on failure. Offline changes
      * still apply and persist; the poller resynchronises from audio.master. */
     (void)thinkpad_ec_master_set(m);
@@ -152,6 +154,7 @@ int audio_master_set(struct ciuki_mixer_master *m)
 static void master_refresh(bool requested)
 {
     kmutex_lock(&audio_lock.control);
+    if (power_suspended) { kmutex_unlock(&audio_lock.control); return; }
     struct ciuki_mixer_master m = audio.master;
     bool hardware = audio.master_in_hardware;
     int changed = requested ? thinkpad_ec_master_refresh(&m) : thinkpad_ec_master_poll(&m);
@@ -312,6 +315,37 @@ int audio_power_quiesce(void)
     if (!e) power_stopped = true;
     kmutex_unlock(&audio_lock.control); kmutex_unlock(&audio_lock.service); return e;
 }
+bool audio_power_resume_ready(void)
+{ return !power_stopped && audio_backend_resume_ready(); }
+int audio_power_resume(void)
+{
+    if (!power_suspended) return 0;
+    kmutex_lock(&audio_lock.service); kmutex_lock(&audio_lock.control);
+    int e = audio_backend_resume();
+    if (!e) {
+        struct audio_transport b; audio_backend_snapshot(&b);
+        audio.running = b.running; audio.last_service_cycles = 0;
+        audio_backend_rebase(audio.output - (quantum_pending ? AUDIO_QUANTUM : 0));
+        idle_since = 0; audio_backend_idle(false);
+        thinkpad_ec_start();
+    } else audio_fail(e);
+    power_suspended = false;
+    kmutex_unlock(&audio_lock.control); kmutex_unlock(&audio_lock.service);
+    audio_wake(); return e;
+}
+int audio_power_suspend(void)
+{
+    if (!audio.initialized || (!audio.ready && audio_backend_resume_ready())) return 0;
+    if (!audio_power_resume_ready()) return -ENOTSUP;
+    uint64_t end = deadline_after_ms(2000);
+    if (!kmutex_lock_until(&audio_lock.service, end)) return -EBUSY;
+    if (!kmutex_lock_until(&audio_lock.control, end)) { kmutex_unlock(&audio_lock.service); return -EBUSY; }
+    int e = thinkpad_ec_stop();
+    if (!e) { power_suspended = true; e = audio_backend_suspend(); }
+    kmutex_unlock(&audio_lock.control); kmutex_unlock(&audio_lock.service);
+    if (e && power_suspended) { int r = audio_power_resume(); if (r) return r; }
+    return e;
+}
 /* The service start moved later by the firmware time proven since `firmware`. */
 static uint64_t service_start(uint64_t start, uint64_t firmware)
 {
@@ -320,7 +354,7 @@ static uint64_t service_start(uint64_t start, uint64_t firmware)
 }
 static void audio_service_locked(void)
 {
-    if (!audio.ready) return;
+    if (!audio.ready || power_suspended) return;
     struct audio_transport b; audio_backend_snapshot(&b);
     uint64_t start = ktime_cycles();
     /* f2-96: SMM time inside the service (a T23 SMI lasts 2.1 ms, proven
@@ -334,7 +368,7 @@ static void audio_service_locked(void)
         if (gap > audio.max_service_gap_us) audio.max_service_gap_us = gap > UINT32_MAX ? UINT32_MAX : (uint32_t)gap;
     }
     audio.last_service_cycles = start;
-    bool active = native_source_count() != 0;
+    bool active = native_source_count() != 0 || audio_backend_capture_active();
     if (audio_vm_active && audio_vm_active()) active = true;
     bool attached = audio_vm_attached && audio_vm_attached();
     unsigned nominal = attached ? AUDIO_VM_LEAD : AUDIO_LEAD;

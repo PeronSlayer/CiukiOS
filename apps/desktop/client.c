@@ -810,6 +810,10 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
                 desk_end_task_open(d,DESK_HANG_DOS,0,c->pid,c->window_id,c->title);
         }
         break;
+    case DESK_POWER_REPLY:
+        if (!p.serial) c->power_aware=1;
+        else desk_power_reply(d,i,p.serial,p.flags);
+        break;
     case DESK_SESSION_ANSWER:
         if (!p.serial) c->session_aware=1;     /* registration: this window handles queries */
         else session_answer(d,i,p.serial,p.flags);
@@ -2140,6 +2144,10 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
     if (error) { close_attachments(d,m,-1); if (p.request) v3_reply(d,peer,&p,error); return error; }
     struct desk_client *c=&d->clients[i];
     switch (p.opcode) {
+    case DESK_POWER_REPLY:
+        if (!p.serial) c->power_aware=1;
+        else desk_power_reply(d,i,p.serial,p.flags);
+        break;
     case DESK_DAMAGE: case DESK_V3_PRESENT: {
         if (p.opcode==DESK_V3_PRESENT && (!p.request || c->gl_present_request || c->minimized || c->collapsed || !p.width || !p.height)) { error=-EAGAIN;break; }
         if (!p.width || !p.height) break;

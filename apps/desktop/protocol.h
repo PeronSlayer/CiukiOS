@@ -156,7 +156,12 @@ enum desk_opcode {
      *   CREATE_WINDOW, registers the window for queries; the desktop never
      *   sends QUERY_END_SESSION or END_SESSION to an unregistered client
      *   (it agrees by default and gets CLOSE_REQUEST/CLOSED at the end). */
-    DESK_QUERY_END_SESSION, DESK_END_SESSION, DESK_SESSION_ANSWER
+    DESK_QUERY_END_SESSION, DESK_END_SESSION, DESK_SESSION_ANSWER,
+    /* G11B: highest visible opcode was 86 (wt/g18). v2, no descriptors.
+     * EVENT: serial,event (PBT),lParam; REPLY: serial,answer (0 veto,1
+     * agree,2 removed from queue). REPLY serial=0,answer=1 registers. */
+    DESK_POWER_EVENT = 87,
+    DESK_POWER_REPLY = 88
 };
 #define DESK_ENDSESSION_CLOSEAPP 0x00000001u   /* lParam bits, as WinUser.h */
 #define DESK_ENDSESSION_CRITICAL 0x40000000u

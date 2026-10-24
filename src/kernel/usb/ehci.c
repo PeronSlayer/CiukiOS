@@ -515,3 +515,34 @@ const struct usb_hc_ops usb_ehci_ops = {
     .port_disable=disable,.port_ack_changes=ack,.packet=packet,
     .interrupt=interrupt,.interrupt_stop=interrupt_stop,
 };
+
+int usb_ehci_suspend(struct usb_host *h)
+{
+    h->sleep_regs[0] = rd(h, 0); h->sleep_regs[1] = rd(h, 8);
+    h->sleep_regs[2] = rd(h, 0x14); h->sleep_regs[3] = rd(h, 0x18);
+    h->sleep_regs[4] = rd(h, 0x40); h->sleep_regs[5] = rd(h, 0x0c);
+    wr(h, 8, 0);
+    for (unsigned p = 0; p < h->ports; p++) {
+        unsigned v = port_read(h, p);
+        if ((v & 4) && !(v & 0x2000)) port_write(h, p, 0x80, 0, 0);
+    }
+    wr(h, 0, h->sleep_regs[0] & ~(ASE | PSE | 1u));
+    return wait(h, 4, ASS | PSS | 0x1000, 0x1000);
+}
+int usb_ehci_resume(struct usb_host *h)
+{
+    wr(h, 8, 0); wr(h, 0x14, h->sleep_regs[2]); wr(h, 0x18, h->sleep_regs[3]);
+    wr(h, 0x40, h->sleep_regs[4]); wr(h, 0x0c, h->sleep_regs[5]);
+    wr(h, 0, h->sleep_regs[0]);
+    int e = wait(h, 4, ASS | PSS | 0x1000, h->sleep_regs[0] & 1 ?
+        ((h->sleep_regs[0] & ASE ? ASS : 0) | (h->sleep_regs[0] & PSE ? PSS : 0)) : 0x1000);
+    if (e) return e;
+    for (unsigned p = 0; p < h->ports; p++)
+        if ((port_read(h, p) & 0x2080) == 0x80) port_write(h, p, 0x40, 0, 0);
+    usb_sleep(h, 20);
+    for (unsigned p = 0; p < h->ports; p++)
+        if ((port_read(h, p) & 0x2040) == 0x40) port_write(h, p, 0, 0xc0, 0);
+    usb_sleep(h, 10);
+    wr(h, 8, h->sleep_regs[1]);
+    return 0;
+}

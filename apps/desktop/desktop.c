@@ -1779,6 +1779,7 @@ static int power_request(int action)
     return ciuki_power(action==1 ? CIUKI_POWER_REBOOT : CIUKI_POWER_OFF);
 }
 static int power_state(void) { return ciuki_power(CIUKI_POWER_QUERY); }
+static int power_cancel_standby(void) { return ciuki_power(CIUKI_POWER_CANCEL_STANDBY); }
 static int power_standby(void) { return ciuki_power(CIUKI_POWER_STANDBY); }   /* G11 */
 static int power_alive(struct desktop *d, uint32_t pid)
 {
@@ -2297,6 +2298,7 @@ static void shell_setup(struct desktop *d, int gate)
     terminate_authority=d->authority_fd;
     d->power_request=power_request; d->power_state=power_state; d->power_prepare=power_prepare; d->power_alive=power_alive;
     d->power_standby=power_standby;
+    d->power_cancel_standby=power_cancel_standby;
     const char *mixer=getenv("CIUKI_MIXER_FD");
     fd=mixer ? number(mixer,CIUKI_OPEN_MAX-1) : -1;
     d->mixer_fd=fd>=3 && fcntl(fd,F_GETFD)>=0 ? fd : -1;

@@ -466,3 +466,33 @@ int maestro_capture_stop(struct audio_dma_device *d, uint32_t token)
     d->inhibited=true; maestro_inhibit(d);
     kmutex_unlock(&d->register_lock); return -EIO;
 }
+
+/* Retain boot rollback context and the diagnostic capture token across the
+ * shared playback/capture engine reset performed by prepare. */
+static __typeof__(maestro) sleep_maestro;
+static unsigned sleep_capture_source;
+int maestro_power_save(struct audio_dma_device *d)
+{
+    sleep_maestro=maestro;
+    uint16_t source=0;
+    int e=maestro.capture_running ? maestro_codec_read(d,0x1a,&source) : 0;
+    sleep_capture_source=source&7;
+    return e;
+}
+bool maestro_capture_active(const struct audio_dma_device *d)
+{ return maestro.owner==d && maestro.capture_running; }
+int maestro_power_resume(struct audio_dma_device *d)
+{
+    uint32_t clock=maestro.clock;
+    maestro=sleep_maestro; maestro.clock=clock;
+    maestro.capture_running=false; maestro.capture_generation=0;
+    if (!sleep_maestro.capture_running) return 0;
+    static const struct audio_frame silence[AUDIO_QUANTUM];
+    int e=0;
+    for (unsigned i=0;i<8 && !e;i++) e=audio_dma_publish(d,silence);
+    if (!e) e=audio_dma_start(d);
+    uint32_t token=0;
+    if (!e) e=maestro_capture_start(d,sleep_maestro.capture_rate,sleep_capture_source,&token);
+    if (!e) maestro.capture_generation=sleep_maestro.capture_generation;
+    return e;
+}

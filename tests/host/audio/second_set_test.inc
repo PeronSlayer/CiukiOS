@@ -310,6 +310,10 @@ static void test_second_set(void)
         else second.regs[(kind>=AUDIO_VIA686 ? d->channel : 4)/4]|=causes;
         CHECK(backend_irq(d->state.irq,d->name) && d->inhibited && !audio.error);
         CHECK(kind==AUDIO_SB16 ? second.mask : !second.active);
+        unsigned held_pages=pages_used; uint32_t held_phys=d->phys;
+        CHECK(!audio_backend_suspend() && !d->state.running);
+        CHECK(!audio_backend_resume() && d->state.ready && d->phys==held_phys && pages_used==held_pages);
+        CHECK(!audio_backend_suspend() && !audio_backend_resume());
         audio_backend_shutdown(); CHECK(!audio.quarantined && pages_used==baseline && !audio.commitment_pages);
         CHECK(second_pic_masks+second_pic_unmasks==pic_before);
         if (kind==AUDIO_SB16) {

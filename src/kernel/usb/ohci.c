@@ -207,3 +207,26 @@ const struct usb_hc_ops usb_ohci_ops = {
     .port_enable = enable, .port_disable = disable, .packet = packet, .port_ack_changes = ack_changes,
     .interrupt = usb_interrupt, .interrupt_stop = usb_interrupt_stop,
 };
+
+/* OHCI 1.0a HCFS Suspend -> Resume (20 ms) -> Operational. Restore the
+ * schedule/context without resetting a device address or DATA toggle. */
+int usb_ohci_suspend(struct usb_host *h)
+{
+    static const unsigned regs[] = {4, 0x10, 0x18, 0x20, 0x28, 0x34, 0x40, 0x44};
+    for (unsigned i = 0; i < 8; i++) h->sleep_regs[i] = usb_read(h, regs[i], 4);
+    usb_write(h, 0x14, UINT32_MAX, 4);
+    usb_write(h, 4, (h->sleep_regs[0] & ~0xfcu) | 0xc0u, 4);
+    return usb_wait_register(h, 4, 4, 0xc0, 0xc0, 100);
+}
+int usb_ohci_resume(struct usb_host *h)
+{
+    static const unsigned regs[] = {4, 0x10, 0x18, 0x20, 0x28, 0x34, 0x40, 0x44};
+    usb_write(h, 0x14, UINT32_MAX, 4);
+    for (unsigned i = 2; i < 8; i++) usb_write(h, regs[i], h->sleep_regs[i], 4);
+    usb_write(h, 4, (h->sleep_regs[0] & ~0xfcu) | 0x40u, 4);
+    usb_sleep(h, 20);
+    usb_write(h, 4, h->sleep_regs[0], 4);
+    int e = usb_wait_register(h, 4, 4, 0xc0, 0x80, 100);
+    if (!e) usb_write(h, 0x10, h->sleep_regs[1], 4);
+    return e;
+}

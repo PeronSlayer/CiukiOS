@@ -5,6 +5,7 @@
 #include <ciuki/mm.h>
 #include <ciuki/task.h>
 #include <ciuki/net.h>
+#include <ciuki/power_sleep.h>
 #include <ciuki/net_control.h>
 #include <ciuki/timing.h>
 #include <ciuki/net_bridge.h>
@@ -14,7 +15,7 @@
 #define NET_ENODEV 19
 static struct netif devices[NETIF_MAX];
 static unsigned device_count;
-static bool initialized, shutting_down;
+static bool initialized, shutting_down, net_sleeping;
 static struct task *worker;
 static bool input_active;
 static struct kmutex registration_mutex;
@@ -657,6 +658,7 @@ static void mmio_write(void *cookie, volatile void *mapping, unsigned reg, uint3
 { (void)cookie; *(volatile uint32_t *)((volatile uint8_t *)mapping + reg) = value; }
 int net_init(void)
 {
+    if (net_sleeping) return -NET_EBUSY;
     if (initialized) return shutting_down ? -NET_ENODEV : 0;
     initialized = true; kmutex_init(&registration_mutex);
     if (g_boot.flags & CBI_F_SAFE_MODE) {
@@ -727,6 +729,89 @@ int net_power_quiesce(void)
     if (worker) { task_reap(worker); worker = 0; }
     return 0;
 }
+/* Reversible stop: retain netif identity, stack callbacks, claims, rings and
+ * IRQ membership. No frame is replayed after stop/init. */
+bool net_power_resume_ready(void)
+{
+    if (shutting_down) return false;
+    for (unsigned i = 0; i < device_count; i++) {
+        struct netif *d = &devices[i];
+        if (!d->driver || d->quarantined || d->stopping || !d->ready) return false;
+        if (d->external_owner && (!d->power_ready || !d->power_suspend ||
+            !d->power_resume || !d->power_ready(d))) return false;
+        if (!d->external_owner && (!d->driver->stop || !d->driver->init ||
+            !d->driver->start || !d->driver->idle)) return false;
+    }
+    return true;
+}
+int net_power_resume(void)
+{
+    int first = 0;
+    for (unsigned i = 0; i < device_count; i++) {
+        struct netif *d = &devices[i];
+        kmutex_lock(&d->mutex);
+        if (!d->suspended) { kmutex_unlock(&d->mutex); continue; }
+        int e = 0;
+        if (d->external_owner) e = d->power_resume(d);
+        else {
+            e = pci_command(d, d->sleep_command & ~4u);
+            if (!e) e = d->driver->init(d);
+            if (!e) e = pci_command(d, d->sleep_command);
+            if (!e && d->configured_speed && d->driver==&net_e100)
+                e=net_e100_media(d,d->configured_speed,d->configured_duplex);
+            if (!e && d->configured_speed && d->driver==&net_e1000)
+                e=net_e1000_media(d,d->configured_speed,d->configured_duplex);
+            if (!e && d->sleep_running) e = d->driver->start(d);
+            if (!e && d->promiscuous) e = d->driver->promiscuous ? d->driver->promiscuous(d, true) : -ENOTSUP;
+        }
+        d->suspended = false;
+        if (e) { quarantine_locked(d, "resume_failed"); if (!first) first = e; }
+        else {
+            d->ready = true; d->running = d->sleep_running;
+            d->link = d->driver->link_state(d);
+            d->link_deadline = d->io.now(d->io.cookie) + 1000;
+            d->driver->irq_enable(d, d->irq_attached);
+        }
+        kmutex_unlock(&d->mutex);
+    }
+    if (initialized) kmutex_lock(&registration_mutex);
+    net_sleeping=false;
+    if (initialized) kmutex_unlock(&registration_mutex);
+    net_worker_kick(); return first;
+}
+int net_power_suspend(void)
+{
+    if (net_sleeping) return -NET_EBUSY;
+    if (!net_power_resume_ready()) return -ENOTSUP;
+    if (initialized) kmutex_lock(&registration_mutex);
+    net_sleeping=true;
+    if (initialized) kmutex_unlock(&registration_mutex);
+    /* A publication already holding registration_mutex is now visible. */
+    if (!net_power_resume_ready()) { (void)net_power_resume();return -ENOTSUP; }
+    int e = 0;
+    for (unsigned i = 0; i < device_count; i++) {
+        struct netif *d = &devices[i];
+        kmutex_lock(&d->mutex);
+        d->sleep_running = d->running;
+        d->ready = d->running = false; d->suspended = true;
+        if (d->external_owner) e = d->power_suspend(d);
+        else {
+            d->sleep_command = pci_read_config(d, &d->pci, 4) & 0xffff;
+            d->driver->irq_enable(d, false);
+            e = d->driver->stop(d);
+            if (!e && !d->driver->idle(d)) e = -EIO;
+            if (!e) e = pci_command(d, d->sleep_command & ~4u);
+            if (!e) for (unsigned k = 0; k < 4; k++) net_tx_complete(d, k, false);
+        }
+        if (e && !d->external_owner) {
+            d->suspended = false; quarantine_locked(d, "suspend_stop_unproved");
+        }
+        kmutex_unlock(&d->mutex);
+        if (e) break;
+    }
+    if (e) { int r = net_power_resume(); return r ? r : e; }
+    return 0;
+}
 unsigned net_count(void) { return device_count; }
 struct netif *net_get(unsigned i) { return i < device_count ? &devices[i] : 0; }
 
@@ -772,9 +857,10 @@ struct netif *netif_publish_external(const struct pci_func *p,const struct netif
                                       void *context,const uint8_t mac[6],gen_t generation,bool carrier,
                                       void (*fault)(struct netif *,const char *))
 {
-    if(!initialized || shutting_down || !p || !driver || !context || !fault || !generation ||
+    if(!initialized || shutting_down || net_sleeping || !p || !driver || !context || !fault || !generation ||
        !valid_mac(mac) || (g_boot.flags&CBI_F_SAFE_MODE)) return 0;
     kmutex_lock(&registration_mutex);
+    if (shutting_down || net_sleeping) {kmutex_unlock(&registration_mutex);return 0;}
     unsigned slot=device_count;
     for(unsigned i=0;i<device_count;i++) if(devices[i].pci.bus==p->bus && devices[i].pci.dev==p->dev && devices[i].pci.fn==p->fn) { slot=i;break; }
     struct netif *d=slot<NETIF_MAX?&devices[slot]:0;

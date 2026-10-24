@@ -286,6 +286,9 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/storage_power_test.c" -o "$out/storage_power_test"
 "$out/storage_power_test"
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/power_sleep_test.c" -o "$out/power_sleep_test"
+"$out/power_sleep_test"
 
 # FPU/SIMD audit classifier: a fixture with x87, MMX and SSE instructions
 # must be flagged; integer code must not.

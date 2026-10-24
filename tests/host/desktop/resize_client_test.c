@@ -23,8 +23,28 @@ static void open_window(struct du_window *w,struct du_ui *u)
     configured(400,300,0,1); assert(du_window_turn(w,1)==1); drain();
     assert(rt_surfaces()==1 && rt_mappings()==1 && rt_handles()==1);
 }
+static unsigned power_seen;
+static int power_event(struct du_window *w,uint32_t event,uint32_t flags,void *ctx)
+{ (void)w;(void)ctx;assert(flags==1 || event!=0);power_seen++;return event!=0; }
+static void rt_power_tests(void)
+{
+    struct du_window w;struct du_ui u;open_window(&w,&u);w.power_event=power_event;
+    for(unsigned event=0;event<=18;event+=event==0?4:event==4?3:event==7?3:8) {
+        struct ciuki_message msg;desk_message(&msg,DESK_POWER_EVENT,16);msg.data[0]=DESK_SHELL_VERSION;msg.data[2]=DESK_RESIZE_MINOR;
+        desk_put32(msg.data+4,event+1);desk_put32(msg.data+8,event);desk_put32(msg.data+12,event==0);
+        rt_push(&msg);assert(du_window_turn(&w,event+10)==1);
+        unsigned replies=0;
+        while(rt_pop(&msg)) if(msg.data[1]==DESK_POWER_REPLY) {
+            assert(desk_get32(msg.data+4)==event+1);
+            assert(desk_get32(msg.data+8)==(replies?event!=0:2));replies++;
+        }
+        assert(replies==2);
+    }
+    assert(power_seen==5);du_window_destroy(&w);rt_reset();
+}
 void rt_client_tests(void)
 {
+    rt_power_tests();
     struct du_window w; struct du_ui u;
     open_window(&w,&u);
     u.mouse_x=15; u.mouse_y=40;

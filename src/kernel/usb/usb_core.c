@@ -1,6 +1,7 @@
 /* USB enumeration and serialized service. SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/usb.h>
+#include <ciuki/power_sleep.h>
 #include <ciuki/input.h>
 #include <ciuki/init.h>
 #include <ciuki/smi.h>
@@ -155,7 +156,7 @@ bool usb_host_irq(struct usb_host *h)
     /* A retained fatal cause is worker state, not proof that the hardware
      * stopped asserting. Even quarantined hosts keep servicing their source
      * until isolation permits callback removal. */
-    if (!h || !h->irq_attached) return false;
+    if (!h || !h->irq_attached || h->suspended) return false;
     if (h->pci.prog_if == 0x20) {
         unsigned off = h->ehci_caplen, status = h->io.read(h->io.cookie, off + 4, 4);
         unsigned causes = status & h->io.read(h->io.cookie, off + 8, 4) & 0x17;
@@ -364,7 +365,7 @@ void usb_host_take(struct usb_host *h)
 {
     for (;;) {
         fs_lock_take(&h->transfer_lock);
-        if (!h->busy) { h->busy = true; return; }
+        if (!h->busy && !h->suspended) { h->busy = true; return; }
         usb_hid_service(h);
         fs_lock_drop(&h->transfer_lock);
         h->io.sleep(h->io.cookie, 1);
@@ -377,7 +378,7 @@ bool usb_host_take_until(struct usb_host *h, uint64_t deadline)
     for (unsigned waits = 0; waits < USB_BIND_TIMEOUT_MS; waits++) {
         if (usb_expired(h, deadline)) return false;
         if (fs_lock_try_take(&h->transfer_lock)) {
-            if (!h->busy) { h->busy = true; return true; }
+            if (!h->busy && !h->suspended) { h->busy = true; return true; }
             usb_hid_service(h);
             fs_lock_drop(&h->transfer_lock);
         }
@@ -527,6 +528,75 @@ int usb_power_quiesce(void)
         h->quarantined = true; h->reason = stopped ? "shutdown_stopped" : "shutdown_uncertain";
         usb_host_drop(h);
         if (!stopped) return -USB_EIO;
+    }
+    return 0;
+}
+bool usb_power_resume_ready(void)
+{
+    for (unsigned i = 0; i < host_count; i++) {
+        struct usb_host *h = &hosts[i];
+        if (!h->owned || h->quarantined || !h->ready || !h->ops ||
+            (h->pci.prog_if != 0 && h->pci.prog_if != 0x10 && h->pci.prog_if != 0x20)) return false;
+    }
+    return true;
+}
+int usb_host_resume(struct usb_host *h)
+{
+    if (!h->suspended) return 0;
+    fs_lock_take(&h->transfer_lock);
+    h->io.config_write(h->io.cookie, 4, h->sleep_regs[10], 2);
+    int e = h->io.config_read(h->io.cookie, 4, 2) != h->sleep_regs[10] ? -USB_EIO :
+        h->pci.prog_if == 0 ? usb_uhci_resume(h) :
+        h->pci.prog_if == 0x10 ? usb_ohci_resume(h) : usb_ehci_resume(h);
+    if (!e) for (unsigned i = 0; i < h->device_count; i++) {
+        struct usb_device *d = &h->devices[i];
+        if (!d->present) continue;
+        unsigned st = h->ops->port_status(h, d->root_port);
+        if (!(st & USB_PORT_CONNECTED) || !(st & USB_PORT_ENABLED) || (st & USB_PORT_CHANGED)) { e = -USB_EIO; break; }
+        for (unsigned k = 0; k < USB_HID_MAX; k++) {
+            struct usb_hid *p = &d->hid[k];
+            p->pipe_begin = p->progress_at = p->retire_begin = h->io.now(h->io.cookie);
+            p->next_poll = p->repeat_at = h->io.now(h->io.cookie) + 20;
+        }
+    }
+    h->suspended = false;
+    if (e) usb_host_quarantine(h, "resume_context_lost");
+    else { h->ready = h->sleep_ready; h->next_scan = h->io.now(h->io.cookie); }
+    fs_lock_drop(&h->transfer_lock);
+    return e;
+}
+int usb_host_suspend(struct usb_host *h)
+{
+    if (h->suspended) return 0;
+    if (!h->ready || h->quarantined || !h->owned) return -USB_ENOTSUP;
+    if (!usb_host_take_until(h, h->io.now(h->io.cookie) + 2000)) return -16; /* CiukiOS EBUSY */
+    for (unsigned k=0;k<h->device_count;k++) if (h->devices[k].storage.binding) {
+        usb_host_drop(h);return -16; /* CiukiOS EBUSY: finish publishing the mount first */
+    }
+    h->sleep_ready = h->ready; h->ready = false;
+    h->sleep_regs[10] = h->io.config_read(h->io.cookie, 4, 2);
+    int e = h->pci.prog_if == 0 ? usb_uhci_suspend(h) :
+        h->pci.prog_if == 0x10 ? usb_ohci_suspend(h) : usb_ehci_suspend(h);
+    h->suspended = true;
+    usb_host_drop(h);
+    if (e) { int r = usb_host_resume(h); return r ? r : e; }
+    return 0;
+}
+int usb_power_resume(void)
+{
+    int first = 0;
+    for (unsigned i = 0; i < host_count; i++) {
+        int e = usb_host_resume(&hosts[i]);
+        if (e && !first) first = e;
+    }
+    return first;
+}
+int usb_power_suspend(void)
+{
+    if (!usb_power_resume_ready()) return -USB_ENOTSUP;
+    for (unsigned i = 0; i < host_count; i++) {
+        int e = usb_host_suspend(&hosts[i]);
+        if (e) { int r = usb_power_resume(); return r ? r : e; }
     }
     return 0;
 }
@@ -998,7 +1068,7 @@ void usb_step(struct usb_host *h)
     if (!h) return;
     fs_lock_take(&h->transfer_lock);
     usb_hid_service(h);
-    if (h->busy) { fs_lock_drop(&h->transfer_lock); return; }
+    if (h->busy || h->suspended) { fs_lock_drop(&h->transfer_lock); return; }
     if (!h->ready || h->quarantined) { fs_lock_drop(&h->transfer_lock); usb_storage_service(h); return; }
     h->busy = true;
     if (!usb_leases_valid(h)) { usb_host_drop(h); return; }

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include "miniport.h"
 #include <ciuki/kernel.h>
+#include <ciuki/abi.h>
 #include <stddef.h>
 _Static_assert(sizeof(struct ndis_chars32)==124,"NDIS51 characteristics");
 _Static_assert(offsetof(struct ndis_chars32,cancel_send)==96,"NDIS50 characteristics");
@@ -209,6 +210,53 @@ static const uint32_t startup[]={0x00010101,0x00010102,0x00010103,0x00010104,
     0x00010116,0x0001010f,0x0001010e,0x00010110,0x01010103};
 static bool has_oid(struct ndis_miniport *m,uint32_t oid)
 { for(unsigned i=0;i<m->supported_count;i++) if(m->supported[i]==oid) return true;return false; }
+/* NDIS5 PnP OIDs (ntddndis.h). Never Halt on a reversible transition. */
+bool ndis_mp_power_ready(struct ndis_miniport *m)
+{
+    return live(m) && m->state == NDIS_MP_RUNNING &&
+        has_oid(m, 0xfd010102u) && has_oid(m, 0xfd010103u);
+}
+int ndis_mp_power(struct ndis_miniport *m, bool suspend)
+{
+    if (!ndis_mp_power_ready(m)) return -ENOTSUP;
+    if (suspend && m->power_error) return m->power_error;
+    if (suspend) {
+        if (m->power_phase == 4) return 0;
+        if (!m->power_phase) { m->power_phase = 1; m->tx_blocked = true; }
+    } else {
+        if (!m->power_phase) return 0;
+        if (m->power_phase != 5) {
+            if (m->control.live) return -EAGAIN;
+            m->power_error = 0;
+            uint32_t state = 1; /* NdisDeviceStateD0 */
+            if (!ndis_mp_oid(m, true, 0xfd010102u, &state, 4)) return -EIO;
+            m->power_phase = 5;
+        }
+    }
+    return -EAGAIN;
+}
+static void power_poll(struct ndis_miniport *m, int done)
+{
+    uint32_t state = 4; /* NdisDeviceStateD3 */
+    if (m->power_phase == 1) {
+        if (m->control.live || m->hang_token || m->transfer.live) return;
+        for (unsigned i = 0; i < NDIS_RING_SLOTS; i++)
+            if (m->tx[i].live || m->returns[i].live) return;
+        if (!ndis_mp_oid(m, false, 0xfd010103u, &state, 4)) { m->power_error = -EIO; return; }
+        m->power_phase = 2;
+    } else if (done && (m->power_phase == 2 || m->power_phase == 3 || m->power_phase == 5)) {
+        if (m->control.status != NDIS_SUCCESS) { m->power_error = -EIO; return; }
+        if (m->power_phase == 2) {
+            if (!ndis_mp_oid(m, true, 0xfd010102u, &state, 4)) { m->power_error = -EIO; return; }
+            m->power_phase = 3;
+        } else if (m->power_phase == 3) m->power_phase = 4;
+        else {
+            m->power_phase = 0; m->tx_blocked = false;
+            m->hang_due = after(m, (uint64_t)m->hang_seconds * 1000000);
+            m->counter_due = after(m, 1000000);
+        }
+    }
+}
 static int startup_result(struct ndis_miniport *m)
 {
     uint32_t oid=m->control.oid,value=0;unsigned bytes=m->control.written;
@@ -564,6 +612,18 @@ void ndis_mp_poll(struct ndis_miniport *m)
     for(unsigned i=0;i<NDIS_RING_SLOTS;i++) if(m->returns[i].live) {
         uint32_t ignored;
         if(m->ops.result(m->ops.context,m->returns[i].token,&ignored)) m->returns[i].live=false;
+    }
+    if (m->power_phase) {
+        if (m->power_phase == 1 && m->hang_token) {
+            uint32_t hung;
+            if (m->ops.result(m->ops.context,m->hang_token,&hung)) {
+                m->hang_token=0;
+                if (hung) { m->power_error=-EBUSY; return; }
+            }
+        }
+        if (m->power_phase == 1) send_poll(m); /* retire only: tx_blocked */
+        power_poll(m, done);
+        return;
     }
     if(m->hang_token) {
         uint32_t hung;

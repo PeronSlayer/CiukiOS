@@ -232,6 +232,9 @@ static void test_ymfpci(void)
         ym.irq_during_stop=true;
         CHECK(!audio_backend_stop() && !ym.active && !ym.regs[0x114/4] && !(ym.cfg[1]&4));
         CHECK(ym.stop_irqs && !audio_dma.state.published && !audio_dma.pcm[8191].right);
+        unsigned sleep_pages=pages_used; uint32_t sleep_phys=audio_dma.phys;
+        CHECK(!audio_backend_suspend() && !audio_backend_resume());
+        CHECK(audio_dma.state.ready && audio_dma.phys==sleep_phys && pages_used==sleep_pages);
         audio_backend_shutdown();
         CHECK(!audio.quarantined && pages_used==baseline && !audio.commitment_pages && ym.revokes==1);
         CHECK(!ym.pinned_mask && ym.unpin_calls==2);

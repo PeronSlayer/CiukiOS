@@ -35,6 +35,7 @@ int biosvm_apm_call(struct biosvm_regs *r, uint32_t ms)
     case 0x5300: r->eax = 0x0102; r->ebx = 0x504d; r->ecx = 0; break;
     case 0x5301: connects++; break;
     case 0x5304: disconnects++; break;
+    case 0x5310: CHECK(!r->ebx); r->ecx=0; break;
     case 0x530e: r->eax = 0x0102; break;
     case 0x530a:
         if (r->ebx & 0x8000) { r->flags = 1; r->eax = 0x0900; break; } /* no battery sockets */
@@ -59,6 +60,8 @@ void task_start(struct task *t) { CHECK(t == &fake_tasks[0] || t == &fake_tasks[
 void kwait_init(struct kwait *q) { memset(q, 0, sizeof(*q)); }
 void kwait_wake_all(struct kwait *q) { (void)q; wakes++; }
 bool kwait_wait_until(struct kwait *q, kwait_cond_fn cond, void *arg, uint64_t d) { (void)q; (void)d; return cond(arg); }
+int power_devices_suspend(void) { return -ENOTSUP; }
+int power_devices_resume(void) { return 0; }
 int storage_power_init(void) { return 0; }
 int storage_sync_bounded(uint64_t end) { (void)end; return 0; }
 uint64_t deadline_after_ms(uint32_t ms) { return ticks + ms; }
@@ -79,6 +82,7 @@ void biosvm_last_failure(struct biosvm_failure *out) { *out = (struct biosvm_fai
 #define APM_PLATFORM_HOST_CLOCK
 static uint64_t now_us(void *ctx) { (void)ctx; return ticks * 1000; }
 #include "../../src/kernel/core/power_source.c"
+bool power_devices_resume_ready(void) { return false; }
 #include "../../src/kernel/core/apm_platform.c"
 #include "../../src/kernel/core/power_platform.c"
 void task_sleep_ms(uint32_t ms) { ticks += ms; service_once(); }

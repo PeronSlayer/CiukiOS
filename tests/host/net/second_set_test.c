@@ -497,8 +497,25 @@ static void test_second_probe(enum second_kind kind)
         sleep_hook = 0; device_count = 0;
     }
 }
+static void test_second_sleep(void)
+{
+    for(enum second_kind kind=S_E1000;kind<=S_RHINE;kind++) {
+        struct second_model h;struct netif *d=&devices[0];second_setup(&h,d,kind);
+        shutting_down=false;CHECK(!second_attach(&h,d));device_count=1;
+        unsigned pages=page_count;gen_t generation=d->generation;uint8_t *dma=d->dma;
+        CHECK(net_power_resume_ready());
+        for(unsigned cycle=0;cycle<2;cycle++) {
+            CHECK(!net_power_suspend() && d->suspended && !d->running);
+            CHECK(!net_power_resume() && d->running && d->ready);
+            CHECK(d->generation==generation && d->dma==dma && page_count==pages && !releases);
+        }
+        CHECK(!netif_stop(d));device_count=0;
+    }
+    puts("PASS G11B network: two retained-claim/ring suspend/resume cycles for e1000/PCnet/Tulip/3Com/Rhine");
+}
 static void test_second_set(void)
 {
+    test_second_sleep();
     for (enum second_kind kind = S_E1000; kind <= S_RHINE; kind++) {
         test_second_paths(kind); test_second_faults(kind); test_second_admission(kind);
     }

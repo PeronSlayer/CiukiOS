@@ -558,7 +558,7 @@ static void fake_out8(void *ctx, uint16_t port, uint8_t value)
     f->phase_sectors=multiple ? f->multiple[f->selected] : 1;
     f->phase_left=f->blocks<f->phase_sectors ? f->blocks : f->phase_sectors;
     bool flush = value == 0xe7 || value == 0xea;
-    f->status = flush || value==0xc6 || value==0xef || value==0xe3 || f->dma_command ? 0x40 : 0x48;
+    f->status = flush || value==0xc6 || value==0xef || value==0xe3 || value==0xe0 || value==0xe1 || f->dma_command ? 0x40 : 0x48;
     if (value == 0xe3) {
         f->idle_count = f->registers[2][0]; f->idle_commands++;
         if (f->idle_abort) f->status = 0x41;
@@ -1018,6 +1018,9 @@ static void test_standby_timer(void)
     CHECK(ata_channel_discover(&f.channel) == 1);
     struct ata_device *d = &f.channel.devices[0];
     CHECK(d->power_mgmt);
+    CHECK(!ata_power_command(d,0xe0) && f.command==0xe0);
+    CHECK(!ata_power_command(d,0xe1) && f.command==0xe1);
+    CHECK(!d->block.read(&d->block,0,1,buf));
     unsigned commands = f.commands;
     CHECK(ata_standby_timer(d, 241) == 0 && f.command == 0xe3 && f.idle_count == 241 && f.commands == commands + 1);
     CHECK(d->standby_count == 241 && !d->standby_refused && !f.channel.stopped && (f.control & 2));

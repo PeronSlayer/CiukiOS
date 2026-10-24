@@ -263,6 +263,20 @@ static void session(void)
         assert(!desktop_call(NULL,W32R_ENDSESSION,W32R_POWER_RESET,0,&r,NULL,0));
         PSTATUS(); assert(st.key==1);
         assert(rpc(10,W32R_ENDSESSION,W32R_SESSION_REPLY,hwnd,100,1,"","",NULL,0,&r,NULL,0)==6);
+        /* G11B: dequeue deadline belongs to a window, not the broadcast.
+         * A delivered query may wait for its handler beyond 20 seconds. */
+        assert(!rpc(99,W32R_ENDSESSION,W32R_POWER_BEGIN,0,0,1,"","",NULL,0,&r,NULL,0));
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_POLL,0,100,0,"","",NULL,0,&r,NULL,0)&&r.count==0);
+        server.now+=20001;PSTATUS();assert(st.key==0);
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_REPLY,hwnd,100,1,"","",NULL,0,&r,NULL,0));
+        assert(!desktop_call(NULL,W32R_ENDSESSION,W32R_POWER_RESET,0,&r,NULL,0));
+        assert(!rpc(99,W32R_ENDSESSION,W32R_POWER_BEGIN,0,2,0,"","",NULL,0,&r,NULL,0));
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_POLL,0,100,0,"","",NULL,0,&r,NULL,0)&&r.count==2);
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_REPLY,hwnd,100,1,"","",NULL,0,&r,NULL,0));
+        assert(!desktop_call(NULL,W32R_ENDSESSION,W32R_POWER_RESET,0,&r,NULL,0));
+        assert(!rpc(99,W32R_ENDSESSION,W32R_POWER_BEGIN,0,0,0,"","",NULL,0,&r,NULL,0));
+        server.now+=20000;PSTATUS();assert(st.key==1 && st.count==1);
+        assert(!desktop_call(NULL,W32R_ENDSESSION,W32R_POWER_RESET,0,&r,NULL,0));
         #undef PSTATUS
         puts("PASS G11 WM_POWERBROADCAST: desktop authority, one at a time, per-window delivery on the USER thread, query denial, notifications not denied, end of session first, reset");
     }

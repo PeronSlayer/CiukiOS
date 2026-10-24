@@ -278,6 +278,8 @@ struct usb_host {
     unsigned root_status[USB_PORT_MAX]; /* last observed normalized state */
     struct usb_port_log root_log[USB_PORT_MAX];
     bool attempted, ready, quarantined, touched, owned, busy;
+    bool suspended, sleep_ready;
+    uint32_t sleep_regs[12];
     bool irq_attached, irq_pending;
     bool completion_irq, irq_fallback;
     uint64_t completion_interrupts;
@@ -299,6 +301,14 @@ struct usb_host {
 };
 extern const struct usb_hc_ops usb_uhci_ops, usb_ohci_ops, usb_ehci_ops;
 int usb_ehci_activate(struct usb_host *, struct usb_host *, unsigned);
+int usb_uhci_suspend(struct usb_host *);
+int usb_uhci_resume(struct usb_host *);
+int usb_ohci_suspend(struct usb_host *);
+int usb_ohci_resume(struct usb_host *);
+int usb_ehci_suspend(struct usb_host *);
+int usb_ehci_resume(struct usb_host *);
+int usb_host_suspend(struct usb_host *);
+int usb_host_resume(struct usb_host *);
 bool usb_ehci_stop(struct usb_host *); /* pinned claims/arena are never released */
 int usb_controller_snapshot(const struct usb_host *, struct usb_controller_inventory *);
 bool usb_ehci_companion_ready(const struct usb_host *, unsigned port);

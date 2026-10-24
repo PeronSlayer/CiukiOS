@@ -17,7 +17,9 @@ static bool s5_available;
 
 static uint64_t sources_at, request_at;
 static struct ciuki_power_status published;
-static ACPI_HANDLE power_buttons[FW_MAX];
+static ACPI_HANDLE power_buttons[FW_MAX], sleep_buttons[FW_MAX];
+static unsigned sleep_button_count;
+static uint64_t sleep_request_at;
 static unsigned button_count;
 static struct saved_enable { uint32_t address; uint8_t value; } enables[260];
 static unsigned enable_count;
@@ -57,11 +59,21 @@ void fw_power_request(void)
     fw_os->unlock(flags);
     if (ready && fw_os->publish) fw_os->publish(&published);
 }
-static UINT32 button(void *ctx) { if (!ctx) fw_power_request(); return ACPI_INTERRUPT_HANDLED; }
+static void sleep_request(void)
+{
+    uint32_t f = fw_os->lock();
+    bool due = !sleep_request_at || fw_os->clock() >= sleep_request_at;
+    if (due) sleep_request_at = fw_os->clock() + 10000000;
+    fw_os->unlock(f);
+    if (due && fw_os->sleep_request) fw_os->sleep_request();
+}
+static UINT32 button(void *ctx)
+{ if (ctx) sleep_request(); else fw_power_request(); return ACPI_INTERRUPT_HANDLED; }
 static void notify(ACPI_HANDLE h, UINT32 value, void *ctx)
 {
     (void)ctx;
     if (value == 0x80) {
+        for (unsigned i = 0; i < sleep_button_count; i++) if (sleep_buttons[i] == h) sleep_request();
         for (unsigned i = 0; i < button_count; i++) if (power_buttons[i] == h) fw_power_request();
     }
     /* fx-3 follow-up 2: a thermal zone's notification re-reads that zone
@@ -124,12 +136,16 @@ int acpi_pm_blocks(struct apm_pm_blocks *out)
     if (!out || !pm_blocks_valid) return -2; /* ENOENT */
     *out = pm_blocks; return 0;
 }
-ACPI_STATUS fw_power_collect(ACPI_HANDLE h, uint32_t caps, uint32_t id, bool power_button)
+ACPI_STATUS fw_power_collect(ACPI_HANDLE h, uint32_t caps, uint32_t id, bool power_button, bool sleep_button)
 {
     ACPI_STATUS s = AE_OK;
     if (power_button) {
         if (button_count == FW_MAX) return AE_LIMIT;
         power_buttons[button_count++] = h;
+    }
+    if (sleep_button) {
+        if (sleep_button_count == FW_MAX) return AE_LIMIT;
+        sleep_buttons[sleep_button_count++] = h;
     }
     if (caps & CIUKI_FW_CAP_EC) s = fw_ec_add(h);
     if (!s && (caps & CIUKI_FW_CAP_THERMAL)) s = fw_thermal_add(h, id);
@@ -180,7 +196,7 @@ ACPI_STATUS fw_power_takeover(void)
     if (!s) s = AcpiEvInstallSciHandler();
     if (!s) s = AcpiInstallNotifyHandler(ACPI_ROOT_OBJECT, ACPI_ALL_NOTIFY, notify, NULL);
     if (!s && !(AcpiGbl_FADT.Flags & ACPI_FADT_POWER_BUTTON)) s = AcpiInstallFixedEventHandler(ACPI_EVENT_POWER_BUTTON, button, NULL);
-    /* Sleep button is acknowledged without offering suspend. */
+    /* Both button forms use the policy owner; no sleep in SCI context. */
     if (!s && !(AcpiGbl_FADT.Flags & ACPI_FADT_SLEEP_BUTTON)) s = AcpiInstallFixedEventHandler(ACPI_EVENT_SLEEP_BUTTON, button, (void *)1);
     if (!s) {
         fw_budget_begin(100000, 250);

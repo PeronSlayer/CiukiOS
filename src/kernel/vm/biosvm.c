@@ -582,7 +582,7 @@ static int apm_io(void *arg, uint16_t port, unsigned width, bool write, uint32_t
 static int run_vm(struct biosvm_regs *regs, uint32_t ms, unsigned test)
 {
     bool apm = regs->interrupt == 0x15 &&
-               ((regs->eax >= 0x5300 && regs->eax <= 0x530f) || regs->eax == 0x5380);
+               ((regs->eax >= 0x5300 && regs->eax <= 0x5310) || regs->eax == 0x5380);
     if (apm && firmware.io) return -EBUSY;
     if (apm && apm_deadline_active) {
         uint64_t now = deadline_after_ms(0);
@@ -713,7 +713,7 @@ int biosvm_apm_call(struct biosvm_regs *regs, uint32_t ms)
     if (!regs || !ms || ms > 2000) return -EINVAL;
     uint32_t fn = regs->eax;
     if (regs->interrupt != 0x15 ||
-        !((fn >= 0x5300 && fn <= 0x530f) || fn == 0x5380) ||
+        !((fn >= 0x5300 && fn <= 0x5310) || fn == 0x5380) ||
         fn == 0x5302 || fn == 0x5303 ||
         (fn == 0x5380 && ((regs->ebx >> 8) & 0xff) != 0x7f)) return -V86_EPERM;
     if (!g_current || !(read_eflags() & V86_IF)) return -V86_EPERM;
