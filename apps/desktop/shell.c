@@ -918,7 +918,8 @@ static void act(struct desktop *d, const struct sh_item *it)
             char **paths=calloc((unsigned)selected,sizeof(*paths)); unsigned used=0; int e=paths?0:-ENOMEM;
             for (unsigned i=0;!e && i<model->count;i++) if (model->entries[i].selected) {
                 paths[used]=malloc(FM_PATH); if (!paths[used]) e=-ENOMEM;
-                else e=fm_entry_path(model,i,paths[used]); used++;
+                else e=fm_entry_path(model,i,paths[used]);
+                used++;
             }
             if (!e) e=fm_shell_selection_write(&model->fs,paths,used,manifest);
             fm_drag_free(paths,NULL,used);
@@ -3456,6 +3457,18 @@ int desk_shell_button(struct desktop *d, int button, int down)
     if(button==CIUKI_BUTTON_LEFT && d->sh.cfg.layout_switch && desk_contains(desk_shell_tray_icon_box(d,SH_TRAY_LANGUAGE),x,y)) {
         d->sh.cfg.keyboard^=1;d->text_dead=0;desk_preferences_changed(d);return 1;
     }
+    /* G22: handle the second click before the popup's outside-click path. */
+    if (button==CIUKI_BUTTON_LEFT && desk_contains(volume_icon_box(d),x,y)) {
+        if (d->sh.volume_click_ns && d->now_ns-d->sh.volume_click_ns <=
+            (uint64_t)d->sh.cfg.double_click_ms*1000000ull) {
+            d->sh.volume_click_ns=0;
+            if (d->sh.volume_open) damage(d,outer(volume_popup(d)));
+            d->sh.volume_open=0;
+            launch_named(d,"mixer",NULL);
+            return 1;
+        }
+        d->sh.volume_click_ns=d->now_ns ? d->now_ns : 1;
+    } else d->sh.volume_click_ns=0;
     /* G1: double-clicking the tray clock opens Date/Time Properties. */
     if (button==CIUKI_BUTTON_LEFT && desk_contains(desk_shell_clock_box(d),x,y)) {
         if (d->sh.clock_click_ns && d->now_ns-d->sh.clock_click_ns<=(uint64_t)d->sh.cfg.double_click_ms*1000000ull) {

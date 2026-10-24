@@ -537,7 +537,8 @@ void desk_folder_service(struct desktop *d)
                 paths[k]=malloc(FM_PATH); if (!paths[k]) r=-ENOMEM; else r=fm_entry_path(m,i,paths[k]); k++;
             }
             if (!r) r=fm_link_selection(m,paths,n);
-            for (unsigned i=0;i<k;i++) free(paths[i]); free(paths);
+            for (unsigned i=0;i<k;i++) free(paths[i]);
+            free(paths);
             if (!r) { r=fm_refresh(m); if (!r) desk_folder_changed(d); }
         } else if (command==DF_PASTE_INTO && m->entries[index].meta.type==FM_DIR) {
             r=fm_entry_path(m,(unsigned)index,path); if (!r) r=job(d,FM_COPY,NULL,0,path,2);

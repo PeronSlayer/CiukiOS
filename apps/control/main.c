@@ -272,6 +272,12 @@ static int usb_hwid_name(void *ctx, unsigned vendor, unsigned device, char *out,
     struct cp_main *m=ctx; m->assets_requested=1;
     return cp_hwid_lookup_json(m->hwid_usb,vendor,device,out,size);
 }
+static int sound_validate(void *ctx, const char *path)
+{ (void)ctx; return sound_validate_file(path); }
+static int sound_schemes(void *ctx, char names[][SOUND_SCHEME_NAME], unsigned cap)
+{ (void)ctx; return sound_scheme_list_at(SOUND_SCHEMES_DIR,names,cap); }
+static int sound_scheme(void *ctx, unsigned op, const char *name, struct sound_scheme *s)
+{ (void)ctx; return sound_scheme_at(SOUND_SCHEMES_DIR,op,name,s); }
 static int load_sounds(void *ctx, char *text, size_t size, size_t *length)
 {
     (void)ctx; struct sound_scheme s;
@@ -465,6 +471,25 @@ static int log_read(void *ctx,uint32_t offset,char *text,size_t cap,size_t *leng
 static int open_power(void *ctx) { return apply(ctx,DESK_SETTINGS_OPEN_POWER,0,0); }
 static int read_power_status(void *ctx, struct ciuki_power_status *out)
 { (void)ctx; return ciuki_power_status(out) ? -errno : 0; }
+static int capture_caps(void *ctx,struct ciuki_audio_capture *out)
+{
+    (void)ctx; int fd=open("/dev/audio",O_RDONLY|O_CLOEXEC);
+    if (fd<0) return -errno;
+    *out=(struct ciuki_audio_capture){.version=1,.size=sizeof(*out)};
+    int error=ciuki_devctl(fd,AUDIO_CAPTURE_CAPS,out,sizeof(*out)) ? -errno : 0;
+    close(fd); return error;
+}
+static int multimedia_open(void *ctx,unsigned which)
+{
+    struct cp_main *m=ctx;
+    static const char *const names[]={"mixer","recorder","music"};
+    if (which>=3) return -EINVAL;
+    unsigned n=(unsigned)strlen(names[which]); struct ciuki_message request;
+    desk_message(&request,DESK_LAUNCH,16+n);
+    desk_put32(request.data+4,++m->serial); desk_put32(request.data+8,n);
+    memcpy(request.data+12,names[which],n); desk_put32(request.data+12+n,0);
+    return du_window_queue(&m->window,&request) ? -errno : 0;
+}
 static int audio_query(void *ctx, struct ciuki_audio_diagnostics *out)
 {
     (void)ctx;
@@ -769,6 +794,7 @@ int main(int argc, char **argv)
     h->startup_list=startup_list; h->startup_enable=startup_enable;
     h->uninstall_list=win32_uninstall_list; h->program_remove=program_remove;
     h->program_install=program_install;h->programs_changed=programs_changed;
+    h->sound_validate=sound_validate; h->sound_schemes=sound_schemes; h->sound_scheme=sound_scheme;
     h->load_sounds = load_sounds; h->save_sounds = save_sounds; h->load = load; h->save = save; h->wallpapers = wallpapers; h->decode_begin = decode_begin; h->decode_poll = decode_poll; h->decode_cancel = decode_cancel; h->mixer = mixer; h->apply = apply; h->now = now; h->time_zone = time_zone; h->ctx = m;
     h->display = display_query;
     h->network_begin=network_begin; h->network_poll=network_poll;
@@ -776,7 +802,7 @@ int main(int argc, char **argv)
     h->network=network_query; h->power=open_power; h->power_status=read_power_status; h->log_read=log_read;
     h->autoplay_list=autoplay_list; h->autoplay_forget=autoplay_forget;
     h->save_async=1; h->fonts_async=1; h->job_notify=notify_completion;
-    h->audio_diagnostics = audio_query;
+    h->audio_diagnostics = audio_query; h->capture_caps=capture_caps; h->multimedia_open=multimedia_open;
     h->game_begin=game_begin;h->game_poll=game_poll_result;
     h->joystick = joystick_request; h->joystick_save_game = joystick_save_game; h->devices = devices; h->firmware = firmware; h->hwid_name = hwid_name; h->usb_hwid_name = usb_hwid_name; h->monotonic = monotonic; h->boot_load = boot_load; h->boot_save = boot_save;
 

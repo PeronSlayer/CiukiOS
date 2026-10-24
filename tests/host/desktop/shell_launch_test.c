@@ -108,7 +108,6 @@ static FILE *sequence_fopen(const char *path,const char *mode)
 }
 #define fopen sequence_fopen
 #endif
-#include "replay_display.h"
 #include "../../../apps/desktop/desktop.c"
 #undef CU_CALL
 #undef write

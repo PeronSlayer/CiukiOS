@@ -19,12 +19,12 @@ enum {
     C_SYS0, C_SYS1, C_SYS2, C_SYS3, C_SYS4,
     C_BACK = 100, C_APPLETS, C_TREE, C_REFRESH, C_PROPERTIES, C_DRIVERS, C_LEASES,
     C_SYSTEM_TABS, C_CPU, C_UPTIME, C_SYSTEM_HARDWARE, C_FLAGS, C_BOOT_OPTIONS, C_SERIAL, C_BOOT_APPLY,
-    C_DETAILS = 130, C_FIRMWARE = 131, D_FIRMWARE = 199, D_PROPERTIES = 200, D_INFO, C_SCHEME, C_UI_VOL, C_UI_VOL_V
+    C_DETAILS = 130, C_FIRMWARE = 131, D_FIRMWARE = 199, D_PROPERTIES = 200, D_INFO, C_SCHEME, C_UI_VOL, C_UI_VOL_V, C_SOUND_BROWSE, C_SOUND_NONE, C_SCHEME_SAVE, C_SCHEME_DELETE, D_SOUND_BROWSE, D_SCHEME_SAVE, C_MM_VOLUME, C_MM_RECORDER, C_MM_MUSIC
 };
 enum { C_REPEAT_DELAY=1500, C_REPEAT_SPEED, C_BLINK, C_SWAP, C_TRAILS,
        C_WHEEL, C_POINTER, C_LAYOUT_SWITCH, C_DOUBLE_TEST };
-static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts", "autoplay", "programs", "joystick"};
-static const char *const page_labels[CP_PAGES] = {"Display Properties", "Mouse", "Keyboard", "Sounds and Audio", "Date and Time", "System", "System", "System", "Network", "Power", "Display Properties", "Display Properties", "Storage and removable devices", "Add/Remove Programs", "Game controllers"};
+static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts", "autoplay", "programs", "joystick", "multimedia"};
+static const char *const page_labels[CP_PAGES] = {"Display Properties", "Mouse", "Keyboard", "Sounds and Audio", "Date and Time", "System", "System", "System", "Network", "Power", "Display Properties", "Display Properties", "Storage and removable devices", "Add/Remove Programs", "Game controllers", "Multimedia"};
 static void build(struct cp_app *a);
 static void refresh(struct cp_app *a);
 static unsigned power_read(struct cp_app *a);
@@ -57,6 +57,17 @@ static void load(struct cp_app *a, struct ciuki_settings *out)
     static char buffer[CFG_TEXT_MAX]; size_t n = 0;
     cfg_defaults(out);
     if (a->host.load && !a->host.load(a->host.ctx, buffer, sizeof(buffer), &n)) cfg_parse(out, buffer, n);
+}
+static int sound_commit(struct cp_app *a, const struct sound_scheme *next)
+{
+    size_t n=sound_format(next,a->sound_text,sizeof(a->sound_text));
+    if (!n || !a->host.save_sounds || a->host.save_sounds(a->host.ctx,a->sound_text,n)) {
+        text(a,C_STATUS,"Sound settings could not be saved."); return -1;
+    }
+    a->sounds=*next;
+    int r=a->host.apply ? a->host.apply(a->host.ctx,DESK_SETTINGS_SOUND_RELOAD,0,0) : -1;
+    text(a,C_STATUS,r ? "Saved. Restart to apply sound settings." : "Sound settings saved and applied.");
+    return 0;
 }
 static void changed(struct cp_app *a)
 {
@@ -352,8 +363,11 @@ static void sync(struct cp_app *a)
     if ((w = du_get(u,C_SOUND_ENABLED))) w->value = a->sounds.enabled;
     struct sound_scheme defaults; sound_defaults(&defaults);
     unsigned scheme = !a->sounds.enabled ? 1 : memcmp(defaults.file,a->sounds.file,sizeof(defaults.file)) ? 2 : 0;
-    for (unsigned k = 0; k < 3; k++) a->scheme_items[k].selected = k == scheme;
-    if ((w = du_get(u,C_SCHEME))) w->active = scheme;
+    for (unsigned k=0;k<a->sound_name_count;k++)
+        if (!strcmp(a->sound_named,a->sound_names[k])) scheme=k+3;
+    for (unsigned k = 0; k < 3+a->sound_name_count; k++) a->scheme_items[k].selected = k == scheme;
+    if ((w=du_get(u,C_SCHEME_DELETE))) w->disabled=scheme<3;
+    if ((w = du_get(u,C_SCHEME))) { w->active = scheme; du_list_ensure(w,scheme); }
     if ((w = du_get(u,C_UI_VOL))) w->value = a->sounds.volume;
     snprintf(a->sound_volume_label,sizeof(a->sound_volume_label),"%d%%",a->sounds.volume);
     text(a,C_UI_VOL_V,a->sound_volume_label);
@@ -760,22 +774,63 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
             text(a,C_STATUS,r ? "Audio test could not start." : e->id == C_HARDWARE ? "Testing audio hardware..." : "Playing selected sound.");
         }
         break;
+    case C_MM_VOLUME: case C_MM_RECORDER: case C_MM_MUSIC:
+        if (e->type==DU_EV_ACTIVATE) {
+            int error=a->host.multimedia_open ? a->host.multimedia_open(a->host.ctx,(unsigned)(e->id-C_MM_VOLUME)) : -ENOSYS;
+            text(a,C_STATUS,error ? "The multimedia program could not be opened." : "Program requested.");
+        }
+        break;
+    case C_SOUND_BROWSE:
+        if (e->type==DU_EV_ACTIVATE)
+            du_file_dialog(u,D_SOUND_BROWSE,0,"Choose a PCM WAV sound (22050 Hz, mono, 16-bit, up to 2 seconds)",SOUND_DIR,"",NULL,NULL);
+        break;
+    case C_SOUND_NONE: case D_SOUND_BROWSE:
+        if ((e->id==C_SOUND_NONE && e->type==DU_EV_ACTIVATE) ||
+            (e->id==D_SOUND_BROWSE && e->type==DU_EV_DIALOG && !e->index && e->text)) {
+            const char *path=e->id==C_SOUND_NONE ? "" : e->text;
+            struct sound_scheme next=a->sounds;
+            if (sound_assign(&next,a->sound_selected,path) || (path[0] &&
+                (!a->host.sound_validate || a->host.sound_validate(a->host.ctx,path)))) {
+                text(a,C_STATUS,"Cannot assign this sound: choose a supported PCM WAV file."); break;
+            }
+            if (!sound_commit(a,&next)) a->sound_named[0]=0;
+        }
+        break;
+    case C_SCHEME_SAVE:
+        if (e->type==DU_EV_ACTIVATE) du_input_box(u,D_SCHEME_SAVE,"Save sound scheme","Name (letters, digits, hyphen or underscore):",a->sound_named);
+        break;
+    case D_SCHEME_SAVE:
+        if (e->type==DU_EV_DIALOG && !e->index && e->text) {
+            if (!a->host.sound_scheme || a->host.sound_scheme(a->host.ctx,SOUND_SCHEME_SAVE,e->text,&a->sounds))
+                text(a,C_STATUS,"Scheme could not be saved. Choose a valid custom name.");
+            else { snprintf(a->sound_named,sizeof(a->sound_named),"%s",e->text); build(a); text(a,C_STATUS,"Named scheme saved."); }
+        }
+        break;
+    case C_SCHEME_DELETE:
+        if (e->type==DU_EV_ACTIVATE && a->sound_named[0]) {
+            if (!a->host.sound_scheme || a->host.sound_scheme(a->host.ctx,SOUND_SCHEME_DELETE,a->sound_named,&a->sounds))
+                text(a,C_STATUS,"Scheme could not be deleted.");
+            else { a->sound_named[0]=0; build(a); text(a,C_STATUS,"Named scheme deleted; active sounds retained."); }
+        }
+        break;
     case C_SOUND_ENABLED: case C_SCHEME: case C_UI_VOL:
-        if ((e->id == C_SCHEME && e->type == DU_EV_SELECT && e->index >= 0 && e->index < 2) ||
+        if ((e->id == C_SCHEME && e->type == DU_EV_SELECT && e->index >= 0 && (unsigned)e->index < 3+a->sound_name_count) ||
             (e->id == C_UI_VOL && e->type == DU_EV_CHANGE && e->index >= 0 && e->index <= 100) ||
             (e->id == C_SOUND_ENABLED && (e->type == DU_EV_CHANGE || e->type == DU_EV_ACTIVATE))) {
             struct sound_scheme next = a->sounds;
             if (e->id == C_SCHEME) {
                 if (!e->index) { int volume = next.volume; sound_defaults(&next); next.volume = volume; }
-                else next.enabled = 0;
+                else if (e->index==1) next.enabled = 0;
+                else if (e->index==2) break;
+                else if (!a->host.sound_scheme || a->host.sound_scheme(a->host.ctx,SOUND_SCHEME_LOAD,a->sound_names[e->index-3],&next)) {
+                    text(a,C_STATUS,"Scheme could not be loaded."); break;
+                }
             } else if (e->id == C_UI_VOL) next.volume = e->index;
             else next.enabled = !next.enabled;
-            size_t n = sound_format(&next,a->sound_text,sizeof(a->sound_text));
-            if (!n || !a->host.save_sounds || a->host.save_sounds(a->host.ctx,a->sound_text,n)) text(a,C_STATUS,"Sound settings could not be saved.");
-            else {
-                a->sounds = next;
-                int r = a->host.apply ? a->host.apply(a->host.ctx,DESK_SETTINGS_SOUND_RELOAD,0,0) : -1;
-                text(a,C_STATUS,r ? "Saved. Restart to apply sound settings." : "Sound settings saved and applied.");
+            if (!sound_commit(a,&next)) {
+                if (e->id==C_SCHEME && e->index>=3)
+                    snprintf(a->sound_named,sizeof(a->sound_named),"%s",a->sound_names[e->index-3]);
+                else a->sound_named[0]=0;
             }
         }
         break;
@@ -1395,6 +1450,28 @@ static void build(struct cp_app *a)
     w=add(a,DU_SCROLLBAR,C_BLINK,224,212,280,17,"");w->total=13;w->page=1;w->vertical=0;
     add(a,DU_LABEL,C_KEY_NOTE1,24,258,480,14,"Italian: Shift+^, then a vowel; Space inserts the accent.");
     add(a,DU_EDIT,1515,24,284,480,24,"Type here to test repeat and blink");
+    } else if (a->page == CP_MULTIMEDIA) {
+        struct ciuki_audio_diagnostics diag={0};
+        struct ciuki_audio_capture cap={.version=1,.size=sizeof(cap)};
+        int playback=a->host.audio_diagnostics && !a->host.audio_diagnostics(a->host.ctx,&diag) &&
+            (diag.flags&CIUKI_AUDIO_DIAG_READY);
+        int capture=a->host.capture_caps && !a->host.capture_caps(a->host.ctx,&cap) && cap.available;
+        add(a,DU_GROUP,1800,16,38,528,100,"Audio");
+        add(a,DU_LABEL,1801,28,62,494,20,playback ? "Preferred playback: system audio device" : "Preferred playback: no available device");
+        add(a,DU_LABEL,1802,28,88,494,20,capture ? "Preferred recording: system capture device (microphone / line in)" : "Preferred recording: no supported capture device");
+        add(a,DU_LABEL,1803,28,112,494,20,"One system device; automatic routing (no alternate devices).");
+        add(a,DU_GROUP,1804,16,146,528,70,"MIDI");
+        add(a,DU_LABEL,1805,28,170,494,20,"Windows programs: built-in TinySoundFont synthesizer");
+        add(a,DU_LABEL,1806,28,192,494,20,"DOS: OPL3 synthesis; native MIDI port is not yet available.");
+        add(a,DU_GROUP,1807,16,224,528,66,"Devices");
+        char device[128];
+        if (playback) snprintf(device,sizeof(device),"Controller %08x; codec %08x; playback %u Hz",diag.controller,diag.codec_id,diag.rate);
+        else snprintf(device,sizeof(device),"Audio hardware unavailable or quarantined.");
+        add(a,DU_LABEL,1808,28,248,494,20,device);
+        add(a,DU_LABEL,1809,28,268,494,20,"CD audio uses the selected optical drive through MCI.");
+        add(a,DU_BUTTON,C_MM_VOLUME,24,306,152,26,"Volume Control");
+        add(a,DU_BUTTON,C_MM_RECORDER,190,306,152,26,"Sound Recorder");
+        add(a,DU_BUTTON,C_MM_MUSIC,356,306,152,26,"Music Player");
     } else if (a->page == CP_SOUNDS) {
     /* Sounds */
     add(a, DU_LABEL, C_VOL_L, 24, 44, 180, 14, "Master &volume:");
@@ -1407,16 +1484,24 @@ static void build(struct cp_app *a)
     add(a, DU_CHECKBOX, C_SOUND_ENABLED, 184, 88, 290, 24, "Play system sounds");
     static const char *const schemes[] = {"Default", "No sounds", "Custom"};
     for (unsigned k = 0; k < 3; k++) a->scheme_items[k].text[0] = schemes[k];
-    w = add(a,DU_TABS,C_SCHEME,24,124,452,28,""); w->items = a->scheme_items; w->count = 3;
+    int count=a->host.sound_schemes ? a->host.sound_schemes(a->host.ctx,a->sound_names,SOUND_SCHEMES_MAX) : 0;
+    a->sound_name_count=count>=0 && count<=(int)SOUND_SCHEMES_MAX ? (unsigned)count : 0;
+    for (unsigned k=0;k<a->sound_name_count;k++) a->scheme_items[k+3].text[0]=a->sound_names[k];
+    w = add(a,DU_LISTVIEW,C_SCHEME,24,120,270,52,""); w->items = a->scheme_items; w->count = 3+a->sound_name_count;
+    list_style(w,"Sound scheme");
+    add(a,DU_BUTTON,C_SCHEME_SAVE,306,124,82,24,"Save As...");
+    add(a,DU_BUTTON,C_SCHEME_DELETE,396,124,80,24,"Delete");
     for (unsigned k = 0; k < SOUND_EVENTS; k++) {
         a->sound_items[k].text[0] = sound_labels[k]; a->sound_items[k].text[1] = a->sounds.file[k];
     }
-    w = add(a,DU_LISTVIEW,C_SOUND_LIST,24,176,452,110,""); w->items = a->sound_items; w->count = SOUND_EVENTS;
+    w = add(a,DU_LISTVIEW,C_SOUND_LIST,24,180,452,94,""); w->items = a->sound_items; w->count = SOUND_EVENTS;
     list_style(w,"Event"); w->column_count = 2;
     w->columns[0] = (struct du_column){"Event",170,0}; w->columns[1] = (struct du_column){"Assigned sound",258,0};
-    add(a,DU_BUTTON,C_SOUND_TEST,24,294,90,24,"Preview");
-    add(a,DU_BUTTON,C_HARDWARE,124,294,220,24,"Test audio hardware");
-    add(a,DU_LABEL,C_AUDIO,24,326,452,14,"");
+    add(a,DU_BUTTON,C_SOUND_TEST,24,280,90,24,"Preview");
+    add(a,DU_BUTTON,C_SOUND_BROWSE,124,280,90,24,"Browse...");
+    add(a,DU_BUTTON,C_SOUND_NONE,224,280,90,24,"None");
+    add(a,DU_BUTTON,C_HARDWARE,24,312,220,24,"Test audio hardware");
+    add(a,DU_LABEL,C_AUDIO,24,342,500,14,"");
     } else if (a->page == CP_DATETIME) {
     dt_build(a);
     } else if (a->page==CP_UNINSTALL) {

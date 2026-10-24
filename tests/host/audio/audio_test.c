@@ -1256,7 +1256,7 @@ static void test_refill_demand(void)
     d->flags=O_RDONLY;
     CHECK(ctl(fd,AUDIO_REFILL_READ,&c,sizeof(c))==-EACCES && !audio_refill_reader(client,4096));
     struct file_description probe={.node=d->node};
-    CHECK(audio_device_open(&probe,O_RDONLY)==-EACCES && !probe.audio);
+    CHECK(!audio_device_open(&probe,O_RDONLY) && !probe.audio && !probe.capture_generation);
     d->flags=O_WRONLY|O_NONBLOCK;
     CHECK(!ctl(fd,AUDIO_REFILL_READ,&c,sizeof(c)));
     struct task *saved=g_current, other={.generation=1,.prio=P_NORMAL,.state=T_RUNNING};
@@ -1369,7 +1369,11 @@ static void test_stream_syscalls(void)
 {
     audio.ready=false;CHECK(file_open(client,"/dev/audio",O_WRONLY,0)==-ENODEV);
     audio.ready=true;audio.error=0;audio.running=true;idle_since=0; /* fd-only fixture: transport already running */
-    CHECK(file_open(client,"/dev/audio",O_RDONLY,0)==-EACCES);
+    int capture=file_open(client,"/dev/audio",O_RDONLY,0); CHECK(capture>=0);
+    struct ciuki_audio_capture cap={.version=1,.size=sizeof(cap)};
+    CHECK(!ctl(capture,AUDIO_CAPTURE_CAPS,&cap,sizeof(cap)) && !cap.available);
+    cap.gain=100; CHECK(ctl(capture,AUDIO_CAPTURE_START,&cap,sizeof(cap))==-EOPNOTSUPP);
+    CHECK(!file_close(client,capture));
     CHECK(file_open(client,"/dev/mixer",O_RDWR,0)==-EACCES);
     int fd=file_open(client,"/dev/audio",O_WRONLY|O_NONBLOCK,0);CHECK(fd>=0);
     waiting_stream=file_fd(client,fd)->audio;

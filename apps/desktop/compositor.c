@@ -237,7 +237,7 @@ struct desk_box desk_shell_tray_icon_box(const struct desktop *d, enum sh_tray_i
         (icon == SH_TRAY_POWER && d->sh.power_status.version != CIUKI_POWER_VERSION) ||
         (icon == SH_TRAY_MEDIA && !(d->sh.media.removable_mask & ~7u))) return (struct desk_box){0, 0, 0, 0};
     struct desk_box c = desk_shell_clock_box(d);
-    int slot = icon == SH_TRAY_LANGUAGE ? 3 + ((d->sh.media.removable_mask & ~7u) != 0) + (d->sh.power_status.version == CIUKI_POWER_VERSION) : icon == SH_TRAY_NOTIFICATION ? 0 : icon == SH_TRAY_POWER ? 3 + ((d->sh.media.removable_mask & ~7u) != 0) : icon == SH_TRAY_MEDIA ? 3 : icon + 1;
+    int slot = icon == SH_TRAY_LANGUAGE ? 3 + ((d->sh.media.removable_mask & ~7u) != 0) + (d->sh.power_status.version == CIUKI_POWER_VERSION) : icon == SH_TRAY_NOTIFICATION ? 0 : icon == SH_TRAY_POWER ? 3 + ((d->sh.media.removable_mask & ~7u) != 0) : icon == SH_TRAY_MEDIA ? 3 : (int)icon + 1;
     return (struct desk_box){c.x - (slot + 1) * (SH_TRAY_ICON_SIZE + SH_TRAY_GAP),
                             c.y + (c.h - SH_TRAY_ICON_SIZE) / 2, SH_TRAY_ICON_SIZE, SH_TRAY_ICON_SIZE};
 }

@@ -417,7 +417,7 @@ static void wm_frame(const char *what)
     if (wm_mode==WM_CACHE && !d.damage.count && !d.move_damage.count && !d.present_damage.count)
         for (unsigned k=0;k<64;k++) { wm_clock+=40000000ull; if (!desk_accel_cache_step(&d,wm_clock)) break; }
 }
-static const char *const wm_programs[]={"files","ciuknote","control","netsurf","dosbox","calc","tasks","terminal","gfxdemo","printers"};
+static const char *const wm_programs[]={"files","ciuknote","control","netsurf","dosbox","calc","tasks","terminal","gfxdemo","printers","mixer"};
 static void wm_begin(unsigned m, int shell)
 {
     wm_mode=m; wm_shell=shell;
@@ -926,7 +926,13 @@ static void row_popups(unsigned m)
     row_name="tray popups"; wm_begin(m,1);
     struct fake_app *a=app_open("files",400,260,200,40); (void)a;
     struct desk_box v=desk_shell_tray_icon_box(&d,SH_TRAY_VOLUME); click(v.x+4,v.y+4,CIUKI_BUTTON_LEFT); assert(d.sh.volume_open); step("volume popup");
-    tap(DU_KEY_UP); step("volume changed"); tap(DU_KEY_ESC); step("volume popup closed");
+    tap(DU_KEY_UP); step("volume changed");
+    turn(100000000ull); click(v.x+4,v.y+4,CIUKI_BUTTON_LEFT);
+    assert(!d.sh.volume_open && last_app && !strcmp(d.clients[last_app->slot].application,"mixer"));
+    step("G22 volume double-click closes popup and launches mixer");
+    turn(1000000000ull); click(v.x+4,v.y+4,CIUKI_BUTTON_LEFT);
+    assert(d.sh.volume_open); step("G22 isolated volume click keeps popup");
+    tap(DU_KEY_ESC); step("volume popup closed");
     desk_shell_notify(&d,"Network","Cable connected",DU_DLG_ICON_INFO,SH_NOTIFY_DETAILS); step("notification");
     for (unsigned k=0;k<12;k++) { turn(16666667ull); wm_frame("notification slides in"); }
     turn(8100000000ull); step("notification expired");

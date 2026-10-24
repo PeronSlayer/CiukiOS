@@ -83,7 +83,7 @@ struct audio_dma_device {
     bool link_changed, legacy_changed;
     uint8_t ak[26], dsp_major, dsp_minor, saved_mixer[6];
     struct cmipci_state cmi;
-    /* Optional voice engines: no public capture ABI or foreign framework. */
+    /* Optional voice engines; audio_dev.c exposes copies, never DMA mappings. */
     const struct audio_capture_ops *capture_ops;
     int (*voice_codec_read)(struct audio_dma_device *, uint16_t, uint16_t *);
     int (*voice_codec_write)(struct audio_dma_device *, uint16_t, uint16_t);
@@ -141,6 +141,7 @@ int audio_capture_open(struct audio_dma_device *, uint32_t *generation);
 int audio_capture_read(struct audio_dma_device *, uint32_t generation,
                        struct audio_frame *, unsigned frames);
 int audio_capture_close(struct audio_dma_device *, uint32_t generation);
+int audio_capture_source(struct audio_dma_device *, uint32_t generation, unsigned source);
 int audio_capture_shutdown(struct audio_dma_device *);
 uint32_t audio_voice_mask(const struct audio_dma_device *);
 int audio_voice_cursor(struct audio_dma_device *, unsigned voice, unsigned *frame);

@@ -96,6 +96,7 @@ struct desk_shell {
     char save_status[160];
     uint64_t programs_click_ns;
     uint64_t clock_click_ns;        /* G1: first click of a tray-clock double-click */
+    uint64_t volume_click_ns;       /* G22: popup on click, Volume Control on double-click */
     int gate;                       /* runtime gate scenarios: defaults only, no settings I/O */
     struct sh_menu menus[SH_LEVELS];
     int levels, menu_owner;         /* menu_owner: client for SH_MENU_TASK, icon for SH_MENU_ICON */

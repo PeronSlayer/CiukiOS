@@ -1957,6 +1957,47 @@ command: this thread's next bounded source reads
 f1-101: the kernel's producer boost state of this stream
 
 ```c
+#define AUDIO_CAPTURE_CAPS 0x4109u
+#define AUDIO_CAPTURE_START 0x410au
+#define AUDIO_CAPTURE_READ 0x410bu
+#define AUDIO_CAPTURE_STOP 0x410cu
+#define CIUKI_CAPTURE_MIC 0u
+#define CIUKI_CAPTURE_LINE 1u
+#define CIUKI_CAPTURE_FRAMES 128u
+```
+
+Open /dev/audio O_RDONLY. START is explicit and exclusive; close stops it.
+Fixed S16LE stereo 48000 Hz, copied buffers only. Unsupported hardware
+reports available=0, START returns EOPNOTSUPP. READ returns EAGAIN while
+waiting for data, EIO on an overrun. Gain is software attenuation 0..100.
+
+```c
+struct ciuki_audio_capture {
+    uint32_t version;
+    uint32_t size;
+    uint32_t source;
+    uint32_t gain;
+    uint32_t rate;
+    uint32_t channels;
+    uint32_t format;
+    uint32_t available;
+    uint32_t reserved[2];
+};
+struct ciuki_audio_capture_data {
+    uint32_t version;
+    uint32_t size;
+    uint32_t frames;
+    uint32_t captured;
+    int16_t pcm[256];
+```
+
+CIUKI_CAPTURE_FRAMES stereo frames
+
+```c
+uint32_t reserved[2];
+};
+
+
 #define MIXER_GET_MASTER 0x4201u
 #define MIXER_SET_MASTER 0x4202u
 #define MIXER_GET_DIAGNOSTICS 0x4203u
