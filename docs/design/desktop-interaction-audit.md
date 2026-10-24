@@ -487,3 +487,30 @@ The display regression harness also exposed a maximized-window relayout using
 its old origin when applying the new screen limits. Reset that origin to the
 new work area before sizing; the host test checks the 1024 by 768 to 640 by
 480 and return path, alongside preview and durable frame classification.
+
+## Control Panel Win98 layout (2026-10-24, visual audit group B)
+
+Research: the Windows 98 shell shows Control Panel as a folder window of
+large-icon applets with an "N object(s)" status bar, value sliders are
+trackbar controls (common-controls `TRACKBAR_CLASS`: channel, thumb, optional
+tick marks; Microsoft Learn "About Trackbar Controls"), and property sheets
+carry their tabs directly on the dialog (`PROPSHEETPAGE`, Microsoft Learn
+"About Property Sheets") with OK, Cancel and Apply bottom-right.
+Decisions, all in `apps/control/app.c`:
+
+- Every horizontal value slider (pointer speed, double-click, trails, wheel,
+  keyboard repeat and blink, master and UI volume, CD volume, power alarms,
+  accessibility, RGB, Appearance size and points, font DPI) is a `DU_TRACKBAR`
+  built by `slider()` (range `0..total-1`, ticks on small ranges, PgUp/PgDn page
+  and drag from the toolkit). Sliders are now Tab stops.
+- The home is a `DU_ICONS` list of 32 px Tango applet icons beside the category
+  tree, a `DU_STATUS` bar "N object(s)" and no Close button (the window has its
+  close box).
+- A single-page applet no longer wears a one-tab strip repeating the window
+  title (`flatten_page()` hides it and lifts the body). Taskbar & Start Menu uses
+  the page tab control for its two tabs instead of a second one.
+- `CP_HEIGHT` is 436: the 356 px tab body ends 10 px above a hint strip and the
+  OK/Cancel/Apply row keeps a 10 px bottom margin, so the Display hint no longer
+  sits on the buttons.
+- The keyboard layout note that was drawn over the Multimedia page moved to
+  the Keyboard page.

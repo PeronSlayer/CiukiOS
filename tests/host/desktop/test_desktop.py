@@ -447,7 +447,7 @@ class DesktopTests(unittest.TestCase):
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)
             self.assertIn("PASS control display", result.stdout)
             names = sorted(p.stem for p in renders.glob("*.xrgb"))
-            self.assertEqual(names, ["control-display-fill", "control-display-fit", "control-display-migrated-fill"])
+            self.assertEqual(names, ["control-display-fill", "control-display-fit", "control-display-migrated-fill", "control-home", "control-keyboard", "control-mouse", "control-taskbar"])
             for name in names:
                 width, height = map(int, (renders / f"{name}.size").read_text().split())
                 control_frame(self,name,(renders / f"{name}.xrgb").read_bytes(),width,height)

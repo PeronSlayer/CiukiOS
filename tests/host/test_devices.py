@@ -156,7 +156,7 @@ class DeviceTests(unittest.TestCase):
             capture=load('network_settings_png',ROOT / 'tests/host/desktop/test_desktop.py')
             review=ROOT / 'build/host/f2-100';review.mkdir(exist_ok=True,parents=True)
             for p in frames.glob('*.xrgb'):
-                capture.write_png(review/(p.stem+'.png'),560,420,capture.xrgb_to_rgb(p.read_bytes()))
+                capture.write_png(review/(p.stem+'.png'),560,436,capture.xrgb_to_rgb(p.read_bytes()))
             print('NETWORK_SETTINGS_GOLDENS',actual)
             self.assertEqual(actual,json.loads(pins.read_text()))
 

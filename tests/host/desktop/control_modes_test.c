@@ -203,14 +203,13 @@ int main(int argc, char **argv)
     }
     select(4104,AP_SCROLLBAR);
     struct du_widget *slider=du_get(&u,4108);
-    struct du_sb sb={slider->box,slider->vertical,slider->value,slider->total,slider->page};
-    int grab=slider->box.x;
-    while(grab<slider->box.x+slider->box.w && du_sb_part(&sb,grab,slider->box.y+8)!=3) grab++;
-    assert(grab<slider->box.x+slider->box.w);
-    at_move(&u,grab,slider->box.y+8);
+    /* A Win98 trackbar: grab the thumb at its centre (the thumb travels box.w-13 px from box.x+6). */
+    assert(slider->kind==DU_TRACKBAR && slider->lo==0 && slider->hi==ap_size_max(AP_SCROLLBAR)-ap_size_min(AP_SCROLLBAR));
+    int grab=slider->box.x+6+slider->value*(slider->box.w-13)/slider->hi;
+    at_move(&u,grab,slider->box.y+slider->box.h/2);
     struct ciuki_input_event down={.type=CIUKI_INPUT_BUTTON,.code=1,.value=1}; du_input(&u,&down);
     unsigned old_size=a.cfg.appearance.item[AP_SCROLLBAR].size;
-    at_move(&u,grab+30,slider->box.y+8);
+    at_move(&u,grab+30,slider->box.y+slider->box.h/2);
     assert(a.cfg.appearance.item[AP_SCROLLBAR].size>old_size && u.capture>=0 && u.widgets[u.capture].id==4108);
     down.value=0; du_input(&u,&down);
     struct du_event save_scheme={.type=DU_EV_DIALOG,.id=4120,.index=0,.text="My Appearance"};
@@ -376,9 +375,9 @@ int main(int argc, char **argv)
     for (unsigned i=0;i<u.count;i++) {
         struct du_widget *w=&u.widgets[i];
         if (w->kind==DU_LISTVIEW && w->box.x==248 && w->box.y==64) wall=w;
-        if (w->kind==DU_SCROLLBAR && w->box.x==292 && w->box.y==256) red=w;
+        if (w->kind==DU_TRACKBAR && w->box.x==292 && w->box.y==256) red=w;
     }
-    assert(wall && wall->count==16 && red && red->total==256);
+    assert(wall && wall->count==16 && red && red->hi==255);
     select(wall->id,8); assert(!strcmp(a.cfg.wallpaper,"pattern:0") && a.display_dirty);
     struct du_event colour={.type=DU_EV_CHANGE,.id=red->id,.index=18}; u.event(&u,&colour,u.user);
     assert(a.cfg.desktop_color==0x125564u && a.display_dirty);

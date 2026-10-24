@@ -453,7 +453,7 @@ int main(int argc, char **argv)
     assert(label && !label->hidden);
     for (unsigned i = 0; i < u.count; i++) if (u.widgets[i].kind == DU_TABS) tabs = &u.widgets[i];
     assert(tabs);
-    struct du_rect monitor = {24, 44, 208, 172}, column = {24, 216, 208, CP_HEIGHT - 52 + 8 - 216};
+    struct du_rect monitor = {24, 44, 208, 172}, column = {24, 216, 208, CP_HEIGHT - 62 + 8 - 216};
     for (int k = 0; k < 5; k++) {
         struct du_widget *b = find(DU_BUTTON, labels[k]);
         assert(b && !b->hidden && !b->disabled && b->box.w == 68 && b->box.h == 22);
@@ -509,6 +509,36 @@ int main(int argc, char **argv)
     /* Other pages hide the buttons. */
     attach(CP_MOUSE);
     for (int k = 0; k < 5; k++) assert(!find(DU_BUTTON, labels[k]));
+    /* Win98 look: value sliders are trackbars, the one-page applet has no tab strip of its own. */
+    {
+        unsigned tracks = 0, scrolls = 0;
+        for (unsigned i = 0; i < u.count; i++) { tracks += u.widgets[i].kind == DU_TRACKBAR; scrolls += u.widgets[i].kind == DU_SCROLLBAR; }
+        assert(tracks == 4 && !scrolls);
+        for (unsigned i = 0; i < u.count; i++) if (u.widgets[i].kind == DU_TABS) assert(u.widgets[i].hidden);
+    }
+    render_settled(&u); at_save(renders, "control-mouse", &u);
+    cp_detach(&a);
+    attach(CP_KEYBOARD); render_settled(&u); at_save(renders, "control-keyboard", &u); cp_detach(&a);
+    attach(CP_TASKBAR);
+    {
+        unsigned tabs = 0, visible = 0;
+        for (unsigned i = 0; i < u.count; i++) if (u.widgets[i].kind == DU_TABS) { tabs++; visible += !u.widgets[i].hidden && u.widgets[i].count == 2; }
+        assert(tabs == 1 && visible == 1);   /* the two taskbar tabs sit on the sheet, not in a second tab control */
+    }
+    render_settled(&u); at_save(renders, "control-taskbar", &u); cp_detach(&a);
+    /* The home is a folder window: large icons, an "N object(s)" status bar and no Close button. */
+    attach(CP_HOME);
+    {
+        struct du_widget *grid = NULL, *status = NULL;
+        for (unsigned i = 0; i < u.count; i++) {
+            if (u.widgets[i].kind == DU_LISTVIEW) grid = &u.widgets[i];
+            if (u.widgets[i].kind == DU_STATUS) status = &u.widgets[i];
+        }
+        assert(grid && grid->view == DU_ICONS && grid->count && grid->items[0].icon32 && status);
+        char want[32]; snprintf(want, sizeof(want), "%u object(s)", grid->count);
+        assert(!strcmp(status->text, want) && !find(DU_BUTTON, "Close"));
+    }
+    render_settled(&u); at_save(renders, "control-home", &u);
     cp_detach(&a);
 
     /* A file written before fill keeps its mode; Ciuk1 is selected. */
@@ -550,7 +580,11 @@ int main(int argc, char **argv)
      * Space. Verify the actual toolkit targets master Mute, not UI sounds. */
     mixer_volume=20;attach(CP_SOUNDS);a.host.apply=master_apply;
     assert(u.focus>=0 && !strcmp(u.widgets[u.focus].text,"Control Panel") && a.volume==20 && !a.muted);
-    for (unsigned i=0;i<2;i++) at_tap(&u,DU_KEY_TAB);
+    /* The two volume trackbars are now tab stops (Back, Close, Master volume, UI sounds volume, Mute). */
+    for (unsigned i=0;i<4;i++) {
+        at_tap(&u,DU_KEY_TAB);
+        if (i==1) assert(u.focus>=0 && u.widgets[u.focus].kind==DU_TRACKBAR);
+    }
     assert(u.focus>=0 && u.widgets[u.focus].kind==DU_BUTTON && !strcmp(u.widgets[u.focus].text,"Mute: Off"));
     at_tap(&u,DU_KEY_SPACE);assert(master_applies==1 && a.muted);
     cp_detach(&a);mixer_volume=70;
