@@ -151,7 +151,7 @@ placement: a feature is done when the user can do the same thing.
 | WM-18 | Full-screen programs (DOS Alt+Enter, DirectDraw exclusive) and switching back | RK-apps | done (host) | `DESK_DOS_FULLSCREEN` (`shell.c:798-806`), v3 lease (`client.c:1518-1556`); `v3_test.c:145`. T23 defects are tracked in fx-16 |
 | WM-19 | Multiple monitors (Windows 98 supports up to nine displays) | RK-vmm, MS-winfeat | absent (scope) | `MonitorFromWindow` returns one constant handle (`sdk/win32/user32/upper.c:258-285`) |
 | WM-20 | Cursors: arrow, I-beam, hourglass, AppStarting, resize, move, hand, no-drop, help | MS-cursor | done | 22 shapes (`apps/desktop/protocol.h:67-77`), routing `input.c:166-218`; `tests/host/desktop/cursor_set_test.c` |
-| WM-21 | Pointer schemes (large, inverted, animated cursors) chosen in Mouse properties | RK-acc | absent | One fixed set in `assets/cursors/` |
+| WM-21 | Pointer schemes (large, inverted, animated cursors) chosen in Mouse properties | RK-acc | partial | G12: selectable Ciuki, 2x Large and Inverted schemes, derived deterministically from the fx-13 rasters; custom app cursors retain their pixels. `row_input_preferences` in `test_window_model` checks hardware/software ownership, clipping and repaint. Animated cursor import remains absent |
 | WM-22 | Window opening is fast: the frame appears promptly after a click, with the AppStarting cursor in between | RK-perf | partial | AppStarting from click to the first frame (`input.c:190-197`); `[desktop] launch … spawn_ms` records (`desktop.c:566-581`). The T23 still reports slow opening; fx-15 measures and fixes it |
 
 ## 5. Keyboard shortcuts (system-wide)
@@ -223,7 +223,7 @@ application are in that application's section.
 | TB-8 | Battery meter in the tray with tooltip (percent, time left), a click for the power meter | RK-power | partial | Icon, caution state and AC mark (`shell.c:1198-1224`). Missing: tooltip, percent; no data on the T23 (directive fx-18) |
 | TB-9 | Network and removable-media icons | — | done | `shell.c:923,1040-1049,1104`; `tests/host/desktop/network_tray_test.c`, `media_tray_test.c` |
 | TB-10 | Balloon notifications from programs | MS-taskbar | partial | One shell-internal balloon slot (`shell.c:1327-1400`); no client API and no queue |
-| TB-11 | Keyboard-language indicator in the tray (when more than one layout is installed) | RK-intl | absent | See IN-3 |
+| TB-11 | Keyboard-language indicator in the tray (when more than one layout is installed) | RK-intl | done (host model) | G12: EN/IT tray indicator, clickable and updated by Left Alt+Shift; enabled with the two-layout switch in Keyboard properties. `row_input_preferences` in `test_window_model` |
 
 ## 9. File manager (My Computer and Windows Explorer)
 
@@ -336,11 +336,11 @@ application are in that application's section.
 | ID | Feature: Windows 98 reference behaviour | Ref | Status | CiukiOS evidence / what is missing |
 | --- | --- | --- | --- | --- |
 | IN-1 | PS/2 and USB keyboard and mouse, wheel | RK-dev | done (host) | `src/kernel/drivers/i8042.c`, `src/kernel/usb/usb_hid.c`; `tests/host/i8042_test.c`, USB tests |
-| IN-2 | Keyboard properties: repeat delay, repeat rate, cursor blink rate | RK-cpl | absent | Fixed `INPUT_REPEAT_DELAY_MS 500` (`src/kernel/include/ciuki/input.h:28`); no typematic programming |
-| IN-3 | Keyboard languages: several layouts, Left Alt+Shift or Ctrl+Shift switching, tray indicator | RK-intl, RK-cpl | partial | US and Italian layouts (`apps/desktop/keymap.c`, Win32 HKL 0x0409/0x0410 in `sdk/win32/user32/layout.c:129-176`) chosen in Control Panel. Missing: switching hotkey, indicator, more layouts |
-| IN-4 | Dead keys and AltGr | MS-kbd | partial | AltGr done (`keymap.c:43`); no dead-key composition |
-| IN-5 | Caps Lock, Num Lock and Scroll Lock LEDs | MS-kbd | partial | USB keyboards (`usb_hid.c:181,293,339,391`); no PS/2 LED command (0xED) |
-| IN-6 | Mouse properties: swap buttons, double-click speed with test area, pointer speed, pointer trails, pointer schemes | RK-cpl, RK-acc | partial | Pointer speed and double-click time (`apps/desktop/settings.h:27-37,60`). Missing: button swap, trails, schemes, wheel lines; Win32 SPI values are per process and never saved |
+| IN-2 | Keyboard properties: repeat delay, repeat rate, cursor blink rate | RK-cpl | done (host model) | G12: persisted controls and native caret test; PS/2 F3 uses a nearest-period mapping of the Windows 0..31 speed; USB uses the same delay/period. `i8042_test g12-settings`, USB `basic`, Control Panel `input_properties`, window-model `row_input_text`. Sanitizer exit needs a lead rerun outside the ptrace-restricted sandbox |
+| IN-3 | Keyboard languages: several layouts, Left Alt+Shift or Ctrl+Shift switching, tray indicator | RK-intl, RK-cpl | partial | G12: US/Italian live switching with Left Alt+Shift in either order, no switch for AltGr, EN/IT tray and running native/Win32 client updates. Missing: additional layouts and a selectable Ctrl+Shift alternative. `row_input_preferences`, USER host suite |
+| IN-4 | Dead keys and AltGr | MS-kbd | done (host model) | G12: Italian Shift+circumflex composition, spacing accent, non-combining fallback and context reset; UTF-8 native edit/textarea and shell fields; Win32 ToAsciiEx and WM_DEADCHAR/WM_CHAR. Existing accented vowels and AltGr are retained. The circumflex mapping is a documented Ciuki extension, not a claim about every Windows Italian layout. `docs/design/input-settings.md`, `row_input_text`, USER host suite |
+| IN-5 | Caps Lock, Num Lock and Scroll Lock LEDs | MS-kbd | done (host model) | G12: PS/2 ED through the bounded ACK/RESEND engine; one lock state for native/USB transitions, converted to the USB HID LED bit order. `i8042_test g12-settings` and USB controller suite; hardware qualification remains with the lead |
+| IN-6 | Mouse properties: swap buttons, double-click speed with test area, pointer speed, pointer trails, pointer schemes | RK-cpl, RK-acc | done (host model) | G12: saved swap, trails, wheel lines/page scrolling and Ciuki/Large/Inverted schemes; double-click test button. Enumerated input SPI settings use the desktop session broker and requested durable writes, retaining session-only overrides across unrelated saves. Control Panel `input_properties`, window-model rows 36/37 and USER host suite; animated cursor import is tracked in WM-21 |
 | IN-7 | Game Controllers: add, calibrate, test | RK-cpl | done | `apps/control/joystick.inc` with three-point calibration; `tests/host/joystick/*` |
 | IN-8 | Touchpad tapping and scrolling | RK-dev | partial | i8042 touchpad support (`tests/host/i8042_touchpad_test.inc`); no settings page |
 

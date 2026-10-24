@@ -1,3 +1,4 @@
+#include "input_text.h"
 /* SPDX-License-Identifier: MIT */
 #include "desktop.h"
 #include <string.h>
@@ -49,6 +50,7 @@ void desk_route_key(struct desktop *d, int code, int value)
 }
 static void release(struct desktop *d, const struct ciuki_input_event *base)
 {
+    d->text_dead=0;d->shell_caret_hidden=0;d->shell_caret_next=0;
     struct ciuki_input_event e = *base;
     e.type = CIUKI_INPUT_KEY; e.value = e.value2 = 0; e.lost_count = 0;
     for (int k = 0; k <= 0x200; k++) if (d->keys[k]) {
@@ -64,6 +66,8 @@ static void release(struct desktop *d, const struct ciuki_input_event *base)
 static void focus_damage(struct desktop *d, int i)
 {
     struct desk_box f=d->clients[i].frame;
+    if(d->clients[i].internal==DESK_INTERNAL_RUN)
+        desk_damage_add(&d->damage,desk_content(&d->clients[i]),d->width,d->height);
     struct desk_box parts[4]={{f.x,f.y,f.w,DESK_TITLE},
         {f.x,f.y+DESK_TITLE,DESK_BORDER,f.h-DESK_TITLE},
         {f.x+f.w-DESK_BORDER,f.y+DESK_TITLE,DESK_BORDER,f.h-DESK_TITLE},
@@ -164,6 +168,11 @@ unsigned desk_resize_hit(const struct desk_client *c, int32_t x, int32_t y)
         edge = DESK_EDGE_RIGHT | DESK_EDGE_BOTTOM;
     return edge;
 }
+static void trail_damage(struct desktop *d)
+{
+    for(unsigned k=0;k<d->pointer_trail_count;k++)
+        desk_damage_add(&d->damage,(struct desk_box){d->pointer_trail[k].x-64,d->pointer_trail[k].y-64,128,128},d->width,d->height);
+}
 void desk_cursor_update(struct desktop *d)
 {
     unsigned shape=DESK_CURSOR_ARROW, edges=0;
@@ -218,9 +227,11 @@ void desk_cursor_update(struct desktop *d)
             d->v3_cursor_hidden=vc->v3_visibility<0 || (vc->v3_pointer&DESK_V3_HIDDEN);
         }
     }
-    if (old_custom!=d->v3_cursor_id || old_slot!=d->v3_cursor_slot || old_hidden!=d->v3_cursor_hidden) d->cursor_dirty=1;
+    if (old_custom!=d->v3_cursor_id || old_slot!=d->v3_cursor_slot || old_hidden!=d->v3_cursor_hidden) {
+        trail_damage(d);d->pointer_trail_count=0;d->cursor_dirty=1;
+    }
     if (shape>=DESK_CURSOR_COUNT) shape=DESK_CURSOR_ARROW;
-    if (d->cursor_shape!=shape) { d->cursor_shape=shape; d->cursor_dirty=1; }
+    if (d->cursor_shape!=shape) { trail_damage(d);d->cursor_shape=shape; d->cursor_dirty=1; }
 }
 void desk_geometry_begin(struct desktop *d, int i, int size)
 {
@@ -339,10 +350,25 @@ static void input(struct desktop *d, const struct ciuki_input_event *in)
             for (unsigned k=0;k<sizeof(modifiers)/sizeof(modifiers[0]);k++) desk_shell_key(d,modifiers[k],0);
             d->sh.logo_down=0; d->sh.logo_keys=0; memset(d->sh.chord,0,sizeof(d->sh.chord));
         }
+        d->layout_alt=d->layout_shift=d->layout_chord=d->text_dead=0;
         d->buttons = (uint32_t)e.value & 7u;
+        if(d->shell && d->sh.cfg.mouse_swap)d->buttons=(d->buttons&~3u)|((d->buttons&1)<<1)|((d->buttons&2)>>1);
         route(d, d->focus, DESK_KEY, &e);
         break;
     case CIUKI_INPUT_KEY:
+        if (e.code < 0 || e.code > 0x200 || e.value < 0 || e.value > 2) break;
+        d->text_routed=0;
+        if(e.value==1 && e.code==0x3a)d->text_caps^=1;
+        if(d->shell && (e.code==0x38 || e.code==0x2a || e.code==0x36)) {
+            if(e.code==0x38)d->layout_alt=e.value!=0;
+            else {unsigned bit=e.code==0x2a ? 1u : 2u;if(e.value)d->layout_shift|=bit;else d->layout_shift&=~bit;}
+            if(!d->layout_alt || !d->layout_shift)d->layout_chord=0;
+            else if(e.value==1 && !d->layout_chord && d->sh.cfg.layout_switch) {
+                d->layout_chord=1;d->sh.cfg.keyboard^=1;d->text_dead=0;
+                d->sh.alt_used=1;desk_preferences_changed(d);
+                /* Keep balanced modifier events at the focused client. */
+            }
+        }
         if (e.code < 0 || e.code > 0x200 || e.value < 0 || e.value > 2) break;
         if (d->drag>=0 && !d->keyboard_geometry && e.code==0x01 && e.value) { desk_geometry_end(d,1); break; }
         if (d->keyboard_geometry) {
@@ -366,11 +392,21 @@ static void input(struct desktop *d, const struct ciuki_input_event *in)
             break;
         }
         /* Shell shortcuts and menus (shell.c): Win, Ctrl+Esc, Alt+Tab, Alt+F4, menu keys, built-in windows. */
-        if (d->shell && desk_shell_key(d, e.code, e.value)) break;
+        if (d->shell && desk_shell_key(d,e.code,e.value)) {if(d->layout_chord)d->sh.alt_used=1;break;}
+        if(d->layout_chord)d->sh.alt_used=1;
         d->keys[e.code] = (uint8_t)(e.value != 0 && d->focus >= 0);
         route(d, d->focus, DESK_KEY, &e);
+        if(e.value){d->text_scan=(unsigned)e.code;d->text_routed=1;}
         break;
-    case CIUKI_INPUT_TEXT: route(d, d->focus, DESK_KEY, &e); break;
+    case CIUKI_INPUT_TEXT:
+        if(d->shell && e.source!=2) {
+            if(!d->text_routed)break;
+            unsigned mods=(d->sh.modifiers&DU_SHIFT ? CIUKI_KEYMAP_SHIFT : 0) |
+                (d->sh.alt_code==0x138 ? CIUKI_KEYMAP_ALTGR : 0) | (d->text_caps ? CIUKI_KEYMAP_CAPS : 0);
+            unsigned ch=ciuki_input_char(d->sh.cfg.keyboard,d->text_scan,mods);
+            if(ch)e.code=(int)ch;
+        }
+        route(d,d->focus,DESK_KEY,&e);break;
     case CIUKI_INPUT_WHEEL:
         if (d->shell && desk_shell_wheel(d, e.value)) break;
         route(d, d->focus, DESK_MOTION, &e);
@@ -384,6 +420,15 @@ static void input(struct desktop *d, const struct ciuki_input_event *in)
         }
         break;
     case CIUKI_INPUT_MOTION:
+        if(d->shell && d->sh.cfg.mouse_trails>1 && !d->v3_cursor_id && !d->v3_cursor_hidden) {
+            for(unsigned k=0;k<d->pointer_trail_count;k++)
+                desk_damage_add(&d->damage,(struct desk_box){d->pointer_trail[k].x-64,d->pointer_trail[k].y-64,128,128},d->width,d->height);
+            unsigned count=(unsigned)d->sh.cfg.mouse_trails;if(count<2)count=2;
+            if(d->pointer_trail_count<count)d->pointer_trail_count++;
+            for(unsigned k=d->pointer_trail_count-1;k;k--)d->pointer_trail[k]=d->pointer_trail[k-1];
+            d->pointer_trail[0].x=d->mouse_x;d->pointer_trail[0].y=d->mouse_y;d->pointer_trail[0].until=d->now_ns+150000000;
+            desk_damage_add(&d->damage,(struct desk_box){d->mouse_x-64,d->mouse_y-64,128,128},d->width,d->height);
+        }
         if (d->v3_pointer_window) {
             int vi=d->v3_pointer_window-1;
             struct desk_client *vc=&d->clients[vi];
@@ -433,6 +478,8 @@ static void input(struct desktop *d, const struct ciuki_input_event *in)
         }
         break;
     case CIUKI_INPUT_BUTTON: {
+        if(d->shell && d->sh.cfg.mouse_swap && (e.code==CIUKI_BUTTON_LEFT || e.code==CIUKI_BUTTON_RIGHT))
+            e.code=e.code==CIUKI_BUTTON_LEFT ? CIUKI_BUTTON_RIGHT : CIUKI_BUTTON_LEFT;
         if (e.code < 1 || e.code > 3 || (e.value != 0 && e.value != 1)) break;
         uint32_t mask = 1u << (e.code-1);
         if (e.value) d->buttons |= mask; else d->buttons &= ~mask;

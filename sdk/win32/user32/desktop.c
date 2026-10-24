@@ -49,7 +49,7 @@ BOOL u32_connect(void) {
   return 1;
 }
 BOOL u32_wire(struct u32_window *w, UINT op, const void *data, UINT n, int fd) {
-  if (!w || !w->wire || !u32_connect())
+  if (!w || (!w->wire && op!=DESK_INPUT_SETTINGS) || !u32_connect())
     return 0;
   DWORD token =
       du3_request(&u32_desktop, op, w->wire, w->generation, data, n, fd);
@@ -250,6 +250,18 @@ BOOL u32_order_wire(struct u32_window *w, HWND after, HWND owner, UINT flags) {
   return u32_wire(w, DESK_V3_WINDOW_ORDER, b, sizeof(b), -1);
 }
 void u32_event(const struct desk_packet *p) {
+  if(p->opcode==DESK_INPUT_STATE) {
+    BOOL changed=0;
+    if(p->index<=DESK_INPUT_VALUES)for(UINT k=1;k<=DESK_INPUT_VALUES;k++)
+      if((!p->index || k==p->index) && u32_input_value(k)!=p->input_settings[k-1])changed=1;
+    u32_input_snapshot(p->input_settings);
+    if(changed && (p->flags&2)) {
+      static const UINT actions[]={0,0,23,11,0,33,93,105,87,113,32,91};
+      for(UINT i=0;i<U32_WINDOWS;i++)if(u32_windows[i].handle && !u32_windows[i].parent)
+        SendNotifyMessageA(u32_windows[i].handle,0x1a,actions[p->index],0);
+    }
+    return;
+  }
   if (p->opcode==DESK_V3_CLIPBOARD_EVENT) { u32_clip_event(p); return; }
   if (p->opcode == DESK_V3_RESULT) {
     for (struct request *r = requests; r; r = r->next)

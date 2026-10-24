@@ -4131,9 +4131,20 @@ struct ciuki_display_engine_info {
     uint64_t native[CIUKI_ENGINE_OPERATIONS];
     uint64_t software[CIUKI_ENGINE_OPERATIONS];
 };
+```
 
+G12: input-grant-only keyboard policy; no new syscall.
 
-
+```c
+#define INPUT_KEYBOARD_SET 0x4905u
+#pragma pack(push, 4)
+struct ciuki_keyboard_settings {
+    uint32_t version;
+    uint32_t size;
+    uint32_t delay;
+    uint32_t speed;
+};
+#pragma pack(pop)
 
 struct ciuki_input_event {
     uint32_t sequence;
@@ -5206,6 +5217,20 @@ PLACE and CONFIGURE state word: 0 normal, 1 minimised, 2 hidden,
 ```c
 DESK_V3_LIMITS
 };
+```
+
+G12: shared settings, v2/v3; no fds. Request: key (0=query), value,
+flags (SPIF_UPDATEINIFILE=1, SENDCHANGE=2). Snapshot: 11 u32 values, changed key, flags.
+Reply uses the request/window identity of the request; unsolicited snapshots
+use request 0. Appended after main's existing clipboard and limits opcodes (80–82).
+
+```c
+#define DESK_INPUT_SETTINGS 83u
+#define DESK_INPUT_STATE 84u
+#define DESK_INPUT_VALUES 11u
+enum desk_input_key { DESK_INPUT_LAYOUT=1, DESK_INPUT_DELAY, DESK_INPUT_SPEED,
+    DESK_INPUT_BLINK, DESK_INPUT_SWAP, DESK_INPUT_TRAILS, DESK_INPUT_WHEEL,
+    DESK_INPUT_SCHEME, DESK_INPUT_MOUSE_SPEED, DESK_INPUT_DOUBLE_CLICK, DESK_INPUT_TOGGLE };
 #define DESK_RESIZABLE 1u
 #define DESK_CONFIGURE_COMMITTED 1u
 #define DESK_CURSOR_API 1u
@@ -5673,7 +5698,8 @@ uint64_t completed_ns, next_frame_ns;
 optional 84-byte FRAME
 
 ```c
-uint64_t convert_ns,copy_ns,slot_ns,refresh_ns;
+uint32_t input_settings[DESK_INPUT_VALUES];
+    uint64_t convert_ns,copy_ns,slot_ns,refresh_ns;
 ```
 
 optional 64-byte PRESENTED
@@ -7396,6 +7422,9 @@ struct du_ui {
     struct du_timer timers[DU_TIMERS];
     int mouse_x, mouse_y, focused_window;
     unsigned modifiers, buttons, caps;
+    unsigned input_layout, input_dead, input_blink_ms, input_wheel_lines, input_double_ms;
+    unsigned input_text[2], input_text_count, input_text_ready;
+    int input_caret_on; uint64_t input_caret_deadline;
     uint8_t keys[0x201];
     uint64_t now, last_click_ns; int last_click_x, last_click_y, last_click_widget, last_click_index;
     int dirty;
@@ -7802,6 +7831,7 @@ enum du_ta_motion { DU_TA_LEFT, DU_TA_RIGHT, DU_TA_UP, DU_TA_DOWN, DU_TA_HOME, D
 enum du_ta_drag { DU_TA_DRAG_NONE, DU_TA_DRAG_SELECT, DU_TA_DRAG_VTHUMB, DU_TA_DRAG_HTHUMB };
 
 struct du_textarea {
+    int caret_hidden;
     char *text;
 ```
 

@@ -597,6 +597,8 @@ void desk_gfx_complete(struct desktop *d, int i, int result, uint64_t completed,
     }
     desk_queue(d,i,&reply); c->gfx_pending=c->gfx_reply_pending=0;
 }
+static void input_state(struct desktop *, int, uint32_t);
+static int input_setting(struct desktop *, const struct desk_packet *);
 void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
 {
     if (m->length && m->data[0]==DESK_V3_VERSION) { (void)desk_v3_receive(d,i,m); return; }
@@ -941,6 +943,9 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         desk_put32(reply.data+4,p.serial); memcpy(reply.data+8,&p.joystick,sizeof(p.joystick));
         desk_put32(reply.data+108,(uint32_t)result); desk_queue(d,i,&reply); break;
     }
+    case DESK_INPUT_SETTINGS:
+        if (!input_setting(d,&p)) input_state(d,i,0);
+        break;
     case DESK_SETTINGS: {
         /* Control Panel settings use the real display callback and share
          * the shutdown guard with the other preference requests. */
@@ -2509,6 +2514,49 @@ static int v3_order(struct desktop *d, int peer, int i, const struct desk_packet
     desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
     return 0;
 }
+static void input_state(struct desktop *d, int i, uint32_t request)
+{
+    struct desk_client *c=&d->clients[i];
+    struct ciuki_message m;
+    unsigned offset=c->version==DESK_V3_VERSION ? 16 : 4;
+    desk_message(&m,DESK_INPUT_STATE,offset+DESK_INPUT_VALUES*4+8);
+    if(offset==16) {
+        m.data[0]=DESK_V3_VERSION;desk_put32(m.data+4,request);
+        desk_put32(m.data+8,c->v3_id);desk_put32(m.data+12,c->v3_generation);
+    }
+    for(unsigned k=1;k<=DESK_INPUT_VALUES;k++)desk_put32(m.data+offset+(k-1)*4,(unsigned)*cfg_input_field(&d->sh.cfg,k));
+    desk_put32(m.data+offset+DESK_INPUT_VALUES*4,d->input_change_key);
+    desk_put32(m.data+offset+DESK_INPUT_VALUES*4+4,d->input_change_flags);
+    desk_queue(d,i,&m);
+}
+void desk_preferences_persistent(const struct desktop *d,struct ciuki_settings *out)
+{
+    *out=d->sh.cfg;
+    for(unsigned k=1;k<=DESK_INPUT_VALUES;k++)if(d->input_volatile_mask&(1u<<(k-1)))
+        *cfg_input_field(out,k)=(int)d->input_saved[k-1];
+}
+void desk_preferences_changed(struct desktop *d)
+{
+    d->shell_caret_hidden=0;d->shell_caret_next=0;
+    d->cursor_dirty=1;
+    desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
+    for(int i=0;i<DESK_CLIENTS;i++)if(d->clients[i].hello && d->clients[i].window) input_state(d,i,0);
+}
+static int input_setting(struct desktop *d, const struct desk_packet *p)
+{
+    if(!p->index)return 0;
+    unsigned old=(unsigned)*cfg_input_field(&d->sh.cfg,p->index);
+    if(cfg_input_set(&d->sh.cfg,p->index,p->values[0]))return -EINVAL;
+    unsigned bit=1u<<(p->index-1);
+    if(p->flags&1)d->input_volatile_mask&=~bit;
+    else if(!(d->input_volatile_mask&bit)) {d->input_saved[p->index-1]=old;d->input_volatile_mask|=bit;}
+    if(p->flags&1)d->sh.want_save=1;
+    d->input_change_key=p->index;d->input_change_flags=p->flags;
+    desk_preferences_changed(d);
+    d->input_change_key=d->input_change_flags=0;
+    return 0;
+}
+
 int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
 {
     struct desk_client *anchor=&d->clients[peer];
@@ -2527,6 +2575,12 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
     }
     if (p.opcode==DESK_HELLO) {
         anchor->pid=m->sender_pid; anchor->hello=1; anchor->version=DESK_V3_VERSION; return 0;
+    }
+    if(p.opcode==DESK_INPUT_SETTINGS && !id && !generation) {
+        int error=input_setting(d,&p);
+        if(!error)input_state(d,peer,p.request);
+        if(p.request)v3_reply(d,peer,&p,error);
+        return error;
     }
     if (p.opcode==DESK_V3_CLIPBOARD && desk_clip_receive) { desk_clip_receive(d,peer,m,&p); return 0; }
     int error=0;
@@ -2566,6 +2620,11 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
     if (error) { close_attachments(d,m,-1); if (p.request) v3_reply(d,peer,&p,error); return error; }
     struct desk_client *c=&d->clients[i];
     switch (p.opcode) {
+    case DESK_INPUT_SETTINGS:
+        error=input_setting(d,&p);
+        if(!error)input_state(d,i,p.request);
+        break;
+
     case DESK_DAMAGE: case DESK_V3_PRESENT: {
         if (p.opcode==DESK_V3_PRESENT && (!p.request || c->gl_present_request || c->minimized || c->collapsed || !p.width || !p.height)) { error=-EAGAIN;break; }
         if (!p.width || !p.height) break;

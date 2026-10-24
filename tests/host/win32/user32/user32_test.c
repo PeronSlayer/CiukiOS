@@ -280,6 +280,8 @@ static void lease_event(DWORD id, DWORD generation, DWORD state, DWORD w,
   for (UINT i = 0; i < 18; i++)
     desk_put32(b + i * 4, words[i]);
 }
+static UINT shared_input[DESK_INPUT_VALUES]={0,1,31,530,0,0,3,0,10,500,1};
+static UINT saved_input[DESK_INPUT_VALUES]={0,1,31,530,0,0,3,0,10,500,1};
 static struct ciuki_screen_control saver_policy={.version=1,.size=sizeof(saver_policy),.timeout=600,.saver=1};
 #include "g5_clipboard_fixture.h"
 DWORD w32r_gate(DWORD call, DWORD a, DWORD b, DWORD c) {
@@ -298,6 +300,15 @@ DWORD w32r_gate(DWORD call, DWORD a, DWORD b, DWORD c) {
     CHECK(outgoing_count < 2048);
     struct ciuki_message *sent = (void *)(uintptr_t)b;
     outgoing[outgoing_count++] = *sent;
+    if(sent->data[1]==DESK_INPUT_SETTINGS) {
+      UINT key=desk_get32(sent->data+16),value=desk_get32(sent->data+20),flags=desk_get32(sent->data+24);
+      if(key && key<=DESK_INPUT_VALUES){shared_input[key-1]=value;if(flags&1)saved_input[key-1]=value;}
+      CHECK(in_tail-in_head<256);
+      struct ciuki_message *state=&incoming[in_tail++%256];
+      desk_v3_message(state,DESK_INPUT_STATE,DESK_INPUT_VALUES*4+8,desk_get32(sent->data+4),desk_get32(sent->data+8),desk_get32(sent->data+12));
+      for(UINT k=0;k<DESK_INPUT_VALUES;k++)desk_put32(state->data+16+k*4,shared_input[k]);
+      desk_put32(state->data+16+DESK_INPUT_VALUES*4,key);desk_put32(state->data+20+DESK_INPUT_VALUES*4,flags);
+    }
     if (sent->data[1]==DESK_V3_CLIPBOARD) { fixture_clipboard(sent); return 0; }
     if (sent->data[1] == DESK_V3_LEASE && sent->data[1] != reject_opcode) {
       DWORD flags = desk_get32(sent->data + 16);
@@ -543,6 +554,10 @@ static void input_event(struct u32_window *w, UINT type, UINT code,
   UINT data[10] = {0, 0, 0, type, 0, 0, code, value, 0, 0};
   event(w, DESK_KEY, data, 10);
 }
+static void g12_input_event(struct u32_window *w,UINT type,UINT code,UINT value)
+{
+  UINT data[10]={0,0,0,type,1000000000,0,code,value,0,0};event(w,DESK_KEY,data,10);
+}
 static void discard(void) {
   MSG msg;
   for (UINT i = 0; i < 1000 && PeekMessageA(&msg, 0, 0, 0, 1); i++)
@@ -670,7 +685,7 @@ static void test_input(void) {
   MSG msg;
   struct u32_window *w = u32_window(windows[0]);
   for (UINT layout = 0; layout < 2; layout++) {
-    u32_layout = layout;
+    shared_input[0]=layout;u32_layout = layout;
     u32_clear_input();
     for (UINT k = 0; k < sizeof(vk_scans) / sizeof(*vk_scans); k++) {
       UINT expected = layout ? vk_it[k] : vk_us[k];
@@ -694,6 +709,19 @@ static void test_input(void) {
     printf("TRACE protocol-v3 layout=%s %u pinned KEY/TEXT messages\n",
            layout ? "it" : "us", count);
   }
+  discard();u32_clear_input();SetFocus(w->handle);
+  g12_input_event(w,CIUKI_INPUT_KEY,0x2a,1);discard();
+  g12_input_event(w,CIUKI_INPUT_KEY,0x0d,1);
+  CHECK(PeekMessageA(&msg,0,0,0,1) && msg.message==WM_KEYDOWN);CHECK(TranslateMessage(&msg));
+  g12_input_event(w,CIUKI_INPUT_TEXT,'^',0);
+  CHECK(PeekMessageA(&msg,0,0,0,1) && msg.message==0x103 && msg.wParam=='^');
+  g12_input_event(w,CIUKI_INPUT_KEY,0x0d,0);g12_input_event(w,CIUKI_INPUT_KEY,0x2a,0);discard();
+  g12_input_event(w,CIUKI_INPUT_KEY,0x12,1);
+  CHECK(PeekMessageA(&msg,0,0,0,1) && msg.message==WM_KEYDOWN);CHECK(TranslateMessage(&msg));
+  g12_input_event(w,CIUKI_INPUT_TEXT,'e',0);
+  CHECK(PeekMessageA(&msg,0,0,0,1) && msg.message==WM_CHAR && msg.wParam==0xea);
+  g12_input_event(w,CIUKI_INPUT_KEY,0x12,0);discard();u32_clear_input();
+  puts("PASS G12 WM_DEADCHAR then composed WM_CHAR through TranslateMessage");
   CHECK(SetCapture(child) == 0 && GetCapture() == child);
   CHECK(ReleaseCapture() && GetCapture() == 0);
   SetFocus(child);
@@ -1400,6 +1428,25 @@ static void test_spi(void) {
   CHECK(SystemParametersInfoA(29, 8, 0, 0) && GetSystemMetrics(36) == 8);
   CHECK(SystemParametersInfoA(33, 1, 0, 0) && GetSystemMetrics(23) == 1);
   CHECK(SystemParametersInfoA(33, 0, 0, 0) && !GetSystemMetrics(23));
+  CHECK(SystemParametersInfoA(23,3,0,1));
+  CHECK(SystemParametersInfoA(22,0,&value,0) && value==3 && saved_input[1]==3);
+  CHECK(SystemParametersInfoA(11,0,0,0));
+  CHECK(SystemParametersInfoA(10,0,&value,0) && value==0 && saved_input[2]==31);
+  CHECK(SystemParametersInfoA(93,7,0,1));
+  CHECK(SystemParametersInfoA(94,0,&value,0) && value==7 && saved_input[5]==7);
+  CHECK(SystemParametersInfoA(105,0xffffffffu,0,1));
+  CHECK(SystemParametersInfoA(104,0,&value,0) && (UINT)value==0xffffffffu && saved_input[6]==101);
+  CHECK(SystemParametersInfoA(23,1,0,0));
+  CHECK(SystemParametersInfoA(11,31,0,0));
+  CHECK(SystemParametersInfoA(105,3,0,0));
+  CHECK(SystemParametersInfoA(93,0,0,0));
+  uint8_t dead_keys[256]={0};uint16_t composed;
+  dead_keys[16]=128;
+  CHECK(ToAsciiEx(0xdd,0x0d,dead_keys,&composed,0,0x04100410u)==-1 && composed=='^');
+  dead_keys[16]=0;
+  CHECK(ToAsciiEx('A',0x1e,dead_keys,&composed,0,0x04100410u)==1 && composed==0xe2);
+  dead_keys[16]=128;CHECK(ToAsciiEx(0xdd,0x0d,dead_keys,&composed,0,0x04100410u)==-1);
+  dead_keys[16]=0;CHECK(ToAsciiEx('X',0x2d,dead_keys,&composed,0,0x04100410u)==2 && composed==('^'|('x'<<8)));
   RECT work = {0, 0, 0, 0}, set = {0, 0, 640, 400};
   CHECK(SystemParametersInfoA(48, 0, &work, 0) && work.top == 32);
   CHECK(SystemParametersInfoA(47, 0, &set, 0) &&

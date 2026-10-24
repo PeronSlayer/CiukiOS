@@ -1,9 +1,9 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
-#include "../../../apps/desktop/keymap.h"
+#include "../../../apps/desktop/input_text.h"
 #include "internal.h"
 static uint8_t async_keys[256], lock_keys[256], key_vks[0x201];
 UINT u32_pointer_changing;
-static UINT double_time = 500;
+
 static HWND click_window;
 static UINT click_button;
 static DWORD click_time;
@@ -62,12 +62,11 @@ void u32_clear_input(void) {
 }
 UINT W32API GetDoubleClickTime(void) {
   U32_GUARD;
-  return double_time;
+  u32_input_refresh();return u32_input_value(DESK_INPUT_DOUBLE_CLICK);
 }
 BOOL W32API SetDoubleClickTime(UINT t) {
   U32_GUARD;
-  double_time = t ? (t > 5000 ? 5000 : t) : 500;
-  return 1;
+  return u32_input_setting(DESK_INPUT_DOUBLE_CLICK,t ? (t>5000 ? 5000 : t) : 500,0);
 }
 void u32_input(struct u32_window *root, const struct ciuki_input_event *e) {
   u32_settings();
@@ -133,25 +132,28 @@ void u32_input(struct u32_window *root, const struct ciuki_input_event *e) {
     if (u32_hooks(2, 0, key, lp))
       return;
     if (down) {
+      t->key_scan=(UINT)e->code;
       t->key_window = h;
       t->key_time = time ? time : u32_ticks();
       t->key_lparam = (DWORD)lp;
     }
   } else if (e->type == CIUKI_INPUT_TEXT) {
-    m = async_keys[18] & 128 ? WM_SYSCHAR : WM_CHAR;
-    wp = u32_ansi(e->code);
+    BOOL system=(async_keys[18]&128) && !(async_keys[165]&128);
+    m=system ? WM_SYSCHAR : WM_CHAR;
+    unsigned chars[2];
+    unsigned count=ciuki_input_compose(&t->dead_accent,(unsigned)e->code,
+        u32_layout==1 && t->key_scan==0x0d && (async_keys[16]&128),chars);
+    if(!count) {chars[0]=(unsigned)e->code;count=1;m=system ? 0x107 : 0x103;}
     lp = t->key_lparam ? t->key_lparam : 1;
     HWND target = t->key_window ? t->key_window : h;
-    if (!t->key_window ||
-        (t->translate_window == target && t->translate_time == t->key_time)) {
-      u32_queue(GetWindowThreadProcessId(target, 0), target, m, wp, lp,
-                QS_POSTMESSAGE, time, u32_pointer);
-      t->translate_window = 0;
-    } else if (t->text_count < 64)
-      t->text[t->text_count++] =
-          (MSG){target, m, wp, lp, t->key_time, u32_pointer};
-    else
-      u32_fail(1816);
+    BOOL immediate=!t->key_window || (t->translate_window==target && t->translate_time==t->key_time);
+    for(unsigned k=0;k<count;k++) {
+      wp=u32_ansi(chars[k]);
+      if(immediate)u32_queue(GetWindowThreadProcessId(target,0),target,m,wp,lp,QS_POSTMESSAGE,time,u32_pointer);
+      else if(t->text_count<64)t->text[t->text_count++]=(MSG){target,m,wp,lp,t->key_time,u32_pointer};
+      else u32_fail(1816);
+    }
+    if(immediate)t->translate_window=0;
     return;
   } else {
     POINT p = u32_pointer;
@@ -205,7 +207,7 @@ void u32_input(struct u32_window *root, const struct ciuki_input_event *e) {
         int dx = p.x - click_pos.x, dy = p.y - click_pos.y;
         if (w && (w->cls->c.style & 8) && h == click_window &&
             click_button == button &&
-            (DWORD)(time - click_time) <= double_time && dx >= -2 && dx <= 2 &&
+            (DWORD)(time - click_time) <= GetDoubleClickTime() && dx >= -2 && dx <= 2 &&
             dy >= -2 && dy <= 2) {
           m++;
           m++;
@@ -263,6 +265,7 @@ HWND W32API SetFocus(HWND h) {
   HWND old = t->focus;
   if (old == h)
     return old;
+  t->dead_accent=0;
   t->focus = h;
   if (old)
     SendMessageA(old, WM_KILLFOCUS, (WPARAM)h, 0);

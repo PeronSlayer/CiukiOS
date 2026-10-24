@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
-#include "../../../apps/desktop/keymap.h"
+#include "../../../apps/desktop/input_text.h"
 #include "internal.h"
 static const uint8_t scan_vk[0x59] = {
     [1] = 27,    [2] = '1',   [3] = '2',   [4] = '3',   [5] = '4',
@@ -296,8 +296,14 @@ int W32API ToAsciiEx(UINT v, UINT scan, const uint8_t *keys, uint16_t *out,
   }
   if (!c)
     return 0;
-  *out = u32_ansi(c);
-  return 1;
+  struct u32_thread *thread=u32_thread();
+  unsigned chars[2], pending=thread ? thread->dead_accent : 0;
+  unsigned count=ciuki_input_compose(&pending,c,layout==1 && (scan&255)==0x0d && (keys[16]&128),chars);
+  if(thread)thread->dead_accent=pending;
+  if(!count) {*out=(uint16_t)u32_ansi(c);return -1;}
+  *out=(uint16_t)u32_ansi(chars[0]);
+  if(count==2)*out|=(uint16_t)((uint8_t)u32_ansi(chars[1]))<<8;
+  return (int)count;
 }
 int W32API ToAscii(UINT v, UINT scan, const uint8_t *keys, uint16_t *out,
                    UINT flags) {

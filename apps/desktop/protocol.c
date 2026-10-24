@@ -216,8 +216,18 @@ static int v3_parse(const struct ciuki_message *m, int client,
             !clip_parse(b,n,client,m->fd_count,&p->clip)) return 0;
         return client ? p->request==p->clip.serial : !p->request;
     }
-    if (!p->window_id || !p->generation) return 0;
+    if ((!p->window_id || !p->generation) && !((p->opcode==DESK_INPUT_SETTINGS || p->opcode==DESK_INPUT_STATE || p->opcode==DESK_V3_RESULT) && !p->window_id && !p->generation)) return 0;
     switch (p->opcode) {
+    case DESK_INPUT_SETTINGS:
+        if (!client || n!=12 || m->fd_count) return 0;
+        p->index=desk_get32(b);p->values[0]=desk_get32(b+4);p->flags=desk_get32(b+8);
+        if(p->index>DESK_INPUT_VALUES || p->flags>3) return 0;
+        expected=12;break;
+    case DESK_INPUT_STATE:
+        if (client || n!=DESK_INPUT_VALUES*4+8 || m->fd_count) return 0;
+        for(unsigned k=0;k<DESK_INPUT_VALUES;k++) p->input_settings[k]=desk_get32(b+k*4);
+        p->index=desk_get32(b+DESK_INPUT_VALUES*4);p->flags=desk_get32(b+DESK_INPUT_VALUES*4+4);
+        expected=DESK_INPUT_VALUES*4+8;break;
     case DESK_CREATE_WINDOW:
         if (!client || n<36) return 0;
         p->style=desk_get32(b); p->owner=desk_get32(b+4); p->owner_generation=desk_get32(b+8);
@@ -335,7 +345,7 @@ static int v3_parse(const struct ciuki_message *m, int client,
     case DESK_V3_RESULT:
         if (client || n!=8) return 0;
         p->index=desk_get32(b); p->result=(int32_t)desk_get32(b+4);
-        if (!p->request || p->result>0 || p->result < -4095) return 0;
+        if ((!p->window_id && p->index!=DESK_INPUT_SETTINGS) || !p->request || p->result>0 || p->result < -4095) return 0;
         expected=8; break;
     case DESK_V3_ACTIVATE:
         if (n!=8) return 0;
@@ -412,6 +422,17 @@ int desk_parse(const struct ciuki_message *m, int client,
     if (p->opcode==DESK_DOS_FULLSCREEN)
         return !client && m->data[0]==DESK_SHELL_VERSION && m->length==4 && !m->fd_count && !resize;
     switch (p->opcode) {
+    case DESK_INPUT_SETTINGS:
+        if(!client || m->length!=16 || m->fd_count) return 0;
+        p->index=desk_get32(m->data+4);p->values[0]=desk_get32(m->data+8);p->flags=desk_get32(m->data+12);
+        if(p->index>DESK_INPUT_VALUES || p->flags>3) return 0;
+        n=16;break;
+    case DESK_INPUT_STATE:
+        if(client || m->length!=12+DESK_INPUT_VALUES*4 || m->fd_count) return 0;
+        for(unsigned k=0;k<DESK_INPUT_VALUES;k++)p->input_settings[k]=desk_get32(m->data+4+k*4);
+        p->index=desk_get32(m->data+4+DESK_INPUT_VALUES*4);p->flags=desk_get32(m->data+8+DESK_INPUT_VALUES*4);
+        n=12+DESK_INPUT_VALUES*4;break;
+
     case DESK_CLOSE_ACK:
         if (!client || m->data[0]!=DESK_SHELL_VERSION || m->length!=8) return 0;
         p->flags=desk_get32(m->data+4); if (p->flags>DESK_CLOSE_DOS_ACTIVE) return 0;

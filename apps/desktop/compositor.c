@@ -215,7 +215,7 @@ int desk_shell_clock_width_at(const struct desktop *d, uint64_t second)
 }
 static int tray_width_at(const struct desktop *d, uint64_t second)
 {
-    unsigned icons = 3 + ((d->sh.media.removable_mask & ~7u) != 0) + (d->sh.power_status.version == CIUKI_POWER_VERSION);
+    unsigned icons = 3 + (d->sh.cfg.layout_switch!=0) + ((d->sh.media.removable_mask & ~7u) != 0) + (d->sh.power_status.version == CIUKI_POWER_VERSION);
     return 2 * SH_TRAY_MARGIN + desk_shell_clock_width_at(d, second) +
            (int)icons * (SH_TRAY_ICON_SIZE + SH_TRAY_GAP);
 }
@@ -232,11 +232,12 @@ struct desk_box desk_shell_clock_box(const struct desktop *d)
 }
 struct desk_box desk_shell_tray_icon_box(const struct desktop *d, enum sh_tray_icon icon)
 {
-    if (icon < SH_TRAY_VOLUME || icon > SH_TRAY_POWER ||
+    if (icon < SH_TRAY_VOLUME || icon > SH_TRAY_LANGUAGE ||
+        (icon == SH_TRAY_LANGUAGE && !d->sh.cfg.layout_switch) ||
         (icon == SH_TRAY_POWER && d->sh.power_status.version != CIUKI_POWER_VERSION) ||
         (icon == SH_TRAY_MEDIA && !(d->sh.media.removable_mask & ~7u))) return (struct desk_box){0, 0, 0, 0};
     struct desk_box c = desk_shell_clock_box(d);
-    int slot = icon == SH_TRAY_NOTIFICATION ? 0 : icon == SH_TRAY_POWER ? 3 + ((d->sh.media.removable_mask & ~7u) != 0) : icon == SH_TRAY_MEDIA ? 3 : icon + 1;
+    int slot = icon == SH_TRAY_LANGUAGE ? 3 + ((d->sh.media.removable_mask & ~7u) != 0) + (d->sh.power_status.version == CIUKI_POWER_VERSION) : icon == SH_TRAY_NOTIFICATION ? 0 : icon == SH_TRAY_POWER ? 3 + ((d->sh.media.removable_mask & ~7u) != 0) : icon == SH_TRAY_MEDIA ? 3 : icon + 1;
     return (struct desk_box){c.x - (slot + 1) * (SH_TRAY_ICON_SIZE + SH_TRAY_GAP),
                             c.y + (c.h - SH_TRAY_ICON_SIZE) / 2, SH_TRAY_ICON_SIZE, SH_TRAY_ICON_SIZE};
 }
@@ -276,6 +277,8 @@ int desk_start_contains(const struct desktop *d, int32_t x, int32_t y)
 int desk_shell_chrome_intersects(const struct desktop *d, struct desk_box box)
 {
     struct desk_box ignored;
+    if(d->shell && d->sh.cfg.mouse_trails)for(unsigned k=0;k<d->pointer_trail_count;k++)
+        if(desk_intersect(box,(struct desk_box){d->pointer_trail[k].x-64,d->pointer_trail[k].y-64,128,128},&ignored))return 1;
     return desk_notification_intersects(d,box) ||
         (d->shell && desk_intersect(box,desk_start_bounds(d),&ignored)) ||
         /* fx-19: the translucent drag image and the desktop marquee. */
@@ -764,10 +767,13 @@ static uint32_t cursor_display_rgb(const struct desktop *d, uint32_t rgb)
     }
     return out;
 }
+static unsigned pointer_scale(const struct desktop *d)
+{ return d->shell && !d->v3_cursor_id && d->sh.cfg.pointer_scheme==1 ? 2u : 1u; }
 static struct desk_box pointer_box(const struct desktop *d)
 {
     struct desk_cursor_raster r=cursor_raster(d);
-    return (struct desk_box){d->mouse_x-(int)r.hot_x,d->mouse_y-(int)r.hot_y,(int)r.width,(int)r.height};
+    unsigned scale=pointer_scale(d);
+    return (struct desk_box){d->mouse_x-(int)(r.hot_x*scale),d->mouse_y-(int)(r.hot_y*scale),(int)(r.width*scale),(int)(r.height*scale)};
 }
 /* Exact horizontal opaque-region sweep. At most N+1 spans survive N
  * occluders on a row; geometry boundaries join rows into bands. No region
@@ -899,7 +905,7 @@ int desk_client_damage(struct desktop *d,int index,struct desk_box box)
             for(int x=0;x<box.w;x++) {
                 d->stats.compare_px++;
                 uint32_t previous=covered && box.x+x>=pointer.x && box.x+x<pointer.x+pointer.w ?
-                    d->cursor_under[(y-d->cursor_box.y)*32+box.x+x-d->cursor_box.x] : old[x];
+                    d->cursor_under[(y-d->cursor_box.y)*64+box.x+x-d->cursor_box.x] : old[x];
                 if((src[x]&0xffffffu)!=previous) { same=0;break; }
             }
         }
@@ -995,6 +1001,7 @@ void desk_caption_damage(struct desktop *d,int index)
 }
 static void visible_window(struct desktop *d, int index, struct desk_box clip)
 { DESK_PROFILE("windows", window(d,index,clip)); }
+static void cursor(struct desktop *, struct desk_box);
 static void saver_scene(struct desktop *d, struct desk_box clip)
 {
     fill(d,clip,clip,0);
@@ -1082,6 +1089,14 @@ static void scene(struct desktop *d, struct desk_box clip)
             desk_paint_fill(&p,b.x+b.w-1-k,b.y+k,1,b.h-2*k,ink);
         }
     }
+    if(d->shell && d->sh.cfg.mouse_trails>1 && !d->v3_cursor_id && !d->v3_cursor_hidden) {
+        int x=d->mouse_x,y=d->mouse_y;
+        for(unsigned k=d->pointer_trail_count;k;k--) {
+            d->mouse_x=d->pointer_trail[k-1].x;d->mouse_y=d->pointer_trail[k-1].y;
+            cursor(d,clip);
+        }
+        d->mouse_x=x;d->mouse_y=y;
+    }
     if (d->shell && desk_shell_start) DESK_PROFILE("bars_menus", desk_shell_start(d,clip));
 }
 static void cursor(struct desktop *d, struct desk_box clip)
@@ -1090,7 +1105,9 @@ static void cursor(struct desktop *d, struct desk_box clip)
     struct desk_box box=pointer_box(d);
     struct desk_cursor_raster r=cursor_raster(d);
     if (d->saver_active || d->hw_cursor || d->v3_cursor_hidden || !desk_intersect(box,clip,&b)) return;
-    if (!d->v3_cursor_id && !r.shadow && du_commands) {
+    unsigned scale=pointer_scale(d);
+    int inverted=d->shell && !d->v3_cursor_id && d->sh.cfg.pointer_scheme==2;
+    if (!d->v3_cursor_id && scale==1 && !inverted && !r.shadow && du_commands) {
         uint8_t planes[256]={0}; unsigned stride=(r.width+7)/8, extent=stride*r.height;
         for (unsigned y=0;y<r.height;y++) for (unsigned x=0;x<r.width;x++) {
             unsigned bit=0x80000000u>>x;
@@ -1117,11 +1134,15 @@ static void cursor(struct desktop *d, struct desk_box clip)
                 unsigned blue=((colour&255)*alpha+(dst[x]&255)*inv+127)/255;
                 dst[x]=(red<<16)|(green<<8)|blue; continue;
             }
-            uint32_t bit=0x80000000u>>(b.x+x-box.x);
-            unsigned row=(unsigned)(b.y+y-box.y);
-            if (r.mask[row]&bit) dst[x]=r.image[row]&bit ? 0xffffffu : cursor_background();
+            unsigned column=(unsigned)(b.x+x-box.x)/scale;
+            uint32_t bit=0x80000000u>>column;
+            unsigned row=(unsigned)(b.y+y-box.y)/scale;
+            if (r.mask[row]&bit) {
+                if(inverted)dst[x]^=0xffffffu;
+                else dst[x]=r.image[row]&bit ? 0xffffffu : cursor_background();
+            }
             else if (r.shadow) {
-                unsigned alpha=r.shadow[row*32+(unsigned)(b.x+x-box.x)], inv=255-alpha;
+                unsigned alpha=r.shadow[row*32+column], inv=255-alpha;
                 if (!alpha) continue;
                 uint32_t under=cursor_display_rgb(d,dst[x]);
                 unsigned red=(((under>>16)&255)*inv+127)/255;
@@ -1137,11 +1158,11 @@ static void cursor(struct desktop *d, struct desk_box clip)
  * blended twice. A moved/changed pointer or a RAM copy restores the entire
  * old footprint before the copy and draws the entire new one afterwards. */
 static void pointer_rows(struct desk_box box, int full, const pixman_region32_t *damage,
-                         const pixman_region32_t *move, uint32_t rows[32])
+                         const pixman_region32_t *move, uint64_t rows[64])
 {
-    memset(rows,0,32*sizeof(*rows));
+    memset(rows,0,64*sizeof(*rows));
     if (full) {
-        uint32_t bits=UINT32_MAX>>(32-box.w);
+        uint64_t bits=UINT64_MAX>>(64-box.w);
         for (int y=0;y<box.h;y++) rows[y]=bits;
         return;
     }
@@ -1151,21 +1172,21 @@ static void pointer_rows(struct desk_box box, int full, const pixman_region32_t 
         for (int i=0;i<count;i++) {
             struct desk_box b;
             if (!desk_intersect(box,box_region(rects[i]),&b)) continue;
-            uint32_t bits=(UINT32_MAX>>(32-b.w))<<(b.x-box.x);
+            uint64_t bits=(UINT64_MAX>>(64-b.w))<<(b.x-box.x);
             for (int y=b.y-box.y;y<b.y-box.y+b.h;y++) rows[y]|=bits;
         }
     }
 }
-static void pointer_under(struct desktop *d, struct desk_box box, const uint32_t rows[32], int save)
+static void pointer_under(struct desktop *d, struct desk_box box, const uint64_t rows[64], int save)
 {
     for (int y=0;y<box.h;y++) {
-        uint32_t bits=rows[y];
+        uint64_t bits=rows[y];
         for (int x=0;x<box.w;) {
-            if (!(bits&(1u<<x))) { x++; continue; }
+            if (!(bits&(1ull<<x))) { x++; continue; }
             int left=x;
-            do { x++; } while (x<box.w && (bits&(1u<<x)));
+            do { x++; } while (x<box.w && (bits&(1ull<<x)));
             uint32_t *dst=d->pixels+(size_t)(box.y+y)*d->width+box.x+left;
-            uint32_t *under=d->cursor_under+y*32+left;
+            uint32_t *under=d->cursor_under+y*64+left;
             size_t bytes=(size_t)(x-left)*4;
             if (save) {
                 memcpy(under,dst,bytes);
@@ -1261,7 +1282,8 @@ static void command_query(struct desktop *d)
     }
 }
 static int pointer_capable(const struct desktop *d)
-{ return (d->accel_caps&2u) || (d->command_caps&CIUKI_CAP_CURSOR_ARGB); }
+{ return !(d->shell && (d->sh.cfg.pointer_scheme || d->sh.cfg.mouse_trails>1)) &&
+    ((d->accel_caps&2u) || (d->command_caps&CIUKI_CAP_CURSOR_ARGB)); }
 /* No caller retries a failed admitted batch. The authoritative RAM scene is
  * reconstructed after CPU safety, and unsafe fences suppress presentation. */
 static int command_submit_targets(struct desktop *d, const struct ciuki_batch_record *records, unsigned count,
@@ -1396,7 +1418,7 @@ void desk_accel_reset(struct desktop *d, uint32_t generation)
     struct ciuki_accel_request q={.operation=CIUKI_ACCEL_QUERY};
     int caps=accel_call(d,&q);
     d->accel_caps=caps>0 ? (uint32_t)caps : 0;
-    if (!pointer_capable(d) && !accel_retry(caps)) d->hw_cursor_shown=0;
+    if (!(d->accel_caps&2u) && !(d->command_caps&CIUKI_CAP_CURSOR_ARGB) && !accel_retry(caps)) d->hw_cursor_shown=0;
     vram_reset(d);
     d->cursor_loaded=DESK_CURSOR_COUNT;
     if (pointer_capable(d) && !d->v3_cursor_id && !d->v3_cursor_hidden) (void)pointer_load(d);
@@ -1469,6 +1491,7 @@ static int copy_cut(pixman_region32_t *region,const struct ciuki_rect *r,struct 
 static int copy_region(struct desktop *d,pixman_region32_t *region,const struct ciuki_rect *r,int index)
 {
     pixman_region32_init_rect(region,r->dst_x,r->dst_y,r->width,r->height);
+    if(d->pointer_trail_count) {pixman_region32_clear(region);return 0;}
     for (int i=0;i<DESK_CLIENTS;i++) {
         struct desk_client *c=&d->clients[i];
         if (i==index || !c->window || c->minimized || c->order<=d->clients[index].order) continue;
@@ -2110,7 +2133,7 @@ int desk_redraw(struct desktop *d)
             desk_accel_reset(d,d->accel_generation);
         } else if ((d->hw_cursor || d->hw_cursor_shown) && !pointer_capable(d)) {
             /* Engine loss: the kernel hid the cursor; software returns. */
-            d->hw_cursor=d->hw_cursor_shown=0; d->cursor_dirty=1; d->scanout_valid=0;
+            d->hw_cursor=0; pointer_hide(d); d->cursor_dirty=1; d->scanout_valid=0;
             desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
         } else if (!d->hw_cursor && pointer_capable(d) && !d->v3_cursor_id && !d->v3_cursor_hidden &&
                    frame_begin>=d->hw_cursor_retry_ns) {
@@ -2131,7 +2154,7 @@ int desk_redraw(struct desktop *d)
     region_load(d,&move_region,&d->move_damage); region_load(d,&damage_region,&d->damage);
     begin=time_now(d);
     command_capture_previous(d);
-    uint32_t pointer_damage[32];
+    uint64_t pointer_damage[64];
     int pointer_full=d->cursor_dirty || d->copy_pending || !d->frame_valid || !d->cursor_valid ||
                      d->hw_cursor || d->hw_cursor_shown;
     if (d->cursor_valid) {

@@ -215,10 +215,38 @@ static void jobs(const char *fonts)
     assert(poll(&fd,1,100)==1 && fd.revents&POLLHUP); finish_panel(&m);
     puts("PASS failed completion publication wakes peer HUP");
 }
+static struct ciuki_settings input_saved;
+static unsigned input_applied;
+static int input_load(void *ctx,char *text,size_t size,size_t *length)
+{(void)ctx;*length=cfg_format(&input_saved,text,size);return *length ? 0 : -1;}
+static int input_save(void *ctx,const char *text,size_t length)
+{(void)ctx;cfg_defaults(&input_saved);return cfg_parse(&input_saved,text,length) ? -1 : 0;}
+static int input_apply(void *ctx,unsigned request,int value,int flag)
+{(void)ctx;(void)value;(void)flag;assert(request==DESK_SETTINGS_RELOAD);input_applied++;return 0;}
+static void input_properties(void)
+{
+    static struct cp_main m;cfg_defaults(&input_saved);strcpy(input_saved.extra,"foreign=preserved\n");
+    init_panel(&m,CP_MOUSE);m.app.host.load=input_load;m.app.host.save=input_save;m.app.host.apply=input_apply;
+    du_post(&m.ui,DU_EV_CHANGE,1503,1);assert(input_saved.mouse_swap);
+    du_post(&m.ui,DU_EV_CHANGE,1504,7);assert(input_saved.mouse_trails==7);
+    du_post(&m.ui,DU_EV_CHANGE,1505,101);assert(input_saved.wheel_lines==101);
+    du_post(&m.ui,DU_EV_ACTIVATE,1506,0);assert(input_saved.pointer_scheme==1);
+    struct du_widget *test=du_get(&m.ui,1508);assert(test);
+    m.ui.now=1000000000;du_post(&m.ui,DU_EV_ACTIVATE,1508,0);
+    m.ui.now+=200000000;du_post(&m.ui,DU_EV_ACTIVATE,1508,0);assert(!strcmp(test->text,"Double click detected"));
+    cp_open(&m.app,CP_KEYBOARD);
+    du_post(&m.ui,DU_EV_CHANGE,1500,3);du_post(&m.ui,DU_EV_CHANGE,1501,0);
+    du_post(&m.ui,DU_EV_CHANGE,1502,0);du_post(&m.ui,DU_EV_CHANGE,1507,0);
+    assert(input_saved.repeat_delay==3 && !input_saved.repeat_speed && !input_saved.cursor_blink_ms && !input_saved.layout_switch);
+    assert(input_saved.mouse_swap && input_saved.mouse_trails==7 && strstr(input_saved.extra,"foreign=preserved") && input_applied==8);
+    assert(du_get(&m.ui,1515) && du_get(&m.ui,1515)->kind==DU_EDIT);
+    finish_panel(&m);puts("PASS G12 Keyboard/Mouse controls, double-click test, durable merge and apply");
+}
+
 int main(int argc,char **argv)
 {
     setvbuf(stdout,NULL,_IONBF,0);
     setvbuf(stdout,NULL,_IONBF,0);
-    assert(argc==2); idle_pages(); jobs(argv[1]);
+    assert(argc==2); input_properties();idle_pages(); jobs(argv[1]);
     puts("PASS Control Panel event-driven jobs"); fflush(stdout); return 0;
 }

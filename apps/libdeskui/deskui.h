@@ -335,6 +335,9 @@ struct du_ui {
     struct du_timer timers[DU_TIMERS];
     int mouse_x, mouse_y, focused_window;
     unsigned modifiers, buttons, caps;
+    unsigned input_layout, input_dead, input_blink_ms, input_wheel_lines, input_double_ms;
+    unsigned input_text[2], input_text_count, input_text_ready;
+    int input_caret_on; uint64_t input_caret_deadline;
     uint8_t keys[0x201];
     uint64_t now, last_click_ns; int last_click_x, last_click_y, last_click_widget, last_click_index;
     int dirty;

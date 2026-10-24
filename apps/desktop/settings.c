@@ -19,9 +19,12 @@ void cfg_defaults(struct ciuki_settings *s)
     s->desktop_color = CFG_DESKTOP_COLOR;          /* DESK_BACKGROUND */
     s->clock_24h = 1;
     s->desktop_icons = 1;
+    s->mouse_spi_speed=10;
     s->mouse_speed = CFG_MOUSE_NORMAL;
     s->double_click_ms = 500;
     s->keyboard = CFG_KEYS_US;
+    s->repeat_delay = 1; s->repeat_speed = 31;
+    s->cursor_blink_ms = 530; s->wheel_lines = 3; s->layout_switch = 1;
     s->saver_seconds=600; s->saver_kind=1;
 }
 
@@ -112,8 +115,17 @@ static int assign(struct ciuki_settings *s, const char *key, const char *v, int 
     if (!strcmp(key, "clock_24h")) return flag(v, &s->clock_24h);
     if (!strcmp(key, "clock_seconds")) return flag(v, &s->clock_seconds);
     if (!strcmp(key, "desktop_icons")) return flag(v, &s->desktop_icons);
-    if (!strcmp(key, "mouse_speed")) return number(v, CFG_MOUSE_MIN, CFG_MOUSE_MAX, &s->mouse_speed);
-    if (!strcmp(key, "double_click_ms")) return number(v, 200, 900, &s->double_click_ms);
+    if (!strcmp(key, "repeat_delay")) return number(v, 0, 3, &s->repeat_delay);
+    if (!strcmp(key, "repeat_speed")) return number(v, 0, 31, &s->repeat_speed);
+    if (!strcmp(key, "cursor_blink_ms")) return number(v, 0, 1200, &s->cursor_blink_ms);
+    if (!strcmp(key, "mouse_swap")) return flag(v, &s->mouse_swap);
+    if (!strcmp(key, "mouse_trails")) return number(v, 0, 7, &s->mouse_trails);
+    if (!strcmp(key, "wheel_lines")) return number(v, 0, 101, &s->wheel_lines);
+    if (!strcmp(key, "pointer_scheme")) return number(v, 0, 2, &s->pointer_scheme);
+    if (!strcmp(key, "layout_switch")) return flag(v, &s->layout_switch);
+    if (!strcmp(key, "mouse_speed")) {int ok=number(v, CFG_MOUSE_MIN, CFG_MOUSE_MAX, &s->mouse_speed);if(ok)s->mouse_spi_speed=s->mouse_speed*2;return ok;}
+    if (!strcmp(key, "mouse_spi_speed")) return number(v, 1, 20, &s->mouse_spi_speed);
+    if (!strcmp(key, "double_click_ms")) return number(v, 0, 5000, &s->double_click_ms);
 
     if (!strcmp(key,"saver_enabled")) return flag(v,&s->saver_enabled);
     if (!strcmp(key,"saver_seconds")) return number(v,0,2147483647,&s->saver_seconds);
@@ -183,6 +195,12 @@ size_t cfg_format(const struct ciuki_settings *s, char *out, size_t size)
         cfg_keyboard_names[s->keyboard >= 0 && s->keyboard < CFG_KEYS_COUNT ? s->keyboard : 0], (unsigned)s->display_mode);
     if (n <= 0 || (size_t)n >= size) return 0;
     size_t used = (size_t)n;
+    n = snprintf(out + used, size - used,
+        "mouse_spi_speed=%d\nrepeat_delay=%d\nrepeat_speed=%d\ncursor_blink_ms=%d\nmouse_swap=%d\nmouse_trails=%d\nwheel_lines=%d\npointer_scheme=%d\nlayout_switch=%d\n",
+        s->mouse_spi_speed, s->repeat_delay, s->repeat_speed, s->cursor_blink_ms, s->mouse_swap,
+        s->mouse_trails, s->wheel_lines, s->pointer_scheme, s->layout_switch);
+    if (n <= 0 || (size_t)n >= size - used) return 0;
+    used += (size_t)n;
     n=snprintf(out+used,size-used,"saver_enabled=%d\nsaver_seconds=%d\nsaver_kind=%d\nmonitor_seconds=%d\n",
                !!s->saver_enabled,s->saver_seconds,s->saver_kind,s->monitor_seconds);
     if (n<0 || (size_t)n>=size-used) return 0;
@@ -257,3 +275,21 @@ void cfg_icons_arrange(struct ciuki_settings *s) { icon_remove(s,NULL); }
 
 void cfg_icon_forget(struct ciuki_settings *s, const char *name)
 { char key[1538]; if (icon_key(key,name)) icon_remove(s,key); }
+
+/* Protocol keys are append-only, independent of the C layout. */
+int *cfg_input_field(struct ciuki_settings *s, unsigned key)
+{
+    switch(key) {
+    case 1:return &s->keyboard; case 2:return &s->repeat_delay; case 3:return &s->repeat_speed;
+    case 4:return &s->cursor_blink_ms; case 5:return &s->mouse_swap; case 6:return &s->mouse_trails;
+    case 7:return &s->wheel_lines; case 8:return &s->pointer_scheme; case 9:return &s->mouse_spi_speed;
+    case 10:return &s->double_click_ms; case 11:return &s->layout_switch; default:return NULL;
+    }
+}
+int cfg_input_set(struct ciuki_settings *s, unsigned key, unsigned value)
+{
+    static const unsigned maximum[]={0,1,3,31,1200,1,7,101,2,20,5000,1};
+    int *p=cfg_input_field(s,key);
+    if (!p || value>maximum[key] || (key==9 && !value)) return -1;
+    *p=(int)value;return 0;
+}

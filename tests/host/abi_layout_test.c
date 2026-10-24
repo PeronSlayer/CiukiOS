@@ -130,6 +130,7 @@ _Static_assert(SETUP_ERASED_MAX==16u,"Setup preview capacity");
 #if defined(__i386__)
 _Static_assert(sizeof(struct setup_erased_partition)==32,"Setup erased record");
 _Static_assert(_Alignof(struct setup_erased_partition)==4,"Setup erased alignment");
+/* G1 already added setup_answers.tz_zone[48]; keep its existing ABI oracle current. */
 _Static_assert(sizeof(struct setup_plan)==1204,"Setup plan version 2");
 #define SETUP_OFFSET(field, expected) _Static_assert(__builtin_offsetof(struct setup_plan,field)==expected,"Setup plan " #field)
 SETUP_OFFSET(version,0);
@@ -155,6 +156,12 @@ _Static_assert(__builtin_offsetof(struct setup_erased_partition,label)==20,"eras
 #undef SETUP_OFFSET
 #endif
 
+_Static_assert(DESK_INPUT_SETTINGS==83 && DESK_INPUT_STATE==84 && DESK_INPUT_VALUES==11,"G12 input protocol");
+_Static_assert(DESK_INPUT_LAYOUT==1 && DESK_INPUT_DELAY==2 && DESK_INPUT_SPEED==3 &&
+    DESK_INPUT_BLINK==4 && DESK_INPUT_SWAP==5 && DESK_INPUT_TRAILS==6 &&
+    DESK_INPUT_WHEEL==7 && DESK_INPUT_SCHEME==8 && DESK_INPUT_MOUSE_SPEED==9 &&
+    DESK_INPUT_DOUBLE_CLICK==10 && DESK_INPUT_TOGGLE==11,"G12 setting keys");
+_Static_assert(sizeof(((struct desk_packet *)0)->input_settings)==44,"G12 snapshot payload");
 struct expectation { const char *key; uint32_t native, expected; };
 _Static_assert(CIUKI_COM_UNKNOWN==0 && CIUKI_COM_8250==1 && CIUKI_COM_16450==2 &&
     CIUKI_COM_16550==3 && CIUKI_COM_16550A==4 && CIUKI_COM_16650==5 && CIUKI_COM_16750==6,"COM chip codes");
@@ -195,6 +202,13 @@ static const struct expectation expectations[] = {
     {"offsetof.ciuki_screen_control.inhibited",__builtin_offsetof(struct ciuki_screen_control,inhibited),52u},
     {"sizeof.ciuki_screen_control",sizeof(struct ciuki_screen_control),56u},
     {"alignof.ciuki_screen_control",_Alignof(struct ciuki_screen_control),4u},
+    {"constant.INPUT_KEYBOARD_SET", INPUT_KEYBOARD_SET, 0x4905u},
+    {"sizeof.ciuki_keyboard_settings", sizeof(struct ciuki_keyboard_settings), 16u},
+    {"alignof.ciuki_keyboard_settings", _Alignof(struct ciuki_keyboard_settings), 4u},
+    {"offsetof.ciuki_keyboard_settings.version", __builtin_offsetof(struct ciuki_keyboard_settings, version), 0u},
+    {"offsetof.ciuki_keyboard_settings.size", __builtin_offsetof(struct ciuki_keyboard_settings, size), 4u},
+    {"offsetof.ciuki_keyboard_settings.delay", __builtin_offsetof(struct ciuki_keyboard_settings, delay), 8u},
+    {"offsetof.ciuki_keyboard_settings.speed", __builtin_offsetof(struct ciuki_keyboard_settings, speed), 12u},
     {"constant.CIUKI_SYS_FILE_INFO", CIUKI_SYS_FILE_INFO, 98u},
     {"constant.MEDIA_GET_LABEL", MEDIA_GET_LABEL, 0x4d18u},
     {"constant.MEDIA_SET_LABEL", MEDIA_SET_LABEL, 0x4d19u},

@@ -72,6 +72,16 @@ enum desk_v3_opcode {
      * 3 maximised (the desktop zooms the window; WM_SIZE SIZE_MAXIMIZED). */
     DESK_V3_LIMITS
 };
+/* G12: shared settings, v2/v3; no fds. Request: key (0=query), value,
+ * flags (SPIF_UPDATEINIFILE=1, SENDCHANGE=2). Snapshot: 11 u32 values, changed key, flags.
+ * Reply uses the request/window identity of the request; unsolicited snapshots
+ * use request 0. Appended after main's existing clipboard and limits opcodes (80–82). */
+#define DESK_INPUT_SETTINGS 83u
+#define DESK_INPUT_STATE 84u
+#define DESK_INPUT_VALUES 11u
+enum desk_input_key { DESK_INPUT_LAYOUT=1, DESK_INPUT_DELAY, DESK_INPUT_SPEED,
+    DESK_INPUT_BLINK, DESK_INPUT_SWAP, DESK_INPUT_TRAILS, DESK_INPUT_WHEEL,
+    DESK_INPUT_SCHEME, DESK_INPUT_MOUSE_SPEED, DESK_INPUT_DOUBLE_CLICK, DESK_INPUT_TOGGLE };
 #define DESK_RESIZABLE 1u
 #define DESK_CONFIGURE_COMMITTED 1u
 #define DESK_CURSOR_API 1u
@@ -296,6 +306,7 @@ struct desk_packet {
     uint32_t resize_serial; /* optional GFX_FRAME replacement attachment */
     uint64_t completed_ns, next_frame_ns;
     uint32_t timing_serial,render_us,submit_us,wait_us; /* optional 84-byte FRAME */
+    uint32_t input_settings[DESK_INPUT_VALUES];
     uint64_t convert_ns,copy_ns,slot_ns,refresh_ns; /* optional 64-byte PRESENTED */
     struct desk_clip_wire clip; /* G5 CLIPBOARD / CLIPBOARD_EVENT */
     int clipboard_fd; /* v3 GET reply only; receiver closes it */

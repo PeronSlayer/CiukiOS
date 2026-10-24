@@ -117,6 +117,7 @@ static int window_open(struct du_window *w, struct du_ui *u, int channel, int wi
     queue(w, &m);
     /* G3: this window answers QUERY_END_SESSION (registration: serial 0, AGREE). */
     desk_message(&m, DESK_SESSION_ANSWER, 12); desk_put32(m.data + 8, DU_SESSION_AGREE); queue(w, &m);
+    desk_message(&m,DESK_INPUT_SETTINGS,16);queue(w,&m);
     clip_window=w; du_clip_bind(native_clip,w);
     return flush(w);
 fail: { int error = errno ? errno : EINVAL; du_window_destroy(w); errno = error; return -1; }
@@ -309,6 +310,11 @@ int du_window_turn(struct du_window *w, uint64_t now)
                 w->request_width = p.width; w->request_height = p.height;
             }
             break;
+        case DESK_INPUT_STATE:
+            if(w->ui->input_layout!=p.input_settings[0])w->ui->input_dead=0;
+            w->ui->input_layout=p.input_settings[0];w->ui->input_blink_ms=p.input_settings[3];
+            w->ui->input_wheel_lines=p.input_settings[6];w->ui->input_double_ms=p.input_settings[9];
+            w->ui->input_caret_on=1;w->ui->input_caret_deadline=0;w->ui->dirty=1;break;
         case DESK_PING:
             if (w->session_reply_pending) session_answer(w, w->session_reply_pending - 1);   /* answer before PONG */
             desk_message(&m, DESK_PONG, 8); desk_put32(m.data + 4, p.serial); queue(w, &m); break;

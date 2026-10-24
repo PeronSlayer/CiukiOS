@@ -440,6 +440,8 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 44 | G8 Copy To / Move To folder chooser, navigation, acceptance and cancellation; Undo progress and resulting file list | dialog plus shadow, changed list rows and selection | `du_folder_dialog`, `operations_ui.inc`, normal transfer publication | none | `test_window_model.test_g8_file_operation_dialogs_redraw`: production Files, partial versus full frame |
 | 45 | G8 Open With, Always use, Browse and File Types edits (extension, description, icon, default action, open/edit/print, download confirmation) | old and new dialog boxes, controls, focus and validation text | `open_with`, `file_types`, libdeskui dialogs | custom dialog geometry explicitly damages its complete box after layout | same G8 dialog replay |
 | 46 | G8 Send To and registered New menus; new/paste/create shortcuts, Bitmap and ShellNew publish new rows | popup boxes and file list after refresh | `operations_ui.inc`, `files_update`, `scan_poll`; desktop folder refresh reuses row 19 | none | same G8 dialog replay; G8 model tests check resulting files |
+| 47 | G12 input settings: large/inverted scheme, trail movement and expiry, language indicator and left-handed buttons | previous and new trail footprints; full scene on scheme/layout changes, including hardware pointer hide/restore | `desk_preferences_changed`, `desk_input`, `desk_shell_tick`, `cursor`, `pointer_rows` | preference cursor modes must hide the hardware sprite before software drawing | `row_input_preferences` in `test_window_model` (all five presenters) |
+| 48 | G12 native edit/textarea and shell Run/rename caret blink, composed character insertion, configured wheel line/page scrolling | client caret/widget invalidation becomes ordinary client damage | `du_tick`, `desk_shell_tick`, `du_input`, `du_widget_wheel` | keep selection focus while only the caret visibility changes | `row_input_text` in `test_window_model` |
 
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with
@@ -448,6 +450,7 @@ fx-15b after the merge, with the reconcile extended to the band and the
 drag image. Rows 31-35 came with G4 (`docs/design/taskbar-arrangement-windows-keys.md`),
 row 36 with G21, row 37 with fx-26, row 38 with G13 (`docs/directives/g13-g16-os-gaps-batch-3.md`)
 and rows 39-41 with G10 (`docs/directives/g7-g12-os-gaps-batch-2.md`);
+drag image. Rows 31-35 came with G4 (`docs/design/taskbar-arrangement-windows-keys.md`); rows 36-37 came with G12 (`docs/design/input-settings.md`).
 the randomized sequences gained operations 42-47 (taskbar menu, Win+D/M and
 Alt+M, taskbar focus keys, Alt+F6/Menu key/Shift+F10/F3, caption icon,
 Win+E/R/F/Break/F1). Row 36 adds fx-26's drag with concurrent damage.

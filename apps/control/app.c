@@ -21,6 +21,8 @@ enum {
     C_SYSTEM_TABS, C_CPU, C_UPTIME, C_SYSTEM_HARDWARE, C_FLAGS, C_BOOT_OPTIONS, C_SERIAL, C_BOOT_APPLY,
     C_DETAILS = 130, C_FIRMWARE = 131, D_FIRMWARE = 199, D_PROPERTIES = 200, D_INFO, C_SCHEME, C_UI_VOL, C_UI_VOL_V
 };
+enum { C_REPEAT_DELAY=1500, C_REPEAT_SPEED, C_BLINK, C_SWAP, C_TRAILS,
+       C_WHEEL, C_POINTER, C_LAYOUT_SWITCH, C_DOUBLE_TEST };
 static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts", "autoplay", "programs", "joystick"};
 static const char *const page_labels[CP_PAGES] = {"Display Properties", "Mouse", "Keyboard", "Sounds and Audio", "Date and Time", "System", "System", "System", "Network", "Power", "Display Properties", "Display Properties", "Storage and removable devices", "Add/Remove Programs", "Game controllers"};
 static void build(struct cp_app *a);
@@ -60,9 +62,13 @@ static void changed(struct cp_app *a)
 {
     static struct ciuki_settings now;
     load(a, &now);            /* keep what the desktop wrote meanwhile: recent documents, unknown keys */
-    if (a->page==CP_MOUSE) { now.mouse_speed=a->cfg.mouse_speed; now.double_click_ms=a->cfg.double_click_ms; }
+    if (a->page==CP_MOUSE) { now.mouse_speed=a->cfg.mouse_speed; now.mouse_spi_speed=a->cfg.mouse_spi_speed; now.double_click_ms=a->cfg.double_click_ms;
+        now.mouse_swap=a->cfg.mouse_swap; now.mouse_trails=a->cfg.mouse_trails;
+        now.wheel_lines=a->cfg.wheel_lines; now.pointer_scheme=a->cfg.pointer_scheme; }
+    else if (a->page==CP_KEYBOARD) { now.keyboard=a->cfg.keyboard;
+        now.repeat_delay=a->cfg.repeat_delay; now.repeat_speed=a->cfg.repeat_speed;
+        now.cursor_blink_ms=a->cfg.cursor_blink_ms; now.layout_switch=a->cfg.layout_switch; }
     else if (a->page==CP_POWER) now.monitor_seconds=a->cfg.monitor_seconds;
-    else if (a->page==CP_KEYBOARD) now.keyboard=a->cfg.keyboard;
     else if (a->page==CP_DATETIME) { now.clock_24h=a->cfg.clock_24h; now.clock_seconds=a->cfg.clock_seconds; }
     static char out[CFG_TEXT_MAX];
     size_t n = cfg_format(&now, out, sizeof(out));
@@ -326,6 +332,14 @@ static void sync(struct cp_app *a)
     snprintf(s, sizeof(s), "%d of %d%s", a->cfg.mouse_speed, CFG_MOUSE_MAX, a->cfg.mouse_speed == CFG_MOUSE_NORMAL ? " (normal)" : ""); text(a, C_SPEED_V, s);
     if ((w = du_get(u, C_DBL))) w->value = (a->cfg.double_click_ms - 200) / 100;
     snprintf(s, sizeof(s), "%d ms", a->cfg.double_click_ms); text(a, C_DBL_V, s);
+    if ((w=du_get(u,C_REPEAT_DELAY))) w->value=a->cfg.repeat_delay;
+    if ((w=du_get(u,C_REPEAT_SPEED))) w->value=a->cfg.repeat_speed;
+    if ((w=du_get(u,C_BLINK))) w->value=a->cfg.cursor_blink_ms/100;
+    if ((w=du_get(u,C_SWAP))) w->value=a->cfg.mouse_swap;
+    if ((w=du_get(u,C_TRAILS))) w->value=a->cfg.mouse_trails;
+    if ((w=du_get(u,C_WHEEL))) w->value=a->cfg.wheel_lines;
+    if ((w=du_get(u,C_LAYOUT_SWITCH))) w->value=a->cfg.layout_switch;
+    text(a,C_POINTER,a->cfg.pointer_scheme==1 ? "Pointers: Ciuki Large" : a->cfg.pointer_scheme==2 ? "Pointers: Ciuki Inverted" : "Pointers: Ciuki");
     for (int k = 0; k < CFG_KEYS_COUNT; k++) a->key_items[k].selected = k == a->cfg.keyboard;
     if ((w = du_get(u, C_KEY))) w->active = (unsigned)a->cfg.keyboard;
     if ((w = du_get(u, C_VOL))) { w->value = a->volume; w->disabled = !a->mixer_ok; }
@@ -709,7 +723,19 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
         if (e->type == DU_EV_ACTIVATE) { a->cfg.desktop_color = swatches[e->id - C_COL0]; save = 1; a->preview_valid = 0; }
         break;
     case C_ICONS: if (e->type == DU_EV_ACTIVATE) { a->cfg.desktop_icons = !a->cfg.desktop_icons; save = 1; } break;
-    case C_SPEED: if (e->type == DU_EV_CHANGE) { a->cfg.mouse_speed = CFG_MOUSE_MIN + e->index; save = 1; } break;
+    case C_REPEAT_DELAY: if(e->type==DU_EV_CHANGE) {a->cfg.repeat_delay=e->index;save=1;} break;
+    case C_REPEAT_SPEED: if(e->type==DU_EV_CHANGE) {a->cfg.repeat_speed=e->index;save=1;} break;
+    case C_BLINK: if(e->type==DU_EV_CHANGE) {a->cfg.cursor_blink_ms=e->index*100;save=1;} break;
+    case C_SWAP: if(e->type==DU_EV_CHANGE) {a->cfg.mouse_swap=e->index!=0;save=1;} break;
+    case C_TRAILS: if(e->type==DU_EV_CHANGE) {a->cfg.mouse_trails=e->index;save=1;} break;
+    case C_WHEEL: if(e->type==DU_EV_CHANGE) {a->cfg.wheel_lines=e->index;save=1;} break;
+    case C_LAYOUT_SWITCH: if(e->type==DU_EV_CHANGE) {a->cfg.layout_switch=e->index!=0;save=1;} break;
+    case C_POINTER: if(e->type==DU_EV_ACTIVATE) {a->cfg.pointer_scheme=(a->cfg.pointer_scheme+1)%3;save=1;} break;
+    case C_DOUBLE_TEST: if(e->type==DU_EV_ACTIVATE) {
+        static uint64_t last; uint64_t now=a->ui->now;
+        text(a,C_DOUBLE_TEST,last && now>=last && now-last<=(uint64_t)a->cfg.double_click_ms*1000000 ? "Double click detected" : "Click again to test"); last=now;
+    } break;
+    case C_SPEED: if (e->type == DU_EV_CHANGE) { a->cfg.mouse_speed = CFG_MOUSE_MIN + e->index; a->cfg.mouse_spi_speed=a->cfg.mouse_speed*2; save = 1; } break;
     case C_DBL: if (e->type == DU_EV_CHANGE) { a->cfg.double_click_ms = 200 + e->index * 100; save = 1; } break;
     case C_KEY: if (e->type == DU_EV_SELECT && e->index >= 0 && e->index < CFG_KEYS_COUNT) { a->cfg.keyboard = e->index; save = 1; } break;
     case C_VOL: case C_MUTE:
@@ -1348,14 +1374,27 @@ static void build(struct cp_app *a)
     add(a, DU_LABEL, C_DBL_L, 24, 116, 200, 14, "&Double-click speed:");
     w = add(a, DU_SCROLLBAR, C_DBL, 24, 134, 300, 17, ""); w->vertical = 0; w->total = 8; w->page = 1;
     add(a, DU_LABEL, C_DBL_V, 336, 134, 140, 17, "");
-    add(a, DU_LABEL, C_MOUSE_NOTE, 24, 172, 452, 14, "The desktop applies both at once; 5 moves one pixel per mouse count.");
+    add(a,DU_CHECKBOX,C_SWAP,24,168,240,22,"Swap left and right buttons");
+    add(a,DU_BUTTON,C_DOUBLE_TEST,288,166,220,24,"Double click here to test");
+    add(a,DU_LABEL,1510,24,202,160,14,"Pointer trails (0/1 = off):");
+    w=add(a,DU_SCROLLBAR,C_TRAILS,200,200,300,17,"");w->total=8;w->page=1;w->vertical=0;
+    add(a,DU_LABEL,1511,24,234,170,14,"Wheel lines (101 = page):");
+    w=add(a,DU_SCROLLBAR,C_WHEEL,200,232,300,17,"");w->total=102;w->page=1;w->vertical=0;
+    add(a,DU_BUTTON,C_POINTER,24,272,300,24,"");
     } else if (a->page == CP_KEYBOARD) {
     /* Keyboard */
     add(a, DU_LABEL, C_KEY_L, 24, 44, 200, 14, "Keyboard &layout:");
     for (int k = 0; k < CFG_KEYS_COUNT; k++) { memset(&a->key_items[k], 0, sizeof(a->key_items[k])); a->key_items[k].text[0] = cfg_keyboard_labels[k]; }
     w = add(a, DU_LISTVIEW, C_KEY, 24, 60, 220, 56, ""); w->items = a->key_items; w->count = CFG_KEYS_COUNT; list_style(w, "Layout");
-    add(a, DU_LABEL, C_KEY_NOTE1, 24, 126, 452, 14, "The Run dialog uses the new layout at once; programs started");
-    add(a, DU_LABEL, C_KEY_NOTE2, 24, 140, 452, 14, "afterwards receive it in CIUKI_KEYMAP.");
+    add(a,DU_CHECKBOX,C_LAYOUT_SWITCH,264,62,270,42,"Left Alt+Shift / language indicator");
+    add(a,DU_LABEL,1512,24,134,190,14,"Repeat delay (short to long):");
+    w=add(a,DU_SCROLLBAR,C_REPEAT_DELAY,224,132,280,17,"");w->total=4;w->page=1;w->vertical=0;
+    add(a,DU_LABEL,1513,24,174,190,14,"Repeat rate (slow to fast):");
+    w=add(a,DU_SCROLLBAR,C_REPEAT_SPEED,224,172,280,17,"");w->total=32;w->page=1;w->vertical=0;
+    add(a,DU_LABEL,1514,24,214,190,14,"Cursor blink (0 = steady):");
+    w=add(a,DU_SCROLLBAR,C_BLINK,224,212,280,17,"");w->total=13;w->page=1;w->vertical=0;
+    add(a,DU_LABEL,C_KEY_NOTE1,24,258,480,14,"Italian: Shift+^, then a vowel; Space inserts the accent.");
+    add(a,DU_EDIT,1515,24,284,480,24,"Type here to test repeat and blink");
     } else if (a->page == CP_SOUNDS) {
     /* Sounds */
     add(a, DU_LABEL, C_VOL_L, 24, 44, 180, 14, "Master &volume:");
