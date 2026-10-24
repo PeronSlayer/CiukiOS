@@ -353,8 +353,7 @@ int dosvm_bios(struct dosvm *v, struct v86_frame *f, uint8_t vector)
         if (ax == 0x1680) f->tf.eax &= ~255u; /* supported; slice released at INT reflection */
         else if (ax == 0x1687) low(&f->tf.eax, 0xFFFF); /* DPMI not implemented/advertised */
         else if (ax == 0x1686) low(&f->tf.eax, 1);
-        else if (ax == 0x4300) f->tf.eax = (f->tf.eax & ~255u) | 0x80;
-        else if (ax == 0x4310) { f->es=VM_XMS_SEG; low(&f->tf.ebx,0); }
+        else dosvm_xms_multiplex(v, f); /* reflected calls that reach the ROM default */
         return 0;
     case 0x67: return dosvm_ems(v,f);
     default:

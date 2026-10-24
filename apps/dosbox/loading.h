@@ -27,6 +27,14 @@ static inline const char *dosbox_return_text(int error)
  * EXIT and the owner's own close end it as before. */
 static inline int dosbox_stop_reported(unsigned reason) { return reason==2u || reason==4u; }
 #define DOSBOX_PULSE_MS 250u
+/* A launched program that returns to the prompt before the window showed it
+ * (no frame presented) or within its first seconds has usually printed an
+ * error ("not enough memory", a missing file). Windows 98 shows the program's
+ * text output in a "Finished - <name>" window; the DOS Box keeps its window
+ * and text screen then, even with "Close on exit" on. */
+#define DOSBOX_EARLY_EXIT_MS 10000u
+static inline int dosbox_early_exit(int loading, uint64_t launch_at, uint64_t now)
+{ return loading || !launch_at || now - launch_at < DOSBOX_EARLY_EXIT_MS; }
 static inline struct du_rect dosbox_panel_pulse(struct du_canvas *canvas, uint64_t elapsed)
 {
     struct du_rect bar = {120,272,400,18};

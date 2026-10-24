@@ -238,6 +238,18 @@ static uint8_t xms_move(struct dosvm *v, struct v86_frame *f)
     return result;
 }
 
+/* XMS 3.0 (1991) section "Determining if an XMS driver is installed":
+ * INT 2Fh AX=4300h returns AL=80h; AX=4310h returns the control function
+ * in ES:BX (VM_XMS_SEG:0000, the patchable short-jump entry). */
+int dosvm_xms_multiplex(struct dosvm *v, struct v86_frame *f)
+{
+    (void)v;
+    uint16_t ax=(uint16_t)f->tf.eax;
+    if (ax==0x4300) { f->tf.eax=(f->tf.eax&~255u)|0x80; return 0; }
+    if (ax==0x4310) { f->es=VM_XMS_SEG; vm_low(&f->tf.ebx,0); return 0; }
+    return -ENOSYS;
+}
+
 int dosvm_xms(struct dosvm *v, struct v86_frame *f)
 {
     unsigned fn=(f->tf.eax>>8)&255, handle=(uint16_t)f->tf.edx;

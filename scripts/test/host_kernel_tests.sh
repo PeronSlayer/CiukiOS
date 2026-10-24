@@ -767,3 +767,7 @@ bash "$root/tests/host/dos/run_unified_binding.sh"
 # f3-57: unified CiukiDOS local IFS (live VFS backend, critical errors,
 # activation barrier, kernel=unified installation record).
 bash "$root/tests/host/dos/run_unified_file.sh"
+# DOS Box memory: XMS visible in front of the guest INT 2Fh chain, FreeCOM's
+# XMS swap, free conventional memory against Wolfenstein 3-D 1.4's own check
+# and the game itself on the production VM code (uses the H57 qualification).
+bash "$root/tests/host/dos/run_dos_memory.sh"

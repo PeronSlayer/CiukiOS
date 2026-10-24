@@ -1510,6 +1510,16 @@ int main(int argc, char **argv)
 #endif
     CHECK(dosvm_create(&config, &gv) == 0);
     printf("return tracker: %s (production VM creation)\n", gv->return_tracker_tf ? "tf" : "breakpoint");
+    /* GUEST_NO_X87=1: the BIOS equipment word (0040:0010 bit 1) reports no
+     * coprocessor, so a Borland C program selects its own INT 34h-3Dh x87
+     * emulator; libx86emu has no x87 and this runner models only the
+     * control/status subset (Wolfenstein 3-D, tests/host/dos/dos_memory.py). */
+    if (getenv("GUEST_NO_X87")) {
+        uint16_t equipment = 0;
+        CHECK(!dosvm_read(gv, 0x410, &equipment, 2));
+        equipment &= (uint16_t)~2u;
+        CHECK(!dosvm_write(gv, 0x410, &equipment, 2));
+    }
 #ifdef CIUKI_DOSVM_FILE_CPU
     const char *disabled=getenv("GUEST_NO_FILE_HOOK");
     if (disabled && !strcmp(disabled,"alloc")) h50_fail_pages=(sizeof(struct file_runtime)+PAGE_SIZE-1)/PAGE_SIZE;
@@ -1695,6 +1705,11 @@ int main(int argc, char **argv)
         }
         r = run(400000000ull, 0);
         stats("after-exit");
+        /* f3-61 launch state once the program returned (FreeCOM may have
+         * reloaded itself from its XMS swap): no pending EXEC, shell idle. */
+        if (guest_kernel)
+            printf("H61 SHELL after %s exec_pending=%u overflow=%u shell_idle=%u\n", argv[i + 1],
+                   gv->exec_pending, gv->exec_overflow, dosvm_shell_idle(gv));
 #ifdef CIUKI_DOSVM_FILE_CPU
         if (gv->files) {
             unsigned processes=0; for (unsigned n=0;n<DOS_FILE_PSPS;n++) processes+=gv->files->process[n].used;

@@ -7,8 +7,10 @@
  * draws. No guest instruction stream, desktop, QEMU or image.
  * Modes (argv[1]):
  *   frame  Programs > Games > DOOM: the first game frame reaches the window;
- *   exit   the game quits to DOS: "Close on exit" closes the window and the
- *          VM is destroyed (Windows 98 PIF "Close on exit");
+ *   exit   the game quits to DOS after 11 s: "Close on exit" closes the
+ *          window and the VM is destroyed (Windows 98 PIF "Close on exit");
+ *          a return in the first 10 s keeps a "Finished - <name>" window
+ *          (apps/dosbox/loading.h DOSBOX_EARLY_EXIT_MS, dosbox replay 23/32);
  *   close  a plain DOS Box at its idle C:\> prompt is closed from the desktop
  *          (close button, Alt+F4): CLOSE ends the VM and the window closes.
  * SPDX-License-Identifier: GPL-2.0-only */
@@ -29,7 +31,7 @@ static unsigned game_line_length, game_lines, game_execs, game_draws, game_calls
 static char game_program[128];
 static bool game_stepping;
 int game_mode;                      /* 0 frame, 1 exit, 2 close */
-static uint64_t game_returned_at;
+static uint64_t game_returned_at, game_exec_at;
 
 uint64_t game_now_ms(void) { return g_ticks; }
 /* The DOS command interpreter waits for input: the VM task sleeps in
@@ -51,7 +53,7 @@ static void game_execute(struct dosvm *v)
     CHECK(interrupt_service(v, &exec, 0x21) == -ENOSYS);
     snprintf(game_program, sizeof(game_program), "%s", game_line);
     game_execs++; game_line_length = 0;
-    game_state = GUEST_PROGRAM; game_state_at = g_ticks;
+    game_state = GUEST_PROGRAM; game_state_at = game_exec_at = g_ticks;
 }
 /* Advance the scripted guest to the current time (kernel CPU held). */
 static void game_guest_step(void)
@@ -86,7 +88,7 @@ static void game_guest_step(void)
         }
         break;
     case GUEST_DRAWING:
-        if (game_mode == 1 && game_draws >= 5 && g_ticks - game_state_at >= 28) {
+        if (game_mode == 1 && game_draws >= 5 && g_ticks - game_exec_at >= 11000) {
             /* The player quits: text mode, DOS terminates the program and the
              * kernel's IRET reaches the shell's EXEC frame; dosvm.c's trap
              * exit then retires that frame and marks the armed launch
@@ -100,7 +102,7 @@ static void game_guest_step(void)
             game_prompt_idle(v); game_state = GUEST_PROMPT; game_state_at = g_ticks;
             break;
         }
-        if (g_ticks - game_state_at >= 28 && v->video_direct == VIDEO_LINEAR) {
+        if (g_ticks - game_state_at >= 28 && v->video_direct == VIDEO_LINEAR && (game_mode != 1 || game_draws < 5)) {
             /* One frame: a band of colour 0x2A at the top of the screen. */
             for (unsigned x = 0; x < 320; x += 4) linear_store(v, 10 * 320 + x, 0x2A);
             game_draws++; game_state_at = g_ticks;

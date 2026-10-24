@@ -618,7 +618,8 @@ class DesktopTests(unittest.TestCase):
         # fx-4b: 20 verify wait, 21 mismatch; G3: 22 end of session; G17: 23-26 toolbar, properties
         # and session end with the toolbar; fx-23: 27-28 CREATE on its worker (PING answered, owner stop).
         # dec2: 29-30 EXIT at the prompt with Close on exit on/off.
-        self.dosbox_loading_replay(range(31), True)
+        # 31-32 a program's return after 12 s closes it; an early return keeps "Finished - <name>".
+        self.dosbox_loading_replay(range(33), True)
 
     def test_dosbox_save_quota(self):
         self.dosbox_loading_replay((18, 19), False)

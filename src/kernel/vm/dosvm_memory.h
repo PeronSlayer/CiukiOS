@@ -117,6 +117,7 @@ void dosvm_pool_free(struct dosvm *, struct vm_block *);
 void dosvm_pool_query(struct dosvm *, uint32_t *, uint32_t *);
 int dosvm_copy_region(struct dosvm *, uint32_t, uint32_t, uint32_t, bool);
 int dosvm_xms(struct dosvm *, struct v86_frame *);
+int dosvm_xms_multiplex(struct dosvm *, struct v86_frame *); /* 2Fh/4300h, 4310h; else -ENOSYS */
 uint8_t dosvm_umb(struct dosvm *, struct v86_frame *, unsigned);
 int dosvm_ems(struct dosvm *, struct v86_frame *);
 int dosvm_ems_return(struct dosvm *, struct v86_frame *);

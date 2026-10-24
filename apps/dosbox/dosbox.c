@@ -419,7 +419,7 @@ int main(int argc, char **argv)
         if (db_policy(&window,id,generation)) goto done;
     }
     int running = 1, fullscreen = 0, fullscreen_painted = 0;
-    int startup_fullscreen=window.profile.screen!=0, returned_seen=0;
+    int startup_fullscreen=window.profile.screen!=0, returned_seen=0, kept_early=0;
     while (running) {
         dos_clip_vm(id,generation,server);
         for (unsigned budget = 0; budget < 32; budget++) {
@@ -563,10 +563,22 @@ int main(int argc, char **argv)
         if (ciuki_dosvm(CIUKI_DOSVM_STATUS, &c)) goto done;
         fullscreen=!!(c.changed&CIUKI_DOSVM_FULL_SCREEN);
         if (autorun_launch_sent && (c.changed&CIUKI_DOSVM_PROGRAM_RETURNED) && (c.changed&CIUKI_DOSVM_SHELL_READY)) {
-            if (window.profile.close_on_exit) break;
+            if (!returned_seen) kept_early=dosbox_early_exit(loading,launch_at,now_ms());
+            if (window.profile.close_on_exit && !kept_early) break;
             if (!returned_seen) {
                 returned_seen=1; loading=0; shown=1; redraw=1;
-                db_notice(&window,"The program has finished. This DOS window will remain open.");
+                if (kept_early) {
+                    /* Show the program's text screen (its error message) and
+                     * title the window "Finished - <name>", as Windows 98 does. */
+                    struct ciuki_message t;
+                    snprintf(finished,sizeof(finished),"Finished - %s",name);
+                    frame_title=finished;
+                    size_t n=strlen(finished);
+                    desk_message(&t,DESK_SET_TITLE,8+(unsigned)n);
+                    desk_put32(t.data+4,(uint32_t)n); memcpy(t.data+8,finished,n);
+                    if (send_packet(channel,&t)) goto done;
+                    db_notice(&window,"The program has ended. Read its messages, then close this window.");
+                } else db_notice(&window,"The program has finished. This DOS window will remain open.");
             }
         }
         if ((c.changed&CIUKI_DOSVM_SAVE_FULL) && !save_full_seen) {
