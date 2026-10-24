@@ -41,15 +41,16 @@ SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "autoplay.c", "a
 # F2-83: shaded bars, coverage rims and task buttons; desktop-shell.md.
 # G16 (2026-10-24): the two dialogs frames show the toolkit Open dialog (New Folder, List/Details, Files of type).
 # F2-99: only the new software arrow/shadow footprint differs (integ-fix1 pixel comparison).
+# Fix B: final combined G16/G19/G20/G23 shell and toolkit state; see build/codex/fixb-report.md.
 LOOK_GOLDENS = {
-    "ciuki-blue-desktop.ppm": "b46e3cc28c49d9f171e433dc001d0af13c3392e6e76fa64411aecc264d89d5e5",
-    "ciuki-blue-dialogs.ppm": "c730ef80c789f8072cec87c486ba25dd2e624d942084eab8443d7f1bd56c4995",
-    "ciuki-blue-tray-disabled.ppm": "e6448c5e6cff1af18be71510d8edc2898e309da6bf27daaf31e04f3de2551e3d",
-    "ciuki-blue-tray-media.ppm": "7908574c1328c6dc007c6915f686e58e245b020552f299dc6cbb0480e9a5cf83",
-    "platinum-desktop.ppm": "8748fdd63953ebd0ac92660d2d4770d26dd79ac7e2c5d05afc3d59d97564e8f6",
-    "platinum-dialogs.ppm": "de52ea8689005a78b6fb45f1d5790a3a4879c001185248dfe0fbf3c01a1a2a6b",
-    "platinum-tray-disabled.ppm": "5daa1a2a2ac41a643b565895372bdf6c541125397cec3cde3aecd0aa594a4fae",
-    "platinum-tray-media.ppm": "0f68811b59e9f824f299017d3895141bb6a927f4efd456f59d7f3db04aa397df"
+    "ciuki-blue-desktop.ppm": "1760a02cbf1a7b6e190956cb2224d90ebd16508b50b7ba32570cfb8c5d733aa8",
+    "ciuki-blue-dialogs.ppm": "af6c2a46a0653eeb6749f5844c97b852eb4041a44e80030ab3647d7afa9a455a",
+    "ciuki-blue-tray-disabled.ppm": "c8dcf43112cfd62edcf26c4727c29a60a61fda7e32cd1df58992f220b0d70528",
+    "ciuki-blue-tray-media.ppm": "828d0b4e9b46ee6b22afbba57acc8db956240150ac2e1d20c66d129c02b54f1d",
+    "platinum-desktop.ppm": "ef553b4abf2d38e6438c311f7a144c8c031cc393c10af84fe48426207e7a9183",
+    "platinum-dialogs.ppm": "27b51cba1124474ad5a3f30e81a034a9cb202a6b12846fb601a39df42a052ba8",
+    "platinum-tray-disabled.ppm": "a6ab48b6f04ebd95a095c71e99143ac24ace29adb52cf50fee6c56a0d86860e0",
+    "platinum-tray-media.ppm": "2433cbff5aa75196cfc469379569506e915db99c1e5ead753e1ca02eea41f11a"
 }
 
 # Public set-1 codes the kernel reports for the QMP qcodes of the desktop cases (E0 keys | 0x100).
@@ -776,7 +777,13 @@ class DesktopTests(unittest.TestCase):
                 stream.write(b"grown payload start")
                 stream.seek(64 * 1024 * 1024 + 123)
                 stream.write(b"grown payload end")
-            sources = image.desktop_license_payloads()
+            # Generate the same real notices as the SDK, without requiring an
+            # installed target SDK for this independent FAT copier fixture.
+            notices = folder / "sdk" / "licenses"
+            load("fixture_freetype", ROOT / "sdk/freetype/build.py").notices(notices)
+            load("fixture_tinygl", ROOT / "sdk/libgl/build.py").notices(notices)
+            with patch.object(image, "SDK", notices.parent):
+                sources = image.desktop_license_payloads()
             self.assertEqual(sum(p.startswith("/system/licenses/lwip-") for p in sources), 3)
             sources["/Programs/grown.bin"] = payload
             directories = {"/Programs", "/System", "/system/licenses"}

@@ -979,8 +979,11 @@ static void row_resources(unsigned m)
     desk_shell_resources_update(&d,&r); step("Resource Meter icon appears: the tray widens");
     r.system=25; r.user=25; r.level=1; desk_shell_resources_update(&d,&r); step("level low: the bar changes");
     struct desk_box i=desk_shell_tray_icon_box(&d,SH_TRAY_RESOURCES); assert(i.w==SH_TRAY_ICON_SIZE);
+    const struct desk_theme *base_theme=desk_theme;
     pointer_to(i.x+4,i.y+4); step("hover the icon");
-    turn(700000000ull); assert(d.sh.tooltip==7); step("tooltip with the three values");
+    turn(700000000ull); assert(d.sh.tooltip==7);
+    assert(desk_theme==base_theme); /* tooltip measurement must restore its temporary role */
+    step("tooltip with the three values");
     r.system=10; r.level=2; desk_shell_resources_update(&d,&r); step("critical while the tooltip shows");
     click(i.x+4,i.y+4,CIUKI_BUTTON_LEFT); step("click raises the Resource Meter window");
     r.visible=0; desk_shell_resources_update(&d,&r); assert(!d.sh.tooltip || d.sh.tooltip!=7); step("Resource Meter closed: the icon is removed");
@@ -1594,7 +1597,16 @@ static void row_g8_menus(unsigned m)
     row_name="G8 file operations"; wm_begin(m,1);
     desk_menu_open(&d,SH_MENU_DESKTOP,600,450); step("Undo and Paste Shortcut desktop menu");
     desk_menu_close(&d); step("desktop menu dismissed");
-    desk_menu_open(&d,SH_MENU_NEW,580,430); step("New Bitmap, Shortcut and registered document menu");
+    desk_menu_open(&d,SH_MENU_NEW,580,430);
+    unsigned marked=0;
+    for (int k=0;k<d.sh.menus[0].count;k++) {
+        const struct sh_item *it=&d.sh.menus[0].items[k];
+        if (it->action==SH_ACT_FILE && (it->arg==DF_BITMAP || it->arg==DF_SHORTCUT)) {
+            assert(it->mark==1); marked++;
+        }
+    }
+    assert(marked==2); /* G8/G19 labels must retain their access-key underlines. */
+    step("New Bitmap, Shortcut and registered document menu");
     desk_menu_close(&d); step("New menu dismissed");
     d.sh.dnd.allowed=FM_EFFECTS; d.sh.dnd.effect=FM_EFFECT_LINK;
     desk_menu_open(&d,SH_MENU_DRAG,600,430);
