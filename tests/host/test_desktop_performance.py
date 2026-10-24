@@ -26,7 +26,7 @@ class DesktopPerformanceTests(unittest.TestCase):
 
     def test_compositor_counters_and_sequence(self):
         self.run_model("performance", ["tests/host/desktop/performance_test.c", "tests/host/desktop/fake.c",
-                       *(f"apps/desktop/{p}.c" for p in ("client", "protocol", "input", "compositor", "theme", "shell", "autoplay", "autoplay_content", "settings", "wallpaper", "keymap", "folder")),
+                       *(f"apps/desktop/{p}.c" for p in ("client", "protocol", "input", "compositor", "theme", "shell", "autoplay", "autoplay_content", "settings", "power_policy", "wallpaper", "keymap", "folder")),
                        "apps/files/model.c", "apps/files/transfer.c",
                        *(f"apps/libdeskui/{p}.c" for p in ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map"))],
                        ["apps/desktop", "tests/host/desktop", "src/kernel/include"],

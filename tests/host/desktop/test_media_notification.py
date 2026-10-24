@@ -26,7 +26,7 @@ class MediaNotificationTests(unittest.TestCase):
         icons = load("media_icons", ROOT / "tests/host/desktop/icon_assets.py")
         sources = [f"apps/desktop/{n}.c" for n in
                    ("client", "protocol", "input", "compositor", "theme", "shell", "autoplay",
-                    "autoplay_content", "settings", "wallpaper", "keymap", "folder")]
+                    "autoplay_content", "settings", "power_policy", "wallpaper", "keymap", "folder")]
         sources += [f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "textarea", "icons", "icon_map")]
         sources += ["apps/files/model.c", "apps/files/transfer.c", "tests/host/desktop/fake.c",
                     "tests/host/desktop/media_notification_test.c"]

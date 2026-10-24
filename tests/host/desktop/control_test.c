@@ -234,8 +234,106 @@ static int apm_t23_fixture(void *ctx, struct ciuki_power_status *p)
     p->batteries[0].remaining=75; p->batteries[0].seconds=5400; p->batteries[0].state=1;
     memset(&p->batteries[1],0xff,sizeof(p->batteries[1])); p->batteries[1].id=2; p->batteries[1].present=0; return 0;
 }
+/* G11 Power Management (apps/control/power.inc ids). */
+enum { PW_TABS=1850, PW_SCHEME=1852, PW_SAVE_AS, PW_DELETE, PW_GROUP, PW_HEAD_AC, PW_HEAD_DC, PW_NOTE=1861, PW_SOURCE,
+       PW_CELL=1870, PW_LOW=1881, PW_LOW_LEVEL, PW_LOW_VALUE, PW_LOW_ACTION=1887, PW_CRIT_LEVEL=1892, PW_CRIT_ACTION=1897,
+       PW_METER_SOURCE=1900, PW_METER_TOTAL, PW_DETAILS, PW_SHOW_METER=1905, PW_PASSWORD, PW_BUTTON=1910, PW_LID=1912,
+       PW_ADV_NOTE, PW_SAVE_NAME=1915, PW_DELETE_CONFIRM, PW_ITEM=1920 };
+static struct ciuki_power_events power_events_record;
+static int power_events_ok;
+static int power_events(void *ctx, struct ciuki_power_events *e)
+{ (void)ctx; if (!power_events_ok) return -ENOSYS; *e=power_events_record; return 0; }
+static void power_emit(int type, int id, int index, const char *text)
+{ struct du_event e={.type=type,.id=id,.index=index,.text=text}; u.event(&u,&e,u.user); }
+/* The open dropdown's item whose label is `label`, chosen by the user. */
+static void power_pick(const char *label)
+{
+    assert(u.popup && u.popup_count);
+    for (unsigned k=0;k<u.popup_count;k++) if (!strcmp(u.popup[k].label,label)) {
+        int id=u.popup[k].id, owner=u.popup_owner; du_menu_close(&u); power_emit(DU_EV_ACTIVATE,id,owner,NULL); return;
+    }
+    assert(!"popup item");
+}
+static int popup_has(const char *label)
+{ for (unsigned k=0;k<u.popup_count;k++) if (!strcmp(u.popup[k].label,label)) return 1; return 0; }
+static void power_policy_page(void)
+{
+    saved_n=0; saves=applies=0;
+    power_events_record=(struct ciuki_power_events){.version=1,.size=sizeof(power_events_record),.standby_reason=CIUKI_POWER_STANDBY_NO_RESUME};
+    power_events_ok=1;
+    /* A desktop (no battery bay): Power Schemes, Power Meter, Advanced. */
+    attach(CP_HOME); a.host.power_status=power_fixture; a.host.power_events=power_events;
+    struct ciuki_power_status none; (void)power_fixture(NULL,&none);
+    a.host.power_status=NULL; cp_open(&a,CP_POWER);
+    struct du_widget *tabs=du_get(&u,PW_TABS);
+    assert(tabs && tabs->count==3 && !strcmp(tabs->items[0].text[0],"Power Schemes") && !strcmp(tabs->items[1].text[0],"Power Meter") &&
+           !strcmp(tabs->items[2].text[0],"Advanced") && !tabs->active);
+    assert(!strcmp(du_get(&u,PW_SCHEME)->text,"Home/Office Desk") && du_get(&u,PW_DELETE)->disabled && !du_get(&u,PW_HEAD_DC));
+    assert(!strcmp(du_get(&u,PW_CELL+PP_MONITOR)->text,"After 15 mins") && du_get(&u,PW_CELL+PP_STANDBY)->disabled);
+    assert(strstr(du_get(&u,PW_NOTE)->text,"cannot resume yet"));
+    /* Turn off monitor: After 25 mins, saved as the user's scheme. */
+    at_click_widget(&u,PW_CELL+PP_MONITOR); assert(u.popup_count==16 && popup_has("Never") && popup_has("After 5 hours"));
+    power_pick("After 25 mins");
+    assert(saves==1 && applies==1 && strstr(saved,"power_scheme=0\n") && strstr(saved,"power_scheme0=Home/Office Desk,1200,1500,1800,1200,900,1800\n"));
+    assert(!strcmp(du_get(&u,PW_CELL+PP_MONITOR)->text,"After 25 mins"));
+    /* Save As, then Delete (built-ins cannot be deleted). */
+    at_click_widget(&u,PW_SAVE_AS); assert(du_dialog_id(&u)==PW_SAVE_NAME);
+    du_dialog_close(&u); power_emit(DU_EV_DIALOG,PW_SAVE_NAME,0,"Always On");   /* OK closes the box */
+    assert(saves==1 && strstr(du_get(&u,3)->text,"Type a new name"));
+    power_emit(DU_EV_DIALOG,PW_SAVE_NAME,0,"Presentation");
+    assert(saves==2 && !strcmp(du_get(&u,PW_SCHEME)->text,"Presentation") && !du_get(&u,PW_DELETE)->disabled);
+    assert(strstr(saved,"power_scheme=3\n") && strstr(saved,"power_scheme3=Presentation,1200,1500,1800,1200,900,1800\n"));
+    at_click_widget(&u,PW_SCHEME); assert(u.popup_count==4); power_pick("Always On");
+    assert(saves==3 && !strcmp(du_get(&u,PW_SCHEME)->text,"Always On") && !strcmp(du_get(&u,PW_CELL+PP_DISKS)->text,"After 1 hour"));
+    at_click_widget(&u,PW_SCHEME); power_pick("Presentation");
+    at_click_widget(&u,PW_DELETE); assert(du_dialog_id(&u)==PW_DELETE_CONFIRM);
+    du_dialog_close(&u); power_emit(DU_EV_DIALOG,PW_DELETE_CONFIRM,0,NULL);
+    assert(saves==5 && !strstr(saved,"Presentation") && strstr(saved,"power_scheme=auto\n"));
+    /* Advanced: the meter, the password (G32), the button; no lid on a desktop with unknown lid. */
+    power_emit(DU_EV_SELECT,PW_TABS,2,NULL);
+    assert(du_get(&u,PW_SHOW_METER)->value && du_get(&u,PW_PASSWORD)->disabled && !du_get(&u,PW_LID));
+    at_click_widget(&u,PW_BUTTON); assert(u.popup_count==1 && popup_has("Shut down")); du_menu_close(&u);
+    at_click_widget(&u,PW_SHOW_METER); assert(saves==6 && strstr(saved,"power_meter=0\n"));
+    cp_detach(&a);
+    /* The T23 shape: battery bays add Alarms; Stand by where qualified. */
+    power_events_record.standby_reason=CIUKI_POWER_STANDBY_AVAILABLE;
+    attach(CP_HOME); a.host.power_status=apm_t23_fixture; a.host.power_events=power_events; cp_open(&a,CP_POWER);
+    tabs=du_get(&u,PW_TABS); assert(tabs->count==4 && !strcmp(tabs->items[1].text[0],"Alarms"));
+    assert(!strcmp(du_get(&u,PW_SCHEME)->text,"Portable/Laptop") && du_get(&u,PW_HEAD_DC) && !du_get(&u,PW_CELL+PP_STANDBY)->disabled);
+    assert(!strcmp(du_get(&u,PW_CELL+PP_TIMERS+PP_MONITOR)->text,"After 2 mins") && strstr(du_get(&u,PW_SOURCE)->text,"runs on batteries"));
+    power_emit(DU_EV_SELECT,PW_TABS,1,NULL);
+    assert(du_get(&u,PW_LOW)->value && du_get(&u,PW_LOW_LEVEL)->value==10 && !strcmp(du_get(&u,PW_LOW_VALUE)->text,"10%"));
+    at_click_widget(&u,PW_CRIT_ACTION); assert(u.popup_count==3 && popup_has("Stand by")); power_pick("Shut down");
+    assert(strstr(saved,"power_alarm_critical=1,3,1,1,2,0\n"));
+    du_get(&u,PW_LOW_LEVEL)->value=2; power_emit(DU_EV_CHANGE,PW_LOW_LEVEL,1,NULL);
+    assert(strstr(saved,"power_alarm_low=1,2,0,1,0,0\n") && strstr(saved,"power_alarm_critical=1,1,1,1,2,0\n"));
+    assert(du_get(&u,PW_CRIT_LEVEL)->value==1);   /* critical moved below low */
+    power_emit(DU_EV_SELECT,PW_TABS,3,NULL);
+    at_click_widget(&u,PW_BUTTON); assert(u.popup_count==2); power_pick("Stand by"); assert(strstr(saved,"power_button=standby\n"));
+    at_click_widget(&u,PW_LID); assert(u.popup_count==3); power_pick("Stand by"); assert(strstr(saved,"power_lid=standby\n"));
+    assert(!strcmp(du_get(&u,PW_ADV_NOTE)->text,"This computer can stand by."));
+    /* Stand by withdrawn: the choices fall back to Shut down on screen. */
+    power_events_record.standby_reason=CIUKI_POWER_STANDBY_NO_FIRMWARE; cp_tick(&a);
+    assert(!strcmp(du_get(&u,PW_BUTTON)->text,"Shut down") && !strcmp(du_get(&u,PW_LID)->text,"Shut down"));
+    assert(strstr(du_get(&u,PW_ADV_NOTE)->text,"no standby state"));
+    /* Power Meter: the source and the total. */
+    power_emit(DU_EV_SELECT,PW_TABS,2,NULL);
+    assert(!strcmp(du_get(&u,PW_METER_SOURCE)->text,"Power source: Batteries"));
+    assert(!strcmp(du_get(&u,PW_METER_TOTAL)->text,"Total battery power remaining: 75% (1 hr 30 min)"));
+    at_click_widget(&u,PW_DETAILS); assert(!du_get(&u,PW_DETAILS)->value && !du_get(&u,1800)->text[0]);
+    cp_detach(&a);
+    /* The tray's Open Power Meter. */
+    assert(cp_page_index("power-meter")==CP_POWER);
+    attach(CP_HOME); a.host.power_status=apm_t23_fixture; cp_open(&a,CP_POWER);
+    assert(du_get(&u,PW_METER_SOURCE) && du_get(&u,PW_TABS)->active==2);
+    power_events_ok=0; cp_tick(&a); power_emit(DU_EV_SELECT,PW_TABS,3,NULL);
+    assert(strstr(du_get(&u,PW_ADV_NOTE)->text,"does not report"));
+    cp_detach(&a);
+    puts("PASS power Control Panel G11: Windows 98 tabs (Alarms with a battery bay), scheme dropdown, timers saved to desktop.cfg, Save As/Delete, alarms and levels, button and lid choices, standby availability, Power Meter, Open Power Meter");
+}
 static void power_page(void)
 {
+    assert(cp_page_index("power-meter")==CP_POWER);   /* the status lines are on the Power Meter tab */
     attach(CP_HOME); a.host.power_status=power_fixture; cp_open(&a,CP_POWER);
     assert(strstr(du_get(&u,1800)->text,"AC: Unknown") && strstr(du_get(&u,1800)->text,"Lid: Unknown"));
     assert(strstr(du_get(&u,1801)->text,"Firmware retained") && !strstr(du_get(&u,1801)->text,"APM"));
@@ -248,7 +346,7 @@ static void power_page(void)
     a.host.power_status=apm_t23_fixture; cp_tick(&a);
     assert(strstr(du_get(&u,1800)->text,"AC: Disconnected") && strstr(du_get(&u,1802)->text,"Battery 1: Discharging; capacity 75 / 100 %"));
     assert(!strcmp(du_get(&u,1803)->text,"Remaining life: 1 h 30 min") && !strcmp(du_get(&u,1804)->text,"Battery 2: Not installed"));
-    a.host.power_status=NULL; cp_open(&a,CP_POWER);
+    a.host.power_status=NULL; (void)cp_page_index("power-meter"); cp_open(&a,CP_POWER);
     assert(!strcmp(du_get(&u,1800)->text,"Power status: Unknown"));
     assert(!du_get(&u,1802)->text[0]); cp_detach(&a);
     puts("PASS power Control Panel: firmware ownership, AC/lid/battery unknowns, APM percent/life refresh, T23 empty bay, stale-value clearing");
@@ -309,6 +407,7 @@ int main(int argc, char **argv)
     joystick_page();
     programs_page();
     power_page();
+    power_policy_page();
     /* No desktop.cfg yet: the defaults, Ciuk2 filled. */
     attach(CP_DISPLAY);
     assert(!strcmp(a.cfg.theme, "Ciuki Blue") && !strcmp(desk_theme->name, "Ciuki Blue"));

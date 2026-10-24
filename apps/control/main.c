@@ -498,6 +498,9 @@ static int multimedia_open(void *ctx,unsigned which)
     memcpy(request.data+12,names[which],n); desk_put32(request.data+12+n,0);
     return du_window_queue(&m->window,&request) ? -errno : 0;
 }
+static int read_power_events(void *ctx, struct ciuki_power_events *out)   /* G11 */
+{ (void)ctx; return ciuki_power_events(out) ? -errno : 0; }
+
 static int audio_query(void *ctx, struct ciuki_audio_diagnostics *out)
 {
     (void)ctx;
@@ -814,7 +817,7 @@ int main(int argc, char **argv)
     h->internet_load=internet_read;h->internet_save=internet_write;
     h->network_begin=network_begin; h->network_poll=network_poll;
     h->engine=engine_query; h->engine_info=generic_engine_query; h->accel_retry=accel_retry;
-    h->network=network_query; h->power=open_power; h->power_status=read_power_status; h->log_read=log_read;
+    h->network=network_query; h->power=open_power; h->power_status=read_power_status; h->power_events=read_power_events; h->log_read=log_read;
     h->autoplay_list=autoplay_list; h->autoplay_forget=autoplay_forget;
     h->save_async=1; h->fonts_async=1; h->job_notify=notify_completion;
     h->audio_diagnostics = audio_query; h->capture_caps=capture_caps; h->multimedia_open=multimedia_open;

@@ -616,3 +616,13 @@ shape: PM1_CNT read, then `RETF 2` with the 5300h results: completes, flags
 from the handler, no quarantine; `RETF` without discarding also completes;
 a HLT elsewhere times out with `reason=halted` and the CS:IP) and
 `tests/host/apm_t23_test.c` (the failure detail in the APM record).
+
+## Power policy above the providers (G11, 2026-10-24)
+
+`docs/design/power-policy.md` adds call 73 STANDBY (5), POLICY (6) and
+EVENTS (7) and QUERY's CAN_STANDBY (16). The APM events of this section are
+now also counted for the desktop (sleep requests, battery low, critical,
+resumes, status changes); the kernel's answers to them are unchanged:
+standby and suspend requests are still rejected (5307h CX=0005h) because no
+standby is qualified. Standby needs a provider sleep capability and a resume
+path for every native DMA driver; `power_devices_resume_ready` reports none.

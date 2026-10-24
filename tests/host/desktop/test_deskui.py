@@ -212,7 +212,7 @@ class DeskuiTests(unittest.TestCase):
             "apps/files/model.c", "apps/files/transfer.c", *TOOLKIT,
             "apps/desktop/protocol.c", "tests/host/desktop/resize_transport.c", "apps/libdeskui/clipboard.c", "apps/libdeskui/clipstore.c", "tests/host/desktop/resize_client.c",
             *(f"apps/desktop/{n}.c" for n in ("client", "input", "shell", "autoplay", "autoplay_content",
-                "settings", "settings_io", "wallpaper", "keymap", "folder"))], frames=True,
+                "settings", "power_policy", "settings_io", "wallpaper", "keymap", "folder"))], frames=True,
             cflags=("-include", str(ROOT / "tests/host/desktop/replay_base.h")))
         self.assertIn("PASS Files transfer worker", stdout)
         self.assertIn("[files] job=copy progress items=0 bytes=0", stdout)

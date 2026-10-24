@@ -2356,6 +2356,114 @@ uint32_t reserved;
 };
 ```
 
+G11 power policy (call 73, docs/design/power-policy.md). STANDBY (desktop
+only) enters a qualified sleep state; ENOTSUP while QUERY lacks
+CAN_STANDBY. POLICY (desktop only): C=record, D=sizeof; queues the ATA
+standby timer of every fixed disk for a kernel task and returns at once;
+the out fields report the last completed application. EVENTS (any native
+client): C=record, D=sizeof; cached boot-monotonic counters, no firmware
+call.
+
+```c
+#define CIUKI_POWER_STANDBY 5u
+#define CIUKI_POWER_POLICY 6u
+#define CIUKI_POWER_EVENTS 7u
+#define CIUKI_POWER_CAN_STANDBY 16u
+#define CIUKI_POWER_POLICY_VERSION 1u
+#define CIUKI_POWER_EVENTS_VERSION 1u
+```
+
+standby_reason: the first unmet standby qualification.
+
+```c
+#define CIUKI_POWER_STANDBY_AVAILABLE 0u
+#define CIUKI_POWER_STANDBY_NO_PROVIDER 1u
+#define CIUKI_POWER_STANDBY_NO_FIRMWARE 2u
+#define CIUKI_POWER_STANDBY_NO_RESUME 3u
+struct ciuki_power_policy {
+    uint32_t version;
+    uint32_t size;
+    uint32_t disk_seconds;
+```
+
+in: idle time before the drives spin down; 0 never
+
+```c
+uint32_t disks;
+```
+
+out: fixed disks that accepted the timer
+
+```c
+uint32_t refused;
+```
+
+out: disks without the feature or that aborted
+
+```c
+uint32_t applied_seconds;
+```
+
+out: programmed time (rounded up)
+
+```c
+int32_t error;
+```
+
+out: negative errno of the first failure
+
+```c
+uint32_t reserved;
+};
+struct ciuki_power_events {
+    uint32_t version;
+    uint32_t size;
+    uint32_t sleep_requests;
+```
+
+APM 0001h, 0002h, 0009h, 000Ah
+
+```c
+uint32_t battery_low;
+```
+
+APM 0005h
+
+```c
+uint32_t critical;
+```
+
+APM 0008h
+
+```c
+uint32_t resumes;
+```
+
+APM 0003h, 0004h, 000Bh
+
+```c
+uint32_t status_changes;
+```
+
+APM 0006h, 000Ch
+
+```c
+uint32_t standby_reason;
+```
+
+CIUKI_POWER_STANDBY_*
+
+```c
+uint32_t disk_seconds;
+```
+
+last programmed drive timer, UNKNOWN before
+
+```c
+uint32_t reserved;
+};
+```
+
 f2-33: process enumeration (call 70) and termination request (call 71).
 One system record, then process records in ascending PID order.
 
@@ -6261,7 +6369,7 @@ SPDX-License-Identifier: MIT
 #ifndef CIUKI_USER_POWER_H
 #define CIUKI_USER_POWER_H
 #include <ciuki/abi.h>
-#define __CIUKI_POWER_VERSION__ 1
+#define __CIUKI_POWER_VERSION__ 2
 ```
 
 action: CIUKI_POWER_REBOOT, CIUKI_POWER_OFF or CIUKI_POWER_QUERY.
@@ -6286,6 +6394,25 @@ call runs during this query.
 
 ```c
 int ciuki_power_status(struct ciuki_power_status *status);
+```
+
+G11 (version 2): cached boot-monotonic power events (APM standby/suspend
+requests, battery low, critical, resumes, status changes), the first unmet
+standby qualification and the programmed drive timer; initializes
+version/size. Any native client; no firmware call.
+
+```c
+int ciuki_power_events(struct ciuki_power_events *events);
+```
+
+Desktop only (EPERM otherwise): queues `disk_seconds` (0 = never, at most
+5 h 30 min) as the standby timer of every ATA fixed disk and returns at
+once; the out fields report the last completed application. Stand by is
+ciuki_power(CIUKI_POWER_STANDBY), ENOTSUP while QUERY lacks
+CIUKI_POWER_CAN_STANDBY.
+
+```c
+int ciuki_power_policy(struct ciuki_power_policy *policy);
 #endif
 ```
 

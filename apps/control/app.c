@@ -26,8 +26,8 @@ enum { C_REPEAT_DELAY=1500, C_REPEAT_SPEED, C_BLINK, C_SWAP, C_TRAILS,
 static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts", "autoplay", "programs", "joystick", "multimedia", "users", "passwords", "regional", "internet"};
 static const char *const page_labels[CP_PAGES] = {"Display Properties", "Mouse", "Keyboard", "Sounds and Audio", "Date and Time", "System", "System", "System", "Network", "Power", "Display Properties", "Display Properties", "Storage and removable devices", "Add/Remove Programs", "Game controllers", "Multimedia", "Users", "Passwords", "Regional Settings", "Internet Properties"};
 static void build(struct cp_app *a);
-static void refresh(struct cp_app *a);
 static unsigned power_read(struct cp_app *a);
+static void refresh(struct cp_app *a);
 static void properties(struct cp_app *a, int resources);
 static void details(struct cp_app *a);
 static void firmware_show(struct cp_app *a, uint32_t index);
@@ -35,9 +35,11 @@ static const uint32_t swatches[6] = {0x375564u, 0x2f6f6bu, 0x3a3f6bu, 0x6b4f3au,
 /* The Position buttons, in two rows of three: Center Tile Stretch / Fit Fill. */
 #define CP_POSITIONS 5
 static const int mode_order[CP_POSITIONS] = {CFG_WALL_CENTER, CFG_WALL_TILE, CFG_WALL_STRETCH, CFG_WALL_FIT, CFG_WALL_FILL};
+static int power_meter_requested;   /* G11: "--panel=power-meter" opens the Power Meter tab */
 int cp_page_index(const char *name)
 {
     if (name && !strcmp(name, "storage")) return CP_AUTOPLAY;
+    if (name && !strcmp(name, "power-meter")) { power_meter_requested = 1; return CP_POWER; }
     for (int i = 0; i < CP_PAGES; i++) if (name && !strcmp(name, page_names[i])) return i;
     return CP_HOME;
 }
@@ -90,6 +92,9 @@ static void changed(struct cp_app *a)
     text(a, C_STATUS, a->host.save_async ? "Saving settings..." : r ? "Saved. The desktop applies it at its next start." : "Saved and applied.");
 }
 #include "regional.inc"
+#include "power.inc"   /* G11: Power Management Properties */
+
+
 /* Display previews use the existing durable settings/reload path. Keep the
  * entry snapshot until OK; rollback merges only this applet's owned keys. */
 static void display_copy(struct ciuki_settings *to, const struct ciuki_settings *from)
@@ -448,11 +453,7 @@ void cp_tick(struct cp_app *a)
             a->volume = volume; a->muted = mute; sync(a);
         }
     }
-    if (a->page == CP_POWER) {
-        unsigned lines = power_read(a);
-        for (unsigned i = 0; i < lines; i++) text(a,1800+(int)i,a->power_lines[i]);
-        return;
-    }
+    if (a->page == CP_POWER) { pw_tick(a); return; }
     if (a->page==CP_DATETIME) { dt_tick(a); return; }
     if (a->page!=CP_SYSTEM) return;
     char previous[sizeof(a->clock_line)]; memcpy(previous,a->clock_line,sizeof(previous));
@@ -529,6 +530,7 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
         return;
     }
     if (dt_event(a, e)) return;
+    if (pw_event(a, e)) return;
     switch (e->id) {
     case 950:
         if (e->type==DU_EV_SELECT && e->index>=0 && (unsigned)e->index<a->autoplay_count) a->autoplay_selected=(unsigned)e->index;
@@ -1279,14 +1281,6 @@ static void system_pages(struct cp_app *a)
         add(a, DU_BUTTON, CP_REFRESH, 24, 324, 84, 24, "Refresh");
     } else if (a->page == CP_NETWORK) {
         network_build(a);
-    } else if (a->page == CP_POWER) {
-        char monitor[80]; snprintf(monitor,sizeof(monitor),"Monitor off: %d min (0 = Never)",a->cfg.monitor_seconds/60);
-        add(a,DU_LABEL,CP_SAVER_NOTE,24,40,300,16,monitor);
-        struct du_widget *mw=add(a,DU_SCROLLBAR,CP_MONITOR_WAIT,340,40,192,16,"");
-        mw->vertical=0; mw->total=1441; mw->page=1; mw->value=a->cfg.monitor_seconds/60;
-        unsigned lines = power_read(a);
-        for (unsigned i = 0; i < 20; i++) add(a,DU_LABEL,1800+(int)i,24,64+(int)i*14,CP_WIDTH-48,14,i<lines ? a->power_lines[i] : "");
-        add(a, DU_BUTTON, CP_POWER_ACTION, 24, 350, 160, 24, "Shut Down...")->disabled=!a->host.power;
     }
 }
 
@@ -1417,7 +1411,11 @@ static void build(struct cp_app *a)
             add(a,DU_BUTTON,CP_SAVER_SETTINGS,280,100,120,24,"Settings...");
             add(a,DU_LABEL,1977,24,278,480,16,"Preview ends when you move the mouse or press a key.");
             add(a,DU_LABEL,1976,24,302,480,16,"These savers have no additional settings.");
-            add(a,DU_LABEL,1975,24,326,480,16,"Monitor power: Power applet. Password protection: unavailable.");
+            char monitor[80]; snprintf(monitor,sizeof(monitor),"Turn off monitor after %d minutes (0 = Never)",a->cfg.monitor_seconds/60);
+            add(a,DU_LABEL,CP_SAVER_NOTE,24,326,350,16,monitor);
+            w=add(a,DU_SCROLLBAR,CP_MONITOR_WAIT,24,350,350,18,"");
+            w->vertical=0; w->total=1441; w->page=1; w->value=a->cfg.monitor_seconds/60;
+            add(a,DU_LABEL,1976,24,374,480,16,"Password protection: unavailable.");
         } else {
             add(a,DU_LABEL,CP_AREA_LABEL,24,44,232,16,"Resolution:");
             w=add(a,DU_LISTVIEW,CP_AREA,24,64,232,100,""); w->items=a->area_items; list_style(w,"Screen area");
@@ -1525,6 +1523,9 @@ static void build(struct cp_app *a)
     dt_build(a);
     } else if (a->page == CP_REGIONAL) {
     regional_build(a);
+    } else if (a->page == CP_POWER) {
+    pw_build(a);
+
     } else if (a->page==CP_UNINSTALL) {
         int count=a->host.uninstall_list ? a->host.uninstall_list(a->host.ctx,a->uninstall,CP_PROGRAM_MAX) : -ENOSYS;
         a->uninstall_count=count>=0 && count<=(int)CP_PROGRAM_MAX ? (unsigned)count : 0;
@@ -1628,6 +1629,7 @@ void cp_open(struct cp_app *a, int page)
     a->status[0] = 0;
     if (a->page == CP_DRIVERS) { a->detail_list = C_DRIVERS; a->detail_index = 0; }
     if (a->page == CP_DEVICES || a->page == CP_DRIVERS || a->page == CP_SYSTEM || a->page == CP_AUTOPLAY) refresh(a);
+    if (a->page == CP_POWER) pw_open(a);
     build(a);
 }
 void cp_assets_ready(struct cp_app *a)

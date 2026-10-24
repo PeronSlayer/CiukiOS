@@ -446,6 +446,9 @@ static int media_wait_read(struct desktop *d)
 static uint32_t last_power_action;
 int ciuki_power(uint32_t action) { last_power_action=action; errno=ENOSYS; return -1; }
 int ciuki_power_status(struct ciuki_power_status *out) { (void)out; errno=ENOSYS; return -1; }
+/* G11: the EVENTS and POLICY records (no kernel in these scenarios). */
+int ciuki_power_events(struct ciuki_power_events *out) { (void)out; errno=ENOSYS; return -1; }
+int ciuki_power_policy(struct ciuki_power_policy *out) { (void)out; errno=ENOSYS; return -1; }
 int ciuki_proc_list(void *buffer,uint32_t bytes)
 {
     assert(bytes>=CIUKI_PROC_LIST_MIN+8*sizeof(struct ciuki_proc_record));

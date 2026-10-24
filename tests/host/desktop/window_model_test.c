@@ -1655,13 +1655,45 @@ static void row_regional(unsigned m)
     app_paint(panel,12,250,390,20,0x26u); step("regional save failure status");
     wm_end();
 }
+/* G11 (docs/design/power-policy.md): the power meter appears, its tooltip
+ * follows the readings, "Show power meter on taskbar" re-lays out the tray,
+ * the scheme menu, and a battery alarm's message window. */
+static struct ciuki_power_status row_power_record(unsigned percent, uint32_t ac)
+{
+    struct ciuki_power_status p={.version=1,.size=sizeof(p),.provider=CIUKI_POWER_PROVIDER_APM,.ownership=CIUKI_POWER_OWNED,
+        .ac_online=ac,.lid_open=CIUKI_POWER_UNKNOWN,.battery_count=1};
+    p.batteries[0]=(struct ciuki_power_battery){.id=1,.present=1,.unit=CIUKI_POWER_UNIT_PERCENT,.state=ac==1 ? 2u : 1u,
+        .design=CIUKI_POWER_UNKNOWN,.full=100,.remaining=percent,.rate=CIUKI_POWER_UNKNOWN,.voltage=CIUKI_POWER_UNKNOWN,.seconds=percent*60u};
+    return p;
+}
+static void row_power(unsigned m)
+{
+    row_name="power"; wm_begin(m,1);
+    (void)app_open("files",320,220,40,50);
+    struct ciuki_power_events ev={.version=1,.size=sizeof(ev)};
+    struct ciuki_power_status p=row_power_record(80,1);
+    assert(!desk_shell_power_update(&d,&p)); desk_shell_power_events(&d,&ev,3); step("meter appears, tray re-laid out");
+    struct desk_box bi=desk_shell_tray_icon_box(&d,SH_TRAY_POWER); assert(bi.w);
+    pointer_to(bi.x+4,bi.y+4); step("hover the meter");
+    turn(700000000ull); assert(d.sh.tooltip==6); step("meter tooltip");
+    p=row_power_record(42,0); assert(!desk_shell_power_update(&d,&p)); desk_shell_power_events(&d,&ev,3); step("tooltip text and icon follow the reading");
+    snprintf(d.sh.cfg.extra,sizeof(d.sh.cfg.extra),"power_meter=0\n"); desk_shell_power_config(&d); step("meter hidden, tooltip gone");
+    d.sh.cfg.extra[0]=0; desk_shell_power_config(&d); step("meter shown again");
+    bi=desk_shell_tray_icon_box(&d,SH_TRAY_POWER); click(bi.x+4,bi.y+4,CIUKI_BUTTON_LEFT);
+    assert(d.sh.levels==1 && d.sh.menus[0].kind==SH_MENU_POWER); step("scheme menu");
+    tap(DU_KEY_ESC); step("scheme menu closed");
+    pointer_to(300,300);
+    p=row_power_record(8,0); assert(!desk_shell_power_update(&d,&p)); desk_shell_power_events(&d,&ev,3);
+    assert(!strcmp(d.sh.message_title,"Low Battery Alarm")); step("low battery alarm message");
+    wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
-    row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,
+    row_fullscreen, row_gfx, row_topbar, row_theme, row_strips, row_lease, row_selection, row_drag,
     row_taskbar_menu, row_arrange, row_minimize_all, row_win_keys, row_caption_icon, row_startup,
     row_move_damaged, row_fault, row_saver, row_find, row_g8_menus, row_input_preferences,
     row_input_text, row_dos_controls, row_printing, row_logon, row_regional, row_disk_tools,
-    row_network_tools, row_g18_shortcuts, row_g18_tray};
+    row_network_tools, row_g18_shortcuts, row_g18_tray, row_power};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).

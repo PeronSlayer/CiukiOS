@@ -47,7 +47,7 @@ class WindowResizeTests(unittest.TestCase):
             icons = load("resize_icon_assets", ROOT / "tests/host/desktop/icon_assets.py")
             toolkit = load("resize_toolkit", ROOT / "tests/host/desktop/test_deskui.py").TOOLKIT
             sources = [*toolkit, "apps/desktop/client.c", "apps/desktop/protocol.c", "apps/desktop/input.c",
-                       "apps/desktop/shell.c", "apps/desktop/autoplay.c", "apps/desktop/autoplay_content.c", "apps/desktop/folder.c", "apps/files/transfer.c", "apps/desktop/settings.c", "apps/desktop/wallpaper.c", "apps/desktop/keymap.c",
+                       "apps/desktop/shell.c", "apps/desktop/autoplay.c", "apps/desktop/autoplay_content.c", "apps/desktop/folder.c", "apps/files/transfer.c", "apps/desktop/settings.c", "apps/desktop/power_policy.c", "apps/desktop/wallpaper.c", "apps/desktop/keymap.c",
                        "apps/files/app.c", "apps/files/model.c", "tests/host/desktop/fake_vfs.c",
                        "tests/host/desktop/files_resize_capture.c", "tests/host/desktop/resize_transport.c",
                        "tests/host/desktop/resize_client.c", "apps/libdeskui/clipboard.c", "apps/libdeskui/clipstore.c"]

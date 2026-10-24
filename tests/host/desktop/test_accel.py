@@ -18,7 +18,7 @@ class AccelerationTests(unittest.TestCase):
     def test_cursor_set_goldens(self):
         sources = [ROOT / "apps/desktop" / name for name in
                    ("protocol.c", "client.c", "input.c", "compositor.c", "theme.c", "shell.c", "autoplay.c",
-                    "autoplay_content.c", "settings.c", "wallpaper.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c")]
+                    "autoplay_content.c", "settings.c", "power_policy.c", "wallpaper.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c")]
         sources += [*(ROOT / "apps/libdeskui" / n for n in ("draw.c", "widgets.c", "list.c", "menu.c", "dialog.c", "textarea.c", "icons.c", "icon_map.c")),
                     ROOT / "tests/host/desktop/fake.c", ROOT / "tests/host/desktop/cursor_set_test.c"]
         parent = ROOT / "build/host"
@@ -62,7 +62,7 @@ class AccelerationTests(unittest.TestCase):
         out = ROOT / "build/host"
         out.mkdir(parents=True, exist_ok=True)
         sources = [ROOT / "apps/desktop" / name for name in
-                   ("protocol.c", "client.c", "input.c", "compositor.c", "theme.c", "shell.c", "autoplay.c", "autoplay_content.c", "settings.c", "wallpaper.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c")]
+                   ("protocol.c", "client.c", "input.c", "compositor.c", "theme.c", "shell.c", "autoplay.c", "autoplay_content.c", "settings.c", "power_policy.c", "wallpaper.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c")]
         sources += [*(ROOT / "apps/libdeskui" / n for n in ("draw.c","widgets.c","list.c","menu.c","dialog.c","textarea.c","icons.c","icon_map.c")), ROOT / "tests/host/desktop/fake.c", ROOT / "tests/host/desktop/accel_test.c"]
         subprocess.run(["clang", "-std=c17", "-D_POSIX_C_SOURCE=200809L", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-fsanitize=address,undefined",
                         "-include", str(ROOT / "tests/host/desktop/replay_base.h"),
@@ -78,7 +78,7 @@ class AccelerationTests(unittest.TestCase):
         out = ROOT / "build/host"
         out.mkdir(parents=True, exist_ok=True)
         sources = [ROOT / "apps/desktop" / name for name in
-                   ("protocol.c", "client.c", "input.c", "compositor.c", "theme.c", "shell.c", "autoplay.c", "autoplay_content.c", "settings.c", "wallpaper.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c")]
+                   ("protocol.c", "client.c", "input.c", "compositor.c", "theme.c", "shell.c", "autoplay.c", "autoplay_content.c", "settings.c", "power_policy.c", "wallpaper.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c")]
         sources += [*(ROOT / "apps/libdeskui" / n for n in ("draw.c","widgets.c","list.c","menu.c","dialog.c","textarea.c","icons.c","icon_map.c")), ROOT / "tests/host/desktop/fake.c", ROOT / "tests/host/desktop/pointer_test.c"]
         with tempfile.TemporaryDirectory(prefix="pointer-", dir=out) as directory:
             folder = Path(directory)

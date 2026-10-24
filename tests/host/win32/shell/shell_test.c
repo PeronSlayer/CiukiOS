@@ -218,6 +218,54 @@ static void session(void)
         #undef STATUS
         puts("PASS G3 HOLD end session: no deadline, window in turn and fetch, held until COMMIT, CANCEL/veto send FALSE, late answer refused, desktop authority");
     }
+    {   /* G11 WM_POWERBROADCAST (docs/design/power-policy.md): desktop only,
+         * every top-level window in turn on its USER thread, a query stops
+         * at BROADCAST_QUERY_DENY, an end of session is served first. */
+        struct w32r_reply st;
+        #define PSTATUS() assert(!desktop_call(NULL,W32R_ENDSESSION,W32R_POWER_STATUS,0,&st,NULL,0))
+        assert(rpc(10,W32R_ENDSESSION,W32R_POWER_BEGIN,0,10,0,"","",NULL,0,&r,NULL,0)==5);
+        PSTATUS(); assert(st.key==1 && !st.count);                       /* nothing running */
+        assert(!rpc(99,W32R_ENDSESSION,W32R_POWER_BEGIN,0,10,0,"","",NULL,0,&r,NULL,0));   /* PBT_APMPOWERSTATUSCHANGE */
+        PSTATUS(); assert(st.key==0);
+        assert(rpc(99,W32R_ENDSESSION,W32R_POWER_BEGIN,0,9,0,"","",NULL,0,&r,NULL,0)==1115);
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_POLL,0,100,0,"","",NULL,0,&r,NULL,0)&&r.key==hwnd&&r.type==W32R_POWERBROADCAST&&r.count==10&&!r.disposition);
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_POLL,0,100,0,"","",NULL,0,&r,NULL,0)&&!r.key);   /* delivered once */
+        assert(rpc(10,W32R_ENDSESSION,W32R_SESSION_REPLY,hwnd+1,100,1,"","",NULL,0,&r,NULL,0)==87);
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_REPLY,hwnd,100,1,"","",NULL,0,&r,NULL,0));
+        PSTATUS(); assert(st.key==1 && st.count==1);
+        /* PBT_APMQUERYSUSPEND with the UI flag, denied. */
+        assert(!rpc(99,W32R_ENDSESSION,W32R_POWER_BEGIN,0,0,1,"","",NULL,0,&r,NULL,0));
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_POLL,0,100,0,"","",NULL,0,&r,NULL,0)&&r.type==W32R_POWERBROADCAST&&r.count==0&&r.disposition==1);
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_REPLY,hwnd,100,0,"","",NULL,0,&r,NULL,0));
+        PSTATUS(); assert(st.key==2 && !st.count);
+        /* A notification answered FALSE is still delivered, not denied. */
+        assert(!rpc(99,W32R_ENDSESSION,W32R_POWER_BEGIN,0,4,0,"","",NULL,0,&r,NULL,0));
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_POLL,0,100,0,"","",NULL,0,&r,NULL,0)&&r.count==4);
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_REPLY,hwnd,100,0,"","",NULL,0,&r,NULL,0));
+        PSTATUS(); assert(st.key==1 && !st.count);
+        /* An end of session comes first; the broadcast follows it. */
+        assert(!rpc(99,W32R_ENDSESSION,W32R_POWER_BEGIN,0,10,0,"","",NULL,0,&r,NULL,0));
+        assert(!desktop_call(NULL,W32R_ENDSESSION,W32R_SESSION_BEGIN,9|W32R_SESSION_HOLD,&r,NULL,0));
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_POLL,0,100,0,"","",NULL,0,&r,NULL,0)&&r.type==0x11);
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_REPLY,hwnd,100,1,"","",NULL,0,&r,NULL,0));
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_POLL,0,100,0,"","",NULL,0,&r,NULL,0)&&!r.key);  /* held: nothing else */
+        assert(!desktop_call(NULL,W32R_ENDSESSION,W32R_SESSION_CANCEL,0,&st,NULL,0));
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_POLL,0,100,0,"","",NULL,0,&r,NULL,0)&&r.type==0x16&&r.count==0);
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_REPLY,hwnd,100,1,"","",NULL,0,&r,NULL,0));
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_POLL,0,100,0,"","",NULL,0,&r,NULL,0)&&r.type==W32R_POWERBROADCAST&&r.count==10);
+        assert(!rpc(10,W32R_ENDSESSION,W32R_SESSION_REPLY,hwnd,100,1,"","",NULL,0,&r,NULL,0));
+        PSTATUS(); assert(st.key==1 && st.count==1);
+        assert(!desktop_call(NULL,W32R_ENDSESSION,W32R_SESSION_RESET,0,&r,NULL,0));
+        /* Malformed requests, then a finished broadcast is replaced. */
+        assert(rpc(99,W32R_ENDSESSION,W32R_POWER_BEGIN,0,0x13,0,"","",NULL,0,&r,NULL,0)==87);
+        assert(rpc(99,W32R_ENDSESSION,W32R_POWER_STATUS,0,1,0,"","",NULL,0,&r,NULL,0)==87);
+        assert(!rpc(99,W32R_ENDSESSION,W32R_POWER_BEGIN,0,18,0,"","",NULL,0,&r,NULL,0));
+        assert(!desktop_call(NULL,W32R_ENDSESSION,W32R_POWER_RESET,0,&r,NULL,0));
+        PSTATUS(); assert(st.key==1);
+        assert(rpc(10,W32R_ENDSESSION,W32R_SESSION_REPLY,hwnd,100,1,"","",NULL,0,&r,NULL,0)==6);
+        #undef PSTATUS
+        puts("PASS G11 WM_POWERBROADCAST: desktop authority, one at a time, per-window delivery on the USER thread, query denial, notifications not denied, end of session first, reset");
+    }
     struct desk_restart d={.boot_checked=1};live=1;killed=0;
     assert(!desk_restart_begin(&d,&ops,10,1,server.now));
     tick(&d,&ops,server.now+9999);assert(!killed);tick(&d,&ops,server.now+21);assert(killed==1);

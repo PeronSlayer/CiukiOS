@@ -37,7 +37,8 @@ ACCESSORIES = {
 }
 PROGRAMS = ("desktop", "shell-launch", "demo", "gfxdemo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", "hwreport", "printers", "printspool", *ACCESSORIES)
 # Desktop shell (shell.c and friends): Start menu, tray, icons, wallpapers, settings, keyboard layouts.
-SHELL = ["users.c", "users_io.c", "../../src/kernel/lib/sha256.c", "startup.c", "firstboot.c", "firstboot_native.c", "firstboot_games.c", "sounds.c", "sound_storage.c", "master_storage.c", "sound_runtime.c", "shell.c", "autoplay.c", "autoplay_content.c", "autoplay_registry.c", "settings.c", "settings_io.c", "wallpaper.c", "wallpaper_io.c", "image.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c", "../files/clipboard.c", "../files/vfs.c"]
+SHELL = ["users.c", "users_io.c", "../../src/kernel/lib/sha256.c", "startup.c", "firstboot.c", "firstboot_native.c", "firstboot_games.c", "sounds.c", "sound_storage.c", "master_storage.c", "sound_runtime.c", "shell.c", "autoplay.c", "autoplay_content.c", "autoplay_registry.c", "settings.c", "power_policy.c", "settings_io.c", "wallpaper.c", "wallpaper_io.c", "image.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c", "../files/clipboard.c", "../files/vfs.c"]
+
 OUTPUTS = {*PROGRAMS, "libdeskui.a", "ciuki-portrait.xrgb", *ICON_FILES}
 
 
@@ -187,7 +188,8 @@ def build():
                           "../ciuknote/doc.c", "../ciuknote/vfs.c"]
     sources["terminal"] = ["../terminal/main.c", "../terminal/app.c", "../terminal/commands.c", "../terminal/network.c", "../terminal/lua.c", "../files/model.c", "../files/transfer.c", "../files/clipboard.c", "../files/vfs.c", "../tasks/model.c"]
     sources["hwreport"] = ["../hwreport/main.c", "../hwreport/native.c", "../hwreport/report.c", "../hwreport/archive.c", "../hwreport/textlink.c", "../accessories/acc.c"]
-    sources["control"] = ["users.c", "users_io.c", "startup.c", "win32_syscall.c", "win32_native.c", "win32_registry.c", "win32_service.c", "win32_restart.c", "win32_launch.c", "autoplay_registry.c", "../control/main.c", "../control/decoder.c", "../control/programs.c", "../control/app.c", "../control/driver_pack_ui.c", "../control/driver_pack.c", "../control/driver_pack_io.c", "../../src/kernel/ndis/package.c", "../../src/kernel/lib/sha256.c", "../control/display.c", "../control/fonts.c", "sounds.c", "sound_storage.c", "settings.c", "settings_io.c", "wallpaper.c", "image.c"]
+    sources["control"] = ["users.c", "users_io.c", "startup.c", "win32_syscall.c", "win32_native.c", "win32_registry.c", "win32_service.c", "win32_restart.c", "win32_launch.c", "autoplay_registry.c", "../control/main.c", "../control/decoder.c", "../control/programs.c", "../control/app.c", "../control/driver_pack_ui.c", "../control/driver_pack.c", "../control/driver_pack_io.c", "../../src/kernel/ndis/package.c", "../../src/kernel/lib/sha256.c", "../control/display.c", "../control/fonts.c", "sounds.c", "sound_storage.c", "settings.c", "power_policy.c", "settings_io.c", "wallpaper.c", "image.c"]
+
     sources["regedit"] = ["../regedit/main.c", "../regedit/app.c", "../accessories/acc.c"]
     sources["gfxdemo"] = ["../gfxdemo/main.c", "../gfxdemo/app.c", "../gfxdemo/scene.c", "../accessories/acc.c"]
     sources["printers"] = ["../printers/main.c", "../libprint/print.c", "../accessories/acc.c"]

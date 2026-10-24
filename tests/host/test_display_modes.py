@@ -79,7 +79,7 @@ class DisplayTests(unittest.TestCase):
 
     def test_compositor_and_settings(self):
         self.build_run(['tests/host/desktop/display_modes_test.c','tests/host/desktop/fake.c',
-                        *('apps/desktop/'+n+'.c' for n in ('client','protocol','input','compositor','theme','shell','autoplay','autoplay_content','settings','wallpaper','keymap','folder','../files/model','../files/transfer')),
+                        *('apps/desktop/'+n+'.c' for n in ('client','protocol','input','compositor','theme','shell','autoplay','autoplay_content','settings', 'power_policy','wallpaper','keymap','folder','../files/model','../files/transfer')),
                         *('apps/libdeskui/'+n+'.c' for n in ('draw','widgets','list','menu','dialog','textarea','icons','icon_map'))],include=['apps/desktop'])
 
     def test_sdk_header_locations_agree(self):

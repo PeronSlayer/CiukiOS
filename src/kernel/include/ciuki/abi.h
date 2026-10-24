@@ -1770,6 +1770,46 @@ struct ciuki_power_status {
     struct ciuki_power_battery batteries[CIUKI_POWER_BATTERIES];
     struct ciuki_power_zone zones[CIUKI_POWER_ZONES];
 };
+/* G11 power policy (call 73, docs/design/power-policy.md). STANDBY (desktop
+ * only) enters a qualified sleep state; ENOTSUP while QUERY lacks
+ * CAN_STANDBY. POLICY (desktop only): C=record, D=sizeof; queues the ATA
+ * standby timer of every fixed disk for a kernel task and returns at once;
+ * the out fields report the last completed application. EVENTS (any native
+ * client): C=record, D=sizeof; cached boot-monotonic counters, no firmware
+ * call. */
+#define CIUKI_POWER_STANDBY 5u
+#define CIUKI_POWER_POLICY 6u
+#define CIUKI_POWER_EVENTS 7u
+#define CIUKI_POWER_CAN_STANDBY 16u
+#define CIUKI_POWER_POLICY_VERSION 1u
+#define CIUKI_POWER_EVENTS_VERSION 1u
+/* standby_reason: the first unmet standby qualification. */
+#define CIUKI_POWER_STANDBY_AVAILABLE 0u
+#define CIUKI_POWER_STANDBY_NO_PROVIDER 1u
+#define CIUKI_POWER_STANDBY_NO_FIRMWARE 2u
+#define CIUKI_POWER_STANDBY_NO_RESUME 3u
+struct ciuki_power_policy {
+    uint32_t version;
+    uint32_t size;
+    uint32_t disk_seconds; /* in: idle time before the drives spin down; 0 never */
+    uint32_t disks; /* out: fixed disks that accepted the timer */
+    uint32_t refused; /* out: disks without the feature or that aborted */
+    uint32_t applied_seconds; /* out: programmed time (rounded up) */
+    int32_t error; /* out: negative errno of the first failure */
+    uint32_t reserved;
+};
+struct ciuki_power_events {
+    uint32_t version;
+    uint32_t size;
+    uint32_t sleep_requests; /* APM 0001h, 0002h, 0009h, 000Ah */
+    uint32_t battery_low; /* APM 0005h */
+    uint32_t critical; /* APM 0008h */
+    uint32_t resumes; /* APM 0003h, 0004h, 000Bh */
+    uint32_t status_changes; /* APM 0006h, 000Ch */
+    uint32_t standby_reason; /* CIUKI_POWER_STANDBY_* */
+    uint32_t disk_seconds; /* last programmed drive timer, UNKNOWN before */
+    uint32_t reserved;
+};
 
 /* f2-33: process enumeration (call 70) and termination request (call 71).
  * One system record, then process records in ascending PID order. */

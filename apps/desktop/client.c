@@ -2192,6 +2192,9 @@ void desk_session_tick(struct desktop *d)
         return;
     }
     if (hung) desk_end_task_open(d,DESK_HANG_NOT_RESPONDING,1,pid,target,name);
+    /* G11: a battery alarm with "Force standby or shutdown even if a program
+     * stops responding" ends it, as End Task would. */
+    if (hung && d->session.force && d->end_task.kind==DESK_HANG_NOT_RESPONDING && d->end_task.session) desk_end_task_choice(d,1);
 }
 /* Next instant the session or a window close needs a turn (0: none). */
 uint64_t desk_session_deadline(const struct desktop *d)

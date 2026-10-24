@@ -26,7 +26,7 @@ class NetworkTrayTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="network-tray-", dir=parent) as temp:
             sources = [ROOT / "apps/desktop" / name for name in
                        ("protocol.c", "client.c", "input.c", "compositor.c", "theme.c", "shell.c", "autoplay.c", "autoplay_content.c",
-                        "settings.c", "wallpaper.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c")]
+                        "settings.c", "power_policy.c", "wallpaper.c", "keymap.c", "folder.c", "../files/model.c", "../files/transfer.c")]
             sources += [ROOT / "apps/libdeskui" / n for n in ("draw.c", "widgets.c", "list.c", "menu.c", "dialog.c", "textarea.c", "icons.c", "icon_map.c")]
             sources += [ROOT / "tests/host/desktop/fake.c",
                         ROOT / "tests/host/desktop" / ("tray_layout_test.c" if kind == "layout" else f"{kind}_tray_test.c")]

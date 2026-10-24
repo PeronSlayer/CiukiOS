@@ -574,6 +574,9 @@ int ciuki_power(uint32_t action) { (void)action; errno = ENOSYS; return -1; }
 /* G6 file information (call 98): not modelled; Files' Properties falls back. */
 int ciuki_file_info_set(const char *path, uint32_t mask, const struct ciuki_file_info *in) { (void)path; (void)mask; (void)in; errno = ENOSYS; return -1; }
 int ciuki_power_status(struct ciuki_power_status *out) { (void)out; errno=ENOSYS; return -1; }
+/* G11: the EVENTS and POLICY records (no kernel in these scenarios). */
+int ciuki_power_events(struct ciuki_power_events *out) { (void)out; errno=ENOSYS; return -1; }
+int ciuki_power_policy(struct ciuki_power_policy *out) { (void)out; errno=ENOSYS; return -1; }
 int ciuki_launch_mark(uint32_t event, ciuki_pid_t pid, uint64_t click_us)
 { (void)event; (void)pid; (void)click_us; return 0; } /* quiet replay */
 int ciuki_proc_list(void *buffer, uint32_t bytes)
