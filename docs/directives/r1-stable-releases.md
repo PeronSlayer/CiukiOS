@@ -1,0 +1,15 @@
+# r1 — stable releases of approved images
+
+- **Written:** 2026-10-24 13:28 by the lead. Owner decision 2026-10-24: every image the owner approves as "stable" is published as a GitHub release with an emulator package (QEMU, VirtualBox, VMware), the installer and the raw disk image; documentation is updated with it. Implementer: Codex gpt-6.1-sol high, worktree from `main`. Rules of `g7-g12-os-gaps-batch-2.md` (header).
+
+**Deliver `scripts/release_stable.py`** (host-testable, no network in tests), run by the lead only after the owner's approval of a named image SHA-256:
+1. **Inputs:** the canonical `build/f0/ciukios.img` and the Setup CD of the same source commit (`make build-full`, `make build-full-cd`), their manifests; refuse unless both manifests show the same commit, `source_dirty=0`, the image SHA-256 the owner approved, and the payload audits pass (no `legacy/local`, no commercial game payloads, nothing from `third_party/mswin98rskt` or the owner's driver pack).
+2. **Artifacts** in `build/releases/<tag>/` (the directory keeps only the current release, per AGENTS.md):
+   - `ciukios-<ver>-disk.zip`: the raw image for Rufus, balenaEtcher or `dd`, with a short README (how to write it, the target machines of `docs/design/hardware-baseline.md`).
+   - `ciukios-<ver>-setup.iso`: the Setup CD (hybrid for USB sticks if the boot chain allows it; otherwise say so in the notes).
+   - `ciukios-<ver>-qemu.zip`: a qcow2 converted from the image plus `run-qemu.sh` and `run-qemu.cmd` with the qemu-t23 profile (machine, Pentium III CPU, 512 MiB, AC'97, a supported NIC, `-rtc base=localtime`, KVM/WHPX/HVF when available, TCG otherwise).
+   - `ciukios-<ver>-vm.ova`: OVF 1.0 package with a streamOptimized VMDK for VirtualBox and VMware (IDE PIIX4 disk, 512 MiB, one CPU, devices CiukiOS drives: AC'97 or ES1371 audio, PCnet or E1000 NIC, standard VGA or VMware SVGA); also `ciukios-<ver>-vmware.zip` (VMDK + .vmx) if a plain OVA cannot select the right devices for VMware.
+   - The corresponding-source bundle and notices the image's licences require (the Wine items listed in `config/release-policy.json`, `third_party/wine/SOURCE-OFFER.txt`, license texts of the bundled components).
+   - `SHA256SUMS` and `RELEASE-NOTES.md` (from the CHANGELOG section of the version, the image SHA-256, the source commit, how to try each package).
+3. **Publication:** tag `v<version>-stable.<n>` (n counts stable releases of the version), title "CiukiOS <version> — stable <n>", `gh release create` with the artifacts, not marked as prerelease; `--dry-run` prints everything without network. `config/release-policy.json` gains a `stable` rule (owner approval, the image SHA-256) next to the suspended push prereleases, and the pre-push hook keeps working unchanged.
+4. **Tests:** fixture images (small FAT32 image and ISO built in the test) through every conversion (`qemu-img` vmdk/qcow2, OVF XML validated against the DMTF schema rules it uses, zip contents, checksums), the refusal paths, the dry run. Document the procedure in `docs/release-process.md` and link it from `docs/README.md`.
