@@ -11,6 +11,10 @@
 #include <string.h>
 /* The host socket header declares its own SOCK_RAW enum member. */
 #undef SOCK_RAW
+#undef MSG_TRUNC
+#undef MSG_PEEK
+#undef MSG_DONTWAIT
+#undef MSG_NOSIGNAL
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <time.h>

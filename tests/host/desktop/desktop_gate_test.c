@@ -41,7 +41,7 @@ static int ciuki_error(uint32_t r) { return r >= (uint32_t)-4095 ? -(int32_t)r :
 static uint32_t ciuki_raw_probe_report(uintptr_t,uint32_t,uint32_t,uint32_t,uint32_t,uint32_t);
 static void *gate_mmap(void *,size_t,int,int,int,off_t);
 /* This host gate has no firmware screen-control/DPMS backend. */
-static uint32_t gate_display_call(uintptr_t op,uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t e,uintptr_t f)
+__attribute__((unused)) static uint32_t gate_display_call(uintptr_t op,uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t e,uintptr_t f)
 { (void)op;(void)a;(void)b;(void)c;(void)e;(void)f;return (uint32_t)-ENOSYS; }
 #define CU_CALL(n,b,c,d,s,i,p) gate_display_call(b,c,d,s,i,p)
 #define CIUKI_RUNTIME_H
@@ -57,6 +57,8 @@ int ciuki_dosvm(uint32_t op,struct ciuki_dosvm_command *c)
  * the gate exercises the display contract, so the harness supplies the persistence hook. */
 int master_preference_save(const char *directory, unsigned left, unsigned right, unsigned mute)
 { (void)directory; (void)left; (void)right; (void)mute; return 0; }
+int line_preference_save(const char *directory, const struct ciuki_mixer_line *line)
+{ (void)directory; (void)line; return 0; }
 
 #undef main
 #undef mmap
