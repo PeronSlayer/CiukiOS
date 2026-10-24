@@ -290,6 +290,11 @@ int usb_storage_eject(struct storage *s,unsigned d,uint32_t g) { (void)s;(void)d
 /* f5-12B2: the CD-audio devctls (media_cd.c) are exercised by ata_test; here only the dispatch edge. */
 int media_cd_devctl(struct process *p,struct storage *s,uint32_t op,uint32_t a,uint32_t b)
 { (void)p;(void)s;(void)a;(void)b;(void)op; return -ENOTTY; }
+/* G29c: raw floppy transfers pin the caller's buffer; this namespace test
+ * issues none, so pinning reports a fault. */
+int ua_pin(struct uaddr *u, struct ua_pin *pin, uint32_t base, uint32_t bytes, bool write)
+{ (void)u;(void)pin;(void)base;(void)bytes;(void)write; return -EFAULT; }
+void ua_unpin(struct uaddr *u, struct ua_pin *pin) { (void)u;(void)pin; }
 /* fx-17b: a modelled floppy controller with drive A: (media_dev's weak
  * platform hooks); floppy_disk is the diskette in the drive, or none. */
 #include "../../../src/kernel/drivers/media_dev.c"
