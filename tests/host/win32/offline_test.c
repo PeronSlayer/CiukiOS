@@ -23,7 +23,8 @@ const struct w32_services *w32_get_services(void) { return &services; }
 /* No PIE keeps static test data/allocator addresses representable on the wire.
  * Ordinary-stack pointer fields recover their upper bits from the record.
  * ASan's optional fake stack must be disabled, while leak detection stays on. */
-static void *field_pointer(uint32_t low,uintptr_t record) { if(low<0x10000000U)return (void *)(uintptr_t)low; return (void *)((record&~(uintptr_t)UINT32_MAX)|low); }
+extern char __executable_start,_end;
+static void *field_pointer(uint32_t low,uintptr_t record) { if(low>=(uintptr_t)&__executable_start&&low<(uintptr_t)&_end)return (void *)(uintptr_t)low; return (void *)((record&~(uintptr_t)UINT32_MAX)|low); }
 struct object { int used,type,references,flags,ready; struct ciuki_socket_timeval timeout; uint32_t position; };
 static struct object objects[32];
 static struct object *descriptors[128];

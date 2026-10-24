@@ -83,6 +83,8 @@ static struct gate_control page_storage, *control_page=&page_storage;
 #define page (*control_page)
 static uint32_t output_pixels[320*320];
 static uint32_t client_pixels[(240*160*4+4095)/4096*1024];
+/* The handshake client is the real 360x240 Ciuki Demo window. */
+static uint32_t handshake_pixels[(360*240*4+4095)/4096*1024];
 static unsigned g18_surfaces;
 static uint8_t g18_pixels[2][4096];
 static unsigned g18_closed;
@@ -279,12 +281,14 @@ int ciuki_surface_create(uint32_t w,uint32_t h,uint32_t f)
 }
 void *ciuki_surface_map(int fd,int prot) {
     if(fd>=124 && fd<=125 && g18_surfaces) { assert(prot==(PROT_READ|PROT_WRITE)); return g18_pixels[fd-124]; }
-    if ((handshake && fd==7) || ((burst || flush_timeout) && fd==127)) { assert(prot==PROT_READ); return client_pixels; }
+    if ((handshake && fd==7) || ((burst || flush_timeout) && fd==127)) { assert(prot==PROT_READ); return handshake && fd==7 ? handshake_pixels : client_pixels; }
     assert(fd==output_fd && prot==(PROT_READ|PROT_WRITE));return output_pixels;
 }
 int ciuki_surface_info(int fd,struct ciuki_surface_info *s) {
     assert((handshake && fd==7) || ((burst || flush_timeout) && fd==127));
-    *s=(struct ciuki_surface_info){sizeof(*s),240,160,240*4,CIUKI_SURFACE_XRGB8888,sizeof(client_pixels)};return 0;
+    if (handshake) *s=(struct ciuki_surface_info){sizeof(*s),360,240,360*4,CIUKI_SURFACE_XRGB8888,sizeof(handshake_pixels)};
+    else *s=(struct ciuki_surface_info){sizeof(*s),240,160,240*4,CIUKI_SURFACE_XRGB8888,sizeof(client_pixels)};
+    return 0;
 }
 int ciuki_present(int display,int surface,const struct ciuki_rect *r)
 {
