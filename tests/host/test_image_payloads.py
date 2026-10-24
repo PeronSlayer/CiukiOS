@@ -47,8 +47,11 @@ class ImagePayloadTests(unittest.TestCase):
         loader = (ROOT / "src/boot/ciukldr/disk.inc").read_text()
         reserved = int(re.search(r"%define CIUKI_FAT_RESERVED_SECTORS (\d+)", loader)[1])
         self.assertEqual(reserved, image.FAT_RESERVED)
-        self.assertIn("cmp word [sector+14], CIUKI_FAT_RESERVED_SECTORS", loader)
-        self.assertEqual(loader.count("add eax, CIUKI_FAT_RESERVED_SECTORS"), 2)
+        # G29d: the loader takes the reserved-sector count from the BPB (a converted volume may differ from the
+        # canonical 160); the define stays the canonical layout the builder and the Black Box use.
+        self.assertIn("mov [reserved_sectors], eax", loader)
+        self.assertIn("cmp dword [reserved_sectors], 32", loader)
+        self.assertEqual(loader.count("add eax, [reserved_sectors]"), 2)
         if shutil.which("nasm"):
             binary = self.work / "loader.bin"
             subprocess.run(["nasm", "-f", "bin", "-I", str(ROOT) + "/",

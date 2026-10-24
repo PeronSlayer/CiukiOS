@@ -27,12 +27,12 @@ PIN = "PIN-FROM-FIRST-RUN"
 # wp-ruler-bullet and wp-preview-1 were reviewed again as screenshots (CIUKI_FONT_REVIEW=<folder> writes PNG copies), as were the new
 # frames justified, options-dialog, ruler-units, nowrap-hscroll, ruler-drag, pictures, pictures-frame, insert-object, word-opened
 # and word-picture; context, empty, formatted, opened and replace-bar differ from G28's only by the ruler and are pinned without a
-# new review. A change here is a visible change of WordPad or libdeskui; none of these is guest evidence.
+# new review. wp-font-dialog was re-pinned after G16b added the Font Script combo (reviewed as a screenshot 2026-10-24). A change here is a visible change of WordPad or libdeskui; none of these is guest evidence.
 APP_SCREENS = {
     'wp-context.xrgb': '7c3774294348b7bafa8b7a73d0ddf249e0634082a854076d8dbc08797a7db50f',
     'wp-empty.xrgb': '32666e1497a07675f2ca95074cdf9eb90ca1a83734e97e4c6ab1f913cf6495df',
     'wp-find.xrgb': 'b8b548bf648955f1aa510a0587943597c029e3fb1bc5828d87ada722b23f7ef7',
-    'wp-font-dialog.xrgb': 'aae56f839590714091c9f7892adf08c3186cd0b663f6d4a4d69ad05ed8d5003c',
+    'wp-font-dialog.xrgb': 'c78c046aa92d7a667ea74f2a323c77d120671151a3506b3a54b98098d69e14d9',
     'wp-formatted.xrgb': 'e5958b1ba1ac40c190b84bb7546dab3606dfcc37cb3548f3c4f68674eeba96ab',
     'wp-opened.xrgb': '04618571576664f6e9fcd4fac82130c8cd8023166afbbcc1c3e0e1aa27f1c3a7',
     'wp-paragraphs.xrgb': '2df78fab3fb20a253ab371773451152a4e1ac42b066e45e8da2e0afae2cde225',
@@ -152,7 +152,7 @@ class WordpadTests(unittest.TestCase):
         builder = (ROOT / "apps/desktop/build_desktop.py").read_text()
         self.assertIn('for name in ("ciuknote", "paint", "viewer", "wordpad"):', builder)   # and so is the shared printing code (G31)
         self.assertIn("apps/wordpad", (ROOT / "apps/desktop/build_desktop.py").read_text())
-        self.assertIn('-lfont"] if name in ("control", "wordpad")', (ROOT / "apps/desktop/build_desktop.py").read_text())
+        self.assertIn('-lfont"] if name in ("control", "charmap", "wordpad")', (ROOT / "apps/desktop/build_desktop.py").read_text())
         image = (ROOT / "scripts/build_image.py").read_text()
         self.assertIn('"/Programs/wordpad": DESKTOP / "wordpad"', image)
         catalog = (ROOT / "apps/desktop/catalog.h").read_text()
