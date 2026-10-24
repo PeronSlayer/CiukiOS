@@ -15,6 +15,9 @@ struct viewer_image { uint32_t *pixels; int width, height; char format[8]; };
 /* Decodes a file's bytes; 0 or a negative errno-like code (-EINVAL unsupported, -EFBIG too large, -ENOMEM). */
 int viewer_decode(const uint8_t *data, size_t size, const char *name, struct viewer_image *);
 void viewer_free(struct viewer_image *);
+/* Rotates the picture clockwise by quarter_turns (1 = 90 degrees right, 2 = 180, 3 = 90 degrees left; any integer, modulo 4).
+ * 0, or -ENOMEM with the picture unchanged. */
+int viewer_rotate(struct viewer_image *, int quarter_turns);
 int viewer_is_image_name(const char *name);
 /* Zoom in percent; 0 means best fit. */
 int viewer_zoom_step(int zoom, int direction);
@@ -39,11 +42,14 @@ struct viewer_app {
     char path[VIEWER_PATH], folder[VIEWER_PATH];
     char names[VIEWER_FOLDER][96]; unsigned count; int index;
     int zoom;                 /* percent, 0 = best fit */
+    int rotation;             /* quarter turns to the right of the file as stored (the view only; files are not rewritten) */
+    /* G27 Set As Wallpaper: mode 0 centered, 1 tiled, 2 stretched; 0 or -errno. NULL disables the commands. */
+    int (*wallpaper)(void *host, const char *path, int mode);
     int scroll_x, scroll_y;   /* image pixels at the top-left of the view */
     struct du_file_entry *entries;
-    struct du_menu menus[3]; struct du_menu_item file_items[8], view_items[6], help_items[1];
+    struct du_menu menus[3]; struct du_menu_item file_items[11], view_items[9], help_items[1];
 };
-enum { V_M_OPEN = 1, V_M_PREV, V_M_NEXT, V_M_EXIT, V_M_IN, V_M_OUT, V_M_ACTUAL, V_M_FIT, V_M_ABOUT, V_M_PAGESETUP, V_M_PRINT,
+enum { V_M_OPEN = 1, V_M_PREV, V_M_NEXT, V_M_EXIT, V_M_IN, V_M_OUT, V_M_ACTUAL, V_M_FIT, V_M_ABOUT, V_M_PAGESETUP, V_M_PRINT, V_M_RIGHT, V_M_LEFT, V_M_TURN, V_M_WALL_CENTER, V_M_WALL_TILE, V_M_WALL_STRETCH,
        V_STATUS = 100, V_PREV, V_NEXT, V_IN, V_OUT, V_FIT, V_ACTUAL, V_D_OPEN = 200, V_D_INFO };
 int viewer_attach(struct viewer_app *, struct du_ui *, const struct viewer_fs *);
 void viewer_detach(struct viewer_app *);

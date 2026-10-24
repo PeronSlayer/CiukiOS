@@ -19,6 +19,7 @@ int main(int argc, char **argv)
     charmap_attach(&m->app, &m->ui);
     if (test) du_window_move(&m->window, 24, 48);
     int r = du_run(&m->window, NULL, NULL);
+    charmap_detach(&m->app);
     du_window_destroy(&m->window); free(m);
     return r < 0 ? 1 : 0;
 }

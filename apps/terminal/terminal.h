@@ -9,6 +9,10 @@
 #define TERM_LINE 1024
 #define TERM_ARGS 32
 #define TERM_CAPTURE (1024u * 1024u)
+#define TERM_ENV 64
+#define TERM_BATCH_MAX (64u * 1024u)
+#define TERM_BATCH_DEPTH 16
+#define TERM_STAGES 8
 #define TERM_CELL_W 7
 #define TERM_CELL_H 16
 #define TERM_WIDTH (80 * TERM_CELL_W + 24)
@@ -34,6 +38,12 @@ struct term_host {
     void (*pump)(void *);
     void (*quit)(void *);
     int (*disktool)(void *, int, char **);
+    /* G27 (AX-17), all optional: the DOS attribute bits of a path (R=1 H=2 S=4 A=0x20), the volume
+     * label of a drive (0 = A:), and a drive's capacity and free bytes. */
+    int (*attributes)(void *, const char *path, uint32_t attributes);
+    int (*label_get)(void *, unsigned drive, char out[33]);
+    int (*label_set)(void *, unsigned drive, const char *label);
+    int (*space)(void *, unsigned drive, uint64_t *total, uint64_t *free_bytes);
 };
 struct terminal {
     struct term_host host;
@@ -54,6 +64,11 @@ struct terminal {
     int selecting, output_focus; size_t selection_a, selection_b;
     unsigned pending_power;
     struct du_menu_item menu_items[3]; struct du_menu menu;
+    /* G27: pipes, redirection, environment and batch files (script.c). */
+    const char *in_data; size_t in_length;   /* standard input of the command being run */
+    char *env[TERM_ENV]; unsigned env_count;
+    int errorlevel, echo_off;
+    void *batch; unsigned batch_depth;       /* the running batch file frame, NULL at the prompt */
 };
 int term_network_command(struct terminal *, int, char **);
 int term_disktool(struct terminal *, int, char **);
@@ -64,6 +79,17 @@ void term_printf(struct terminal *, const char *, ...);
 int term_execute(struct terminal *, const char *);
 /* G14 (recovery.c): 1 when the command is SCANREG, SCANDISK, SFC or WIN. */
 int term_recovery(struct terminal *, int n, char **argv, int *result);
+int term_execute(struct terminal *, const char *);        /* expands %VARIABLES%, then runs pipes, redirection and control commands */
+int term_command(struct terminal *, const char *);         /* one command, no pipes or redirection (commands.c) */
+int term_parse(char *, char **);                           /* in-place argument split with quotes; count or -errno */
+int term_wildcard(const char *pattern, const char *name);
+int term_glob(struct terminal *, const char *pattern, char ***names, unsigned *count);   /* matches as typed (basename only without a directory part) */
+void term_glob_free(char **names, unsigned count);
+int term_extra(struct terminal *, int argc, char **argv, int *result);   /* script.c commands; 1 when argv[0] was one of them */
+int term_batch(struct terminal *, const char *path, int argc, char **argv);
+const char *term_getenv(const struct terminal *, const char *name);
+int term_setenv(struct terminal *, const char *name, const char *value);   /* NULL or empty deletes */
+void term_env_free(struct terminal *);
 char *term_capture(struct terminal *, const char *, int *);
 int term_path(struct terminal *, const char *, char *);
 unsigned term_visual_rows(const struct terminal *);

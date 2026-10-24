@@ -274,6 +274,11 @@ static const struct program_info programs[] = {
     {"clock", "Clock", "appointment-new", "accessories", NULL},
     {"help", "CiukiOS Help", "help-browser", "accessories", NULL},
     {"mixer", "Volume Control", "audio-volume-high", "accessories", NULL},
+    {"serial", "Serial Terminal", "network-wired", "accessories", NULL},
+    {"mines", "Minesweeper", "face-smile", "games", NULL},
+    {"solitaire", "Solitaire", "applications-games", "games", NULL},
+    {"freecell", "FreeCell", "applications-games", "games", NULL},
+    {"hearts", "Hearts", "emblem-favorite", "games", NULL},
     {"hwreport", "Hardware Report", "preferences-system", "system-tools", NULL},
     {"scandisk", "ScanDisk", "drive-harddisk", "system-tools", NULL},
     {"msconfig", "System Configuration", "preferences-system", "system-tools", NULL},
@@ -427,12 +432,17 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         d->v3_links_force|=DESK_LINKS_SCAN;
         desk_links_refresh(d);
         if (d->v3_link_count) item(m,"Programs folder","folder",SH_ACT_PROGRAMS_FOLDER,0,0);
-        int developer = 0, accessories = 0, system_tools = 0;
+        unsigned preview=0;
+        for (unsigned k=0;k<d->v3_link_count && preview<8;k++) if (!d->v3_links[k].desktop) {
+            item(m,d->v3_links[k].launch.label,"application-x-executable",SH_ACT_WIN32_LINK,(int)k,0); preview++;
+        }
+        int developer = 0, accessories = 0, system_tools = 0, games = 0;
         for (size_t k = 0; k < sizeof(programs) / sizeof(programs[0]); k++) {
             int at = program_index(d, programs[k].name);
             if (at < 0 && !(programs[k].target && d->v3_launch)) continue;
             if (!strcmp(programs[k].category, "system-tools")) { system_tools = 1; continue; }
             if (!strcmp(programs[k].category, "accessories")) { accessories = 1; continue; }
+            if (!strcmp(programs[k].category, "games")) { games = 1; continue; }
             if (strcmp(programs[k].category, "programs")) { developer = 1; continue; }
             item(m, programs[k].label, programs[k].icon, SH_ACT_LAUNCH, at, 0);
         }
@@ -441,7 +451,7 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         if (system_tools) item(m, "System Tools", "applications-system", SH_ACT_SUBMENU, SH_MENU_SYSTEM_TOOLS, 0);
         if (accessories) item(m, "Accessories", "applications-accessories", SH_ACT_SUBMENU, SH_MENU_ACCESSORIES, 0);
         /* The bundled shareware games run in a DOS Box window (catalog.h desk_games). */
-        if (program_index(d, "dosbox") >= 0) item(m, "Games", "applications-games", SH_ACT_SUBMENU, SH_MENU_GAMES, 0);
+        if (games || program_index(d, "dosbox") >= 0) item(m, "Games", "applications-games", SH_ACT_SUBMENU, SH_MENU_GAMES, 0);
         if (developer) { separator(m); item(m, "Developer", "applications-development", SH_ACT_SUBMENU, SH_MENU_DEVELOPER, 0); }
         shortcut_programs_menu(d,m,kind);
         break;
@@ -465,10 +475,17 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         }
         shortcut_programs_menu(d,m,kind);
         break;
-    case SH_MENU_GAMES:
+    case SH_MENU_GAMES: {
+        unsigned native = 0;   /* G27: the native games first (Minesweeper, Solitaire, FreeCell, Hearts), then the bundled DOS games */
+        for (size_t k = 0; k < sizeof(programs) / sizeof(programs[0]); k++) {
+            int at = program_index(d, programs[k].name);
+            if (at >= 0 && !strcmp(programs[k].category, "games")) { item(m, programs[k].label, programs[k].icon, SH_ACT_LAUNCH, at, 0); native++; }
+        }
+        if (native) separator(m);
         for (unsigned k = 0; k < DESK_GAME_COUNT; k++) if(!(d->games_removed&(1u<<k))) item(m, desk_games[k].label, desk_games[k].tango, SH_ACT_GAME, (int)k, 0);
         shortcut_programs_menu(d,m,kind);
         break;
+    }
     case SH_MENU_DEVELOPER:
         for (unsigned k = 0; k < d->program_count && m->count < SH_ITEMS; k++) {
             const struct program_info *p = program_find(d->programs[k].name);

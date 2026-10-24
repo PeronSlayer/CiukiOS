@@ -11,12 +11,14 @@
 #endif
 #include "../libdeskui/textarea.h"
 #include "default_font.h"
+#include "xform.h"
 #include "../libdeskui/job.h"
 #include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 typedef uint8_t u8;
 typedef uint16_t u16;
@@ -35,6 +37,9 @@ static void (*decline_cb)(void *);
 static void (*printing_cb)(void *,int);
 static void (*title_cb)(void *, const char *);
 static void *callback_host;
+static int (*wallpaper_cb)(void *, const char *, int);
+static void *wallpaper_host;
+static const char *wallpaper_folder;
 static void fmt_u32(char *out, u32 n) { sprintf(out, "%u", (unsigned)n); }
 static void no_memory(void);
 static void layout(void);
@@ -1625,6 +1630,7 @@ static struct du_menu_item file_items[] = {
     ITEM("&New", M_NEW, 0x31, DU_CTRL), ITEM("&Open...", M_OPEN, 0x18, DU_CTRL),
     ITEM("&Save", M_SAVE, 0x1f, DU_CTRL), ITEM("Save &As...", M_SAVEAS, 0, 0), SEP,
     ITEM("Page Set&up...", M_PAGESETUP, 0, 0), ITEM("&Print...", M_PRINT, 0x19, DU_CTRL), SEP,
+    ITEM("Set As &Wallpaper (Tiled)", M_WALL_TILE, 0, 0), ITEM("Set As Wallpaper (&Centered)", M_WALL_CENTER, 0, 0), SEP,
     ITEM("E&xit", M_EXIT, DU_KEY_F4, DU_ALT) };
 static struct du_menu_item edit_items[] = {
     ITEM("&Undo", M_UNDO, 0x2c, DU_CTRL), ITEM("&Repeat", M_REDO, 0x15, DU_CTRL), SEP,
@@ -1638,9 +1644,9 @@ static struct du_menu_item view_items[] = {
     ITEM("&2x", M_Z2, 0, 0), ITEM("&4x", M_Z4, 0, 0), ITEM("&6x", M_Z6, 0, 0), ITEM("&8x", M_Z8, 0, 0), SEP,
     ITEM("Show &Grid", M_GRID, 0x22, DU_CTRL), ITEM("Text &Font...", M_FONT, 0, 0) };
 static struct du_menu_item image_items[] = {
-    ITEM("&Flip/Rotate...", M_FLIP, 0x13, DU_CTRL), ITEM("&Invert Colours", M_INVERT, 0x17, DU_CTRL),
+    ITEM("&Flip/Rotate...", M_FLIP, 0x13, DU_CTRL), ITEM("&Stretch/Skew...", M_STRETCH, 0x11, DU_CTRL), ITEM("&Invert Colours", M_INVERT, 0x17, DU_CTRL),
     ITEM("&Attributes...", M_ATTR, 0x12, DU_CTRL), ITEM("&Clear Image", M_CLEARIMG, 0, 0), SEP,
-    ITEM("&Draw Opaque", M_OPAQUE, 0, 0) };
+    ITEM("&Draw Opaque", M_OPAQUE, 0, 0), SEP, ITEM("Edit Co&lours...", M_COLOURS, 0, 0) };
 static struct du_menu_item help_items[] = {ITEM("&Help Topics", M_HELP, DU_KEY_F1, 0), SEP, ITEM("&About CiukPaint", M_ABOUT, 0, 0)};
 #define MENU(label, items) {label, items, sizeof(items) / sizeof(items[0])}
 static struct du_menu menus[] = {MENU("&File", file_items), MENU("&Edit", edit_items), MENU("&View", view_items), MENU("&Image", image_items), MENU("&Help", help_items)};
@@ -1660,7 +1666,8 @@ static void update_menus(void)
     flag(&view_items[2], DU_ITEM_CHECKED, show_status);
     for (int i = 0; i < 5; i++) flag(&view_items[6 + i], DU_ITEM_CHECKED, zoom == zooms[i]);
     flag(&view_items[12], DU_ITEM_CHECKED, show_grid); flag(&view_items[12], DU_ITEM_DISABLED, zoom < 4);
-    flag(&image_items[5], DU_ITEM_CHECKED, opaque);
+    flag(&image_items[6], DU_ITEM_CHECKED, opaque);
+    flag(&file_items[5], DU_ITEM_DISABLED, !wallpaper_cb); flag(&file_items[6], DU_ITEM_DISABLED, !wallpaper_cb);
 }
 static void context_menu(int x, int y) { update_menus(); du_popup(ui, context_items, 8, x, y, P_CANVAS); }
 
@@ -2001,7 +2008,7 @@ static void render(struct du_ui *u, void *arg)
 }
 
 /* Modal controls on libdeskui. The accept hook reads values before release. */
-enum { D_CHANGES=500, D_OPEN, D_SAVE, D_FORMAT, D_ATTR, D_FLIP, D_FONT };
+enum { D_CHANGES=500, D_OPEN, D_SAVE, D_OVERWRITE, D_FORMAT, D_ATTR, D_FLIP, D_FONT, D_STRETCH, D_COLOURS };
 enum { A_NONE, A_NEW, A_OPEN, A_EXIT, A_DROP };
 static char dropped_path[DU_TEXT_MAX];   /* fx-19: a picture dropped on the window */
 static int pending, closing, candidate_w, candidate_h, candidate_transform;
@@ -2011,13 +2018,28 @@ static struct du_item font_rows[32];
 static char font_files[32][256], font_names[32][40];
 static unsigned nfonts, candidate_font;
 static int candidate_scale, candidate_bold;
+static int candidate_stretch[4], candidate_rgb[3];     /* stretch % h/v, skew degrees h/v; red green blue */
+static unsigned custom_next;                           /* the next of the 14 custom swatches Edit Colours replaces */
+static const char *format_ext(enum paint_format f)
+{ return f==PAINT_PNG ? ".png" : f==PAINT_GIF ? ".gif" : f==PAINT_JPEG ? ".jpg" : ".bmp"; }
+/* 1 and the format for a known extension; BMP keeps the current bitmap depth. */
+static int format_of(const char *ext, enum paint_format *f)
+{
+    if (!ext) return 0;
+    if (!strcasecmp(ext,".png")) *f=PAINT_PNG;
+    else if (!strcasecmp(ext,".gif")) *f=PAINT_GIF;
+    else if (!strcasecmp(ext,".jpg") || !strcasecmp(ext,".jpeg") || !strcasecmp(ext,".jpe")) *f=PAINT_JPEG;
+    else if (!strcasecmp(ext,".bmp")) { if (*f==PAINT_PNG || *f==PAINT_GIF || *f==PAINT_JPEG) *f=PAINT_BMP8; }
+    else return 0;
+    return 1;
+}
 static void file_dialog(int save);
 static void run_pending(void);
 static void error_message(int r)
 {
     if (r == -ENOMEM) no_memory();
     else if (r == -EFBIG) message("This picture is too large. Maximum: 2048 x 1200 pixels (either orientation).");
-    else if (r == -EINVAL) message("Cannot read this picture. CiukPaint opens BMP and PNG files.");
+    else if (r == -EINVAL) message("Cannot read this picture. CiukPaint opens BMP, PNG, GIF and JPEG files.");
     else if (r) message(strerror(-r));
 }
 static void custom_dialog(int id, const char *title, int w, int h)
@@ -2044,6 +2066,13 @@ static int number(const char *s, int max)
     char *end; long value=strtol(s,&end,10);
     return *s && !*end && value>0 && value<=max ? (int)value : 0;
 }
+/* A whole number from lo to hi (zero and negatives allowed); 1 and *out when valid. */
+static int integer(const char *s, int lo, int hi, int *out)
+{
+    char *end; long value=strtol(s,&end,10);
+    if (!*s || *end || value<lo || value>hi) return 0;
+    *out=(int)value; return 1;
+}
 static int accept_controls(struct du_ui *u, int button, void *arg)
 {
     (void)arg; struct du_dialog *d=&u->dialog;
@@ -2056,8 +2085,17 @@ static int accept_controls(struct du_ui *u, int button, void *arg)
         }
     } else if (d->id==D_FLIP) {
         for (int i=0;i<5;i++) if (d->items[2+i].value) candidate_transform=i+1;
+    } else if (d->id==D_STRETCH) {
+        static const int lo[4]={PAINT_STRETCH_MIN,PAINT_STRETCH_MIN,-PAINT_SKEW_MAX,-PAINT_SKEW_MAX}, hi[4]={PAINT_STRETCH_MAX,PAINT_STRETCH_MAX,PAINT_SKEW_MAX,PAINT_SKEW_MAX};
+        for (int i=0;i<4;i++) if (!integer(d->items[3+i*2].text,lo[i],hi[i],&candidate_stretch[i])) {
+            du_set_text(&d->items[2+i*2],"Out of range - see the limits:"); return 1;
+        }
+    } else if (d->id==D_COLOURS) {
+        for (int i=0;i<3;i++) if (!integer(d->items[3+i*2].text,0,255,&candidate_rgb[i])) {
+            du_set_text(&d->items[9],"Red, green and blue are numbers from 0 to 255."); return 1;
+        }
     } else if (d->id==D_FORMAT) {
-        for (int i=0;i<3;i++) if (d->items[2+i].value) candidate_format=(enum paint_format)i;
+        for (int i=0;i<5;i++) if (d->items[2+i].value) candidate_format=(enum paint_format)i;
     } else if (d->id==D_FONT) {
         candidate_font=d->items[2].active; candidate_scale=number(d->items[4].text,4);
         candidate_bold=d->items[5].value;
@@ -2088,11 +2126,36 @@ static void flip_dialog(void)
     for (int i=0;i<5;i++) { struct du_widget *w=control(2+(unsigned)i,DU_RADIO,labels[i],20,36+i*23,280,20); w->value=i==0; }
     ui->dialog.accept=accept_controls;
 }
+static void stretch_dialog(void)
+{
+    custom_dialog(D_STRETCH,"Stretch and Skew",380,220);
+    static const char *const names[4]={"Stretch &horizontal, 1-500 %:","Stretch &vertical, 1-500 %:","Skew h&orizontal, -89 to 89 degrees:","Skew v&ertical, -89 to 89 degrees:"};
+    static const char *const defaults[4]={"100","100","0","0"};
+    for (int i=0;i<4;i++) {
+        control(2+(unsigned)i*2,DU_LABEL,names[i],14,36+i*34,250,22);
+        control(3+(unsigned)i*2,DU_EDIT,defaults[i],274,34+i*34,70,22);
+    }
+    ui->dialog.focus=3; ui->dialog.accept=accept_controls;
+}
+static void colours_dialog(void)
+{
+    custom_dialog(D_COLOURS,"Edit Colours",340,210);
+    static const char *const names[3]={"&Red (0-255):","&Green (0-255):","&Blue (0-255):"};
+    char value[3][8];
+    for (int i=0;i<3;i++) {
+        unsigned c=rgb(fg); int channel=i==0?(int)((c>>16)&255):i==1?(int)((c>>8)&255):(int)(c&255);
+        snprintf(value[i],sizeof(value[i]),"%d",channel);
+        control(2+(unsigned)i*2,DU_LABEL,names[i],14,36+i*30,130,22);
+        control(3+(unsigned)i*2,DU_EDIT,value[i],154,34+i*30,70,22);
+    }
+    control(9,DU_LABEL,"The colour replaces one of the custom boxes and becomes the foreground.",14,134,310,22);
+    ui->dialog.focus=3; ui->dialog.accept=accept_controls;
+}
 static void format_dialog(void)
 {
-    custom_dialog(D_FORMAT,"Save As - File Format",350,170);
-    static const char *const labels[]={"Original 8-bit bitmap (*.bmp)","24-bit bitmap (*.bmp)","PNG image (*.png)"};
-    for (int i=0;i<3;i++) { struct du_widget *w=control(2+(unsigned)i,DU_RADIO,labels[i],20,38+i*25,310,22); w->value=i==(int)save_format; }
+    custom_dialog(D_FORMAT,"Save As - File Format",350,220);
+    static const char *const labels[]={"Original 8-bit bitmap (*.bmp)","24-bit bitmap (*.bmp)","PNG image (*.png)","GIF image (*.gif)","JPEG image (*.jpg)"};
+    for (int i=0;i<5;i++) { struct du_widget *w=control(2+(unsigned)i,DU_RADIO,labels[i],20,38+i*25,310,22); w->value=i==(int)save_format; }
     ui->dialog.accept=accept_controls;
 }
 static void font_dialog(void)
@@ -2136,7 +2199,7 @@ static void file_dialog(int save)
         char *dot=strrchr(name,'.'); if (dot) *dot=0;
         size_t len=strlen(name);
         if (len+4>=sizeof(name)) { error_message(-ENAMETOOLONG); return; }
-        strcat(name,save_format==PAINT_PNG?".png":".bmp");
+        strcat(name,format_ext(save_format));
     }
     /* The shared dialog supplies the file types, the default extension and the replace prompt. */
     static const struct du_file_filter open_types[]={{"Pictures (*.bmp;*.png)","*.bmp;*.png"},{"Bitmap Files (*.bmp)","*.bmp"},{"PNG Images (*.png)","*.png"},{"All Files (*.*)","*.*"}};
@@ -2146,6 +2209,8 @@ static void file_dialog(int save)
         .filters=save?save_types:open_types,.filter_count=save?3:4,.filter_index=save&&save_format==PAINT_PNG?1:0,
         .default_ext=save_format==PAINT_PNG?"png":"bmp"};
     if (du_file_open(ui,save?D_SAVE:D_OPEN,&o)) no_memory();
+    if (du_file_dialog(ui,save?D_SAVE:D_OPEN,save,save?"Save As (BMP, PNG, GIF or JPEG)":"Open (BMP, PNG, GIF or JPEG)",folder,
+                       save?name:"",NULL,NULL)) no_memory();
 }
 static void run_pending(void)
 {
@@ -2171,6 +2236,73 @@ static void abandon(void)
     if (action==A_EXIT && decline_cb) decline_cb(callback_host);
 }
 void paint_decline_callback(void (*declined)(void *)) { decline_cb=declined; }
+/* Image > Stretch/Skew: the selection if there is one, else the whole picture. */
+static void stretch_skew_apply(void)
+{
+    struct paint_image n; int r;
+    if (sel_on) {
+        if (!lift(0)) return;
+        r=paint_stretch_skew(&flt,&n,candidate_stretch[0],candidate_stretch[1],candidate_stretch[2],candidate_stretch[3],bg);
+        if (r) { if (r==-ENOMEM) no_memory(); else message("The picture would be too large."); return; }
+        sel_damage();
+        img_free(&flt); flt=n; selw=flt.w; selh=flt.h;
+        sel_damage(); float_render();
+        return;
+    }
+    if (op_open) return;
+    r=paint_stretch_skew(&cv,&n,candidate_stretch[0],candidate_stretch[1],candidate_stretch[2],candidate_stretch[3],bg);
+    if (r) { if (r==-ENOMEM) no_memory(); else message("The picture would be too large."); return; }
+    make_room();
+    replace_canvas(&n);
+    dmg_all();
+}
+static int index_in_images(u8 index)
+{
+    const struct paint_image *all[]={&cv,&old,&pool,&flt,&clip};
+    for (unsigned k=0;k<sizeof(all)/sizeof(all[0]);k++) {
+        const struct paint_image *m=all[k];
+        if (!m->pixels) continue;
+        size_t count=(size_t)m->w*(size_t)m->h;
+        for (size_t i=0;i<count;i++) if (m->pixels[i]==index) return 1;
+    }
+    return 0;
+}
+/* Edit Colours: the colour (0-255 per channel) becomes the foreground and replaces one of the 14 custom swatches.
+ * The picture is indexed, so an unused palette entry (above the scheme colours) is redefined; with all in use the
+ * nearest existing colour is taken instead. Returns the palette index. */
+static int define_colour(int red, int green, int blue)
+{
+    int r6=red>>2, g6=green>>2, b6=blue>>2, found=-1;
+    for (int i=0;i<NCOL && found<0;i++) if (pal[i*3]==r6 && pal[i*3+1]==g6 && pal[i*3+2]==b6) found=i;
+    if (found<0) {
+        for (int i=16;i<NCOL && found<0;i++) {
+            int swatched=0;
+            for (int k=0;k<NSWATCH;k++) swatched|=swatch[k]==i;
+            if (i==fg || i==bg || swatched || index_in_images((u8)i)) continue;
+            pal[i*3]=(u8)r6; pal[i*3+1]=(u8)g6; pal[i*3+2]=(u8)b6; found=i;
+        }
+    }
+    if (found<0) found=nearest(r6,g6,b6);
+    int boxed=0;
+    for (int k=0;k<NSWATCH;k++) boxed|=swatch[k]==found;
+    if (!boxed) swatch[14+custom_next++%14]=(u8)found;   /* a colour already in a box is only selected */
+    fg=(u8)found;
+    return found;
+}
+static void set_wallpaper(int mode)
+{
+    if (!wallpaper_cb || !wallpaper_folder) return;
+    finish_pending(); drop_selection();
+    char file[PAINT_PATH_MAX];
+    int n=snprintf(file,sizeof(file),"%s/CiukPaint.bmp",wallpaper_folder);
+    if (n<0 || (size_t)n>=sizeof(file)) { error_message(-ENAMETOOLONG); return; }
+    int r=paint_write_image(file,PAINT_BMP24,&cv,pal);
+    if (!r) r=wallpaper_cb(wallpaper_host,file,mode);
+    if (r) message(r==-EINVAL ? "This picture cannot be used as the wallpaper." : strerror(-r));
+    else message(mode==PAINT_WALL_TILE ? "The picture is now the wallpaper (tiled)." : "The picture is now the wallpaper (centered).");
+}
+void paint_wallpaper_callback(int (*set)(void *, const char *, int), void *host, const char *folder)
+{ wallpaper_cb=set; wallpaper_host=host; wallpaper_folder=folder; }
 static void do_save(const char *p)
 {
     int r=paint_save(p,save_format);
@@ -2185,17 +2317,25 @@ static void dialog_result(const struct du_event *e)
     } else if (e->id==D_OPEN) { if (!e->index) error_message(paint_open(e->text)); }
     else if (e->id==D_SAVE) {
         if (e->index) { abandon(); return; }
-        /* The dialog already added the default extension and asked before replacing a file. */
         const char *ext=strrchr(e->text,'.');
-        snprintf(pending_path,sizeof(pending_path),"%s",e->text);
-        if (ext && (!strcmp(ext,".png") || !strcmp(ext,".PNG"))) save_format=PAINT_PNG;
-        else if (ext && (!strcmp(ext,".bmp") || !strcmp(ext,".BMP"))) { if (save_format==PAINT_PNG) save_format=PAINT_BMP8; }
-        else { abandon(); message("Use the .bmp or .png extension."); return; }
-        do_save(pending_path);
+        if (!ext) {
+            int n=snprintf(pending_path,sizeof(pending_path),"%s%s",e->text,format_ext(save_format));
+            if (n<0 || (size_t)n>=sizeof(pending_path)) { abandon(); error_message(-ENAMETOOLONG); return; }
+        } else {
+            snprintf(pending_path,sizeof(pending_path),"%s",e->text);
+            if (!format_of(ext,&save_format)) { abandon(); message("Use the .bmp, .png, .gif or .jpg extension."); return; }
+        }
+        struct stat st;
+        if (!stat(pending_path,&st)) {
+            static const char *const buttons[]={"Yes","No"};
+            du_message(ui,D_OVERWRITE,"Save As","This file exists. Replace it?",DU_DLG_ICON_QUESTION,buttons,2,1,1);
+        } else do_save(pending_path);
     }
     else if (e->id==D_FORMAT) { if (!e->index) { save_format=candidate_format; file_dialog(1); } }
     else if (e->id==D_ATTR && !e->index) { if (candidate_w!=cv.w || candidate_h!=cv.h) resize_canvas(candidate_w,candidate_h); }
     else if (e->id==D_FLIP && !e->index) transform(candidate_transform);
+    else if (e->id==D_STRETCH && !e->index) stretch_skew_apply();
+    else if (e->id==D_COLOURS && !e->index) define_colour(candidate_rgb[0],candidate_rgb[1],candidate_rgb[2]);
     else if (e->id==D_FONT && !e->index) {
         if (candidate_font<nfonts) snprintf(font_file,sizeof(font_file),"%s",font_files[candidate_font]);
         text_scale=candidate_scale; text_bold=candidate_bold; font_load(); if (text_on) text_render();
@@ -2228,6 +2368,9 @@ void paint_command(int id)
     case M_Z1: case M_Z2: case M_Z4: case M_Z6: case M_Z8: set_zoom(zooms[id-M_Z1],scx+page_w()/2,scy+page_h()/2); break;
     case M_GRID: if (zoom>=4) show_grid=!show_grid; break;
     case M_FONT: font_dialog(); break; case M_FLIP: finish_pending(); flip_dialog(); break;
+    case M_STRETCH: finish_pending(); stretch_dialog(); break;
+    case M_COLOURS: finish_pending(); colours_dialog(); break;
+    case M_WALL_TILE: set_wallpaper(PAINT_WALL_TILE); break; case M_WALL_CENTER: set_wallpaper(PAINT_WALL_CENTER); break;
     case M_INVERT: finish_pending(); transform(6); break;
     case M_ATTR: finish_pending(); drop_selection(); attributes_dialog(); break;
     case M_CLEARIMG: finish_pending(); drop_selection(); begin_op(0); fill_rect(0,0,cv.w-1,cv.h-1,bg); commit_op(); break;
@@ -2401,7 +2544,7 @@ int paint_attach(struct du_ui *u)
     if (ui) return -EBUSY;
     if (!u || u->count) return -EINVAL;
     partial_layout=0; dx0=dy0=0; dx1=dy1=-1;
-    ui=u; quit_cb=NULL; decline_cb=NULL; title_cb=NULL; callback_host=NULL;
+    ui=u; quit_cb=NULL; decline_cb=NULL; title_cb=NULL; callback_host=NULL; custom_next=0;
     fg=BLACK; bg=WHITE; tool=prev_tool=T_PENCIL; tool_hot=-1; zoom=1;
     line_w=pen_size=1; fill_style=0; brush_kind=PEN_ROUND; brush_size=eraser_size=air_size=1;
     text_scale=1; text_bold=0; opaque=1; font_file[0]=0;
@@ -2438,12 +2581,13 @@ void paint_detach(void)
     img_free(&cv); img_free(&old); pool_free(); img_free(&flt); img_free(&clip); img_free(&selection_mask); du_ta_free(&text_edit);
     ui->event=NULL; ui->paint=NULL; ui->layout=NULL; ui->menus=NULL; ui->menu_count=ui->count=0;
     ui=NULL; quit_cb=NULL; decline_cb=NULL; printing_cb=NULL; title_cb=NULL; callback_host=NULL; text=NULL;
+    ui=NULL; quit_cb=NULL; decline_cb=NULL; title_cb=NULL; callback_host=NULL; wallpaper_cb=NULL; wallpaper_folder=NULL; text=NULL;
 }
 static int install_image(const char *p, struct paint_image next)
 {
     finish_pending(); drop_selection(); drop_undo(); pool_free(); img_free(&cv);
     image_revision++; cv=next; snprintf(path,sizeof(path),"%s",p); dirty=0; scx=scy=0;
-    const char *ext=strrchr(p,'.'); save_format=ext && (!strcmp(ext,".png") || !strcmp(ext,".PNG"))?PAINT_PNG:PAINT_BMP8;
+    save_format=PAINT_BMP8; format_of(strrchr(p,'.'),&save_format);
     update_title(); layout(); return 0;
 }
 static struct { struct du_job job; struct paint_image image; char path[PAINT_PATH_MAX]; uint8_t palette[PAINT_COLORS*3]; int error; uint64_t revision; } opening;

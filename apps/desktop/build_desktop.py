@@ -22,7 +22,7 @@ ICON_FILES = ("tango.cis", *ICON_NOTICES)
 ACCESSORIES = {
     "clipbrd": ["clipbrd_main.c"],
     "calc": ["calc_main.c", "calc_view.c", "calc_model.c"],
-    "charmap": ["charmap_main.c", "charmap_view.c"],
+    "charmap": ["charmap_main.c", "charmap_view.c", "charmap_model.c"],
     "clock": ["clock_main.c", "clock_view.c", "clock_model.c"],
     "help": ["help_main.c", "help_view.c", "help_topics.c", "help_navigation.c", "help_wizard.c",
              "helpfile.c", "help_hlp.c", "help_chm.c", "help_markup.c",
@@ -37,6 +37,15 @@ ACCESSORIES = {
     # G28: WordPad (RTF editor); links libfont for the Liberation faces and shares CiukNote's file helpers.
     "wordpad": ["../wordpad/main.c", "../wordpad/app.c", "../wordpad/rich.c", "../wordpad/rtf.c", "../wordpad/layout.c",
                 "../wordpad/fonts.c", "../ciuknote/doc.c", "../ciuknote/vfs.c"],
+    "paint": ["../paint/main.c", "../paint/paint.c", "../paint/io.c", "../paint/stb.c", "../paint/xform.c", "wallpaper.c", "../desktop/settings.c"],
+    "viewer": ["viewer_main.c", "viewer_view.c", "viewer_model.c", "viewer_stb.c", "wallpaper.c", "../desktop/settings.c"],
+    # G27 games (apps/games): engine, window and main; the card drawing is shared.
+    "mines": ["../games/mines_main.c", "../games/mines_view.c", "../games/mines_model.c", "../games/cards.c"],
+    "solitaire": ["../games/solitaire_main.c", "../games/solitaire_view.c", "../games/solitaire_model.c", "../games/cards.c"],
+    "freecell": ["../games/freecell_main.c", "../games/freecell_view.c", "../games/freecell_model.c", "../games/cards.c"],
+    # G27 Serial Terminal (HyperTerminal equivalent) on the native COM ports.
+    "serial": ["../serial/serial_main.c", "../serial/serial_view.c", "../serial/serial_model.c", "../serial/screen.c", "../serial/xmodem.c"],
+    "hearts": ["../games/hearts_main.c", "../games/hearts_view.c", "../games/hearts_model.c", "../games/cards.c"],
 }
 # G30 system tools (apps/systools): Start > Programs > Accessories > System Tools.
 SYSTOOLS = ("resmeter", "schedtask", "sysinfo", "sysmon")
@@ -61,7 +70,7 @@ def inputs():
     files = [p for directory in (ROOT / "apps/desktop", ROOT / "apps/demo", ROOT / "apps/gfxdemo", ROOT / "apps/dosbox", ROOT / "apps/libdeskui",
                                  ROOT / "apps/files", ROOT / "apps/tasks", ROOT / "apps/ciuknote", ROOT / "apps/control",
                                  ROOT / "apps/ciukide", ROOT / "apps/wordpad", ROOT / "apps/regedit", ROOT / "apps/hwreport", ROOT / "apps/systools", ROOT / "apps/accessories", ROOT / "apps/paint",
-                                 ROOT / "apps/music", ROOT / "apps/terminal", ROOT / "apps/printers", ROOT / "apps/libprint", ROOT / "third_party/minimp3", ROOT / "third_party/stb", ROOT / "assets/fonts/native")
+                                 ROOT / "apps/music", ROOT / "apps/terminal", ROOT / "apps/printers", ROOT / "apps/libprint", ROOT / "apps/games", ROOT / "apps/serial", ROOT / "third_party/minimp3", ROOT / "third_party/stb", ROOT / "assets/fonts/native")
              for p in directory.rglob("*") if p.is_file() and "__pycache__" not in p.parts]
     files.extend(ROOT / name for name in ("scripts/build_sounds.py", "assets/sounds/LICENSE.txt",
                  "assets/sounds/CREDITS.TXT", "assets/sounds/kenney-interface/UPSTREAM.json",
@@ -192,6 +201,7 @@ def build():
     sources["ciukide"] = ["../ciukide/main.c", "../ciukide/app.c", "../ciukide/model.c", "../ciukide/job.c", "../ciukide/process.c",
                           "../ciuknote/doc.c", "../ciuknote/vfs.c"]
     sources["terminal"] = ["../terminal/main.c", "../terminal/app.c", "../terminal/commands.c", "../terminal/network.c", "../terminal/disktools.c", "../files/backup.c", "../terminal/lua.c", "../files/model.c", "../files/transfer.c", "../files/clipboard.c", "../files/vfs.c", "../tasks/model.c", "../terminal/recovery.c", "../sysrecovery/regcheck.c", "../sysrecovery/sfc.c", "../sysrecovery/scanreport.c", "../../src/kernel/lib/sha256.c"]
+    sources["terminal"] = ["../terminal/main.c", "../terminal/app.c", "../terminal/commands.c", "../terminal/script.c", "../terminal/lua.c", "../files/model.c", "../files/transfer.c", "../files/vfs.c", "../tasks/model.c"]
     sources["hwreport"] = ["../hwreport/main.c", "../hwreport/native.c", "../hwreport/report.c", "../hwreport/archive.c", "../hwreport/textlink.c", "../accessories/acc.c"]
 
     systools = ["../systools/sysinfo.c", "../systools/resmeter.c", "../systools/monitor.c", "../systools/devctl.c", "../systools/sched.c", "../systools/profiles.c",

@@ -10,6 +10,8 @@
 #pragma weak term_recovery /* recovery.c; host tests link the commands alone */
 static unsigned lower(unsigned c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
 static int equal(const char *a, const char *b) { return fm_same_path(a,b); }
+static int wildcard(const char *p, const char *s);
+int term_wildcard(const char *p, const char *s) { return wildcard(p,s); }
 static int wildcard(const char *p, const char *s)
 {
     const char *star = NULL, *retry = NULL;
@@ -23,7 +25,7 @@ static int wildcard(const char *p, const char *s)
     while (*p == '*') p++;
     return !*p;
 }
-static int parse(char *s, char **argv)
+int term_parse(char *s, char **argv)
 {
     int n = 0; char *read = s, *write = s;
     while (*read) {
@@ -290,15 +292,21 @@ static const char help[]=
 "LUA [script.lua args]  script.lua [args]   RUN (unavailable)\n"
 "SCANREG [/BACKUP] [/COMMENT=text] [/RESTORE [n]] [/FIX]   SFC [/UPDATE f | /RESTORE f src]\n"
 "SCANDISK [d:] [/A] [/THOROUGH] [/AUTOFIX]   WIN (after Command prompt only)\n"
+"SET [name=value]       ATTRIB [+R -R +H -H +S -S +A -A] [files]\n"
+"LABEL [d:] [text]      VOL [d:]            CHKDSK [d:]\n"
+"FIND [/I /V /C /N] \"text\" [files]   SORT [/R]   MORE\n"
+"IPCONFIG [/ALL]        PING, FORMAT (unavailable)\n"
+"cmd | cmd   cmd > file   cmd >> file   cmd < file   name.bat [args]\n"
+"Batch: ECHO ON/OFF REM :label GOTO IF [NOT] EXIST/ERRORLEVEL/a==b FOR CALL SHIFT PAUSE EXIT [/B]\n"
 "REG is reserved. Quote paths with spaces; * and ? match names.\n"
 "Tab: complete path; Up/Down: history; PgUp/PgDn: scroll.\n"
 "Ctrl+C: copy selection or interrupt; Ctrl+V: paste.\n"
 "Disk tools: BACKUP, RESTORE, FDISK (type the command for help).\n"
 "Interactive Lua: .exit returns to the command prompt.\n";
-int term_execute(struct terminal *t,const char *line)
+int term_command(struct terminal *t,const char *line)
 {
     if(strlen(line)>=DU_TEXT_MAX) { term_write(t,"Command too long.\n"); return -E2BIG; }
-    char text[DU_TEXT_MAX]; strcpy(text,line); char *a[TERM_ARGS]; int n=parse(text,a),r=0;
+    char text[DU_TEXT_MAX]; strcpy(text,line); char *a[TERM_ARGS]; int n=term_parse(text,a),r=0;
     if(n<0)r=n;
     else if(!n)return 0;
     else if(equal(a[0],"HELP")) { if(n!=1)r=-EINVAL; else term_write(t,help); }
@@ -311,6 +319,7 @@ int term_execute(struct terminal *t,const char *line)
     else if(term_recovery && term_recovery(t,n,a,&r)) { } /* G14: SCANREG, SCANDISK, SFC, WIN */
     else if(equal(a[0],"RUN"))term_write(t,"not available in this release\n");
     else if(equal(a[0],"BACKUP") || equal(a[0],"RESTORE") || equal(a[0],"FDISK"))r=t->host.disktool ? t->host.disktool(t->host.ctx,n,a) : -ENOSYS;
+    else if(equal(a[0],"RUN"))term_write(t,"not available in this release\n");   /* needs a child process with redirected standard streams */
     else if(equal(a[0],"REG"))term_write(t,"REG is reserved for a later release.\n");
     else if(equal(a[0],"DIR") || equal(a[0],"ls"))r=n>2 ? -EINVAL : directory(t,n==2 ? a[1] : t->cwd[0] ? t->cwd : "Computer");
     else if(equal(a[0],"CD") || (n==1 && strlen(a[0])==2 && a[0][1]==':')) {
@@ -327,7 +336,8 @@ int term_execute(struct terminal *t,const char *line)
             if(!r)r=(equal(a[0],"MD") || equal(a[0],"mkdir")) ? t->host.fs.mkdir(t->host.fs.ctx,path) : t->host.fs.rmdir(t->host.fs.ctx,path); }
     }
     else if(equal(a[0],"TYPE") || equal(a[0],"cat") || equal(a[0],"DEL") || equal(a[0],"rm")) {
-        if(n<2)r=-EINVAL;
+        if(n<2 && n==1 && t->in_data && (equal(a[0],"TYPE") || equal(a[0],"cat")))term_write(t,t->in_data);   /* standard input: TYPE < file, cmd | TYPE */
+        else if(n<2)r=-EINVAL;
         for(int k=1;!r && k<n;k++) { struct matches m={0}; r=expand(t,a[k],&m);
             for(unsigned i=0;!r && i<m.count;i++)r=(equal(a[0],"TYPE") || equal(a[0],"cat")) ? type_file(t,m.paths[i]) : t->host.fs.unlink(t->host.fs.ctx,m.paths[i]); release(&m); }
     }
@@ -351,10 +361,29 @@ int term_execute(struct terminal *t,const char *line)
         else if(equal(a[0],"LUA") && n==1) { t->lua_mode=1; term_write(t,"Lua 5.4.8. Type .exit to return.\n"); }
         else r=term_lua(t,equal(a[0],"LUA") ? a[1] : a[0],n-(equal(a[0],"LUA") ? 2 : 1),a+(equal(a[0],"LUA") ? 2 : 1));
     }
+    else if(term_extra(t,n,a,&r)) {}
     else r=system_cmd(t,n,a);
     if(r)term_printf(t,"%s: %s (error %d)\n",n>0 ? a[0] : "Syntax",strerror(-r),-r);
     if(t->ui)du_invalidate(t->ui,(struct du_rect){4,4,t->ui->canvas.width-8,t->ui->canvas.height-8}); return r;
 }
+int term_glob(struct terminal *t,const char *pattern,char ***names,unsigned *count)
+{
+    struct matches m={0}; int r=expand(t,pattern,&m);
+    *names=NULL; *count=0;
+    if(r) { release(&m); return r; }
+    const char *slash=strpbrk(pattern,"/\\"); char **out=calloc(m.count?m.count:1,sizeof(*out));
+    if(!out) { release(&m); return -ENOMEM; }
+    for(unsigned i=0;i<m.count;i++) {
+        const char *base=fm_basename(m.paths[i]); size_t prefix=0;
+        if(slash) { const char *last=pattern+strlen(pattern); while(last>pattern && last[-1]!='/' && last[-1]!='\\')last--; prefix=(size_t)(last-pattern); }
+        out[i]=malloc(prefix+strlen(base)+1);
+        if(!out[i]) { term_glob_free(out,i); release(&m); return -ENOMEM; }
+        memcpy(out[i],pattern,prefix); strcpy(out[i]+prefix,base);
+    }
+    *names=out; *count=m.count; release(&m); return 0;
+}
+void term_glob_free(char **names,unsigned count)
+{ for(unsigned i=0;i<count;i++)free(names[i]); free(names); }
 char *term_capture(struct terminal *t,const char *line,int *error)
 {
     if(t->capture) { *error=-EBUSY; return NULL; }

@@ -307,7 +307,7 @@ class MusicTests(unittest.TestCase):
         acc = load('music_viewer_acc', ROOT/'tests/host/desktop/test_accessories.py')
         out = ROOT/'build/f4-07'; out.mkdir(parents=True, exist_ok=True)
         self.harness('viewer', ['apps/accessories/viewer_model.c', 'apps/accessories/viewer_view.c',
-                               'apps/accessories/viewer_stb.c', 'apps/accessories/acc.c', *acc.TOOLKIT,
+                               'apps/accessories/viewer_stb.c', 'apps/accessories/wallpaper.c', 'apps/desktop/settings.c', 'apps/desktop/protocol.c', 'apps/accessories/acc.c', *acc.TOOLKIT,
                                'tests/host/desktop/viewer_test.c'], out)
         from PIL import Image
         for raw in out.glob('viewer-*.xrgb'):

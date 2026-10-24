@@ -3,6 +3,7 @@
 #include <ciuki/net.h>
 #include <ciuki/audio.h>
 #include <ciuki/proc.h>
+#include <ciuki/fileinfo.h>
 #include <ciuki/display.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -48,6 +49,25 @@ static int kill(void *ctx,uint32_t pid)
 { struct ciuki_message m; desk_message(&m,DESK_END_TASK,16); desk_put32(m.data+12,pid); return send(ctx,&m); }
 static int power(void *ctx,unsigned action)
 { struct ciuki_message m; desk_message(&m,DESK_TERMINAL_POWER,12); desk_put32(m.data+8,action); return send(ctx,&m); }
+/* G27: ATTRIB, LABEL, VOL and CHKDSK use the same calls as Files (syscall 98 and /dev/media). */
+static int attributes(void *ctx,const char *path,uint32_t value) { (void)ctx; return ciuki_set_attributes(path,value) ? -errno : 0; }
+static int label_get(void *ctx,unsigned drive,char out[33])
+{
+    (void)ctx; struct ciuki_media_label r={.version=CIUKI_MEDIA_VERSION,.size=sizeof(r),.drive=drive};
+    int e=device("/dev/media",MEDIA_GET_LABEL,&r,sizeof(r)); if(!e)snprintf(out,33,"%s",r.label); return e;
+}
+static int label_set(void *ctx,unsigned drive,const char *label)
+{
+    (void)ctx; struct ciuki_media_label r={.version=CIUKI_MEDIA_VERSION,.size=sizeof(r),.drive=drive};
+    if(strlen(label)>CIUKI_MEDIA_LABEL_MAX)return -EINVAL; strcpy(r.label,label);
+    return device("/dev/media",MEDIA_SET_LABEL,&r,sizeof(r));
+}
+static int space(void *ctx,unsigned drive,uint64_t *total,uint64_t *free_bytes)
+{
+    (void)ctx; struct ciuki_media_space sp={.version=CIUKI_MEDIA_VERSION,.size=sizeof(sp),.drive=drive};
+    int e=device("/dev/media",MEDIA_GET_SPACE,&sp,sizeof(sp)); if(e)return e;
+    *total=(uint64_t)sp.cluster_bytes*sp.total_clusters; *free_bytes=(uint64_t)sp.cluster_bytes*sp.free_clusters; return 0;
+}
 static int cwd(void *ctx,const char *path) { (void)ctx; return chdir(path) ? -errno : 0; }
 static time_t now(void *ctx) { (void)ctx; return time(NULL); }
 static int disktool(void *ctx,int n,char **a) { struct native_terminal *x=ctx; return term_disktool(&x->app,n,a); }
@@ -83,7 +103,8 @@ int main(int argc,char **argv)
     if(du_window_open_resizable(&x->window,&x->ui,channel,TERM_WIDTH,TERM_HEIGHT,"Terminal",304,168)) { free(x); return 1; }
     du_help_topic(&x->ui, "terminal"); /* G15 */
     struct term_host h={.fs=*fm_native_vfs(),.ctx=x,.net=net,.network_command=term_network_command,.mixer=mixer,.volume=volume,.processes=processes,.display=display,
-        .launch=launch,.kill=kill,.power=power,.cwd=cwd,.now=now,.pump=pump,.quit=quit,.disktool=disktool};
+        .launch=launch,.kill=kill,.power=power,.cwd=cwd,.now=now,.pump=pump,.quit=quit,
+        .attributes=attributes,.label_get=label_get,.label_set=label_set,.space=space,.disktool=disktool};
     if(term_attach(&x->app,&x->ui,&h)) { du_window_destroy(&x->window); free(x); return 1; }
     x->window.user=x; x->window.message=message; x->window.close_request=close_request;
     x->window.query_end_session=query_end_session;
