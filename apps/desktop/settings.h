@@ -46,7 +46,6 @@ struct ciuki_settings {
     struct regional regional;
     char desktop_theme_name[32];
     int document_icon, recycle_icon;
-    int pointer_scheme;
     struct cfg_desktop_theme desktop_themes[CFG_DESKTOP_THEMES];
     struct appearance appearance;
     int appearance_set;
@@ -71,7 +70,6 @@ struct ciuki_settings {
     int cursor_blink_ms;            /* 0 = steady; otherwise 100..1200 */
     int mouse_swap, mouse_trails;   /* boolean, 0/1 (off) or 2..7 */
     int wheel_lines;                /* 0..100, 101 = one page */
-    int pointer_scheme;             /* 0 Ciuki, 1 large, 2 inverted */
     int layout_switch;              /* Left Alt+Shift and tray indicator */
     struct access_settings access;  /* G25: access_* keys (access.h) */
     char recent[CFG_RECENT_MAX][CFG_PATH_MAX];

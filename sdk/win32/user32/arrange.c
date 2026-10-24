@@ -90,7 +90,10 @@ static BOOL place(HWND h, int x, int y, int cx, int cy) {
     return 0;
   if (w->style & WS_MAXIMIZE)
     ShowWindow(h, 9 /* SW_RESTORE */);
-  return SetWindowPos(h, 0, x, y, cx, cy, SWP_NOZORDER | SWP_NOACTIVATE);
+  w = u32_window(h);
+  if (!w) return 0;
+  return SetWindowPos(h, 0, x, y, cx, cy, SWP_NOZORDER | SWP_NOACTIVATE |
+                      ((w->style & WS_THICKFRAME) ? 0 : SWP_NOSIZE));
 }
 uint16_t W32API CascadeWindows(HWND parent, UINT how, const RECT *rect, UINT count,
                            const HWND *kids) {

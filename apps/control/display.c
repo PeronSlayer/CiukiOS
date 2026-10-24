@@ -27,6 +27,19 @@ void cp_settings_message(struct ciuki_message *m, uint32_t serial, unsigned requ
         desk_put32(m->data + 12, (uint32_t)value);
 }
 
+/* Reuse the existing launch protocol; OPEN_POWER means Shut Down, not the
+ * Power Management applet. Only these two panel arguments are authorised. */
+int cp_applet_message(struct ciuki_message *m,uint32_t serial,int page)
+{
+    const char *arg=page==CP_DISPLAY ? "--panel=display" : page==CP_POWER ? "--panel=power" : NULL;
+    if (!arg) return -EINVAL;
+    unsigned t=7,n=(unsigned)strlen(arg);
+    desk_message(m,DESK_LAUNCH,16+t+n);m->data[0]=DESK_SHELL_VERSION;m->data[2]=DESK_RESIZE_MINOR;
+    desk_put32(m->data+4,serial);desk_put32(m->data+8,t);memcpy(m->data+12,"control",t);
+    desk_put32(m->data+12+t,n);memcpy(m->data+16+t,arg,n);
+    return 0;
+}
+
 static void label(struct cp_app *a, int id, const char *s)
 { struct du_widget *w=du_get(a->ui,id); if (w && strcmp(w->text,s)) { du_set_text(w,s); du_invalidate(a->ui,w->box); } }
 static int eligible(const struct ciuki_display_mode *m)

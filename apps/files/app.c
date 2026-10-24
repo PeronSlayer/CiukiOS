@@ -1419,8 +1419,22 @@ static void property_changed(struct du_ui *u,const struct du_event *e,void *ctx)
     if (e->type==DU_EV_SELECT && !a->property_options) property_page(a);
     if (e->type==DU_EV_CHANGE) { u->dialog.items[2].disabled=0; du_invalidate(u,u->dialog.box); }
 }
-/* Integer polar sectors. Start the blue used-space sector at noon;
- * the table bounds each 1/64 turn without floating point or libm. */
+/* Group bytes without locale state; Windows 98 drive properties show
+ * exact bytes alongside binary megabytes, even on small volumes. */
+static void drive_space_text(char out[64], uint64_t bytes)
+{
+    char digits[24], grouped[32];
+    snprintf(digits,sizeof(digits),"%llu",(unsigned long long)bytes);
+    size_t len=strlen(digits), n=0;
+    for (size_t i=0;i<len;i++) {
+        if (i && (len-i)%3==0) grouped[n++]=',';
+        grouped[n++]=digits[i];
+    }
+    grouped[n]=0;
+    snprintf(out,64,"%s bytes %llu MB",grouped,(unsigned long long)(bytes/1048576));
+}
+/* Elliptical top and shaded front thickness, integer-only. A unit ray is
+ * chosen in the untilted disc so the used/free ratio survives projection. */
 static void property_paint(struct du_ui *u,void *ctx)
 {
     struct files_app *a=ctx;
@@ -1430,19 +1444,27 @@ static void property_paint(struct du_ui *u,void *ctx)
     const struct ciuki_media_space *sp=&a->property_space;
     uint32_t total=sp->total_clusters, free=sp->free_clusters>total ? total : sp->free_clusters;
     unsigned used=total ? (unsigned)((uint64_t)(total-free)*64/total) : 0;
-    int cx=u->dialog.box.x+u->dialog.box.w-72,cy=u->dialog.box.y+214;
-    for (int y=-34;y<=34;y++) for (int x=-34;x<=34;x++) if (x*x+y*y<=34*34) {
-        unsigned angle=0; int best=-100000;
-        /* Choose the nearest clockwise unit ray, without atan2/libm. */
-        for (unsigned k=0;k<64;k++) {
-            unsigned q=k/16,t=k%16; int sn=sine[t],cs=sine[16-t];
-            int vx=q==0 ? sn : q==1 ? cs : q==2 ? -sn : -cs;
-            int vy=q==0 ? -cs : q==1 ? sn : q==2 ? cs : -sn;
-            int dot=vx*x+vy*y;
-            if (dot>best) { best=dot; angle=k; }
+    const uint32_t blue=0xff2059c5u,purple=0xffc52dafu;
+    int pitch=desk_font_line(desk_theme->font_ui)+1;
+    int legend_y=u->dialog.box.y+DESK_TITLE+42+3*pitch;
+    du_fill(&u->canvas,(struct du_rect){u->dialog.box.x+24,legend_y,10,10},blue);
+    du_fill(&u->canvas,(struct du_rect){u->dialog.box.x+24,legend_y+pitch,10,10},purple);
+    int cx=u->dialog.box.x+366,cy=u->dialog.box.y+250;
+    /* Back-to-front layers leave a ten-pixel front wall below the top. */
+    for (int layer=1;layer>=0;layer--) for (int y=-32;y<=32;y++) for (int x=-96;x<=96;x++)
+        if (x*x+9*y*y<=96*96) {
+            unsigned angle=0; int best=-100000;
+            for (unsigned k=0;k<64;k++) {
+                unsigned q=k/16,t=k%16; int sn=sine[t],cs=sine[16-t];
+                int vx=q==0 ? sn : q==1 ? cs : q==2 ? -sn : -cs;
+                int vy=q==0 ? -cs : q==1 ? sn : q==2 ? cs : -sn;
+                int dot=vx*x+vy*y*3;
+                if (dot>best) { best=dot; angle=k; }
+            }
+            uint32_t colour=angle<used ? blue : purple;
+            if (layer) colour=(colour&0xff000000u)|((colour&0xfefefeu)>>1);
+            du_fill(&u->canvas,(struct du_rect){cx+x,cy+y,1,layer ? 11 : 1},colour);
         }
-        du_fill(&u->canvas,(struct du_rect){cx+x,cy+y,1,1},angle<used ? 0xff2059c5u : 0xffc52dafU);
-    }
 }
 static int property_accept(struct du_ui *u,int button,void *ctx)
 {
@@ -1521,16 +1543,16 @@ static void properties_dialog(struct files_app *a)
     d->accept=property_accept; d->accept_ctx=a; d->changed=property_changed; d->paint=property_paint; d->sheet_ctx=a;
     d->items[2].disabled=1;
     if (a->property_drive>=0) {
-        char used[48]="Unavailable",free_text[48]="Unavailable",capacity[48]="Unavailable";
+        char used[64]="Unavailable",free_text[64]="Unavailable",capacity[64]="Unavailable";
         struct ciuki_media_space *sp=&a->property_space;
         if (a->property_have_space) {
             uint64_t total=(uint64_t)sp->total_clusters*sp->cluster_bytes;
-            uint64_t free=(uint64_t)sp->free_clusters*sp->cluster_bytes;
-            files_size_text(capacity,sizeof(capacity),total);
+            uint64_t free=(uint64_t)(sp->free_clusters>sp->total_clusters ? sp->total_clusters : sp->free_clusters)*sp->cluster_bytes;
+            drive_space_text(capacity,total);
             if (sp->flags & CIUKI_MEDIA_SPACE_COUNTING) { strcpy(used,"calculating..."); strcpy(free_text,"calculating..."); }
-            else { files_size_text(used,sizeof(used),total>free ? total-free : 0); files_size_text(free_text,sizeof(free_text),free); }
+            else { drive_space_text(used,total-free); drive_space_text(free_text,free); }
         }
-        snprintf(a->property_text,sizeof(a->property_text),"Drive %c:\nType:\tDisk drive\n\nUsed space:\t%s (blue)\nFree space:\t%s (purple)\nCapacity:\t%s\n\nVolume label:",'A'+a->property_drive,used,free_text,capacity);
+        snprintf(a->property_text,sizeof(a->property_text),"Drive %c:\nType:\tDisk drive\n\n    Used space:\t%s\n    Free space:\t%s\nCapacity:\t%s\n\nVolume label:",'A'+a->property_drive,used,free_text,capacity);
         struct du_widget *w=du_property_control(a->ui,4,DU_EDIT,400,(struct du_rect){24,178,220,23},a->property_label);
         w->disabled=!a->set_label || (have && (info->flags & CIUKI_FILE_INFO_READ_ONLY_MEDIUM));
         if (a->backup_call) du_property_control(a->ui,6,DU_BUTTON,C_BACKUP,(struct du_rect){24,157,150,25},"&Backup Now...");

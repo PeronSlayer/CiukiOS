@@ -540,7 +540,7 @@ int du_ta_text(struct du_textarea *ta, unsigned ch)
  * else (control characters, other scripts) is a hollow placeholder box. */
 static void draw_char(struct du_canvas *c, int x, int y, unsigned ch, uint32_t ink, int bold)
 {
-    if ((ch >= 0x20 && ch < 0x7f) || (ch >= 0xa0 && ch <= 0xff) || ch == 0x2022 || ch == 0x2026) {
+    if (desk_font_code_index(ch)>=0) {
         char s[4]; size_t n;
         if (ch < 0x80) { s[0] = (char)ch; n = 1; }
         else if (ch < 0x800) { s[0] = (char)(0xc0 | (ch >> 6)); s[1] = (char)(0x80 | (ch & 63)); n = 2; }

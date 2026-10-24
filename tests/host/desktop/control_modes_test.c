@@ -34,10 +34,14 @@ static int apply(void *ctx, unsigned request, int value, int flag)
 {
     (void)ctx; if (queue_error) return -1;
     cp_settings_message(&wire, (unsigned)++requests, request, value, flag);
-    struct desk_packet p;
+    static struct desk_packet p;
     assert(desk_parse(&wire, 1, NULL, &p) && p.request == request && p.serial == (unsigned)requests);
     if (request == DESK_SETTINGS_DISPLAY || request == DESK_SETTINGS_DISPLAY_PREVIEW) { assert(!flag && !p.values[1] && !p.values[2]); requested = (uint16_t)p.values[0]; }
     return 0;
+}
+static int open_applet(void *ctx,int page)
+{
+    (void)ctx; return cp_applet_message(&wire,(unsigned)++requests,page);
 }
 static void changed_mode(uint16_t id)
 {
@@ -59,7 +63,7 @@ static int hwid_lookup(void *ctx,unsigned vendor,unsigned device,char *out,size_
 static void attach(int page)
 {
     memset(&a, 0, sizeof(a));
-    a.host = (struct cp_host){.load = load, .save = save, .apply = apply, .display = query, .portrait = portrait, .hwid_name=hwid_lookup,
+    a.host = (struct cp_host){.load = load, .save = save, .apply = apply, .open_applet=open_applet, .display = query, .portrait = portrait, .hwid_name=hwid_lookup,
                              .screen_w = 1024, .screen_h = 768, .machine = "i686"};
     du_init(&u, pixels, CP_WIDTH, CP_HEIGHT); u.focused_window = 1;
     assert(!cp_attach(&a, &u, page) && u.count < DU_WIDGETS);
@@ -128,13 +132,11 @@ static void check_layout(void)
 {
     for (unsigned i = 0; i < u.count; i++) {
         const struct du_widget *p = &u.widgets[i];
-        if (p->hidden || p->kind == DU_TABS) continue;
+        if (p->hidden || (p->kind == DU_TABS || p->kind == DU_GROUP)) continue;
         assert(p->box.x >= 8 && p->box.x + p->box.w <= CP_WIDTH - 8 && p->box.y + p->box.h <= CP_HEIGHT);
         for (unsigned j = i + 1; j < u.count; j++) {
             const struct du_widget *q = &u.widgets[j];
-            if (q->hidden || q->kind == DU_TABS) continue;
-            if(p->box.x < q->box.x + q->box.w && q->box.x < p->box.x + p->box.w && p->box.y < q->box.y + q->box.h && q->box.y < p->box.y + p->box.h)
-                fprintf(stderr,"overlapping widgets: %d and %d\n",p->id,q->id);
+            if (q->hidden || (q->kind == DU_TABS || q->kind == DU_GROUP)) continue;
             assert(!(p->box.x < q->box.x + q->box.w && q->box.x < p->box.x + p->box.w && p->box.y < q->box.y + q->box.h && q->box.y < p->box.y + p->box.h));
         }
     }
@@ -146,15 +148,35 @@ int main(int argc, char **argv)
     FILE *f = fopen(argv[2], "rb"); assert(f && fread(portrait, 4, 256 * 256, f) == 256 * 256); fclose(f);
     init(); cp_open(&a,CP_DISPLAY); select(CP_DISPLAY_TABS_ID,CP_SCREEN_SAVER);
     assert(du_get(&u,CP_SAVER_KIND) && du_get(&u,CP_SAVER_WAIT)); check_layout();
-    select(CP_SAVER_KIND,2); assert(a.cfg.saver_kind==2 && a.display_dirty);
-    at_click_widget(&u,CP_SAVER_ENABLE); assert(a.cfg.saver_enabled);
+    assert(!strcmp(du_get(&u,CP_SAVER_KIND)->text,"(None)"));
+    assert(du_get(&u,CP_SAVER_PASSWORD)->disabled && du_get(&u,CP_SAVER_CHANGE)->disabled);
+    assert(du_get(&u,CP_SAVER_PREVIEW)->disabled);
+    at_click_widget(&u,CP_SAVER_KIND); assert(u.popup_count==4 && !strcmp(u.popup[0].label,"(None)"));
+    du_menu_close(&u);
+    struct du_event choice={.type=DU_EV_ACTIVATE,.id=CP_SAVER_STARS}; u.event(&u,&choice,u.user);
+    assert(a.cfg.saver_kind==2 && a.cfg.saver_enabled && a.display_dirty);
+    du_set_text(du_get(&u,CP_SAVER_WAIT),"3");
     struct du_event wait={.type=DU_EV_CHANGE,.id=CP_SAVER_WAIT,.index=3};
     u.event(&u,&wait,u.user); assert(a.cfg.saver_seconds==180);
+    at_click_widget(&u,CP_SAVER_UP); assert(a.cfg.saver_seconds==240);
+    at_click_widget(&u,CP_SAVER_DOWN); assert(a.cfg.saver_seconds==180);
+    at_tap(&u,DU_KEY_UP); assert(a.cfg.saver_seconds==240);
+    at_tap(&u,DU_KEY_DOWN); assert(a.cfg.saver_seconds==180);
+    du_set_text(du_get(&u,CP_SAVER_WAIT),"1441");u.event(&u,&wait,u.user);assert(a.cfg.saver_seconds==180);
+    du_set_text(du_get(&u,CP_SAVER_WAIT),"bad");u.event(&u,&wait,u.user);assert(a.cfg.saver_seconds==180);
+    du_set_text(du_get(&u,CP_SAVER_WAIT),"3");
     du_render(&u); at_save(argv[1],"control-screen-saver",&u);
+    uint32_t *old=malloc(sizeof(pixels)); assert(old); memcpy(old,pixels,sizeof(pixels));
+    du_tick(&u,u.now+100000000ull); du_render(&u); assert(memcmp(old,pixels,sizeof(pixels)));
+    memcpy(old,pixels,sizeof(pixels)); u.dirty=1;du_render(&u);assert(!memcmp(old,pixels,sizeof(pixels)));free(old);
+    at_click_widget(&u,CP_SAVER_POWER); static struct desk_packet power;
+    assert(desk_parse(&wire,1,NULL,&power) && power.opcode==DESK_LAUNCH && !strcmp(power.title,"control") && !strcmp(power.argument,"--panel=power"));
     at_click_widget(&u,CP_SAVER_SETTINGS); assert(du_dialog_id(&u)==CP_SAVER_SETTINGS); du_dialog_close(&u);
     at_click_widget(&u,CP_SAVER_PREVIEW);
-    struct desk_packet preview; assert(desk_parse(&wire,1,NULL,&preview));
+    static struct desk_packet preview; assert(desk_parse(&wire,1,NULL,&preview));
     assert(preview.request==DESK_SETTINGS_SAVER_PREVIEW && preview.values[0]==2);
+    choice.id=CP_SAVER_NONE;u.event(&u,&choice,u.user);assert(!a.cfg.saver_enabled && a.cfg.saver_kind==2);
+    choice.id=CP_SAVER_STARS;u.event(&u,&choice,u.user);assert(a.cfg.saver_enabled && a.cfg.saver_seconds==180);
     at_click_widget(&u,CP_APPLY);
     assert(strstr(saved,"saver_kind=2\n") && strstr(saved,"saver_seconds=180\n"));
     assert(cp_close(&a) && a.cfg.saver_kind==1 && !a.cfg.saver_enabled);
@@ -217,6 +239,11 @@ int main(int argc, char **argv)
     assert(a.cfg.appearance.dpi==144);
     assert(cp_close(&a)); cp_detach(&a);
     puts("PASS G23 Control Panel: every Appearance item, Effects toggles, Advanced 96/120/custom DPI and tab geometry");
+    init(); cp_open(&a,CP_HOME);
+    struct du_event home={.type=DU_EV_SELECT,.id=CP_CATEGORY,.index=CP_CAT_APPEARANCE};u.event(&u,&home,u.user);
+    struct du_event display={.type=DU_EV_OPEN,.id=101,.index=0};u.event(&u,&display,u.user);
+    assert(a.page==CP_HOME && desk_parse(&wire,1,NULL,&power) && !strcmp(power.argument,"--panel=display"));
+    assert(cp_applet_message(&wire,999,CP_MOUSE)==-EINVAL);cp_detach(&a);
     init(); check_layout();
     assert(a.area_count == 4 && !strcmp(a.area_items[2].text[0], "1024 x 768") && a.area == 2);
     assert(a.depth_count == 2 && a.depths[0] == 16 && a.depths[1] == 32 && a.depth == 1);
@@ -324,7 +351,7 @@ int main(int argc, char **argv)
     cp_settings_saved(&a,0); cp_tick(&a);
     assert(a.mode_state==CP_MODE_REVERT && requested==0x118);
     changed_mode(requested); cp_display_result(&a,0); cp_tick(&a); assert(a.quit); cp_detach(&a);
-    struct desk_packet p;
+    static struct desk_packet p;
     cp_settings_message(&wire, 42, DESK_SETTINGS_DISPLAY, 0x118, 0); assert(desk_parse(&wire, 1, NULL, &p));
     assert(!desk_parse(&wire, 0, NULL, &p)); desk_put32(wire.data + 16, 1); assert(!desk_parse(&wire, 1, NULL, &p));
     cp_settings_message(&wire, 42, DESK_SETTINGS_DISPLAY, 0x118, 0); wire.data[0] = DESK_VERSION; assert(!desk_parse(&wire, 1, NULL, &p));

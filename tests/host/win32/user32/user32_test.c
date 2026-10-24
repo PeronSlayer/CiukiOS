@@ -1197,7 +1197,7 @@ static void test_arrange(void) {
   CHECK(p);
   HWND k[3];
   for (UINT i = 0; i < 3; i++) {
-    k[i] = CreateWindowExA(0, "USER fixture", "kid", WS_CHILD | WS_VISIBLE, 0,
+    k[i] = CreateWindowExA(0, "USER fixture", "kid", WS_CHILD | WS_VISIBLE | WS_THICKFRAME, 0,
                            0, 50, 50, p, (HANDLE)(uintptr_t)(20 + i), 0, 0);
     CHECK(k[i]);
   }
@@ -1223,7 +1223,7 @@ static void test_arrange(void) {
   /* four and five windows fill a grid; the short last line shares its width */
   HWND more[2];
   for (UINT i = 0; i < 2; i++)
-    more[i] = CreateWindowExA(0, "USER fixture", "more", WS_CHILD | WS_VISIBLE,
+    more[i] = CreateWindowExA(0, "USER fixture", "more", WS_CHILD | WS_VISIBLE | WS_THICKFRAME,
                               0, 0, 50, 50, p, (HANDLE)(uintptr_t)(30 + i), 0, 0);
   HWND five[5] = {k[0], k[1], k[2], more[0], more[1]};
   CHECK(TileWindows(p, MDITILE_VERTICAL, &area, 5, five) == 5);
@@ -1255,13 +1255,27 @@ static void test_arrange(void) {
   HWND top[3];
   for (UINT i = 0; i < 3; i++)
     top[i] = CreateWindowExA(i == 1 ? WS_EX_TOOLWINDOW : 0, "USER fixture", "top",
-                             WS_VISIBLE | WS_CAPTION, 5, 40, 60, 60, 0, 0, 0, 0);
+                             WS_VISIBLE | WS_CAPTION | WS_THICKFRAME, 5, 40, 60, 60, 0, 0, 0, 0);
   CHECK(SetWindowPos(top[2], HWND_TOPMOST, 0, 0, 0, 0,
                      SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE));
   RECT work = {0, 32, 800, 600};
   CHECK(TileWindows(0, 0, &work, 3, top) == 1);
   CHECK(local_rect(top[0]).left == 0 && local_rect(top[0]).top == 32 &&
         local_rect(top[0]).right == 800 && local_rect(top[1]).left == 5);
+  /* A fixed-size property dialog moves but never takes the cell's size. */
+  HWND fixed=CreateWindowExA(0,"USER fixture","Display Properties",WS_VISIBLE | WS_CAPTION,
+                              27,61,260,180,0,0,0,0);
+  RECT fixed_before=local_rect(fixed); HWND mixed[2]={top[0],fixed};
+  CHECK(CascadeWindows(0,0,&work,2,mixed)==2);
+  RECT fr=local_rect(fixed);
+  CHECK(fr.right-fr.left==fixed_before.right-fixed_before.left && fr.bottom-fr.top==fixed_before.bottom-fixed_before.top);
+  CHECK(TileWindows(0,MDITILE_HORIZONTAL,&work,2,mixed)==2);
+  fr=local_rect(fixed);
+  CHECK(fr.right-fr.left==fixed_before.right-fixed_before.left && fr.bottom-fr.top==fixed_before.bottom-fixed_before.top);
+  CHECK(TileWindows(0,MDITILE_VERTICAL,&work,2,mixed)==2);
+  fr=local_rect(fixed);
+  CHECK(fr.right-fr.left==fixed_before.right-fixed_before.left && fr.bottom-fr.top==fixed_before.bottom-fixed_before.top);
+  CHECK(DestroyWindow(fixed));
   for (UINT i = 0; i < 3; i++) CHECK(DestroyWindow(top[i]));
   CHECK(DestroyWindow(p));
   printf("TRACE arrange: cascade tile zorder grid skip restore iconic "

@@ -336,10 +336,8 @@ static void text_font_rows(struct du_canvas *c, int font, int x, int y, const ch
     struct desk_paint p = painter(c);
     for (size_t n=0; *s && n<chars; n++) {
         size_t used; unsigned ch=desk_utf8_decode(s,&used); s+=used;
-        /* Same font coverage as theme.c: ASCII, Latin-1, bullet, ellipsis,
-         * otherwise '?'. Font rasters and pen advances stay unchanged. */
-        int index=ch>=0x20 && ch<0x7f ? (int)ch-0x20 : ch>=0xa0 && ch<=0xff ? 95+(int)ch-0xa0 :
-                  ch==0x2022 ? 191 : ch==0x2026 ? 192 : '?'-0x20;
+        int index=desk_font_code_index(ch);
+        if (index<0) index='?'-0x20;
         const struct desk_glyph *g=&f->glyphs[index];
         int gx=x+g->left, gy=baseline+g->top;
         struct du_rect v=visible(c,(struct du_rect){gx,gy,g->w,g->h});

@@ -2161,6 +2161,40 @@ static void row_taskbar_customization(unsigned m)
     wm_end();
 }
 #include "window_custom_test.h"
+/* fx-28, appended after the existing model rows. */
+static void row_fixed_arrange(unsigned m)
+{
+    row_name="fixed-size arrange"; wm_begin(m,1);
+    struct fake_app *a=app_open("control",300,220,80,80);
+    struct fake_app *b=app_open("control",320,240,230,190); (void)b; /* resizable Control Panel browser */
+    struct desk_client *fixed=&d.clients[a->slot]; fixed->resizable=0;
+    struct desk_box original=fixed->frame; step("fixed Display Properties");
+    int kinds[]={DESK_ARRANGE_CASCADE,DESK_ARRANGE_TILE_H,DESK_ARRANGE_TILE_V};
+    for (unsigned k=0;k<3;k++) {
+        assert(desk_arrange(&d,kinds[k])==2);
+        assert(fixed->frame.w==original.w && fixed->frame.h==original.h); step("arranged with fixed dialog");
+        assert(desk_arrange_undo(&d)==2); assert(!memcmp(&fixed->frame,&original,sizeof(original))); step("Undo with fixed dialog");
+    }
+    wm_end();
+}
+static void row_review_content(unsigned m)
+{
+    row_name="screenshot review content"; wm_begin(m,1);
+    struct fake_app *a=app_open("control",400,280,100,80);
+    struct desk_client *c=&d.clients[a->slot];
+    uint32_t *pixels=(uint32_t *)c->pixels;
+    struct du_canvas canvas={.pixels=pixels,.width=400,.height=280,.clip={0,0,400,280}};
+    const char *states[]={"(None)","Blank","Ciuki logo","Starfield","Password protection unavailable", "313,524,224 bytes 299 MB", "DIB \xe2\x80\x94 2 formats", "\xe2\x86\x90 \xe2\x86\x92"};
+    for (unsigned k=0;k<sizeof(states)/sizeof(*states);k++) {
+        du_fill(&canvas,(struct du_rect){0,0,400,280},desk_theme->face);
+        du_text(&canvas,14,18,states[k],desk_theme->ink);
+        struct ciuki_message damage; shell_message(&damage,DESK_DAMAGE,24);
+        desk_put32(damage.data+12,400); desk_put32(damage.data+16,280); wm_send(a,&damage);
+        step("changed saver selection, preview, drive data or extended glyphs");
+        desk_menu_open(&d,SH_MENU_START,20,40); step("covered by shell menu"); desk_menu_close(&d); step("exposed changed control content");
+    }
+    wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
     row_fullscreen, row_gfx, row_topbar, row_theme, row_strips, row_lease, row_selection, row_drag,
@@ -2172,8 +2206,9 @@ static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overl
     row_power_resume, row_disk_maintenance, row_copy_disk, row_backup, row_blank_media,
     row_disk_terminal, row_multimedia, row_run, row_help, row_g26b_network_ui, row_access,
     row_taskbar_customization, row_taskbar_dock, row_taskbar_autohide, row_taskbar_toolbars,
-    row_start_custom, row_shell_custom_prompts};
-    row_move_damaged, row_fault, row_saver, row_appearance, row_item_appearance, row_effects, row_dpi, row_desktop_themes, row_background_browse, row_advanced_fonts};
+    row_start_custom, row_shell_custom_prompts, row_move_damaged, row_fault, row_saver,
+    row_appearance, row_item_appearance, row_effects, row_dpi, row_desktop_themes,
+    row_background_browse, row_advanced_fonts, row_fixed_arrange, row_review_content};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).

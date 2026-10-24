@@ -176,3 +176,15 @@ assert the codes.
 ## Not delivered (gaps)
 
 See `build/codex/g4-report.md`.
+
+### fx-28 fixed-size windows
+
+Direct Display Properties launches now register a fixed-size native window.
+Native arrangements already move such windows without resizing. Win32
+`CascadeWindows` and `TileWindows` now add SWP_NOSIZE without WS_THICKFRAME;
+sizeable test fixtures explicitly request a sizing frame. Added mixed fixed and
+sizeable regression coverage and an appended fx-15 rendering row. The Control
+Panel browser opens Display in a separate fixed-size applet through DESK_LAUNCH,
+retaining its own sizing style. Monitor Settings launches Power Management by the
+same path. The shell authorises only authenticated Control Panel clients and the
+exact display/power arguments; other programs and panel arguments are refused.

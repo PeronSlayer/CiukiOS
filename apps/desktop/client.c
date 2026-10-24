@@ -20,6 +20,7 @@ static void queued_attachments_close(struct desktop *d,const struct ciuki_messag
     if (m->data[0]==DESK_V3_VERSION && m->data[1]==DESK_DROP_FILES)
         for (unsigned k=0;k<m->fd_count && k<4;k++) if (m->fds[k]>=0) d->ops.close(m->fds[k]);
 }
+static uint64_t client_clock(struct desktop *);
 int desk_ignore_sigpipe(void)
 { return signal(SIGPIPE,SIG_IGN)==SIG_ERR ? -1 : 0; }
 void desk_init(struct desktop *d, const struct desk_ops *ops, uint32_t w, uint32_t h)
@@ -283,6 +284,22 @@ void desk_flush(struct desktop *d, int i)
         if (r < 0) {
             if (errno == EPIPE || errno == EBADF) desk_drop_client(d, i);
             return;
+        }
+        /* A shell-owned wait or transport backpressure before this send is
+         * not client time. v3 PINGs share their transport: stamp the addressed
+         * window, rather than the transport anchor. */
+        if (message->data[1]==DESK_PING) {
+            int target=i;
+            if (message->data[0]==DESK_V3_VERSION) {
+                uint32_t id=desk_get32(message->data+8), gen=desk_get32(message->data+12);
+                for (int k=0;k<DESK_CLIENTS;k++) if (d->clients[k].v3_id==id && d->clients[k].v3_generation==gen &&
+                    d->clients[k].channel==c->channel) { target=k; break; }
+            }
+            struct desk_client *ping=&d->clients[target];
+            if (ping->ping_pending && ping->ping_queued &&
+                desk_get32(message->data+(message->data[0]==DESK_V3_VERSION ? 16 : 4))==ping->serial) {
+                ping->ping_queued=0; ping->ping_sent_ns=client_clock(d);
+            }
         }
         d->replied++;
         queued_attachments_close(d,message);
@@ -913,6 +930,8 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
                       !strcmp(p.title,"ciukide-run");
         int ide_guide = p.opcode == DESK_LAUNCH && c->program == DESK_APP_IDE && !c->taskman &&
                         !strcmp(p.title,"ciuknote") && !strcmp(p.argument,"/Documents/Developer/Guide.txt");
+        int panel_launch=p.opcode==DESK_LAUNCH && c->program==DESK_APP_CONTROL && !strcmp(p.title,"control") &&
+                         (!strcmp(p.argument,"--panel=display") || !strcmp(p.argument,"--panel=power"));
         int install=p.opcode==DESK_LAUNCH && c->program==DESK_APP_CONTROL && !strcmp(p.title,"install") && p.argument[0];
         /* G15: every program's F1 and Help menu opens CiukiOS Help (topic:<id> or no argument). */
         int help_open = p.opcode == DESK_LAUNCH && !c->taskman && !strcmp(p.title, "help") && desk_help_argument(p.argument);
@@ -1033,7 +1052,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
     case DESK_PONG:
         session_pong(d,i,p.serial);
         if (c->ping_pending && p.serial == c->serial) {
-            c->ping_pending = 0; c->next_ping_ns = d->now_ns + 1000000000ull;
+            c->ping_pending = c->ping_queued = 0; c->next_ping_ns = d->now_ns + 1000000000ull;
             if (c->unresponsive) {
                 c->unresponsive = 0;
                 desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
@@ -1200,14 +1219,14 @@ void desk_heartbeat(struct desktop *d, uint64_t now)
         if (!c->ping_pending && now >= c->next_ping_ns && c->tx_count < DESK_TX_MAX) {
             struct ciuki_message m;
             desk_message(&m, DESK_PING, 8); desk_put32(m.data + 4, ++c->serial);
-            desk_queue(d, i, &m); c->ping_pending = 1; c->ping_sent_ns = now;
+            desk_queue(d, i, &m); c->ping_pending = 1; c->ping_queued = 1; c->ping_sent_ns = now;
             session_ping_sent(d,i);
         }
         /* One rule for every application: a PING unanswered for 5 s marks the window, but only when the desktop
          * itself drained the channels after that deadline. A desktop-owned wait (a synchronous VFS lookup in a
          * launch, a present, a worker mailbox) leaves the PONG unread in the channel and must not be charged
          * to the application (f2-88). */
-        if (c->ping_pending && now - c->ping_sent_ns >= 5000000000ull && !c->unresponsive &&
+        if (c->ping_pending && !c->ping_queued && now >= c->ping_sent_ns && now - c->ping_sent_ns >= 5000000000ull && !c->unresponsive &&
             (!d->drain_ns || d->drain_ns >= c->ping_sent_ns + 5000000000ull)) {
             c->unresponsive = 1;
             if (c->window) desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
@@ -2157,7 +2176,7 @@ static void session_step(struct desktop *d)
                 desk_queue(d,i,&m);
                 if (!c->ping_pending && c->tx_count<DESK_TX_MAX) {
                     desk_message(&m,DESK_PING,8); desk_put32(m.data+4,++c->serial);
-                    desk_queue(d,i,&m); c->ping_pending=1; c->ping_sent_ns=d->now_ns; p->ping=c->serial;
+                    desk_queue(d,i,&m); c->ping_pending=1; c->ping_queued=1; c->ping_sent_ns=d->now_ns; p->ping=c->serial;
                 }
                 if (d->focus!=i && !c->minimized) desk_focus(d,i);   /* its prompt comes to the front */
                 return;
@@ -2889,7 +2908,7 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
                 desk_damage_add(&d->damage,desk_outer(c),d->width,d->height);
                 if (d->shell) desk_damage_add(&d->damage,desk_task_button(d,i),d->width,d->height);
             }
-            c->ping_pending=0; c->unresponsive=0; c->next_ping_ns=d->now_ns+1000000000ull;
+            c->ping_pending=c->ping_queued=0; c->unresponsive=0; c->next_ping_ns=d->now_ns+1000000000ull;
         }
         return 0;
     default: error=-EINVAL; break;

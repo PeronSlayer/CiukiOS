@@ -191,11 +191,8 @@ int desk_font_scale(int id,int x) {
 
 static int glyph_index(unsigned c)
 {
-    if (c >= 0x20 && c < 0x7f) return (int)c - 0x20;
-    if (c >= 0xa0 && c <= 0xff) return 95 + (int)c - 0xa0;
-    if (c == 0x2022) return 191;
-    if (c == 0x2026) return 192;
-    return '?' - 0x20;
+    int index=desk_font_code_index(c);
+    return index>=0 ? index : '?' - 0x20;
 }
 
 int desk_font_cap(int id) { return desk_font_scale(id,-desk_font(id)->glyphs['H' - 0x20].top); }

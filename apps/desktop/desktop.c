@@ -211,7 +211,7 @@ static uint64_t desktop_pause_ns(const struct desktop *d,uint64_t now,int input_
         const struct desk_client *c=&d->clients[i];
         if (c->channel<0 || !c->hello || (c->version==DESK_V3_VERSION && !c->window)) continue;
         if (!c->ping_pending && c->tx_count<DESK_TX_MAX) loop_deadline(now,c->next_ping_ns,&wait);
-        else if (c->ping_pending && !c->unresponsive) loop_deadline(now,c->ping_sent_ns+5000000000ull,&wait);
+        else if (c->ping_pending && !c->ping_queued && !c->unresponsive) loop_deadline(now,c->ping_sent_ns+5000000000ull,&wait);
     }
     if (d->shell && !d->power.state) {
         reason=PAUSE_CLOSE;

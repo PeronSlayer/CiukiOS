@@ -492,6 +492,7 @@ static void test_lifecycle(void)
     /* f2-88: one rule for every application. A first frame (or any reply) 2 s late is not "not responding". */
     d.clients[survivor].ping_pending=0; d.clients[survivor].next_ping_ns=0;
     desk_heartbeat(&d,10000000000ull); assert(d.clients[survivor].ping_pending);
+    desk_flush(&d,survivor); /* fx-28: the timeout begins when this PING is delivered. */
     desk_heartbeat(&d,12100000000ull); assert(!d.clients[survivor].unresponsive);
     /* A desktop-owned wait (launch VFS lookup, present) past the 5 s deadline: the loop has not drained the
      * channels since, so the unread PONG is not charged to the application... */
