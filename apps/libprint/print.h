@@ -50,6 +50,9 @@ int cp_add_printer(const char *root, const char *name, const char *port, unsigne
 int cp_set_default(const char *root, unsigned printer);
 int cp_printer_pause(const char *root, unsigned printer, int pause);
 int cp_job_read(const char *root, unsigned id, struct cp_job *);
+/* The slots that exist (jNNN folders), ascending, from one directory read:
+ * returns their count, or -1/errno. Scanners read only these slots. */
+int cp_job_ids(const char *root, unsigned ids[CP_JOBS]);
 int cp_job_control(const char *root, unsigned id, enum cp_control);
 int cp_purge(const char *root, unsigned printer);
 /* printer=CP_PRINTERS selects default; target overrides port for Print to File.

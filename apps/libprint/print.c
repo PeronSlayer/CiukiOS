@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "internal.h"
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -153,6 +154,25 @@ int cp_job_read(const char *r,unsigned id,struct cp_job *j)
     if(read_saved(p,j,sizeof(*j)))return -1;
     if(j->magic!=CP_JOB_MAGIC || j->version!=1 || j->id!=id || j->printer>=CP_PRINTERS || j->state>CP_ERROR || j->bytes>CP_MAX_BYTES || j->offset>j->bytes || !cp_page_valid(&j->page) || j->completed>=j->page.copies || !valid_string(j->title,CP_TITLE) || !valid_string(j->target,CP_PATH)) { errno=EINVAL;return -1; }return 0;
 }
+/* One directory read names the reserved slots. Probing all 128 slots for
+ * job and job.bak cost the background worker 256 failed path walks through
+ * /WINDOWS on every idle pass (QEMU, image 56e58374: printspool was the top
+ * CPU user, median 38 %, and held C: for 81 ms per lookup). POSIX readdir;
+ * FAT may return the short name in either case. */
+int cp_job_ids(const char *r,unsigned ids[CP_JOBS])
+{
+    DIR *d=opendir(base(r));if(!d)return -1;
+    unsigned char seen[CP_JOBS+1]={0};struct dirent *e;
+    while((e=readdir(d))){
+        const char *s=e->d_name;unsigned id=0,i=1;
+        if((s[0]!='j' && s[0]!='J') || strlen(s)!=4)continue;
+        for(;i<4 && s[i]>='0' && s[i]<='9';i++)id=id*10+(unsigned)(s[i]-'0');
+        if(i==4 && id>=1 && id<=CP_JOBS)seen[id]=1;
+    }
+    closedir(d);
+    unsigned n=0;for(unsigned id=1;id<=CP_JOBS;id++)if(seen[id])ids[n++]=id;
+    return (int)n;
+}
 int cp_job_control(const char *r,unsigned id,enum cp_control ctl)
 {
     struct cp_job j;char p[CP_PATH+64];if(ctl<CP_PAUSE || ctl>CP_CANCEL){errno=EINVAL;return -1;}if(cp_job_read(r,id,&j) || path(p,sizeof(p),r,id,"ctl"))return -1;
@@ -160,7 +180,8 @@ int cp_job_control(const char *r,unsigned id,enum cp_control ctl)
 }
 int cp_purge(const char *r,unsigned printer)
 {
-    int e=0;for(unsigned id=1;id<=CP_JOBS;id++){struct cp_job j;if(!cp_job_read(r,id,&j) && j.printer==printer && cp_job_control(r,id,CP_CANCEL))e=-1;}return e;
+    unsigned ids[CP_JOBS];int n=cp_job_ids(r,ids);if(n<0)return -1;
+    int e=0;for(int i=0;i<n;i++){unsigned id=ids[i];struct cp_job j;if(!cp_job_read(r,id,&j) && j.printer==printer && cp_job_control(r,id,CP_CANCEL))e=-1;}return e;
 }
 static void release(const char *r,unsigned id)
 {
@@ -197,9 +218,10 @@ int cp_submit_raw(const char *r,unsigned printer,const char *title,const void *d
 const char *cp_state_name(unsigned s){static const char *const names[]={"Queued","Paused","Printing","Offline","Error"};return s<=CP_ERROR?names[s]:"Invalid";}
 int cp_service_step(const char *r)
 {
+    unsigned ids[CP_JOBS];int count=cp_job_ids(r,ids);if(count<=0)return count;  /* idle: no slot reserved */
     struct cp_config *c=malloc(sizeof(*c));if(!c)return -1;if(cp_config_load(r,c)){free(c);return -1;}
-    for(unsigned id=1;id<=CP_JOBS;id++){
-        struct cp_job j;char p[CP_PATH+64];if(cp_job_read(r,id,&j))continue;
+    for(int k=0;k<count;k++){
+        unsigned id=ids[k];struct cp_job j;char p[CP_PATH+64];if(cp_job_read(r,id,&j))continue;
         char ctl=0;if(!path(p,sizeof(p),r,id,"ctl") && !read_saved(p,&ctl,1)){
             if(ctl=='c'){release(r,id);free(c);return 1;}if(ctl=='p')j.state=CP_PAUSED;if(ctl=='r')j.state=CP_QUEUED;unlink(p);
             if(path(p,sizeof(p),r,id,"job") || save_record(p,&j,sizeof(j))){free(c);return -1;}

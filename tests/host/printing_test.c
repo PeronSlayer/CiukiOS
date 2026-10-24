@@ -3,6 +3,8 @@
 #include "../../apps/libprint/print.h"
 #include <assert.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,6 +12,14 @@
 #include <sys/wait.h>
 #include <unistd.h>
 static char root[128],out[256];
+/* Linked with -Wl,--wrap=open: every open the library makes is counted. */
+static unsigned opens;
+int __real_open(const char *,int,...);
+int __wrap_open(const char *p,int flags,...)
+{
+    unsigned mode=0;if(flags&O_CREAT){va_list a;va_start(a,flags);mode=va_arg(a,unsigned);va_end(a);}
+    opens++;return __real_open(p,flags,mode);
+}
 static void makepath(char *p,size_t cap,unsigned id,const char *leaf){snprintf(p,cap,"%s/j%03u/%s",root,id,leaf);}
 static size_t slurp(const char *path,char *outbuf,size_t cap)
 {FILE *f=fopen(path,"rb");assert(f);size_t n=fread(outbuf,1,cap-1,f);outbuf[n]=0;fclose(f);return n;}
@@ -82,10 +92,24 @@ static void producers_and_lock(void)
     unsigned seen=0;for(unsigned id=1;id<=4;id++){struct cp_job j;assert(!cp_job_read(root,id,&j));assert(!strncmp(j.title,"producer",8));unsigned n=(unsigned)(j.title[8]-'0');assert(n<4 && !(seen&(1u<<n)));seen|=1u<<n;}assert(seen==15);
     assert(!cp_purge(root,1));drain();
 }
+/* The background worker's idle pass reads the spool folder once; it no
+ * longer opens job and job.bak in all 128 slots (256 failed path walks a
+ * second on the image). A pass with one published job reads only that slot. */
+static void idle_scan(void)
+{
+    drain();opens=0;assert(cp_service_step(root)==0);assert(opens==0);
+    char p[256];makepath(p,sizeof(p),77,"");assert(!mkdir(p,0700));          /* an unpublished reservation */
+    opens=0;assert(cp_service_step(root)==0);assert(opens<=4);
+    int id=cp_submit_raw(root,1,"Scan","x",1,NULL,NULL);assert(id>0 && id!=77);
+    assert(!cp_printer_pause(root,1,1));opens=0;assert(cp_service_step(root)==0);assert(opens<=8);
+    unsigned ids[CP_JOBS];assert(cp_job_ids(root,ids)==2 && ids[0]==(unsigned)id && ids[1]==77);
+    assert(!cp_printer_pause(root,1,0));drain();assert(cp_job_ids(root,ids)==1 && ids[0]==77);
+    assert(!rmdir(p));assert(cp_job_ids(root,ids)==0);
+}
 int main(void)
 {
     setvbuf(stdout,NULL,_IONBF,0);
     char tmp[]="/tmp/ciuki-print-XXXXXX";char *p=mkdtemp(tmp);assert(p);snprintf(root,sizeof(root),"%s",p);snprintf(out,sizeof(out),"%s/output.prn",root);
-    assert(sizeof(struct cp_job)==424 && sizeof(struct cp_page)==40 && sizeof(struct cp_config)==2988);assert(offsetof(struct cp_job,page)==32 && offsetof(struct cp_job,title)==72 && offsetof(struct cp_job,target)==168);assert(!cp_init(root));assert(!cp_service_lock(root));assert(cp_service_lock(root)==-1 && errno==EBUSY);cp_service_unlock(root);raw_and_controls();offline_and_restart();rendering();full_and_corrupt();producers_and_lock();
-    char path[256];snprintf(path,sizeof(path),"%s/printers",root);unlink(path);unlink(out);assert(!rmdir(root));puts("printing: PASS (queue, controls, recovery, drivers, offline, copies, range, full)");return 0;
+    assert(sizeof(struct cp_job)==424 && sizeof(struct cp_page)==40 && sizeof(struct cp_config)==2988);assert(offsetof(struct cp_job,page)==32 && offsetof(struct cp_job,title)==72 && offsetof(struct cp_job,target)==168);assert(!cp_init(root));assert(!cp_service_lock(root));assert(cp_service_lock(root)==-1 && errno==EBUSY);cp_service_unlock(root);raw_and_controls();offline_and_restart();rendering();full_and_corrupt();producers_and_lock();idle_scan();
+    char path[256];snprintf(path,sizeof(path),"%s/printers",root);unlink(path);unlink(out);assert(!rmdir(root));puts("printing: PASS (queue, controls, recovery, drivers, offline, copies, range, full, idle scan)");return 0;
 }

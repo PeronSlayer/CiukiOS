@@ -154,6 +154,37 @@ static void test_launch_async(void)
     sent=fake_sent; desk_launch_completed(&d,&stale,"control",123); desk_flush(&d,files); assert(fake_sent==sent);
     puts("PASS fx-8 client LAUNCH: TASK_RESULT deferred to completion, same requester only");
 
+    /* 5. A DOS Box stuck in "Closing..." (QEMU, image 56e58374: its process
+     * stayed inside the kernel's VM destroy and never answered) holds nothing
+     * a launch needs: the close request waits on that window's own channel,
+     * Run starts another program on the launcher worker, frames continue and
+     * the window keeps its "Closing..." caption until its process ends. */
+    int dos=-1;
+    for (int i=0;i<DESK_CLIENTS && dos<0;i++) if (d.clients[i].channel<0 && !d.clients[i].internal) dos=i;
+    assert(dos>=0);
+    fake_channel(91); assert(desk_add_client(&d,91)==dos);
+    d.clients[dos].pid=4242; d.clients[dos].dosbox=1;
+    window(&d,dos,4242,92,"CiukiDOS"); drain(&d,dos);
+    desk_request_close(&d,dos);
+    assert(d.clients[dos].closing && queued(&d,dos,DESK_CLOSE_REQUEST,NULL)==1);
+    async_arm(3891);
+    char again[]="control"; unsigned spawned=control_spawns;
+    started=async_wall_ms();
+    assert(run_command(&d,again)==0 && async_wall_ms()-started<250);
+    async_wait_entered(); slot=async_pending_slot(&d); assert(slot>=0 && slot!=dos);
+    presents=d.presents; inputs=d.inputs;
+    for (unsigned turn=0;turn<5;turn++) {
+        struct ciuki_input_event motion={.type=CIUKI_INPUT_MOTION,.value=1,.value2=1,.monotonic_ns=d.now_ns};
+        desk_input(&d,&motion); d.now_ns+=16000000ull; desk_heartbeat(&d,d.now_ns);
+        fake_presents=0; assert(!launch_service(&d) && !desk_redraw(&d)); /* the fake records 64 rectangles */
+    }
+    assert(d.presents>=presents+5 && d.inputs>=inputs+5);
+    async_release(); async_complete(&d,1);
+    assert(control_spawns==spawned+1 && !d.clients[slot].spawn_pending && d.clients[slot].pid);
+    assert(d.clients[dos].closing && d.clients[dos].window && d.clients[dos].pid==4242);
+    puts("PASS stuck DOS Box: Run starts control on the launcher worker while CiukiDOS stays \"Closing...\"; "
+         "frames and input continue; the close request is queued only to the DOS Box");
+
     async_arm(0);
     desk_menu_close(&d); desk_render_release(&d); drop_all(&d); fake_reset();
     free(d.pixels); free(d.sh.wall);
