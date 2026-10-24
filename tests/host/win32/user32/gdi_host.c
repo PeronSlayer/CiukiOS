@@ -6,6 +6,12 @@
 #include <w32/gdi32.h>
 #include <w32/pixelformat.h>
 #include <w32/services.h>
+extern unsigned W32API GetMetaFileBitsEx(DWORD,unsigned,void *);
+extern DWORD W32API SetMetaFileBitsEx(unsigned,const void *);
+extern unsigned W32API GetEnhMetaFileBits(DWORD,unsigned,void *);
+extern DWORD W32API SetEnhMetaFileBits(unsigned,const void *);
+extern BOOL W32API DeleteMetaFile(DWORD);
+extern BOOL W32API DeleteEnhMetaFile(DWORD);
 #include <linux/futex.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -121,7 +127,9 @@ static const struct {
                EXPORT(w32_gdi_draw_icon),  EXPORT(SetDIBits),
                EXPORT(CreateCompatibleDC), EXPORT(StretchBlt),
                EXPORT(w32_gdi_palette_hook), EXPORT(w32_gdi_gl_window_format),
-               EXPORT(w32_gdi_live_objects)};
+               EXPORT(w32_gdi_live_objects), EXPORT(GetPaletteEntries), EXPORT(CreatePalette),
+               EXPORT(GetMetaFileBitsEx), EXPORT(SetMetaFileBitsEx), EXPORT(GetEnhMetaFileBits),
+               EXPORT(SetEnhMetaFileBits), EXPORT(DeleteMetaFile), EXPORT(DeleteEnhMetaFile)};
 void *host_gdi_proc(const char *name) {
   for (unsigned i = 0; i < sizeof(exports) / sizeof(*exports); i++)
     if (!strcmp(exports[i].name, name))

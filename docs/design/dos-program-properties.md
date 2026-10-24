@@ -80,7 +80,7 @@ zoom. Deferred desktop messages from clipboard RPC are drained before
 reading the channel again.
 
 Main's `CIUKI_DOSVM_TEXT=18` and `CIUKI_DOSVM_MARK=19` remain fixed.
-G17's `CIUKI_DOSVM_TEXT_CHUNK=20` and `CIUKI_DOSVM_POLICY=21` follow them;
+G17's `CIUKI_DOSVM_TEXT_CHUNK=22` and `CIUKI_DOSVM_POLICY=23` follow main's clipboard commands 20 and 21;
 all four commands retain their payloads in the unchanged 136-byte command.
 The VM checkpoint waits while either marking policy holds the guest.
 The fx-15 G4 rows remain 31–35 and G17 follows at 36–40; the executable

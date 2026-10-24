@@ -31,6 +31,7 @@ struct viewer {
 static const char *format_name(unsigned f)
 {
     switch (f) { case 1:return "ANSI text"; case 2:return "Bitmap"; case 7:return "OEM text"; case 8:return "DIB";
+    case 0x80:return "Owner display"; case 3:return "Metafile picture"; case 9:return "Palette"; case 14:return "Enhanced metafile";
     case 13:return "Unicode text"; case 15:return "Files (CF_HDROP)"; case 16:return "Locale"; case 17:return "DIB V5"; default:return "Private format"; }
 }
 static void preview(struct viewer *v)
@@ -38,6 +39,16 @@ static void preview(struct viewer *v)
     free(v->text); v->text=NULL; free(v->image); v->image=NULL; v->width=v->height=0;
     void *data=NULL; uint32_t n=0;
     unsigned f=v->selected;
+    if (f==0x80) {
+        uint8_t request[24]={0}; uint32_t bytes=0; void *reply=NULL;
+        unsigned width=v->ui.canvas.width>20 ? v->ui.canvas.width-20 : 1;
+        unsigned height=v->ui.canvas.height>70 ? v->ui.canvas.height-70 : 1;
+        desk_put32(request+16,width); desk_put32(request+20,height);
+        (void)du_clip_display(0x30b,request,24,&reply,&bytes); free(reply); reply=NULL;
+        if (!du_clip_display(0x309,request,24,&reply,&bytes) && bytes>4)
+            (void)clip_dib_decode((unsigned char *)reply+4,bytes-4,&v->image,&v->width,&v->height);
+        free(reply); v->ui.dirty=1; return;
+    }
     if (!f || du_clip_open()) return;
     int e=du_clip_get(f==2 ? 8 : f,&data,&n);
     if (!e && (f==8 || f==2 || f==17)) (void)clip_dib_decode(data,n,&v->image,&v->width,&v->height);
@@ -67,6 +78,14 @@ static void refresh(struct viewer *v)
     int opened=!du_clip_open();
     for (unsigned i=0;i<q.count;i++) {
         unsigned f=q.formats[i]; char name[128]; snprintf(name,sizeof(name),"%s",format_name(f));
+        if (f==0x80) {
+            unsigned char request[8]={0}; desk_put32(request,sizeof(name)); void *reply=NULL; uint32_t bytes=0;
+            if (!du_clip_display(0x30c,request,8,&reply,&bytes) && bytes>4) {
+                unsigned used=bytes-4; if (used>=sizeof(name)) used=sizeof(name)-1;
+                memcpy(name,(unsigned char *)reply+4,used); name[used]=0;
+            }
+            free(reply);
+        }
         if (f>=0xc000) {
             struct desk_clip_wire w={.op=DESK_CLIP_NAME,.format=f},r; void *unused=NULL;
             if (!du_clip_call(&w,NULL,&r,&unused)) snprintf(name,sizeof(name),"%s",r.name);
@@ -175,5 +194,9 @@ int main(int argc, char **argv)
     du_timer_start(&v->ui,1,500000000ull,1);
     if (path) (void)read_clip(path);
     int r=du_run(&v->window,idle,v);
+    if (v->selected==0x80) {
+        unsigned char request[24]={0}; void *reply=NULL; uint32_t bytes=0;
+        (void)du_clip_display(0x30b,request,24,&reply,&bytes); free(reply);
+    }
     free(v->image); free(v->text); du_window_destroy(&v->window); free(v); return r<0;
 }

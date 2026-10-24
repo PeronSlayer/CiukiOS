@@ -324,7 +324,7 @@ int du_window_turn(struct du_window *w, uint64_t now)
         w->server_pid = m.sender_pid;
         if (now > w->ui->now) w->ui->now = now;
         switch (p.opcode) {
-        case DESK_CLIPBOARD_EVENT: du_clip_observe(p.clip.sequence); break;
+        case DESK_CLIPBOARD_EVENT: du_clip_event(&p.clip); break;
         case DESK_CONFIGURE:
             if (p.flags & DESK_CONFIGURE_COMMITTED) {
                 if ((!w->configured ? p.serial != 0 : !w->swap_sent || p.serial != w->configure_serial) ||
@@ -388,6 +388,7 @@ int du_window_turn(struct du_window *w, uint64_t now)
     if (!w->closing && !w->present_pending && replacement(w)) { w->error = errno; w->closed = 1; return -1; }
     if (w->closing) {
         if (w->closing == 1 && w->count < 16) {
+            if (clip_window==w) du_clip_release(); /* render while the channel is still live */
             struct ciuki_message m; desk_message(&m, DESK_CLOSE, 4);
             if (!queue(w, &m)) w->closing = 2;
         }
@@ -469,7 +470,7 @@ int du_run(struct du_window *w, void (*idle)(void *), void *arg)
 
 void du_window_destroy(struct du_window *w)
 {
-    if (clip_window==w) { du_clip_bind(NULL,NULL); clip_window=NULL; }
+    if (clip_window==w) { du_clip_release(); du_clip_bind(NULL,NULL); clip_window=NULL; }
     struct clip_saved **at=&clip_saved_head,*previous=NULL;
     while (*at) {
         struct clip_saved *p=*at;
@@ -544,6 +545,19 @@ static int native_clip(void *ctx, struct desk_clip_wire *w, const void *data, st
                         if (!map || map==MAP_FAILED) error=-ENOMEM;
                         else { *out=malloc(reply->bytes); if (!*out) error=-ENOMEM; else memcpy(*out,map,reply->bytes); munmap(map,info.allocation_bytes); }
                     }
+                }
+            }
+            /* EmptyClipboard destroys old producer resources before its
+             * caller can publish new promises. Ordinary UI events remain
+             * deferred; only this clipboard lifecycle callback is immediate. */
+            if (packet.clip.kind==DESK_CLIP_DESTROY) du_clip_event(&packet.clip);
+            if (packet.clip.kind==DESK_CLIP_RENDER) {
+                struct clip_saved *saved=clip_saved_count<1024 ? malloc(sizeof(*saved)) : NULL;
+                if (!saved) error=-ENOMEM;
+                else {
+                    *saved=(struct clip_saved){.window=window,.message=incoming}; saved->message.fd_count=0;
+                    if (clip_saved_tail) clip_saved_tail->next=saved; else clip_saved_head=saved;
+                    clip_saved_tail=saved; clip_saved_count++;
                 }
             }
             for (unsigned i=0;i<incoming.fd_count;i++) close(incoming.fds[i]);

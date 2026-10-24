@@ -9,6 +9,8 @@
 int ciuki_dosvm(uint32_t,struct ciuki_dosvm_command *);
 #include <unistd.h>
 #include <sys/mman.h>
+#define DOSBOX_SETTINGS_DIR "build/host/g5/clipboard-settings"
+#include "../../../apps/dosbox/clipboard_settings.h"
 static int test_close(int);
 static int test_unmap(void *,size_t);
 #define close test_close
@@ -76,7 +78,36 @@ int main(void)
     assert(!dos_clip_action(4)); struct desk_packet event={.opcode=DESK_BUTTON,.event={.code=1,.value=1}};
     assert(dos_clip_input(&event) && paused); event=(struct desk_packet){.opcode=DESK_KEY,.event={.code=CIUKI_KEY_ESCAPE,.value=1}};
     assert(dos_clip_input(&event) && !paused);
+    unsigned char buffer[128]="DOS\x82"; uint32_t size=5;
+    assert(dos_clip_execute(3,7,buffer,&size)==-EPERM);
+    assert(!dos_clip_execute(1,0,buffer,&size)); assert(dos_clip_execute(1,0,buffer,&size)==-EBUSY);
+    assert(!dos_clip_execute(2,0,buffer,&size) && !dos_clip_execute(3,7,buffer,&size));
+    size=0; assert(!dos_clip_execute(4,13,buffer,&size) && size==10);
+    size=0; assert(!dos_clip_execute(5,1,buffer,&size) && size==5 && buffer[3]==0xe9);
+    assert(!dos_clip_execute(8,0,buffer,&size)); assert(!strcmp(du_system_clipboard_text_get(),"DOS\xc3\xa9"));
+    assert(!dos_clip_execute(9,0,buffer,&size) && size==65536);
+    strcpy((char *)buffer,"screen\r\ntext"); size=strlen((char *)buffer)+1;
+    assert(!dos_clip_execute(CIUKI_DOSVM_CLIP_SCREEN,7,buffer,&size));
+    assert(!strcmp(du_system_clipboard_text_get(),"screen\ntext"));
+    assert(dosbox_clipboard_key("  C:/Game/GAME.EXE arg")==dosbox_clipboard_key("\"c:\\game\\game.exe\" other"));
+    assert(dosbox_clipboard_key("C:/A/GAME.EXE")!=dosbox_clipboard_key("C:/B/GAME.EXE"));
+    char previous[160]; assert(!dosbox_clipboard_path(dosbox_clipboard_key("G5b fixture"),previous,sizeof(previous)));
+    (void)unlink(previous);
+    dos_clip_settings("G5b fixture"); assert(!state.quick_edit && !state.exclusive);
+    assert(!dos_clip_action(4) && state.quick_edit); assert(!dos_clip_action(5) && state.exclusive);
+    event=(struct desk_packet){.opcode=DESK_BUTTON,.event={.code=1,.value=1}};
+    assert(!dos_clip_input(&event) && !paused); /* Exclusive overrides automatic selection */
+    struct dosbox_clipboard_settings settings;
+    dosbox_clipboard_load(state.settings_key,&settings); assert(settings.quick_edit && settings.exclusive);
+    settings.quick_edit=0; assert(!dosbox_clipboard_save(state.settings_key,&settings));
+    dos_clip_settings("G5b fixture"); assert(!state.quick_edit && state.exclusive);
+    char path[160]; assert(!dosbox_clipboard_path(state.settings_key,path,sizeof(path)));
+    FILE *bad=fopen(path,"wb"); assert(bad); assert(fputs("DOS clipboard=1\nQuickEdit=1\nExclusive=1\nextra",bad)>=0); fclose(bad);
+    dosbox_clipboard_load(state.settings_key,&settings); assert(!settings.quick_edit && !settings.exclusive);
+    assert(!unlink(path) && !rmdir(DOSBOX_SETTINGS_DIR));
     dos_clip_destroy(); clip_destroy(&store); free(pixels);
     for (unsigned i=1;i<32;i++) assert(!surfaces[i].p);
+    puts("PASS G5b DOS programmatic shared-store execution, OEM/ANSI synthesis, full-screen text publication, persisted QuickEdit/Exclusive round-trip and malformed settings");
     puts("PASS G5 DOS Mark/Copy text trimming, graphics DIB, QuickEdit, Esc resume, Unicode to OEM paste, CRLF once, Alt-numpad, queue retry"); fflush(stdout);
+    return 0;
 }

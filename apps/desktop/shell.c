@@ -588,6 +588,7 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
             item(m,"Copy",NULL,SH_ACT_DOS_COPY,owner,blocked ? SH_ITEM_DISABLED : 0);
             item(m,"Paste",NULL,SH_ACT_DOS_PASTE,owner,blocked ? SH_ITEM_DISABLED : 0);
             item(m,"QuickEdit on/off",NULL,SH_ACT_DOS_QUICKEDIT,owner,blocked ? SH_ITEM_DISABLED : 0);
+            item(m,"Exclusive mode on/off",NULL,SH_ACT_DOS_EXCLUSIVE,owner,blocked ? SH_ITEM_DISABLED : 0);
         }
         separator(m);
         item(m, "Close    Alt+F4", "process-stop", SH_ACT_TASK_CLOSE, owner, minimized ? 0 : SH_ITEM_DEFAULT);
@@ -1022,11 +1023,11 @@ static void act(struct desktop *d, const struct sh_item *it)
         break;
     case SH_ACT_TASK_MINIMIZE: if (it->arg >= 0 && it->arg < DESK_CLIENTS && !d->clients[it->arg].minimized) desk_minimize(d, it->arg); break;
     case SH_ACT_TASK_CLOSE: desk_request_close(d, it->arg); break;
-    case SH_ACT_DOS_MARK: case SH_ACT_DOS_COPY: case SH_ACT_DOS_PASTE: case SH_ACT_DOS_QUICKEDIT:
+    case SH_ACT_DOS_MARK: case SH_ACT_DOS_COPY: case SH_ACT_DOS_PASTE: case SH_ACT_DOS_QUICKEDIT: case SH_ACT_DOS_EXCLUSIVE:
         if (it->arg>=0 && it->arg<DESK_CLIENTS && d->clients[it->arg].dosbox) {
             desk_focus(d,it->arg); struct ciuki_message message;
             desk_message(&message,DESK_DOS_CLIPBOARD,8); message.data[0]=2;
-            desk_put32(message.data+4,it->action==SH_ACT_DOS_MARK ? 1 : it->action==SH_ACT_DOS_COPY ? 2 : it->action==SH_ACT_DOS_PASTE ? 3 : 4);
+            desk_put32(message.data+4,it->action==SH_ACT_DOS_MARK ? 1 : it->action==SH_ACT_DOS_COPY ? 2 : it->action==SH_ACT_DOS_PASTE ? 3 : it->action==SH_ACT_DOS_QUICKEDIT ? 4 : 5);
             desk_queue(d,it->arg,&message);
         }
         break;

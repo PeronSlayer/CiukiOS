@@ -218,6 +218,7 @@ static uint32_t present_events(struct present_request *r)
     uint32_t reason = v->fullscreen_error ? (uint32_t)v->fullscreen_error : (uint32_t)v->info.reason;
     if (!b->observed || b->state != public_state(v) || b->flags != status_flags(v) || b->reason != reason)
         events |= CIUKI_DOSVM_EVENT_STATE;
+    if (v->clipboard.pending && !v->clipboard.done) events |= CIUKI_DOSVM_EVENT_CLIPBOARD;
     if (b->console != v->console_sequence) events |= CIUKI_DOSVM_EVENT_CONSOLE;
     if (!v->fullscreen && !v->fullscreen_hold && deadline_passed(v->present_due_us / 1000u) &&
         (!v->video_presented || (!v->vbe_mode && v->video_geometry.text) || deadline_passed(v->video_due_us / 1000u)) &&
@@ -330,7 +331,8 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
     if (!p->dosvm_capability) return -EPERM;
     if (op < CIUKI_DOSVM_CREATE || (op > CIUKI_DOSVM_WAIT_PRESENT &&
         op != CIUKI_DOSVM_TEXT && op != CIUKI_DOSVM_MARK &&
-        op != CIUKI_DOSVM_TEXT_CHUNK && op != CIUKI_DOSVM_POLICY)) return -EINVAL;
+        op != CIUKI_DOSVM_TEXT_CHUNK && op != CIUKI_DOSVM_POLICY &&
+        op != CIUKI_DOSVM_CLIP_REQUEST && op != CIUKI_DOSVM_CLIP_COMPLETE)) return -EINVAL;
     if (tf->edx != sizeof(struct ciuki_dosvm_command)) return -EINVAL;
     struct ciuki_dosvm_command c, allowed;
     bool direct = op == CIUKI_DOSVM_WAIT_PRESENT || op == CIUKI_DOSVM_PRESENT || op == CIUKI_DOSVM_PRESENT_BANDS;
@@ -375,6 +377,15 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
     if (op==CIUKI_DOSVM_TEXT) {
         if (!c.text.buffer || !c.text.capacity || c.text.capacity>CIUKI_DOSVM_TEXT_MAX || c.text.buffer>UINT32_MAX-c.text.capacity) return -EINVAL;
         allowed.text.buffer=c.text.buffer; allowed.text.capacity=c.text.capacity;
+    }
+    if (op==CIUKI_DOSVM_CLIP_REQUEST || op==CIUKI_DOSVM_CLIP_COMPLETE) {
+        if (c.clip.capacity>CIUKI_DOSVM_CLIP_MAX ||
+            (c.clip.capacity && (!c.clip.buffer || c.clip.buffer>UINT32_MAX-c.clip.capacity))) return -EINVAL;
+        allowed.clip.buffer=c.clip.buffer; allowed.clip.capacity=c.clip.capacity;
+        if (op==CIUKI_DOSVM_CLIP_COMPLETE) {
+            if (c.clip.bytes>CIUKI_DOSVM_CLIP_MAX || c.clip.result>0) return -EINVAL;
+            allowed.clip.serial=c.clip.serial; allowed.clip.bytes=c.clip.bytes; allowed.clip.result=c.clip.result;
+        }
     }
     if (op == CIUKI_DOSVM_INPUT) {
         if (!event_valid(&c.event)) return -EINVAL;
@@ -507,7 +518,9 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
             video_mode(v, &c);
             dosvm_startup_report(v, false);
             dosvm_perf_report(v);
-        } else if (op == CIUKI_DOSVM_WAIT_PRESENT) e = wait_present(b, v, p, &c);
+        } else if (op==CIUKI_DOSVM_CLIP_REQUEST || op==CIUKI_DOSVM_CLIP_COMPLETE)
+            e=dosvm_clipboard_client(v,op,&c);
+        else if (op == CIUKI_DOSVM_WAIT_PRESENT) e = wait_present(b, v, p, &c);
         else if (!dosvm_valid(key)) e = -ESRCH;
         else if (op == CIUKI_DOSVM_FULLSCREEN) {
             if (c.focused && !b->focused) e=-EACCES;

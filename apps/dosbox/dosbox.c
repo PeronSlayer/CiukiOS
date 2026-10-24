@@ -276,6 +276,7 @@ int main(int argc, char **argv)
     uint32_t *guest=ciuki_surface_map(vm_surface,PROT_READ|PROT_WRITE);
     if (pixels == (void *)-1 || !pixels || guest==(void *)-1 || !guest) { close(surface); close(vm_surface); return 1; }
     dos_clip_init(channel,guest);
+    dos_clip_settings(typed);
     struct du_canvas canvas = {pixels, CIUKI_DOSVM_WIDTH, CIUKI_DOSVM_HEIGHT,
                               {0, 0, CIUKI_DOSVM_WIDTH, CIUKI_DOSVM_HEIGHT}};
     const char *icon = dosbox_launch_icon(typed);
@@ -554,6 +555,7 @@ int main(int argc, char **argv)
             goto done;
         }
         unsigned video_events=c.wait.events;
+        if (video_events&CIUKI_DOSVM_EVENT_CLIPBOARD) (void)dos_clip_service();
         int polled_launch = autorun_launch_armed;
         command(&c, id, generation);
         if (ciuki_dosvm(CIUKI_DOSVM_STATUS, &c)) goto done;

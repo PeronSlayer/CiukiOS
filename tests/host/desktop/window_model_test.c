@@ -971,10 +971,10 @@ static void row_resources(unsigned m)
     r.system=25; r.user=25; r.level=1; desk_shell_resources_update(&d,&r); step("level low: the bar changes");
     struct desk_box i=desk_shell_tray_icon_box(&d,SH_TRAY_RESOURCES); assert(i.w==SH_TRAY_ICON_SIZE);
     pointer_to(i.x+4,i.y+4); step("hover the icon");
-    turn(700000000ull); assert(d.sh.tooltip==6); step("tooltip with the three values");
+    turn(700000000ull); assert(d.sh.tooltip==7); step("tooltip with the three values");
     r.system=10; r.level=2; desk_shell_resources_update(&d,&r); step("critical while the tooltip shows");
     click(i.x+4,i.y+4,CIUKI_BUTTON_LEFT); step("click raises the Resource Meter window");
-    r.visible=0; desk_shell_resources_update(&d,&r); assert(!d.sh.tooltip || d.sh.tooltip!=6); step("Resource Meter closed: the icon is removed");
+    r.visible=0; desk_shell_resources_update(&d,&r); assert(!d.sh.tooltip || d.sh.tooltip!=7); step("Resource Meter closed: the icon is removed");
     struct desk_box gone=desk_shell_tray_icon_box(&d,SH_TRAY_RESOURCES); assert(!gone.w);
     wm_end();
 }
@@ -1716,6 +1716,38 @@ static void row_browser_clipboard_raster(unsigned m)
     app_paint(browser,20,100,120,40,0x00ee44);step("paste into a page form");
     wm_end();
 }
+/* G5b rows are appended after G10's saver rows; existing indexes stay stable. */
+static void row_dos_clipboard_settings(unsigned m)
+{
+    row_name="DOS clipboard settings"; wm_begin(m,1);
+    struct fake_app *a=app_open("dosbox",320,240,60,60);
+    key(0x38,1); tap(DU_KEY_SPACE); key(0x38,0); step("DOS window system menu");
+    assert(d.sh.levels && d.sh.menus[0].kind==SH_MENU_TASK);
+    struct sh_menu *menu=&d.sh.menus[0]; int quick=-1,exclusive=-1;
+    for (int i=0;i<menu->count;i++) {
+        if (menu->items[i].action==SH_ACT_DOS_QUICKEDIT) quick=i;
+        if (menu->items[i].action==SH_ACT_DOS_EXCLUSIVE) exclusive=i;
+    }
+    assert(quick>=0 && exclusive>quick); menu_item_click(exclusive); step("Exclusive mode command dismisses menu");
+    key(0x38,1); tap(DU_KEY_SPACE); key(0x38,0); step("reopen DOS menu");
+    menu_item_click(quick); step("QuickEdit command dismisses menu");
+    app_close(a); step("DOS settings window closed"); wm_end();
+}
+static void row_clipboard_owner_display(unsigned m)
+{
+    row_name="clipboard owner display"; wm_begin(m,1);
+    /* Register the accessory only in this row, preserving the existing fuzz
+     * catalogue and seeds. The application still uses the production launch. */
+    snprintf(d.programs[d.program_count].name,sizeof(d.programs[0].name),"clipbrd");
+    snprintf(d.programs[d.program_count].path,sizeof(d.programs[0].path),"/Programs/clipbrd"); d.program_count++;
+    struct fake_app *viewer=app_open("clipbrd",320,240,60,60);
+    (void)app_open("calc",160,120,240,180); step("viewer partially occluded");
+    for (unsigned k=0;k<4;k++) { app_paint(viewer,10,60,280,160,0x192837u+k*0x112233u); step("owner-display bitmap changes in viewer"); }
+    desk_focus(&d,viewer->slot); step("owner-display viewer activated");
+    desk_move(&d,viewer->slot,100,110); step("viewer moves after owner paint");
+    app_paint(viewer,10,60,280,160,0x8a4210); step("owner scroll repaints viewer");
+    app_close(viewer); step("owner-display viewer closed"); wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
     row_fullscreen, row_gfx, row_topbar, row_theme, row_strips, row_lease, row_selection, row_drag,
@@ -1723,7 +1755,7 @@ static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overl
     row_move_damaged, row_fault, row_saver, row_find, row_g8_menus, row_input_preferences,
     row_input_text, row_dos_controls, row_printing, row_logon, row_regional, row_disk_tools,
     row_network_tools, row_g18_shortcuts, row_g18_tray, row_power, row_resources,
-    row_browser_clipboard_raster};
+    row_browser_clipboard_raster, row_dos_clipboard_settings, row_clipboard_owner_display};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).

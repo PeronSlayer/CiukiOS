@@ -4593,14 +4593,33 @@ owner-only snapshot of visible BIOS text cells
 focused=1 pause for Mark, 0 resume
 
 ```c
+#define CIUKI_DOSVM_CLIP_REQUEST 20u
+```
+
+owner fetches transient WINOLDAP request
+
+```c
+#define CIUKI_DOSVM_CLIP_COMPLETE 21u
+```
+
+matching serial completes it
+
+```c
+#define CIUKI_DOSVM_CLIP_MAX 65536u
+#define CIUKI_DOSVM_CLIP_SCREEN 256u
+```
+
+text-only full-screen Print Screen
+
+```c
 #define CIUKI_DOSVM_TEXT_MAX 16000u
 ```
 
 G17 owner-bound visible OEM text and window execution policy. No pointers.
 
 ```c
-#define CIUKI_DOSVM_TEXT_CHUNK 20u
-#define CIUKI_DOSVM_POLICY 21u
+#define CIUKI_DOSVM_TEXT_CHUNK 22u
+#define CIUKI_DOSVM_POLICY 23u
 #define CIUKI_DOSVM_TEXT_BYTES 48u
 struct ciuki_dosvm_text_chunk {
     uint32_t row;
@@ -4644,6 +4663,7 @@ UNIFIED.IMG differs from UNIFIED.SHA
 #define CIUKI_DOSVM_EVENT_STATE 2u
 #define CIUKI_DOSVM_EVENT_CONSOLE 4u
 #define CIUKI_DOSVM_EVENT_TIMEOUT 8u
+#define CIUKI_DOSVM_EVENT_CLIPBOARD 16u
 ```
 
 CREATE launch.kernel: all three historical values map to unified (2).
@@ -4710,6 +4730,26 @@ armed EXEC returned to its shell
 #define CIUKI_DOSVM_BOOTING 0u
 #define CIUKI_DOSVM_RUNNING 1u
 #define CIUKI_DOSVM_STOPPED 2u
+struct ciuki_dosvm_clip {
+    uint32_t serial;
+    uint32_t op;
+```
+
+WINOLDAP AX low byte, or CLIP_SCREEN
+
+```c
+uint32_t format;
+    uint32_t bytes;
+    uint32_t buffer;
+    uint32_t capacity;
+    int32_t result;
+```
+
+0 success, negative errno failure
+
+```c
+uint32_t reserved[3];
+};
 struct ciuki_dosvm_text {
     uint32_t buffer;
     uint32_t capacity;
@@ -4798,6 +4838,12 @@ struct ciuki_dosvm_text text;
 ```
 
 TEXT input buffer/capacity; output OEM cells
+
+```c
+struct ciuki_dosvm_clip clip;
+```
+
+CLIP_REQUEST/CLIP_COMPLETE
 
 ```c
 struct ciuki_dosvm_policy policy;
@@ -5723,13 +5769,13 @@ DESK_CLIPBOARD, DESK_CLIPBOARD_EVENT,
     DESK_DOS_CLIPBOARD
 ```
 
-v2 desktop to DOS window: u32 action 1 Mark, 2 Copy, 3 Paste, 4 toggle QuickEdit
+v2 desktop to DOS window: u32 action 1 Mark, 2 Copy, 3 Paste, 4 toggle QuickEdit, 5 toggle Exclusive mode
 
 ```c
 };
 enum desk_clip_op { DESK_CLIP_QUERY = 1, DESK_CLIP_EMPTY, DESK_CLIP_PUT, DESK_CLIP_CLOSE,
-                    DESK_CLIP_GET, DESK_CLIP_WATCH, DESK_CLIP_REGISTER, DESK_CLIP_NAME, DESK_CLIP_OPEN, DESK_CLIP_RELEASE };
-enum desk_clip_kind { DESK_CLIP_REPLY = 1, DESK_CLIP_RENDER, DESK_CLIP_CHANGED, DESK_CLIP_DESTROY };
+                    DESK_CLIP_GET, DESK_CLIP_WATCH, DESK_CLIP_REGISTER, DESK_CLIP_NAME, DESK_CLIP_OPEN, DESK_CLIP_RELEASE, DESK_CLIP_DISPLAY, DESK_CLIP_DISPLAY_REPLY };
+enum desk_clip_kind { DESK_CLIP_REPLY = 1, DESK_CLIP_RENDER, DESK_CLIP_CHANGED, DESK_CLIP_DESTROY, DESK_CLIP_DISPLAY_EVENT };
 #define DESK_CLIP_DELAYED 1u
 ```
 

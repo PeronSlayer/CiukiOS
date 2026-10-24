@@ -109,9 +109,14 @@ static int clip_parse(const uint8_t *b, unsigned n, int client, unsigned fds, st
         if (n<28) return 0;
         w->serial=desk_get32(b); w->op=desk_get32(b+4); w->format=desk_get32(b+8); w->flags=desk_get32(b+12);
         w->bytes=desk_get32(b+16); w->token=desk_get32(b+20); w->count=desk_get32(b+24);
-        if (!w->serial || w->op<DESK_CLIP_QUERY || w->op>DESK_CLIP_RELEASE || w->count>DESK_CLIP_NAME_MAX || n!=28+w->count) return 0;
+        if (!w->serial || w->op<DESK_CLIP_QUERY || w->op>DESK_CLIP_DISPLAY_REPLY || w->count>DESK_CLIP_NAME_MAX || n!=28+w->count) return 0;
         unsigned want_fd=0;
         switch (w->op) {
+        case DESK_CLIP_DISPLAY: case DESK_CLIP_DISPLAY_REPLY:
+            if (w->count || w->bytes>DESK_CLIP_ITEM_MAX || w->format<0x309 || w->format>0x30e || w->format==0x30d) return 0;
+            if (w->op==DESK_CLIP_DISPLAY && (w->flags || w->bytes!=((w->format==0x309 || w->format==0x30b) ? 24u : 8u))) return 0;
+            if (w->op==DESK_CLIP_DISPLAY_REPLY && (!w->token || !w->flags)) return 0;
+            want_fd=!!w->bytes; break;
         case DESK_CLIP_PUT:
             if (!w->format || w->token || w->count || (w->flags&~3u) || w->flags==3 ||
                 w->bytes>DESK_CLIP_ITEM_MAX || ((w->flags&DESK_CLIP_DELAYED) && w->bytes)) return 0;
@@ -139,13 +144,17 @@ static int clip_parse(const uint8_t *b, unsigned n, int client, unsigned fds, st
     w->serial=desk_get32(b); w->kind=desk_get32(b+4); w->op=desk_get32(b+8); w->result=(int32_t)desk_get32(b+12);
     w->format=desk_get32(b+16); w->bytes=desk_get32(b+20); w->sequence=desk_get32(b+24); w->token=desk_get32(b+28);
     w->count=desk_get32(b+32);
-    if (w->kind<DESK_CLIP_REPLY || w->kind>DESK_CLIP_DESTROY || w->result>0 || w->result < -4095) return 0;
+    if (w->kind<DESK_CLIP_REPLY || w->kind>DESK_CLIP_DISPLAY_EVENT || w->result>0 || w->result < -4095) return 0;
+    if (w->kind==DESK_CLIP_DISPLAY_EVENT) {
+        return w->serial && w->token && w->op==DESK_CLIP_DISPLAY && !w->result && !w->count && n==36 &&
+            w->format>=0x309 && w->format<=0x30e && w->format!=0x30d && w->bytes<=DESK_CLIP_ITEM_MAX && fds==!!w->bytes;
+    }
     if (w->kind!=DESK_CLIP_REPLY) {
         if (w->serial || w->op || w->result || w->count || n!=36 || fds) return 0;
         if (w->kind==DESK_CLIP_RENDER ? !w->format || w->bytes : w->format || w->bytes) return 0;
         return 1;
     }
-    if (!w->serial || w->op<DESK_CLIP_QUERY || w->op>DESK_CLIP_RELEASE) return 0;
+    if (!w->serial || w->op<DESK_CLIP_QUERY || w->op>DESK_CLIP_DISPLAY_REPLY) return 0;
     if (w->op==DESK_CLIP_NAME) {
         if (w->count>DESK_CLIP_NAME_MAX || n!=36+w->count || !desk_utf8_valid(b+36,w->count) ||
             has_nul((const char *)b+36,w->count)) return 0;
@@ -155,7 +164,7 @@ static int clip_parse(const uint8_t *b, unsigned n, int client, unsigned fds, st
         for (unsigned i=0;i<w->count;i++) w->formats[i]=desk_get32(b+36+4*i);
     }
     if (w->bytes>DESK_CLIP_ITEM_MAX && w->op!=DESK_CLIP_QUERY) return 0;
-    return fds==(w->op==DESK_CLIP_GET && !w->result && w->bytes ? 1u : 0u);
+    return fds==((w->op==DESK_CLIP_GET || w->op==DESK_CLIP_DISPLAY) && !w->result && w->bytes ? 1u : 0u);
 }
 int desk_clip_message(struct ciuki_message *m, unsigned version, int client,
                       const struct desk_clip_wire *w, int fd)
@@ -460,7 +469,7 @@ int desk_parse(const struct ciuki_message *m, int client,
     unsigned n = 4;
     if (p->opcode==DESK_DOS_CLIPBOARD) {
         p->flags=desk_get32(m->data+4);
-        return !client && m->data[0]==DESK_SHELL_VERSION && m->length==8 && !m->fd_count && !resize && p->flags>=1 && p->flags<=4;
+        return !client && m->data[0]==DESK_SHELL_VERSION && m->length==8 && !m->fd_count && p->flags>=1 && p->flags<=5;
     }
     if (p->opcode==DESK_DOS_FULLSCREEN)
         return !client && m->data[0]==DESK_SHELL_VERSION && m->length==4 && !m->fd_count && !resize;

@@ -11,6 +11,16 @@ int du_clip_close(void);
 int du_clip_empty(void);
 int du_clip_put(unsigned format, const void *, uint32_t);
 int du_clip_get(unsigned format, void **, uint32_t *);
+/* Producer callback: DESK_CLIP_RENDER (one format), DESTROY, or RELEASE
+ * (render all before window destruction). RENDER calls du_clip_put without
+ * opening the clipboard; RELEASE opens/closes it like WM_RENDERALLFORMATS. */
+typedef void (*du_clip_producer)(void *, unsigned event, unsigned format);
+void du_clip_producer_bind(du_clip_producer, void *);
+int du_clip_delay(unsigned format);
+void du_clip_event(const struct desk_clip_wire *);
+void du_clip_release(void);
+/* CF_OWNERDISPLAY viewer messages 0309h..030eh, explicit byte payload. */
+int du_clip_display(unsigned message,const void *,uint32_t,void **,uint32_t *);
 int du_clip_register(const char *);
 int du_clip_query(struct desk_clip_wire *);
 int du_clip_available(unsigned format); /* notification-cached menu state; GET remains fresh */

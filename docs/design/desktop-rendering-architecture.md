@@ -464,6 +464,8 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 69 | Power meter (G11, `power-policy.md`): the battery icon appears with the first record, changes with each reading, is hidden or shown by "Show power meter on taskbar"; its tooltip follows the readings; the scheme menu; a battery alarm's message window | the tray (re-laid out when the icon count changes), the old and new tooltip box, the menu box (row 13), the message window (row 17) | `desk_shell_power_update`, `desk_shell_power_config`, `power_tooltip_damage`, `desk_shell_tray_damage`, `SH_MENU_POWER`, `power_alarm` | none | power |
 | 31 | Resource Meter tray icon (G30; Windows 98 `Shell_NotifyIcon` of rsrcmtr.exe): appears with the running Resource Meter window, changes its level bar, tooltip with the three percentages, click opens the window, removed when the program ends | the tray box and everything right of the changed icon (the clock and icons shift by one slot), then only the icon box; the tooltip box | `desk_shell_resources_update`, `draw_tray`, `desk_shell_tray_damage`, `hover_target` 6 | none | resource meter tray icon |
 | 70 | NetSurf system-clipboard paste and completion of a sampled large raster (FX-24B) | changed content rectangles, clipped to the browser client; overlapping windows remain intact | existing `DESK_DAMAGE`, `ciuki_browser_damage`, `ciuki_browser_present` | no new protocol event; browser changes use the normal damage path | browser clipboard and raster |
+| 71 | DOS clipboard settings (G5b): QuickEdit and Exclusive mode commands in the DOS window menu | menu outer box on open, hot row and dismissal; normal client damage when a selection starts/ends | `shell.c` DOS menu, `dos_clip_action`, shared `clipboard_settings.h` | none new; settings are persisted before applying them | DOS clipboard settings (appended after saver) |
+| 72 | CF_OWNERDISPLAY viewer size/paint/scroll and owner replacement (G5b) | viewer client damage through the ordinary native/Win32 backing surface; old viewer box when closed | `clipbrd_main.c` preview, USER `clipboard_display.c`, normal DAMAGE/PRESENT | handles/HDC never cross processes; owner paints a bounded local surface whose DIB is returned to the viewer | clipboard owner display (appended after DOS clipboard settings) |
 
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with
@@ -472,22 +474,21 @@ fx-15b after the merge, with the reconcile extended to the band and the
 drag image. Rows 31-35 came with G4 (`docs/design/taskbar-arrangement-windows-keys.md`),
 row 36 with G21, row 37 with fx-26, row 38 with G13 (`docs/directives/g13-g16-os-gaps-batch-3.md`)
 and rows 39-41 with G10 (`docs/directives/g7-g12-os-gaps-batch-2.md`).
-Rows 47-48 cover G12 (`docs/design/input-settings.md`), rows 49-53 G17,
-row 54 G22, row 55 G31 and row 56 G32 logon.
-The randomized sequences gained operations 42-47 (taskbar menu, Win+D/M and
+Rows 42–46 cover G7 and G8; G12 occupies executable rows 35–36, G17 row 37,
+printing row 38, G32 logon row 39, G24 Regional Settings row 40 and G29 Disk
+tools row 41. G5b appends inventory rows 71–72 for DOS clipboard settings and
+the CF_OWNERDISPLAY viewer without shifting those existing executable rows.
+The randomized sequences gained operations 42–47 (taskbar menu, Win+D/M and
 Alt+M, taskbar focus keys, Alt+F6/Menu key/Shift+F10/F3, caption icon,
 Win+E/R/F/Break/F1). Row 37 adds fx-26's drag with concurrent damage.
 The executable row table groups several inventory events into one scenario:
 main's indexes 0–32 stay unchanged, including G4 at `WM_ROW=24` through
 `WM_ROW=28`, startup at 29, fx-26 at 30, fault at 31 and saver at 32.
-G7 appends inventory row 42 and executable scenario `row_find` at `WM_ROW=33`.
-G8 appends inventory rows 43–46. Its desktop-menu scenario is
-`row_g8_menus`, selected by `WM_ROW=34`; rows 44–46 use the production
-Files dialog replay. G12 follows at `WM_ROW=35` and `WM_ROW=36`, G17 at
-`WM_ROW=37`, printing at `WM_ROW=38` and G32 logon at `WM_ROW=39`.
-G24 Regional Settings follows at `WM_ROW=40` (inventory rows 57–61).
-G29 Disk tools follows at `WM_ROW=41` (inventory row 62).
-Existing executable scenario indexes stay unchanged.
+G7 appends executable scenario `row_find` at `WM_ROW=33`; G8 uses
+`row_g8_menus` at `WM_ROW=34`; G12 follows at `WM_ROW=35` and `WM_ROW=36`.
+G17 uses `WM_ROW=37`, printing 38, G32 logon 39, G24 40 and G29 41.
+G5b's DOS clipboard scenarios are appended after these rows. Existing
+executable scenario indexes stay unchanged.
 
 ### One rule instead of one fix per path: the frame reconcile
 

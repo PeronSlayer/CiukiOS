@@ -4,7 +4,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
+#include "../../sdk/libreg/casefold.h"
 
 static void changed(struct clip_store *s) { if (!++s->sequence) ++s->sequence; s->dirty=1; }
 void clip_init(struct clip_store *s) { memset(s,0,sizeof(*s)); s->locale=0x409; }
@@ -17,7 +17,7 @@ void clip_disconnect(struct clip_store *s, uint32_t client)
     if (s->opener==client) s->opener=s->open_token=0;
     if (s->owner!=client) return;
     for (unsigned i=0;i<s->count;) {
-        if (s->items[i].delayed) { memmove(s->items+i,s->items+i+1,(s->count-i-1)*sizeof(*s->items)); s->count--; changed(s); }
+        if (s->items[i].delayed || s->items[i].format==0x80) { memmove(s->items+i,s->items+i+1,(s->count-i-1)*sizeof(*s->items)); s->count--; changed(s); }
         else i++;
     }
     s->owner=s->token=0;
@@ -27,11 +27,34 @@ static struct clip_item *item(struct clip_store *s, unsigned f)
 static int text(unsigned f) { return f==1 || f==7 || f==13; }
 static int valid_format(const struct clip_store *s, unsigned f)
 {
-    return (f>=1 && f<=17 && f!=2 && f!=3 && f!=9 && f!=14) || f==0x81 ||
+    return (f>=1 && f<=17) || (f>=0x80 && f<=0x83) || f==0x8e ||
            (f>=0x200 && f<=0x2ff) || (f>=0xc000 && f<0xc000+s->names);
 }
-static int name_equal(const char *a, const char *b)
-{ for (;*a && *b;a++,b++) if (tolower((unsigned char)*a)!=tolower((unsigned char)*b)) return 0; return *a==*b; }
+/* Validated UTF-8, Unicode full folding without normalization, matching the
+ * registry atom namespace (sdk/libreg/casefold.h). */
+struct name_cursor { const unsigned char *s; uint32_t pending[3]; unsigned at; };
+static uint32_t name_fold(struct name_cursor *p)
+{
+    if (p->at<3 && p->pending[p->at]) return p->pending[p->at++];
+    unsigned c=*p->s++; if (!c) return 0;
+    if (c>=128) {
+        unsigned n=c<0xe0 ? 1 : c<0xf0 ? 2 : 3;
+        c&=(1u<<(6-n))-1;
+        while (n--) c=(c<<6)|(*p->s++&63);
+    }
+    size_t lo=0,hi=sizeof(folds)/sizeof(*folds);
+    while (lo<hi) { size_t m=(lo+hi)/2; if (folds[m].from<c) lo=m+1; else hi=m; }
+    memset(p->pending,0,sizeof(p->pending)); p->at=1;
+    if (lo<sizeof(folds)/sizeof(*folds) && folds[lo].from==c) {
+        memcpy(p->pending,folds[lo].to,sizeof(p->pending)); c=p->pending[0];
+    }
+    return c;
+}
+static int name_equal(const char *a,const char *b)
+{
+    struct name_cursor x={.s=(const unsigned char *)a},y={.s=(const unsigned char *)b};
+    for (;;) { unsigned c=name_fold(&x),d=name_fold(&y); if (c!=d) return 0; if (!c) return 1; }
+}
 /* CP1252's non-Latin-1 characters; undefined codes retain their control value. */
 static const uint16_t cp1252[32]={0x20ac,0x81,0x201a,0x192,0x201e,0x2026,0x2020,0x2021,0x2c6,0x2030,0x160,0x2039,0x152,0x8d,0x17d,0x8f,0x90,0x2018,0x2019,0x201c,0x201d,0x2022,0x2013,0x2014,0x2dc,0x2122,0x161,0x203a,0x153,0x9d,0x17e,0x178};
 static const uint16_t cp437[128]={
@@ -74,6 +97,7 @@ static int put(struct clip_store *s, const struct desk_clip_wire *w, const void 
     struct clip_item *p=item(s,w->format);
     if (!valid_format(s,w->format) || (w->bytes && !data) || w->bytes>DESK_CLIP_ITEM_MAX ||
         (w->flags&~3u) || w->flags==3 || ((w->flags&1) && w->bytes)) return -EINVAL;
+    if (w->format==0x80 && (w->bytes || w->flags!=DESK_CLIP_DELAYED)) return -EINVAL;
     if ((w->flags&2) && (!p || !p->delayed)) return -EINVAL;
     if (!(w->flags&1) && text(w->format)) {
         if (w->format==13 ? w->bytes<2 || (w->bytes&1) || ((const unsigned char *)data)[w->bytes-1] || ((const unsigned char *)data)[w->bytes-2] :
@@ -87,7 +111,7 @@ static int put(struct clip_store *s, const struct desk_clip_wire *w, const void 
     if (w->bytes && !copy) return -ENOMEM;
     if (copy) memcpy(copy,data,w->bytes);
     if (!p) p=&s->items[s->count++]; else free(p->data);
-    *p=(struct clip_item){w->format,w->bytes,copy,!!(w->flags&1)};
+    *p=(struct clip_item){w->format,w->bytes,copy,!!(w->flags&1) && w->format!=0x80};
     s->bytes=s->bytes-old+w->bytes; changed(s); return 0;
 }
 static void add_format(struct desk_clip_wire *r, unsigned f)
@@ -105,7 +129,8 @@ int clip_request(struct clip_store *s, uint32_t client, const struct desk_clip_w
         for (unsigned i=0;i<s->count;i++) {
             unsigned f=s->items[i].format; add_format(r,f);
             if (text(f)) { add_format(r,1); add_format(r,7); add_format(r,13); }
-            if (f==8) add_format(r,2);
+            if (f==8 || f==17) add_format(r,2);
+            if (f==2) add_format(r,8);
         } break;
     case DESK_CLIP_REGISTER: {
         if (!w->count || w->count>DESK_CLIP_NAME_MAX || !desk_utf8_valid((const uint8_t *)w->name,w->count) || memchr(w->name,0,w->count)) { error=-EINVAL; break; }
@@ -130,12 +155,15 @@ int clip_request(struct clip_store *s, uint32_t client, const struct desk_clip_w
         else error=put(s,w,data); break;
     case DESK_CLIP_GET: {
         if (s->opener!=client) { error=-EPERM; break; }
-        unsigned f=w->format==2 ? 8 : w->format; struct clip_item *p=item(s,f);
-        if (!p && f==8) p=item(s,17);
+        unsigned f=w->format; struct clip_item *p=item(s,f);
+        if (!p && f==2) p=item(s,8);
+        if (!p && f==8) p=item(s,2);
+        if (!p && (f==8 || f==2)) p=item(s,17);
         if (!p && text(f)) { p=item(s,13); if (!p) p=item(s,1); if (!p) p=item(s,7); }
         if (!p) { error=-ENOENT; break; }
         if (p->delayed) { r->format=p->format; error=-EAGAIN; break; }
         if (p->format!=f && text(f)) { struct clip_item *locale=item(s,16);
+            if (locale && locale->delayed) { r->format=16; error=-EAGAIN; break; }
             uint32_t lcid=locale ? desk_get32(locale->data) : s->locale;
             unsigned lang=lcid&1023;
             int western=lcid==0x809 || lang==16 || lang==7 || lang==12 || lang==10 || lang==19 || lang==22 || lang==29 || lang==6 || lang==20 || lang==11;

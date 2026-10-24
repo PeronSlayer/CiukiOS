@@ -493,7 +493,7 @@ void dosvm_fullscreen_poll(void)
             if (fullscreen_sample_frame) v->fullscreen_frame_seconds++;
             fullscreen_sample_frame=false;
         }
-        bool idle=v->fullscreen_suspended || v->idle.sleeping ||
+        bool idle=v->fullscreen_suspended || v->idle.sleeping || v->clipboard.pending ||
             (v->idle.seen && g_ticks-v->idle.last_tick<1000) ||
             (v->monitor.state==V86_HALTED && v->monitor.vif);
         bool frame_timeout=!fullscreen_frame_seen && deadline_passed(fullscreen_frame_deadline);
@@ -550,6 +550,10 @@ bool dosvm_fullscreen_input(uint16_t type, uint16_t code, int32_t value)
         if (code==0x1D) left_ctrl=value!=0;
         if (code==0x11D) right_ctrl=value!=0;
         if (swallowed==code) { if (!value) swallowed=0; return true; }
+        if (fullscreen_owner && (code==0x137 || code==0x54)) {
+            if (value==1) { fullscreen_owner->clipboard_screen=true; dosvm_idle_wake(fullscreen_owner); }
+            return true;
+        }
         bool alt=left_alt||right_alt, ctrl=left_ctrl||right_ctrl;
         if (ctrl && alt && (code==0x153 || code==0x53)) return false; /* system path */
         if (value==1 && alt && !ctrl && (code==0x1C || code==0x11C || (code==0x0F && fullscreen_owner))) {

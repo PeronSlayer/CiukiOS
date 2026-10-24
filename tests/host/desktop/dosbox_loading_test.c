@@ -49,6 +49,8 @@ int dos_clip_marking(void) { return 0; }
 int dos_clip_pasting(void) { return 0; }
 int dos_clip_dirty(void) { return 0; }
 void dos_clip_destroy(void) {}
+void dos_clip_settings(const char *typed) { (void)typed; }
+int dos_clip_service(void) { return 0; }
 
 static unsigned surfaces;
 static uint64_t clock_ms, enter_ms, first_frame_ms;
@@ -74,7 +76,7 @@ static int last_permille = -1, vm_created;
 static volatile int create_entered, create_release;
 static unsigned create_polls, create_pongs, create_checking, create_pulses, create_queries;
 static uint64_t create_started_ms, create_released_ms;
-static void real_sleep(void) { struct timespec t = {0, 1000000}; nanosleep(&t, NULL); }
+static void real_sleep(void) { struct timespec t = {.tv_nsec = 1000000}; nanosleep(&t, NULL); }
 static int creating(void) { return create_job.started && !__atomic_load_n(&create_job.done, __ATOMIC_ACQUIRE); }
 static char console[256]; static unsigned console_at;
 static const struct desk_theme replay_theme = {.face = 0xcccccc, .ink = 0, .select = 0x2266aa};
@@ -104,6 +106,11 @@ int ciuki_surface_create(uint32_t w, uint32_t h, uint32_t f)
 { assert(w == 640 && h == 480 && f == CIUKI_SURFACE_XRGB8888); return 7+(int)surfaces++; }
 void *ciuki_surface_map(int fd, int prot)
 { assert((fd == 7 || fd==8) && prot == (PROT_READ | PROT_WRITE)); return fd==7 ? guest_screen : screen; }
+int ciuki_surface_info(int fd,struct ciuki_surface_info *info)
+{
+    (void)fd; *info=(struct ciuki_surface_info){sizeof(*info),640,480,2560,CIUKI_SURFACE_XRGB8888,sizeof(screen)};
+    return 0;
+}
 int ciuki_channel_send(int fd, const struct ciuki_message *m, uint32_t flags)
 {
     assert(fd == 3 && !flags);

@@ -403,7 +403,14 @@ struct dosvm {
     unsigned console_length;
     cvga_geometry video_geometry;
     bool video_modex, video_chain4;
-    bool clipboard_mark;
+    bool clipboard_mark, clipboard_screen;
+    struct {
+        struct kwait wait;
+        uint32_t serial, op, format, bytes;
+        uint8_t *data;
+        int result;
+        bool pending, done;
+    } clipboard;
     uint8_t video_dac_mask;
     uint16_t video_row_base[DOSVM_VIDEO_HEIGHT];
     uint8_t video_row_pan[DOSVM_VIDEO_HEIGHT];
@@ -471,6 +478,10 @@ bool dosvm_file_unified_info(const struct dosvm *,struct dosvm_unified_info *) _
 /* fx-10 MSCDEX (dosvm_cdaudio.c): INT 2Fh AH=15h from V86 code and from
  * DPMI 0300h. -ENOSYS for other calls or a VM without a CD slot. Weak for
  * the standalone monitor fixtures that do not link the CD audio task. */
+int dosvm_clipboard_interrupt(struct dosvm *,struct v86_frame *);
+int dosvm_clipboard_reflect(struct dosvm *,struct v86_frame *,uint16_t);
+int dosvm_clipboard_client(struct dosvm *,unsigned,struct ciuki_dosvm_command *);
+void dosvm_clipboard_checkpoint(struct dosvm *);
 int dosvm_cdaudio_interrupt(struct dosvm *,struct v86_frame *) __attribute__((weak));
 int dosvm_cdaudio_reflect(struct dosvm *,struct v86_frame *,uint16_t image) __attribute__((weak));
 int dosvm_cdaudio_open(struct dosvm *) __attribute__((weak));

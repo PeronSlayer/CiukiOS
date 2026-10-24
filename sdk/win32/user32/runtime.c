@@ -179,6 +179,14 @@ BOOL u32_directory(UINT op, HWND h, DWORD index, DWORD type, DWORD flags,
                    struct w32r_reply *reply, void *result, DWORD cap) {
   char utf8[1021];
   u32_utf8(utf8, sizeof(utf8), name ? name : "");
+  return u32_directory_utf8(op,h,index,type,flags,utf8,data,n,reply,result,cap);
+}
+BOOL u32_directory_utf8(UINT op, HWND h, DWORD index, DWORD type, DWORD flags,
+                   const char *name, const void *data, DWORD n,
+                   struct w32r_reply *reply, void *result, DWORD cap) {
+  const char *utf8=name ? name : "";
+  unsigned length=w32_strlen(utf8);
+  if (length>1020) return u32_fail(87);
   DWORD len = w32_strlen(utf8) + 1,
         total = sizeof(struct w32r_request) + 1 + len + n;
   uint8_t *in = u32_alloc(total), *out = u32_alloc(W32R_MAX);
@@ -339,6 +347,11 @@ int strcmp(const char *a, const char *b) {
   while (*a && *a == *b)
     a++, b++;
   return (uint8_t)*a - (uint8_t)*b;
+}
+int strncmp(const char *a, const char *b, size_t n) {
+  while (n && *a && *a == *b)
+    a++, b++, n--;
+  return n ? (uint8_t)*a - (uint8_t)*b : 0;
 }
 #endif
 

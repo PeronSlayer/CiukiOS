@@ -409,3 +409,26 @@ void u32_gdi_ensure(void) {
   u32_set_gdi(&adapter);
   g.palette_hook(palette_notify, 0);
 }
+
+/* Owner-display renders in the owner's local GDI DC, then the viewer draws
+ * the returned DIB in its own DC. No process-local HDC crosses the channel. */
+BOOL u32_clip_display_blit(HDC dc,const void *data,DWORD bytes,const RECT *paint)
+{
+  u32_gdi_ensure();
+  if (!g.compatible_dc || bytes<40) return 0;
+  HANDLE bitmap=u32_dib_bitmap(data,bytes); if (!bitmap) return 0;
+  DWORD source=g.compatible_dc(0),old=source ? g.select(source,U32_PTR(bitmap)) : 0;
+  BOOL ok=0;
+  if (old) {
+    LONG width=w32_u32((const uint8_t *)data+4),height=w32_u32((const uint8_t *)data+8);
+    if (height<0) height=-height;
+    RECT r=paint ? *paint : (RECT){0,0,width,height};
+    if (r.left<0) r.left=0; if (r.top<0) r.top=0;
+    if (r.right>width) r.right=width; if (r.bottom>height) r.bottom=height;
+    if (r.right>r.left && r.bottom>r.top)
+      ok=g.stretch(U32_PTR(dc),r.left,r.top,r.right-r.left,r.bottom-r.top,source,r.left,r.top,r.right-r.left,r.bottom-r.top,0x00cc0020);
+    g.select(source,old);
+  }
+  if (source) g.delete_dc(source);
+  g.delete_object(U32_PTR(bitmap)); return ok;
+}

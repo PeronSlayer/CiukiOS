@@ -2527,10 +2527,14 @@ struct ciuki_pthread_condattr {
 #define CIUKI_DOSVM_IMAGE_QUERY 17u
 #define CIUKI_DOSVM_TEXT 18u /* owner-only snapshot of visible BIOS text cells */
 #define CIUKI_DOSVM_MARK 19u /* focused=1 pause for Mark, 0 resume */
+#define CIUKI_DOSVM_CLIP_REQUEST 20u /* owner fetches transient WINOLDAP request */
+#define CIUKI_DOSVM_CLIP_COMPLETE 21u /* matching serial completes it */
+#define CIUKI_DOSVM_CLIP_MAX 65536u
+#define CIUKI_DOSVM_CLIP_SCREEN 256u /* text-only full-screen Print Screen */
 #define CIUKI_DOSVM_TEXT_MAX 16000u
 /* G17 owner-bound visible OEM text and window execution policy. No pointers. */
-#define CIUKI_DOSVM_TEXT_CHUNK 20u
-#define CIUKI_DOSVM_POLICY 21u
+#define CIUKI_DOSVM_TEXT_CHUNK 22u
+#define CIUKI_DOSVM_POLICY 23u
 #define CIUKI_DOSVM_TEXT_BYTES 48u
 struct ciuki_dosvm_text_chunk {
     uint32_t row;
@@ -2554,6 +2558,7 @@ struct ciuki_dosvm_policy {
 #define CIUKI_DOSVM_EVENT_STATE 2u
 #define CIUKI_DOSVM_EVENT_CONSOLE 4u
 #define CIUKI_DOSVM_EVENT_TIMEOUT 8u
+#define CIUKI_DOSVM_EVENT_CLIPBOARD 16u
 /* CREATE launch.kernel: all three historical values map to unified (2).
  * Values 0/1 are retired compatibility inputs, never another kernel.
  * game is the catalog index+1, or zero for the interactive shell. */
@@ -2577,6 +2582,16 @@ struct ciuki_dosvm_policy {
 #define CIUKI_DOSVM_BOOTING 0u
 #define CIUKI_DOSVM_RUNNING 1u
 #define CIUKI_DOSVM_STOPPED 2u
+struct ciuki_dosvm_clip {
+    uint32_t serial;
+    uint32_t op; /* WINOLDAP AX low byte, or CLIP_SCREEN */
+    uint32_t format;
+    uint32_t bytes;
+    uint32_t buffer;
+    uint32_t capacity;
+    int32_t result; /* 0 success, negative errno failure */
+    uint32_t reserved[3];
+};
 struct ciuki_dosvm_text {
     uint32_t buffer;
     uint32_t capacity;
@@ -2602,6 +2617,7 @@ struct ciuki_dosvm_command {
        union {
         struct ciuki_input_event event; /* 72: INPUT */
         struct ciuki_dosvm_text text; /* TEXT input buffer/capacity; output OEM cells */
+        struct ciuki_dosvm_clip clip; /* CLIP_REQUEST/CLIP_COMPLETE */
         struct ciuki_dosvm_policy policy;
         struct { uint32_t kernel, game, memory, reserved[7]; } launch; /* CREATE input */
         struct { uint32_t bands[2], redraw, flags, reserved[6]; } presentation; /* bands output; redraw input 0/1 */

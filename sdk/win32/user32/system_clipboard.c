@@ -15,7 +15,7 @@ static DWORD render_tid;
 static DWORD render_depth;
 BOOL u32_clip_rendering(void) { return render_depth && render_tid==u32_tid(); }
 static HWND owner_window;
-static BOOL rpc(struct desk_clip_wire *w, const void *data,
+BOOL u32_clip_rpc(struct desk_clip_wire *w, const void *data,
                 struct desk_clip_wire *reply, void **out) {
   if (!u32_connect()) return 0;
   struct u32_surface surface = {.fd = -1};
@@ -71,29 +71,29 @@ static UINT to_wire(UINT f) {
   if (!n || n > DESK_CLIP_NAME_MAX) return 0;
   struct desk_clip_wire w = {.op=DESK_CLIP_REGISTER, .count=n}, r;
   w32_copy(w.name,name,n);
-  return rpc(&w,0,&r,0) ? r.format : 0;
+  return u32_clip_rpc(&w,0,&r,0) ? r.format : 0;
 }
 static UINT from_wire(UINT f) {
   if (f<0xc000) return f;
   struct desk_clip_wire w={.op=DESK_CLIP_NAME,.format=f},r;
-  if (!rpc(&w,0,&r,0)) return 0;
+  if (!u32_clip_rpc(&w,0,&r,0)) return 0;
   r.name[r.count]=0; struct w32r_reply atom;
-  return u32_directory(W32R_ATOM_ADD,0,0,0,0,r.name,0,0,&atom,0,0) ? atom.key : 0;
+  return u32_directory_utf8(W32R_ATOM_ADD,0,0,0,0,r.name,0,0,&atom,0,0) ? atom.key : 0;
 }
 static BOOL query(struct desk_clip_wire *r) {
-  struct desk_clip_wire w={.op=DESK_CLIP_QUERY}; return rpc(&w,0,r,0);
+  struct desk_clip_wire w={.op=DESK_CLIP_QUERY}; return u32_clip_rpc(&w,0,r,0);
 }
 BOOL u32_clip_call(UINT op, HWND hwnd, UINT f, DWORD flags, const void *data,
                    DWORD bytes, struct w32r_reply *result, void *out, DWORD cap) {
   w32_fill(result,0,sizeof(*result));
   struct desk_clip_wire w={0},r;
-  if (!watching) { w.op=DESK_CLIP_WATCH; w.flags=1; if (!rpc(&w,0,&r,0)) return 0; watching=1; w=(struct desk_clip_wire){0}; }
+  if (!watching) { w.op=DESK_CLIP_WATCH; w.flags=1; if (!u32_clip_rpc(&w,0,&r,0)) return 0; watching=1; w=(struct desk_clip_wire){0}; }
   if (op==W32R_CLIP_VIEWER || op==W32R_CLIP_CHAIN)
     return u32_directory(op,hwnd,u32_tid(),f,flags,"",data,bytes,result,out,cap);
   if (op==W32R_CLIP_OPEN) {
     if (!u32_directory(op,hwnd,u32_tid(),0,0,"",0,0,result,0,0)) return 0;
     w.op=DESK_CLIP_OPEN; w.token=U32_PTR(hwnd);
-    if (!rpc(&w,0,&r,0)) { struct w32r_reply ignored; u32_directory(W32R_CLIP_CLOSE,0,u32_tid(),0,0,"",0,0,&ignored,0,0); return 0; }
+    if (!u32_clip_rpc(&w,0,&r,0)) { struct w32r_reply ignored; u32_directory(W32R_CLIP_CLOSE,0,u32_tid(),0,0,"",0,0,&ignored,0,0); return 0; }
     return 1;
   }
   if (op==W32R_CLIP_OWNER || op==W32R_CLIP_QUERY) {
@@ -111,7 +111,7 @@ BOOL u32_clip_call(UINT op, HWND hwnd, UINT f, DWORD flags, const void *data,
   }
   if (op==W32R_CLIP_SET && !owner_window && !u32_clip_rendering()) return u32_fail(1418);
   void *copy=0;
-  BOOL ok=rpc(&w,data,&r,&copy);
+  BOOL ok=u32_clip_rpc(&w,data,&r,&copy);
   if (op==W32R_CLIP_CLOSE) {
     struct w32r_reply ignored;
     BOOL closed=u32_directory(W32R_CLIP_CLOSE,0,u32_tid(),0,0,"",0,0,&ignored,0,0);
@@ -125,7 +125,7 @@ BOOL u32_clip_call(UINT op, HWND hwnd, UINT f, DWORD flags, const void *data,
 }
 void *u32_clip_fetch(UINT f, DWORD *bytes) {
   struct desk_clip_wire w={.op=DESK_CLIP_GET,.format=to_wire(f)},r; void *data=0;
-  if (!w.format || !rpc(&w,0,&r,&data)) return 0;
+  if (!w.format || !u32_clip_rpc(&w,0,&r,&data)) return 0;
   *bytes=r.bytes; return data;
 }
 UINT u32_clip_enum(UINT previous) {
@@ -157,6 +157,8 @@ void u32_clip_event(const struct desk_packet *p) {
       }
       break;
     }
+  } else if (p->clip.kind==DESK_CLIP_DISPLAY_EVENT) {
+    u32_clip_display_event(p);
   } else if (p->clip.kind==DESK_CLIP_RENDER) {
     UINT format=from_wire(p->clip.format);
     struct u32_window *owner=u32_window((HWND)(uintptr_t)p->clip.token);
@@ -166,9 +168,13 @@ void u32_clip_event(const struct desk_packet *p) {
       render_depth--; render_tid=previous;
     }
   } else if (p->clip.kind==DESK_CLIP_DESTROY) {
-    if (owner_window) SendMessageA(owner_window,WM_DESTROYCLIPBOARD,0,0);
-    owner_window=0; u32_clipboard_owned_clear();
+    if (owner_window && U32_PTR(owner_window)==p->clip.token) {
+      SendMessageA(owner_window,WM_DESTROYCLIPBOARD,0,0);
+      owner_window=0; u32_clipboard_owned_clear();
+    }
+    u32_clipboard_changed(p->clip.sequence);
   } else if (p->clip.kind==DESK_CLIP_CHANGED) {
+    u32_clipboard_changed(p->clip.sequence);
     struct w32r_reply r;
     if (u32_directory(W32R_CLIP_OWNER,0,0,0,0,"",0,0,&r,0,0) && r.type && u32_window((HWND)(uintptr_t)r.type))
       PostMessageA((HWND)(uintptr_t)r.type,WM_DRAWCLIPBOARD,0,0);
@@ -179,7 +185,7 @@ void u32_clip_render_all(HWND hwnd, BOOL callbacks) {
   if (hwnd && hwnd==owner_window) {
     if (callbacks && u32_clip_has_delayed()) SendMessageA(hwnd,WM_RENDERALLFORMATS,0,0);
     struct desk_clip_wire w={.op=DESK_CLIP_RELEASE,.token=U32_PTR(hwnd)},r;
-    (void)rpc(&w,0,&r,0); owner_window=0; u32_clipboard_owned_clear();
+    (void)u32_clip_rpc(&w,0,&r,0); owner_window=0; u32_clipboard_owned_clear();
   }
 }
 
@@ -196,7 +202,7 @@ int W32API GetPriorityClipboardFormat(const UINT *formats, int count) {
 
 void u32_clip_abandon(DWORD tid) {
   struct desk_clip_wire w={.op=DESK_CLIP_CLOSE},r;
-  (void)rpc(&w,0,&r,0);
+  (void)u32_clip_rpc(&w,0,&r,0);
   struct w32r_reply ignored;
   u32_directory(W32R_CLIP_CLOSE,0,tid,0,0,"",0,0,&ignored,0,0);
 }
