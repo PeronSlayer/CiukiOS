@@ -23,6 +23,7 @@ struct ciuki_connection {
     int fd;unsigned state,port;char host[254];bool secure;
     uint64_t idle_ms;
     struct ciuki_job *job;
+    char proxy_host[254];
     struct ciuki_tls *tls;
 };
 struct ciuki_net { struct ciuki_dns *dns;struct ciuki_connection connections[8];const br_x509_trust_anchor *anchors;size_t anchor_count;bool polling;unsigned char input[CIUKI_HTTP_SLICE]; };
@@ -111,11 +112,23 @@ static bool request(struct ciuki_job *j,const struct ciuki_request *r)
         unsigned c=(unsigned char)r->host[i];
         j->host[i]=(char)(c>='A'&&c<='Z'?c+32:c);
     }
+    j->proxy_port=0;
+    if(!r->proxy_host || !*r->proxy_host || r->tls)j->proxy_host[0]=0;
+    if(r->proxy_host && *r->proxy_host && !r->tls) {
+        size_t bytes=strlen(r->proxy_host);if(bytes>253 || !r->proxy_port || r->proxy_port>65535)return false;
+        for(size_t i=0;i<bytes;i++) { unsigned c=(unsigned char)r->proxy_host[i];if(!((c>='A'&&c<='Z')||(c>='a'&&c<='z')||(c>='0'&&c<='9')||c=='-'||c=='.'))return false; }
+        memmove(j->proxy_host,r->proxy_host,bytes+1);j->proxy_port=r->proxy_port;
+    }
     j->port=r->port;j->secure=r->tls;j->post=r->post!=NULL;
     if(r->post && (!text(r->post,CIUKI_HTTP_POST,false)))return false;
     if(r->cookie && (strlen(r->cookie)>CIUKI_HTTP_LINE || strchr(r->cookie,'\r')||strchr(r->cookie,'\n')))return false;
     char prefix[128];const char *method=r->post?"POST ":r->head?"HEAD ":"GET ";
-    if(!append(j,method,strlen(method)) || !append(j,r->target,strlen(r->target)) ||
+    if(!append(j,method,strlen(method)))return false;
+    if(j->proxy_port) {
+        char authority[280];int n=snprintf(authority,sizeof(authority),"http://%s:%u",j->host,j->port);
+        if(n<0 || (size_t)n>=sizeof(authority) || !append(j,authority,(size_t)n))return false;
+    }
+    if(!append(j,r->target,strlen(r->target)) ||
         !append(j," HTTP/1.1\r\nHost: ",17) || !append(j,j->host,strlen(j->host)))return false;
     int n;
     if(r->port!=(r->tls?443u:80u)){
@@ -171,7 +184,7 @@ struct ciuki_job *ciuki_net_job(const struct ciuki_request *r,ciuki_http_callbac
     if(r->post)bytes+=strlen(r->post)+1;
     if(r->cookie)bytes+=strlen(r->cookie)+1;
     if(bytes>CIUKI_NET_PENDING_BUDGET-pending_bytes || !(j->snapshot=malloc(bytes))){ciuki_net_job_free(j);return NULL;}
-    j->pending_charge+=bytes;pending_bytes+=bytes;j->pending=*r;j->pending.host=j->host;
+    j->pending_charge+=bytes;pending_bytes+=bytes;j->pending=*r;j->pending.host=j->host;j->pending.proxy_host=j->proxy_host;
     const char **headers=j->snapshot;char *out=(char *)(headers+fields+1);
     for(size_t i=0;i<fields;i++)headers[i]=copy_text(&out,r->headers[i]);headers[fields]=NULL;
     j->pending.headers=headers;j->pending.target=copy_text(&out,r->target);
@@ -315,7 +328,7 @@ static void tls_failure(struct ciuki_job *j)
 static bool loopback_name(const char *host)
 { return !strcasecmp(host,"localhost") || !strcasecmp(host,"localhost."); }
 static bool origin(const struct ciuki_connection *c,const struct ciuki_job *j)
-{ return c->state && c->port==j->port && c->secure==j->secure && !strcmp(c->host,j->host); }
+{ return c->state && c->port==(j->proxy_port?j->proxy_port:j->port) && c->secure==j->secure && !strcmp(c->host,j->host) && !strcmp(c->proxy_host,j->proxy_host); }
 static void io_error(struct ciuki_job *j,int error)
 {
     j->io_errno=error;
@@ -330,7 +343,7 @@ static bool open_connection(struct ciuki_connection *c,uint32_t address)
     if(c->fd<0){io_error(j,errno);return false;}
     int flags=fcntl(c->fd,F_GETFL,0);
     if(flags<0||fcntl(c->fd,F_SETFL,flags|O_NONBLOCK)<0){io_error(j,errno);return false;}
-    struct sockaddr_in a={0};a.sin_family=AF_INET;a.sin_port=htons((uint16_t)j->port);a.sin_addr.s_addr=address;
+    struct sockaddr_in a={0};a.sin_family=AF_INET;a.sin_port=htons((uint16_t)c->port);a.sin_addr.s_addr=address;
     int r=connect(c->fd,(struct sockaddr *)&a,sizeof(a));
     if(r<0 && errno!=EINPROGRESS && errno!=EALREADY && errno!=EINTR){io_error(j,errno);return false;}
     c->state=CONNECTING;return true;
@@ -338,10 +351,11 @@ static bool open_connection(struct ciuki_connection *c,uint32_t address)
 static bool resolve(struct ciuki_net *n,struct ciuki_connection *c)
 {
     struct in_addr address;
+    const char *host=c->job->proxy_port?c->job->proxy_host:c->job->host;
     c->state=RESOLVING;
     ciuki_net_record(c->job,CIUKI_FETCH_DNS);
-    if(inet_pton(AF_INET,c->job->host,&address)==1)return open_connection(c,address.s_addr);
-    c->job->dns_token=ciuki_dns_submit(n->dns,c->job->host);
+    if(inet_pton(AF_INET,host,&address)==1)return open_connection(c,address.s_addr);
+    c->job->dns_token=ciuki_dns_submit(n->dns,host);
     return true;
 }
 bool ciuki_net_start(struct ciuki_net *n,struct ciuki_job *j)
@@ -372,7 +386,7 @@ bool ciuki_net_start(struct ciuki_net *n,struct ciuki_job *j)
     if(!idle)slot->state=RESOLVING;
     if(!j->started_ms){j->error="Monotonic system clock is unavailable.";return true;}
     if(idle){j->pooled=true;slot->state=TRANSFER;return true;}
-    slot->port=j->port;slot->secure=j->secure;memcpy(slot->host,j->host,sizeof(slot->host));
+    slot->port=j->proxy_port?j->proxy_port:j->port;memcpy(slot->proxy_host,j->proxy_host,sizeof(slot->proxy_host));slot->secure=j->secure;memcpy(slot->host,j->host,sizeof(slot->host));
     /* Refuse invalid clock/entropy before DNS or any TLS network traffic. */
     if(j->secure){
         slot->tls=ciuki_tls_create(j->host,n->anchors,n->anchor_count,&j->tls_error);
@@ -452,7 +466,7 @@ void ciuki_net_poll(struct ciuki_net *n)
         if(!j->error && now-j->started_ms>=30000)io_error(j,ETIMEDOUT);
         if(!j->error && !j->cancelled && c->state==RESOLVING){
             uint32_t address;int error;
-            if(!j->dns_token)j->dns_token=ciuki_dns_submit(n->dns,j->host);
+            if(!j->dns_token)j->dns_token=ciuki_dns_submit(n->dns,j->proxy_port?j->proxy_host:j->host);
             if(j->dns_token && ciuki_dns_result(n->dns,j->dns_token,&address,&error)){
                 j->dns_token=0;
                 j->io_errno=error;

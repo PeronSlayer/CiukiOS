@@ -112,6 +112,15 @@ static int v3_parse(const struct ciuki_message *m, int client,
     if (p->opcode==DESK_HELLO) return client && !n && !m->fd_count && !p->window_id && !p->generation && !p->request;
     if (!p->window_id || !p->generation) return 0;
     switch (p->opcode) {
+    case DESK_LAUNCH:
+        /* G26 v3: URL-only launch; the desktop fixes the program to NetSurf. */
+        if(!client || n<5)return 0;
+        p->count=desk_get32(b);
+        if(!p->count || p->count>DESK_ARG_MAX || n!=4+p->count || !desk_utf8_valid(b+4,p->count))return 0;
+        memcpy(p->argument,b+4,p->count);
+        if(strncmp(p->argument,"http://",7) && strncmp(p->argument,"https://",8) &&
+           strncmp(p->argument,"file:///",8) && strncmp(p->argument,"about:",6))return 0;
+        expected=n;break;
     case DESK_CREATE_WINDOW:
         if (!client || n<36) return 0;
         p->style=desk_get32(b); p->owner=desk_get32(b+4); p->owner_generation=desk_get32(b+8);

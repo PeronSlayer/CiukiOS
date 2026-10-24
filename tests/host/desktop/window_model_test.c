@@ -1025,9 +1025,31 @@ static void row_drag(unsigned m)
     tap(DU_KEY_ESC); press(CIUKI_BUTTON_RIGHT,0); step("cancelled");
     wm_end();
 }
+static void row_network_tools(unsigned m)
+{
+    row_name="G26 browser windows and Internet dialogs";wm_begin(m,1);
+    int window=wm_v3_window(DESK_V3_OVERLAPPED,-1,160,72,260,180);assert(window>=0);
+    struct desk_client *c=&d.clients[window];
+    struct ciuki_message request;const char *url="http://example.test/download";unsigned n=(unsigned)strlen(url);
+    v3msg(&request,DESK_LAUNCH,4+n,c->v3_id,c->v3_generation);
+    desk_put32(request.data+16,n);memcpy(request.data+20,url,n);
+    snprintf(d.clients[v3_root].application,sizeof(d.clients[v3_root].application),"other");
+    assert(desk_v3_receive(&d,v3_root,&request)==-EPERM);step("untrusted launch refused");
+    snprintf(d.clients[v3_root].application,sizeof(d.clients[v3_root].application),"netsurf");
+    assert(!desk_v3_receive(&d,v3_root,&request));assert(last_app);step("new browser launch queued");
+    struct fake_app *child=last_app;app_spawned(child);app_create_window(child);step("new browser window visible");
+    app_paint(child,0,0,(unsigned)child->w,(unsigned)child->h,0x13579);step("new browser first frame");
+    /* Application widgets/dialogs publish damage through the common client
+     * path. Their state transitions are exercised by G26's app host tests. */
+    app_paint(child,12,24,120,64,0x24680);step("download Save dialog opens");
+    app_paint(child,12,24,120,64,0x13579);step("Save dialog closes");
+    struct fake_app *panel=app_open("control",320,220,220,100);step("Internet Properties opens");
+    app_paint(panel,20,50,240,120,0xabcdef);step("Internet Properties apply status");
+    wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
-    row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag};
+    row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,row_network_tools};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code). */

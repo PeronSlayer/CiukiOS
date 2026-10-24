@@ -150,6 +150,7 @@ void syscall_dispatch(struct trap_frame *tf)
     case CIUKI_SYS_POLL:
     case CIUKI_SYS_RESOLVE4:
     case CIUKI_SYS_NETCTL:
+    case CIUKI_SYS_NET_INFO:
         r = net_socket_call ? net_socket_call(tf) : -ENOSYS;
         break;
     case CIUKI_SYS_GETENTROPY:

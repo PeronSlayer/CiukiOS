@@ -2137,6 +2137,14 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
     if (error) { close_attachments(d,m,-1); if (p.request) v3_reply(d,peer,&p,error); return error; }
     struct desk_client *c=&d->clients[i];
     switch (p.opcode) {
+    case DESK_LAUNCH: {
+        if(strcmp(anchor->application,"netsurf")) { error=-EPERM;break; }
+        const char *args[]={p.argument};
+        desk_launch_origin(d,DESK_LAUNCH_SHELL,NULL);
+        error=desk_task_launch_args(d,"netsurf",args,1);
+        if(error>0)error=0;
+        break;
+    }
     case DESK_DAMAGE: case DESK_V3_PRESENT: {
         if (p.opcode==DESK_V3_PRESENT && (!p.request || c->gl_present_request || c->minimized || c->collapsed || !p.width || !p.height)) { error=-EAGAIN;break; }
         if (!p.width || !p.height) break;

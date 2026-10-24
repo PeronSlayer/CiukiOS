@@ -31,6 +31,7 @@ void net_fd_changed(struct process *, unsigned);
 /* Input publication, including IRQ producers: defer the poll waiter walk. */
 void net_input_changed(void);
 uint32_t net_socket_count(void);
+void net_socket_snapshot(struct ciuki_net_socket_list *);
 uint32_t *net_socket_flags(struct proc_object *);
 bool net_socket_object(struct proc_object *);
 int32_t net_socket_call(struct trap_frame *);

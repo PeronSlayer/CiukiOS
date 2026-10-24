@@ -829,6 +829,7 @@ G1 TIME=97 is preserved; G6 follows the highest allocated syscall.
 ```c
 CIUKI_SYS_TIME = 97,
     CIUKI_SYS_FILE_INFO = 98,
+    CIUKI_SYS_NET_INFO = 99,
 };
 ```
 
@@ -4879,9 +4880,12 @@ F6 approved extension, 2026-10-20; public integers are SDK-owned.
 #define AF_INET 2
 #define SOCK_STREAM 1
 #define SOCK_DGRAM 2
+#define SOCK_RAW 3
 #define SOCK_NONBLOCK 2048
 #define SOCK_CLOEXEC 524288
 #define IPPROTO_IP 0
+#define IPPROTO_ICMP 1
+#define IP_TTL 2
 #define IPPROTO_TCP 6
 #define IPPROTO_UDP 17
 #define SHUT_RD 0
@@ -4909,7 +4913,30 @@ F6 approved extension, 2026-10-20; public integers are SDK-owned.
 #define CIUKI_SOCKET_IO_MAX 32768
 #define CIUKI_UDP_MAX 1472
 #define CIUKI_DNS_MAX 4
+#define CIUKI_NET_INFO_CONFIG 0u
+#define CIUKI_NET_INFO_SOCKETS 1u
+#define CIUKI_NET_SOCKET_CLOSED 0u
+#define CIUKI_NET_SOCKET_LISTEN 1u
+#define CIUKI_NET_SOCKET_CONNECTING 2u
+#define CIUKI_NET_SOCKET_CONNECTED 3u
+#define CIUKI_NET_SOCKET_CLOSE_WAIT 4u
 #pragma pack(push, 4)
+struct ciuki_net_socket_info {
+    uint32_t pid;
+    uint32_t type;
+    uint32_t state;
+    uint32_t local_address;
+    uint16_t local_port;
+    uint16_t peer_port;
+    uint32_t peer_address;
+};
+struct ciuki_net_socket_list {
+    uint32_t version;
+    uint32_t size;
+    uint32_t count;
+    uint32_t reserved;
+    struct ciuki_net_socket_info sockets[CIUKI_SOCKET_MAX];
+};
 struct ciuki_sockaddr_in {
     uint16_t family;
     uint16_t port;
@@ -5807,6 +5834,13 @@ Privileged configuration; returns 0 or -1 with errno.
 
 ```c
 int ciuki_net_control(unsigned operation, struct ciuki_net_control *);
+```
+
+Read-only adapter CONFIG or bounded native SOCKETS snapshot; no capability.
+operation is CIUKI_NET_INFO_CONFIG/SOCKETS; bytes must match the record.
+
+```c
+int ciuki_net_info(unsigned operation, void *record, uint32_t bytes);
 #endif
 ```
 

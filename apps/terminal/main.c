@@ -80,7 +80,7 @@ int main(int argc,char **argv)
     }
     struct native_terminal *x=calloc(1,sizeof(*x)); if(!x)return 1;
     if(du_window_open_resizable(&x->window,&x->ui,channel,TERM_WIDTH,TERM_HEIGHT,"Terminal",304,168)) { free(x); return 1; }
-    struct term_host h={.fs=*fm_native_vfs(),.ctx=x,.net=net,.mixer=mixer,.volume=volume,.processes=processes,.display=display,
+    struct term_host h={.fs=*fm_native_vfs(),.ctx=x,.net=net,.network_command=term_network_command,.mixer=mixer,.volume=volume,.processes=processes,.display=display,
         .launch=launch,.kill=kill,.power=power,.cwd=cwd,.now=now,.pump=pump,.quit=quit};
     if(term_attach(&x->app,&x->ui,&h)) { du_window_destroy(&x->window); free(x); return 1; }
     x->window.user=x; x->window.message=message; x->window.close_request=close_request;

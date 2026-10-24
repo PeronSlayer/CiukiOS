@@ -213,6 +213,8 @@ static int number(const char *s,unsigned long max,unsigned long *v)
 static int system_cmd(struct terminal *t,int n,char **a)
 {
     const char *c=a[0]; int r;
+    if(equal(c,"PING") || equal(c,"TRACERT") || equal(c,"IPCONFIG") || equal(c,"NETSTAT"))
+        return t->host.network_command ? t->host.network_command(t,n,a) : -ENOSYS;
     if(equal(c,"NET")) {
         if(n!=1)return -EINVAL;
         struct ciuki_net_state s={.version=1,.size=sizeof(s)};
@@ -279,6 +281,8 @@ static const char help[]=
 "DEL/rm files           MD/mkdir dir       RD/rmdir dir\n"
 "TYPE/cat files         CLS/clear          ECHO text\n"
 "VER  HELP  EXIT        START program [file]\n"
+"PING host             TRACERT host\n"
+"IPCONFIG [/all|/release|/renew]  NETSTAT [-s]\n"
 "NET                   AUDIO [volume 0..100|mute|unmute]\n"
 "TASKS [KILL pid]       DISPLAY            MEM\n"
 "DATE  TIME            SHUTDOWN            REBOOT\n"

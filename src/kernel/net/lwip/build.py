@@ -12,7 +12,7 @@ HERE = Path(__file__).resolve().parent
 SHA256 = "7b622662dba2383d71f874f2e494b54ae948531559c17acbe75797966d646878"
 SOURCES = tuple("core/" + n + ".c" for n in (
     "init", "def", "inet_chksum", "ip", "mem", "memp", "netif", "pbuf",
-    "stats", "sys", "timeouts", "dns", "udp", "tcp", "tcp_in", "tcp_out")) + tuple(
+    "stats", "sys", "timeouts", "dns", "raw", "udp", "tcp", "tcp_in", "tcp_out")) + tuple(
     "core/ipv4/" + n + ".c" for n in (
         "ip4", "ip4_addr", "icmp", "etharp", "dhcp", "acd")) + (
     "netif/ethernet.c", "api/tcpip.c", "api/api_lib.c", "api/api_msg.c",

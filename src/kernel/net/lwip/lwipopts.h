@@ -20,7 +20,9 @@
 #define LWIP_UDP 1
 #define LWIP_DHCP 1
 #define LWIP_DNS 1
-#define LWIP_RAW 0
+#define LWIP_RAW 1
+#define MEMP_NUM_RAW_PCB 4
+#define DEFAULT_RAW_RECVMBOX_SIZE 8
 #define LWIP_IGMP 0
 #define LWIP_AUTOIP 0
 #define IP_FORWARD 0

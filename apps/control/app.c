@@ -21,8 +21,8 @@ enum {
     C_SYSTEM_TABS, C_CPU, C_UPTIME, C_SYSTEM_HARDWARE, C_FLAGS, C_BOOT_OPTIONS, C_SERIAL, C_BOOT_APPLY,
     C_DETAILS = 130, C_FIRMWARE = 131, D_FIRMWARE = 199, D_PROPERTIES = 200, D_INFO, C_SCHEME, C_UI_VOL, C_UI_VOL_V
 };
-static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts", "autoplay", "programs", "joystick"};
-static const char *const page_labels[CP_PAGES] = {"Display Properties", "Mouse", "Keyboard", "Sounds and Audio", "Date and Time", "System", "System", "System", "Network", "Power", "Display Properties", "Display Properties", "Storage and removable devices", "Add/Remove Programs", "Game controllers"};
+static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts", "autoplay", "programs", "joystick", "internet"};
+static const char *const page_labels[CP_PAGES] = {"Display Properties", "Mouse", "Keyboard", "Sounds and Audio", "Date and Time", "System", "System", "System", "Network", "Power", "Display Properties", "Display Properties", "Storage and removable devices", "Add/Remove Programs", "Game controllers", "Internet Properties"};
 static void build(struct cp_app *a);
 static void refresh(struct cp_app *a);
 static unsigned power_read(struct cp_app *a);
@@ -46,6 +46,7 @@ static void text(struct cp_app *a, int id, const char *s)
 #include "datetime.inc"   /* G1: Date/Time Properties */
 
 #include "network.inc"
+#include "internet.inc"
 #include "game_properties.inc"
 #include "joystick.inc"
 
@@ -474,6 +475,7 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
     if ((e->id==CP_CANCEL || e->id==C_CLOSE) && e->type==DU_EV_ACTIVATE) { cp_close(a); return; }
     if (a->display_write && e->id==C_BACK && e->type==DU_EV_ACTIVATE) { a->navigation_pending=1; a->next_page=CP_HOME; return; }
     if (a->display_write && e->type != DU_EV_TICK) return;
+    if (internet_event(a,e)) return;
     if (network_event(a, e)) return;
     if (game_event(a,e)) return;
     if (cp_display_event(a, e)) return;
@@ -1245,6 +1247,8 @@ static void build(struct cp_app *a)
                 add(a,DU_BUTTON,976,128,316,252,24,"Retry acceleration after restart");
             }
         }
+    } else if (a->page == CP_INTERNET) {
+        internet_build(a);
     } else if (a->page == CP_JOYSTICK) {
         joystick_build(a);
     } else if (a->page == CP_MOUSE) {

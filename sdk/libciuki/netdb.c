@@ -6,6 +6,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <stdio.h>
+#include "hosts.h"
+static int hosts_next(void *stream) { return fgetc(stream); }
+static int hosts_address(const char *name,uint32_t *address)
+{
+    FILE *stream=fopen("/system/settings/HOSTS","r");
+    if(!stream)return 0;
+    int found=cu_hosts_lookup(hosts_next,stream,name,address);
+    fclose(stream);return found;
+}
 struct answer { struct addrinfo info; struct sockaddr_in address; };
 void freeaddrinfo(struct addrinfo *info)
 {
@@ -31,7 +41,8 @@ int getaddrinfo(const char *node,const char *service,const struct addrinfo *hint
     if (!node) address.s_addr=htonl(h.ai_flags&AI_PASSIVE ? INADDR_ANY : INADDR_LOOPBACK);
     else if (inet_pton(AF_INET,node,&address)!=1) {
         if (h.ai_flags&AI_NUMERICHOST) return EAI_NONAME;
-        if (!strcmp(node,"localhost")) address.s_addr=htonl(INADDR_LOOPBACK);
+        if (hosts_address(node,&address.s_addr)) { /* Local mappings precede DNS. */ }
+        else if (!strcmp(node,"localhost")) address.s_addr=htonl(INADDR_LOOPBACK);
         else {
             size_t bytes=strlen(node)+1; if (bytes<2 || bytes>254) return EAI_NONAME;
             struct ciuki_resolve4 r={.size=sizeof(r),.version=1,.name=CU_PTR(node),.name_bytes=(uint32_t)bytes};

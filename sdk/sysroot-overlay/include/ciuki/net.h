@@ -11,4 +11,7 @@ int ciuki_devctl(int fd, uint32_t op, void *record, uint32_t size);
 int ciuki_net_status(struct ciuki_net_state *);
 /* Privileged configuration; returns 0 or -1 with errno. */
 int ciuki_net_control(unsigned operation, struct ciuki_net_control *);
+/* Read-only adapter CONFIG or bounded native SOCKETS snapshot; no capability.
+ * operation is CIUKI_NET_INFO_CONFIG/SOCKETS; bytes must match the record. */
+int ciuki_net_info(unsigned operation, void *record, uint32_t bytes);
 #endif

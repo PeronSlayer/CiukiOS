@@ -19,6 +19,7 @@
     "core/sys.c",
     "core/timeouts.c",
     "core/dns.c",
+    "core/raw.c",
     "core/udp.c",
     "core/tcp.c",
     "core/tcp_in.c",

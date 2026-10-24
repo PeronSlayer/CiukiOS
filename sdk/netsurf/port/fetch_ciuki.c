@@ -6,6 +6,7 @@
 #include <strings.h>
 #include <libwapcaplet/libwapcaplet.h>
 #include "utils/errors.h"
+#include "utils/nsoption.h"
 #include "utils/nsurl.h"
 #include "utils/inet.h"
 #include "netsurf/ssl_certs.h"
@@ -163,6 +164,7 @@ static void *setup(struct fetch *parent,nsurl *url,bool only_2xx,bool downgrade,
     lwc_string *host=nsurl_get_component(url,NSURL_HOST),*port=nsurl_get_component(url,NSURL_PORT);
     char *target=NULL,*cookie=NULL;size_t length=0;
     struct ciuki_request r={.tls=nsurl_get_scheme_type(url)==NSURL_SCHEME_HTTPS,.post=post,.headers=headers};
+    if(nsoption_bool(http_proxy) && !r.tls) { r.proxy_host=nsoption_charp(http_proxy_host);r.proxy_port=nsoption_int(http_proxy_port); }
     r.port=r.tls?443:80;r.host=host?lwc_string_data(host):"";
     if(port){
         r.port=0;for(const char *s=lwc_string_data(port);*s;s++){
