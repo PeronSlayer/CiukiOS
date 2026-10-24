@@ -15,8 +15,9 @@
 #include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
-#define WIDTH 240u
-#define HEIGHT 160u
+#define WIDTH 360u
+#define HEIGHT 240u
+#define HEADER 84u /* top panel; the dirty redraw covers all of it */
 static unsigned protocol_version=DESK_VERSION;
 static void handler(int signal_number)
 {
@@ -46,11 +47,26 @@ static void text(uint32_t *pixels, unsigned x, unsigned y, const char *s)
 }
 static void draw_region(uint32_t *pixels, const char *typed, unsigned motion, unsigned buttons, int y0, int y1)
 {
-    for (int y=y0;y<y1;y++) for (unsigned x=0;x<WIDTH;x++)
-        pixels[y*WIDTH+x]=y<58 ? 0xe8d7b9u : ((x/16+y/16)&1) ? 0x607a85u : 0x375564u;
-    if (!y0) text(pixels,8,8,"Type here:");
-    text(pixels,8,22,typed);
-    char s[64]; snprintf(s,sizeof(s),"Motion %u  Buttons %u",motion,buttons); text(pixels,8,40,s);
+    struct desk_paint p = {pixels, WIDTH, HEIGHT, 0, y0, WIDTH, y1-y0};
+    /* Panel: a face-coloured header with a sunken entry field, over a soft
+     * gradient with a fine grid for the pointer to move across. */
+    if (y1>(int)HEADER) {
+        int top=y0>(int)HEADER ? y0 : (int)HEADER;
+        desk_paint_vgradient(&p,0,(int)HEADER,(int)WIDTH,(int)(HEIGHT-HEADER),0x47697au,0x243b4au);
+        for (int y=top;y<y1;y++) for (unsigned x=0;x<WIDTH;x++)
+            if (!(x%24) || !((unsigned)y%24)) pixels[y*WIDTH+x]=desk_mix(0xffffffu,pixels[y*WIDTH+x],28);
+    }
+    if (y0<(int)HEADER) {
+        int end=y1<(int)HEADER ? y1 : (int)HEADER;
+        for (int y=y0;y<end;y++) for (unsigned x=0;x<WIDTH;x++) pixels[y*WIDTH+x]=y==(int)HEADER-1 ? 0x8a8f94u : 0xe8e4d8u;
+        text(pixels,10,10,"Type here:");
+        for (int y=26;y<48;y++) for (unsigned x=10;x<WIDTH-10;x++) {
+            int edge=y==26||x==10 ? 1 : (y==47||x==WIDTH-11) ? 2 : 0;
+            if (y>=y0 && y<y1) pixels[y*WIDTH+x]=edge==1 ? 0x7a7f84u : edge==2 ? 0xffffffu : 0xfcfcfcu;
+        }
+        text(pixels,14,31,typed);
+        char s[64]; snprintf(s,sizeof(s),"Motion %u   Buttons %u",motion,buttons); text(pixels,10,58,s);
+    }
 }
 static void draw(uint32_t *pixels, const char *typed, unsigned motion, unsigned buttons)
 { draw_region(pixels,typed,motion,buttons,0,HEIGHT); }
@@ -202,8 +218,8 @@ int main(int argc, char **argv)
         }
         if (!open) break;
         if (dirty) {
-            draw_region(pixels,typed,motion,buttons,20,58);
-            desk_message(&m,DESK_DAMAGE,20); desk_put32(m.data+8,20); desk_put32(m.data+12,WIDTH); desk_put32(m.data+16,38);
+            draw_region(pixels,typed,motion,buttons,0,HEADER);
+            desk_message(&m,DESK_DAMAGE,20); desk_put32(m.data+8,0); desk_put32(m.data+12,WIDTH); desk_put32(m.data+16,HEADER);
             if (send_wait(channel,&m)) return 1;
         }
         if (gate && configured && !pending && !announced && turns==target) {

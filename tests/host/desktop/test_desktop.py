@@ -42,15 +42,16 @@ SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "autoplay.c", "a
 # G16 (2026-10-24): the two dialogs frames show the toolkit Open dialog (New Folder, List/Details, Files of type).
 # F2-99: only the new software arrow/shadow footprint differs (integ-fix1 pixel comparison).
 # Fix C (2026-10-24): reviewed G16b/G28b dialogs in the G23 appearance tree; see build/codex/fixc-report.md.
+RUN_GOLDEN = "c96f36fabf83610080708a635823c5543308d01fb58cb4a95ddadb4838533078"  # qa4: Run dialog, one explanation text
 LOOK_GOLDENS = {
-    "ciuki-blue-desktop.ppm": "1760a02cbf1a7b6e190956cb2224d90ebd16508b50b7ba32570cfb8c5d733aa8",
-    "ciuki-blue-dialogs.ppm": "6815007bbd7f345d7c7db6035f27d9c5f5605bd9fbf711bc84c096592a181c5a",
-    "ciuki-blue-tray-disabled.ppm": "c8dcf43112cfd62edcf26c4727c29a60a61fda7e32cd1df58992f220b0d70528",
-    "ciuki-blue-tray-media.ppm": "828d0b4e9b46ee6b22afbba57acc8db956240150ac2e1d20c66d129c02b54f1d",
-    "platinum-desktop.ppm": "ef553b4abf2d38e6438c311f7a144c8c031cc393c10af84fe48426207e7a9183",
-    "platinum-dialogs.ppm": "7abfd44a71dc421801a93e755df982e36304874c2105dd689c4147cfce074d16",
-    "platinum-tray-disabled.ppm": "a6ab48b6f04ebd95a095c71e99143ac24ace29adb52cf50fee6c56a0d86860e0",
-    "platinum-tray-media.ppm": "2433cbff5aa75196cfc469379569506e915db99c1e5ead753e1ca02eea41f11a"
+    "ciuki-blue-desktop.ppm": "51a90eca8b2ec1432c161d1a9ab5058b7085ce7a146c2c2232823c06ed9d220b",
+    "ciuki-blue-dialogs.ppm": "afa1cc7cc7167b0c5c9c3b1937b22cc287ec42ede25a3440db6147bfc4f65314",
+    "ciuki-blue-tray-disabled.ppm": "c325bc05ad479d8c7ae324593d8e4d313815052b234943678d1b09b85d5a1991",
+    "ciuki-blue-tray-media.ppm": "fa294798fa35fc7c263c4c13a191baf4650ebb0598589bd5343c884cd5baf657",
+    "platinum-desktop.ppm": "35bce69536a7ffd0739d64d32748a446d7b8f7cf0377d3c2227ac913c9a15d21",
+    "platinum-dialogs.ppm": "90f9c7b39bbeccda0fdb732e099817a67fc423826d736622c6a7bd4119db2f10",
+    "platinum-tray-disabled.ppm": "591a2ae6e4e03b971c5602e6b98d65959beae4a98dba385733c55127f2aa727f",
+    "platinum-tray-media.ppm": "6917caa80c0416cfd2073a2cb6df6e8a198ebb25711109f835171d27e39e3910"
 }
 
 # Public set-1 codes the kernel reports for the QMP qcodes of the desktop cases (E0 keys | 0x100).
@@ -160,6 +161,33 @@ class DesktopTests(unittest.TestCase):
                 self.assertEqual(predicate["fields"]["keys"], {"eq": 4})
         finally:
             sys.path.remove(path)
+
+    def test_run_dialog_layout_frame(self):
+        """qa4: the Run dialog draws its explanation once (no overlapping lines), Windows 98 layout."""
+        parent = ROOT / "build/host"
+        parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="desktop-run-", dir=parent) as temp:
+            folder = Path(temp)
+            env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0")
+            binary = folder / "capture"
+            sources = [ROOT / "apps/desktop" / n for n in ("client.c", "protocol.c", "input.c", "compositor.c", "theme.c")] + SHELL_SOURCES
+            sources += [ROOT / "tests/host/desktop" / n for n in ("fake.c", "compositor_capture.c")]
+            sources += [ROOT / "apps/libdeskui" / n for n in ("icons.c", "icon_map.c")]
+            subprocess.run(["clang", "-std=c17", "-D_POSIX_C_SOURCE=200809L", "-include", str(ROOT / "tests/host/desktop/replay_base.h"), "-O1", "-Wall", "-Wextra", "-Werror",
+                            "-fsanitize=address,undefined", "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
+                            "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "src/kernel/include"),
+                            *(str(p) for p in sources), "-o", str(binary)], check=True, env=env)
+            c = load("capture_portrait_run", ROOT / "apps/desktop/convert_portrait.py")
+            source = folder / "portrait.xrgb"
+            source.write_bytes(c.convert(ROOT / "assets/brand/ciuki-logo.png"))
+            target = folder / "run.xrgb"
+            subprocess.run([str(binary), str(source), str(target), "run"], check=True, env=env)
+            pixels = target.read_bytes()
+            self.assertEqual(len(pixels), 640*480*4)
+            capture("desktop-run", pixels, 640, 480)
+            actual = hashlib.sha256(pixels).hexdigest()
+            if RUN_GOLDEN == "PIN-FROM-FIRST-RUN": print("RUN_GOLDEN", actual)
+            else: self.assertEqual(actual, RUN_GOLDEN)
 
     def test_plain_screen_digest_and_shell_portrait(self):
         parent = ROOT / "build/host"

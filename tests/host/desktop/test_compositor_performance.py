@@ -34,8 +34,8 @@ THEMES = ("Platinum", "Ciuki Blue")
 # G4: the shell menus underline their access keys (SM-9).
 # fixd: visually reviewed combined G11/G19/G23/G30 integration frames (2026-10-24).
 GOLDENS = {
-    "Ciuki Blue": "612f137b12739e988ee487bb4bbde0e6bd648f27406d0a48b7e17f133caf1dfc",
-    "Platinum": "08bea6b80f1fc350bfe36773f677262fb8ecd8cf103bf733c27819931eace4d8"
+    "Ciuki Blue": "434841a387286672d2f1c6eb58658bf13e1f8491fdcfd4833a14938f6753e375",
+    "Platinum": "2032042044b174bbfc4bc7c6ceccf7382b8f5340128a6813ae9e52ba18a669a1"
 }
 SOURCES = ["apps/desktop/" + n + ".c" for n in
            ("client", "protocol", "input", "compositor", "theme", "shell", "autoplay", "autoplay_content", "settings", "power_policy",

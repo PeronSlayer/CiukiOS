@@ -12,7 +12,7 @@ _review = _review_util.module_from_spec(_review_spec); _review_spec.loader.exec_
 capture = _review.capture
 
 ROOT = Path(__file__).resolve().parents[3]
-GOLDEN = "2d2cd95864af8fc3dc9ff7f3cca8961a910815ee688fba84c933911054ee5de4"  # F2-63 FreeType mono atlas
+GOLDEN = "a230f4330c4721034c5ce21e2393bc4499caf8cb93ccb7a2bd174c1fbb0918e4"  # qa4: 360x240 panel layout
 
 
 class DemoTests(unittest.TestCase):
@@ -29,7 +29,7 @@ class DemoTests(unittest.TestCase):
                             str(ROOT / "apps/desktop/theme.c"), str(ROOT / "apps/desktop/compositor.c"), "-o", str(binary)], check=True)
             frame = folder / "demo.xrgb"
             subprocess.run([binary, frame], check=True, env={**os.environ, "ASAN_OPTIONS": "detect_leaks=0"})
-            capture("demo", frame.read_bytes(), 240, 160)
+            capture("demo", frame.read_bytes(), 360, 240)
             digest = hashlib.sha256(frame.read_bytes()).hexdigest()
             if GOLDEN == "PIN-FROM-FIRST-RUN": print("DEMO_GOLDEN", digest)
             else: self.assertEqual(digest, GOLDEN)

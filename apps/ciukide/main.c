@@ -8,7 +8,7 @@
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
-struct ide_main { struct ide_app app; struct du_ui ui; struct du_window window; uint32_t serial; int closing, pending; struct du_job opening, reaping; int child_pid, child_status, child_error; const char *folder; struct ide_app *loaded; struct du_ui *load_ui; int load_error; uint64_t open_revision; };
+struct ide_main { struct ide_app app; struct du_ui ui; struct du_window window; uint32_t serial; int closing, pending; struct du_job opening, reaping; int child_pid, child_status, child_error; const char *folder; int quiet; struct ide_app *loaded; struct du_ui *load_ui; int load_error; uint64_t open_revision; };
 /* The two output channels wake for log data. A blocking reaper publishes
  * process exit separately, including exit after both channels reached EOF. */
 static void reap_child(void *ctx)
@@ -100,9 +100,10 @@ static void idle(void *ctx)
         m->ui.wait_fds[m->ui.wait_count++]=m->app.job.fd[i];
     if (du_job_ready(&m->opening)) {
         du_job_finish(&m->opening);
-        if (!m->load_error && m->open_revision==m->app.editor.revision && !m->app.editor.modified) ide_adopt_project(&m->app,m->loaded);
+        if (m->quiet && (m->load_error || m->open_revision!=m->app.editor.revision || m->app.editor.modified)) { /* default sample missing or already typing: no dialog */ }
+        else if (!m->load_error && m->open_revision==m->app.editor.revision && !m->app.editor.modified) ide_adopt_project(&m->app,m->loaded);
         else du_message(&m->ui,IDE_MESSAGE,"CiukIDE",m->load_error ? strerror(-m->load_error) : "Project loaded; save the current edits before opening it again.",DU_DLG_ICON_ERROR,NULL,0,0,0);
-        free_project(m); m->folder=NULL;
+        free_project(m); m->folder=NULL; m->quiet=0;
     } else if (m->folder && !m->opening.started && m->window.configured && !m->ui.dirty && m->ui.frame_count) {
         m->open_revision=m->app.editor.revision;
         int r=du_job_start_ui(&m->opening,read_project,m,&m->ui);
@@ -127,7 +128,8 @@ int main(int argc,char **argv)
     m->app.fs=cn_native_fs(); m->app.process=&child_ops; m->app.process_ctx=m; m->app.launch=launch; m->app.launch_ctx=m;
     m->window.user=m; m->window.message=message; m->window.close_request=close_request;
     if (ide_attach(&m->app,&m->ui)) { du_window_destroy(&m->window); free(m); return 1; }
-    m->folder=folder;
+    /* Without a folder the sample project opens, so the editor, Build and Run work at once. */
+    m->quiet=!folder; m->folder=folder ? folder : "/Documents/Developer/Samples/HelloWindow";
     int r=du_run(&m->window,idle,m);
     if (m->app.job.pid) {
         kill(m->app.job.pid,SIGKILL);
