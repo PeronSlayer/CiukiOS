@@ -20,6 +20,8 @@ class PrintingTests(unittest.TestCase):
             binary = Path(scratch) / "printing"
             flags = ["clang", "-std=c11", "-D_POSIX_C_SOURCE=200809L", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined", "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections", "-pthread", "-I", str(ROOT / "src/kernel/include")]
             env = dict(os.environ, TMPDIR=scratch)
+            if not ui:
+                flags.append("-Wl,--wrap=open")  # printing_test.c counts the library's opens
             subprocess.run([*flags, *(str(ROOT / s) for s in sources), "-o", str(binary)], check=True, env=env)
             subprocess.run([str(binary)], check=True, env=env)
     def test_spool_and_drivers(self):

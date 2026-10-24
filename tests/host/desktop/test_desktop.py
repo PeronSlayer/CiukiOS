@@ -590,6 +590,7 @@ class DesktopTests(unittest.TestCase):
             result = subprocess.run([str(binary), "--launch-async"], check=True, env=env, timeout=30, capture_output=True, text=True)
             self.assertIn("PASS fx-8 launch: input thread returned", result.stdout)
             self.assertIn("PASS fx-8 client LAUNCH", result.stdout)
+            self.assertIn("PASS stuck DOS Box: Run starts control", result.stdout)
             print(result.stdout, end="")
             subprocess.run([str(binary), "--autoplay-startup"], check=True, env=env, timeout=20)
             subprocess.run([str(binary), "--slow-stick-folder"], check=True, env=env, timeout=20)
@@ -614,7 +615,10 @@ class DesktopTests(unittest.TestCase):
             self.assertIn("PASS dosbox autorun", result.stdout)
 
     def test_dosbox_loading(self):
-        self.dosbox_loading_replay(range(23), True)  # fx-4b: 20 verify wait, 21 mismatch; G3: 22 end of session
+        # fx-4b: 20 verify wait, 21 mismatch; G3: 22 end of session; G17: 23-26 toolbar, properties
+        # and session end with the toolbar; fx-23: 27-28 CREATE on its worker (PING answered, owner stop).
+        # The merge of both kept range(23), so 23-28 had stopped running.
+        self.dosbox_loading_replay(range(29), True)
 
     def test_dosbox_save_quota(self):
         self.dosbox_loading_replay((18, 19), False)
@@ -638,7 +642,10 @@ class DesktopTests(unittest.TestCase):
                 result = subprocess.run([str(binary), str(scenario)], capture_output=True, text=True,
                                         timeout=30, env=dict(os.environ, ASAN_OPTIONS="detect_leaks=0"))
                 self.assertEqual(result.returncode, 0, f"scenario {scenario}: {result.stderr}")
-                self.assertIn("PASS dosbox loading replay", result.stdout)
+                expected = ("PASS G17 DOS program lifecycle" if 23 <= scenario <= 26 else
+                            "PASS fx-23 slow CREATE" if scenario == 27 else
+                            "PASS fx-23 close during CREATE" if scenario == 28 else "PASS dosbox loading replay")
+                self.assertIn(expected, result.stdout, f"scenario {scenario}")
                 if scenario==0: print(result.stdout.strip())
             for events in ((1, 2) if event_cases else ()):
                 for scenario in (0, 1, 3, 5, 8):

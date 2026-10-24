@@ -434,6 +434,36 @@ vm_profile="$(CIUKI_VM_MEMORY_CHARGE=1 "$out/dosvm_test")"
 read -r -a vm_profile_args <<< "$vm_profile"
 "$out/ledger_test_normal" --dosvm-profile "${vm_profile_args[@]}"
 
+# A DOS game launched as the desktop launches it: the production
+# /Programs/dosbox (tests/host/dos/game_launch_app.c) over the production
+# client boundary, lifecycle, launch gate, presenter and destroy of
+# dosvm_test.c (game_launch_kernel.c), with a scripted DOS guest. Modes:
+# the first DOOM frame reaches the window; DOOM quits to DOS and "Close on
+# exit" closes the window; the desktop closes a plain DOS Box at C:\>.
+launch="$out/game-launch"
+mkdir -p "$launch/include/ciuki"
+for name in dosvm.h channel.h surface.h; do cp "$root/sdk/sysroot-overlay/include/ciuki/$name" "$launch/include/ciuki/"; done
+cp "$root/apps/desktop/protocol.h" "$launch/include/ciuki/desktop.h"
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -D_POSIX_C_SOURCE=200809L \
+    "-DDOSBOX_SETTINGS_DIR=\"$launch/prefs\"" -I "$launch/include" -I "$root/src/kernel/include" \
+    -c "$root/tests/host/dos/game_launch_app.c" -o "$launch/app.o"
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -I "$root/src/kernel/include" \
+    -c "$root/apps/desktop/protocol.c" -o "$launch/protocol.o"
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast -fsanitize=address,undefined \
+    -ffunction-sections -fdata-sections -Wl,--gc-sections \
+    -I "$root/src/kernel/include" -I "$out" -I "$root/tests/host" "$root/tests/host/dos/game_launch_kernel.c" \
+    "$root/tests/host/dosvm_uaddr_model.c" "${network_sources[@]}" \
+    "$root/src/kernel/lib/fmt.c" "$root/src/kernel/lib/sha256.c" \
+    "$root/src/kernel/vm/virtual_vga.c" "$root/src/kernel/vm/virtual_vga_bios.c" \
+    "$root/src/kernel/vm/vga_x86.c" "$root/src/kernel/vm/vga_presenter.c" \
+    "$out/dosvm_audio_vm_source.o" "$out/dosvm_audio_opl3.o" "$out/dosvm_audio_mixer.o" \
+    "$launch/app.o" "$launch/protocol.o" "$pool" -pthread -Wl,-u,pool_fixture_start -o "$launch/game-launch"
+for mode in frame exit close; do
+    rm -rf "$launch/prefs"
+    result="$(ASAN_OPTIONS=detect_leaks=0 "$launch/game-launch" "$mode")" || { printf '%s\n' "$result"; exit 1; }
+    grep -E '^PASS DOS (game launch|game exit|Box close)' <<< "$result"
+done
+
 # F4-28: optimized VM-source callback cost (the sanitized full suite above
 # also runs it). Host-only, sequential, with the production audio units.
 for unit in vm_source opl3 mixer; do

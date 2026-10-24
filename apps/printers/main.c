@@ -40,7 +40,8 @@ static void background(void *v)
     a->error=e?errno:0;
     if(cp_config_load(a->root,&a->loaded_config)){a->error=errno;return;}
     a->loaded_count=0;
-    for(unsigned id=1;id<=CP_JOBS;id++)if(!cp_job_read(a->root,id,&a->loaded_jobs[a->loaded_count]))a->loaded_count++;
+    unsigned ids[CP_JOBS];int n=cp_job_ids(a->root,ids);
+    for(int i=0;i<n;i++)if(!cp_job_read(a->root,ids[i],&a->loaded_jobs[a->loaded_count]))a->loaded_count++;
 }
 static void schedule(struct printers *a,int command)
 {

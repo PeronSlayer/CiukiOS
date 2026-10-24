@@ -55,6 +55,19 @@ after each 1024-byte write. Regular file output is fsynced before progress
 publication and seeks to its recorded offset, so interrupted progress updates
 can overwrite the same bytes on retry. Device outputs use `O_NONBLOCK` without
 file creation or append flags. Completed and cancelled jobs release their slots.
+Scanners (the background worker's pass, Purge, the Printers window) read the
+spool folder once and visit only the `jNNN` slots it names (`cp_job_ids`,
+POSIX [readdir](https://pubs.opengroup.org/onlinepubs/9799919799/functions/readdir.html);
+FAT may return the short name in either case). The first G31 worker instead
+opened `job` and `job.bak` in all 128 slots on every idle pass, once a second:
+256 failed path walks through `/WINDOWS`. On image 56e58374 in QEMU it was the
+top CPU user (median 38 % of each two-second window) and held C: for about
+81 ms per lookup while DOS sessions started and closed
+(`docs/validation/dos-close-hang-2026-10-24.md`). An idle pass now opens no file. Windows exposes
+queue changes through notifications rather than slot probing
+([FindFirstPrinterChangeNotification](https://learn.microsoft.com/en-us/windows/win32/printdocs/findfirstprinterchangenotification));
+this queue keeps its one-second worker poll, but the poll costs one directory
+read.
 The desktop starts `/System/printspool` once per session. A separate `worker.lock`
 directory and owner PID prevent a desktop restart from creating a second active
 service; graceful shutdown removes the lock and dead owners can be reclaimed. No GUI process
