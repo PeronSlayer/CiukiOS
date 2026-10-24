@@ -103,6 +103,7 @@ void desk_focus(struct desktop *d, int i)
     if (d->power.state && i>=0 && i<DESK_CLIENTS && d->clients[i].internal!=DESK_INTERNAL_POWER) return;
     if (i >= 0 && (i >= DESK_CLIENTS || !d->clients[i].window || d->clients[i].minimized)) return;
     if (i == d->focus) return;
+    if (i >= 0 && d->shell && d->sh.taskbar_key) desk_shell_taskbar_leave(d);   /* a window took the focus from the taskbar */
     if (d->v3_lease_state) desk_v3_revoke(d);
     desk_v3_pointer_release(d);
     struct ciuki_input_event e = { .monotonic_ns = d->now_ns };
@@ -336,7 +337,7 @@ static void input(struct desktop *d, const struct ciuki_input_event *in)
         if (d->shell) {
             const int modifiers[]={0x38,0x138,0x1D,0x11D,0x2A,0x36};
             for (unsigned k=0;k<sizeof(modifiers)/sizeof(modifiers[0]);k++) desk_shell_key(d,modifiers[k],0);
-            d->sh.logo_down=0;
+            d->sh.logo_down=0; d->sh.logo_keys=0; memset(d->sh.chord,0,sizeof(d->sh.chord));
         }
         d->buttons = (uint32_t)e.value & 7u;
         route(d, d->focus, DESK_KEY, &e);
@@ -446,6 +447,7 @@ static void input(struct desktop *d, const struct ciuki_input_event *in)
             e.value2=0; route(d,vi,DESK_BUTTON,&e); break;
         }
         /* Start menu, taskbar, tray, desktop icons and context menus (shell.c). */
+        int menu_was_open = d->shell && d->sh.levels;
         if (d->shell && desk_shell_button(d, e.code, e.value)) break;
         if (e.value && i>=0 && desk_modal_target(d,i)!=i) { desk_focus(d,i); break; }
         if (e.value && e.code!=CIUKI_BUTTON_LEFT && i>=0) desk_focus(d,i);
@@ -471,6 +473,9 @@ static void input(struct desktop *d, const struct ciuki_input_event *in)
                 }
                 if (d->shell && desk_contains(desk_shade_box(c),d->mouse_x,d->mouse_y)) {
                     desk_zoom(d,i); break;
+                }
+                if (d->shell && desk_contains(desk_caption_icon_box(d,c),d->mouse_x,d->mouse_y)) {
+                    desk_shell_caption_icon(d,i,stamp,menu_was_open); break;
                 }
                 unsigned edges = desk_resize_hit(c,d->mouse_x,d->mouse_y);
                 if (edges) {

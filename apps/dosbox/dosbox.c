@@ -12,7 +12,8 @@
 #include <ciuki/dosvm.h>
 #include <ciuki/channel.h>
 #include <ciuki/surface.h>
-#include <ciuki/desktop.h>
+#include "../desktop/protocol.h"
+#include "clipboard.h"
 #include <errno.h>
 #include <poll.h>
 #include <signal.h>
@@ -112,7 +113,7 @@ static int pre_create_service(int channel, uint32_t *server, int *configured, in
 {
     for (unsigned budget = 0; budget < 32; budget++) {
         struct ciuki_message m;
-        int n = ciuki_channel_recv(channel, &m, DONTWAIT);
+        int n = dos_clip_recv(&m);
         if (n < 0 && (errno == EAGAIN || errno == EINTR)) return 0;
         if (n <= 0) return 1;                                     /* desktop gone */
         struct desk_packet packet;
@@ -188,6 +189,7 @@ int main(int argc, char **argv)
     uint32_t id = 0, generation = 0, server = 0;
     uint32_t *pixels = ciuki_surface_map(surface, PROT_READ | PROT_WRITE);
     if (pixels == (void *)-1 || !pixels) { close(surface); return 1; }
+    dos_clip_init(channel,pixels);
     struct du_canvas canvas = {pixels, CIUKI_DOSVM_WIDTH, CIUKI_DOSVM_HEIGHT,
                               {0, 0, CIUKI_DOSVM_WIDTH, CIUKI_DOSVM_HEIGHT}};
     const char *icon = dosbox_launch_icon(typed);
@@ -282,6 +284,7 @@ int main(int argc, char **argv)
     }
     int running = 1, fullscreen = 0, fullscreen_painted = 0;
     while (running) {
+        dos_clip_vm(id,generation,server);
         for (unsigned budget = 0; budget < 32; budget++) {
             int n = ciuki_channel_recv(channel, &m, DONTWAIT);
             if (n < 0 && (errno == EAGAIN || errno == EINTR)) break;
@@ -318,7 +321,14 @@ int main(int argc, char **argv)
                 }
                 id=0; running=0; break;
             }
+            if (packet.opcode==DESK_DOS_CLIPBOARD) {
+                int error=dos_clip_action(packet.flags);
+                if (error) { snprintf(fullscreen_notice,sizeof(fullscreen_notice),"Clipboard: %s",strerror(-error)); fullscreen_notice_until=now_ms()+3000; notice_painted=0; }
+                continue;
+            }
+            if (dos_clip_input(&packet)) continue;
             if (packet.opcode == DESK_DOS_FULLSCREEN && id) {
+                (void)dos_clip_action(0);
                 command(&c,id,generation); c.focused=!fullscreen;
                 if (ciuki_dosvm(CIUKI_DOSVM_FULLSCREEN,&c)) {
                     snprintf(fullscreen_notice,sizeof(fullscreen_notice),"%s",strerror(errno));
@@ -347,6 +357,12 @@ int main(int argc, char **argv)
             }
         }
         if (!running) break;
+        dos_clip_tick(focused);
+        if (configured && dos_clip_dirty()) {
+            desk_message(&m,DESK_DAMAGE,20); desk_put32(m.data+12,640); desk_put32(m.data+16,480);
+            if (send_packet(channel,&m)) goto done;
+            redraw=1;
+        }
         if (failure) goto panel;
         /* Producer events and the VM's fractional VGA deadline determine
          * the frame rate. This timeout bounds input/lifecycle service only. */
@@ -443,7 +459,7 @@ int main(int argc, char **argv)
             result = 1;
         }
         if (loading) goto panel;
-        if (configured && (redraw || (video_events&CIUKI_DOSVM_EVENT_VIDEO))) {
+        if (configured && !dos_clip_marking() && (redraw || (video_events&CIUKI_DOSVM_EVENT_VIDEO))) {
             command(&c, id, generation);
             c.presentation.redraw=redraw;
             c.presentation.flags=precise_rows ? CIUKI_DOSVM_PRESENT_SCANLINES : 0;
@@ -502,6 +518,7 @@ panel:
     }
     if (!failure) result = 0;
 done:
+    dos_clip_destroy();
     command(&c, id, generation);
     if (id && ciuki_dosvm(CIUKI_DOSVM_CLOSE, &c)) result = 1;
     desk_message(&m, DESK_CLOSE, 4); send_packet(channel, &m);

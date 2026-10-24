@@ -19,8 +19,11 @@ void amendment_layout_checks(struct content *document)
     char data[4097];memset(data,'x',sizeof(data)-1);data[sizeof(data)-1]=0;
     text.utf8_data=data;text.utf8_data_size=sizeof(data)-1;
     start=ciuki_layout_begin(true);
-    /* entry check + font pre/post + loop: expire in the bounded UTF-8 walk. */
-    test_expire_read=test_clock_reads+5;
+    /* fx-24: the entry check reads the clock (no deadline yet); measures no
+     * longer read it; the next read comes CIUKI_LAYOUT_CLOCK_STRIDE checks
+     * later, inside the bounded UTF-8 walk (a check every 256 bytes of the
+     * 4096), and sees the deadline there. */
+    test_expire_read=test_clock_reads+2;
     assert(!ciuki_text_reformat(&text.base,640,480));
     assert(ciuki_layout_expired() && !text.physical_line_count);
     assert(!ciuki_layout_end(start,false));

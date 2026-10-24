@@ -905,10 +905,12 @@ static void *scan_run(void *arg)
             (void)fm_view_load(&a->model,&a->attribute_column);
             a->model.fs=adapter; a->view_loaded=1;
         }
+#ifndef __i386__
         if (s->kind==SCAN_MEDIA && a->poll_clipboard && !scan_cancelled(s)) {
             struct fm_vfs adapter=a->model.fs; a->model.fs=s->source;
             s->clipboard_valid=!fm_clipboard_load(&a->model); a->model.fs=adapter;
         }
+#endif
         if (s->kind == SCAN_OPEN) s->error = scan_sniff(s);
         else {
             if (s->kind == SCAN_MEDIA || s->kind == SCAN_REFRESH ||
@@ -1045,6 +1047,12 @@ static void scan_poll(struct files_app *a)
     if (!s) return;
     if (scan_cancelled(s)) { scan_free(s); return; }
     struct files_app *b = &s->state;
+#ifdef __i386__
+    if (s->kind==SCAN_MEDIA && a->poll_clipboard) {
+        uint64_t before=clipboard_key(&a->model);
+        if (!fm_clipboard_load(&a->model) && before!=clipboard_key(&a->model)) files_update(a);
+    }
+#endif
     if (!a->view_loaded && b->view_loaded) {
         a->view_loaded=1; a->attribute_column=b->attribute_column;
         a->model.show_hidden=b->model.show_hidden; a->model.hide_system=b->model.hide_system;
@@ -1584,7 +1592,8 @@ static void files_service(struct du_ui *u,void *ctx)
 /* ---- commands ---- */
 static void paste(struct files_app *a, const char *destination)
 {
-    if (fm_clipboard_load(&a->model)) return;
+    int error=fm_clipboard_load(&a->model);
+    if (error) { error_box(a,"Clipboard","The file clipboard could not be read.",error); return; }
     if (!a->model.clipboard_count) return;
     start_job(a, a->model.cut ? FM_MOVE : FM_COPY, a->model.clipboard, a->model.clipboard_count, destination);
 }
@@ -2016,7 +2025,12 @@ static void command(struct files_app *a, int id)
     case C_GO_SYSTEM: files_navigate(a, "/system"); break;
     case C_TREE_OPEN: files_update(a); break;
     case C_ADDRESS: { struct du_widget *e = W(a, W_ADDRESS); du_focus(a->ui, W_ADDRESS); e->anchor = 0; e->cursor = strlen(e->text); break; }
-    case C_CUT: case C_COPY: if (!fm_clipboard(m, id == C_CUT) && !fm_clipboard_save(m)) { a->note[0] = 0; files_update(a); } break;
+    case C_CUT: case C_COPY: {
+        int error=fm_clipboard(m,id==C_CUT); if (!error) error=fm_clipboard_save(m);
+        if (error) error_box(a,"Clipboard","The selected files could not be copied to the clipboard.",error);
+        else { a->note[0]=0; files_update(a); }
+        break;
+    }
     case C_PASTE: paste(a, m->path); break;
     case C_PASTE_INTO: {
         char p[FM_PATH];

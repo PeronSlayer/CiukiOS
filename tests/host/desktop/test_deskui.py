@@ -166,13 +166,13 @@ class DeskuiTests(unittest.TestCase):
 
     def test_update_regions_and_scroll(self):
         self.run_harness("update-regions", ["tests/host/desktop/update_regions_test.c", *TOOLKIT,
-            "apps/desktop/protocol.c", "tests/host/desktop/resize_transport.c", "tests/host/desktop/resize_client.c"],
+            "apps/desktop/protocol.c", "tests/host/desktop/resize_transport.c", "apps/libdeskui/clipboard.c", "apps/libdeskui/clipstore.c", "tests/host/desktop/resize_client.c"],
             cflags=("-include", str(ROOT / "tests/host/desktop/replay_base.h"), "-pthread"))
 
     def test_toolkit_widgets_and_frames(self):
         _, digests = self.run_harness("deskui", ["tests/host/desktop/deskui_test.c", *TOOLKIT,
             "apps/desktop/protocol.c", "tests/host/desktop/resize_transport.c",
-            "tests/host/desktop/resize_client.c", "tests/host/desktop/resize_client_test.c"], frames=True)
+            "apps/libdeskui/clipboard.c", "apps/libdeskui/clipstore.c", "tests/host/desktop/resize_client.c", "tests/host/desktop/resize_client_test.c"], frames=True)
         self.assertEqual(len(digests), 9)
         self.check_frames(digests, TOOLKIT_FRAMES, "TOOLKIT")
 
@@ -186,13 +186,13 @@ class DeskuiTests(unittest.TestCase):
     def test_files_slow_listing_responsive(self):
         stdout, _ = self.run_harness("files-async", ["tests/host/desktop/files_async_test.c",
             "apps/files/app.c", "apps/files/model.c", "apps/files/transfer.c", *TOOLKIT,
-            "apps/desktop/protocol.c", "tests/host/desktop/resize_transport.c", "tests/host/desktop/resize_client.c"])
+            "apps/desktop/protocol.c", "tests/host/desktop/resize_transport.c", "apps/libdeskui/clipboard.c", "apps/libdeskui/clipstore.c", "tests/host/desktop/resize_client.c"])
         self.assertIn("PASS Files worker", stdout)
 
     def test_files_transfer_worker(self):
         stdout, digests = self.run_harness("files-transfer", ["tests/host/desktop/files_transfer_test.c",
             "apps/files/model.c", "apps/files/transfer.c", *TOOLKIT,
-            "apps/desktop/protocol.c", "tests/host/desktop/resize_transport.c", "tests/host/desktop/resize_client.c",
+            "apps/desktop/protocol.c", "tests/host/desktop/resize_transport.c", "apps/libdeskui/clipboard.c", "apps/libdeskui/clipstore.c", "tests/host/desktop/resize_client.c",
             *(f"apps/desktop/{n}.c" for n in ("client", "input", "shell", "autoplay", "autoplay_content",
                 "settings", "settings_io", "wallpaper", "keymap", "folder"))], frames=True,
             cflags=("-include", str(ROOT / "tests/host/desktop/replay_base.h")))
@@ -208,7 +208,7 @@ class DeskuiTests(unittest.TestCase):
             path=folder / "writer"; path.mkdir(); return path
         stdout, _ = self.run_harness("files-idle", ["tests/host/desktop/files_idle_test.c",
             "apps/files/model.c", "apps/files/transfer.c", "apps/files/vfs.c", *TOOLKIT,
-            "apps/desktop/protocol.c", "tests/host/desktop/resize_transport.c", "tests/host/desktop/resize_client.c"], directory)
+            "apps/desktop/protocol.c", "tests/host/desktop/resize_transport.c", "apps/libdeskui/clipboard.c", "apps/libdeskui/clipstore.c", "tests/host/desktop/resize_client.c"], directory)
         self.assertIn("PASS Files idle", stdout)
 
     def test_files_version(self):

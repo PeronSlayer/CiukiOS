@@ -66,7 +66,9 @@ static int acquire(pthread_mutex_t *m,int try) {
             ++m->words[1];return 0;
         }
         if(try)return EBUSY;
-        __atomic_add_fetch(&m->words[3],1,__ATOMIC_RELAXED);
+        /* Register as a waiter (full barrier) before WAIT_WORD re-reads the
+         * owner word; pairs with the release in pthread_mutex_unlock. */
+        __atomic_add_fetch(&m->words[3],1,__ATOMIC_SEQ_CST);
         int e=error(CU_CALL(WAIT_WORD,CU_PTR(&m->words[0]),owner,0,CLOCK_MONOTONIC,0,0));
         __atomic_sub_fetch(&m->words[3],1,__ATOMIC_RELAXED);
         if(e&&e!=EAGAIN&&e!=EINTR)return e;
@@ -78,8 +80,17 @@ int pthread_mutex_unlock(pthread_mutex_t *m) {
     if(!mutex_valid(m))return EINVAL;
     if(__atomic_load_n(&m->words[0],__ATOMIC_RELAXED)!=pthread_self())return EPERM;
     if(--m->words[1])return 0;
-    __atomic_store_n(&m->words[0],0,__ATOMIC_RELEASE);
-    /* Always wake: avoids waiter-count visibility races on a future SMP port. */
+    /* fx-24: wake only when a waiter is registered. newlib's malloc, free
+     * and stdio locks are these mutexes, so an unconditional WAKE_WORD made
+     * every allocation a system call (about 2.7 million for one encyclopedia
+     * article in NetSurf). Dekker ordering keeps the wake-up race-free on
+     * SMP too: the release is a full barrier (xchg) before the waiter count
+     * is read, and a waiter increments the count with a full barrier before
+     * WAIT_WORD compares the owner word in the kernel. Either the waiter's
+     * compare sees the release (EAGAIN, it retries the CAS) or this load
+     * sees the waiter and wakes it; a stale count only costs a spare wake. */
+    __atomic_exchange_n(&m->words[0],0,__ATOMIC_SEQ_CST);
+    if(!__atomic_load_n(&m->words[3],__ATOMIC_SEQ_CST))return 0;
     return error(CU_CALL(WAKE_WORD,CU_PTR(&m->words[0]),1,0,0,0,0));
 }
 static int ca_valid(const pthread_condattr_t *a) { return a&&!a->reserved&&(a->clock_id==CLOCK_REALTIME||a->clock_id==CLOCK_MONOTONIC); }

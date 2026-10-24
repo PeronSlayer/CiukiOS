@@ -140,6 +140,14 @@ static struct desk_box title_box(const struct desk_client *c, unsigned button)
     return (struct desk_box){b[0],b[1],b[2],b[3]};
 }
 struct desk_box desk_close_box(const struct desk_client *c) { return title_box(c,DESK_TB_CLOSE); }
+/* The caption icon (WM-11): drawn in the themes whose caption has one (theme.c
+ * paint_frame: not the Platinum pinstripes); a click on it opens the window menu. */
+struct desk_box desk_caption_icon_box(const struct desktop *d, const struct desk_client *c)
+{
+    if (!d->shell || !c->window || (c->v3_style&3)==DESK_V3_POPUP || desk_theme->title_style==DESK_TITLE_PINSTRIPE || c->frame.w<56)
+        return (struct desk_box){0};
+    return (struct desk_box){c->frame.x+6,c->frame.y+4,16,16};
+}
 struct desk_box desk_min_box(const struct desk_client *c) { return title_box(c,DESK_TB_MINIMIZE); }
 /* Zoom button, left of minimise (the old function and theme flag names are retained). */
 struct desk_box desk_shade_box(const struct desk_client *c) { return title_box(c,DESK_TB_COLLAPSE); }

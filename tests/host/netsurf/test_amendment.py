@@ -116,6 +116,14 @@ class SanitizerTests(unittest.TestCase):
             self.compile_run("admission",[],extra,["--",*[f for f in files if f.name in ("news-front.html","article.html","forum-thread.html")]],
                              env={"CIUKI_NETSURF_FREE_BYTES":str(2*1024*1024)},build=False)
 
+    def test_path_plotter(self):
+        """fx-24: SVG shapes reach the framebuffer plotter table's path entry,
+        which upstream leaves unimplemented; the port fills (non-zero rule,
+        anti-aliased), strokes, transforms and clips them on a real libnsfb
+        RAM surface."""
+        self.compile_run("path",[HERE / "path_test.c",ROOT / "sdk/netsurf/port/path.c"],
+                         ["-DCIUKI_NETSURF","-Wl,--whole-archive","-lnsfb","-Wl,--no-whole-archive","-ldeskui","-lm","-lpthread"])
+
     def test_gif_memory_and_oom(self):
         gif=self.base / "source/libnsgif/src"
         self.compile_run("gif-memory",[HERE / "gif_memory_test.c",gif / "lzw.c"],[

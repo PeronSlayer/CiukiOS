@@ -334,9 +334,33 @@ class FontTests(unittest.TestCase):
             return self.measure(face, b"Thread safe face")
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
             widths = list(pool.map(work, range(4)))
+        # fx-24: measuring uses the metrics cache and rasterises nothing.
         expected = {(self.glyph(face, cp), size) for cp in range(65, 91) for size in (853, 1195)}
-        expected.update((self.glyph(face, cp), 853) for cp in b"Thread safe face")
         self.assertEqual(len(set(widths)), 1); self.assertEqual(self.stats(face).glyphs, len(expected)); self.assertEqual(self.stats(other).glyphs, 0)
+
+    def test_measure_matches_paint_without_rasterising(self):
+        """fx-24: NetSurf's layout of one encyclopedia article measured about
+        13,000 strings; each bitmap-cache miss loaded, hinted and rendered a
+        glyph only to read its advance. Measures now come from a metrics cache
+        (same hinted load, no rendering) and must equal the painted advance
+        exactly, for every face, many sizes and texts, cold and warm."""
+        texts = [b"The quick brown fox jumps over the lazy dog", b"AVATAR To Wa", "caf\u00e9 \u00c5\u00e9 \u20ac \u2026 \u00ff\u00fe".encode(),
+                 bytes(range(32, 127)), "\u0391\u03b2\u03b3 \u0416\u0436 \ufffd".encode(), b"\xff\xc0A\x00V"]
+        @Painter
+        def nothing(ctx, x, y, bitmap): return 0
+        for file in sorted(FONTS.glob("*.ttf")):
+            face = self.face(file)
+            for size in (64, 640, 853, 1024, 1195, 1707, 3200, 8192):
+                for text in texts:
+                    with self.subTest(file=file.name, size=size, text=text[:12]):
+                        self.lib.ciuki_font_cache_clear(face); before = self.stats(face)
+                        cold = self.measure(face, text, size)
+                        s = self.stats(face); self.assertEqual((s.glyphs, s.misses, s.hits), (0, before.misses, before.hits))
+                        warm = self.measure(face, text, size)
+                        out = C.c_int32()
+                        self.assertEqual(self.lib.ciuki_font_paint(face, size, text, len(text), 0, 0, nothing, None, C.byref(out)), 0)
+                        self.assertEqual((cold, warm), (out.value, out.value))
+                        self.assertEqual(self.measure(face, text, size), out.value)
 
     def test_integer_blend_and_canvas_clip(self):
         file = FONTS / "LiberationSans-Regular.ttf"; face = self.face(file)

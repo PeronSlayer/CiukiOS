@@ -31,9 +31,10 @@ THEMES = ("Platinum", "Ciuki Blue")
 # F2-83: deliberately re-recorded for the shared shaded bar surfaces/tasks.
 # F2-99: original cursor silhouette and software shadow replace DMZ-White.
 # fx-13: cursor set scaled to the classic 13x19 arrow.
+# G4: the shell menus underline their access keys (SM-9).
 GOLDENS = {
-    "Ciuki Blue": "e58f78953ff512de3b5673c582fd50dc022d63efc842fc2a84ab9955c20cd58e",
-    "Platinum": "e91633e9e4af420c1b4731cbcbfac1db3be921cd85759508ea1f00cffc20e482"
+    "Ciuki Blue": "1205bd3839fa50038dd2cb6a2be8d6a11d235e8551f717f1e45bc069bced643b",
+    "Platinum": "b4a455e9c0f02d9f981088cf9dd90b255730a5218a92165d3f697970597c619c"
 }
 SOURCES = ["apps/desktop/" + n + ".c" for n in
            ("client", "protocol", "input", "compositor", "theme", "shell", "autoplay", "autoplay_content", "settings",
