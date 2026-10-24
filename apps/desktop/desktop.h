@@ -103,6 +103,7 @@ struct desk_client {
     uint32_t v3_cursor_pixels[4][1024];
     uint8_t v3_hot_x[4], v3_hot_y[4];
     uint32_t owner_id;           /* shell modal owner, stable across slot reuse */
+    uint32_t v3_limits[4];       /* G4: WM_GETMINMAXINFO track sizes (min w/h, max w/h), 0 default */
     int minimized, internal, closing, program;   /* internal: DESK_INTERNAL_* kind; program: 1 Files, 2 CiukNote, 3 Control Panel */
     int collapsed;                /* retained shade state, independent of maximize */
     int32_t shade_height;
@@ -188,6 +189,24 @@ struct desk_power_sequence {
     struct desk_power_target targets[DESK_CLIENTS * 2];
     char text[320];
 };
+/* G4: the taskbar's window arrangement with its Undo (client.c). Windows 98
+ * keeps the previous positions of the windows an arrangement moved, so that
+ * the menu offers Undo Cascade, Undo Tile or Undo Minimize All until the
+ * next arrangement. Windows are identified by window_id (stable across
+ * slot reuse); windows that closed meanwhile are skipped by the undo. */
+enum { DESK_ARRANGE_NONE, DESK_ARRANGE_CASCADE, DESK_ARRANGE_TILE_H, DESK_ARRANGE_TILE_V, DESK_ARRANGE_MINIMIZE_ALL };
+struct desk_arrange_saved {
+    uint32_t window_id;
+    struct desk_box frame, restore;
+    int32_t shade_height;
+    uint8_t minimized, zoomed, collapsed;
+};
+struct desk_arrange_undo {
+    int kind;                       /* DESK_ARRANGE_*: the operation Undo reverses, or none */
+    unsigned count;
+    uint32_t focus_id;              /* window_id that was active before the operation */
+    struct desk_arrange_saved windows[DESK_CLIENTS];
+};
 /* G3 end of session (docs/design/desktop-shell.md, "End of session"):
  * Windows 9x WM_QUERYENDSESSION / WM_ENDSESSION. Shut Down, Restart and Log
  * Off ask every program in turn, topmost window first; a program may show
@@ -238,7 +257,9 @@ struct desk_end_task {
     char name[DESK_TITLE_MAX + 1];
 };
 struct desk_render_cache;
+struct desk_clipboard;
 struct desktop {
+    struct desk_clipboard *clipboard;
     void (*wake)(void *);
     void *wake_ctx;
     uint64_t drain_ns;  /* f2-88: when the loop last drained every client channel (0: not tracked, host tests) */
@@ -406,6 +427,9 @@ struct desktop {
     int (*mixer_set)(struct desktop *, uint32_t left, uint32_t right, uint32_t mute);
     /* Title-bar double-click (maximize and restore). */
     uint64_t title_click_ns; int title_click_window; int32_t title_click_x, title_click_y;
+    /* G4: the caption icon's double click closes (WM-11); the taskbar's Undo record. */
+    uint64_t icon_click_ns; int icon_click_window;
+    struct desk_arrange_undo arrange;
     /* Title buttons (desk_title_code): under the pointer, and pressed with the left button. */
     int title_hot, title_down;
     uint32_t display_counter;
@@ -467,6 +491,7 @@ int desk_intersect(struct desk_box a, struct desk_box b, struct desk_box *out);
 struct desk_box desk_frame(uint32_t w, uint32_t h, int32_t x, int32_t y);
 struct desk_box desk_content(const struct desk_client *c);
 struct desk_box desk_close_box(const struct desk_client *c);
+struct desk_box desk_caption_icon_box(const struct desktop *, const struct desk_client *c);   /* zero when the theme draws none */
 struct desk_box desk_min_box(const struct desk_client *c);
 struct desk_box desk_shade_box(const struct desk_client *c);   /* zoom; zero box when too narrow */
 struct desk_box desk_outer(const struct desk_client *c);       /* frame plus drop shadow */
@@ -494,6 +519,17 @@ int desk_program_kind(const char *name);
 int desk_catalog_takes_file(const char *name);   /* catalog.h accessories that open a file argument */         /* 1 Files, 2 CiukNote, else 0 */
 void desk_shell_enable(struct desktop *);
 void desk_minimize(struct desktop *, int index);
+/* G4: Windows 98 taskbar arrangements (client.c). Each acts on the windows that
+ * have a task button, are not minimised, owned, built-in dialogs or topmost
+ * (cascade and tile), inside the work area between the two bars; the result
+ * is the number of windows moved. desk_arrange_undo reverses the last one. */
+int desk_arrangeable(const struct desktop *, int index);
+int desk_minimizable(const struct desktop *, int index);   /* has a task button, is shown and not owned */
+int desk_arrange(struct desktop *, int kind);   /* DESK_ARRANGE_CASCADE, _TILE_H, _TILE_V */
+int desk_minimize_all(struct desktop *);        /* Win+M, Minimize All Windows */
+int desk_show_desktop(struct desktop *);        /* Win+D: minimise all, again restores */
+int desk_arrange_undo_kind(const struct desktop *);   /* DESK_ARRANGE_* the Undo item reverses, 0 none */
+int desk_arrange_undo(struct desktop *);        /* Shift+Win+M, Undo Cascade/Tile/Minimize All */
 void desk_request_close(struct desktop *, int index);
 void desk_close_timeouts(struct desktop *);
 void desk_child_exited(struct desktop *, uint32_t pid, int status);

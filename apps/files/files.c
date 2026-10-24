@@ -3,6 +3,7 @@
 #include "app.h"
 #include "../desktop/autoplay.h"
 #include <ciuki/media.h>
+#include <ciuki/fileinfo.h>
 #include <fcntl.h>
 #include "../desktop/catalog.h"
 #include <ciuki/spawn.h>
@@ -146,6 +147,13 @@ static int media_label(unsigned drive,char out[33])
     struct ciuki_media_volume v={.version=CIUKI_MEDIA_VERSION,.size=sizeof(v),.drive=drive};
     int fd=open("/dev/media",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
     int result=ciuki_devctl(fd,MEDIA_GET_VOLUME,&v,sizeof(v)); close(fd);
+    if (drive==2 || (result && v.flags==0)) {
+        struct ciuki_media_label r={.version=CIUKI_MEDIA_VERSION,.size=sizeof(r),.drive=drive};
+        fd=open("/dev/media",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
+        int e=ciuki_devctl(fd,MEDIA_GET_LABEL,&r,sizeof(r)) ? -errno : 0; close(fd);
+        if (!e) snprintf(out,33,"%s",r.label);
+        return e;
+    }
     if (result || !v.flags) return -1;
     char label[33];
     if (!ap_drive_label(fm_native_vfs(),drive,label) && label[0]) memcpy(out,label,33);
@@ -194,6 +202,26 @@ static int media_space(unsigned d,struct ciuki_media_space *sp)
     int fd=open("/dev/media",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
     int e=ciuki_devctl(fd,MEDIA_GET_SPACE,sp,sizeof(*sp)) ? -errno : 0; close(fd); return e;
 }
+static int native_info(const char *path,struct ciuki_file_info *info)
+{ return ciuki_file_info_get(path,info) ? -errno : 0; }
+static int native_attributes(const char *path,uint32_t attributes)
+{ return ciuki_set_attributes(path,attributes) ? -errno : 0; }
+static int native_volume_label(unsigned drive,char out[33])
+{
+    struct ciuki_media_label r={.version=CIUKI_MEDIA_VERSION,.size=sizeof(r),.drive=drive};
+    int fd=open("/dev/media",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
+    int e=ciuki_devctl(fd,MEDIA_GET_LABEL,&r,sizeof(r)) ? -errno : 0; close(fd);
+    if (!e) snprintf(out,33,"%s",r.label);
+    return e;
+}
+static int native_label(unsigned drive,const char *label)
+{
+    struct ciuki_media_label r={.version=CIUKI_MEDIA_VERSION,.size=sizeof(r),.drive=drive};
+    if (strlen(label)>CIUKI_MEDIA_LABEL_MAX) return -EINVAL;
+    strcpy(r.label,label);
+    int fd=open("/dev/media",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
+    int e=ciuki_devctl(fd,MEDIA_SET_LABEL,&r,sizeof(r)) ? -errno : 0; close(fd); return e;
+}
 static int media_blockers(unsigned drive,uint32_t generation,struct ciuki_media_blockers *b)
 {
     *b=(struct ciuki_media_blockers){.version=CIUKI_MEDIA_VERSION,.size=sizeof(*b),.drive=drive,.generation=generation};
@@ -205,13 +233,15 @@ int main(int argc, char **argv)
     int channel = 3, test = 0, bin_properties = 0, shell_action=0;
     const char *shell_path=NULL; char shell_parent[FM_PATH];
     char **shell_paths=NULL; unsigned shell_count=0;
-    const char *path = FM_COMPUTER;
+    const char *path = FM_COMPUTER, *property=NULL;
+    char property_parent[FM_PATH];
     for (int i = 1; i < argc; i++) {
         if (!strncmp(argv[i], "--channel-fd=", 13)) {
             char *end; long n = strtol(argv[i] + 13, &end, 10);
             if (!argv[i][13] || *end || n < 3 || n >= 128) return 2;
             channel = (int)n;
         } else if (!strcmp(argv[i], "--test=files")) test = 1;
+        else if (!strncmp(argv[i],"--properties=",13)) { property=argv[i]+13; if (!property[0]) return 2; }
         /* G2: the desktop's Recycle Bin icon opens the bin, or its Properties. */
         else if (!strcmp(argv[i], "recycle:properties")) { path = "Recycle Bin"; bin_properties = 1; }
         else if (!strncmp(argv[i],"--file-action=",14)) {
@@ -230,6 +260,7 @@ int main(int argc, char **argv)
         else if (argv[i][0] != '-') path = argv[i];
         else return 2;
     }
+    if (property) { if (property[0]!='/' || fm_parent(property_parent,property)) return 2; path=property_parent; }
     struct files_main *m = calloc(1, sizeof(*m));
     if (!m) return 1;
     int width, height;
@@ -252,6 +283,8 @@ int main(int argc, char **argv)
     a->user = m; a->test = test; a->spawn = launch; a->drop=drop; a->drag_begin=drag_begin; a->drag_status=drag_status; a->close = close_window; a->close_declined=close_declined; a->portrait = portrait;
     a->poll_clipboard=1; a->media_label_key=media_label_key; a->media_label=media_label; a->media_read=media_read; a->media_remove=media_remove; a->media_blockers=media_blockers;
     a->media_load=media_load; a->media_space=media_space;
+    a->file_info=native_info; a->set_attributes=native_attributes; a->set_label=native_label; a->volume_label=native_volume_label; a->version_info=fm_native_version;
+    if (property) snprintf(a->property_request,sizeof(a->property_request),"%s",property);
     if (test) a->checkpoint = checkpoint;
     m->window.close_request = close_request; m->window.message = on_message; m->window.user = a;
     a->show_bin_properties = bin_properties;

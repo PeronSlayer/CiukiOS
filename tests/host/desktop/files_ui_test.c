@@ -333,14 +333,14 @@ static void computer_ui_tests(void)
     assert(!strcmp(du_get(&ui, 100)->text, "Computer"));
     fm_select(&app.model, 0, 0); files_update(&app);
     assert(app.rows[0].icon16 && app.rows[0].icon32 && !strcmp(app.rows[0].text[2], "Disk Drive"));
-    assert(du_get(&ui, 3)->disabled && du_get(&ui, 4)->disabled && du_get(&ui, 7)->disabled && du_get(&ui, 8)->disabled);
+    assert(du_get(&ui, 3)->disabled && du_get(&ui, 4)->disabled && du_get(&ui, 7)->disabled && !du_get(&ui, 8)->disabled);
     int operations = fake_operations;
-    const int forbidden[] = {4, 5, 6, 7, 8, 11, 12, 13, 14, 32};
+    const int forbidden[] = {4, 5, 6, 7, 11, 12, 13, 14, 32};
     for (unsigned i = 0; i < sizeof(forbidden) / sizeof(forbidden[0]); i++) activate(forbidden[i]);
     assert(fake_operations == operations && !app.job_active && !ui.dialog.kind && app.rename_index < 0);
     rclick(du_get(&ui, 107)->box.x + 30, list_row_y(du_get(&ui, 107), 0));
     for (unsigned i = 0; i < app.popup_count; i++)
-        if (app.popup[i].id == 7 || app.popup[i].id == 14 || app.popup[i].id == 8) assert(app.popup[i].flags & DU_ITEM_DISABLED);
+        if (app.popup[i].id == 7 || app.popup[i].id == 14) assert(app.popup[i].flags & DU_ITEM_DISABLED);
     key(DU_KEY_ESC); key(DU_KEY_ENTER);
     assert(!strcmp(app.model.path, "/") && !strcmp(du_get(&ui, 100)->text, "C:\\"));
     key(DU_KEY_BACKSPACE); assert(!app.model.path[0]);
@@ -745,7 +745,11 @@ int main(int argc, char **argv)
     assert(strstr(ui.dialog.title,"Cancel Operation"));
     struct du_event confirm={.type=DU_EV_DIALOG,.id=ui.dialog.id,.index=0};
     du_dialog_close(&ui); files_event(&ui,&confirm,&app);
-    tick(); assert(closed && !app.job_active && app.job.state == FM_CANCELLED);
+    tick(); assert(closed && !app.job_active);
+    /* The worker may finish this small copy while the close confirmation
+     * is open. A completed operation also closes cleanly; cancellation
+     * itself is exercised with slow I/O by the transfer-worker tests. */
+    assert(app.job.state == FM_CANCELLED || app.job.state == FM_DONE);
     closed = 0;
     /* Alt+F4 closes. */
     chord(DU_KEY_LALT, DU_KEY_F4); assert(closed);

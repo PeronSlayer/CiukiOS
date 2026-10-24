@@ -74,6 +74,15 @@ Host evidence and exact implementation limits are recorded in
 
 ## Integration boundaries
 
+The G6/G8 merge retains the separate View / Folder Options preferences and
+File Types editor, and selects the Properties worker callback without
+overwriting the Undo worker callback. Both operate on the existing transfer
+worker. The merge rechecked the Microsoft
+[file-management reference](https://learn.microsoft.com/en-us/windows/win32/shell/manage)
+and [file-type registration reference](https://learn.microsoft.com/en-us/windows/win32/shell/fa-file-types):
+G8 keeps its existing transfer inverses and shared HKCR associations alongside
+G6 metadata and display preferences; no additional syscall or message is needed.
+
 The shared resolver is `fm_launch_resolve(fs, path, verb, record)` in
 `apps/files/model.c` (`operations.inc`). The desktop's `open_path` callback
 queues it on the existing shortcut worker and also accepts HTTP(S) URLs.

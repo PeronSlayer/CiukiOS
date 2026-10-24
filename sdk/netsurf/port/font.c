@@ -28,16 +28,32 @@ static uint64_t clock_ns(void)
     if(clock_gettime(CLOCK_MONOTONIC,&t))return 0;
     return (uint64_t)t.tv_sec*1000000000u+t.tv_nsec;
 }
-struct ciuki_font_work ciuki_font_work_read(void) { return work; }
+/* fx-24: clock_gettime is a system call on CiukiOS; timing every measured
+ * string with it cost two calls per width-cache miss (about 26,000 in one
+ * article's first layout). The time stamp counter costs no system call
+ * (user RDTSC, as apps/music uses); a layout's measure time is its share of
+ * the span's cycles applied to the span's measured duration. */
+static uint64_t cycles(void)
+{
+#if defined(__i386__) || defined(__x86_64__)
+    return __builtin_ia32_rdtsc();
+#else
+    return 0;
+#endif
+}
+struct ciuki_font_work ciuki_font_work_read(void) { struct ciuki_font_work w=work;w.stamp=cycles();return w; }
 void ciuki_font_work_report(struct ciuki_font_work before,uint64_t elapsed,bool local)
 {
     static unsigned reports;
     if(reports>=16)return;
     reports++;
+    uint64_t span=cycles()-before.stamp,share=work.measure_cycles-before.measure_cycles;
+    uint64_t raw=elapsed/(ciuki_layout_clock_scale?ciuki_layout_clock_scale:1);
+    uint64_t measure_ns=span && share<=span?(uint64_t)((double)raw*(double)share/(double)span):0;
     ciuki_log_line("[netsurf] layout work elapsed_us=%llu class=%s pass=%u font_opens=%u font_open_us=%llu font_measures=%u font_measure_us=%llu width_hits=%u measured_bytes=%llu",
         (unsigned long long)(elapsed/1000),local?"local":"remote",reports,work.opens-before.opens,
         (unsigned long long)((work.open_ns-before.open_ns)/1000),work.measures-before.measures,
-        (unsigned long long)((work.measure_ns-before.measure_ns)/1000),work.hits-before.hits,
+        (unsigned long long)(measure_ns/1000),work.hits-before.hits,
         (unsigned long long)(work.bytes-before.bytes));
 }
 /* Exact whole-string SDK advances; fixed storage, no new font/glyph budget.
@@ -158,10 +174,9 @@ nserror fb_font_width(const plot_font_style_t *style,const char *s,size_t n,int 
     }
     struct ciuki_font_face *face=face_for(style); int32_t advance;
     if(!face)return NSERROR_NOMEM;
-    uint64_t start=clock_ns();
+    uint64_t start=cycles();
     int error=ciuki_font_measure(face,size,s,n,&advance);
-    uint64_t end=clock_ns();
-    work.measures++;work.bytes+=n;if(end>=start)work.measure_ns+=end-start;
+    work.measures++;work.bytes+=n;work.measure_cycles+=cycles()-start;
     if(error)return NSERROR_NOMEM;
     if(ciuki_layout_expired())return NSERROR_STOPPED;
     *width=(advance+32)/64;

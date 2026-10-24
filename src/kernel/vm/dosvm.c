@@ -482,7 +482,10 @@ static int transfer(struct dosvm *v, uint32_t linear, void *buffer, unsigned byt
         unsigned n = PAGE_SIZE - (linear & (PAGE_SIZE - 1));
         if (n > bytes) n = bytes;
         if (linear >= 0xA0000 && linear < 0xC0000) {
-            if (v->fullscreen && !v->vbe_mode && !v->fullscreen_model) {
+            /* fx-22: only the adapter's owner continuation or the switch
+             * service touches the physical aperture; its writes are dirty. */
+            if (v->fullscreen && !v->vbe_mode && !v->fullscreen_model &&
+                dosvm_fullscreen_aperture(v, linear, n, write)) {
                 volatile uint8_t *aperture = P2V(linear);
                 for (unsigned i=0;i<n;i++) {
                     if (write) aperture[i]=b[i]; else b[i]=aperture[i];
@@ -1288,13 +1291,39 @@ static void worker(void *arg)
 
 static bool destroying[DOSVM_LIMIT];
 
+/* The transaction's own task cannot wait for itself. */
+static int fullscreen_pin_wait(const struct dosvm *v)
+{
+    if (dosvm_fullscreen_service()) return -EBUSY;
+    uint64_t until = deadline_after_ms(DOSVM_FULLSCREEN_PIN_WAIT_MS);
+    while (dosvm_fullscreen_pinned(v) && !deadline_passed(until)) task_sleep_ms(1);
+    return dosvm_fullscreen_pinned(v) ? -EBUSY : 0;
+}
+static int fullscreen_release(const struct dosvm *v, struct dosvm_key key)
+{
+    for (unsigned attempt = 0; attempt < 3; attempt++) {
+        int e = dosvm_fullscreen_leave(key, false);
+        if (e != -EBUSY) return e;
+        int pinned = fullscreen_pin_wait(v);
+        if (pinned) return pinned;
+    }
+    return -EBUSY;
+}
 int dosvm_destroy(struct dosvm_key key, bool forced)
 {
     struct dosvm *v = dosvm_lookup(key);
     if (!v) return -EINVAL;
     if (v->info.state == DOSVM_DEAD) return v->info.cleanup_error;
-    if (v->fullscreen_hold) return -EBUSY; /* switch pins the VM/address space */
+    /* fx-22: a switch pins the VM and its address space. The return is
+     * bounded (supersavage-fullscreen.md, fx-22): wait for it before any
+     * side effect, rather than reap and close devices and then fail at the
+     * display step (T23 f441c5bd: Quake closing during Alt+Enter). */
     if (v->task == g_current) return -V86_EPERM;
+    if (dosvm_fullscreen_pinned(v)) {
+        int pinned = fullscreen_pin_wait(v);
+        if (pinned) return pinned;
+        if (v->info.state == DOSVM_DEAD) return v->info.cleanup_error;
+    }
     unsigned slot=key.id-1;
     if (destroying[slot]) return -EBUSY;
     destroying[slot]=true;
@@ -1309,19 +1338,23 @@ int dosvm_destroy(struct dosvm_key key, bool forced)
         }
         task_sleep_ms(1);
     }
-    if (v->task) { task_reap(v->task); v->task = 0; }
-    dosvm_uart_close(v);
-    int printer_cleanup=dosvm_game_ports_close ? dosvm_game_ports_close(v) : 0;
-    int network_error = dosvm_network_detach(v);
-    if (network_error) { destroying[slot] = false; return network_error; }
-    if (dosvm_cdaudio_close) dosvm_cdaudio_close(v); /* fx-10: stop its CD stream */
-    int video_error=dosvm_fullscreen_leave(key,false);
+    /* The stop above requests the return (dosvm_fullscreen_stopping); the
+     * display worker may already run it while the task ends. Finish or wait
+     * for it (bounded) before reaping and closing anything, never close
+     * devices underneath it and then fail at the display step. */
+    int video_error = fullscreen_release(v, key);
     if (video_error) {
         klog("[dosvm] failure stage=destroy-display vm=%u generation=%u result=%d fallback=retain",
              key.id,key.generation,video_error);
         destroying[slot]=false;
         return video_error;
     }
+    if (v->task) { task_reap(v->task); v->task = 0; }
+    dosvm_uart_close(v);
+    int printer_cleanup=dosvm_game_ports_close ? dosvm_game_ports_close(v) : 0;
+    int network_error = dosvm_network_detach(v);
+    if (network_error) { destroying[slot] = false; return network_error; }
+    if (dosvm_cdaudio_close) dosvm_cdaudio_close(v); /* fx-10: stop its CD stream */
     int file_cleanup=0;
     v->save_discarding=forced || v->info.reason!=DOSVM_EXIT;
     if (dosvm_file_destroy) {
@@ -1801,12 +1834,14 @@ bool dosvm_input_focus(struct dosvm_key key, bool focused)
         previous->pointer_known = false;
     }
     v->window_input = true;
+    bool resumed = focused && v->fullscreen_suspended;
     if (focused) { input_focus = key; v->pointer_known = false; v->fullscreen_suspended=false; }
     else if (input_focus.id == key.id && input_focus.generation == key.generation) {
         task_input_withdraw(v->task);
         dosvm_kbd_release(v); dosvm_mouse_event(v, 0, 0, 0);
         v->pointer_known = false; input_focus = (struct dosvm_key){0};
     }
+    if (resumed) kwait_wake_all(&v->wake); /* fx-22: a parked VM blocks on it */
     irq_restore(flags);
     return true;
 }

@@ -417,6 +417,31 @@ int du_file_dialog(struct du_ui *u, int id, int save, const char *title, const c
     return 0;
 }
 
+void du_property_sheet(struct du_ui *u, int id, const char *title, int width, int height,
+                       const struct du_item *pages, unsigned count)
+{
+    begin(u, DU_DLG_PROGRESS, id, title, "");
+    struct du_dialog *d = &u->dialog;
+    d->sheet = 1; d->buttons = 3; d->cancel = 1; d->focus = 0;
+    place(u, width, height);
+    item(d, 0, DU_BUTTON, ID_BUTTON, "&OK");
+    item(d, 1, DU_BUTTON, ID_BUTTON - 1, "&Cancel");
+    item(d, 2, DU_BUTTON, ID_BUTTON - 2, "&Apply");
+    button_row(d, 3, d->box.y + d->box.h - BTN_H - 12);
+    struct du_widget *tabs = item(d, 3, DU_TABS, ID_BAR, "");
+    tabs->items = (struct du_item *)pages; tabs->count = count;
+    tabs->box = (struct du_rect){d->box.x + 10, body_y(d) + 6, d->box.w - 20, d->box.h - 74};
+}
+struct du_widget *du_property_control(struct du_ui *u, unsigned slot, enum du_kind kind, int id,
+                                     struct du_rect box, const char *text)
+{
+    if (!u->dialog.sheet || slot < 4 || slot >= DU_DIALOG_ITEMS) return NULL;
+    struct du_widget *w = item(&u->dialog, slot, kind, id, text);
+    box.x += u->dialog.box.x; box.y += body_y(&u->dialog);
+    w->box = box;
+    return w;
+}
+
 void du_dialog_icon(struct du_ui *u, const uint32_t *argb32)
 { if (u->dialog.kind == DU_DLG_MESSAGE && u->dialog.icon) { u->dialog.icon_pixels = argb32; dialog_damage(u); } }
 
@@ -502,6 +527,7 @@ static void process(struct du_ui *u)
     memcpy(pending, d->pending, sizeof(pending)); d->pending_count = 0;
     for (unsigned k = 0; k < n && d->kind; k++) {
         struct du_event *e = &pending[k];
+        if (d->sheet && d->changed) d->changed(u, e, d->sheet_ctx);
         int file = d->kind == DU_DLG_OPEN || d->kind == DU_DLG_SAVE;
         if (e->type == DU_EV_ACTIVATE && e->id <= ID_BUTTON && e->id > ID_BUTTON - 4) {
             int index = ID_BUTTON - e->id;
@@ -552,6 +578,15 @@ void du_dialog_key(struct du_ui *u, unsigned code)
     struct du_dialog *d = &u->dialog;
     struct du_widget *f = d->focus >= 0 && (unsigned)d->focus < d->count ? &d->items[d->focus] : NULL;
     if (code == DU_KEY_ESC) { finish(u, d->cancel); return; }
+    if (d->sheet && code == DU_KEY_TAB && (u->modifiers & DU_CTRL)) {
+        struct du_widget *tabs = &d->items[3];
+        if (tabs->count) {
+            tabs->active = (tabs->active + ((u->modifiers & DU_SHIFT) ? tabs->count - 1 : 1)) % tabs->count;
+            if (d->changed) d->changed(u, &(struct du_event){.type=DU_EV_SELECT, .id=ID_BAR, .index=(int)tabs->active}, d->sheet_ctx);
+            dialog_damage(u);
+        }
+        return;
+    }
     if (code == DU_KEY_TAB) {
         for (unsigned n = 0; n < d->count; n++) {
             d->focus = u->modifiers & DU_SHIFT ? (d->focus <= 0 ? (int)d->count - 1 : d->focus - 1) : (d->focus + 1) % (int)d->count;
@@ -559,7 +594,7 @@ void du_dialog_key(struct du_ui *u, unsigned code)
         }
         dialog_damage(u); return;
     }
-    if (f && (f->kind == DU_EDIT || f->kind == DU_TEXTAREA || f->kind == DU_LISTVIEW || f->kind == DU_TREE)) {
+    if (f && (f->kind == DU_EDIT || f->kind == DU_TEXTAREA || f->kind == DU_LISTVIEW || f->kind == DU_TREE || f->kind == DU_TABS)) {
         int handled = 0; DIALOG_CALL(handled = du_widget_key(u, f, code)); if (handled) return;
     }
     if (f && (f->kind == DU_CHECKBOX || f->kind == DU_RADIO)) {
@@ -583,9 +618,11 @@ void du_dialog_key(struct du_ui *u, unsigned code)
             const char *amp = strchr(d->items[i].text, '&');
             unsigned m = amp && amp[1] ? (unsigned char)amp[1] : 0;
             if (m >= 'A' && m <= 'Z') m += 32;
-            if (m != ch) continue;
+            if (m != ch || d->items[i].hidden || d->items[i].disabled) continue;
             if (d->items[i].kind == DU_BUTTON && i < d->buttons) {
                 if ((d->kind == DU_DLG_OPEN || d->kind == DU_DLG_SAVE) && i == 0) accept_file(u); else finish(u, (int)i);
+            } else if (d->sheet && (d->items[i].kind == DU_CHECKBOX || d->items[i].kind == DU_RADIO)) {
+                d->focus=(int)i; DIALOG_CALL(du_widget_key(u,&d->items[i],DU_KEY_SPACE));
             } else if (d->items[i].kind == DU_LABEL && i + 1 <= d->count) d->focus = i == F_LOOK ? F_FOLDER : F_NAME;
             dialog_damage(u); return;
         }
@@ -679,13 +716,18 @@ void du_draw_dialog(struct du_ui *u)
         if (d->icon_pixels) du_icon_blit(c, ix, top + 16, d->icon_pixels, 32, DU_ICON_NORMAL);
         else if (du_message_icon_name(d->icon)) du_icon_draw(c, ix, top + 16, du_icon_for(du_message_icon_name(d->icon), 32), DU_ICON_NORMAL);
         du_text_wrap(c,body,d->text,DU_INK);
+    } else if (d->sheet) {
+        /* The tab control draws its page background before the body. */
+        du_draw_widget(u, &d->items[3], d->focus == 3 && u->focused_window);
+        draw_text(c, b.x + 24, top + 42, b.w - 48, d->text);
+        if (d->paint) d->paint(u, d->sheet_ctx);
     } else if (d->kind == DU_DLG_INPUT || d->kind == DU_DLG_PROGRESS) {
         draw_text(c, b.x + 14, top + 12, b.w - 28, d->text);
     }
     int focus_button = d->focus >= 0 && (unsigned)d->focus < d->buttons;
     for (unsigned i = 0; i < d->count; i++) {
         struct du_widget *w = &d->items[i];
-        if (w->hidden) continue;
+        if (w->hidden || (d->sheet && i == 3)) continue;
         if (w->kind == DU_BUTTON && i < d->buttons) w->def = focus_button ? (int)i == d->focus : i == 0;
         struct du_rect old = c->clip;
         c->clip = du_intersection(old, w->box);

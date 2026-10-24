@@ -22,7 +22,7 @@
 #define FM_COMPUTER ""
 enum fm_type { FM_FILE, FM_DIR, FM_OTHER };
 enum fm_kind { FM_KIND_FOLDER, FM_KIND_TEXT, FM_KIND_APP, FM_KIND_IMAGE, FM_KIND_AUDIO, FM_KIND_SCRIPT, FM_KIND_FILE };
-struct fm_meta { enum fm_type type; uint64_t size, ino; uint32_t dev, mode; int64_t modified; uint32_t exec; };
+struct fm_meta { enum fm_type type; uint64_t size, ino; uint32_t dev, mode; int64_t modified; uint32_t exec; uint32_t attributes; uint64_t allocated; int allocated_known; };
 /* bin: 0, or index + 1 of the entry's record in fm_model.bin (G2: the Recycle
  * Bin view lists stored items under their stored names; the record has the
  * original name, location and deletion date). */
@@ -56,9 +56,11 @@ struct fm_model {
     struct fm_entry *entries; unsigned count, capacity, active, anchor, sort; int descending;
     char find[FM_NAME]; size_t find_length; uint64_t find_deadline;
     char **clipboard; unsigned clipboard_count; int cut;
+    int show_hidden, hide_system, hide_extensions;
     /* G2: records behind the Recycle Bin view's entries, and the drives whose
      * volumes are fixed disks (bit 0 = A:; C: always counts). */
     struct rb_item *bin; unsigned bin_count; uint32_t fixed;
+    uint32_t clipboard_sequence;
     uint32_t drive_slots; /* fx-17b: drives listed in Computer without a medium (floppies) */
 };
 enum fm_job_kind { FM_COPY, FM_MOVE, FM_DELETE, FM_PROPERTIES };
@@ -77,6 +79,7 @@ struct fm_job {
     int input, output, error, cleanup_error, yes_all, cancel, skip_seen, prompt_dir;
     unsigned used, written, chunk, batch; int eof; unsigned char *buffer; /* FM_WRITE_BATCH bytes while copying */
     uint64_t bytes, files, folders, total_bytes;
+    uint64_t allocated; int allocated_unknown;
     uint64_t file_bytes;
     unsigned total_items, items_done;
     int counting;
@@ -136,6 +139,8 @@ void fm_clipboard_clear(struct fm_model *);
 int fm_clipboard_consume(struct fm_model *);
 int fm_clipboard_save(struct fm_model *);
 int fm_clipboard_load(struct fm_model *);
+int fm_view_load(struct fm_model *, int *attributes);
+int fm_view_save(struct fm_model *, int attributes);
 int fm_unique(struct fm_model *, const char *base, const char *suffix, char *out);
 int fm_create(struct fm_model *, const char *, int directory);
 int fm_rename(struct fm_model *, unsigned, const char *);
@@ -148,6 +153,7 @@ void fm_job_answer(struct fm_job *, enum fm_replace);
 void fm_job_cancel(struct fm_job *);
 void fm_job_destroy(struct fm_job *);
 const struct fm_vfs *fm_native_vfs(void);
+int fm_native_version(const char *, char *, size_t);
 /* fx-19 drag and drop: the one shared effect rule (Windows 95/98 Explorer,
  * DROPEFFECT values). Drag sources and drop targets, in Files and in the
  * desktop shell, call only fm_drop_effect; fx-17's transfer engine performs

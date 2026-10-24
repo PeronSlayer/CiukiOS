@@ -1367,7 +1367,7 @@ int main(int argc,char **argv)
     desk_menu_close(&d);   /* as a menu launch does (shell.c activate): the menu drops over the demo's title now */
     assert(!d.menu_open && d.focus==0);
     struct ciuki_input_event e={.type=CIUKI_INPUT_BUTTON,.code=1,.value=1};
-    d.mouse_x=40; d.mouse_y=60; desk_input(&d,&e); assert(d.drag==0);
+    d.mouse_x=70; d.mouse_y=60; desk_input(&d,&e); assert(d.drag==0);   /* G4: x 40 would be the caption icon, whose click opens the window menu */
     e.type=CIUKI_INPUT_MOTION; e.code=0; e.value=60; e.value2=60; desk_input(&d,&e);
     assert(d.shell_stage==4 && d.clients[0].frame.x==80 && d.clients[0].frame.y==112);
     e.type=CIUKI_INPUT_BUTTON; e.code=1; e.value=e.value2=0; desk_input(&d,&e);

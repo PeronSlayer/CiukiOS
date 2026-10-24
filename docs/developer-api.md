@@ -824,10 +824,11 @@ enum ciuki_syscall {
     CIUKI_SYS_GETENTROPY = 91,
 ```
 
-G1: outside 78-95 (left to F6) and after the Win32 family's 96.
+G1 TIME=97 is preserved; G6 follows the highest allocated syscall.
 
 ```c
 CIUKI_SYS_TIME = 97,
+    CIUKI_SYS_FILE_INFO = 98,
 };
 ```
 
@@ -1284,12 +1285,18 @@ stable filesystem identity; empty if unavailable
 char label[33];
     uint8_t reserved[3];
 };
+```
 
+fx-21b: usb_unrecognized (formerly reserved; zero on input) counts the USB
+devices quarantined at enumeration since boot. The desktop shows "USB
+Device Not Recognized" once for every increase.
+
+```c
 struct ciuki_media_state {
     uint32_t version;
     uint32_t size;
     uint32_t removable_mask;
-    uint32_t reserved;
+    uint32_t usb_unrecognized;
     uint32_t generation[26];
     uint32_t type[26];
 };
@@ -1326,6 +1333,31 @@ struct ciuki_media_space {
     uint32_t cluster_bytes;
     uint32_t total_clusters;
     uint32_t free_clusters;
+    uint32_t reserved;
+};
+```
+
+G6: volume label of a mounted FAT drive (C: included). GET fills label
+(no padding, "" when none) and flags; SET writes the root-directory
+volume-ID entry and the boot sector BS_VolLab (FAT spec 1.03, pp. 9-12, 25;
+Win32 SetVolumeLabel). Label: at most 11 bytes of printable ASCII, stored
+upper case; * ? . , ; : / \ | + = < > [ ] " refused with EINVAL; "" removes
+the label. EROFS on a read-only, write-protected or optical medium;
+ENOENT without a mounted FAT volume. reserved must be zero.
+
+Appended after MEDIA_CD_POSITION=0x4d17; existing values stay fixed.
+
+```c
+#define MEDIA_GET_LABEL 0x4d18u
+#define MEDIA_SET_LABEL 0x4d19u
+#define CIUKI_MEDIA_LABEL_READ_ONLY 1u
+#define CIUKI_MEDIA_LABEL_MAX 11u
+struct ciuki_media_label {
+    uint32_t version;
+    uint32_t size;
+    uint32_t drive;
+    uint32_t flags;
+    char label[12];
     uint32_t reserved;
 };
 ```
@@ -2458,10 +2490,16 @@ uint8_t d_type;
 20
 
 ```c
-uint8_t reserved[3];
+uint8_t d_attributes;
 ```
 
-21
+21: G6 CIUKI_ATTR_* of the entry, 0 when none
+
+```c
+uint8_t reserved[2];
+```
+
+22
 
 ```c
 char d_name[768];
@@ -2480,6 +2518,130 @@ int64_t d_mtime;
 ```
 
 800: Unix seconds, zero when unavailable
+
+```c
+};
+```
+
+G6: FAT attributes, times and MS-DOS name through the native file API,
+call 98 file_info(B=path, C=record, D=sizeof(record)); 0 or -errno.
+GET fills every field the object has and reports them in mask; SET
+changes only the mask fields (ATTRIBUTES, CREATED, ACCESSED, MODIFIED) in
+one directory-entry publication. Times are Unix seconds through the same
+FAT conversion as stat; FAT keeps created to 10 ms, modified to 2 s and
+accessed to the day (Microsoft "File Times"). attributes are the FAT
+byte (Microsoft FAT 1.03 p. 23): SET accepts READONLY|HIDDEN|SYSTEM|
+ARCHIVE plus the object's own DIRECTORY bit. Errors: EINVAL (version,
+size, operation, mask, attribute bits, a time outside 1980-2107, a
+volume root), ENOENT/ENOTDIR/ENAMETOOLONG (path), EFAULT, EROFS (CD,
+NTFS, write-protected or read-only FAT volume), EOPNOTSUPP (device and
+synthetic nodes), EIO (medium gone). Win32 GetFileAttributes/SetFile-
+Attributes/GetFileTime/SetFileTime and DOS INT 21h AX=4300h/4301h and
+AX=5700h/5701h read and write the same directory entry.
+
+```c
+#define CIUKI_FILE_INFO_VERSION 1u
+#define CIUKI_FILE_INFO_GET 0u
+#define CIUKI_FILE_INFO_SET 1u
+#define CIUKI_ATTR_READONLY 0x01u
+#define CIUKI_ATTR_HIDDEN 0x02u
+#define CIUKI_ATTR_SYSTEM 0x04u
+#define CIUKI_ATTR_DIRECTORY 0x10u
+#define CIUKI_ATTR_ARCHIVE 0x20u
+#define CIUKI_ATTR_SETTABLE 0x27u
+#define CIUKI_FILE_INFO_ATTRIBUTES 1u
+#define CIUKI_FILE_INFO_CREATED 2u
+#define CIUKI_FILE_INFO_ACCESSED 4u
+#define CIUKI_FILE_INFO_MODIFIED 8u
+#define CIUKI_FILE_INFO_SHORT_NAME 16u
+#define CIUKI_FILE_INFO_ALLOCATED 32u
+#define CIUKI_FILE_INFO_SETTABLE 15u
+#define CIUKI_FILE_INFO_READ_ONLY_MEDIUM 1u
+#define CIUKI_FILE_INFO_VOLUME_ROOT 2u
+#define CIUKI_SHORT_NAME_MAX 16u
+struct ciuki_file_info {
+    uint32_t version;
+```
+
+0
+
+```c
+uint32_t size;
+```
+
+4
+
+```c
+uint32_t operation;
+```
+
+8
+
+```c
+uint32_t mask;
+```
+
+12
+
+```c
+uint32_t attributes;
+```
+
+16
+
+```c
+uint32_t flags;
+```
+
+20: GET output
+
+```c
+uint64_t file_size;
+```
+
+24
+
+```c
+uint64_t allocated;
+```
+
+32: bytes in whole clusters ("size on disk")
+
+```c
+int64_t created;
+```
+
+40
+
+```c
+int64_t accessed;
+```
+
+48
+
+```c
+int64_t modified;
+```
+
+56
+
+```c
+uint32_t created_ms;
+```
+
+64: 0-999 past created
+
+```c
+uint32_t reserved;
+```
+
+68
+
+```c
+char short_name[16];
+```
+
+72: 8.3 alias, NUL terminated
 
 ```c
 };
@@ -4185,6 +4347,19 @@ reason = positive errno when FAILED. No VM capability is required.
 
 ```c
 #define CIUKI_DOSVM_IMAGE_QUERY 17u
+#define CIUKI_DOSVM_TEXT 18u
+```
+
+owner-only snapshot of visible BIOS text cells
+
+```c
+#define CIUKI_DOSVM_MARK 19u
+```
+
+focused=1 pause for Mark, 0 resume
+
+```c
+#define CIUKI_DOSVM_TEXT_MAX 16000u
 #define CIUKI_DOSVM_IMAGE_UNCHECKED 0u
 ```
 
@@ -4265,6 +4440,14 @@ STATUS.changed: game data quota/disk space exhausted
 #define CIUKI_DOSVM_BOOTING 0u
 #define CIUKI_DOSVM_RUNNING 1u
 #define CIUKI_DOSVM_STOPPED 2u
+struct ciuki_dosvm_text {
+    uint32_t buffer;
+    uint32_t capacity;
+    uint32_t columns;
+    uint32_t rows;
+    uint32_t cell_height;
+    uint32_t reserved[5];
+};
 struct ciuki_dosvm_command {
     uint32_t version;
 ```
@@ -4339,6 +4522,12 @@ union {
 ```
 
 72: INPUT
+
+```c
+struct ciuki_dosvm_text text;
+```
+
+TEXT input buffer/capacity; output OEM cells
 
 ```c
 struct { uint32_t kernel, game, memory, reserved[7]; } launch;
@@ -4964,12 +5153,26 @@ enum desk_v3_opcode {
     DESK_V3_ACTIVATE, DESK_V3_LEASE_EVENT, DESK_V3_RELATIVE_EVENT,
     DESK_V3_CRASH, DESK_V3_RESTART, DESK_V3_POINTER_STATE,
     DESK_V3_WINDOW_ORDER, DESK_V3_WIN32_HWND,
-    DESK_V3_PRESENT
+    DESK_V3_PRESENT,
 ```
 
 16-byte damage; RESULT after frame, immediate if covered/identical
 
+G5 system clipboard on the v3 transport: window 0, generation 0,
+payload exactly as the v2 CLIPBOARD/CLIPBOARD_EVENT below.
+
 ```c
+DESK_V3_CLIPBOARD, DESK_V3_CLIPBOARD_EVENT,
+```
+
+G4 (WM_GETMINMAXINFO): client to desktop, 16 bytes: minimum and maximum
+track size of the client area, min-w, min-h, max-w, max-h in unscaled
+pixels, each 0 (default) or 1..2048, max >= min when both are given.
+PLACE and CONFIGURE state word: 0 normal, 1 minimised, 2 hidden,
+3 maximised (the desktop zooms the window; WM_SIZE SIZE_MAXIMIZED).
+
+```c
+DESK_V3_LIMITS
 };
 #define DESK_RESIZABLE 1u
 #define DESK_CONFIGURE_COMMITTED 1u
@@ -5158,7 +5361,135 @@ SESSION_ANSWER (client to desktop, 12 bytes): serial of the query,
   (it agrees by default and gets CLOSE_REQUEST/CLOSED at the end).
 
 ```c
-DESK_QUERY_END_SESSION, DESK_END_SESSION, DESK_SESSION_ANSWER
+DESK_QUERY_END_SESSION, DESK_END_SESSION, DESK_SESSION_ANSWER,
+```
+
+G5 one system clipboard owned by the desktop (Windows 98 clipboard
+model; docs/design/system-clipboard.md), version 2, any client.
+CLIPBOARD (client to desktop), u32 after the header: serial (nonzero,
+  echoed), op (DESK_CLIP_QUERY..NAME), format, flags, byte count,
+  owner token, name byte count, name (REGISTER only, 1..127 UTF-8).
+  A PUT with bytes and without DELAYED carries one surface holding the
+  bytes from offset 0 (desk_clip_dims); other requests carry none.
+CLIPBOARD_EVENT (desktop to client): serial (0 unsolicited), kind
+  (DESK_CLIP_REPLY..DESTROY), op answered (REPLY) or 0, signed
+  result, format, byte count, sequence, owner token, item count,
+  items: count u32 formats, or count name bytes for a NAME reply.
+  A successful GET reply with bytes carries one read-only surface.
+
+```c
+DESK_CLIPBOARD, DESK_CLIPBOARD_EVENT,
+    DESK_DOS_CLIPBOARD
+```
+
+v2 desktop to DOS window: u32 action 1 Mark, 2 Copy, 3 Paste, 4 toggle QuickEdit
+
+```c
+};
+enum desk_clip_op { DESK_CLIP_QUERY = 1, DESK_CLIP_EMPTY, DESK_CLIP_PUT, DESK_CLIP_CLOSE,
+                    DESK_CLIP_GET, DESK_CLIP_WATCH, DESK_CLIP_REGISTER, DESK_CLIP_NAME, DESK_CLIP_OPEN, DESK_CLIP_RELEASE };
+enum desk_clip_kind { DESK_CLIP_REPLY = 1, DESK_CLIP_RENDER, DESK_CLIP_CHANGED, DESK_CLIP_DESTROY };
+#define DESK_CLIP_DELAYED 1u
+```
+
+PUT: SetClipboardData(format, NULL); owner only, no bytes
+
+```c
+#define DESK_CLIP_RENDERED 2u
+```
+
+PUT: the owner's answer to RENDER; zero bytes declines
+
+```c
+#define DESK_CLIP_OWNER 1u
+```
+
+QUERY reply flags in byte count: the clipboard has an owner
+
+```c
+#define DESK_CLIP_MINE 2u
+```
+
+... and it is the caller
+
+```c
+#define DESK_CLIP_NAME_MAX 127u
+#define DESK_CLIP_LIST_MAX 48u
+#define DESK_CLIP_FORMATS_MAX 32u
+```
+
+stored formats
+
+```c
+#define DESK_CLIP_NAMES_MAX 256u
+```
+
+registered formats
+
+```c
+#define DESK_CLIP_ITEM_MAX 16777216u
+```
+
+one format: the surface limit
+
+```c
+#define DESK_CLIP_BYTES_MAX 16777216u
+```
+
+all stored formats
+
+```c
+#define DESK_CLIP_RENDER_NS 2000000000ull
+```
+
+WM_RENDERFORMAT answer
+
+Windows clipboard format ids (Winuser.h).
+
+```c
+#define DESK_CF_TEXT 1u
+#define DESK_CF_BITMAP 2u
+#define DESK_CF_METAFILEPICT 3u
+#define DESK_CF_SYLK 4u
+#define DESK_CF_DIF 5u
+#define DESK_CF_TIFF 6u
+#define DESK_CF_OEMTEXT 7u
+#define DESK_CF_DIB 8u
+#define DESK_CF_PALETTE 9u
+#define DESK_CF_PENDATA 10u
+#define DESK_CF_RIFF 11u
+#define DESK_CF_WAVE 12u
+#define DESK_CF_UNICODETEXT 13u
+#define DESK_CF_ENHMETAFILE 14u
+#define DESK_CF_HDROP 15u
+#define DESK_CF_LOCALE 16u
+#define DESK_CF_DIBV5 17u
+#define DESK_CF_OWNERDISPLAY 0x80u
+#define DESK_CF_DSPTEXT 0x81u
+#define DESK_CF_PRIVATEFIRST 0x200u
+#define DESK_CF_PRIVATELAST 0x2ffu
+#define DESK_CF_REGISTERED 0xc000u
+#define DESK_CLIP_PREFERRED_DROPEFFECT "Preferred DropEffect"
+struct desk_clip_wire {
+    uint32_t serial;
+    uint32_t op;
+    uint32_t kind;
+    uint32_t format;
+    uint32_t flags;
+    uint32_t bytes;
+    uint32_t token;
+    uint32_t sequence;
+    uint32_t count;
+    int32_t result;
+    union {
+```
+
+formats: QUERY reply; name: REGISTER request, NAME reply
+
+```c
+uint32_t formats[DESK_CLIP_LIST_MAX];
+        char name[DESK_CLIP_NAME_MAX + 1];
+    };
 };
 #define DESK_ENDSESSION_CLOSEAPP 0x00000001u
 ```
@@ -5316,6 +5647,18 @@ uint64_t convert_ns,copy_ns,slot_ns,refresh_ns;
 optional 64-byte PRESENTED
 
 ```c
+struct desk_clip_wire clip;
+```
+
+G5 CLIPBOARD / CLIPBOARD_EVENT
+
+```c
+int clipboard_fd;
+```
+
+v3 GET reply only; receiver closes it
+
+```c
 };
 int desk_utf8_valid(const uint8_t *, unsigned);
 void desk_v3_message(struct ciuki_message *, unsigned op, unsigned payload,
@@ -5333,6 +5676,22 @@ Surface info is required for CREATE and DAMAGE (the attachment on a swap).
 int desk_parse(const struct ciuki_message *m, int from_client,
                const struct ciuki_surface_info *surface, struct desk_packet *out);
 int desk_surface_valid(const struct ciuki_surface_info *s);
+```
+
+G5: encode a clipboard request (client) or event (desktop) for protocol
+version 2 or 3 (v3: window 0, generation 0, request token = serial for a
+request); fd < 0 for none. Returns 0, or -EINVAL when desk_parse would
+refuse the message.
+
+```c
+int desk_clip_message(struct ciuki_message *, unsigned version, int client,
+                      const struct desk_clip_wire *, int fd);
+```
+
+Surface geometry carrying n clipboard bytes from offset 0.
+
+```c
+void desk_clip_dims(uint32_t n, uint32_t *width, uint32_t *height);
 #endif
 ```
 
@@ -5451,6 +5810,37 @@ errors; the deadline spans the entire call, including chunks/draws.
 uint32_t arc4random(void);
 void arc4random_buf(void *, size_t);
 uint32_t arc4random_uniform(uint32_t);
+#endif
+```
+
+## `ciuki/fileinfo.h`
+
+Source: `sdk/sysroot-overlay/include/ciuki/fileinfo.h`.
+
+SPDX-License-Identifier: MIT
+
+```c
+#ifndef CIUKI_SDK_FILEINFO_H
+#define CIUKI_SDK_FILEINFO_H
+#include <ciuki/abi.h>
+```
+
+G6: FAT attributes, created/accessed/modified times, size on disk and the
+MS-DOS (8.3) name of a path; call 98, record in ciuki/abi.h. Both return
+0, or -1 with errno (EROFS on read-only media, EOPNOTSUPP for devices).
+ciuki_file_info_get initializes version, size and operation itself.
+ciuki_file_info_set changes only the fields named in mask
+(CIUKI_FILE_INFO_ATTRIBUTES/CREATED/ACCESSED/MODIFIED).
+
+```c
+int ciuki_file_info_get(const char *path, struct ciuki_file_info *out);
+int ciuki_file_info_set(const char *path, uint32_t mask, const struct ciuki_file_info *in);
+```
+
+Convenience: replace the four settable FAT attribute bits.
+
+```c
+int ciuki_set_attributes(const char *path, uint32_t attributes);
 #endif
 ```
 
@@ -6426,7 +6816,7 @@ Icon slots (16 menus/lists, 22 toolbars, 32 large icons and dialogs).
 #define DU_ICON_LARGE   (desk_theme->icon_large)
 
 #define DU_WIDGETS       64
-#define DU_DIALOG_ITEMS  10
+#define DU_DIALOG_ITEMS  24
 #define DU_TIMERS        8
 #define DU_REGIONS       32
 #define DU_TEXT_MAX      1040
@@ -6899,7 +7289,13 @@ struct du_dialog {
     struct du_widget items[DU_DIALOG_ITEMS];
     unsigned count, buttons;
     unsigned progress, progress_total;
-    du_lister lister; void *lister_ctx;
+    int folders_only;
+```
+
+folder chooser: accept the current directory
+
+```c
+du_lister lister; void *lister_ctx;
     struct du_file_entry *entries; struct du_item *rows; unsigned entry_count;
     struct du_dialog_places *places;
 ```
@@ -6931,6 +7327,15 @@ the dialog while it is running.
 ```c
 int (*accept)(struct du_ui *, int button, void *);
     void *accept_ctx;
+```
+
+Property-sheet pages reuse the modal controls and their keyboard route.
+
+```c
+int sheet;
+    void (*changed)(struct du_ui *, const struct du_event *, void *);
+    void (*paint)(struct du_ui *, void *);
+    void *sheet_ctx;
 };
 
 struct du_timer { uint64_t deadline, interval; int id, active, repeat; };
@@ -7098,7 +7503,19 @@ void du_message(struct du_ui *, int id, const char *title, const char *text, int
 void du_input_box(struct du_ui *, int id, const char *title, const char *prompt, const char *initial);
 int du_file_dialog(struct du_ui *, int id, int save, const char *title, const char *folder,
                    const char *name, du_lister, void *ctx);
+int du_folder_dialog(struct du_ui *, int id, const char *title, const char *folder, du_lister, void *ctx);
 void du_progress(struct du_ui *, int id, const char *title, const char *text, unsigned value, unsigned total);
+```
+
+OK=0, Cancel=1, Apply=2; accept may keep the sheet open after Apply/error.
+Control slots 4..9 are caller-owned, boxes relative to the sheet body.
+Page labels and callbacks remain valid until the sheet closes.
+
+```c
+void du_property_sheet(struct du_ui *, int id, const char *title, int width, int height,
+                       const struct du_item *pages, unsigned count);
+struct du_widget *du_property_control(struct du_ui *, unsigned slot, enum du_kind, int id,
+                                     struct du_rect, const char *text);
 void du_dialog_icon(struct du_ui *, const uint32_t *argb32);
 void du_dialog_close(struct du_ui *);
 int du_dialog_id(const struct du_ui *);

@@ -312,6 +312,11 @@ struct du_dialog {
      * the dialog while it is running. */
     int (*accept)(struct du_ui *, int button, void *);
     void *accept_ctx;
+    /* Property-sheet pages reuse the modal controls and their keyboard route. */
+    int sheet;
+    void (*changed)(struct du_ui *, const struct du_event *, void *);
+    void (*paint)(struct du_ui *, void *);
+    void *sheet_ctx;
 };
 
 struct du_timer { uint64_t deadline, interval; int id, active, repeat; };
@@ -418,6 +423,13 @@ int du_file_dialog(struct du_ui *, int id, int save, const char *title, const ch
                    const char *name, du_lister, void *ctx);
 int du_folder_dialog(struct du_ui *, int id, const char *title, const char *folder, du_lister, void *ctx);
 void du_progress(struct du_ui *, int id, const char *title, const char *text, unsigned value, unsigned total);
+/* OK=0, Cancel=1, Apply=2; accept may keep the sheet open after Apply/error.
+ * Control slots 4..9 are caller-owned, boxes relative to the sheet body.
+ * Page labels and callbacks remain valid until the sheet closes. */
+void du_property_sheet(struct du_ui *, int id, const char *title, int width, int height,
+                       const struct du_item *pages, unsigned count);
+struct du_widget *du_property_control(struct du_ui *, unsigned slot, enum du_kind, int id,
+                                     struct du_rect, const char *text);
 void du_dialog_icon(struct du_ui *, const uint32_t *argb32);
 void du_dialog_close(struct du_ui *);
 int du_dialog_id(const struct du_ui *);
