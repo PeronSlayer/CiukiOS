@@ -65,6 +65,21 @@ struct vfs_version_watch {
 };
 int vfs_version_pin(struct vfs_table *,int,const struct vfs_file_version *,struct vfs_version_pin *);
 void vfs_version_unpin(struct vfs_version_pin *);
+/* G29d program starts (CIUKIST.LOG hints), queued by exec and written later
+ * by a background flusher, as Windows 98's Task Monitor logs application
+ * starts asynchronously: exec never waits on the log's write or commit.
+ * Bounded; on overflow the oldest queued start is dropped. */
+#define VFS_STARTUP_QUEUE 16u
+#define VFS_STARTUP_READS 16u
+struct vfs_startup_hint {
+    struct fat_volume *volume;
+    uint64_t mount; /* the volume attachment and media generation at exec */
+    uint32_t parent, index, first, size;
+    uint16_t write_date, write_time;
+    uint8_t attr, count;
+    char alias[13];
+    uint32_t order[VFS_STARTUP_READS];
+};
 enum vfs_whence { VFS_SEEK_SET, VFS_SEEK_CUR, VFS_SEEK_END };
 /* Internal DOS bridge errors; never user syscall errno values. */
 #define VFS_ESHARE 201
@@ -205,6 +220,13 @@ struct vfs {
     struct vfs_version_watch version_watches[VFS_VERSION_PINS];
     uint64_t next_version_watch;
     struct vfs_change changes[VFS_CHANGES];
+    /* G29d start queue (identity_lock): ring of `startup_count` hints from
+     * `startup_head`; one flusher at a time. Counters are diagnostics. */
+    struct vfs_startup_hint startup_queue[VFS_STARTUP_QUEUE];
+    unsigned startup_head, startup_count;
+    bool startup_flushing;
+    uint32_t startup_queued, startup_dropped, startup_written, startup_failed;
+    struct fs_event startup_event; /* a start was queued */
 };
 struct vfs_table {
     struct vfs *vfs;
@@ -240,8 +262,16 @@ void vfs_reserve_file_locked(struct vfs *, uint32_t drives,struct vfs_file_ident
 void vfs_unlock(struct vfs *);
 /* Diagnostic tag only: call under namespace before starting a mutation. */
 void vfs_tag_locked(struct vfs *,const char *tag);
-/* Namespace held; saves advisory image reads under the volume reservation. */
+/* Namespace held (exec): queues an advisory record of the image's actual
+ * reads for the background flusher. No I/O, no lock is dropped. */
 void vfs_startup_record_locked(struct vfs *,struct fat_volume *,const struct fat_entry *,const uint32_t *,unsigned);
+/* Background flusher, nothing held: writes every queued start into its
+ * volume's CIUKIST.LOG, one write and commit per volume, after a flush in
+ * progress has finished. Returns the number of starts written or the first
+ * error (the starts of that volume are dropped: the log is advisory). */
+int vfs_startup_flush(struct vfs *);
+/* Kernel flusher: waits (bounded) for a queued start; true when one is. */
+bool vfs_startup_wait(struct vfs *);
 void vfs_site_locked(struct vfs *,const char *site);
 /* Namespace held, no volume reservation on entry/return. A private FAT view
  * and the reader reference protect an immutable open chain during transport. */

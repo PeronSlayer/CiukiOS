@@ -156,12 +156,13 @@ void vfs_init(struct vfs *v) {
     memset(v,0,sizeof(*v)); fs_lock_init(&v->lock); fs_lock_classify(&v->lock,1,'-');
     fs_lock_init(&v->identity_lock);
     v->holder='-';
-    fs_event_init(&v->volume_changed);
+    fs_event_init(&v->volume_changed); fs_event_init(&v->startup_event);
     for (unsigned d=0;d<26;d++) { fs_lock_init(&v->volume_lock[d]); fs_lock_classify(&v->volume_lock[d],2,'A'+d); }
 }
 void vfs_destroy(struct vfs *v) {
     if (files_detach) files_detach(v);
     for (unsigned d=0;d<26;d++) fs_lock_destroy(&v->volume_lock[d]);
+    fs_event_destroy(&v->startup_event);
     fs_event_destroy(&v->volume_changed); fs_lock_destroy(&v->identity_lock); fs_lock_destroy(&v->lock);
 }
 static void volume_mutexes(struct vfs *v,uint32_t mask,bool take) {
@@ -2776,42 +2777,132 @@ int vfs_free_space(struct vfs_table *t, unsigned d, uint64_t *bytes, uint32_t *c
     vfs_unlock(t->vfs); return e;
 }
 
-/* Best-effort startup hints use ordinary exclusive handles and short FAT
- * transactions. In particular, no volume reservation spans log device I/O. */
+/* G29d: program starts are queued here by exec (fdtable.c image_fat, the
+ * namespace held) and written to CIUKIST.LOG later by the background flusher
+ * (mount.c), as Windows 98's Task Monitor logs application starts
+ * asynchronously. Before the queue, every launch wrote and committed the log
+ * inside exec and so waited on C: publication (QEMU 56e58374). The record is
+ * advisory: the queue is bounded, an overflow drops the oldest start, and a
+ * stale identity is ignored at use (fat_startup.inc). */
 void vfs_startup_record_locked(struct vfs *v,struct fat_volume *vol,const struct fat_entry *file,
                               const uint32_t *order,unsigned count)
 {
-    if (!count || count>16 || vol->readonly) return;
-    uint32_t saved=v->active; unsigned drive=26;
+    if (!count || count>VFS_STARTUP_READS || !vol || vol->readonly || !file->size || (file->attr&FAT_ATTR_DIR)) return;
+    unsigned drive=26;
     for (unsigned d=0;d<26;d++) if (v->volumes[d]==vol) drive=d;
-    if (drive==26 || (saved && !(saved&vfs_drive_mask(drive)))) return;
-    /* The image owner pins its node/volume. Copy the advisory identity before
-     * dropping namespace; a concurrent image change invalidates the hint at use. */
-    struct fat_entry image=*file;
-    uint32_t observed[16]; memcpy(observed,order,count*sizeof(*order));
-    struct vfs_table *table=fs_contig_alloc(sizeof(*table));
-    void *data=fs_page_alloc();
-    if (!table || !data) { fs_contig_free(table,sizeof(*table)); fs_page_free(data); return; }
+    if (drive==26) return;
+    struct vfs_startup_hint hint={.volume=vol,.parent=file->parent,.index=file->index,.first=file->first,
+        .size=file->size,.write_date=file->times.write_date,.write_time=file->times.write_time,
+        .attr=file->attr,.count=(uint8_t)count};
+    memcpy(hint.alias,file->alias,sizeof(hint.alias)-1);
+    memcpy(hint.order,order,count*sizeof(*order));
+    fs_lock_take(&v->identity_lock);
+    hint.mount=identity_generation(v,vol);
+    if (v->startup_count==VFS_STARTUP_QUEUE) { /* drop the oldest start */
+        v->startup_head=(v->startup_head+1)%VFS_STARTUP_QUEUE; v->startup_count--; v->startup_dropped++;
+    }
+    v->startup_queue[(v->startup_head+v->startup_count)%VFS_STARTUP_QUEUE]=hint;
+    v->startup_count++; v->startup_queued++;
+    fs_lock_drop(&v->identity_lock);
+    fs_event_wake(&v->startup_event);
+}
+bool vfs_startup_wait(struct vfs *v)
+{
+    fs_lock_take(&v->identity_lock);
+    if (!v->startup_count) fs_event_wait(&v->startup_event,&v->identity_lock);
+    bool queued=v->startup_count!=0;
+    fs_lock_drop(&v->identity_lock);
+    return queued;
+}
+static void startup_entry(const struct vfs_startup_hint *h,struct fat_entry *e)
+{
+    memset(e,0,sizeof(*e));
+    e->parent=h->parent; e->index=h->index; e->first=h->first; e->size=h->size; e->attr=h->attr;
+    e->times.write_date=h->write_date; e->times.write_time=h->write_time;
+    memcpy(e->alias,h->alias,sizeof(h->alias));
+}
+/* One volume's queued starts (batch[first..count) naming `vol` and `mount`):
+ * ordinary exclusive handle, short FAT transactions, no volume reservation
+ * across the log's device I/O. Returns the starts written or an error. */
+static int startup_write(struct vfs *v,struct vfs_table *table,unsigned drive,struct fat_volume *vol,uint64_t mount,
+                         const struct vfs_startup_hint *batch,unsigned first,unsigned count,void *data,void *spare)
+{
     char path[]="A:/CIUKIST.LOG"; path[0]=(char)('A'+drive);
-    vfs_unlock(v);
-    if (!vfs_table_init(v,table,drive)) {
-        table->request=fs_request_current();
-        int fd=vfs_open(table,path,VFS_READ|VFS_WRITE|VFS_CREATE,VFS_DENY_ALL,FAT_ATTR_HIDDEN|FAT_ATTR_SYSTEM);
-        if (fd>=0) {
-            struct fat_entry log; size_t done=0, size=fat_startup_size(); uint64_t position;
-            int e=vfs_handle_stat(table,fd,&log,0);
-            if (!e && (log.attr&(FAT_ATTR_DIR|FAT_ATTR_HIDDEN|FAT_ATTR_SYSTEM))!=(FAT_ATTR_HIDDEN|FAT_ATTR_SYSTEM)) e=-FS_EACCES;
-            if (!e && log.size==size) e=vfs_read(table,fd,data,size,&done);
-            if (!e) e=fat_startup_prepare(vol,&image,observed,count,data,done);
-            if (!e) e=vfs_seek(table,fd,0,VFS_SEEK_SET,&position);
+    int e=vfs_table_init(v,table,drive);
+    if (e) return e;
+    table->request=fs_request_current();
+    int fd=vfs_open(table,path,VFS_READ|VFS_WRITE|VFS_CREATE,VFS_DENY_ALL,FAT_ATTR_HIDDEN|FAT_ATTR_SYSTEM);
+    int applied=0;
+    if (fd<0) e=fd;
+    else {
+        struct fat_entry log; size_t done=0, size=fat_startup_size(); uint64_t position;
+        e=vfs_handle_stat(table,fd,&log,0);
+        if (!e && (log.attr&(FAT_ATTR_DIR|FAT_ATTR_HIDDEN|FAT_ATTR_SYSTEM))!=(FAT_ATTR_HIDDEN|FAT_ATTR_SYSTEM)) e=-FS_EACCES;
+        if (!e && log.size==size) e=vfs_read(table,fd,data,size,&done);
+        for (unsigned i=first;!e && i<count;i++) {
+            if (batch[i].volume!=vol || batch[i].mount!=mount) continue;
+            struct fat_entry image; startup_entry(&batch[i],&image);
+            memcpy(spare,data,size); /* a refused hint leaves the log as it was */
+            if (fat_startup_prepare(vol,&image,batch[i].order,batch[i].count,data,done)) { memcpy(data,spare,size); continue; }
+            done=size; applied++;
+        }
+        if (!e && applied) {
+            e=vfs_seek(table,fd,0,VFS_SEEK_SET,&position);
             if (!e) e=vfs_write(table,fd,data,size,&done);
             if (!e && done!=size) e=-FS_EIO;
             if (!e && log.size>size) e=vfs_truncate(table,fd,size);
-            if (!e) (void)vfs_commit(table,fd);
-            (void)vfs_close(table,fd);
+            if (!e) e=vfs_commit(table,fd);
         }
-        vfs_table_destroy(table);
+        int closed=vfs_close(table,fd);
+        if (!e) e=closed;
     }
-    vfs_lock(v,saved);
-    fs_contig_free(table,sizeof(*table)); fs_page_free(data);
+    vfs_table_destroy(table);
+    return e ? e : applied;
+}
+int vfs_startup_flush(struct vfs *v)
+{
+    fs_lock_take(&v->identity_lock);
+    bool idle=!v->startup_count && !v->startup_flushing;
+    fs_lock_drop(&v->identity_lock);
+    if (idle) return 0;
+    struct vfs_startup_hint *batch=fs_contig_alloc(sizeof(v->startup_queue));
+    struct vfs_table *table=fs_contig_alloc(sizeof(*table));
+    void *data=fs_page_alloc(), *spare=fs_page_alloc();
+    int result=!batch || !table || !data || !spare ? -FS_ENOMEM : 0;
+    unsigned count=0;
+    if (!result) {
+        /* A flush in progress holds the log open: shutdown and the
+         * defragmenter's analysis wait for it, then take what remains. */
+        fs_lock_take(&v->identity_lock);
+        while (v->startup_flushing) fs_event_wait(&v->startup_event,&v->identity_lock);
+        for (;count<v->startup_count;count++)
+            batch[count]=v->startup_queue[(v->startup_head+count)%VFS_STARTUP_QUEUE];
+        v->startup_head=v->startup_count=0;
+        v->startup_flushing=count!=0;
+        fs_lock_drop(&v->identity_lock);
+    }
+    unsigned written=0, failed=0;
+    for (unsigned i=0;i<count;i++) {
+        struct fat_volume *vol=batch[i].volume;
+        if (!vol) continue; /* already written with an earlier start of its volume */
+        uint64_t mount=batch[i].mount; unsigned drive=26, starts=0;
+        for (unsigned j=i;j<count;j++) if (batch[j].volume==vol && batch[j].mount==mount) starts++;
+        vfs_lock(v,0);
+        for (unsigned d=0;d<26;d++) if (v->volumes[d]==vol) drive=d;
+        bool live=drive<26 && !vol->readonly && identity_generation(v,vol)==mount;
+        vfs_unlock(v);
+        int e=live ? startup_write(v,table,drive,vol,mount,batch,i,count,data,spare) : -FS_ENOENT;
+        if (e>=0) { written+=(unsigned)e; failed+=starts-(unsigned)e; }
+        else { failed+=starts; if (!result) result=e; }
+        for (unsigned j=i;j<count;j++) if (batch[j].volume==vol && batch[j].mount==mount) batch[j].volume=0;
+    }
+    if (count) {
+        fs_lock_take(&v->identity_lock);
+        v->startup_flushing=false; v->startup_written+=written; v->startup_failed+=failed;
+        fs_lock_drop(&v->identity_lock);
+        fs_event_wake(&v->startup_event);
+    }
+    fs_contig_free(batch,sizeof(v->startup_queue)); fs_contig_free(table,sizeof(*table));
+    fs_page_free(data); fs_page_free(spare);
+    return result ? result : (int)written;
 }

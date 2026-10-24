@@ -234,3 +234,38 @@ The startup-image harness also passes persistent logging, native open-log
 sharing, launch success and descriptor/identity cleanup. The standalone
 filesystem run and its complete results are recorded in
 `build/codex/fixd-fs-final.log`.
+
+## Start logging leaves the launch path (2026-10-24)
+
+QEMU runs of image 56e58374: each native program start still wrote and
+committed `CIUKIST.LOG` inside exec (`fdtable.c` `image_fat`), so while C:
+publication was stuck after a DOS Box close every Run launch waited there.
+Research: the Resource Kit, “Disk Management” (`wrkc10_5.htm`), describes
+the source of Disk Defragmenter's start order as a separate process: “To
+record the disk access patterns of programs during their startup, Windows 98
+uses a process called Task Monitor”, which writes its logs to
+`\Windows\Applog` and counts program uses. Logging is the monitor's work,
+not the launched program's.
+
+- Exec only appends the start (identity, actual read order, the volume's
+  attachment generation) to a bounded in-memory queue in the VFS
+  (`VFS_STARTUP_QUEUE`, 16 starts, `identity_lock`); it performs no I/O and
+  keeps its locks. A full queue drops the oldest start (`startup_dropped`).
+- The `startup-log` kernel task (normal priority, created with the storage
+  writer) wakes on a queued start, waits one second so a burst of starts
+  costs one update, and calls `vfs_startup_flush`: per volume one exclusive
+  open of the log, the existing serialization (`fat_startup_prepare`) for
+  each start, one write and one commit; no reservation spans device I/O.
+  A start whose volume was detached or remounted, a refused hint or a log
+  held open by a reader is dropped (`startup_failed`): the log stays
+  advisory and never fails a launch.
+- The Disk Defragmenter's analysis for “rearrange program files” flushes the
+  queue first, and shutdown flushes it before the boot log; both wait for a
+  flush in progress. The defragmenter keeps reading the same log format.
+
+Host evidence (`--startup-image`): a launch leaves the device write and flush
+counters and the volume's mutation sequence unchanged and creates no log;
+the log appears with the next flush (use clock +1); a flush while a native
+reader holds the log is refused and counted; 19 starts in a burst keep the
+newest 16, written by one flush. On 56e58374 the same launch check fails
+(the start was written inside exec).

@@ -1218,3 +1218,34 @@ result reused on a recovered volume with no disk reads; an identity change
 after the check re-arms it, the hash runs on the verifier) and DOS Box replay
 scenarios 22 (a 6 s CREATE: PING answered, three check-progress paints,
 pulses, 61 polls of 100 ms) and 23 (close during CREATE).
+
+### Boot-time check: the image's version is pinned (2026-10-24)
+
+QEMU runs of image 56e58374: every boot ended the background check with
+`[dosvm] image verify result=failed step=version error=-11`, so the first
+DOS Box after boot re-hashed `UNIFIED.IMG` inside CREATE (2471 ms in QEMU,
+27.7 MB) although the image had not changed. Cause: a file's write
+generation (f3-51c) is its own change record or, without one, the volume's
+change floor; the ledger keeps `VFS_CHANGES` (64) records and raises the
+floor when it evicts one. The image is never written in a normal session, so
+it has no record, and more than 64 other files changing on C: during the
+check (boot log, settings, spooler, Files) moved its version.
+
+- The check pins the version it starts from with `vfs_version_pin`, the
+  bounded version watch the session digest cache already uses
+  (`dosvm_disk.c`): unrelated changes no longer move it, while a write,
+  truncate, rename or unlink of the image itself, or a volume expiry (raw
+  write, removal), still advances the pinned sequence and voids the result.
+- The pin stays with a finished result (verified or mismatch), so fx-23's
+  rule holds under the same churn after the check: a launch reuses the
+  finished check for the same file version even when the session digest has
+  been evicted. A new check, a failed or cancelled one, game removal's hold
+  and release, and a launch's own synchronous publication release it. With
+  no free watch the check runs unpinned, as before.
+
+Host evidence: `tests/host/dos/test_image_verify.py` section 8: 80 files
+created and rewritten during the check (the change floor rose from 0 to 178
+in the run) keep the image verified and stamped; 80 more changes after the
+check, then a launch with an empty session digest: `source=background`, no
+hash, no disk reads; an mtime change of the image itself during a check
+still ends `failed step=version`. Fails on 56e58374, passes with the pin.

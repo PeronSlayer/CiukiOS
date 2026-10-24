@@ -1595,6 +1595,8 @@ int storage_sync_until(struct storage *s, const struct vfs_request *request)
 int storage_sync(void)
 {
     static const char marker[]="[storage] shutdown requested\n";
+    /* G29d: starts still queued for CIUKIST.LOG (best effort, advisory). */
+    if (system_storage.ready && !system_storage.stopped) (void)vfs_startup_flush(&system_storage.vfs);
     if (blackbox_capture) blackbox_capture(marker,sizeof(marker)-1);
     int e=blackbox_checkpoint ? blackbox_checkpoint() : 0;
     if (e) { klog("[storage] shutdown refused stage=blackbox result=%d",e); return e; }
@@ -1655,6 +1657,24 @@ static void storage_timer(void *arg)
     }
     task_exit(0);
 }
+/* G29d: program starts reach CIUKIST.LOG on this task, never inside exec
+ * (Windows 98's Task Monitor records application starts asynchronously).
+ * A start is written about a second after it was queued, so a burst of
+ * starts costs one log write and commit. */
+#define STARTUP_LOG_DELAY_MS 1000u
+static void startup_log_main(void *arg)
+{
+    struct storage *s = arg;
+    while (!s->stopped) {
+        if (!vfs_startup_wait(&s->vfs) || s->stopped) continue;
+        task_sleep_ms(STARTUP_LOG_DELAY_MS);
+        if (s->stopped) break;
+        int e = vfs_startup_flush(&s->vfs);
+        if (e < 0) klog("[storage] startup_log error=%d dropped=%u failed=%u", e,
+                                          s->vfs.startup_dropped, s->vfs.startup_failed);
+    }
+    task_exit(0);
+}
 /* f9-02: a published destination needs the writer even when the boot
  * started storage read-only (Setup mode). Idempotent; never in ordinary
  * boots, whose writer is created by storage_init. */
@@ -1689,11 +1709,13 @@ void storage_init(void)
     bool probe = (g_boot.flags & CBI_F_TEST_REQUEST) && storage_probe_readonly(g_boot.test_request, g_boot.test_request_len);
     s->setup_mode = storage_setup_requested();
     struct storage_start_policy policy = storage_start_policy(probe, s->setup_mode);
-    struct task *timer = 0;
+    struct task *timer = 0, *starts = 0;
     if (policy.writer) {
         timer = task_create_kernel("storage-writer", storage_timer, s, P_DEVICE);
         if (!timer) s->writer_error = -FS_ENOMEM;
         else s->cache.writer_online=true;
+        starts = timer ? task_create_kernel("startup-log", startup_log_main, s, P_NORMAL) : 0;
+        if (timer && !starts) klog("[storage] startup_log unavailable error=%d", -FS_ENOMEM);
     }
     struct ata_device *devices[STORAGE_DISKS];
     for (unsigned slot = 0; slot < STORAGE_DISKS; slot++)
@@ -1759,6 +1781,7 @@ void storage_init(void)
     if (policy.writer) {
         if (timer) task_start(timer);
         else klog("[storage] writeback unavailable; volumes read-only error=%d", s->writer_error);
+        if (starts) task_start(starts);
     }
 }
 #else
@@ -1781,6 +1804,9 @@ int storage_defrag(struct storage *s, struct ciuki_media_defrag *r, bool step)
     if (!s || !s->ready || s->stopped) return -FS_ENOENT;
     if (s->setup_mode) return -FS_EBUSY;
     unsigned d=r->drive;
+    /* G29d: the analysis of "rearrange program files" sees every start so
+     * far, also those still queued for the start-log task. */
+    if (!step && (r->flags&CIUKI_DEFRAG_STARTUP)) (void)vfs_startup_flush(&s->vfs);
     vfs_lock(&s->vfs,0); vfs_reserve_locked(&s->vfs,vfs_drive_mask(d));
     struct storage_volume *v=&s->volumes[d];
     struct blkdev *dev=v->part.parent;
