@@ -7,7 +7,7 @@
 #define DESK_FOLDER "/Documents/Desktop"
 #define DESK_TRASH "/Documents/Trash"   /* the pre-G2 Trash folder: its items are migrated into C:\RECYCLED (RB_LEGACY_TRASH) */
 #define DESK_FOLDER_POLL_SLOTS (2u * FM_ENTRIES)
-enum { DF_NONE, DF_REFRESH, DF_FOLDER, DF_TEXT, DF_BITMAP, DF_RENAME, DF_DELETE, DF_PASTE, DF_CUT, DF_COPY, DF_PROPERTIES, DF_EMPTY };
+enum { DF_NONE, DF_REFRESH, DF_FOLDER, DF_TEXT, DF_BITMAP, DF_RENAME, DF_DELETE, DF_PASTE, DF_CUT, DF_COPY, DF_PROPERTIES, DF_EMPTY, DF_SHORTCUT };
 struct desk_folder {
     struct fm_model model;
     struct fm_job job;

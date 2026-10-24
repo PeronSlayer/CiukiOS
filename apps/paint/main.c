@@ -9,6 +9,7 @@
 struct paint_main { struct du_window window; struct du_ui ui; const char *path; };
 static void quit(void *arg) { du_window_close(&((struct paint_main *)arg)->window); }
 static void title(void *arg, const char *text) { du_window_set_title(&((struct paint_main *)arg)->window,text); }
+static int wallpaper(void *arg,const char *path) { return acc_set_wallpaper(&((struct paint_main *)arg)->window,path); }
 /* libdeskui: nonzero closes now. paint_request_close returns 1 when it
  * showed the save prompt (G3: before, the window closed under the prompt
  * and a clean picture never closed until the desktop's deadline). */
@@ -34,7 +35,7 @@ int main(int argc, char **argv)
         fprintf(stderr,"paint: desktop connection failed: %s\n",strerror(errno)); free(m); return 1;
     }
     if (paint_attach(&m->ui)) { du_window_destroy(&m->window); free(m); return 1; }
-    paint_callbacks(quit,title,m); paint_decline_callback(declined); m->window.close_request=closing;
+    paint_callbacks(quit,title,m); paint_wallpaper_callback(wallpaper); paint_decline_callback(declined); m->window.close_request=closing;
     m->path=path;
     du_window_accept_files(&m->window,1);   /* fx-19: DragAcceptFiles */
     if (test) du_window_move(&m->window,24,48);

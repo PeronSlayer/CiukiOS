@@ -48,7 +48,7 @@ enum sh_menu_kind { SH_MENU_NONE, SH_MENU_START, SH_MENU_PROGRAMS, SH_MENU_DEVEL
                     SH_MENU_SETTINGS, SH_MENU_HELP, SH_MENU_DESKTOP, SH_MENU_ICON, SH_MENU_TASK, SH_MENU_ACCESSORIES,
                     SH_MENU_GAMES, SH_MENU_NEW, SH_MENU_OPEN_WITH, SH_MENU_TRAY_SETTINGS,
                     SH_MENU_SYSTEM_TOOLS, SH_MENU_SETTINGS_CATEGORY, SH_MENU_SETTINGS_LAST = SH_MENU_SETTINGS_CATEGORY + CP_CATEGORIES - 1,
-                    SH_MENU_DRAG, SH_MENU_TASKBAR };
+                    SH_MENU_DRAG, SH_MENU_TASKBAR, SH_MENU_ARRANGE };
 enum sh_action { SH_ACT_NONE, SH_ACT_SUBMENU, SH_ACT_LAUNCH, SH_ACT_ABOUT, SH_ACT_RUN, SH_ACT_SHUTDOWN,
                  SH_ACT_DOCUMENT, SH_ACT_CONTROL, SH_ACT_KEYS, SH_ACT_ARRANGE, SH_ACT_ICON_OPEN,
                  SH_ACT_ICON_PROPERTIES, SH_ACT_REFRESH, SH_ACT_TASK_RESTORE, SH_ACT_TASK_MINIMIZE,
@@ -57,7 +57,7 @@ enum sh_action { SH_ACT_NONE, SH_ACT_SUBMENU, SH_ACT_LAUNCH, SH_ACT_ABOUT, SH_AC
                  SH_ACT_DRAG /* fx-19 right-drag menu: arg is the DROPEFFECT, 0 Cancel */,
                  /* G4 taskbar menu */
                  SH_ACT_CASCADE, SH_ACT_TILE_H, SH_ACT_TILE_V, SH_ACT_MINIMIZE_ALL, SH_ACT_ARRANGE_UNDO,
-                 SH_ACT_TASKBAR_PROPERTIES };
+                 SH_ACT_TASKBAR_PROPERTIES, SH_ACT_ICON_SORT, SH_ACT_ICON_AUTO };
 #define SH_ITEM_SEPARATOR 1u
 #define SH_ITEM_DISABLED 2u
 #define SH_ITEM_DEFAULT 4u
@@ -106,6 +106,8 @@ struct desk_shell {
      * (selected unless focus_unselected); anchor for Shift ranges; the
      * rubber band in screen coordinates and the selection it started from. */
     int focus_unselected, anchor, icon_button, icon_pending;
+    int icon_editing; char icon_edit[FM_NAME]; unsigned icon_edit_cursor;
+    char icon_typeahead[FM_NAME]; unsigned icon_typeahead_length; uint64_t icon_typeahead_ns;
     int band, band_x0, band_y0, band_x1, band_y1; unsigned band_modifiers;
     uint8_t *band_original; int band_capacity;
     struct sh_dnd dnd;

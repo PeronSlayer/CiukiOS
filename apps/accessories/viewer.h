@@ -34,17 +34,19 @@ struct viewer_app {
     struct viewer_load *loading; int asynchronous;
     struct du_ui *ui; const struct viewer_fs *fs;
     void (*quit)(void *host); void *host;
+    int (*set_wallpaper)(void *, const char *);
     struct viewer_image image; int loaded; char error[160];
     char path[VIEWER_PATH], folder[VIEWER_PATH];
     char names[VIEWER_FOLDER][96]; unsigned count; int index;
     int zoom;                 /* percent, 0 = best fit */
     int scroll_x, scroll_y;   /* image pixels at the top-left of the view */
     struct du_file_entry *entries;
-    struct du_menu menus[3]; struct du_menu_item file_items[5], view_items[6], help_items[1];
+    struct du_menu menus[3]; struct du_menu_item file_items[6], view_items[6], help_items[1];
 };
-enum { V_M_OPEN = 1, V_M_PREV, V_M_NEXT, V_M_EXIT, V_M_IN, V_M_OUT, V_M_ACTUAL, V_M_FIT, V_M_ABOUT,
+enum { V_M_OPEN = 1, V_M_PREV, V_M_NEXT, V_M_EXIT, V_M_IN, V_M_OUT, V_M_ACTUAL, V_M_FIT, V_M_ABOUT, V_M_WALLPAPER,
        V_STATUS = 100, V_PREV, V_NEXT, V_IN, V_OUT, V_FIT, V_ACTUAL, V_D_OPEN = 200, V_D_INFO };
 int viewer_attach(struct viewer_app *, struct du_ui *, const struct viewer_fs *);
+void viewer_wallpaper_callback(struct viewer_app *, int (*)(void *, const char *));
 void viewer_detach(struct viewer_app *);
 void viewer_poll(struct viewer_app *);
 int viewer_open(struct viewer_app *, const char *path);

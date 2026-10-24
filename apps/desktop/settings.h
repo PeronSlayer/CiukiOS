@@ -33,6 +33,7 @@ struct ciuki_settings {
     int wallpaper_mode;             /* CFG_WALL_* */
     uint32_t desktop_color;         /* 0xRRGGBB behind and around the wallpaper */
     int clock_24h, clock_seconds, desktop_icons;
+    int icon_auto_arrange, icon_sort; /* G19: persisted desktop view state */
     int mouse_speed;                /* 1..10, 5 = one screen pixel per mouse count */
     int double_click_ms;            /* 200..900 */
     uint16_t display_mode;         /* confirmed VBE mode id; 0 keeps loader default */
@@ -57,6 +58,9 @@ int cfg_icon_position(const struct ciuki_settings *, const char *, int *, int *)
 int cfg_icon_move(struct ciuki_settings *, const char *, int, int);
 void cfg_icon_forget(struct ciuki_settings *, const char *);
 void cfg_icons_arrange(struct ciuki_settings *);
+int cfg_icon_label(const struct ciuki_settings *, const char *, char *, size_t);
+int cfg_icon_label_set(struct ciuki_settings *, const char *, const char *);
+void cfg_icon_label_forget(struct ciuki_settings *, const char *);
 int cfg_theme_index(const char *name);   /* -1 when unknown */
 /* Mouse speed as a rational multiplier num/8 applied to relative motion. */
 int cfg_mouse_numerator(int speed);

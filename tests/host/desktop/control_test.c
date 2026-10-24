@@ -411,6 +411,15 @@ int main(int argc, char **argv)
     at_click_widget(&u,find(DU_BUTTON,"Fit")->id); at_click_widget(&u,CP_OK);
     cp_settings_saved(&a,EROFS); assert(!a.quit && !a.display_accept && a.display_dirty && a.display_session);
     du_dialog_close(&u); a.host.save_async=0; cp_close(&a); cp_detach(&a);
+    attach(CP_DISPLAY);
+    struct du_widget *browse=find(DU_BUTTON,"Browse..."); assert(browse);
+    struct du_event choose={.type=DU_EV_ACTIVATE,.id=browse->id}; u.event(&u,&choose,u.user);
+    struct du_event selected_wall={.type=DU_EV_DIALOG,.id=browse->id+1,.index=0,.text="/Documents/Desktop/Scene.png"};
+    u.event(&u,&selected_wall,u.user);
+    assert(!strcmp(a.cfg.wallpaper,"/Documents/Desktop/Scene.png") && a.display_dirty);
+    assert(!cp_wallpaper_set(&a,"/Documents/Desktop/Paint.bmp") && !strcmp(a.cfg.wallpaper,"/Documents/Desktop/Paint.bmp"));
+    assert(cp_wallpaper_set(&a,"/Documents/Desktop/not-an-image.txt")==-EINVAL);
+    cp_close(&a); cp_detach(&a);
     puts("PASS Display Properties: staged edits, preview/Cancel merge, durable OK, pending-close rollback and failed save");
     puts("PASS F1-63 Control Panel: two Tab presses and Space apply master preference 20/20/muted");
     printf("PASS control display: five positions, layout, desktop.cfg modes, preview\n");

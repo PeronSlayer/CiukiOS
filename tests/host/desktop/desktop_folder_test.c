@@ -129,6 +129,18 @@ int main(int argc,char **argv)
     int pictures=d.sh.icon_count-1;
     assert(d.sh.icon_count==7 && !strcmp(d.sh.icons[pictures].label,"Pictures"));
     assert(!strcmp(d.sh.icons[pictures].argument,"/Documents/Pictures"));
+    d.sh.icon_selected=0; key(DU_KEY_F2); assert(d.sh.icon_editing==0);
+    snprintf(d.sh.icon_edit,sizeof(d.sh.icon_edit),"My Computer"); key(DU_KEY_ENTER);
+    assert(!strcmp(d.sh.icons[0].label,"My Computer"));
+    static char icon_cfg[CFG_TEXT_MAX]; static struct ciuki_settings icon_parsed;
+    size_t icon_cfg_n=cfg_format(&d.sh.cfg,icon_cfg,sizeof(icon_cfg)); assert(icon_cfg_n);
+    cfg_defaults(&icon_parsed); assert(!cfg_parse(&icon_parsed,icon_cfg,icon_cfg_n));
+    char renamed_system[64]; assert(cfg_icon_label(&icon_parsed,"/Computer",renamed_system,sizeof(renamed_system)) && !strcmp(renamed_system,"My Computer"));
+    cfg_icon_label_forget(&d.sh.cfg,"/Computer"); d.sh.icon_count=0; desk_shell_apply(&d);
+    d.sh.cfg.icon_sort=3; desk_folder_changed(&d);
+    for (unsigned k=1;k<d.sh.folder->model.count;k++)
+        assert(d.sh.folder->model.entries[k-1].meta.modified<=d.sh.folder->model.entries[k].meta.modified);
+    assert(d.sh.icon_count==7); d.sh.cfg.icon_sort=0; desk_folder_changed(&d); pictures=d.sh.icon_count-1;
     d.sh.icon_selected=pictures; key(DU_KEY_F2); key(DU_KEY_DELETE);
     assert(d.sh.folder->editing<0 && d.sh.folder->command==DF_NONE);
     key(DU_KEY_ENTER); assert(!strcmp(program,"files") && !strcmp(launched,"/Documents/Pictures"));
@@ -146,6 +158,11 @@ int main(int argc,char **argv)
     fake_short_io=1; command(DF_BITMAP,-1); fake_short_io=0;
     int bmp=fake_lookup(DESK_FOLDER "/New Bitmap Image.bmp"); assert(bmp>=0 && fake_nodes[bmp].meta.size==58 && !memcmp(fake_nodes[bmp].data,"BM",2)); key(DU_KEY_ESC);
     command(DF_BITMAP,-1); assert(fake_lookup(DESK_FOLDER "/New Bitmap Image (2).bmp")>=0); key(DU_KEY_ESC);
+    command(DF_SHORTCUT,-1); int shortcut_node=fake_lookup(DESK_FOLDER "/New Shortcut.lnk");
+    assert(shortcut_node>=0 && fake_nodes[shortcut_node].meta.size>=40 && fake_nodes[shortcut_node].meta.size<=DESK_LINK_BYTES);
+    struct desk_launch_record shortcut_record;
+    assert(desk_link_decode(fake_nodes[shortcut_node].data,(unsigned)fake_nodes[shortcut_node].meta.size,&shortcut_record));
+    assert(!strcmp(shortcut_record.label,"Files") && !strcmp(shortcut_record.target,"/Programs/files")); key(DU_KEY_ESC);
     int n=named("New Folder"); d.sh.icon_selected=n; key(DU_KEY_F2); assert(d.sh.folder->editing==n-3);
     strcpy(d.sh.folder->edit,"bad:name"); key(DU_KEY_ENTER); desk_folder_service(&d); assert(d.sh.folder->editing>=0 && fake_lookup(DESK_FOLDER "/New Folder")>=0); close_message();
     strcpy(d.sh.folder->edit,"trailing."); key(DU_KEY_ENTER); desk_folder_service(&d); assert(d.sh.folder->editing>=0); close_message();

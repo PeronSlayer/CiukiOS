@@ -19,6 +19,8 @@ void cfg_defaults(struct ciuki_settings *s)
     s->desktop_color = CFG_DESKTOP_COLOR;          /* DESK_BACKGROUND */
     s->clock_24h = 1;
     s->desktop_icons = 1;
+    s->icon_auto_arrange = 0;
+    s->icon_sort = 0;
     s->mouse_speed = CFG_MOUSE_NORMAL;
     s->double_click_ms = 500;
     s->keyboard = CFG_KEYS_US;
@@ -112,6 +114,8 @@ static int assign(struct ciuki_settings *s, const char *key, const char *v, int 
     if (!strcmp(key, "clock_24h")) return flag(v, &s->clock_24h);
     if (!strcmp(key, "clock_seconds")) return flag(v, &s->clock_seconds);
     if (!strcmp(key, "desktop_icons")) return flag(v, &s->desktop_icons);
+    if (!strcmp(key, "icon_auto_arrange")) return flag(v, &s->icon_auto_arrange);
+    if (!strcmp(key, "icon_sort")) return number(v, 0, 3, &s->icon_sort);
     if (!strcmp(key, "mouse_speed")) return number(v, CFG_MOUSE_MIN, CFG_MOUSE_MAX, &s->mouse_speed);
     if (!strcmp(key, "double_click_ms")) return number(v, 200, 900, &s->double_click_ms);
 
@@ -175,10 +179,11 @@ size_t cfg_format(const struct ciuki_settings *s, char *out, size_t size)
     int n = snprintf(out, size,
         "# CiukiOS desktop settings (key=value). Written by the desktop and Control Panel.\n"
         "version=%d\ntheme=%s\nwallpaper=%s\nwallpaper_mode=%s\ndesktop_color=%06x\n"
-        "clock_24h=%d\nclock_seconds=%d\ndesktop_icons=%d\nmouse_speed=%d\ndouble_click_ms=%d\nkeyboard=%s\ndisplay_mode=%u\n",
+        "clock_24h=%d\nclock_seconds=%d\ndesktop_icons=%d\nicon_auto_arrange=%d\nicon_sort=%d\nmouse_speed=%d\ndouble_click_ms=%d\nkeyboard=%s\ndisplay_mode=%u\n",
         CFG_VERSION, s->theme, s->wallpaper,
         cfg_mode_names[s->wallpaper_mode >= 0 && s->wallpaper_mode < CFG_WALL_MODES ? s->wallpaper_mode : 0],
         (unsigned)(s->desktop_color & 0xffffffu), !!s->clock_24h, !!s->clock_seconds, !!s->desktop_icons,
+        !!s->icon_auto_arrange, s->icon_sort < 0 || s->icon_sort > 3 ? 0 : s->icon_sort,
         s->mouse_speed, s->double_click_ms,
         cfg_keyboard_names[s->keyboard >= 0 && s->keyboard < CFG_KEYS_COUNT ? s->keyboard : 0], (unsigned)s->display_mode);
     if (n <= 0 || (size_t)n >= size) return 0;
@@ -257,3 +262,53 @@ void cfg_icons_arrange(struct ciuki_settings *s) { icon_remove(s,NULL); }
 
 void cfg_icon_forget(struct ciuki_settings *s, const char *name)
 { char key[1538]; if (icon_key(key,name)) icon_remove(s,key); }
+
+static int icon_label_key(char *out, const char *name)
+{
+    static const char hex[] = "0123456789abcdef";
+    size_t n = strlen(name); if (n > 765) return 0;
+    memcpy(out, "iconlabel.", 10);
+    for (size_t i=0;i<n;i++) { unsigned c=(unsigned char)name[i]; out[10+i*2]=hex[c>>4]; out[11+i*2]=hex[c&15]; }
+    out[10+n*2]='='; out[11+n*2]=0; return 1;
+}
+int cfg_icon_label(const struct ciuki_settings *s, const char *name, char *out, size_t size)
+{
+    char key[1540]; if (!s || !name || !out || !size || !icon_label_key(key,name)) return 0;
+    size_t n=strlen(key);
+    for (const char *p=s->extra; *p;) {
+        const char *end=strchr(p,'\n'); if (!end) break;
+        if (!strncmp(p,key,n)) {
+            size_t len=(size_t)(end-p)-n; if (!len || len>=size) return 0;
+            memcpy(out,p+n,len); out[len]=0; return 1;
+        }
+        p=end+1;
+    }
+    return 0;
+}
+int cfg_icon_label_set(struct ciuki_settings *s, const char *name, const char *label)
+{
+    char key[1540], line[1640];
+    if (!s || !name || !label || !icon_label_key(key,name)) return 0;
+    size_t n=strlen(label); if (!n || n>=64) return 0;
+    for (size_t i=0;i<n;i++) if ((unsigned char)label[i]<32 || label[i]=='\r' || label[i]=='\n') return 0;
+    int count=snprintf(line,sizeof(line),"%s%s\n",key,label);
+    if (count<=0 || (size_t)count>=sizeof(line)) return 0;
+    size_t prefix=strlen(key), old=strlen(s->extra), removed=0; char *p=s->extra;
+    for (const char *q=s->extra; *q;) {
+        const char *end=strchr(q,'\n'); if (!end) break;
+        if (!strncmp(q,key,prefix)) removed+=(size_t)(end-q)+1;
+        q=end+1;
+    }
+    if (old-removed+(size_t)count+1>sizeof(s->extra)) return 0;
+    while (*p) { char *end=strchr(p,'\n'); if (!end) break;
+        if (!strncmp(p,key,prefix)) memmove(p,end+1,strlen(end+1)+1); else p=end+1; }
+    old=strlen(s->extra);
+    memcpy(s->extra+old,line,(size_t)count+1); return 1;
+}
+void cfg_icon_label_forget(struct ciuki_settings *s, const char *name)
+{
+    char key[1540]; if (!s || !name || !icon_label_key(key,name)) return;
+    size_t n=strlen(key); char *p=s->extra;
+    while (*p) { char *end=strchr(p,'\n'); if (!end) break;
+        if (!strncmp(p,key,n)) memmove(p,end+1,strlen(end+1)+1); else p=end+1; }
+}

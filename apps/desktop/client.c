@@ -3,6 +3,7 @@
 #include "gate.h"
 #include <errno.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/mman.h>
 #include <signal.h>
 #include <stdio.h>
@@ -14,6 +15,24 @@ static void v3_configure(struct desktop *, int);
 static void session_answer(struct desktop *, int, uint32_t, uint32_t);
 static void session_pong(struct desktop *, int, uint32_t);
 static void session_ping_sent(struct desktop *, int);
+static int netsurf_wallpaper_request(const struct desk_client *c, const struct desk_packet *p)
+{
+    static const char prefix[] = "--set-wallpaper=";
+    const char *path;
+    size_t n;
+    if (!c || !p || (p->opcode != DESK_LAUNCH && p->opcode != DESK_V3_LAUNCH) ||
+        (strcmp(c->application,"netsurf") && strcmp(c->application,"paint") && strcmp(c->application,"viewer")) ||
+        strcmp(p->title,"control") || strncmp(p->argument,prefix,sizeof(prefix)-1)) return 0;
+    path=p->argument+sizeof(prefix)-1;
+    size_t length=strlen(path);
+    if (path[0]!='/' || strstr(path,"/../") || strstr(path,"/./") || !path[1] ||
+        (length>=3 && !strcmp(path+length-3,"/..")) || (length>=2 && !strcmp(path+length-2,"/.")) || length>=128) return 0;
+    n=length;
+    return (n>=4 && !strcasecmp(path+n-4,".png")) ||
+           (n>=4 && !strcasecmp(path+n-4,".bmp")) ||
+           (n>=4 && !strcasecmp(path+n-4,".jpg")) ||
+           (n>=5 && !strcasecmp(path+n-5,".jpeg"));
+}
 int desk_ignore_sigpipe(void)
 { return signal(SIGPIPE,SIG_IGN)==SIG_ERR ? -1 : 0; }
 void desk_init(struct desktop *d, const struct desk_ops *ops, uint32_t w, uint32_t h)
@@ -882,6 +901,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         int ide_guide = p.opcode == DESK_LAUNCH && c->program == DESK_APP_IDE && !c->taskman &&
                         !strcmp(p.title,"ciuknote") && !strcmp(p.argument,"/Documents/Developer/Guide.txt");
         int install=p.opcode==DESK_LAUNCH && c->program==DESK_APP_CONTROL && !strcmp(p.title,"install") && p.argument[0];
+        int browser_wallpaper=netsurf_wallpaper_request(c,&p);
         int terminal = c->program == DESK_APP_TERMINAL;
         int terminal_launch = terminal && p.opcode == DESK_LAUNCH && desk_program_graphical(p.title) &&
                               (!p.argument[0] || p.argument[0] == '/');
@@ -895,7 +915,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
             r->client = i; r->channel = c->channel; r->pid = c->pid; r->serial = p.serial; r->opcode = p.opcode;
             r->recent = files_open; snprintf(r->argument, sizeof(r->argument), "%s", p.argument);
         }
-        int32_t result = !c->taskman && !files_open && !ide_run && !ide_guide && !terminal_launch && !terminal_end && !install ? -EPERM :
+        int32_t result = !c->taskman && !files_open && !ide_run && !ide_guide && !terminal_launch && !terminal_end && !install && !browser_wallpaper ? -EPERM :
             p.opcode == DESK_END_TASK ? (terminal_end && p.pid == 1 ? -EPERM : desk_task_end(d, p.window_id, p.pid)) :
             p.opcode == DESK_SWITCH_TO ? desk_task_switch(d, p.window_id) :
             install ? (d->power.state ? -EBUSY : d->install_program ? d->install_program(d,p.argument) : -ENOSYS) :
@@ -2563,6 +2583,11 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
     if (error) { close_attachments(d,m,-1); if (p.request) v3_reply(d,peer,&p,error); return error; }
     struct desk_client *c=&d->clients[i];
     switch (p.opcode) {
+    case DESK_V3_LAUNCH:
+        error=!netsurf_wallpaper_request(c,&p) || !d->shell ? -EPERM : desk_task_launch(d,p.title,p.argument);
+        if (error>0) error=0; /* A positive PID means the Control Panel was started. */
+        d->launch_deferred=0; /* V3 replies report accepted queueing, not a later v2 TASK_RESULT. */
+        break;
     case DESK_DAMAGE: case DESK_V3_PRESENT: {
         if (p.opcode==DESK_V3_PRESENT && (!p.request || c->gl_present_request || c->minimized || c->collapsed || !p.width || !p.height)) { error=-EAGAIN;break; }
         if (!p.width || !p.height) break;

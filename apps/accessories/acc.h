@@ -14,6 +14,7 @@
 /* argv: [--channel-fd=N] [--test=<name>] [path]. Returns 0, or 2 on a bad
  * argument (the process exit status, as the other desktop clients). */
 int acc_args(int argc, char **argv, const char *test_name, int *channel, int *test, const char **path);
+int acc_set_wallpaper(struct du_window *, const char *path);
 /* Window size from CIUKI_DISPLAY=<w>x<h>, clamped to the given preferred size. */
 void acc_window_size(int preferred_w, int preferred_h, int *w, int *h);
 

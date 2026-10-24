@@ -258,6 +258,7 @@ void cp_game_open(struct cp_app *, unsigned);
 void cp_joystick_result(struct cp_app *, const struct ciuki_joystick_control *, int);
 void cp_assets_ready(struct cp_app *);
 int cp_attach(struct cp_app *, struct du_ui *, int page);
+int cp_wallpaper_set(struct cp_app *, const char *path);
 void cp_detach(struct cp_app *);
 int cp_page_index(const char *name);
 void cp_tick(struct cp_app *);

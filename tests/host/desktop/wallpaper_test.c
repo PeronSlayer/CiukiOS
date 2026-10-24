@@ -94,7 +94,15 @@ static void settings(void)
     /* An out-of-range value in memory is written as the first mode. */
     s.wallpaper_mode = CFG_WALL_MODES;
     assert(cfg_format(&s, text, sizeof(text)) && strstr(text, "\nwallpaper_mode=center\n"));
-    printf("settings: wallpaper_mode center/stretch/tile/fit/fill = 0..4, default Ciuk2 fill, round trip\n");
+    cfg_defaults(&s); s.icon_auto_arrange=1; s.icon_sort=3;
+    assert(cfg_icon_label_set(&s,"/Computer","My Computer"));
+    char label[64]; assert(cfg_icon_label(&s,"/Computer",label,sizeof(label)) && !strcmp(label,"My Computer"));
+    n=cfg_format(&s,text,sizeof(text)); assert(n && strstr(text,"icon_auto_arrange=1\nicon_sort=3\n"));
+    cfg_defaults(&t); assert(!cfg_parse(&t,text,n));
+    assert(t.icon_auto_arrange && t.icon_sort==3 && cfg_icon_label(&t,"/Computer",label,sizeof(label)) && !strcmp(label,"My Computer"));
+    assert(cfg_icon_label_set(&t,"/Computer","Computer") && cfg_icon_label(&t,"/Computer",label,sizeof(label)) && !strcmp(label,"Computer"));
+    cfg_icon_label_forget(&t,"/Computer"); assert(!cfg_icon_label(&t,"/Computer",label,sizeof(label)));
+    printf("settings: wallpaper modes, G19 sort/auto-arrange and system icon label round trips\n");
 }
 
 static void check_layer(void)

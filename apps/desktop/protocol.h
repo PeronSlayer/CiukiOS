@@ -70,7 +70,10 @@ enum desk_v3_opcode {
      * pixels, each 0 (default) or 1..2048, max >= min when both are given.
      * PLACE and CONFIGURE state word: 0 normal, 1 minimised, 2 hidden,
      * 3 maximised (the desktop zooms the window; WM_SIZE SIZE_MAXIMIZED). */
-    DESK_V3_LIMITS
+    DESK_V3_LIMITS,
+    /* G19: launch one desktop-owned Control Panel action from a v3 client.
+     * Payload: title length/title, argument length/argument. */
+    DESK_V3_LAUNCH
 };
 #define DESK_RESIZABLE 1u
 #define DESK_CONFIGURE_COMMITTED 1u

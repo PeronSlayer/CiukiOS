@@ -81,6 +81,28 @@ static int bitmap(struct fm_model *m, const char *name)
     if (r) m->fs.unlink(m->fs.ctx,path); else { r=fm_refresh(m); if (!r) fm_select_name(m,name,0); }
     return r;
 }
+static int shortcut(struct fm_model *m, const char *name)
+{
+    struct desk_launch_record *record=calloc(1,sizeof(*record));
+    uint8_t *bytes=malloc(DESK_LINK_BYTES);
+    if (!record || !bytes) { free(record); free(bytes); return -ENOMEM; }
+    snprintf(record->label,sizeof(record->label),"Files");
+    snprintf(record->target,sizeof(record->target),"/Programs/files");
+    snprintf(record->icon,sizeof(record->icon),"system-file-manager");
+    record->show=1;
+    unsigned size=desk_link_encode(record,bytes,DESK_LINK_BYTES); free(record);
+    if (!size) { free(bytes); return -EINVAL; }
+    char path[FM_PATH]; int r=fm_join(path,m->path,name); if (r) { free(bytes); return r; }
+    int fd=m->fs.open(m->fs.ctx,path,1); if (fd<0) { free(bytes); return fd; }
+    unsigned at=0;
+    while (at<size) { int n=m->fs.write(m->fs.ctx,fd,bytes+at,size-at); if (n<=0) { r=n<0?n:-EIO; break; } at+=(unsigned)n; }
+    free(bytes);
+    if (!r) r=m->fs.sync(m->fs.ctx,fd);
+    int closed=m->fs.close(m->fs.ctx,fd); if (!r) r=closed;
+    if (r) m->fs.unlink(m->fs.ctx,path);
+    else { r=fm_refresh(m); if (!r) fm_select_name(m,name,0); }
+    return r;
+}
 enum { F_PROGRESS=850, F_REPLACE };
 static int transfer_prepare(void *arg)
 {
@@ -514,9 +536,10 @@ void desk_folder_service(struct desktop *d)
     }
     f->revision++; /* an in-flight poll predates this explicit operation */
     int r=0; char name[FM_NAME], path[FM_PATH];
-    if (command==DF_FOLDER || command==DF_TEXT || command==DF_BITMAP) {
-        r=fm_unique(m,command==DF_FOLDER ? "New Folder" : command==DF_TEXT ? "New Text Document" : "New Bitmap Image",command==DF_FOLDER ? "" : command==DF_TEXT ? ".txt" : ".bmp",name);
-        if (!r) r=command==DF_BITMAP ? bitmap(m,name) : fm_create(m,name,command==DF_FOLDER);
+    if (command==DF_FOLDER || command==DF_TEXT || command==DF_BITMAP || command==DF_SHORTCUT) {
+        r=fm_unique(m,command==DF_FOLDER ? "New Folder" : command==DF_TEXT ? "New Text Document" : command==DF_BITMAP ? "New Bitmap Image" : "New Shortcut",
+                    command==DF_FOLDER ? "" : command==DF_TEXT ? ".txt" : command==DF_BITMAP ? ".bmp" : ".lnk",name);
+        if (!r) r=command==DF_BITMAP ? bitmap(m,name) : command==DF_SHORTCUT ? shortcut(m,name) : fm_create(m,name,command==DF_FOLDER);
         if (!r) { desk_folder_changed(d); d->sh.icon_selected=(int)m->active+3; desk_folder_rename(d,d->sh.icon_selected); }
     } else if (command==DF_REFRESH) { r=fm_refresh(m); if (!r) desk_folder_changed(d); }
     else if (command==DF_PASTE) r=job(d,FM_COPY,NULL,0,m->path,2);

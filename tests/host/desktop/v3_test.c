@@ -35,7 +35,7 @@ static void protocol(void)
     const unsigned ops[]={DESK_CREATE_WINDOW,DESK_DAMAGE,DESK_V3_RESIZE,DESK_V3_PLACE,DESK_SET_TITLE,
         DESK_SET_CURSOR,DESK_V3_CURSOR_BITMAP,DESK_V3_POINTER,DESK_V3_WARP,DESK_V3_LEASE,
         DESK_V3_CRASH,DESK_V3_RESTART,DESK_CLOSE,DESK_CLOSED,DESK_CLOSE_REQUEST,DESK_PING,DESK_PONG,
-        DESK_CONFIGURE,DESK_V3_RESULT,DESK_V3_ACTIVATE,DESK_V3_LEASE_EVENT,DESK_KEY,DESK_MOTION,DESK_BUTTON,DESK_V3_RELATIVE_EVENT,DESK_V3_POINTER_STATE,DESK_CLOSE_ACK,DESK_V3_WINDOW_ORDER,DESK_V3_WIN32_HWND};
+        DESK_CONFIGURE,DESK_V3_RESULT,DESK_V3_ACTIVATE,DESK_V3_LEASE_EVENT,DESK_KEY,DESK_MOTION,DESK_BUTTON,DESK_V3_RELATIVE_EVENT,DESK_V3_POINTER_STATE,DESK_CLOSE_ACK,DESK_V3_WINDOW_ORDER,DESK_V3_WIN32_HWND,DESK_V3_LAUNCH};
     for (unsigned k=0;k<sizeof(ops)/sizeof(*ops);k++) {
         unsigned op=ops[k], n=0; int direction=1;
         msg(&m,op,0,1,1); uint8_t *b=m.data+16;
@@ -50,6 +50,14 @@ static void protocol(void)
         case DESK_V3_POINTER: n=20; break;
         case DESK_V3_WARP: n=8; break;
         case DESK_V3_LEASE: n=16; break;
+        case DESK_V3_LAUNCH: {
+            const char title[]="control", argument[]="--set-wallpaper=/Documents/photo.png";
+            n=8+sizeof(title)-1+sizeof(argument)-1;
+            desk_put32(b,sizeof(title)-1); memcpy(b+4,title,sizeof(title)-1);
+            desk_put32(b+4+sizeof(title)-1,sizeof(argument)-1);
+            memcpy(b+8+sizeof(title)-1,argument,sizeof(argument)-1);
+            break;
+        }
         case DESK_V3_CRASH: n=13; desk_put32(b,0xc0000005); desk_put32(b+8,1); b[12]='M'; break;
         case DESK_V3_RESTART: case DESK_CLOSE_ACK: n=4; break;
         case DESK_V3_WIN32_HWND: n=4;desk_put32(b,100);break;

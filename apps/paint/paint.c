@@ -31,6 +31,7 @@ typedef u8 *fptr;
 #define BLACK 79
 static struct du_ui *ui;
 static void (*quit_cb)(void *);
+static int (*wallpaper_cb)(void *, const char *);
 static void (*decline_cb)(void *);
 static void (*title_cb)(void *, const char *);
 static void *callback_host;
@@ -1622,7 +1623,8 @@ static void tool_up(int x, int y)
 #define SEP {"", 0, 0, 0, DU_ITEM_SEPARATOR}
 static struct du_menu_item file_items[] = {
     ITEM("&New", M_NEW, 0x31, DU_CTRL), ITEM("&Open...", M_OPEN, 0x18, DU_CTRL),
-    ITEM("&Save", M_SAVE, 0x1f, DU_CTRL), ITEM("Save &As...", M_SAVEAS, 0, 0), SEP,
+    ITEM("&Save", M_SAVE, 0x1f, DU_CTRL), ITEM("Save &As...", M_SAVEAS, 0, 0),
+    ITEM("Set as &Wallpaper", M_SET_WALLPAPER, 0, 0), SEP,
     ITEM("E&xit", M_EXIT, DU_KEY_F4, DU_ALT) };
 static struct du_menu_item edit_items[] = {
     ITEM("&Undo", M_UNDO, 0x2c, DU_CTRL), ITEM("&Repeat", M_REDO, 0x15, DU_CTRL), SEP,
@@ -1649,6 +1651,7 @@ static struct du_menu_item context_items[] = {
 static void flag(struct du_menu_item *m, unsigned bit, int yes) { if (yes) m->flags |= bit; else m->flags &= ~bit; }
 static void update_menus(void)
 {
+    flag(&file_items[4],DU_ITEM_DISABLED,!path[0]);
     flag(&edit_items[0], DU_ITEM_DISABLED, !(op_open || (undo_kind && !undone)));
     flag(&edit_items[1], DU_ITEM_DISABLED, !(undo_kind && undone && !op_open));
     for (int i = 3; i <= 6; i++) flag(&edit_items[i], DU_ITEM_DISABLED,
@@ -2214,6 +2217,10 @@ void paint_command(int id)
     case M_OPEN: ask_then(A_OPEN); break;
     case M_SAVE: finish_pending(); drop_selection(); if (!path[0]) file_dialog(1); else do_save(path); break;
     case M_SAVEAS: finish_pending(); drop_selection(); format_dialog(); break;
+    case M_SET_WALLPAPER:
+        if (path[0] && (!wallpaper_cb || wallpaper_cb(callback_host,path))) message("The wallpaper request could not be sent to the desktop.");
+        else if (!path[0]) message("Save the picture before setting it as wallpaper.");
+        break;
     case M_EXIT: ask_then(A_EXIT); break;
     case M_UNDO: undo(0); break; case M_REDO: undo(1); break;
     case M_CUT: if (sel_on && copy_selection()) clear_selection(); break;
@@ -2398,7 +2405,7 @@ int paint_attach(struct du_ui *u)
     if (ui) return -EBUSY;
     if (!u || u->count) return -EINVAL;
     partial_layout=0; dx0=dy0=0; dx1=dy1=-1;
-    ui=u; quit_cb=NULL; decline_cb=NULL; title_cb=NULL; callback_host=NULL;
+    ui=u; quit_cb=NULL; decline_cb=NULL; title_cb=NULL; wallpaper_cb=NULL; callback_host=NULL;
     fg=BLACK; bg=WHITE; tool=prev_tool=T_PENCIL; tool_hot=-1; zoom=1;
     line_w=pen_size=1; fill_style=0; brush_kind=PEN_ROUND; brush_size=eraser_size=air_size=1;
     text_scale=1; text_bold=0; opaque=1; font_file[0]=0;
@@ -2426,6 +2433,7 @@ full:
 }
 void paint_callbacks(void (*quit)(void *), void (*title)(void *, const char *), void *host)
 { quit_cb=quit; title_cb=title; callback_host=host; update_title(); }
+void paint_wallpaper_callback(int (*set_wallpaper)(void *, const char *)) { wallpaper_cb=set_wallpaper; update_menus(); }
 void paint_detach(void)
 {
     if (!ui) return;
@@ -2433,7 +2441,7 @@ void paint_detach(void)
     cancel_pointer(); du_dialog_close(ui); du_menu_close(ui);
     img_free(&cv); img_free(&old); pool_free(); img_free(&flt); img_free(&clip); img_free(&selection_mask); du_ta_free(&text_edit);
     ui->event=NULL; ui->paint=NULL; ui->layout=NULL; ui->menus=NULL; ui->menu_count=ui->count=0;
-    ui=NULL; quit_cb=NULL; decline_cb=NULL; title_cb=NULL; callback_host=NULL; text=NULL;
+    ui=NULL; quit_cb=NULL; decline_cb=NULL; title_cb=NULL; wallpaper_cb=NULL; callback_host=NULL; text=NULL;
 }
 static int install_image(const char *p, struct paint_image next)
 {

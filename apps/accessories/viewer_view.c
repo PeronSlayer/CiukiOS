@@ -76,6 +76,7 @@ static void status(struct viewer_app *a)
         if (w->disabled!=!many) { w->disabled=(uint8_t)!many;du_invalidate(a->ui,w->box); }
     }
     a->file_items[1].flags = a->file_items[2].flags = many ? 0 : DU_ITEM_DISABLED;
+    a->file_items[3].flags = a->loaded ? 0 : DU_ITEM_DISABLED;
 }
 void viewer_layout(struct viewer_app *a)
 {
@@ -205,7 +206,8 @@ void viewer_paint(struct du_ui *u, void *user)
 
 static const struct du_menu_item file_template[] = {
     {"&Open...", V_M_OPEN, 0x18, DU_CTRL, 0}, {"&Previous Image", V_M_PREV, DU_KEY_PGUP, 0, DU_ITEM_DISABLED},
-    {"&Next Image", V_M_NEXT, DU_KEY_PGDN, 0, DU_ITEM_DISABLED}, {"", 0, 0, 0, DU_ITEM_SEPARATOR}, {"E&xit", V_M_EXIT, 0, 0, 0} };
+    {"&Next Image", V_M_NEXT, DU_KEY_PGDN, 0, DU_ITEM_DISABLED}, {"Set as &Wallpaper", V_M_WALLPAPER, 0, 0, DU_ITEM_DISABLED},
+    {"", 0, 0, 0, DU_ITEM_SEPARATOR}, {"E&xit", V_M_EXIT, 0, 0, 0} };
 static const struct du_menu_item view_template[] = {
     {"Zoom &In", V_M_IN, 0, 0, 0}, {"Zoom &Out", V_M_OUT, 0, 0, 0}, {"", 0, 0, 0, DU_ITEM_SEPARATOR},
     {"&Best Fit", V_M_FIT, 0, 0, 0}, {"&Actual Size", V_M_ACTUAL, 0, 0, 0}, {"", 0, 0, 0, DU_ITEM_SEPARATOR} };
@@ -217,7 +219,7 @@ int viewer_attach(struct viewer_app *a, struct du_ui *u, const struct viewer_fs 
     memcpy(a->file_items, file_template, sizeof(file_template));
     memcpy(a->view_items, view_template, sizeof(view_template));
     memcpy(a->help_items, help_template, sizeof(help_template));
-    a->menus[0] = (struct du_menu){"&File", a->file_items, 5};
+    a->menus[0] = (struct du_menu){"&File", a->file_items, 6};
     a->menus[1] = (struct du_menu){"&View", a->view_items, 5};
     a->menus[2] = (struct du_menu){"&Help", a->help_items, 1};
     u->menus = a->menus; u->menu_count = 3;
@@ -230,6 +232,8 @@ int viewer_attach(struct viewer_app *a, struct du_ui *u, const struct viewer_fs 
     u->focus = -1;
     return 0;
 }
+void viewer_wallpaper_callback(struct viewer_app *a,int (*set_wallpaper)(void *,const char *))
+{ a->set_wallpaper=set_wallpaper; }
 void viewer_detach(struct viewer_app *a) {
     if (a->loading) {
         du_job_finish(&a->loading->job); viewer_free(&a->loading->result.image);
@@ -258,6 +262,10 @@ void viewer_event(struct du_ui *u, const struct du_event *e, void *user)
         case V_M_OPEN: du_file_dialog(u, V_D_OPEN, 0, "Open", a->folder[0] ? a->folder : "/", "", a->fs->list, a->fs->ctx); break;
         case V_M_PREV: case V_PREV: step(a, -1); break;
         case V_M_NEXT: case V_NEXT: step(a, 1); break;
+        case V_M_WALLPAPER:
+            if (a->loaded && a->set_wallpaper && a->set_wallpaper(a->host,a->path))
+                du_message(u,V_D_INFO,"Image Viewer","The wallpaper request could not be sent to the desktop.",DU_DLG_ICON_ERROR,NULL,0,0,0);
+            break;
         case V_M_IN: case V_IN: zoom(a, viewer_zoom_step(effective_zoom(a), 1)); break;
         case V_M_OUT: case V_OUT: zoom(a, viewer_zoom_step(effective_zoom(a), -1)); break;
         case V_M_FIT: case V_FIT: zoom(a, 0); break;

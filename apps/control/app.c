@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <errno.h>
 
 #define CP_T_PREVIEW 700   /* timer id of the deferred wallpaper preview (outside the widget ids) */
@@ -17,12 +18,20 @@ enum {
     C_VOL_L, C_VOL, C_VOL_V, C_MUTE, C_SOUND_LIST, C_SOUND_TEST, C_SOUND_ENABLED, C_HARDWARE, C_AUDIO,
     C_DATE, C_H24, C_SECONDS, C_TIME_NOTE1, C_TIME_NOTE2,
     C_SYS0, C_SYS1, C_SYS2, C_SYS3, C_SYS4,
+    C_WALL_BROWSE = 996, C_WALL_FILE,
     C_BACK = 100, C_APPLETS, C_TREE, C_REFRESH, C_PROPERTIES, C_DRIVERS, C_LEASES,
     C_SYSTEM_TABS, C_CPU, C_UPTIME, C_SYSTEM_HARDWARE, C_FLAGS, C_BOOT_OPTIONS, C_SERIAL, C_BOOT_APPLY,
     C_DETAILS = 130, C_FIRMWARE = 131, D_FIRMWARE = 199, D_PROPERTIES = 200, D_INFO, C_SCHEME, C_UI_VOL, C_UI_VOL_V
 };
 static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts", "autoplay", "programs", "joystick"};
 static const char *const page_labels[CP_PAGES] = {"Display Properties", "Mouse", "Keyboard", "Sounds and Audio", "Date and Time", "System", "System", "System", "Network", "Power", "Display Properties", "Display Properties", "Storage and removable devices", "Add/Remove Programs", "Game controllers"};
+static int wallpaper_path(const char *path)
+{
+    if (!path || path[0]!='/' || strstr(path,"/../") || strstr(path,"/./")) return 0;
+    size_t n=strlen(path); if (n<2 || (n>=3 && !strcmp(path+n-3,"/..")) || (n>=2 && !strcmp(path+n-2,"/."))) return 0;
+    const char *dot=strrchr(path,'.'); if (!dot) return 0;
+    return !strcasecmp(dot,".png") || !strcasecmp(dot,".jpg") || !strcasecmp(dot,".jpeg") || !strcasecmp(dot,".bmp");
+}
 static void build(struct cp_app *a);
 static void refresh(struct cp_app *a);
 static unsigned power_read(struct cp_app *a);
@@ -61,6 +70,10 @@ static void changed(struct cp_app *a)
     static struct ciuki_settings now;
     load(a, &now);            /* keep what the desktop wrote meanwhile: recent documents, unknown keys */
     if (a->page==CP_MOUSE) { now.mouse_speed=a->cfg.mouse_speed; now.double_click_ms=a->cfg.double_click_ms; }
+    else if (a->page==CP_DISPLAY) {
+        snprintf(now.wallpaper,sizeof(now.wallpaper),"%s",a->cfg.wallpaper);
+        now.wallpaper_mode=a->cfg.wallpaper_mode; now.desktop_color=a->cfg.desktop_color;
+    }
     else if (a->page==CP_POWER) now.monitor_seconds=a->cfg.monitor_seconds;
     else if (a->page==CP_KEYBOARD) now.keyboard=a->cfg.keyboard;
     else if (a->page==CP_DATETIME) { now.clock_24h=a->cfg.clock_24h; now.clock_seconds=a->cfg.clock_seconds; }
@@ -702,6 +715,15 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
             save = 1; a->preview_valid = 0;
         }
         break;
+    case C_WALL_BROWSE:
+        if (e->type==DU_EV_ACTIVATE) du_file_dialog(u,C_WALL_FILE,0,"Choose wallpaper","/Documents","",NULL,NULL);
+        break;
+    case C_WALL_FILE:
+        if (e->type==DU_EV_DIALOG && !e->index && e->text && strlen(e->text)<sizeof(a->cfg.wallpaper) && wallpaper_path(e->text)) {
+            snprintf(a->cfg.wallpaper,sizeof(a->cfg.wallpaper),"%s",e->text); save=1; a->preview_valid=0;
+            text(a,C_STATUS,"Wallpaper selected. Apply to publish it on the desktop.");
+        } else if (e->type==DU_EV_DIALOG && !e->index) text(a,C_STATUS,"Choose a PNG, JPEG or BMP image.");
+        break;
     case C_POS0: case C_POS1: case C_POS2: case C_POS3: case C_POS4:
         if (e->type == DU_EV_ACTIVATE) { a->cfg.wallpaper_mode = mode_order[e->id - C_POS0]; save = 1; a->preview_valid = 0; }
         break;
@@ -1290,12 +1312,13 @@ static void build(struct cp_app *a)
             for (unsigned k=0;k<walls;k++) a->wall_items[k].icon16=NULL;
             w=add(a,DU_LISTVIEW,C_WALL,248,64,CP_WIDTH-272,138,"");
             w->items=a->wall_items; w->count=walls; list_style(w,"Wallpaper"); w->anchors=DU_ANCHOR_GROW_X;
+            add(a,DU_BUTTON,C_WALL_BROWSE,248,208,120,24,"Browse...");
             add(a,DU_LABEL,C_POS_L,24,224,100,14,"Position:");
             static const char *const pos[CP_POSITIONS]={"Center","Tile","Stretch","Fit","Fill"};
             for (int k=0;k<CP_POSITIONS;k++) add(a,DU_BUTTON,C_POS0+k,24+k%3*70,240+k/3*24,68,22,pos[k]);
             add(a,DU_LABEL,C_COL_L,24,296,180,14,"Desktop colour:");
             for (int k=0;k<6;k++) add(a,DU_BUTTON,C_COL0+k,24+k*34,312,30,24,"");
-            add(a,DU_BUTTON,C_ICONS,248,224,CP_WIDTH-272,24,"")->anchors=DU_ANCHOR_GROW_X;
+            add(a,DU_BUTTON,C_ICONS,248,236,CP_WIDTH-272,24,"")->anchors=DU_ANCHOR_GROW_X;
         } else if (a->display_tab==CP_APPEARANCE) {
             add(a,DU_LABEL,C_THEME_L,24,44,200,16,"&Theme:");
             for (int k=0;k<CFG_THEMES;k++) a->theme_items[k]=(struct du_item){.text={cfg_theme_names[k]}};
@@ -1477,6 +1500,14 @@ void cp_open(struct cp_app *a, int page)
     if (a->page == CP_DRIVERS) { a->detail_list = C_DRIVERS; a->detail_index = 0; }
     if (a->page == CP_DEVICES || a->page == CP_DRIVERS || a->page == CP_SYSTEM || a->page == CP_AUTOPLAY) refresh(a);
     build(a);
+}
+int cp_wallpaper_set(struct cp_app *a, const char *path)
+{
+    if (!a || !path || !wallpaper_path(path) || strlen(path)>=sizeof(a->cfg.wallpaper)) return -EINVAL;
+    snprintf(a->cfg.wallpaper,sizeof(a->cfg.wallpaper),"%s",path);
+    a->preview_valid=0; changed(a);
+    text(a,C_STATUS,"Wallpaper saved and sent to the desktop.");
+    return 0;
 }
 void cp_assets_ready(struct cp_app *a)
 {

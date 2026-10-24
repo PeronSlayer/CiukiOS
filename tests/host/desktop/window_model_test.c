@@ -1322,11 +1322,53 @@ static void row_caption_icon(unsigned m)
     assert(!desk_theme_use("Platinum")); desk_theme_changed(&d); step("Platinum");
     wm_end();
 }
+static void row_icon_sort(unsigned m)
+{
+    row_name="G19 icon sorting"; wm_begin(m,1);
+    d.sh.cfg.icon_sort=3; d.sh.icon_count=0; desk_shell_apply(&d);
+    assert(d.sh.cfg.icon_sort==3); step("sort by Date selected and icons rebuilt");
+    wm_end();
+}
+static void row_icon_auto_arrange(unsigned m)
+{
+    row_name="G19 Auto Arrange"; wm_begin(m,1);
+    assert(cfg_icon_move(&d.sh.cfg,"/Computer",190,100));
+    d.sh.icon_count=0; desk_shell_apply(&d); step("manually positioned system icon");
+    d.sh.cfg.icon_auto_arrange=1; cfg_icons_arrange(&d.sh.cfg); d.sh.icon_count=0; desk_shell_apply(&d);
+    assert(d.sh.cfg.icon_auto_arrange); step("Auto Arrange returns icons to the grid");
+    wm_end();
+}
+static void row_icon_keyboard(unsigned m)
+{
+    row_name="G19 desktop keyboard"; wm_begin(m,1);
+    tap(DU_KEY_HOME); assert(d.sh.icon_selected==0); step("Home selects the first icon");
+    tap(DU_KEY_END); assert(d.sh.icon_selected==2); step("End selects the last icon");
+    tap(0x2e); assert(d.sh.icon_typeahead_length==1 && d.sh.icon_typeahead[0]=='c');
+    assert(d.sh.icon_selected==0); step("type-ahead selects Computer");
+    wm_end();
+}
+static void row_system_icon_rename(unsigned m)
+{
+    row_name="G19 system icon rename"; wm_begin(m,1);
+    tap(DU_KEY_HOME); tap(DU_KEY_F2); assert(d.sh.icon_editing==0);
+    snprintf(d.sh.icon_edit,sizeof(d.sh.icon_edit),"Renamed Computer");
+    d.sh.icon_edit_cursor=(unsigned)strlen(d.sh.icon_edit); tap(DU_KEY_ENTER);
+    assert(!strcmp(d.sh.icons[0].label,"Renamed Computer")); step("label edit is published");
+    wm_end();
+}
+static void row_wallpaper_change(unsigned m)
+{
+    row_name="G19 wallpaper change"; wm_begin(m,1);
+    snprintf(d.sh.cfg.wallpaper,sizeof(d.sh.cfg.wallpaper),"builtin:%s",desk_builtin_wallpapers[1].id);
+    d.sh.want_wallpaper=1; assert(!desk_shell_wallpaper_update(&d)); step("wallpaper settings publish a new background");
+    wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
     row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,
     row_taskbar_menu, row_arrange, row_minimize_all, row_win_keys, row_caption_icon, row_startup,
-    row_move_damaged, row_fault, row_saver};
+    row_move_damaged, row_fault, row_saver, row_icon_sort, row_icon_auto_arrange,
+    row_icon_keyboard, row_system_icon_rename, row_wallpaper_change};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).
