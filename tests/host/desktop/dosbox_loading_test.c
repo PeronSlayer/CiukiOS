@@ -68,6 +68,14 @@ int ciuki_surface_create(uint32_t w, uint32_t h, uint32_t f)
 { assert(w == 640 && h == 480 && f == CIUKI_SURFACE_XRGB8888); return 7; }
 void *ciuki_surface_map(int fd, int prot)
 { assert(fd == 7 && prot == (PROT_READ | PROT_WRITE)); return screen; }
+/* Clipboard transport uses the same known window surface. */
+int ciuki_surface_info(int fd, struct ciuki_surface_info *out)
+{
+    assert(fd == 7);
+    *out = (struct ciuki_surface_info){sizeof(*out), 640, 480, 2560,
+                                     CIUKI_SURFACE_XRGB8888, sizeof(screen)};
+    return 0;
+}
 int ciuki_channel_send(int fd, const struct ciuki_message *m, uint32_t flags)
 {
     assert(fd == 3 && !flags);
