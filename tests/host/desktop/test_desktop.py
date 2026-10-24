@@ -41,14 +41,14 @@ SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "autoplay.c", "a
 # F2-83: shaded bars, coverage rims and task buttons; desktop-shell.md.
 # G16 (2026-10-24): the two dialogs frames show the toolkit Open dialog (New Folder, List/Details, Files of type).
 # F2-99: only the new software arrow/shadow footprint differs (integ-fix1 pixel comparison).
-# Fix B: final combined G16/G19/G20/G23 shell and toolkit state; see build/codex/fixb-report.md.
+# Fix C (2026-10-24): reviewed G16b/G28b dialogs in the G23 appearance tree; see build/codex/fixc-report.md.
 LOOK_GOLDENS = {
     "ciuki-blue-desktop.ppm": "1760a02cbf1a7b6e190956cb2224d90ebd16508b50b7ba32570cfb8c5d733aa8",
-    "ciuki-blue-dialogs.ppm": "af6c2a46a0653eeb6749f5844c97b852eb4041a44e80030ab3647d7afa9a455a",
+    "ciuki-blue-dialogs.ppm": "6815007bbd7f345d7c7db6035f27d9c5f5605bd9fbf711bc84c096592a181c5a",
     "ciuki-blue-tray-disabled.ppm": "c8dcf43112cfd62edcf26c4727c29a60a61fda7e32cd1df58992f220b0d70528",
     "ciuki-blue-tray-media.ppm": "828d0b4e9b46ee6b22afbba57acc8db956240150ac2e1d20c66d129c02b54f1d",
     "platinum-desktop.ppm": "ef553b4abf2d38e6438c311f7a144c8c031cc393c10af84fe48426207e7a9183",
-    "platinum-dialogs.ppm": "27b51cba1124474ad5a3f30e81a034a9cb202a6b12846fb601a39df42a052ba8",
+    "platinum-dialogs.ppm": "7abfd44a71dc421801a93e755df982e36304874c2105dd689c4147cfce074d16",
     "platinum-tray-disabled.ppm": "a6ab48b6f04ebd95a095c71e99143ac24ace29adb52cf50fee6c56a0d86860e0",
     "platinum-tray-media.ppm": "2433cbff5aa75196cfc469379569506e915db99c1e5ead753e1ca02eea41f11a"
 }

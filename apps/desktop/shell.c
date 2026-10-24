@@ -2432,7 +2432,9 @@ static int shortcut_resolve(struct desktop *d, struct desk_launch_record *record
 int desk_shell_open_record(struct desktop *d, const struct desk_launch_record *record, unsigned depth)
 {
     if (!desk_launch_valid(record) || depth>=8) return -EINVAL;
-    if (desk_target_url(record->target)) return d->open_path ? d->open_path(d,record->target) : -ENOSYS;
+    /* The native shell also works without an asynchronous path resolver.
+     * An installed resolver owns the request, including any refusal. */
+    if (desk_target_url(record->target)) return d->open_path ? d->open_path(d,record->target) : desk_task_launch(d,"netsurf",record->target);
     char path[FM_PATH];
     int r=fm_posix_path(path,record->target); if (r) return r;
     const char *ext=strrchr(path,'.');

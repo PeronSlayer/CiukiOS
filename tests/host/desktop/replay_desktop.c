@@ -41,3 +41,6 @@ int ap_preference_set(const char *dir,const char *id,const char *label,int actio
 
 /* This desktop fixture has no installed SETUP.STATE. */
 int desk_firstboot(struct desktop *d) { (void)d; return 0; }
+/* The app replay does not start the scheduled-tasks service. */
+void desk_schedsvc_exited(struct desktop *d, uint32_t pid, int status)
+{ (void)d; (void)pid; (void)status; }
