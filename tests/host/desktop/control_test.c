@@ -207,8 +207,8 @@ static void joystick_page(void)
     at_click_widget(&u,1120);
     assert(a.game_open && joystick_pending.operation==CIUKI_JOY_GET_GAME && joystick_pending.axis==1 && a.joystick_busy);
     reply=joystick_pending;reply.attached=0;cp_joystick_result(&a,&reply,0);
-    assert(!a.joystick_busy && a.game_joy_ready && strstr(du_get(&u,1500)->text,"Game: ") && strstr(du_get(&u,1501)->text,"DOS default"));
-    at_click_widget(&u,1510);assert(!a.game_open && du_get(&u,1121) && !joystick_game_saved && !joystick_game_record.device);
+    assert(!a.joystick_busy && a.game_joy_ready && strstr(du_get(&u,2200)->text,"Game: ") && strstr(du_get(&u,2201)->text,"DOS default"));
+    at_click_widget(&u,2210);assert(!a.game_open && du_get(&u,1121) && !joystick_game_saved && !joystick_game_record.device);
     assert(cp_page_index("joystick")==CP_JOYSTICK);
     cp_detach(&a);du_release(&u);
     puts("PASS joystick Control Panel: discovery, fresh three-point capture, per-axis calibration, A/B/off, stale refusal and the per-game properties entry");
@@ -589,6 +589,16 @@ int main(int argc, char **argv)
     struct du_event selected_wall={.type=DU_EV_DIALOG,.id=browse->id+1,.index=0,.text="/Documents/Desktop/Scene.png"};
     u.event(&u,&selected_wall,u.user);
     assert(!strcmp(a.cfg.wallpaper,"/Documents/Desktop/Scene.png") && a.display_dirty);
+    a.display_dirty=0;
+    static const char *const invalid_wall[]={"/Documents/Desktop/not-an-image.txt","/Documents/../Scene.png",
+                                           "/Documents/./Scene.png","Scene.png"};
+    for (unsigned k=0;k<sizeof(invalid_wall)/sizeof(*invalid_wall);k++) {
+        selected_wall.text=invalid_wall[k]; u.event(&u,&selected_wall,u.user);
+        assert(!a.display_dirty && !strcmp(a.cfg.wallpaper,"/Documents/Desktop/Scene.png"));
+        assert(strstr(du_get(&u,3)->text,"Choose a PNG, JPEG or BMP"));
+    }
+    selected_wall.text="/Documents/Desktop/Scene.JPG"; u.event(&u,&selected_wall,u.user);
+    assert(a.display_dirty && !strcmp(a.cfg.wallpaper,selected_wall.text));
     assert(!cp_wallpaper_set(&a,"/Documents/Desktop/Paint.bmp") && !strcmp(a.cfg.wallpaper,"/Documents/Desktop/Paint.bmp"));
     assert(cp_wallpaper_set(&a,"/Documents/Desktop/not-an-image.txt")==-EINVAL);
     cp_close(&a); cp_detach(&a);

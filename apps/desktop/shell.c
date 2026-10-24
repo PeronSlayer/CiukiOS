@@ -421,8 +421,7 @@ static const struct { int kind; const char *label; char key; } access_keys[] = {
     {SH_MENU_DOCUMENTS,"My Documents",'m'},{SH_MENU_DOCUMENTS,"Clear Recent Documents",'c'},
     {SH_MENU_DESKTOP,"Arrange icons",'i'},{SH_MENU_DESKTOP,"Line up",'u'},{SH_MENU_DESKTOP,"Refresh",'f'},
     {SH_MENU_DESKTOP,"New",'n'},{SH_MENU_DESKTOP,"Paste",'p'},{SH_MENU_DESKTOP,"Properties",'r'},
-    {SH_MENU_NEW,"Folder",'f'},{SH_MENU_NEW,"Text file",'t'},{SH_MENU_NEW,"Bitmap image",'b'},{SH_MENU_NEW,"Shortcut",'s'},
-    {SH_MENU_NEW,"Bitmap image",'b'},{SH_MENU_NEW,"Shortcut",'s'},
+    {SH_MENU_NEW,"Folder",'f'},{SH_MENU_NEW,"Text file",'t'},{SH_MENU_NEW,"Bitmap Image",'b'},{SH_MENU_NEW,"Shortcut...",'s'},
     {SH_MENU_ARRANGE,"By Name",'n'},{SH_MENU_ARRANGE,"By Type",'t'},{SH_MENU_ARRANGE,"By Size",'s'},{SH_MENU_ARRANGE,"By Date",'d'},
     {SH_MENU_ICON,"Open",'o'},{SH_MENU_ICON,"Open With",'w'},{SH_MENU_ICON,"Cut",'t'},{SH_MENU_ICON,"Copy",'c'},
     {SH_MENU_ICON,"Rename",'m'},{SH_MENU_ICON,"Delete",'d'},{SH_MENU_ICON,"Properties",'r'},
@@ -659,7 +658,7 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         item(m,"By Size",NULL,SH_ACT_ICON_SORT,2,d->sh.cfg.icon_sort==2 ? SH_ITEM_DEFAULT : 0);
         item(m,"By Date",NULL,SH_ACT_ICON_SORT,3,d->sh.cfg.icon_sort==3 ? SH_ITEM_DEFAULT : 0);
         separator(m);
-        item(m,d->sh.cfg.icon_auto_arrange ? "Auto Arrange  \xe2\x80\xa2" : "Auto Arrange",NULL,SH_ACT_ICON_AUTO,0,0);
+        item(m,d->sh.cfg.icon_auto_arrange ? "Auto Arrange  \xe2\x9c\x93" : "Auto Arrange",NULL,SH_ACT_ICON_AUTO,0,0);
         break;
     case SH_MENU_OPEN_WITH:
         if (icon_is_entry(d, d->sh.menu_owner)) {
@@ -678,7 +677,7 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         item(m,"Paste","edit-paste",SH_ACT_FILE,DF_PASTE,d->sh.folder ? 0 : SH_ITEM_DISABLED);
         item(m,"Paste Shortcut",NULL,SH_ACT_FILE,DF_PASTE_SHORTCUT,d->sh.folder ? 0 : SH_ITEM_DISABLED);
         item(m,"Undo    Ctrl+Z","edit-undo",SH_ACT_FILE,DF_UNDO,d->sh.folder ? 0 : SH_ITEM_DISABLED);
-        item(m,d->sh.cfg.desktop_icons ? "Show Desktop Icons  \xe2\x80\xa2" : "Show Desktop Icons",NULL,SH_ACT_ICONS_SHOW,0,0);
+        item(m,d->sh.cfg.desktop_icons ? "Show Desktop Icons  \xe2\x9c\x93" : "Show Desktop Icons",NULL,SH_ACT_ICONS_SHOW,0,0);
         separator(m);
         item(m,"Properties","document-properties",SH_ACT_CONTROL,CP_DISPLAY+1,program_index(d,"control")<0 ? SH_ITEM_DISABLED : 0);
         break;
@@ -1656,8 +1655,6 @@ static struct desk_box tooltip_box(const struct desktop *d)
         d->sh.tooltip==4 ? media_icon_box(d) : d->sh.tooltip==5 ? notification_icon_box(d) :
         d->sh.tooltip==6 ? desk_shell_tray_icon_box(d, SH_TRAY_POWER) :
         d->sh.tooltip==7 ? desk_shell_tray_icon_box(d, SH_TRAY_RESOURCES) : clock_box(d);
-    return tray_popup(d,anchor,w,h);
-        d->sh.tooltip==4 ? media_icon_box(d) : d->sh.tooltip==5 ? notification_icon_box(d) : clock_box(d);
     struct desk_box result=tray_popup(d,anchor,w,h);
     desk_theme=saved; return result;
 }

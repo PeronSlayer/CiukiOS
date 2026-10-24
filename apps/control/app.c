@@ -1154,8 +1154,11 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
         if(e->type==DU_EV_ACTIVATE) du_file_dialog(u,4131,0,"Choose a desktop background","/system/wallpapers","",NULL,NULL);
         break;
     case 4131:
-        if(e->type==DU_EV_DIALOG && !e->index && e->text && e->text[0]=='/' && strlen(e->text)<sizeof(a->cfg.wallpaper) && !strstr(e->text,"/../")) {
-            snprintf(a->cfg.wallpaper,sizeof(a->cfg.wallpaper),"%s",e->text); a->preview_valid=0; save=1;
+        if(e->type==DU_EV_DIALOG && !e->index) {
+            if(e->text && strlen(e->text)<sizeof(a->cfg.wallpaper) && wallpaper_path(e->text)) {
+                snprintf(a->cfg.wallpaper,sizeof(a->cfg.wallpaper),"%s",e->text); a->preview_valid=0; save=1;
+                text(a,C_STATUS,"Wallpaper selected. Apply to publish it on the desktop.");
+            } else text(a,C_STATUS,"Choose a PNG, JPEG or BMP image.");
         }
         break;
     case C_THEME:
