@@ -78,6 +78,7 @@ static void status(struct viewer_app *a)
         if (w->disabled!=!many) { w->disabled=(uint8_t)!many;du_invalidate(a->ui,w->box); }
     }
     a->file_items[1].flags = a->file_items[2].flags = many ? 0 : DU_ITEM_DISABLED;
+    a->file_items[11].flags = a->loaded && !a->loading ? 0 : DU_ITEM_DISABLED;
     unsigned wall = a->wallpaper && a->loaded ? 0 : DU_ITEM_DISABLED;
     a->file_items[6].flags = a->file_items[7].flags = a->file_items[8].flags = wall;   /* the three Set As Wallpaper rows, after Page Setup and Print */
     a->view_items[6].flags = a->view_items[7].flags = a->view_items[8].flags = a->loaded ? 0 : DU_ITEM_DISABLED;
@@ -237,7 +238,7 @@ static const struct du_menu_item file_template[] = {
     {"&Next Image", V_M_NEXT, DU_KEY_PGDN, 0, DU_ITEM_DISABLED}, {"", 0, 0, 0, DU_ITEM_SEPARATOR},
     {"Page Set&up...", V_M_PAGESETUP, 0, 0, 0}, {"&Print...", V_M_PRINT, 0x19, DU_CTRL, 0},
     {"Set As Wallpaper (&Centered)", V_M_WALL_CENTER, 0, 0, DU_ITEM_DISABLED}, {"Set As Wallpaper (&Tiled)", V_M_WALL_TILE, 0, 0, DU_ITEM_DISABLED},
-    {"Set As Wallpaper (&Stretched)", V_M_WALL_STRETCH, 0, 0, DU_ITEM_DISABLED}, {"", 0, 0, 0, DU_ITEM_SEPARATOR}, {"E&xit", V_M_EXIT, 0, 0, 0} };
+    {"Set As Wallpaper (&Stretched)", V_M_WALL_STRETCH, 0, 0, DU_ITEM_DISABLED}, {"", 0, 0, 0, DU_ITEM_SEPARATOR}, {"E&xit", V_M_EXIT, 0, 0, 0}, {"Save &As...", V_M_SAVE_AS, 0x1f, DU_CTRL | DU_SHIFT, DU_ITEM_DISABLED} };
 static const struct du_menu_item view_template[] = {
     {"Zoom &In", V_M_IN, 0, 0, 0}, {"Zoom &Out", V_M_OUT, 0, 0, 0}, {"", 0, 0, 0, DU_ITEM_SEPARATOR},
     {"&Best Fit", V_M_FIT, 0, 0, 0}, {"&Actual Size", V_M_ACTUAL, 0, 0, 0}, {"", 0, 0, 0, DU_ITEM_SEPARATOR},
@@ -251,7 +252,7 @@ int viewer_attach(struct viewer_app *a, struct du_ui *u, const struct viewer_fs 
     memcpy(a->file_items, file_template, sizeof(file_template));
     memcpy(a->view_items, view_template, sizeof(view_template));
     memcpy(a->help_items, help_template, sizeof(help_template));
-    a->menus[0] = (struct du_menu){"&File", a->file_items, 11};
+    a->menus[0] = (struct du_menu){"&File", a->file_items, 12};
     a->menus[1] = (struct du_menu){"&View", a->view_items, 9};
     a->menus[2] = (struct du_menu){"&Help", a->help_items, 1};
     u->menus = a->menus; u->menu_count = 3;
@@ -279,6 +280,11 @@ void viewer_event(struct du_ui *u, const struct du_event *e, void *user)
     int old_x=a->scroll_x,old_y=a->scroll_y;
     switch (e->type) {
     case DU_EV_DIALOG:
+        if (id == V_D_SAVE && !e->index && e->text && e->text[0] && a->loaded) {
+            int err = viewer_save_bmp(&a->image, e->text);
+            if (err) du_message(u, V_D_INFO, "Save Picture", strerror(-err), DU_DLG_ICON_ERROR, NULL, 0, 0, 0);
+            else du_recent_add(e->text);
+        }
         if (id == V_D_OPEN && !e->index && e->text && e->text[0]) viewer_open(a, e->text);
         break;
     case DU_EV_DROPFILES: {
@@ -289,6 +295,15 @@ void viewer_event(struct du_ui *u, const struct du_event *e, void *user)
     }
     case DU_EV_ACTIVATE:
         switch (id) {
+        case V_M_SAVE_AS:
+            if (a->loaded && !a->loading) {
+                static const struct du_file_filter types[] = {{"Bitmap (*.bmp)", "*.bmp"}};
+                struct du_file_options o = {.folder = a->folder[0] ? a->folder : "/", .name = "Picture.bmp",
+                    .flags = DU_FILE_SAVE | DU_FILE_OVERWRITE_PROMPT | DU_FILE_PATH_MUST_EXIST,
+                    .title = "Save Picture As", .filters = types, .filter_count = 1, .default_ext = "bmp", .lister = a->fs->list, .lister_ctx = a->fs->ctx};
+                du_file_open(u, V_D_SAVE, &o);
+            }
+            break;
         case V_M_OPEN: du_file_dialog(u, V_D_OPEN, 0, "Open", a->folder[0] ? a->folder : "/", "", a->fs->list, a->fs->ctx); break;
         case V_M_PREV: case V_PREV: step(a, -1); break;
         case V_M_NEXT: case V_NEXT: step(a, 1); break;

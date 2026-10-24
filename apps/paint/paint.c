@@ -1667,7 +1667,12 @@ static void update_menus(void)
     for (int i = 0; i < 5; i++) flag(&view_items[6 + i], DU_ITEM_CHECKED, zoom == zooms[i]);
     flag(&view_items[12], DU_ITEM_CHECKED, show_grid); flag(&view_items[12], DU_ITEM_DISABLED, zoom < 4);
     flag(&image_items[6], DU_ITEM_CHECKED, opaque);
-    flag(&file_items[8], DU_ITEM_DISABLED, !wallpaper_cb); flag(&file_items[9], DU_ITEM_DISABLED, !wallpaper_cb);
+    for (unsigned i=0;i<sizeof(file_items)/sizeof(file_items[0]);i++) {
+        if (file_items[i].id==M_WALL_TILE || file_items[i].id==M_WALL_CENTER)
+            flag(&file_items[i],DU_ITEM_DISABLED,!wallpaper_cb);
+        else if (file_items[i].id==M_PRINT || file_items[i].id==M_PAGESETUP)
+            flag(&file_items[i],DU_ITEM_DISABLED,!printing_cb);
+    }
 }
 static void context_menu(int x, int y) { update_menus(); du_popup(ui, context_items, 8, x, y, P_CANVAS); }
 
@@ -2557,7 +2562,7 @@ full:
 }
 void paint_callbacks(void (*quit)(void *), void (*title)(void *, const char *), void *host)
 { quit_cb=quit; title_cb=title; callback_host=host; update_title(); }
-void paint_print_callback(void (*printing)(void *,int)) { printing_cb=printing; }
+void paint_print_callback(void (*printing)(void *,int)) { printing_cb=printing; update_menus(); }
 void paint_detach(void)
 {
     if (!ui) return;

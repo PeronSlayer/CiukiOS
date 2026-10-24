@@ -29,7 +29,7 @@ GAMES = "apps/games/"
 TESTS = {
     "mines": [GAMES + "mines_model.c", GAMES + "mines_view.c", GAMES + "cards.c"],
     "freecell": [GAMES + "freecell_model.c", GAMES + "freecell_view.c", GAMES + "cards.c"],
-    "serial": ["apps/serial/screen.c", "apps/serial/xmodem.c", "apps/serial/serial_model.c", "apps/serial/serial_view.c"],
+    "serial": ["apps/serial/screen.c", "apps/serial/xmodem.c", "apps/serial/transfer.c", "apps/serial/serial_model.c", "apps/serial/serial_view.c"],
     "hearts": [GAMES + "hearts_model.c", GAMES + "hearts_view.c", GAMES + "cards.c"],
     "solitaire": [GAMES + "solitaire_model.c", GAMES + "solitaire_view.c", GAMES + "cards.c"],
 }

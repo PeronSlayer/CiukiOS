@@ -599,6 +599,8 @@ int main(int argc,char **argv)
     du_init(&ui,pixels,PAINT_W,PAINT_H); assert(!paint_attach(&ui));
     paint_print_callback(host_print);paint_command(M_PAGESETUP);assert(setup_requests==1);
     struct paint_state initial_print=state();at_chord(&ui,DU_KEY_LCTRL,0x19);assert(print_requests==1);
+    paint_print_callback(NULL);at_chord(&ui,DU_KEY_LCTRL,0x19);assert(print_requests==1);
+    paint_print_callback(host_print);at_chord(&ui,DU_KEY_LCTRL,0x19);assert(print_requests==2);
     assert(state().width==initial_print.width && state().height==initial_print.height && state().dirty==initial_print.dirty);
     stroke_continuity();
     render(argv[2],"paint-initial"); tools(); render(argv[2],"paint-tools");

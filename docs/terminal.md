@@ -30,8 +30,8 @@ Its working directory starts at `C:\Documents`. Commands are case insensitive.
 | `SHUTDOWN`, `REBOOT` | Confirm, then ask the desktop to close programs and flush storage before powering off or restarting. |
 | `LUA script.lua [args]`, `script.lua [args]` | Run Lua in this Terminal. |
 | `LUA` | Enter interactive Lua; `.exit` returns to the native prompt. |
-| `RUN program [args]` | Prints `not available in this release`: the native SDK has no pipes yet. |
-| `REG` | Reserved for the registry directive, f2-47. |
+| `RUN program [args]` | Runs a native child, passes arguments and the Terminal environment, redirects its standard streams, waits while pumping the UI, and returns its exit status. Ctrl+C terminates the child. Use START for GUI, DOS and Win32 programs. |
+| `REG` | Native registry QUERY, ADD, DELETE (/F required), IMPORT and EXPORT through libreg. Example: `REG ADD System\Tools Message STRING "hello world"`; integer/bool/hex literals may omit STRING. Native roots and file format, not Windows hive aliases or REGEDIT4. |
 | `SCANREG [/BACKUP] [/COMMENT=text] [/FIX]` | Registry Checker: check the registry roots, `/FIX` restores a damaged root from the newest good backup, `/BACKUP` writes `C:\SYSTEM\SYSBCKUP\RB00n.CRB` (five kept). |
 | `SCANREG /RESTORE [n]` | List the backups by date, or restore backup `n` (only after a Command prompt only start), then `REBOOT`. |
 | `SCANDISK [d:] [/A] [/THOROUGH] [/AUTOFIX]` | Check a drive (default: the current one) and print the ScanDisk report; `/AUTOFIX` schedules the repair for the next start. |
@@ -125,5 +125,10 @@ of files (folders keep theirs). `LABEL [d:] [text]` and `VOL [d:]` read and set 
 volume label. `CHKDSK [d:]` is a read-only survey: capacity and free space, folders,
 files and hidden files; it repairs nothing (`/F` is refused; ScanDisk does the
 repairs). `IPCONFIG [/ALL]` shows the adapter, link state and IPv4 address. `FORMAT`
-and `PING` print that they are unavailable (they need a kernel format service and
-raw ICMP sockets). `RUN` and `REG` are still reserved.
+uses G29's generation-checked removable-media formatter: `FORMAT A: /Q /FS:FAT12 /V:DISK YES`.
+Without `/Q`, a full format checks the surface (floppy FORMAT TRACK included).
+Omit `YES` to query capacity and see the warning without writing. Formatting
+inside a pipeline/output capture is refused. The boot/fixed volume and unsupported
+switches are refused. `PING` uses G26's raw ICMP controller (shared with TRACERT),
+including sequence matching, timeouts and interruption. `RUN` and `REG` use the
+native process and registry services described above.

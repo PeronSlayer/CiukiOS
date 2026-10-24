@@ -34,6 +34,12 @@ static int display(void *ctx,struct ciuki_display_info *s)
 { (void)ctx; if(device_error)return device_error; s->width=1024; s->height=768; s->bpp=32; s->mode_count=1;
   s->modes[0]=(struct ciuki_display_mode){.id=0x118,.width=1024,.height=768,.bpp=32,.current=1}; return 0; }
 static int launch(void *ctx,const char *p,const char *a) { (void)ctx; launches++; snprintf(launched,sizeof(launched),"%s",p); snprintf(argument,sizeof(argument),"%s",a ? a : ""); return 0; }
+static int native_run(struct terminal *t,int n,char **a)
+{ assert(n==2 && !strcmp(a[0],"sample") && !strcmp(a[1],"two words"));term_write(t,"native child output\n");return 7; }
+static int native_registry(struct terminal *t,int n,char **a)
+{ assert(n==6 && !strcmp(a[1],"ADD") && !strcmp(a[4],"STRING") && !strcmp(a[5],"hello world"));term_write(t,"registry request\n");return 0; }
+static int network_command(struct terminal *t,int n,char **a)
+{ assert(n==2 && !strcmp(a[0],"PING") && !strcmp(a[1],"127.0.0.1"));term_write(t,"raw ICMP provider\n");return 0; }
 static int kill(void *ctx,uint32_t pid) { (void)ctx; kills++; killed=pid; return pid==1 ? -EPERM : 0; }
 static int power(void *ctx,unsigned action) { (void)ctx; powers++; powered=action; return 0; }
 static time_t now(void *ctx) { (void)ctx; return 1791892800; }
@@ -160,7 +166,7 @@ static void scripting(void)
     contains("CHKDSK D:",0,"Volume DATA DISK",1); contains("CHKDSK /F",-EINVAL,"nothing is repaired",1); command("CHKDSK X:",-ENOENT,NULL);
     contains("IPCONFIG",0,"IP Address. . . . . . . . . : 0.0.0.0",1); contains("IPCONFIG",0,"Connected",1); contains("IPCONFIG /ALL",0,"52-00-00-00-00-AB",1);
     contains("IPCONFIG /ALL",0,"rtl8139",1); command("IPCONFIG /X",-EINVAL,NULL);
-    contains("PING 10.0.0.1",-ENOSYS,"raw ICMP",1); contains("FORMAT A:",-ENOSYS,"format service",1);
+    contains("PING 10.0.0.1",-ENOSYS,"error",1); contains("FORMAT A:",-ENOSYS,"error",1);
     contains("HELP",0,"ATTRIB",1); contains("HELP",0,"IPCONFIG",1);
     /* Interrupting a long redirection and the capture limits stay clean. */
     fake_assert_clean();
@@ -188,7 +194,7 @@ static void builtins(void)
     command("COPY sub cloned",0,NULL); assert(fake_lookup("/Documents/cloned/child")>=0);
     command("MOVE cloned D:\\cloned",0,NULL); assert(fake_lookup("/mnt/d/cloned/child")>=0 && fake_lookup("/Documents/cloned")<0);
     command("TYPE missing",-ENOENT,NULL); command("COPY one.txt",-EINVAL,NULL); command("ECHO \"bad",-EINVAL,NULL);
-    command("RUN hello",0,"not available in this release"); command("REG",0,"reserved"); command("mystery",-ENOSYS,NULL);
+    command("RUN hello",-ENOSYS,NULL); command("REG",-ENOSYS,NULL); command("mystery",-ENOSYS,NULL);
     command("START ciuknote \"space name.txt\"",0,"Launch requested"); assert(launches==1 && !strcmp(launched,"ciuknote") && !strcmp(argument,"/Documents/space name.txt"));
     command("START /Programs/tasks",0,NULL); command("START ../tasks",-EINVAL,NULL);
     command("clear",0,NULL); assert(app.count>0); /* captures do not clear the visible grid */
@@ -288,10 +294,14 @@ int main(void)
     assert(fake_create("/mnt",FM_DIR)>=0); assert(fake_create("/mnt/d",FM_DIR)>=0); file("/Documents/one.txt","first\n"); file("/Documents/space name.txt","spaces\n"); file("/Documents/plain","plain"); file("/Documents/sub/child","child");
     struct term_host host={.fs=fake_vfs,.attributes=attributes,.label_get=label_get,.label_set=label_set,.space=space,.net=net,.mixer=mixer,.volume=volume,.processes=processes,.display=display,.launch=launch,.kill=kill,.power=power,.now=now,.pump=pump,.quit=quit};
     du_init(&ui,pixels,TERM_WIDTH,TERM_HEIGHT); assert(!term_attach(&app,&ui,&host)); assert(app.columns==80 && app.rows==25);
-    builtins(); system_commands(); scripting(); lua_and_ui();
     app.host.disktool=disktool;
     command("BACKUP FULL set.cbk one.txt",0,NULL); command("RESTORE set.cbk ORIGINAL OLDER",0,NULL); command("FDISK 1",0,NULL);
     assert(disktool_calls==3);
+    builtins(); system_commands(); scripting(); lua_and_ui();
+    app.host.run=native_run;app.host.registry=native_registry;app.host.network_command=network_command;
+    command("RUN sample \"two words\"",7,"native child output");assert(app.errorlevel==7);
+    command("REG ADD System\\Tools Message STRING \"hello world\"",0,"registry request");
+    command("PING 127.0.0.1",0,"raw ICMP provider");
     /* Deterministic review scene: the production fixed-cell painter, accents,
      * descenders, cursor and selection. Independent of previous command output. */
     term_execute(&app,"CLS"); term_write(&app,"CiukiOS Terminal\nClassic computing, one woof at a time.\nAVATAR To Wa 0123456789 gjpqy\n");

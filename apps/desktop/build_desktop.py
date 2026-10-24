@@ -45,7 +45,7 @@ ACCESSORIES = {
     "solitaire": ["../games/solitaire_main.c", "../games/solitaire_view.c", "../games/solitaire_model.c", "../games/cards.c"],
     "freecell": ["../games/freecell_main.c", "../games/freecell_view.c", "../games/freecell_model.c", "../games/cards.c"],
     # G27 Serial Terminal (HyperTerminal equivalent) on the native COM ports.
-    "serial": ["../serial/serial_main.c", "../serial/serial_view.c", "../serial/serial_model.c", "../serial/screen.c", "../serial/xmodem.c"],
+    "serial": ["../serial/serial_main.c", "../serial/serial_view.c", "../serial/serial_model.c", "../serial/screen.c", "../serial/xmodem.c", "../serial/transfer.c"],
     "hearts": ["../games/hearts_main.c", "../games/hearts_view.c", "../games/hearts_model.c", "../games/cards.c"],
 }
 # G30 system tools (apps/systools): Start > Programs > Accessories > System Tools.
@@ -202,7 +202,7 @@ def build():
     sources["ciuknote"] = ["../ciuknote/main.c", "../ciuknote/app.c", "../ciuknote/doc.c", "../ciuknote/vfs.c"]
     sources["ciukide"] = ["../ciukide/main.c", "../ciukide/app.c", "../ciukide/model.c", "../ciukide/job.c", "../ciukide/process.c",
                           "../ciuknote/doc.c", "../ciuknote/vfs.c"]
-    sources["terminal"] = ["../terminal/main.c", "../terminal/app.c", "../terminal/commands.c", "../terminal/network.c", "../terminal/disktools.c", "../files/backup.c", "../terminal/lua.c", "../files/model.c", "../files/transfer.c", "../files/clipboard.c", "../files/vfs.c", "../tasks/model.c", "../terminal/recovery.c", "../sysrecovery/regcheck.c", "../sysrecovery/sfc.c", "../sysrecovery/scanreport.c", "../../src/kernel/lib/sha256.c"]
+    sources["terminal"] = ["../terminal/main.c", "../terminal/app.c", "../terminal/commands.c", "../terminal/native_commands.c", "../terminal/format.c", "../terminal/network.c", "../terminal/disktools.c", "../files/backup.c", "../terminal/lua.c", "../files/model.c", "../files/transfer.c", "../files/clipboard.c", "../files/vfs.c", "../tasks/model.c", "../terminal/recovery.c", "../sysrecovery/regcheck.c", "../sysrecovery/sfc.c", "../sysrecovery/scanreport.c", "../../src/kernel/lib/sha256.c"]
     sources["hwreport"] = ["../hwreport/main.c", "../hwreport/native.c", "../hwreport/report.c", "../hwreport/archive.c", "../hwreport/textlink.c", "../accessories/acc.c"]
 
     systools = ["../systools/sysinfo.c", "../systools/resmeter.c", "../systools/monitor.c", "../systools/devctl.c", "../systools/sched.c", "../systools/profiles.c",
