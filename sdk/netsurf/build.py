@@ -267,7 +267,8 @@ def libwebp(src, folder, prefix, cc, env, cflags):
     for group in ("DEC_OBJS", "DSP_DEC_OBJS", "UTILS_DEC_OBJS"):
         block = make.split("\n" + group + " = \\\n", 1)[1].split("\n\n", 1)[0]
         files += [src / name.rstrip("\\").strip().replace(".o", ".c") for name in block.split("\n") if name.strip(" \\")]
-    static_archive("webp", files, folder, prefix, cc, env, cflags, [], [src, src / "src"])
+    static_archive("webp", files, folder, prefix, cc, env, cflags,
+                   ["-include", HERE / "port/webp_memory.h"], [ROOT, src, src / "src"])
     (prefix / "include/webp").mkdir(parents=True, exist_ok=True)
     for name in ("decode.h", "types.h"):
         shutil.copy2(src / "src/webp" / name, prefix / "include/webp" / name)

@@ -1322,11 +1322,22 @@ static void row_caption_icon(unsigned m)
     assert(!desk_theme_use("Platinum")); desk_theme_changed(&d); step("Platinum");
     wm_end();
 }
+static void row_browser_clipboard_raster(unsigned m)
+{
+    row_name="browser clipboard and raster";wm_begin(m,1);
+    struct fake_app *browser=app_open("netsurf",400,300,60,70);
+    struct fake_app *other=app_open("ciuknote",220,160,300,130);
+    (void)other;step("browser partly covered");
+    app_paint(browser,8,8,350,24,0x123456);step("system clipboard paste into URL field");
+    app_paint(browser,10,60,380,230,0x00aacc);step("large raster decode completes under another window");
+    app_paint(browser,20,100,120,40,0x00ee44);step("paste into a page form");
+    wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
     row_fullscreen,row_gfx,row_topbar,row_theme,row_strips,row_lease,row_selection,row_drag,
     row_taskbar_menu, row_arrange, row_minimize_all, row_win_keys, row_caption_icon, row_startup,
-    row_move_damaged, row_fault, row_saver};
+    row_move_damaged, row_fault, row_saver, row_browser_clipboard_raster};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).
