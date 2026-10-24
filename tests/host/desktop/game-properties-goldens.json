@@ -1,13 +1,13 @@
 {
-  "game-conflict.xrgb": "5329eacd69477ad10ce32f9d6ab79be40efdeb9f4bb54cb89fa9cb44202011f8",
-  "game-defaults.xrgb": "ff16c4b38164f5ae4b2f641585d151c9188e8f000e012ac6f408f210755a5c02",
-  "game-file.xrgb": "5fed3e9d9205b80851c0514ab79c2222cdb916c08adee760c3e2eb20e67d6a0d",
-  "game-loading.xrgb": "bad74c3da7292b2afe6c05d7e85e73a8a9faa772a140bfee333c39f957240ac9",
-  "game-missing.xrgb": "6a0f927e7d1797b5fd4f1560684695ead86bca18427b4485d4b6dbebd2df951f",
-  "game-raw.xrgb": "05288202676507be0f3a6f463e5cb32bf529f75b6eb49f4cdd54d94bccf6a588",
-  "game-save-error.xrgb": "b17da339d689dffd64d6668dc10c2c3a5958bc306e59dc3f0cf2f861ce58274f",
-  "game-saved.xrgb": "3bfc5f544b01fd8b26db4c64949a7138d29fadf25a714dcb35f2c11424cf0149",
-  "game-second.xrgb": "aa2f6b6ad03ab2a303d81f1eeecd8c2b28a957fed42bcf61487ec735aae74466",
-  "startup-enabled.xrgb": "b93e384f66be3d5516e4427e4902b20238a7557f061983e1f6fe198a8d721e80",
-  "startup-unavailable.xrgb": "ed486dd529497742f7899b33119ff8337555b3fbe78d0a46c6935e424e9fa38c"
+  "game-conflict.xrgb": "e7eeb08164c6b5b1350e13cfe3a99ef1a20df40820607a0e0b6bd56baef8a278",
+  "game-defaults.xrgb": "2c756ee816ca3431c4f999eb7a1983f12e73d0067ce00451f48ce62af51a9d9b",
+  "game-file.xrgb": "0e16cceb126bc8774784a7fea75ac744f2c99775501792a24c6521f998d1bd32",
+  "game-loading.xrgb": "deaa7f295496c358c03deaf884f2405a23aed4e34e0ee63a717041774db25599",
+  "game-missing.xrgb": "3a7786dfb7d51be65f46517e6b6c4a717aa9855ed6dbebbb3cecdc161aa780b3",
+  "game-raw.xrgb": "a6f56dd25354be6319b60aeef98068661467c9817531e7e4862946a17dc2c5ee",
+  "game-save-error.xrgb": "a32d29157bd695be871fd0b1514021a35e0f74cee7a1cb47d4837f80881af7a1",
+  "game-saved.xrgb": "322f81c92b1b400dfb53329826cd2fd9780ef8d5e0d361fcc106e60c18c152d9",
+  "game-second.xrgb": "2b6bfb1b6a7078a6e2d35fdb7b28240ddd89544fe4aabe253a71c414556d8e6d",
+  "startup-enabled.xrgb": "1b91ec599fc26390b2d60b7ce9e623cc06c2eb9bd1ebae4ace4586151f69f032",
+  "startup-unavailable.xrgb": "8091db23631069208c9476407103539f21017983183b7e437be2b6054c6c57d6"
 }

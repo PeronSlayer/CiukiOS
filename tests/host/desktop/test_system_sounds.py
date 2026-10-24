@@ -86,10 +86,10 @@ class SystemSoundsTests(unittest.TestCase):
         self.harness("sounds-control", ["tests/host/desktop/sounds_control_test.c", "apps/control/app.c", "apps/desktop/power_policy.c", "apps/systools/devctl.c", "apps/systools/profiles.c", "apps/control/driver_pack_ui.c", "apps/control/display.c", "apps/desktop/protocol.c", "apps/desktop/sounds.c",
                     "apps/desktop/settings.c", "apps/desktop/wallpaper.c", "apps/desktop/image.c", "apps/control/fonts.c",
                     "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c", *desktop.TOOLKIT], frame)
-        self.assertEqual(frame.stat().st_size, 560*420*4)
-        capture("control-sounds", frame.read_bytes(), 560, 420)
+        self.assertEqual(frame.stat().st_size, 560*436*4)
+        capture("control-sounds", frame.read_bytes(), 560, 436)
         from PIL import Image
-        Image.frombytes("RGB", (560,420), frame.read_bytes(), "raw", "BGRX").save(folder / "f4-12-sounds.png")
+        Image.frombytes("RGB", (560,436), frame.read_bytes(), "raw", "BGRX").save(folder / "f4-12-sounds.png")
         frame.unlink()
 
 if __name__ == "__main__":

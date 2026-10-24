@@ -1,10 +1,10 @@
 {
-  "network-absent": "9d99e8c548b0e200de4e1401abba8fdc907248f602e1f66ad71a6b2b19fe7dba",
-  "network-adapter": "93b33627056389b7e535a2befc1bf7019205e9b681fb8ebba79d83c02c4e62c2",
-  "network-busy": "9b60b9704dfaba5d4dd04fc17a06ac7fcd2b270d145bd62f439b21247f134987",
-  "network-dhcp": "da0e44f795776db17a917cb0d4217b33bf2a402fae7757d3d693dbb559e48421",
-  "network-invalid": "3bd61f2b4100872d0b4b8f786c435b49f39f5315d9792876907e9984edd399ae",
-  "network-static": "508d6dbbe2219fac4f1cb97a65b839f34d07461cde49c5450f072af39f5492d7",
-  "network-status": "3165742fa7f7756cb75a0c04766237a3d37d8c16466b72ef5a3017787f0637d3",
-  "network-test": "dd4b187717748f90208297a04ae052efaf0a8a6bb224be3b466ca48a4e4974df"
+  "network-absent": "78b59b6e446e583fd5cb41dbc926db1b743e592f7f4602ecaa996085efdd6bfd",
+  "network-adapter": "ea5856a053d56b385c027b1cbfaa399323d98d9ba3f1559585e98aa95e4cd595",
+  "network-busy": "16d9524abdc4995a869e80f9e56493870d7d85ea3cdd958bccf65cdf6f95a960",
+  "network-dhcp": "95c80bb7aa4eba4eb2724687e5bbf376e06ca165beb38bb5cc72187363ef865e",
+  "network-invalid": "4394a018561363719ad69b1187cb1f66fe4083baadadf4352869e4975d59f6bb",
+  "network-static": "883c8e75bbea5fffdb5538a2b2b76c4c134ffeffdb7120f76e8563e559da66fc",
+  "network-status": "50b7924535dabf309f73af7aa80f1c9221fc16a6074aa09bd62fd3e2dbf9868d",
+  "network-test": "552e3cf65a2fd911f5bea29e78e31a9fb26909218f07fb14160a4eaf95dabc0e"
 }

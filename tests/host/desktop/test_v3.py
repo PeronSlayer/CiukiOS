@@ -160,7 +160,7 @@ class DesktopV3Tests(unittest.TestCase):
         for theme in ('ciuki-blue', 'platinum'):
             name = theme + '-add-remove'
             data = (out / (name + '.xrgb')).read_bytes()
-            self.assertEqual(len(data), 560 * 420 * 4)
+            self.assertEqual(len(data), 560 * 436 * 4)
             record[name] = hashlib.sha256(data).hexdigest()
-            capture('f5-09-' + name, data, 560, 420)
+            capture('f5-09-' + name, data, 560, 436)
         self.assertEqual(record, json.loads((ROOT / 'tests/host/desktop/v3-control-goldens.json').read_text()))

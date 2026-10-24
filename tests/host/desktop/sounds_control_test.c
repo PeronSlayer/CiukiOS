@@ -78,7 +78,7 @@ int main(int argc,char **argv)
     struct du_widget *schemes = NULL, *ui_volume = NULL;
     for (unsigned i=0;i<u.count;i++) {
         if (u.widgets[i].items==a.scheme_items) schemes=&u.widgets[i];
-        if (u.widgets[i].kind==DU_SCROLLBAR && u.widgets[i].box.x==270) ui_volume=&u.widgets[i];
+        if (u.widgets[i].kind==DU_TRACKBAR && u.widgets[i].box.x==270) ui_volume=&u.widgets[i];
     }
     assert(schemes && ui_volume);
     ev=(struct du_event){.type=DU_EV_SELECT,.id=schemes->id,.index=0};u.event(&u,&ev,u.user);
@@ -120,7 +120,7 @@ int main(int argc,char **argv)
     assert(find(&u,"Preferred recording: system capture device (microphone / line in)"));
     ev=(struct du_event){.type=DU_EV_ACTIVATE,.id=find(&u,"Sound Recorder")->id};u.event(&u,&ev,u.user);assert(mm_open==2);
     struct du_widget *cd_slider=NULL;
-    for (unsigned i=0;i<u.count;i++) if (u.widgets[i].kind==DU_SCROLLBAR) cd_slider=&u.widgets[i];
+    for (unsigned i=0;i<u.count;i++) if (u.widgets[i].kind==DU_TRACKBAR) cd_slider=&u.widgets[i];
     assert(cd_slider && !cd_slider->disabled && cd_slider->value==75);
     cd_slider->value=40; ev=(struct du_event){.type=DU_EV_CHANGE,.id=cd_slider->id};u.event(&u,&ev,u.user);assert(cd_volume==40);
     cp_detach(&a);puts("PASS Sounds page: events/assignments, preview, hardware request, enable persistence/failure, render");

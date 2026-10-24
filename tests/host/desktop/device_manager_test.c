@@ -142,7 +142,7 @@ int main(int argc, char **argv)
             if (!app.applet_items[row].icon16) fprintf(stderr,"missing applet icon: page=%d label=%s\n",page,app.applet_items[row].text[0]);
             assert(app.applet_items[row].icon16);
             du_focus(&ui,kind(DU_LISTVIEW)->id); at_tap(&ui,DU_KEY_HOME);
-            for (unsigned k=0;k<row;k++) at_tap(&ui,DU_KEY_DOWN);
+            for (unsigned k=0;k<row;k++) at_tap(&ui,DU_KEY_RIGHT);   /* the applets are large icons: Right steps one icon */
             at_tap(&ui,DU_KEY_ENTER); assert(app.page==page);
             char name[64]; snprintf(name,sizeof(name),"control-%s",page_files[page]); render(renders,name);
             assert(ui.count<DU_WIDGETS); click("Control Panel"); assert(app.page==CP_HOME);

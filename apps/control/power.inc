@@ -79,7 +79,7 @@ static void pw_alarm_widgets(struct cp_app *a, const struct pp_alarm *m, int bas
 {
     struct du_widget *w = add(a, DU_GROUP, base, 16, y, CP_WIDTH - 32, 150, title); w->anchors = DU_ANCHOR_GROW_X;
     w = add(a, DU_CHECKBOX, base + 1, 28, y + 16, 500, 22, check); w->value = m->enabled;
-    w = add(a, DU_SCROLLBAR, base + 2, 28, y + 44, 300, 18, ""); w->vertical = 0; w->total = 101; w->page = 1; w->value = m->level;
+    w = slider(a, base + 2, 28, y + 40, 300, 100, 0); w->value = m->level;
     w->disabled = !m->enabled;
     char v[16]; snprintf(v, sizeof(v), "%d%%", m->level);
     add(a, DU_LABEL, base + 3, 340, y + 46, 60, 16, v);

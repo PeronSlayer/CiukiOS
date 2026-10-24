@@ -58,6 +58,15 @@ int cp_page_index(const char *name)
 }
 static struct du_widget *add(struct cp_app *a, enum du_kind k, int id, int x, int y, int w, int h, const char *text)
 { return du_add(a->ui, k, id, (struct du_rect){x, y, w, h}, text); }
+/* Win98 trackbar for a value slider: 0..hi with a notched thumb; tick > 0 draws tick marks every tick units.
+ * A scrollbar of total/page 1 covered 0..total-1, so callers pass hi = total - 1. PgUp/PgDn move big units. */
+static struct du_widget *slider(struct cp_app *a, int id, int x, int y, int w, int hi, int tick)
+{
+    struct du_widget *s = add(a, DU_TRACKBAR, id, x, y, w, tick > 0 ? 30 : 26, "");
+    int big = hi / 8; if (big < 1) big = 1;
+    du_trackbar_set(s, 0, hi, 0, 1, big, tick);
+    return s;
+}
 static void text(struct cp_app *a, int id, const char *s)
 { struct du_widget *w = du_get(a->ui, id); if (w && strcmp(w->text,s)) { du_set_text(w,s); du_invalidate(a->ui,w->box); } }
 #include "datetime.inc"   /* G1: Date/Time Properties */
@@ -751,10 +760,10 @@ static void appearance_build(struct cp_app *a)
         add(a,DU_EDIT,A_COLOUR+i,352,138+i*26,170,24,value);
     }
     snprintf(value,sizeof(value),"Size: %u pixels",v->size); add(a,DU_LABEL,4196,244,222,278,18,value);
-    w=add(a,DU_SCROLLBAR,A_SIZE,244,244,278,18,""); w->vertical=0; w->total=ap_size_max(a->appearance_item)-ap_size_min(a->appearance_item)+1; w->page=1; w->value=v->size-ap_size_min(a->appearance_item);
+    w=slider(a,A_SIZE,244,242,278,ap_size_max(a->appearance_item)-ap_size_min(a->appearance_item),0); w->value=v->size-ap_size_min(a->appearance_item);
     snprintf(value,sizeof(value),"Font: %s",desk_font(v->font)->name); add(a,DU_BUTTON,A_FONT,244,270,278,24,value);
     snprintf(value,sizeof(value),"Point size: %u",v->points); add(a,DU_LABEL,4197,244,300,278,16,value);
-    w=add(a,DU_SCROLLBAR,A_POINTS,244,320,140,18,""); w->vertical=0; w->total=31; w->page=1; w->value=v->points-6;
+    w=slider(a,A_POINTS,244,316,140,30,0); w->value=v->points-6;
     add(a,DU_BUTTON,A_BOLD,390,316,64,24,(v->style&1) ? "Bold: On" : "Bold");
     add(a,DU_BUTTON,A_ITALIC,458,316,64,24,(v->style&2) ? "Italic: On" : "Italic");
     (void)u;
@@ -866,8 +875,8 @@ static void advanced_open(struct cp_app *a)
     du_property_control(a->ui,4,DU_LABEL,4150,(struct du_rect){24,42,440,20},"Font size:");
     du_property_control(a->ui,5,DU_BUTTON,A_SMALL,(struct du_rect){24,70,204,26},"Small Fonts (96 dpi)");
     du_property_control(a->ui,6,DU_BUTTON,A_LARGE,(struct du_rect){244,70,224,26},"Large Fonts (120 dpi)");
-    struct du_widget *w=du_property_control(a->ui,7,DU_SCROLLBAR,A_DPI,(struct du_rect){24,112,444,20},"");
-    w->vertical=0; w->total=193; w->page=1; w->value=a->cfg.appearance.dpi-48;
+    struct du_widget *w=du_property_control(a->ui,7,DU_TRACKBAR,A_DPI,(struct du_rect){24,106,444,30},"");
+    du_trackbar_set(w,0,192,a->cfg.appearance.dpi-48,1,24,24);
     char label[64]; snprintf(label,sizeof(label),"Custom font size: %u dpi",a->cfg.appearance.dpi);
     du_property_control(a->ui,8,DU_LABEL,4151,(struct du_rect){24,142,444,20},label);
     du_property_control(a->ui,9,DU_LABEL,4152,(struct du_rect){24,170,444,20},"Reopen windows after applying the new font size.");
@@ -1835,6 +1844,23 @@ static const char *uninstall_icon(const struct desk_uninstall_entry *r)
     if (r->kind==DESK_PROGRAM_DOS) return du_icon_name("program:dosbox");
     return du_icon_name("type:executable");
 }
+/* A single-page applet used to wear a one-tab strip repeating the window title. Win98 property sheets put the
+ * tabs directly on the dialog and a page without siblings has none: hide the strip and lift the body into it. */
+static void flatten_page(struct cp_app *a)
+{
+    struct du_ui *u = a->ui;
+    struct du_widget *t = du_get(u, C_TABS);
+    if (!t || t->kind != DU_TABS || t->count != 1 || t->items != a->tab_items || t->items[0].text[0] != page_labels[a->page]) return;
+    int shift = DU_TAB_H - 1, top = t->box.y + shift, bottom = t->box.y + t->box.h;
+    for (unsigned k = 0; k < u->count; k++) {
+        struct du_widget *v = &u->widgets[k];
+        if (v == t || v->box.y < top || v->box.y + v->box.h > bottom) continue;
+        if ((v->anchors & DU_ANCHOR_BOTTOM) && !(v->anchors & DU_ANCHOR_TOP)) continue;
+        v->box.y -= shift;
+        if ((v->anchors & DU_ANCHOR_GROW_Y) == DU_ANCHOR_GROW_Y) v->box.h += shift;
+    }
+    t->hidden = 1;
+}
 static void build(struct cp_app *a)
 {
     a->building=1;
@@ -1844,27 +1870,28 @@ static void build(struct cp_app *a)
     u->count = 0; u->focus = -1;
     struct du_widget *w;
     if (a->page == CP_HOME) {
-        add(a, DU_LABEL, C_TABS, 12, 12, 476, 16, "Control Panel");
         for (int k=0;k<CP_CATEGORIES;k++) {
             a->category_items[k]=(struct du_item){.text={cp_categories[k].label},
                 .icon16=du_icon_argb(du_icon_name(cp_categories[k].icon),16),.selected=k==a->category};
         }
-        w=add(a,DU_TREE,CP_CATEGORY,8,36,182,CP_HEIGHT-96,"");
+        w=add(a,DU_TREE,CP_CATEGORY,8,8,182,CP_HEIGHT-36,"");
         w->items=a->category_items; w->count=CP_CATEGORIES; w->active=(unsigned)a->category;
         w->inactive_selection=1; w->anchors=DU_ANCHOR_GROW_Y;
         unsigned count=0;
         for (unsigned k=0;k<CP_APPLETS;k++) if (cp_applets[k].category==a->category) {
             a->applet_pages[count]=cp_applets[k].page;
             a->applet_items[count++]=(struct du_item){.text={cp_applets[k].label},
-                .icon16=du_icon_argb(du_icon_name(cp_applets[k].icon),16)};
+                .icon16=du_icon_argb(du_icon_name(cp_applets[k].icon),16),
+                .icon32=du_icon_argb(du_icon_name(cp_applets[k].icon),32)};
         }
-        w=add(a,DU_LISTVIEW,C_APPLETS,198,36,CP_WIDTH-206,CP_HEIGHT-96,"");
-        w->items=a->applet_items; w->count=count; w->view=DU_DETAILS;
-        w->column_count=1; w->columns[0]=(struct du_column){cp_categories[a->category].label,CP_WIDTH-230,0};
+        /* A Win98 Control Panel is a folder window: the applets are large icons, the status bar counts them. */
+        w=add(a,DU_LISTVIEW,C_APPLETS,198,8,CP_WIDTH-206,CP_HEIGHT-36,"");
+        w->items=a->applet_items; w->count=count; w->view=DU_ICONS;
         w->anchors=DU_ANCHOR_GROW_X|DU_ANCHOR_GROW_Y;
+        snprintf(a->status,sizeof(a->status),"%u object(s)",count);
     } else {
         a->tab_items[0].text[0] = page_labels[a->page];
-        w = add(a, DU_TABS, C_TABS, 8, 8, CP_WIDTH - 16, CP_HEIGHT - 64, "");
+        w = add(a, DU_TABS, C_TABS, 8, 8, CP_WIDTH - 16, CP_HEIGHT - 80, "");
         w->items = a->tab_items; w->count = 1;
         w->anchors = DU_ANCHOR_GROW_X | DU_ANCHOR_GROW_Y;
         add(a, DU_BUTTON, C_BACK, 12, CP_HEIGHT - 34, 110, 24, "Control Panel")->anchors = DU_ANCHOR_BOTTOM;
@@ -1874,9 +1901,9 @@ static void build(struct cp_app *a)
         du_get(u,CP_OK)->def=1;
         add(a,DU_BUTTON,CP_CANCEL,CP_WIDTH-184,CP_HEIGHT-34,80,24,"Cancel")->anchors=DU_ANCHOR_RIGHT|DU_ANCHOR_BOTTOM;
         add(a,DU_BUTTON,CP_APPLY,CP_WIDTH-96,CP_HEIGHT-34,88,24,"Apply")->anchors=DU_ANCHOR_RIGHT|DU_ANCHOR_BOTTOM;
-    } else add(a, DU_BUTTON, C_CLOSE, CP_WIDTH - 88, CP_HEIGHT - 34, 80, 24, "Close")->anchors = DU_ANCHOR_RIGHT | DU_ANCHOR_BOTTOM;
-    add(a, DU_LABEL, C_STATUS, 12, CP_HEIGHT - 52, 476, 16, a->status)->anchors = DU_ANCHOR_GROW_X | DU_ANCHOR_BOTTOM;
-    if (a->page == CP_HOME) text(a, C_STATUS, "Open an applet to change its settings.");
+    } else if (a->page != CP_HOME) add(a, DU_BUTTON, C_CLOSE, CP_WIDTH - 88, CP_HEIGHT - 34, 80, 24, "Close")->anchors = DU_ANCHOR_RIGHT | DU_ANCHOR_BOTTOM;
+    if (a->page == CP_HOME) add(a, DU_STATUS, C_STATUS, 0, CP_HEIGHT - 20, CP_WIDTH, 20, a->status)->anchors = DU_ANCHOR_GROW_X | DU_ANCHOR_BOTTOM;
+    else add(a, DU_LABEL, C_STATUS, 12, CP_HEIGHT - 62, 476, 16, a->status)->anchors = DU_ANCHOR_GROW_X | DU_ANCHOR_BOTTOM;
     if (user_page(a)) {
         user_build(a);
     } else if (a->page == CP_DISPLAY) {
@@ -1906,9 +1933,8 @@ static void build(struct cp_app *a)
             static const char *const rgb_names[]={"Red", "Green", "Blue"};
             uint32_t colour=a->cfg.desktop_color;
             for (unsigned k=0;k<3;k++) {
-                add(a,DU_LABEL,4010+(int)k,248,258+(int)k*25,44,16,rgb_names[k]);
-                w=add(a,DU_SCROLLBAR,rgb_ids[k],292,256+(int)k*25,CP_WIDTH-316,18,"");
-                w->vertical=0; w->total=256; w->page=1;
+                add(a,DU_LABEL,4010+(int)k,248,261+(int)k*26,44,16,rgb_names[k]);
+                w=slider(a,rgb_ids[k],292,256+(int)k*26,CP_WIDTH-316,255,0);
                 w->value=(int)((colour>>(16-k*8))&255u);
             }
         } else if (a->display_tab==CP_APPEARANCE) {
@@ -1923,7 +1949,7 @@ static void build(struct cp_app *a)
             }
             add(a,DU_BUTTON,A_DOC_ICON,24,244,490,30,a->cfg.document_icon ? "Documents icon: Folder" : "Documents icon: Home");
             add(a,DU_BUTTON,A_BIN_ICON,24,286,490,30,a->cfg.recycle_icon ? "Recycle Bin icon: Delete" : "Recycle Bin icon: Trash");
-            add(a,DU_LABEL,4189,24,330,490,18,"Computer and About use the approved Ciuki portrait.");
+            add(a,DU_LABEL,4189,24,338,490,18,"Computer and About use the approved Ciuki portrait.");
         } else if (a->display_tab==CP_SCREEN_SAVER) {
             static const char *const names[]={"(None)","Blank","Ciuki logo","Starfield"};
             int choice=a->cfg.saver_enabled ? a->cfg.saver_kind+1 : 0;
@@ -1959,7 +1985,7 @@ static void build(struct cp_app *a)
             add(a,DU_BUTTON,A_LARGE,142,306,112,24,"Large (120 dpi)");
             char dpi[64]; snprintf(dpi,sizeof(dpi),"Custom: %u dpi",a->cfg.appearance.dpi);
             add(a,DU_LABEL,4198,272,286,240,18,dpi);
-            w=add(a,DU_SCROLLBAR,A_DPI,272,310,240,18,""); w->vertical=0; w->total=193; w->page=1; w->value=a->cfg.appearance.dpi-48;
+            w=slider(a,A_DPI,272,308,240,192,0); w->value=a->cfg.appearance.dpi-48;
             add(a,DU_BUTTON,CP_REFRESH,24,342,88,24,"Refresh");
             add(a,DU_BUTTON,4133,400,342,112,24,"Advanced...");
             if(a->host.accel_retry){
@@ -1976,19 +2002,19 @@ static void build(struct cp_app *a)
     } else if (a->page == CP_MOUSE) {
     /* Mouse */
     add(a, DU_LABEL, C_SPEED_L, 24, 44, 200, 14, "Pointer &speed:");
-    w = add(a, DU_SCROLLBAR, C_SPEED, 24, 62, 300, 17, ""); w->vertical = 0; w->total = CFG_MOUSE_MAX - CFG_MOUSE_MIN + 1; w->page = 1;
-    add(a, DU_LABEL, C_SPEED_V, 336, 62, 140, 17, "");
-    add(a, DU_LABEL, C_SLOW, 24, 82, 60, 14, "Slow");
-    add(a, DU_LABEL, C_FAST, 300, 82, 40, 14, "Fast");
+    slider(a, C_SPEED, 24, 56, 300, CFG_MOUSE_MAX - CFG_MOUSE_MIN, 1);
+    add(a, DU_LABEL, C_SPEED_V, 336, 60, 140, 17, "");
+    add(a, DU_LABEL, C_SLOW, 24, 86, 60, 14, "Slow");
+    add(a, DU_LABEL, C_FAST, 294, 86, 40, 14, "Fast");
     add(a, DU_LABEL, C_DBL_L, 24, 116, 200, 14, "&Double-click speed:");
-    w = add(a, DU_SCROLLBAR, C_DBL, 24, 134, 300, 17, ""); w->vertical = 0; w->total = 8; w->page = 1;
-    add(a, DU_LABEL, C_DBL_V, 336, 134, 140, 17, "");
+    slider(a, C_DBL, 24, 128, 300, 7, 1);
+    add(a, DU_LABEL, C_DBL_V, 336, 132, 140, 17, "");
     add(a,DU_CHECKBOX,C_SWAP,24,168,240,22,"Swap left and right buttons");
     add(a,DU_BUTTON,C_DOUBLE_TEST,288,166,220,24,"Double click here to test");
     add(a,DU_LABEL,1510,24,202,160,14,"Pointer trails (0/1 = off):");
-    w=add(a,DU_SCROLLBAR,C_TRAILS,200,200,300,17,"");w->total=8;w->page=1;w->vertical=0;
+    slider(a,C_TRAILS,200,194,300,7,1);
     add(a,DU_LABEL,1511,24,234,170,14,"Wheel lines (101 = page):");
-    w=add(a,DU_SCROLLBAR,C_WHEEL,200,232,300,17,"");w->total=102;w->page=1;w->vertical=0;
+    slider(a,C_WHEEL,200,229,300,101,0);
     add(a,DU_BUTTON,C_POINTER,24,272,300,24,"");
     } else if (a->page == CP_KEYBOARD) {
     /* Keyboard */
@@ -1997,13 +2023,15 @@ static void build(struct cp_app *a)
     w = add(a, DU_LISTVIEW, C_KEY, 24, 60, 220, 56, ""); w->items = a->key_items; w->count = CFG_KEYS_COUNT; list_style(w, "Layout");
     add(a,DU_CHECKBOX,C_LAYOUT_SWITCH,264,62,270,42,"Left Alt+Shift / language indicator");
     add(a,DU_LABEL,1512,24,134,190,14,"Repeat delay (short to long):");
-    w=add(a,DU_SCROLLBAR,C_REPEAT_DELAY,224,132,280,17,"");w->total=4;w->page=1;w->vertical=0;
+    slider(a,C_REPEAT_DELAY,224,128,280,3,1);
     add(a,DU_LABEL,1513,24,174,190,14,"Repeat rate (slow to fast):");
-    w=add(a,DU_SCROLLBAR,C_REPEAT_SPEED,224,172,280,17,"");w->total=32;w->page=1;w->vertical=0;
+    slider(a,C_REPEAT_SPEED,224,168,280,31,0);
     add(a,DU_LABEL,1514,24,214,190,14,"Cursor blink (0 = steady):");
-    w=add(a,DU_SCROLLBAR,C_BLINK,224,212,280,17,"");w->total=13;w->page=1;w->vertical=0;
+    slider(a,C_BLINK,224,206,280,12,1);
     add(a,DU_LABEL,C_KEY_NOTE1,24,258,480,14,"Italian: Shift+^, then a vowel; Space inserts the accent.");
     add(a,DU_EDIT,1515,24,284,480,24,"Type here to test repeat and blink");
+    add(a, DU_LABEL, C_KEY_NOTE2, 24, 318, 480, 14, "The Run dialog uses the new layout at once; programs started");
+    add(a, DU_LABEL, 1516, 24, 332, 480, 14, "afterwards receive it in CIUKI_KEYMAP.");
     } else if (a->page == CP_MULTIMEDIA) {
         struct ciuki_audio_diagnostics diag={0};
         struct ciuki_audio_capture cap={.version=1,.size=sizeof(cap)};
@@ -2025,43 +2053,42 @@ static void build(struct cp_app *a)
         add(a,DU_LABEL,1809,28,268,110,20,"CD volume:");
         struct ciuki_mixer_line cd={.version=1,.size=sizeof(cd),.line=CIUKI_MIXER_CD};
         int cd_ok=a->host.audio_line && !a->host.audio_line(a->host.ctx,&cd,0) && cd.available;
-        struct du_widget *cd_slider=add(a,DU_SCROLLBAR,C_MM_CD,150,268,300,18,"");
-        cd_slider->total=110; cd_slider->page=10; cd_slider->value=(int)((cd.left+cd.right)/2); cd_slider->disabled=!cd_ok;
+        struct du_widget *cd_slider=slider(a,C_MM_CD,150,262,300,100,0);
+        du_trackbar_set(cd_slider,0,100,0,1,10,0); cd_slider->value=(int)((cd.left+cd.right)/2); cd_slider->disabled=!cd_ok;
         add(a,DU_BUTTON,C_MM_VOLUME,24,306,152,26,"Volume Control");
         add(a,DU_BUTTON,C_MM_RECORDER,190,306,152,26,"Sound Recorder");
         add(a,DU_BUTTON,C_MM_MUSIC,356,306,152,26,"Music Player");
-    add(a, DU_LABEL, C_KEY_NOTE1, 24, 126, 452, 14, "The Run dialog uses the new layout at once; programs started");
-    add(a, DU_LABEL, C_KEY_NOTE2, 24, 140, 452, 14, "afterwards receive it in CIUKI_KEYMAP.");
     } else if (a->page == CP_TASKBAR) {
     a->taskbar_tabs[0]=(struct du_item){.text={"Taskbar Options"},.selected=!a->taskbar_tab};
     a->taskbar_tabs[1]=(struct du_item){.text={"Start Menu Programs"},.selected=a->taskbar_tab==1};
-    w=add(a,DU_TABS,CP_TASKBAR_TABS,16,40,CP_WIDTH-32,32,"");w->items=a->taskbar_tabs;w->count=2;w->active=(unsigned)a->taskbar_tab;
+    /* The two tabs sit directly on the sheet (the page already owns the outer tab control). */
+    w=du_get(u,C_TABS);w->id=CP_TASKBAR_TABS;w->items=a->taskbar_tabs;w->count=2;w->active=(unsigned)a->taskbar_tab;
     if (!a->taskbar_tab) {
-        add(a,DU_CHECKBOX,C_TASKBAR_TOP,24,84,452,24,"Always on top");
-        add(a,DU_CHECKBOX,C_TASKBAR_AUTOHIDE,24,116,452,24,"Auto hide");
-        add(a,DU_CHECKBOX,C_START_SMALL,24,148,452,24,"Show small icons in Start menu");
-        add(a,DU_CHECKBOX,C_TASKBAR_CLOCK,24,180,452,24,"Show clock");
-        add(a,DU_CHECKBOX,C_QUICK_LAUNCH,24,212,452,24,"Show Quick Launch");
+        add(a,DU_CHECKBOX,C_TASKBAR_TOP,24,48,452,24,"Always on top");
+        add(a,DU_CHECKBOX,C_TASKBAR_AUTOHIDE,24,80,452,24,"Auto hide");
+        add(a,DU_CHECKBOX,C_START_SMALL,24,112,452,24,"Show small icons in Start menu");
+        add(a,DU_CHECKBOX,C_TASKBAR_CLOCK,24,144,452,24,"Show clock");
+        add(a,DU_CHECKBOX,C_QUICK_LAUNCH,24,176,452,24,"Show Quick Launch");
     } else {
-        add(a,DU_LABEL,1978,24,80,CP_WIDTH-48,18,"Customize the Programs menu:");
-        add(a,DU_BUTTON,CP_START_ADD,24,106,88,24,"Add...");
-        add(a,DU_BUTTON,CP_START_REMOVE,120,106,88,24,"Remove...");
-        add(a,DU_BUTTON,CP_START_ADVANCED,216,106,100,24,"Advanced...");
+        add(a,DU_LABEL,1978,24,44,CP_WIDTH-48,18,"Customize the Programs menu:");
+        add(a,DU_BUTTON,CP_START_ADD,24,70,88,24,"Add...");
+        add(a,DU_BUTTON,CP_START_REMOVE,120,70,88,24,"Remove...");
+        add(a,DU_BUTTON,CP_START_ADVANCED,216,70,100,24,"Advanced...");
         if (a->menu_selected>=a->menu.count) a->menu_selected=0;
         for (unsigned k=0;k<a->menu.count;k++) a->menu_items[k]=(struct du_item){.text={a->menu.entries[k].label,a->menu.entries[k].path},.selected=k==a->menu_selected};
-        w=add(a,DU_LISTVIEW,CP_START_LIST,24,142,CP_WIDTH-48,124,"");w->items=a->menu_items;w->count=a->menu.count;w->active=a->menu_selected;list_style(w,"Shortcut");
+        w=add(a,DU_LISTVIEW,CP_START_LIST,24,106,CP_WIDTH-48,124,"");w->items=a->menu_items;w->count=a->menu.count;w->active=a->menu_selected;list_style(w,"Shortcut");
         w->column_count=2;w->columns[0]=(struct du_column){"Shortcut",160,0};w->columns[1]=(struct du_column){"Location",CP_WIDTH-224,0};
-        add(a,DU_LABEL,1979,24,282,CP_WIDTH-48,18,"Documents menu - clear the list of recently opened documents:");
-        add(a,DU_BUTTON,CP_START_CLEAR,24,308,88,24,"Clear");
+        add(a,DU_LABEL,1979,24,246,CP_WIDTH-48,18,"Documents menu - clear the list of recently opened documents:");
+        add(a,DU_BUTTON,CP_START_CLEAR,24,272,88,24,"Clear");
     }
     } else if (a->page == CP_SOUNDS) {
     /* Sounds */
     add(a, DU_LABEL, C_VOL_L, 24, 44, 180, 14, "Master &volume:");
-    w = add(a, DU_SCROLLBAR, C_VOL, 24, 62, 160, 17, ""); w->vertical = 0; w->total = 101; w->page = 1;
-    add(a, DU_LABEL, C_VOL_V, 194, 62, 48, 17, "");
+    slider(a, C_VOL, 24, 56, 160, 100, 10);
+    add(a, DU_LABEL, C_VOL_V, 194, 60, 48, 17, "");
     add(a, DU_LABEL, 898, 270, 44, 180, 14, "UI sounds volume:");
-    w = add(a, DU_SCROLLBAR, C_UI_VOL, 270, 62, 150, 17, ""); w->vertical = 0; w->total = 101; w->page = 1;
-    add(a, DU_LABEL, C_UI_VOL_V, 430, 62, 46, 17, "");
+    slider(a, C_UI_VOL, 270, 56, 150, 100, 10);
+    add(a, DU_LABEL, C_UI_VOL_V, 430, 60, 46, 17, "");
     add(a, DU_BUTTON, C_MUTE, 24, 88, 140, 24, "");
     add(a, DU_CHECKBOX, C_SOUND_ENABLED, 184, 88, 290, 24, "Play system sounds");
     static const char *const schemes[] = {"Default", "No sounds", "Custom"};
@@ -2158,6 +2185,7 @@ static void build(struct cp_app *a)
     }
     if (a->page == CP_SYSTEM && a->system_tab!=6) cp_display_refresh(a);
     cp_tick(a); sync(a);
+    flatten_page(a);
     /* Honor the current surface when returning from an applet after a resize. */
     int dx = u->canvas.width - CP_WIDTH, dy = u->canvas.height - CP_HEIGHT;
     for (unsigned k = 0; k < u->count; k++) {

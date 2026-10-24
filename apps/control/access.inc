@@ -55,8 +55,9 @@ static struct du_widget *ac_check(struct cp_app *a, int id, int x, int y, int w,
 }
 static struct du_widget *ac_slider(struct cp_app *a, int id, int x, int y, int w, unsigned steps, unsigned value)
 {
-    struct du_widget *s = add(a, DU_SCROLLBAR, id, x, y, w, 17, "");
-    s->vertical = 0; s->total = (int)steps; s->page = 1; s->value = (int)value;
+    /* Win98 trackbar; the rows sit 22 px apart, so the box is 22 high (thumb 21) and centred on the 17 px row. */
+    struct du_widget *s = add(a, DU_TRACKBAR, id, x, y - 3, w, 22, "");
+    du_trackbar_set(s, 0, (int)steps - 1, (int)value, 1, 1, 0);
     return s;
 }
 static void ac_seconds(struct cp_app *a, int id, unsigned ms)
@@ -116,8 +117,8 @@ static void ac_note(struct cp_app *a, int id, int x, int y, int w, const char *s
 }
 static void ac_ok_cancel(struct cp_app *a)
 {
-    struct du_widget *w = add(a, DU_BUTTON, C_AC_OK, CP_WIDTH - 196, CP_HEIGHT - 94, 84, 24, "OK"); w->def = 1;
-    add(a, DU_BUTTON, C_AC_CANCEL, CP_WIDTH - 104, CP_HEIGHT - 94, 84, 24, "Cancel");
+    struct du_widget *w = add(a, DU_BUTTON, C_AC_OK, CP_WIDTH - 196, CP_HEIGHT - 110, 84, 24, "OK"); w->def = 1;
+    add(a, DU_BUTTON, C_AC_CANCEL, CP_WIDTH - 104, CP_HEIGHT - 110, 84, 24, "Cancel");
 }
 static void ac_hotkey_block(struct cp_app *a, int y, unsigned flags, const char *hotkey)
 {

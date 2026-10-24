@@ -411,10 +411,10 @@ class FontTests(unittest.TestCase):
         frame = self.folder / "fonts.xrgb"
         result = subprocess.run([binary, FONTS, frame], check=True, capture_output=True, text=True, env=self.env)
         self.assertIn("PASS control fonts", result.stdout)
-        self.assertEqual(frame.stat().st_size, 560 * 420 * 4)
-        capture("control-fonts", frame.read_bytes(), 560, 420)
+        self.assertEqual(frame.stat().st_size, 560 * 436 * 4)
+        capture("control-fonts", frame.read_bytes(), 560, 436)
         from PIL import Image
-        Image.frombytes("RGB", (560, 420), frame.read_bytes(), "raw", "BGRX").save(ROOT / "build/host/f2-63/control-fonts.png")
+        Image.frombytes("RGB", (560, 436), frame.read_bytes(), "raw", "BGRX").save(ROOT / "build/host/f2-63/control-fonts.png")
 
     def test_host_benchmark(self):
         binary = self.folder / "benchmark"
