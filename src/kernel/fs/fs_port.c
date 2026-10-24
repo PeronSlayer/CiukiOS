@@ -205,6 +205,11 @@ static uint8_t rtc_read(void *ctx, uint8_t reg)
 }
 uint8_t fs_floppy_cmos_types(void)
 { rtc_begin(0); uint8_t types=rtc_read(0,0x10); rtc_end(0); return types; }
+/* fx-26: one byte of the standard 128-byte CMOS bank (the ThinkPad EC
+ * driver's NVRAM key watch reads 60h every 100 ms); read only, same short
+ * irq-save section as a calendar sample. */
+uint8_t fs_cmos_read(uint8_t reg)
+{ rtc_begin(0); uint8_t value=rtc_read(0,reg&0x7f); rtc_end(0); return value; }
 static void rtc_write(void *ctx,uint8_t reg,uint8_t value)
 { (void)ctx; outb(0x70,rtc_nmi_shadow|reg); outb(0x71,value); }
 static uint32_t rtc_now(void *ctx) { (void)ctx; return fs_now_ms(); }

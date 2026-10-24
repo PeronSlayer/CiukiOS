@@ -54,7 +54,7 @@ int cp_program_contains(const char *directory,const char *target)
 }
 static int system_path(const char *location)
 {
-    static const char *const names[]={"desktop","shell-launch","demo","gfxdemo","dosbox","files","tasks","ciuknote","ciukide","control","terminal","regedit","hwreport","calc","charmap","clock","help","mixer","music","paint","viewer","lua"};
+    static const char *const names[]={"desktop","shell-launch","demo","gfxdemo","dosbox","files","tasks","ciuknote","ciukide","control","terminal","regedit","hwreport","logview","calc","charmap","clock","help","mixer","music","paint","viewer","lua"};
     if(cp_program_contains("/System",location) || cp_program_contains("/Windows",location))return 1;
     for(unsigned i=0;i<sizeof(names)/sizeof(*names);i++){
         char p[80];snprintf(p,sizeof(p),"/Programs/%s",names[i]);

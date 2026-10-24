@@ -21,9 +21,19 @@ class DiagnosticTests(unittest.TestCase):
             '-include',str(ROOT/'tests/host/desktop/replay_base.h'),
             '-fsanitize=address,undefined','-I'+str(ROOT/'src/kernel/include'),
             str(ROOT/'tests/host/win32/diagnostics/crash_file_test.c'),str(ROOT/'apps/desktop/win32_crash.c'),'-o',str(program)],check=True)
-        with tempfile.TemporaryDirectory(dir=out) as temp:
-            result=subprocess.run([program,temp],capture_output=True,text=True,env=dict(os.environ,ASAN_OPTIONS='detect_leaks=0'))
+        with tempfile.TemporaryDirectory(dir=out) as temp, tempfile.TemporaryDirectory(dir=out) as native:
+            result=subprocess.run([program,temp,native],capture_output=True,text=True,env=dict(os.environ,ASAN_OPTIONS='detect_leaks=0'))
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            self.assertIn('PASS native crash text rotation',result.stdout)
+            files=sorted(Path(native).iterdir());self.assertEqual(len(files),8)
+            texts=[f.read_text() for f in files]
+            self.assertEqual(sorted(int(t.splitlines()[0].split('=')[1]) for t in texts),list(range(3,11)))
+            newest=max(texts,key=lambda t:int(t.splitlines()[0].split('=')[1]))
+            self.assertIn('Executable: crasher',newest);self.assertIn('PID: 109 TID: 9',newest)
+            self.assertIn('Page fault: write of unmapped address 00000010',newest)
+            self.assertIn('Exception: 0E, error code 000006',newest);self.assertIn('EIP: 00401234',newest)
+            self.assertIn('ESP: BFFFFFF0',newest);self.assertEqual(newest.split('Stack:')[1].split(),['DEADBEEF','01020304']+['????????']*6)
+            for f in files:self.assertLessEqual(f.stat().st_size,2048)
             files=sorted(Path(temp).iterdir());self.assertEqual(len(files),8)
             sequences=[]
             for file in files:

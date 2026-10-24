@@ -271,6 +271,7 @@ static void enter_handler(struct proc_thread *t, struct trap_frame *tf, const st
         task_exit(t->process->raw_exit);
 }
 
+extern void native_fault_report(struct proc_thread *, const struct trap_frame *, uint32_t) __attribute__((weak));
 void proc_signal_fault(struct trap_frame *tf, uint32_t cr2)
 {
     struct proc_thread *t = proc_thread_for(g_current);
@@ -283,8 +284,11 @@ void proc_signal_fault(struct trap_frame *tf, uint32_t cr2)
     p->fault_address = info.fault_addr;
     p->raw_exit = EXIT_FAULT_BASE + (int)tf->vector;
     if (p->state != PROC_LIVE || t->in_handler || (t->mask & CIUKI_SIGBIT(info.signo)) ||
-        p->actions[info.signo].handler <= SIG_IGN)
+        p->actions[info.signo].handler <= SIG_IGN) {
+        /* G13: the user is told (illegal-operation dialog, crash file). */
+        if (p->state == PROC_LIVE && native_fault_report) native_fault_report(t, tf, info.fault_addr);
         proc_signal_die(t, (uint32_t)info.signo);
+    }
     enter_handler(t, tf, &info);
 }
 

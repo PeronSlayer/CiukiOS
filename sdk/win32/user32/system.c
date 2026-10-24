@@ -126,8 +126,8 @@ static void logfont(uint8_t *out, BOOL bold) {
   out[27] = 0x22;
   w32_copy(out + 28, "MS Sans Serif", 14);
 }
-/* SystemParametersInfo state is process-global for every GUI thread and
- * never persisted: SPIF_UPDATEINIFILE is accepted without writing native
+/* Except for the shared G10 saver path below, SPI state is process-global
+ * for every GUI thread and never persisted: SPIF_UPDATEINIFILE is accepted without writing native
  * desktop settings; SPIF_SENDCHANGE notifies this process's top-level windows
  * with WM_SETTINGCHANGE (wParam = action). Each setter follows the argument
  * convention Microsoft documents for its action (uiParam value, pvParam
@@ -135,7 +135,7 @@ static void logfont(uint8_t *out, BOOL bold) {
 static struct {
   int mouse[3];
   UINT mouse_speed, icon_x, icon_y, title_wrap, menu_drop, click_w, click_h,
-      swap, beep, saver_running, keyboard_pref, show_sounds, min_animate;
+      swap, beep, keyboard_pref, show_sounds, min_animate;
   RECT work;
   BOOL work_set, ncm_set, font_set, minimized_set, icons_set;
   uint8_t ncm[340], icon_font[60], minimized[20], icon_metrics[76];
@@ -261,8 +261,6 @@ static BOOL spi_get(UINT action, UINT param, void *out) {
       return u32_fail(87);
     *(int *)out = (int)spi.mouse_speed;
     return 1;
-  case 114: /* SPI_GETSCREENSAVERRUNNING */
-    return put_bool(out, spi.saver_running);
   default:
     (void)param;
     return -1;
@@ -360,11 +358,6 @@ static BOOL spi_set(UINT action, UINT param, void *in) {
       return u32_fail(87);
     spi.min_animate = !!w32_u32((const uint8_t *)in + 4);
     return 1;
-  case 97: /* SPI_SETSCREENSAVERRUNNING: uiParam; pvParam receives old */
-    if (in)
-      *(BOOL *)in = (BOOL)spi.saver_running;
-    spi.saver_running = !!param;
-    return 1;
   case 113: /* SPI_SETMOUSESPEED: the value is pvParam itself (1..20) */
     if ((uintptr_t)in < 1 || (uintptr_t)in > 20)
       return u32_fail(87);
@@ -374,12 +367,41 @@ static BOOL spi_set(UINT action, UINT param, void *in) {
     return -1;
   }
 }
+/* G10: share native desktop policy across all Win32 processes. */
+BOOL u32_saver_command(UINT command, int value) {
+  struct ciuki_screen_control q = {.version=CIUKI_SCREEN_VERSION,.size=sizeof(q),
+                                  .action=command,.value=value};
+  int32_t e=(int32_t)u32_backend.gate(CIUKI_SYS_DISPLAY,CIUKI_DISPLAY_SCREEN,U32_PTR(&q),0);
+  return e<0 ? u32_fail(e==-22 ? 87 : 50) : 1;
+}
+static BOOL saver_spi(UINT action, UINT param, void *out, UINT flags) {
+  BOOL get=action==14 || action==16 || action==114 || action==118;
+  if (get && !out) return u32_fail(87);
+  /* G32 owns passwords; never report a successful secure lock setter. */
+  if (action==119) return u32_fail(120);
+  if (action==118) { *(BOOL *)out=0; return 1; }
+  struct ciuki_screen_control q={.version=CIUKI_SCREEN_VERSION,.size=sizeof(q),
+      .action=get ? 0 : action,.value=(int32_t)param,
+      .flags=(flags&1) ? CIUKI_SCREEN_PERSIST : 0};
+  if (action==15 && param>INT32_MAX) return u32_fail(87);
+  int32_t e=(int32_t)u32_backend.gate(CIUKI_SYS_DISPLAY,CIUKI_DISPLAY_SCREEN,U32_PTR(&q),0);
+  if (e<0) return u32_fail(e==-22 ? 87 : 50);
+  if (get) *(UINT *)out=action==14 ? q.timeout : action==16 ? q.enabled : q.running;
+  if (action==97 && out) *(BOOL *)out=q.value;
+  if (!get && (flags&2))
+    for (UINT i=0;i<U32_WINDOWS;i++)
+      if (u32_windows[i].handle && !u32_windows[i].parent)
+        SendNotifyMessageA(u32_windows[i].handle,0x1a,action,0);
+  return 1;
+}
 BOOL W32API SystemParametersInfoA(UINT action, UINT param, void *out,
                                   UINT flags) {
   U32_GUARD;
+  if (action==14 || action==15 || action==16 || action==17 || action==97 ||
+      action==114 || action==118 || action==119) return saver_spi(action,param,out,flags);
   static const struct {
     UINT get, set, value;
-  } values[] = {{5, 6, 1},   {10, 11, 31},    {14, 15, 600}, {16, 17, 0},
+  } values[] = {{5, 6, 1},   {10, 11, 31},
                 {22, 23, 1}, {38, 37, 0},     {70, 71, 0},   {74, 75, 0},
                 {94, 93, 0}, {102, 103, 400}, {104, 105, 3}, {106, 107, 400}};
   BOOL setter = 0, result = (BOOL)-1;

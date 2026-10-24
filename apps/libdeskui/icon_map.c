@@ -42,6 +42,7 @@ const struct du_icon_map du_icon_map[] = {
     {"program:charmap", "accessories-character-map"},
     {"program:clock", "appointment-new"},              /* a clock face (Tango 0.8.90 has no clock app icon) */
     {"program:help", "help-browser"},
+    {"program:logview", "text-x-generic"},             /* Log Viewer (G13) */
     {"program:music", "audio-x-generic"},
     {"program:mixer", "audio-volume-high"},
     {"program:viewer", "image-x-generic"},
