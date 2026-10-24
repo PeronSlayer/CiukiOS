@@ -318,6 +318,7 @@ void du_text_fit(struct du_canvas *c, int x, int y, int w, const char *s, uint32
     if (!strcmp(s,"Running full screen — Alt+Enter to return")) fs_panel_seen++;
     if (!strcmp(s, "Unable to start") || !strcmp(s, "Program did not start") || !strcmp(s, "Startup timed out")) error_seen++;
 }
+int du_text_width(const char *s) { return (int)strlen(s)*7; }
 const char *du_icon_name(const char *name) { assert(!strcmp(name, "program:dosbox")); return "utilities-terminal"; }
 const struct du_icon *du_icon(const char *name, unsigned size)
 { assert(name && (size == 32 || size == 16)); return NULL; }

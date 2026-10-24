@@ -85,3 +85,22 @@ all four commands retain their payloads in the unchanged 136-byte command.
 The VM checkpoint waits while either marking policy holds the guest.
 The fx-15 G4 rows remain 31–35 and G17 follows at 36–40; the executable
 scenario `row_dos_controls` is `WM_ROW=29` (zero-based).
+
+## Window chrome (visual audit 2026-10-24)
+
+Reference: the Windows 98 MS-DOS Prompt toolbar (font size combo, then icon
+buttons Mark, Copy, Paste, Full screen, Properties, Background, Font) and its
+tabbed Properties sheet (Program, Font, Memory, Screen, Misc with OK, Cancel
+and Apply), as described in the same Resource Kit chapter and the Windows 95
+Resource Kit page cited above; no Microsoft artwork is used.
+Decision: the 28-pixel toolbar keeps its size (the guest mapping depends on
+it) and is drawn with libdeskui primitives and Tango icons (`edit-select-all`,
+`edit-copy`, `edit-paste`, `view-fullscreen`, `document-properties`,
+`preferences-desktop-wallpaper`, `preferences-desktop-font`), with hover,
+pressed and toggled states (Mark active, Background on) and an immediate
+tooltip. The font size is a combo (Fit, 100%, 125%: the real choices, not the
+Windows font list) whose drop list uses the existing menu. The Properties
+sheet uses the toolkit's tab, edit, combo, check box and slider looks; only
+fields that exist in the stored profile are shown. The toolkit widget tree is
+not linked into this client: it paints with the same primitives and shares one
+geometry table between painting and hit-testing (`window.h`).
