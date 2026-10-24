@@ -35,6 +35,9 @@ class PackageTests(unittest.TestCase):
             subprocess.run([clang, *manifest['flags'], '--sysroot='+str(sdk/'sysroot'),
                             '-nostdinc', '-isystem', str(sdk/'sysroot/include'),
                             '-isystem', resource+'/include', '-DDP_NATIVE_VFS',
+                            # as apps/desktop/build_desktop.py: kernel headers after the SDK's (G30b system_settings.h)
+                            '-I', str(ROOT/'apps/desktop'), '-I', str(ROOT/'sdk/win32/include'),
+                            '-idirafter', str(ROOT/'src/kernel/include'),
                             '-c', source, '-o', str(out/(Path(source).stem+'.o'))],
                            cwd=ROOT, check=True)
 
