@@ -877,6 +877,8 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
          * LAUNCH /Programs/ciuknote with one absolute path argument (opening a text file). */
         int files_open = p.opcode == DESK_LAUNCH && c->program == DESK_APP_FILES && !c->taskman &&
                          (!strcmp(p.title, "ciuknote") || desk_catalog_takes_file(p.title)) && p.argument[0] == '/';
+        int shell_open = p.opcode==DESK_LAUNCH && c->program==DESK_APP_FILES && !c->taskman &&
+                         !strcmp(p.title,"shell-open") && p.argument[0]=='/';
         int ide_run = p.opcode == DESK_LAUNCH && c->program == DESK_APP_IDE && !c->taskman &&
                       !strcmp(p.title,"ciukide-run");
         int ide_guide = p.opcode == DESK_LAUNCH && c->program == DESK_APP_IDE && !c->taskman &&
@@ -895,9 +897,10 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
             r->client = i; r->channel = c->channel; r->pid = c->pid; r->serial = p.serial; r->opcode = p.opcode;
             r->recent = files_open; snprintf(r->argument, sizeof(r->argument), "%s", p.argument);
         }
-        int32_t result = !c->taskman && !files_open && !ide_run && !ide_guide && !terminal_launch && !terminal_end && !install ? -EPERM :
+        int32_t result = !c->taskman && !files_open && !shell_open && !ide_run && !ide_guide && !terminal_launch && !terminal_end && !install ? -EPERM :
             p.opcode == DESK_END_TASK ? (terminal_end && p.pid == 1 ? -EPERM : desk_task_end(d, p.window_id, p.pid)) :
             p.opcode == DESK_SWITCH_TO ? desk_task_switch(d, p.window_id) :
+            shell_open ? (d->power.state ? -EBUSY : d->open_path ? d->open_path(d,p.argument) : -ENOSYS) :
             install ? (d->power.state ? -EBUSY : d->install_program ? d->install_program(d,p.argument) : -ENOSYS) :
             c->taskman && p.argument[0] ? -EPERM : ide_run ? desk_ide_launch(d,p.argument) : desk_task_launch(d, p.title, p.argument);
         int deferred = p.opcode == DESK_LAUNCH && !result && d->launch_deferred;

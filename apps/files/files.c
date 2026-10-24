@@ -36,6 +36,21 @@ static int launch_window(struct files_main *m, const char *name, const char *pat
     desk_put32(msg.data + 12 + length, (uint32_t)n); memcpy(msg.data + 16 + length, path, n);
     return du_window_queue(&m->window, &msg) ? -errno : 0;
 }
+
+uint32_t files_registry_exchange(const void *,uint32_t,void *,uint32_t,uint32_t *);
+static int shell_open(struct files_app *a,const char *path)
+{ return launch_window(a->user,"shell-open",path); }
+static int shell_record(struct files_app *a,const struct desk_launch_record *record)
+{
+    struct files_main *m=a->user;
+    uint8_t *bytes=malloc(DESK_LINK_BYTES); if (!bytes) return -ENOMEM;
+    unsigned n=desk_link_encode(record,bytes,DESK_LINK_BYTES);
+    if (!n) { free(bytes); return -EINVAL; }
+    char path[128]; snprintf(path,sizeof(path),"/system/settings/open-%u-%u.lnk",(unsigned)getpid(),m->launch_serial+1);
+    int e=fm_write_new(&a->model.fs,path,bytes,n); free(bytes);
+    if (!e) { e=shell_open(a,path); if (e) a->model.fs.unlink(a->model.fs.ctx,path); }
+    return e;
+}
 static void on_message(struct du_window *w, const struct desk_packet *p, void *user)
 {
     struct files_app *a = user; struct files_main *m = a->user; (void)w;
@@ -215,7 +230,9 @@ static int media_blockers(unsigned drive,uint32_t generation,struct ciuki_media_
 }
 int main(int argc, char **argv)
 {
-    int channel = 3, test = 0, bin_properties = 0, find = 0;
+    int channel = 3, test = 0, bin_properties = 0, find = 0, shell_action=0;
+    const char *shell_path=NULL; char shell_parent[FM_PATH];
+    char **shell_paths=NULL; unsigned shell_count=0;
     const char *path = FM_COMPUTER, *property=NULL;
     char property_parent[FM_PATH];
     for (int i = 1; i < argc; i++) {
@@ -228,6 +245,19 @@ int main(int argc, char **argv)
         /* G2: the desktop's Recycle Bin icon opens the bin, or its Properties. */
         else if (!strcmp(argv[i], "recycle:properties")) { path = "Recycle Bin"; bin_properties = 1; }
         else if (!strcmp(argv[i], "find:")) { find = 1; path = FM_COMPUTER; }
+        else if (!strncmp(argv[i],"--file-action=",14)) {
+            char *end; long action=strtol(argv[i]+14,&end,10);
+            if (*end!=':' || action<FILES_UNDO || action>FILES_NEW_REGISTERED) return 2;
+            shell_action=(int)action; shell_path=end+1;
+            if (shell_path[0]=='@') {
+                const char *manifest=shell_path+1;
+                if (strncmp(manifest,"/system/settings/selection-",27) || fm_shell_selection_read(fm_native_vfs(),manifest,&shell_paths,&shell_count)) return 2;
+                (void)unlink(manifest);
+                if (fm_parent(shell_parent,shell_paths[0])) { fm_drag_free(shell_paths,NULL,shell_count); return 2; }
+                path=shell_parent;
+            } else if (shell_path[0]) { if (fm_parent(shell_parent,shell_path)) return 2; path=shell_parent; }
+            else path="/Documents/Desktop";
+        }
         else if (argv[i][0] != '-') path = argv[i];
         else return 2;
     }
@@ -248,6 +278,9 @@ int main(int argc, char **argv)
         return 1;
     }
     struct files_app *a = &m->app;
+    fm_registry_exchange=files_registry_exchange;
+    a->shell_open=shell_open; a->shell_record=shell_record;
+    a->shell_paths=shell_paths; a->shell_count=shell_count;
     a->user = m; a->test = test; a->spawn = launch; a->drop=drop; a->drag_begin=drag_begin; a->drag_status=drag_status; a->close = close_window; a->close_declined=close_declined; a->portrait = portrait;
     a->poll_clipboard=1; a->media_label_key=media_label_key; a->media_label=media_label; a->media_read=media_read; a->media_remove=media_remove; a->media_blockers=media_blockers;
     a->media_load=media_load; a->media_space=media_space;
@@ -257,6 +290,7 @@ int main(int argc, char **argv)
     m->window.close_request = close_request; m->window.message = on_message; m->window.user = a;
     a->show_bin_properties = bin_properties; a->find_initial = find;
     if (files_setup(a, &m->ui, fm_native_vfs(), path)) { du_window_destroy(&m->window); free(m); return 1; }
+    if (shell_action) files_shell_action(a,shell_action,shell_path);
     /* Fixed placement keeps the scripted desktop case deterministic. */
     if (test) du_window_move(&m->window, 4, 36);
     int r = du_run(&m->window, idle, a);

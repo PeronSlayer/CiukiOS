@@ -4,6 +4,7 @@
 #ifndef CIUKI_FILES_APP_H
 #define CIUKI_FILES_APP_H
 #include "model.h"
+#include "operations.h"
 #include <ciuki/abi.h>
 #include "../libdeskui/deskui.h"
 
@@ -56,8 +57,13 @@ struct files_app {
     struct fm_search_query find_edit;
     int find_page, find_initial, find_again, find_running;
     char find_from[16], find_to[16], find_size[32];
-    struct du_menu_item file_items[12], edit_items[6], view_items[12], go_items[14], help_items[3];
-    struct du_menu_item popup[18]; unsigned popup_count;
+    struct du_menu_item file_items[20], edit_items[12], view_items[13], go_items[14], help_items[3];
+    struct du_menu_item popup[64]; unsigned popup_count;
+    struct files_operations *operations;
+    int shell_action; char shell_action_path[FM_PATH];
+    char **shell_paths; unsigned shell_count;
+    int (*shell_open)(struct files_app *, const char *);
+    int (*shell_record)(struct files_app *, const struct desk_launch_record *);
     int (*spawn)(struct files_app *, const char *program, char *const argv[]);
     void (*close)(struct files_app *);
     void (*close_declined)(struct files_app *);
@@ -108,6 +114,9 @@ struct files_app {
     char **drop_paths; unsigned drop_count;   /* items dropped on the bin window, awaiting the confirmation */
     void *user;
 };
+/* G8 shell actions can be requested by desktop icons without duplicating UI. */
+
+void files_shell_action(struct files_app *, int action, const char *path);
 
 void files_properties_path(struct files_app *, const char *);
 void files_drop(struct files_app *, int x, int y, int copy);

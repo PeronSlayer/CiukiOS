@@ -465,7 +465,10 @@ static void finish(struct du_ui *u, int index)
     if (d->accept && d->accept(u, index, d->accept_ctx)) { dialog_damage(u); return; }
     char text[DU_TEXT_MAX] = "";
     if (d->kind == DU_DLG_INPUT) snprintf(text, sizeof(text), "%s", d->items[2].text);
-    if ((d->kind == DU_DLG_OPEN || d->kind == DU_DLG_SAVE) && index == 0) join(text, d->folder, d->items[F_NAME].text);
+    if ((d->kind == DU_DLG_OPEN || d->kind == DU_DLG_SAVE) && index == 0) {
+        if (d->folders_only) snprintf(text,sizeof(text),"%s",d->folder);
+        else join(text, d->folder, d->items[F_NAME].text);
+    }
     int id = d->id;
     du_dialog_close(u);
     du_emit(u, (struct du_event){.type = DU_EV_DIALOG, .id = id, .index = index, .text = text});
@@ -484,20 +487,30 @@ static void accept_file(struct du_ui *u)
 {
     struct du_dialog *d = &u->dialog;
     const char *name = d->items[F_NAME].text;
-    if (!name[0]) return;
+    if (!name[0]) { if (d->folders_only) finish(u,0); return; }
     for (unsigned i = 0; i < d->entry_count; i++)
         if (d->entries[i].directory && !strcmp(d->entries[i].name, name)) {
             char path[DU_TEXT_MAX]; join(path, d->folder, name);
             if (!navigate(u, path)) du_set_text(&d->items[F_NAME], "");
             return;
         }
-    if (name[0] == '/') {
+    if (name[0] == '/' || (d->folders_only && name[0] && name[1]==':' && (name[2]=='/' || name[2]=='\\'))) {
         unsigned count = 0;
         /* An absolute folder path navigates; anything else is a file name. */
         if (!d->lister(d->lister_ctx, name, d->entries, DU_FILE_ENTRIES, &count)) { navigate(u, name); du_set_text(&d->items[F_NAME], ""); return; }
         navigate(u, d->folder);
     }
-    finish(u, 0);
+    if (!d->folders_only) finish(u, 0);
+}
+
+int du_folder_dialog(struct du_ui *u,int id,const char *title,const char *folder,du_lister lister,void *ctx)
+{
+    int e=du_file_dialog(u,id,0,title,folder,"",lister,ctx);
+    if (!e) {
+        u->dialog.folders_only=1; du_set_text(&u->dialog.items[F_ACCEPT],"&Choose");
+        du_set_text(&u->dialog.items[F_FILE],"&Folder:");
+    }
+    return e;
 }
 
 static void dialog_event(struct du_ui *u, const struct du_event *e, void *arg)

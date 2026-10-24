@@ -176,7 +176,7 @@ def build():
     archive = [sdk["tools"]["llvm-ar"]["path"], "rcsD", str(library), *(str(p) for p in objects)]
     subprocess.run(archive, check=True, env=env)
     commands["libdeskui"] = archive
-    sources["files"] = ["autoplay_content.c", "../files/files.c", "../files/app.c", "../files/model.c", "../files/transfer.c", "../files/clipboard.c", "../files/vfs.c"]
+    sources["files"] = ["autoplay_content.c", "../files/files.c", "../files/registry_transport.c", "../files/app.c", "../files/model.c", "../files/transfer.c", "../files/clipboard.c", "../files/vfs.c"]
     sources["tasks"] = ["../tasks/tasks.c", "../tasks/model.c", "../tasks/view.c"]
     sources["ciuknote"] = ["../ciuknote/main.c", "../ciuknote/app.c", "../ciuknote/doc.c", "../ciuknote/vfs.c"]
     sources["ciukide"] = ["../ciukide/main.c", "../ciukide/app.c", "../ciukide/model.c", "../ciukide/job.c", "../ciukide/process.c",

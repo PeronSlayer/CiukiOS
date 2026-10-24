@@ -210,6 +210,7 @@ int fm_search(struct fm_model *m, const struct fm_search_query *query)
         m->entries = out->entries; out->entries = NULL; m->count = out->count; m->capacity = out->capacity;
         m->result_paths = out->result_paths; out->result_paths = NULL; m->result_count = out->result_count;
         m->query = out->query; m->searching = 1; m->search_incomplete = out->search_incomplete; m->search_error = out->search_error;
+        fm_registered_types(m->entries,m->count);
         strcpy(m->path, out->path); m->active = m->anchor = 0; fm_sort(m, m->sort, m->descending);
     }
     fm_destroy(out); free(out); free(w); return r;

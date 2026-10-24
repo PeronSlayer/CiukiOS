@@ -57,7 +57,8 @@ enum sh_action { SH_ACT_NONE, SH_ACT_SUBMENU, SH_ACT_LAUNCH, SH_ACT_ABOUT, SH_AC
                  SH_ACT_DRAG /* fx-19 right-drag menu: arg is the DROPEFFECT, 0 Cancel */,
                  /* G4 taskbar menu: retain main's action values. */
                  SH_ACT_CASCADE, SH_ACT_TILE_H, SH_ACT_TILE_V, SH_ACT_MINIMIZE_ALL, SH_ACT_ARRANGE_UNDO,
-                 SH_ACT_TASKBAR_PROPERTIES, SH_ACT_FIND };
+                 SH_ACT_TASKBAR_PROPERTIES, SH_ACT_FIND,
+                 SH_ACT_FILES_ACTION /* G8: appended after G7 Find. */ };
 #define SH_ITEM_SEPARATOR 1u
 #define SH_ITEM_DISABLED 2u
 #define SH_ITEM_DEFAULT 4u

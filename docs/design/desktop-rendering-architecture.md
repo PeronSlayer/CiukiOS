@@ -436,6 +436,10 @@ not), and the f2-101d command batches at 32 and 16 bpp.
 | 40 | Saver input dismissal and monitor wake | full desktop, windows, overlays and pointer | `desk_saver_input`, `saver_wake`, full invalidation | G10: dismissing input consumed, failed wake remains retryable | saver |
 | 41 | Monitor off after idle or SC_MONITORPOWER | no presentation while off; wake invalidates the complete scene (row 37) | `desk_saver_tick`, `monitor_power`, `desk_redraw` | G10: suspend drawing until firmware wake succeeds | saver |
 | 42 | Find entry points: Start > Find submenu, desktop F3, Win+F; Files criteria pages, validation, results publication, sorting, Stop and navigation | menu boxes, normal window/client damage; Files invalidates its changed client state | `desk_shell_find`, Files `find_dialog`, `scan_poll`, `files_update` | G7 adds no compositor special case | `row_find` in `test_window_model`; `files_search_test.c` compares every client transition with a full redraw |
+| 43 | G8 desktop menus: Undo, Paste Shortcut, New Bitmap/Shortcut/registered document, enabled Create Shortcut(s) Here | old and new menu boxes, clipped to the screen | `shell.c`, `desk_menu_open/close` | none | `test_window_model` `row_g8_menus`, all five presenters |
+| 44 | G8 Copy To / Move To folder chooser, navigation, acceptance and cancellation; Undo progress and resulting file list | dialog plus shadow, changed list rows and selection | `du_folder_dialog`, `operations_ui.inc`, normal transfer publication | none | `test_window_model.test_g8_file_operation_dialogs_redraw`: production Files, partial versus full frame |
+| 45 | G8 Open With, Always use, Browse and File Types edits (extension, description, icon, default action, open/edit/print, download confirmation) | old and new dialog boxes, controls, focus and validation text | `open_with`, `file_types`, libdeskui dialogs | custom dialog geometry explicitly damages its complete box after layout | same G8 dialog replay |
+| 46 | G8 Send To and registered New menus; new/paste/create shortcuts, Bitmap and ShellNew publish new rows | popup boxes and file list after refresh | `operations_ui.inc`, `files_update`, `scan_poll`; desktop folder refresh reuses row 19 | none | same G8 dialog replay; G8 model tests check resulting files |
 
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with
@@ -448,8 +452,12 @@ the randomized sequences gained operations 42-47 (taskbar menu, Win+D/M and
 Alt+M, taskbar focus keys, Alt+F6/Menu key/Shift+F10/F3, caption icon,
 Win+E/R/F/Break/F1). Row 36 adds fx-26's drag with concurrent damage.
 The executable row table groups several inventory events into one scenario:
-main's indexes 0-28 stay unchanged, including G4 at `WM_ROW=24` through
-`WM_ROW=28`; fx-26's appended scenario moves from `WM_ROW=24` to `WM_ROW=29`.
+main's indexes 0–32 stay unchanged, including G4 at `WM_ROW=24` through
+`WM_ROW=28`, startup at 29, fx-26 at 30, fault at 31 and saver at 32.
+G7 appends inventory row 42 and executable scenario `row_find` at `WM_ROW=33`.
+G8 appends inventory rows 43–46. Its desktop-menu scenario is
+`row_g8_menus`, selected by `WM_ROW=34`; rows 44–46 use the production
+Files dialog replay. Existing executable scenario indexes stay unchanged.
 
 ### One rule instead of one fix per path: the frame reconcile
 

@@ -177,6 +177,7 @@ const struct du_icon_map du_icon_map[] = {
     {"type:.inf", "emblem-system"}, {"type:.json", "emblem-system"}, {"type:.xml", "emblem-system"},
     {"type:.yaml", "emblem-system"}, {"type:.yml", "emblem-system"}, {"type:.toml", "emblem-system"},
     {"type:.reg", "emblem-system"}, {"type:.pif", "emblem-system"},
+    {"type:.lnk", "emblem-symbolic-link"},
     {"type:.htm", "text-html"}, {"type:.html", "text-html"},
     {"type:.lua", "text-x-script"}, {"type:.bat", "text-x-script"}, {"type:.cmd", "text-x-script"},
     {"type:.sh", "text-x-script"}, {"type:.py", "text-x-script"}, {"type:.pl", "text-x-script"},

@@ -91,7 +91,7 @@ static void fx19_desktop_cases(void)
     capture("desktop-fx19-drag");
     desk_shell_key(&d,0x1d,1); desk_cursor_update(&d); assert(d.sh.dnd.effect==FM_EFFECT_COPY && d.cursor_shape==DESK_CURSOR_DRAG_COPY);
     desk_shell_key(&d,0x1d,0); desk_shell_key(&d,0x38,1); desk_cursor_update(&d);
-    assert(d.sh.dnd.effect==FM_EFFECT_NONE && d.cursor_shape==DESK_CURSOR_FORBIDDEN);   /* link: no native shortcuts */
+    assert(d.sh.dnd.effect==FM_EFFECT_LINK && d.cursor_shape==DESK_CURSOR_DRAG_LINK);   /* G8 native shortcuts */
     desk_shell_key(&d,0x38,0);
     {   char **paths; char *types; unsigned n; assert(!fm_drag_load(&fake_vfs,&paths,&types,&n) && n==2 && types[0]=='F'); fm_drag_free(paths,types,n); }
     desk_shell_button(&d,1,0); assert(!d.sh.dnd.active); settle();
@@ -105,7 +105,7 @@ static void fx19_desktop_cases(void)
     desk_shell_key(&d,0x1d,1); assert(d.sh.dnd.effect==FM_EFFECT_NONE); desk_shell_key(&d,0x1d,0);
     desk_shell_button(&d,1,0); assert(fake_lookup(DESK_FOLDER "/dnd-c.txt")>=0 && d.sh.confirm); confirm(); settle();
     assert(fake_lookup(DESK_FOLDER "/dnd-c.txt")<0 && in_bin("dnd-c.txt")==1);
-    puts("PASS fx-19 desktop drag: SM_CXDRAG, multi-item move into a folder icon, Ctrl copy cursor, Alt/link refused, Recycle Bin target, data object");
+    puts("PASS fx-19 desktop drag: SM_CXDRAG, multi-item move into a folder icon, Ctrl copy cursor, Alt/link cursor, Recycle Bin target, data object");
 
     /* Free space repositions the dragged icons by the pointer offset; Esc cancels. */
     dnd_files(); dnd_at("dnd-a.txt",&ax,&ay); dnd_at("dnd-b.txt",&bx,&by);
@@ -132,7 +132,7 @@ static void fx19_desktop_cases(void)
     assert(d.sh.dnd.menu && d.sh.levels==1 && d.sh.menus[0].kind==SH_MENU_DRAG && d.sh.menus[0].count==5);
     assert(!strcmp(d.sh.menus[0].items[0].label,"Move Here") && (d.sh.menus[0].items[0].flags&SH_ITEM_DEFAULT));
     assert(!strcmp(d.sh.menus[0].items[1].label,"Copy Here") && !(d.sh.menus[0].items[1].flags&SH_ITEM_DISABLED));
-    assert(d.sh.menus[0].items[2].flags&SH_ITEM_DISABLED);
+    assert(!(d.sh.menus[0].items[2].flags&SH_ITEM_DISABLED));
     capture("desktop-fx19-drag-menu");
     key(DU_KEY_DOWN); key(DU_KEY_DOWN); key(DU_KEY_ENTER);
     assert(!d.sh.dnd.active); settle();
@@ -142,7 +142,7 @@ static void fx19_desktop_cases(void)
     d.now_ns+=1000000000ull; d.mouse_x=bx; d.mouse_y=by; desk_shell_button(&d,CIUKI_BUTTON_RIGHT,1); dnd_move(fx,fy);
     desk_shell_button(&d,CIUKI_BUTTON_RIGHT,0); key(DU_KEY_ESC); assert(!d.sh.dnd.active && !d.sh.levels);
     dnd_click(bx,by,0,CIUKI_BUTTON_RIGHT); assert(d.sh.levels==1 && d.sh.menus[0].kind==SH_MENU_ICON); key(DU_KEY_ESC);
-    puts("PASS fx-19 desktop right-drag: menu with bold default, Copy Here, Shortcut disabled, Esc cancel, release-time icon menu");
+    puts("PASS fx-19 desktop right-drag: menu with bold default, Copy Here, Shortcut enabled, Esc cancel, release-time icon menu");
 
     /* Desktop to a Files window: DRAG_OVER with client coordinates, the target's DRAG_STATUS sets the cursor, DRAG_DROP carries the effect. */
     fake_channel(30); int files=desk_add_client(&d,30); assert(files>=0);

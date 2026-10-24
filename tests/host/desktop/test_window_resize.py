@@ -50,7 +50,7 @@ class WindowResizeTests(unittest.TestCase):
                        "apps/desktop/shell.c", "apps/desktop/autoplay.c", "apps/desktop/autoplay_content.c", "apps/desktop/folder.c", "apps/files/transfer.c", "apps/desktop/settings.c", "apps/desktop/wallpaper.c", "apps/desktop/keymap.c",
                        "apps/files/app.c", "apps/files/model.c", "tests/host/desktop/fake_vfs.c",
                        "tests/host/desktop/files_resize_capture.c", "tests/host/desktop/resize_transport.c",
-                       "tests/host/desktop/resize_client.c"]
+                       "tests/host/desktop/resize_client.c", "apps/libdeskui/clipboard.c", "apps/libdeskui/clipstore.c"]
             binary = folder / "capture"
             objects = []
             for i, s in enumerate(sources):

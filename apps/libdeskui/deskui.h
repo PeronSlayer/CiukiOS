@@ -42,7 +42,7 @@
 #define DU_ICON_LARGE   (desk_theme->icon_large)
 
 #define DU_WIDGETS       64
-#define DU_DIALOG_ITEMS  10
+#define DU_DIALOG_ITEMS  24
 #define DU_TIMERS        8
 #define DU_REGIONS       32
 #define DU_TEXT_MAX      1040
@@ -298,6 +298,7 @@ struct du_dialog {
     struct du_widget items[DU_DIALOG_ITEMS];
     unsigned count, buttons;
     unsigned progress, progress_total;
+    int folders_only; /* folder chooser: accept the current directory */
     du_lister lister; void *lister_ctx;
     struct du_file_entry *entries; struct du_item *rows; unsigned entry_count;
     struct du_dialog_places *places;        /* owned, live file-dialog Places observer */
@@ -420,6 +421,7 @@ void du_message(struct du_ui *, int id, const char *title, const char *text, int
 void du_input_box(struct du_ui *, int id, const char *title, const char *prompt, const char *initial);
 int du_file_dialog(struct du_ui *, int id, int save, const char *title, const char *folder,
                    const char *name, du_lister, void *ctx);
+int du_folder_dialog(struct du_ui *, int id, const char *title, const char *folder, du_lister, void *ctx);
 void du_progress(struct du_ui *, int id, const char *title, const char *text, unsigned value, unsigned total);
 /* OK=0, Cancel=1, Apply=2; accept may keep the sheet open after Apply/error.
  * Control slots 4..9 are caller-owned, boxes relative to the sheet body.

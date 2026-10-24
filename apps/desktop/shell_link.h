@@ -6,6 +6,26 @@
 #define CIUKI_SHELL_LINK_H
 #include "protocol.h"
 #include <string.h>
+/* Self-contained codec: model-only users do not need the desktop wire parser. */
+static inline uint32_t desk_link_get32(const uint8_t *p)
+{ return p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24; }
+static inline void desk_link_put32(uint8_t *p,uint32_t v)
+{ for (unsigned i=0;i<4;i++) p[i]=(uint8_t)(v>>(8*i)); }
+static inline int desk_link_utf8(const uint8_t *p,unsigned n)
+{
+    for (unsigned i=0;i<n;) {
+        uint32_t c=p[i++],min=0; unsigned extra=0;
+        if (c<128) { if (c<32 || c==127) return 0; continue; }
+        if (c>=0xc2 && c<0xe0) { c&=31; extra=1; min=128; }
+        else if (c>=0xe0 && c<0xf0) { c&=15; extra=2; min=2048; }
+        else if (c>=0xf0 && c<=0xf4) { c&=7; extra=3; min=65536; }
+        else return 0;
+        if (extra>n-i) return 0;
+        while(extra--) { unsigned b=p[i++]; if ((b&192)!=128) return 0; c=(c<<6)|(b&63); }
+        if(c<min || c>0x10ffff || (c>=0xd800 && c<=0xdfff) || (c>=0x80 && c<0xa0)) return 0;
+    }
+    return 1;
+}
 #define DESK_LINK_BYTES 4096u
 #define DESK_LINKS 64u
 #define DESK_UNINSTALL_MAX 32u
@@ -33,7 +53,7 @@ static inline int desk_launch_valid(const struct desk_launch_record *r)
     const unsigned caps[]={sizeof(r->label),sizeof(r->target),sizeof(r->arguments),sizeof(r->directory),sizeof(r->icon)};
     for (unsigned k=0;k<5;k++) {
         unsigned n=0; while (n<caps[k] && fields[k][n]) n++;
-        if (n==caps[k] || !desk_utf8_valid((const uint8_t *)fields[k],n) || (k<2 && !n)) return 0;
+        if (n==caps[k] || !desk_link_utf8((const uint8_t *)fields[k],n) || (k<2 && !n)) return 0;
     }
     if (r->target[0]!='/' && !((r->target[0]>='A' && r->target[0]<='Z') || (r->target[0]>='a' && r->target[0]<='z'))) return 0;
     if (r->target[0]!='/' && (r->target[1]!=':' || (r->target[2]!='\\' && r->target[2]!='/'))) return 0;
@@ -41,14 +61,14 @@ static inline int desk_launch_valid(const struct desk_launch_record *r)
 }
 static inline int desk_link_decode(const uint8_t *bytes, unsigned count, struct desk_launch_record *out)
 {
-    if (!bytes || !out || count<40 || count>DESK_LINK_BYTES || memcmp(bytes,"CIUKLNK3",8) || desk_get32(bytes+36)) return 0;
-    memset(out,0,sizeof(*out)); out->show=desk_get32(bytes+8); out->icon_index=(int32_t)desk_get32(bytes+12);
+    if (!bytes || !out || count<40 || count>DESK_LINK_BYTES || memcmp(bytes,"CIUKLNK3",8) || desk_link_get32(bytes+36)) return 0;
+    memset(out,0,sizeof(*out)); out->show=desk_link_get32(bytes+8); out->icon_index=(int32_t)desk_link_get32(bytes+12);
     char *fields[]={out->label,out->target,out->arguments,out->directory,out->icon};
     const unsigned caps[]={sizeof(out->label),sizeof(out->target),sizeof(out->arguments),sizeof(out->directory),sizeof(out->icon)};
     unsigned offset=40;
     for (unsigned k=0;k<5;k++) {
-        unsigned n=desk_get32(bytes+16+k*4);
-        if (n>=caps[k] || n>count-offset || !desk_utf8_valid(bytes+offset,n)) return 0;
+        unsigned n=desk_link_get32(bytes+16+k*4);
+        if (n>=caps[k] || n>count-offset || !desk_link_utf8(bytes+offset,n)) return 0;
         memcpy(fields[k],bytes+offset,n); offset+=n;
     }
     return offset==count && desk_launch_valid(out);
@@ -60,9 +80,9 @@ static inline unsigned desk_link_encode(const struct desk_launch_record *r, uint
     unsigned total=40;
     for (unsigned k=0;k<5;k++) total+=(unsigned)strlen(fields[k]);
     if (total>cap || total>DESK_LINK_BYTES) return 0;
-    memset(out,0,40); memcpy(out,"CIUKLNK3",8); desk_put32(out+8,r->show); desk_put32(out+12,(uint32_t)r->icon_index);
+    memset(out,0,40); memcpy(out,"CIUKLNK3",8); desk_link_put32(out+8,r->show); desk_link_put32(out+12,(uint32_t)r->icon_index);
     unsigned offset=40;
-    for (unsigned k=0;k<5;k++) { unsigned n=(unsigned)strlen(fields[k]); desk_put32(out+16+k*4,n); memcpy(out+offset,fields[k],n); offset+=n; }
+    for (unsigned k=0;k<5;k++) { unsigned n=(unsigned)strlen(fields[k]); desk_link_put32(out+16+k*4,n); memcpy(out+offset,fields[k],n); offset+=n; }
     return total;
 }
 /* Preserve the quoted Windows argument tail exactly; never use /bin/sh.

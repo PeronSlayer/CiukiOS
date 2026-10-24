@@ -50,7 +50,7 @@ static unsigned row(const char *path)
 }
 static void tree(void)
 {
-    fake_reset(); assert(fake_create("/system",FM_DIR)>=0); assert(fake_create("/tmp",FM_DIR)>=0); assert(fake_create("/out",FM_DIR)>=0); assert(fake_create("/one",FM_DIR)>=0); assert(fake_create("/two",FM_DIR)>=0);
+    fake_reset(); assert(fake_create("/system",FM_DIR)>=0); assert(fake_create("/system/settings",FM_DIR)>=0); assert(fake_create("/Documents",FM_DIR)>=0); assert(fake_create("/Documents/Desktop",FM_DIR)>=0); assert(fake_create("/tmp",FM_DIR)>=0); assert(fake_create("/out",FM_DIR)>=0); assert(fake_create("/one",FM_DIR)>=0); assert(fake_create("/two",FM_DIR)>=0);
     assert(fake_create("/one/sub",FM_DIR)>=0); assert(fake_create("/Programs",FM_DIR)>=0);
     fake_file("/Programs/ciuknote",1,0); fake_file("/one/same.txt",100,0); fake_file("/two/same.txt",200,0);
     fake_file("/one/sub/Report.TXT",9000,0); fake_file("/one/plain",0,0); fake_file("/one/space name.txt",0,0);
@@ -176,6 +176,11 @@ static void ui_tests(void)
     assert(app.model.sort==FM_SORT_LOCATION && W(&app,W_LIST)->sort==4); frame();
     assert(W(&app,C_PROPERTIES)->disabled && W(&app,C_PASTE)->disabled);
     command(&app,C_PROPERTIES); assert(!app.job_active && !ui.dialog.kind);
+    const int new_commands[]={FILES_NEW_SHORTCUT,FILES_NEW_BITMAP,FILES_NEW_REGISTERED,FILES_PASTE_SHORTCUT};
+    for (unsigned i=0;i<sizeof(new_commands)/sizeof(*new_commands);i++) {
+        command(&app,new_commands[i]); assert(!app.job_active && !ui.dialog.kind);
+    }
+    assert(ui.menu_count==6 && !strcmp(ui.menus[4].label,"&Tools"));
     struct du_event background={.type=DU_EV_CONTEXT,.id=W_LIST,.index=-1,.x=300,.y=150}; context(&app,&background);
     for(unsigned i=0;i<app.popup_count;i++) if (app.popup[i].id==C_PASTE || app.popup[i].id==C_NEW_FOLDER || app.popup[i].id==C_NEW_TEXT || app.popup[i].id==C_PROPERTIES) assert(app.popup[i].flags & DU_ITEM_DISABLED);
     frame(); struct ciuki_input_event escape={.type=CIUKI_INPUT_KEY,.code=DU_KEY_ESC,.value=1}; du_input(&ui,&escape); escape.value=0; du_input(&ui,&escape); frame();
@@ -187,6 +192,25 @@ static void ui_tests(void)
     command(&app,C_OPEN_NOTE); assert(launched==1 && !strcmp(launched_path,"/two/same.txt"));
     command(&app,C_RENAME); du_set_text(W(&app,W_RENAME),"changed.txt"); rename_commit(&app); wait_worker();
     assert(fake_lookup("/two/changed.txt")>=0 && fake_lookup("/two/same.txt")<0);
+    /* G8 records the actual result parent, even for equal names in other folders. */
+    command(&app,FILES_UNDO); wait_worker();
+    assert(fake_lookup("/two/same.txt")>=0 && fake_lookup("/two/changed.txt")<0);
+    fm_select(&app.model,row("/two/same.txt"),0);
+    command(&app,C_RENAME); du_set_text(W(&app,W_RENAME),"changed.txt"); rename_commit(&app); wait_worker();
+    fm_select(&app.model,row("/two/changed.txt"),0);
+    command(&app,FILES_OPEN_WITH); assert(ui.dialog.id==D_OP_WITH);
+    assert(!strcmp(app.operations->selected,"/two/changed.txt")); frame(); du_dialog_close(&ui);
+    command(&app,FILES_SHORTCUT); wait_worker();
+    assert(fake_lookup("/two/Shortcut to changed.txt.lnk")>=0 && fake_lookup("/Shortcut to changed.txt.lnk")<0);
+    fm_select(&app.model,row("/two/changed.txt"),0);
+    command(&app,FILES_SEND_TO); assert(ui.popup_count>=5); du_menu_close(&ui);
+    command(&app,OP_SEND_BASE); wait_worker();
+    assert(fake_lookup("/Documents/Desktop/Shortcut to changed.txt.lnk")>=0);
+    fm_select(&app.model,row("/two/changed.txt"),0);
+    command(&app,FILES_COPY_TO); assert(ui.dialog.folders_only); du_dialog_close(&ui);
+    struct du_event dest={.type=DU_EV_DIALOG,.id=D_OP_DEST,.index=0,.text="C:\\out"};
+    files_event(&ui,&dest,&app); wait_worker(); assert(fake_lookup("/out/changed.txt")>=0);
+    command(&app,FILES_UNDO); wait_worker(); assert(fake_lookup("/out/changed.txt")<0);
     b=row("/two/changed.txt"); fm_select(&app.model,b,0); command(&app,C_PROPERTIES); wait_worker(); assert(ui.dialog.id==D_PROPERTIES); frame(); du_dialog_close(&ui);
     char **paths; unsigned count;
     assert(!selection_paths(&app,&paths,&count) && count==1);
