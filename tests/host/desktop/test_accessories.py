@@ -28,16 +28,14 @@ ACC = "apps/accessories/"
 TESTS = {
     "calc": [ACC + "calc_model.c", ACC + "calc_view.c"],
     "clock": [ACC + "clock_model.c", ACC + "clock_view.c"],
-    "viewer": [ACC + "viewer_model.c", ACC + "viewer_view.c", ACC + "viewer_stb.c"],
+    "viewer": [ACC + "viewer_model.c", ACC + "viewer_view.c", ACC + "viewer_stb.c", ACC + "wallpaper.c", "apps/desktop/settings.c", "apps/desktop/protocol.c"],
     "help": [ACC+n for n in ("help_topics.c","help_view.c","help_navigation.c","help_wizard.c","helpfile.c","help_hlp.c","help_chm.c","help_markup.c")]
             + ["sdk/win32/lz32/mspack/chmd.c","sdk/win32/lz32/mspack/lzxd.c"],
-    "viewer": [ACC + "viewer_model.c", ACC + "viewer_view.c", ACC + "viewer_stb.c", ACC + "wallpaper.c", "apps/desktop/settings.c", "apps/desktop/protocol.c"],
-    "help": [ACC + "help_topics.c", ACC + "help_view.c"],
+    "logview": [ACC + "logview_model.c", ACC + "logview_view.c"],
     "mixer": [ACC + "mixer_view.c"],
     "mixer_queue": ["apps/desktop/settings_io.c"],
     "recorder": [ACC + "recorder.c"],
     "cdplayer": [],
-    "charmap": [ACC + "charmap_view.c"],
     "charmap": [ACC + "charmap_view.c", ACC + "charmap_model.c", "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c"],
     "keymap": [],
 }
@@ -89,22 +87,23 @@ class AccessoriesTests(unittest.TestCase):
             env = dict(os.environ, TMPDIR=temp, ASAN_OPTIONS="detect_leaks=0", HOME=str(scratch))
             binary = folder / name
             sources = [*TESTS[name], *TOOLKIT, f"tests/host/desktop/{name}_test.c"]
-            extra=["-I",str(ROOT/"sdk/win32/lz32/mspack"),"-DHAVE_INTTYPES_H=1","-DSIZEOF_OFF_T=8"] if name=="help" else []
+            help_flags = ["-I", str(ROOT / "sdk/win32/lz32/mspack"), "-DHAVE_INTTYPES_H=1", "-DSIZEOF_OFF_T=8"] if name == "help" else []
             if name != "keymap":
                 sources.append(ACC + "acc.c")
             icons = load("acc_icon_assets", ROOT / "tests/host/desktop/icon_assets.py")   # the guest's /system/icons store
-            extra, tail = [], []
+            extra, tail = [*help_flags, *(["-include", str(ROOT / "tests/host/desktop/replay_base.h")] if name == "recorder" else [])], []
             if name == "charmap":      # real TrueType faces: the host FreeType build and the sdk/libfont backend
                 ft = load("acc_freetype", ROOT / "sdk/freetype/build.py")
                 (folder / "include").mkdir()
                 (folder / "include/ciuki").symlink_to(ROOT / "sdk/sysroot-overlay/include/ciuki", target_is_directory=True)
-                extra = ["-I", str(folder / "include"), *ft.includes()]
+                extra = [*extra, "-I", str(folder / "include"), *ft.includes()]
                 tail = [str(ft.host()), "-pthread"]
             subprocess.run([*FLAGS, *icons.defines(), *INCLUDES, *extra, *(str(ROOT / s) for s in sources), *tail, "-lm", "-o", str(binary)],
                            check=True, env=env)
             args = {"viewer": [str(scratch), str(ROOT / "misc/CiukiOS_SplashScreen.png"), str(renders)],
                     "help": [str(scratch), str(renders)], "logview": [str(scratch), str(renders)], "keymap": [],
                     "charmap": [str(ROOT / "assets/fonts/liberation"), str(renders)]}.get(name, [str(renders)])
+            result = subprocess.run([str(binary), *args], env=env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("PASS", result.stdout)
             # The tests write the recent list only under the scratch HOME.
@@ -142,8 +141,7 @@ class AccessoriesTests(unittest.TestCase):
         entries = re.findall(r'\{"([a-z]+)", "([^"]+)", "([a-z-]+)", ([01]),', catalog)
         names = [e[0] for e in entries]
         # Catalogue order selects defaults: Viewer precedes its Paint alternative.
-        self.assertEqual(sorted(names), ["calc", "charmap", "clipbrd", "clock", "gfxdemo", "help", "hwreport", "logview", "mixer", "msconfig", "music", "paint", "printers", "recorder", "regedit", "resmeter", "scandisk", "schedtask", "sysinfo", "sysmon", "viewer", "wordpad"])
-        self.assertEqual(sorted(names), ["calc", "charmap", "clock", "freecell", "gfxdemo", "hearts", "help", "hwreport", "mines", "mixer", "music", "paint", "regedit", "serial", "solitaire", "viewer"])
+        self.assertEqual(sorted(names), ["calc", "charmap", "clipbrd", "clock", "freecell", "gfxdemo", "hearts", "help", "hwreport", "logview", "mines", "mixer", "msconfig", "music", "paint", "printers", "recorder", "regedit", "resmeter", "scandisk", "schedtask", "serial", "solitaire", "sysinfo", "sysmon", "viewer", "wordpad"])
         build = load("acc_build", ROOT / "apps/desktop/build_desktop.py")
         self.assertEqual(set(build.ACCESSORIES) | set(build.SYSTOOLS) | {"regedit", "gfxdemo", "hwreport", "printers"}, set(names))
         self.assertIn("regedit", build.PROGRAMS)
@@ -157,6 +155,7 @@ class AccessoriesTests(unittest.TestCase):
         for _, _, icon, _ in entries:
             self.assertRegex(listing, rf"/32x32/[a-z]+/{re.escape(icon)}\.png")
         # File-taking accessories are exactly the ones the desktop passes LAUNCH arguments to.
+        # G14: ScanDisk takes a drive root (Check Now on the drive's Tools tab).
         self.assertEqual({e[0] for e in entries if e[3] == "1"}, {"clipbrd", "help", "music", "paint", "scandisk", "viewer", "wordpad"})
 
     def test_stb_provenance(self):

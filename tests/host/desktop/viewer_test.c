@@ -163,7 +163,7 @@ int main(int argc, char **argv)
         app.wallpaper = NULL; du_render(&ui); viewer_event(&ui, &(struct du_event){.type = DU_EV_ACTIVATE, .id = V_M_WALL_TILE}, &app); assert(!calls);   /* no hook: nothing happens */
         app.wallpaper = record;
         snprintf(path, sizeof(path), "%s/b-photo.jpg", scratch); viewer_open(&app, path);
-        du_render(&ui); assert(!(app.file_items[4].flags & DU_ITEM_DISABLED));
+        du_render(&ui); assert(!(app.file_items[6].flags & DU_ITEM_DISABLED));
         viewer_event(&ui, &(struct du_event){.type = DU_EV_ACTIVATE, .id = V_M_WALL_TILE}, &app);
         assert(calls == 1 && last_mode == 1 && !strcmp(last_path, path) && ui.dialog.kind && strstr(ui.dialog.text, "tiled")); ui.dialog.kind = 0;
         viewer_event(&ui, &(struct du_event){.type = DU_EV_ACTIVATE, .id = V_M_WALL_STRETCH}, &app); assert(calls == 2 && last_mode == 2); ui.dialog.kind = 0;
@@ -190,7 +190,7 @@ int main(int argc, char **argv)
         assert(strstr(text, "wallpaper_mode=stretch") && strstr(text, "wallpaper=/x/y.JPG") && !strstr(text, "dog.png"));
         assert(acc_wallpaper_write(cfg, "relative.png", ACC_WALL_TILE) == -ENAMETOOLONG && acc_wallpaper_write(cfg, "/x/a.gif", ACC_WALL_TILE) == -EINVAL);
         assert(acc_wallpaper_write(cfg, "/x/a.png", 99) == -EINVAL);
-        char longp[300]; memset(longp, 'a', sizeof(longp)); longp[0] = '/'; strcpy(longp + 250, ".png");
+        char longp[300]; memset(longp, 'a', sizeof(longp)); longp[0] = '/'; strcpy(longp + 270, ".png");   /* longer than CFG_PATH_MAX (G20: 256) */
         assert(acc_wallpaper_write(cfg, longp, ACC_WALL_TILE) == -ENAMETOOLONG);
         char missing[1100]; snprintf(missing, sizeof(missing), "%s/new.cfg", scratch);
         assert(!acc_wallpaper_write(missing, "/a/b.bmp", ACC_WALL_CENTER));        /* no settings file yet: defaults, then the wallpaper */

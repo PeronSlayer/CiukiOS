@@ -114,13 +114,9 @@ static void identical_frame(void)
     /* Derive expected pixels from the pinned source artwork, independently
      * of the mask submitted to the presenter. Mono hardware has no shadow. */
     if (shown) {
+        /* G25's accessibility pointer (large/inverted) selects the artwork; G12's Mouse > Pointers scheme
+         * (0 Ciuki, 1 large, 2 inverted) is applied to it the way compositor.c cursor_raster() does. */
         struct desk_tool_cursor art=desk_tool_cursor_scheme(d.cursor_shape,d.sh.cfg.access.pointer);
-        for (int y=0;y<32;y++) for (int x=0;x<32;x++) {
-            int px=d.mouse_x-art.hot_x+x, py=d.mouse_y-art.hot_y+y;
-            uint32_t bit=0x80000000u>>x;
-            if (px>=0 && py>=0 && (unsigned)px<d.width && (unsigned)py<d.height && (art.mask[y]&bit))
-                expected[(unsigned)py*d.width+(unsigned)px]=art.image[y]&bit ? 0xffffffu : 0;
-        struct desk_tool_cursor art=desk_tool_cursor(d.cursor_shape);
         const struct desk_cursor_raster *source=desk_generic_cursor(d.cursor_shape);
         unsigned width=32,height=32; int hx=art.hot_x,hy=art.hot_y;
         if(d.shell && d.sh.cfg.pointer_scheme==1 && source) {

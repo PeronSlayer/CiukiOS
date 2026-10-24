@@ -29,7 +29,7 @@ struct desk_dirty_row { int32_t left, right; };   /* visible-span painter (compo
 #define DESK_TASK_X 4
 #define DESK_BACKGROUND 0x375564u
 #define DESK_PORTRAIT_SIZE 256
-#define DESK_MENU_MAX 32
+#define DESK_MENU_MAX 64   /* the integrated image's /Programs holds 39 programs; 32 hid Task Manager, Terminal, Image Viewer and WordPad */
 #define DESK_MENU_ROW 28
 #define DESK_CLOSE_NS 2000000000ull
 /* App scenarios (runtime-selected in the post-fault interaction stage): the

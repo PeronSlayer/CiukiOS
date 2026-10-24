@@ -7,12 +7,18 @@
 #define DESK_FOLDER "/Documents/Desktop"
 #define DESK_TRASH "/Documents/Trash"   /* the pre-G2 Trash folder: its items are migrated into C:\RECYCLED (RB_LEGACY_TRASH) */
 #define DESK_FOLDER_POLL_SLOTS (2u * FM_ENTRIES)
-enum { DF_NONE, DF_REFRESH, DF_FOLDER, DF_TEXT, DF_BITMAP, DF_RENAME, DF_DELETE, DF_PASTE, DF_CUT, DF_COPY, DF_PROPERTIES, DF_EMPTY, DF_UNDO, DF_SHORTCUT, DF_PASTE_SHORTCUT, DF_PASTE_INTO };
+enum { DF_NONE, DF_REFRESH, DF_FOLDER, DF_TEXT, DF_BITMAP, DF_RENAME, DF_DELETE, DF_PASTE, DF_CUT, DF_COPY, DF_PROPERTIES, DF_EMPTY, DF_UNDO, DF_SHORTCUT, DF_PASTE_SHORTCUT, DF_PASTE_INTO, DF_SHORTCUT_FINISH };
 struct desk_folder {
     struct fm_model model;
     struct fm_job job;
     struct files_transfer *transfer;
     struct fm_model result;
+    struct fm_model *picker;
+    int wizard, wizard_window, wizard_focus, picker_scroll, picker_click;
+    uint64_t picker_click_ns;
+    int wizard_select_all;
+    char shortcut_target[260], shortcut_args[1024], shortcut_name[FM_NAME];
+    char picker_path[FM_PATH], wizard_error[160];
     int result_error, clipboard_job, dialog_window, undo_job;
     /* G2 Recycle Bin: the delete awaiting its confirmation, the policy read for it,
      * the running bin job (RB op) and the full/empty state of the icon. */
@@ -32,6 +38,7 @@ struct desk_folder {
     unsigned revision;
     struct folder_worker *worker;
 };
+struct desk_launch_record;
 struct desktop;
 struct desk_box;
 int desk_folder_init(struct desktop *, const struct fm_vfs *);
@@ -58,6 +65,14 @@ void desk_folder_dialog_paint(struct desktop *, struct desk_box, struct desk_box
 void desk_folder_dialog_click(struct desktop *, int x, int y);
 void desk_folder_dialog_key(struct desktop *, int code, int value);
 void desk_folder_cancel(struct desktop *);
+int desk_folder_link_read(struct desktop *, const char *, struct desk_launch_record *);
+int desk_folder_link_create(struct desktop *, const char *, const char *, const struct desk_launch_record *);
+void desk_folder_shortcut_begin(struct desktop *);
+void desk_folder_shortcut_close(struct desktop *);
+void desk_folder_shortcut_action(struct desktop *, unsigned);
+void desk_folder_shortcut_key(struct desktop *, int, unsigned);
+void desk_folder_shortcut_paint(struct desktop *, struct desk_box, struct desk_box);
+void desk_folder_shortcut_click(struct desktop *, int, int);
 void desk_folder_changed(struct desktop *);
 int desk_folder_busy(struct desktop *);
 const char *desk_folder_activity(const struct desktop *);

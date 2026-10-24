@@ -320,7 +320,8 @@ static void tooltips(void)
     motion(42, 170); tick_ms(600); assert(u.tip.visible); input(CIUKI_INPUT_WHEEL, 0, 1, 0); assert(!u.tip.visible);
     /* A widget without text never shows one. */
     motion(300, 300); tick_ms(100); struct du_widget *plain = du_add(&u, DU_BUTTON, 63, (struct du_rect){220, 160, 60, 24}, "None");
-    motion(plain->box.x + 4, plain->box.y + 4); tick_ms(900); assert(!u.tip.visible && du_next_deadline(&u) == UINT64_MAX);
+    plain->tip[0] = 0;   /* G15 gives every control a fallback tip; a program removes it by clearing it */
+    motion(plain->box.x + 4, plain->box.y + 4); tick_ms(900); assert(!u.tip.visible && !u.tip.w);   /* G12's caret blink may still own du_next_deadline */
     motion(300, 300);
     puts("PASS G16 tooltips: 500 ms initial delay restarted by movement, 5 s autopop, 100 ms reshow, hide on leave/press/key/wheel, bounded invalidation");
 }

@@ -27,6 +27,7 @@ extern void desk_access_indicator_draw(struct desktop *, struct du_canvas *, str
 extern void desk_access_flash_draw(struct desktop *, struct desk_box) __attribute__((weak));
 extern void desk_access_magnifier_set(struct desktop *, int on) __attribute__((weak));
 extern int desk_access_magnifier_on(const struct desktop *) __attribute__((weak));
+#include <strings.h>
 
 /* ---- theme hooks ------------------------------------------------------- */
 /* Every shell colour is a theme colour (desk_theme; DU_* are the same
@@ -47,6 +48,7 @@ static unsigned keymap_mods(const struct desktop *d);
 static int menu_letter(struct desktop *d, int level, unsigned ch);
 static int internal_find(const struct desktop *d, int kind);
 
+static void desktop_icon_rename_begin(struct desktop *, int);
 /* fx-19 selection and drag session (defined after the icon painter). */
 static int drop_lit(const struct desktop *d, int k);
 static void dnd_commit(struct desktop *d, unsigned effect);
@@ -347,6 +349,7 @@ static const char *client_icon(const struct desktop *d, int i)
     const struct desk_client *c = &d->clients[i];
     if (c->internal == DESK_INTERNAL_ABOUT) return "ciuki";
     if (c->internal == DESK_INTERNAL_RUN) return "go-jump";
+    if (c->internal == DESK_INTERNAL_SHORTCUT || c->internal == DESK_INTERNAL_SHORTCUT_WIZARD) return "emblem-symbolic-link";
     if (c->internal == DESK_INTERNAL_TRANSFER || c->internal==DESK_INTERNAL_PROGRAMS) return "folder";
     if (c->internal == DESK_INTERNAL_SHUTDOWN || c->internal == DESK_INTERNAL_POWER) return "system-shutdown";
     if (c->internal) return du_message_icon_name(d->sh.message_kind) ? du_message_icon_name(d->sh.message_kind) : "dialog-information";
@@ -382,6 +385,11 @@ static void item(struct sh_menu *m, const char *label, const char *icon, int act
 static void separator(struct sh_menu *m) { item(m, "", NULL, SH_ACT_NONE, 0, SH_ITEM_SEPARATOR); }
 
 /* Only projected Desktop entries may receive filesystem operations. */
+static int network_icon(const struct desktop *d, int index)
+{
+    return index>=0 && index<d->sh.icon_count && !strcmp(d->sh.icons[index].program,"control") &&
+           !strcmp(d->sh.icons[index].argument,"--panel=network");
+}
 static int icon_is_entry(const struct desktop *d, int index)
 {
     return d->sh.folder && index >= 3 && index < d->sh.icon_count &&
@@ -390,6 +398,11 @@ static int icon_is_entry(const struct desktop *d, int index)
 static const char *icon_position_name(const struct desktop *d, int index)
 {
     if (index < 3) return index == 0 ? "/Computer" : index == 1 ? (d->sh.profile.documents[0] ? d->sh.profile.documents : "/Documents") : "/Trash";
+    if (network_icon(d,index)) return "/Network";
+    if (index>=0 && index<d->sh.icon_count && d->sh.icons[index].action==SH_ACT_WIN32_LINK) {
+        unsigned link=(unsigned)strtoul(d->sh.icons[index].argument,NULL,10);
+        if (link<d->v3_link_count) return d->v3_links[link].source;
+    }
     return icon_is_entry(d, index) ? d->sh.icons[index].label : "/Pictures";
 }
 /* SM-9: the underlined access keys of the shell's fixed menus, the Windows 98
@@ -401,14 +414,16 @@ static const struct { int kind; const char *label; char key; } access_keys[] = {
     {SH_MENU_START,"Programs",'p'},{SH_MENU_START,"Documents",'d'},{SH_MENU_START,"Settings",'s'},
     {SH_MENU_START,"Find",'f'},{SH_MENU_FIND,"Files or Folders...",'f'},
     {SH_MENU_START,"Help",'h'},{SH_MENU_START,"Run...",'r'},{SH_MENU_START,"Shut Down...",'u'},
-    {SH_MENU_START,"Favorites",'a'},{SH_MENU_START,"Find",'f'},{SH_MENU_START,"Help",'h'},{SH_MENU_START,"Run...",'r'},{SH_MENU_START,"Shut Down...",'u'},
+    {SH_MENU_START,"Favorites",'a'},
     {SH_MENU_SETTINGS,"Control Panel",'c'},{SH_MENU_SETTINGS,"Task Manager",'t'},
     {SH_MENU_SETTINGS,"Taskbar & Start Menu",'k'},
     {SH_MENU_HELP,"Keyboard Shortcuts",'k'},{SH_MENU_HELP,"About CiukiOS",'a'},
     {SH_MENU_DOCUMENTS,"My Documents",'m'},{SH_MENU_DOCUMENTS,"Clear Recent Documents",'c'},
     {SH_MENU_DESKTOP,"Arrange icons",'i'},{SH_MENU_DESKTOP,"Line up",'u'},{SH_MENU_DESKTOP,"Refresh",'f'},
     {SH_MENU_DESKTOP,"New",'n'},{SH_MENU_DESKTOP,"Paste",'p'},{SH_MENU_DESKTOP,"Properties",'r'},
-    {SH_MENU_NEW,"Folder",'f'},{SH_MENU_NEW,"Text file",'t'},
+    {SH_MENU_NEW,"Folder",'f'},{SH_MENU_NEW,"Text file",'t'},{SH_MENU_NEW,"Bitmap image",'b'},{SH_MENU_NEW,"Shortcut",'s'},
+    {SH_MENU_NEW,"Bitmap image",'b'},{SH_MENU_NEW,"Shortcut",'s'},
+    {SH_MENU_ARRANGE,"By Name",'n'},{SH_MENU_ARRANGE,"By Type",'t'},{SH_MENU_ARRANGE,"By Size",'s'},{SH_MENU_ARRANGE,"By Date",'d'},
     {SH_MENU_ICON,"Open",'o'},{SH_MENU_ICON,"Open With",'w'},{SH_MENU_ICON,"Cut",'t'},{SH_MENU_ICON,"Copy",'c'},
     {SH_MENU_ICON,"Rename",'m'},{SH_MENU_ICON,"Delete",'d'},{SH_MENU_ICON,"Properties",'r'},
     {SH_MENU_TASK,"Restore",'r'},{SH_MENU_TASK,"Move",'m'},{SH_MENU_TASK,"Size",'s'},{SH_MENU_TASK,"Minimize",'n'},
@@ -502,11 +517,10 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
 {
     memset(m, 0, sizeof(*m));
     m->kind = kind; m->hot = -1;
-    m->row_h = desk_appearance_active ? desk_metric(AP_MENU,SH_SUB_ROW)+desk_scale(10) : kind == SH_MENU_START ? SH_START_ROW : SH_SUB_ROW;
-    m->icon = 16;   /* every menu: the Tango 16 px artwork (the Start menu too) */
+    m->row_h = desk_appearance_active ? desk_metric(AP_MENU,SH_SUB_ROW)+desk_scale(10) : kind == SH_MENU_START ? desk_menu_row(d) : SH_SUB_ROW;
+    m->icon = 16;   /* every menu: the Tango 16 px artwork */
     if (kind>=128) { shortcut_programs_menu(d,m,kind); return; }
-    m->row_h = kind == SH_MENU_START ? desk_menu_row(d) : SH_SUB_ROW;
-    m->icon = kind==SH_MENU_START && !d->sh.cfg.start_small ? 32 : 16;
+    m->icon = kind==SH_MENU_START && !d->sh.cfg.start_small ? 32 : 16;   /* G20: the Start menu's large icons */
     switch (kind) {
     case SH_MENU_START:
         custom_folder_items(d,m,SH_ROOT_START);
@@ -517,8 +531,6 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         item(m, "Settings", "preferences-system", SH_ACT_SUBMENU, SH_MENU_SETTINGS, 0);
         item(m, "Find", "system-search", SH_ACT_SUBMENU, SH_MENU_FIND, 0);
         item(m, "Help", "help-browser", SH_ACT_HELP, 0, 0); /* G15: launch Help directly */
-        item(m,"Find","system-search",SH_ACT_FIND,0,0);
-        item(m, "Help", "help-browser", SH_ACT_SUBMENU, SH_MENU_HELP, 0);
         item(m, "Run...", "go-jump", SH_ACT_RUN, 0, 0);
         item(m, "About CiukiOS", "ciuki", SH_ACT_ABOUT, 0, 0);   /* G15: it left the Help submenu */
         separator(m);
@@ -642,8 +654,16 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         item(m,"Folder","folder-new",SH_ACT_FILE,DF_FOLDER,0);
         item(m,"Text file","text-x-generic",SH_ACT_FILE,DF_TEXT,0);
         item(m,"Bitmap Image","image-x-generic",SH_ACT_FILE,DF_BITMAP,0);
-        item(m,"Shortcut...","emblem-symbolic-link",SH_ACT_FILES_ACTION,FILES_NEW_SHORTCUT,0);
+        item(m,"Shortcut...","emblem-symbolic-link",SH_ACT_FILE,DF_SHORTCUT,0);
         item(m,"Document...","document-new",SH_ACT_FILES_ACTION,FILES_NEW_REGISTERED,0);
+        break;
+    case SH_MENU_ARRANGE:
+        item(m,"By Name",NULL,SH_ACT_ICON_SORT,0,d->sh.cfg.icon_sort==0 ? SH_ITEM_DEFAULT : 0);
+        item(m,"By Type",NULL,SH_ACT_ICON_SORT,1,d->sh.cfg.icon_sort==1 ? SH_ITEM_DEFAULT : 0);
+        item(m,"By Size",NULL,SH_ACT_ICON_SORT,2,d->sh.cfg.icon_sort==2 ? SH_ITEM_DEFAULT : 0);
+        item(m,"By Date",NULL,SH_ACT_ICON_SORT,3,d->sh.cfg.icon_sort==3 ? SH_ITEM_DEFAULT : 0);
+        separator(m);
+        item(m,d->sh.cfg.icon_auto_arrange ? "Auto Arrange  ✓" : "Auto Arrange",NULL,SH_ACT_ICON_AUTO,0,0);
         break;
     case SH_MENU_OPEN_WITH:
         if (icon_is_entry(d, d->sh.menu_owner)) {
@@ -655,13 +675,14 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         }
         break;
     case SH_MENU_DESKTOP:
-        item(m,"Arrange icons",NULL,SH_ACT_ARRANGE,0,0);
+        item(m,"Arrange icons",NULL,SH_ACT_SUBMENU,SH_MENU_ARRANGE,0);
         item(m,"Line up",NULL,SH_ACT_ARRANGE,1,0);
         item(m,"Refresh","view-refresh",SH_ACT_REFRESH,0,0);
         item(m,"New","document-new",SH_ACT_SUBMENU,SH_MENU_NEW,d->sh.folder ? 0 : SH_ITEM_DISABLED);
         item(m,"Paste","edit-paste",SH_ACT_FILE,DF_PASTE,d->sh.folder ? 0 : SH_ITEM_DISABLED);
         item(m,"Paste Shortcut",NULL,SH_ACT_FILE,DF_PASTE_SHORTCUT,d->sh.folder ? 0 : SH_ITEM_DISABLED);
         item(m,"Undo    Ctrl+Z","edit-undo",SH_ACT_FILE,DF_UNDO,d->sh.folder ? 0 : SH_ITEM_DISABLED);
+        item(m,d->sh.cfg.desktop_icons ? "Show Desktop Icons  ✓" : "Show Desktop Icons",NULL,SH_ACT_ICONS_SHOW,0,0);
         separator(m);
         item(m,"Properties","document-properties",SH_ACT_CONTROL,CP_DISPLAY+1,program_index(d,"control")<0 ? SH_ITEM_DISABLED : 0);
         break;
@@ -675,8 +696,13 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         break;
     case SH_MENU_ICON:
         item(m, "Open", NULL, SH_ACT_ICON_OPEN, d->sh.menu_owner, SH_ITEM_DEFAULT);
+        if (d->sh.menu_owner==0 || d->sh.menu_owner==1)
+            item(m,"Explore","folder",SH_ACT_ICON_OPEN,d->sh.menu_owner,0);
+        if (network_icon(d,d->sh.menu_owner))
+            item(m,"Explore","network-workgroup",SH_ACT_ICON_OPEN,d->sh.menu_owner,0);
         if (d->sh.menu_owner == 2) {   /* G2: the Recycle Bin */
             item(m, "Empty Recycle Bin", "user-trash", SH_ACT_EMPTY_RECYCLE, 0, d->sh.folder && d->sh.folder->bin_full ? 0 : SH_ITEM_DISABLED);
+            item(m,"Rename",NULL,SH_ACT_RENAME,2,0);
             separator(m);
             item(m, "Properties", "document-properties", SH_ACT_ICON_PROPERTIES, 2, 0);
             break;
@@ -696,7 +722,8 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
                 item(m,"Paste",NULL,SH_ACT_FILE,DF_PASTE_INTO,0);
             item(m,"Rename    F2", NULL, SH_ACT_RENAME,d->sh.menu_owner,marked_count(d,0)>1 ? SH_ITEM_DISABLED : 0);
             item(m,"Delete", "edit-delete", SH_ACT_FILE, DF_DELETE,0);
-        }
+        } else if ((d->sh.menu_owner>=0 && d->sh.menu_owner<3) || network_icon(d,d->sh.menu_owner))
+            item(m,"Rename",NULL,SH_ACT_RENAME,d->sh.menu_owner,0);
         separator(m);
         item(m, "Properties", "document-properties", SH_ACT_ICON_PROPERTIES, d->sh.menu_owner, 0);
         break;
@@ -1026,6 +1053,12 @@ static void game_data_action(struct desktop *d,int index,unsigned button)
     }
     damage_all(d);
 }
+static void desktop_refresh(struct desktop *d)
+{
+    d->v3_links_force|=DESK_LINKS_SCAN; d->v3_links_next=0; desk_links_refresh(d);
+    if (d->sh.folder) d->sh.folder->command=DF_REFRESH;
+    d->sh.background_valid=0; damage_all(d);
+}
 static void act(struct desktop *d, const struct sh_item *it)
 {
     char argument[24];
@@ -1137,8 +1170,19 @@ static void act(struct desktop *d, const struct sh_item *it)
     /* G20 routes the taskbar context-menu Properties command to its dedicated
      * Taskbar & Start Menu Control Panel page. */
     case SH_ACT_TASKBAR_PROPERTIES: launch_named(d, "control", "--panel=taskbar"); break;
+    case SH_ACT_ICON_SORT:
+        if (it->arg>=0 && it->arg<=3) {
+            d->sh.cfg.icon_sort=it->arg; d->sh.want_save=1; d->sh.icon_selected=-1; d->sh.icon_count=0;
+            desk_shell_apply(d);
+        }
+        break;
+    case SH_ACT_ICON_AUTO:
+        d->sh.cfg.icon_auto_arrange=!d->sh.cfg.icon_auto_arrange;
+        if (d->sh.cfg.icon_auto_arrange) cfg_icons_arrange_at(&d->sh.cfg,d->width,d->height);
+        d->sh.want_save=1; d->sh.icon_selected=-1; d->sh.icon_count=0; desk_shell_apply(d);
+        break;
     case SH_ACT_ARRANGE: {
-        if (!it->arg) cfg_icons_arrange(&d->sh.cfg);
+        if (!it->arg) cfg_icons_arrange_at(&d->sh.cfg,d->width,d->height);
         else {
             uint8_t occupied[512]={0};
             int cw=d->sh.icon_count ? d->sh.icons[0].box.w : 96;
@@ -1158,7 +1202,7 @@ static void act(struct desktop *d, const struct sh_item *it)
                 int slot=(col*rows+row)%cells;
                 while (occupied[slot/8] & (1u<<(slot%8))) slot=(slot+1)%cells;
                 occupied[slot/8]|=1u<<(slot%8);
-                cfg_icon_move(&d->sh.cfg,icon_position_name(d,k),8+(slot/rows)*cw,DESK_BAR+10+(slot%rows)*ch);
+                cfg_icon_move_at(&d->sh.cfg,icon_position_name(d,k),d->width,d->height,8+(slot/rows)*cw,DESK_BAR+10+(slot%rows)*ch);
             }
         }
         d->sh.want_save=1;
@@ -1166,11 +1210,19 @@ static void act(struct desktop *d, const struct sh_item *it)
         desk_shell_apply(d);
         break;
     }
+    case SH_ACT_ICONS_SHOW:
+        if (d->sh.dnd.active) desk_shell_drag_cancel(d);
+        d->sh.band=0; d->sh.icon_pending=0; d->sh.icon_editing=-1;
+        if (d->sh.folder) d->sh.folder->editing=-1;
+        d->sh.cfg.desktop_icons=!d->sh.cfg.desktop_icons; d->sh.want_save=1;
+        d->sh.background_valid=0; damage_all(d); break;
     case SH_ACT_REFRESH:
-        d->sh.want_reload=1; d->sh.want_wallpaper=1;
-        if (d->sh.folder) d->sh.folder->command=DF_REFRESH;
+        desktop_refresh(d);
         break;
-    case SH_ACT_RENAME: desk_folder_rename(d,it->arg); break;
+    case SH_ACT_RENAME:
+        if (icon_is_entry(d,it->arg)) desk_folder_rename(d,it->arg);
+        else if ((it->arg>=0 && it->arg<3) || network_icon(d,it->arg)) desktop_icon_rename_begin(d,it->arg);
+        break;
     case SH_ACT_FILE:
         if (d->sh.folder) {
             d->sh.folder->command=it->arg; d->sh.folder->index=d->sh.menu_owner-3;
@@ -1211,7 +1263,9 @@ static void act(struct desktop *d, const struct sh_item *it)
         break;
     case SH_ACT_ICON_OPEN: icon_open(d, it->arg); break;
     case SH_ACT_ICON_PROPERTIES:
-        if (it->arg==2 && d->sh.icon_count>2 && !strcmp(d->sh.icons[2].label,"Recycle Bin")) { launch_named(d,"files","recycle:properties"); break; }   /* G2 */
+        if (it->arg==0 && d->sh.icon_count>0 && !strcmp(d->sh.icons[0].argument,"Computer")) { launch_named(d,"control","--panel=system"); break; }   /* My Computer */
+        if (network_icon(d,it->arg)) { launch_named(d,"control","--panel=network"); break; }
+        if (it->arg==2 && d->sh.icon_count>2) { launch_named(d,"files","recycle:properties"); break; }   /* G2 */
         if (it->arg>=0 && it->arg<d->sh.icon_count) {
             const struct sh_icon *ic=&d->sh.icons[it->arg];
             if (ic->action==SH_ACT_WIN32_LINK) { desk_shortcut_properties(d,(unsigned)strtoul(ic->argument,NULL,10),0); break; }
@@ -2241,15 +2295,15 @@ static void draw_notification(struct desktop *d,struct desk_box clip)
  * filter 1 4 6 4 1 (radius 4), raised 3x, capped at HALO_PEAK and moved
  * 1 px down, blended in black under the white text. It is computed once per
  * label (and theme text mode) and cached; a repaint only blends it. */
-#define SH_LABEL_FONT (desk_appearance_active ? desk_item_font(AP_ICON) : DESK_FONT_LABEL)
-#define ICON_CELL_W 96
-#define ICON_CELL_H 94
+#define SH_LABEL_FONT (desk_appearance_active ? desk_item_font(AP_ICON) : d->sh.cfg.icon_font)
+#define ICON_CELL_W (d->sh.cfg.icon_spacing_x)
+#define ICON_CELL_H (d->sh.cfg.icon_spacing_y)
 #define SH_DESKTOP_ICON 48
 #define LABEL_TOP 54                                   /* label block (halo included) in the cell */
 #define LABEL_H (ICON_CELL_H - LABEL_TOP)
 #define LABEL_ROOM (ICON_CELL_W - 12)                  /* widest line; the halo stays in the cell */
-#define LABEL_BASE 14                                  /* first baseline below LABEL_TOP */
-#define LABEL_PITCH 16
+#define LABEL_BASE (desk_font(d->sh.cfg.icon_font)->ascent+1)                                  /* first baseline below LABEL_TOP */
+#define LABEL_PITCH (desk_font_line(d->sh.cfg.icon_font)-1)
 #define HALO_GAIN 48                                   /* sixteenths: 3x the blurred coverage */
 #define HALO_PEAK 210                                  /* at most 82 % black */
 static void icon_add(struct desktop *d, const char *label, const char *program, const char *argument,
@@ -2279,26 +2333,53 @@ static void icons_layout(struct desktop *d)
         if (y + desk_metric(AP_ICON_Y,ICON_CELL_H) > bottom && y > top) { y = top; x += desk_metric(AP_ICON_X,ICON_CELL_W); }
         int px=x,py=y;
         const char *name=icon_position_name(d, k);
-        if (cfg_icon_position(&d->sh.cfg,name,&px,&py)) {
+        if (!d->sh.cfg.icon_auto_arrange && cfg_icon_position_at(&d->sh.cfg,name,d->width,d->height,&px,&py)) {
             if (px+desk_metric(AP_ICON_X,ICON_CELL_W)>(int)d->width) px=(int)d->width-desk_metric(AP_ICON_X,ICON_CELL_W);
             if (px<0) px=0;
             if (py+desk_metric(AP_ICON_Y,ICON_CELL_H)>bottom) py=bottom-desk_metric(AP_ICON_Y,ICON_CELL_H);
             if (py<top) py=top;
         }
         d->sh.icons[k].box = (struct desk_box){px, py, desk_metric(AP_ICON_X,ICON_CELL_W), desk_metric(AP_ICON_Y,ICON_CELL_H)};
+        if (d->sh.cfg.icon_auto_arrange && cfg_icon_move_at(&d->sh.cfg,name,d->width,d->height,px,py)) d->sh.want_save=1;
         y += desk_metric(AP_ICON_Y,ICON_CELL_H);
+    }
+}
+static int desktop_icon_compare(const struct fm_entry *a, const struct fm_entry *b, int mode)
+{
+    int c=0;
+    if (mode==2) c=a->meta.size<b->meta.size ? -1 : a->meta.size>b->meta.size ? 1 : 0;
+    else if (mode==3) c=a->meta.modified<b->meta.modified ? -1 : a->meta.modified>b->meta.modified ? 1 : 0;
+    else if (mode==1) {
+        enum fm_kind ka=fm_kind(a),kb=fm_kind(b); c=ka<kb ? -1 : ka>kb ? 1 : 0;
+        if (!c) c=strcasecmp(strrchr(a->name,'.') ? strrchr(a->name,'.') : "",strrchr(b->name,'.') ? strrchr(b->name,'.') : "");
+    }
+    if (!c) c=strcasecmp(a->name,b->name);
+    if (!c) c=strcmp(a->name,b->name);
+    return c;
+}
+static void desktop_icon_sort(struct desktop *d)
+{
+    struct fm_model *m=d->sh.folder ? &d->sh.folder->model : NULL;
+    if (!m || d->sh.cfg.icon_sort<0 || d->sh.cfg.icon_sort>3) return;
+    for (unsigned i=1;i<m->count;i++) {
+        struct fm_entry entry=m->entries[i]; unsigned at=i;
+        while (at && desktop_icon_compare(&entry,&m->entries[at-1],d->sh.cfg.icon_sort)<0) {
+            m->entries[at]=m->entries[at-1]; at--;
+        }
+        m->entries[at]=entry;
     }
 }
 static void icons_build(struct desktop *d)
 {
     /* Indices change: a desktop-source drag and a band end here. */
     if (d->sh.dnd.active && d->sh.dnd.source < 0) desk_shell_drag_cancel(d);
-    d->sh.band = 0; d->sh.icon_pending = 0;
+    d->sh.dnd.resolved_icon=-1;
+    d->sh.band = 0; d->sh.icon_pending = 0; d->sh.icon_editing=-1;
     d->sh.icon_count = 0; d->sh.icon_selected=-1; d->sh.focus_unselected=0; d->sh.anchor=-1;
-    icon_add(d, "Computer", "files", "Computer", "ciuki-computer", SH_ACT_LAUNCH, 1);
+    desktop_icon_sort(d);
+    icon_add(d, "My Computer", "files", "Computer", "ciuki-computer", SH_ACT_LAUNCH, 1);
     if (d->sh.icon_count!=1) return;
-    icon_add(d, "Documents", "files", d->sh.profile.documents[0] ? d->sh.profile.documents : "/Documents", "user-home", SH_ACT_LAUNCH, 0);
-    icon_add(d, "Documents", "files", "/Documents", d->sh.cfg.document_icon ? "folder" : "user-home", SH_ACT_LAUNCH, 0);
+    icon_add(d, "My Documents", "files", d->sh.profile.documents[0] ? d->sh.profile.documents : "/Documents", d->sh.cfg.document_icon ? "folder" : "user-home", SH_ACT_LAUNCH, 0);
     if (d->sh.icon_count!=2) return;
     icon_add(d, "Recycle Bin", "files", "Recycle Bin", d->sh.cfg.recycle_icon ? "edit-delete" : "user-trash", SH_ACT_LAUNCH, 0);
     if (d->sh.icon_count!=3) return;
@@ -2310,14 +2391,104 @@ static void icons_build(struct desktop *d)
         icon_add(d,e->name,e->meta.type==FM_DIR ? "files" : cat ? cat->name : "ciuknote",path,
             e->meta.type==FM_DIR ? "folder" : strlen(e->name)>4 && fm_same_path(e->name+strlen(e->name)-4,".lnk") ? "emblem-symbolic-link" : cat ? cat->tango : "text-x-generic", SH_ACT_LAUNCH,0);
         if (d->sh.icon_count!=(int)i+4) return;
+        d->sh.icons[i+3].selected=(uint8_t)!!e->selected;
     }
-    /* Keep folder entries at index 3 + model index; Pictures is a shortcut. */
+    /* Keep folder entries at index 3 + model index; other system icons follow. */
     if (d->pictures_exists) {
         char path[FM_PATH];
         if (!fm_join(path,d->sh.profile.documents[0] ? d->sh.profile.documents : "/Documents","Pictures"))
             icon_add(d,"Pictures","files",path,"folder",SH_ACT_LAUNCH,0);
     }
+    icon_add(d,"Network Neighborhood","control","--panel=network","network-workgroup",SH_ACT_LAUNCH,0);
+    for (int k=0;k<d->sh.icon_count;k++) {
+        char override[FM_NAME];
+        if (cfg_icon_label(&d->sh.cfg,icon_position_name(d,k),override,sizeof(override)))
+            snprintf(d->sh.icons[k].label,sizeof(d->sh.icons[k].label),"%s",override);
+    }
     d->sh.icon_selected = -1;
+}
+static int desktop_program_target(struct desktop *d, const char *path, const struct fm_meta *meta)
+{
+    if (meta->type!=FM_FILE) return 0;
+    if (meta->exec) return 1;
+    for (unsigned i=0;i<d->program_count;i++) if (!strcmp(path,d->programs[i].path)) return 1;
+    const char *ext=strrchr(path,'.');
+    if (ext && (!strcasecmp(ext,".exe") || !strcasecmp(ext,".com") || !strcasecmp(ext,".bat") || !strcasecmp(ext,".pif"))) return 1;
+    if (!d->sh.folder) return 0;
+    struct fm_vfs *fs=&d->sh.folder->model.fs;
+    int fd=fs->open(fs->ctx,path,0); if (fd<0) return 0;
+    uint8_t signature[4]; unsigned at=0;
+    while (at<sizeof(signature)) { int n=fs->read(fs->ctx,fd,signature+at,sizeof(signature)-at); if (n<=0) break; at+=(unsigned)n; }
+    fs->close(fs->ctx,fd);
+    return (at==4 && !memcmp(signature,"\177ELF",4)) || (at>=2 && signature[0]=='M' && signature[1]=='Z');
+}
+/* Resolve every desktop link through one bounded dispatcher. Never execute a
+ * shell command: paths and argument vectors remain separate. */
+static int shortcut_resolve(struct desktop *d, struct desk_launch_record *record, unsigned depth)
+{
+    while (depth++<8) {
+        if (!desk_launch_valid(record)) return -EINVAL;
+        if (desk_target_url(record->target)) return 0;
+        char path[FM_PATH]; int r=fm_posix_path(path,record->target); if (r) return r;
+        const char *ext=strrchr(path,'.');
+        if (!ext || strcasecmp(ext,".lnk")) return 0;
+        r=desk_folder_link_read(d,path,record); if (r) return r;
+    }
+    return -EINVAL;
+}
+int desk_shell_open_record(struct desktop *d, const struct desk_launch_record *record, unsigned depth)
+{
+    if (!desk_launch_valid(record) || depth>=8) return -EINVAL;
+    if (desk_target_url(record->target)) return desk_task_launch(d,"netsurf",record->target);
+    char path[FM_PATH];
+    int r=fm_posix_path(path,record->target); if (r) return r;
+    const char *ext=strrchr(path,'.');
+    if (ext && !strcasecmp(ext,".lnk")) {
+        struct desk_launch_record *next=malloc(sizeof(*next)); if (!next) return -ENOMEM;
+        r=desk_folder_link_read(d,path,next);
+        if (!r) r=desk_shell_open_record(d,next,depth+1);
+        free(next); return r;
+    }
+    for (unsigned i=0;i<d->program_count;i++) if (!strcmp(path,d->programs[i].path)) {
+        if (!record->arguments[0]) return desk_task_launch(d,d->programs[i].name,NULL);
+        char text[sizeof(record->arguments)]; strcpy(text,record->arguments);
+        const char *args[6]; unsigned count=0; char *read=text,*write=text;
+        while (*read) {
+            while (*read==' ' || *read=='\t') read++;
+            if (!*read) break;
+            if (count==6) return -E2BIG;
+            args[count++]=write; int quote=0;
+            while (*read && (quote || (*read!=' ' && *read!='\t'))) {
+                if (*read=='"') { quote=!quote; read++; } else *write++=*read++;
+            }
+            if (quote) return -EINVAL;
+            while (*read==' ' || *read=='\t') read++;
+            *write++=0;
+        }
+        return count ? desk_task_launch_args(d,d->programs[i].name,args,count) : desk_task_launch(d,d->programs[i].name,NULL);
+    }
+    struct fm_meta meta;
+    if (!d->sh.folder) return d->v3_launch ? d->v3_launch(d,record) : -ENODEV;
+    struct fm_vfs *fs=&d->sh.folder->model.fs;
+    r=fs->stat_path(fs->ctx,path,&meta); if (r) return r;
+    if (meta.type==FM_DIR) return desk_task_launch(d,"files",path);
+    if (desktop_program_target(d,path,&meta)) {
+        if (!d->v3_launch) return -ENOSYS;
+        struct desk_launch_record *launch=malloc(sizeof(*launch)); if (!launch) return -ENOMEM;
+        *launch=*record;
+        if (strlen(path)>=sizeof(launch->target)) r=-ENAMETOOLONG;
+        else { strcpy(launch->target,path);
+            if (record->directory[0]) {
+                r=fm_posix_path(path,record->directory);
+                if (!r && strlen(path)>=sizeof(launch->directory)) r=-ENAMETOOLONG;
+                if (!r) strcpy(launch->directory,path);
+            }
+            if (!r) r=d->v3_launch(d,launch);
+        }
+        free(launch); return r;
+    }
+    const struct desk_catalog_entry *cat=desk_catalog_file(path);
+    return desk_task_launch(d,cat ? cat->name : "ciuknote",path);
 }
 static void icon_open(struct desktop *d, int index)
 {
@@ -2331,6 +2502,17 @@ static void icon_open(struct desktop *d, int index)
     if (ic->action==SH_ACT_WIN32_LINK) {
         unsigned k=(unsigned)strtoul(ic->argument,NULL,10);
         if (desk_link_launch(d,k)<0) desk_shortcut_properties(d,k,1);
+    }
+    else if (icon_is_entry(d,index)) {
+        struct desk_launch_record *record=calloc(1,sizeof(*record));
+        int r=-ENOMEM;
+        if (record) {
+            snprintf(record->label,sizeof(record->label),"%.63s",ic->label);
+            if (strlen(ic->argument)>=sizeof(record->target)) r=-ENAMETOOLONG;
+            else { strcpy(record->target,ic->argument); record->show=1; r=desk_shell_open_record(d,record,0); }
+            free(record);
+        }
+        if (r<0) desk_shell_notify_error(d,"Cannot open shortcut or item",r);
     }
     else if (ic->action == SH_ACT_LAUNCH) launch_named(d, ic->program, ic->argument[0] ? ic->argument : NULL);
 }
@@ -2351,7 +2533,14 @@ static int icon_hit(const struct desktop *d, int32_t x, int32_t y)
     }
     return -1;
 }
-static int label_lines(const char *label, char lines[2][32],int room)
+static void desktop_icon_rename_begin(struct desktop *d, int index)
+{
+    if (index<0 || index>=d->sh.icon_count || (d->sh.folder && d->sh.folder->busy)) return;
+    d->sh.icon_editing=index;
+    d->sh.icon_edit_cursor=(unsigned)snprintf(d->sh.icon_edit,sizeof(d->sh.icon_edit),"%s",d->sh.icons[index].label);
+    desk_focus(d,-1); damage(d,d->sh.icons[index].box);
+}
+static int label_lines(const struct desktop *d, const char *label, char lines[2][32],int room)
 {
     /* Up to two lines of at most room pixels, broken at the last space
      * that fits (a longer word is cut); a second line that still does not
@@ -2369,7 +2558,7 @@ static int label_lines(const char *label, char lines[2][32],int room)
     else snprintf(lines[1], 32, "%.*s\xe2\x80\xa6", (int)desk_text_fit_chars(f, rest, room - desk_text_measure(f, "\xe2\x80\xa6")), rest);
     return 2;
 }
-static void binomial(const uint16_t *in, uint16_t *out, int dx, int dy)
+static void binomial(const struct desktop *d, const uint16_t *in, uint16_t *out, int dx, int dy)
 {
     /* One pass of the 5-tap binomial filter along (dx, dy); zero outside. */
     static const unsigned k[5] = {1, 4, 6, 4, 1};
@@ -2382,11 +2571,11 @@ static void binomial(const uint16_t *in, uint16_t *out, int dx, int dy)
         out[y * ICON_CELL_W + x] = (uint16_t)((sum + 8) / 16);
     }
 }
-struct icon_halo { char text[sizeof(((struct sh_icon *)0)->label)]; int aa, valid; uint8_t alpha[ICON_CELL_W * LABEL_H]; };
+struct icon_halo { char text[sizeof(((struct sh_icon *)0)->label)]; int aa, valid, width, height, font; uint8_t alpha[]; };
 static struct icon_halo **label_halo;
 static unsigned halo_capacity;
-static const uint8_t empty_halo[ICON_CELL_W * LABEL_H];
-static const uint8_t *label_halo_of(int k, const char *label, char lines[2][32], int count)
+static const uint8_t empty_halo[256 * 256];
+static const uint8_t *label_halo_of(const struct desktop *d, int k, const char *label, char lines[2][32], int count)
 {
     /* Halo alpha of desktop icon k's label block (ICON_CELL_W x LABEL_H). */
     int aa = desk_theme->text_aa;
@@ -2396,18 +2585,22 @@ static const uint8_t *label_halo_of(int k, const char *label, char lines[2][32],
         if (!p) return empty_halo;
         memset(p+halo_capacity,0,(next-halo_capacity)*sizeof(*p)); label_halo=p; halo_capacity=next;
     }
-    if (!label_halo[k]) label_halo[k]=calloc(1,sizeof(**label_halo));
+    if (label_halo[k] && (label_halo[k]->width!=ICON_CELL_W || label_halo[k]->height!=LABEL_H || label_halo[k]->font!=d->sh.cfg.icon_font)) { free(label_halo[k]); label_halo[k]=NULL; }
+    if (!label_halo[k]) {
+        label_halo[k]=calloc(1,sizeof(**label_halo)+(size_t)ICON_CELL_W*LABEL_H);
+        if (label_halo[k]) { label_halo[k]->width=ICON_CELL_W; label_halo[k]->height=LABEL_H; label_halo[k]->font=d->sh.cfg.icon_font; }
+    }
     if (!label_halo[k]) return empty_halo;
     if (label_halo[k]->valid && label_halo[k]->aa == aa && !strcmp(label_halo[k]->text, label)) return label_halo[k]->alpha;
-    static uint32_t mask[ICON_CELL_W * LABEL_H];
-    static uint16_t a[ICON_CELL_W * LABEL_H], b[ICON_CELL_W * LABEL_H];
-    memset(mask, 0, sizeof(mask));
+    static uint32_t mask[256 * 256];
+    static uint16_t a[256 * 256], b[256 * 256];
+    memset(mask, 0, (size_t)ICON_CELL_W * LABEL_H * sizeof(*mask));
     struct desk_paint m = {mask, ICON_CELL_W, LABEL_H, 0, 0, ICON_CELL_W, LABEL_H};
     for (int l = 0; l < count; l++)
         desk_paint_text(&m, SH_LABEL_FONT, (ICON_CELL_W - desk_text_measure(SH_LABEL_FONT, lines[l])) / 2,
                         LABEL_BASE + l * LABEL_PITCH, lines[l], 0x0000ffu);
     for (int i = 0; i < ICON_CELL_W * LABEL_H; i++) a[i] = (uint16_t)(mask[i] & 255u);
-    for (int pass = 0; pass < 2; pass++) { binomial(a, b, 1, 0); binomial(b, a, 0, 1); }
+    for (int pass = 0; pass < 2; pass++) { binomial(d,a, b, 1, 0); binomial(d,b, a, 0, 1); }
     for (int y = 0; y < LABEL_H; y++) for (int x = 0; x < ICON_CELL_W; x++) {
         unsigned v = y ? (unsigned)a[(y - 1) * ICON_CELL_W + x] * HALO_GAIN / 16 : 0;   /* 1 px down */
         label_halo[k]->alpha[y * ICON_CELL_W + x] = (uint8_t)(v > HALO_PEAK ? HALO_PEAK : v);
@@ -2416,9 +2609,13 @@ static const uint8_t *label_halo_of(int k, const char *label, char lines[2][32],
     label_halo[k]->aa = aa; label_halo[k]->valid = 1;
     return label_halo[k]->alpha;
 }
+extern void desk_recovery_paint(struct desktop *, struct desk_box) __attribute__((weak));
+extern void desk_recovery_tick(struct desktop *) __attribute__((weak));
 static void draw_icons(struct desktop *d, struct desk_box clip)
 {
-    if (!d->sh.cfg.desktop_icons) return;
+    /* G14: Safe mode's corner labels under the icons; no icons at a command prompt. */
+    if (desk_recovery_paint) desk_recovery_paint(d, clip);
+    if (!d->sh.cfg.desktop_icons || d->terminal_shell) return;
     for (int k = 0; k < d->sh.icon_count; k++) {
         const struct sh_icon *ic = &d->sh.icons[k];
         struct desk_box b;
@@ -2426,19 +2623,20 @@ static void draw_icons(struct desktop *d, struct desk_box clip)
         struct du_canvas c = canvas(d, b);
         struct desk_paint p = painter(&c);
         int selected = desk_shell_icon_marked(d, k) || drop_lit(d, k);
-        int32_t ix = ic->box.x + (ic->box.w - SH_DESKTOP_ICON) / 2, iy = ic->box.y + 4;
+        int icon_size=desk_appearance_active ? desk_scale((desk_appearance.effects&AP_LARGE_ICONS) ? 48 : desk_appearance.item[AP_ICON].size) : SH_DESKTOP_ICON;
+        int32_t ix = ic->box.x + (ic->box.w - icon_size) / 2, iy = ic->box.y + desk_scale(4);
         const uint32_t *custom=NULL;
         if (ic->action==SH_ACT_WIN32_LINK && d->v3_link_icon) {
             unsigned link=(unsigned)strtoul(ic->argument,NULL,10);
             if (link<d->v3_link_count) custom=d->v3_link_icon(d,d->v3_links[link].source,32);
         }
-        if (custom) du_icon_blit(&c,ix+8,iy+8,custom,32,selected ? DU_ICON_SELECTED : DU_ICON_NORMAL);
-        else du_icon_blit(&c, ix, iy, desk_shell_icon(ic->icon, SH_DESKTOP_ICON), SH_DESKTOP_ICON, selected ? DU_ICON_SELECTED : DU_ICON_NORMAL);
-        int icon_size=desk_appearance_active ? desk_scale((desk_appearance.effects&AP_LARGE_ICONS) ? 48 : desk_appearance.item[AP_ICON].size) : SH_DESKTOP_ICON;
-        int32_t ix = ic->box.x + (ic->box.w - icon_size) / 2, iy = ic->box.y + desk_scale(4);
-        du_icon_blit(&c, ix, iy, desk_shell_icon(ic->icon, icon_size), icon_size, selected ? DU_ICON_SELECTED : DU_ICON_NORMAL);
+        if (custom) du_icon_blit(&c,ix+(icon_size-32)/2,iy+(icon_size-32)/2,custom,32,selected ? DU_ICON_SELECTED : DU_ICON_NORMAL);
+        else du_icon_blit(&c, ix, iy, desk_shell_icon(ic->icon, icon_size), icon_size, selected ? DU_ICON_SELECTED : DU_ICON_NORMAL);
+        const char *extension=strrchr(ic->argument,'.');
+        if (strcmp(ic->icon,"emblem-symbolic-link") && (ic->action==SH_ACT_WIN32_LINK || (extension && !strcasecmp(extension,".lnk"))))
+            du_icon_blit(&c,ix+icon_size-16,iy+icon_size-16,desk_shell_icon("emblem-symbolic-link",16),16,DU_ICON_NORMAL);   /* G19: the link arrow */
         char lines[2][32];
-        int count = label_lines(ic->label, lines,ic->box.w-desk_scale(12)), widest = 0;
+        int count = label_lines(d,ic->label, lines,ic->box.w-desk_scale(12)), widest = 0;
         for (int l = 0; l < count; l++) { int w = desk_text_measure(SH_LABEL_FONT, lines[l]); if (w > widest) widest = w; }
         int cell_width=ic->box.w;
         int pitch=desk_appearance_active ? desk_font_line(SH_LABEL_FONT)+desk_scale(2) : LABEL_PITCH;
@@ -2449,7 +2647,7 @@ static void draw_icons(struct desktop *d, struct desk_box clip)
             desk_paint_round_blend(&p, sel.x, sel.y, sel.w, sel.h, 4, desk_mix(0xffffffu, SH_HOT, 80), 130,
                                    desk_mix(0xffffffu, SH_HOT, 170), 235);
         /* The cached halo, then white text over it. */
-        const uint8_t *halo = desk_appearance_active ? empty_halo : label_halo_of(k, ic->label, lines, count);
+        const uint8_t *halo = desk_appearance_active ? empty_halo : label_halo_of(d,k, ic->label, lines, count);
         struct desk_box area;
         if (!desk_appearance_active && desk_intersect((struct desk_box){ic->box.x, top, ICON_CELL_W, LABEL_H}, b, &area))
             for (int32_t y = area.y; y < area.y + area.h; y++) {
@@ -2460,6 +2658,16 @@ static void draw_icons(struct desktop *d, struct desk_box clip)
         for (int l = 0; l < count; l++)
             desk_paint_text(&p, SH_LABEL_FONT, ic->box.x + (cell_width - desk_text_measure(SH_LABEL_FONT, lines[l])) / 2,
                             top + baseline + l * pitch, lines[l], desk_appearance_active ? selected ? desk_appearance.item[AP_SELECTED].text : desk_appearance.item[AP_ICON].text : 0xffffffu);
+        if (d->sh.icon_editing==k) {
+            struct du_rect box={ic->box.x+2,top,cell_width-4,desk_scale(24)};
+            du_well(&c,box,0xffffffu);
+            const char *shown=d->sh.icon_edit;
+            while (*shown && du_text_width(shown)>box.w-8) shown++;
+            du_text(&c,box.x+4,box.y+5,shown,DU_INK);
+            char prefix[FM_NAME]; unsigned start=(unsigned)(shown-d->sh.icon_edit);
+            unsigned n=d->sh.icon_edit_cursor>start ? d->sh.icon_edit_cursor-start : 0;
+            if (n<sizeof(prefix)) { memcpy(prefix,shown,n); prefix[n]=0; du_vline(&c,box.x+4+du_text_width(prefix),box.y+4,16,DU_INK); }
+        }
         if (d->sh.folder && d->sh.folder->editing==k-3 && k>=3) {
             struct desk_folder *f=d->sh.folder;
             struct du_rect box={ic->box.x+2,top,cell_width-4,desk_scale(24)};
@@ -2511,7 +2719,8 @@ unsigned desk_shell_cursor(const struct desktop *d)
  * Dragging follows OLE DoDragDrop: the shell owns the pointer from the
  * SM_CXDRAG threshold to the drop; targets report DROPEFFECT values; Esc
  * cancels; the right button ends in a Move/Copy/Shortcut/Cancel menu.
- * Paths are handed to the folder layer (folder.c); this file does no I/O. */
+ * Paths are handed to the folder layer (folder.c); bounded shortcut resolution
+ * is cached for the hovered icon during a drag and revalidated at activation. */
 int desk_shell_icon_marked(const struct desktop *d, int k)
 {
     if (k < 0 || k >= d->sh.icon_count) return 0;
@@ -2815,6 +3024,30 @@ static void dnd_evaluate(struct desktop *d)
             } else if (g->count && (k == 1 || entry_dir || (ic->action == SH_ACT_LAUNCH && !strcmp(ic->program, "files") && ic->argument[0] == '/'))) {
                 kind = SH_DROP_ICON; target = k; allowed = g->source_allowed;
                 snprintf(destination, sizeof(destination), "%s", ic->argument);
+            } else if (g->count && (icon_is_entry(d,k) || ic->action==SH_ACT_WIN32_LINK)) {
+                if (g->resolved_icon==k) {
+                    kind=g->resolved_kind; target=k;
+                    allowed=kind==SH_DROP_PROGRAM ? FM_EFFECT_COPY : kind==SH_DROP_ICON ? g->source_allowed : 0;
+                    snprintf(destination,sizeof(destination),"%s",g->resolved_destination);
+                } else {
+                const char *linkpath=ic->action==SH_ACT_WIN32_LINK ? icon_position_name(d,k) : ic->argument;
+                const char *ext=strrchr(linkpath,'.');
+                if (ic->action==SH_ACT_WIN32_LINK || (ext && !strcasecmp(ext,".lnk"))) {
+                    struct desk_launch_record *record=malloc(sizeof(*record));
+                    if (record && !desk_folder_link_read(d,linkpath,record) && !shortcut_resolve(d,record,0) && !desk_target_url(record->target)) {
+                        char path[FM_PATH]; struct fm_meta meta;
+                        if (!fm_posix_path(path,record->target) && !d->sh.folder->model.fs.stat_path(d->sh.folder->model.fs.ctx,path,&meta)) {
+                            if (meta.type==FM_DIR) { kind=SH_DROP_ICON; target=k; allowed=g->source_allowed; snprintf(destination,sizeof(destination),"%s",path); }
+                            else if (desktop_program_target(d,path,&meta)) { kind=SH_DROP_PROGRAM; target=k; allowed=FM_EFFECT_COPY; }
+                        }
+                    }
+                    free(record);
+                } else if (icon_is_entry(d,k) && desktop_program_target(d,ic->argument,&d->sh.folder->model.entries[k-3].meta)) {
+                    kind=SH_DROP_PROGRAM; target=k; allowed=FM_EFFECT_COPY;
+                }
+                g->resolved_icon=k; g->resolved_kind=kind;
+                snprintf(g->resolved_destination,sizeof(g->resolved_destination),"%s",destination);
+                }
             }
         } else {
             kind = SH_DROP_DESKTOP;
@@ -2838,7 +3071,8 @@ static void dnd_evaluate(struct desktop *d)
             effect = fm_drop_effect(g->source_volume, fm_volume(destination), g->keys, allowed);
             if (effect && fm_drop_check(g->paths, g->count, destination, effect)) effect = FM_EFFECT_NONE;
         }
-        if ((kind == SH_DROP_ICON || kind == SH_DROP_TRASH) && effect) drop_index = target;
+        if (kind==SH_DROP_PROGRAM) effect=FM_EFFECT_COPY;
+        if ((kind == SH_DROP_ICON || kind == SH_DROP_TRASH || kind==SH_DROP_PROGRAM) && effect) drop_index = target;
     }
     if (kind != g->kind || target != g->target) {
         if (g->kind == SH_DROP_FILES) dnd_over(d, 1);
@@ -2856,7 +3090,7 @@ static void dnd_start(struct desktop *d)
 {
     struct sh_dnd *g = &d->sh.dnd;
     g->start_hover_ns=0;g->opened_start=0;
-    g->active = 1; g->menu = 0; g->serial = ++dnd_counter ? dnd_counter : ++dnd_counter;
+    g->active = 1; g->menu = 0; g->resolved_icon=-1; g->serial = ++dnd_counter ? dnd_counter : ++dnd_counter;
     g->kind = SH_DROP_NONE; g->target = -1; g->status_target = -1; g->hover_task = -1; g->drop_index = -1;
     g->start_x = d->mouse_x; g->start_y = d->mouse_y; g->image = (struct desk_box){0, 0, 0, 0};
     g->source_volume = g->count ? fm_volume(g->paths[0]) : 0;
@@ -2937,6 +3171,7 @@ void desk_shell_drag_cancel(struct desktop *d)
 static void dnd_reposition(struct desktop *d)
 {
     struct sh_dnd *g = &d->sh.dnd;
+    if (d->sh.cfg.icon_auto_arrange) { d->sh.cfg.icon_auto_arrange=0; d->sh.want_save=1; }
     int dx = g->menu ? g->menu_x - g->start_x : d->mouse_x - g->start_x, dy = g->menu ? g->menu_y - g->start_y : d->mouse_y - g->start_y;
     int saved = 1;
     for (int k = 0; k < d->sh.icon_count; k++) if (desk_shell_icon_marked(d, k)) {
@@ -2946,7 +3181,7 @@ static void dnd_reposition(struct desktop *d)
         if (b->x + b->w > (int)d->width) b->x = (int)d->width - b->w;
         if (b->y < DESK_BAR + 10) b->y = DESK_BAR + 10;
         if (b->y + b->h > (int)d->height - DESK_BAR) b->y = (int)d->height - DESK_BAR - b->h;
-        if (cfg_icon_move(&d->sh.cfg, icon_position_name(d, k), b->x, b->y)) d->sh.want_save = 1; else saved = 0;
+        if (cfg_icon_move_at(&d->sh.cfg, icon_position_name(d, k),d->width,d->height, b->x, b->y)) d->sh.want_save = 1; else saved = 0;
         damage(d, *b);
     }
     d->sh.background_valid = 0;
@@ -2980,6 +3215,29 @@ static void dnd_commit(struct desktop *d, unsigned effect)
             dnd_send(d, g->target, DESK_DRAG_DROP, 20, w, 4); performed = effect;
         }
         break;
+    case SH_DROP_PROGRAM: {
+        const struct sh_icon *ic=&d->sh.icons[g->target];
+        struct desk_launch_record *record=calloc(1,sizeof(*record)); int r=-ENOMEM;
+        if (record) {
+            const char *linkpath=ic->action==SH_ACT_WIN32_LINK ? icon_position_name(d,g->target) : ic->argument;
+            const char *ext=strrchr(linkpath,'.');
+            if (ic->action==SH_ACT_WIN32_LINK || (ext && !strcasecmp(ext,".lnk"))) { r=desk_folder_link_read(d,linkpath,record); if (!r) r=shortcut_resolve(d,record,0); }
+            else { r=strlen(ic->argument)>=sizeof(record->target) ? -ENAMETOOLONG : 0;
+                if (!r) { strcpy(record->target,ic->argument); snprintf(record->label,sizeof(record->label),"%.63s",ic->label); record->show=1; } }
+            unsigned at=(unsigned)strlen(record->arguments);
+            for (unsigned i=0;!r && i<g->count;i++) {
+                if (strchr(g->paths[i],'"')) { r=-EINVAL; break; }
+                size_t n=strlen(g->paths[i]); if (at+n+4>=sizeof(record->arguments)) { r=-ENAMETOOLONG; break; }
+                if (at) record->arguments[at++]=' ';
+                record->arguments[at++]='"'; memcpy(record->arguments+at,g->paths[i],n); at+=(unsigned)n;
+                record->arguments[at++]='"'; record->arguments[at]=0;
+            }
+            if (!r) r=desk_shell_open_record(d,record,0);
+            free(record);
+        }
+        if (r<0) desk_shell_notify_error(d,"Cannot open dropped items",r); else performed=FM_EFFECT_COPY;
+        break;
+    }
     case SH_DROP_APP:
         if (g->target >= 0 && app_target(d, g->target)) {
             struct desk_box b = desk_content(&d->clients[g->target]);
@@ -3085,7 +3343,7 @@ static void draw_drag_image(struct desktop *d, struct desk_box clip)
             const struct sh_icon *ic = &d->sh.icons[g->icons[n]];
             int x = ic->box.x + dx, y = ic->box.y + dy;
             du_icon_blit(&c, x + (ICON_CELL_W - SH_DESKTOP_ICON) / 2, y + 4, desk_shell_icon(ic->icon, SH_DESKTOP_ICON), SH_DESKTOP_ICON, DU_ICON_GHOST);
-            char lines[2][32]; int count = label_lines(ic->label, lines,ic->box.w-desk_scale(12)), widest = 0;
+            char lines[2][32]; int count = label_lines(d,ic->label, lines,ic->box.w-desk_scale(12)), widest = 0;
             for (int l = 0; l < count; l++) { int w = desk_text_measure(SH_LABEL_FONT, lines[l]); if (w > widest) widest = w; }
             desk_paint_round_blend(&p, x + (ICON_CELL_W - widest) / 2 - 5, y + LABEL_TOP + 1, widest + 10, count * LABEL_PITCH + 4, 4,
                                    SH_HOT, 110, SH_HOT, 140);
@@ -3512,6 +3770,7 @@ static void internal_size(const struct desktop *d, int kind, uint32_t *w, uint32
         break;
     }
     case DESK_INTERNAL_GAME_DATA: *w=480; *h=230; break;
+    case DESK_INTERNAL_SHORTCUT_WIZARD: *w=520; *h=380; break;
     case DESK_INTERNAL_TRANSFER: *w = 454; *h = 230; break;
     case DESK_INTERNAL_SHORTCUT: *w=548; *h=430; break;
     case DESK_INTERNAL_PROGRAMS: *w=460; *h=420; break;
@@ -3564,7 +3823,7 @@ int desk_internal_open(struct desktop *d, int kind)
     if (!++d->next_window_id) ++d->next_window_id;
     c->window_id = d->next_window_id;
     c->info.width = w; c->info.height = h;
-    snprintf(c->title, sizeof(c->title), "%s", kind == DESK_INTERNAL_ABOUT ? "About CiukiOS" : kind == DESK_INTERNAL_RUN ? "Run" :
+    snprintf(c->title, sizeof(c->title), "%s", kind==DESK_INTERNAL_SHORTCUT_WIZARD ? "Create Shortcut" : kind == DESK_INTERNAL_ABOUT ? "About CiukiOS" : kind == DESK_INTERNAL_RUN ? "Run" :
              kind == DESK_INTERNAL_SHUTDOWN ? "Shut Down CiukiOS" : kind == DESK_INTERNAL_POWER ? "Shutting down..." : kind == DESK_INTERNAL_AUTOPLAY ? "AutoPlay" : kind==DESK_INTERNAL_PROGRAMS ? "Programs" :
              kind==DESK_INTERNAL_END_TASK ? d->end_task.name : d->sh.message_title);
     c->frame = desk_frame(w, h, 0, DESK_BAR);
@@ -3593,6 +3852,7 @@ int desk_internal_open(struct desktop *d, int kind)
 }
 void desk_internal_closed(struct desktop *d, int index)
 {
+    if (d->clients[index].internal==DESK_INTERNAL_SHORTCUT_WIZARD && d->sh.folder) { d->sh.folder->wizard_window=-1; desk_folder_shortcut_close(d); }
     if (d->about == index) d->about = -1;
     if (d->clients[index].internal==DESK_INTERNAL_RUN && d->sh.run) {
         struct desk_run_ui *r=d->sh.run;
@@ -3929,6 +4189,8 @@ void desk_internal_paint(struct desktop *d, int index, struct desk_box content, 
         }
         break;
     }
+    case DESK_INTERNAL_SHORTCUT_WIZARD:
+        desk_folder_shortcut_paint(d,content,clip); return;
     case DESK_INTERNAL_TRANSFER:
         desk_folder_dialog_paint(d,content,clip); return;
     case DESK_INTERNAL_AUTOPLAY: {
@@ -4060,7 +4322,7 @@ static void run_commit(struct desktop *d, int index)
     snprintf(d->sh.want_run, sizeof(d->sh.want_run), "%s", d->sh.run_text);
     r->busy=1;
     if (!d->sh.run_length) return;
-    if (d->sh.prompt_mode==1) snprintf(d->sh.custom_open,sizeof(d->sh.custom_open),"%s",d->sh.run_text);
+    if (d->sh.prompt_mode==1) snprintf(d->sh.custom_open,sizeof(d->sh.custom_open),"%.*s",(int)sizeof(d->sh.custom_open)-1,d->sh.run_text);
     else if (d->sh.prompt_mode==2) custom_request(d,SH_EDIT_TOOLBAR,d->sh.run_text,NULL,NULL);
     else if (d->sh.prompt_mode==3)
         custom_request(d,SH_EDIT_RENAME,d->sh.prompt_path,NULL,d->sh.run_text);
@@ -4106,6 +4368,7 @@ int desk_internal_click(struct desktop *d, int index, int32_t x, int32_t y)
         }
         damage(d,desk_outer(cl)); return 1;
     }
+    case DESK_INTERNAL_SHORTCUT_WIZARD: desk_folder_shortcut_click(d,x,y); return 1;
     case DESK_INTERNAL_TRANSFER: desk_folder_dialog_click(d,x,y); return 1;
     case DESK_INTERNAL_AUTOPLAY: {
         struct desk_autoplay *a=&d->sh.autoplay;
@@ -4604,6 +4867,7 @@ void desk_shell_tick(struct desktop *d)
     bar_autohide(d);
     dnd_tick(d);
     desk_power_policy_tick(d);
+    if (desk_recovery_tick && !d->sh.gate) desk_recovery_tick(d);
     if (!d->sh.network_poll_ns || (d->now_ns >= d->sh.network_poll_ns &&
         d->now_ns - d->sh.network_poll_ns >= 2000000000ull)) {
         d->sh.network_poll_ns = d->now_ns ? d->now_ns : 1;
@@ -4810,6 +5074,7 @@ static int internal_key(struct desktop *d, int index, int code, int value)
         struct ciuki_input_event e={.type=CIUKI_INPUT_KEY,.code=code,.value=value}; run_browser_input(d,&e); return 1;
     }
     if (value == 0) return 1;
+    if (c->internal==DESK_INTERNAL_SHORTCUT_WIZARD) { desk_folder_shortcut_key(d,code,ciuki_keymap_char(d->sh.cfg.keyboard,(unsigned)code,keymap_mods(d))); return 1; }
     switch (c->internal) {
     case DESK_INTERNAL_GAME_DATA:
         if (code==DU_KEY_ESC) {
@@ -5315,6 +5580,28 @@ int desk_shell_key(struct desktop *d, int code, int value)
         if (value == 1) launch_named(d, "help", "topic:desktop");
         return 1;
     }
+    if (d->focus<0 && d->sh.icon_editing>=0 && d->sh.icon_editing<d->sh.icon_count) {
+        if (!value) return 1;
+        size_t n=strlen(d->sh.icon_edit); unsigned pos=d->sh.icon_edit_cursor; int edited=d->sh.icon_editing;
+        if (code==DU_KEY_ESC) d->sh.icon_editing=-1;
+        else if (code==DU_KEY_ENTER) {
+            const char *name=icon_position_name(d,edited);
+            if (cfg_icon_label_set(&d->sh.cfg,name,d->sh.icon_edit)) {
+                snprintf(d->sh.icons[edited].label,sizeof(d->sh.icons[edited].label),"%s",d->sh.icon_edit); d->sh.want_save=1;
+            } else desk_shell_message(d,"Desktop","Enter a label of 1 to 63 characters.",1);
+            d->sh.icon_editing=-1;
+        } else if (code==DU_KEY_HOME) d->sh.icon_edit_cursor=0;
+        else if (code==DU_KEY_END) d->sh.icon_edit_cursor=(unsigned)n;
+        else if (code==DU_KEY_LEFT && pos) d->sh.icon_edit_cursor--;
+        else if (code==DU_KEY_RIGHT && pos<n) d->sh.icon_edit_cursor++;
+        else if (code==DU_KEY_BACKSPACE && pos) { memmove(d->sh.icon_edit+pos-1,d->sh.icon_edit+pos,n-pos+1); d->sh.icon_edit_cursor--; }
+        else if (code==DU_KEY_DELETE && pos<n) memmove(d->sh.icon_edit+pos,d->sh.icon_edit+pos+1,n-pos);
+        else if (!(d->sh.modifiers&DU_CTRL)) {
+            unsigned ch=ciuki_keymap_char(d->sh.cfg.keyboard,(unsigned)code,keymap_mods(d));
+            if (ch>=32 && ch<127 && n+1<sizeof(d->sh.icon_edit)) { memmove(d->sh.icon_edit+pos+1,d->sh.icon_edit+pos,n-pos+1); d->sh.icon_edit[pos]=(char)ch; d->sh.icon_edit_cursor++; }
+        }
+        d->sh.background_valid=0; damage(d,d->sh.icons[edited].box); return 1;
+    }
     if (d->focus<0 && d->sh.folder && d->sh.folder->editing>=0) {
         struct desk_folder *f=d->sh.folder;
         if (!value) return 1;
@@ -5379,9 +5666,14 @@ int desk_shell_key(struct desktop *d, int code, int value)
             !(d->clients[d->focus].internal==DESK_INTERNAL_RUN && d->sh.run && d->sh.run->browser)) return 1;
         return internal_key(d, d->focus, code, value);
     }
+    if (d->focus<0 && value && code==DU_KEY_F5) { desktop_refresh(d); return 1; }
     if (d->focus < 0 && d->sh.cfg.desktop_icons && d->sh.icon_count && !d->shell_test && !d->tasks_test && !d->app_test) {
         if (!value) return 0;
         int s = d->sh.icon_selected; if (s>=d->sh.icon_count) s=-1;
+        if (code==DU_KEY_HOME || code==DU_KEY_END) {
+            if (d->sh.icon_count) select_only(d,code==DU_KEY_HOME ? 0 : d->sh.icon_count-1);
+            return 1;
+        }
         if (code==DU_KEY_UP || code==DU_KEY_DOWN || code==DU_KEY_LEFT || code==DU_KEY_RIGHT) {
             int next=s<0 ? 0 : s; int64_t best=INT64_MAX;
             if (s>=0) for (int i=0;i<d->sh.icon_count;i++) if (i!=s) {
@@ -5406,6 +5698,20 @@ int desk_shell_key(struct desktop *d, int code, int value)
             for (int k=0;k<d->sh.icon_count;k++) mark(d,k,1);
             return 1;
         }
+        if (!(d->sh.modifiers&(DU_CTRL|DU_ALT|DU_SHIFT)) && d->now_ns-d->sh.icon_typeahead_ns>1000000000ull)
+            d->sh.icon_typeahead_length=0;
+        if (!(d->sh.modifiers&(DU_CTRL|DU_ALT)) && code!=DU_KEY_BACKSPACE) {
+            unsigned ch=ciuki_keymap_char(d->sh.cfg.keyboard,(unsigned)code,keymap_mods(d));
+            if (ch>=32 && ch<127 && d->sh.icon_typeahead_length+1<sizeof(d->sh.icon_typeahead)) {
+                d->sh.icon_typeahead[d->sh.icon_typeahead_length++]=(char)tolower((unsigned char)ch);
+                d->sh.icon_typeahead[d->sh.icon_typeahead_length]=0; d->sh.icon_typeahead_ns=d->now_ns;
+                for (int off=1;off<=d->sh.icon_count;off++) {
+                    int k=(s+off+d->sh.icon_count)%d->sh.icon_count;
+                    if (!strncasecmp(d->sh.icons[k].label,d->sh.icon_typeahead,d->sh.icon_typeahead_length)) { select_only(d,k); break; }
+                }
+                return 1;
+            }
+        }
         /* File commands act on the selection; the focus, or the first
          * selected file when the focus is a system icon. */
         int primary=icon_is_entry(d,s) && desk_shell_icon_marked(d,s) ? s : -1;
@@ -5413,12 +5719,13 @@ int desk_shell_key(struct desktop *d, int code, int value)
         if (primary<0 && icon_is_entry(d,s)) primary=s;
         if (d->sh.folder) {
             if (code==DU_KEY_F2 && icon_is_entry(d, s)) { desk_folder_rename(d,s); return 1; }
+            if (code==DU_KEY_F2 && ((s>=0 && s<3) || network_icon(d,s))) { desktop_icon_rename_begin(d,s); return 1; }
             if (code==DU_KEY_DELETE && primary>=0) {
                 /* G2: Shift+Delete bypasses the Recycle Bin. */
                 d->sh.folder->command=DF_DELETE; d->sh.folder->index=primary-3; d->sh.folder->multi=selection_sync(d)>1;
                 d->sh.folder->command_flags=(d->sh.modifiers&(DU_CTRL|DU_ALT|DU_SHIFT))==DU_SHIFT ? RB_PERMANENT : 0; return 1;
             }
-            if (code==DU_KEY_F5) { d->sh.folder->command=DF_REFRESH; return 1; }
+
             if (d->sh.modifiers&DU_CTRL) {
                 int command=code==0x2c ? DF_UNDO : code==0x2f ? DF_PASTE : code==0x2e ? DF_COPY : code==0x2d ? DF_CUT : 0;
                 if (command && (command==DF_PASTE || command==DF_UNDO || primary>=0)) {
@@ -5441,7 +5748,7 @@ static void icons_prepare(void)
      * bounded shell/menu/window variants now, including the generic icon
      * used by crash victims whose title differs from the survivor's. */
     static const unsigned sizes[]={16,22,32,48};
-    static const char *const extra[]={"go-jump","drive-removable-media","media-optical","user-trash-full","system-log-out","system-lock-screen","system-users","dialog-password"};
+    static const char *const extra[]={"go-jump","drive-removable-media","media-optical","user-trash-full","system-log-out","system-lock-screen","system-users","dialog-password","emblem-symbolic-link","network-workgroup"};
     for (unsigned s=0;s<sizeof(sizes)/sizeof(*sizes);s++) {
         for (unsigned i=0;i<sizeof(icon_table)/sizeof(*icon_table);i++)
             (void)store_icon(icon_table[i].name,sizes[s]);
@@ -5462,6 +5769,7 @@ void desk_shell_reset(struct desktop *d)
     d->sh.custom_drag=d->sh.custom_item=-1;
     d->sh.custom_refresh=1;
     d->sh.icon_selected = d->sh.click_icon = d->sh.icon_drag = -1;
+    d->sh.icon_editing=-1;
     d->sh.anchor = -1; d->sh.dnd.drop_index = d->sh.dnd.target = d->sh.dnd.status_target = d->sh.dnd.hover_task = -1;
     d->sh.volume = 20;
 }
@@ -5471,6 +5779,11 @@ void desk_shell_apply(struct desktop *d)
     if (desk_theme_use(d->sh.cfg.theme)) desk_theme_use(DESK_THEME_DEFAULT);
     if(d->sh.cfg.appearance_set) desk_appearance_apply(&d->sh.cfg.appearance);
     desk_theme_changed(d); d->cursor_loaded=DESK_CURSOR_COUNT; d->cursor_dirty=1;
+    if (!d->sh.cfg.desktop_icons) {
+        if (d->sh.dnd.active) desk_shell_drag_cancel(d);
+        d->sh.band=0; d->sh.icon_pending=0; d->sh.icon_editing=-1;
+        if (d->sh.folder) d->sh.folder->editing=-1;
+    }
     if (!d->sh.icon_count) icons_build(d);
     if(d->sh.icon_count>1) d->sh.icons[1].icon=d->sh.cfg.document_icon ? "folder" : "user-home";
     if(d->sh.icon_count>2) d->sh.icons[2].icon=d->sh.cfg.recycle_icon ? "edit-delete" : d->sh.folder && d->sh.folder->bin_full ? "user-trash-full" : "user-trash";
@@ -5503,9 +5816,9 @@ int desk_shell_wallpaper_update(struct desktop *d)
     }
     /* Initial/resize placeholder only. The worker paints every selected
      * wallpaper, including procedural ones, before one complete publication. */
-    int r = desk_wallpaper_render(d->sh.wall, d->width, d->height, DESK_BAR, DESK_BAR,
+    int r = desk_wallpaper_render_pattern(d->sh.wall, d->width, d->height, DESK_BAR, DESK_BAR,
                                   d->sh.wallpaper_pending ? "none" : d->sh.cfg.wallpaper,
-                                  d->sh.cfg.wallpaper_mode, desktop_colour(d), &d->sh.image, d->portrait);
+                                  d->sh.cfg.wallpaper_mode, desktop_colour(d), &d->sh.image, d->portrait,d->sh.cfg.wallpaper_pattern);
     d->sh.wall_valid = 1;
     d->sh.background_valid=0;
     d->sh.image_failed = r < 0;
@@ -5553,11 +5866,11 @@ void desk_links_refresh(struct desktop *d)
 }
 int desk_link_launch(struct desktop *d, unsigned index)
 {
-    if (index>=d->v3_link_count || !d->v3_link_read || !d->v3_launch) return -ENOENT;
+    if (index>=d->v3_link_count || (!d->sh.folder && !d->v3_link_read)) return -ENOENT;
     struct desk_launch_record *record=malloc(sizeof(*record)); if (!record) return -ENOMEM;
-    int result=d->v3_link_read(d,d->v3_links[index].source,record);
+    int result=d->sh.folder ? desk_folder_link_read(d,d->v3_links[index].source,record) : d->v3_link_read(d,d->v3_links[index].source,record);
     if (!result && !desk_launch_valid(record)) result=-EINVAL;
-    if (!result) result=d->v3_launch(d,record);
+    if (!result) result=desk_shell_open_record(d,record,0);
     free(record); return result;
 }
 

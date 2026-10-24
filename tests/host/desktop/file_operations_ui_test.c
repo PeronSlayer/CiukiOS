@@ -58,8 +58,17 @@ static void accept(void) { key(DU_KEY_ENTER); settle(); }
 static void cancel(void) { key(DU_KEY_ESC); settle(); }
 static void choose_dest(void)
 {
-    assert(ui.dialog.folders_only); du_set_text(&ui.dialog.items[5],"C:\\dest"); ui.dialog.focus=5;
-    key(DU_KEY_ENTER); assert(!strcmp(ui.dialog.folder,"C:\\dest")); ui.dialog.focus=0; accept();
+    /* G16 Browse for Folder: select "dest" in the tree, then OK. */
+    assert(ui.dialog.kind==DU_DLG_FOLDER);
+    struct du_widget *tree=NULL;
+    for (unsigned i=0;i<ui.dialog.count;i++) if (ui.dialog.items[i].kind==DU_TREE) tree=&ui.dialog.items[i];
+    assert(tree);
+    int row=-1;
+    for (unsigned i=0;i<tree->count;i++) if (!strcmp(tree->items[i].text[0],"dest")) row=(int)i;
+    assert(row>=0);
+    struct du_event pick={.type=DU_EV_SELECT,.id=tree->id,.index=row};
+    ui.dialog.on_event(&ui,&pick);
+    ui.dialog.focus=0; accept();   /* the OK button */
 }
 int main(int argc,char **argv)
 {
@@ -75,7 +84,7 @@ int main(int argc,char **argv)
     assert(!fm_shell_selection_write(&fake_vfs,selected_paths,2,manifest));
     assert(!fm_shell_selection_read(&fake_vfs,manifest,&app.shell_paths,&app.shell_count)); assert(!fake_vfs.unlink(NULL,manifest));
     assert(!raw_navigate(&app,"/work")); files_shell_action(&app,FILES_COPY_TO,NULL); files_test_wait(&app);
-    assert(fm_selected(&app.model,NULL)==2 && ui.dialog.folders_only); choose_dest();
+    assert(fm_selected(&app.model,NULL)==2 && ui.dialog.kind==DU_DLG_FOLDER); choose_dest();
     assert(fake_lookup("/dest/a.txt")>=0 && fake_lookup("/dest/b.txt")>=0); action(FILES_UNDO); settle();
     assert(fake_lookup("/dest/a.txt")<0 && fake_lookup("/dest/b.txt")<0);
     action(FILES_NEW_BITMAP); settle(); assert(fake_lookup("/work/New Bitmap Image.bmp")>=0);

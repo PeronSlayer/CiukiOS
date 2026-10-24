@@ -775,7 +775,7 @@ static void test_menu(void)
     for (size_t n=0;n<sizeof(elf);n++) assert(!desk_program_add(&d,"truncated",elf,n));
     for (int k=0;k<7;k++) { uint8_t copy[52]; memcpy(copy,elf,52); copy[k]^=0xff; assert(!desk_program_add(&d,"invalid",copy,52)); }
     uint8_t copy[52]; memcpy(copy,elf,52); copy[4]=2; assert(!desk_program_add(&d,"elf64",copy,52));
-    for (int i=31;i>=0;i--) { char name[20]; snprintf(name,sizeof(name),"app%02d",i); desk_program_add(&d,name,elf,52); }
+    for (int i=DESK_MENU_MAX-1;i>=0;i--) { char name[20]; snprintf(name,sizeof(name),"app%02d",i); desk_program_add(&d,name,elf,52); }
     assert(d.program_count==DESK_MENU_MAX && !strcmp(d.programs[0].name,"app00") && !strcmp(d.programs[15].name,"app15"));
     desk_shell_enable(&d);
     struct desk_box menu=desk_menu_box(&d);

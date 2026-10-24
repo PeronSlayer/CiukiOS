@@ -2202,15 +2202,16 @@ static void file_dialog(int save)
         strcat(name,format_ext(save_format));
     }
     /* The shared dialog supplies the file types, the default extension and the replace prompt. */
-    static const struct du_file_filter open_types[]={{"Pictures (*.bmp;*.png)","*.bmp;*.png"},{"Bitmap Files (*.bmp)","*.bmp"},{"PNG Images (*.png)","*.png"},{"All Files (*.*)","*.*"}};
-    static const struct du_file_filter save_types[]={{"Bitmap Files (*.bmp)","*.bmp"},{"PNG Images (*.png)","*.png"},{"All Files (*.*)","*.*"}};
+    static const struct du_file_filter open_types[]={{"Pictures (*.bmp;*.png;*.gif;*.jpg)","*.bmp;*.png;*.gif;*.jpg;*.jpeg;*.jpe"},{"Bitmap Files (*.bmp)","*.bmp"},
+        {"PNG Images (*.png)","*.png"},{"GIF Images (*.gif)","*.gif"},{"JPEG Images (*.jpg)","*.jpg;*.jpeg;*.jpe"},{"All Files (*.*)","*.*"}};
+    static const struct du_file_filter save_types[]={{"Bitmap Files (*.bmp)","*.bmp"},{"PNG Images (*.png)","*.png"},
+        {"GIF Images (*.gif)","*.gif"},{"JPEG Images (*.jpg)","*.jpg"},{"All Files (*.*)","*.*"}};
     struct du_file_options o={.flags=save?DU_FILE_SAVE|DU_FILE_OVERWRITE_PROMPT:DU_FILE_FILE_MUST_EXIST,
-        .title=save?"Save As (BMP or PNG)":"Open (BMP or PNG)",.folder=folder,.name=save?name:"",
-        .filters=save?save_types:open_types,.filter_count=save?3:4,.filter_index=save&&save_format==PAINT_PNG?1:0,
-        .default_ext=save_format==PAINT_PNG?"png":"bmp"};
+        .title=save?"Save As (BMP, PNG, GIF or JPEG)":"Open (BMP, PNG, GIF or JPEG)",.folder=folder,.name=save?name:"",
+        .filters=save?save_types:open_types,.filter_count=save?5:6,
+        .filter_index=save?(save_format==PAINT_PNG?1:save_format==PAINT_GIF?2:save_format==PAINT_JPEG?3:0):0,
+        .default_ext=format_ext(save_format)+1};
     if (du_file_open(ui,save?D_SAVE:D_OPEN,&o)) no_memory();
-    if (du_file_dialog(ui,save?D_SAVE:D_OPEN,save,save?"Save As (BMP, PNG, GIF or JPEG)":"Open (BMP, PNG, GIF or JPEG)",folder,
-                       save?name:"",NULL,NULL)) no_memory();
 }
 static void run_pending(void)
 {
@@ -2317,19 +2318,11 @@ static void dialog_result(const struct du_event *e)
     } else if (e->id==D_OPEN) { if (!e->index) error_message(paint_open(e->text)); }
     else if (e->id==D_SAVE) {
         if (e->index) { abandon(); return; }
+        /* The dialog already added the default extension and asked before replacing a file. */
         const char *ext=strrchr(e->text,'.');
-        if (!ext) {
-            int n=snprintf(pending_path,sizeof(pending_path),"%s%s",e->text,format_ext(save_format));
-            if (n<0 || (size_t)n>=sizeof(pending_path)) { abandon(); error_message(-ENAMETOOLONG); return; }
-        } else {
-            snprintf(pending_path,sizeof(pending_path),"%s",e->text);
-            if (!format_of(ext,&save_format)) { abandon(); message("Use the .bmp, .png, .gif or .jpg extension."); return; }
-        }
-        struct stat st;
-        if (!stat(pending_path,&st)) {
-            static const char *const buttons[]={"Yes","No"};
-            du_message(ui,D_OVERWRITE,"Save As","This file exists. Replace it?",DU_DLG_ICON_QUESTION,buttons,2,1,1);
-        } else do_save(pending_path);
+        snprintf(pending_path,sizeof(pending_path),"%s",e->text);
+        if (!ext || !format_of(ext,&save_format)) { abandon(); message("Use the .bmp, .png, .gif or .jpg extension."); return; }
+        do_save(pending_path);
     }
     else if (e->id==D_FORMAT) { if (!e->index) { save_format=candidate_format; file_dialog(1); } }
     else if (e->id==D_ATTR && !e->index) { if (candidate_w!=cv.w || candidate_h!=cv.h) resize_canvas(candidate_w,candidate_h); }

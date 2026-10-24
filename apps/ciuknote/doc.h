@@ -36,6 +36,9 @@ int cn_is_log(const char *text, size_t n); /* the first line is exactly ".LOG" *
 void cn_timestamp(char *out, size_t cap, const struct tm *tm); /* "9:41 AM 10/11/2026" */
 
 const char *cn_basename(const char *path);
+int cn_has_extension(const char *name);                /* a final ".ext" that is not the whole name */
+int cn_match(const char *pattern, const char *name);   /* case-insensitive * and ? glob */
+int cn_has_wildcard(const char *name);
 int cn_is_text_name(const char *name);                 /* *.txt, ASCII case-insensitive */
 int cn_resolve(char *out, const char *dir, const char *input); /* absolute, normalised; input may be relative */
 int cn_join(char *out, const char *dir, const char *name);

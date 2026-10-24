@@ -1,3 +1,9 @@
+/* CiukiOS has no per-thread CPU clock; host latency coverage uses it. */
+#ifdef CLOCK_THREAD_CPUTIME_ID
+#define FOLDER_CPU_CLOCK CLOCK_THREAD_CPUTIME_ID
+#else
+#define FOLDER_CPU_CLOCK CLOCK_MONOTONIC
+#endif
 /* SPDX-License-Identifier: MIT
  * Block production transfer I/O while replaying real shell input. */
 static uint64_t folder_clock(clockid_t clock)

@@ -44,13 +44,12 @@ const struct du_icon_map du_icon_map[] = {
     {"program:netsurf", "internet-web-browser"},       /* NetSurf, the browser application (apps/desktop/catalog.h) */
     /* Accessories (apps/desktop/catalog.h: the launcher's Tango names). */
     {"program:cdplayer", "media-optical"},
-    {"program:clipbrd", "edit-paste"},
+    {"program:clipbrd", "edit-paste"},                  /* same catalogue icon in Files and the desktop */
     {"program:recorder", "audio-input-microphone"},
     {"program:calc", "accessories-calculator"},
     {"program:charmap", "accessories-character-map"},
     {"program:clock", "appointment-new"},              /* a clock face (Tango 0.8.90 has no clock app icon) */
     {"program:help", "help-browser"},
-    {"program:clipbrd", "edit-paste"},                  /* same catalogue icon in Files and the desktop */
     {"program:logview", "text-x-generic"},             /* Log Viewer (G13) */
     {"program:music", "audio-x-generic"},
     {"program:mixer", "audio-volume-high"},

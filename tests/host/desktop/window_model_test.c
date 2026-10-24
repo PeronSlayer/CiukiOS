@@ -307,18 +307,23 @@ static int fake_links(struct desktop *dd, struct desk_link_entry *out, unsigned 
  * taskbar hover and cancel are what this harness compares. */
 static const char drag_object[]="X\nF/Documents/report.txt\nD/Documents/Games\n";
 static unsigned drag_offset;
+static int g19_drop_fixture;
 static int vfs_list(void *ctx, const char *path, unsigned flags, fm_emit emit, void *arg)
 {
     (void)ctx; (void)flags;
     struct fm_meta dir={.type=FM_DIR};
     if (!strcmp(path,"/")) return emit("Documents",&dir,arg);
     if (!strcmp(path,"/Documents")) return emit("Desktop",&dir,arg);
+    if (g19_drop_fixture && !strcmp(path,DESK_FOLDER)) {
+        struct fm_meta app={.type=FM_FILE,.exec=1}; return emit("launcher.exe",&app,arg);
+    }
     return 0;
 }
 static int vfs_stat(void *ctx, const char *path, struct fm_meta *meta)
 {
     (void)ctx;
     if (!strcmp(path,"/") || !strcmp(path,"/Documents") || !strcmp(path,"/Documents/Desktop")) { *meta=(struct fm_meta){.type=FM_DIR}; return 0; }
+    if (g19_drop_fixture && !strcmp(path,DESK_FOLDER "/launcher.exe")) { *meta=(struct fm_meta){.type=FM_FILE,.exec=1}; return 0; }
     return -ENOENT;
 }
 static int vfs_refuse_path(void *ctx, const char *path) { (void)ctx; (void)path; return -EROFS; }
@@ -432,7 +437,7 @@ static void wm_frame(const char *what)
 static const char *const wm_programs[]={"files","ciuknote","control","netsurf","dosbox","calc","tasks","terminal","gfxdemo","printers","mixer","resmeter"};
 static void wm_begin(unsigned m, int shell)
 {
-    wm_mode=m; wm_shell=shell;
+    wm_mode=m; wm_shell=shell; g19_drop_fixture=0;
     mode=m==WM_SOFTWARE ? MODE_SOFTWARE : m==WM_ENGINE || m==WM_CACHE ? MODE_ENGINE : m==WM_BATCH32 ? MODE_BATCH32 : MODE_BATCH16;
     fake_reset(); struct desk_ops ops=fake_ops; ops.present=m>=WM_BATCH32 ? packed_upload : upload;
     desk_init(&d,&ops,640,480); d.display=7; d.mouse_x=600; d.mouse_y=12;
@@ -1375,6 +1380,7 @@ static void row_disk_terminal(unsigned m)
         disk_ui_present(u,states[k],a);
     }
     free(u); free(pixels); app_close(a); step("disk terminal closes"); wm_end();
+}
 static void row_appearance(unsigned m)
 {
     row_name="display appearance"; wm_begin(m,1);
@@ -2195,6 +2201,143 @@ static void row_review_content(unsigned m)
     }
     wm_end();
 }
+static void row_icon_sort(unsigned m)
+{
+    row_name="G19 icon sorting"; wm_begin(m,1);
+    d.sh.cfg.icon_sort=3; d.sh.icon_count=0; desk_shell_apply(&d);
+    assert(d.sh.cfg.icon_sort==3); step("sort by Date selected and icons rebuilt");
+    wm_end();
+}
+static void row_icon_auto_arrange(unsigned m)
+{
+    row_name="G19 Auto Arrange"; wm_begin(m,1);
+    assert(cfg_icon_move(&d.sh.cfg,"/Computer",190,100));
+    d.sh.icon_count=0; desk_shell_apply(&d); step("manually positioned system icon");
+    d.sh.cfg.icon_auto_arrange=1; cfg_icons_arrange(&d.sh.cfg); d.sh.icon_count=0; desk_shell_apply(&d);
+    assert(d.sh.cfg.icon_auto_arrange); step("Auto Arrange returns icons to the grid");
+    wm_end();
+}
+static void row_icon_keyboard(unsigned m)
+{
+    row_name="G19 desktop keyboard"; wm_begin(m,1);
+    tap(DU_KEY_HOME); assert(d.sh.icon_selected==0); step("Home selects the first icon");
+    tap(DU_KEY_END); assert(d.sh.icon_selected==d.sh.icon_count-1); step("End selects the last icon");
+    tap(0x32); assert(d.sh.icon_typeahead_length==1 && d.sh.icon_typeahead[0]=='m');
+    assert(d.sh.icon_selected==0); step("type-ahead selects My Computer");
+    wm_end();
+}
+static void row_system_icon_rename(unsigned m)
+{
+    row_name="G19 system icon rename"; wm_begin(m,1);
+    tap(DU_KEY_HOME); tap(DU_KEY_F2); assert(d.sh.icon_editing==0);
+    snprintf(d.sh.icon_edit,sizeof(d.sh.icon_edit),"Renamed Computer");
+    d.sh.icon_edit_cursor=(unsigned)strlen(d.sh.icon_edit); tap(DU_KEY_ENTER);
+    assert(!strcmp(d.sh.icons[0].label,"Renamed Computer")); step("label edit is published");
+    wm_end();
+}
+static void row_wallpaper_change(unsigned m)
+{
+    row_name="G19 wallpaper change"; wm_begin(m,1);
+    snprintf(d.sh.cfg.wallpaper,sizeof(d.sh.cfg.wallpaper),"builtin:%s",desk_builtin_wallpapers[1].id);
+    d.sh.want_wallpaper=1; assert(!desk_shell_wallpaper_update(&d)); step("wallpaper settings publish a new background");
+    wm_end();
+}
+static void row_shortcut_wizard(unsigned m)
+{
+    row_name="G19 Create Shortcut"; wm_begin(m,1);
+    desk_folder_shortcut_begin(&d); assert(d.sh.folder->wizard==1); step("wizard target page");
+    strcpy(d.sh.folder->shortcut_target,"/missing-g19-target"); desk_folder_shortcut_action(&d,3);
+    assert(d.sh.folder->wizard==1 && d.sh.folder->wizard_error[0]); step("missing target stays on the target page with an error");
+    desk_folder_shortcut_action(&d,1); assert(d.sh.folder->wizard==3); step("Browse target picker");
+    desk_folder_shortcut_action(&d,4); step("Browse Cancel returns to target");
+    strcpy(d.sh.folder->shortcut_target,"/Documents"); desk_folder_shortcut_action(&d,3);
+    assert(d.sh.folder->wizard==2); step("wizard name page");
+    desk_folder_shortcut_action(&d,2); step("Back keeps target");
+    desk_folder_shortcut_close(&d); step("Cancel exposes desktop"); wm_end();
+}
+static void row_icon_metrics(unsigned m)
+{
+    row_name="G19 icon appearance"; wm_begin(m,1);
+    d.sh.cfg.icon_spacing_x=124; d.sh.cfg.icon_spacing_y=120; d.sh.cfg.icon_font=DESK_FONT_MONO;
+    desk_shell_apply(&d); step("Appearance Apply changes spacing and caption font");
+    d.sh.cfg.icon_spacing_x=60; d.sh.cfg.icon_spacing_y=60; d.sh.cfg.icon_font=DESK_FONT_LARGE;
+    desk_shell_apply(&d); step("minimum spacing clips large captions within each cell"); wm_end();
+}
+static void row_icon_visibility(unsigned m)
+{
+    row_name="G19 Show Desktop Icons"; wm_begin(m,1);
+    d.sh.cfg.desktop_icons=0; desk_shell_apply(&d); step("hide desktop icons");
+    d.sh.cfg.desktop_icons=1; desk_shell_apply(&d); step("show saved icons"); wm_end();
+}
+static void row_system_menus(unsigned m)
+{
+    row_name="G19 system icon menus"; wm_begin(m,1);
+    int system[]={0,1,2,d.sh.folder ? (int)d.sh.folder->model.count+3+(!!d.pictures_exists) : 3};
+    for (unsigned k=0;k<4;k++) {
+        d.sh.menu_owner=system[k]; desk_menu_open(&d,SH_MENU_ICON,300,160); step("system context menu");
+        tap(DU_KEY_ESC); step("context menu dismissed");
+    }
+    wm_end();
+}
+static void row_desktop_refresh(unsigned m)
+{
+    row_name="G19 Refresh"; wm_begin(m,1);
+    desk_menu_open(&d,SH_MENU_DESKTOP,300,160); step("desktop context menu");
+    tap(0x21); /* Refresh access key F */
+    step("Refresh rescans and repaints without discarding layout settings"); wm_end();
+}
+static void row_resolution_layout(unsigned m)
+{
+    row_name="G19 resolution positions"; wm_begin(m,1);
+    assert(cfg_icon_move_at(&d.sh.cfg,"/Computer",800,600,270,140));
+    assert(cfg_icon_move_at(&d.sh.cfg,"/Computer",d.width,d.height,170,90));
+    desk_shell_apply(&d); step("current resolution reads its own position");
+    assert(d.sh.icons[0].box.x==170);
+    assert(cfg_icons_arrange_at(&d.sh.cfg,d.width,d.height)); desk_shell_apply(&d); step("Arrange clears only current resolution");
+    int x,y; assert(cfg_icon_position_at(&d.sh.cfg,"/Computer",800,600,&x,&y) && x==270 && y==140);
+    wm_end();
+}
+static int g19_record_launch(struct desktop *dd, const struct desk_launch_record *record)
+{ (void)dd; assert(strstr(record->arguments,"report.txt")); return 0; }
+static void row_icon_drop_targets(unsigned m)
+{
+    row_name="G19 icon drop targets"; wm_begin(m,1);
+    g19_drop_fixture=1; d.sh.folder->command=DF_REFRESH; desk_folder_service(&d); d.v3_launch=g19_record_launch;
+    step("executable desktop icon");
+    struct fake_app *files=app_open("files",220,160,300,220);
+    assert(files_drag_begin(files,1)); int x,y; icon_point(3,&x,&y); pointer_to(x,y);
+    assert(d.sh.dnd.kind==SH_DROP_PROGRAM); step("program icon highlights as an open target");
+    press(CIUKI_BUTTON_LEFT,0); step("drop opens program with file arguments, leaving sources intact");
+    assert(files_drag_begin(files,2)); pointer_to(200,180); key(0x1d,1); key(0x2a,1);
+    assert(d.sh.dnd.effect==FM_EFFECT_LINK); step("Ctrl Shift creates a shortcut cursor");
+    press(CIUKI_BUTTON_RIGHT,0); step("right drag menu enables Create Shortcut(s) Here");
+    tap(DU_KEY_ESC); key(0x2a,0); key(0x1d,0); step("cancel link drop"); wm_end();
+}
+static void row_wallpaper_pattern(unsigned m)
+{
+    row_name="G19 wallpaper patterns"; wm_begin(m,1);
+    strcpy(d.sh.cfg.wallpaper,"none"); d.sh.cfg.wallpaper_pattern=3;
+    assert(!desk_shell_wallpaper_update(&d) || d.sh.wall_valid); /* invalidate below when replacing a retained frame */
+    d.sh.wall_valid=0; assert(!desk_shell_wallpaper_update(&d)); step("Pattern Apply paints desktop colour and mask");
+    d.sh.cfg.wallpaper_pattern=0; d.sh.wall_valid=0;
+    assert(!desk_shell_wallpaper_update(&d)); step("None restores solid desktop background"); wm_end();
+}
+static void row_recovery(unsigned m)
+{
+    /* G14: Safe mode labels the background's four corners; a Command prompt
+     * only start shows no desktop icons until the Terminal's WIN. Both are
+     * background content: windows over them and their removal repaint it. */
+    row_name="safe mode and command prompt"; wm_begin(m,1);
+    struct desk_box all={0,0,(int)d.width,(int)d.height};
+    d.safe_mode=1; d.sh.background_valid=0; desk_damage_add(&d.damage,all,d.width,d.height);
+    step("Safe mode labels in the four corners");
+    struct fake_app *a=app_open("files",300,200,0,DESK_BAR); step("a window over a corner label");
+    desk_move(&d,a->slot,200,200); step("the corner label exposed again");
+    d.terminal_shell=1; d.sh.background_valid=0; desk_damage_add(&d.damage,all,d.width,d.height);
+    step("command prompt only: no desktop icons");
+    assert(!desk_recovery_win(&d) && !d.terminal_shell); step("WIN: the icons return");
+    wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
     row_fullscreen, row_gfx, row_topbar, row_theme, row_strips, row_lease, row_selection, row_drag,
@@ -2208,7 +2351,10 @@ static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overl
     row_taskbar_customization, row_taskbar_dock, row_taskbar_autohide, row_taskbar_toolbars,
     row_start_custom, row_shell_custom_prompts, row_move_damaged, row_fault, row_saver,
     row_appearance, row_item_appearance, row_effects, row_dpi, row_desktop_themes,
-    row_background_browse, row_advanced_fonts, row_fixed_arrange, row_review_content};
+    row_background_browse, row_advanced_fonts, row_fixed_arrange, row_review_content,
+    row_icon_sort, row_icon_auto_arrange,
+    row_icon_keyboard, row_system_icon_rename, row_wallpaper_change, row_shortcut_wizard, row_icon_metrics,
+    row_icon_visibility, row_system_menus, row_desktop_refresh, row_resolution_layout, row_icon_drop_targets, row_wallpaper_pattern, row_recovery};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).

@@ -1,3 +1,4 @@
+#include "../desktop/input_text.h"
 /* SPDX-License-Identifier: MIT
  * Widget registry, input dispatch, focus/release, timers and simple widgets. */
 #include "internal.h"
@@ -17,6 +18,9 @@
 #undef _SC_THREAD_STACK_MIN
 #endif
 #include <unistd.h>
+
+static void context_click(struct du_ui *);
+static int help_key(struct du_ui *);
 
 static char *clipboard;
 static char clipboard_path[DU_TEXT_MAX] = "/system/settings/text.clip";
@@ -139,7 +143,8 @@ void du_init(struct du_ui *u, uint32_t *pixels, int width, int height)
     memset(u, 0, sizeof(*u));
     u->canvas = (struct du_canvas){pixels, width, height, {0, 0, width, height}};
     u->focus = u->capture = u->hover = u->menu = u->popup_owner = -1;
-    u->last_click_widget = -1; u->focused_window = 1; u->dirty = 1;
+    u->input_double_ms=500;u->input_blink_ms=530;u->input_wheel_lines=3;u->input_caret_on=1;
+    u->last_click_widget = -1; u->focused_window = 1; u->dirty = 1; u->help_tip.widget = -1;
 }
 
 void du_resize(struct du_ui *u, uint32_t *pixels, int width, int height)
@@ -232,7 +237,7 @@ void du_control_help(struct du_widget *w)
     case DU_HEADER: tip=w->text[0] ? w->text : "Heading"; help="Names this column or group of controls."; break;
     default: break;
     }
-    if (!w->tip[0]) snprintf(w->tip, sizeof(w->tip), "%s", tip);
+    if (!w->tip[0]) snprintf(w->tip, sizeof(w->tip), "%.*s", (int)sizeof(w->tip) - 1, tip);
     if (!w->help) {
         char action[48]; unsigned at=0;
         for (const char *p=w->text;*p && at+1<sizeof(action);p++) if (*p!='&' && *p!='.') {
@@ -297,6 +302,7 @@ static unsigned widget_cursor(const struct du_widget *w, const struct du_ui *u)
 }
 unsigned du_cursor_at(const struct du_ui *u)
 {
+    if (u->whats_this) return DESK_CURSOR_HELP;
     if (!du_contains((struct du_rect){0,0,u->canvas.width,u->canvas.height},u->mouse_x,u->mouse_y) && u->capture < 0) return DESK_CURSOR_ARROW;
     if (u->dialog.kind) {
         const struct du_dialog *d = &u->dialog;
@@ -323,6 +329,8 @@ int du_focused(const struct du_ui *u)
 
 void du_release(struct du_ui *u)
 {
+    u->input_dead=0;
+    du_tip_hide(u); du_help_tip_hide(u); u->whats_this = 0;
     memset(u->keys, 0, sizeof(u->keys));
     u->modifiers = u->buttons = 0; u->menu_armed = 0;
     if (u->capture >= 0 && (unsigned)u->capture < u->count) {
@@ -355,7 +363,7 @@ void du_release(struct du_ui *u)
 
 void du_window_focus(struct du_ui *u, int focused)
 {
-    if (!focused) { du_release(u); du_menu_close(u); }
+    if (!focused) { u->input_dead=0;du_release(u); du_menu_close(u); }
     if (u->focused_window != focused) {
         u->focused_window = focused;
         du_post(u, DU_EV_FOCUS, 0, focused);
@@ -366,15 +374,11 @@ void du_window_focus(struct du_ui *u, int focused)
 
 unsigned du_key_char(const struct du_ui *u, unsigned code)
 {
-    static const char plain[] = "\0\0" "1234567890-=\0\0" "qwertyuiop[]\0\0" "asdfghjkl;'`\0\\" "zxcvbnm,./";
-    static const char shift[] = "\0\0" "!@#$%^&*()_+\0\0" "QWERTYUIOP{}\0\0" "ASDFGHJKL:\"~\0|" "ZXCVBNM<>?";
-    if (u->modifiers & (DU_CTRL | DU_ALT)) return 0;
-    if (code == DU_KEY_SPACE) return ' ';
-    if (code >= sizeof(plain) - 1 || !plain[code]) return 0;
-    unsigned ch = (unsigned char)((u->modifiers & DU_SHIFT) ? shift[code] : plain[code]);
-    if (u->caps && ch >= 'a' && ch <= 'z') ch -= 32;
-    else if (u->caps && ch >= 'A' && ch <= 'Z') ch += 32;
-    return ch;
+    if(u->input_text_ready)return u->input_text_count ? u->input_text[0] : 0;
+    if ((u->modifiers&DU_CTRL) || ((u->modifiers&DU_ALT) && !u->keys[0x138]))return 0;
+    return ciuki_input_char((int)u->input_layout,code,
+        (u->modifiers&DU_SHIFT ? CIUKI_KEYMAP_SHIFT : 0) |
+        (u->keys[0x138] ? CIUKI_KEYMAP_ALTGR : 0) | (u->caps ? CIUKI_KEYMAP_CAPS : 0));
 }
 
 /* ---- timers ---- */
@@ -403,6 +407,11 @@ void du_tick(struct du_ui *u, uint64_t now)
         if(step!=u->menu_animation_step) { du_invalidate(u,(struct du_rect){0,0,u->canvas.width,u->canvas.height}); u->menu_animation_step=step; }
         if(step==6) u->menu_opened=0;
     }
+    if(u->input_blink_ms && u->now>=u->input_caret_deadline) {
+        u->input_caret_on=!u->input_caret_on;u->input_caret_deadline=u->now+(uint64_t)u->input_blink_ms*1000000;
+        if(u->focus>=0 && (unsigned)u->focus<u->count &&
+           (u->widgets[u->focus].kind==DU_EDIT || u->widgets[u->focus].kind==DU_TEXTAREA))du_invalidate(u,u->widgets[u->focus].box);
+    }
     if (u->service) u->service(u,u->user);
     du_dialog_tick(u);
     du_tip_tick(u);
@@ -427,6 +436,8 @@ uint64_t du_next_deadline(const struct du_ui *u)
 {
     uint64_t next = du_dialog_deadline(u), tip = du_tip_deadline(u);
     if (tip < next) next = tip;
+    if(u->input_blink_ms && u->focused_window && u->focus>=0 && (unsigned)u->focus<u->count &&
+       (u->widgets[u->focus].kind==DU_EDIT || u->widgets[u->focus].kind==DU_TEXTAREA) && u->input_caret_deadline<next)next=u->input_caret_deadline;
     for (int i = 0; i < DU_TIMERS; i++) if (u->timers[i].active && u->timers[i].deadline < next) next = u->timers[i].deadline;
     return next;
 }
@@ -483,7 +494,10 @@ int du_edit_key(struct du_ui *u, struct du_widget *w, unsigned code)
     else if (code == DU_KEY_BACKSPACE || code == DU_KEY_DELETE) kind = 3;
     else if (ctrl && (code == 0x2d || code == 0x2f)) kind = 2;
     if (kind) snprintf(before, sizeof(before), "%s", w->text);
-    if (ch) { char s[2] = {(char)ch, 0}; du_edit_insert(w, s); }
+    if (ch) {
+        unsigned count=u->input_text_ready ? u->input_text_count : 1;
+        for(unsigned k=0;k<count;k++) {char text[5];ciuki_input_utf8(u->input_text_ready ? u->input_text[k] : ch,text);du_edit_insert(w,text);}
+    }
     else if (ctrl && !(u->modifiers & DU_ALT) && code == 0x1e) { w->anchor = 0; w->cursor = len; }
     else if (ctrl && (code == 0x2e || code == 0x2d)) {
         size_t a = sel_lo(w), b = sel_hi(w);
@@ -513,6 +527,7 @@ int du_edit_key(struct du_ui *u, struct du_widget *w, unsigned code)
     return 1;
 }
 
+static int draw_caret_visible=1;
 void du_draw_edit(struct du_canvas *c, struct du_widget *w, int focused)
 {
     struct du_rect b = w->box;
@@ -553,7 +568,7 @@ void du_draw_edit(struct du_canvas *c, struct du_widget *w, int focused)
             c->clip = keep;
         }
     }
-    if (focused && w->cursor == w->anchor) du_vline(c, x + desk_text_measure_n(font, w->text + start, cursor_chars - w->offset) - 1, y - 3, DU_GLYPH_H + 6, DU_INK);
+    if (focused && draw_caret_visible && w->cursor == w->anchor) du_vline(c, x + desk_text_measure_n(font, w->text + start, cursor_chars - w->offset) - 1, y - 3, DU_GLYPH_H + 6, DU_INK);
     c->clip = old;
 }
 
@@ -657,10 +672,12 @@ int du_sb_clamp(int value, int total, int page)
     return value < 0 ? 0 : value > max ? max : value;
 }
 
+static unsigned active_wheel_lines=3;
 int du_wheel_value(int value, int detents, int total, int page)
 {
     int max=total>page ? total-page : 0;
-    int64_t next=(int64_t)value-(int64_t)detents*3;
+    unsigned lines=active_wheel_lines==101 ? (unsigned)(page>0 ? page : 1) : active_wheel_lines;
+    int64_t next=(int64_t)value-(int64_t)detents*lines;
     return next<0 ? 0 : next>max ? max : (int)next;
 }
 
@@ -958,7 +975,7 @@ void du_draw_widget(struct du_ui *u, struct du_widget *w, int focused)
         break;
     case DU_BUTTON: du_draw_button(c, w, focused); break;
     case DU_TOOLBUTTON: draw_toolbutton(c, w); break;
-    case DU_EDIT: du_draw_edit(c, w, focused && u->focused_window); break;
+    case DU_EDIT: draw_caret_visible=u->input_caret_on;du_draw_edit(c,w,focused && u->focused_window);draw_caret_visible=1;break;
     case DU_LISTVIEW: du_draw_list(c, w, focused, u->focused_window); break;
     case DU_TREE: du_draw_tree(c, w, focused, u->focused_window); break;
     case DU_SCROLLBAR: { struct du_sb s = widget_sb(w); du_sb_draw(c, &s, w->pressed && w->hot ? w->drag : 0); break; }
@@ -968,7 +985,9 @@ void du_draw_widget(struct du_ui *u, struct du_widget *w, int focused)
     case DU_TABS: draw_tabs(c, w, focused && u->focused_window); break;
     case DU_GRAPH: draw_graph(c, w); break;
     case DU_GROUP: draw_group(c, w); break;
-    case DU_TEXTAREA: du_ta_draw(c, w->box, (struct du_textarea *)w->data, focused && u->focused_window); break;
+    case DU_TEXTAREA:
+        if(w->data)((struct du_textarea *)w->data)->caret_hidden=!u->input_caret_on;
+        du_ta_draw(c,w->box,(struct du_textarea *)w->data,focused && u->focused_window);break;
     case DU_CHECKBOX: case DU_RADIO: draw_check(c, w, focused && u->focused_window); break;
     case DU_TOOLBAR: draw_band(c, w); break;
     case DU_COMBO: du_draw_combo(c, w, focused, u->focused_window); break;
@@ -1142,7 +1161,8 @@ static void ta_changed(struct du_ui *u, struct du_widget *w, struct du_textarea 
 
 int du_widget_wheel(struct du_ui *u, struct du_widget *w, int detents)
 {
-    if (w->disabled || w->hidden || !detents) return 0;
+    active_wheel_lines=u->input_wheel_lines;
+    if (w->disabled || w->hidden || !detents || !active_wheel_lines) return 0;
     int changed=0;
     switch (w->kind) {
     case DU_LISTVIEW: case DU_TREE: {
@@ -1158,6 +1178,10 @@ int du_widget_wheel(struct du_ui *u, struct du_widget *w, int detents)
         }
         return changed;
     case DU_TRACKBAR: return du_trackbar_wheel(u,w,detents);
+    case DU_CANVAS:
+        if (!w->wheel_events) return 0;
+        du_emit(u, (struct du_event){.type = DU_EV_POINTER, .id = w->id, .index = DU_POINTER_WHEEL, .x = detents, .y = u->mouse_y ? u->mouse_y : 1});
+        return 1;
     case DU_SCROLLBAR: {
         int next=du_wheel_value(w->value,detents,w->total,w->page);
         changed=next!=w->value; w->value=next;
@@ -1182,7 +1206,10 @@ int du_widget_key(struct du_ui *u, struct du_widget *w, unsigned code)
         du_ta_fit(ta, w->box);
         struct du_rect caret=ta_caret(w); struct du_textarea before=*ta;
         unsigned ch = du_key_char(u, code);
-        if (!(ch ? du_ta_text(ta, ch) : du_ta_key(ta, code, u->modifiers))) return 0;
+        int changed=0;
+        if(ch) {unsigned count=u->input_text_ready ? u->input_text_count : 1;for(unsigned k=0;k<count;k++)changed|=du_ta_text(ta,u->input_text_ready ? u->input_text[k] : ch);}
+        else changed=du_ta_key(ta,code,u->modifiers);
+        if(!changed)return 0;
         ta_changed(u,w,before,caret);
         du_post(u, DU_EV_CHANGE, w->id, 0);
         return 1;
@@ -1322,21 +1349,57 @@ void du_widget_release(struct du_ui *u, struct du_widget *w, int button, int x, 
     if (flip) toggle(u, w);
 }
 
+
+/* ---- G15: What's This? and F1 help ----
+ * Windows 98 (RK-vmm, RK-keys): F1 opens the program's help topic (WM_HELP);
+ * Shift+F1 and the dialog "?" button turn the pointer into a question-mark
+ * cursor and the next click shows the control's What's This? text. Hover
+ * tooltips are the G16 tooltips of controls.c; du_tooltip sets their text. */
+struct du_widget *du_tooltip(struct du_ui *u, int id, const char *tip)
+{
+    struct du_widget *w = du_get(u, id);
+    if (w) du_set_tip(w, tip);
+    return w;
+}
 void du_help_topic(struct du_ui *u, const char *topic) { if (u) u->help_topic = topic; }
 int du_help(struct du_ui *u, const char *topic)
 {
     if (!u || !u->help_open) return -ENOSYS;
     return u->help_open(u, topic ? topic : u->help_topic, u->help_ctx);
 }
-void du_context_help(struct du_ui *u, int on) { if (u) u->whats_this = on != 0; }
+void du_context_help(struct du_ui *u, int on)
+{
+    if (!u) return;
+    on = on != 0;
+    du_tip_hide(u); du_help_tip_hide(u);
+    if (u->whats_this == on) return;
+    u->whats_this = on; u->menu_armed = 0;
+}
 
+/* A click in What's This? mode: WM_HELP for the control (HELPINFO_WINDOW),
+ * then its text in a popup unless the program handled it. */
 static void context_click(struct du_ui *u)
 {
-    int hit = du_hit(u, u->mouse_x, u->mouse_y);
-    struct du_widget *w = hit >= 0 ? &u->widgets[hit] : NULL;
+    struct du_widget *w = u->dialog.kind ? du_dialog_item_at(u, u->mouse_x, u->mouse_y) :
+        du_hit(u, u->mouse_x, u->mouse_y) >= 0 ? &u->widgets[du_hit(u, u->mouse_x, u->mouse_y)] : NULL;
     u->whats_this = 0; u->help_consumed = 0;
     du_emit(u, (struct du_event){.type=DU_EV_HELP,.id=w?w->id:0,.index=DU_HELP_CONTEXT,
                                  .x=u->mouse_x,.y=u->mouse_y,.text=w?w->help:NULL});
+    if (!u->help_consumed && w && w->help && w->help[0]) du_help_tip_show(u, w->help);
+}
+
+/* F1 (WM_HELP from the keyboard): the focused control's id; the default
+ * action opens the program's topic. Returns 0 when the program has no topic
+ * and no handler, so F1 stays an ordinary key. */
+static int help_key(struct du_ui *u)
+{
+    const struct du_widget *f = u->focus >= 0 && (unsigned)u->focus < u->count ? &u->widgets[u->focus] : NULL;
+    if (!u->help_topic) return 0;
+    if (u->dialog.kind) f = u->dialog.focus >= 0 && (unsigned)u->dialog.focus < u->dialog.count ? &u->dialog.items[u->dialog.focus] : NULL;
+    u->help_consumed = 0;
+    du_emit(u, (struct du_event){.type=DU_EV_HELP,.id=f?f->id:0,.index=DU_HELP_F1,.text=f?f->help:NULL});
+    if (!u->help_consumed) (void)du_help(u, NULL);
+    return 1;
 }
 
 /* ---- dispatch ---- */
@@ -1352,18 +1415,13 @@ static void focus_next(struct du_ui *u, int back)
 
 static void key_down(struct du_ui *u, unsigned code)
 {
-    du_tip_hide(u);
+    du_tip_hide(u); du_help_tip_hide(u);
+    /* G15: What's This? waits for a click; Esc cancels, other keys are ignored. */
+    if (u->whats_this) { if (code == DU_KEY_ESC) du_context_help(u, 0); return; }
     if (code == DU_KEY_F1 && !(u->modifiers & (DU_CTRL | DU_ALT))) {
         if (u->modifiers & DU_SHIFT) { du_context_help(u, 1); return; }
-        if (u->help_topic) {
-            const struct du_widget *f = u->focus >= 0 && (unsigned)u->focus < u->count ? &u->widgets[u->focus] : NULL;
-            u->help_consumed = 0;
-            du_emit(u, (struct du_event){.type=DU_EV_HELP,.id=f?f->id:0,.index=DU_HELP_F1,.text=f?f->help:NULL});
-            if (!u->help_consumed) (void)du_help(u, NULL);
-            return;
-        }
+        if (help_key(u)) return;
     }
-    if (u->whats_this) { if (code == DU_KEY_ESC) du_context_help(u, 0); return; }
     if (u->combo_open) { du_combo_overlay_key(u, code); return; }
     if (u->dialog.kind) { du_dialog_key(u, code); return; }
     if (u->menu >= 0 || u->popup) { du_menu_key(u, code); return; }
@@ -1371,7 +1429,7 @@ static void key_down(struct du_ui *u, unsigned code)
         if (u->modifiers & DU_SHIFT) { /* Shift+F10: context menu of the focus */ }
         else { du_menu_open(u, 0, 1); return; }
     }
-    if ((u->modifiers & DU_ALT) && !(u->modifiers & DU_CTRL)) {
+    if ((u->modifiers & DU_ALT) && !(u->modifiers & DU_CTRL) && !u->keys[DU_KEY_RALT]) {
         unsigned saved = u->modifiers; u->modifiers = 0;
         unsigned ch = du_key_char(u, code); u->modifiers = saved;
         if (ch && du_menu_mnemonic(u, ch)) return;
@@ -1411,7 +1469,10 @@ static void key_down(struct du_ui *u, unsigned code)
         return;
     }
     if (f && du_widget_key(u, f, code)) return;
-    du_emit(u, (struct du_event){.type = DU_EV_KEY, .id = f ? f->id : 0, .key = code, .ch = du_key_char(u, code)});
+    unsigned characters=u->input_text_ready ? u->input_text_count : 1;
+    for(unsigned k=0;k<characters;k++)
+        du_emit(u,(struct du_event){.type=DU_EV_KEY,.id=f ? f->id : 0,.key=code,
+            .ch=u->input_text_ready ? u->input_text[k] : du_key_char(u,code)});
 }
 
 void du_input(struct du_ui *u, const struct ciuki_input_event *e)
@@ -1423,7 +1484,7 @@ void du_input(struct du_ui *u, const struct ciuki_input_event *e)
             du_emit(u,(struct du_event){.type=DU_EV_CONSUMER,.key=(unsigned)e->code});
         return;
     }
-    if (e->type == CIUKI_INPUT_RESYNC) { du_release(u); return; }
+    if (e->type == CIUKI_INPUT_RESYNC) { u->input_dead=0;du_release(u); return; }
     if (e->type == CIUKI_INPUT_KEY) {
         if (e->code < 0 || e->code > 0x200) return;
         unsigned code = (unsigned)e->code;
@@ -1431,7 +1492,8 @@ void du_input(struct du_ui *u, const struct ciuki_input_event *e)
         u->modifiers = (u->keys[DU_KEY_LSHIFT] || u->keys[DU_KEY_RSHIFT] ? DU_SHIFT : 0) |
                        (u->keys[DU_KEY_LCTRL] || u->keys[DU_KEY_RCTRL] ? DU_CTRL : 0) |
                        (u->keys[DU_KEY_LALT] || u->keys[DU_KEY_RALT] ? DU_ALT : 0);
-        if (code == DU_KEY_LALT || code == DU_KEY_RALT) {
+        if (code == DU_KEY_RALT) return;
+        if (code == DU_KEY_LALT) {
             if (e->value == 1) u->menu_armed = 1;
             else if (!e->value && u->menu_armed && !u->dialog.kind) {
                 u->menu_armed = 0;
@@ -1440,10 +1502,15 @@ void du_input(struct du_ui *u, const struct ciuki_input_event *e)
             return;
         }
         if (!e->value) return;
-        u->menu_armed = 0;
+        u->menu_armed = 0; du_tip_hide(u);
         if (code == DU_KEY_CAPS && e->value == 1) { u->caps = !u->caps; return; }
         if (code == DU_KEY_LSHIFT || code == DU_KEY_RSHIFT || code == DU_KEY_LCTRL || code == DU_KEY_RCTRL) return;
-        key_down(u, code);
+        unsigned ch=du_key_char(u,code);
+        u->input_text_count=ciuki_input_compose(&u->input_dead,ch,u->input_layout==1 && code==0x0d && (u->modifiers&DU_SHIFT),u->input_text);
+        if(ch && !u->input_text_count)return;
+        u->input_text_ready=ch!=0;
+        u->input_caret_on=1;u->input_caret_deadline=u->now+(uint64_t)u->input_blink_ms*1000000;
+        key_down(u, code);u->input_text_ready=0;
         return;
     }
     if (e->type == CIUKI_INPUT_TEXT) return; /* text derives from KEY events plus Shift/Caps */
@@ -1463,7 +1530,7 @@ void du_input(struct du_ui *u, const struct ciuki_input_event *e)
         if (u->capture >= 0 && (unsigned)u->capture < u->count) { du_widget_motion(u, &u->widgets[u->capture], u->mouse_x, u->mouse_y); return; }
         if (u->dialog.kind) { du_dialog_motion(u); return; }
         int hit = du_hit(u, u->mouse_x, u->mouse_y);
-        du_tip_motion(u, hit >= 0 ? &u->widgets[hit] : NULL);
+        if (!u->help_tip.visible) du_tip_motion(u, hit >= 0 ? &u->widgets[hit] : NULL);   /* What's This? stays until a click or key */
         if (hit != u->hover) {
             if (u->hover>=0 && (unsigned)u->hover<u->count) {
                 struct du_widget *old=&u->widgets[u->hover];
@@ -1485,7 +1552,7 @@ void du_input(struct du_ui *u, const struct ciuki_input_event *e)
     unsigned bit = 1u << (button - 1);
     if (e->value) u->buttons |= bit; else u->buttons &= ~bit;
     du_tip_hide(u);
-    if (e->value && u->whats_this) { context_click(u); return; }
+    if (e->value) { du_help_tip_hide(u); if (u->whats_this) { context_click(u); return; } }
     if (u->combo_open) { du_combo_overlay_button(u, button, e->value != 0); return; }
     if (u->dialog.kind) { if (e->value) du_dialog_press(u, button); else du_dialog_release(u, button); return; }
     if (e->value) {

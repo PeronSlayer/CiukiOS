@@ -79,5 +79,5 @@ int main(void)
     for(unsigned i=0;i<100 && !j->error;i++)tunnel(&c);
     assert(j->error && strstr(j->error,"Proxy authentication") && c.state==TUNNEL);ciuki_net_job_free(j);
     puts("PASS G26B native CONNECT state machine: partial writes/reads, TLS gated on 2xx, 407 refusal, proxy credentials excluded from origin request");
-    puts("PASS G26 HTTP proxy: absolute target/origin Host+cookies/owned input/proxy endpoint/injection rejection/HTTPS direct");return 0;
+    puts("PASS G26 HTTP proxy: absolute target/origin Host+cookies/owned input/proxy endpoint/injection rejection/HTTPS through the CONNECT tunnel");return 0;
 }

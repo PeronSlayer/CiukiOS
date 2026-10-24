@@ -372,12 +372,6 @@ struct desk_box desk_quick_launch_button(const struct desktop *d)
     if (!d->sh.cfg.quick_launch || (d->sh.cfg.taskbar_autohide && d->sh.bar_hidden)) return (struct desk_box){0};
     struct desk_box b=desk_taskbar(d);
     return (struct desk_box){b.x+4,b.y+3,26,26};
-    int32_t available=(int32_t)d->width-2*DESK_TASK_X;
-    if (available<=0 || !count) return (struct desk_box){0,0,0,0};
-    int32_t w=available/(int32_t)count;
-    if (w>desk_scale(160)) w=desk_scale(160);
-    int32_t left=DESK_TASK_X+(int32_t)position*w;
-    return (struct desk_box){left,(int32_t)d->height-DESK_BAR+3,w,DESK_BAR-6};
 }
 int32_t desk_menu_row(const struct desktop *d)
 { return d->sh.cfg.start_small ? SH_SUB_ROW : SH_START_ROW; }
@@ -879,21 +873,16 @@ static struct desk_cursor_raster cursor_raster(const struct desktop *d)
     }
     unsigned shape=d->cursor_shape;
     const struct desk_cursor_raster *generic=desk_generic_cursor(shape);
-    if (generic) return scheme_raster(d,*generic,desk_generic_cursor_large(shape));
-    if (shape>=DESK_CURSOR_COUNT) return scheme_raster(d,desk_cursors[DESK_CURSOR_ARROW],&desk_cursors_large[DESK_CURSOR_ARROW]);
-    struct desk_tool_cursor tool=desk_tool_cursor(shape);
-    struct desk_cursor_raster raster={.hot_x=(unsigned)tool.hot_x,.hot_y=(unsigned)tool.hot_y,.width=32,.height=32};
-    memcpy(raster.mask,tool.mask,sizeof(raster.mask));
-    memcpy(raster.image,tool.image,sizeof(raster.image));
-    return scheme_raster(d,raster,NULL);
     struct desk_cursor_raster raster;
-    if(generic) raster=*generic;
-    else if(shape>=DESK_CURSOR_COUNT) raster=desk_cursors[DESK_CURSOR_ARROW];
+    const struct desk_cursor_raster *large=NULL;
+    if(generic) { raster=*generic; large=desk_generic_cursor_large(shape); }
+    else if(shape>=DESK_CURSOR_COUNT) { raster=desk_cursors[DESK_CURSOR_ARROW]; large=&desk_cursors_large[DESK_CURSOR_ARROW]; }
     else {
         struct desk_tool_cursor tool=desk_tool_cursor(shape);
         raster=(struct desk_cursor_raster){.hot_x=(unsigned)tool.hot_x,.hot_y=(unsigned)tool.hot_y,.width=32,.height=32};
         memcpy(raster.mask,tool.mask,sizeof(raster.mask)); memcpy(raster.image,tool.image,sizeof(raster.image));
     }
+    /* G12 Mouse > Pointers: the scheme chosen in the Control Panel (0 Ciuki, 1 large, 2 inverted)... */
     if(d->shell && d->sh.cfg.pointer_scheme==2) {
         for(unsigned y=0;y<32;y++) raster.image[y]^=raster.mask[y];
     } else if(d->shell && d->sh.cfg.pointer_scheme==1 && generic) {
@@ -909,7 +898,8 @@ static struct desk_cursor_raster cursor_raster(const struct desktop *d)
             if(source.image[sy]&from) raster.image[y]|=to;
         }
     }
-    return raster;
+    /* ...then G25's accessibility pointer options on top. */
+    return scheme_raster(d,raster,large);
 }
 static uint32_t cursor_background(void)
 { return desk_cursors[0].shadow ? 0 : 0x101010u; }
@@ -1189,10 +1179,8 @@ static void scene(struct desktop *d, struct desk_box clip)
     if (!desk_intersect(clip,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},&clip)) return;
     /* A client-only update writes its opaque backing store directly. Higher
      * windows' shadows and shell overlays still need the ordinary painter. */
-    if (!d->animation.active && !d->menu_open && !d->sh.levels && !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open && !d->sh.tooltip && !desk_shell_chrome_intersects(d,clip) && !d->sh.switcher &&
-        clip.y>=DESK_BAR && (!d->shell || (clip.x+clip.w<=desk_taskbar(d).x || clip.x>=desk_taskbar(d).x+desk_taskbar(d).w || clip.y+clip.h<=desk_taskbar(d).y || clip.y>=desk_taskbar(d).y+desk_taskbar(d).h))) {
     if (!d->geometry_outline && !d->animation.active && !d->menu_open && !d->sh.levels && !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open && !d->sh.tooltip && !desk_shell_chrome_intersects(d,clip) && !d->sh.switcher &&
-        clip.y>=DESK_BAR && (!d->shell || clip.y+clip.h<=(int)d->height-DESK_BAR)) {
+        clip.y>=DESK_BAR && (!d->shell || (clip.x+clip.w<=desk_taskbar(d).x || clip.x>=desk_taskbar(d).x+desk_taskbar(d).w || clip.y+clip.h<=desk_taskbar(d).y || clip.y>=desk_taskbar(d).y+desk_taskbar(d).h))) {
         for (int i=0;i<DESK_CLIENTS;i++) {
             struct desk_client *c=&d->clients[i];
             if (!c->window || c->minimized || c->collapsed || c->internal || !c->pixels) continue;
@@ -1252,6 +1240,7 @@ static void scene(struct desktop *d, struct desk_box clip)
             cursor(d,clip);
         }
         d->mouse_x=x;d->mouse_y=y;
+    }
     if(d->geometry_outline) {
         struct desk_box b=d->geometry_preview;
         struct desk_paint p=paint_of(d,clip);

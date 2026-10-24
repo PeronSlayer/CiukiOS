@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
@@ -42,8 +43,8 @@ void ciuki_font_prefetch(void); /* font.c (fx-15) */
 #include "logline.h"
 #include "pointer.h"
 
-enum { BACK=1,FORWARD,RELOAD,STOP,BOOKMARK,URL,STATUS,HOME,NEW_WINDOW=10,OPEN=20,FILE_PICKER,NOTICE,SAVE_DOWNLOAD,DOWNLOAD_PROGRESS };
-static const int buttons[]={BACK,FORWARD,RELOAD,STOP,HOME,BOOKMARK,NEW_WINDOW};
+enum { BACK=1,FORWARD,RELOAD,STOP,BOOKMARK,URL,STATUS,HOME,WALLPAPER,NEW_WINDOW=10,OPEN=20,FILE_PICKER,NOTICE,SAVE_DOWNLOAD,DOWNLOAD_PROGRESS };
+static const int buttons[]={BACK,FORWARD,RELOAD,STOP,HOME,BOOKMARK,NEW_WINDOW,WALLPAPER};
 static struct du_ui ui;
 static struct cp_ui printing;
 static struct ciuki_browser_surface *surface;
@@ -136,6 +137,35 @@ static void action(int id)
         internet_profile_unlock(&lock);
         ciuki_chrome_status(error?"Unable to save bookmarks; the previous file was kept.":"Bookmark saved. Ctrl+B opens Bookmarks; Ctrl+H opens History.");
         break;
+    case WALLPAPER: {
+        nsurl *current=browser_window_access_url(bw);
+        const char *url=current?nsurl_access(current):NULL;
+        if(!url || strncmp(url,"file:///",8)) { ciuki_chrome_status("Open a local PNG, JPEG or BMP image first.");break; }
+        char path[512];size_t at=0;
+        for(const char *p=url+7;*p && *p!='?' && *p!='#';p++) {
+            unsigned ch=(unsigned char)*p;
+            if(ch=='%') {
+                int hi=p[1]>='0'&&p[1]<='9'?p[1]-'0':p[1]>='a'&&p[1]<='f'?p[1]-'a'+10:p[1]>='A'&&p[1]<='F'?p[1]-'A'+10:-1;
+                int lo=p[2]>='0'&&p[2]<='9'?p[2]-'0':p[2]>='a'&&p[2]<='f'?p[2]-'a'+10:p[2]>='A'&&p[2]<='F'?p[2]-'A'+10:-1;
+                if(hi<0||lo<0){ciuki_chrome_status("The local image path is invalid.");return;}ch=(unsigned)(hi*16+lo);p+=2;
+            }
+            if(ch<32||ch==127||at+1>=sizeof(path)){ciuki_chrome_status("The local image path is too long or invalid.");return;}
+            path[at++]=(char)ch;
+        }
+        path[at]=0;const char *dot=strrchr(path,'.');
+        if(!dot || (strcasecmp(dot,".png")&&strcasecmp(dot,".jpg")&&strcasecmp(dot,".jpeg")&&strcasecmp(dot,".bmp"))) {
+            ciuki_chrome_status("The current local page is not a supported wallpaper image.");break;
+        }
+        char arg[160];int n=snprintf(arg,sizeof(arg),"--set-wallpaper=%s",path);
+        if(n<=0||(size_t)n>=sizeof(arg)){ciuki_chrome_status("The wallpaper path is too long.");break;}
+        unsigned name_n=7,arg_n=(unsigned)n;uint8_t payload[240];
+        desk_put32(payload,name_n);memcpy(payload+4,"control",name_n);
+        desk_put32(payload+4+name_n,arg_n);memcpy(payload+8+name_n,arg,arg_n);
+        ciuki_chrome_status(du3_request(&surface->connection,DESK_V3_LAUNCH,surface->window,
+            surface->generation,payload,8+name_n+arg_n,-1) ?
+            "Control Panel opened to apply this image." : "The wallpaper request could not be sent.");
+        break;
+    }
     }
     }
 }
@@ -175,7 +205,8 @@ static void layout(void)
 {
     int w=surface->current.info.width,h=surface->current.info.height;
     for(unsigned i=0;i<sizeof(buttons)/sizeof(*buttons);i++)du_get(&ui,buttons[i])->box=(struct du_rect){4+(int)i*30,4,28,28};
-    du_get(&ui,URL)->box=(struct du_rect){218,6,w-224,24};
+    int url_x=8+(int)(sizeof(buttons)/sizeof(*buttons))*30;   /* the address box follows the toolbar buttons */
+    du_get(&ui,URL)->box=(struct du_rect){url_x,6,w-url_x-6,24};
     du_get(&ui,STATUS)->box=(struct du_rect){0,h-CIUKI_BROWSER_STATUS,w,CIUKI_BROWSER_STATUS};
 }
 void ciuki_chrome_init(struct ciuki_browser_surface *s)
@@ -184,8 +215,8 @@ void ciuki_chrome_init(struct ciuki_browser_surface *s)
     surface=s;active=status_dirty=true;toolbar_keys=false;input_records=0;
     du_init(&ui,s->current.back,s->current.info.width,s->current.info.height);
     ui.event=event;
-    const char *labels[]={"Back","Forward","Reload","Stop","Home","Bookmark","New window"};
-    const char *icons[]={"actions/go-previous","actions/go-next","actions/view-refresh","actions/process-stop","actions/go-home","actions/bookmark-new","actions/document-new"};
+    const char *labels[]={"Back","Forward","Reload","Stop","Home","Bookmark","New window","Wallpaper"};
+    const char *icons[]={"actions/go-previous","actions/go-next","actions/view-refresh","actions/process-stop","actions/go-home","actions/bookmark-new","actions/document-new","preferences-desktop-wallpaper"};
     for(unsigned i=0;i<sizeof(buttons)/sizeof(*buttons);i++) {
         struct du_widget *widget=du_add(&ui,DU_TOOLBUTTON,buttons[i],(struct du_rect){0},labels[i]);
         widget->icon=du_icon_argb(icons[i],22);widget->icon_size=22;

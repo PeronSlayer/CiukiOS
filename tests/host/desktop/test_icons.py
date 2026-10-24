@@ -223,7 +223,7 @@ class IconStoreTests(unittest.TestCase):
         rows = dict(re.findall(r'item\(m,\s*"([^"]+)",\s*"([a-z-]+)"', shell))
         settings=(ROOT / "apps/desktop/settings_catalog.h").read_text()
         applets=re.findall(r'\{CP_\w+, CP_CAT_\w+, "[^"]+", "([^"]+)", "([a-z-]+)"\}',settings)
-        self.assertEqual(len(applets),18)  # integration applets plus Accessibility Options
+        self.assertEqual(len(applets),19)  # Display, Taskbar, Sounds, Multimedia, Keyboard, Mouse, Game controllers, Accessibility, Date/Time, Regional, Internet, Network, Power, Storage, Add Hardware, Add/Remove Programs, Users, Passwords, System
         rows.update(applets)
         objects = {"Programs": "menu:programs", "Documents": "menu:documents", "Settings": "menu:settings", "Help": "menu:help",
                    "System Tools": "menu:system-tools", "Run...": "menu:run", "Shut Down...": "menu:shutdown", "Accessories": "menu:accessories", "Games": "menu:games",
@@ -234,17 +234,18 @@ class IconStoreTests(unittest.TestCase):
                    "Close    Alt+F4": "action:stop", "About CiukiOS": "menu:about"}
         for label, obj in objects.items():
             self.assertEqual(rows[label], table[obj], label)
-        icons = dict(re.findall(r'icon_add\(d, "([^"]+)", [^,]+, [^,]+, "([a-z-]+)"', shell))
+        # G19: the icon argument may be a setting-dependent expression (My Documents, Recycle Bin): the default is the last literal.
+        icons = dict(re.findall(r'icon_add\(d,\s*"([^"]+)",\s*"[^"]*",\s*[^;]*?"([a-z-]+)"\s*,\s*SH_ACT_', shell))
         # f2-42: three fixed icons precede the real Desktop folder entries.
         # f4-07: Pictures is an optional shortcut after those entries.
-        self.assertEqual(set(icons) - {"Pictures"}, {"Computer", "Documents", "Recycle Bin"})
+        self.assertEqual(set(icons) - {"Pictures"}, {"My Computer", "My Documents", "Recycle Bin", "Network Neighborhood"})
         if "Pictures" in icons:
             self.assertEqual(icons["Pictures"], table["place:folder"])
-            self.assertRegex(shell, r'if \(d->pictures_exists\) icon_add\(d, "Pictures", "files", "/Documents/Pictures"')
-        for label, obj in {"Documents": "place:home", "Recycle Bin": "place:trash"}.items():
+            self.assertRegex(shell, r'(?s)if \(d->pictures_exists\) \{.*?icon_add\(d,\s*"Pictures",\s*"files",\s*path,\s*"folder"')   # G19: under the profile's Documents
+        for label, obj in {"My Documents": "place:home", "Recycle Bin": "place:trash", "Network Neighborhood": "place:network"}.items():
             self.assertEqual(icons[label], table[obj], label)
         self.assertIn('e->meta.type==FM_DIR ? "folder" : strlen(e->name)>4 && fm_same_path(e->name+strlen(e->name)-4,".lnk") ? "emblem-symbolic-link" : cat ? cat->tango : "text-x-generic"', shell)
-        self.assertEqual(icons["Computer"], "ciuki-computer")    # identity: Tango computer with the approved portrait
+        self.assertEqual(icons["My Computer"], "ciuki-computer")    # identity: Tango computer with the approved portrait
         # The shell draws only store sizes: menus and the taskbar 16, dialogs and Alt+Tab 32, desktop icons 48.
         self.assertIn("#define SH_DESKTOP_ICON 48", shell)
         self.assertIn("m->icon = 16;", shell)
@@ -258,7 +259,8 @@ class IconStoreTests(unittest.TestCase):
                 calls.append((args[:args.rindex(",")].strip(), args[args.rindex(",") + 1:].strip()))
         # Only the identity portrait ("ciuki") is drawn at other sizes (Ciuki button 18, banner and badges 20).
         sizes = {size for name, size in calls if name != '"ciuki"'}
-        self.assertEqual(sizes - {"16", "32", "SH_DESKTOP_ICON", "m->icon", "size"}, set(), calls)
+        # G23 scales the taskbar and tray sizes with the DPI (icon_size, SH_TRAY_ICON_SIZE); the drag image uses the 48 px store size.
+        self.assertEqual(sizes - {"16", "32", "48", "SH_DESKTOP_ICON", "SH_TRAY_ICON_SIZE", "icon_size", "m->icon", "size"}, set(), calls)
         print(f"PASS shell/map coherence: {len(programs) + len(accessories)} program rows, {len(objects)} menu rows, desktop icons")
 
     def test_lookup_rules(self):

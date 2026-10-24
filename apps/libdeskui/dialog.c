@@ -2,6 +2,7 @@
  * Modal dialogs drawn inside the client window: message box, input box,
  * file open/save and progress with Cancel. */
 #include "internal.h"
+#include "../desktop/profile.h"
 #include "../desktop/sounds.h"
 #include <dirent.h>
 #include <errno.h>
@@ -30,7 +31,7 @@ enum { SUB_NONE, SUB_CONFIRM, SUB_MESSAGE, SUB_NEWDIR };
 #define PLACE_MAX 31
 struct du_dialog_places {
     struct du_item rows[PLACE_MAX];
-    struct { char path[32], label[64]; } entries[PLACE_MAX];
+    struct { char path[128], label[64]; } entries[PLACE_MAX];
     unsigned count;
     uint64_t next_poll;
     int fd;
@@ -83,10 +84,11 @@ void du_dialog_tick(struct du_ui *u)
      * Only the first list owns the observer and the polling deadline. */
     struct du_dialog_places *published=p;
     p=published+1; p->count=0;
-    place_add(p,"Desktop","/Documents/Desktop","place:desktop");
-    place_add(p,"Documents","/Documents","place:documents");
-    place_add(p,"Music","/Documents/Music","audio-x-generic");
-    place_add(p,"Pictures","/Documents/Pictures","image-x-generic");
+    char personal[128];
+    profile_child(personal,sizeof(personal),"Desktop"); place_add(p,"Desktop",personal,"place:desktop");
+    place_add(p,"Documents",profile_home(),"place:documents");
+    profile_child(personal,sizeof(personal),"Music"); place_add(p,"Music",personal,"audio-x-generic");
+    profile_child(personal,sizeof(personal),"Pictures"); place_add(p,"Pictures",personal,"image-x-generic");
     place_add(p,"CiukiOS (C:)","/","drive-harddisk");
 #if defined(__i386__) || defined(DU_NATIVE_MEDIA)
     if (published->fd<0) published->fd=open("/dev/media",O_RDONLY|O_CLOEXEC);
@@ -1050,6 +1052,9 @@ void du_dialog_key(struct du_ui *u, unsigned code)
         DIALOG_CALL(du_post(u, DU_EV_ACTIVATE, f->id, 0)); return;   /* a button that is not one of the closing buttons */
     }
     if (code == DU_KEY_ENTER || (code == DU_KEY_SPACE && f && f->kind == DU_BUTTON)) {
+        if (d->sheet && f && f->kind==DU_BUTTON && (unsigned)d->focus>=d->buttons) {
+            DIALOG_CALL(du_widget_key(u,f,code)); return;
+        }
         int index = f && f->kind == DU_BUTTON ? (f->id == ID_UP ? -1 : ID_BUTTON - f->id) : 0;
         if (f && f->id == ID_UP) { parent_folder(u); return; }
         if ((d->kind == DU_DLG_OPEN || d->kind == DU_DLG_SAVE) && index == 0) accept_file(u); else finish(u, index);
@@ -1070,6 +1075,8 @@ void du_dialog_key(struct du_ui *u, unsigned code)
             if (m != ch || d->items[i].hidden || d->items[i].disabled) continue;
             if (d->items[i].kind == DU_BUTTON && i < d->buttons) {
                 if ((d->kind == DU_DLG_OPEN || d->kind == DU_DLG_SAVE) && i == 0) accept_file(u); else finish(u, (int)i);
+            } else if (d->sheet && d->items[i].kind==DU_BUTTON) {
+                d->focus=(int)i; DIALOG_CALL(du_widget_key(u,&d->items[i],DU_KEY_ENTER));
             } else if (d->sheet && (d->items[i].kind == DU_CHECKBOX || d->items[i].kind == DU_RADIO)) {
                 d->focus=(int)i; DIALOG_CALL(du_widget_key(u,&d->items[i],DU_KEY_SPACE));
             } else if (d->items[i].kind == DU_BUTTON) {
@@ -1091,12 +1098,35 @@ static struct du_rect close_box(const struct du_dialog *d)
     return (struct du_rect){b[0], b[1], b[2], b[3]};
 }
 
+/* G15: the "?" button takes the slot of minimise, as in a WS_EX_CONTEXTHELP frame. */
+struct du_rect du_dialog_help_box(const struct du_ui *u)
+{
+    const struct du_dialog *d = &u->dialog;
+    int b[4] = {0, 0, 0, 0};
+    if (d->kind && d->help_button) desk_title_button_box(d->box.x, d->box.y, d->box.w, DESK_TB_HELP, b);
+    return (struct du_rect){b[0], b[1], b[2], b[3]};
+}
+void du_dialog_help_button(struct du_ui *u, int on)
+{
+    struct du_dialog *d = &u->dialog;
+    if (!d->kind) return;
+    d->help_button = on != 0; d->help_hot = 0; dialog_damage(u);
+}
+struct du_widget *du_dialog_item_at(struct du_ui *u, int x, int y)
+{
+    struct du_dialog *d = &u->dialog;
+    for (unsigned i = d->count; i > 0; i--)
+        if (!d->items[i - 1].hidden && du_contains(d->items[i - 1].box, x, y)) return &d->items[i - 1];
+    return NULL;
+}
+
 void du_dialog_press(struct du_ui *u, int button)
 {
     struct du_dialog *d = &u->dialog;
     int x = u->mouse_x, y = u->mouse_y;
     if (!du_contains(d->box, x, y)) return;
     if (button == 1 && du_contains(close_box(d), x, y)) { finish(u, d->cancel); return; }
+    if (button == 1 && d->help_button && du_contains(du_dialog_help_box(u), x, y)) { du_context_help(u, 1); dialog_damage(u); return; }
     if (button == 1 && y < body_y(d)) { d->dragging = 1; d->drag_x = x - d->box.x; d->drag_y = y - d->box.y; return; }
     if (d->on_press && d->on_press(u, button, x, y)) return;
     for (unsigned i = d->count; i > 0; i--) {
@@ -1122,6 +1152,8 @@ void du_dialog_motion(struct du_ui *u)
                 if (!d->items[i - 1].hidden && du_contains(d->items[i - 1].box, u->mouse_x, u->mouse_y)) under = &d->items[i - 1];
         du_tip_motion(u, under);
     }
+    int help_hot = !d->dragging && d->help_button && du_contains(du_dialog_help_box(u), u->mouse_x, u->mouse_y);
+    if (help_hot != d->help_hot) { d->help_hot = help_hot; dialog_damage(u); }
     if (d->dragging) {
         int nx = u->mouse_x - d->drag_x, ny = u->mouse_y - d->drag_y;
         if (nx < -d->box.w + 40) nx = -d->box.w + 40;
@@ -1168,6 +1200,8 @@ void du_draw_dialog(struct du_ui *u)
     struct desk_paint p = {c->pixels, c->width, c->height, v.x, v.y, v.w, v.h};
     struct desk_frame_style style = {.title = d->title, .active = u->focused_window, .buttons = DESK_TB_CLOSE,
                                      .hot = d->close_hot && du_contains(close_box(d), u->mouse_x, u->mouse_y) ? DESK_TB_CLOSE : 0};
+    if (d->help_button) style.buttons |= DESK_TB_HELP;
+    if (d->help_button && d->help_hot) style.hot = DESK_TB_HELP;
     desk_paint_frame(&p, b.x, b.y, b.w, b.h, &style);
     int top = body_y(d);
     if (d->kind == DU_DLG_MESSAGE) {
