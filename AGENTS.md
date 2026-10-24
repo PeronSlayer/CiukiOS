@@ -147,7 +147,10 @@ states both in the directive. Owner directive, 2026-10-22: use only
 failures. Claude chooses the reasoning effort per task: `low`/`medium` for
 mechanical work, `high` for ordinary implementation, `xhigh` for kernel,
 drivers, filesystem and V86/DPMI work. Claude agents implement only when
-Codex fails or is out of usage.
+Codex fails or is out of usage. Owner directive, 2026-10-23: watch the Codex
+quota and use a cheaper model (`gpt-6-luna`) wherever `gpt-6.1-sol` is not
+needed (mechanical changes, conflict-marker resolution, small UI items);
+`gpt-6-astra` stays forbidden.
 
 `ultra` only when the owner asks for it. Re-check the cache when models change.
 

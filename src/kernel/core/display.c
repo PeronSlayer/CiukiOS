@@ -42,21 +42,44 @@ static int check_result;
 
 static bool checkpoint_cancel(void *arg) { (void)arg; return false; }
 static void checkpoint_pause(void *arg) { (void)arg; task_sleep_ms(1); }
+/* fx-22: the last step record, for step_ms and the stall report. */
+static const char *step_name;
+static uint64_t step_tick, step_reported;
+static const struct task *step_task;
+static unsigned recovery_sync_left;
+#define RECOVERY_SYNC_STEP_MS 50u
+#define RECOVERY_SYNC_TOTAL_MS 200u
+#define STALL_REPORT_MS 1000u
+#define STALL_REPEAT_MS 5000u
+static bool recovery_sync_cancel(void *arg) { return deadline_passed(*(const uint64_t *)arg); }
 int display_fullscreen_checkpoint(const char *step, int result)
 {
     /* The emulated adapters have serial evidence and tight switch timings.
      * Hardware must commit the watermark before the next transaction step. */
     if (g_boot.flags & CBI_F_SMBIOS_QEMU) return 0;
-    klog("[display] fullscreen_step=%s result=%d tick=%llu",step,result,g_ticks);
+    uint64_t now=g_ticks;
+    klog("[display] fullscreen_step=%s result=%d tick=%llu step_ms=%llu",step,result,now,
+         step_tick && now>=step_tick ? now-step_tick : 0);
+    step_name=step; step_tick=now; step_task=g_current; step_reported=0;
     struct bootlog_stats stats;
     bootlog_snapshot(&stats);
     int e;
     if (fullscreen_recovering) {
         /* Recovery cannot depend on a slow/quarantined storage controller.
-         * klog already queued both trails. Request the FAT watermark without
-         * device I/O; the storage worker commits it (and the raw trail).
-         * EAGAIN means queued, never a failed return checkpoint. */
-        e=stats.active ? bootlog_try_sync() : -EIO;
+         * klog already queued both trails; the storage worker commits the
+         * FAT watermark (and the raw trail). fx-22: wait for that commit at
+         * most 50 ms per step and 200 ms per return, so the last durable
+         * record names the step that did not finish (T23 f441c5bd ended at
+         * a queued vga-capture); then it stays queued. EAGAIN means queued,
+         * never a failed return checkpoint. */
+        unsigned wait=recovery_sync_left<RECOVERY_SYNC_STEP_MS ? recovery_sync_left : RECOVERY_SYNC_STEP_MS;
+        if (stats.active && wait) { /* thread context: every checkpoint caller */
+            uint64_t began=g_ticks, until=deadline_after_ms(wait);
+            e=bootlog_sync(recovery_sync_cancel,checkpoint_pause,&until);
+            uint64_t spent=g_ticks-began;
+            recovery_sync_left-=spent<recovery_sync_left ? (unsigned)spent : recovery_sync_left;
+            if (e==-EBUSY) e=bootlog_try_sync();
+        } else e=stats.active ? bootlog_try_sync() : -EIO;
         if (e==-EAGAIN) e=0;
     } else {
         e=stats.active ? bootlog_sync(checkpoint_cancel,checkpoint_pause,0) : -EIO;
@@ -266,7 +289,24 @@ void display_fullscreen_return_request(void)
     if (fullscreen_display && !fullscreen_return_timed) {
         fullscreen_return_tick=g_ticks; fullscreen_return_timed=true;
         fullscreen_recovering=true; fullscreen_log_failed=false;
+        recovery_sync_left=RECOVERY_SYNC_TOTAL_MS;
+        step_name="return-request"; step_tick=g_ticks; step_task=0; step_reported=0;
     }
+}
+/* fx-22: called each second by the device-level cpustat task. A return
+ * step that lasts STALL_REPORT_MS is recorded with the task running the
+ * switch, again every STALL_REPEAT_MS, and its commit requested. */
+void display_fullscreen_stall_poll(void)
+{
+    if (!fullscreen_recovering || !step_name || g_boot.flags & CBI_F_SMBIOS_QEMU) return;
+    uint64_t now=g_ticks, held=now-step_tick;
+    if (held<STALL_REPORT_MS || (step_reported && now-step_reported<STALL_REPEAT_MS)) return;
+    step_reported=now;
+    const struct task *t=step_task;
+    klog("[display] fullscreen_stall step=%s step_ms=%llu return_ms=%llu task=%s#%u state=%u level=%u",
+         step_name,held,now-fullscreen_return_tick,t ? t->name : "none",t ? t->id : 0,
+         t ? (unsigned)t->state : 0,t ? (unsigned)t->effective_priority : 0);
+    (void)bootlog_try_sync();
 }
 
 void display_watchdog_poll(void)

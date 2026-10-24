@@ -182,11 +182,7 @@ typedef struct {
 #define HWND_BOTTOM ((HWND)(uintptr_t)1)
 #define HWND_TOPMOST ((HWND)(intptr_t)-1)
 #define HWND_NOTOPMOST ((HWND)(intptr_t)-2)
-#define CF_TEXT 1u
-#define CF_BITMAP 2u
-#define CF_OEMTEXT 7u
-#define CF_DIB 8u
-#define CF_UNICODETEXT 13u
+#include "clipboard_formats.h"
 
 ATOM W32API RegisterClassA(const WNDCLASSA *);
 ATOM W32API RegisterClassExA(const WNDCLASSEXA *);
@@ -207,6 +203,19 @@ BOOL W32API EnableWindow(HWND, BOOL);
 BOOL W32API ShowWindow(HWND, int);
 BOOL W32API SetWindowPos(HWND, HWND, int, int, int, int, UINT);
 BOOL W32API MoveWindow(HWND, int, int, int, int, BOOL);
+typedef struct {
+  POINT ptReserved, ptMaxSize, ptMaxPosition, ptMinTrackSize, ptMaxTrackSize;
+} MINMAXINFO;
+#define SIZE_RESTORED 0u
+#define SIZE_MINIMIZED 1u
+#define SIZE_MAXIMIZED 2u
+#define MDITILE_VERTICAL 0u
+#define MDITILE_HORIZONTAL 1u
+#define MDITILE_SKIPDISABLED 2u
+#define MDITILE_ZORDER 4u
+uint16_t W32API CascadeWindows(HWND, UINT, const RECT *, UINT, const HWND *);
+uint16_t W32API TileWindows(HWND, UINT, const RECT *, UINT, const HWND *);
+UINT W32API ArrangeIconicWindows(HWND);
 LONG W32API GetWindowLongA(HWND, int);
 LONG W32API SetWindowLongA(HWND, int, LONG);
 uintptr_t W32API GetClassLongA(HWND, int);
@@ -337,6 +346,14 @@ int W32API FrameRect(HDC, const RECT *, HBRUSH);
 BOOL W32API ScrollWindow(HWND, int, int, const RECT *, const RECT *);
 int W32API ScrollWindowEx(HWND, int, int, const RECT *, const RECT *, HRGN,
                           RECT *, UINT);
+UINT W32API RegisterClipboardFormatA(const char *);
+UINT W32API RegisterClipboardFormatW(const WCHAR *);
+int W32API GetClipboardFormatNameA(UINT, char *, int);
+int W32API GetClipboardFormatNameW(UINT, WCHAR *, int);
+UINT W32API EnumClipboardFormats(UINT);
+int W32API CountClipboardFormats(void);
+int W32API GetPriorityClipboardFormat(const UINT *, int);
+DWORD W32API GetClipboardSequenceNumber(void);
 BOOL W32API OpenClipboard(HWND);
 BOOL W32API CloseClipboard(void);
 BOOL W32API EmptyClipboard(void);

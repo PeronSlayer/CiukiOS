@@ -623,7 +623,7 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     "$root/src/kernel/fs/blkreq.c" "$root/src/kernel/fs/cache.c" "$root/src/kernel/fs/path.c" "$root/src/kernel/fs/fat.c" \
     "$root/src/kernel/fs/vfs.c" "$root/src/kernel/fs/fs_ro.c" "$root/src/kernel/fs/iso9660.c" "$root/tests/host/fs/fake.c" \
     "$root/src/kernel/probes/f2_probes_files.c" -o "$out/files_test"
-"$out/files_test" "$out/fs/fat32.img" "$out/fs/fat16.img" "$out/files-payload.elf"
+"$out/files_test" "$out/fs/fat32.img" "$out/fs/fat16.img" "$out/files-payload.elf" "$out/fs/fat12.img"
 # G1: the time-zone service, the RTC in local time and FAT stamps on the
 # same production FAT/VFS/posix path (fresh fixtures: files_test writes them).
 python3 "$root/tests/host/fs/fixtures.py"

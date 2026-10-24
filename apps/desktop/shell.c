@@ -11,6 +11,7 @@
 #include "shell_icons.h"
 #include "keymap.h"
 #include "catalog.h"
+#include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,6 +27,11 @@
 #define SH_WINDOW    DU_WINDOW
 #define SH_TIP       0xffffe1u      /* tooltip paper */
 static void tooltip_hide(struct desktop *d);
+/* G4: the taskbar's keyboard focus (KB-13) and the access keys of menus (SM-9). */
+static void taskbar_set(struct desktop *d, int pick);
+static void taskbar_blur(struct desktop *d, int refocus);
+static unsigned keymap_mods(const struct desktop *d);
+static int menu_letter(struct desktop *d, int level, unsigned ch);
 /* fx-19 selection and drag session (defined after the icon painter). */
 static int drop_lit(const struct desktop *d, int k);
 static void dnd_commit(struct desktop *d, unsigned effect);
@@ -259,6 +265,7 @@ static const struct program_info programs[] = {
     {"help", "CiukiOS Help", "help-browser", "accessories", NULL},
     {"mixer", "Volume Control", "audio-volume-high", "accessories", NULL},
     {"hwreport", "Hardware Report", "preferences-system", "system-tools", NULL},
+    {"clipbrd", "Clipboard Viewer", "edit-paste", "system-tools", NULL},
     {"regedit", "Registry Editor", "preferences-system", "accessories", NULL},
     {"viewer", "Image Viewer", "image-x-generic", "accessories", NULL},
     {"hello", "Hello", "face-smile", "developer", NULL},
@@ -329,6 +336,45 @@ static const char *icon_position_name(const struct desktop *d, int index)
 {
     if (index < 3) return index == 0 ? "/Computer" : index == 1 ? "/Documents" : "/Trash";
     return icon_is_entry(d, index) ? d->sh.icons[index].label : "/Pictures";
+}
+/* SM-9: the underlined access keys of the shell's fixed menus, the Windows 98
+ * assignments (Start: P D S H R and Sh&ut Down; the window menu: R M S Mi&nimize
+ * Ma&ximize C). A label may end with a shortcut after two spaces. Menus built
+ * from the installed programs have none: a letter jumps to the next entry that
+ * starts with it, as in Windows. */
+static const struct { int kind; const char *label; char key; } access_keys[] = {
+    {SH_MENU_START,"Programs",'p'},{SH_MENU_START,"Documents",'d'},{SH_MENU_START,"Settings",'s'},
+    {SH_MENU_START,"Help",'h'},{SH_MENU_START,"Run...",'r'},{SH_MENU_START,"Shut Down...",'u'},
+    {SH_MENU_SETTINGS,"Control Panel",'c'},{SH_MENU_SETTINGS,"Task Manager",'t'},
+    {SH_MENU_HELP,"Keyboard Shortcuts",'k'},{SH_MENU_HELP,"About CiukiOS",'a'},
+    {SH_MENU_DOCUMENTS,"My Documents",'m'},{SH_MENU_DOCUMENTS,"Clear Recent Documents",'c'},
+    {SH_MENU_DESKTOP,"Arrange icons",'i'},{SH_MENU_DESKTOP,"Line up",'u'},{SH_MENU_DESKTOP,"Refresh",'f'},
+    {SH_MENU_DESKTOP,"New",'n'},{SH_MENU_DESKTOP,"Paste",'p'},{SH_MENU_DESKTOP,"Properties",'r'},
+    {SH_MENU_NEW,"Folder",'f'},{SH_MENU_NEW,"Text file",'t'},
+    {SH_MENU_ICON,"Open",'o'},{SH_MENU_ICON,"Open With",'w'},{SH_MENU_ICON,"Cut",'t'},{SH_MENU_ICON,"Copy",'c'},
+    {SH_MENU_ICON,"Rename",'m'},{SH_MENU_ICON,"Delete",'d'},{SH_MENU_ICON,"Properties",'r'},
+    {SH_MENU_TASK,"Restore",'r'},{SH_MENU_TASK,"Move",'m'},{SH_MENU_TASK,"Size",'s'},{SH_MENU_TASK,"Minimize",'n'},
+    {SH_MENU_TASK,"Maximize",'x'},{SH_MENU_TASK,"Full screen",'f'},{SH_MENU_TASK,"Close",'c'},
+    {SH_MENU_TASKBAR,"Cascade Windows",'c'},{SH_MENU_TASKBAR,"Tile Windows Horizontally",'h'},
+    {SH_MENU_TASKBAR,"Tile Windows Vertically",'v'},{SH_MENU_TASKBAR,"Minimize All Windows",'m'},
+    {SH_MENU_TASKBAR,"Undo Minimize All",'u'},{SH_MENU_TASKBAR,"Undo Cascade",'u'},{SH_MENU_TASKBAR,"Undo Tile",'u'},
+    {SH_MENU_TASKBAR,"Properties",'r'},
+    {SH_MENU_DRAG,"Move Here",'m'},{SH_MENU_DRAG,"Copy Here",'c'},{SH_MENU_DRAG,"Create Shortcut(s) Here",'s'},
+};
+static void assign_marks(struct sh_menu *m)
+{
+    for (int k=0;k<m->count;k++) {
+        struct sh_item *it=&m->items[k];
+        it->mark=0;
+        if (it->flags & SH_ITEM_SEPARATOR) continue;
+        for (size_t a=0;a<sizeof(access_keys)/sizeof(*access_keys);a++) {
+            if (access_keys[a].kind!=m->kind) continue;
+            size_t len=strlen(access_keys[a].label);
+            if (strncmp(it->label,access_keys[a].label,len) || (it->label[len] && strncmp(it->label+len,"  ",2))) continue;
+            for (size_t b=0;b<len;b++) if (tolower((unsigned char)it->label[b])==access_keys[a].key) { it->mark=(uint8_t)(b+1); break; }
+            break;
+        }
+    }
 }
 static void build(struct desktop *d, struct sh_menu *m, int kind)
 {
@@ -495,8 +541,34 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         item(m, "Maximize", NULL, SH_ACT_TASK_MAXIMIZE, owner, blocked || !c || !c->resizable || c->zoomed ? SH_ITEM_DISABLED : 0);
         if (owner>=0 && owner<DESK_CLIENTS && d->clients[owner].dosbox)
             item(m,"Full screen    Alt+Enter",NULL,SH_ACT_DOS_FULLSCREEN,owner,0);
+        if (c && c->dosbox) {
+            item(m,"Mark",NULL,SH_ACT_DOS_MARK,owner,blocked ? SH_ITEM_DISABLED : 0);
+            item(m,"Copy",NULL,SH_ACT_DOS_COPY,owner,blocked ? SH_ITEM_DISABLED : 0);
+            item(m,"Paste",NULL,SH_ACT_DOS_PASTE,owner,blocked ? SH_ITEM_DISABLED : 0);
+            item(m,"QuickEdit on/off",NULL,SH_ACT_DOS_QUICKEDIT,owner,blocked ? SH_ITEM_DISABLED : 0);
+        }
         separator(m);
         item(m, "Close    Alt+F4", "process-stop", SH_ACT_TASK_CLOSE, owner, minimized ? 0 : SH_ITEM_DEFAULT);
+        break;
+    }
+    case SH_MENU_TASKBAR: {
+        /* The Windows 98 taskbar menu (Toolbars belongs to the taskbar
+         * customisation, G20): the arrangements act on the windows that have
+         * a task button; after one, the menu offers its Undo. */
+        int arrangeable=0, minimizable=0, undo=desk_arrange_undo_kind(d);
+        for (int i=0;i<DESK_CLIENTS;i++) { arrangeable+=desk_arrangeable(d,i); minimizable+=desk_minimizable(d,i); }
+        unsigned none=arrangeable ? 0 : SH_ITEM_DISABLED;
+        item(m,"Cascade Windows",NULL,SH_ACT_CASCADE,0,none);
+        item(m,"Tile Windows Horizontally",NULL,SH_ACT_TILE_H,0,none);
+        item(m,"Tile Windows Vertically",NULL,SH_ACT_TILE_V,0,none);
+        if (undo==DESK_ARRANGE_MINIMIZE_ALL) item(m,"Undo Minimize All",NULL,SH_ACT_ARRANGE_UNDO,0,0);
+        else {
+            item(m,"Minimize All Windows",NULL,SH_ACT_MINIMIZE_ALL,0,minimizable ? 0 : SH_ITEM_DISABLED);
+            if (undo==DESK_ARRANGE_CASCADE) item(m,"Undo Cascade",NULL,SH_ACT_ARRANGE_UNDO,0,0);
+            else if (undo==DESK_ARRANGE_TILE_H || undo==DESK_ARRANGE_TILE_V) item(m,"Undo Tile",NULL,SH_ACT_ARRANGE_UNDO,0,0);
+        }
+        separator(m);
+        item(m,"Properties","document-properties",SH_ACT_TASKBAR_PROPERTIES,0,program_index(d,"control")<0 ? SH_ITEM_DISABLED : 0);
         break;
     }
     default:
@@ -505,6 +577,7 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
                 item(m,cp_applets[k].label,cp_applets[k].icon,SH_ACT_CONTROL,cp_applets[k].page+1,program_index(d,"control")<0 ? SH_ITEM_DISABLED : 0);
         break;
     }
+    assign_marks(m);
 }
 static int32_t item_y(const struct sh_menu *m, int index)
 {
@@ -540,6 +613,7 @@ static void menus_damage(struct desktop *d)
 }
 void desk_menu_open(struct desktop *d, int kind, int32_t x, int32_t y)
 {
+    d->sh.start_keyboard = 0;
     desk_v3_revoke(d); desk_v3_pointer_release(d);
     tooltip_hide(d);
     if (d->sh.icon_selected>=0) damage(d,d->sh.icons[d->sh.icon_selected].box);
@@ -741,10 +815,31 @@ static void act(struct desktop *d, const struct sh_item *it)
     case SH_ACT_GAME: launch_game(d, it->arg); break;
     case SH_ACT_KEYS:
         desk_shell_message(d, "Keyboard Shortcuts",
-            "Win or Ctrl+Esc   Open the Start menu\nAlt+Tab           Switch between windows\n"
-            "Alt+F4            Close the active window\nEnter             Open the selected icon\n"
-            "Arrows            Move in menus and icons\nEsc               Close a menu", 0);
+            "Win or Ctrl+Esc      Open the Start menu\n"
+            "Win+D                Show the desktop; again, bring the windows back\n"
+            "Win+M, Shift+Win+M   Minimize all windows, undo\n"
+            "Win+E, Win+R         Open Computer, Run\n"
+            "Win+F, Win+Ctrl+F    Find files or folders, find a computer\n"
+            "Win+Break            System properties\n"
+            "Win+Tab              Move through the taskbar buttons\n"
+            "Alt+Tab              Switch between windows (add Shift to go back)\n"
+            "Alt+Esc, Alt+F6      Next window, next window of the same program\n"
+            "Alt+Space            Open the window menu\n"
+            "Alt+F4               Close the window; on the desktop, Shut Down\n"
+            "Alt+M                On the desktop or taskbar, minimize all windows\n"
+            "Shift+F10, Menu key  Open the context menu of the selection\n"
+            "Enter                Open the selected icon\n"
+            "Arrows               Move in menus and icons\n"
+            "Esc                  Close a menu", 0);
         break;
+    case SH_ACT_CASCADE: (void)desk_arrange(d, DESK_ARRANGE_CASCADE); break;
+    case SH_ACT_TILE_H: (void)desk_arrange(d, DESK_ARRANGE_TILE_H); break;
+    case SH_ACT_TILE_V: (void)desk_arrange(d, DESK_ARRANGE_TILE_V); break;
+    case SH_ACT_MINIMIZE_ALL: (void)desk_minimize_all(d); break;
+    case SH_ACT_ARRANGE_UNDO: (void)desk_arrange_undo(d); break;
+    /* Taskbar Properties (always on top, auto hide, clock) is G20's dialog;
+     * until then the entry opens the Control Panel, where it will live. */
+    case SH_ACT_TASKBAR_PROPERTIES: launch_named(d, "control", NULL); break;
     case SH_ACT_ARRANGE: {
         if (!it->arg) cfg_icons_arrange(&d->sh.cfg);
         else {
@@ -804,7 +899,16 @@ static void act(struct desktop *d, const struct sh_item *it)
                     launch_named(d,"control",arg);return;
                 }
         }
-        if (icon_is_entry(d, it->arg)) { d->sh.folder->command=DF_PROPERTIES; d->sh.folder->index=it->arg-3; break; }
+        if (icon_is_entry(d, it->arg)) {
+            char argument[FM_PATH+16];
+            snprintf(argument,sizeof(argument),"--properties=%s",d->sh.icons[it->arg].argument);
+            launch_named(d,"files",argument); break;
+        }
+        if (it->arg>=0 && it->arg<d->sh.icon_count && !strcmp(d->sh.icons[it->arg].program,"files")) {
+            char argument[FM_PATH+16];
+            const char *path=d->sh.icons[it->arg].argument;
+            if (path[0]) { snprintf(argument,sizeof(argument),"--properties=%s",path); launch_named(d,"files",argument); break; }
+        }
         if (it->arg >= 0 && it->arg < d->sh.icon_count) {
             const struct sh_icon *ic = &d->sh.icons[it->arg];
             char text[200];
@@ -832,6 +936,14 @@ static void act(struct desktop *d, const struct sh_item *it)
         break;
     case SH_ACT_TASK_MINIMIZE: if (it->arg >= 0 && it->arg < DESK_CLIENTS && !d->clients[it->arg].minimized) desk_minimize(d, it->arg); break;
     case SH_ACT_TASK_CLOSE: desk_request_close(d, it->arg); break;
+    case SH_ACT_DOS_MARK: case SH_ACT_DOS_COPY: case SH_ACT_DOS_PASTE: case SH_ACT_DOS_QUICKEDIT:
+        if (it->arg>=0 && it->arg<DESK_CLIENTS && d->clients[it->arg].dosbox) {
+            desk_focus(d,it->arg); struct ciuki_message message;
+            desk_message(&message,DESK_DOS_CLIPBOARD,8); message.data[0]=2;
+            desk_put32(message.data+4,it->action==SH_ACT_DOS_MARK ? 1 : it->action==SH_ACT_DOS_COPY ? 2 : it->action==SH_ACT_DOS_PASTE ? 3 : 4);
+            desk_queue(d,it->arg,&message);
+        }
+        break;
     case SH_ACT_DOS_FULLSCREEN:
         if (it->arg>=0 && it->arg<DESK_CLIENTS && d->clients[it->arg].dosbox) {
             if (d->clients[it->arg].minimized) desk_minimize(d,it->arg);
@@ -892,6 +1004,16 @@ static void draw_banner(struct du_canvas *c, struct desk_box b)
         }
     }
 }
+/* SM-9: the underlined access key of an item. */
+static void mark_line(struct du_canvas *c, int32_t tx, int32_t ty, const struct sh_item *it, int bold_face, uint32_t colour)
+{
+    if (!it->mark) return;
+    int font = bold_face ? desk_theme->font_bold : desk_theme->font_ui;
+    int at = desk_text_measure_n(font, it->label, (size_t)(it->mark - 1));
+    size_t used; unsigned ch = desk_utf8_decode(it->label + it->mark - 1, &used);
+    int w = desk_text_advance(font, ch) - 1;
+    du_hline(c, tx + at, ty + DU_GLYPH_H + 2, w > 1 ? w : 1, colour);
+}
 static void draw_menu(struct desktop *d, const struct sh_menu *m, struct desk_box clip)
 {
     struct desk_box b;
@@ -917,8 +1039,14 @@ static void draw_menu(struct desktop *d, const struct sh_menu *m, struct desk_bo
         int32_t tx = x0 + 6 + m->icon + 10, ty = y + (h - text_h()) / 2;
         if (it->flags & SH_ITEM_DISABLED) {
             if (platinum) du_text(&c, tx, ty, it->label, DU_GRAY); else du_text_disabled(&c, tx, ty, it->label);
-        } else if (it->flags & SH_ITEM_DEFAULT) bold(&c, tx, ty, it->label, hot ? SH_HOT_INK : SH_INK);
-        else du_text(&c, tx, ty, it->label, hot ? SH_HOT_INK : SH_INK);
+            mark_line(&c, tx, ty, it, 0, DU_GRAY);
+        } else if (it->flags & SH_ITEM_DEFAULT) {
+            bold(&c, tx, ty, it->label, hot ? SH_HOT_INK : SH_INK);
+            mark_line(&c, tx, ty, it, 1, hot ? SH_HOT_INK : SH_INK);
+        } else {
+            du_text(&c, tx, ty, it->label, hot ? SH_HOT_INK : SH_INK);
+            mark_line(&c, tx, ty, it, 0, hot ? SH_HOT_INK : SH_INK);
+        }
         if (it->action == SH_ACT_SUBMENU) du_triangle(&c, x0 + w - 10, y + h / 2, 3, 4, hot ? SH_HOT_INK : SH_INK);
     }
 }
@@ -1010,6 +1138,15 @@ void desk_shell_media_update(struct desktop *d,const struct ciuki_media_state *s
             desk_shell_notify(d,"Removable media",text,unsafe ? DU_DLG_ICON_WARNING : DU_DLG_ICON_INFO,SH_NOTIFY_MEDIA);
         }
     }
+    /* fx-21b: a USB device the kernel quarantined at enumeration. Windows
+     * shows this notification-area balloon ("USB Device not recognized: One
+     * of the devices attached to this computer has malfunctioned", Microsoft
+     * KB 2654149) and advises unplugging and reconnecting the device; a
+     * re-plug re-enumerates the port. One balloon per counted device,
+     * including a device that failed before the desktop started. */
+    unsigned seen=d->sh.media.version==CIUKI_MEDIA_VERSION ? d->sh.media.usb_unrecognized : 0;
+    if (state->version==CIUKI_MEDIA_VERSION && state->usb_unrecognized>seen)
+        desk_shell_notify(d,DESK_USB_UNRECOGNIZED_TITLE,DESK_USB_UNRECOGNIZED_TEXT,DU_DLG_ICON_WARNING,SH_NOTIFY_DETAILS);
     for (unsigned i=3;i<26;i++) if (!(state->removable_mask&(1u<<i)) ||
         state->generation[i]!=d->sh.media.generation[i]) d->sh.media_labels[i][0]=0;
     d->sh.media=*state; d->sh.media_scroll=0;
@@ -1195,6 +1332,9 @@ static void draw_taskbar(struct desktop *d, struct desk_box clip)
             desk_paint_text_ellipsis(&p,font,button.x+25+dy,button.y+17+dy,title,button.w-30-dy,
                                     active ? t->task_active_text : t->taskbar_text);
         }
+        /* KB-13: the button in keyboard focus carries the theme's focus cue. */
+        if (d->sh.taskbar_key && d->sh.task_pick == i)
+            du_focus_ring(&bc, (struct du_rect){button.x + 3, button.y + 3, button.w - 6, button.h - 6});
     }
 }
 static void bar_text(struct du_canvas *c, int x, int y, const char *text)
@@ -2387,7 +2527,7 @@ static void draw_start(struct desktop *d, struct du_canvas *c)
     const struct desk_theme *t = desk_theme;
     struct desk_box b = desk_start_button(d);
     struct desk_paint p = painter(c);
-    int open = d->menu_open, hot = d->sh.start_hot && !open;
+    int open = d->menu_open, hot = (d->sh.start_hot || (d->sh.taskbar_key && d->sh.task_pick == DESK_CLIENTS)) && !open;
     uint32_t base = t->topbar_accent;
     uint32_t light = desk_mix(t->hilite, base, 120);
     uint32_t dark = desk_mix(t->outline, base, 150);
@@ -2490,7 +2630,8 @@ void desk_shell_reconcile(struct desktop *d)
         const struct desk_client *c=&d->clients[i];
         if (now.box.w>0) {
             now.icon=client_icon(d,i);
-            now.flags=(d->focus==i && !c->minimized ? 1u : 0u)|(d->sh.hover_target==16+i ? 2u : 0u)|(c->minimized ? 4u : 0u);
+            now.flags=(d->focus==i && !c->minimized ? 1u : 0u)|(d->sh.hover_target==16+i ? 2u : 0u)|(c->minimized ? 4u : 0u)|
+                (d->sh.taskbar_key && d->sh.task_pick==i ? 8u : 0u);
             snprintf(now.title,sizeof(now.title),"%s",c->closing ? "Closing..." : c->unresponsive ? "Not responding" : c->title);
         }
         if (memcmp(&was->box,&now.box,sizeof(now.box)) || was->icon!=now.icon || was->flags!=now.flags || strcmp(was->title,now.title)) {
@@ -2498,6 +2639,8 @@ void desk_shell_reconcile(struct desktop *d)
         }
         *was=now;
     }
+    int start_focus=d->sh.taskbar_key && d->sh.task_pick==DESK_CLIENTS;
+    if (start_focus!=d->sh.start_focus_shown) { damage(d,desk_start_bounds(d)); d->sh.start_focus_shown=start_focus; }
     struct desk_box popups[SH_LEVELS+6]={{0}};
     for (int l=0;l<d->sh.levels && l<SH_LEVELS;l++) popups[l]=outer(d->sh.menus[l].box);
     if (d->sh.volume_open) popups[SH_LEVELS]=outer(volume_popup(d));
@@ -2540,6 +2683,26 @@ void desk_shell_reconcile(struct desktop *d)
     int windows=d->about>=0 && d->clients[d->about].window && d->sh.about_tab==1 ? desk_task_count(d) : -1;
     if (windows!=d->about_windows && windows>=0) damage(d,desk_content(&d->clients[d->about]));
     d->about_windows=windows;
+}
+/* WM-11: a click on the caption icon opens the window menu under it; a second
+ * click within the double-click time closes the window (Windows 98). The
+ * click that merely dismissed the open menu does not reopen it. */
+int desk_shell_caption_icon(struct desktop *d, int i, uint64_t stamp, int menu_was_open)
+{
+    if (!d->shell || i < 0 || i >= DESK_CLIENTS || !d->clients[i].window) return 0;
+    uint64_t interval = (uint64_t)d->sh.cfg.double_click_ms * 1000000ull;
+    int again = d->icon_click_window == i && d->icon_click_ns && stamp >= d->icon_click_ns && stamp - d->icon_click_ns <= interval;
+    if (again) {
+        d->icon_click_window = -1;
+        if (d->sh.levels) desk_menu_close(d);
+        desk_request_close(d, i);
+        return 1;
+    }
+    if (menu_was_open && d->icon_click_window == i) { d->icon_click_window = -1; return 1; }
+    d->icon_click_window = i; d->icon_click_ns = stamp;
+    d->sh.menu_owner = i;
+    desk_menu_open(d, SH_MENU_TASK, d->clients[i].frame.x, d->clients[i].frame.y + DESK_TITLE);
+    return 1;
 }
 /* The window icon in a gradient title bar (compositor.c, weak hook). */
 const uint32_t *desk_shell_window_icon(struct desktop *d, int index, int size)
@@ -3217,6 +3380,7 @@ int desk_shell_button(struct desktop *d, int button, int down)
     tooltip_hide(d);
     d->sh.hover_since = d->now_ns;
     if (d->sh.switcher) switcher_finish(d, 0);
+    if (d->sh.taskbar_key) taskbar_blur(d, 0);   /* a click moves the focus to what it hits */
     /* The protrusion is above the menu too: clicking it toggles Start. */
     if (d->sh.levels && desk_start_contains(d,x,y)) {
         int start=d->sh.menus[0].kind==SH_MENU_START;
@@ -3345,10 +3509,14 @@ int desk_shell_button(struct desktop *d, int button, int down)
             if (d->sh.notification.title[0])
                 desk_shell_message_class(d,d->sh.notification.title,d->sh.notification.text,d->sh.notification.icon);
         }
+        /* WM-12: the empty part of the bar opens the taskbar menu. */
+        if (button==CIUKI_BUTTON_RIGHT) { d->sh.menu_owner=-1; desk_menu_open(d, SH_MENU_TASKBAR, x, DESK_BAR); }
         return 1;
     }
     if (desk_contains(bar,x,y)) {
+        int on_button = 0;
         for (int i = 0; i < DESK_CLIENTS; i++) if (desk_contains(desk_task_button(d, i), x, y)) {
+            on_button = 1;
             if (button == CIUKI_BUTTON_RIGHT) {
                 d->sh.menu_owner = i;
                 desk_menu_open(d, SH_MENU_TASK, x, bar.y);
@@ -3358,6 +3526,8 @@ int desk_shell_button(struct desktop *d, int button, int down)
             }
             break;
         }
+        /* WM-12: Cascade, Tile, Minimize All and Undo, on the empty part of the taskbar. */
+        if (!on_button && button == CIUKI_BUTTON_RIGHT) { d->sh.menu_owner = -1; desk_menu_open(d, SH_MENU_TASKBAR, x, bar.y); }
         return 1;
     }
     if (desk_hit(d, x, y) >= 0) return 0;
@@ -3538,6 +3708,9 @@ static int menu_key(struct desktop *d, int code)
     case DU_KEY_UP: case DU_KEY_DOWN:
         menu_highlight(d,m,menu_step(m, m->hot < 0 ? (code == DU_KEY_UP ? 0 : m->count - 1) : m->hot, code == DU_KEY_UP ? -1 : 1));
         return 1;
+    case DU_KEY_HOME: case DU_KEY_END:   /* SM-9: the first and the last enabled item */
+        menu_highlight(d, m, menu_step(m, code == DU_KEY_HOME ? m->count - 1 : 0, code == DU_KEY_HOME ? 1 : -1));
+        return 1;
     case DU_KEY_RIGHT:
         if (m->hot >= 0 && m->items[m->hot].action == SH_ACT_SUBMENU) {
             submenu(d, l, m->hot);
@@ -3555,10 +3728,51 @@ static int menu_key(struct desktop *d, int code)
         }
         return 1;
     case DU_KEY_ESC:
-        if (l > 0) { damage(d, outer(m->box)); d->sh.levels--; } else desk_menu_close(d);
+        if (l > 0) { damage(d, outer(m->box)); d->sh.levels--; }
+        else {
+            /* Ctrl+Esc, Esc (Windows 98 General Keyboard-only Commands): the
+             * Start menu closes and the focus stays on the taskbar. */
+            int keyboard = d->sh.start_keyboard && m->kind == SH_MENU_START;
+            desk_menu_close(d);
+            if (keyboard) taskbar_set(d, DESK_CLIENTS);
+        }
         return 1;
-    default: return 1;
+    default:
+        if (!(d->sh.modifiers & (DU_CTRL | DU_ALT))) {
+            unsigned ch = ciuki_keymap_char(d->sh.cfg.keyboard, (unsigned)code, keymap_mods(d));
+            if (ch >= 'A' && ch <= 'Z') ch += 32;
+            if (ch > 32 && ch < 127) return menu_letter(d, l, ch);
+        }
+        return 1;
     }
+}
+/* SM-9: a letter in an open menu. The item whose access key it is runs (a
+ * submenu opens); when several items share it, the highlight moves to the next
+ * one; a menu without access keys jumps to the next entry that starts with it. */
+static int menu_letter(struct desktop *d, int level, unsigned ch)
+{
+    struct sh_menu *m = &d->sh.menus[level];
+    int found[SH_ITEMS], n = 0;
+    for (int k = 0; k < m->count; k++) {
+        const struct sh_item *it = &m->items[k];
+        if (it->flags & (SH_ITEM_SEPARATOR | SH_ITEM_DISABLED)) continue;
+        if (it->mark && (unsigned)tolower((unsigned char)it->label[it->mark - 1]) == ch) found[n++] = k;
+    }
+    if (n == 1) {
+        int k = found[0];
+        if (m->items[k].action == SH_ACT_SUBMENU) { menu_highlight(d, m, k); return menu_key(d, DU_KEY_RIGHT); }
+        activate(d, level, k);
+        return 1;
+    }
+    if (!n) for (int k = 0; k < m->count; k++) {
+        const struct sh_item *it = &m->items[k];
+        if (!(it->flags & (SH_ITEM_SEPARATOR | SH_ITEM_DISABLED)) && (unsigned)tolower((unsigned char)it->label[0]) == ch) found[n++] = k;
+    }
+    if (!n) return 1;
+    int next = found[0];
+    for (int j = 0; j < n; j++) if (found[j] > m->hot) { next = found[j]; break; }
+    menu_highlight(d, m, next);
+    return 1;
 }
 int desk_shell_wheel(struct desktop *d, int detents)
 {
@@ -3667,8 +3881,159 @@ static int internal_key(struct desktop *d, int index, int code, int value)
 }
 static void toggle_start(struct desktop *d)
 {
+    taskbar_blur(d, 0);
     if (d->sh.levels && d->sh.menus[0].kind == SH_MENU_START) desk_menu_close(d);
-    else { desk_menu_close(d); desk_menu_open(d, SH_MENU_START, 0, 0); d->sh.menus[0].hot = 0; }
+    else { desk_menu_close(d); desk_menu_open(d, SH_MENU_START, 0, 0); d->sh.menus[0].hot = 0; d->sh.start_keyboard = 1; }
+}
+/* ---- KB-13: the keyboard focus of the taskbar ---------------------------
+ * Windows 98 (General Keyboard-only Commands): Ctrl+Esc then Esc puts the
+ * focus on the Start button, Tab and the arrows move over the task buttons,
+ * Enter or Space presses the one in focus, Shift+F10 or the Menu key opens
+ * its menu, Esc gives the focus back; Win+Tab moves over the task buttons
+ * from the active window. The taskbar being active, no window is. */
+static void taskbar_damage(struct desktop *d, int pick)
+{
+    if (pick == DESK_CLIENTS) damage(d, desk_start_bounds(d));
+    else if (pick >= 0 && pick < DESK_CLIENTS) damage(d, desk_task_button(d, pick));
+}
+static void taskbar_set(struct desktop *d, int pick)
+{
+    if (d->sh.taskbar_key) taskbar_damage(d, d->sh.task_pick);
+    else {
+        d->sh.task_return = d->focus >= 0 ? d->clients[d->focus].window_id : 0;
+        d->sh.taskbar_key = 1;
+        if (d->focus >= 0) desk_focus(d, -1);
+    }
+    d->sh.task_pick = pick;
+    taskbar_damage(d, pick);
+}
+static void taskbar_blur(struct desktop *d, int refocus)
+{
+    if (!d->sh.taskbar_key) return;
+    taskbar_damage(d, d->sh.task_pick);
+    d->sh.taskbar_key = 0;
+    uint32_t id = d->sh.task_return;
+    d->sh.task_return = 0;
+    if (refocus && id) for (int i = 0; i < DESK_CLIENTS; i++)
+        if (d->clients[i].window && d->clients[i].window_id == id && !d->clients[i].minimized) { desk_focus(d, i); break; }
+}
+void desk_shell_taskbar_leave(struct desktop *d) { taskbar_blur(d, 0); }
+/* The next task button in slot order (the Start button first when asked). */
+static int task_step(const struct desktop *d, int from, int dir, int with_start)
+{
+    int list[DESK_CLIENTS + 1], n = 0, at = -1;
+    if (with_start) list[n++] = DESK_CLIENTS;
+    for (int i = 0; i < DESK_CLIENTS; i++) if (desk_task_visible(&d->clients[i])) list[n++] = i;
+    for (int k = 0; k < n; k++) if (list[k] == from) at = k;
+    if (!n) return -1;
+    if (at < 0) return dir > 0 ? list[0] : list[n - 1];
+    return list[(at + dir + n) % n];
+}
+static int taskbar_keys(struct desktop *d, int code)
+{
+    int shift = (d->sh.modifiers & DU_SHIFT) != 0, pick = d->sh.task_pick;
+    if (pick < DESK_CLIENTS && !desk_task_visible(&d->clients[pick])) pick = task_step(d, pick, 1, 1);
+    switch (code) {
+    case DU_KEY_TAB: case DU_KEY_RIGHT: case DU_KEY_LEFT: {
+        int dir = code == DU_KEY_LEFT || (code == DU_KEY_TAB && shift) ? -1 : 1;
+        /* "CTRL+ESC, ESC ... use TAB to go to desktop": Tab past either end leaves the taskbar. */
+        if (code == DU_KEY_TAB && ((dir > 0 && pick == task_step(d, DESK_CLIENTS, -1, 1)) || (dir < 0 && pick == DESK_CLIENTS))) {
+            taskbar_blur(d, 0); return 1;
+        }
+        int next = task_step(d, pick, dir, 1);
+        if (next >= 0) taskbar_set(d, next);
+        return 1;
+    }
+    case DU_KEY_HOME: taskbar_set(d, DESK_CLIENTS); return 1;
+    case DU_KEY_END: { int last = task_step(d, DESK_CLIENTS, -1, 1); if (last >= 0) taskbar_set(d, last); return 1; }
+    case DU_KEY_ENTER: case DU_KEY_SPACE:
+        taskbar_blur(d, 0);
+        if (pick == DESK_CLIENTS) { desk_menu_close(d); desk_menu_open(d, SH_MENU_START, 0, 0); d->sh.menus[0].hot = 0; d->sh.start_keyboard = 1; }
+        else if (pick >= 0) {
+            /* The click on a task button: restore a minimised window, minimise the active one. */
+            if (d->clients[pick].minimized || d->focus == pick) desk_minimize(d, pick);
+            else desk_focus(d, pick);
+        }
+        return 1;
+    case DU_KEY_ESC: taskbar_blur(d, 1); return 1;
+    case DU_KEY_MENU: case DU_KEY_F10:
+        if (code == DU_KEY_F10 && !shift) return 0;
+        if (pick >= 0 && pick < DESK_CLIENTS) {
+            struct desk_box b = desk_task_button(d, pick);
+            d->sh.menu_owner = pick; desk_menu_open(d, SH_MENU_TASK, b.x, desk_taskbar(d).y);
+        } else { d->sh.menu_owner = -1; desk_menu_open(d, SH_MENU_TASKBAR, 0, desk_taskbar(d).y); }
+        d->sh.menus[0].hot = menu_step(&d->sh.menus[0], d->sh.menus[0].count - 1, 1);
+        return 1;
+    default: return 0;
+    }
+}
+/* Keys a shortcut consumed: their repeats and releases never reach a program. */
+static void swallow_press(struct desktop *d, int code)
+{
+    for (unsigned k = 0; k < sizeof(d->sh.chord) / sizeof(*d->sh.chord); k++)
+        if (!d->sh.chord[k]) { d->sh.chord[k] = (uint16_t)(code + 1); return; }
+}
+static int swallowed(struct desktop *d, int code, int release)
+{
+    for (unsigned k = 0; k < sizeof(d->sh.chord) / sizeof(*d->sh.chord); k++)
+        if (d->sh.chord[k] == code + 1) { if (release) d->sh.chord[k] = 0; return 1; }
+    return 0;
+}
+void desk_shell_find(struct desktop *d, int computer)
+{
+    /* G7 (Find Files or Folders) is not part of this build: the entry points
+     * (Win+F, Win+Ctrl+F, F3 on the desktop) already exist and reach this one
+     * function, which G7 replaces by the Find window. */
+    desk_shell_message(d, computer ? "Find: Computer" : "Find: Files or Folders",
+        computer ? "Finding a computer on the network is not available in this version of CiukiOS yet."
+                 : "Finding files and folders is not available in this version of CiukiOS yet.\n\nOpen Computer or Documents to browse for the file.", 0);
+}
+/* Win+key shortcuts of the Microsoft Natural Keyboard (Windows 98 Resource Kit,
+ * Appendix G): D, M, Shift+M, E, F, Ctrl+F, R, Tab, Break and F1. */
+static int logo_chord(struct desktop *d, int code)
+{
+    int ctrl = (d->sh.modifiers & DU_CTRL) != 0, shift = (d->sh.modifiers & DU_SHIFT) != 0;
+    switch (code) {
+    case 0x20: case 0x32: case 0x12: case 0x21: case 0x13: case DU_KEY_TAB: case 0x200: case DU_KEY_F1: break;
+    default: return 0;
+    }
+    if (d->sh.switcher) switcher_finish(d, 0);
+    if (d->sh.levels) desk_menu_close(d);
+    switch (code) {
+    case 0x20: (void)desk_show_desktop(d); break;                                  /* D */
+    case 0x32: if (shift) (void)desk_arrange_undo(d); else (void)desk_minimize_all(d); break;   /* M */
+    case 0x12: launch_named(d, "files", "Computer"); break;                       /* E: Computer, the Explorer of Windows 98 */
+    case 0x21: desk_shell_find(d, ctrl); break;                                   /* F, Ctrl+F */
+    case 0x13: desk_internal_open(d, DESK_INTERNAL_RUN); break;                   /* R */
+    case DU_KEY_TAB: {                                                            /* Tab: cycle the taskbar buttons */
+        int from = d->sh.taskbar_key ? d->sh.task_pick : d->focus;
+        int next = task_step(d, from, shift ? -1 : 1, 0);
+        if (next >= 0) taskbar_set(d, next);
+        break;
+    }
+    case 0x200:                                                                   /* Break: System Properties */
+        if (program_index(d, "control") >= 0) launch_named(d, "control", "--panel=system");
+        else desk_shell_message(d, "System Properties", "The Control Panel is not installed.", 1);
+        break;
+    default:                                                                      /* F1 */
+        if (program_index(d, "help") >= 0) launch_named(d, "help", NULL);
+        else { struct sh_item keys = {.action = SH_ACT_KEYS}; act(d, &keys); }
+        break;
+    }
+    return 1;
+}
+/* KB-8: Shift+F10 and the Menu key on the desktop open the context menu of
+ * the selection, or the desktop's own menu when nothing is selected. */
+static void desktop_menu_key(struct desktop *d)
+{
+    int s = d->sh.icon_selected;
+    if (d->sh.cfg.desktop_icons && s >= 0 && s < d->sh.icon_count) {
+        if (!desk_shell_icon_marked(d, s)) { mark(d, s, 1); d->sh.anchor = s; }
+        struct desk_box b = d->sh.icons[s].box;
+        d->sh.menu_owner = s;
+        desk_menu_open(d, SH_MENU_ICON, b.x + b.w / 2, b.y + b.h / 2);
+    } else desk_menu_open(d, SH_MENU_DESKTOP, d->mouse_x, d->mouse_y);
+    d->sh.menus[0].hot = menu_step(&d->sh.menus[0], d->sh.menus[0].count - 1, 1);
 }
 static int volume_action(struct desktop *d, unsigned action, int value, int notify)
 {
@@ -3701,6 +4066,13 @@ int desk_shell_consumer(struct desktop *d, unsigned action, int value)
 }
 int desk_shell_key(struct desktop *d, int code, int value)
 {
+    if (code==CIUKI_KEY_PRINTSCREEN || code==0x54) {
+        extern int desk_clip_key(struct desktop *, int, int, int) __attribute__((weak));
+        if (desk_clip_key && desk_clip_key(d,code,value,!!(d->sh.modifiers&DU_ALT))<0)
+            desk_shell_message(d,"Clipboard","The screen could not be copied to the clipboard.",1);
+        return 1;
+    }
+
     if (!d->shell) return 0;
     if (value && d->sh.tooltip) { tooltip_hide(d); d->sh.hover_since=0; }
     int alt = code == 0x38 || code == 0x138, ctrl = code == 0x1d || code == 0x11d, shift = code == 0x2a || code == 0x36;
@@ -3740,11 +4112,20 @@ int desk_shell_key(struct desktop *d, int code, int value)
         return 1;
     }
     if (logo) {
-        if (value == 1) d->sh.logo_down = 1;
-        else if (value == 0 && d->sh.logo_down) { d->sh.logo_down = 0; toggle_start(d); }
+        /* Either Windows key; the Start menu opens when the last one is
+         * released without another key between (a chord is not a tap). */
+        unsigned bit = code == 0x15b ? 1u : 2u;
+        if (value == 1) { if (!d->sh.logo_keys) d->sh.logo_down = 1; d->sh.logo_keys |= bit; }
+        else if (value == 0) {
+            d->sh.logo_keys &= ~bit;
+            if (!d->sh.logo_keys && d->sh.logo_down) { d->sh.logo_down = 0; toggle_start(d); }
+        }
         return 1;
     }
+    if (!value) { if (swallowed(d, code, 1)) return 1; }
+    else if (value == 2 && swallowed(d, code, 0)) return 1;
     if (value) d->sh.logo_down = 0;
+    if (value == 1 && d->sh.logo_keys && logo_chord(d, code)) { swallow_press(d, code); return 1; }
     if (value==1 && code==0x153 && (d->sh.modifiers&(DU_CTRL|DU_ALT))==(DU_CTRL|DU_ALT)) {
         desk_v3_revoke(d); desk_v3_pointer_release(d);
         /* Windows 98 (RK-apps "Closing Failed Applications"): one Close Program
@@ -3760,6 +4141,10 @@ int desk_shell_key(struct desktop *d, int code, int value)
         d->sh.alt_used=1; return 1;
     }
     if (d->sh.modifiers & DU_ALT) {
+        if (code==DU_KEY_ENTER && d->focus<0 && d->sh.icon_selected>=0 && d->sh.icon_selected<d->sh.icon_count) {
+            if (value==1) act(d,&(struct sh_item){.action=SH_ACT_ICON_PROPERTIES,.arg=d->sh.icon_selected});
+            d->sh.alt_used=1; return 1;
+        }
         if (code==DU_KEY_ENTER && d->focus>=0 && d->clients[d->focus].version==DESK_V3_VERSION) {
             if (value==1) {
                 struct desk_client *c=&d->clients[d->focus]; struct ciuki_message m;
@@ -3778,6 +4163,31 @@ int desk_shell_key(struct desktop *d, int code, int value)
                 d->sh.menus[0].hot=0;
             }
             d->sh.alt_used=1; return 1;
+        }
+        if (code == 0x1f && d->focus < 0 && d->sh.icon_selected < 0 && !desk_task_count(d)) {
+            /* ALT+S, with no window open and nothing selected on the desktop: the Start menu. */
+            if (value == 1) toggle_start(d);
+            d->sh.alt_used = 1; return 1;
+        }
+        if (code == 0x32 && d->focus < 0) {
+            /* KB-13: Alt+M with the focus on the desktop or the taskbar minimises all windows. */
+            if (value == 1) { if (d->sh.levels) desk_menu_close(d); (void)desk_minimize_all(d); }
+            d->sh.alt_used = 1; return 1;
+        }
+        if (code == 0x40) {
+            /* KB-9: Alt+F6 brings the next window of the same program to the front. */
+            if (value == 1 && d->focus >= 0) {
+                const struct desk_client *f = &d->clients[d->focus];
+                int back = -1;
+                for (int i = 0; i < DESK_CLIENTS; i++) {
+                    const struct desk_client *c = &d->clients[i];
+                    if (i == d->focus || !c->window || c->minimized || c->owner_id || c->internal || desk_modal_target(d, i) != i) continue;
+                    if (!((f->pid && c->pid == f->pid) || (f->application[0] && !strcmp(f->application, c->application)))) continue;
+                    if (back < 0 || c->order < d->clients[back].order) back = i;
+                }
+                if (back >= 0) desk_focus(d, back);
+            }
+            d->sh.alt_used = 1; return 1;
         }
         if (code == DU_KEY_TAB) {
             if (value) { desk_v3_revoke(d); desk_v3_pointer_release(d); if (!d->sh.switcher) switcher_start(d, (d->sh.modifiers & DU_SHIFT) != 0); else switcher_step(d, (d->sh.modifiers & DU_SHIFT) != 0); }
@@ -3824,9 +4234,9 @@ int desk_shell_key(struct desktop *d, int code, int value)
             d->sh.alt_used = 1; return 1;
         }
         if (value && !d->sh.alt_routed) { desk_route_key(d, d->sh.alt_code, 1); d->sh.alt_routed = 1; }
-        if (!value && d->sh.alt_used && (code == DU_KEY_TAB || code == DU_KEY_F4 || code==DU_KEY_SPACE || code==DU_KEY_ESC)) return 1;
+        if (!value && d->sh.alt_used && (code == DU_KEY_TAB || code == DU_KEY_F4 || code==DU_KEY_SPACE || code==DU_KEY_ESC || code==0x40 || code==0x32 || code==0x1f)) return 1;
     }
-    if (!value && (code == DU_KEY_TAB || code == DU_KEY_F4 || code==DU_KEY_SPACE || code==DU_KEY_ESC) && d->sh.alt_used) return 1;
+    if (!value && (code == DU_KEY_TAB || code == DU_KEY_F4 || code==DU_KEY_SPACE || code==DU_KEY_ESC || code==0x40 || code==0x32 || code==0x1f) && d->sh.alt_used) return 1;
     if ((d->sh.modifiers & DU_CTRL) && code == DU_KEY_ESC) { if (value == 1) toggle_start(d); return 1; }
     if (d->focus<0 && d->sh.folder && d->sh.folder->editing>=0) {
         struct desk_folder *f=d->sh.folder;
@@ -3857,6 +4267,17 @@ int desk_shell_key(struct desktop *d, int code, int value)
         damage_all(d); return 1;
     }
     if (d->sh.levels) return value ? menu_key(d, code) : 1;
+    if (d->sh.taskbar_key && d->focus < 0 && value && !d->sh.dnd.active) {
+        if (taskbar_keys(d, code)) { swallow_press(d, code); return 1; }
+    }
+    if (d->focus < 0 && value == 1 && !d->shell_test && !d->tasks_test && !d->app_test &&
+        (!d->sh.folder || d->sh.folder->editing < 0)) {
+        /* KB-8 and G7's entry: the desktop's context menu key and F3 (Find). */
+        if (code == DU_KEY_MENU || (code == DU_KEY_F10 && (d->sh.modifiers & DU_SHIFT))) {
+            desktop_menu_key(d); swallow_press(d, code); return 1;
+        }
+        if (code == 0x3d) { desk_shell_find(d, 0); swallow_press(d, code); return 1; }
+    }
     if (d->sh.media_open) {
         if (value && code==DU_KEY_ESC) { d->sh.media_open=0; damage(d,outer(media_popup(d))); return 1; }
         if (value && code==DU_KEY_DOWN && d->sh.media_scroll+media_rows(d)<media_count(d)) { d->sh.media_scroll++; damage(d,outer(media_popup(d))); return 1; }

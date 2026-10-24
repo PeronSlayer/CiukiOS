@@ -299,7 +299,7 @@ static int listing(struct fm_vfs *fs, const char *path, struct listing *l)
 
 /* Jobs use raw listing(): hiding belongs only to the browser, not to copies
  * or recursive deletion/properties. */
-static int browser_listing(struct fm_vfs *fs, const char *path, uint32_t fixed, struct listing *l, uint32_t slots)
+static int browser_listing(struct fm_vfs *fs, const char *path, uint32_t fixed, struct listing *l, uint32_t slots, int show_hidden, int hide_system)
 {
     int r;
     if (fm_is_recycle(path)) {
@@ -318,7 +318,9 @@ static int browser_listing(struct fm_vfs *fs, const char *path, uint32_t fixed, 
     if (!r) {
         unsigned count = 0;
         for (unsigned i = 0; i < l->count; i++)
-            if (!fm_hidden(path, l->entries[i].name)) l->entries[count++] = l->entries[i];
+            if (!fm_hidden(path, l->entries[i].name) &&
+                (show_hidden || !(l->entries[i].meta.attributes & 2u)) &&
+                (!hide_system || !(l->entries[i].meta.attributes & 4u))) l->entries[count++] = l->entries[i];
         l->count = count;
     }
     return r;
@@ -393,6 +395,7 @@ static int order(const struct fm_model *m, const struct fm_entry *a, const struc
     }
     if (column == 1) result = a->meta.size < b->meta.size ? -1 : a->meta.size > b->meta.size;
     else if (column == 2) { char x[32], y[32]; result = compare(fm_type_name(a, x, sizeof(x)), fm_type_name(b, y, sizeof(y))); }
+    else if (column == 4) result = a->meta.attributes < b->meta.attributes ? -1 : a->meta.attributes > b->meta.attributes;
     else if (column == 3) result = a->meta.modified < b->meta.modified ? -1 : a->meta.modified > b->meta.modified;
     if (!result) result = compare(a->name, b->name);
     if (!result) result = strcmp(a->name, b->name);
@@ -402,7 +405,7 @@ static int order(const struct fm_model *m, const struct fm_entry *a, const struc
 void fm_sort(struct fm_model *m, unsigned column, int descending)
 {
     if (column > 5) return;
-    if (column > 3 && !fm_is_recycle(m->path)) column = 0;   /* the bin's keys mean nothing elsewhere */
+    if (column == 5 && !fm_is_recycle(m->path)) column = 0;
     m->sort = column; m->descending = descending;
     if (m->count < 2) return;
     /* Stable bottom-up merge sort; focus/anchor follow entries, not indices. */
@@ -431,11 +434,13 @@ void fm_sort(struct fm_model *m, unsigned column, int descending)
 static int load(struct fm_model *m, const char *path)
 {
     struct listing l;
-    int r = browser_listing(&m->fs, path, m->fixed, &l, m->drive_slots);
+    int r = browser_listing(&m->fs, path, m->fixed, &l, m->drive_slots, m->show_hidden, m->hide_system);
     if (r) return r;
     free(m->entries); free(m->bin);
     m->entries = l.entries; m->count = l.count; m->capacity = l.capacity; m->bin = l.bin; m->bin_count = l.bin_count;
     m->active = m->anchor = 0; m->find_length = 0; m->find[0] = 0;
+    /* Key 4 changes meaning across the bin boundary; do not carry it over. */
+    if (m->sort > 3 && fm_is_recycle(m->path) != fm_is_recycle(path)) m->sort = 0;
     if (path != m->path) snprintf(m->path, sizeof(m->path), "%s", path);
     fm_sort(m, m->sort, m->descending);
     return 0;
@@ -473,7 +478,7 @@ int fm_navigate(struct fm_model *m, const char *path)
 int fm_refresh(struct fm_model *m)
 {
     struct listing l;
-    int r = browser_listing(&m->fs, m->path, m->fixed, &l, m->drive_slots);
+    int r = browser_listing(&m->fs, m->path, m->fixed, &l, m->drive_slots, m->show_hidden, m->hide_system);
     if (r) return r;
     char active[FM_NAME] = "";
     if (m->active < m->count) strcpy(active, m->entries[m->active].name);
@@ -931,6 +936,10 @@ static int job_step(struct fm_job *j)
             pop(j); return 1;
         }
         if (j->kind == FM_PROPERTIES) {
+            if (f->meta.type == FM_FILE) {
+                j->allocated += f->meta.allocated;
+                if (!f->meta.allocated_known) j->allocated_unknown = 1;
+            }
             if (j->depth == 1 && j->next == 1) j->property_meta = f->meta;
             if (f->meta.type == FM_FILE) { j->files++; j->bytes += f->meta.size; pop(j); return 1; }
             if (j->depth > 1) j->folders++;
