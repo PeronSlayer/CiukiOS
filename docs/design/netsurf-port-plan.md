@@ -752,6 +752,51 @@ Remaining kernel item: `brk` growth creates one extent per call and extent
 lists are walked linearly (`src/kernel/proc/uaddr.c`); NetSurf avoids it
 with its 1 MiB pad, other programs do not.
 
+### FX-24B: shared clipboard, large raster images and CSS selection
+
+Expected behaviour and implementation contract (2026-10-24):
+
+- Windows 98 applications exchange selected text through the system clipboard.
+  The Resource Kit, Appendix G (`wrkappg_2.htm`, Clipboard shortcuts), and
+  Microsoft's [clipboard operations](https://learn.microsoft.com/en-us/windows/win32/dataxchg/clipboard-operations)
+  require one shared store. Bind NetSurf's v3 desktop channel with
+  `du_clip_bind`; retain G5's Unicode conversion and ownership protocol.
+  Clipboard replies use window/generation zero, unlike window input. Preserve
+  window events during a bounded synchronous RPC, close every attachment and
+  unbind on shutdown. Page selection and toolbar editing use the same store.
+- The [libpng manual](https://www.libpng.org/pub/png/libpng-manual.txt)
+  describes progressive rows and raw Adam7 passes; the
+  [PNG specification](https://www.w3.org/TR/png-3/) defines their sample lattice.
+  Sample selected pixels directly from these rows, including interlaced PNG,
+  without allocating a full-size intermediate image. Reuse that decoder for
+  cache reconstruction. Keep the original content dimensions for layout.
+- [GIF89a](https://www.w3.org/Graphics/GIF/spec-gif89a.txt) defines interlace,
+  transparency and disposal. Retain libnsgif's LZW and animation state machine,
+  sampling onto a reduced canvas; disposal and restore buffers use the same
+  sample lattice. Do not allocate an original-size canvas for a large GIF.
+- Google's [WebP decoder API](https://developers.google.com/speed/webp/docs/api)
+  supports scaled decoding into external storage. Use it and charge decoder
+  working allocations to the existing image ledger too. PNG library allocations
+  must also be charged. The ledger remains 2–16 MiB, derived from free memory;
+  no OS memory limit changes. Output stays within 4096 pixels per side and
+  one megapixel, with smaller output when remaining ledger space requires it.
+  Raster inputs above 65535 pixels per side are refused before row allocation.
+- [CSS 2 selectors](https://www.w3.org/TR/CSS2/selector.html) and the pinned
+  libcss 0.9.2 `src/select/select.c` define matching and cascade order. Remove
+  the redundant pending-selector scan: selecting the next chain already
+  detects exhaustion. Use a small stack array for class-chain cursors with a
+  heap fallback for large class lists. Preserve specificity/source ordering,
+  invalidation, pseudo classes, media matching and style sharing. Verify against
+  upstream selection expectations and rendered fixtures; measure allocation
+  savings and time separately from hardware qualification.
+  The strict i686 check found upstream's 6200-byte `css_select_style` frame.
+  Keep one reusable heap scratch state per selection context, released with the
+  context; reentrant selection borrows a separate state. Results own no scratch
+  memory. This keeps the production frame below the required 4 KiB limit.
+  Failure cleanup before node-data attachment must leave the borrowed parent
+  bloom filter (or static empty root filter) intact; the allocation/error-path
+  fixture covers this ownership boundary too.
+
 ## Milestones and acceptance
 
 Private site names/URLs and expected pages will be supplied by the lead at

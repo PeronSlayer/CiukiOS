@@ -1,0 +1,901 @@
+CiukiOS FX-24B: sampled large raster decoding and cheaper CSS chain selection.
+Sources and contract: docs/design/netsurf-port-plan.md, FX-24B.
+
+--- a/libcss/src/select/select.c
++++ b/libcss/src/select/select.c
+@@ -59,6 +59,7 @@
+ 
+ 	/* Interned default style */
+ 	css_computed_style *default_style;
++	css_select_state *spare_state;
+ };
+ 
+ /**
+@@ -272,6 +273,7 @@
+ 		free(ctx->sheets);
+ 	}
+ 
++	free(ctx->spare_state);
+ 	free(ctx);
+ 
+ 	return CSS_OK;
+@@ -1003,6 +1005,7 @@
+ 	}
+ 
+ 	if (state->node_data != NULL) {
++		state->node_data->bloom = NULL; /* borrowed until css__set_node_data */
+ 		css__destroy_node_data(state->node_data);
+ 	}
+ 
+@@ -1250,7 +1253,7 @@
+ 	css_origin origin = CSS_ORIGIN_UA;
+ 	uint32_t i, j, nhints;
+ 	css_error error;
+-	css_select_state state;
++	css_select_state *state;
+ 	css_hint *hints = NULL;
+ 	void *parent = NULL;
+ 	struct css_node_data *share;
+@@ -1263,49 +1266,53 @@
+ 	if (error != CSS_OK)
+ 		return error;
+ 
++	state = ctx->spare_state;
++	ctx->spare_state = NULL;
++	if (state == NULL) state = malloc(sizeof(*state));
++	if (state == NULL) return CSS_NOMEM;
+ 	error = css_select__initialise_selection_state(
+-			&state, node, parent, media, unit_ctx, handler, pw);
++			state, node, parent, media, unit_ctx, handler, pw);
+ 	if (error != CSS_OK)
+-		return error;
++		goto release_state;
+ 
+ 	/* Fetch presentational hints */
+ 	error = handler->node_presentational_hint(pw, node, &nhints, &hints);
+ 	if (error != CSS_OK)
+ 		goto cleanup;
+ 	if (nhints > 0) {
+-		state.node_data->flags |= CSS_NODE_FLAGS_HAS_HINTS;
++		state->node_data->flags |= CSS_NODE_FLAGS_HAS_HINTS;
+ 	}
+ 
+ 	if (inline_style != NULL) {
+-		state.node_data->flags |= CSS_NODE_FLAGS_HAS_INLINE_STYLE;
++		state->node_data->flags |= CSS_NODE_FLAGS_HAS_INLINE_STYLE;
+ 	}
+ 
+ 	/* Check if we can share another node's style */
+-	error = css_select_style__get_sharable_node_data(node, &state, &share);
++	error = css_select_style__get_sharable_node_data(node, state, &share);
+ 	if (error != CSS_OK) {
+ 		goto cleanup;
+ 	} else if (share != NULL) {
+ 		css_computed_style **styles = share->partial.styles;
+ 		for (i = 0; i < CSS_PSEUDO_ELEMENT_COUNT; i++) {
+-			state.results->styles[i] =
++			state->results->styles[i] =
+ 					css__computed_style_ref(styles[i]);
+ 		}
+ #ifdef DEBUG_STYLE_SHARING
+ 		printf("style:\t%s\tSHARED!\n",
+-				lwc_string_data(state.element.name));
++				lwc_string_data(state->element.name));
+ #endif
+ 		goto complete;
+ 	}
+ #ifdef DEBUG_STYLE_SHARING
+-	printf("style:\t%s\tSELECTED\n", lwc_string_data(state.element.name));
++	printf("style:\t%s\tSELECTED\n", lwc_string_data(state->element.name));
+ #endif
+ 
+ 	/* Not sharing; need to select. */
+ 	if (ctx->uses_revert ||
+ 			(inline_style != NULL && inline_style->uses_revert)) {
+ 		/* Need to track UA and USER origin styles for revert. */
+-		state.revert = calloc(CSS_ORIGIN_AUTHOR, sizeof(*state.revert));
+-		if (state.revert == NULL) {
++		state->revert = calloc(CSS_ORIGIN_AUTHOR, sizeof(*state->revert));
++		if (state->revert == NULL) {
+ 			error = CSS_NOMEM;
+ 			goto cleanup;
+ 		}
+@@ -1314,7 +1321,7 @@
+ 	/* Base element style is guaranteed to exist
+ 	 */
+ 	error = css__computed_style_create(
+-			&state.results->styles[CSS_PSEUDO_ELEMENT_NONE]);
++			&state->results->styles[CSS_PSEUDO_ELEMENT_NONE]);
+ 	if (error != CSS_OK) {
+ 		goto cleanup;
+ 	}
+@@ -1323,11 +1330,11 @@
+ 	if (nhints > 0) {
+ 		/* Ensure that the appropriate computed style exists */
+ 		struct css_computed_style *computed_style =
+-				state.results->styles[CSS_PSEUDO_ELEMENT_NONE];
+-		state.computed = computed_style;
++				state->results->styles[CSS_PSEUDO_ELEMENT_NONE];
++		state->computed = computed_style;
+ 
+ 		for (i = 0; i < nhints; i++) {
+-			error = set_hint(&state, &hints[i]);
++			error = set_hint(state, &hints[i]);
+ 			if (error != CSS_OK)
+ 				goto cleanup;
+ 		}
+@@ -1342,19 +1349,19 @@
+ 	for (i = 0; i < ctx->n_sheets; i++) {
+ 		const css_select_sheet s = ctx->sheets[i];
+ 
+-		if (state.revert != NULL && s.origin != origin) {
++		if (state->revert != NULL && s.origin != origin) {
+ 			for (j = 0; j < CSS_PSEUDO_ELEMENT_COUNT; j++) {
+-				if (state.results->styles[j] == NULL) {
++				if (state->results->styles[j] == NULL) {
+ 					continue;
+ 				}
+ 				error = css__computed_style_clone(
+-						state.results->styles[j],
+-						&state.revert[origin].style[j]);
++						state->results->styles[j],
++						&state->revert[origin].style[j]);
+ 				if (error != CSS_OK) {
+ 					goto cleanup;
+ 				}
+-				memcpy(state.revert[origin].props,
+-				       state.props, sizeof(state.props));
++				memcpy(state->revert[origin].props,
++				       state->props, sizeof(state->props));
+ 			}
+ 			origin = s.origin;
+ 		}
+@@ -1362,7 +1369,7 @@
+ 		if (mq__list_match(s.media, unit_ctx, media, &ctx->str) &&
+ 				s.sheet->disabled == false) {
+ 			error = select_from_sheet(ctx, s.sheet,
+-					s.origin, &state);
++					s.origin, state);
+ 			if (error != CSS_OK)
+ 				goto cleanup;
+ 		}
+@@ -1384,11 +1391,11 @@
+ 		/* No bytecode if input was empty or wholly invalid */
+ 		if (sel->style != NULL) {
+ 			/* Inline style applies to base element only */
+-			state.current_pseudo = CSS_PSEUDO_ELEMENT_NONE;
+-			state.computed = state.results->styles[
++			state->current_pseudo = CSS_PSEUDO_ELEMENT_NONE;
++			state->computed = state->results->styles[
+ 					CSS_PSEUDO_ELEMENT_NONE];
+ 
+-			error = cascade_style(sel->style, &state);
++			error = cascade_style(sel->style, state);
+ 			if (error != CSS_OK)
+ 				goto cleanup;
+ 		}
+@@ -1397,13 +1404,13 @@
+ 	/* Fix up any remaining unset properties. */
+ 
+ 	/* Base element */
+-	state.current_pseudo = CSS_PSEUDO_ELEMENT_NONE;
+-	state.computed = state.results->styles[CSS_PSEUDO_ELEMENT_NONE];
++	state->current_pseudo = CSS_PSEUDO_ELEMENT_NONE;
++	state->computed = state->results->styles[CSS_PSEUDO_ELEMENT_NONE];
+ 	for (i = 0; i < CSS_N_PROPERTIES; i++) {
+-		prop_state *prop = &state.props[i][CSS_PSEUDO_ELEMENT_NONE];
++		prop_state *prop = &state->props[i][CSS_PSEUDO_ELEMENT_NONE];
+ 
+ 		if (prop->explicit_default == FLAG_VALUE_REVERT) {
+-			error = css__select_revert_property(&state, prop,
++			error = css__select_revert_property(state, prop,
+ 					CSS_PSEUDO_ELEMENT_NONE, i);
+ 			if (error != CSS_OK) {
+ 				goto cleanup;
+@@ -1425,7 +1432,7 @@
+ 				prop->set == false ||
+ 				(parent == NULL &&
+ 				prop->explicit_default == FLAG_VALUE_INHERIT)) {
+-			error = set_initial(&state, i,
++			error = set_initial(state, i,
+ 					CSS_PSEUDO_ELEMENT_NONE, parent);
+ 			if (error != CSS_OK)
+ 				goto cleanup;
+@@ -1434,18 +1441,18 @@
+ 
+ 	/* Pseudo elements, if any */
+ 	for (j = CSS_PSEUDO_ELEMENT_NONE + 1; j < CSS_PSEUDO_ELEMENT_COUNT; j++) {
+-		state.current_pseudo = j;
+-		state.computed = state.results->styles[j];
++		state->current_pseudo = j;
++		state->computed = state->results->styles[j];
+ 
+ 		/* Skip non-existent pseudo elements */
+-		if (state.computed == NULL)
++		if (state->computed == NULL)
+ 			continue;
+ 
+ 		for (i = 0; i < CSS_N_PROPERTIES; i++) {
+-			prop_state *prop = &state.props[i][j];
++			prop_state *prop = &state->props[i][j];
+ 
+ 			if (prop->explicit_default == FLAG_VALUE_REVERT) {
+-				error = css__select_revert_property(&state,
++				error = css__select_revert_property(state,
+ 						prop, j, i);
+ 				if (error != CSS_OK) {
+ 					goto cleanup;
+@@ -1464,7 +1471,7 @@
+ 			 * to its initial value. */
+ 			if (prop->explicit_default == FLAG_VALUE_INITIAL ||
+ 					prop->set == false) {
+-				error = set_initial(&state, i, j, parent);
++				error = set_initial(state, i, j, parent);
+ 				if (error != CSS_OK)
+ 					goto cleanup;
+ 			}
+@@ -1478,7 +1485,7 @@
+ 	if (parent == NULL) {
+ 		/* Only compute absolute values for the base element */
+ 		error = css__compute_absolute_values(NULL,
+-				state.results->styles[CSS_PSEUDO_ELEMENT_NONE],
++				state->results->styles[CSS_PSEUDO_ELEMENT_NONE],
+ 				unit_ctx);
+ 		if (error != CSS_OK)
+ 			goto cleanup;
+@@ -1487,31 +1494,35 @@
+ 	/* Intern the partial computed styles */
+ 	for (j = CSS_PSEUDO_ELEMENT_NONE; j < CSS_PSEUDO_ELEMENT_COUNT; j++) {
+ 		/* Skip non-existent pseudo elements */
+-		if (state.results->styles[j] == NULL)
++		if (state->results->styles[j] == NULL)
+ 			continue;
+ 
+-		error = css__arena_intern_style(&state.results->styles[j]);
++		error = css__arena_intern_style(&state->results->styles[j]);
+ 		if (error != CSS_OK) {
+ 			goto cleanup;
+ 		}
+ 	}
+ 
+ complete:
+-	error = css__set_node_data(node, &state, handler, pw);
++	error = css__set_node_data(node, state, handler, pw);
+ 	if (error != CSS_OK) {
+ 		goto cleanup;
+ 	}
+ 
+ 	/* Steal the results from the selection state, so they don't get
+ 	 * freed when the selection state is finalised */
+-	*result = state.results;
+-	state.results = NULL;
++	*result = state->results;
++	state->results = NULL;
+ 
+ 	error = CSS_OK;
+ 
+ cleanup:
+-	css_select__finalise_selection_state(&state);
+-
++	css_select__finalise_selection_state(state);
++
++
++release_state:
++	if (ctx->spare_state == NULL) ctx->spare_state = state;
++	else free(state);
+ 	return error;
+ }
+ 
+@@ -1906,25 +1917,6 @@
+ 
+ #undef IMPORT_STACK_SIZE
+ 
+-static inline bool _selectors_pending(const css_selector **node,
+-		const css_selector **id, const css_selector ***classes,
+-		uint32_t n_classes, const css_selector **univ)
+-{
+-	bool pending = false;
+-	uint32_t i;
+-
+-	pending |= *node != NULL;
+-	pending |= *id != NULL;
+-	pending |= *univ != NULL;
+-
+-	if (classes != NULL && n_classes > 0) {
+-		for (i = 0; i < n_classes; i++)
+-			pending |= *(classes[i]) != NULL;
+-	}
+-
+-	return pending;
+-}
+-
+ static inline bool _selector_less_specific(const css_selector *ref,
+ 		const css_selector *cand)
+ {
+@@ -1999,6 +1991,7 @@
+ 	css_selector_hash_iterator node_iterator;
+ 	const css_selector **id_selectors = &empty_selector;
+ 	css_selector_hash_iterator id_iterator;
++	const css_selector **local_classes[16];
+ 	const css_selector ***class_selectors = NULL;
+ 	css_selector_hash_iterator class_iterator;
+ 	const css_selector **univ_selectors = &empty_selector;
+@@ -2023,7 +2016,8 @@
+ 
+ 	if (state->classes != NULL && n_classes > 0) {
+ 		/* Find hash chains for node classes */
+-		class_selectors = malloc(n_classes * sizeof(css_selector **));
++		class_selectors = n_classes <= 16 ? local_classes :
++			malloc(n_classes * sizeof(css_selector **));
+ 		if (class_selectors == NULL) {
+ 			error = CSS_NOMEM;
+ 			goto cleanup;
+@@ -2055,8 +2049,7 @@
+ 		goto cleanup;
+ 
+ 	/* Process matching selectors, if any */
+-	while (_selectors_pending(node_selectors, id_selectors,
+-			class_selectors, n_classes, univ_selectors)) {
++	for (;;) {
+ 		const css_selector *selector;
+ 
+ 		/* Selectors must be matched in ascending order of specificity
+@@ -2068,9 +2061,9 @@
+ 				class_selectors, n_classes, univ_selectors,
+ 				&src);
+ 
+-		/* We know there are selectors pending, so should have a
+-		 * selector here */
+-		assert(selector != NULL);
++		/* Selecting the least chain also detects exhaustion; no second
++		 * walk of every class cursor is necessary. */
++		if (selector == NULL) break;
+ 
+ 		/* Match and handle the selector chain */
+ 		error = match_selector_chain(ctx, selector, state);
+@@ -2108,7 +2101,7 @@
+ 
+ 	error = CSS_OK;
+ cleanup:
+-	if (class_selectors != NULL)
++	if (class_selectors != NULL && class_selectors != local_classes)
+ 		free(class_selectors);
+ 
+ 	return error;
+--- a/libnsgif/src/gif.c
++++ b/libnsgif/src/gif.c
+@@ -87,6 +87,7 @@
+ 	nsgif_bitmap_t *frame_image;
+ 	/** Row span of frame_image in pixels. */
+ 	uint32_t rowspan;
++	uint32_t sample, output_width, output_height;
+ 
+ 	/** Minimum allowable frame delay. */
+ 	uint16_t delay_min;
+@@ -214,8 +215,12 @@
+ 		return NSGIF_OK;
+ 	}
+ 
++	/* Keep logical dimensions and animation rectangles in source coordinates. */
++	gif->sample = ciuki_image_scale(width, height, 2,
++			&gif->output_width, &gif->output_height);
++	if (!gif->sample) return NSGIF_ERR_OOM;
+ 	assert(gif->bitmap.create);
+-	gif->frame_image = gif->bitmap.create(width, height);
++	gif->frame_image = gif->bitmap.create(gif->output_width, gif->output_height);
+ 	if (gif->frame_image == NULL) {
+ 		return NSGIF_ERR_OOM;
+ 	}
+@@ -240,7 +245,7 @@
+ 		return NULL;
+ 	}
+ 
+-	gif->rowspan = gif->info.width;
++	gif->rowspan = gif->output_width;
+ 	if (gif->bitmap.get_rowspan) {
+ 		gif->rowspan = gif->bitmap.get_rowspan(gif->frame_image);
+ 	}
+@@ -303,8 +308,7 @@
+ 		const uint32_t *bitmap)
+ {
+ 	size_t pixel_bytes = sizeof(*bitmap);
+-	size_t height = gif->info.height;
+-	size_t width  = gif->info.width;
++	size_t height, width;
+ 	uint32_t *prev_frame;
+ 
+ 	if (gif->decoded_frame == NSGIF_FRAME_INVALID ||
+@@ -318,6 +322,7 @@
+ 		return NSGIF_ERR_OOM;
+ 	}
+ 
++	height = gif->output_height; width = gif->output_width;
+ 	if (gif->prev_frame == NULL) {
+ 		prev_frame = realloc(gif->prev_frame,
+ 				width * height * pixel_bytes);
+@@ -341,8 +346,8 @@
+ {
+ 	const uint32_t *prev_frame = gif->prev_frame;
+ 	size_t pixel_bytes = sizeof(*bitmap);
+-	size_t height = gif->info.height;
+-	size_t width  = gif->info.width;
++	size_t height = gif->output_height;
++	size_t width  = gif->output_width;
+ 
+ 	if (prev_frame == NULL) return NSGIF_ERR_OOM;
+ 	memcpy(bitmap, prev_frame, height * width * pixel_bytes);
+@@ -490,8 +495,11 @@
+ 		uint32_t x;
+ 		uint32_t *frame_scanline;
+ 
+-		frame_scanline = frame_data + offset_x +
+-				(y + offset_y) * gif->rowspan;
++		uint32_t source_x = offset_x;
++		bool sampled_row = ((y + offset_y) & (gif->sample - 1)) == 0;
++		frame_scanline = sampled_row ? frame_data +
++				((y + offset_y) / gif->sample) * gif->rowspan +
++				(offset_x + gif->sample - 1) / gif->sample : NULL;
+ 
+ 		x = width;
+ 		while (x > 0) {
+@@ -519,21 +527,13 @@
+ 			row_available = x < available ? x : available;
+ 			x -= row_available;
+ 			available -= row_available;
+-			if (transparency_index > 0xFF) {
+-				while (row_available-- > 0) {
+-					*frame_scanline++ =
+-						colour_table[*uncompressed++];
+-				}
+-			} else {
+-				while (row_available-- > 0) {
+-					register uint32_t colour;
+-					colour = *uncompressed++;
+-					if (colour != transparency_index) {
+-						*frame_scanline =
+-							colour_table[colour];
+-					}
++			while (row_available-- > 0) {
++				uint32_t colour = *uncompressed++;
++				if (sampled_row && (source_x & (gif->sample - 1)) == 0) {
++					if (colour != transparency_index) *frame_scanline = colour_table[colour];
+ 					frame_scanline++;
+ 				}
++				source_x++;
+ 			}
+ 		}
+ 
+@@ -617,7 +617,7 @@
+ 	uint32_t transparency_index = frame->transparency_index;
+ 	uint32_t *restrict colour_table = gif->colour_table;
+ 
+-	if (frame->info.interlaced == false && offset_x == 0 &&
++	if (gif->sample == 1 && frame->info.interlaced == false && offset_x == 0 &&
+ 			width == gif->info.width &&
+ 			width == gif->rowspan) {
+ 		ret = nsgif__decode_simple(gif, height, offset_y,
+@@ -653,8 +653,8 @@
+ 	size_t pixel_bytes = sizeof(*bitmap);
+ 
+ 	if (frame == NULL) {
+-		size_t width  = gif->info.width;
+-		size_t height = gif->info.height;
++		size_t width = gif->output_width;
++		size_t height = gif->output_height;
+ 
+ 		memset(bitmap, NSGIF_TRANSPARENT_COLOUR,
+ 				width * height * pixel_bytes);
+@@ -673,17 +673,23 @@
+ 		width -= gif__clip(offset_x, width, gif->info.width);
+ 		height -= gif__clip(offset_y, height, gif->info.height);
+ 
++		/* Samples at k*sample belong to [offset, offset+length). */
++		uint32_t right = (offset_x + width + gif->sample - 1) / gif->sample;
++		uint32_t bottom = (offset_y + height + gif->sample - 1) / gif->sample;
++		offset_x = (offset_x + gif->sample - 1) / gif->sample;
++		offset_y = (offset_y + gif->sample - 1) / gif->sample;
++		width = right - offset_x; height = bottom - offset_y;
+ 		if (frame->info.transparency) {
+ 			for (uint32_t y = 0; y < height; y++) {
+ 				uint32_t *scanline = bitmap + offset_x +
+-						(offset_y + y) * gif->info.width;
++						(offset_y + y) * gif->rowspan;
+ 				memset(scanline, NSGIF_TRANSPARENT_COLOUR,
+ 						width * pixel_bytes);
+ 			}
+ 		} else {
+ 			for (uint32_t y = 0; y < height; y++) {
+ 				uint32_t *scanline = bitmap + offset_x +
+-						(offset_y + y) * gif->info.width;
++						(offset_y + y) * gif->rowspan;
+ 				for (uint32_t x = 0; x < width; x++) {
+ 					scanline[x] = gif->info.background;
+ 				}
+--- a/netsurf/content/handlers/image/png.c
++++ b/netsurf/content/handlers/image/png.c
+@@ -22,6 +22,7 @@
+ #include <string.h>
+ #include <stdlib.h>
+ #include <png.h>
++#include "sdk/netsurf/port/image_memory.h"
+ 
+ #include "netsurf/inttypes.h"
+ #include "utils/utils.h"
+@@ -51,6 +52,8 @@
+ typedef struct nspng_content {
+ 	struct content base; /**< base content type */
+ 
++	unsigned scale;
++	bool cache_decode;
+ 	bool no_process_data; /**< Do not continue to process data as it arrives */
+ 	png_structp png;
+ 	png_infop info;
+@@ -77,6 +80,7 @@
+  */
+ static void nspng_warning(png_structp png_ptr, png_const_charp warning_message)
+ {
++	(void)png_ptr;
+ 	NSLOG(netsurf, INFO, "%s", warning_message);
+ }
+ 
+@@ -185,15 +189,18 @@
+ 
+ 	png_c->base.width = width;
+ 	png_c->base.height = height;
+-	png_c->base.size += width * height * 4;
++	uint32_t out_w, out_h;
++	png_c->scale = ciuki_image_scale(width, height, 2, &out_w, &out_h);
++	if (!png_c->scale) png_error(png_s, "Image exceeds available memory");
++	png_c->base.size += out_w * out_h * 4;
+ 
+ 	/* see if progressive-conversion should continue */
+-	if (image_cache_speculate((struct content *)png_c) == false) {
++	if (!png_c->cache_decode && image_cache_speculate((struct content *)png_c) == false) {
+ 		longjmp(png_jmpbuf(png_s), CBERR_NOPRE);
+ 	}
+ 
+ 	/* Claim the required memory for the converted PNG */
+-	png_c->bitmap = guit->bitmap->create(width, height, BITMAP_NONE);
++	png_c->bitmap = guit->bitmap->create(out_w, out_h, BITMAP_NONE);
+ 	if (png_c->bitmap == NULL) {
+ 		/* Failed to create bitmap skip pre-conversion */
+ 		longjmp(png_jmpbuf(png_s), CBERR_NOPRE);
+@@ -233,46 +240,48 @@
+ 		longjmp(png_jmpbuf(png_s), 1);
+ 	}
+ 
+-	/* Calculate address of row start */
+-	row = buffer + (png_c->rowstride * row_num);
+-
+-	/* Handle interlaced sprites using the Adam7 algorithm */
++	/* Raw Adam7 pass rows contain only their own samples. Select pixels
++	 * on the global sample lattice; never combine into a full-size canvas. */
++	unsigned start = 0, step = 1;
+ 	if (png_c->interlace) {
+-		unsigned long dst_off;
+-		unsigned long src_off = 0;
+-		unsigned int start, step;
+-
+-		start = interlace_start[pass];
+-		step = interlace_step[pass];
+-		row_num = interlace_row_start[pass] +
+-			interlace_row_step[pass] * row_num;
+-
+-		/* Copy the data to our current row taking interlacing
+-		 * into consideration */
+-		row = buffer + (png_c->rowstride * row_num);
+-
+-		for (dst_off = start; dst_off < rowbytes; dst_off += step) {
+-			row[dst_off++] = new_row[src_off++];
+-			row[dst_off++] = new_row[src_off++];
+-			row[dst_off++] = new_row[src_off++];
+-			row[dst_off++] = new_row[src_off++];
+-		}
+-	} else {
+-		/* Do a fast memcpy of the row data */
+-		memcpy(row, new_row, rowbytes);
++		start = interlace_start[pass] / 4;
++		step = (interlace_step[pass] + 4) / 4;
++		row_num = interlace_row_start[pass] + interlace_row_step[pass] * row_num;
++	}
++	if (row_num >= (unsigned)png_c->base.height || (row_num & (png_c->scale - 1))) return;
++	row = buffer + png_c->rowstride * (row_num / png_c->scale);
++	if (!png_c->interlace && png_c->scale == 1) {
++		memcpy(row, new_row, rowbytes); return;
++	}
++	for (unsigned x = start, src = 0; x < (unsigned)png_c->base.width; x += step, src += 4) {
++		if ((x & (png_c->scale - 1)) == 0 && src + 4 <= rowbytes)
++			memcpy(row + 4 * (x / png_c->scale), new_row + src, 4);
+ 	}
+ }
+ 
+ 
+ static void end_callback(png_structp png_s, png_infop info)
+ {
++	(void)png_s; (void)info;
++}
++
++static png_voidp ciuki_png_alloc(png_structp png, png_alloc_size_t bytes)
++{
++	(void)png;
++	return ciuki_image_malloc(bytes);
++}
++static void ciuki_png_free(png_structp png, png_voidp ptr)
++{
++	(void)png;
++	ciuki_image_free(ptr);
+ }
+ 
+ static nserror nspng_create_png_data(nspng_content *png_c)
+ {
+ 	png_c->bitmap = NULL;
+ 
+-	png_c->png = png_create_read_struct(PNG_LIBPNG_VER_STRING, 0, 0, 0);
++	png_c->png = png_create_read_struct_2(PNG_LIBPNG_VER_STRING, 0, 0, 0,
++			NULL, ciuki_png_alloc, ciuki_png_free);
+ 	if (png_c->png == NULL) {
+ 		content_broadcast_error(&png_c->base, NSERROR_NOMEM, NULL);
+ 		return NSERROR_NOMEM;
+@@ -398,156 +407,34 @@
+ 	return ret;
+ }
+ 
+-struct png_cache_read_data_s {
+-	const uint8_t *data;
+-	size_t size;
+-};
+-
+-/** PNG library read fucntion to read data from a memory array 
+- */
+-static void 
+-png_cache_read_fn(png_structp png_ptr, png_bytep data, png_size_t length)
+-{
+-	struct png_cache_read_data_s *png_cache_read_data;
+-	png_cache_read_data = png_get_io_ptr(png_ptr);
+-
+-	if (length > png_cache_read_data->size) {
+-		length = png_cache_read_data->size;
+-	}
+-
+-	if (length == 0) {
+-		png_error(png_ptr, "Read Error");
+-	}
+-
+-	memcpy(data, png_cache_read_data->data, length);
+-
+-	png_cache_read_data->data += length;
+-	png_cache_read_data->size -= length;
+-}
+-
+-/** calculate an array of row pointers into a bitmap data area
+- */
+-static png_bytep *calc_row_pointers(struct bitmap *bitmap)
+-{
+-	int height = guit->bitmap->get_height(bitmap);
+-	unsigned char *buffer= guit->bitmap->get_buffer(bitmap);
+-	size_t rowstride = guit->bitmap->get_rowstride(bitmap);
+-	png_bytep *row_ptrs;
+-	int hloop;
+-
+-	/* The buffer allocation may occour when the buffer is aquired
+-	 * and therefore may fail.
+-	 */
+-	if (buffer == NULL) {
+-		return NULL;
+-	}
+-
+-	row_ptrs = malloc(sizeof(png_bytep) * height);
+-
+-	if (row_ptrs != NULL) {
+-		for (hloop = 0; hloop < height; hloop++) {
+-			row_ptrs[hloop] = buffer + (rowstride * hloop);
+-		}
+-	}
+-
+-	return row_ptrs;
+-}
+-
+-/** PNG content to bitmap conversion.
+- *
+- * This routine generates a bitmap object from a PNG image content
+- */
+-static struct bitmap *
+-png_cache_convert(struct content *c)
+-{
+-	png_structp png_ptr;
+-	png_infop info_ptr;
+-	png_infop end_info_ptr;
+-	volatile struct bitmap * volatile bitmap = NULL;
+-	struct png_cache_read_data_s png_cache_read_data;
+-	png_uint_32 width, height;
+-	volatile png_bytep * volatile row_pointers = NULL;
+-
+-	png_cache_read_data.data = 
+-		content__get_source_data(c, &png_cache_read_data.size);
+-
+-	if ((png_cache_read_data.data == NULL) || 
+-	    (png_cache_read_data.size <= 8)) {
+-		return NULL;
+-	}
+-
+-	png_ptr = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL,
+-			nspng_error, nspng_warning);
+-	if (png_ptr == NULL) {
+-		return NULL;
+-	}
+-
+-	info_ptr = png_create_info_struct(png_ptr);
+-	if (info_ptr == NULL) {
+-		png_destroy_read_struct(&png_ptr, NULL, NULL);
+-		return NULL;
+-	}
+-
+-	end_info_ptr = png_create_info_struct(png_ptr);
+-	if (end_info_ptr == NULL) {
+-		png_destroy_read_struct(&png_ptr, &info_ptr, NULL);
+-		return NULL;
+-	}
+-
+-	/* setup error exit path */
+-	if (setjmp(png_jmpbuf(png_ptr))) {
+-		/* cleanup and bail */
+-		goto png_cache_convert_error;
+-	}
+-
+-	/* read from a buffer instead of stdio */
+-	png_set_read_fn(png_ptr, &png_cache_read_data, png_cache_read_fn);
+-
+-	/* ensure the png info structure is populated */
+-	png_read_info(png_ptr, info_ptr);
+-
+-	/* setup output transforms */
+-	nspng_setup_transforms(png_ptr, info_ptr);
+-
+-	width = png_get_image_width(png_ptr, info_ptr);
+-	height = png_get_image_height(png_ptr, info_ptr);
+-
+-	/* Claim the required memory for the converted PNG */
+-	bitmap = guit->bitmap->create(width, height, BITMAP_NONE);
+-	if (bitmap == NULL) {
+-		/* cleanup and bail */
+-		goto png_cache_convert_error;
+-	}
+-
+-	row_pointers = calc_row_pointers((struct bitmap *) bitmap);
+-
+-	if (row_pointers != NULL) {
+-		png_read_image(png_ptr, (png_bytep *) row_pointers);
++/* Reconstruct an evicted bitmap with the same sampled progressive decoder. */
++static struct bitmap *png_cache_convert(struct content *c)
++{
++	nspng_content *decoded = calloc(1, sizeof(*decoded));
++	if (!decoded) return NULL;
++	decoded->base = *c; decoded->cache_decode = true;
++	size_t bytes;
++	const uint8_t *data = content__get_source_data(c, &bytes);
++	if (!data || bytes <= 8 || nspng_create_png_data(decoded) != NSERROR_OK) { free(decoded); return NULL; }
++	if (setjmp(png_jmpbuf(decoded->png))) {
++		if (decoded->bitmap) guit->bitmap->destroy(decoded->bitmap);
++		decoded->bitmap = NULL;
+ 	} else {
+-		guit->bitmap->destroy((struct bitmap *)bitmap);
+-		bitmap = NULL;
+-	}
+-
+-png_cache_convert_error:
+-
+-	/* cleanup png read */
+-	png_destroy_read_struct(&png_ptr, &info_ptr, &end_info_ptr);
+-
+-	if (row_pointers != NULL) {
+-		free((png_bytep *) row_pointers);
+-	}
+-
+-	if (bitmap != NULL) {
+-		bool opaque = bitmap_test_opaque((void *)bitmap);
+-		guit->bitmap->set_opaque((void *)bitmap, opaque);
+-		bitmap_format_to_client((void *)bitmap, &(bitmap_fmt_t) {
++		png_process_data(decoded->png, decoded->info, (png_bytep)data, bytes);
++	}
++	png_destroy_read_struct(&decoded->png, &decoded->info, NULL);
++	if (decoded->bitmap) {
++		bool opaque = bitmap_test_opaque(decoded->bitmap);
++		guit->bitmap->set_opaque(decoded->bitmap, opaque);
++		bitmap_format_to_client(decoded->bitmap, &(bitmap_fmt_t) {
+ 			.layout = bitmap_fmt.layout,
+ 			.pma = opaque ? bitmap_fmt.pma : false,
+ 		});
+-		guit->bitmap->modified((void *)bitmap);
+-	}
+-
+-	return (struct bitmap *)bitmap;
++		guit->bitmap->modified(decoded->bitmap);
++	}
++	struct bitmap *result = decoded->bitmap;
++	free(decoded);
++	return result;
+ }
+ 
+ static bool nspng_convert(struct content *c)
+--- a/netsurf/content/handlers/image/webp.c
++++ b/netsurf/content/handlers/image/webp.c
+@@ -29,6 +29,7 @@
+ #include <setjmp.h>
+ 
+ #include <webp/decode.h>
++#include "sdk/netsurf/port/image_memory.h"
+ 
+ #include "utils/utils.h"
+ #include "utils/log.h"
+@@ -95,7 +96,8 @@
+ 	WebPBitstreamFeatures webpfeatures;
+ 	unsigned int bmap_flags;
+ 	uint8_t *pixels = NULL;
+-	uint8_t *decoded;
++	WebPDecoderConfig config;
++	uint32_t width, height;
+ 	size_t rowstride;
+ 	struct bitmap *bitmap = NULL;
+ 	bitmap_fmt_t webp_fmt = {
+@@ -120,9 +122,16 @@
+ 		bmap_flags = BITMAP_NONE;
+ 	}
+ 
++	if (!ciuki_image_scale(webpfeatures.width, webpfeatures.height, 2, &width, &height) ||
++	    !WebPInitDecoderConfig(&config)) return NULL;
++	/* Decode directly into the reduced canvas; libwebp scratch is charged too. */
++	retry:
++	config.options.use_scaling = 1;
++	config.options.scaled_width = width;
++	config.options.scaled_height = height;
+ 	/* create bitmap */
+-	bitmap = guit->bitmap->create(webpfeatures.width,
+-				      webpfeatures.height,
++	bitmap = guit->bitmap->create(width,
++				      height,
+ 				      bmap_flags);
+ 	if (bitmap == NULL) {
+ 		/* empty bitmap could not be created */
+@@ -140,27 +149,24 @@
+ 
+ 	switch (webp_fmt.layout) {
+ 	default:
+-		/* WebP has no ABGR function, fall back to default. */
+ 		webp_fmt.layout = BITMAP_LAYOUT_R8G8B8A8;
+ 		/* Fall through. */
+-	case BITMAP_LAYOUT_R8G8B8A8:
+-		decoded = WebPDecodeRGBAInto(source_data, source_size, pixels,
+-				rowstride * webpfeatures.height, rowstride);
+-		break;
+-
+-	case BITMAP_LAYOUT_B8G8R8A8:
+-		decoded = WebPDecodeBGRAInto(source_data, source_size, pixels,
+-				rowstride * webpfeatures.height, rowstride);
+-		break;
+-
+-	case BITMAP_LAYOUT_A8R8G8B8:
+-		decoded = WebPDecodeARGBInto(source_data, source_size, pixels,
+-				rowstride * webpfeatures.height, rowstride);
+-		break;
+-	}
+-	if (decoded == NULL) {
+-		/* decode failed */
++	case BITMAP_LAYOUT_R8G8B8A8: config.output.colorspace = MODE_RGBA; break;
++	case BITMAP_LAYOUT_B8G8R8A8: config.output.colorspace = MODE_BGRA; break;
++	case BITMAP_LAYOUT_A8R8G8B8: config.output.colorspace = MODE_ARGB; break;
++	}
++	config.output.is_external_memory = 1;
++	config.output.u.RGBA.rgba = pixels;
++	config.output.u.RGBA.stride = rowstride;
++	config.output.u.RGBA.size = rowstride * height;
++	webpres = WebPDecode(source_data, source_size, &config);
++	WebPFreeDecBuffer(&config.output);
++	if (webpres != VP8_STATUS_OK) {
+ 		guit->bitmap->destroy(bitmap);
++		if (webpres == VP8_STATUS_OUT_OF_MEMORY && (width > 1 || height > 1)) {
++			width = (width + 1) / 2; height = (height + 1) / 2;
++			goto retry;
++		}
+ 		return NULL;
+ 	}
+ 

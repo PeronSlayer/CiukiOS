@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT
  * Actual registered nsfb surface, with OS boundaries replaced by v3 fixtures. */
 #include <assert.h>
+#include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,26 +11,56 @@
 #include <libnsfb_plot.h>
 #include "sdk/netsurf/port/surface.h"
 #include "sdk/netsurf/port/budget.h"
+#include "apps/libdeskui/clipboard.h"
+#include "apps/libdeskui/clipstore.h"
+#include "netsurf/clipboard.h"
+#include "sdk/netsurf/port/clipboard.inc"
 void (*ciuki_ui_pump)(void);   /* budget.c's hook; the surface installs its pump */
 static unsigned live,unmaps,resize_calls,sends,pongs;
 static struct ciuki_message fifo[128];
 static unsigned fifo_head,fifo_count;
-static int nextfd=4,available,recv_fault;
+static int available,recv_fault,clip_interleave;
+static struct clip_store shared_clip;
 static struct ciuki_surface_info info[32];
 static void *maps[32];
 static struct ciuki_message incoming;
 int fixture_create(uint32_t w,uint32_t h,uint32_t format)
 {
-    int fd=nextfd++;assert(fd<32);live++;
+    int fd=4;while(fd<32 && maps[fd])fd++;assert(fd<32);live++;
     info[fd]=(struct ciuki_surface_info){.size=sizeof(info[fd]),.width=w,.height=h,.stride=w*4,.format=format,.allocation_bytes=(w*h*4+4095)&~4095u};
     maps[fd]=calloc(1,info[fd].allocation_bytes);assert(maps[fd]);return fd;
 }
 int fixture_info(int fd,struct ciuki_surface_info *out) { *out=info[fd];return 0; }
 void *fixture_map(int fd,int prot) { (void)prot;return maps[fd]; }
-int fixture_unmap(void *p,size_t n) { assert(p && n);unmaps++;free(p);return 0; }
-int fixture_close(int fd) { if(fd!=3) { assert(live);live--; }return 0; }
+int fixture_unmap(void *p,size_t n) { assert(p && n);unmaps++;return 0; }
+int fixture_close(int fd) { if(fd!=3) { assert(live && maps[fd]);live--;free(maps[fd]);maps[fd]=NULL; }return 0; }
 int fixture_send(int fd,const struct ciuki_message *m,uint32_t flags)
-{ assert(fd==3 && flags==DONTWAIT && m->data[0]==3);sends++;if(m->data[1]==DESK_PONG)pongs++;return 0; }
+{
+    assert(fd==3 && flags==DONTWAIT && m->data[0]==3);sends++;
+    if(m->data[1]==DESK_PONG)pongs++;
+    if(m->data[1]==DESK_V3_CLIPBOARD) {
+        struct desk_packet p;assert(desk_parse(m,1,NULL,&p));
+        struct desk_clip_wire reply;void *bytes=NULL;
+        clip_request(&shared_clip,1,&p.clip,m->fd_count?maps[m->fds[0]]:NULL,&reply,&bytes);
+        if(clip_interleave) {
+            struct ciuki_message *ping=&fifo[(fifo_head+fifo_count++)%128];
+            desk_v3_message(ping,DESK_PING,4,0,1,1);desk_put32(ping->data+16,99);
+            struct ciuki_message *motion=&fifo[(fifo_head+fifo_count++)%128];
+            desk_v3_message(motion,DESK_MOTION,40,0,1,1);
+            desk_put32(motion->data+28,CIUKI_INPUT_MOTION);
+            desk_put32(motion->data+44,123);desk_put32(motion->data+48,100);
+            clip_interleave=0;
+        }
+        int attachment=-1;
+        if(bytes) {
+            uint32_t w,h;desk_clip_dims(reply.bytes,&w,&h);
+            attachment=fixture_create(w,h,CIUKI_SURFACE_XRGB8888);
+            memcpy(maps[attachment],bytes,reply.bytes);free(bytes);
+        }
+        assert(!desk_clip_message(&fifo[(fifo_head+fifo_count++)%128],3,0,&reply,attachment));
+    }
+    return 0;
+}
 int fixture_recv(int fd,struct ciuki_message *m,uint32_t flags)
 {
     assert(fd==3 && flags==DONTWAIT);
@@ -78,11 +109,42 @@ static int wait_input(int channel,int timeout)
 }
 int main(void)
 {
+    clip_init(&shared_clip);
     ciuki_browser_channel=3;
     nsfb_t *fb=nsfb_new(NSFB_SURFACE_CIUKI);assert(fb);
     assert(!nsfb_set_geometry(fb,640,422,NSFB_FMT_XRGB8888));assert(!nsfb_init(fb));
     struct ciuki_browser_surface *s=ciuki_browser_active;assert(s && sends==2 && live==1);
     result(DESK_CREATE_WINDOW,s->create_request);nsfb_event_t e;assert(!nsfb_event(fb,&e,0));assert(s->ready);
+    /* Real NetSurf clipboard callbacks -> bound v3 channel -> G5 store. */
+    const char *text="Ciuki\t\xf0\x9f\x90\xb6\n\xc3\xa8";
+    clip_interleave=1;
+    gui_set_clipboard(text,strlen(text),NULL,0);
+    assert(shared_clip.owner==1 && live==1 && s->held_count==1 && pongs==1);
+    uint32_t clip_sequence=shared_clip.sequence;
+    gui_set_clipboard("\xc0\x80",2,NULL,0);
+    assert(shared_clip.sequence==clip_sequence); /* rejected before EMPTY */
+    void *copied=NULL;struct desk_clip_wire request={.op=DESK_CLIP_OPEN},reply;
+    assert(!clip_request(&shared_clip,2,&request,NULL,&reply,&copied));
+    request=(struct desk_clip_wire){.op=DESK_CLIP_GET,.format=DESK_CF_UNICODETEXT};
+    assert(!clip_request(&shared_clip,2,&request,NULL,&reply,&copied));
+    char *decoded=NULL;assert(!clip_text_decode(copied,reply.bytes,&decoded));
+    assert(!strcmp(decoded,text));free(copied);free(decoded);
+    request=(struct desk_clip_wire){.op=DESK_CLIP_EMPTY};
+    assert(!clip_request(&shared_clip,2,&request,NULL,&reply,&copied));
+    uint8_t win32[]={ 'P',0,0x15,0x04,13,0,10,0,0,0 };
+    request=(struct desk_clip_wire){.op=DESK_CLIP_PUT,.format=DESK_CF_UNICODETEXT,.bytes=sizeof(win32)};
+    assert(!clip_request(&shared_clip,2,&request,win32,&reply,&copied));
+    request=(struct desk_clip_wire){.op=DESK_CLIP_CLOSE};
+    assert(!clip_request(&shared_clip,2,&request,NULL,&reply,&copied));
+    char *pasted=NULL;size_t pasted_len=0;gui_get_clipboard(&pasted,&pasted_len);
+    assert(pasted_len==4 && !strcmp(pasted,"P\xd0\x95\n"));free(pasted);
+    assert(nsfb_event(fb,&e,0) && e.type==NSFB_EVENT_MOVE_ABSOLUTE && e.value.vector.x==123);
+    /* An asynchronous connection-wide notification must not be discarded. */
+    struct desk_clip_wire changed={.kind=DESK_CLIP_CHANGED,.sequence=12345};
+    assert(!desk_clip_message(&incoming,3,0,&changed,-1));available=1;
+    assert(!nsfb_event(fb,&e,0) && du_clip_observed()==12345 && live==1);
+    unmaps=0;pongs=0; /* following legacy checks count window mappings only */
+    puts("PASS FX-24B NetSurf clipboard: UTF-8/UTF-16 between programs, page callbacks, held input, PING, notifications and attachment cleanup");
     event(DESK_MOTION,CIUKI_INPUT_MOTION,0,50,100);assert(nsfb_event(fb,&e,0) && e.type==NSFB_EVENT_MOVE_ABSOLUTE && e.value.vector.y==64);
     event(DESK_BUTTON,CIUKI_INPUT_BUTTON,1,1,0);assert(nsfb_event(fb,&e,0) && e.type==NSFB_EVENT_KEY_DOWN);
     /* Drag remains content-owned while crossing over the toolbar. */
@@ -182,5 +244,6 @@ int main(void)
     }
     puts("NetSurf registered Ciuki surface: constructor, viewport, content drag, resize and cleanup passed");
     puts("PASS f6-20 surface QUIT reasons: channel EOF/error, desktop close request and CLOSED");
+    assert(du_clip_open()==-ENOSYS);clip_destroy(&shared_clip);
     puts("PASS f6-19 launch without --channel-fd: the surface opens the inherited desktop channel at fd 3");fflush(stdout);return 0;
 }

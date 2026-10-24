@@ -18,6 +18,89 @@
 #include "plot.h"
 #include "ciuki_port/surface.h"
 #include "ciuki_port/budget.h"
+#include "apps/libdeskui/clipboard.h"
+
+static bool clip_waiting;
+static uint64_t clip_now(void)
+{
+    struct timespec ts;
+    if(clock_gettime(CLOCK_MONOTONIC,&ts))return 0;
+    return (uint64_t)ts.tv_sec*1000000000u+ts.tv_nsec;
+}
+
+/* G5 v3 clipboard RPCs belong to the connection (window/generation zero).
+ * Keep unrelated input for the next UI turn, without recursive callbacks. */
+static int clipboard_rpc(void *ctx,struct desk_clip_wire *w,const void *data,
+                         struct desk_clip_wire *reply,void **out)
+{
+    struct ciuki_browser_surface *s=ctx;
+    if(clip_waiting)return -EBUSY;
+    if(s->closed || s->connection.disconnected)return -EPIPE;
+    *out=NULL;
+    int fd=-1,error=0,done=0;
+    if(w->bytes) {
+        uint32_t width,height;
+        desk_clip_dims(w->bytes,&width,&height);
+        fd=s->ops.create(width,height,CIUKI_SURFACE_XRGB8888);
+        if(fd<0)return -errno;
+        struct ciuki_surface_info info;
+        if(s->ops.transport.info(fd,&info) || !desk_surface_valid(&info) || w->bytes>info.allocation_bytes)error=-EIO;
+        else {
+            void *map=s->ops.map(fd,PROT_READ|PROT_WRITE);
+            if(!map || map==MAP_FAILED)error=-ENOMEM;
+            else { memcpy(map,data,w->bytes);s->ops.unmap(map,info.allocation_bytes); }
+        }
+    }
+    struct ciuki_message m;
+    if(!error)error=desk_clip_message(&m,DESK_V3_VERSION,1,w,fd);
+    uint64_t now=clip_now(),deadline=now+3000000000ull;
+    if(!now)error=-EIO;
+    clip_waiting=true;
+    while(!error && s->ops.transport.send(s->connection.channel,&m,DONTWAIT)) {
+        if(errno!=EAGAIN && errno!=EINTR) { error=-errno;break; }
+        now=clip_now();if(!now || now>=deadline) { error=-ETIMEDOUT;break; }
+        struct pollfd p={s->connection.channel,POLLOUT,0};poll(&p,1,10);
+    }
+    if(fd>=0)s->ops.transport.close(fd);
+    while(!error && !done && !s->closed) {
+        now=clip_now();if(!now || now>=deadline) { error=-ETIMEDOUT;break; }
+        struct desk_packet p;
+        int got=du3_next(&s->connection,&p);
+        if(got<0 && (errno==EAGAIN || errno==EINTR)) {
+            struct pollfd wait={s->connection.channel,POLLIN,0};poll(&wait,1,10);continue;
+        }
+        if(got!=1) { ciuki_browser_mark_closed(s,"clipboard-channel",got?errno:0);error=-EIO;break; }
+        if(p.opcode==DESK_V3_CLIPBOARD_EVENT) {
+            du_clip_observe(p.clip.sequence);
+            if(p.clip.kind==DESK_CLIP_REPLY && p.clip.serial==w->serial) {
+                *reply=p.clip;done=1;error=reply->result;
+                if(reply->op!=w->op)error=-EIO;
+                if(!error && w->op==DESK_CLIP_GET && reply->bytes) {
+                    struct ciuki_surface_info info;
+                    if(p.clipboard_fd<0 || s->ops.transport.info(p.clipboard_fd,&info) ||
+                       !desk_surface_valid(&info) || reply->bytes>info.allocation_bytes)error=-EIO;
+                    else {
+                        void *map=s->ops.map(p.clipboard_fd,PROT_READ);
+                        if(!map || map==MAP_FAILED)error=-ENOMEM;
+                        else {
+                            *out=malloc(reply->bytes);
+                            if(!*out)error=-ENOMEM;else memcpy(*out,map,reply->bytes);
+                            s->ops.unmap(map,info.allocation_bytes);
+                        }
+                    }
+                }
+            }
+            if(p.clipboard_fd>=0)s->ops.transport.close(p.clipboard_fd);
+        } else if(p.window_id==s->window && p.generation==s->generation) {
+            if(p.opcode==DESK_PING) {
+                if(du3_ui_progress(&s->connection,s->window,s->generation,p.serial))error=-EIO;
+            } else if(!ciuki_browser_hold(s,&p))error=-ENOMEM;
+        }
+    }
+    if(!error && !done)error=-EIO;
+    clip_waiting=false;
+    return error;
+}
 
 struct ciuki_browser_surface *ciuki_browser_active;
 int ciuki_browser_channel=-1;
@@ -33,6 +116,11 @@ static bool receive(struct ciuki_browser_surface *s,struct desk_packet *p)
             if(r==0)ciuki_browser_mark_closed(s,"channel-eof",0);
             else if(errno!=EAGAIN && errno!=EINTR)ciuki_browser_mark_closed(s,"channel-error",errno);
             return false;
+        }
+        if(p->opcode==DESK_V3_CLIPBOARD_EVENT) {
+            du_clip_observe(p->clip.sequence);
+            if(p->clipboard_fd>=0)s->ops.transport.close(p->clipboard_fd);
+            continue;
         }
         if(p->window_id==s->window && p->generation==s->generation)return true;
     }
@@ -74,12 +162,15 @@ static int initialise(nsfb_t *fb)
         .transport={ciuki_channel_send,ciuki_channel_recv,ciuki_surface_info,close},
         .create=ciuki_surface_create,.map=ciuki_surface_map,.unmap=munmap};
     if(ciuki_browser_open(s,&ops,channel,fb->width,fb->height+CIUKI_BROWSER_TOP+CIUKI_BROWSER_STATUS)) { free(s);return -1; }
-    fb->surface_priv=ciuki_browser_active=s; bind(fb,s); ciuki_chrome_init(s);ciuki_ui_pump=pump;return 0;
+    fb->surface_priv=ciuki_browser_active=s; bind(fb,s);
+    du_clip_bind(clipboard_rpc,s);
+    ciuki_chrome_init(s);ciuki_ui_pump=pump;return 0;
 }
 static int finalise(nsfb_t *fb)
 {
     struct ciuki_browser_surface *s=fb->surface_priv;
     ciuki_ui_pump=NULL;
+    du_clip_bind(NULL,NULL);
     if(s) { ciuki_chrome_release();ciuki_browser_close(s);free(s); }
     ciuki_browser_active=NULL;fb->ptr=NULL;fb->surface_priv=NULL;return 0;
 }

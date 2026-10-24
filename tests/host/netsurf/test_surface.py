@@ -36,12 +36,15 @@ class SurfaceTests(unittest.TestCase):
                 "-include",str(ROOT / "tests/host/desktop/replay_base.h"),"-fsanitize=address,undefined","-fno-sanitize-recover=undefined",
                 "-I"+str(overlay),"-I"+str(ROOT),"-I"+str(host / "native-headers"),"-I"+str(host / "prefix/include"),
                 "-I"+str(host / "source/libnsfb/src"),"-I"+str(host / "source/libnsfb/src/surface")]
-        names={"ciuki_surface_create":"fixture_create","ciuki_surface_info":"fixture_info","ciuki_surface_map":"fixture_map",
+        common += ["-I"+str(host / "source/netsurf/include"),"-I"+str(host / "source/netsurf")]
+        names={"ciuki_surface_create":"fixture_create","ciuki_surface_map":"fixture_map",
                "ciuki_channel_send":"fixture_send","ciuki_channel_recv":"fixture_recv","close":"fixture_close","munmap":"fixture_unmap"}
         # Production installs this file beside libnsfb's surface.h; compile
         # a staged copy so the port's own surface.h cannot shadow it.
         source=out / "nsfb-surface.c"
-        source.write_bytes((ROOT / "sdk/netsurf/port/nsfb_surface.c").read_bytes())
+        source.write_text((ROOT / "sdk/netsurf/port/nsfb_surface.c").read_text()
+                          .replace("#include <ciuki/surface.h>", "#include <ciuki/surface.h>\nint fixture_info(int, struct ciuki_surface_info *);")
+                          .replace("ciuki_surface_info,close", "fixture_info,close"))
         subprocess.run([*common,*["-D"+k+"="+v for k,v in names.items()],"-c",str(source),"-o",str(out / "nsfb-glue.o")],check=True)
         # The cached archive supplies upstream libnsfb only. Compile the port
         # from this source state, including its private record layout.
