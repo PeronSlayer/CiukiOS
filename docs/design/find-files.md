@@ -45,8 +45,26 @@ The current text matcher folds ASCII case and searches bytes (including binary
 files); it does not decode Unicode text or apply locale-specific case mappings.
 Criteria use Next Page rather than expanding the toolkit's global dialog limit.
 
-This branch predates G4's `desk_shell_find` placeholder and G6's new metadata;
-provide the entry point here and use existing `fm_meta.modified`/`size`.
-Creation/access date choices and G6 hidden/system attribute filtering need
-integration after G6; Find Computer, Internet and People remain separate gaps.
-No guest or hardware qualification is claimed by host tests.
+## G4/G6 merge integration
+
+The merge rechecked the Microsoft references above: Q133717 keeps file search
+separate from other Find actions, and Searching for One or More Files returns
+size, attributes and times alongside each name. Keep G4's Windows-key state,
+chord suppression and separate Win+Ctrl+F action, with one `desk_shell_find`
+entry point; its file-search route now launches the G7 Files criteria.
+Start Find and its Files or Folders item use G4's underlined F access key.
+
+Search enumeration consumes G6's `fm_meta` size, modified time and attributes.
+G6's persisted Show Hidden/Hide System choices apply to results and recursive
+traversal, and result Properties uses the same G6 metadata sheet and full path.
+The optional Attributes column and In Folder coexist. Preserve main's sort
+keys 0–5 (including Attributes=4 and bin Date Deleted=5); G7 In Folder uses
+model key 6, mapped from its visible header position. Preserve main's shell
+menu/action enum values by appending G7 Find after the G4 taskbar entries.
+No syscall or desktop protocol allocation is needed.
+
+[File Times](https://learn.microsoft.com/en-us/windows/win32/sysinfo/file-times)
+confirms that not all filesystems record creation/access timestamps and FAT
+access has day resolution. This merge retains the delivered Date Modified
+criteria; creation/access date choices, Find Computer, Internet and People
+remain gaps. No guest or hardware qualification is claimed by host tests.

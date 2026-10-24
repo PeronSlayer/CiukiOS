@@ -18,7 +18,7 @@ static int on_spawn(struct files_app *a, const char *program, char *const argv[]
 { (void)a; assert(!strcmp(program,"/Programs/ciuknote")); assert(argv[1]); strcpy(launched_path,argv[1]); launched++; return 0; }
 static void wait_worker(void)
 {
-    for (unsigned i=0;(app.reading || app.job_active) && i<5000;i++) { scan_poll(&app); job_tick(&app); struct timespec t={0,1000000}; nanosleep(&t,NULL); }
+    for (unsigned i=0;(app.reading || app.job_active) && i<5000;i++) { scan_poll(&app); job_tick(&app); struct timespec t={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&t,NULL); }
     assert(!app.reading && !app.job_active);
 }
 static void frame(void)
@@ -50,7 +50,7 @@ static unsigned row(const char *path)
 }
 static void tree(void)
 {
-    fake_reset(); assert(fake_create("/tmp",FM_DIR)>=0); assert(fake_create("/out",FM_DIR)>=0); assert(fake_create("/one",FM_DIR)>=0); assert(fake_create("/two",FM_DIR)>=0);
+    fake_reset(); assert(fake_create("/system",FM_DIR)>=0); assert(fake_create("/tmp",FM_DIR)>=0); assert(fake_create("/out",FM_DIR)>=0); assert(fake_create("/one",FM_DIR)>=0); assert(fake_create("/two",FM_DIR)>=0);
     assert(fake_create("/one/sub",FM_DIR)>=0); assert(fake_create("/Programs",FM_DIR)>=0);
     fake_file("/Programs/ciuknote",1,0); fake_file("/one/same.txt",100,0); fake_file("/two/same.txt",200,0);
     fake_file("/one/sub/Report.TXT",9000,0); fake_file("/one/plain",0,0); fake_file("/one/space name.txt",0,0);
@@ -81,6 +81,18 @@ static void model_tests(void)
     struct fm_model *m=calloc(1,sizeof(*m)); assert(m); fm_init(m,&fake_vfs);
     struct fm_search_query *q=calloc(1,sizeof(*q)); assert(q); strcpy(q->look_in,"C:\\");
     q->recursive=1; strcpy(q->named,"*.TXT"); assert(!fm_search(m,q) && m->count==4 && !m->search_incomplete);
+    /* G6 attributes govern result visibility and traversal, with metadata retained. */
+    fake_nodes[fake_lookup("/one/same.txt")].meta.attributes=2;
+    fake_nodes[fake_lookup("/one/sub")].meta.attributes=4;
+    m->hide_system=1;
+    assert(!fm_search(m,q) && m->count==2);
+    m->show_hidden=1; assert(!fm_search(m,q) && m->count==3);
+    m->hide_system=0; assert(!fm_search(m,q) && m->count==4);
+    fm_sort(m,4,1); assert(m->sort==4 && m->entries[0].meta.attributes==2);
+    fm_sort(m,FM_SORT_LOCATION,0); assert(m->sort==FM_SORT_LOCATION);
+    fake_nodes[fake_lookup("/one/same.txt")].meta.attributes=0;
+    fake_nodes[fake_lookup("/one/sub")].meta.attributes=0;
+    m->show_hidden=0; assert(!fm_search(m,q) && m->count==4);
     char p[FM_PATH]; assert(!fm_entry_path(m,0,p)); assert(strstr(p,"/one/") || strstr(p,"/two/"));
     strcpy(q->look_in,"C:\\one"); q->recursive=0; assert(!fm_search(m,q) && m->count==2);
     q->recursive=1; strcpy(q->containing,"hello needle"); assert(!fm_search(m,q) && m->count==1);
@@ -133,7 +145,7 @@ static int slow_read(void *ctx,int fd,void *buf,unsigned n)
 {
     if (__atomic_load_n(&slow_reads,__ATOMIC_ACQUIRE)) {
         __atomic_store_n(&read_entered,1,__ATOMIC_RELEASE);
-        while (!__atomic_load_n(&released,__ATOMIC_ACQUIRE)) { struct timespec t={0,1000000}; nanosleep(&t,NULL); }
+        while (!__atomic_load_n(&released,__ATOMIC_ACQUIRE)) { struct timespec t={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&t,NULL); }
     }
     return fake_vfs.read(ctx,fd,buf,n);
 }
@@ -151,13 +163,24 @@ static void ui_tests(void)
     du_set_text(&ui.dialog.items[4],""); button(2); assert(app.find_page==2); frame();
     du_set_text(&ui.dialog.items[4],"files"); button(0); assert(app.loading); wait_worker();
     assert(app.model.searching && app.model.count==4); assert(W(&app,W_LIST)->column_count==5); frame();
+    /* Both Details columns survive, and their header mapping keeps main's key 4. */
+    app.attribute_column=1; files_layout(&app); files_update(&app);
+    assert(W(&app,W_LIST)->column_count==6);
+    assert(!strcmp(W(&app,W_LIST)->columns[4].title,"Attributes"));
+    assert(!strcmp(W(&app,W_LIST)->columns[5].title,"In Folder"));
+    struct du_event sort={.type=DU_EV_SORT,.id=W_LIST,.index=5}; files_event(&ui,&sort,&app);
+    assert(app.model.sort==FM_SORT_LOCATION && W(&app,W_LIST)->sort==5);
+    sort.index=4; files_event(&ui,&sort,&app); assert(app.model.sort==4);
+    app.attribute_column=0; files_layout(&app); files_update(&app);
+    sort.index=4; files_event(&ui,&sort,&app);
+    assert(app.model.sort==FM_SORT_LOCATION && W(&app,W_LIST)->sort==4); frame();
     assert(W(&app,C_PROPERTIES)->disabled && W(&app,C_PASTE)->disabled);
     command(&app,C_PROPERTIES); assert(!app.job_active && !ui.dialog.kind);
     struct du_event background={.type=DU_EV_CONTEXT,.id=W_LIST,.index=-1,.x=300,.y=150}; context(&app,&background);
     for(unsigned i=0;i<app.popup_count;i++) if (app.popup[i].id==C_PASTE || app.popup[i].id==C_NEW_FOLDER || app.popup[i].id==C_NEW_TEXT || app.popup[i].id==C_PROPERTIES) assert(app.popup[i].flags & DU_ITEM_DISABLED);
     frame(); struct ciuki_input_event escape={.type=CIUKI_INPUT_KEY,.code=DU_KEY_ESC,.value=1}; du_input(&ui,&escape); escape.value=0; du_input(&ui,&escape); frame();
     unsigned a=row("/one/same.txt"),b=row("/two/same.txt"); fm_select(&app.model,a,0); fm_select(&app.model,b,DU_CTRL);
-    assert(fm_selected(&app.model,NULL)==2); command(&app,C_COPY); assert(app.model.clipboard_count==2);
+    assert(fm_selected(&app.model,NULL)==2); command(&app,C_COPY); assert(app.model.clipboard_count==2 && !ui.dialog.kind);
     /* Cut and selection survive a refresh without selecting another equal name. */
     fm_select(&app.model,b,0); command(&app,C_CUT); command(&app,C_REFRESH); wait_worker();
     assert(fm_selected(&app.model,NULL)==1); assert(app.model.active==row("/two/same.txt"));
@@ -185,7 +208,7 @@ static void ui_tests(void)
     /* Search cancellation is nonblocking; a subsequent navigation wins. */
     files_find(&app); du_set_text(&ui.dialog.items[4],"*.txt"); du_set_text(&ui.dialog.items[6],"never matches"); du_set_text(&ui.dialog.items[8],"C:\\one");
     __atomic_store_n(&slow_reads,1,__ATOMIC_RELEASE); button(0);
-    for(unsigned i=0;i<5000 && !__atomic_load_n(&read_entered,__ATOMIC_ACQUIRE);i++) { struct timespec t={0,1000000}; nanosleep(&t,NULL); }
+    for(unsigned i=0;i<5000 && !__atomic_load_n(&read_entered,__ATOMIC_ACQUIRE);i++) { struct timespec t={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&t,NULL); }
     assert(read_entered && app.loading); files_find(&app); assert(!app.loading);
     assert(!files_navigate(&app,"/two")); __atomic_store_n(&released,1,__ATOMIC_RELEASE); wait_worker();
     assert(!app.model.searching && !strcmp(app.model.path,"/two")); frame();

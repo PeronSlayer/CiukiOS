@@ -15,6 +15,7 @@
 
 /* f1-100: the ThinkPad EC traffic record of the window (drivers/thinkpad_ec.c). */
 extern void thinkpad_ec_window_emit(void) __attribute__((weak));
+extern void display_fullscreen_stall_poll(void) __attribute__((weak)); /* fx-22 */
 /* fx-5 follow-up: lock-order reports of a normal boot (core/sync.c). */
 #pragma weak ksync_order_snapshot
 
@@ -652,7 +653,9 @@ static void cpu_worker(void *arg)
     (void)arg;
     for (;;) { task_sleep_ms(1000); ledger_poll(g_ticks); if (reclaim_poll) reclaim_poll(g_ticks);
         if (pager_poll) pager_poll(g_ticks);
-        task_sleep_ms(1000); ledger_poll(g_ticks); if (reclaim_poll) reclaim_poll(g_ticks); cpu_emit(); }
+        if (display_fullscreen_stall_poll) display_fullscreen_stall_poll();
+        task_sleep_ms(1000); ledger_poll(g_ticks); if (reclaim_poll) reclaim_poll(g_ticks); cpu_emit();
+        if (display_fullscreen_stall_poll) display_fullscreen_stall_poll(); }
 }
 void cpu_init(void)
 {

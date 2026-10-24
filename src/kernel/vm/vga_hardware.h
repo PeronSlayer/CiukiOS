@@ -12,6 +12,12 @@ struct vga_hardware_bus {
     void (*write)(void *, unsigned, uint8_t);
 };
 void vga_hardware_capture(cvga_state *, const struct vga_hardware_bus *);
+/* fx-22: registers plus the selected 4 KiB plane pages (bit n = offsets
+ * n*4096.., all planes); `expired` is polled between pages. Returns the
+ * pages captured. */
+#define VGA_HARDWARE_ALL_PAGES 0xFFFFu
+uint16_t vga_hardware_capture_pages(cvga_state *, const struct vga_hardware_bus *, uint16_t pages,
+                                    bool (*expired)(void *), void *);
 void vga_hardware_load(const cvga_state *, const struct vga_hardware_bus *);
 /* Native providers bracket the planar transfer with their chipset aperture
  * controls and keep scanout blank until panel/streams have been restored. */

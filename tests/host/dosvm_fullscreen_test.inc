@@ -230,6 +230,9 @@ static void test_fullscreen_service(void)
             fs_waiting_vm=v;fs_park_tick=g_ticks+100;sleep_hook=delayed_fullscreen_park;
         }
         fs_slow_aperture=true;fs_aperture_bytes=0;fs_recovery_ms=160;
+        /* fx-22: the guest stored through every aperture page (a game), so
+         * the dirty-page capture reads back all 256 KiB as before. */
+        { uint32_t *gpd=P2V(v->as.pd_phys),*gpt=P2V(gpd[0]&~0xFFFu); for (unsigned i=0xA0;i<0xC0;i++) gpt[i]|=0x40u; }
         uint64_t began=g_ticks;unsigned before=fs_ends;
         fullscreen_return=true;dosvm_fullscreen_poll();
         sleep_hook=0;fs_waiting_vm=0;

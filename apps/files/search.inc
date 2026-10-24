@@ -150,7 +150,9 @@ static int search_root(struct search_walk *w, const char *root)
             free(w->frames[top].list.entries); w->frames[top].list.entries = NULL; w->depth--; continue;
         }
         const struct fm_entry *e = &w->frames[top].list.entries[w->frames[top].next++];
-        if (fm_hidden(w->frames[top].path, e->name) || e->meta.type == FM_OTHER) continue;
+        if (fm_hidden(w->frames[top].path, e->name) || e->meta.type == FM_OTHER ||
+            (!m->show_hidden && (e->meta.attributes & 2u)) ||
+            (m->hide_system && (e->meta.attributes & 4u))) continue;
         if (++w->visited > 65536) { r = -E2BIG; break; }
         r = fm_join(w->full, w->frames[top].path, e->name);
         if (r) { search_warning(w, r); continue; }
@@ -179,7 +181,8 @@ int fm_search(struct fm_model *m, const struct fm_search_query *query)
     struct fm_model *out = calloc(1, sizeof(*out));
     struct search_walk *w = calloc(1, sizeof(*w));
     if (!out || !w) { free(out); free(w); return -ENOMEM; }
-    fm_init(out, &m->fs); out->query = *query; w->m = out; w->q = &out->query;
+    fm_init(out, &m->fs); out->show_hidden = m->show_hidden; out->hide_system = m->hide_system;
+    out->query = *query; w->m = out; w->q = &out->query;
     unsigned length = (unsigned)strlen(query->containing);
     for (unsigned i = 1, at = 0; i < length; i++) {
         while (at && fold((unsigned char)query->containing[i]) != fold((unsigned char)query->containing[at])) at = w->prefix[at-1];
