@@ -335,7 +335,7 @@ static void digest_version_watches(void) {
     }
     for (unsigned i=0;i<VFS_VERSION_PINS;i++) vfs_version_unpin(&full[i]);
     for (unsigned i=0;i<VFS_VERSION_PINS;i++) CHECK(!space.version_watches[i].refs);
-    puts("PASS f3-63 digest watches: 128 unrelated writes keep the version, same-bytes write and raw change invalidate, bounded 16/refcounts/stale pin/release without open handles");
+    puts("PASS f3-63 digest watches: 128 unrelated writes keep the version, same-bytes write and raw change invalidate, bounded watches/refcounts/stale pin/release without open handles");
 }
 /* Last: a device error empties the open file's cursor (no later writes). */
 static void error_path(void) {

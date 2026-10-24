@@ -174,6 +174,9 @@ struct storage *storage_get(void);
 bool storage_readonly_info(unsigned drive, char *text, unsigned bytes);
 void storage_init(void);
 int storage_sync(void);
+/* storage_sync's G29d step: -FS_EBUSY (never waits) while a start-log flush
+ * is in progress, otherwise writes the queued starts and returns 0. */
+int storage_startup_log_shutdown(struct storage *);
 /* Suspend flush: caller-scoped deadline in microseconds, propagated into
  * VFS/cache/controller waits. Keeps mounts and dirty flags for resume.
  * This synchronous worker entry retires in-flight references before return. */

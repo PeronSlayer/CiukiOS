@@ -9,6 +9,8 @@
 #include <ciuki/kernel.h>
 #include "fake.h"
 #include <stdio.h>
+#include <pthread.h>
+unsigned int alarm(unsigned int); /* <unistd.h> clashes with the ABI header names */
 #define CHECK(x) do { if (!(x)) { fprintf(stderr,"MAINTENANCE %d: %s\n",__LINE__,#x); abort(); } } while (0)
 #define OK(x) do { int e_=(x); if (e_) fprintf(stderr,"MAINTENANCE error %d at %d\n",e_,__LINE__); CHECK(!e_); } while(0)
 struct ciuki_boot_info g_boot;
@@ -23,6 +25,36 @@ void fs_host_service(void) {
     if (observed && observed->volumes[3].formatting && !observed->vfs.volumes[3]) {
         CHECK(observed->vfs.mutating&vfs_drive_mask(3)); exclusive++;
     }
+}
+/* dec1: a start-log flush in progress, stalled where a stuck C: commit would
+ * stall it (here: on the namespace this test holds). */
+static int flush_result;
+static void *flush_main(void *arg) {
+    struct storage *s=arg; flush_result=vfs_startup_flush(&s->vfs,true); return NULL;
+}
+static void startup_log_refusals(struct storage *s) {
+    struct fat_entry entry; OK(vfs_stat(&table,"/New.txt",&entry));
+    const uint32_t order[1]={0};
+    vfs_lock(&s->vfs,0); vfs_startup_record_locked(&s->vfs,&s->volumes[3].fat,&entry,order,1); vfs_unlock(&s->vfs);
+    CHECK(s->vfs.startup_count==1);
+    vfs_lock(&s->vfs,0);
+    pthread_t flusher; CHECK(!pthread_create(&flusher,NULL,flush_main,s));
+    for (unsigned i=0;i<5000 && !__atomic_load_n(&s->vfs.startup_flushing,__ATOMIC_ACQUIRE);i++) {
+        struct timespec t={0,1000000}; nanosleep(&t,NULL);
+    }
+    CHECK(__atomic_load_n(&s->vfs.startup_flushing,__ATOMIC_ACQUIRE));
+    /* Shut Down and the defragmenter's analysis refuse at once (a wait
+     * would deadlock here; the alarm ends a blocked run). */
+    alarm(20); uint32_t start=fs_now_ms();
+    CHECK(storage_startup_log_shutdown(s)==-FS_EBUSY);
+    struct ciuki_media_defrag q={.version=CIUKI_MEDIA_VERSION,.size=sizeof(q),.drive=3,.flags=CIUKI_DEFRAG_STARTUP};
+    CHECK(storage_defrag(s,&q,false)==-FS_EBUSY);
+    CHECK(vfs_startup_flush(&s->vfs,false)==-FS_EBUSY);
+    CHECK(fs_now_ms()-start<1000); alarm(0);
+    vfs_unlock(&s->vfs);
+    CHECK(!pthread_join(flusher,NULL) && flush_result==1 && !s->vfs.startup_flushing);
+    OK(storage_startup_log_shutdown(s)); OK(storage_defrag(s,&q,false)); CHECK(q.clusters);
+    struct fat_entry log; OK(vfs_stat(&table,"/CIUKIST.LOG",&log)); CHECK(log.size==fat_startup_size());
 }
 static void one(bool writable) {
     struct storage *s=calloc(1,sizeof(*s)); CHECK(s); OK(storage_setup(s,0));
@@ -47,6 +79,7 @@ static void one(bool writable) {
         size_t done; OK(vfs_write(&table,fd,"kept",4,&done)); CHECK(done==4); OK(vfs_close(&table,fd));
         CHECK(storage_defrag(s,&old,true)==-FS_EAGAIN);
         OK(storage_defrag(s,&r,false)); OK(storage_defrag(s,&r,true)); CHECK(!r.moved);
+        startup_log_refusals(s);
     }
     uint32_t generation=s->vfs.generation[3]; observed=s; exclusive=0;
     OK(storage_convert(s,&c,true)); observed=0;
@@ -105,5 +138,5 @@ int main(int argc,char **argv) {
     OK(fat_write(&seed_volume,&file,0,"seed",4,&done)); CHECK(done==4);
     OK(fat_unmount(&seed_volume)); cache_destroy(&seed_cache);
     disk.events=disk.writes=disk.flushes=0; disk.undo_enabled=true; one(false); one(true); boot_one(argv[2],argv[3],false); boot_one(argv[2],argv[3],true);
-    fake_close(&disk); puts("PASS G29b storage: fixed generation=0, read-only query, removable/system/stale/busy refusals, exclusive conversion and RO/RW remount, data retained"); return 0;
+    fake_close(&disk); puts("PASS G29b storage: fixed generation=0, read-only query, removable/system/stale/busy refusals, exclusive conversion and RO/RW remount, data retained; a start-log flush in progress: Shut Down and defrag analysis refuse EBUSY at once, succeed after it"); return 0;
 }

@@ -2814,6 +2814,17 @@ bool vfs_startup_wait(struct vfs *v)
     fs_lock_drop(&v->identity_lock);
     return queued;
 }
+void vfs_startup_settle(struct vfs *v,uint32_t ms)
+{
+    uint32_t start=fs_now_ms();
+    fs_lock_take(&v->identity_lock);
+    for (;;) {
+        uint32_t spent=fs_now_ms()-start;
+        if (v->startup_count>=VFS_STARTUP_URGENT || spent>=ms) break;
+        fs_event_wait_ms(&v->startup_event,&v->identity_lock,ms-spent);
+    }
+    fs_lock_drop(&v->identity_lock);
+}
 static void startup_entry(const struct vfs_startup_hint *h,struct fat_entry *e)
 {
     memset(e,0,sizeof(*e));
@@ -2859,28 +2870,34 @@ static int startup_write(struct vfs *v,struct vfs_table *table,unsigned drive,st
     vfs_table_destroy(table);
     return e ? e : applied;
 }
-int vfs_startup_flush(struct vfs *v)
+int vfs_startup_flush(struct vfs *v,bool wait)
 {
     fs_lock_take(&v->identity_lock);
-    bool idle=!v->startup_count && !v->startup_flushing;
+    bool idle=!v->startup_count && !v->startup_flushing, busy=v->startup_flushing;
     fs_lock_drop(&v->identity_lock);
     if (idle) return 0;
+    if (busy && !wait) return -FS_EBUSY;
     struct vfs_startup_hint *batch=fs_contig_alloc(sizeof(v->startup_queue));
     struct vfs_table *table=fs_contig_alloc(sizeof(*table));
     void *data=fs_page_alloc(), *spare=fs_page_alloc();
     int result=!batch || !table || !data || !spare ? -FS_ENOMEM : 0;
     unsigned count=0;
-    if (!result) {
-        /* A flush in progress holds the log open: shutdown and the
-         * defragmenter's analysis wait for it, then take what remains. */
-        fs_lock_take(&v->identity_lock);
-        while (v->startup_flushing) fs_event_wait(&v->startup_event,&v->identity_lock);
-        for (;count<v->startup_count;count++)
-            batch[count]=v->startup_queue[(v->startup_head+count)%VFS_STARTUP_QUEUE];
-        v->startup_head=v->startup_count=0;
-        v->startup_flushing=count!=0;
-        fs_lock_drop(&v->identity_lock);
+    fs_lock_take(&v->identity_lock);
+    if (result) { /* advisory: drop the queue once instead of retrying it */
+        v->startup_failed+=v->startup_count; v->startup_head=v->startup_count=0;
+    } else {
+        /* A flush in progress holds the log open; only the start-log task
+         * waits for it, then takes what remains. */
+        while (wait && v->startup_flushing) fs_event_wait(&v->startup_event,&v->identity_lock);
+        if (v->startup_flushing) result=-FS_EBUSY;
+        else {
+            for (;count<v->startup_count;count++)
+                batch[count]=v->startup_queue[(v->startup_head+count)%VFS_STARTUP_QUEUE];
+            v->startup_head=v->startup_count=0;
+            v->startup_flushing=count!=0;
+        }
     }
+    fs_lock_drop(&v->identity_lock);
     unsigned written=0, failed=0;
     for (unsigned i=0;i<count;i++) {
         struct fat_volume *vol=batch[i].volume;

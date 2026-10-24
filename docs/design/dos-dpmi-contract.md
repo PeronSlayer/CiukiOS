@@ -1241,11 +1241,15 @@ check (boot log, settings, spooler, Files) moved its version.
   finished check for the same file version even when the session digest has
   been evicted. A new check, a failed or cancelled one, game removal's hold
   and release, and a launch's own synchronous publication release it. With
-  no free watch the check runs unpinned, as before.
+  no free watch the check runs unpinned, as before, and says so in the log;
+  `VFS_VERSION_PINS` (24) leaves a watch beside the 16 session digests
+  (`dosvm_disk.c` asserts it).
 
 Host evidence: `tests/host/dos/test_image_verify.py` section 8: 80 files
 created and rewritten during the check (the change floor rose from 0 to 178
 in the run) keep the image verified and stamped; 80 more changes after the
 check, then a launch with an empty session digest: `source=background`, no
 hash, no disk reads; an mtime change of the image itself during a check
-still ends `failed step=version`. Fails on 56e58374, passes with the pin.
+still ends `failed step=version`; no version watch remains after a hold,
+a release, a void check or at the end. Fails on 56e58374, passes with the
+pin.

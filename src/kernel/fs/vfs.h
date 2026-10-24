@@ -54,7 +54,9 @@ struct vfs_file_version {
  * only a change counter, never an open file, volume reservation or cache page. */
 struct vfs;
 struct vfs_table;
-#define VFS_VERSION_PINS 16u
+/* f3-51c: the DOS session digest cache pins up to DOSVM_DIGESTS (16)
+ * versions and the boot-time image check one more (dosvm_disk.c asserts). */
+#define VFS_VERSION_PINS 24u
 /* Counter watches retain no file/volume handle. The VFS must outlive every
  * token; unpin before destroying a nonresident VFS. */
 struct vfs_version_pin { struct vfs *vfs; uint64_t serial; };
@@ -70,6 +72,7 @@ void vfs_version_unpin(struct vfs_version_pin *);
  * starts asynchronously: exec never waits on the log's write or commit.
  * Bounded; on overflow the oldest queued start is dropped. */
 #define VFS_STARTUP_QUEUE 16u
+#define VFS_STARTUP_URGENT (VFS_STARTUP_QUEUE*3u/4u) /* write without the settle delay */
 #define VFS_STARTUP_READS 16u
 struct vfs_startup_hint {
     struct fat_volume *volume;
@@ -265,13 +268,19 @@ void vfs_tag_locked(struct vfs *,const char *tag);
 /* Namespace held (exec): queues an advisory record of the image's actual
  * reads for the background flusher. No I/O, no lock is dropped. */
 void vfs_startup_record_locked(struct vfs *,struct fat_volume *,const struct fat_entry *,const uint32_t *,unsigned);
-/* Background flusher, nothing held: writes every queued start into its
- * volume's CIUKIST.LOG, one write and commit per volume, after a flush in
- * progress has finished. Returns the number of starts written or the first
- * error (the starts of that volume are dropped: the log is advisory). */
-int vfs_startup_flush(struct vfs *);
-/* Kernel flusher: waits (bounded) for a queued start; true when one is. */
+/* Nothing held: writes every queued start into its volume's CIUKIST.LOG,
+ * one write and commit per volume. With `wait` it first waits for a flush in
+ * progress (the start-log task); without it, it returns -FS_EBUSY at once
+ * (shutdown, the defragmenter's analysis: that flush holds the log open and
+ * may be stalled in a commit). Returns the number of starts written or the
+ * first error (the starts of that volume are dropped: the log is advisory).
+ * Without memory the whole queue is dropped and counted as failed. */
+int vfs_startup_flush(struct vfs *,bool wait);
+/* Start-log task: waits (bounded) for a queued start; true when one is. */
 bool vfs_startup_wait(struct vfs *);
+/* Start-log task: lets a burst of starts settle for up to `ms`, returning at
+ * once when VFS_STARTUP_URGENT starts are queued (no early drops at boot). */
+void vfs_startup_settle(struct vfs *,uint32_t ms);
 void vfs_site_locked(struct vfs *,const char *site);
 /* Namespace held, no volume reservation on entry/return. A private FAT view
  * and the reader reference protect an immutable open chain during transport. */

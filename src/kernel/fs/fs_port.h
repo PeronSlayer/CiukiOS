@@ -105,6 +105,17 @@ static inline void fs_event_wait(struct fs_event *q, fs_lock *l) {
     while (seq==__atomic_load_n(&q->sequence,__ATOMIC_ACQUIRE)) pthread_cond_wait(&q->changed,&q->mutex);
     pthread_mutex_unlock(&q->mutex); fs_lock_take(l);
 }
+/* As fs_event_wait, but returns after `ms` without a wake. */
+static inline void fs_event_wait_ms(struct fs_event *q, fs_lock *l, uint32_t ms) {
+    uint32_t seq=__atomic_load_n(&q->sequence,__ATOMIC_ACQUIRE);
+    struct timespec until; clock_gettime(CLOCK_REALTIME,&until);
+    until.tv_sec+=ms/1000; until.tv_nsec+=(long)(ms%1000)*1000000L;
+    if (until.tv_nsec>=1000000000L) { until.tv_sec++; until.tv_nsec-=1000000000L; }
+    fs_lock_drop(l); pthread_mutex_lock(&q->mutex);
+    while (seq==__atomic_load_n(&q->sequence,__ATOMIC_ACQUIRE) &&
+           pthread_cond_timedwait(&q->changed,&q->mutex,&until)==0) {}
+    pthread_mutex_unlock(&q->mutex); fs_lock_take(l);
+}
 static inline void *fs_alloc(size_t n) { return n <= 2040 ? malloc(n) : NULL; }
 static inline void fs_free(void *p) { free(p); }
 extern unsigned fs_host_page_fail;
@@ -202,6 +213,10 @@ static inline void fs_event_wake(struct fs_event *q) {
 static inline void fs_event_wait(struct fs_event *q, fs_lock *l) {
     struct fs_event_ticket t={q,q->sequence}; fs_lock_drop(l);
     kwait_wait_until(&q->wait,fs_event_changed,&t,deadline_after_ms(1000)); fs_lock_take(l);
+}
+static inline void fs_event_wait_ms(struct fs_event *q, fs_lock *l, uint32_t ms) {
+    struct fs_event_ticket t={q,q->sequence}; fs_lock_drop(l);
+    kwait_wait_until(&q->wait,fs_event_changed,&t,deadline_after_ms(ms)); fs_lock_take(l);
 }
 static inline void *fs_alloc(size_t n) { return n <= 2040 ? kmalloc(n) : 0; }
 static inline void fs_free(void *p) { kfree(p); }

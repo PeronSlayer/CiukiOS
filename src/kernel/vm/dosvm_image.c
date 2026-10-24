@@ -192,6 +192,7 @@ static void version_pin(struct vfs_file_version *version)
             return;
         }
     }
+    klog("[dosvm] image verify pin error=%d attempts=3 unpinned", -FS_EAGAIN);
 }
 static void finish(uint32_t state, int error, const char *source)
 {
