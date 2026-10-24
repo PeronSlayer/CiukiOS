@@ -296,16 +296,20 @@ class NormalBootUnitTests(unittest.TestCase):
         self.assertIn('.taskbar = 0x%06xu,' % runner.DESK_TASKBAR, default)
         self.assertIn('.topbar_accent = 0x%06xu,' % runner.DESK_START_BUTTON[0], default)
         self.assertIn('desk_paint_bar(&p,0,0,(int)d->width,DESK_BAR,t->topbar,d->lfb_bytes_per_pixel==2);', compositor)
-        self.assertIn('desk_paint_bar(&p,bar.x,bar.y,bar.w,bar.h,t->taskbar,d->lfb_bytes_per_pixel==2);', compositor)
+        # The taskbar is painted by the shell (desk_shell_bar) with the theme's taskbar colour.
+        self.assertIn('desk_paint_bar(&p,b.x,b.y,b.w,b.h,desk_theme->taskbar,d->lfb_bytes_per_pixel==2);',
+                      (ROOT / 'apps/desktop/shell.c').read_text())
         # The Ciuki button: its box (desktop.h, compositor.c) and its face colours (shell.c draw_start).
         for name, value in zip(('X', 'Y'), runner.DESK_START_BOX[:2]):
             self.assertIn('#define DESK_START_%s %d\n' % (name, value), geometry_header)
-        self.assertIn('return (struct desk_box){DESK_START_X,DESK_START_Y,DESK_START_W,DESK_START_H};', compositor)
+        self.assertIn('return (struct desk_box){desk_scale(DESK_START_X),desk_scale(DESK_START_Y),desk_scale(DESK_START_W),desk_scale(DESK_START_H)};', compositor)
         shell = (ROOT / 'apps/desktop/shell.c').read_text()
         self.assertIn('uint32_t base = t->topbar_accent;', shell)
         for name, value in zip(('W', 'H'), runner.DESK_START_BOX[2:]):
             self.assertIn('#define DESK_START_%s %d\n' % (name, value), geometry_header)
-        self.assertIn('{0,(int32_t)d->height-DESK_BAR,(int32_t)d->width,DESK_BAR}', compositor)
+        # Bottom edge (the default): the taskbar is DESK_BAR rows at least (a configurable size since G9).
+        self.assertIn('if (size<DESK_BAR) size=DESK_BAR;', compositor)
+        self.assertIn('default: return (struct desk_box){0,(int)d->height-size,(int)d->width,size};', compositor)
         self.assertIn('fg = 0x%06X, bg = 0x%06X;' % (runner.CONSOLE_COLOURS[1], runner.CONSOLE_COLOURS[0]), console)
         self.assertIn('console_set_color(0xFFFFFF, 0x%06X);' % runner.CONSOLE_COLOURS[2], output)
 
