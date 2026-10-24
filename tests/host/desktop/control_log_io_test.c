@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT
  * Execute the native applet's positioned reader on a host fixture. */
 #include "replay_base.h"
+#include "host_socket_undef.h"
 #undef IPPROTO_IP
 #undef IPPROTO_TCP
 #undef IPPROTO_UDP

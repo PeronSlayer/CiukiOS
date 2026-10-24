@@ -17,15 +17,15 @@ import hashlib
 # F2-99: new software arrow/shadow; old raster reproduces all former pins (integ-fix1).
 # fx-13: cursor set scaled to the classic 13x19 arrow.
 BOOT_GOLDENS = {
-    "absent-ro": "31cf9ac29ffc33b5ca44783ee1712594589e848381e4e46a5101654ab022d8d7",
-    "absent-rw": "31cf9ac29ffc33b5ca44783ee1712594589e848381e4e46a5101654ab022d8d7",
-    "identical-unpresented": "b0d613e4f31f67833293a797ba9bed741e822edc9417e741d34663a667f08bfd",
-    "present-ro": "31cf9ac29ffc33b5ca44783ee1712594589e848381e4e46a5101654ab022d8d7",
-    "present-ro-seeded": "31cf9ac29ffc33b5ca44783ee1712594589e848381e4e46a5101654ab022d8d7",
-    "present-rw": "31cf9ac29ffc33b5ca44783ee1712594589e848381e4e46a5101654ab022d8d7",
-    "present-rw-seeded": "31cf9ac29ffc33b5ca44783ee1712594589e848381e4e46a5101654ab022d8d7",
-    "theme": "6a9c77250f0b517802dfd5e27821fe7d365d1996e6bacca1d8601b719728919e",
-    "wallpaper-change": "b0d613e4f31f67833293a797ba9bed741e822edc9417e741d34663a667f08bfd"
+    "absent-ro": "7a222ee8ff75d87ff81f7ff0d319a467612b3f30702779f5585f2907f212f133",
+    "absent-rw": "7a222ee8ff75d87ff81f7ff0d319a467612b3f30702779f5585f2907f212f133",
+    "identical-unpresented": "d3c43f4e3722b80bf7004e540612feaef112a97eabf042d7268eca0139caa0c2",
+    "present-ro": "7a222ee8ff75d87ff81f7ff0d319a467612b3f30702779f5585f2907f212f133",
+    "present-ro-seeded": "7a222ee8ff75d87ff81f7ff0d319a467612b3f30702779f5585f2907f212f133",
+    "present-rw": "7a222ee8ff75d87ff81f7ff0d319a467612b3f30702779f5585f2907f212f133",
+    "present-rw-seeded": "7a222ee8ff75d87ff81f7ff0d319a467612b3f30702779f5585f2907f212f133",
+    "theme": "b9ebf2bee76b40df8cce00b378a9ce35f020db481b69b5225fbdfb81c44fc337",
+    "wallpaper-change": "d3c43f4e3722b80bf7004e540612feaef112a97eabf042d7268eca0139caa0c2"
 }
 
 def build_footprint(folder, env):
@@ -70,7 +70,12 @@ def build_footprint(folder, env):
 class MemoryFootprintTests(unittest.TestCase):
     def test_sound_storage_prepared_before_worker(self):
         from .test_system_sounds import module
-        module("footprint_sounds", ROOT / "scripts/build_sounds.py").build()
+        sounds = module("footprint_sounds", ROOT / "scripts/build_sounds.py")
+        # Shared worktree assets may be read-only; verify an existing pack.
+        if (sounds.OUTPUT / "manifest.json").exists():
+            sounds.validate()
+        else:
+            sounds.build()
         parent = ROOT / "build/host"
         parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="sound-footprint-", dir=parent) as temp:

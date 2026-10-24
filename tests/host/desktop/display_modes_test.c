@@ -7,6 +7,14 @@
 #include <errno.h>
 
 static struct desktop d;
+/* Preference notifications may follow CONFIGURE after a mode change. */
+static const struct ciuki_message *configuration_since(unsigned first)
+{
+    for (unsigned i=fake_sent;i>first;i--)
+        if (fake_messages[i-1].data[0]==DESK_SHELL_VERSION && fake_messages[i-1].data[1]==DESK_CONFIGURE)
+            return &fake_messages[i-1];
+    assert(!"missing display CONFIGURE"); return NULL;
+}
 static int mode_set(struct desktop *desktop,uint16_t mode)
 { assert(desktop==&d); desktop->display_mode=desktop->display_pending=mode; return 0; }
 int main(void)
@@ -25,7 +33,7 @@ int main(void)
     assert(d.mouse_x == 639 && d.mouse_y == 479 && !d.sh.wall_valid);
     assert(d.damage.count == 1 && d.damage.boxes[0].w == 640 && d.damage.boxes[0].h == 480);
     desk_flush(&d,0);
-    assert(fake_sent >= 1 && fake_messages[fake_sent-1].data[1] == DESK_CONFIGURE);
+    (void)configuration_since(0);
     unsigned old_sent = fake_sent;
     assert(!desk_shell_wallpaper_update(&d) && d.sh.wall_w == 640 && d.sh.wall_h == 480);
     assert(d.sh.icons[0].box.y >= DESK_BAR);
@@ -41,7 +49,8 @@ int main(void)
     desk_display_relayout(&d, 1024, 768);
     assert(c->frame.x == 0 && c->frame.y == DESK_BAR && c->frame.w == 1024 && c->frame.h == 768-2*DESK_BAR);
     desk_flush(&d,0);
-    assert(fake_sent > old_sent && !d.sh.wall_valid);
+    assert(!d.sh.wall_valid);
+    (void)configuration_since(old_sent);
     assert(!desk_shell_wallpaper_update(&d) && d.sh.wall_w == 1024 && d.sh.wall_h == 768);
     for (int i = 0; i < d.sh.icon_count; i++) assert(d.sh.icons[i].box.y + d.sh.icons[i].box.h <= 768 - DESK_BAR);
     /* A depth-only change still configures the client; a smaller mode refits
@@ -52,8 +61,7 @@ int main(void)
     assert(c->zoomed && c->resize_serial != serial);
     assert(c->frame.x == 0 && c->frame.y == DESK_BAR && c->frame.w == 1024 && c->frame.h == 768-2*DESK_BAR);
     desk_flush(&d,0);
-    assert(fake_sent > old_sent && fake_messages[fake_sent-1].data[1] == DESK_CONFIGURE);
-    assert(desk_get32(fake_messages[fake_sent-1].data+12) == c->resize_serial);
+    assert(desk_get32(configuration_since(old_sent)->data+12) == c->resize_serial);
     free(d.pixels); d.pixels = calloc(640*480,4); assert(d.pixels);
     desk_display_relayout(&d,640,480);
     assert(c->zoomed && c->frame.x == 0 && c->frame.y == DESK_BAR && c->frame.w == 640 && c->frame.h == 480-2*DESK_BAR);

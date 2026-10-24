@@ -200,3 +200,37 @@ The loader reserves `[0x20000,0x38000)` (96 KiB) until kernel handoff: a
 32 KiB cluster buffer covers Windows FAT16 cluster sizes, and a separate
 GS segment holds the bounded journal index. The boot-info loader extent
 includes both. No physical-memory or cache admission limit is changed.
+
+## Integration correction: startup logging and short holds (2026-10-24)
+
+The standalone host filesystem suite reproduced the exec-image hold exactly:
+20 device commands at 106 ms each, or 2,120 ms, tagged `metadata/vfs`.
+The G29D hook used direct `fat_lookup`/`fat_startup_record` under one volume
+reservation after the executable snapshot. This was independent of fx-23's
+publication gate and of host scheduling load.
+
+Research: Linux's [iomap design, IOMAP_NOWAIT](https://www.kernel.org/doc/html/latest/filesystems/iomap/design.html)
+describes avoiding synchronous metadata I/O for a nonblocking best-effort path;
+its [readahead documentation](https://www.kernel.org/doc/html/v6.12/core-api/mm-api.html#readahead)
+allows advisory prefetch to fail without failing the demand read. These are
+supporting examples, not Windows compatibility claims. The Windows 98
+application-access recording requirement and the CiukiOS f1-93 short-hold
+contract both still apply.
+
+The hook now opens the private log with an ordinary exclusive read/write VFS
+handle. Lookup, create, write, truncate and commit use the existing bounded
+FAT transactions; log reads use the open-file reader path. Namespace and
+volume reservations are released across device commands. A pure serialization
+helper retains the same format, CRC, volume serial, record validation, bounded
+use/recency update and observed cluster order. A failed allocation, sharing
+check or log I/O remains advisory and never fails the image snapshot.
+The exclusive handle also protects the complete update against a log open
+while a transaction has temporarily released its volume guard.
+
+Host verification on the integrated tree: the same f1-93 exec-image row
+still issues 39 modeled commands but releases the reservation 28 times,
+with `logical_hold_max_ms=0`, `vfs_hold_records=0` and `cold_fallbacks=0`.
+The startup-image harness also passes persistent logging, native open-log
+sharing, launch success and descriptor/identity cleanup. The standalone
+filesystem run and its complete results are recorded in
+`build/codex/fixd-fs-final.log`.

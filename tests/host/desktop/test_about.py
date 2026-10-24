@@ -13,11 +13,12 @@ ROOT = Path(__file__).resolve().parents[3]
 W, H = 800, 600
 # Pinned on the production compositor with the host fixture (compositor_capture.c, 800x600, version "1.0.0 alpha").
 # F2-99 cursor; F1-109/F2-123, integ-video and integ-periph credits rows, re-recorded at the staging merge (lead); stage-fix6: seven ATA add-in rows; fx-24: libjpeg-turbo, Expat and libwebp rows (list length moves the scroll positions).
+# fixd: visually reviewed combined G11/G19/G23/G30 integration frames (2026-10-24).
 GOLDENS = {
-    "about-credits": "bb1e4b15f05b4ef4b6e2145f651453a1233685cdd0a5e25a3effa5876bc14468",
-    "about-credits-end": "11ffb76fae46ae3e4ec3f694b99f12235539e5459d1ca654d0a535cf9d77e9cf",
-    "about-credits-pgdn": "a15a3766bd149567b4e15fbdbd865a83a77adcb22f86d69f48dc6e8bd6892458",
-    "about-credits-wheel": "e85cff8bcd986e6ac558f6b5f6c62927173ec1ac432a70bc653530d092c92fc2",
+    "about-credits": "8e82cde45366226cb571bac5b4704f9be23197a163af03d6bfec0949495bbe58",
+    "about-credits-end": "bfcea79ef7d9bfa34303b0f934ddfadee5f03d36e31d66ff42af1ee80fd7151a",
+    "about-credits-pgdn": "bff8fd8c5a2172cb44239fa135f1167ab926eec079f874f9acece7ffec673b14",
+    "about-credits-wheel": "bea9455377584ee19e8868b17fea3ec25da777866ba62265cf428754473e3a93"
 }
 
 

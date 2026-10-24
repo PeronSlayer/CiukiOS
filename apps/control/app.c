@@ -471,14 +471,16 @@ static void sync(struct cp_app *a)
     snprintf(s, sizeof(s), "%d of %d%s", a->cfg.mouse_speed, CFG_MOUSE_MAX, a->cfg.mouse_speed == CFG_MOUSE_NORMAL ? " (normal)" : ""); text(a, C_SPEED_V, s);
     if ((w = du_get(u, C_DBL))) w->value = (a->cfg.double_click_ms - 200) / 100;
     snprintf(s, sizeof(s), "%d ms", a->cfg.double_click_ms); text(a, C_DBL_V, s);
-    if ((w=du_get(u,C_REPEAT_DELAY))) w->value=a->cfg.repeat_delay;
-    if ((w=du_get(u,C_REPEAT_SPEED))) w->value=a->cfg.repeat_speed;
-    if ((w=du_get(u,C_BLINK))) w->value=a->cfg.cursor_blink_ms/100;
-    if ((w=du_get(u,C_SWAP))) w->value=a->cfg.mouse_swap;
-    if ((w=du_get(u,C_TRAILS))) w->value=a->cfg.mouse_trails;
-    if ((w=du_get(u,C_WHEEL))) w->value=a->cfg.wheel_lines;
-    if ((w=du_get(u,C_LAYOUT_SWITCH))) w->value=a->cfg.layout_switch;
-    text(a,C_POINTER,a->cfg.pointer_scheme==1 ? "Pointers: Ciuki Large" : a->cfg.pointer_scheme==2 ? "Pointers: Ciuki Inverted" : "Pointers: Ciuki");
+    if (a->page==CP_MOUSE || a->page==CP_KEYBOARD) {
+        if ((w=du_get(u,C_REPEAT_DELAY))) w->value=a->cfg.repeat_delay;
+        if ((w=du_get(u,C_REPEAT_SPEED))) w->value=a->cfg.repeat_speed;
+        if ((w=du_get(u,C_BLINK))) w->value=a->cfg.cursor_blink_ms/100;
+        if ((w=du_get(u,C_SWAP))) w->value=a->cfg.mouse_swap;
+        if ((w=du_get(u,C_TRAILS))) w->value=a->cfg.mouse_trails;
+        if ((w=du_get(u,C_WHEEL))) w->value=a->cfg.wheel_lines;
+        if ((w=du_get(u,C_LAYOUT_SWITCH))) w->value=a->cfg.layout_switch;
+        text(a,C_POINTER,a->cfg.pointer_scheme==1 ? "Pointers: Ciuki Large" : a->cfg.pointer_scheme==2 ? "Pointers: Ciuki Inverted" : "Pointers: Ciuki");
+    }
     for (int k = 0; k < CFG_KEYS_COUNT; k++) a->key_items[k].selected = k == a->cfg.keyboard;
     if ((w = du_get(u, C_KEY))) w->active = (unsigned)a->cfg.keyboard;
     if ((w = du_get(u, C_VOL))) { w->value = a->volume; w->disabled = !a->mixer_ok; }

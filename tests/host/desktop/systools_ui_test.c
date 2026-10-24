@@ -149,6 +149,9 @@ static void test_sysinfo(void)
         free(text); free(want);
         assert(strstr(st->text, "Saved "));
     }
+    /* Clear the verified Save status (it contains the temporary path) before
+     * capturing another golden. Refresh preserves the selected category. */
+    tap(&si_ui, DU_KEY_F5);
     /* Tools menu launches by catalogue name; a refusal is reported. */
     menu(&si_ui, K_T, K_S); assert(!strcmp(launched, "sysmon") && !si_ui.dialog.kind);
     menu(&si_ui, K_T, K_R); assert(!strcmp(launched, "resmeter"));

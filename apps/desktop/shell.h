@@ -106,6 +106,7 @@ enum sh_action { SH_ACT_NONE, SH_ACT_SUBMENU, SH_ACT_LAUNCH, SH_ACT_ABOUT, SH_AC
 #define SH_ITEM_SEPARATOR 1u
 #define SH_ITEM_DISABLED 2u
 #define SH_ITEM_DEFAULT 4u
+#define SH_ITEM_CHECKED 8u
 /* mark: 1 + the byte of label that is the underlined access key (0 none). */
 struct sh_item { char label[44]; const char *icon; uint8_t action, flags, mark; int16_t arg; };
 struct sh_menu { uint64_t opened; unsigned animation_step; int kind, count, hot, row_h, icon,scroll,scroll_max; struct desk_box box; struct sh_item items[SH_ITEMS]; };

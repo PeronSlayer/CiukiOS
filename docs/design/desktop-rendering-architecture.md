@@ -813,3 +813,60 @@ and the separate mixer-display refresh semantics of
 These references were rechecked against the merged implementation; no public
 ABI numbers change. G4's scenario indexes and inventory rows stay fixed,
 with fx-26 appended after them as described above.
+
+### Integration correction: desktop menu checks (2026-10-24)
+
+The system-string atlas audit found G19's U+2713 suffix in Auto Arrange and
+Show Desktop Icons, outside the pinned UI atlas. The two selected states now
+use an explicit menu checked flag and the shell's existing 7-by-7 check
+painter in the icon gutter. Their labels remain plain English, and disabled
+and hot rows use their existing theme ink. This follows Microsoft's
+[About Menus: Menu Item Check Marks](https://learn.microsoft.com/en-us/windows/win32/menurc/about-menus)
+separation of check state from item text and avoids extending the font atlas
+for a control mark. U+FFFC in WordPad is an embedded object anchor, not UI
+ink: [Unicode Specials](https://www.unicode.org/charts/PDF/UFFF0.pdf).
+The atlas audit excludes that exact internal picture marker.
+
+The package-invoked memory-footprint boot replay also exposed two consecutive
+`cfg_writer_start` calls on the same settings writer after the profile merge.
+The second call reinitialized live synchronization objects and lost the first
+thread handle: shutdown hung in `cfg_writer_stop` until the fixture alarm.
+[POSIX pthread_mutex_init](https://pubs.opengroup.org/onlinepubs/007904875/functions/pthread_mutex_destroy.html)
+defines reinitializing a live mutex as undefined behavior. Keep exactly the
+profile-aware startup call; the default profile already supplies the ordinary
+system settings paths. The existing six-case boot replay exercises startup,
+reload and shutdown of that one worker without relaxing its deadline.
+
+The seven merged System property tabs exceeded the fixed panel width and
+clipped Startup. Microsoft documents label-dependent tab sizes and adjustable
+margins in [About Tab Controls](https://learn.microsoft.com/en-us/windows/win32/controls/tab-controls).
+The toolkit keeps its existing 18-pixel total horizontal margin when tabs
+fit; when they overflow it reduces that margin uniformly, down to six pixels,
+using the same widths for paint and hit testing. This fits the complete merged
+System tab row without changing labels or page geometry.
+
+Network frame review caught a production page-scoping defect: the generic
+refresh wrote the Mouse pointer-scheme caption into widget 1506, which the
+Network TCP/IP page reuses for its Default gateway label. Restrict the G12
+advanced input refresh block to Mouse/Keyboard pages. The network fixture
+now asserts the gateway label on every TCP/IP frame; its existing goldens
+should remain valid. Control lookup is parent-local (the same rule described
+by [GetDlgItem](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getdlgitem));
+reusing a page-local ID does not authorize another page's refresh to write it.
+
+The scheduler's optional native boundary already supplies weak host-replay
+`start` and `tick` bindings in desktop.c. The new child-exit callback was
+called strongly by the merged service loop but lacked that companion host
+binding, breaking both footprint and app-case replay links. Add the matching
+weak `exited` no-op; the real schedsvc.c strong definition still wins in
+native builds ([GCC weak attribute](https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html)).
+Isolated platform replays continue to omit the scheduler worker; its dedicated
+service harness tests the real binding.
+
+The first Start-menu opening allocated a 4,112-byte 32px `system-search` cache
+entry and a temporary 2,509-byte decode buffer after the first frame. The
+Find icon was missing from `icons_prepare`; add it to the existing four-size
+bounded preparation list. The [Icon Theme Specification](https://specifications.freedesktop.org/icon-theme/)
+identifies icons by name and size, so preparing another icon or another size
+cannot cover this lookup. The footprint assertion stays at zero allocations
+and requires unchanged cache counts/bytes across all measured phases.

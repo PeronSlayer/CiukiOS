@@ -55,10 +55,10 @@ class ControlSystemToolsTests(unittest.TestCase):
             pins = ROOT / "tests/host/desktop/control-system-tools-goldens.json"
             if UPDATE:
                 pins.write_text(json.dumps(actual, indent=2, sort_keys=True) + "\n")
-            self.assertEqual(actual, json.loads(pins.read_text()))
             review = module("g30c_frame_review", ROOT / "tests/host/desktop/frame_review.py")
             for p in frames.glob("*.xrgb"):
                 review.capture(p.stem, p.read_bytes(), 560, 420)
+            self.assertEqual(actual, json.loads(pins.read_text()))
 
 
 if __name__ == "__main__":

@@ -658,7 +658,7 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         item(m,"By Size",NULL,SH_ACT_ICON_SORT,2,d->sh.cfg.icon_sort==2 ? SH_ITEM_DEFAULT : 0);
         item(m,"By Date",NULL,SH_ACT_ICON_SORT,3,d->sh.cfg.icon_sort==3 ? SH_ITEM_DEFAULT : 0);
         separator(m);
-        item(m,d->sh.cfg.icon_auto_arrange ? "Auto Arrange  \xe2\x9c\x93" : "Auto Arrange",NULL,SH_ACT_ICON_AUTO,0,0);
+        item(m,"Auto Arrange",NULL,SH_ACT_ICON_AUTO,0,d->sh.cfg.icon_auto_arrange ? SH_ITEM_CHECKED : 0);
         break;
     case SH_MENU_OPEN_WITH:
         if (icon_is_entry(d, d->sh.menu_owner)) {
@@ -677,7 +677,7 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         item(m,"Paste","edit-paste",SH_ACT_FILE,DF_PASTE,d->sh.folder ? 0 : SH_ITEM_DISABLED);
         item(m,"Paste Shortcut",NULL,SH_ACT_FILE,DF_PASTE_SHORTCUT,d->sh.folder ? 0 : SH_ITEM_DISABLED);
         item(m,"Undo    Ctrl+Z","edit-undo",SH_ACT_FILE,DF_UNDO,d->sh.folder ? 0 : SH_ITEM_DISABLED);
-        item(m,d->sh.cfg.desktop_icons ? "Show Desktop Icons  \xe2\x9c\x93" : "Show Desktop Icons",NULL,SH_ACT_ICONS_SHOW,0,0);
+        item(m,"Show Desktop Icons",NULL,SH_ACT_ICONS_SHOW,0,d->sh.cfg.desktop_icons ? SH_ITEM_CHECKED : 0);
         separator(m);
         item(m,"Properties","document-properties",SH_ACT_CONTROL,CP_DISPLAY+1,program_index(d,"control")<0 ? SH_ITEM_DISABLED : 0);
         break;
@@ -1388,6 +1388,7 @@ static void mark_line(struct du_canvas *c, int32_t tx, int32_t ty, const struct 
     int w = desk_text_advance(font, ch) - 1;
     du_hline(c, tx + at, ty + DU_GLYPH_H + 2, w > 1 ? w : 1, colour);
 }
+static void check_mark(struct du_canvas *, int, int, uint32_t);
 static void draw_menu(struct desktop *d, const struct sh_menu *m, struct desk_box clip)
 {
     struct desk_box b;
@@ -1424,6 +1425,8 @@ static void draw_menu(struct desktop *d, const struct sh_menu *m, struct desk_bo
             d->v3_link_icon(d,d->v3_links[it->arg].source,(unsigned)m->icon) : NULL;
         if (!ic) ic=desk_shell_icon(it->icon,m->icon);
         if (ic) du_icon_blit(&c, x0 + 6, y + (h - m->icon) / 2, ic, m->icon, it->flags & SH_ITEM_DISABLED ? DU_ICON_DISABLED : DU_ICON_NORMAL);
+        if (it->flags & SH_ITEM_CHECKED)
+            check_mark(&c,x0+6+(m->icon-7)/2,y+(h-7)/2,it->flags & SH_ITEM_DISABLED ? DU_GRAY : hot ? SH_HOT_INK : SH_INK);
         int32_t tx = x0 + 6 + m->icon + 10, ty = y + (h - text_h()) / 2;
         if (it->flags & SH_ITEM_DISABLED) {
             if (platinum) du_text(&c, tx, ty, it->label, DU_GRAY); else du_text_disabled(&c, tx, ty, it->label);
@@ -5742,7 +5745,7 @@ static void icons_prepare(void)
      * bounded shell/menu/window variants now, including the generic icon
      * used by crash victims whose title differs from the survivor's. */
     static const unsigned sizes[]={16,22,32,48};
-    static const char *const extra[]={"go-jump","drive-removable-media","media-optical","user-trash-full","system-log-out","system-lock-screen","system-users","dialog-password","emblem-symbolic-link","network-workgroup"};
+    static const char *const extra[]={"system-search","go-jump","drive-removable-media","media-optical","user-trash-full","system-log-out","system-lock-screen","system-users","dialog-password","emblem-symbolic-link","network-workgroup"};
     for (unsigned s=0;s<sizeof(sizes)/sizeof(*sizes);s++) {
         for (unsigned i=0;i<sizeof(icon_table)/sizeof(*icon_table);i++)
             (void)store_icon(icon_table[i].name,sizes[s]);

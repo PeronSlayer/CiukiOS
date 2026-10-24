@@ -1908,6 +1908,8 @@ static int launch_pending(struct desktop *d)
 /* G30: the scheduled-tasks service is linked by build_desktop.py (schedsvc.c); host replays run without it. */
 __attribute__((weak)) int desk_schedsvc_start(struct desktop *d) { (void)d; return 0; }
 __attribute__((weak)) void desk_schedsvc_tick(struct desktop *d) { (void)d; }
+__attribute__((weak)) void desk_schedsvc_exited(struct desktop *d, uint32_t pid, int status)
+{ (void)d; (void)pid; (void)status; }
 __attribute__((weak)) void desk_resources_poll(struct desktop *d) { (void)d; }
 __attribute__((weak)) int desk_v3_fixture_active(void) { return 0; }
 __attribute__((weak)) int desk_v3_fixture_begin(struct desktop *d) { (void)d; return -ENOSYS; }
@@ -2840,7 +2842,6 @@ static void shell_setup(struct desktop *d, int gate)
         settings_writer.notify=d->wake; settings_writer.notify_ctx=d->wake_ctx;
         settings_writer.run_job=mixer_job_run;
         settings_writer_started=!cfg_writer_start(&settings_writer,d->sh.profile.settings,d->sh.profile.temporary);
-        settings_writer_started=!cfg_writer_start(&settings_writer,CFG_FILE,CFG_DIR "/desktop.new");
 #ifdef __i386__
         /* The native bootstrap owns file-worker lifetime. Host models attach
          * storage adapters separately and never write the guest's root paths. */
