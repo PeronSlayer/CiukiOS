@@ -233,11 +233,12 @@ class LoaderParserTests(unittest.TestCase):
         source = Path(cls.folder.name) / 'parser.asm'
         binary = source.with_suffix('.bin')
         symbols = (*SYMBOLS, 'raw_map', 'ph_table', 'elf_load', 'elf_load.validate',
-                   'file_seek', 'loader_bss_end')
-        source.write_text('%include "src/boot/ciukldr.asm"\nsection .parser_symbols align=1\ndw '
+                   'file_seek')
+        source.write_text('%include "src/boot/ciukldr.asm"\nsection .parser_symbols align=1\ndd loader_bss_end\ndw '
                           + ','.join(symbols) + '\n')
         subprocess.run(['nasm', '-f', 'bin', str(source), '-o', str(binary)], cwd=ROOT, check=True)
         cls.machine = LoaderParserMachine(binary, symbols)
+        cls.loader_extent = struct.unpack_from('<I',binary.read_bytes(),-2*len(symbols)-4)[0]
 
     @classmethod
     def tearDownClass(cls):
@@ -345,7 +346,7 @@ class LoaderParserTests(unittest.TestCase):
     def test_elf_fills_shared_scratch_before_first_header_validation(self):
         m = self.machine
         self.assertEqual(m.symbols['ph_table'], m.symbols['raw_map'])
-        self.assertEqual(m.symbols['loader_bss_end'], 0x7841)  # G14: + the 4 KiB cluster buffer
+        self.assertEqual(self.loader_extent, 0x18000)  # G29D: full 32-bit two-segment extent
         for count in (1, 32):
             m.reset()
             header = bytearray(52)

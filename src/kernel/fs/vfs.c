@@ -2775,3 +2775,21 @@ int vfs_free_space(struct vfs_table *t, unsigned d, uint64_t *bytes, uint32_t *c
     if (v) { *cb=(uint32_t)v->spc*512; *bytes=(uint64_t)fat_free_estimate(v,0) * *cb; } /* fx-17b: bound while counting */
     vfs_unlock(t->vfs); return e;
 }
+
+/* Best-effort startup hints never weaken sharing or fail application launch.
+ * No profile I/O while another description/native node has the log open. */
+void vfs_startup_record_locked(struct vfs *v,struct fat_volume *vol,const struct fat_entry *file,
+                              const uint32_t *order,unsigned count)
+{
+    if (!count || vol->readonly) return;
+    uint32_t saved=v->active, mask=0;
+    for (unsigned d=0;d<26;d++) if (v->volumes[d]==vol) mask=vfs_drive_mask(d);
+    if (!mask || (saved && !(saved&mask))) return;
+    vfs_reserve_locked(v,saved|mask);
+    struct fat_entry log;
+    int e=VFS_IO(v,fat_lookup(vol,vol->type==32 ? vol->root : 0,"CIUKIST.LOG",&log));
+    if (e==-FS_ENOENT || (!e && !busy(v,vol,&log)))
+        (void)VFS_IO(v,fat_startup_record(vol,file,order,count));
+    /* Restore the caller's set without extending it across another turn. */
+    if (!saved) { vfs_unlock(v); vfs_lock(v,0); }
+}

@@ -20,6 +20,11 @@
 #undef fake_reset
 #include "../../../apps/accessories/mixer.h"
 
+/* Hardware inventory is outside this compositor fixture; registry host
+ * storage still links its real hardware provider. */
+int ciuki_devices(struct ciuki_devices_info *info)
+{ (void)info; errno=ENODEV; return -1; }
+
 enum { WM_SOFTWARE, WM_ENGINE, WM_CACHE, WM_BATCH32, WM_BATCH16, WM_MODES };
 static const char *const wm_names[WM_MODES]={"software","engine","engine+cache","batch32","batch16"};
 static unsigned wm_mode;
@@ -2338,6 +2343,14 @@ static void row_recovery(unsigned m)
     assert(!desk_recovery_win(&d) && !d.terminal_shell); step("WIN: the icons return");
     wm_end();
 }
+/* G29D appended events use the real maintenance controller and worker. */
+static void row_startup_disk_tools(unsigned m)
+{
+    row_name="startup disk tools"; wm_begin(m,1);
+    struct fake_app *a=app_open("files",560,400,0,DESK_BAR);
+    maintenance_ui_scenario(disk_ui_present,a);
+    app_close(a); step("startup disk tools close"); wm_end();
+}
 static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overlays,row_move,row_show_hide,row_minimize,
     row_close,row_death,row_activation,row_caption,row_menus,row_tooltip,row_popups,row_switcher,row_internal,row_icons,
     row_fullscreen, row_gfx, row_topbar, row_theme, row_strips, row_lease, row_selection, row_drag,
@@ -2354,7 +2367,7 @@ static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overl
     row_background_browse, row_advanced_fonts, row_fixed_arrange, row_review_content,
     row_icon_sort, row_icon_auto_arrange,
     row_icon_keyboard, row_system_icon_rename, row_wallpaper_change, row_shortcut_wizard, row_icon_metrics,
-    row_icon_visibility, row_system_menus, row_desktop_refresh, row_resolution_layout, row_icon_drop_targets, row_wallpaper_pattern, row_recovery};
+    row_icon_visibility, row_system_menus, row_desktop_refresh, row_resolution_layout, row_icon_drop_targets, row_wallpaper_pattern, row_recovery, row_startup_disk_tools};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).

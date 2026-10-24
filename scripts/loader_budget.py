@@ -17,6 +17,7 @@ from ciuki_version import load
 ROOT = Path(__file__).resolve().parents[1]
 EXTENT = 24576
 TRAIL = 32
+CAPABILITY = 8
 CATEGORIES = ('header', 'code', 'tables', 'strings', 'scratch', 'padding', 'trail')
 
 
@@ -37,6 +38,8 @@ def measure(binary, listing):
     data = Path(binary).read_bytes()
     if len(data) != EXTENT or data[-TRAIL:-TRAIL + 8] != b'CLDRPRG1':
         raise ValueError('expected the fixed 48-sector loader and progress trail')
+    if data[-TRAIL-CAPABILITY:-TRAIL] != b'G29DCVT1':
+        raise ValueError('missing boot-conversion capability marker')
     totals = Counter({name: 0 for name in CATEGORIES})
     cursor, used, kind = 0, 0, None
     for line in Path(listing).read_text().splitlines():
@@ -59,10 +62,10 @@ def measure(binary, listing):
         source = expanded.split(';', 1)[0].strip()
         if offset < 16:
             kind = 'header'
-        elif offset >= EXTENT - TRAIL:
+        elif offset >= EXTENT - TRAIL - CAPABILITY:
             kind = 'trail'
         elif source:
-            if re.search(r'\balign\b', source) or source.startswith('times 24544-'):
+            if re.search(r'\balign\b', source) or source.startswith('times 24536-'):
                 kind = 'padding'
             elif re.search(r'\btimes\b', source):
                 kind = 'scratch'
@@ -74,11 +77,11 @@ def measure(binary, listing):
             raise ValueError('listing continuation without an initializer')
         totals[kind] += count
         cursor += count
-        if offset < EXTENT - TRAIL and kind != 'padding':
+        if offset < EXTENT - TRAIL - CAPABILITY and kind != 'padding':
             used = cursor
     if cursor != EXTENT or sum(totals.values()) != EXTENT:
         raise ValueError('listing does not account for the complete loader')
-    return dict(totals, used=used, free=EXTENT - TRAIL - used, extent=EXTENT)
+    return dict(totals, used=used, free=EXTENT - TRAIL - CAPABILITY - used, extent=EXTENT)
 
 
 def main():
@@ -95,7 +98,7 @@ def main():
     print(f'CIUKLDR byte budget ({version or "unknown"}):')
     for name in CATEGORIES:
         print(f'  {name:8s} {budget[name]:5d}')
-    print(f'  used     {budget["used"]:5d} (before free tail and {TRAIL}-byte trail)')
+    print(f'  used     {budget["used"]:5d} (before free tail and {TRAIL+CAPABILITY}-byte capability/progress tail)')
     print(f'  free     {budget["free"]:5d}')
     print(f'  extent   {budget["extent"]:5d}')
 

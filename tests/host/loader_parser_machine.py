@@ -42,7 +42,7 @@ class LoaderParserMachine(LoaderUARTMachine):
     def reset(self):
         self.mem = self.initial.copy()
         self.regs = dict.fromkeys(('eax', 'ebx', 'ecx', 'edx', 'esi', 'edi', 'ebp'), 0)
-        self.regs.update(esp=0x7c00, ss=0, fs=0, ds=0x2000, es=0x2000)
+        self.regs.update(esp=0x7c00, ss=0, fs=0, ds=0x2000, es=0x2000, gs=0)
         self.zero = self.carry = False
         self.hooks = {}
         self.interrupts = {}  # vector -> callable; BIOS calls are host fixtures
@@ -50,7 +50,7 @@ class LoaderParserMachine(LoaderUARTMachine):
 
     @staticmethod
     def reg_info(name):
-        if name == 'es':
+        if name in ('es', 'gs'):
             return name, 0, 16
         return LoaderUARTMachine.reg_info(name)
 
@@ -124,16 +124,45 @@ class LoaderParserMachine(LoaderUARTMachine):
                 self.carry = a < b if op in ('sub', 'cmp') else value > mask if op == 'add' else False
                 if op not in ('cmp', 'test'):
                     self.write(dest, value, bits)
-            elif op in ('inc', 'dec', 'shl', 'imul'):
+            elif op in ('inc', 'dec', 'shl', 'shr', 'imul'):
                 value = self.read(dest, bits)
                 if op in ('inc', 'dec'):
                     value += 1 if op == 'inc' else -1
-                elif op == 'shl':
-                    value <<= self.read(operands[1])
+                elif op in ('shl', 'shr'):
+                    shift = self.read(operands[1])
+                    if op == 'shr':
+                        self.carry = bool(value & (1 << (shift-1))) if shift else self.carry
+                        value >>= shift
+                    else:
+                        self.carry = bool(value & (1 << (bits-shift))) if shift else self.carry
+                        value <<= shift
                 else:
                     value = self.read(operands[1]) * self.read(operands[2])
                 self.write(dest, value, bits)
                 self.zero = (value & mask) == 0
+            elif op in ('pushad', 'popad'):
+                names = ('eax', 'ecx', 'edx', 'ebx', 'esp', 'ebp', 'esi', 'edi')
+                if op == 'pushad':
+                    original = self.read('esp')
+                    for reg in names:
+                        self.push(original if reg == 'esp' else self.read(reg), 32)
+                else:
+                    for reg in reversed(names):
+                        value = self.pop(32)
+                        if reg != 'esp': self.write(reg, value, 32)
+            elif op == 'not':
+                self.write(dest, ~self.read(dest, bits), bits)
+            elif op in ('mul', 'div'):
+                assert bits == 32, instruction
+                if op == 'mul':
+                    value = self.read('eax') * self.read(dest, 32)
+                    self.write('eax', value & 0xffffffff, 32)
+                    self.write('edx', value >> 32, 32)
+                else:
+                    value = (self.read('edx') << 32) | self.read('eax')
+                    quotient, remainder = divmod(value, self.read(dest, 32))
+                    assert quotient <= 0xffffffff
+                    self.write('eax', quotient, 32); self.write('edx', remainder, 32)
             elif op in ('push', 'pop'):
                 if op == 'push':
                     self.push(self.read(dest), bits)

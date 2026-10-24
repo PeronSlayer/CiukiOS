@@ -240,6 +240,8 @@ void vfs_reserve_file_locked(struct vfs *, uint32_t drives,struct vfs_file_ident
 void vfs_unlock(struct vfs *);
 /* Diagnostic tag only: call under namespace before starting a mutation. */
 void vfs_tag_locked(struct vfs *,const char *tag);
+/* Namespace held; saves advisory image reads under the volume reservation. */
+void vfs_startup_record_locked(struct vfs *,struct fat_volume *,const struct fat_entry *,const uint32_t *,unsigned);
 void vfs_site_locked(struct vfs *,const char *site);
 /* Namespace held, no volume reservation on entry/return. A private FAT view
  * and the reader reference protect an immutable open chain during transport. */

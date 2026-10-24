@@ -8,7 +8,7 @@ struct files_maintenance {
     pthread_cond_t changed;
     pthread_t thread;
     int started, done, error, mode, pause, stop, restarts, moved;
-    int details, check;
+    int details, check, rearrange;
     struct ciuki_media_defrag defrag;
     struct ciuki_media_convert convert;
     int (*defrag_call)(int,struct ciuki_media_defrag *);
@@ -49,7 +49,7 @@ static void *maintenance_run(void *ctx)
                     struct ciuki_media_defrag map=r; map.flags=0;
                     error=w->defrag_call(0,&map);
                     if (!error) {
-                        if (map.sequence==r.sequence) map.ordinal=r.ordinal;
+                        if (map.sequence==r.sequence) { map.ordinal=r.ordinal; map.placement=r.placement; map.profiled=r.profiled; }
                         else { pthread_mutex_lock(&w->lock); w->restarts++; pthread_mutex_unlock(&w->lock); }
                         map.flags=r.flags; r=map;
                     }
@@ -105,6 +105,7 @@ static void maintenance_changed(struct du_ui *u,const struct du_event *e,void *c
     if (!w) return;
     if (e->id==M_DETAILS) w->details=u->dialog.items[4].value;
     if (e->id==M_CHECK && !w->started) w->check=u->dialog.items[5].value;
+    if (e->id==M_REARRANGE && !w->started) w->rearrange=u->dialog.items[6].value;
     if (e->type==DU_EV_ACTIVATE && e->id==M_PAUSE && w->started && w->mode==M_DEFRAG) {
         pthread_mutex_lock(&w->lock); w->pause=!w->pause; pthread_cond_broadcast(&w->changed); pthread_mutex_unlock(&w->lock);
         du_set_text(&u->dialog.items[8],w->pause ? "&Resume" : "&Pause");
@@ -124,7 +125,8 @@ static int maintenance_accept(struct du_ui *u,int button,void *ctx)
     }
     if (button==0 && w->mode==M_ANALYZE && !w->error) {
         w->check=u->dialog.items[5].value;
-        w->defrag.flags=w->check ? CIUKI_DEFRAG_CHECK : 0;
+        w->rearrange=u->dialog.items[6].value;
+        w->defrag.flags=(w->check ? CIUKI_DEFRAG_CHECK : 0)|(w->rearrange ? CIUKI_DEFRAG_STARTUP : 0);
         /* Re-analyze with Settings before the first move. */
         w->mode=M_DEFRAG; w->defrag.ordinal=0;
         int e=maintenance_launch(a,M_DEFRAG);
@@ -146,7 +148,7 @@ static void maintenance_sheet(struct files_app *a)
     du_set_text(&d->items[0],"&Start"); d->items[0].disabled=w->started || w->error;
     du_set_text(&d->items[1],w->started && w->mode==M_DEFRAG ? "S&top" : "&Close");
     if (w->mode>=M_CONVERT_QUERY) {
-        snprintf(d->text,sizeof(d->text),"%s",w->mode==M_CONVERT ? "Converting the drive. Please wait.\nDo not remove or power off the disk." : "Reading fixed drive information...");
+        snprintf(d->text,sizeof(d->text),"%s",w->mode==M_CONVERT ? (w->convert.reserved&CIUKI_CONVERT_NEXT_BOOT ? "Scheduling conversion for the next start..." : "Converting the drive. Please wait.\nDo not remove or power off the disk.") : "Reading fixed drive information...");
         d->items[0].disabled=1; d->items[1].disabled=w->started; return;
     }
     pthread_mutex_lock(&w->lock); int paused=w->pause; pthread_mutex_unlock(&w->lock);
@@ -154,8 +156,9 @@ static void maintenance_sheet(struct files_app *a)
     du_property_control(a->ui,4,DU_CHECKBOX,M_DETAILS,(struct du_rect){24,108,450,24},"Show &Details (drive ranges)")->value=w->details;
     struct du_widget *check=du_property_control(a->ui,5,DU_CHECKBOX,M_CHECK,(struct du_rect){24,136,450,24},"&Check the drive for errors first");
     check->value=w->check; check->disabled=w->started;
-    du_property_control(a->ui,6,DU_CHECKBOX,M_REARRANGE,(struct du_rect){24,164,470,24},"Rearrange program files so they start faster")->disabled=1;
-    du_property_control(a->ui,7,DU_LABEL,0,(struct du_rect){40,190,450,22},"Startup access profiles are not available.");
+    struct du_widget *rearrange=du_property_control(a->ui,6,DU_CHECKBOX,M_REARRANGE,(struct du_rect){24,164,470,24},"Rearrange program files so they start faster");
+    rearrange->value=w->rearrange; rearrange->disabled=w->started;
+    du_property_control(a->ui,7,DU_LABEL,0,(struct du_rect){40,190,450,22},"Use recorded program and library startup reads.");
     struct du_widget *pause=du_property_control(a->ui,8,DU_BUTTON,M_PAUSE,(struct du_rect){365,73,120,25},paused ? "&Resume" : "&Pause");
     pause->disabled=!w->started || w->mode!=M_DEFRAG;
 }
@@ -188,11 +191,15 @@ static void maintenance_service(struct files_app *a)
         "The operation could not be completed. Close files on this drive and check it for errors:",error);
     else if (w->mode==M_ANALYZE) maintenance_sheet(a);
     else if (w->mode==M_CONVERT_QUERY) {
-        char text[390]; snprintf(text,sizeof(text),"Convert fixed drive %c: to FAT32 (%u bytes per cluster)?\nBack up your files first. You cannot return to FAT16.\nOlder DOS and dual-boot systems may no longer read this drive.\nContinue?",'A'+w->convert.drive,w->convert.cluster_bytes);
+        char text[390]; snprintf(text,sizeof(text),"Convert fixed drive %c: to FAT32 (%u bytes per cluster)?\nBack up your files first. You cannot return to FAT16.\nOlder DOS and dual-boot systems may no longer read this drive.\n%sContinue?",'A'+w->convert.drive,w->convert.cluster_bytes,
+            w->convert.reserved&CIUKI_CONVERT_NEXT_BOOT ? "Conversion will run at the next start.\n" : "");
         du_message(a->ui,D_CONVERT_WARNING,"Drive Converter (FAT32)",text,DU_DLG_ICON_WARNING,yes_no,2,1,1);
     } else {
         char text[240];
-        if (w->mode==M_CONVERT) snprintf(text,sizeof(text),"Drive %c: successfully converted to FAT32.\nAllocation unit: %u bytes.",'A'+w->convert.drive,w->convert.cluster_bytes);
+        if (w->mode==M_CONVERT) {
+            if (w->convert.reserved&CIUKI_CONVERT_NEXT_BOOT) snprintf(text,sizeof(text),"Drive %c: conversion scheduled for the next start.\nSave your work and restart to convert to FAT32.",'A'+w->convert.drive);
+            else snprintf(text,sizeof(text),"Drive %c: successfully converted to FAT32.\nAllocation unit: %u bytes.",'A'+w->convert.drive,w->convert.cluster_bytes);
+        }
         else snprintf(text,sizeof(text),"%s\nFiles moved: %d\nFragmented files remaining: %u (%u%%)\nFiles without a large enough free run stay fragmented.",
             w->stop ? "Defragmentation stopped." : "Defragmentation finished.",w->moved,w->defrag.fragmented,
             w->defrag.files ? (unsigned)((uint64_t)w->defrag.fragmented*100/w->defrag.files) : 0);
@@ -202,8 +209,7 @@ static void maintenance_service(struct files_app *a)
 int files_maintenance_open(struct files_app *a,unsigned drive,int convert)
 {
     if (drive>=26 || a->reading || a->loading || a->job_active || files_disk_busy(a) || du_dialog_id(a->ui)) return -EBUSY;
-    if (a->media.type[drive]==CIUKI_MEDIA_OPTICAL || (convert && (drive==2 ||
-        a->media.type[drive]==CIUKI_MEDIA_USB || a->media.type[drive]==CIUKI_MEDIA_FLOPPY))) return -EROFS;
+    if (a->media.type[drive]==CIUKI_MEDIA_OPTICAL || (convert && (a->media.type[drive]==CIUKI_MEDIA_USB || a->media.type[drive]==CIUKI_MEDIA_FLOPPY))) return -EROFS;
     disk_stop(a);
     struct files_maintenance *w=calloc(1,sizeof(*w)); if (!w) return -ENOMEM;
     int e=pthread_mutex_init(&w->lock,NULL); if (e) { free(w); return -e; }

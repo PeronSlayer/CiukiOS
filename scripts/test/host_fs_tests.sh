@@ -17,6 +17,30 @@ for tool in clang ar python3 mkfs.fat fsck.fat mcopy mmd mdir mtype mdel nm nasm
     if ! command -v "$tool" >/dev/null; then printf 'MISSING TOOL: %s\n' "$tool"; missing=1; fi
 done
 # Focused entries keep the filesystem runner lock and sanitizer policy.
+run_startup_image_tests() {
+    ((missing == 0)) || exit 1
+    python3 tests/host/fs/fixtures.py
+    clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+        -ffunction-sections -fdata-sections -Wl,--gc-sections \
+        -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread -Isrc/kernel/include -Isrc/kernel/fs \
+        tests/host/proc/startup_image_test.c tests/host/proc/signal_legacy.c \
+        tests/host/proc/desktop_legacy.c src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c \
+        src/kernel/fs/cache.c src/kernel/fs/path.c src/kernel/fs/fat.c src/kernel/fs/vfs.c \
+        src/kernel/fs/fs_ro.c src/kernel/fs/iso9660.c tests/host/fs/fake.c \
+        src/kernel/probes/f2_probes_files.c -o build/host/fs/startup_image_test
+    build/host/fs/startup_image_test build/host/fs/fat32.img build/host/fs/fat16.img
+    nm --defined-only build/host/fs/startup_image_test > build/host/fs/startup-image-symbols.txt
+    rm build/host/fs/startup_image_test
+}
+if [[ ${1:-} == --startup-image ]]; then
+    run_startup_image_tests
+    exit 0
+fi
+if [[ ${1:-} == --boot-convert ]]; then
+    ((missing == 0)) || exit 1
+    python3 tests/host/test_boot_conversion.py
+    exit 0
+fi
 if [[ ${1:-} == --fat12 ]]; then
     if ((missing)); then echo 'Fixture tests NOT RUN: required tool missing'; exit 1; fi
     python3 tests/host/fs/fat12.py
@@ -62,8 +86,15 @@ run_maintenance_mount_tests() {
         src/kernel/fs/vfs.c src/kernel/fs/fs_ro.c src/kernel/fs/iso9660.c src/kernel/fs/ntfs_ro.c \
         src/kernel/fs/ntfs_fs.c src/kernel/fs/mount.c src/kernel/drivers/blkpart.c \
         src/kernel/lib/fmt.c tests/host/fs/fake.c tests/host/fs/test_maintenance_mount.c -o "$out/test_mount"
-    "$out/test_mount" "$out/fixed.img"
-    rm "$out/test_mount" "$out/fixed.img"
+    nasm -f bin src/boot/mbr.asm -o "$out/mbr.bin"
+    nasm -f bin src/boot/ciukldr.asm -o "$out/loader.bin"
+    python3 - "$out/loader.bin" <<'PYLOADER'
+import pathlib,struct,sys,zlib
+p=pathlib.Path(sys.argv[1]); b=bytearray(p.read_bytes())
+struct.pack_into('<H',b,6,48); struct.pack_into('<I',b,8,zlib.crc32(b[16:])); p.write_bytes(b)
+PYLOADER
+    "$out/test_mount" "$out/fixed.img" "$out/mbr.bin" "$out/loader.bin"
+    rm "$out/test_mount" "$out/fixed.img" "$out/mbr.bin" "$out/loader.bin"
 }
 if [[ ${1:-} == --maintenance-mount ]]; then
     run_maintenance_mount_tests
@@ -112,6 +143,28 @@ run_defrag_tests() {
     for type in 12 16 32; do fsck.fat -n "$out/fat$type.img"; done
     rm "$out/test_defrag" "$out/fat12.img" "$out/fat16.img" "$out/fat32.img"
 }
+run_startup_tests() {
+    ((missing == 0)) || exit 1
+    local out=build/host/fs/startup type size
+    mkdir -p "$out"
+    for type in 12 16 32; do
+        case $type in 12) size=1440K;; 16) size=16M;; 32) size=64M;; esac
+        truncate -s "$size" "$out/fat$type.img"
+        mkfs.fat -F "$type" -s 1 "$out/fat$type.img"
+    done
+    clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+        -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+        -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c \
+        src/kernel/fs/cache.c src/kernel/fs/path.c src/kernel/fs/fat.c \
+        tests/host/fs/fake.c tests/host/fs/scan.c tests/host/fs/test_startup.c -o "$out/test_startup"
+    "$out/test_startup" "$out/fat12.img" "$out/fat16.img" "$out/fat32.img"
+    for type in 12 16 32; do fsck.fat -n "$out/fat$type.img"; done
+    rm "$out/test_startup" "$out/fat12.img" "$out/fat16.img" "$out/fat32.img"
+}
+if [[ ${1:-} == --startup ]]; then
+    run_startup_tests
+    exit 0
+fi
 if [[ ${1:-} == --defrag ]]; then
     run_defrag_tests
     exit 0
@@ -464,6 +517,9 @@ python3 tests/host/fs/test_crash_classifier.py
 python3 tests/host/fs/classify_crashes.py
 run_format_tests
 run_defrag_tests
+run_startup_tests
+run_startup_image_tests
+python3 tests/host/test_boot_conversion.py
 run_convert_tests
 python3 - <<'PY'
 from pathlib import Path

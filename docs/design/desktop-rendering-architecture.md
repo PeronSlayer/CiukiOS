@@ -476,6 +476,8 @@ after each of these transients (`equivalent()`).
 | 48 | fx-28 Display from Control Panel opens a fixed applet; monitor Settings opens Power Management | ordinary window create/focus (row 1); browser remains resizable | bounded Control Panel DESK_LAUNCH capability for display/power | OPEN_POWER is the shutdown confirmation, so it is not used | fixed-size arrange; real transport and `control_modes_test.c` |
 
 
+| 92 | G29D startup placement checkbox and its running/disabled state | the maintenance dialog controls and exposed client | Files `maintenance_ui.inc`, ordinary toolkit invalidation | no new paint or protocol path | startup disk tools (appended row) |
+| 93 | G29D boot-volume next-start warning, Cancel and scheduled confirmation | dialog bounds and client content | Files conversion query/worker completion | scheduling never claims conversion has already completed | startup disk tools (appended row) |
 A window drag shows the window contents, as Windows 98 does by default; the
 caption animation of row 8 is the only window outline. Rows 25-30 came with
 | 42 | Find entry points: Start > Find submenu, desktop F3, Win+F; Files criteria pages, validation, results publication, sorting, Stop and navigation | menu boxes, normal window/client damage; Files invalidates its changed client state | `desk_shell_find`, Files `find_dialog`, `scan_poll`, `files_update` | G7 adds no compositor special case | `row_find` in `test_window_model`; `files_search_test.c` compares every client transition with a full redraw |

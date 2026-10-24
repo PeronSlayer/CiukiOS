@@ -298,10 +298,6 @@ int storage_add_disk(struct storage *s, unsigned disk, struct blkdev *dev)
         /* f9-01: in Setup mode C: is the boot CD's image; disk 0 is data. */
         bool boot = !s->setup_mode && !disk && !part->logical && part->start == boot_start && part->count == boot_count;
         /* Raw replay precedes FAT scanning and every writable activation. */
-        if (boot && s==&system_storage && blackbox_bind)
-            blackbox_bind(dev,part->start,part->count,blackbox_serial_replay);
-        if (boot && s==&system_storage && bootstat_bind)
-            (void)bootstat_bind(dev,part->start,part->count);
         unsigned d = boot ? 2 : s->next_drive++;
         if (d >= 26) return s->disk_errors[disk] = -FS_ENOSPC;
         struct storage_volume *v = &s->volumes[d];
@@ -314,7 +310,22 @@ int storage_add_disk(struct storage *s, unsigned disk, struct blkdev *dev)
         /* G29b: a committed conversion locator blocks ordinary FAT parsing.
          * Replay is idempotent and must precede dirty-volume recovery. */
         e = !superfloppy ? fat_convert_recover(dev,part->start,part->count) : 0;
+        bool pending=false;
+        if (!e && boot) e=fat_convert_boot_pending(dev,part->start,part->count,&pending);
         if (!e) e = fat_mount(&v->fat, &s->cache, &v->io, 0, part->count, false);
+        if (!e && pending) {
+            int conversion=fat_convert_boot(&v->fat,dev,part->start);
+            fat_census_end(&v->fat);
+            cache_invalidate(&s->cache,&v->io,true);
+            e=conversion;
+            if (conversion && !fat_convert_boot_cancel(dev,part->start)) e=0;
+            if (!e) e=fat_mount(&v->fat,&s->cache,&v->io,0,part->count,false);
+            klog("[storage] boot FAT32 conversion result=%d mount=%d",conversion,e);
+        }
+        if (!e && boot && s==&system_storage && blackbox_bind)
+            blackbox_bind(dev,part->start,part->count,blackbox_serial_replay);
+        if (!e && boot && s==&system_storage && bootstat_bind && v->fat.type==32)
+            (void)bootstat_bind(dev,part->start,part->count);
         v->writes_before_gate = v->writes;
         if (!e) {
             v->read_gate = !(v->fat.ro_reasons & ~(FAT_RO_REQUEST | FAT_RO_DURABILITY | FAT_RO_DIRTY | FAT_RO_LOST | FAT_RO_IO_FLAG));
@@ -1764,7 +1775,7 @@ int storage_writer_start(struct storage *s) { (void)s; return 0; }
 int storage_defrag(struct storage *s, struct ciuki_media_defrag *r, bool step)
 {
     if (!r || r->version!=CIUKI_MEDIA_VERSION || r->size!=sizeof(*r) ||
-        r->drive>=26 || (r->flags&~CIUKI_DEFRAG_CHECK)) return -FS_EINVAL;
+        r->drive>=26 || (r->flags&~(CIUKI_DEFRAG_CHECK|CIUKI_DEFRAG_STARTUP))) return -FS_EINVAL;
     if (!s || !s->ready || s->stopped) return -FS_ENOENT;
     if (s->setup_mode) return -FS_EBUSY;
     unsigned d=r->drive;
@@ -1783,7 +1794,11 @@ int storage_defrag(struct storage *s, struct ciuki_media_defrag *r, bool step)
         if (!e && v->fat.readonly) e=-FS_EROFS;
         bool moved=false;
         if (!e) {
-            e=VFS_IO(&s->vfs,fat_defrag_step(&v->fat,r->ordinal,r->sequence,&moved));
+            if (r->flags&CIUKI_DEFRAG_STARTUP) {
+                uint32_t previous=r->placement;
+                e=VFS_IO(&s->vfs,fat_defrag_startup_step(&v->fat,r->ordinal,r->sequence,&r->placement,&moved));
+                if (!e && moved && previous!=r->placement) r->profiled++;
+            } else e=VFS_IO(&s->vfs,fat_defrag_step(&v->fat,r->ordinal,r->sequence,&moved));
             r->finished=e==1; if (e==1) e=0;
             r->moved=moved;
             if (!e && !r->finished) r->ordinal++;
@@ -1796,7 +1811,7 @@ int storage_defrag(struct storage *s, struct ciuki_media_defrag *r, bool step)
         if (!e) {
             r->files=info.files; r->fragmented=info.fragmented;
             r->clusters=info.clusters; r->free_clusters=info.free_clusters;
-            memcpy(r->map,info.map,sizeof(r->map)); r->ordinal=0; r->moved=0; r->finished=0;
+            memcpy(r->map,info.map,sizeof(r->map)); r->ordinal=0; r->moved=0; r->finished=0; r->placement=2; r->profiled=0;
         }
     }
     if (!e) { r->sequence=v->fat.mutation_sequence; r->generation=dev->media_generation; }
@@ -1807,12 +1822,12 @@ int storage_defrag(struct storage *s, struct ciuki_media_defrag *r, bool step)
 int storage_convert(struct storage *s, struct ciuki_media_convert *r, bool execute)
 {
     if (!r || r->version!=CIUKI_MEDIA_VERSION || r->size!=sizeof(*r) ||
-        r->drive>=26 || r->reserved) return -FS_EINVAL;
+        r->drive>=26 || (r->reserved&~CIUKI_CONVERT_NEXT_BOOT)) return -FS_EINVAL;
     if (!s || !s->ready || s->stopped) return -FS_ENOENT;
     unsigned d=r->drive;
-    /* The live system image's boot code is not replaced by a data-volume
-     * converter. Boot-time conversion needs the loader installation path. */
-    if (d==2 || s->setup_mode) return -FS_EROFS;
+    if (s->setup_mode) return -FS_EROFS;
+    if (d==2 && execute && !(r->reserved&CIUKI_CONVERT_NEXT_BOOT)) return -FS_EROFS;
+    if (d!=2 && r->reserved) return -FS_EINVAL;
     vfs_lock(&s->vfs,0); vfs_reserve_locked(&s->vfs,vfs_drive_mask(d));
     struct storage_volume *v=&s->volumes[d]; struct blkdev *dev=v->part.parent;
     int e=!v->present || !v->fat.mounted || s->vfs.volumes[d]!=&v->fat ? -FS_ENOENT :
@@ -1822,6 +1837,17 @@ int storage_convert(struct storage *s, struct ciuki_media_convert *r, bool execu
     if (!e && v->disk<STORAGE_DISKS && s->raw[v->disk].lease.holder) e=-FS_EBUSY;
     uint32_t bytes=0;
     if (!e) e=fat_convert_plan(&v->fat,&bytes);
+    if (!e && d==2) {
+        if (v->fat.spc>64) e=-FS_EOPNOTSUPP;
+        if (!e) e=VFS_IO(&s->vfs,fat_convert_boot_loader(dev,v->part.start,v->part.block.capacity));
+        if (!e && execute) {
+            e=VFS_IO(&s->vfs,fat_convert_boot_schedule(&v->fat,dev,v->part.start));
+            cache_invalidate(&s->cache,&v->io,true);
+        }
+        if (!e) { r->reserved=CIUKI_CONVERT_NEXT_BOOT; r->generation=dev->media_generation;
+            r->filesystem=16; r->cluster_bytes=bytes; r->sectors=(uint32_t)v->part.block.capacity; }
+        vfs_unlock(&s->vfs); return e;
+    }
     if (!e && execute) {
         for (unsigned i=0;!e && i<26;i++)
             if (s->volumes[i].part.parent==dev && s->volumes[i].formatting) e=-FS_EBUSY;

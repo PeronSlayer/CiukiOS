@@ -519,6 +519,8 @@ struct image_source {
     struct vfs_file_identity *id;
     struct fat_cursor cursor;
     bool busy;
+    uint32_t startup_order[16];
+    unsigned startup_count;
 };
 /* Read the snapshot's missing pages in [first, end): runs of contiguous
  * missing pages, at most BLKDEV_READ_BYTES each (one admission per run). */
@@ -594,6 +596,15 @@ static int image_fat_read(struct image_source *src, uint32_t offset, uint32_t by
     int err = px_error(vfs_read_identity_locked(src->space->vfs, src->id, n->volume, &n->entry, &src->cursor,
         &src->busy, &position, &position, true, image_range_check, &range, src->buffer, bytes, &done));
     proc_launch_volume_read(bytes, done);
+    if (!err && done) {
+        uint32_t unit=(uint32_t)n->volume->spc*512;
+        uint32_t last=(offset+(uint32_t)done-1)/unit;
+        for (uint32_t c=offset/unit;c<=last && src->startup_count<16;c++) {
+            bool seen=false;
+            for (unsigned i=0;i<src->startup_count;i++) if (src->startup_order[i]==c) seen=true;
+            if (!seen) src->startup_order[src->startup_count++]=c;
+        }
+    }
     return !err && done != bytes ? -EIO : err;
 }
 static int image_ro_read(struct image_source *src, uint32_t offset, uint32_t bytes)
@@ -633,7 +644,10 @@ static int image_fat(struct px_namespace *s, struct px_node *n, struct file_imag
         /* Changed while it was read: read it again from the new entry. */
         if (n->linked && n->entry.first == entry.first && n->entry.size == entry.size &&
             n->entry.chain_generation == entry.chain_generation && vfs_identity_live(v, id) &&
-            vfs_change_generation(v, n->volume, entry.parent, entry.index) == generation) break;
+            vfs_change_generation(v, n->volume, entry.parent, entry.index) == generation) {
+            vfs_startup_record_locked(v,n->volume,&entry,src.startup_order,src.startup_count);
+            break;
+        }
         if (attempt == 2) { err = -EAGAIN; break; }
     }
     vfs_identity_put(v, id);

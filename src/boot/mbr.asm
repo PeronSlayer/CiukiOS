@@ -185,7 +185,8 @@ align 4, db 0
 dap db 16, 0
     dw 1, 0, 0x2000
     dq 1
-times 440-($-$$) db 0
+times 436-($-$$) db 0
+db "CKD1"
 dd 0 ; Disk signature, filled independently of boot code.
 dw 0
 times 64 db 0 ; Filled by the image builder.
