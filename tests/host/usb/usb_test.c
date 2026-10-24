@@ -34,8 +34,10 @@ static struct resource leases[64];
 static unsigned lease_count, generation;
 static unsigned claims, writes, events, key_downs, key_ups, repeats, wheel_events;
 static unsigned keyboard_delay=500,keyboard_interval=33;
+#ifndef USB_LATENCY_QUEUE
 unsigned input_repeat_delay(void){return keyboard_delay;}
 unsigned input_repeat_interval(void){return keyboard_interval;}
+#endif
 static unsigned held[513], buttons[3];
 static int last_x,last_y,last_wheel;
 static unsigned connect_records,disconnect_records,reset_records,enable_records;

@@ -37,7 +37,7 @@ int main(int argc,char **argv) {{
                '-fsanitize=address,undefined',
                '-fsanitize-coverage=trace-pc-guard,trace-loads,trace-stores,trace-div',
                '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
-               '-I', str(ROOT / 'src/kernel/include'), '-I', str(HOST), '-I', str(OUT), '-I', str(folder),
+               '-I', str(ROOT / 'src/kernel/include'), '-I', str(HOST), '-I', str(folder), '-I', str(OUT),
                *flags, str(wrapper), *(str(ROOT / p) for p in extra), '-o', str(binary)]
     subprocess.run(command, check=True, env=ENV, stdout=subprocess.DEVNULL)
     result = subprocess.run([str(binary), *map(str, args)], check=False, env=ENV,
@@ -90,13 +90,26 @@ def main():
         composed=composed.replace('#include "../../src/', f'#include "{ROOT}/src/')
         replay(folder, 'pit-full', None, [('timer_irq', 'PIT-full-ring-1000-timers', 100)],
                ['serial_tick', 'timing_timer_irq'], ['src/kernel/lib/fmt.c'], text='#undef main\n'+composed)
+        subprocess.run(['python3', str(HOST / 'vm/prepare_lifecycle.py'),
+                        str(ROOT), str(folder)], check=True, env=ENV)
         # The VM network boundary retains frames in f6-10's real shared pool,
         # just as the full DOSVM fixture linked by host_kernel_tests.sh does.
         pool = subprocess.check_output(['python3', str(HOST / 'vm/pool_build.py'),
                                         str(ROOT), str(folder)], env=ENV, text=True).strip()
+        # Match host_kernel_tests.sh without borrowing objects from an earlier
+        # suite invocation (or another source state).
+        vm_audio = []
+        for unit in ('vm_source', 'opl3', 'mixer'):
+            obj = folder / f'dosvm_audio_{unit}.o'
+            subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+                            '-fsanitize=address,undefined', '-include', str(HOST / 'vm_audio_shim.h'),
+                            '-I', str(ROOT / 'src/kernel/include'), '-c',
+                            str(ROOT / f'src/kernel/audio/{unit}.c'), '-o', str(obj)],
+                           check=True, env=ENV)
+            vm_audio.append(obj)
         vm_source=(HOST / 'dosvm_test.c').read_text()
         vm_source=vm_source[:vm_source.index('int main(void)')] + 'int main(void) { ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram); test_audio(); test_timer(); test_game_audio(); printf("VM clock coverage checks=%u guest_enters=%u deletes=%u\\n",checks,guest_enters,deletes); free(ram); return 0; }\n'
-        vm_source=re.sub(r'(#include ")([^"]+)(")', lambda m:m[1]+str(((HOST / m[2]) if (HOST / m[2]).is_file() else (OUT / m[2])).resolve())+m[3],vm_source)
+        vm_source=re.sub(r'(#include ")([^"]+)(")', lambda m:m[1]+str(((HOST / m[2]) if (HOST / m[2]).is_file() else (folder / m[2])).resolve())+m[3],vm_source)
         replay(folder, 'vm-clock', None,
                # fx-9: the PIT top half samples and signals only (R1 100 us);
                # every vm-clock turn is bounded work between safe points.
@@ -109,7 +122,7 @@ def main():
                 'src/kernel/vm/virtual_vga.c', 'src/kernel/vm/virtual_vga_bios.c',
                 'src/kernel/vm/vga_x86.c', 'src/kernel/vm/vga_presenter.c',
                 'src/kernel/net/bridge.c', 'src/kernel/vm/dosvm_ipx.c', 'src/kernel/vm/dosvm_ne2000.c',
-                *(OUT / f'dosvm_audio_{n}.o' for n in ('vm_source', 'opl3', 'mixer')), pool],
+                *vm_audio, pool],
                ['-D_POSIX_C_SOURCE=200809L', '-Wno-pointer-to-int-cast',
                 '-pthread', '-Wl,-u,pool_fixture_start'], text=vm_source)
         # f1-121's APM cases time with clock_gettime; the model header is
@@ -142,6 +155,11 @@ void bootlog_capture(const char *s,size_t n) {{ (void)s;(void)n;abort(); }}
 void console_write(const char *s,size_t n) {{ (void)s;(void)n;abort(); }}
 ''')
         ata_fs = ['partition', 'fs_port', 'blkreq', 'cache', 'fat', 'path', 'vfs', 'fs_ro', 'iso9660', 'ntfs_fs', 'ntfs_ro', 'mount']
+        # The full ATA fixture also checks the optical lifecycle against this
+        # small authored data fixture, normally prepared by the enclosing suite.
+        subprocess.run(['python3', str(ROOT / 'scripts/test/iso_fixtures.py'),
+                        '--out', str(OUT / 'optical'), '--joliet'],
+                       check=True, env=ENV, stdout=subprocess.DEVNULL)
         replay(folder, 'ata', 'ata_test.c', [('ata_channel_irq', 'ATA-status-capture', 100), ('ata_dma_irq', 'ATA-DMA-stop-ack', 100)],
                ['fake_in8', 'fake_out8'],
                [*(f'src/kernel/fs/{n}.c' for n in ata_fs), 'src/kernel/core/bootlog.c', 'src/kernel/probes/fat_probes.c', 'src/kernel/lib/sha256.c', 'src/kernel/lib/fmt.c',
@@ -163,7 +181,8 @@ void console_write(const char *s,size_t n) {{ (void)s;(void)n;abort(); }}
                [('ac97_irq', 'AC97-period', 100), ('backend_irq', 'ES137x-SB16-period', 100)],
                ['mock_read', 'mock_write'],
                ['tests/host/proc/signal_legacy.c', 'tests/host/proc/desktop_legacy.c',
-                'src/kernel/audio/registry_master.c', 'src/kernel/lib/sha256.c',  # f1-119 DS-1 microcode check
+                'src/kernel/audio/registry_master.c', 'src/kernel/audio/midi.c',
+                'src/kernel/audio/opl3.c', 'src/kernel/lib/sha256.c',  # f1-119 DS-1 microcode check
                 *(f'src/kernel/fs/{n}.c' for n in fs_sources),
                 'tests/host/fs/fake.c', 'src/kernel/probes/f2_probes_files.c'],
                # audio_test.c observes source-read admission through the wrap
