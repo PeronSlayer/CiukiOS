@@ -1072,6 +1072,9 @@ static void test_power_status(void)
     int old=desk_shell_tray_box(&d).w;
     struct ciuki_power_status p={.version=1,.size=sizeof(p),.ac_online=CIUKI_POWER_UNKNOWN,.lid_open=CIUKI_POWER_UNKNOWN};
     assert(!desk_shell_power_update(&d,&p));
+    assert(desk_shell_tray_box(&d).w==old);   /* no battery: the meter stays hidden */
+    p.battery_count=1; p.batteries[0]=(struct ciuki_power_battery){.id=1,.present=1,.unit=CIUKI_POWER_UNIT_PERCENT,.full=100,.remaining=50,.design=CIUKI_POWER_UNKNOWN,.rate=CIUKI_POWER_UNKNOWN,.voltage=CIUKI_POWER_UNKNOWN};
+    assert(!desk_shell_power_update(&d,&p));
     assert(desk_shell_tray_box(&d).w==old+SH_TRAY_ICON_SIZE+SH_TRAY_GAP);
     struct desk_box b=desk_shell_tray_icon_box(&d,SH_TRAY_POWER);
     assert(b.w==16 && b.x>=desk_shell_tray_box(&d).x);
