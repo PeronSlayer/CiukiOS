@@ -29,7 +29,8 @@
     }                                                                          \
   } while (0)
 void ui_kernel_init(void), ui_kernel_finish(void), ui_kernel_switch(unsigned),
-    ui_kernel_schedule(void (*)(void)), ui_kernel_pause(uint32_t);
+    ui_kernel_schedule(void (*)(void)), ui_kernel_pause(uint32_t),
+    ui_kernel_refuse_send(uint32_t);
 unsigned ui_kernel_current(void);
 uint32_t ui_kernel_tid(void), ui_kernel_pid(void), ui_kernel_ticks(void);
 int32_t ui_kernel_call(void *, uint32_t);
@@ -346,6 +347,10 @@ static UINT outgoing_count, in_head, in_tail, reject_opcode;
 static DWORD lease_token = 0x40, lease_generation = 0x80, lease_serial;
 static DWORD frames_seen, frames_refused, frame_token, frame_generation;
 static uint64_t fake_ns;
+/* q3exec3: a test may add the desktop's own events around a request's
+ * RESULT (a PING queued before the desktop read a DESK_CLOSE, the
+ * DESK_CLOSED it sends after the RESULT). */
+static void (*desk_reply_hook)(const struct ciuki_message *sent, BOOL after_result);
 /* Fake desktop lease: GRANTED (state 1) carries the full 72-byte tuple. */
 static void lease_event(DWORD id, DWORD generation, DWORD state, DWORD w,
                         DWORD h, DWORD bpp) {
@@ -405,6 +410,8 @@ DWORD w32r_gate(DWORD call, DWORD a, DWORD b, DWORD c) {
     CHECK(outgoing_count < 2048);
     struct ciuki_message *sent = (void *)(uintptr_t)b;
     outgoing[outgoing_count++] = *sent;
+    if (desk_reply_hook)
+      desk_reply_hook(sent, 0);
     if(sent->data[1]==DESK_INPUT_SETTINGS) {
       UINT key=desk_get32(sent->data+16),value=desk_get32(sent->data+20),flags=desk_get32(sent->data+24);
       if(key && key<=DESK_INPUT_VALUES){shared_input[key-1]=value;if(flags&1)saved_input[key-1]=value;}
@@ -433,6 +440,8 @@ DWORD w32r_gate(DWORD call, DWORD a, DWORD b, DWORD c) {
       if (sent->data[1] == reject_opcode)
         reject_opcode = 0;
     }
+    if (desk_reply_hook)
+      desk_reply_hook(sent, 1);
     return 0;
   }
   if (call == CIUKI_SYS_CHANNEL_RECV) {
@@ -1128,6 +1137,7 @@ static UINT trace_index(HWND h, UINT m) {
       return i;
   return 9999;
 }
+static void failed_destroy_ping(void);
 static void test_order(void) {
   const UINT quiet = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
   HWND a = CreateWindowExA(0, "USER fixture", "a", WS_VISIBLE | WS_CAPTION,
@@ -1202,11 +1212,78 @@ static void test_order(void) {
   CHECK(!IsWindow(owned) && !IsWindow(b));
   CHECK(trace_index(owned, WM_DESTROY) < trace_index(b, WM_DESTROY) &&
         trace_index(owned, WM_NCDESTROY) < trace_index(b, WM_DESTROY));
+  failed_destroy_ping();
   CHECK(DestroyWindow(a));
   printf("TRACE window order: insert-after bottom topmost notopmost owner "
          "cycle refusal cross-thread owned destruction\n");
 }
 
+/* q3exec3 review: DestroyWindow destroys dependents first and fails when a
+ * dependent on another thread cannot be reached; the window then lives on.
+ * A PING the desktop sent it while a same-thread dependent was being closed
+ * must still be answered, or the desktop (which pings again only after an
+ * answer) marks a live, pumping window "not responding". */
+static DWORD review_mine_wire, review_mine_generation;
+static HWND review_parent;
+static void review_close_hook(const struct ciuki_message *sent, BOOL after_result) {
+  if (sent->data[0] != DESK_V3_VERSION || sent->data[1] != DESK_CLOSE ||
+      desk_get32(sent->data + 8) != review_mine_wire ||
+      desk_get32(sent->data + 12) != review_mine_generation)
+    return;
+  CHECK(in_tail - in_head < 256);
+  struct ciuki_message *m = &incoming[in_tail++ % 256];
+  if (!after_result) {
+    struct u32_window *p = u32_window(review_parent);
+    CHECK(p && p->wire && p->destroying && !p->closing);
+    desk_v3_message(m, DESK_PING, 4, 0, p->wire, p->generation);
+    desk_put32(m->data + 16, 0x61);
+  } else
+    desk_v3_message(m, DESK_CLOSED, 0, 0, review_mine_wire, review_mine_generation);
+}
+static void failed_destroy_ping(void) {
+  review_parent = CreateWindowExA(0, "USER fixture", "parent", WS_VISIBLE | WS_CAPTION,
+                                  300, 30, 60, 60, 0, 0, 0, 0);
+  HWND mine = CreateWindowExA(0, "USER fixture", "mine", WS_VISIBLE | WS_CAPTION,
+                              310, 40, 40, 40, review_parent, 0, 0, 0);
+  ui_kernel_switch(1);
+  HWND theirs = CreateWindowExA(0, "USER fixture", "theirs", WS_VISIBLE | WS_CAPTION,
+                                320, 50, 40, 40, review_parent, 0, 0, 0);
+  ValidateRect(theirs, 0);
+  ui_kernel_switch(0);
+  CHECK(review_parent && mine && theirs);
+  ValidateRect(review_parent, 0);
+  ValidateRect(mine, 0);
+  struct u32_window *p = u32_window(review_parent), *w = u32_window(mine);
+  CHECK(w < u32_window(theirs)); /* the same-thread dependent goes first */
+  review_mine_wire = w->wire, review_mine_generation = w->generation;
+  UINT from = outgoing_count;
+  desk_reply_hook = review_close_hook;
+  ui_kernel_refuse_send(U32_DESTROY);
+  CHECK(!DestroyWindow(review_parent));
+  desk_reply_hook = 0;
+  CHECK(IsWindow(review_parent) && !IsWindow(mine) && IsWindow(theirs) &&
+        !p->destroying && !p->closing && p->wire);
+  MSG m;
+  while (PeekMessageA(&m, 0, 0, 0, 1))
+    DispatchMessageA(&m);
+  UINT pongs = 0;
+  for (UINT i = from; i < outgoing_count; i++) {
+    const struct ciuki_message *o = &outgoing[i];
+    if (o->data[0] != DESK_V3_VERSION)
+      continue;
+    CHECK(desk_get32(o->data + 8) && desk_get32(o->data + 12));
+    if (o->data[1] == DESK_PONG) {
+      CHECK(desk_get32(o->data + 8) == p->wire && desk_get32(o->data + 12) == p->generation &&
+            desk_get32(o->data + 16) == 0x61);
+      pongs++;
+    }
+  }
+  CHECK(pongs == 1 && !p->ping);
+  ui_kernel_schedule(schedule_peer);
+  CHECK(DestroyWindow(review_parent));
+  ui_kernel_schedule(0);
+  CHECK(!IsWindow(review_parent) && !IsWindow(theirs));
+}
 static RECT local_rect(HWND h) { return u32_window(h)->rect; }
 /* G4: CascadeWindows, TileWindows and ArrangeIconicWindows (Microsoft Learn,
  * winuser.h): explicit lists keep their order, MDITILE_ZORDER follows the

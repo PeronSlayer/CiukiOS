@@ -2907,3 +2907,71 @@ progress page, creates the Program Manager group through the PROGMAN DDE
 conversation, may call `dsetup.dll` `DirectXSetup`, writes the `Uninstall`
 key and copies `unvise32.exe` to the Windows directory, may add `RunOnce`
 and ask for a restart (`ExitWindowsEx`), and ends with its finish page.
+
+## q3exec3 — No message names a closed window (2026-10-25)
+
+QEMU evidence (lead, image of main a347ca76b): the wizard still vanishes
+after Next on Welcome. The serial log records
+`[desktop] v3 drop pid=6 sender=6 opcode=12 length=20 fds=0 window=0 generation=3`
+(opcode 12 is DESK_PONG; generation 3 is the Welcome page, after the
+"Starting Setup" dialog and the background), then
+`[win32] warning check=dialogbox-create-failed`.
+
+### Cause
+
+The desktop pings every window once a second (`next_ping_ns`). A PING it
+queued for the Welcome page just before it read the page's DESK_CLOSE
+reaches USER in the same batch as the RESULT and the DESK_CLOSED answer,
+while `u32_destroy` waits in `u32_wire`. `u32_event` stored the PING
+(`w->ping`), DESK_CLOSED cleared `w->wire` but not `w->ping`, and the end of
+`u32_pump` answered the PING with `du3_ui_progress(wire 0, generation 3)`.
+`du3_ui_progress` is the only client send that libdeskui does not check
+locally with `desk_parse` (`du3_request` refuses a packet the desktop would
+refuse), and the desktop's parser refuses window 0 for every per-window
+opcode, so the desktop ended the connection, as in q3exec2.
+
+### Decisions
+
+1. user32: DestroyWindow flushes the window's queue (Windows 98 behaviour,
+   see q3exec2), so while a window is being destroyed only DESK_CLOSED and,
+   until its DESK_CLOSE is sent, DESK_PING are still taken; the PING answer
+   is sent only for a live window (wire id and generation set, not
+   closing); DESK_CLOSED and `u32_destroy` clear the pending PING. PING
+   stays answered while dependents are destroyed because DestroyWindow can
+   still fail there (a dependent on another thread cannot be reached) and
+   the window lives on; the desktop pings again only after an answer and
+   would otherwise mark a pumping window "not responding" after five
+   seconds (Codex review of 58c5707bc). A new `closing` state, set just
+   before DESK_CLOSE (in `u32_destroy` and in `SetParent` when a top-level
+   window becomes a child), makes `u32_wire` refuse every other message for
+   that window, so nothing follows its DESK_CLOSE. A window the desktop no
+   longer has is never named in another window's message: a new window's
+   owner and a WINDOW_ORDER owner are left out, and ordering after such a
+   window is dropped (both were refused locally before, failing the call).
+2. libdeskui: `du3_ui_progress` refuses window or generation 0 like
+   `du3_request` (EINVAL), for every native client too.
+3. desktop: the q3exec2 refusal covers every well-formed per-window
+   message, not only frame updates. A packet that parses when its window
+   and generation are replaced by non-zero values (and, for DAMAGE and
+   PRESENT, with the largest surface) names a closed or zero window and is
+   refused alone with -ENOENT (-EINVAL for a frame update outside a live
+   window's surface), logged as `[desktop] v3 stale update`. A RESULT must
+   name a window, so a request naming window 0 gets no answer. Malformed
+   packets, another sender, descriptors and HELLO-order faults still end
+   the connection.
+4. Host tests: the VISE mode of `tests/host/win32/dialogs` makes the fake
+   desktop queue a PING for the Welcome page and one for the background
+   before the page's DESK_CLOSE RESULT, and DESK_CLOSED after it; exactly
+   one PONG, for the background with its serial, may leave USER, and no
+   packet names window 0 or a closed window (fails without decision 1).
+   `tests/host/win32/user32` (`failed_destroy_ping`) destroys a parent whose
+   same-thread dependent closes first, with a PING for the parent queued
+   during that close, and whose other-thread dependent cannot be reached
+   (the harness refuses that send as the kernel does without queue
+   memory): DestroyWindow fails, the parent lives on and its PING is
+   answered once, with its own window id.
+   `tests/host/desktop/v3_test.c` `stale_updates` sends the logged packet
+   (PONG, window 0, generation 3), a PONG with generation 0, a PONG for a
+   closed window and SET_TITLE requests naming window 0: all are refused
+   alone; a malformed PONG still drops the connection (fails without
+   decision 3).

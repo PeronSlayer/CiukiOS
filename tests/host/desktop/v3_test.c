@@ -253,10 +253,11 @@ static void ownership(void)
     assert(!d.clients[root].v3_failed && d.clients[root].v3_over_count>=1); fake_block=0; flush(); assert(d.clients[a].window); cleanup();
     puts("PASS v3 multiwindow: ownership, generations, topmost, modal owner death, transport loss and backpressure");
 }
-/* q3exec2: a frame update that arrives after its window's DESK_CLOSE, or
+/* q3exec2/q3exec3: a per-window message that arrives after its window's
+ * DESK_CLOSE or names window 0 (a PING answer included), or a frame update
  * whose rectangle no longer fits the window's surface, is refused alone;
- * the program keeps its connection and its other windows. A packet no
- * surface could make valid, or one from another sender, still ends it. */
+ * the program keeps its connection and its other windows. A packet no live
+ * window could make valid, or one from another sender, still ends it. */
 static void stale_updates(void)
 {
     setup(); int root=peer(10,42), a=create(root,20,1,1,0,0), b=create(root,21,2,1,0,0); flush();
@@ -272,6 +273,29 @@ static void stale_updates(void)
     assert(d.clients[root].channel==10 && d.clients[b].window && d.v3_stale_updates==3);
     msg(&m,DESK_DAMAGE,16,2,1); desk_put32(m.data+24,200); desk_put32(m.data+28,100);
     assert(!desk_v3_receive(&d,root,&m)); flush();
+    /* q3exec3: the PING answer of a window whose wire id the program
+     * already cleared (window 0) or that the desktop closed, and a request
+     * naming no window, are refused alone; a RESULT must name a window, so
+     * a request naming none gets no answer. */
+    desk_v3_message(&m,DESK_PONG,4,0,0,3); m.sender_pid=42; desk_put32(m.data+16,7);
+    assert(desk_v3_receive(&d,root,&m)==-ENOENT); flush();
+    desk_v3_message(&m,DESK_PONG,4,0,1,1); m.sender_pid=42; desk_put32(m.data+16,7);
+    assert(desk_v3_receive(&d,root,&m)==-ENOENT); flush();
+    desk_v3_message(&m,DESK_PONG,4,0,2,0); m.sender_pid=42; desk_put32(m.data+16,7);
+    assert(desk_v3_receive(&d,root,&m)==-ENOENT); flush();
+    unsigned sent=fake_sent;
+    desk_v3_message(&m,DESK_SET_TITLE,8,++token,0,0); m.sender_pid=42; desk_put32(m.data+16,4); memcpy(m.data+20,"Gone",4);
+    assert(desk_v3_receive(&d,root,&m)==-ENOENT); flush(); assert(fake_sent==sent);
+    msg(&m,DESK_SET_TITLE,8,0,3); desk_put32(m.data+16,4); memcpy(m.data+20,"Gone",4);
+    assert(desk_v3_receive(&d,root,&m)==-ENOENT); flush(); assert(fake_sent==sent);
+    assert(d.clients[root].channel==10 && d.clients[b].window && d.v3_stale_updates==7);
+    desk_v3_message(&m,DESK_PONG,4,0,2,1); m.sender_pid=42; desk_put32(m.data+16,7);
+    assert(!desk_v3_receive(&d,root,&m)); flush();
+    msg(&m,DESK_PONG,8,0,3); m.sender_pid=42;
+    assert(desk_v3_receive(&d,root,&m)==-EINVAL); assert(d.clients[root].channel<0 && !d.clients[b].window);
+    cleanup();
+    setup(); root=peer(10,42); a=create(root,20,1,1,0,0); b=create(root,21,2,1,0,0); flush();
+    msg(&m,DESK_CLOSE,0,1,1); assert(!desk_v3_receive(&d,root,&m)); flush();
     msg(&m,DESK_DAMAGE,16,1,1); m.sender_pid=84;
     assert(desk_v3_receive(&d,root,&m)==-EINVAL); assert(d.clients[root].channel<0 && !d.clients[b].window);
     cleanup();
@@ -283,7 +307,7 @@ static void stale_updates(void)
     msg(&m,DESK_DAMAGE,16,2,1); desk_put32(m.data+16,0x80000000u);
     assert(desk_v3_receive(&d,root,&m)==-EINVAL); assert(d.clients[root].channel<0 && !d.clients[b].window);
     cleanup();
-    puts("PASS v3 stale frame updates: closed window and outside rectangle refused alone, malformed still drops");
+    puts("PASS v3 stale window messages: closed or zero window (PONG included) and outside rectangle refused alone, malformed still drops");
 }
 static void slow_client_storm(void)
 {
@@ -566,6 +590,9 @@ static void bridge(void)
     desk_v3_message(&bridge_wire,DESK_PING,4,0,1,1); desk_put32(bridge_wire.data+16,99);
     struct desk_packet p; assert(du3_next(&c,&p)==1 && p.serial==99 && bridge_sends==before);
     assert(!du3_ui_progress(&c,1,1,99)); assert(bridge_wire.data[1]==DESK_PONG);
+    /* q3exec3: a PONG never names window or generation 0. */
+    before=bridge_sends;
+    assert(du3_ui_progress(&c,0,3,99)<0 && errno==EINVAL && du3_ui_progress(&c,1,0,99)<0 && bridge_sends==before);
     bridge_wire.data[255]=1; assert(du3_next(&c,&p)<0 && c.disconnected);
     puts("PASS user-mode bridge tokens, backpressure, malformed server, explicit guest UI PONG");
 }

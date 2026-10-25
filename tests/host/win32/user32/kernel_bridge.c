@@ -57,6 +57,11 @@ uint32_t ui_kernel_pid(void) {
 }
 uint32_t ui_kernel_ticks(void) { return (uint32_t)g_ticks; }
 void ui_kernel_schedule(void (*fn)(void)) { dispatch = fn; }
+/* q3exec3: the next cross-thread send of MESSAGE is refused as the kernel
+ * refuses it when the sender's queue charge cannot be allocated
+ * (src/kernel/proc/win32/message.c, W32_MSG_START: error 8). */
+static uint32_t refused_send;
+void ui_kernel_refuse_send(uint32_t message) { refused_send = message; }
 void ui_kernel_pause(uint32_t n) {
   g_ticks += n;
   if (dispatch)
@@ -69,6 +74,12 @@ int32_t ui_kernel_call(void *record, uint32_t bytes) {
   struct proc_thread *thread = ui_threads[current_thread];
   if (header->operation == W32_MESSAGE) {
     struct ciuki_w32_message_args *r = record, a = *r;
+    if (refused_send && a.action == W32_MSG_START &&
+        a.message.message == refused_send) {
+      refused_send = 0;
+      r->error = 8;
+      return 0;
+    }
     uint32_t original = a.buffer, capacity = a.bytes;
     if (capacity) {
       CHECK(capacity <= 65536);

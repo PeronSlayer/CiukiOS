@@ -49,6 +49,9 @@ int du3_next(struct du3_connection *c, struct desk_packet *p)
 int du3_ui_progress(struct du3_connection *c, uint32_t id, uint32_t generation, uint32_t ping)
 {
     if (!c || c->disconnected) { errno=EPIPE; return -1; }
+    /* q3exec3: as du3_request, a reply names a live window (the desktop ends
+     * the connection for a PONG with window or generation 0). */
+    if (!id || !generation) { errno=EINVAL; return -1; }
     struct ciuki_message m; desk_v3_message(&m,DESK_PONG,4,0,id,generation); desk_put32(m.data+16,ping);
     return c->transport.send(c->channel,&m,DONTWAIT);
 }
