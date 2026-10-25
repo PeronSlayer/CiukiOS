@@ -12,7 +12,7 @@ import re
 import struct
 import subprocess
 from functools import lru_cache
-from inventory import ROOT, sites
+from inventory import CORPUS, ROOT, sites
 
 
 def lzexe(data, limit=2*1024*1024):
@@ -209,7 +209,8 @@ def collect():
     spec=importlib.util.spec_from_file_location("d51_games",ROOT/"scripts/build_games_disk.py")
     games=importlib.util.module_from_spec(spec);spec.loader.exec_module(games)
     result=dict(schema_version=1,runtime_trace="not-collected",files=[])
-    for package in games.PACKAGES:
+    # Pinned f3-51 corpus: the three shareware games (see inventory.CORPUS).
+    for package in CORPUS:
         _,members,_=games.package_files(package)
         for path,data,_ in members:
             if not path.upper().endswith((".COM",".EXE")): continue
