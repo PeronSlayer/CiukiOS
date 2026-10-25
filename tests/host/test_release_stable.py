@@ -233,10 +233,14 @@ class StableReleaseTests(unittest.TestCase):
         def transport(*args, root=release.ROOT):
             self.calls.append(args)
             if args[:2] == ("git", "tag"):
+                if "-alpha." in args[-1]:
+                    return "v1.0.0-alpha.1\nv0.9.2-alpha.8"
                 return "v1.0.0-stable.1\nv0.9.2-stable.8"
             if args[0] == "gh":
                 self.network.append(args)
                 if args[1] == "api":
+                    if "-alpha." in args[-1]:
+                        return '[{"ref": "refs/tags/v1.0.0-alpha.2"}]'
                     return '[{"ref": "refs/tags/v1.0.0-stable.2"}]'
                 return "https://example.invalid/synthetic-release"
             return original_command(*args, root=root)
@@ -345,7 +349,8 @@ class StableReleaseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=self.root) as temporary:
             temp = Path(temporary)
             for suffix, disk_name, fmt in (("-qemu.zip", "ciukios.qcow2", "qcow2"),
-                                            ("-vmware.zip", "ciukios.vmdk", "vmdk")):
+                                            ("-vmware.zip", "ciukios.vmdk", "vmdk"),
+                                            ("-virtualbox.zip", "ciukios.vdi", "vdi")):
                 with zipfile.ZipFile(destination / (stem + suffix)) as archive:
                     archive.extract(disk_name, temp)
                     self.assertEqual(archive.testzip(), None)
@@ -358,10 +363,24 @@ class StableReleaseTests(unittest.TestCase):
                         self.assertIn("hvf", launcher)
                         self.assertIn(b"whpx", archive.read("run-qemu.cmd"))
                         self.assertNotIn(b"\n", archive.read("run-qemu.cmd").replace(b"\r\n", b""))
+                    elif fmt == "vdi":
+                        self.assertEqual(set(archive.namelist()), {"ciukios.vdi", "create-vm.sh", "create-vm.cmd", "README.txt"})
+                        self.assertTrue(archive.getinfo("create-vm.sh").external_attr >> 16 & stat.S_IXUSR)
+                        script = archive.read("create-vm.sh").decode() + archive.read("create-vm.cmd").decode() \
+                            + archive.read("README.txt").decode()
+                        for key in ("--memory 512", "--ioapic off", "--controller PIIX4", "--nictype1 Am79C973",
+                                    "--audiocontroller ac97", "--graphicscontroller vboxvga", "ciukios.vdi"):
+                            self.assertIn(key, script)
+                        self.assertIn("%VBM%", archive.read("create-vm.cmd").decode())
                     else:
+                        self.assertEqual(set(archive.namelist()), {"ciukios.vmdk", "ciukios.vmx", "README.txt"})
                         vmx = archive.read("ciukios.vmx")
                         for setting in (b'virtualDev = "es1371"', b'virtualDev = "e1000"', b'ide0:0.present = "TRUE"'):
                             self.assertIn(setting, vmx)
+                info = json.loads(run("qemu-img", "info", "--output=json", "-f", fmt, temp / disk_name).stdout)
+                self.assertEqual(info["format"], fmt)
+                if fmt == "vmdk":
+                    self.assertEqual(info["format-specific"]["data"]["create-type"], "monolithicSparse")
                 run("qemu-img", "compare", "-f", "raw", "-F", fmt, self.root / "build/f0/ciukios.img", temp / disk_name)
             ova = destination / (stem + "-vm.ova")
             with tarfile.open(ova) as archive:
@@ -559,6 +578,63 @@ class StableReleaseTests(unittest.TestCase):
         (directory / "v1.0.0-stable.2").mkdir()
         with self.assertRaisesRegex(release.Refusal, "already exists"):
             release.release(self.root, "1.0.0", self.disk["image_sha256"], True)
+
+    def test_alpha_channel_dry_run_and_publication(self):
+        with io.StringIO() as output, redirect_stdout(output):
+            release.release(self.root, "1.0.0", self.disk["image_sha256"], True, "alpha")
+            printed = output.getvalue()
+        self.assertFalse(self.network)
+        self.assertIn('"tag": "v1.0.0-alpha.2"', printed)   # dry run counts local tags only
+        self.assertIn('"title": "CiukiOS 1.0.0 alpha 2"', printed)
+        self.assertIn("--prerelease", printed)
+        with io.StringIO() as output, redirect_stdout(output):
+            destination = release.release(self.root, "1.0.0", self.disk["image_sha256"], False, "alpha")
+        self.assertEqual(destination.name, "v1.0.0-alpha.3")
+        publish = self.network[-1]
+        self.assertEqual(publish[3], "v1.0.0-alpha.3")
+        self.assertIn("--prerelease", publish)
+        self.assertEqual(publish[publish.index("--title") + 1], "CiukiOS 1.0.0 alpha 3")
+        self.assertIn("pre-release", (destination / "RELEASE-NOTES.md").read_text())
+
+    def test_alpha_title_has_no_number_for_first_release(self):
+        self.assertEqual(release.release_title("1.0.0", "alpha", 1), "CiukiOS 1.0.0 alpha")
+        self.assertEqual(release.release_title("1.0.0", "alpha", 2), "CiukiOS 1.0.0 alpha 2")
+        self.assertEqual(release.release_title("1.0.0", "stable", 2), "CiukiOS 1.0.0 \u2014 stable 2")
+        self.assertEqual(release.next_number("1.0.0", ["v1.0.0-stable.5", "v1.0.0-alpha.1"], "alpha"), 2)
+
+    def test_channel_refusals(self):
+        with self.assertRaisesRegex(release.Refusal, "channel must be"):
+            release.inputs(self.root, "1.0.0", self.disk["image_sha256"], "nightly")
+        blobs = dict(self.blobs)
+        blobs["config/version.json"] = json.dumps({"version": "1.0.0", "stage": "beta"}).encode()
+        with patch.object(release, "git_bytes", lambda root, commit, name: blobs[name]):
+            with self.assertRaisesRegex(release.Refusal, "not the alpha channel|differs from built"):
+                release.inputs(self.root, "1.0.0", self.disk["image_sha256"], "alpha")
+
+    def test_generated_public_files_name_no_pc_models(self):
+        destination = None
+        with io.StringIO() as output, redirect_stdout(output):
+            destination = release.release(self.root, "1.0.0", self.disk["image_sha256"], False, "alpha")
+        texts = [destination / "RELEASE-NOTES.md"]
+        for suffix in ("-disk.zip", "-qemu.zip", "-vmware.zip", "-virtualbox.zip"):
+            with zipfile.ZipFile(destination / ("ciukios-1.0.0" + suffix)) as archive:
+                texts += [archive.read(n).decode() for n in archive.namelist() if n.endswith((".txt", ".sh", ".cmd", ".vmx"))]
+        texts = [t.read_text() if isinstance(t, Path) else t for t in texts]
+        texts.append(release.ovf_descriptor_text() if hasattr(release, "ovf_descriptor_text") else "")
+        texts.append(" ".join(release.publication_command(
+            {"tag": "v", "commit": COMMIT, "title": "t", "version": "1.0.0", "channel": "alpha"}, destination)))
+        for text in texts:
+            self.assertIsNone(release.PUBLIC_FORBIDDEN.search(text), text[:80])
+        self.assertIsNone(release.PUBLIC_FORBIDDEN.search(release.DISK_README + release.VM_README))
+        self.assertIsNotNone(release.PUBLIC_FORBIDDEN.search("a ThinkPad T23"))
+        self.assertIsNotNone(release.PUBLIC_FORBIDDEN.search("Armada E500"))
+
+    def test_real_changelog_and_public_doc_name_no_pc_models(self):
+        section = release.changelog_section((ROOT / "CHANGELOG.md").read_text(), "1.0.0")
+        self.assertIn("Known issues", section)
+        self.assertIsNone(release.PUBLIC_FORBIDDEN.search(section))
+        doc = (ROOT / "docs/release-notes-1.0-alpha.md").read_text()
+        self.assertIsNone(release.PUBLIC_FORBIDDEN.search(doc))
 
     def test_cli_refuses_without_approval(self):
         result = run(sys.executable, ROOT / "scripts/release_stable.py", "--help")

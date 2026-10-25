@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package an owner-approved canonical image and Setup CD as a stable release.
+"""Package an owner-approved canonical image and Setup CD as a stable release, or an alpha/beta pre-release (--channel).
 
 No builds or guest execution. --dry-run performs the audits without network or
 release output. See docs/release-process.md for the approval and source contract.
@@ -37,7 +37,10 @@ REPO = os.environ.get("CIUKIOS_GITHUB_REPO", "PeronSlayer/CiukiOS")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 COMMIT = re.compile(r"[0-9a-f]{40}")
 VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
-STABLE_TAG = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+-stable\.[1-9][0-9]*")
+CHANNELS = ("stable", "alpha", "beta")
+RELEASE_TAG = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+-(?:stable|alpha|beta)\.[1-9][0-9]*")
+STABLE_TAG = RELEASE_TAG
+PUBLIC_FORBIDDEN = re.compile(r"\b(?:T23|E500|ThinkPad|Armada)\b|qemu-t23", re.IGNORECASE)
 OVF = "http://schemas.dmtf.org/ovf/envelope/1"
 RASD = "http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_ResourceAllocationSettingData"
 VSSD = "http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_VirtualSystemSettingData"
@@ -280,7 +283,8 @@ def clean(value: object) -> bool:
     return value is False or (type(value) is int and value == 0)
 
 
-def inputs(root: Path, version: str, approved_sha: str) -> dict:
+def inputs(root: Path, version: str, approved_sha: str, channel: str = "stable") -> dict:
+    require(channel in CHANNELS, "channel must be stable, alpha or beta")
     require(VERSION.fullmatch(version), "version must be MAJOR.MINOR.PATCH")
     require(SHA256.fullmatch(approved_sha), "approval must name a full lowercase SHA-256")
     policy = json.loads((root / "config/release-policy.json").read_text())["stable"]
@@ -306,6 +310,8 @@ def inputs(root: Path, version: str, approved_sha: str) -> dict:
     identity = git_json(root, commit, "config/version.json")
     require(identity["version"] == version and disk["version"] == f"{version} {identity['stage']}",
             "release version differs from built source")
+    if channel != "stable":
+        require(identity["stage"] == channel, f"source stage {identity['stage']!r} is not the {channel} channel")
     verify_file(image, {"sha256": approved_sha, "size": image.stat().st_size})
     verify_file(iso, {"sha256": cd["iso"]["sha256"], "size": cd["iso"]["bytes"]})
     config = git_json(root, commit, "config/cd-components.json")
@@ -314,7 +320,7 @@ def inputs(root: Path, version: str, approved_sha: str) -> dict:
     return {"root": root, "image": image, "iso": iso, "disk": disk, "cd": cd,
             "disk_manifest": disk_path, "cd_manifest": cd_path, "commit": commit,
             "version": version, "sha256": approved_sha, "config": config,
-            "policy": policy, "changelog": section}
+            "policy": policy, "changelog": section, "channel": channel}
 
 
 def changelog_section(changelog: str, version: str) -> str:
@@ -404,16 +410,16 @@ def audit_inputs(info: dict, scratch: Path) -> tuple[Path, list[Path], list[Path
     return tree, sources, notices
 
 
-def next_number(version: str, tags: list[str]) -> int:
-    pattern = re.compile(r"v" + re.escape(version) + r"-stable\.([1-9][0-9]*)")
+def next_number(version: str, tags: list[str], channel: str = "stable") -> int:
+    pattern = re.compile(r"v" + re.escape(version) + "-" + channel + r"\.([1-9][0-9]*)")
     numbers = {int(m[1]) for tag in tags if (m := pattern.fullmatch(tag))}
     return max(numbers, default=0) + 1
 
 
-def release_tags(root: Path, version: str, remote: bool) -> list[str]:
-    tags = command("git", "tag", "--list", f"v{version}-stable.*", root=root).splitlines()
+def release_tags(root: Path, version: str, remote: bool, channel: str = "stable") -> list[str]:
+    tags = command("git", "tag", "--list", f"v{version}-{channel}.*", root=root).splitlines()
     if remote:
-        refs = json.loads(command("gh", "api", f"repos/{REPO}/git/matching-refs/tags/v{version}-stable.", root=root))
+        refs = json.loads(command("gh", "api", f"repos/{REPO}/git/matching-refs/tags/v{version}-{channel}.", root=root))
         tags += [r["ref"].removeprefix("refs/tags/") for r in refs]
     return tags
 
@@ -421,13 +427,15 @@ def release_tags(root: Path, version: str, remote: bool) -> list[str]:
 def artifacts(info: dict) -> list[str]:
     stem = "ciukios-" + info["version"]
     return [stem + suffix for suffix in ("-disk.zip", "-setup.iso", "-qemu.zip", "-vm.ova",
-                                        "-vmware.zip", "-sources.zip", "-notices.zip")] + [
+                                        "-vmware.zip", "-virtualbox.zip", "-sources.zip", "-notices.zip")] + [
         "build-manifest.json", "cd-manifest.json", "RELEASE-NOTES.md", "SHA256SUMS"]
 
 
 def conversion_commands(image: Path, directory: Path) -> list[list[str]]:
-    return [["qemu-img", "convert", "-f", "raw", "-O", fmt, "-o", options, str(image), str(directory / name)]
+    return [["qemu-img", "convert", "-f", "raw", "-O", fmt, *(["-o", options] if options else []),
+             str(image), str(directory / name)]
             for fmt, options, name in (("qcow2", "compat=1.1", "ciukios.qcow2"),
+                                       ("vdi", "", "ciukios.vdi"),
                                        ("vmdk", "subformat=streamOptimized,adapter_type=ide", "ciukios-stream.vmdk"),
                                        ("vmdk", "subformat=monolithicSparse,adapter_type=ide", "ciukios.vmdk"))]
 
@@ -533,6 +541,42 @@ def vmx() -> str:
             'svga.present = "TRUE"\nrtc.diffFromUTC = "0"\n')
 
 
+VBOX_CREATE = [
+    'VBoxManage createvm --name CiukiOS --ostype Other --register',
+    'VBoxManage modifyvm CiukiOS --memory 512 --vram 16 --cpus 1 --ioapic off --firmware bios '
+    '--graphicscontroller vboxvga --nic1 nat --nictype1 Am79C973 --audiocontroller ac97 --audiocodec ad1980 '
+    '--rtcuseutc off --boot1 disk --boot2 none --boot3 none --boot4 none',
+    'VBoxManage storagectl CiukiOS --name IDE --add ide --controller PIIX4',
+    'VBoxManage storageattach CiukiOS --storagectl IDE --port 0 --device 0 --type hdd --medium ciukios.vdi',
+]
+
+
+def vbox_scripts() -> tuple[str, str]:
+    return ("#!/bin/sh\n# Creates the CiukiOS VM in VirtualBox from ciukios.vdi next to this script.\n"
+            'set -e\ncd "$(dirname "$0")"\n' + "\n".join(VBOX_CREATE) + "\n",
+            "@echo off\r\ncd /d \"%~dp0\"\r\nif defined VBOX_MSI_INSTALL_PATH (set VBM=\"%VBOX_MSI_INSTALL_PATH%VBoxManage.exe\") "
+            "else set VBM=VBoxManage\r\n"
+            + "".join(line.replace("VBoxManage", "%VBM%", 1) + "\r\n" for line in VBOX_CREATE))
+
+
+VBOX_README = """CiukiOS for VirtualBox (VDI disk)
+
+Fastest: run create-vm.sh (Linux, macOS) or create-vm.cmd (Windows) in this
+folder. It needs VBoxManage and creates a VM named CiukiOS using ciukios.vdi.
+Then enable audio for your host in Settings > Audio (the host driver name
+differs between VirtualBox versions) and start the VM.
+
+By hand, create a VM of type Other/Other, then set:
+  System: 512 MB, one CPU, I/O APIC off, EFI off
+  Display: VBoxVGA graphics controller, 16 MB video memory
+  Storage: IDE controller PIIX4, ciukios.vdi attached as the primary master
+  Audio: Intel AC97 controller (codec AD1980)
+  Network: NAT, adapter type PCnet-FAST III (Am79C973)
+  System clock: local time (do not set hardware clock to UTC)
+Do not enable 3D acceleration. Alternatively import ciukios-<ver>-vm.ova.
+"""
+
+
 def zip_bundle(output: Path, files: list[tuple[Path, str]], texts: dict[str, str] | None = None) -> None:
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True) as archive:
         for path, name in files:
@@ -566,12 +610,12 @@ On Linux, after unmounting the destination partitions:
   sudo dd if=ciukios.img of=/dev/sdX bs=4M conv=fsync status=progress
 Replace /dev/sdX with the intended whole disk, never a partition or host disk.
 
-Targets: ThinkPad T23, Armada E500, and generic 1998-2004 BIOS PCs with i686
-CMOV CPU, E820, VBE 2.0+ linear framebuffer, PS/2 input, legacy parallel ATA
+Targets: late-1990s and early-2000s desktops and laptops (1998-2004 BIOS PCs)
+with an i686 CMOV CPU, E820, VBE 2.0+ linear framebuffer, PS/2 input, legacy parallel ATA
 and FAT32. Current reference memory is at least 128 MiB; VM packages use 512.
 Pentium MMX/K6, UEFI-only and AHCI-only systems are outside this baseline.
 See docs/design/hardware-baseline.md at the release source commit for scope
-and per-machine qualification. Owner approval applies to the named disk hash;
+and the qualification status of each hardware class. Owner approval applies to the named disk hash;
 it does not establish qualification of every machine or emulator.
 """
 
@@ -582,11 +626,14 @@ extract the ZIP and run ./run-qemu.sh or run-qemu.cmd. QEMU may be set to
 the executable path. The launchers prefer KVM (Linux), WHPX (Windows), or
 HVF (Intel macOS) and retry with TCG when acceleration cannot start.
 Apple Silicon uses x86 TCG. AC97, E1000 NAT, local RTC, IDE, standard VGA,
-512 MiB and one CPU follow the qemu-t23 profile. No emulator is bundled.
+512 MiB and one CPU follow the reference virtual profile. No emulator is bundled.
 
-VirtualBox: import the OVA, select NAT, PIIX4 IDE, ICH AC97 and standard VGA
+VirtualBox (OVA route): import the OVA, select NAT, PIIX4 IDE, ICH AC97 and standard VGA
 (VBoxVGA), disable EFI, and retain 512 MiB and one CPU. OVF importers may
 map device hints differently; inspect the imported settings before starting.
+VirtualBox: extract the VirtualBox ZIP (VDI disk) and run create-vm.sh or
+create-vm.cmd, or follow its README. IDE PIIX4, ICH AC97, PCnet-FAST III,
+VBoxVGA, 512 MiB, I/O APIC off. The OVA is an alternative import route.
 VMware: extract the VMware ZIP and open ciukios.vmx. It explicitly selects
 IDE, ES1371 sound, E1000 NAT and VMware SVGA. The runnable VMDK is
 monolithicSparse; the OVA's streamOptimized VMDK is an import transport.
@@ -600,7 +647,9 @@ def notes(info: dict) -> str:
     return (f"# {info['title']}\n\nSource commit: `{info['commit']}`\n\n"
             f"Approved disk SHA-256: `{info['sha256']}`\n\n"
             f"Owner approval: {info['policy']['approval_record']}\n\n"
-            "## Try this release\n\n"
+            + ("This is a pre-release (" + info["channel"] + " channel): expect rough edges; see the known issues below.\n\n"
+             if info.get("channel", "stable") != "stable" else "")
+            + "## Try this release\n\n"
             "Verify SHA256SUMS before use. Extract the disk ZIP for Rufus (DD mode), "
             "balenaEtcher or dd; writing it erases the destination disk. "
             "The Setup ISO is an El Torito hard-disk-emulation CD, not a hybrid USB image; "
@@ -622,6 +671,9 @@ def package(info: dict, directory: Path, scratch: Path, sources: list[Path], not
     make_ova(scratch, directory / (stem + "-vm.ova"), info["image"].stat().st_size, version)
     zip_bundle(directory / (stem + "-vmware.zip"), [(scratch / "ciukios.vmdk", "ciukios.vmdk")],
                {"ciukios.vmx": vmx(), "README.txt": VM_README})
+    shell_vbox, cmd_vbox = vbox_scripts()
+    zip_bundle(directory / (stem + "-virtualbox.zip"), [(scratch / "ciukios.vdi", "ciukios.vdi")],
+               {"create-vm.sh": shell_vbox, "create-vm.cmd": cmd_vbox, "README.txt": VBOX_README})
     zip_bundle(directory / (stem + "-sources.zip"), [(p, "SOURCES/" + p.name) for p in sources])
     zip_bundle(directory / (stem + "-notices.zip"), [(p, "LICENSES/" + p.name) for p in notices])
     shutil.copyfile(info["disk_manifest"], directory / "build-manifest.json")
@@ -633,6 +685,9 @@ def package(info: dict, directory: Path, scratch: Path, sources: list[Path], not
     # Detect input changes during packaging before finalising or publishing.
     require(digest(info["image"]) == info["sha256"] and digest(info["iso"]) == info["cd"]["iso"]["sha256"],
             "release input changed during packaging")
+    for text in (DISK_README, VM_README, (directory / "RELEASE-NOTES.md").read_text(encoding="utf-8")):
+        found = PUBLIC_FORBIDDEN.search(text)
+        require(not found, f"public text names a specific PC model: {found and found[0]}")
     sums = "".join(f"{digest(p)}  {p.name}\n" for p in sorted(directory.iterdir()))
     (directory / "SHA256SUMS").write_text(sums, encoding="ascii")
 
@@ -641,7 +696,14 @@ def publication_command(info: dict, directory: Path) -> list[str]:
     return ["gh", "release", "create", info["tag"],
             *(str(directory / name) for name in artifacts(info)),
             "--target", info["commit"], "--title", info["title"],
-            "--notes-file", str(directory / "RELEASE-NOTES.md"), "-R", REPO]
+            "--notes-file", str(directory / "RELEASE-NOTES.md"), "-R", REPO,
+            *(["--prerelease"] if info.get("channel", "stable") != "stable" else [])]
+
+
+def release_title(version: str, channel: str, number: int) -> str:
+    if channel == "stable":
+        return f"CiukiOS {version} \u2014 stable {number}"
+    return f"CiukiOS {version} {channel}" + (f" {number}" if number > 1 else "")
 
 
 @contextmanager
@@ -656,16 +718,16 @@ def release_lock(root: Path):
         yield
 
 
-def release(root: Path, version: str, approved_sha: str, dry_run: bool) -> Path:
+def release(root: Path, version: str, approved_sha: str, dry_run: bool, channel: str = "stable") -> Path:
     with release_lock(root):
-        info = inputs(root, version, approved_sha)
-        number = next_number(version, release_tags(root, version, remote=not dry_run))
-        info.update(tag=f"v{version}-stable.{number}", title=f"CiukiOS {version} — stable {number}")
+        info = inputs(root, version, approved_sha, channel)
+        number = next_number(version, release_tags(root, version, not dry_run, channel), channel)
+        info.update(tag=f"v{version}-{channel}.{number}", title=release_title(version, channel, number))
         releases = root / "build/releases"
         destination = releases / info["tag"]
         require(not destination.exists(), "release destination already exists; inspect it before retrying")
         old = list(releases.iterdir()) if releases.exists() else []
-        require(all(p.is_dir() and not p.is_symlink() and STABLE_TAG.fullmatch(p.name) for p in old),
+        require(all(p.is_dir() and not p.is_symlink() and RELEASE_TAG.fullmatch(p.name) for p in old),
                 "build/releases contains unrelated outputs; relocate them before release")
         scratch_parent = root / "build/codex"
         with tempfile.TemporaryDirectory(dir=scratch_parent, prefix="stable-audit-") as temporary:
@@ -698,10 +760,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", required=True)
     parser.add_argument("--approved-image-sha256", required=True)
+    parser.add_argument("--channel", choices=CHANNELS, default="stable",
+                        help="stable (default), or alpha/beta: tag v<version>-<channel>.<n>, GitHub prerelease")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     try:
-        release(ROOT, args.version, args.approved_image_sha256, args.dry_run)
+        release(ROOT, args.version, args.approved_image_sha256, args.dry_run, args.channel)
     except (Refusal, OSError, KeyError, TypeError, ValueError, zipfile.BadZipFile, tarfile.TarError) as error:
         raise SystemExit(f"[stable-release] refused: {error}") from error
 

@@ -1,21 +1,50 @@
 # Changelog
 
-## Unreleased — 1.0.0 alpha image 2026-10-25 (`main` `b60e5c36`, image `2287114d…`, T23 trial pending)
+## 1.0.0 alpha — 2026-10-25
 
-Corrections to the image of 24 October, which stopped at the splash screen on the ThinkPad T23. Evidence: host suites, canonical build, QEMU boot smoke and a QEMU walk through the programs (dev diary 2026-10-25-01). Not yet tried on the T23.
+CiukiOS is a modern retro-gaming operating system dedicated to Ciuki, a dog: a 32-bit protected-mode kernel with a Windows 95/98-class desktop, DOS games in virtual machines, Win32 programs and a network stack. *Classic computing, one woof at a time.*
 
-- **Boot.** The T23 hang at the splash is fixed: the cache publication path no longer livelocks against the video-marker task and the storage writer, so the desktop starts.
-- **DOS windows.** Closing a DOS window (Alt+F4 on DOOM, or `exit` at the prompt) no longer freezes the whole system. `exit` now closes the window. A program that ends within 10 seconds leaves its window open with its output, titled "Finished - <name>". `DIR` shows the correct free space.
-- **DOS memory and games.** XMS is visible to DOS programs again and the shell no longer stays resident: 575 KB of conventional memory are free at the prompt (507 KB before). Wolfenstein 3-D starts. DOOM, Wolfenstein 3-D and Quake start from Programs > Games, play and close in QEMU.
+### Highlights
+
+- **Kernel and resources.** Windows 98/ME-class memory, scheduling, disk cache and real-time management; a crash-resilient pagefile; a hardware entropy source.
+- **Storage.** FAT32 with a transactional cache, parallel ATA, USB mass storage, and a faster FAT chain cache for large sequential reads.
+- **DOS.** DOS games run in virtual machines on a unified FreeDOS-based kernel with XMS, EMS and upper memory, a virtual NE2000/IPX network adapter, and fast game launch. DOOM, Wolfenstein 3-D and Quake start from Programs > Games.
+- **Win32.** A Win32 subsystem with dialogs, controls, shell integration and original installers (NSIS, CAB, self-extracting) running on reused Wine 10.0 libraries.
+- **Network and web.** lwIP TCP/IP with DHCP and DNS, TLS 1.2, and the NetSurf 3.11 web browser (images, clipboard, JavaScript with Duktape).
+- **Desktop and media.** Per-program icons, Start menu with groups, WordPad, Paint, Music, Solitaire, Clock, Task Manager, CiukIDE, System Information and a redesigned Control Panel; AC'97 audio; print spooler; English and Italian language indicator.
+- **Graphics.** 2D acceleration on supported video chips with a safe software fallback (`accel=0`).
+
+### New since the earlier alpha images
+
+- **Boot.** A hang at the splash screen on real hardware is fixed: the cache publication path no longer livelocks against the video-marker task and the storage writer.
+- **DOS windows.** Closing a DOS window (Alt+F4, or `exit` at the prompt) no longer freezes the system. A program that ends within 10 seconds leaves its window open with its output, titled "Finished - <name>". `DIR` shows the correct free space.
+- **DOS memory.** XMS is visible to DOS programs again and the shell no longer stays resident: about 585 KB of conventional memory are free at the prompt. The DOS Box has an EMS device (`EMMXXXX0`) and upper memory blocks. Wolfenstein 3-D starts.
 - **Printing.** The print spooler is event-driven and uses about 0.3 % of the CPU (65-77 % before); offline jobs are retried every 15 seconds.
-- **Audio.** After a stop the audio transport keeps its larger safety margin for 30 seconds, so a sound that starts right after another does not begin with an underrun.
-- **NetSurf.** Images over one megapixel display again; Ctrl+L no longer types an extra "l" into the address bar (which made remote pages fail with "Unable to open this address"); the system clipboard works again; the browser closes without crashing. JavaScript is off by default until a crash in the script engine is fixed; it can be switched on in the browser's options.
-- **Desktop.** Per-program icons; the Start menu opens under its button with folder icons for the groups; Shut Down CiukiOS uses radio choices; new look for Open/Save dialogs, Control Panel (trackbars, icon grid), Music, WordPad, Paint (28-colour palette), Solitaire and cards, Clock, DOS window bar and properties, Task Manager, disk Properties, CiukIDE, System Information and the log viewer; a blue language indicator (En/It) in the tray; the power icon is hidden on machines without a battery; messages say "CiukiOS" instead of "Windows".
+- **Audio.** A sound that starts right after another no longer begins with an underrun.
+- **NetSurf.** Images over one megapixel display again; Ctrl+L no longer types an extra "l" into the address bar; the system clipboard works; the browser closes cleanly; JavaScript is on again.
+- **Desktop.** New look for Open/Save dialogs, Control Panel, Music, WordPad, Paint (28-colour palette), Solitaire, Clock, DOS window bar and properties, Task Manager, disk Properties, CiukIDE, System Information and the log viewer; the power icon is hidden on machines without a battery.
 - **Setup CD.** The system component includes `/System/SFC.LST` and `/System/printspool`.
 
-## 1.0.0 alpha (unreleased, `main`; hardware image `3423912f8463…` of 2026-10-22, T23 trial pending)
+### Known issues (planned for 1.0.1 alpha)
 
-Covers all changes merged on `main` since 0.9.2 on 2026-10-20. The Setup CD installer (f9) has been deferred to a later release (owner decision 2026-10-21 20:29, dev diary 2026-10-21-07); the 1.0 Alpha release ships as the hardware disk image `build/hw/ciukios-hw.img`. Full hardware qualification on the ThinkPad T23 is pending for this image.
+- Applications are slow to launch.
+- NetSurf renders pages slowly.
+- The Control Panel and property sheets show redraw glitches.
+- Changing the theme while music plays from a USB stick can hang the system.
+- Hardware acceleration for DOS games still needs improvement.
+- This is an alpha: hardware qualification is not complete on every machine class, and the virtual machine packages have not been tested on every host.
+
+### How to try it
+
+- **QEMU:** extract `ciukios-1.0.0-qemu.zip` and run `run-qemu.sh` (Linux, macOS) or `run-qemu.cmd` (Windows).
+- **VirtualBox:** import `ciukios-1.0.0-vm.ova`.
+- **VMware:** extract `ciukios-1.0.0-vmware.zip` and open `ciukios.vmx`.
+- **Setup ISO:** `ciukios-1.0.0-setup.iso` boots the CiukiOS Setup from a CD (it is not a hybrid USB image).
+- **Real hardware:** write the raw disk image from `ciukios-1.0.0-disk.zip` to a whole disk with Rufus (DD mode), balenaEtcher or `dd`; this erases the destination. Targets are late-1990s and early-2000s desktops and laptops with an i686 CPU, BIOS, VBE 2.0+ video, PS/2 input, parallel ATA and 128 MiB of RAM or more.
+
+## Development log, 2026-10-20 to 2026-10-22 (hardware image `3423912f8463…` of 2026-10-22)
+
+Covers all changes merged on `main` since 0.9.2 on 2026-10-20. The Setup CD installer (f9) has been deferred to a later release (owner decision 2026-10-21 20:29, dev diary 2026-10-21-07); the 1.0 Alpha release ships as the hardware disk image `build/hw/ciukios-hw.img`. Full hardware qualification on real hardware is pending for this image.
 
 ### Kernel and resource management
 

@@ -47,7 +47,7 @@ disk: every converted disk must compare equal to its original logical sectors.
   their configured hashes; a URL-only offer is insufficient.
 - [GitHub CLI release create](https://cli.github.com/manual/gh_release_create):
   explicitly target the source commit and upload all artifacts with a notes file;
-  stable releases do not use `--prerelease`. Dry runs never invoke `gh`.
+  stable releases do not use `--prerelease`; alpha/beta channels do. Dry runs never invoke `gh`.
 
 The present Setup CD is El Torito hard-disk emulation, without a hybrid USB
 boot layout (`build_cd.py`). Distribute it as a CD ISO and state this limit;
@@ -75,11 +75,28 @@ It audits FAT files (including nested guest images), ISO contents and source
 archives; private bytes are also checked by content against the configured
 private roots on the release workstation. Keep those roots available for audit.
 
+Release channels. `--channel stable` (default) publishes `v<version>-stable.<n>`
+titled `CiukiOS <version> — stable <n>`, not a prerelease. `--channel alpha` (or
+`beta`) publishes `v<version>-alpha.<n>` titled `CiukiOS <version> alpha`
+(` <n>` appended only when n > 1), with `gh release create --prerelease`; the
+source's `config/version.json` stage must equal the channel. `n` counts earlier
+tags of that version and channel, local and (outside dry runs) remote. All
+other checks, artifacts and approvals are the same for every channel.
+
+Public text rule: the tool's disk README, VM README and `RELEASE-NOTES.md`
+describe hardware generically (late-1990s/early-2000s desktops and laptops,
+component classes). Packaging refuses if they name a specific PC model, and a
+host test fails if the CHANGELOG section of the version or
+`docs/release-notes-1.0-alpha.md` does.
+
 Fetch release tags before an offline preview. For example:
 
 ```bash
 python3 scripts/release_stable.py --version 1.0.0 --approved-image-sha256 <sha256> --dry-run
 python3 scripts/release_stable.py --version 1.0.0 --approved-image-sha256 <sha256>
+# alpha pre-release (tag v1.0.0-alpha.1, GitHub prerelease):
+python3 scripts/release_stable.py --version 1.0.0 --channel alpha --approved-image-sha256 <sha256> --dry-run
+python3 scripts/release_stable.py --version 1.0.0 --channel alpha --approved-image-sha256 <sha256>
 ```
 
 Dry run validates approval and both inputs and prints the planned artifacts,
@@ -92,12 +109,12 @@ there must be relocated by the lead first. Failed preparation preserves the
 previous release. A publication failure retains the complete prepared artifacts
 for inspection; the tool does not overwrite an existing release or retry upload.
 
-Each release contains disk/QEMU/VMware ZIPs, Setup ISO, OVF OVA, corresponding
+Each release contains disk/QEMU/VMware/VirtualBox ZIPs (VMDK+VMX; VDI+VBoxManage scripts and README), Setup ISO, OVF OVA, corresponding
 sources ZIP, notices ZIP, both input manifests, checksums and release notes.
 The notes quote the matching CHANGELOG section, disk digest and source commit,
 with instructions and qualification limits. Verify `sha256sum -c SHA256SUMS`
 before publication or writing physical media. The disk README covers Rufus,
-balenaEtcher and `dd`, the T23/E500 and generic 1998–2004 i686/CMOV BIOS targets
+balenaEtcher and `dd`, and the generic late-1990s/early-2000s i686/CMOV BIOS targets
 from [the hardware baseline](design/hardware-baseline.md). Always select the
 whole destination disk carefully: writing the raw image erases it.
 

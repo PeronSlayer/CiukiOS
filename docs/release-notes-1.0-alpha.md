@@ -1,12 +1,12 @@
 # CiukiOS 1.0 Alpha Release Notes
 
-- **Release:** 1.0 Alpha (unreleased, `main`; latest image `2287114d` of 2026-10-25, T23 trial pending)
+- **Release:** 1.0 Alpha (unreleased, `main`; latest image `2287114d` of 2026-10-25, hardware trial pending)
 - **Date:** 2026-10-25 (first written 2026-10-21; updated with the trials and fixes of 2026-10-21/22 and the image of 2026-10-25)
 - **Target Architecture:** i686 PC (Pentium III baseline, AC'97 audio, IDE/ATA, VESA VBE 2.0+, PS/2 / USB HID)
-- **Primary Hardware Twin:** IBM ThinkPad T23 (1.13 GHz Pentium III-M, 512 MiB RAM, S3 SuperSavage IX/C, Intel 82801CA ICH3 AC'97)
+- **Primary Hardware Twin:** the reference laptop (1.13 GHz Pentium III-M, 512 MiB RAM, S3 SuperSavage IX/C, Intel 82801CA ICH3 AC'97)
 - **Canonical Image:** 512 MiB FAT32 disk image (`build/f0/ciukios.img`, or `build/hw/ciukios-hw.img`)
 - **Setup Media Note:** Setup CD (f9) is deferred to a later release (owner decision 2026-10-21 20:29, dev diary 2026-10-21-07); the 1.0 Alpha ships as a direct disk image written to the target disk.
-- **Qualification Status:** Five alpha images (`8f59e221`, `28805270`, `b453bc92`, `5a10eef4`, `a4d9454e`) were tried on the ThinkPad T23 on 2026-10-21/22 and none has passed; see section 2.2. Hardware qualification is open (`TODO(lead)`).
+- **Qualification Status:** Five alpha images (`8f59e221`, `28805270`, `b453bc92`, `5a10eef4`, `a4d9454e`) were tried on the reference laptop on 2026-10-21/22 and none has passed; see section 2.2. Hardware qualification is open (`TODO(lead)`).
 
 ---
 
@@ -33,7 +33,7 @@ CiukiOS 1.0 Alpha marks the completion of the core foundations transition, bring
 ### 1.3 Unified DOS Subsystem
 - **Unified Kernel Architecture:** Adoption of the unified DOS contract (f3-54) combining the FreeDOS 1.3 kernel base with the CiukiDOS identity, banner, and prompt:
   - Pinned FreeDOS 2043 kernel fork built natively and reproducibly with Open Watcom 1.9 (patch 0001, SHA `d24464ec…`; f3-55), with the native DFV2 binding and `CIUKIDF.SYS` (f3-56, f3-57).
-  - **Unified only (f3-63, owner decision of 22 October):** games and the DOS Box shell use the qualified unified kernel. Classic CiukiDOS and the pristine FreeDOS reference are absent from the canonical image; the reference remains in the host harness. DOS Box has no settings panel or configuration writer. The earlier f3-61 IFS/game evidence remains diagnostic; the f3-63 launch-time and CPU targets require a new qualified image and T23 measurements.
+  - **Unified only (f3-63, owner decision of 22 October):** games and the DOS Box shell use the qualified unified kernel. Classic CiukiDOS and the pristine FreeDOS reference are absent from the canonical image; the reference remains in the host harness. DOS Box has no settings panel or configuration writer. The earlier f3-61 IFS/game evidence remains diagnostic; the f3-63 launch-time and CPU targets require a new qualified image and hardware measurements.
   - VMM integration via the network redirector interface (INT 2Fh AH=11h), serving DOS INT 21h file calls from the native VFS as in the Windows 9x IFS Manager.
 - **Pageable DOS Memory Pool:** 24 MiB VM memory pool converted to a pageable object (Contract D1, f3-46), reducing VM creation latency from 134.3 ms to 23.6 ms with protected I/O fault handling.
 - **Event-Driven Frame Synchronization:** DOS window rendering converted from 2 ms polling to blocking event-driven frame waits (`WAIT_PRESENT`, f3-52), donating priority to the VM thread while waiting and capping loading panel repaints to <=4 Hz to prevent VM thread starvation.
@@ -75,31 +75,31 @@ CiukiOS 1.0 Alpha marks the completion of the core foundations transition, bring
 
 ---
 
-## 2. Known Issues from the ThinkPad T23 Trial (Image `b51f034f`)
+## 2. Known Issues from the Reference Laptop Trial (Image `b51f034f`)
 
-During the hardware trial of image `b51f034f04aee486…` on the IBM ThinkPad T23 (dev diary 2026-10-21-02), several behavioral defects and hardware telemetry measurements were recorded:
+During the hardware trial of image `b51f034f04aee486…` on the reference laptop (dev diary 2026-10-21-02), several behavioral defects and hardware telemetry measurements were recorded:
 
 ### 2.1 Summary of Trial Findings and Resolutions
 
-| Defect / Measurement | Hardware Symptoms on T23 | Root Cause / Analysis | Status & Addressed By |
+| Defect / Measurement | Hardware Symptoms | Root Cause / Analysis | Status & Addressed By |
 | --- | --- | --- | --- |
 | **Unbounded Volume Holds on C:** | Opening or moving any window causes visible lag and system instability. | 513 `vfs_hold drive=C task=desktop op=other` records (406 spanning 50–200 ms, 91 spanning 200–500 ms, 16 exceeding 500 ms up to 1,502 ms). `storage-writer op=log_write` averaged 1,633 ms (max 1,837 ms). | **Addressed by authored work** (directives `f1-87`, `f1-89`, `f1-90`: bounded logical holds, log write chunking, priority reader path). Verification on hardware pending (`TODO(lead)`). |
 | **Audio Refill Starvation** | Music playback suffers audible lag spikes when moving or opening windows. | `audio-refill` exceeded its budget in 192 of 201 windows; audio refill starved in queue behind long volume reservations while transport remained healthy (`lead_periods=8`). | **Addressed by merged/authored work** (directive `f1-90` exempts audio refill from budget overrun penalties and routes it via the C3 reader priority path; `f4-34` >=2 s decoded buffer). Verification on hardware pending (`TODO(lead)`). |
 | **Windowed DOS VM Lag & Audio Distortion** | DOS games stutter and drop audio in windowed mode, but run smoothly in full-screen mode; DOOM audio slightly distorted. | Windowed VM descheduled or parked when SB16 IRQ was due (latency 33–476 ms, underrun count up to 1,229); tight coupling to the desktop presenter; 129 ms un-preemptible span in `dosvm_pool.c:239` (`resolve`). | **Addressed by authored work** (directive `f1-87`: VM decoupled from presenter, frame wait bounded, `resolve` capped at 5 ms, independent audio cadence). Verification on hardware pending (`TODO(lead)`). |
 | **High PIT & OPL VM Exits** | CPU overhead of ~5% attributed entirely to I/O port trap dispatch during DOS VM execution. | 593,816 exits on port 0040 (10.4 s), 296,908 on port 0043 (7.4 s), and 230,000 on OPL ports 0388/0389 (3.7 s). | **Addressed by authored work** (directive `f1-87`: fast-path dispatch for ports 0040, 0043, 0388, and 0389). Verification on hardware pending (`TODO(lead)`). |
-| **Unattributed 2.1 ms Interrupt-Off Pauses** | Periodic system stalls of ~2.1 ms occurring ~3.9 times per second. | 1,554 sections with interrupts disabled (`firmware_max_us=2117`), matching the UHCI USB host controller scan rate (~3.98 scans/sec). | **Open investigation** (directive `f1-87`: test option `usbscan=0` provided for T23 trial to isolate hardware SMI vs. USB host controller interaction). |
+| **Unattributed 2.1 ms Interrupt-Off Pauses** | Periodic system stalls of ~2.1 ms occurring ~3.9 times per second. | 1,554 sections with interrupts disabled (`firmware_max_us=2117`), matching the UHCI USB host controller scan rate (~3.98 scans/sec). | **Open investigation** (directive `f1-87`: test option `usbscan=0` provided for hardware trial to isolate hardware SMI vs. USB host controller interaction). |
 | **S3 SuperSavage BCI Self-Test Failure** | 2D acceleration driver placed in quarantine (`init_result=-5`); desktop falls back to software composition. | SuperSavage BCI self-test readback fails on real hardware due to CR50 register depth setup ordering. | **Addressed by merged work** (directive `f1-88`: CR50 depth selection ordering before descriptor write, incoming CR50 buffering, completion fence, and `accel=0` safe mode fallback token). Hardware verification pending (`TODO(lead)`). |
 
 ### 2.2 Trials of 2026-10-21/22 (images `8f59e221` to `a4d9454e`)
 
-Later images (24 and 25 October, `56e58374` stopped at the splash on the T23; `2287114d` fixes it and the DOS window hang, dev diary 2026-10-25-01) have only QEMU and host evidence; the T23 trial is pending.
+Later images (24 and 25 October, `56e58374` stopped at the splash on real hardware; `2287114d` fixes it and the DOS window hang, dev diary 2026-10-25-01) have only QEMU and host evidence; the hardware trial is pending.
 
 | Image | Result (owner) | Resolution |
 | --- | --- | --- |
 | `8f59e221` (first alpha) | NetSurf does not open; windows stutter; any DOS application or game puts the system in protection with an I/O error; USB copy very slow; Display Properties "not responding" (dev diary 2026-10-21-10) | Second image `28805270` (2026-10-22-01): wallpaper read in one pass, popup faces, DOS and I/O fixes |
 | `28805270` / `b453bc92` (third: splash bar fixed, f0-55b) | Rejected: slow window opening (no 2D acceleration visible), unified DOS does not work, NetSurf exits, Display Properties not responding, music worse (2026-10-22-03) | Fourth image `5a10eef4`: Savage fill repair (f1-95), IFS connected (f3-61), priority inheritance and 25 % desktop share during a game (f1-98), USB 64 KiB transfers (f1-96), NetSurf local pages exempt from the layout budget (f6-20), 2D indicator (f1-97) |
 | `5a10eef4` | Residual instability, stutter, NetSurf without internet, "I/O error and protection", USB stick removed by the system (2026-10-22-05) | Fifth image `a4d9454e`: SMI blackouts traced to the EC event line routed on SMI# and the poll turned off (f1-100), USB stale TD state (f1-96b), the desktop draws with the 2D engine (f2-92), e100 receive filter fixed so DHCP works (f6-22) |
-| `a4d9454e` | Stutter of windows and music unchanged, browser cannot be interacted with, two cursors, hardware volume keys have no effect, USB copy 149 KB/s (2026-10-22-07) | Open: the T23 log shows the SMI blackouts gone (`irqoff_long` 2 per boot, `ec_poll=off`), DHCP up, and the CPU saturated by the desktop (about 40 composed frames per second with one player open). Directives f2-95 (compositor rebuilt on the Windows 98/X11 region model with X11 regions and pixman, MIT), f1-101 (audio producer priority) and f2-96 (one cursor, EC poll every 2 s) |
+| `a4d9454e` | Stutter of windows and music unchanged, browser cannot be interacted with, two cursors, hardware volume keys have no effect, USB copy 149 KB/s (2026-10-22-07) | Open: the reference laptop log shows the SMI blackouts gone (`irqoff_long` 2 per boot, `ec_poll=off`), DHCP up, and the CPU saturated by the desktop (about 40 composed frames per second with one player open). Directives f2-95 (compositor rebuilt on the Windows 98/X11 region model with X11 regions and pixman, MIT), f1-101 (audio producer priority) and f2-96 (one cursor, EC poll every 2 s) |
 
 The next image is built only with the desktop CPU budget demonstrated on the model and those three points green.
 
@@ -131,8 +131,8 @@ The `write_physical.sh` script enforces the following validation steps:
 5. **Hash Matching:** Compares the readback SHA-256 against the source image hash. The write is accepted as valid evidence only when the hashes match byte-for-byte.
 6. **Provenance Logging:** Generates a structured `acquisition.json` file alongside the image, recording the target disk identity, source hash, readback hash, and timestamp.
 
-### 3.4 Capturing Serial Diagnostics on ThinkPad T23
-To record diagnostic boot logs from the ThinkPad T23 during physical testing:
+### 3.4 Capturing Serial Diagnostics on the Reference Laptop
+To record diagnostic boot logs from the reference laptop during physical testing:
 1. Connect an RS-232 null-modem cable from the laptop's serial port to a USB serial adapter on the workstation.
 2. Verify workstation serial port settings: COM1 operates at `38400 8N1`.
 3. Launch the capture utility prior to powering on the machine:
@@ -177,5 +177,5 @@ The full list (version, licence, notice path and status of every component shipp
 ## 5. Verification and Open Items
 
 - Canonical image SHA-256: `TODO(lead)`
-- ThinkPad T23 physical qualification log: `TODO(lead)`
+- Reference laptop physical qualification log: `TODO(lead)`
 - Second physical baseline (assembled 1998–2002 PC) qualification: `TODO(lead)`
