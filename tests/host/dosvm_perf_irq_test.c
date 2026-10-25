@@ -5,6 +5,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+/* Host libc can expose wait macros through stdlib.h in POSIX mode. The
+ * production DOSVM header now reaches the guest ABI via display_driver.h;
+ * select its status encoding just as the other DOSVM fixtures do. */
+#undef WIFEXITED
+#undef WEXITSTATUS
+#undef WIFSIGNALED
+#undef WTERMSIG
 #define CIUKI_CPU_H
 #include <ciuki/kernel.h>
 #include <ciuki/timing.h>

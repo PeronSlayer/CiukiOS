@@ -4,7 +4,8 @@
 #include <string.h>
 #include <stdint.h>
 #include <w32/ntdll.h>
-#include "../../../sdk/win32/offline/wsock.c"
+static uint32_t wire_pointer(uintptr_t);
+#include "wsock_host.inc"
 #define CHECK(c) do { if(!(c)) { fprintf(stderr,"Winsock oracle line %d: %s\n",__LINE__,#c); exit(1); } } while(0)
 static struct w32_teb test_teb;
 _Thread_local struct w32_teb *w32_model_teb=&test_teb;
@@ -20,11 +21,20 @@ static void *model_alloc(void *opaque,uint32_t bytes) { (void)opaque; CHECK(byte
 static void model_free(void *opaque,void *address,uint32_t bytes) { (void)opaque;(void)bytes; for(unsigned i=0;i<12;i++)if(address==allocations[i].bytes) { CHECK(allocated[i]); allocated[i]=0; allocation_count--; return; } CHECK(0); }
 static const struct w32_services services={.alloc=model_alloc,.free=model_free};
 const struct w32_services *w32_get_services(void) { return &services; }
-/* No PIE keeps static test data/allocator addresses representable on the wire.
- * Ordinary-stack pointer fields recover their upper bits from the record.
- * ASan's optional fake stack must be disabled, while leak detection stays on. */
-extern char __executable_start,_end;
-static void *field_pointer(uint32_t low,uintptr_t record) { if(low>=(uintptr_t)&__executable_start&&low<(uintptr_t)&_end)return (void *)(uintptr_t)low; return (void *)((record&~(uintptr_t)UINT32_MAX)|low); }
+/* The wire stays 32-bit even when host stack/static pointers share low bits.
+ * Tokens retain the full host pointer instead of guessing its upper bits. */
+static uintptr_t wire_pointers[256];
+static unsigned wire_pointer_count;
+static uint32_t wire_pointer(uintptr_t pointer)
+{
+    if (!pointer) return 0;
+    for (unsigned i=0;i<wire_pointer_count;i++) if (wire_pointers[i]==pointer) return i+1;
+    CHECK(wire_pointer_count<sizeof(wire_pointers)/sizeof(wire_pointers[0]));
+    wire_pointers[wire_pointer_count++]=pointer;
+    return wire_pointer_count;
+}
+static void *field_pointer(uint32_t token,uintptr_t record)
+{ (void)record; CHECK(token && token<=wire_pointer_count); return (void *)wire_pointers[token-1]; }
 struct object { int used,type,references,flags,ready; struct ciuki_socket_timeval timeout; uint32_t position; };
 static struct object objects[32];
 static struct object *descriptors[128];
@@ -123,6 +133,12 @@ static struct ciuki_sockaddr_in address={.family=AF_INET,.port=0x5000,.address=0
 static char bytes[32],left[8],right[8]; static int address_length; static ULONG flags,done;
 int main(void) {
     setvbuf(stdout,NULL,_IOLBF,0);
+#if UINTPTR_MAX > UINT32_MAX
+    uintptr_t low=0x1234,high=UINT64_C(0x100001234);
+    CHECK((uint32_t)low==(uint32_t)high);
+    CHECK(wire_pointer(low)!=wire_pointer(high));
+    CHECK((uintptr_t)field_pointer(wire_pointer(low),0)==low && (uintptr_t)field_pointer(wire_pointer(high),0)==high);
+#endif
     test_teb.LastErrorValue=77;
     CHECK(socket(AF_INET,SOCK_STREAM,0)==WS_INVALID&&WSAGetLastError()==10093);
     CHECK(WSACleanup()==-1&&WSAGetLastError()==10093);
@@ -182,7 +198,8 @@ int main(void) {
     async_step();CHECK(WSAGetOverlappedResult(b,&ov,&transferred,0,&result_flags) && transferred==5);
 
     CHECK(!WSASend(b,vector,2,&done,0,&ov,completion_) && !completion_calls && queued_apc.argument);
-    overlapped_apc((uintptr_t)queued_apc.argument);CHECK(completion_calls==1);
+    CHECK(field_pointer(queued_apc.routine,0)==(void *)(uintptr_t)overlapped_apc);
+    overlapped_apc((uintptr_t)field_pointer(queued_apc.argument,0));CHECK(completion_calls==1);
     failure_op=CIUKI_SYS_SENDTO;failure_error=ENETUNREACH;CHECK(send(b,"x",1,0)==-1&&WSAGetLastError()==10051);
     failure_op=CIUKI_SYS_CONNECT;failure_error=EINPROGRESS;CHECK(connect(b,&address,16)==-1 && WSAGetLastError()==10035);
     CHECK(inet_addr("127.1")==0x0100007f&&inet_addr("0x7f.01")==0x0100007f&&inet_addr("0177.0.0.1")==0x0100007f&&inet_addr("")==0&&inet_addr("256.0.0.1")==~0u&&inet_addr("0x100000000")==~0u);
@@ -220,7 +237,7 @@ int main(void) {
     CHECK(!WSASend(datagram,&full_vector,1,&short_done,0,&queued,completion_));
     unsigned callbacks_before=completion_calls;posts_before=posted;
     CHECK(!WSACleanup());async_step();CHECK(posted==posts_before);
-    overlapped_apc((uintptr_t)queued_apc.argument);CHECK(completion_calls==callbacks_before && allocation_count==1);
+    overlapped_apc((uintptr_t)field_pointer(queued_apc.argument,0));CHECK(completion_calls==callbacks_before && allocation_count==1);
     no_descriptors();
     puts("PASS G26 Winsock G26B async/event/DNS cancellation/FIONREAD/truncation/overlapped startup handles refs fd-reuse options select HOSTS DNS numeric synchronous vectors errors cleanup");return 0;
 }
