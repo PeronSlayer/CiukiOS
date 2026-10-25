@@ -8,9 +8,11 @@ static void es_logoff(struct desktop *desktop) { es_logoffs++; desk_logon_open(d
 static unsigned es_terms; static uint32_t es_term_pid; static int es_term_sig;
 static int es_terminate(uint32_t pid, int sig) { es_terms++; es_term_pid=pid; es_term_sig=sig; return 0; }
 static unsigned es_w32_calls[8]; static uint32_t es_w32_flags; static struct desk_w32_status es_w32_next;
+static int es_w32_error;   /* review P1-3: BEGIN/STATUS fail with this -errno while set */
 static int es_w32(struct desktop *d, unsigned action, uint32_t flags, struct desk_w32_status *st)
 {
     (void)d; assert(action<8 && st); es_w32_calls[action]++;
+    if (es_w32_error && (action==DESK_W32_SESSION_BEGIN || action==DESK_W32_SESSION_STATUS)) return es_w32_error;
     if (action==DESK_W32_SESSION_BEGIN) es_w32_flags=flags;
     *st=action==DESK_W32_SESSION_STATUS ? es_w32_next : (struct desk_w32_status){0};
     return 0;
@@ -19,7 +21,7 @@ static void es_setup(void)
 {
     shutdown_setup();
     shutdown_desktop.terminate=es_terminate; es_terms=es_term_pid=0; es_term_sig=0;
-    memset(es_w32_calls,0,sizeof(es_w32_calls)); es_w32_flags=0; memset(&es_w32_next,0,sizeof(es_w32_next));
+    memset(es_w32_calls,0,sizeof(es_w32_calls)); es_w32_flags=0; memset(&es_w32_next,0,sizeof(es_w32_next)); es_w32_error=0;
 }
 static void es_send(int i, uint32_t pid, unsigned op, unsigned length, uint32_t a, uint32_t b)
 {

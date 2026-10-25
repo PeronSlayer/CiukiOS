@@ -603,7 +603,10 @@ static int launch_program(struct desktop *d, const struct desk_program *program)
     ciuki_pid_t pid=-1;
     const char *operation="channel-inherit";
     if (!fcntl(pair[1],F_SETFD,0)) {
-        index=desk_add_client(d,pair[0]);
+        /* Review P2-5: the Task Manager the desktop launches itself (Ctrl+Alt+Del)
+         * is admitted from the emergency reserve, so Close Program opens when
+         * the programs have filled the table. */
+        index=desk_add_client_tier(d,pair[0],!strcmp(program->name,"tasks") ? DESK_SLOT_EMERGENCY : DESK_SLOT_PROGRAM);
         if (index>=0) operation="spawn";
         else { errno=ENOSPC; operation="client-slot"; }
     }
@@ -1961,13 +1964,53 @@ __attribute__((weak)) void desk_w32_poll(struct desktop *d) { (void)d; }
 __attribute__((weak)) void desk_w32_child_exited(struct desktop *d,uint32_t pid,int status)
 { (void)d; (void)pid; (void)status; }
 __attribute__((weak)) int desk_w32_shutdown(void) { return 1; }
+/* Review P1-1 (T23 c42f556e): call 73 runs on its own thread. The orderly
+ * REBOOT/OFF may wait inside the kernel (a storage preflight bounded to 5 s
+ * per stage, the device quiesce); the desktop loop keeps presenting the
+ * progress window, taking Cancel and Force meanwhile. The first call starts
+ * the worker and returns EINPROGRESS; later calls return EINPROGRESS until
+ * the worker finished, then its result once. A success never returns. */
+static pthread_mutex_t power_call_lock=PTHREAD_MUTEX_INITIALIZER;
+static int power_call_running, power_call_done, power_call_result, power_call_errno;
+static void *power_call_worker(void *arg)
+{
+    int action=(int)(intptr_t)arg;
+    int r=ciuki_power(action==1 ? CIUKI_POWER_REBOOT : CIUKI_POWER_OFF), e=errno;
+    pthread_mutex_lock(&power_call_lock);
+    power_call_result=r; power_call_errno=e; power_call_done=1; power_call_running=0;
+    pthread_mutex_unlock(&power_call_lock);
+    return NULL;
+}
 static int power_request(int action)
 {
+    pthread_mutex_lock(&power_call_lock);
+    if (power_call_done) {
+        int r=power_call_result; errno=power_call_errno; power_call_done=0;
+        pthread_mutex_unlock(&power_call_lock);
+        return r;
+    }
+    if (power_call_running) { pthread_mutex_unlock(&power_call_lock); errno=EINPROGRESS; return -1; }
+    pthread_mutex_unlock(&power_call_lock);
     if (!run_history_idle()) { errno=EBUSY; return -1; }
     int ready=desk_w32_shutdown();
     if(ready<=0){errno=ready<0 ? -ready : EBUSY;return -1;}
-    return ciuki_power(action==1 ? CIUKI_POWER_REBOOT : CIUKI_POWER_OFF);
+    pthread_t thread; pthread_attr_t attr;
+    pthread_attr_init(&attr); pthread_attr_setdetachstate(&attr,PTHREAD_CREATE_DETACHED);
+    pthread_mutex_lock(&power_call_lock); power_call_running=1; pthread_mutex_unlock(&power_call_lock);
+    int e=pthread_create(&thread,&attr,power_call_worker,(void *)(intptr_t)action);
+    pthread_attr_destroy(&attr);
+    if (e) {
+        /* No thread: the call runs here, as before. */
+        pthread_mutex_lock(&power_call_lock); power_call_running=0; pthread_mutex_unlock(&power_call_lock);
+        return ciuki_power(action==1 ? CIUKI_POWER_REBOOT : CIUKI_POWER_OFF);
+    }
+    errno=EINPROGRESS; return -1;
 }
+/* The forced restart or power off after the user's Force: runs beside a
+ * blocked orderly call (the kernel's power_force takes no storage lock and
+ * waits for nothing unbounded). FORCE_REBOOT does not return. */
+static int power_force_request(int action)
+{ return ciuki_power(action==1 ? CIUKI_POWER_FORCE_REBOOT : CIUKI_POWER_FORCE_OFF); }
 static int power_state(void) { return ciuki_power(CIUKI_POWER_QUERY); }
 static int power_cancel_standby(void) { return ciuki_power(CIUKI_POWER_CANCEL_STANDBY); }
 static int power_standby(void) { return ciuki_power(CIUKI_POWER_STANDBY); }   /* G11 */
@@ -2844,6 +2887,7 @@ static void shell_setup(struct desktop *d, int gate)
     d->authority_fd=fd>=3 && fcntl(fd,F_GETFD)>=0 ? fd : -1;
     terminate_authority=d->authority_fd;
     d->power_request=power_request; d->power_state=power_state; d->power_prepare=power_prepare; d->power_alive=power_alive;
+    d->power_force_request=power_force_request;
     d->power_standby=power_standby;
     d->power_cancel_standby=power_cancel_standby;
     const char *mixer=getenv("CIUKI_MIXER_FD");

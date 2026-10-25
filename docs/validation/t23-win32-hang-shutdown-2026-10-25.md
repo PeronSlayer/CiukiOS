@@ -180,13 +180,93 @@ QEMU).
 | End Task waits HungAppTimeout: a window of the program still open 5 s after End Task gets "This program is not responding", even if it answers PINGs or declined; one dialog per End Task; `[desktop] end task timeout pid=... window=...` | `apps/desktop/client.c` (`desk_task_end`, `desk_close_timeouts`, `desk_session_deadline`), `apps/desktop/desktop.h` (`end_task_ns`) |
 | A second close request (title button, Alt+F4, caption icon, task button Close) on a "Closing..." window opens the dialog at once, unless the program answered `CLOSE_ACK LATER` and answers PINGs | `apps/desktop/client.c` (`desk_user_close`, `close_later`), `apps/desktop/input.c`, `apps/desktop/shell.c` |
 | The desktop's close request reaches Win32 windows as WM_SYSCOMMAND SC_CLOSE; Close grayed in the system menu or `CS_NOCLOSE` declines at once; a window surviving SC_CLOSE declines | `sdk/win32/user32/desktop.c`, `sdk/win32/user32/messages.c`, `sdk/win32/user32/internal.h`; contract section "t23close" |
-| Programs leave `DESK_SYSTEM_SLOTS` (2) client slots for End Task, Shut Down, the shutdown progress and messages; other built-in windows leave one; refusals recorded | `apps/desktop/desktop.h`, `apps/desktop/client.c` (`desk_add_client`, v3 CREATE_WINDOW, `desk_free_slots`), `apps/desktop/shell.c` (`desk_internal_open`) |
+| Programs leave `DESK_SYSTEM_SLOTS` client slots for End Task, Shut Down, the shutdown progress and messages; refusals recorded (tiered in the second round below: 3 slots, Task Manager and application prompts admitted from the first) | `apps/desktop/desktop.h`, `apps/desktop/client.c` (`desk_add_client_tier`, `desk_slot_available`, v3 CREATE_WINDOW, `desk_free_slots`), `apps/desktop/shell.c` (`desk_internal_open`) |
 | Win32 turn: a process that holds its query for 5 s with no window on the desktop is not responding; every window in turn is recorded (`[desktop] end-session win32 turn pid=... hwnd=... delivered=...`); a failed End Task dialog is recorded | `apps/desktop/client.c` (`session_hung`, `session_step`, `desk_end_task_open`) |
-| Power sequence: every live Win32 process from the broker (`W32R_SHUTDOWN_LIST`) is a target (closed, SIGTERM at the 3 s deadline, listed as "Windows program (PID n)"); Force sends SIGKILL | `apps/desktop/client.c` (`desk_power_begin`, `power_terminate`, `desk_power_force`), `apps/desktop/win32_native.c` (`w32_power_pids`), `apps/desktop/desktop.h` (`power_w32_pids`) |
+| Power sequence: every live Win32 process from the broker (`W32R_SHUTDOWN_LIST`) is a target (closed, listed as "Windows program (PID n)"); Force sends SIGKILL (the automatic SIGTERM is qualified in the second round: only after the broker reported WM_ENDSESSION done) | `apps/desktop/client.c` (`desk_power_begin`, `power_terminate`, `desk_power_force`), `apps/desktop/win32_native.c` (`w32_power_pids`), `apps/desktop/desktop.h` (`power_w32_pids`) |
 
 Design record: `docs/design/desktop-shell.md` (G3, "Amendments after the T23
 trial of image c42f556e") and `docs/design/win32-personality-contract.md`
 ("t23close").
+
+## Second round: the Codex review of `63c964019` (2026-10-25)
+
+The review (`gpt-6.1-sol`, read-only) found three P1 and four P2 gaps in
+the first round. Each is closed below; each fix has a host test that
+asserts the behaviour the review objected to is gone (the asserted
+"before" is the first round's own behaviour, which its case 5 had asserted
+as correct: SIGTERM 3 s after the sequence began).
+
+| Finding | Fix | Test |
+| --- | --- | --- |
+| **P1-1** shutdown could block inside the kernel: the desktop called call 73 synchronously; `storage_shutdown` waited forever for `writer_running` (`mount.c`) and every drive reservation; `fs_port.h` lock waits repeat forever; SIGKILL lets a sleeping syscall unwind, so a deadlocked storage waiter survives Force | Kernel: every shutdown preflight wait (namespace, writer batch, drive reservations, boot log) is bounded by `storage_shutdown_wait_ms` (5 s) and a timeout is the existing `EBUSY` refusal with nothing changed (`mount.c` `shutdown_volumes`, `storage_sync`; `vfs.c` `vfs_reserve_request_locked`); new call 73 actions `CIUKI_POWER_FORCE_REBOOT` (9) / `FORCE_OFF` (10) run beside a blocked orderly call, flush at most 3 s through the bounded suspend-flush worker, latch UNCERTAIN, then reset or soft-off (`power.c` `power_force`; `abi.h`, `power.h`). Desktop: `power_request` runs call 73 on a worker thread (`EINPROGRESS` meanwhile, `desktop.c`), the loop stays live; after `DESK_POWER_CALL_NS` (15 s) the busy dialog says the shutdown waits for a disk operation and Force is the forced action; a second Force after SIGKILL left the kernel at EBUSY is the forced action too (`client.c` `desk_power_tick`, `desk_power_force`, `power_busy`; `power_force_request`). A volume the forced path leaves dirty is checked by ScanDisk at the next start (`boot_scandisk`, `FAT_RO_DIRTY`) | `tests/host/fs/test_storage_namespace.c` `bounded_shutdown_test` (a writer batch and a drive holder outliving 200 ms give EBUSY in 190–2000 ms; before, the first case never returned) and `cancelled_wait_test` (a task ended while blocked behind a C: holder leaves in 1 ms with `-VFS_ECANCELLED`, nothing reserved, the holder releases normally: the kernel's SIGKILL path, `interrupted` → request `cancelled`); `tests/host/power_runtime_test.c` `test_forced` (beside a blocked OFF, flush bound 3 s, UNCERTAIN, reset / soft-off / ENOTSUP, desktop only; before, actions 9/10 were EINVAL); `hang_close_test.h` case 10 (EINPROGRESS for 15 s, busy dialog, Force calls the forced restart); `shutdown_sequence_test.h` (the production `power_request` on its worker thread) |
+| **P1-2** SIGTERM 3 s after the broker COMMIT could kill a program still saving in WM_ENDSESSION | After COMMIT the power sequence polls the broker STATUS (`power_w32_status`); a Win32 target gets its SIGTERM only once the broker reports `ENDED` (every WM_ENDSESSION answered, as Windows ends a process after its handler returns); not ended `DESK_WAIT_TO_KILL_NS` (20 s, WaitToKillAppTimeout) after the COMMIT, the sequence stops at "Some programs are still running ... have not finished ending their session" and Force is the explicit consent. Native targets keep the 3 s rule | `hang_close_test.h` case 6: 12 s of WM_ENDSESSION without SIGTERM, SIGTERM at ENDED; never ended: the dialog at 20 s, Force SIGKILL, a second Force is the forced restart |
+| **P1-3** broker BEGIN/STATUS errors were taken as agreement | `session_broker_failed`: errors (EIO, or EBUSY while an ExitWindowsEx restart owns the broker) are retried for `DESK_SESSION_BROKER_NS` (5 s); past that the Win32 programs are *unknown*: no COMMIT, ordinary close of their windows, no automatic SIGTERM, busy dialog "The Windows programs could not be asked to save their work" with Force/Cancel; `[desktop] end-session agreed ... win32=committed\|unknown\|none` | `hang_close_test.h` case 7: BEGIN failing for 5 s (>10 retries) then unknown, no COMMIT, no SIGTERM, the user asked at the close deadline; a STATUS error that recovers within the window changes nothing (COMMIT once) |
+| **P2-4** lossy Win32 inventory (capacity 32, enumeration failure → zero programs) | `DESK_POWER_TARGETS` 64 (`CIUKI_PROCESS_MAX`); `power_w32_pids` returns `-errno` (`-ENOSPC` on truncation, never a silent cut); a failed list is recorded, fetched again on every closing tick and before Force (`power_list_w32`), named in the busy dialog | `hang_close_test.h` case 5: the list fails at begin (error kept, one target), recovers at the next tick (two targets, the known one marked Win32), fetched again before Force |
+| **P2-5** reserved slots rejected Task Manager; built-ins and message boxes could consume the reserve | `DESK_SYSTEM_SLOTS` 3 with tiers (`desk_slot_available`): programs and every ordinary built-in or message box need >3 free; the Task Manager the desktop launches itself is admitted at `DESK_SLOT_EMERGENCY` (`desk_add_client_tier`, `desktop.c` `launch_program`); End Task, Shut Down, the progress window and a message during a session/shutdown take the last two | `hang_close_test.h` case 1: 13 programs, About and a message box refused, Task Manager admitted, a second emergency connection refused, End Task dialog and Shut Down both open with the table full; `memory_footprint_test.h` fills to the reserve |
+| **P2-6** real application save prompts refused with slots free (`DialogBox` returned -1) | An owned v3 window (DialogBox/MessageBox) of a process being closed (close request pending, the session's Win32 turn, or the power sequence) is admitted from the emergency reserve (`process_being_closed`, `[desktop] prompt admitted`); unowned windows and idle programs are still refused there | `hang_close_test.h` case 9: the idle program's prompt and an unowned window refused, the closing editor's "Save changes?" admitted, a second prompt refused, End Task still opens |
+| **P2-7** a fetched query pumping forever without a prompt held the shutdown; w32srv shutdown unbounded | A prompt is a window of the process newer than the window-id watermark of the poll before the query was fetched (`w32_mark`/`w32_poll_mark`); without one a fetched query is bounded by `DESK_WAIT_TO_KILL_NS` (20 s), then "This program is not responding" (End Task / Cancel). `desk_w32_shutdown`: SIGKILL 10 s after SIGTERM, a reaped kill is a lost flush (recorded) not a failed shutdown, unreaped 10 s later it is abandoned (`DESK_W32_SHUTDOWN_MS`) | `hang_close_test.h` case 8 (pumping 20 s → dialog, Cancel keeps all; a prompt opened after the query waits 44 s without a dialog); `end_session_test.h` G3 Win32 (the prompt opened between two polls still counts); `tests/host/desktop/win32_native_lifecycle_test.c` (SIGKILL at +10 s, reaped kill → 1, unreaped → abandoned at +20 s) |
+
+Research for the timeouts: the Windows 98 Resource Kit in `build/rskt`
+(`wrkc25_5.htm`, "If an application stops responding, you can press
+CTRL+ALT+DEL to display the Close Program dialog box, and then close the
+unresponsive application without affecting other running tasks") describes
+the Close Program behaviour but gives no timeout values; HungAppTimeout
+(5000 ms) and WaitToKillAppTimeout (20000 ms) are the documented defaults
+of the Windows 2000 registry values (links in the research section above),
+which Windows 98 also keeps under `HKCU\Control Panel\Desktop`. The
+review's point stands: these values are not proven Windows 98 figures; they
+are the documented Windows defaults closest to it and are single constants
+(`DESK_HUNG_NS`, `DESK_WAIT_TO_KILL_NS`) if the owner wants others.
+
+### Second-round results (host, systemd scope MemoryMax=3G)
+
+- Launcher harness (`tests/host/desktop/shell_launch_test.c`, the default
+  run): shutdown sequence, G3 end-session (7 scenarios) and the ten T23 cases
+  pass.
+- `tests.host.desktop.test_win32_adapter`: 4 tests OK (the lifecycle test
+  now covers the bounded w32srv shutdown).
+- `tests.host.win32.user32.test_user32` and
+  `tests.host.win32.dialogs.test_dialogs`: 23 tests OK (105 s).
+- `tests/host/fs/test_storage_namespace.c` (host_kernel_tests.sh recipe):
+  2227 checks, 0 failures, with `bounded_shutdown_test` and
+  `cancelled_wait_test`.
+- `tests/host/power_runtime_test.c` with `test_forced`: PASS.
+- `tests/host/abi_layout_test.c` against the i686 dump: 2940 checks PASS
+  (`CIUKI_POWER_FORCE_REBOOT` 9, `CIUKI_POWER_FORCE_OFF` 10 added).
+- Compile-only checks: `power.c`, `mount.c`, `vfs.c` with the kernel's
+  i686 flags; `client.c`, `shell.c`, `desktop.c`, `win32_native.c`,
+  `input.c` with `ciuki-cc -Werror` (desktop flavour; `win32_native.c` also
+  with the control flavour), against the worktree's `abi.h`.
+- Full desktop suite (`python3 -m unittest discover -s tests/host/desktop
+  -t .`, 1892 s): 224 tests, 5 skipped, one failure:
+  `test_window_model` aborted in a fuzz run on a double close in the
+  harness (`tests/host/desktop/window_model_test.c` closed a refused
+  CREATE_WINDOW surface the desktop had already closed through
+  `close_attachments`; the three-slot quota made that refusal reachable,
+  its own guard still assumed two). Harness fixed (quota from
+  `DESK_SYSTEM_SLOTS`, no second close); `test_window_model` rerun: 2 tests
+  OK, `PASS fx-15 window model: 11565 frames identical to a full redraw`.
+  No production code changed for it.
+
+### Second-round risks
+
+- The forced actions bypass the device quiesce and the durability barrier:
+  a volume not flushed within the 3 s bound is left dirty on purpose
+  (ScanDisk at the next start). The desktop reaches them only after the
+  user pressed Force twice, or once on a call 73 that has not returned in
+  15 s.
+- `power_request` on a worker thread: a Cancel while the call runs leaves
+  the worker to finish; the next sequence sees `EINPROGRESS` until it
+  returns and then takes its result (the kernel refuses concurrent
+  sequences with EBUSY anyway).
+- Three reserved slots leave 13 to programs (16 - 3); the first round left
+  14. Every Win32 top-level window still costs a slot (open point below).
+- A Win32 program whose prompt was already open before the session began is
+  not recognised as prompting (older than the watermark): after 20 s of
+  pumping the user is asked, and Cancel keeps everything running.
+- The w32srv abandonment path (not reaped 10 s after SIGKILL) proceeds to
+  call 73 with the service's files possibly still open: EBUSY, the busy
+  dialog, Force, then the forced action. It cannot hang.
 
 ## Host tests
 
@@ -212,10 +292,11 @@ trial of image c42f556e") and `docs/design/win32-personality-contract.md`
 - Guest compile check: `client.c`, `shell.c`, `input.c`, `win32_native.c`
   with `ciuki-cc -Werror` (desktop and control flavours); user32
   `desktop.c`, `messages.c` with the PE32 flags.
-- Runs (systemd scope, MemoryMax=3G): `python3 -m unittest discover -s
-  tests/host/desktop -t .` 224 tests OK (5 skipped, 1862 s);
+- Runs (systemd scope, MemoryMax=3G), first round: `python3 -m unittest
+  discover -s tests/host/desktop -t .` 224 tests OK (5 skipped, 1862 s);
   `tests.host.win32.dialogs.test_dialogs` and
-  `tests.host.win32.user32.test_user32` 23 tests OK.
+  `tests.host.win32.user32.test_user32` 23 tests OK. Second round: see
+  "Second-round results" above.
 
 ## What the lead must check (QEMU, then T23)
 
@@ -231,19 +312,42 @@ trial of image c42f556e") and `docs/design/win32-personality-contract.md`
    (`[desktop] end task timeout pid=...`), End Task ends it.
 4. Restart with installers running: one `[desktop] end-session win32 turn`
    record per window asked; a busy one gets the dialog after 5 s; after End
-   Task the session goes on; the machine restarts. If a program survives,
+   Task the session goes on; `[desktop] end-session agreed ... win32=committed`,
+   then `[desktop] power win32 end-session ended after N ms` before any
+   SIGTERM to a Win32 program; the machine restarts. If a program survives,
    "Some programs are still running" names it, Force ends it (SIGKILL) and
    the restart completes. No forced power-off may be needed.
 5. Check that `[desktop] end task pid=... result=0` is followed by the
    process leaving the `[cpu] task=` lists: a Win32 thread blocked in a
-   storage wait must still end on SIGKILL (kernel side, not changed here).
+   storage wait must end on SIGKILL (the request path is cancelled:
+   `cancelled_wait_test`; a thread inside `fs_lock_take` waits for its
+   holder, which the 5 s shutdown bound no longer depends on).
+6. Second round, QEMU first: with an installer copying files, Shut Down
+   while a 48 MB read holds C: for longer than 5 s. Expected:
+   `[storage] shutdown busy holder=reservation wait_ms=5000 result=-16`
+   (or `holder=writer`), the desktop's progress window keeps painting, the
+   busy dialog after the EBUSY retries, Force (SIGKILL), and if the kernel
+   still answers EBUSY a second Force with
+   `[power] forced reboot requested ... [power] forced flush result=...`
+   and a reset; at the next start ScanDisk checks C: if the flush did not
+   complete. Also Ctrl+Alt+Del with 13 program windows open: Task Manager
+   must appear (`[desktop] emergency connection admitted`).
+7. Second round, broker: kill w32srv (or hold it busy) and Shut Down.
+   Expected: `[desktop] end-session win32 broker begin failed ... retrying`,
+   after 5 s `... programs not asked`, the busy dialog with "could not be
+   asked to save their work", Force, shutdown completes.
 
 ## Open points (not changed here)
 
 - The `donation_cycle` records pair installer threads with desktop worker
   threads on drive and cache holds; if such a cycle is a real deadlock only
-  a request deadline breaks it, and SIGKILL must still end a thread waiting
-  there. Storage and scheduler owners should check it with these records.
+  a request deadline breaks it. The shutdown no longer depends on it (5 s
+  bound, forced actions), and a request-scoped wait ends on SIGKILL
+  (`cancelled_wait_test`), but a thread inside a plain `fs_lock_take` (no
+  request scope) still waits for its holder; storage and scheduler owners
+  should check it with these records.
+- The Windows 98 timeout figures (5 s, 20 s) are the documented Windows
+  2000 defaults, not Windows 98 measurements (see the second round).
 - `device-work#9` took 17–34 % of the CPU in kernel mode with no DOS VM
   running; every program was slower for it.
 - Every USER pump asks w32srv for session messages every 250 ms with a

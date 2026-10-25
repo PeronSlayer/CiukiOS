@@ -2,9 +2,10 @@
 static struct desktop shutdown_desktop;
 static unsigned shutdown_calls, shutdown_prepares, shutdown_terms;
 static int shutdown_error, shutdown_busy_left, shutdown_vm_live;
+static int shutdown_in_progress;   /* review P1-1: the call runs on another thread and has not returned */
 static int shutdown_progress;
 static int shutdown_state(void) { return shutdown_progress; }
-static uint64_t shutdown_call_times[32];
+static uint64_t shutdown_call_times[128];   /* the stuck-call case polls for 15 s at 250 ms */
 static int shutdown_external_live=1;
 static int shutdown_alive(struct desktop *d, uint32_t pid)
 { (void)d; (void)pid; return shutdown_external_live; }
@@ -17,9 +18,10 @@ static void shutdown_prepare(struct desktop *d)
 static int shutdown_request(int action)
 {
     assert(action==shutdown_desktop.power.action && shutdown_prepares==1);
-    assert(shutdown_calls<32);
+    assert(shutdown_calls<128);
     shutdown_call_times[shutdown_calls++]=shutdown_desktop.now_ns;
     assert(shutdown_desktop.mixer_fd==-1);
+    if (shutdown_in_progress) { errno=EINPROGRESS; return -1; }
     if (shutdown_vm_live || shutdown_busy_left) {
         if (shutdown_busy_left>0) shutdown_busy_left--;
         errno=EBUSY; return -1;
@@ -49,7 +51,7 @@ static void shutdown_setup(void)
     shutdown_desktop.power_alive=shutdown_alive;
     shutdown_desktop.pixels=calloc(640*480,4); assert(shutdown_desktop.pixels);
     shutdown_calls=shutdown_terms=shutdown_prepares=0;
-    shutdown_error=shutdown_busy_left=shutdown_vm_live=0;
+    shutdown_error=shutdown_busy_left=shutdown_vm_live=shutdown_in_progress=0;
     shutdown_progress=0;
     shutdown_external_live=1;
     shell_regular_fd=shell_directory_fd=-1;
@@ -275,7 +277,14 @@ static void test_shutdown_sequence(void)
      * errno text. The original ENOSYS help stays present. */
     for (int action=1; action<=2; action++) {
         shutdown_setup(); d->power_request=power_request;
-        desk_power_begin(d,action); shutdown_at(1000000000ull);
+        desk_power_begin(d,action);
+        /* Review P1-1: the production call runs on a worker thread (EINPROGRESS
+         * meanwhile); the desktop takes its result at the retry cadence. */
+        uint64_t t=1000000000ull;
+        for (unsigned k=0; k<2000 && d->power.state; k++) {
+            shutdown_at(t); t+=DESK_POWER_RETRY_NS;
+            struct timespec pause={0,1000000}; nanosleep(&pause,NULL);
+        }
         assert(last_power_action==(uint32_t)(action==1 ? CIUKI_POWER_REBOOT : CIUKI_POWER_OFF));
         assert(!d->power.state && strstr(d->sh.message_text,"power interface (call 73)") && strstr(d->sh.message_text,strerror(ENOSYS)));
         shutdown_cleanup();

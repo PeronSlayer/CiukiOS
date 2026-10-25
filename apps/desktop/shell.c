@@ -3864,13 +3864,16 @@ int desk_internal_open(struct desktop *d, int kind)
     }
     if (i >= 0) desk_drop_client(d, i);   /* one message at a time: the newest wins */
     for (i = 0; i < DESK_CLIENTS; i++) if (d->clients[i].channel < 0 && !d->clients[i].internal) break;
-    /* T23 c42f556e: the slots programs leave free (DESK_SYSTEM_SLOTS) are for
-     * the system dialogs; another built-in window leaves one of them. */
-    int system = kind == DESK_INTERNAL_END_TASK || kind == DESK_INTERNAL_SHUTDOWN ||
-                 kind == DESK_INTERNAL_POWER || kind == DESK_INTERNAL_MESSAGE;
-    if (i < DESK_CLIENTS && !system && desk_free_slots(d) <= 1) i = DESK_CLIENTS;
+    /* T23 c42f556e, review P2-5: the slots programs leave free
+     * (DESK_SYSTEM_SLOTS) are for the system dialogs: End Task, Shut Down,
+     * the shutdown progress, and a message box while a session or shutdown
+     * runs (the Shut Down error). Any other built-in window, a message box
+     * included, is an ordinary program window and never takes a reserve. */
+    int system = kind == DESK_INTERNAL_END_TASK || kind == DESK_INTERNAL_SHUTDOWN || kind == DESK_INTERNAL_POWER ||
+                 (kind == DESK_INTERNAL_MESSAGE && desk_session_busy(d));
+    if (i < DESK_CLIENTS && !desk_slot_available(d, system ? DESK_SLOT_SYSTEM : DESK_SLOT_PROGRAM)) i = DESK_CLIENTS;
     if (i == DESK_CLIENTS) {
-        fprintf(stderr, "[desktop] built-in window unavailable kind=%d free=%d\n", kind, desk_free_slots(d));
+        fprintf(stderr, "[desktop] built-in window unavailable kind=%d system=%d free=%d\n", kind, system, desk_free_slots(d));
         return -1;
     }
     struct desk_client *c = &d->clients[i];

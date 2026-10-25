@@ -57,6 +57,18 @@ static int provider_off(void *ctx)
 void klog(const char *fmt, ...) { va_list ap; va_start(ap,fmt); vsnprintf(last,sizeof(last),fmt,ap); va_end(ap); }
 int blackbox_checkpoint(void) { checkpoints++; strcpy(durable,last); return 0; }
 __attribute__((noreturn)) void kernel_reboot(void) { stage('R'); longjmp(reboot_return,1); }
+/* T23 c42f556e forced actions: a scripted clock and bounded flush worker. */
+static uint64_t fake_ms;
+static unsigned force_flushes;
+static int force_flush_result; /* -EAGAIN: never completes */
+uint64_t deadline_after_ms(uint32_t ms) { return fake_ms + ms; }
+bool deadline_passed(uint64_t deadline) { return fake_ms >= deadline; }
+void task_sleep_ms(uint32_t ms) { fake_ms += ms; }
+int storage_sync_bounded(uint64_t end)
+{
+    if (!force_flushes++) stage('F');
+    (void)end; return force_flush_result;
+}
 #include "../../src/kernel/core/power_source.c"
 #include "../../src/kernel/core/power.c"
 static void provide(enum power_source_kind kind)
@@ -268,8 +280,44 @@ static void test_g11(void)
     power_source_win32_status(&w); assert(w.ac == 1 && w.battery_flag == 128 && w.percent == 255);
     puts("PASS power runtime G11: ATA standby count encoding, standby reasons (provider, firmware, device resume), CAN_STANDBY, STANDBY authority and stop latch, APM event counters, EVENTS record, POLICY validation and refusals, SYSTEM_POWER_STATUS");
 }
+/* T23 trial c42f556e: a REBOOT/OFF that cannot finish (a disk operation or
+ * a program that does not end) must not leave the machine without a way to
+ * stop: the forced actions run beside the blocked call, flush for at most
+ * POWER_FORCE_FLUSH_MS through the bounded worker, latch UNCERTAIN, then
+ * reset or soft-off. Before them, call 73 action 9/10 was EINVAL. */
+static unsigned forced_offs;
+static int forced_off(void *ctx) { (void)ctx; stage('P'); forced_offs++; return -EIO; }
+static void test_forced(void)
+{
+    reset(); fake_ms=0; force_flushes=0; force_flush_result=0;
+    desktop.pid=7; assert(power_syscall(CIUKI_POWER_FORCE_REBOOT)==-EPERM && !stages);
+    reset(); force_flushes=0; power_running=true;   /* an orderly OFF blocked on another thread */
+    assert(power_syscall(CIUKI_POWER_OFF)==-EBUSY && !stages);
+    if (!setjmp(reboot_return)) { (void)power_syscall(CIUKI_POWER_FORCE_REBOOT); assert(0); }
+    assert(!strcmp(order,"FR") && (power_progress&CIUKI_POWER_UNCERTAIN) && strstr(last,"forced-reset"));
+    /* A flush worker that never completes ends at its 3 s bound. */
+    reset(); force_flushes=0; force_flush_result=-EAGAIN; fake_ms=1000; power_running=true;
+    if (!setjmp(reboot_return)) { (void)power_syscall(CIUKI_POWER_FORCE_REBOOT); assert(0); }
+    assert(!strcmp(order,"FR") && fake_ms>=1000+POWER_FORCE_FLUSH_MS && fake_ms<1000+POWER_FORCE_FLUSH_MS+20);
+    assert(force_flushes>=POWER_FORCE_FLUSH_MS/10 && force_flushes<=POWER_FORCE_FLUSH_MS/10+2);
+    /* Forced off: no quiesce, the latch, the provider's soft-off; none: ENOTSUP. */
+    reset(); force_flushes=0; force_flush_result=0; power_running=true; forced_offs=0;
+    power_source_release(source.provider, false, 0);
+    { const struct power_source_ops ops = {.soft_off=forced_off};
+      assert(!power_source_reserve(POWER_SOURCE_ACPI, &ops) && !power_source_activate(POWER_SOURCE_ACPI)); }
+    assert(power_syscall(CIUKI_POWER_FORCE_OFF)==-EIO && !strcmp(order,"FP") && forced_offs==1);
+    assert(power_syscall(CIUKI_POWER_QUERY)&CIUKI_POWER_UNCERTAIN);
+    reset(); force_flushes=0; power_running=true; power_source_release(source.provider, false, 0);
+    assert(power_syscall(CIUKI_POWER_FORCE_OFF)==-ENOTSUP && !strcmp(order,"F"));
+    /* Storage already durable: no second flush. */
+    reset(); force_flushes=0; storage_flushed=true;
+    if (!setjmp(reboot_return)) { (void)power_syscall(CIUKI_POWER_FORCE_REBOOT); assert(0); }
+    assert(!strcmp(order,"R") && !force_flushes);
+    puts("PASS power runtime T23 forced: runs beside a blocked REBOOT/OFF, flush bounded to 3 s, UNCERTAIN, reset or soft-off, desktop only");
+}
 int main(void)
 {
+    test_forced();
     test_audio_settings_flush();
     reset(); assert(power_source_soft_off()==-EBUSY && !stages); /* no orderly proof yet */
     reset(); desktop.pid=7; assert(power_syscall(CIUKI_POWER_OFF)==-EPERM && !stages);

@@ -198,12 +198,12 @@ Decisions (they supersede the matching parts of items 3, 6, 7 and 8):
    `CS_NOCLOSE` class declines at once. End Task remains the way to end such
    a program (`docs/design/win32-personality-contract.md`, "t23close").
 4. **System dialogs always have a client slot.** Program connections and
-   program windows leave the last `DESK_SYSTEM_SLOTS` (2) of the 16 client
-   slots free; the End Task, Shut Down, shutdown progress and message
-   windows may use them, other built-in windows leave one. Refusals are
-   recorded (`[desktop] client table full ...`,
+   program windows leave the last `DESK_SYSTEM_SLOTS` of the 16 client
+   slots free for the End Task, Shut Down, shutdown progress and session
+   message windows. Refusals are recorded (`[desktop] client table full ...`,
    `[desktop] built-in window unavailable ...`,
-   `[desktop] end task dialog unavailable ...`).
+   `[desktop] end task dialog unavailable ...`). Superseded in detail by
+   decisions 10 and 11 (three tiered slots).
 5. **The Win32 turn treats a windowless process as a window.** A process
    holding its WM_QUERYENDSESSION for 5 s with no window on the desktop
    (connection ended, hidden windows only) is not responding, as Windows 98
@@ -211,9 +211,72 @@ Decisions (they supersede the matching parts of items 3, 6, 7 and 8):
    recorded (`[desktop] end-session win32 turn pid=... hwnd=...`).
 6. **The power sequence ends every Win32 process.** Besides the desktop's
    clients and children, every live process of the Win32 broker
-   (`W32R_SHUTDOWN_LIST`) is a target: closed, SIGTERM at the 3 s deadline,
-   named in "Some programs are still running" as "Windows program (PID n)".
-   **Force is SIGKILL** (TerminateProcess) for every remaining target.
+   (`W32R_SHUTDOWN_LIST`) is a target: closed, named in "Some programs are
+   still running" as "Windows program (PID n)". **Force is SIGKILL**
+   (TerminateProcess) for every remaining target. (The automatic SIGTERM at
+   the 3 s deadline is qualified by decision 7 below.)
+
+Decisions after the Codex review of `63c964019` (2026-10-25; findings P1-1
+to P2-7 in `docs/validation/t23-win32-hang-shutdown-2026-10-25.md`):
+
+7. **No automatic end while WM_ENDSESSION may run (P1-2).** After the
+   session's broker COMMIT the power sequence polls the broker STATUS; a
+   Win32 target gets its SIGTERM only after the broker reported every
+   WM_ENDSESSION delivery done (`DESK_W32_ENDED`, as Windows ends a process
+   after its WM_ENDSESSION returns). Not done
+   [WaitToKillAppTimeout](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-2000-server/cc978624(v=technet.10))
+   (`DESK_WAIT_TO_KILL_NS`, 20 s) after the COMMIT, the sequence stops at
+   "Some programs are still running ... have not finished ending their
+   session" and the user's Force is the consent. Native targets keep the
+   3 s rule (they were queried and told END_SESSION(1)).
+8. **A broker error is not an agreement (P1-3).** BEGIN or STATUS failing
+   (a stalled w32srv, an ExitWindowsEx restart that owns the broker: EBUSY)
+   is retried for `DESK_SESSION_BROKER_NS` (5 s); past that the Win32
+   programs are *unknown*: no COMMIT, their windows get the ordinary close
+   (SC_CLOSE, their own prompts allowed by decision 11), no automatic
+   SIGTERM, and the busy dialog says "The Windows programs could not be
+   asked to save their work" with Force and Cancel. Records:
+   `[desktop] end-session win32 broker begin|status failed result=... : retrying`,
+   `... unavailable result=...: programs not asked`,
+   `[desktop] end-session agreed ... win32=committed|unknown|none`.
+9. **The inventory keeps its errors (P2-4).** The target table holds
+   `DESK_POWER_TARGETS` (64, the kernel's process limit); `power_w32_pids`
+   returns `-errno`, a failed `W32R_SHUTDOWN_LIST` is recorded
+   (`[desktop] power win32 list unavailable error=...`), fetched again on
+   every tick and before Force (reconciliation), and named in the busy
+   dialog ("The Windows programs could not be listed").
+10. **Reserved slots are tiered (P2-5).** `DESK_SYSTEM_SLOTS` is 3:
+    programs (connections, windows, every ordinary built-in window and
+    message box) need more than 3 free; the Task Manager the desktop itself
+    launches on Ctrl+Alt+Del (`desk_add_client_tier(DESK_SLOT_EMERGENCY)`)
+    may take the first reserve; End Task, Shut Down, the shutdown progress
+    and a message box during a session or shutdown take the last two, so
+    End Task and Shut Down always open together. Records:
+    `[desktop] emergency connection admitted`, `[desktop] built-in window unavailable kind=... system=...`.
+11. **Application prompts have bounded capacity (P2-6).** A v3 window with
+    an owner (a DialogBox/MessageBox) created by a process that is being
+    closed (a close request pending, the session's Win32 turn, or the power
+    sequence) may take the emergency reserve (`[desktop] prompt admitted`);
+    unowned windows and programs not being closed are still refused there.
+12. **A prompt is a new window, not PONG activity (P2-7).** The Win32 turn
+    records the window-id watermark of the poll before the query was
+    fetched; a window of that process newer than it is its prompt and is
+    waited for without a deadline while it answers. Without one, a fetched
+    query held for `DESK_WAIT_TO_KILL_NS` (20 s) gets "This program is not
+    responding" (End Task / Cancel). The w32srv shutdown flush is bounded
+    too: SIGKILL 10 s after its SIGTERM, a reaped kill is a lost flush
+    (recorded, the shutdown goes on), unreaped 10 s later it is abandoned
+    (`DESK_W32_SHUTDOWN_MS`, `apps/desktop/win32_native.c`).
+13. **Call 73 off the desktop thread, and a forced way out (P1-1).** The
+    orderly REBOOT/OFF runs on a worker thread (`power_request` returns
+    `EINPROGRESS` meanwhile); the kernel bounds every shutdown preflight
+    wait to 5 s (`vfs-storage-contract.md`). A call that has not returned
+    after `DESK_POWER_CALL_NS` (15 s) stops at "... waiting for a disk
+    operation that has not finished"; Force then, or a second Force after
+    SIGKILL left the kernel at EBUSY, is `CIUKI_POWER_FORCE_REBOOT` /
+    `FORCE_OFF` (`execution-abi.md`): a 3 s best-effort flush, then reset or
+    soft-off; the dialog says unsaved information may be lost and ScanDisk
+    checks the disk at the next start. Record: `[desktop] power forced action=... reason=call-73-not-returned|second-force`.
 
 ### Not covered (gaps, owned elsewhere)
 

@@ -203,6 +203,10 @@ int storage_sync_until(struct storage *, const struct vfs_request *);
  * until transport cleanup completes; expiry never frees uncertain buffers. */
 int storage_power_init(void);
 int storage_sync_bounded(uint64_t deadline_ms);
+/* T23 c42f556e: the longest a shutdown preflight waits for the namespace, the
+ * writer, a drive reservation or the boot log's drive (ms); past it call 73
+ * is refused with EBUSY before any change. Writable for host tests. */
+extern uint32_t storage_shutdown_wait_ms;
 /* f0-49: bind the pager's backing file on a writable fixed FAT volume. */
 struct pagefile;
 int storage_pagefile_bind(struct storage *, unsigned drive, const char *path);

@@ -69,12 +69,16 @@ uint32_t desk_w32_record(void *record,uint32_t bytes)
     else assert(a->action==3);
     return 0;
 }
+static int spawn_after_registration;   /* after a registry exchange succeeded the respawn carries no --fresh-clients */
 ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],const struct ciuki_spawn_fd *maps,uint32_t count,uint32_t flags)
 {
-    assert(!strcmp(path,"/System/Win32/w32srv") && !strcmp(argv[0],path) && argv[1] && !strcmp(argv[1],"--fresh-clients") && !argv[2]);
+    assert(!strcmp(path,"/System/Win32/w32srv") && !strcmp(argv[0],path));
+    if(spawn_after_registration)assert(!argv[1]);
+    else assert(argv[1] && !strcmp(argv[1],"--fresh-clients") && !argv[2]);
     assert(env && !maps && !count && !flags);return (int)(100+ ++starts);
 }
-int __wrap_kill(pid_t pid,int signo){assert(pid==(int)(100+starts) && signo==SIGTERM);signals++;return 0;}
+static unsigned kills;   /* review P2-7: the bounded shutdown's SIGKILL */
+int __wrap_kill(pid_t pid,int signo){assert(pid==(int)(100+starts) && (signo==SIGTERM || signo==SIGKILL));if(signo==SIGKILL)kills++;else signals++;return 0;}
 int desk_add_client(struct desktop *d,int fd){(void)d;(void)fd;assert(0);return -1;}
 int ciuki_channel_pair(int *fds){(void)fds;assert(0);return -1;}
 int ciuki_channel_send(int fd,const struct ciuki_message *m,uint32_t flags)
@@ -173,5 +177,24 @@ int main(void)
     puts("PASS native shortcut uses existing launcher identity, six-argument bound, retained launch state and explicit unsupported cwd");
     puts("PASS native desktop wiring: exact authorized child, crash/kill restart, flush-exit barrier, no restart during power-off, Cancel resumes service, failed flush blocks power-off");
     idle_traffic(&d);
+    /* Review P2-7 (T23 c42f556e): the service's shutdown flush is bounded.
+     * Not exited 10 s after SIGTERM: SIGKILL; reaped after that: the flush is
+     * lost but the shutdown goes on (1, not -EIO); not reaped 10 s after the
+     * SIGKILL: abandoned, the shutdown goes on. Before, desk_w32_shutdown
+     * returned 0 forever and the power sequence never reached call 73. */
+    unsigned starts_before=starts,signals_before=signals; spawn_after_registration=1;
+    d.power.state=DESK_POWER_RETRY;
+    advance(200000);assert(!desk_w32_shutdown() && signals==signals_before+1 && !kills);
+    advance(209999);assert(!desk_w32_shutdown() && !kills);
+    advance(210000);assert(!desk_w32_shutdown() && kills==1);
+    advance(215000);assert(!desk_w32_shutdown() && kills==1);
+    desk_w32_child_exited(&d,(uint32_t)(100+starts),SIGKILL);assert(desk_w32_shutdown()==1);
+    d.power.state=0;desk_w32_poll(&d);assert(starts==starts_before+1);
+    d.power.state=DESK_POWER_RETRY;
+    advance(300000);assert(!desk_w32_shutdown() && signals==signals_before+2 && kills==1);
+    advance(310000);assert(!desk_w32_shutdown() && kills==2);
+    advance(319999);assert(!desk_w32_shutdown());
+    advance(320000);assert(desk_w32_shutdown()==1 && kills==2);
+    puts("PASS w32srv shutdown bound: SIGKILL 10 s after SIGTERM, a reaped kill is a lost flush not a failed shutdown, unreaped 10 s later abandoned");
     return 0;
 }

@@ -348,6 +348,32 @@ static int power_sequence(bool off)
     klog("[power] %s soft-off returned error=%d; stopped devices and leases retained", name, e); power_checkpoint();
     return e;
 }
+/* T23 trial c42f556e (docs/validation/t23-win32-hang-shutdown-2026-10-25.md):
+ * the forced end of a shutdown that cannot finish, after the user chose it.
+ * It runs beside a REBOOT/OFF still blocked on another thread (no
+ * power_running), takes no storage lock itself and waits for nothing
+ * unbounded: a best-effort durable flush through the bounded suspend-flush
+ * worker (POWER_FORCE_FLUSH_MS), the UNCERTAIN latch, then reset or the
+ * provider's soft-off. Device quiesce is skipped, as for the power button. */
+#define POWER_FORCE_FLUSH_MS 3000u
+static int power_force(bool off, uint32_t pid)
+{
+    klog("[power] forced %s requested by pid %u running=%u progress=%u storage=%s", off ? "power off" : "reboot",
+         pid, power_running, power_progress, storage_flushed ? "durable" : "pending");
+    if (!storage_flushed) {
+        uint64_t end = deadline_after_ms(POWER_FORCE_FLUSH_MS);
+        int e;
+        while ((e = storage_sync_bounded(end)) == -EAGAIN && !deadline_passed(end)) task_sleep_ms(10);
+        klog("[power] forced flush result=%d", e == -EAGAIN ? -ETIMEDOUT : e);
+    }
+    power_progress |= CIUKI_POWER_UNCERTAIN;
+    if (!off) { klog("[power] stage=forced-reset fallback=8042-triple-fault"); kernel_reboot(); }
+    if (!power_source_can_off()) { klog("[power] forced off: no soft-off provider"); return -ENOTSUP; }
+    power_source_mark_stopped();
+    int e = power_source_soft_off();
+    klog("[power] forced soft-off returned error=%d", e);
+    return e;
+}
 /* The desktop, or Setup's capability holder in Setup mode, owns call 73's
  * control actions. */
 static bool power_authorized(const struct process *caller)
@@ -487,6 +513,8 @@ int32_t power_syscall(uint32_t action)
         f=irq_save(); power_running=false; irq_restore(f);
         return e;
     }
+    if (action == CIUKI_POWER_FORCE_REBOOT || action == CIUKI_POWER_FORCE_OFF)
+        return power_force(action == CIUKI_POWER_FORCE_OFF, caller->pid);
     if (action != CIUKI_POWER_REBOOT && action != CIUKI_POWER_OFF) return -EINVAL;
     bool off = action == CIUKI_POWER_OFF;
     uint32_t f = irq_save();

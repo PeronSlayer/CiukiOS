@@ -1429,15 +1429,46 @@ int storage_shutdown(struct storage *s)
     if (e && paged) { if (pager_resume) pager_resume(); else if (pagefile_reattach) pagefile_reattach(&system_pagefile); }
     return e;
 }
+/* T23 trial c42f556e: the shutdown preflight waits for the namespace, for
+ * the storage writer's batch and for every drive reservation (a reader of a
+ * 48 MB installer, a stuck holder) at most this long; past it the call is a
+ * refusal before any change (EBUSY), as a busy volume already was, so call
+ * 73 always returns and the desktop can offer Force and, past that, the
+ * forced restart. Writable for host tests. */
+uint32_t storage_shutdown_wait_ms=5000u;
+static uint64_t shutdown_now(void *arg) { (void)arg; return (uint64_t)fs_now_ms()*1000u; } /* microseconds */
+static void shutdown_pause(void *arg)
+{
+    (void)arg;
+#ifdef FS_HOST
+    struct timespec t={0,1000000}; nanosleep(&t,0);
+#else
+    task_sleep_ms(1);
+#endif
+}
 static int shutdown_volumes(struct storage *s)
 {
     /* Reserve all letters before preflight, excluding opens through durable
      * detach while allowing media snapshots during commit/device waits. */
-    vfs_lock(&s->vfs,0);
+    struct vfs_request request={.deadline=shutdown_now(0)+(uint64_t)storage_shutdown_wait_ms*1000u,
+        .now=shutdown_now,.pause=shutdown_pause,.operation="shutdown",.site="mount"};
+    if (vfs_admit(&s->vfs,0,&request)) {
+        klog("[storage] shutdown busy holder=namespace wait_ms=%u result=%d",storage_shutdown_wait_ms,-FS_EBUSY);
+        return -FS_EBUSY;
+    }
     if (s->writer_quiescing) { vfs_unlock(&s->vfs); return -FS_EBUSY; }
     s->writer_quiescing=true;
-    while (s->writer_running) fs_event_wait(&s->vfs.volume_changed,&s->vfs.lock);
-    vfs_reserve_locked(&s->vfs,VFS_ALL_DRIVES); vfs_tag_locked(&s->vfs,"commit"); vfs_site_locked(&s->vfs,"mount");
+    struct fs_request_scope scope; fs_request_enter(&scope,&request);
+    int waited=0;
+    while (s->writer_running && !waited) waited=fs_event_wait_request(&s->vfs.volume_changed,&s->vfs.lock,VFS_WAIT_VOLUME);
+    fs_request_leave(&scope);
+    if (!waited) waited=vfs_reserve_request_locked(&s->vfs,VFS_ALL_DRIVES,&request);
+    if (waited) {
+        klog("[storage] shutdown busy holder=%s wait_ms=%u result=%d",s->writer_running ? "writer" : "reservation",
+             storage_shutdown_wait_ms,-FS_EBUSY);
+        s->writer_quiescing=false; vfs_unlock(&s->vfs); fs_event_wake(&s->vfs.volume_changed); return -FS_EBUSY;
+    }
+    vfs_tag_locked(&s->vfs,"commit"); vfs_site_locked(&s->vfs,"mount");
     /* fx-5: the first holder is recorded; the refusal changes nothing. */
     const char *busy = 0; unsigned busy_drive = 0;
     for (unsigned i = 0; i < VFS_NODES && !busy; i++) if (s->vfs.nodes[i].refs && (!s->vfs.nodes[i].ro || s->vfs.nodes[i].generation==s->vfs.generation[s->vfs.nodes[i].drive]))
@@ -1703,7 +1734,17 @@ int storage_sync(void)
     if (e) { klog("[storage] shutdown refused stage=blackbox result=%d",e); return e; }
     e=storage_startup_log_shutdown(&system_storage);
     if (e) { klog("[storage] shutdown refused stage=startup-log result=%d",e); return e; }
-    e = bootlog_shutdown();
+    /* T23 c42f556e: the log's last writes wait for C: at most
+     * storage_shutdown_wait_ms (a stuck holder of the drive); a timeout is a
+     * refusal like EBUSY, not a log failure. */
+    {
+        struct vfs_request request={.deadline=shutdown_now(0)+(uint64_t)storage_shutdown_wait_ms*1000u,
+            .now=shutdown_now,.pause=shutdown_pause,.operation="shutdown",.site="mount"};
+        struct fs_request_scope scope; fs_request_enter(&scope,&request);
+        e = bootlog_shutdown();
+        fs_request_leave(&scope);
+        if (e==-VFS_ETIMEOUT || e==-VFS_ECANCELLED) e=-FS_EBUSY;
+    }
     /* fx-5: EBUSY is a refusal before any change (bootlog_shutdown waited
      * for the drain owner first): the writer, cache and mounts continue and
      * call 73 may retry. Latching `stopped` here ended the storage writer

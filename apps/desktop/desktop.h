@@ -17,7 +17,16 @@
  * DESK_SYSTEM_SLOTS client slots, so the desktop's own system dialogs ("This
  * program is not responding", Shut Down, the shutdown progress and message
  * boxes) can always open, however many windows the programs create. */
-#define DESK_SYSTEM_SLOTS 2
+#define DESK_SYSTEM_SLOTS 3
+/* How the last DESK_SYSTEM_SLOTS are shared (Codex review of 63c964019, P2-5
+ * and P2-6): a program connection or window needs more than DESK_SYSTEM_SLOTS
+ * free; an emergency client (the Task Manager the desktop itself launched on
+ * Ctrl+Alt+Del, a program's own modal prompt while it is being closed or
+ * asked to end the session) may take the first reserved slot; the desktop's
+ * system dialogs (End Task, Shut Down, the shutdown progress, a message while
+ * a session or shutdown runs) take the last two, so End Task and Shut Down
+ * can always open together. */
+enum { DESK_SLOT_PROGRAM, DESK_SLOT_EMERGENCY, DESK_SLOT_SYSTEM };
 #define DESK_DAMAGE_MAX 32
 struct desk_dirty_row { int32_t left, right; };   /* visible-span painter (compositor.c) */
 #define DESK_TX_MAX 64
@@ -199,19 +208,49 @@ struct desk_child { uint32_t pid; uint64_t close_ns; int term_sent, close_deferr
 #define DESK_POWER_CLOSE_NS 3000000000ull
 #define DESK_POWER_RETRY_NS 250000000ull
 #define DESK_POWER_BUSY_NS 5000000000ull
+/* Windows WaitToKillAppTimeout (20000 ms): how long a program may take to
+ * end after WM_ENDSESSION before the End Task dialog; CiukiOS never ends a
+ * Win32 program automatically while its WM_ENDSESSION may still be running
+ * (Codex review P1-2): past this bound the user is asked ("Some programs are
+ * still running", Force). */
+#define DESK_WAIT_TO_KILL_NS 20000000000ull
+/* An orderly call 73 that has not returned (a disk operation that does not
+ * finish, review P1-1) for this long is reported as busy, and Force then
+ * offers the forced restart or power off. The kernel bounds each shutdown
+ * preflight wait to 5 s (storage_shutdown_wait_ms). */
+#define DESK_POWER_CALL_NS 15000000000ull
+/* Every live process the kernel can hold (CIUKI_PROCESS_MAX), so no storage
+ * holder is left out of the power sequence (review P2-4). */
+#define DESK_POWER_TARGETS 64
 enum { DESK_POWER_IDLE, DESK_POWER_CLOSING, DESK_POWER_RETRY,
        DESK_POWER_BUSY, DESK_POWER_FORCE, DESK_POWER_DONE };
 struct desk_power_target {
     uint32_t pid;
     int owned, terminated, gone;
+    int w32;   /* a Win32 broker process: its WM_ENDSESSION completion governs the automatic SIGTERM */
     char name[DESK_TITLE_MAX + 1];
 };
 struct desk_power_sequence {
     int state, action, window, previous_focus, prepared;
     unsigned count;
     uint64_t close_deadline, busy_deadline, next_try;
-    struct desk_power_target targets[DESK_CLIENTS * 2];
-    char text[320];
+    struct desk_power_target targets[DESK_POWER_TARGETS];
+    /* Win32 end of session (review P1-2): w32_asked when the broker COMMIT
+     * delivered WM_ENDSESSION(TRUE); w32_ended when its STATUS reported every
+     * delivery done (the programs may then be ended, as Windows does after
+     * WM_ENDSESSION returns); neither: the Win32 programs were never asked
+     * (broker unavailable) and only the user's Force may end them. */
+    int w32_asked, w32_ended, w32_unknown;
+    uint64_t w32_commit_ns, w32_next_status;
+    int w32_list_error;         /* the last W32R_SHUTDOWN_LIST failure (review P2-4), 0 none */
+    int w32_list_retry;         /* the list is fetched again on the next tick */
+    /* An orderly call 73 running on another thread (review P1-1). */
+    uint64_t call_started_ns;
+    int call_stuck;
+    /* Force already ended the programs once (SIGKILL); the next Force is the
+     * forced restart or power off (CIUKI_POWER_FORCE_*). */
+    int forced, force_power;
+    char text[400];
 };
 /* G4: the taskbar's window arrangement with its Undo (client.c). Windows 98
  * keeps the previous positions of the windows an arrangement moved, so that
@@ -290,6 +329,11 @@ struct desk_power_broadcast {
     int resume_pending;
     uint64_t resume_input_ns;
 };
+/* The broker may be stalled or busy (an ExitWindowsEx restart owns it): its
+ * BEGIN/STATUS errors are retried for this long, then the Win32 programs are
+ * "unknown" (never agreed, review P1-3): their windows are closed as any
+ * other and only the user's Force ends them. */
+#define DESK_SESSION_BROKER_NS 5000000000ull
 struct desk_session {
     int state, action;
     unsigned count, at;
@@ -297,6 +341,14 @@ struct desk_session {
     struct desk_session_part parts[DESK_CLIENTS + 1];
     uint32_t w32_pid, w32_hwnd, w32_delivered;
     uint64_t w32_since, w32_next;
+    /* Review P2-7: window_id watermark when the query was fetched; a newer
+     * window of that process is its prompt (DialogBox/MessageBox), waited for
+     * without a deadline while it answers. Without one the query is bounded
+     * by DESK_WAIT_TO_KILL_NS, then the End Task dialog asks the user. */
+    uint32_t w32_mark, w32_poll_mark;   /* poll_mark: the watermark at the previous STATUS poll */
+    uint64_t w32_error_since;   /* first broker error of the current retry window, 0 none */
+    int w32_unknown;            /* the broker never answered: Win32 programs not asked */
+    int w32_committed;          /* COMMIT delivered WM_ENDSESSION(TRUE) (read by desk_power_begin) */
     int force;   /* G11 alarm "Force": a program that stops responding is ended */
 };
 /* The "This program is not responding" (End Task, Cancel) and DOS warning
@@ -521,6 +573,8 @@ struct desktop {
     int (*sound_shutdown)(struct desktop *); /* 1 complete, 0 still within the 2 s allowance */
     void (*sound_cancel)(struct desktop *);
     void (*sound_tone)(struct desktop *, unsigned tone);   /* G25: a synthesised accessibility tone (access.h ACC_TONE_*) */
+    /* 0: done (a real success never returns); -1 with errno. EINPROGRESS: the
+     * call runs on another thread, ask again next tick (review P1-1). */
     int (*power_request)(int action);
     int (*power_state)(void); /* query capabilities and irreversible progress */
     void (*power_prepare)(struct desktop *);
@@ -530,7 +584,11 @@ struct desktop {
      * clients), including those whose desktop connection ended or that have
      * no window: the power sequence closes and, after its deadline, ends
      * them with the programs it launched. Fills pids, returns the count. */
-    unsigned (*power_w32_pids)(struct desktop *, uint32_t *pids, unsigned cap);
+    int (*power_w32_pids)(struct desktop *, uint32_t *pids, unsigned cap);   /* count, or -errno (review P2-4) */
+    /* Review P1-1: the forced end of a shutdown that cannot finish
+     * (CIUKI_POWER_FORCE_REBOOT / FORCE_OFF), after the user's second Force;
+     * NULL on hosts without it. Returns like power_request. */
+    int (*power_force_request)(int action);
     /* Volume Control requests (DESK_MIXER_SET): applied with the delegated mixer
      * control handle; NULL on hosts without one. 0 or -errno. */
     int (*joystick_control)(struct desktop *, struct ciuki_joystick_control *);
@@ -667,6 +725,9 @@ void desk_request_close(struct desktop *, int index);
  * is not responding" at once (as a second End Task does). */
 void desk_user_close(struct desktop *, int index);
 int desk_free_slots(const struct desktop *);   /* client slots held by no client and no built-in window */
+int desk_slot_available(const struct desktop *, int tier);   /* DESK_SLOT_*: a slot may be taken at this tier */
+/* A connection admitted at DESK_SLOT_EMERGENCY (the desktop's own launch of Task Manager). */
+int desk_add_client_tier(struct desktop *, int fd, int tier);
 void desk_close_timeouts(struct desktop *);
 void desk_child_exited(struct desktop *, uint32_t pid, int status);
 void desk_session_begin(struct desktop *, int action);   /* 1 restart, 2 shut down, 3 log off */
