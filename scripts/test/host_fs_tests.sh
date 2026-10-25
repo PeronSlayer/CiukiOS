@@ -47,6 +47,15 @@ run_startup_image_tests() {
     nm --defined-only build/host/fs/startup_image_test > build/host/fs/startup-image-symbols.txt
     rm build/host/fs/startup_image_test
 }
+if [[ ${1:-} == --launch-replay ]]; then
+    clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+        -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+        -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c \
+        tests/host/fs/test_launch_replay.c -o build/host/fs/test_launch_replay
+    build/host/fs/test_launch_replay
+    rm build/host/fs/test_launch_replay
+    exit 0
+fi
 if [[ ${1:-} == --startup-image ]]; then
     run_startup_image_tests
     exit 0
@@ -263,6 +272,14 @@ clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c \
     tests/host/fs/test_cache.c -o build/host/fs/test_cache
 build/host/fs/test_cache
+# fx-launch: the T23 trial 2ca3b0b6 starts replayed on the production cache
+# (C4 sizing from the trial's ledger, PATA timing from verbose trials).
+clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+    -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c \
+    tests/host/fs/test_launch_replay.c -o build/host/fs/test_launch_replay
+build/host/fs/test_launch_replay
+rm build/host/fs/test_launch_replay
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
     -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c \

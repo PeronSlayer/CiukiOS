@@ -13,6 +13,17 @@
 #define CACHE_STEP_PAGES 64u
 #define CACHE_PREFETCH_MIN 16384u
 #define CACHE_PREFETCH_MAX 65536u
+/* Sector index (fx-launch, T23 trial 2ca3b0b6): at least one bucket per two
+ * slots the cache may hold, in whole pages of bucket heads. F1 hashed every
+ * slot into 256 fixed buckets, sized for its 8 MiB cache (13,440 slots, about
+ * 52 per chain); C4 (f1-85) lets the cache grow to 32 MiB with the same table,
+ * and the trial kept 7,161 data pages (57,288 slots, about 224 per chain) for
+ * its whole session, so every launch read walked about 600 descriptors per
+ * missing sector (tests/host/fs/test_launch_replay.c). A cache whose slots fit
+ * the inline table keeps it; a failed page allocation keeps the current table
+ * (correct, only slower). */
+#define CACHE_HASH_INLINE 256u
+#define CACHE_HASH_DIR 256u
 /* One open description, shared by dup/inheritance. All fields are protected
  * by its cache lock. No private file data or independently mapped frames. */
 struct cache_stream {
@@ -80,7 +91,10 @@ struct block_cache {
     struct cache_page inline_page;  /* first page header: no descriptor page needed */
     struct cache_meta *meta;
     struct cache_lru lru[2];        /* [0] 512-byte slots, [1] 2048-byte slots */
-    struct cache_block *hash[256];
+    struct cache_block *hash_inline[CACHE_HASH_INLINE];
+    struct cache_block **hash_dir[CACHE_HASH_DIR]; /* bucket pages; none: hash_inline */
+    uint32_t hash_mask, hash_pages;
+    uint64_t lookups, lookup_probes; /* index walks, for the launch evidence */
     struct cache_device devices[CACHE_DEVICES];
     void *workspace[256];
     uint32_t workspace_pages, blocks;
@@ -134,8 +148,13 @@ struct cache_stats {
      * overlap. The fraction is unreclaimable_data / data_pages. */
     uint32_t pinned_data, dirty_data, error_data, unreclaimable_data;
     uint64_t prefetch_useful, prefetch_wasted, prefetch_commands;
+    uint32_t hash_buckets, hash_pages;
+    uint64_t lookups, lookup_probes;
 };
 void cache_stats(struct block_cache *, struct cache_stats *);
+/* Index introspection for host evidence (cache lock held by the caller). */
+uint32_t cache_hash_buckets(const struct block_cache *);
+struct cache_block **cache_hash_bucket(struct block_cache *, uint32_t index);
 void cache_destroy(struct block_cache *);
 /* M1 inputs are pages of usable/free NORMAL RAM, not installed RAM. A zero
  * initial result means the floor cannot fit above the pressure reserve. */

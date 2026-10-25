@@ -79,11 +79,20 @@ int main(int argc,char **argv) {
     /* The task's settle delay: a burst reaching 3/4 of the queue is written
      * at once; a single start waits for the delay. */
     for (unsigned i=0;i<VFS_STARTUP_URGENT;i++) { CHECK(!image_open(client->cwd,"/SHORT.BIN",&image)); image.close(image.cookie); }
-    uint32_t settle=fs_now_ms(); vfs_startup_settle(&vfs,60000); CHECK(fs_now_ms()-settle<1000);
+    uint32_t settle=fs_now_ms(); vfs_startup_settle(&vfs,60000,60000); CHECK(fs_now_ms()-settle<1000);
     CHECK(vfs_startup_flush(&vfs,true)==(int)VFS_STARTUP_URGENT);
     CHECK(!image_open(client->cwd,"/SHORT.BIN",&image)); image.close(image.cookie);
-    settle=fs_now_ms(); vfs_startup_settle(&vfs,50); CHECK(fs_now_ms()-settle>=50 && fs_now_ms()-settle<5000);
-    CHECK(vfs_startup_flush(&vfs,true)==1 && log_clock()==before+2+VFS_STARTUP_QUEUE+VFS_STARTUP_URGENT);
+    settle=fs_now_ms(); vfs_startup_settle(&vfs,50,5000); CHECK(fs_now_ms()-settle>=50 && fs_now_ms()-settle<5000);
+    /* fx-launch: the quiet period runs from the newest start, not from the
+     * flusher's wake-up, and the maximum bounds a continuous burst. */
+    CHECK(!image_open(client->cwd,"/SHORT.BIN",&image)); image.close(image.cookie);
+    struct timespec pause={0,150000000}; nanosleep(&pause,0);
+    settle=fs_now_ms(); vfs_startup_settle(&vfs,200,5000);
+    CHECK(fs_now_ms()-settle<150 && vfs.startup_count==2);
+    CHECK(!image_open(client->cwd,"/SHORT.BIN",&image)); image.close(image.cookie);
+    settle=fs_now_ms(); vfs_startup_settle(&vfs,60000,80);
+    CHECK(fs_now_ms()-settle>=80 && fs_now_ms()-settle<5000 && vfs.startup_count==3);
+    CHECK(vfs_startup_flush(&vfs,true)==3 && log_clock()==before+4+VFS_STARTUP_QUEUE+VFS_STARTUP_URGENT);
     fd=file_open(client,"/dev/media",O_RDONLY,0); CHECK(fd>=0);
     struct ciuki_media_defrag request={.version=CIUKI_MEDIA_VERSION,.size=sizeof(request),
         .drive=2,.flags=CIUKI_DEFRAG_STARTUP,.placement=2};

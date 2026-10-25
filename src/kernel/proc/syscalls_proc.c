@@ -18,30 +18,38 @@ uint64_t proc_launch_now(void)
 }
 bool proc_launch_enabled(void) { return console_quiet && !console_quiet(); }
 
+/* fx-launch: quiet boots (every owner trial) also measure the spawn stage,
+ * the kernel part of the desktop's spawn_ms, and log it once at the end of
+ * image loading: T23 trial 2ca3b0b6 had desktop spawn_ms of 74-1277 ms and
+ * no record of where the kernel spent them. Only the verbose console keeps
+ * the later window/first-frame stages and the [launch] summary. */
 void proc_launch_start(struct process *parent, struct process *child, uint64_t spawn_us, uint64_t click_us)
 {
-    if (!proc_launch_enabled()) return;
+    bool verbose = proc_launch_enabled();
+    uint64_t now = spawn_us ? spawn_us : proc_launch_now();
     child->launch.active = true;
-    child->launch.spawn_us = spawn_us;
-    child->launch.click_us = click_us;
+    child->launch.quiet = !verbose;
+    child->launch.spawn_us = now;
+    child->launch.click_us = click_us ? click_us : now;
     struct proc_thread *self = proc_thread_for(g_current);
     if (self && self->process == parent) self->launch_loading = child;
 }
 void proc_launch_elf(struct process *p)
 {
-    if (!p->launch.active || !proc_launch_enabled()) return;
+    if (!p->launch.active || p->launch.finished || (!p->launch.quiet && !proc_launch_enabled())) return;
     p->launch.elf_us = proc_launch_now();
-    if (klog) klog("[launch-stage] name=%s pid=%u spawn_us=%llu elf_us=%llu read_bytes=%llu disk_bytes=%llu",
+    if (klog) klog("[launch-stage] name=%s pid=%u spawn_us=%llu elf_us=%llu read_bytes=%llu disk_bytes=%llu disk_requests=%llu dma_ms=%llu",
                   p->name, p->pid, p->launch.spawn_us, p->launch.elf_us,
-                  p->launch.volume_bytes, p->launch.disk_bytes);
+                  p->launch.volume_bytes, p->launch.disk_bytes, p->launch.disk_reads, p->launch.dma_ms);
+    if (p->launch.quiet) p->launch.finished = true;
 }
 static struct proc_launch *launch_io(void)
 {
-    if (!proc_launch_enabled()) return 0;
     struct process *p = proc_current();
     struct proc_thread *self = proc_thread_for(g_current);
     if (self && self->launch_loading) p = self->launch_loading;
-    return p && p->launch.active && !p->launch.finished ? &p->launch : 0;
+    if (!p || !p->launch.active || p->launch.finished) return 0;
+    return p->launch.quiet || proc_launch_enabled() ? &p->launch : 0;
 }
 void proc_launch_volume_read(uint32_t requested, size_t done)
 {

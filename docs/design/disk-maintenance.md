@@ -283,3 +283,25 @@ EBUSY within 1 s, and succeed once it finished. On 56e58374 the launch check
 fails (the start was written inside exec); on the first version of this
 change (a64d5839) the stalled-flush case blocks the analysis until the
 test's alarm.
+
+## Start log after the launch burst (fx-launch, 2026-10-25)
+
+T23 trial of main 60d029c9: during the CDPLAYER.EXE start, whose EXE and six
+DLL snapshots were queued over about ten seconds, the one-second settle let
+the `startup-log` task flush four times inside the launch; the flusher and
+the program waited on each other's C: holds (`[sched] inherit
+from=startup-log#16 to=CDPLAYER.EXE#103 ... reason=drive` and the reverse).
+The Resource Kit (`wrkc10_5.htm`) describes Task Monitor as a separate
+recorder; it gives no write cadence.
+
+The task now flushes once no start has been queued for 10 s
+(`STARTUP_LOG_QUIET_MS`), at the latest 60 s after it woke
+(`STARTUP_LOG_MAX_MS`); `vfs_startup_settle(quiet, max)` measures the quiet
+period from the newest queued start. A queue 3/4 full is still written at
+once, and Shut Down and the defragmenter's analysis still flush the queue
+themselves, so the bounded queue and the advisory semantics are unchanged.
+Host evidence (`--startup-image`): the quiet period runs from the newest
+start (a start 150 ms old ends a 200 ms quiet period within 150 ms), the
+maximum bounds a longer one (80 ms), and 12 queued starts end the wait at
+once. Record: `docs/validation/fx-launch-latency-2026-10-25.md`.
+

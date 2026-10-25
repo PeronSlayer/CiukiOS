@@ -87,16 +87,20 @@ uint32_t w32_loader_call(struct proc_thread *t, struct ciuki_w32_loader_args *a)
         if (!a->bytes || a->bytes > 512u * 1024 * 1024 ||
             !ua_range(p->memory, a->source, a->bytes, PROT_READ))
             return W32_STATUS_ACCESS_VIOLATION;
-        /* Pins freeze the snapshot against release/protect while section hashing
-         * and seeding yield. Copying into another image is never kernel code. */
-        for (struct ua_extent *e = ua_find(p->memory, a->source);
-             e && e->base < a->source + a->bytes; e = e->next)
-            if (e->prot & PROT_WRITE)
-                return W32_STATUS_ACCESS_DENIED;
         struct ua_pin pin;
         int err = ua_pin(p->memory, &pin, a->source, a->bytes, false);
         if (err)
             return w32_status(err);
+        /* Pin first: pinning may wait/yield. Pins prevent release/protect, but
+         * only private backing also excludes writes through shared aliases. */
+        for (uint32_t at = a->source; at < pin.end;) {
+            struct ua_extent *e = ua_find(p->memory, at);
+            if (!ua_extent_private(e) || (e->prot & PROT_WRITE)) {
+                ua_unpin(p->memory, &pin);
+                return W32_STATUS_ACCESS_DENIED;
+            }
+            at = e->end;
+        }
         struct loader_snapshot snapshot = {p->memory, a->source};
         struct ciuki_file file = {&snapshot, a->bytes, loader_read, 0};
         struct w32_image *im = w32_alloc(sizeof(*im));

@@ -2802,7 +2802,7 @@ void vfs_startup_record_locked(struct vfs *v,struct fat_volume *vol,const struct
         v->startup_head=(v->startup_head+1)%VFS_STARTUP_QUEUE; v->startup_count--; v->startup_dropped++;
     }
     v->startup_queue[(v->startup_head+v->startup_count)%VFS_STARTUP_QUEUE]=hint;
-    v->startup_count++; v->startup_queued++;
+    v->startup_count++; v->startup_queued++; v->startup_last_ms=fs_now_ms();
     fs_lock_drop(&v->identity_lock);
     fs_event_wake(&v->startup_event);
 }
@@ -2814,14 +2814,21 @@ bool vfs_startup_wait(struct vfs *v)
     fs_lock_drop(&v->identity_lock);
     return queued;
 }
-void vfs_startup_settle(struct vfs *v,uint32_t ms)
+/* fx-launch: the start log is written after the launch burst, once no
+ * start has been queued for quiet_ms (a Win32 start queues its EXE and each
+ * DLL over seconds; on T23 trial 2ca3b0b6 the flusher and CDPLAYER.EXE
+ * waited on each other's C: holds in four consecutive windows), at the
+ * latest max_ms after this call, and at once at 3/4 of the queue. */
+void vfs_startup_settle(struct vfs *v,uint32_t quiet_ms,uint32_t max_ms)
 {
     uint32_t start=fs_now_ms();
     fs_lock_take(&v->identity_lock);
     for (;;) {
-        uint32_t spent=fs_now_ms()-start;
-        if (v->startup_count>=VFS_STARTUP_URGENT || spent>=ms) break;
-        fs_event_wait_ms(&v->startup_event,&v->identity_lock,ms-spent);
+        uint32_t now=fs_now_ms(), spent=now-start, idle=now-v->startup_last_ms;
+        if (v->startup_count>=VFS_STARTUP_URGENT || spent>=max_ms || idle>=quiet_ms) break;
+        uint32_t wait=quiet_ms-idle;
+        if (wait>max_ms-spent) wait=max_ms-spent;
+        fs_event_wait_ms(&v->startup_event,&v->identity_lock,wait);
     }
     fs_lock_drop(&v->identity_lock);
 }
