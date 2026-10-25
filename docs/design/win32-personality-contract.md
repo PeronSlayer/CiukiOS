@@ -2975,3 +2975,103 @@ opcode, so the desktop ended the connection, as in q3exec2.
    closed window and SET_TITLE requests naming window 0: all are refused
    alone; a malformed PONG still drops the connection (fails without
    decision 3).
+
+## q3exec4 — Wizard pages: destination read, hidden controls, placement (2026-10-25)
+
+QEMU evidence (lead, image of main 50a843517, serial
+`build/lead-scratch/q3-serial-102.log`, screenshots of the run): the whole
+wizard runs (Welcome, license, Choose Destination Location showing
+`c:\Q3Ademo`, Ready To Install, Setup copying, Finished) and the Start menu
+group is created, but the copy page shows `Copying file: \requirements.txt`,
+the uninstall log lists only `0=\quake3.exe` and `1=\requirements.txt`, the
+Finished page shows check boxes labelled `IDS_OPTION1` and `IDS_OPTION2`,
+the Ready To Install page an empty "Current settings" box, and every page
+opens 9 pixels right and 72 pixels lower than the one before (Welcome at
+240,253, Finished at 276,540 with its buttons under the taskbar).
+
+### Research
+
+- [WM_DESTROY](https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-destroy):
+  "This message is sent first to the window being destroyed and then to the
+  child windows (if any) as they are destroyed. During the processing of
+  the message, it can be assumed that all child windows still exist."
+  [DestroyWindow](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-destroywindow)
+  destroys owned windows first. Wine's `DestroyWindow` does the same:
+  owned windows, then `WM_DESTROY` to the window and recursively to its
+  children, then `WM_NCDESTROY` from the children up.
+- [Window Features, Window Visibility](https://learn.microsoft.com/en-us/windows/win32/winmsg/window-features#window-visibility):
+  the system does not draw a hidden window, and a child window is hidden
+  while its parent is hidden.
+- `vise32ex.dll` (host disassembly, no execution):
+  - Choose Destination Location (template 108, procedure 0x1000bab0) fills
+    edit control 1006 in WM_INITDIALOG and reads it back in **WM_DESTROY**
+    (0x1000bbc2: `GetDlgItemTextA(hDlg, 1006, buf, 259)` when Next ended
+    the page) into the destination variable (0x1002fc70).
+  - Finished (template 12033, procedure 0x1000fa10) sets each option check
+    box (1023-1025) from the script or hides it with
+    `ShowWindow(GetDlgItem(hDlg, id), SW_HIDE)` when the label is empty
+    (0x1000feff); the Quake III demo script leaves all three empty. Ready To
+    Install (template 12032, 0x1001f1df) hides the "Current settings" label
+    and box the same way when the script does not ask for them.
+  - Files are written with `_lcreat`/`_lwrite`; directories are created one
+    component at a time with `CreateDirectoryA` (0x100477c0).
+- `apps/desktop/client.c` `v3_place`/`v3_configure`: CREATE and PLACE give
+  the frame origin (`desk_frame`), CONFIGURE answers with the content origin
+  (`desk_content`: frame + border 3, title 24).
+
+### Findings and decisions
+
+1. Destination empty. `u32_destroy` destroyed child windows before sending
+   `WM_DESTROY` to the dialog (directive f5-10A, item 1, asked for
+   "WM_DESTROY children first"), so VISE's `GetDlgItemTextA(1006)` found no
+   control and stored an empty destination: files were installed under the
+   root of C: (`\quake3.exe`). Decision, as documented for Windows: owned
+   windows are destroyed first (the only phase that can still fail and keep
+   the window), then the window's `WM_DESTROY` while its children exist,
+   then each child (its own `WM_DESTROY` ... `WM_NCDESTROY`), then the
+   window's `WM_NCDESTROY`. This corrects the f5-10A wording, which the
+   Microsoft documentation contradicts.
+2. Copy stopping after `requirements.txt`. It follows from 1: with an empty
+   destination every file in a subdirectory of the product folder
+   (`demoq3\pak0.pk3`, `Extras\...`) was skipped, while the two files of the
+   folder itself went to `C:\`; the kernel creates rooted directories such
+   as `\demoq3\` and opens files in them correctly (checked on the real VFS
+   of `tests/host/win32/kernel32_files.c`). The silent install of the same
+   image, whose destination stayed at the script default `c:\Q3Ademo`,
+   installed the complete `demoq3\pak0.pk3` (46,853,694 bytes) and the
+   Extras tree with the same file calls, so no file-API change is made.
+3. `IDS_OPTION1`/`IDS_OPTION2` on the Finished page (and the empty "Current
+   settings" box). The labels are the template placeholders of check boxes
+   VISE hides. USER sent `WM_PAINT` to every window with an update region,
+   hidden ones included, and a child's DC drew into its root surface whether
+   or not the child was visible: the controls painted themselves after the
+   dialog was shown. Decision: a child window is painted only while it and
+   its ancestors are visible (`u32_paintable`: no `WM_PAINT`, no `QS_PAINT`,
+   `UpdateWindow` does nothing, and its DC has an empty visible region);
+   hiding a visible child (`ShowWindow(SW_HIDE)`, `SWP_HIDEWINDOW`)
+   invalidates the parent area it leaves. Top-level windows keep painting
+   their own surface while hidden (it is their first frame when shown).
+4. Pages creeping down the screen. USER sent the content origin in CREATE
+   and PLACE while the desktop takes the frame origin there, so every
+   placement round trip (MoveWindow, ShowWindow, ...) moved a captioned
+   window by its frame (3, 24); VISE reopens each page where the previous
+   one was, so the drift added up. Decision: CREATE and PLACE carry the
+   frame origin (`u32_frame_origin`), the inverse of what CONFIGURE reports.
+5. Host tests (VISE mode of `tests/host/win32/dialogs`, fixtures 142 and
+   143): the destination page reads `c:\Q3Ademo` from its edit control in
+   `WM_DESTROY` (fails without 1); the Finished page leaves no pixels of its
+   three hidden check boxes and none of a static hidden after painting
+   (fails without 3); with the fake desktop answering CREATE and PLACE as
+   `v3_place`/`v3_configure` do, the license page reopens exactly where the
+   Welcome page was (fails without 4). `tests/host/win32/user32` checks the
+   destruction order (parent `WM_DESTROY`, child `WM_DESTROY` and
+   `WM_NCDESTROY`, parent `WM_NCDESTROY`); the dialog template test now
+   shows its modeless dialog (no `WS_VISIBLE`) before expecting its
+   controls to paint.
+
+### Known limits
+
+- The frame origin assumes the desktop's default frame metrics (border 3,
+  title 24), as the CONFIGURE handler already does; a theme with other
+  metrics would still shift windows.
+- Moving a visible child does not yet invalidate the parent area it leaves.

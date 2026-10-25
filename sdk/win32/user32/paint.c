@@ -224,6 +224,10 @@ static HDC acquire(HWND h, BOOL frame, const struct u32_region *paint) {
   GetClientRect(h, &client);
   struct u32_region include =
       paint ? *paint : (struct u32_region){.r = {client}, .n = 1};
+  /* q3exec4: a hidden child (or the child of a hidden window) has an empty
+   * visible region: what it draws is discarded, as on Windows. */
+  if (!u32_paintable(w))
+    include.n = 0;
   for (UINT i = 0; i < include.n; i++)
     OffsetRect(&include.r[i], o.x, o.y);
   for (struct u32_window *parent = u32_window(w->parent); parent;
@@ -429,9 +433,28 @@ BOOL W32API UpdateWindow(HWND h) {
   struct u32_window *w = u32_window(h);
   if (!w)
     return u32_fail(1400);
-  if (w->redraw && w->update.n)
+  if (w->redraw && w->update.n && u32_paintable(w))
     SendMessageA(h, WM_PAINT, 0, 0);
   return 1;
+}
+/* q3exec4: Windows paints only visible windows; a child that is hidden, or
+ * whose parent is, keeps no pixels in the parent's surface. Top-level
+ * windows keep painting their own surface while hidden (it is shown only
+ * with the window, whose first frame it is). */
+BOOL u32_paintable(struct u32_window *w) {
+  return !w->parent || IsWindowVisible(w->handle);
+}
+/* Hiding a visible child exposes the parent beneath it (ShowWindow SW_HIDE,
+ * SetWindowPos SWP_HIDEWINDOW): the parent repaints that area. */
+void u32_child_hidden(struct u32_window *w) {
+  struct u32_window *parent = u32_window(w->parent);
+  if (!parent)
+    return;
+  RECT r;
+  GetWindowRect(w->handle, &r);
+  POINT po = u32_origin(parent);
+  OffsetRect(&r, -po.x, -po.y);
+  InvalidateRect(parent->handle, &r, 1);
 }
 BOOL W32API RedrawWindow(HWND h, const RECT *r, HRGN region, UINT flags) {
   U32_GUARD;

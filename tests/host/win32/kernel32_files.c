@@ -349,6 +349,20 @@ int main(int argc, char **argv) {
     CHECK(refused.error==5&&!refused.result);
   }
   CHECK(path_request("C:\\System", W32_F_MKDIR) == 5);
+  /* q3exec4: Installer VISE creates a product tree one component at a
+   * time with a trailing backslash (C:\Q3Ademo\, C:\Q3Ademo\demoq3\);
+   * a path rooted on the current drive (\demoq3\) is a directory of C:. */
+  CHECK(!path_request("C:\\Q3Ademo\\", W32_F_MKDIR) &&
+        !path_request("C:\\Q3Ademo\\demoq3\\", W32_F_MKDIR) &&
+        !path_request("\\demoq3\\", W32_F_MKDIR) && path_request("", W32_F_MKDIR));
+  {
+    struct ciuki_w32_file_args rooted = open_request("\\demoq3\\pak0.pk3", 0x40000000u, 0, 2);
+    CHECK(!rooted.error);
+    close_handle(rooted.result);
+    struct vfs_table t; struct fat_entry e; CHECK(!vfs_table_init(&vfs, &t, 2));
+    CHECK(!vfs_stat(&t, "C:/demoq3/pak0.pk3", &e) && !vfs_stat(&t, "C:/Q3Ademo/demoq3", &e));
+    vfs_table_destroy(&t);
+  }
   amendment_file_identity();
   amendment_files();
   delete_attr_race();

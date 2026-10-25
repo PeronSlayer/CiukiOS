@@ -2280,17 +2280,27 @@ static void run(void) {
   test_g23_appearance();
   traces = 0;
   CHECK(DestroyWindow(windows[0]));
-  UINT child_destroy = 999, parent_destroy = 999;
-  for (UINT i = 0; i < traces; i++)
+  UINT child_destroy = 999, parent_destroy = 999, child_nc = 999, parent_nc = 999;
+  for (UINT i = 0; i < traces; i++) {
     if (trace[i].m == WM_DESTROY) {
       if (trace[i].h == child)
         child_destroy = i;
       if (trace[i].h == windows[0])
         parent_destroy = i;
     }
-  CHECK(child_destroy < parent_destroy && !IsWindow(child));
-  printf("TRACE destruction: child WM_DESTROY/WM_NCDESTROY parent "
-         "WM_DESTROY/WM_NCDESTROY\n");
+    if (trace[i].m == WM_NCDESTROY) {
+      if (trace[i].h == child)
+        child_nc = i;
+      if (trace[i].h == windows[0])
+        parent_nc = i;
+    }
+  }
+  /* q3exec4: WM_DESTROY reaches the window first, while its children
+   * still exist, then each child (Microsoft Learn, WM_DESTROY). */
+  CHECK(parent_destroy < child_destroy && child_destroy < child_nc &&
+        child_nc < parent_nc && parent_nc < 999 && !IsWindow(child));
+  printf("TRACE destruction: parent WM_DESTROY, child WM_DESTROY/WM_NCDESTROY, "
+         "parent WM_NCDESTROY\n");
   for (UINT i = 1; i < 3; i++) {
     ui_kernel_switch(i);
     CHECK(DestroyWindow(windows[i]));

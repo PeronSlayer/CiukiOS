@@ -196,6 +196,10 @@ void u32_restack(struct u32_window *, HWND);
 enum { U32_TEARDOWN, U32_NORMAL, U32_VICTIM };
 extern BOOL u32_exiting;
 BOOL u32_destroy(struct u32_window *, UINT);
+/* q3exec4: a child window is painted only while it and its ancestors are
+ * visible (a hidden control draws nothing into its parent's surface). */
+BOOL u32_paintable(struct u32_window *);
+void u32_child_hidden(struct u32_window *);
 HANDLE u32_dib_bitmap(const void *, DWORD);
 void u32_palette_deliver(void);
 HWND u32_dc_window(HDC);
