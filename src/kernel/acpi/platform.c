@@ -202,7 +202,8 @@ static bool acpi_can_off(void *ctx) { (void)ctx; return acpi_power_can_off(); }
  * the APM worker disconnected and released); bounded at 3 s. */
 static int provider_reserve(void)
 {
-    const struct power_source_ops ops = {.soft_off = acpi_soft_off, .can_off = acpi_can_off};
+    /* The forced Off is the same S5 write: ACPI consults no orderly proof of ours. */
+    const struct power_source_ops ops = {.soft_off = acpi_soft_off, .soft_off_forced = acpi_soft_off, .can_off = acpi_can_off};
     uint64_t end = deadline_after_ms(3000);
     int e;
     while ((e = power_source_reserve(POWER_SOURCE_ACPI, &ops)) == -EAGAIN && !deadline_passed(end)) task_sleep_ms(10);

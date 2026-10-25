@@ -27,9 +27,17 @@ static struct dialog *dialog(HWND h) {
 /* The desktop's end-of-session turn recognises a program's prompt as a
  * modal dialog (DialogBox, MessageBox) owned by one of its windows
  * (docs/design/desktop-shell.md, review 2 finding 7). */
+/* Review 3, finding 5: the desktop learns the modality from the CREATE
+ * packet, which CreateWindowExA sends before the dialog record is attached;
+ * the dialog being created is marked here meanwhile. */
+static BOOL creating_modal;
 BOOL u32_dialog_modal(struct u32_window *w) {
-  struct dialog *d = w ? w->dialog : 0;
-  return d && d->modal;
+  if (!w)
+    return 0;
+  struct dialog *d = w->dialog;
+  if (d)
+    return d->modal;
+  return w->creating && creating_modal && !(w->style & WS_CHILD);
 }
 int u32_muldiv(int a, int b, int c) {
   if (!c)
@@ -614,8 +622,11 @@ HWND u32_dialog_create_ex(HINSTANCE instance, const struct u32_template *t,
       r.top = 0;
   }
   const char *klass = t->klass[0] ? t->klass : U32_DIALOG_CLASS;
+  BOOL outer_modal = creating_modal;
+  creating_modal = modal;
   HWND h = CreateWindowExA(ex, klass, t->title, style & ~WS_VISIBLE, r.left,
                            r.top, width, height, owner, menu, instance, 0);
+  creating_modal = outer_modal;
   if (!h) {
     if (owns_font)
       u32_graphics()->delete_object(U32_PTR(font));

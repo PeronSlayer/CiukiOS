@@ -64,6 +64,10 @@ struct apm_ops {
     void (*event)(void *, uint16_t, uint16_t);
     int (*orderly_shutdown)(void *, uint64_t deadline);
     void (*emergency_record)(void *, int error);
+    /* Optional (review 3, finding 4): the forced Off's authorization, the
+     * emergency device fence's proof (power_source_emergency_stopped), never
+     * the orderly one. NULL: a forced Off is refused (ENOTSUP). */
+    int (*forced_shutdown)(void *, uint64_t deadline);
     /* fx-18, optional: microsecond clock for the cost record, the battery
      * low record, and the ACPI handoff request (ACPI replaces APM). */
     uint64_t (*now_us)(void *);
@@ -111,6 +115,7 @@ bool apm_backend_can_standby(const struct apm_backend *);
 int apm_backend_standby(struct apm_backend *);
 int apm_backend_cancel_standby(struct apm_backend *);
 int apm_backend_off(struct apm_backend *); /* requires global orderly-shutdown proof before Off */
+int apm_backend_off_forced(struct apm_backend *); /* the forced Off: forced_shutdown proof, same BIOS request */
 void apm_status_decode(const struct biosvm_regs *, struct apm_status *);
 /* fx-18: one battery unit (BX=80nnh); CH bit 4 = selected unit absent. */
 void apm_unit_decode(const struct biosvm_regs *, struct apm_unit *);

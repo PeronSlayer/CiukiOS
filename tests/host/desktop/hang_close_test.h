@@ -546,4 +546,73 @@ static void test_t23_hang_close(void)
     desk_drop_client(d,(int)d->clients[prog].v3_peer-1);
     shutdown_cleanup();
     puts("PASS T23 prompt recognition: unowned, non-modal or hidden windows do not hold the session past 20 s");
+
+    /* 19. Review 3, finding 1: the desktop's own readiness check (the sound
+     * tail, settings/wallpaper/folder/media workers through shutdown_wait)
+     * never completes. After 15 s the busy dialog names it; Force runs the
+     * forced action past it. Before, the sequence waited forever and the
+     * 15 s call timer never started. */
+    es_setup(); d->terminate=hc_terminate; hc_terms=0; d->power_force_request=hc_force_request; hc_forces=0; d->power_w32_pids=NULL;
+    d->sound_shutdown=shutdown_sound; shutdown_sound_deadline=UINT64_MAX; shutdown_sound_checks=0;
+    desk_power_begin(d,2);
+    for (uint64_t t=1250000000ull; t<=16000000000ull; t+=250000000ull) shutdown_at(t);
+    assert(!shutdown_calls && shutdown_sound_checks>50 && d->power.state==DESK_POWER_RETRY);
+    shutdown_at(16250000000ull);
+    assert(d->power.state==DESK_POWER_BUSY && d->power.aux_stuck && strstr(d->power.text,"desktop has not finished its own work"));
+    shutdown_progress=CIUKI_POWER_UNCERTAIN;
+    desk_power_force(d);
+    assert(d->power.force_power);
+    unsigned checks=shutdown_sound_checks; shutdown_at(16500000000ull);
+    assert(hc_forces==1 && hc_force_action==2 && shutdown_sound_checks==checks && d->power.state==DESK_POWER_DONE);
+    d->sound_shutdown=NULL;
+    shutdown_cleanup();
+    puts("PASS T23 desktop work bound: an unfinished readiness check leads to the busy dialog at 15 s and Force bypasses it");
+
+    /* 20. Review 3, finding 2: the 15 s timeout of a call 73 in flight
+     * never makes the sequence cancellable: the busy dialog has no Cancel,
+     * Esc does nothing, and Force is the way out. Before, the timeout
+     * cleared the timer and Cancel reappeared while the worker still ran. */
+    es_setup(); d->terminate=hc_terminate; hc_terms=0; d->power_force_request=hc_force_request; hc_forces=0; d->power_w32_pids=NULL;
+    shutdown_in_progress=1;
+    desk_power_begin(d,1);
+    for (uint64_t t=1250000000ull; t<=16250000000ull; t+=250000000ull) shutdown_at(t);
+    assert(d->power.state==DESK_POWER_BUSY && d->power.call_stuck && d->power.worker_inflight && !desk_power_cancelable(d));
+    desk_power_cancel(d); shutdown_key(0x01);
+    assert(d->power.state==DESK_POWER_BUSY);
+    shutdown_progress=CIUKI_POWER_UNCERTAIN;
+    desk_power_force(d); shutdown_at(16500000000ull);
+    assert(hc_forces==1 && d->power.state==DESK_POWER_DONE);
+    shutdown_cleanup();
+    puts("PASS T23 stuck call: never cancellable while the worker is in flight, Force is the way out");
+
+    /* 21. Review 3, finding 6: the dialog the user asked for stays open
+     * while the program's prompt keeps answering (ticks pass); it closes
+     * when the turn moves to another window, and End Task ends the program.
+     * Before, the next session tick dismissed it at once. */
+    es_setup(); d->w32_session=es_w32; d->terminate=hc_terminate; hc_terms=0;
+    int app2=es_v3_window(93,"Quake III Arena Demo");
+    es_w32_next=(struct desk_w32_status){DESK_W32_PENDING,93,0x9300,1};
+    desk_session_begin(d,2);
+    int ask2=es_v3_owned(app2,1,DESK_V3_OVERLAPPED|DESK_V3_MODAL,"Save changes?");
+    assert(ask2>=0);
+    for (uint64_t t=1250000000ull; t<=10000000000ull; t+=250000000ull) { es_v3_pong(app2); es_v3_pong(ask2); shutdown_at(t); }
+    desk_focus(d,ask2); hc_alt_f4();
+    assert(d->end_task.kind==DESK_HANG_NOT_RESPONDING && d->end_task.session && d->session.escalated);
+    for (uint64_t t=10250000000ull; t<=20000000000ull; t+=250000000ull) { es_v3_pong(app2); es_v3_pong(ask2); shutdown_at(t); }
+    assert(d->end_task.kind==DESK_HANG_NOT_RESPONDING && d->end_task.session && d->end_task.pid==93);   /* still there */
+    es_w32_next=(struct desk_w32_status){DESK_W32_PENDING,94,0x9400,1};   /* the program answered: the turn moved on */
+    shutdown_at(20250000000ull);
+    assert(!d->end_task.kind && !d->session.escalated && d->session.w32_pid==94);
+    es_w32_next=(struct desk_w32_status){DESK_W32_PENDING,93,0x9300,1};
+    shutdown_at(20500000000ull);
+    desk_focus(d,ask2); hc_alt_f4();
+    assert(d->end_task.kind==DESK_HANG_NOT_RESPONDING && d->session.escalated);
+    es_v3_pong(app2); es_v3_pong(ask2); shutdown_at(20750000000ull);
+    assert(d->end_task.kind==DESK_HANG_NOT_RESPONDING);
+    desk_end_task_choice(d,1);
+    assert(hc_killed(93,SIGKILL)==1 && !d->session.escalated && d->session.state);
+    desk_session_cancel(d);
+    desk_drop_client(d,(int)d->clients[app2].v3_peer-1);
+    shutdown_cleanup();
+    puts("PASS T23 escalation latch: the user's End Task dialog survives ticks with a responsive prompt, closes when the turn moves on, End Task ends the program");
 }

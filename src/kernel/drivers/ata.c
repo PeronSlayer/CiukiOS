@@ -1815,6 +1815,23 @@ bool ata_channel_idle(struct ata_channel *c)
     return idle;
 }
 
+/* T23 c42f556e (review 3, finding 3): the power path's storage fence.
+ * Every discovered channel stops taking submissions (quiescing rejects even
+ * those queued on the mutex), masks its interrupt and stops or revokes bus
+ * mastering through ata_channel_idle, without waiting on a stuck owner; a
+ * channel that cannot prove itself idle is quarantined with its claims.
+ * 0 when every channel proved idle, -FS_EBUSY otherwise. Terminal for the
+ * boot, as the orderly shutdown's device stop is. */
+int ata_power_quiesce(void)
+{
+    int e = 0;
+    for (unsigned i = 0; i < ATA_CHANNELS; i++) {
+        struct ata_channel *c = &channels[i];
+        if (!c->discovered) continue;
+        if (!ata_channel_idle(c)) e = -FS_EBUSY;
+    }
+    return e;
+}
 bool ata_registry_idle(int handle, gen_t generation)
 {
     bool matched=false, idle=true;

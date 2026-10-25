@@ -56,7 +56,7 @@ bool power_source_emergency_stopped(void) { return emergency_stopped; }
 int power_source_orderly_shutdown(uint64_t end)
 {
     (void)end; /* the proof is the latch; no shutdown work is started here */
-    return stopped || emergency_stopped ? 0 : -EBUSY;
+    return stopped ? 0 : -EBUSY;   /* strict: the emergency latch never passes as orderly (review 3, finding 4) */
 }
 int power_source_reserve(enum power_source_kind kind, const struct power_source_ops *ops)
 {
@@ -332,15 +332,28 @@ int power_source_soft_off(void)
 {
     uint32_t f = irq_save();
     if (!source.active || !provider_ops.soft_off) { irq_restore(f); return -ENOTSUP; }
-    /* Off needs a proof that no device is active: the orderly latch, or
-     * the emergency one published after the forced path's bounded fence. */
-    if (off_running || !(stopped || emergency_stopped)) { irq_restore(f); return -EBUSY; }
+    if (off_running || !stopped) { irq_restore(f); return -EBUSY; }
     off_running = true;
     struct power_source_ops ops = provider_ops;
     irq_restore(f);
     int e = ops.soft_off(ops.ctx);
     f = irq_save(); off_running = false; irq_restore(f);
     return e ? e : -EIO; /* returning cannot prove physical power removal */
+}
+/* The forced Off: an explicit authorization carried to the provider's own
+ * forced entry (APM: Off without the orderly proof, on the emergency one;
+ * ACPI: the same S5 write). Never the ordinary entry. */
+int power_source_soft_off_forced(void)
+{
+    uint32_t f = irq_save();
+    if (!source.active || !provider_ops.soft_off_forced) { irq_restore(f); return -ENOTSUP; }
+    if (off_running || !emergency_stopped) { irq_restore(f); return -EBUSY; }
+    off_running = true;
+    struct power_source_ops ops = provider_ops;
+    irq_restore(f);
+    int e = ops.soft_off_forced(ops.ctx);
+    f = irq_save(); off_running = false; irq_restore(f);
+    return e ? e : -EIO;
 }
 /* G11: SYSTEM_POWER_STATUS (learn.microsoft.com, ns-winbase-system_power_status):
  * BatteryFlag 1 high (>66 %), 2 low (<33 %), 4 critical (<5 %), 8 charging,

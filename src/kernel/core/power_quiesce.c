@@ -12,6 +12,10 @@ int power_devices_quiesce(void)
     int e = net_power_quiesce();
     if (!e) e = audio_power_quiesce();
     if (!e) e = usb_power_quiesce();
+    /* Review 3, finding 3: storage last. The ATA channels refuse new
+     * submissions and stop or revoke their bus mastering and interrupts,
+     * so no disk DMA outlives this barrier (orderly or forced). */
+    if (!e) e = ata_power_quiesce();
     return e;
 }
 /* Unlike S5, these owners keep all allocations and claims. A failed owner

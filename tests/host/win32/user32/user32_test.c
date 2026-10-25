@@ -712,6 +712,44 @@ static UINT close_acks(UINT from, UINT wire) {
     }
   return n;
 }
+/* Review 3, finding 5: the desktop admits a program's save prompt from the
+ * reserved prompt slot only when its CREATE packet already says modal and
+ * names the owner; a later PLACE is too late. DialogBox must send it at
+ * creation, a modeless CreateDialog must not. */
+static intptr_t W32API end_at_init(HWND h, UINT m, WPARAM wp, LPARAM lp) {
+  (void)wp; (void)lp;
+  if (m == WM_INITDIALOG) { EndDialog(h, 7); return 1; }
+  return 0;
+}
+static int create_style_after(UINT from, UINT *style, UINT *owner) {
+  for (UINT i = from; i < outgoing_count; i++)
+    if (outgoing[i].data[0] == 3 && outgoing[i].data[1] == DESK_CREATE_WINDOW) {
+      *style = desk_get32(outgoing[i].data + 16); *owner = desk_get32(outgoing[i].data + 20);
+      return 1;
+    }
+  return 0;
+}
+static void test_modal_prompt_wire(void) {
+  HWND owner = CreateWindowExA(0, "USER fixture", "program", WS_VISIBLE | WS_CAPTION, 40, 40, 200, 120, 0, 0, 0, 0);
+  CHECK(owner);
+  struct u32_window *ow = u32_window(owner);
+  CHECK(ow && ow->wire);
+  /* The template header and its three empty arrays (menu, class, title). */
+  static const struct { DLGTEMPLATE t; uint16_t menu, klass, title; } prompt_template = {   /* no padding: the WORDs follow the 18-byte header */
+      .t = {.style = WS_POPUP | WS_CAPTION | WS_VISIBLE | DS_MODALFRAME, .cdit = 0, .x = 10, .y = 10, .cx = 120, .cy = 60}};
+  const DLGTEMPLATE *prompt = &prompt_template.t;
+  UINT before = outgoing_count, style = 0, wire_owner = 0;
+  CHECK(DialogBoxIndirectParamA(0, prompt, owner, end_at_init, 0) == 7);
+  CHECK(create_style_after(before, &style, &wire_owner));
+  CHECK((style & DESK_V3_MODAL) && wire_owner == ow->wire);
+  before = outgoing_count;
+  HWND modeless = CreateDialogIndirectParamA(0, prompt, owner, end_at_init, 0);
+  CHECK(modeless && create_style_after(before, &style, &wire_owner));
+  CHECK(!(style & DESK_V3_MODAL) && wire_owner == ow->wire);
+  DestroyWindow(modeless);
+  DestroyWindow(owner);
+  puts("PASS T23 modal prompt wire: DialogBox creates its desktop window modal and owned, CreateDialog does not");
+}
 /* G3: the desktop's close request reaches WM_CLOSE; a window that survives
  * (the program's prompt was cancelled) declines with CLOSE_ACK 0, so the
  * desktop's "Closing..." ends; a destroyed window sends no decline. */
@@ -2343,6 +2381,7 @@ static void run(void) {
   }
   ui_kernel_switch(0);
   test_desktop_close();
+  test_modal_prompt_wire();
   test_lifecycle();
   CHECK(UnregisterClassA("USER fixture", 0));
   #ifndef U32_TEST_EXTERNAL_MODULES

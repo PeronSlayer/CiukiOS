@@ -259,6 +259,13 @@ struct desk_power_sequence {
     /* An orderly call 73 running on another thread (review P1-1). */
     uint64_t call_started_ns;
     int call_stuck;
+    int worker_inflight;        /* review 3, finding 2: the worker has not returned (a timeout never clears it) */
+    /* Review 3, finding 1: the desktop's own readiness checks (sound tail,
+     * settings/wallpaper/folder/media workers) are bounded by the same
+     * DESK_POWER_CALL_NS; past it the busy dialog offers Force, which
+     * bypasses them (forced power keeps their resources). */
+    uint64_t aux_started_ns;
+    int aux_stuck;
     /* Force already ended the programs once (SIGKILL); the next Force is the
      * forced restart or power off (CIUKI_POWER_FORCE_*). */
     int forced, force_power;
@@ -368,6 +375,7 @@ struct desk_session {
     int w32_committed;          /* COMMIT delivered WM_ENDSESSION(TRUE) (read by desk_power_begin) */
     uint32_t w32_killed_pid;    /* End Task killed this process during the Win32 turn (finding 1) */
     uint64_t w32_killed_ns;
+    int escalated;              /* review 3, finding 6: the user asked for the End Task dialog; it stays until answered */
     int force;   /* G11 alarm "Force": a program that stops responding is ended */
 };
 /* The "This program is not responding" (End Task, Cancel) and DOS warning

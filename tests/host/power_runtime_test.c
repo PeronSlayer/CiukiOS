@@ -285,8 +285,9 @@ static void test_g11(void)
  * stop: the forced actions run beside the blocked call, flush for at most
  * POWER_FORCE_FLUSH_MS through the bounded worker, latch UNCERTAIN, then
  * reset or soft-off. Before them, call 73 action 9/10 was EINVAL. */
-static unsigned forced_offs;
+static unsigned forced_offs, ordinary_offs;
 static int forced_off(void *ctx) { (void)ctx; stage('P'); forced_offs++; return -EIO; }
+static int ordinary_off(void *ctx) { (void)ctx; ordinary_offs++; return -EIO; }   /* must never run on the forced path */
 /* Review 2, finding 5: the platform's nonblocking device fence (power_platform.c
  * quiesce step) as the forced actions see it: -EAGAIN while the stop runs. */
 static int fence_result; static unsigned fence_steps;
@@ -312,21 +313,32 @@ static void test_forced(void)
     assert(fence_steps>=POWER_FORCE_QUIESCE_MS/10 && fence_steps<=POWER_FORCE_QUIESCE_MS/10+2);
     /* Forced off with the fence timing out: refused (EBUSY), no soft-off, no
      * proof published (review 2, finding 5: active DMA never reaches the BIOS). */
-    reset(); force_flushes=0; fence_steps=0; force_flush_result=0; fence_result=-EAGAIN; power_running=true; forced_offs=0;
+    reset(); force_flushes=0; fence_steps=0; force_flush_result=0; fence_result=-EAGAIN; power_running=true; forced_offs=0; ordinary_offs=0;
     power_source_release(source.provider, false, 0);
-    { const struct power_source_ops ops = {.soft_off=forced_off};
+    { const struct power_source_ops ops = {.soft_off=ordinary_off,.soft_off_forced=forced_off};
       assert(!power_source_reserve(POWER_SOURCE_ACPI, &ops) && !power_source_activate(POWER_SOURCE_ACPI)); }
-    assert(power_syscall(CIUKI_POWER_FORCE_OFF)==-EBUSY && !strcmp(order,"FD") && !forced_offs);
+    assert(power_syscall(CIUKI_POWER_FORCE_OFF)==-EBUSY && !strcmp(order,"FD") && !forced_offs && !ordinary_offs);
     assert(!power_source_emergency_stopped() && power_source_orderly_shutdown(0)==-EBUSY && strstr(last,"power button"));
     assert(power_syscall(CIUKI_POWER_QUERY)&CIUKI_POWER_UNCERTAIN);
     /* The fence proved every device stopped: the emergency latch (not the
      * orderly one), then the provider's soft-off. */
+    reset(); force_flushes=0; fence_steps=0; fence_result=0; power_running=true; forced_offs=0; ordinary_offs=0;
+    power_source_release(source.provider, false, 0);
+    { const struct power_source_ops ops = {.soft_off=ordinary_off,.soft_off_forced=forced_off};
+      assert(!power_source_reserve(POWER_SOURCE_ACPI, &ops) && !power_source_activate(POWER_SOURCE_ACPI)); }
+    assert(power_syscall(CIUKI_POWER_FORCE_OFF)==-EIO && !strcmp(order,"FDP") && forced_offs==1 && !ordinary_offs);
+    /* Review 3, finding 4: the emergency latch is not the orderly proof (APM
+     * reads that one before BIOS Off) and the ordinary entry refuses it. */
+    assert(power_source_emergency_stopped() && !stopped && power_source_orderly_shutdown(0)==-EBUSY && power_source_soft_off()==-EBUSY && !ordinary_offs);
+    assert(power_source_soft_off_forced()==-EIO && forced_offs==2);
+    emergency_stopped=false;
+    assert(power_source_soft_off_forced()==-EBUSY && forced_offs==2);
+    /* A provider without a forced entry refuses the forced Off (ENOTSUP) with the latch set. */
     reset(); force_flushes=0; fence_steps=0; fence_result=0; power_running=true; forced_offs=0;
     power_source_release(source.provider, false, 0);
-    { const struct power_source_ops ops = {.soft_off=forced_off};
+    { const struct power_source_ops ops = {.soft_off=ordinary_off};
       assert(!power_source_reserve(POWER_SOURCE_ACPI, &ops) && !power_source_activate(POWER_SOURCE_ACPI)); }
-    assert(power_syscall(CIUKI_POWER_FORCE_OFF)==-EIO && !strcmp(order,"FDP") && forced_offs==1);
-    assert(power_source_emergency_stopped() && !stopped && !power_source_orderly_shutdown(0));
+    assert(power_syscall(CIUKI_POWER_FORCE_OFF)==-ENOTSUP && !strcmp(order,"FD") && !ordinary_offs);
     emergency_stopped=false;
     reset(); force_flushes=0; fence_steps=0; power_running=true; power_source_release(source.provider, false, 0);
     assert(power_syscall(CIUKI_POWER_FORCE_OFF)==-ENOTSUP && !strcmp(order,"FD"));
@@ -342,7 +354,7 @@ static void test_forced(void)
       assert(!power_source_reserve(POWER_SOURCE_ACPI, &ops) && !power_source_activate(POWER_SOURCE_ACPI)); }
     assert(power_syscall(CIUKI_POWER_FORCE_OFF)==-EBUSY && !strcmp(order,"F") && !fence_steps && !forced_offs);
     emergency_stopped=false;
-    puts("PASS power runtime T23 forced: runs beside a blocked REBOOT/OFF, flush bounded to 3 s, device fence bounded to 2 s, reset regardless, soft-off only on a proved fence (emergency latch), desktop only");
+    puts("PASS power runtime T23 forced: runs beside a blocked REBOOT/OFF, flush bounded to 3 s, device fence bounded to 2 s, reset regardless, soft-off only on a proved fence through the provider's forced entry (the orderly proof stays strict), desktop only");
 }
 int main(void)
 {

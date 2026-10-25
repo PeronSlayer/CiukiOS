@@ -331,7 +331,52 @@ findings 1–8 in the validation record):
     is refused (`EBUSY`, "turn the computer off with its power button")
     unless the fence proved every device stopped, and then publishes the
     emergency latch (`power_source_mark_emergency_stopped`), distinct from
-    the orderly proof, which providers accept for Off.
+    the orderly proof (see decision 24 for how providers consume it).
+
+Decisions after the third Codex review (of `42b2445bc`, 2026-10-25;
+findings 1–6 in the validation record):
+
+21. **The desktop's own readiness is bounded (finding 1).** The sound tail
+    and `shutdown_wait` (settings, wallpaper, folder, AutoPlay, media and
+    custom workers) are polled as before, but from the first refusal a
+    `DESK_POWER_CALL_NS` (15 s) deadline runs; past it the busy dialog says
+    "The desktop has not finished its own work" and Force runs the forced
+    action without consulting them (their resources stay as they are).
+    Record: `[desktop] power desktop work not finished after N ms: asking the user`.
+22. **Never cancellable while the worker is in flight (finding 2).**
+    `worker_inflight` is set at the first `EINPROGRESS` and cleared only by
+    the worker's result; `desk_power_cancelable` reads it (and `call_stuck`),
+    never the timer, so the 15 s busy dialog has no Cancel.
+23. **The device fence stops storage too (finding 3).**
+    `power_devices_quiesce` ends with `ata_power_quiesce`: every discovered
+    channel refuses new submissions, masks its interrupt and stops or revokes
+    bus mastering (`ata_channel_idle`) without waiting on a stuck owner; a
+    channel that cannot prove itself idle is quarantined and the fence
+    fails. The orderly path gains the same barrier after `storage_sync`.
+    `kernel_reboot` tries, after the 8042 pulse and before the CPU-only
+    triple fault, the ICH/PIIX reset control register 0CF9h (full reset,
+    SYS_RST with RST_CPU; ICH3 datasheet 82801CA 5.11.1.2 and 9.7.5) when
+    bus 0 has an Intel ISA/LPC bridge (class 0601h, vendor 8086h); otherwise
+    nothing changes. The forced restart runs the fence (DMA revoked) before
+    the reset in any case.
+24. **The orderly proof stays strict (finding 4).**
+    `power_source_orderly_shutdown` and `power_source_soft_off` accept the
+    orderly latch only. The forced Off goes through
+    `power_source_soft_off_forced`, which needs the emergency latch and the
+    provider's own `soft_off_forced` entry: APM's `apm_backend_off_forced`
+    consults `forced_shutdown` (the fence's proof) and never the orderly
+    one; ACPI's forced entry is the same S5 write. A provider without a
+    forced entry refuses (ENOTSUP) and the user uses the power button.
+25. **Modality is on the wire from the first packet (finding 5).** user32
+    marks the dialog being created (`creating_modal`, before
+    `CreateWindowExA`) so the CREATE packet of a DialogBox/MessageBox
+    already carries `DESK_V3_MODAL` with its owner; a modeless
+    CreateDialog does not. The desktop's prompt admission reads that packet.
+26. **Explicit escalation is latched (finding 6).** `session.escalated`
+    keeps the user-requested End Task dialog open while the prompt keeps
+    answering; it ends only on the user's answer, when the broker's turn
+    moves to another window, or when the session ends. The automatic
+    (hang-detected) dialog still closes when the program answers again.
 
 ### Not covered (gaps, owned elsewhere)
 

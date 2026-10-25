@@ -1727,7 +1727,9 @@ static int session_escalate(struct desktop *d, int i)
     if (!s->w32_pid || c->pid!=s->w32_pid || c->internal || !d->terminate) return 0;
     if (d->end_task.kind && d->end_task.session) { if (d->end_task.window>=0) desk_focus(d,d->end_task.window); return 1; }
     fprintf(stderr,"[desktop] end-session win32 escalation pid=%u by the user\n",c->pid);
+    s->escalated=1;   /* stays until the user answers, the turn moves on or the session ends (review 3, finding 6) */
     desk_end_task_open(d,DESK_HANG_NOT_RESPONDING,1,c->pid,0,c->title);
+    if (!d->end_task.kind) s->escalated=0;
     return 1;
 }
 void desk_user_close(struct desktop *d, int i)
@@ -2180,7 +2182,11 @@ void desk_power_begin(struct desktop *d, int action)
  * stopping devices; the sequence cannot be taken back until it returns
  * (EBUSY changed nothing and Cancel is possible again). */
 int desk_power_cancelable(const struct desktop *d)
-{ return d->power.state && d->power.state!=DESK_POWER_DONE && !d->power.call_started_ns && !d->power.force_power; }
+{
+    /* Review 3, finding 2: the worker-in-flight marker, not the timer, says
+     * whether call 73 may still act; the 15 s timeout changes nothing here. */
+    return d->power.state && d->power.state!=DESK_POWER_DONE && !d->power.worker_inflight && !d->power.call_stuck && !d->power.force_power;
+}
 void desk_power_cancel(struct desktop *d)
 {
     if (d->power.state==DESK_POWER_DONE) return; /* flushed/stopped session cannot resume */
@@ -2250,9 +2256,9 @@ void desk_power_force(struct desktop *d)
      * even SIGKILL (a thread in a kernel wait that never ends), must not
      * leave the machine on: the second Force (or the first on a stuck call)
      * is the forced restart or power off. */
-    if (p->action!=3 && (p->call_stuck || p->forced)) {
+    if (p->action!=3 && (p->call_stuck || p->aux_stuck || p->forced)) {
         p->force_power=1;
-        fprintf(stderr,"[desktop] power forced action=%d reason=%s\n",p->action,p->call_stuck ? "call-73-not-returned" : "second-force");
+        fprintf(stderr,"[desktop] power forced action=%d reason=%s\n",p->action,p->call_stuck ? "call-73-not-returned" : p->aux_stuck ? "desktop-work-not-finished" : "second-force");
     }
     power_list_w32(d);   /* review P2-4: the inventory is reconciled before Force */
     /* T23 c42f556e: Force is TerminateProcess (SIGKILL): the deadline's
@@ -2319,7 +2325,21 @@ void desk_power_tick(struct desktop *d)
         return;
     }
     if (d->now_ns<p->next_try) return;
-    if (d->sound_shutdown && !d->sound_shutdown(d)) return;
+    if (!p->force_power && d->sound_shutdown && !d->sound_shutdown(d)) {
+        /* Review 3, finding 1: the desktop's own readiness (sound tail,
+         * settings/wallpaper/folder/media/custom workers) is bounded; a
+         * worker stuck behind a filesystem lock leads to the busy dialog
+         * and Force, which runs the forced action past these checks. */
+        if (!p->aux_started_ns) p->aux_started_ns=d->now_ns;
+        if (d->now_ns>=p->aux_started_ns+DESK_POWER_CALL_NS && !p->aux_stuck) {
+            fprintf(stderr,"[desktop] power desktop work not finished after %llu ms: asking the user\n",
+                    (unsigned long long)((d->now_ns-p->aux_started_ns)/1000000ull));
+            p->aux_stuck=1; p->last_error=EAGAIN;
+            power_busy(d);
+        }
+        return;
+    }
+    p->aux_started_ns=0;
     if (!p->prepared) { p->prepared=1; if (d->power_prepare) d->power_prepare(d); }
     int r;
     if (p->force_power) {
@@ -2333,7 +2353,9 @@ void desk_power_tick(struct desktop *d)
     if (error==EINPROGRESS) {
         /* Review P1-1: the orderly call runs on another thread and the
          * desktop stays live; past DESK_POWER_CALL_NS the user is told and
-         * Force becomes the forced action. */
+         * Force becomes the forced action. The in-flight marker outlives the
+         * timeout (review 3, finding 2): no Cancel until the worker returned. */
+        p->worker_inflight=1;
         if (!p->call_started_ns) p->call_started_ns=d->now_ns;
         p->next_try=d->now_ns+DESK_POWER_RETRY_NS;
         if (d->now_ns>=p->call_started_ns+DESK_POWER_CALL_NS) {
@@ -2344,7 +2366,7 @@ void desk_power_tick(struct desktop *d)
         }
         return;
     }
-    p->call_started_ns=0;
+    p->call_started_ns=0; p->worker_inflight=0;
     int progress=d->power_state ? d->power_state() : 0;
     if (progress>=0 && (progress&(CIUKI_POWER_STOPPED|CIUKI_POWER_UNCERTAIN))) {
         p->state=DESK_POWER_DONE;
@@ -2580,6 +2602,7 @@ static void session_step(struct desktop *d)
         if (st.pid!=s->w32_pid || st.hwnd!=s->w32_hwnd) {
             /* T23 c42f556e: the next log names the window the session waits on. */
             if (st.pid) fprintf(stderr,"[desktop] end-session win32 turn pid=%u hwnd=%08x delivered=%u\n",st.pid,st.hwnd,st.delivered);
+            if (s->escalated) { s->escalated=0; session_close_dialog(d); }   /* the escalated window's turn is over */
             s->w32_pid=st.pid; s->w32_hwnd=st.hwnd; s->w32_since=d->now_ns; s->w32_mark=before;
         }
         if (st.delivered && !s->w32_delivered) { s->w32_since=d->now_ns; s->w32_mark=before; }  /* fetched: its handler runs now */
@@ -2639,7 +2662,9 @@ void desk_session_tick(struct desktop *d)
     const char *name=NULL; uint32_t pid=0,target=0;
     int hung=session_hung(d,p,&name,&pid,&target);
     if (d->end_task.kind && d->end_task.session) {
-        if (d->end_task.kind==DESK_HANG_NOT_RESPONDING && !hung) session_close_dialog(d); /* it answers again */
+        /* It answers again: the automatic dialog closes; one the user asked
+         * for (escalation) stays until answered (review 3, finding 6). */
+        if (d->end_task.kind==DESK_HANG_NOT_RESPONDING && !hung && !d->session.escalated) session_close_dialog(d);
         return;
     }
     if (hung) desk_end_task_open(d,DESK_HANG_NOT_RESPONDING,1,pid,target,name);
@@ -2729,6 +2754,7 @@ void desk_end_task_choice(struct desktop *d, int end)
     struct desk_end_task e=d->end_task;
     if (!e.kind) return;
     memset(&d->end_task,0,sizeof(d->end_task)); d->end_task.window=-1;
+    if (e.session) d->session.escalated=0;   /* answered or dismissed: the escalation latch ends */
     if (e.window>=0 && e.window<DESK_CLIENTS && d->clients[e.window].internal==DESK_INTERNAL_END_TASK) desk_drop_client(d,e.window);
     if (end<0) return;
     struct desk_session_part *p=e.session ? session_current(d) : NULL;

@@ -80,13 +80,13 @@ static void low_battery(void *ctx, int error)
     (void)ctx;
     klog("[apm] event=battery_low flush_error=%d action=notify", error);
 }
-static int request_off(void *ctx)
+static bool off_forced;   /* review 3, finding 4: the pending Off carries the forced authorization */
+static int request_off_with(bool forced)
 {
-    (void)ctx;
     if (g_current == apm_worker) return -EBUSY;
     uint32_t f = irq_save();
     if (off_pending || sleep_pending || backend.state != APM_CONNECTED) { irq_restore(f); return -EBUSY; }
-    off_done = false; off_pending = true;
+    off_done = false; off_pending = true; off_forced = forced;
     off_deadline = deadline_after_ms(APM_QUIESCE_MS + APM_POWER_MS + 500);
     irq_restore(f);
     while (!off_done) {
@@ -95,6 +95,8 @@ static int request_off(void *ctx)
     }
     return off_result;
 }
+static int request_off(void *ctx) { (void)ctx; return request_off_with(false); }
+static int request_off_forced(void *ctx) { (void)ctx; return request_off_with(true); }
 static int sleep_error(int e)
 {
     if (e==-VFS_ETIMEOUT) return -ETIMEDOUT;
@@ -147,7 +149,7 @@ static int reserve(void *ctx)
     /* V86 containment exists. The remaining admission is the global
      * storage/DMA/time owner, not an invented ring-0 firmware broker. */
     if (!power_source_platform_ready()) return -ENOTSUP;
-    const struct power_source_ops ops = {.soft_off = request_off,
+    const struct power_source_ops ops = {.soft_off = request_off, .soft_off_forced = request_off_forced,
         .can_standby = can_standby, .standby = request_standby, .cancel_standby = request_cancel_standby};
     int e = power_source_reserve(POWER_SOURCE_APM, &ops);
     if (e) return e;
@@ -192,6 +194,13 @@ static int orderly(void *ctx, uint64_t end)
 {
     (void)ctx;
     return power_source_orderly_shutdown(end);
+}
+/* The forced Off's proof: the emergency fence stopped every device
+ * (storage may be dirty); the orderly latch is not consulted. */
+static int forced(void *ctx, uint64_t end)
+{
+    (void)ctx; (void)end;
+    return power_source_emergency_stopped() ? 0 : -EBUSY;
 }
 static void emergency_record(void *ctx, int error)
 {
@@ -260,7 +269,7 @@ static int discover(void)
     const struct apm_ops ops = {.real_call = firmware_call, .acpi_present = acpi_present,
         .reserve = reserve, .release = release, .now_ms = now, .step = step,
         .resume = resume, .publish = publish, .event = event,
-        .orderly_shutdown = orderly, .emergency_record = emergency_record,
+        .orderly_shutdown = orderly, .forced_shutdown = forced, .emergency_record = emergency_record,
         .now_us = now_us, .low_battery = low_battery, .handoff = handoff, .sleep_ready = sleep_ready};
     apm_backend_init(&backend, &ops);
     int e;
@@ -338,7 +347,7 @@ static void service_once(void)
     }
     if (off_pending) {
         int r = deadline_passed(off_deadline) ? -V86_ETIMEDOUT :
-                backend.emergency ? -EBUSY : apm_backend_off(&backend);
+                backend.emergency ? -EBUSY : off_forced ? apm_backend_off_forced(&backend) : apm_backend_off(&backend);
         if (r != -EAGAIN) {
             uint32_t f = irq_save(); off_result = r; off_pending = false; off_done = true; irq_restore(f);
         }

@@ -11,6 +11,11 @@ struct reboot_ops {
     void (*pulse)(void *);
     void (*delay)(void *);
     void (*triple)(void *);
+    /* Optional (T23 c42f556e, review 3 finding 3): a qualified hard reset
+     * (ICH/PIIX reset control register 0CF9h, full reset) tried after the
+     * 8042 pulse and before the CPU-only triple fault, on Intel ISA/LPC
+     * bridges only; NULL or unqualified: nothing. */
+    void (*hard)(void *);
 };
 /* Bounded even when the controller is missing or its input buffer is stuck. */
 void reboot_sequence(const struct reboot_ops *, void *);

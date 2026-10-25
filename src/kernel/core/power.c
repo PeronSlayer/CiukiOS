@@ -385,7 +385,7 @@ static int power_force(bool off, uint32_t pid)
     if (!power_source_can_off()) { klog("[power] forced off: no soft-off provider"); return -ENOTSUP; }
     if (fence) { klog("[power] forced off refused: devices not quiescent (error %d); turn the computer off with its power button", fence); return -EBUSY; }
     power_source_mark_emergency_stopped();
-    int e = power_source_soft_off();
+    int e = power_source_soft_off_forced();   /* the forced authorization, never the orderly entry (review 3, finding 4) */
     klog("[power] forced soft-off returned error=%d", e);
     return e;
 }

@@ -322,6 +322,54 @@ cases).
   shutdown no longer waits for it (finding 1) and the forced action ends the
   machine with its resources retained.
 
+## Fourth round: the third Codex review (xhigh, of `42b2445bc`, 2026-10-25)
+
+The third review closed review-2 findings 1, 4 and 8, found nothing in tier
+authentication, call-73 privileges or the ABI, and left six gaps (2 P1,
+4 P2). Each is closed below with a host test whose assertions the
+`42b2445bc` code violates.
+
+| Finding | Fix (files) | Test |
+| --- | --- | --- |
+| **1 (P1)** `sound_shutdown` / `shutdown_wait` (settings, wallpaper, folder, AutoPlay, media, custom workers) returned before the call timer started: a stuck worker stranded even an empty desktop at "Shutting down" | `client.c`: the readiness check runs under a `DESK_POWER_CALL_NS` (15 s) deadline from its first refusal; past it `aux_stuck`, the busy dialog ("The desktop has not finished its own work") and Force, whose forced action skips the readiness checks and `power_prepare` only snapshots (resources retained) | `hang_close_test.h` case 19: a never-ready sound tail → RETRY for 15 s (>50 polls, no call), busy dialog, Force → forced power off without another readiness poll |
+| **2 (P1)** the 15 s timeout cleared `call_started_ns`, `desk_power_cancelable` read it and ignored `call_stuck`: Cancel came back while the worker ran | `client.c`: `worker_inflight` set at the first `EINPROGRESS`, cleared only by a result; `desk_power_cancelable` reads it and `call_stuck`, never the timer | case 20: 15 s in flight → busy dialog with `!desk_power_cancelable`, Cancel/Esc refused, Force → forced restart |
+| **3 (P2)** the fence stopped network/audio/USB only: ATA DMA/IRQ could stay active and a failed flush did not stop storage admission; reset was a CPU INIT (keyboard/triple fault), not a PCI reset | `drivers/ata.c` `ata_power_quiesce` (every discovered channel: `ata_channel_idle` — quiescing refuses submissions, NIEN, bus mastering stopped or revoked, IRQ detached or masked; a failed proof quarantines and fails the fence); `power_quiesce.c` runs it last (orderly and forced paths); `reboot.c`: optional `hard` op in `reboot_ops`, the ICH/PIIX RST_CNT 0CF9h full reset (02h then 06h) after the 8042 pulse and before the triple fault, only when bus 0 has an Intel ISA/LPC bridge (class 0601h, vendor 8086h) | `tests/host/sweep_test.c`: pulse, settle, hard, settle, triple ordering with and without the op; the ATA fence is driver code without a host model (checked by compile; QEMU/T23 item 10 below) |
+| **4 (P2)** `power_source_orderly_shutdown` and `power_source_soft_off` accepted the emergency latch; APM trusted that proof before BIOS Off | `power_source.c/h`: the orderly proof and the ordinary soft-off are strict again; `power_source_soft_off_forced` needs the emergency latch and the provider's `soft_off_forced` entry; `apm.c` `apm_backend_off_forced` consults the new optional `forced_shutdown` op only (`apm.h`), `apm_platform.c` carries the forced request to the worker (`request_off_forced`, `forced` = `power_source_emergency_stopped`), `acpi/platform.c` uses the same S5 write; `power.c` calls the forced entry | `power_runtime_test.c` `test_forced`: with the emergency latch the orderly proof is EBUSY, the ordinary entry refuses, the forced entry runs the provider's forced op, a provider without one → ENOTSUP; `apm_test.c`: the forced Off takes no F/X steps and fails on its own proof, the orderly Off still fails on the flush error, no `forced_shutdown` → ENOTSUP |
+| **5 (P2)** `d->modal` was attached after `CreateWindowExA` created the desktop window: the CREATE packet lacked `DESK_V3_MODAL`, so a real DialogBox prompt could not use the prompt slot | user32 `dialog.c`: `creating_modal` set before `CreateWindowExA`; `u32_dialog_modal` reports it for the window being created (not a child) until the record is attached | `tests/host/win32/user32/user32_test.c` `test_modal_prompt_wire`: a DialogBox's CREATE packet carries `DESK_V3_MODAL` and the owner's wire id; a CreateDialog's does not |
+| **6 (P2)** the escalation dialog was dismissed on the next tick (hang detection false with a responsive modal); the test answered before a tick | `client.c`: `session.escalated` latch; `desk_session_tick` closes only the automatic dialog; the latch ends on the user's answer (`desk_end_task_choice`), when the broker's turn moves to another window (`session_step`) or when the session ends | case 21: the dialog survives 10 s of ticks with a responsive prompt, closes when the turn moves on, End Task ends the program after a tick |
+
+### Fourth-round results (host, systemd scope MemoryMax=3G)
+
+- Launcher harness default run: shutdown sequence, G3 end-session and the
+  21 T23 cases pass.
+- `power_runtime_test` PASS; `apm_test` 46098 checks 0 failures;
+  `power_platform_test` 76, `apm_platform_test` 103, `apm_t23_test` 543
+  checks, 0 failures.
+- `tests.host.win32.user32.test_user32` 3 tests OK (with
+  `test_modal_prompt_wire`).
+- Compile-only with the kernel's i686 flags: `power.c`, `power_source.c`,
+  `apm.c`, `apm_platform.c`, `ata.c`, `power_quiesce.c`, `reboot.c`,
+  `power_platform.c`; `acpi/platform.c` against the ACPICA headers of the
+  main clone's canonical build (`build/f0/obj/acpica/include`).
+- `tests/host/test_sweep.py` (reboot ordering with and without the hard
+  reset op): 6 tests OK.
+- Full desktop suite (`python3 -m unittest discover -s tests/host/desktop
+  -t .`, 1893 s): 224 tests OK, 5 skipped.
+
+### Fourth-round risks
+
+- `ata_power_quiesce` now runs in the orderly shutdown too (after
+  `storage_sync`): a channel that cannot prove itself idle makes the
+  orderly quiesce fail (UNCERTAIN, as any device stop failure already did).
+- The 0CF9h hard reset runs only after the 8042 pulse did not reset the
+  machine and only with an Intel ISA/LPC bridge on bus 0; other chipsets
+  keep the triple-fault fallback.
+- The forced Off on APM depends on `forced_shutdown`, i.e. on the fence's
+  proof; a stuck ATA channel quarantines and the Off is refused with the
+  power-button message (the forced restart still resets).
+- The desktop readiness deadline (15 s) also covers a slow but healthy
+  settings save; the dialog then offers Force, not an automatic action.
+
 ## Host tests
 
 - `tests/host/desktop/hang_close_test.h` (run by
@@ -398,6 +446,14 @@ cases).
    `[power] forced device fence result=...` and the reset. For Shut Down
    the same, and with a failed fence the message "turn the computer off
    with its power button" instead of soft-off.
+10. Fourth round: Shut Down with an installer stuck in a disk wait and
+    "Force" twice: `[power] forced device fence result=0` with the ATA
+    channels quiescing (a quarantined channel gives `result=-16` and, for
+    Shut Down, the power-button message); on the T23 (APM) the forced Off
+    must reach BIOS Off through `apm_backend_off_forced` (no orderly steps
+    in the log); a forced restart on a stuck 8042 must still reset
+    (0CF9h). Also: a Win32 "Save changes?" box opened at 12 program windows
+    must appear (`[desktop] prompt admitted`).
 9. Third round: while the progress window shows "Shutting down..." after
    the programs closed, the Cancel button must disappear once call 73 runs
    (and Esc does nothing); with 12 program windows open, Ctrl+Alt+Del, a
