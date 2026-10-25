@@ -444,17 +444,62 @@ BOOL W32API UpdateWindow(HWND h) {
 BOOL u32_paintable(struct u32_window *w) {
   return !w->parent || IsWindowVisible(w->handle);
 }
-/* Hiding a visible child exposes the parent beneath it (ShowWindow SW_HIDE,
- * SetWindowPos SWP_HIDEWINDOW): the parent repaints that area. */
-void u32_child_hidden(struct u32_window *w) {
-  struct u32_window *parent = u32_window(w->parent);
-  if (!parent)
+/* Invalidate, in WINDOW's client coordinates, every visible child of
+ * WINDOW but SKIP that meets R, and their children, whatever their parents'
+ * WS_CLIPCHILDREN says (a clipped parent does not repaint under them). */
+static void expose_children(struct u32_window *window, RECT r, struct u32_window *skip) {
+  POINT po = u32_origin(window);
+  for (UINT i = 0; i < U32_WINDOWS; i++) {
+    struct u32_window *c = &u32_windows[i];
+    if (!c->handle || c == skip || c->parent != window->handle || !(c->style & WS_VISIBLE))
+      continue;
+    RECT box, hit;
+    GetWindowRect(c->handle, &box);
+    OffsetRect(&box, -po.x, -po.y);
+    if (!IntersectRect(&hit, &r, &box))
+      continue;
+    POINT co = u32_origin(c);
+    OffsetRect(&hit, po.x - co.x, po.y - co.y);
+    InvalidateRect(c->handle, &hit, 1);
+    if (c->style & (WS_BORDER | WS_DLGFRAME | 0x00300000u) ||
+        c->exstyle & (WS_EX_CLIENTEDGE | WS_EX_STATICEDGE))
+      c->internal_paint = 1;
+    expose_children(c, hit, skip);
+  }
+}
+/* q3exec4 review: a DC acquired before its window (or an ancestor) was
+ * hidden draws nothing more, as Windows updates busy DCs' visible regions;
+ * a WM_PAINT handler that hides its window keeps its DC. */
+static void hide_dcs(struct u32_window *w) {
+  if (!u32_gdi || u32_gdi->version < 3 || !u32_gdi->visible)
     return;
-  RECT r;
-  GetWindowRect(w->handle, &r);
-  POINT po = u32_origin(parent);
-  OffsetRect(&r, -po.x, -po.y);
-  InvalidateRect(parent->handle, &r, 1);
+  for (UINT i = 0; i < 64; i++)
+    if (dcs[i].dc && dcs[i].hwnd &&
+        ((w->parent && dcs[i].hwnd == w->handle) || IsChild(w->handle, dcs[i].hwnd)))
+      u32_gdi->visible(dcs[i].dc, 0, 0);
+}
+/* Hiding a visible child exposes what lies beneath the rectangle it
+ * occupied (OLD, in its parent's client coordinates; SetWindowPos may move
+ * it in the same call): the parent and the siblings there repaint. Hiding
+ * any window also empties the DCs it and its children still hold. */
+void u32_child_hidden(struct u32_window *w, RECT old) {
+  struct u32_window *parent = u32_window(w->parent);
+  if (parent) {
+    InvalidateRect(parent->handle, &old, 1);
+    expose_children(parent, old, w);
+  }
+  hide_dcs(w);
+}
+/* A child that becomes visible is painted whole, its children too (Windows
+ * invalidates a window when it is shown). */
+void u32_child_shown(struct u32_window *w) {
+  RECT client;
+  GetClientRect(w->handle, &client);
+  InvalidateRect(w->handle, 0, 1);
+  if (w->style & (WS_BORDER | WS_DLGFRAME | 0x00300000u) ||
+      w->exstyle & (WS_EX_CLIENTEDGE | WS_EX_STATICEDGE))
+    w->internal_paint = 1;
+  expose_children(w, client, 0);
 }
 BOOL W32API RedrawWindow(HWND h, const RECT *r, HRGN region, UINT flags) {
   U32_GUARD;

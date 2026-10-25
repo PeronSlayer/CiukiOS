@@ -35,6 +35,10 @@ struct u32_gdi {
   HANDLE (*bitmap_create)(const struct u32_surface *);
   /* v2 tail: never read for a v1 table. USER retains the slot until release. */
   BOOL (*window_pixel_format)(HDC, int *);
+  /* v3 tail (q3exec4): replace the visible region of a DC USER acquired
+   * (surface coordinates; no rectangles = nothing visible). Never read for
+   * a v1 or v2 table. */
+  BOOL (*visible)(HDC, const RECT *, UINT);
 };
 /* Install before USER use; the table and callbacks outlive the process. Host
  * adapters replace transport only; public USER APIs execute the same code. */

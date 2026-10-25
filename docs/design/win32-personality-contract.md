@@ -3069,9 +3069,37 @@ opens 9 pixels right and 72 pixels lower than the one before (Welcome at
    shows its modeless dialog (no `WS_VISIBLE`) before expecting its
    controls to paint.
 
+### Codex review of the change (five P2, no P1)
+
+1. A popup that a child creates in its `WM_DESTROY`, owned by the window
+   being destroyed, outlived its owner (the desktop dropped it with the
+   owner's window while USER kept its handle). Decision: after the
+   window's `WM_NCDESTROY`, USER destroys owned windows again, and the
+   child and late-owned passes repeat until none is left; a dependent whose
+   destruction fails there is released (never leaked).
+2. Hiding a control under a `WS_CLIPCHILDREN` parent left its pixels over
+   an overlapping sibling (the parent neither repaints there nor
+   invalidates its children). Decision: hiding exposes the visible siblings
+   and their children under the vacated rectangle directly.
+3. `SetWindowPos` with a move or a size and `SWP_HIDEWINDOW` exposed the new
+   rectangle. Decision: the rectangle the window occupied before the call.
+4. `SWP_SHOWWINDOW` without a move or size left a control painted earlier,
+   then hidden, blank. Decision: a window shown by `SetWindowPos` or
+   `ShowWindow` is invalidated whole, its children too.
+5. A `WM_PAINT` handler that hid its window kept drawing through its DC.
+   Decision, as Wine updates busy DCs: `struct u32_gdi` gains a v3 tail,
+   `visible(HDC, rects, count)`, and hiding a window empties the visible
+   region of the DCs it (if a child) and its children still hold;
+   `u32_set_gdi` accepts tables of versions 1 to 3.
+
+Each has a regression in `tests/host/win32/user32/user32_test.c`
+(`review_round2`, and the production `visible` tail in
+`test_production_gdi`) that fails without its fix.
+
 ### Known limits
 
 - The frame origin assumes the desktop's default frame metrics (border 3,
   title 24), as the CONFIGURE handler already does; a theme with other
   metrics would still shift windows.
-- Moving a visible child does not yet invalidate the parent area it leaves.
+- Moving a visible child (without hiding it) does not yet invalidate the
+  parent area it leaves.
