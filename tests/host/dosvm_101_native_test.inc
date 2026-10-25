@@ -59,6 +59,14 @@ static void test_101_native(void)
         CHECK(!dosvm_write(v,v->vbe_buffer.base,&racing,1) && native_transfer_entered);
         CHECK(*(uint8_t *)P2V(fs_direct_phys)==racing);
         unsigned initial_writes=fs_linear_writes;
+        /* Resident low-memory DMA stays on RAM even with an active LFB;
+         * both directions preserve the first and last bytes of the copy. */
+        const uint8_t dma_bytes[]={0x35,0xA9};
+        uint8_t dma_read[sizeof(dma_bytes)]={0};
+        CHECK(!dosvm_write(v,0x30000,dma_bytes,sizeof(dma_bytes)));
+        CHECK(!dosvm_read_resident(v,0x30000,dma_read,sizeof(dma_read)));
+        CHECK(!memcmp(dma_read,dma_bytes,sizeof(dma_bytes)));
+        CHECK(*(uint8_t *)P2V(fs_direct_phys)==racing && fs_linear_writes==initial_writes);
         for (unsigned i=0;i<pages;i++) {
             uint32_t pte; CHECK(as_lookup(&v->as,v->vbe_buffer.base+i*PAGE_SIZE,&pte)==fs_direct_phys+i*PAGE_SIZE);
             CHECK((pte&(PTE_PCD|PTE_PWT|PTE_BORROWED))==(fs_direct_cache|PTE_BORROWED));

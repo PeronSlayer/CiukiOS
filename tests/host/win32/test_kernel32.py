@@ -86,8 +86,19 @@ class Kernel32Files(unittest.TestCase):
         # G26 replaces the former offline facade with a native socket bridge.
         out=ROOT/'build/host/win32/winsock';out.mkdir(parents=True,exist_ok=True)
         program=out/'winsock'
+        # Preserve the guest's fixed-width records while transporting actual
+        # host pointers through tokens; low-bit reconstruction fails under ASLR.
+        source=(ROOT/'sdk/win32/offline/wsock.c').read_text()
+        packing='#define WP(p) ((uint32_t)(uintptr_t)(p))'
+        receive_length='.address_length=(uint32_t)length'
+        self.assertEqual(source.count(packing),1)
+        self.assertEqual(source.count(receive_length),1)
+        source=source.replace(packing,'#define WP(p) wire_pointer((uintptr_t)(p))')
+        source=source.replace(receive_length,'.address_length=sending?(uint32_t)length:WP((void *)length)')
+        (out/'wsock_host.inc').write_text(source)
         subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror','-DW32_HOST_MODEL',
             '-fno-pie','-no-pie','-fsanitize=address,undefined','-fno-sanitize-recover=all',
+            '-I'+str(out),'-I'+str(ROOT/'sdk/win32/offline'),
             '-I'+str(ROOT/'sdk/win32/include'),'-I'+str(ROOT/'src/kernel/include'),
             str(ROOT/'tests/host/win32/offline_test.c'),'-o',str(program)],check=True)
         result=subprocess.run([program],capture_output=True,text=True,

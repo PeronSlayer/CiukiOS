@@ -305,7 +305,7 @@ RELOCATION-TYPES none
 DYNAMIC not-observed (LoadLibrary/GetProcAddress/COM/codecs require runtime census)
 
 FILE compiled-resources.exe
-SHA256 321832d882f6e764021f2cc21694dc219a9d313d258db85294bbf5680c90b993
+SHA256 b521b66e242be4c76774d26a275e6cd84d17ab851064aa60e680fae61b340c32
 FORMAT PE32 i386 EXE
 SUBSYSTEM console LINKER 14.0
 RESOURCE {"language": 1033, "name": 400, "size": 104, "type": 2}
@@ -317,6 +317,8 @@ RESOURCE {"language": 1033, "name": 102, "size": 170, "type": 5}
 RESOURCE {"language": 1033, "name": 103, "size": 296, "type": 5}
 RESOURCE {"language": 1033, "name": 110, "size": 588, "type": 5}
 RESOURCE {"language": 1033, "name": 111, "size": 376, "type": 5}
+RESOURCE {"language": 1033, "name": 140, "size": 316, "type": 5}
+RESOURCE {"language": 1033, "name": 141, "size": 310, "type": 5}
 RESOURCE {"language": 1033, "name": 1, "size": 42, "type": 6}
 RESOURCE {"language": 1033, "name": 2, "size": 70, "type": 6}
 RESOURCE {"language": 1033, "name": 300, "size": 32, "type": 9}

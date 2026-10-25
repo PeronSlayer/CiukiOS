@@ -627,12 +627,16 @@ static int transfer(struct dosvm *v, uint32_t linear, void *buffer, unsigned byt
     while (bytes) {
         unsigned n = PAGE_SIZE - (linear & (PAGE_SIZE - 1));
         if (n > bytes) n = bytes;
-        int direct=v->vbe_direct.pages ? dosvm_vbe_direct_transfer(v,linear,b,n,write) : 0;
-        if (direct<0) return direct;
-        if (direct) {
-            b+=n; linear+=n; bytes-=n;
-            if (bytes && copy_preemptible(v)) kpreempt_point();
-            continue;
+        /* The VBE buffer is a pool allocation. Conventional-memory DMA
+         * never names it, even while a direct framebuffer is active. */
+        if (linear >= VM_POOL_BASE && v->vbe_direct.pages) {
+            int direct=dosvm_vbe_direct_transfer(v,linear,b,n,write);
+            if (direct<0) return direct;
+            if (direct) {
+                b+=n; linear+=n; bytes-=n;
+                if (bytes && copy_preemptible(v)) kpreempt_point();
+                continue;
+            }
         }
         if (linear >= 0xA0000 && linear < 0xC0000) {
             /* fx-22: only the adapter's owner continuation or the switch
@@ -666,18 +670,19 @@ static int transfer(struct dosvm *v, uint32_t linear, void *buffer, unsigned byt
             int64_t r = guest_frame(v, linear, write, wait);
             if (r < 0) return (int)r;
             phys = (uint32_t)r;
+            /* Pool resolution can yield to the display worker. Recheck
+             * before borrowing RAM; entry may now have mapped the LFB.
+             * The resident path above cannot yield, so its first check
+             * remains authoritative (notably for clock-task DMA reads). */
+            int direct=v->vbe_direct.pages ? dosvm_vbe_direct_transfer(v,linear,b,n,write) : 0;
+            if (direct<0) return direct;
+            if (direct) {
+                b+=n; linear+=n; bytes-=n;
+                if (bytes && copy_preemptible(v)) kpreempt_point();
+                continue;
+            }
         }
         if (!phys) return -EFAULT;
-        /* Pool resolution can yield to the display worker. Recheck after
-         * that point before borrowing RAM; entry may now have mapped LFB.
-         * Kernel code is preempted only at explicit service points. */
-        direct=v->vbe_direct.pages ? dosvm_vbe_direct_transfer(v,linear,b,n,write) : 0;
-        if (direct<0) return direct;
-        if (direct) {
-            b+=n; linear+=n; bytes-=n;
-            if (bytes && copy_preemptible(v)) kpreempt_point();
-            continue;
-        }
         if (write) memcpy(P2V(phys), b, n);
         else memcpy(b, P2V(phys), n);
         b += n; linear += n; bytes -= n;
