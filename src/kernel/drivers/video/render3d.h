@@ -22,6 +22,37 @@
 #define R3D_DEPTH_WRITE 16u
 #define R3D_COPY 32u
 #define R3D_FEATURES 63u
+#define R3D_TEXTURE1 64u
+#define R3D_ALL_FEATURES 127u
+#define R3D_REFS 5u
+#define R3D_MIPS 11u
+
+/* Zero state preserves the f7-02 minimum. These records remain kernel-private. */
+enum render3d_compare { R3D_LESS, R3D_NEVER, R3D_ALWAYS, R3D_EQUAL,
+    R3D_LEQUAL, R3D_GREATER, R3D_NOTEQUAL, R3D_GEQUAL };
+enum render3d_blend { R3D_ONE, R3D_ZERO, R3D_SRC_ALPHA, R3D_INV_SRC_ALPHA };
+enum render3d_combine { R3D_MODULATE, R3D_REPLACE, R3D_ADD, R3D_DECAL };
+enum render3d_filter { R3D_NEAREST, R3D_BILINEAR, R3D_NEAREST_MIP,
+    R3D_BILINEAR_MIP, R3D_TRILINEAR };
+enum render3d_format { R3D_ARGB8888, R3D_RGBA8888, R3D_RGB565,
+    R3D_ARGB4444, R3D_L8, R3D_A8 };
+struct render3d_sampler {
+    uint32_t combine, filter, repeat_u, repeat_v;
+};
+struct render3d_state {
+    uint32_t depth_func, alpha_func, alpha_ref, alpha_test;
+    uint32_t blend, source, destination, flat;
+    struct render3d_sampler sampler[2];
+};
+struct render3d_texture_image {
+    const void *pixels;
+    size_t bytes;
+    uint32_t pitch;
+};
+struct render3d_texture_desc {
+    uint32_t format, width, height, levels;
+    struct render3d_texture_image image[R3D_MIPS];
+};
 
 enum render3d_policy { R3D_AUTO, R3D_SOFTWARE, R3D_HARDWARE_REQUIRED };
 enum render3d_kind { R3D_COLOR = 1, R3D_D16, R3D_TEXTURE, R3D_LINEAR_COLOR };
@@ -37,9 +68,10 @@ struct render3d_caps {
     uint32_t version, features, hardware_features, max_size, texture_units;
     uint32_t ring_bytes, max_job_bytes, max_jobs, ram_budget;
     uint32_t hardware_max_size;
+    uint32_t texture_heap_bytes;
 };
 /* Screen X/Y Q16.16 [0,1024]; normalized Z Q0.16 [0,65535];
- * reciprocal W Q16.16 [1/256,256]; U/V Q16.16 [0,1], clamp + nearest.
+ * reciprocal W Q16.16 [1/256,256]; U/V Q16.16 [-16,16].
  * RGBA is packed 0xAARRGGBB. No kernel FP or implicit API-origin conversion. */
 struct render3d_vertex {
     int32_t x, y;
@@ -47,11 +79,17 @@ struct render3d_vertex {
     int32_t u, v;
 };
 /* Typed, fully copied list. Unknown bits and nonzero unused vertices fail.
- * D16 LESS, Gouraud, nearest/clamp, one-stage MODULATE are the minimum subset.
+ * Zero state selects D16 LESS, Gouraud, nearest/clamp, MODULATE.
+ * texture/vertices.u,v select stage 0; texture1/uv1 select stage 1.
+ * flat_color is explicit per triangle, independent of provoking-vertex rules.
  * COPY copies to an owned offscreen presentation buffer, never scanout. */
 struct render3d_request {
     uint32_t flags, target, depth, texture, copy_target;
     uint32_t clear_color, clear_depth, count;
+    uint32_t texture1;
+    struct render3d_state state;
+    uint32_t flat_color[R3D_VERTICES/3];
+    int32_t uv1[R3D_VERTICES][2];
     struct render3d_vertex vertices[R3D_VERTICES];
 };
 /* sequence orders the device; ordinal is a consecutive context receipt.
@@ -69,6 +107,8 @@ struct render3d_resource {
     uint32_t handle, kind, width, height, pitch, bytes, offset, reserved;
     uint32_t references;
     bool live, pending_free, hardware, resident;
+    uint32_t format, levels, level_offset[R3D_MIPS];
+    uint64_t last_use;
     void *shadow;
 };
 struct render3d_context {
@@ -85,6 +125,7 @@ struct render3d_job {
     struct render3d_fence fence;
     int result;
     bool occupied, complete;
+    bool software;
 };
 struct render3d_service;
 struct render3d_host;
@@ -97,17 +138,18 @@ struct render3d_backend {
     uint32_t features;
     bool (*qualified)(void *, uint32_t);
     int (*layout)(void *, struct render3d_resource *);
-    int (*validate)(void *, const struct render3d_request *, struct render3d_resource *const [4]);
+    int (*validate)(void *, const struct render3d_request *, struct render3d_resource *const [R3D_REFS]);
     int (*enter)(void *);
     void (*leave)(void *);
     int (*execute)(void *, const struct render3d_request *,
-                   struct render3d_resource *const [4]);
+                   struct render3d_resource *const [R3D_REFS]);
     int (*idle)(void *);
     void (*quarantine)(void *);
     /* Optional owner attachment for the internal native consumer. */
     int (*attach)(struct render3d_service *, const struct render3d_host *, uint32_t);
     uint32_t max_size;
     void (*detach)(struct render3d_service *, void *);
+    uint32_t (*texture_pool_bytes)(void *);
 };
 struct render3d_host {
     void *ctx;
@@ -124,6 +166,7 @@ struct render3d_service {
     const struct render3d_backend *backend;
     void *device;
     uint32_t generation, next_handle, ram_bytes, heap_first, heap_end;
+    uint32_t texture_first;
     uint64_t sequence;
     bool admission, quarantined, busy;
     unsigned head, queued;
@@ -142,6 +185,14 @@ int render3d_create_context(struct render3d_service *, uint32_t, enum render3d_p
 int render3d_destroy_context(struct render3d_service *, uint32_t, uint32_t);
 int render3d_create_resource(struct render3d_service *, uint32_t, uint32_t,
     enum render3d_kind, uint32_t, uint32_t, const void *, size_t, uint32_t *);
+/* Texture creation copies every row/mip. Updates create a new immutable
+ * handle, then retire the old one; queued references survive retirement.
+ * RGBA8888 is byte-ordered R,G,B,A. Other multi-byte input is little-endian.
+ * Shadows/readback are packed ARGB8888, with consecutive canonical mips. */
+int render3d_create_texture(struct render3d_service *, uint32_t, uint32_t,
+    const struct render3d_texture_desc *, uint32_t *);
+int render3d_texture_shape(const struct render3d_resource *);
+int render3d_validate_state(const struct render3d_request *);
 int render3d_destroy_resource(struct render3d_service *, uint32_t, uint32_t, uint32_t);
 int render3d_submit(struct render3d_service *, uint32_t, uint32_t,
                    const struct render3d_request *, size_t, struct render3d_fence *);
@@ -161,6 +212,6 @@ int fbdev_render3d_prepare(uint32_t);
 void fbdev_render3d_prepared(void);
 void render3d_device_lost(struct render3d_service *);
 /* Private software slice; returns 1 when complete, 0 for another slice. */
-int render3d_scalar_slice(const struct render3d_request *, struct render3d_resource *const [4],
+int render3d_scalar_slice(const struct render3d_request *, struct render3d_resource *const [R3D_REFS],
                           struct render3d_job *, const struct render3d_host *);
 #endif

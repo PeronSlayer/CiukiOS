@@ -40,11 +40,11 @@ static struct render3d_host host={NULL,alloc_mem,free_mem,time_us,cooperate};
 static bool qualified(void *ctx,uint32_t gen) { (void)ctx; return qualify && gen==17; }
 static int layout(void *ctx,struct render3d_resource *r)
 { (void)ctx; if (r->width>64) return -EOPNOTSUPP; r->reserved=invalid_layout ? UINT32_MAX : (r->bytes+4095)&~4095u; return 0; }
-static int validate_packet(void *ctx,const struct render3d_request *r,struct render3d_resource *const resources[4])
+static int validate_packet(void *ctx,const struct render3d_request *r,struct render3d_resource *const resources[R3D_REFS])
 { (void)ctx; (void)r; (void)resources; return invalid_command ? -EINVAL : 0; }
 static int enter(void *ctx) { (void)ctx; entered++; return 0; }
 static void leave(void *ctx) { (void)ctx; left++; }
-static int execute(void *ctx,const struct render3d_request *q,struct render3d_resource *const r[4])
+static int execute(void *ctx,const struct render3d_request *q,struct render3d_resource *const r[R3D_REFS])
 {
     (void)ctx; hardware_writes++;
     struct render3d_job j={0};
@@ -81,7 +81,7 @@ static struct render3d_vertex v(int x,int y,uint32_t z,uint32_t color,int u,int 
 static void security(void)
 {
     init(&fake_family); struct render3d_caps caps; render3d_query_caps(&service,&caps);
-    assert(caps.features==R3D_FEATURES && !caps.hardware_features && caps.ring_bytes==262144);
+    assert(caps.features==R3D_ALL_FEATURES && !caps.hardware_features && caps.ring_bytes==262144);
     uint32_t c=create(10,R3D_AUTO),foreign=create(11,R3D_SOFTWARE),other=create(10,R3D_SOFTWARE);
     uint32_t t=image(10,c,R3D_COLOR,16,16,NULL), d=image(10,c,R3D_D16,16,16,NULL);
     uint32_t a=image(11,foreign,R3D_COLOR,16,16,NULL), z=image(10,other,R3D_COLOR,16,16,NULL);
@@ -283,7 +283,7 @@ static void layouts(void)
     unsigned w=64,h=32; uint32_t *src=malloc(w*h*4),*dst=malloc(w*h*4); assert(src && dst);
     for (unsigned i=0;i<w*h;i++) src[i]=i;
     assert(!savage3d_pack_texture(dst,w*h*4,src,w,h));
-    assert(dst[0]==0 && dst[8]==64 && dst[16]==8 && dst[32]==16 && dst[512]==32 && dst[1024]==1024);
+    assert(dst[0]==0 && dst[8]==64 && dst[16]==128 && dst[32]==256 && dst[512]==32 && dst[1024]==1024);
     unsigned char seen[8192]={0};
     for (unsigned y=0;y<h;y++) for (unsigned x=0;x<w;x++) {
         uint32_t at; assert(!savage3d_texture_offset(w,h,x,y,&at)); assert(at<w*h*4 && !seen[at]); seen[at]=1; assert(dst[at/4]==y*w+x);
@@ -362,11 +362,34 @@ static void completed_receipts(void)
     assert(!render3d_close(&service) && !outstanding && !service.ram_bytes);
     puts("completed ordinal-only receipts, pending exact pairs, owner/generation bounds and ring reuse PASS");
 }
+static void scalar_numeric_bounds(void)
+{
+    init(NULL); uint32_t c=create(1,R3D_SOFTWARE);
+    uint32_t target=image(1,c,R3D_COLOR,1,1,0),depth=image(1,c,R3D_D16,1,1,0);
+    uint32_t *pixels=malloc(1024*1024*4); assert(pixels);
+    for (unsigned i=0;i<1024*1024;i++) pixels[i]=UINT32_MAX;
+    uint32_t tex=image(1,c,R3D_TEXTURE,1024,1024,pixels); free(pixels);
+    struct render3d_request q={.flags=R3D_CLEAR_COLOR|R3D_CLEAR_DEPTH|R3D_DEPTH_WRITE|R3D_TEXTURED|R3D_TEXTURE1,
+        .target=target,.depth=depth,.texture=tex,.texture1=tex,.clear_depth=65535,.count=3};
+    /* A four-unit Q32 area surrounding the pixel centre forces derivative
+     * saturation, signed UV and extreme reciprocal-W products. */
+    q.vertices[0]=(struct render3d_vertex){32768,32767,16384,256,UINT32_MAX,-16*65536,16*65536};
+    q.vertices[1]=(struct render3d_vertex){32769,32769,16384,16777216,UINT32_MAX,16*65536,-16*65536};
+    q.vertices[2]=(struct render3d_vertex){32767,32769,16384,256,UINT32_MAX,-16*65536,-16*65536};
+    for (unsigned i=0;i<2;i++) q.state.sampler[i]=(struct render3d_sampler){R3D_MODULATE,R3D_TRILINEAR,1,1};
+    for (unsigned i=0;i<3;i++) { q.uv1[i][0]=q.vertices[i].v; q.uv1[i][1]=q.vertices[i].u; }
+    (void)submit(1,c,&q); drain();
+    uint32_t color; uint16_t z;
+    assert(!render3d_readback(&service,1,c,target,&color,sizeof(color)) && color==UINT32_MAX);
+    assert(!render3d_readback(&service,1,c,depth,&z,sizeof(z)) && z==16384);
+    assert(!render3d_close(&service) && !outstanding);
+    puts("scalar tiny-area derivatives, maximum texture/UV/reciprocal-W products and signed wrap PASS");
+}
 int main(int argc,char **argv)
 {
     if (argc==2 && !strcmp(argv[1],"queued-close")) queued_close();
     else if (argc==2 && !strcmp(argv[1],"completed-receipts")) completed_receipts();
-    else { security(); software(); queues(); hardware(); limits(); layouts(); diagnostic(); queued_close(); completed_receipts(); }
+    else { security(); software(); queues(); hardware(); limits(); layouts(); diagnostic(); queued_close(); completed_receipts(); scalar_numeric_bounds(); }
     assert(!outstanding);
     puts("universal 3D host model PASS"); fflush(stdout); return 0;
 }
