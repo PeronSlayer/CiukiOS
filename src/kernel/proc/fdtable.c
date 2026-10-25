@@ -15,6 +15,7 @@
 #pragma weak vfs_file_wait_locked
 #pragma weak vfs_turn_take_locked
 #pragma weak vfs_turn_drop_locked
+#pragma weak klog /* host harnesses link no log sink */
 uint32_t net_socket_count(void) __attribute__((weak));
 uint32_t *net_socket_flags(struct proc_object *) __attribute__((weak));
 void net_fd_changed(struct process *, unsigned) __attribute__((weak));
@@ -442,13 +443,19 @@ int files_bootstrap(struct vfs *v)
  *
  * fx-8: the snapshot is sparse. For an ELF32 executable it holds only the
  * bytes the loader reads (elf.c: the ELF header, the program and section
- * header tables, every PT_LOAD's file bytes); any other file (PE images,
- * malformed headers) is snapshotted whole, as before, so every validation
- * result is unchanged. The built-in programs carry their DWARF sections
- * (NetSurf: 13.5 MB file, 2.6 MB loadable); reading those made the T23
- * spend 3.9 s per NetSurf start (trial 423b803a: 247 ATA commands, about
- * 3 MB/s), now ~0.8 s for the 2.6 MB the child maps. A page the snapshot
- * does not hold reads as -ENOEXEC. */
+ * header tables, every PT_LOAD's file bytes); any other file (malformed
+ * headers) is snapshotted whole, as before, so every validation result is
+ * unchanged. The built-in programs carry their DWARF sections (NetSurf:
+ * 13.5 MB file, 2.6 MB loadable); reading those made the T23 spend 3.9 s per
+ * NetSurf start (trial 423b803a: 247 ATA commands, about 3 MB/s), now ~0.8 s
+ * for the 2.6 MB the child maps. A page the snapshot does not hold reads as
+ * -ENOEXEC.
+ *
+ * q3exec: a PE image is snapshotted as its Win32 loader view (image_pe_view)
+ * and the snapshot's size is that view, so an installer's appended payload
+ * (Quake III Arena demo: 69,632-byte stub, 48.8 MB overlay) is neither read
+ * nor counted against CIUKI_ELF_BYTES_MAX, which bounds the bytes a loader
+ * reads, not the file. */
 struct file_image {
     uint32_t bytes, pages;  /* pages: snapshot pages held */
     uint32_t lists[CIUKI_ELF_BYTES_MAX / PAGE_SIZE / (PAGE_SIZE / sizeof(uint32_t))];
@@ -494,6 +501,7 @@ static int image_read(void *cookie, uint32_t offset, void *buffer, uint32_t byte
 /* Store one page of a read run at its file page index. */
 static int image_store(struct file_image *image, uint32_t index, const uint8_t *data, uint32_t take)
 {
+    if (index >= ARRAY_SIZE(image->lists) * IMAGE_PER_LIST) return -ENOEXEC; /* beyond the loader limit */
     uint32_t *slot = &image->lists[index / IMAGE_PER_LIST];
     if (!*slot) {
         *slot = pmm_alloc();
@@ -547,8 +555,58 @@ static int image_need(struct file_image *image, struct image_source *src, uint32
     if (bytes > image->bytes - offset) bytes = image->bytes - offset;
     return image_fill(image, src, offset / PAGE_SIZE, (offset + bytes - 1) / PAGE_SIZE + 1);
 }
-/* The bytes elf_validate() and elf_load() read, or the whole file when it is
- * not an ELF32 header those functions could accept. Ranges are read in file
+static uint32_t image_le16(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8; }
+static uint32_t image_le32(const uint8_t *p) { return image_le16(p) | image_le16(p + 2) << 16; }
+/* Read bytes the snapshot may not hold yet; never past the loader limit. */
+static int image_fetch(struct file_image *image, struct image_source *src, uint32_t offset, void *dst, uint32_t n)
+{
+    if (offset > image->bytes || n > image->bytes - offset || offset + n > CIUKI_ELF_BYTES_MAX) return 0;
+    int err = image_need(image, src, offset, n);
+    return err ? err : !image_read(image, offset, dst, n);
+}
+/* q3exec: the Win32 loader view of a PE file. Windows maps the headers and
+ * the sections of an image and nothing else (Microsoft PE format: "Section
+ * Table", "Other Contents of the File", "The Attribute Certificate Table";
+ * Pietrek, "Peering Inside the PE", MSDN 1994): data after the last section,
+ * the overlay where self-extracting installers keep their payload, is never
+ * part of the image, and the program reads it through its own file handle.
+ * The view runs from offset 0 to the end of the headers and section table,
+ * of every section's raw data and of the attribute certificate table (kept so
+ * the loaders' certificate-file-bounds rule still sees it), clipped to the
+ * file. Every PE consumer (kernel seed and section hash, ntdll's snapshot and
+ * parser) reads only this range, so a view is indistinguishable from a file
+ * that ends there. 1 with the view, 0 when the bytes are no PE header layout
+ * the view can be computed from (snapshotted whole, as before, so the
+ * validators name the failure), or a read error. */
+static int image_pe_view(struct file_image *image, struct image_source *src, uint32_t *view)
+{
+    uint8_t dos[64], pe[24], op[96], sec[40], certificate[8];
+    int r = image_fetch(image, src, 0, dos, sizeof(dos));
+    if (r <= 0) return r;
+    uint32_t off = image_le32(dos + 60);
+    if (dos[0] != 'M' || dos[1] != 'Z' || off < 64 || (off & 3)) return 0;
+    if ((r = image_fetch(image, src, off, pe, sizeof(pe))) <= 0) return r;
+    if (memcmp(pe, "PE\0\0", 4)) return 0;
+    uint32_t count = image_le16(pe + 6), olen = image_le16(pe + 20);
+    if (!count || count > 96 || olen < 96 || olen > CIUKI_ELF_BYTES_MAX) return 0;
+    if ((r = image_fetch(image, src, off + 24, op, sizeof(op))) <= 0) return r;
+    uint64_t end = (uint64_t)off + 24 + olen + count * 40u, headers = image_le32(op + 60);
+    if (headers > end) end = headers;
+    for (uint32_t i = 0; i < count; i++) {
+        if ((r = image_fetch(image, src, off + 24 + olen + i * 40, sec, sizeof(sec))) <= 0) return r;
+        uint64_t raw = image_le32(sec + 16), at = image_le32(sec + 20);
+        if (raw && at + raw > end) end = at + raw;
+    }
+    if (image_le32(op + 92) > 4 && olen >= 96 + 5 * 8) {
+        if ((r = image_fetch(image, src, off + 24 + 96 + 4 * 8, certificate, sizeof(certificate))) <= 0) return r;
+        uint64_t at = image_le32(certificate), n = image_le32(certificate + 4);
+        if (n && at + n > end) end = at + n;
+    }
+    *view = end < image->bytes ? (uint32_t)end : image->bytes;
+    return 1;
+}
+/* The bytes elf_validate() and elf_load() read, a PE file's loader view, or
+ * the whole file when it is neither header layout. Ranges are read in file
  * order so the FAT cursor walks the cluster chain forward once. */
 static int image_snapshot(struct file_image *image, struct image_source *src)
 {
@@ -556,9 +614,23 @@ static int image_snapshot(struct file_image *image, struct image_source *src)
              uint16_t ehsize, phentsize, phnum, shentsize, shnum, shstrndx; } h;
     struct { uint32_t type, offset, va, pa, filesz, memsz, flags, align; } ph;
     _Static_assert(sizeof(h) == 52 && sizeof(ph) == 32, "ELF32 header layout");
-    uint32_t bytes = image->bytes;
+    uint32_t bytes = image->bytes, view = 0;
     int err = image_need(image, src, 0, bytes < BLKDEV_READ_BYTES ? bytes : BLKDEV_READ_BYTES);
     if (err) return err;
+    int pe = src->whole ? 0 : image_pe_view(image, src, &view);
+    if (pe < 0) return pe;
+    if (pe) {
+        if (view > CIUKI_ELF_BYTES_MAX) {
+            if (klog) klog("[proc] image refused reason=pe-view-limit file=%u view=%u limit=%u", bytes, view, CIUKI_ELF_BYTES_MAX);
+            return -ENOEXEC;
+        }
+        image->bytes = view;    /* the overlay after the view is not the image */
+        return image_need(image, src, 0, view);
+    }
+    if (bytes > CIUKI_ELF_BYTES_MAX) {
+        if (klog) klog("[proc] image refused reason=size file=%u limit=%u", bytes, CIUKI_ELF_BYTES_MAX);
+        return -ENOEXEC;
+    }
     bool elf = bytes >= sizeof(h) && !image_read(image, 0, &h, sizeof(h)) &&
         !memcmp(h.ident, "\177ELF", 4) && h.ident[4] == 1 && h.ident[5] == 1 &&
         h.phentsize == sizeof(ph) && h.phnum && h.phnum <= CIUKI_ELF_PHDR_MAX &&
@@ -635,7 +707,6 @@ static int image_fat(struct px_namespace *s, struct px_node *n, struct file_imag
     for (unsigned attempt = 0;; attempt++) {
         if (!n->linked) { err = -ENOENT; break; }
         struct fat_entry entry = n->entry;
-        if (entry.size > CIUKI_ELF_BYTES_MAX) { err = -ENOEXEC; break; }
         image_reset(image); image->bytes = entry.size;
         uint64_t generation = vfs_change_generation(v, n->volume, entry.parent, entry.index);
         struct image_source src = { .read = image_fat_read, .buffer = buffer, .whole = whole, .space = s, .node = n, .id = id };
@@ -668,7 +739,8 @@ static int image_snapshot_open(void *cwd_arg, const char *path, struct ciuki_fil
     int err = px_resolve_locked(s, cwd, path, false, &r);
     vfs_tag_locked(s->vfs,"open"); vfs_site_locked(s->vfs,"native");
     if (!err && r.node->kind != PX_FILE) err = -EACCES;
-    if (!err && (r.node->ro ? r.node->ro_size : r.node->entry.size) > CIUKI_ELF_BYTES_MAX) err = -ENOEXEC;
+    /* The size limit applies to the loader's byte set (image_snapshot). */
+    if (!err && (r.node->ro ? r.node->ro_size : r.node->entry.size) > UINT32_MAX) err = -ENOEXEC;
     if (!err) err = px_share_locked(r.node, VFS_READ, 0);
     if (!err) err = px_range_locked(r.node,0,r.node->ro ? r.node->ro_size : r.node->entry.size);
     if (!err) image->bytes = (uint32_t)(r.node->ro ? r.node->ro_size : r.node->entry.size);

@@ -54,6 +54,29 @@ static WCHAR *unicode(const struct w32_services *s, const char *text, UNICODE_ST
     }
     return p;
 }
+/* q3exec: Windows 98 starts every program with IO.SYS's default environment
+ * ("tmp=c:\windows\temp", "temp=c:\windows\temp": Windows 95 Resource
+ * Kit, "How Windows 95 processes Autoexec.bat"; the same values in a Windows
+ * 98 SET listing). A program launched by the native desktop inherits only
+ * the native environment, so the absent names are added here; an inherited
+ * value wins. Installers locate their temporary directory this way: the
+ * MindVision VISE stub of the Quake III Arena demo tries TMP, then TEMP, then
+ * "<Windows drive>\TEMP", a directory CiukiOS does not create (its Windows
+ * 98 tree has C:\WINDOWS\TEMP), and cannot unpack its engine without one. */
+static const char *const default_environment[] = {"TMP=C:\\WINDOWS\\TEMP", "TEMP=C:\\WINDOWS\\TEMP"};
+static int environment_has(const char *environment, const char *entry) {
+    ULONG n = 0;
+    while (entry[n] != '=')
+        n++;
+    for (const char *q = environment; *q; q += w32_strlen(q) + 1) {
+        ULONG i = 0;
+        while (i < n && q[i] && (q[i] | 32) == (entry[i] | 32))
+            i++;
+        if (i == n && q[n] == '=')
+            return 1;
+    }
+    return 0;
+}
 NTSTATUS w32_ciuki_start(struct w32_loader *l, struct w32_peb *peb, const char *exe,
                          const char *command, const char *directory, const char *environment,
                          struct w32_module **main) {
@@ -100,11 +123,26 @@ NTSTATUS w32_ciuki_start(struct w32_loader *l, struct w32_peb *peb, const char *
             ;
     } while (environment[size]);
     size++;
-    p->Environment = l->services->alloc(0, size * 2);
+    ULONG entries = environment[0] ? size - 1 : 0, total = entries;
+    for (unsigned d = 0; d < sizeof(default_environment) / sizeof(*default_environment); d++)
+        if (!environment_has(environment, default_environment[d]))
+            total += w32_strlen(default_environment[d]) + 1;
+    total += total ? 1 : 2;
+    p->Environment = l->services->alloc(0, total * 2);
     if (!p->Environment)
         return STATUS_NO_MEMORY;
-    for (ULONG i = 0; i < size; i++)
+    for (ULONG i = 0; i < entries; i++)
         p->Environment[i] = w32_acp_character((uint8_t)environment[i]);
+    ULONG at = entries;
+    for (unsigned d = 0; d < sizeof(default_environment) / sizeof(*default_environment); d++)
+        if (!environment_has(environment, default_environment[d]))
+            for (const char *c = default_environment[d];; c++) {
+                p->Environment[at++] = (uint8_t)*c;
+                if (!*c)
+                    break;
+            }
+    while (at < total)
+        p->Environment[at++] = 0;
     for (const char *q = environment; *q; q += w32_strlen(q) + 1)
         if ((q[0] == 'P' || q[0] == 'p') && (q[1] == 'A' || q[1] == 'a') &&
             (q[2] == 'T' || q[2] == 't') && (q[3] == 'H' || q[3] == 'h') && q[4] == '=')

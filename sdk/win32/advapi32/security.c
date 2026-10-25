@@ -259,6 +259,23 @@ int W32API StartServiceW(void *service, uint32_t count, const WCHAR **arguments)
   (void)arguments;
   W21("StartServiceW", 0);
 }
+/* q3exec: Windows 98's ADVAPI32 exports the service-control ANSI entry
+ * points as failures with ERROR_CALL_NOT_IMPLEMENTED (no service manager on
+ * 9x). The MindVision VISE 3.x engine of the Quake III Arena demo installer
+ * (vise32ex.dll) imports both statically next to the census entries
+ * (OpenSCManagerA, CreateServiceA, ControlService...); without the exports
+ * its LoadLibrary fails with ERROR_PROC_NOT_FOUND (127) before any code runs. */
+int W32API QueryServiceStatus(void *service, void *status) {
+  (void)service;
+  (void)status;
+  W21("QueryServiceStatus", 0);
+}
+int W32API StartServiceA(void *service, uint32_t count, const char **arguments) {
+  (void)service;
+  (void)count;
+  (void)arguments;
+  W21("StartServiceA", 0);
+}
 int W32API ConvertSidToStringSidW(const void *sid, WCHAR **text) {
   (void)sid;
   (void)text;

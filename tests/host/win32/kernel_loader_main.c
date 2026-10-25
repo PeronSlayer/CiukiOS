@@ -78,6 +78,13 @@ static int startup(void) {
     CHECK(!w32_ciuki_start(&loader, &host.peb, "/compiled-tls.exe", "\"two  spaces\" /x", "C:\\",
                            "PATH=C:\\TOOLS\0TEMP=C:\\TEMP\0CIUKI_SHELL_SHOW=7\0\0", &main));
     CHECK((host.peb.ProcessParameters->WindowFlags&1) && host.peb.ProcessParameters->ShowWindowFlags==7);
+    /* q3exec: Windows 98's IO.SYS defaults complete the native environment;
+     * the inherited TEMP wins, the absent TMP is C:\WINDOWS\TEMP. */
+    {
+        static const char expected[] = "PATH=C:\\TOOLS\0TEMP=C:\\TEMP\0CIUKI_SHELL_SHOW=7\0TMP=C:\\WINDOWS\\TEMP\0";
+        const WCHAR *env = host.peb.ProcessParameters->Environment;
+        for (unsigned i = 0; i < sizeof(expected); i++) CHECK(env[i] == (unsigned char)expected[i]);
+    }
     CHECK(main && loader.main == main && host.peb.ImageBaseAddress == main->pe.image);
     CHECK(host.teb.ThreadLocalStoragePointer && main->tls_index < 64);
     unsigned char *tls = host.teb.ThreadLocalStoragePointer[main->tls_index];
