@@ -179,8 +179,13 @@ static void test_templates(void) {
   command_count = 0;
   SendDlgItemMessageA(dlg, 107, BM_CLICK, 0, 0);
   CHECK(got_command(107, BN_CLICKED) && IsDlgButtonChecked(dlg, 107));
+  /* q3exec4: controls paint (and ask WM_CTLCOLORSTATIC) only while their
+   * dialog is visible; this template has no WS_VISIBLE. */
   ctlcolor_static = 0;
   InvalidateRect(dlg, 0, 1);
+  drain(dlg);
+  CHECK(!ctlcolor_static);
+  ShowWindow(dlg, 5 /* SW_SHOW */);
   drain(dlg);
   CHECK(ctlcolor_static >= 2);
   DestroyWindow(dlg);
@@ -1293,6 +1298,7 @@ static void test_help(void) {
 static POINT vise_saved;
 static HWND vise_background;
 static UINT vise_pages, vise_visible[4], vise_owner_visible[4];
+static RECT vise_rects[4];
 static DWORD vise_page_wire, vise_page_generation, vise_close_pings;
 /* q3exec3: the desktop pings its windows every second. A PING it queued
  * for the Welcome page (and one for the background) just before it read
@@ -1306,7 +1312,37 @@ static void vise_push(UINT op, DWORD wire, DWORD generation, UINT n, DWORD value
   if (n)
     desk_put32(m->data + 16, value);
 }
+/* q3exec4: the production desktop answers CREATE and PLACE with
+ * DESK_CONFIGURE (apps/desktop/client.c v3_place, v3_configure): the frame
+ * sits at the x,y it was sent and the content, which CONFIGURE reports,
+ * at x + 3, y + 24 (default frame border and title) unless the window is a
+ * popup. Each page then must stay where USER placed it. */
+static BOOL vise_configure;
+static void vise_configure_reply(const struct ciuki_message *sent) {
+  UINT op = sent->data[1];
+  if (sent->data[0] != DESK_V3_VERSION || (op != DESK_V3_PLACE && op != DESK_CREATE_WINDOW))
+    return;
+  const uint8_t *b = sent->data + 16;
+  DWORD x, y, w, h, scale, state, style;
+  if (op == DESK_V3_PLACE)
+    x = desk_get32(b), y = desk_get32(b + 4), w = desk_get32(b + 8), h = desk_get32(b + 12),
+    scale = desk_get32(b + 16), state = desk_get32(b + 20), style = desk_get32(b + 24);
+  else
+    style = desk_get32(b), x = desk_get32(b + 12), y = desk_get32(b + 16), w = desk_get32(b + 20),
+    h = desk_get32(b + 24), scale = desk_get32(b + 28), state = 0;
+  if (state == 3)
+    return;
+  BOOL popup = (style & 3) == DESK_V3_POPUP;
+  CHECK(in_tail - in_head < 256);
+  struct ciuki_message *m = &incoming[in_tail++ % 256];
+  desk_v3_message(m, DESK_CONFIGURE, 32, 0, desk_get32(sent->data + 8), desk_get32(sent->data + 12));
+  DWORD v[8] = {w, h, scale ? scale : 1, 1, x + (popup ? 0 : 3), y + (popup ? 0 : 24), state, style};
+  for (UINT k = 0; k < 8; k++)
+    desk_put32(m->data + 16 + k * 4, v[k]);
+}
 static void vise_close_hook(const struct ciuki_message *sent, BOOL after_result) {
+  if (after_result && vise_configure)
+    vise_configure_reply(sent);
   if (sent->data[0] != DESK_V3_VERSION || sent->data[1] != DESK_CLOSE ||
       desk_get32(sent->data + 8) != vise_page_wire ||
       desk_get32(sent->data + 12) != vise_page_generation)
@@ -1390,6 +1426,7 @@ static void vise_page_script(HWND dlg, UINT why, UINT step) {
     return;
   CHECK(vise_pages < 4);
   vise_visible[vise_pages] = IsWindowVisible(dlg);
+  GetWindowRect(dlg, &vise_rects[vise_pages]);
   vise_owner_visible[vise_pages] = IsWindowVisible(vise_background);
   vise_pages++;
   /* Let the page's frame updates reach the desktop, then the real input
@@ -1402,6 +1439,97 @@ static void vise_page_script(HWND dlg, UINT why, UINT step) {
       DispatchMessageA(&m);
     }
   ui_kernel_pause(50);
+  raw_input(dlg, CIUKI_INPUT_KEY, 0x1c, 1, 0);
+  raw_input(dlg, CIUKI_INPUT_TEXT, '\r', 0, 0);
+  raw_input(dlg, CIUKI_INPUT_KEY, 0x1c, 0, 0);
+}
+/* q3exec4: the Choose Destination Location page (template 108) fills its
+ * edit control 1006 in WM_INITDIALOG and reads the folder back in WM_DESTROY
+ * (vise32ex.dll 0x1000bbc2: GetDlgItemTextA(hDlg, 1006) when Next ended the
+ * page); WM_DESTROY reaches a dialog while its controls still exist. */
+static char vise_dest[260];
+static BOOL vise_dest_next;
+static intptr_t W32API vise_dest_proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
+  (void)lp;
+  if (m == WM_INITDIALOG) {
+    SetDlgItemTextA(h, 1006, "c:\\Q3Ademo");
+    vise_dest_next = 0;
+    return 1;
+  }
+  if (m == WM_DESTROY && vise_dest_next) {
+    CHECK(GetDlgItem(h, 1006) && IsWindow(GetDlgItem(h, 1006)));
+    GetDlgItemTextA(h, 1006, vise_dest, 0x103);
+    return 0;
+  }
+  if (m == WM_COMMAND && (wp & 0xffff) == IDOK) {
+    vise_dest_next = 1;
+    EndDialog(h, 1);
+    return 1;
+  }
+  return 0;
+}
+/* q3exec4: the Finished page (template 12033) hides each of its three
+ * option check boxes whose label the script leaves empty (all three in the
+ * Quake III demo script) with ShowWindow(SW_HIDE) in WM_INITDIALOG
+ * (0x1000feff). A hidden control must leave no pixels on the page. */
+static UINT vise_ink[4];
+static UINT vise_control_ink(HWND dlg, int id) {
+  struct u32_window *root = u32_window(dlg), *c = u32_window(GetDlgItem(dlg, id));
+  CHECK(root && c && root->surface.pixels);
+  POINT a = u32_origin(c), b = u32_surface_origin(root);
+  RECT r;
+  GetClientRect(c->handle, &r);
+  const uint32_t *px = root->surface.pixels;
+  UINT pitch = root->surface.pitch / 4, ink = 0;
+  int x0 = a.x - b.x, y0 = a.y - b.y;
+  CHECK(x0 >= 2 && y0 >= 0);
+  uint32_t background = px[y0 * pitch + x0 - 2] & 0xffffff;
+  for (int y = 0; y < r.bottom; y++)
+    for (int x = 0; x < r.right; x++)
+      if ((UINT)(x0 + x) < root->surface.width && (UINT)(y0 + y) < root->surface.height)
+        ink += (px[(y0 + y) * pitch + x0 + x] & 0xffffff) != background;
+  return ink;
+}
+static intptr_t W32API vise_finish_proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
+  (void)lp;
+  if (m == WM_INITDIALOG) {
+    SetWindowTextA(h, "Finished");
+    SetDlgItemTextA(h, 901, "Setup is complete and Quake 3 Arena Demo is now installed!");
+    SetDlgItemTextA(h, 902, "Click Close to end the Setup");
+    for (int id = 1023; id <= 1025; id++)
+      ShowWindow(GetDlgItem(h, id), 0 /* SW_HIDE */);
+    return 1;
+  }
+  if (m == WM_COMMAND && (wp & 0xffff) == IDOK) {
+    EndDialog(h, 1);
+    return 1;
+  }
+  return 0;
+}
+static void vise_finish_script(HWND dlg, UINT why, UINT step) {
+  (void)why;
+  if (step)
+    return;
+  ui_kernel_pause(50);
+  MSG m;
+  while (PeekMessageA(&m, 0, 0, 0, 1))
+    if (!IsDialogMessageA(dlg, &m)) {
+      TranslateMessage(&m);
+      DispatchMessageA(&m);
+    }
+  for (int k = 0; k < 3; k++) {
+    CHECK(!IsWindowVisible(GetDlgItem(dlg, 1023 + k)));
+    vise_ink[k] = vise_control_ink(dlg, 1023 + k);
+  }
+  vise_ink[3] = vise_control_ink(dlg, 901);
+  /* Hiding a painted control later exposes the page beneath it. */
+  ShowWindow(GetDlgItem(dlg, 902), 0 /* SW_HIDE */);
+  while (PeekMessageA(&m, 0, 0, 0, 1))
+    if (!IsDialogMessageA(dlg, &m)) {
+      TranslateMessage(&m);
+      DispatchMessageA(&m);
+    }
+  vise_ink[2] += vise_control_ink(dlg, 902);
   raw_input(dlg, CIUKI_INPUT_KEY, 0x1c, 1, 0);
   raw_input(dlg, CIUKI_INPUT_TEXT, '\r', 0, 0);
   raw_input(dlg, CIUKI_INPUT_KEY, 0x1c, 0, 0);
@@ -1460,8 +1588,8 @@ static void test_vise(void) {
   vise_saved = (POINT){0x8000, 0x8000};
   script(vise_page_script);
   desk_reply_hook = vise_close_hook;
+  vise_configure = 1;
   CHECK(DialogBoxParamA(FIXTURE, (const char *)(uintptr_t)140, vise_background, vise_proc, 0) == IDOK);
-  desk_reply_hook = 0;
   CHECK(vise_close_pings == 1);
   {
     struct u32_window *b = u32_window(vise_background);
@@ -1479,10 +1607,25 @@ static void test_vise(void) {
   script(vise_page_script);
   CHECK(DialogBoxParamA(FIXTURE, (const char *)(uintptr_t)141, vise_background, vise_proc, 1) == IDOK);
   script(0);
+  /* q3exec4: the license page reopens exactly where the welcome page was,
+   * after the desktop's CONFIGURE answers (no creeping placement). */
+  CHECK(vise_rects[1].left == vise_rects[0].left && vise_rects[1].top == vise_rects[0].top);
   CHECK(vise_pages == 2 && vise_visible[0] && vise_visible[1] && vise_owner_visible[0] && vise_owner_visible[1]);
   /* The license page opens where the welcome page was. */
   RECT r;
   CHECK(vise_saved.x != 0x8000 && GetWindowRect(vise_background, &r));
+  /* q3exec4: Next on the destination page keeps the folder it shows. */
+  script(vise_page_script);
+  CHECK(DialogBoxParamA(FIXTURE, (const char *)(uintptr_t)142, vise_background, vise_dest_proc, 0) == 1);
+  CHECK(vise_pages == 3 && !strcmp(vise_dest, "c:\\Q3Ademo"));
+  /* q3exec4: the Finished page shows its message and none of the three
+   * hidden option check boxes. */
+  script(vise_finish_script);
+  CHECK(DialogBoxParamA(FIXTURE, (const char *)(uintptr_t)143, vise_background, vise_finish_proc, 0) == 1);
+  script(0);
+  desk_reply_hook = 0;
+  vise_configure = 0;
+  CHECK(vise_ink[3] > 0 && !vise_ink[0] && !vise_ink[1] && !vise_ink[2]);
   /* A visible window destroyed right after painting: its last frame update
    * must not follow its DESK_CLOSE (the race that took the installer's
    * windows away). */
@@ -1495,6 +1638,6 @@ static void test_vise(void) {
   DestroyWindow(w);
   vise_check_wire(from);
   DestroyWindow(vise_background);
-  printf("VISE wizard: welcome -> license, owner visible, close-time PING answered for the live window only, %u packets valid for the desktop\n",
-         outgoing_count - from);
+  printf("VISE wizard: welcome -> license -> destination (%s) -> finished, owner visible, close-time PING answered for the live window only, hidden options drawn nowhere, %u packets valid for the desktop\n",
+         vise_dest, outgoing_count - from);
 }

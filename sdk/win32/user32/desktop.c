@@ -99,6 +99,21 @@ UINT u32_style(struct u32_window *w) {
          (w->exstyle & WS_EX_TOPMOST ? DESK_V3_TOPMOST : 0) |
          (w->exstyle & WS_EX_CONTEXTHELP ? DESK_V3_CONTEXTHELP : 0);
 }
+/* q3exec4: CREATE and PLACE name the desktop frame's origin (apps/desktop
+ * desk_frame: the frame at x,y, its content at x + DESK_FRAME_BORDER,
+ * y + DESK_FRAME_TITLE), while DESK_CONFIGURE answers with the content
+ * origin (desk_content). Sending the content origin moved a captioned
+ * window by its frame (3, 24) on every placement round trip: the Quake III
+ * installer's pages, which reopen where the last one was, crept down the
+ * screen until the Finished page's buttons were under the taskbar. */
+static POINT u32_frame_origin(struct u32_window *w) {
+  POINT p = u32_surface_origin(w);
+  int bx, by;
+  u32_frame(w->style, w->exstyle, &bx, &by);
+  p.x -= bx;
+  p.y -= by;
+  return p;
+}
 BOOL u32_create_wire(struct u32_window *w) {
   if (!u32_connect())
     return 0;
@@ -135,7 +150,7 @@ BOOL u32_create_wire(struct u32_window *w) {
     desk_put32(data + 4, owner->wire);
     desk_put32(data + 8, owner->generation);
   }
-  POINT p = u32_surface_origin(w);
+  POINT p = u32_frame_origin(w);
   desk_put32(data + 12, p.x);
   desk_put32(data + 16, p.y);
   desk_put32(data + 20, width);
@@ -230,7 +245,7 @@ BOOL u32_place(struct u32_window *w) {
     return 0;
   UINT width, height;
   u32_surface_size(w, &width, &height);
-  POINT p = u32_surface_origin(w);
+  POINT p = u32_frame_origin(w);
   uint8_t b[32];
   desk_put32(b, p.x);
   desk_put32(b + 4, p.y);
