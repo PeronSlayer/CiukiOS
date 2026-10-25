@@ -22,6 +22,8 @@
 #pragma weak blackbox_reset
 #pragma weak blackbox_capture
 #pragma weak blackbox_serial_replay
+#pragma weak blackbox_flusher_start
+#pragma weak blackbox_flush_request
 /* G14 boot status (core/bootstat.c): sector 9 of the same partition. */
 #include <ciuki/bootstat.h>
 #ifndef FS_HOST
@@ -1278,7 +1280,11 @@ static struct task *writer_task;
 void storage_writer_progress(struct storage *s, const char *stage)
 {
     if (s != &system_storage) return;
-    if (!strncmp(stage, "start", 6)) __atomic_store_n(&writer_task, g_current, __ATOMIC_RELEASE);
+    if (!strncmp(stage, "start", 6)) {
+        /* The stall poll's persistence runs on its own flusher (blackbox.c). */
+        if (blackbox_flusher_start) (void)blackbox_flusher_start();
+        __atomic_store_n(&writer_task, g_current, __ATOMIC_RELEASE);
+    }
     else if (!strncmp(stage, "stop", 5)) __atomic_store_n(&writer_task, (struct task *)0, __ATOMIC_RELEASE);
     else if (!strncmp(stage, "idle", 5)) __atomic_add_fetch(&writer_passes, 1, __ATOMIC_RELAXED);
     __atomic_store_n(&writer_stage, stage, __ATOMIC_RELEASE);
@@ -1341,11 +1347,13 @@ unsigned storage_stall_poll(uint32_t now)
                                     __atomic_load_n(&writer_passes, __ATOMIC_RELAXED), wait, 0, a, sizeof(a));
     int nb = storage_stall_describe(s, now, 0, now - beat, 0, 0, 1, b, sizeof(b));
     irq_restore(f);
-    if (na) klog("%s", a);
-    if (nb) klog("%s", b);
-    /* The records above are in the black box's RAM ring; its sectors are
-     * written here, not by the stalled writer (bounded: 2 s, 512 sectors). */
-    if (blackbox_checkpoint) (void)blackbox_checkpoint();
+    /* Never waits (review P1): the periodic path drops on a full UART queue
+     * instead of sleeping for capacity, and "[storage] writer_stall" is a
+     * protected boot-log record. The black box's sectors are written by its
+     * own flusher on request; this task only increments and wakes. */
+    if (na) klog_periodic("%s", a);
+    if (nb) klog_periodic("%s", b);
+    if (blackbox_flush_request) blackbox_flush_request();
     return 1;
 }
 #endif

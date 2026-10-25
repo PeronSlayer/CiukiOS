@@ -114,6 +114,9 @@ void ksync_priority_changed(struct task *t) __attribute__((weak));
 enum { KSYNC_DEPEND_DRIVE = 1, KSYNC_DEPEND_CACHE = 2, KSYNC_DEPEND_IO = 3 };
 void ksync_depend(struct task *owner, const void *object, unsigned reason) __attribute__((weak));
 void ksync_depend_release(const void *object) __attribute__((weak));
+/* The same release for an explicitly named owner (owner-only callers keep
+ * ksync_depend_release, which names the calling task). */
+void ksync_depend_revoke(struct task *owner, const void *object) __attribute__((weak));
 void kmutex_init(struct kmutex *m);
 /* A named class for lock-order records; same mutex semantics. */
 static inline void kmutex_init_named(struct kmutex *m, const char *name)

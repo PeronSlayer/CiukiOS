@@ -132,8 +132,12 @@ void ksync_depend(struct task *owner, const void *object, unsigned reason)
     irq_restore(f);
 }
 void ksync_depend_release(const void *object)
+{ ksync_depend_revoke(g_current, object); }
+/* T23 trial 2ca3b0b6 (review): a block request can end outside its executor
+ * (a queued request cancelled by another task), so the edges to `owner` for
+ * `object` are revoked by name, not by the calling task. */
+void ksync_depend_revoke(struct task *owner, const void *object)
 {
-    struct task *owner = g_current;
     if (!owner || !dependents) return;
     uint32_t f = irq_save();
     bool released = false;

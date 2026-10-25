@@ -185,13 +185,14 @@ static inline bool fs_lock_try_take(fs_lock *l) {
 void fs_lock_long_wait(fs_lock *,uint32_t ticket,uint32_t waited_ms,bool polling) __attribute__((weak));
 static inline void fs_lock_take(fs_lock *l) {
     uint32_t f=irq_save(); struct fs_ticket t={l,l->next++}; irq_restore(f);
-    uint32_t start=0; bool reported=false;
+    uint32_t start=0; bool started=false, reported=false;
     for (;;) {
         f=irq_save();
         if (fs_ticket_ready(&t)) { l->held=true; kwait_set_owner(&l->wait,g_current); kpreempt_hold(); irq_restore(f); return; }
         irq_restore(f);
-        /* The wait's own clock (deadline_after_ms(0): the tick now). */
-        if (!start) start=(uint32_t)deadline_after_ms(0)|1u;
+        /* The wait's own clock (deadline_after_ms(0): the tick now), taken
+         * once; the flag, not the value, says it was taken. */
+        if (!started) { start=(uint32_t)deadline_after_ms(0); started=true; }
         kwait_wait_ticket_until(&l->wait,fs_ticket_ready,&t,deadline_after_ms(1000),&t.ticket);
         uint32_t waited=(uint32_t)deadline_after_ms(0)-start;
         if (!reported && fs_lock_long_wait && waited>=FS_LOCK_LONG_WAIT_MS) {
@@ -204,6 +205,10 @@ static inline void fs_depend(uintptr_t holder,const void *object,unsigned reason
 }
 static inline void fs_depend_release(const void *object) {
     if (ksync_depend_release) ksync_depend_release(object);
+}
+/* Edges to an explicitly named holder (blkreq.c: a request's executor). */
+static inline void fs_depend_revoke(uintptr_t holder,const void *object) {
+    if (ksync_depend_revoke) ksync_depend_revoke((struct task *)holder,object);
 }
 static inline uintptr_t fs_lock_holder(fs_lock *l) { return (uintptr_t)l->wait.owner; }
 /* Rank 3 is the block cache (cache.c); namespace and volume locks guard a

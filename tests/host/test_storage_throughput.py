@@ -1,5 +1,6 @@
 """Replay the production storage task with a fake clock and storage sinks."""
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -102,6 +103,33 @@ int main(void) {
                             '-I' + str(ROOT / 'src/kernel/include'), str(path),
                             '-o', str(temp / 'storage-task')], check=True, env=env)
             subprocess.run([str(temp / 'storage-task')], check=True, env=env)
+
+    def test_stall_poll_never_waits_for_storage(self):
+        # T23 2ca3b0b6 review P1: the cpustat stall poll observes a stuck
+        # storage writer or executor; nothing it calls may wait for either.
+        source = (ROOT / 'src/kernel/fs/mount.c').read_text()
+        begin = source.index('unsigned storage_stall_poll(uint32_t now)\n')
+        end = source.index('\n}\n', begin)
+        body = source[begin:end]
+        for forbidden in ('blackbox_checkpoint', 'blackbox_flush(', 'klog(', 'vfs_', 'fs_lock_take',
+                          'fs_event_wait', 'kwait_wait', 'task_sleep', 'blk_', 'cache_', 'storage_writeback'):
+            self.assertNotIn(forbidden, body, forbidden)
+        self.assertIn('klog_periodic(', body)
+        self.assertIn('blackbox_flush_request()', body)
+        # The request is a counter and a wake (blackbox.c, kernel build).
+        blackbox = (ROOT / 'src/kernel/core/blackbox.c').read_text()
+        kernel = blackbox[blackbox.index('#else\nstatic struct task *flusher;'):]
+        request = kernel[kernel.index('void blackbox_flush_request(void) {'):]
+        request = request[:request.index('\n}\n')]
+        for forbidden in ('checkpoint', 'flush_records', 'kwait_wait', 'task_sleep', 'fs_lock'):
+            self.assertNotIn(forbidden, request, forbidden)
+        self.assertIn('kwait_wake_all(&flusher_wait)', request)
+        # Its records are protected boot-log lines, never budgeted statistics.
+        bootlog = (ROOT / 'src/kernel/core/bootlog.c').read_text()
+        table = bootlog[bootlog.index('statistic_periodic[]={'):]
+        prefixes = re.findall(r'"([^"]+)"', table[:table.index('};')])
+        for record in ('[storage] writer_stall ', '[storage] lock_wait '):
+            self.assertFalse(any(record.startswith(prefix) for prefix in prefixes), record)
 
 
 if __name__ == '__main__':

@@ -254,7 +254,9 @@ void fs_lock_long_wait(fs_lock *l, uint32_t ticket, uint32_t waited_ms, bool pol
     uint32_t next = l->next, serving = l->serving;
     unsigned rank = l->rank; char drive = l->drive ? l->drive : '-';
     irq_restore(f);
-    klog("[storage] lock_wait task=%s rank=%u drive=%c owner=%s mode=%s ticket=%u serving=%u next=%u waited_ms=%u",
+    /* The periodic path never sleeps for UART capacity; the line is a
+     * protected boot-log record ("[storage] queue" is the only statistic). */
+    klog_periodic("[storage] lock_wait task=%s rank=%u drive=%c owner=%s mode=%s ticket=%u serving=%u next=%u waited_ms=%u",
          who, rank, drive, by, polling ? "poll" : "fifo", polling ? 0u : ticket, serving, next, waited_ms);
 }
 #else

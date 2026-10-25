@@ -95,7 +95,11 @@ Decision: a requester waiting for a queued or issued block request names
 the queue's executor as the holder (`ksync_depend`, new reason
 `KSYNC_DEPEND_IO`, recorded as `[sched] inherit ... reason=io`). The
 executor runs at the requester's level, transitively through lock owners,
-until `finish()` releases the request; the edge is renewed on every wake
+until the request's terminal transition: `finish()` revokes the edges to
+that executor for that request by the executor's name
+(`ksync_depend_revoke`), so a queued request cancelled by another task
+also ends the boost at once (review); `ksync_depend_release` keeps its
+calling-task semantics for lock holders. The edge is renewed on every wake
 outside the queue lock, so an edge refused as a cycle is retried. Device
 time is unchanged; only the CPU dispatches of the executor stop waiting for
 the starvation dispatch. `executor_donation` is cleared only by the replay's
@@ -116,19 +120,26 @@ reader and the device-class storage writer measure issue 100 ms, service
   `blackbox`, `bootstat`, `bootlog`, `writeback`, `census`), passes, what
   the writer waits for (`lock:<owner>`, `drive|cache|io:<holder>`), the
   namespace owner, C:'s state, holder, operation and age, writer turn, gate,
-  queued tickets, readers, cache owner, dirty bytes and batch flag. It then
-  writes the black box's sectors itself (`blackbox_checkpoint`: raw ATA
-  writes, at most 2 s and 512 sectors), so the records preceding a stuck
-  writer reach the disk and the next boot.
+  queued tickets, readers, cache owner, dirty bytes and batch flag. The poll
+  never waits (review): the records use the periodic log path, which drops
+  on a full UART queue instead of sleeping for capacity, and are protected
+  boot-log lines; persistence is a request (`blackbox_flush_request`: a
+  counter and a wake) to a dedicated `blackbox` task started with the
+  storage writer, which runs the bounded checkpoint (raw ATA writes) and may
+  itself wait behind the stalled executor. The records preceding a stuck
+  writer so reach the disk and the next boot whenever the ATA queue moves.
 - `[storage] lock_wait`: a task still waiting for a filesystem lock after
   5 s names the lock's rank and drive, its owner (`none` while a served
   ticket's task has not run), the tickets and the wait, once per wait
-  (`fs_lock_take`, `fs_lock_take_request`).
+  (`fs_lock_take`, `fs_lock_take_request`; periodic log path). The wait's
+  start is the real tick with a separate taken flag (the reviewed `now|1`
+  stamp made a grant within an even tick UINT32_MAX ms long).
 - The desktop observer now samples the idle stage once a second (it slept
   until the next busy stage, so a loop stuck at the turn's end, e.g. in the
   offscreen-cache upload after an appearance change, was never reported).
   An idle loop stamp older than 3 s is reported; one-second shell sleeps are
-  not; standby is excluded.
+  not; standby is excluded through a flag the desktop thread publishes with
+  its loop stamp (the observer never reads the desktop's power structure).
 
 Recommended for the next trial: keep the serial capture; after a freeze,
 boot the same disk once and collect the new BOOT.LOG, whose `[blackbox]`
@@ -138,14 +149,27 @@ moved, whether the music kept playing and whether a fatal screen appeared.
 ## Host validation
 
 - `tests/host/fs/wait_latency_test.c` (in `test_kernel_latency.py`): the
-  executor replay above, beside the existing F1-80/F1-98 cases.
+  executor replay above, beside the existing F1-80/F1-98 cases; a queued
+  request cancelled by another task (requester native reader and storage
+  writer) with the executor's donation revoked inside the cancellation
+  (fails with the owner-only release); the long lock-wait record silent for
+  every short production wait and for a grant within the even tick it
+  started (fails with the `now|1` stamp), once naming the holder for 6 s.
+- `tests/host/blackbox_test.c`: three persistence requests return at once
+  while the flusher is inside a blocked device write, and both records
+  reach the sectors after the device resumes.
+- `tests/host/test_storage_throughput.py`: the stall poll calls nothing
+  that waits for storage (no checkpoint, flush, VFS, lock, cache, block
+  request, sleep or blocking `klog`), the request is a counter and a wake,
+  and both new records are protected boot-log lines.
 - `tests/host/fs/test_storage.c`: `storage_stall_due` (5 s, 10 s repeat,
   reset by progress, millisecond wrap) and the exact text of both
   `writer_stall` records, both within 240 bytes at maximum widths.
 - `tests/host/test_storage_throughput.py`: the storage task stamps start,
   each pass and stop.
 - `tests/host/desktop/theme_wallpaper_sequence_test.h`: idle-stage bounds,
-  standby exclusion, and the observer thread reporting a stuck idle loop.
+  the published standby flag, and the observer thread reporting a stuck
+  idle loop.
 - i686 compile of every kernel file that includes the touched headers with
   `build_kernel.py`'s flags. The only failures are untouched files that
   need their own recipe's include paths or build-identity defines (ACPI,

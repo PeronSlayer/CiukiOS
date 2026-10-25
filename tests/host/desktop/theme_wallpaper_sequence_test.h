@@ -97,9 +97,12 @@ static void sequence_watchdog_test(struct desktop *d)
     assert(!desktop_stall_record(4000,line,sizeof(line)));
     assert(desktop_stall_record(4001,line,sizeof(line))>0 && strstr(line,"[desktop] stall stage=idle"));
     assert(strstr(line,"input_pending=0 work_pending=0 wait=accel-cache"));
-    const struct desktop *observed=desktop_watchdog.desktop; desktop_watchdog.desktop=d;
-    d->power.state=1; assert(!desktop_stall_record(60000,line,sizeof(line))); d->power.state=0;
-    assert(desktop_stall_record(60000,line,sizeof(line))>0); desktop_watchdog.desktop=observed;
+    /* Standby is the desktop thread's own publication with the loop stamp
+     * (review: never a read of its power structure from this thread). */
+    desktop_watchdog_loop(1000000000ull,1);
+    assert(!desktop_stall_record(60000,line,sizeof(line)));
+    desktop_watchdog_loop(1000000000ull,0);
+    assert(desktop_stall_record(60000,line,sizeof(line))>0 && strstr(line,"stage=idle"));
 
     /* Exercise the actual observer while the main thread produces no frame;
      * its console write must bypass the busy settings/mixer worker. */

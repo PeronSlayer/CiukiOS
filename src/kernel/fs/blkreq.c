@@ -243,9 +243,10 @@ static void finish(struct blk_request *r,int e) {
 #ifdef FS_HOST
     fs_event_wake(&r->event);
 #else
-    /* The executor's inherited priority ends with the request it served
-     * (blk_request_wait); a finish by anyone else releases nothing. */
-    fs_depend_release(r);
+    /* The executor's inherited priority ends with the request, on every
+     * terminal transition and whoever performs it (a queued request
+     * cancelled by another task included): revoked by the executor's name. */
+    if (r->queue && r->queue->worker) fs_depend_revoke((uintptr_t)r->queue->worker,r);
     uint32_t flags=irq_save(); r->event.sequence++; irq_restore(flags);
     kwait_wake_io(&r->event.wait);
 #endif

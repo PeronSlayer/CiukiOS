@@ -171,8 +171,8 @@ unsigned storage_hold_watch(struct storage *, uint32_t now_ms);
  * record. The cpustat task (no VFS) checks the writer's progress stamp:
  * a pass older than STORAGE_STALL_MS is reported, then every
  * STORAGE_STALL_REPEAT_MS while it lasts, with the C: owners it may be
- * waiting for, and the black box is flushed by raw sectors. Diagnostic
- * only: nothing is waited for, taken or changed. */
+ * waiting for, and the black box's own flusher is asked to write its raw
+ * sectors. Diagnostic only: the poll waits for, takes and changes nothing. */
 #define STORAGE_STALL_MS 5000u
 #define STORAGE_STALL_REPEAT_MS 10000u
 bool storage_stall_due(uint32_t now_ms, uint32_t beat_ms, uint32_t *reported_ms);
