@@ -235,6 +235,10 @@ static void packed_standard(cvga_mode_params *v,const struct dos_video_mode *m)
     c[0x10]=vs; c[0x11]=(ve&15)|0x20; c[0x12]=m->height-1;
     c[0x13]=m->pitch>>3; c[0x14]=0; c[0x15]=vs-1; c[0x16]=ve-1; c[0x17]=0xEB;
     v->gc[5]=0x40; v->gc[6]=5; v->attr[0x10]=0x41;
+    /* X.Org vgaHWInit and Linux savagefb vgaHWInit: identity attribute
+     * palette for every depth above 4 bpp. Mode 12h's planar palette maps
+     * 6 -> 14h and 8..15 -> 38h..3Fh (T23 c42f556e review). */
+    for (unsigned i=0;i<16;i++) v->attr[i]=(uint8_t)i;
 }
 static void standard_mode(const struct supersavage_mode_io *b, const cvga_mode_params *v)
 {

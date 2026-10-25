@@ -1838,6 +1838,12 @@ called its protected-mode SetWindow pointer, still NULL, after three failed
   full-screen transport leaves it to the VBE path), so the window would
   otherwise keep aliasing the old bank and native mode 13h stores would
   land in the VBE buffer after the return.
+- T23 c42f556e (`supersavage-fullscreen.md`, "VBE full-screen transport"):
+  in a VBE full screen the trapped VGA ports take the fx-27 lean exits and
+  DAC burst as in the window, the first-frame record never stalls the copy
+  transport, and an effective guest palette change counts as its first
+  frame; the fast paths leave a direct LFB lease's borrowed pages to the
+  ordinary monitor.
 - `WAR2.BAT` starts `WAR2.EXE` directly; `UVCONFIG.EXE` stays installed.
 - The QEMU full-screen probe (`vm-fullscreen`, `f3_probes_video.c`) records
   `case=vbe_window` (004Fh, entry stays windowed, `active=0`) instead of the

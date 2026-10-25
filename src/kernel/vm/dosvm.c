@@ -137,13 +137,18 @@ static bool lean_fetch(struct dosvm *v, const struct v86_frame *f, const struct 
     }
     if (linear >= 0xA0000 && linear < 0xC0000) return false;
     uint32_t pte = 0, phys = as_lookup(&v->as, linear, &pte);
-    if (!phys || !(pte & PTE_U)) return false;     /* not resident: the ordinary path */
+    /* Not resident: the ordinary path. Nor a borrowed page: a VBE full
+     * screen's direct LFB lease (dosvm_vbe_direct_enter) puts the provider's
+     * physical framebuffer in the VM's PTEs, which P2V does not map (T23
+     * BAR E8000000h); the ordinary monitor reads it through the provider
+     * alias (monitor_memory, transfer). Codex review of 1bb063bd0, P1. */
+    if (!phys || !(pte & PTE_U) || (pte & PTE_BORROWED)) return false;
     *byte = *(const uint8_t *)P2V(phys);
     return true;
 }
 static bool lean_before(const struct dosvm *v, const struct v86_frame *f)
 {
-    if (v->info.state >= DOSVM_STOPPING || !v->info.dos_ready || v->fullscreen ||
+    if (v->info.state >= DOSVM_STOPPING || !v->info.dos_ready || !dosvm_vga_ports_modeled(v) ||
         v->fullscreen_hold || v->fullscreen_suspended || v->idle.depth || v->network_attached ||
         v->audio.sb.irq_entry_ready || v->monitor.state == V86_HALTED || g_need_resched) return false;
     if (v->dpmi.active && !dpmi_lean_eligible(v, f)) return false;
