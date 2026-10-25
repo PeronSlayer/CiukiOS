@@ -95,6 +95,7 @@ volatile uint64_t g_ticks;
 static unsigned ata_calls, ata_lookups, sequence;
 static bool initialized;
 static void storage_timer(void *arg) { (void)arg; CHECK(false); }
+static void startup_log_main(void *arg) { (void)arg; CHECK(false); }   /* dec1: the start-log flusher task */
 void ledger_snapshot(struct mm_ledger *out) {
     memset(out,0,sizeof(*out)); out->zone[2].usable=28672;
     out->zone[2].free=24576; out->high=2048;

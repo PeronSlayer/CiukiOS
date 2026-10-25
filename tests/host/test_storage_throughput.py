@@ -16,6 +16,9 @@ class StorageTaskTests(unittest.TestCase):
         source = (ROOT / 'src/kernel/fs/mount.c').read_text()
         begin = source.index('static void storage_timer(void *arg)\n')
         end = source.index('\n/* f9-02: a published destination needs the writer', begin)
+        # dec1/G29d: the start-log task follows the timer; it is not part of the slice.
+        startup = source.find('\n/* G29d: program starts reach CIUKIST.LOG', begin)
+        if 0 <= startup < end: end = startup
         # Compile the exact function. All substitutions are outside it at
         # the scheduler/clock/log/cache boundary; no modeled work loop.
         function = source[begin:end]
