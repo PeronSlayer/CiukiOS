@@ -468,6 +468,10 @@ static void upper_memory(void) {
     /* no range published: an EXEC into upper memory is refused, nothing kept */
     arena(UMB,ROOT); CHECK(event(3,UMB,ROOT,0)==DFV2_RESUME && ev_err()==87 && !find_used(UMB));
     dos_unified_upper(&U,0x9F000,END); CHECK(!U.upper_first && !U.upper_end);   /* not above A0000h */
+    dos_unified_upper(&U,0xA0000,END); CHECK(!U.upper_first && !U.upper_end);   /* video RAM below the window */
+    dos_unified_upper(&U,0xC8000,END); CHECK(!U.upper_first && !U.upper_end);   /* below C9000h */
+    dos_unified_upper(&U,FIRST,0xE8000); CHECK(!U.upper_first && !U.upper_end); /* past E0000h */
+    dos_unified_upper(&U,FIRST,0xD0000); CHECK(U.upper_first==FIRST && U.upper_end==0xD0000); /* D000h frame arena */
     dos_unified_upper(&U,FIRST,0xF8000); CHECK(!U.upper_first && !U.upper_end);  /* into the system ROM */
     dos_unified_upper(&U,FIRST,END); CHECK(U.upper_first==FIRST && U.upper_end==END);
     /* LOADHIGH: begin, commit with the inherited JFT, TSR stays resident */
@@ -500,7 +504,7 @@ static void upper_memory(void) {
     prepare_call(DFV2_ROLE_EVENT,0,0,0,0); w16(LIN(DRV,CALL+0x20),0x7000); w16(LIN(DRV,CALL+0x1a),0);
     f=live(DFV2_ROLE_EVENT);
     CHECK(dos_unified_gate(&U,&f)==DFV2_RESUME && out_cf() && out_ax()==87 && !U.bound && !strcmp(U.why,"root PSP extent"));
-    printf("H56-05 upper memory: %s LOADHIGH begin/commit/TSR, 55h/50h and a JFT in UMBs once published; "
+    printf("H56-07 upper memory: %s LOADHIGH begin/commit/TSR, 55h/50h and a JFT in UMBs once published; "
            "video RAM, EMS frame, overrun and unpublished range refused; CDS/root PSP in UMBs still refuse the bind\n",verdict());
 }
 

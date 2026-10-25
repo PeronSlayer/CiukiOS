@@ -1377,10 +1377,15 @@ SHARE (9 KiB) and FreeCOM's environment sat in conventional memory.
 - FreeDOS 2043 `kernel/config.c`: `Dosmem()` reads DOS= tokens only while
   they are `UMB` or `HIGH`, so `DOS=LOW,UMB` stops at `LOW` and leaves the
   UMBs unlinked; `DOS=UMB,LOW` links them and keeps the kernel low (no HMA
-  move). `umb_init()` runs after a DEVICE= line (`LoadDevice`), while FILES,
-  LASTDRIVE and STACKS are allocated earlier (`PostConfig`), and
-  `KernelAllocPara` forces low allocation until UMBs exist: SFT, CDS and stacks
-  stay conventional without `DOSDATA=UMB` or the *HIGH lines. `init_device()`
+  move). `umb_init()` runs after a DEVICE= line (`LoadDevice`, main.c:337),
+  before the tables are allocated (main.c:345), and `KernelAllocPara` forces
+  low allocation until UMBs exist; the tables (SFT, CDS, stacks) and the
+  device headers therefore stay conventional only because the config has no
+  `*HIGH` line and no `DOSDATA=UMB` (config.c:460-477, :1873). The real
+  safeguard is `test_config_links_umbs_and_keeps_every_kernel_structure_low`
+  in `tests/host/dos/test_dos_box_memory.py`, which fails if the generated
+  fork FDCONFIG.SYS contains DEVICEHIGH, FILESHIGH, LASTDRIVEHIGH, STACKSHIGH
+  or DOSDATA=UMB. `init_device()`
   does not link a driver whose end address equals its header.
 - FreeCOM 0.85a: `shell/loadhigh.c` (LH/LOADHIGH links the UMBs and sets
   the allocation strategy for one EXEC); `shell/init.c` resizes the
@@ -1450,6 +1455,18 @@ FreeDOS 2043 puts BUFFERS in the HMA only with the kernel there
 `DOSDATA=UMB` would move the SFT and CDS into UMBs, which the bind refuses.
 Windows 98 sessions typically show about 600 KiB.
 
+**Limits.** A user-edited FDCONFIG.SYS with DEVICEHIGH, FILESHIGH,
+LASTDRIVEHIGH or DOSDATA=UMB now places structures the bind reads (device
+headers, SFT, CDS) in UMBs; the bind refuses
+(`unified_activation_refused`) and the session runs without the unified IFS.
+Accepting them would need an f3-56 amendment. The direct-role frame check
+(`dos_unified.c`, "direct iregs frame") reads the caller's iregs through
+conventional addresses only, so if a direct-role claim is ever added it would
+refuse INT 21h calls from high-loaded programs; it is not switched to the
+published range now because no direct claim exists to test it. The published
+window is C9000h to E0000h (D0000h with the D000h frame); `dos_unified_upper`
+refuses any other range.
+
 **Risks.** XMS 10h no longer returns UMBs (DOS owns them, as with
 DOS=UMB under HIMEM/EMM386 on Windows 98); a program that wants upper memory
 gets it from DOS (5803h, 48h, LH). Wolfenstein 3-D now pages into EMS through
@@ -1462,10 +1479,15 @@ Host evidence: `tests/host/dos/run_dos_memory.sh` (on the unchanged
 profile and code it fails 5 checks: no UMB link, SHARE low, no `EMMXXXX0`
 device, prompt block 8C5Ah below the new 8E80h floor, Wolf3D without EMS;
 passes after with the figures above), `tests/host/dos/unified_binding_test.c`
-H56-05 (UMB processes accepted only once published; video RAM, EMS frame,
+H56-07 (UMB processes accepted only once published; video RAM, EMS frame,
 overrun, CDS and root PSP in UMBs refused), `tests/host/dos/test_dos_box_memory.py`
 (profile, reference unchanged, driver header and answers),
-`tests/host/dos/run_unified_file.sh` (H57/H61 with the new profile).
+`tests/host/dos/run_unified_file.sh` (H61 boots the new profile, DOS=UMB,LOW
+and `LH SHARE`, on the production VM; H57 boots its own `DOS=LOW` CONFIG and
+does not exercise it). No host boot yet runs the H56 inheritance probe (a
+high-loaded parent EXECing a child, file I/O from a high-loaded program):
+H57 has no UMB arena or published range, so that case needs the QEMU/T23
+DOS Box or a UMB-capable H56 variant.
 
 ### Boot-time check: the image's version is pinned (2026-10-24)
 

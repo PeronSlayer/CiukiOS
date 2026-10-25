@@ -4,7 +4,7 @@
 #include "port_test.c"
 #include "../../../src/kernel/vm/dosvm_network.c"
 static struct dosvm guest[3];
-static uint8_t low[2][0xa0000];
+static uint8_t low[2][0xe0000];
 static unsigned registered_ports[3],preemptions;
 static int port_error;
 static unsigned wire_count;
@@ -53,6 +53,9 @@ int dosvm_port_register(struct dosvm_key key,uint16_t first,uint16_t last,dosvm_
 }
 int dosvm_port_unregister(struct dosvm_key key,uint16_t first)
 { CHECK(key.id && key.id<=2 && first==0x300); registered_ports[key.id-1]=0; return 0; }
+/* dosvm_umb.c's published window, stubbed: C9000h-E0000h while UMBs are on. */
+void dosvm_umb_range(struct dosvm *v,uint32_t *first,uint32_t *end)
+{ *first=v->memory.umb_enabled ? VM_UMB_FIRST : 0; *end=*first ? VM_UMB_END : 0; }
 static void put16(uint8_t *p,uint16_t x) { p[0]=x; p[1]=x>>8; }
 static void command(struct dosvm *v,struct v86_frame *f,unsigned fn,unsigned at)
 {
@@ -112,12 +115,41 @@ int main(void)
     f.tf.cs=0xf000; f.tf.eip=DOSVM_IPX_RETURN+2; f.tf.user_esp=0x100;
     CHECK(!dosvm_network_interrupt(v,&f,0xfc) && !memcmp(&f,&saved,sizeof(f)) && v->monitor.vif && !n->active);
     CHECK(v->frame_pm && v->dpmi.depth==1); /* neither PM condition was cleared to dispatch */
+    /* Real-mode callback with its stack in a UMB: delivered; in video RAM: dropped, counted */
+    v->frame_pm=false; v->memory.umb_enabled=true;
+    for (unsigned k=0;k<2;k++) {
+        uint16_t ss=k ? 0xb800 : 0xc900; unsigned dropped=n->ipx.callbacks_dropped;
+        put16(e+10,0x9c86); put16(e+34,1); put16(e+4,0x30); put16(e+6,0x5000);
+        put16(e+36,0); put16(e+38,0x600); put16(e+40,100);
+        command(v,&f,4,0x2000); CHECK(e[8]==0xfe);
+        frame_tap(d,frame,64,&port); dosvm_network_service(v,1000);
+        struct v86_frame g=saved; g.tf.user_ss=ss; g.tf.user_esp=0x100;
+        if (!k) {
+            CHECK(dosvm_network_dispatch(v,&g)==1 && n->active && g.tf.cs==0x5000 && g.tf.eip==0x30 && g.tf.user_esp==0xfc);
+            CHECK(low[0][(ss<<4)+0xfc]==(DOSVM_IPX_RETURN&255) && low[0][(ss<<4)+0xff]==0xf0);
+            g.tf.cs=0xf000; g.tf.eip=DOSVM_IPX_RETURN+2; g.tf.user_esp=0x100;
+            CHECK(!dosvm_network_interrupt(v,&g,0xfc) && !n->active && g.tf.user_ss==ss);
+        } else {
+            CHECK(!dosvm_network_dispatch(v,&g) && !n->active && n->ipx.callbacks_dropped==dropped+1);
+        }
+        CHECK(e[8]==0 || e[8]==0xfe);
+    }
+    v->frame_pm=true; v->memory.umb_enabled=false;
     uint32_t value=0; CHECK(!virtual_port(v,0x300,1,false,&value,n)); CHECK(value==0x21);
     value=0x7f; CHECK(!virtual_port(v,0x30f,1,true,&value,n)); dosvm_ne2000_overflow(&n->ne);
     CHECK(v->monitor.pic[0].irr&8); CHECK(!virtual_port(v,0x31f,1,false,&value,n)); CHECK(!(v->monitor.pic[0].irr&8));
     CHECK(virtual_port(v,0x310,4,false,&value,n)==-V86_EPERM);
     uint32_t ticket=0; CHECK(guest_pin(n,0x9fff0,32,true,&ticket)==-EFAULT);
     CHECK(guest_pin(n,0xa0000,1,false,&ticket)==-EFAULT);
+    /* UMB buffers are accepted only while the VM publishes its arena */
+    CHECK(guest_pin(n,0xc9000,16,false,&ticket)==-EFAULT);
+    v->memory.umb_enabled=true;
+    CHECK(!guest_pin(n,0xc9000,16,false,&ticket)); guest_unpin(n,ticket);
+    CHECK(!guest_pin(n,0xdffff,1,false,&ticket)); guest_unpin(n,ticket);
+    CHECK(guest_pin(n,0xdffff,2,false,&ticket)==-EFAULT);    /* runs past E0000h */
+    CHECK(guest_pin(n,0xc8fff,2,false,&ticket)==-EFAULT);    /* starts below C9000h */
+    CHECK(guest_pin(n,0xb8000,16,false,&ticket)==-EFAULT);   /* video RAM */
+    v->memory.umb_enabled=false;
     CHECK(!guest_pin(n,0x5000,16,false,&ticket)); CHECK(guest_write(n,0x5000,"x",1)==-EFAULT); guest_unpin(n,ticket);
     /* Two adapters, actual type tap, physical TX copy, and a LAN peer reply. */
     uint8_t *send_ecb=low[0]+0x3000;

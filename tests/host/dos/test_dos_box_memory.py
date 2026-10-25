@@ -26,6 +26,8 @@ class DosBoxMemoryTests(unittest.TestCase):
         # *HIGH/DOSDATA lines (SFT, CDS, stacks, device headers in UMBs) would
         # break the DFV2 final bind (f3-56 Amendment 1).
         config = unified.fork_config(self.ref)
+        for forbidden in (b"DEVICEHIGH", b"FILESHIGH", b"LASTDRIVEHIGH", b"STACKSHIGH", b"DOSDATA=UMB", b"INSTALLHIGH"):
+            self.assertNotIn(forbidden, config)
         self.assertNotIn(b"HIGH", config)
         self.assertNotIn(b"DOSDATA", config)
 

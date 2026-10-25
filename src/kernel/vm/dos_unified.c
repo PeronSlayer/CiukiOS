@@ -68,7 +68,9 @@ void dos_unified_init(struct dos_unified *d,uint32_t generation,const struct dos
     if (backend) d->backend=*backend;
 }
 void dos_unified_upper(struct dos_unified *d,uint32_t first,uint32_t end) {
-    bool valid=first>=0xa0000 && first<end && end<=0xf0000;
+    /* The published UMB window of dosvm_umb.c: C9000h up to E0000h (or D0000h
+     * with the D000h EMS frame); the arena may be shorter, never wider. */
+    bool valid=first>=0xc9000 && first<end && end<=0xe0000;
     d->upper_first=valid ? first : 0; d->upper_end=valid ? end : 0;
 }
 

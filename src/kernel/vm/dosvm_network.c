@@ -69,10 +69,20 @@ static struct dosvm_network *network(const struct dosvm *v)
 }
 static bool live(const struct dosvm_network *n)
 { return n->allocated && n->vm && n->key.generation == n->vm->info.key.generation && n->vm->info.state < DOSVM_STOPPING; }
+/* Guest memory that stays resident through teardown: conventional RAM below
+ * A0000h or the VM's published UMB arena (the range the DFV2 lifecycle checks
+ * use). Video RAM, the EMS frame, ROM and pageable memory are refused. */
+static bool resident_range(struct dosvm *v, uint32_t linear, unsigned bytes)
+{
+    if (!bytes) return false;
+    if (linear < 0xa0000) return bytes <= 0xa0000 - linear;
+    uint32_t first, end; dosvm_umb_range(v, &first, &end);
+    return first && linear >= first && linear < end && bytes <= end - linear;
+}
 static int guest_pin(void *arg, uint32_t linear, unsigned bytes, bool write, uint32_t *ticket)
 {
     struct dosvm_network *n = arg;
-    if (!live(n) || !bytes || bytes > 1500 || linear >= 0xa0000 || bytes > 0xa0000 - linear ||
+    if (!live(n) || bytes > 1500 || !resident_range(n->vm, linear, bytes) ||
         !dosvm_range(n->vm, linear, bytes, write)) return -EFAULT;
     for (unsigned i = 0; i < NETWORK_PINS; i++) if (!n->pin[i].used) {
         n->pin[i] = (struct network_pin){linear, (uint16_t)bytes, true, write}; *ticket = i + 1; return 0;
@@ -155,9 +165,9 @@ static int guest_upcall(void *arg, const struct dosvm_ipx_upcall *call)
             !dosvm_range(v, ((uint32_t)call->cs << 4) + call->ip, 1, false)) return -EFAULT;
         uint16_t sp = (uint16_t)f->tf.user_esp - 4;
         uint32_t stack = (f->tf.user_ss << 4) + sp;
-        /* Dispatch may run with physical IF clear. Conventional frames stay
+        /* Dispatch may run with physical IF clear. Conventional and UMB frames stay
          * resident through teardown; never fault a pageable EMS/DPMI stack here. */
-        if (stack >= 0xa0000 || 4 > 0xa0000 - stack) return -EFAULT;
+        if (!resident_range(v, stack, 4)) return -EFAULT;
         uint16_t ret[2] = {DOSVM_IPX_RETURN,0xf000};
         if (dosvm_write(v, stack, ret, sizeof(ret))) return -EFAULT;
         n->saved = *f; n->saved_vif = v->monitor.vif; n->callback_pm = false;
