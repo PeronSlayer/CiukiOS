@@ -239,8 +239,12 @@ int supervisor_spawn(const char *path, const char *const argv[], const char *cwd
     int err=proc_prepare(&ps[0],out); if (err) return err;
     struct process *p=*out;
     unsigned slot=(unsigned)(p-ps);
-    stacks[slot]=(struct ua_extent){.base=CIUKI_MAIN_STACK_LIMIT-65536,.end=CIUKI_MAIN_STACK_LIMIT,.kind=UA_STACK};
-    memory[slot]=(struct uaddr){.heap_base=0x100000,.brk=0x100000,.as={.pages=20},.backing=20,.head=&stacks[slot]};
+    /* This controller model does not link uaddr.c; keep its singleton
+     * stack consistent with both the ordered list and the AVL index. */
+    stacks[slot]=(struct ua_extent){.base=CIUKI_MAIN_STACK_LIMIT-65536,.end=CIUKI_MAIN_STACK_LIMIT,
+        .kind=UA_STACK,.height=1};
+    memory[slot]=(struct uaddr){.heap_base=0x100000,.brk=0x100000,.as={.pages=20},.backing=20,
+        .head=&stacks[slot],.root=&stacks[slot],.extents=1};
     p->memory=&memory[slot]; proc_publish(p,CIUKI_SPAWN_NEW_GROUP);
     if (desktop) {
         if (strcmp(path,"/Programs/desktop") || strcmp(argv[0],"desktop") || argv[1] || cwd) abort();

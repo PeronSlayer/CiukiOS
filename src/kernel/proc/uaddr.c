@@ -592,15 +592,125 @@ int ua_init(struct uaddr *u, void *identity)
     return err;
 }
 
+/* Intrusive AVL index: no allocation, recursion, lock acquisition or service
+ * point. The cooperative UP kernel cannot switch an extent mutator in these
+ * bounded sections. Range walkers still own metadata pins across service.
+ * Research and ownership decisions: docs/validation/fx-uafind.md. */
+static unsigned extent_height(const struct ua_extent *e)
+{ return e ? e->height : 0; }
+
+static void extent_height_update(struct ua_extent *e)
+{
+    unsigned l=extent_height(e->left), r=extent_height(e->right);
+    e->height=1+(l>r?l:r);
+}
+
+static void extent_replace(struct uaddr *u, struct ua_extent *old, struct ua_extent *fresh)
+{
+    if (!old->parent) u->root=fresh;
+    else if (old->parent->left==old) old->parent->left=fresh;
+    else old->parent->right=fresh;
+    if (fresh) fresh->parent=old->parent;
+}
+
+static struct ua_extent *extent_rotate_left(struct uaddr *u, struct ua_extent *e)
+{
+    struct ua_extent *r=e->right;
+    extent_replace(u,e,r);
+    e->right=r->left;
+    if (e->right) e->right->parent=e;
+    r->left=e; e->parent=r;
+    extent_height_update(e); extent_height_update(r);
+    return r;
+}
+
+static struct ua_extent *extent_rotate_right(struct uaddr *u, struct ua_extent *e)
+{
+    struct ua_extent *l=e->left;
+    extent_replace(u,e,l);
+    e->left=l->right;
+    if (e->left) e->left->parent=e;
+    l->right=e; e->parent=l;
+    extent_height_update(e); extent_height_update(l);
+    return l;
+}
+
+static void extent_balance(struct uaddr *u, struct ua_extent *e)
+{
+    for (; e; e=e->parent) {
+        extent_height_update(e);
+        int balance=(int)extent_height(e->left)-(int)extent_height(e->right);
+        if (balance>1) {
+            if (extent_height(e->left->right)>extent_height(e->left->left))
+                extent_rotate_left(u,e->left);
+            e=extent_rotate_right(u,e);
+        } else if (balance < -1) {
+            if (extent_height(e->right->left)>extent_height(e->right->right))
+                extent_rotate_right(u,e->right);
+            e=extent_rotate_left(u,e);
+        }
+    }
+}
+
+static void extent_insert(struct uaddr *u, struct ua_extent *e)
+{
+    struct ua_extent **at=&u->root, *parent=0, *previous=0, *next=0;
+    while (*at) {
+        parent=*at;
+        if (e->base<parent->base) { next=parent; at=&parent->left; }
+        else { previous=parent; at=&parent->right; }
+    }
+    e->left=e->right=0; e->parent=parent; e->height=1;
+    e->previous=previous; e->next=next;
+    if (previous) previous->next=e; else u->head=e;
+    if (next) next->previous=e;
+    *at=e; u->last_hit=0;
+    extent_balance(u,parent);
+}
+
+static void extent_remove(struct uaddr *u, struct ua_extent *e)
+{
+    u->last_hit=0;
+    if (e->previous) e->previous->next=e->next; else u->head=e->next;
+    if (e->next) e->next->previous=e->previous;
+    struct ua_extent *rebalance=e->parent;
+    if (!e->left) extent_replace(u,e,e->right);
+    else if (!e->right) extent_replace(u,e,e->left);
+    else {
+        /* Move the successor node, never its payload: backing aliases and
+         * callers may retain extent pointers under a pin. */
+        struct ua_extent *n=e->next;
+        if (n->parent!=e) {
+            rebalance=n->parent;
+            extent_replace(u,n,n->right);
+            n->right=e->right; n->right->parent=n;
+        } else rebalance=n;
+        extent_replace(u,e,n);
+        n->left=e->left; n->left->parent=n;
+        extent_height_update(n);
+    }
+    extent_balance(u,rebalance);
+}
+
+struct ua_extent *ua_lower_bound(const struct uaddr *u, uint32_t va)
+{
+    struct ua_extent *next=0;
+    for (struct ua_extent *e=u->root; e;) {
+        if (va<e->base) { next=e; e=e->left; }
+        else if (va>=e->end) e=e->right;
+        else return e;
+    }
+    return next;
+}
+
 struct ua_extent *ua_find(const struct uaddr *u, uint32_t va)
 {
-    struct ua_pin walk; walk_hold(u,&walk);
-    struct ua_extent *found=0;
-    for (struct ua_extent *e = u->head; e && e->base <= va; e = e->next) {
-        walk_step();
-        if (va < e->end) { found=e; break; }
-    }
-    walk_drop(u,&walk); return found;
+    struct ua_extent *e=u->last_hit;
+    if (e && va>=e->base && va<e->end) return e;
+    e=ua_lower_bound(u,va);
+    if (e && va<e->base) e=0;
+    ((struct uaddr *)u)->last_hit=e;
+    return e;
 }
 
 static bool arena(const struct ua_extent *e)
@@ -610,12 +720,8 @@ static bool arena(const struct ua_extent *e)
 
 static bool vacant(const struct uaddr *u, uint32_t base, uint32_t end)
 {
-    struct ua_pin walk; walk_hold(u,&walk); bool free=true;
-    for (const struct ua_extent *e = u->head; e; e = e->next) {
-        walk_step();
-        if (base < e->end && end > e->base) { free=false; break; }
-    }
-    walk_drop(u,&walk); return free;
+    const struct ua_extent *e=ua_lower_bound(u,base);
+    return !e || e->base>=end;
 }
 
 static int map_area(struct uaddr *u, uint32_t base, uint32_t bytes, uint32_t prot,
@@ -643,11 +749,7 @@ static int map_area(struct uaddr *u, uint32_t base, uint32_t bytes, uint32_t pro
         return -ENOMEM;
     *e = (struct ua_extent){ .base = base, .end = end, .prot = PROT_NONE, .maximum = maximum,
         .kind = kind, .owner = owner, .generation = ++next_generation, .preparing = true };
-    struct ua_pin walk; walk_hold(u,&walk);
-    struct ua_extent **at = &u->head;
-    while (*at && (*at)->base < base) { walk_step(); at = &(*at)->next; }
-    e->next = *at; *at = e;
-    walk_drop(u,&walk);
+    extent_insert(u,e);
     u->extents++;
     if (in_arena) u->arena_extents++;
     uint64_t start = cpu_path_clock ? cpu_path_clock() : 0;
@@ -659,13 +761,9 @@ static int map_area(struct uaddr *u, uint32_t base, uint32_t bytes, uint32_t pro
     if (!err && prot) err=reserve_pages(u,base,end);
     if (err) {
         /* Other disjoint mappings may have changed the list while yielded. */
-        walk_hold(u,&walk);
-        at = &u->head;
-        while (*at != e) { walk_step(); at = &(*at)->next; }
-        *at = e->next; u->extents--;
+        extent_remove(u,e); u->extents--;
         if (in_arena) u->arena_extents--;
         object_detach(e); kfree(e);
-        walk_drop(u,&walk);
         return err;
     }
     protect_pages(u, base, end, prot);
@@ -728,7 +826,7 @@ static bool pinned(const struct uaddr *u, uint32_t base, uint32_t end)
 {
     if (wait_metadata(u, base, end)) return true;
     struct ua_pin walk; walk_hold(u,&walk); bool busy=false;
-    for (const struct ua_extent *e = u->head; e; e = e->next) {
+    for (const struct ua_extent *e = ua_lower_bound(u,base); e && e->base<end; e = e->next) {
         walk_step();
         if ((e->preparing || (e->backing && e->backing->busy)) && base < e->end && end > e->base) { busy=true; break; }
     }
@@ -750,7 +848,7 @@ static int prepare_split(struct uaddr *u, uint32_t base, uint32_t end, bool remo
     int final = (int)u->arena_extents + (l && arena(a)) + (r && arena(b));
     if (removing) {
         struct ua_pin walk; walk_hold(u,&walk);
-        for (struct ua_extent *e = u->head; e; e = e->next) {
+        for (struct ua_extent *e = ua_lower_bound(u,base); e && e->base<end; e = e->next) {
             walk_step();
             if (arena(e) && e->base < end && e->end > base) final--;
         }
@@ -779,7 +877,7 @@ static void split(struct uaddr *u, uint32_t at, struct ua_extent *fresh)
     fresh->base = at;
     if (fresh->backing) object_attach(fresh,fresh->backing);
     e->end = at;
-    e->next = fresh;
+    extent_insert(u,fresh);
     u->extents++;
     if (arena(fresh))
         u->arena_extents++;
@@ -788,27 +886,24 @@ static void split(struct uaddr *u, uint32_t at, struct ua_extent *fresh)
 static void remove_range(struct uaddr *u, uint32_t base, uint32_t end)
 {
     struct ua_pin walk; walk_hold(u,&walk);
-    struct ua_extent **at = &u->head;
-    while (*at) {
+    struct ua_extent *e=ua_lower_bound(u,base);
+    while (e && e->base<end) {
         walk_step();
-        struct ua_extent *e = *at;
+        struct ua_extent *next=e->next;
         if (e->base >= base && e->end <= end) {
             if (ledger_promise) ledger_promise(e->kind==UA_SHARED ? MM_USER_SHARED : MM_USER_PRIVATE,-(int32_t)((e->end-e->base)/PAGE_SIZE),0);
             ww_cancel(u->identity, e->generation, e->base, e->end);
             e->preparing = true;
             free_pages(u, e->base, e->end, false);
-            at = &u->head;
-            while (*at != e) { walk_step(); at = &(*at)->next; }
             if (e->shared.object) e->shared.release(e->shared.object);
             object_detach(e);
-            *at = e->next;
+            extent_remove(u,e);
             u->extents--;
             if (arena(e))
                 u->arena_extents--;
             kfree(e);
-        } else {
-            at = &e->next;
         }
+        e=next;
     }
     walk_drop(u,&walk);
 }
@@ -826,7 +921,7 @@ int ua_munmap(struct uaddr *u, uint32_t base, uint32_t bytes)
     if (pinned(u, base, end))
         return -EBUSY;
     struct ua_pin walk; walk_hold(u,&walk); bool protected=false;
-    for (struct ua_extent *e = u->head; e; e = e->next) {
+    for (struct ua_extent *e = ua_lower_bound(u,base); e && e->base<end; e = e->next) {
         walk_step();
         if (base < e->end && end > e->base && protected_kind(e)) { protected=true; break; }
     }
@@ -880,7 +975,7 @@ int ua_mprotect(struct uaddr *u, uint32_t base, uint32_t bytes, uint32_t prot)
     split(u, base, l);
     split(u, end, r);
     protect_pages(u, base, end, prot);
-    for (struct ua_extent *e = u->head; e; e = e->next) {
+    for (struct ua_extent *e = ua_lower_bound(u,base); e && e->base<end; e = e->next) {
         walk_step();
         if (e->base >= base && e->end <= end) e->prot = prot;
     }
@@ -1092,7 +1187,7 @@ void ua_backing_identity(struct uaddr *u,uint32_t base,uint32_t bytes,
                           struct vfs_file_identity *file,uint64_t generation,uint64_t page)
 {
     struct ua_pin walk; walk_hold(u,&walk);
-    for (struct ua_extent *e=u->head;e;e=e->next) {
+    for (struct ua_extent *e=ua_lower_bound(u,base);e && e->base<base+bytes;e=e->next) {
         walk_step();
         if (e->base<base || e->base>=base+bytes || !e->backing) continue;
         e->backing->kind=file?MM_BACKING_FILE:MM_BACKING_SHARED;
@@ -1378,9 +1473,9 @@ void ua_destroy(struct uaddr *u)
  * prepared pin already excludes unmap, protection and alias changes and keeps
  * its pages resident (private when pinned for write), so the copy needs no
  * second pin. A second pin would wait for a peer thread's metadata walk, and
- * under a preemption hold that wait is refused with EBUSY: since f0-44 every
- * walk (even ua_find) holds a whole-space mutation pin across its service
- * points, so a peer preempted there made read()/stat() fail with EBUSY. */
+ * under a preemption hold that wait is refused with EBUSY. Long metadata
+ * walks hold a whole-space mutation pin across their service points, so a
+ * peer preempted there can make read()/stat() fail with EBUSY. */
 static bool own_pin_covers(const struct uaddr *u, uint32_t base, uint32_t bytes, bool write)
 {
     uint32_t end = base + bytes; /* ua_range bounded it below the stack limit */
@@ -1455,9 +1550,11 @@ int32_t ua_map_shared(struct uaddr *u, uint32_t bytes,
 /* The Win32 layer owns allocation identity; this backend reuses the native
  * eager page accounting and rollback. No metadata/backing is published until
  * every allocation succeeds. Existing PTE_NEW bits are cleared at publication. */
-static void w32_coalesce(struct uaddr *u)
+static void w32_coalesce(struct uaddr *u, uint32_t base, uint32_t end)
 {
-    for (struct ua_extent *e = u->head; e && e->next;) {
+    struct ua_extent *e=ua_lower_bound(u,base);
+    if (e && e->previous) e=e->previous;
+    for (; e && e->next && e->base<=end;) {
         walk_step();
         struct ua_extent *n = e->next;
         if (e->kind == UA_W32 && n->kind == UA_W32 && e->end == n->base &&
@@ -1466,7 +1563,7 @@ static void w32_coalesce(struct uaddr *u)
             e->w32_locked == n->w32_locked && e->w32_type == n->w32_type &&
             e->generation == n->generation && e->backing==n->backing &&
             e->page_index+(e->end-e->base)/PAGE_SIZE==n->page_index) {
-            e->end = n->end; e->next = n->next;
+            extent_remove(u,n); e->end = n->end;
             object_detach(n); u->extents--; kfree(n);
         } else e = n;
     }
@@ -1499,7 +1596,7 @@ int ua_w32_change(struct uaddr *u, uint32_t base, uint32_t bytes,
     if (operation == W32_VM_ALLOC) err = reserve_pages(u, base, end);
     if (err) { ua_unpin(u, &transaction); kfree(l); kfree(r); return err; }
     split(u, base, l); split(u, end, r);
-    for (struct ua_extent *e = u->head; e; e = e->next) {
+    for (struct ua_extent *e = ua_lower_bound(u,base); e && e->base<end; e = e->next) {
         walk_step();
         if (e->base < base || e->end > end) continue;
         if (operation == W32_VM_FREE) {
@@ -1518,7 +1615,7 @@ int ua_w32_change(struct uaddr *u, uint32_t base, uint32_t bytes,
             protect_pages(u, e->base, e->end, e->prot);
         }
     }
-    w32_coalesce(u);
+    w32_coalesce(u,base,end);
     ua_unpin(u, &transaction);
     return 0;
 }

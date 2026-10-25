@@ -79,7 +79,11 @@ class KernelLatencyTests(unittest.TestCase):
                                     'for (uint32_t va = base; va < end; va += PAGE_SIZE) { charge(1000);')
             source = source.replace('while (j < 1024 && !pt[j]) j++;',
                                     'while (j < 1024 && !pt[j]) { charge(250); j++; }')
-            source = source.replace('walk_step();', 'charge(1000); walk_step();')
+            tree_loop = 'for (struct ua_extent *e=u->root; e;) {'
+            self.assertEqual(source.count(tree_loop), 1)
+            source = source.replace(tree_loop, tree_loop + ' charge(1000); tree_visits++;')
+            self.assertIn('walk_step();', source)
+            source = source.replace('walk_step();', 'charge(1000); range_visits++; walk_step();')
             (temp / 'bounded_uaddr.inc').write_text(source)
             binary = temp / 'memory'
             subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',

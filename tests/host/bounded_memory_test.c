@@ -14,6 +14,7 @@ static uint8_t freed[786432+1024];
 static uint64_t total,work_span,maximum;
 static bool points;
 static unsigned releases;
+static unsigned tree_visits,range_visits,service_points;
 static void (*on_point)(void);
 static void charge(uint64_t ns) { total+=ns; work_span+=ns; }
 static void boundary(void) { if (work_span>maximum) maximum=work_span; work_span=0; }
@@ -26,7 +27,7 @@ static uint32_t read_cr3(void) { return 0; }
 static void write_cr3(uint32_t p) { (void)p; }
 static void invlpg(uint32_t p) { (void)p; }
 void task_sleep_ms(uint32_t ms) { (void)ms; abort(); }
-void kpreempt_point(void) { if (points) { charge(200); boundary(); if (on_point) on_point(); } }
+void kpreempt_point(void) { if (points) { service_points++; charge(200); boundary(); if (on_point) on_point(); } }
 void pmm_free(uint32_t pa) { unsigned p=pa/4096; CHECK(p<sizeof(freed) && !freed[p]); freed[p]=1; releases++; charge(6000); }
 uint32_t pmm_alloc(void) { abort(); }
 void *kmalloc(size_t n) { return malloc(n); }
@@ -59,6 +60,23 @@ static struct uaddr setup(unsigned pages,bool own)
     }
     g_user_mappings=pages; return u;
 }
+/* Validate the entire architectural-size fixture independently of lookup:
+ * the indexed helper must maintain both orderings and every AVL invariant. */
+static unsigned check_tree(struct ua_extent *e,struct ua_extent *parent,
+                           struct ua_extent *nodes,unsigned *count)
+{
+    if (!e) return 0;
+    CHECK(e->parent==parent);
+    unsigned left=check_tree(e->left,e,nodes,count);
+    unsigned i=(*count)++;
+    CHECK(e==&nodes[i] && e->base==i*PAGE_SIZE && e->end==(i+1)*PAGE_SIZE);
+    CHECK(e->previous==(i ? &nodes[i-1] : 0));
+    CHECK(e->next==(i+1<786432 ? &nodes[i+1] : 0));
+    unsigned right=check_tree(e->right,e,nodes,count);
+    CHECK(left<=right+1 && right<=left+1);
+    CHECK(e->height==1+(left>right ? left : right));
+    return e->height;
+}
 int main(void)
 {
     /* Every PDE and PTE, including empty tables at the high end; the frame
@@ -90,29 +108,64 @@ int main(void)
     /* Win32 can reserve an extent per VA page; there is no 256-extent
      * cap outside the native mmap arena. Exercise that architectural limit. */
     struct ua_extent *nodes=calloc(786432,sizeof(*nodes)); CHECK(nodes);
-    struct uaddr u={.head=nodes};
+    struct uaddr u={0};
     for (unsigned i=0;i<786432;i++) {
-        nodes[i]=(struct ua_extent){.base=i*PAGE_SIZE,.end=(i+1)*PAGE_SIZE,
-            .next=i+1<786432 ? &nodes[i+1] : 0};
+        nodes[i]=(struct ua_extent){.base=i*PAGE_SIZE,.end=(i+1)*PAGE_SIZE};
+        extent_insert(&u,&nodes[i]); u.extents++;
     }
+    unsigned checked=0,height=check_tree(u.root,0,nodes,&checked);
+    CHECK(checked==u.extents && checked==786432 && u.head==nodes && !u.last_hit);
+    unsigned logarithm=0;
+    for (unsigned n=u.extents;n;n>>=1) logarithm++;
+    CHECK(height<=2*logarithm);
+    /* Point searches no longer yield: charge each production tree visit,
+     * force cold lookups, and bound the worst depth over ALL mapped pages. */
+    unsigned deepest=0;
+    uint64_t worst_lookup=0;
+    points=true; service_points=0;
+    for (unsigned i=0;i<786432;i++) {
+        u.last_hit=0; tree_visits=range_visits=0; total=work_span=maximum=0;
+        CHECK(ua_find(&u,nodes[i].end-1)==&nodes[i]);
+        boundary();
+        CHECK(tree_visits && tree_visits<=height && !range_visits && !u.pins);
+        CHECK(maximum==tree_visits*1000u && maximum<=2000000);
+        if (tree_visits>deepest) deepest=tree_visits;
+        if (maximum>worst_lookup) worst_lookup=maximum;
+    }
+    CHECK(deepest==height && !service_points);
+    tree_visits=0; total=work_span=maximum=0;
+    CHECK(ua_find(&u,CIUKI_MAIN_STACK_LIMIT-1)==&nodes[786431]);
+    CHECK(!tree_visits && !total && !service_points && !u.pins);
+    CHECK(!ua_find(&u,CIUKI_MAIN_STACK_LIMIT));
+    CHECK(tree_visits && tree_visits<=height && !u.last_hit && !service_points && !u.pins);
+    tree_visits=0;
+    CHECK(vacant(&u,CIUKI_MAIN_STACK_LIMIT,CIUKI_MAIN_STACK_LIMIT+PAGE_SIZE));
+    CHECK(tree_visits && tree_visits<=height && !service_points && !u.pins);
+    CHECK(!vacant(&u,CIUKI_MAIN_STACK_LIMIT-PAGE_SIZE,CIUKI_MAIN_STACK_LIMIT));
+    printf("fx-uafind point lookups: records=786432 cold_hits=786432 max_depth=%u height=%u log_bound=%u span=%lluns cache_visits=0 misses/vacancy=bounded service_points=0 PASS\n",
+        deepest,height,2*logarithm,(unsigned long long)worst_lookup);
+    /* Range walks still need service points and pins; retain the old
+     * worst-case span and <=10% overhead checks across the complete list. */
     for (unsigned site=0;site<2;site++) {
         uint64_t before=0,oldtotal=0;
         for (unsigned enabled=0;enabled<2;enabled++) {
-            total=work_span=maximum=0; points=enabled;
-            if (!site) CHECK(ua_find(&u,CIUKI_MAIN_STACK_LIMIT-1)==&nodes[786431]);
-            else CHECK(vacant(&u,CIUKI_MAIN_STACK_LIMIT,CIUKI_MAIN_STACK_LIMIT+PAGE_SIZE));
-            boundary(); CHECK(!u.pins);
+            total=work_span=maximum=0; points=enabled; walk_work=0;
+            tree_visits=range_visits=service_points=0;
+            if (!site) CHECK(!pinned(&u,0,CIUKI_MAIN_STACK_LIMIT));
+            else CHECK(!first_fit(&u,PAGE_SIZE));
+            boundary(); CHECK(!u.pins && range_visits==786432 && tree_visits<=height);
+            CHECK(service_points==(enabled ? 786432/128 : 0));
             if (!enabled) { before=maximum;oldtotal=total; }
             else {
                 CHECK(maximum<=2000000 && total<=oldtotal*110/100);
-                printf("F0-44 extent walk site=%u records=786432 span=%llu->%lluns work=%llu->%lluns PASS\n",site,
+                printf("F0-44 extent range walk site=%u records=786432 visits=%u service_points=%u span=%llu->%lluns work=%llu->%lluns PASS\n",site,range_visits,service_points,
                     (unsigned long long)before,(unsigned long long)maximum,(unsigned long long)oldtotal,(unsigned long long)total);
             }
         }
     }
-    nodes[255].next=0; walking_owner=&u; points=true;
+    walking_owner=&u; points=true; walk_work=0;
     on_point=mapping_during_walk;
-    CHECK(ua_find(&u,255*PAGE_SIZE)==&nodes[255] && !on_point && !u.pins);
+    CHECK(!pinned(&u,0,CIUKI_MAIN_STACK_LIMIT) && !on_point && !u.pins);
     puts("F0-44 metadata service: concurrent insertion refused, no leaked walk pin PASS");
     free(nodes);
     /* New M2 reservation/slot lookup/split/teardown walks, with actual

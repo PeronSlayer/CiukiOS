@@ -25,6 +25,9 @@ struct ua_extent {
     bool w32_locked;
     enum ua_kind kind;
     struct ua_extent *next;
+    /* Internal AVL index and ordered-list predecessor; never ABI records. */
+    struct ua_extent *previous, *left, *right, *parent;
+    uint8_t height;
     struct ua_shared shared;
     struct memory_object *backing;
     uint32_t page_index;
@@ -41,6 +44,7 @@ struct ua_pin {
 struct uaddr {
     struct aspace as;
     struct ua_extent *head;
+    struct ua_extent *root, *last_hit;
     struct ua_pin *pins;
     uint32_t heap_base, brk, extents, arena_extents, backing;
     uint32_t peak_backing;
@@ -75,6 +79,8 @@ int32_t ua_brk(struct uaddr *u, uint32_t end);
 /* Internal release after a thread is stopped; never bypasses I/O pins. */
 void ua_release_owner(struct uaddr *u, uint32_t owner);
 struct ua_extent *ua_find(const struct uaddr *u, uint32_t address);
+/* Containing extent, or the first following extent when address is a hole. */
+struct ua_extent *ua_lower_bound(const struct uaddr *u, uint32_t address);
 /* Backing ownership, not access protection; inspect while the extent is pinned. */
 bool ua_extent_private(const struct ua_extent *extent);
 bool ua_range(const struct uaddr *u, uint32_t address, uint32_t bytes, uint32_t prot);

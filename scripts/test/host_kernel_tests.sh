@@ -559,6 +559,17 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     "$root/tests/host/proc/signal_legacy.c" "$root/tests/host/proc/desktop_legacy.c" -o "$out/proc_test"
 "$out/proc_test"
 
+# fx-uafind: real extent mutations/index invariants and user-copy/fault costs.
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/proc/uaddr_index_test.c" \
+    "$root/tests/host/proc/signal_legacy.c" "$root/tests/host/proc/desktop_legacy.c" -o "$out/uaddr_index_test"
+"$out/uaddr_index_test"
+# Timing uses an optimized unsanitized executable for comparable host costs.
+clang -std=c17 -O2 -g -Wall -Wextra -Werror \
+    -I "$root/src/kernel/include" "$root/tests/host/proc/uaddr_bench.c" \
+    "$root/tests/host/proc/signal_legacy.c" "$root/tests/host/proc/desktop_legacy.c" -o "$out/uaddr_bench"
+"$out/uaddr_bench"
+
 # f2-39: production launch markers and ELF batches, fake monotonic clock/I/O.
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/proc/launch_test.c" \
