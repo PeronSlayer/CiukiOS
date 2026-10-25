@@ -7,3 +7,7 @@
 2. Batching for the Pentium III: build command streams per frame with minimal copies; texture residency through render3d's heap with LRU; vertex transform/clip stays on the CPU (contract §8.1).
 3. Host tests with the render3d fake engine/scalar backend: Quake-like replay through the hardware path matches the software golden within tolerances; fallback per draw; context loss/mode change; process death; performance model numbers (submission cost per frame) for the replay. Keep all existing opengl32 tests green.
 Report to build/codex/f7-09-report.md. Leave changes uncommitted.
+
+## Lead amendment 1 (2026-10-26 00:30): review findings
+
+Your work is committed as 1752b3507; the lead approved the backend.h adapter contract (decision 1). Fix the three P2 of the Codex review /home/peronslayer/Desktop/CiukiOS/build/lead-scratch/f7-09-review.md: (1) GPU swap only when the loaded color attachment is back_color, else synchronize and present on the CPU; (2) invalidate hardware attachment coherence before the swap's CPU copy (e.g. gl_hw_software(c)) so a later front draw/readback cannot resurrect pre-swap pixels; (3) reject minimum-encoder nearest-sampling draws whose interpolation can select a different texel than the software path (boundary case in the review) until native sampling equivalence is established. Each with a test that fails before and passes after. Decisions 2 and 3 of your report (f7-03 capability alignment, presentation lease f7-04) will be a separate integration directive after both branches merge. Leave changes uncommitted.

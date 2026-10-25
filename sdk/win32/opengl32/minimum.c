@@ -49,11 +49,20 @@ int gl_hw_minimum_encode(const struct gl_hw_command *g, unsigned target,
                (unsigned)v->color[1] << 8 | (unsigned)v->color[2];
     if (out->flags & R3D_TEXTURED) {
       if (v->qw[0] < 4096 || v->qw[0] > 268435456 || (v->qw[0] & 15)) return -1;
-      int64_t u = (int64_t)v->uv[0][0] * 1048576 / v->qw[0];
-      int64_t t = (int64_t)v->uv[0][1] * 1048576 / v->qw[0];
+      /* Native interpolation rounds; software planes truncate. Even a sub-Q16
+       * difference can choose a different nearest texel. Until equivalence is
+       * qualified, admit only constant, exactly representable sampling. */
+      const struct sw_vertex *first = &g->vertices[i - i % 3];
+      if (v->qw[0] != first->qw[0] || v->uv[0][0] != first->uv[0][0] ||
+          v->uv[0][1] != first->uv[0][1]) return -1;
+      int64_t uq = (int64_t)v->uv[0][0] * 1048576;
+      int64_t tq = (int64_t)v->uv[0][1] * 1048576;
+      if (uq % v->qw[0] || tq % v->qw[0]) return -1;
+      int64_t u = uq / v->qw[0], t = tq / v->qw[0];
       if (u < 0 || u > 65536 || t < 0 || t > 65536) return -1;
       r->u = (int32_t)u; r->v = (int32_t)t;
       r->rhw = (unsigned)v->qw[0] / 16;
+      if ((u * r->rhw) % 65536 || (t * r->rhw) % 65536) return -1;
     }
   }
   out->count = g->count;

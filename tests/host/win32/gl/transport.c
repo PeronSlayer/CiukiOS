@@ -14,6 +14,7 @@ unsigned gl_test_lease, gl_test_releases, gl_test_damage, gl_test_failure;
 unsigned gl_test_generation=12, gl_test_token=11;
 unsigned gl_test_gamma_presenters, gl_test_gamma_updates, gl_test_gamma_serial;
 unsigned gl_test_gamma_failure, gl_test_frames;
+unsigned *gl_test_frame_pixel;
 uint16_t gl_test_gamma_ramp[768];
 #ifndef GL_TEST_NO_GAMMA
 DWORD W32API w32_gdi_gamma_presenter(BOOL on) {
@@ -62,6 +63,7 @@ int32_t gl_host_display_frame(struct ciuki_w32_display_args *a, const void *p) {
     return 0;
   }
   assert(a->action == W32_DISPLAY_FRAME);
+  if (gl_test_frame_pixel) memcpy(gl_test_frame_pixel, p, sizeof(*gl_test_frame_pixel));
   gl_test_frames++;
   a->result = !gl_test_failure;
   return gl_test_failure ? -1 : 0;

@@ -231,11 +231,47 @@ static void texture_scene(void) {
   glReadPixels(0,0,32,32,GL_RGBA,GL_UNSIGNED_BYTE,result);
   assert(glGetError()==GL_NO_ERROR);
 }
+static void swap_front_tests(unsigned popup) {
+  HGLRC rc; HDC dc=make(&rc);
+  extern HDC gl_test_dc;
+  extern unsigned gl_test_width,gl_test_height,gl_test_popup,gl_test_frames,*gl_test_frame_pixel;
+  extern pthread_t gl_test_owner;
+  gl_test_dc=dc; gl_test_owner=pthread_self();
+  gl_test_width=gl_test_height=32; gl_test_popup=popup;
+  unsigned frame_pixel=0;
+  gl_test_frame_pixel=&frame_pixel;
+  glClearColor(1,0,0,1); glClear(GL_COLOR_BUFFER_BIT);
+  glDrawBuffer(GL_FRONT);
+  glClearColor(0,0,1,1); glClear(GL_COLOR_BUFFER_BIT);
+  glColor3f(0,0,1); triangle(0);
+  unsigned presented=presents, frames=gl_test_frames;
+  assert(SwapBuffers(dc));
+  /* Swap always presents back, even while the GPU attachment is front. */
+  assert(presents==presented);
+  if (popup) assert(gl_test_frames==frames+1 && frame_pixel==0xffff0000);
+  else assert(result[0]==0xffff0000);
+  /* No draw-buffer transition: the next front draw must reload swapped RAM. */
+  unsigned before=submissions;
+  glColor3f(0,1,0);
+  glPushMatrix(); glScalef(.5f,.5f,1); triangle(0); glPopMatrix();
+  glReadBuffer(GL_FRONT);
+  unsigned char pixels[32*32*4];
+  glReadPixels(0,0,32,32,GL_RGBA,GL_UNSIGNED_BYTE,pixels);
+  assert(submissions>before && glGetError()==GL_NO_ERROR);
+  assert(pixels[0]==255 && pixels[1]==0 && pixels[2]==0);
+  unsigned center=(16*32+16)*4;
+  assert(pixels[center]==0 && pixels[center+1]==255 && pixels[center+2]==0);
+  end(dc,rc); gl_test_dc=0; gl_test_popup=0; gl_test_frame_pixel=0;
+  puts(popup ? "PASS front-selected fullscreen swap: back presentation and coherent front redraw" :
+               "PASS front-selected windowed swap: back presentation and coherent front redraw");
+}
 void gl_hardware_tests(void) {
   HGLRC rc; HDC dc = make(&rc);
   scene(); unsigned golden = checksum(); end(dc,rc);
   dc=make(&rc); texture_scene(); unsigned texture_golden=checksum(); end(dc,rc);
   enabled=1;
+  swap_front_tests(0);
+  swap_front_tests(1);
   for (unsigned variant=0; variant<5; variant++) {
     dc=make(&rc);
     unsigned before = submissions;

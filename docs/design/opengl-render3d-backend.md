@@ -71,3 +71,24 @@ operation; the host provider tests the user boundary only.
 Host models are evidence for this adapter, its state snapshots and ordering.
 They do not qualify the missing kernel transport, broaden hardware admission,
 or establish silicon precision, performance, probe qualification or scanout.
+
+Lead amendment 1 research checked 2026-10-26:
+[SwapBuffers](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-swapbuffers)
+operates on the window's front/back buffers independently of GL draw selection.
+[OpenGL 1.1](https://registry.khronos.org/OpenGL/specs/gl/glspec11.pdf),
+sections 3.8.1, 4.2.1, 4.3.2 and 5.5, defines nearest texel selection,
+independent draw/read selection and ordered completion. Repository inspection
+found that GPU presentation used the current loaded draw attachment, and swap's
+CPU back-to-front copy did not invalidate a previously loaded front attachment.
+Restrict GPU swap to the loaded back attachment, synchronize other targets for
+CPU presentation, and invalidate coherence before copying back to front.
+
+The software plane interpolator truncates while the native scalar interpolator
+rounds. For U values 32767/32771/32771 on the triangle (0,0)/(8,0)/(0,8),
+the first sample selects opposite columns of a two-column texture. A coordinate
+error below one Q16 unit can therefore cause a full-channel error. Until native
+sampling equivalence is established, the minimum encoder admits textured
+triangles only with constant UV and reciprocal-W and lossless Q20/Q16 conversion
+and native premultiplication. All other textured triangles fall back per draw;
+the broad adapter's capability contract is unchanged. This conservative subset
+avoids a per-pixel admission scan and retains exact constant-coordinate draws.

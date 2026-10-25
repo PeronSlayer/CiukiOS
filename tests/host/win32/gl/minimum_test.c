@@ -37,6 +37,10 @@ int main(void) {
       command.vertices[0]=vertex(0,0,1000,0xffff8040,0,0);
       command.vertices[1]=vertex(8,0,1100,0xff4080ff,65536,0);
       command.vertices[2]=vertex(0,8,1200,0xff80ff40,0,65536);
+      if (textured) for (unsigned i=0;i<3;i++) {
+        command.vertices[i].uv[0][0]=16384;
+        command.vertices[i].uv[0][1]=49152;
+      }
       if (reverse) { struct sw_vertex v=command.vertices[1]; command.vertices[1]=command.vertices[2]; command.vertices[2]=v; }
       assert(!gl_hw_minimum_encode(&command,1,2,0,&request));
       assert(request.vertices[0].x==0 && request.vertices[0].y==8*65536);
@@ -59,6 +63,41 @@ int main(void) {
       }
       assert(coverage==28);
     }
+  /* A sub-Q16 interpolation error can cross an entire texel boundary. */
+  command.vertices[0]=vertex(0,0,1000,0xffffffff,32767,0);
+  command.vertices[1]=vertex(8,0,1000,0xffffffff,32771,0);
+  command.vertices[2]=vertex(0,8,1000,0xffffffff,32771,0);
+  /* Independently demonstrate the rejected native request's full-channel
+   * error, rather than relying only on the encoder's admission decision. */
+  request=(struct render3d_request){.target=1,.depth=2,.texture=3,.count=3,
+    .flags=R3D_TEXTURED|R3D_DEPTH_TEST|R3D_DEPTH_WRITE};
+  for (unsigned i=0;i<3;i++) request.vertices[i]=(struct render3d_vertex){
+    .x=command.vertices[i].x*4096,.y=(128-command.vertices[i].y)*4096,
+    .z=1000,.rhw=65536,.color=UINT32_MAX,.u=command.vertices[i].uv[0][0]};
+  memset(color,0,sizeof(color)); memset(native,0,sizeof(native));
+  memset(depth,255,sizeof(depth)); memset(native_depth,255,sizeof(native_depth));
+  struct render3d_job boundary={0};
+  while (!render3d_scalar_slice(&request,resources,&boundary,0)) {}
+  sw_triangle(&command.state,command.vertices,command.vertices+1,command.vertices+2);
+  assert(color[7*8]==0xffff0000 && native[7*8]==0xff00ff00);
+  assert(gl_hw_minimum_encode(&command,1,2,0,&request));
+  /* Constant coordinates survive only when native conversion is lossless. */
+  for (unsigned i=0;i<3;i++) command.vertices[i].uv[0][0]=32767;
+  assert(!gl_hw_minimum_encode(&command,1,2,0,&request));
+  for (unsigned i=0;i<3;i++) command.vertices[i].qw[0]=1048592;
+  assert(gl_hw_minimum_encode(&command,1,2,0,&request));
+  for (unsigned i=0;i<3;i++) command.vertices[i].qw[0]=1048576;
+  command.vertices[2].qw[0]=524288;
+  assert(gl_hw_minimum_encode(&command,1,2,0,&request));
+  command.vertices[2].qw[0]=1048576;
+  for (unsigned i=0;i<3;i++) {
+    command.vertices[i].qw[0]=524288;
+    command.vertices[i].uv[0][0]=16384;
+  }
+  assert(!gl_hw_minimum_encode(&command,1,2,0,&request));
+  command.vertices[2].uv[0][1]=1;
+  assert(gl_hw_minimum_encode(&command,1,2,0,&request));
+  command.vertices[2].uv[0][1]=0;
   /* Refuse every unexpressible state rather than silently omit it. */
   command.state.blend=1; assert(gl_hw_minimum_encode(&command,1,2,0,&request)); command.state.blend=0;
   command.state.depth_func=GL_LEQUAL; assert(gl_hw_minimum_encode(&command,1,2,0,&request)); command.state.depth_func=GL_LESS;
@@ -71,5 +110,5 @@ int main(void) {
   command.clear_color=0x12345678; command.clear_depth=65535;
   assert(!gl_hw_minimum_encode(&command,1,2,4,&request));
   assert(request.flags==(R3D_CLEAR_COLOR|R3D_CLEAR_DEPTH|R3D_COPY) && request.copy_target==4);
-  printf("PASS render3d minimum: %u independent origin/coverage/channel/depth comparisons, strict state rejection, clear and offscreen copy\n",comparisons);
+  printf("PASS render3d minimum: %u independent origin/coverage/channel/depth comparisons, nearest boundary rejection (255-channel error), strict state rejection, clear and offscreen copy\n",comparisons);
 }

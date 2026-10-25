@@ -315,6 +315,9 @@ int gl_hw_present(struct gl_context *c, unsigned token, unsigned generation,
                    unsigned width, unsigned height, unsigned bpp, unsigned pitch) {
   struct gl_hw_context *h = c->hardware;
   if (!h || !h->context || !h->loaded || !h->driver->present) return 0;
+  /* Draw selection is independent of swap's back-buffer source. Selection
+   * changes invalidate loaded, so a loaded target always matches sw.color. */
+  if (c->sw.color != c->back_color) return 0;
   gl_hw_flush(c);
   if (!h->context) return 0;
   if (h->driver->finish(h->context)) { fail(h); return 0; }
