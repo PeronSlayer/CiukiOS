@@ -433,6 +433,43 @@ class NormalBootRunnerTests(unittest.TestCase):
         self.assertEqual(result['image']['sha256_after'], result['image']['sha256'])
         self.assertTrue(result['cleanup']['clean'])
 
+    def test_case_budget_starts_at_the_loader_source_selection(self):
+        # QEMU fb12caae: the 3 s menu cost ~270 host s under TCG icount and the
+        # launch-based budget expired 7.9 s after the desktop started. Here the
+        # menu outlasts the whole case timeout and the boot still passes.
+        menu = GOOD_SERIAL.index('L:SELECT_SOURCE=menu\r')
+        result, _ = self.run_normal(GOOD_SERIAL[:menu], delayed_records=GOOD_SERIAL[menu:], delay=2.5,
+                                    case=normal_case(timeout=2))
+        self.assertEqual(result['outcome'], 'pass', result['reason'])
+        self.assertFalse(result['timeout']['occurred'])
+        self.assertEqual({k: result['timeout'][k] for k in ('seconds', 'basis', 'loader_seconds', 'phase')},
+                         {'seconds': 2, 'basis': 'loader_source', 'loader_seconds': 600, 'phase': 'system'})
+        boot = result['normal_boot']
+        self.assertGreaterEqual(boot['loader_source_after_seconds'], 2.5)
+        self.assertEqual(boot['loader_source_after_seconds'], boot['milestones']['loader_source']['host_elapsed_seconds'])
+        self.assertGreaterEqual(boot['screendump_after_seconds'] - boot['desktop_seen_after_seconds'], 0.29)
+        # Launch-based (the old rule) this run had no budget left for the settle.
+        self.assertGreater(boot['screendump_after_seconds'], 2)
+
+    def test_loader_phase_and_case_budget_are_both_bounded(self):
+        # No source selection: the loader bound, not the case timeout, ends it.
+        menu = GOOD_SERIAL.index('L:SELECT_SOURCE=menu\r')
+        with patch.object(runner, 'NORMAL_BOOT_LOADER_SECONDS', 1.5):
+            result, directory = self.run_normal(GOOD_SERIAL[:menu], case=normal_case(timeout=60))
+        self.assertEqual((result['outcome'], result['reason']), ('fail', 'host monotonic deadline exceeded'))
+        self.assertTrue(result['timeout']['occurred'])
+        self.assertEqual((result['timeout']['phase'], result['timeout']['loader_seconds']), ('loader', 1.5))
+        self.assertNotIn('loader_source_after_seconds', result['normal_boot'])
+        self.assertTrue((directory / 'screen-fail.ppm').is_file())
+        # After the selection the case timeout applies: a desktop that never
+        # starts still fails, timed from the loader line.
+        result, _ = self.run_normal(GOOD_SERIAL[:menu], delayed_records=GOOD_SERIAL[menu:10], delay=1,
+                                    case=normal_case(timeout=2))
+        self.assertEqual((result['outcome'], result['reason']), ('fail', 'host monotonic deadline exceeded'))
+        self.assertEqual(result['timeout']['phase'], 'system')
+        self.assertGreaterEqual(result['normal_boot']['loader_source_after_seconds'], 1)
+        self.assertNotIn('desktop_pid', result['normal_boot']['milestones'])
+
     def test_negative_lines_fail_with_diagnostics(self):
         panic = GOOD_SERIAL[:10] + ['Ciuki VMM panic: halting.',
                                     'CIUKI_TEST v=1 run=00000000 seq=000001 probe=panic event=PANIC vector=none reason=x']

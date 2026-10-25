@@ -1102,6 +1102,19 @@ def observe_window_screen(path, spec, arm):
 # and one screendump. Every pattern is anchored at the start of a line (CR/LF
 # removed), so text in the middle of a line never matches.
 NORMAL_BOOT_KIND = 'normal-boot'
+# Host deadline of a normal boot (2026-10-25, QEMU fb12caae): the case
+# timeout counts from the loader's source selection (L:SELECT_SOURCE=menu),
+# not from QEMU launch; the phase before it has its own bound. The loader's
+# 3 s boot menu (src/boot/ciukldr/menu.inc deadline_start/deadline_expired)
+# busy-polls INT 16h AH=01, the COM1 LSR and the BIOS tick at 0:046Ch with
+# no HLT. Under the profiles' -icount shift=1,sleep=on virtual time advances
+# 2 ns per executed instruction and at real speed only while the CPU sleeps
+# (https://www.qemu.org/docs/master/system/qemu-manpage.html, -icount), so
+# the 3 s wait is ~1.5e9 instructions, which TCG with -d nochain executes in
+# 270.1-273.9 host seconds (f0-smoke 5b7cef8b, 9948c446, fb12caae). Counted
+# from launch, the 300 s case budget left 2.8 s after the 8 s settle, and a
+# 3.7 s slower menu failed fb12caae 7.9 s after the desktop started.
+NORMAL_BOOT_LOADER_SECONDS = 600
 NORMAL_BOOT_MILESTONES = (
     ('loader_banner', re.compile(rb'L:CPU signature=')),
     ('loader_source', re.compile(rb'L:SELECT_SOURCE=menu$')),
@@ -1978,6 +1991,8 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                                'settle_seconds':case['expected']['settle_seconds'],
                                'milestones_required':[name for name,_ in NORMAL_BOOT_MILESTONES],
                                'negative_kinds':sorted({name for name,_ in NORMAL_BOOT_NEGATIVE}|{'repeated_milestone'})}
+        # The case timeout runs from the loader's source selection.
+        result['timeout'].update(basis='loader_source',loader_seconds=NORMAL_BOOT_LOADER_SECONDS,phase='loader')
     directory.mkdir(parents=True,exist_ok=False)
     launched=None
     process=qmp=cgroup=None;parser=(SweepParser if case.get('sweep') else NormalBootParser if normal else Parser)(run_id,case['probe']);fd=None;dirfd=None;logs=[]
@@ -2024,7 +2039,8 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             parser=session.parser
         os.mkfifo(fifo,0o600);fd=os.open(fifo,os.O_RDWR|os.O_NONBLOCK)
         serial=(directory/'serial.log').open('wb');stderr=(directory/'stderr.log').open('wb');qlog=(directory/'qmp.log').open('wb');logs=[serial,stderr,qlog]
-        launched=time.monotonic();deadline=launched+case['timeout']
+        launched=time.monotonic()
+        deadline=launched+(NORMAL_BOOT_LOADER_SECONDS if normal else case['timeout'])
         host_ms=lambda:int((time.monotonic()-launched)*1000)
         if normal:parser.clock=lambda:time.monotonic()-launched
         process=host.launch(scoped,directory)
@@ -2103,6 +2119,11 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             res.check_budget(runs)
             ready,_,_=select.select([fd,process.stdout.fileno()],[],[],.025)
             for source in ready:collect(source)
+            if normal and result['timeout']['phase']=='loader' and 'loader_source' in parser.milestones:
+                # NORMAL_BOOT_LOADER_SECONDS: the case budget starts here.
+                loader_after=parser.milestones['loader_source']['host_elapsed_seconds']
+                deadline=launched+loader_after+case['timeout'];result['timeout']['phase']='system'
+                result['normal_boot']['loader_source_after_seconds']=loader_after
             if qmp is None and (directory/'q').exists():
                 qmp=host.connect_qmp(Path('/proc/self/fd')/str(dirfd)/'q',qlog)
                 version=qmp.greeting['QMP']['version']
