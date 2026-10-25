@@ -181,3 +181,4 @@ Documenti di design, validazione, fonti esterne.
 | [Prova T23 3423912f…: musica risolta; decisioni (solo DOS unificato, cursori stile macOS, modello Windows 9x ovunque, rete completa); otto sessioni Codex](2026-10-22-10-prova-t23-3423912f-decisioni.md) | 22 ottobre 2026 | prova hardware, decisioni |
 | [Immagine T23 2287114d…: blocco allo splash, chiusura delle finestre DOS, memoria DOS (Wolfenstein), spooler, NetSurf, revisione grafica](2026-10-25-01-immagine-t23-correzioni-notturne.md) | 25 ottobre 2026 | modifica, integrazione, decisione |
 | [JavaScript di NetSurf riattivato (valori Duktape e x87); EMMXXXX0 e memoria superiore nella finestra DOS (emendamento f3-56)](2026-10-25-02-javascript-netsurf-ems-umb-dos.md) | 25 ottobre 2026 | modifica, decisione |
+| [Versione 1.0.1 alpha: correzioni della prova T23, Warcraft II con VESA in finestra, installer di Quake III](2026-10-25-03-versione-1-0-1-alpha.md) | 25 ottobre 2026 | decisione, modifica, integrazione |
