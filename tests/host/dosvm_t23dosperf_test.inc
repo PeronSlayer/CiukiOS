@@ -241,10 +241,224 @@ static void test_t23_sb_opl(void)
     puts("t23-dosperf Sound Blaster OPL3 ports 220h-223h: lean exits with the ordinary register file PASS");
 }
 
+/* Codex xhigh review of t23-dosperf (2026-10-25), P2: the shared burst
+ * decoder (vga_x86.c) executes MOV/INC/DEC/ADD/SUB/XCHG/shift/NEG/IMUL
+ * forms whose destination is ESP. With an armed image at [ESP] and the
+ * armed-image guard removed from the DAC/VGA bursts,
+ *     out dx,al / add esp,4 / out dx,al / sub esp,4 / out dx,al    (DX=3C9h)
+ * retired as one burst, so the monitor never saw ESP above the image (a
+ * scalar exit's armed_observe marks it popped); armed_live then kept the
+ * stale image as an enclosing owner at the next nested CLI (2 owners instead
+ * of 1; 1 instead of 0 after the inner restore), if_recovery_prepare stayed
+ * suppressed for an unplanted POPFD and a pending IRQ waited for the forced
+ * recovery (reviewer's probe: 1/0/1/1 scalar against 2/1/0/0 batched).
+ * Rule now: while an image is armed, the burst decoders refuse every
+ * instruction that writes SP/ESP before executing it (cvx_cpu.lock_sp); the
+ * CPU runs it natively and the next exit observes the stack. Without an
+ * armed image the same sequences still batch, and a palette loop that
+ * leaves ESP alone still batches beside the image (test_t23_war2_palette). */
+static unsigned t23_sp_bytes(unsigned kind, bool up, uint32_t x, uint8_t *b)
+{
+    uint32_t val = up ? x + 4 : x;
+    switch (kind) {
+    case 0: b[0] = 0x43; return 1;                                     /* control: inc ebx */
+    case 1: b[0] = 0x83; b[1] = up ? 0xC4 : 0xEC; b[2] = 4; return 3;   /* add/sub esp,4 */
+    case 2: b[0] = up ? 0x44 : 0x4C; return 1;                         /* inc/dec esp */
+    case 3: b[0] = 0xBC; memcpy(b + 1, &val, 4); return 5;             /* mov esp,imm32 */
+    case 4: b[0] = 0xB8; memcpy(b + 1, &val, 4); b[5] = 0x89; b[6] = 0xC4; return 7; /* mov eax,imm32; mov esp,eax */
+    case 5: b[0] = 0x66; b[1] = 0x83; b[2] = up ? 0xC4 : 0xEC; b[3] = 4; return 4;   /* add/sub sp,4 */
+    case 6: b[0] = 0xC1; b[1] = up ? 0xE4 : 0xEC; b[2] = 1; return 3;   /* shl/shr esp,1 */
+    case 7: b[0] = 0xF7; b[1] = 0xDC; return 2;                        /* neg esp, twice */
+    case 8: b[0] = 0xFF; b[1] = up ? 0xC4 : 0xCC; return 2;            /* inc/dec esp (FF /0, FF /1) */
+    case 9:                                                            /* xchg esp,eax */
+        if (up) { b[0] = 0xB8; memcpy(b + 1, &val, 4); b[5] = 0x87; b[6] = 0xE0; return 7; }
+        b[0] = 0x87; b[1] = 0xE0; return 2;
+    case 10: b[0] = 0x6B; b[1] = 0xE4; b[2] = 1; return 3;             /* imul esp,esp,1: ESP unchanged */
+    case 11:                                                           /* mov esp,ss: below the image */
+        if (up) { b[0] = 0x8C; b[1] = 0xD4; return 2; }
+        b[0] = 0xBC; memcpy(b + 1, &val, 4); return 5;
+    }
+    return 0;
+}
+static void test_t23_armed_stack_burst(void)
+{
+    static const char *const names[] = {"inc ebx", "add/sub esp", "inc/dec esp", "mov esp,imm", "mov esp,eax",
+        "add/sub sp", "shl/shr esp", "neg esp", "inc/dec esp (FF)", "xchg esp,eax", "imul esp", "mov esp,ss"};
+    for (unsigned pass = 0; pass < 2; pass++)          /* 0: no armed image (control); 1: armed */
+    for (unsigned kind = 0; kind < 12; kind++) {
+        bool armed = pass, writes_sp = kind != 0, pops = kind >= 1 && kind <= 9;
+        struct dosvm *v = fx27_vm(true);
+        struct dpmi *d = &v->dpmi;
+        uint32_t base = seg_base(v, (uint16_t)cur.tf.cs);
+        /* The outer region: PUSHF; CLI; STI; POPFD; NOP; HLT. */
+        static const uint8_t region[] = {0x9C, 0xFA, 0xFB, 0x9D, 0x90, 0xF4};
+        CHECK(!dosvm_write(v, base + 0x33000, region, sizeof(region)));
+        cur.tf.user_esp -= 4;
+        uint32_t x = cur.tf.user_esp, lin = seg_base(v, (uint16_t)cur.tf.user_ss) + x;
+        uint32_t image = t23_image();
+        CHECK(!dosvm_write(v, lin, &image, 4));
+        if (armed) {
+            review_boundary(v, 0x33000);
+            v->monitor.vif = true; d->if_armed = false;
+            cur.tf.eip = 0x33001; step(v, 13, 0);
+            CHECK(!left && d->if_armed == 1 && !d->armed[0].popped && !v->monitor.vif);
+            step(v, 13, 0);                                   /* STI */
+            CHECK(!left && cur.tf.eip == 0x33003 && v->monitor.vif && d->if_armed == 1);
+        } else { v->monitor.vif = true; d->if_armed = 0; }
+        /* mov edx,3C9h / out dx,al / <up> / out dx,al / <down> / out dx,al / hlt */
+        uint8_t code[40]; unsigned n = 0;
+        code[n++] = 0xBA; code[n++] = 0xC9; code[n++] = 3; code[n++] = 0; code[n++] = 0;
+        code[n++] = 0xEE;
+        n += t23_sp_bytes(kind, true, x, code + n);
+        code[n++] = 0xEE;
+        n += t23_sp_bytes(kind, false, x, code + n);
+        code[n++] = 0xEE;
+        uint32_t end = 0x33100 + n;
+        code[n++] = 0xF4;
+        CHECK(!dosvm_write(v, base + 0x33100, code, n));
+        cur.tf.eip = 0x33100; cur.tf.eax = 0;
+        unsigned dac0 = v->perf.dac_batched;
+        unsigned exits = fx27_run(v, end, 1000, false);
+        unsigned expect = armed && writes_sp ? 3 : 1;
+        printf("t23-dosperf review stack burst %s, %s: exits=%u (expected %u) dac_batched=%u popped=%u\n",
+               names[kind], armed ? "armed image" : "no image", exits, expect,
+               v->perf.dac_batched - dac0, armed ? d->armed[0].popped : 0);
+        CHECK(cur.tf.user_esp == x && cur.tf.eip == end);
+        CHECK(exits == expect && v->perf.dac_batched - dac0 == (expect == 1 ? 2u : 0u));
+        if (armed) {
+            CHECK(d->if_armed == 1 && d->armed[0].popped == pops);
+            /* The nested region at the same site: a popped image is no owner. */
+            review_boundary(v, 0x33000);
+            cur.tf.user_esp -= 4;
+            uint32_t lin1 = seg_base(v, (uint16_t)cur.tf.user_ss) + cur.tf.user_esp, image1 = t23_image();
+            CHECK(!dosvm_write(v, lin1, &image1, 4));
+            cur.tf.eip = 0x33001; step(v, 13, 0);
+            CHECK(!left && !v->monitor.vif && d->if_armed == (pops ? 1 : 2));
+            uint32_t planted;
+            CHECK(!dosvm_read(v, lin1, &planted, 4) && (planted & V86_TF));
+            /* The inner restore: POPFD loads the planted image, the NOP
+             * retires, the CPU reports BS. */
+            cur.tf.user_esp += 4;
+            cur.tf.eflags = (cur.tf.eflags & ~0x0CD5u) | (planted & 0x0CD5u) | V86_TF;
+            cur.tf.eip = 0x33005;
+            debug_dr6 = 1u << 14; step(v, 1, 0);
+            CHECK(!left && v->monitor.vif && !(cur.tf.eflags & V86_TF) && d->if_armed == (pops ? 0 : 1));
+            if (pops) {
+                /* An unplanted POPFD under a pending IRQ (NOP; CLI; POPFD;
+                 * NOP; HLT): with no stale owner the recovery step runs
+                 * and the IRQ is delivered after the restore. */
+                static const uint8_t plain[] = {0x90, 0xFA, 0x9D, 0x90, 0xF4};
+                CHECK(!dosvm_write(v, base + 0x33200, plain, sizeof(plain)));
+                cur.tf.eip = 0x33201; step(v, 13, 0);
+                CHECK(!left && !v->monitor.vif && !d->if_armed && cur.tf.eip == 0x33202);
+                cur.tf.user_esp -= 4;
+                uint32_t lin2 = seg_base(v, (uint16_t)cur.tf.user_ss) + cur.tf.user_esp, image2 = t23_image();
+                CHECK(!dosvm_write(v, lin2, &image2, 4));
+                v->monitor.pic[0].imr = 0xFD; v->monitor.pic[0].irr |= 2;
+                uint32_t irqs = v->monitor.stats.delivered[1];
+                step(v, 0x20, 0);                             /* a timer exit at the POPFD */
+                CHECK(!left && v->monitor.stats.delivered[1] == irqs);
+                CHECK(d->if_step && d->if_restore_step && (cur.tf.eflags & V86_TF));
+                cur.tf.user_esp += 4;
+                cur.tf.eflags = (cur.tf.eflags & ~(0x0CD5u | V86_TF)) | (image2 & 0x0CD5u);
+                cur.tf.eip = 0x33203;
+                debug_dr6 = 1u << 14; step(v, 1, 0);
+                /* Delivered at this exit (reflected to the real-mode IRQ1
+                 * handler: the frame is the handler's, IF clear). */
+                CHECK(v->monitor.stats.delivered[1] == irqs + 1 && !d->if_step && !(cur.tf.eflags & V86_TF));
+            }
+        }
+        destroy(v, true); empty();
+    }
+    puts("t23-dosperf review: a DAC burst beside an armed image stops before every SP/ESP write (12 encodings), the next exit observes the popped image, the nested CLI keeps one owner, the inner restore none, and the unplanted POPFD's recovery step delivers the pending IRQ; the same sequences batch without an image PASS");
+}
+
+/* Codex review, inherited P2: pm_trap keeps a PM STI shadow across a
+ * physical IRQ at the shadowed CS:EIP, because the IRQ may have landed
+ * before that instruction. STI; JMP $ retires at the same address, so
+ * address equality is no retirement evidence: with IRQ1 pending, 200 timer
+ * exits left shadow=1, vif=1, IRR=2 and 0 deliveries (dpmi_deliver refuses
+ * under the shadow). Now such an IRQ exit, with a virtual IRQ deliverable,
+ * single-steps the shadowed instruction once with the monitor's own TF
+ * (shadow_step): the BS trap after it is the evidence, ends the shadow and
+ * that exit delivers. The step is planted only for an instruction
+ * return_step_safe admits: never across PUSHF (it would save the TF),
+ * POPF/IRET or an SS load (its #DB inhibition). */
+static void test_t23_shadow_self_jump(void)
+{
+    /* 1. STI; L: JMP L with IRQ1 pending: timer exits at L. */
+    struct dosvm *v = fx27_vm(true);
+    struct dpmi *d = &v->dpmi;
+    uint32_t base = seg_base(v, (uint16_t)cur.tf.cs);
+    static const uint8_t loop[] = {0xFB, 0xEB, 0xFE, 0xF4};
+    CHECK(!dosvm_write(v, base + 0x34000, loop, sizeof(loop)));
+    v->monitor.vif = false;
+    v->monitor.pic[0].imr = 0xFD; v->monitor.pic[0].irr |= 2;
+    uint32_t irqs = v->monitor.stats.delivered[1];
+    cur.tf.eip = 0x34000; step(v, 13, 0);                      /* STI: shadow over JMP $ */
+    CHECK(!left && v->monitor.vif && d->shadow && d->shadow_eip == 0x34001 &&
+          v->monitor.stats.delivered[1] == irqs && !(cur.tf.eflags & V86_TF));
+    for (unsigned i = 0; i < 2; i++) {
+        cur.tf.eip = 0x34001; step(v, 0x20, 0);
+        CHECK(!left && d->shadow && v->monitor.vif && v->monitor.stats.delivered[1] == irqs);
+    }
+    /* The first IRQ exit planted the owned step; the second, before the
+     * stepped instruction retired, kept it. */
+    CHECK(d->shadow_step && (cur.tf.eflags & V86_TF) && !d->if_step && d->shadow_steps == 1);
+    /* JMP $ retires under TF: BS at the same address. The shadow ends and
+     * the exit delivers IRQ1; no TF is left in the frame or the handler. */
+    debug_dr6 = 1u << 14; step(v, 1, 0);
+    CHECK(!d->shadow && !d->shadow_step && !(cur.tf.eflags & V86_TF));
+    CHECK(v->monitor.stats.delivered[1] == irqs + 1);          /* the handler's frame now */
+    destroy(v, true); empty();
+
+    /* 2. STI; PUSHF: no step across a flags save; the shadow ends at the
+     * next trap elsewhere, which delivers. */
+    v = fx27_vm(true); d = &v->dpmi;
+    base = seg_base(v, (uint16_t)cur.tf.cs);
+    static const uint8_t save[] = {0xFB, 0x9C, 0x90, 0xF4};
+    static const uint8_t out[] = {0xEE, 0x90};
+    CHECK(!dosvm_write(v, base + 0x34100, save, sizeof(save)));
+    CHECK(!dosvm_write(v, base + 0x34200, out, sizeof(out)));
+    v->monitor.vif = false;
+    v->monitor.pic[0].imr = 0xFD; v->monitor.pic[0].irr |= 2;
+    irqs = v->monitor.stats.delivered[1];
+    cur.tf.eip = 0x34100; step(v, 13, 0);
+    CHECK(!left && d->shadow && d->shadow_eip == 0x34101);
+    cur.tf.eip = 0x34101; step(v, 0x20, 0);
+    CHECK(!left && d->shadow && !d->shadow_step && !(cur.tf.eflags & V86_TF) &&
+          v->monitor.stats.delivered[1] == irqs && d->shadow_steps == 0);
+    cur.tf.eip = 0x34200; cur.tf.edx = 0x3C9; step(v, 13, 0);  /* PUSHF; NOP ran natively */
+    CHECK(!d->shadow && v->monitor.stats.delivered[1] == irqs + 1 && !(cur.tf.eflags & V86_TF));
+    destroy(v, true); empty();
+
+    /* 3. STI; OUT: the step is planted, then the shadowed instruction
+     * traps itself (#GP(0)): TF is taken back, the shadow ends as before,
+     * the OUT is emulated and the exit delivers. */
+    v = fx27_vm(true); d = &v->dpmi;
+    base = seg_base(v, (uint16_t)cur.tf.cs);
+    static const uint8_t trap[] = {0xFB, 0xEE, 0xF4};
+    CHECK(!dosvm_write(v, base + 0x34300, trap, sizeof(trap)));
+    v->monitor.vif = false;
+    v->monitor.pic[0].imr = 0xFD; v->monitor.pic[0].irr |= 2;
+    irqs = v->monitor.stats.delivered[1];
+    cur.tf.eip = 0x34300; cur.tf.edx = 0x3C9; cur.tf.eax = 0x15; step(v, 13, 0);
+    CHECK(!left && d->shadow && d->shadow_eip == 0x34301);
+    cur.tf.eip = 0x34301; step(v, 0x20, 0);
+    CHECK(!left && d->shadow && d->shadow_step && (cur.tf.eflags & V86_TF) && v->monitor.stats.delivered[1] == irqs);
+    step(v, 13, 0);                                             /* the OUT's #GP(0) */
+    CHECK(!d->shadow && !d->shadow_step && !(cur.tf.eflags & V86_TF));
+    CHECK(v->monitor.stats.delivered[1] == irqs + 1 && d->shadow_steps == 1);
+    destroy(v, true); empty();
+    puts("t23-dosperf review: an IRQ at a shadowed self-jump single-steps the shadowed instruction with the monitor's TF and delivers at its BS; no step across PUSHF; a trapping shadowed instruction gives the TF back PASS");
+}
+
 static void test_t23dosperf(void)
 {
     test_t23_sb_opl();
     test_t23_unprovable_cli();
     test_t23_lean_flags();
     test_t23_war2_palette();
+    test_t23_armed_stack_burst();
+    test_t23_shadow_self_jump();
 }

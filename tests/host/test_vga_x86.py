@@ -22,7 +22,8 @@ CF, ZF, VM = 0x1, 0x40, 0x20000
 class CPU(ctypes.Structure):
     _fields_ = [('gpr', ctypes.c_uint32 * 8), ('eip', ctypes.c_uint32), ('eflags', ctypes.c_uint32),
                 ('seg_base', ctypes.c_uint32 * 6), ('sreg', ctypes.c_uint16 * 6),
-                ('code32', ctypes.c_uint8), ('base_valid', ctypes.c_uint8), ('reserved', ctypes.c_uint8 * 2)]
+                ('code32', ctypes.c_uint8), ('base_valid', ctypes.c_uint8), ('lock_sp', ctypes.c_uint8),
+                ('reserved', ctypes.c_uint8)]
 
 
 class Result(ctypes.Structure):

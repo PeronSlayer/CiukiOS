@@ -1,8 +1,10 @@
 # T23 DOS window lag (trial c42f556e, 2026-10-25)
 
 - Written 2026-10-25 19:16-20:35 CET in `CiukiOS-wt-t23-dosperf` (branch
-  `wt/t23-dosperf`, from `main` 50a843517). Host evidence only: no QEMU,
-  image build or hardware run. Every T23 figure below is a record of the
+  `wt/t23-dosperf`, from `main` 50a843517); section 8 added 2026-10-25
+  20:50-21:35 CET after the Codex xhigh review (two P2 findings, both
+  fixed here; items 3 and 4 of section 4 corrected). Host evidence only: no
+  QEMU, image build or hardware run. Every T23 figure below is a record of the
   trial (image c42f556e, `main` a347ca76b) or a model stated as such.
 - Owner report: Warcraft II starts in the window and lags "like every DOS
   game", a complaint repeated for a week. Machine: Pentium III-M (TSC
@@ -175,15 +177,25 @@ record (section 4, item 6) measures it at the next trial.
    proof restarts the seed demand or return tracking, the ordinary tail runs.
 3. **STI shadow** (`lean_io`): a PM shadow ends at the next #GP(0), as in
    `pm_trap`, so the exit after a lean STI can be lean; a pending IRQ is
-   delivered by that exit's ordinary tail as before.
+   delivered by that exit's ordinary tail as before. **Review fix** (section
+   8.2, `dpmi_dispatch.c shadow_trap`): a physical IRQ at the shadowed
+   CS:EIP with a virtual IRQ deliverable single-steps the shadowed
+   instruction once with the monitor's TF (`shadow_step`); its BS trap is
+   the retirement evidence, ends the shadow and lets that exit deliver.
 4. **Bursts beside an armed image** (`dosvm_vga.c video_run_blocked`,
    `dosvm_io_burst.inc burst_blocked`): an armed flags image no longer stops
    the I/O, DAC or VGA burst. Their decoders execute no POPF/IRET/POP/RET or
    stack transfer; the VGA and DAC bursts store only to the aperture, the I/O
-   burst only through REP INS elements emulated as the ordinary path does.
-   The image is not loaded by a burst, and `armed_observe` sees it at the
-   next exit as after native execution; return tracking, watchpoints, TF, shadows,
-   IF-recovery steps, deliverable IRQs and reschedules still stop them.
+   burst's only memory operands are REP OUTS elements (INS is not admitted),
+   run by the scalar emulator; an exception that emulator reflects (the one
+   stack change on that path, the ordinary path's own) ends the burst.
+   The image is not loaded by a burst. **Review fix** (section 8.1,
+   `vga_x86.c sp_locked`, `cvx_cpu.lock_sp`): while an image is armed the
+   DAC and VGA bursts refuse, before executing it, every instruction that
+   writes SP/ESP, so `armed_observe` sees at the next exit every stack
+   pointer the CPU would have shown it (the I/O burst decoder writes no
+   SP/ESP). Return tracking, watchpoints, TF, shadows, IF-recovery steps,
+   deliverable IRQs and reschedules still stop them.
 5. **Sound Blaster OPL3 ports lean** (`dosvm.c lean_port`): base+0..3 and
    base+8/9 reach `dosvm_opl_io`, like 388h-38Bh.
 6. **Evidence** for the presenter: `group=vm_perf_presenter ... samples=
@@ -272,6 +284,8 @@ figures; section 7 lists the records that measure them.
 | lean PM CLI/STI against the scalar control | - | same virtual IF, STI shadow, its end at the next #GP, armed PUSHF image, IRQ delivered after the shadow, missed proof falls back with the seed demand on |
 | OPL3 through 220h-223h | ordinary | lean, same register file as the scalar control |
 | `PUSHF; CLI` (fx-16 site) | armed | armed (rule 1 does not apply) |
+| review 8.1: DAC burst across an SP/ESP write beside an armed image (12 encodings, `test_t23_armed_stack_burst`) | 1 exit, pop hidden, owners 2/1, no recovery step, IRQ not delivered | 3 exits, image popped at the next exit, owners 1/0, recovery step, IRQ delivered; without an image still 1 exit |
+| review 8.2: `STI; JMP $` with IRQ1 pending, timer exits at the loop (`test_t23_shadow_self_jump`) | after 200 exits shadow=1, vif=1, IRR=02, 0 deliveries | first exit plants the owned step, BS ends the shadow, IRQ delivered; no step across PUSHF; a trapping stepped instruction gives the TF back |
 
 Updated expectations (behaviour change, with the reason in each test):
 `test_fx27_lean` (a PM STI shadow ends at the #GP and the exit is lean),
@@ -324,7 +338,13 @@ lean=26790 missed=0 unprovable=4343 dac=0` and the suite PASS line.
 - Rule 4 changes a contract stop condition (F3-33: "owned IF ... proof
   MUST stop a burst"). The argument rests on the burst decoders: if a later
   change lets `cvx_execute` or the I/O burst execute POPF, IRET, POP or a
-  stack store, the armed-image stop must come back.
+  stack store, the armed-image stop must come back; a new register
+  destination in `cvx_execute` must go through `sp_locked` (section 8.1),
+  and a new I/O-burst setup instruction must not write SP/ESP.
+- The shadow step (section 8.2) adds one #DB exit (37 us on the T23) to an
+  IRQ that lands at a shadowed instruction while a virtual IRQ is pending;
+  the alternative was the shadow kept until the next trap elsewhere. It is
+  never planted across PUSHF, POPF/IRET, SS loads, INT or far transfers.
 - Lean CLI/STI skip the ordinary per-exit housekeeping as fx-27's lean port
   exits do (UART/IPX service, present sampling, heartbeat, reports run at
   the next ordinary exit, at most one host tick later).
@@ -357,3 +377,150 @@ Warcraft II demo in the DOS window, intro movie and title/menu, then DOOM:
   scheduling preference (next item for the scheduler, not done here).
 - DOOM: unchanged correctness; `pm_flags` per exit below 10 us; `dac=`
   about 768 per palette change.
+
+## 8. Codex xhigh review (2026-10-25 20:40 CET) and fixes
+
+Review: no P1; two P2, one of them inherited from the parent commit. Both
+reproduced on this host with the production monitor and the fake trap
+transport (`tests/host/dosvm_t23dosperf_test.inc`, a temporary non-fatal
+probe build of the two new tests on the unfixed sources, then the fatal
+tests on the fixed sources). The remaining review checks (lean CLI/STI,
+flags-load exclusion of the decoders, CLI prefilter, war2fs/101-dosvid2
+interaction) found no blocker.
+
+### 8.1 P2: VGA/DAC batching hid the stack observations of armed-image ownership
+
+Finding. Removing `if_armed` from `video_run_blocked` admitted the shared
+decoder's ESP-writing forms (`vga_x86.c`: MOV ESP, INC/DEC ESP, ADD/SUB
+ESP, ...). With an image armed at [ESP] and virtual IF on, the DAC burst
+retired `out dx,al / add esp,4 / out dx,al / sub esp,4 / out dx,al`
+(DX=3C9h) as one exit, so no exit saw ESP above the image; a scalar exit
+at the middle OUT marks it `popped` (`armed_observe`) and `armed_live`
+drops it. The stale image stayed an enclosing owner at the next nested
+`PUSHF; CLI`, `if_recovery_prepare` returned early on `if_armed` and a
+pending IRQ waited for the 2 ms forced recovery. Pre-fix probe on this
+host (`add/sub esp` case; the same for every SP-writing encoding):
+
+| observation | scalar (HEAD a347ca76b guard) | batched (3d79c46fd, unfixed) | fixed |
+| --- | ---: | ---: | ---: |
+| exits for the three OUTs | 3 | 1 | 3 |
+| image `popped` after the sequence | yes | no | yes |
+| owners after the nested CLI | 1 | 2 | 1 |
+| owners after the inner POPFD restore | 0 | 1 | 0 |
+| recovery step for a later unplanted POPFD | 1 | 0 | 1 |
+| pending IRQ delivered after that restore | 1 | 0 | 1 |
+
+Fix (`src/kernel/vm/vga_x86.h`, `vga_x86.c`, `dosvm_vga.c`). `cvx_cpu`
+gets a `lock_sp` flag in its reserved bytes (layout unchanged; the Python
+oracle's ctypes mirror updated). With it set, `cvx_execute` returns
+`CVX_UNSUPPORTED` before any bus cycle or register change for every
+instruction whose destination register is SP/ESP, checked after the ModRM
+decode at each register destination: MOV r,imm (B8-BF), INC/DEC r (40-4F),
+the ALU forms 00-3F (reg or register r/m destination, CMP excepted),
+80-83, XCHG 86/87 (both operands), MOV 88-8B, MOV r,Sreg (8C), MOV r/m,imm
+(C6/C7), the shifts (C0/C1/D0-D3), NOT/NEG (F6/F7 /2 /3), INC/DEC (FE/FF),
+IMUL 69/6B and 0F AF, MOVZX/MOVSX (0F B6/B7/BE/BF). Byte forms never reach
+SP (register 4 is AH); the decoder has no implicit SP writer. `video_burst`
+and `dosvm_vga_dac_burst` set `lock_sp = if_armed != 0`; the burst stops
+before the refused instruction (the DAC lookahead finds no port access
+through it), the CPU executes it natively and the next exit observes the
+stack as after native execution. Without an armed image the rule is off.
+Checking only a batch's final ESP would not do: the reviewer's sequence
+ends where it began. The scalar first instruction (`video_emulate`) is not
+guarded: the ordinary path, observed at the next exit like native code.
+
+I/O burst audit (`dosvm_io_burst.inc`): the decoder retires port cycles,
+MOV AL/AH/EAX/EDX imm, MOV AH,AL and INC EDX, never a write to SP/ESP; its
+only memory operands are REP OUTS elements (6E/6F; INS 6C/6D is not
+admitted) run by the scalar emulator with its per-element checks, and an
+exception that emulator reflects (the one stack change on the path, the
+same as the ordinary path's) ends the burst at the CS:EIP comparison. No
+code change; the comment and the amendment text ("REP INS") corrected.
+
+Test: `test_t23_armed_stack_burst` (in `dosvm_test` and the
+`CIUKI_VM_T23DOSPERF` mode), 12 encodings (control `inc ebx`; `add/sub
+esp`, `inc/dec esp` (40/48 and FF /0 /1), `mov esp,imm32`, `mov esp,eax`,
+`add/sub sp` (16-bit), `shl/shr esp`, `neg esp`, `xchg esp,eax`, `imul
+esp,esp,1` (ESP unchanged, still refused), `mov esp,ss` (below the image)),
+each without an image (1 exit, 2 DAC bytes batched) and beside an armed
+image (3 exits for every SP writer, 1 for the control), then the reviewer's
+four observations for every popping case. On the unfixed sources the probe
+printed exits=1, popped=0, owners 2/1, no recovery step, 0 deliveries;
+the fatal test fails at its first exit check. `test_t23_war2_palette`
+still retires Warcraft II's palette load in one burst beside the image.
+
+### 8.2 P2 (inherited): `STI; JMP $` kept the PM shadow indefinitely
+
+Finding. `pm_trap` keeps the STI shadow across a physical IRQ at the
+shadowed CS:EIP (the IRQ may have landed before the instruction). A
+self-jump retires at the same address, so the address proves nothing:
+with IRQ1 pending, 200 timer exits at the loop left `shadow=1`, `vif=1`,
+`IRR=02`, 0 deliveries (`dpmi_deliver` refuses under the shadow); the
+request stayed pending, not lost. Reproduced here with the same figures
+(probe build). The predicate predates this branch (parent commit).
+
+Fix (`dpmi_dispatch.c shadow_trap`, `dpmi_internal.h shadow_step*`). The
+shadow covers exactly the next instruction (Intel SDM vol. 2 `STI`; vol. 3
+section 6.8.3 "Masking Maskable Hardware Interrupts"). At a physical IRQ
+exit at the shadowed address, when a virtual IRQ is deliverable
+(`dosvm_pic_pending` under `irq_save`), the monitor plants its own TF on
+the frame and records the owner context (SS, depth, client; CS is the
+shadow's): `shadow_step`. The BS trap at that context is the retirement
+evidence: TF taken back, shadow ended, the exit's tail delivers. An IRQ
+exit before the stepped instruction retired keeps TF and shadow; a fault of
+the stepped instruction takes TF back and ends the shadow (as every non-IRQ
+trap did); a context change drops the ownership without touching a TF that
+is not the monitor's. The step is planted only when `return_step_safe`
+admits the instruction (no PUSHF, which would save the TF into an image;
+no POPF/IRET; no MOV/POP SS, whose #DB inhibition spans the next
+instruction; no INT, far transfer, SYSENTER/SYSEXIT, LSS or RSM), the CS
+is not the host stub, and no client TF, NT, f3-15 step, return tracker or
+watchpoint is live; otherwise the shadow is kept as before. The lean exit
+is unaffected (TF in the frame and `d->shadow` both refuse it).
+
+Test: `test_t23_shadow_self_jump`: (1) `STI; L: JMP L` with IRQ1 pending,
+two timer exits at L (the first plants the step, the second keeps it),
+then the BS trap: shadow and step cleared, IRQ1 delivered, no TF in the
+handler's frame; (2) `STI; PUSHF`: no step at the IRQ exit, shadow kept,
+ended at the next trap elsewhere, which delivers; (3) `STI; OUT`: the step
+is planted, the OUT's own #GP(0) takes the TF back, the OUT is emulated
+and the exit delivers. On the unfixed sources (1) fails: after 200 exits
+`shadow=1 vif=1 irr=02 delivered=0`.
+
+### 8.3 Suites after the fixes
+
+Sequential, each under `systemd-run --user --scope -p MemoryMax=3G
+-p MemorySwapMax=1G`, `nice -n 10` (AMD Ryzen 7 7800X3D host):
+
+| suite | result |
+| --- | --- |
+| `dosvm_test` (ASan/UBSan, `host_kernel_tests.sh` DOS VM block) | PASS, 60,744,524 checks (60,606,140 before the two tests), max record 237 bytes |
+| `CIUKI_VM_DISK_TRACE=1`, `FX16=` (all), `FX22`, `FX27`, `T23DOSPERF`, `WAR2_FULLSCREEN`, `VBE_WINDOW`, `101_VIDEO`, `101_NATIVE`, `AUDIO_COST`, `101_REVOKE_RACE=all` | PASS (fx-27 622,983 checks, fx-22 62,137, t23-dosperf 117,276) |
+| `DOSX_PERF=1 bash tests/host/dos/run_dos_extenders.sh` (DOS/4GW client, Warcraft II with and without EMS, 30 s perf replay) | PASS before and after the fixes (table below) |
+| `run_dos_memory.sh`, `run_unified_file.sh` | PASS |
+| `irq_work_replay.py` | PASS; `DOS-audio-clock-per-VM max_us=250 budget_us=250` (unchanged, at the limit), `DOS-clock-turn max_us=258` of 1,000 |
+| `tests.host.test_kernel_latency` (15 tests), `test_vga_x86.py` oracle (5 tests, ctypes mirror with `lock_sp`) | PASS |
+
+Warcraft II perf replay, same command on this host, "before" = the branch's
+production sources at 2518b0bef (the fixes' six files replaced by their
+HEAD copies for that run), "after" = this tree; per simulated second from
+the `H61 PERF` rows (`build/host/dos/extenders/war2-perf.log`):
+
+| phase, per simulated second | before | after |
+| --- | ---: | ---: |
+| intro (13h, 6-11 s): exits / lean / lean share | 29,701 / 24,089 / 81 % | 29,706 / 24,082 / 81 % |
+| intro: CLI misses / `unprovable` / seed demand rows (of 30) | 0 / 3,886 / 3 | 0 / 3,889 / 3 |
+| intro: `pm_flags`, `pit_pic`, `pm_int` exits | 16,270, 8,236, 3,921 | 16,281, 8,229, 3,924 |
+| title (101h, 16-19 s): exits / lean / lean share | 10,162 / 4,679 / 46 % | 10,138 / 4,975 / 49 % |
+| title: VGA I/O exits / DAC bytes batched | 159 / 64,180 | 158 / 64,117 |
+| armed flags images (every row) | 1 | 1 |
+| 30 s totals: exits / lean / DAC bytes batched / frames | 824,400 / 474,289 / 215,308 / 38 | 824,306 / 477,502 / 217,609 / 48 |
+
+The palette load still batches beside the armed image (about 64,000 DAC
+bytes per second in the title phase for 158-159 VGA I/O exits, i.e. one
+exit per 768-byte load plus the index writes), the CLI misses stay at 0
+and the lean share is unchanged: Warcraft II's loops write no SP/ESP, so
+rule 4(b) never stops them, and no IRQ lands at a shadowed self-jump in
+this replay (`shadow_steps` adds no exit). The differences between the two
+columns are the replay's run-to-run noise (the guest's instruction clock
+is the same; the host decides where the 30 s window cuts).

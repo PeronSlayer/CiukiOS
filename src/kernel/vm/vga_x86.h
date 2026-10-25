@@ -47,7 +47,12 @@ typedef struct cvx_cpu {
     uint16_t sreg[6];
     uint8_t code32;                  /* CS default size is 32 bits */
     uint8_t base_valid;              /* with bus segment_base: bit = seg_base valid */
-    uint8_t reserved[2];
+    /* Nonzero: every instruction whose destination register is SP/ESP
+     * returns CVX_UNSUPPORTED before any side effect (a monitor burst
+     * beside an owned stack image stops there and the CPU executes the
+     * instruction natively). Byte forms never reach SP. */
+    uint8_t lock_sp;
+    uint8_t reserved[1];
 } cvx_cpu;
 
 /* Callbacks return 0 on success. A nonzero return aborts emulation with

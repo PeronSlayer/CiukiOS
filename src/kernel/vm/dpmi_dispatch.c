@@ -1500,6 +1500,62 @@ static int debug_trap(struct dosvm *v, struct v86_frame *f, uint32_t dr6)
 int dpmi_io_repeat(struct dosvm *v, struct v86_frame *f)
 { return emulate(v, f); }
 
+/* The PM STI shadow covers exactly the next instruction (Intel SDM vol. 2,
+ * STI; vol. 3, 6.8.3). pm_trap keeps the shadow across a physical IRQ (or
+ * an owned execute fault) at the shadowed CS:EIP, since the IRQ may have
+ * landed before that instruction retired; any other trap ends it. A loop
+ * that retires at the same address (STI; JMP $, the interrupt waits of
+ * DOS/4GW clients) makes that address no evidence: Codex review
+ * 2026-10-25, 200 timer exits with IRQ1 pending left shadow=1, vif=1,
+ * IRR=2 and no delivery (dpmi_deliver refuses under the shadow). So an IRQ
+ * exit at the shadowed address with a virtual IRQ deliverable single-steps
+ * the shadowed instruction once with the monitor's own TF (shadow_step,
+ * owned in this stack/depth/client like the f3-15 recovery step): the BS
+ * trap after it is the retirement evidence, ends the shadow and lets that
+ * exit deliver. The step is planted only for an instruction
+ * return_step_safe admits (never across PUSHF, which would save the TF,
+ * POPF/IRET, an SS load whose #DB inhibition spans the next instruction,
+ * INT, a far transfer or a host stub) and only while no client TF, other
+ * owned step or watchpoint is live; otherwise the shadow is kept as
+ * before. A fault of the stepped instruction takes the TF back and ends
+ * the shadow, as pm_trap always did for a non-IRQ trap. */
+static bool shadow_step_context(const struct dpmi *d, const struct v86_frame *f)
+{
+    return (uint16_t)f->tf.cs == d->shadow_cs && (uint16_t)f->tf.user_ss == d->shadow_step_ss &&
+           d->depth == d->shadow_step_depth && d->clients == d->shadow_step_client;
+}
+static bool shadow_trap(struct dosvm *v, struct v86_frame *f, uint32_t dr6, bool irq, bool execute_fault)
+{
+    struct dpmi *d = &v->dpmi;
+    bool at = (uint16_t)f->tf.cs == d->shadow_cs && f->tf.eip == d->shadow_eip;
+    if (d->shadow_step) {
+        bool mine = shadow_step_context(d, f);
+        bool bs = f->tf.vector == 1 && (dr6 & (1u << 14));
+        if (mine && irq && at) return false;    /* the IRQ landed before the stepped instruction: TF stays */
+        if (mine) f->tf.eflags &= ~V86_TF;      /* never clear a TF that is not this step's */
+        d->shadow_step = false;
+        d->shadow = false;                      /* retired (BS) or faulted: the shadow is over either way */
+        /* B0-B3/BD/BT remain client events even when BS is monitor-owned. */
+        return mine && bs && !(dr6 & (15u | (1u << 13) | (1u << 15)));
+    }
+    if (!d->shadow) return false;
+    if (!((irq || execute_fault) && at)) { d->shadow = false; return false; }
+    if (!irq || !v->monitor.vif || (f->tf.eflags & (V86_TF | (1u << 14))) || d->if_step || d->return_steps ||
+        d->return_step || d->dr7 || (uint16_t)f->tf.cs == DPMI_HOST_CS) return false;
+    uint32_t flags = irq_save();
+    dosvm_pic_cascade(&v->monitor);
+    bool pending = dosvm_pic_pending(&v->monitor) >= 0;
+    irq_restore(flags);
+    if (!pending || !return_step_safe(v, f)) return false;
+    d->shadow_step = true;
+    d->shadow_step_ss = (uint16_t)f->tf.user_ss;
+    d->shadow_step_depth = (uint8_t)d->depth;
+    d->shadow_step_client = (uint8_t)d->clients;
+    d->shadow_steps++;
+    f->tf.eflags |= V86_TF;
+    return false;
+}
+
 static int pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t dr6)
 {
     struct dpmi *d = &v->dpmi;
@@ -1507,10 +1563,11 @@ static int pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t 
     unsigned vector = f->tf.vector;
     bool irq = vector >= 0x20 && vector < 0x30;
     /* Clear a retired STI shadow before consuming an owned #DB: the
-     * early step return below must not extend it through the epilogue. */
+     * early step return below must not extend it through the epilogue.
+     * An IRQ at the shadowed address may plant the shadow step; its BS
+     * trap is consumed here (shadow_trap). */
     bool execute_fault = vector == 1 && (dr6 & return_debug_bit(d));
-    if (d->shadow && !((irq || execute_fault) && (uint16_t)f->tf.cs == d->shadow_cs && f->tf.eip == d->shadow_eip))
-        d->shadow = false;
+    if (shadow_trap(v, f, dr6, irq, execute_fault)) return 0;
     bool recovery_step = d->if_step;
     if (if_recovery_trap(v, f, dr6)) return 0;
     if (irq) return_unstep(v, f, false);
@@ -1561,7 +1618,8 @@ static int pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t 
  * (fx-16: a PUSHF image patched with TF at its CLI) is no obligation at an
  * I/O exit: without TF in the frame it has not been loaded yet, so
  * flags_restored does nothing, return_boundary_seed returns before any
- * seed or count, the I/O bursts refuse it themselves, and with no IRQ
+ * seed or count, the bursts refuse every SP/ESP write beside it
+ * (t23-dosperf, cvx_cpu.lock_sp), and with no IRQ
  * pending if_recovery_prepare only ends recovery. For such a PM exit
  * dpmi_pm_trap's work around an emulated IN/OUT reduces to the bookkeeping
  * of dpmi_lean_retire; the caller still requires that no virtual IRQ is

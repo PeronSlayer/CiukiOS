@@ -23,10 +23,16 @@ static bool io_burst_fetch(struct dosvm *v, const struct v86_frame *f, unsigned 
     }
     return !dosvm_read(v, linear, byte, 1);
 }
-/* t23-dosperf: an armed flags image does not stop the burst (the same
- * argument as video_run_blocked in dosvm_vga.c: this decoder retires port
- * cycles and MOV/INC register setup, never POPF/IRET; its only stores are
- * REP INS elements, emulated as the ordinary path emulates them). */
+/* t23-dosperf: an armed flags image does not stop the burst (the argument
+ * of video_run_blocked in dosvm_vga.c). Audited for the review of
+ * 2026-10-25: this decoder retires port cycles and MOV AL/AH/EAX/EDX,
+ * MOV AH,AL and INC EDX setup, never POPF/IRET/POP/RET and never a write
+ * to SP/ESP, so the stack observations armed_observe needs are not hidden.
+ * Its only memory operands are REP OUTS elements (INS is not admitted),
+ * run by the scalar emulator with its per-element segment, DF and fault
+ * checks; an exception that emulator reflects is the one stack change on
+ * this path (the same as the ordinary path's) and ends the burst at the
+ * CS:EIP comparison below. */
 static bool burst_blocked(const struct dosvm *v, const struct v86_frame *f)
 {
     return v->info.state >= DOSVM_STOPPING || g_need_resched || (f->tf.eflags & V86_TF) ||
