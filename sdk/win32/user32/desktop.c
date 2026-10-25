@@ -309,8 +309,12 @@ void u32_event(const struct desk_packet *p) {
   }
   /* q3exec3: DestroyWindow flushes the window's queue; while it runs, only
    * the desktop's DESK_CLOSED answer still concerns the window (a PING
-   * taken here was answered after DESK_CLOSED had cleared the wire id). */
-  if (w->destroying && p->opcode != DESK_CLOSED) {
+   * taken here was answered after DESK_CLOSED had cleared the wire id).
+   * A PING is still taken until DESK_CLOSE is sent: the destruction may
+   * fail (a dependent on another thread cannot be reached) and the window
+   * then lives on, and the desktop pings again only after an answer. */
+  if (w->destroying && p->opcode != DESK_CLOSED &&
+      (p->opcode != DESK_PING || w->closing)) {
     u32_event_release(p);
     return;
   }
@@ -484,8 +488,9 @@ void u32_pump(void) {
   for (UINT i = 0; i < U32_WINDOWS; i++) {
     struct u32_window *w = &u32_windows[i];
     if (w->handle && w->tid == u32_tid() && w->ping) {
-      /* q3exec3: the answer names a live window, as u32_wire requires. */
-      if (!w->wire || !w->generation || w->destroying || w->closing)
+      /* q3exec3: the answer names a live window, as u32_wire requires:
+       * until its DESK_CLOSE (a destruction may still fail), never after. */
+      if (!w->wire || !w->generation || w->closing)
         w->ping = 0;
       else if (!du3_ui_progress(&u32_desktop, w->wire, w->generation, w->ping))
         w->ping = 0;

@@ -2933,10 +2933,15 @@ opcode, so the desktop ended the connection, as in q3exec2.
 ### Decisions
 
 1. user32: DestroyWindow flushes the window's queue (Windows 98 behaviour,
-   see q3exec2), so while a window is being destroyed only DESK_CLOSED is
-   still taken; the PING answer is sent only for a live window (wire id
-   and generation set, not destroying, not closing); DESK_CLOSED and
-   `u32_destroy` clear the pending PING. A new `closing` state, set just
+   see q3exec2), so while a window is being destroyed only DESK_CLOSED and,
+   until its DESK_CLOSE is sent, DESK_PING are still taken; the PING answer
+   is sent only for a live window (wire id and generation set, not
+   closing); DESK_CLOSED and `u32_destroy` clear the pending PING. PING
+   stays answered while dependents are destroyed because DestroyWindow can
+   still fail there (a dependent on another thread cannot be reached) and
+   the window lives on; the desktop pings again only after an answer and
+   would otherwise mark a pumping window "not responding" after five
+   seconds (Codex review of 58c5707bc). A new `closing` state, set just
    before DESK_CLOSE (in `u32_destroy` and in `SetParent` when a top-level
    window becomes a child), makes `u32_wire` refuse every other message for
    that window, so nothing follows its DESK_CLOSE. A window the desktop no
@@ -2959,6 +2964,12 @@ opcode, so the desktop ended the connection, as in q3exec2.
    before the page's DESK_CLOSE RESULT, and DESK_CLOSED after it; exactly
    one PONG, for the background with its serial, may leave USER, and no
    packet names window 0 or a closed window (fails without decision 1).
+   `tests/host/win32/user32` (`failed_destroy_ping`) destroys a parent whose
+   same-thread dependent closes first, with a PING for the parent queued
+   during that close, and whose other-thread dependent cannot be reached
+   (the harness refuses that send as the kernel does without queue
+   memory): DestroyWindow fails, the parent lives on and its PING is
+   answered once, with its own window id.
    `tests/host/desktop/v3_test.c` `stale_updates` sends the logged packet
    (PONG, window 0, generation 3), a PONG with generation 0, a PONG for a
    closed window and SET_TITLE requests naming window 0: all are refused
