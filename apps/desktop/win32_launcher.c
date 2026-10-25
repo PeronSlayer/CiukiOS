@@ -31,6 +31,16 @@ int main(int argc,char **argv)
     if(argv[4][0]){
         result=desk_w32_native_path(argv[4],cwd,sizeof(cwd));if(result)goto reply;
         if(chdir(cwd)){result=-errno;goto reply;}
+    }else if(kind==DESK_W32_PE){
+        /* f7 (Quake III Arena reads its data relative to the current
+         * directory): a program opened from a folder starts in that folder,
+         * as Windows Explorer starts it; a shortcut without "Start in" does
+         * the same here, since the desktop's own directory (the root) means
+         * nothing to the program. A folder that cannot be entered keeps the
+         * previous behaviour. */
+        snprintf(cwd,sizeof(cwd),"%s",path);
+        char *slash=strrchr(cwd,'/');
+        if(slash){ if(slash==cwd)slash[1]=0; else *slash=0; (void)!chdir(cwd); }
     }
     char command[1600];
     if(strchr(argv[2],'"')){result=-EINVAL;goto reply;}

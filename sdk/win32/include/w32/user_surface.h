@@ -49,6 +49,14 @@ int32_t W32API w32_user_display_lease(uintptr_t, DWORD, DWORD, DWORD, struct dd_
 void W32API w32_user_display_release(uintptr_t);
 void W32API w32_user_display_poll(uintptr_t, struct dd_lease *);
 int32_t W32API w32_user_display_clip(uintptr_t, RECT *, DWORD *);
+/* f7 display settings (Windows 98 DEVMODEA layout, 124..156 bytes). */
+LONG W32API ChangeDisplaySettingsA(void *, DWORD);
+BOOL W32API EnumDisplaySettingsA(const char *, DWORD, void *);
+BOOL W32API CloseWindow(HWND);
+/* Value-only seams for gdi32: the physical display as programs see it
+ * (width, height, bpp) and the full-screen mode this process set. */
+BOOL W32API w32_user_display_caps(DWORD *);
+BOOL W32API w32_user_display_mode(DWORD *);
 /* Forced teardown only: target has been admitted for termination by kernel32.
  * Ordinary ExitThread/ExitProcess use UserDllMain's detach path. */
 void W32API w32_user_thread_cleanup(DWORD);

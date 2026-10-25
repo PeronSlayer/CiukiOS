@@ -37,4 +37,14 @@ DWORD W32API w32_gdi_gl_glyph(HDC, DWORD, BOOL, GLYPHMETRICS *, DWORD, void *);
 /* Value-only surface query; no backing pointer escapes GDI's lock. */
 BOOL W32API w32_gdi_gl_size(HDC, DWORD *, DWORD *);
 BOOL W32API w32_gdi_gl_window_format(HDC, int *);
+/* f7 device gamma ramps (3 x 256 WORDs: red, green, blue). Both public calls
+ * fail with ERROR_NOT_SUPPORTED unless USER reports a full-screen display
+ * mode for this process and a presenter applies the ramp on its lease. */
+BOOL W32API GetDeviceGammaRamp(HDC, void *);
+BOOL W32API SetDeviceGammaRamp(HDC, const void *);
+/* Presenter seam: register (TRUE) or unregister (FALSE) a presenter that
+ * applies the ramp; returns the count. w32_gdi_gamma copies the ramp (768
+ * WORDs) and returns its serial, 0 until SetDeviceGammaRamp succeeded. */
+DWORD W32API w32_gdi_gamma_presenter(BOOL);
+DWORD W32API w32_gdi_gamma(uint16_t *);
 #endif

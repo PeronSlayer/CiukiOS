@@ -55,6 +55,13 @@ int main(int argc,char **argv)
     char *show_args[]={"shell-launch","0","C:\\fixture.exe","",argv[1],"7",NULL};
     assert(!desk_w32_launcher_main(6,show_args) && show==7);
     show_args[5]="3";assert(!desk_w32_launcher_main(6,show_args) && show==3);
+    /* f7: no directory: a PE starts in its own folder (Quake III reads demoq3 from its cwd). */
+    char *folder_args[]={"shell-launch","0","C:\\tmp\\quake3.exe","+set r_mode 3","",NULL};
+    assert(!chdir(argv[1]));
+    assert(!desk_w32_launcher_main(5,folder_args) && !strcmp(path,"/tmp/quake3.exe") && !strcmp(cwd,"/tmp"));
+    assert(!strcmp(words[1],"\"C:\\tmp\\quake3.exe\" +set r_mode 3"));
+    char *root_args[]={"shell-launch","0","C:\\top.exe","","",NULL};
+    assert(!desk_w32_launcher_main(5,root_args) && !strcmp(cwd,"/"));
     unsigned saved=launched;show_args[5]="10";
     assert(desk_w32_launcher_main(6,show_args)==1 && reply_result==-EINVAL && launched==saved);
     puts("PASS production PE/DOS launcher and shared native argv parser: full quoted command line, native argv quoting, DOS window, cwd isolation, bad cwd refusal");return 0;

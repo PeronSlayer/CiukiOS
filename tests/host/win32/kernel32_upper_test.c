@@ -775,6 +775,7 @@ DECL(int, LCIDToLocaleName, (DWORD, WCHAR *, int, DWORD));
 DECL(BOOL, IsValidLocaleName, (const WCHAR *));
 DECL(int, GetUserDefaultLocaleName, (WCHAR *, int));
 DECL(BOOL, EnumSystemLocalesEx, (BOOL(W32API *)(WCHAR *, DWORD, intptr_t), DWORD, intptr_t, void *));
+DECL(BOOL, EnumSystemLocalesA, (BOOL(W32API *)(char *), DWORD));
 DECL(BOOL, GetCPInfoExW, (DWORD, DWORD, void *));
 DECL(BOOL, GetStringTypeExW, (DWORD, DWORD, const WCHAR *, int, uint16_t *));
 DECL(BOOL, GetStringTypeExA, (DWORD, DWORD, const char *, int, uint16_t *));
@@ -1102,6 +1103,15 @@ static BOOL W32API enum_locale(WCHAR *name, DWORD flags, intptr_t param) {
   (*count)++;
   return !(flags & 0x10) || name[0] == 'e';
 }
+/* f7: the Quake III Arena C runtime's EnumSystemLocalesA (LCID strings). */
+static char locale_seen[4][9];
+static int locale_count, locale_stop;
+static BOOL W32API enum_locale_a(char *lcid) {
+  if (locale_count < 4)
+    memcpy(locale_seen[locale_count], lcid, 9);
+  locale_count++;
+  return !locale_stop;
+}
 static void locale_tests(void) {
   CHECK(GetUserDefaultLCID() == 0x409 && GetSystemDefaultLCID() == 0x409 && GetThreadLocale() == 0x409);
   CHECK(GetUserDefaultLangID() == 0x409 && GetSystemDefaultLangID() == 0x409);
@@ -1148,6 +1158,21 @@ static void locale_tests(void) {
   CHECK(EnumSystemLocalesEx(enum_locale, 0x20, (intptr_t)&count, 0) && count == 2);
   CHECK(!EnumSystemLocalesEx(0, 0, 0, 0) && last_error == 87);
   CHECK(!EnumSystemLocalesEx(enum_locale, 0, 0, (void *)1) && last_error == 87);
+  CHECK(EnumSystemLocalesA(enum_locale_a, 1) && locale_count == 2 &&
+        !strcmp(locale_seen[0], "00000409") && !strcmp(locale_seen[1], "00000410"));
+  for (int i = 0; i < 2; i++) {
+    unsigned long value = strtoul(locale_seen[i], 0, 16);
+    CHECK(IsValidLocale((DWORD)value, 1) && IsValidLocale((DWORD)value, 2));
+  }
+  locale_count = 0;
+  CHECK(EnumSystemLocalesA(enum_locale_a, 2) && locale_count == 2);
+  locale_count = 0, locale_stop = 1;
+  CHECK(EnumSystemLocalesA(enum_locale_a, 1) && locale_count == 1);
+  locale_count = 0, locale_stop = 0;
+  CHECK(EnumSystemLocalesA(enum_locale_a, 4) && locale_count == 0);
+  CHECK(!EnumSystemLocalesA(enum_locale_a, 3) && last_error == 1004);
+  CHECK(!EnumSystemLocalesA(enum_locale_a, 8) && last_error == 1004);
+  CHECK(!EnumSystemLocalesA(0, 1) && last_error == 87);
   struct {
     DWORD max;
     uint8_t def[2], lead[12];

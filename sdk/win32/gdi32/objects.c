@@ -605,6 +605,42 @@ static unsigned display_dpi(void) {
   gdi_free(text,32769); return dpi;
 }
 int gdi_smoothing(void) { (void)display_dpi(); return !!(display_effects&AP_SMOOTH); }
+/* f7: a display DC (the screen DC of GetDC(NULL), a window DC or a memory
+ * DC compatible with the display) reports the display device, as Windows
+ * GetDeviceCaps does for HORZRES, VERTRES and BITSPIXEL; not the 1x1
+ * monochrome default bitmap of a memory DC or the window surface. USER owns
+ * the display query (w32_user_display_caps: width, height, bits per pixel
+ * as programs see the composed desktop); read at most every 250 ms. */
+#ifdef W32_HOST_MODEL
+extern BOOL W32API w32_user_display_caps(DWORD *) __attribute__((weak));
+#else
+extern void *W32API GetModuleHandleA(const char *);
+extern void *W32API GetProcAddress(void *, const char *);
+#endif
+static int display_caps(DWORD *out) {
+  static DWORD cached[3], last;
+  static int valid;
+  DWORD now = GetTickCount();
+  if (valid && (DWORD)(now - last) < 250) {
+    w32_copy(out, cached, sizeof(cached));
+    return 1;
+  }
+  BOOL(W32API * query)(DWORD *) = 0;
+#ifdef W32_HOST_MODEL
+  query = w32_user_display_caps;
+#else
+  void *m = GetModuleHandleA("user32.dll");
+  query = m ? GetProcAddress(m, "w32_user_display_caps") : 0;
+#endif
+  DWORD v[3] = {0, 0, 0};
+  if (!query || !query(v) || !v[0] || !v[1] || !v[2])
+    return 0;
+  w32_copy(cached, v, sizeof(v));
+  last = now;
+  valid = 1;
+  w32_copy(out, v, sizeof(v));
+  return 1;
+}
 int W32API GetDeviceCaps(HDC h, int cap) {
   GDI_GUARD;
   struct dc *d = gdi_dc(h);
@@ -615,7 +651,15 @@ int W32API GetDeviceCaps(HDC h, int cap) {
     return gdi_printer_caps(d, cap);
   DWORD width = desktop.width ? desktop.width : s->width,
         height = desktop.height ? desktop.height : s->height,
-        bpp = desktop.bpp ? desktop.bpp : s->bpp;
+        bpp = desktop.bpp ? desktop.bpp : s->bpp, shown[3];
+  if (!desktop.bpp && (cap == 4 || cap == 6 || cap == 8 || cap == 10 || cap == 12 ||
+                       cap == 24 || cap == 38 || cap == 104 || cap == 106 ||
+                       cap == 108 || cap == 117 || cap == 118) &&
+      display_caps(shown)) {
+    width = shown[0];
+    height = shown[1];
+    bpp = shown[2];
+  }
   switch (cap) {
   case 0:
     return 0x400;

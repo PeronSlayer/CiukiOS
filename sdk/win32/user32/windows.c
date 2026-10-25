@@ -726,6 +726,19 @@ BOOL W32API ShowWindow(HWND h, int cmd) {
     InvalidateRect(h, 0, 1);
   return old;
 }
+/* f7 (Quake III imports it): CloseWindow minimizes, never destroys.
+ * Windows: "Minimizes (but does not destroy) the specified window"; a child
+ * window is not minimized (FALSE), as in Wine's CloseWindow. */
+BOOL W32API CloseWindow(HWND h) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  if (!w)
+    return u32_fail(1400);
+  if (w->style & WS_CHILD)
+    return 0;
+  ShowWindow(h, 6 /* SW_MINIMIZE */);
+  return 1;
+}
 HWND W32API GetParent(HWND h) {
   U32_GUARD;
   struct u32_window *w = u32_window(h);

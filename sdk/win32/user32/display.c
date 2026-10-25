@@ -201,3 +201,199 @@ void u32_display_event(struct u32_window *w, const struct desk_packet *p) {
   }
   u32_display_cache();
 }
+
+/* f7 (Quake III Arena): ChangeDisplaySettings and EnumDisplaySettings.
+ *
+ * Windows 98 (ChangeDisplaySettingsA, EnumDisplaySettingsA, DEVMODEA in the
+ * Platform SDK): CDS_FULLSCREEN makes a temporary mode change for the
+ * program; ChangeDisplaySettings(NULL, 0) returns to the registry mode;
+ * CDS_TEST only validates. On CiukiOS the desktop composes every window and
+ * owns the physical mode; a Win32 program reaches the display only through
+ * the full-screen lease (DESK_V3_LEASE), which its borderless popup takes on
+ * its first presented frame (DirectDraw SetDisplayMode and the GL swap of a
+ * WS_POPUP window without caption, sdk/win32/opengl32/present.c). So a
+ * dynamic change (flags 0 or CDS_FULLSCREEN) records a process-scoped mode
+ * that the lease then switches to; nothing is sent to the desktop and the
+ * composed desktop keeps its mode. Persisting a mode (CDS_UPDATEREGISTRY,
+ * CDS_GLOBAL, CDS_SET_PRIMARY, CDS_NORESET) is the Display control panel's
+ * job: DISP_CHANGE_NOTUPDATED. A mode is valid under the DirectDraw rule
+ * (sdk/win32/ddraw/device.c mode_supported): 8, 16 or 32 bits per pixel and
+ * either a hardware mode size or one of the logical sizes the presenter
+ * scales, with a 16/32-bit hardware mode at least that large. */
+#define DISP_SUCCESSFUL 0
+#define DISP_BADMODE (-2)
+#define DISP_NOTUPDATED (-3)
+#define DISP_BADFLAGS (-4)
+#define DISP_BADPARAM (-5)
+#define CDS_UPDATEREGISTRY_ 1u
+#define CDS_TEST_ 2u
+#define CDS_FULLSCREEN_ 4u
+#define CDS_PERSIST_ (1u | 8u | 0x10u | 0x10000000u) /* registry, global, primary, noreset */
+#define CDS_RESET_ 0x40000000u
+#define DM_BITSPERPEL_ 0x40000u
+#define DM_PELSWIDTH_ 0x80000u
+#define DM_PELSHEIGHT_ 0x100000u
+#define DM_DISPLAYFLAGS_ 0x200000u
+#define DM_DISPLAYFREQUENCY_ 0x400000u
+/* DEVMODEA offsets: dmSize, dmFields, dmBitsPerPel, dmPelsWidth,
+ * dmPelsHeight, dmDisplayFlags, dmDisplayFrequency; the minimum dmSize that
+ * holds them (the Windows 95 DEVMODE through dmDisplayFrequency). The
+ * Unicode forms stay Windows 9x typed failures (scripts/win32/user32.py). */
+struct devmode_layout { UINT size, fields, bpp, width, height, flags, freq, minimum; };
+static const struct devmode_layout devmode_a = {36, 40, 104, 108, 112, 116, 120, 124};
+static struct { BOOL active; DWORD width, height, bpp; } cds_mode;
+static const DWORD logical_sizes[][2] = {{320, 200}, {320, 240}, {400, 300}, {512, 384},
+                                         {640, 400}, {640, 480}, {800, 600}, {1024, 768}};
+static BOOL display_query(struct ciuki_display_info *d) {
+  w32_fill(d, 0, sizeof(*d));
+  d->version = CIUKI_DISPLAY_VERSION;
+  d->size = sizeof(*d);
+  return (int32_t)u32_backend.gate(CIUKI_SYS_DISPLAY, CIUKI_DISPLAY_QUERY, U32_PTR(d), 0) == 0 &&
+         d->width && d->height && d->mode_count <= 32;
+}
+static BOOL mode_valid(const struct ciuki_display_info *d, DWORD w, DWORD h, DWORD bpp) {
+  if (!w || !h || (bpp != 8 && bpp != 16 && bpp != 32))
+    return 0;
+  BOOL listed = 0;
+  for (UINT i = 0; i < 8; i++)
+    if (logical_sizes[i][0] == w && logical_sizes[i][1] == h)
+      listed = 1;
+  for (UINT i = 0; i < d->mode_count; i++)
+    if (d->modes[i].width == w && d->modes[i].height == h)
+      listed = 1;
+  if (!listed)
+    return 0;
+  for (UINT i = 0; i < d->mode_count; i++)
+    if (d->modes[i].width >= w && d->modes[i].height >= h &&
+        (d->modes[i].bpp == 16 || d->modes[i].bpp == 32))
+      return 1;
+  return 0;
+}
+/* The bpp a program sees for the composed desktop (its DIB surfaces). */
+static DWORD desktop_bpp(const struct ciuki_display_info *d) {
+  return d->bpp == 8 || d->bpp == 16 ? d->bpp : 32;
+}
+static LONG change_settings(const uint8_t *dm, const struct devmode_layout *l, DWORD flags) {
+  U32_GUARD;
+  if (flags & ~(CDS_PERSIST_ | CDS_TEST_ | CDS_FULLSCREEN_ | CDS_RESET_))
+    return DISP_BADFLAGS;
+  if ((flags & CDS_FULLSCREEN_) && (flags & CDS_UPDATEREGISTRY_))
+    return DISP_BADFLAGS;
+  if (!dm) {
+    if (!(flags & CDS_TEST_))
+      cds_mode.active = 0;
+    return DISP_SUCCESSFUL;
+  }
+  DWORD size = w32_u16(dm + l->size), fields = w32_u32(dm + l->fields);
+  if (size < l->minimum)
+    return DISP_BADPARAM;
+  struct ciuki_display_info d;
+  if (!display_query(&d))
+    return DISP_BADMODE;
+  DWORD w = fields & DM_PELSWIDTH_ ? w32_u32(dm + l->width) : d.width;
+  DWORD h = fields & DM_PELSHEIGHT_ ? w32_u32(dm + l->height) : d.height;
+  DWORD bpp = fields & DM_BITSPERPEL_ ? w32_u32(dm + l->bpp) : desktop_bpp(&d);
+  if (bpp == 15)
+    bpp = 16;
+  /* dmDisplayFrequency is accepted and ignored: the presenter paces at the
+   * mode's own rate, as Windows 98 drivers without refresh control did. */
+  if (!mode_valid(&d, w, h, bpp))
+    return DISP_BADMODE;
+  if (flags & CDS_TEST_)
+    return DISP_SUCCESSFUL;
+  if (flags & CDS_PERSIST_)
+    return DISP_NOTUPDATED;
+  cds_mode.active = 1;
+  cds_mode.width = w;
+  cds_mode.height = h;
+  cds_mode.bpp = bpp;
+  return DISP_SUCCESSFUL;
+}
+LONG W32API ChangeDisplaySettingsA(void *dm, DWORD flags) {
+  return change_settings(dm, &devmode_a, flags);
+}
+/* Value-only display query for gdi32 GetDeviceCaps (HORZRES, VERTRES,
+ * BITSPIXEL of display DCs): width, height and bits per pixel of the
+ * physical mode as programs see the composed desktop (8 or 16 as is, 24
+ * and 32 as 32, the depth of every window surface). */
+BOOL W32API w32_user_display_caps(DWORD *out) {
+  struct ciuki_display_info d;
+  if (!out || !display_query(&d))
+    return 0;
+  out[0] = d.width;
+  out[1] = d.height;
+  out[2] = desktop_bpp(&d);
+  return 1;
+}
+/* Value-only query for gdi32 (device gamma ramps): the full-screen mode this
+ * process set with ChangeDisplaySettings, if any (width, height, bpp). */
+BOOL W32API w32_user_display_mode(DWORD *out) {
+  U32_GUARD;
+  if (!cds_mode.active)
+    return 0;
+  if (out) {
+    out[0] = cds_mode.width;
+    out[1] = cds_mode.height;
+    out[2] = cds_mode.bpp;
+  }
+  return 1;
+}
+/* ENUM_CURRENT_SETTINGS (-1) is the program's full-screen mode while one is
+ * set, else the physical mode; ENUM_REGISTRY_SETTINGS (-2) the desktop's
+ * physical mode; 0, 1, ... the modes ChangeDisplaySettings accepts, by
+ * bits per pixel, then width, then height, each reported at 60 Hz. */
+static BOOL enum_settings(const char *device, DWORD index, uint8_t *dm, const struct devmode_layout *l) {
+  U32_GUARD;
+  if (device && *device && w32_stricmp(device, "DISPLAY") && w32_stricmp(device, "\\\\.\\DISPLAY1"))
+    return u32_fail(87);
+  if (!dm || w32_u16(dm + l->size) < l->minimum)
+    return u32_fail(87);
+  struct ciuki_display_info d;
+  if (!display_query(&d))
+    return u32_fail(31);
+  DWORD w = 0, h = 0, bpp = 0;
+  if (index == 0xffffffffu && cds_mode.active) {
+    w = cds_mode.width; h = cds_mode.height; bpp = cds_mode.bpp;
+  } else if (index == 0xffffffffu || index == 0xfffffffeu) {
+    w = d.width; h = d.height; bpp = desktop_bpp(&d);
+  } else {
+    DWORD sizes[8 + 32][2], count = 0;
+    for (UINT i = 0; i < 8 + d.mode_count; i++) {
+      DWORD sw = i < 8 ? logical_sizes[i][0] : d.modes[i - 8].width;
+      DWORD sh = i < 8 ? logical_sizes[i][1] : d.modes[i - 8].height;
+      BOOL seen = 0;
+      for (DWORD k = 0; k < count; k++)
+        if (sizes[k][0] == sw && sizes[k][1] == sh)
+          seen = 1;
+      if (seen)
+        continue;
+      DWORD at = count++;
+      while (at && (sizes[at - 1][0] > sw || (sizes[at - 1][0] == sw && sizes[at - 1][1] > sh))) {
+        sizes[at][0] = sizes[at - 1][0];
+        sizes[at][1] = sizes[at - 1][1];
+        at--;
+      }
+      sizes[at][0] = sw;
+      sizes[at][1] = sh;
+    }
+    DWORD n = 0;
+    for (DWORD b = 8; b <= 32 && !bpp; b *= 2)
+      for (DWORD k = 0; k < count && !bpp; k++)
+        if (mode_valid(&d, sizes[k][0], sizes[k][1], b) && n++ == index) {
+          w = sizes[k][0]; h = sizes[k][1]; bpp = b;
+        }
+    if (!bpp)
+      return u32_fail(18); /* ERROR_NO_MORE_FILES: past the last mode */
+  }
+  w32_put32(dm + l->fields, DM_BITSPERPEL_ | DM_PELSWIDTH_ | DM_PELSHEIGHT_ |
+                                DM_DISPLAYFLAGS_ | DM_DISPLAYFREQUENCY_);
+  w32_put32(dm + l->bpp, bpp);
+  w32_put32(dm + l->width, w);
+  w32_put32(dm + l->height, h);
+  w32_put32(dm + l->flags, 0);
+  w32_put32(dm + l->freq, 60);
+  return 1;
+}
+BOOL W32API EnumDisplaySettingsA(const char *device, DWORD index, void *dm) {
+  return enum_settings(device, index, dm, &devmode_a);
+}
