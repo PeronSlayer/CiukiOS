@@ -1,6 +1,26 @@
 /* SPDX-License-Identifier: MIT */
 #include "win32_adapter.h"
 #include <sys/wait.h>
+#include <ciuki/abi.h>
+/* PIDs are monotonic within a boot and restart at the next one, so the
+ * window server's persisted owners are valid exactly when they predate this
+ * desktop in the same boot: a live process older than this desktop (PID 1
+ * aside) means a replacement after a desktop death; none means a cold boot
+ * and the identities of the previous boot are reset (Codex review P2). */
+int desk_w32_fresh_clients(const struct ciuki_proc_system *s, const struct ciuki_proc_record *r, uint32_t self_pid)
+{
+    if (!s || !r || s->version!=CIUKI_PROC_VERSION) return 1;
+    uint64_t self_start=0; int found=0;
+    for (uint32_t i=0;i<s->records;i++) if (r[i].pid==self_pid) { self_start=r[i].start_tick; found=1; break; }
+    if (!found) return 1;
+    for (uint32_t i=0;i<s->records;i++) {
+        const struct ciuki_proc_record *p=&r[i];
+        if (p->pid<=1 || p->pid==self_pid) continue;
+        if (p->state!=CIUKI_PROC_LIVE && p->state!=CIUKI_PROC_STOPPING) continue;
+        if (p->start_tick<self_start) return 0;
+    }
+    return 1;
+}
 /* A server that dies soon after its start is failing to start: the kernel
  * refused its registration (q3crash 2026-10-25: the dead desktop's orphaned
  * w32srv held it; 323 restarts in 35 s) or its store is unusable. An exit

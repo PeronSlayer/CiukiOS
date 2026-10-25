@@ -1,6 +1,7 @@
 /* Production shell adapters against the real registry dispatcher behind a
  * fake authenticated endpoint. SPDX-License-Identifier: MIT */
 #include "win32_adapter.h"
+#include <ciuki/abi.h>
 #include "../../../apps/w32srv/registry.h"
 #include <assert.h>
 #include <errno.h>
@@ -193,9 +194,27 @@ static void backoff(void)
     pid=s.pid;now+=1000000;assert(desk_w32_service_exited(&s,&o,pid,9,now));assert(deferrals==d0+1 && s.rapid_exits==4 && s.retry_ns==now+2000000000ull);
     puts("PASS supervision back-off: refused start deferred 250 ms..5 s, crash after service immediate, fourth rapid crash deferred");
 }
+/* Codex review of wt/q3crash (P2): --fresh-clients only on a cold boot. */
+static void fresh_clients(void)
+{
+    struct ciuki_proc_system sys={.version=CIUKI_PROC_VERSION,.size=sizeof(sys)};
+    struct ciuki_proc_record r[4]={{.pid=1,.state=CIUKI_PROC_LIVE,.start_tick=0},
+        {.pid=2,.state=CIUKI_PROC_LIVE,.start_tick=10},{.pid=3,.state=CIUKI_PROC_LIVE,.start_tick=20}};
+    sys.records=3;assert(desk_w32_fresh_clients(&sys,r,2)==1);                 /* cold boot: PID 1, the desktop, its child */
+    r[2]=(struct ciuki_proc_record){.pid=6,.state=CIUKI_PROC_LIVE,.start_tick=5};
+    assert(desk_w32_fresh_clients(&sys,r,2)==0);                               /* a program older than this desktop: replacement */
+    r[2].state=CIUKI_PROC_STOPPING;assert(desk_w32_fresh_clients(&sys,r,2)==0);
+    r[2].state=CIUKI_PROC_ZOMBIE;assert(desk_w32_fresh_clients(&sys,r,2)==1);  /* a zombie is not a surviving client */
+    r[2]=(struct ciuki_proc_record){.pid=6,.state=CIUKI_PROC_LIVE,.start_tick=10};
+    assert(desk_w32_fresh_clients(&sys,r,2)==1);                               /* same tick: not older */
+    assert(desk_w32_fresh_clients(&sys,r,9)==1);                               /* this desktop absent from the snapshot */
+    sys.version=CIUKI_PROC_VERSION+1;assert(desk_w32_fresh_clients(&sys,r,2)==1);
+    assert(desk_w32_fresh_clients(NULL,r,2)==1 && desk_w32_fresh_clients(&sys,NULL,2)==1);
+    puts("PASS fresh clients: cold boot resets, a live or stopping program older than the desktop keeps identities, zombies/unknown snapshot reset");
+}
 int main(int argc,char **argv)
 {
-    assert(argc==2);registry(argv[1]);supervision();backoff();
+    assert(argc==2);registry(argv[1]);supervision();backoff();fresh_clients();
     uint8_t pe[68]={0};pe[0]='M';pe[1]='Z';pe[60]=64;memcpy(pe+64,"PE\0\0",4);
     char path[512];snprintf(path,sizeof(path),"%s/fixture.exe",argv[1]);file(path,pe,sizeof(pe));
     struct desk_launch_record r={.label="Fixture",.show=1};snprintf(r.target,sizeof(r.target),"%s",path);

@@ -156,6 +156,56 @@ supervision test (crash/SIGKILL, reconnect, flush, orderly shutdown) stays green
   are in the lead's earlier runner logs (`build/codex/f1-52b-kernel-host.log`,
   `f2-51b-host-kernel.log`).
 
+## Codex review of wt/q3crash (2026-10-26): findings and fixes
+
+The review (`build/lead-scratch/q3crash-review.md`, gpt-6.1-sol xhigh) found
+no blocker in the parking fix and four defects in the rest; all fixed, each
+with a host test that fails on the committed `c2a784bc4` and passes now.
+
+- **P1 — stale-server retirement used the process pointer across a record.**
+  `klog` may sleep on serial backpressure (`core/serial.c`); the old order
+  logged, then `proc_stop(server)` and published. During the record the old
+  server could be reaped or a rival could register. Now lookup, stale check,
+  `proc_stop` and publication are one non-yielding interval and the record
+  is written afterwards from saved scalars (`service.c`:
+  `server_retired_log`, REGISTER, `w32_services_desktop_died`). Test: the
+  harness `klog` runs a hook; a rival registering during the record is
+  refused (error 5) and the first registrar stays; the retired server
+  exiting and being reaped during the record is harmless. On the old code
+  the rival registered (`kernel_objects_test.inc:298`).
+- **P2 — descriptors of connections lost before ACCEPT leaked.** The
+  cleanup kept every server end; an unaccepted link's server fd (installed
+  by `channel_connect`) is never reported by ACCEPT, so the desktop and
+  w32srv could not reclaim it (one per failed launch, 128-entry table). Now
+  only accepted links keep their server end; an unaccepted one is closed
+  with the object-identity check. Test: five Win32 programs dying before
+  acceptance leave the desktop's and w32srv's fd counts unchanged.
+- **P2 — desktop replacement discarded surviving clients' identities.**
+  Every new desktop started its first w32srv with `--fresh-clients`, whose
+  `wr_clients_reset` removes all process-owned atoms and HWNDs, also those
+  of programs that survived the desktop's death; the earlier claim that
+  they "reconnect as after any w32srv restart" was too strong. Now
+  `desk_w32_fresh_clients()` (`apps/desktop/win32_service.c`, used by
+  `spawn_service`) passes the flag only on a cold boot: a live or stopping
+  process older than this desktop (PID 1 aside) in `ciuki_proc_list` means a
+  replacement in the same boot, where PIDs are monotonic and the persisted
+  owners are valid; `wr_reconcile` with the live-process check then keeps
+  them. Tests: the decision function (cold boot, older live/stopping
+  program, zombie, same tick, absent self, bad snapshot); the registry
+  harness (`registry_test.c reconciliation`): a live owner's HWND and local
+  atom keep their values across a server restart without the reset and
+  are removed by `wr_clients_reset`. Limit: a boot-time service started
+  before the desktop would also read as a replacement; none exists today
+  (the desktop is PID 2 in both logs).
+- **P3 — fatal `poll()` errors returned 1 silently.** `desktop.c` now logs
+  `desktop: exit: poll errno=N` before returning.
+
+Suites after the review fixes: kernel core OK (fails on HEAD `service.c`
+at `kernel_objects_test.inc:298`), `test_win32_adapter.py` OK (4 tests,
+incl. the lifecycle fixture's `--fresh-clients` on a cold-boot snapshot),
+`test_registry.py` OK (16 tests); `desktop.c`, `win32_native.c`,
+`win32_service.c`, `client.c` compile with the SDK compiler.
+
 ## What the lead must check in QEMU
 
 1. `quake3.exe` on a clean image: no panic; the game reaches the menu and
@@ -168,8 +218,9 @@ supervision test (crash/SIGKILL, reconnect, flush, orderly shutdown) stays green
    line on the console.
 3. Kill the desktop deliberately (or let a crash restart it): one
    `[win32] service server pid=... desktop died; stopped` line, the new
-   desktop's w32srv registers (no `w32srv restart` burst), Win32 programs
-   reconnect to the new server.
+   desktop's w32srv registers (no `w32srv restart` burst) without
+   `--fresh-clients`, and a Win32 program that survived the desktop keeps
+   its windows and atoms (same HWND values, no identity loss).
 4. If a w32srv start is refused for another reason, the console shows
    `[win32] w32srv start-failed stage=...` and `[win32] w32srv restart
    deferred` with growing delays instead of hundreds of restarts.
@@ -183,8 +234,9 @@ supervision test (crash/SIGKILL, reconnect, flush, orderly shutdown) stays green
   server that never reads its channels would keep the fd until its own
   death (the desktop and w32srv both read and drop on hang-up).
 - Retiring a stale registered server stops a w32srv that may still serve
-  Win32 programs of the previous desktop session; they reconnect as after
-  any w32srv restart.
+  Win32 programs of the previous desktop session; they reconnect to the new
+  server, which keeps their persisted identities (no `--fresh-clients` on a
+  replacement).
 - `tests/host/proc/proc_test.c`'s `schedule()` no longer asserts IF on; the
   thread-context rule moved to the blocking stubs of `kernel_core_test.c`.
   Harness programs that only include proc_test.c lose that guard.

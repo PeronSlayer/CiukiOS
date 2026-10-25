@@ -37,6 +37,11 @@ struct desk_w32_supervisor_ops {
     void *ctx;
 };
 void desk_w32_supervise(struct desk_w32_supervisor *, const struct desk_w32_supervisor_ops *, uint64_t);
+struct ciuki_proc_system; struct ciuki_proc_record;
+/* 1 on a cold boot (the directory's process identities are from an old boot,
+ * whose PIDs this boot reuses), 0 when this desktop replaces one that died
+ * in this boot (surviving Win32 programs keep their atoms and HWNDs). */
+int desk_w32_fresh_clients(const struct ciuki_proc_system *, const struct ciuki_proc_record *, uint32_t self_pid);
 int desk_w32_service_exited(struct desk_w32_supervisor *, const struct desk_w32_supervisor_ops *, uint32_t, int, uint64_t);
 struct desktop;
 int desk_w32_native_shortcut(struct desktop *, const struct desk_launch_record *);

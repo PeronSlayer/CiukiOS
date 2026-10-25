@@ -3392,7 +3392,7 @@ int main(int argc, char **argv)
         watch=gate ? -1 : media_watch_fd(d);
         if (watch>=0) { media_at=(int)nfds; fds[nfds++]=(struct pollfd){watch,POLLIN,0}; }
         int ready=poll(fds,nfds,du_wait_ms(sleep_now,wait==UINT64_MAX ? UINT64_MAX : sleep_now+wait));
-        if (ready<0 && errno!=EINTR) return 1;
+        if (ready<0 && errno!=EINTR) { int saved=errno; fprintf(stderr,"desktop: exit: poll errno=%d nfds=%u\n",saved,nfds); return 1; }
         if (ready>=0) watch_result(d,mixer_at>=0 ? fds[mixer_at].revents : -1,media_at>=0 ? fds[media_at].revents : -1);
         /* A client whose channel is no longer open is dropped (q3crash
          * 2026-10-25: the kernel closed the desktop's end when the Win32

@@ -79,6 +79,34 @@ static void suspend_timer_interleave(void)
     t->w32->suspend = 0;
     t->task->state = T_READY; t->task->wake_tick = 0;
 }
+/* Codex review of wt/q3crash, P1: the retirement record may sleep on serial
+ * backpressure; these hooks run during it. */
+static struct proc_thread *rival_registrar; static uint32_t rival_error = 1234; static int hook_busy;
+static void rival_during_log(const char *fmt)
+{
+    if (hook_busy || !strstr(fmt, "service server pid=")) return;  /* the retirement record; its reason is an argument */
+    hook_busy = 1;
+    struct ciuki_w32_service_args a = { .action = W32_SVC_REGISTER, .service = 2 };
+    CHECK(!w32_service_call(rival_registrar, &a));
+    rival_error = a.error;
+    hook_busy = 0;
+}
+static struct process *reap_target; static unsigned reaped;
+static void reap_during_log(const char *fmt)
+{
+    if (hook_busy || !strstr(fmt, "service server pid=")) return;
+    hook_busy = 1;
+    struct task *saved = g_current; g_current = &controller;
+    proc_stop(reap_target, 0, 0); proc_collect(); reaped++;
+    g_current = saved;
+    hook_busy = 0;
+}
+static unsigned count_fds(const struct process *p)
+{
+    unsigned n = 0;
+    for (unsigned i = 0; p->fds && i < CIUKI_OPEN_MAX; i++) n += !!p->fds[i].object;
+    return n;
+}
 static void suspend_interleave(void)
 {
     CHECK(interleave_thread->w32->safe);
@@ -248,7 +276,6 @@ static void test_services(struct proc_thread *client)
     struct proc_thread *ndt = make_process(proc_supervisor(), &next_desktop);
     CHECK(ndt);
     w32_service_delegate(proc_supervisor(), next_desktop, "/Programs/desktop");
-    uint32_t old_desktop_pid = desktop->pid;
     proc_stop(desktop, 0, 0);
     proc_collect();
     CHECK(server->state == PROC_LIVE && server->ppid == proc_supervisor()->pid);
@@ -257,25 +284,67 @@ static void test_services(struct proc_thread *client)
     CHECK(nst);
     w32_service_delegate(next_desktop, next_server, "/System/Win32/w32srv");
     CHECK(next_server->w32 && next_server->w32->service == 2);
+    struct process *rival; struct proc_thread *rt2 = make_process(next_desktop, &rival);
+    CHECK(rt2);
+    w32_service_delegate(next_desktop, rival, "/System/Win32/w32srv");
+    /* Codex review P1: while the retirement is recorded on the console, a
+     * rival server of the same desktop registers. Lookup, stale check, stop
+     * and publication are one interval, so the rival meets a live current
+     * holder and is refused; the first registrar stays registered. */
+    rival_registrar = rt2; rival_error = 1234; on_klog = rival_during_log;
     service = (struct ciuki_w32_service_args) { .action = W32_SVC_REGISTER, .service = 2 };
     CHECK(!w32_service_call(nst, &service) && !service.error && service.result);
+    on_klog = 0;
+    CHECK(rival_error == 5);
     CHECK(server->state != PROC_LIVE);           /* the stale holder was retired */
     proc_collect();
     service = (struct ciuki_w32_service_args) { .action = W32_SVC_REGISTER, .service = 1 };
     CHECK(!w32_service_call(ndt, &service) && !service.error);
     /* A live holder whose desktop is current still refuses a second server. */
-    struct process *rival; struct proc_thread *rt2 = make_process(next_desktop, &rival);
-    CHECK(rt2);
-    w32_service_delegate(next_desktop, rival, "/System/Win32/w32srv");
     service = (struct ciuki_w32_service_args) { .action = W32_SVC_REGISTER, .service = 2 };
     CHECK(!w32_service_call(rt2, &service) && service.error == 5 && next_server->state == PROC_LIVE);
     proc_stop(rival, 0, 0); proc_collect();
-    /* The hook: the desktop's death retires its registered window server at once. */
-    w32_services_desktop_died(next_desktop->pid);
-    CHECK(next_server->state != PROC_LIVE);
-    proc_collect();
-    (void)old_desktop_pid;
+    /* Codex review P1: during the record the retired server exits and is
+     * reaped (the old code stopped it after the record: use after free). */
+    struct process *third_desktop, *third_server;
+    struct proc_thread *tdt = make_process(proc_supervisor(), &third_desktop);
+    CHECK(tdt);
+    w32_service_delegate(proc_supervisor(), third_desktop, "/Programs/desktop");
+    uint32_t next_server_pid = next_server->pid;
     proc_stop(next_desktop, 0, 0);
+    proc_collect();
+    CHECK(next_server->state == PROC_LIVE && next_server->ppid == proc_supervisor()->pid);
+    fake_desktop_pid = third_desktop->pid;
+    struct proc_thread *tst = make_process(third_desktop, &third_server);
+    CHECK(tst);
+    w32_service_delegate(third_desktop, third_server, "/System/Win32/w32srv");
+    reap_target = next_server; reaped = 0; on_klog = reap_during_log;
+    service = (struct ciuki_w32_service_args) { .action = W32_SVC_REGISTER, .service = 2 };
+    CHECK(!w32_service_call(tst, &service) && !service.error && service.result);
+    on_klog = 0;
+    CHECK(reaped == 1 && !proc_find(next_server_pid));
+    service = (struct ciuki_w32_service_args) { .action = W32_SVC_REGISTER, .service = 1 };
+    CHECK(!w32_service_call(tdt, &service) && !service.error);
+    service = (struct ciuki_w32_service_args) { .action = W32_SVC_ACCEPT, .service = 2 };
+    CHECK(!w32_service_call(tst, &service) && !service.error);   /* the third server is the holder */
+    /* Codex review P2: a Win32 program that dies before either server
+     * accepted its connection leaves no descriptor behind in the servers
+     * (channel_connect installed one each; ACCEPT would never report it). */
+    unsigned desktop_fds = count_fds(third_desktop), server_fds = count_fds(third_server);
+    for (unsigned k = 0; k < 5; k++) {
+        struct process *brief; struct proc_thread *bt = object_process(third_desktop, &brief);
+        CHECK(bt && brief->w32 && brief->w32->endpoint[0] && brief->w32->endpoint[1]);
+        CHECK(count_fds(third_desktop) == desktop_fds + 1 && count_fds(third_server) == server_fds + 1);
+        g_current = &controller;
+        proc_stop(brief, 0, 0);
+        proc_collect();
+        CHECK(count_fds(third_desktop) == desktop_fds && count_fds(third_server) == server_fds);
+    }
+    /* The hook: the desktop's death retires its registered window server at once. */
+    w32_services_desktop_died(third_desktop->pid);
+    CHECK(third_server->state != PROC_LIVE);
+    proc_collect();
+    proc_stop(third_desktop, 0, 0);
     proc_collect();
     g_current = before_client_death;
     fake_desktop_pid = 0;
