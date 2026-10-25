@@ -29,6 +29,7 @@
 #include "h1_services.h"
 static int installer_exec;
 static int installer_fixture;
+static int game_exec; /* f7: installer-exec plus the h1_game.c desktop, queue and display */
 #endif
 /* f5-20D: the guest fixture's logic (src/probes/win32_upper/exercise.c, the
  * same source that is linked as upper-exercise.exe) on the adapter. The test
@@ -77,6 +78,10 @@ static int logged_invoke(void *opaque, void *proc, void *module, uint32_t reason
     host_print("\n");
     if (dll && reason == 1)
         r ? attach_true++ : attach_false++;
+#ifdef H1_INSTALLERS
+    if (dll && reason == 1 && r && game_exec)
+        h1_game_module(module_name(module), module); /* f7: GL call profile of the game mode */
+#endif
     if (dll && reason == 0)
         detach_calls++;
     return r;
@@ -170,6 +175,8 @@ static int32_t h1_kernel(void *record, uint32_t size) {
         return 0;
 #ifdef H1_INSTALLERS
     int32_t status;
+    if (game_exec && (h1_game_kernel(record, size, &status) || h1_installer_kernel(record, size, &status)))
+        return status; /* game mode: no per-record trace (thousands per second) */
     if ((installer_exec || installer_fixture) && h1_installer_kernel(record, size, &status)){
         host_print("KERNEL op=");print_hex(h->operation);
         host_print(" action=");host_number(recent_kernel[(kernel_records-1)%32].action);
@@ -312,7 +319,10 @@ static uint32_t h1_server(const void *in, uint32_t n, void *out, uint32_t cap, u
  * acceptance table names the first unavailable adapter service exactly.
  * Called from the gate page with the number in eax; no system call here. */
 static ULONG gate_ops[16][2];
-static ULONG __attribute__((cdecl, used)) h1_gate_log(ULONG number) {
+static ULONG __attribute__((cdecl, used)) h1_gate_log(ULONG number, ULONG a, ULONG b, ULONG c) {
+    int32_t handled;
+    if (game_exec && h1_game_gate(number, a, b, c, &handled))
+        return (ULONG)handled;
     gate_calls++;
     for (unsigned i = 0; i < 16; i++)
         if (!gate_ops[i][1] || gate_ops[i][0] == number) {
@@ -330,11 +340,12 @@ static int gate_page(void) {
         return 0;
     uint8_t *gate = (uint8_t *)(uintptr_t)0x7ffe0100u;
 #ifdef H1_INSTALLERS
-    /* push eax; push ecx; push edx; push eax; call h1_gate_log; add esp,4;
-     * pop edx; pop ecx; add esp,4 (saved eax); ret -> eax = -38 */
-    ULONG rel = (ULONG)(uintptr_t)h1_gate_log - (0x7ffe0100u + 9);
-    const uint8_t code[] = {0x50, 0x51, 0x52, 0x50, 0xe8, rel, rel >> 8, rel >> 16, rel >> 24,
-                            0x83, 0xc4, 0x04, 0x5a, 0x59, 0x83, 0xc4, 0x04, 0xc3};
+    /* push ecx; push edx; push edx; push ecx; push ebx; push eax;
+     * call h1_gate_log(eax, ebx, ecx, edx); add esp,16; pop edx; pop ecx;
+     * ret -> eax = its result (-38 unless the f7 game mode serves it) */
+    ULONG rel = (ULONG)(uintptr_t)h1_gate_log - (0x7ffe0100u + 11);
+    const uint8_t code[] = {0x51, 0x52, 0x52, 0x51, 0x53, 0x50, 0xe8, rel, rel >> 8, rel >> 16, rel >> 24,
+                            0x83, 0xc4, 0x10, 0x5a, 0x59, 0xc3};
 #else
     ULONG counter = (ULONG)(uintptr_t)&gate_calls;
     /* incl counter; movl $-38,%eax; ret */
@@ -350,6 +361,9 @@ static int gate_page(void) {
 }
 
 static void print_stats(void) {
+#ifdef H1_INSTALLERS
+    h1_game_report();
+#endif
     host_print("STATS kernel_records=");
     host_number(kernel_records);
     host_print(" kernel_enosys=");
@@ -394,6 +408,8 @@ static void installer_report(void *opaque, uint32_t action, uint32_t reason,
         host_print(" eax=");print_hex(c->Eax);
         host_print(" ecx=");print_hex(c->Ecx);
         host_print(" edx=");print_hex(c->Edx);
+        host_print(" stack=");print_hex((ULONG)(uintptr_t)host.teb.Tib.StackLimit);
+        host_print("-");print_hex((ULONG)(uintptr_t)host.teb.Tib.StackBase);
         host_print("\nSTACK");
         uintptr_t at=c->Esp,low=(uintptr_t)host.teb.Tib.StackLimit,high=(uintptr_t)host.teb.Tib.StackBase;
         for(unsigned i=0;i<32 && at>=low && at<=high && high-at>=4;i++,at+=4){
@@ -642,7 +658,8 @@ static int run_fixture(void) {
 int host_main(int argc, char **argv) {
     int exec = argc == 4 && !w32_strcmp(argv[1], "exec");
 #ifdef H1_INSTALLERS
-    installer_exec = argc == 5 && !w32_strcmp(argv[1], "installer-exec");
+    game_exec = argc == 5 && !w32_strcmp(argv[1], "game-exec");
+    installer_exec = argc == 5 && (game_exec || !w32_strcmp(argv[1], "installer-exec"));
     installer_fixture = argc == 3 && !w32_strcmp(argv[1], "installer-fixture");
     exec = exec || installer_exec;
 #endif
@@ -672,6 +689,10 @@ int host_main(int argc, char **argv) {
         (installer_fixture && !h1_installer_init(argv[2])))
         return 9;
     host.services.report = installer_report;
+    if (game_exec) {
+        h1_game_init(h1_kernel);
+        host_exec_heap = 1;
+    }
 #endif
     if (!gate_page())
         return 3;

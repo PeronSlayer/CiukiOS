@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 # failure must retain the published return convention as well as error 120.
 MINUS_ONE_FAILURES = {
     'GetMessageW', 'VkKeyScanW', 'VkKeyScanExW', 'DialogBoxParamA', 'DialogBoxIndirectParamA',
-    'ChangeDisplaySettingsA', 'WaitForInputIdle', 'GetMenuState',
+    'ChangeDisplaySettingsA', 'ChangeDisplaySettingsW', 'WaitForInputIdle', 'GetMenuState',
     'GetMenuItemCount', 'GetMenuItemID', 'CheckMenuItem', 'EnableMenuItem',
 }
 

@@ -192,7 +192,7 @@ def h1_program(fixtures, test=None):
     directory = OUT / 'h1'; directory.mkdir(parents=True, exist_ok=True)
     if _H1_PROGRAM is None:
         reused = [n for n, r in upper.RECORD['dlls'].items() if r['qualified']]
-        extras = {'extra_sources': [HERE / 'h1_services.c'],
+        extras = {'extra_sources': [HERE / 'h1_services.c', HERE / 'h1_game.c'],
                   'extra_flags': ['-DH1_INSTALLERS', '-I' + str(HERE)]}
         program, _ = upper.build_h1(directory, reused, **extras)
         (directory / 'upper_table.h').write_text(upper.upper_fixture.table_header(

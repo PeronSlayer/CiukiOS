@@ -150,6 +150,7 @@ class Gdi32Tests(unittest.TestCase):
     def test_concurrent_object_and_dc_lifetime(self): self.execute('concurrency')
     def test_reflections_clip_phase_mask_transparency_mono_conversion_and_pattern_origin(self): self.execute('transfers')
     def test_transactional_region_dc_oom_and_fixed_point_xform(self): self.execute('faults')
+    def test_quake3_display_caps_driver_formats_and_gamma_ramps(self): self.execute('quake3')
     def test_user32_borrowed_surface_defaults_child_origin_and_device_clipping(self): self.execute('child')
     def test_font_provider_metadata_extents_and_saved_stock_lifetime(self): self.execute('font-boundary')
     def test_freetype_cp1252_extent_alignment_dx_and_drawtext_layout(self): self.execute('text', FONT)

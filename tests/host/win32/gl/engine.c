@@ -109,7 +109,7 @@ static void pixel_formats(void) {
   assert(sizeof(p) == 40);
   for (int n = 1; n <= 4; n++) {
     assert(DescribePixelFormat(dc, n, 40, &p) == 4);
-    assert(p.dwFlags & PFD_GENERIC_FORMAT);
+    assert(!(p.dwFlags & PFD_GENERIC_FORMAT)); /* f7: driver formats, not GDI generic */
     assert(p.cDepthBits == 16 && !p.cStencilBits && !p.cAccumBits);
     assert(p.cColorBits == (n & 1 ? 24 : 16));
   }

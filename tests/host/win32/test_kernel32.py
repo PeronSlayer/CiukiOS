@@ -146,6 +146,22 @@ class Kernel32Files(unittest.TestCase):
         result=subprocess.run([program,ROOT/'build/host/fs/fat32.img',ROOT/'build/host/fs/fat16.img'],env=env,capture_output=True,text=True,timeout=60)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         self.assertIn('PASS kernel32 production VFS',result.stdout)
+    def test_f7_hardware_64bit_division_helpers(self):
+        """f7: __aulldiv/__aullrem/__alldiv/__allrem use DIVL (the bit loop
+        took 81% of Quake III's menu CPU time); i386 stdcall when the host
+        has a 32-bit runtime, else the same C source natively."""
+        out=ROOT/'build/host/win32/f5-20a';out.mkdir(parents=True,exist_ok=True)
+        sources=[str(ROOT/'tests/host/win32/kernel32_divide_test.c'),str(ROOT/'sdk/win32/kernel32/compiler.c'),
+                 str(ROOT/'sdk/win32/gdi32/compiler.c')]
+        program=out/'divide'
+        flags=['clang','-std=c17','-O2','-Wall','-Wextra','-Werror','-I'+str(ROOT/'sdk/win32/include')]
+        built=subprocess.run([*flags,'-m32',*sources,'-o',str(program)],capture_output=True)
+        if built.returncode:
+            subprocess.run([*flags,'-DW32_HOST_MODEL',*sources,'-o',str(program)],check=True)
+        result=subprocess.run([program],capture_output=True,text=True,timeout=120)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn('PASS i386 64-bit division helpers',result.stdout)
+
     def _host(self,name,sources,marker,extra=(),env=None):
         out=ROOT/'build/host/win32/f5-20a';out.mkdir(parents=True,exist_ok=True)
         program=out/name

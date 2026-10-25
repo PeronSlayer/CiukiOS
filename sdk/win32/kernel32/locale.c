@@ -291,6 +291,31 @@ int W32API GetLocaleInfoEx(const WCHAR *name, DWORD type, WCHAR *out, int cap) {
     return copy_name("it",out,cap);
   return locale_info(lcid, type, out, cap, 1);
 }
+/* f7 (the Quake III Arena C runtime imports it): EnumSystemLocalesA calls
+ * the procedure with each locale identifier as eight hexadecimal digits
+ * ("00000409"), stopping when it returns FALSE. LCID_INSTALLED (1) and
+ * LCID_SUPPORTED (2) list the locales IsValidLocale accepts (US English and
+ * Italian; the invariant locale is not enumerated); LCID_ALTERNATE_SORTS (4)
+ * adds none, since no alternate sort orders exist. */
+typedef BOOL(W32API *k32_locale_proc_a)(char *);
+BOOL W32API EnumSystemLocalesA(k32_locale_proc_a proc, DWORD flags) {
+  if (!proc) {
+    SetLastError(87);
+    return 0;
+  }
+  if ((flags & ~7u) || (flags & 3u) == 3u) {
+    SetLastError(ERROR_INVALID_FLAGS);
+    return 0;
+  }
+  if (flags == 4u)
+    return 1;
+  char text[9] = "00000409";
+  if (!proc(text))
+    return 1;
+  w32_copy(text, "00000410", 9);
+  proc(text);
+  return 1;
+}
 typedef BOOL(W32API *k32_locale_proc)(WCHAR *, DWORD, intptr_t);
 /* LOCALE_WINDOWS 1, LOCALE_NEUTRALDATA 0x10, LOCALE_SPECIFICDATA 0x20. */
 BOOL W32API EnumSystemLocalesEx(k32_locale_proc proc, DWORD flags, intptr_t param,

@@ -1030,6 +1030,81 @@ static void benchmark(void) {
   free(pixels);
   free(indexed);
 }
+/* f7 (Quake III Arena): display device capabilities of display DCs, driver
+ * pixel formats and device gamma ramps. USER's value-only queries are the
+ * weak seams of the host model; they answer only while a case enables them. */
+#include <w32/pixelformat.h>
+static DWORD q3_display[3], q3_mode[3];
+static int q3_display_on, q3_mode_on;
+BOOL W32API w32_user_display_caps(DWORD *out) {
+  if (!q3_display_on)
+    return 0;
+  memcpy(out, q3_display, sizeof(q3_display));
+  return 1;
+}
+BOOL W32API w32_user_display_mode(DWORD *out) {
+  if (!q3_mode_on)
+    return 0;
+  if (out)
+    memcpy(out, q3_mode, sizeof(q3_mode));
+  return 1;
+}
+static void quake3(void) {
+  /* Screen DC of GetDC(NULL) is a memory DC: before the fix it reported its
+   * 1x1 monochrome default bitmap (Quake III then asked "Low Desktop Color
+   * Depth" and used 1x1 as the desktop size). */
+  HDC screen = CreateCompatibleDC(0);
+  assert(screen);
+  assert(GetDeviceCaps(screen, 12) == 1 && GetDeviceCaps(screen, 8) == 1);
+  q3_display_on = 1;
+  q3_display[0] = 1024, q3_display[1] = 768, q3_display[2] = 32;
+  /* (a failed query is never cached) */
+  assert(GetDeviceCaps(screen, 12) == 32);   /* BITSPIXEL */
+  assert(GetDeviceCaps(screen, 8) == 1024);  /* HORZRES */
+  assert(GetDeviceCaps(screen, 10) == 768);  /* VERTRES */
+  assert(GetDeviceCaps(screen, 24) == -1);   /* NUMCOLORS, direct colour */
+  assert(GetDeviceCaps(screen, 2) == 1);     /* TECHNOLOGY: DT_RASDISPLAY */
+  uint32_t pixels[16 * 8] = {0};
+  struct w32_dib surface = test_dib(pixels, 16, 8, 32, 0, 1);
+  HDC window = dc_for(&surface);
+  assert(GetDeviceCaps(window, 8) == 1024 && GetDeviceCaps(window, 12) == 32);
+  /* Driver formats: never PFD_GENERIC_FORMAT, 16-bit depth, double buffered
+   * 24- and 16-bit colour first (Quake III GLW_ChoosePFD keeps them). */
+  PIXELFORMATDESCRIPTOR pfd;
+  assert(DescribePixelFormat(window, 1, 40, &pfd) == 4);
+  for (int n = 1; n <= 4; n++) {
+    assert(DescribePixelFormat(window, n, 40, &pfd) == 4);
+    assert(!(pfd.dwFlags & PFD_GENERIC_FORMAT) && pfd.iPixelType == PFD_TYPE_RGBA);
+    assert(pfd.cDepthBits >= 15 && (pfd.dwFlags & PFD_SUPPORT_OPENGL));
+    assert(!!(pfd.dwFlags & PFD_DOUBLEBUFFER) == (n <= 2));
+  }
+  /* Gamma ramps: no presenter, or no full-screen mode, means no device ramp
+   * (FALSE, the program keeps its software gamma). */
+  uint16_t ramp[3][256], set[3][256], copy[768];
+  assert(!GetDeviceGammaRamp(screen, ramp) && !SetDeviceGammaRamp(screen, ramp));
+  assert(w32_gdi_gamma_presenter(1) == 1);
+  assert(!GetDeviceGammaRamp(screen, ramp));
+  q3_mode_on = 1;
+  q3_mode[0] = 640, q3_mode[1] = 480, q3_mode[2] = 32;
+  assert(!GetDeviceGammaRamp(screen, 0) && !GetDeviceGammaRamp(0, ramp));
+  assert(w32_gdi_gamma(copy) == 0);
+  assert(GetDeviceGammaRamp(screen, ramp));
+  for (unsigned c = 0; c < 3; c++)
+    for (unsigned i = 0; i < 256; i++) {
+      assert(ramp[c][i] == i * 257u);
+      set[c][i] = (uint16_t)(i * 200u + c);
+    }
+  assert(SetDeviceGammaRamp(window, set));
+  assert(w32_gdi_gamma(copy) == 1 && !memcmp(copy, set, sizeof(set)));
+  assert(GetDeviceGammaRamp(screen, ramp) && !memcmp(ramp, set, sizeof(set)));
+  assert(SetDeviceGammaRamp(screen, set) && w32_gdi_gamma(0) == 2);
+  assert(w32_gdi_gamma_presenter(0) == 0);
+  assert(!GetDeviceGammaRamp(screen, ramp) && !SetDeviceGammaRamp(screen, set));
+  q3_mode_on = 0;
+  DeleteDC(window);
+  DeleteDC(screen);
+  puts("PASS quake3 display caps, driver pixel formats, device gamma ramps");
+}
 int main(int argc, char **argv) {
   assert(argc >= 2);
   if (!strcmp(argv[1], "lifetime"))
@@ -1056,6 +1131,8 @@ int main(int argc, char **argv) {
     font_boundary();
   else if (!strcmp(argv[1], "faults"))
     faults();
+  else if (!strcmp(argv[1], "quake3"))
+    quake3();
   else if (!strcmp(argv[1], "text")) {
     assert(argc == 3);
     text(argv[2]);

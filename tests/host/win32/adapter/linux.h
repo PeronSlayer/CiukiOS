@@ -15,6 +15,7 @@ struct host_state {
     void *dispatcher; /* KiUserExceptionDispatcher of the core in use */
 };
 extern struct host_state host;
+extern ULONG host_exec_heap; /* f7: readable pages also executable (Windows 9x, no NX) */
 LONG host_syscall(ULONG, ULONG, ULONG, ULONG, ULONG, ULONG, ULONG);
 void host_init(void);
 void host_fs(struct w32_teb *);

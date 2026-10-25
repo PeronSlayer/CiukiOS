@@ -7,4 +7,11 @@ int h1_installer_kernel(void *,uint32_t,int32_t *);
 uint32_t h1_installer_server(const void *,uint32_t,void *,uint32_t,uint32_t *);
 void h1_installer_parameters(const char *);
 void h1_installer_providers(const struct w32_builtin *,uint32_t);
+/* f7 game mode (h1_game.c): desktop, surfaces, display, message queue. */
+void h1_game_init(int32_t (*)(void *,uint32_t));
+int h1_game_enabled(void);
+int h1_game_kernel(void *,uint32_t,int32_t *);
+int h1_game_gate(uint32_t,uint32_t,uint32_t,uint32_t,int32_t *);
+void h1_game_report(void);
+void h1_game_module(const char *,void *); /* after a DLL's successful DLL_PROCESS_ATTACH: GL call profile hooks */
 #endif

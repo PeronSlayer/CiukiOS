@@ -32,7 +32,13 @@ void host_exit(ULONG code) {
 static ULONG round_page(ULONG n) {
     return (n + 4095) & ~4095u;
 }
+/* f7 game mode: Windows 98 on an i686 without PAE has no no-execute bit,
+ * so every readable page of a process is executable (Quake III runs the
+ * code its QVM compiler writes into heap memory). Opt-in; 0 keeps W^X. */
+ULONG host_exec_heap;
 static void *mapping(ULONG address, ULONG size, ULONG protection, ULONG flags, LONG fd) {
+    if (host_exec_heap && (protection & 1))
+        protection |= 4;
     LONG result = host_syscall(192, address, round_page(size), protection, flags, fd, 0);
     return (ULONG)result >= 0xfffff001u ? 0 : (void *)(uintptr_t)result;
 }
@@ -83,6 +89,8 @@ static void release(void *opaque, void *p, ULONG n) {
 }
 static int protect(void *opaque, void *p, ULONG n, ULONG prot) {
     (void)opaque;
+    if (host_exec_heap && (prot & 1))
+        prot |= 4;
     return !host_syscall(125, PTR(p), n, prot, 0, 0, 0);
 }
 static int open_file(void *opaque, const char *name, struct w32_file *f) {

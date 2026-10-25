@@ -1463,6 +1463,87 @@ static void *poll_worker(void *unused) {
   __atomic_store_n(&worker.done, 1, __ATOMIC_RELEASE);
   return 0;
 }
+/* f7 (Quake III Arena): ChangeDisplaySettingsA/EnumDisplaySettingsA over
+ * the fixture display (800x600x32, hardware modes 640x480x32, 800x600x32),
+ * CloseWindow and the gdi32 seams. */
+static void q3_devmode(uint8_t *dm, UINT size, DWORD fields, DWORD w, DWORD h, DWORD bpp) {
+  memset(dm, 0, 156);
+  w32_put16(dm + 36, (uint16_t)size);
+  w32_put32(dm + 40, fields);
+  w32_put32(dm + 104, bpp);
+  w32_put32(dm + 108, w);
+  w32_put32(dm + 112, h);
+}
+static void test_quake3(void) {
+  BOOL saved = host_modules;
+  host_modules = 1;
+  uint8_t dm[156];
+  DWORD mode[3], caps[3];
+  CHECK(w32_user_display_caps(caps) && caps[0] == 800 && caps[1] == 600 && caps[2] == 32);
+  CHECK(ChangeDisplaySettingsA(0, 0) == 0 && !w32_user_display_mode(mode));
+  /* Quake III GLW_SetMode: dmSize = sizeof(DEVMODE) (148), width and height. */
+  q3_devmode(dm, 148, 0x80000 | 0x100000, 640, 480, 0);
+  CHECK(ChangeDisplaySettingsA(dm, 2 /* CDS_TEST */) == 0 && !w32_user_display_mode(mode));
+  CHECK(ChangeDisplaySettingsA(dm, 4 /* CDS_FULLSCREEN */) == 0);
+  CHECK(w32_user_display_mode(mode) && mode[0] == 640 && mode[1] == 480 && mode[2] == 32);
+  memset(dm, 0x55, sizeof(dm));
+  w32_put16(dm + 36, 148);
+  CHECK(EnumDisplaySettingsA(0, 0xffffffffu, dm));
+  CHECK(w32_u32(dm + 40) == 0x7c0000u && w32_u32(dm + 104) == 32 && w32_u32(dm + 108) == 640 &&
+        w32_u32(dm + 112) == 480 && w32_u32(dm + 116) == 0 && w32_u32(dm + 120) == 60);
+  CHECK(w32_u16(dm + 36) == 148 && dm[0] == 0x55 && dm[124] == 0x55);
+  CHECK(EnumDisplaySettingsA("DISPLAY", 0xfffffffeu, dm) && w32_u32(dm + 108) == 800 &&
+        w32_u32(dm + 112) == 600);
+  CHECK(ChangeDisplaySettingsA(0, 0) == 0 && !w32_user_display_mode(mode));
+  CHECK(EnumDisplaySettingsA(0, 0xffffffffu, dm) && w32_u32(dm + 108) == 800);
+  /* Refusals: unknown size, 24 bpp, persistence, bad flags, short DEVMODE. */
+  q3_devmode(dm, 148, 0x80000 | 0x100000, 641, 480, 0);
+  CHECK(ChangeDisplaySettingsA(dm, 4) == -2);
+  q3_devmode(dm, 148, 0x40000 | 0x80000 | 0x100000, 640, 480, 24);
+  CHECK(ChangeDisplaySettingsA(dm, 4) == -2);
+  q3_devmode(dm, 148, 0x80000 | 0x100000, 1024, 768, 0);
+  CHECK(ChangeDisplaySettingsA(dm, 4) == -2); /* larger than every hardware mode */
+  q3_devmode(dm, 148, 0x40000 | 0x80000 | 0x100000, 640, 480, 16);
+  CHECK(ChangeDisplaySettingsA(dm, 1 /* CDS_UPDATEREGISTRY */) == -3);
+  CHECK(ChangeDisplaySettingsA(dm, 4 | 1) == -4 && ChangeDisplaySettingsA(dm, 0x80) == -4);
+  q3_devmode(dm, 68, 0x80000 | 0x100000, 640, 480, 0);
+  CHECK(ChangeDisplaySettingsA(dm, 4) == -5);
+  CHECK(!w32_user_display_mode(mode));
+  q3_devmode(dm, 156, 0x40000 | 0x80000 | 0x100000 | 0x400000, 320, 200, 15);
+  w32_put32(dm + 120, 75); /* a refresh rate is accepted and ignored */
+  CHECK(ChangeDisplaySettingsA(dm, 0) == 0 && w32_user_display_mode(mode) && mode[2] == 16);
+  CHECK(ChangeDisplaySettingsA(0, 0) == 0);
+  /* Enumeration: 7 sizes up to 800x600 at 8, 16 and 32 bits, each accepted. */
+  UINT n = 0, last_bpp = 0;
+  BOOL saw = 0;
+  for (; n < 64; n++) {
+    q3_devmode(dm, 148, 0, 0, 0, 0);
+    if (!EnumDisplaySettingsA(0, n, dm))
+      break;
+    DWORD bpp = w32_u32(dm + 104), w = w32_u32(dm + 108), h = w32_u32(dm + 112);
+    CHECK(bpp >= last_bpp && w <= 800 && h <= 600 && w32_u32(dm + 120) == 60);
+    last_bpp = bpp;
+    saw |= w == 640 && h == 480 && bpp == 32;
+    w32_put32(dm + 40, 0x40000 | 0x80000 | 0x100000);
+    CHECK(ChangeDisplaySettingsA(dm, 2) == 0);
+  }
+  CHECK(n == 21 && saw);
+  q3_devmode(dm, 120, 0, 0, 0, 0);
+  CHECK(!EnumDisplaySettingsA(0, 0, dm) && GetLastError() == 87);
+  q3_devmode(dm, 148, 0, 0, 0, 0);
+  CHECK(!EnumDisplaySettingsA("\\\\.\\DISPLAY2", 0, dm) && GetLastError() == 87);
+  /* CloseWindow minimizes a top-level window; a child is refused. */
+  HWND top = CreateWindowExA(0, "USER fixture", "close", WS_VISIBLE | WS_CAPTION, 0, 0, 60, 40, 0, 0, 0, 0);
+  CHECK(top && !IsIconic(top));
+  CHECK(CloseWindow(top) && IsIconic(top) && IsWindow(top));
+  HWND inner = CreateWindowExA(0, "USER fixture", "inner", WS_CHILD | WS_VISIBLE, 0, 0, 10, 10, top, 0, 0, 0);
+  CHECK(inner && !CloseWindow(inner) && !IsIconic(inner));
+  CHECK(DestroyWindow(top) && !IsWindow(inner));
+  SetLastError(0);
+  CHECK(!CloseWindow(top) && GetLastError() == 1400);
+  host_modules = saved;
+  puts("TRACE quake3: ChangeDisplaySettingsA full-screen record, EnumDisplaySettingsA, CloseWindow");
+}
 static void test_display(void) {
   HWND g = CreateWindowExA(0, "USER fixture", "game", WS_VISIBLE | WS_POPUP, 0,
                            0, 320, 200, 0, 0, 0, 0);
@@ -2276,6 +2357,7 @@ static void run(void) {
   test_arrange();
   test_zoom_limits();
   test_display();
+  test_quake3();
   test_production_gdi();
   test_g23_appearance();
   traces = 0;

@@ -2975,3 +2975,194 @@ opcode, so the desktop ended the connection, as in q3exec2.
    closed window and SET_TITLE requests naming window 0: all are refused
    alone; a malformed PONG still drops the connection (fails without
    decision 3).
+
+## f7: Quake III Arena demo (2026-10-25)
+
+Owner goal (2026-10-25 19:35, "3D funzionante"): the Quake III Arena demo
+(id Software, point release 1.11: `quake3.exe` 864,313 bytes, SHA-256
+`2c0dd4d0...8269a3`, and `demoq3/pak0.pk3` 46,853,694 bytes, installed by
+`Q3ADemo.exe` to `C:\Q3Ademo`) starts from its Start-menu item and renders
+its menus and demos through `opengl32.dll`, windowed and full screen. Host
+evidence and the QEMU checklist: `docs/validation/f7-quake3-demo-2026-10-25.md`.
+
+### Research
+
+- The executable (PE32 GUI, MSVC 6 linker, image base 0x400000, 8 MiB stack
+  reserve, no relocations), read on the host with `scripts/win32/census.py`
+  and `objdump`; no game file enters the repository. Static imports:
+  KERNEL32 102, USER32 46, GDI32 10, WINMM 11 (timers, joystick, `midiIn*`),
+  WSOCK32 18 by ordinal, ADVAPI32 6, ole32 3 (`CoInitialize`,
+  `CoCreateInstance`, `CoUninitialize`, used for Aureal A3D only).
+  Dynamic loads: `LoadLibrary("opengl32")` and `GetProcAddress` of the 336
+  OpenGL 1.1 functions and 22 `wgl*` names, `wglGetProcAddress` of
+  `glActiveTextureARB`, `glClientActiveTextureARB`, `glMultiTexCoord2fARB`,
+  `glLockArraysEXT`, `glUnlockArraysEXT`, `wglSwapIntervalEXT` and the 3Dfx
+  gamma pair; `dinput.dll!DirectInputCreateA`; `dsound.dll!DirectSoundCreate`
+  (0x442560: on DSERR_ALLOCATED it waits 3 s and retries once, then runs
+  without sound); `3dfxvgl` only after opengl32 failed.
+- id Software's GPL release of the same code base,
+  [Quake-III-Arena code/win32](https://github.com/id-Software/Quake-III-Arena/tree/master/code/win32):
+  `win_glimp.c` `GLW_ChoosePFD` rejects every format with
+  `PFD_GENERIC_FORMAT` unless `r_allowSoftwareGL` is set (the 1.11 binary
+  does the same at 0x461290), needs a depth of at least 15 bits and retries
+  without stencil; `GLW_SetMode` reads `GetDeviceCaps(GetDC(GetDesktopWindow()),
+  BITSPIXEL/HORZRES/VERTRES)` and shows "Low Desktop Color Depth" when the
+  depth is below 15 or exactly 24, then calls
+  `ChangeDisplaySettings({640x480}, CDS_FULLSCREEN)` and creates a
+  `WS_POPUP|WS_VISIBLE|WS_SYSMENU`, `WS_EX_TOPMOST` window at 0,0 (when CDS
+  fails it tries the `EnumDisplaySettings` list, then a captioned window);
+  `win_gamma.c` uses hardware gamma (with overbright bits) only when
+  `GetDeviceGammaRamp` succeeds; `win_wndproc.c` ignores WM_DISPLAYCHANGE
+  in full screen.
+- Microsoft documentation: [ChangeDisplaySettingsA](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-changedisplaysettingsa)
+  ("CDS_FULLSCREEN: the mode is temporary in nature"; NULL with flags 0
+  returns to the registry mode; CDS_UPDATEREGISTRY that cannot be stored
+  returns DISP_CHANGE_NOTUPDATED; CDS_TEST only tests),
+  [EnumDisplaySettingsA](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-enumdisplaysettingsa),
+  [DEVMODEA](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-devmodea),
+  [SetDeviceGammaRamp](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-setdevicegammaramp)
+  ("succeeds only for devices with drivers that support downloadable gamma
+  ramps in hardware"; three arrays of 256 WORDs, red, green, blue),
+  [GetDeviceGammaRamp](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-getdevicegammaramp),
+  [GetDeviceCaps](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-getdevicecaps),
+  [PIXELFORMATDESCRIPTOR](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-pixelformatdescriptor)
+  ("PFD_GENERIC_FORMAT: the pixel format is supported by the GDI software
+  implementation ... If this bit is clear, the pixel format is supported by
+  a device driver or hardware"),
+  [CloseWindow](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-closewindow)
+  ("Minimizes (but does not destroy) the specified window"),
+  [EnumSystemLocalesA](https://learn.microsoft.com/en-us/windows/win32/api/winnls/nf-winnls-enumsystemlocalesa).
+- 64-bit division: H. S. Warren, *Hacker's Delight*, 2nd ed., 9-5
+  ("Unsigned Doubleword Division from Long Division").
+
+### Findings
+
+1. Load: the image's DLLs lacked four static imports, so the loader refused
+   the executable (error 127): `GDI32!GetDeviceGammaRamp`,
+   `GDI32!SetDeviceGammaRamp`, `USER32!CloseWindow`,
+   `KERNEL32!EnumSystemLocalesA`. `USER32!ChangeDisplaySettingsA` and
+   `EnumDisplaySettingsA` were W21 typed failures (-1, FALSE), so the game
+   could only run windowed.
+2. Every pixel format carried `PFD_GENERIC_FORMAT`: Quake III refused all of
+   them ("...no hardware acceleration found") and stopped with "could not
+   load OpenGL subsystem".
+3. `GetDeviceCaps` of the screen DC (`GetDC(NULL)` is a memory DC) reported
+   the 1x1 monochrome default bitmap: depth 1, size 1x1. Quake III asked
+   "Low Desktop Color Depth" before every mode set (observed on the H1 host
+   run), and any program reading the display depth from a screen, window or
+   memory DC got the surface's values instead of the display's.
+4. The i386 64-bit division helpers (`__aulldiv`/`__aullrem`, and through
+   `gdi_sdiv` `__alldiv`/`__allrem`) were a 64-iteration shift-and-subtract
+   loop. The software renderer divides in 64 bits per pixel: 81% of the CPU
+   time of the main menu went to `k32_udiv` (H1 host profile).
+5. A program opened from Files or the desktop, or from a shortcut without
+   "Start in", inherited the desktop's directory (`C:\`); Quake III reads
+   `demoq3` from its current directory (`fs_basepath` = `_getcwd`).
+6. The full-screen path already existed: a borderless `WS_POPUP` GL window
+   takes the DirectDraw display lease on its first `SwapBuffers`
+   (`opengl32/present.c`, `user32/display.c`, kernel `W32_DISPLAY_FRAME`),
+   and the kernel switches to the exact mode or a 1-3x multiple
+   (`ciuki_present_choose_mode`).
+
+### Decisions
+
+| DLL | Function | CiukiOS behaviour |
+| --- | --- | --- |
+| GDI32 | `DescribePixelFormat` | The four formats (24/16-bit colour, double/single buffered, 16-bit depth, no stencil) no longer set `PFD_GENERIC_FORMAT`: they belong to the system OpenGL driver (opengl32 over the 3D driver model, software or hardware), not to a GDI generic implementation. |
+| GDI32 | `GetDeviceCaps` | For a non-printer DC (screen, window, memory) HORZRES, VERTRES, BITSPIXEL and the caps derived from them (HORZSIZE, VERTSIZE, NUMCOLORS, RASTERCAPS, SIZEPALETTE, NUMRESERVED, COLORRES, DESKTOPVERTRES/HORZRES) report the display through USER's `w32_user_display_caps` (cached 250 ms): width and height of the physical mode, 8 or 16 bits as is, 24 and 32 as 32 (every window surface is XRGB8888, and 24 would trigger the games' "low depth" paths). An explicit `w32_gdi_set_desktop` keeps priority; without USER the old values remain. |
+| GDI32 | `GetDeviceGammaRamp`, `SetDeviceGammaRamp` | A display DC and a 768-WORD ramp; succeed only while USER reports a full-screen mode set by this process (`w32_user_display_mode`) and a presenter has registered that it applies the ramp on its lease (`w32_gdi_gamma_presenter`); otherwise FALSE with ERROR_NOT_SUPPORTED (50), as a Windows 98 board without downloadable ramps. Get returns the current ramp (identity until Set); Set stores it and advances the serial that `w32_gdi_gamma` returns with the ramp. No presenter registers yet (see next steps), so Quake III uses its software gamma ("GAMMA: software w/ 0 overbright bits") and the picture is correct windowed and full screen. |
+| USER32 | `ChangeDisplaySettingsA` | DEVMODEA (dmSize 124..156; dmFields DM_PELSWIDTH, DM_PELSHEIGHT, DM_BITSPERPEL, others ignored; missing fields take the current mode, 15 bpp is 16). A mode is valid under the DirectDraw rule: 8/16/32 bpp, a hardware size or a logical size the presenter scales (320x200 ... 1024x768), with a 16/32-bit hardware mode at least that large. Flags 0 or CDS_FULLSCREEN record a process-scoped full-screen mode and return DISP_CHANGE_SUCCESSFUL; nothing is sent to the desktop: the borderless window's first frame takes the lease, which switches the physical mode. CDS_TEST validates only. CDS_UPDATEREGISTRY, CDS_GLOBAL, CDS_SET_PRIMARY, CDS_NORESET: DISP_CHANGE_NOTUPDATED (the Display control panel owns the desktop mode). Unknown flags or FULLSCREEN with UPDATEREGISTRY: DISP_CHANGE_BADFLAGS; short DEVMODE: DISP_CHANGE_BADPARAM; invalid mode: DISP_CHANGE_BADMODE. NULL clears the record. No WM_DISPLAYCHANGE: the composed desktop does not change mode. `ChangeDisplaySettingsW` stays a Windows 9x typed failure (-1, error 120). |
+| USER32 | `EnumDisplaySettingsA` | Device NULL, "DISPLAY" or `\\.\DISPLAY1`; ENUM_CURRENT_SETTINGS returns the process's full-screen mode while set, else the physical mode; ENUM_REGISTRY_SETTINGS the physical mode; indexes 0.. list the modes ChangeDisplaySettingsA accepts by bpp, width, height, all at 60 Hz (dmFields BITSPERPEL, PELSWIDTH, PELSHEIGHT, DISPLAYFLAGS, DISPLAYFREQUENCY; dmSize and dmDriverExtra are the caller's). Past the last mode: FALSE (ERROR_NO_MORE_FILES). |
+| USER32 | `CloseWindow` | Minimizes a top-level window (`ShowWindow(SW_MINIMIZE)`), returns TRUE; a child window: FALSE; an invalid handle: FALSE, ERROR_INVALID_WINDOW_HANDLE. |
+| USER32 | `w32_user_display_caps`, `w32_user_display_mode` | Private value-only seams for GDI (above). |
+| KERNEL32 | `EnumSystemLocalesA` | LCID_INSTALLED and LCID_SUPPORTED call the procedure with "00000409" then "00000410" (the locales `IsValidLocale` accepts), stopping when it returns FALSE; LCID_ALTERNATE_SORTS adds none; both INSTALLED and SUPPORTED, or unknown bits: ERROR_INVALID_FLAGS; no procedure: ERROR_INVALID_PARAMETER. |
+| runtime | `__aulldiv`, `__aullrem`, `__alldiv`, `__allrem` | `k32_udiv`/`k32_urem` use DIVL: one when the dividend's high half is below a 32-bit divisor, two otherwise, one plus a correction for divisors of 2^32 and more; a zero divisor keeps the former result (all ones, remainder n). Used by opengl32, gdi32, ddraw and kernel32. |
+| desktop | `/System/Win32/shell-launch` | A PE started without a directory starts in its own folder, as Windows Explorer starts a program opened from a folder. A shortcut with "Start in" (VISE `AddItem` defdir, IShellLink working directory) keeps it. |
+
+Full screen follows the DirectDraw model: the program's mode is the lease
+of its borderless window, not a desktop mode change. `ChangeDisplaySettings`
+succeeds for a mode the lease can show; while the program has focus its
+frames go to `W32_DISPLAY_FRAME` and the kernel scans them out at that mode
+(exact, or the smallest scaled or enclosing mode, centred); Alt+Tab, the
+Start menu or a focus change revoke the lease and the desktop regrants it
+when the window regains focus. A captioned (windowed) GL window stays on
+the composed path (`StretchDIBits` + DESK_V3_PRESENT). DOS full screen and
+the Win32 lease exclude each other in the kernel, unchanged.
+
+### Host evidence: the H1 game mode
+
+`tests/host/win32/installers/h1_game.c` adds a `game-exec` mode to the
+confined i386 H1 adapter (installer services plus a stand-in desktop with
+window surfaces, focus and the lease, the thread message queue, the
+display query, `W32_DISPLAY` frames, a CPU sampler and executable heap
+pages, as Windows 98 without NX: the game's QVM compiler runs code it
+writes to the heap). `tests/host/win32/installers/test_quake3.py` runs the
+unmodified `quake3.exe` on this tree's production DLLs to the main menu,
+takes Quake III's own screenshot and checks the console log, the presented
+frames and the menu's pixels; it skips without the (never committed) game
+tree. Threads stay unavailable there, so DirectSound reports "failed" and
+the run is silent; sound is covered by the dsound host tests and QEMU.
+
+The game mode also measures the program's OpenGL use: after
+`opengl32.dll`'s `DLL_PROCESS_ATTACH` it redirects the mapped image's
+export table to counting thunks (written into the image's `.reloc`
+section, dead after the load, because `GetProcAddress` accepts only RVAs
+inside a section) and wraps `wglGetProcAddress` so the extension entry
+points are counted too; the report lists calls per name, the SIGPROF
+samples per 64-byte block and the frames presented. The menu test checks
+the profile's shape (vertex arrays locked with `glLockArraysEXT`, one
+`glDrawElements` per surface, one `glReadPixels` for the screenshot); the
+opt-in timedemo test (`CIUKI_Q3A_TIMEDEMO`) records the console's frames
+per second of `demo001` and the per-call profile of the arena.
+
+### Known limits and next steps
+
+- opengl32 (the f7-glperf worker's area): 13 `wgl*` names Quake III asks
+  for are not exported by this tree's opengl32 (`wglChoosePixelFormat`,
+  `wglDescribePixelFormat`, `wglGetPixelFormat`, `wglSetPixelFormat`,
+  `wglSwapBuffers`, `wglCopyContext`, `wglCreateLayerContext`,
+  `wglDescribeLayerPlane`, `wglGetLayerPaletteEntries`,
+  `wglRealizeLayerPalette`, `wglSetLayerPaletteEntries`,
+  `wglSwapLayerBuffers`, `wglUseFontOutlinesA`); the f7-glperf worktree
+  adds the first five (`opengl32/wgl_formats.c`, delegates to GDI), the
+  eight layer-plane, copy-context and font-outline names stay absent. Each
+  is logged once as `missing-export` at load and Quake III keeps a NULL
+  pointer: the ICD path (`GLW_StartOpenGL` with `opengl32`) never calls
+  them, only a standalone 3Dfx-style driver path would. The
+  per-pixel 64-bit arithmetic in `sdk/libgl/software/renderer.c` dominates
+  the arena profile (host timedemo at 640x480: `sw_triangle` 34.5%,
+  `k32_urem` 30.3% from `coordinate()`'s GL_REPEAT `int64 % 65536`,
+  `k32_udiv` 9.5% from `interpolate()` and the perspective divide,
+  `sample_level` 4.0%): a mask for the power-of-two wrap and incremental
+  span steps instead of a division per channel are the next targets; the
+  host renders `demo001` at 1.8 frames/s at 640x480 and 5.2 at 320x240,
+  the menu at 12. Device gamma on the lease: in `gl_present`'s
+  full-screen branch, call `w32_gdi_gamma_presenter(TRUE)` once and send
+  `W32_DISPLAY_GAMMA` (the `w32_gdi_gamma` ramp) before a frame whenever
+  its serial or the lease token/generation changed; then Quake III switches
+  to hardware gamma with overbright bits (`r_ignorehwgamma 0`, the default;
+  `r_overBrightBits 1`). Until then the software gamma path is correct and
+  complete, and `SetDeviceGammaRamp` answers as a Windows 98 display driver
+  without downloadable ramps (FALSE, `ERROR_NOT_SUPPORTED`).
+- Merge note for the f7-glperf worktree, which also edits
+  `sdk/win32/gdi32/pixelformat.c`: this change's only edit to `describe()`
+  is clearing `PFD_GENERIC_FORMAT`, which that worktree does as well (with
+  the real 16/32-bit colour, D16/D24 and S8 descriptors); take theirs for
+  `describe()` and keep the gamma-ramp block appended here
+  (`GetDeviceGammaRamp`, `SetDeviceGammaRamp`, `w32_gdi_gamma_presenter`,
+  `w32_gdi_gamma`), which depends on nothing in the descriptors. With their
+  D24/S8 formats Quake III's first `GLW_ChoosePFD( 32, 24, 8 )` succeeds
+  (stencil shadows become possible); the menu test's "no stencil format"
+  expectation is not asserted, only the lines common to both.
+- `r_smp 1` would swap from a second thread, which `w32_user_gl_target`
+  refuses (owner thread only); the default is 0.
+- Quake III's `r_mode` table (`code/renderer/tr_init.c`): 0 320x240,
+  1 400x300, 2 512x384, 3 640x480, 4 800x600, 5 960x720, 6 1024x768,
+  7 1152x864, 8 1280x1024, 9 1600x1200, 10 2048x1536, 11 856x480. Under
+  the mode rule above, 0-4 and 6 are accepted on a 1024x768 display (0-2
+  through the presenter's scaling), 5 and 7-11 return
+  `DISP_CHANGE_BADMODE` and Quake III falls back through
+  `EnumDisplaySettings` to a captioned 640x480 window ("...calling CDS:
+  failed, ...trying next higher resolution" is the game's own text).
+- The H1 game mode has no threads, network or audio device; QEMU is the
+  evidence for DirectSound, DirectInput with real input, and winsock.
