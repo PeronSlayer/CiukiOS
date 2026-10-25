@@ -137,7 +137,7 @@ static bool lean_fetch(struct dosvm *v, const struct v86_frame *f, const struct 
 }
 static bool lean_before(const struct dosvm *v, const struct v86_frame *f)
 {
-    if (v->info.state >= DOSVM_STOPPING || !v->info.dos_ready || v->fullscreen ||
+    if (v->info.state >= DOSVM_STOPPING || !v->info.dos_ready || !dosvm_vga_ports_modeled(v) ||
         v->fullscreen_hold || v->fullscreen_suspended || v->idle.depth || v->network_attached ||
         v->audio.sb.irq_entry_ready || v->monitor.state == V86_HALTED || g_need_resched) return false;
     if (v->dpmi.active && !dpmi_lean_eligible(v, f)) return false;

@@ -14,6 +14,29 @@ full-screen scanout still needs this provider; without it full-screen entry
 for a VBE mode stays windowed. Decision, sources and tests:
 `dos-dpmi-contract.md`, "VBE modes in the DOS window (2026-10-25)".
 
+## T23 c42f556e amendment: VBE full-screen transport (2026-10-25)
+
+Warcraft II's 101h (windowed model) full screen on the T23 ran at a third of
+its window speed, froze for 2 s at its first frame and almost met the 5 s
+first-frame watchdog. Evidence, research and tests:
+[t23-war2-fullscreen](../validation/t23-war2-fullscreen-2026-10-25.md).
+Rules added for a VBE full screen, whose scanout is the kernel's copy of the
+VM's buffer and palette:
+
+- its trapped VGA ports reach the VGA model as in the window, so the fx-27
+  lean exits and DAC burst apply (`dosvm_vga_ports_modeled`); a VGA-mode
+  full screen keeps the adapter pass-through;
+- the display worker is its transport and never waits for a durable log
+  commit while it runs: `first-guest-frame` is a non-blocking
+  `display_fullscreen_record` (both transports); entry and return steps are
+  unchanged;
+- a guest DAC or display-register change counts as its first frame
+  (`source=register-write`);
+- each entry starts its own step clock (`display_fullscreen_entry_request`):
+  `vm-park step_ms` no longer includes the time spent in the window;
+- packed modes program the identity attribute palette (X.Org and Linux
+  `vgaHWInit`).
+
 ## fx-22 return transaction amendment (2026-10-23)
 
 Trial f441c5bd (Quake quit to the DOS prompt in native full screen, then

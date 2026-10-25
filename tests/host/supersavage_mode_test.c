@@ -181,6 +181,10 @@ static void cycles(void)
             assert(hz>m->clock_khz*990u && hz<m->clock_khz*1010u);
             assert(card.cr[0x50]==((m->width==640 ? 0x40 : 0x80)|(m->bpp==16 ? 0x10 : 0)));
             assert(card.vga.crtc[1]==m->width/8-1 && card.vga.crtc[0x12]==(uint8_t)(m->height-1));
+            /* X.Org vgaHWInit / Linux savagefb: identity attribute palette
+             * above 4 bpp, 8-bit pixel path (T23 c42f556e review). */
+            for (unsigned a=0;a<16;a++) assert(card.vga.attr[a]==a);
+            assert(card.vga.attr[0x10]==0x41);
         } else {
             assert(!card.cr[0x31] && !(card.sr[0x1B]&0x98));
             assert(card.sr[0x12]==original.sr[0x12] && card.sr[0x13]==original.sr[0x13]);

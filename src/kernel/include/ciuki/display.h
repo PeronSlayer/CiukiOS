@@ -35,6 +35,9 @@ int display_fullscreen_lfb(struct display_lfb *);
 bool display_fullscreen_active(void);
 /* IRQ safe, records the hotkey/fault time without doing any I/O. */
 void display_fullscreen_return_request(void);
+/* Thread context: a new entry transaction; its first step's step_ms then
+ * counts from the request, not from the previous transaction's last step. */
+void display_fullscreen_entry_request(void);
 /* fx-22: records a return step that has lasted 1 s (cpustat, each second). */
 void display_fullscreen_stall_poll(void);
 /* Boot check only, no grants/desktop; end verifies the original VBE mode. */
@@ -47,6 +50,10 @@ void display_check_sweep_end(bool restored);
 /* Thread context; entry commits the preceding records on hardware. Return
  * queues the watermark for the storage worker without waiting for device I/O. */
 int display_fullscreen_checkpoint(const char *step, int result);
+/* A step record while the full screen runs (first guest frame): queued and
+ * its commit requested, never waited for. The display worker is the scanout
+ * transport of a VBE full screen. Always returns 0. */
+int display_fullscreen_record(const char *step, int result);
 int grants_display_suspend(bool suspended);
 uint32_t grants_display_pid(void);
 bool grants_display_owner(const struct process *);

@@ -1,6 +1,7 @@
 /* Physical transport seams. The production state machine is included below. */
 #include "../../src/kernel/arch/vga_io.h"
 #include <ciuki/display.h>
+#include <ciuki/bootlog.h>
 static uint8_t fs_bitmap[8193];
 static cvga_state fs_card;
 static bool fs_ports,fs_display,fs_refuse;
@@ -53,9 +54,26 @@ int display_fullscreen_write(uint32_t offset,const void *p,uint32_t bytes)
     fs_linear_writes++;fs_linear_bytes+=bytes;return 0;
 }
 void display_fullscreen_return_request(void) {}
+/* T23 c42f556e: storage that does not drain makes a durable checkpoint wait
+ * the whole BOOTLOG_SYNC_TIMEOUT_MS and fail with -EAGAIN (display.c,
+ * bootlog_sync); a running full screen's record never waits. */
+static unsigned fs_checkpoint_wait_ms;
+static unsigned fs_entry_requests,fs_records;
+void display_fullscreen_entry_request(void) { fs_entry_requests++; }
+int display_fullscreen_record(const char *step,int result)
+{
+    (void)result; fs_records++;
+    if (fs_checkpoint_hook) fs_checkpoint_hook(step);
+    return 0;
+}
 int display_fullscreen_checkpoint(const char *step,int result)
 {
     (void)result; fs_checkpoints++;
+    if (fs_checkpoint_wait_ms) {
+        g_ticks+=fs_checkpoint_wait_ms;
+        if (fs_checkpoint_hook) fs_checkpoint_hook(step);
+        return -EAGAIN;
+    }
     if (!strcmp(step,"watchdog-return")) fs_watchdog_returns++;
     if (fs_return_order && !strcmp(step,"guest-revoke")) {
         CHECK(!fs_exit_stage);fs_exit_stage=1;

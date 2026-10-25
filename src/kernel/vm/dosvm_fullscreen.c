@@ -262,9 +262,11 @@ void dosvm_fullscreen_mode_changed(struct dosvm *v)
     display_fullscreen_return_request();
     flags=irq_save(); fullscreen_mode_vm=0; irq_restore(flags);
 }
-static void linear_palette(struct dosvm *v)
+/* True when a guest display-state change (DAC, mask or another display
+ * register, vga.display_changes) reloaded the palette. */
+static bool linear_palette(struct dosvm *v)
 {
-    if (fullscreen_palette==v->vga.display_changes) return;
+    if (fullscreen_palette==v->vga.display_changes) return false;
     outb(0x3C6,v->vga.dac_mask);outb(0x3C8,0);
     /* Native packed setup uses X.Org's eight-bit CLUT; guests retain the
      * six-bit VGA DAC advertised by the synthetic VBE interface. */
@@ -272,6 +274,7 @@ static void linear_palette(struct dosvm *v)
         unsigned c=v->vga.dac[i][k];outb(0x3C9,(c<<2)|(c>>4));
     }
     fullscreen_palette=v->vga.display_changes;
+    return true;
 }
 int dosvm_fullscreen_enter(struct dosvm_key key)
 {
@@ -295,6 +298,9 @@ int dosvm_fullscreen_enter(struct dosvm_key key)
     /* Persistence sleeps: pin the VM before the first record can yield. */
     v->fullscreen_hold=true;
     klog("[dosvm] fullscreen_request vm=%u generation=%u mode=%u",key.id,key.generation,mode);
+    /* T23 c42f556e: vm-park step_ms measured the idle time since the
+     * previous transaction's last step (4391 ms), not the park. */
+    display_fullscreen_entry_request();
     int e=display_fullscreen_checkpoint("vm-park",0);
     bool recovery_failed=false;
     if (e) goto resume;
@@ -488,15 +494,23 @@ void dosvm_fullscreen_poll(void)
     irq_restore(flags);
     if (v) {
         if (fullscreen_linear && !fullscreen_return) {
-            linear_palette(v);
+            /* The entry loaded the palette and the whole buffer; a guest
+             * DAC (or other display register) change since then is a guest
+             * store to the display too (T23 c42f556e: Warcraft II's 101h
+             * screen reloaded its palette every retrace while its first
+             * pixel store came 4120 ms into the 5 s first-frame watchdog). */
+            bool palette=linear_palette(v);
             int frame=dosvm_vbe_flush(v,false);
             if (frame<0) { v->fullscreen_error=frame; fullscreen_return=true; return_cause(DOSVM_FS_PRESENT_ERROR); }
             if (frame>0) fullscreen_sample_frame=true;
-            if (frame>0 && !fullscreen_frame_seen) {
+            if ((frame>0 || (frame==0 && palette)) && !fullscreen_frame_seen) {
                 fullscreen_frame_seen=true;
-                klog("[dosvm] fullscreen_first_frame vm=%u generation=%u tick=%llu source=linear-write",
-                    v->info.key.id,v->info.key.generation,g_ticks);
-                display_fullscreen_checkpoint("first-guest-frame",0);
+                klog("[dosvm] fullscreen_first_frame vm=%u generation=%u tick=%llu source=%s",
+                    v->info.key.id,v->info.key.generation,g_ticks,frame>0 ? "linear-write" : "register-write");
+                /* This worker is the scanout transport of a VBE full screen:
+                 * the record never waits for the BOOT.LOG commit (T23
+                 * c42f556e: a 2000 ms -EAGAIN wait froze buffer and palette). */
+                display_fullscreen_record("first-guest-frame",0);
                 if (fullscreen_mode_vm==v || v->vbe_direct.copying) goto release;
             }
         }
@@ -510,7 +524,7 @@ void dosvm_fullscreen_poll(void)
             if (fullscreen_frame_seen) {
                 klog("[dosvm] fullscreen_first_frame vm=%u generation=%u tick=%llu source=aperture-write",
                     v->info.key.id,v->info.key.generation,g_ticks);
-                display_fullscreen_checkpoint("first-guest-frame",0);
+                display_fullscreen_record("first-guest-frame",0);
                 if (fullscreen_mode_vm==v || v->vbe_direct.copying) goto release;
             }
         }

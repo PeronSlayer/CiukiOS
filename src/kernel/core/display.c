@@ -95,6 +95,29 @@ int display_fullscreen_checkpoint(const char *step, int result)
     return e;
 }
 
+/* T23 c42f556e (docs/validation/t23-war2-fullscreen-2026-10-25.md): the
+ * poll's first-guest-frame checkpoint waited the whole BOOT.LOG sync timeout
+ * (2000 ms, -EAGAIN) in the display worker, which in a VBE full screen is the
+ * only scanout transport: buffer flush and palette stood still meanwhile.
+ * A running full screen's record is evidence, not a hardware step: queue it
+ * and request the commit (the storage worker writes it shortly after). */
+int display_fullscreen_record(const char *step, int result)
+{
+    if (g_boot.flags & CBI_F_SMBIOS_QEMU) return 0;
+    uint64_t now=g_ticks;
+    klog("[display] fullscreen_step=%s result=%d tick=%llu step_ms=%llu",step,result,now,
+         step_tick && now>=step_tick ? now-step_tick : 0);
+    step_name=step; step_tick=now; step_task=g_current; step_reported=0;
+    (void)bootlog_try_sync();
+    return 0;
+}
+/* T23 c42f556e: vm-park reported step_ms=4391, the idle time since the
+ * previous return's desktop-restored step. An entry starts its own clock. */
+void display_fullscreen_entry_request(void)
+{
+    step_name="entry-request"; step_tick=g_ticks; step_task=g_current; step_reported=0;
+}
+
 uint32_t display_change_counter(void) { return changes; }
 static void changed(void) { if (!++changes) ++changes; }
 void display_present_returned(void)

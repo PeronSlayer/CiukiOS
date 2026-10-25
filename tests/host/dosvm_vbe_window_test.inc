@@ -107,6 +107,129 @@ static void vbe_window_function_cpu(void)
          "4F0Ah SetPrimaryPalette writes the DAC from a 32-bit client");
 }
 #endif
+/* T23 c42f556e (docs/validation/t23-war2-fullscreen-2026-10-25.md): the
+ * Warcraft II demo's full-screen sequence on the SuperSavage provider,
+ * replayed on the production VM, full-screen state machine and monitor with
+ * the fake adapter: Alt+Enter on the mode 13h logo, 4F02h 0101h while full
+ * screen (mode-change return), banked title screen in the window, Alt+Enter
+ * into the VBE (linear transport) full screen, a palette load per retrace
+ * (DOOM-style OUT 3C9h loop, fx-27 replay), Alt+Enter back to the window.
+ * Each check below failed on main 50a843517:
+ * - a palette load in the VBE full screen took 769 ordinary exits (the fx-27
+ *   lean exits and DAC burst were off for any full screen; T23: 21.8 us per
+ *   3C9h exit against 4.6 us in the window);
+ * - the first guest frame's durable checkpoint held the display worker, the
+ *   only scanout transport, for the 2000 ms BOOT.LOG sync timeout (T23:
+ *   "fullscreen_log error=-11 step=first-guest-frame");
+ * - a screen that changes only its palette was returned to the window by
+ *   the 5 s first-frame watchdog (T23: first pixel store at 4120 ms). */
+static unsigned war2_palette(struct dosvm *v, uint8_t seed, bool scalar)
+{
+    const uint8_t code[] = {0xBA, 0xC8, 0x03, 0x30, 0xC0, 0xEE,  /* mov dx,3C8h; xor al,al; out dx,al */
+        0x42, 0xBE, 0x00, 0x01, 0xB9, 0x00, 0x03,                  /* inc dx; mov si,100h; mov cx,300h */
+        0xAC, 0xC0, 0xE8, 0x02, 0xEE, 0xE2, 0xF9,                  /* lodsb; shr al,2; out dx,al; loop */
+        0x90};
+    CHECK(!dosvm_write(v, 0x30000, code, sizeof(code)));
+    uint8_t source[768];
+    for (unsigned i = 0; i < 768; i++) source[i] = (uint8_t)(seed + i * 3);
+    CHECK(!dosvm_write(v, 0x20100, source, sizeof(source)));
+    cur.tf.cs = 0x3000; cur.tf.eip = 0; cur.ds = cur.es = 0x2000;
+    cur.tf.eflags = V86_VM | V86_IF | 2;
+    unsigned exits = fx27_run(v, sizeof(code) - 1, 100000, scalar);
+    for (unsigned i = 0; i < 768; i++) CHECK(v->vga.dac[i / 3][i % 3] == (uint8_t)(source[i] >> 2));
+    return exits;
+}
+static void war2_alt_enter(void)
+{
+    (void)dosvm_fullscreen_input(INPUT_KEY, 0x38, 1);
+    CHECK(dosvm_fullscreen_input(INPUT_KEY, 0x1C, 1));
+    CHECK(dosvm_fullscreen_input(INPUT_KEY, 0x1C, 0));
+    (void)dosvm_fullscreen_input(INPUT_KEY, 0x38, 0);
+}
+static void test_vbe_native_war2_t23(void)
+{
+    bool available = fs_vbe_available;
+    window_fixtures(); fs_vbe_available = true; fs_direct_available = false;
+    (void)dosvm_fullscreen_input(INPUT_RESYNC, 0, 0);
+    struct dosvm *v = fx27_vm(false);
+    struct dosvm_key key = dosvm_key(v); v->owner_pid = 10; fs_expected_owner = v;
+    CHECK(dosvm_input_focus(key, true)); v->fullscreen_parked = true;
+    unsigned requests = fs_entry_requests;
+    /* 1. Alt+Enter on the Blizzard logo (13h): VGA full screen, whose VGA
+     *    ports go to the adapter (no modeled port, no lean exit). */
+    war2_alt_enter(); dosvm_fullscreen_poll();
+    CHECK(v->fullscreen && fs_display && !fullscreen_linear && !dosvm_vga_ports_modeled(v));
+    CHECK(fs_entry_requests == requests + 1);
+    /* 2. 4F02h BX=0101h in full screen: ordered return, windowed 101h. */
+    struct v86_frame f = vf(0x4F02, 0x0101, 0, 0);
+    CHECK(!dosvm_vga_bios(v, &f) && (uint16_t)f.tf.eax == 0x004F && v->fullscreen_hold);
+    CHECK(v->vbe_mode == 0x101 && !v->vbe_linear);
+    dosvm_fullscreen_poll();
+    CHECK(!v->fullscreen && !v->fullscreen_hold && !fs_display && !v->fullscreen_error);
+    CHECK(v->fullscreen_cause == DOSVM_FS_MODE_CHANGE && dosvm_vga_ports_modeled(v));
+    /* The title screen through the bank window: banks 0 and 2. */
+    CHECK(dosvm_vga_retry(v, 0xA0000, 0x30000, false)); vbe_window_maps(v, 0);
+    vbe_window_store(v, 0x100, 0x21);
+    f = vf(0x4F05, 0, 0, 2); CHECK(!dosvm_vga_bios(v, &f) && (uint16_t)f.tf.eax == 0x004F);
+    vbe_window_maps(v, 2); vbe_window_store(v, 0x200, 0x22);
+    /* 3. Alt+Enter on the 101h screen: VBE full screen, linear transport,
+     *    RAM buffer kept (windowed mode), forced flush at entry. */
+    war2_alt_enter(); dosvm_fullscreen_poll();
+    CHECK(v->fullscreen && fs_display && fullscreen_linear && !v->vbe_direct.pages);
+    CHECK(fs_entry_requests == requests + 2 && dosvm_vga_ports_modeled(v) && !fullscreen_frame_seen);
+    CHECK(fs_linear[0x100] == 0x21 && fs_linear[2 * 65536 + 0x200] == 0x22);
+    /* 4. The first guest frame while BOOT.LOG does not drain: the poll that
+     *    sees it neither waits nor stops the transport. */
+    CHECK(dosvm_vga_retry(v, 0xA0000, 0x30000, false)); vbe_window_maps(v, 2);
+    vbe_window_store(v, 0x300, 0x23);
+    fs_checkpoint_wait_ms = BOOTLOG_SYNC_TIMEOUT_MS;
+    uint64_t before = g_ticks; unsigned records = fs_records;
+    dosvm_fullscreen_poll();
+    uint64_t waited = g_ticks - before;
+    CHECK(fullscreen_frame_seen && fs_linear[2 * 65536 + 0x300] == 0x23);
+    vbe_window_store(v, 0x301, 0x24); dosvm_fullscreen_poll();
+    fs_checkpoint_wait_ms = 0;
+    CHECK(fs_linear[2 * 65536 + 0x301] == 0x24 && v->fullscreen);
+    printf("T23 c42f556e war2 first frame: display worker waited %llu ms (sync timeout %u ms), records=%u\n",
+           (unsigned long long)waited, BOOTLOG_SYNC_TIMEOUT_MS, fs_records - records);
+    CHECK(!waited && fs_records == records + 1);
+    /* 5. One full palette load per retrace: the scalar control takes 769
+     *    exits; the fx-27 lean exit and DAC burst apply as in the window. */
+    unsigned scalar = war2_palette(v, 1, true);
+    unsigned lean0 = v->perf.lean_exits, dac0 = v->perf.dac_batched;
+    unsigned exits = war2_palette(v, 2, false);
+    printf("T23 c42f556e war2 VBE full-screen palette load: %u exits (scalar control %u), lean=%u dac_batched=%u\n",
+           exits, scalar, v->perf.lean_exits - lean0, v->perf.dac_batched - dac0);
+    CHECK(scalar == 769 && exits <= 2 && v->perf.dac_batched - dac0 >= 760);
+    /* The poll loads the new palette into the adapter's 8-bit CLUT (the
+     *    fake card keeps six bits per entry). */
+    dosvm_fullscreen_poll();
+    for (unsigned i = 0; i < 256; i++) for (unsigned k = 0; k < 3; k++) {
+        unsigned c = v->vga.dac[i][k];
+        CHECK(fs_card.dac[i][k] == (uint8_t)(((c << 2) | (c >> 4)) & 63));
+    }
+    /* 6. Alt+Enter: hotkey return; the game continues in its window. */
+    war2_alt_enter(); dosvm_fullscreen_poll();
+    CHECK(!v->fullscreen && !fs_display && !v->fullscreen_hold && !v->fullscreen_suspended && !v->fullscreen_error);
+    CHECK(v->fullscreen_cause == DOSVM_FS_HOTKEY && v->info.state < DOSVM_STOPPING);
+    vbe_window_maps(v, 2);                    /* the bank window stayed open */
+    uint8_t byte = 0; CHECK(!dosvm_read(v, 0xA0301, &byte, 1) && byte == 0x24);
+    CHECK(war2_palette(v, 3, false) <= 2);
+    /* 7. A screen that only changes its palette keeps full screen past the
+     *    5 s first-frame watchdog (the DAC change is the guest's store). */
+    war2_alt_enter(); dosvm_fullscreen_poll();
+    CHECK(v->fullscreen && fullscreen_linear && !fullscreen_frame_seen);
+    CHECK(war2_palette(v, 4, false) <= 2);
+    g_ticks += 6000;
+    dosvm_fullscreen_poll();
+    CHECK(v->fullscreen && fs_display && fullscreen_frame_seen && !v->fullscreen_error);
+    CHECK(!dosvm_fullscreen_leave(key, false) && !fs_display && !v->fullscreen);
+    fs_expected_owner = 0; fs_vbe_available = available;
+    (void)dosvm_fullscreen_input(INPUT_RESYNC, 0, 0);
+    destroy(v, true); empty();
+    puts("PASS T23 c42f556e war2: 13h full screen, 4F02h 0101h mode-change return, banked window, VBE full screen with "
+         "lean/burst palette loads, non-blocking first-frame record, palette-only first frame, hotkey return to the window");
+}
 static void test_vbe_window(void)
 {
     bool available = fs_vbe_available; fs_vbe_available = false;

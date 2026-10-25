@@ -19,6 +19,7 @@ struct ciuki_boot_info g_boot;
 struct task *g_current;
 volatile uint64_t g_ticks;
 static unsigned raw_calls,log_failures;
+static char last_line[256]; /* T23 c42f556e: the step record's text */
 static bool worker_drains; /* fx-22: the storage worker commits during a wait */
 int blackbox_checkpoint(void) { raw_calls++;return 0; }
 void task_sleep_ms(uint32_t ms)
@@ -33,6 +34,7 @@ void klog(const char *format,...)
     char line[256];va_list ap;va_start(ap,format);
     int n=vsnprintf(line,sizeof(line),format,ap);va_end(ap);
     CHECK(n>0 && n<(int)sizeof(line));
+    memcpy(last_line,line,(size_t)n+1);
     bootlog_capture(line,(size_t)n);
     if (strstr(format,"fullscreen_log error=")) log_failures++;
 }
@@ -77,5 +79,29 @@ int main(void)
     worker_drains=false;
     printf("fx-22 real bootlog, draining worker: two durable steps in %u ms, commits=%u PASS\n",
            model_now-began,commits-commits_before);
+    /* T23 c42f556e (docs/validation/t23-war2-fullscreen-2026-10-25.md): the
+     * first-guest-frame step of a running full screen is recorded and its
+     * commit requested, never waited for, even with a sink that does not
+     * drain (the durable checkpoint above waits 2000 ms and fails -EAGAIN). */
+    fullscreen_return_timed=false;fullscreen_recovering=false;
+    unsigned failures=log_failures,raw_before=raw_calls;
+    uint64_t requested=sync_target;
+    began=model_now;
+    CHECK(!display_fullscreen_record("first-guest-frame",0));
+    CHECK(model_now==began && raw_calls==raw_before && log_failures==failures);
+    CHECK(strstr(last_line,"fullscreen_step=first-guest-frame result=0") && sync_target>requested);
+    printf("T23 c42f556e first-guest-frame record, sink not draining: waited %u ms, commit requested PASS\n",
+           model_now-began);
+    drain();CHECK(sync_done>=sync_target);
+    /* An entry's first step counts from its request, not from the previous
+     * transaction's last step (T23: vm-park step_ms=4391). */
+    worker_drains=true;
+    CHECK(!display_fullscreen_checkpoint("desktop-restored",0));
+    g_ticks+=4391;
+    display_fullscreen_entry_request();
+    CHECK(!display_fullscreen_checkpoint("vm-park",0));
+    worker_drains=false;
+    CHECK(strstr(last_line,"fullscreen_step=vm-park result=0") && strstr(last_line,"step_ms=0"));
+    puts("T23 c42f556e entry request: vm-park step_ms=0 after a 4391 ms idle gap PASS");
     return 0;
 }

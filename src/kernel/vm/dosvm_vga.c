@@ -939,7 +939,7 @@ static int dac_port(void *arg, uint16_t port, unsigned size, int write, uint32_t
 }
 int dosvm_vga_dac_burst(struct dosvm *v, struct v86_frame *f)
 {
-    if (v->fullscreen || video_run_blocked(v, f)) return 0;
+    if (!dosvm_vga_ports_modeled(v) || video_run_blocked(v, f)) return 0;
     cvx_cpu c = {0};
     struct dac_bus ctx = {.v = v};
     cvx_bus bus = {.read = dac_read, .write = dac_write, .fetch = dac_fetch, .context = &ctx, .port = dac_port};
