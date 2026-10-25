@@ -277,7 +277,11 @@ def build(out=None):
                 game_files[path] = data
         game_files["/DOOM/CIUKI.CFG"] = games._fixtures().DOOM_CONFIG
         refuse_local_payloads({name: hashlib.sha256(data).hexdigest() for name, data in files.items()})
-        directories = (*directories, "WOLF3D", "DOOM", "QUAKE", "QUAKE/ID1")
+        # Every folder of the installed games (WOLF3D, DOOM, QUAKE/ID1, WAR2/DATA...),
+        # parents before children, so a new bundled game needs no list edit here.
+        game_dirs = {"/".join(path.strip("/").split("/")[:depth]).upper()
+                     for path in game_files for depth in range(1, path.strip("/").count("/") + 1)}
+        directories = (*directories, *sorted(game_dirs - set(directories), key=lambda d: (d.count("/"), d)))
         identity, licenses, metadata = unified.install(out, files, directories, game_files,
             source_output=out.parent.parent / "ciukidos-unified-source.zip")
     guest_files, _ = unified.fork_guest_files()
