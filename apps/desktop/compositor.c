@@ -1610,6 +1610,7 @@ static void vram_reset(struct desktop *d)
 }
 void desk_accel_reset(struct desktop *d, uint32_t generation)
 {
+    if (d->accel_generation && generation!=d->accel_generation) d->restore_cpu_frame=1;
     d->scanout_valid=0; d->move_damage.count=0;
     d->hw_cursor=0; d->cursor_dirty=1; d->copy_pending=0;
     /* f2-96: a new generation follows a stopped engine (fbdev_change_begin)
@@ -2087,14 +2088,15 @@ static int present_box_commands(struct desktop *d, struct desk_box b)
 }
 static int present_box_raw(struct desktop *d, struct desk_box b)
 {
-    if (d->batch && (d->command_caps&(CIUKI_CAP_MONO|CIUKI_CAP_INVERT|CIUKI_CAP_KEYED)))
+    if (!d->restore_cpu_frame && d->batch && (d->command_caps&(CIUKI_CAP_MONO|CIUKI_CAP_INVERT|CIUKI_CAP_KEYED)))
         return present_box_commands(d,b) ? engine_failed(d) : 0;
 
     int engine=(d->accel_caps&1u) && d->accel;
-    /* f2-92: offscreen-cache copies need no previous scanout; fills and
-     * duplicate-row copies keep requiring a completed engine-era frame. */
-    int scan=engine && d->scanout_valid, cached=engine && d->vram_end && b.w>=DESK_VRAM_MIN_W;
-    if (!scan && !cached) {
+    /* 101-b: fills need no old pixels. Duplicate rows copy only a source
+     * completed earlier in this call, so the first frame is eligible too.
+     * Lease-generation recovery still takes its dedicated full-present path. */
+    int cached=engine && d->vram_end && b.w>=DESK_VRAM_MIN_W;
+    if (!engine || d->restore_cpu_frame) {
         struct ciuki_rect r={b.x,b.y,b.x,b.y,(uint32_t)b.w,(uint32_t)b.h};
         if (d->ops.present(d->display,d->output,&r)) return -1;
         d->frame_stats.lfb_bytes+=(uint64_t)b.w*b.h*(d->lfb_bytes_per_pixel ? d->lfb_bytes_per_pixel : 4);
@@ -2104,7 +2106,7 @@ static int present_box_raw(struct desktop *d, struct desk_box b)
     int hit=cached ? vram_lookup(d,b,b.y,&hit_x,&hit_y) : -1;
     for (int y=b.y;y<b.y+b.h;) {
         const uint32_t *row=d->pixels+(size_t)y*d->width+b.x;
-        int solid=scan && b.w>=64;
+        int solid=b.w>=64;
         for (int x=1;solid && x<b.w;x++) if (row[x]!=row[0]) solid=0;
         if (!solid && hit>=0) {
             /* Consecutive rows served by the same cache: one engine copy. */
@@ -2127,7 +2129,7 @@ static int present_box_raw(struct desktop *d, struct desk_box b)
         /* Composition is complete, and the preceding span was presented in
          * this call. Equal non-solid rows can copy that scanout span without
          * retaining another RAM frame. A failure uses the normal full retry. */
-        if (!solid && scan && b.w>=64 && y>b.y &&
+        if (!solid && b.w>=64 && y>b.y &&
             !memcmp(row,row-d->width,(size_t)b.w*4)) {
             struct ciuki_rect r={b.x,y-1,b.x,y,(uint32_t)b.w,1};
             if (screen_copy(d,&r)) return -1;
@@ -2150,7 +2152,7 @@ static int present_box_raw(struct desktop *d, struct desk_box b)
              * before a row an offscreen cache can supply. */
             for (;bottom<b.y+b.h;bottom++) {
                 const uint32_t *next=d->pixels+(size_t)bottom*d->width+b.x;
-                if (scan && b.w>=64 && !memcmp(next,next-d->width,(size_t)b.w*4)) break;
+                if (b.w>=64 && !memcmp(next,next-d->width,(size_t)b.w*4)) break;
                 if (cached && (hit=vram_lookup(d,b,bottom,&hit_x,&hit_y))>=0) break;
             }
         }
@@ -2474,7 +2476,7 @@ int desk_redraw(struct desktop *d)
         uint64_t start=input && input<=end ? input : frame_begin;
         s->frame_ns=end>=start ? end-start : 0; s->completed=1;
         latency_record(d,s->frame_ns); d->frame_input_ns=0;
-        d->damage.count=d->present_damage.count=0; d->scanout_valid=1;
+        d->damage.count=d->present_damage.count=0; d->scanout_valid=1; d->restore_cpu_frame=0;
         d->last_frame_ns=frame_begin;
     } else {
         d->scanout_valid=0;

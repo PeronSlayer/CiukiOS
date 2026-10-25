@@ -380,6 +380,7 @@ struct desktop {
     int render_cache_prepared;
     uint64_t chrome_rebuilds;
     int frame_valid, scanout_valid;
+    int restore_cpu_frame; /* a changed display lease needs one full CPU present */
     struct desk_damage move_damage;
     /* fx-2: the stacking the composed frame shows (window id per slot, 0
      * when hidden, and its order). desk_stack_damage reconciles it: a

@@ -442,11 +442,30 @@ static inline void db_paint_sheet(struct dosbox_window *w, struct du_canvas *c)
 static inline void db_paint_rows(struct dosbox_window *w, struct du_canvas *c, const uint32_t *guest,
                                  const uint32_t *source_rows, uint32_t *damage_rows)
 {
+    /* Fit/100% preserve horizontal pixels: copy each selected scanline.
+     * 125% resolves horizontal coordinates once per paint, not per pixel.
+     * Selection retains the scalar path and its guest-cell coordinates. */
+    int plain=!(w->marking && w->selected);
+    unsigned sx0=(unsigned)db_source_x(w,0);
+    uint16_t columns[640];
+    if (plain && w->profile.zoom==2)
+        for (int x=0;x<640;x++) columns[x]=(uint16_t)db_source_x(w,x);
     for (int y=DOSBOX_TOOLBAR;y<480;y++) {
         int sy=db_source_y(w,y);
         if (source_rows && (w->properties || w->font_menu || (w->notice[0] && y>=458) || (db_tip_visible(w) && y<DB_TIP_BOTTOM) ||
             !(source_rows[sy/32]&(1u<<(sy%32))))) continue;
         if (damage_rows) damage_rows[y/32]|=1u<<(y%32);
+        if (plain) {
+            uint32_t *dest=c->pixels+y*640;
+            const uint32_t *src=guest+sy*640;
+            if (w->profile.zoom==2) for (int x=0;x<640;x++) dest[x]=src[columns[x]];
+            else {
+                unsigned count=640-sx0;
+                memcpy(dest,src+sx0,count*sizeof(*dest));
+                for (unsigned x=count;x<640;x++) dest[x]=src[639];
+            }
+            continue;
+        }
         for (int x=0;x<640;x++) {
             int sx=db_source_x(w,x); uint32_t pixel=guest[sy*640+sx];
             if (w->marking && w->selected) {

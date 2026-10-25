@@ -151,6 +151,45 @@ static void ui_tests(void)
     for (unsigned y=28;y<480;y++) assert(!!(damage[y/32]&(1u<<(y%32)))==((y-28)*480/452==17));
     window.properties=1; memset(damage,0,sizeof(damage)); db_paint_rows(&window,&canvas,guest,src,damage);
     for (unsigned i=0;i<15;i++) assert(!damage[i]);
+    /* 101-b: compare every viewport pixel with the scalar coordinate rule,
+     * including clamped scrolling, zoom, selection and sparse source dirt. */
+    window.properties=0;
+    for (unsigned zoom=0;zoom<3;zoom++) for (unsigned selected=0;selected<2;selected++) {
+        window.profile.zoom=zoom; window.scroll_x=zoom ? 137 : 0; window.scroll_y=zoom ? 173 : 0;
+        window.marking=window.selected=(int)selected; window.columns=80; window.rows=25;
+        window.x0=43; window.x1=12; window.y0=21; window.y1=4;
+        memset(pixels,0xa5,sizeof(pixels)); memset(src,0,sizeof(src)); memset(damage,0,sizeof(damage));
+        for (unsigned y=0;y<480;y+=3) src[y/32]|=1u<<(y%32);
+        db_paint_rows(&window,&canvas,guest,src,damage);
+        for (int y=28;y<480;y++) {
+            int sy=db_source_y(&window,y), changed=!!(src[sy/32]&(1u<<(sy%32)));
+            assert(!!(damage[y/32]&(1u<<(y%32)))==changed);
+            for (int x=0;x<640;x++) {
+                int sx=db_source_x(&window,x); uint32_t expected=0xa5a5a5a5;
+                if (changed) {
+                    expected=guest[sy*640+sx];
+                    if (selected && sx*80/640>=12 && sx*80/640<=43 && sy*25/480>=4 && sy*25/480<=21)
+                        expected^=0xffffff;
+                }
+                assert(pixels[y*640+x]==expected);
+            }
+        }
+    }
+    window.profile.zoom=0; window.scroll_x=window.scroll_y=0; window.marking=window.selected=0;
+    if (getenv("CIUKI_101_VIEW_BENCH")) {
+        memset(src,0xff,sizeof(src));
+        for (unsigned zoom=0;zoom<3;zoom++) {
+            window.profile.zoom=zoom;
+            struct timespec start,end; assert(!clock_gettime(CLOCK_MONOTONIC,&start));
+            for (unsigned frame=0;frame<64;frame++) db_paint_rows(&window,&canvas,guest,src,NULL);
+            assert(!clock_gettime(CLOCK_MONOTONIC,&end));
+            uint64_t ns=(uint64_t)(end.tv_sec-start.tv_sec)*1000000000u+end.tv_nsec-start.tv_nsec;
+            printf("101-video viewport=%u frames=64 ns_per_frame=%llu pixel=%u\n",zoom,
+                   (unsigned long long)(ns/64),pixels[479*640+639]);
+            fflush(stdout);
+        }
+        window.profile.zoom=0;
+    }
     /* Win98-style toolbar: ids by position, hover tooltip, sheet hit-testing. */
     assert(db_tool_at(4,10)==DB_TOOL_ZOOM && db_tool_at(112,10)==DB_TOOL_MARK && db_tool_at(185,10)==-1);
     assert(db_tool_at(224,10)==DB_TOOL_PROPS && db_tool_at(290,10)==DB_TOOL_FONT && db_tool_at(300,10)==-1);
