@@ -229,6 +229,13 @@ class NetworkTests(unittest.TestCase):
         for mode in ("idle-expiry","idle-reuse-expiry"):
             with self.subTest(mode=mode):self.engine(mode)
 
+    def exit_fields(self,result):
+        """t23-render: the numeric fields of the exit record."""
+        import re
+        line=next((l for l in result.stderr.splitlines() if l.startswith("[netsurf] exit reason=")),None)
+        self.assertIsNotNone(line,result.stderr)
+        return {k:int(v) for k,v in re.findall(r" (\w+)=(\d+)(?= |$)",line)}
+
     def fetch_records(self,result):
         import re
         lines=[line for line in result.stderr.splitlines() if line.startswith("[netsurf] fetch ")]
@@ -488,16 +495,70 @@ class NetworkTests(unittest.TestCase):
                     # Records name the path only (privacy: no query).
                     done=[line for line in records if f"/fx24/{name} stage=done code=200 " in line]
                     self.assertEqual(len(done),1,name+"\n"+"\n".join(records))
-                exit_line=re.search(r"\[netsurf\] exit reason=\S+ .* box_slices=(\d+) box_elements=(\d+) box_slice_max_us=(\d+) image_reuse=(\d+) ",result.stderr)
-                self.assertIsNotNone(exit_line,result.stderr)
-                slices,elements,slice_max,reuse=map(int,exit_line.groups())
-                print(f"slow-ui page: box_slices={slices} box_elements={elements} box_slice_max_us={slice_max} image_reuse={reuse}",flush=True)
+                f=self.exit_fields(result)
+                slices,elements,slice_max,element_max,reuse=(f["box_slices"],f["box_elements"],f["box_slice_max_us"],
+                                                             f["box_element_max_us"],f["image_reuse"])
+                print(f"slow-ui page: box_slices={slices} box_elements={elements} box_slice_max_us={slice_max} "
+                      f"box_element_max_us={element_max} image_reuse={reuse}",flush=True)
                 self.assertGreaterEqual(reuse,len(names))
                 self.assertGreaterEqual(elements,1500)
                 self.assertLessEqual(slices,elements//10//5)
-                # One 10-element step past the budget at most (model time).
-                self.assertLess(slice_max,12000)
+                # The 8 ms budget plus at most one element (model time).
+                self.assertLessEqual(slice_max,8000+element_max+1000)
             self.browser("/fx24/main.html",mode="browser-slow-ui",scheme="https",inspect=inspect,extra_env={"CIUKI_FIXTURE_SITE":site})
+
+    def test_reused_svg_keeps_its_intrinsic_size(self):
+        """t23-render review: an SVG adopted from the parser's fetch after
+        it was DONE skipped the READY step of the box callback, whose
+        content_reformat gives an SVG its intrinsic size; an automatically
+        sized SVG then stayed 0x0 (no red pixel). A late stylesheet holds
+        box construction until both SVG fetches are done. A 100x60 red SVG
+        with automatic size and one with only width=50 must show 6,000 and
+        1,500 red pixels."""
+        import re
+        with tempfile.TemporaryDirectory(dir=OUT) as site:
+            svg='<svg xmlns="http://www.w3.org/2000/svg" width="100" height="60"><rect width="100" height="60" fill="#f00"/></svg>'
+            for name in ("auto.svg","wide.svg"):(Path(site) / name).write_text(svg)
+            (Path(site) / "late.css").write_text("i{color:#333}")
+            (Path(site) / "svg.html").write_text('<!doctype html><title>SVG</title><body style="margin:0">'
+                '<img src="auto.svg?v=1" alt="a"><br><img src="wide.svg?v=1" width="50" alt="b"><p>'+"<i>w</i>"*400+
+                '</p><link rel="stylesheet" href="late.css">')
+            def inspect(result):
+                reuse=self.exit_fields(result)["image_reuse"]
+                pixels=result.capture
+                red=[i//4 for i in range(0,len(pixels),4) if pixels[i]==0 and pixels[i+1]==0 and pixels[i+2]==255]
+                top=sum(1 for i in red if i//640<60)
+                print(f"svg reuse: image_reuse={reuse} red_total={len(red)} red_top={top}",flush=True)
+                self.assertGreaterEqual(reuse,2)
+                # As a fetch finishing after box construction shows them
+                # (and as <object> does): 100x60, and 50x30 for width=50.
+                self.assertEqual(top,6000)
+                self.assertEqual(len(red)-top,1500)
+            self.browser("/fx24/svg.html",mode="browser-slow-ui",scheme="https",inspect=inspect,extra_env={"CIUKI_FIXTURE_SITE":site})
+
+    def test_box_slices_stay_near_budget_on_costly_elements(self):
+        """t23-render review: the slice clock was read every 10 elements, so
+        elements with costly style selection overran the 8 ms budget by up
+        to 10 elements (33-37 ms on the 32x model). With 200 :nth-child
+        rules on 400 sibling b elements every element costs milliseconds of
+        model time; a slice may overrun the budget by one element only."""
+        with tempfile.TemporaryDirectory(dir=OUT) as site:
+            (Path(site) / "heavy.css").write_text("".join(f"b:nth-child(400n+{i}){{color:#{i:02x}0000}}" for i in range(1,201)))
+            (Path(site) / "costly.html").write_text('<!doctype html><title>Costly</title><link rel="stylesheet" href="heavy.css">'
+                '<div>'+"<b>w</b>"*400+"</div>")
+            def inspect(result):
+                f=self.exit_fields(result)
+                slices,elements,slice_max,element_max=(f["box_slices"],f["box_elements"],f["box_slice_max_us"],f["box_element_max_us"])
+                print(f"costly page: box_slices={slices} box_elements={elements} box_slice_max_us={slice_max} "
+                      f"box_element_max_us={element_max}",flush=True)
+                self.assertGreaterEqual(elements,400)
+                self.assertGreater(slices,1)
+                # box_element_max_us is the longest step between two clock
+                # reads: one element with its text.
+                self.assertLessEqual(slice_max,8000+element_max+1000)
+                # Reading the clock every 10 elements gave 80,744 here.
+                self.assertLess(slice_max,32000)
+            self.browser("/fx24/costly.html",mode="browser-slow-ui",scheme="https",inspect=inspect,extra_env={"CIUKI_FIXTURE_SITE":site})
 
     def test_navigation_during_blocked_lookup(self):
         self.browser("/",mode="browser-blocked",host="blocked.example",expected="fixture_navigation_blocked=1 completed=1 late_ignored=1")

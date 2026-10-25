@@ -699,12 +699,12 @@ static int exit_line(char *line,size_t size,bool surface)
     if(!ciuki_net_fetch_summary || !ciuki_net_fetch_summary(fetches+1,sizeof(fetches)-1))fetches[0]=0;
     /* fx-nsperf: present work (DAMAGE messages, refused sends) and connects
      * retried after the system refused a socket. */
-    return format_line(line,size,"[netsurf] exit reason=%s detail=%d layout_rejections=%u layout_max_us=%llu local_max_us=%llu remote_max_us=%llu input_overflows=%u keepalive_pumps=%u presents=%llu damage_messages=%llu present_refused=%llu box_slices=%llu box_elements=%llu box_slice_max_us=%llu image_reuse=%u connect_retries=%u%s network=%s",
+    return format_line(line,size,"[netsurf] exit reason=%s detail=%d layout_rejections=%u layout_max_us=%llu local_max_us=%llu remote_max_us=%llu input_overflows=%u keepalive_pumps=%u presents=%llu damage_messages=%llu present_refused=%llu box_slices=%llu box_elements=%llu box_slice_max_us=%llu box_element_max_us=%llu image_reuse=%u connect_retries=%u%s network=%s",
             exit_reason?exit_reason:"unknown",exit_detail,ciuki_layout_rejections,
             (unsigned long long)(ciuki_layout_max_ns/1000u),(unsigned long long)(ciuki_layout_local_max_ns/1000u),
             (unsigned long long)(ciuki_layout_remote_max_ns/1000u),s?s->overflows:0u,s?s->pumps:0u,
             (unsigned long long)(s?s->stats.presents:0),(unsigned long long)(s?s->stats.messages:0),(unsigned long long)(s?s->stats.refused:0),
-            (unsigned long long)ciuki_box_slices,(unsigned long long)ciuki_box_elements,(unsigned long long)(ciuki_box_slice_max_ns/1000u),ciuki_speculative_adoptions,
+            (unsigned long long)ciuki_box_slices,(unsigned long long)ciuki_box_elements,(unsigned long long)(ciuki_box_slice_max_ns/1000u),(unsigned long long)(ciuki_box_element_max_ns/1000u),ciuki_speculative_adoptions,
             ciuki_net_connect_retries?ciuki_net_connect_retries():0u,fetches,
             ciuki_net_state_word?ciuki_net_state_word():"unknown");
 }

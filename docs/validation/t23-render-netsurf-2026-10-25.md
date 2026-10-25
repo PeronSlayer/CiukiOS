@@ -263,20 +263,34 @@ poll by every Win32 UI thread. What each means for rendering:
 - `sdk/netsurf/patches/0018-t23-render-image-reuse-and-box-slices.patch`:
   - `html/object.c` `html_adopt_speculative_object`: a box asking for an
     image URL takes the document's existing no-box object for the same URL
-    and permitted types (callback switched to the box callback; a DONE
-    content is attached at once, a LOADING/READY one counts as an active
-    fetch and receives the rest). The HTML Standard's list of available
-    images, limited to the parser-then-box pair.
-  - `html/box_construct.c`: `convert_xml_to_box` converts 10 elements at a
-    time until `CIUKI_BOX_SLICE_NS` (8 ms, half a 60 Hz frame) of budget time
-    has passed, then yields. The UI keeps a turn between slices; Windows
-    only calls a window not responding after 5 s without message
-    processing (`IsHungAppWindow`,
+    and permitted types (callback switched to the box callback). A
+    raster image already READY/DONE is attached at once; a LOADING one
+    counts as an active fetch and receives the rest. Content that can
+    reformat (SVG) and was already READY/DONE is not attached during box
+    construction: its READY (and DONE) events are replayed to the box
+    callback right after the document's first layout
+    (`html.c` `html_box_convert_done` -> `html_object_ciuki_replay`), as a
+    fetch finishing after box construction delivers them; the READY step
+    sizes the SVG from the laid-out box (review fix: attached at box
+    construction, an automatically sized SVG stayed without its intrinsic
+    size, and a width-only one kept its intrinsic height). The HTML
+    Standard's list of available images, limited to the parser-then-box
+    pair.
+  - `html/box_construct.c`: `convert_xml_to_box` converts elements until
+    `CIUKI_BOX_SLICE_NS` (8 ms, half a 60 Hz frame) of budget time has
+    passed, reading the clock after every element (one clock read per
+    element: about 2,300 per encyclopedia page), then yields; a slice
+    overruns the budget by at most one element and its text (review fix:
+    with a read every 10 elements, costly elements made slices of 33-37 ms,
+    81 ms on the costly-element test page). The UI keeps a turn between
+    slices; Windows only calls a window not responding after 5 s without
+    message processing (`IsHungAppWindow`,
     <https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-ishungappwindow>).
 - `sdk/netsurf/port/budget.c/.h`: the slice clock (charged with the layout
   clock scale, so host tests see T23-sized slices) and counters;
   `chrome.c`: the exit record adds `box_slices`, `box_elements`,
-  `box_slice_max_us` and `image_reuse` (before `connect_retries`).
+  `box_slice_max_us`, `box_element_max_us` (the longest step between two
+  clock reads) and `image_reuse` (before `connect_retries`).
 - `tests/host/netsurf/test_surface.py`: `test_registered_surface` links
   the cached host prefix. It failed at `nsfb_test.c:122` (`pongs==1`)
   against the shared prefix built on 2026-10-25 00:31, before fx-nsperf
@@ -302,10 +316,24 @@ poll by every Win32 UI thread. What each means for rendering:
   20 ms UI turns (`browser-slow-ui`, budgets on the 32x T23 model), a page
   with 1,500 elements and then twelve thumbnails whose URLs carry a query
   and whose responses have no expiry. After: each thumbnail done once,
-  `box_slices=25-27 box_elements=1517 box_slice_max_us=9237-10069
-  image_reuse=12` over four runs.
-  Without the `object.c` hunk: `thumb00.png` done twice (fails). Without
-  the box hunk the slice fields stay 0 (fails).
+  `box_slices=29-30 box_elements=1517 box_slice_max_us=8335-8440
+  image_reuse=12`, `box_element_max_us=1839` (with the clock read every
+  10 elements: 25-27 slices, 9,237-10,069 us). Without the `object.c` hunk:
+  `thumb00.png` done twice (fails). Without the box hunk the slice fields
+  stay 0 (fails).
+- `test_reused_svg_keeps_its_intrinsic_size` (review): two 100x60 red
+  SVGs, one automatically sized and one with only `width=50`, adopted
+  after their fetches completed (a stylesheet at the end of the page holds
+  box construction). The normal late path and `<object>` show 6,000 and
+  1,500 red pixels (100x60 and 50x30). Committed 0018: 1,950 and 1,050;
+  with a READY reformat at adoption: 6,000 and 3,000 (50x60); with the
+  replay after the first layout: 6,000 and 1,500 (passes).
+- `test_box_slices_stay_near_budget_on_costly_elements` (review): 200
+  `:nth-child` rules on 400 sibling elements, several ms of model time per
+  element. Clock read after every element: 196-209 slices, longest
+  16,927-17,530 us with a 12,063-15,295 us element (the longest step
+  between two clock reads); every slice at most 8 ms plus one element. Clock read every 10 elements: 40
+  slices, longest 80,744 us (fails the 32,000 us ceiling).
 - Investigation replay (scratch harness, not committed): the encyclopedia
   main page of the same day mirrored (2,309 elements, 28 resources) and
   served over local HTTP to the real front end, each UI turn delayed by a
@@ -333,7 +361,8 @@ poll by every Win32 UI thread. What each means for rendering:
 
 1. NetSurf, an encyclopedia main page: it appears; `NETSURF.LOG`/BOOT.LOG
    exit record `box_slices` well below `box_elements`/10 (the old slice
-   count), `box_slice_max_us` about 10,000 at most, `image_reuse` > 0;
+   count), `box_slice_max_us` at most 8,000 plus `box_element_max_us`,
+   `image_reuse` > 0; SVG images keep their size;
    every thumbnail `stage=done` once; a `layout work ... class=remote`
    record.
 2. A Win32 program kept running (for example the Quake III installer

@@ -4,17 +4,22 @@ layout ran (remote_max_us=0).
 
 html/object.c: box construction takes the object the parser already
 fetched for the same img URL (dom_event.c html_process_inserted_img)
-instead of fetching it again. With slow box construction the first fetch
+instead of fetching it again. Content that can reformat (SVG) and was
+already READY/DONE gets those events replayed to the box callback after
+the document's first layout (html.c html_box_convert_done,
+html_object_ciuki_replay), as a fetch finishing later would deliver them;
+its READY step sizes it from the laid-out box. With slow box construction the first fetch
 completed first, llcache keeps no response to a URL with a query unless it
 has an explicit expiry, and every thumbnail was downloaded and decoded
 twice (18 of the trial's 49 fetches). HTML Standard, list of available
 images.
 
-html/box_construct.c: convert_xml_to_box converts 10 elements at a time
-until CIUKI_BOX_SLICE_NS of budget time has passed (frontends/framebuffer/
-ciuki/budget.h) instead of yielding after every 10 elements; the Ciuki main
-loop runs one scheduler callback per UI turn, so a 2,300-element page cost
-about 230 turns before its first layout.
+html/box_construct.c: convert_xml_to_box converts elements until
+CIUKI_BOX_SLICE_NS of budget time has passed, reading the clock after every
+element (frontends/framebuffer/ciuki/budget.h), instead of yielding after
+every 10 elements; the Ciuki main loop runs one scheduler callback per UI
+turn, so a 2,300-element page cost about 230 turns before its first
+layout.
 
 --- a/netsurf/content/handlers/html/box_construct.c
 +++ b/netsurf/content/handlers/html/box_construct.c
@@ -26,22 +31,25 @@ about 230 turns before its first layout.
  
  /**
   * Context for box tree construction
-@@ -1248,6 +1249,14 @@
+@@ -1247,7 +1248,16 @@
+ 	dom_node *next;
  	bool convert_children;
  	uint32_t num_processed = 0;
- 	const uint32_t max_processed_before_yield = 10;
+-	const uint32_t max_processed_before_yield = 10;
 +	/* Ciuki t23-render: upstream yields after every 10 elements, and the
 +	 * Ciuki main loop runs one scheduler callback per UI turn, so an
 +	 * encyclopedia main page (about 2,300 elements) cost about 230 UI
 +	 * turns of box construction; at the T23 trial's pace (c42f556e,
-+	 * roughly 50-100 ms per turn under load) 12-23 s. Keep converting,
-+	 * 10 elements at a time, until the slice has used CIUKI_BOX_SLICE_NS
-+	 * of budget time; the UI still gets a turn between slices. */
++	 * roughly 50-100 ms per turn under load) 12-23 s. Keep converting
++	 * until the slice has used CIUKI_BOX_SLICE_NS of budget time, with
++	 * the clock read after every element (with its text) because one
++	 * element's style selection can cost milliseconds; at least one
++	 * element per slice, and the UI still gets a turn between slices. */
 +	struct ciuki_box_slice slice = ciuki_box_slice_begin();
  
  	do {
  		convert_children = true;
-@@ -1297,6 +1306,7 @@
+@@ -1297,6 +1307,7 @@
  			/* Conversion complete */
  			struct box root;
  
@@ -49,17 +57,44 @@ about 230 turns before its first layout.
  			memset(&root, 0, sizeof(root));
  
  			root.type = BOX_BLOCK;
-@@ -1344,7 +1354,9 @@
+@@ -1344,7 +1355,9 @@
  			free(ctx);
  			return;
  		}
 -	} while (++num_processed < max_processed_before_yield);
-+	} while ((++num_processed % max_processed_before_yield) != 0 ||
-+		 !ciuki_box_slice_expired(&slice));
++		num_processed++;
++	} while (!ciuki_box_slice_expired(&slice));
 +	ciuki_box_slice_end(&slice, num_processed);
  
  	/* More work to do: schedule a continuation */
  	guit->misc->schedule(0, (void *)convert_xml_to_box, ctx);
+--- a/netsurf/content/handlers/html/html.c
++++ b/netsurf/content/handlers/html/html.c
+@@ -296,6 +296,11 @@
+ 
+ 	content_set_ready(&c->base);
+ 
++	/* Ciuki t23-render: objects adopted from the parser's fetch after it
++	 * completed get the events they missed now, after the first layout,
++	 * as a late fetch would deliver them. */
++	html_object_ciuki_replay(c);
++
+ 	html_proceed_to_done(c);
+ 
+ 	dom_node_unref(html);
+--- a/netsurf/content/handlers/html/html.h
++++ b/netsurf/content/handlers/html/html.h
+@@ -99,6 +99,10 @@
+ 	/** Bitmap of acceptable content types */
+ 	content_type permitted_types;
+ 	bool background;  /**< This object is a background image. */
++	/** Ciuki t23-render: adopted from the parser's fetch after its
++	 * READY (and DONE) events; html_object_ciuki_replay delivers them to
++	 * the box callback after the document's first layout. */
++	bool ciuki_replay_ready, ciuki_replay_done;
+ };
+ 
+ 
 --- a/netsurf/content/handlers/html/object.c
 +++ b/netsurf/content/handlers/html/object.c
 @@ -46,6 +46,7 @@
@@ -70,7 +105,7 @@ about 230 turns before its first layout.
  
  /* break reference loop */
  static void html_object_refresh(void *p);
-@@ -705,6 +706,74 @@
+@@ -705,6 +706,113 @@
  }
  
  
@@ -122,15 +157,29 @@ about 230 turns before its first layout.
 +		hlcache_handle_replace_callback(object->content,
 +				html_object_callback, object);
 +
-+		if (content != NULL && content->status == CONTENT_STATUS_DONE) {
-+			/* The events this box would have seen are over. */
++		if (content != NULL &&
++		    (content->status == CONTENT_STATUS_READY ||
++		     content->status == CONTENT_STATUS_DONE) &&
++		    content_can_reformat(object->content)) {
++			/* Content that can reformat (SVG) gets its size in the
++			 * READY step, from the laid-out box; a fetch completing
++			 * after box construction delivers READY and DONE after
++			 * the first layout. Replay them then
++			 * (html_object_ciuki_replay); until DONE it counts as an
++			 * active fetch. */
++			object->ciuki_replay_ready = true;
++			object->ciuki_replay_done =
++				content->status == CONTENT_STATUS_DONE;
++		} else if (content != NULL &&
++			   (content->status == CONTENT_STATUS_READY ||
++			    content->status == CONTENT_STATUS_DONE)) {
++			/* A raster image has its size already. */
 +			html_object_done(box, object->content, false);
-+		} else {
-+			if (content != NULL &&
-+			    content->status == CONTENT_STATUS_READY)
-+				html_object_done(box, object->content, false);
-+			/* LOADING, READY or not yet created: the box callback
-+			 * receives the rest, ending with DONE or ERROR. */
++		}
++		if (content == NULL || content->status != CONTENT_STATUS_DONE ||
++		    object->ciuki_replay_done) {
++			/* LOADING, READY, not yet created or replayed: DONE or
++			 * ERROR ends the active fetch. */
 +			c->base.active++;
 +			NSLOG(netsurf, INFO, "%d fetches active",
 +			      c->base.active);
@@ -142,10 +191,35 @@ about 230 turns before its first layout.
 +	return false;
 +}
 +
++/* exported interface documented in html/object.h */
++void html_object_ciuki_replay(html_content *c)
++{
++	struct content_html_object *object, *next;
++
++	for (object = c->object_list; object != NULL; object = next) {
++		hlcache_event event = { .type = CONTENT_MSG_READY };
++		bool ready = object->ciuki_replay_ready;
++		bool done = object->ciuki_replay_done;
++
++		/* The callbacks may reformat or finish the document but do
++		 * not change its object list. */
++		next = object->next;
++		object->ciuki_replay_ready = object->ciuki_replay_done = false;
++		if (object->content == NULL || object->box == NULL)
++			continue;
++		if (ready)
++			html_object_callback(object->content, &event, object);
++		if (done && object->content != NULL) {
++			event.type = CONTENT_MSG_DONE;
++			html_object_callback(object->content, &event, object);
++		}
++	}
++}
++
  /* exported interface documented in html/object.h */
  bool
  html_fetch_object(html_content *c,
-@@ -722,6 +791,10 @@
+@@ -722,6 +830,10 @@
  	if (c->aborted)
  		return true;
  
@@ -156,4 +230,23 @@ about 230 turns before its first layout.
  	child.charset = c->encoding;
  	child.quirks = c->base.quirks;
  
+--- a/netsurf/content/handlers/html/object.h
++++ b/netsurf/content/handlers/html/object.h
+@@ -57,6 +57,16 @@
+ nserror html_object_free_objects(struct html_content *html);
+ 
+ /**
++ * Ciuki t23-render: deliver the READY/DONE events an adopted object (see
++ * html_fetch_object) missed, as they would have arrived after the first
++ * layout. Called when box construction is complete and the document has
++ * been made READY.
++ *
++ * \param html The html content whose objects to replay.
++ */
++void html_object_ciuki_replay(struct html_content *html);
++
++/**
+  * close content of content objects associated with a HTML content
+  *
+  * \param html The html content to close the objects from.
 
