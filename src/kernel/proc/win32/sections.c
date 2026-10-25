@@ -75,11 +75,16 @@ static uint32_t section_page(struct section_data *s, unsigned index)
     w32_accounts.pages++;
     return page;
 }
+uint32_t w32_shared_frame;
 void w32_section_destroy(struct w32_object *o)
 {
     struct section_data *s = o->u.section;
     if (!s || --s->refs)
         return;
+    /* The tick publisher (counter.c) reads the frame with interrupts off. */
+    if (s->kind == 4 && s->pages[0] && s->pages[0] == w32_shared_frame) {
+        uint32_t f = irq_save(); w32_shared_frame = 0; irq_restore(f);
+    }
     for (unsigned i = 0; i < s->count; i++)
         if (s->pages[i]) {
             mm_free(s->pages[i], MM_USER_SHARED);
@@ -871,6 +876,7 @@ int w32_shared_map(struct process *p)
     }
     const uint8_t gate[] = { 0xcd, 0x80, 0xc3 };
     memcpy((uint8_t *)P2V(page) + 0x100, gate, sizeof(gate));
+    w32_shared_frame = page;
     int err = ua_map_at(p->memory, CIUKI_W32_SHARED, PAGE_SIZE, 0, PROT_READ, UA_W32, 0);
     if (!err) {
         struct ua_extent *e = ua_find(p->memory, CIUKI_W32_SHARED);
