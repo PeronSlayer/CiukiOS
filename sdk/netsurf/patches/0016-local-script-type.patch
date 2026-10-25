@@ -1,0 +1,18 @@
+CiukiOS: a local .js file is text/javascript. The framebuffer front end
+typed every unknown local file as text/html, so the script handler refused a
+local page's external scripts and they never ran (a page opened from disk,
+the host render tests). Host test: test_local.py example-domain fixture.
+
+--- a/netsurf/frontends/framebuffer/fetch.c
++++ b/netsurf/frontends/framebuffer/fetch.c
+@@ -89,6 +89,10 @@
+ 		return "image/bmp";
+ 	if (l > 3 && strcasecmp(unix_path + l - 4, ".txt") == 0)
+ 		return "text/plain";
++	/* CiukiOS: a local page's external scripts (text/html before, so
++	 * the script handler refused them and they never ran). */
++	if (l > 2 && strcasecmp(unix_path + l - 3, ".js") == 0)
++		return "text/javascript";
+ 	return "text/html";
+ }
+ 

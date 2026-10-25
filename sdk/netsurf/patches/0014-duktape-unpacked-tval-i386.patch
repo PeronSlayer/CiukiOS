@@ -1,0 +1,36 @@
+CiukiOS: unpacked duk_tval on 32-bit x86. Duktape's packed 8-byte value is a
+NaN with the type tag in its top 16 bits; the fastint, undefined, null,
+boolean, pointer and lightfunc tags are signalling NaNs. The i686 target has
+x87 floating point only, clang copies the value union as a double
+(fldl/fstpl, e.g. in duk_insert) and fldl quiets a signalling NaN, so a
+moved fastint became an object at the integer's address (QEMU 2026-10-25:
+NetSurf faulted at 0x200 in duk_hobject_find_entry_tval_ptr_stridx after
+example.com's script) and undefined, null and booleans became numbers.
+Upstream reference: Duktape misc/clang_aliasing.c ("0xf1 into 0xf9") and the
+x86 clause in duk_config.h. Host test: tests/host/netsurf/duktape_values_test.c.
+
+--- a/netsurf/content/handlers/javascript/duktape/duk_custom.h
++++ b/netsurf/content/handlers/javascript/duktape/duk_custom.h
+@@ -29,6 +29,22 @@
+ #endif
+ 
+ #define DUK_USE_FASTINT
++
++#ifdef __i386__
++/* CiukiOS (QEMU 2026-10-25): no packed duk_tval on 32-bit x86. The packed
++ * value is a NaN whose top 16 bits are the type tag, and the tags of fastint,
++ * undefined, null, boolean, pointer and lightfunc are signalling NaNs. Clang
++ * copies the union as a double, which on the x87-only i686 target (SDK:
++ * -march=pentiumpro -mno-sse -mno-sse2) is fldl/fstpl, and fldl quiets a
++ * signalling NaN: 0xfff1 (fastint) became 0xfff9 (object), so an integer
++ * moved by duk_insert became an object at the integer's address and
++ * NetSurf faulted in a property lookup (address 0x200). Duktape records the
++ * effect in misc/clang_aliasing.c and its configuration already avoids the
++ * packed form for one affected x86 compiler. The i386 psABI also returns
++ * doubles in st(0). The unpacked duk_tval keeps the tag in its own word.
++ */
++#undef DUK_USE_PACKED_TVAL
++#endif
+ #define DUK_USE_REGEXP_CANON_WORKAROUND
+ 
+ /* Required for execution timeout checking */

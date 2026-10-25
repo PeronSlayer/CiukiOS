@@ -90,6 +90,75 @@ class LocalTests(unittest.TestCase):
             self.assertEqual(styled.failures(out.read_bytes(),640),[])
             self.assert_exit_reason(completed,"capture")
 
+    def test_example_domain_page(self):
+        """QEMU 2026-10-25: http://example.com showed only its paragraph, not
+        the "Example Domain" heading and the link the page used to have. Its
+        revision of 2026-10-24 has neither in the markup: one paragraph and a
+        script (spread, arrow functions, insertAdjacentHTML, prepend,
+        navigator.languages) that adds translations and a "Learn more" link.
+        Duktape 2.7 does not parse that script and NetSurf 3.11 binds none of
+        those calls, so NetSurf shows the paragraph, as a browser does
+        without JavaScript. Authored pages of both shapes
+        (fixtures/example-domain), JavaScript on: the earlier shape draws its
+        heading and link; the current one draws its paragraph centred on the
+        light colour of light-dark(#eee,#222) (patch 0015; white before) and
+        its external script is fetched and refused as a SyntaxError (patch
+        0016; a local .js was typed text/html and never ran). Nested
+        light-dark() keeps the light colour; a malformed or more than eight
+        levels deep one is dropped with its declaration."""
+        import struct
+        def render(name,page=None):
+            with tempfile.TemporaryDirectory(dir=self.out) as directory:
+                out=Path(directory) / "page.xrgb"
+                if page:(Path(directory) / name).write_text(page)
+                url=(Path(directory) / name if page else HERE / "fixtures/example-domain" / name).as_uri()
+                completed=subprocess.run([str(self.base / "stage/Programs/netsurf"),"-w","800","-h","600",
+                    "--ciuki-resources="+str(self.base / "stage/system/netsurf"),"--ciuki-profile="+str(Path(directory) / "profile"),
+                    "--ciuki-capture="+str(out),url],capture_output=True,text=True,timeout=30)
+                self.assertEqual(completed.returncode,0,completed.stdout+completed.stderr)
+                self.assertIn("NetSurf local title: Example Domain",completed.stderr)
+                self.assert_exit_reason(completed,"capture")
+                raw=out.read_bytes();self.assertEqual(len(raw),800*600*4)
+            # The page area, without the window's scroll bars.
+            rows=[struct.unpack_from("<760I",raw,y*800*4) for y in range(560)]
+            def box(test):
+                points=[(x,y) for y,row in enumerate(rows) for x,p in enumerate(row) if test(p&0xffffff)]
+                if not points:return None
+                xs=[x for x,_ in points];ys=[y for _,y in points]
+                return min(xs),min(ys),max(xs),max(ys),len(points)
+            dark=lambda p:max(p>>16,(p>>8)&255,p&255)<0x70
+            blue=lambda p:(p&255)>(p>>16)+40
+            return completed,rows,box(dark),box(blue)
+        completed,rows,text,link=render("classic.html")
+        self.assertEqual(rows[5][5]&0xffffff,0xeeeeee)
+        self.assertIsNotNone(link,"no link drawn")
+        self.assertGreater(link[4],100)
+        # The heading: the first run of text rows is taller than a 16 px line.
+        lines=[y for y,row in enumerate(rows) if any(max(p>>16&255,p>>8&255,p&255)<0x70 for p in row)]
+        first=1
+        while first<len(lines) and lines[first]==lines[first-1]+1:first+=1
+        self.assertGreaterEqual(first,20,lines[:40])
+        self.assertLess(text[1],link[1])
+        classic_link=link[4]
+        completed,rows,text,link=render("index.html")
+        for x,y in ((5,5),(700,100),(400,540)):self.assertEqual(rows[y][x]&0xffffff,0xeeeeee,(x,y))
+        self.assertIsNone(link)
+        self.assertIsNotNone(text)
+        x0,y0,x1,y1,count=text
+        self.assertGreater(count,500)
+        self.assertLess(abs((x0+x1)/2-391),20,text)  # centred in the 782 px viewport
+        self.assertGreater(y0,120,text)  # padding-top 25vh
+        self.assertLess(x1-x0,26*16+10,text)  # max-width 26em
+        self.assertIn("Uncaught error in JS: SyntaxError",completed.stderr)
+        deep="light-dark("*9+"#eee"+",#222)"*9
+        for background,colour in (("light-dark(light-dark(#eee,#000),#222)",0xeeeeee),("light-dark(#eee)",0xcccccc),
+                                  ("light-dark(#eee,#222",0xcccccc),("light-dark(#eee,#222,#333)",0xcccccc),(deep,0xcccccc),
+                                  ("light-dark("*8+"#eee"+",#222)"*8,0xeeeeee)):
+            with self.subTest(background=background[:40]):
+                _,rows,_,_=render("light-dark.html","<title>Example Domain</title><style>html{background:#ccc;background:"+background+"}</style><p>x")
+                self.assertEqual(rows[300][700]&0xffffff,colour)
+        print("example domain: classic heading rows",first,"link pixels",classic_link,"current paragraph box",text[:4],flush=True)
+
     def test_streaming_file(self):
         with tempfile.TemporaryDirectory(dir=self.out) as directory:
             page=Path(directory) / "stream.html"

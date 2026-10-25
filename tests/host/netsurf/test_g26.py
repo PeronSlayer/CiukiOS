@@ -33,6 +33,43 @@ class BrowserUserTools(unittest.TestCase):
         self.assertEqual(capture.stat().st_size,640*480*4)
         print('PASS G26B real NetSurf Duktape executes authored DOM/title mutation')
 
+    def test_javascript_values_on_i686(self):
+        """QEMU 2026-10-25: example.com's script ended NetSurf with a fault at
+        0x200 in duk_hobject_find_entry_tval_ptr_stridx. The target's x87
+        code copies Duktape's packed duk_tval as a double and quiets the
+        signalling-NaN tags (fastint, undefined, null, boolean, pointer,
+        lightfunc): a moved integer became an object at the integer's
+        address. NetSurf's own Duktape, configuration and the port's
+        allocator, built with -m32 and the SDK's code-generation flags; the
+        values must keep their kind (patch 0014: unpacked duk_tval)."""
+        spec=importlib.util.spec_from_file_location('g26_kernel_flags',ROOT/'scripts/build_kernel.py')
+        kernel=importlib.util.module_from_spec(spec);spec.loader.exec_module(kernel)
+        # The SDK compiles with the kernel's flags except -mno-80387 (sdk/build_sdk.py).
+        codegen=[f for f in kernel.CFLAGS if f.startswith(('-march=','-mno-sse','-mno-mmx','-O'))
+                 or f in ('-fno-strict-aliasing','-fno-omit-frame-pointer')]
+        self.assertIn('-mno-sse2',codegen)
+        probe=self.out/'m32-probe.c';probe.write_text('int main(void){return 0;}\n')
+        if subprocess.run(['clang','-m32',str(probe),'-o',str(self.out/'m32-probe')],capture_output=True).returncode:
+            self.skipTest('no 32-bit C library for clang -m32 on this host')
+        source=self.base/'source/netsurf';duktape=source/'content/handlers/javascript/duktape'
+        common=['clang','-m32',*codegen,'-g','-std=c17','-D_POSIX_C_SOURCE=200809L','-I'+str(duktape),'-I'+str(source),'-I'+str(source/'include')]
+        engine=self.out/'duktape-i686.o'
+        subprocess.run([*common,'-w','-c',str(duktape/'duktape.c'),'-o',str(engine)],check=True)
+        binary=self.out/'duktape-values-i686'
+        subprocess.run([*common,'-DCIUKI_HOST','-Wall','-Wextra','-Werror','-I'+str(ROOT),
+            str(ROOT/'tests/host/netsurf/duktape_values_test.c'),str(ROOT/'sdk/netsurf/port/js_memory.c'),str(engine),'-lm','-o',str(binary)],check=True)
+        result=subprocess.run([binary],capture_output=True,text=True,timeout=60)
+        print(result.stdout,end='')
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        # The target compiler itself selects the unpacked value.
+        sdk=ROOT/'build/tools/ciuki-sdk/bin/ciuki-cc'
+        if sdk.exists():
+            check=self.out/'tval-target.c'
+            check.write_text('#include "duktape.h"\n#if defined(DUK_USE_PACKED_TVAL)\n#error packed duk_tval on the target\n#endif\nint ciuki_tval_probe;\n')
+            subprocess.run([str(sdk),'-D__ciuki__','-DCIUKI_NETSURF','-I'+str(duktape),'-I'+str(source),'-I'+str(source/'include'),
+                            '-I'+str(source/'frontends'),'-fsyntax-only',str(check)],check=True)
+            print('PASS target compiler: unpacked duk_tval')
+
     def test_png_jpeg(self):
         binary=self.out/'raster'
         subprocess.run(['clang','-std=c17','-D_POSIX_C_SOURCE=200809L','-O1','-g','-Wall','-Wextra','-Werror',
