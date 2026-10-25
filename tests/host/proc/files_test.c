@@ -941,6 +941,145 @@ static void test_launch_sparse(void)
     puts("PASS fx-8 executable snapshot: loader byte set only (headers, PT_LOAD, section table), forward runs, "
          "unchanged ELF validation/load, whole file for non-ELF and malformed headers, no page leak");
 }
+/* q3exec: a PE image's snapshot is its Win32 loader view. The header values
+ * are those of id Software's Q3ADemo.exe (MindVision Installer VISE 3.x,
+ * 48,907,862 bytes): e_lfanew 0xF0, file and section alignment 0x1000,
+ * SizeOfHeaders 0x1000, SizeOfImage 0x12000 and five sections whose raw data
+ * ends at 0x11000, followed by the installer's payload, which starts with
+ * "ESIV" and ends with the "ESIV" + payload-offset trailer the stub seeks to
+ * (its _llseek(-8, FILE_END)). Before q3exec the 32 MiB limit refused the file
+ * by its size (fdtable.c image_snapshot_open, ENOEXEC: "Exec format error"),
+ * and any PE was snapshotted, hashed and copied whole. */
+#define Q3_VIEW 0x11000u
+static void q3_put16(uint8_t *p, uint32_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
+static void q3_put32(uint8_t *p, uint32_t v) { q3_put16(p, v); q3_put16(p + 2, v >> 16); }
+static void q3_stub(uint8_t *file, uint32_t bytes)
+{
+    static const uint32_t sections[5][5] = {   /* VirtualSize, RVA, SizeOfRawData, PointerToRawData, flags */
+        {0xbfcc,0x1000,0xc000,0x1000,0x60000020},{0xcf2,0xd000,0x1000,0xd000,0x40000040},
+        {0x198c,0xe000,0x1000,0xe000,0xc0000040},{0xc0,0x10000,0x1000,0xf000,0xc0000040},
+        {0x1000,0x11000,0x1000,0x10000,0x40000040}};
+    static const char *names[5] = {".text",".rdata",".data",".data1",".rsrc"};
+    for (uint32_t i = 0; i < bytes; i++) file[i] = (uint8_t)(i * 7 + (i >> 11));
+    memset(file, 0, 0x1000);
+    file[0] = 'M'; file[1] = 'Z'; q3_put32(file + 60, 0xf0);
+    uint8_t *pe = file + 0xf0, *op = pe + 24;
+    memcpy(pe, "PE\0\0", 4); q3_put16(pe + 4, 0x14c); q3_put16(pe + 6, 5); q3_put32(pe + 8, 0x375ee349);
+    q3_put16(pe + 20, 0xe0); q3_put16(pe + 22, 0x10f);
+    q3_put16(op, 0x10b); q3_put32(op + 16, 0x71a0); q3_put32(op + 28, 0x400000);
+    q3_put32(op + 32, 0x1000); q3_put32(op + 36, 0x1000); q3_put16(op + 40, 4); q3_put16(op + 48, 4);
+    q3_put32(op + 56, 0x12000); q3_put32(op + 60, 0x1000); q3_put16(op + 68, 2);
+    q3_put32(op + 72, 0x100000); q3_put32(op + 76, 0x1000); q3_put32(op + 80, 0x100000); q3_put32(op + 84, 0x1000);
+    q3_put32(op + 92, 16);
+    q3_put32(op + 96 + 8, 0xd5c8); q3_put32(op + 100 + 8, 0x50);       /* imports */
+    q3_put32(op + 96 + 16, 0x11000); q3_put32(op + 100 + 16, 0x4d8);   /* resources */
+    q3_put32(op + 96 + 96, 0xd000); q3_put32(op + 100 + 96, 0x150);    /* IAT */
+    for (unsigned i = 0; i < 5; i++) {
+        uint8_t *t = op + 0xe0 + i * 40;
+        memcpy(t, names[i], strlen(names[i]));
+        for (unsigned k = 0; k < 4; k++) q3_put32(t + 8 + k * 4, sections[i][k]);
+        q3_put32(t + 36, sections[i][4]);
+    }
+    memcpy(file + Q3_VIEW, "ESIV", 4);
+    memcpy(file + bytes - 8, "ESIV", 4); q3_put32(file + bytes - 4, Q3_VIEW);
+}
+/* A source that serves a file of any size from a generator and records the
+ * furthest byte the snapshot asked for. */
+struct q3_source { struct image_source base; const uint8_t *head; uint32_t head_bytes, reads; uint64_t furthest; };
+static int q3_read(struct image_source *s, uint32_t offset, uint32_t bytes)
+{
+    struct q3_source *q = (struct q3_source *)s;
+    for (uint32_t i = 0; i < bytes; i++) {
+        uint32_t at = offset + i;
+        s->buffer[i] = at < q->head_bytes ? q->head[at] : (uint8_t)(at * 7 + (at >> 11));
+    }
+    if ((uint64_t)offset + bytes > q->furthest) q->furthest = (uint64_t)offset + bytes;
+    q->reads++;
+    return 0;
+}
+static int q3_snapshot(const uint8_t *head, uint32_t head_bytes, uint32_t bytes, bool whole,
+                       struct q3_source *q, struct file_image **out)
+{
+    static uint8_t buffer[BLKDEV_READ_BYTES];
+    struct file_image *image = kzalloc(sizeof(*image)); CHECK(image);
+    *q = (struct q3_source){ .base = { .read = q3_read, .buffer = buffer, .whole = whole }, .head = head, .head_bytes = head_bytes };
+    image->bytes = bytes;
+    int err = image_snapshot(image, &q->base);
+    if (err) { image_close(image); image = 0; }
+    *out = image;
+    return err;
+}
+static void test_launch_pe_view(void)
+{
+    const uint32_t bytes = Q3_VIEW + 3 * BLKDEV_READ_BYTES + 1234;   /* overlay crosses FAT runs */
+    uint8_t *file = malloc(bytes), *readback = malloc(bytes); CHECK(file && readback);
+    q3_stub(file, bytes);
+    int fd = file_open(client, "/launch-q3.exe", O_CREAT | O_RDWR, 0666); CHECK(fd >= 0);
+    for (uint32_t at = 0; at < bytes; at += BLKDEV_READ_BYTES) {
+        uint32_t n = bytes - at < BLKDEV_READ_BYTES ? bytes - at : BLKDEV_READ_BYTES;
+        CHECK(io(fd, file + at, n, true, true, at) == (int)n);
+    }
+    cache_invalidate(&cache, &disk[0].dev, false);
+    files_launch_verbose = true; client->launch = (struct proc_launch){ .active = true };
+    unsigned pages = pages_used;
+    struct ciuki_file snapshot; CHECK(!image_open(client->cwd, "/launch-q3.exe", &snapshot));
+    /* The view only: the first 64 KiB run and the .rsrc page, never the payload. */
+    CHECK(snapshot.bytes == Q3_VIEW && client->launch.volume_bytes == Q3_VIEW && client->launch.volume_reads == 2);
+    CHECK(!snapshot.read(snapshot.cookie, 0, readback, Q3_VIEW) && !memcmp(readback, file, Q3_VIEW));
+    CHECK(snapshot.read(snapshot.cookie, Q3_VIEW, readback, 4) == -EIO);    /* "ESIV" is not the image */
+    snapshot.close(snapshot.cookie);
+    /* The installer reads its payload through an ordinary descriptor. */
+    CHECK(io(fd, readback, 8, false, true, bytes - 8) == 8 && !memcmp(readback, "ESIV", 4));
+    CHECK(io(fd, readback, 4, false, true, Q3_VIEW) == 4 && !memcmp(readback, "ESIV", 4));
+    /* A signed image keeps its attribute certificate table in the view (the
+     * certificate-file-bounds rule needs it): here it ends the file. */
+    const uint32_t certificate = (bytes - 16) & ~7u;
+    q3_put32(file + 0xf0 + 24 + 96 + 32, certificate); q3_put32(file + 0xf0 + 24 + 100 + 32, 8);
+    CHECK(io(fd, file, PAGE_SIZE, true, true, 0) == PAGE_SIZE);
+    cache_invalidate(&cache, &disk[0].dev, false); client->launch = (struct proc_launch){ .active = true };
+    CHECK(!image_open(client->cwd, "/launch-q3.exe", &snapshot));
+    CHECK(snapshot.bytes == certificate + 8 && client->launch.volume_bytes == certificate + 8);
+    CHECK(!snapshot.read(snapshot.cookie, 0, readback, certificate + 8) && !memcmp(readback, file, certificate + 8));
+    snapshot.close(snapshot.cookie);
+    /* A certificate pointer past the end stays the validators' refusal: clipped to the file. */
+    q3_put32(file + 0xf0 + 24 + 96 + 32, bytes); CHECK(io(fd, file, PAGE_SIZE, true, true, 0) == PAGE_SIZE);
+    CHECK(!image_open(client->cwd, "/launch-q3.exe", &snapshot) && snapshot.bytes == bytes);
+    snapshot.close(snapshot.cookie);
+    q3_put32(file + 0xf0 + 24 + 96 + 32, 0); q3_put32(file + 0xf0 + 24 + 100 + 32, 0);
+    CHECK(io(fd, file, PAGE_SIZE, true, true, 0) == PAGE_SIZE);
+    /* Digests open every byte, PE or not. */
+    client->launch = (struct proc_launch){ .active = true };
+    CHECK(!image_open_whole(client->cwd, "/launch-q3.exe", &snapshot) && snapshot.bytes == bytes);
+    CHECK(client->launch.volume_bytes == bytes && !snapshot.read(snapshot.cookie, 0, readback, bytes) && !memcmp(readback, file, bytes));
+    snapshot.close(snapshot.cookie);
+    CHECK(pages_used == pages);
+    memset(&client->launch, 0, sizeof(client->launch)); files_launch_verbose = false;
+    CHECK(!file_close(client, fd)); CHECK(!remove_path_native("/launch-q3.exe", false));
+    /* The real size: 48,907,862 bytes, larger than CIUKI_ELF_BYTES_MAX. */
+    const uint32_t q3_bytes = 48907862u;
+    CHECK(q3_bytes > CIUKI_ELF_BYTES_MAX);
+    struct q3_source q; struct file_image *image;
+    q3_stub(file, Q3_VIEW + 8); memcpy(file + Q3_VIEW, "ESIV", 4);
+    CHECK(!q3_snapshot(file, Q3_VIEW, q3_bytes, false, &q, &image));
+    CHECK(image->bytes == Q3_VIEW && image->pages == Q3_VIEW / PAGE_SIZE && q.furthest == Q3_VIEW && q.reads == 2);
+    CHECK(!image_read(image, 0, readback, Q3_VIEW) && !memcmp(readback, file, Q3_VIEW));
+    image_close(image);
+    /* Over the limit: a view past 32 MiB, a non-PE file and the whole-file
+     * open are refused without reading past the first run. */
+    q3_put32(file + 0xf0 + 24 + 0xe0 + 4 * 40 + 20, CIUKI_ELF_BYTES_MAX);   /* .rsrc raw data at 32 MiB */
+    CHECK(q3_snapshot(file, Q3_VIEW, q3_bytes, false, &q, &image) == -ENOEXEC && q.furthest == BLKDEV_READ_BYTES);
+    q3_stub(file, Q3_VIEW + 8); file[0] = 'Z';
+    CHECK(q3_snapshot(file, Q3_VIEW, q3_bytes, false, &q, &image) == -ENOEXEC && q.furthest == BLKDEV_READ_BYTES);
+    file[0] = 'M';
+    CHECK(q3_snapshot(file, Q3_VIEW, q3_bytes, true, &q, &image) == -ENOEXEC && q.furthest == BLKDEV_READ_BYTES);
+    /* A header pointer past the loader limit is no view (and is never read). */
+    q3_put32(file + 60, CIUKI_ELF_BYTES_MAX);
+    CHECK(q3_snapshot(file, Q3_VIEW, q3_bytes, false, &q, &image) == -ENOEXEC && q.furthest == BLKDEV_READ_BYTES);
+    CHECK(pages_used == pages);
+    free(file); free(readback);
+    puts("PASS q3exec PE snapshot: Win32 loader view (headers, sections, certificate), overlay unread and "
+         "readable through a descriptor, 48.9 MB installer accepted, limit on the view, whole file for digests");
+}
 static void test_launch_throughput(void)
 {
     const unsigned bytes=1024*1024;
@@ -1620,7 +1759,7 @@ int main(int argc, char **argv)
     client->cwd=space->root; px_retain(client->cwd); client->cwd_retain=px_retain; client->cwd_release=px_release;
     test_paths(); test_fds(); test_io(); test_namespace(); test_syscalls(); test_read_interruption(); test_peer_walk_copy(); test_lifetime_and_legacy(); test_overwrite_ctime(); test_concurrent_append(); test_clocks(); test_net_node(); test_media_node();
     test_com_nodes(); test_lpt_nodes(); test_uname(); test_optical_native();
-    test_launch_reads(); test_launch_throughput(); test_launch_sparse();
+    test_launch_reads(); test_launch_throughput(); test_launch_sparse(); test_launch_pe_view();
     test_registry_commit(); test_setup_metadata(); test_file_info();
     unsigned prior_pages = pages_used, prior_heap = heap_blocks;
     CHECK(f2_files_post_commit_fault());

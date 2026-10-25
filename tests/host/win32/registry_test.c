@@ -403,6 +403,7 @@ DECL(void *,CreateServiceW,(void *,const WCHAR *,const WCHAR *,uint32_t,uint32_t
 DECL(int,ChangeServiceConfigW,(void *,uint32_t,uint32_t,uint32_t,const WCHAR *,const WCHAR *,uint32_t *,const WCHAR *,const WCHAR *,const WCHAR *,const WCHAR *));
 DECL(int,ChangeServiceConfig2W,(void *,uint32_t,void *));DECL(int,QueryServiceConfigW,(void *,void *,uint32_t,uint32_t *));
 DECL(int,QueryServiceStatusEx,(void *,uint32_t,void *,uint32_t,uint32_t *));DECL(int,StartServiceW,(void *,uint32_t,const WCHAR **));
+DECL(int,QueryServiceStatus,(void *,void *));DECL(int,StartServiceA,(void *,uint32_t,const char **));
 DECL(int,ConvertSidToStringSidW,(const void *,WCHAR **));
 DECL(int,CreateProcessAsUserW,(void *,const WCHAR *,WCHAR *,void *,void *,int,uint32_t,void *,const WCHAR *,void *,void *));
 DECL(int,GetFileSecurityW,(const WCHAR *,uint32_t,void *,uint32_t,uint32_t *));DECL(int,GetFileSecurityA,(const char *,uint32_t,void *,uint32_t,uint32_t *));
@@ -528,6 +529,10 @@ static void upper_security(void)
     CHECK(!ChangeServiceConfigW((void *)1,0,0,0,NULL,NULL,NULL,NULL,NULL,NULL,NULL)&&last_error==120);
     CHECK(!ChangeServiceConfig2W((void *)1,1,NULL)&&!QueryServiceConfigW((void *)1,NULL,0,&needed)&&needed==7);
     CHECK(!QueryServiceStatusEx((void *)1,0,NULL,0,&needed)&&!StartServiceW((void *)1,0,NULL)&&last_error==120);
+    /* q3exec: the ANSI service entry points vise32ex.dll imports fail as on Windows 98. */
+    uint8_t service_status[28];memset(service_status,0x5a,sizeof(service_status));last_error=0;
+    CHECK(!QueryServiceStatus((void *)1,service_status)&&last_error==120&&service_status[0]==0x5a);
+    last_error=0;CHECK(!StartServiceA((void *)1,0,NULL)&&last_error==120);
     CHECK(!ConvertSidToStringSidW(sid,&text)&&text==(WCHAR *)1&&last_error==120);
     CHECK(!CreateProcessAsUserW(NULL,NULL,NULL,NULL,NULL,0,0,NULL,NULL,NULL,NULL)&&last_error==120);
     uint8_t descriptor[20];CHECK(!GetFileSecurityW(L16("C:\\x"),4,descriptor,20,&needed)&&last_error==120&&needed==7);
@@ -535,7 +540,7 @@ static void upper_security(void)
     CHECK(!GetFileSecurityA("C:\\x",4,descriptor,20,&needed)&&last_error==120&&needed==7);
     CHECK(!SetFileSecurityW(L16("C:\\x"),4,descriptor)&&!LookupPrivilegeValueW(NULL,L16("SeBackupPrivilege"),descriptor)&&last_error==120);
     CHECK(CommandLineFromMsiDescriptor(L16("x"),NULL,&length)==120&&length==5);
-    CHECK(stub_diagnostics==15);
+    CHECK(stub_diagnostics==17);
     puts("PASS f5-20A security structures hardware profile random bytes and W21 service NT-security MSI failures");
 }
 /* f5-20B (directive f5-20 amendment 1, item 3): NtDeleteKey deletes the

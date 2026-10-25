@@ -20,7 +20,7 @@ struct w32_account {
 };
 struct w32_handle_entry {
     struct w32_object *object;
-    uint32_t access, generation;
+    uint32_t access;
     bool inherit;
 };
 struct w32_process {

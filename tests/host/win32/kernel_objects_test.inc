@@ -331,9 +331,23 @@ static void test_objects_sections(void)
     uint32_t duplicate = a.result;
     CHECK(!w32_handle_close(other, duplicate) && w32_handle_close(other, duplicate) == 6);
     uint32_t old = event2;
-    CHECK(!w32_handle_close(p, event2));
+    CHECK(!w32_handle_close(p, event2) && !w32_lookup(t, old, 0) && w32_handle_close(p, old) == 6);
     event2 = object_create(t, W32_OBJ_EVENT, 0, 0);
-    CHECK(old != event2 && !w32_lookup(t, old, 0));
+    CHECK(w32_lookup(t, event2, 0) && event2 <= 0x4000);
+    /* q3exec: handle values are (slot + 1) * 4 and a freed value is reused
+     * by the next handle of that slot, as on Windows; Win16-derived code
+     * (the VISE installer stub) keeps HFILEs in sign-extended WORDs, so no
+     * value may reach 0x8000 however often slots are reused. */
+    {
+        uint32_t first = object_create(t, W32_OBJ_EVENT, 0, 0), second = object_create(t, W32_OBJ_EVENT, 0, 0);
+        for (unsigned i = 0; i < 70000; i++) {
+            CHECK(!w32_handle_close(p, first));
+            uint32_t again = object_create(t, W32_OBJ_EVENT, 0, 0);
+            CHECK(again == first && (uint32_t)(int32_t)(int16_t)again == again);
+        }
+        CHECK(!w32_handle_close(p, first) && !w32_handle_close(p, second));
+        CHECK(!w32_lookup(t, first, 0) && !w32_lookup(t, 0x4004, 0) && !w32_lookup(t, 0x8000 | first, 0));
+    }
     a = (struct ciuki_w32_object_args) { .action = W32_OBJ_SET_INHERIT, .handle = event, .value = 1 };
     CHECK(!w32_object_call(t, &a) && !a.error);
     struct process *child;
@@ -622,7 +636,7 @@ static void test_objects_sections(void)
         if (p->w32->chunks[c])
             for (unsigned i = 0; i < 64; i++)
                 if (p->w32->chunks[c][i].object && p->w32->chunks[c][i].object->type == W32_OBJ_FILE)
-                    imported = (p->w32->chunks[c][i].generation << 14) | ((c * 64 + i) << 2);
+                    imported = (c * 64 + i + 1) << 2;
     sec.file = imported;
     CHECK(!w32_section_call(t, &sec) && !sec.error);
     struct w32_object *alias = w32_lookup(t, sec.result, 0);
@@ -747,7 +761,7 @@ static void test_objects_sections(void)
             && heap_blocks == initial_heap && !memcmp(promises, initial_promises, sizeof(promises))
             && !mapping_count && !shared_mapping_count);
     }
-    puts("w32 objects: atomic waits/order/pulse/timeouts, abandonment, generations/duplicate/inherit/names, "
+    puts("w32 objects: atomic waits/order/pulse/timeouts, abandonment, 16-bit handle values/reuse/duplicate/inherit/names, "
          "APC FIFO/user frames, suspend/FXSAVE, 10000 quota, COW/coherence/flush errors, 100 teardown cycles "
          "PASS");
 }

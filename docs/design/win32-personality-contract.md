@@ -390,7 +390,11 @@ the kernel holding a lock.
 **[F5]** Every Win32 process MUST have a kernel handle table, separate from
 its F2 descriptor table, with handle values that are non-zero multiples of
 four, at most 4096 handles per process and a system-wide ledger of 8192
-Win32 objects charged at creation. `CloseHandle` on an invalid handle MUST
+Win32 objects charged at creation. Handle values MUST be `(slot + 1) * 4`
+(4 to 0x4000) and a closed handle's value is reused by the next handle of its
+slot, as on Windows 95/98 and NT: Win16-derived programs keep HFILEs in
+sign-extended 16-bit fields, so no value may reach 0x8000 (see "q3exec"
+below). `CloseHandle` on an invalid handle MUST
 fail with `ERROR_INVALID_HANDLE` (6) and MUST NOT raise an exception (9x
 behaviour). `DuplicateHandle` MUST work within a process and between
 processes when the caller holds a handle to both. Access masks MUST be
@@ -619,6 +623,16 @@ refused. `MajorSubsystemVersion` above 5 MUST be accepted with a log record,
 not refused. Checksums and the `DllCharacteristics` flags of later Windows
 versions MUST be ignored. Section characteristics MUST give each page its
 protection; a writable and executable section MUST map read-write-execute.
+
+**[F5]** Only the headers and the sections are the image. Data after the
+last section (the overlay where self-extracting installers append their
+payload) MUST NOT be read, hashed or copied by the loaders and MUST NOT count
+against any image size limit; the program reads it through its own file
+handle. The kernel snapshots a PE file as its loader view: offset 0 to the
+end of the headers and section table, of every section's raw data and of the
+attribute certificate table (kept so `certificate-file-bounds` is still
+checked), clipped to the file. The view, not the file, is bounded by the
+32 MiB executable snapshot limit (see "q3exec" below).
 
 **[F5]** Malformed images MUST fail with `ERROR_BAD_EXE_FORMAT` (193) and a
 `[win32] load` record naming the first failed check, never with a crash of
@@ -2713,3 +2727,93 @@ pending delivery record when present. This also permits unwinding a handled
 noncontinuable exception rather than falsely treating unwind as continuation
 of its faulting instruction. Invalid selectors/context still kill only the
 calling process. No record size or native ABI changes are needed.
+
+## q3exec — Self-extracting installers: loader view, 16-bit handles, default environment (2026-10-25)
+
+Owner goal: the unmodified Quake III Arena demo installer `Q3ADemo.exe`
+(id Software, MindVision Installer VISE 3.x, 48,907,862 bytes,
+`third_party/games/q3a-demo-installer/`) runs inside CiukiOS from the desktop
+folder "Quake III Arena Demo". QEMU evidence on the image of main 6c876714:
+Run reported "could not be started. Exec format error (8)", with no
+`[win32] load` record in the serial log.
+
+### Research
+
+- [Microsoft PE format](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format):
+  `SizeOfRawData`/`PointerToRawData` locate each section's file data; "the
+  attribute certificate and debug information must be placed at the very end
+  of an image file ... because the loader does not map these into memory";
+  the Certificate Table entry is a file pointer and "these certificates are
+  not loaded into memory as part of the image".
+- Matt Pietrek, [Peering Inside the PE](https://learn.microsoft.com/en-us/previous-versions/ms809762(v=msdn.10))
+  (MSDN, March 1994): the Windows NT and Windows 95 loaders memory-map "the
+  appropriate pieces of the file"; `SizeOfImage` runs "up to the end of the
+  last section". Bytes after the last section are therefore never part of the
+  image on Windows 9x or NT, which is how self-extractors keep a payload there.
+- Windows 95 Resource Kit, [How Windows 95 processes Autoexec.bat](https://discmaster.textfiles.com/file/31960/Extra%20Streangth%20Realhelp.iso/doc/win95/source/33bmr4jn.htm?html=true):
+  the Autoexec.bat defaults are in IO.SYS, including `tmp=c:\windows\temp`
+  and `temp=c:\windows\temp`; a Windows 98 `SET` listing shows the same
+  values ([MASM forum](https://masmforum.com/board/index.php?msg=17574)).
+- Raymond Chen, [kernel handles are multiples of four](https://devblogs.microsoft.com/oldnewthing/20050121-00):
+  the low two bits of kernel handles are zero; handle values are otherwise
+  opaque, and Windows reuses a freed table entry.
+- The installer itself (host disassembly of the 69,632-byte stub with
+  `objdump`, no execution): PE32 GUI, i386, image base 0x400000, file and
+  section alignment 0x1000, five sections whose raw data ends at 0x11000, no
+  relocations; the last 8 bytes of the file are `ESIV` and the payload offset
+  0x11000. The stub calls `GetModuleFileNameA`, `_lopen(OF_READ)`,
+  `_llseek(-8, FILE_END)`, reads the trailer and seeks to the payload; it reads
+  `TMP`, then `TEMP` (its C runtime `getenv`), else uses `<Windows drive>\TEMP`,
+  removes stale `~vis*` directories there, creates `~visNNNN`, unpacks
+  `vise32ex.dll` (215,548 compressed bytes, 495,616 bytes; 16-bit big-endian
+  words carrying raw deflate) and `English.vlg` into it with `_lcreat`/
+  `_hwrite`, then `LoadLibraryA(vise32ex.dll)` and calls its `ViseMain`
+  export without checking `GetProcAddress`. The codec keeps both file
+  handles in 16-bit fields and sign-extends them (`movswl`) before
+  `_hread`/`_hwrite`.
+
+### Findings and decisions
+
+1. Refusing check: `image_snapshot_open` in `src/kernel/proc/fdtable.c`
+   refused any executable larger than `CIUKI_ELF_BYTES_MAX` (32 MiB) with
+   `-ENOEXEC` before reading it; `w32_spawn` was never reached. Every PE was
+   also snapshotted whole, hashed whole by the section cache and copied whole
+   into the process for ntdll. Decision: a PE snapshot is its loader view
+   (rule in "Accepted images"); the 32 MiB limit bounds the view. The real
+   file's view is 69,632 bytes; both the production kernel validator
+   (`w32_pe_validate`) and the user-mode mechanism (`sdk/pe`) accept it. A
+   view past 32 MiB, and a non-PE file over the limit, are refused with
+   `-ENOEXEC` and a `[proc] image refused reason=...` record.
+2. Handle values: the kernel encoded `generation << 14 | slot << 2`, so every
+   reused slot produced values of 0x8000 or more, which the VISE codec turns
+   into invalid handles (the second support file would fail). Decision:
+   values are `(slot + 1) * 4` without generation bits, as on Windows; a
+   stale value is reused by the next handle of its slot, as on Windows.
+3. Environment: a program launched by the native desktop received only the
+   native environment (`LC_ALL`, `PATH=/Programs`, `HOME`), so the stub would
+   use `C:\TEMP`, which the image does not have (it has `C:\WINDOWS\TEMP`).
+   Decision: process start (`sdk/win32/services/start.c`) adds the Windows 98
+   IO.SYS defaults `TMP` and `TEMP` = `C:\WINDOWS\TEMP` when absent; an
+   inherited value wins. `PATH` stays the native value the loader already
+   interprets.
+4. Imports (checked against the exports of the DLLs in the 6c876714 image,
+   matched by SHA-256 from `build-manifest.json`): the stub's 81 imports
+   (`KERNEL32` 74 including the `_l*`/`_h*` family, `USER32` 4, `ADVAPI32` 3)
+   all resolve. `vise32ex.dll` has 280 imports from `KERNEL32` (130),
+   `USER32` (83, including DDE), `GDI32` (29), `ADVAPI32` (18), `SHELL32` (5),
+   `ole32` (5), `VERSION` (3), `comdlg32` (3), `WINMM` (2) and `OLEAUT32`
+   (ordinals 161 and 163); only `ADVAPI32!QueryServiceStatus` and
+   `ADVAPI32!StartServiceA` were missing, which fails its `LoadLibrary` with
+   127 and makes the stub call a null `ViseMain`. Decision: both are exported
+   as Windows 98 does, failing with `ERROR_CALL_NOT_IMPLEMENTED` (120).
+
+### Known limits
+
+- A signed PE whose attribute certificate follows a large overlay keeps the
+  overlay inside its view (the certificate bounds rule needs it), so such a
+  file over 32 MiB is still refused.
+- `vise32ex.dll` also drives the PROGMAN DDE conversation, `dsetup.dll`
+  `DirectXSetup`, `RunOnce`, the `Uninstall` key and an `unvise32.exe`
+  uninstaller copied to the Windows directory; these use existing contract
+  services and are QEMU evidence still to collect.
+
