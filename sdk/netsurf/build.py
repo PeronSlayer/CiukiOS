@@ -559,7 +559,10 @@ def build(host=False, clean=False, directory=None):
     shutil.copy2(ROOT / "assets/icons/upstream/AUTHORS",notices / "Tango-AUTHORS.txt")
     shutil.copytree(HERE / "patches",notices / "netsurf-patches")
     (notices / "NetSurf-SOURCE.txt").write_text("NetSurf 3.11, GPL-2.0-only.\nSource: "+expected["pins"]["archive"]["url"]+"\nSHA-256: "+expected["pins"]["archive"]["sha256"]+"\nCiuki changes: sdk/netsurf; applied patches retained in netsurf-patches.\nCiuki portrait is a separate CiukiOS project asset; Tango is Public Domain.\n")
-    (resource / "Choices").write_text("enable_javascript:true\nmemory_cache_size:2097152\ndisc_cache_size:0\nmax_fetchers:8\n")
+    # JavaScript is off by default on the target for now (chrome.c
+    # ciuki_chrome_defaults, netsurf-port-plan.md); host tests keep it on.
+    (resource / "Choices").write_text("enable_javascript:" + ("1" if host else "0") +
+                                      "\nmemory_cache_size:2097152\ndisc_cache_size:0\nmax_fetchers:8\n")
     # Chrome uses the system Tango store and approved portrait conversion.
     shutil.copy2(ROOT / "assets/brand/ciuki-logo.png",resource / "ciuki-logo.png")
     elf=None

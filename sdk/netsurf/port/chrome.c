@@ -40,6 +40,7 @@
 #include "surface.h"
 void ciuki_font_prefetch(void); /* font.c (fx-15) */
 #include "profile.h"
+#include "js_memory.h"
 #include "chrome.h"
 #include "budget.h"
 #include "logline.h"
@@ -92,13 +93,26 @@ int ciuki_browser_channel=-1;
 static struct browser_window *browser(void) { return window_list?window_list->bw:NULL; }
 static nserror count_bookmark(void *context,nsurl *url,const char *title)
 { (void)context;(void)url;(void)title;bookmarks++;return bookmarks>500?NSERROR_BAD_SIZE:NSERROR_OK; }
+size_t fetch_ciuki_describe(const nsurl *,char *,size_t);
 static void navigate(const char *text)
 {
     nsurl *url=NULL;
     nserror err=nsurl_create(text,&url);
     if(!err && browser())err=browser_window_navigate(browser(),url,NULL,BW_NAVIGATE_HISTORY,NULL,NULL,NULL);
+    if(err) {
+        /* No address text (privacy, as the input records); the nserror tells
+         * an unparsable address from a missing fetcher (NO_FETCH_HANDLER) or
+         * a refused fetch setup (NOMEM) when no fetch record follows, and the
+         * fetcher table (patch 0013) why a scheme has no fetcher. */
+        ciuki_log_line("[netsurf] navigate error=%d parsed=%d window=%d",(int)err,url!=NULL,browser()!=NULL);
+        if(url && err==NSERROR_NO_FETCH_HANDLER) {
+            char table[CIUKI_LOG_LINE_MAX-32]="";
+            fetch_ciuki_describe(url,table,sizeof(table));
+            ciuki_log_line("[netsurf] fetchers %s",table);
+        }
+        ciuki_chrome_status("Unable to open this address.");
+    }
     if(url)nsurl_unref(url);
-    if(err)ciuki_chrome_status("Unable to open this address.");
 }
 static int save_hotlist(const char *path,void *unused)
 { (void)unused;return hotlist_export(path,"NetSurf Bookmarks")==NSERROR_OK?0:-1; }
@@ -423,14 +437,19 @@ bool ciuki_chrome_input(const struct ciuki_input_event *input)
         struct du_widget *focused=&ui.dialog.items[ui.dialog.focus];
         if(focused->kind==DU_EDIT)edit=focused;
     } else if(!ui.dialog.kind && du_focused(&ui)==URL)edit=du_get(&ui,URL);
+    /* Desktop TEXT owns printable input, including AltGr (right Alt or
+     * Ctrl+right Alt). KEY still owns editing, navigation and shortcuts. */
+    bool altgr=ui.keys[DU_KEY_RALT];
     if(e.type==CIUKI_INPUT_TEXT && edit) {
+        /* QEMU 2026-10-25: the desktop also sends the character of a
+         * Ctrl or Alt chord, so Ctrl+L selected the address and then typed
+         * "l" over it ("lhttp://..."). As in a Windows edit control, a Ctrl
+         * or (left) Alt chord is a command, never text; AltGr still types. */
+        if((ui.modifiers&(DU_CTRL|DU_ALT)) && !altgr)return true;
         char utf8[5];
         if(e.code>=32 && e.code!=127 && du_utf8_encode(e.code,utf8))du_edit_insert(edit,utf8);
         ui.dirty=1;return true;
     }
-    /* Desktop TEXT owns printable input, including AltGr (right Alt or
-     * Ctrl+right Alt). KEY still owns editing, navigation and shortcuts. */
-    bool altgr=ui.keys[DU_KEY_RALT];
     if(e.type==CIUKI_INPUT_KEY && e.value && edit &&
        (!(ui.modifiers&(DU_CTRL|DU_ALT)) || altgr) && du_keymap(DU_LAYOUT_US,e.code,0))return true;
     if(e.type==CIUKI_INPUT_WHEEL && !ui.dialog.kind && ui.capture<0 &&
@@ -577,7 +596,17 @@ void ciuki_chrome_defaults(void)
         nsoption_set_charp(http_proxy_host,internet.proxy[0]?strdup(internet.proxy):NULL);
         nsoption_set_int(http_proxy_port,internet.port);
     } else nsoption_set_int(memory_cache_size,2*1024*1024);
+#ifdef CIUKI_HOST
     nsoption_set_bool(enable_javascript,true);
+#else
+    /* Temporary (2026-10-25, docs/design/netsurf-port-plan.md): JavaScript
+     * is off by default on CiukiOS until the Duktape fault on real pages is
+     * fixed (QEMU: a script of the first remote page faulted on a NULL
+     * object in duk_hobject_find_entry_tval_ptr_stridx). A profile Choices
+     * file with enable_javascript:1 still turns it on. Host builds keep it
+     * on for the JavaScript host tests. */
+    nsoption_set_bool(enable_javascript,false);
+#endif
     nsoption_set_uint(disc_cache_size,0);
     nsoption_set_charp(disc_cache_path,NULL);nsoption_set_charp(cookie_file,NULL);nsoption_set_charp(cookie_jar,NULL);
     nsoption_set_int(max_fetchers,8);nsoption_set_int(max_fetchers_per_host,2);
@@ -693,6 +722,10 @@ void ciuki_netsurf_log_record(const char *line)
 }
 void ciuki_chrome_exit_report(void)
 {
+#ifndef CIUKI_HOST
+    /* Called right before netsurf_exit(): see ciuki_js_exiting. */
+    ciuki_js_exiting=true;
+#endif
     char line[CIUKI_LOG_LINE_MAX];
     if(exit_reported || exit_line(line,sizeof(line),true)<=0)return;
     exit_reported=true;

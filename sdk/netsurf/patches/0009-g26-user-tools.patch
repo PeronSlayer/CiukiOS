@@ -1,17 +1,12 @@
-G26: compile the port-owned streaming download store and bounded PNG/JPEG
-content handlers. The Ciuki PNG/JPEG handlers register after upstream handlers so the
-G26 allocation ledger stays active while fx-24 retains its other image formats.
-The Ciuki handler uses the project's existing pinned libpng and stb JPEG sources.
+G26: compile the port-owned streaming download store. PNG and JPEG are
+decoded by upstream's handlers with fx-24's DCT-scaled JPEG and fx-24b's
+sampled PNG decoding under the image ledger; G26's own full-size PNG/JPEG
+handler (port/raster_content.c) registered after them and replaced both, so
+any photograph above one megapixel was refused by the bitmap admission and
+not shown. It is no longer compiled or registered.
 
 --- a/netsurf/frontends/framebuffer/Makefile
 +++ b/netsurf/frontends/framebuffer/Makefile
 @@ -182,1 +182,2 @@
-+S_FRONTEND += ciuki/download_store.c ciuki/raster.c ciuki/raster_content.c
++S_FRONTEND += ciuki/download_store.c
  S_FRONTEND += ciuki/net.c ciuki/http.c ciuki/tls.c ciuki/dns.c
---- a/netsurf/content/handlers/image/image.c
-+++ b/netsurf/content/handlers/image/image.c
-@@ -47,0 +48 @@
-+nserror ciuki_raster_init(void);
-@@ -112 +113 @@
--	return error;
-+	return ciuki_raster_init();

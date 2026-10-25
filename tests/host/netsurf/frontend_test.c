@@ -30,6 +30,7 @@ void amendment_layout_checks(struct content *);
 #include "framebuffer/ciuki/chrome.c"
 #include "framebuffer/fbtk/event.c"
 #include "sdk/netsurf/port/docmem.h"
+#include "content/fetch.h"
 static bool running,finished;
 static unsigned damages,clicks;
 static bool intercept_actions,navigation_done;
@@ -122,6 +123,20 @@ static void chrome_checks(void)
     assert(!toolbar_keys);
     shortcut(0x26);drain();assert(toolbar_keys && du_focused(&ui)==URL);
     assert(!url->anchor && url->cursor==strlen(url->text));
+    /* QEMU 2026-10-25: the desktop sends a chord's character as TEXT too.
+     * Ctrl+L (with its "l") selects the whole address and types nothing;
+     * the next characters replace it. Alt chords type nothing either;
+     * AltGr (right Alt) still types. */
+    char before[DU_TEXT_MAX];snprintf(before,sizeof(before),"%s",url->text);
+    input(CIUKI_INPUT_KEY,DU_KEY_LCTRL,1,0);input(CIUKI_INPUT_KEY,0x26,1,0);input(CIUKI_INPUT_TEXT,'l',0,0);
+    input(CIUKI_INPUT_KEY,0x26,0,0);input(CIUKI_INPUT_KEY,DU_KEY_LCTRL,0,0);drain();
+    assert(!strcmp(url->text,before) && !url->anchor && url->cursor==strlen(url->text));
+    input(CIUKI_INPUT_KEY,DU_KEY_LALT,1,0);input(CIUKI_INPUT_TEXT,'d',0,0);input(CIUKI_INPUT_KEY,DU_KEY_LALT,0,0);
+    assert(!strcmp(url->text,before));
+    text("http://example.com");assert(!strcmp(url->text,"http://example.com"));
+    input(CIUKI_INPUT_KEY,DU_KEY_RALT,1,0);input(CIUKI_INPUT_TEXT,'@',0,0);input(CIUKI_INPUT_KEY,DU_KEY_RALT,0,0);
+    assert(!strcmp(url->text,"http://example.com@"));
+    shortcut(0x26);drain();assert(!url->anchor && url->cursor==strlen(url->text));
     /* A late URL notification cannot replace the user's partially typed URL. */
     text("editing");nsurl *late;assert(nsurl_create("http://late.example/",&late)==NSERROR_OK);
     ciuki_chrome_url(late);nsurl_unref(late);assert(!strcmp(url->text,"editing"));
@@ -214,6 +229,15 @@ static void exercise(void)
     assert(s->current.back && s->current.map);
     s->connection.transport.send=send_fixture;
     ciuki_browser_active=s;ciuki_chrome_init(s);
+    /* QEMU 2026-10-25 (typed http address: NO_FETCH_HANDLER): with a page
+     * shown, the production fetcher table still serves http and https, and
+     * the patch 0013 description names the matching slot as accepting. */
+    for(unsigned i=0;i<2;i++) {
+        nsurl *u=NULL;assert(nsurl_create(i?"https://example.com/":"http://example.com/",&u)==NSERROR_OK);
+        char table[320];assert(fetch_can_fetch(u) && fetch_ciuki_describe(u,table,sizeof(table))>0);
+        assert(strstr(table,"=ok") && !strstr(table,"=refused"));
+        nsurl_unref(u);
+    }
     chrome_checks();
     /* Wheel reaches actual page scrolling, in both directions and detents. */
     input(CIUKI_INPUT_MOTION,0,100,200);drain();

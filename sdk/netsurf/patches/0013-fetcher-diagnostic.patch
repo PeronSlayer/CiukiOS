@@ -1,0 +1,77 @@
+CiukiOS: fetcher table diagnostic for a refused navigation (port/chrome.c logs it
+after a NO_FETCH_HANDLER navigate error): the intern table census, the
+corestring "http" pointer, the URL scheme string and every fetcher slot string
+(pointer, reference count, length, hash, text), no URL text.
+
+--- a/netsurf/content/fetch.c
++++ b/netsurf/content/fetch.c
+@@ -588,6 +588,69 @@
+ 
+ 
+ 
++#ifdef CIUKI_NETSURF
++#include <stdio.h>
++/* CiukiOS diagnostic for a refused navigation (sdk/netsurf/port/chrome.c).
++ * QEMU 2026-10-25: a typed http address got NSERROR_NO_FETCH_HANDLER and the
++ * URL's scheme string was not pointer-equal to any registered fetcher
++ * scheme. Each string is written as pointer/rREFCNT/lLEN/hHASH/'text' (text
++ * cut to 10 printable characters; schemes only, no URL text), followed by
++ * what the intern table holds: its string count, how many strings read
++ * "http", and whether the URL's scheme and slot 0's scheme are in it. */
++struct fetch_ciuki_census { const lwc_string *url, *slot; unsigned total, http; bool url_seen, slot_seen; };
++static void fetch_ciuki_count(lwc_string *str, void *pw)
++{
++	struct fetch_ciuki_census *c = pw;
++	c->total++;
++	if (str->len == 4 && memcmp(str + 1, "http", 4) == 0) c->http++;
++	if (str == c->url) c->url_seen = true;
++	if (str == c->slot) c->slot_seen = true;
++}
++static size_t fetch_ciuki_string(char *out, size_t cap, const lwc_string *s)
++{
++	char text[11];
++	size_t i = 0;
++	if (s != NULL) {
++		const char *d = (const char *)(s + 1);
++		for (; i < s->len && i < 10; i++)
++			text[i] = (d[i] > 32 && d[i] < 127 && d[i] != '\'') ? d[i] : '?';
++	}
++	text[i] = 0;
++	int n = s == NULL ? snprintf(out, cap, "null") :
++		snprintf(out, cap, "%p/r%u/l%u/h%08x/'%s'", (const void *)s,
++			 (unsigned)s->refcnt, (unsigned)s->len, (unsigned)s->hash, text);
++	return n <= 0 ? 0 : (size_t)n < cap ? (size_t)n : cap - 1;
++}
++size_t fetch_ciuki_describe(const nsurl *url, char *out, size_t cap)
++{
++	lwc_string *scheme = nsurl_get_component(url, NSURL_SCHEME);
++	struct fetch_ciuki_census census = { scheme, fetchers[0].scheme, 0, 0, false, false };
++	size_t used = 0;
++	if (cap < 2) return 0;
++	out[0] = 0;
++	lwc_iterate_strings(fetch_ciuki_count, &census);
++	int n = snprintf(out, cap, "table=%u http=%u url_in=%d slot0_in=%d core_http=%p url=",
++			 census.total, census.http, census.url_seen, census.slot_seen,
++			 (void *)corestring_lwc_http);
++	if (n > 0) used = (size_t)n < cap ? (size_t)n : cap - 1;
++	if (used + 1 < cap) used += fetch_ciuki_string(out + used, cap - used, scheme);
++	for (int i = 0; i < MAX_FETCHERS && used + 4 < cap; i++) {
++		if (fetchers[i].scheme == NULL && fetchers[i].refcount == 0)
++			continue;
++		bool same = scheme != NULL && fetchers[i].scheme == scheme;
++		n = snprintf(out + used, cap - used, " %d:f%d%s:", i, fetchers[i].refcount,
++			     same ? (fetchers[i].refcount > 0 &&
++				     fetchers[i].ops.acceptable(url) ? "=ok" : "=refused") : "");
++		if (n <= 0) break;
++		used += (size_t)n < cap - used ? (size_t)n : cap - used - 1;
++		if (used + 1 < cap)
++			used += fetch_ciuki_string(out + used, cap - used, fetchers[i].scheme);
++	}
++	if (scheme != NULL) lwc_string_unref(scheme);
++	return used;
++}
++#endif
++
+ /* exported interface documented in content/fetch.h */
+ bool fetch_can_fetch(const nsurl *url)
+ {

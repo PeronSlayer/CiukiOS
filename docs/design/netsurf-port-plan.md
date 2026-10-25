@@ -876,7 +876,43 @@ charged against the fx-14 DOM budget. Integration retains G31 visible-page
 Ctrl+P printing and Ctrl+Shift+P setup. [G26C](browser-g26c.md) replaces the viewport
 with full-layout raster pagination through G31, connects shared default-program
 associations and saved-download Open With, and hardens zone classification.
-Print-media CSS and POST transfer to a new process remain gaps. G26 PNG/JPEG handlers
-register after upstream image handlers while fx-24 GIF/BMP/ICO/WebP/SVG remain
-enabled. Host evidence and limits are in `build/codex/g26-report.md` and
-`build/codex/g26b-report.md`.
+Print-media CSS and POST transfer to a new process remain gaps. G26's own
+full-size PNG/JPEG handler (`port/raster_content.c`) registered after upstream's
+and replaced fx-24's DCT-scaled JPEG and fx-24b's sampled PNG decoding, so a
+photograph above one megapixel was refused by the bitmap admission and not
+shown (`test_local` styled page); since 2026-10-25 it is no longer compiled or
+registered and upstream's handlers decode every PNG and JPEG under the image
+ledger. JavaScript setup (patch 0012): a refused allocation from the
+JavaScript budget during heap or thread setup reached Duktape's default fatal
+handler (abort, or a stack overflow when the uncaught-error text could not be
+allocated), and the generated `dukky_create_prototypes()` silently skipped a
+prototype it could not allocate (a missing Window prototype turned the window
+into an HTMLUnknownElement over the `browser_window` pointer). A heap is now
+made only with 1 MiB of JavaScript budget left (8 MiB free), setup steps run
+under `duk_safe_call`, any refused allocation during heap setup discards the
+heap, and a document whose thread failed is not retried per element; a window
+without a heap has no scripting instead of no browser. At process exit the
+target leaves the Duktape heaps to the operating system (no finalisers, no
+collection; the exit report sets `ciuki_js_exiting` just before
+`netsurf_exit()`), as Windows 98 reclaims a terminating process: in QEMU the
+heap teardown overflowed the 1 MiB main stack at every close although Duktape's
+own mark recursion is capped at 256 levels, and the recursion behind it is not
+yet identified; the first JavaScript allocation made with less than 128 KiB of
+main stack left logs `[netsurf] deep stack` lines with the frame chain (frame
+pointers are kept) for llvm-symbolizer. A refused navigation logs
+`[netsurf] navigate error=`, and for NO_FETCH_HANDLER a `[netsurf] fetchers`
+line with the fetcher table (patch 0013: scheme and slot strings, no URL
+text). The address bar and the chrome's dialog edits ignore the text of a
+Ctrl or left-Alt chord, as a Windows edit control does (the desktop sends the
+chord's character too: Ctrl+L selected the address and then typed "l" over
+it, giving "lhttp://..."); AltGr still types.
+
+**Temporary decision (2026-10-25): JavaScript is off by default on CiukiOS.**
+The first remote page that loaded in QEMU (image of 89850ae0) faulted in a
+script on a NULL object (`duk_hobject_find_entry_tval_ptr_stridx`, address
+0x200). Until that Duktape/binding fault is found and fixed with a host test,
+`ciuki_chrome_defaults()` sets `enable_javascript` off on the target and the
+system Choices says `enable_javascript:0`, so pages load without scripts; a
+profile Choices with `enable_javascript:1` still enables it. Host builds keep
+JavaScript on for the JavaScript host tests. Host evidence and limits are in
+`build/codex/g26-report.md` and `build/codex/g26b-report.md`.

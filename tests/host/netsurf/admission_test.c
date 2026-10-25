@@ -57,10 +57,12 @@ static void admit(const char *path)
     /* The DOM that stays after parsing (host x86-64: wider than i686). */
     size_t live=__sanitizer_get_current_allocated_bytes()-before;
     unsigned scripts=0,nodes=count_nodes((dom_node_internal *)document,&scripts);
-    printf("admitted %s bytes=%zu nodes=%u charged=%zu live_dom=%zu live_per_node=%zu budget=%zu\n",
-           path,size,nodes,charged,live,nodes?live/nodes:0,budget);
+    printf("admitted %s bytes=%zu nodes=%u scripts_with_text=%u charged=%zu live_dom=%zu live_per_node=%zu budget=%zu\n",
+           path,size,nodes,scripts,charged,live,nodes?live/nodes:0,budget);
     fflush(stdout);
-    assert(!scripts);              /* script text was dropped */
+    /* G26B runs JavaScript: script text is kept in the DOM (fx-14 dropped
+     * it) and charged like any other text node, so it is inside live. */
+    assert(scripts || !strstr(data,"<script"));
     assert(live<=charged);         /* the ledger is conservative */
     assert(charged<=budget);
     dom_node_unref(document);free(data);
@@ -131,7 +133,7 @@ int main(int argc,char **argv)
         if(err==HUBBUB_OK)dom_node_unref(node);else assert(!node);
     }
     dom_hubbub_parser_destroy(p);dom_node_unref(doc);
-    puts("NetSurf construction: ordinary pages admitted against the memory budget, script text dropped, "
+    puts("NetSurf construction: ordinary pages admitted against the memory budget, script text kept and charged, "
          "oversized pages refused for memory, depth-before-attach and text OOM sweep passed");
     fflush(stdout);
 }
