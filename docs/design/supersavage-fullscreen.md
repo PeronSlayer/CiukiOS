@@ -30,8 +30,13 @@ VM's buffer and palette:
   commit while it runs: `first-guest-frame` is a non-blocking
   `display_fullscreen_record` (both transports); entry and return steps are
   unchanged;
-- a guest DAC or display-register change counts as its first frame
-  (`source=register-write`);
+- in an 8 bpp mode an effective palette change (DAC or mask differing from
+  what the adapter shows) counts as its first frame
+  (`source=palette-write`); other display-register writes load nothing and
+  earn nothing;
+- the fast paths never dereference a borrowed PTE (a linear mode's direct
+  LFB lease names provider MMIO outside `P2V`); the ordinary monitor reads
+  it through the provider alias;
 - each entry starts its own step clock (`display_fullscreen_entry_request`):
   `vm-park step_ms` no longer includes the time spent in the window;
 - packed modes program the identity attribute palette (X.Org and Linux

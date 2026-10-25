@@ -154,9 +154,15 @@ name what ended it; the DOS Box writes the exit code to `C:\SYSTEM\DOSVM.LOG`
   `display_fullscreen_entry_request()` starts the step clock of an entry.
   `dosvm_fullscreen.c` records `first-guest-frame` (both transports) with the
   former and calls the latter before `vm-park`.
-- `dosvm_fullscreen.c` poll: in a VBE full screen a guest DAC (or display
-  register) change loaded by `linear_palette` counts as the first frame
-  (`source=register-write`); pixel stores stay `source=linear-write`.
+- `dosvm_fullscreen.c` poll: in an 8 bpp VBE full screen an effective
+  palette change (DAC entries or DAC mask differing from what the adapter
+  shows, loaded by `linear_palette`) counts as the first frame
+  (`source=palette-write`); pixel stores stay `source=linear-write`. Other
+  display-register writes, which `vga.display_changes` also counts, load
+  nothing and earn no credit (review fix, section 9).
+- `dosvm.c lean_fetch` and `dosvm_vga.c dac_byte` refuse borrowed PTEs (the
+  direct LFB lease of a linear VBE full screen) and leave them to the
+  ordinary monitor (review fix, section 9).
 - `supersavage_mode.c packed_standard`: identity attribute palette.
 
 ## 6. Tests (fail on `main` 50a843517, pass after)
@@ -184,7 +190,7 @@ Reruns, one at a time under `systemd-run --user --scope -p MemoryMax=3G
 
 | Suite | Result |
 | --- | --- |
-| `dosvm_test` (ASan/UBSan, guest CPU), full run | PASS, 60,587,191 checks |
+| `dosvm_test` (ASan/UBSan, guest CPU), full run | PASS, 60,587,191 checks (60,633,212 after the review fixes) |
 | `dosvm_test` with `CIUKI_VM_DISK_TRACE`, `VBE_WINDOW`, `WAR2_FULLSCREEN`, `101_NATIVE`, `101_VIDEO`, `101_REVOKE_RACE=all`, `FX27`, `FX22`, `FX16`, `WAIT_PRESENT` | PASS each (`FX16` prints `checks=1`, as on `main`) |
 | `CIUKI_VM_MEMORY_CHARGE` through `ledger_test_normal --dosvm-profile` | PASS (128/256/512 MiB) |
 | `tests/host/dos/run_dos_extenders.sh` | PASS (War2 with and without EMS reaches the 101h title screen) |
@@ -202,7 +208,7 @@ Reruns, one at a time under `systemd-run --user --scope -p MemoryMax=3G
   `case=vbe_window` there). The changed paths need the T23.
 - T23, Warcraft II demo, Alt+Enter on the 101h title screen and main menu:
   - `fullscreen_step=vm-park ... step_ms` small (no idle gap), then
-    `fullscreen_first_frame ... source=linear-write` or `source=register-write`
+    `fullscreen_first_frame ... source=linear-write` or `source=palette-write`
     and `fullscreen_step=first-guest-frame` with no
     `fullscreen_log error=-11` and no 2 s freeze;
   - serial `[dosvm] perf_port vm=1 port=03c9` in full screen at the window's
@@ -227,9 +233,14 @@ Reruns, one at a time under `systemd-run --user --scope -p MemoryMax=3G
 - `first-guest-frame` is no longer durable before the next step: a hang right
   after the first frame leaves `watchdog-armed` as the last durable record.
   Entry and return hardware steps keep their durable or bounded checkpoints.
-- A guest that keeps changing the DAC counts as drawing; a hung guest that
-  only cycles its palette is no longer caught by the first-frame watchdog
-  (the 15 s progress watchdog and Alt+Enter remain).
+- An effective palette change counts as drawing. Once a first frame (pixel
+  or palette) was seen there is no frame-based watchdog: a game that keeps
+  animating its palette, also one that is otherwise hung and still cycles
+  the palette from an interrupt handler, keeps full screen indefinitely.
+  The 15 s progress watchdog does not catch it either: it only checks that
+  the sampled CS:IP changes, not useful progress. Alt+Enter (and a VM stop)
+  remain the way out. Register writes without a visible change no longer
+  hold full screen (section 9).
 - Identity attribute palette changes the packed-mode register values (still
   verified by `verify_mode`); the T23 run must confirm the colours.
 - Unchanged, outside this fix: a VBE screen with no change at all for 5 s is
@@ -239,3 +250,41 @@ Reruns, one at a time under `systemd-run --user --scope -p MemoryMax=3G
   (750-860 ms, about 30 ms per durable step) and the 13h entry's audio
   underruns (`underruns=1980`, `parked_ms=642`) are the existing transaction.
 - What ended the session after the return is not in BOOT.LOG.
+
+## 9. Review fixes (Codex xhigh review of 1bb063bd0)
+
+Written 2026-10-25 20:06 CET.
+
+- **P1, fast paths and the direct LFB lease.** Enabling lean exits and the
+  DAC burst in a VBE full screen included linear (D14) modes, whose PTEs
+  name the provider's framebuffer during a direct LFB lease
+  (`dosvm_vbe_direct_enter`, `PTE_BORROWED`). `lean_fetch` (instruction
+  bytes) and `dac_byte` (burst loads and fetches) dereferenced any user PTE
+  through `P2V`, which maps RAM only: on the T23 the BAR is E8000000h. Fix:
+  both refuse a borrowed PTE; the ordinary monitor then reads the lease
+  through the provider alias (`monitor_memory`, `transfer`). The lean exit
+  and burst stay available for code and data in RAM.
+  Test `test_vbe_native_lease_fast_paths` (`CIUKI_VM_WAR2_FULLSCREEN`,
+  `CIUKI_VM_VBE_WINDOW`, full run): mode 4101h, native full screen with a
+  lease at physical E8000000h whose provider alias is a separate buffer
+  (seam `fs_direct_mmio`), a PM32 Quake-style palette loop reading its table
+  from the lease, then the same loop executed from the lease. On 1bb063bd0:
+  ASan SEGV in `dac_byte` (table in the lease) and, with only that fixed, in
+  `lean_fetch` (code in the lease). After: correct DAC, 769 exits each (lean
+  exits for code in RAM, the ordinary path for code in the lease).
+- **P2, register writes and the first-frame credit.** `vga.display_changes`
+  also counts CRTC, sequencer and graphics register writes (for example the
+  cursor location, CRTC 0Eh), which the VBE transport does not scan out, so
+  a loop rewriting such a register earned the first-frame credit and kept
+  full screen while nothing visible changed; the poll also reloaded the
+  whole palette on each such write. Fix: `linear_palette` keeps the DAC and
+  mask last loaded and loads, and earns credit, only when they differ; only
+  8 bpp modes earn palette credit (direct colour ignores the DAC). Test
+  (step 8 of `test_vbe_native_war2_t23`): CRTC 0Eh toggled every 100 ms with
+  a moving sampled CS:IP for up to 16 s. On 1bb063bd0: still full screen
+  after 16000 ms, 123,040 adapter port writes. After: returned at 5000 ms
+  with `cause=first-frame-timeout`, -ETIMEDOUT, no adapter writes.
+- Reruns after the fixes (2026-10-25, same commands and scopes): every
+  suite of section 6's table PASS again, `dosvm_test` full run 60,633,212
+  checks, `DOS-audio-clock-per-VM max_us=250 budget_us=250` unchanged.
+

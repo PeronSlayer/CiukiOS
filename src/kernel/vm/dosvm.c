@@ -131,7 +131,12 @@ static bool lean_fetch(struct dosvm *v, const struct v86_frame *f, const struct 
     }
     if (linear >= 0xA0000 && linear < 0xC0000) return false;
     uint32_t pte = 0, phys = as_lookup(&v->as, linear, &pte);
-    if (!phys || !(pte & PTE_U)) return false;     /* not resident: the ordinary path */
+    /* Not resident: the ordinary path. Nor a borrowed page: a VBE full
+     * screen's direct LFB lease (dosvm_vbe_direct_enter) puts the provider's
+     * physical framebuffer in the VM's PTEs, which P2V does not map (T23
+     * BAR E8000000h); the ordinary monitor reads it through the provider
+     * alias (monitor_memory, transfer). Codex review of 1bb063bd0, P1. */
+    if (!phys || !(pte & PTE_U) || (pte & PTE_BORROWED)) return false;
     *byte = *(const uint8_t *)P2V(phys);
     return true;
 }

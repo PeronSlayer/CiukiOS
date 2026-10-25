@@ -224,11 +224,102 @@ static void test_vbe_native_war2_t23(void)
     dosvm_fullscreen_poll();
     CHECK(v->fullscreen && fs_display && fullscreen_frame_seen && !v->fullscreen_error);
     CHECK(!dosvm_fullscreen_leave(key, false) && !fs_display && !v->fullscreen);
+    /* 8. Codex review of 1bb063bd0, P2: a loop that only rewrites a CRTC
+     *    register (cursor location 0Eh; vga.display_changes counts it) while
+     *    its sampled CS:IP keeps moving is no frame: it loads nothing into
+     *    the adapter and the 5 s first-frame watchdog returns it. */
+    war2_alt_enter(); dosvm_fullscreen_poll();
+    CHECK(v->fullscreen && fullscreen_linear && !fullscreen_frame_seen);
+    unsigned busy_ms = 0, loads = fs_card.changes;
+    for (; busy_ms < 16000 && v->fullscreen; busy_ms += 100) {
+        uint32_t changes = v->vga.display_changes;
+        port_out(v, 0x3D4, 1, 0x0E); port_out(v, 0x3D5, 1, v->vga.crtc[0x0E] ^ 1u);
+        CHECK(v->vga.display_changes != changes);
+        dosvm_fullscreen_progress(v, 0x3000, busy_ms);
+        g_ticks += 100; dosvm_fullscreen_poll();
+    }
+    printf("T23 c42f556e war2 CRTC-only busy loop in VBE full screen: returned after %u ms, cause=%u error=%d, adapter writes=%u\n",
+           busy_ms, v->fullscreen_cause, v->fullscreen_error, fs_card.changes - loads);
+    CHECK(!v->fullscreen && !fs_display && busy_ms <= 5200 && fs_card.changes == loads);
+    CHECK(v->fullscreen_cause == DOSVM_FS_FIRST_FRAME_TIMEOUT && v->fullscreen_error == -ETIMEDOUT);
     fs_expected_owner = 0; fs_vbe_available = available;
     (void)dosvm_fullscreen_input(INPUT_RESYNC, 0, 0);
     destroy(v, true); empty();
     puts("PASS T23 c42f556e war2: 13h full screen, 4F02h 0101h mode-change return, banked window, VBE full screen with "
-         "lean/burst palette loads, non-blocking first-frame record, palette-only first frame, hotkey return to the window");
+         "lean/burst palette loads, non-blocking first-frame record, palette-only first frame, hotkey return to the window, "
+         "CRTC-only loop returned by the first-frame watchdog");
+}
+/* Codex review of 1bb063bd0, P1: in a linear VBE full screen with a direct
+ * LFB lease the VM's PTEs name the provider's framebuffer (T23 BAR
+ * E8000000h), which P2V does not map. The fast paths enabled for a VBE full
+ * screen (lean exit fetch, DAC burst loads) must not dereference it: a
+ * palette loop reading its table from the leased buffer and the same loop
+ * executed from it. On 1bb063bd0 both read P2V(E80xxxxxh) (host: outside the
+ * RAM model). */
+static unsigned lease_quake_code(uint8_t code[64])
+{
+    unsigned n = 0;
+    code[n++] = 0xBA; code[n++] = 0xC8; code[n++] = 3; code[n++] = 0; code[n++] = 0;   /* mov edx,3C8h */
+    code[n++] = 0x31; code[n++] = 0xC0;                                               /* xor eax,eax */
+    code[n++] = 0xEE;                                                                 /* out dx,al */
+    code[n++] = 0x31; code[n++] = 0xFF;                                               /* xor edi,edi */
+    unsigned loop = n;
+    code[n++] = 0x0F; code[n++] = 0xB6; code[n++] = 0x04; code[n++] = 0x37;           /* movzx eax,[edi+esi] */
+    code[n++] = 0x89; code[n++] = 0xD9;                                               /* mov ecx,ebx */
+    code[n++] = 0xD3; code[n++] = 0xF8;                                               /* sar eax,cl */
+    code[n++] = 0xBA; code[n++] = 0xC9; code[n++] = 3; code[n++] = 0; code[n++] = 0;   /* mov edx,3C9h */
+    code[n++] = 0xEE;                                                                 /* out dx,al */
+    code[n++] = 0x47;                                                                 /* inc edi */
+    code[n++] = 0x81; code[n++] = 0xFF; code[n++] = 0xFF; code[n++] = 2; code[n++] = 0; code[n++] = 0;
+    code[n++] = 0x7E; code[n] = (uint8_t)(loop - (n + 1)); n++;                       /* jng loop */
+    code[n++] = 0x90;
+    return n;
+}
+static void test_vbe_native_lease_fast_paths(void)
+{
+    static uint8_t mmio[DOS_VBE_BYTES];
+    bool available = fs_vbe_available;
+    window_fixtures(); fs_vbe_available = fs_direct_available = true;
+    fs_direct_phys = 0xE8000000u; fs_direct_cache = 0; fs_direct_mmio = mmio; fs_direct_bad = 0;
+    (void)dosvm_fullscreen_input(INPUT_RESYNC, 0, 0);
+    struct dosvm *v = fx27_vm(true);
+    struct dosvm_key key = dosvm_key(v); v->owner_pid = 10; fs_expected_owner = v;
+    CHECK(dosvm_input_focus(key, true)); v->fullscreen_parked = true;
+    struct v86_frame f = vf(0x4F02, 0x4101, 0, 0);
+    CHECK(!dosvm_vga_bios(v, &f) && (uint16_t)f.tf.eax == 0x004F && v->vbe_linear);
+    CHECK(!dosvm_fullscreen_enter(key) && v->fullscreen && v->vbe_direct.pages && dosvm_vga_ports_modeled(v));
+    uint32_t pte = 0;
+    CHECK(as_lookup(&v->as, v->vbe_buffer.base, &pte) == fs_direct_phys && (pte & PTE_BORROWED) && (pte & PTE_U));
+    uint8_t code[64], source[768];
+    unsigned n = lease_quake_code(code);
+    /* 1. Code in RAM, palette table in the leased framebuffer. */
+    for (unsigned i = 0; i < 768; i++) source[i] = (uint8_t)(i * 7 + 1);
+    uint32_t table = v->vbe_buffer.base + 0x10000;
+    CHECK(!dosvm_write(v, table, source, sizeof(source)) && !memcmp(mmio + 0x10000, source, sizeof(source)));
+    CHECK(!dosvm_write(v, 0x30000, code, n));
+    cur.tf.eip = 0x30000; cur.tf.esi = table; cur.tf.ebx = 2;
+    unsigned lean0 = v->perf.lean_exits;
+    unsigned data_exits = fx27_run(v, 0x30000 + n - 1, 100000, false);
+    for (unsigned i = 0; i < 768; i++) CHECK(v->vga.dac[i / 3][i % 3] == (uint8_t)(source[i] >> 2));
+    unsigned data_lean = v->perf.lean_exits - lean0;
+    /* 2. The same loop executed from the leased framebuffer, table in RAM. */
+    for (unsigned i = 0; i < 768; i++) source[i] = (uint8_t)(255 - i * 3);
+    uint32_t text = v->vbe_buffer.base + 0x20000;
+    CHECK(!dosvm_write(v, text, code, n) && !memcmp(mmio + 0x20000, code, n));
+    CHECK(!dosvm_write(v, 0x40000, source, sizeof(source)));
+    cur.tf.eip = text; cur.tf.esi = 0x40000; cur.tf.ebx = 2;
+    lean0 = v->perf.lean_exits;
+    unsigned text_exits = fx27_run(v, text + n - 1, 100000, false);
+    for (unsigned i = 0; i < 768; i++) CHECK(v->vga.dac[i / 3][i % 3] == (uint8_t)(source[i] >> 2));
+    printf("Codex P1 leased LFB at %08x: table in the lease %u exits (lean %u), code in the lease %u exits (lean %u)\n",
+           fs_direct_phys, data_exits, data_lean, text_exits, v->perf.lean_exits - lean0);
+    CHECK(text_exits == 769 && v->perf.lean_exits == lean0);   /* the ordinary path fetches through the alias */
+    CHECK(!dosvm_fullscreen_leave(key, false) && !fs_display && !v->vbe_direct.pages);
+    uint8_t byte = 0; CHECK(!dosvm_read(v, table, &byte, 1) && byte == (uint8_t)(0 * 7 + 1)); /* copied back */
+    fs_direct_mmio = 0; fs_direct_available = false; fs_expected_owner = 0; fs_vbe_available = available;
+    (void)dosvm_fullscreen_input(INPUT_RESYNC, 0, 0);
+    destroy(v, true); empty();
+    puts("PASS Codex P1 direct LFB lease outside P2V: lean exits and DAC bursts never read borrowed pages");
 }
 static void test_vbe_window(void)
 {

@@ -27,6 +27,9 @@ static int fs_linear_error;
 static bool fs_direct_available;
 static uint32_t fs_direct_phys,fs_direct_cache;
 static unsigned fs_direct_bad;
+/* Codex review of 1bb063bd0, P1: a provider alias outside P2V, as for the
+ * T23's framebuffer BAR at E8000000h (P2V covers only RAM). */
+static uint8_t *fs_direct_mmio;
 bool vmm_cache_alias_ok(uint32_t physical,uint32_t bytes,uint32_t cache)
 { return physical==fs_direct_phys && bytes<=DOS_VBE_BYTES && cache==fs_direct_cache && fs_direct_bad!=5; }
 void framebuffer_write_drain(void) {}
@@ -35,7 +38,7 @@ int display_fullscreen_lfb(struct display_lfb *out)
     if (!fs_direct_available) return -EOPNOTSUPP;
     const struct dos_video_mode *m=dos_video_mode(fs_expected_owner->vbe_mode);
     CHECK(fs_display && m);
-    *out=(struct display_lfb){.physical=fs_direct_phys,.mapped=P2V(fs_direct_phys),
+    *out=(struct display_lfb){.physical=fs_direct_phys,.mapped=fs_direct_mmio ? fs_direct_mmio : P2V(fs_direct_phys),
         .bytes=fs_direct_bad==1 ? PAGE_SIZE : DOS_VBE_BYTES,.width=m->width,
         .height=m->height,.pitch=m->pitch,.bpp=m->bpp,.cache_flags=fs_direct_cache};
     if (fs_direct_bad==2) out->pitch++;
@@ -50,7 +53,7 @@ int display_fullscreen_write(uint32_t offset,const void *p,uint32_t bytes)
     CHECK(fs_display && offset<=DOS_VBE_BYTES && bytes<=DOS_VBE_BYTES-offset);
     if (fs_linear_error) return fs_linear_error;
     memcpy(fs_linear+offset,p,bytes);
-    if (fs_direct_available) memcpy(P2V(fs_direct_phys+offset),p,bytes);
+    if (fs_direct_available) memcpy(fs_direct_mmio ? fs_direct_mmio+offset : P2V(fs_direct_phys+offset),p,bytes);
     fs_linear_writes++;fs_linear_bytes+=bytes;return 0;
 }
 void display_fullscreen_return_request(void) {}
