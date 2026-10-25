@@ -2,11 +2,16 @@
 ; Reports, on the VM record port (E9h) and the console, what a real-mode game
 ; sees when it is started from the DOS Box prompt: INT 12h, the largest free
 ; conventional block (INT 21h/48h BX=FFFFh), the whole MCB chain (owner, size,
-; name), the DOS version/HMA flag (21h/3306h), the UMB link state (21h/5802h),
-; XMS (2Fh/4300h, 4310h; functions 00h, 08h, 10h query) and LIM EMS (INT 67h
-; EMMXXXX0, functions 40h-42h, 46h). It allocates nothing and ends with
-; "DOSMEM PASS"; the host test checks the figures. Lines stay below the
-; record channel's 16 lines per second and 80 characters.
+; name; upper memory too, linked for the walk with 21h/5803h as MEM does, then
+; restored), the DOS version/HMA flag (21h/3306h), the UMB link state
+; (21h/5802h), XMS (2Fh/4300h, 4310h; functions 00h, 08h, 10h query) and LIM
+; EMS by both LIM EMS 4.0 Appendix B tests: the "get interrupt vector" test
+; (EMMXXXX0 at offset 000Ah of the INT 67h segment; functions 40h-42h, 46h)
+; and the "open handle" test (21h/3D00h on EMMXXXX0, IOCTL 4400h device
+; information, 4407h output status, an EMM386 private IOCTL read 4402h,
+; close). It allocates nothing and ends with "DOSMEM PASS"; the host test
+; checks the figures. Lines stay below the record channel's 16 lines per
+; second and 80 characters.
 ; SPDX-License-Identifier: GPL-2.0-only
 bits 16
 org 0x100
@@ -45,11 +50,15 @@ start:
     call hex_byte
     mov ax, 0x5802
     int 0x21
+    mov [link], al
     mov di, f_link
     call hex_byte
     mov si, l_conv
     call line
-; ---- MCB chain: three blocks per line ----
+; ---- MCB chain: three blocks per line, upper memory linked ----
+    mov ax, 0x5803
+    mov bx, 1
+    int 0x21
     mov ah, 0x52
     int 0x21
     mov ax, [es:bx-2]
@@ -85,6 +94,10 @@ start:
     jne .mcb_used
     mov ax, [fs:3]
     add [freesum], ax
+    mov dx, fs
+    cmp dx, 0xA000
+    jb .mcb_used
+    add [uppersum], ax
 .mcb_used:
     mov si, 8
     mov cx, 8
@@ -126,8 +139,15 @@ start:
     je .mcb_done
     call mcb_flush
 .mcb_done:
+    mov ax, 0x5803
+    xor bh, bh
+    mov bl, [link]
+    int 0x21
     mov ax, [freesum]
     mov di, f_free
+    call hex_word
+    mov ax, [uppersum]
+    mov di, f_ufree
     call hex_word
 ; ---- XMS ----
     mov ax, 0x4300
@@ -206,11 +226,58 @@ start:
     mov di, f_ever
     call hex_byte
 .ems_done:
+; ---- EMS, LIM 4.0 Appendix B "open handle" test ----
+; open=handle (or the DOS error with cf=1), info=IOCTL 4400h DX (FFFFh when
+; refused), ready=4407h AL (EEh when refused), ioctl=4402h result (E0xxh:
+; refused with error xx), close=Y when 3Eh succeeded.
+    mov ax, 0x3D00
+    mov dx, emm_path
+    int 0x21
+    sbb cx, cx
+    mov di, f_dopen
+    call hex_word
+    jcxz .dev_open
+    mov byte [f_dcf], '1'
+    jmp .dev_done
+.dev_open:
+    mov bx, ax
+    mov ax, 0x4400
+    int 0x21
+    jnc .dev_info
+    mov dx, 0xFFFF
+.dev_info:
+    mov ax, dx
+    mov di, f_dinfo
+    call hex_word
+    mov ax, 0x4407
+    int 0x21
+    jnc .dev_ready
+    mov al, 0xEE
+.dev_ready:
+    mov di, f_dready
+    call hex_byte
+    mov byte [ioctl_buffer], 2  ; EMM386 private IOCTL read: get version
+    mov ax, 0x4402
+    mov cx, 2
+    mov dx, ioctl_buffer
+    int 0x21
+    jnc .dev_ioctl
+    or ax, 0xE000
+.dev_ioctl:
+    mov di, f_dread
+    call hex_word
+    mov ah, 0x3E
+    int 0x21
+    jc .dev_done
+    mov byte [f_dclose], 'Y'
+.dev_done:
     mov si, l_tail
     call line
     mov si, l_xms
     call line
     mov si, l_ems
+    call line
+    mov si, l_dev
     call line
     mov si, l_pass
     call line
@@ -291,7 +358,8 @@ f_flags db '00 link='
 f_link  db '00',0
 l_tail  db 'DOSMEM MCB end'
 f_bad   db ' free='
-f_free  db '0000',0
+f_free  db '0000 upper='
+f_ufree db '0000',0
 l_xms   db 'DOSMEM XMS 2F='
 f_2f    db '00 ver='
 f_xver  db '0000 hma='
@@ -308,6 +376,14 @@ f_frame db '0000 pages='
 f_efree db '0000/'
 f_etotal db '0000 ver='
 f_ever  db '00',0
+l_dev   db 'DOSMEM EMMDEV open='
+f_dopen db '0000 cf='
+f_dcf   db '0 info='
+f_dinfo db '0000 ready='
+f_dready db '00 ioctl='
+f_dread db '0000 close='
+f_dclose db 'N',0
+emm_path db 'EMMXXXX0',0
 l_pass  db      'DOSMEM PASS',0
 l_mcb   db      'DOSMEM '
         times 3*24+2 db 0
@@ -316,6 +392,9 @@ xms     dw 0, 0
 mcb     dw 0
 cursor  dw 0
 freesum dw 0
+uppersum dw 0
+ioctl_buffer dw 0
+link    db 0
 count   db 0
 align 16
 stack times 512 db 0

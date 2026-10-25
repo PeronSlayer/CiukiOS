@@ -1304,12 +1304,14 @@ static void play_progress(uint64_t begin)
     const struct unified_runtime *u = (const struct unified_runtime *)gv->unified;
     if (u) { reads = u->ifs.stats.reads; failed = u->ifs.stats.failed; critical = u->ifs.stats.critical; }
 #endif
+    unsigned xms_kb = 0;   /* XMS and EMS the game holds (DOS Box memory, dos_memory.py) */
+    for (unsigned i = 0; i < VM_MEM_HANDLES; i++) if (gv->memory.xms[i].used) xms_kb += gv->memory.xms[i].bytes / 1024;
     printf("H61 PLAY t=%llu mode=%02x vbe=%x unchained=%u flips=%u irq_pm=%u dpmi=%u clients=%u terminations=%u faults=%u "
-           "sb_units=%u ifs_reads=%u ifs_failed=%u ifs_critical=%u instr=%llu\n",
+           "sb_units=%u ifs_reads=%u ifs_failed=%u ifs_critical=%u instr=%llu xms_kb=%u ems_kb=%u\n",
            (unsigned long long)(g_ticks - begin), video.mode, gv->vbe_mode, video.unchained, video.starts,
            gv->dpmi.stats.irqs_pm, gv->dpmi.active, gv->dpmi.clients, gv->dpmi.stats.terminations, gv->dpmi.stats.faults,
            gv->audio.sb.units, reads, failed, critical,
-           (unsigned long long)instructions);
+           (unsigned long long)instructions, xms_kb, (unsigned)(gv->memory.ems_bytes / 1024));
 }
 static int play_run(void)
 {

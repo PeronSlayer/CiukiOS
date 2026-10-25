@@ -281,7 +281,6 @@ def build(out=None):
             source_output=out.parent.parent / "ciukidos-unified-source.zip")
     guest_files, _ = unified.fork_guest_files()
     files.update(guest_files)
-    files["/FDAUTO.BAT"] = unified.reference_module().AUTO
     files["/D48/UNI.JSN"] = (json.dumps(identity,sort_keys=True,indent=2)+"\n").encode()
     manifest = {"schema_version": 1, "image_sha256": digest(out), "size": out.stat().st_size,
                 "kernel": "unified", "identity": identity, "licenses": str(licenses),

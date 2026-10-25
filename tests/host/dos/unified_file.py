@@ -303,15 +303,19 @@ def main():
           installed["/FDCONFIG.SYS"] == config and b"DEVICE=C:\\CIUKIDF.SYS\r\nSHELL=" in config and
           identity["kernel"]["personality"] == "ciukidos-fork" and identity["profile"]["ifs"] is True,
           "install: kernel=unified guest files are the qualified fork, driver and CONFIG")
-    image = dict(installed, **{"/FDAUTO.BAT": ref.AUTO,
-                               "/D48/UNI.JSN": (json.dumps(identity, sort_keys=True, indent=2) + "\n").encode()})
+    check(installed["/FDAUTO.BAT"] == unified.fork_auto(ref) and installed["/CIUKIEMM.SYS"] == unified.ems_device(),
+          "install: FDAUTO.BAT loads SHARE high, the EMMXXXX0 device is installed")
+    image = dict(installed, **{"/D48/UNI.JSN": (json.dumps(identity, sort_keys=True, indent=2) + "\n").encode()})
     check(unified.readback(lambda name: image[name], identity, {}), "install: read-back")
-    image["/CIUKIDF.SYS"] = bytes([driver[0] ^ 1]) + driver[1:]
-    try:
-        unified.readback(lambda name: image[name], identity, {})
-        check(False, "install: a corrupted CIUKIDF.SYS passed read-back")
-    except ValueError:
-        pass
+    for path in ("/CIUKIDF.SYS", "/CIUKIEMM.SYS"):
+        good = image[path]
+        image[path] = bytes([good[0] ^ 1]) + good[1:]
+        try:
+            unified.readback(lambda name: image[name], identity, {})
+            check(False, f"install: a corrupted {path[1:]} passed read-back")
+        except ValueError:
+            pass
+        image[path] = good
     if failures:
         QUALIFIED.unlink(missing_ok=True)
         print(f"H57 FAIL: {len(failures)} checks failed")

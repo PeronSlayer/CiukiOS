@@ -1,23 +1,30 @@
 """DOS Box memory host qualification (DOSMEM). No QEMU, systemd scope or OS image.
 
 Boots the kernel=unified guest exactly as the canonical builder installs it
-(fork kernel, CIUKIDF.SYS, FDCONFIG.SYS with DOS=LOW, CIUKISH.COM, FDAUTO.BAT
-with SHARE) on the production VM code (tests/host/dosvm_guest.c with
-libx86emu, the f3-61 production path) and checks what a real-mode program
-started at the DOS Box prompt sees (tests/host/dos/dosmem/dosmem.asm):
+(fork kernel, CIUKIDF.SYS, CIUKIEMM.SYS, FDCONFIG.SYS with DOS=UMB,LOW,
+CIUKISH.COM, FDAUTO.BAT with LH SHARE) on the production VM code
+(tests/host/dosvm_guest.c with libx86emu, the f3-61 production path) and
+checks what a real-mode program started at the DOS Box prompt sees
+(tests/host/dos/dosmem/dosmem.asm):
 
 - XMS 3.0 through INT 2Fh AX=4300h/4310h, answered by the VMM in front of the
   guest's INT 2Fh chain (the FreeDOS kernel returns AH=43h unchained);
-- the largest free conventional block against Wolfenstein 3-D 1.4's own
-  memory check (WL_MAIN.C InitGame, ID_MM.C MM_Startup), with margin;
+- the block a program gets at the prompt against Wolfenstein 3-D 1.4's own
+  memory check (WL_MAIN.C InitGame, ID_MM.C MM_Startup), with margin, and
+  against the DOS=UMB/LOADHIGH floor (PROMPT_FLOOR);
 - FreeCOM's XMS swap (the resident COMMAND block while a program runs);
-- HMA (XMS 00h), the UMB arena (XMS 10h largest-block query) and LIM EMS 4.0
-  (INT 67h, EMMXXXX0 at the vector segment, page frame E000h);
+- HMA (XMS 00h); the UMB arena C900h-DFFFh linked into DOS (DOS=UMB: the
+  MCB chain continues there, XMS 10h has nothing left) with SHARE's PSP in it;
+- LIM EMS 4.0 by both LIM EMS 4.0 Appendix B tests: the INT 67h vector
+  segment carries EMMXXXX0 (page frame E000h) and the EMMXXXX0 device opens
+  (IOCTL 4400h device bit, 4407h ready, the EMM386 private IOCTL refused);
 
 then runs the pinned Wolfenstein 3-D 1.4 shareware from its directory and
 requires it to stay in its game graphics (mode 13h unchained) instead of
-returning to the prompt with "You do not have enough memory". The pristine
-FreeDOS 1.3 reference base must see XMS too (f3-48 case "multiplex").
+returning to the prompt with "You do not have enough memory", with the EMS
+its page manager (ID_PM.C, "open handle" test) now finds in use. The pristine
+FreeDOS 1.3 reference base must see XMS too (f3-48 case "multiplex") and
+keeps its own profile (DOS=LOW, SHARE low, no EMMXXXX0 device).
 Host replay, not QEMU or hardware evidence. SPDX-License-Identifier: GPL-2.0-only
 """
 import importlib.util
@@ -61,7 +68,12 @@ failures = []
 WOLF3D_LAYOUT = dict(image=287040, dgroup=0x3783, stklen=0x1000, heaplen=0, edata=0xE881)
 WOLF3D_MIN_BLOCK = 0x80BD   # 527312 bytes (515 KiB) for WOLF3D.EXE's own block
 MARGIN = 0x800              # 32 KiB demanded above it
-DOSMEM_BLOCK = 0x6B         # DOSMEM.COM's own MCB and block, free again when Wolf3D runs
+# DOS=UMB with SHARE loaded high (2026-10-25): the block a program gets at
+# the prompt was ~8C5Ah paragraphs with SHARE low and no UMB link; SHARE
+# (235h) and FreeCOM's environment (40h) now sit in the UMBs, less the
+# EMMXXXX0 device (7 paragraphs). Falling back to SHARE low fails this.
+PROMPT_FLOOR = 0x8E80       # 583680 bytes (570 KiB)
+UMB_FIRST, UMB_END = 0xC900, 0xE000
 
 
 def check(condition, message):
@@ -158,7 +170,9 @@ def guest(ref):
     files["/KERNEL.SYS"] = (root / "KERNEL.SYS").read_bytes()
     files["/CIUKIDF.SYS"] = (root / "CIUKIDF.SYS").read_bytes()
     files["/FDCONFIG.SYS"] = unified.fork_config(ref)
+    files["/FDAUTO.BAT"] = unified.fork_auto(ref)
     files["/CIUKISH.COM"] = unified.session_shell()
+    files["/CIUKIEMM.SYS"] = unified.ems_device()
     identity["kernel"] = dict(personality="ciukidos-fork", local_build=True)
     identity["profile"] = dict(kernel="unified", ifs=True)
     return files, identity
@@ -191,7 +205,7 @@ def run(cpu, image, name, kernel, args, **extra):
 def records(log):
     """The probe's record-port lines, reassembled from 48-byte parts."""
     text = "".join(re.findall(r"^  guest: (.*)$", log, re.M))
-    return {m.group(1): m.group(2) for m in re.finditer(r"DOSMEM (CONV|MCB end|XMS|EMS) (.*?)(?=DOSMEM |$)", text)}, \
+    return {m.group(1): m.group(2) for m in re.finditer(r"DOSMEM (CONV|MCB end|XMS|EMS|EMMDEV) (.*?)(?=DOSMEM |$)", text)}, \
         re.findall(r"([0-9A-F]{4}):([0-9A-F]{4}):([0-9A-F]{4}):(.{8}) ", text)
 
 
@@ -205,14 +219,17 @@ def measure(cpu, image, name, kernel):
     check("H61 SHELL after DOSMEM exec_pending=0 overflow=0 shell_idle=1" in log,
           f"{name}: the program's return completed its EXEC frame and the shell is idle")
     lines, chain = records(log)
-    conv, xms, ems = (fields(lines.get(key, "")) for key in ("CONV", "XMS", "EMS"))
+    conv, xms, ems, device, tail = (fields(lines.get(key, "")) for key in ("CONV", "XMS", "EMS", "EMMDEV", "MCB end"))
     blocks = [(int(seg, 16), int(owner, 16), int(size, 16), label.rstrip(".")) for seg, owner, size, label in chain]
+    ready = re.search(r"^  guest: DOSREADY \S+ free=([0-9A-F]{4})", log, re.M)
     print(f"DOSMEM {name}: int12={conv.get('k12')}KB largest={conv.get('largest')}h dos={conv.get('dos')} "
-          f"flags={conv.get('flags')} link={conv.get('link')}; XMS 2F={xms.get('2F')} ver={xms.get('ver')} "
-          f"hma={xms.get('hma')} freeKB={xms.get('freeKB')} umb={xms.get('umb')}; EMS {lines.get('EMS', '?')}", flush=True)
+          f"flags={conv.get('flags')} link={conv.get('link')}; boot largest={ready.group(1) if ready else '?'}h; "
+          f"free low+upper={tail.get('free')}h upper={tail.get('upper')}h; XMS 2F={xms.get('2F')} ver={xms.get('ver')} "
+          f"hma={xms.get('hma')} freeKB={xms.get('freeKB')} umb={xms.get('umb')}; EMS {lines.get('EMS', '?')}; "
+          f"EMMXXXX0 {lines.get('EMMDEV', '?')}", flush=True)
     for seg, owner, size, label in blocks:
         print(f"DOSMEM {name}: MCB {seg:04X} owner={owner:04X} paragraphs={size:04X} ({size * 16} bytes) {label}")
-    return conv, xms, ems, blocks, log
+    return conv, xms, ems, device, blocks, log
 
 
 def main():
@@ -236,22 +253,37 @@ def main():
     image.parent.mkdir(parents=True)
     ref.build_reference(image, programs | wolf, ("D48", "WOLF3D"), None, folder, guest=(files, identity))
 
-    conv, xms, ems, blocks, log = measure(cpu, image, "unified", "unified")
+    conv, xms, ems, device, blocks, log = measure(cpu, image, "unified", "unified")
     largest = int(conv.get("largest", "0"), 16)
-    check(conv.get("k12") == "0280" and conv.get("dos") == "070A", f"unified: 640 KiB, DOS 7.10 {conv}")
+    check(conv.get("k12") == "0280" and conv.get("dos") == "070A" and conv.get("flags") == "00",
+          f"unified: 640 KiB, DOS 7.10, kernel low (DOS=LOW kept) {conv}")
     check(xms.get("2F") == "80" and xms.get("ver") == "0300" and xms.get("hma") == "01",
           f"unified: XMS 3.00 visible through INT 2Fh/4300h in front of DOS, HMA present {xms}")
-    check(xms.get("umb", "").startswith("0000/B0/") and int(xms["umb"][-4:], 16) == 0x1700,
-          f"unified: XMS 10h reports the 92 KiB UMB arena C900h-DFFFh as the largest block {xms}")
+    # DOS=UMB: the kernel took the whole arena at boot and links it on request.
+    upper = [b for b in blocks if b[0] >= 0xA000]
+    check(conv.get("link") == "00" and xms.get("umb", "").startswith("0000/B1/") and upper and
+          upper[0][0] == UMB_FIRST and upper[-1][0] + upper[-1][2] + 1 == UMB_END,
+          f"unified: DOS=UMB links the UMB arena C900h-DFFFh (unlinked for programs, XMS 10h empty) {xms} {upper}")
+    share = [(seg, size) for seg, owner, size, label in blocks if label.startswith("SHARE") and owner == seg + 1]
+    check(len(share) == 1 and UMB_FIRST <= share[0][0] < UMB_END,
+          f"unified: SHARE loaded high, its PSP in the UMBs {share}")
     check(ems.get("st") == "00" and ems.get("frame") == "E000" and ems.get("ver") == "40" and
-          lines_ems_present(log), f"unified: LIM EMS 4.0, page frame E000h {ems}")
+          lines_ems_present(log), f"unified: LIM EMS 4.0, page frame E000h, EMMXXXX0 at the INT 67h segment {ems}")
+    # LIM EMS 4.0 Appendix B "open handle": a device (C000h attribute, as
+    # EMM386), ready, no EMM386 private IOCTL (refused, access denied).
+    check(device.get("cf") == "0" and device.get("info") == "C0C0" and device.get("ready") == "FF" and
+          device.get("ioctl") == "E005" and device.get("close") == "Y",
+          f"unified: the EMMXXXX0 device opens, IOCTL 4400h bit 7, 4407h ready, 4402h refused {device}")
     shell = [size for seg, owner, size, label in blocks if label.startswith("COMMAND") and owner == seg + 1]
     check(shell and all(size <= 0x100 for size in shell),
           f"unified: FreeCOM swapped to XMS while a program runs (resident COMMAND blocks {shell})")
-    check(largest + DOSMEM_BLOCK >= minimum + MARGIN,
-          f"unified: largest free block {largest:#x} (+{DOSMEM_BLOCK:#x}) below Wolf3D's {minimum:#x} + margin")
-    print(f"DOSMEM unified: Wolf3D block at the prompt ~{largest + DOSMEM_BLOCK:#x} paragraphs "
-          f"({(largest + DOSMEM_BLOCK) * 16} bytes), margin {(largest + DOSMEM_BLOCK - minimum) * 16} bytes", flush=True)
+    own = [size + 1 for seg, owner, size, label in blocks if label.startswith("DOSMEM") and owner == seg + 1]
+    prompt = largest + (own[0] if len(own) == 1 else 0)
+    check(prompt >= minimum + MARGIN,
+          f"unified: block at the prompt {prompt:#x} below Wolf3D's {minimum:#x} + margin")
+    check(prompt >= PROMPT_FLOOR, f"unified: block at the prompt {prompt:#x} below the DOS=UMB floor {PROMPT_FLOOR:#x}")
+    print(f"DOSMEM unified: block a program gets at the prompt ~{prompt:#x} paragraphs ({prompt * 16} bytes, "
+          f"{prompt * 16 // 1024} KiB), Wolf3D margin {(prompt - minimum) * 16} bytes", flush=True)
 
     # The game itself, started from its directory as the Games menu does. The
     # runner has no x87: GUEST_NO_X87 makes Borland's startup pick its emulator.
@@ -259,28 +291,35 @@ def main():
                     GUEST_NO_X87="1", GUEST_PLAY_MS="8000")
     end = re.search(r"^H61 PLAY END WOLF3D (.*)$", log, re.M)
     play = fields(end.group(1)) if end else {}
-    last = re.findall(r"^H61 PLAY t=(\d+) mode=(\w+) vbe=\w+ unchained=(\d)", log, re.M)
+    last = re.findall(r"^H61 PLAY t=(\d+) mode=(\w+) vbe=\w+ unchained=(\d).* xms_kb=(\d+) ems_kb=(\d+)$", log, re.M)
     check(code == 0 and play.get("returned") == "0" and play.get("stopped") == "0" and last and
           int(last[-1][0]) >= 8000 and last[-1][1] == "13" and last[-1][2] == "1",
           f"wolf3d: still in its game graphics after 8 s (play {play}, last sample {last[-1:] or None})")
+    # ID_PM.C PML_StartupEMS finds EMS only by the "open handle" test.
+    check(last and int(last[-1][4]) > 0, f"wolf3d: its page manager holds EMS (open-handle detection) {last[-1:]}")
     print(f"DOSMEM wolf3d: returned={play.get('returned')} stopped={play.get('stopped')} "
           f"last sample t={last[-1][0] if last else '?'} mode={last[-1][1] if last else '?'} "
-          f"unchained={last[-1][2] if last else '?'}", flush=True)
+          f"unchained={last[-1][2] if last else '?'} xms_kb={last[-1][3] if last else '?'} "
+          f"ems_kb={last[-1][4] if last else '?'}", flush=True)
 
     # The pristine FreeDOS 1.3 reference base: same VMM, XMS visible as the
     # f3-48 "multiplex" case expects.
     reference = OUT / "img/freedos/FREEDOS.IMG"
     reference.parent.mkdir(parents=True)
     ref.build_reference(reference, programs, ("D48",), None, folder)
-    conv, xms, _, _, _ = measure(cpu, reference, "freedos-1.3", "freedos-1.3")
+    conv, xms, _, device, blocks, _ = measure(cpu, reference, "freedos-1.3", "freedos-1.3")
     check(xms.get("2F") == "80", f"freedos-1.3: XMS visible through INT 2Fh/4300h {xms}")
+    check(device.get("cf") == "1" and xms.get("umb", "").startswith("0000/B0/") and
+          not [b for b in blocks if b[0] >= 0xA000],
+          f"freedos-1.3: reference profile unchanged (DOS=LOW, no UMB link, no EMMXXXX0 device) {device}")
 
     shutil.rmtree(OUT / "img", ignore_errors=True)
     if failures:
         print(f"DOSMEM FAIL: {len(failures)} checks failed")
         return 1
-    print("DOSMEM PASS: XMS visible in front of the guest INT 2Fh chain, FreeCOM swapped, "
-          "Wolfenstein 3-D 1.4 memory check passed with margin and the game runs")
+    print("DOSMEM PASS: XMS visible in front of the guest INT 2Fh chain, FreeCOM swapped, UMBs linked with SHARE "
+          "high, EMS found by both LIM tests, Wolfenstein 3-D 1.4 memory check passed with margin and the game "
+          "runs with EMS")
     return 0
 
 

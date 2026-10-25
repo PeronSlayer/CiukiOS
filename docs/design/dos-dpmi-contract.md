@@ -1306,7 +1306,8 @@ case already expects AL=80h from 2Fh/4300h, which both the pristine FreeDOS
 1.3 reference and the unified guest now return.
 
 **Not done (measured headroom, later decisions).** DOS=UMB with LOADHIGH
-SHARE would move about 9 KiB into the 92 KiB UMB arena; DOS=HIGH would free
+SHARE would move about 9 KiB into the 92 KiB UMB arena (done on 2026-10-25,
+next section, with the `EMMXXXX0` device); DOS=HIGH would free
 the 42 KiB `SC` block but needs the DFV2 final bind to accept kernel text in
 the HMA (f3-56 Amendment 1). EMS visibility to "open handle" programs needs
 an `EMMXXXX0` character device in the DOS device chain (IOCTL 4400h bit 7,
@@ -1325,6 +1326,146 @@ after 1 s in text mode; passes after: XMS visible, FreeCOM 0091h, largest
 sees XMS) and `tests/host/dosvm_test.c` (trap answer with a non-chaining
 INT 2Fh vector). The Wolf3D replay sets `GUEST_NO_X87` so Borland's startup
 uses its INT 34h–3Dh emulator, because the libx86emu runner has no x87.
+
+### DOS Box memory: UMBs linked, SHARE high, the EMMXXXX0 device (2026-10-25)
+
+**Gaps.** After the XMS fix above, two differences from a Windows 98 MS-DOS
+session remained. (1) EMS was visible only to the "get interrupt vector"
+test: a program that looks for the expanded memory manager by opening the
+`EMMXXXX0` device got DOS error 2 and ran without EMS. Wolfenstein 3-D is
+one: its page manager finds EMS only that way. (2) The 92 KiB UMB arena
+(C900h–DFFFh) was reachable only through XMS 10h; DOS did not link it, so
+SHARE (9 KiB) and FreeCOM's environment sat in conventional memory.
+
+**Research.**
+- LIM EMS 4.0, Appendix B ([text](https://www.phatcode.net/res/218/files/limems40.txt),
+  "Testing for the presence of the expanded memory manager") gives the two
+  tests a program may use. "Open handle": INT 21h AX=3D00h on `EMMXXXX0`; then
+  IOCTL 4400h, where bit 7 of DX set means a device and not a file; then IOCTL
+  4407h, where "the memory manager passes a status value of 0FFh" when it is
+  ready; then close. "Get interrupt vector": `EMMXXXX0` at offset 0Ah of the
+  INT 67h handler segment, the test device drivers must use. An EMS provider
+  has to pass both.
+- Wolfenstein 3-D [`ID_PM.C`](https://github.com/id-Software/wolf3d/blob/master/WOLFSRC/ID_PM.C)
+  `PML_StartupEMS` uses only the "open handle" test (3D00h, 4400h with
+  `and dx,0x80`, 4407h with AL nonzero, close), then INT 67h 40h/46h/41h/42h/43h.
+- Windows 98 Resource Kit, chapter 25 ("Configuring Applications"):
+  "Windows 98 automatically provides expanded memory for MS-DOS-based
+  applications that require it to run". Chapter 26 ("Optimizing Conventional
+  Memory"): the methods "are the same as for MS-DOS 6.x": load real-mode
+  drivers and programs "using devicehigh or loadhigh statements". The
+  Windows 95 Resource Kit says the same about EMS
+  ([MS-DOS-based applications](https://techshelps.github.io/MSDN/DNWIN95/HTML/S65BF.HTM)).
+  No Microsoft document found says how V86MMGR exposes `EMMXXXX0` without
+  EMM386 in CONFIG.SYS; the device follows from the LIM tests above.
+- EMM386-compatible device: Jemm (`third_party/jemm/source-e96bb6bb.tar.gz`,
+  [upstream](https://github.com/Baron-von-Riedesel/Jemm)) `JEMM16.ASM` declares
+  `EMMXXXX0` with attribute `0C000h` ("character device, supports IOCTL - like
+  EMM386"); `DEV.ASM` answers output status (10) and open/close (13/14) with
+  done, writes (8/9/11) with write fault, unsupported IOCTL read functions
+  with read fault, everything else with unknown command. DOSBox Staging
+  ([`src/ints/ems.cpp`](https://github.com/dosbox-staging/dosbox-staging/blob/main/src/ints/ems.cpp))
+  adds an `EMMXXXX0` DOS device whose device information is `0xC0C0` and
+  writes the name at offset 0Ah of its INT 67h segment.
+- IOCTL 4400h ([RBIL](https://www.ctyme.com/intr/rb-2820.htm)): for a
+  character device bit 7 is set, bit 6 is EOF on input, bit 14 means the
+  driver processes IOCTL requests. FreeDOS 2043 (`kernel/ioctl.c`) returns the
+  SFT flags' low byte with the driver attribute's high byte, so attribute
+  C000h gives DX=C0C0h; 4407h sends command 10 and returns AL=FFh unless the
+  busy bit is set. `kernel/dosfns.c` `DosOpenSft` checks for a device before
+  the redirector, so the open does not reach the C: IFS.
+- FreeDOS 2043 `kernel/config.c`: `Dosmem()` reads DOS= tokens only while
+  they are `UMB` or `HIGH`, so `DOS=LOW,UMB` stops at `LOW` and leaves the
+  UMBs unlinked; `DOS=UMB,LOW` links them and keeps the kernel low (no HMA
+  move). `umb_init()` runs after a DEVICE= line (`LoadDevice`), while FILES,
+  LASTDRIVE and STACKS are allocated earlier (`PostConfig`), and
+  `KernelAllocPara` forces low allocation until UMBs exist: SFT, CDS and stacks
+  stay conventional without `DOSDATA=UMB` or the *HIGH lines. `init_device()`
+  does not link a driver whose end address equals its header.
+- FreeCOM 0.85a: `shell/loadhigh.c` (LH/LOADHIGH links the UMBs and sets
+  the allocation strategy for one EXEC); `shell/init.c` resizes the
+  environment with `ENV_USEUMB`, so `/E:1024` moves into a UMB when DOS has
+  them.
+- The DFV2 bind (f3-56 Amendment 1, `dos_unified.c` `final_bind`) reads
+  every device header from NUL in conventional memory, so a DEVICEHIGH driver
+  would refuse the bind; the lifecycle checks (`arena`, `read_psp`) required
+  a conventional PSP, so `LH SHARE` failed with "Undefined error 87" and
+  SHARE did not load (measured before the change below).
+
+**Decision.**
+- `CIUKIEMM.SYS` (`src/com/dosemm.asm`, 164 bytes, 6 paragraphs resident)
+  is the `EMMXXXX0` device: attribute C000h as EMM386; command 10 ready, 13/14
+  done, 8/9/11 write fault, 3 (IOCTL read) read fault (no EMM386 private API
+  is offered), others unknown command. Its INIT keeps the device only when
+  the INT 67h segment carries `EMMXXXX0` at 0Ah (read from the IVT) and
+  INT 67h AH=40h returns 00h. It loads with DEVICE= (low), before
+  CIUKIDF.SYS. EMS itself is unchanged (`dosvm_ems.c`, vector F100:0000).
+- `FDCONFIG.SYS` of `kernel=unified`: `DOS=UMB,LOW` (kernel text and data
+  low, f3-56 Amendment 1 unchanged; no HIGH, DOSDATA or *HIGH lines).
+  `FDAUTO.BAT` of `kernel=unified`: `LH C:\SHARE.COM`. The f3-48 reference
+  profile (`scripts/dos_conformance.py` CONFIG/AUTO, pristine FreeDOS 1.3)
+  is unchanged; `build_reference` now takes the guest's FDAUTO.BAT as it
+  already took its FDCONFIG.SYS.
+- DFV2 lifecycle (`dos_unified.c`): a PSP, its arena header and its JFT may
+  lie in conventional memory or in the VM's UMB arena, which the monitor
+  publishes with `dos_unified_upper` (`dosvm_umb_range`: C9000h to the arena
+  end, none when UMBs are disabled; D0000h with the D000h frame). Kernel
+  text/data, SDA, SFT, CDS, device headers, NLS tables and the root PSP stay
+  conventional; video RAM, the EMS frame, ROM and an arena that runs past the
+  range are refused.
+
+**Measurement** (host replay as above, `tests/host/dos/run_dos_memory.sh`;
+paragraphs in hex; DOSMEM.COM now links the UMBs for its MCB walk as MEM
+does and runs the "open handle" test):
+
+| | before | after |
+| --- | --- | --- |
+| DOS= / UMB link | DOS=LOW, no link | DOS=UMB,LOW: link MCB 9FFFh, arena C900h–DFFFh owned by DOS (XMS 10h: B1h, none left) |
+| `SD` (kernel data, buffers, SFT, CDS, drivers) | 0357h | 035Eh (+7: EMMXXXX0 device) |
+| `SC` (kernel text) | 0A55h, low | same |
+| SHARE | 0235h low | 0235h at C909h (UMB) |
+| FreeCOM environment | 0040h at 9FBFh | 0040h at DFBFh (UMB) |
+| UMB free after boot | — | 1486h (82 KiB) |
+| DOSREADY largest block at boot | 8C1Dh (561 KiB) | 8E95h (570 KiB) |
+| Block a program gets at the prompt | ~8C5Ah (574880 B) | ~8ED2h (584992 B, +10112 B); Wolf3D margin 57680 B |
+| EMS "get interrupt vector" | LIM 4.0, frame E000h, 512 pages | same |
+| EMS "open handle" | 3D00h: error 2 | handle 5, 4400h DX=C0C0h, 4407h AL=FFh, 4402h refused (error 5), close |
+| Wolfenstein 3-D 1.4 after 8 s | mode 13h; no EMS (`PML_StartupEMS` fails at the open), XMS 24573 KiB held | mode 13h, EMS 2656 KiB and XMS 21917 KiB held |
+| Pristine FreeDOS 1.3 reference | DOS=LOW, SHARE low, no device | same |
+
+DOOM and Quake on the same runner (scratch replay, old and new profile, same
+image otherwise): DOOM 1.9 shareware (`DOOM.EXE -config CIUKI.CFG -nosound`,
+DOS/4GW) is a DPMI client at 1 s and in mode 13h unchained from 5 s, with 18
+page flips and 1183 IFS reads at 10 s under both profiles. Quake 1.06
+shareware (`QUAKE.EXE -nosound`) enters the VMM's DPMI host (one client) at
+its first sample under both, then stops in the runner, which has no x87, as
+before the change; its game loop needs QEMU or hardware.
+
+**Not done (headroom).** `SHELLHIGH=C:\CIUKISH.COM` measured another 30h
+paragraphs (768 bytes); left out: CIUKISH.COM is the session wrapper, not a
+TSR, and its SHELL= line belongs to the EXIT decision of 2026-10-24. DOS=HIGH (the
+42 KiB `SC` block into the HMA) remains refused by the f3-56 bind, and
+FreeDOS 2043 puts BUFFERS in the HMA only with the kernel there
+(`BUFFERSHIGH` is an alias of BUFFERS); FILESHIGH/LASTDRIVEHIGH or
+`DOSDATA=UMB` would move the SFT and CDS into UMBs, which the bind refuses.
+Windows 98 sessions typically show about 600 KiB.
+
+**Risks.** XMS 10h no longer returns UMBs (DOS owns them, as with
+DOS=UMB under HIMEM/EMM386 on Windows 98); a program that wants upper memory
+gets it from DOS (5803h, 48h, LH). Wolfenstein 3-D now pages into EMS through
+the VMM's frame instead of XMS. A program that opens `EMMXXXX0` and uses the
+EMM386 private IOCTL (4402h) gets an error, as with any non-EMM386 manager.
+The adapter's process range covers the whole arena; a DOS PSP anywhere in it
+is checked as in conventional memory (MCB, PSP signature, JFT).
+
+Host evidence: `tests/host/dos/run_dos_memory.sh` (on the unchanged
+profile and code it fails 5 checks: no UMB link, SHARE low, no `EMMXXXX0`
+device, prompt block 8C5Ah below the new 8E80h floor, Wolf3D without EMS;
+passes after with the figures above), `tests/host/dos/unified_binding_test.c`
+H56-05 (UMB processes accepted only once published; video RAM, EMS frame,
+overrun, CDS and root PSP in UMBs refused), `tests/host/dos/test_dos_box_memory.py`
+(profile, reference unchanged, driver header and answers),
+`tests/host/dos/run_unified_file.sh` (H57/H61 with the new profile).
 
 ### Boot-time check: the image's version is pinned (2026-10-24)
 

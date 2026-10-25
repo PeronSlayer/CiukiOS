@@ -5,6 +5,12 @@
 
 static unsigned umb_pages(struct dosvm *v)
 { uint32_t end=v->memory.frame_segment==0xD000 ? 0xD0000 : VM_UMB_END; return (end-VM_UMB_FIRST)/PAGE_SIZE; }
+/* The arena's linear range [first, end); empty when UMBs are disabled. */
+void dosvm_umb_range(struct dosvm *v, uint32_t *first, uint32_t *end)
+{
+    *first=v->memory.umb_enabled ? VM_UMB_FIRST : 0;
+    *end=*first ? VM_UMB_FIRST+umb_pages(v)*PAGE_SIZE : 0;
+}
 static unsigned umb_largest(struct dosvm *v)
 {
     unsigned run=0, best=0;

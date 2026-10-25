@@ -220,6 +220,9 @@ static int unified_create(struct dosvm *v) {
     dfv2_ifs_init(&r->ifs,&r->unified,&ops,&host,v->info.key.id,v->info.key.generation);
     dfv2_ifs_backend(&r->ifs,&backend);
     dos_unified_init(&r->unified,v->info.key.generation,&ops,&backend);
+    /* LOADHIGH/DOS=UMB: processes may live in the UMB arena (dosvm_umb.c). */
+    uint32_t upper_first,upper_end; dosvm_umb_range(v,&upper_first,&upper_end);
+    dos_unified_upper(&r->unified,upper_first,upper_end);
     v->unified=&r->unified; v->unified_phys=phys; v->unified_bytes=bytes; v->info.resident+=bytes;
     return 0;
 }

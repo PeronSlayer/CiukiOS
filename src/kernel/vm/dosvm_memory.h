@@ -119,6 +119,7 @@ int dosvm_copy_region(struct dosvm *, uint32_t, uint32_t, uint32_t, bool);
 int dosvm_xms(struct dosvm *, struct v86_frame *);
 int dosvm_xms_multiplex(struct dosvm *, struct v86_frame *); /* 2Fh/4300h, 4310h; else -ENOSYS */
 uint8_t dosvm_umb(struct dosvm *, struct v86_frame *, unsigned);
+void dosvm_umb_range(struct dosvm *, uint32_t *first, uint32_t *end);
 int dosvm_ems(struct dosvm *, struct v86_frame *);
 int dosvm_ems_return(struct dosvm *, struct v86_frame *);
 static inline uint16_t vm_u16(const uint8_t *p) { return p[0] | ((uint16_t)p[1] << 8); }

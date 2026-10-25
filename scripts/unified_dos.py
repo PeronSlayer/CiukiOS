@@ -621,29 +621,62 @@ FORK_QUALIFIED = ROOT / "build/unified-dos/fork-qualified.json"
 
 SESSION_SHELL_REFERENCE = b"C:\\COMMAND.COM C:\\ /P=C:\\FDAUTO.BAT /E:1024\r\n"
 SESSION_SHELL_LINE = b"C:\\CIUKISH.COM\r\n"
+# DOS Box memory (2026-10-25, dos-dpmi-contract.md): FreeDOS 2043 config.c
+# Dosmem() reads DOS= tokens only while they are UMB or HIGH, so "DOS=LOW,UMB"
+# would leave the UMBs unlinked; "DOS=UMB,LOW" links them and keeps the
+# kernel low (no HIGH, f3-56 Amendment 1).
+DOS_LINE_REFERENCE = b"DOS=LOW\r\n"
+DOS_LINE = b"DOS=UMB,LOW\r\n"
+EMS_DEVICE_LINE = b"DEVICE=C:\\CIUKIEMM.SYS\r\n"
+SHARE_REFERENCE = b"\r\nC:\\SHARE.COM\r\n"
+SHARE_HIGH = b"\r\nLH C:\\SHARE.COM\r\n"
+
+
+def _assemble(source, name):
+    import subprocess, tempfile
+    with tempfile.TemporaryDirectory(prefix="dosasm-") as temporary:
+        out = Path(temporary) / name
+        subprocess.run(["nasm", "-f", "bin", str(ROOT / source), "-o", str(out)], cwd=ROOT, check=True)
+        return out.read_bytes()
 
 
 def session_shell():
     """CIUKISH.COM, assembled from src/com/dossh.asm (deterministic nasm -f bin)."""
-    import subprocess, tempfile
-    with tempfile.TemporaryDirectory(prefix="dossh-") as temporary:
-        out = Path(temporary) / "CIUKISH.COM"
-        subprocess.run(["nasm", "-f", "bin", str(ROOT / "src/com/dossh.asm"), "-o", str(out)], cwd=ROOT, check=True)
-        return out.read_bytes()
+    return _assemble("src/com/dossh.asm", "CIUKISH.COM")
+
+
+def ems_device():
+    """CIUKIEMM.SYS, the EMMXXXX0 character device (LIM EMS 4.0 "open handle"
+    detection), assembled from src/com/dosemm.asm (deterministic nasm -f bin)."""
+    return _assemble("src/com/dosemm.asm", "CIUKIEMM.SYS")
 
 
 def fork_config(ref):
     """kernel=unified CONFIG for the fork: the reference profile plus the
-    DFV2 control driver (f3-57). DOS=LOW stays required (f3-56 Amendment 1)."""
+    DFV2 control driver (f3-57). The kernel stays low (f3-56 Amendment 1);
+    DOS=UMB links the VM's upper memory blocks for LOADHIGH and the EMMXXXX0
+    device (CIUKIEMM.SYS) makes the VMM's EMS visible to "open handle"
+    detection. Both drivers load low: the final bind reads every device
+    header in conventional memory."""
     marker = b"SHELL="
-    if ref.CONFIG.count(marker) != 1 or not ref.CONFIG.startswith(b"DOS=LOW\r\n"):
+    if ref.CONFIG.count(marker) != 1 or not ref.CONFIG.startswith(DOS_LINE_REFERENCE):
         raise ValueError("reference CONFIG layout changed")
     head, shell_line = ref.CONFIG.split(marker)
     if shell_line != SESSION_SHELL_REFERENCE:
         raise ValueError("reference SHELL= line changed")
+    head = DOS_LINE + head[len(DOS_LINE_REFERENCE):]
     # DOS Box session: the primary FreeCOM with /P ignores EXIT, so the guest
     # boots the CIUKISH.COM wrapper that runs it non-permanently (/K FDAUTO.BAT).
-    return head + b"DEVICE=C:\\CIUKIDF.SYS\r\n" + marker + SESSION_SHELL_LINE
+    return head + EMS_DEVICE_LINE + b"DEVICE=C:\\CIUKIDF.SYS\r\n" + marker + SESSION_SHELL_LINE
+
+
+def fork_auto(ref):
+    """kernel=unified FDAUTO.BAT: the reference autoexec with SHARE loaded
+    into the upper memory blocks (FreeCOM LOADHIGH); the conformance
+    reference profile keeps ref.AUTO unchanged."""
+    if ref.AUTO.count(SHARE_REFERENCE) != 1:
+        raise ValueError("reference FDAUTO.BAT layout changed")
+    return ref.AUTO.replace(SHARE_REFERENCE, SHARE_HIGH)
 
 
 def fork_guest_files(qualified=FORK_QUALIFIED):
@@ -673,11 +706,13 @@ def fork_guest_files(qualified=FORK_QUALIFIED):
         raise ValueError("rebuilt fork kernel/driver hash mismatch")
     ref = reference_module()
     files, identity = ref.reference_files()
-    config = fork_config(ref)
+    config, auto = fork_config(ref), fork_auto(ref)
     files["/KERNEL.SYS"] = kernel
     files["/CIUKIDF.SYS"] = driver
     files["/FDCONFIG.SYS"] = config
+    files["/FDAUTO.BAT"] = auto
     files["/CIUKISH.COM"] = session_shell()
+    files["/CIUKIEMM.SYS"] = ems_device()
     files["/D48/KERNEL.LIC"] = sources()["COPYING"]
     identity["kernel"] = dict(version="2043", personality="ciukidos-fork", sha256=sha(kernel),
                               license="GPL-2.0-or-later", license_sha256=sha(files["/D48/KERNEL.LIC"]),
@@ -686,7 +721,7 @@ def fork_guest_files(qualified=FORK_QUALIFIED):
                               fork_manifest_sha256=first["fork_manifest_sha256"],
                               driver=dict(name="CIUKIDF.SYS", sha256=sha(driver), size=len(driver)))
     identity["profile"] = dict(kernel="unified", schema_value=2, bridge=False, share=True, ifs=True,
-                               config_sha256=sha(config), auto_sha256=sha(ref.AUTO))
+                               config_sha256=sha(config), auto_sha256=sha(auto))
     return files, identity
 
 
@@ -769,7 +804,7 @@ def corresponding_source(output):
              "tests/host/dos/check_unmodified_build.py", "tests/host/dos/unified_boot_test.c"]
     # The canonical guest also carries Ciuki probe/wrapper binaries. Include
     # their full narrowly scoped source trees and build configuration.
-    paths.extend(("src/com/shell.asm", "src/com/dosvm_shell.asm"))
+    paths.extend(("src/com/shell.asm", "src/com/dosvm_shell.asm", "src/com/dossh.asm", "src/com/dosemm.asm"))
     for folder in ("src/runtime", "src/probes/dos", "src/probes/doscompat"):
         paths.extend(str(p.relative_to(ROOT)) for p in (ROOT / folder).rglob("*") if p.is_file())
     paths.append("src/boot/floppy_stage1.asm")
@@ -846,7 +881,8 @@ def notices(identity, source):
                + ("CIUKIDF.SYS: CiukiOS contributors, GPL-2.0-or-later; grant in the source bundle.\n" if fork else "") +
                "FreeCOM 0.85a, GPL-2.0; bundled SUPPL has separate LGPL notices.\n"
                "SHARE 08/2006a: original package GPL notice, version not expanded.\n"
-               + ("DFV2 binding and native file system on; DOS=LOW; original FreeCOM and SHARE release binaries.\n"
+               + ("DFV2 binding and native file system on; DOS=UMB,LOW (kernel low, SHARE loaded high); "
+                  "original FreeCOM and SHARE release binaries.\n"
                   if fork else "Binding disabled; DOS=LOW; original FreeCOM and SHARE release binaries.\n") +
                "Corresponding source: " + source["archive"] + "\nSHA-256: " + source["sha256"] +
                "\nSource URL: " + (offer["url"] or "not assigned; release publication blocked") + "\n")
@@ -869,11 +905,14 @@ def readback(read, identity, license_files):
             raise ValueError("unified guest read-back mismatch: " + role)
         if sha(read("/D48/" + role.upper() + ".LIC")) != identity[role]["license_sha256"]:
             raise ValueError("unified license read-back mismatch: " + role)
-    config = fork_config(ref) if identity.get("profile", {}).get("ifs") else ref.CONFIG
-    if read("/FDCONFIG.SYS") != config or read("/FDAUTO.BAT") != ref.AUTO:
+    fork = identity.get("profile", {}).get("ifs")
+    config, auto = (fork_config(ref), fork_auto(ref)) if fork else (ref.CONFIG, ref.AUTO)
+    if read("/FDCONFIG.SYS") != config or read("/FDAUTO.BAT") != auto:
         raise ValueError("unified profile read-back mismatch")
-    if identity.get("profile", {}).get("ifs") and read("/CIUKISH.COM") != session_shell():
+    if fork and read("/CIUKISH.COM") != session_shell():
         raise ValueError("unified read-back mismatch: CIUKISH.COM")
+    if fork and read("/CIUKIEMM.SYS") != ems_device():
+        raise ValueError("unified read-back mismatch: CIUKIEMM.SYS")
     driver = identity["kernel"].get("driver")
     if driver and sha(read("/" + driver["name"])) != driver["sha256"]:
         raise ValueError("unified read-back mismatch: CIUKIDF.SYS")

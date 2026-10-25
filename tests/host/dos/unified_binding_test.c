@@ -459,10 +459,55 @@ static void lifetime(void) {
     printf("H56-04 lifetime: %s EXEC begin/commit/rollback, nested, inheritance/noinherit, 26/55/50, exit/TSR, refusals at 6 publications, exhaustion, destroy (prepared=%u committed=%u)\n",verdict(),B.prepared,B.committed);
 }
 
+/* DOS=UMB/LOADHIGH: a process may live in the VM's upper memory blocks once
+ * the monitor publishes their range; nothing else may, and the final bind
+ * still requires conventional kernel structures. */
+static void upper_memory(void) {
+    enum { UMB=0xC901, FIRST=0xC9000, END=0xE0000 };
+    fresh(); CHECK(do_register()==DFV2_RESUME && do_final()==DFV2_RESUME && U.bound);
+    /* no range published: an EXEC into upper memory is refused, nothing kept */
+    arena(UMB,ROOT); CHECK(event(3,UMB,ROOT,0)==DFV2_RESUME && ev_err()==87 && !find_used(UMB));
+    dos_unified_upper(&U,0x9F000,END); CHECK(!U.upper_first && !U.upper_end);   /* not above A0000h */
+    dos_unified_upper(&U,FIRST,0xF8000); CHECK(!U.upper_first && !U.upper_end);  /* into the system ROM */
+    dos_unified_upper(&U,FIRST,END); CHECK(U.upper_first==FIRST && U.upper_end==END);
+    /* LOADHIGH: begin, commit with the inherited JFT, TSR stays resident */
+    CHECK(event(3,UMB,ROOT,0)==DFV2_RESUME && !ev_err() && find_used(UMB));
+    psp(UMB,ROOT,true); arena(UMB,UMB); CHECK(event(4,UMB,ROOT,0)==DFV2_RESUME && !ev_err() && U.owning==UMB);
+    select_psp(UMB); CHECK(event(7,UMB,ROOT,0)==DFV2_RESUME && !ev_err() && U.owning==ROOT); select_psp(ROOT);
+    /* a child PSP (55h) created in upper memory, and AH=50h selecting it */
+    psp(0xD001,ROOT,true); CHECK(event(1,0xD001,ROOT,0x55)==DFV2_RESUME && !ev_err() && U.selected==0xD001);
+    select_psp(0xD001); CHECK(event(2,ROOT,0,0)==DFV2_RESUME && !ev_err() && U.selected==ROOT); select_psp(ROOT);
+    /* a JFT moved into upper memory (AH=67h) by a conventional process */
+    psp(0x1800,ROOT,true); memcpy(guest+LIN(0xDE00,0),guest+LIN(0x1800,0x18),20); wfar(LIN(0x1800,0x34),0xDE00,0);
+    CHECK(event(1,0x1800,ROOT,0x26)==DFV2_RESUME && !ev_err() && find_used(0x1800));
+    /* outside the range: video RAM, the EMS frame, an arena running past its end */
+    static const uint16_t outside[3]={0xB801,0xE001,0xDFF8};
+    for (unsigned i=0;i<3;i++) {
+        arena(outside[i],ROOT);
+        CHECK(event(3,outside[i],ROOT,0)==DFV2_RESUME && ev_err()==87 && !find_used(outside[i]));
+    }
+    psp(0xE801,ROOT,true); CHECK(event(1,0xE801,ROOT,0x26)==DFV2_RESUME && ev_err()==87);
+    dos_unified_destroy(&U);
+    /* the final bind keeps every kernel structure conventional */
+    fresh(); dos_unified_upper(&U,FIRST,END); CHECK(do_register()==DFV2_RESUME);
+    uint32_t rec=LIN(0x7000,0); bind_record(rec,1); wfar(LIN(0x7000,0x84),0xCA00,0); wfar(LIN(DATA,0x26+0x16),0xCA00,0);
+    prepare_call(DFV2_ROLE_EVENT,0,0,0,0); w16(LIN(DRV,CALL+0x20),0x7000); w16(LIN(DRV,CALL+0x1a),0);
+    struct dos_file_frame f=live(DFV2_ROLE_EVENT);
+    CHECK(dos_unified_gate(&U,&f)==DFV2_RESUME && out_cf() && out_ax()==87 && !U.bound && !strcmp(U.why,"CDS array"));
+    fresh(); dos_unified_upper(&U,FIRST,END); CHECK(do_register()==DFV2_RESUME);
+    bind_record(rec,1); w16(LIN(0x7000,0x8a),0xCA00);
+    memcpy(guest+LIN(0xCA00,0),guest+LIN(ROOT,0),256); wfar(LIN(0xCA00,0x34),0xCA00,0x18); w16(LIN(DATA,SDA+0x10),0xCA00);
+    prepare_call(DFV2_ROLE_EVENT,0,0,0,0); w16(LIN(DRV,CALL+0x20),0x7000); w16(LIN(DRV,CALL+0x1a),0);
+    f=live(DFV2_ROLE_EVENT);
+    CHECK(dos_unified_gate(&U,&f)==DFV2_RESUME && out_cf() && out_ax()==87 && !U.bound && !strcmp(U.why,"root PSP extent"));
+    printf("H56-05 upper memory: %s LOADHIGH begin/commit/TSR, 55h/50h and a JFT in UMBs once published; "
+           "video RAM, EMS frame, overrun and unpublished range refused; CDS/root PSP in UMBs still refuse the bind\n",verdict());
+}
+
 int main(void) {
     guest=calloc(1,MEM); snap_guest=calloc(1,MEM);
     if (!guest || !snap_guest) return 2;
-    rom_and_discovery(); negotiation(); layout_refusals(); frames(); lifetime();
+    rom_and_discovery(); negotiation(); layout_refusals(); frames(); lifetime(); upper_memory();
     free(guest); free(snap_guest);
     printf("H56 native: %u checks, %u failures\n",checks,failures);
     return failures ? 1 : 0;

@@ -30,6 +30,18 @@ static bool rd(struct dos_unified *d,struct dos_file_far p,void *b,uint32_t n) {
     if (!conv(p,n) || !d->memory.check(d->memory.arg,lin(p),n,false)) return false;
     d->memory.read(d->memory.arg,lin(p),b,n); return true;
 }
+/* Process memory (DOS=UMB, LOADHIGH; 2026-10-25): a PSP, its arena header
+ * and its JFT may also lie in the upper memory blocks the VM manager hands
+ * out through XMS 10h, [upper_first, upper_end) set by dos_unified_upper.
+ * Kernel text and data, SDA, SFT, CDS, device headers, NLS tables and the
+ * root PSP stay conventional (DOS=LOW, f3-56 Amendment 1). */
+static bool upper(const struct dos_unified *d,struct dos_file_far p,uint32_t n) {
+    uint32_t a=lin(p); return n && a>=d->upper_first && a<d->upper_end && n<=d->upper_end-a && n<=65536u-p.off;
+}
+static bool prd(struct dos_unified *d,struct dos_file_far p,void *b,uint32_t n) {
+    if (!(conv(p,n) || upper(d,p,n)) || !d->memory.check(d->memory.arg,lin(p),n,false)) return false;
+    d->memory.read(d->memory.arg,lin(p),b,n); return true;
+}
 struct span { uint32_t base,bytes; };
 static struct span sp(struct dos_file_far p,uint32_t n) { return (struct span){lin(p),n}; }
 static bool disjoint(struct span a,struct span b) { return a.base+a.bytes<=b.base || b.base+b.bytes<=a.base; }
@@ -54,6 +66,10 @@ bool dos_unified_discover(struct dos_file_frame *f) {
 void dos_unified_init(struct dos_unified *d,uint32_t generation,const struct dos_file_ops *memory,const struct dfv2_backend *backend) {
     memset(d,0,sizeof(*d)); d->generation=generation; d->memory=*memory;
     if (backend) d->backend=*backend;
+}
+void dos_unified_upper(struct dos_unified *d,uint32_t first,uint32_t end) {
+    bool valid=first>=0xa0000 && first<end && end<=0xf0000;
+    d->upper_first=valid ? first : 0; d->upper_end=valid ? end : 0;
 }
 
 static int prepare(struct dos_unified *d,unsigned event,uint16_t psp,uint16_t parent) {
@@ -112,9 +128,9 @@ static void done_error(struct dfv2_call *k,unsigned error) {
 struct jft { uint16_t count; struct dos_file_far table; uint8_t h[255]; };
 static bool read_psp(struct dos_unified *d,const struct dfv2_layout *l,uint16_t psp,struct jft *j) {
     uint8_t b[0x38];
-    if (!psp || !rd(d,at(psp,0),b,sizeof(b)) || u16(b)!=0x20cd) return false;
+    if (!psp || !prd(d,at(psp,0),b,sizeof(b)) || u16(b)!=0x20cd) return false;
     j->count=u16(b+0x32); j->table=fp(b+0x34);
-    if (!j->count || j->count>DFV2_SFT_MAX || !rd(d,j->table,j->h,j->count)) return false;
+    if (!j->count || j->count>DFV2_SFT_MAX || !prd(d,j->table,j->h,j->count)) return false;
     for (unsigned i=0;i<j->count;i++) if (j->h[i]!=0xff && j->h[i]>=l->sft_count) return false;
     return true;
 }
@@ -152,8 +168,8 @@ static struct dfv2_process *free_slot(struct dos_unified *d) {
  * block still belongs to the parent; patchPSP() gives it to the child. */
 static bool arena(struct dos_unified *d,uint16_t psp,uint16_t owner) {
     uint8_t m[5];
-    return psp>1 && rd(d,at((uint16_t)(psp-1),0),m,5) && (m[0]=='M' || m[0]=='Z') &&
-        u16(m+1)==owner && u16(m+3)>=0x10 && conv(at(psp,0),256);
+    return psp>1 && prd(d,at((uint16_t)(psp-1),0),m,5) && (m[0]=='M' || m[0]=='Z') &&
+        u16(m+1)==owner && u16(m+3)>=0x10 && (conv(at(psp,0),256) || upper(d,at(psp,0),256));
 }
 /* Copy/child PSP records can be replaced; an EXEC or root record cannot. */
 static bool replaceable(const struct dos_unified *d,const struct dfv2_process *p) {

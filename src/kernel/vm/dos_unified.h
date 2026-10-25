@@ -100,6 +100,7 @@ struct dos_unified {
     struct dfv2_layout layout;
     struct dfv2_process process[DFV2_PROCESSES];
     uint32_t generation,serial;
+    uint32_t upper_first,upper_end; /* UMB RAM a process may occupy; empty by default */
     uint16_t selected,owning;
     bool registered,bound,dead,pending;
     uint64_t token,tokens;
@@ -114,6 +115,11 @@ struct dos_unified {
 void dos_unified_rom(uint8_t *page_f1,uint32_t generation);
 bool dos_unified_discover(struct dos_file_frame *);
 void dos_unified_init(struct dos_unified *,uint32_t generation,const struct dos_file_ops *,const struct dfv2_backend *);
+/* DOS=UMB/LOADHIGH (2026-10-25): the linear range [first, end) of the VM's
+ * upper memory blocks, where a process's PSP, arena header and JFT may lie
+ * (lifecycle events 1-7). Everything the final bind reads stays
+ * conventional. A range outside A0000h-EFFFFh leaves none. */
+void dos_unified_upper(struct dos_unified *,uint32_t first,uint32_t end);
 /* live: CS:IP after INT FE, SS:SP at the gate, DS:SI (phase-0 record). */
 enum dfv2_outcome dos_unified_gate(struct dos_unified *,const struct dos_file_frame *live);
 /* Monitor: where the critical callback frame goes, and its return. */

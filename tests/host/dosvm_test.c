@@ -939,6 +939,12 @@ static void test_memory_services(bool locked)
     f=xf(0x11,0xC900); CHECK(XMS(v,f) && AX(f)==1 && !v->memory.umb[0] && !v->memory.umb[1]);
     f=xf(0x11,0xC900); CHECK(XMS(v,f) && (f.tf.ebx&255)==0xB2);
     f=xf(0x11,0xE000); CHECK(XMS(v,f) && (f.tf.ebx&255)==0xB2);
+    /* The range the DFV2 adapter accepts processes in (DOS=UMB, LOADHIGH). */
+    uint32_t umb_first=0,umb_end=0; dosvm_umb_range(v,&umb_first,&umb_end);
+    CHECK(umb_first==0xC9000 && umb_end==0xE0000);
+    v->memory.frame_segment=0xD000; dosvm_umb_range(v,&umb_first,&umb_end); CHECK(umb_first==0xC9000 && umb_end==0xD0000);
+    v->memory.umb_enabled=false; dosvm_umb_range(v,&umb_first,&umb_end); CHECK(!umb_first && !umb_end);
+    v->memory.frame_segment=0xE000; v->memory.umb_enabled=true;
     f=xf(0x8A,0); CHECK(XMS(v,f) && !AX(f) && (f.tf.ebx&255)==0x80);
     CHECK(v->info.xms_calls==((1u<<0x13)-1u|1u<<19|1u<<22));
     /* EMS: handles, page-table windows, save/restore, realloc, release. */
