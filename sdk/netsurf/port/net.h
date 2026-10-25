@@ -42,7 +42,12 @@ struct ciuki_job {
     int io_errno,tls_engine_error;
     uint64_t record_ms;
 };
-#define CIUKI_NET_PENDING_BUDGET (128u*1024u)
+/* Metadata of fetches NetSurf has set up but not yet started. fx-nsperf:
+ * G26b's proxy fields grew a job to 1,564 bytes on i686 (1,648 on x86-64), so
+ * 128 KiB held at most 83 queued fetches; NetSurf treats a refused setup as a
+ * failed fetch, so further images of a large page broke. 256 KiB keeps more
+ * than 100 queued (the f6-15 fan-out test). */
+#define CIUKI_NET_PENDING_BUDGET (256u*1024u)
 size_t ciuki_net_pending_bytes(void);
 struct ciuki_net *ciuki_net_create(const br_x509_trust_anchor *,size_t);
 void ciuki_net_notify(struct ciuki_net *,void (*)(void *),void *);
@@ -56,7 +61,7 @@ void ciuki_net_poll(struct ciuki_net *);
 /* Called every UI turn, even when NetSurf has no active fetches. */
 void ciuki_net_service_idle(struct ciuki_net *);
 /* Port-local fd_set callers translate these to their own representation. */
-unsigned ciuki_net_fds(struct ciuki_net *,struct pollfd [8]);
+unsigned ciuki_net_fds(struct ciuki_net *,struct pollfd [8]); /* CIUKI_NET_SLOTS */
 struct ciuki_tls *ciuki_net_tls(struct ciuki_job *);
 void ciuki_net_record(struct ciuki_job *,enum ciuki_fetch_stage);
 /* Also used for errors raised by the NetSurf binding after response headers. */
@@ -72,5 +77,8 @@ size_t ciuki_net_state_text(char *,size_t);
  * for the exit line; error records also reach ciuki_netsurf_log_record
  * (chrome.c: NETSURF.LOG, 16 per session) when that hook is linked. */
 size_t ciuki_net_fetch_summary(char *,size_t);
+/* fx-nsperf: connects the system refused for resources (ENOBUFS, ENOMEM,
+ * EAGAIN, EMFILE, ENFILE) and retried later instead of failing the fetch. */
+unsigned ciuki_net_connect_retries(void);
 void ciuki_netsurf_log_record(const char *);
 #endif

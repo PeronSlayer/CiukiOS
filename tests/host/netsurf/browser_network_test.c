@@ -26,6 +26,7 @@
 extern void fixture_begin(const char *,const char *,const char *),fixture_end(void);
 extern unsigned fixture_requests(void),fixture_loops(void),fixture_connections(void);
 extern bool fixture_lookup_blocked(void);
+extern unsigned fixture_socket_refusals(void),fixture_socket_max(void);
 extern bool fixture_slow_started(void);
 extern bool fixture_lookup_returned_in_thread(void);
 extern void fixture_lookup_release(void);
@@ -216,5 +217,7 @@ int __wrap_main(int argc,char **argv)
     if(blocked){assert(navigated && completed && lookup_released && lookup_idle && late_checked);puts("fixture_navigation_blocked=1 completed=1 late_ignored=1");}
     if(budget)assert(retried && retry_done);
     printf("fixture_requests=%u fixture_loop_requests=%u\n",fixture_requests(),fixture_loops());
+    if(!strcmp(mode,"browser-socket-limit"))
+        printf("fixture_socket_limit refusals=%u max_live=%u connections=%u\n",fixture_socket_refusals(),fixture_socket_max(),fixture_connections());
     fixture_end();return result;
 }

@@ -1,0 +1,76 @@
+CiukiOS fx-nsperf. The framebuffer main loop presents each turn's frame
+(ciuki_chrome_present) before the scheduler runs: libnsfb updates on the
+Ciuki surface now only collect damage. Host frame bench hooks: the RAM
+surface reports each update to an optional hook, and the front end exposes
+the wheel's scroll and a queued browser-widget redraw, so frontends/
+framebuffer/ciuki/framebench.c can mirror every frame into the CiukiOS v3
+surface model and charge it on the T23 model (--ciuki-frame-bench, host
+builds only).
+
+--- a/netsurf/frontends/framebuffer/gui.c
++++ b/netsurf/frontends/framebuffer/gui.c
+@@ -233,6 +233,18 @@
+ 	fbtk_set_scroll_position(gw->hscroll, bwidget->scrollx + bwidget->panx);
+ }
+ 
++/* fx-nsperf host frame bench (ciuki/framebench.c): the wheel's scroll and a
++ * queued redraw of part of the browser widget. */
++void ciuki_frame_bench_scroll(struct gui_window *gw, int dy)
++{
++	widget_scroll_y(gw, dy, false);
++}
++
++void ciuki_frame_bench_queue(struct gui_window *gw, int x0, int y0, int x1, int y1)
++{
++	fb_queue_redraw(gw->browser, x0, y0, x1, y1);
++}
++
+ static void
+ fb_pan(fbtk_widget_t *widget,
+        struct browser_widget_s *bwidget,
+@@ -657,10 +669,18 @@
+ 
+ 		if (!ciuki_chrome_modal()) fbtk_redraw(fbtk);
+         ciuki_chrome_render();
++        /* fx-nsperf: present this turn's frame before the scheduler can
++         * start a long layout (unless input is queued: one present then
++         * covers all of it). */
++        ciuki_chrome_present();
+         if (ciuki_capture_path && window_list && !ciuki_chrome_busy()) {
+             /* Let deferred core callbacks unwind before taking host evidence. */
+             if (++ciuki_capture_turns>=3) { ciuki_chrome_capture(fbtk_get_nsfb(fbtk)); ciuki_chrome_exit_reason("capture"); fb_complete=true; }
+         }
++        if (ciuki_frame_bench && window_list && !ciuki_chrome_busy()) {
++            /* fx-nsperf: the host frame bench, on the loaded page. */
++            if (++ciuki_capture_turns>=3) { ciuki_frame_bench_run(fbtk, window_list); ciuki_chrome_exit_reason("bench"); fb_complete=true; }
++        }
+ 	}
+ }
+ 
+--- a/libnsfb/src/surface/ram.c
++++ b/libnsfb/src/surface/ram.c
+@@ -119,12 +119,24 @@
+     return false;
+ }
+ 
++/* CiukiOS host frame bench (NetSurf frontends/framebuffer/ciuki/framebench.c):
++ * updates are mirrored into the CiukiOS surface model; NULL otherwise. */
++void (*nsfb_ram_update_hook)(nsfb_t *nsfb, nsfb_bbox_t *box);
++
++static int ram_update(nsfb_t *nsfb, nsfb_bbox_t *box)
++{
++    if (nsfb_ram_update_hook != NULL)
++        nsfb_ram_update_hook(nsfb, box);
++    return 0;
++}
++
+ const nsfb_surface_rtns_t ram_rtns = {
+     .defaults = ram_defaults,
+     .initialise = ram_initialise,
+     .finalise = ram_finalise,
+     .input = ram_input,
+     .geometry = ram_set_geometry,
++    .update = ram_update,
+ };
+ 
+ NSFB_SURFACE_DEF(ram, NSFB_SURFACE_RAM, &ram_rtns)

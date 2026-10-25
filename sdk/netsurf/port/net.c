@@ -19,16 +19,37 @@ int ciuki_devctl(int,uint32_t,void *,uint32_t) __attribute__((weak));
 #include <strings.h>
 #include <time.h>
 #include <unistd.h>
-enum { EMPTY,RESOLVING,CONNECTING,TRANSFER,IDLE,TUNNEL };
+/* fx-nsperf: WAITING holds an admitted job whose socket the system refused
+ * for lack of resources; it reconnects to the saved address later. */
+enum { EMPTY,RESOLVING,CONNECTING,TRANSFER,IDLE,TUNNEL,WAITING };
 struct ciuki_connection {
     int fd;unsigned state,port;char host[254];bool secure;
     uint64_t idle_ms;
+    uint32_t address;uint64_t retry_ms;unsigned refusals;
     struct ciuki_job *job;
     char proxy_host[254],proxy_auth[264];
     char tunnel[4096];size_t tunnel_bytes,tunnel_sent,tunnel_request;
     struct ciuki_tls *tls;
 };
-struct ciuki_net { struct ciuki_dns *dns;struct ciuki_connection connections[8];const br_x509_trust_anchor *anchors;size_t anchor_count;bool polling;unsigned char input[CIUKI_HTTP_SLICE]; };
+/* fx-nsperf (T23 trial 2ca3b0b6): images of one HTTPS page failed at
+ * connect with errno 105 (ENOBUFS) about 5 s after NetSurf set them up,
+ * five in the same second: each refusal freed its slot, the next queued
+ * image took it and was refused too. The CiukiOS socket layer answers
+ * ENOBUFS when its TCP objects (32 for the system, closing ones included),
+ * its request slots (8) or lwIP's PCBs, netconns, segments or heap run out
+ * (src/kernel/net/lwip/sockets.c, lwipopts.h); the browser alone keeps at
+ * most CIUKI_NET_SLOTS sockets. A refusal is now a temporary shortage: the
+ * job keeps its slot without a socket, the number of sockets the browser
+ * opens at once drops to what the system just accepted (at least one), and
+ * the connect is retried after 250 ms, doubling to 4 s, within the job's
+ * 30 s limit. Each established connection raises the limit by one again. */
+#define CIUKI_NET_SLOTS 8
+#define CIUKI_NET_IDLE 4          /* keep-alive connections kept, at most 2 per origin */
+#define CIUKI_NET_RETRY_MS 250
+#define CIUKI_NET_RETRY_MAX_MS 4000
+struct ciuki_net { struct ciuki_dns *dns;struct ciuki_connection connections[CIUKI_NET_SLOTS];const br_x509_trust_anchor *anchors;size_t anchor_count;bool polling;unsigned limit;unsigned char input[CIUKI_HTTP_SLICE]; };
+static unsigned connect_retries;
+unsigned ciuki_net_connect_retries(void) { return connect_retries; }
 static uint64_t now_ms(void)
 { struct timespec t;if(clock_gettime(CLOCK_MONOTONIC,&t))return 0;return (uint64_t)t.tv_sec*1000+(unsigned long)t.tv_nsec/1000000; }
 static unsigned record_id;
@@ -215,7 +236,7 @@ struct ciuki_net *ciuki_net_create(const br_x509_trust_anchor *anchors,size_t co
     struct ciuki_net *n=calloc(1,sizeof(*n));if(!n)return NULL;
     n->dns=ciuki_dns_create();if(!n->dns){free(n);return NULL;}
     n->anchors=anchors;n->anchor_count=count;
-    for(unsigned i=0;i<8;i++)n->connections[i].fd=-1;
+    for(unsigned i=0;i<CIUKI_NET_SLOTS;i++)n->connections[i].fd=-1;
     return n;
 }
 static void close_connection(struct ciuki_net *n,struct ciuki_connection *c)
@@ -230,7 +251,7 @@ static void close_connection(struct ciuki_net *n,struct ciuki_connection *c)
     ciuki_tls_free(c->tls);memset(c,0,sizeof(*c));c->fd=-1;
 }
 void ciuki_net_destroy(struct ciuki_net *n)
-{ if(n){for(unsigned i=0;i<8;i++)close_connection(n,&n->connections[i]);ciuki_dns_destroy(n->dns);free(n);} }
+{ if(n){for(unsigned i=0;i<CIUKI_NET_SLOTS;i++)close_connection(n,&n->connections[i]);ciuki_dns_destroy(n->dns);free(n);} }
 void ciuki_net_cancel(struct ciuki_job *j)
 {
     j->cancelled=true;
@@ -258,7 +279,7 @@ static bool clean_socket(struct ciuki_connection *c,bool request_queued)
 void ciuki_net_service_idle(struct ciuki_net *n)
 {
     uint64_t now=now_ms();
-    for(unsigned i=0;i<8;i++){
+    for(unsigned i=0;i<CIUKI_NET_SLOTS;i++){
         struct ciuki_connection *c=&n->connections[i];
         if(c->state==IDLE && (!now || now-c->idle_ms>=15000 || !clean_socket(c,false)))close_connection(n,c);
     }
@@ -342,17 +363,60 @@ static void io_error(struct ciuki_job *j,int error)
     network_message(j,error==ENETDOWN||error==ENETUNREACH||error==EADDRNOTAVAIL?"Offline: no usable network address or route.":
         error==ECONNREFUSED?"The server refused the connection.":error==ETIMEDOUT?"The network request timed out (30 second limit).":"The network connection failed.");
 }
-static bool open_connection(struct ciuki_connection *c,uint32_t address)
+static unsigned open_sockets(const struct ciuki_net *n)
+{ unsigned count=0;for(unsigned i=0;i<CIUKI_NET_SLOTS;i++)if(n->connections[i].fd>=0)count++;return count; }
+/* n->limit is 0 until the system refuses a socket, then the number of
+ * sockets the browser may hold. */
+static bool at_limit(const struct ciuki_net *n) { return n->limit && open_sockets(n)>=n->limit; }
+static bool refused_for_resources(int error)
+{ return error==ENOBUFS || error==ENOMEM || error==EAGAIN || error==EMFILE || error==ENFILE; }
+/* Wait for a socket: the next attempt is due at retry_ms, and only below
+ * the browser's current socket limit. */
+static void wait_for_socket(struct ciuki_connection *c,uint64_t delay)
+{ c->state=WAITING;c->retry_ms=now_ms()+delay; }
+static bool open_connection(struct ciuki_net *n,struct ciuki_connection *c,uint32_t address)
 {
     struct ciuki_job *j=c->job;
     ciuki_net_record(j,CIUKI_FETCH_CONNECT);
+    c->address=address;
+    if(at_limit(n)){wait_for_socket(c,0);return true;}
     c->fd=socket(AF_INET,SOCK_STREAM,0);
-    if(c->fd<0){io_error(j,errno);return false;}
-    int flags=fcntl(c->fd,F_GETFL,0);
-    if(flags<0||fcntl(c->fd,F_SETFL,flags|O_NONBLOCK)<0){io_error(j,errno);return false;}
-    struct sockaddr_in a={0};a.sin_family=AF_INET;a.sin_port=htons((uint16_t)c->port);a.sin_addr.s_addr=address;
-    int r=connect(c->fd,(struct sockaddr *)&a,sizeof(a));
-    if(r<0 && errno!=EINPROGRESS && errno!=EALREADY && errno!=EINTR){io_error(j,errno);return false;}
+    int r=c->fd<0?-1:0;
+    if(!r){
+        int flags=fcntl(c->fd,F_GETFL,0);
+        if(flags<0||fcntl(c->fd,F_SETFL,flags|O_NONBLOCK)<0){io_error(j,errno);return false;}
+        struct sockaddr_in a={0};a.sin_family=AF_INET;a.sin_port=htons((uint16_t)c->port);a.sin_addr.s_addr=address;
+        r=connect(c->fd,(struct sockaddr *)&a,sizeof(a));
+        if(r<0 && (errno==EINPROGRESS || errno==EALREADY || errno==EINTR))r=0;
+    }
+    if(r<0){
+        int error=errno;
+        if(!refused_for_resources(error) || now_ms()-j->started_ms>=30000){io_error(j,error);return false;}
+        /* The system is out of sockets or buffers: give this one back, open
+         * no more than are open now and try again later; the retry first
+         * closes a kept-alive connection no waiting job can use. */
+        if(c->fd>=0)close(c->fd);
+        c->fd=-1;
+        unsigned open=open_sockets(n);
+        n->limit=open?open:1;
+        uint64_t delay=(uint64_t)CIUKI_NET_RETRY_MS<<(c->refusals<4?c->refusals:4);
+        if(delay>CIUKI_NET_RETRY_MAX_MS)delay=CIUKI_NET_RETRY_MAX_MS;
+        c->refusals++;j->io_errno=error;
+        if(connect_retries!=UINT_MAX)connect_retries++;
+        if(c->refusals==1){
+            /* Not a fetch stage record: the fetch goes on. The session's
+             * first wait also reaches NETSURF.LOG. */
+            static bool logged;
+            char line[CIUKI_LOG_LINE_MAX];
+            int count=record_line(line,sizeof(line),"[netsurf] connect-wait url=%s://%s%s errno=%d id=%u open=%u limit=%u retry_ms=%llu",
+                j->secure?"https":"http",j->host,j->path_prefix,error,j->record_id,open,n->limit,(unsigned long long)delay);
+            if(count>0){
+                fflush(stderr);ciuki_write_all(2,line,(size_t)count);
+                if(!logged && ciuki_netsurf_log_record){logged=true;ciuki_netsurf_log_record(line);}
+            }
+        }
+        wait_for_socket(c,delay);return true;
+    }
     c->tunnel_bytes=c->tunnel_sent=c->tunnel_request=0;
     c->state=CONNECTING;return true;
 }
@@ -362,7 +426,7 @@ static bool resolve(struct ciuki_net *n,struct ciuki_connection *c)
     const char *host=c->job->proxy_port?c->job->proxy_host:c->job->host;
     c->state=RESOLVING;
     ciuki_net_record(c->job,CIUKI_FETCH_DNS);
-    if(inet_pton(AF_INET,host,&address)==1)return open_connection(c,address.s_addr);
+    if(inet_pton(AF_INET,host,&address)==1)return open_connection(n,c,address.s_addr);
     c->job->dns_token=ciuki_dns_submit(n->dns,host);
     return true;
 }
@@ -377,7 +441,7 @@ bool ciuki_net_start(struct ciuki_net *n,struct ciuki_job *j)
     }
     if(j->error){ciuki_net_record(j,j->stage);ciuki_net_failure(j,j->error);ciuki_net_record(j,CIUKI_FETCH_DONE);release_pending(j);j->started=j->finished=true;return true;}
     struct ciuki_connection *slot=NULL,*idle=NULL;unsigned active=0;
-    for(unsigned i=0;i<8;i++){
+    for(unsigned i=0;i<CIUKI_NET_SLOTS;i++){
         struct ciuki_connection *c=&n->connections[i];
         if(origin(c,j)){
             if(c->job)active++;
@@ -387,7 +451,7 @@ bool ciuki_net_start(struct ciuki_net *n,struct ciuki_job *j)
     }
     if(active>=2)return false;
     if(idle)slot=idle;
-    if(!slot)for(unsigned i=0;i<8;i++)if(n->connections[i].state==IDLE){slot=&n->connections[i];close_connection(n,slot);break;}
+    if(!slot)for(unsigned i=0;i<CIUKI_NET_SLOTS;i++)if(n->connections[i].state==IDLE){slot=&n->connections[i];close_connection(n,slot);break;}
     if(!slot)return false;
     if(!admit(j)){ciuki_net_failure(j,j->error);ciuki_net_record(j,CIUKI_FETCH_DONE);release_pending(j);j->started=j->finished=true;return true;}
     j->started=true;j->started_ms=now_ms();j->owner=n;j->connection=slot;slot->job=j;
@@ -402,14 +466,47 @@ bool ciuki_net_start(struct ciuki_net *n,struct ciuki_job *j)
     }
     resolve(n,slot);return true;
 }
+/* A job waiting for a socket takes an idle keep-alive connection of its
+ * origin instead (HTTP/1.1 persistent connection reuse, RFC 9112 9.3). */
+static bool reuse_idle(struct ciuki_net *n,struct ciuki_connection *waiting)
+{
+    struct ciuki_job *j=waiting->job;
+    for(unsigned i=0;i<CIUKI_NET_SLOTS;i++){
+        struct ciuki_connection *c=&n->connections[i];
+        if(c==waiting || c->state!=IDLE || !origin(c,j))continue;
+        if(waiting->fd>=0)close(waiting->fd);
+        ciuki_tls_free(waiting->tls);memset(waiting,0,sizeof(*waiting));waiting->fd=-1;
+        j->pooled=true;j->connection=c;c->job=j;c->state=TRANSFER;
+        return true;
+    }
+    return false;
+}
+/* A kept-alive connection that no waiting job can use, to close when the
+ * browser is at its socket limit. */
+static struct ciuki_connection *unwanted_idle(struct ciuki_net *n)
+{
+    for(unsigned i=0;i<CIUKI_NET_SLOTS;i++){
+        struct ciuki_connection *c=&n->connections[i];bool wanted=false;
+        if(c->state!=IDLE)continue;
+        for(unsigned k=0;k<CIUKI_NET_SLOTS;k++)
+            if(n->connections[k].state==WAITING && origin(c,n->connections[k].job))wanted=true;
+        if(!wanted)return c;
+    }
+    return NULL;
+}
 static void finish(struct ciuki_net *n,struct ciuki_connection *c)
 {
     struct ciuki_job *j=c->job;
     if(j->error)ciuki_net_failure(j,j->error);
     ciuki_net_record(j,CIUKI_FETCH_DONE);
     bool keep=!j->cancelled && !j->error && j->sent==j->request_bytes && ciuki_http_reusable(j->http);
-    unsigned idle=0;for(unsigned i=0;i<8;i++)if(n->connections[i].state==IDLE)idle++;
-    if(keep && idle<2){j->finished=true;j->connection=NULL;c->job=NULL;c->state=IDLE;c->idle_ms=now_ms();}
+    unsigned idle=0,same=0;
+    for(unsigned i=0;i<CIUKI_NET_SLOTS;i++)if(n->connections[i].state==IDLE){idle++;if(origin(&n->connections[i],j))same++;}
+    if(keep && idle<CIUKI_NET_IDLE && same<2){
+        j->finished=true;j->connection=NULL;c->job=NULL;c->state=IDLE;c->idle_ms=now_ms();
+        for(unsigned i=0;i<CIUKI_NET_SLOTS;i++)
+            if(n->connections[i].state==WAITING && origin(c,n->connections[i].job) && reuse_idle(n,&n->connections[i]))break;
+    }
     else close_connection(n,c);
 }
 static void tunnel(struct ciuki_connection *c)
@@ -486,7 +583,7 @@ void ciuki_net_poll(struct ciuki_net *n)
     if(n->polling)return;n->polling=true;
     ciuki_net_service_idle(n);
     uint64_t now=now_ms();
-    for(unsigned i=0;i<8;i++){
+    for(unsigned i=0;i<CIUKI_NET_SLOTS;i++){
         struct ciuki_connection *c=&n->connections[i];struct ciuki_job *j=c->job;
         if(c->state==IDLE)continue;
         if(!j)continue;
@@ -503,7 +600,7 @@ void ciuki_net_poll(struct ciuki_net *n)
                     else if(error==EHOSTUNREACH)network_message(j,"DNS lookup failed: the server name could not be resolved.");
                     else io_error(j,error);
                 }
-                else open_connection(c,address);
+                else open_connection(n,c,address);
             }
         }
         if(!j->error && !j->cancelled && c->state==CONNECTING){
@@ -512,9 +609,19 @@ void ciuki_net_poll(struct ciuki_net *n)
             else if(r>0){int error=0;socklen_t bytes=sizeof(error);
                 if(getsockopt(c->fd,SOL_SOCKET,SO_ERROR,&error,&bytes))io_error(j,errno);
                 else if(error)io_error(j,error);
-                else {c->state=j->secure && j->proxy_port?TUNNEL:TRANSFER;if(c->tls && c->state==TRANSFER)ciuki_net_record(j,CIUKI_FETCH_TLS);}
+                else {
+                    j->io_errno=0;
+                    c->state=j->secure && j->proxy_port?TUNNEL:TRANSFER;if(c->tls && c->state==TRANSFER)ciuki_net_record(j,CIUKI_FETCH_TLS);
+                    if(n->limit && ++n->limit>=CIUKI_NET_SLOTS)n->limit=0;
+                }
             }
         }
+        if(!j->error && !j->cancelled && c->state==WAITING && !reuse_idle(n,c) && now>=c->retry_ms){
+            struct ciuki_connection *idle=at_limit(n)?unwanted_idle(n):NULL;
+            if(idle)close_connection(n,idle);
+            if(!at_limit(n))open_connection(n,c,c->address);
+        }
+        if(c->state==EMPTY)continue; /* the job moved to a kept-alive connection */
         if(!j->error && !j->cancelled && c->state==TUNNEL)tunnel(c);
         if(!j->error && !j->cancelled && c->state==TRANSFER)transfer(c,n->input);
         /* A stale idle socket can be retried once, only for idempotent methods
@@ -539,11 +646,15 @@ int ciuki_net_timeout(struct ciuki_net *n,int timeout)
 {
     if(!n)return timeout;
     uint64_t now=now_ms();
-    for(unsigned i=0;i<8;i++){
+    for(unsigned i=0;i<CIUKI_NET_SLOTS;i++){
         struct ciuki_connection *c=&n->connections[i];uint64_t end;
         if(c->state==IDLE)end=c->idle_ms+15000;
         else if(c->job)end=c->job->started_ms+30000;
         else continue;
+        /* A wait that is due runs as soon as a socket is free; one blocked by
+         * the limit wakes with the connection that frees it. */
+        if(c->state==WAITING && c->retry_ms>now && c->retry_ms<end)end=c->retry_ms;
+        if(c->state==WAITING && c->retry_ms<=now && (!at_limit(n) || unwanted_idle(n)))end=now;
         uint64_t left=end>now?end-now:0;
         if(c->job && c->tls && (ciuki_tls_state(c->tls)&BR_SSL_RECVAPP))left=0;
         if(timeout<0 || left<(unsigned)timeout)timeout=left>INT_MAX?INT_MAX:(int)left;
@@ -553,7 +664,7 @@ int ciuki_net_timeout(struct ciuki_net *n,int timeout)
 unsigned ciuki_net_fds(struct ciuki_net *n,struct pollfd fds[8])
 {
     unsigned count=0;
-    for(unsigned i=0;i<8;i++){
+    for(unsigned i=0;i<CIUKI_NET_SLOTS;i++){
         struct ciuki_connection *c=&n->connections[i];if(c->fd<0)continue;
         short events=POLLIN;
         if(c->state==CONNECTING)events=POLLOUT;

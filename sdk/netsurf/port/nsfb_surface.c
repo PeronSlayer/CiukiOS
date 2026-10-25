@@ -228,7 +228,7 @@ static int update(nsfb_t *fb,nsfb_bbox_t *box)
     struct ciuki_browser_surface *s=fb->surface_priv;if(!s)return -1;
     nsfb_bbox_t b=box?*box:(nsfb_bbox_t){0,0,fb->width,fb->height};
     b.y0+=CIUKI_BROWSER_TOP;b.y1+=CIUKI_BROWSER_TOP;
-    ciuki_browser_damage(s,b);return ciuki_browser_present(s);
+    return ciuki_browser_update(s,b);
 }
 static int cursor(nsfb_t *fb,struct nsfb_cursor_s *value) { (void)fb;(void)value;return 0; }
 static const nsfb_surface_rtns_t routines={.defaults=defaults,.initialise=initialise,.finalise=finalise,

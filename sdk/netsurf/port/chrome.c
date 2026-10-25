@@ -317,6 +317,12 @@ void ciuki_chrome_render(void)
         ciuki_browser_damage(surface,(nsfb_bbox_t){0,ui.canvas.height-CIUKI_BROWSER_STATUS,ui.canvas.width,ui.canvas.height});status_dirty=false;
     }
 }
+/* fx-nsperf: libnsfb updates only collect damage (surface.c). The frame
+ * drawn in a main-loop turn is presented at its end, before the scheduler
+ * can run a long layout; while input is still queued (several wheel
+ * detents) the next turns draw first and one present covers them all. */
+void ciuki_chrome_present(void)
+{ if(active && surface && !surface->count)ciuki_browser_present(surface); }
 void ciuki_chrome_status(const char *text)
 { if(active) { du_set_text(du_get(&ui,STATUS),text?text:"");status_dirty=true; } }
 /* The URL the core last displayed: for its internal query pages this is the
@@ -629,6 +635,7 @@ int ciuki_chrome_arguments(int *argc,char **argv)
         else if(!strncmp(a,"--ciuki-resources=",18)) { ciuki_resource_path=a+18;consumed=true; }
         else if(!strncmp(a,"--ciuki-profile=",16)) { profile_path=a+16;profile_requested=true;consumed=true; }
         else if(!strncmp(a,"--ciuki-capture=",16)) { ciuki_capture_path=a+16;consumed=true; }
+        else if(!strcmp(a,"--ciuki-frame-bench")) { ciuki_frame_bench=true;consumed=true; }
         else if(!strncmp(a,"--ciuki-log=",12)) { ciuki_netsurf_log_path=a+12;consumed=true; }
         else if(!strncmp(a,"--ciuki-clock-scale=",20)) {
             /* f6-20 T23 model: charge host layouts as a slower CPU. */
@@ -642,12 +649,12 @@ int ciuki_chrome_arguments(int *argc,char **argv)
      * with the trust anchors the profile selects. */
     ciuki_test_arm();
     /* fx-15: the body faces load while the rest of start-up runs. */
-    if(!ciuki_capture_path)ciuki_font_prefetch();
+    if(!ciuki_capture_path && !ciuki_frame_bench)ciuki_font_prefetch();
     return 0;
 }
 int ciuki_chrome_start(void)
 {
-    if(ciuki_capture_path && !profile_requested)return 0;
+    if((ciuki_capture_path || ciuki_frame_bench) && !profile_requested)return 0;
     profile_ready=ciuki_profile_init(profile_path)==0;
     if(!profile_ready)return -1;
     const char *bookmarks_path=ciuki_profile_path("Bookmarks.html");
@@ -681,6 +688,7 @@ void ciuki_chrome_exit_reason(const char *reason)
 /* Builds without the native fetcher (unit harnesses) report "unknown". */
 __attribute__((weak)) const char *ciuki_net_state_word(void);
 __attribute__((weak)) size_t ciuki_net_fetch_summary(char *,size_t);
+__attribute__((weak)) unsigned ciuki_net_connect_retries(void);
 __attribute__((format(printf,3,4)))
 static int format_line(char *line,size_t size,const char *format,...)
 { va_list ap;va_start(ap,format);int n=ciuki_line_vformat(line,size,format,ap);va_end(ap);return n; }
@@ -689,10 +697,14 @@ static int exit_line(char *line,size_t size,bool surface)
     struct ciuki_browser_surface *s=surface?ciuki_browser_active:NULL;
     char fetches[128]=" ";
     if(!ciuki_net_fetch_summary || !ciuki_net_fetch_summary(fetches+1,sizeof(fetches)-1))fetches[0]=0;
-    return format_line(line,size,"[netsurf] exit reason=%s detail=%d layout_rejections=%u layout_max_us=%llu local_max_us=%llu remote_max_us=%llu input_overflows=%u keepalive_pumps=%u%s network=%s",
+    /* fx-nsperf: present work (DAMAGE messages, refused sends) and connects
+     * retried after the system refused a socket. */
+    return format_line(line,size,"[netsurf] exit reason=%s detail=%d layout_rejections=%u layout_max_us=%llu local_max_us=%llu remote_max_us=%llu input_overflows=%u keepalive_pumps=%u presents=%llu damage_messages=%llu present_refused=%llu connect_retries=%u%s network=%s",
             exit_reason?exit_reason:"unknown",exit_detail,ciuki_layout_rejections,
             (unsigned long long)(ciuki_layout_max_ns/1000u),(unsigned long long)(ciuki_layout_local_max_ns/1000u),
-            (unsigned long long)(ciuki_layout_remote_max_ns/1000u),s?s->overflows:0u,s?s->pumps:0u,fetches,
+            (unsigned long long)(ciuki_layout_remote_max_ns/1000u),s?s->overflows:0u,s?s->pumps:0u,
+            (unsigned long long)(s?s->stats.presents:0),(unsigned long long)(s?s->stats.messages:0),(unsigned long long)(s?s->stats.refused:0),
+            ciuki_net_connect_retries?ciuki_net_connect_retries():0u,fetches,
             ciuki_net_state_word?ciuki_net_state_word():"unknown");
 }
 /* Appends "<UTC time> <line>"; past 64 KiB the file starts over. */

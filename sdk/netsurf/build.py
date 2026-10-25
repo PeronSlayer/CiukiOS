@@ -475,7 +475,7 @@ def build(host=False, clean=False, directory=None):
     env["PATH"]=str(hp / "bin")+os.pathsep+env.get("PATH",os.defpath)
     browser = tree / "netsurf"
     with (browser / "frontends/framebuffer/Makefile").open("a") as stream:
-        stream.write("\nS_FRONTEND += ciuki/js_memory.c ciuki/printing.c\n")
+        stream.write("\nS_FRONTEND += ciuki/js_memory.c ciuki/printing.c ciuki/framebench.c\n")
     # Build only the desktop toolkit, without its v1/v2 client transport.
     desk_objects=[]
     for source in [p for p in sorted((ROOT / "apps/libdeskui").glob("*.c")) if p.name!="client.c"] + sorted((ROOT / "apps/libprint").glob("*.c")) + [ROOT / "apps/desktop" / n for n in ("protocol.c", "compositor.c", "theme.c")]:

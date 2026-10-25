@@ -149,8 +149,9 @@ class NetworkTests(unittest.TestCase):
         compile("tls-limits",[HERE / "tls_limits_test.c"])
         compile("tls-entropy",[HERE / "tls_entropy_test.c",ROOT / "sdk/netsurf/port/tls.c"],
             ["-Wl,--wrap=getentropy,--wrap=clock_gettime,--wrap=br_ssl_engine_inject_entropy,--wrap=br_ssl_client_reset"])
+        # dns.c reads the native resolver header only outside CIUKI_HOST (G26b).
         compile("dns",[HERE / "dns_test.c",ROOT / "sdk/netsurf/port/dns.c"],
-            ["-Wl,--wrap=getaddrinfo,--wrap=freeaddrinfo,--wrap=calloc,--wrap=free,--wrap=pthread_create"])
+            ["-DCIUKI_HOST","-Wl,--wrap=getaddrinfo,--wrap=freeaddrinfo,--wrap=calloc,--wrap=free,--wrap=pthread_create"])
         cls.wraps=["-Wl,"+",".join("--wrap="+n for n in ("socket","connect","send","recv","close","fcntl","getsockopt","poll","getaddrinfo","freeaddrinfo","open"))]
         cls.stack=cls.compile_stack()
         compile("network",[HERE / "network_test.c",*[ROOT / ("sdk/netsurf/port/"+s+".c") for s in ("http","net","tls","dns")],*cls.stack],
@@ -429,6 +430,38 @@ class NetworkTests(unittest.TestCase):
                 self.assertTrue(any(f"/fx24/{name} stage=done code=200 " in line for line in done),name+"\n"+"\n".join(records))
             self.assertEqual(styled.failures(result.capture,640),[])
         self.browser("/fx24/styled.html",inspect=inspect,extra_env={"CIUKI_FIXTURE_SITE":site})
+
+    def test_page_with_40_images_under_a_socket_limit(self):
+        """fx-nsperf, T23 trial 2ca3b0b6: images of one HTTPS page failed at
+        connect with errno 105 (ENOBUFS) after about 5 s in the fetch queue,
+        five in a row. A refused connect gave up the image and freed its slot
+        for the next queued image, which was refused too. With the system
+        holding one TCP socket (stack_fixture.c browser-socket-limit), a page
+        with 40 images over HTTPS must still show every image: refusals wait
+        and retry, the browser never holds more sockets than the system
+        accepted, and later images use the kept-alive connection."""
+        import re
+        with tempfile.TemporaryDirectory(dir=OUT) as site:
+            image=(HERE / "fixtures/fx24/disc.png").read_bytes()
+            names=[f"img{i:02d}.png" for i in range(40)]
+            for name in names:(Path(site) / name).write_bytes(image)
+            (Path(site) / "many.html").write_text("<!doctype html><title>Images</title><h1>Ciuki</h1>"+
+                "".join(f'<img src="{name}" width="20" height="20" alt="{name}">' for name in names))
+            def inspect(result):
+                records=self.fetch_records(result)
+                self.assertEqual([line for line in records if " stage=error " in line],[])
+                done=[line for line in records if " stage=done code=200 " in line]
+                for name in names:
+                    self.assertTrue(any(f"/fx24/{name} stage=done code=200 " in line for line in done),name+"\n"+result.stderr)
+                limit=re.search(r"fixture_socket_limit refusals=(\d+) max_live=(\d+) connections=(\d+)",result.stdout)
+                self.assertIsNotNone(limit,result.stdout)
+                print(limit[0],flush=True)
+                self.assertGreater(int(limit[1]),0)
+                self.assertEqual(int(limit[2]),1)
+                self.assertIn("[netsurf] connect-wait url=https://fixture.example/fx24/",result.stderr)
+                retries=re.search(r"\[netsurf\] exit reason=\S+ .* connect_retries=(\d+) fetches=",result.stderr)
+                self.assertTrue(retries and int(retries[1])>0,result.stderr)
+            self.browser("/fx24/many.html",mode="browser-socket-limit",scheme="https",inspect=inspect,extra_env={"CIUKI_FIXTURE_SITE":site})
 
     def test_navigation_during_blocked_lookup(self):
         self.browser("/",mode="browser-blocked",host="blocked.example",expected="fixture_navigation_blocked=1 completed=1 late_ignored=1")

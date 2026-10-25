@@ -95,6 +95,21 @@ def news_front_large(seed=5):
     """The largest ordinary page: about 600 KB and 20,000 DOM nodes."""
     return news_front(seed,teasers=1300).replace("<title>News Front</title>","<title>News Front Large</title>")
 
+def portal(seed=7,sections=30):
+    """fx-nsperf: a portal page using eight text styles (three families,
+    bold, italic, five sizes), the glyph cache's worst ordinary case."""
+    rng=random.Random(seed)
+    parts=["<!doctype html><html><head><meta charset=utf-8><title>Portal</title><style>"
+           "body{font-family:sans-serif;font-size:14px} h1{font-size:30px} h2{font-size:22px;font-family:serif} h3{font-size:17px}"
+           ".s{font-size:11px} .m{font-family:monospace;font-size:13px} .q{font-family:serif;font-style:italic;font-size:15px}"
+           ".b{font-weight:bold;font-size:16px} .big{font-size:19px}</style></head><body><h1>"+words(rng,5)+"</h1>"]
+    for _ in range(sections):
+        parts.append(f"<h2>{words(rng,6)}</h2><h3>{words(rng,8)}</h3><p class=s>{words(rng,20)}</p>"
+                     f"<p>{words(rng,60)} <b>{words(rng,5)}</b> <i>{words(rng,6)}</i></p><p class=q>{words(rng,30)}</p>"
+                     f"<pre class=m>{words(rng,12)}\n{words(rng,12)}</pre><p class=b>{words(rng,15)}</p><p class=big>{words(rng,25)}</p>")
+    parts.append("</body></html>")
+    return "".join(parts)
+
 PAGES={"search-home.html":search_home,"news-front.html":news_front,"article.html":article,
        "forum-thread.html":forum_thread,"nested-100.html":nested,"news-front-large.html":news_front_large}
 TITLES=("Search Home","News Front","Long Article","Forum Thread","Nested","News Front Large")
