@@ -11,17 +11,13 @@
   ],
   "format": "MindVision Installer VISE self-extractor (69,632-byte stub plus a 48,838,230-byte obfuscated payload that begins with the ESIV marker); no host tool unpacks it, so it is installed unmodified and run by the Win32 loader",
   "install": {
-    "directory": "Quake III Arena Demo Setup",
-    "windows_path": "C:\\Games\\Quake III Arena Demo Setup\\Q3ADemo.exe",
+    "directory": "Quake III Arena Demo",
+    "windows_path": "C:\\Documents\\Desktop\\Quake III Arena Demo\\Q3ADemo.exe",
+    "location": "/Documents/Desktop/Quake III Arena Demo (desktop folder; Q3ADemo.exe, Q3A_EULA.txt, README.txt)",
     "files": [
       {"name": "Q3ADemo.exe", "size": 48907862, "sha256": "6af96cb1b5c97535c9923d8855ca85ec21b21b65b48738b2c5e674e17c65835d", "role": "installer"}
     ],
-    "menu_entry": {
-      "group": "Programs > Games",
-      "label": "Install Quake III Arena Demo",
-      "target": "C:\\Games\\Quake III Arena Demo Setup\\Q3ADemo.exe",
-      "defined_in": "apps/desktop/shell.c programs[] (name q3demo), started through the Win32 launch path"
-    }
+    "start_menu": "none built in; the installer creates its own Start Menu shortcuts, merged by the shell"
   },
   "license": "id Software Limited Use Software License Agreement for the Quake III: Arena demo (Q3A_EULA.txt, shown by the installer)",
   "license_files": [
