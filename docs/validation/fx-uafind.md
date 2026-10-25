@@ -70,3 +70,39 @@ Host evidence and before/after replay results are recorded in
 estimate; it does not establish hardware speed or identify the trial's actual
 kernel CPU attribution. Runtime integration and hardware qualification belong
 to the lead.
+
+## Lead amendment 1: indexed host fixtures
+
+Continuation on 2026-10-25: the F0-44 bounded-memory fixture still constructed
+786,432 nodes as a list without populating the AVL tree. Its lookup failure
+was a fixture mismatch. The fixture now calls the production `extent_insert`
+helper for every node (O(n log n) setup, outside measured work), validates the
+complete tree/list/height/parent/count invariants, and forces a cold lookup
+for every mapped page. The existing R1 cost model charges 1 microsecond per
+production tree-node visit, as it already does for range-node visits.
+
+The maximum lookup depth is 20 (conservative logarithmic bound 40), with a
+20 microsecond modeled uninterrupted span. A last-hit lookup visits zero tree
+nodes; misses and vacancy checks also stay within the validated height.
+Point searches allocate no metadata pin and invoke no service point.
+Full-range pin checks and first-fit walks each visit all 786,432 records and
+execute 6,144 service points. Their maximum spans are 148.2 and 128.2
+microseconds respectively, below the original 2 millisecond bound; total
+service overhead remains below the original 10 percent ceiling. The pinned
+range walk still refuses a concurrent insertion with `-EBUSY` and releases
+its pin. No list is truncated behind the index.
+
+The host-fixture audit also found an eager-image extent in `reclaim_test.c`
+and a singleton stack in `proc/app_gate_test.c`. Reclaim now inserts/removes
+through production index helpers and checks cache invalidation. The app-gate
+controller does not link the memory manager; its singleton model explicitly
+initializes the matching root, head, count and leaf height. Its other tree
+links remain zero.
+
+The whole `tests.host.test_kernel_latency` module passes all 15 tests with
+its existing ASan/UBSan/LSan policy. This amendment changes host fixtures and
+instrumentation only. The primary-source decision above still applies:
+Microsoft's VAD documentation exposes tree depth, while the local Windows 98
+Resource Kit describes demand paging rather than an index implementation.
+The continuation verification table and any remaining sandbox limits are in
+`build/codex/fx-uafind-report.md`.

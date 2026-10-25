@@ -256,7 +256,8 @@ static void eager_alias_reuse(void)
     struct uaddr u; CHECK(!ua_init(&u,&u));
     struct ua_extent eager={.base=CIUKI_MMAP_BASE,.end=CIUKI_MMAP_BASE+PAGE_SIZE,
         .prot=3,.maximum=3,.kind=UA_W32,.w32_type=W32_MEM_IMAGE};
-    u.head=&eager;
+    extent_insert(&u,&eager); u.extents++;
+    CHECK(ua_find(&u,CIUKI_MMAP_BASE)==&eager);
     uint32_t phys=pmm_alloc(); CHECK(phys); mm_claim(phys,1,MM_USER_PRIVATE);
     CHECK(ledger_commit(MM_USER_PRIVATE,1));
     CHECK(!as_map(&u.as,CIUKI_MMAP_BASE,phys,PTE_U|PTE_W));
@@ -271,7 +272,9 @@ static void eager_alias_reuse(void)
     sample_space=&u.as; sample_va=0xa0000; CHECK(!vmm_sample_step(123));
     CHECK(!(pmm_descriptor(0xa0000)->reserved&MM_PAGE_TOUCHED));
     set_pte(&u,0xa0000,pte(&u,0xa0000,false),0);
-    cr3=0; u.head=0; as_destroy(&u.as);
+    cr3=0; extent_remove(&u,&eager); u.extents--;
+    CHECK(!u.head && !u.root && !u.last_hit && !u.extents);
+    as_destroy(&u.as);
     CHECK(pmm_free_count()==baseline && ledger_reconcile());
     puts("TRACE M3 eager translation invalidated before first PMM-free publication: PASS");
 }
