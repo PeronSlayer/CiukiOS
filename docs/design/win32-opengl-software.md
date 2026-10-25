@@ -1,5 +1,235 @@
 # Win32 software OpenGL (f7-07)
 
+## Quake III Arena (f7-08): research and implementation decisions
+
+Primary sources checked for this amendment:
+[id Software renderer and Win32 source](https://github.com/id-Software/Quake-III-Arena/tree/master/code)
+(`qgl.h`, `win_qgl.c`, `win_glimp.c`, `tr_init.c`, `tr_backend.c`,
+`tr_shade.c`, `tr_image.c`, `tr_surface.c`; also the sky, shadow and view
+paths), [GL 1.1](https://registry.khronos.org/OpenGL/specs/gl/glspec11.pdf),
+[multitexture](https://registry.khronos.org/OpenGL/extensions/ARB/ARB_multitexture.txt),
+[compiled arrays](https://registry.khronos.org/OpenGL/extensions/EXT/EXT_compiled_vertex_array.txt),
+[environment ADD](https://registry.khronos.org/OpenGL/extensions/EXT/EXT_texture_env_add.txt),
+[S3TC](https://registry.khronos.org/OpenGL/extensions/EXT/EXT_texture_compression_s3tc.txt),
+[legacy S3 tokens](https://registry.khronos.org/OpenGL/extensions/S3/S3_s3tc.txt), and
+[WGL swap control](https://github.com/KhronosGroup/OpenGL-Registry/blob/main/extensions/EXT/WGL_EXT_swap_control.txt).
+The GPL source is a behavior reference; no game code is incorporated into the DLL.
+The released GPL renderer is later than the requested 1.11 demo; its inventory
+is a source-based compatibility target, pending execution of that binary.
+
+Pre-f7-08 repository comparison: multitexture, ADD, compiled-array lock state and EXT
+S3TC decoding already existed. The renderer rejected line width,
+stencil operations and stencil clears, and had only 255 live texture slots.
+GDI32 owned the four D16/S0 pixel descriptors; new depth/stencil formats required
+a coordinated GDI32 change. Quake's normal ICD path calls GDI's format functions
+directly, so exporting alternate WGL descriptors cannot fix that path.
+Lead amendment 1 selects CiukiOS opengl32 as the system driver, regardless of
+backend. Microsoft's [PIXELFORMATDESCRIPTOR reference](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-pixelformatdescriptor)
+assigns PFD_GENERIC_FORMAT to the generic GDI implementation; driver-supported
+formats clear it. All CiukiOS formats therefore clear PFD_GENERIC_FORMAT and
+PFD_GENERIC_ACCELERATED. Quake's default ICD selection accepts them without
+`r_allowSoftwareGL`; the renderer string still identifies software rendering.
+The same amendment authorizes real GDI descriptors: preserve indices 1–4,
+report XRGB storage as cColorBits=32 with RGB 8/8/8 at shifts 16/8/0 and
+cAlphaBits=0 (24 meaningful RGB bits; no destination alpha), and add
+double-buffered D24/S0, D16/S8 and D24/S8 pairs for XRGB and RGB565.
+This cColorBits storage convention is the lead's explicit interoperability
+decision; the Microsoft member description otherwise excludes alpha planes.
+Keep legacy GL_S3_s3tc absent (Quake uploads its different internal format
+tokens); existing EXT block uploads remain independently supported. Swap
+control is explicitly accepted as absent for this milestone by amendment 1;
+it must stay absent until swaps can actually honor display periods;
+the extension requires more than storing an interval in the context.
+
+Performance changes must preserve integer fragment results and all existing
+goldens. Use exact incremental interpolation and early rejection before texture
+sampling; do not replace perspective correction with an unchecked affine
+approximation. Host timings and an explicit scalar PIII cost model are evidence
+for this synthesized workload only, not measured guest/game frame rates.
+
+
+### Lead amendment 2: reviewed corrections and measured hot paths
+
+Research rechecked before implementation on 2026-10-25. [GL 1.1 §§3.8.1–2](https://registry.khronos.org/OpenGL/specs/gl/glspec11.pdf)
+requires border components to follow the image base format, fractional repeat
+coordinates even for negative inputs, and a 0.5 min/mag transition for LINEAR
+magnification with NEAREST_MIPMAP_NEAREST/LINEAR minification. Preserve exact
+integer interpolation and D24 line depths; fix the intermediate product width.
+[glIsEnabled](https://learn.microsoft.com/en-us/windows/win32/opengl/glisenabled)
+includes client arrays; the texture coordinate query uses the client unit from
+[ARB_multitexture](https://registry.khronos.org/OpenGL/extensions/ARB/ARB_multitexture.txt)
+(client state selection also in [GL 1.3 §2.8](https://registry.khronos.org/OpenGL/specs/gl/glspec13.pdf)).
+[glViewport](https://learn.microsoft.com/en-us/windows/win32/opengl/glviewport)
+clamps positive dimensions to the advertised maximum. Keep application origins
+for queries and use bounded internal coordinates for the TinyGL adapter.
+
+The lead's real-demo profile predates f7-08: its per-channel interpolation
+is already replaced by exact incremental planes in 50926c685. Remaining repeat
+coordinate reduction still uses wide remainder; replace it by a low-16-bit mask.
+Remove wide reciprocal division from ordinary perspective spans using an exact
+normalized integer reciprocal with correction. Keep pathological small-Q,
+sliver and fractional trilinear fallbacks, with independent division oracles.
+
+[SetDeviceGammaRamp](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-setdevicegammaramp)
+belongs to the display device. Bind the q3run GDI presenter/count and ramp/serial
+interfaces optionally, without an import requirement on this branch. Register
+once per full-screen context at MakeCurrent (before Quake probes gamma),
+unregister when it releases presentation, and
+send the existing W32_DISPLAY_GAMMA record before a frame whenever the ramp
+serial or exact lease token/generation changes. Retry failed updates. Test
+payloads and lifetime through the production present path. No public ABI change
+is needed; the transport and ramp records already exist.
+
+The normal reciprocal uses one 32-bit divide to seed a normalized integer
+Newton correction, then bounded exact quotient/remainder correction. A million
+denominators/projections match division, including both signs. A target-i686
+LLVM IR audit follows helper calls from repeat/reciprocal wrappers and rejects
+64-bit division/remainder operations. Small-Q and trilinear/sliver fallbacks
+remain outside that audit. Mip-chain maximum selection now uses one bit scan
+and is skipped for magnification and nonmip filtering. The existing model keeps
+its conservative 160-cycle perspective coefficient for the new seeded reciprocal;
+it has no separate repeat-modulo charge and cannot quantify that removed cost.
+All rendered goldens remain unchanged; the LOD oracle has only the documented
+0.5-crossover encoding correction.
+
+### Quake III coverage inventory
+
+The table covers all 59 GL 1.1 calls referenced by the examined renderer,
+view, sky, shadow and Win32 initialization paths. `qgl.h`/`win_qgl.c` additionally
+bind the complete GL 1.1 ABI: all 336 declarations resolve in the export census;
+that does not imply conformance for unexercised APIs such as evaluators.
+
+| Family | GL 1.1 entry points | Implementation/evidence |
+| --- | --- | --- |
+| Queries | `glGetString`, `glGetError`, `glGetIntegerv` | Existing paths retained; exact host scenes and Quake default-state/array replay. |
+| Immediate geometry | `glBegin`, `glEnd`, `glVertex2f`, `glVertex3f`, `glVertex3fv`, `glColor3f`, `glColor4f`, `glColor4ubv`, `glTexCoord2f`, `glTexCoord2fv` | Existing paths retained; exact host scenes and Quake default-state/array replay. |
+| Client arrays | `glArrayElement`, `glDrawElements`, `glVertexPointer`, `glColorPointer`, `glTexCoordPointer`, `glEnableClientState`, `glDisableClientState` | Existing paths retained; exact host scenes and Quake default-state/array replay. |
+| Transforms | `glMatrixMode`, `glLoadIdentity`, `glLoadMatrixf`, `glOrtho`, `glPushMatrix`, `glPopMatrix`, `glTranslatef`, `glClipPlane` | Existing paths retained; exact host scenes and Quake default-state/array replay. |
+| Raster state | `glEnable`, `glDisable`, `glViewport`, `glScissor`, `glCullFace`, `glPolygonMode`, `glPolygonOffset`, `glShadeModel`, `glLineWidth` | New line-width state and scalar wide lines; existing clipping/culling/viewport paths. |
+| Fragment and clear state | `glClear`, `glClearColor`, `glClearDepth`, `glColorMask`, `glDepthFunc`, `glDepthMask`, `glDepthRange`, `glAlphaFunc`, `glBlendFunc`, `glStencilFunc`, `glStencilOp` | New stencil state/operations and rounded alpha reference; D16/D24 attachments. |
+| Texture objects and images | `glBindTexture`, `glDeleteTextures`, `glTexImage2D`, `glTexSubImage2D`, `glTexParameterf`, `glTexParameterfv`, `glTexEnvf` | Dynamic names (2048 live objects tested), owned border-color state and GL_CLAMP border filtering; existing uploads/mips. |
+| Lists, synchronization and pixels | `glCallList`, `glFinish`, `glDrawBuffer`, `glReadPixels` | Independent front/back read/draw buffers, masked dual clear/write, swap-copy and stencil readback; existing owned lists. |
+
+| Probed extension / WGL calls | Outcome |
+| --- | --- |
+| `GL_ARB_multitexture`: `glActiveTextureARB`, `glClientActiveTextureARB`, `glMultiTexCoord2fARB` | Advertised, two independent active/client units and matrix stacks; all declared ARB coordinate overloads retain their existing lookup tests. `GL_MAX_ACTIVE_TEXTURES_ARB` is the old name for token `0x84e2` (`GL_MAX_TEXTURE_UNITS_ARB`), returning 2. |
+| `GL_EXT_compiled_vertex_array`: `glLockArraysEXT`, `glUnlockArraysEXT` | Advertised; first/count queries, invalid ranges and nested/unmatched lock errors. Array contents remain authoritative; direct validated emission removes repeated dispatch/locking without caching state across draws. |
+| `GL_EXT_texture_env_add` | Advertised; saturated RGB sum, base-format-dependent alpha, no new entry points. MODULATE/REPLACE/ADD have specialized scalar loops. |
+| `GL_S3_s3tc` | Deliberately absent; the legacy `GL_RGB4_S3TC` request is not accepted. The source disables compression when this extension is absent. |
+| `GL_EXT_texture_compression_s3tc` | Existing advertised ARB compressed upload/subimage/retrieval with DXT1 RGB/RGBA, DXT3 and DXT5 decoding remains tested. It does not imply support for the legacy S3 tokens. |
+| `WGL_EXT_swap_control`: `wglSwapIntervalEXT`, `wglGetSwapIntervalEXT` | Absent, both lookups return null. Quake explicitly tolerates the failed probe. A display-period boundary and window-owned interval state are required before advertising it; no false success or timer-based imitation is added. |
+| `ChoosePixelFormat`, `DescribePixelFormat`, `SetPixelFormat`, `GetPixelFormat` | GDI-owned stable namespace. WGL-named aliases delegate to it for mini-driver clients; normal `opengl32.dll` ICD clients import GDI directly. Indices 1–4 retain D16/S0 and their buffering/color classes; indices 5–10 add double-buffered D24/S0, D16/S8 and D24/S8 in XRGB/RGB565 pairs. XRGB reports cColorBits=32, RGB 8/8/8, alpha 0; all are system-driver formats without GENERIC_FORMAT. |
+| `wglCreateContext`, `wglMakeCurrent`, `wglDeleteContext`, `wglGetCurrentContext`, `wglGetCurrentDC`, `wglGetProcAddress`, `wglShareLists` | Existing ownership/rebind/share rules retained. Context attachment precision and double buffering now come from the selected descriptor rather than the numeric format index. |
+| `SwapBuffers` / `wglSwapBuffers` | Existing GDI transport / direct WGL alias; successful double-buffer presentation copies back to front and preserves back, matching PFD_SWAP_COPY. Front drawing is submitted by Flush/Finish. |
+| `SetDeviceGammaRamp` / optional 3DFX gamma probes | GDI owns the ramp. Optional q3run GDI hooks register GL as a full-screen presenter; GL sends W32_DISPLAY_GAMMA on serial or lease changes. Without those hooks it does not register gamma support. No 3DFX gamma extension is advertised here. |
+
+### State, enum and format inventory
+
+| State / data | Enumerants and behavior used by the source |
+| --- | --- |
+| Queries and diagnostics | `GL_VENDOR`, `GL_RENDERER`, `GL_VERSION`, `GL_EXTENSIONS`, `GL_MAX_TEXTURE_SIZE`, `GL_MAX_ACTIVE_TEXTURES_ARB`; `GL_NO_ERROR`, `GL_INVALID_ENUM`, `GL_INVALID_VALUE`, `GL_INVALID_OPERATION`, `GL_STACK_OVERFLOW`, `GL_STACK_UNDERFLOW`, `GL_OUT_OF_MEMORY`. Renderer/vendor strings remain honest software identification, version starts with 1.1. |
+| Geometry / shading | `GL_TRIANGLES`, `GL_TRIANGLE_STRIP`, `GL_QUADS`, `GL_POLYGON`, `GL_LINES`; `GL_FLAT`, `GL_SMOOTH`; `GL_FRONT`, `GL_BACK`, `GL_FRONT_AND_BACK`, `GL_FILL`, `GL_LINE`, `GL_CULL_FACE`, `GL_POLYGON_OFFSET_FILL`; line widths 1 and 3. |
+| Matrices / clip / viewport | `GL_MODELVIEW`, `GL_PROJECTION`, `GL_CLIP_PLANE0`; column-major float matrices, user eye plane, viewport/scissor and depth range including collapsed sky and weapon ranges. Raster pixel depth now uses the selected depth precision and depth range too. |
+| Arrays and scalar types | `GL_VERTEX_ARRAY`, `GL_COLOR_ARRAY`, `GL_TEXTURE_COORD_ARRAY`; `GL_FLOAT` XYZ at 16-byte stride and ST at 8/16-byte stride, `GL_UNSIGNED_BYTE` RGBA at 4-byte stride; `GL_INDEX_TYPE` is a renderer macro for `GL_UNSIGNED_INT` indices, not a GL enumerant. Both units can change arrays inside a lock. `GL_TRUE`/`GL_FALSE` enable/mask values. |
+| Depth, alpha, blending | `GL_DEPTH_TEST`, `GL_ALPHA_TEST`, `GL_BLEND`; `GL_LEQUAL`, `GL_EQUAL`; alpha `GL_GREATER` 0, `GL_LESS` 0.5 and `GL_GEQUAL` 0.5. Reference rounds to nearest byte (0.5 becomes 128), per GL 1.1 sections 2.13.9/4.1.3. Blend sources: `GL_ZERO`, `GL_ONE`, `GL_DST_COLOR`, `GL_ONE_MINUS_DST_COLOR`, `GL_SRC_ALPHA`, `GL_ONE_MINUS_SRC_ALPHA`, `GL_DST_ALPHA`, `GL_ONE_MINUS_DST_ALPHA`, `GL_SRC_ALPHA_SATURATE`; destinations additionally `GL_SRC_COLOR`, `GL_ONE_MINUS_SRC_COLOR`. |
+| Stencil / overdraw / shadows | `GL_STENCIL_TEST`, `GL_STENCIL_BUFFER_BIT`, `GL_STENCIL_INDEX`; `GL_ALWAYS`, `GL_NOTEQUAL`, `GL_KEEP`, `GL_INCR`, `GL_DECR` in the game, plus all core comparisons and KEEP/ZERO/REPLACE/INCR/DECR/INVERT implemented and tested. Alpha precedes stencil; stencil fail/depth fail/depth pass operations honor the write mask. Increment/decrement saturate. An absent attachment always passes stencil, clear is harmless and stencil readback reports INVALID_OPERATION. |
+| Color and scissor | `GL_COLOR_BUFFER_BIT`, `GL_DEPTH_BUFFER_BIT`, `GL_SCISSOR_TEST`, color/depth write masks. FRONT/BACK/FRONT_AND_BACK and NONE draw selection have separate storage and masked writes. Read selection is independent. |
+| Texture state | `GL_TEXTURE_2D`, `GL_TEXTURE0_ARB`, `GL_TEXTURE1_ARB`, `GL_TEXTURE_ENV`, `GL_TEXTURE_ENV_MODE`, `GL_MODULATE`, `GL_REPLACE`, `GL_DECAL`, `GL_ADD`; `GL_TEXTURE_WRAP_S`, `GL_TEXTURE_WRAP_T`, `GL_REPEAT`, `GL_CLAMP`, `GL_TEXTURE_BORDER_COLOR`; `GL_TEXTURE_MIN_FILTER`, `GL_TEXTURE_MAG_FILTER`. |
+| Texture filtering | `GL_NEAREST`, `GL_LINEAR`, `GL_NEAREST_MIPMAP_NEAREST`, `GL_LINEAR_MIPMAP_NEAREST`, `GL_NEAREST_MIPMAP_LINEAR`, `GL_LINEAR_MIPMAP_LINEAR`; complete power-of-two mip chains and independent texture units. |
+| Image / readback formats | Uploads use `GL_RGBA` / `GL_UNSIGNED_BYTE`; RGB/RGBA internal choices include numeric 3/4, `GL_RGB`, `GL_RGBA`, `GL_RGB5`, `GL_RGB8`, `GL_RGBA4`, `GL_RGBA8`. Screenshots use RGB/RGBA bytes; overdraw uses STENCIL_INDEX bytes. PACK/UNPACK pitch, row length and skips remain tested. The optional legacy `GL_RGB4_S3TC` is excluded as above. |
+
+### Exact scalar optimization and qualification boundaries
+
+The rasterizer intersects three edge inequalities per row, then advances exact
+signed quotient/remainder attribute planes across the covered span. Constant
+attributes need no increments. Scissor and safe early depth rejection precede
+texture work; early rejection is disabled when stencil side effects are active.
+A bounded 48-bit reciprocal reconstructs both coordinates exactly, with a
+single remainder correction, and can be shared by both units. Very small Q
+keeps the original signed division. Trilinear filters keep fractional LOD, sharing
+one ordinary-case footprint division among the four quotient-rule derivatives.
+Nearest-mip filters calculate only the half-octave decision they consume.
+Power-of-two wrap uses masks, bilinear samples reuse row/column addressing,
+and common environment/blend modes have direct scalar loops. Amendment 1
+also retains exact perspective reciprocals between pixels with identical Q.
+Nonmip/nearest-mip decisions compare the undivided footprint numerator against
+integer thresholds (257 for minification, 363 for the half octave), with
+explicit overflow guards and the original maximum footprint. This eliminates
+the ordinary-case footprint division without changing its floor or saturation;
+trilinear and large sliver cases retain the old quotient path. Texture-size
+logarithms use scalar integer bit scans. Bilinear filtering uses the exact
+identity a*(256-f)+b*f = (a<<8)+(b-a)*f without intermediate rounding;
+REPEAT/CLAMP_TO_EDGE bypass border checks after their addressing is resolved.
+
+The 1500-case differential traversal shares texture/fragment helpers but uses
+the prior bounding-box and barycentric per-pixel division algorithm. It tests
+coverage, signed projective reconstruction, six filters, scissor, fog, alpha,
+blend, D16/D24 and stencil side effects. Existing independent perspective,
+derivative, clipping, pixel-format and fragment oracles remain in place.
+A frozen pre-amendment division-based LOD helper independently checks 20000
+cases plus exact threshold boundaries, overflow guards and sliver scaling.
+Constant non-unity positive/negative Q on each/both units exercises reciprocal
+reuse independently against the old per-pixel division traversal.
+All seven scene and eleven amendment golden values are unchanged. Old beta-only
+error expectations for FRONT/BOTH and stencil state are replaced with legal behavior;
+no rendered golden was edited. The four Quake replay goldens were captured
+before optimization. Alpha-reference rounding is a specification correction,
+covered independently with byte alphas 127 and 128 against GEQUAL 0.5.
+
+`quake3.c` synthesizes 3000 triangles at 320x240 and 640x480: sky (2),
+lightmapped world (1600), models (600), alpha/additive effects (400), HUD (398).
+The two-pass variant adds 1600 world triangles at EQUAL with DST_COLOR/ZERO.
+It uses locked indexed arrays, both texture stages, bilinear mips, ADD,
+MODULATE/REPLACE, alpha tests, depth and polygon offset. Frame timings include
+command submission, setup, clears and rasterization; they exclude SwapBuffers,
+compositor/scanout, game logic and asset loading. Three measured frames follow
+a warm frame; readback/checksum occurs outside the measured interval.
+D16/S0 remains the comparable baseline; a second replay selects the actual
+Quake default XRGB/D24/S8 through production GDI. Both must match the same four
+pre-optimization image hashes, with a broad wall-time bound;
+a same-process occluded-triangle comparison bounds early-depth regressions.
+Profile-mode tests additionally require no ordinary footprint divisions and
+fewer perspective divisions than half the covered pixels on this replay.
+
+Host-only SW_PROFILE counters (off in target builds) feed an explicitly
+assumed PIII-933 scalar cost model in the fixture, not a host-frequency scale.
+[Intel PIII product details](https://www.intel.com/pressroom/kits/quickreffam.htm)
+identify the 933 MHz / 133 MHz / 256 KiB L2 class. The cycle coefficients are
+engineering assumptions, not Intel latency measurements: triangle 700, span
+60, varying-attribute setup 120, attribute increment 12, covered pixel 16,
+shaded pixel 25, perspective division 160, LOD 120, wide division 160, texel
+12, texture stage 40, fragment 60, destination write 8, submitted vertex 220.
+Clear/depth/destination streaming traffic adds a 300 MiB/s budget; cached
+texture traffic is charged per texel. The displayed sensitivity range halves
+or doubles all costs; it is not a statistical confidence interval. TinyGL's
+x87 transform ABI is retained; the target recipe and PE disassembly forbid
+MMX/SSE. Host C float code uses the host ABI and is not a PIII timing proxy.
+
+| Indices | Color storage / meaningful RGB | Buffering | Depth / stencil |
+| --- | --- | --- | --- |
+| 1 / 2 | XRGB32 / RGB565 (24 / 16 RGB bits) | Double | D16 / S0 |
+| 3 / 4 | XRGB32 / RGB565 (24 / 16 RGB bits) | Single | D16 / S0 |
+| 5 / 6 | XRGB32 / RGB565 (24 / 16 RGB bits) | Double | D24 / S0 |
+| 7 / 8 | XRGB32 / RGB565 (24 / 16 RGB bits) | Double | D16 / S8 |
+| 9 / 10 | XRGB32 / RGB565 (24 / 16 RGB bits) | Double | D24 / S8 |
+
+ChoosePixelFormat prefers sufficient precision then the smallest excess, in
+color/depth/stencil order, with lower-index ties and the original XRGB/D16
+zero-request defaults. It respects buffering and requested drawing flags;
+unsupported stereo and GDI support fail. Quake's own descriptor enumeration
+finds the exact 32/D24/S8 match at index 9. All double-buffer formats report
+SWAP_COPY. The fixture/controller and suite capability count are now ten;
+scene hashes and the result-page layout are unchanged.
+
+D24/S8 tests use the production GDI namespace and context allocator without a
+descriptor adapter. Every format is selected and queried through GDI/WGL;
+the 32/D24/S8 default is additionally exercised with allocation-failure cleanup,
+masked/scissored clears, stencil readback and ordering, saturation, lists and
+raster pixel depth. Stencil is an independent S8 attachment for either D16 or
+D24; RGB565 affects color quantization only.
+Exact commands, measured speeds and environment failures are recorded in
+`build/codex/f7-glperf-report.md`.
+
 ## Amendment 3 cross-review decisions (2026-10-21)
 
 Primary sources rechecked before the fixes:
@@ -70,7 +300,8 @@ Research, 2026-10-20; primary sources rechecked 2026-10-21:
 - [PIXELFORMATDESCRIPTOR](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/ns-wingdi-pixelformatdescriptor)
   and [SetPixelFormat](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-setpixelformat):
   the descriptor is 40 bytes, format indices start at one, and a window's
-  format cannot change after selection. Software formats report GENERIC_FORMAT.
+  format cannot change after selection. Amendment f7-08 above supersedes the
+  earlier GENERIC_FORMAT decision: these are system-driver formats.
 - [wglGetProcAddress](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-wglgetprocaddress):
   unknown names and lookup without a current context fail.
 - [ARB multitexture](https://registry.khronos.org/OpenGL/extensions/ARB/ARB_multitexture.txt)

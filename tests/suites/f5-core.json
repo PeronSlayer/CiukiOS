@@ -1513,7 +1513,7 @@
                 "eq": 8
               },
               "pixel_formats": {
-                "eq": 4
+                "eq": 10
               },
               "fonts": {
                 "eq": 1

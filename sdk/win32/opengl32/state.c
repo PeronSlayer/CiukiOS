@@ -100,7 +100,15 @@ int gl_state(struct gl_context *c, unsigned id, const union gl_arg *a,
       RESTORE(sw.depth_func);
       RESTORE(clear_depth);
     }
+    if (mask & GL_STENCIL_BUFFER_BIT) {
+      RESTORE(sw.stencil_test); RESTORE(sw.stencil_func);
+      RESTORE(sw.stencil_ref); RESTORE(sw.stencil_mask);
+      RESTORE(sw.stencil_write_mask); RESTORE(sw.stencil_fail);
+      RESTORE(sw.stencil_zfail); RESTORE(sw.stencil_zpass); RESTORE(clear_stencil);
+    }
     if (mask & GL_COLOR_BUFFER_BIT) {
+      RESTORE(draw_buffer);
+      gl_select_buffer(c);
       RESTORE(sw.alpha_test);
       RESTORE(sw.alpha_func);
       RESTORE(sw.alpha_ref);
@@ -114,9 +122,7 @@ int gl_state(struct gl_context *c, unsigned id, const union gl_arg *a,
     if (mask & GL_VIEWPORT_BIT) {
       COPY(viewport);
       COPY(range);
-      glViewport(c->viewport[0], c->viewport[1],
-                 c->viewport[2] ? c->viewport[2] : 1,
-                 c->viewport[3] ? c->viewport[3] : 1);
+      gl_sync_viewport(c);
     }
     if (mask & GL_SCISSOR_BIT) {
       RESTORE(sw.scissor);
@@ -175,12 +181,16 @@ int gl_state(struct gl_context *c, unsigned id, const union gl_arg *a,
       RESTORE(list_base);
     if (mask & GL_HINT_BIT)
       RESTORE(compression_hint);
-    if (mask & GL_PIXEL_MODE_BIT)
-      COPY(zoom);
+    if (mask & GL_PIXEL_MODE_BIT) {
+      COPY(zoom); RESTORE(read_buffer);
+    }
+    if (mask & GL_LINE_BIT)
+      RESTORE(line_width);
     if (mask & GL_POINT_BIT)
       c->zb->pointsize = p->point;
     if (mask & GL_ENABLE_BIT) {
       RESTORE(sw.depth_test);
+      RESTORE(sw.stencil_test);
       RESTORE(sw.alpha_test);
       RESTORE(sw.blend);
       RESTORE(sw.scissor);

@@ -1,6 +1,7 @@
 /* GL 1.1 ABI personality over TinyGL and the scalar fragment backend.
  * SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "internal.h"
+#include "../../libgl/software/profile.h"
 static int clampi(int x, int a, int b) { return x < a ? a : x > b ? b : x; }
 static float compat_clamp(float x, float a, float b) {
   return !(x >= a) ? a : x > b ? b : x;
@@ -27,7 +28,7 @@ static int convert(struct gl_context *c, GLVertex *v, struct sw_vertex *out) {
   out->z = (int)(compat_clamp(c->range[0] +
                                   (z + 1) * 0.5f * (c->range[1] - c->range[0]),
                               0, 1) *
-                 65535);
+                 (c->depth_bits == 24 ? 16777215 : 65535));
   out->iw = (int)(iw * 1048576);
   for (int k = 0; k < 4; k++)
     out->color[k] = (int)(compat_clamp(v->color.v[k], 0, 1) * 255);
@@ -84,7 +85,8 @@ void gl_triangle(GLContext *tiny, GLVertex *a, GLVertex *b, GLVertex *d) {
       c->sw.offset = (int)compat_clamp(
           (float)(c->offset_units +
                   c->offset_factor * (dzdx > dzdy ? dzdx : dzdy)),
-          -65535, 65535);
+          c->depth_bits == 24 ? -16777215 : -65535,
+          c->depth_bits == 24 ? 16777215 : 65535);
     }
   }
   sw_triangle(&c->sw, v, v + 1, v + 2);
@@ -113,8 +115,18 @@ void gl_compat_line(GLContext *tiny, GLVertex *a, GLVertex *b) {
       for (int j = 0; j < n; j++)
         for (int i = 0; i < n; i++)
           sw_fragment(&c->sw, px + i, py + j, x.z, x.color);
-    } else
-      sw_line(&c->sw, &x, &y);
+    } else {
+      int width = (int)compat_clamp(c->line_width + 0.5f, 1, 64);
+      int dx = y.x - x.x, dy = y.y - x.y;
+      int horizontal = (dx < 0 ? -dx : dx) >= (dy < 0 ? -dy : dy);
+      for (int i = 0; i < width; i++) {
+        struct sw_vertex a = x, b = y;
+        int offset = (i - (width - 1) / 2) * 16;
+        if (horizontal) { a.y += offset; b.y += offset; }
+        else { a.x += offset; b.x += offset; }
+        sw_line(&c->sw, &a, &b);
+      }
+    }
   }
 }
 void gl_free_list(struct gl_list *l) {
@@ -190,7 +202,7 @@ int gl_record(struct gl_context *c, unsigned id, const union gl_arg *a) {
     break;
   case ID_glTexParameteriv:
   case ID_glTexParameterfv:
-    bytes = 4;
+    bytes = a[1].i == GL_TEXTURE_BORDER_COLOR ? 16 : 4;
     pointer = 2;
     break;
   case ID_glCallLists:
@@ -415,6 +427,7 @@ static double read_component(const void *p, int t, int i, int normalize) {
   return v;
 }
 static void element(struct gl_context *c, int index) {
+  SW_COUNT(SW_VERTEX, 1);
   if (index < 0) {
     gl_error(c, GL_INVALID_VALUE);
     return;
@@ -432,6 +445,26 @@ static void element(struct gl_context *c, int index) {
     float a[4] = {0, 0, 0, 1};
     for (int i = 0; i < v->size; i++)
       a[i] = (float)read_component(p, v->type, i, k == 1 || k == 2);
+    /* DrawElements already owns the context lock and has validated the array
+     * descriptors. Keep list compilation on the recording dispatcher. */
+    if (c->tiny.in_begin && !c->compiling) {
+      switch (k) {
+      case 0: glVertex4f(a[0], a[1], a[2], a[3]); break;
+      case 1: glColor4f(a[0], a[1], a[2], a[3]); break;
+      case 2: glNormal3f(a[0], a[1], a[2]); break;
+      case 3:
+      case 4:
+        for (int j = 0; j < 4; j++) {
+          c->texcoord[k-3][j] = a[j];
+          if (k == 3) c->tiny.current_tex_coord.v[j] = a[j];
+          else c->tiny.current_tex_coord1.v[j] = a[j];
+        }
+        break;
+      case 5: glEdgeFlag(*p); break;
+      default: break;
+      }
+      continue;
+    }
     switch (k) {
     case 0:
       w32_glVertex4f(a[0], a[1], a[2], a[3]);
@@ -489,9 +522,14 @@ static int family(struct gl_context *c, unsigned id, const union gl_arg *a) {
   return 1;
 }
 static int enabled(struct gl_context *c, int n) {
+  int array = array_index(c, n);
+  if (array >= 0)
+    return c->array[array].enabled;
   switch (n) {
   case GL_DEPTH_TEST:
     return c->sw.depth_test;
+  case GL_STENCIL_TEST:
+    return c->sw.stencil_test;
   case GL_ALPHA_TEST:
     return c->sw.alpha_test;
   case GL_BLEND:
@@ -583,6 +621,15 @@ static int get(struct gl_context *c, int name, double *v) {
   case GL_CLIENT_ATTRIB_STACK_DEPTH:
     *v = c->client_depth;
     break;
+  case GL_LINE_WIDTH:
+    *v = c->line_width;
+    break;
+  case GL_LINE_WIDTH_RANGE:
+    v[0] = 1; v[1] = 64;
+    return 2;
+  case GL_LINE_WIDTH_GRANULARITY:
+    *v = 1;
+    break;
   case GL_POINT_SIZE:
     *v = c->zb->pointsize;
     break;
@@ -606,17 +653,16 @@ static int get(struct gl_context *c, int name, double *v) {
     *v = c->binding[c->active][name == GL_TEXTURE_BINDING_2D]->name;
     break;
   case GL_DEPTH_BITS:
-    *v = 16;
+    *v = c->depth_bits;
     break;
   case GL_RED_BITS:
   case GL_BLUE_BITS:
-    *v = c->format & 1 ? 8 : 5;
+    *v = c->sw.rgb565 ? 5 : 8;
     break;
   case GL_GREEN_BITS:
-    *v = c->format & 1 ? 8 : 6;
+    *v = c->sw.rgb565 ? 6 : 8;
     break;
   case GL_ALPHA_BITS:
-  case GL_STENCIL_BITS:
   case GL_ACCUM_RED_BITS:
   case GL_ACCUM_GREEN_BITS:
   case GL_ACCUM_BLUE_BITS:
@@ -624,8 +670,19 @@ static int get(struct gl_context *c, int name, double *v) {
   case GL_AUX_BUFFERS:
     *v = 0;
     break;
+  case GL_STENCIL_BITS: *v = c->stencil_bits; break;
+  case GL_STENCIL_FUNC: *v = c->sw.stencil_func; break;
+  case GL_STENCIL_REF: *v = c->sw.stencil_ref; break;
+  case GL_STENCIL_VALUE_MASK: *v = c->sw.stencil_mask; break;
+  case GL_STENCIL_WRITEMASK: *v = c->sw.stencil_write_mask; break;
+  case GL_STENCIL_FAIL: *v = c->sw.stencil_fail; break;
+  case GL_STENCIL_PASS_DEPTH_FAIL: *v = c->sw.stencil_zfail; break;
+  case GL_STENCIL_PASS_DEPTH_PASS: *v = c->sw.stencil_zpass; break;
+  case GL_STENCIL_CLEAR_VALUE: *v = c->clear_stencil; break;
+  case GL_DRAW_BUFFER: *v = c->draw_buffer; break;
+  case GL_READ_BUFFER: *v = c->read_buffer; break;
   case GL_DOUBLEBUFFER:
-    *v = c->format <= 2;
+    *v = c->doublebuffer;
     break;
   case GL_RGBA_MODE:
     *v = 1;
@@ -795,7 +852,7 @@ union gl_arg w32_gl_dispatch(unsigned id, const union gl_arg *a) {
       result.p = "CiukiOS; TinyGL by Fabrice Bellard, Gek, C-Chads";
       break;
     case GL_RENDERER:
-      result.p = "CiukiOS scalar software; D16; no stencil/accumulation";
+      result.p = "CiukiOS scalar software OpenGL";
       break;
     case GL_VERSION:
       result.p = "1.1 CiukiOS software subset";
@@ -855,6 +912,8 @@ union gl_arg w32_gl_dispatch(unsigned id, const union gl_arg *a) {
     return result;
   case ID_glFlush:
   case ID_glFinish:
+    if ((c->draw_buffer == GL_FRONT || c->draw_buffer == GL_FRONT_LEFT || c->draw_buffer == GL_FRONT_AND_BACK) && !gl_present(c, 1))
+      gl_error(c, GL_INVALID_OPERATION);
     return result;
   case ID_glRenderMode:
     gl_state(c, id, a, &result);
@@ -1308,7 +1367,7 @@ union gl_arg w32_gl_dispatch(unsigned id, const union gl_arg *a) {
       break;
     }
     unsigned color = sw_color_format(&c->sw, rgba(c->clear));
-    int z = (int)(c->clear_depth * 65535);
+    int z = (int)(c->clear_depth * (c->depth_bits == 24 ? 16777215 : 65535));
     for (unsigned y = 0; y < c->sw.height; y++)
       for (unsigned x = 0; x < c->sw.width; x++) {
         if (c->sw.scissor && ((int)x < c->sw.box[0] || (int)y < c->sw.box[1] ||
@@ -1316,23 +1375,26 @@ union gl_arg w32_gl_dispatch(unsigned id, const union gl_arg *a) {
                               (int)y >= c->sw.box[1] + c->sw.box[3]))
           continue;
         unsigned p = (c->sw.height - 1 - y) * c->sw.width + x;
-        if (I(0) & GL_COLOR_BUFFER_BIT)
-          c->sw.color[p] =
-              (c->sw.color[p] & ~c->sw.color_mask) | (color & c->sw.color_mask);
+        if ((I(0) & GL_COLOR_BUFFER_BIT) && !c->sw.color_disabled) {
+          c->sw.color[p] = (c->sw.color[p] & ~c->sw.color_mask) | (color & c->sw.color_mask);
+          if (c->sw.color2) c->sw.color2[p] = (c->sw.color2[p] & ~c->sw.color_mask) | (color & c->sw.color_mask);
+        }
         if ((I(0) & GL_DEPTH_BUFFER_BIT) && c->sw.depth_write)
-          c->sw.depth[p] = z;
+          { if (c->sw.depth24) c->sw.depth24[p] = z;
+            else c->sw.depth[p] = z; }
+        if ((I(0) & GL_STENCIL_BUFFER_BIT) && c->sw.stencil)
+          c->sw.stencil[p] = (c->sw.stencil[p] & ~c->sw.stencil_write_mask) |
+                            (c->clear_stencil & c->sw.stencil_write_mask);
       }
     break;
   }
   case ID_glViewport:
-    if (I(2) < 0 || I(3) < 0 || I(2) > 2048 || I(3) > 2048 || I(0) < -2048 ||
-        I(0) > 2048 || I(1) < -2048 || I(1) > 2048)
+    if (I(2) < 0 || I(3) < 0)
       gl_error(c, GL_INVALID_VALUE);
     else {
       for (int k = 0; k < 4; k++)
-        c->viewport[k] = I(k);
-      if (I(2) && I(3))
-        glViewport(I(0), I(1), I(2), I(3));
+        c->viewport[k] = k < 2 ? I(k) : clampi(I(k), 0, 2048);
+      gl_sync_viewport(c);
     }
     break;
   case ID_glScissor:
@@ -1348,6 +1410,9 @@ union gl_arg w32_gl_dispatch(unsigned id, const union gl_arg *a) {
   case ID_glDisable: {
     int e = id == ID_glEnable;
     switch (I(0)) {
+    case GL_STENCIL_TEST:
+      c->sw.stencil_test = e;
+      break;
     case GL_DEPTH_TEST:
       c->sw.depth_test = e;
       break;
@@ -1415,7 +1480,7 @@ union gl_arg w32_gl_dispatch(unsigned id, const union gl_arg *a) {
     else {
       c->sw.alpha_func = I(0);
       c->alpha_ref = compat_clamp(F(1), 0, 1);
-      c->sw.alpha_ref = (int)(c->alpha_ref * 255);
+      c->sw.alpha_ref = (int)(c->alpha_ref * 255 + 0.5f);
     }
     break;
   case ID_glBlendFunc:
@@ -1501,6 +1566,9 @@ union gl_arg w32_gl_dispatch(unsigned id, const union gl_arg *a) {
       m[15] = 1;
       glMultMatrixf(m);
     }
+    break;
+  case ID_glLineWidth:
+    c->line_width = F(0);
     break;
   case ID_glShadeModel:
     glShadeModel(I(0));
@@ -1620,19 +1688,22 @@ union gl_arg w32_gl_dispatch(unsigned id, const union gl_arg *a) {
     if (I(0) == GL_TEXTURE_COMPRESSION_HINT_ARB)
       c->compression_hint = I(1);
     break;
-  case ID_glClearStencil:
+  case ID_glClearStencil: c->clear_stencil = (unsigned)I(0) & (c->stencil_bits ? 255 : 0); break;
   case ID_glStencilFunc:
-  case ID_glStencilMask:
+    c->sw.stencil_func = I(0); c->sw.stencil_ref = clampi(I(1), 0, c->stencil_bits ? 255 : 0);
+    c->sw.stencil_mask = (unsigned)I(2) & 255; break;
+  case ID_glStencilMask: c->sw.stencil_write_mask = (unsigned)I(0) & 255; break;
   case ID_glStencilOp:
-    gl_error(c, GL_INVALID_OPERATION);
-    break;
+    c->sw.stencil_fail = I(0); c->sw.stencil_zfail = I(1);
+    c->sw.stencil_zpass = I(2); break;
   case ID_glDrawBuffer:
-  case ID_glReadBuffer:
-    /* This beta has one software render buffer. Do not silently alias a
-     * request for a distinct front/back buffer to the current render target. */
-    if (I(0) != (c->format <= 2 ? GL_BACK : GL_FRONT))
-      gl_error(c, GL_INVALID_OPERATION);
+  case ID_glReadBuffer: {
+    int buffer = I(0);
+    if ((buffer == GL_BACK || buffer == GL_BACK_LEFT) && !c->doublebuffer) gl_error(c, GL_INVALID_OPERATION);
+    else if (id == ID_glReadBuffer) c->read_buffer = buffer;
+    else { c->draw_buffer = buffer; gl_select_buffer(c); }
     break;
+  }
   default:
     if (id == ID_glBitmap || id == ID_glDrawPixels || id == ID_glReadPixels ||
         id == ID_glCopyPixels || id == ID_glPixelZoom) {

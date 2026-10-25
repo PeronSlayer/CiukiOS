@@ -5,6 +5,9 @@
 #include <string.h>
 #include <ciuki/abi.h>
 #include <ciuki/bootstat.h>
+#include "../../sdk/win32/include/w32/gl_extensions.h"
+_Static_assert(GL_TEXTURE_COMPRESSION_HINT_ARB == 0x84efu,
+               "f7-08 GL_TEXTURE_COMPRESSION_HINT_ARB");
 #include "../../sdk/win32/include/w32/screen_saver.h"
 _Static_assert(SC_SCREENSAVE==0xf140u,"G10 SC_SCREENSAVE");
 _Static_assert(SC_MONITORPOWER==0xf170u,"G10 SC_MONITORPOWER");

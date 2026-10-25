@@ -67,7 +67,9 @@ void gl_error(struct gl_context *c, unsigned e) {
     c->error = e;
 }
 void gl_defaults(struct gl_context *c) {
-  c->sw.rgb565 = !(c->format & 1);
+  c->sw.stencil_func = GL_ALWAYS;
+  c->sw.stencil_mask = c->sw.stencil_write_mask = 255;
+  c->sw.stencil_fail = c->sw.stencil_zfail = c->sw.stencil_zpass = GL_KEEP;
   c->sw.depth_write = 1;
   c->sw.depth_func = GL_LESS;
   c->sw.alpha_func = GL_ALWAYS;
@@ -75,6 +77,9 @@ void gl_defaults(struct gl_context *c) {
   c->sw.dfactor = GL_ZERO;
   c->sw.color_mask = 0xffffffff;
   c->clear_depth = 1;
+  c->line_width = 1;
+  c->draw_buffer = c->read_buffer = c->doublebuffer ? GL_BACK : GL_FRONT;
+  gl_select_buffer(c);
   c->range[1] = 1;
   c->fog_density = 1;
   c->fog_end = 1;
@@ -128,6 +133,16 @@ int gl_window_coord(struct gl_context *c, double value, int axis) {
   int n = (int)scaled;
   return scaled < n ? n - 1 : n;
 }
+void gl_sync_viewport(struct gl_context *c) {
+  /* TinyGL adds signed origin+size and converts raster positions to int.
+   * Software mapping uses the original application viewport through the
+   * bounded gl_window_coord path. Keep only TinyGL's internal copy bounded. */
+  int x = c->viewport[0], y = c->viewport[1];
+  x = x < -2048 ? -2048 : x > 2048 ? 2048 : x;
+  y = y < -2048 ? -2048 : y > 2048 ? 2048 : y;
+  glViewport(x, y, c->viewport[2] ? c->viewport[2] : 1,
+              c->viewport[3] ? c->viewport[3] : 1);
+}
 void gl_window_state(struct gl_context *c) {
   int x = gl_window_coord(c, c->scissor[0], 0),
       y = gl_window_coord(c, c->scissor[1], 1);
@@ -140,7 +155,21 @@ unsigned gl_read_color(struct gl_context *c, int x, int y) {
       (unsigned)y >= c->drawable_height)
     return 0xff000000;
   x = gl_window_coord(c, x, 0); y = gl_window_coord(c, y, 1);
-  return c->sw.color[(c->sw.height - 1 - y) * c->sw.width + x] | 0xff000000;
+  uint32_t *source = (c->read_buffer == GL_FRONT || c->read_buffer == GL_FRONT_LEFT) ? c->front_color : c->back_color;
+  return source[(c->sw.height - 1 - y) * c->sw.width + x] | 0xff000000;
+}
+void gl_select_buffer(struct gl_context *c) {
+  c->sw.color = (c->draw_buffer == GL_FRONT || c->draw_buffer == GL_FRONT_LEFT) ? c->front_color : c->back_color;
+  c->sw.color2 = c->doublebuffer && c->draw_buffer == GL_FRONT_AND_BACK ? c->front_color : 0;
+  c->sw.color_disabled = c->draw_buffer == GL_NONE;
+}
+static void free_attachments(struct gl_context *c) {
+  if (c->doublebuffer) gl_dealloc(c->front_color);
+  c->front_color = c->back_color = 0;
+  gl_dealloc(c->sw.depth);
+  gl_dealloc(c->sw.depth24);
+  gl_dealloc(c->sw.stencil);
+  c->sw.depth = 0; c->sw.depth24 = 0; c->sw.stencil = 0;
 }
 int gl_refresh_target(struct gl_context *c, HDC dc) {
   unsigned dw, dh, window;
@@ -153,17 +182,25 @@ int gl_refresh_target(struct gl_context *c, HDC dc) {
         .biHeight = -(LONG)h, .biPlanes = 1, .biBitCount = 32}};
     void *bits = 0;
     HBITMAP back = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &bits, 0, 0);
-    uint16_t *depth = gl_alloc(w * h * 2);
-    if (!back || !bits || !depth) {
+    void *depth = gl_alloc(w * h * (c->depth_bits == 24 ? 4 : 2));
+    uint8_t *stencil = c->stencil_bits ? gl_alloc(w * h) : 0;
+    uint32_t *front = c->doublebuffer ? gl_alloc(w * h * 4) : bits;
+    if (!back || !bits || !depth || (c->stencil_bits && !stencil) || !front) {
       if (back) DeleteObject(back);
       gl_dealloc(depth);
+      gl_dealloc(stencil);
+      if (c->doublebuffer) gl_dealloc(front);
       return 0;
     }
     /* Contents after drawable resize are undefined; never expose old storage. */
     gl_release_present(c);
     if (c->back) DeleteObject(c->back);
-    gl_dealloc(c->sw.depth);
-    c->back = back; c->sw.color = bits; c->sw.depth = depth;
+    free_attachments(c);
+    c->back = back; c->back_color = bits; c->front_color = front;
+    gl_select_buffer(c);
+    if (c->depth_bits == 24) c->sw.depth24 = depth;
+    else c->sw.depth = depth;
+    c->sw.stencil = stencil;
     c->sw.width = w; c->sw.height = h;
   }
   c->drawable_width = dw; c->drawable_height = dh;
@@ -185,6 +222,17 @@ HGLRC W32API wglCreateContext(HDC dc) {
   struct gl_context *c = gl_alloc(sizeof(*c));
   if (!c)
     return 0;
+  PIXELFORMATDESCRIPTOR pfd;
+  if (!DescribePixelFormat(dc, format, sizeof(pfd), &pfd) ||
+      (pfd.cDepthBits != 16 && pfd.cDepthBits != 24) ||
+      (pfd.cStencilBits && pfd.cStencilBits != 8)) {
+    gl_dealloc(c); return 0;
+  }
+  c->format = format;
+  c->depth_bits = pfd.cDepthBits;
+  c->stencil_bits = pfd.cStencilBits;
+  c->doublebuffer = !!(pfd.dwFlags & PFD_DOUBLEBUFFER);
+  c->sw.rgb565 = pfd.cColorBits <= 16;
   c->share = gl_alloc(sizeof(*c->share));
   if (!c->share) {
     gl_dealloc(c);
@@ -195,7 +243,7 @@ HGLRC W32API wglCreateContext(HDC dc) {
   if (!gl_refresh_target(c, dc) || !c->zb) {
     if (c->back)
       DeleteObject(c->back);
-    gl_dealloc(c->sw.depth);
+    free_attachments(c);
     gl_dealloc(c->share);
     if (c->zb)
       ZB_close(c->zb);
@@ -212,7 +260,7 @@ HGLRC W32API wglCreateContext(HDC dc) {
     gl_selected_context = 0;
     ZB_close(c->zb);
     DeleteObject(c->back);
-    gl_dealloc(c->sw.depth);
+    free_attachments(c);
     gl_dealloc(c->share);
     gl_dealloc(c);
     return 0;
@@ -240,11 +288,7 @@ HGLRC W32API wglCreateContext(HDC dc) {
 static void release_share(struct gl_share *s) {
   if (--s->refs)
     return;
-  for (unsigned i = 0; i < GL_TEXTURES; i++)
-    for (unsigned l = 0; l < SW_LEVELS; l++) {
-      gl_dealloc(s->textures[i].image[l].pixels);
-      gl_dealloc(s->textures[i].image[l].compressed);
-    }
+  gl_free_textures(s);
   for (unsigned i = 0; i < GL_LISTS; i++)
     gl_free_list(&s->lists[i]);
   gl_dealloc(s);
@@ -269,7 +313,7 @@ BOOL W32API wglDeleteContext(HGLRC h) {
   release_share(c->share);
   if (c->back)
     DeleteObject(c->back);
-  gl_dealloc(c->sw.depth);
+  free_attachments(c);
   gl_dealloc(c);
   return 1;
 }
@@ -288,6 +332,8 @@ BOOL W32API wglMakeCurrent(HDC dc, HGLRC h) {
   if (c->dc != dc)
     gl_release_present(c);
   c->dc = dc;
+  /* Quake probes device gamma immediately after MakeCurrent, before swapping. */
+  gl_prepare_present(c, dc);
   return 1;
 }
 HGLRC W32API wglGetCurrentContext(void) {
@@ -309,8 +355,8 @@ BOOL W32API wglShareLists(HGLRC a, HGLRC b) {
   struct gl_context *s = find(a), *d = find(b);
   if (!s || !d || s == d || d->tid || s->format != d->format)
     return 0;
-  for (unsigned i = 1; i < GL_TEXTURES; i++)
-    if (d->share->textures[i].used)
+  for (struct gl_texture *n = d->share->textures; n; n = n->next)
+    if (n->value.used)
       return 0;
   for (unsigned i = 1; i < GL_LISTS; i++)
     if (d->share->lists[i].reserved)
@@ -387,8 +433,9 @@ BOOL W32API w32_gl_swap(HDC dc) {
   struct gl_context *c = gl_current();
   if (!c || c->dc != dc || c->tiny.in_begin)
     return 0;
-  if (!gl_present(c))
+  if (!gl_present(c, 0))
     return 0;
+  if (c->doublebuffer) w32_copy(c->front_color, c->back_color, c->sw.width * c->sw.height * 4);
   c->frames++;
   return 1;
 }

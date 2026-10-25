@@ -324,9 +324,9 @@ static void pixel_bytes(void) {
   }
   clean();
   glReadBuffer(GL_FRONT);
-  assert(glGetError() == GL_INVALID_OPERATION);
+  assert(glGetError() == GL_NO_ERROR);
   glDrawBuffer(GL_FRONT_AND_BACK);
-  assert(glGetError() == GL_INVALID_OPERATION);
+  assert(glGetError() == GL_NO_ERROR);
   glReadBuffer(GL_BACK);
   glDrawBuffer(GL_BACK);
   assert(!glGetError());
@@ -393,8 +393,8 @@ static void lists(void) {
   assert(glGetError() == GL_INVALID_VALUE);
   glMatrixMode(0xffff);
   assert(glGetError() == GL_INVALID_ENUM);
-  glStencilFunc(GL_ALWAYS, 0, 0);
-  assert(glGetError() == GL_INVALID_OPERATION);
+  glStencilFunc(0xffff, 0, 0);
+  assert(glGetError() == GL_INVALID_ENUM);
   glBegin(GL_TRIANGLES);
   glClear(0); /* GetError itself is illegal here. */
   glEnd();

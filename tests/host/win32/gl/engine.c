@@ -19,6 +19,10 @@ static const char *const extensions[] = {
 void gl_amendment_tests(HDC);
 void gl_review_tests(HDC);
 void gl_fixture_tests(void);
+void gl_quake3_benchmark(unsigned, int);
+void gl_quake3_coverage(HDC);
+void gl_raster_tests(void);
+void gl_amendment2_tests(const char *);
 static HDC dc;
 static HGLRC rc;
 static unsigned pixels[W32_GL_WIDTH * W32_GL_HEIGHT];
@@ -107,20 +111,70 @@ static void fragment_oracles(void) {
 static void pixel_formats(void) {
   PIXELFORMATDESCRIPTOR p;
   assert(sizeof(p) == 40);
-  for (int n = 1; n <= 4; n++) {
-    assert(DescribePixelFormat(dc, n, 40, &p) == 4);
-    assert(p.dwFlags & PFD_GENERIC_FORMAT);
-    assert(p.cDepthBits == 16 && !p.cStencilBits && !p.cAccumBits);
-    assert(p.cColorBits == (n & 1 ? 24 : 16));
+  static const int depths[] = {16,16,16,16,24,24,16,16,24,24};
+  for (int n = 1; n <= 10; n++) {
+    assert(DescribePixelFormat(dc, n, 40, &p) == 10);
+    assert(!(p.dwFlags & PFD_GENERIC_FORMAT));
+    assert(p.cDepthBits == depths[n-1] && p.cStencilBits == (n >= 7 ? 8 : 0));
+    assert(!p.cAccumBits && !p.cAlphaBits);
+    assert(p.cColorBits == (n & 1 ? 32 : 16));
+    assert(p.cRedBits == (n & 1 ? 8 : 5));
+    assert(p.cGreenBits == (n & 1 ? 8 : 6));
+    assert(p.cBlueBits == (n & 1 ? 8 : 5));
+    assert(p.cRedShift == (n & 1 ? 16 : 11));
+    assert(p.cGreenShift == (n & 1 ? 8 : 5) && !p.cBlueShift);
+    int doublebuffer = n != 3 && n != 4;
+    assert(!!(p.dwFlags & PFD_DOUBLEBUFFER) == doublebuffer);
+    assert(!!(p.dwFlags & PFD_SWAP_COPY) == doublebuffer);
+    assert(ChoosePixelFormat(dc, &p) == n);
+    unsigned pixels[4] = {0};
+    struct w32_dib dib = test_dib(pixels, 2, 2, 32, 0, 1);
+    HDC target = w32_gdi_surface_dc(&dib, (POINT){0}, 0, 0);
+    assert(target && SetPixelFormat(target, n, &p));
+    assert(GetPixelFormat(target) == n && !SetPixelFormat(target, n, &p));
+    HGLRC context = wglCreateContext(target);
+    assert(context && wglMakeCurrent(target, context));
+    int value;
+    glGetIntegerv(GL_DEPTH_BITS, &value);
+    assert(value == p.cDepthBits);
+    glGetIntegerv(GL_STENCIL_BITS, &value);
+    assert(value == p.cStencilBits);
+    glGetIntegerv(GL_DOUBLEBUFFER, &value);
+    assert(value == doublebuffer);
+    glGetIntegerv(GL_ALPHA_BITS, &value);
+    assert(value == 0);
+    glClearColor(0.3f, 0.5f, 0.7f, 0.2f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+    unsigned char rgba[4];
+    glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    assert(rgba[0] == (n & 1 ? 76 : 74));
+    assert(rgba[1] == (n & 1 ? 127 : 125));
+    assert(rgba[2] == (n & 1 ? 178 : 181) && rgba[3] == 255);
+    assert(glGetError() == GL_NO_ERROR);
+    assert(wglMakeCurrent(0, 0) && wglDeleteContext(context));
+    assert(DeleteDC(target));
   }
   assert(!DescribePixelFormat(dc, 0, 40, &p));
-  assert(!DescribePixelFormat(dc, 5, 40, &p));
+  assert(!DescribePixelFormat(dc, 11, 40, &p));
   assert(!DescribePixelFormat(dc, 1, 39, &p));
   p = (PIXELFORMATDESCRIPTOR){.nSize = 40,
                               .nVersion = 1,
                               .dwFlags = PFD_DOUBLEBUFFER | PFD_SUPPORT_OPENGL,
                               .cColorBits = 24};
   assert(ChoosePixelFormat(dc, &p) == 1);
+  p.cColorBits = 32; p.cDepthBits = 24; p.cStencilBits = 8;
+  assert(ChoosePixelFormat(dc, &p) == 9);
+  p.cColorBits = 16;
+  assert(ChoosePixelFormat(dc, &p) == 10);
+  p.cDepthBits = 16;
+  assert(ChoosePixelFormat(dc, &p) == 8);
+  p.cStencilBits = 0;
+  assert(ChoosePixelFormat(dc, &p) == 2);
+  p.dwFlags = PFD_STEREO;
+  assert(!ChoosePixelFormat(dc, &p));
+  p.dwFlags = PFD_SUPPORT_GDI;
+  assert(!ChoosePixelFormat(dc, &p));
+  p.dwFlags = PFD_DOUBLEBUFFER | PFD_SUPPORT_OPENGL;
   assert(SetPixelFormat(dc, 1, &p));
   assert(!SetPixelFormat(dc, 2, &p));
   assert(GetPixelFormat(dc) == 1);
@@ -245,13 +299,27 @@ static uint64_t now(void) {
 }
 int main(int argc, char **argv) {
   setvbuf(stdout, 0, _IONBF, 0);
+  if (argc > 1 && !strcmp(argv[1], "--amendment2")) {
+    gl_amendment2_tests(argc > 2 ? argv[2] : 0);
+    test_reset();
+    return 0;
+  }
   int benchmark = argc > 1 && !strcmp(argv[1], "--benchmark");
+  if (argc > 1 && (!strcmp(argv[1], "--quake3") ||
+                  !strcmp(argv[1], "--quake3-default"))) {
+    gl_quake3_benchmark(3, !strcmp(argv[1], "--quake3-default"));
+    test_reset();
+    return 0;
+  }
+  gl_amendment2_tests(0);
   fragment_oracles();
+  gl_raster_tests();
   struct w32_dib dib = test_dib(pixels, W32_GL_WIDTH, W32_GL_HEIGHT, 32, 0, 1);
   dc = w32_gdi_surface_dc(&dib, (POINT){0}, 0, 0);
   assert(dc);
   pixel_formats();
   lifecycle();
+  gl_quake3_coverage(dc);
   upload();
   gl_amendment_tests(dc);
   gl_review_tests(dc);
