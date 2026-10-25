@@ -10,36 +10,39 @@ Released under the [GNU GPLv2](LICENSE).
 
 <table>
 <tr>
-<td><a href="docs/screenshots/1.0-alpha/01-desktop.png"><img src="docs/screenshots/1.0-alpha/01-desktop.png" width="320" alt="Desktop"></a><br><sub>Desktop</sub></td>
-<td><a href="docs/screenshots/1.0-alpha/02-start-menu-games.png"><img src="docs/screenshots/1.0-alpha/02-start-menu-games.png" width="320" alt="Start menu, Games"></a><br><sub>Start menu, Games</sub></td>
-<td><a href="docs/screenshots/1.0-alpha/03-doom.png"><img src="docs/screenshots/1.0-alpha/03-doom.png" width="320" alt="DOOM in a window"></a><br><sub>DOOM in a window</sub></td>
+<td><a href="docs/screenshots/1.0.1-alpha/01-desktop.png"><img src="docs/screenshots/1.0.1-alpha/01-desktop.png" width="320" alt="Desktop"></a><br><sub>Desktop</sub></td>
+<td><a href="docs/screenshots/1.0.1-alpha/02-start-menu-classic-games.png"><img src="docs/screenshots/1.0.1-alpha/02-start-menu-classic-games.png" width="320" alt="Start menu, Classic Games"></a><br><sub>Start menu, Classic Games</sub></td>
+<td><a href="docs/screenshots/1.0.1-alpha/03-doom.png"><img src="docs/screenshots/1.0.1-alpha/03-doom.png" width="320" alt="DOOM in a window"></a><br><sub>DOOM in a window</sub></td>
 </tr>
 <tr>
-<td><a href="docs/screenshots/1.0-alpha/04-wolfenstein-3d.png"><img src="docs/screenshots/1.0-alpha/04-wolfenstein-3d.png" width="320" alt="Wolfenstein 3-D"></a><br><sub>Wolfenstein 3-D</sub></td>
-<td><a href="docs/screenshots/1.0-alpha/05-quake.png"><img src="docs/screenshots/1.0-alpha/05-quake.png" width="320" alt="Quake"></a><br><sub>Quake</sub></td>
-<td><a href="docs/screenshots/1.0-alpha/06-files.png"><img src="docs/screenshots/1.0-alpha/06-files.png" width="320" alt="Files"></a><br><sub>Files</sub></td>
+<td><a href="docs/screenshots/1.0.1-alpha/04-quake.png"><img src="docs/screenshots/1.0.1-alpha/04-quake.png" width="320" alt="Quake"></a><br><sub>Quake</sub></td>
+<td><a href="docs/screenshots/1.0.1-alpha/05-warcraft-ii.png"><img src="docs/screenshots/1.0.1-alpha/05-warcraft-ii.png" width="320" alt="Warcraft II demo (VESA)"></a><br><sub>Warcraft II demo (VESA)</sub></td>
+<td><a href="docs/screenshots/1.0.1-alpha/06-wolfenstein-3d.png"><img src="docs/screenshots/1.0.1-alpha/06-wolfenstein-3d.png" width="320" alt="Wolfenstein 3-D"></a><br><sub>Wolfenstein 3-D</sub></td>
 </tr>
 <tr>
-<td><a href="docs/screenshots/1.0-alpha/07-control-panel.png"><img src="docs/screenshots/1.0-alpha/07-control-panel.png" width="320" alt="Control Panel"></a><br><sub>Control Panel</sub></td>
-<td><a href="docs/screenshots/1.0-alpha/08-netsurf.png"><img src="docs/screenshots/1.0-alpha/08-netsurf.png" width="320" alt="NetSurf"></a><br><sub>NetSurf browser</sub></td>
-<td><a href="docs/screenshots/1.0-alpha/09-dos-box.png"><img src="docs/screenshots/1.0-alpha/09-dos-box.png" width="320" alt="DOS Box"></a><br><sub>DOS Box</sub></td>
+<td><a href="docs/screenshots/1.0.1-alpha/07-netsurf-google.png"><img src="docs/screenshots/1.0.1-alpha/07-netsurf-google.png" width="320" alt="NetSurf browser"></a><br><sub>NetSurf browser</sub></td>
+<td><a href="docs/screenshots/1.0.1-alpha/08-control-panel.png"><img src="docs/screenshots/1.0.1-alpha/08-control-panel.png" width="320" alt="Control Panel"></a><br><sub>Control Panel</sub></td>
+<td><a href="docs/screenshots/1.0.1-alpha/10-dos-box.png"><img src="docs/screenshots/1.0.1-alpha/10-dos-box.png" width="320" alt="DOS Box"></a><br><sub>DOS Box</sub></td>
 </tr>
 </table>
 
-QEMU captures of the 1.0 alpha ([details](docs/screenshots/1.0-alpha/README.md)).
+QEMU captures of the 1.0.1 alpha ([details](docs/screenshots/1.0.1-alpha/README.md)).
 
 ## Highlights
 
 **Games and DOS**
 - DOS games in a window or full screen, with Sound Blaster 16 and AdLib/OPL3
   sound, DPMI and XMS/EMS, on a unified DOS kernel (a FreeDOS fork).
-- DOOM, Wolfenstein 3-D and Quake shareware are pre-installed (Programs > Games).
+- DOOM, Wolfenstein 3-D and Quake shareware and the Warcraft II demo are
+  pre-installed (Programs > Games); VESA modes work in the DOS window on any
+  video card.
 - Virtual NE2000 and IPX for DOS LAN play (host-tested).
 
 **Desktop**
 - A Windows 98-class desktop: Start menu, taskbar, tray, Control Panel, Files,
   Task Manager, Terminal, Registry Editor, CiukNote, WordPad, CiukPaint, Music
-  Player, Image Viewer, Calculator, card games, CiukIDE with a C compiler.
+  Player, Image Viewer, Calculator, Classic Games (Solitaire, FreeCell, Hearts,
+  Minesweeper), CiukIDE with a C compiler.
 - Tango icons, FreeType fonts, themes and wallpapers.
 
 **Windows programs**
