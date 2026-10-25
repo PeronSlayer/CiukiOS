@@ -46,6 +46,8 @@ class LoaderParserMachine(LoaderUARTMachine):
         self.zero = self.carry = False
         self.hooks = {}
         self.interrupts = {}  # vector -> callable; BIOS calls are host fixtures
+        self.iflag = False
+        self.idle = None  # IRQ wake fixture; HLT without a fixture fails closed.
         self.budget = 100000
 
     @staticmethod
@@ -195,6 +197,15 @@ class LoaderParserMachine(LoaderUARTMachine):
                     following = int(dest, 16)
             elif op in ('clc', 'stc'):
                 self.carry = op == 'stc'
+            elif op in ('sti', 'cli'):
+                self.iflag = op == 'sti'
+            elif op == 'hlt':
+                assert self.iflag, 'HLT with interrupts disabled'
+                assert self.idle is not None, 'HLT without an IRQ wake fixture'
+                self.idle()
+            elif op == 'in':
+                assert operands == ['al', 'dx'], instruction
+                self.write('al', self.port_read(self.read('dx')))
             elif op == 'int':
                 handler = self.interrupts.get(int(dest.split()[-1], 16))
                 if handler is None:

@@ -154,7 +154,7 @@ class BootMenu:
     DAY_TICKS = 0x1800b0
     MENU_TICKS = 55
     ENTRY_TICKS = 548
-    POLL_LIMIT = 0x2000000
+    IDLE_WAKE_FACTOR = 2
     SAFE_CONFIRMATION = 'Safe mode; P for a probe, or wait'
     MENU_HINT = 'Ctrl or F8: Startup menu, S for safe mode, L for log, H for Hardware check'
 
@@ -182,7 +182,7 @@ class BootMenu:
     def _restart(self, tick, ticks):
         self.start_tick = tick
         self.deadline_ticks = ticks
-        self.polls_left = self.POLL_LIMIT
+        self.polls_left = ticks * self.IDLE_WAKE_FACTOR
 
     def _cancel_cfg(self):
         self.request = None
@@ -245,7 +245,8 @@ class BootMenu:
                     self._finish(error=True)
                     return
                 self.line += char
-        self.polls_left -= 1
+        if char is None:  # Empty input halts; buffered input never spends a wait.
+            self.polls_left = max(0, self.polls_left - 1)
         elapsed = (tick - self.start_tick) % self.DAY_TICKS
         if self.polls_left == 0 or elapsed >= self.deadline_ticks:
             self._finish(error=self.state == 'entry')
@@ -454,6 +455,8 @@ def pack_display_inventory(inventory):
 # G14 Startup menu (docs/design/startup-recovery.md 2.2), the model the
 # assembled startup.inc is checked against.
 CBI_F_SAFE_MODE = 1 << 0
+CBI_F_SERIAL_LOG = 1 << 1
+CBI_F_TEST_REQUEST = 1 << 6
 CBI_F_VERBOSE = 1 << 11
 CBI_F_DIAG_VERBOSE = 1 << 12
 CBI_F_HW_CHECK = 1 << 13

@@ -51,13 +51,13 @@ class LoaderMenuTests(unittest.TestCase):
         menu.poll(105)
         self.assert_safe_menu(menu)
 
-    def test_safe_restarts_tick_and_stalled_clock_budgets(self):
+    def test_safe_restarts_tick_and_idle_wakeup_budgets(self):
         menu = BootMenu(tick=100)
         menu.poll(154)
-        self.assertLess(menu.polls_left, BootMenu.POLL_LIMIT)
+        self.assertEqual(menu.polls_left, 2 * BootMenu.MENU_TICKS - 1)
         menu.poll(154, 'S')
         self.assertEqual((menu.start_tick, menu.deadline_ticks, menu.polls_left),
-                         (154, 55, BootMenu.POLL_LIMIT))
+                         (154, 55, 2 * BootMenu.MENU_TICKS))
         menu.poll(155)
         self.assertEqual(menu.state, 'menu')
         menu.poll(208)
@@ -122,11 +122,31 @@ class LoaderMenuTests(unittest.TestCase):
     def test_stopped_clock_still_expires_after_safe_restart(self):
         menu = BootMenu()
         menu.poll(1, 'S')
-        menu.polls_left = 2  # Reach the existing finite poll bound cheaply.
+        menu.polls_left = 2  # Reach the finite idle-wakeup bound cheaply.
         menu.poll(1)
         self.assertEqual(menu.state, 'menu')
         menu.poll(1)
         self.assert_safe_menu(menu)
+
+    def test_buffered_input_does_not_spend_idle_wakeup_budget(self):
+        menu = BootMenu()
+        for char in 'x' * 200:
+            menu.poll(0, char)
+        self.assertEqual(menu.polls_left, 2 * BootMenu.MENU_TICKS)
+        self.assertEqual(menu.state, 'menu')
+        for _ in range(2 * BootMenu.MENU_TICKS):
+            menu.poll(0)  # A wake without a working BDA clock.
+        self.assertEqual(menu.state, 'done')
+
+    def test_production_empty_input_halts_and_only_wakeups_spend_the_bound(self):
+        source = (ROOT / 'src/boot/ciukldr/menu.inc').read_text()
+        getc = source.split('menu_getc:', 1)[1].split('deadline_start:', 1)[0]
+        empty = getc.split('.empty:', 1)[1]
+        self.assertRegex(empty, r'\bsti\s+hlt\b')
+        self.assertLess(empty.index('hlt'), empty.index('dec word [menu_polls]'))
+        deadline = source.split('deadline_expired:', 1)[1].split('menu_tick dd', 1)[0]
+        self.assertIn('cmp word [menu_polls], 0', deadline)
+        self.assertNotIn('dec ', deadline)
 
     def test_unchanged_cfg_and_fw_cfg_paths_and_positive_safe_sources(self):
         menu = BootMenu(request=self.CONFIGURED, safe=True)
@@ -170,7 +190,8 @@ class LoaderMenuTests(unittest.TestCase):
         self.assertIn('call deadline_start', restart)
         deadline = source.split('deadline_start:', 1)[1].split('deadline_expired:', 1)[0]
         self.assertIn('mov [menu_tick], eax', deadline)
-        self.assertIn('mov dword [menu_polls], 0x2000000', deadline)
+        self.assertIn('mov [menu_polls], bp', deadline)
+        self.assertIn('shl word [menu_polls], 1', deadline)
         cancel = menu.split('.cancel_cfg:', 1)[1].split('.log:', 1)[0]
         self.assertIn('~CBI_F_TEST_REQUEST', cancel)
         self.assertIn('mov word [B(test_request_len)], 0', cancel)
