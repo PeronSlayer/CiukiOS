@@ -628,7 +628,9 @@ static int transfer(struct dosvm *v, uint32_t linear, void *buffer, unsigned byt
         unsigned n = PAGE_SIZE - (linear & (PAGE_SIZE - 1));
         if (n > bytes) n = bytes;
         uint32_t window;
-        if (dosvm_vbe_window(v, linear, &window)) {
+        /* Range test inline: DMA and other low-memory copies skip the call
+         * (IRQ budget of the per-VM audio clock). */
+        if (linear >= 0xA0000 && linear < 0xB0000 && dosvm_vbe_window(v, linear, &window)) {
             /* war2vbe: a windowed VBE mode's A0000h-AFFFFh is 64 KiB of the
              * VBE buffer (4F05h bank). Bank and page boundaries coincide, so
              * this page-bounded span is one buffer page; a kernel store sets
