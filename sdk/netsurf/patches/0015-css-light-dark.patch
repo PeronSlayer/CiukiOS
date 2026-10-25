@@ -1,0 +1,58 @@
+CiukiOS: CSS Color 5 light-dark(<color>, <color>) computes to the first
+colour for a light used colour scheme and to the second for a dark one
+(https://www.w3.org/TR/css-color-5/#light-dark). CiukiOS has a light scheme
+only, so the first colour is used. libcss 0.9 rejected the function and with
+it the whole declaration: example.com (revision of 2026-10-24) sets
+html{color-scheme:light dark;background:light-dark(#eee,#222)} and was drawn
+on white instead of #eee. Nesting is bounded (8 levels) for the 1 MiB stack.
+Host test: test_local.py test_example_domain_page (fixture, nested, invalid
+and too deeply nested light-dark()).
+
+--- a/libcss/src/parse/properties/utils.c
++++ b/libcss/src/parse/properties/utils.c
+@@ -443,6 +443,45 @@
+ 		uint8_t r = 0, g = 0, b = 0, a = 0xff;
+ 		int colour_channels = 0;
+ 
++		/* CiukiOS: CSS Color 5 light-dark(<color>, <color>) gives the
++		 * first colour when the used colour scheme is light, as on
++		 * CiukiOS, which has no dark scheme. Without it the whole
++		 * declaration was dropped (example.com 2026-10-24:
++		 * background:light-dark(#eee,#222) drew white). Nested
++		 * light-dark() is bounded: the browser's stack is 1 MiB. */
++		if (lwc_string_length(token->idata) == 10 &&
++				strncasecmp(lwc_string_data(token->idata),
++				"light-dark", 10) == 0) {
++			static unsigned int nesting;
++			uint16_t dark_value;
++			uint32_t dark;
++
++			if (nesting >= 8)
++				goto invalid;
++			nesting++;
++			error = css__parse_colour_specifier(c, vector, ctx,
++					value, result);
++			if (error == CSS_OK) {
++				consumeWhitespace(vector, ctx);
++				token = parserutils_vector_iterate(vector, ctx);
++				if (!tokenIsChar(token, ','))
++					error = CSS_INVALID;
++			}
++			if (error == CSS_OK)
++				error = css__parse_colour_specifier(c, vector,
++						ctx, &dark_value, &dark);
++			if (error == CSS_OK) {
++				consumeWhitespace(vector, ctx);
++				token = parserutils_vector_iterate(vector, ctx);
++				if (!tokenIsChar(token, ')'))
++					error = CSS_INVALID;
++			}
++			nesting--;
++			if (error != CSS_OK)
++				goto invalid;
++			return CSS_OK;
++		}
++
+ 		if ((lwc_string_caseless_isequal(
+ 				token->idata, c->strings[RGB],
+ 				&match) == lwc_error_ok && match)) {

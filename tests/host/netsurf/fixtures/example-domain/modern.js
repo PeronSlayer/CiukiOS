@@ -1,0 +1,1 @@
+var B=document.body,P,p;B.children[0].insertAdjacentHTML("afterend","<p lang=it>Questo nome serve agli esempi della documentazione.</p><a href=https://fixture.example/help>Learn more</a>");P=[...B.querySelectorAll("p")];navigator.languages.some(l=>p=P.find(q=>q.lang==l.split("-")[0]));B.prepend(p||P[0]);

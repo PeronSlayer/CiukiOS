@@ -907,12 +907,58 @@ Ctrl or left-Alt chord, as a Windows edit control does (the desktop sends the
 chord's character too: Ctrl+L selected the address and then typed "l" over
 it, giving "lhttp://..."); AltGr still types.
 
-**Temporary decision (2026-10-25): JavaScript is off by default on CiukiOS.**
-The first remote page that loaded in QEMU (image of 89850ae0) faulted in a
-script on a NULL object (`duk_hobject_find_entry_tval_ptr_stridx`, address
-0x200). Until that Duktape/binding fault is found and fixed with a host test,
-`ciuki_chrome_defaults()` sets `enable_javascript` off on the target and the
-system Choices says `enable_javascript:0`, so pages load without scripts; a
-profile Choices with `enable_javascript:1` still enables it. Host builds keep
-JavaScript on for the JavaScript host tests. Host evidence and limits are in
+**JavaScript on CiukiOS (2026-10-25).** A temporary decision turned
+JavaScript off by default after the first remote page with a script faulted
+in QEMU (image of 89850ae0: example.com's `s.js`, `vector=14 error=00000004`
+at address 0x200 in `duk_hobject_find_entry_tval_ptr_stridx`). Cause:
+Duktape's packed 8-byte `duk_tval` is a NaN whose top 16 bits are the type
+tag, and the tags of fastint, undefined, null, boolean, pointer and
+lightfunc (0xfff1-0xfff7) are signalling NaNs. The target is i686 with x87
+floating point only (SDK: `-march=pentiumpro -mno-sse -mno-sse2`); clang
+copies the value union as a double, `fldl`/`fstpl` (24 such copies in the
+target's `duk_insert`, `duk_call`, `duk_new`, proxy and call-setup code),
+and `fldl` quiets a signalling NaN (Intel SDM, FLD). A fastint therefore
+became 0xfff9, an object whose pointer is the integer, and undefined, null
+and booleans became numbers; the first use of such an "object" reads or
+writes a few bytes above the integer's address. Duktape records the effect
+in `misc/clang_aliasing.c` ("the 7th byte gets OR'd with 0x08", 0xf1 into
+0xf9; https://github.com/svaarala/duktape/blob/master/misc/clang_aliasing.c)
+and its `duk_config.h` already avoids the packed form for an affected x86
+compiler; the `DUK_USE_PACKED_TVAL` option describes the unpacked
+12-16 byte form as the portable one. Host builds are x86-64 (never packed),
+so no host test saw it. Patch 0014 undefines `DUK_USE_PACKED_TVAL` on
+32-bit x86 (`duk_custom.h`): the tag has its own word, and the target
+Duktape object has no x87 copy left in those paths. The heap is larger
+(32-bit x87 host model: the built-ins 64.9 to 75.2 KB; 250 objects with 20
+functions each 1.12 to 1.38 MB); the x86-64 host build, whose values are
+16 bytes too and whose pointers are larger, already runs pages within the
+1 MiB heap admission (budget of 8 MiB free). `tests/host/netsurf/
+duktape_values_test.c` (`test_g26.py`) builds NetSurf's Duktape with `-m32`
+and the SDK's code-generation flags and the port's allocator: every value
+kind through insert, swap, replace, copy, properties and C calls, a binding's
+integer moved by `duk_insert` and read by a script, script integers and the
+SyntaxError of ES2015 syntax. Before patch 0014 it reports undefined turned
+into a number and aborts (double free); a moved integer faults at its
+address plus 4 (its reference count); after it passes. JavaScript is again
+on by default (`ciuki_chrome_defaults()`, system Choices
+`enable_javascript:1`; a boolean option is 0/1, `true` was never read as
+true); a profile Choices with `enable_javascript:0` turns it off.
+
+example.com since its revision of 2026-10-24 (577 bytes) has no heading and
+no link in its markup: one paragraph and `/s.js`, which inserts
+translations, a book icon and a "Learn more" link with spread syntax, arrow
+functions, `insertAdjacentHTML`, `prepend`, `querySelectorAll` and
+`navigator.languages`. Duktape 2.7 (ECMAScript 5.1 plus parts of ES2015)
+reports a SyntaxError and NetSurf 3.11 binds none of those calls, so NetSurf
+shows the paragraph, as any browser without JavaScript does; the missing
+heading and link were not a CSS, font or layout defect. Two gaps on that page
+are fixed: `light-dark(<color>, <color>)` (CSS Color 5,
+https://www.w3.org/TR/css-color-5/#light-dark; the first colour for a light
+used colour scheme, the only one CiukiOS has) was rejected by libcss with its
+whole declaration, so the page was drawn on white instead of #eee (patch
+0015; nesting is bounded to eight levels for the 1 MiB stack); a local `.js` file was typed `text/html` by the framebuffer front end,
+so a local page's external scripts never ran (patch 0016).
+`test_local.py` `test_example_domain_page` renders authored pages of the old
+(heading and link) and the current shape with JavaScript on.
+Host evidence and limits are in
 `build/codex/g26-report.md` and `build/codex/g26b-report.md`.

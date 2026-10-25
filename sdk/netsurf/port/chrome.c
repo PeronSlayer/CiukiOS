@@ -596,17 +596,12 @@ void ciuki_chrome_defaults(void)
         nsoption_set_charp(http_proxy_host,internet.proxy[0]?strdup(internet.proxy):NULL);
         nsoption_set_int(http_proxy_port,internet.port);
     } else nsoption_set_int(memory_cache_size,2*1024*1024);
-#ifdef CIUKI_HOST
+    /* On again since 2026-10-25: the fault of the first remote page with a
+     * script (QEMU, duk_hobject_find_entry_tval_ptr_stridx at 0x200) was
+     * Duktape's packed values copied through x87 registers (patch 0014,
+     * docs/design/netsurf-port-plan.md). A profile Choices file with
+     * enable_javascript:0 turns it off. */
     nsoption_set_bool(enable_javascript,true);
-#else
-    /* Temporary (2026-10-25, docs/design/netsurf-port-plan.md): JavaScript
-     * is off by default on CiukiOS until the Duktape fault on real pages is
-     * fixed (QEMU: a script of the first remote page faulted on a NULL
-     * object in duk_hobject_find_entry_tval_ptr_stridx). A profile Choices
-     * file with enable_javascript:1 still turns it on. Host builds keep it
-     * on for the JavaScript host tests. */
-    nsoption_set_bool(enable_javascript,false);
-#endif
     nsoption_set_uint(disc_cache_size,0);
     nsoption_set_charp(disc_cache_path,NULL);nsoption_set_charp(cookie_file,NULL);nsoption_set_charp(cookie_jar,NULL);
     nsoption_set_int(max_fetchers,8);nsoption_set_int(max_fetchers_per_host,2);
