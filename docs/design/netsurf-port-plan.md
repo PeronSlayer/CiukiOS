@@ -891,5 +891,15 @@ into an HTMLUnknownElement over the `browser_window` pointer). A heap is now
 made only with 1 MiB of JavaScript budget left (8 MiB free), setup steps run
 under `duk_safe_call`, any refused allocation during heap setup discards the
 heap, and a document whose thread failed is not retried per element; a window
-without a heap has no scripting instead of no browser. Host evidence and limits are in
+without a heap has no scripting instead of no browser. At process exit the
+target leaves the Duktape heaps to the operating system (no finalisers, no
+collection; the exit report sets `ciuki_js_exiting` just before
+`netsurf_exit()`), as Windows 98 reclaims a terminating process: in QEMU the
+heap teardown overflowed the 1 MiB main stack at every close although Duktape's
+own mark recursion is capped at 256 levels, and the recursion behind it is not
+yet identified; the first JavaScript allocation made with less than 128 KiB of
+main stack left logs `[netsurf] deep stack` lines with the frame chain (frame
+pointers are kept) for llvm-symbolizer. A refused navigation logs
+`[netsurf] navigate error=` with the fetcher table (patch 0013: scheme string
+and slot pointers and reference counts, no URL text). Host evidence and limits are in
 `build/codex/g26-report.md` and `build/codex/g26b-report.md`.

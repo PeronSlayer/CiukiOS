@@ -11,7 +11,10 @@ Now: a heap is made only with 1 MiB of budget left, setup steps run under
 duk_safe_call, a refused allocation during heap setup discards the heap, and
 a document whose thread failed is not retried at every inserted element. A
 window without a heap has no scripting (NULL heap and thread, as with the
-"none" backend) and one stderr line, instead of no browser.
+"none" backend) and one stderr line, instead of no browser. At process exit
+(port/js_memory.h ciuki_js_exiting, set by the exit report) the target does
+not tear the Duktape heap down: the OS reclaims the process, and the teardown
+overflowed the 1 MiB main stack at every close (QEMU 2026-10-25).
 
 --- a/netsurf/content/handlers/javascript/duktape/dukky.c
 +++ b/netsurf/content/handlers/javascript/duktape/dukky.c
@@ -116,7 +119,25 @@ window without a heap has no scripting (NULL heap and thread, as with the
  
  	*heap = ret;
  	return NSERROR_OK;
-@@ -653,10 +720,55 @@
+@@ -636,6 +703,17 @@
+ {
+ 	assert(heap->pending_destroy == true);
+ 	assert(heap->live_threads == 0);
++#if defined(CIUKI_NETSURF) && !defined(CIUKI_HOST)
++	/* Process exit (ciuki_js_exiting, port/js_memory.h): the operating
++	 * system reclaims the whole address space, as Windows 98 does for a
++	 * terminating process, so the Duktape heap is not walked, finalised
++	 * or freed (QEMU 2026-10-25: the teardown overflowed the 1 MiB main
++	 * stack at every close). */
++	if (ciuki_js_exiting) {
++		free(heap);
++		return;
++	}
++#endif
+ 	NSLOG(dukky, DEBUG, "Destroying duktape javascript context");
+ 	duk_destroy_heap(heap->ctx);
+ 	free(heap);
+@@ -653,10 +731,55 @@
  /* Just for here, the CTX is in ret, not thread */
  #define CTX (ret->ctx)
  
@@ -172,7 +193,7 @@ window without a heap has no scripting (NULL heap and thread, as with the
  	assert(heap != NULL);
  	assert(heap->pending_destroy == false);
  
-@@ -671,6 +783,33 @@
+@@ -671,6 +794,33 @@
  	      win_priv, doc_priv);
  
  	/* create new thread */
@@ -206,7 +227,7 @@ window without a heap has no scripting (NULL heap and thread, as with the
  	duk_get_global_string(heap->ctx, THREAD_MAP); /* ... threads */
  	duk_push_thread(heap->ctx); /* ... threads thread */
  	ret->heap = heap;
-@@ -701,6 +840,7 @@
+@@ -701,6 +851,7 @@
  	/* And now the event mapping table */
  	duk_push_object(CTX);
  	duk_put_global_string(CTX, EVENT_MAGIC);
@@ -214,7 +235,7 @@ window without a heap has no scripting (NULL heap and thread, as with the
  
  	/* Now load the polyfills */
  	/* ... */
-@@ -710,12 +850,20 @@
+@@ -710,12 +861,20 @@
  					  (const char *)polyfill_js, polyfill_js_len) != 0) {
  		NSLOG(dukky, CRITICAL, "%s", duk_safe_to_string(CTX, -1));
  		NSLOG(dukky, CRITICAL, "Unable to compile polyfill.js, thread aborted");
@@ -235,7 +256,7 @@ window without a heap has no scripting (NULL heap and thread, as with the
  		js_destroythread(ret);
  		return NSERROR_INIT_FAILED;
  	}
-@@ -731,18 +879,35 @@
+@@ -731,18 +890,35 @@
  					  (const char *)generics_js, generics_js_len) != 0) {
  		NSLOG(dukky, CRITICAL, "%s", duk_safe_to_string(CTX, -1));
  		NSLOG(dukky, CRITICAL, "Unable to compile generics.js, thread aborted");
@@ -271,7 +292,7 @@ window without a heap has no scripting (NULL heap and thread, as with the
  	duk_push_global_object(CTX);
  	/* ..., Win */
  	duk_get_prop_string(CTX, -1, "NetSurf");
-@@ -751,6 +916,7 @@
+@@ -751,6 +927,7 @@
  	/* ..., Win */
  	duk_del_prop_string(CTX, -1, "NetSurf");
  	duk_pop(CTX);
@@ -279,3 +300,22 @@ window without a heap has no scripting (NULL heap and thread, as with the
  	/* ... */
  
  	dukky_log_stack_frame(CTX, "New thread created");
+@@ -821,6 +998,18 @@
+ /* exported interface documented in js.h */
+ void js_destroythread(jsthread *thread)
+ {
++#if defined(CIUKI_NETSURF) && !defined(CIUKI_HOST)
++	if (ciuki_js_exiting) {
++		/* See dukky_destroyheap: no closedownThread call and no
++		 * collection at process exit. */
++		jsheap *heap = thread->heap;
++		free(thread);
++		heap->live_threads--;
++		if (heap->pending_destroy && heap->live_threads == 0)
++			dukky_destroyheap(heap);
++		return;
++	}
++#endif
+ 	thread->pending_destroy = true;
+ 	if (thread->in_use == 0) {
+ 		dukky_destroythread(thread);

@@ -30,6 +30,7 @@ void amendment_layout_checks(struct content *);
 #include "framebuffer/ciuki/chrome.c"
 #include "framebuffer/fbtk/event.c"
 #include "sdk/netsurf/port/docmem.h"
+#include "content/fetch.h"
 static bool running,finished;
 static unsigned damages,clicks;
 static bool intercept_actions,navigation_done;
@@ -214,6 +215,15 @@ static void exercise(void)
     assert(s->current.back && s->current.map);
     s->connection.transport.send=send_fixture;
     ciuki_browser_active=s;ciuki_chrome_init(s);
+    /* QEMU 2026-10-25 (typed http address: NO_FETCH_HANDLER): with a page
+     * shown, the production fetcher table still serves http and https, and
+     * the patch 0013 description names the matching slot as accepting. */
+    for(unsigned i=0;i<2;i++) {
+        nsurl *u=NULL;assert(nsurl_create(i?"https://example.com/":"http://example.com/",&u)==NSERROR_OK);
+        char table[320];assert(fetch_can_fetch(u) && fetch_ciuki_describe(u,table,sizeof(table))>0);
+        assert(strstr(table,"=ok") && !strstr(table,"=refused"));
+        nsurl_unref(u);
+    }
     chrome_checks();
     /* Wheel reaches actual page scrolling, in both directions and detents. */
     input(CIUKI_INPUT_MOTION,0,100,200);drain();

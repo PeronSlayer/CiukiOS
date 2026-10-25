@@ -1,0 +1,43 @@
+CiukiOS: fetcher table diagnostic for a refused navigation (port/chrome.c logs it
+with the navigate error): the URL scheme string and every fetcher slot as
+pointers and reference counts, no URL text.
+
+--- a/netsurf/content/fetch.c
++++ b/netsurf/content/fetch.c
+@@ -588,6 +588,36 @@
+ 
+ 
+ 
++#ifdef CIUKI_NETSURF
++#include <stdio.h>
++/* CiukiOS diagnostic for a refused navigation (sdk/netsurf/port/chrome.c):
++ * the URL scheme's interned string and every fetcher slot, as pointers and
++ * reference counts, so a log tells a released slot (refcount 0) from a
++ * scheme string that was freed and interned again (pointer mismatch) from a
++ * fetcher that refuses the URL. No URL text is written. */
++size_t fetch_ciuki_describe(const nsurl *url, char *out, size_t cap)
++{
++	lwc_string *scheme = nsurl_get_component(url, NSURL_SCHEME);
++	size_t used = 0;
++	int n = snprintf(out, cap, "scheme=%p/%u", (void *)scheme,
++			 scheme != NULL ? (unsigned)scheme->refcnt : 0u);
++	if (n > 0) used = (size_t)n < cap ? (size_t)n : cap;
++	for (int i = 0; i < MAX_FETCHERS && used + 1 < cap; i++) {
++		if (fetchers[i].scheme == NULL && fetchers[i].refcount == 0)
++			continue;
++		bool same = scheme != NULL && fetchers[i].scheme == scheme;
++		n = snprintf(out + used, cap - used, " %d:%p/%d%s", i,
++			     (void *)fetchers[i].scheme, fetchers[i].refcount,
++			     same ? (fetchers[i].refcount > 0 &&
++				     fetchers[i].ops.acceptable(url) ? "=ok" : "=refused") : "");
++		if (n <= 0) break;
++		used += (size_t)n < cap - used ? (size_t)n : cap - used - 1;
++	}
++	if (scheme != NULL) lwc_string_unref(scheme);
++	return used;
++}
++#endif
++
+ /* exported interface documented in content/fetch.h */
+ bool fetch_can_fetch(const nsurl *url)
+ {

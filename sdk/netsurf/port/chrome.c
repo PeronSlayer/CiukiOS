@@ -40,6 +40,7 @@
 #include "surface.h"
 void ciuki_font_prefetch(void); /* font.c (fx-15) */
 #include "profile.h"
+#include "js_memory.h"
 #include "chrome.h"
 #include "budget.h"
 #include "logline.h"
@@ -92,20 +93,23 @@ int ciuki_browser_channel=-1;
 static struct browser_window *browser(void) { return window_list?window_list->bw:NULL; }
 static nserror count_bookmark(void *context,nsurl *url,const char *title)
 { (void)context;(void)url;(void)title;bookmarks++;return bookmarks>500?NSERROR_BAD_SIZE:NSERROR_OK; }
+size_t fetch_ciuki_describe(const nsurl *,char *,size_t);
 static void navigate(const char *text)
 {
     nsurl *url=NULL;
     nserror err=nsurl_create(text,&url);
     if(!err && browser())err=browser_window_navigate(browser(),url,NULL,BW_NAVIGATE_HISTORY,NULL,NULL,NULL);
-    bool parsed=url!=NULL;
-    if(url)nsurl_unref(url);
     if(err) {
         /* No address text (privacy, as the input records); the nserror tells
          * an unparsable address from a missing fetcher (NO_FETCH_HANDLER) or
-         * a refused fetch setup (NOMEM) when no fetch record follows. */
-        ciuki_log_line("[netsurf] navigate error=%d parsed=%d window=%d",(int)err,parsed,browser()!=NULL);
+         * a refused fetch setup (NOMEM) when no fetch record follows, and the
+         * fetcher table (patch 0013) why a scheme has no fetcher. */
+        char table[320]="";
+        if(url)fetch_ciuki_describe(url,table,sizeof(table));
+        ciuki_log_line("[netsurf] navigate error=%d parsed=%d window=%d %s",(int)err,url!=NULL,browser()!=NULL,table);
         ciuki_chrome_status("Unable to open this address.");
     }
+    if(url)nsurl_unref(url);
 }
 static int save_hotlist(const char *path,void *unused)
 { (void)unused;return hotlist_export(path,"NetSurf Bookmarks")==NSERROR_OK?0:-1; }
@@ -700,6 +704,10 @@ void ciuki_netsurf_log_record(const char *line)
 }
 void ciuki_chrome_exit_report(void)
 {
+#ifndef CIUKI_HOST
+    /* Called right before netsurf_exit(): see ciuki_js_exiting. */
+    ciuki_js_exiting=true;
+#endif
     char line[CIUKI_LOG_LINE_MAX];
     if(exit_reported || exit_line(line,sizeof(line),true)<=0)return;
     exit_reported=true;
