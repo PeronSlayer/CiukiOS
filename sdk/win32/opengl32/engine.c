@@ -89,11 +89,12 @@ void gl_triangle(GLContext *tiny, GLVertex *a, GLVertex *b, GLVertex *d) {
           c->depth_bits == 24 ? 16777215 : 65535);
     }
   }
-  sw_triangle(&c->sw, v, v + 1, v + 2);
+  if (!gl_hw_triangle(c, v)) sw_triangle(&c->sw, v, v + 1, v + 2);
   c->sw.offset = 0;
 }
 void gl_compat_line(GLContext *tiny, GLVertex *a, GLVertex *b) {
   struct gl_context *c = tiny->software_state;
+  gl_hw_software(c);
   c->sw.offset = 0;
   int point = a == b;
   GLVertex ca = *a, cb = *b;
@@ -821,6 +822,7 @@ union gl_arg w32_gl_dispatch(unsigned id, const union gl_arg *a) {
     gl_error(c, GL_INVALID_OPERATION);
     return result;
   }
+  if (!c->tiny.in_begin) gl_hw_probe(c);
   gl_selected_context = &c->tiny;
   struct gl_context *selected __attribute__((cleanup(selected_texture_done))) =
       c;
@@ -852,7 +854,7 @@ union gl_arg w32_gl_dispatch(unsigned id, const union gl_arg *a) {
       result.p = "CiukiOS; TinyGL by Fabrice Bellard, Gek, C-Chads";
       break;
     case GL_RENDERER:
-      result.p = "CiukiOS scalar software OpenGL";
+      result.p = gl_hw_active(c) ? "CiukiOS render3d with scalar fallback" : "CiukiOS scalar software OpenGL";
       break;
     case GL_VERSION:
       result.p = "1.1 CiukiOS software subset";
@@ -912,6 +914,8 @@ union gl_arg w32_gl_dispatch(unsigned id, const union gl_arg *a) {
     return result;
   case ID_glFlush:
   case ID_glFinish:
+    if (id == ID_glFinish) gl_hw_sync(c);
+    else gl_hw_flush(c);
     if ((c->draw_buffer == GL_FRONT || c->draw_buffer == GL_FRONT_LEFT || c->draw_buffer == GL_FRONT_AND_BACK) && !gl_present(c, 1))
       gl_error(c, GL_INVALID_OPERATION);
     return result;
@@ -1368,6 +1372,7 @@ union gl_arg w32_gl_dispatch(unsigned id, const union gl_arg *a) {
     }
     unsigned color = sw_color_format(&c->sw, rgba(c->clear));
     int z = (int)(c->clear_depth * (c->depth_bits == 24 ? 16777215 : 65535));
+    if (gl_hw_clear(c, (unsigned)I(0), color, (unsigned)z)) break;
     for (unsigned y = 0; y < c->sw.height; y++)
       for (unsigned x = 0; x < c->sw.width; x++) {
         if (c->sw.scissor && ((int)x < c->sw.box[0] || (int)y < c->sw.box[1] ||

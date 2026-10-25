@@ -149,6 +149,7 @@ static void pixel_rect(struct gl_context *c, double x0, double y0, double x1,
 }
 void gl_pixels(struct gl_context *c, unsigned id, const union gl_arg *a,
                union gl_arg *r) {
+  gl_hw_software(c);
   (void)r;
   c->sw.offset = 0;
   if (id == ID_glPixelZoom) {

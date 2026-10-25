@@ -208,6 +208,7 @@ BOOL gl_present(struct gl_context *c, int front) {
   unsigned w, h, window;
   if (!gl_refresh_target(c, c->dc) || !gl_target(c->dc, &w, &h, &window))
     return 0;
+  gl_hw_probe(c);
   const uint32_t *source = front ? c->front_color : c->back_color;
   bind_user();
   DWORD values[4];
@@ -229,6 +230,11 @@ BOOL gl_present(struct gl_context *c, int front) {
       return 0;
     if (!present_gamma(c, &lease))
       return 0;
+    int gpu = front ? 0 : gl_hw_present(c, lease.token, lease.generation,
+        lease.width, lease.height, lease.bpp, lease.pitch);
+    if (gpu < 0) return 0;
+    if (gpu > 0) { gl_hw_sync(c); size_log(c, w, h); return 1; }
+    gl_hw_sync(c);
     uint8_t *copy = gl_alloc(lease.pitch * lease.height);
     if (!copy)
       return 0;
@@ -255,6 +261,7 @@ BOOL gl_present(struct gl_context *c, int front) {
     return 1;
   }
   /* LEASE(0) is synchronous: composition must be restored before PRESENT. */
+  gl_hw_sync(c);
   gl_release_present(c);
   BITMAPINFO info = {.bmiHeader = {.biSize = 40,
                                    .biWidth = c->sw.width,

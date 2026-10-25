@@ -509,6 +509,7 @@ void gl_quake3_coverage(HDC dc) {
        "allocation recovery");
 }
 void gl_quake3_benchmark(unsigned iterations, int default_format) {
+  extern void gl_hardware_sample(unsigned, unsigned, unsigned, unsigned);
   for (unsigned size = 0; size < 2; size++) {
     unsigned w = size ? 640 : 320, h = size ? 480 : 240;
     unsigned *pixels = calloc(w * h, 4);
@@ -560,6 +561,7 @@ void gl_quake3_benchmark(unsigned iterations, int default_format) {
 #ifdef SW_PROFILE
       model(w, h, pass + 1, iterations, p.cDepthBits);
 #endif
+      gl_hardware_sample(w,h,pass+1,iterations+1);
     }
     assert(wglMakeCurrent(0, 0) && wglDeleteContext(rc));
     assert(DeleteDC(dc));

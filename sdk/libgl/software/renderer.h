@@ -12,6 +12,7 @@ struct sw_image {
   unsigned bytes, format, internal;
 };
 struct sw_texture {
+  uint64_t revision; /* Private immutable-upload identity, not a public ABI. */
   unsigned name, used, refs, deleted, target;
   unsigned border_color;
   int wrap_s, wrap_t, min, mag;

@@ -23,6 +23,9 @@ void gl_quake3_benchmark(unsigned, int);
 void gl_quake3_coverage(HDC);
 void gl_raster_tests(void);
 void gl_amendment2_tests(const char *);
+void gl_hardware_enable(void);
+void gl_hardware_tests(void);
+void gl_hardware_stats(void);
 static HDC dc;
 static HGLRC rc;
 static unsigned pixels[W32_GL_WIDTH * W32_GL_HEIGHT];
@@ -299,6 +302,14 @@ static uint64_t now(void) {
 }
 int main(int argc, char **argv) {
   setvbuf(stdout, 0, _IONBF, 0);
+  if (argc > 1 && !strcmp(argv[1], "--hardware")) {
+    gl_hardware_tests(); test_reset(); return 0;
+  }
+  if (argc > 1 && (!strcmp(argv[1], "--hardware-quake3") ||
+                   !strcmp(argv[1], "--hardware-quake3-default"))) {
+    gl_hardware_enable(); gl_quake3_benchmark(3,!strcmp(argv[1], "--hardware-quake3-default"));
+    gl_hardware_stats(); test_reset(); return 0;
+  }
   if (argc > 1 && !strcmp(argv[1], "--amendment2")) {
     gl_amendment2_tests(argc > 2 ? argv[2] : 0);
     test_reset();

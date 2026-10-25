@@ -176,6 +176,48 @@ void gl_textures(struct gl_context *c, unsigned id, const union gl_arg *a,
 #define P(n) (a[n].p)
   struct sw_unit *u = &c->sw.unit[c->active];
   struct sw_texture *t = c->binding[c->active][I(0) == GL_TEXTURE_2D];
+  if (id == ID_glCopyTexImage1D || id == ID_glCopyTexImage2D ||
+      id == ID_glCopyTexSubImage1D || id == ID_glCopyTexSubImage2D) {
+    int one = id == ID_glCopyTexImage1D || id == ID_glCopyTexSubImage1D;
+    int sub = id == ID_glCopyTexSubImage1D || id == ID_glCopyTexSubImage2D;
+    int w = I(sub ? one ? 5 : 6 : 5), h = one ? 1 : I(sub ? 7 : 6);
+    int x = I(sub ? one ? 3 : 4 : 3), y = I(sub ? one ? 4 : 5 : 4);
+    gl_hw_sync(c);
+    uint8_t *pixels = w && h ? gl_alloc((unsigned)w * h * 4) : 0;
+    if (w && h && !pixels) { gl_error(c, GL_OUT_OF_MEMORY); return; }
+    for (int j = 0; j < h; j++)
+      for (int i = 0; i < w; i++) {
+        int64_t sx = (int64_t)x + i, sy = (int64_t)y + j;
+        unsigned color = sx < 0 || sy < 0 || sx >= c->drawable_width || sy >= c->drawable_height
+            ? 0xff000000 : gl_read_color(c, (int)sx, (int)sy);
+        gl_pixel_put(pixels + ((unsigned)j * w + i) * 4, GL_RGBA, GL_UNSIGNED_BYTE, color);
+      }
+    int unpack[6]; w32_copy(unpack, c->unpack, sizeof(unpack));
+    w32_fill(c->unpack, 0, sizeof(c->unpack)); c->unpack[0] = 1;
+    gl_hw_texture_changed(t);
+    if (sub) {
+      if (w && h) subimage(c, t, I(1), I(2), one ? 0 : I(3), w, h,
+                          GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+      else {
+        const struct sw_image *m = &t->image[I(1)];
+        if (!m->pixels || (unsigned)I(2) > m->w || (!one && (unsigned)I(3) > m->h))
+          gl_error(c, GL_INVALID_VALUE);
+      }
+    } else image(c, t, I(1), I(2), w, h, I(one ? 6 : 7), GL_RGBA,
+                 GL_UNSIGNED_BYTE, pixels, 0, 0);
+    w32_copy(c->unpack, unpack, sizeof(unpack));
+    gl_dealloc(pixels);
+    return;
+  }
+  switch (id) {
+  case ID_glTexImage1D: case ID_glTexImage2D:
+  case ID_glTexSubImage1D: case ID_glTexSubImage2D:
+  case ID_glCompressedTexImage2DARB: case ID_glCompressedTexSubImage2DARB:
+  case ID_glTexParameteri: case ID_glTexParameterf:
+  case ID_glTexParameteriv: case ID_glTexParameterfv:
+    gl_hw_texture_changed(t); break;
+  default: break;
+  }
   switch (id) {
   case ID_glBindTexture:
     if (!target(I(0))) {

@@ -159,6 +159,7 @@ unsigned gl_read_color(struct gl_context *c, int x, int y) {
   return source[(c->sw.height - 1 - y) * c->sw.width + x] | 0xff000000;
 }
 void gl_select_buffer(struct gl_context *c) {
+  gl_hw_software(c);
   c->sw.color = (c->draw_buffer == GL_FRONT || c->draw_buffer == GL_FRONT_LEFT) ? c->front_color : c->back_color;
   c->sw.color2 = c->doublebuffer && c->draw_buffer == GL_FRONT_AND_BACK ? c->front_color : 0;
   c->sw.color_disabled = c->draw_buffer == GL_NONE;
@@ -193,6 +194,7 @@ int gl_refresh_target(struct gl_context *c, HDC dc) {
       return 0;
     }
     /* Contents after drawable resize are undefined; never expose old storage. */
+    gl_hw_close(c);
     gl_release_present(c);
     if (c->back) DeleteObject(c->back);
     free_attachments(c);
@@ -298,6 +300,7 @@ BOOL W32API wglDeleteContext(HGLRC h) {
   struct gl_context *c = find(h);
   if (!c || (c->tid && c->tid != tid()))
     return 0;
+  gl_hw_close(c);
   for (unsigned i = 0; i < 16; i++)
     if (contexts[i] == c)
       contexts[i] = 0;
@@ -320,8 +323,10 @@ BOOL W32API wglDeleteContext(HGLRC h) {
 BOOL W32API wglMakeCurrent(HDC dc, HGLRC h) {
   GL_GUARD;
   struct gl_context *old = gl_current(), *c = h ? find(h) : 0;
-  if (old)
+  if (old) {
+    gl_hw_sync(old);
     old->tid = 0;
+  }
   if (!h)
     return 1;
   if (!c || (c->tid && c->tid != tid()) || GetPixelFormat(dc) != (int)c->format)
@@ -329,8 +334,10 @@ BOOL W32API wglMakeCurrent(HDC dc, HGLRC h) {
   if (!gl_refresh_target(c, dc))
     return 0;
   c->tid = tid();
-  if (c->dc != dc)
+  if (c->dc != dc) {
+    gl_hw_close(c);
     gl_release_present(c);
+  }
   c->dc = dc;
   /* Quake probes device gamma immediately after MakeCurrent, before swapping. */
   gl_prepare_present(c, dc);
