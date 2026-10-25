@@ -630,7 +630,7 @@ class StableReleaseTests(unittest.TestCase):
         self.assertIsNotNone(release.PUBLIC_FORBIDDEN.search("Armada E500"))
 
     def test_real_changelog_and_public_doc_name_no_pc_models(self):
-        section = release.changelog_section((ROOT / "CHANGELOG.md").read_text(), "1.0.0")
+        section = release.changelog_section((ROOT / "CHANGELOG.md").read_text(), "1.0.1")
         self.assertIn("Known issues", section)
         self.assertIsNone(release.PUBLIC_FORBIDDEN.search(section))
         doc = (ROOT / "docs/release-notes-1.0-alpha.md").read_text()
