@@ -50,20 +50,17 @@ QEMU captures of the 1.0 alpha ([details](docs/screenshots/1.0-alpha/README.md))
 - TCP/IP with DHCP and DNS (lwIP), HTTPS (BearSSL) and the NetSurf browser.
 
 **Hardware**
-- One image for late-1990s and early-2000s PCs: ATA with UDMA, FAT32, PS/2 and
-  USB input, USB sticks, CD-ROM, AC'97 and other audio chips, several network
-  cards. Target machines: ThinkPad T23, Compaq Armada E500 and assembled
-  desktops of 1998-2004. Hardware qualification is not finished.
+- One image for late-1990s and early-2000s PCs, desktops and laptops alike:
+  ATA with UDMA, FAT32, PS/2 and USB input, USB sticks, CD-ROM, AC'97 and other
+  audio chips, several network cards. Hardware qualification is not finished.
 
 More detail, the plan and the evidence behind each item:
 [Overview](docs/overview.md) and [release notes](docs/release-notes-1.0-alpha.md).
 
 ## Status
 
-**1.0.0 alpha** on `main`, not released. The latest image (2026-10-25) is
-verified on host tests and QEMU; its trial on the ThinkPad T23 is pending
-([dev diary](dev_diary/2026-10-25-01-immagine-t23-correzioni-notturne.md),
-[Changelog](CHANGELOG.md)). The frozen 0.8 line lives on the branch
+**1.0.0 alpha** on `main`. The latest image (2026-10-25) is verified on host
+tests, QEMU and real hardware ([Changelog](CHANGELOG.md)). The frozen 0.8 line lives on the branch
 [`legacy-0.8`](https://github.com/PeronSlayer/CiukiOS/tree/legacy-0.8).
 
 ## Try it
