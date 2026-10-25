@@ -1279,3 +1279,172 @@ static void test_help(void) {
   DestroyWindow(dlg);
   DestroyWindow(owner);
 }
+
+/* ---- q3exec2: Installer VISE wizard pages ------------------------------- */
+/* The Quake III Arena demo installer (MindVision Installer VISE 3.x) shows
+ * each wizard page as its own modal dialog owned by a full-screen background
+ * window. A page saves its screen position on WM_DESTROY (GetWindowRect,
+ * then ClientToScreen of GetParent) and the next page restores it in
+ * WM_INITDIALOG (ScreenToClient of GetParent, MoveWindow); the first page is
+ * centred on its parent, or on the desktop when the parent is hidden
+ * (vise32ex.dll 0x10049be0, 0x1001e080, 0x1002b150). VISE takes every
+ * DialogBoxParam result except Cancel (2) and Back (12) as Next, so a page
+ * the desktop cannot show is skipped without a trace. */
+static POINT vise_saved;
+static HWND vise_background;
+static UINT vise_pages, vise_visible[4], vise_owner_visible[4];
+HWND GetDesktopWindow(void);
+static void vise_center(HWND dlg) {
+  HWND parent = GetParent(dlg);
+  if (!parent || !IsWindowVisible(parent))
+    parent = GetDesktopWindow();
+  RECT p, d;
+  GetWindowRect(parent, &p);
+  GetWindowRect(dlg, &d);
+  int w = d.right - d.left, h = d.bottom - d.top;
+  MoveWindow(dlg, p.left + ((p.right - p.left) - w) / 2,
+             p.top + ((p.bottom - p.top) - h) / 2, w, h, 0);
+}
+static intptr_t W32API vise_proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
+  if (m == WM_INITDIALOG) {
+    HFONT font = (HFONT)SendMessageA(h, WM_GETFONT, 0, 0);
+    for (HWND c = GetWindow(h, 5); c; c = GetWindow(c, 2))
+      SendMessageA(c, WM_SETFONT, (WPARAM)font, 0);
+    SetWindowTextA(h, lp ? "Software License Agreement" : "Welcome");
+    if (lp) {
+      static char text[10240];
+      for (UINT i = 0; i + 1 < sizeof(text); i++)
+        text[i] = i % 72 == 71 ? '\n' : i % 72 == 70 ? '\r' : (char)('A' + i % 26);
+      SetDlgItemTextA(h, 1200, text);
+    }
+    EnableWindow(GetDlgItem(h, 12), lp != 0);
+    if (vise_saved.x == 0x8000 && vise_saved.y == 0x8000)
+      vise_center(h);
+    else {
+      POINT at = vise_saved;
+      RECT r;
+      ScreenToClient(GetParent(h), &at);
+      GetWindowRect(h, &r);
+      MoveWindow(h, at.x, at.y, r.right - r.left, r.bottom - r.top, 1);
+    }
+    return 1;
+  }
+  if (m == WM_DESTROY) {
+    RECT r;
+    GetWindowRect(h, &r);
+    vise_saved = (POINT){r.left, r.top};
+    ClientToScreen(GetParent(h), &vise_saved);
+    return 0;
+  }
+  if (m == WM_COMMAND && ((wp & 0xffff) == IDOK || (wp & 0xffff) == IDCANCEL ||
+                          (wp & 0xffff) == 12)) {
+    EndDialog(h, wp & 0xffff);
+    return 1;
+  }
+  return 0;
+}
+static LRESULT W32API vise_background_proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
+  if (m == WM_ENTERIDLE) /* the harness drives modal loops from the owner */
+    return owner_proc(h, m, wp, lp);
+  if (m == WM_CREATE)
+    EnableMenuItem(GetSystemMenu(h, 0), SC_CLOSE, MF_GRAYED);
+  if (m == WM_SYSCOMMAND && wp == SC_CLOSE)
+    return 0;
+  return DefWindowProcA(h, m, wp, lp);
+}
+static void vise_page_script(HWND dlg, UINT why, UINT step) {
+  (void)why;
+  if (step)
+    return;
+  CHECK(vise_pages < 4);
+  vise_visible[vise_pages] = IsWindowVisible(dlg);
+  vise_owner_visible[vise_pages] = IsWindowVisible(vise_background);
+  vise_pages++;
+  /* Let the page's frame updates reach the desktop, then the real input
+   * path: the desktop's key press, its text and the release. */
+  ui_kernel_pause(50);
+  MSG m;
+  while (PeekMessageA(&m, 0, 0, 0, 1))
+    if (!IsDialogMessageA(dlg, &m)) {
+      TranslateMessage(&m);
+      DispatchMessageA(&m);
+    }
+  ui_kernel_pause(50);
+  raw_input(dlg, CIUKI_INPUT_KEY, 0x1c, 1, 0);
+  raw_input(dlg, CIUKI_INPUT_TEXT, '\r', 0, 0);
+  raw_input(dlg, CIUKI_INPUT_KEY, 0x1c, 0, 0);
+}
+/* Every packet must pass the desktop's own parser against the surface its
+ * window has there, and nothing may follow a window's DESK_CLOSE: the
+ * desktop drops the connection for a refused packet (desk_v3_receive), every
+ * window of the program with it. Surfaces are tracked from CREATE/RESIZE. */
+static void vise_check_wire(UINT from) {
+  struct vise_surface { DWORD wire, generation, w, h, closed; } sizes[64];
+  UINT known = 0;
+  for (UINT i = from; i < outgoing_count; i++) {
+    const struct ciuki_message *m = &outgoing[i];
+    if (m->data[0] != DESK_V3_VERSION)
+      continue;
+    struct desk_packet p;
+    DWORD wire = desk_get32(m->data + 8), generation = desk_get32(m->data + 12);
+    struct ciuki_surface_info info = {sizeof(info), 0, 0, 0, CIUKI_SURFACE_XRGB8888, 0};
+    UINT k = 0;
+    while (k < known && (sizes[k].wire != wire || sizes[k].generation != generation))
+      k++;
+    if (m->data[1] == DESK_CREATE_WINDOW || m->data[1] == DESK_V3_RESIZE) {
+      CHECK(k < 64);
+      if (k == known)
+        sizes[known++] = (struct vise_surface){wire, generation, 0, 0, 0};
+      sizes[k].w = desk_get32(m->data + (m->data[1] == DESK_CREATE_WINDOW ? 36 : 16));
+      sizes[k].h = desk_get32(m->data + (m->data[1] == DESK_CREATE_WINDOW ? 40 : 20));
+    }
+    if (k < known) {
+      CHECK(!sizes[k].closed);
+      info.width = sizes[k].w, info.height = sizes[k].h;
+      if (m->data[1] == DESK_CLOSE)
+        sizes[k].closed = 1;
+    }
+    info.stride = info.width * 4;
+    info.allocation_bytes = (info.stride * info.height + 4095u) & ~4095u;
+    CHECK(desk_parse(m, 1, &info, &p));
+  }
+}
+static void test_vise(void) {
+  WNDCLASSA c = {.style = 3, .lpfnWndProc = vise_background_proc,
+                 .hbrBackground = (HBRUSH)(uintptr_t)(COLOR_WINDOW + 1),
+                 .lpszClassName = "VISE background"};
+  CHECK(RegisterClassA(&c));
+  UINT from = outgoing_count;
+  vise_background = CreateWindowExA(0, "VISE background", "Quake 3 Arena Demo Setup",
+                                     0x00cf0000, (int)0x80000000, (int)0x80000000,
+                                     (int)0x80000000, (int)0x80000000, 0, 0, FIXTURE, 0);
+  CHECK(vise_background);
+  ShowWindow(vise_background, 3); /* SW_SHOWMAXIMIZED */
+  UpdateWindow(vise_background);
+  drain(0);
+  vise_saved = (POINT){0x8000, 0x8000};
+  script(vise_page_script);
+  CHECK(DialogBoxParamA(FIXTURE, (const char *)(uintptr_t)140, vise_background, vise_proc, 0) == IDOK);
+  UpdateWindow(vise_background);
+  script(vise_page_script);
+  CHECK(DialogBoxParamA(FIXTURE, (const char *)(uintptr_t)141, vise_background, vise_proc, 1) == IDOK);
+  script(0);
+  CHECK(vise_pages == 2 && vise_visible[0] && vise_visible[1] && vise_owner_visible[0] && vise_owner_visible[1]);
+  /* The license page opens where the welcome page was. */
+  RECT r;
+  CHECK(vise_saved.x != 0x8000 && GetWindowRect(vise_background, &r));
+  /* A visible window destroyed right after painting: its last frame update
+   * must not follow its DESK_CLOSE (the race that took the installer's
+   * windows away). */
+  HWND w = CreateWindowExA(0, "STATIC", "Starting setup", WS_POPUP | WS_CAPTION | WS_VISIBLE,
+                           10, 10, 200, 100, 0, 0, FIXTURE, 0);
+  drain(0);
+  InvalidateRect(w, 0, 1);
+  UpdateWindow(w);
+  ui_kernel_pause(100);
+  DestroyWindow(w);
+  vise_check_wire(from);
+  DestroyWindow(vise_background);
+  printf("VISE wizard: welcome -> license, owner visible, %u packets valid for the desktop\n",
+         outgoing_count - from);
+}

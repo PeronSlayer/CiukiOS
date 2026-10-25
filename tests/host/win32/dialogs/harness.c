@@ -868,6 +868,9 @@ static void harness_run(void) {
     test_help();
   else if (!strcmp(mode, "installer"))
     test_installer();
+  else if (!strcmp(mode, "vise"))
+    test_vise();
+
   else if (!strcmp(mode, "frames"))
     test_frames();
   else if (!strcmp(mode, "upper-user"))

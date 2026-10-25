@@ -247,6 +247,11 @@ class DialogTests(unittest.TestCase):
     def test_installer_style_pages(self):
         self.execute('installer')
 
+    def test_vise_wizard_pages(self):
+        """q3exec2: Installer VISE pages and the desktop wire after DestroyWindow."""
+        text = self.execute('vise')
+        self.assertIn('VISE wizard: welcome -> license', text)
+
     def test_f5_20b_upper_user(self):
         """f5-20B: the Unicode USER layer and the remaining USER entry points
         the reused Wine DLLs import (directive f5-20, part B)."""

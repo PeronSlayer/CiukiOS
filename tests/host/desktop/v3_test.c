@@ -253,6 +253,38 @@ static void ownership(void)
     assert(!d.clients[root].v3_failed && d.clients[root].v3_over_count>=1); fake_block=0; flush(); assert(d.clients[a].window); cleanup();
     puts("PASS v3 multiwindow: ownership, generations, topmost, modal owner death, transport loss and backpressure");
 }
+/* q3exec2: a frame update that arrives after its window's DESK_CLOSE, or
+ * whose rectangle no longer fits the window's surface, is refused alone;
+ * the program keeps its connection and its other windows. A packet no
+ * surface could make valid, or one from another sender, still ends it. */
+static void stale_updates(void)
+{
+    setup(); int root=peer(10,42), a=create(root,20,1,1,0,0), b=create(root,21,2,1,0,0); flush();
+    struct ciuki_message m; msg(&m,DESK_CLOSE,0,1,1); assert(!desk_v3_receive(&d,root,&m)); flush();
+    assert(!d.clients[a].window && d.clients[b].window);
+    msg(&m,DESK_DAMAGE,16,1,1); desk_put32(m.data+24,200); desk_put32(m.data+28,100);
+    assert(desk_v3_receive(&d,root,&m)==-ENOENT); flush();
+    assert(d.clients[root].channel==10 && d.clients[b].window);
+    msg(&m,DESK_V3_PRESENT,16,1,1); desk_put32(m.data+24,10); desk_put32(m.data+28,10);
+    assert(desk_v3_receive(&d,root,&m)==-ENOENT); flush();
+    msg(&m,DESK_DAMAGE,16,2,1); desk_put32(m.data+16,150); desk_put32(m.data+24,100); desk_put32(m.data+28,10);
+    assert(desk_v3_receive(&d,root,&m)==-EINVAL); flush();
+    assert(d.clients[root].channel==10 && d.clients[b].window && d.v3_stale_updates==3);
+    msg(&m,DESK_DAMAGE,16,2,1); desk_put32(m.data+24,200); desk_put32(m.data+28,100);
+    assert(!desk_v3_receive(&d,root,&m)); flush();
+    msg(&m,DESK_DAMAGE,16,1,1); m.sender_pid=84;
+    assert(desk_v3_receive(&d,root,&m)==-EINVAL); assert(d.clients[root].channel<0 && !d.clients[b].window);
+    cleanup();
+    setup(); root=peer(10,42); b=create(root,21,2,1,0,0); flush();
+    msg(&m,DESK_DAMAGE,16,2,1); m.data[2]=1;
+    assert(desk_v3_receive(&d,root,&m)==-EINVAL); assert(d.clients[root].channel<0 && !d.clients[b].window);
+    cleanup();
+    setup(); root=peer(10,42); b=create(root,21,2,1,0,0); flush();
+    msg(&m,DESK_DAMAGE,16,2,1); desk_put32(m.data+16,0x80000000u);
+    assert(desk_v3_receive(&d,root,&m)==-EINVAL); assert(d.clients[root].channel<0 && !d.clients[b].window);
+    cleanup();
+    puts("PASS v3 stale frame updates: closed window and outside rectangle refused alone, malformed still drops");
+}
 static void slow_client_storm(void)
 {
     struct ciuki_message m; unsigned keys=0, buttons=0, last_motion=0, motions=0, sent0;
@@ -702,6 +734,6 @@ int main(int argc,char **argv)
 #ifdef DESKTOP_ADAPTER_FIXTURE
     production_lease_replay();
 #endif
-    protocol(); ownership(); window_order(); context_help(); input_and_lease(); resize_and_cursor(); bridge(); native_power(); links(); shell_links(); close_and_native_tasks(); slow_client_storm(); frames(argv[2]);
+    protocol(); ownership(); stale_updates(); window_order(); context_help(); input_and_lease(); resize_and_cursor(); bridge(); native_power(); links(); shell_links(); close_and_native_tasks(); slow_client_storm(); frames(argv[2]);
     puts("PASS desktop v3 integration (host only)"); return 0;
 }
