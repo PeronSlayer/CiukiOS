@@ -895,6 +895,12 @@ def build_with_stage(kernel, out, boot_cfg, stage):
     directories.update(registry_directories)
     dos_sources, dos_directories, dos_metadata, free = dos_payloads(out)
     sources.update(dos_sources); directories.update(dos_directories); metadata.update(dos_metadata)
+    # Owner request 2026-10-25: the Quake III Arena demo installer, unmodified, with its Games shortcut.
+    q3a_spec = importlib.util.spec_from_file_location("q3a_demo", ROOT / "scripts/q3a_demo.py")
+    q3a = importlib.util.module_from_spec(q3a_spec); q3a_spec.loader.exec_module(q3a)
+    q3a_sources, q3a_directories, q3a_metadata, q3a_free = q3a.payloads(out.parent / "q3a-demo")
+    sources.update(q3a_sources); directories.update(q3a_directories); metadata.update(q3a_metadata)
+    free = set(free) | q3a_free
     # Any other native ELF the builder staged (the Win32 and DOS stores hold PE
     # files and data, which stay untouched); application_payloads did its own.
     metadata["native_elf"] += strip_payloads(sources, stage)
