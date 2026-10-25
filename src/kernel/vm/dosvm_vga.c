@@ -11,6 +11,7 @@
 #include "vga_presenter.h"
 
 #define VIDEO_LINEAR 5u
+#define VIDEO_BANK 6u      /* war2vbe: 64 KiB of the VBE buffer (window A) */
 static void video_direct(struct dosvm *, bool port_timed);
 static void video_collect(struct dosvm *, bool planes);
 extern const uint8_t font_cfn_regular[]; /* 95 widths, then 95 x 16 u16 rows */
@@ -22,7 +23,10 @@ static bool vram(uint32_t address) { return address >= 0xA0000 && address < 0xC0
 static int video_read(void *arg, uint32_t address, uint8_t *value)
 {
     struct dosvm *v = arg;
-    if (vram(address)) {
+    uint32_t window;
+    /* war2vbe: a windowed VBE mode's A0000h-AFFFFh cycles address the VBE
+     * buffer (dosvm_read translates them), not the VGA planes. */
+    if (vram(address) && !dosvm_vbe_window(v, address, &window)) {
         dosvm_vga_model(v);
         *value = cvga_read_vram(&v->vga, address); return 0;
     }
@@ -232,7 +236,16 @@ static uint32_t plane_frame(struct dosvm *v, unsigned plane, unsigned page)
 }
 static uint32_t video_frame(struct dosvm *v, unsigned want, unsigned page)
 {
+    if (want == VIDEO_BANK) return dosvm_vbe_frame(v, v->vbe_bank * VIDEO_WINDOW_PAGES + page);
     return want == VIDEO_LINEAR ? v->frames[VIDEO_WINDOW_PAGE + page] : plane_frame(v, want - 1, page);
+}
+/* war2vbe: every page of the selected bank is a resident buffer frame. */
+static bool video_bank_ready(struct dosvm *v)
+{
+    if (!v->vbe_buffer.used || (v->vbe_bank + 1u) * VIDEO_WINDOW_PAGES > v->vbe_buffer.pages) return false;
+    for (unsigned page = 0; page < VIDEO_WINDOW_PAGES; page++)
+        if (!video_frame(v, VIDEO_BANK, page)) return false;
+    return true;
 }
 /* Reuse the VM's own aperture pages, which normally stay supervisor-only.
  * The model uses physical offsets: chain-4 clears A0/A1 without shifting. */
@@ -267,8 +280,11 @@ static uint32_t video_exchange(struct dosvm *v, unsigned want)
     if (e) panic("dosvm: missing video window table");
     if (v->video_direct && v->video_direct < VIDEO_LINEAR)
         v->video_pending[v->video_direct - 1] |= (uint16_t)dirty;
-    if (v->video_direct && !want && (accessed & ~dirty)) v->perf.latch_read_windows++;
+    if (v->video_direct == VIDEO_BANK && dirty)
+        dosvm_vbe_mark(v, v->vbe_bank_mapped * VIDEO_WINDOW_PAGES, dirty);
+    if (v->video_direct && v->video_direct != VIDEO_BANK && !want && (accessed & ~dirty)) v->perf.latch_read_windows++;
     v->video_direct = want;
+    if (want == VIDEO_BANK) v->vbe_bank_mapped = v->vbe_bank;
     return dirty;
 }
 /* fx-27: chain-4 stores stay in the linear backing until a model consumer
@@ -295,7 +311,12 @@ static void video_collect(struct dosvm *v, bool planes)
     if (v->video_direct) {
         if (as_replace_pages(&v->as, VIDEO_WINDOW_PAGE * PAGE_SIZE, 0,
                              VIDEO_WINDOW_PAGES, 0, &dirty, 0)) panic("dosvm: missing video window table");
-        if (v->video_direct < VIDEO_LINEAR)
+        if (v->video_direct == VIDEO_BANK) {
+            /* war2vbe: window stores are VBE buffer stores (presenter damage). */
+            if (dirty) dosvm_vbe_mark(v, v->vbe_bank_mapped * VIDEO_WINDOW_PAGES, dirty);
+            dirty = 0;
+        }
+        else if (v->video_direct < VIDEO_LINEAR)
             v->video_pending[v->video_direct - 1] |= (uint16_t)dirty;
         else if (dirty) {
             v->video_linear_stale |= (uint16_t)dirty;
@@ -323,7 +344,8 @@ static void video_collect(struct dosvm *v, bool planes)
 static void video_harvest(struct dosvm *v) { video_collect(v, true); }
 void dosvm_vga_sync(struct dosvm *v, bool unmap)
 {
-    if (v->fullscreen) return;
+    /* A VBE bank window may stay open in a linear (VBE) full screen. */
+    if (v->fullscreen && v->video_direct != VIDEO_BANK) return;
     if (!v->as.pd_phys) return;
     /* VGA state/PTEs are thread-owned on this UP kernel. No scheduling
      * point in harvest/seed/exchange: the guest cannot run, while timer
@@ -334,13 +356,25 @@ void dosvm_vga_sync(struct dosvm *v, bool unmap)
 }
 static void video_direct(struct dosvm *v, bool port_timed)
 {
-    if (v->fullscreen || v->vbe_mode) return;
+    /* war2vbe: a windowed VBE mode maps its bank in the window and in a
+     * linear (VBE) full screen, whose aperture stays VM RAM; never while a
+     * full-screen switch holds the VM (the switch restores the PTEs). */
+    bool bank_mode = v->vbe_mode && !v->vbe_linear;
+    if (v->fullscreen && (!bank_mode || v->fullscreen_hold)) return;
     if (!v->as.pd_phys || v->info.state >= DOSVM_STOPPING) return;
-    int write_plane = cvga_direct_plane(&v->vga);
-    int plane = v->video_read_window ? cvga_direct_read_plane(&v->vga) : write_plane;
-    unsigned want = plane < 0 ? (cvga_direct_linear(&v->vga) ? VIDEO_LINEAR : 0) : (unsigned)plane + 1;
-    bool writable = want && (!v->video_read_window || plane == write_plane || want == VIDEO_LINEAR);
-    if (want == v->video_direct && writable == v->video_writable) return;
+    unsigned want;
+    bool writable;
+    if (v->vbe_mode) {
+        want = bank_mode && video_bank_ready(v) ? VIDEO_BANK : 0;
+        writable = want != 0;
+        if (want == v->video_direct && (want != VIDEO_BANK || v->vbe_bank_mapped == v->vbe_bank)) return;
+    } else {
+        int write_plane = cvga_direct_plane(&v->vga);
+        int plane = v->video_read_window ? cvga_direct_read_plane(&v->vga) : write_plane;
+        want = plane < 0 ? (cvga_direct_linear(&v->vga) ? VIDEO_LINEAR : 0) : (unsigned)plane + 1;
+        writable = want && (!v->video_read_window || plane == write_plane || want == VIDEO_LINEAR);
+        if (want == v->video_direct && writable == v->video_writable) return;
+    }
     uint64_t begin = port_timed ? 0 : dosvm_perf_task_clock();
     /* Chained backing needs deinterleaving before memory state changes.
      * Single planes need only their D bitmap carried across the swap. */
@@ -358,8 +392,38 @@ void dosvm_vga_model(struct dosvm *v)
 {
     if (v->video_direct == VIDEO_LINEAR) dosvm_vga_sync(v, true);
 }
+/* war2vbe: the open bank window's D pages -> VBE buffer D bits, for the
+ * presenter, the present sampler and the linear full-screen flush. */
+void dosvm_vga_bank_collect(struct dosvm *v)
+{
+    if (v->video_direct != VIDEO_BANK || !v->as.pd_phys) return;
+    uint32_t dirty = 0;
+    if (as_replace_pages(&v->as, VIDEO_WINDOW_PAGE * PAGE_SIZE, 0, VIDEO_WINDOW_PAGES, 0, &dirty, 0))
+        panic("dosvm: missing video window table");
+    if (dirty) dosvm_vbe_mark(v, v->vbe_bank_mapped * VIDEO_WINDOW_PAGES, dirty);
+}
 bool dosvm_vga_retry(struct dosvm *v, uint32_t address, uint32_t instruction, bool pm)
 {
+    if (v->vbe_mode) {
+        /* war2vbe: a windowed VBE mode opens its bank window on the first
+         * guest access (and after a full-screen switch restored the PTEs);
+         * linear VBE modes keep A0000h on the VGA model, as before. */
+        if (v->vbe_linear || address < 0xA0000 || address >= 0xB0000 || vram(instruction) ||
+            !v->as.pd_phys || v->info.state >= DOSVM_STOPPING) return false;
+        if (v->video_direct == VIDEO_BANK) {
+            uint32_t pte = 0;
+            unsigned page = (address >> 12) - VIDEO_WINDOW_PAGE;
+            as_lookup(&v->as, address & ~0xFFFu, &pte);
+            if ((pte & PTE_U) && (pte & ~0xFFFu) == dosvm_vbe_frame(v, v->vbe_bank_mapped * VIDEO_WINDOW_PAGES + page))
+                return false;
+            v->vbe_bank_mapped = UINT16_MAX;
+        }
+        dosvm_vga_direct(v);
+        if (v->video_direct != VIDEO_BANK) return false;
+        v->video_faults++;
+        if (pm) v->video_pm_faults++;
+        return true;
+    }
     if (v->video_direct || address < 0xA0000 || address >= 0xB0000 || vram(instruction) ||
         !cvga_direct_linear(&v->vga) || !v->as.pd_phys || v->info.state >= DOSVM_STOPPING) return false;
     dosvm_vga_direct(v);
@@ -399,9 +463,17 @@ int dosvm_vga_bios(struct dosvm *v, struct v86_frame *f)
     cvbios_regs r = {f->tf.eax, f->tf.ebx, f->tf.ecx, f->tf.edx,
                      f->tf.esi, f->tf.edi, f->tf.ebp, (uint16_t)f->es, (uint16_t)f->ds};
     v->video_bus_fault = false;
+    v->video_bios_active = true;   /* war2vbe: BIOS A0000h cycles reach the VGA model */
     int handled = cvbios_int10(&v->video_bios, &r);
+    v->video_bios_active = false;
     if (!function && handled) {
-        v->vbe_mode=0; v->video_presented=false;
+        /* war2vbe review (P2): harvest and close the VBE bank window before
+         * the VBE state goes. In a linear (VBE) full screen video_direct()
+         * below returns early and neither the mode-change revocation nor
+         * the full-screen exit touches A0000h (map_aperture leaves the VBE
+         * transport alone), so A0000h would keep aliasing the old bank. */
+        if (v->video_direct == VIDEO_BANK) dosvm_vga_sync(v, true);
+        v->vbe_mode=0; v->vbe_linear=false; v->vbe_bank=0; v->video_presented=false;
         if (hardware_mode && linear_mode) dosvm_fullscreen_mode_changed(v);
     }
     if (handled && (!function || function == 0x0E || function == 9 || function == 0x0A || function == 0x13))
@@ -578,6 +650,9 @@ static int video_string_run(void *arg, uint32_t source, uint32_t dest, unsigned 
                          uint32_t count, int back, int move, uint32_t value, bool preflight)
 {
     struct dosvm *v = arg;
+    /* war2vbe: a windowed VBE mode's window is the VBE buffer, not the
+     * planes; its rare emulated strings go bytewise through the bus. */
+    if (v->vbe_mode && !v->vbe_linear) return 0;
     /* The fast plane copier accepts RAM source pointers only. A VBE owner
      * can still address the virtual VGA aperture; use the ordinary monitor
      * transfer so a borrowed LFB source never becomes a RAM direct-map read. */
