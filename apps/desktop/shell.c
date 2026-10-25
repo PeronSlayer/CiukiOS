@@ -315,9 +315,6 @@ static const struct program_info programs[] = {
     {"solitaire", "Solitaire", "applications-games", "games", NULL},
     {"freecell", "FreeCell", "face-glasses", "games", NULL},
     {"hearts", "Hearts", "emblem-favorite", "games", NULL},
-    /* Owner request 2026-10-25: the bundled id Software Windows demo installer (scripts/q3a_demo.py), started through
-     * the same Win32 path as Run and Files (SH_ACT_WIN32_PROGRAM); listed after the DOS games. */
-    {"q3demo", "Install Quake III Arena Demo", "input-gaming", "games", "C:\\Games\\Quake III Arena Demo Setup\\Q3ADemo.exe"},
     {"hwreport", "Hardware Report", "preferences-desktop-peripherals", "system-tools", NULL},
     {"scandisk", "ScanDisk", "drive-harddisk", "system-tools", NULL},
     {"msconfig", "System Configuration", "preferences-system", "system-tools", NULL},
@@ -616,7 +613,7 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
     case SH_MENU_GAMES: {
         /* Owner 2026-10-25: the CiukiOS versions of the classic Windows games (Minesweeper, Solitaire, FreeCell,
          * Hearts) live in the Classic Games submenu; Games lists that submenu, the bundled DOS games, then the
-         * bundled Windows programs (the Quake III Arena demo installer) and installed shortcuts. */
+         * bundled Windows programs (the table rows with a target) and installed shortcuts. */
         int classic = 0;
         for (size_t k = 0; k < sizeof(programs) / sizeof(programs[0]) && !classic; k++)
             classic = !strcmp(programs[k].category, "games") && !programs[k].target && program_index(d, programs[k].name) >= 0;
