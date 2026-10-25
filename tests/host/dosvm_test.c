@@ -1043,7 +1043,8 @@ int main(void)
     if (getenv("CIUKI_VM_101_REVOKE_RACE")) { test_101_revoke_races(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_101_BENCH")) { bench_101_video(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_101_VIDEO")) { test_101_video(); free(ram); fflush(stdout); return 0; }
-    if (getenv("CIUKI_VM_VBE_WINDOW")) { test_vbe_window(); test_fullscreen_vbe(); free(ram); fflush(stdout); return 0; }
+    if (getenv("CIUKI_VM_VBE_WINDOW")) { test_vbe_window(); test_vbe_native_war2_t23(); test_vbe_native_lease_fast_paths(); test_fullscreen_vbe(); free(ram); fflush(stdout); return 0; }
+    if (getenv("CIUKI_VM_WAR2_FULLSCREEN")) { test_vbe_native_war2_t23(); test_vbe_native_lease_fast_paths(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_101_NATIVE")) { test_101_native(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_MPU")) { test_mpu_uart(); test_vm_midi(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_PROPERTIES")) { test_dos_properties(); free(ram); fflush(stdout); return 0; }
@@ -1116,6 +1117,8 @@ int main(void)
     test_fullscreen_more_modes();
     test_fullscreen_vbe();
     test_vbe_window();
+    test_vbe_native_war2_t23();
+    test_vbe_native_lease_fast_paths();
     test_101_native();
     test_fx22();
     test_startup();

@@ -630,6 +630,16 @@ uint64_t dosvm_vga_next_due(uint64_t due_us, uint64_t period_us, uint64_t tick);
 int dosvm_keyboard_refresh(struct dosvm *);
 static inline const char *dosvm_probe(const struct dosvm *v)
 { return v->probe ? v->probe : "vm-boot"; }
+/* The VM's trapped VGA ports reach the VGA model: in the window, and in a
+ * VBE full screen, whose scanout is the kernel's copy of the VM's buffer
+ * and palette (dosvm_fullscreen.c linear transport). Only a VGA-mode full
+ * screen sends them to the adapter (dosvm_vga_port -> dosvm_fullscreen_port);
+ * there the I/O bitmap passes them without an exit. T23 c42f556e
+ * (docs/validation/t23-war2-fullscreen-2026-10-25.md): the fx-27 lean exits
+ * and DAC bursts, gated on !fullscreen, left every 3C9h OUT of Warcraft II
+ * in 101h full screen on the ordinary exit path (21.8 us against 4.6 us). */
+static inline bool dosvm_vga_ports_modeled(const struct dosvm *v)
+{ return !v->fullscreen || v->vbe_mode; }
 /* Low page protection: the VGA window A0000h-BFFFFh is supervisor-only so
  * every guest access faults into the f3-02 model; ROM/stub pages read-only;
  * DPMI real-mode host stack pages (C6000h-C7FFFh) writable. Shared by

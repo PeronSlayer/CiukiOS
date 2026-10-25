@@ -897,7 +897,9 @@ static int dac_byte(struct dac_bus *b, unsigned slot, uint32_t address, uint8_t 
     uint32_t page = address & ~0xFFFu;
     if (!b->host[slot] || b->page[slot] != page) {
         uint32_t pte = 0, phys = as_lookup(&b->v->as, address, &pte);
-        if (!phys || !(pte & PTE_U)) return -EFAULT;     /* never pages in */
+        /* Never pages in; never reads a borrowed (direct LFB lease) page,
+         * which is provider MMIO outside P2V (lean_fetch, dosvm.c). */
+        if (!phys || !(pte & PTE_U) || (pte & PTE_BORROWED)) return -EFAULT;
         b->page[slot] = page; b->host[slot] = P2V(phys & ~0xFFFu);
     }
     *value = b->host[slot][address & 0xFFFu];
@@ -939,7 +941,7 @@ static int dac_port(void *arg, uint16_t port, unsigned size, int write, uint32_t
 }
 int dosvm_vga_dac_burst(struct dosvm *v, struct v86_frame *f)
 {
-    if (v->fullscreen || video_run_blocked(v, f)) return 0;
+    if (!dosvm_vga_ports_modeled(v) || video_run_blocked(v, f)) return 0;
     cvx_cpu c = {0};
     struct dac_bus ctx = {.v = v};
     cvx_bus bus = {.read = dac_read, .write = dac_write, .fetch = dac_fetch, .context = &ctx, .port = dac_port};
