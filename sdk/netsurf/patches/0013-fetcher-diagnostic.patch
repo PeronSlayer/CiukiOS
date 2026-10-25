@@ -1,37 +1,73 @@
-CiukiOS: fetcher table diagnostic for a refused navigation (port/chrome.c logs it
-with the navigate error): the URL scheme string and every fetcher slot as
-pointers and reference counts, no URL text.
+CiukiOS: diagnostics for a typed http address refused with NO_FETCH_HANDLER
+(QEMU 2026-10-25). content/fetch.c: fetch_ciuki_describe() for a refused
+navigation (port/chrome.c logs it): the intern table census, the corestring
+"http" pointer, the URL scheme string and every fetcher slot string (pointer,
+reference count, length, hash, text), no URL text. libwapcaplet: the first
+destructions of "http"/"https" log the caller chain on the i686 target.
 
 --- a/netsurf/content/fetch.c
 +++ b/netsurf/content/fetch.c
-@@ -588,6 +588,36 @@
+@@ -588,6 +588,69 @@
  
  
  
 +#ifdef CIUKI_NETSURF
 +#include <stdio.h>
-+/* CiukiOS diagnostic for a refused navigation (sdk/netsurf/port/chrome.c):
-+ * the URL scheme's interned string and every fetcher slot, as pointers and
-+ * reference counts, so a log tells a released slot (refcount 0) from a
-+ * scheme string that was freed and interned again (pointer mismatch) from a
-+ * fetcher that refuses the URL. No URL text is written. */
++/* CiukiOS diagnostic for a refused navigation (sdk/netsurf/port/chrome.c).
++ * QEMU 2026-10-25: a typed http address got NSERROR_NO_FETCH_HANDLER and the
++ * URL's scheme string was not pointer-equal to any registered fetcher
++ * scheme. Each string is written as pointer/rREFCNT/lLEN/hHASH/'text' (text
++ * cut to 10 printable characters; schemes only, no URL text), followed by
++ * what the intern table holds: its string count, how many strings read
++ * "http", and whether the URL's scheme and slot 0's scheme are in it. */
++struct fetch_ciuki_census { const lwc_string *url, *slot; unsigned total, http; bool url_seen, slot_seen; };
++static void fetch_ciuki_count(lwc_string *str, void *pw)
++{
++	struct fetch_ciuki_census *c = pw;
++	c->total++;
++	if (str->len == 4 && memcmp(str + 1, "http", 4) == 0) c->http++;
++	if (str == c->url) c->url_seen = true;
++	if (str == c->slot) c->slot_seen = true;
++}
++static size_t fetch_ciuki_string(char *out, size_t cap, const lwc_string *s)
++{
++	char text[11];
++	size_t i = 0;
++	if (s != NULL) {
++		const char *d = (const char *)(s + 1);
++		for (; i < s->len && i < 10; i++)
++			text[i] = (d[i] > 32 && d[i] < 127 && d[i] != '\'') ? d[i] : '?';
++	}
++	text[i] = 0;
++	int n = s == NULL ? snprintf(out, cap, "null") :
++		snprintf(out, cap, "%p/r%u/l%u/h%08x/'%s'", (const void *)s,
++			 (unsigned)s->refcnt, (unsigned)s->len, (unsigned)s->hash, text);
++	return n <= 0 ? 0 : (size_t)n < cap ? (size_t)n : cap - 1;
++}
 +size_t fetch_ciuki_describe(const nsurl *url, char *out, size_t cap)
 +{
 +	lwc_string *scheme = nsurl_get_component(url, NSURL_SCHEME);
++	struct fetch_ciuki_census census = { scheme, fetchers[0].scheme, 0, 0, false, false };
 +	size_t used = 0;
-+	int n = snprintf(out, cap, "scheme=%p/%u", (void *)scheme,
-+			 scheme != NULL ? (unsigned)scheme->refcnt : 0u);
-+	if (n > 0) used = (size_t)n < cap ? (size_t)n : cap;
-+	for (int i = 0; i < MAX_FETCHERS && used + 1 < cap; i++) {
++	if (cap < 2) return 0;
++	out[0] = 0;
++	lwc_iterate_strings(fetch_ciuki_count, &census);
++	int n = snprintf(out, cap, "table=%u http=%u url_in=%d slot0_in=%d core_http=%p url=",
++			 census.total, census.http, census.url_seen, census.slot_seen,
++			 (void *)corestring_lwc_http);
++	if (n > 0) used = (size_t)n < cap ? (size_t)n : cap - 1;
++	if (used + 1 < cap) used += fetch_ciuki_string(out + used, cap - used, scheme);
++	for (int i = 0; i < MAX_FETCHERS && used + 4 < cap; i++) {
 +		if (fetchers[i].scheme == NULL && fetchers[i].refcount == 0)
 +			continue;
 +		bool same = scheme != NULL && fetchers[i].scheme == scheme;
-+		n = snprintf(out + used, cap - used, " %d:%p/%d%s", i,
-+			     (void *)fetchers[i].scheme, fetchers[i].refcount,
++		n = snprintf(out + used, cap - used, " %d:f%d%s:", i, fetchers[i].refcount,
 +			     same ? (fetchers[i].refcount > 0 &&
 +				     fetchers[i].ops.acceptable(url) ? "=ok" : "=refused") : "");
 +		if (n <= 0) break;
 +		used += (size_t)n < cap - used ? (size_t)n : cap - used - 1;
++		if (used + 1 < cap)
++			used += fetch_ciuki_string(out + used, cap - used, fetchers[i].scheme);
 +	}
 +	if (scheme != NULL) lwc_string_unref(scheme);
 +	return used;
@@ -41,3 +77,54 @@ pointers and reference counts, no URL text.
  /* exported interface documented in content/fetch.h */
  bool fetch_can_fetch(const nsurl *url)
  {
+--- a/libwapcaplet/src/libwapcaplet.c
++++ b/libwapcaplet/src/libwapcaplet.c
+@@ -183,10 +183,48 @@
+ 	return lwc_error_ok;
+ }
+ 
++#if defined(__i386__) && defined(CIUKI_NETSURF)
++#include <stdint.h>
++#include <stdio.h>
++#include <unistd.h>
++/* CiukiOS diagnostic (QEMU 2026-10-25): the interned "http" string that
++ * corestrings and the http fetcher hold was destroyed while still in use,
++ * so later URLs interned a new "http" and found no fetcher. The first
++ * destructions of "http" and "https" log the caller chain (the browser is
++ * built with frame pointers; resolve with llvm-symbolizer). At exit they
++ * are destroyed legitimately, after the exit report line. */
++static void lwc__ciuki_trace(const lwc_string *str)
++{
++	static int reported;
++	if (reported >= 3) return;
++	if (!((str->len == 4 && memcmp(CSTR_OF(str), "http", 4) == 0) ||
++	      (str->len == 5 && memcmp(CSTR_OF(str), "https", 5) == 0)))
++		return;
++	reported++;
++	char line[400];
++	int n = snprintf(line, sizeof(line), "[netsurf] lwc destroy %.*s %p:",
++			 (int)str->len, CSTR_OF(str), (const void *)str);
++	/* Main thread stack only: CIUKI_MAIN_STACK_RESERVATION_BASE to
++	 * CIUKI_MAIN_STACK_LIMIT (ciuki/abi.h). */
++	uintptr_t *fp = __builtin_frame_address(0);
++	for (int i = 0; i < 24 && n > 0 && (size_t)n + 12 < sizeof(line); i++) {
++		if ((uintptr_t)fp < 0xbfc00000u || (uintptr_t)fp > 0xc0000000u - 8) break;
++		n += snprintf(line + n, sizeof(line) - (size_t)n, " %#lx", (unsigned long)fp[1]);
++		uintptr_t *next = (uintptr_t *)fp[0];
++		if (next <= fp) break;
++		fp = next;
++	}
++	if (n > 0 && (size_t)n + 1 < sizeof(line)) { line[n++] = '\n'; (void)!write(2, line, (size_t)n); }
++}
++#endif
++
+ void
+ lwc_string_destroy(lwc_string *str)
+ {
+ 	assert(str);
++#if defined(__i386__) && defined(CIUKI_NETSURF)
++	lwc__ciuki_trace(str);
++#endif
+ 
+ 	*(str->prevptr) = str->next;
+ 

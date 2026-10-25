@@ -11,6 +11,8 @@
 #include "utils/nsoption.h"
 #include "utils/nsurl.h"
 #include "utils/inet.h"
+#include "utils/corestrings.h"
+#include "framebuffer/ciuki/logline.h"
 #include "netsurf/ssl_certs.h"
 #include "content/fetch.h"
 #include "content/fetchers.h"
@@ -271,9 +273,20 @@ nserror fetch_ciuki_register(void)
     ciuki_browser_wait=event_wait;
     static const struct fetcher_operation_table operations={initialise,acceptable,setup,start,abort_fetch,free_fetch,poll_fetch,fdset,finalise};
     const char *names[]={"http","https"};
+    lwc_string *registered[2];
     for(unsigned i=0;i<2;i++){
         lwc_string *scheme;if(lwc_intern_string(names[i],strlen(names[i]),&scheme)!=lwc_error_ok)return NSERROR_NOMEM;
+        registered[i]=scheme;
         nserror e=fetcher_add(scheme,&operations);if(e!=NSERROR_OK){lwc_string_unref(scheme);return e;}
+    }
+    /* QEMU 2026-10-25 diagnostic: the http fetcher's scheme string was not
+     * the one later URLs intern. Here, right after registration, the same
+     * text must intern to the same string as the slot's and corestrings'. */
+    lwc_string *again=NULL;
+    if(lwc_intern_string("http",4,&again)==lwc_error_ok) {
+        ciuki_log_line("[netsurf] fetchers registered http=%p corestring=%p again=%p https=%p",
+            (void *)registered[0],(void *)corestring_lwc_http,(void *)again,(void *)registered[1]);
+        lwc_string_unref(again);
     }
     return NSERROR_OK;
 }

@@ -104,9 +104,12 @@ static void navigate(const char *text)
          * an unparsable address from a missing fetcher (NO_FETCH_HANDLER) or
          * a refused fetch setup (NOMEM) when no fetch record follows, and the
          * fetcher table (patch 0013) why a scheme has no fetcher. */
-        char table[320]="";
-        if(url)fetch_ciuki_describe(url,table,sizeof(table));
-        ciuki_log_line("[netsurf] navigate error=%d parsed=%d window=%d %s",(int)err,url!=NULL,browser()!=NULL,table);
+        ciuki_log_line("[netsurf] navigate error=%d parsed=%d window=%d",(int)err,url!=NULL,browser()!=NULL);
+        if(url && err==NSERROR_NO_FETCH_HANDLER) {
+            char table[CIUKI_LOG_LINE_MAX-32]="";
+            fetch_ciuki_describe(url,table,sizeof(table));
+            ciuki_log_line("[netsurf] fetchers %s",table);
+        }
         ciuki_chrome_status("Unable to open this address.");
     }
     if(url)nsurl_unref(url);
