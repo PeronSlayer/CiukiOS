@@ -14,7 +14,9 @@
 
 #define CIUKI_CPU_H
 #define KERNEL_VBASE CIUKI_MAIN_STACK_LIMIT
+#ifndef HOST_PAGES
 #define HOST_PAGES 11000u
+#endif
 static uint8_t *ram;
 static bool allocated[HOST_PAGES];
 static unsigned pages_used, heap_blocks, checks;

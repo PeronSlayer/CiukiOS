@@ -46,8 +46,8 @@ static uint32_t placement(const struct uaddr *u, uint32_t bytes, uint32_t limit,
 
 static int reserve(struct uaddr *u, uint32_t base, uint32_t bytes, uint32_t protect, uint32_t owner)
 {
-    for (const struct ua_extent *e = u->head; e; e = e->next)
-        if (base < e->end && base + bytes > e->base) return -EEXIST;
+    const struct ua_extent *next = ua_lower_bound(u, base);
+    if (next && next->base < base + bytes) return -EEXIST;
     int err = ua_map_at(u, base, bytes, 0, PROT_READ | PROT_WRITE | PROT_EXEC, UA_W32, owner);
     if (err) return err;
     struct ua_extent *e = ua_find(u, base);
@@ -137,8 +137,8 @@ uint32_t w32_vm_query(const struct uaddr *u, uint32_t address, struct ciuki_w32_
     memset(out, 0, sizeof(*out)); out->base = base;
     if (!e) {
         uint32_t end = CIUKI_W32_LIMIT;
-        for (const struct ua_extent *n = u->head; n; n = n->next)
-            if (n->base > base) { end = n->base; break; }
+        const struct ua_extent *n = ua_lower_bound(u, base);
+        if (n) end = n->base;
         /* Unavailable address holes are reported reserved/no-access. */
         if (base < CIUKI_W32_LOW) end = CIUKI_W32_LOW;
         else if (base >= CIUKI_W32_SHARED + PAGE_SIZE) end = CIUKI_W32_LIMIT;
