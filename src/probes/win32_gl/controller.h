@@ -17,7 +17,7 @@ _Static_assert(sizeof(struct w32_gl_result) == 144,
                "common fixture result size");
 static inline int w32_gl_valid(const struct w32_gl_result *r) {
   if (r->magic != W32_GL_MAGIC || r->version != 2 || r->done != 1 ||
-      r->frames != 7 || r->pixel_formats != 4 || r->extensions != 8 ||
+      r->frames != 7 || r->pixel_formats != 10 || r->extensions != 8 ||
       r->render_width != 320 || r->render_height != 240 ||
       r->drawable_width != 320 || r->drawable_height != 240 ||
       !r->display_width || !r->display_height) return 0;

@@ -13,6 +13,7 @@ struct sw_image {
 };
 struct sw_texture {
   unsigned name, used, refs, deleted, target;
+  unsigned border_color;
   int wrap_s, wrap_t, min, mag;
   struct sw_image image[SW_LEVELS];
 };
@@ -27,12 +28,20 @@ struct sw_vertex {
 struct sw_state {
   unsigned width, height;
   uint32_t *color;
+  uint32_t *color2;
+  int color_disabled;
   uint16_t *depth;
   int rgb565, depth_test, depth_write, depth_func, alpha_test, alpha_func,
       alpha_ref, blend, sfactor, dfactor;
   unsigned color_mask;
   int scissor, box[4], fog, fog_color, offset;
   struct sw_unit unit[2];
+  /* Optional D24/S8 attachments; absent attachments preserve native D16. */
+  uint32_t *depth24;
+  uint8_t *stencil;
+  int stencil_test, stencil_func, stencil_ref;
+  unsigned stencil_mask, stencil_write_mask;
+  int stencil_fail, stencil_zfail, stencil_zpass;
 };
 /* Coordinates: 4 fractional bits, S/W,T/W 16, Q/W and reciprocal-W 20.
  * Color 0..255. Clipped before entry; dimensions <=2048; stored UV/Q <=2^27.

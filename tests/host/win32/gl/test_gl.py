@@ -17,23 +17,29 @@ class GLTests(unittest.TestCase):
  def setUpClass(cls):
   cls.build(sanitize=True)
  @classmethod
- def build(cls,sanitize):
+ def build(cls,sanitize,profile=False):
   out=ROOT/'build/host/win32/gl';out.mkdir(parents=True,exist_ok=True);cls.out=out
   spec=importlib.util.spec_from_file_location('glbuild',ROOT/'sdk/libgl/build.py');gl=importlib.util.module_from_spec(spec);spec.loader.exec_module(gl)
   lib=gl.host(sanitize=sanitize)
   units=[ROOT/'sdk/win32/gdi32'/n for n in gdi32.SOURCES if n not in ('compiler.c','compiler.S')]
-  units += [ROOT/'sdk/win32/services/bytes.c',ROOT/'tests/host/win32/gdi32/support.c',HERE/'engine.c',HERE/'amendment.c',HERE/'review.c',HERE/'transport.c',HERE/'fixture.c']
+  units += [ROOT/'sdk/win32/services/bytes.c',ROOT/'tests/host/win32/gdi32/support.c',HERE/'engine.c',HERE/'amendment.c',HERE/'review.c',HERE/'transport.c',HERE/'fixture.c',HERE/'quake3.c',HERE/'raster.c',HERE/'raster_reference.c']
   units += list((ROOT/'sdk/win32/opengl32').glob('*.c'))+[ROOT/'sdk/libgl/software/renderer.c']
   cls.binary=out/('engine' if sanitize else 'benchmark')
   flags=['-std=c17','-D_GNU_SOURCE','-DW32_HOST_MODEL','-O2','-g','-ffp-contract=off','-Wall','-Wextra','-Werror','-Wno-unused-function','-fno-vectorize','-fno-slp-vectorize','-I'+str(ROOT/'sdk/win32/include'),'-I'+str(ROOT/'sdk/libgl/vendor/include')]
   flags+=['-I'+str(ROOT/'src/kernel/include')]
   if sanitize:flags+=['-fsanitize=address,undefined','-fno-sanitize-recover=all']
+  if profile:flags+=['-DSW_PROFILE']
   fixture=out/('fixture-sanitize.o' if sanitize else 'fixture.o')
   subprocess.run(['clang',*flags,'-include',str(HERE/'aliases.h'),'-Dentry=gl_fixture_entry',
     '-DwglUseFontBitmapsA=gl_fixture_font','-c',str(ROOT/'src/probes/win32_gl/exercise.c'),'-o',str(fixture)],check=True)
   units+=[fixture]
   units += [ROOT/'src/probes/win32_gl/scenes.c']
   subprocess.run(['clang',*flags,*map(str,units),str(lib),'-lm','-pthread','-o',str(cls.binary)],check=True)
+  # The differential oracle includes the authored scalar backend, with every
+  # external definition renamed. Audit the linked symbol table for collisions.
+  nm=subprocess.check_output(['nm','--defined-only',str(cls.binary)],text=True)
+  external=[m[1] for m in re.finditer(r'^[0-9a-fA-F]+ [A-Z] (\S+)$',nm,re.M)]
+  assert len(external)==len(set(external)), 'duplicate external GL symbol'
   cls.present=out/('present' if sanitize else 'present-benchmark')
   subprocess.run(['clang',*flags,'-include',str(ROOT/'tests/host/desktop/replay_base.h'),str(HERE/'present_test.c'),str(ROOT/'apps/desktop/gl_present.c'),str(ROOT/'apps/desktop/protocol.c'),str(ROOT/'apps/libdeskui/v3.c'),'-o',str(cls.present)],check=True)
  def test_export_surface_and_probe_registration(self):
@@ -45,6 +51,7 @@ class GLTests(unittest.TestCase):
   names={name for row in info['exports'] for name in row['names']}
   self.assertFalse({row['name'] for row in rows}-names)
   self.assertTrue({'wglCreateContext','wglDeleteContext','wglMakeCurrent','wglGetCurrentContext','wglGetCurrentDC','wglGetProcAddress','wglShareLists','wglUseFontBitmapsA','wglUseFontBitmapsW'}<=names)
+  self.assertTrue({'wglChoosePixelFormat','wglDescribePixelFormat','wglGetPixelFormat','wglSetPixelFormat','wglSwapBuffers'}<=names)
   selector=(ROOT/'src/kernel/probes/selector.c').read_text()
   loader=(ROOT/'src/boot/ciukldr/menu.inc').read_text()
   model=(ROOT/'scripts/test/loader_model.py').read_text()
@@ -94,9 +101,48 @@ class GLTests(unittest.TestCase):
   self.assertEqual(actual,json.loads((HERE/'goldens.json').read_text()))
   amendment={m[1]:int(m[2]) for m in re.finditer(r'GL_AMENDMENT name=(\S+) checksum=(\d+)',p.stdout)}
   self.assertEqual(amendment,json.loads((HERE/'amendment-goldens.json').read_text()))
+ def test_quake3_replay(self):
+  p=subprocess.run([str(self.binary),'--quake3'],capture_output=True,text=True,timeout=120)
+  print(p.stdout,end='');self.assertEqual(p.returncode,0,p.stdout+p.stderr)
+  check_quake3(p.stdout,sanitize=True)
+ def test_quake3_default_format_replay(self):
+  p=subprocess.run([str(self.binary),'--quake3-default'],capture_output=True,text=True,timeout=120)
+  print(p.stdout,end='');self.assertEqual(p.returncode,0,p.stdout+p.stderr)
+  check_quake3(p.stdout,sanitize=True,default_format=True)
+
+def check_quake3(output,sanitize=False,default_format=False):
+ expected=json.loads((HERE/'quake3-goldens.json').read_text())
+ rows=re.findall(r'GL_Q3 width=(\d+) height=(\d+) passes=(\d+) triangles=(\d+) frames=(\d+) checksum=(\d+) ns_frame=(\d+) ns_pixel=([\d.]+)',output)
+ assert len(rows)==4,output
+ attachments=re.findall(r'GL_Q3 .* depth=(\d+) stencil=(\d+)',output)
+ assert attachments==([('24','8')]*4 if default_format else [('16','0')]*4),attachments
+ for w,h,passes,triangles,frames,checksum,ns_frame,ns_pixel in rows:
+  key=f'{w}x{h}/{passes}'
+  assert int(checksum)==expected[key],(key,checksum)
+  assert int(triangles)==(3000 if passes=='1' else 4600)
+  assert int(frames)>0 and int(ns_frame)>0
+  # Deliberately broad wall-time guard for loaded/sanitized CI; differential
+  # traversal also has a same-process relative early-depth regression bound.
+  assert float(ns_pixel)<(15000 if sanitize else 3000),(key,ns_pixel)
+ models=[dict(re.findall(r'(\w+)=([\d.]+)',line)) for line in output.splitlines() if line.startswith('GL_Q3_MODEL ')]
+ if models:
+  assert len(models)==4,models
+  for row in models:
+   # Deterministic work bounds catch restoration of per-pixel divisions on
+   # the replay even when host speed or scheduler load changes. Sliver and
+   # trilinear division fallbacks are checked separately by the LOD oracle.
+   assert int(row['wide_div'])==0,row
+   assert int(row['perspective_div'])*2<int(row['covered']),row
 
 if __name__=='__main__':
- if '--benchmark' in sys.argv:
+ if any(arg in sys.argv for arg in ('--quake3-benchmark','--quake3-profile','--quake3-default-benchmark','--quake3-default-profile')):
+  profile='--quake3-profile' in sys.argv or '--quake3-default-profile' in sys.argv
+  default_format='--quake3-default-benchmark' in sys.argv or '--quake3-default-profile' in sys.argv
+  GLTests.build(sanitize=False,profile=profile)
+  p=subprocess.run([str(GLTests.binary),'--quake3-default' if default_format else '--quake3'],capture_output=True,text=True,timeout=120)
+  print(p.stdout,end='');assert p.returncode==0,p.stderr
+  check_quake3(p.stdout,default_format=default_format)
+ elif '--benchmark' in sys.argv:
   GLTests.build(sanitize=False)
   subprocess.run([str(GLTests.present)],check=True)
   subprocess.run([str(GLTests.build_compositor(sanitize=False)),'--gl-present-only'],check=True)

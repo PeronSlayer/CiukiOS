@@ -140,10 +140,11 @@ static void size_log(struct gl_context *c, unsigned dw, unsigned dh) {
   line[used] = 0;
   s->diagnostic(s->opaque, "info", "opengl32.dll", line);
 }
-BOOL gl_present(struct gl_context *c) {
+BOOL gl_present(struct gl_context *c, int front) {
   unsigned w, h, window;
   if (!gl_refresh_target(c, c->dc) || !gl_target(c->dc, &w, &h, &window))
     return 0;
+  const uint32_t *source = front ? c->front_color : c->back_color;
   bind_user();
   DWORD values[4];
   if (user.target && user.target(c->dc, values) > 0 && values[3]) {
@@ -152,7 +153,7 @@ BOOL gl_present(struct gl_context *c) {
     if (!user.lease)
       return 0;
     struct gl_lease lease = {0};
-    if (user.lease(window, c->sw.width, c->sw.height, c->format & 1 ? 32 : 16,
+    if (user.lease(window, c->sw.width, c->sw.height, c->sw.rgb565 ? 16 : 32,
                    &lease) ||
         !lease.active)
       return 0;
@@ -166,7 +167,7 @@ BOOL gl_present(struct gl_context *c) {
       return 0;
     for (unsigned y = 0; y < lease.height; y++)
       for (unsigned x = 0; x < lease.width; x++) {
-        unsigned p = c->sw.color[y * c->sw.width + x];
+        unsigned p = source[y * c->sw.width + x];
         if (lease.bpp == 32)
           w32_put32(copy + y * lease.pitch + x * 4, p);
         else
@@ -201,7 +202,7 @@ BOOL gl_present(struct gl_context *c) {
                                    .biPlanes = 1,
                                    .biBitCount = 32}};
   if (!StretchDIBits(c->dc, 0, 0, w, h, 0, 0, c->sw.width, c->sw.height,
-                     c->sw.color, &info, DIB_RGB_COLORS, SRCCOPY))
+                     source, &info, DIB_RGB_COLORS, SRCCOPY))
     return 0;
   if (window && (!user.damage || !user.damage(c->dc)))
     return 0;
