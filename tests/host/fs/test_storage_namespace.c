@@ -628,6 +628,16 @@ static void floppy_namespace_tests(void)
     OK(media_devctl(&supervisor,control,MEDIA_GET_STATE,1,sizeof(st)));
     CHECK(!media_poll_events(file_fd(&supervisor,control)));
     CHECK(st.type[0]==CIUKI_MEDIA_FLOPPY && !(st.removable_mask&1u) && st.type[1]==CIUKI_MEDIA_NONE);
+    struct ciuki_media_state unchanged=st;
+    uint32_t generations[26];memcpy(generations,s->vfs.generation,sizeof(generations));
+    media_state_changed(); /* CD/error producer: no volume was published */
+    CHECK(media_poll_events(file_fd(&supervisor,control))==POLLIN);
+    CHECK(media_poll_events(file_fd(&supervisor,control))==POLLIN); /* level, not edge */
+    st=(struct ciuki_media_state){.version=CIUKI_MEDIA_VERSION,.size=sizeof(st)};
+    OK(media_devctl(&supervisor,control,MEDIA_GET_STATE,1,sizeof(st)));
+    CHECK(!media_poll_events(file_fd(&supervisor,control)));
+    CHECK(!memcmp(&unchanged,&st,sizeof(st)) && !memcmp(generations,s->vfs.generation,sizeof(generations)));
+
     struct ciuki_media_remove load={CIUKI_MEDIA_VERSION,sizeof(load),0,0};media_user=&load;
     CHECK(media_devctl(&supervisor,control,MEDIA_FLOPPY_LOAD,1,sizeof(load))==-ENXIO && !s->vfs.volumes[0]);
     load.drive=1;CHECK(media_devctl(&supervisor,control,MEDIA_FLOPPY_LOAD,1,sizeof(load))==-ENODEV);load.drive=0;

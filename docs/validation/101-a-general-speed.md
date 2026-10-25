@@ -43,3 +43,49 @@ Exact commands, map resolution, replay figures, limitations and integration
 items are recorded in `build/codex/101-sched-report.md` in the implementer's
 worktree. Host replay figures are operation counts or deterministic model
 time, not measurements of the rebuilt image on the laptop.
+
+
+Review follow-up: media observer recovery and complete readiness coverage
+
+The review directive adds two requirements: retry a failed snapshot after its
+watch descriptor closes, and observe changes that do not mount/unmount a drive.
+Research checked before these fixes:
+
+- Microsoft [Detecting Media Insertion or Removal](https://learn.microsoft.com/en-us/windows/win32/devio/detecting-media-insertion-or-removal),
+  [DBT_DEVICEARRIVAL](https://learn.microsoft.com/en-us/windows/win32/devio/dbt-devicearrival)
+  and [DBT_DEVICEREMOVECOMPLETE](https://learn.microsoft.com/en-us/windows/win32/devio/dbt-deviceremovecomplete)
+  describe media events independently of an application's periodic refresh.
+  These current Win32 pages support the notification semantics; their current
+  minimum-version tables are not evidence of Windows 98 implementation internals.
+- [SFF-8020i revision 2.6](https://www.jmargolin.com/project/SFF8020i.pdf),
+  sections 10.6 and 10.8.26.1, describes medium-change unit attention and TEST
+  UNIT READY. The existing ATAPI driver already turns these into media generations;
+  an audio-only CD deliberately has no ISO namespace mount.
+- Microsoft's [USB Device not recognized](https://learn.microsoft.com/en-us/previous-versions/troubleshoot/windows-server/usb-device-not-recognized-error)
+  describes a warning for a malfunctioning attached device. This later-Windows
+  reference supports the existing warning, not an NT device-manager architecture.
+- Microsoft's [Using Timers](https://learn.microsoft.com/en-us/windows/win32/winmsg/using-timers)
+  retains explicit timer lifetimes. Keep the existing two-second retry for an
+  unavailable observation, with readiness suppressing it only while a live watch
+  exists.
+
+Repository comparison: media_run closes its descriptor on any state, volume or
+CD query error; media_poll must clear the previous readiness confirmation when
+collecting that failure. The fallback predicate must additionally require a live
+worker descriptor. Optical service already compares observed generation/result;
+notify media observers after publishing that transition, including audio-only
+arrival/removal. USB enumeration already increments a bounded, one-warning-per-
+quarantined-device counter; notify after incrementing it. Both reuse the existing
+media serial and poll wake, without modifying drive generations or public ABI.
+Unchanged optical state and already quarantined ports must emit no extra wakes.
+The serial is captured before copying state so a concurrent later transition
+remains readable. Namespace-only publication continues to use the same serial.
+
+
+Historical corroboration checked during follow-up validation: Windows 98
+Resource Kit, Chapter 12 `wrkc12_1.htm` lists AutoPlay among the multimedia
+features; Chapter 24 `wrkc24_4.htm`, “CD-ROM performance problems occur when
+AutoPlay is enabled”, identifies AutoPlay as enabled by default. The owner's
+extraction was read in place. These passages support preserving the existing
+AutoPlay behavior while fixing readiness; they do not specify a notification
+implementation or justify silently disabling audio-CD observation.

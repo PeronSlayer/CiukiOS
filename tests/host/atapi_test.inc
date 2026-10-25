@@ -478,15 +478,22 @@ static void test_cd_audio(void)
     CHECK(!storage_setup(&optical_store,32768));
     CHECK(!optical_bind(&optical_store,3,d));
     issued=f.packets; captured_logs[0]=0;
+    unsigned notifications=media_notifications;
+    uint32_t namespace_before[26];memcpy(namespace_before,optical_store.vfs.generation,sizeof(namespace_before));
     optical_service(&optical_store,0);
+    CHECK(media_notifications==notifications+1);
     CHECK(!optical_store.optical[3].mounted && !vfs_drive_present(&optical_store.vfs,3) && !optical_store.optical[3].state);
     CHECK(f.packets==issued+1 && strstr(captured_logs,"reason=audio_cd") && strstr(captured_logs,"stage=audio generation="));
     issued=f.packets; captured_logs[0]=0; optical_service(&optical_store,1000);
     CHECK(f.packets==issued+1 && !strstr(captured_logs,"stage=iso")); /* readiness only, once per second */
+    CHECK(media_notifications==notifications+1); /* unchanged CD: no extra wake */
     /* The disc goes away and comes back: a new generation, still no mount. */
     f.no_medium=true; optical_service(&optical_store,2000);
+    CHECK(media_notifications==notifications+2);
     CHECK(d->media==ATAPI_NO_MEDIUM && d->block.media_generation>gen && !d->toc.valid);
     f.no_medium=false; optical_service(&optical_store,3000);
+    CHECK(media_notifications==notifications+3);
+    CHECK(!memcmp(namespace_before,optical_store.vfs.generation,sizeof(namespace_before)));
     CHECK(d->media==ATAPI_READY && d->toc.first_audio && !optical_store.optical[3].mounted && !vfs_drive_present(&optical_store.vfs,3));
     CHECK(!atapi_eject(d) && d->media==ATAPI_NO_MEDIUM);
     CHECK(!d->media_writes && !d->block.quarantined && !f.disk.channel.stopped);

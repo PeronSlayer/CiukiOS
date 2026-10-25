@@ -1427,6 +1427,7 @@ static void observer_close(int *fd)
 {
     if (*fd>=0) { close(*fd); *fd=-1; }
 }
+static int media_events=-1; /* 0 after a poll error (no kernel readiness) */
 static struct {
     pthread_mutex_t lock;
     pthread_cond_t changed;
@@ -1562,6 +1563,9 @@ static void media_poll(struct desktop *d)
     if (ready) { memcpy(volumes,media_worker.volumes,sizeof(volumes)); memcpy(cd_states,media_worker.cd_states,sizeof(cd_states)); media_worker.ready=0; }
     pthread_mutex_unlock(&media_worker.lock);
     if (!ready) return;
+    /* A failed snapshot closes the watched description. Forget its confirmed
+     * readiness support so the timed fallback can open and validate a new one. */
+    if (!ok) media_events=-1;
     /* An unavailable observation never fabricates an eject. */
     if (observed) desk_shell_media_update(d,&state);
     if (ok) { desk_shell_media_labels(d,volumes); desk_autoplay_update(d,volumes); desk_autoplay_cd_update(d,cd_states); }
@@ -1721,10 +1725,9 @@ static void mixer_poll(struct desktop *d,uint64_t now,uint64_t *next)
         d->sh.want_reload|=4;
     }
 }
-/* fx-26: the media worker's description is readable after a drive was
- * published or withdrawn (WM_DEVICECHANGE); polled only while the worker is
- * idle, so a pending query never spins the loop. */
-static int media_events=-1; /* as mixer_events: 0 after a POLLNVAL (no kernel readiness) */
+/* The media worker's description is readable after a namespace, CD-media
+ * or USB-error change; polled only while the worker is idle, so a pending
+ * query never spins the loop. */
 static int media_watch_fd(const struct desktop *d)
 {
     if (!d->shell || d->sh.gate || d->power.state || !media_worker.started || !media_events) return -1;
@@ -2214,7 +2217,9 @@ static void shell_service(struct desktop *d)
     /* Once the native readiness watch is confirmed, only a media event or
      * an explicit rescan requests another snapshot. Network's two-second
      * status timer must not scan every mounted drive as a side effect. */
-    if ((sh->want_reload & 32) && (media_events!=1 || media_worker.rescan || media_worker.confirm_pending)) {
+    if ((sh->want_reload & 32) && (media_events!=1 ||
+        __atomic_load_n(&media_worker.fd,__ATOMIC_ACQUIRE)<0 ||
+        media_worker.rescan || media_worker.confirm_pending)) {
         desktop_wait("media-submit"); media_read(d);
     }
     if (sh->want_remove) { desktop_wait("media-remove"); media_remove(d); }

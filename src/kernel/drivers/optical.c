@@ -5,6 +5,7 @@
 #include <ciuki/ata.h>
 #include <ciuki/storage.h>
 #include <ciuki/vfs_hooks.h>
+#include <ciuki/media_events.h>
 
 #define OPTICAL_POLL_MS 1000u
 int optical_bind(struct storage *s, unsigned slot, struct ata_device *d)
@@ -75,6 +76,8 @@ void optical_service(struct storage *s, uint64_t now)
                  !e && d->toc.valid && d->toc.first_audio ? "audio_cd" :
                  d->ready_error ? d->ready_stage : s->optical[slot].diagnostic ? s->optical[slot].diagnostic : "unavailable");
             b->observed_generation = d->block.media_generation; b->result = e;
+            /* Audio-only discs have no namespace publication to wake AutoPlay. */
+            media_notify_changed();
         }
         vfs_unlock(&s->vfs);
     }

@@ -28,6 +28,10 @@
 #include "storage_test.c"
 #undef main
 
+#include <ciuki/media_events.h>
+static unsigned media_notifications;
+void media_state_changed(void) { media_notifications++; }
+
 uint32_t fs_host_clock_ms(void) { return (uint32_t)m.now; }
 
 /* Production usb_core.c/usb_enumerate references outside this fixture. */
@@ -391,12 +395,16 @@ static void slow_stick(const char *path)
 static void dead_stick(const char *path,bool fast_replug)
 {
     fx_begin(path,0);fx.dev[FX_STICK].wedged=true;
+    unsigned notifications=media_notifications;
+    uint32_t namespace_before[26];memcpy(namespace_before,storage_get()->vfs.generation,sizeof(namespace_before));
     uint32_t before=usb_unrecognized_devices();
     usb_step(&m.h);
     assert(record_count("port=2 parent=0 attempt=")==12 && record_count("result=-110")==6);
     uint64_t first=record_tick("port=2 parent=0 attempt=1 series=1 operation=1 tick=");
     uint64_t quarantined=record_tick("[usb] unrecognized controller=");
     assert(quarantined-first<=30580);
+    assert(media_notifications==notifications+1);
+    assert(!memcmp(namespace_before,storage_get()->vfs.generation,sizeof(namespace_before)));
     assert(strstr(records,"[usb] quarantine device addr=0 reason=enumeration_transfer stage=enumeration"));
     assert(record_count("[usb] unrecognized ")==1 && usb_unrecognized_devices()==before+1);
     assert(strstr(records,"reason=enumeration_transfer count=") && strstr(records,"notify=desktop"));
@@ -404,6 +412,7 @@ static void dead_stick(const char *path,bool fast_replug)
     printf("fx-21b dead stick: quarantined %llu ms after the first attempt (bound 30580)\n",(unsigned long long)(quarantined-first));
     /* Still connected: no second notification however long it stays. */
     fx_scan(3000);
+    assert(media_notifications==notifications+1); /* quarantined port stays quiet */
     assert(record_count("[usb] unrecognized ")==1 && usb_unrecognized_devices()==before+1);
     assert(record_count("port=2 parent=0 attempt=")==12 && m.h.root_blocked[FX_STICK]);
     if(fast_replug) {
