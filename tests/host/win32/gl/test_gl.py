@@ -25,6 +25,7 @@ class GLTests(unittest.TestCase):
   units=[ROOT/'sdk/win32/gdi32'/n for n in gdi32.SOURCES if n not in ('compiler.c','compiler.S')]
   units += [ROOT/'sdk/win32/services/bytes.c',ROOT/'tests/host/win32/gdi32/support.c',HERE/'engine.c',HERE/'amendment.c',HERE/'review.c',HERE/'amendment2.c',HERE/'transport.c',HERE/'fixture.c',HERE/'quake3.c',HERE/'raster.c',HERE/'raster_reference.c']
   units += list((ROOT/'sdk/win32/opengl32').glob('*.c'))+[ROOT/'sdk/libgl/software/renderer.c']
+  units += [HERE/'hardware.c']
   cls.binary=out/(('engine' if sanitize else 'benchmark')+('' if gamma_hooks else '-no-gamma'))
   flags=['-std=c17','-D_GNU_SOURCE','-DW32_HOST_MODEL','-O2','-g','-ffp-contract=off','-Wall','-Wextra','-Werror','-Wno-unused-function','-fno-vectorize','-fno-slp-vectorize','-I'+str(ROOT/'sdk/win32/include'),'-I'+str(ROOT/'sdk/libgl/vendor/include')]
   flags+=['-I'+str(ROOT/'src/kernel/include')]
@@ -107,6 +108,30 @@ class GLTests(unittest.TestCase):
   p=subprocess.run([str(self.binary),'--quake3'],capture_output=True,text=True,timeout=120)
   print(p.stdout,end='');self.assertEqual(p.returncode,0,p.stdout+p.stderr)
   check_quake3(p.stdout,sanitize=True)
+ def test_hardware_adapter(self):
+  p=subprocess.run([str(self.binary),'--hardware'],capture_output=True,text=True,timeout=60)
+  print(p.stdout,end='');self.assertEqual(p.returncode,0,p.stdout+p.stderr)
+ def test_render3d_minimum(self):
+  binary=self.out/'minimum'
+  subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror',
+    '-fsanitize=address,undefined','-fno-sanitize-recover=all',
+    '-I'+str(ROOT/'src/kernel/include'),str(HERE/'minimum_test.c'),
+    str(ROOT/'sdk/win32/opengl32/minimum.c'),str(ROOT/'sdk/libgl/software/renderer.c'),
+    str(ROOT/'src/kernel/drivers/video/render3d_scalar.c'),'-o',str(binary)],check=True)
+  p=subprocess.run([str(binary)],capture_output=True,text=True,timeout=60)
+  print(p.stdout,end='');self.assertEqual(p.returncode,0,p.stdout+p.stderr)
+ def test_hardware_quake3_replay(self):
+  p=subprocess.run([str(self.binary),'--hardware-quake3'],capture_output=True,text=True,timeout=120)
+  print(p.stdout,end='');self.assertEqual(p.returncode,0,p.stdout+p.stderr)
+  check_quake3(p.stdout,sanitize=True)
+  row=re.search(r'GL_HW_MODEL submissions=(\d+) vertices=(\d+)',p.stdout)
+  self.assertIsNotNone(row);self.assertGreater(int(row[2]),10000)
+  self.assertLess(int(row[1])*3,int(row[2]))
+  self.assertEqual(len(re.findall(r'^GL_HW_REPLAY .* frames=4 ',p.stdout,re.M)),4)
+ def test_hardware_quake3_default_format_replay(self):
+  p=subprocess.run([str(self.binary),'--hardware-quake3-default'],capture_output=True,text=True,timeout=120)
+  print(p.stdout,end='');self.assertEqual(p.returncode,0,p.stdout+p.stderr)
+  check_quake3(p.stdout,sanitize=True,default_format=True)
  def test_quake3_default_format_replay(self):
   p=subprocess.run([str(self.binary),'--quake3-default'],capture_output=True,text=True,timeout=120)
   print(p.stdout,end='');self.assertEqual(p.returncode,0,p.stdout+p.stderr)

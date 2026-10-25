@@ -8,6 +8,7 @@ typedef unsigned GLbitfield;
 #include "../../../sdk/libgl/software/renderer.h"
 #include <w32/opengl32.h>
 #include <w32/services.h>
+#include "backend.h"
 union gl_arg {
   int64_t i;
   double f;
@@ -50,6 +51,7 @@ struct gl_texgen {
   double object[4], eye[4];
 };
 struct gl_context {
+  struct gl_hw_context *hardware;
   struct gl_snapshot *attributes, *client_attributes;
   unsigned attribute_depth, client_depth;
   HGLRC handle;

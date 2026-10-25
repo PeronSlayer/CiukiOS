@@ -177,6 +177,18 @@ unsigned gl_validate(struct gl_context *c, unsigned id, const union gl_arg *a) {
   }
   case ID_glBindTexture:
     return target(I(0)) ? 0 : GL_INVALID_ENUM;
+  case ID_glCopyTexImage1D: case ID_glCopyTexImage2D:
+  case ID_glCopyTexSubImage1D: case ID_glCopyTexSubImage2D: {
+    int one = id == ID_glCopyTexImage1D || id == ID_glCopyTexSubImage1D;
+    int sub = id == ID_glCopyTexSubImage1D || id == ID_glCopyTexSubImage2D;
+    int w = I(sub ? one ? 5 : 6 : 5), h = one ? 1 : I(sub ? 7 : 6);
+    if (I(0) != (one ? GL_TEXTURE_1D : GL_TEXTURE_2D)) return GL_INVALID_ENUM;
+    if (I(1) < 0 || I(1) >= SW_LEVELS || w < 0 || h < 0 || w > 2048 || h > 2048)
+      return GL_INVALID_VALUE;
+    if (sub) return I(2) < 0 || (!one && I(3) < 0) ? GL_INVALID_VALUE : 0;
+    return !internal(I(2)) || I(one ? 6 : 7) ||
+        (w && (w & (w - 1))) || (h && (h & (h - 1))) ? GL_INVALID_VALUE : 0;
+  }
   case ID_glTexImage1D:
   case ID_glTexImage2D:
   case ID_glTexSubImage1D:
