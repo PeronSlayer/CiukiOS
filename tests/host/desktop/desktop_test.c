@@ -519,6 +519,15 @@ static void test_lifecycle(void)
     i=client(12,13,8,8,0); fake_closed_peer=12;
     desk_flush(&d,i); assert(!d.clients[i].window && d.clients[survivor].window && fake_live()==baseline);
     fake_closed_peer=-1;
+    /* q3crash 2026-10-25: poll said POLLNVAL for the channel (closed under the
+     * desktop): the client is dropped, its surface released, the channel
+     * number not closed (it may be another file of ours by now). */
+    i=client(12,13,8,8,0); unsigned held=fake_live();
+    desk_client_invalid(&d,i);
+    assert(!d.clients[i].window && d.clients[i].channel<0 && !d.clients[i].channel_invalid && d.clients[survivor].window);
+    assert(fake_live()==held-2 && fake_live()==baseline+1);   /* surface and its map went, channel 12 stayed */
+    fake_ops.close(12); assert(fake_live()==baseline);
+    desk_client_invalid(&d,i);                                 /* an empty slot is ignored */
     request(&m,DESK_CLOSE,4); desk_receive(&d,survivor,&m); assert(!d.clients[survivor].window);
     cleanup();
     puts("PASS lifecycle: SIGPIPE/EPIPE isolation, backpressure, 5s heartbeat/recovery, 100 victim cycles, 100 replies/cycle, fd/map cleanup");

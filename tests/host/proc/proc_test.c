@@ -109,8 +109,9 @@ static void fixture_cancel_timers(struct task *t)
 void task_start(struct task *t) {
     CHECK(t->state == T_BLOCKED);
 #ifdef HOST_TIMER_QUEUE
-    ktimer_cancel(&t->wake_timer);t->wake_tick=0;
+    ktimer_cancel(&t->wake_timer);
 #endif
+    t->wake_tick=0;
     t->state = T_READY;
 }
 bool task_alive(const struct task *t) { return t->state != T_ZOMBIE && t->state != T_DEAD; }
@@ -119,7 +120,9 @@ void task_reap(struct task *t) { CHECK(t != g_current && t->state == T_ZOMBIE &&
 void task_exit(int code) { CHECK(expect_exit); task_kill(g_current, code); longjmp(exited, 1); }
 void schedule(void)
 {
-    CHECK(host_flags & 0x200);
+    /* As in the kernel, schedule() itself accepts IF cleared (trap.c and the
+     * user-return hooks park with IF off); the blocking waits mirror
+     * thread_context() in their own stubs (kernel_core_test.c). */
     uint32_t saved = irq_save();
     g_ticks++;
     irq_restore(saved); /* callbacks execute other tasks, with physical IF */

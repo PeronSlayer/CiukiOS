@@ -111,6 +111,30 @@ static uint32_t connect_service(struct process *client, uint32_t service, uint32
     w32_changed_wake();
     return 0;
 }
+/* A registered server whose authority is gone: a window server whose
+ * desktop died (orphans are adopted by PID 1, so its parent is no longer the
+ * desktop the supervisor runs) or a desktop PID 1 no longer recognises. Such
+ * a process keeps serving its old clients but must not block a successor
+ * (q3crash 2026-10-25: 323 w32srv restarts, each refused with error 5). */
+static bool server_stale(const struct process *server, uint32_t service)
+{
+    uint32_t desktop = supervisor_desktop_pid();
+    return service == W32_SERVICE_DESKTOP ? server->pid != desktop : server->ppid != desktop;
+}
+static void server_retire(struct process *server, uint32_t service, const char *why)
+{
+    klog("[win32] service server pid=%u service=%u %s; stopped", server->pid, service, why);
+    proc_stop(server, 0, 0);
+}
+/* The supervisor's desktop died: its window server has no desktop to serve
+ * and would otherwise survive as an orphan holding the registration. */
+void w32_services_desktop_died(uint32_t desktop_pid)
+{
+    struct process *server = proc_find(service_pid[W32_SERVICE_W32SRV - 1]);
+    if (server && server->state == PROC_LIVE && server->w32 && server->w32->service == W32_SERVICE_W32SRV &&
+        (server->ppid == desktop_pid || server->ppid == proc_supervisor()->pid))
+        server_retire(server, W32_SERVICE_W32SRV, "desktop died");
+}
 void w32_services_cleanup(struct process *p)
 {
     if (display_present_process_exit) display_present_process_exit(p);
@@ -124,8 +148,12 @@ void w32_services_cleanup(struct process *p)
             *at = l->next;
             if (l->client->fds && l->client->fds[l->client_fd].object == l->client_end)
                 desktop_close(l->client, l->client_fd);
-            if (l->server->fds && l->server->fds[l->server_fd].object == l->server_end)
-                desktop_close(l->server, l->server_fd);
+            /* A dying client's end is released with its table; the server's
+             * end is never closed under a polling server: it reads the hang-up
+             * (recv 0) and closes the descriptor itself. Closing it here left
+             * the desktop polling an invalid descriptor (POLLNVAL, exit 1) or
+             * a reused number (q3crash 2026-10-25). The server's own death
+             * releases its table. */
             l->client_end->release(l->client_end);
             l->server_end->release(l->server_end);
             if (l->client->w32)
@@ -158,8 +186,12 @@ uint32_t w32_service_call(struct proc_thread *t, struct ciuki_w32_service_args *
         }
         struct process *old = server_for(a->service);
         if (old && old != p) {
-            a->error = 5;
-            return 0;
+            if (!server_stale(old, a->service)) {
+                klog("[win32] service pid=%u action=register service=%u error=5 holder=%u", p->pid, a->service, old->pid);
+                a->error = 5;
+                return 0;
+            }
+            server_retire(old, a->service, "stale registration");
         }
         service_pid[a->service - 1] = p->pid;
         a->result = 1;

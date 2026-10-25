@@ -54,6 +54,31 @@ static void pulse_interleave(void)
     struct ciuki_w32_object_args a = { .action = W32_OBJ_PULSE, .handle = interleave_step };
     CHECK(!w32_object_call(interleave_thread, &a) && !a.error);
 }
+/* The other thread's ResumeThread while the suspended thread is parked at
+ * its user return after a timer IRQ: the park is a plain blocked task (no
+ * kwait with IF off) and the resume makes it runnable at once. */
+static unsigned preempted_resumes;
+static void suspend_preempted_interleave(void)
+{
+    struct proc_thread *t = interleave_thread;
+    CHECK(!(host_flags & 0x200) && t->w32->safe && t->w32->suspend == 1);
+    CHECK(t->task->state == T_BLOCKED && t->task->wake_tick == g_ticks); /* armed at now+1, the stub ticked once */
+    struct ciuki_w32_context_args a = { .action = W32_CTX_RESUME, .thread = W32_CURRENT_THREAD };
+    CHECK(!w32_context_call(t, &a) && !a.error && a.result == 1 && !t->w32->suspend);
+    CHECK(t->task->state == T_READY && !t->task->wake_tick);
+    preempted_resumes++;
+}
+/* The timer fired (timer_task_wake made the task ready) and only then did
+ * another thread clear the suspend count: no direct unpark, loop re-check. */
+static unsigned timer_parks;
+static void suspend_timer_interleave(void)
+{
+    struct proc_thread *t = interleave_thread;
+    CHECK(t->task->state == T_BLOCKED && t->w32->safe);
+    if (++timer_parks == 1) { t->task->state = T_READY; t->task->wake_tick = 0; return; } /* timer wake, still suspended: parks again */
+    t->w32->suspend = 0;
+    t->task->state = T_READY; t->task->wake_tick = 0;
+}
 static void suspend_interleave(void)
 {
     CHECK(interleave_thread->w32->safe);
@@ -193,9 +218,66 @@ static void test_services(struct proc_thread *client)
     CHECK(!w32_service_call(st, &service) && !service.error);
     service = (struct ciuki_w32_service_args) { .action = W32_SVC_CONNECT, .service = 2 };
     CHECK(!w32_service_call(client, &service) && !service.error);
-    proc_stop(server, 0, 0);
+    /* q3crash 2026-10-25 (1): a Win32 client's death must not close the
+     * desktop's end of its service link from the kernel: the desktop polls
+     * that descriptor (POLLNVAL ended it with status 1, or the number was
+     * reused). The server keeps its descriptor, reads the hang-up and closes. */
+    struct process *dying; struct proc_thread *dying_thread = object_process(desktop, &dying);
+    CHECK(dying_thread && dying->w32 && dying->w32->endpoint[1]); /* handoff connected it to the window server */
+    /* Links are prepended: the newest pending connection is accepted first. */
+    service = (struct ciuki_w32_service_args) { .action = W32_SVC_ACCEPT, .service = 2 };
+    CHECK(!w32_service_call(st, &service) && !service.error && service.result && service.pid == dying->pid);
+    int channel_poll_events(struct desktop_description *);
+    int32_t kept_fd = (int32_t)service.endpoint;
+    service = (struct ciuki_w32_service_args) { .action = W32_SVC_ACCEPT, .service = 2 };
+    CHECK(!w32_service_call(st, &service) && !service.error && service.result && service.pid == client->process->pid);
+    struct proc_object *kept_end = server->fds[kept_fd].object;
+    CHECK(kept_end);
+    struct task *before_client_death = g_current;
+    g_current = &controller;                     /* the dying client's task is collectable */
+    proc_stop(dying, 0, 0);
+    proc_collect();
+    CHECK(server->fds[kept_fd].object == kept_end);
+    CHECK(channel_poll_events(desktop_fd(server, kept_fd)) & POLLHUP);
+    CHECK(!desktop_close(server, kept_fd) && !server->fds[kept_fd].object);
+    /* q3crash 2026-10-25 (2): the desktop died; its window server is an
+     * orphan of PID 1 and still registered. The supervisor's hook retires it;
+     * independently, a successor's registration retires a stale holder
+     * instead of failing with error 5 forever (323 restarts). */
+    struct process *next_desktop, *next_server;
+    struct proc_thread *ndt = make_process(proc_supervisor(), &next_desktop);
+    CHECK(ndt);
+    w32_service_delegate(proc_supervisor(), next_desktop, "/Programs/desktop");
+    uint32_t old_desktop_pid = desktop->pid;
     proc_stop(desktop, 0, 0);
     proc_collect();
+    CHECK(server->state == PROC_LIVE && server->ppid == proc_supervisor()->pid);
+    fake_desktop_pid = next_desktop->pid;
+    struct proc_thread *nst = make_process(next_desktop, &next_server);
+    CHECK(nst);
+    w32_service_delegate(next_desktop, next_server, "/System/Win32/w32srv");
+    CHECK(next_server->w32 && next_server->w32->service == 2);
+    service = (struct ciuki_w32_service_args) { .action = W32_SVC_REGISTER, .service = 2 };
+    CHECK(!w32_service_call(nst, &service) && !service.error && service.result);
+    CHECK(server->state != PROC_LIVE);           /* the stale holder was retired */
+    proc_collect();
+    service = (struct ciuki_w32_service_args) { .action = W32_SVC_REGISTER, .service = 1 };
+    CHECK(!w32_service_call(ndt, &service) && !service.error);
+    /* A live holder whose desktop is current still refuses a second server. */
+    struct process *rival; struct proc_thread *rt2 = make_process(next_desktop, &rival);
+    CHECK(rt2);
+    w32_service_delegate(next_desktop, rival, "/System/Win32/w32srv");
+    service = (struct ciuki_w32_service_args) { .action = W32_SVC_REGISTER, .service = 2 };
+    CHECK(!w32_service_call(rt2, &service) && service.error == 5 && next_server->state == PROC_LIVE);
+    proc_stop(rival, 0, 0); proc_collect();
+    /* The hook: the desktop's death retires its registered window server at once. */
+    w32_services_desktop_died(next_desktop->pid);
+    CHECK(next_server->state != PROC_LIVE);
+    proc_collect();
+    (void)old_desktop_pid;
+    proc_stop(next_desktop, 0, 0);
+    proc_collect();
+    g_current = before_client_death;
     fake_desktop_pid = 0;
     CHECK(!w32_accounts.endpoints && !desktop_objects.channels && !desktop_objects.descriptions);
 }
@@ -415,6 +497,35 @@ static void test_objects_sections(void)
     on_schedule = 0;
     for (unsigned i = 160; i < 288; i++)
         CHECK(t->task->fpu_area[i] == 0x51);
+    /* q3crash 2026-10-25: SuspendThread of a running thread takes effect on
+     * trap_return after the timer IRQ that preempted it, with IF cleared
+     * (interrupt gate), and the syscall tail re-disables IF too; the park
+     * must not be a kwait (sync: blocking operation outside thread context). */
+    tf.eax = 42;
+    interleave_thread = t;
+    on_schedule = suspend_preempted_interleave;
+    cx = (struct ciuki_w32_context_args) { .action = W32_CTX_SUSPEND, .thread = W32_CURRENT_THREAD };
+    CHECK(!w32_context_call(t, &cx) && !cx.error && cx.result == 0);
+    uint32_t trap_tail = irq_save();         /* IF off: the trap_return hook */
+    w32_user_return(t, &tf);
+    CHECK(!(host_flags & 0x200));
+    irq_restore(trap_tail);
+    CHECK(preempted_resumes == 1 && tf.eax == 42 && !t->w32->suspend && !t->w32->safe);
+    CHECK(t->task->state == T_RUNNING && !t->task->wake_tick);
+    on_schedule = 0;
+    /* The resume may also come from the one-tick safety timer: the parked
+     * task wakes without a direct w32_unpark and leaves on resume_ready. */
+    cx = (struct ciuki_w32_context_args) { .action = W32_CTX_SUSPEND, .thread = W32_CURRENT_THREAD };
+    CHECK(!w32_context_call(t, &cx) && !cx.error);
+    on_schedule = suspend_timer_interleave;
+    trap_tail = irq_save();
+    w32_user_return(t, &tf);
+    irq_restore(trap_tail);
+    CHECK(timer_parks == 2 && !t->w32->suspend && !t->w32->safe && t->task->state == T_RUNNING);
+    on_schedule = 0;
+    /* w32_unpark is a no-op for a thread that is not parked. */
+    w32_unpark(t);
+    CHECK(t->task->state == T_RUNNING);
     cx = (struct ciuki_w32_context_args) { .action = W32_CTX_SUSPEND, .thread = W32_CURRENT_THREAD };
     for (unsigned i = 0; i < 127; i++) {
         CHECK(!w32_context_call(t, &cx) && !cx.error && cx.result == i);

@@ -54,11 +54,19 @@ int main(int argc,char **argv)
     }
 #ifdef __CIUKIOS__
     struct ciuki_display_info display={.version=CIUKI_DISPLAY_VERSION,.size=sizeof(display)};
-    if(!ciuki_display_query(&display)&&!wr_defaults(&s,display.width,display.height,display.bpp)){wr_destroy(&s);return 1;}
+    /* Start failures are said on the console (io.log is the kernel debug
+     * write; stderr is not collected): q3crash 2026-10-25 had 323 silent exits. */
+    char failure[96];
+    if(!ciuki_display_query(&display)&&!wr_defaults(&s,display.width,display.height,display.bpp)){
+        io.log(io.opaque,"[win32] w32srv start-failed stage=defaults");wr_destroy(&s);return 1;
+    }
     struct w32r_service a;
     int records=ciuki_proc_list(&snapshot,sizeof(snapshot));
     if(records<0||(uint32_t)records!=snapshot.system.records||snapshot.system.records>CIUKI_PROCESS_MAX||
-       snapshot.system.version!=CIUKI_PROC_VERSION||wr_reconcile(&s,alive,NULL)){wr_destroy(&s);return 1;}
+       snapshot.system.version!=CIUKI_PROC_VERSION||wr_reconcile(&s,alive,NULL)){
+        snprintf(failure,sizeof(failure),"[win32] w32srv start-failed stage=reconcile records=%d",records);
+        io.log(io.opaque,failure);wr_destroy(&s);return 1;
+    }
 #ifdef W32SRV_GUEST
     /* f5-10C2 font bridge: system faces read-only, AddFontResource copies
      * under C:\WINDOWS\FONTS. A missing engine refuses font requests (120). */
@@ -75,7 +83,13 @@ int main(int argc,char **argv)
     struct ws_shell *shell=ws_create(&shell_fs,&shell_config,&s);
     if(shell){s.shell_call=ws_call;s.shell_exit=ws_exit;s.shell=shell;}
     else fprintf(stderr,"[win32] shell services unavailable\n");
-    if(wr_flush(&s)||service(1,&a)<0){
+    /* The registration is refused (error 5) while another live w32srv holds
+     * it: the dead desktop's orphan did, 323 times, in q3crash 2026-10-25. */
+    uint32_t flush_error=wr_flush(&s);int registered=0;
+    if(flush_error)snprintf(failure,sizeof(failure),"[win32] w32srv start-failed stage=flush error=%u",flush_error);
+    else if((registered=service(1,&a))<0)snprintf(failure,sizeof(failure),"[win32] w32srv start-failed stage=register error=%u",a.error);
+    if(flush_error||registered<0){
+        io.log(io.opaque,failure);
 #ifdef W32SRV_GUEST
         wf_destroy(fonts);
 #endif

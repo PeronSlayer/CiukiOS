@@ -28,6 +28,8 @@ struct desk_w32_supervisor {
     uint32_t pid, starts;
     uint64_t retry_ns, death_ns;
     int stopping;
+    uint64_t start_ns;      /* when the live server was spawned */
+    unsigned rapid_exits;   /* consecutive deaths within DESK_W32_RAPID_NS of a start */
 };
 struct desk_w32_supervisor_ops {
     int (*spawn)(void *); /* must use exact /System/Win32/w32srv */

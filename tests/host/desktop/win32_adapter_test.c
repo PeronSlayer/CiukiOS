@@ -164,9 +164,38 @@ static void supervision(void)
     s.stopping=1;s.pid=0;before=spawned;desk_w32_supervise(&s,&o,2000000000);assert(spawned==before);
     puts("PASS supervision: crash/SIGKILL records, 1 ms replay recovery, bounded retry, shutdown suppression");
 }
+/* q3crash 2026-10-25: a server exiting with code 1 at once (registration
+ * refused) is not respawned in a tight loop; crashes after service are. */
+static unsigned deferrals;static uint64_t last_delay;
+static void backoff_record(void *ctx,const char *text,int pid,uint64_t ns)
+{assert(ctx==&spawned && pid>0);if(strstr(text,"deferred")){deferrals++;last_delay=ns;}else assert(strstr(text,"[win32] w32srv restart"));}
+static void backoff(void)
+{
+    struct desk_w32_supervisor s={0};struct desk_w32_supervisor_ops o={spawn,backoff_record,&spawned};
+    uint64_t now=0;desk_w32_supervise(&s,&o,now);assert(s.pid);
+    uint32_t pid=s.pid;now+=5000000;assert(desk_w32_service_exited(&s,&o,pid,1<<8,now));
+    assert(deferrals==1 && last_delay==250000000ull && s.retry_ns==now+250000000ull && s.rapid_exits==1);
+    unsigned before=spawned;desk_w32_supervise(&s,&o,now+1000000);assert(!s.pid && spawned==before);
+    now=s.retry_ns;desk_w32_supervise(&s,&o,now);assert(s.pid && spawned==before+1 && s.start_ns==now);
+    const uint64_t expect[]={500000000ull,1000000000ull,2000000000ull,4000000000ull,5000000000ull,5000000000ull};
+    for(unsigned i=0;i<6;i++){
+        pid=s.pid;now+=1000000;assert(desk_w32_service_exited(&s,&o,pid,1<<8,now));
+        assert(last_delay==expect[i] && s.retry_ns==now+expect[i]);
+        before=spawned;desk_w32_supervise(&s,&o,now+expect[i]-1);assert(spawned==before);
+        now=s.retry_ns;desk_w32_supervise(&s,&o,now);assert(s.pid);
+    }
+    /* A crash after 3 s of service restarts at once and resets the count. */
+    pid=s.pid;now+=3000000000ull;assert(desk_w32_service_exited(&s,&o,pid,11,now));
+    assert(s.retry_ns==now && !s.rapid_exits);desk_w32_supervise(&s,&o,now);assert(s.pid);
+    /* Early crashes restart at once three times (f5-09b replay), then defer. */
+    unsigned d0=deferrals;
+    for(unsigned i=0;i<3;i++){pid=s.pid;now+=1000000;assert(desk_w32_service_exited(&s,&o,pid,9,now));assert(s.retry_ns==now && deferrals==d0);desk_w32_supervise(&s,&o,now);assert(s.pid);}
+    pid=s.pid;now+=1000000;assert(desk_w32_service_exited(&s,&o,pid,9,now));assert(deferrals==d0+1 && s.rapid_exits==4 && s.retry_ns==now+2000000000ull);
+    puts("PASS supervision back-off: refused start deferred 250 ms..5 s, crash after service immediate, fourth rapid crash deferred");
+}
 int main(int argc,char **argv)
 {
-    assert(argc==2);registry(argv[1]);supervision();
+    assert(argc==2);registry(argv[1]);supervision();backoff();
     uint8_t pe[68]={0};pe[0]='M';pe[1]='Z';pe[60]=64;memcpy(pe+64,"PE\0\0",4);
     char path[512];snprintf(path,sizeof(path),"%s/fixture.exe",argv[1]);file(path,pe,sizeof(pe));
     struct desk_launch_record r={.label="Fixture",.show=1};snprintf(r.target,sizeof(r.target),"%s",path);
