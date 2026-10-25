@@ -1,0 +1,54 @@
+/* Source-backed transport/layout helpers; no silicon qualification claim.
+ * SPDX-License-Identifier: GPL-2.0-only */
+#ifndef CIUKI_SAVAGE3D_PRIVATE_H
+#define CIUKI_SAVAGE3D_PRIVATE_H
+#include "../render3d.h"
+#include "savage2d.h"
+uint32_t savage3d_fixed_ieee(uint32_t, unsigned);
+/* Canonical serializer fixture; hardware variant reverses integer depth. */
+int savage3d_triangle_packet(const struct render3d_vertex [3], uint32_t [22]);
+int savage3d_hw_triangle_packet(const struct render3d_vertex [3], uint32_t [22]);
+/* Pro/SuperSavage ARGB8888 texture tile, >=32x16, one unmipped level. */
+int savage3d_texture_offset(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t *);
+int savage3d_pack_texture(void *, size_t, const uint32_t *, uint32_t, uint32_t);
+/* Checked plan only; callers must subtract every registry reservation first. */
+struct savage3d_plan {
+    struct render3d_extent color[2], depth, texture;
+    uint32_t color_pitch, depth_pitch, free_bytes, largest_bytes;
+};
+int savage3d_plan_vram(uint32_t, const struct render3d_extent *, unsigned,
+                      uint32_t, uint32_t, struct savage3d_plan *);
+const struct render3d_backend *savage3d_backend(void);
+#define SAVAGE3D_ALIAS_BYTES (64u * 8192u)
+#define SAVAGE3D_TEXTURE_MIN (256u * 1024u)
+/* Linear offsets are absolute VRAM bytes; aperture offsets are alias-local.
+ * Only the owner creates these callbacks/mappings. No client sees them. */
+struct savage3d_memory {
+    void *ctx;
+    uint32_t (*read)(void *, bool aperture, uint32_t, unsigned);
+    void (*write)(void *, bool aperture, uint32_t, uint32_t, unsigned);
+    int (*enter)(void *, uint32_t);
+    void (*leave)(void *);
+};
+struct savage3d_device {
+    struct savage2d *engine;
+    struct savage3d_memory memory;
+    struct render3d_extent heap;
+    uint32_t generation;
+    bool qualified, probing, locked, lost;
+    struct render3d_service *consumer;
+    void (*lost_notify)(void *);
+    uint64_t packets, triangles, copies;
+    uint64_t slice_started;
+    uint32_t failed_phase, expected, actual, guard_offset;
+};
+int savage3d_mode_heap(const struct savage2d *, const struct fb_device *, uint32_t,
+                       struct render3d_extent *, uint32_t *required);
+/* Source-complete positive qualification, entered only after claims and a
+ * fresh durable operation marker. All scratch is inside device.heap. */
+int savage3d_probe(struct savage3d_device *);
+void savage3d_bind_vfs(struct vfs *);
+void savage3d_boot_diagnostic(struct savage2d *, const struct fb_device *);
+int savage3d_owner_stop(struct savage2d *);
+int savage3d_owner_attach(struct render3d_service *, const struct render3d_host *, uint32_t);
+#endif

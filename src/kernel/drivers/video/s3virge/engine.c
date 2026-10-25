@@ -12,8 +12,13 @@
 /* Origin: Haiku r1beta5, src/add-ons/accelerants/s3/virge_{draw,init,mode}.cpp
  * and virge.h; a1f00118db8b858feb73f64ac4dc3d038b82bf9b.
  * Native glue: bounded synchronous execution, firmware mode preserved. */
+#define S3_RENDER_FAMILY (&render_family)
 #include "../s3legacy/private.h"
 #include "registers.h"
+#include "../render3d.h"
+static const struct render3d_family render_family = {
+    .status=R3D_NOT_IMPLEMENTED, .potential_units=1, .potential_texture_size=256
+};
 static bool accept(const struct pci_func *p)
 {
     if (!p || p->vendor!=0x5333 || p->class_code!=3) return false;

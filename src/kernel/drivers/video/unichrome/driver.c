@@ -15,6 +15,11 @@
 #include "engine.h"
 #include "regs.h"
 
+#include "../render3d.h"
+static const struct render3d_family render_family = {
+    .status=R3D_NOT_IMPLEMENTED, .potential_units=2, .potential_texture_size=1024
+};
+
 static const struct display_match matches[]={
     {0x1106,0x3122,3,255}, {0x1106,0x7205,3,255},
     {0x1106,0x3108,3,255}, {0x1106,0x3118,3,255}
@@ -387,6 +392,7 @@ static int selftest(uint64_t deadline, void (*line)(void *,const char *),void *c
     return 0;
 }
 const struct display_driver unichrome_driver={
+    .render3d=&render_family,
     .id="unichrome",.attempt_files={LEGACY_PATH,MARKER_PATH},.name="VIA UniChrome / UniChrome Pro",.matches=matches,
     .match_count=ARRAY_SIZE(matches),.framebuffer_bar=0,.probe=uc_pci_supported,.eligible=eligible,
     .start=start,.fallback=fallback,.attempt_begin=attempt_begin,.attempt_end=attempt_end,

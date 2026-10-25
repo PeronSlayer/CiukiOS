@@ -17,6 +17,11 @@
 #include "rage128.h"
 #include "regs.h"
 
+#include "../render3d.h"
+static const struct render3d_family render_family = {
+    .status=R3D_NOT_IMPLEMENTED, .potential_units=2, .potential_texture_size=1024
+};
+
 static const struct display_match matches[]={
     {0x1002,0x4c45,3,255}, {0x1002,0x4c46,3,255},
     {0x1002,0x4d46,3,255}, {0x1002,0x4d4c,3,255},
@@ -350,6 +355,7 @@ static int selftest(uint64_t deadline, void (*line)(void *, const char *), void 
     return e;
 }
 const struct display_driver rage128_driver={
+    .render3d=&render_family,
     .id="rage128", .attempt_files={ATTEMPT_PATH}, .name="ATI Rage 128 / Rage 128 Pro",
     .matches=matches,.match_count=ARRAY_SIZE(matches),.framebuffer_bar=0,
     .probe=probe,.eligible=eligible,.start=start,.fallback=fallback,

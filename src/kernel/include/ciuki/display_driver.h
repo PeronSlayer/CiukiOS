@@ -34,6 +34,7 @@ struct display_selftest_result {
     bool restored;
 };
 #define DISPLAY_ATTEMPT_FILES 2
+struct render3d_family;
 struct display_driver {
     const char *id, *name;
     const struct display_match *matches;
@@ -83,6 +84,9 @@ struct display_driver {
      * The driver keeps its own I/O. The registry only stats these for its
      * retained-attempt status and truncates them for an explicit retry. */
     const char *attempt_files[DISPLAY_ATTEMPT_FILES];
+    /* Immutable kernel-only 3D nomination. NULL means software-only.
+     * Potential features never authorize hardware without boot qualification. */
+    const struct render3d_family *render3d;
 };
 #define DISPLAY_CHECK_CURSOR (1u << 4)
 /* Selection is read-only, before any activation. Ambiguous PCI ownership

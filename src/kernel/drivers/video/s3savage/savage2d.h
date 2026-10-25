@@ -71,6 +71,9 @@ struct savage2d {
     /* submitted includes BCI register setup, before drawing is enabled. */
     bool mmio_saved, status_ready, submitted, final_idle_checked;
     bool event_pending;
+    /* Never set by normal 2D activation. Only a completed guarded offscreen
+     * 3D qualification may enable this shared-owner transport. */
+    bool render3d_qualified;
     enum savage_chip chip;
     uint32_t status_reg, fifo_mask, cob_offset, saved_cob;
 };
@@ -101,6 +104,9 @@ void savage2d_summary_safe_mode(void);
 const struct accel_ops *savage2d_fallback_ops(void);
 int savage2d_start(struct savage2d *, const struct savage_io *, const struct fb_device *,
                    bool supersavage, uint8_t *cursor, uint32_t cursor_offset);
+/* Internal packet transport, caller holds presenter then engine ownership.
+ * Uses this exact 2D owner/status/quarantine; creates no mapping or reset. */
+int savage2d_render3d_packet(struct savage2d *, const uint32_t *, unsigned);
 /* Early chips require a disjoint driver-owned 128 KiB VRAM COB. Zero means
  * unavailable. No register access on invalid family/geometry/reservation. */
 int savage2d_start_chip(struct savage2d *, const struct savage_io *, const struct fb_device *,

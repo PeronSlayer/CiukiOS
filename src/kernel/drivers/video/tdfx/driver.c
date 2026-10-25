@@ -20,6 +20,11 @@
 #include "engine.h"
 #include "registers.h"
 
+#include "../render3d.h"
+static const struct render3d_family render_family = {
+    .status=R3D_NOT_IMPLEMENTED, .potential_units=2, .potential_texture_size=2048
+};
+
 static struct tdfx_engine engine={.cpu_safe=true,.reason="pending"};
 static volatile uint8_t *registers;
 static void *register_window, *cursor_window;
@@ -325,6 +330,7 @@ static void record(void)
         engine.active && !engine.quarantined,engine.quarantined,engine.cpu_safe,engine.status,engine.reason);
 }
 const struct display_driver tdfx_driver={
+    .render3d=&render_family,
     .id="tdfx",.attempt_files={"C:/system/settings/tdfx%04x.cfg"},.name="3dfx Voodoo3 / VSA-100",.matches=matches,
     .match_count=ARRAY_SIZE(matches),.framebuffer_bar=1,
     .probe=probe,.eligible=eligible,.start=start,.fallback=fallback,

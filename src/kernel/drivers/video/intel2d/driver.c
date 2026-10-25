@@ -11,6 +11,11 @@
 #include "../../../fs/vfs.h"
 #include "intel2d.h"
 
+#include "../render3d.h"
+static const struct render3d_family render_family = {
+    .status=R3D_NOT_IMPLEMENTED, .potential_units=4, .potential_texture_size=2048
+};
+
 #define MMIO_BYTES 0x80000u
 #define GTT_BYTES 0x40000u
 static struct intel_engine engine={.cpu_safe=true};
@@ -444,7 +449,7 @@ static const struct display_match gen2_matches[]={
 };
 static const struct display_match gen3_matches[]={{0x8086,0x2582,3,255}};
 #define ADAPTER(table,bar) \
-    .id="intel2d",.name="Intel integrated graphics",.matches=table, \
+    .render3d=&render_family,.id="intel2d",.name="Intel integrated graphics",.matches=table, \
     .attempt_files={"C:/system/settings/intel2d-%04x.cfg"}, \
     .match_count=ARRAY_SIZE(table),.framebuffer_bar=bar,.probe=probe,.eligible=eligible, \
     .start=start,.fallback=fallback,.attempt_begin=attempt_begin,.attempt_end=attempt_end, \

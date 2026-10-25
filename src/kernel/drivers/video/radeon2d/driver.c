@@ -61,6 +61,11 @@
 #include "../../../fs/vfs.h"
 #include "engine.h"
 
+#include "../render3d.h"
+static const struct render3d_family render_family = {
+    .status=R3D_NOT_IMPLEMENTED, .potential_units=6, .potential_texture_size=2048
+};
+
 /* Discrete primary functions from Linux v6.12 radeonfb_pci_table.
  * Shared list prevents the registry match and generation selection diverging. */
 #define RADEON_CHIPS(X) \
@@ -421,6 +426,7 @@ static int cursor_test(const struct accel_ops *ops, uint64_t deadline, bool (*ca
     return e ? e : hidden;
 }
 const struct display_driver radeon2d_driver={
+    .render3d=&render_family,
     .id="radeon2d", .attempt_files={ATTEMPT_PATH}, .name="ATI Radeon R100/R200/R300/R4xx", .matches=matches,
     .match_count=ARRAY_SIZE(matches), .framebuffer_bar=0, .probe=probe, .eligible=eligible,
     .start=start, .fallback=fallback, .attempt_begin=attempt_begin, .attempt_end=attempt_end,

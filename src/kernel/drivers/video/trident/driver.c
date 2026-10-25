@@ -11,6 +11,11 @@
 #include <ciuki/swdib.h>
 #include "engine.h"
 
+#include "../render3d.h"
+static const struct render3d_family render_family = {
+    .status=R3D_NOT_IMPLEMENTED, .potential_units=0, .potential_texture_size=0
+};
+
 static const struct display_match matches[]={
     {0x1023,0x9880,3,255},{0x1023,0x8400,3,255},{0x1023,0x8420,3,255},
     {0x1023,0x8500,3,255},{0x1023,0x8520,3,255},{0x1023,0x8600,3,255},
@@ -340,6 +345,7 @@ static void snapshot(struct ciuki_accel_info *out)
     out->operations=engine.operations; out->idle_waits=engine.waits;
 }
 const struct display_driver trident_blade_driver={
+    .render3d=&render_family,
     .id="trident",.attempt_files={ATTEMPT_PATH},.name="Trident Blade / CyberBlade",.matches=matches,
     .match_count=ARRAY_SIZE(matches),.framebuffer_bar=0,
     .probe=probe,.eligible=eligible,.start=start,.fallback=fallback,

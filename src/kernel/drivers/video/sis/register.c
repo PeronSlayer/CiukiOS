@@ -13,6 +13,11 @@
 #include "../../../fs/vfs.h"
 #include "sis.h"
 
+#include "../render3d.h"
+static const struct render3d_family render_family = {
+    .status=R3D_NOT_IMPLEMENTED, .potential_units=2, .potential_texture_size=1024
+};
+
 static const struct display_match matches300[] = {
     {0x1039,0x0300,3,255}, {0x1039,0x5300,3,255}, {0x1039,0x6300,3,255}
 };
@@ -350,7 +355,7 @@ static int cursor_test(const struct accel_ops *a,uint64_t deadline,bool (*cancel
     return e;
 }
 #define SIS_DRIVER(id_,name_,matches_,probe_,marker_) { \
-    .id=id_,.attempt_files={"C:/system/settings/accel.cfg",marker_},.name=name_,.matches=matches_,.match_count=ARRAY_SIZE(matches_),.framebuffer_bar=0, \
+    .render3d=&render_family,.id=id_,.attempt_files={"C:/system/settings/accel.cfg",marker_},.name=name_,.matches=matches_,.match_count=ARRAY_SIZE(matches_),.framebuffer_bar=0, \
     .probe=probe_,.eligible=eligible,.start=start,.fallback=fallback, \
     .attempt_begin=attempt_begin,.attempt_end=attempt_end,.attempt_failed=attempt_failed, \
     .record=record,.quarantine=quarantine,.summary=summary,.snapshot=snapshot,.cursor_test=cursor_test }

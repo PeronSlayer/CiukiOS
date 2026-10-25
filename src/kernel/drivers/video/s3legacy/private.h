@@ -80,6 +80,9 @@ int s3_cursor_test(const struct accel_ops *, uint64_t, bool (*)(void *), void *)
 int s3_access_begin(struct s3_device *);
 int s3_access_end(struct s3_device *);
 
+#ifndef S3_RENDER_FAMILY
+#define S3_RENDER_FAMILY 0
+#endif
 #define S3_ADAPTER(symbol, ident, label, engine, table) \
 static struct s3_device state = {.backend=&engine,.id=ident,.name=label, \
     .reason="pending",.cpu_safe=true,.cursor_hidden=true, \
@@ -96,7 +99,7 @@ static void quarantine(const char *r) { s3_fault(&state,r); } \
 static bool summary(bool *r,bool *u,const char **why) { return s3_summary(&state,r,u,why); } \
 static void snapshot(struct ciuki_accel_info *i) { s3_snapshot(&state,i); } \
 static void record(void) { s3_record(&state); } \
-const struct display_driver symbol = { .id=ident,.attempt_files={"C:/system/settings/accel.cfg"}, \
+const struct display_driver symbol = { .render3d=S3_RENDER_FAMILY,.id=ident,.attempt_files={"C:/system/settings/accel.cfg"}, \
     .name=label,.matches=table, \
     .match_count=ARRAY_SIZE(table),.framebuffer_bar=0,.probe=probe,.eligible=eligible, \
     .start=start,.fallback=fallback,.attempt_begin=begin,.attempt_end=end, \
