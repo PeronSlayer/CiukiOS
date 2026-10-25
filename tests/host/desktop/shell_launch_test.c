@@ -1320,6 +1320,7 @@ __attribute__((noinline)) static void test_launch_timing(void)
 }
 #include "shutdown_sequence_test.h"
 #include "end_session_test.h"
+#include "hang_close_test.h"
 static pthread_mutex_t wallpaper_test_lock=PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t wallpaper_test_changed=PTHREAD_COND_INITIALIZER;
 static int wallpaper_test_entered, wallpaper_test_release;
@@ -1644,6 +1645,7 @@ int main(int argc,char **argv)
     test_wallpaper_startup();
     test_shutdown_sequence();
     test_end_session();
+    test_t23_hang_close();
     return 0;
 }
 

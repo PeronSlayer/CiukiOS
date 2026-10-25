@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "internal.h"
+#include <w32/controls.h>
 static BOOL connected;
 static DWORD generation;
 struct request {
@@ -356,11 +357,26 @@ void u32_event(const struct desk_packet *p) {
   case DESK_PING:
     w->ping = p->serial;
     break;
-  case DESK_CLOSE_REQUEST:
+  case DESK_CLOSE_REQUEST: {
+    /* T23 c42f556e: the desktop's title button, Alt+F4 and the task
+     * button's Close are Windows' close button: WM_SYSCOMMAND SC_CLOSE,
+     * which DefWindowProc turns into WM_CLOSE. A program that grays Close in
+     * its system menu, has CS_NOCLOSE or ignores SC_CLOSE (the Quake III
+     * installer's background window does both) is not closed, as on Windows
+     * 98; the old direct WM_CLOSE destroyed that window and the installer
+     * went on copying files with no window. A grayed or CS_NOCLOSE close
+     * declines at once; End Task stays the way to end such a program. */
+    UINT state = w->system_menu ? GetMenuState(w->system_menu, SC_CLOSE, MF_BYCOMMAND) : (UINT)-1;
+    if ((w->cls && (w->cls->c.style & 0x200u)) || (state != (UINT)-1 && (state & (MF_GRAYED | MF_DISABLED)))) {
+      static const uint8_t declined[4];
+      u32_wire(w, DESK_CLOSE_ACK, declined, sizeof(declined), -1);
+      break;
+    }
     w->desktop_close = 1;
-    u32_queue(w->tid, h, WM_CLOSE, 0, 0, QS_POSTMESSAGE, u32_ticks(),
+    u32_queue(w->tid, h, WM_SYSCOMMAND, SC_CLOSE, 0, QS_POSTMESSAGE, u32_ticks(),
               u32_pointer);
     break;
+  }
   case DESK_V3_HELP:
     /* G15: the "?" caption button: DefWindowProc turns SC_CONTEXTHELP into What's This? */
     u32_queue(w->tid, h, WM_SYSCOMMAND, 0xf180u /* SC_CONTEXTHELP */, 0, QS_POSTMESSAGE, u32_ticks(),

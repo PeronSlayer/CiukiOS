@@ -212,11 +212,12 @@ static void test_memory_footprint(const char *directory)
     desk_folder_destroy(&d);
     network_available=0;
     footprint_begin("all_slots_resize_recover");
-    for (int i=1;i<DESK_CLIENTS;i++) footprint_client(&d,i,240,160);
-    for (int i=1;i<DESK_CLIENTS;i++) desk_drop_client(&d,i);
+    /* T23 c42f556e: programs fill every slot but the DESK_SYSTEM_SLOTS kept for the system dialogs. */
+    for (int i=1;i<DESK_CLIENTS-DESK_SYSTEM_SLOTS;i++) footprint_client(&d,i,240,160);
+    for (int i=1;i<DESK_CLIENTS-DESK_SYSTEM_SLOTS;i++) desk_drop_client(&d,i);
     footprint_frame(&d);
-    for (int i=1;i<DESK_CLIENTS;i++) footprint_client(&d,i,640,480);
-    for (int i=1;i<DESK_CLIENTS;i++) desk_drop_client(&d,i);
+    for (int i=1;i<DESK_CLIENTS-DESK_SYSTEM_SLOTS;i++) footprint_client(&d,i,640,480);
+    for (int i=1;i<DESK_CLIENTS-DESK_SYSTEM_SLOTS;i++) desk_drop_client(&d,i);
     footprint_frame(&d);
     footprint_compare_painter(&d);
     footprint_client(&d,1,1018,741); footprint_compare_painter(&d); /* exact pool bounds */

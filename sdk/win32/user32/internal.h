@@ -73,8 +73,9 @@ struct u32_window {
   BOOL lease_wanted;
   BOOL destroy_request; /* U32_DESTROY is honoured only when USER sent it */
   BOOL closing;         /* q3exec3: DESK_CLOSE sent; nothing else names the window */
-  BOOL desktop_close;   /* G3: a desktop CLOSE_REQUEST posted WM_CLOSE; a window that survives its
-                         * dispatch (the user cancelled the program's prompt) declines with CLOSE_ACK 0 */
+  BOOL desktop_close;   /* G3: a desktop CLOSE_REQUEST posted WM_SYSCOMMAND SC_CLOSE (T23 c42f556e; it
+                         * was WM_CLOSE); a window that survives its dispatch (the user cancelled the
+                         * program's prompt, or it ignored SC_CLOSE) declines with CLOSE_ACK 0 */
   BOOL flash;
   /* f5-10C classic state: control/dialog records, menus, scroll bars. */
   void *control, *dialog;

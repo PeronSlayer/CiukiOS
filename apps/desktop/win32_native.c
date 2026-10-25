@@ -506,13 +506,30 @@ static void w32_session_reap(struct desktop *d,uint64_t ms)
         (void)restart_call(NULL,W32R_ENDSESSION,W32R_SESSION_RESET,0,&r,NULL,0);w32_session_open=0;
     }else if(r.key==3)(void)restart_call(NULL,W32R_ENDSESSION,W32R_SESSION_CANCEL,0,&r,NULL,0);
 }
+/* T23 c42f556e: the live Win32 processes for the power sequence (the
+ * broker's authenticated clients, W32R_SHUTDOWN_LIST, as the ExitWindowsEx
+ * restart uses), also those whose desktop connection ended. */
+static unsigned w32_power_pids(struct desktop *d,uint32_t *pids,unsigned cap)
+{
+    (void)d;
+    if(!authorized || !pids || !cap)return 0;
+    struct w32r_reply r;uint8_t bytes[4*64];
+    uint32_t e=restart_call(NULL,W32R_SHUTDOWN,W32R_SHUTDOWN_LIST,0,&r,bytes,sizeof(bytes));
+    if(e || r.count>64 || r.data_bytes!=r.count*4){fprintf(stderr,"[win32] power list unavailable error=%u\n",e);return 0;}
+    unsigned n=0;
+    for(unsigned i=0;i<r.count && n<cap;i++){
+        uint32_t pid=(uint32_t)bytes[i*4]|(uint32_t)bytes[i*4+1]<<8|(uint32_t)bytes[i*4+2]<<16|(uint32_t)bytes[i*4+3]<<24;
+        if(pid)pids[n++]=pid;
+    }
+    return n;
+}
 int ciuki_win32_shell_restart(uint32_t pid,uint32_t flags)
 {return !authorized || !owner?-EPIPE:desk_restart_begin(&restart,&restart_ops,pid,flags,clock_ns()/1000000);}
 void desk_w32_start(struct desktop *d)
 {
     owner=d;struct w32r_service a;uint32_t e=service(1,1,&a);
     if(e || !a.result){fprintf(stderr,"[win32] desktop endpoint unavailable error=%u\n",e);return;}
-    authorized=1;d->w32_session=w32_session;d->w32_power=w32_power;desk_w32_supervise(&supervisor,&supervision,clock_ns());
+    authorized=1;d->w32_session=w32_session;d->w32_power=w32_power;d->power_w32_pids=w32_power_pids;desk_w32_supervise(&supervisor,&supervision,clock_ns());
 }
 void desk_w32_poll(struct desktop *d)
 {

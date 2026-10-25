@@ -12,6 +12,12 @@
 #include "access.h"
 #include <stddef.h>
 #define DESK_CLIENTS 16
+/* T23 trial c42f556e (docs/validation/t23-win32-hang-shutdown-2026-10-25.md):
+ * program connections and program windows never take the last
+ * DESK_SYSTEM_SLOTS client slots, so the desktop's own system dialogs ("This
+ * program is not responding", Shut Down, the shutdown progress and message
+ * boxes) can always open, however many windows the programs create. */
+#define DESK_SYSTEM_SLOTS 2
 #define DESK_DAMAGE_MAX 32
 struct desk_dirty_row { int32_t left, right; };   /* visible-span painter (compositor.c) */
 #define DESK_TX_MAX 64
@@ -134,6 +140,13 @@ struct desk_client {
     int power_aware, power_pending, power_granted;
     uint32_t power_serial;
     uint64_t close_sent_ns;
+    /* T23 c42f556e, Windows HungAppTimeout after End Task: when End Task
+     * asked this program to close (0: no End Task pending); a window of the
+     * program still open DESK_HUNG_NS later gets "This program is not
+     * responding" whether or not it answers PINGs. close_later: the program
+     * answered CLOSE_ACK LATER and is showing its own prompt. */
+    uint64_t end_task_ns;
+    int close_later;
     uint32_t pid, serial, version, window_id;
     uint32_t minor, resize_serial, applied_serial;
     uint32_t min_width, min_height, max_width, max_height, step_width, step_height;
@@ -491,6 +504,7 @@ struct desktop {
     struct desk_power_sequence power;
     struct desk_session session;   /* G3: the end-of-session queries before power */
     struct desk_end_task end_task;
+    unsigned slots_refused;   /* T23 c42f556e: client/window requests refused to keep DESK_SYSTEM_SLOTS */
     /* G3: the Win32 end-session broker; NULL or an error: no Win32 programs to ask. */
     int (*w32_session)(struct desktop *, unsigned action, uint32_t flags, struct desk_w32_status *);
     /* G11: WM_POWERBROADCAST (action DESK_W32_POWER_*, event = PBT_*), and
@@ -512,6 +526,11 @@ struct desktop {
     void (*power_prepare)(struct desktop *);
     void (*logoff)(struct desktop *); /* G32: called after G3 has closed the session */
     int (*power_alive)(struct desktop *, uint32_t pid);
+    /* T23 c42f556e: the live Win32 processes (w32srv's authenticated
+     * clients), including those whose desktop connection ended or that have
+     * no window: the power sequence closes and, after its deadline, ends
+     * them with the programs it launched. Fills pids, returns the count. */
+    unsigned (*power_w32_pids)(struct desktop *, uint32_t *pids, unsigned cap);
     /* Volume Control requests (DESK_MIXER_SET): applied with the delegated mixer
      * control handle; NULL on hosts without one. 0 or -errno. */
     int (*joystick_control)(struct desktop *, struct ciuki_joystick_control *);
@@ -642,6 +661,12 @@ int desk_show_desktop(struct desktop *);        /* Win+D: minimise all, again re
 int desk_arrange_undo_kind(const struct desktop *);   /* DESK_ARRANGE_* the Undo item reverses, 0 none */
 int desk_arrange_undo(struct desktop *);        /* Shift+Win+M, Undo Cascade/Tile/Minimize All */
 void desk_request_close(struct desktop *, int index);
+/* T23 c42f556e: a close the user asked for (title button, Alt+F4, the
+ * caption icon, the task button's Close). Asked again while the window is
+ * still "Closing..." and not showing its own prompt, it opens "This program
+ * is not responding" at once (as a second End Task does). */
+void desk_user_close(struct desktop *, int index);
+int desk_free_slots(const struct desktop *);   /* client slots held by no client and no built-in window */
 void desk_close_timeouts(struct desktop *);
 void desk_child_exited(struct desktop *, uint32_t pid, int status);
 void desk_session_begin(struct desktop *, int action);   /* 1 restart, 2 shut down, 3 log off */

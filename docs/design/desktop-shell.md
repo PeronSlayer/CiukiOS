@@ -158,6 +158,63 @@
     the windows that agreed.
   - ExitWindowsEx sessions (no HOLD) are unchanged.
 
+### Amendments after the T23 trial of image c42f556e (2026-10-25)
+
+Evidence and timeline: `docs/validation/t23-win32-hang-shutdown-2026-10-25.md`
+(four Quake III Arena demo installers at once; closing did nothing, Shut
+Down and Restart did not complete). Additional sources:
+
+- [HungAppTimeout](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-2000-server/cc978614(v=technet.10)):
+  "how long the system waits for user processes to end after the user
+  clicks the End Task command button", default 5000 ms; past it "the End
+  Task dialog box appears, stating that the process did not respond".
+- [WaitToKillAppTimeout](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-2000-server/cc978624(v=technet.10))
+  and [AutoEndTasks](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-server-2003/cc736867(v=ws.10)):
+  at shut down a process that does not end gets the End Task dialog unless
+  processes are ended automatically.
+- [EndTask](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-endtask):
+  a gentle WM_CLOSE first; forcing destroys the program when that fails.
+- Windows 98 SE shut-down dialog quoted by a user
+  ([BleepingComputer](https://www.bleepingcomputer.com/forums/t/14143/windows-98se-shutdown-problems/)):
+  "This program is not responding. It may be busy, waiting for a response
+  from you, or it may have stopped running ... To close this program
+  immediately, click End Task", for a hidden notification window too.
+
+Decisions (they supersede the matching parts of items 3, 6, 7 and 8):
+
+1. **End Task waits HungAppTimeout for the program to end.** Task Manager's
+   End Task on a responsive window still sends WM_CLOSE; when a window of
+   that process is still open 5 s later, "This program is not responding"
+   opens whether or not the program answers PINGs or declined (a busy
+   installer that ignores the close). One dialog per End Task.
+2. **A second close of a "Closing..." window offers End Task.** The title
+   button, Alt+F4, the caption icon and the task button's Close
+   (`desk_user_close`) on a window whose close request is still pending open
+   the dialog at once, unless the program answered `CLOSE_ACK LATER` and is
+   answering PINGs (it shows its own prompt).
+3. **The close button is SC_CLOSE for Win32 windows.** user32 delivers the
+   desktop's `CLOSE_REQUEST` as WM_SYSCOMMAND SC_CLOSE (Windows' close
+   button and Alt+F4); a window with Close grayed in its system menu or a
+   `CS_NOCLOSE` class declines at once. End Task remains the way to end such
+   a program (`docs/design/win32-personality-contract.md`, "t23close").
+4. **System dialogs always have a client slot.** Program connections and
+   program windows leave the last `DESK_SYSTEM_SLOTS` (2) of the 16 client
+   slots free; the End Task, Shut Down, shutdown progress and message
+   windows may use them, other built-in windows leave one. Refusals are
+   recorded (`[desktop] client table full ...`,
+   `[desktop] built-in window unavailable ...`,
+   `[desktop] end task dialog unavailable ...`).
+5. **The Win32 turn treats a windowless process as a window.** A process
+   holding its WM_QUERYENDSESSION for 5 s with no window on the desktop
+   (connection ended, hidden windows only) is not responding, as Windows 98
+   shows the dialog for hidden windows. Each window the session waits on is
+   recorded (`[desktop] end-session win32 turn pid=... hwnd=...`).
+6. **The power sequence ends every Win32 process.** Besides the desktop's
+   clients and children, every live process of the Win32 broker
+   (`W32R_SHUTDOWN_LIST`) is a target: closed, SIGTERM at the 3 s deadline,
+   named in "Some programs are still running" as "Windows program (PID n)".
+   **Force is SIGKILL** (TerminateProcess) for every remaining target.
+
 ### Not covered (gaps, owned elsewhere)
 
 - Stand by (PW-6, G11) and Restart in MS-DOS mode (DOS-9) in the Shut Down

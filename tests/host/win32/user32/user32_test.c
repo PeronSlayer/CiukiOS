@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: LGPL-2.1-or-later */
 #define _GNU_SOURCE
 #include "../../../../sdk/win32/user32/internal.h"
+#include <w32/controls.h>
 #include "../../../../apps/desktop/help_request.h"
 #include "../../../../apps/desktop/sounds.h"
 #include <assert.h>
@@ -583,6 +584,7 @@ static UINT traces;
 static int nesting;
 static int minmax_set;
 static int keep_on_close; /* G3: WM_CLOSE answered by a cancelled "Save changes?" */
+static int ignore_sc_close; /* T23 c42f556e: the Quake III installer background ignores SC_CLOSE */
 static unsigned g5_render_count,g5_all_count;
 static HWND g5_all_window;
 static HANDLE g5b_bitmap;
@@ -622,6 +624,8 @@ static LRESULT W32API procedure(HWND h, UINT m, WPARAM wp, LPARAM lp) {
   trace[traces].wp = wp;
   trace[traces++].lp = lp;
   if (m == WM_CLOSE && keep_on_close)
+    return 0;
+  if (m == WM_SYSCOMMAND && (wp & 0xfff0) == SC_CLOSE && ignore_sc_close)
     return 0;
   if (m == WM_USER + 1) {
     CHECK(InSendMessage());
@@ -737,6 +741,48 @@ static void test_desktop_close(void) {
     DispatchMessageA(&msg);
   CHECK(!IsWindow(h) && !close_acks(before, wire));
   puts("PASS G3 desktop close: WM_CLOSE posted, a surviving window declines once, own WM_CLOSE silent, destroyed window silent");
+  /* T23 c42f556e: the close request is Windows' close button, WM_SYSCOMMAND
+   * SC_CLOSE. The Quake III installer's background grays Close in its system
+   * menu and ignores SC_CLOSE: it must survive (one decline, no WM_CLOSE);
+   * a direct WM_CLOSE reached DefWindowProc and destroyed it. */
+  h = CreateWindowExA(0, "USER fixture", "VISE background", WS_VISIBLE | WS_CAPTION | 0x80000u /* WS_SYSMENU */,
+                      40, 40, 60, 60, 0, 0, 0, 0);
+  CHECK(h);
+  ValidateRect(h, 0);
+  w = u32_window(h);
+  CHECK(w && w->wire);
+  wire = w->wire;
+  ignore_sc_close = 1;
+  before = outgoing_count;
+  UINT first = traces;
+  event(w, DESK_CLOSE_REQUEST, 0, 0);
+  for (UINT i = 0; i < 100 && PeekMessageA(&msg, 0, 0, 0, 1); i++)
+    DispatchMessageA(&msg);
+  BOOL syscommand = 0, closed = 0;
+  for (UINT i = first; i < traces; i++) {
+    if (trace[i].h == h && trace[i].m == WM_SYSCOMMAND && (trace[i].wp & 0xfff0) == SC_CLOSE) syscommand = 1;
+    if (trace[i].h == h && trace[i].m == WM_CLOSE) closed = 1;
+  }
+  CHECK(IsWindow(h) && syscommand && !closed && close_acks(before, wire) == 1 && !w->desktop_close);
+  ignore_sc_close = 0;
+  /* Close grayed in the system menu: declined at once, nothing dispatched. */
+  CHECK(EnableMenuItem(GetSystemMenu(h, 0), SC_CLOSE, MF_BYCOMMAND | MF_GRAYED) != (UINT)-1);
+  before = outgoing_count;
+  first = traces;
+  event(w, DESK_CLOSE_REQUEST, 0, 0);
+  for (UINT i = 0; i < 100 && PeekMessageA(&msg, 0, 0, 0, 1); i++)
+    DispatchMessageA(&msg);
+  for (UINT i = first; i < traces; i++)
+    CHECK(!(trace[i].h == h && (trace[i].m == WM_CLOSE || trace[i].m == WM_SYSCOMMAND)));
+  CHECK(IsWindow(h) && close_acks(before, wire) == 1 && !w->desktop_close);
+  /* Enabled again, the close button closes it through DefWindowProc. */
+  CHECK(EnableMenuItem(GetSystemMenu(h, 0), SC_CLOSE, MF_BYCOMMAND) != (UINT)-1);
+  before = outgoing_count;
+  event(w, DESK_CLOSE_REQUEST, 0, 0);
+  for (UINT i = 0; i < 100 && PeekMessageA(&msg, 0, 0, 0, 1); i++)
+    DispatchMessageA(&msg);
+  CHECK(!IsWindow(h) && !close_acks(before, wire));
+  puts("PASS T23 desktop close is SC_CLOSE: an SC_CLOSE-ignoring window survives and declines, grayed Close declines at once, enabled Close destroys");
 }
 static void test_send(void) {
   ui_kernel_schedule(schedule_peer);

@@ -1333,7 +1333,7 @@ static void act(struct desktop *d, const struct sh_item *it)
         }
         break;
     case SH_ACT_TASK_MINIMIZE: if (it->arg >= 0 && it->arg < DESK_CLIENTS && !d->clients[it->arg].minimized) desk_minimize(d, it->arg); break;
-    case SH_ACT_TASK_CLOSE: desk_request_close(d, it->arg); break;
+    case SH_ACT_TASK_CLOSE: desk_user_close(d, it->arg); break;
     case SH_ACT_DOS_MARK: case SH_ACT_DOS_COPY: case SH_ACT_DOS_PASTE: case SH_ACT_DOS_QUICKEDIT: case SH_ACT_DOS_EXCLUSIVE:
         if (it->arg>=0 && it->arg<DESK_CLIENTS && d->clients[it->arg].dosbox) {
             desk_focus(d,it->arg); struct ciuki_message message;
@@ -3782,7 +3782,7 @@ int desk_shell_caption_icon(struct desktop *d, int i, uint64_t stamp, int menu_w
     if (again) {
         d->icon_click_window = -1;
         if (d->sh.levels) desk_menu_close(d);
-        desk_request_close(d, i);
+        desk_user_close(d, i);
         return 1;
     }
     if (menu_was_open && d->icon_click_window == i) { d->icon_click_window = -1; return 1; }
@@ -3864,7 +3864,15 @@ int desk_internal_open(struct desktop *d, int kind)
     }
     if (i >= 0) desk_drop_client(d, i);   /* one message at a time: the newest wins */
     for (i = 0; i < DESK_CLIENTS; i++) if (d->clients[i].channel < 0 && !d->clients[i].internal) break;
-    if (i == DESK_CLIENTS) return -1;
+    /* T23 c42f556e: the slots programs leave free (DESK_SYSTEM_SLOTS) are for
+     * the system dialogs; another built-in window leaves one of them. */
+    int system = kind == DESK_INTERNAL_END_TASK || kind == DESK_INTERNAL_SHUTDOWN ||
+                 kind == DESK_INTERNAL_POWER || kind == DESK_INTERNAL_MESSAGE;
+    if (i < DESK_CLIENTS && !system && desk_free_slots(d) <= 1) i = DESK_CLIENTS;
+    if (i == DESK_CLIENTS) {
+        fprintf(stderr, "[desktop] built-in window unavailable kind=%d free=%d\n", kind, desk_free_slots(d));
+        return -1;
+    }
     struct desk_client *c = &d->clients[i];
     uint32_t w, h;
     internal_size(d, kind, &w, &h);
@@ -5620,7 +5628,7 @@ int desk_shell_key(struct desktop *d, int code, int value)
         if (code == DU_KEY_F4) {
             if (value == 1) {
                 if (d->sh.levels) desk_menu_close(d);
-                else if (d->focus >= 0) desk_request_close(d, d->focus);
+                else if (d->focus >= 0) desk_user_close(d, d->focus);
                 else desk_internal_open(d, DESK_INTERNAL_SHUTDOWN);
             }
             d->sh.alt_used = 1;

@@ -27,12 +27,14 @@ static int shutdown_request(int action)
     if (shutdown_error) { errno=shutdown_error; return -1; }
     return 0;
 }
+static int shutdown_last_signal;
 static int shutdown_terminate(uint32_t pid, int sig)
 {
     shutdown_terms++;
-    assert(sig==SIGTERM);
+    assert(sig==SIGTERM || sig==SIGKILL);   /* T23 c42f556e: Force is SIGKILL */
+    shutdown_last_signal=sig;
     int r=terminate_child(pid,sig); /* production call 71 wrapper and rights */
-    assert(last_authority==66 && terminated_pid==pid && terminated_signal==SIGTERM);
+    assert(last_authority==66 && terminated_pid==pid && terminated_signal==sig);
     return r;
 }
 static void shutdown_setup(void)
@@ -220,7 +222,7 @@ static void test_shutdown_sequence(void)
     struct ciuki_input_event e={.type=CIUKI_INPUT_BUTTON,.code=1,.value=1}; desk_input(d,&e);
     e.type=CIUKI_INPUT_MOTION; e.value=20; e.value2=20; desk_input(d,&e);
     assert(d->drag==-1 && d->clients[progress].frame.x==frame.x && d->clients[progress].frame.y==frame.y);
-    shutdown_key(0x21); assert(d->power.state==DESK_POWER_FORCE && shutdown_terms==2 && shutdown_calls==21);
+    shutdown_key(0x21); assert(d->power.state==DESK_POWER_FORCE && shutdown_terms==2 && shutdown_calls==21 && shutdown_last_signal==SIGKILL);
     shutdown_at(10249999999ull); assert(shutdown_calls==21);
     shutdown_at(10250000000ull); assert(shutdown_calls==22 && d->power.state==DESK_POWER_BUSY);
     shutdown_at(11000000000ull); assert(shutdown_calls==22);
