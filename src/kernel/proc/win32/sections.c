@@ -723,8 +723,11 @@ static int image_seed(
     }
     return 0;
 }
+/* `known`: the image digest when the caller already hashed these exact,
+ * pinned bytes (w32_loader_image); NULL hashes them here. */
 static int image_section_map_inner(
-    struct process *p, const struct ciuki_file *f, const struct w32_image *im, bool builtin, uint32_t *mapped)
+    struct process *p, const struct ciuki_file *f, const struct w32_image *im, bool builtin, uint32_t *mapped,
+    const uint8_t *known)
 {
     uint32_t limit = builtin ? CIUKI_W32_BUILTIN_LIMIT : CIUKI_W32_APP_LIMIT;
     if ((!im->base && (!mapped || builtin)) || (im->base && im->base < (builtin ? CIUKI_W32_APP_LIMIT : CIUKI_W32_LOW)) || im->base >= limit || (im->base & 65535)
@@ -732,28 +735,32 @@ static int image_section_map_inner(
         return -ENOEXEC;
     if (w32_process_init(p))
         return -ENOMEM;
-    uint32_t scratch = pmm_alloc();
-    if (!scratch)
-        return -ENOMEM;
-    struct sha256_ctx hash;
-    sha256_init(&hash);
-    int err = 0;
-    for (uint32_t off = 0; off < f->bytes;) {
-        uint32_t n = f->bytes - off;
-        if (n > PAGE_SIZE)
-            n = PAGE_SIZE;
-        err = f->read(f->cookie, off, P2V(scratch), n);
-        if (err)
-            break;
-        sha256_update(&hash, P2V(scratch), n);
-        off += n;
-        kpreempt_point();
-    }
     uint8_t digest[32];
-    sha256_final(&hash, digest);
-    pmm_free(scratch);
-    if (err)
-        return err;
+    int err = 0;
+    if (known)
+        memcpy(digest, known, sizeof(digest));
+    else {
+        uint32_t scratch = pmm_alloc();
+        if (!scratch)
+            return -ENOMEM;
+        struct sha256_ctx hash;
+        sha256_init(&hash);
+        for (uint32_t off = 0; off < f->bytes;) {
+            uint32_t n = f->bytes - off;
+            if (n > PAGE_SIZE)
+                n = PAGE_SIZE;
+            err = f->read(f->cookie, off, P2V(scratch), n);
+            if (err)
+                break;
+            sha256_update(&hash, P2V(scratch), n);
+            off += n;
+            kpreempt_point();
+        }
+        sha256_final(&hash, digest);
+        pmm_free(scratch);
+        if (err)
+            return err;
+    }
     struct w32_object *o = 0;
     for (struct w32_object *it = w32_objects; it; it = it->next)
         if (it->type == W32_OBJ_SECTION && it->u.section) {
@@ -819,19 +826,20 @@ static bool image_section_available(void *unused)
     return !image_section_building;
 }
 static int image_map_serialized(
-    struct process *p, const struct ciuki_file *f, const struct w32_image *im, bool builtin, uint32_t *mapped)
+    struct process *p, const struct ciuki_file *f, const struct w32_image *im, bool builtin, uint32_t *mapped,
+    const uint8_t *known)
 {
     while (image_section_building)
         kwait_wait_until(&image_section_changed, image_section_available, 0, w32_now() + 1);
     image_section_building = true;
-    int err = image_section_map_inner(p, f, im, builtin, mapped);
+    int err = image_section_map_inner(p, f, im, builtin, mapped, known);
     image_section_building = false;
     kwait_wake_all(&image_section_changed);
     return err;
 }
 int w32_image_section_map(struct process *p,const struct ciuki_file *f,const struct w32_image *im,bool builtin)
 {
-    return image_map_serialized(p,f,im,builtin,0);
+    return image_map_serialized(p,f,im,builtin,0,0);
 }
 static void shared_section_retain(void *o) { w32_retain(o); }
 static void shared_section_release(void *o) { w32_release(o); }
@@ -908,10 +916,13 @@ int w32_loader_image(struct process *p,const struct ciuki_file *f,struct w32_ima
     if(!reused){
         bool builtin=!!(flags&W32_LDR_BUILTIN)&&!datafile;
         uint32_t mapped=im->base;
-        err=image_map_serialized(p,f,im,builtin,&mapped);
+        /* fx-launch: the bytes stay pinned for this call, so the digest
+         * just computed identifies them; hashing every DLL a second time in
+         * the section lookup doubled the SHA-256 work of each Win32 start. */
+        err=image_map_serialized(p,f,im,builtin,&mapped,digest);
         if(err && !(flags&W32_LDR_EXACT) && !builtin && (im->directories[11]) && !(im->flags&1)){
             im->base=0;
-            err=image_map_serialized(p,f,im,false,&mapped);
+            err=image_map_serialized(p,f,im,false,&mapped,digest);
         }
         if(err)return err;
         im->base=mapped;

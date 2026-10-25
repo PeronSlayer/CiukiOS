@@ -15,4 +15,8 @@ void hardware_check_cache(struct storage *s, struct hw_check_result *out) {
         stats.pages,stats.data_pages,stats.meta_pages,stats.workspace_pages+stats.writeback_pages,
         stats.floor_pages,stats.ceiling_pages,stats.speculative_bytes,stats.speculative_peak,
         stats.pinned_data,stats.dirty_data,stats.error_data,stats.unreclaimable_data,stats.data_pages,stats.max_slice_us);
+    /* fx-launch: sector index size and walk cost (probes per lookup ~1-2). */
+    klog("[cache] index buckets=%u pages=%u slots=%u lookups=%llu probes=%llu",
+        stats.hash_buckets,stats.hash_pages,stats.slots_512+stats.slots_2048,
+        (unsigned long long)stats.lookups,(unsigned long long)stats.lookup_probes);
 }

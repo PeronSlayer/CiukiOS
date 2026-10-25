@@ -180,7 +180,11 @@ static int prepare_image(struct process *p, const struct ciuki_file *file,
                           const struct proc_strings *strings, uint64_t mask)
 {
     if(w32_refuse_image_name&&w32_refuse_image_name(p,p->name))return -ENOSYS;
-    if (w32_is_pe && w32_is_pe(file)) return w32_spawn ? w32_spawn(p, file, strings, mask) : -ENOSYS;
+    if (w32_is_pe && w32_is_pe(file)) {
+        int err = w32_spawn ? w32_spawn(p, file, strings, mask) : -ENOSYS;
+        if (!err) proc_launch_elf(p); /* image and ntdll mapped: end of the spawn stage */
+        return err;
+    }
     struct elf_image image;
     int err = elf_validate(file, &image);
     if (err)

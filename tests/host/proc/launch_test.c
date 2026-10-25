@@ -37,6 +37,9 @@ static void measurement(void)
     struct process *desktop, *other;
     struct proc_thread *dt=make_process(proc_supervisor(),&desktop);
     make_process(proc_supervisor(),&other);
+    /* fx-launch: the two fixture spawns of a quiet boot log their spawn stage. */
+    CHECK(launch_lines==2 && strstr(launch_log,"[launch-stage] name=test pid=") && desktop->launch.finished);
+    launch_lines=0; launch_log[0]=0;
     fake_desktop_pid=desktop->pid; g_current=dt->task; dt->task->state=T_RUNNING;
     static const struct ciuki_file_ops ops={.open=measured_open}; proc_set_file_ops(&ops);
     g_ticks=1005;
@@ -99,9 +102,19 @@ static void measurement(void)
     CHECK(proc_spawn(CIUKI_IMAGE_BASE-1)==-EFAULT && !desktop->launch_pending);
     unsigned lines=launch_lines; quiet_boot=true;
     CHECK(!proc_launch_mark(desktop,CIUKI_LAUNCH_BEGIN,0,1100000));
+    /* fx-launch: a quiet boot keeps only the spawn stage, as one record at
+     * the end of image loading; later stages and markers stay verbose-only. */
+    g_ticks=1200;
     int quiet_pid=proc_spawn(prepare_spawn_args(desktop)); CHECK(quiet_pid>0);
-    CHECK(!proc_find((uint32_t)quiet_pid)->launch.active && launch_lines==lines);
-    CHECK(!proc_find((uint32_t)quiet_pid)->launch.dma_reads);
+    struct proc_launch *q=&proc_find((uint32_t)quiet_pid)->launch;
+    CHECK(q->active && q->quiet && q->finished && launch_lines==lines+1);
+    CHECK(q->spawn_us==1200000 && q->elf_us==1275000 && q->volume_bytes==16384 && q->disk_reads==32 && q->dma_ms==5);
+    char quiet_record[200];
+    snprintf(quiet_record,sizeof(quiet_record),"[launch-stage] name=fixture pid=%d spawn_us=1200000 elf_us=1275000 "
+             "read_bytes=16384 disk_bytes=16384 disk_requests=32 dma_ms=5",quiet_pid);
+    CHECK(strstr(launch_log,quiet_record));
+    proc_launch_volume_read(4096,4096); CHECK(q->volume_bytes==16384); /* finished: no later accounting */
+    CHECK(proc_launch_mark(desktop,CIUKI_LAUNCH_CONFIGURE,(uint32_t)quiet_pid,0)==0 && !q->configured);
     /* Two threads of one process may block in simultaneous spawns: each
      * preload must keep its own provisional-child attribution. */
     quiet_boot=false;

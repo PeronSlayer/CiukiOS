@@ -52,7 +52,23 @@ _Static_assert(PAGES_PER_META >= 8, "i686 descriptor density");
 #endif
 
 static unsigned cls(const struct cache_block *b) { return b->capacity >= 2048 ? 1u : 0u; }
-static unsigned bucket(struct blkdev *d, uint64_t lba) { return (unsigned)((uintptr_t)d/16 ^ lba ^ (lba>>32)) & 255; }
+/* The 128 sectors of one aligned 64 KiB run take distinct buckets (the run
+ * index is mixed in as a constant within the run); runs, and two devices'
+ * equal LBAs, are scattered by multiplicative mixing, so files placed at
+ * LBAs that differ by a power of two do not share chains. Any mask works. */
+static uint32_t bucket(const struct block_cache *c, struct blkdev *d, uint64_t lba) {
+    uint64_t run=lba>>7;
+    uint32_t mix=((uint32_t)run^(uint32_t)(run>>32)^(uint32_t)((uintptr_t)d>>4))*0x9e3779b1u;
+    return ((uint32_t)lba^(mix>>7<<7)^(mix>>16)) & c->hash_mask;
+}
+#define HASH_PER_PAGE (4096u/(unsigned)sizeof(struct cache_block *))
+static struct cache_block **slot(struct block_cache *c, uint32_t h) {
+    return c->hash_pages ? &c->hash_dir[h/HASH_PER_PAGE][h%HASH_PER_PAGE] : &c->hash_inline[h];
+}
+uint32_t cache_hash_buckets(const struct block_cache *c) { return c->hash_mask+1; }
+struct cache_block **cache_hash_bucket(struct block_cache *c, uint32_t index) {
+    return index<=c->hash_mask ? slot(c,index) : 0;
+}
 static uint32_t total_pages(const struct block_cache *c) {
     return c->data_pages+c->meta_pages+c->workspace_pages+c->writeback_pages;
 }
@@ -234,7 +250,7 @@ static int write_block(struct block_cache *c, struct cache_block *b) {
 static void unhash(struct block_cache *c, struct cache_block *b) {
     prefetch_finish(c,b,false);
     if (!b->dev) return;
-    struct cache_block **p=&c->hash[bucket(b->dev,b->lba)];
+    struct cache_block **p=slot(c,bucket(c,b->dev,b->lba));
     unsigned work=0;
     while (*p && *p!=b) { scan_service(&work); p=&(*p)->hash_next; }
     if (*p) *p=b->hash_next;
@@ -368,12 +384,47 @@ static int layout_for(struct block_cache *c, struct blkdev *d) {
     return convert(c,pages*2);
 }
 static struct cache_block *find(struct block_cache *c, struct blkdev *d, uint64_t lba) {
-    unsigned work=0;
-    for (struct cache_block *b=c->hash[bucket(d,lba)]; b; b=b->hash_next) {
-        scan_service(&work);
+    unsigned work=0; c->lookups++;
+    for (struct cache_block *b=*slot(c,bucket(c,d,lba)); b; b=b->hash_next) {
+        scan_service(&work); c->lookup_probes++;
         if (b->dev==d && b->lba==lba && b->generation==d->media_generation && b->sector_size==d->sector_size) return b;
     }
     return 0;
+}
+/* Rebuild the index for `slots` cache slots: the old chains are walked once
+ * and every hashed block moves to its new bucket. Only grows; called with the
+ * cache lock held or before the cache is published. */
+static void hash_resize(struct block_cache *c, uint32_t slots) {
+    uint32_t buckets=CACHE_HASH_INLINE;
+    while (buckets<slots/2 && buckets<CACHE_HASH_DIR*HASH_PER_PAGE) buckets*=2;
+    if (buckets<=c->hash_mask+1) return;
+    uint32_t pages=(buckets+HASH_PER_PAGE-1)/HASH_PER_PAGE;
+    struct cache_block **fresh[CACHE_HASH_DIR]={0};
+    for (uint32_t i=0;i<pages;i++) {
+        fs_service();
+        if (!(fresh[i]=fs_normal_page_alloc())) {
+            while (i--) { cache_unclaim(fresh[i],MM_CACHE_META); fs_page_free(fresh[i]); }
+            return;
+        }
+        cache_claim(fresh[i],MM_CACHE_META);
+    }
+    struct cache_block *moved=0;
+    unsigned work=0;
+    for (uint32_t h=0;h<=c->hash_mask;h++) {
+        struct cache_block **head=slot(c,h);
+        while (*head) {
+            struct cache_block *b=*head; *head=b->hash_next;
+            b->hash_next=moved; moved=b; scan_service(&work);
+        }
+    }
+    for (uint32_t i=0;i<c->hash_pages;i++) { cache_unclaim(c->hash_dir[i],MM_CACHE_META); fs_page_free(c->hash_dir[i]); }
+    memcpy(c->hash_dir,fresh,sizeof(fresh));
+    c->hash_pages=pages; c->hash_mask=buckets-1;
+    while (moved) {
+        struct cache_block *b=moved; moved=b->hash_next;
+        struct cache_block **head=slot(c,bucket(c,b->dev,b->lba));
+        b->hash_next=*head; *head=b; scan_service(&work);
+    }
 }
 /* Reserve a miss before dropping the lock. Failed fills retain their result
  * until existing waiters have consumed it, then the slot is reusable. */
@@ -424,7 +475,7 @@ retry:
     unhash(c,b); c->misses++; if (read) c->demand_misses++;
     b->dev=d; b->lba=lba; b->generation=d->media_generation; b->sector_size=(uint16_t)d->sector_size;
     b->invalid=false; b->io_error=0;
-    unsigned h=bucket(d,lba); b->hash_next=c->hash[h]; c->hash[h]=b;
+    struct cache_block **head=slot(c,bucket(c,d,lba)); b->hash_next=*head; *head=b;
     touch_demand(c,b,read && background_io(),true);
     if (!read && issued) *issued=true; /* fresh slot, contents undefined (f1-89 fill) */
     if (read) {
@@ -444,6 +495,7 @@ retry:
 static unsigned meta_needed(unsigned data) { return data>1 ? (data-1+PAGES_PER_META-1)/PAGES_PER_META : 0; }
 int cache_init(struct block_cache *c, size_t bytes) {
     memset(c,0,sizeof(*c)); fs_lock_init(&c->lock); fs_lock_init(&c->workspace_lock); fs_event_init(&c->changed); fs_event_init(&c->writer_kick); fs_lock_classify(&c->lock,3,0); fs_lock_classify(&c->workspace_lock,3,0);
+    c->hash_mask=CACHE_HASH_INLINE-1;
     if (!bytes) bytes=CACHE_DEFAULT_BYTES;
     if (bytes<8192 || bytes>32u*1024u*1024u) { cache_destroy(c); return -FS_EINVAL; }
     size_t pages=bytes/4096;
@@ -484,6 +536,7 @@ int cache_init(struct block_cache *c, size_t bytes) {
         c->data_pages++;
         half_activate(c,pg,0,0,false); half_activate(c,pg,1,0,false);
     }
+    hash_resize(c,c->blocks);
     return 0;
 fail: cache_destroy(c); return -FS_ENOMEM;
 }
@@ -505,6 +558,8 @@ int cache_adaptive_enable(struct block_cache *c, uint32_t usable) {
         total_pages(c)<CACHE_FLOOR_BYTES/4096 ? -FS_ENOMEM : 0;
     if (!e) {
         c->floor_pages=CACHE_FLOOR_BYTES/4096; c->ceiling_pages=ceiling;
+        /* Growth never outruns the index: size it once for the ceiling. */
+        hash_resize(c,ceiling*CACHE_PAGE_SLOTS);
         c->adaptive=true; c->window_time=fs_now_ms();
         if (reclaim_cache_register) reclaim_cache_register(c);
         c->window_hits=c->demand_hits; c->window_misses=c->demand_misses;
@@ -669,9 +724,9 @@ void cache_reclaim_step(struct block_cache *c, bool speculative, struct reclaim_
             c->trim_slot++; c->trim_prev=0; continue;
         }
         struct cache_block *b=&pg->b[i], *prev=c->trim_prev;
-        unsigned h=bucket(b->dev,b->lba);
-        if (prev==b || (prev && (!prev->dev || bucket(prev->dev,prev->lba)!=h))) prev=0;
-        struct cache_block **at=prev?&prev->hash_next:&c->hash[h];
+        uint32_t h=bucket(c,b->dev,b->lba);
+        if (prev==b || (prev && (!prev->dev || bucket(c,prev->dev,prev->lba)!=h))) prev=0;
+        struct cache_block **at=prev?&prev->hash_next:slot(c,h);
         while (*at && *at!=b && probes<32) {
             prev=*at; at=&prev->hash_next; probes++;
         }
@@ -852,7 +907,7 @@ bool cache_prefetch_tick(struct block_cache *c) {
         if (b->busy || b->waiters || b->pins || b->dirty || b->speculative || page_pinned(b->data)) continue;
         unhash(c,b); b->dev=d; b->lba=s->lba+n; b->generation=d->media_generation;
         b->sector_size=512; b->invalid=false; b->io_error=0; b->busy=true;
-        unsigned h=bucket(d,b->lba); b->hash_next=c->hash[h]; c->hash[h]=b; blocks[n++]=b;
+        struct cache_block **head=slot(c,bucket(c,d,b->lba)); b->hash_next=*head; *head=b; blocks[n++]=b;
     }
     if (!n) { s->pending=0; fs_lock_drop(&c->lock); return false; }
     uint64_t lba=s->lba; s->lba+=n; s->pending-=n; s->outstanding++; c->batch_busy=true;
@@ -899,6 +954,7 @@ void cache_destroy(struct block_cache *c) {
         cache_unclaim(m,MM_CACHE_META); fs_page_free(m);
     }
     for (unsigned i=0;i<c->workspace_pages;i++) { fs_service(); cache_unclaim(c->workspace[i],MM_CACHE_WORK); fs_page_free(c->workspace[i]); }
+    for (unsigned i=0;i<c->hash_pages;i++) { cache_unclaim(c->hash_dir[i],MM_CACHE_META); fs_page_free(c->hash_dir[i]); }
     fs_lock_destroy(&c->lock); fs_lock_destroy(&c->workspace_lock); fs_event_destroy(&c->changed); fs_event_destroy(&c->writer_kick);
     memset(c,0,sizeof(*c));
 }
@@ -936,6 +992,8 @@ static void stats_locked(struct block_cache *c, struct cache_stats *out) {
     out->blocked_pinned=c->blocked_pinned; out->blocked_dirty=c->blocked_dirty; out->blocked_error=c->blocked_error;
     out->prefetch_useful=c->prefetch_useful; out->prefetch_wasted=c->prefetch_wasted;
     out->prefetch_commands=c->prefetch_commands;
+    out->hash_buckets=c->hash_mask+1; out->hash_pages=c->hash_pages;
+    out->lookups=c->lookups; out->lookup_probes=c->lookup_probes;
     stats_page(c,&c->inline_page,out);
     unsigned work=0;
     for (struct cache_meta *m=c->meta;m;m=m->next) for (unsigned i=0;i<m->count;i++) {
@@ -1026,7 +1084,7 @@ int cache_read_run(struct block_cache *c, struct blkdev *d, uint64_t lba, uint32
             if (!b) continue;
             unhash(c,b); b->dev=d; b->lba=lba+j; b->generation=generation; b->sector_size=512;
             b->busy=true; b->invalid=false; b->io_error=0;
-            unsigned h=bucket(d,b->lba); b->hash_next=c->hash[h]; c->hash[h]=b;
+            struct cache_block **head=slot(c,bucket(c,d,b->lba)); b->hash_next=*head; *head=b;
             touch_demand(c,b,background,true); reserved[j]=b; c->misses++;
         }
         c->demand_misses+=end-i;

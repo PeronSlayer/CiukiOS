@@ -165,11 +165,18 @@ int main(void) {
             for (unsigned i=0;i<4;i++) devices[i]=(struct blkdev){.sector_size=512,.capacity=1048576,
                 .read=read_data,.write=write_data,.write_cache_state=BLKDEV_CACHE_DISABLED};
             struct cache_scan scan={0}; struct cache_block *target=0; unsigned count=0;
+            uint64_t run[4]={0};
             for (struct cache_block *b;(b=scan_next(&c,&scan));) {
                 unsigned dev=count/4096;
                 b->dev=&devices[dev]; b->sector_size=512;
-                b->lba=(count%4096)*256u+bucket(b->dev,0);
-                b->hash_next=c.hash[0]; c.hash[0]=b;
+                /* fx-launch: the index is sized to the cache and mixes runs,
+                 * so pick, per device, LBAs whose bucket is 0: within an
+                 * aligned 128-sector run, bucket(base+j) == bucket(base)^j. */
+                uint32_t h;
+                do h=bucket(&c,b->dev,run[dev]*128); while (h&~127u && ++run[dev]);
+                b->lba=run[dev]++*128+(h&127u);
+                CHECK(!bucket(&c,b->dev,b->lba));
+                b->hash_next=*cache_hash_bucket(&c,0); *cache_hash_bucket(&c,0)=b;
                 if (!target) target=b;
                 count++;
             }
@@ -178,7 +185,7 @@ int main(void) {
                 c.lru[0].newest->busy=false;
                 /* Discard the synthetic hash fixture; force a clean victim
                  * behind the maximum number of busy descriptors. */
-                memset(c.hash,0,sizeof(c.hash));
+                for (uint32_t h=0;h<cache_hash_buckets(&c);h++) *cache_hash_bucket(&c,h)=0;
                 for (struct cache_block *b=c.lru[0].oldest;b;b=b->next) b->dev=0;
             }
             model_points=enabled; model_total=model_span=model_max=0; model_enabled=true;

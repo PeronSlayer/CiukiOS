@@ -1670,18 +1670,22 @@ static void storage_timer(void *arg)
 }
 /* G29d: program starts reach CIUKIST.LOG on this task, never inside exec
  * (Windows 98's Task Monitor records application starts asynchronously).
- * A start is written about a second after it was queued, so a burst of
- * starts costs one log write and commit; a queue 3/4 full is written at
- * once. A failed flush drops its starts (no retry loop); an error is logged
- * when it first appears, not again until a flush succeeds. */
-#define STARTUP_LOG_DELAY_MS 1000u
+ * fx-launch: starts are written once no start has been queued for 10 s (the
+ * launch, its DLLs and its first frame are over), at the latest 60 s after
+ * the first, so a burst costs one log write and commit away from the
+ * launch; a queue 3/4 full is written at once, Shut Down and the
+ * defragmenter's analysis flush it themselves. A failed flush drops its
+ * starts (no retry loop); an error is logged when it first appears, not
+ * again until a flush succeeds. */
+#define STARTUP_LOG_QUIET_MS 10000u
+#define STARTUP_LOG_MAX_MS 60000u
 static void startup_log_main(void *arg)
 {
     struct storage *s = arg;
     int reported = 0;
     while (!s->stopped) {
         if (!vfs_startup_wait(&s->vfs) || s->stopped) continue;
-        vfs_startup_settle(&s->vfs, STARTUP_LOG_DELAY_MS);
+        vfs_startup_settle(&s->vfs, STARTUP_LOG_QUIET_MS, STARTUP_LOG_MAX_MS);
         if (s->stopped) break;
         int e = vfs_startup_flush(&s->vfs, true);
         if (e < 0 && e != reported) klog("[storage] startup_log error=%d dropped=%u failed=%u", e,

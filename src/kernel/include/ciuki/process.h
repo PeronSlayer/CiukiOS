@@ -23,6 +23,7 @@ struct proc_launch {
     uint32_t dma_max;
     uint32_t volume_max, disk_max, image_max, page_faults;
     bool active, configured, damaged, finished;
+    bool quiet; /* fx-launch: quiet boot, spawn stage only (one record at elf) */
 };
 enum proc_personality { PROC_NATIVE, PROC_WIN32 };
 /* Pure translations, not permission to elevate. SCHED_OTHER is policy 0;
