@@ -396,7 +396,11 @@ void u32_flush(void) {
   BOOL any = 0;
   for (UINT i = 0; i < U32_WINDOWS; i++) {
     struct u32_window *w = &u32_windows[i];
-    if (!w->handle || !w->wire || w->dcs || !w->redraw ||
+    /* q3exec2: a window being destroyed sends nothing more. DestroyWindow
+     * waits for the desktop's DESK_CLOSE answer while pumping, and a frame
+     * update flushed during that wait reached the desktop after the window
+     * was gone: the desktop then dropped the program's whole connection. */
+    if (!w->handle || !w->wire || w->destroying || w->dcs || !w->redraw ||
         !IsWindowVisible(w->handle) || IsIconic(w->handle))
       continue;
     UINT sent = 0;

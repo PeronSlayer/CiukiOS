@@ -2721,10 +2721,37 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
     struct ciuki_surface_info info={0};
     if (i>=0) info=d->clients[i].info;
     struct desk_packet p;
+    /* q3exec2: a frame update (DAMAGE, PRESENT) is checked against its
+     * window's surface. One that names a window this desktop no longer has
+     * (closed, or dropped with its owner) or whose rectangle no longer fits
+     * that surface is a stale update and is refused alone. Dropping the
+     * connection for it removed every window of the program: the Quake III
+     * Arena demo installer lost its background and every wizard page, whose
+     * DialogBoxParam then failed and was taken as Next. Only a packet that
+     * no surface could make valid still ends the connection. */
+    if (anchor->channel>=0 && anchor->hello && anchor->version==DESK_V3_VERSION &&
+        m->sender_pid && (!anchor->pid || anchor->pid==m->sender_pid) && !m->fd_count &&
+        m->length>=16 && m->data[0]==DESK_V3_VERSION &&
+        (m->data[1]==DESK_DAMAGE || m->data[1]==DESK_V3_PRESENT) && !desk_parse(m,1,&info,&p)) {
+        const struct ciuki_surface_info any={sizeof(any),CIUKI_SURFACE_DIMENSION_MAX,CIUKI_SURFACE_DIMENSION_MAX,
+            CIUKI_SURFACE_DIMENSION_MAX*4,CIUKI_SURFACE_XRGB8888,CIUKI_SURFACE_MAX};
+        if (desk_parse(m,1,&any,&p)) {
+            int error=i<0 ? -ENOENT : -EINVAL;
+            if (d->v3_stale_updates++<8)
+                fprintf(stderr,"[desktop] v3 stale update pid=%u opcode=%u window=%u generation=%u error=%d\n",
+                    anchor->pid,p.opcode,id,generation,error);
+            if (p.request) v3_reply(d,peer,&p,error);
+            return error;
+        }
+    }
     if (anchor->channel<0 || (anchor->hello && anchor->version!=DESK_V3_VERSION) ||
         !m->sender_pid || (anchor->pid && anchor->pid!=m->sender_pid) ||
         (m->fd_count==1 && d->ops.info(m->fds[0],&info)) || !desk_parse(m,1,&info,&p) ||
         (!anchor->hello && p.opcode!=DESK_HELLO) || (anchor->hello && p.opcode==DESK_HELLO)) {
+        /* Every window of the program goes with the connection: say so. */
+        if (anchor->channel>=0)
+            fprintf(stderr,"[desktop] v3 drop pid=%u sender=%u opcode=%u length=%u fds=%u window=%u generation=%u\n",
+                anchor->pid,m->sender_pid,m->length>1 ? m->data[1] : 0,m->length,m->fd_count,id,generation);
         close_attachments(d,m,-1); desk_drop_client(d,peer); return -EINVAL;
     }
     if (p.opcode==DESK_HELLO) {

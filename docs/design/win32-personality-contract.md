@@ -2817,3 +2817,93 @@ Run reported "could not be started. Exec format error (8)", with no
   uninstaller copied to the Windows directory; these use existing contract
   services and are QEMU evidence still to collect.
 
+
+## q3exec2 — Installer VISE wizard pages and the desktop connection (2026-10-25)
+
+QEMU evidence (lead, image after main d5acb646): the installer starts and
+shows its background window and the Welcome page; Enter on Welcome (Next is
+the default button) makes the background, the page and the taskbar button
+disappear while the process keeps running, reading C: for more than two
+minutes. No page follows and no `[win32] exit` record appears. The disk
+after the run shows that the install went on without its pages: the
+default destination `C:\Q3Ademo` holds the complete `demoq3\pak0.pk3`
+(46,853,694 bytes) and the `Extras` help tree up to a zero-length
+`Keel.jpg` that was being written when the run stopped (71 files,
+47,830,679 bytes, about five minutes of copying).
+
+### Research
+
+- [DialogBoxParamA](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-dialogboxparama):
+  the result is the `EndDialog` value; zero when the parent is invalid, -1
+  for any other failure (Windows 3.x compatibility).
+- [DestroyWindow](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-destroywindow):
+  WM_DESTROY/WM_NCDESTROY are sent, owned windows go first, the thread
+  message queue is flushed and timers are destroyed; nothing of a destroyed
+  window is painted afterwards.
+- The installer engine (`vise32ex.dll`, 495,616 bytes, image base
+  0x10000000; host disassembly with `objdump`, no execution):
+  - The standard screens are table-driven (0x10044c0f). Welcome is
+    `DialogBoxParamA(template 10205, owner = background, 0x10049be0)` called
+    from 0x1004a1b0; the license page is template 12029 with procedure
+    0x1001e080 (called from 0x1001e710). The caller takes 2 (Cancel) as
+    abort, 12 (Back) as previous page and every other value, -1 included,
+    as Next: a page that cannot be created is skipped silently and the
+    script goes on (files are then copied without any visible page).
+  - Each page procedure saves its position on WM_DESTROY
+    (`GetWindowRect`, `ClientToScreen(GetParent)`) in a global pair whose
+    sentinel is 0x8000, restores it in WM_INITDIALOG
+    (`ScreenToClient(GetParent)`, `MoveWindow`) and otherwise centres the
+    page on its parent, or on the desktop when the parent is hidden
+    (0x1002b150). Welcome paints its own bitmap in WM_PAINT.
+  - The background window (class procedure 0x10016e00, style 0x00CF0000,
+    `CW_USEDEFAULT`, `ShowWindow(SW_SHOWMAXIMIZED)`) grays SC_CLOSE in
+    WM_CREATE and ignores it in WM_SYSCOMMAND; script action 0x25 shows or
+    hides it. The ownerless "Starting Setup" dialog (template 101) is
+    created at 0x10027138 and destroyed at 0x10044969, before the
+    background exists.
+
+### Findings and decisions
+
+1. Connection loss. `desk_v3_receive` (`apps/desktop/client.c`) parsed every
+   packet against the surface of the window it names and dropped the whole
+   connection when parsing failed. A DESK_DAMAGE or DESK_V3_PRESENT for a
+   window the desktop had already closed has no surface, so it always
+   failed: the desktop then closed every window of the program (background
+   included, with its taskbar button) and every later `CreateWindow` and
+   `DialogBoxParam` failed, which VISE takes as Next. A host replay of the
+   production desktop confirms it (-EINVAL, connection gone).
+2. The race that produced such a packet. `u32_destroy` sends DESK_CLOSE and
+   pumps while it waits for the answer; `u32_flush` could send the window's
+   queued DESK_DAMAGE during that wait, after the DESK_CLOSE. Decision
+   (user32, as DestroyWindow on Windows 98): a window being destroyed sends
+   nothing more; its queued frame updates are discarded before DESK_CLOSE.
+3. Decision (desktop): a frame update (DAMAGE, PRESENT) that is well formed
+   for some surface but names a closed window (-ENOENT) or a rectangle
+   outside the window's surface (-EINVAL) is a stale update and is refused
+   alone, with a RESULT when it carries a request and a
+   `[desktop] v3 stale update ...` record (first eight). Malformed packets,
+   wrong senders and descriptors still end the connection, now with a
+   `[desktop] v3 drop pid=... opcode=... window=...` record.
+4. Diagnostics: user32 records the first failed dialog creation
+   (`[win32] warning check=dialogbox-create-failed module=user32.dll`) and
+   the loss of the desktop connection
+   (`check=desktop-connection-lost`), so a skipped page is visible in the
+   serial log.
+5. Host tests: `tests/host/win32/dialogs` mode `vise` runs a Welcome-like
+   page (template 140) and a license-like page (template 141, 10 KiB EDIT
+   text) owned by a maximized VISE-style background, with real key input,
+   position save/restore and frame flushing, and checks every outgoing
+   packet with the desktop's own parser against the surface each window has
+   there, including that nothing follows a window's DESK_CLOSE (it fails
+   without decision 2). `tests/host/desktop/v3_test.c` `stale_updates`
+   covers decision 3.
+
+### Known limits and next steps of the install
+
+The exact packet the QEMU run sent after Welcome is not proven on the host;
+the records of decisions 3 and 4 identify it on the next run. After the
+license page VISE shows the destination page (default `C:\Q3Ademo`), the
+progress page, creates the Program Manager group through the PROGMAN DDE
+conversation, may call `dsetup.dll` `DirectXSetup`, writes the `Uninstall`
+key and copies `unvise32.exe` to the Windows directory, may add `RunOnce`
+and ask for a restart (`ExitWindowsEx`), and ends with its finish page.
