@@ -14,7 +14,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
-PACKAGES = ("wolf3d-shareware", "doom-shareware", "quake-shareware")
+PACKAGES = ("wolf3d-shareware", "doom-shareware", "quake-shareware", "war2-demo")
 
 
 def load(name, path):
@@ -396,10 +396,13 @@ class DiskTests(unittest.TestCase):
         self.assertEqual(m["redistribution"], "free")
         self.assertEqual([p["name"] for p in m["packages"]], list(PACKAGES))
         game = [f for f in m["files"] if f["role"] != "dos_system"]
-        self.assertEqual({f["path"].rsplit("/", 1)[0] for f in game}, {"/WOLF3D", "/DOOM", "/QUAKE", "/QUAKE/ID1"})
+        self.assertEqual({f["path"].rsplit("/", 1)[0] for f in game}, {"/WOLF3D", "/DOOM", "/QUAKE", "/QUAKE/ID1", "/WAR2", "/WAR2/DATA", "/WAR2/DEMODATA",
+                                                                                    "/WAR2/DRIVERS", "/WAR2/KALI", "/WAR2/UTIL"})
         self.assertTrue(all(f["redistribution"] == "free" and len(f["sha256"]) == 64 for f in game))
         self.assertIn("/DOOM/CIUKI.CFG", {f["path"] for f in game})
-        self.assertEqual({f["path"] for f in game if f["role"] == "executable"}, {"/WOLF3D/WOLF3D.EXE", "/DOOM/DOOM.EXE", "/QUAKE/QUAKE.EXE"})
+        self.assertEqual({f["path"] for f in game if f["role"] == "executable"}, {"/WOLF3D/WOLF3D.EXE", "/DOOM/DOOM.EXE", "/QUAKE/QUAKE.EXE", "/WAR2/WAR2.EXE"})
+        self.assertEqual({f["path"] for f in game if f.get("generated")},
+                         {"/DOOM/CIUKI.CFG", "/WAR2/DIG.INI", "/WAR2/MDI.INI", "/WAR2/WAR2.BAT"})
         system = {f["path"]: f["sha256"] for f in m["files"] if f["role"] == "dos_system"}
         dos_manifest = json.loads(DOSBOOT.with_suffix(".json").read_text())
         self.assertEqual(system, {p["path"]: p["sha256"] for p in dos_manifest["payloads"]})
@@ -460,6 +463,130 @@ class DiskTests(unittest.TestCase):
         _, manifest = games.build(again, DOSBOOT)
         self.assertEqual(manifest["image_sha256"], self.manifest["image_sha256"])
         self.assertEqual(manifest["logical_sha256"], self.manifest["logical_sha256"])
+
+
+class Warcraft2DemoTests(unittest.TestCase):
+    """Owner request 2026-10-25: Blizzard's Warcraft II DOS demo (v1.20elc) is bundled
+    with the other shareware games; only the demo, never the retail game."""
+    PACKAGE = "war2-demo"
+
+    def setUp(self):
+        parent = ROOT / "build/host"
+        parent.mkdir(parents=True, exist_ok=True)
+        self._temp = tempfile.TemporaryDirectory(prefix="war2-", dir=parent)
+        self.addCleanup(self._temp.cleanup)
+        self.root = Path(self._temp.name)
+        shutil.copytree(ROOT / games.GAMES, self.root / games.GAMES)
+
+    def test_pin_layout_and_version(self):
+        record, files, documents = games.package_files(self.PACKAGE)
+        self.assertEqual((record["size"], record["sha256"]),
+                         (11235087, "f837a7d4ffa8e24c9d20abc5656f3f336a1ad2214dd62209e567ef91e6028131"))
+        self.assertEqual(record["unpack"], {"format": "blizzard-install", "offset": 581361, "notes": record["unpack"]["notes"]})
+        paths = {path: data for path, data, _ in files}
+        self.assertEqual(len(paths), 66)
+        self.assertEqual(record["install"]["directory"], "WAR2")
+        self.assertEqual({path.rsplit("/", 1)[0] for path in paths},
+                         {"/WAR2", "/WAR2/DATA", "/WAR2/DEMODATA", "/WAR2/DRIVERS", "/WAR2/KALI", "/WAR2/UTIL"})
+        self.assertEqual(sorted(path.rsplit("/", 1)[1] for path in paths if path.startswith("/WAR2/DEMODATA/")),
+                         ["MAINDAT.WAR", "MUDDAT.CUD", "REZDAT.WAR", "SFXDAT.SUD", "SNDDAT.WAR", "STRDAT.WAR"])
+        # The final DOS demo, not the beta build (war2demo(1.02elc).exe) nor the CD build.
+        self.assertIn(b"WARCRAFT 2 DEMO v1.20elc", paths["/WAR2/WAR2.EXE"])
+        self.assertNotIn(b"DEMO BETA", paths["/WAR2/WAR2.EXE"])
+        self.assertEqual(paths["/WAR2/SETUP.EXE"], games.archive(self.PACKAGE, record)[:581361])
+        self.assertEqual({n for n, _ in documents}, {"VENDOR.TXT", "README.TXT"})
+        self.assertEqual(dict(documents)["VENDOR.TXT"], paths["/WAR2/VENDOR.TXT"])
+        self.assertIn(b"six playable scenarios", dict(documents)["VENDOR.TXT"])
+        self.assertEqual(sum(len(d) for d in paths.values()), 13856269)
+        roles = {path: info["role"] for path, _, info in files}
+        self.assertEqual([p for p, r in roles.items() if r == "executable"], ["/WAR2/WAR2.EXE"])
+
+    def test_every_lha_member_is_crc_and_size_checked(self):
+        record = games.upstream(self.PACKAGE)
+        data = games.archive(self.PACKAGE, record)
+        # A flipped byte inside the war2.exe member, the container offset and the entry table are all refused.
+        bad = bytearray(data)
+        bad[600000] ^= 1
+        with self.assertRaisesRegex(ValueError, "CRC|LH5|LHA|differs"):
+            games.blizzard_members(bytes(bad), 581361)
+        with self.assertRaisesRegex(ValueError, "pinned offset"):
+            games.blizzard_members(data, 581360)
+        bad = bytearray(data)
+        bad[581361 + 12 + 22 + 4] ^= 1                 # war2.exa: record size
+        with self.assertRaisesRegex(ValueError, "record"):
+            games.blizzard_members(bytes(bad), 581361)
+        with self.assertRaisesRegex(ValueError, "truncated|terminator|LHA"):
+            games.blizzard_members(data[:3000000], 581361)
+
+    def test_registered_or_modified_warcraft_data_never_passes(self):
+        record, files, _ = games.package_files(self.PACKAGE)
+        pinned = {path: (path, data, info) for path, data, info in files}
+        games.refuse_registered(list(pinned.values()), self.root)           # the demo itself is accepted
+        retail = b"retail warcraft ii data" * 64
+        for name in ("MAINDAT.WAR", "SNDDAT.WAR", "REZDAT.WAR", "STRDAT.WAR", "SFXDAT.SUD", "MUDDAT.CUD", "WAR2.EXE"):
+            path = "/WAR2/DEMODATA/" + name if name != "WAR2.EXE" else "/WAR2/WAR2.EXE"
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(ValueError, "unpinned shareware member"):
+                    games.refuse_registered([(path, retail, dict(pinned[path][2]) if path in pinned else {"package": self.PACKAGE})], self.root)
+                with self.assertRaisesRegex(ValueError, "Warcraft II data"):       # not claimed as the package's
+                    games.refuse_registered([(path, retail, {"role": "data"})], self.root)
+                with self.assertRaisesRegex(ValueError, "unpinned shareware member|Warcraft II data"):   # another package's name for it
+                    games.refuse_registered([(path, retail, {"package": "doom-shareware"})], self.root)
+        # A pinned demo member under another package is refused too, and a pin cannot admit retail names.
+        demo = pinned["/WAR2/DEMODATA/MAINDAT.WAR"]
+        with self.assertRaisesRegex(ValueError, "Warcraft II data"):
+            games.refuse_registered([(demo[0], demo[1], {"package": "quake-shareware"})], self.root)
+        with self.assertRaisesRegex(ValueError, "Warcraft II data"):
+            games.refuse_registered([(demo[0], demo[1], {"role": "data"})], self.root)
+        path = self.root / games.GAMES / self.PACKAGE / "UPSTREAM.json"
+        edited = json.loads(path.read_text())
+        edited["install"]["files"].append({"name": "WAR2.MPQ", "size": 1, "sha256": "0" * 64, "role": "data"})
+        path.write_text(json.dumps(edited))
+        with self.assertRaisesRegex(ValueError, "pinned but absent"):
+            games.package_files(self.PACKAGE, self.root)
+        # Local owner copies of the retail files (third_party/War2) cannot reach any build.
+        local = self.root / "third_party/War2/MAINDAT.WAR"
+        local.parent.mkdir(parents=True)
+        local.write_bytes(retail)
+        with self.assertRaisesRegex(SystemExit, "local commercial payload"):
+            dos.refuse_local_payloads({"/X/RETAIL.BIN": sha(retail)}, self.root, free=games.free_hashes(self.root))
+        with self.assertRaisesRegex(SystemExit, "reserved name"):
+            dos.refuse_local_payloads({"/OTHER/MAINDAT.WAR": "1" * 64}, self.root, free=games.free_hashes(self.root))
+        dos.refuse_local_payloads({"/WAR2/DEMODATA/MAINDAT.WAR": demo[2]["role"] and sha(demo[1])}, self.root,
+                                  free=games.free_hashes(self.root))
+
+    def test_licence_notice_and_bundling_record(self):
+        record = games.upstream(self.PACKAGE)
+        self.assertEqual(record["redistribution"], "free (shareware, unmodified package)")
+        for name in ("VENDOR.TXT", "README.TXT", "war2demo.exe", "UPSTREAM.json"):
+            self.assertTrue((ROOT / games.GAMES / self.PACKAGE / name).is_file(), name)
+        self.assertIn("PRIOR signed written permission", record["bundling"])
+        self.assertEqual(len(record["sources"]), 2)
+        self.assertEqual(sha((ROOT / games.GAMES / self.PACKAGE / "war2demo.exe").read_bytes()), record["sha256"])
+        self.assertEqual(subprocess.run(["git", "check-attr", "text", "--", f"{games.GAMES}/{self.PACKAGE}/war2demo.exe"],
+                                        cwd=ROOT, capture_output=True, text=True).stdout.strip().rsplit(": ", 1)[-1], "unset")
+
+    def test_generated_sound_files_match_the_vm_blaster(self):
+        files = dict(games.war2_files())
+        self.assertEqual(set(files), {"/WAR2/DIG.INI", "/WAR2/MDI.INI", "/WAR2/WAR2.BAT"})
+        dig = files["/WAR2/DIG.INI"].decode("ascii").split("\r\n")
+        self.assertEqual(dig[0], ";Miles Design Audio Interface Library V3.03 of 18-Jun-95")
+        self.assertEqual([line.split()[0] for line in dig[1:7]], ["DEVICE", "DRIVER", "IO_ADDR", "IRQ", "DMA_8_BIT", "DMA_16_BIT"])
+        self.assertIn("DRIVER      SB16.DIG", dig)
+        self.assertIn("DRIVER      SBPRO2.MDI", files["/WAR2/MDI.INI"].decode("ascii"))
+        for text in (files["/WAR2/DIG.INI"], files["/WAR2/MDI.INI"]):       # BLASTER A220 I7 D1 H5
+            for line in ("IO_ADDR     220h", "IRQ         7", "DMA_8_BIT   1", "DMA_16_BIT  5"):
+                self.assertIn(line.encode(), text)
+        self.assertEqual(files["/WAR2/WAR2.BAT"].count(b"\r\n"), 3)
+        self.assertIn(b"IF NOT EXIST UNIVBE.DRV UVCONFIG.EXE", files["/WAR2/WAR2.BAT"])
+        # The drivers the files name are installed members.
+        _, members, _ = games.package_files(self.PACKAGE)
+        names = {path for path, _, _ in members}
+        self.assertTrue({"/WAR2/DRIVERS/SB16.DIG", "/WAR2/DRIVERS/SBPRO2.MDI", "/WAR2/UVCONFIG.EXE"} <= names)
+        aildrvr = next(data for path, data, _ in members if path == "/WAR2/DRIVERS/AILDRVR.LST").decode("latin-1")
+        self.assertIn("[sb16.dig]", aildrvr)
+        self.assertIn("Sound Blaster 16/AWE32", aildrvr)
+        self.assertIn("Creative Labs Sound Blaster 16", aildrvr)
 
 
 if __name__ == "__main__":

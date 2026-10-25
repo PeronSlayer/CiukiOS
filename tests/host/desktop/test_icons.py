@@ -225,7 +225,7 @@ class IconStoreTests(unittest.TestCase):
             self.assertEqual(rows_by_name[name], (name, label, tango, "programs"), name)
             self.assertEqual(table[f"program:{name}"], tango, name)
         games = re.findall(r'\{"[^"]+", "[^"]+", "[^"]+", "([a-z-]+)"\}', catalog)
-        self.assertEqual(len(games), 3)
+        self.assertEqual(len(games), 4)  # Wolfenstein 3D, DOOM, Quake and the Warcraft II demo
         self.assertEqual(set(games), {table["menu:game"]})
         rows = dict(re.findall(r'item\(m,\s*"([^"]+)",\s*"([a-z-]+)"', shell))
         settings=(ROOT / "apps/desktop/settings_catalog.h").read_text()

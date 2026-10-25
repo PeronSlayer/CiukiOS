@@ -7,7 +7,7 @@
 #include <string.h>
 int fb_register_games(const char *directory,int (*query)(void *,unsigned,int,uint32_t *),void *ctx,char *text,size_t cap)
 {
-    static const char *const ids[]={"wolf3d-shareware","doom-shareware","quake-shareware"};
+    static const char *const ids[]={"wolf3d-shareware","doom-shareware","quake-shareware","war2-demo"};
     struct reg_root *root=NULL;unsigned registered=0;int error=0;
     for(unsigned i=0;i<DESK_GAME_COUNT;i++){
         uint32_t bytes=0;int present=query(ctx,i+1,0,&bytes);

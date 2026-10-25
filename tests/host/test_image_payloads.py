@@ -219,8 +219,15 @@ class ImagePayloadTests(unittest.TestCase):
         licences = {f"/system/licenses/{p}-{n}" for p, n in (("wolf3d-shareware", "VENDOR.DOC"),
                     ("wolf3d-shareware", "FILE_ID.DIZ"), ("wolf3d-shareware", "UPSTREAM.json"),
                     ("doom-shareware", "README.TXT"), ("doom-shareware", "DOOMS_19.DAT"), ("doom-shareware", "UPSTREAM.json"), ("quake-shareware", "SLICNSE.TXT"),
-                    ("quake-shareware", "LICINFO.TXT"), ("quake-shareware", "UPSTREAM.json"))}
+                    ("quake-shareware", "LICINFO.TXT"), ("quake-shareware", "UPSTREAM.json"),
+                    ("war2-demo", "VENDOR.TXT"), ("war2-demo", "README.TXT"), ("war2-demo", "UPSTREAM.json"))}
         self.assertEqual(set(sources), {"/Games/CIUKIGAM.IMG"} | licences)
+        # Owner request 2026-10-25: Blizzard's licence notice travels with the Warcraft II demo.
+        self.assertEqual(sources["/system/licenses/war2-demo-VENDOR.TXT"].read_bytes(),
+                         (ROOT / "third_party/games/war2-demo/VENDOR.TXT").read_bytes())
+        self.assertIn("war2-demo", [p["name"] for p in metadata["packages"]])
+        self.assertTrue({"/WAR2/WAR2.EXE", "/WAR2/DEMODATA/MAINDAT.WAR", "/WAR2/DIG.INI"} <=
+                        {f["path"] for f in metadata["files"]})
         self.assertTrue({"/Games", "/system/licenses"} <= directories)
         self.assertNotIn("checkers", metadata)
         records = image.payload_records(sources)

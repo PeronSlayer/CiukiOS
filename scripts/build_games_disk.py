@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Build the bundled shareware DOS games disk CIUKIGAM.IMG (owner decisions 2026-10-12/14).
 
-Wolfenstein 3-D, DOOM and Quake are pre-installed games of CiukiOS in their
-shareware releases, the only ones whose packages may be redistributed:
+Wolfenstein 3-D, DOOM, Quake and the Warcraft II demo are pre-installed games
+of CiukiOS in their shareware releases, the only ones whose packages may be
+redistributed:
 Wolfenstein 3-D v1.4 (1wolf14.zip, episode 1), DOOM v1.9 (doom19s.zip,
-episode 1), and Quake v1.06 (quake106.zip, episode 1). Registered game data
-never enters this disk, the image or the repository.
+episode 1), Quake v1.06 (quake106.zip, episode 1) and the Warcraft II: Tides
+of Darkness DOS demo v1.20elc (war2demo.exe, Blizzard's electronic release).
+Registered game data never enters this disk, the image or the repository.
 
 Inputs are only the vendored original archives under third_party/games/
 (never the network): each archive's size and SHA-256 and every installed
@@ -55,9 +57,66 @@ ROOT = Path(__file__).resolve().parents[1]
 GAMES = "third_party/games"
 NAME = "CIUKIGAM.IMG"
 # Install order on the disk; each name is a directory under third_party/games.
-PACKAGES = ("wolf3d-shareware", "doom-shareware", "quake-shareware")
+PACKAGES = ("wolf3d-shareware", "doom-shareware", "quake-shareware", "war2-demo")
 REDISTRIBUTION = "free"
 SECTOR = 512
+
+
+BLIZZARD_MAGIC, BLIZZARD_VERSION = b"WAR\0", 4
+
+
+def blizzard_members(data, offset):
+    """{NAME: bytes} of Blizzard's installer container (Warcraft II demo, v1.20elc):
+    SETUP.EXE is the executable before `offset`; entries are validated and
+    every LHA member's CRC-16 and size are checked."""
+    if data[offset:offset + 4] != BLIZZARD_MAGIC:
+        raise ValueError("Blizzard installer: container not at the pinned offset")
+    count, version = struct.unpack_from("<HH", data, offset + 4)
+    if not 2 <= count <= 256 or version != BLIZZARD_VERSION:
+        raise ValueError("Blizzard installer: unsupported header")
+    at, entries = offset + 12, []
+    for _ in range(count):
+        if at + 14 > len(data):
+            raise ValueError("Blizzard installer: truncated entry")
+        word, size, _check = struct.unpack_from("<III", data, at)
+        length, flag = word & 0xFFFFFF, word >> 24
+        if not 14 <= length <= 80 or at + length > len(data) or flag not in (0, 0x80):
+            raise ValueError("Blizzard installer: bad entry record")
+        raw = data[at + 12:at + length]
+        if not raw.endswith(b"\0") or b"\0" in raw[:-1]:
+            raise ValueError("Blizzard installer: bad entry name")
+        entries.append((raw[:-1].decode("ascii", "replace").upper().replace("\\", "/"), flag, size))
+        at += length
+    members = {}
+    first, flag, size = entries[0]
+    if first != "SETUP.EXE" or flag or size != offset:
+        raise ValueError("Blizzard installer: first entry is not the SETUP.EXE stub")
+    members[first] = data[:offset]
+    total = offset
+    for name, flag, size in entries[1:]:
+        if size > 32 * 1024 * 1024 or total + size > 64 * 1024 * 1024:
+            raise ValueError("Blizzard installer: output too large")
+        if not flag:
+            if at + size > len(data) or name in members or any(not DOS_NAME.fullmatch(p) for p in name.split("/")):
+                raise ValueError("Blizzard installer: bad stored member " + name)
+            members[name] = data[at:at + size]
+            at += size
+        else:
+            if at + 27 > len(data):
+                raise ValueError("Blizzard installer: truncated LHA member")
+            end = at + data[at] + 2 + struct.unpack_from("<I", data, at + 7)[0]
+            if end >= len(data) or data[end] != 0:
+                raise ValueError("Blizzard installer: LHA member lacks its terminator: " + name)
+            (real, packed, usize, crc), = lha_entries(data[at:end + 1])
+            output = lh5_decode(packed, usize)
+            if usize != size or lha_crc16(output) != crc or real in members or name not in (real[:-1] + "A", real + "A"):
+                raise ValueError("Blizzard installer: member differs from its record: " + name)
+            members[real] = output
+            at = end + 1
+        total += size
+    if len(data) - at > 4096:
+        raise ValueError("Blizzard installer: unexpected data after the last member")
+    return members
 
 
 def _module(name, path):
@@ -472,6 +531,8 @@ def archive(package, record, root=ROOT):
 def unpack(record, data):
     """(outer members, installable members) as UPSTREAM.json "unpack" declares."""
     spec = record["unpack"]
+    if spec.get("format") == "blizzard-install":   # the archive is the installer executable itself
+        return {}, blizzard_members(data, spec["offset"])
     outer = zip_members(data)
     if spec.get("format") == "zip-split":          # DOOMS_19.1 + DOOMS_19.2 = one ZIP
         inner = zip_members(b"".join(outer[name] for name in spec["parts"]))
@@ -532,6 +593,34 @@ def free_hashes(root=ROOT):
     return hashes
 
 
+# Warcraft II data containers (*.WAR, *.SUD, *.CUD): only the pinned demo's own
+# members may carry these names (the retail game's files use the same names).
+WAR2_DATA = re.compile(r"[^/]*\.(WAR|SUD|CUD)")
+WAR2_DIR = "/WAR2"
+# The Miles Audio Interface Library V3.03 files WAR2's sound setup writes
+# (SETUP.EXE strings: DEVICE, DRIVER, IO_ADDR %Xh, IRQ, DMA_8_BIT, DMA_16_BIT),
+# for the DOS VM's Sound Blaster 16 (FDAUTO.BAT: BLASTER=A220 I7 D1 H5 T6): the
+# aildrvr.lst entries "Sound Blaster 16/AWE32" (SB16.DIG) and "Creative Labs
+# Sound Blaster 16" (SBPRO2.MDI, the FM music driver).
+WAR2_SOUND = (("DIG.INI", "Sound Blaster 16/AWE32", "SB16.DIG"),
+              ("MDI.INI", "Creative Labs Sound Blaster 16", "SBPRO2.MDI"))
+
+
+def war2_files():
+    """Generated [(disk path, bytes)]: DIG.INI, MDI.INI and WAR2.BAT. WAR2.EXE
+    stops with "run UVCONFIG" until UVCONFIG.EXE has written UNIVBE.DRV for the
+    video card (setup.exe does that at install time; it is machine specific),
+    so the launcher runs it once."""
+    files = []
+    for name, device, driver in WAR2_SOUND:
+        text = (";Miles Design Audio Interface Library V3.03 of 18-Jun-95\r\n"
+                f"DEVICE      {device}\r\nDRIVER      {driver}\r\nIO_ADDR     220h\r\n"
+                "IRQ         7\r\nDMA_8_BIT   1\r\nDMA_16_BIT  5\r\n")
+        files.append((f"{WAR2_DIR}/{name}", text.encode("ascii")))
+    files.append((f"{WAR2_DIR}/WAR2.BAT", b"@ECHO OFF\r\nIF NOT EXIST UNIVBE.DRV UVCONFIG.EXE\r\nWAR2.EXE\r\n"))
+    return files
+
+
 def refuse_registered(files, root=ROOT):
     """No registered game data (DOOM.WAD, *.WL6, ...) and no other local
     commercial file: the DOS system and generated files go through the f3-06
@@ -544,6 +633,9 @@ def refuse_registered(files, root=ROOT):
             raise ValueError(f"refusing registered game data {path}")
         if info.get("package") and sha256(data) not in free:
             raise ValueError(f"refusing unpinned shareware member {path}")
+        if (WAR2_DATA.fullmatch(name) or path.upper() == WAR2_DIR + "/WAR2.EXE") and (
+                info.get("package") != "war2-demo" or sha256(data) not in free):
+            raise ValueError(f"refusing Warcraft II data that is not the pinned demo's {path}")
     dos.refuse_local_payloads({path: sha256(data) for path, data, _ in files}, root, free=free)
 
 
@@ -604,6 +696,9 @@ def build(out=None, dos_image=None, root=ROOT):
     # f3-06 DOOM defaults (dos_fixtures.DOOM_CONFIG): SB16 at 220h/IRQ 7/DMA 1, no mouse or joystick.
     files.append(("/DOOM/CIUKI.CFG", fixtures.DOOM_CONFIG, {"package": None, "role": "config",
                                                              "redistribution": REDISTRIBUTION, "generated": True}))
+    for path, data in war2_files():
+        files.append((path, data, {"package": None, "role": "config" if path.endswith(".INI") else "launcher",
+                                   "redistribution": REDISTRIBUTION, "generated": True}))
     refuse_registered(files, root)
     paths = [path for path, _, _ in files]
     if len(set(p.upper() for p in paths)) != len(paths):

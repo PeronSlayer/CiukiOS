@@ -346,7 +346,7 @@ probes end `NOT_RUN reason=fixtures_absent` without the fixture disk).
 
 ### Pre-installed shareware games
 
-Owner decisions 2026-10-12/14: Wolfenstein 3-D, DOOM and Quake are pre-installed in
+Owner decisions 2026-10-12/14 and 2026-10-25: Wolfenstein 3-D, DOOM, Quake and the Warcraft II demo are pre-installed in
 their shareware releases, the only ones whose packages may be passed on
 (the registered data above stays local). The original archives are vendored
 under `third_party/games/` with their licence documents and an
@@ -358,12 +358,13 @@ published references) and every installed member:
 | `wolf3d-shareware` | `1wolf14.zip` (Wolfenstein 3-D 1.4, episode 1) | `cb2a2ef7…59451a8` | `\WOLF3D` (all 12 files of `W3DSW14.SHR`) |
 | `doom-shareware` | `doom19s.zip` (DOOM 1.9, episode 1) | `cacf0142…1b486e6` | `\DOOM` (16 files of `DOOMS_19.1`+`.2`, without the DOOM FAQ) plus `CIUKI.CFG` |
 | `quake-shareware` | `quake106.zip` (Quake 1.06, episode 1) | `ec6c9d34…7553239` | `\QUAKE` and `\QUAKE\ID1` (all 16 original members) |
+| `war2-demo` | `war2demo.exe` (Blizzard's Warcraft II DOS demo v1.20elc, six scenarios; the final electronic release, mirrors classicdosgames.com and dosgames.com agree) | `f837a7d4…028131` | `\WAR2` and its `DATA`, `DEMODATA`, `DRIVERS`, `KALI`, `UTIL` (all 66 files of Blizzard's installer, byte-identical) plus generated `DIG.INI`, `MDI.INI` (Sound Blaster 16, A220 I7 D1 H5) and `WAR2.BAT` (runs `UVCONFIG.EXE` once for `UNIVBE.DRV`, then `WAR2.EXE`) |
 
 The image build never downloads: `scripts/build_image.py` calls
 `scripts/build_games_disk.py`, which checks each archive against its pins,
 unpacks it (ZIP; Apogee's `.SHR` container with PKWARE DCL "implode"
 members, decoded by a port of zlib's `blast.c`; Quake's LHA self-extractor
-with the pure-Python `-lh5-` decoder and CRC-16 verification), checks every member,
+and Blizzard's installer container (`war2demo.exe`) with the pure-Python `-lh5-` decoder and CRC-16 verification), checks every member,
 refuses registered data names (`DOOM.WAD`, `*.WL6`, …) and any other
 match with the owner's local files that is not a pinned shareware file, and
 installs the games inside `build/f0/dos/UNIFIED.IMG`. This is the sole DOS

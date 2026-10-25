@@ -75,7 +75,7 @@ int main(void)
     unsigned char wav[48]={'R','I','F','F',40,0,0,0,'W','A','V','E','f','m','t',' ',16,0,0,0,1,0,1,0,0x22,0x56,0,0,0x44,0xac,0,0,2,0,16,0,'d','a','t','a',4,0,0,0,0,0,1,0};
     struct sound_scheme scheme;sound_defaults(&scheme);char path[160],full[512];assert(!sound_path(&scheme,SOUND_STARTUP,path,sizeof(path)));snprintf(full,sizeof(full),"%s%s",FB_ROOT,path);put(full,wav,sizeof(wav));put(FB_ROOT "/dev/audio","",0);
     int r=service(&n,FB_SOUND,1,text,sizeof(text));for(unsigned i=0;i<10&&r==-EAGAIN;i++)r=service(&n,FB_SOUND,0,text,sizeof(text));assert(!r&&audio_calls);cancel_service(&n,FB_SOUND);assert(n.audio==-1&&!n.wav);
-    assert(!service(&n,FB_GAMES,1,text,sizeof(text))&&strstr(text,"3 bundled"));
+    assert(!service(&n,FB_GAMES,1,text,sizeof(text))&&strstr(text,"4 bundled"));
     puts("PASS native firstboot: fsync failures, registry status/keyed retry request, real WAV/audio, network, entropy, RTC, games");
     return 0;
 }

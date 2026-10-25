@@ -1035,8 +1035,15 @@ __attribute__((noinline)) static void test_games_menu(void)
         }
         desk_menu_close(&d);
     }
-    assert(DESK_GAME_COUNT == 3 && !strcmp(desk_games[2].label,"Quake (shareware)") &&
+    assert(DESK_GAME_COUNT == 4 && !strcmp(desk_games[2].label,"Quake (shareware)") &&
            !strcmp(desk_games[2].title,"Quake") && !strcmp(desk_games[2].command,"\\QUAKE\\QUAKE.EXE"));
+    /* Owner 2026-10-25: the Warcraft II demo sits with the DOS games (not inside Classic Games). */
+    assert(!strcmp(desk_games[3].label,"Warcraft II (demo)") && !strcmp(desk_games[3].title,"Warcraft II") &&
+           !strcmp(desk_games[3].command,"\\WAR2\\WAR2.BAT") && !strcmp(desk_games[3].tango,"input-gaming"));
+    desk_menu_open(&d,SH_MENU_GAMES,0,0);
+    assert(item_at(&d.sh.menus[0],"Warcraft II (demo)")>=0 && item_at(&d.sh.menus[0],"Warcraft II (demo)")>item_at(&d.sh.menus[0],"Quake (shareware)"));
+    desk_menu_close(&d);
+    desk_menu_open(&d,SH_MENU_CLASSIC_GAMES,0,0);assert(item_at(&d.sh.menus[0],"Warcraft II (demo)")<0);desk_menu_close(&d);
     assert(!strcmp(desk_games[0].command,"\\WOLF3D\\WOLF3D.EXE") && !strcmp(desk_games[1].command,"\\DOOM\\DOOM.EXE -config CIUKI.CFG"));
     drop_all(&d); fake_reset();
     /* The same Games-menu route on EIO emits the executable and failing
