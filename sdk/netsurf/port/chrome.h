@@ -26,9 +26,14 @@ extern const char *ciuki_resource_path;
 extern const char *ciuki_capture_path;
 const char *ciuki_chrome_choices(void);
 void ciuki_chrome_capture(void *);
+void ciuki_chrome_present(void); /* fx-nsperf: end of a main-loop turn */
 /* f6-20: why the main loop ended. NULL asks the surface (desktop close
  * request, channel loss); the first reason recorded wins. The report is one
  * "[netsurf] exit reason=..." line on stderr, before netsurf_exit(). */
 void ciuki_chrome_exit_reason(const char *);
 void ciuki_chrome_exit_report(void);
 extern struct gui_download_table ciuki_download_table;
+/* fx-nsperf host frame bench (framebench.c): --ciuki-frame-bench on host
+ * builds; the main loop runs it once the page has loaded. */
+extern bool ciuki_frame_bench;
+void ciuki_frame_bench_run(void *root,struct gui_window *);

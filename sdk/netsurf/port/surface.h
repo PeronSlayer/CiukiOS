@@ -2,6 +2,7 @@
 #ifndef CIUKI_NETSURF_SURFACE_H
 #define CIUKI_NETSURF_SURFACE_H
 #include <stdbool.h>
+#include <stdint.h>
 #include <libnsfb.h>
 #include <libnsfb_event.h>
 #include "apps/libdeskui/v3.h"
@@ -22,6 +23,11 @@ struct ciuki_browser_storage {
     int fd;
     struct ciuki_surface_info info;
     uint32_t *map, *back;
+};
+/* fx-nsperf: what the present path did, for the exit record and the host
+ * frame bench (framebench.c). Pixels, not bytes; messages are DAMAGE sends. */
+struct ciuki_present_stats {
+    uint64_t presents, messages, damage_px, compared_px, copied_px, refused;
 };
 struct ciuki_browser_ops {
     struct du3_transport transport;
@@ -56,11 +62,14 @@ struct ciuki_browser_surface {
     unsigned held_head, held_count, pumps;
     bool in_input;
     bool held_resync; /* fx-11: held input was dropped; release keys after the layout */
+    struct ciuki_present_stats stats;
 };
 int ciuki_browser_open(struct ciuki_browser_surface *,const struct ciuki_browser_ops *,int,int,int);
 void ciuki_browser_close(struct ciuki_browser_surface *);
 void ciuki_browser_damage(struct ciuki_browser_surface *,nsfb_bbox_t);
 int ciuki_browser_present(struct ciuki_browser_surface *);
+/* libnsfb's update routine for the Ciuki surface (nsfb_surface.c). */
+int ciuki_browser_update(struct ciuki_browser_surface *,nsfb_bbox_t);
 int ciuki_browser_cursor(struct ciuki_browser_surface *,unsigned shape);
 int ciuki_browser_packet(struct ciuki_browser_surface *,const struct desk_packet *);
 bool ciuki_browser_event(struct ciuki_browser_surface *,nsfb_event_t *);

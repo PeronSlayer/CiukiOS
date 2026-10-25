@@ -102,56 +102,123 @@ int ciuki_browser_cursor(struct ciuki_browser_surface *s,unsigned shape)
     if(!du3_request(&s->connection,DESK_SET_CURSOR,s->window,s->generation,b,sizeof(b),-1))return -1;
     s->cursor_shape=shape;s->cursor_valid=true;return 0;
 }
-static int publish(struct ciuki_browser_surface *s,nsfb_bbox_t b)
+/* fx-nsperf (T23 trial 2ca3b0b6, "pages render at 1-2 fps"): f2-98b sent
+ * one DAMAGE per changed pixel run, joining runs only when adjacent rows had
+ * the same x range. Text changes on almost every row in many short runs: a
+ * 100-pixel wheel step on a text page sent 7,700-24,000 messages. Each is a
+ * channel send, a desktop read, damage bookkeeping and a RESULT; the channel
+ * holds 64 messages and the desktop reads 16 of a client per service turn,
+ * so a refused send also restarted the comparison of the whole region.
+ * The host frame bench (framebench.c) models that frame at 0.75-2.3 s on
+ * the T23.
+ *
+ * Now rows are compared with memcmp and a changed row copies only its first
+ * to last changed pixel. Changed rows closer than CIUKI_PRESENT_GAP rows form
+ * one band, sent as one DAMAGE of the band's bounding box: everything else
+ * inside that box is already equal, so the desktop reads the same pixels it
+ * did before. A rectangle sends at most CIUKI_PRESENT_BANDS bands (the last
+ * absorbs the rest), so a frame is a handful of messages, not thousands. An
+ * unchanged frame still sends nothing and separate damage rectangles stay
+ * separate (f2-98b). */
+#define CIUKI_PRESENT_GAP 16
+#define CIUKI_PRESENT_BANDS 8
+#define CIUKI_PRESENT_RECTS 16
+static int send_damage(struct ciuki_browser_surface *s,nsfb_bbox_t b)
 {
-    unsigned stride=s->current.info.stride/4;
-    for(int y=b.y0;y<b.y1;y++)
-        memcpy(s->current.map+(size_t)y*stride+b.x0,s->current.back+(size_t)y*stride+b.x0,(size_t)(b.x1-b.x0)*4);
     uint8_t wire[16]; desk_put32(wire,b.x0); desk_put32(wire+4,b.y0);
     desk_put32(wire+8,b.x1-b.x0); desk_put32(wire+12,b.y1-b.y0);
     uint32_t request=du3_request(&s->connection,DESK_DAMAGE,s->window,s->generation,wire,16,-1);
-    if(!request) { s->retry_damage=b;s->retry_present=true;return -1; }
-    s->retry_present=false;
+    if(!request) { s->retry_damage=b;s->retry_present=true;s->stats.refused++;return -1; }
+    s->retry_present=false;s->stats.messages++;s->stats.damage_px+=(uint64_t)(b.x1-b.x0)*(uint64_t)(b.y1-b.y0);
     /* RESULT acknowledges queuing only. As in libdeskui, drawing stays in
-     * back; copy damaged rows just before DAMAGE, without a consumption wait.
-     * The compositor may read during this copy (accepted intra-frame tearing). */
+     * back; changed pixels are copied just before DAMAGE, without a
+     * consumption wait. The compositor may read during this copy (accepted
+     * intra-frame tearing). */
     return 0;
 }
-static int present_area(struct ciuki_browser_surface *s,nsfb_bbox_t bounds)
+/* Published areas leave the region, so a present resumed after a refused
+ * send compares only what is left: the rectangles already presented and the
+ * top rows of the one that was refused. */
+struct present_done { nsfb_bbox_t box[CIUKI_PRESENT_RECTS+1]; unsigned count; };
+static void done_add(struct present_done *d,nsfb_bbox_t b)
+{ if(d->count<sizeof(d->box)/sizeof(*d->box) && b.x1>b.x0 && b.y1>b.y0)d->box[d->count++]=b; }
+/* *done_y: the rows above it are equal in map and back and their bands sent. */
+static int present_area(struct ciuki_browser_surface *s,nsfb_bbox_t bounds,int *done_y)
 {
-    /* The covering box bounds comparison only. Separate changes never
-     * upload the untouched space between them. Coalesce equal runs on
-     * adjacent rows so a rectangular update is one channel message. */
-    nsfb_bbox_t pending={0};
     unsigned stride=s->current.info.stride/4;
+    size_t width=(size_t)(bounds.x1-bounds.x0);
+    nsfb_bbox_t band={0};
+    bool open=false;unsigned bands=0;int last=0;
+    *done_y=bounds.y0;
     for(int y=bounds.y0;y<bounds.y1;y++) {
-        for(int x=bounds.x0;x<bounds.x1;) {
-            size_t at=(size_t)y*stride;
-            while(x<bounds.x1 && s->current.map[at+x]==s->current.back[at+x])x++;
-            if(x==bounds.x1)break;
-            int first=x++;
-            while(x<bounds.x1 && s->current.map[at+x]!=s->current.back[at+x])x++;
-            if(pending.x0==first && pending.x1==x && pending.y1==y)pending.y1++;
-            else {
-                if(pending.x1>pending.x0 && publish(s,pending))return -1;
-                pending=(nsfb_bbox_t){first,y,x,y+1};
+        uint32_t *map=s->current.map+(size_t)y*stride,*back=s->current.back+(size_t)y*stride;
+        if(!memcmp(map+bounds.x0,back+bounds.x0,width*4)) {
+            s->stats.compared_px+=width;
+            if(open && y-last>CIUKI_PRESENT_GAP && bands+1<CIUKI_PRESENT_BANDS) {
+                open=false;bands++;
+                if(send_damage(s,band))return -1;
+                *done_y=band.y1;
             }
+            continue;
         }
+        int x0=bounds.x0,x1=bounds.x1;
+        while(map[x0]==back[x0])x0++;
+        while(map[x1-1]==back[x1-1])x1--;
+        s->stats.compared_px+=(uint64_t)(x0-bounds.x0)+(uint64_t)(bounds.x1-x1)+1;
+        memcpy(map+x0,back+x0,(size_t)(x1-x0)*4);
+        s->stats.copied_px+=(uint64_t)(x1-x0);
+        if(!open) { band=(nsfb_bbox_t){x0,y,x1,y+1};open=true; }
+        else {
+            if(x0<band.x0)band.x0=x0;
+            if(x1>band.x1)band.x1=x1;
+            band.y1=y+1;
+        }
+        last=y;
     }
-    if(pending.x1>pending.x0 && publish(s,pending))return -1;
+    if(open && send_damage(s,band))return -1;
+    *done_y=bounds.y1;
     return 0;
+}
+static void present_resume(struct ciuki_browser_surface *s,const struct present_done *done)
+{
+    if(!s->damage_region)return;
+    for(unsigned i=0;i<done->count;i++) {
+        pixman_region32_t box;
+        pixman_region32_init_rect(&box,done->box[i].x0,done->box[i].y0,
+            (unsigned)(done->box[i].x1-done->box[i].x0),(unsigned)(done->box[i].y1-done->box[i].y0));
+        pixman_region32_subtract(s->damage_region,s->damage_region,&box);
+        pixman_region32_fini(&box);
+    }
 }
 int ciuki_browser_present(struct ciuki_browser_surface *s)
 {
     if(!s->ready || !s->dirty || s->swap_request)return 0;
-    if(s->retry_present && publish(s,s->retry_damage))return -1;
+    s->stats.presents++;
+    if(s->retry_present && send_damage(s,s->retry_damage))return -1;
+    struct present_done done={.count=0};int done_y;
     if(s->damage_region) {
         int count;const pixman_box32_t *boxes=pixman_region32_rectangles(s->damage_region,&count);
-        for(int i=0;i<count;i++)
-            if(present_area(s,(nsfb_bbox_t){boxes[i].x1,boxes[i].y1,boxes[i].x2,boxes[i].y2}))return -1;
-    } else if(present_area(s,s->damage))return -1; /* bounded ENOMEM recovery */
+        const pixman_box32_t *e=pixman_region32_extents(s->damage_region);
+        /* Many scattered updates: one pass over their extents; unchanged
+         * rows cost a memcmp and bands still split distant changes. */
+        if(count>CIUKI_PRESENT_RECTS) { boxes=e;count=1; }
+        for(int i=0;i<count;i++) {
+            nsfb_bbox_t b={boxes[i].x1,boxes[i].y1,boxes[i].x2,boxes[i].y2};
+            if(present_area(s,b,&done_y)) {
+                done_add(&done,(nsfb_bbox_t){b.x0,b.y0,b.x1,done_y});
+                present_resume(s,&done);return -1;
+            }
+            done_add(&done,b);
+        }
+    } else if(present_area(s,s->damage,&done_y))return -1; /* bounded ENOMEM recovery */
     damage_release(s);s->dirty=false;return 0;
 }
+/* fx-nsperf: libnsfb calls update for every redrawn widget box and for the
+ * pan copy, several times per frame. The damage is collected here and
+ * presented once per UI turn (nsfb_surface.c input), as a Windows 98
+ * application accumulates its update region until WM_PAINT. */
+int ciuki_browser_update(struct ciuki_browser_surface *s,nsfb_bbox_t b)
+{ ciuki_browser_damage(s,b);return 0; }
 static void resize_request(struct ciuki_browser_surface *s)
 {
     if(s->swap_request || !s->configure || !s->ready)return;

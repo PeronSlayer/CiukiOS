@@ -295,7 +295,22 @@ int net_stack_transmit(unsigned index,const void *data,unsigned bytes)
     peer_output(p);return 0;
 }
 static int result(int n) { if(n<0){errno=-n;return -1;}return n; }
-int __wrap_socket(int family,int type,int protocol) { return result(net_socket_create(&client,family,type,protocol)); }
+/* fx-nsperf, T23 trial 2ca3b0b6: images of one HTTPS page failed at
+ * connect with ENOBUFS. browser-socket-limit models a system that holds
+ * one TCP socket object (net_socket_count, closing objects included until
+ * the control worker deletes them), fewer than the browser's slots: the
+ * kernel socket layer's own refusal for exhausted TCP objects, request slots
+ * or lwIP pools (src/kernel/net/lwip/sockets.c). */
+static unsigned socket_refusals,socket_max;
+unsigned fixture_socket_refusals(void) { return socket_refusals; }
+unsigned fixture_socket_max(void) { return socket_max; }
+int __wrap_socket(int family,int type,int protocol)
+{
+    if(!strcmp(fixture_mode,"browser-socket-limit") && net_socket_count()>=1){socket_refusals++;errno=ENOBUFS;return -1;}
+    int fd=result(net_socket_create(&client,family,type,protocol));
+    if(fd>=0 && net_socket_count()>socket_max)socket_max=net_socket_count();
+    return fd;
+}
 int __wrap_connect(int fd,const struct sockaddr *a,socklen_t n)
 {
     CHECK(n==16);struct ciuki_sockaddr_in address;memcpy(&address,a,16);return result(net_socket_connect(&client,fd,&address,NULL));

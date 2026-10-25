@@ -797,6 +797,41 @@ Expected behaviour and implementation contract (2026-10-24):
   bloom filter (or static empty root filter) intact; the allocation/error-path
   fixture covers this ownership boundary too.
 
+### Frame presentation and socket refusals (fx-nsperf, 2026-10-25)
+
+Real-hardware trial of 60d029c9: pages rendered at 1-2 fps; five images of
+one HTTPS page failed at `connect` with errno 105 (ENOBUFS). Measurements,
+causes and tests: `docs/validation/fx-nsperf-netsurf-frame-cost.md`.
+
+- **Present.** f2-98b sent one DAMAGE per changed pixel run; a 100-pixel
+  wheel step on a text page was 7,700-24,000 messages through a 64-message
+  channel that the desktop reads 16 at a time (host frame bench model:
+  0.75-2.3 s per step). The surface now compares rows with `memcmp`, copies
+  each changed row's first-to-last changed span and sends one DAMAGE per band
+  of changed rows (rows closer than 16 join, at most 8 bands per damaged
+  rectangle). libnsfb updates only record damage; each main-loop turn
+  presents once after drawing, before the scheduler runs, unless input is
+  still queued (the Windows update-region/WM_PAINT model). A wheel step is now 1-3
+  messages, about 22 ms on the model, most of it the desktop composing the
+  moved area.
+- **Socket refusals.** ENOBUFS, ENOMEM, EAGAIN, EMFILE or ENFILE from
+  socket()/connect() no longer fail the fetch: the job waits without a
+  socket, the browser holds no more sockets than were open at the refusal,
+  retries after 250 ms doubling to 4 s within the 30 s fetch limit, closes a
+  kept-alive connection no waiting job can use, and a waiting job takes an
+  idle kept-alive connection of its origin. Kept-alive connections: 4, at
+  most 2 per origin. The pending-fetch budget is 256 KiB (128 KiB held only
+  83 set-up fetches after G26b grew a job to 1,564 bytes; NetSurf fails a
+  fetch whose setup is refused). Exit line: `presents`, `damage_messages`,
+  `present_refused`, `connect_retries`; `[netsurf] connect-wait` record.
+- **Frame bench.** `--ciuki-frame-bench` (host builds, `framebench.c`, patch
+  0017) mirrors every libnsfb update of the real front end into the v3
+  surface over the desktop channel model and charges each frame on the T23
+  model; `test_local` asserts message counts and frame cost.
+- Not changed: a desktop v3 scroll request (engine blit of the moved area,
+  the ScrollWindowEx model), JPEG decoding at displayed size, the glyph cache
+  (100 % hits on repaints, 0-26 misses per wheel step).
+
 ## Milestones and acceptance
 
 Private site names/URLs and expected pages will be supplied by the lead at

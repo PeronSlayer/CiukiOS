@@ -319,6 +319,45 @@ class LocalTests(unittest.TestCase):
                 print(f"{name}: {len(body)} bytes, host layout {layout/1e6:.1f} ms, T23 model {layout*T23_CLOCK_SCALE/1e9:.2f} s",flush=True)
                 self.assertLess(layout*T23_CLOCK_SCALE,10_000_000_000)  # fx-11 top-level document limit
 
+    def test_frame_cost_scroll_and_small_updates(self):
+        """fx-nsperf, T23 trial 2ca3b0b6 ("NetSurf keeps rendering pages very
+        slowly, 1-2 fps"). The host frame bench mirrors every libnsfb update
+        of the real front end into the CiukiOS v3 surface over the desktop
+        channel model (64 queued messages, 16 read per desktop turn) and
+        charges each frame on the T23 model (framebench.c). Before: a 100-px
+        wheel step on the standard article sent 7,700-24,000 DAMAGE messages
+        (one per changed pixel run), refilled the channel 120-380 times and
+        cost 0.75-2.3 s; a full repaint after load sent about 3,000. Now a
+        frame is a few messages presented once per UI turn."""
+        for name,body in (("article.html",pages.article(3,60000)),("forum.html",pages.forum_thread(4,20)),("portal.html",pages.portal())):
+            with self.subTest(page=name),tempfile.TemporaryDirectory(dir=self.out) as directory:
+                page=Path(directory) / name;page.write_text(body)
+                completed=subprocess.run([str(self.base / "stage/Programs/netsurf"),"-w","800","-h","542","-f","ram",
+                    "--ciuki-resources="+str(self.base / "stage/system/netsurf"),"--ciuki-frame-bench",page.as_uri()],
+                    capture_output=True,text=True,timeout=60)
+                self.assertEqual(completed.returncode,0,completed.stdout+completed.stderr)
+                self.assert_exit_reason(completed,"bench")
+                frames=[dict(field.split("=",1) for field in line.split()[2:])
+                        for line in completed.stderr.splitlines() if line.startswith("[netsurf] frame-bench kind=")]
+                kinds={}
+                for frame in frames:kinds.setdefault(frame["kind"],[]).append(frame)
+                self.assertEqual({k:len(v) for k,v in kinds.items()},{"first":1,"repaint":3,"scroll":12,"small":3,"page":1},completed.stderr)
+                for line in completed.stderr.splitlines():
+                    if line.startswith("[netsurf] frame-bench summary "):print(name,line,flush=True)
+                for frame in frames:
+                    # A frame is a handful of DAMAGE messages and never waits
+                    # for the desktop to drain the channel.
+                    self.assertLessEqual(int(frame["damage_messages"]),8,frame)
+                    self.assertEqual(int(frame["ui_waits"]),0,frame)
+                for frame in kinds["repaint"]+kinds["small"]:
+                    # An identical repaint publishes nothing; a small update
+                    # compares only its own rectangle.
+                    self.assertEqual(int(frame["damage_messages"]),0,frame)
+                    self.assertLessEqual(int(frame["compared_px"]),int(frame["update_px"]),frame)
+                scroll=sorted(float(frame["model_t23_ms"]) for frame in kinds["scroll"])
+                self.assertLess(scroll[len(scroll)//2],50.0,kinds["scroll"])
+                self.assertLess(float(kinds["page"][0]["model_t23_ms"]),100.0,kinds["page"])
+
     def test_deep_pages_within_main_stack(self):
         """fx-14: nesting just inside the new DOM depth (128) lays out and
         paints with the main stack limited to CiukiOS's 1 MiB."""

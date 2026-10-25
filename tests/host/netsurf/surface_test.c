@@ -8,6 +8,7 @@
 #include "sdk/netsurf/port/pointer.h"
 static struct { struct ciuki_surface_info info;void *map;int live; } fds[64];
 static int nextfd=4, fail_create, fail_send, closed, unmapped;
+static unsigned fail_after;
 static struct ciuki_message sent[256], incoming;
 static unsigned sends;
 static unsigned padding;
@@ -26,8 +27,10 @@ static int closefd(int fd) { assert(fd>=3 && fd<64);if(fd!=3) { assert(fds[fd].l
 static int sendmsg(int fd,const struct ciuki_message *message,uint32_t flags)
 {
     assert(fd==3 && flags==DONTWAIT);
-    if(fail_send) { errno=EAGAIN;return -1; }
-    assert(sends<256);sent[sends++]=*message;return 0;
+    if(fail_send || (fail_after && sends>=fail_after)) { errno=EAGAIN;return -1; }
+    /* fx-nsperf: the scroll fixture counts more messages than it keeps. */
+    sent[sends%256]=*message;
+    sends++;return 0;
 }
 static int recvmsg(int fd,struct ciuki_message *message,uint32_t flags)
 { assert(fd==3 && flags==DONTWAIT);*message=incoming;return 1; }
@@ -118,6 +121,66 @@ int main(void)
     assert(s->current.map[100*640+300]==saved);
     assert(s->current.map[20*640+10]==0x334455 && s->current.map[200*640+600]==0x556677);
     puts("PASS F2-98b NetSurf: exact disjoint regions, unchanged frame sends nothing, backpressure retains copied-but-unsent damage");
+    /* fx-nsperf, T23 trial 2ca3b0b6 ("pages render at 1-2 fps"): a 100-row
+     * wheel step on a text page sent one DAMAGE per changed pixel run
+     * (7,700-24,000 per frame on the frame bench's article). Text-like rows:
+     * glyph-sized dark runs on white, 21-row lines with 5 blank rows. */
+    {
+        unsigned W=640,H=480,top=36,view=H-36-22;
+        uint32_t *page=malloc((size_t)W*2000*4);assert(page);
+        /* Start from a presented surface (earlier cases left unreported
+         * private pixels on purpose). */
+        memcpy(s->current.map,s->current.back,(size_t)W*H*4);
+        srand(7);
+        for(unsigned y=0;y<2000;y++)for(unsigned x=0;x<W;x++) {
+            unsigned line=y%21,col=x%9;
+            page[(size_t)y*W+x]=line<16 && x>8 && x<W-24 && col<5 && (rand()%3) ? 0x000000u+(unsigned)(rand()%64) : 0xffffffu;
+        }
+        for(unsigned y=0;y<view;y++)memcpy(s->current.back+(size_t)(top+y)*W,page+(size_t)y*W,W*4);
+        ciuki_browser_damage(s,(nsfb_bbox_t){0,(int)top,(int)W,(int)(top+view)});
+        assert(!ciuki_browser_present(s) && !s->dirty);
+        assert(!memcmp(s->current.map+(size_t)top*W,s->current.back+(size_t)top*W,(size_t)view*W*4));
+        /* The wheel step: fb_pan's copy (update of the moved box), the
+         * exposed strip and the scroll bar, presented in one UI turn. */
+        uint64_t messages=s->stats.messages;unsigned before_sends=sends;
+        memmove(s->current.back+(size_t)top*W,s->current.back+(size_t)(top+100)*W,(size_t)(view-100)*W*4);
+        ciuki_browser_update(s,(nsfb_bbox_t){0,(int)top,(int)W-16,(int)(top+view-100)});
+        for(unsigned y=view-100;y<view;y++)memcpy(s->current.back+(size_t)(top+y)*W,page+(size_t)(100+y)*W,W*4);
+        ciuki_browser_update(s,(nsfb_bbox_t){0,(int)(top+view-100),(int)W-16,(int)(top+view)});
+        ciuki_browser_update(s,(nsfb_bbox_t){(int)W-16,(int)top,(int)W,(int)(top+view)});
+        unsigned update_sends=sends-before_sends;
+        while(s->dirty)assert(!ciuki_browser_present(s));
+        printf("fx-nsperf scroll frame: %llu DAMAGE messages, %u sent by updates, %llu compared px, %llu copied px\n",
+            (unsigned long long)(s->stats.messages-messages),update_sends,(unsigned long long)s->stats.compared_px,(unsigned long long)s->stats.copied_px);
+        assert(s->stats.messages-messages>=1 && s->stats.messages-messages<=8);
+        assert(!update_sends); /* updates are collected; the UI turn presents */
+        assert(!memcmp(s->current.map+(size_t)top*W,s->current.back+(size_t)top*W,(size_t)view*W*4));
+        /* A status-bar text change (22 rows of glyph runs) is one message. */
+        messages=s->stats.messages;
+        for(unsigned y=H-22+4;y<H-4;y++)for(unsigned x=4;x<300;x++)s->current.back[(size_t)y*W+x]=(x+y)%7<3?0x101010:0xc0c0c0;
+        ciuki_browser_damage(s,(nsfb_bbox_t){0,(int)(H-22),(int)W,(int)H});
+        assert(!ciuki_browser_present(s) && s->stats.messages-messages==1);
+        const uint8_t *wire=sent[(sends-1)%256].data;
+        assert(wire[1]==DESK_DAMAGE && desk_get32(wire+16)==4 && desk_get32(wire+20)==H-18 &&
+               desk_get32(wire+24)==296 && desk_get32(wire+28)==14);
+        /* Distant changes in one rectangle are separate bands; a refused
+         * send keeps the copied band and resumes without sending a published
+         * band again or comparing it again. */
+        messages=s->stats.messages;
+        s->current.back[(size_t)(top+10)*W+20]^=0xff;s->current.back[(size_t)(top+300)*W+400]^=0xff;
+        ciuki_browser_damage(s,(nsfb_bbox_t){0,(int)top,(int)W,(int)(top+view)});
+        fail_after=sends+1;
+        assert(ciuki_browser_present(s)==-1 && s->dirty && s->retry_present && s->stats.messages-messages==1);
+        fail_after=0;uint64_t compared=s->stats.compared_px;
+        assert(!ciuki_browser_present(s) && !s->dirty && s->stats.messages-messages==2);
+        assert(s->stats.compared_px-compared<(uint64_t)(view-10)*W);
+        wire=sent[(sends-1)%256].data;
+        assert(wire[1]==DESK_DAMAGE && desk_get32(wire+16)==400 && desk_get32(wire+20)==top+300 &&
+               desk_get32(wire+24)==1 && desk_get32(wire+28)==1);
+        assert(!memcmp(s->current.map,s->current.back,(size_t)H*W*4));
+        free(page);
+        puts("PASS fx-nsperf present: a text scroll frame and a status-bar change are a few DAMAGE messages, collected per UI turn; a refused send resumes");
+    }
     int old=s->current.fd;
     p=configure(800,600,10);ciuki_browser_packet(s,&p);assert(s->pending.fd>=0 && s->current.fd==old && fds[old].live);
     unsigned swap=s->swap_request;

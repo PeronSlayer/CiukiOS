@@ -146,6 +146,16 @@ static struct ciuki_font_face *face_for(const plot_font_style_t *style)
     faces[i].key=key;faces[i].used=++face_clock;
     return faces[i].face;
 }
+/* fx-nsperf: glyph bitmap cache totals over the open faces (frame bench). */
+void ciuki_font_stats(struct ciuki_font_cache_stats *sum)
+{
+    memset(sum,0,sizeof(*sum));
+    for(unsigned i=0;i<CIUKI_FONT_FACES;i++) {
+        struct ciuki_font_cache_stats s;
+        if(!faces[i].face || ciuki_font_cache_info(faces[i].face,&s))continue;
+        sum->glyphs+=s.glyphs;sum->bytes+=s.bytes;sum->hits+=s.hits;sum->misses+=s.misses;sum->evictions+=s.evictions;
+    }
+}
 static unsigned em(const plot_font_style_t *s)
 {
     int64_t value=(int64_t)s->size*96*64/(72*PLOT_STYLE_SCALE);
