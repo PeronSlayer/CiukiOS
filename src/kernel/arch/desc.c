@@ -72,9 +72,14 @@ void gdt_init(void)
 
 void tss_set_kernel_stack(uint32_t esp0) { g_tss.esp0 = esp0; }
 
+/* gdt_init installs an all-FF bitmap. Cache only that state, never an
+ * allowlist pointer whose contents or owner generation could change. */
+static bool io_denied=true;
 void arch_io_install(const struct arch_io_range *ranges, unsigned count)
 {
-    (void)arch_io_bitmap(g_tss.io_bitmap, ranges, count);
+    if (!count && io_denied) return;
+    bool valid=arch_io_bitmap(g_tss.io_bitmap, ranges, count);
+    io_denied=!count || !valid;
 }
 
 void arch_vga_io(bool enabled)
@@ -82,6 +87,7 @@ void arch_vga_io(bool enabled)
     /* Byte-aligned allowlist. Every other bit and the sentinel stay set.
      * Called with interrupts disabled on each task switch/ownership change. */
     arch_vga_bitmap(g_tss.io_bitmap,enabled);
+    if (enabled) io_denied=false;
 }
 
 /* f3-04 per-VM LDT. Intel SDM Vol. 3A 3.5.1 and LLDT: the descriptor is a

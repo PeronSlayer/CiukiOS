@@ -364,6 +364,7 @@ struct desktop {
     struct desk_box geometry_restore;
     unsigned cascade;
     unsigned usb_wheel_records;
+    unsigned v3_stale_updates;   /* q3exec2: stale DAMAGE/PRESENT refusals logged (first 8) */
     struct {
         struct desk_box from, to, box;
         uint64_t started;

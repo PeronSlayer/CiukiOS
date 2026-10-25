@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "../files/operations.h"
+#include "worker_role.h"
 #include "desktop.h"
 #include <ciuki/present_abi.h>
 #include "../../sdk/sysroot-overlay/include/ciuki/dosvm.h"
@@ -458,6 +459,7 @@ static struct {
 static struct launch_job launch_sync_job;
 static void *launcher_run(void *unused)
 {
+    desk_worker_role("launcher");
     (void)unused;
     pthread_mutex_lock(&launcher.lock);
     for (;;) {
@@ -787,7 +789,7 @@ static struct cfg_writer settings_writer;
 static struct users_worker user_worker;
 static int user_initial, user_switch_saving, user_default_loading, user_default_ready;
 static int links_profile_update(struct desktop *);
-static int settings_writer_started, verbose_boot;
+static int settings_writer_started, verbose_boot, statistics_boot;
 static int settings_reload_pending, settings_reload_request, settings_reload_wallpaper;
 static int theme_read_pending;
 static struct desk_wall_worker wallpaper_worker;
@@ -800,6 +802,7 @@ static struct {
     pthread_t thread;
     const struct desktop *desktop;
     unsigned live, stop, stage, pending, work, frame_ms, loop_ms;
+    unsigned standby; /* published by the desktop thread with loop_ms */
     const char *wait;
 } desktop_watchdog;
 static pthread_mutex_t watchdog_lock=PTHREAD_MUTEX_INITIALIZER;
@@ -818,16 +821,32 @@ static void desktop_stage(unsigned stage)
 }
 static void desktop_input_pending(void)
 { __atomic_store_n(&desktop_watchdog.pending,1,__ATOMIC_RELEASE); }
+/* The loop stamp before each sleep, with whether that sleep may be
+ * unbounded (a power state); both read by the observer thread. */
+static void desktop_watchdog_loop(uint64_t now_ns,int standby)
+{
+    __atomic_store_n(&desktop_watchdog.standby,standby ? 1u : 0u,__ATOMIC_RELEASE);
+    __atomic_store_n(&desktop_watchdog.loop_ms,(uint32_t)(now_ns/1000000ull),__ATOMIC_RELEASE);
+}
+/* T23 trial 2ca3b0b6: the idle stage covers the turn's end (offscreen-cache
+ * upload, late input read, clipboard tick) and its sleep, which the shell
+ * bounds to one second outside power states. The observer samples it once a
+ * second and reports a loop stamp older than this; a sleep never reaches it. */
+#define DESKTOP_IDLE_STALL_MS 3000u
 static int desktop_stall_record(uint32_t now,char *line,size_t size)
 {
     uint32_t frame=__atomic_load_n(&desktop_watchdog.frame_ms,__ATOMIC_ACQUIRE);
     unsigned pending=__atomic_load_n(&desktop_watchdog.pending,__ATOMIC_ACQUIRE);
     unsigned work=__atomic_load_n(&desktop_watchdog.work,__ATOMIC_ACQUIRE);
     uint32_t loop=__atomic_load_n(&desktop_watchdog.loop_ms,__ATOMIC_ACQUIRE);
+    unsigned stage=__atomic_load_n(&desktop_watchdog.stage,__ATOMIC_ACQUIRE);
+    int32_t loop_limit=stage==STALL_IDLE ? (int32_t)DESKTOP_IDLE_STALL_MS : 500;
+    /* Power states sleep until input; the flag is the desktop thread's own
+     * publication (never its power structure, which that thread rewrites). */
+    if (stage==STALL_IDLE && __atomic_load_n(&desktop_watchdog.standby,__ATOMIC_ACQUIRE)) loop_limit=INT32_MAX;
     /* A blocked loop cannot discover input arriving later in its kernel grant.
      * Also report a lost loop heartbeat, without claiming that input was read. */
-    if ((int32_t)(now-frame)<=500 || (!pending && !work && (int32_t)(now-loop)<=500)) return 0;
-    unsigned stage=__atomic_load_n(&desktop_watchdog.stage,__ATOMIC_ACQUIRE);
+    if ((int32_t)(now-frame)<=500 || (!pending && !work && (int32_t)(now-loop)<=loop_limit)) return 0;
     const char *wait=__atomic_load_n(&desktop_watchdog.wait,__ATOMIC_ACQUIRE);
     const char *wall="idle", *settings="idle", *wall_wait="idle";
     if (wallpaper_worker_started) {
@@ -861,6 +880,7 @@ static int desktop_stall_record(uint32_t now,char *line,size_t size)
 }
 static void *desktop_watchdog_run(void *unused)
 {
+    desk_worker_role("watchdog");
     (void)unused; uint32_t reported=0;
     while (!__atomic_load_n(&desktop_watchdog.stop,__ATOMIC_ACQUIRE)) {
         uint32_t now=(uint32_t)(monotonic()/1000000ull);
@@ -885,19 +905,19 @@ static void *desktop_watchdog_run(void *unused)
             reported=now;
         }
         pthread_mutex_lock(&watchdog_lock);
-        /* Idle needs no watchdog sampling. Active work retains the existing
-         * diagnostic deadline; an input/service turn wakes this condition. */
+        /* Active work keeps the 100 ms diagnostic deadline; an input or
+         * service turn wakes this condition. T23 trial 2ca3b0b6: idle is
+         * sampled once a second (it was not sampled at all, so a loop stuck
+         * at the turn's end left no record). */
         const struct desktop *d=desktop_watchdog.desktop;
-        if (__atomic_load_n(&desktop_watchdog.stage,__ATOMIC_ACQUIRE)==STALL_IDLE &&
+        int idle=__atomic_load_n(&desktop_watchdog.stage,__ATOMIC_ACQUIRE)==STALL_IDLE &&
             !__atomic_load_n(&desktop_watchdog.pending,__ATOMIC_ACQUIRE) &&
             !__atomic_load_n(&desktop_watchdog.work,__ATOMIC_ACQUIRE) &&
-            (!d || !__atomic_load_n(&d->v3_restore_watchdog_pending,__ATOMIC_ACQUIRE))) {
-            pthread_cond_wait(&watchdog_changed,&watchdog_lock);
-        } else {
-            struct timespec until;clock_gettime(CLOCK_REALTIME,&until);until.tv_nsec+=100000000;
-            if(until.tv_nsec>=1000000000){until.tv_sec++;until.tv_nsec-=1000000000;}
-            pthread_cond_timedwait(&watchdog_changed,&watchdog_lock,&until);
-        }
+            (!d || !__atomic_load_n(&d->v3_restore_watchdog_pending,__ATOMIC_ACQUIRE));
+        struct timespec until;clock_gettime(CLOCK_REALTIME,&until);
+        if (idle) until.tv_sec++;
+        else { until.tv_nsec+=100000000; if(until.tv_nsec>=1000000000){until.tv_sec++;until.tv_nsec-=1000000000;} }
+        pthread_cond_timedwait(&watchdog_changed,&watchdog_lock,&until);
         pthread_mutex_unlock(&watchdog_lock);
     }
     return NULL;
@@ -1198,12 +1218,15 @@ static void accel_record(struct desktop *d, uint64_t now)
 }
 static void performance_sample(struct desktop *d, uint64_t now)
 {
+    static uint64_t next_publication;
     if (!d->sample_begin_ns) { d->sample_begin_ns=now; return; }
     if (now-d->sample_begin_ns<2000000000ull) return;
     desk_stats_sample(d); d->sample_ns=now-d->sample_begin_ns;
     d->sample_begin_ns=now;
-    accel_record(d,now);
-    { char line[160]; int n=loop_record_line(line,sizeof(line),now,d->sample_ns); if (n) (void)write(STDERR_FILENO,line,(size_t)n); }
+    int publish=statistics_boot || verbose_boot || !next_publication || now>=next_publication;
+    if (publish) { next_publication=now+60000000000ull; accel_record(d,now); }
+    /* Reset the loop counters every sample even when its record is quiet. */
+    { char line[160]; int n=loop_record_line(line,sizeof(line),now,d->sample_ns); if (n && publish) (void)write(STDERR_FILENO,line,(size_t)n); }
     if (verbose_boot) {
         const struct desk_frame_stats *s=&d->sample;
         char line[CFG_LOG_MAX];
@@ -1421,6 +1444,7 @@ static void observer_close(int *fd)
 {
     if (*fd>=0) { close(*fd); *fd=-1; }
 }
+static int media_events=-1; /* 0 after a poll error (no kernel readiness) */
 static struct {
     pthread_mutex_t lock;
     pthread_cond_t changed;
@@ -1485,6 +1509,7 @@ static void media_sound(struct desktop *d,int connected)
  * touches desktop/shell state. Device queries are outside the mailbox lock. */
 static void *media_run(void *arg)
 {
+    desk_worker_role("media");
     struct desktop *d=arg; int fd=-1;
     for (;;) {
         pthread_mutex_lock(&media_worker.lock);
@@ -1555,6 +1580,9 @@ static void media_poll(struct desktop *d)
     if (ready) { memcpy(volumes,media_worker.volumes,sizeof(volumes)); memcpy(cd_states,media_worker.cd_states,sizeof(cd_states)); media_worker.ready=0; }
     pthread_mutex_unlock(&media_worker.lock);
     if (!ready) return;
+    /* A failed snapshot closes the watched description. Forget its confirmed
+     * readiness support so the timed fallback can open and validate a new one. */
+    if (!ok) media_events=-1;
     /* An unavailable observation never fabricates an eject. */
     if (observed) desk_shell_media_update(d,&state);
     if (ok) { desk_shell_media_labels(d,volumes); desk_autoplay_update(d,volumes); desk_autoplay_cd_update(d,cd_states); }
@@ -1714,10 +1742,9 @@ static void mixer_poll(struct desktop *d,uint64_t now,uint64_t *next)
         d->sh.want_reload|=4;
     }
 }
-/* fx-26: the media worker's description is readable after a drive was
- * published or withdrawn (WM_DEVICECHANGE); polled only while the worker is
- * idle, so a pending query never spins the loop. */
-static int media_events=-1; /* as mixer_events: 0 after a POLLNVAL (no kernel readiness) */
+/* The media worker's description is readable after a namespace, CD-media
+ * or USB-error change; polled only while the worker is idle, so a pending
+ * query never spins the loop. */
 static int media_watch_fd(const struct desktop *d)
 {
     if (!d->shell || d->sh.gate || d->power.state || !media_worker.started || !media_events) return -1;
@@ -1734,8 +1761,11 @@ static void watch_result(struct desktop *d,int mixer_revents,int media_revents)
         else { if (mixer_events<0) mixer_events=1; if (mixer_revents&POLLIN) d->sh.want_reload|=4; }
     }
     if (media_revents>=0) {
-        if (media_revents&POLLNVAL) media_events=0;
-        else if (media_revents&POLLIN) { media_events=1; media_worker.rescan=1; d->sh.want_reload|=32; }
+        if (media_revents&(POLLNVAL|POLLERR|POLLHUP)) media_events=0;
+        else {
+            if (media_events<0) media_events=1;
+            if (media_revents&POLLIN) { media_worker.rescan=1; d->sh.want_reload|=32; }
+        }
     }
 }
 static void system_read(struct desktop *d)
@@ -2201,7 +2231,14 @@ static void shell_service(struct desktop *d)
     if (sh->want_reload & 2) { desktop_wait("system-read"); system_read(d); if (d->about>=0) desk_damage_add(&d->damage,d->clients[d->about].frame,d->width,d->height); }
     if (sh->want_reload & 4) { desktop_wait("mixer-read"); mixer_read(d); }
     if (sh->want_reload & 16) { desktop_wait("network-read"); network_read(d); }
-    if (sh->want_reload & 32) { desktop_wait("media-submit"); media_read(d); }
+    /* Once the native readiness watch is confirmed, only a media event or
+     * an explicit rescan requests another snapshot. Network's two-second
+     * status timer must not scan every mounted drive as a side effect. */
+    if ((sh->want_reload & 32) && (media_events!=1 ||
+        __atomic_load_n(&media_worker.fd,__ATOMIC_ACQUIRE)<0 ||
+        media_worker.rescan || media_worker.confirm_pending)) {
+        desktop_wait("media-submit"); media_read(d);
+    }
     if (sh->want_remove) { desktop_wait("media-remove"); media_remove(d); }
     desktop_wait("autoplay-check");
     if (sh->autoplay.want_commit) {
@@ -2491,6 +2528,7 @@ static int open_with_record(const char *path,struct desk_launch_record *record)
 }
 static void *links_thread(void *arg)
 {
+    desk_worker_role("links");
     struct links_worker *w=arg;
     for (;;) {
         pthread_mutex_lock(&w->mutex);
@@ -2870,12 +2908,16 @@ extern void desk_recovery_init(struct desktop *, int, int) __attribute__((weak))
 extern void desk_recovery_start(struct desktop *) __attribute__((weak));
 int main(int argc, char **argv)
 {
+    desk_worker_role("input-compositor-shell");
     int safe_mode = 0, terminal_shell = 0;
     startup_begin=monotonic(); startup_stage("entry");
 #ifdef __i386__
     static struct ciuki_devices_info devices;
     devices.version=CIUKI_DEVICES_VERSION; devices.size=sizeof(devices);
-    if (!ciuki_devices(&devices)) verbose_boot=!!(devices.boot_flags&(1u<<11)); /* CBI_F_VERBOSE */
+    if (!ciuki_devices(&devices)) {
+        verbose_boot=!!(devices.boot_flags&(1u<<11)); /* CBI_F_VERBOSE */
+        statistics_boot=!!(devices.boot_flags&((1u<<11)|(1u<<12)|(1u<<6))); /* logged, diagnostic, test */
+    }
 #endif
     int display = 3, input = 4, test = 0, gate = 0, cycles = 1, demo_count = 0, fullscreen_test = 0;
     int channels[DESK_CLIENTS], channel_count = 0;
@@ -3319,7 +3361,7 @@ int main(int argc, char **argv)
             }
         }
         uint64_t sleep_now=monotonic();
-        __atomic_store_n(&desktop_watchdog.loop_ms,(uint32_t)(sleep_now/1000000ull),__ATOMIC_RELEASE);
+        desktop_watchdog_loop(sleep_now,d->power.state!=0);
         uint64_t timer=d->shell && !gate && !d->power.state ? mixer_poll_next : UINT64_MAX;
         uint64_t wait=desktop_pause_ns(d,sleep_now,fifo_count!=0 || late_input,timer);
         /* The explicit crash-isolation probe has a shared-memory control

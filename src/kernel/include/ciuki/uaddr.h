@@ -75,6 +75,8 @@ int32_t ua_brk(struct uaddr *u, uint32_t end);
 /* Internal release after a thread is stopped; never bypasses I/O pins. */
 void ua_release_owner(struct uaddr *u, uint32_t owner);
 struct ua_extent *ua_find(const struct uaddr *u, uint32_t address);
+/* Backing ownership, not access protection; inspect while the extent is pinned. */
+bool ua_extent_private(const struct ua_extent *extent);
 bool ua_range(const struct uaddr *u, uint32_t address, uint32_t bytes, uint32_t prot);
 int ua_pin(struct uaddr *u, struct ua_pin *pin, uint32_t base, uint32_t bytes, bool write);
 void ua_unpin(struct uaddr *u, struct ua_pin *pin);

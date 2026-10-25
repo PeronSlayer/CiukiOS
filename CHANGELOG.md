@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.0 alpha — 2026-10-25
+## 1.0.1 alpha — 2026-10-25
 
 CiukiOS is a modern retro-gaming operating system dedicated to Ciuki, a dog: a 32-bit protected-mode kernel with a Windows 95/98-class desktop, DOS games in virtual machines, Win32 programs and a network stack. *Classic computing, one woof at a time.*
 
@@ -8,39 +8,46 @@ CiukiOS is a modern retro-gaming operating system dedicated to Ciuki, a dog: a 3
 
 - **Kernel and resources.** Windows 98/ME-class memory, scheduling, disk cache and real-time management; a crash-resilient pagefile; a hardware entropy source.
 - **Storage.** FAT32 with a transactional cache, parallel ATA, USB mass storage, and a faster FAT chain cache for large sequential reads.
-- **DOS.** DOS games run in virtual machines on a unified FreeDOS-based kernel with XMS, EMS and upper memory, a virtual NE2000/IPX network adapter, and fast game launch. DOOM, Wolfenstein 3-D and Quake start from Programs > Games.
+- **DOS.** DOS games run in virtual machines on a unified FreeDOS-based kernel with XMS, EMS and upper memory, a virtual NE2000/IPX network adapter, and fast game launch. DOOM, Wolfenstein 3-D, Quake and the Warcraft II demo start from Programs > Games.
 - **Win32.** A Win32 subsystem with dialogs, controls, shell integration and original installers (NSIS, CAB, self-extracting) running on reused Wine 10.0 libraries.
 - **Network and web.** lwIP TCP/IP with DHCP and DNS, TLS 1.2, and the NetSurf 3.11 web browser (images, clipboard, JavaScript with Duktape).
-- **Desktop and media.** Per-program icons, Start menu with groups, WordPad, Paint, Music, Solitaire, Clock, Task Manager, CiukIDE, System Information and a redesigned Control Panel; AC'97 audio; print spooler; English and Italian language indicator.
+- **Desktop and media.** Per-program icons, Start menu with groups, WordPad, Paint, Music, Classic Games (Solitaire, FreeCell, Hearts, Minesweeper), Clock, Task Manager, CiukIDE, System Information and a redesigned Control Panel; AC'97 audio; print spooler; English and Italian language indicator.
 - **Graphics.** 2D acceleration on supported video chips with a safe software fallback (`accel=0`).
 
 ### New since the earlier alpha images
 
+- **Control Panel.** Pages no longer redraw over each other when you switch applet, category or tab.
+- **Speed.** Applications open faster: the block-cache lookup is sized to the cache and Win32 libraries are hashed once.
+- **NetSurf.** Scrolling and repainting are much faster, and a refused connection is retried.
+- **Storage.** Disk and USB access stay responsive when the CPU is busy (I/O priority).
+- **Responsiveness.** Task switches no longer clear the 8 KB I/O permission bitmap, the page allocator skips full bitmap words, short firmware stalls are charged to the firmware instead of the interrupted program, normal boots write full statistics at most once a minute, and CD and USB media changes are signalled instead of polled every 2 seconds.
+- **Boot menu.** The 3-second boot menu idles the CPU instead of spinning.
+- **DOS game video.** Faster video path: damage tracking limits redraws to the rows that changed, faster scaling and native copy/fill. Supported video chips stretch the picture with the 2D engine, and full-screen games write directly to the VBE framebuffer.
+- **Games.** Programs > Games has a Classic Games submenu (Solitaire, FreeCell, Hearts, Minesweeper). The Warcraft II DOS demo is bundled and starts from Programs > Games.
+- **Quake III Arena demo.** The demo installer is in the "Quake III Arena Demo" folder on the desktop: run it, then start the game from the Start menu.
+- **Windows installers.** Installers with large payloads (self-extracting archives of tens of megabytes) now start; Windows service queries behave as on Windows 98.
 - **Boot.** A hang at the splash screen on real hardware is fixed: the cache publication path no longer livelocks against the video-marker task and the storage writer.
 - **DOS windows.** Closing a DOS window (Alt+F4, or `exit` at the prompt) no longer freezes the system. A program that ends within 10 seconds leaves its window open with its output, titled "Finished - <name>". `DIR` shows the correct free space.
 - **DOS memory.** XMS is visible to DOS programs again and the shell no longer stays resident: about 585 KB of conventional memory are free at the prompt. The DOS Box has an EMS device (`EMMXXXX0`) and upper memory blocks. Wolfenstein 3-D starts.
 - **Printing.** The print spooler is event-driven and uses about 0.3 % of the CPU (65-77 % before); offline jobs are retried every 15 seconds.
 - **Audio.** A sound that starts right after another no longer begins with an underrun.
 - **NetSurf.** Images over one megapixel display again; Ctrl+L no longer types an extra "l" into the address bar; the system clipboard works; the browser closes cleanly; JavaScript is on again.
-- **Desktop.** New look for Open/Save dialogs, Control Panel, Music, WordPad, Paint (28-colour palette), Solitaire, Clock, DOS window bar and properties, Task Manager, disk Properties, CiukIDE, System Information and the log viewer; the power icon is hidden on machines without a battery.
+- **Desktop.** New look for Open/Save dialogs, Control Panel, Music, WordPad, Paint (28-colour palette), Classic Games (Solitaire, FreeCell, Hearts, Minesweeper), Clock, DOS window bar and properties, Task Manager, disk Properties, CiukIDE, System Information and the log viewer; the power icon is hidden on machines without a battery.
 - **Setup CD.** The system component includes `/System/SFC.LST` and `/System/printspool`.
 
-### Known issues (planned for 1.0.1 alpha)
+### Known issues
 
-- Applications are slow to launch.
-- NetSurf renders pages slowly.
-- The Control Panel and property sheets show redraw glitches.
-- Changing the theme while music plays from a USB stick can hang the system.
-- Hardware acceleration for DOS games still needs improvement.
+- Changing the theme while music plays from a USB stick hung the system once on real hardware; the cause is not confirmed. Storage priority and stall diagnostics were added, and the next occurrence is recorded on disk.
+- DOS game video on some video chips still runs in software.
 - This is an alpha: hardware qualification is not complete on every machine class, and the virtual machine packages have not been tested on every host.
 
 ### How to try it
 
-- **QEMU:** extract `ciukios-1.0.0-qemu.zip` and run `run-qemu.sh` (Linux, macOS) or `run-qemu.cmd` (Windows).
-- **VirtualBox:** import `ciukios-1.0.0-vm.ova`.
-- **VMware:** extract `ciukios-1.0.0-vmware.zip` and open `ciukios.vmx`.
-- **Setup ISO:** `ciukios-1.0.0-setup.iso` boots the CiukiOS Setup from a CD (it is not a hybrid USB image).
-- **Real hardware:** write the raw disk image from `ciukios-1.0.0-disk.zip` to a whole disk with Rufus (DD mode), balenaEtcher or `dd`; this erases the destination. Targets are late-1990s and early-2000s desktops and laptops with an i686 CPU, BIOS, VBE 2.0+ video, PS/2 input, parallel ATA and 128 MiB of RAM or more.
+- **QEMU:** extract `ciukios-1.0.1-qemu.zip` and run `run-qemu.sh` (Linux, macOS) or `run-qemu.cmd` (Windows).
+- **VirtualBox:** extract `ciukios-1.0.1-virtualbox.zip` (VDI disk) and run `create-vm.sh` or `create-vm.cmd`, or import `ciukios-1.0.1-vm.ova`.
+- **VMware:** extract `ciukios-1.0.1-vmware.zip` (VMDK disk) and open `ciukios.vmx`.
+- **Setup ISO:** `ciukios-1.0.1-setup.iso` boots the CiukiOS Setup from a CD (it is not a hybrid USB image).
+- **Real hardware:** write the raw disk image from `ciukios-1.0.1-disk.zip` to a whole disk with Rufus (DD mode), balenaEtcher or `dd`; this erases the destination. Targets are late-1990s and early-2000s desktops and laptops with an i686 CPU, BIOS, VBE 2.0+ video, PS/2 input, parallel ATA and 128 MiB of RAM or more.
 
 ## Development log, 2026-10-20 to 2026-10-22 (hardware image `3423912f8463…` of 2026-10-22)
 

@@ -19,6 +19,13 @@ bool g_cpu_tsc;
 uint32_t ticks_lo(void) { return (uint32_t)g_ticks; }
 void klog(const char *fmt,...) { (void)fmt; }
 void klog_diag(const char *fmt,...) { (void)fmt; }
+/* T23 2ca3b0b6 review: the long lock-wait record (fs_port.h) is observed
+ * here; every short production wait in this file must leave it silent. */
+static unsigned long_wait_calls;
+static uint32_t long_wait_ms;
+static const struct task *long_wait_owner;
+void fs_lock_long_wait(fs_lock *l,uint32_t ticket,uint32_t waited_ms,bool polling)
+{ (void)ticket; (void)polling; long_wait_calls++; long_wait_ms=waited_ms; long_wait_owner=l->wait.owner; }
 static struct vfs space;
 static fs_lock mutex;
 static fs_lock outer;
@@ -170,9 +177,242 @@ static void inherit_case(unsigned which)
            holder_checks,which==2 ? "cache" : "drive");
     vfs_destroy(&space); fs_lock_destroy(&cache_lock);
 }
+/* T23 trial 2ca3b0b6: after an appearance change the CPU stayed busy
+ * (idle_pm=0) and ata0 reported svc_max_ms=105, usb-storage 1079. A queued
+ * request runs on its controller's ordinary-priority "storage-io" worker,
+ * which is dispatched twice per command (issue, then the continuation after
+ * the completion interrupt). Replay: the production queue, scheduler,
+ * ksync_depend and kwait; the worker is `hog` (base 7), a CPU-bound renderer
+ * `normal` at the interactive level 9 never blocks, and the requester `ui`
+ * is an interactive reader polling with a native request (1 ms pause) or a
+ * device-class storage writer sleeping on the request event. The negative
+ * control (no executor donation) reproduces the 100 ms starvation dispatch
+ * at each worker step; with donation the worker runs at the requester's
+ * level and the request completes in the device time plus at most one
+ * renderer slice per step. */
+#define EXEC_DEVICE_MS 5u
+static struct blk_queue exec_queue;
+static struct blkdev exec_dev;
+static struct blk_request exec_request;
+static uint8_t exec_buffer[4096];
+static unsigned exec_phase,exec_reads,exec_worker_turns,exec_renderer_ticks,exec_level;
+static bool exec_donation;
+static uint64_t exec_issue_tick,exec_done_tick;
+static int exec_read(struct blkdev *d,uint64_t lba,uint32_t n,void *buf)
+{ (void)d;(void)lba; exec_reads++; memset(buf,0x5a,(size_t)n*512u); return 0; }
+static void exec_dispatch(void)
+{
+    if (pumping) return;
+    pumping=true;
+    while (g_current!=waiter) {
+        CHECK(g_ticks<5000);
+        if (g_current==&hog) {
+            exec_worker_turns++;
+            /* With donation the worker runs at least at the requester's
+             * level for every dispatch of this request. */
+            if (exec_donation) CHECK(waiter->depends_on==&hog && hog.effective_priority>=exec_level);
+            else CHECK(!waiter->depends_on && !hog.inherited_priority);
+            if (exec_phase==0) {
+                /* Issue: the command now runs in the device for 5 ms. */
+                exec_phase=1; exec_issue_tick=g_ticks; run_tick(0x5555);
+                task_sleep_ms(EXEC_DEVICE_MS);
+            } else {
+                /* Continuation after the completion interrupt: the
+                 * production run_one executes, finishes and wakes. */
+                CHECK(exec_phase==1); exec_phase=2;
+                CHECK(blk_queue_run_one(&exec_queue));
+                exec_done_tick=g_ticks;
+                /* The inheritance ends with the request it served. */
+                CHECK(!hog.inherited_priority && !dependents && !waiter->depends_on);
+                hog.state=T_BLOCKED; hog.wake_tick=0; schedule();
+            }
+        } else if (g_current==&normal) {
+            /* The dispatcher runs inside switch_context (IF clear): the
+             * renderer's preemption at its tick is an explicit schedule. */
+            exec_renderer_ticks++; run_tick(0x4444);
+            if (g_need_resched) schedule();
+        } else {
+            CHECK(g_current==&idle); run_tick(0);
+            if (g_need_resched) schedule();
+        }
+    }
+    pumping=false;
+}
+static uint64_t executor_case(bool donation,bool device_writer)
+{
+    reset(); exec_donation=executor_donation=donation;
+    exec_phase=exec_reads=exec_worker_turns=exec_renderer_ticks=0; exec_issue_tick=exec_done_tick=0;
+    hog.user=normal.user=ui.user=false;
+    task_set_class(&hog,P_NORMAL);          /* blk_queue_start: "storage-io", P_NORMAL */
+    task_set_class(&normal,P_INTERACTIVE);  /* desktop/client rendering after the change */
+    task_set_class(&ui,device_writer ? P_DEVICE : P_INTERACTIVE);
+    exec_level=ui.effective_priority;
+    fs_lock_init(&pool_lock);
+    blk_queue_init(&exec_queue,"storage-io",BLKREQ_COMMAND_BYTES); exec_queue.worker=&hog;
+    exec_dev=(struct blkdev){.read=exec_read,.request_read=exec_read,.capacity=4096,.sector_size=512,.queue=&exec_queue};
+    memset(&exec_request,0,sizeof(exec_request));
+    exec_request.device=&exec_dev; exec_request.queue=&exec_queue; exec_request.buffer=exec_buffer;
+    exec_request.length=sizeof(exec_buffer); exec_request.operation=BLK_READ; exec_request.priority=BLK_DEMAND;
+    exec_request.timeout=30000; exec_request.state=BLK_PREPARED; fs_event_init(&exec_request.event);
+    /* The renderer is ready and never blocks; the worker sleeps for work. */
+    idle.state=T_READY; hog.state=T_BLOCKED; normal.state=T_READY; rq_push(&normal);
+    cpu_switch(&idle,&ui); ui.state=T_RUNNING; g_current=&ui; waiter=&ui;
+    struct vfs_request request={.now=req_now,.cancelled=req_cancelled,.pause=req_pause,
+        .deadline=UINT64_MAX/2,.operation="read",.site="native"};
+    struct fs_request_scope scope;
+    if (!device_writer) { fs_request_enter(&scope,&request); exec_request.context=&request; }
+    uint64_t start=g_ticks;
+    latency_switch_hook=exec_dispatch;
+    CHECK(!blk_request_submit(&exec_request));
+    task_start(&hog); /* the queue's changed event wakes its worker */
+    int e=blk_request_wait(&exec_request);
+    latency_switch_hook=0;
+    if (!device_writer) fs_request_leave(&scope);
+    uint64_t latency=g_ticks-start;
+    CHECK(!e && exec_reads==1 && exec_phase==2 && exec_worker_turns==2);
+    CHECK(exec_request.state==BLK_COMPLETED && !exec_queue.busy && !exec_queue.head);
+    CHECK(!ui.depends_on && !dependents && !hog.inherited_priority && hog.effective_priority==7);
+    CHECK(!ui.preempt_holds && !hog.preempt_holds && !normal.preempt_holds);
+    bool recorded=false;
+    for (unsigned i=0;i<inherit_used;i++)
+        if (inherit_events[i].reason==KSYNC_DEPEND_IO && inherit_events[i].from_id==ui.id &&
+            inherit_events[i].to_id==hog.id && inherit_events[i].level>=exec_level) recorded=true;
+    CHECK(recorded==donation);
+    uint64_t service=exec_done_tick-start;
+    /* With donation each worker step waits at most one renderer slice
+     * (10 ms) and the requester its own turn after completion; without it
+     * each step waits for the 100 ms starvation dispatch (svc_max_ms=105). */
+    if (donation) CHECK(service<=EXEC_DEVICE_MS+2*10+2 && latency<=EXEC_DEVICE_MS+3*10+2);
+    else CHECK(service>=2*100 && exec_issue_tick-start>=100);
+    printf("T23 2ca3b0b6 storage-io executor: requester=%s level=%u donation=%s issue_ms=%llu service_ms=%llu "
+           "requester_ms=%llu worker_turns=%u renderer_ms=%u PASS\n",device_writer ? "storage-writer" : "native-reader",
+           exec_level,donation ? "on" : "off (negative control)",(unsigned long long)(exec_issue_tick-start),
+           (unsigned long long)service,(unsigned long long)latency,exec_worker_turns,exec_renderer_ticks);
+    fs_event_destroy(&exec_request.event); executor_donation=true;
+    return latency;
+}
+/* Review P2: a queued request cancelled by another task. Its requester's
+ * donation to the (never dispatched) executor ends at the cancellation, in
+ * the cancelling task, not when the requester next runs. */
+static unsigned cancel_checks;
+static void cancel_dispatch(void)
+{
+    if (pumping) return;
+    pumping=true;
+    while (g_current!=waiter) {
+        CHECK(g_ticks<1000);
+        CHECK(g_current!=&hog); /* the executor never runs in this case */
+        if (g_current==&normal) {
+            if (exec_request.state==BLK_QUEUED) {
+                CHECK(ui.depends_on==&hog && hog.inherited_priority==exec_level);
+                CHECK(blk_request_cancel(&exec_request) && exec_request.state==BLK_CANCELLED);
+                CHECK(!hog.inherited_priority && hog.effective_priority==7 && !ui.depends_on && !dependents);
+                cancel_checks++;
+            }
+            run_tick(0x4444);
+            if (g_need_resched) schedule();
+        } else {
+            CHECK(g_current==&idle); run_tick(0);
+            if (g_need_resched) schedule();
+        }
+    }
+    pumping=false;
+}
+static void executor_cancel_case(bool device_writer)
+{
+    reset(); executor_donation=true; cancel_checks=0; exec_reads=0;
+    hog.user=normal.user=ui.user=false;
+    task_set_class(&hog,P_NORMAL); task_set_class(&normal,P_INTERACTIVE);
+    task_set_class(&ui,device_writer ? P_DEVICE : P_INTERACTIVE);
+    exec_level=ui.effective_priority;
+    fs_lock_init(&pool_lock);
+    blk_queue_init(&exec_queue,"storage-io",BLKREQ_COMMAND_BYTES); exec_queue.worker=&hog;
+    exec_dev=(struct blkdev){.read=exec_read,.request_read=exec_read,.capacity=4096,.sector_size=512,.queue=&exec_queue};
+    memset(&exec_request,0,sizeof(exec_request));
+    exec_request.device=&exec_dev; exec_request.queue=&exec_queue; exec_request.buffer=exec_buffer;
+    exec_request.length=sizeof(exec_buffer); exec_request.operation=BLK_READ; exec_request.priority=BLK_DEMAND;
+    exec_request.timeout=30000; exec_request.state=BLK_PREPARED; fs_event_init(&exec_request.event);
+    idle.state=T_READY; hog.state=T_BLOCKED; normal.state=T_READY; rq_push(&normal);
+    cpu_switch(&idle,&ui); ui.state=T_RUNNING; g_current=&ui; waiter=&ui;
+    struct vfs_request request={.now=req_now,.cancelled=req_cancelled,.pause=req_pause,
+        .deadline=UINT64_MAX/2,.operation="read",.site="native"};
+    struct fs_request_scope scope;
+    if (!device_writer) { fs_request_enter(&scope,&request); exec_request.context=&request; }
+    latency_switch_hook=cancel_dispatch;
+    CHECK(!blk_request_submit(&exec_request));
+    int e=blk_request_wait(&exec_request);
+    latency_switch_hook=0;
+    if (!device_writer) fs_request_leave(&scope);
+    CHECK(e==-FS_EAGAIN && cancel_checks==1 && !exec_reads);
+    CHECK(!ui.depends_on && !dependents && !hog.inherited_priority);
+    printf("T23 2ca3b0b6 storage-io executor: requester=%s cancelled by another task, donation revoked at the cancellation PASS\n",
+           device_writer ? "storage-writer" : "native-reader");
+    fs_event_destroy(&exec_request.event);
+}
+/* Review P2: the long lock-wait record never fires for a short wait, also
+ * one granted within the tick it started (an even tick: the former start
+ * stamp now|1 made that wait UINT32_MAX ms long); a 6 s wait fires once. */
+static unsigned holder_turns;
+static void run_deferred(void)
+{
+    uint32_t saved=flags; flags=0x200;
+    for (unsigned n=0;deferred_fn && n<1024;n++) { kwork_fn fn=deferred_fn; deferred_fn=0; fn(deferred_arg); }
+    flags=saved;
+}
+static void lock_wait_dispatch(void)
+{
+    if (pumping) return;
+    pumping=true;
+    while (g_current!=waiter) {
+        CHECK(g_ticks<8000);
+        if (g_current==&hog) {
+            holder_turns++;
+            fs_lock_drop(&mutex); run_deferred(); /* the waker runs before the next tick */
+            hog.state=T_BLOCKED; hog.wake_tick=0; schedule();
+        } else {
+            CHECK(g_current==&idle); run_tick(0);
+            if (g_need_resched) schedule();
+        }
+    }
+    pumping=false;
+}
+static void lock_wait_case(unsigned hold)
+{
+    reset(); holder_turns=0; long_wait_calls=0; long_wait_ms=0; long_wait_owner=0;
+    fs_lock_init(&mutex);
+    hog.user=normal.user=ui.user=false; task_set_class(&hog,P_NORMAL); task_set_class(&ui,P_INTERACTIVE);
+    normal.state=T_BLOCKED; idle.state=T_READY; hog.state=T_RUNNING; g_current=&hog;
+    cpu_switch(&idle,&hog);
+    fs_lock_take(&mutex);
+    hog.state=T_BLOCKED;
+    if (hold) ktimer_wait_task(&hog,hold);
+    else { hog.state=T_READY; rq_push(&hog); }
+    cpu_switch(&hog,&ui); ui.state=T_RUNNING; g_current=&ui; waiter=&ui;
+    CHECK(!(g_ticks&1)); /* the wait starts on an even tick */
+    uint64_t start=g_ticks;
+    latency_switch_hook=lock_wait_dispatch;
+    fs_lock_take(&mutex); fs_lock_drop(&mutex);
+    latency_switch_hook=0;
+    uint64_t waited=g_ticks-start;
+    CHECK(holder_turns==1 && !ui.preempt_holds && !hog.preempt_holds);
+    if (!hold) CHECK(waited==0 && !long_wait_calls);
+    else CHECK(long_wait_calls==1 && long_wait_ms>=FS_LOCK_LONG_WAIT_MS && long_wait_ms<hold && long_wait_owner==&hog);
+    printf("T23 2ca3b0b6 long lock wait: held_ms=%u waited_ms=%llu records=%u%s PASS\n",hold,
+           (unsigned long long)waited,long_wait_calls,hold ? " (once, naming the holder)" : " (same-tick grant on an even tick)");
+    fs_lock_destroy(&mutex);
+}
 int main(void)
 {
     for (unsigned i=0;i<3;i++) wait_case(i);
     for (unsigned i=0;i<3;i++) inherit_case(i);
+    CHECK(!long_wait_calls); /* every wait above is short */
+    for (unsigned writer=0;writer<2;writer++) {
+        uint64_t slow=executor_case(false,writer!=0), fast=executor_case(true,writer!=0);
+        CHECK(fast*4<slow);
+        executor_cancel_case(writer!=0);
+    }
+    CHECK(!long_wait_calls);
+    lock_wait_case(0);
+    lock_wait_case(6000);
     return 0;
 }

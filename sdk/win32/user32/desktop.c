@@ -431,6 +431,13 @@ void u32_pump(void) {
       break;
     u32_event(&p);
   }
+  /* q3exec2: every window of the program is gone with the connection and
+   * no new one can be shown; record it once on the serial log. */
+  static BOOL lost;
+  if (u32_desktop.disconnected && !lost) {
+    lost = 1;
+    w32_diag("warning", "user32.dll", "desktop-connection-lost");
+  }
   struct u32_thread *t = u32_thread();
   UINT pending = t ? t->event_count : 0;
   while (t && t->events && pending--) {

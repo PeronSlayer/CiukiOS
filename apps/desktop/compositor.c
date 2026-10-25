@@ -2040,6 +2040,20 @@ static int present_box_commands(struct desktop *d, struct desk_box b)
         unsigned n=0, bytes=0; int video=0;
         for (unsigned rows=0;rows<32 && y<b.y+b.h;rows++,y++) {
             const uint32_t *row=d->pixels+(size_t)y*d->width+b.x, *old=command_previous(d,b,y);
+            /* A preceding WRITE/MONO in this batch completes before STRETCH.
+             * Keep this selection when a driver also advertises other DM2
+             * commands; clipping/composition already produced these rows. */
+            if ((d->command_caps&CIUKI_CAP_STRETCH) &&
+                (d->command_native&(1u<<CIUKI_CMD_SCALED)) && b.w>=64 && y>b.y &&
+                !memcmp(row,row-d->width,(size_t)b.w*4)) {
+                int bottom=y+1;
+                while (bottom<b.y+b.h && !memcmp(row,d->pixels+(size_t)bottom*d->width+b.x,(size_t)b.w*4)) bottom++;
+                records[n++]=(struct ciuki_batch_record){.opcode=CIUKI_CMD_SCALED,.src=1,
+                    .sx=b.x,.sy=y-1,.sw=(unsigned)b.w,.sh=1,.dx=b.x,.dy=y,
+                    .dw=(unsigned)b.w,.dh=(unsigned)(bottom-y),.filter=CIUKI_FILTER_NEAREST_EDGE};
+                y=bottom-1;
+                continue;
+            }
             struct ciuki_batch_clip clips[16]; unsigned count=0; uint32_t key;
             if (old && (d->command_caps&CIUKI_CAP_INVERT) && invert_spans(old,row,b.w,b.x,y,clips,&count)) {
                 if (count) {
@@ -2131,6 +2145,19 @@ static int present_box_raw(struct desktop *d, struct desk_box b)
          * retaining another RAM frame. A failure uses the normal full retry. */
         if (!solid && b.w>=64 && y>b.y &&
             !memcmp(row,row-d->width,(size_t)b.w*4)) {
+            if (d->batch && (d->command_caps&CIUKI_CAP_STRETCH) &&
+                (d->command_native&(1u<<CIUKI_CMD_SCALED))) {
+                int bottom=y+1;
+                while (bottom<b.y+b.h && !memcmp(row,d->pixels+(size_t)bottom*d->width+b.x,(size_t)b.w*4)) bottom++;
+                struct ciuki_batch_record r={.opcode=CIUKI_CMD_SCALED,.src=1,
+                    .sx=b.x,.sy=y-1,.sw=(unsigned)b.w,.sh=1,.dx=b.x,.dy=y,
+                    .dw=(unsigned)b.w,.dh=(unsigned)(bottom-y),.filter=CIUKI_FILTER_NEAREST_EDGE};
+                if (command_submit(d,&r,1,NULL,0)) return engine_failed(d);
+                d->presents++; d->frame_stats.presents++;
+                y=bottom;
+                if (cached && y<b.y+b.h) hit=vram_lookup(d,b,y,&hit_x,&hit_y);
+                continue;
+            }
             struct ciuki_rect r={b.x,y-1,b.x,y,(uint32_t)b.w,1};
             if (screen_copy(d,&r)) return -1;
             y++;

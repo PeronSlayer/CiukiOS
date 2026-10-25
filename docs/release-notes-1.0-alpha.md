@@ -10,6 +10,20 @@
 
 ---
 
+## 1.0.1 alpha (2026-10-25)
+
+First published alpha; the 1.0.0 version was skipped. It adds the fixes from the hardware trial of the earlier images and new games (details in `CHANGELOG.md`):
+
+- Control Panel pages no longer redraw over each other; applications open faster; NetSurf scrolls and repaints much faster and retries refused connections.
+- Storage stays responsive when the CPU is busy (I/O priority); the boot menu idles the CPU.
+- Faster DOS game video (damage tracking, faster scaling, native copy/fill; 2D-engine stretching on supported chips and a direct VBE framebuffer in full screen).
+- Lower system overhead: task switches, page allocation, statistics and media detection cost less CPU.
+- Programs > Games has a Classic Games submenu (Solitaire, FreeCell, Hearts, Minesweeper) and the Warcraft II DOS demo.
+- The Quake III Arena demo installer is in a desktop folder; Windows installers with large payloads start.
+- Packages: QEMU, VirtualBox (VDI and scripts), VMware (VMDK and `.vmx`), OVA, Setup ISO and raw disk image, named `ciukios-1.0.1-*`.
+
+---
+
 ## 1. Overview and Contents
 
 CiukiOS 1.0 Alpha marks the completion of the core foundations transition, bringing together Windows 98/ME-class resource management, a unified DOS subsystem, native Win32 application and installer support, full TCP/IP networking with a native graphical web browser, and desktop multimedia capabilities.

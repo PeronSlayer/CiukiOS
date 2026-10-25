@@ -229,6 +229,7 @@ struct vfs {
     unsigned startup_head, startup_count;
     bool startup_flushing;
     uint32_t startup_queued, startup_dropped, startup_written, startup_failed;
+    uint32_t startup_last_ms; /* when the newest start was queued */
     struct fs_event startup_event; /* a start was queued */
 };
 struct vfs_table {
@@ -280,7 +281,7 @@ int vfs_startup_flush(struct vfs *,bool wait);
 bool vfs_startup_wait(struct vfs *);
 /* Start-log task: lets a burst of starts settle for up to `ms`, returning at
  * once when VFS_STARTUP_URGENT starts are queued (no early drops at boot). */
-void vfs_startup_settle(struct vfs *,uint32_t ms);
+void vfs_startup_settle(struct vfs *,uint32_t quiet_ms,uint32_t max_ms);
 void vfs_site_locked(struct vfs *,const char *site);
 /* Namespace held, no volume reservation on entry/return. A private FAT view
  * and the reader reference protect an immutable open chain during transport. */

@@ -93,7 +93,13 @@ int file_section_io_locked(struct file_description *d,void *buffer,size_t bytes,
 #include "../../../src/kernel/proc/win32/wait.c"
 #include "../../../src/kernel/proc/win32/apc.c"
 #include "../../../src/kernel/proc/win32/message.c"
+/* fx-launch: count the image bytes the section code hashes. */
+static uint64_t sha256_bytes_hashed;
+static void counted_sha256_update(struct sha256_ctx *ctx,const void *data,size_t bytes)
+{ sha256_bytes_hashed+=bytes; sha256_update(ctx,data,bytes); }
+#define sha256_update counted_sha256_update
 #include "../../../src/kernel/proc/win32/sections.c"
+#undef sha256_update
 #include "../../../src/kernel/proc/win32/service.c"
 #include "../../../src/kernel/proc/sigframe.c"
 #include "../../../src/kernel/core/fpu.c"
@@ -276,7 +282,7 @@ static void test_context(void)
     ua_destroy(&u);
     puts("w32 contexts: exact selectors, flags, address permissions, x87/MXCSR sanitization, fault classes PASS");
 }
-static uint8_t pe_data[0x2400],loader_data[0x2400];
+static uint8_t pe_data[0x2400],loader_data[0x2400],dll_data[0x2400];
 static int pe_read(void *cookie,uint32_t off,void *dst,uint32_t n){CHECK(off<=sizeof(pe_data)&&n<=sizeof(pe_data)-off);memcpy(dst,(uint8_t*)cookie+off,n);return 0;}
 static void put16(uint8_t *p,uint16_t x){memcpy(p,&x,2);}static void put32(uint8_t *p,uint32_t x){memcpy(p,&x,4);}
 static void make_pe(uint8_t *b,bool dll){memset(b,0,0x2400);put16(b,0x5a4d);put32(b+60,0x80);put32(b+0x80,0x4550);put16(b+0x84,0x14c);put16(b+0x86,1);put16(b+0x94,224);put16(b+0x96,dll?0x2102:0x102);uint8_t *o=b+0x98;put16(o,0x10b);put32(o+16,0x1000);put32(o+28,dll?0x70010000:0x400000);put32(o+32,4096);put32(o+36,512);put32(o+56,0x3000);put32(o+60,512);put16(o+68,3);put32(o+72,0x100000);put32(o+76,4096);put32(o+92,16);uint8_t *s=o+224;put32(s+8,0x1000);put32(s+12,0x1000);put32(s+16,512);put32(s+20,512);put32(s+36,0xe0000020);b[512]=0xc3;
@@ -292,6 +298,7 @@ static bool loader_missing;
 static int loader_open(void *cwd,const char *path,struct ciuki_file *out){
     (void)cwd;
     if(!strcmp(path,"/fixture.exe")){*out=(struct ciuki_file){pe_data,sizeof(pe_data),pe_read,0};return 0;}
+    if(!strcmp(path,"/fixture.dll")){*out=(struct ciuki_file){dll_data,sizeof(dll_data),pe_read,0};return 0;}
     CHECK(!strcmp(path,"/System/Win32/ntdll.dll"));if(loader_missing)return -ENOENT;
     *out=(struct ciuki_file){loader_data,sizeof(loader_data),pe_read,0};return 0;
 }
@@ -349,6 +356,26 @@ static void test_spawn_exceptions(void)
     CHECK(!ua_write(p->memory,t->teb+1536,"/fixture.exe",13));
     struct ciuki_w32_loader_args original_open={.action=W32_LDR_OPEN,.path=t->teb+1536};
     CHECK(!w32_loader_call(t,&original_open)&&original_open.address==original_source&&!p->w32_source);
+    /* fx-launch: LDR_IMAGE of a DLL not yet in the image-section cache hashes
+     * its pinned snapshot once (it hashed it twice: the loader, then the
+     * section lookup), and a second process view reuses the section. */
+    make_pe(dll_data,true);put32(dll_data+0x98+28,0x10000000);
+    CHECK(!ua_write(p->memory,t->teb+1536,"/fixture.dll",13));
+    struct ciuki_w32_loader_args dll_open={.action=W32_LDR_OPEN,.path=t->teb+1536};
+    CHECK(!w32_loader_call(t,&dll_open)&&dll_open.address&&dll_open.bytes==sizeof(dll_data));
+    /* The file may change after OPEN; IMAGE must still use the private snapshot. */
+    dll_data[512]=0x90;
+    uint64_t hashed=sha256_bytes_hashed;
+    struct ciuki_w32_loader_args dll_image={.action=W32_LDR_IMAGE,.source=dll_open.address,.bytes=dll_open.bytes};
+    CHECK(!w32_loader_call(t,&dll_image)&&dll_image.address==0x10000000);
+    CHECK(sha256_bytes_hashed-hashed==sizeof(dll_data));
+    uint8_t mapped[2];CHECK(!ua_read(p->memory,mapped,0x10000000,2)&&mapped[0]=='M'&&mapped[1]=='Z');
+    CHECK(!ua_read(p->memory,mapped,0x10001000,1) && mapped[0]==0xc3);
+    dll_data[512]=0xc3;
+    struct ciuki_w32_loader_args dll_unmap={.action=W32_LDR_UNMAP,.address=0x10000000};
+    CHECK(!w32_loader_call(t,&dll_unmap));
+    struct ciuki_w32_vm dll_release={.address=dll_open.address,.flags=W32_MEM_RELEASE};
+    CHECK(!w32_vm_free(p->memory,&dll_release));
     struct trap_frame tf={.vector=6,.gs=0x23,.fs=0x4b,.es=0x23,.ds=0x23,.cs=0x1b,.user_ss=0x23,.eip=0x401000,.user_esp=t->stack_base+t->stack_bytes-32,.eflags=0x202};
     struct ciuki_w32_context ctx;w32_context_capture(&ctx,&tf);fpu_w32_export(t->task,&ctx);
     struct ciuki_w32_exception exc={.code=W32_EXCEPTION_ILLEGAL,.address=tf.eip};
@@ -385,6 +412,81 @@ static int blob_read(void *cookie, uint32_t off, void *dst, uint32_t bytes)
 }
 
 #include "kernel_objects_test.inc"
+
+static struct process *alias_loader_process;
+static uint32_t alias_loader_write;
+static unsigned alias_loader_waits;
+static void change_loader_alias(void)
+{
+    CHECK(image_section_building && alias_loader_process->memory->pins);
+    const uint8_t changed=0x90;
+    CHECK(!ua_user_write(alias_loader_process->memory,alias_loader_write+512,&changed,1));
+    alias_loader_waits++;
+    image_section_building=false;
+    on_schedule=0;
+}
+static void test_loader_shared_alias(void)
+{
+    struct process *p;
+    struct proc_thread *t=object_process(proc_supervisor(),&p);
+    g_current=t->task; g_current->state=T_RUNNING;
+    make_pe(dll_data,true); put32(dll_data+0x98+28,0x10000000);
+    struct ciuki_w32_section_args section={.kind=W32_SEC_PAGEFILE,.bytes=sizeof(dll_data),
+                                          .protect=W32_PAGE_READWRITE};
+    CHECK(!w32_section_call(t,&section) && !section.error);
+    struct ciuki_w32_view_args writer={.action=W32_VIEW_MAP,.section=section.result,
+                                      .bytes=sizeof(dll_data),.access=W32_FILE_MAP_WRITE};
+    CHECK(!w32_view_call(t,&writer) && !writer.error);
+    struct ciuki_w32_view_args reader={.action=W32_VIEW_MAP,.section=section.result,
+                                      .bytes=sizeof(dll_data),.access=W32_FILE_MAP_READ};
+    CHECK(!w32_view_call(t,&reader) && !reader.error);
+    CHECK(!ua_user_write(p->memory,writer.address,dll_data,sizeof(dll_data)));
+    uint8_t byte=0;
+    CHECK(!ua_user_read(p->memory,&byte,reader.address+512,1) && byte==0xc3);
+    alias_loader_process=p; alias_loader_write=writer.address; alias_loader_waits=0;
+    image_section_building=true; on_schedule=change_loader_alias;
+    uint64_t hashed=sha256_bytes_hashed;
+    struct ciuki_w32_loader_args image={.action=W32_LDR_IMAGE,.source=reader.address,
+                                       .bytes=sizeof(dll_data)};
+    uint32_t status=w32_loader_call(t,&image);
+    /* Before the fix this waits, seeds changed bytes B with digest A, and
+     * succeeds. The fixed API must refuse before hashing or waiting. */
+    if(alias_loader_waits)
+        fprintf(stderr,"loader alias mutated during serialization wait: status=%#x\n",status);
+    CHECK(status==W32_STATUS_ACCESS_DENIED);
+    CHECK(!alias_loader_waits && sha256_bytes_hashed==hashed && !p->memory->pins);
+    on_schedule=0; image_section_building=false;
+    /* Refusal does not freeze shared memory or leave a cache/view behind. */
+    const uint8_t changed=0x90;
+    CHECK(!ua_user_write(p->memory,writer.address+512,&changed,1));
+    CHECK(!ua_user_read(p->memory,&byte,reader.address+512,1) && byte==changed);
+    CHECK(!image.address && !w32_view_contains(p->memory,0x10000000));
+    /* A private snapshot remains immutable while a writer changes the shared
+     * source during the real serialization wait. Still hash just once. */
+    CHECK(!ua_user_write(p->memory,writer.address,dll_data,sizeof(dll_data)));
+    struct loader_snapshot source={p->memory,reader.address};
+    struct ciuki_file file={&source,sizeof(dll_data),loader_read,0};
+    uint32_t snapshot=0;
+    CHECK(!w32_loader_snapshot(p,&file,&snapshot));
+    image=(struct ciuki_w32_loader_args){.action=W32_LDR_IMAGE,.source=snapshot,.bytes=file.bytes};
+    /* Reject a writable later extent even when the first extent is private RO. */
+    struct ciuki_w32_vm protect={.address=snapshot+PAGE_SIZE,.bytes=PAGE_SIZE,
+                                 .protect=W32_PAGE_READWRITE};
+    CHECK(!w32_vm_protect(p->memory,&protect));
+    CHECK(w32_loader_call(t,&image)==W32_STATUS_ACCESS_DENIED && !p->memory->pins);
+    CHECK(sha256_bytes_hashed==hashed);
+    protect.protect=W32_PAGE_READONLY;
+    CHECK(!w32_vm_protect(p->memory,&protect));
+    image_section_building=true; on_schedule=change_loader_alias;
+    CHECK(!w32_loader_call(t,&image) && image.address==0x10000000);
+    CHECK(alias_loader_waits==1 && !on_schedule && !image_section_building && !p->memory->pins);
+    CHECK(sha256_bytes_hashed-hashed==sizeof(dll_data));
+    CHECK(!ua_user_read(p->memory,&byte,reader.address+512,1) && byte==changed);
+    CHECK(!ua_user_read(p->memory,&byte,image.address+PAGE_SIZE,1) && byte==0xc3);
+    stop_collect(p); alias_loader_process=0;
+    CHECK(!pages_used && !g_user_mappings && heap_blocks==1);
+    puts("w32 loader: shared alias refusal, later writable extent, immutable snapshot across serialization/hash PASS");
+}
 #ifdef W32_KERNEL_BRIDGE
 #define main kernel_mechanism_main
 #endif
@@ -402,6 +504,6 @@ int main(int argc, char **argv)
         free(parsed);free(b.data);return 0;
     }
     ram=calloc(HOST_PAGES,PAGE_SIZE);CHECK(ram);controller.state=T_RUNNING;g_current=&controller;
-    test_memory();test_records();test_fpu();test_context();test_spawn_exceptions();test_objects_sections();
+    test_memory();test_records();test_fpu();test_context();test_spawn_exceptions();test_objects_sections();test_loader_shared_alias();
     CHECK(!pages_used&&!g_user_mappings&&heap_blocks==1);printf("w32 core: checks=%u PASS\n",checks);free(ram);return 0;
 }

@@ -15,6 +15,7 @@ import struct
 import sys
 
 ROOT = Path(__file__).resolve().parents[3]
+CORPUS = ("wolf3d-shareware", "doom-shareware", "quake-shareware")
 
 
 def sites(data):
@@ -38,7 +39,9 @@ def collect():
     games = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(games)
     result = dict(schema_version=1, runtime_trace="not-collected", files=[])
-    for package in games.PACKAGES:
+    # The f3-48 audit is pinned to the three shareware games; packages added
+    # later (the Warcraft II demo) are outside its recorded corpus.
+    for package in CORPUS:
         _, files, _ = games.package_files(package)
         for path, data, _ in files:
             if not path.upper().endswith((".EXE", ".COM")):

@@ -1018,6 +1018,25 @@ VGA window frames) stays resident: a deliberate difference from Windows 98,
 whose V86 memory is pageable, because the monitor, the VGA model and DPMI
 real-mode stacks use it directly.
 
+**101-d direct VBE amendment.** DPMI 0800h continues returning the VM-local
+pool address for `DOS_VBE_PHYS`, never a physical BAR. During exclusive native
+full screen, a matching provider may temporarily replace only its visible
+page-rounded PTEs with borrowed LFB pages. Original RAM stays pinned and
+charged, excluded from replacement and the global sampler. Guest dirty bits
+remain frame evidence, but no per-frame copy is needed. Kernel transfers and
+screenshots read the exported LFB alias while mapped. The display-driver-model
+101-d protocol holds the VM, withdraws guest access, copies back, restores
+PTEs and only then restores desktop ownership. Hotkey/focus loss, stop, fault,
+mode change and entry rollback all revoke; any admission refusal retains the
+pool-backed copy path. A parked VM cannot be destroyed during the transfer.
+Revocation reports whether copy-back and PTE restoration have completed;
+another continuation copying is not completion. A leave that yielded before
+copy-back began must defer provider restoration and retain the VM hold when
+revocation is incomplete, even after park timeout. Mode changes own a separate
+pin, never a saved copy of the display worker's busy flag. Existing poll/leave
+continuations recheck that pin after yielding; return resumes on a later poll
+once the copy and mode-change continuation finish.
+
 **Locked compatibility mode.** `dosvm_config.memory_locked`, set per game by
 the launcher (`/system/settings/dos-game-N.cfg` line `DOS memory=locked`,
 F12 key 4, `--dos-memory=`) and passed in CREATE `launch.memory = 1`, keeps
@@ -1726,6 +1745,25 @@ called its protected-mode SetWindow pointer, still NULL, after three failed
   PTE restore reopens it). The window is closed before the address space is
   destroyed (`dosvm_vga_sync` also runs in a linear full screen when the bank
   window is open), so the aliased buffer frames are freed once.
+- With the 101-dosvid2 direct LFB lease (`display-driver-model.md`, native
+  full screen borrows the provider's LFB for the buffer's PTEs): only a
+  linear (D14) mode takes the lease (`dosvm_vbe_direct_enter` refuses a
+  windowed mode or an open bank window); a windowed mode in native full
+  screen keeps the RAM buffer, its bank window and the copy flush, because
+  the provider exposes no bank register and the window may never alias the
+  borrowed aperture (`dosvm_vbe_frame` returns no frame while a lease
+  exists). A 4F02h in full screen first closes the bank window
+  (`dosvm_vga_sync`), then revokes any lease (copy-back into the RAM buffer
+  before a clear), so the buffer the window or the presenter uses next is
+  always the authoritative RAM copy. Kernel accesses translate A000h to the
+  bank first and then, for a leased linear buffer, go to the exported LFB
+  alias; the planar string fast path stays off in both cases.
+- A VGA mode set (INT 10h AH=00h, or 4F02h with a VGA mode) harvests and
+  closes an open bank window before it clears the VBE state (Codex review
+  of 22c606fa5, P2): in a VBE full screen nothing else touches A0000h (the
+  full-screen transport leaves it to the VBE path), so the window would
+  otherwise keep aliasing the old bank and native mode 13h stores would
+  land in the VBE buffer after the return.
 - `WAR2.BAT` starts `WAR2.EXE` directly; `UVCONFIG.EXE` stays installed.
 - The QEMU full-screen probe (`vm-fullscreen`, `f3_probes_video.c`) records
   `case=vbe_window` (004Fh, entry stays windowed, `active=0`) instead of the
@@ -1751,8 +1789,12 @@ client (DAC entries, registers kept), windowed set, bank
 aliasing and switching, window and kernel stores presented with the DAC
 palette, the PTE-restore retry, DPMI 0800h without a provider, the linear
 model and AH=03h, the VGA mode return clearing the planes, teardown with the
-window open (the fake PMM rejects a double free), and the native linear
-full-screen flush of window stores. `test_fullscreen_vbe` and
+window open (the fake PMM rejects a double free), the native linear
+full-screen flush of window stores, the direct LFB lease taken only by a
+linear mode with its copy-back visible through the bank window, and a VGA
+mode set in a VBE full screen closing the bank window (the review case:
+banked mode, native full screen, reopened bank, mode 13h, return, then a
+native mode 13h store reaches the VGA model, not the VBE buffer). `test_fullscreen_vbe` and
 `test_video_bios_ports` expectations follow the new attributes and
 availability. `tests/host/dos/run_dos_extenders.sh` checks the demo's VESA
 calls (4F00h, 4F01h 101h, 4F02h 0101h, 4F0Ah, at least five bank switches)

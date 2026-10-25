@@ -99,6 +99,33 @@ BEGIN
   EDITTEXT 1000, 0, 12, 236, 56, 0x00A00844
   AUTOCHECKBOX "I &accept the terms in the License Agreement", 1034, 0, 74, 236, 10, 0x00010000
 END
+// q3exec2: two pages of a MindVision Installer VISE 3.x wizard, as in
+// vise32ex.dll of the Quake III Arena demo installer (templates 10205, the
+// Welcome page, and 12029, the license page): the same styles, positions
+// and control layout. Each page is its own modal dialog owned by the
+// installer's full-screen background window.
+140 DIALOG 0, 0, 368, 205
+STYLE 0x90C800C4
+FONT 8, "MS Sans Serif"
+BEGIN
+  CONTROL "", 901, "Static", 0x50020080, 117, 10, 239, 160
+  CONTROL "&Next >", 1, "Button", 0x50030001, 248, 185, 50, 14
+  CONTROL "Cancel", 2, "Button", 0x50010000, 306, 185, 50, 14
+  CONTROL "< &Back", 12, "Button", 0x50010000, 198, 185, 50, 14
+  CONTROL "", 1300, "Static", 0x50021007, 12, 178, 344, 1
+  CONTROL "", 1001, "Static", 0x50021008, 12, 10, 92, 160
+END
+141 DIALOG 104, 74, 368, 205
+STYLE 0x80C800C0
+FONT 8, "MS Sans Serif"
+BEGIN
+  CONTROL "&Next >", 1, "Button", 0x50030001, 248, 185, 50, 14
+  CONTROL "Cancel", 2, "Button", 0x50030000, 306, 185, 50, 14
+  CONTROL "", 1001, "Static", 0x50001008, 12, 10, 92, 160
+  CONTROL "", 1200, "Edit", 0x50A20804, 117, 10, 239, 161
+  CONTROL "", 1300, "Static", 0x50021007, 12, 178, 344, 1
+  CONTROL "< &Back", 12, "Button", 0x50030000, 198, 185, 50, 14
+END
 200 MENU
 BEGIN
   POPUP "&File"

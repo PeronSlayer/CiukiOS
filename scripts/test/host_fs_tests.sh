@@ -16,6 +16,21 @@ missing=0
 for tool in clang ar python3 mkfs.fat fsck.fat mcopy mmd mdir mtype mdel nm nasm; do
     if ! command -v "$tool" >/dev/null; then printf 'MISSING TOOL: %s\n' "$tool"; missing=1; fi
 done
+# The RAM logger's production pacing/retention model uses this runner's
+# standard filesystem sanitizer policy; no disk/image fixture is needed.
+if [[ ${1:-} == --bootlog ]]; then
+    command -v clang >/dev/null || exit 1
+    clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+        -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread -Isrc/kernel/include \
+        tests/host/bootlog_test.c -o build/host/fs/bootlog_test
+    build/host/fs/bootlog_test
+    clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+        -ffunction-sections -fdata-sections -Wl,--gc-sections \
+        -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread -Isrc/kernel/include \
+        tests/host/bootlog_statistics_test.c src/kernel/lib/fmt.c -o build/host/fs/bootlog_statistics_test
+    build/host/fs/bootlog_statistics_test
+    exit 0
+fi
 # Focused entries keep the filesystem runner lock and sanitizer policy.
 run_startup_image_tests() {
     ((missing == 0)) || exit 1
@@ -32,6 +47,15 @@ run_startup_image_tests() {
     nm --defined-only build/host/fs/startup_image_test > build/host/fs/startup-image-symbols.txt
     rm build/host/fs/startup_image_test
 }
+if [[ ${1:-} == --launch-replay ]]; then
+    clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+        -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+        -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c \
+        tests/host/fs/test_launch_replay.c -o build/host/fs/test_launch_replay
+    build/host/fs/test_launch_replay
+    rm build/host/fs/test_launch_replay
+    exit 0
+fi
 if [[ ${1:-} == --startup-image ]]; then
     run_startup_image_tests
     exit 0
@@ -248,6 +272,14 @@ clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c \
     tests/host/fs/test_cache.c -o build/host/fs/test_cache
 build/host/fs/test_cache
+# fx-launch: the T23 trial 2ca3b0b6 starts replayed on the production cache
+# (C4 sizing from the trial's ledger, PATA timing from verbose trials).
+clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
+    -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
+    -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c \
+    tests/host/fs/test_launch_replay.c -o build/host/fs/test_launch_replay
+build/host/fs/test_launch_replay
+rm build/host/fs/test_launch_replay
 clang -DFS_HOST -D_POSIX_C_SOURCE=200809L -std=c17 -Wall -Wextra -Werror \
     -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
     -Isrc/kernel/include -Isrc/kernel/fs src/kernel/fs/fs_port.c src/kernel/fs/blkreq.c src/kernel/fs/cache.c \

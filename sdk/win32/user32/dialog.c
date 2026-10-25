@@ -817,8 +817,15 @@ intptr_t u32_dialog_box(HINSTANCE instance, const void *data, DWORD size,
                         HWND parent, DLGPROC proc, LPARAM param, BOOL wide) {
   HWND owner = top_owner(parent);
   HWND h = u32_dialog_from(instance, data, size, owner, proc, param, 1, wide);
-  if (!h)
+  if (!h) {
+    /* q3exec2: installers take any result but Cancel and Back as Next
+     * (Installer VISE), so a page that cannot be created is skipped
+     * silently; record the first one on the serial log. */
+    static volatile uint32_t once;
+    if (!__atomic_exchange_n(&once, 1, __ATOMIC_RELAXED))
+      w32_diag("warning", "user32.dll", "dialogbox-create-failed");
     return -1;
+  }
   return u32_dialog_run(h, owner);
 }
 intptr_t W32API DialogBoxIndirectParamA(HINSTANCE instance,

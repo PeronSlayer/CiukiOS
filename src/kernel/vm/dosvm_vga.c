@@ -467,6 +467,12 @@ int dosvm_vga_bios(struct dosvm *v, struct v86_frame *f)
     int handled = cvbios_int10(&v->video_bios, &r);
     v->video_bios_active = false;
     if (!function && handled) {
+        /* war2vbe review (P2): harvest and close the VBE bank window before
+         * the VBE state goes. In a linear (VBE) full screen video_direct()
+         * below returns early and neither the mode-change revocation nor
+         * the full-screen exit touches A0000h (map_aperture leaves the VBE
+         * transport alone), so A0000h would keep aliasing the old bank. */
+        if (v->video_direct == VIDEO_BANK) dosvm_vga_sync(v, true);
         v->vbe_mode=0; v->vbe_linear=false; v->vbe_bank=0; v->video_presented=false;
         if (hardware_mode && linear_mode) dosvm_fullscreen_mode_changed(v);
     }
@@ -647,6 +653,10 @@ static int video_string_run(void *arg, uint32_t source, uint32_t dest, unsigned 
     /* war2vbe: a windowed VBE mode's window is the VBE buffer, not the
      * planes; its rare emulated strings go bytewise through the bus. */
     if (v->vbe_mode && !v->vbe_linear) return 0;
+    /* The fast plane copier accepts RAM source pointers only. A VBE owner
+     * can still address the virtual VGA aperture; use the ordinary monitor
+     * transfer so a borrowed LFB source never becomes a RAM direct-map read. */
+    if (v->vbe_direct.pages) return 0;
     unsigned bytes = count * size, tail = (count - 1) * size;
     uint32_t low = back ? dest - tail : dest, src_low = back ? source - tail : source;
     if (low < 0xA0000 || low > 0xB0000 || bytes > 0xB0000 - low ||
@@ -1428,7 +1438,8 @@ int dosvm_frame_capture(struct dosvm *v, uint64_t tick, struct dosvm_frame *out,
     struct ciuki_rect damage;
     sha256_init(&sink.sha);
     v->video_presented = false;                   /* every row, borders included */
-    int e = dosvm_vga_present(v, hash_row, &sink, tick, &damage);
+    int e = v->vbe_mode ? dosvm_vbe_capture(v,hash_row,&sink,tick,&damage) :
+        dosvm_vga_present(v, hash_row, &sink, tick, &damage);
     v->video_presented = false;                   /* a window redraws its surface whole */
     if (e < 0) return e;
     if (sink.next != DOSVM_VIDEO_HEIGHT) return -EAGAIN; /* scanout changed mid-frame */

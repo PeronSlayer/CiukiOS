@@ -1230,6 +1230,26 @@ existing bounded transport/stop protocol; it cannot be physically preempted.
 Host random-read evidence establishes absence of queued speculative delay,
 not an unmeasured hardware latency bound.
 
+### fx-launch amendment: the sector index follows the cache size (2026-10-25)
+
+F1 indexed every slot in 256 fixed buckets, sized for its 8 MiB cache
+(13,440 slots, about 52 per chain). C4 growth to 32 MiB kept that table:
+the T23 trial of main 60d029c9 held 7,161 data pages (57,288 slots, about
+224 per chain) for its whole session, and a missing sector cost about 600
+descriptor visits in `cache_read_run` (three lookups and the victim's
+unhash), a hit up to a chain. The index now has at least one bucket per two
+slots the cache may hold (power of two, minimum the 256 inline buckets), in
+whole NORMAL pages charged to `MM_CACHE_META` outside the C4 byte budget;
+`cache_init` sizes it for its slots and `cache_adaptive_enable` for the
+ceiling, so growth never outruns it, and a failed allocation keeps the
+current table. The 128 sectors of an aligned 64 KiB run take distinct
+buckets; runs and devices are mixed multiplicatively. Lookup cost is the
+only change: sizes, LRU order, read-ahead, dirty policy and reclaim are
+untouched. `cache_stats` reports buckets, pages, lookups and probes. Windows
+98 documents VCACHE's lookup only by service name; no Windows constant is
+involved. Evidence: `tests/host/fs/test_launch_replay.c`,
+`docs/validation/fx-launch-latency-2026-10-25.md`.
+
 ### F5-06 Amendment 1 consumers of common locks
 
 Win32 native descriptions now retain the F1-84 common identity and register

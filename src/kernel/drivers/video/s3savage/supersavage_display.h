@@ -15,4 +15,6 @@ int supersavage_display_end(void);
 void supersavage_display_complete(bool recovered);
 /* CPU-only packed writes under the caller's quiesced framebuffer lease. */
 int supersavage_display_write(uint32_t offset, const void *, uint32_t bytes);
+struct display_lfb;
+int supersavage_display_lfb(struct display_lfb *);
 #endif

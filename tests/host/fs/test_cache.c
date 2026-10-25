@@ -243,7 +243,7 @@ static void concurrent_fill(bool fail,unsigned run,unsigned cancel) {
     uint32_t start=fs_now_ms(); bool waiting=false;
     while (!waiting && fs_now_ms()-start<2000) {
         fs_lock_take(&c.lock);
-        for (unsigned i=0;i<256;i++) for (struct cache_block *x=c.hash[i];x;x=x->hash_next) if (x->waiters) waiting=true;
+        for (unsigned i=0;i<cache_hash_buckets(&c);i++) for (struct cache_block *x=*cache_hash_bucket(&c,i);x;x=x->hash_next) if (x->waiters) waiting=true;
         for (struct cache_fill *f=c.fills;f;f=f->next) if (f->waiters) waiting=true;
         fs_lock_drop(&c.lock);
         struct timespec t={0,1000000}; nanosleep(&t,0);

@@ -467,6 +467,15 @@ static bool take_drain(void)
 }
 static void drop_drain(void)
 { uint32_t f=lock_ram(); draining=false; unlock_ram(f); }
+/* A pressure drain must account and yield after each aligned batch, even
+ * when no timer tick has requested preemption. All VFS and RAM locks have
+ * been released here; the drain reservation still serializes its buffer. */
+#ifdef FS_HOST
+void bootlog_host_yield(void) __attribute__((weak));
+static void drain_yield(void) { if (bootlog_host_yield) bootlog_host_yield(); }
+#else
+static void drain_yield(void) { task_yield(); }
+#endif
 bool bootlog_due(uint32_t now)
 {
     uint32_t f = lock_ram();
@@ -518,9 +527,7 @@ int bootlog_drain(void)
         bool again=!e && !commit && pressure && pending;
         unlock_ram(f);
         if (!again || (uint32_t)(fs_now_ms()-turn_start)>=BOOTLOG_TURN_MS) break;
-#ifndef FS_HOST
-        kpreempt_point();
-#endif
+        drain_yield();
     }
     last_drain = fs_now_ms(); drain_started = true;
     bool publish = !e && stats.active && metadata_dirty &&

@@ -442,28 +442,35 @@ static void vfs_close_retirement(const char *path) {
 static void global_reclaim_hook(void) {
     struct block_cache c; struct disk m; struct cache_stream stream={0};
     init_disk(&m); CHECK(!cache_init(&c,8*MIB) && !cache_adaptive_enable(&c,28672));
+    /* fx-launch: the index is sized to the cache, so a 256-sector stride now
+     * gives chains of one or two. A stride of 1/32 of the buckets rebuilds the
+     * F1 geometry this case was written for (256 chains of about 60): the
+     * scanner's bounded continuation must still handle long removals. */
+    const uint64_t stride=cache_hash_buckets(&c)/32;
+    CHECK(stride>=512 && !(stride&(stride-1)));
+    m.dev.capacity=stride*(c.data_pages+1)+65536;
     uint8_t bytes[4096];
-    for (unsigned i=0;i<c.data_pages-6;i++) CHECK(!cache_read_run(&c,&m.dev,i*256,8,bytes));
+    for (unsigned i=0;i<c.data_pages-6;i++) CHECK(!cache_read_run(&c,&m.dev,i*stride,8,bytes));
     stream_read(&c,&m,&stream,64*1024,4096); stream_read(&c,&m,&stream,64*1024+4096,4096);
     CHECK(cache_prefetch_tick(&c) && c.speculative_bytes==16384);
     void *dirty_page=0,*pin_page=0,*busy_page=0,*clean_page=0;
-    CHECK(!cache_write(&c,&m.dev,(c.data_pages-10)*256,bytes));
-    struct cache_block *dirty=block(&c,&m.dev,(c.data_pages-10)*256,&dirty_page);
-    struct cache_block *pin=block(&c,&m.dev,(c.data_pages-20)*256,&pin_page);
-    struct cache_block *busy=block(&c,&m.dev,(c.data_pages-30)*256,&busy_page);
-    struct cache_block *clean_block=block(&c,&m.dev,(c.data_pages-40)*256,&clean_page);
+    CHECK(!cache_write(&c,&m.dev,(c.data_pages-10)*stride,bytes));
+    struct cache_block *dirty=block(&c,&m.dev,(c.data_pages-10)*stride,&dirty_page);
+    struct cache_block *pin=block(&c,&m.dev,(c.data_pages-20)*stride,&pin_page);
+    struct cache_block *busy=block(&c,&m.dev,(c.data_pages-30)*stride,&busy_page);
+    struct cache_block *clean_block=block(&c,&m.dev,(c.data_pages-40)*stride,&clean_page);
     CHECK(dirty && pin && busy && clean_block && clean_page!=c.inline_page.data);
     pinned=(uint32_t)((uintptr_t)pin_page>>12); busy->busy=true;
     /* Reverse valid bucket chains to model the adverse insertion order;
      * the scanner must continue long removals without a long callback. */
-    for (unsigned h=0;h<256;h++) {
-        struct cache_block *at=c.hash[h],*prev=0;
+    for (unsigned h=0;h<cache_hash_buckets(&c);h++) {
+        struct cache_block **head=cache_hash_bucket(&c,h),*at=*head,*prev=0;
         while (at) { struct cache_block *next=at->hash_next; at->hash_next=prev; prev=at; at=next; }
-        c.hash[h]=prev;
+        *head=prev;
     }
     uint32_t data=c.data_pages,meta=c.meta_pages,reclaimed=0,blocked_dirty=0,blocked_pin=0,inflight=0;
     uint64_t writes=m.writes,commands=m.commands,max_us=0;
-    CHECK(!cache_read(&c,&m.dev,(c.data_pages-40)*256,bytes) && !cache_read(&c,&m.dev,(c.data_pages-40)*256,bytes) && m.commands==commands);
+    CHECK(!cache_read(&c,&m.dev,(c.data_pages-40)*stride,bytes) && !cache_read(&c,&m.dev,(c.data_pages-40)*stride,bytes) && m.commands==commands);
     struct reclaim_result r; bool wrote_during_trim=false;
     pin_transition=true; cache_reclaim_step(&c,true,&r);
     CHECK(r.pinned && !r.reclaimed && c.data_pages==data);

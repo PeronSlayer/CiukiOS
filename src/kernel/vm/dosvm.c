@@ -638,6 +638,13 @@ static int transfer(struct dosvm *v, uint32_t linear, void *buffer, unsigned byt
             if (write) dosvm_vbe_mark(v, (window - v->vbe_buffer.base) / PAGE_SIZE, 1);
             b += n; linear += n; bytes -= n; continue;
         }
+        int direct=v->vbe_direct.pages ? dosvm_vbe_direct_transfer(v,linear,b,n,write) : 0;
+        if (direct<0) return direct;
+        if (direct) {
+            b+=n; linear+=n; bytes-=n;
+            if (bytes && copy_preemptible(v)) kpreempt_point();
+            continue;
+        }
         if (linear >= 0xA0000 && linear < 0xC0000) {
             /* fx-22: only the adapter's owner continuation or the switch
              * service touches the physical aperture; its writes are dirty. */
@@ -672,6 +679,16 @@ static int transfer(struct dosvm *v, uint32_t linear, void *buffer, unsigned byt
             phys = (uint32_t)r;
         }
         if (!phys) return -EFAULT;
+        /* Pool resolution can yield to the display worker. Recheck after
+         * that point before borrowing RAM; entry may now have mapped LFB.
+         * Kernel code is preempted only at explicit service points. */
+        direct=v->vbe_direct.pages ? dosvm_vbe_direct_transfer(v,linear,b,n,write) : 0;
+        if (direct<0) return direct;
+        if (direct) {
+            b+=n; linear+=n; bytes-=n;
+            if (bytes && copy_preemptible(v)) kpreempt_point();
+            continue;
+        }
         if (write) memcpy(P2V(phys), b, n);
         else memcpy(b, P2V(phys), n);
         b += n; linear += n; bytes -= n;
@@ -692,6 +709,12 @@ static void *monitor_memory(void *arg, uint32_t linear, unsigned n, bool write)
      * use monitor_copy; this pointer is solely its validation token. The
      * fetch precedes the instruction's effects: a pool alias may resolve. */
     if (!dosvm_range(v, linear, n, write)) return 0;
+    if (v->vbe_direct.pages && linear-v->vbe_direct.base<v->vbe_direct.pages*PAGE_SIZE) {
+        /* Never lend an MMIO pointer across a possible ownership change.
+         * Only byte fetches dereference this token; actual data transfers
+         * use monitor_copy's per-page, IRQ-excluded provider access. */
+        return dosvm_vbe_direct_transfer(v,linear,&v->vbe_direct.fetch,1,false)==1 ? &v->vbe_direct.fetch : 0;
+    }
     if (linear >= 0xA0000 && linear < 0xC0000) return P2V(as_lookup(&v->as, linear, 0));
     int64_t phys = guest_frame(v, linear, write, true);
     return phys < 0 ? 0 : P2V((uint32_t)phys);

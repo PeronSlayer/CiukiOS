@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <unistd.h>
 #include "../../src/kernel/core/blackbox.c"
 #define CHECK(x) do { if (!(x)) { fprintf(stderr,"blackbox:%d %s\n",__LINE__,#x);exit(1); } } while (0)
 static uint8_t disk[512*400];
@@ -51,8 +53,35 @@ static void overlapping_checkpoint(void) {
     blackbox_reset();bind();size_t length;const char *s=blackbox_replay(&length);
     CHECK(length && strstr(s,"worker record") && strstr(s,"shutdown marker"));
 }
+/* T23 2ca3b0b6 review P1: the stall watchdog requests persistence with a
+ * stalled executor (this device's write blocks). Every request returns at
+ * once while the flusher is inside the blocked write; the records reach the
+ * sectors after the device resumes. A blocking request would hang here. */
+static void async_flush_request(void) {
+    setup();bind();CHECK(!blackbox_flusher_start());
+    block_writer=true;entered=false;
+    blackbox_capture("[storage] writer_stall ms=5000\n",31);
+    struct timespec before,after;clock_gettime(CLOCK_MONOTONIC,&before);
+    blackbox_flush_request();
+    pthread_mutex_lock(&transport);while (!entered) pthread_cond_wait(&changed,&transport);pthread_mutex_unlock(&transport);
+    blackbox_capture("[storage] writer_stall ms=15000\n",32);
+    blackbox_flush_request();blackbox_flush_request();
+    clock_gettime(CLOCK_MONOTONIC,&after);
+    long long ms=(after.tv_sec-before.tv_sec)*1000LL+(after.tv_nsec-before.tv_nsec)/1000000;
+    CHECK(block_writer && !blackbox_flush_served() && ms<1000);
+    pthread_mutex_lock(&transport);block_writer=false;pthread_cond_broadcast(&changed);pthread_mutex_unlock(&transport);
+    for (unsigned i=0;blackbox_flush_served()!=3;i++) {
+        CHECK(i<5000);const struct timespec pause={0,1000000};nanosleep(&pause,NULL);
+    }
+    blackbox_flusher_stop();
+    blackbox_reset();bind();size_t length;const char *s=blackbox_replay(&length);
+    CHECK(length && strstr(s,"writer_stall ms=5000") && strstr(s,"writer_stall ms=15000"));
+    printf("PASS blackbox async flush: three requests returned in %lld ms beside a blocked device write, persisted after it resumed\n",ms);
+}
 int main(void) {
+    alarm(30); /* a request that waits for the blocked device fails, never hangs */
     overlapping_checkpoint();
+    async_flush_request();
     setup();CHECK(!blackbox_available());bind();CHECK(blackbox_available() && !writes && !flushes);
     blackbox_capture("last before lock\n",17);CHECK(!blackbox_flush());CHECK(writes==1 && flushes==1);
     dev.quarantined=true;CHECK(!blackbox_available());blackbox_capture("device stopped\n",15);CHECK(blackbox_flush()==-FS_EAGAIN);

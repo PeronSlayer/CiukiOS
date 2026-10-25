@@ -10,7 +10,9 @@
  * buffer, its dirty pages
  * reaching the window presenter with the VM's DAC palette, kernel stores
  * through the window, the VGA BIOS mode return, teardown with the window
- * open, and the native full-screen flush of a windowed mode. Included by
+ * open, the native full-screen flush of a windowed mode, and (101-dosvid2
+ * merge) the direct LFB lease taken by linear modes only, its copy-back
+ * visible through the bank window after a windowed mode set. Included by
  * dosvm_test.c after dosvm_fullscreen_test.inc. SPDX-License-Identifier: GPL-2.0-only */
 static void vbe_window_store(struct dosvm *v, unsigned offset, uint8_t byte)
 {
@@ -247,6 +249,65 @@ static void test_vbe_window(void)
     dosvm_fullscreen_poll(); CHECK(fs_linear[2 * 65536 + 3] == 0x24);
     CHECK(!dosvm_fullscreen_leave(key, false) && !v->fullscreen && !fs_display);
     vbe_window_maps(v, 2);
+    /* 101-dosvid2 direct LFB lease (merge 2026-10-25): a windowed mode never
+     * borrows the provider's LFB; it keeps the RAM buffer, the bank window
+     * and the copy flush. */
+    fs_direct_available = true; fs_direct_phys = 0x300000; fs_direct_cache = 0; fs_expected_owner = v;
+    CHECK(!dosvm_fullscreen_enter(key) && v->fullscreen && !v->vbe_direct.pages && !v->video_direct);
+    CHECK(dosvm_vga_retry(v, 0xA0000, 0x30000, false));
+    vbe_window_maps(v, 2);
+    vbe_window_store(v, 7, 0x55);
+    dosvm_fullscreen_poll(); CHECK(fs_linear[2 * 65536 + 7] == 0x55 && !v->vbe_direct.pages);
+    CHECK(!dosvm_fullscreen_leave(key, false) && !v->fullscreen);
+    /* The linear model (D14, memory kept) takes the lease; no bank window. */
+    f = vf(0x4F02, 0xC101, 0, 0);
+    CHECK(!dosvm_vga_bios(v, &f) && (uint16_t)f.tf.eax == 0x004F && v->vbe_linear && !v->video_direct);
+    CHECK(!dosvm_fullscreen_enter(key) && v->fullscreen && v->vbe_direct.pages);
+    CHECK(!dosvm_vbe_frame(v, 0) && !dosvm_vga_retry(v, 0xA0000, 0x30000, false));
+    f = vf(0x4F05, 0, 0, 1); CHECK(!dosvm_vga_bios(v, &f) && (uint16_t)f.tf.eax == 0x034F);
+    *(uint8_t *)P2V(fs_direct_phys + 2 * 65536 + 9) = 0x66;   /* a guest store through the lease */
+    /* A windowed mode set in full screen (D15): the lease is revoked with
+     * its copy-back before the mode changes, the VM returns to the window,
+     * and the bank window then shows the RAM copy of the leased frame. */
+    f = vf(0x4F02, 0x8101, 0, 0);
+    CHECK(!dosvm_vga_bios(v, &f) && (uint16_t)f.tf.eax == 0x004F && !v->vbe_linear);
+    CHECK(!v->vbe_direct.pages && !v->vbe_direct.copying && v->fullscreen_hold && !v->video_direct);
+    dosvm_fullscreen_poll();
+    CHECK(!v->fullscreen && !v->fullscreen_hold && !fs_display);
+    CHECK(dosvm_vga_retry(v, 0xA0000, 0x30000, false));
+    vbe_window_maps(v, 0);
+    f = vf(0x4F05, 0, 0, 2); CHECK(!dosvm_vga_bios(v, &f) && (uint16_t)f.tf.eax == 0x004F);
+    vbe_window_maps(v, 2);
+    uint8_t leased = 0; CHECK(!dosvm_read(v, 0xA0009, &leased, 1) && leased == 0x66);
+    CHECK(!dosvm_read(v, 0xA0007, &leased, 1) && leased == 0x55);
+    fs_direct_available = false; fs_expected_owner = 0;
+    /* Review P2: banked mode -> native full screen -> reopened bank -> mode
+     * 13h -> full-screen return. The VGA mode set closes the bank window
+     * itself (nothing else touches A0000h in a VBE full screen), so a native
+     * mode 13h store after the return faults into the VGA path instead of
+     * landing in the old VBE bank. */
+    CHECK(!dosvm_fullscreen_enter(key) && v->fullscreen && !v->video_direct);
+    CHECK(dosvm_vga_retry(v, 0xA0000, 0x30000, false));
+    vbe_window_maps(v, 2);
+    vbe_window_store(v, 0x20, 0x5E);                             /* a pending bank store */
+    uint8_t banked = 0; CHECK(!dosvm_read(v, v->vbe_buffer.base + 2 * 65536 + 5, &banked, 1));
+    int10(v, 0x13, 0, 0, 0);
+    CHECK(!v->vbe_mode && v->video_direct != VIDEO_BANK && v->fullscreen_hold);
+    for (unsigned page = 0; page < 16; page++) {
+        uint32_t pte = *window_pte(v, 0xA0000 + page * PAGE_SIZE);
+        CHECK(!(pte & PTE_U) && (pte & ~0xFFFu) == v->frames[0xA0 + page]);
+    }
+    CHECK(*vbe_pte(v, 32) & PTE_D);                              /* the bank store was harvested */
+    dosvm_fullscreen_poll();
+    CHECK(!v->fullscreen && !v->fullscreen_hold && !fs_display);
+    CHECK(!(*window_pte(v, 0xA0000) & PTE_U) && (*window_pte(v, 0xA0000) & ~0xFFFu) == v->frames[0xA0]);
+    CHECK(dosvm_vga_retry(v, 0xA0005, 0x30000, false) && v->video_direct == VIDEO_LINEAR);
+    linear_store(v, 5, 0x3C);                                    /* native mode 13h store */
+    dosvm_vga_sync(v, true);
+    CHECK(cvga_peek_vram(&v->vga, 0xA0005) == 0x3C);
+    uint8_t unchanged = 0;
+    CHECK(!dosvm_read(v, v->vbe_buffer.base + 2 * 65536 + 5, &unchanged, 1) && unchanged == banked);
+    CHECK(!dosvm_read(v, v->vbe_buffer.base + 2 * 65536 + 0x20, &unchanged, 1) && unchanged == 0x5E);
     struct ciuki_dosvm_command close = command_for(key.id, key.generation);
     CHECK(!finish_test_vm(&close, sizeof(close))); empty();
 #ifdef CIUKI_DOSVM_GUEST_CPU
@@ -254,5 +315,7 @@ static void test_vbe_window(void)
 #endif
     fs_vbe_available = available;
     puts("PASS war2vbe windowed VBE without a native provider: 4F00h/4F01h/4F02h/4F03h/4F05h, WinFuncPtr stub, bank aliasing, "
-         "window and kernel stores presented with the DAC palette, linear/VGA returns, teardown, native full-screen flush");
+         "window and kernel stores presented with the DAC palette, linear/VGA returns, teardown, native full-screen flush, "
+         "direct LFB lease for linear modes only with its copy-back seen through the bank window, "
+         "VGA mode set in a VBE full screen closes the bank window");
 }

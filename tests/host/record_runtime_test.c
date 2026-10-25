@@ -6,6 +6,7 @@
 #define CIUKI_CPU_H
 #include <ciuki/kernel.h>
 #include <ciuki/arch.h>
+#include <ciuki/cpustat.h>
 static uint32_t cpu_flags = 0x200;
 static uint32_t irq_save(void) { uint32_t f = cpu_flags; cpu_flags = 0; return f; }
 static void irq_restore(uint32_t f) { cpu_flags = f; }
@@ -16,6 +17,8 @@ struct ciuki_boot_info g_boot;
 static char output[8192];
 static unsigned ordinary_writes,console_writes,ring_captures,verbose_captures;
 static unsigned blackbox_captures;
+static bool diagnostic_window;
+bool cpu_diagnostic_active(void) { return diagnostic_window; }
 static unsigned protected_captures;
 static char last_protected[256];
 static char last_ring[256], last_blackbox[256];
@@ -44,6 +47,7 @@ void blackbox_capture(const char *s, size_t n)
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL %d: %s\n", __LINE__, #c); return 1; } } while (0)
 int main(void)
 {
+    setvbuf(stdout,NULL,_IONBF,0);
     unsigned initial_ring=ring_captures;
     rec_diag_disk_bootlog("vm-window","group=vm_perf_cpu ms=5000"); CHECK(ring_captures==initial_ring+1);
     g_boot.flags=CBI_F_VERBOSE;
@@ -113,9 +117,16 @@ int main(void)
     }
     rec_set_run("87654321"); CHECK(!rec_active());
     unsigned ordinary=ordinary_writes,screen=console_writes,ring=ring_captures;
+    g_boot.flags=CBI_F_VERBOSE;
     output[0]=0;klog_periodic("[cpu] window_ms=%u idle=%u top=%s",2000u,900u,"desktop#4:100");
     CHECK(!strcmp(output,"[cpu] window_ms=2000 idle=900 top=desktop#4:100\n"));
     CHECK(ordinary_writes==ordinary+1 && console_writes==screen+1 && ring_captures==ring+1);
+    ordinary=ordinary_writes;screen=console_writes;ring=ring_captures;g_boot.flags=0;
+    klog_periodic("[kernel] smi count=1 max_us=2117");
+    klog_periodic("[ec] thinkpad keys nvram_polls=20");
+    CHECK(ordinary_writes==ordinary && console_writes==screen && ring_captures==ring);
+    diagnostic_window=true;klog_periodic("[cpu] forced watchdog window");diagnostic_window=false;
+    CHECK(ring_captures==ring+1);
     /* No UART policy bit or probe BEGIN is needed for a loader failure to
      * enter the protected disk class; no pointer survives loader reclaim. */
     g_boot.flags=0;

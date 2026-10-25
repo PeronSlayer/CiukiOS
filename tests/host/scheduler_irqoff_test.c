@@ -11,7 +11,13 @@
 static uint64_t rdtsc(void) { return cycles; }
 static void hlt(void) { abort(); }
 bool g_cpu_tsc=true;
+/* These are separate translation units in the kernel. Keep their private
+ * counters separate in this combined fixture too. */
+#define firmware_max timing_firmware_max
+#define firmware_window timing_firmware_window
 #include "latency_timing.inc"
+#undef firmware_window
+#undef firmware_max
 #undef timing_snapshot
 /* f1-94: every section of 1 ms or more reaches the SMI attribution. */
 static struct smi_section offered; static unsigned offers;
@@ -84,7 +90,10 @@ static void firmware_credit_tests(void)
     timing_begin_hook=timing_end_hook=0;
     puts("PASS f2-96 firmware credit: bounded IF-clear gaps (after and before the switch charge) and late PIT edges with IF set leave the refill budget; resumed-caller gaps, V86 frames and IF-clear delays are still charged; firmware_credit record");
 }
-int main(void) {
+#ifndef IRQOFF_MAIN
+#define IRQOFF_MAIN main
+#endif
+int IRQOFF_MAIN(void) {
     reset(); timing_begin_hook=timing_crit_begin; timing_end_hook=timing_crit_end;
     flags=0; rq_push(&normal); fpu_cost=1600;
     schedule();

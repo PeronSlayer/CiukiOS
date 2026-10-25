@@ -427,7 +427,9 @@ BOOL u32_destroy(struct u32_window *w, UINT mode) {
     u32_free(p);
   }
   /* At process detach the desktop connection is closed next, which drops
-   * every window of the connection in one step. */
+   * every window of the connection in one step. Pending frame updates of a
+   * closing window are discarded (u32_flush skips destroying windows). */
+  w->damage.n = 0;
   if (w->wire && !u32_exiting)
     u32_wire(w, DESK_CLOSE, 0, 0, -1);
   u32_backend.drop_surface(&w->surface);

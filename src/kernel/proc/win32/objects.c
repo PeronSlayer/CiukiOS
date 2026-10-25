@@ -151,14 +151,24 @@ int w32_thread_objects_init(struct proc_thread *t)
     t->w32 = s;
     return 0;
 }
+/* q3exec: a handle value is (slot + 1) * 4, from 4 to 0x4000, as on Windows
+ * 95/98 and NT, where a kernel handle is a small multiple of four indexing
+ * the process handle table and a closed handle's value is reused by the next
+ * handle created in that slot. Win16-derived code keeps HFILEs in 16-bit
+ * fields: the MindVision VISE 3.x stub of the Quake III Arena demo installer
+ * stores its _lopen/_lcreat handles in WORDs and sign-extends them (movswl)
+ * before _hread/_hwrite, so any value of 0x8000 or more names another
+ * handle. The former generation bits (generation << 14) gave every reused
+ * slot such a value. */
+static uint32_t handle_value(unsigned slot) { return (slot + 1) << 2; }
 static struct w32_handle_entry *entry(struct process *p, uint32_t h)
 {
-    if (!p->w32 || !h || (h & 3))
+    if (!p->w32 || !h || (h & 3) || h > handle_value(64 * 64 - 1))
         return 0;
-    uint32_t slot = (h >> 2) & 4095, gen = h >> 14;
+    uint32_t slot = (h >> 2) - 1;
     struct w32_handle_entry *chunk = p->w32->chunks[slot / 64];
     struct w32_handle_entry *e = chunk ? &chunk[slot % 64] : 0;
-    return e && e->object && gen && e->generation == gen ? e : 0;
+    return e && e->object ? e : 0;
 }
 struct w32_object *w32_lookup(struct proc_thread *t, uint32_t h, uint32_t type)
 {
@@ -189,8 +199,6 @@ uint32_t w32_handle_install(
             if (!p->w32 || p->w32->closing || p->state==PROC_STOPPING || p->state==PROC_ZOMBIE) {
                 w32_free(chunk,64*sizeof(*chunk));return 5;
             }
-            for (unsigned i = 0; i < 64; i++)
-                chunk[i].generation = 1;
             if (p->w32->chunks[c])
                 w32_free(chunk, 64 * sizeof(*chunk));
             else
@@ -198,9 +206,9 @@ uint32_t w32_handle_install(
         }
         for (unsigned i = 0; i < 64; i++) {
             struct w32_handle_entry *e = &p->w32->chunks[c][i];
-            if (e->object || !e->generation || e->generation > 0x3ffff)
+            if (e->object)
                 continue;
-            *h = (e->generation << 14) | ((c * 64 + i) << 2);
+            *h = handle_value(c * 64 + i);
             e->object = o;
             e->access = access;
             e->inherit = inherit;
@@ -220,7 +228,6 @@ uint32_t w32_handle_close(struct process *p, uint32_t h)
         return W32_ERROR_INVALID_HANDLE;
     struct w32_object *o = e->object;
     e->object = 0;
-    e->generation++;
     p->w32->handles--;
     w32_accounts.handles--;
     if (o->type==W32_OBJ_FILE && w32_file_handle_close) w32_file_handle_close(p,o);
@@ -249,8 +256,6 @@ uint32_t w32_handles_inherit(struct process *child, const struct process *parent
             if (!child->w32 || child->w32->closing || !parent->w32 || parent->w32->closing) {
                 w32_free(chunk,64*sizeof(*chunk));return 5;
             }
-            for (unsigned i = 0; i < 64; i++)
-                chunk[i].generation = 1;
             child->w32->chunks[c] = chunk;
         }
     for (unsigned c = 0; c < 64; c++)
@@ -641,7 +646,7 @@ void w32_process_cleanup(struct process *p)
             for (unsigned i = 0; i < 64; i++) {
                 struct w32_handle_entry *e = &p->w32->chunks[c][i];
                 if (e->object)
-                    w32_handle_close(p, (e->generation << 14) | ((c * 64 + i) << 2));
+                    w32_handle_close(p, handle_value(c * 64 + i));
             }
             w32_free(p->w32->chunks[c], 64 * sizeof(struct w32_handle_entry));
         }

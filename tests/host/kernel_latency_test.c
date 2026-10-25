@@ -73,6 +73,7 @@ static char records[4096];
 static unsigned record_bytes;
 void klog_periodic(const char *fmt,...)
 {
+    if (!strncmp(fmt,"[cpu] window_ms=",strlen("[cpu] window_ms="))) CHECK(cpu_diagnostic_active());
     va_list ap; va_start(ap,fmt);
     int n=vsnprintf(records+record_bytes,sizeof(records)-record_bytes,fmt,ap); va_end(ap);
     CHECK(n>0 && n<=240); record_bytes+=(unsigned)n;
@@ -127,6 +128,8 @@ static void reset(void)
     irq_cycles=exited_cycles=stretch_max=resched_max=0;switches=overruns=0;
     overrun_used=overrun_lost=audio_used=audio_lost=0;
     forced=threshold=resched_pending=false;record_bytes=0;records[0]=0;g_boot.flags=0;
+    automatic_window=0;
+    diagnostic_active=false;
     memset(&timing_fixture,0,sizeof(timing_fixture));
     memset(&irqoff,0,sizeof(irqoff)); memset(&irqoff_window,0,sizeof(irqoff_window)); fpu_cost=0;
     irqoff_credited=irqoff_last_end=pit_last=pit_phase=0; firmware_window=firmware_max=0; firmware_count=0; /* f2-96 */

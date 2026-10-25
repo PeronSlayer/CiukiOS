@@ -4198,6 +4198,7 @@ created with the BATCH_* formats; they cannot be mapped into user space.
 #define CIUKI_CMD_SHOW 2u
 #define CIUKI_FILTER_NEAREST 0u
 #define CIUKI_FILTER_BILINEAR 1u
+#define CIUKI_FILTER_NEAREST_EDGE 2u
 #define CIUKI_FENCE_REFUSED 0u
 #define CIUKI_FENCE_RUNNING 1u
 #define CIUKI_FENCE_SUCCEEDED 2u
@@ -4218,6 +4219,7 @@ created with the BATCH_* formats; they cannot be mapped into user space.
 #define CIUKI_CAP_BILINEAR 128u
 #define CIUKI_CAP_LINE 256u
 #define CIUKI_CAP_CURSOR_ARGB 512u
+#define CIUKI_CAP_STRETCH 1024u
 #define CIUKI_SURFACE_BATCH_RGB565 2u
 #define CIUKI_SURFACE_BATCH_BGR888 3u
 #define CIUKI_SURFACE_BATCH_XRGB8888 4u

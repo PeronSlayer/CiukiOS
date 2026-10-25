@@ -4,6 +4,8 @@
 #include "../fs/blkdev.h"
 #ifndef FS_HOST
 #include <ciuki/ata.h>
+#include <ciuki/sync.h>
+#include <ciuki/task.h>
 #endif
 #define PAYLOAD 480u
 static struct blkdev *device;
@@ -157,6 +159,81 @@ int blackbox_checkpoint(void) {
     }
     return -FS_EBUSY;
 }
+/* T23 trial 2ca3b0b6 (review P1): persistence requested from a context
+ * that must never wait for storage (the cpustat stall watchdog, whose
+ * subject is a stuck storage writer or executor). A dedicated flusher (a
+ * kernel task, a thread on the host) runs the bounded checkpoint; a request
+ * is one counter increment and a wake. The flusher may itself wait behind
+ * the stalled executor; nothing else does. */
+static uint32_t flush_requested, flush_served;
+#ifdef FS_HOST
+static pthread_mutex_t flusher_lock=PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t flusher_changed=PTHREAD_COND_INITIALIZER;
+static pthread_t flusher_thread;
+static bool flusher_live, flusher_stop;
+static void *flusher_main(void *unused) {
+    (void)unused;
+    pthread_mutex_lock(&flusher_lock);
+    for (;;) {
+        while (!flusher_stop && flush_requested==flush_served) pthread_cond_wait(&flusher_changed,&flusher_lock);
+        if (flusher_stop) break;
+        uint32_t want=flush_requested;
+        pthread_mutex_unlock(&flusher_lock);
+        (void)blackbox_checkpoint();
+        pthread_mutex_lock(&flusher_lock);
+        flush_served=want; pthread_cond_broadcast(&flusher_changed);
+    }
+    pthread_mutex_unlock(&flusher_lock); return NULL;
+}
+int blackbox_flusher_start(void) {
+    pthread_mutex_lock(&flusher_lock);
+    int e=0;
+    if (!flusher_live) { flusher_stop=false; e=pthread_create(&flusher_thread,NULL,flusher_main,NULL); flusher_live=!e; }
+    pthread_mutex_unlock(&flusher_lock); return e ? -FS_ENOMEM : 0;
+}
+void blackbox_flusher_stop(void) {
+    pthread_mutex_lock(&flusher_lock);
+    bool live=flusher_live; flusher_stop=true; flusher_live=false; pthread_cond_broadcast(&flusher_changed);
+    pthread_mutex_unlock(&flusher_lock);
+    if (live) pthread_join(flusher_thread,NULL);
+}
+void blackbox_flush_request(void) {
+    pthread_mutex_lock(&flusher_lock); flush_requested++; pthread_cond_broadcast(&flusher_changed);
+    pthread_mutex_unlock(&flusher_lock);
+}
+uint32_t blackbox_flush_served(void) {
+    pthread_mutex_lock(&flusher_lock); uint32_t served=flush_served; pthread_mutex_unlock(&flusher_lock); return served;
+}
+#else
+static struct task *flusher;
+static struct kwait flusher_wait;
+static bool flush_pending(void *arg) {
+    (void)arg; return __atomic_load_n(&flush_requested,__ATOMIC_ACQUIRE)!=flush_served;
+}
+static void flusher_main(void *arg) {
+    (void)arg;
+    for (;;) {
+        (void)kwait_wait_until(&flusher_wait,flush_pending,0,deadline_after_ms(60000));
+        uint32_t want=__atomic_load_n(&flush_requested,__ATOMIC_ACQUIRE);
+        if (want==flush_served) continue;
+        (void)blackbox_checkpoint();
+        __atomic_store_n(&flush_served,want,__ATOMIC_RELEASE);
+    }
+}
+int blackbox_flusher_start(void) {
+    if (__atomic_load_n(&flusher,__ATOMIC_ACQUIRE)) return 0;
+    kwait_init(&flusher_wait);
+    struct task *t=task_create_kernel("blackbox",flusher_main,0,P_DEVICE);
+    if (!t) return -FS_ENOMEM;
+    __atomic_store_n(&flusher,t,__ATOMIC_RELEASE); task_start(t);
+    return 0;
+}
+void blackbox_flush_request(void) {
+    __atomic_add_fetch(&flush_requested,1,__ATOMIC_RELEASE);
+    if (__atomic_load_n(&flusher,__ATOMIC_ACQUIRE)) kwait_wake_all(&flusher_wait);
+}
+uint32_t blackbox_flush_served(void) { return __atomic_load_n(&flush_served,__ATOMIC_ACQUIRE); }
+#endif
 void blackbox_panic(const char *s,size_t n) {
 #ifndef FS_HOST
     if (read_eflags()&0x200) return;

@@ -46,6 +46,7 @@ static void release(uint32_t phys, unsigned pages) { for (unsigned i = 0; i < pa
 
 int main(void)
 {
+    setvbuf(stdout,NULL,_IONBF,0);
     fresh();
     uint32_t normal = zone_normal(), dma = zone_dma();
     uint32_t normal_first=4096+descriptor_bytes/PAGE_SIZE;

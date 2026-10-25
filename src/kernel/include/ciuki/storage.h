@@ -166,6 +166,23 @@ int storage_activate_removable(struct storage *, struct blkdev *);
 unsigned storage_census_service(struct storage *, uint32_t now_ms);
 /* fx-23: name drive reservations held for 2 s or more, once per hold. */
 unsigned storage_hold_watch(struct storage *, uint32_t now_ms);
+/* T23 trial 2ca3b0b6: the boot log, the black box and the write-back all
+ * leave through the storage writer, so a writer blocked behind C: left no
+ * record. The cpustat task (no VFS) checks the writer's progress stamp:
+ * a pass older than STORAGE_STALL_MS is reported, then every
+ * STORAGE_STALL_REPEAT_MS while it lasts, with the C: owners it may be
+ * waiting for, and the black box's own flusher is asked to write its raw
+ * sectors. Diagnostic only: the poll waits for, takes and changes nothing. */
+#define STORAGE_STALL_MS 5000u
+#define STORAGE_STALL_REPEAT_MS 10000u
+bool storage_stall_due(uint32_t now_ms, uint32_t beat_ms, uint32_t *reported_ms);
+/* Two records (part 0: writer and namespace, part 1: drive C: and cache),
+ * read without locks; returns the length or 0. */
+int storage_stall_describe(const struct storage *, uint32_t now_ms, const char *stage, uint32_t age_ms,
+                           unsigned passes, const char *writer_wait, unsigned part, char *line, size_t size);
+unsigned storage_stall_poll(uint32_t now_ms); /* kernel cpustat task; 1 when reported */
+/* Called by the storage writer at each stage ("start", "idle", ..., "stop"). */
+void storage_writer_progress(struct storage *, const char *stage);
 int storage_writeback(struct storage *, uint32_t now_ms);
 int storage_shutdown(struct storage *); /* no clean mark following any error */
 void storage_destroy(struct storage *); /* quiescent host tests / failed init only */

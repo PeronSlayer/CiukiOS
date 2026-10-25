@@ -180,7 +180,11 @@ static int prepare_image(struct process *p, const struct ciuki_file *file,
                           const struct proc_strings *strings, uint64_t mask)
 {
     if(w32_refuse_image_name&&w32_refuse_image_name(p,p->name))return -ENOSYS;
-    if (w32_is_pe && w32_is_pe(file)) return w32_spawn ? w32_spawn(p, file, strings, mask) : -ENOSYS;
+    if (w32_is_pe && w32_is_pe(file)) {
+        int err = w32_spawn ? w32_spawn(p, file, strings, mask) : -ENOSYS;
+        if (!err) proc_launch_elf(p); /* image and ntdll mapped: end of the spawn stage */
+        return err;
+    }
     struct elf_image image;
     int err = elf_validate(file, &image);
     if (err)
@@ -276,8 +280,8 @@ static void spawn_cleanup(void *operation)
 
 int proc_spawn(uint32_t args_va)
 {
+    uint64_t spawn_us = proc_launch_now();
     struct process *parent = proc_current();
-    uint64_t spawn_us = proc_launch_enabled() ? proc_launch_now() : 0;
     uint64_t click_us = parent->launch_pending ? parent->launch_click_us : spawn_us;
     parent->launch_pending = false; /* even an invalid or cancelled attempt consumes BEGIN */
     struct ciuki_spawn_args a;

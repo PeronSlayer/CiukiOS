@@ -196,6 +196,16 @@ static int activation_probe(void *arg)
         if (!err && engine.cpu_safe) for (unsigned y=0;y<8;y++)
             if (memcmp(f->mapped+y*f->pitch,golden+y*ref.pitch,ref.pitch)) { err=-EIO; break; }
     }
+    if (!err) {
+        struct swdib_target target={.device=*f,.identity=f,.rights=PROT_READ|PROT_WRITE,.kind=CIUKI_TARGET_SCANOUT};
+        struct ciuki_batch_record r={.opcode=CIUKI_CMD_SCALED,.record_bytes=128,.src=1,.dst=1,
+            .sx=0,.sy=0,.sw=6,.sh=1,.dx=0,.dy=4,.dw=6,.dh=4,.filter=CIUKI_FILTER_NEAREST_EDGE};
+        struct swdib_command c={.record=&r,.src=&target,.dst=&target};
+        for (unsigned y=4;y<8;y++) memcpy(golden+y*ref.pitch,golden,6*(f->bpp/8));
+        err=engine.ops.stretch_rect(&engine,&c);
+        if (!err) for (unsigned y=0;y<8;y++)
+            if (memcmp(f->mapped+y*f->pitch,golden+y*ref.pitch,ref.pitch)) { err=-EIO; break; }
+    }
     int idle=engine.ops.sync(&engine);
     if (!idle && engine.cpu_safe) {
         for (unsigned y=0;y<8;y++) memcpy(f->mapped+y*f->pitch,saved+y*ref.pitch,ref.pitch);
