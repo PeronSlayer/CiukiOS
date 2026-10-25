@@ -52,6 +52,7 @@ void fs_request_wait(enum vfs_wait_reason,uint64_t begin,int outcome);
  * priority never outlives the hold. */
 #define FS_DEPEND_DRIVE 1u
 #define FS_DEPEND_CACHE 2u
+#define FS_DEPEND_IO 3u /* a block request's executor task (blkreq.c) */
 #ifdef FS_HOST
 #include <stdlib.h>
 #include <string.h>
@@ -176,13 +177,26 @@ static inline bool fs_lock_try_take(fs_lock *l) {
     if (free) { l->next++; l->held=true; kwait_set_owner(&l->wait,g_current); kpreempt_hold(); }
     irq_restore(f); return free;
 }
+/* T23 trial 2ca3b0b6: a task still waiting for a filesystem lock after
+ * FS_LOCK_LONG_WAIT_MS is named once per wait, with the lock's rank and
+ * drive, its owner (none while a served ticket waits to run) and tickets
+ * (fs_port.c; weak: harnesses without it skip). Diagnostic only. */
+#define FS_LOCK_LONG_WAIT_MS 5000u
+void fs_lock_long_wait(fs_lock *,uint32_t ticket,uint32_t waited_ms,bool polling) __attribute__((weak));
 static inline void fs_lock_take(fs_lock *l) {
     uint32_t f=irq_save(); struct fs_ticket t={l,l->next++}; irq_restore(f);
+    uint32_t start=0; bool reported=false;
     for (;;) {
         f=irq_save();
         if (fs_ticket_ready(&t)) { l->held=true; kwait_set_owner(&l->wait,g_current); kpreempt_hold(); irq_restore(f); return; }
         irq_restore(f);
+        /* The wait's own clock (deadline_after_ms(0): the tick now). */
+        if (!start) start=(uint32_t)deadline_after_ms(0)|1u;
         kwait_wait_ticket_until(&l->wait,fs_ticket_ready,&t,deadline_after_ms(1000),&t.ticket);
+        uint32_t waited=(uint32_t)deadline_after_ms(0)-start;
+        if (!reported && fs_lock_long_wait && waited>=FS_LOCK_LONG_WAIT_MS) {
+            reported=true; fs_lock_long_wait(l,t.ticket,waited,false);
+        }
     }
 }
 static inline void fs_depend(uintptr_t holder,const void *object,unsigned reason) {
@@ -266,9 +280,18 @@ static inline int fs_lock_take_request(fs_lock *lock,enum vfs_wait_reason reason
     const struct vfs_request *r=fs_request_current();
     if (!r) { fs_lock_take(lock); return 0; }
     uint64_t begin=r->now(r->arg); int error=fs_request_check(); bool blocked=false;
+#ifndef FS_HOST
+    uint32_t start=(uint32_t)deadline_after_ms(0); bool reported=false;
+#endif
     while (!error && !fs_lock_try_take(lock)) {
         blocked=true; fs_depend(fs_lock_holder(lock),lock,fs_lock_reason(lock));
         r->pause(r->arg); error=fs_request_check();
+#ifndef FS_HOST
+        uint32_t waited=(uint32_t)deadline_after_ms(0)-start;
+        if (!reported && fs_lock_long_wait && waited>=FS_LOCK_LONG_WAIT_MS) {
+            reported=true; fs_lock_long_wait(lock,0,waited,true);
+        }
+#endif
     }
     if (blocked) { fs_depend(0,0,0); fs_request_wait(reason,begin,error); }
     return error;

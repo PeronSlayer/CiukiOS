@@ -63,6 +63,14 @@ bool cache_writeback_due(const struct block_cache *c, uint32_t now) {
 void klog(const char *fmt, ...) { (void)fmt; } /* fx-23 writer_busy line */
 unsigned storage_hold_watch(struct storage *arg, uint32_t now) { (void)arg; (void)now; return 0; } /* fx-23 */
 unsigned storage_census_service(struct storage *arg, uint32_t now) { (void)arg; (void)now; return 0; } /* fx-17b */
+/* T23 2ca3b0b6: the progress stamp cpustat reads (mount.c); each pass is
+ * stamped at its start and at every stage, the task at start and exit. */
+static unsigned progress_start, progress_stop, progress_idle, progress_bootlog;
+void storage_writer_progress(struct storage *arg, const char *stage) {
+    assert(arg==&s);
+    progress_start+=!strcmp(stage,"start"); progress_stop+=!strcmp(stage,"stop");
+    progress_idle+=!strcmp(stage,"idle"); progress_bootlog+=!strcmp(stage,"bootlog");
+}
 int storage_writeback(struct storage *arg, uint32_t now) {
     assert(arg==&s && !s.stopped);
     assert(now==60 || now==100 || now==1060 || now==5050);
@@ -76,6 +84,7 @@ int main(void) {
     if (!setjmp(exited)) storage_timer(&s);
     assert(steps==5 && due_checks==5 && drains==3 && writebacks==4 && written);
     assert(last_log==5000);
+    assert(progress_start==1 && progress_idle==5 && progress_bootlog>=drains && progress_stop==1);
     return 0;
 }
 '''

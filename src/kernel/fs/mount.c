@@ -1265,6 +1265,90 @@ unsigned storage_hold_watch(struct storage *s, uint32_t now)
              found[i].owner.site[0] ? found[i].owner.site : "vfs",found[i].waiters);
     return n;
 }
+#ifdef FS_HOST
+#include <stdio.h>
+#define stall_format snprintf
+#else
+#define stall_format ksnprintf
+/* T23 trial 2ca3b0b6: storage writer progress (storage.h). The stamp and
+ * stage are written by the system writer only and read by cpustat. */
+static uint32_t writer_beat, writer_passes;
+static const char *writer_stage = "start";
+static struct task *writer_task;
+void storage_writer_progress(struct storage *s, const char *stage)
+{
+    if (s != &system_storage) return;
+    if (!strncmp(stage, "start", 6)) __atomic_store_n(&writer_task, g_current, __ATOMIC_RELEASE);
+    else if (!strncmp(stage, "stop", 5)) __atomic_store_n(&writer_task, (struct task *)0, __ATOMIC_RELEASE);
+    else if (!strncmp(stage, "idle", 5)) __atomic_add_fetch(&writer_passes, 1, __ATOMIC_RELAXED);
+    __atomic_store_n(&writer_stage, stage, __ATOMIC_RELEASE);
+    __atomic_store_n(&writer_beat, (uint32_t)fs_now_ms(), __ATOMIC_RELEASE);
+}
+#endif
+bool storage_stall_due(uint32_t now, uint32_t beat, uint32_t *reported)
+{
+    if (now - beat < STORAGE_STALL_MS) { *reported = 0; return false; }
+    if (*reported && now - *reported < STORAGE_STALL_REPEAT_MS) return false;
+    *reported = now ? now : 1u; /* zero means nothing reported */
+    return true;
+}
+static void stall_name(char out[20], const struct fs_task_identity *t)
+{
+    if (!t->name[0]) { memcpy(out, "none", 5); return; }
+    stall_format(out, 20, "%s#%u", t->name, t->id);
+}
+int storage_stall_describe(const struct storage *s, uint32_t now, const char *stage, uint32_t age,
+                           unsigned passes, const char *writer_wait, unsigned part, char *line, size_t size)
+{
+    const struct vfs *v = &s->vfs;
+    char owner[20]; int n;
+    if (!part) {
+        const struct vfs_hold_info *o = &v->namespace_owner;
+        stall_name(owner, &o->task);
+        n = stall_format(line, size, "[storage] writer_stall ms=%u stage=%s passes=%u wait=%s namespace=%s ns_held=%u op=%s site=%s",
+                      age, stage ? stage : "none", passes, writer_wait ? writer_wait : "unknown", owner,
+                      fs_lock_holder((fs_lock *)&v->lock) != 0, o->op[0] ? o->op : "-", o->site[0] ? o->site : "-");
+    } else {
+        const unsigned d = 2; const struct vfs_hold_info *h = &v->holds[d];
+        stall_name(owner, &h->task);
+        const char *state = (v->mutating & (1u << d)) ? "mutating" : (v->reserved & (1u << d)) ? "reserved" : "free";
+        n = stall_format(line, size, "[storage] writer_stall drive=C state=%s hold=%s op=%s hold_ms=%u turn=%u/%u gate=%u queued=%u readers=%u cache_held=%u dirty=%u batch=%u",
+                      state, owner, h->op[0] ? h->op : "-", h->task.name[0] ? now - h->started : 0u,
+                      v->turn_depth[d], v->turn_waiters[d], v->publish_waiting[d], v->next[d] - v->serving[d],
+                      v->readers[d], fs_lock_holder((fs_lock *)&s->cache.lock) != 0, s->cache.dirty_bytes,
+                      (unsigned)s->cache.batch_busy);
+    }
+    return n > 0 && (size_t)n < size ? n : 0;
+}
+#ifndef FS_HOST
+unsigned storage_stall_poll(uint32_t now)
+{
+    static uint32_t reported;
+    struct storage *s = &system_storage;
+    struct task *w = __atomic_load_n(&writer_task, __ATOMIC_ACQUIRE);
+    if (!s->ready || s->stopped || !w) return 0;
+    uint32_t beat = __atomic_load_n(&writer_beat, __ATOMIC_ACQUIRE);
+    if (!storage_stall_due(now, beat, &reported)) return 0;
+    /* One consistent uniprocessor snapshot; nothing is taken or waited for. */
+    char wait[48], a[240], b[240];
+    uint32_t f = irq_save();
+    const struct task *owner = w->waiting_on ? w->waiting_on->owner : 0;
+    if (owner) ksnprintf(wait, sizeof(wait), "lock:%s#%u", owner->name, owner->id);
+    else if (w->depends_on) ksnprintf(wait, sizeof(wait), "%s:%s#%u", w->depend_reason == FS_DEPEND_CACHE ? "cache" :
+                                      w->depend_reason == FS_DEPEND_IO ? "io" : "drive", w->depends_on->name, w->depends_on->id);
+    else ksnprintf(wait, sizeof(wait), "%s", w->state == T_BLOCKED ? "blocked" : w->state == T_READY ? "ready" : "running");
+    int na = storage_stall_describe(s, now, __atomic_load_n(&writer_stage, __ATOMIC_ACQUIRE), now - beat,
+                                    __atomic_load_n(&writer_passes, __ATOMIC_RELAXED), wait, 0, a, sizeof(a));
+    int nb = storage_stall_describe(s, now, 0, now - beat, 0, 0, 1, b, sizeof(b));
+    irq_restore(f);
+    if (na) klog("%s", a);
+    if (nb) klog("%s", b);
+    /* The records above are in the black box's RAM ring; its sectors are
+     * written here, not by the stalled writer (bounded: 2 s, 512 sectors). */
+    if (blackbox_checkpoint) (void)blackbox_checkpoint();
+    return 1;
+}
+#endif
 int storage_writeback(struct storage *s, uint32_t now)
 {
     if (!s || !s->ready || s->stopped) return -FS_EINVAL;
@@ -1638,9 +1722,12 @@ static void storage_timer(void *arg)
     struct storage *s = arg;
     uint32_t last_raw=0, window=(uint32_t)fs_now_ms(), passes=0;
     uint32_t kicks=__atomic_load_n(&s->cache.writer_kicks,__ATOMIC_RELAXED);
+    storage_writer_progress(s,"start");
     while (!s->stopped) {
+        storage_writer_progress(s,"idle");
         cache_writer_wait(&s->cache,10);
         uint64_t now=fs_now_ms();
+        storage_writer_progress(s,"window");
         /* fx-23: the writer polls every 10 ms (about 100 passes a second);
          * a window far above that means something keeps kicking it. */
         passes++;
@@ -1656,16 +1743,22 @@ static void storage_timer(void *arg)
         if (due && !s->stopped) {
             /* Disk waits/writeback run on this P_DEVICE task, never on the
              * shared bounded work queue. fs_service/ATA yield within work. */
+            storage_writer_progress(s,"blackbox");
             if (blackbox_flush) blackbox_flush();
             last_raw=(uint32_t)now;
+            storage_writer_progress(s,"bootstat");
             if (bootstat_service) (void)bootstat_service();
+            storage_writer_progress(s,"bootlog");
             if (log_due) bootlog_drain();
         }
         /* The writer_running reservation covers resize/prefetch too, so
          * shutdown quiesces every cache user before destroying its pages. */
+        storage_writer_progress(s,"writeback");
         if (!s->stopped) storage_writeback(s,fs_now_ms());
+        storage_writer_progress(s,"census");
         if (!s->stopped) (void)storage_census_service(s,(uint32_t)fs_now_ms());
     }
+    storage_writer_progress(s,"stop");
     task_exit(0);
 }
 /* G29d: program starts reach CIUKIST.LOG on this task, never inside exec

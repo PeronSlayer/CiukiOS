@@ -170,9 +170,127 @@ static void inherit_case(unsigned which)
            holder_checks,which==2 ? "cache" : "drive");
     vfs_destroy(&space); fs_lock_destroy(&cache_lock);
 }
+/* T23 trial 2ca3b0b6: after an appearance change the CPU stayed busy
+ * (idle_pm=0) and ata0 reported svc_max_ms=105, usb-storage 1079. A queued
+ * request runs on its controller's ordinary-priority "storage-io" worker,
+ * which is dispatched twice per command (issue, then the continuation after
+ * the completion interrupt). Replay: the production queue, scheduler,
+ * ksync_depend and kwait; the worker is `hog` (base 7), a CPU-bound renderer
+ * `normal` at the interactive level 9 never blocks, and the requester `ui`
+ * is an interactive reader polling with a native request (1 ms pause) or a
+ * device-class storage writer sleeping on the request event. The negative
+ * control (no executor donation) reproduces the 100 ms starvation dispatch
+ * at each worker step; with donation the worker runs at the requester's
+ * level and the request completes in the device time plus at most one
+ * renderer slice per step. */
+#define EXEC_DEVICE_MS 5u
+static struct blk_queue exec_queue;
+static struct blkdev exec_dev;
+static struct blk_request exec_request;
+static uint8_t exec_buffer[4096];
+static unsigned exec_phase,exec_reads,exec_worker_turns,exec_renderer_ticks,exec_level;
+static bool exec_donation;
+static uint64_t exec_issue_tick,exec_done_tick;
+static int exec_read(struct blkdev *d,uint64_t lba,uint32_t n,void *buf)
+{ (void)d;(void)lba; exec_reads++; memset(buf,0x5a,(size_t)n*512u); return 0; }
+static void exec_dispatch(void)
+{
+    if (pumping) return;
+    pumping=true;
+    while (g_current!=waiter) {
+        CHECK(g_ticks<5000);
+        if (g_current==&hog) {
+            exec_worker_turns++;
+            /* With donation the worker runs at least at the requester's
+             * level for every dispatch of this request. */
+            if (exec_donation) CHECK(waiter->depends_on==&hog && hog.effective_priority>=exec_level);
+            else CHECK(!waiter->depends_on && !hog.inherited_priority);
+            if (exec_phase==0) {
+                /* Issue: the command now runs in the device for 5 ms. */
+                exec_phase=1; exec_issue_tick=g_ticks; run_tick(0x5555);
+                task_sleep_ms(EXEC_DEVICE_MS);
+            } else {
+                /* Continuation after the completion interrupt: the
+                 * production run_one executes, finishes and wakes. */
+                CHECK(exec_phase==1); exec_phase=2;
+                CHECK(blk_queue_run_one(&exec_queue));
+                exec_done_tick=g_ticks;
+                /* The inheritance ends with the request it served. */
+                CHECK(!hog.inherited_priority && !dependents && !waiter->depends_on);
+                hog.state=T_BLOCKED; hog.wake_tick=0; schedule();
+            }
+        } else if (g_current==&normal) {
+            /* The dispatcher runs inside switch_context (IF clear): the
+             * renderer's preemption at its tick is an explicit schedule. */
+            exec_renderer_ticks++; run_tick(0x4444);
+            if (g_need_resched) schedule();
+        } else {
+            CHECK(g_current==&idle); run_tick(0);
+            if (g_need_resched) schedule();
+        }
+    }
+    pumping=false;
+}
+static uint64_t executor_case(bool donation,bool device_writer)
+{
+    reset(); exec_donation=executor_donation=donation;
+    exec_phase=exec_reads=exec_worker_turns=exec_renderer_ticks=0; exec_issue_tick=exec_done_tick=0;
+    hog.user=normal.user=ui.user=false;
+    task_set_class(&hog,P_NORMAL);          /* blk_queue_start: "storage-io", P_NORMAL */
+    task_set_class(&normal,P_INTERACTIVE);  /* desktop/client rendering after the change */
+    task_set_class(&ui,device_writer ? P_DEVICE : P_INTERACTIVE);
+    exec_level=ui.effective_priority;
+    fs_lock_init(&pool_lock);
+    blk_queue_init(&exec_queue,"storage-io",BLKREQ_COMMAND_BYTES); exec_queue.worker=&hog;
+    exec_dev=(struct blkdev){.read=exec_read,.request_read=exec_read,.capacity=4096,.sector_size=512,.queue=&exec_queue};
+    memset(&exec_request,0,sizeof(exec_request));
+    exec_request.device=&exec_dev; exec_request.queue=&exec_queue; exec_request.buffer=exec_buffer;
+    exec_request.length=sizeof(exec_buffer); exec_request.operation=BLK_READ; exec_request.priority=BLK_DEMAND;
+    exec_request.timeout=30000; exec_request.state=BLK_PREPARED; fs_event_init(&exec_request.event);
+    /* The renderer is ready and never blocks; the worker sleeps for work. */
+    idle.state=T_READY; hog.state=T_BLOCKED; normal.state=T_READY; rq_push(&normal);
+    cpu_switch(&idle,&ui); ui.state=T_RUNNING; g_current=&ui; waiter=&ui;
+    struct vfs_request request={.now=req_now,.cancelled=req_cancelled,.pause=req_pause,
+        .deadline=UINT64_MAX/2,.operation="read",.site="native"};
+    struct fs_request_scope scope;
+    if (!device_writer) { fs_request_enter(&scope,&request); exec_request.context=&request; }
+    uint64_t start=g_ticks;
+    latency_switch_hook=exec_dispatch;
+    CHECK(!blk_request_submit(&exec_request));
+    task_start(&hog); /* the queue's changed event wakes its worker */
+    int e=blk_request_wait(&exec_request);
+    latency_switch_hook=0;
+    if (!device_writer) fs_request_leave(&scope);
+    uint64_t latency=g_ticks-start;
+    CHECK(!e && exec_reads==1 && exec_phase==2 && exec_worker_turns==2);
+    CHECK(exec_request.state==BLK_COMPLETED && !exec_queue.busy && !exec_queue.head);
+    CHECK(!ui.depends_on && !dependents && !hog.inherited_priority && hog.effective_priority==7);
+    CHECK(!ui.preempt_holds && !hog.preempt_holds && !normal.preempt_holds);
+    bool recorded=false;
+    for (unsigned i=0;i<inherit_used;i++)
+        if (inherit_events[i].reason==KSYNC_DEPEND_IO && inherit_events[i].from_id==ui.id &&
+            inherit_events[i].to_id==hog.id && inherit_events[i].level>=exec_level) recorded=true;
+    CHECK(recorded==donation);
+    uint64_t service=exec_done_tick-start;
+    /* With donation each worker step waits at most one renderer slice
+     * (10 ms) and the requester its own turn after completion; without it
+     * each step waits for the 100 ms starvation dispatch (svc_max_ms=105). */
+    if (donation) CHECK(service<=EXEC_DEVICE_MS+2*10+2 && latency<=EXEC_DEVICE_MS+3*10+2);
+    else CHECK(service>=2*100 && exec_issue_tick-start>=100);
+    printf("T23 2ca3b0b6 storage-io executor: requester=%s level=%u donation=%s issue_ms=%llu service_ms=%llu "
+           "requester_ms=%llu worker_turns=%u renderer_ms=%u PASS\n",device_writer ? "storage-writer" : "native-reader",
+           exec_level,donation ? "on" : "off (negative control)",(unsigned long long)(exec_issue_tick-start),
+           (unsigned long long)service,(unsigned long long)latency,exec_worker_turns,exec_renderer_ticks);
+    fs_event_destroy(&exec_request.event); executor_donation=true;
+    return latency;
+}
 int main(void)
 {
     for (unsigned i=0;i<3;i++) wait_case(i);
     for (unsigned i=0;i<3;i++) inherit_case(i);
+    for (unsigned writer=0;writer<2;writer++) {
+        uint64_t slow=executor_case(false,writer!=0), fast=executor_case(true,writer!=0);
+        CHECK(fast*4<slow);
+    }
     return 0;
 }

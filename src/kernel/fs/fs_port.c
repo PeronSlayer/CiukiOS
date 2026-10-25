@@ -238,6 +238,25 @@ void fs_service(void)
         service_tick = fs_now_ms();
     }
 }
+/* T23 trial 2ca3b0b6 (fs_port.h): one record per long lock wait, in the
+ * waiter's context, before it waits again; it reaches serial, the black
+ * box and the boot log without taking any filesystem lock. Rank 1 is the
+ * namespace, 2 a drive's volume lock, 3 the block cache; an owner of none
+ * with serving==ticket-k means a served ticket's task has not run yet. */
+void fs_lock_long_wait(fs_lock *l, uint32_t ticket, uint32_t waited_ms, bool polling)
+{
+    uint32_t f = irq_save();
+    const struct task *owner = l->wait.owner, *self = g_current;
+    char who[24], by[24];
+    ksnprintf(who, sizeof(who), "%s#%u", self ? self->name : "boot", self ? self->id : 0u);
+    if (owner) ksnprintf(by, sizeof(by), "%s#%u", owner->name, owner->id);
+    else ksnprintf(by, sizeof(by), "none");
+    uint32_t next = l->next, serving = l->serving;
+    unsigned rank = l->rank; char drive = l->drive ? l->drive : '-';
+    irq_restore(f);
+    klog("[storage] lock_wait task=%s rank=%u drive=%c owner=%s mode=%s ticket=%u serving=%u next=%u waited_ms=%u",
+         who, rank, drive, by, polling ? "poll" : "fifo", polling ? 0u : ticket, serving, next, waited_ms);
+}
 #else
 void fs_calendar_init(void) { }
 uint8_t fs_floppy_cmos_types(void) { return 0; }

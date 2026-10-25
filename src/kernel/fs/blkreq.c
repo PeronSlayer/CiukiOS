@@ -243,6 +243,9 @@ static void finish(struct blk_request *r,int e) {
 #ifdef FS_HOST
     fs_event_wake(&r->event);
 #else
+    /* The executor's inherited priority ends with the request it served
+     * (blk_request_wait); a finish by anyone else releases nothing. */
+    fs_depend_release(r);
     uint32_t flags=irq_save(); r->event.sequence++; irq_restore(flags);
     kwait_wake_io(&r->event.wait);
 #endif
@@ -441,6 +444,32 @@ bool blk_queue_run_one(struct blk_queue *q) {
     q->active=0; q->busy=false; fs_event_wake(&q->changed); fs_lock_drop(&q->lock);
     return true;
 }
+/* T23 trial 2ca3b0b6 (R2 request donation): a queued request is executed
+ * by its controller's "storage-io" task, an ordinary-priority (7) worker
+ * that must run twice per command (issue, then the continuation after the
+ * completion interrupt). Its waiters slept on an event without an owner, so
+ * under a busy CPU the worker waited for the 100 ms starvation dispatch at
+ * each step: the trial's ata0 svc_max_ms=105 and usb-storage svc_max_ms=1079
+ * while an appearance change kept idle_pm at 0. Device service is not
+ * ordinary work in the reference model (Win95 DDK, Multitasking: the VMM
+ * raises the execution priority that services a device event; R2: donation
+ * follows request dependencies). The waiter names the executor
+ * (ksync_depend), which runs at the waiter's level, transitively, until the
+ * request finishes. Cleared only by the replay's negative control
+ * (docs/validation/t23-theme-music-hang-2026-10-25.md). */
+static bool executor_donation=true;
+#ifndef FS_HOST
+static bool executor_lend(struct blk_queue *q,struct blk_request *r) {
+    struct task *executor=q->worker;
+    if (!executor_donation || !executor || terminal(r)) return false;
+    fs_depend((uintptr_t)executor,r,FS_DEPEND_IO); return true;
+}
+static void executor_withdraw(void) { fs_depend(0,0,0); }
+#else
+/* Host queues have no executor task; requesters run their own commands. */
+static bool executor_lend(struct blk_queue *q,struct blk_request *r) { (void)q; (void)r; (void)executor_donation; return false; }
+static void executor_withdraw(void) { }
+#endif
 int blk_request_wait(struct blk_request *r) {
     if (!r || r->state==BLK_PREPARED || r->state==BLK_FREE) return -FS_EINVAL;
     if (!r->queue) {
@@ -458,12 +487,18 @@ int blk_request_wait(struct blk_request *r) {
     struct blk_queue *q=r->queue;
     const struct vfs_request *context=r->context;
     uint64_t begin=context ? context->now(context->arg) : 0;
+    bool lent=false;
     for (;;) {
         int interrupted=fs_request_check();
         if (interrupted) (void)blk_request_cancel(r);
+        /* Named before the queue lock, renewed on every wake: an edge that
+         * would close a cycle (the executor queued for that lock) donates
+         * nothing and is retried; an unchanged edge is a no-op. */
+        if (executor_lend(q,r)) lent=true;
         fs_lock_take(&q->lock);
         if (terminal(r)) {
             int e=r->result; fs_lock_drop(&q->lock);
+            if (lent) executor_withdraw();
             fs_request_wait(VFS_WAIT_TRANSPORT,begin,interrupted);
             return interrupted && (e || r->operation==BLK_READ) ? interrupted : e;
         }

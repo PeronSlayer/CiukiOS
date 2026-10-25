@@ -744,10 +744,51 @@ static void probe_tests(void) {
     storage_destroy(s); reset();
     printf("PASS production FAT probes: FAT12/16/32 listings/hashes, 4MiB lifecycle, aliases/dir growth, cold reopen, cache, bootlog\n");
 }
+/* T23 trial 2ca3b0b6: the stall record cpustat emits when the storage
+ * writer stops making progress (storage.h): due after 5 s, repeated every
+ * 10 s, reset by progress; both lines name the C: owners and stay within
+ * the 240-byte record bound even with the longest names and values. */
+static void stall_record_tests(void) {
+    uint32_t reported=0;
+    CHECK(!storage_stall_due(4999,0,&reported) && !reported);
+    CHECK(storage_stall_due(5000,0,&reported) && reported);
+    CHECK(!storage_stall_due(14999,0,&reported));
+    CHECK(storage_stall_due(15000,0,&reported));
+    CHECK(!storage_stall_due(20000,19000,&reported) && !reported);
+    CHECK(storage_stall_due(UINT32_MAX,UINT32_MAX-5000,&reported) && reported);
+    static struct storage st; memset(&st,0,sizeof(st)); vfs_init(&st.vfs);
+    st.vfs.reserved=1u<<2; st.vfs.next[2]=7; st.vfs.serving[2]=4; st.vfs.readers[2]=1; st.vfs.publish_waiting[2]=1;
+    strcpy(st.vfs.holds[2].task.name,"desktop"); st.vfs.holds[2].task.id=44;
+    strcpy(st.vfs.holds[2].op,"readdir"); strcpy(st.vfs.holds[2].site,"native"); st.vfs.holds[2].started=1000;
+    strcpy(st.vfs.namespace_owner.task.name,"control"); st.vfs.namespace_owner.task.id=107;
+    strcpy(st.vfs.namespace_owner.op,"stat"); strcpy(st.vfs.namespace_owner.site,"native");
+    st.cache.dirty_bytes=4096;
+    char line[240];
+    int n=storage_stall_describe(&st,7000,"bootlog",6000,123,"drive:desktop#44",0,line,sizeof(line));
+    CHECK(n>0 && (size_t)n<sizeof(line));
+    CHECK(!strcmp(line,"[storage] writer_stall ms=6000 stage=bootlog passes=123 wait=drive:desktop#44 namespace=control#107 ns_held=0 op=stat site=native"));
+    n=storage_stall_describe(&st,7000,0,6000,0,0,1,line,sizeof(line));
+    CHECK(!strcmp(line,"[storage] writer_stall drive=C state=reserved hold=desktop#44 op=readdir hold_ms=6000 turn=0/0 gate=1 queued=3 readers=1 cache_held=0 dirty=4096 batch=0"));
+    st.vfs.mutating=1u<<2; memset(&st.vfs.holds[2],0,sizeof(st.vfs.holds[2]));
+    n=storage_stall_describe(&st,7000,0,6000,0,0,1,line,sizeof(line));
+    CHECK(n>0 && strstr(line,"state=mutating hold=none op=- hold_ms=0 "));
+    /* Longest identities and values still fit one bounded record. */
+    memset(st.vfs.namespace_owner.task.name,'n',15); st.vfs.namespace_owner.task.id=UINT32_MAX;
+    memset(st.vfs.namespace_owner.op,'o',11); memset(st.vfs.namespace_owner.site,'s',11);
+    memset(st.vfs.holds[2].task.name,'h',15); st.vfs.holds[2].task.id=UINT32_MAX; memset(st.vfs.holds[2].op,'p',11);
+    st.vfs.turn_depth[2]=st.vfs.turn_waiters[2]=st.vfs.publish_waiting[2]=st.vfs.readers[2]=UINT32_MAX;
+    st.vfs.next[2]=UINT32_MAX; st.vfs.serving[2]=0; st.cache.dirty_bytes=UINT32_MAX;
+    n=storage_stall_describe(&st,UINT32_MAX,"writeback",UINT32_MAX,UINT32_MAX,"cache:abcdefghijklmno#4294967295",0,line,sizeof(line));
+    CHECK(n>0 && n<240);
+    n=storage_stall_describe(&st,UINT32_MAX,0,UINT32_MAX,0,0,1,line,sizeof(line));
+    CHECK(n>0 && n<240);
+    vfs_destroy(&st.vfs);
+    printf("PASS T23 2ca3b0b6 storage writer stall record: due at 5 s, every 10 s, reset by progress, C: owners named, <=240 bytes\n");
+}
 int main(int argc,char **argv) {
     CHECK(argc==4);
     for(unsigned i=0;i<3;i++) OK(fake_open(&media[i],argv[i+1]));
-    baseline(); superfloppy_tests(); mount_tests(); dirty_recovery_tests(); reserved_log_io(); log_tests(); failure_tests(); writeback_isolation(); cfg_tests(); sweep_write_tests(); unsupported_flush_views(); cache_fault_recorder(); shutdown_recorder(); shutdown_busy_tests(); probe_tests(); mount_probe_tests();
+    baseline(); superfloppy_tests(); mount_tests(); dirty_recovery_tests(); reserved_log_io(); log_tests(); failure_tests(); writeback_isolation(); cfg_tests(); sweep_write_tests(); unsupported_flush_views(); cache_fault_recorder(); shutdown_recorder(); shutdown_busy_tests(); probe_tests(); mount_probe_tests(); stall_record_tests();
     for(unsigned i=0;i<3;i++) fake_close(&media[i]);
     printf("STORAGE RESULT checks=%u records=%u max_record=%u failures=0 ASan/UBSan=enabled\n",checks,records,max_record);
     return 0;

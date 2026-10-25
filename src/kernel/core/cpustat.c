@@ -633,7 +633,8 @@ static void cpu_emit(void)
     for (unsigned i = 0; i < inherit_count; i++)
         klog_periodic("[sched] inherit from=%s#%u to=%s#%u level=%u reason=%s count=%u",
             inherits[i].from, inherits[i].from_id, inherits[i].to, inherits[i].to_id, inherits[i].level,
-            inherits[i].reason == KSYNC_DEPEND_CACHE ? "cache" : "drive", inherits[i].count);
+            inherits[i].reason == KSYNC_DEPEND_CACHE ? "cache" : inherits[i].reason == KSYNC_DEPEND_IO ? "io" : "drive",
+            inherits[i].count);
     if (inherit_dropped) klog_periodic("[sched] inherit lost=%u", inherit_dropped);
     /* f1-101: producers raised for a stream behind its lead, and withheld
      * boosts once the shared 20 %/100 ms producer budget was spent. */
@@ -648,13 +649,19 @@ static void cpu_emit(void)
             pm(share_delta.group_cycles, total), share_delta.turns, share_delta.lent_turns,
             ms(share_delta.turn_cycles));
 }
+/* T23 trial 2ca3b0b6: a storage writer blocked behind C: is reported from
+ * here (fs/mount.c), first in each turn, before any poll that may use the
+ * VFS; it also writes the black box's sectors in the writer's place. */
+extern unsigned storage_stall_poll(uint32_t now_ms) __attribute__((weak));
 static void cpu_worker(void *arg)
 {
     (void)arg;
-    for (;;) { task_sleep_ms(1000); ledger_poll(g_ticks); if (reclaim_poll) reclaim_poll(g_ticks);
+    for (;;) { task_sleep_ms(1000); if (storage_stall_poll) (void)storage_stall_poll((uint32_t)g_ticks);
+        ledger_poll(g_ticks); if (reclaim_poll) reclaim_poll(g_ticks);
         if (pager_poll) pager_poll(g_ticks);
         if (display_fullscreen_stall_poll) display_fullscreen_stall_poll();
-        task_sleep_ms(1000); ledger_poll(g_ticks); if (reclaim_poll) reclaim_poll(g_ticks); cpu_emit();
+        task_sleep_ms(1000); if (storage_stall_poll) (void)storage_stall_poll((uint32_t)g_ticks);
+        ledger_poll(g_ticks); if (reclaim_poll) reclaim_poll(g_ticks); cpu_emit();
         if (display_fullscreen_stall_poll) display_fullscreen_stall_poll(); }
 }
 void cpu_init(void)

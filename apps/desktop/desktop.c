@@ -818,16 +818,24 @@ static void desktop_stage(unsigned stage)
 }
 static void desktop_input_pending(void)
 { __atomic_store_n(&desktop_watchdog.pending,1,__ATOMIC_RELEASE); }
+/* T23 trial 2ca3b0b6: the idle stage covers the turn's end (offscreen-cache
+ * upload, late input read, clipboard tick) and its sleep, which the shell
+ * bounds to one second outside power states. The observer samples it once a
+ * second and reports a loop stamp older than this; a sleep never reaches it. */
+#define DESKTOP_IDLE_STALL_MS 3000u
 static int desktop_stall_record(uint32_t now,char *line,size_t size)
 {
     uint32_t frame=__atomic_load_n(&desktop_watchdog.frame_ms,__ATOMIC_ACQUIRE);
     unsigned pending=__atomic_load_n(&desktop_watchdog.pending,__ATOMIC_ACQUIRE);
     unsigned work=__atomic_load_n(&desktop_watchdog.work,__ATOMIC_ACQUIRE);
     uint32_t loop=__atomic_load_n(&desktop_watchdog.loop_ms,__ATOMIC_ACQUIRE);
+    unsigned stage=__atomic_load_n(&desktop_watchdog.stage,__ATOMIC_ACQUIRE);
+    const struct desktop *owner=desktop_watchdog.desktop;
+    int32_t loop_limit=stage==STALL_IDLE ? (int32_t)DESKTOP_IDLE_STALL_MS : 500;
+    if (stage==STALL_IDLE && owner && owner->power.state) loop_limit=INT32_MAX; /* standby sleeps until input */
     /* A blocked loop cannot discover input arriving later in its kernel grant.
      * Also report a lost loop heartbeat, without claiming that input was read. */
-    if ((int32_t)(now-frame)<=500 || (!pending && !work && (int32_t)(now-loop)<=500)) return 0;
-    unsigned stage=__atomic_load_n(&desktop_watchdog.stage,__ATOMIC_ACQUIRE);
+    if ((int32_t)(now-frame)<=500 || (!pending && !work && (int32_t)(now-loop)<=loop_limit)) return 0;
     const char *wait=__atomic_load_n(&desktop_watchdog.wait,__ATOMIC_ACQUIRE);
     const char *wall="idle", *settings="idle", *wall_wait="idle";
     if (wallpaper_worker_started) {
@@ -885,19 +893,19 @@ static void *desktop_watchdog_run(void *unused)
             reported=now;
         }
         pthread_mutex_lock(&watchdog_lock);
-        /* Idle needs no watchdog sampling. Active work retains the existing
-         * diagnostic deadline; an input/service turn wakes this condition. */
+        /* Active work keeps the 100 ms diagnostic deadline; an input or
+         * service turn wakes this condition. T23 trial 2ca3b0b6: idle is
+         * sampled once a second (it was not sampled at all, so a loop stuck
+         * at the turn's end left no record). */
         const struct desktop *d=desktop_watchdog.desktop;
-        if (__atomic_load_n(&desktop_watchdog.stage,__ATOMIC_ACQUIRE)==STALL_IDLE &&
+        int idle=__atomic_load_n(&desktop_watchdog.stage,__ATOMIC_ACQUIRE)==STALL_IDLE &&
             !__atomic_load_n(&desktop_watchdog.pending,__ATOMIC_ACQUIRE) &&
             !__atomic_load_n(&desktop_watchdog.work,__ATOMIC_ACQUIRE) &&
-            (!d || !__atomic_load_n(&d->v3_restore_watchdog_pending,__ATOMIC_ACQUIRE))) {
-            pthread_cond_wait(&watchdog_changed,&watchdog_lock);
-        } else {
-            struct timespec until;clock_gettime(CLOCK_REALTIME,&until);until.tv_nsec+=100000000;
-            if(until.tv_nsec>=1000000000){until.tv_sec++;until.tv_nsec-=1000000000;}
-            pthread_cond_timedwait(&watchdog_changed,&watchdog_lock,&until);
-        }
+            (!d || !__atomic_load_n(&d->v3_restore_watchdog_pending,__ATOMIC_ACQUIRE));
+        struct timespec until;clock_gettime(CLOCK_REALTIME,&until);
+        if (idle) until.tv_sec++;
+        else { until.tv_nsec+=100000000; if(until.tv_nsec>=1000000000){until.tv_sec++;until.tv_nsec-=1000000000;} }
+        pthread_cond_timedwait(&watchdog_changed,&watchdog_lock,&until);
         pthread_mutex_unlock(&watchdog_lock);
     }
     return NULL;
