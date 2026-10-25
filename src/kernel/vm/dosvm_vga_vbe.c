@@ -137,7 +137,7 @@ int dosvm_vbe_bios(struct dosvm *v,struct v86_frame *f)
                 for (unsigned k=0;k<3;k++) v->vga.dac[dx+i][2-k]=entry[k]&63;
             }
         }
-        if (!read) { v->vga.display_changes++; v->video_presented=false; }
+        if (!read) v->vga.display_changes++; /* sampled once at the next frame */
         ok=true;
     }
     vm_low(&f->tf.eax,ok ? 0x004F : 0x014F);
@@ -222,8 +222,32 @@ static bool vbe_span_dirty(const uint32_t pages[], unsigned first, unsigned byte
         if (pages[page / 32] & (1u << (page % 32))) return true;
     return false;
 }
-/* Only rows whose source lies in a dirty page are read and converted; a
- * palette or mode change (display_changes) redraws every row. Columns step
+/* The existing VGA index cache also fits the 640x480 sampled VBE8 image.
+ * PTE dirt alone is not pixel damage. Retain exactly the sampled bytes so
+ * changed rows need no shared-surface readback, just like Mode X/13h. */
+static unsigned vbe_row_changed(struct dosvm *v,const uint8_t *pixels,unsigned y,
+                                unsigned width,bool force,uint8_t mask,const uint32_t delta[8])
+{
+    uint8_t *previous=v->video_indexes[y];
+    bool differs=false;
+    if (width==DOSVM_VIDEO_WIDTH) {
+        differs=memcmp(previous,pixels,DOSVM_VIDEO_WIDTH)!=0;
+        memcpy(previous,pixels,DOSVM_VIDEO_WIDTH);
+    } else for (unsigned x=0,sx=0,acc=0;x<DOSVM_VIDEO_WIDTH;x++) {
+        differs|=previous[x]!=pixels[sx]; previous[x]=pixels[sx];
+        for (acc+=width;acc>=DOSVM_VIDEO_WIDTH;acc-=DOSVM_VIDEO_WIDTH) sx++;
+    }
+    if (force) return 1;
+    if (differs) return 2;
+    if (!delta) return 0;
+    for (unsigned x=0;x<DOSVM_VIDEO_WIDTH;x++) {
+        unsigned index=previous[x]&mask;
+        if (delta[index/32]&(1u<<(index%32))) return 2;
+    }
+    return 0;
+}
+/* Only rows whose source lies in a dirty page or uses a changed palette
+ * entry are converted; mode changes redraw every row. Columns step
  * with an exact DDA (no division per pixel); 8-bit pixels use the 256-entry
  * palette lookup shared with the VGA path. */
 int dosvm_vbe_present(struct dosvm *v,int (*row)(void *,unsigned,const void *,unsigned),
@@ -249,14 +273,24 @@ int dosvm_vbe_present(struct dosvm *v,int (*row)(void *,unsigned,const void *,un
     uint16_t mode=v->vbe_mode;
     uint32_t base=v->vbe_buffer.base;
     v->video_present_rate=(unsigned)((1000000u+dos_video_frame_us(m)/2)/dos_video_frame_us(m));
+    uint32_t palette_delta[8]={0};
+    bool palette_changed=false;
+    bool palette_only=v->video_presented && v->video_lut_valid &&
+                      v->video_dac_mask==v->vga.dac_mask;
     if (m->bpp==8 && (!v->video_lut_valid || v->video_lut_display!=display)) {
         for (unsigned i=0;i<256;i++) {
             const uint8_t *p=v->vga.dac[i];
-            v->video_lut[i]=(((p[0]<<2)|(p[0]>>4))<<16)|(((p[1]<<2)|(p[1]>>4))<<8)|(p[2]<<2)|(p[2]>>4);
+            uint32_t color=(((p[0]<<2)|(p[0]>>4))<<16)|(((p[1]<<2)|(p[1]>>4))<<8)|(p[2]<<2)|(p[2]>>4);
+            if (!v->video_lut_valid || color!=v->video_lut[i]) {
+                palette_delta[i/32]|=1u<<(i%32); palette_changed=true;
+            }
+            v->video_lut[i]=color;
         }
         v->video_lut_display=display; v->video_lut_valid=true;
     }
     uint8_t mask=v->vga.dac_mask;
+    /* True-colour scanout does not depend on the VGA DAC or its mask. */
+    if (m->bpp==16) palette_only=v->video_presented;
     uint8_t pixels[1600];unsigned first=DOSVM_VIDEO_HEIGHT,last=0,converted=UINT32_MAX;
     for (unsigned y=0;y<DOSVM_VIDEO_HEIGHT;y++) {
         if (!(y&3)) kpreempt_point();
@@ -267,10 +301,18 @@ int dosvm_vbe_present(struct dosvm *v,int (*row)(void *,unsigned,const void *,un
             v->video_presented=false;v->perf.present_cycles+=dosvm_perf_task_clock()-begin;return 0;
         }
         unsigned sy=y*m->height/DOSVM_VIDEO_HEIGHT;
-        if (!full && !vbe_span_dirty(pages,sy*m->pitch,row_bytes)) continue;
+        bool row_dirty=vbe_span_dirty(pages,sy*m->pitch,row_bytes);
+        if (!row_dirty && ((!full) || (palette_only && !palette_changed))) continue;
+        bool proven=false;
         if (sy!=converted) {
             if (dosvm_read(v,base+sy*m->pitch,pixels,row_bytes)) {
                 v->video_presented=false;v->perf.present_cycles+=dosvm_perf_task_clock()-begin;return -EFAULT;
+            }
+            if (m->bpp==8) {
+                unsigned changed=vbe_row_changed(v,pixels,y,m->width,!palette_only,mask,
+                                                 palette_changed ? palette_delta : 0);
+                if (!changed) continue;
+                proven=changed==2;
             }
             if (m->bpp==8 && m->width==DOSVM_VIDEO_WIDTH) {
                 for (unsigned x=0;x<DOSVM_VIDEO_WIDTH;x++) v->video_pixels[x]=v->video_lut[pixels[x]&mask];
@@ -286,7 +328,9 @@ int dosvm_vbe_present(struct dosvm *v,int (*row)(void *,unsigned,const void *,un
             v->perf.converted_bytes+=row_bytes;
             converted=sy;
         }
+        v->video_row_proven=proven;
         int e=row(arg,y,v->video_pixels,sizeof(v->video_pixels));
+        v->video_row_proven=false;
         if (e<0) { v->video_presented=false; v->perf.present_cycles+=dosvm_perf_task_clock()-begin; return e; }
         if (e>0) continue;
         v->perf.rows++;
@@ -299,6 +343,7 @@ int dosvm_vbe_present(struct dosvm *v,int (*row)(void *,unsigned,const void *,un
      * palette change rather than acknowledging a mixed frame as current. */
     v->video_presented=v->vbe_mode==mode && v->vga.display_changes==display;
     v->video_tick=tick;v->video_display=display;
+    v->video_dac_mask=mask;
     v->video_geometry=(cvga_geometry){.width=m->width,.height=m->height};
     v->perf.present_cycles+=dosvm_perf_task_clock()-begin;
     if(!last)return 0;

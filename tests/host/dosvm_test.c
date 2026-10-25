@@ -1033,9 +1033,12 @@ static void test_memory_services(bool locked)
 #include "dosvm_fx22_test.inc"     /* fx-22: T23 trial f441c5bd full-screen return */
 #include "dosvm_properties_test.inc"
 #include "dosvm_fx27_test.inc"     /* fx-27: windowed DOS graphics budgets */
+#include "dosvm_101_video_test.inc"
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
+    if (getenv("CIUKI_VM_101_BENCH")) { bench_101_video(); free(ram); fflush(stdout); return 0; }
+    if (getenv("CIUKI_VM_101_VIDEO")) { test_101_video(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_MPU")) { test_mpu_uart(); test_vm_midi(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_PROPERTIES")) { test_dos_properties(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_CLIPBOARD")) { test_programmatic_clipboard(); free(ram); fflush(stdout); return 0; }
@@ -1099,6 +1102,7 @@ int main(void)
     test_speed();
     test_cost_bursts();
     test_fx27();
+    test_101_video();
     test_exit_cost();
     test_idle();
     test_fullscreen_transport();

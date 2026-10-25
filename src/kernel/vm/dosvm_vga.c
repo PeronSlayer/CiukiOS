@@ -1215,11 +1215,17 @@ int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *
         return 0; /* an idle prompt/game never scans every row at the poll rate */
     }
     v->video_index_linear = linear;
-    bool palette_changed = !v->video_lut_valid;
+    /* 101-b: one palette delta per sampled frame. Retained source indexes
+     * let an unused DAC entry produce no conversion or surface traffic. */
+    bool palette_changed = false;
+    uint32_t palette_delta[8] = {0};
     if (!v->video_lut_valid || v->video_lut_display != display) {
         for (unsigned i = 0; i < 256; i++) {
             uint32_t color = rgb(scan, (uint8_t)i);
-            palette_changed |= color != v->video_lut[i];
+            if (!v->video_lut_valid || color != v->video_lut[i]) {
+                palette_delta[i/32] |= 1u << (i%32);
+                palette_changed = true;
+            }
             v->video_lut[i] = color;
         }
         v->video_lut_display = display; v->video_lut_valid = true;
@@ -1236,10 +1242,19 @@ int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *
             cvga_modex_dirty(v->video_row_base[y], v->video_row_pan[y], g.width, v->video_taken) :
             cvga_row_reads_dirty(scan, y, v->video_taken)) ||
             (g.text && (phase ^ v->video_phase) && cvga_row_phase_sensitive(scan, y)))) {
-            bool force = !planar_cached || borders || palette_changed || g.blank || layout ||
+            bool force = !planar_cached || borders || g.blank || layout ||
                 v->video_geometry.blank != g.blank || v->video_dac_mask != scan->dac_mask;
             unsigned changed = !indexed ? 1 : linear ? video_linear_changed(v, y, g.width, force) :
                 video_planar_changed(v, scan, y, g.width, force);
+            if (!changed && indexed && palette_changed) {
+                for (unsigned x=0;x<g.width;x++) {
+                    unsigned index=v->video_indexes[y][x] & dac_mask;
+                    if (palette_delta[index/32] & (1u << (index%32))) {
+                        changed=2; /* equal indexes, provably different RGB */
+                        break;
+                    }
+                }
+            }
             if (changed) {
                 bands[band] = 1; dirty_rows[y] = (uint8_t)changed;
             }

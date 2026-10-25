@@ -480,10 +480,11 @@ static void test_fx27_surface(void)
     CHECK(dosvm_vga_present(v, put_row, &target, 40, &d) == 1 && d.height == 2);
     /* Pre-fx-27: each changed row first read the surface back (256-byte chunks). */
     CHECK(surface_reads == reads && surface_rows == writes + 2);
-    /* A palette change forces every row; unchanged colours are still compared. */
+    /* 101-b: only rows using the changed colour are converted. Their RGB
+     * difference is proven by the palette delta, without surface readback. */
     port_out(v, 0x3C8, 1, 200); port_out(v, 0x3C9, 1, 1); port_out(v, 0x3C9, 1, 2); port_out(v, 0x3C9, 1, 3);
     reads = surface_reads;
-    CHECK(dosvm_vga_present(v, put_row, &target, 80, &d) <= 1 && surface_reads > reads);
+    CHECK(dosvm_vga_present(v, put_row, &target, 80, &d) == 1 && surface_reads == reads && d.height==2);
     destroy(v, true); empty();
     puts("fx-27 surface writer: index-proven rows written without read-back, forced rows still compared PASS");
 }
