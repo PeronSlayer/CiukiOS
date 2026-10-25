@@ -250,6 +250,12 @@ static void test_exit_burst(bool pm, bool big)
         case 7:v->monitor.vif=true;v->monitor.pic[0].imr=0;v->monitor.pic[0].irr=1;break;
         }
         struct v86_frame before=cur;
+        /* t23-dosperf: an armed flags image (case 3) no longer stops the
+         * burst: it retires IN 40h; MOV AH,AL; IN 40h, as without one. */
+        if (guard==3) {
+            CHECK(!dosvm_io_burst(v,&cur) && cur.tf.eip==initial.tf.eip+8 && v->dpmi.if_armed);
+            continue;
+        }
         CHECK(!dosvm_io_burst(v,&cur) && !memcmp(&before,&cur,sizeof(cur)));
     }
     g_need_resched=false;

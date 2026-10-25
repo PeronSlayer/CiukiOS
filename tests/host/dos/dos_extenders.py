@@ -114,6 +114,33 @@ def war2(cpu, image, name, menu):
     return log
 
 
+def war2_perf(image):
+    """t23-dosperf (docs/validation/t23-dos-window-lag-2026-10-25.md), only
+    with DOSX_PERF=1: the demo for 30 simulated seconds under the fx-27 T23
+    time model, one GUEST_PLAY_PERF line per second (exit causes, lean
+    exits, CLI proof cache, seed demand, DAC bursts, armed flags images).
+    The model charges host code time, so the runner is built as
+    memory.compile_cpu builds it but with -O2 and no sanitizers."""
+    cpu = OUT / "dosvm_vm_cpu_o2"
+    subprocess.run(["clang", "-DFS_HOST", "-DCIUKI_DOSVM_FILE_CPU", "-D_POSIX_C_SOURCE=200809L", "-std=c17", "-O2", "-g",
+                    "-Wall", "-Wextra", "-Werror", "-Wno-pointer-to-int-cast", "-pthread",
+                    "-Isrc/kernel/include", "-Ibuild/host", "tests/host/dosvm_guest.c", "tests/host/dosvm_guest_cpu.c",
+                    "src/kernel/lib/fmt.c", "src/kernel/lib/sha256.c", "src/kernel/vm/virtual_vga.c",
+                    "src/kernel/vm/virtual_vga_bios.c", "src/kernel/vm/vga_x86.c", "src/kernel/vm/vga_presenter.c",
+                    *h56.FS, "src/kernel/fs/partition.c", "src/kernel/drivers/blkpart.c", *memory.VM, "-lx86emu",
+                    "-o", str(cpu)], cwd=ROOT, check=True)
+    code, log = run(cpu, image, "war2-perf", ["shell:CD \\WAR2", "-", "play:WAR2.EXE", "WAR2"],
+                    GUEST_PLAY_MS="30000", GUEST_PLAY_KEYS="01@12000,01@14000", GUEST_PLAY_PERF="1",
+                    GUEST_PERF="1", GUEST_T23="1", GUEST_T23_MODEL="fx27", GUEST_SLICE="200000")
+    rows = [dict(re.findall(r"(\w+)=([0-9.]+)", line)) for line in log.splitlines() if line.startswith("H61 PERF ")]
+    check(code == 0 and "guest runner: PASS" in log and len(rows) > 12, f"war2-perf: runner verdict (exit {code})")
+    if len(rows) > 12:
+        a, b = rows[6], rows[11]           # the intro movie (mode 13h), simulated 6-11 s
+        span = (float(b["t"]) - float(a["t"])) / 1000
+        rate = {k: (float(b[k]) - float(a[k])) / span for k in ("traps", "lean", "missed", "unprovable", "dac")}
+        print("DOSX war2-perf intro per second: " + " ".join(f"{k}={v:.0f}" for k, v in rate.items()), flush=True)
+
+
 def main():
     if not Path("/usr/include/x86emu.h").exists():
         print("DOSX: unavailable (libx86emu development headers missing)")
@@ -148,6 +175,8 @@ def main():
     check("DOS/4GW error" not in "\n".join(screen(log)), "DPMI4GW.EXE: no DOS/4GW error on the screen")
 
     war2(cpu, image, "war2-ems", True)
+    if os.environ.get("DOSX_PERF"):
+        war2_perf(image)
     # The same guest without the EMMXXXX0 device: DOS/4GW Professional probes
     # VCPI/EMS/XMS/DPMI itself; the VMM has EMS 4.0 but no VCPI (INT 67h
     # DE00h fails), so both profiles must take the DPMI path.

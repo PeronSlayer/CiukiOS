@@ -271,6 +271,11 @@ static void perf_live(struct dosvm *v, const struct dosvm_perf_sample *s, unsign
                   id, gen, n, s->frames, s->flips, s->harvests, s->pages, s->present_rate);
     rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_present vm=%u gen=%u n=%u present_us=%llu harvest_us=%llu rows=%u",
                   id, gen, n, s->present_us, s->harvest_us, s->rows);
+    /* t23-dosperf: presenter samples (PRESENT calls that sampled), VIDEO
+     * wakes of WAIT_PRESENT and their dispatch delay (avg/max us). */
+    rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_presenter vm=%u gen=%u n=%u samples=%u waits=%u wait_avg_us=%llu wait_max_us=%llu",
+                  id, gen, n, s->present_samples, s->present_waits,
+                  s->present_waits ? s->present_wait_us / s->present_waits : 0, s->present_wait_max_us);
     rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_remap vm=%u gen=%u n=%u remaps=%u remap_us=%llu batched=%u lean=%u dac=%u linear=%u",
                   id, gen, n, s->port_remaps, s->remap_us, s->batched, s->lean_exits, s->dac_batched, s->linear_direct);
     rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_exits vm=%u gen=%u n=%u gp=%u pf=%u db=%u timer=%u other=%u pm=%u",
@@ -351,6 +356,9 @@ static void perf_disk_report(struct dosvm *v)
     CAPTURE(burst_insn); CAPTURE(latch_read_windows); CAPTURE(batched);
     CAPTURE(lean_exits); CAPTURE(dac_batched); CAPTURE(linear_direct);
     CAPTURE(port_overflow); CAPTURE(ticks);
+    CAPTURE(present_waits); CAPTURE(present_wait_cycles); CAPTURE(present_wait_max_cycles);
+    r->present_samples = v->present_samples;
+    v->perf.present_wait_max_cycles = 0;
     CAPTURE(return_hits); CAPTURE(return_segmented); CAPTURE(return_fallbacks);
     CAPTURE(return_armed); CAPTURE(return_expired); CAPTURE(return_reacquired);
     CAPTURE(guest_cycles); CAPTURE(monitor_cycles); CAPTURE(present_cycles);
@@ -394,6 +402,12 @@ static void perf_disk_report(struct dosvm *v)
     v->perf.last_return_armed = r->return_armed;
     v->perf.last_return_expired = r->return_expired;
     v->perf.last_return_reacquired = r->return_reacquired;
+    s->present_samples = r->present_samples - v->perf.last_present_samples;
+    s->present_waits = DELTA(present_waits, last_present_waits);
+    s->present_wait_us = perf_us(DELTA(present_wait_cycles, last_present_wait_cycles));
+    s->present_wait_max_us = perf_us(r->present_wait_max_cycles);
+    v->perf.last_present_samples = r->present_samples; v->perf.last_present_waits = r->present_waits;
+    v->perf.last_present_wait_cycles = r->present_wait_cycles;
     s->ticks = DELTA(ticks, last_ticks); s->timer_us = perf_us(DELTA(timer_cycles, last_timer));
     s->audio_us = perf_us(DELTA(audio_cycles, last_audio));
     v->perf.last_ticks = r->ticks; v->perf.last_timer = r->timer_cycles;

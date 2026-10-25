@@ -632,10 +632,29 @@ int dosvm_vga_init(struct dosvm *v)
  * so the guest observes exactly the sequential result, only sooner. */
 #define VIDEO_BURST 1024u
 #define VIDEO_BURST_IDLE 8u /* INC/INC/LOOP plus the next RAM load must reach its VGA store. */
+/* t23-dosperf (dos-dpmi-contract.md, amendment of 2026-10-25): an armed
+ * fx-16 flags image does not stop a burst. The image (a stack slot or a
+ * register holding TF) only acts when POPF/IRET loads it; this decoder
+ * executes neither (nor POP, RET or any stack transfer) and stores only to
+ * the aperture, so a burst can neither load nor change the image. Its
+ * ownership, however, is also decided by stack observations: armed_observe
+ * marks an image popped when an exit finds ESP above it, and armed_live
+ * drops it then. So, while an image is armed, the burst decoders refuse
+ * every instruction that writes SP/ESP (cvx_cpu.lock_sp: MOV, INC/DEC,
+ * ADD/SUB and the other ALU, XCHG, shift, NEG and IMUL forms with ESP as
+ * destination) before executing it; the CPU runs it natively and the next
+ * exit observes the stack as it would after native execution (Codex review
+ * 2026-10-25: a batch across `out; add esp,4; out; sub esp,4; out` hid the
+ * pop and left a stale owner that delayed a pending IRQ). Palette loops
+ * leave ESP alone and keep batching. Warcraft II keeps one such image
+ * owned for its whole run (an enclosing DOS/4GW region), which kept every
+ * palette load at 768 exits (T23 trial c42f556e: vm_perf_remap dac=0 in
+ * every bank, 184,514 DAC exits per 5 s in the window). Return tracking
+ * (execute breakpoints), watchpoints and IF-recovery steps still stop it. */
 static bool video_run_blocked(const struct dosvm *v, const struct v86_frame *f)
 {
     return (f->tf.eflags & V86_TF) || g_need_resched || v->monitor.shadow || v->dpmi.shadow ||
-        v->dpmi.dr7 || v->dpmi.if_armed || v->dpmi.return_steps || v->dpmi.if_step ||
+        v->dpmi.dr7 || v->dpmi.return_steps || v->dpmi.if_step ||
         v->dpmi.if_restore_step || v->info.state >= DOSVM_STOPPING ||
         (v->monitor.vif && v86_irq_pending(&v->monitor) >= 0);
 }
@@ -771,6 +790,7 @@ static void video_burst(struct dosvm *v, struct v86_frame *f, const cvx_cpu *fir
         .segment_base=v->frame_pm ? burst_base : 0, .validate=v->frame_pm ? burst_validate : 0,
         .string=burst_string, .port=burst_port};
     cvx_cpu c = *first;
+    c.lock_sp = v->dpmi.if_armed != 0;   /* no SP/ESP write beside an owned stack image */
     c.gpr[0] = f->tf.eax; c.gpr[1] = f->tf.ecx; c.gpr[2] = f->tf.edx; c.gpr[3] = f->tf.ebx;
     c.gpr[4] = f->tf.user_esp; c.gpr[5] = f->tf.ebp; c.gpr[6] = f->tf.esi; c.gpr[7] = f->tf.edi;
     c.eip = f->tf.eip; c.eflags = f->tf.eflags;
@@ -943,6 +963,7 @@ int dosvm_vga_dac_burst(struct dosvm *v, struct v86_frame *f)
 {
     if (!dosvm_vga_ports_modeled(v) || video_run_blocked(v, f)) return 0;
     cvx_cpu c = {0};
+    c.lock_sp = v->dpmi.if_armed != 0;   /* no SP/ESP write beside an owned stack image */
     struct dac_bus ctx = {.v = v};
     cvx_bus bus = {.read = dac_read, .write = dac_write, .fetch = dac_fetch, .context = &ctx, .port = dac_port};
     if (v->frame_pm) {

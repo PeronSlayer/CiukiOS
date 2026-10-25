@@ -82,10 +82,11 @@ int main(void) {
     CHECK(!s.storage_calls && !s.dropped_protected && !s.dropped_verbose);
     CHECK(record_count<=BOOTLOG_RECORDS && used<=BOOTLOG_RAM && !s.boot_queued);
     CHECK(serial_rows==73 && hold_rows==16 && wait_rows==16); /* 4*5*2 + 32 + summary */
-    CHECK(record_count==249 && record_count==serial_rows+4*44);
+    /* 45 disk rows per VM bank: t23-dosperf added vm_perf_presenter (was 44). */
+    CHECK(record_count==253 && record_count==serial_rows+4*45);
     unsigned verbose=0; for (unsigned i=head;i!=NONE;i=records[i].next) verbose+=records[i].verbose;
     CHECK(verbose==16); /* waits never promote to protected disk slots */
-    printf("PASS f1-86 stalled drain 5s: four VMs, slots=%u/%u bytes=%u/%u UART=%u B protected=%u verbose=%u drops=0 disk_families=176 serial_rows=%u\n",
+    printf("PASS f1-86 stalled drain 5s: four VMs, slots=%u/%u bytes=%u/%u UART=%u B protected=%u verbose=%u drops=0 disk_families=180 serial_rows=%u\n",
            record_count,BOOTLOG_RECORDS,used,BOOTLOG_RAM,serial_bytes,record_count-verbose,verbose,serial_rows);
     /* Per-drive independence and next-boundary summary, no duplicate replay. */
     contention('D',1,175); CHECK(hold_rows==17 && wait_rows==17);

@@ -107,11 +107,17 @@ static bool dosvm_in_irq(const struct dosvm *v)
  * itself always takes the ordinary path. When an obligation appears
  * after the instruction, the exit continues through the ordinary tail
  * without emulating again, so delivery and scheduling are unchanged. */
-static bool lean_port(uint16_t port, unsigned width)
+static bool lean_port(const struct dosvm *v, uint16_t port, unsigned width)
 {
     if ((port >= 0x3C0 && port <= 0x3CF) || port == 0x3D4 || port == 0x3D5 || port == 0x3DA ||
         port == 0x3B4 || port == 0x3B5 || port == 0x3BA) return width <= 2;
     if (width != 1) return false;
+    /* t23-dosperf: the Sound Blaster's own OPL3 ports (base+0..3, base+8/9)
+     * reach the same dosvm_opl_io as 388h-38Bh (dosvm_sb16.c sb_io).
+     * Warcraft II's music writes them through 220h/222h: 4,400 exits per
+     * second at 12.8 us in trial c42f556e (bank n=3), never lean. */
+    uint16_t sb = v->audio.sb.base;
+    if (sb && ((port >= sb && port <= sb + 3) || port == sb + 8 || port == sb + 9)) return true;
     return (port >= 0x40 && port <= 0x43) || port == 0x20 || port == 0x21 || port == 0xA0 ||
         port == 0xA1 || (port >= 0x388 && port <= 0x38B) || port <= 0x0F ||
         (port >= 0x80 && port <= 0x8F) || (port >= 0xC0 && port <= 0xDF);
@@ -177,6 +183,13 @@ static bool lean_after(struct dosvm *v, const struct v86_frame *f)
 static int lean_io(struct dosvm *v, struct v86_frame *f, int *error)
 {
     *error = 0;
+    /* t23-dosperf: a PM STI shadow covers one instruction; pm_trap ends it
+     * at every later trap that is not a physical IRQ (or an owned execute
+     * fault) at the shadowed address, so at every #GP(0). End it here the
+     * same way, so the exit after a lean STI can be lean too (Warcraft II:
+     * STI, then the next CLI). A pending IRQ is still delivered on the
+     * ordinary tail (lean_after). */
+    if (v->frame_pm) v->dpmi.shadow = false;
     if (!lean_before(v, f)) return 0;
     struct dpmi_seg seg, *cs = 0;
     if (v->frame_pm) {
@@ -190,6 +203,16 @@ static int lean_io(struct dosvm *v, struct v86_frame *f, int *error)
         width = width == 4 ? 2 : 4;
         if (!lean_fetch(v, f, cs, len++, &op)) return 0;
     }
+    /* t23-dosperf: an unprefixed PM CLI/STI (DOS/4GW and Watcom clients:
+     * Warcraft II, 10,143 per second in trial c42f556e bank n=4) takes the
+     * same lean return as a port exit. V86 CLI/STI keep v86_emulate. */
+    if ((op == 0xFA || op == 0xFB) && len == 1 && cs) {
+        bool quiet = dpmi_lean_flags(v, f, cs, op);
+        cli();
+        if (quiet && lean_after(v, f)) { v->perf.lean_exits++; return 1; }
+        sti();
+        return 2;
+    }
     if (op < 0xE4 || (op > 0xE7 && op < 0xEC) || op > 0xEF) return 0;
     uint16_t port = (uint16_t)f->tf.edx;
     if (op < 0xE8) {
@@ -198,7 +221,7 @@ static int lean_io(struct dosvm *v, struct v86_frame *f, int *error)
     }
     if (!(op & 1)) width = 1;
     bool write = op & 2;
-    if (!lean_port(port, width)) return 0;
+    if (!lean_port(v, port, width)) return 0;
     uint32_t value = f->tf.eax;
     int e = 0;
     /* The same dispatch as dosvm_io_fast: the cached PIT/OPL handlers,
