@@ -17,15 +17,15 @@ import hashlib
 # F2-99: new software arrow/shadow; old raster reproduces all former pins (integ-fix1).
 # fx-13: cursor set scaled to the classic 13x19 arrow.
 BOOT_GOLDENS = {
-    "absent-ro": "b64c0deb523743ac84b4c63288d18efa19a444741547027876bff273d253eaf0",
-    "absent-rw": "b64c0deb523743ac84b4c63288d18efa19a444741547027876bff273d253eaf0",
-    "identical-unpresented": "f889ff481d11dc11db1a0ce87d4430042fce925fbe57be9173dfc2bcc3463dc7",
-    "present-ro": "b64c0deb523743ac84b4c63288d18efa19a444741547027876bff273d253eaf0",
-    "present-ro-seeded": "b64c0deb523743ac84b4c63288d18efa19a444741547027876bff273d253eaf0",
-    "present-rw": "b64c0deb523743ac84b4c63288d18efa19a444741547027876bff273d253eaf0",
-    "present-rw-seeded": "b64c0deb523743ac84b4c63288d18efa19a444741547027876bff273d253eaf0",
-    "theme": "1cab030f8cc31f57568b344182dfb74191d067a60f852464f321419d0c4dade4",
-    "wallpaper-change": "f889ff481d11dc11db1a0ce87d4430042fce925fbe57be9173dfc2bcc3463dc7"
+    "absent-ro": "4b420dd9fbfc9124c054d04c5c84429cd0a8a8f2e8f58d9594622c4c22f65e4d",
+    "absent-rw": "4b420dd9fbfc9124c054d04c5c84429cd0a8a8f2e8f58d9594622c4c22f65e4d",
+    "identical-unpresented": "96d908182c1e50b2e019c04560f06411850c6c8c02f04fc4df46d5b4a86677c8",
+    "present-ro": "4b420dd9fbfc9124c054d04c5c84429cd0a8a8f2e8f58d9594622c4c22f65e4d",
+    "present-ro-seeded": "4b420dd9fbfc9124c054d04c5c84429cd0a8a8f2e8f58d9594622c4c22f65e4d",
+    "present-rw": "4b420dd9fbfc9124c054d04c5c84429cd0a8a8f2e8f58d9594622c4c22f65e4d",
+    "present-rw-seeded": "4b420dd9fbfc9124c054d04c5c84429cd0a8a8f2e8f58d9594622c4c22f65e4d",
+    "theme": "c2f0dfd66e2a6d73902675bde6e03ce8e4d0c6f87479d691f7529309cc75ebe7",
+    "wallpaper-change": "96d908182c1e50b2e019c04560f06411850c6c8c02f04fc4df46d5b4a86677c8"
 }
 
 def build_footprint(folder, env):

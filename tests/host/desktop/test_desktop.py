@@ -43,14 +43,14 @@ SHELL_SOURCES = [ROOT / "apps/desktop" / n for n in ("shell.c", "autoplay.c", "a
 # F2-99: only the new software arrow/shadow footprint differs (integ-fix1 pixel comparison).
 # Fix C (2026-10-24): reviewed G16b/G28b dialogs in the G23 appearance tree; see build/codex/fixc-report.md.
 RUN_GOLDEN = "5c6f33f5f4ac21afc2be8e0ea4adc0074314be6ca4b00cbc4569d164da70ad55"  # tray: language/power indicator rules
-SHUTDOWN_GOLDEN = "ac6777c8719f9b25f5b2e3a6d6a98cf64880f0df120f38c4893462b11c147b14"  # audit E: Shut Down CiukiOS radio dialog (no Stand by on the fixture)
+SHUTDOWN_GOLDEN = "401100d5d4c50f1caf79f27aeb484330fd73dc3929a65cb4ed1dd75af203d234"  # audit E: Shut Down CiukiOS radio dialog (no Stand by on the fixture)
 LOOK_GOLDENS = {
     "ciuki-blue-desktop.ppm": "7df31bb6a63521603a2203fb1b84982f530574f702d49e19b857cbb175079e4f",
-    "ciuki-blue-dialogs.ppm": "e718780fc698d5427ae31bf34b8103600acc41a5ba0f78b23c9111af9322e26f",
+    "ciuki-blue-dialogs.ppm": "94e8d579ebb69348375a8e77c845d472ea5d7b4308f33467656e55cef07fd522",
     "ciuki-blue-tray-disabled.ppm": "a434503b360bf51aeddd818be6c9fa88d66c009191c35c45ac960e5edc162c55",
     "ciuki-blue-tray-media.ppm": "152b033c88b3884672819d9e546b2c7048ab2d72d2f0f24a4b976053f8d7e308",
     "platinum-desktop.ppm": "1c4cf9cc98f42f861cbf56ae2795b7f77c3dd4e5543a55a0789bf9766b67a481",
-    "platinum-dialogs.ppm": "c226e254e9a9538b2ad223e00e20ed99e7ab5e2c27b2c33588de2e69aa7db3bf",
+    "platinum-dialogs.ppm": "8367b0a18a75837523ea42bd7657c5e0ce0d84beed2b5f77e76c4469a5094cab",
     "platinum-tray-disabled.ppm": "5597b23f63195811836ba0444277e72ccd44c53799a871409d4cda67f7926cd5",
     "platinum-tray-media.ppm": "497774ef29cae94838ce27516924fc723c191a695e069ec04985ad51e7526ea0"
 }

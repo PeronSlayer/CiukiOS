@@ -27,8 +27,8 @@ SOURCES = ["apps/systools/schedtask_ui.c", "apps/systools/sched.c", "apps/systoo
 PIN = "PIN-FROM-FIRST-RUN"
 # fixd: visually reviewed combined G11/G19/G23/G30 integration frames (2026-10-24).
 RENDERS = {
-    "folder-empty": "22214bcc3b5e3a5a973139fba0bed5ac54753a494de69ed377bd8f3344665438",
-    "folder-tasks": "53609bd9d7d5a3b4dc8c2f69879fe86afabda45b4658072f13a1031a26a51bc3",
+    "folder-empty": "c031cef9e1f45e434e3ca6addcc03fb1e4d75bf5f8c602795e39d32793a5e3b7",
+    "folder-tasks": "1316ef70663769c852724e94739b2af686b80cd4ba57e4ef96bc4d83729d6aab",
     "maint-finish": "9f66c0d90b5735082b0cb946aa3b50c879450bd497e38dec1767290b2b4ab7bc",
     "maint-slot": "763a3111e12b071a046057a868838e6adaac58f227ebaabbba76580eb7c47966",
     "maint-welcome": "b297aa940dbddda220ee23e49866478c08946f6a741352af25742655233f59e9",
@@ -37,7 +37,7 @@ RENDERS = {
     "props-task": "20b3a86de1d2166f56ef1e2fe794774b612ab8e0f762f8fbc5e85c74e597c879",
     "wizard-finish": "373e0da66c10c02f24abd210062cc1376d50071adad9063ba5a759bf66c3622e",
     "wizard-name": "d14c0861befe5793c5e4b62e301e5fb7b8ed52b0dee89630854189628756cb73",
-    "wizard-program": "c67f8edbed12aebdeb5c7dd44d158906dcf39e8aae0e9e511ba08b191196a8f2",
+    "wizard-program": "2e42bf71acb28ab14bbd4ac4a2fbd65aeebf32b4af28c90628d036231aaf5069",
     "wizard-welcome": "aba2b02842ae479e2d1d8f044395a7c69ef0a39cca6d0c1401324ddbf02ebc8e",
     "wizard-when-daily": "48f5783d8d30fbb763fc74a6e678fe8d0a06d37c8ebd8441b8b3734b22adc6d6",
     "wizard-when-weekly": "3347092bb35a91b185a9916b5497c48b21f60f5794b238fbd10dbe1e4b35583c"

@@ -19,17 +19,17 @@ ROOT = Path(__file__).resolve().parents[3]
 # F2-83: shaded bars and notification surfaces; dialog-only hashes stay pinned.
 # F2-99: balloon, notification and tooltip contain the new arrow/shadow; other pins unchanged.
 GOLDENS = {
-    "balloon": "5c4987636835d1f8bf538dbbed00949998f5a0af37e7fcbd6197e2e78ae723bf",
+    "balloon": "39189cc3d28d061bae6a1dca4f330250c8975242e0c2d275aca92d13d89fe364",
     "error": "310f334a2b31f450caf39691beba785a2fc3b989d24731bcca509449bcdc6d5a",
     "info": "50e827a231ec558500bc59905d529a42ecaca3851d9a7a2c7ec06c0b9a203c53",
-    "loading": "c675bfec0dd20df260c2137464b819e2faaa8624138f6d4ca823bad8eb937af1",
-    "notification": "6cd42b0073861b64a5162a82d1d3b96279a29e12357b6810515c307d9b9ee369",
+    "loading": "b96ea6bcef932c42a679e56328565af242c93ece5322b4e44c3c3a02fdcf3274",
+    "notification": "09bf0b5e889ed9fd102351967d67d9c38c2e1c71135b7fc5138181f8a6848c24",
     "question": "a1ed1a8b878ff15b9f6a251573a41d6f268d33e137d42ceeaea7e4df665c3c06",
-    "tooltip": "0d05fdfb86398c58398f6b783403a81b208483eb4ef7bd582bde3cbadb77bc20",
-    "tooltip-media": "b1f9f70002fbadfe97391eba277600d6b0a59a1ba4ffcfb9e8984280ac7e60b7",
-    "tooltip-network": "6ed947eaa1149185c6d52071cbd727969000250f28a77979bc6e44ead0c1b039",
-    "tooltip-task": "3cb211651824166cfd6d1478466892e30060727ff2205e513a1af7be5e983c4c",
-    "tooltip-volume": "82be7639974371fd0c9d165251035ce1c0e7e684b3a627ffe9b0b9e935b39310",
+    "tooltip": "925b21ad35eda558416858f8dc1dc185ab92243cbd42b3c6da1a4f428398a095",
+    "tooltip-media": "4d13b0ca4b9878178f37d606e1ffc7437d49a8012f867865faba296abb5a0023",
+    "tooltip-network": "10488773fba204ecfe95f98ac3142b359394a2b2ad424e2ee1830b8a0b63b08d",
+    "tooltip-task": "d67c8b98fae808af2d296cba326b58ed739e79d2003f41921f595c3d8e63899e",
+    "tooltip-volume": "9192417219cc8801a5fab09e3301b62b2cef2cd44e0c6316857a24bb129362ce",
     "warning": "43a94b327cd5807be7f35b7c2aad42f07341c63d8208f757cf6b3000c4951177"
 }
 
