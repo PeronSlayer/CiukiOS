@@ -14,7 +14,7 @@ static bool mode_adapter(const struct pci_func *p)
 static const struct display_mode_provider modes = {
     supersavage_display_supported, supersavage_display_prepare,
     supersavage_display_begin, supersavage_display_write,
-    supersavage_display_end, supersavage_display_complete
+    supersavage_display_end, supersavage_display_complete, supersavage_display_lfb
 };
 static int selftest(uint64_t deadline, void (*line)(void *, const char *), void *ctx,
                     struct display_selftest_result *out)

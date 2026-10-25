@@ -3,6 +3,7 @@
 #ifndef CIUKI_DOSVM_INTERNAL_H
 #define CIUKI_DOSVM_INTERNAL_H
 #include <ciuki/dosvm.h>
+#include <ciuki/display_driver.h>
 #include <ciuki/task.h>
 #include <ciuki/storage.h>
 #include <ciuki/sync.h>
@@ -285,6 +286,14 @@ struct dosvm {
     cvbios video_bios;
     uint16_t vbe_mode;
     struct vm_block vbe_buffer;
+    struct {
+        struct display_lfb lfb;
+        uint32_t saved[DOS_VBE_BYTES/PAGE_SIZE];
+        uint32_t base;
+        unsigned pages;
+        bool revoking, copying;
+        uint8_t fetch;
+    } vbe_direct;
     bool vbe_mapped[DPMI_CLIENTS];
     cvx_bus video_bus;
     bool video_bus_fault, video_presented;
@@ -530,8 +539,16 @@ void dosvm_vbe_init(struct dosvm *);
 int dosvm_vbe_bios(struct dosvm *, struct v86_frame *);
 int dosvm_vbe_map(struct dosvm *, struct v86_frame *, unsigned);
 bool dosvm_vbe_dirty(struct dosvm *, bool clear);
+bool dosvm_vbe_direct_enter(struct dosvm *);
+void dosvm_vbe_direct_withdraw(struct dosvm *);
+void dosvm_vbe_direct_revoke(struct dosvm *);
+/* One page at a time, with no yield while borrowing the provider alias.
+ * 0: outside direct range, 1: copied, negative: withdrawing, retry later. */
+int dosvm_vbe_direct_transfer(struct dosvm *, uint32_t, void *, unsigned, bool);
 int dosvm_vbe_flush(struct dosvm *, bool force);
 int dosvm_vbe_present(struct dosvm *, int (*)(void *, unsigned, const void *, unsigned),
+                      void *, uint64_t, struct ciuki_rect *);
+int dosvm_vbe_capture(struct dosvm *, int (*)(void *, unsigned, const void *, unsigned),
                       void *, uint64_t, struct ciuki_rect *);
 void dosvm_fullscreen_mode_changed(struct dosvm *);
 /* fx-22: true when the calling task may use the physical aperture for this

@@ -16,6 +16,16 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 
 class DisplayDriverTests(unittest.TestCase):
+    def test_stretch_operation_tables(self):
+        video=ROOT/'src/kernel/drivers/video'
+        hooks={p.relative_to(video).as_posix() for p in video.glob('*/*.c')
+               if re.search(r'\.stretch_rect\s*=', p.read_text())}
+        self.assertEqual(hooks, {'tdfx/engine.c'})
+        engine=(video/'tdfx/engine.c').read_text()
+        self.assertIn('.command_features=command_features',engine)
+        self.assertIn('CIUKI_CAP_STRETCH',engine)
+        print('STRETCH operation tables: only qualified 3dfx row replication; other families absent PASS')
+
     def test_integrated_nomination_tables(self):
         # Check the production build graph, not a second hand-maintained list.
         # Preprocess the real match macros to catch cross-family PCI collisions.

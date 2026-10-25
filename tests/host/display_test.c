@@ -85,7 +85,7 @@ void supersavage_display_complete(bool recovered)
 { native_completes++;native_recovered=recovered; }
 static const struct display_mode_provider fixture_modes = {
     supersavage_display_supported,supersavage_display_prepare,supersavage_display_begin,
-    supersavage_display_write,supersavage_display_end,supersavage_display_complete
+    supersavage_display_write,supersavage_display_end,supersavage_display_complete,NULL
 };
 const struct display_mode_provider *display_driver_modes(const struct fb_device *fb)
 { (void)fb; return is_supersavage ? &fixture_modes : NULL; }

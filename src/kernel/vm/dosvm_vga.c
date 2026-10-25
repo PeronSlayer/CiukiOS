@@ -578,6 +578,10 @@ static int video_string_run(void *arg, uint32_t source, uint32_t dest, unsigned 
                          uint32_t count, int back, int move, uint32_t value, bool preflight)
 {
     struct dosvm *v = arg;
+    /* The fast plane copier accepts RAM source pointers only. A VBE owner
+     * can still address the virtual VGA aperture; use the ordinary monitor
+     * transfer so a borrowed LFB source never becomes a RAM direct-map read. */
+    if (v->vbe_direct.pages) return 0;
     unsigned bytes = count * size, tail = (count - 1) * size;
     uint32_t low = back ? dest - tail : dest, src_low = back ? source - tail : source;
     if (low < 0xA0000 || low > 0xB0000 || bytes > 0xB0000 - low ||
@@ -1359,7 +1363,8 @@ int dosvm_frame_capture(struct dosvm *v, uint64_t tick, struct dosvm_frame *out,
     struct ciuki_rect damage;
     sha256_init(&sink.sha);
     v->video_presented = false;                   /* every row, borders included */
-    int e = dosvm_vga_present(v, hash_row, &sink, tick, &damage);
+    int e = v->vbe_mode ? dosvm_vbe_capture(v,hash_row,&sink,tick,&damage) :
+        dosvm_vga_present(v, hash_row, &sink, tick, &damage);
     v->video_presented = false;                   /* a window redraws its surface whole */
     if (e < 0) return e;
     if (sink.next != DOSVM_VIDEO_HEIGHT) return -EAGAIN; /* scanout changed mid-frame */

@@ -1,9 +1,10 @@
-/* Synthetic VBE with legacy VGA and linear modes. RAM stays VM-owned in both display
- * paths; no guest address is interpreted as a host physical address.
+/* Synthetic VBE; pool RAM remains VM-owned. Exclusive full screen may borrow
+ * a provider's validated LFB; guest physical tokens never grant host memory.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
 #include <ciuki/display.h>
+#include <ciuki/mtrr.h>
 #include "dosvm_internal.h"
 
 void dosvm_vbe_init(struct dosvm *v)
@@ -106,6 +107,8 @@ int dosvm_vbe_bios(struct dosvm *v,struct v86_frame *f)
             dosvm_vga_sync(v,true);
             /* Capture the old VGA transport before changing its model. */
             if (v->fullscreen && !v->vbe_mode) dosvm_fullscreen_model_begin(v);
+            /* Save the old frame before a clear or new geometry can replace it. */
+            if (v->fullscreen) dosvm_fullscreen_mode_changed(v);
             if (!(bx&0x8000)) dosvm_pool_zero(v,v->vbe_buffer.base,v->vbe_buffer.pages);
             v->vbe_mode=bx&0x1FF; v->video_presented=false;
             v->video_blank=0;v->video_vblank_us=0;
@@ -167,6 +170,110 @@ static uint32_t *vbe_pte(struct dosvm *v,unsigned page)
     uint32_t *pd=P2V(v->as.pd_phys);
     return &((uint32_t *)P2V(pd[va>>22]&~0xFFFu))[(va>>12)&1023];
 }
+static void vbe_invalidate(struct dosvm *v,unsigned page)
+{
+    if (read_cr3()==v->as.pd_phys) invlpg(v->vbe_buffer.base+page*PAGE_SIZE);
+}
+bool dosvm_vbe_direct_enter(struct dosvm *v)
+{
+    const struct dos_video_mode *m=dos_video_mode(v->vbe_mode);
+    struct display_lfb lfb={0};
+    if (!m || !v->fullscreen_hold || v->vbe_direct.pages || !v->vbe_buffer.used ||
+        display_fullscreen_lfb(&lfb)) return false;
+    unsigned pages=(m->pitch*m->height+PAGE_SIZE-1)/PAGE_SIZE;
+    uint32_t bytes=pages*PAGE_SIZE;
+    if (!lfb.mapped || !lfb.physical || (lfb.physical&(PAGE_SIZE-1)) ||
+        (uint64_t)lfb.physical+bytes>0x100000000ull || lfb.bytes<bytes ||
+        lfb.width!=m->width || lfb.height!=m->height || lfb.pitch!=m->pitch || lfb.bpp!=m->bpp ||
+        (lfb.cache_flags!=0 && lfb.cache_flags!=(PTE_PCD|PTE_PWT)) ||
+        !vmm_cache_alias_ok(lfb.physical,bytes,lfb.cache_flags) || pages>v->vbe_buffer.pages)
+        return false;
+    /* The buffer is pinned for its lifetime. Save every exact PTE before any
+     * changes, and prove that it still names the retained pool frame. */
+    for (unsigned i=0;i<pages;i++) {
+        uint32_t pte=0,phys=0;
+        uint32_t va=v->vbe_buffer.base+i*PAGE_SIZE;
+        if (!as_lookup(&v->as,va,&pte) || (pte&(PTE_P|PTE_U|PTE_W|PTE_BORROWED))!=(PTE_P|PTE_U|PTE_W) ||
+            dosvm_pool_frame(v,va,false,false,&phys) || phys!=(pte&~0xFFFu)) return false;
+        unsigned index=(va-VM_POOL_BASE)/PAGE_SIZE;
+        for (unsigned w=0;w<VM_POOL_WINDOWS;w++)
+            if (v->memory.pool.window[w]==index+1) return false;
+        v->vbe_direct.saved[i]=pte;
+    }
+    /* Include the tail of the last page: it is accessible to the guest too.
+     * No guest PTE has changed if the provider refuses any copy. */
+    for (unsigned i=0;i<pages;i++)
+        if (display_fullscreen_write(i*PAGE_SIZE,P2V(v->vbe_direct.saved[i]&~0xFFFu),PAGE_SIZE)) return false;
+    framebuffer_write_drain();
+    uint32_t flags=irq_save();
+    v->vbe_direct.lfb=lfb; v->vbe_direct.base=v->vbe_buffer.base;
+    v->vbe_direct.revoking=false;
+    for (unsigned i=0;i<pages;i++) {
+        *vbe_pte(v,i)=(lfb.physical+i*PAGE_SIZE)|PTE_P|PTE_U|PTE_W|PTE_BORROWED|lfb.cache_flags;
+        vbe_invalidate(v,i);
+    }
+    v->vbe_direct.pages=pages;
+    irq_restore(flags);
+    return true;
+}
+void dosvm_vbe_direct_withdraw(struct dosvm *v)
+{
+    uint32_t flags=irq_save();
+    if (v->vbe_direct.pages && !v->vbe_direct.revoking) {
+        v->fullscreen_hold=true;
+        v->vbe_direct.revoking=true;
+        for (unsigned i=0;i<v->vbe_direct.pages;i++) {
+            *vbe_pte(v,i)&=~(PTE_U|PTE_W);
+            vbe_invalidate(v,i);
+        }
+    }
+    irq_restore(flags);
+}
+void dosvm_vbe_direct_revoke(struct dosvm *v)
+{
+    uint32_t flags=irq_save();
+    if (!v->vbe_direct.pages || v->vbe_direct.copying) { irq_restore(flags); return; }
+    v->vbe_direct.copying=true;
+    dosvm_vbe_direct_withdraw(v);
+    irq_restore(flags);
+    framebuffer_write_drain();
+    /* The withdrawn VM cannot issue stores, and pool aliases cannot be
+     * republished. No allocation, wait or pool dirty sampler touches MMIO. */
+    for (unsigned i=0;i<v->vbe_direct.pages;i++) {
+        uint8_t *to=P2V(v->vbe_direct.saved[i]&~0xFFFu);
+        volatile const uint8_t *from=v->vbe_direct.lfb.mapped+i*PAGE_SIZE;
+        for (unsigned k=0;k<PAGE_SIZE;k++) to[k]=from[k];
+        uint32_t phys;
+        (void)dosvm_pool_frame(v,v->vbe_direct.base+i*PAGE_SIZE,true,false,&phys);
+        /* Do not yield inside a fault/IRQ-off stop. A normal display worker
+         * remains preemptible, while copying pins the entire transaction. */
+        if ((read_eflags()&0x200u) && !(g_current && g_current->preempt_holds)) kpreempt_point();
+    }
+    flags=irq_save();
+    for (unsigned i=0;i<v->vbe_direct.pages;i++) {
+        /* Restored RAM is authoritative and dirty even for stores made by
+         * the CPU guest rather than the monitor. Preserve original flags. */
+        *vbe_pte(v,i)=v->vbe_direct.saved[i]|PTE_D;
+        vbe_invalidate(v,i);
+    }
+    v->vbe_direct.pages=0; v->vbe_direct.copying=false;
+    v->vbe_direct.lfb.mapped=0; v->vbe_direct.revoking=false;
+    v->video_presented=false; v->video_lut_valid=false;
+    irq_restore(flags);
+}
+int dosvm_vbe_direct_transfer(struct dosvm *v,uint32_t linear,void *buffer,unsigned bytes,bool write)
+{
+    uint32_t flags=irq_save();
+    uint32_t off=linear-v->vbe_direct.base;
+    if (!v->vbe_direct.pages || off>=v->vbe_direct.pages*PAGE_SIZE) { irq_restore(flags); return 0; }
+    if (v->vbe_direct.revoking || bytes>v->vbe_direct.pages*PAGE_SIZE-off) { irq_restore(flags); return -EAGAIN; }
+    volatile uint8_t *p=v->vbe_direct.lfb.mapped+off;
+    uint8_t *b=buffer;
+    for (unsigned i=0;i<bytes;i++) { if (write) p[i]=b[i]; else b[i]=p[i]; }
+    if (write) *vbe_pte(v,off/PAGE_SIZE)|=PTE_D;
+    irq_restore(flags);
+    return 1;
+}
 bool dosvm_vbe_dirty(struct dosvm *v,bool clear)
 {
     bool dirty=false;
@@ -183,6 +290,16 @@ int dosvm_vbe_flush(struct dosvm *v,bool force)
 {
     const struct dos_video_mode *m=dos_video_mode(v->vbe_mode);
     if (!m || !v->vbe_buffer.used) return -EIO;
+    if (v->vbe_direct.pages) {
+        if (v->vbe_direct.revoking) return 0;
+        framebuffer_write_drain();
+        bool dirty=false;
+        for (unsigned i=0;i<v->vbe_direct.pages;i++) {
+            uint32_t *pte=vbe_pte(v,i);
+            if (*pte&PTE_D) { dirty=true; *pte&=~PTE_D; vbe_invalidate(v,i); }
+        }
+        return dirty;
+    }
     unsigned bytes=m->pitch*m->height; bool dirty=false;
     for (unsigned i=0;i<(bytes+PAGE_SIZE-1)/PAGE_SIZE;i++) {
         uint32_t *pte=vbe_pte(v,i);
@@ -250,8 +367,8 @@ static unsigned vbe_row_changed(struct dosvm *v,const uint8_t *pixels,unsigned y
  * entry are converted; mode changes redraw every row. Columns step
  * with an exact DDA (no division per pixel); 8-bit pixels use the 256-entry
  * palette lookup shared with the VGA path. */
-int dosvm_vbe_present(struct dosvm *v,int (*row)(void *,unsigned,const void *,unsigned),
-                      void *arg,uint64_t tick,struct ciuki_rect *damage)
+static int vbe_render(struct dosvm *v,int (*row)(void *,unsigned,const void *,unsigned),
+                      void *arg,uint64_t tick,struct ciuki_rect *damage,bool capture)
 {
     const struct dos_video_mode *m=dos_video_mode(v->vbe_mode);
     if (!m || !v->vbe_buffer.used) return -EIO;
@@ -266,7 +383,7 @@ int dosvm_vbe_present(struct dosvm *v,int (*row)(void *,unsigned,const void *,un
     uint64_t begin=dosvm_perf_task_clock();
     unsigned bpp=m->bpp/8u, row_bytes=m->width*bpp;
     uint32_t pages[DOS_VBE_BYTES/PAGE_SIZE/32]={0};
-    bool dirty=vbe_collect(v,m->pitch*m->height,pages);
+    bool dirty=!capture && vbe_collect(v,m->pitch*m->height,pages);
     uint32_t display=v->vga.display_changes;
     bool full=!v->video_presented || v->video_display!=display;
     if (!full && !dirty) { v->perf.present_cycles+=dosvm_perf_task_clock()-begin; return 0; }
@@ -297,7 +414,7 @@ int dosvm_vbe_present(struct dosvm *v,int (*row)(void *,unsigned,const void *,un
         /* A mode change may release/reallocate the linear buffer. Never
          * dereference its old extent after a cooperative point. */
         if (v->vbe_mode!=mode || !v->vbe_buffer.used || v->vbe_buffer.base!=base ||
-            v->fullscreen || v->fullscreen_hold || v->info.state>=DOSVM_STOPPING) {
+            ((v->fullscreen || v->fullscreen_hold) && !capture) || v->vbe_direct.revoking || v->info.state>=DOSVM_STOPPING) {
             v->video_presented=false;v->perf.present_cycles+=dosvm_perf_task_clock()-begin;return 0;
         }
         unsigned sy=y*m->height/DOSVM_VIDEO_HEIGHT;
@@ -350,4 +467,14 @@ int dosvm_vbe_present(struct dosvm *v,int (*row)(void *,unsigned,const void *,un
     v->video_frames++;
     *damage=(struct ciuki_rect){0,(int32_t)first,0,(int32_t)first,DOSVM_VIDEO_WIDTH,last-first};
     return 1;
+}
+int dosvm_vbe_present(struct dosvm *v,int (*row)(void *,unsigned,const void *,unsigned),
+                      void *arg,uint64_t tick,struct ciuki_rect *damage)
+{ return vbe_render(v,row,arg,tick,damage,false); }
+int dosvm_vbe_capture(struct dosvm *v,int (*row)(void *,unsigned,const void *,unsigned),
+                      void *arg,uint64_t tick,struct ciuki_rect *damage)
+{
+    memset(damage,0,sizeof(*damage));
+    v->video_bands=0; memset(v->video_rows,0,sizeof(v->video_rows));
+    return vbe_render(v,row,arg,tick,damage,true);
 }

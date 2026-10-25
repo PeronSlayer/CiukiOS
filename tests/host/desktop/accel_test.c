@@ -33,6 +33,32 @@ static uint32_t vram_first, vram_end;
 static unsigned writes, cache_copies, fail_write;
 static uint64_t written_pixels, engine_copied_pixels;
 static struct ciuki_accel_request cursor;
+static unsigned stretches;
+static int stretch_fail;
+static int stretch_info(int fd,uint32_t generation,struct ciuki_command_info *out)
+{
+    assert(fd==7 && generation==55);
+    *out=(struct ciuki_command_info){.size=sizeof(*out),.version=1,
+        .native_commands=caps ? 1u<<CIUKI_CMD_SCALED : 0,
+        .capabilities=caps ? CIUKI_CAP_BATCH|CIUKI_CAP_SCALED|CIUKI_CAP_STRETCH : 0};
+    return 0;
+}
+static int stretch_batch(int fd,const void *wire,uint32_t bytes,struct ciuki_batch_reply *reply)
+{
+    assert(fd==7 && bytes==224);
+    const struct ciuki_batch_header *h=wire;
+    const struct ciuki_batch_record *r=(const void *)((const uint8_t *)wire+h->records_offset);
+    assert(h->record_count==1 && h->target_count==1 && r->opcode==CIUKI_CMD_SCALED &&
+        r->filter==CIUKI_FILTER_NEAREST_EDGE && r->sw==r->dw && r->sh==1 && r->src==1 && r->dst==1);
+    for (unsigned y=0;y<r->dh;y++) memcpy(scanout+((unsigned)r->dy+y)*d.width+(unsigned)r->dx,
+        scanout+(unsigned)r->sy*d.width+(unsigned)r->sx,r->dw*4);
+    stretches++;
+    *reply=(struct ciuki_batch_reply){.size=64,.version=1,.state=CIUKI_FENCE_SUCCEEDED,.flags=CIUKI_FENCE_CPU_SAFE};
+    if (stretch_fail) { stretch_fail=0; caps=0; shown=0; return -EIO; }
+    return 0;
+}
+static int stretch_fence(int fd,uint64_t id,uint16_t action,uint32_t timeout,struct ciuki_batch_reply *reply)
+{ (void)fd;(void)id;(void)action;(void)timeout;(void)reply;assert(0);return -EIO; }
 static int upload(int display,int surface,const struct ciuki_rect *r)
 {
     (void)display; (void)surface;
@@ -521,31 +547,35 @@ static void foreign_regions(void)
 /* A 320x200 game expanded into a 640x480 window, with the actual dosbox
  * Fit row mapping. The display driver COPY transport must match the full
  * software composition, including the very first frame and recovery. */
-static void dos_video_frame(unsigned available)
+static void dos_video_frame(unsigned available,unsigned zoom)
 {
     fake_reset(); struct desk_ops ops=fake_ops; ops.present=upload;
     desk_init(&d,&ops,800,600); d.display=7;
     d.pixels=calloc((size_t)d.width*d.height,4); scanout=calloc((size_t)d.width*d.height,4);
     assert(d.pixels && scanout);
-    caps=available; copies=window_copies=fills=uploads=cursor_moves=0;
+    caps=!!available; copies=window_copies=fills=uploads=cursor_moves=stretches=0;
     uploaded_pixels=0; shown=fail_copy=fail_cursor=fail_fill=0;
-    if (available) { d.accel=service; desk_accel_reset(&d,55); }
+    if (available) {
+        if (available==2) { d.commands=stretch_info; d.batch=stretch_batch; d.fence=stretch_fence; }
+        d.accel=service; desk_accel_reset(&d,55);
+    }
     int i=window_new(10,20,640,480,40,40);
     uint32_t *pixels=(uint32_t *)d.clients[i].pixels;
     for (unsigned y=0;y<480;y++) for (unsigned x=0;x<640;x++) {
-        unsigned sy=y<28 ? 0 : (y-28)*480/452;
+        unsigned sy=y<28 ? 0 : zoom==0 ? (y-28)*480/452 : zoom==2 ? (y-28)*100/125 : y-28;
+        unsigned sx=zoom==2 ? x*100/125 : x;
         pixels[y*640+x]=y<28 || sy<40 || sy>=440 ? 0 :
-            (0x203040u+((sy-40)/2)*4173u+(x/2)*89u)&0xffffff;
+            (0x203040u+((sy-40)/2)*4173u+(sx/2)*89u)&0xffffff;
     }
     redraw(); /* identical_frame compares actual scanout to the CPU oracle */
-    printf("101-video desktop first Fit frame accel=%u uploaded_pixels=%llu copies=%u fills=%u\n",
-           available,(unsigned long long)uploaded_pixels,copies,fills);
+    printf("101-video desktop zoom=%u accel=%u uploaded_pixels=%llu copies=%u stretches=%u fills=%u\n",
+           zoom,available,(unsigned long long)uploaded_pixels,copies,stretches,fills);
     fflush(stdout);
     if (available && !getenv("CIUKI_101_BASELINE")) {
-        assert(copies>100 && uploaded_pixels<(uint64_t)d.width*d.height/2);
+        assert((available==2 ? stretches>100 : copies>100) && uploaded_pixels<(uint64_t)d.width*d.height/2);
         /* A submitted copy can fail after modifying scanout. Reconstruction
          * still uses the client surface and completes with identical pixels. */
-        fail_copy=1;
+        if (available==2) stretch_fail=1; else fail_copy=1;
         for (unsigned p=0;p<640*480;p++) pixels[p]^=0x112233;
         dirty_client(i); redraw(); redraw(); assert(!caps && !d.accel_caps);
     }
@@ -554,7 +584,7 @@ static void dos_video_frame(unsigned available)
 }
 int main(void)
 {
-    dos_video_frame(0); dos_video_frame(1);
+    for (unsigned zoom=0;zoom<3;zoom++) { dos_video_frame(0,zoom); dos_video_frame(1,zoom); dos_video_frame(2,zoom); }
     foreign_regions();
     late_cursor_ready();
     cache_scenario();

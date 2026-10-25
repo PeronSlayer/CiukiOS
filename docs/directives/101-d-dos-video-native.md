@@ -1,0 +1,19 @@
+# 101-d — DOS game video, round 2: native stretch and direct VBE mapping
+
+- **Written:** 2026-10-25 by the lead, on the owner's request ("fallo a questo punto"). Implementer: Codex gpt-6.1-sol, effort xhigh. Worktree `../CiukiOS-wt-101-dosvid2`, branch `wt/101-dosvid2` (main with round 1 merged, commit ea49de32).
+- **Round 1:** read `docs/directives/101-b-report-round1.md` (copied here) and `docs/validation/101-dos-video-accel.md`. Round 1 left two decisions open; the lead decides them below.
+
+## Decision 1 — native stretch as an optional display-driver operation
+
+- Add an optional STRETCH (scaled copy) operation to the display driver model (`docs/design/display-driver-model.md`, the native driver operation table, capability flags), used by the desktop's presentation of scaled DOS frames (Fit/125 %) when the active driver advertises it; otherwise the existing CPU path from round 1 stays. Output must be pixel-identical to the CPU path for the integer/nearest scale factors the DOS window uses (define the sampling rule once and test both paths against it); if a chip's hardware filter cannot match, it may only be used where exactness is not required and must say so — prefer exactness.
+- Implement it only for chips whose stretch capability is documented in the sources the project already uses (the driver pack in third_party/drivers and third_party/Ultimate Windows Driver Pack for reading only, X.Org/NetBSD xf86-video-* sources, vendor manuals): research each candidate (S3 Savage family including the SuperSavage class — 2D engine BitBLT has no general stretch, the Streams Processor/overlay scales; Intel 2D/overlay; ATI Rage/Radeon; Cirrus; others in src/kernel/drivers/video) and implement where the documented mechanism fits a composited desktop (an overlay that bypasses composition is acceptable only for exclusive full-screen; for a window it must respect clipping, else skip). Record per chip: supported/not, mechanism, sources.
+- Never invent register programming: cite the source for every register sequence.
+
+## Decision 2 — direct VBE LFB mapping in full screen
+
+- When a DOS VM runs in native full screen (the existing native full-screen mode for DOS games) with a VBE linear-framebuffer mode whose geometry and pixel format equal a mode the active display provider can set, map the provider's physical LFB pages directly into the VM's LFB window instead of the pool-backed copy: cache attribute write-combining where MTRR/PAT support it (else uncached), exclusive ownership while full screen, no desktop composition. On leaving full screen (Alt+Enter, focus change, VM stop, fault) revoke the mapping atomically: stop the VM, copy the LFB contents back into the VM's pool buffer, restore the borrowed PTEs, then resume windowed presentation — no stale or lost frame, no access to the physical LFB after revocation. Account the pages correctly (pool/sampler/ledger), keep screenshot capture working (read from the LFB while mapped).
+- Write the contract amendment first (in `docs/design/display-driver-model.md` and the DOS VM video/DPMI contract): physical extent export from the provider, cache flags, ownership/revocation protocol, failure fallback (any refusal → the existing copy path).
+
+## Acceptance
+
+Host tests that fail before and pass after: STRETCH capability selection and pixel identity against the CPU path for every scale factor used; per-chip operation tables; the LFB map/revoke protocol (map, guest writes land in the provider surface model, revoke copies back, PTEs restored, refusal falls back), including revocation while the VM is running and on VM fault. Kernel and apps build without warnings; dosvm/vm host tests, display driver tests and the desktop suites you touch pass. Note: LeakSanitizer cannot run in your sandbox — say which sanitizer runs the lead must repeat. Report with before/after per-frame figures and the per-chip stretch table.

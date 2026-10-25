@@ -118,6 +118,12 @@
 /* Linux v6.12 include/video/tdfx.h corroborates this register. */
 #define MISC_INIT0 0x10u
 #define COMMAND_EXTRA (0x100000u + 0x38u)
+/* Voodoo3 guide 7.2.16/21; X.Org tdfxdefs.h at the pin below. */
+#define SRC_SIZE (0x100000u + 0x58u)
+#define SCRN_TO_SCRN_STRETCH 2u
+#define STRETCH_CLIP1 (1u << 23)
+#define BRES_ERROR0 (0x100000u + 0x28u)
+#define BRES_ERROR1 (0x100000u + 0x2cu)
 /* X.Org tdfxdefs.h, 278042ff4c469f24ab7bc28e517e8a78e2821ddc.
  * Register facts only: read-only refusal, never program bus stall policy. */
 #define PCI_INIT0 0x04u

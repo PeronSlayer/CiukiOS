@@ -72,10 +72,59 @@ Each optional command has its own capability bit:
 - **INVERT:** XOR rectangles for focus and drag outlines;
 - **KEYED:** copy with a source colour key;
 - **SCALED:** stretch copy, nearest and optionally filtered;
+- **STRETCH:** optional exact edge-sampled stretch, carried by SCALED with
+  `CIUKI_FILTER_NEAREST_EDGE` and advertised by `CIUKI_CAP_STRETCH`;
 - **LINE:** solid single-pixel lines;
 - **CURSOR:** monochrome 32×32 AND/XOR, which already exists, and colour ARGB up to 64×64 with a per-driver maximum size and alpha mode.
 
 Every drawing command carries a destination clip list of up to 16 rectangles.
+
+### 101-d amendment: exact stretch and exclusive LFB export
+
+Edge sampling is `origin + floor(destination_offset * source_extent /
+destination_extent)` per axis, relative to the original unclipped rectangle.
+Existing centre-sampled NEAREST and BILINEAR retain their semantics. Edge
+stretch preserves packed pixel bits when formats match (as COPY does),
+including the ignored X byte; differing formats use the software conversion.
+Optional `accel_ops.stretch_rect` receives the immutable validated SCALED record and
+retained targets. Its feature bit requires an actual native hook. Software
+implements the same edge rule. Unsupported ratios/layouts refuse before any
+submission; completion, clipping and partial-error recovery follow DM3/4.
+
+The initial native implementation is restricted to 3dfx RGB565/XRGB8888
+scanout row replication (`sw == dw`, `sh == 1`). The desktop uses it for runs
+of equal composed rows, including Fit and 125% DOS windows, after the source
+row completes. Every destination row is compared before admission. Application
+scaling stays in software; COPY/CPU remain the fallback. This avoids assuming
+an undocumented Bresenham phase. Register facts follow the
+[Voodoo3 programming guide](https://bitsavers.trailing-edge.com/components/3dfx/Voodoo3_Programming_Guide_r1.4a_199906.pdf),
+sections 7.2.8/16/21/23.2, 8.2.6 and 8.4.4, corroborated by
+[X.Org tdfx](https://github.com/freedesktop-unofficial-mirror/xorg__driver__xf86-video-tdfx/blob/278042ff4c469f24ab7bc28e517e8a78e2821ddc/src/tdfx_video.c).
+Other families retain refusal; see `../validation/101-dos-video-native.md`.
+
+An optional mode-provider `lfb` hook exports a kernel-only physical extent
+after packed mode entry: physical base, kernel alias, extent, geometry/pitch/
+bpp and the alias's PTE cache bits. A page-aligned extent must fit the
+provider's exclusive framebuffer lease. Geometry and indexed-8/RGB565 layout
+must exactly match the synthetic VBE mode. MTRR-backed WC uses PCD=PWT=0;
+otherwise UC uses both, matching every kernel alias. No PAT state is changed.
+
+The provider stays pinned until guest aliases are revoked. Desktop grants
+are suspended, acceleration stopped and composition excluded. The VM parks
+before initial copy/PTE replacement. Original pool frames remain pinned and
+charged, with unchanged commitment/mapping counts; borrowed MMIO is not RAM.
+Revocation holds the VM, removes guest permissions from all borrowed PTEs
+atomically, drains stores, copies the page-rounded visible extent to retained
+pool frames, then restores the saved PTE frames/flags atomically (setting D
+for the first windowed sample) before restoring the
+desktop. Stop/fault/mode-change follow the same protocol; a park timeout keeps
+the VM suspended. Kernel transfers/screenshots use the exported alias while
+direct. Any export/layout/cache/PTE refusal leaves the copy path. Cache alias
+and TLB rules follow [Intel SDM Vol. 3A](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html),
+sections 4.10 and 12 (formerly 11), using the existing MTRR policy.
+Mode-change continuations pin the global display transaction across copy-back
+service points; a second return cannot restore the provider underneath them.
+Kernel pool transfers recheck the direct lease after a resolving service point.
 
 **[DM3] Batches and fences.** A new user request, `CIUKI_ACCEL_BATCH`, takes
 up to 64 fixed-size command records and runs them under one presenter

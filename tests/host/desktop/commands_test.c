@@ -8,13 +8,15 @@ static unsigned pixel_bpp=32;
 static unsigned command_counts[15], released, batches, fenced;
 static uint64_t next_fence;
 static unsigned hot_x, hot_y, colour_w, colour_h;
+static int stretch_enabled;
 static uint32_t colour_pixels[64*64];
 static int commands_info(int fd, uint32_t generation, struct ciuki_command_info *out)
 {
     assert(fd==7 && generation==55);
     *out=(struct ciuki_command_info){.size=sizeof(*out),.version=1,
-        .native_commands=1u<<CIUKI_CMD_WRITE,
-        .capabilities=CIUKI_CAP_BATCH|CIUKI_CAP_MONO|CIUKI_CAP_INVERT|CIUKI_CAP_KEYED|CIUKI_CAP_CURSOR_ARGB,.cursor_width=64,.cursor_height=64};
+        .native_commands=(1u<<CIUKI_CMD_WRITE)|(stretch_enabled ? 1u<<CIUKI_CMD_SCALED : 0),
+        .capabilities=CIUKI_CAP_BATCH|CIUKI_CAP_MONO|CIUKI_CAP_INVERT|CIUKI_CAP_KEYED|CIUKI_CAP_CURSOR_ARGB|
+            (stretch_enabled ? CIUKI_CAP_SCALED|CIUKI_CAP_STRETCH : 0),.cursor_width=64,.cursor_height=64};
     return 0;
 }
 static int fence_service(int fd, uint64_t id, uint16_t action, uint32_t timeout, struct ciuki_batch_reply *reply)
@@ -125,6 +127,12 @@ static void scenario_commands(unsigned bpp)
     assert(command_counts[CIUKI_CMD_MONO] && command_counts[CIUKI_CMD_CURSOR_ARGB_SET] &&
         command_counts[CIUKI_CMD_CURSOR_MOVE] && command_counts[CIUKI_CMD_CURSOR_SHOW]);
     assert(batches && released==fenced && !d.recovering_fence && d.hw_colour_cursor);
+    stretch_enabled=1; desk_accel_reset(&d,55);
+    for (unsigned y=0;y<80;y++) for (unsigned x=0;x<120;x++) pixels[y*120+x]=(x*317u+(y/4)*4173u)&0xffffff;
+    unsigned before_stretch=command_counts[CIUKI_CMD_SCALED];
+    dirty_client(w); command_redraw();
+    assert(command_counts[CIUKI_CMD_SCALED]>before_stretch);
+    stretch_enabled=0;
     for (int k=0;k<DESK_CLIENTS;k++) desk_drop_client(&d,k);
     desk_render_release(&d); free(d.pixels); free(scanout); assert(!fake_live());
     printf("desktop command batches %u bpp: %u batches, %u released fences, %u MONO rows, KEYED and INVERT, exact frames and ARGB hotspot/MOVE/SHOW PASS\n",bpp,batches,released,command_counts[5]);

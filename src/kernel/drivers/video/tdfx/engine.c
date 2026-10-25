@@ -41,6 +41,7 @@
 	SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 #include <ciuki/kernel.h>
+#include <ciuki/swdib.h>
 #include "engine.h"
 #include "registers.h"
 
@@ -181,6 +182,63 @@ static int copy(void *ctx,const struct fb_rect *r,int32_t x,int32_t y)
     /* No replay: an overlapping command may have executed partially. */
     return err;
 }
+static uint32_t command_bits(void *ctx)
+{ return caps(ctx)&1u ? 1u<<CIUKI_CMD_SCALED : 0; }
+static uint32_t command_features(void *ctx)
+{ return caps(ctx)&1u ? CIUKI_CAP_STRETCH : 0; }
+static bool scanout(const struct tdfx_engine *e,const struct swdib_target *t)
+{
+    const struct fb_device *f=t ? &t->device : 0;
+    return f && t->kind==CIUKI_TARGET_SCANOUT && !t->offset &&
+        f->phys==e->fb.phys && f->generation==e->fb.generation &&
+        f->width==e->fb.width && f->height==e->fb.height &&
+        f->pitch==e->fb.pitch && f->bpp==e->fb.bpp &&
+        f->red_size==e->fb.red_size && f->red_pos==e->fb.red_pos &&
+        f->green_size==e->fb.green_size && f->green_pos==e->fb.green_pos &&
+        f->blue_size==e->fb.blue_size && f->blue_pos==e->fb.blue_pos;
+}
+static int stretch(void *ctx,const struct swdib_command *c)
+{
+    struct tdfx_engine *e=ctx;
+    if (!e->active || e->quarantined) return -EIO;
+    if (!c || !c->record) return -EOPNOTSUPP;
+    const struct ciuki_batch_record *r=c->record;
+    struct fb_rect src={r->sx,r->sy,(int32_t)r->sw,(int32_t)r->sh};
+    struct fb_rect dst={r->dx,r->dy,(int32_t)r->dw,(int32_t)r->dh};
+    /* No guessed Bresenham phase: only exact constant-row replication.
+     * Validate the entire record, including overlap/clip list, before I/O. */
+    if (r->opcode!=CIUKI_CMD_SCALED || r->filter!=CIUKI_FILTER_NEAREST_EDGE ||
+        !scanout(e,c->src) || !scanout(e,c->dst) || r->sw!=r->dw || r->sh!=1 ||
+        !rect(e,&src) || !rect(e,&dst) || swdib_validate(c)) return -EOPNOTSUPP;
+    /* Voodoo3 guide 7.2.16/21/23.2, X.Org tdfx_video.c stretch sequence.
+     * Keep the original source/destination for each clip: clipping must not
+     * restart the sampling phase. Clip1 leaves the legacy clip0 intact. */
+    for (unsigned n=0;n<(r->clip_count ? r->clip_count : 1);n++) {
+        int64_t l=dst.x,t=dst.y,right=(int64_t)dst.x+dst.width,bottom=(int64_t)dst.y+dst.height;
+        if (r->clip_count) {
+            const struct ciuki_batch_clip *p=&c->clips[n];
+            if (p->x>l) l=p->x;
+            if (p->y>t) t=p->y;
+            if ((int64_t)p->x+p->width<right) right=(int64_t)p->x+p->width;
+            if ((int64_t)p->y+p->height<bottom) bottom=(int64_t)p->y+p->height;
+        }
+        if (l>=right || t>=bottom) continue;
+        int err=wait_status(e,r->clip_count ? 8 : 6,false); if (err) return err;
+        e->io.drain(e->io.ctx);
+        if (r->clip_count) {
+            wr(e,CLIP1_MIN,xy((uint32_t)l,(uint32_t)t)); wr(e,CLIP1_MAX,xy((uint32_t)right,(uint32_t)bottom));
+        }
+        wr(e,SRC_FORMAT,e->format); wr(e,DST_FORMAT,e->format);
+        wr(e,SRC_SIZE,xy(r->sw,r->sh)); wr(e,SRC_XY,xy(r->sx,r->sy));
+        wr(e,DST_SIZE,xy(r->dw,r->dh)); wr(e,DST_XY,xy(r->dx,r->dy));
+        /* Reserve separately: the documented PCI FIFO has at most 31 slots. */
+        err=wait_status(e,1,false); if (err) return err;
+        wr(e,CMD_2D,SCRN_TO_SCRN_STRETCH|CMD_2D_GO|(r->clip_count ? STRETCH_CLIP1 : 0)|(0xccu<<24));
+        err=sync_engine(e); if (err) return err;
+        e->operations++;
+    }
+    return 0;
+}
 static uint32_t rgb(const struct tdfx_engine *e,uint32_t p)
 {
     if (e->fb.bpp==32) return p&0xffffffu;
@@ -302,7 +360,8 @@ int tdfx_engine_start(struct tdfx_engine *e,const struct tdfx_io *io,
     e->format=f->pitch|(f->bpp==16 ? 0x30000u : 0x50000u);
     e->ops=(struct accel_ops){.ctx=e,.sync=sync_engine,.copy_rect=copy,.fill_rect=fill,
         .cursor_set=cursor_set,.cursor_move=cursor_move,.cursor_show=cursor_show,
-        .stop=stop,.capabilities=caps,.cpu_ready=cpu_ready,.set_pause=set_pause};
+        .stop=stop,.capabilities=caps,.cpu_ready=cpu_ready,.set_pause=set_pause,
+        .command_bits=command_bits,.command_features=command_features,.stretch_rect=stretch};
     uint32_t cfg=io->read(io->ctx,VIDEO_PROC_CONFIG);
     uint32_t misc=io->read(io->ctx,MISC_INIT1);
     uint32_t expected=1u|128u|(1u<<10)|((f->bpp/8u-1u)<<18);
@@ -322,10 +381,13 @@ int tdfx_engine_start(struct tdfx_engine *e,const struct tdfx_io *io,
      * disguise unrelated work. No command before presenter exclusion. */
     int err=wait_status(e,0,true); if (err) return err;
     err=hide(e); if (err) return err;
-    err=wait_status(e,7,false); if (err) return err;
+    err=wait_status(e,9,false); if (err) return err;
     wr(e,CLIP0_MIN,0); wr(e,CLIP0_MAX,xy(f->width,f->height));
     wr(e,SRC_BASE_ADDR,0); wr(e,DST_BASE_ADDR,0);
     wr(e,COMMAND_EXTRA,0);
+    /* Guide 7.2.8/8.2.6: disable firmware's forced line/polygon errors.
+     * This private engine exposes no operation that can re-enable them. */
+    wr(e,BRES_ERROR0,0); wr(e,BRES_ERROR1,0);
     /* The donor disables 2D block writes for SDRAM. Use the conservative
      * setting for both memory types, without altering CLUT/palette state. */
     wr(e,MISC_INIT1,misc|(1u<<15));

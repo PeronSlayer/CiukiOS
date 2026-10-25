@@ -104,6 +104,9 @@ enum alias_op { ALIAS_PUBLISH, ALIAS_REVOKE, ALIAS_SAMPLE, ALIAS_SAMPLE_ACCESS }
  * one pool PTE plus sixteen window PTEs, no allocation, no yield. */
 static bool aliases(struct dosvm *v, uint32_t index, enum alias_op op, uint32_t phys)
 {
+    /* Borrowed LFB PTEs never enter the pool sampler or publication path.
+     * The original RAM frame remains pinned/charged until copy-back. */
+    if (v->vbe_direct.pages && pool_va(index)-v->vbe_direct.base<v->vbe_direct.pages*PAGE_SIZE) return false;
     struct vm_pool *pool = &v->memory.pool;
     bool accessed = false;
     for (int i = -1; i < (int)VM_POOL_WINDOWS; i++) {

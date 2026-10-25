@@ -43,7 +43,10 @@ struct accel_ops {
     uint32_t (*command_bits)(void *);
     int (*command)(void *, const struct swdib_command *);
     void (*cursor_limits)(void *, uint32_t *width, uint32_t *height);
-    uint32_t (*command_features)(void *); /* optional CIUKI_CAP_BILINEAR */
+    uint32_t (*command_features)(void *); /* optional BILINEAR / STRETCH bits */
+    /* Optional exact edge-sampled SCALED (CIUKI_CAP_STRETCH). A clean refusal
+     * precedes every fragment. Same retained targets/clip union as command. */
+    int (*stretch_rect)(void *, const struct swdib_command *);
 };
 struct vfs;
 /* -EOPNOTSUPP guarantees no submission and no modified pixels. Success

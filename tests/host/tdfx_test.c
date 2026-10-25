@@ -139,13 +139,19 @@ static void launch(uint32_t cmd)
     for (unsigned y=0;y<h;y++) for (unsigned x=0;x<w;x++) {
         int tx=dx+(int)x*xs,ty=dy+(int)y*ys;
         CHECK(tx>=0 && ty>=0 && tx<(int)fb.width && ty<(int)fb.height);
+        if (cmd&STRETCH_CLIP1) {
+            unsigned lo=fake.regs[CLIP1_MIN/4],hi=fake.regs[CLIP1_MAX/4];
+            if (tx<(int)(lo&65535) || ty<(int)(lo>>16) || tx>=(int)(hi&65535) || ty>=(int)(hi>>16)) continue;
+        }
         uint8_t *to=pixels+ty*fb.pitch+tx*bytes;
         if (fake.drop_write) continue;
         if ((cmd&15)==5) {
             uint32_t colour=fake.regs[COLOR_FORE/4]; memcpy(to,&colour,bytes);
         } else {
-            CHECK((cmd&15)==1);
+            CHECK((cmd&15)==1 || (cmd&15)==2);
+            unsigned source=fake.regs[SRC_SIZE/4];
             int fromx=sx+(int)x*xs,fromy=sy+(int)y*ys;
+            if ((cmd&15)==2) { fromx=sx+x*(source&65535)/w; fromy=sy+y*(source>>16)/h; }
             CHECK(fromx>=0 && fromy>=0 && fromx<(int)fb.width && fromy<(int)fb.height);
             uint8_t p[4]; memcpy(p,pixels+fromy*fb.pitch+fromx*bytes,bytes); memcpy(to,p,bytes);
         }
@@ -202,6 +208,36 @@ static void wrote(unsigned n,uint32_t reg,uint32_t value)
 static struct tdfx_engine e;
 static void start_core(bool cursor)
 { CHECK(!tdfx_engine_start(&e,&io,&fb,cursor ? cursor_page : 0,g_boot.display.vram_bytes-PAGE_SIZE)); CHECK(e.cpu_safe); trace_reset(); }
+static void stretch_test(unsigned bits)
+{
+    setup(bits); start_core(false);
+    CHECK(e.ops.stretch_rect && (e.ops.command_features(&e)&CIUKI_CAP_STRETCH) &&
+          (e.ops.command_bits(&e)&(1u<<CIUKI_CMD_SCALED)));
+    struct swdib_target target={.device=fb,.identity=pixels,.kind=CIUKI_TARGET_SCANOUT,.rights=3};
+    struct swdib_target oracle=target; oracle.device.mapped=reference; oracle.identity=reference;
+    for (unsigned i=0;i<fb.size;i++) pixels[i]=(i*17u)&255;
+    memcpy(reference,pixels,sizeof(pixels));
+    struct ciuki_batch_clip clips[]={{3,4,8,4},{8,6,12,12}};
+    struct ciuki_batch_record r={.opcode=CIUKI_CMD_SCALED,.record_bytes=128,.dst=1,.src=1,
+        .sx=2,.sy=1,.sw=20,.sh=1,.dx=2,.dy=4,.dw=20,.dh=15,.filter=CIUKI_FILTER_NEAREST_EDGE,
+        .clip_offset=8,.clip_count=2};
+    struct swdib_command c={.record=&r,.src=&target,.dst=&target,.clips=clips};
+    struct swdib_command ref=c; ref.src=ref.dst=&oracle;
+    CHECK(!swdib_validate(&ref)); swdib_execute(&ref,0,0);
+    CHECK(!e.ops.stretch_rect(&e,&c)); CHECK(!memcmp(pixels,reference,sizeof(pixels)));
+    /* Refusal precedes every command/register write and all cursor changes. */
+    unsigned count=fake.count;
+    r.filter=CIUKI_FILTER_BILINEAR; CHECK(e.ops.stretch_rect(&e,&c)==-EOPNOTSUPP && fake.count==count);
+    r.filter=CIUKI_FILTER_NEAREST_EDGE; r.sw=16;
+    CHECK(e.ops.stretch_rect(&e,&c)==-EOPNOTSUPP && fake.count==count);
+    r.sw=20; target.kind=CIUKI_TARGET_SYSTEM;
+    CHECK(e.ops.stretch_rect(&e,&c)==-EOPNOTSUPP && fake.count==count);
+    target.kind=CIUKI_TARGET_SCANOUT; r.sy=r.dy;
+    CHECK(e.ops.stretch_rect(&e,&c)==-EOPNOTSUPP && fake.count==count);
+    r.sy=1; fake.after_launch_busy=true;
+    CHECK(e.ops.stretch_rect(&e,&c)==-ETIMEDOUT && !e.ops.command_bits(&e));
+    CHECK(!e.ops.command_features(&e));
+}
 static void golden(unsigned bits)
 {
     setup(bits); start_core(false);
@@ -421,7 +457,7 @@ static void lifecycle(const char *name)
         } else { CHECK(!guard); CHECK(!memcmp(saved,pixels,sizeof(saved))); }
         CHECK(marker_durable); return;
     }
-    CHECK(live_ops && !memcmp(saved,pixels,sizeof(saved)) && fake.native_draws==4);
+    CHECK(live_ops && !memcmp(saved,pixels,sizeof(saved)) && fake.native_draws==5);
     CHECK(live_ops->capabilities(live_ops->ctx)==(!strcmp(name,"cursorless") ? 1u : 3u));
     CHECK(!memcmp(cursor_saved,cursor_page,sizeof(cursor_saved))); /* setup didn't overwrite unknown cursor */
     tdfx_driver.record(); tdfx_driver.record(); CHECK(logs==1);
@@ -453,6 +489,8 @@ int main(int argc,char **argv)
 {
     CHECK(argc==2); const char *s=argv[1];
     if (!strcmp(s,"goldens16")) golden(16);
+    else if (!strcmp(s,"stretch16")) stretch_test(16);
+    else if (!strcmp(s,"stretch32")) stretch_test(32);
     else if (!strcmp(s,"goldens32")) golden(32);
     else if (!strcmp(s,"trace")) trace_test();
     else if (!strcmp(s,"refusal")) refusal();

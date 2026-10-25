@@ -222,7 +222,7 @@ static int park(struct dosvm *v,unsigned timeout)
 }
 static int map_aperture(struct dosvm *v, bool grant)
 {
-    if (fullscreen_linear) return 0; /* VBE keeps its private RAM mapping */
+    if (fullscreen_linear) return 0; /* VBE revocation owns its separate PTE set */
     uint32_t *pd=P2V(v->as.pd_phys);
     if (!(pd[0]&PTE_P)) return -EFAULT;
     uint32_t *pt=P2V(pd[0]&~0xFFFu);
@@ -238,7 +238,14 @@ static int map_aperture(struct dosvm *v, bool grant)
 }
 void dosvm_fullscreen_mode_changed(struct dosvm *v)
 {
-    if (fullscreen_owner!=v) return;
+    uint32_t flags=irq_save();
+    if (fullscreen_owner!=v) { irq_restore(flags); return; }
+    /* Copy-back can yield. Pin the global owner and aperture snapshot until
+     * this VM's mode-change continuation has queued the ordered return. */
+    bool busy=fullscreen_busy;
+    fullscreen_busy=true;
+    irq_restore(flags);
+    dosvm_vbe_direct_revoke(v);
     /* A guest worker cannot synchronously park itself. Finish the synthetic
      * operation, then park at its normal checkpoint for the display worker. */
     arch_vga_io(false); map_aperture(v,false);
@@ -246,6 +253,7 @@ void dosvm_fullscreen_mode_changed(struct dosvm *v)
     fullscreen_revoked=true; if (transfer_vm==v) transfer_vm=0;
     v->fullscreen_hold=true;
     display_fullscreen_return_request();
+    flags=irq_save(); fullscreen_busy=busy; irq_restore(flags);
 }
 static void linear_palette(struct dosvm *v)
 {
@@ -301,6 +309,7 @@ int dosvm_fullscreen_enter(struct dosvm_key key)
         fullscreen_palette=~v->vga.display_changes; linear_palette(v);
         e=dosvm_vbe_flush(v,true);
         if (e<0) goto rollback;
+        (void)dosvm_vbe_direct_enter(v); /* any refusal retains the copy path */
         e=0;
     } else {
         vga_hardware_load(&v->vga,&hardware);
@@ -334,6 +343,7 @@ int dosvm_fullscreen_enter(struct dosvm_key key)
     goto resume;
 rollback:
     {
+        dosvm_vbe_direct_revoke(v);
         int restored=display_fullscreen_end();
         recovery_failed=restored!=0;
         if (restored) e=restored;
@@ -351,7 +361,7 @@ static unsigned page_count(uint16_t pages) { unsigned n=0; for (;pages;pages&=(u
 int dosvm_fullscreen_leave(struct dosvm_key key, bool background)
 {
     if (!dosvm_fullscreen_active(key)) return 0;
-    if (fullscreen_busy) return -EBUSY;
+    if (fullscreen_busy || fullscreen_owner->vbe_direct.copying) return -EBUSY;
     fullscreen_busy=true;
     fullscreen_service_task=g_current;
     struct fs_boost boost=boost_begin();
@@ -369,6 +379,7 @@ int dosvm_fullscreen_leave(struct dosvm_key key, bool background)
     uint64_t park_ms=g_ticks-began;
     if (parked) klog("[dosvm] fullscreen_quiesced vm=%u generation=%u park_ms=%llu transfer=%u",
         key.id,key.generation,park_ms,(unsigned)transfer);
+    dosvm_vbe_direct_revoke(v);
     uint32_t flags=irq_save();
     arch_vga_io(false);
     uint32_t dirty=collect_dirty(v,false);
@@ -424,6 +435,9 @@ void dosvm_fullscreen_stopping(struct dosvm *v)
         display_fullscreen_return_request();
         uint32_t flags=irq_save();
         arch_vga_io(false);
+        /* Fault/stop can run with IF clear. Withdraw immediately, then the
+         * display worker copies back before restoring the provider. */
+        dosvm_vbe_direct_withdraw(v);
         (void)collect_dirty(v,false); /* the PTEs below no longer show guest writes */
         map_aperture(v,false);
         fullscreen_revoked=true;

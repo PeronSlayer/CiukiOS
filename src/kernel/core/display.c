@@ -572,6 +572,13 @@ int display_fullscreen_write(uint32_t offset,const void *data,uint32_t bytes)
     return fullscreen_display && fullscreen_native && !switching ?
         fullscreen_provider->write(offset,data,bytes) : -EIO;
 }
+int display_fullscreen_lfb(struct display_lfb *out)
+{
+    if (!out) return -EINVAL;
+    memset(out,0,sizeof(*out));
+    return fullscreen_display && fullscreen_native && !switching &&
+        fullscreen_provider && fullscreen_provider->lfb ? fullscreen_provider->lfb(out) : -EOPNOTSUPP;
+}
 static int fullscreen_windowed(int error)
 {
     klog("[display] fullscreen=0 continuation=windowed error=%d",error);

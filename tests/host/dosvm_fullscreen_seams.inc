@@ -20,14 +20,36 @@ static unsigned fs_end_sleeps; /* fx-22: safe points inside the native restore *
 static bool fs_vbe_available;
 static uint8_t fs_linear[DOS_VBE_BYTES];
 static unsigned fs_linear_writes;
+static unsigned fs_linear_bytes;
 static int fs_linear_error;
+static bool fs_direct_available;
+static uint32_t fs_direct_phys,fs_direct_cache;
+static unsigned fs_direct_bad;
+bool vmm_cache_alias_ok(uint32_t physical,uint32_t bytes,uint32_t cache)
+{ return physical==fs_direct_phys && bytes<=DOS_VBE_BYTES && cache==fs_direct_cache && fs_direct_bad!=5; }
+void framebuffer_write_drain(void) {}
+int display_fullscreen_lfb(struct display_lfb *out)
+{
+    if (!fs_direct_available) return -EOPNOTSUPP;
+    const struct dos_video_mode *m=dos_video_mode(fs_expected_owner->vbe_mode);
+    CHECK(fs_display && m);
+    *out=(struct display_lfb){.physical=fs_direct_phys,.mapped=P2V(fs_direct_phys),
+        .bytes=fs_direct_bad==1 ? PAGE_SIZE : DOS_VBE_BYTES,.width=m->width,
+        .height=m->height,.pitch=m->pitch,.bpp=m->bpp,.cache_flags=fs_direct_cache};
+    if (fs_direct_bad==2) out->pitch++;
+    if (fs_direct_bad==3) out->physical++;
+    if (fs_direct_bad==4) out->bpp=32;
+    return 0;
+}
 bool display_fullscreen_supported(uint16_t mode)
 { return fs_vbe_available && dos_video_mode(mode); }
 int display_fullscreen_write(uint32_t offset,const void *p,uint32_t bytes)
 {
     CHECK(fs_display && offset<=DOS_VBE_BYTES && bytes<=DOS_VBE_BYTES-offset);
     if (fs_linear_error) return fs_linear_error;
-    memcpy(fs_linear+offset,p,bytes);fs_linear_writes++;return 0;
+    memcpy(fs_linear+offset,p,bytes);
+    if (fs_direct_available) memcpy(P2V(fs_direct_phys+offset),p,bytes);
+    fs_linear_writes++;fs_linear_bytes+=bytes;return 0;
 }
 void display_fullscreen_return_request(void) {}
 int display_fullscreen_checkpoint(const char *step,int result)

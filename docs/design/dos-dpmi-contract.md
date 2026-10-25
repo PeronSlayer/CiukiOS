@@ -1018,6 +1018,18 @@ VGA window frames) stays resident: a deliberate difference from Windows 98,
 whose V86 memory is pageable, because the monitor, the VGA model and DPMI
 real-mode stacks use it directly.
 
+**101-d direct VBE amendment.** DPMI 0800h continues returning the VM-local
+pool address for `DOS_VBE_PHYS`, never a physical BAR. During exclusive native
+full screen, a matching provider may temporarily replace only its visible
+page-rounded PTEs with borrowed LFB pages. Original RAM stays pinned and
+charged, excluded from replacement and the global sampler. Guest dirty bits
+remain frame evidence, but no per-frame copy is needed. Kernel transfers and
+screenshots read the exported LFB alias while mapped. The display-driver-model
+101-d protocol holds the VM, withdraws guest access, copies back, restores
+PTEs and only then restores desktop ownership. Hotkey/focus loss, stop, fault,
+mode change and entry rollback all revoke; any admission refusal retains the
+pool-backed copy path. A parked VM cannot be destroyed during the transfer.
+
 **Locked compatibility mode.** `dosvm_config.memory_locked`, set per game by
 the launcher (`/system/settings/dos-game-N.cfg` line `DOS memory=locked`,
 F12 key 4, `--dos-memory=`) and passed in CREATE `launch.memory = 1`, keeps
