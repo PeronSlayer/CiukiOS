@@ -122,9 +122,7 @@ int gl_state(struct gl_context *c, unsigned id, const union gl_arg *a,
     if (mask & GL_VIEWPORT_BIT) {
       COPY(viewport);
       COPY(range);
-      glViewport(c->viewport[0], c->viewport[1],
-                 c->viewport[2] ? c->viewport[2] : 1,
-                 c->viewport[3] ? c->viewport[3] : 1);
+      gl_sync_viewport(c);
     }
     if (mask & GL_SCISSOR_BIT) {
       RESTORE(sw.scissor);

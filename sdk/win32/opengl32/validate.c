@@ -104,12 +104,9 @@ unsigned gl_validate(struct gl_context *c, unsigned id, const union gl_arg *a) {
       return GL_INVALID_VALUE;
     return 0;
   case ID_glViewport:
+    return I(2) < 0 || I(3) < 0 ? GL_INVALID_VALUE : 0;
   case ID_glScissor:
-    if (I(2) < 0 || I(3) < 0 || I(2) > (id == ID_glViewport ? 2048 : 65536) ||
-        I(3) > (id == ID_glViewport ? 2048 : 65536))
-      return GL_INVALID_VALUE;
-    if (id == ID_glViewport &&
-        (I(0) < -2048 || I(0) > 2048 || I(1) < -2048 || I(1) > 2048))
+    if (I(2) < 0 || I(3) < 0 || I(2) > 65536 || I(3) > 65536)
       return GL_INVALID_VALUE;
     return 0;
   case ID_glMatrixMode:

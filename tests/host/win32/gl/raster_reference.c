@@ -5,12 +5,15 @@
  * SPDX-License-Identifier: MIT */
 #include "../../../../sdk/libgl/software/renderer.h"
 #include <assert.h>
+#include <stdio.h>
+#include <string.h>
 #define sw_triangle reference_unused_triangle
 #define sw_fragment reference_fragment
 #define sw_line reference_line
 #define sw_s3tc reference_s3tc
 #define sw_color_format reference_color_format
 #define sw_base_format reference_base_format
+unsigned reference_base_format(unsigned);
 #define mip_lod reference_unused_mip_lod
 #include "../../../../sdk/libgl/software/renderer.c"
 #undef mip_lod
@@ -70,7 +73,8 @@ static int mip_lod(const struct sw_texture *t, const struct gradient g[2],
   if (t->min == GL_NEAREST || t->min == GL_LINEAR)
     return 1;
   if (t->min == GL_NEAREST_MIPMAP_NEAREST || t->min == GL_LINEAR_MIPMAP_NEAREST)
-    return lod + (rho >= 363 ? 128 : 1);
+    return !lod && t->mag == GL_LINEAR && t->min == GL_NEAREST_MIPMAP_NEAREST
+               ? (rho >= 363 ? 129 : 0) : lod + (rho >= 363 ? 128 : 1);
   /* Binary log in 8 fractional bits, integer only. */
   uint64_t n = (uint64_t)rho << 8;
   for (int bit = 128; bit; bit >>= 1) {
@@ -89,6 +93,85 @@ static int mip_lod(const struct sw_texture *t, const struct gradient g[2],
 #undef sw_s3tc
 #undef sw_color_format
 #undef sw_base_format
+/* These expected components/filters are independent of the shared sampler. */
+void raster_review_sampling_case(const char *which) {
+  if (!which || !strcmp(which, "border")) {
+    const unsigned formats[] = {GL_RGBA, GL_RGB, GL_ALPHA, GL_LUMINANCE,
+                                 GL_LUMINANCE_ALPHA, GL_INTENSITY};
+    const int expected[][4] = {{100,20,40,30}, {100,20,40,255}, {0,0,0,30},
+                               {100,100,100,255}, {100,100,100,30}, {100,100,100,100}};
+    for (unsigned f=0; f<6; f++) {
+      uint32_t black = f==1 || f==3 ? 0xff000000 : 0;
+      struct sw_texture t={.target=GL_TEXTURE_2D, .wrap_s=GL_CLAMP,
+        .wrap_t=GL_CLAMP, .min=GL_LINEAR, .mag=GL_LINEAR,
+        .border_color=0x3cc82850};
+      t.image[0]=(struct sw_image){.w=1,.h=1,.pixels=&black,.internal=formats[f]};
+      int out[4]; sample(&t,0,32768,0,out);
+      for(int k=0;k<4;k++) assert(out[k]==expected[f][k]);
+      sample(&t,32768,65536,0,out);
+      for(int k=0;k<4;k++) assert(out[k]==expected[f][k]);
+      t.target=GL_TEXTURE_1D; sample(&t,0,0,0,out);
+      for(int k=0;k<4;k++) assert(out[k]==expected[f][k]);
+      if(formats[f]==GL_RGB) {
+        struct sw_unit u={.mode=GL_DECAL,.texture=&t};
+        int primary[4]={11,22,33,44}, previous[4]={11,22,33,44};
+        environment(&u,out,primary,previous);
+        assert(previous[0]==100 && previous[1]==20 && previous[2]==40 && previous[3]==44);
+      }
+    }
+    puts("PASS amendment2 internal-format border expansion (six formats, 1D/2D, DECAL)");
+  }
+  if (!which || !strcmp(which, "lod")) {
+    uint32_t texels[4]={0xffff0000,0xff0000ff,0xff00ff00,0xffffffff};
+    struct sw_texture t={.target=GL_TEXTURE_1D,.wrap_s=GL_REPEAT,
+      .wrap_t=GL_REPEAT,.mag=GL_LINEAR};
+    t.image[0]=(struct sw_image){.w=4,.h=1,.pixels=texels,.internal=GL_RGBA};
+    t.image[1]=(struct sw_image){.w=2,.h=1,.pixels=texels+2,.internal=GL_RGBA};
+    t.image[2]=(struct sw_image){.w=1,.h=1,.pixels=texels+3,.internal=GL_RGBA};
+    const int filters[]={GL_NEAREST_MIPMAP_NEAREST,GL_NEAREST_MIPMAP_LINEAR};
+    for(unsigned f=0;f<2;f++) {
+      t.min=filters[f];
+      const int lods[]={0,1,64,127,128};
+      for(unsigned j=0;j<5;j++) {
+        int out[4]; sample(&t,10240,0,lods[j],out);
+        assert(out[0]==223 && out[1]==0 && out[2]==32 && out[3]==255);
+      }
+      int out[4]; sample(&t,10240,0,129,out);
+      assert(out[2]==0 && out[0]<255);
+      t.mag=GL_NEAREST; sample(&t,10240,0,1,out);
+      assert(out[0]>=254 && out[2]==0);
+      t.mag=GL_LINEAR;
+      /* 1.25 texels/pixel must still magnify through actual plane/LOD setup. */
+      uint32_t pixels[16*16]={0};
+      struct sw_state s={.width=16,.height=16,.color=pixels,.color_mask=~0u};
+      s.unit[0]=(struct sw_unit){.enabled=1,.mode=GL_REPLACE,.texture=&t};
+      struct sw_vertex v[3]={{.qw={1048576}}, {.x=256,.uv={{5*65536}},.qw={1048576}},
+                             {.y=256,.qw={1048576}}};
+      sw_triangle(&s,v,v+1,v+2);
+      assert(pixels[15*16]==0xffdf0020);
+    }
+    puts("PASS amendment2 LINEAR/NEAREST_MIPMAP min-mag switch at LOD 0.5");
+  }
+}
+void raster_review_reciprocal_tests(void) {
+  uint32_t rng = 0x243f6a88;
+  for (unsigned i=0;i<1000000;i++) {
+    rng ^= rng<<13; rng ^= rng>>17; rng ^= rng<<5;
+    unsigned d = i<65536 ? 4096+i : 4096+rng%((1u<<27)-4095);
+    uint64_t r = reciprocal48(d);
+    assert(r == (1ULL<<48)/d);
+    for (int sign=-1;sign<=1;sign+=2) {
+      int uv=(int)(rng%((1u<<28)+1))-(1<<27), q=sign*(int)d;
+      assert(project(uv,q,r) == (int64_t)uv*1048576/q);
+    }
+  }
+  const int64_t bounds[]={INT64_MIN,INT64_MAX,-65537,-65536,-1,0,1,65535,65536};
+  for (unsigned i=0;i<sizeof(bounds)/sizeof(*bounds);i++) {
+    int64_t old = bounds[i]%65536; if(old<0) old+=65536;
+    assert(coordinate(bounds[i],GL_REPEAT)==old);
+  }
+  puts("PASS amendment2 1000000 exact perspective reciprocals/projections and signed repeat extrema");
+}
 static int interpolate(int64_t a, int64_t b, int64_t c, int x, int y, int z,
                        int64_t area) {
   return (int)((a * x + b * y + c * z) / area);

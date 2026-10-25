@@ -7,6 +7,7 @@ import re
 import sys
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
 from scripts.win32 import gdi32
@@ -17,18 +18,19 @@ class GLTests(unittest.TestCase):
  def setUpClass(cls):
   cls.build(sanitize=True)
  @classmethod
- def build(cls,sanitize,profile=False):
+ def build(cls,sanitize,profile=False,gamma_hooks=True):
   out=ROOT/'build/host/win32/gl';out.mkdir(parents=True,exist_ok=True);cls.out=out
   spec=importlib.util.spec_from_file_location('glbuild',ROOT/'sdk/libgl/build.py');gl=importlib.util.module_from_spec(spec);spec.loader.exec_module(gl)
   lib=gl.host(sanitize=sanitize)
   units=[ROOT/'sdk/win32/gdi32'/n for n in gdi32.SOURCES if n not in ('compiler.c','compiler.S')]
-  units += [ROOT/'sdk/win32/services/bytes.c',ROOT/'tests/host/win32/gdi32/support.c',HERE/'engine.c',HERE/'amendment.c',HERE/'review.c',HERE/'transport.c',HERE/'fixture.c',HERE/'quake3.c',HERE/'raster.c',HERE/'raster_reference.c']
+  units += [ROOT/'sdk/win32/services/bytes.c',ROOT/'tests/host/win32/gdi32/support.c',HERE/'engine.c',HERE/'amendment.c',HERE/'review.c',HERE/'amendment2.c',HERE/'transport.c',HERE/'fixture.c',HERE/'quake3.c',HERE/'raster.c',HERE/'raster_reference.c']
   units += list((ROOT/'sdk/win32/opengl32').glob('*.c'))+[ROOT/'sdk/libgl/software/renderer.c']
-  cls.binary=out/('engine' if sanitize else 'benchmark')
+  cls.binary=out/(('engine' if sanitize else 'benchmark')+('' if gamma_hooks else '-no-gamma'))
   flags=['-std=c17','-D_GNU_SOURCE','-DW32_HOST_MODEL','-O2','-g','-ffp-contract=off','-Wall','-Wextra','-Werror','-Wno-unused-function','-fno-vectorize','-fno-slp-vectorize','-I'+str(ROOT/'sdk/win32/include'),'-I'+str(ROOT/'sdk/libgl/vendor/include')]
   flags+=['-I'+str(ROOT/'src/kernel/include')]
   if sanitize:flags+=['-fsanitize=address,undefined','-fno-sanitize-recover=all']
   if profile:flags+=['-DSW_PROFILE']
+  if not gamma_hooks:flags+=['-DGL_TEST_NO_GAMMA']
   fixture=out/('fixture-sanitize.o' if sanitize else 'fixture.o')
   subprocess.run(['clang',*flags,'-include',str(HERE/'aliases.h'),'-Dentry=gl_fixture_entry',
     '-DwglUseFontBitmapsA=gl_fixture_font','-c',str(ROOT/'src/probes/win32_gl/exercise.c'),'-o',str(fixture)],check=True)
@@ -109,6 +111,30 @@ class GLTests(unittest.TestCase):
   p=subprocess.run([str(self.binary),'--quake3-default'],capture_output=True,text=True,timeout=120)
   print(p.stdout,end='');self.assertEqual(p.returncode,0,p.stdout+p.stderr)
   check_quake3(p.stdout,sanitize=True,default_format=True)
+ def test_optional_gamma_seam(self):
+  original=self.binary
+  try:
+   self.build(sanitize=True,gamma_hooks=False)
+   p=subprocess.run([str(self.binary),'--amendment2','gamma'],capture_output=True,text=True,timeout=60)
+   print(p.stdout,end='');self.assertEqual(p.returncode,0,p.stdout+p.stderr)
+  finally:
+   type(self).binary=original
+ def test_i686_hot_math_has_no_wide_division(self):
+  from scripts.win32 import opengl32
+  with tempfile.TemporaryDirectory(dir=self.out) as folder:
+   source=Path(folder)/'hot.c';ir=source.with_suffix('.ll')
+   source.write_text('#include "'+str(ROOT/'sdk/libgl/software/renderer.c')+'"\n'
+     'int audit_repeat(int64_t uv) { return coordinate(uv, GL_REPEAT); }\n'
+     'uint64_t audit_reciprocal(unsigned q) { return reciprocal48(q); }\n')
+   subprocess.run(['clang',*opengl32.FLAGS,'-S','-emit-llvm',str(source),'-o',str(ir)],check=True)
+   bodies=dict(re.findall(r'^define [^\n]*@([\w.]+)\([^\n]*\).*?\{(.*?)^}',ir.read_text(),re.M|re.S))
+   pending=['audit_repeat','audit_reciprocal'];seen=set()
+   while pending:
+    name=pending.pop()
+    if name in seen:continue
+    seen.add(name);body=bodies[name]
+    self.assertNotRegex(body,r'\b(?:sdiv|udiv|srem|urem) i64\b',name)
+    pending += [n for n in re.findall(r'\bcall\b[^\n]*@([\w.]+)\(',body) if n in bodies]
 
 def check_quake3(output,sanitize=False,default_format=False):
  expected=json.loads((HERE/'quake3-goldens.json').read_text())

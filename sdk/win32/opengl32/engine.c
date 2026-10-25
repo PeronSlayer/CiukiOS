@@ -522,6 +522,9 @@ static int family(struct gl_context *c, unsigned id, const union gl_arg *a) {
   return 1;
 }
 static int enabled(struct gl_context *c, int n) {
+  int array = array_index(c, n);
+  if (array >= 0)
+    return c->array[array].enabled;
   switch (n) {
   case GL_DEPTH_TEST:
     return c->sw.depth_test;
@@ -1386,14 +1389,12 @@ union gl_arg w32_gl_dispatch(unsigned id, const union gl_arg *a) {
     break;
   }
   case ID_glViewport:
-    if (I(2) < 0 || I(3) < 0 || I(2) > 2048 || I(3) > 2048 || I(0) < -2048 ||
-        I(0) > 2048 || I(1) < -2048 || I(1) > 2048)
+    if (I(2) < 0 || I(3) < 0)
       gl_error(c, GL_INVALID_VALUE);
     else {
       for (int k = 0; k < 4; k++)
-        c->viewport[k] = I(k);
-      if (I(2) && I(3))
-        glViewport(I(0), I(1), I(2), I(3));
+        c->viewport[k] = k < 2 ? I(k) : clampi(I(k), 0, 2048);
+      gl_sync_viewport(c);
     }
     break;
   case ID_glScissor:

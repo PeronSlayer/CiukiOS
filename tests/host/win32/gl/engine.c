@@ -22,6 +22,7 @@ void gl_fixture_tests(void);
 void gl_quake3_benchmark(unsigned, int);
 void gl_quake3_coverage(HDC);
 void gl_raster_tests(void);
+void gl_amendment2_tests(const char *);
 static HDC dc;
 static HGLRC rc;
 static unsigned pixels[W32_GL_WIDTH * W32_GL_HEIGHT];
@@ -298,6 +299,11 @@ static uint64_t now(void) {
 }
 int main(int argc, char **argv) {
   setvbuf(stdout, 0, _IONBF, 0);
+  if (argc > 1 && !strcmp(argv[1], "--amendment2")) {
+    gl_amendment2_tests(argc > 2 ? argv[2] : 0);
+    test_reset();
+    return 0;
+  }
   int benchmark = argc > 1 && !strcmp(argv[1], "--benchmark");
   if (argc > 1 && (!strcmp(argv[1], "--quake3") ||
                   !strcmp(argv[1], "--quake3-default"))) {
@@ -305,6 +311,7 @@ int main(int argc, char **argv) {
     test_reset();
     return 0;
   }
+  gl_amendment2_tests(0);
   fragment_oracles();
   gl_raster_tests();
   struct w32_dib dib = test_dib(pixels, W32_GL_WIDTH, W32_GL_HEIGHT, 32, 0, 1);

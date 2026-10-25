@@ -133,6 +133,16 @@ int gl_window_coord(struct gl_context *c, double value, int axis) {
   int n = (int)scaled;
   return scaled < n ? n - 1 : n;
 }
+void gl_sync_viewport(struct gl_context *c) {
+  /* TinyGL adds signed origin+size and converts raster positions to int.
+   * Software mapping uses the original application viewport through the
+   * bounded gl_window_coord path. Keep only TinyGL's internal copy bounded. */
+  int x = c->viewport[0], y = c->viewport[1];
+  x = x < -2048 ? -2048 : x > 2048 ? 2048 : x;
+  y = y < -2048 ? -2048 : y > 2048 ? 2048 : y;
+  glViewport(x, y, c->viewport[2] ? c->viewport[2] : 1,
+              c->viewport[3] ? c->viewport[3] : 1);
+}
 void gl_window_state(struct gl_context *c) {
   int x = gl_window_coord(c, c->scissor[0], 0),
       y = gl_window_coord(c, c->scissor[1], 1);
@@ -322,6 +332,8 @@ BOOL W32API wglMakeCurrent(HDC dc, HGLRC h) {
   if (c->dc != dc)
     gl_release_present(c);
   c->dc = dc;
+  /* Quake probes device gamma immediately after MakeCurrent, before swapping. */
+  gl_prepare_present(c, dc);
   return 1;
 }
 HGLRC W32API wglGetCurrentContext(void) {

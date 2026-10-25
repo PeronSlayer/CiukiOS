@@ -87,12 +87,15 @@ struct gl_context {
   M4 *texture_base[2], *texture_ptr[2];
   int primitive, locked_first, locked_count;
   unsigned frames, leased_window;
+  unsigned gamma_registered, gamma_valid, gamma_serial, gamma_token, gamma_generation;
   HBITMAP back;
 };
 int gl_target(HDC, unsigned *, unsigned *, unsigned *);
+void gl_prepare_present(struct gl_context *, HDC);
 int gl_refresh_target(struct gl_context *, HDC);
 void gl_select_buffer(struct gl_context *);
 void gl_window_state(struct gl_context *);
+void gl_sync_viewport(struct gl_context *);
 int gl_window_coord(struct gl_context *, double, int);
 unsigned gl_read_color(struct gl_context *, int, int);
 void gl_render_size(unsigned *, unsigned *);

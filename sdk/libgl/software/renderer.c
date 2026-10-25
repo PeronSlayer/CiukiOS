@@ -179,6 +179,20 @@ static unsigned texel(const struct sw_texture *t, const struct sw_image *m,
   return m->pixels[wrap(y, (int)m->h, t->wrap_t) * m->w +
                    wrap(x, (int)m->w, t->wrap_s)];
 }
+/* Border colors have the same base-format component expansion as image data
+ * (GL 1.1 Table 3.7). Do this only on the clamp-border path. */
+static void border_color(const struct sw_texture *t, unsigned internal, int c[4]) {
+  unpack(t->border_color, c);
+  unsigned base = sw_base_format(internal);
+  if (base == GL_ALPHA)
+    c[0] = c[1] = c[2] = 0;
+  else if (base == GL_LUMINANCE || base == GL_LUMINANCE_ALPHA || base == GL_INTENSITY)
+    c[1] = c[2] = c[0];
+  if (base == GL_RGB || base == GL_LUMINANCE)
+    c[3] = 255;
+  else if (base == GL_INTENSITY)
+    c[3] = c[0];
+}
 static void sample_level(const struct sw_texture *t, int level, int u, int v,
                          int linear, int out[4]) {
   const struct sw_image *m = &t->image[level];
@@ -216,8 +230,10 @@ static void sample_level(const struct sw_texture *t, int level, int u, int v,
       int border = (t->wrap_s == GL_CLAMP && (xx < 0 || (unsigned)xx >= m->w)) ||
                    (t->target != GL_TEXTURE_1D && t->wrap_t == GL_CLAMP &&
                     (yy < 0 || (unsigned)yy >= m->h));
-      unpack(border ? t->border_color : m->pixels[ys[j >> 1] * m->w + xs[j & 1]],
-             out_color[j]);
+      if (border)
+        border_color(t, m->internal, out_color[j]);
+      else
+        unpack(m->pixels[ys[j >> 1] * m->w + xs[j & 1]], out_color[j]);
     }
   }
   for (int k = 0; k < 4; k++) {
@@ -231,28 +247,29 @@ static void sample_level(const struct sw_texture *t, int level, int u, int v,
 static void sample(const struct sw_texture *t, int u, int v, int lod,
                    int out[4]) {
   int level = 0, linear = 0, last = 0;
-  if (t) {
-    unsigned size =
-        t->image[0].w > t->image[0].h ? t->image[0].w : t->image[0].h;
-    while (size > 1 && last < SW_LEVELS - 1) {
-      size >>= 1;
-      last++;
-    }
-    if (t->target == GL_TEXTURE_1D)
-      v = 0;
-  }
   if (!t) {
     out[0] = out[1] = out[2] = 0;
     out[3] = 255;
     return;
   }
-  if (lod > 0) {
-    linear = t->min == GL_LINEAR || t->min == GL_LINEAR_MIPMAP_NEAREST ||
+  if (t->target == GL_TEXTURE_1D)
+    v = 0;
+  int crossover = t->mag == GL_LINEAR &&
+      (t->min == GL_NEAREST_MIPMAP_NEAREST || t->min == GL_NEAREST_MIPMAP_LINEAR)
+          ? 128 : 0;
+  if (lod <= crossover) {
+    sample_level(t, 0, u, v, t->mag == GL_LINEAR, out);
+    return;
+  }
+  linear = t->min == GL_LINEAR || t->min == GL_LINEAR_MIPMAP_NEAREST ||
              t->min == GL_LINEAR_MIPMAP_LINEAR;
-    if (t->min != GL_NEAREST && t->min != GL_LINEAR)
-      level = clamp((lod + 128) >> 8, 0, last);
-  } else
-    linear = t->mag == GL_LINEAR;
+  if (t->min != GL_NEAREST && t->min != GL_LINEAR) {
+    /* Only mip minification needs the chain limit. One scalar BSR replaces
+     * the size loop, and magnified/nonmip samples need neither. */
+    unsigned size = t->image[0].w > t->image[0].h ? t->image[0].w : t->image[0].h;
+    last = size ? clamp(31 - (int)__builtin_clz(size), 0, SW_LEVELS - 1) : 0;
+    level = clamp((lod + 128) >> 8, 0, last);
+  }
   if (t->min == GL_NEAREST_MIPMAP_LINEAR || t->min == GL_LINEAR_MIPMAP_LINEAR) {
     level = clamp(lod >> 8, 0, last);
     int next = level + 1;
@@ -411,10 +428,9 @@ static int top(const struct sw_vertex *a, const struct sw_vertex *b) {
  * positive coordinate beyond INT_MAX must still clamp to the positive edge. */
 static int coordinate(int64_t uv, int wrap_mode) {
   if (wrap_mode == GL_REPEAT) {
-    uv %= 65536;
-    if (uv < 0)
-      uv += 65536;
-    return (int)uv;
+    /* Unsigned conversion is defined modulo 2^64, including negative UVs.
+     * The low 16 bits are exactly the nonnegative fractional coordinate. */
+    return (int)((uint64_t)uv & 65535u);
   }
   return uv < 0 ? 0 : uv > 65536 ? 65536 : (int)uv;
 }
@@ -505,8 +521,12 @@ static int mip_lod(const struct sw_texture *t, const struct gradient g[2],
     unsigned octave = 0;
     while (octave < 11 && footprint_ge(largest, den, rho, octave, 512))
       octave++;
-    return (int)octave * 256 +
-           (octave < 11 && footprint_ge(largest, den, rho, octave, 363) ? 128 : 1);
+    int half = octave < 11 && footprint_ge(largest, den, rho, octave, 363);
+    /* 128 previously encoded only mip rounding. With a 0.5 crossover it
+     * must distinguish a footprint above sqrt(2) from magnification. */
+    if (!octave && t->mag == GL_LINEAR && t->min == GL_NEAREST_MIPMAP_NEAREST)
+      return half ? 129 : 0;
+    return (int)octave * 256 + (half ? 128 : 1);
   }
   if (largest) {
     unsigned r = ratio(largest, den, 0);
@@ -545,6 +565,33 @@ static int mip_lod(const struct sw_texture *t, const struct gradient g[2],
 struct plane {
   int64_t row, dx, dy, step, step_rem, value, rem;
 };
+/* Exact floor(2^48/d), 4096 <= d <= 2^27. Normalize to [2^31,2^32),
+ * seed with one 32-bit DIV, then refine floor(2^63/normalized) using integer
+ * Newton correction. The 16-bit seed leaves only a few quotient corrections.
+ * No wide division/remainder helper is called by ordinary perspective spans.
+ * Downscaling a floored quotient is exact; upscaling appends <=4 remainder bits.
+ */
+static uint64_t reciprocal48(unsigned d) {
+  unsigned shift = (unsigned)__builtin_clz(d), n = d << shift;
+  uint64_t r = (uint64_t)(UINT32_MAX / (n >> 16)) << 15;
+  const uint64_t numerator = 1ULL << 63;
+  uint64_t product = r * n;
+  int64_t error = product > numerator ? -(int64_t)(product - numerator)
+                                      : (int64_t)(numerator - product);
+  r = (uint64_t)((int64_t)r + (((int64_t)r * (error >> 32)) >> 31));
+  product = r * n;
+  while (product > numerator) { r--; product -= n; }
+  uint64_t remainder = numerator - product;
+  while (remainder >= n) { r++; remainder -= n; }
+  if (shift <= 15)
+    return r >> (15 - shift);
+  for (unsigned bit = 15; bit < shift; bit++) {
+    r <<= 1;
+    remainder <<= 1;
+    if (remainder >= n) { r++; remainder -= n; }
+  }
+  return r;
+}
 /* A shared reciprocal reconstructs S and T exactly. For |Q| >= 4096,
  * |UV| <= 2^27 makes UV*floor(2^48/|Q|) fit uint64_t. The quotient estimate
  * is at most one low; a remainder comparison corrects it. Small Q retains
@@ -754,7 +801,7 @@ void sw_triangle(struct sw_state *s, const struct sw_vertex *a,
                 reciprocal[t] = reciprocal[1 - t];
               else {
                 SW_COUNT(SW_PERSPECTIVE_DIV, 1);
-                reciprocal[t] = (1ULL << 48) / den;
+                reciprocal[t] = reciprocal48(den);
               }
             }
             for (int k = 0; k < 2; k++) {
@@ -799,7 +846,7 @@ void sw_line(struct sw_state *s, const struct sw_vertex *a,
       c[k] = a->color[k] + (b->color[k] - a->color[k]) * i / n;
     sw_fragment(s, (a->x + (b->x - a->x) * i / n) >> 4,
                 (a->y + (b->y - a->y) * i / n) >> 4,
-                a->z + (b->z - a->z) * i / n, c);
+                a->z + (int)((int64_t)(b->z - a->z) * i / n), c);
   }
 }
 static unsigned u16(const uint8_t *p) { return p[0] | (unsigned)p[1] << 8; }

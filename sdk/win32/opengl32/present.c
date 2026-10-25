@@ -17,6 +17,28 @@ static struct {
   int32_t(W32API *lease)(uintptr_t, DWORD, DWORD, DWORD, struct gl_lease *);
   void(W32API *release)(uintptr_t);
 } user;
+static struct {
+  DWORD(W32API *presenter)(BOOL);
+  DWORD(W32API *ramp)(uint16_t *);
+} gdi_gamma;
+static void bind_gamma(void) {
+  if (gdi_gamma.presenter && gdi_gamma.ramp)
+    return;
+#ifdef W32_HOST_MODEL
+  /* Optional until q3run's GDI seam is integrated. Never pretend a missing
+   * presenter supports device gamma; production uses optional export lookup. */
+  extern DWORD W32API w32_gdi_gamma_presenter(BOOL) __attribute__((weak));
+  extern DWORD W32API w32_gdi_gamma(uint16_t *) __attribute__((weak));
+  gdi_gamma.presenter = w32_gdi_gamma_presenter;
+  gdi_gamma.ramp = w32_gdi_gamma;
+#else
+  void *m = GetModuleHandleA("gdi32.dll");
+  if (!m)
+    return;
+  gdi_gamma.presenter = GetProcAddress(m, "w32_gdi_gamma_presenter");
+  gdi_gamma.ramp = GetProcAddress(m, "w32_gdi_gamma");
+#endif
+}
 static void bind_user(void) {
   if (user.target)
     return;
@@ -82,6 +104,48 @@ void gl_release_present(struct gl_context *c) {
   if (c->leased_window && user.release)
     user.release(c->leased_window);
   c->leased_window = 0;
+  if (c->gamma_registered)
+    gdi_gamma.presenter(FALSE);
+  c->gamma_registered = c->gamma_valid = 0;
+}
+void gl_prepare_present(struct gl_context *c, HDC dc) {
+  bind_user();
+  DWORD values[4];
+  if (user.target && user.target(dc, values) > 0 && values[3] && user.lease) {
+    bind_gamma();
+    if (!c->gamma_registered && gdi_gamma.presenter && gdi_gamma.ramp)
+      c->gamma_registered = !!gdi_gamma.presenter(TRUE);
+  } else if (c->gamma_registered || c->leased_window)
+    gl_release_present(c);
+}
+static int32_t display_call(struct ciuki_w32_display_args *a, const void *payload) {
+#ifdef W32_HOST_MODEL
+  extern int32_t gl_host_display_frame(struct ciuki_w32_display_args *, const void *);
+  return gl_host_display_frame(a, payload);
+#else
+  (void)payload;
+  return (int32_t)w32r_gate(CIUKI_SYS_W32, (DWORD)(uintptr_t)a, sizeof(*a), 0);
+#endif
+}
+static int present_gamma(struct gl_context *c, const struct gl_lease *lease) {
+  if (!c->gamma_registered)
+    return 1;
+  DWORD serial = gdi_gamma.ramp(0);
+  if (c->gamma_valid && c->gamma_serial == serial && c->gamma_token == lease->token &&
+      c->gamma_generation == lease->generation)
+    return 1;
+  uint16_t ramp[768];
+  serial = gdi_gamma.ramp(ramp);
+  struct ciuki_w32_display_args a = {.header = {1, sizeof(a), W32_DISPLAY, 0},
+    .action = W32_DISPLAY_GAMMA, .token = lease->token, .generation = lease->generation,
+    .address = (DWORD)(uintptr_t)ramp};
+  if (display_call(&a, ramp) < 0 || a.error || !a.result)
+    return 0;
+  c->gamma_valid = 1;
+  c->gamma_serial = serial;
+  c->gamma_token = lease->token;
+  c->gamma_generation = lease->generation;
+  return 1;
 }
 static void display_size(unsigned *dw, unsigned *dh) {
 #ifndef W32_HOST_MODEL
@@ -150,6 +214,7 @@ BOOL gl_present(struct gl_context *c, int front) {
   if (user.target && user.target(c->dc, values) > 0 && values[3]) {
     if (c->leased_window && c->leased_window != window)
       gl_release_present(c);
+    gl_prepare_present(c, c->dc);
     if (!user.lease)
       return 0;
     struct gl_lease lease = {0};
@@ -161,6 +226,8 @@ BOOL gl_present(struct gl_context *c, int front) {
     if (lease.width != c->sw.width || lease.height != c->sw.height ||
         (lease.bpp != 16 && lease.bpp != 32) ||
         lease.pitch < c->sw.width * (lease.bpp / 8) || lease.pitch > 65536)
+      return 0;
+    if (!present_gamma(c, &lease))
       return 0;
     uint8_t *copy = gl_alloc(lease.pitch * lease.height);
     if (!copy)
@@ -179,14 +246,7 @@ BOOL gl_present(struct gl_context *c, int front) {
                                        .token = lease.token,
                                        .generation = lease.generation,
                                        .address = (DWORD)(uintptr_t)copy};
-    int32_t result;
-#ifdef W32_HOST_MODEL
-    extern int32_t gl_host_display_frame(struct ciuki_w32_display_args *, const void *);
-    result = gl_host_display_frame(&a, copy);
-#else
-    result =
-        (int32_t)w32r_gate(CIUKI_SYS_W32, (DWORD)(uintptr_t)&a, sizeof(a), 0);
-#endif
+    int32_t result = display_call(&a, copy);
     gl_dealloc(copy);
     if (result < 0 || a.error || !a.result)
       return 0;

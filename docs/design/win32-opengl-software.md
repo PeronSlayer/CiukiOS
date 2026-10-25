@@ -48,6 +48,50 @@ approximation. Host timings and an explicit scalar PIII cost model are evidence
 for this synthesized workload only, not measured guest/game frame rates.
 
 
+### Lead amendment 2: reviewed corrections and measured hot paths
+
+Research rechecked before implementation on 2026-10-25. [GL 1.1 §§3.8.1–2](https://registry.khronos.org/OpenGL/specs/gl/glspec11.pdf)
+requires border components to follow the image base format, fractional repeat
+coordinates even for negative inputs, and a 0.5 min/mag transition for LINEAR
+magnification with NEAREST_MIPMAP_NEAREST/LINEAR minification. Preserve exact
+integer interpolation and D24 line depths; fix the intermediate product width.
+[glIsEnabled](https://learn.microsoft.com/en-us/windows/win32/opengl/glisenabled)
+includes client arrays; the texture coordinate query uses the client unit from
+[ARB_multitexture](https://registry.khronos.org/OpenGL/extensions/ARB/ARB_multitexture.txt)
+(client state selection also in [GL 1.3 §2.8](https://registry.khronos.org/OpenGL/specs/gl/glspec13.pdf)).
+[glViewport](https://learn.microsoft.com/en-us/windows/win32/opengl/glviewport)
+clamps positive dimensions to the advertised maximum. Keep application origins
+for queries and use bounded internal coordinates for the TinyGL adapter.
+
+The lead's real-demo profile predates f7-08: its per-channel interpolation
+is already replaced by exact incremental planes in 50926c685. Remaining repeat
+coordinate reduction still uses wide remainder; replace it by a low-16-bit mask.
+Remove wide reciprocal division from ordinary perspective spans using an exact
+normalized integer reciprocal with correction. Keep pathological small-Q,
+sliver and fractional trilinear fallbacks, with independent division oracles.
+
+[SetDeviceGammaRamp](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-setdevicegammaramp)
+belongs to the display device. Bind the q3run GDI presenter/count and ramp/serial
+interfaces optionally, without an import requirement on this branch. Register
+once per full-screen context at MakeCurrent (before Quake probes gamma),
+unregister when it releases presentation, and
+send the existing W32_DISPLAY_GAMMA record before a frame whenever the ramp
+serial or exact lease token/generation changes. Retry failed updates. Test
+payloads and lifetime through the production present path. No public ABI change
+is needed; the transport and ramp records already exist.
+
+The normal reciprocal uses one 32-bit divide to seed a normalized integer
+Newton correction, then bounded exact quotient/remainder correction. A million
+denominators/projections match division, including both signs. A target-i686
+LLVM IR audit follows helper calls from repeat/reciprocal wrappers and rejects
+64-bit division/remainder operations. Small-Q and trilinear/sliver fallbacks
+remain outside that audit. Mip-chain maximum selection now uses one bit scan
+and is skipped for magnification and nonmip filtering. The existing model keeps
+its conservative 160-cycle perspective coefficient for the new seeded reciprocal;
+it has no separate repeat-modulo charge and cannot quantify that removed cost.
+All rendered goldens remain unchanged; the LOD oracle has only the documented
+0.5-crossover encoding correction.
+
 ### Quake III coverage inventory
 
 The table covers all 59 GL 1.1 calls referenced by the examined renderer,
@@ -77,7 +121,7 @@ that does not imply conformance for unexercised APIs such as evaluators.
 | `ChoosePixelFormat`, `DescribePixelFormat`, `SetPixelFormat`, `GetPixelFormat` | GDI-owned stable namespace. WGL-named aliases delegate to it for mini-driver clients; normal `opengl32.dll` ICD clients import GDI directly. Indices 1–4 retain D16/S0 and their buffering/color classes; indices 5–10 add double-buffered D24/S0, D16/S8 and D24/S8 in XRGB/RGB565 pairs. XRGB reports cColorBits=32, RGB 8/8/8, alpha 0; all are system-driver formats without GENERIC_FORMAT. |
 | `wglCreateContext`, `wglMakeCurrent`, `wglDeleteContext`, `wglGetCurrentContext`, `wglGetCurrentDC`, `wglGetProcAddress`, `wglShareLists` | Existing ownership/rebind/share rules retained. Context attachment precision and double buffering now come from the selected descriptor rather than the numeric format index. |
 | `SwapBuffers` / `wglSwapBuffers` | Existing GDI transport / direct WGL alias; successful double-buffer presentation copies back to front and preserves back, matching PFD_SWAP_COPY. Front drawing is submitted by Flush/Finish. |
-| `SetDeviceGammaRamp` / optional 3DFX gamma probes | GDI responsibility; no 3DFX gamma extension is advertised here. |
+| `SetDeviceGammaRamp` / optional 3DFX gamma probes | GDI owns the ramp. Optional q3run GDI hooks register GL as a full-screen presenter; GL sends W32_DISPLAY_GAMMA on serial or lease changes. Without those hooks it does not register gamma support. No 3DFX gamma extension is advertised here. |
 
 ### State, enum and format inventory
 
