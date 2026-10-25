@@ -514,3 +514,33 @@ Decisions, all in `apps/control/app.c`:
   sits on the buttons.
 - The keyboard layout note that was drawn over the Multimedia page moved to
   the Keyboard page.
+
+## Control Panel page changes repaint the whole dialog (2026-10-25, 1.0.1 alpha)
+
+Owner trial on real hardware (image of main 60d029c9): the Control Panel and
+its Properties windows "keep drawing on top of each other and glitching".
+
+Research: a Windows 98 property sheet is a dialog whose pages are child dialogs
+of the tab control. Selecting a tab hides the previous page's child windows and
+shows the new page's; Windows invalidates the page area and paints only the
+active page (`WM_PAINT` of the visible children), never the old one (Microsoft
+Learn, "About Property Sheets", "Property Sheet Pages"). Opening an applet from
+the Control Panel folder replaces the folder window's whole client area.
+
+Cause, `apps/control/app.c` `build()`: every applet, category, tab and mode
+change rebuilds the widget list (`u->count = 0`, widgets added again), but the
+toolkit only invalidated the widget that raised the event (`du_emit` ->
+`du_invalidate_widget`). The rest of the window kept the previous page's pixels
+(old tab strip, buttons, status line, icon list) and the new page painted over
+them. Hosting the frames also showed a 2 px strip of the previous Display tab
+beneath the Screen Saver group.
+
+Decision: `build()` ends by marking the whole surface dirty (`u->dirty = 1`),
+because it replaces the complete page. Pages stay consistent with the
+toolkit's rule that an incremental paint must equal a full repaint.
+`tests/host/desktop/control_incremental_test.c` drives every applet of every
+category, every tab (forwards and back, twice), trackbars, a first button and
+its dialog, and the way back to the folder, comparing each incremental frame
+with a forced full repaint (195 checks; 33 failed before the fix). The Files
+drive Properties sheet (General/Tools by Ctrl+Tab) gets the same comparison in
+`files_properties_test.c`; it already agreed.

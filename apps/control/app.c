@@ -2196,6 +2196,9 @@ static void build(struct cp_app *a)
         if (v->anchors & DU_ANCHOR_GROW_Y) v->box.h += dy;
     }
     a->building=0;
+    /* build() replaces the whole widget list: the previous page's pixels (tabs, controls, status line) must not
+     * survive under the new one. A Win98 property sheet repaints its dialog when the page changes. */
+    u->dirty=1;
     du_focus(u, a->page == CP_HOME ? C_APPLETS : a->page == CP_DEVICES && !a->dm_updating ? C_TREE : a->page == CP_ADDHW ? H_AW_NEXT : C_BACK);
 }
 void cp_open(struct cp_app *a, int page)
