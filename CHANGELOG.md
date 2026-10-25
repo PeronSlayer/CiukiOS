@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — 1.0.0 alpha image 2026-10-25 (`main` `b60e5c36`, image `2287114d…`, T23 trial pending)
+
+Corrections to the image of 24 October, which stopped at the splash screen on the ThinkPad T23. Evidence: host suites, canonical build, QEMU boot smoke and a QEMU walk through the programs (dev diary 2026-10-25-01). Not yet tried on the T23.
+
+- **Boot.** The T23 hang at the splash is fixed: the cache publication path no longer livelocks against the video-marker task and the storage writer, so the desktop starts.
+- **DOS windows.** Closing a DOS window (Alt+F4 on DOOM, or `exit` at the prompt) no longer freezes the whole system. `exit` now closes the window. A program that ends within 10 seconds leaves its window open with its output, titled "Finished - <name>". `DIR` shows the correct free space.
+- **DOS memory and games.** XMS is visible to DOS programs again and the shell no longer stays resident: 575 KB of conventional memory are free at the prompt (507 KB before). Wolfenstein 3-D starts. DOOM, Wolfenstein 3-D and Quake start from Programs > Games, play and close in QEMU.
+- **Printing.** The print spooler is event-driven and uses about 0.3 % of the CPU (65-77 % before); offline jobs are retried every 15 seconds.
+- **Audio.** After a stop the audio transport keeps its larger safety margin for 30 seconds, so a sound that starts right after another does not begin with an underrun.
+- **NetSurf.** Images over one megapixel display again; Ctrl+L no longer types an extra "l" into the address bar (which made remote pages fail with "Unable to open this address"); the system clipboard works again; the browser closes without crashing. JavaScript is off by default until a crash in the script engine is fixed; it can be switched on in the browser's options.
+- **Desktop.** Per-program icons; the Start menu opens under its button with folder icons for the groups; Shut Down CiukiOS uses radio choices; new look for Open/Save dialogs, Control Panel (trackbars, icon grid), Music, WordPad, Paint (28-colour palette), Solitaire and cards, Clock, DOS window bar and properties, Task Manager, disk Properties, CiukIDE, System Information and the log viewer; a blue language indicator (En/It) in the tray; the power icon is hidden on machines without a battery; messages say "CiukiOS" instead of "Windows".
+- **Setup CD.** The system component includes `/System/SFC.LST` and `/System/printspool`.
+
 ## 1.0.0 alpha (unreleased, `main`; hardware image `3423912f8463…` of 2026-10-22, T23 trial pending)
 
 Covers all changes merged on `main` since 0.9.2 on 2026-10-20. The Setup CD installer (f9) has been deferred to a later release (owner decision 2026-10-21 20:29, dev diary 2026-10-21-07); the 1.0 Alpha release ships as the hardware disk image `build/hw/ciukios-hw.img`. Full hardware qualification on the ThinkPad T23 is pending for this image.

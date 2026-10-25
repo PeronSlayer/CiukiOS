@@ -1,7 +1,7 @@
 # CiukiOS 1.0 Alpha Release Notes
 
-- **Release:** 1.0 Alpha (unreleased, `main`, image pending)
-- **Date:** 2026-10-22 (first written 2026-10-21; updated with the trials and fixes of 2026-10-21/22)
+- **Release:** 1.0 Alpha (unreleased, `main`; latest image `2287114d` of 2026-10-25, T23 trial pending)
+- **Date:** 2026-10-25 (first written 2026-10-21; updated with the trials and fixes of 2026-10-21/22 and the image of 2026-10-25)
 - **Target Architecture:** i686 PC (Pentium III baseline, AC'97 audio, IDE/ATA, VESA VBE 2.0+, PS/2 / USB HID)
 - **Primary Hardware Twin:** IBM ThinkPad T23 (1.13 GHz Pentium III-M, 512 MiB RAM, S3 SuperSavage IX/C, Intel 82801CA ICH3 AC'97)
 - **Canonical Image:** 512 MiB FAT32 disk image (`build/f0/ciukios.img`, or `build/hw/ciukios-hw.img`)
@@ -39,6 +39,7 @@ CiukiOS 1.0 Alpha marks the completion of the core foundations transition, bring
 - **Event-Driven Frame Synchronization:** DOS window rendering converted from 2 ms polling to blocking event-driven frame waits (`WAIT_PRESENT`, f3-52), donating priority to the VM thread while waiting and capping loading panel repaints to <=4 Hz to prevent VM thread starvation.
 - **Fast Game Loading:** DOS game launch base hashing optimized into a single sequential pass with 64 KiB reads (`85b9024a`, `b2bc10a7`), reducing host hashing elapsed time from 29.2 s to 0.25 s.
 - **DOS Virtual Networking:** Virtual NE2000 network adapter (DP8390 model) and Ethernet II IPX bridge implemented over the native netif and packet pool (f6-11), providing VMM IPX API emulation with DPMI routing, ESR delivery, and `NETID.BIN`.
+- **DOS windows (2026-10-25):** `exit` at the prompt closes the window (the guest shell is `CIUKISH.COM`, a non-permanent COMMAND.COM); a program that ends within 10 s leaves its window open as "Finished - <name>"; closing a window no longer hangs the system; the VMM answers the XMS installation check so 575 KB of conventional memory are free at the prompt and Wolfenstein 3-D starts; DIR reports the correct free space.
 - **DOS Title Conformance Battery:** Automated DOS title battery test harness and manifest schema established covering tracked titles across bundled, test-media, and owner-copy classes (f3-53).
 
 ### 1.4 Win32 Subsystem and Installers
@@ -51,6 +52,8 @@ CiukiOS 1.0 Alpha marks the completion of the core foundations transition, bring
 
 ### 1.5 Network and Web Browser
 - **TCP/IP Network Stack:** lwIP 2.2.1 imported with native `sys_arch` integration, supporting native socket system calls 78–89, DHCP client, DNS resolver, and C SDK socket headers (f6-10).
+- **NetSurf on the 2026-10-25 image:** JavaScript is off by default on the target (the script engine faults on a null object when running example.com's script); enable it in NetSurf's options. Ctrl+L no longer corrupts the address, large images display, and remote pages load in QEMU.
+- **Print spooler:** event-driven (about 0.3 % CPU), with a 60 s safety rescan and a 15 s retry for offline jobs.
 - **Native NetSurf 3.11 Port:**
   - NetSurf Milestone 1 (M1) frontend supporting native window framebuffer rendering (`libnsfb`) and offline HTML/data navigation (f6-14).
   - NetSurf Milestone 2 (M2) HTTP/1.1 fetcher with asynchronous DNS resolution, BearSSL TLS 1.2, cookie support, and offline error classification (f6-15).
@@ -88,6 +91,8 @@ During the hardware trial of image `b51f034f04aee486…` on the IBM ThinkPad T23
 | **S3 SuperSavage BCI Self-Test Failure** | 2D acceleration driver placed in quarantine (`init_result=-5`); desktop falls back to software composition. | SuperSavage BCI self-test readback fails on real hardware due to CR50 register depth setup ordering. | **Addressed by merged work** (directive `f1-88`: CR50 depth selection ordering before descriptor write, incoming CR50 buffering, completion fence, and `accel=0` safe mode fallback token). Hardware verification pending (`TODO(lead)`). |
 
 ### 2.2 Trials of 2026-10-21/22 (images `8f59e221` to `a4d9454e`)
+
+Later images (24 and 25 October, `56e58374` stopped at the splash on the T23; `2287114d` fixes it and the DOS window hang, dev diary 2026-10-25-01) have only QEMU and host evidence; the T23 trial is pending.
 
 | Image | Result (owner) | Resolution |
 | --- | --- | --- |

@@ -207,7 +207,7 @@ and the libdeskui programs, which reuse compositor.c, link without it.
   libc_smoke and any unknown `/Programs` program),
   Documents (recent files, My Documents, Clear Recent Documents), Settings
   (Control Panel and its pages, Task Manager), Help (Keyboard Shortcuts, About
-  CiukiOS), Run..., Shut Down.... Submenus open on hover or click; the
+  CiukiOS), Run..., Shut Down.... The menu opens under its button, the groups carry folder icons and each program its own icon (2026-10-25). Submenus open on hover or click; the
   keyboard works (arrows, Enter, Esc). A vertical banner shows the portrait
   and "CiukiOS". Menus are 30 px (top) and 22 px rows, all with 16 px icons.
 - **Bars:** the top bar holds the Ciuki orb, free space, system tray icons,
@@ -259,7 +259,7 @@ and the libdeskui programs, which reuse compositor.c, link without it.
 - **Built-in windows** (internal clients, framed by the compositor): About
   CiukiOS (540 x 420; tabs General, System from call 70's system record and `uname`,
   Credits, see [About credits](#about-ciukios-credits-f2-97)), Run (a `/Programs` program and up to six arguments, double quotes
-  group), Shut Down CiukiOS (Restart, Shut Down, Cancel) and message boxes.
+  group), Shut Down CiukiOS (radio-button choices for Restart and Shut Down since 2026-10-25, with OK and Cancel) and message boxes.
 - **Shortcuts:** Win (tap) or Ctrl+Esc opens the Start menu; Alt+Tab and
   Shift+Alt+Tab switch windows with an overlay; Alt+F4 sends the v2
   CLOSE_REQUEST to the active window (the Shut Down window when none is
@@ -1070,6 +1070,12 @@ later and ready kernel entropy. A recent build date does not qualify as an
 RTC clock. TLS 1.2 and the pinned CA store are used; certificate exceptions
 and revocation checking are unsupported.
 
+JavaScript is off by default on the target since 2026-10-25: running
+example.com's script made the Duktape engine read a null object, a fault still
+open (`docs/design/netsurf-port-plan.md`). It is switched on from NetSurf's
+options. Ctrl+L focuses the address without typing an `l` into it, and images
+over one megapixel are shown through the scaled decoder.
+
 "Secure connections are not ready yet" means the kernel returned EAGAIN.
 The page estimates the remaining part of the first boot minute, without
 promising readiness; after that minute it says the estimate has elapsed.
@@ -1631,6 +1637,10 @@ visible and disabled (Windows programs require F5). Unreadable or unsupported
 entries are disabled. Explicit DOS commands such as
 `D:\SETUP\INSTALL.COM /S` type three lines: `D:`, `CD \SETUP`, then
 `INSTALL.COM /S`, setting the drive and working directory before execution.
+
+**DOS Box window (2026-10-25):** `exit` at the DOS prompt closes the window;
+a program that ends within 10 seconds leaves its text on screen with the title
+"Finished - <name>"; Alt+F4 closes the window without hanging the system.
 
 **Current runtime boundary:** DOS Box still supplies only its private disk
 image to the guest (`src/kernel/vm/dosvm_disk.c`). This change implements the

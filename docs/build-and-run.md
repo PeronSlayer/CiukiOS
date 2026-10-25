@@ -390,6 +390,10 @@ prompt once the window has keyboard focus. The same works from Run…: `dosbox \
 and spaces). Licence status, including the Wolfenstein 3-D bundling clause
 still open with the owner: `docs/design/f3-acceptance.md`, f3-06 amendment.
 
+Since 2026-10-25 the DOS shell of these windows is `CIUKISH.COM` (a
+non-permanent COMMAND.COM), so `exit` closes the window, XMS is visible and
+575 KB of conventional memory are free, which Wolfenstein 3-D needs (515 KB).
+
 Quake's original `SLICNSE.TXT` and `LICINFO.TXT` also ship under
 `/system/licenses/quake-shareware-*`. The native DPMI server and existing
 24 MiB shared pool exceed the game's 8 MB minimum/16 MB recommendation.
