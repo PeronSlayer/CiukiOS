@@ -15,6 +15,7 @@
 extern void dosvm_client_poll(void) __attribute__((weak));
 extern void entropy_desktop_presented(void) __attribute__((weak)); /* f6-21 */
 extern void dosvm_image_desktop_presented(void) __attribute__((weak)); /* fx-4b */
+extern void w32_services_desktop_died(uint32_t) __attribute__((weak));
 #pragma weak audio_mixer_delegate
 #pragma weak proc_authority_install
 
@@ -354,6 +355,10 @@ void supervisor_poll(void)
             desktop_pid = 0;
             desktop_deaths++;
             int status = p ? p->status : -1;
+            /* The window server it spawned is an orphan now (adopted by PID 1)
+             * and would keep the Win32 service registration from the next
+             * desktop's server (q3crash 2026-10-25). */
+            if (w32_services_desktop_died) w32_services_desktop_died(pid);
             /* A clean exit (status 0) leaves the console; a fault, a signal
              * or an unknown end restarts the shell. */
             if (desktop_restartable && status != 0 && supervisor_restart_allowed(g_ticks)) {

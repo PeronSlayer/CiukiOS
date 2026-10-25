@@ -3377,12 +3377,14 @@ int main(int argc, char **argv)
             uint64_t second=1000000000ull-sleep_now%1000000000ull;
             if (second<wait) wait=second;
         }
-        struct pollfd fds[DESK_CLIENTS+4]; unsigned nfds=0;
-        fds[nfds++]=(struct pollfd){d->input,POLLIN,0};
-        fds[nfds++]=(struct pollfd){desktop_completion.fd[0],POLLIN,0};
+        struct pollfd fds[DESK_CLIENTS+4]; int fd_slot[DESK_CLIENTS+4]; unsigned nfds=0;
+        fd_slot[nfds]=-1; fds[nfds++]=(struct pollfd){d->input,POLLIN,0};
+        fd_slot[nfds]=-1; fds[nfds++]=(struct pollfd){desktop_completion.fd[0],POLLIN,0};
         desk_clip_tick(d);
-        for (int i=0;i<DESK_CLIENTS;i++) if (d->clients[i].channel>=0 && !d->clients[i].spawn_pending)
+        for (int i=0;i<DESK_CLIENTS;i++) if (d->clients[i].channel>=0 && !d->clients[i].spawn_pending) {
+            fd_slot[nfds]=i;
             fds[nfds++]=(struct pollfd){d->clients[i].channel,POLLIN | (d->clients[i].tx_count ? POLLOUT : 0),0};
+        }
         /* fx-26: state-change watches (mixer master, drive namespace). */
         unsigned watched=nfds; int mixer_at=-1, media_at=-1;
         int watch=gate ? -1 : mixer_watch_fd(d);
@@ -3390,10 +3392,17 @@ int main(int argc, char **argv)
         watch=gate ? -1 : media_watch_fd(d);
         if (watch>=0) { media_at=(int)nfds; fds[nfds++]=(struct pollfd){watch,POLLIN,0}; }
         int ready=poll(fds,nfds,du_wait_ms(sleep_now,wait==UINT64_MAX ? UINT64_MAX : sleep_now+wait));
-        if (ready<0 && errno!=EINTR) return 1;
+        if (ready<0 && errno!=EINTR) { int saved=errno; fprintf(stderr,"desktop: exit: poll errno=%d nfds=%u\n",saved,nfds); return 1; }
         if (ready>=0) watch_result(d,mixer_at>=0 ? fds[mixer_at].revents : -1,media_at>=0 ? fds[media_at].revents : -1);
-        for (unsigned i=0;i<watched;i++) if (fds[i].revents&POLLNVAL) return 1;
-        if (fds[1].revents&(POLLERR|POLLHUP)) return 1;
-        if ((fds[1].revents&POLLIN) && du_completion_take(&desktop_completion)) return 1;
+        /* A client whose channel is no longer open is dropped (q3crash
+         * 2026-10-25: the kernel closed the desktop's end when the Win32
+         * installer exited, and the desktop left with status 1). Only the
+         * desktop's own descriptors are fatal, and they say so. */
+        for (unsigned i=0;i<watched;i++) if (fds[i].revents&POLLNVAL) {
+            if (fd_slot[i]>=0) { desk_client_invalid(d,fd_slot[i]); continue; }
+            fprintf(stderr,"desktop: exit: own descriptor invalid index=%u fd=%d\n",i,fds[i].fd); return 1;
+        }
+        if (fds[1].revents&(POLLERR|POLLHUP)) { fprintf(stderr,"desktop: exit: completion channel revents=%d\n",fds[1].revents); return 1; }
+        if ((fds[1].revents&POLLIN) && du_completion_take(&desktop_completion)) { fprintf(stderr,"desktop: exit: completion take errno=%d\n",errno); return 1; }
     }
 }

@@ -144,6 +144,32 @@ static bool resume_ready(void *arg)
     struct proc_thread *t = arg;
     return !t->w32->suspend || t->process->state != PROC_LIVE || t->stopped;
 }
+/* The user-return hook runs on trap_return with IF cleared: every IDT entry
+ * is an interrupt gate, the syscall path re-disables IF before its tail, a
+ * timer IRQ that preempted the thread returns here, and so does a new
+ * thread's first activation. thread_context() forbids a kwait there (the
+ * quake3.exe panic of 2026-10-25). Park the task the way trap.c and the
+ * NDIS host park at user return: T_BLOCKED and schedule(), a one-tick timer
+ * as safety net, while resume/terminate wake it directly (w32_unpark). */
+static void park_until_resumed(struct proc_thread *t)
+{
+    while (!resume_ready(t)) {
+        uint32_t f = irq_save();
+        if (resume_ready(t)) { irq_restore(f); break; }
+        ktimer_wait_task(g_current, w32_now() + 1);
+        g_current->state = T_BLOCKED;
+        irq_restore(f);
+        schedule();
+    }
+}
+/* safe is true only between the context capture and the restore in
+ * w32_user_return; a blocked task there is parked by park_until_resumed. */
+void w32_unpark(struct proc_thread *t)
+{
+    uint32_t f = irq_save();
+    if (t->w32 && t->w32->safe && t->task && t->task->state == T_BLOCKED) task_start(t->task);
+    irq_restore(f);
+}
 void w32_user_return(struct proc_thread *t, struct trap_frame *tf)
 {
     if (!t->w32)
@@ -162,8 +188,7 @@ void w32_user_return(struct proc_thread *t, struct trap_frame *tf)
     fpu_w32_export(t->task, s->context);
     s->safe = true;
     w32_changed_wake();
-    while (!resume_ready(t))
-        kwait_wait_until(&w32_changed, resume_ready, t, w32_now() + 1);
+    park_until_resumed(t);
     if (t->process->state == PROC_LIVE) {
         w32_context_restore(tf, s->context);
         fpu_w32_import(t->task, s->context);
@@ -233,6 +258,8 @@ uint32_t w32_context_call(struct proc_thread *caller, struct ciuki_w32_context_a
         a->result = s->suspend;
         if (s->suspend)
             s->suspend--;
+        if (!s->suspend)
+            w32_unpark(t);
         w32_changed_wake();
     } else if (a->action == W32_CTX_GET || a->action == W32_CTX_SET) {
         if (!s->suspend || !s->safe || !s->context) {

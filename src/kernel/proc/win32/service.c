@@ -111,6 +111,37 @@ static uint32_t connect_service(struct process *client, uint32_t service, uint32
     w32_changed_wake();
     return 0;
 }
+/* A registered server whose authority is gone: a window server whose
+ * desktop died (orphans are adopted by PID 1, so its parent is no longer the
+ * desktop the supervisor runs) or a desktop PID 1 no longer recognises. Such
+ * a process keeps serving its old clients but must not block a successor
+ * (q3crash 2026-10-25: 323 w32srv restarts, each refused with error 5). */
+static bool server_stale(const struct process *server, uint32_t service)
+{
+    uint32_t desktop = supervisor_desktop_pid();
+    return service == W32_SERVICE_DESKTOP ? server->pid != desktop : server->ppid != desktop;
+}
+/* Retirement (lookup, stale check, proc_stop, publication) is one
+ * non-yielding interval; the console record is written afterwards from
+ * saved scalars, because klog may sleep on serial backpressure and the
+ * retired process can be reaped, or a rival can register, meanwhile
+ * (Codex review of wt/q3crash, P1). */
+static void server_retired_log(uint32_t pid, uint32_t service, const char *why)
+{
+    klog("[win32] service server pid=%u service=%u %s; stopped", pid, service, why);
+}
+/* The supervisor's desktop died: its window server has no desktop to serve
+ * and would otherwise survive as an orphan holding the registration. */
+void w32_services_desktop_died(uint32_t desktop_pid)
+{
+    struct process *server = proc_find(service_pid[W32_SERVICE_W32SRV - 1]);
+    if (!(server && server->state == PROC_LIVE && server->w32 && server->w32->service == W32_SERVICE_W32SRV &&
+          (server->ppid == desktop_pid || server->ppid == proc_supervisor()->pid)))
+        return;
+    uint32_t pid = server->pid;
+    proc_stop(server, 0, 0);
+    server_retired_log(pid, W32_SERVICE_W32SRV, "desktop died");
+}
 void w32_services_cleanup(struct process *p)
 {
     if (display_present_process_exit) display_present_process_exit(p);
@@ -124,7 +155,17 @@ void w32_services_cleanup(struct process *p)
             *at = l->next;
             if (l->client->fds && l->client->fds[l->client_fd].object == l->client_end)
                 desktop_close(l->client, l->client_fd);
-            if (l->server->fds && l->server->fds[l->server_fd].object == l->server_end)
+            /* A dying client's end is released with its table. An accepted
+             * link's server end is never closed under a polling server: it
+             * reads the hang-up (recv 0) and closes the descriptor itself.
+             * Closing it here left the desktop polling an invalid descriptor
+             * (POLLNVAL, exit 1) or a reused number (q3crash 2026-10-25). An
+             * unaccepted link's server end was installed by channel_connect
+             * but never reported by ACCEPT: the server cannot know its
+             * number, so it is closed here (Codex review P2: repeated launch
+             * failures leaked one server descriptor each). The server's own
+             * death releases its table. */
+            if (!l->accepted && l->server->fds && l->server->fds[l->server_fd].object == l->server_end)
                 desktop_close(l->server, l->server_fd);
             l->client_end->release(l->client_end);
             l->server_end->release(l->server_end);
@@ -157,12 +198,20 @@ uint32_t w32_service_call(struct proc_thread *t, struct ciuki_w32_service_args *
             return 0;
         }
         struct process *old = server_for(a->service);
+        uint32_t retired = 0;
         if (old && old != p) {
-            a->error = 5;
-            return 0;
+            uint32_t holder = old->pid;
+            if (!server_stale(old, a->service)) {
+                a->error = 5;
+                klog("[win32] service pid=%u action=register service=%u error=5 holder=%u", p->pid, a->service, holder);
+                return 0;
+            }
+            retired = holder;
+            proc_stop(old, 0, 0);
         }
         service_pid[a->service - 1] = p->pid;
         a->result = 1;
+        if (retired) server_retired_log(retired, a->service, "stale registration");
     } else if (a->action == W32_SVC_CONNECT) {
         /* Endpoint slot 1 is the registry (wire service id 2). Native callers
          * gain no desktop endpoint or general personality authority. */

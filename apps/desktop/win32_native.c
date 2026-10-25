@@ -14,6 +14,7 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <unistd.h>
 #include <stdlib.h>
 #include "win32_crash.h"
 uint32_t desk_w32_record(void *,uint32_t);
@@ -123,9 +124,20 @@ uint32_t desk_w32_exchange(const void *input,uint32_t n,void *output,uint32_t ca
 static struct desktop *owner;
 static int authorized;
 static struct desk_w32_supervisor supervisor;
+/* The first server of this desktop resets the directory's client identities
+ * only on a cold boot; after a desktop death in this boot the surviving
+ * Win32 programs keep theirs (desk_w32_fresh_clients, Codex review P2). */
+static int fresh_clients(void)
+{
+    if (__atomic_load_n(&service_registered_once,__ATOMIC_ACQUIRE)) return 0;
+    static struct {struct ciuki_proc_system system;struct ciuki_proc_record records[CIUKI_PROCESS_MAX];} snapshot;
+    int records=ciuki_proc_list(&snapshot,sizeof(snapshot));
+    if (records<0 || (uint32_t)records!=snapshot.system.records || snapshot.system.records>CIUKI_PROCESS_MAX) return 1;
+    return desk_w32_fresh_clients(&snapshot.system,snapshot.records,(uint32_t)getpid());
+}
 static int spawn_service(void *ctx)
 {
-    (void)ctx;char *argv[]={"/System/Win32/w32srv",__atomic_load_n(&service_registered_once,__ATOMIC_ACQUIRE)?NULL:"--fresh-clients",NULL};
+    (void)ctx;char *argv[]={"/System/Win32/w32srv",fresh_clients()?"--fresh-clients":NULL,NULL};
     char *env[]={"LC_ALL=C","PATH=/Programs",NULL};
     int pid=ciuki_spawn(argv[0],argv,env,NULL,0,0);return pid<0 ? -errno : pid;
 }

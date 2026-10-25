@@ -101,6 +101,8 @@ int w32_thread_objects_init(struct proc_thread *t);
 void w32_process_cleanup(struct process *p);
 void w32_thread_objects_cleanup(struct proc_thread *t);
 void w32_thread_died(struct proc_thread *t);
+void w32_unpark(struct proc_thread *t);     /* resume of a thread parked at user return */
+void w32_services_desktop_died(uint32_t desktop_pid); /* retire the dead desktop's window server */
 void w32_process_died(struct process *p);
 struct w32_object *w32_object_new(uint32_t type);
 void w32_retain(struct w32_object *o);

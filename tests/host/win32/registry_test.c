@@ -250,6 +250,19 @@ static void reconciliation(void)
     CHECK(!rpc(&s,20,W32R_WINDOW_GET,live,"","",0,NULL,0,0));
     CHECK(rpc(&s,10,W32R_ATOM_NAME,atom,"","",0,NULL,0,1)==6);
     CHECK(!rpc(&s,20,W32R_ATOM_FIND,0,"","Global survives",0,NULL,0,0)&&r.key==global);
+    /* Codex review of wt/q3crash (P2): a desktop replaced after its death in
+     * the same boot starts its server without --fresh-clients; the surviving
+     * program's HWND and local atom keep their values across that restart,
+     * while a cold boot's reset (wr_clients_reset) removes them. */
+    CHECK(!rpc(&s,20,W32R_ATOM_ADD,0,"","Live local",0,NULL,0,1));uint32_t live_atom=r.key;
+    wr_destroy(&s);start(&s,&d);CHECK(!wr_reconcile(&s,only_twenty,NULL));
+    CHECK(!rpc(&s,20,W32R_WINDOW_GET,live,"","",0,NULL,0,0));
+    CHECK(!rpc(&s,20,W32R_ATOM_NAME,live_atom,"","",0,NULL,0,1));
+    CHECK(!rpc(&s,20,W32R_ATOM_FIND,0,"","Live local",0,NULL,0,1)&&r.key==live_atom);
+    wr_destroy(&s);start(&s,&d);CHECK(!wr_clients_reset(&s));
+    CHECK(rpc(&s,20,W32R_WINDOW_GET,live,"","",0,NULL,0,0)==1400);
+    CHECK(rpc(&s,20,W32R_ATOM_NAME,live_atom,"","",0,NULL,0,1)==6);
+    CHECK(!rpc(&s,20,W32R_ATOM_FIND,0,"","Global survives",0,NULL,0,0)&&r.key==global);
     wr_destroy(&s);clear(&d);
 }
 static int nobody(void *o,uint32_t pid){(void)o;(void)pid;return 0;}

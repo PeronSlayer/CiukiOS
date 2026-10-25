@@ -97,6 +97,7 @@ struct desk_client {
     uint32_t gl_present_request; /* result waits for completed compositor frame */
     uint32_t v3_win32_hwnd; /* f5-07B: copied identity for session z-order */
     unsigned v3_failed, v3_last[DESK_CLIENTS], v3_pointer;
+    unsigned channel_invalid;   /* poll said POLLNVAL: the number is not ours to close */
     /* f2-91 (transport roots): ordered overflow behind the full tx ring, busy marks, silence clock. */
     struct ciuki_message *v3_over; unsigned v3_over_head, v3_over_count, v3_over_lost;
     int v3_busy, v3_busy_mark;
@@ -644,6 +645,7 @@ int desk_arrange_undo(struct desktop *);        /* Shift+Win+M, Undo Cascade/Til
 void desk_request_close(struct desktop *, int index);
 void desk_close_timeouts(struct desktop *);
 void desk_child_exited(struct desktop *, uint32_t pid, int status);
+void desk_client_invalid(struct desktop *, int slot);   /* POLLNVAL on a client channel */
 void desk_session_begin(struct desktop *, int action);   /* 1 restart, 2 shut down, 3 log off */
 /* G11: queue a WM_POWERBROADCAST to every Win32 window (coalesces status
  * changes); desk_power_policy_tick drives the queue, the Stand by sequence

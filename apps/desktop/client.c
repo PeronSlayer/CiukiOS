@@ -114,7 +114,7 @@ void desk_drop_client(struct desktop *d, int i)
     for (unsigned k=0;k<c->tx_count;k++) queued_attachments_close(d,&c->tx[(c->tx_head+k)%DESK_TX_MAX]);
     for (unsigned k=0;k<c->v3_over_count;k++) queued_attachments_close(d,&c->v3_over[(c->v3_over_head+k)%DESK_V3_OVER_MAX]);
     free(c->v3_over);
-    if (c->channel >= 0 && !c->v3_peer) d->ops.close(c->channel);
+    if (c->channel >= 0 && !c->v3_peer && !c->channel_invalid) d->ops.close(c->channel);
     if (d->about == i) d->about = -1;
     if (c->internal) desk_internal_closed(d, i);
     memset(c, 0, sizeof(*c));
@@ -1635,6 +1635,20 @@ void desk_close_timeouts(struct desktop *d)
         desk_end_task_open(d,DESK_HANG_NOT_RESPONDING,0,c->pid,c->window_id,c->title);
         return;
     }
+}
+/* poll() reported POLLNVAL for this slot's channel: the descriptor is not
+ * open in this process (closed under the desktop, q3crash 2026-10-25). The
+ * client is gone; drop it without close(), since the number may already be
+ * another file of ours. Never an exit of the desktop. */
+void desk_client_invalid(struct desktop *d, int i)
+{
+    struct desk_client *c=&d->clients[i];
+    if (i<0 || i>=DESK_CLIENTS || c->channel<0) return;
+    fprintf(stderr,"desktop: client channel invalid slot=%d fd=%d pid=%u; dropped\n",i,c->channel,c->pid);
+    int anchor=c->v3_peer ? (int)c->v3_peer-1 : i;
+    if (anchor!=i && d->clients[anchor].channel==c->channel) { d->clients[anchor].channel_invalid=1; desk_drop_client(d,anchor); return; }
+    c->channel_invalid=1;
+    desk_drop_client(d,i);
 }
 void desk_child_exited(struct desktop *d, uint32_t pid, int status)
 {

@@ -45,7 +45,10 @@ void fpu_fnsave(void *p) { CHECK(!(fake_cr0 & CR0_TS)); memcpy(p, hardware, 108)
 void fpu_frstor(const void *p) { CHECK(!(fake_cr0 & CR0_TS)); memcpy(hardware, p, 108); }
 void fpu_reset_state(int sse) { CHECK(!sse); memset(hardware, 0, 512); }
 #ifndef W32_KERNEL_BRIDGE
-void klog(const char *fmt, ...) { (void)fmt; }
+/* A console record may sleep on serial backpressure: a test hook runs other
+ * tasks' work during the record (Codex review of wt/q3crash, P1). */
+static void (*on_klog)(const char *fmt);
+void klog(const char *fmt, ...) { if (on_klog) on_klog(fmt); }
 #endif
 void arch_w32_fs_switch(uint32_t base) { (void)base; }
 uint64_t arch_w32_counter(void) { return w32_counter_sample(g_ticks, 1193, false, 1190); }
@@ -60,8 +63,11 @@ static bool registry_grant=true;
 bool grants_display_owner(const struct process *p){return registry_grant && p && p->pid==fake_desktop_pid;}
 void proc_signal_pipe(struct proc_thread *t){(void)t;}
 void kmutex_init(struct kmutex *m){memset(m,0,sizeof(*m));}
-void kmutex_lock(struct kmutex *m){CHECK(!m->owner);m->owner=g_current;}
-void kmutex_unlock(struct kmutex *m){CHECK(m->owner==g_current);m->owner=0;}
+/* sync.c thread_context(): a blocking primitive panics with IF cleared or a
+ * current task that is not running (the trap_return hook runs with IF off). */
+static void thread_context(void){CHECK((host_flags&0x200)&&g_current&&g_current->state==T_RUNNING);}
+void kmutex_lock(struct kmutex *m){thread_context();CHECK(!m->owner);m->owner=g_current;}
+void kmutex_unlock(struct kmutex *m){thread_context();CHECK(m->owner==g_current);m->owner=0;}
 int file_clock_now(uint32_t clock,const struct process *p,struct ciuki_timespec *out){(void)clock;(void)p;*out=(struct ciuki_timespec){.tv_sec=1700000000+(int64_t)(g_ticks/1000),.tv_nsec=(int32_t)(g_ticks%1000)*1000000};return 0;}
 static int32_t promises[MM_OWNERS][2], mapping_count, shared_mapping_count;
 void ledger_promise(enum mm_owner owner,int32_t reserved,int32_t committed){promises[owner][0]+=reserved;promises[owner][1]+=committed;}
@@ -135,7 +141,7 @@ void vfs_lock(struct vfs *v,uint32_t mask) { CHECK(!mask); fs_lock_take(&v->lock
 void vfs_unlock(struct vfs *v) { fs_lock_drop(&v->lock); }
 uint64_t deadline_after_ms(uint32_t ms) { return g_ticks + ms; }
 bool kwait_wait_until(struct kwait *q, bool (*p)(void *), void *arg, uint64_t deadline)
-{ (void)q; if(p(arg))return true; CHECK(deadline>=g_ticks); schedule();return p(arg); }
+{ (void)q; thread_context(); if(p(arg))return true; CHECK(deadline>=g_ticks); schedule();return p(arg); }
 void kwait_set_owner(struct kwait *q,struct task *owner) { q->owner=owner; }
 bool kwait_wait_ticket_until(struct kwait *q,kwait_cond_fn p,void *arg,uint64_t deadline,uint32_t *ticket)
 { (void)ticket;return kwait_wait_until(q,p,arg,deadline); }
@@ -524,7 +530,10 @@ static void test_shared_tick(void)
     unsigned before=walk_work; uint64_t t0=shared_cycles();
     shared_old_update(a); shared_old_update(b);
     uint64_t old_cycles=shared_cycles()-t0; unsigned old_steps=walk_work-before;
-    CHECK(old_steps>=5*1500);
+    /* fx-uafind (AVL extents): the old per-process update no longer walks
+     * the 1500 extents linearly (indexed lookups count no walk steps); the
+     * assertion that matters is below: the tick itself touches no extent. */
+    CHECK(old_steps<5*1500);
     g_ticks+=5;
     before=walk_work; t0=shared_cycles();
     w32_shared_tick();
