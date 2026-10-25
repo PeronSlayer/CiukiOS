@@ -60,6 +60,7 @@ const struct du_icon_map du_icon_map[] = {
     {"program:solitaire", "applications-games"},       /* G27 Solitaire */
     {"program:freecell", "face-glasses"},        /* G27 FreeCell */
     {"program:hearts", "emblem-favorite"},             /* G27 Hearts */
+    {"program:q3demo", "input-gaming"},                /* Programs > Games: Install Quake III Arena Demo (Win32 launch record) */
     {"program:serial", "network-wired"},               /* G27 Serial Terminal */
 
     /* Start menu */

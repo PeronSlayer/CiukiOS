@@ -222,6 +222,31 @@ static int shortcut_menu_compare(const struct sh_item *a,const struct sh_item *b
     }
     return (*x!=0)-(*y!=0);
 }
+/* A Start menu entry already shown by the built-in catalogue (items before `first`):
+ * the same label, or the same target. Windows 98 shows one entry per program. */
+static int shortcut_target_same(const char *a,const char *b)
+{
+    char x[FM_PATH],y[FM_PATH];
+    if (!a || !b || fm_posix_path(x,a) || fm_posix_path(y,b)) return 0;
+    return !strcasecmp(x,y);
+}
+static int shortcut_builtin_item(const struct desktop *d,const struct sh_menu *m,unsigned first,
+                                 const struct desk_launch_record *r,const char *label,int folder)
+{
+    for (unsigned j=0;j<first && j<(unsigned)m->count;j++) {
+        const struct sh_item *it=&m->items[j];
+        if (it->action==SH_ACT_NONE || !it->label[0]) continue;
+        if (!strcasecmp(it->label,label)) return 1;
+        if (folder || !r) continue;
+        if (it->action==SH_ACT_LAUNCH && it->arg>=0 && (unsigned)it->arg<d->program_count &&
+            shortcut_target_same(d->programs[it->arg].path,r->target)) return 1;
+        if (it->action==SH_ACT_WIN32_PROGRAM && it->arg>=0 && (size_t)it->arg<sizeof(programs)/sizeof(programs[0]) &&
+            programs[it->arg].target && shortcut_target_same(programs[it->arg].target,r->target)) return 1;
+        if (it->action==SH_ACT_GAME && it->arg>=0 && (unsigned)it->arg<DESK_GAME_COUNT &&
+            shortcut_target_same("/Programs/dosbox",r->target) && strstr(r->arguments,desk_games[it->arg].command)) return 1;
+    }
+    return 0;
+}
 static void shortcut_programs_menu(struct desktop *d,struct sh_menu *m,int kind)
 {
     const char *parent=NULL; unsigned depth=0, prefix=0;
@@ -236,6 +261,8 @@ static void shortcut_programs_menu(struct desktop *d,struct sh_menu *m,int kind)
     } else if (kind==SH_MENU_ACCESSORIES) parent="Accessories/";
     else if (kind==SH_MENU_SYSTEM_TOOLS) parent="System Tools/";
     else if (kind==SH_MENU_GAMES) parent="Games/";
+    else if (kind==SH_MENU_CLASSIC_GAMES) parent="Games/Classic Games/";
+    else if (kind==SH_MENU_DEVELOPER) parent="Developer/";
     else if (kind!=SH_MENU_PROGRAMS) return;
     if (parent && !prefix) { prefix=(unsigned)strlen(parent); depth=1; }
     unsigned first=(unsigned)m->count;
@@ -244,9 +271,17 @@ static void shortcut_programs_menu(struct desktop *d,struct sh_menu *m,int kind)
         if (e->desktop) continue;
         const char *path=shortcut_programs_path(d,e), *child=path;
         if (parent) { if (!path || strncmp(path,parent,prefix)) continue; child=path+prefix; }
-        if (!child) { if (!parent) item(m,e->launch.label,"application-x-executable",SH_ACT_WIN32_LINK,(int)k,0); continue; }
+        if (!child) {
+            if (!parent && !shortcut_builtin_item(d,m,first,&e->launch,e->launch.label,0))
+                item(m,e->launch.label,"application-x-executable",SH_ACT_WIN32_LINK,(int)k,0);
+            continue;
+        }
         const char *slash=strchr(child,'/');
-        if (!slash) { item(m,e->launch.label,"application-x-executable",SH_ACT_WIN32_LINK,(int)k,0); continue; }
+        if (!slash) {
+            if (!shortcut_builtin_item(d,m,first,&e->launch,e->launch.label,0))
+                item(m,e->launch.label,"application-x-executable",SH_ACT_WIN32_LINK,(int)k,0);
+            continue;
+        }
         size_t length=(size_t)(slash-child); if (!length || depth+1>=SH_LINK_MENU_DEPTH) continue;
         int duplicate=0;
         for (unsigned j=0;j<(unsigned)m->count;j++) if (m->items[j].action==SH_ACT_SUBMENU) {
@@ -264,6 +299,9 @@ static void shortcut_programs_menu(struct desktop *d,struct sh_menu *m,int kind)
         if (!duplicate) {
             char label[44]; size_t n=length<sizeof(label)-1 ? length : sizeof(label)-1;
             memcpy(label,child,n);label[n]=0;
+            /* A folder named like a built-in group (Games, Accessories, System Tools, Developer) merges into it:
+             * that group's own menu lists the folder's shortcuts. */
+            if (shortcut_builtin_item(d,m,first,NULL,label,1)) continue;
             item(m,label,"folder",SH_ACT_SUBMENU,SH_LINK_MENU_BASE+(int)k*SH_LINK_MENU_DEPTH+(int)depth+1,0);
         }
     }

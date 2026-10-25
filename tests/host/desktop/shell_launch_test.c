@@ -1014,6 +1014,27 @@ __attribute__((noinline)) static void test_games_menu(void)
     assert(item_at(&d.sh.menus[0],"Wolfenstein 3D (shareware)")>=0);
     assert(item_at(&d.sh.menus[0],"Quake (shareware)")>=0);
     desk_menu_close(&d);d.games_removed=0;
+    /* Owner 2026-10-25: the classic games move into Games > Classic Games (M S F H: distinct initials). */
+    {
+        const char *classic[]={"mines","solitaire","freecell","hearts"},*labels[]={"Minesweeper","Solitaire","FreeCell","Hearts"};
+        for (unsigned c=0;c<4;c++) desk_program_add(&d,classic[c],elf,sizeof(elf));
+        desk_menu_open(&d,SH_MENU_PROGRAMS,0,0);
+        for (unsigned c=0;c<4;c++) assert(item_at(&d.sh.menus[0],labels[c])<0);
+        desk_menu_close(&d);
+        desk_menu_open(&d,SH_MENU_GAMES,0,0);
+        assert(d.sh.menus[0].items[0].action==SH_ACT_SUBMENU && d.sh.menus[0].items[0].arg==SH_MENU_CLASSIC_GAMES &&
+               !strcmp(d.sh.menus[0].items[0].label,"Classic Games") && d.sh.menus[0].count==(int)DESK_GAME_COUNT+1);
+        for (unsigned c=0;c<4;c++) assert(item_at(&d.sh.menus[0],labels[c])<0);
+        for (int k=1;k<d.sh.menus[0].count;k++) assert(d.sh.menus[0].items[k].action==SH_ACT_GAME);
+        desk_menu_close(&d);
+        desk_menu_open(&d,SH_MENU_CLASSIC_GAMES,0,0);
+        assert(d.sh.menus[0].count==4);
+        for (unsigned c=0;c<4;c++) {
+            assert(!strcmp(d.sh.menus[0].items[c].label,labels[c]) && d.sh.menus[0].items[c].action==SH_ACT_LAUNCH);
+            for (unsigned o=c+1;o<4;o++) assert(labels[c][0]!=labels[o][0]);
+        }
+        desk_menu_close(&d);
+    }
     assert(DESK_GAME_COUNT == 3 && !strcmp(desk_games[2].label,"Quake (shareware)") &&
            !strcmp(desk_games[2].title,"Quake") && !strcmp(desk_games[2].command,"\\QUAKE\\QUAKE.EXE"));
     assert(!strcmp(desk_games[0].command,"\\WOLF3D\\WOLF3D.EXE") && !strcmp(desk_games[1].command,"\\DOOM\\DOOM.EXE -config CIUKI.CFG"));
@@ -1022,7 +1043,7 @@ __attribute__((noinline)) static void test_games_menu(void)
      * operation before opening its error dialog, and releases both channels. */
     memset(d.children,0,sizeof(d.children));
     expect_dosbox[0]="--name=DOOM";expect_dosbox[1]=desk_games[1].command;fail_spawn=EIO;
-    desk_menu_open(&d,SH_MENU_GAMES,0,0);d.sh.menus[0].hot=1;
+    desk_menu_open(&d,SH_MENU_GAMES,0,0);d.sh.menus[0].hot=item_at(&d.sh.menus[0],"DOOM (shareware)");
     launch_record[0]=0;key(&d,DU_KEY_ENTER);
     assert(!strcmp(launch_record,"[launch] name=dosbox error=5 path=/Programs/dosbox operation=spawn"));
     assert(strstr(d.sh.message_text,"error 5") && !d.launch_argv[0] && !d.launch_argv[1]);

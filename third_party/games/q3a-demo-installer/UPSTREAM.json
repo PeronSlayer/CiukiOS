@@ -16,11 +16,11 @@
     "files": [
       {"name": "Q3ADemo.exe", "size": 48907862, "sha256": "6af96cb1b5c97535c9923d8855ca85ec21b21b65b48738b2c5e674e17c65835d", "role": "installer"}
     ],
-    "shortcut": {
-      "path": "/WINDOWS/Start Menu/Programs/Games/Install Quake III Arena Demo.lnk",
+    "menu_entry": {
+      "group": "Programs > Games",
       "label": "Install Quake III Arena Demo",
       "target": "C:\\Games\\Quake III Arena Demo Setup\\Q3ADemo.exe",
-      "directory": "C:\\Games\\Quake III Arena Demo Setup"
+      "defined_in": "apps/desktop/shell.c programs[] (name q3demo), started through the Win32 launch path"
     }
   },
   "license": "id Software Limited Use Software License Agreement for the Quake III: Arena demo (Q3A_EULA.txt, shown by the installer)",

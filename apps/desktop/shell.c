@@ -315,6 +315,9 @@ static const struct program_info programs[] = {
     {"solitaire", "Solitaire", "applications-games", "games", NULL},
     {"freecell", "FreeCell", "face-glasses", "games", NULL},
     {"hearts", "Hearts", "emblem-favorite", "games", NULL},
+    /* Owner request 2026-10-25: the bundled id Software Windows demo installer (scripts/q3a_demo.py), started through
+     * the same Win32 path as Run and Files (SH_ACT_WIN32_PROGRAM); listed after the DOS games. */
+    {"q3demo", "Install Quake III Arena Demo", "input-gaming", "games", "C:\\Games\\Quake III Arena Demo Setup\\Q3ADemo.exe"},
     {"hwreport", "Hardware Report", "preferences-desktop-peripherals", "system-tools", NULL},
     {"scandisk", "ScanDisk", "drive-harddisk", "system-tools", NULL},
     {"msconfig", "System Configuration", "preferences-system", "system-tools", NULL},
@@ -567,7 +570,6 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         }
         d->v3_links_force|=DESK_LINKS_SCAN;
         desk_links_refresh(d);
-        if (d->v3_link_count) item(m,"Programs folder","folder",SH_ACT_PROGRAMS_FOLDER,0,0);
         int developer = 0, accessories = 0, system_tools = 0, games = 0;
         for (size_t k = 0; k < sizeof(programs) / sizeof(programs[0]); k++) {
             int at = program_index(d, programs[k].name);
@@ -612,22 +614,35 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         }
         break;
     case SH_MENU_GAMES: {
-        unsigned native = 0;   /* G27: the native games first (Minesweeper, Solitaire, FreeCell, Hearts), then the bundled DOS games */
-        for (size_t k = 0; k < sizeof(programs) / sizeof(programs[0]); k++) {
-            int at = program_index(d, programs[k].name);
-            if (at >= 0 && !strcmp(programs[k].category, "games")) { item(m, programs[k].label, programs[k].icon, SH_ACT_LAUNCH, at, 0); native++; }
-        }
-        if (native) separator(m);
+        /* Owner 2026-10-25: the CiukiOS versions of the classic Windows games (Minesweeper, Solitaire, FreeCell,
+         * Hearts) live in the Classic Games submenu; Games lists that submenu, the bundled DOS games, then the
+         * bundled Windows programs (the Quake III Arena demo installer) and installed shortcuts. */
+        int classic = 0;
+        for (size_t k = 0; k < sizeof(programs) / sizeof(programs[0]) && !classic; k++)
+            classic = !strcmp(programs[k].category, "games") && !programs[k].target && program_index(d, programs[k].name) >= 0;
+        if (classic) item(m, "Classic Games", "folder", SH_ACT_SUBMENU, SH_MENU_CLASSIC_GAMES, 0);
         for (unsigned k = 0; k < DESK_GAME_COUNT; k++) if(!(d->games_removed&(1u<<k))) item(m, desk_games[k].label, desk_games[k].tango, SH_ACT_GAME, (int)k, 0);
+        for (size_t k = 0; k < sizeof(programs) / sizeof(programs[0]); k++)   /* bundled Windows programs (Win32 launch path) */
+            if (programs[k].target && d->v3_launch && !strcmp(programs[k].category, "games"))
+                item(m, programs[k].label, programs[k].icon, SH_ACT_WIN32_PROGRAM, (int)k, 0);
         shortcut_programs_menu(d,m,kind);
         break;
     }
+    case SH_MENU_CLASSIC_GAMES:
+        /* Menu order of programs[]: Minesweeper, Solitaire, FreeCell, Hearts (initials M S F H: no shared letter). */
+        for (size_t k = 0; k < sizeof(programs) / sizeof(programs[0]); k++) {
+            int at = program_index(d, programs[k].name);
+            if (at >= 0 && !programs[k].target && !strcmp(programs[k].category, "games")) item(m, programs[k].label, programs[k].icon, SH_ACT_LAUNCH, at, 0);
+        }
+        shortcut_programs_menu(d,m,kind);
+        break;
     case SH_MENU_DEVELOPER:
         for (unsigned k = 0; k < d->program_count && m->count < SH_ITEMS; k++) {
             const struct program_info *p = program_find(d->programs[k].name);
             if (p && strcmp(p->category, "developer")) continue;   /* Programs and Accessories list theirs */
             item(m, p ? p->label : d->programs[k].name, p ? p->icon : du_icon_file(d->programs[k].name, 0, 1), SH_ACT_LAUNCH, (int)k, 0);
         }
+        shortcut_programs_menu(d,m,kind);
         break;
     case SH_MENU_DOCUMENTS:
         d->sh.custom_refresh=1;
@@ -1142,7 +1157,7 @@ static void act(struct desktop *d, const struct sh_item *it)
                 free(record);
             } else result=-ENOMEM;
         }
-        if (result<0) desk_shell_message(d,"Accessories","The selected program could not be started.",1);
+        if (result<0) desk_shell_message(d,"Programs","The selected program could not be started.",1);
         break;
     }
     case SH_ACT_WIN32_LINK:

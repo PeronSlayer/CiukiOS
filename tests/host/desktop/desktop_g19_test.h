@@ -102,6 +102,18 @@ static void g19_cases(void)
     static struct desk_launch_record drive_record;
     drive_record.show=1; strcpy(drive_record.label,"Drive program"); strcpy(drive_record.target,"E:\\g19.exe");
     assert(!desk_shell_open_record(&d,&drive_record,0) && !strcmp(g19_external_record.target,"/mnt/e/g19.exe"));
+    /* An installer shortcut (CiukiOS .lnk, Windows target and Start in with spaces) reaches the Win32 launcher with
+     * the POSIX path and directory intact; the same record launched directly behaves the same. */
+    fake_file("/Games/Quake III Arena Demo Setup/Q3ADemo.exe",20,0); memset(&g19_external_record,0,sizeof(g19_external_record));
+    static struct desk_launch_record spaced;
+    spaced.show=1; strcpy(spaced.label,"Install Quake III Arena Demo");
+    strcpy(spaced.target,"C:\\Games\\Quake III Arena Demo Setup\\Q3ADemo.exe"); strcpy(spaced.directory,"C:\\Games\\Quake III Arena Demo Setup");
+    uint8_t spaced_bytes[DESK_LINK_BYTES]; unsigned spaced_size=desk_link_encode(&spaced,spaced_bytes,sizeof(spaced_bytes)); assert(spaced_size);
+    static struct desk_launch_record spaced_back; assert(desk_link_decode(spaced_bytes,spaced_size,&spaced_back));
+    int spaced_before=g19_external_count;
+    assert(!desk_shell_open_record(&d,&spaced_back,0) && g19_external_count==spaced_before+1);
+    assert(!strcmp(g19_external_record.target,"/Games/Quake III Arena Demo Setup/Q3ADemo.exe") &&
+           !strcmp(g19_external_record.directory,"/Games/Quake III Arena Demo Setup"));
     g19_link("G19 loop.lnk",DESK_FOLDER "/G19 loop.lnk");
     static struct desk_launch_record record;
     assert(!desk_folder_link_read(&d,DESK_FOLDER "/G19 loop.lnk",&record)); assert(desk_shell_open_record(&d,&record,0)<0);

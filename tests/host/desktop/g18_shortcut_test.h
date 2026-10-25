@@ -32,6 +32,22 @@ static int g18_launch_shortcut(struct desktop *desktop,const struct desk_launch_
     (void)desktop; assert(!strcmp(record->target,"C:\\Programs\\EDITOR.EXE"));
     g18_hotkey_launches++; return 0;
 }
+static int g18_menu_launch(struct desktop *desktop,const struct desk_launch_record *record)
+{ (void)desktop; (void)record; return 0; }
+static unsigned g18_menu_count(const struct sh_menu *m,const char *label)
+{
+    unsigned n=0; for (int k=0;k<m->count;k++) if (!strcasecmp(m->items[k].label,label)) n++;
+    return n;
+}
+static void g18_menu_link(unsigned k,const char *source,const char *label,const char *target,const char *arguments)
+{
+    memset(&d.v3_links[k],0,sizeof(d.v3_links[k]));
+    snprintf(d.v3_links[k].source,sizeof(d.v3_links[k].source),"%s",source);
+    snprintf(d.v3_links[k].launch.label,sizeof(d.v3_links[k].launch.label),"%s",label);
+    snprintf(d.v3_links[k].launch.target,sizeof(d.v3_links[k].launch.target),"%s",target);
+    snprintf(d.v3_links[k].launch.arguments,sizeof(d.v3_links[k].launch.arguments),"%s",arguments);
+    d.v3_links[k].launch.show=1;
+}
 static void row_g18_shortcuts(unsigned m)
 {
     row_name="G18 shortcut properties and installed menus"; wm_begin(m,1);
@@ -117,7 +133,33 @@ static void row_g18_shortcuts(unsigned m)
     key(0x12,2); step("shortcut hotkey repeat suppressed"); assert(g18_hotkey_launches==1);
     key(0x12,0); key(0x38,0); key(0x1d,0); step("shortcut hotkey released");
     tap(0x12); step("plain typing does not launch shortcut"); assert(g18_hotkey_launches==1);
-    d.v3_link_read=NULL; d.v3_launch=NULL;
+    /* A Start Menu tree created by an installer merges into the built-in groups: one Games group, one entry per
+     * program (same name or same target), no "Programs folder" pseudo-item, and the folder's own shortcut is listed. */
+    d.v3_launch=g18_menu_launch; d.v3_link_read=NULL; d.v3_link_count=5;
+    g18_menu_link(0,"/Users/Test/Start Menu/Programs/Games/Install Quake III Arena Demo.lnk","Install Quake III Arena Demo",
+                  "C:\\Games\\Quake III Arena Demo Setup\\Q3ADemo.exe","");
+    g18_menu_link(1,"/Users/Test/Start Menu/Programs/Games/DOOM (shareware).lnk","DOOM (shareware)","/Programs/dosbox",
+                  "\"--name=DOOM\" \"\\DOOM\\DOOM.EXE -config CIUKI.CFG\"");
+    g18_menu_link(2,"/Users/Test/Start Menu/Programs/Games/Doom again.lnk","Doom again","/Programs/dosbox",
+                  "\"--name=DOOM\" \"\\DOOM\\DOOM.EXE -config CIUKI.CFG\"");
+    g18_menu_link(3,"/Users/Test/Start Menu/Programs/Games/Vendor Game.lnk","Vendor Game","C:\\Vendor\\GAME.EXE","");
+    g18_menu_link(4,"/Users/Test/Start Menu/Programs/Games/Quake III Setup.lnk","Quake III Setup",
+                  "c:\\games\\quake iii arena demo setup\\q3ademo.exe","");
+    desk_menu_open(&d,SH_MENU_PROGRAMS,4,DESK_BAR); step("merged Programs menu");
+    assert(g18_menu_count(&d.sh.menus[0],"Games")==1);
+    assert(!g18_menu_count(&d.sh.menus[0],"Programs folder"));
+    desk_menu_open(&d,SH_MENU_GAMES,60,80); step("merged Games menu");
+    assert(g18_menu_count(&d.sh.menus[0],"Install Quake III Arena Demo")==1);
+    assert(g18_menu_count(&d.sh.menus[0],"DOOM (shareware)")==1);
+    assert(!g18_menu_count(&d.sh.menus[0],"Doom again") && !g18_menu_count(&d.sh.menus[0],"Quake III Setup"));
+    assert(g18_menu_count(&d.sh.menus[0],"Vendor Game")==1);
+    for (int k=0;k<d.sh.menus[0].count;k++) if (!strcmp(d.sh.menus[0].items[k].label,"Install Quake III Arena Demo"))
+        assert(d.sh.menus[0].items[k].action==SH_ACT_WIN32_PROGRAM);
+    /* The classic Windows-style games sit in Games > Classic Games, never in Programs or directly in Games. */
+    assert(!g18_menu_count(&d.sh.menus[0],"Minesweeper") && !g18_menu_count(&d.sh.menus[0],"Solitaire"));
+    desk_menu_close(&d);
+    d.v3_launch=NULL;
+    d.v3_link_read=NULL;
     wm_end();
 }
 
