@@ -132,7 +132,22 @@ therefore never covered. A case with `"kind": "normal-boot"` (and
 - `f0-smoke` ends with `normal-boot-qemu-t23` and
   `normal-boot-qemu-desktop-2002` (timeout 300 s, settle 8 s, geometry
   1024x768), so every suite that has `f0-smoke` as a prerequisite stops when
-  the image does not boot to the desktop. Physical sweep import reports these
+  the image does not boot to the desktop. Amendment 2026-10-25 (QEMU
+  `fb12caae`): a normal-boot timeout counts from the loader's source
+  selection (`L:SELECT_SOURCE=menu`), and the phase from launch to that
+  line has its own bound of 600 host seconds (`NORMAL_BOOT_LOADER_SECONDS`
+  in `scripts/test/run.py`). The loader's 3 s boot menu busy-polls INT 16h,
+  the COM1 LSR and the BIOS tick without HLT; under the profiles'
+  `-icount shift=1,sleep=on` virtual time advances 2 ns per executed
+  instruction and at real speed only while the CPU sleeps
+  ([QEMU `-icount`](https://www.qemu.org/docs/master/system/qemu-manpage.html)),
+  so the menu is about 1.5e9 instructions, which TCG with `-d nochain` ran
+  in 270.1-273.9 host seconds (runs `5b7cef8b`, `9948c446`, `fb12caae`).
+  Counted from launch, the 300 s budget left 2.8 s after the settle and
+  `fb12caae` failed 7.9 s after the desktop started, with no hang.
+  `result.json` records `timeout.basis`, `timeout.loader_seconds`,
+  `timeout.phase` (`loader` or `system` when the deadline was set) and
+  `normal_boot.loader_source_after_seconds`. Physical sweep import reports these
   cases `not_run reason=normal_boot_qemu_only` without blocking later cases: a
   sweep boot always carries a BOOT.CFG probe selection.
 

@@ -128,7 +128,10 @@ takes the production path up to `/Programs/desktop`. A case passes when
 `serial.log` shows, in order and at the start of a line, `L:CPU signature=`,
 `L:SELECT_SOURCE=menu`, the `Ciuki VMM F0 build` banner,
 `[supervisor] bootstrap: spawning /Programs/desktop` and
-`[supervisor] desktop pid=<n> pgid=<n>` within 300 s, with no panic,
+`[supervisor] desktop pid=<n> pgid=<n>`, with the screendump within 300 s
+of the `L:SELECT_SOURCE=menu` line (the phase before it is bounded at
+600 s: under TCG with `-icount` the 3 s menu alone takes about 270 host
+seconds), with no panic,
 CIUKI_TEST record, `desktop unavailable` or `desktop stopped` line, and the
 screendump taken 8 s after the desktop line shows the bottom bar, the Ciuki
 orb and the top bar, and a work area free of the kernel console colours
