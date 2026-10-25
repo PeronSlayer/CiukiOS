@@ -11,6 +11,12 @@ static uint64_t exit_ns(void)
     CHECK(!clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t));
     return (uint64_t)t.tv_sec * 1000000000u + t.tv_nsec;
 }
+/* -DT23_HEAD_BASELINE: the same cases against a347ca76b sources. */
+#ifdef T23_HEAD_BASELINE
+#define T23_UNPROVABLE(v) 0u
+#else
+#define T23_UNPROVABLE(v) ((v)->dpmi.cli.unprovable)
+#endif
 static void exit_result(const char *name, uint64_t start, unsigned n)
 { printf("exit_bench case=%s iterations=%u avg_ns=%llu\n", name, n, (unsigned long long)((exit_ns()-start)/n)); }
 static void __attribute__((noinline)) exit_copy(struct v86_frame *to, const struct v86_frame *from)
@@ -224,6 +230,40 @@ int main(void)
         }
         exit_result(armed ? "pm_flags_proved_save_exit" : "pm_flags_no_image_exit",start,n/10);
     }
+    destroy(v,true); empty();
+    /* t23-dosperf: PM CLI/STI of a settled client (no seed demand), lean
+     * against ordinary (the IPX-binding precondition only), TSC cycles per
+     * exit; then Warcraft II's event-loop CLI (flags saved to a local:
+     * PUSHFW; POP AX; MOV EDX,1; MOV [EBP-4],AX; MOV [EBP-0Ch],EDX; CLI),
+     * a candidate that no proof can arm. */
+    v=exit_vm(true);
+    v->dpmi.cli_settled=true; v->dpmi.cli_miss_tick=0; if (g_ticks<5000) g_ticks=5000;
+    static const uint8_t flags_code[]={0xFA,0xFB,0x90,
+        0x66,0x9C,0x66,0x58,0xBA,0x01,0x00,0x00,0x00,0x66,0x89,0x45,0xFC,0x89,0x55,0xF4,0xFA,0x90};
+    CHECK(!dosvm_write(v,0x30000,flags_code,sizeof(flags_code)));
+    for (unsigned mode=0;mode<2;mode++) {
+        v->network_attached=mode==1;
+        uint64_t t0=__builtin_ia32_rdtsc();
+        for (unsigned i=0;i<n;i++) {
+            v->monitor.vif=true; cur.tf.eip=0x30000; step(v,13,0); CHECK(!left && !v->monitor.vif);
+            step(v,13,0); CHECK(!left && v->monitor.vif && cur.tf.eip==0x30002);
+        }
+        printf("exit_bench case=%s iterations=%u avg_tsc_cycles=%llu\n", mode ? "pm_cli_sti_settled_ordinary" :
+               "pm_cli_sti_settled_lean", 2*n, (unsigned long long)((__builtin_ia32_rdtsc()-t0)/(2*n)));
+    }
+    v->network_attached=false;
+    unsigned missed=v->dpmi.cli.missed;
+    uint64_t t0=__builtin_ia32_rdtsc();
+    for (unsigned i=0;i<n;i++) {
+        v->monitor.vif=true; cur.tf.eip=0x30013;
+        cur.tf.eax=(cur.tf.eax&0xFFFF0000u)|(cur.tf.eflags&0x0CD5u)|V86_IF|2u;
+        step(v,13,0); CHECK(!left && !v->monitor.vif && !v->dpmi.if_armed);
+    }
+    printf("exit_bench case=pm_cli_war2_event_loop iterations=%u avg_tsc_cycles=%llu missed=%u unprovable=%u\n", n,
+           (unsigned long long)((__builtin_ia32_rdtsc()-t0)/n), v->dpmi.cli.missed-missed, T23_UNPROVABLE(v));
+#ifndef T23_HEAD_BASELINE
+    CHECK(v->dpmi.cli.missed==missed);
+#endif
     destroy(v,true); empty();
     exit_vga_bench(false); exit_vga_bench(true);
     free(ram);

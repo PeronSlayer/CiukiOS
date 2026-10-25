@@ -801,6 +801,32 @@ void dpmi_cli_sites_reset(struct dosvm *v)
     d->cli_settled = false;
 }
 static void armed_prune(struct dosvm *v, const struct v86_frame *f, bool arming);
+/* t23-dosperf (2026-10-25): every rule that arms a CLI ends on the
+ * instruction physically before it. The forward proof requires the last
+ * decoded instruction, which ends exactly at the CLI, to be PUSHF or POP r
+ * after PUSHF; the control-flow proof clears its last instruction at every
+ * jump, call and return, so the same holds on any path; the pattern rule
+ * reads the same bytes (flags_pattern). The opcode of that instruction is
+ * its last byte, at CS:EIP-1. When that byte is neither 9Ch nor 58h-5Fh,
+ * no proof can succeed from any seed: the CLI is not a flags-saving site.
+ * Warcraft II demo (DOS/4GW Professional 1.97), its event loop at
+ * 01F7:0022BBC6: PUSHFW; POP AX; MOV EDX,1; MOV [EBP-4],AX; MOV [EBP-0Ch],EDX;
+ * CLI ... MOV EAX,[EBP-6]; SAR EAX,16; TEST AH,2; JZ; STI. The image goes
+ * to a local and comes back through STI, which traps; AX still equals the
+ * live image, so the CLI was a candidate whose proofs failed on every
+ * execution (T23 trial c42f556e: cli_hits=457 cli_learned=4
+ * cli_missed=9232, then 25770). Each miss decoded up to 4096 bytes twice
+ * and restarted the seed demand (dpmi_seed_wanted), which kept every port
+ * exit off the lean path. Such a CLI now ends here, cheaply, as it did
+ * after the proofs: no image is armed either way. Unknown bytes (unreadable,
+ * offset 0 of a 16-bit segment) keep the full proofs. */
+static bool flags_save_adjacent(struct dosvm *v, const struct v86_frame *f, const struct dpmi_seg *cs)
+{
+    uint32_t eip = f->tf.eip;
+    uint8_t last;
+    if (!eip || eip - 1 > cs->limit || dosvm_read(v, cs->base + eip - 1, &last, 1)) return true;
+    return last == 0x9C || (last >= 0x58 && last <= 0x5F);
+}
 static bool arm_flags_image(struct dosvm *v, struct v86_frame *f, const struct dpmi_seg *cs,
                             struct dpmi_armed *planted)
 {
@@ -825,6 +851,7 @@ static bool arm_flags_image(struct dosvm *v, struct v86_frame *f, const struct d
     uint8_t pop;
     unsigned width;
     struct dpmi *d = &v->dpmi;
+    if (!flags_save_adjacent(v, f, cs)) { d->cli.unprovable++; return false; }
     d->cli.candidates++;
     struct dpmi_cli_site *site = cli_site_find(v, cs, cs->base + f->tf.eip);
     bool reached = false;
@@ -1336,10 +1363,46 @@ static void return_boundary_seed(struct dosvm *v, struct v86_frame *f)
     }
 }
 
+/* PM CLI (FAh) and STI (FBh) at CPL 3 with IOPL 0: the virtual IF, the
+ * fx-16 flags image of a flags-saving CLI and the STI shadow. next is the
+ * address after the instruction (prefixes included), masked to the code
+ * segment's size. emulate and the lean exit (dpmi_lean_flags) share it. */
+static void pm_flags_insn(struct dosvm *v, struct v86_frame *f, const struct dpmi_seg *cs, uint8_t op, uint32_t next)
+{
+    struct dpmi *d = &v->dpmi;
+    v->perf.cause = DOSVM_COST_PM_FLAGS;
+    if (op == 0xFA) {
+        /* A fresh CLI starts a fresh ordinary-code grace period even if
+         * virtual IF was already clear and an IRQ has long been pending. */
+        d->if_waiting = false;
+        d->if_steps = 0;
+        /* An image armed by an enclosing region and still live keeps its
+         * TF and its owner beside the new one (armed_push). */
+        struct dpmi_armed planted;
+        bool armed = v->monitor.vif && arm_flags_image(v, f, cs, &planted);
+        if (armed) {
+            armed_push(v, &planted);
+            d->stats.if_armed++;
+        }
+        v->monitor.vif = false;
+        dosvm_trace(v, DOSVM_TRACE_FLAGS, f, 0, armed, 0);
+    } else if (!v->monitor.vif) {
+        /* STI shadow: no IRQ before the next instruction retires. Not
+         * single-stepped: TF would leak into a PUSHF image (PUSHF does
+         * not trap at IOPL 0 in protected mode). dpmi_pm_trap ends the
+         * shadow at the first trap that is not an IRQ at that address. */
+        dosvm_vif_restore(v, true, DOSVM_IF_STI);
+        f->tf.eip = next;
+        d->shadow = true;
+        d->shadow_cs = (uint16_t)f->tf.cs;
+        d->shadow_eip = f->tf.eip;
+        return;
+    }
+    f->tf.eip = next;
+}
 /* #GP(0): IOPL-sensitive instructions the monitor virtualizes. */
 static int emulate(struct dosvm *v, struct v86_frame *f)
 {
-    struct dpmi *d = &v->dpmi;
     struct dpmi_seg cs;
     if (!dpmi_seg(v, (uint16_t)f->tf.cs, &cs)) return dpmi_exception(v, f, 13, 0);
     int direct;
@@ -1368,39 +1431,9 @@ static int emulate(struct dosvm *v, struct v86_frame *f)
     uint32_t next = f->tf.eip + len, mask = cs.big ? 0xFFFFFFFFu : 0xFFFFu;
     unsigned w = op32 ? 4 : 2;
     switch (op) {
-    case 0xFA: {
-        v->perf.cause = DOSVM_COST_PM_FLAGS;
-        /* A fresh CLI starts a fresh ordinary-code grace period even if
-         * virtual IF was already clear and an IRQ has long been pending. */
-        d->if_waiting = false;
-        d->if_steps = 0;
-        /* An image armed by an enclosing region and still live keeps its
-         * TF and its owner beside the new one (armed_push). */
-        struct dpmi_armed planted;
-        bool armed = v->monitor.vif && arm_flags_image(v, f, &cs, &planted);
-        if (armed) {
-            armed_push(v, &planted);
-            d->stats.if_armed++;
-        }
-        v->monitor.vif = false;
-        dosvm_trace(v, DOSVM_TRACE_FLAGS, f, 0, armed, 0);
-        break;
-    }
-    case 0xFB:
-        v->perf.cause = DOSVM_COST_PM_FLAGS;
-        if (!v->monitor.vif) {
-            /* STI shadow: no IRQ before the next instruction retires. Not
-             * single-stepped: TF would leak into a PUSHF image (PUSHF does
-             * not trap at IOPL 0 in protected mode). dpmi_pm_trap ends the
-             * shadow at the first trap that is not an IRQ at that address. */
-            dosvm_vif_restore(v, true, DOSVM_IF_STI);
-            f->tf.eip = next & mask;
-            d->shadow = true;
-            d->shadow_cs = (uint16_t)f->tf.cs;
-            d->shadow_eip = f->tf.eip;
-            return 0;
-        }
-        break;
+    case 0xFA: case 0xFB:
+        pm_flags_insn(v, f, &cs, op, next & mask);
+        return 0;
     case 0xF4: v->perf.cause = DOSVM_COST_PM_HLT; v->monitor.state = V86_HALTED; break;
     case 0xE4: case 0xE5: case 0xE6: case 0xE7: case 0xEC: case 0xED: case 0xEE: case 0xEF: {
         uint16_t port = (uint16_t)f->tf.edx;
@@ -1577,6 +1610,26 @@ void dpmi_lean_retire(struct dosvm *v, const struct v86_frame *f)
     d->if_steps = 0;
 }
 
+/* The decode seed at the boundary a PM trap returns to (valid: e == 0 in
+ * PM): its CS:EIP, the root stack snapshot while a CLI proof may need it,
+ * and the DS base. reacquired counts a checkpoint or replanned return. */
+static void decode_boundary(struct dosvm *v, struct v86_frame *f, bool valid, bool reacquired)
+{
+    v->dpmi.decode_valid = valid;
+    if (valid && reacquired) v->perf.return_reacquired++;
+    v->dpmi.decode_cs = (uint16_t)f->tf.cs;
+    v->dpmi.decode_eip = f->tf.eip;
+    struct dpmi_seg ss, code, ds;
+    uint32_t lin;
+    v->dpmi.decode_stack_valid = valid && dpmi_seed_wanted(v) &&
+        dpmi_seg(v, (uint16_t)f->tf.cs, &code) && dpmi_seg(v, (uint16_t)f->tf.user_ss, &ss) &&
+        code.big == ss.big && dpmi_ptr(v, (uint16_t)f->tf.user_ss,
+            ss.big ? f->tf.user_esp : (uint16_t)f->tf.user_esp, sizeof(v->dpmi.decode_stack), false, &lin) &&
+        !dosvm_read(v, lin, v->dpmi.decode_stack, sizeof(v->dpmi.decode_stack));
+    if (v->dpmi.decode_stack_valid) v->dpmi.decode_stack_linear = lin;
+    v->dpmi.decode_ds_valid = valid && dpmi_seg(v, (uint16_t)f->tf.ds, &ds) && ds.present;
+    if (v->dpmi.decode_ds_valid) v->dpmi.decode_ds_base = ds.base;
+}
 int dpmi_pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t dr6)
 {
     /* A physical IRQ can land between PUSHF, POP and CLI without changing
@@ -1621,24 +1674,33 @@ int dpmi_pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t dr
     if (!e && v->frame_pm && !checkpoint) return_boundary_seed(v, f);
     /* Every checkpoint is an observed boundary: retain its independent
      * proof even while another prediction is in flight. */
-    if ((!keep && !irq_return) || e || !v->frame_pm || checkpoint || (replanning && !keep_resumed)) {
-        v->dpmi.decode_valid = !e && v->frame_pm;
-        if (v->dpmi.decode_valid && (checkpoint || (replanning && !keep_resumed)))
-            v->perf.return_reacquired++;
-        v->dpmi.decode_cs = (uint16_t)f->tf.cs;
-        v->dpmi.decode_eip = f->tf.eip;
-        struct dpmi_seg ss, code, ds;
-        uint32_t lin;
-        v->dpmi.decode_stack_valid = !e && v->frame_pm && dpmi_seed_wanted(v) &&
-            dpmi_seg(v, (uint16_t)f->tf.cs, &code) && dpmi_seg(v, (uint16_t)f->tf.user_ss, &ss) &&
-            code.big == ss.big && dpmi_ptr(v, (uint16_t)f->tf.user_ss,
-                ss.big ? f->tf.user_esp : (uint16_t)f->tf.user_esp, sizeof(v->dpmi.decode_stack), false, &lin) &&
-            !dosvm_read(v, lin, v->dpmi.decode_stack, sizeof(v->dpmi.decode_stack));
-        if (v->dpmi.decode_stack_valid) v->dpmi.decode_stack_linear = lin;
-        v->dpmi.decode_ds_valid = !e && v->frame_pm && dpmi_seg(v, (uint16_t)f->tf.ds, &ds) && ds.present;
-        if (v->dpmi.decode_ds_valid) v->dpmi.decode_ds_base = ds.base;
-    }
+    if ((!keep && !irq_return) || e || !v->frame_pm || checkpoint || (replanning && !keep_resumed))
+        decode_boundary(v, f, !e && v->frame_pm, checkpoint || (replanning && !keep_resumed));
     return e;
+}
+/* t23-dosperf: a PM CLI or STI retired on the lean path (dosvm.c lean_io).
+ * The instruction is emulate's (pm_flags_insn), followed by exactly the
+ * boundary work dpmi_pm_trap does after such an emulated #GP(0): no IRQ
+ * vector, no checkpoint, no return replanning (dpmi_lean_eligible held
+ * before the instruction). True when the exit may return at once; false
+ * when the CLI's proofs restarted the seed demand or return tracking (a
+ * CLI that missed): the caller then runs the ordinary tail, as after a
+ * lean port exit with work left. T23 trial c42f556e: Warcraft II's PM
+ * CLI/STI exits cost 20.0 us each (bank n=4, 50,715 per 5 s) on the
+ * ordinary path, against 6.0-7.4 us for lean port exits (DOOM, bank n=4). */
+bool dpmi_lean_flags(struct dosvm *v, struct v86_frame *f, const struct dpmi_seg *cs, uint8_t op)
+{
+    pm_flags_insn(v, f, cs, op, (f->tf.eip + 1) & (cs->big ? 0xFFFFFFFFu : 0xFFFFu));
+    armed_observe(v, f);
+    return_boundary_seed(v, f);
+    decode_boundary(v, f, true, false);
+    struct dpmi *d = &v->dpmi;
+    if (dpmi_seed_wanted(v) || d->return_steps || d->return_step || d->return_replan) return false;
+    /* if_recovery_prepare with no IRQ pending (lean_after checks it):
+     * if_recovery_end, with no owned step (dpmi_lean_eligible). */
+    d->if_waiting = d->if_step = d->if_restore_step = false;
+    d->if_steps = 0;
+    return true;
 }
 
 /* Asynchronous conventional-memory ESR. Use the same suspended continuation

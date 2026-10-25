@@ -130,6 +130,7 @@ struct dpmi_cli_site {
 struct dpmi_cli_stats {
     uint32_t candidates, hits, proved, control, pattern, missed;
     uint32_t seeds, seeds_skipped, irq_proofs, irq_proofs_skipped;
+    uint32_t unprovable;            /* t23-dosperf: no PUSHF/POP r before the CLI */
 };
 struct dpmi {
     uint32_t ldt[DPMI_LDT_ENTRIES][2] __attribute__((aligned(8)));

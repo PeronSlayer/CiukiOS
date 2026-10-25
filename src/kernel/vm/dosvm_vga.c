@@ -632,10 +632,21 @@ int dosvm_vga_init(struct dosvm *v)
  * so the guest observes exactly the sequential result, only sooner. */
 #define VIDEO_BURST 1024u
 #define VIDEO_BURST_IDLE 8u /* INC/INC/LOOP plus the next RAM load must reach its VGA store. */
+/* t23-dosperf (dos-dpmi-contract.md, amendment of 2026-10-25): an armed
+ * fx-16 flags image does not stop a burst. The image (a stack slot or a
+ * register holding TF) only acts when POPF/IRET loads it; this decoder
+ * executes neither (nor POP, RET or any stack transfer) and stores only to
+ * the aperture, so a burst can neither load nor change the image and the
+ * monitor observes it (armed_observe) at the next exit as it would after
+ * the same instructions run natively. Warcraft II keeps one such image
+ * owned for its whole run (an enclosing DOS/4GW region), which kept every
+ * palette load at 768 exits (T23 trial c42f556e: vm_perf_remap dac=0 in
+ * every bank, 184,514 DAC exits per 5 s in the window). Return tracking
+ * (execute breakpoints), watchpoints and IF-recovery steps still stop it. */
 static bool video_run_blocked(const struct dosvm *v, const struct v86_frame *f)
 {
     return (f->tf.eflags & V86_TF) || g_need_resched || v->monitor.shadow || v->dpmi.shadow ||
-        v->dpmi.dr7 || v->dpmi.if_armed || v->dpmi.return_steps || v->dpmi.if_step ||
+        v->dpmi.dr7 || v->dpmi.return_steps || v->dpmi.if_step ||
         v->dpmi.if_restore_step || v->info.state >= DOSVM_STOPPING ||
         (v->monitor.vif && v86_irq_pending(&v->monitor) >= 0);
 }

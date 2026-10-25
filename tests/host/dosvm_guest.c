@@ -1325,6 +1325,13 @@ static int window_vmvideo(const char *command)
 }
 static uint64_t menu_until;
 static bool menu_elapsed(void) { return g_ticks >= menu_until; }
+/* t23-dosperf: the T23 model's charged monitor time so far (ms). */
+static double t23_total_ms(void)
+{
+    uint64_t total = 0;
+    for (unsigned i = 0; i < DOSVM_COST_COUNT; i++) total += t23_charged_ns[i];
+    return total / 1e6;
+}
 /* f3-61 play:COMMAND NAME: a game started the way the DOS Box types it,
  * run for GUEST_PLAY_MS simulated milliseconds (default 30000) or until
  * the shell prompt returns or the VM stops. One progress line per second
@@ -1347,6 +1354,28 @@ static void play_progress(uint64_t begin)
            gv->dpmi.stats.irqs_pm, gv->dpmi.active, gv->dpmi.clients, gv->dpmi.stats.terminations, gv->dpmi.stats.faults,
            gv->audio.sb.units, reads, failed, critical,
            (unsigned long long)instructions, xms_kb, (unsigned)(gv->memory.ems_bytes / 1024));
+    /* t23-dosperf GUEST_PLAY_PERF=1: cumulative exit causes, lean exits,
+     * the fx-16 PM CLI proof cache (BOOT.LOG [vm-audio] cadence_clock
+     * cli_hits/cli_learned/cli_missed) and the seed demand that keeps
+     * port exits off the lean path, once per simulated second. */
+    if (getenv("GUEST_PLAY_PERF")) {
+        const struct dpmi_cli_stats *c = &gv->dpmi.cli;
+        const uint32_t *n = gv->perf.cost_count;
+        bool wanted = !gv->dpmi.cli_settled || g_ticks - gv->dpmi.cli_miss_tick < 1000u;
+        printf("H61 PERF t=%llu traps=%llu lean=%u pm_flags=%u pm_int=%u pit_pic=%u vga_io=%u io=%u db=%u timer=%u "
+               "rm=%u cli_cand=%u hits=%u proved=%u pattern=%u control=%u missed=%u unprovable=%u seeds=%u skipped=%u "
+               "seed_wanted=%u irq0_lost=%llu irq0_reinjected=%llu frames=%u t23_ms=%.1f t23_pit_ms=%.1f t23_flags_ms=%.1f dac=%u armed=%u ret=%u\n",
+               (unsigned long long)(g_ticks - begin), (unsigned long long)traps, gv->perf.lean_exits,
+               n[DOSVM_COST_PM_FLAGS], n[DOSVM_COST_PM_INT], n[DOSVM_COST_PIT_PIC], n[DOSVM_COST_VGA_IO],
+               n[DOSVM_COST_IO], n[DOSVM_COST_DB], n[DOSVM_COST_TIMER],
+               n[DOSVM_COST_RM_INT] + n[DOSVM_COST_RM_IRET] + n[DOSVM_COST_RM_FLAGS] + n[DOSVM_COST_RM_PUSHF] +
+               n[DOSVM_COST_RM_POPF] + n[DOSVM_COST_RM_CLI] + n[DOSVM_COST_RM_STI],
+               c->candidates, c->hits, c->proved, c->pattern, c->control, c->missed, c->unprovable,
+               c->seeds, c->seeds_skipped, wanted, (unsigned long long)gv->pit.lost_edges,
+               (unsigned long long)gv->pit.reinjected, gv->video_frames, t23_total_ms(),
+               t23_charged_ns[DOSVM_COST_PIT_PIC] / 1e6, t23_charged_ns[DOSVM_COST_PM_FLAGS] / 1e6,
+               gv->perf.dac_batched, gv->dpmi.if_armed, gv->perf.return_armed);
+    }
 }
 /* GUEST_PLAY_KEYS="01@12000,1c@20000": a window key (set-1 code, hex) is
  * pressed and released at that simulated millisecond of the play run, as

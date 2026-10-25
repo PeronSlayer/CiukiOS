@@ -23,10 +23,14 @@ static bool io_burst_fetch(struct dosvm *v, const struct v86_frame *f, unsigned 
     }
     return !dosvm_read(v, linear, byte, 1);
 }
+/* t23-dosperf: an armed flags image does not stop the burst (the same
+ * argument as video_run_blocked in dosvm_vga.c: this decoder retires port
+ * cycles and MOV/INC register setup, never POPF/IRET; its only stores are
+ * REP INS elements, emulated as the ordinary path emulates them). */
 static bool burst_blocked(const struct dosvm *v, const struct v86_frame *f)
 {
     return v->info.state >= DOSVM_STOPPING || g_need_resched || (f->tf.eflags & V86_TF) ||
-        v->dpmi.dr7 || v->dpmi.if_armed || v->dpmi.return_steps || v->monitor.shadow || v->dpmi.shadow ||
+        v->dpmi.dr7 || v->dpmi.return_steps || v->monitor.shadow || v->dpmi.shadow ||
         (v->monitor.vif && v86_irq_pending(&v->monitor) >= 0);
 }
 static bool io_hot_port(uint16_t port)

@@ -116,6 +116,9 @@ struct dosvm_perf_sample {
     struct dosvm_hot_cost top_port[DOSVM_PERF_TOP], top_vector[DOSVM_PERF_TOP];
     uint32_t port_overflow, ticks;
     uint64_t timer_us, audio_us;
+    /* t23-dosperf: presenter samples, VIDEO wakes and their dispatch delay. */
+    uint32_t present_samples, present_waits;
+    uint64_t present_wait_us, present_wait_max_us;
 };
 /* Raw cumulative scalars captured with the interval tables detached. Only
  * the reporter reads this bank; producers use the other bank after IF restore. */
@@ -126,6 +129,8 @@ struct dosvm_perf_raw {
     uint32_t ms, frames, starts, harvests, direct_pages, trapped_bytes, converted_bytes, rows;
     uint32_t port_remaps, burst_insn, latch_read_windows, batched, port_overflow, ticks;
     uint32_t lean_exits, dac_batched, linear_direct;
+    uint32_t present_samples, present_waits;
+    uint64_t present_wait_cycles, present_wait_max_cycles;
     uint32_t exits[6], irqs[16], cost_count[DOSVM_COST_COUNT];
     uint32_t port_count[DOSVM_VGA_REGS], port_exits[DOSVM_VGA_REGS];
     uint32_t idle_blocks, idle_count[DOSVM_IDLE_REASONS];
@@ -217,6 +222,9 @@ struct dosvm {
     struct kwait present_wait; /* request dependency on the VM worker */
     uint64_t present_due_us, present_sample_due_us;
     uint32_t console_sequence, present_vbe_changes, present_samples;
+    /* t23-dosperf: when the waiting presenter's VIDEO event became true
+     * (VM context, present_ready), consumed by its WAIT_PRESENT return. */
+    uint64_t present_ready_tsc;
     struct {
         bool sleeping, seen;
         uint64_t last_tick, poll_tick;
@@ -380,6 +388,11 @@ struct dosvm {
          * burst, chain-4 pages presented without a plane deinterleave. */
         uint32_t lean_exits, last_lean_exits, dac_batched, last_dac_batched;
         uint32_t linear_direct, last_linear_direct;
+        /* t23-dosperf: WAIT_PRESENT returns with a VIDEO event and the
+         * cycles from the event becoming true to that return (the
+         * presenter's dispatch delay behind the VM and other tasks). */
+        uint32_t present_waits, last_present_waits, last_present_samples;
+        uint64_t present_wait_cycles, last_present_wait_cycles, present_wait_max_cycles;
         uint32_t last_frames, last_starts, last_harvests, last_pages, last_trapped, last_converted, last_rows;
         uint32_t last_exits[6], last_irqs[16];
         uint64_t last_guest, last_monitor, last_present, last_harvest, last_log, last_edges;
@@ -657,6 +670,7 @@ int dpmi_pm_trap(struct dosvm *, struct v86_frame *, uint32_t cr2, uint32_t dr6)
 bool dpmi_lean_eligible(const struct dosvm *, const struct v86_frame *);
 bool dpmi_lean_quiet(const struct dosvm *, const struct v86_frame *);
 void dpmi_lean_retire(struct dosvm *, const struct v86_frame *);
+bool dpmi_lean_flags(struct dosvm *, struct v86_frame *, const struct dpmi_seg *, uint8_t op);
 int dpmi_io_repeat(struct dosvm *, struct v86_frame *);
 int dpmi_deliver(struct dosvm *, struct v86_frame *);
 void dpmi_close(struct dosvm *);

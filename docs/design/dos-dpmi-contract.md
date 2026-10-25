@@ -471,6 +471,46 @@ path does nothing for it at an I/O exit, and it keeps its owner until
 `flags_restored`. Details and the full eligibility list:
 `f3-acceptance.md`, fx-27.
 
+### t23-dosperf amendment: CLI proofs, lean CLI/STI, bursts beside an armed image (2026-10-25, proposed)
+
+Proposed for the lead's decision with the t23-dosperf merge
+(`validation/t23-dos-window-lag-2026-10-25.md`; T23 trial c42f556e, Warcraft
+II demo in the DOS window). Four rules:
+
+1. **A CLI that no rule can arm is not a miss.** Every arming rule (forward
+   proof, control-flow proof, Windows 95 pattern) needs the instruction that
+   ends at the CLI to be PUSHF or POP r after PUSHF, so its last byte, at
+   CS:EIP-1, must be 9Ch or 58h-5Fh. A candidate CLI with any other byte
+   there is refused at once: no proof, no `cli_missed`, no restart of the
+   seed demand (counted as `unprovable`, host evidence only). Arming
+   outcomes are unchanged. Warcraft II's event loop
+   (`PUSHFW; POP AX; MOV EDX,1; MOV [EBP-4],AX; MOV [EBP-0Ch],EDX; CLI`,
+   restore by `TEST AH,2; JZ; STI`) missed on every execution and kept the
+   seed demand, and therefore every lean exit, off for the whole game.
+2. **PM CLI/STI may take the lean exit** under the fx-27 conditions, with
+   the instruction emulated exactly as `emulate` does (one shared helper)
+   and the boundary work of `dpmi_pm_trap` (armed images observed, the
+   boundary seed, the decode seed). When the CLI's proof restarts the seed
+   demand or return tracking, the ordinary tail runs at that boundary.
+3. **A PM STI shadow ends at the next #GP(0)** on the lean path as in
+   `pm_trap` (any trap that is not a physical IRQ or owned execute fault at
+   the shadowed address ends it); a pending IRQ is still delivered by the
+   ordinary tail of that exit. V86 shadows keep the ordinary path.
+4. **An armed flags image no longer stops an I/O, DAC or VGA burst**
+   (F3-33 clarification above: "owned IF ... proof"). The burst decoders
+   execute no POPF, IRET, POP, RET or stack transfer; the VGA and DAC bursts
+   store only to the aperture and the I/O burst only through REP INS
+   elements emulated as the ordinary path emulates them. A burst never
+   loads an image, and `armed_observe` sees it at the next exit as after
+   native execution.
+   Return tracking (execute breakpoints), client watchpoints, TF, shadows,
+   IF-recovery steps, a deliverable IRQ and a reschedule still stop a burst.
+   Warcraft II keeps one image owned for its whole run, so its per-retrace
+   palette load (768 OUTs to 3C9h) never used the fx-27 DAC burst.
+
+The Sound Blaster's OPL3 ports (base+0..3, base+8/9) join the lean port
+list beside 388h-38Bh: both reach `dosvm_opl_io`.
+
 ## DOS personality and VFS bridge
 
 **[F4]** Shared-drive routing MUST live inside CIUKIDOS before FAT/LFN

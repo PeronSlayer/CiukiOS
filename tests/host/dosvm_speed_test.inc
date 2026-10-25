@@ -134,14 +134,19 @@ static void test_speed_accounting(void)
     v->idle.blocks = 5; v->idle.count[DOSVM_IDLE_28] = 3; v->idle.count[DOSVM_IDLE_16] = 2;
     v->perf.return_hits = 17; v->perf.return_segmented = 11; v->perf.return_fallbacks = 3;
     v->perf.return_armed = 23; v->perf.return_expired = 2; v->perf.return_reacquired = 19;
+    /* t23-dosperf: presenter samples, VIDEO wakes and their dispatch delay. */
+    v->present_samples = 70; v->perf.present_waits = 35;
+    v->perf.present_wait_cycles = 35 * 3000; v->perf.present_wait_max_cycles = 9000;
     g_ticks += DOSVM_PERF_INTERVAL; dosvm_perf_report(v);
-    CHECK(disk_records==disk_before+13); /* IF row plus two F3-47 disk rows */
+    CHECK(disk_records==disk_before+14); /* IF row, two F3-47 disk rows, t23-dosperf presenter row */
     CHECK(v->perf.sample_count == 1 && records == records_before);
     const struct dosvm_perf_sample *s = &v->perf.sample[0];
     CHECK(s->frames == 35 && s->guest_us == 2000 && s->monitor_us == 2000 &&
           s->edges == 140 && s->irqs[0] == 140 && s->insn[V86_OUT] == 200);
     CHECK(s->return_hits == 17 && s->return_segmented == 11 && s->return_fallbacks == 3);
     CHECK(s->return_armed == 23 && s->return_expired == 2 && s->return_reacquired == 19);
+    CHECK(s->present_samples == 70 && s->present_waits == 35 && s->present_wait_us == 105000 &&
+          s->present_wait_max_us == 9000 && !v->perf.present_wait_max_cycles);
     CHECK(strstr(tracker_record, "armed=23 hits=17 expired=2 fallback=3 reacquired=19 segmented=11"));
     CHECK(s->cost_count[DOSVM_COST_VGA_IO] == 1 && s->cost_us[DOSVM_COST_VGA_IO] == 2000);
     CHECK(s->harvests == 140 && s->pages == 700 && s->harvest_us == 123);
