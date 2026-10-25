@@ -212,7 +212,7 @@ class IconStoreTests(unittest.TestCase):
         catalog = (ROOT / "apps/desktop/catalog.h").read_text()
         programs = re.findall(r'\{"(\w+)", "[^"]+", "([a-z-]+)", "(?:programs|accessories|developer|system-tools|games)", (?:NULL|"[^"]*")\}', shell)
         accessories = re.findall(r'\{"(\w+)", "[^"]+", "([a-z-]+)", [01], "[^"]*"\}', catalog)
-        self.assertEqual(len(set(programs)), 40)  # integration Programs, G27 games/Serial and G30 tools
+        self.assertEqual(len(set(programs)), 41)  # integration Programs, G27 games/Serial, G30 tools and the Quake III Arena demo installer
         self.assertEqual(len(accessories), 27)  # integration accessories, G27 games/Serial and G30 tools
         for name, tango in programs + accessories:
             self.assertEqual(tango, table[f"program:{name}"], name)

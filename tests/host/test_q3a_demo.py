@@ -1,11 +1,10 @@
 """Quake III Arena demo installer (owner request 2026-10-25): pin, layout, notices,
-shortcut bytes, Games menu entry and Setup CD assignment. Host only."""
+Games menu entry and Setup CD assignment. Host only."""
 # SPDX-License-Identifier: GPL-2.0-only
 import hashlib
 import importlib.util
 import json
 from pathlib import Path
-import struct
 import tempfile
 import unittest
 
@@ -51,12 +50,12 @@ class Q3ADemoTests(unittest.TestCase):
             sources, directories, metadata, free = q3a.payloads(tmp)
             self.assertEqual(set(sources), {
                 "/Games/Quake III Arena Demo Setup/Q3ADemo.exe",
-                "/WINDOWS/Start Menu/Programs/Games/Install Quake III Arena Demo.lnk",
                 "/system/licenses/q3a-demo-installer-UPSTREAM.json",
                 "/system/licenses/q3a-demo-installer-Q3A_EULA.txt",
                 "/system/licenses/q3a-demo-installer-README-linux-demo.txt"})
             self.assertEqual(free, {SHA})
-            self.assertTrue({"/Games", "/Games/Quake III Arena Demo Setup", "/WINDOWS/Start Menu/Programs/Games"} <= directories)
+            self.assertEqual(directories, {"/Games", "/Games/Quake III Arena Demo Setup"})
+            self.assertFalse([p for p in list(sources) + list(directories) if p.lower().startswith("/windows/start menu")])
             self.assertEqual(metadata["q3a_demo"]["sha256"], SHA)
             for source in sources.values():
                 self.assertTrue(Path(source).is_file())
@@ -65,26 +64,19 @@ class Q3ADemoTests(unittest.TestCase):
             # The local-payload guard accepts the pinned installer and nothing else is reserved.
             dos.refuse_local_payloads({p: q3a.sha256(s) for p, s in sources.items()}, free=free)
 
-    def test_shortcut_bytes(self):
-        data = q3a.encode_link(q3a.LABEL, q3a.TARGET, directory=q3a.WORKDIR)
-        self.assertEqual(data[:8], b"CIUKLNK3")
-        show, icon = struct.unpack_from("<Ii", data, 8)
-        lengths = struct.unpack_from("<5I", data, 16)
-        self.assertEqual((show, icon, struct.unpack_from("<I", data, 36)[0]), (1, 0, 0))
-        self.assertEqual(40 + sum(lengths), len(data))
-        fields, at = [], 40
-        for n in lengths:
-            fields.append(data[at:at + n].decode()); at += n
-        self.assertEqual(fields, ["Install Quake III Arena Demo", "C:\\Games\\Quake III Arena Demo Setup\\Q3ADemo.exe", "",
-                                  "C:\\Games\\Quake III Arena Demo Setup", ""])
+    def test_games_menu_entry(self):
+        # Programs > Games lists a built-in record (shell.c programs[], Win32 launch path), not a .lnk in a Start Menu tree.
         record = json.loads((PACKAGE / "UPSTREAM.json").read_text())["install"]
-        self.assertEqual(record["windows_path"], fields[1])
-        self.assertEqual(record["shortcut"]["label"], fields[0])
-
-    def test_games_menu_folder(self):
-        # Programs > Games is the folder the Start menu scan lists.
-        self.assertEqual(Path(q3a.SHORTCUT_PATH).parent.as_posix(), "/WINDOWS/Start Menu/Programs/Games")
-        self.assertTrue(q3a.SHORTCUT_PATH.endswith(q3a.LABEL + ".lnk"))
+        entry = record["menu_entry"]
+        self.assertEqual((entry["label"], entry["target"]), (q3a.LABEL, q3a.TARGET))
+        self.assertEqual(record["windows_path"], q3a.TARGET)
+        self.assertFalse(hasattr(q3a, "SHORTCUT_PATH"))
+        shell = (ROOT / "apps/desktop/shell.c").read_text()
+        row = [l for l in shell.splitlines() if l.strip().startswith('{"q3demo"')]
+        self.assertEqual(len(row), 1)
+        self.assertIn('"Install Quake III Arena Demo"', row[0])
+        self.assertIn('"games"', row[0])
+        self.assertIn(q3a.TARGET.replace("\\", "\\\\"), row[0])
 
     def test_cd_component(self):
         config = json.loads((ROOT / "config/cd-components.json").read_text())

@@ -96,7 +96,7 @@
      "decision": "plan 10, row Quake"},
     {"id": "q3a-demo", "title": "Quake III Arena demo installer (Windows, unmodified)", "class": "bundled-shareware", "package": "q3a-demo-installer",
      "licence": "id Software Limited Use Software License Agreement (Q3A_EULA.txt)",
-     "paths": ["/Games/Quake III Arena Demo Setup/", "/WINDOWS/Start Menu/Programs/Games/Install Quake III Arena Demo.lnk", "/system/licenses/q3a-demo-installer-*"],
+     "paths": ["/Games/Quake III Arena Demo Setup/", "/system/licenses/q3a-demo-installer-*"],
      "archives": [], "licence_files": [],
      "conditions": "Bundled by the owner's decision of 2026-10-25: the unmodified id Software installer Q3ADemo.exe (third_party/games/q3a-demo-installer/UPSTREAM.json), never run by the build, shipped free of charge with its Limited Use Software License Agreement (Q3A_EULA.txt); the user runs it from Start > Programs > Games.",
      "decision": "owner request 2026-10-25"},

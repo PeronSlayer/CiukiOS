@@ -20,7 +20,7 @@ static int custom_seed(struct custom_worker *w)
     int error=sh_mkdirs(SH_PROGRAMS_FOLDER);
     for (unsigned k=0;k<w->seed_count && !error;k++) {
         const char *category=desk_program_category(w->seed_programs[k].name);
-        const char *group=!strcmp(category,"accessories") ? "Accessories" : !strcmp(category,"system-tools") ? "Accessories/System Tools" : !strcmp(category,"developer") ? "Developer" : "";
+        const char *group=!strcmp(category,"accessories") ? "Accessories" : !strcmp(category,"system-tools") ? "Accessories/System Tools" : !strcmp(category,"developer") ? "Developer" : !strcmp(category,"games") ? "Games/Classic Games" : "";
         char folder[CFG_PATH_MAX];
         if (sh_join(folder,sizeof(folder),SH_PROGRAMS_FOLDER,group)) { error=-ENAMETOOLONG;break; }
         int r=sh_shortcut_add(folder,w->seed_programs[k].path,desk_program_menu_label(w->seed_programs[k].name),NULL);
