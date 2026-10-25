@@ -601,23 +601,42 @@ WAR2_DIR = "/WAR2"
 # (SETUP.EXE strings: DEVICE, DRIVER, IO_ADDR %Xh, IRQ, DMA_8_BIT, DMA_16_BIT),
 # for the DOS VM's Sound Blaster 16 (FDAUTO.BAT: BLASTER=A220 I7 D1 H5 T6): the
 # aildrvr.lst entries "Sound Blaster 16/AWE32" (SB16.DIG) and "Creative Labs
-# Sound Blaster 16" (SBPRO2.MDI, the FM music driver).
+# Sound Blaster 16" (SBPRO2.MDI, the FM music driver). They live beside the
+# drivers: WAR2.EXE changes to its DRIVERS directory, opens MDI.INI and DIG.INI
+# there and changes back (strings "drivers", "MDI.INI", "DIG.INI"; host-runner
+# INT 21h trace 2026-10-25: AH=3Bh c:\war2\drivers, 3D00h MDI.INI, AH=3Bh c:\war2).
 WAR2_SOUND = (("DIG.INI", "Sound Blaster 16/AWE32", "SB16.DIG"),
               ("MDI.INI", "Creative Labs Sound Blaster 16", "SBPRO2.MDI"))
+WAR2_SOUND_DIR = WAR2_DIR + "/DRIVERS"
 
 
 def war2_files():
-    """Generated [(disk path, bytes)]: DIG.INI, MDI.INI and WAR2.BAT. WAR2.EXE
-    stops with "run UVCONFIG" until UVCONFIG.EXE has written UNIVBE.DRV for the
-    video card (setup.exe does that at install time; it is machine specific),
-    so the launcher runs it once."""
+    """Generated [(disk path, bytes)]: DRIVERS/DIG.INI, DRIVERS/MDI.INI and
+    WAR2.BAT. WAR2.EXE stops with "run UVCONFIG" until UVCONFIG.EXE has written
+    UNIVBE.DRV for the video card (setup.exe does that at install time; it is
+    machine specific), so the launcher runs it once."""
     files = []
     for name, device, driver in WAR2_SOUND:
         text = (";Miles Design Audio Interface Library V3.03 of 18-Jun-95\r\n"
                 f"DEVICE      {device}\r\nDRIVER      {driver}\r\nIO_ADDR     220h\r\n"
                 "IRQ         7\r\nDMA_8_BIT   1\r\nDMA_16_BIT  5\r\n")
-        files.append((f"{WAR2_DIR}/{name}", text.encode("ascii")))
+        files.append((f"{WAR2_SOUND_DIR}/{name}", text.encode("ascii")))
     files.append((f"{WAR2_DIR}/WAR2.BAT", b"@ECHO OFF\r\nIF NOT EXIST UNIVBE.DRV UVCONFIG.EXE\r\nWAR2.EXE\r\n"))
+    return files
+
+
+def generated_files(fixtures=None):
+    """Every generated (not pinned) game file, [(disk path, bytes, record)]:
+    DOOM's CIUKI.CFG and the Warcraft II demo's launcher and sound setup. The
+    games disk and the DOS image (scripts/build_dos_image.py) both install
+    exactly this list, so a generated file cannot reach only one of them."""
+    fixtures = fixtures or _fixtures()
+    # f3-06 DOOM defaults (dos_fixtures.DOOM_CONFIG): SB16 at 220h/IRQ 7/DMA 1, no mouse or joystick.
+    files = [("/DOOM/CIUKI.CFG", fixtures.DOOM_CONFIG, {"package": None, "role": "config",
+                                                        "redistribution": REDISTRIBUTION, "generated": True})]
+    for path, data in war2_files():
+        files.append((path, data, {"package": None, "role": "config" if path.endswith(".INI") else "launcher",
+                                   "redistribution": REDISTRIBUTION, "generated": True}))
     return files
 
 
@@ -693,12 +712,7 @@ def build(out=None, dos_image=None, root=ROOT):
                          "sha256": record["sha256"], "directory": "/" + record["install"]["directory"],
                          "redistribution": record["redistribution"], "bundling": record.get("bundling", ""),
                          "license_files": [f"{GAMES}/{package}/{item['name']}" for item in record["license_files"]]})
-    # f3-06 DOOM defaults (dos_fixtures.DOOM_CONFIG): SB16 at 220h/IRQ 7/DMA 1, no mouse or joystick.
-    files.append(("/DOOM/CIUKI.CFG", fixtures.DOOM_CONFIG, {"package": None, "role": "config",
-                                                             "redistribution": REDISTRIBUTION, "generated": True}))
-    for path, data in war2_files():
-        files.append((path, data, {"package": None, "role": "config" if path.endswith(".INI") else "launcher",
-                                   "redistribution": REDISTRIBUTION, "generated": True}))
+    files += generated_files(fixtures)
     refuse_registered(files, root)
     paths = [path for path, _, _ in files]
     if len(set(p.upper() for p in paths)) != len(paths):

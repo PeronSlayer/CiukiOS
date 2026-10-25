@@ -45,6 +45,27 @@ static bool decode(const uint32_t d[2], struct dpmi_seg *s)
     return true;
 }
 
+/* The DPL 3 GDT descriptors a client of this VM can load while its worker
+ * runs (arch/desc.c installs the same values): the flat user code and data
+ * segments, and since 2026-10-25 selector 40h, the VM's BIOS data area
+ * (dos-dpmi-contract.md "Selector 40h"). Windows provides this "bimodal"
+ * selector; the DOS/16M kernel of DOS/4GW and DOS/4GW Professional 1.97
+ * loads it (push 40h / pop es) in its INT 21h 2Ah/2Ch handlers. */
+bool dpmi_gdt_descriptor(const struct dosvm *v, uint16_t sel, uint32_t d[2])
+{
+    d[0] = d[1] = 0;
+    if (sel & 4) return false;
+    switch (sel & ~3u) {
+    case GDT_UCODE: dpmi_desc_set(d, 0, 0xFFFFFFFFu, 0xFA, 0x40); return true;
+    case GDT_UDATA: dpmi_desc_set(d, 0, 0xFFFFFFFFu, 0xF2, 0x40); return true;
+    case SEL_BIOS_DATA:
+        if (!v->dpmi.active) return false;      /* present only with the VM's LDT */
+        dpmi_desc_set(d, ARCH_BIOS_DATA_BASE, ARCH_BIOS_DATA_LIMIT, ARCH_BIOS_DATA_ACCESS, 0);
+        return true;
+    default: return false;
+    }
+}
+
 bool dpmi_seg(const struct dosvm *v, uint16_t sel, struct dpmi_seg *s)
 {
     memset(s, 0, sizeof(*s));
@@ -54,11 +75,8 @@ bool dpmi_seg(const struct dosvm *v, uint16_t sel, struct dpmi_seg *s)
         if (!v->dpmi.active || i >= DPMI_LDT_ENTRIES || v->dpmi.kind[i] == DPMI_FREE) return false;
         return decode(v->dpmi.ldt[i], s);
     }
-    uint32_t flat[2];
-    if ((sel & ~3u) == GDT_UCODE) dpmi_desc_set(flat, 0, 0xFFFFFFFFu, 0xFA, 0x40);
-    else if ((sel & ~3u) == GDT_UDATA) dpmi_desc_set(flat, 0, 0xFFFFFFFFu, 0xF2, 0x40);
-    else return false;
-    return decode(flat, s);
+    uint32_t gdt[2];
+    return dpmi_gdt_descriptor(v, sel, gdt) && decode(gdt, s);
 }
 
 /* Checked selector:offset range; the linear result is also VM-owned memory.

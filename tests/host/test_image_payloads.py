@@ -226,7 +226,7 @@ class ImagePayloadTests(unittest.TestCase):
         self.assertEqual(sources["/system/licenses/war2-demo-VENDOR.TXT"].read_bytes(),
                          (ROOT / "third_party/games/war2-demo/VENDOR.TXT").read_bytes())
         self.assertIn("war2-demo", [p["name"] for p in metadata["packages"]])
-        self.assertTrue({"/WAR2/WAR2.EXE", "/WAR2/DEMODATA/MAINDAT.WAR", "/WAR2/DIG.INI"} <=
+        self.assertTrue({"/WAR2/WAR2.EXE", "/WAR2/DEMODATA/MAINDAT.WAR", "/WAR2/DRIVERS/DIG.INI"} <=
                         {f["path"] for f in metadata["files"]})
         self.assertTrue({"/Games", "/system/licenses"} <= directories)
         self.assertNotIn("checkers", metadata)

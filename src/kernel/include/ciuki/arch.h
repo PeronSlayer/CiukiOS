@@ -31,12 +31,23 @@ void arch_io_install(const struct arch_io_range *, unsigned count); /* IF=0 */
 void arch_vga_io(bool enabled); /* current task only; IOPL remains zero */
 void df_tss_init(uint32_t cr3);
 
-/* f3-04: one GDT slot after the native TLS descriptor (index 7) holds the
- * LDT descriptor of the running DOS VM's DPMI clients (execution-abi.md,
- * "F3-04 amendment"). NULL unloads it (LDTR = 0). Debug registers are
- * VM-local watchpoints, loaded only while that VM's worker runs. */
-#define ARCH_LDT_GDT_INDEX 8
-#define SEL_LDT 0x40
+/* f3-04: the LDT descriptor of the running DOS VM's DPMI clients
+ * (execution-abi.md, "F3-04 amendment"). NULL unloads it (LDTR = 0). Debug
+ * registers are VM-local watchpoints, loaded only while that VM's worker runs.
+ * 2026-10-25 (execution-abi.md, "Selector 40h amendment"): GDT index 8,
+ * selector 40h, is the BIOS data area of the running VM for its DPMI clients
+ * (linear 400h, 64 KiB, DPL 3 data, as the real-mode segment 0040h and the
+ * INT 31h 0002h alias of it), the "bimodal" selector 40h that Windows
+ * provides and the DOS/16M kernel of DOS/4GW loads in its INT 21h 2Ah/2Ch
+ * handlers; it is present only while the LDT is loaded. The LDT descriptor
+ * moved after the Win32 FS slot, to index 10 (selector 50h). */
+#define ARCH_BIOS_GDT_INDEX 8
+#define SEL_BIOS_DATA 0x40
+#define ARCH_BIOS_DATA_BASE 0x400u
+#define ARCH_BIOS_DATA_LIMIT 0xFFFFu
+#define ARCH_BIOS_DATA_ACCESS 0xF2u   /* present, DPL 3, data, writable */
+#define ARCH_LDT_GDT_INDEX 10
+#define SEL_LDT 0x50
 void arch_w32_fs_switch(uint32_t base);
 /* Byte-granular DPL3 data segment, preserving the exact 8 KiB TEB limit. */
 static inline void arch_w32_fs_encode(uint8_t out[8], uint32_t base)

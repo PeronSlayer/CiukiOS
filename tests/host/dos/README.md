@@ -36,6 +36,21 @@ It uses the H57 qualification when present, else builds the fork once under
 [dos-dpmi-contract.md](../../../docs/design/dos-dpmi-contract.md#dos-box-memory-xms-in-front-of-the-guest-int-2fh-chain-2026-10-24)
 and the [2026-10-25 section](../../../docs/design/dos-dpmi-contract.md#dos-box-memory-umbs-linked-share-high-the-emmxxxx0-device-2026-10-25).
 
+DOS extenders in the DOS Box (DOSX) run the same guest with two DOS/4GW
+clients of the VMM's DPMI host: `DPMI4GW.EXE` (Open Watcom's DOS/4GW 1.97:
+DPMI services, IRQ0, virtual IF, INT 21h date/time and file I/O through the
+extender) and the pinned Warcraft II demo under DOS/4GW Professional 1.97,
+with and without the `EMMXXXX0` device, until its own video check:
+
+```sh
+nice -n 19 bash tests/host/dos/run_dos_extenders.sh
+```
+
+It needs Open Watcom under `/opt/watcom` and writes its logs under
+`build/host/dos/extenders/`. The runner has no x87, so `GUEST_NO_X87` models
+a machine without a coprocessor. Decisions and sources:
+[selector 40h and nested saved flags images](../../../docs/design/dos-dpmi-contract.md#selector-40h-and-nested-saved-flags-images-2026-10-25).
+
 Run one command at a time:
 
 ```sh

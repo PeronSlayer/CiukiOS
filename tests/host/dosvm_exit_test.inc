@@ -330,7 +330,7 @@ static void test_exit_flags(void)
             bool ea=exit_reference_arm(v,&a,&cs);
             uint32_t expected; CHECK(!dosvm_read(v,0x2800,&expected,4));
             CHECK(!dosvm_write(v,0x2800,pop==0x57 ? &image : &zero,4));
-            bool eb=arm_flags_image(v,&b,&cs);
+            struct dpmi_armed planted; bool eb=arm_flags_image(v,&b,&cs,&planted);
             uint32_t actual; CHECK(!dosvm_read(v,0x2800,&actual,4));
             if (!(ea==eb && ea==!!match && expected==actual && !memcmp(&a,&b,sizeof(a))))
                 fprintf(stderr,"flags differential big=%u pop=%x match=%u old=%u new=%u expected=%x actual=%x\n",big,pop,match,ea,eb,expected,actual);

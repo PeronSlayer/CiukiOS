@@ -1850,6 +1850,18 @@ in, and LDTR is null for every other task; F2's TLS descriptor stays at
 index 7. The F0 protection probe now expects a nine-entry GDT, LDTR null and
 index 8 not present outside a DPMI worker.
 
+**[F3] Selector 40h amendment (2026-10-25).** GDT index 8, selector 40h,
+is now the running VM's BIOS data area for its DPMI clients (base 400h,
+limit FFFFh, DPL 3 writable data: the "bimodal" selector 40h Windows
+provides, which the DOS/16M kernel of DOS/4GW loads in its INT 21h 2Ah/2Ch
+handlers). The per-VM LDT descriptor moved to index 10, selector 50h, after
+the Win32 FS slot 9. Both are loaded together by `arch_ldt_load` when a DOS
+VM worker with an active DPMI client is switched in and are null for every
+other task; the GDT has eleven entries and the F0 protection probe expects
+indices 8 and 10 not present and LDTR null outside a DPMI worker. Native
+selectors, TLS slot 7 and Win32 FS slot 9 (0x4B) are unchanged. Decision and
+sources: [dos-dpmi-contract.md](dos-dpmi-contract.md#selector-40h-and-nested-saved-flags-images-2026-10-25).
+
 **[F3]** DPMI clients run at CPL 3, IOPL 0, EFLAGS.VM=0, in the VM's address
 space and LDT. `INT n` through the DPL 0 gates arrives as #GP(n*8+2) and is
 decoded by the VM monitor (INT 31h services, virtual interrupts); `INT3`

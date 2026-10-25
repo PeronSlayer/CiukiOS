@@ -1,7 +1,8 @@
 /* GDT, TSS, double-fault TSS and IDT.
  * GDT: null, kcode 0x08, kdata 0x10, ucode 0x1B, udata 0x23, TSS 0x28,
- * double-fault TSS 0x30, native GS TLS 0x3B, DOS VM LDT 0x40 (f3-04; null
- * unless a DPMI VM worker runs). Ordinary segments remain flat.
+ * double-fault TSS 0x30, native GS TLS 0x3B, DPMI BIOS data 0x40, Win32 FS
+ * TEB 0x4B, DOS VM LDT 0x50 (f3-04; 0x40 and 0x50 are null unless a DPMI VM
+ * worker runs). Ordinary segments remain flat.
  * Every switch installs a complete TSS bitmap; only the active full-screen
  * VGA owner or a generation-validated NDIS host may have port grants.
  * SPDX-License-Identifier: GPL-2.0-only */
@@ -16,9 +17,11 @@ struct gdt_entry { uint16_t lim0, base0; uint8_t base1, access, gran, base2; } _
 struct idt_entry { uint16_t off0, sel; uint8_t zero, type; uint16_t off1; } __attribute__((packed));
 struct dtr { uint16_t limit; uint32_t base; } __attribute__((packed));
 
-static struct gdt_entry gdt[CIUKI_W32_FS_INDEX + 1];
-_Static_assert(CIUKI_W32_FS_INDEX == ARCH_LDT_GDT_INDEX + 1, "FS follows LDT");
-_Static_assert(ARCH_LDT_GDT_INDEX == CIUKI_TLS_GDT_INDEX + 1, "LDT slot follows TLS");
+static struct gdt_entry gdt[ARCH_LDT_GDT_INDEX + 1];
+_Static_assert(ARCH_BIOS_GDT_INDEX == CIUKI_TLS_GDT_INDEX + 1, "BIOS data slot follows TLS");
+_Static_assert(CIUKI_W32_FS_INDEX == ARCH_BIOS_GDT_INDEX + 1, "FS follows the BIOS data slot");
+_Static_assert(ARCH_LDT_GDT_INDEX == CIUKI_W32_FS_INDEX + 1, "LDT slot follows FS");
+_Static_assert(SEL_BIOS_DATA == ARCH_BIOS_GDT_INDEX * 8 && SEL_LDT == ARCH_LDT_GDT_INDEX * 8, "GDT selectors");
 static struct idt_entry idt[256];
 struct tss g_tss;
 static struct tss df_tss;
@@ -90,7 +93,9 @@ void arch_vga_io(bool enabled)
 /* f3-04 per-VM LDT. Intel SDM Vol. 3A 3.5.1 and LLDT: the descriptor is a
  * system segment of type 2 in the GDT; LLDT with a null selector marks the
  * LDTR invalid. Only the DOS VM switch hook and the DPMI entry call this;
- * the LDT itself lives in kernel memory, supervisor-only. */
+ * the LDT itself lives in kernel memory, supervisor-only. Selector 40h, the
+ * VM's BIOS data area for its DPMI clients (arch.h), is present exactly
+ * while an LDT is loaded: the running VM's memory starts at linear 0. */
 static const void *ldt_base;
 static unsigned ldt_count;
 void arch_ldt_load(const void *base, unsigned entries)
@@ -102,11 +107,14 @@ void arch_ldt_load(const void *base, unsigned entries)
     uint16_t selector = 0;
     if (base) {
         set_gdt(ARCH_LDT_GDT_INDEX, (uint32_t)base, entries * 8 - 1, 0x82, 0x00);
+        set_gdt(ARCH_BIOS_GDT_INDEX, ARCH_BIOS_DATA_BASE, ARCH_BIOS_DATA_LIMIT, ARCH_BIOS_DATA_ACCESS, 0x00);
         selector = SEL_LDT;
     }
     __asm__ volatile("lldt %0" :: "r"(selector) : "memory");
-    if (!base)
+    if (!base) {
         memset(&gdt[ARCH_LDT_GDT_INDEX], 0, sizeof(gdt[0]));
+        memset(&gdt[ARCH_BIOS_GDT_INDEX], 0, sizeof(gdt[0]));
+    }
     ldt_base = base;
     ldt_count = entries;
 }
