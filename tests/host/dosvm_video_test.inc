@@ -582,7 +582,7 @@ static void test_client_boundary(void)
         q.launch.reserved[0]=1;CHECK(dosvm_call(op,&q,sizeof(q))==-EINVAL);q.launch.reserved[0]=0;
         q.state=1;CHECK(dosvm_call(op,&q,sizeof(q))==-EINVAL);q.state=0;
         CHECK(dosvm_call(op,&q,sizeof(q)-1)==-EINVAL);
-        q.launch.game=0;CHECK(dosvm_call(op,&q,sizeof(q))==-EINVAL);q.launch.game=4;
+        q.launch.game=0;CHECK(dosvm_call(op,&q,sizeof(q))==-EINVAL);q.launch.game=CIUKI_DOSVM_GAME_COUNT+1;
         CHECK(dosvm_call(op,&q,sizeof(q))==-EINVAL);q.launch.game=2;
         user_fault=true;CHECK(dosvm_call(op,&q,sizeof(q))==-EFAULT);user_fault=false;
         program_result=1;CHECK(!dosvm_call(op,&q,sizeof(q)) && q.state==2);program_result=0;
@@ -628,7 +628,7 @@ static void test_client_boundary(void)
         CHECK(!dosvm_call(CIUKI_DOSVM_CLOSE,&close,sizeof(close))); empty();
     }
     c.launch.kernel=1;
-    c.launch.game=4; CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL);
+    c.launch.game=CIUKI_DOSVM_GAME_COUNT+1; CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL);
     c.launch.game=1; c.launch.reserved[0]=2; CHECK(dosvm_call(CIUKI_DOSVM_CREATE,&c,sizeof(c))==-EINVAL);
     c.launch.reserved[0]=0; c.launch.reserved[1]=1;
     /* f2-125: an incomplete explicit tuple (no generation or session) is

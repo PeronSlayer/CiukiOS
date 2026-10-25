@@ -57,9 +57,10 @@ DOS4GW_STATUS = ("DOS/4GW 1.97 runtime from Open Watcom 2.0 binw/dos4gw.exe, dis
 # f3-06: owner-local commercial DOS games (ignored by git). They reach a DOS
 # VM only through the runner's separate fixture disk (scripts/test/
 # dos_fixtures.py), never this payload, the canonical image or a release.
-LOCAL_PAYLOAD_DIRS = ("third_party/Doom", "third_party/WOLF3D", "third_party/Quake")
+LOCAL_PAYLOAD_DIRS = ("third_party/Doom", "third_party/WOLF3D", "third_party/Quake", "third_party/War2")
 LOCAL_PAYLOAD_NAMES = ("DOOM.EXE", "DOOM.WAD", "DOOM1.WAD", "DOOM2.WAD", "WOLF3D.EXE",
-                       "QUAKE.EXE", "PAK0.PAK", "PAK1.PAK", "VSWAP.WL6", "VGAGRAPH.WL6", "GAMEMAPS.WL6", "AUDIOT.WL6")
+                       "QUAKE.EXE", "PAK0.PAK", "PAK1.PAK", "VSWAP.WL6", "VGAGRAPH.WL6", "GAMEMAPS.WL6", "AUDIOT.WL6",
+                       "WAR2.EXE", "MAINDAT.WAR", "REZDAT.WAR", "SNDDAT.WAR", "STRDAT.WAR", "SFXDAT.SUD", "MUDDAT.CUD")
 # Registered (commercial) game data: never published under any condition,
 # not even as a pinned shareware member (owner decision 2026-10-12: only the
 # shareware releases are bundled, scripts/build_games_disk.py).

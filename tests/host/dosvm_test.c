@@ -642,7 +642,7 @@ int dos_save_store_open(struct dos_save_file *f,struct dos_save *s,const struct 
 static unsigned program_calls;
 static int program_result;
 int dosvm_game_program(unsigned game,bool remove,uint32_t *size)
-{ CHECK(game && game<=3);(void)remove;program_calls++;*size=8192;return program_result; }
+{ CHECK(game && game<=4);(void)remove;program_calls++;*size=8192;return program_result; }
 /* fx-4: the production inventory names its failed step; this fixture
  * reports the step/detail a case selects (dosvm_fx4_test.inc). */
 static const char *program_step="fixture",*program_detail="none";

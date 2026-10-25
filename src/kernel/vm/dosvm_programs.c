@@ -102,7 +102,7 @@ int dosvm_game_program(unsigned game,bool remove,uint32_t *size)
 int dosvm_game_program_checked(unsigned game,bool remove,uint32_t *size,const char **step,const char **detail)
 {
     *step="request";*detail="none";
-    if(!size || !game || game>3)return -FS_EINVAL;
+    if(!size || !game || game>4)return -FS_EINVAL;
     *size=0;
     *step="reservation";
     int reservation=remove ? dosvm_game_remove_reserve(game) : 0;

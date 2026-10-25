@@ -65,6 +65,7 @@ int main(void)
     typed("\\WOLF3D\\WOLF3D.EXE", "CD \\WOLF3D\nWOLF3D.EXE\n");
     typed("\\DOOM\\DOOM.EXE -config CIUKI.CFG", "CD \\DOOM\nDOOM.EXE -config CIUKI.CFG\n");
     typed("\\QUAKE\\QUAKE.EXE", "CD \\QUAKE\nQUAKE.EXE\n");
+    typed("\\WAR2\\WAR2.BAT", "CD \\WAR2\nWAR2.BAT\n");
     /* One line: no directory before the program, or not a path. */
     typed("\\RUNREC.COM \\DOOM DOOM.EXE", "\\RUNREC.COM \\DOOM DOOM.EXE\n");
     typed("DIR /W", "DIR /W\n");

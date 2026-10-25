@@ -2847,7 +2847,7 @@ struct ciuki_dosvm_policy {
 #define CIUKI_DOSVM_CIUKIDOS 0u
 #define CIUKI_DOSVM_FREEDOS13 1u
 #define CIUKI_DOSVM_UNIFIED 2u /* sole CiukiDOS K2043 fork, DFV2 binding and native IFS */
-#define CIUKI_DOSVM_GAME_COUNT 3u
+#define CIUKI_DOSVM_GAME_COUNT 4u
 /* f3-46 CREATE launch.memory: 0 demand-zero, pageable pool (default); 1 the
  * per-game compatibility mode, eager and resident (Windows 98 PIF "XMS/EMS
  * memory locked"). Any other value returns EINVAL. */

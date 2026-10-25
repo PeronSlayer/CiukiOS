@@ -10,7 +10,7 @@
 #include <unistd.h>
 static struct cp_program_store store;
 static struct desk_uninstall_entry entries[96];
-static unsigned games=7,registered=1,keep_key,runs,logs,icons,save_failure,saves,key_checks;
+static unsigned games=15,registered=1,keep_key,runs,logs,icons,save_failure,saves,key_checks;
 static int check_key(void *ctx,const char *key){(void)ctx;assert(!strcmp(key,"HKCU/fixture"));key_checks++;return registered;}
 static int persist(void *ctx){(void)ctx;saves++;return save_failure ? -EIO : 0;}
 static char logged[256];
@@ -27,7 +27,7 @@ static void file(const char *,const void *,size_t);
 static int exists(const char *);
 static int game(void *ctx,unsigned id,int remove,uint32_t *bytes)
 {
-    (void)ctx;assert(id && id<=3);*bytes=8192;
+    (void)ctx;assert(id && id<=4);*bytes=8192;
     char pending[64];snprintf(pending,sizeof(pending),"/System/REMOVE%u.PND",id);
     if(remove){games&=~(1u<<(id-1));file(pending,"",0);return 1;}
     return exists(pending) ? 2 : !!(games&(1u<<(id-1)));
@@ -92,6 +92,13 @@ int main(int argc,char **argv)
     assert(!exists("/System/REMOVE3.PND") && !exists("/system/settings/dos-game-3.cfg") && !exists("/Windows/Desktop/Quake.lnk") && icons>=7);
     assert(strstr(logged,"[control] remove name=Quake (shareware) kind=bundled-dos result=0") && logs==12);
     assert(exists("/system/licenses/quake-shareware-UPSTREAM.json"));
+    /* Owner 2026-10-25: the Warcraft II demo is the fourth bundled DOS game (/WAR2, package war2-demo). */
+    link_file("/Windows/Desktop/Warcraft.lnk","Warcraft shortcut","/Programs/dosbox","--name=Warcraft II \\WAR2\\WAR2.BAT");
+    i=find("Warcraft II (demo)");assert(entries[i].kind==DESK_PROGRAM_GAME && entries[i].game==4 && !strcmp(entries[i].location,"/WAR2") &&
+        !strcmp(entries[i].publisher,"Blizzard Entertainment") && !strcmp(entries[i].version,"1.20elc") &&
+        !strcmp(entries[i].licence,"/system/licenses/war2-demo-VENDOR.TXT"));
+    assert(!cp_program_remove(&store,&entries[i]) && !(games&8) && !exists("/System/REMOVE4.PND") && !exists("/Windows/Desktop/Warcraft.lnk"));
+    assert(exists("/system/licenses/war2-demo-UPSTREAM.json") && (games&1));
     struct desk_uninstall_entry bad={.name="bad",.kind=DESK_PROGRAM_NATIVE,.location="/Programs/../System"};
     assert(cp_program_remove(&store,&bad)==-EPERM);
     strcpy(bad.location,"/Programs");assert(cp_program_remove(&store,&bad)==-EPERM);

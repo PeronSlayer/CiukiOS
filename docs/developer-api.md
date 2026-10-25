@@ -5271,7 +5271,7 @@ game is the catalog index+1, or zero for the interactive shell.
 sole CiukiDOS K2043 fork, DFV2 binding and native IFS
 
 ```c
-#define CIUKI_DOSVM_GAME_COUNT 3u
+#define CIUKI_DOSVM_GAME_COUNT 4u
 ```
 
 f3-46 CREATE launch.memory: 0 demand-zero, pageable pool (default); 1 the

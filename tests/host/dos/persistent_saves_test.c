@@ -139,7 +139,7 @@ static bool manager_busy;
 static unsigned reservations;
 struct storage *storage_get(void) { return &manager_storage; }
 int dosvm_game_remove_reserve(unsigned game)
-{ assert(game && game<=3); if (manager_busy) return -FS_EBUSY; reservations++; return 0; }
+{ assert(game && game<=4); if (manager_busy) return -FS_EBUSY; reservations++; return 0; }
 void dosvm_game_remove_release(unsigned game) { assert(game && reservations); reservations--; }
 int dosvm_game_data(unsigned,unsigned,struct ciuki_dosvm_command *);
 static struct fat_volume native;

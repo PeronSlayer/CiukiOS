@@ -84,6 +84,7 @@ PAYLOAD = {
     "/system/licenses/wolf3d-shareware-VENDOR.DOC": b"Apogee fixture\n",
     "/system/licenses/doom-shareware-README.TXT": b"id fixture\n",
     "/system/licenses/quake-shareware-SLICNSE.TXT": b"id fixture\n",
+    "/system/licenses/war2-demo-VENDOR.TXT": b"Blizzard fixture\n",
     "/Games/CIUKIGAM.IMG": bytes(10240),
     "/system/dos/DOSBOOT.IMG": bytes([0xEB, 0x3C, 0x90]) + bytes(8189),
     "/WINDOWS/FONTS/LiberationMono-Regular.ttf": b"font fixture" * 50,
@@ -141,7 +142,7 @@ def make_disk_image(work):
                 "image": "ciukios.img", "image_sha256": sha(image.read_bytes()), "kernel_sha256": kernel,
                 "kernel_full_sha256": full_kernel,
                 "build_epoch": EPOCH, "payloads": [{"path": p, "sha256": sha(d), "size": len(d)} for p, d in sorted(PAYLOAD.items())],
-                "games": {"packages": [{"name": n} for n in ("wolf3d-shareware", "doom-shareware", "quake-shareware")]}}
+                "games": {"packages": [{"name": n} for n in ("wolf3d-shareware", "doom-shareware", "quake-shareware", "war2-demo")]}}
     (directory / "build-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     (directory / "build-clock.json").write_text(json.dumps({"utc_epoch": EPOCH, "kernel_sha256": full_kernel, "version": version}) + "\n")
     volume.unlink()
@@ -230,7 +231,7 @@ def chs(lba):
 class EligibilityTests(unittest.TestCase):
     def setUp(self):
         self.config = json.loads(cd.COMPONENTS.read_text())
-        self.games = ["wolf3d-shareware", "doom-shareware", "quake-shareware"]
+        self.games = ["wolf3d-shareware", "doom-shareware", "quake-shareware", "war2-demo"]
         self.paths = sorted({*PAYLOAD, "/Programs/setup", "/system/RELEASE.JSON"})
         self.assertIn("/Programs/hwreport", self.paths)
 
@@ -239,6 +240,10 @@ class EligibilityTests(unittest.TestCase):
         self.assertEqual(assignment["/Programs/netsurf"], "netsurf")
         self.assertEqual(assignment["/system/licenses/WINE-LICENSE"], "windows")
         self.assertEqual(assignment["/system/licenses/wolf3d-shareware-VENDOR.DOC"], "wolf3d")
+        self.assertEqual(assignment["/system/licenses/war2-demo-VENDOR.TXT"], "war2-demo")
+        war2 = next(c for c in self.config["components"] if c["id"] == "war2-demo")
+        self.assertEqual((war2["class"], war2["package"]), ("bundled-shareware", "war2-demo"))
+        self.assertIn("PRIOR signed written permission", war2["conditions"])
         self.assertEqual(assignment["/WINDOWS/SYSTEM/soundfonts.json"], "soundfont")
         self.assertIn("WINE100.TXZ", required)
         self.assertIn("NETSURF.TGZ", required)
@@ -314,6 +319,10 @@ class EligibilityTests(unittest.TestCase):
         config = copy.deepcopy(self.config)
         next(c for c in config["components"] if c["id"] == "quake")["conditions"] = " "
         with self.assertRaisesRegex(ValueError, "bundled-shareware component quake lacks its conditions text"):
+            cd.eligibility(config, self.paths, self.games)
+        config = copy.deepcopy(self.config)
+        next(c for c in config["components"] if c["id"] == "war2-demo")["conditions"] = ""
+        with self.assertRaisesRegex(ValueError, "bundled-shareware component war2-demo lacks its conditions text"):
             cd.eligibility(config, self.paths, self.games)
         with self.assertRaisesRegex(ValueError, "games package heretic-shareware has no component row"):
             cd.eligibility(self.config, self.paths, [*self.games, "heretic-shareware"])
