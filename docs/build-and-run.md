@@ -147,9 +147,9 @@ boot stops the campaign there. The case kind and its rules are in
 ## Version
 
 `config/version.json` is the single source of the CiukiOS version
-(`1.0.0`, stage `alpha`). `scripts/ciuki_version.py` validates it and:
+(`1.0.1`, stage `alpha`). `scripts/ciuki_version.py` validates it and:
 
-- `scripts/build_kernel.py` passes `-DCIUKI_VERSION="1.0.0 alpha"` to every
+- `scripts/build_kernel.py` passes `-DCIUKI_VERSION="1.0.1 alpha"` to every
   kernel object and records `version` in `build/f0/build-clock.json`. The kernel
   logs `CiukiOS <version>` on the line after the `Ciuki VMM F0 build <id> - CiukiOS`
   banner (that banner is parsed by `scripts/test/physical.py` and is unchanged)
