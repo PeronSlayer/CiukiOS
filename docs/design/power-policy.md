@@ -337,7 +337,7 @@ At G11 allocation the highest call-73 action on `main` was STATUS (4). G11 adds:
 | `CIUKI_POWER_EVENTS` | 7 | C = `struct ciuki_power_events`, D = its size | 0; any native client, cached, no firmware call |
 | `CIUKI_POWER_CANCEL_STANDBY` (G11B) | 8 | none | 0 if no pending BIOS request; rejects it otherwise; desktop only; EBUSY during sleep/shutdown |
 | `CIUKI_POWER_FORCE_REBOOT` (T23 c42f556e) | 9 | none | the forced end of a shutdown that cannot finish, after the user's Force: a 3 s best-effort flush, UNCERTAIN, reset; allowed beside a blocked REBOOT/OFF; desktop only; does not return |
-| `CIUKI_POWER_FORCE_OFF` (T23 c42f556e) | 10 | none | as above, then the provider's soft-off without device quiesce: ENOTSUP without a provider, EIO if the machine stayed on |
+| `CIUKI_POWER_FORCE_OFF` (T23 c42f556e) | 10 | none | as above with a 2 s bounded device fence (`power_source_quiesce_dma`); soft-off only on a proved fence (emergency latch): EBUSY otherwise, ENOTSUP without a provider, EIO if the machine stayed on |
 
 QUERY gains `CIUKI_POWER_CAN_STANDBY` (16). Actions 9 and 10 are specified in
 `execution-abi.md` ("Power control amendment") and modelled in

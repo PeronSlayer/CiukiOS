@@ -278,6 +278,61 @@ to P2-7 in `docs/validation/t23-win32-hang-shutdown-2026-10-25.md`):
     soft-off; the dialog says unsaved information may be lost and ScanDisk
     checks the disk at the next start. Record: `[desktop] power forced action=... reason=call-73-not-returned|second-force`.
 
+Decisions after the second Codex review (of `bc9881f62`, 2026-10-25;
+findings 1–8 in the validation record):
+
+14. **An End Task survivor is given up (finding 1).** A process End Task
+    killed during the Win32 turn that the broker still reports
+    `DESK_KILL_WAIT_NS` (5 s) later (a thread in a kernel wait keeps it and
+    its broker connection alive) is not waited for: no second dialog
+    meanwhile, then the Win32 part is unknown, the session finishes, the
+    power sequence lists the process, and Force, then the forced action,
+    follow. Record: `[desktop] end-session win32 pid=... survived End Task for 5000 ms: programs not asked`.
+15. **Nothing blocking on the input thread (finding 2).** `power_prepare`
+    only closes observer channels and snapshots the descriptors to keep;
+    `fflush`, `fstat` and `close` run on the power worker before call 73
+    (`power_prepare_files`). No synchronous fallback: without a thread the
+    call is refused with `EAGAIN`, as it is while the desktop's own
+    run/history worker is busy; the tick treats `EAGAIN` like `EBUSY`
+    (retry, then the busy dialog "The desktop has not finished its own
+    work", Force) and is never gated by an auxiliary worker.
+16. **No Cancel while call 73 runs (finding 3).** `desk_power_cancelable`
+    is false from the worker's start to its return; the dialog draws no
+    Cancel, Esc/Enter and the close box are ignored, `desk_power_cancel`
+    refuses (`[desktop] power cancel refused`). A result arriving for an
+    earlier request (`power.serial`) is recorded and discarded, never taken
+    by a later one.
+17. **An unresolved inventory never proceeds alone (findings 4 and 8).** A
+    failed `W32R_SHUTDOWN_LIST`, Win32 programs never asked with no list
+    proving there are none, or a live process the 64-entry table could not
+    hold stop the sequence at the busy dialog (Cancel or Force) at the close
+    deadline, even with zero known targets. The table reclaims entries whose
+    process is confirmed gone before refusing one (`[desktop] power target table full pid=...: inventory not represented`),
+    and the broker's own overflow is `-ENOSPC`, not a cut.
+18. **Tiered slots (finding 6).** `DESK_SYSTEM_SLOTS` is 4 and each slot
+    records its tier (`slot_tier`): programs 12, Task Manager 1, a closing
+    program's modal prompt 1, system dialogs 2. Admission checks the tier's
+    own occupancy, so Task Manager, the prompt, End Task and Shut Down
+    coexist whatever the order; a Task Manager or prompt takes a program
+    slot while one is free.
+19. **A prompt is a visible modal dialog (finding 7).** user32 marks a
+    modal dialog (DialogBox, MessageBox) with `DESK_V3_MODAL` when its owner
+    is on the wire; the Win32 turn counts as a prompt only a window newer
+    than the watermark that is modal, visible (not hidden/minimized) and
+    owned by a window of the same process. Unowned progress windows, hidden
+    dialogs or non-modal owned windows leave the 20 s bound in force. The
+    explicit escalation route: Alt+F4/close or End Task on any window of the
+    program the session waits for opens the session's "not responding"
+    dialog at once (`[desktop] end-session win32 escalation pid=...`).
+20. **The forced power off has a device fence (finding 5, kernel).**
+    `power_force` runs the platform's nonblocking quiesce step
+    (`power_source_quiesce_dma`, the orderly sequence's native DMA/IRQ stop
+    on its own worker) for at most 2 s; a reset follows regardless; an Off
+    is refused (`EBUSY`, "turn the computer off with its power button")
+    unless the fence proved every device stopped, and then publishes the
+    emergency latch (`power_source_mark_emergency_stopped`), distinct from
+    the orderly proof, which providers accept for Off.
+
 ### Not covered (gaps, owned elsewhere)
 
 - Stand by (PW-6, G11) and Restart in MS-DOS mode (DOS-9) in the Shut Down

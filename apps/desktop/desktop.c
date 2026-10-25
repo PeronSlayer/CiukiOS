@@ -606,7 +606,7 @@ static int launch_program(struct desktop *d, const struct desk_program *program)
         /* Review P2-5: the Task Manager the desktop launches itself (Ctrl+Alt+Del)
          * is admitted from the emergency reserve, so Close Program opens when
          * the programs have filled the table. */
-        index=desk_add_client_tier(d,pair[0],!strcmp(program->name,"tasks") ? DESK_SLOT_EMERGENCY : DESK_SLOT_PROGRAM);
+        index=desk_add_client_tier(d,pair[0],!strcmp(program->name,"tasks") ? DESK_SLOT_TASKMAN : DESK_SLOT_PROGRAM);
         if (index>=0) operation="spawn";
         else { errno=ENOSPC; operation="client-slot"; }
     }
@@ -1972,37 +1972,59 @@ __attribute__((weak)) int desk_w32_shutdown(void) { return 1; }
  * the worker finished, then its result once. A success never returns. */
 static pthread_mutex_t power_call_lock=PTHREAD_MUTEX_INITIALIZER;
 static int power_call_running, power_call_done, power_call_result, power_call_errno;
+static uint32_t power_call_serial;   /* review 2, finding 3: the request the running/done result belongs to */
+/* Review 2, finding 2: the blocking part of the preparation (fflush, fstat
+ * and close take VFS locks) runs on the power worker, never on the input
+ * thread. The input thread snapshots the descriptors to keep. */
+static int power_keep[CIUKI_OPEN_MAX]; static unsigned power_keep_count; static int power_files_pending;
+static void power_prepare_files(void)
+{
+    fflush(NULL);
+    for (int fd=0; fd<CIUKI_OPEN_MAX; fd++) {
+        int keep=0;
+        for (unsigned k=0; k<power_keep_count && !keep; k++) keep=power_keep[k]==fd;
+        if (keep) continue;
+        struct stat st;
+        if (!fstat(fd,&st) && (S_ISREG(st.st_mode) || S_ISDIR(st.st_mode))) close(fd);
+    }
+}
 static void *power_call_worker(void *arg)
 {
     int action=(int)(intptr_t)arg;
+    if (power_files_pending) { power_prepare_files(); power_files_pending=0; }
     int r=ciuki_power(action==1 ? CIUKI_POWER_REBOOT : CIUKI_POWER_OFF), e=errno;
     pthread_mutex_lock(&power_call_lock);
     power_call_result=r; power_call_errno=e; power_call_done=1; power_call_running=0;
     pthread_mutex_unlock(&power_call_lock);
     return NULL;
 }
-static int power_request(int action)
+static int power_request(struct desktop *d, int action)
 {
     pthread_mutex_lock(&power_call_lock);
     if (power_call_done) {
         int r=power_call_result; errno=power_call_errno; power_call_done=0;
+        int stale=power_call_serial!=d->power.serial;
         pthread_mutex_unlock(&power_call_lock);
-        return r;
-    }
-    if (power_call_running) { pthread_mutex_unlock(&power_call_lock); errno=EINPROGRESS; return -1; }
-    pthread_mutex_unlock(&power_call_lock);
-    if (!run_history_idle()) { errno=EBUSY; return -1; }
+        if (!stale) return r;
+        /* A result of an earlier request is recorded, never taken: ask again. */
+        fprintf(stderr,"[desktop] power call result of request %u discarded (current %u) result=%d errno=%d\n",power_call_serial,d->power.serial,r,errno);
+    } else if (power_call_running) {
+        pthread_mutex_unlock(&power_call_lock); errno=EINPROGRESS; return -1;
+    } else pthread_mutex_unlock(&power_call_lock);
+    if (!run_history_idle()) { errno=EAGAIN; return -1; }   /* the desktop's own worker: retried, named by the busy dialog */
     int ready=desk_w32_shutdown();
     if(ready<=0){errno=ready<0 ? -ready : EBUSY;return -1;}
     pthread_t thread; pthread_attr_t attr;
     pthread_attr_init(&attr); pthread_attr_setdetachstate(&attr,PTHREAD_CREATE_DETACHED);
-    pthread_mutex_lock(&power_call_lock); power_call_running=1; pthread_mutex_unlock(&power_call_lock);
+    pthread_mutex_lock(&power_call_lock); power_call_running=1; power_call_serial=d->power.serial; pthread_mutex_unlock(&power_call_lock);
     int e=pthread_create(&thread,&attr,power_call_worker,(void *)(intptr_t)action);
     pthread_attr_destroy(&attr);
     if (e) {
-        /* No thread: the call runs here, as before. */
+        /* No thread: never run the call on the input thread (it may block
+         * inside the kernel); retried, then the busy dialog and Force. */
         pthread_mutex_lock(&power_call_lock); power_call_running=0; pthread_mutex_unlock(&power_call_lock);
-        return ciuki_power(action==1 ? CIUKI_POWER_REBOOT : CIUKI_POWER_OFF);
+        fprintf(stderr,"[desktop] power worker thread unavailable error=%d\n",e);
+        errno=EAGAIN; return -1;
     }
     errno=EINPROGRESS; return -1;
 }
@@ -2036,20 +2058,21 @@ static int power_alive(struct desktop *d, uint32_t pid)
 }
 static void power_prepare(struct desktop *d)
 {
-    observers_close(d);
+    observers_close(d);   /* observer channels and idle workers: no VFS lock */
     if (d->mixer_fd>=0) { close(d->mixer_fd); d->mixer_fd=-1; d->sh.mixer_state=1; }
     /* Settings, wallpaper and icon readers use scoped FILE/DIR handles.
      * Also release inherited file-backed logs, preserving input, display,
-     * output, IPC and the termination authority for retry/Cancel. */
-    fflush(NULL);
-    for (int fd=0; fd<CIUKI_OPEN_MAX; fd++) {
-        if (fd==d->input || fd==d->display || fd==d->output || fd==d->authority_fd) continue;
-        int ipc=0;
-        for (int i=0; i<DESK_CLIENTS; i++) if (d->clients[i].channel==fd || d->clients[i].surface==fd) ipc=1;
-        if (ipc) continue;
-        struct stat st;
-        if (!fstat(fd,&st) && (S_ISREG(st.st_mode) || S_ISDIR(st.st_mode))) close(fd);
+     * output, IPC and the termination authority for retry/Cancel. The
+     * descriptor scan (fstat/close) runs on the power worker (review 2,
+     * finding 2): the keep set is taken here. */
+    power_keep_count=0;
+    int keep[]={d->input,d->display,d->output,d->authority_fd};
+    for (unsigned k=0; k<4; k++) if (keep[k]>=0) power_keep[power_keep_count++]=keep[k];
+    for (int i=0; i<DESK_CLIENTS; i++) {
+        if (d->clients[i].channel>=0 && power_keep_count<CIUKI_OPEN_MAX) power_keep[power_keep_count++]=d->clients[i].channel;
+        if (d->clients[i].surface>=0 && power_keep_count<CIUKI_OPEN_MAX) power_keep[power_keep_count++]=d->clients[i].surface;
     }
+    power_files_pending=1;
 }
 static void user_logoff(struct desktop *d)
 {
@@ -2187,7 +2210,7 @@ static void shell_service(struct desktop *d)
         links_service(d);
         custom_service(d);
         if (sh->want_save && !custom_busy()) { sh->want_save=0;if (settings_save(d)) sh->want_save=1; }
-        if (run_history_idle()) desk_power_tick(d);
+        desk_power_tick(d);   /* review 2, finding 2: never gated by an auxiliary worker; power_request answers EAGAIN meanwhile */
         return;
     }
     user_service(d);

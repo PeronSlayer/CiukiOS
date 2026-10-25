@@ -72,6 +72,10 @@ int power_source_resume(uint16_t event, uint16_t info);
  * succeeded. It latches this; the latch is never cleared because the
  * session cannot resume afterwards. */
 void power_source_mark_stopped(void);
+/* The forced power off's proof: devices stopped by the bounded fence,
+ * storage possibly dirty (T23 c42f556e, review 2 finding 5). */
+void power_source_mark_emergency_stopped(void);
+bool power_source_emergency_stopped(void);
 /* 0 once stopped, EBUSY before. Performs no shutdown work itself. */
 int power_source_orderly_shutdown(uint64_t deadline_ms);
 /* Reservation excludes both active and failed/uncertain providers.

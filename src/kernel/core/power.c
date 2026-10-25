@@ -353,9 +353,16 @@ static int power_sequence(bool off)
  * It runs beside a REBOOT/OFF still blocked on another thread (no
  * power_running), takes no storage lock itself and waits for nothing
  * unbounded: a best-effort durable flush through the bounded suspend-flush
- * worker (POWER_FORCE_FLUSH_MS), the UNCERTAIN latch, then reset or the
- * provider's soft-off. Device quiesce is skipped, as for the power button. */
+ * worker (POWER_FORCE_FLUSH_MS), then a bounded device fence through the
+ * platform's nonblocking quiesce step (power_source_quiesce_dma, the same
+ * native DMA/IRQ stop path as the orderly sequence, on its own worker;
+ * POWER_FORCE_QUIESCE_MS), the UNCERTAIN latch, then reset, or the
+ * provider's soft-off only when the fence proved every device stopped
+ * (emergency latch, distinct from the orderly proof; review 2 finding 5).
+ * A reset needs no fence; an Off with active DMA is refused (EBUSY) and
+ * the user turns the machine off with its power button. */
 #define POWER_FORCE_FLUSH_MS 3000u
+#define POWER_FORCE_QUIESCE_MS 2000u
 static int power_force(bool off, uint32_t pid)
 {
     klog("[power] forced %s requested by pid %u running=%u progress=%u storage=%s", off ? "power off" : "reboot",
@@ -366,10 +373,18 @@ static int power_force(bool off, uint32_t pid)
         while ((e = storage_sync_bounded(end)) == -EAGAIN && !deadline_passed(end)) task_sleep_ms(10);
         klog("[power] forced flush result=%d", e == -EAGAIN ? -ETIMEDOUT : e);
     }
+    int fence;
+    {
+        uint64_t end = deadline_after_ms(POWER_FORCE_QUIESCE_MS);
+        while ((fence = power_source_quiesce_dma(end)) == -EAGAIN && !deadline_passed(end)) task_sleep_ms(10);
+        if (fence == -EAGAIN) fence = -ETIMEDOUT;
+        klog("[power] forced device fence result=%d", fence);
+    }
     power_progress |= CIUKI_POWER_UNCERTAIN;
     if (!off) { klog("[power] stage=forced-reset fallback=8042-triple-fault"); kernel_reboot(); }
     if (!power_source_can_off()) { klog("[power] forced off: no soft-off provider"); return -ENOTSUP; }
-    power_source_mark_stopped();
+    if (fence) { klog("[power] forced off refused: devices not quiescent (error %d); turn the computer off with its power button", fence); return -EBUSY; }
+    power_source_mark_emergency_stopped();
     int e = power_source_soft_off();
     klog("[power] forced soft-off returned error=%d", e);
     return e;

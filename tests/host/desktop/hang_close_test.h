@@ -39,37 +39,22 @@ static int hc_client_tier(uint32_t pid, const char *name, int tier)
     return i;
 }
 static int hc_client(uint32_t pid, const char *name) { return hc_client_tier(pid,name,DESK_SLOT_PROGRAM); }
-/* A second v3 window on the connection of `owner` (its process's prompt when
- * owned); -ENOSPC when the desktop refuses it. */
-static int hc_v3_window(int owner, int owned, const char *title)
-{
-    struct desktop *d=&shutdown_desktop; struct desk_client *o=&d->clients[owner];
-    int root=(int)o->v3_peer-1; uint32_t pid=o->pid;
-    unsigned id=1; for (int k=0;k<DESK_CLIENTS;k++) if (d->clients[k].v3_peer==o->v3_peer && d->clients[k].v3_id>=id) id=d->clients[k].v3_id+1;
-    fake_surface(90+(int)id,160,80,0x775533u);
-    unsigned n=(unsigned)strlen(title); struct ciuki_message m;
-    desk_v3_message(&m,DESK_CREATE_WINDOW,36+n,++es_v3_token,id,1); m.sender_pid=pid; m.fd_count=1; m.fds[0]=90+(int)id;
-    desk_put32(m.data+16,DESK_V3_OVERLAPPED); desk_put32(m.data+20,owned ? o->v3_id : 0); desk_put32(m.data+24,owned ? o->v3_generation : 0);
-    desk_put32(m.data+28,60); desk_put32(m.data+32,60); desk_put32(m.data+36,160); desk_put32(m.data+40,80);
-    desk_put32(m.data+44,1); desk_put32(m.data+48,n); memcpy(m.data+52,title,n);
-    int e=desk_v3_receive(d,root,&m);
-    if (e) return e;   /* the desktop closed the refused surface */
-    for (int k=0;k<DESK_CLIENTS;k++)
-        if (d->clients[k].window && d->clients[k].v3_peer==o->v3_peer && d->clients[k].v3_id==id) return k;
-    assert(0); return -1;
-}
 static void hc_key(int code, int value)
 { struct ciuki_input_event e={.type=CIUKI_INPUT_KEY,.code=code,.value=value}; desk_input(&shutdown_desktop,&e); }
 static void hc_alt_f4(void) { hc_key(0x38,1); hc_key(0x3e,1); hc_key(0x3e,0); hc_key(0x38,0); }
-static uint32_t hc_w32[4]; static unsigned hc_w32_count; static int hc_w32_error; static unsigned hc_w32_lists;
+static uint32_t hc_w32[128]; static unsigned hc_w32_count; static int hc_w32_error; static unsigned hc_w32_lists;
 static int hc_w32_pids(struct desktop *d, uint32_t *pids, unsigned cap)
 {
     (void)d; hc_w32_lists++;
     if (hc_w32_error) return hc_w32_error;
-    unsigned n=0; for (; n<hc_w32_count && n<cap; n++) pids[n]=hc_w32[n]; return (int)n;
+    if (hc_w32_count>cap) return -ENOSPC;   /* as w32_power_pids: never a silent cut */
+    unsigned n=0; for (; n<hc_w32_count; n++) pids[n]=hc_w32[n]; return (int)n;
 }
 static unsigned hc_forces; static int hc_force_action;
 static int hc_force_request(int action) { hc_forces++; hc_force_action=action; errno=EIO; return -1; }
+/* Review 2, finding 8: processes below this PID have exited (confirmed gone). */
+static uint32_t hc_gone_below;
+static int hc_alive(struct desktop *d, uint32_t pid) { (void)d; return pid>=hc_gone_below; }
 static void test_t23_hang_close(void)
 {
     struct desktop *d=&shutdown_desktop;
@@ -92,19 +77,20 @@ static void test_t23_hang_close(void)
     assert(desk_internal_open(d,DESK_INTERNAL_ABOUT)<0);           /* an ordinary built-in never takes a reserve */
     desk_shell_message(d,"Programs","A program did not start.",1);
     assert(d->sh.message_text[0] && desk_free_slots(d)==DESK_SYSTEM_SLOTS);   /* nor does a message box outside a session */
-    int tasks=hc_client_tier(700,"Task Manager",DESK_SLOT_EMERGENCY);
-    assert(tasks>=0 && desk_free_slots(d)==DESK_SYSTEM_SLOTS-1);
-    assert(hc_client_tier(701,"Another",DESK_SLOT_EMERGENCY)<0 && d->slots_refused==3);
+    int tasks=hc_client_tier(700,"Task Manager",DESK_SLOT_TASKMAN);
+    assert(tasks>=0 && d->clients[tasks].slot_tier==DESK_SLOT_TASKMAN && desk_free_slots(d)==DESK_SYSTEM_SLOTS-1);
+    assert(hc_client_tier(701,"Another",DESK_SLOT_TASKMAN)<0 && d->slots_refused==3);
     desk_request_close(d,slots[3]);
     assert(desk_task_end(d,d->clients[slots[3]].window_id,503)==0);   /* already closing: the dialog at once */
     assert(d->end_task.kind==DESK_HANG_NOT_RESPONDING && d->end_task.window>=0 && d->end_task.pid==503);
     int shut=desk_internal_open(d,DESK_INTERNAL_SHUTDOWN);
-    assert(shut>=0 && d->clients[shut].internal==DESK_INTERNAL_SHUTDOWN && !desk_free_slots(d));
+    assert(shut>=0 && d->clients[shut].internal==DESK_INTERNAL_SHUTDOWN && desk_free_slots(d)==1);   /* the prompt slot stays */
+    assert(desk_internal_open(d,DESK_INTERNAL_RUN)<0);               /* the last slot is not for a built-in */
     desk_drop_client(d,shut);
     desk_end_task_choice(d,1);
     assert(hc_terms==1 && hc_killed(503,SIGKILL)==1);
     shutdown_cleanup();
-    puts("PASS T23 slots: programs keep three slots free, Task Manager admitted from the reserve, End Task dialog and Shut Down open with the table full, About and a message box refused");
+    puts("PASS T23 slots: programs keep four slots free, Task Manager admitted from its tier, End Task dialog and Shut Down open with the table full, About, Run and a message box refused");
 
     /* 2. End Task on a busy program that answers PINGs but does not close
      * (the installer ignores SC_CLOSE and declines): after the 5 s
@@ -303,7 +289,7 @@ static void test_t23_hang_close(void)
     int asking=es_v3_window(42,"Quake III Arena Demo");
     es_w32_next=(struct desk_w32_status){DESK_W32_PENDING,42,0x4200,1};
     desk_session_begin(d,2);
-    int save=hc_v3_window(asking,1,"Save changes?");  /* its prompt, opened after the query */
+    int save=es_v3_owned(asking,1,DESK_V3_OVERLAPPED|DESK_V3_MODAL,"Save changes?");  /* its prompt, opened after the query */
     assert(save>=0);
     for (uint64_t t=1250000000ull; t<=45000000000ull; t+=250000000ull) { es_v3_pong(asking); es_v3_pong(save); shutdown_at(t); }
     assert(d->session.state && !d->end_task.kind && !hc_terms);
@@ -321,17 +307,18 @@ static void test_t23_hang_close(void)
     int editor=es_v3_window(51,"CiukWrite"), other=es_v3_window(52,"Other");
     while (desk_free_slots(d)>DESK_SYSTEM_SLOTS) assert(hc_client(600+(uint32_t)desk_free_slots(d),"Filler")>=0);
     assert(desk_free_slots(d)==DESK_SYSTEM_SLOTS);
-    assert(hc_v3_window(other,1,"Prompt of an idle program")==-ENOSPC);
+    assert(es_v3_owned(other,1,DESK_V3_OVERLAPPED|DESK_V3_MODAL,"Prompt of an idle program")==-ENOSPC);
     desk_request_close(d,editor);
-    assert(hc_v3_window(editor,0,"Unowned window")==-ENOSPC);
-    int prompt=hc_v3_window(editor,1,"Save changes?");
-    assert(prompt>=0 && desk_free_slots(d)==DESK_SYSTEM_SLOTS-1);
-    assert(hc_v3_window(editor,1,"A second prompt")==-ENOSPC);   /* the reserve for dialogs is kept */
+    assert(es_v3_owned(editor,0,DESK_V3_OVERLAPPED,"Unowned window")==-ENOSPC);
+    assert(es_v3_owned(editor,1,DESK_V3_OVERLAPPED,"Owned but not modal")==-ENOSPC);
+    int prompt=es_v3_owned(editor,1,DESK_V3_OVERLAPPED|DESK_V3_MODAL,"Save changes?");
+    assert(prompt>=0 && d->clients[prompt].slot_tier==DESK_SLOT_PROMPT && desk_free_slots(d)==DESK_SYSTEM_SLOTS-1);
+    assert(es_v3_owned(editor,1,DESK_V3_OVERLAPPED|DESK_V3_MODAL,"A second prompt")==-ENOSPC);   /* one prompt slot */
     int dialog=desk_internal_open(d,DESK_INTERNAL_END_TASK);
     assert(dialog>=0 && desk_free_slots(d)==DESK_SYSTEM_SLOTS-2);
     desk_drop_client(d,dialog);
     shutdown_cleanup();
-    puts("PASS T23 prompts: a closing program's owned prompt takes the emergency slot, unowned windows and idle programs are refused, End Task still opens");
+    puts("PASS T23 prompts: a closing program's owned modal prompt takes its tier, unowned or non-modal windows and idle programs are refused, End Task still opens");
 
     /* 10. Review P1-1: an orderly call 73 that does not return (a disk
      * operation that never finishes) runs on another thread; the desktop
@@ -354,4 +341,209 @@ static void test_t23_hang_close(void)
     assert(hc_forces==1 && hc_force_action==1 && d->power.state==DESK_POWER_DONE && strstr(d->power.text,"could not be restarted automatically"));
     shutdown_cleanup();
     puts("PASS T23 stuck call 73: the desktop stays live, 15 s then the user, Force is the forced restart");
+
+    /* 11. Review 2, finding 6: tier occupancy, not allocation order. With the
+     * program quota full, End Task, Shut Down, Task Manager and a closing
+     * program's prompt coexist in any order; a fifth taker of any tier is
+     * refused. Before, with three shared reserve slots, End Task first
+     * refused Task Manager and Task Manager first refused the prompt. */
+    for (int order_case=0; order_case<2; order_case++) {
+        es_setup(); d->terminate=hc_terminate; hc_terms=0;
+        int ed=es_v3_window(81,"CiukWrite");
+        while (desk_slot_available(d,DESK_SLOT_PROGRAM)) assert(hc_client(800+(uint32_t)desk_free_slots(d),"Filler")>=0);
+        assert(desk_free_slots(d)==DESK_SYSTEM_SLOTS);
+        desk_request_close(d,ed);
+        int tm=-1,pr=-1,et=-1,sd=-1;
+        if (order_case==0) {
+            et=desk_internal_open(d,DESK_INTERNAL_END_TASK); sd=desk_internal_open(d,DESK_INTERNAL_SHUTDOWN);
+            tm=hc_client_tier(880,"Task Manager",DESK_SLOT_TASKMAN);
+            pr=es_v3_owned(ed,1,DESK_V3_OVERLAPPED|DESK_V3_MODAL,"Save changes?");
+        } else {
+            tm=hc_client_tier(880,"Task Manager",DESK_SLOT_TASKMAN);
+            pr=es_v3_owned(ed,1,DESK_V3_OVERLAPPED|DESK_V3_MODAL,"Save changes?");
+            et=desk_internal_open(d,DESK_INTERNAL_END_TASK); sd=desk_internal_open(d,DESK_INTERNAL_SHUTDOWN);
+        }
+        assert(tm>=0 && pr>=0 && et>=0 && sd>=0 && !desk_free_slots(d));
+        assert(hc_client_tier(881,"Task Manager again",DESK_SLOT_TASKMAN)<0);
+        assert(es_v3_owned(ed,1,DESK_V3_OVERLAPPED|DESK_V3_MODAL,"Another prompt")==-ENOSPC);
+        assert(hc_client(882,"Program")<0);
+        desk_drop_client(d,et); desk_drop_client(d,sd);
+        shutdown_cleanup();
+    }
+    puts("PASS T23 tiers: Task Manager, the closing program's prompt, End Task and Shut Down coexist in either order; the quotas refuse a fifth");
+
+    /* 12. Review 2, finding 1: End Task on the Win32 program in turn kills
+     * it, but a thread in a kernel wait keeps the process and its broker
+     * connection alive, so the broker keeps reporting it. After
+     * DESK_KILL_WAIT_NS the session stops waiting: the Win32 part is
+     * unknown, the power sequence follows and Force (then the forced
+     * restart) is reachable. Before, the dialog came back every 5 s and the
+     * session never ended. */
+    es_setup(); d->w32_session=es_w32; d->terminate=hc_terminate; hc_terms=0; d->power_force_request=hc_force_request; hc_forces=0;
+    hc_w32[0]=11; hc_w32_count=1; hc_w32_error=0; d->power_w32_pids=hc_w32_pids;
+    es_w32_next=(struct desk_w32_status){DESK_W32_PENDING,11,0x10e4,1};
+    desk_session_begin(d,1);
+    shutdown_at(6100000000ull);
+    assert(d->end_task.kind==DESK_HANG_NOT_RESPONDING && d->end_task.session && d->end_task.pid==11);
+    desk_end_task_choice(d,1);
+    assert(hc_killed(11,SIGKILL)==1 && d->session.state && d->session.w32_killed_pid==11);
+    for (uint64_t t=6250000000ull; t<=11000000000ull; t+=250000000ull) shutdown_at(t);
+    assert(d->session.state && !d->end_task.kind);   /* no second dialog while its exit is awaited */
+    shutdown_at(11250000000ull);
+    assert(!d->session.state && d->session.w32_unknown && d->power.state==DESK_POWER_CLOSING && !d->power.w32_asked);
+    for (uint64_t t=11500000000ull; t<=14500000000ull; t+=250000000ull) shutdown_at(t);
+    assert(d->power.state==DESK_POWER_BUSY && strstr(d->power.text,"Windows program (PID 11)"));
+    shutdown_busy_left=-1;
+    desk_power_force(d); shutdown_at(14750000000ull);
+    assert(hc_killed(11,SIGKILL)==2 && d->power.state==DESK_POWER_BUSY && strstr(d->power.text,"Force again"));
+    shutdown_progress=CIUKI_POWER_UNCERTAIN;
+    desk_power_force(d); shutdown_at(15000000000ull);
+    assert(hc_forces==1 && hc_force_action==1 && d->power.state==DESK_POWER_DONE);
+    hc_w32_count=0;
+    shutdown_cleanup();
+    puts("PASS T23 End Task survivor: a killed process still reported by the broker is given up after 5 s, the power sequence and Force follow, the forced restart ends it");
+
+    /* 13. Review 2, finding 3: while call 73 runs on its worker (EINPROGRESS)
+     * Cancel is refused and not drawn; once the call returned (EBUSY: nothing
+     * changed) Cancel works again. Before, Cancel restored the desktop while
+     * the kernel could still shut it down. */
+    es_setup(); d->terminate=hc_terminate; hc_terms=0;
+    shutdown_in_progress=1;
+    desk_power_begin(d,1); shutdown_at(1250000000ull);
+    assert(shutdown_calls==1 && d->power.call_started_ns && !desk_power_cancelable(d));
+    desk_power_cancel(d);
+    assert(d->power.state==DESK_POWER_RETRY);         /* refused */
+    shutdown_key(0x01);                               /* Esc: ignored */
+    assert(d->power.state==DESK_POWER_RETRY);
+    shutdown_in_progress=0; shutdown_busy_left=-1; shutdown_at(1500000000ull);
+    assert(shutdown_calls==2 && !d->power.call_started_ns && desk_power_cancelable(d));
+    desk_power_cancel(d);
+    assert(d->power.state==DESK_POWER_IDLE);
+    shutdown_cleanup();
+    puts("PASS T23 cancel: refused while call 73 runs, possible again after an EBUSY result");
+
+    /* 14. Review 2, finding 4: the broker's BEGIN and the Win32 inventory
+     * both fail: no target is known, yet the Win32 programs may be running
+     * (a windowless installer). Nothing proceeds on its own: the busy dialog
+     * at the close deadline; Force is the consent. Before, the sequence
+     * went straight to call 73 and the power-off. */
+    es_setup(); d->w32_session=es_w32; d->terminate=hc_terminate; hc_terms=0; es_w32_error=-EIO;
+    hc_w32_count=0; hc_w32_error=-EIO; d->power_w32_pids=hc_w32_pids;
+    desk_session_begin(d,2);
+    for (uint64_t t=1250000000ull; t<=6100000000ull; t+=250000000ull) shutdown_at(t);
+    assert(!d->session.state && d->session.w32_unknown && d->power.state==DESK_POWER_CLOSING && !d->power.count);
+    for (uint64_t t=6250000000ull; t<=8750000000ull; t+=250000000ull) shutdown_at(t);
+    assert(d->power.state==DESK_POWER_CLOSING && !shutdown_calls);   /* the 3 s close grace from 6.0 s */
+    shutdown_at(9000000000ull);
+    assert(d->power.state==DESK_POWER_BUSY && !shutdown_calls && strstr(d->power.text,"could not be listed"));
+    desk_power_force(d); shutdown_at(9500000000ull);
+    assert(shutdown_calls==1 && d->power.state==DESK_POWER_DONE);
+    es_w32_error=0; hc_w32_error=0;
+    shutdown_cleanup();
+    /* The list succeeds and shows no Win32 program: BEGIN failing is then harmless. */
+    es_setup(); d->w32_session=es_w32; d->terminate=hc_terminate; es_w32_error=-EIO; hc_w32_count=0; d->power_w32_pids=hc_w32_pids;
+    desk_session_begin(d,2);
+    for (uint64_t t=1250000000ull; t<=6500000000ull; t+=250000000ull) shutdown_at(t);
+    assert(d->power.state==DESK_POWER_DONE && shutdown_calls==1 && d->power.w32_listed);
+    es_w32_error=0;
+    shutdown_cleanup();
+    puts("PASS T23 unresolved inventory: failed BEGIN plus failed list stops at the busy dialog (Force proceeds); an empty list lets the shutdown go on");
+
+    /* 15. Review 2, finding 8: the target table reclaims entries whose
+     * process is confirmed gone; a live process it cannot hold makes the
+     * inventory unresolved (busy dialog), never a silent drop. Before, a
+     * full table dropped new live PIDs. */
+    es_setup(); d->terminate=hc_terminate; hc_terms=0; d->power_alive=hc_alive; hc_gone_below=0;
+    for (unsigned k=0;k<DESK_POWER_TARGETS;k++) hc_w32[k]=1000+k;
+    hc_w32_count=DESK_POWER_TARGETS; hc_w32_error=0; d->power_w32_pids=hc_w32_pids;
+    desk_power_begin(d,2);
+    assert(d->power.count==DESK_POWER_TARGETS && !d->power.targets_overflow && d->power.w32_listed);
+    hc_w32_count++;                                   /* more live processes than the broker list carries: an error, not a cut */
+    d->power.w32_list_retry=1; shutdown_at(1250000000ull);
+    assert(d->power.w32_list_error==-ENOSPC && d->power.w32_list_retry);
+    hc_gone_below=1032;                               /* 32 of them exited */
+    hc_w32_count=0;
+    for (unsigned k=32;k<DESK_POWER_TARGETS;k++) hc_w32[hc_w32_count++]=1000+k;
+    for (unsigned k=0;k<32;k++) hc_w32[hc_w32_count++]=3000+k;
+    shutdown_at(1500000000ull);                       /* the retry: the gone entries are reclaimed */
+    assert(!d->power.w32_list_error && d->power.count==DESK_POWER_TARGETS && !d->power.targets_overflow);
+    unsigned held=0; for (unsigned k=0;k<d->power.count;k++) held+=d->power.targets[k].pid>=3000;
+    assert(held==32);
+    assert(hc_client(4000,"Late program")>=0);        /* connects during the shutdown: no entry can be reclaimed */
+    assert(d->power.targets_overflow);
+    for (uint64_t t=1750000000ull; t<=4250000000ull; t+=250000000ull) shutdown_at(t);
+    assert(d->power.state==DESK_POWER_BUSY && strstr(d->power.text,"could not be tracked") && !shutdown_calls);
+    desk_power_cancel(d);
+    d->power_alive=shutdown_alive; d->power_w32_pids=NULL; hc_w32_count=0; hc_gone_below=0;
+    shutdown_cleanup();
+    puts("PASS T23 target table: gone entries reclaimed, an unrepresentable inventory stops at the busy dialog");
+
+    /* 16. Review 2, finding 2: the desktop's own worker (or no thread for
+     * the call) refuses the call with EAGAIN: retried at the power cadence,
+     * then the busy dialog names it and Force is the way out; the tick is
+     * never skipped. Before, EAGAIN cancelled the sequence with an error
+     * box and a busy auxiliary worker suppressed the tick. */
+    es_setup(); d->terminate=hc_terminate; hc_terms=0; d->power_force_request=hc_force_request; hc_forces=0; d->power_w32_pids=NULL;
+    shutdown_eagain=1;
+    desk_power_begin(d,2);
+    for (uint64_t t=1250000000ull; t<=6000000000ull; t+=250000000ull) shutdown_at(t);
+    assert(shutdown_calls>15 && d->power.state==DESK_POWER_RETRY);   /* retried at the power cadence */
+    shutdown_at(6250000000ull);                       /* the 5 s busy deadline from the first call */
+    assert(d->power.state==DESK_POWER_BUSY && strstr(d->power.text,"desktop has not finished its own work"));
+    desk_power_force(d); shutdown_at(6500000000ull);
+    assert(d->power.state==DESK_POWER_BUSY && strstr(d->power.text,"Force again"));
+    shutdown_progress=CIUKI_POWER_UNCERTAIN;
+    desk_power_force(d); shutdown_at(6750000000ull);
+    assert(hc_forces==1 && hc_force_action==2 && d->power.state==DESK_POWER_DONE);
+    shutdown_cleanup();
+    puts("PASS T23 EAGAIN: the desktop's own refusal is retried, named, and Force leads to the forced power off");
+
+    /* 17. Review 2, finding 7: the explicit escalation route. The session
+     * waits on a program's real prompt without a deadline; the user's
+     * close (Alt+F4) or End Task on one of its windows opens "This program
+     * is not responding" for the session at once; End Task ends it and
+     * the session goes on. Before, nothing but the prompt's own answer
+     * could move the session. */
+    es_setup(); d->w32_session=es_w32; d->terminate=hc_terminate; hc_terms=0;
+    int app=es_v3_window(91,"Quake III Arena Demo");
+    es_w32_next=(struct desk_w32_status){DESK_W32_PENDING,91,0x9100,1};
+    desk_session_begin(d,2);
+    int ask=es_v3_owned(app,1,DESK_V3_OVERLAPPED|DESK_V3_MODAL,"Save changes?");
+    assert(ask>=0);
+    for (uint64_t t=1250000000ull; t<=30000000000ull; t+=250000000ull) { es_v3_pong(app); es_v3_pong(ask); shutdown_at(t); }
+    assert(d->session.state && !d->end_task.kind);
+    desk_focus(d,ask); hc_alt_f4();
+    assert(d->end_task.kind==DESK_HANG_NOT_RESPONDING && d->end_task.session && d->end_task.pid==91);
+    desk_end_task_choice(d,0);                        /* Cancel: the session is cancelled, everything stays */
+    assert(!d->session.state && !hc_terms && d->clients[app].window);
+    desk_session_begin(d,2);
+    assert(desk_task_end(d,d->clients[app].window_id,91)==0);   /* Task Manager's End Task during the turn */
+    assert(d->end_task.kind==DESK_HANG_NOT_RESPONDING && d->end_task.session && d->end_task.pid==91);
+    desk_end_task_choice(d,1);
+    assert(hc_killed(91,SIGKILL)==1 && d->session.state);
+    desk_session_cancel(d);
+    desk_drop_client(d,(int)d->clients[app].v3_peer-1);
+    shutdown_cleanup();
+    puts("PASS T23 escalation: Alt+F4 or End Task on the program the session waits for opens the session's End Task dialog at once");
+
+    /* 18. Review 2, finding 7: an unowned newer window, a non-modal owned
+     * window or a hidden modal one is not a prompt: the 20 s bound still
+     * applies. Before, any newer window of the process disabled it. */
+    es_setup(); d->w32_session=es_w32; d->terminate=hc_terminate; hc_terms=0;
+    int prog=es_v3_window(92,"Installer");
+    es_w32_next=(struct desk_w32_status){DESK_W32_PENDING,92,0x9200,1};
+    desk_session_begin(d,2);
+    int progress=es_v3_owned(prog,0,DESK_V3_OVERLAPPED,"Copying files...");
+    int owned=es_v3_owned(prog,1,DESK_V3_OVERLAPPED,"Status");
+    int hidden=es_v3_owned(prog,1,DESK_V3_OVERLAPPED|DESK_V3_MODAL,"Hidden dialog");
+    assert(progress>=0 && owned>=0 && hidden>=0);
+    d->clients[hidden].minimized=2;                   /* user32 PLACE flag 2: not visible */
+    for (uint64_t t=1250000000ull; t<=20900000000ull; t+=250000000ull) { es_v3_pong(prog); es_v3_pong(progress); es_v3_pong(owned); es_v3_pong(hidden); shutdown_at(t); }
+    assert(d->session.state && !d->end_task.kind);
+    es_v3_pong(prog); es_v3_pong(progress); es_v3_pong(owned); es_v3_pong(hidden); shutdown_at(21100000000ull);
+    assert(d->end_task.kind==DESK_HANG_NOT_RESPONDING && d->end_task.session && d->end_task.pid==92);
+    desk_end_task_choice(d,0);
+    desk_drop_client(d,(int)d->clients[prog].v3_peer-1);
+    shutdown_cleanup();
+    puts("PASS T23 prompt recognition: unowned, non-modal or hidden windows do not hold the session past 20 s");
 }

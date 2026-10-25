@@ -234,6 +234,8 @@ void u32_activate(struct u32_window *, BOOL, BOOL);
 POINT u32_origin(struct u32_window *);
 void u32_frame(DWORD, DWORD, int *, int *);
 UINT u32_style(struct u32_window *);
+struct u32_window *u32_wire_owner(struct u32_window *); /* the owner the desktop is told, or NULL */
+BOOL u32_dialog_modal(struct u32_window *);
 void u32_region_add(struct u32_region *, RECT);
 void u32_region_sub(struct u32_region *, RECT);
 void u32_damage(struct u32_window *, RECT);

@@ -24,6 +24,13 @@ static struct dialog *dialog(HWND h) {
   struct u32_window *w = u32_window(h);
   return w ? w->dialog : 0;
 }
+/* The desktop's end-of-session turn recognises a program's prompt as a
+ * modal dialog (DialogBox, MessageBox) owned by one of its windows
+ * (docs/design/desktop-shell.md, review 2 finding 7). */
+BOOL u32_dialog_modal(struct u32_window *w) {
+  struct dialog *d = w ? w->dialog : 0;
+  return d && d->modal;
+}
 int u32_muldiv(int a, int b, int c) {
   if (!c)
     return -1;

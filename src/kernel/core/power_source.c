@@ -10,7 +10,7 @@
 static struct power_source_snapshot source = {.status = STATUS_UNKNOWN};
 static struct power_source_ops provider_ops;
 static struct power_source_platform platform_ops;
-static bool platform_ready, off_running, stopped;
+static bool platform_ready, off_running, stopped, emergency_stopped;
 /* ACPI's description (any ownership state); APM records are synthesized. */
 static struct ciuki_power_status acpi_record;
 static bool acpi_record_valid;
@@ -43,10 +43,20 @@ void power_source_mark_stopped(void)
 {
     uint32_t f = irq_save(); stopped = true; irq_restore(f);
 }
+/* T23 c42f556e (review 2, finding 5): the forced power off publishes this
+ * latch, not the orderly one, and only after its bounded device fence
+ * (power_source_quiesce_dma) reported every native DMA/IRQ owner stopped;
+ * storage may be dirty. Providers accept either proof for Off, since both
+ * mean no device is active; logs and snapshots keep them apart. */
+void power_source_mark_emergency_stopped(void)
+{
+    uint32_t f = irq_save(); emergency_stopped = true; irq_restore(f);
+}
+bool power_source_emergency_stopped(void) { return emergency_stopped; }
 int power_source_orderly_shutdown(uint64_t end)
 {
     (void)end; /* the proof is the latch; no shutdown work is started here */
-    return stopped ? 0 : -EBUSY;
+    return stopped || emergency_stopped ? 0 : -EBUSY;
 }
 int power_source_reserve(enum power_source_kind kind, const struct power_source_ops *ops)
 {
@@ -322,7 +332,9 @@ int power_source_soft_off(void)
 {
     uint32_t f = irq_save();
     if (!source.active || !provider_ops.soft_off) { irq_restore(f); return -ENOTSUP; }
-    if (off_running || !stopped) { irq_restore(f); return -EBUSY; }
+    /* Off needs a proof that no device is active: the orderly latch, or
+     * the emergency one published after the forced path's bounded fence. */
+    if (off_running || !(stopped || emergency_stopped)) { irq_restore(f); return -EBUSY; }
     off_running = true;
     struct power_source_ops ops = provider_ops;
     irq_restore(f);

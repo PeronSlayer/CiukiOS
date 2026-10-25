@@ -17,16 +17,23 @@
  * DESK_SYSTEM_SLOTS client slots, so the desktop's own system dialogs ("This
  * program is not responding", Shut Down, the shutdown progress and message
  * boxes) can always open, however many windows the programs create. */
-#define DESK_SYSTEM_SLOTS 3
-/* How the last DESK_SYSTEM_SLOTS are shared (Codex review of 63c964019, P2-5
- * and P2-6): a program connection or window needs more than DESK_SYSTEM_SLOTS
- * free; an emergency client (the Task Manager the desktop itself launched on
- * Ctrl+Alt+Del, a program's own modal prompt while it is being closed or
- * asked to end the session) may take the first reserved slot; the desktop's
- * system dialogs (End Task, Shut Down, the shutdown progress, a message while
- * a session or shutdown runs) take the last two, so End Task and Shut Down
- * can always open together. */
-enum { DESK_SLOT_PROGRAM, DESK_SLOT_EMERGENCY, DESK_SLOT_SYSTEM };
+#define DESK_SYSTEM_SLOTS 4
+/* The client table is partitioned by tier (Codex reviews of 63c964019 and
+ * bc9881f62, P2-5/P2-6 and finding 6): each slot records the tier it was
+ * taken at and every tier has its own quota, so admission never depends on
+ * the order in which the others filled up. Programs (connections, windows,
+ * ordinary built-in windows and message boxes) share DESK_CLIENTS -
+ * DESK_SYSTEM_SLOTS; the Task Manager the desktop itself launched on
+ * Ctrl+Alt+Del has one slot; the modal prompt of a program being closed or
+ * asked to end the session has one; the system dialogs (End Task, Shut
+ * Down, the shutdown progress, a message while a session or shutdown runs)
+ * have two. Task Manager, the prompt, End Task and Shut Down therefore
+ * always coexist. A Task Manager or a prompt takes a program slot while one
+ * is free, so its own slot stays for the pressure point. */
+enum { DESK_SLOT_PROGRAM, DESK_SLOT_TASKMAN, DESK_SLOT_PROMPT, DESK_SLOT_SYSTEM, DESK_SLOT_TIERS };
+#define DESK_SLOT_QUOTA_TASKMAN 1
+#define DESK_SLOT_QUOTA_PROMPT 1
+#define DESK_SLOT_QUOTA_SYSTEM 2
 #define DESK_DAMAGE_MAX 32
 struct desk_dirty_row { int32_t left, right; };   /* visible-span painter (compositor.c) */
 #define DESK_TX_MAX 64
@@ -156,6 +163,7 @@ struct desk_client {
      * answered CLOSE_ACK LATER and is showing its own prompt. */
     uint64_t end_task_ns;
     int close_later;
+    int slot_tier;   /* DESK_SLOT_*: the tier this slot was taken at (quota accounting) */
     uint32_t pid, serial, version, window_id;
     uint32_t minor, resize_serial, applied_serial;
     uint32_t min_width, min_height, max_width, max_height, step_width, step_height;
@@ -244,6 +252,10 @@ struct desk_power_sequence {
     uint64_t w32_commit_ns, w32_next_status;
     int w32_list_error;         /* the last W32R_SHUTDOWN_LIST failure (review P2-4), 0 none */
     int w32_list_retry;         /* the list is fetched again on the next tick */
+    int w32_listed;             /* the list succeeded at least once (the Win32 inventory is known) */
+    int targets_overflow;       /* a live process could not be entered in the table (review 2, finding 8) */
+    int last_error;             /* the last refusal of the power call (EBUSY, EAGAIN) named by the busy dialog */
+    uint32_t serial;            /* this sequence's request serial: a worker result from another is discarded */
     /* An orderly call 73 running on another thread (review P1-1). */
     uint64_t call_started_ns;
     int call_stuck;
@@ -334,6 +346,11 @@ struct desk_power_broadcast {
  * "unknown" (never agreed, review P1-3): their windows are closed as any
  * other and only the user's Force ends them. */
 #define DESK_SESSION_BROKER_NS 5000000000ull
+/* Review 2, finding 1: a process End Task killed during the Win32 turn that
+ * the broker still reports after this long (a thread in a kernel wait keeps
+ * it alive and its broker connection open) is not waited for any more: the
+ * Win32 part becomes unknown and the power sequence, with Force, follows. */
+#define DESK_KILL_WAIT_NS 5000000000ull
 struct desk_session {
     int state, action;
     unsigned count, at;
@@ -349,6 +366,8 @@ struct desk_session {
     uint64_t w32_error_since;   /* first broker error of the current retry window, 0 none */
     int w32_unknown;            /* the broker never answered: Win32 programs not asked */
     int w32_committed;          /* COMMIT delivered WM_ENDSESSION(TRUE) (read by desk_power_begin) */
+    uint32_t w32_killed_pid;    /* End Task killed this process during the Win32 turn (finding 1) */
+    uint64_t w32_killed_ns;
     int force;   /* G11 alarm "Force": a program that stops responding is ended */
 };
 /* The "This program is not responding" (End Task, Cancel) and DOS warning
@@ -574,8 +593,10 @@ struct desktop {
     void (*sound_cancel)(struct desktop *);
     void (*sound_tone)(struct desktop *, unsigned tone);   /* G25: a synthesised accessibility tone (access.h ACC_TONE_*) */
     /* 0: done (a real success never returns); -1 with errno. EINPROGRESS: the
-     * call runs on another thread, ask again next tick (review P1-1). */
-    int (*power_request)(int action);
+     * call runs on another thread, ask again next tick (review P1-1); EAGAIN:
+     * the desktop's own work (a worker, no thread) refused it for now. The
+     * worker tags its result with power.serial (review 2, finding 3). */
+    int (*power_request)(struct desktop *, int action);
     int (*power_state)(void); /* query capabilities and irreversible progress */
     void (*power_prepare)(struct desktop *);
     void (*logoff)(struct desktop *); /* G32: called after G3 has closed the session */
@@ -726,8 +747,10 @@ void desk_request_close(struct desktop *, int index);
 void desk_user_close(struct desktop *, int index);
 int desk_free_slots(const struct desktop *);   /* client slots held by no client and no built-in window */
 int desk_slot_available(const struct desktop *, int tier);   /* DESK_SLOT_*: a slot may be taken at this tier */
-/* A connection admitted at DESK_SLOT_EMERGENCY (the desktop's own launch of Task Manager). */
+int desk_slot_occupancy(const struct desktop *, int tier);   /* slots held at this tier */
+/* A connection admitted at DESK_SLOT_TASKMAN (the desktop's own launch of Task Manager) or DESK_SLOT_PROGRAM. */
 int desk_add_client_tier(struct desktop *, int fd, int tier);
+int desk_power_cancelable(const struct desktop *);   /* 0 while call 73 runs: it cannot be taken back (review 2, finding 3) */
 void desk_close_timeouts(struct desktop *);
 void desk_child_exited(struct desktop *, uint32_t pid, int status);
 void desk_session_begin(struct desktop *, int action);   /* 1 restart, 2 shut down, 3 log off */

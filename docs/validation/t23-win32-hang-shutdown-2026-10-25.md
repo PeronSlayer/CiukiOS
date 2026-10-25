@@ -268,6 +268,60 @@ are the documented Windows defaults closest to it and are single constants
   call 73 with the service's files possibly still open: EBUSY, the busy
   dialog, Force, then the forced action. It cannot hang.
 
+## Third round: the second Codex review (xhigh, of `bc9881f62`, 2026-10-25)
+
+The second review confirmed P1-2 closed and call-73 authority/ABI fine, and
+found eight gaps (4 P1, 4 P2). Each is closed below with a host test whose
+assertions the `bc9881f62` engine violates (the reviewer's sequences are the
+cases).
+
+| Finding | Fix (files) | Test |
+| --- | --- | --- |
+| **1 (P1)** a Win32 thread stuck in `fs_lock_take` survives SIGKILL, its broker connection stays open, the HOLD session has no deadline, End Task only reset `w32_since`: Force never appeared | `client.c`: End Task during the Win32 turn records `w32_killed_pid/ns`; no second dialog while its exit is awaited; a process the broker still reports `DESK_KILL_WAIT_NS` (5 s) later makes the Win32 part unknown (CANCEL best effort), the session finishes, the power sequence lists the process (not asked) and offers Force; the forced action follows the second Force, keeping the stuck process's resources | `hang_close_test.h` case 12: End Task at 6.1 s, no dialog until 11.0 s, unknown at 11.25 s, busy dialog at the close deadline, Force (SIGKILL again), "Force again", forced restart |
+| **2 (P1)** `power_prepare` ran `fflush`/`fstat`/`close` (VFS locks) on the input thread; a failed `pthread_create` fell back to a synchronous call 73; a busy run/history worker suppressed every power tick | `desktop.c`: `power_prepare` closes observer channels and snapshots the descriptors to keep; `power_prepare_files` (fflush, fstat, close) runs on the power worker before the call; no synchronous fallback (`EAGAIN`, recorded); `run_history_idle` refuses with `EAGAIN` instead of gating the tick; the tick always runs during a sequence. `client.c`: `EAGAIN` retried like `EBUSY`, named by the busy dialog ("The desktop has not finished its own work"), Force then the forced action | case 16 (EAGAIN for 5 s → busy dialog → Force → "Force again" → forced power off); `shutdown_sequence_test.h` (descriptor cleanup through `power_prepare_files`, the production call on its worker) |
+| **3 (P1)** Cancel restored the desktop while the detached worker continued call 73; its result could be taken by a later request | `client.c` `desk_power_cancelable`: false from the worker's start to its return; `shell.c` draws no Cancel then and ignores Esc/Enter/close box; `desk_power_cancel` refuses (`[desktop] power cancel refused`); `power_request(struct desktop *, action)` carries `power.serial` and `desktop.c` discards a result of another request (recorded) | case 13: Cancel and Esc refused while EINPROGRESS, allowed again after an EBUSY result |
+| **4 (P1)** failed inventory + failed BEGIN left zero targets and the shutdown proceeded without consent | `client.c`: `w32_listed`; an unresolved inventory (`w32_list_error`, or `w32_unknown` without a successful list, or `targets_overflow`) stops at the busy dialog at the close deadline even with no target; Cancel or Force only | case 14: BEGIN and list failing → busy dialog ("could not be listed"), no call 73; Force proceeds. An empty successful list with BEGIN failing proceeds |
+| **5 (P2)** `power_force` skipped device quiescence and published `power_source_mark_stopped`, the orderly proof APM trusts | `power.c`: a bounded (2 s) device fence through `power_source_quiesce_dma` (the platform's nonblocking native DMA/IRQ stop step); reset regardless; Off refused (`EBUSY`, power-button message) unless the fence proved every device stopped; then `power_source_mark_emergency_stopped` (`power_source.c/h`), a latch distinct from the orderly one that `power_source_soft_off`/`orderly_shutdown` accept | `power_runtime_test.c` `test_forced`: fence timing out → FORCE_REBOOT still resets after 3 s + 2 s, FORCE_OFF `EBUSY` with no soft-off and no latch; fence proved → emergency latch, orderly latch untouched, soft-off; no platform (safe mode) → `EBUSY` |
+| **6 (P2)** emergency admission depended on allocation order (End Task first refused Task Manager; Task Manager first refused a prompt) | `desktop.h`/`client.c`/`shell.c`: `DESK_SYSTEM_SLOTS` 4, each slot records `slot_tier`, quotas per tier (programs 12, Task Manager 1, prompt 1, system 2), `desk_slot_occupancy`; Task Manager/prompt take a program slot while one is free | case 11 (both orders: End Task + Shut Down + Task Manager + prompt coexist, a fifth of any tier refused); cases 1 and 9 updated |
+| **7 (P2)** any newer window counted as a prompt and disabled the 20 s escalation | user32 `desktop.c`/`dialog.c`/`internal.h`: a modal dialog with a live owner on the wire carries `DESK_V3_MODAL`; `client.c` `session_hung`: a prompt is newer than the watermark, modal, visible (not hidden/minimized) and owned by a window of the same process; explicit escalation (`session_escalate`): Alt+F4/close or End Task on a window of the waited program opens the session's dialog at once | case 18 (unowned progress window, non-modal owned window, hidden modal dialog: the dialog at 20 s); case 17 (escalation by Alt+F4 and by End Task); `end_session_test.h` G3 Win32 and cases 8/9 now model the prompt as an owned modal window |
+| **8 (P2)** the 64-entry target table kept gone entries and dropped new live PIDs | `client.c` `power_target`: a full table reclaims an entry whose process is confirmed gone (`power_live`); none: `targets_overflow` (recorded), which is an unresolved inventory (finding 4); `w32_power_pids` already returns `-ENOSPC` on truncation | case 15: 64 targets, a 65th listed → `-ENOSPC` recorded; 32 exited → 32 new PIDs reclaim their entries; a program connecting with no entry reclaimable → overflow → busy dialog "Some programs could not be tracked" |
+
+### Third-round results (host, systemd scope MemoryMax=3G)
+
+- Launcher harness default run: shutdown sequence, G3 end-session and the
+  18 T23 cases pass.
+- `tests/host/power_runtime_test.c`: PASS (fence scenarios);
+  `power_platform_test` 76 checks, `apm_platform_test` 103, `apm_t23_test`
+  543, `power_sdk_test` PASS (they include `power_source.c`).
+- `tests.host.win32.user32.test_user32` + `tests.host.win32.dialogs.test_dialogs`:
+  23 tests OK (108 s; user32 now sends `DESK_V3_MODAL`).
+- `test_memory_footprint` 2 OK; `test_window_model` 2 OK (11564 frames).
+- Compile-only checks: `power.c`, `power_source.c` with the kernel's i686
+  flags; `client.c`, `shell.c`, `desktop.c`, `win32_native.c`, `input.c`
+  with `ciuki-cc -Werror`.
+- Full desktop suite (`python3 -m unittest discover -s tests/host/desktop
+  -t .`, 1855 s): 224 tests OK, 5 skipped.
+
+### Third-round risks
+
+- Programs now have 12 of the 16 slots (Task Manager and a prompt take a
+  program slot while one is free, so the reserve costs nothing until the
+  pressure point).
+- The forced Off needs the platform's quiesce step (installed on every
+  boot except safe mode and hardware check); without it, or when a driver
+  does not stop within 2 s, the user is told to use the power button. The
+  forced restart never waits on it.
+- `power_prepare_files` on the worker: a regular file the input thread
+  opens after the snapshot (a settings save during the sequence) may be
+  closed under it; the sequence is modal and such saves are retried.
+- A modal prompt whose owner is not on the wire (owner closing or
+  unregistered) is sent without `DESK_V3_MODAL` (the protocol requires an
+  owner) and is not recognised as a prompt: the 20 s bound applies and the
+  dialog offers Cancel.
+- A thread inside a plain `fs_lock_take` still waits for its holder; the
+  shutdown no longer waits for it (finding 1) and the forced action ends the
+  machine with its resources retained.
+
 ## Host tests
 
 - `tests/host/desktop/hang_close_test.h` (run by
@@ -336,6 +390,19 @@ are the documented Windows defaults closest to it and are single constants
    Expected: `[desktop] end-session win32 broker begin failed ... retrying`,
    after 5 s `... programs not asked`, the busy dialog with "could not be
    asked to save their work", Force, shutdown completes.
+8. Third round: End Task on an installer stuck in a disk wait during
+   Restart. Expected: `[desktop] end task pid=N result=0`, no second dialog,
+   after 5 s `[desktop] end-session win32 pid=N survived End Task ... programs not asked`,
+   the busy dialog naming it, Force, "Force again", then
+   `[power] forced reboot requested`, `[power] forced flush result=...`,
+   `[power] forced device fence result=...` and the reset. For Shut Down
+   the same, and with a failed fence the message "turn the computer off
+   with its power button" instead of soft-off.
+9. Third round: while the progress window shows "Shutting down..." after
+   the programs closed, the Cancel button must disappear once call 73 runs
+   (and Esc does nothing); with 12 program windows open, Ctrl+Alt+Del, a
+   program's "Save changes?" prompt, End Task and Shut Down must all open
+   together.
 
 ## Open points (not changed here)
 

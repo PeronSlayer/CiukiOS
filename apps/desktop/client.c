@@ -78,12 +78,21 @@ int desk_free_slots(const struct desktop *d)
  * Shut Down dialogs then failed without a trace. Programs leave the last
  * DESK_SYSTEM_SLOTS to the desktop (desk_slot_available: the tiers of
  * desktop.h); each refusal is recorded (the first eight, then every 64th). */
+int desk_slot_occupancy(const struct desktop *d, int tier)
+{
+    int n=0;
+    for (unsigned i=0; i<DESK_CLIENTS; i++)
+        n+=(d->clients[i].channel>=0 || d->clients[i].internal) && d->clients[i].slot_tier==tier;
+    return n;
+}
+/* Review 2, finding 6: every tier has its own quota, so Task Manager, a
+ * closing program's prompt and the two system dialogs coexist whatever the
+ * order they arrive in; the program tier never spills into the others. */
 int desk_slot_available(const struct desktop *d, int tier)
 {
-    int free=desk_free_slots(d);
-    if (tier==DESK_SLOT_SYSTEM) return free>0;
-    if (tier==DESK_SLOT_EMERGENCY) return free>DESK_SYSTEM_SLOTS-1;
-    return free>DESK_SYSTEM_SLOTS;
+    static const int quota[DESK_SLOT_TIERS]={DESK_CLIENTS-DESK_SYSTEM_SLOTS,DESK_SLOT_QUOTA_TASKMAN,DESK_SLOT_QUOTA_PROMPT,DESK_SLOT_QUOTA_SYSTEM};
+    if (tier<0 || tier>=DESK_SLOT_TIERS || desk_free_slots(d)<=0) return 0;
+    return desk_slot_occupancy(d,tier)<quota[tier];
 }
 static void slot_refused(struct desktop *d, const char *kind, uint32_t pid)
 {
@@ -95,10 +104,13 @@ static void slot_refused(struct desktop *d, const char *kind, uint32_t pid)
 int desk_add_client_tier(struct desktop *d, int fd, int tier)
 {
     for (unsigned i = 0; i < DESK_CLIENTS; i++) if (d->clients[i].channel == fd) return -1;
-    if (!desk_slot_available(d,tier)) { slot_refused(d,tier==DESK_SLOT_EMERGENCY ? "emergency-connection" : "connection",0); return -1; }
+    /* Task Manager takes a program slot while one is free; its own slot
+     * stays for the pressure point. */
+    int taken=desk_slot_available(d,DESK_SLOT_PROGRAM) ? DESK_SLOT_PROGRAM : tier==DESK_SLOT_TASKMAN && desk_slot_available(d,DESK_SLOT_TASKMAN) ? DESK_SLOT_TASKMAN : -1;
+    if (taken<0) { slot_refused(d,tier==DESK_SLOT_TASKMAN ? "taskman-connection" : "connection",0); return -1; }
     for (unsigned i = 0; i < DESK_CLIENTS; i++) if (d->clients[i].channel < 0 && !d->clients[i].internal) {
-        d->clients[i].channel = fd;
-        if (tier==DESK_SLOT_EMERGENCY) fprintf(stderr,"[desktop] emergency connection admitted slot=%u free=%d\n",i,desk_free_slots(d));
+        d->clients[i].channel = fd; d->clients[i].slot_tier=taken;
+        if (taken==DESK_SLOT_TASKMAN) fprintf(stderr,"[desktop] emergency connection admitted slot=%u tier=taskman free=%d\n",i,desk_free_slots(d));
         return (int)i;
     }
     return -1;
@@ -1703,11 +1715,27 @@ void desk_close_timeouts(struct desktop *d)
  * program did not close: unless it is showing its own prompt and answering
  * (CLOSE_ACK LATER), "This program is not responding" opens at once, as a
  * second End Task does. */
+/* Review 2, finding 7: while the session waits on a Win32 program (its
+ * prompt, or a query that pumps), closing or End Task on one of its windows
+ * is the explicit escalation: "This program is not responding" with End
+ * Task and Cancel for the session. */
+static int session_escalate(struct desktop *d, int i)
+{
+    struct desk_session *s=&d->session;
+    struct desk_client *c=&d->clients[i];
+    if (s->state!=DESK_SESSION_QUERY || s->at>=s->count || s->parts[s->at].kind!=DESK_PART_WIN32) return 0;
+    if (!s->w32_pid || c->pid!=s->w32_pid || c->internal || !d->terminate) return 0;
+    if (d->end_task.kind && d->end_task.session) { if (d->end_task.window>=0) desk_focus(d,d->end_task.window); return 1; }
+    fprintf(stderr,"[desktop] end-session win32 escalation pid=%u by the user\n",c->pid);
+    desk_end_task_open(d,DESK_HANG_NOT_RESPONDING,1,c->pid,0,c->title);
+    return 1;
+}
 void desk_user_close(struct desktop *d, int i)
 {
     if (i<0 || i>=DESK_CLIENTS || !d->clients[i].window) return;
     int t=desk_modal_target(d,i);
     struct desk_client *c=&d->clients[t];
+    if (session_escalate(d,t)) return;
     if (!c->internal && c->closing && c->version!=DESK_VERSION && c->pid && c->pid!=d->self_pid && d->terminate &&
         !desk_session_busy(d) && (c->unresponsive || !c->close_later)) {
         if (d->end_task.kind && !d->end_task.session && d->end_task.window>=0) { desk_focus(d,d->end_task.window); return; }
@@ -1788,6 +1816,7 @@ int desk_task_end(struct desktop *d, uint32_t window_id, uint32_t pid)
         int i=window_slot(d,window_id);
         if (i<0 || (pid && d->clients[i].pid!=pid && !d->clients[i].internal)) return -ESRCH;
         struct desk_client *c=&d->clients[i];
+        if (session_escalate(d,i)) return 0;
         /* G3, Windows 98 Close Program: End Task asks the program to close
          * (WM_CLOSE, with its own save prompt). A program already asked, or
          * one that does not respond, gets "This program is not responding"
@@ -2013,6 +2042,7 @@ void desk_launch_completed(struct desktop *d, const struct desk_launch_request *
 /* Shutdown is driven by the ordinary IPC/reap/paint loop, never by sleeps.
  * A channel CLOSE/disconnect is not proof that its process (or VM) exited. */
 static int session_w32(struct desktop *d, unsigned action, uint32_t flags, struct desk_w32_status *st);
+static int power_live(struct desktop *d, struct desk_power_target *t);
 static void power_target(struct desktop *d, uint32_t pid, const char *name, int owned, int w32)
 {
     if (!pid || pid==d->self_pid) return;
@@ -2021,8 +2051,19 @@ static void power_target(struct desktop *d, uint32_t pid, const char *name, int 
         if (name && name[0]) snprintf(d->power.targets[i].name,sizeof(d->power.targets[i].name),"%s",name);
         return;
     }
-    if (d->power.count>=DESK_POWER_TARGETS) { fprintf(stderr,"[desktop] power target table full pid=%u\n",pid); return; }
-    struct desk_power_target *t=&d->power.targets[d->power.count++];
+    struct desk_power_target *t=NULL;
+    if (d->power.count<DESK_POWER_TARGETS) t=&d->power.targets[d->power.count++];
+    else {
+        /* Review 2, finding 8: a full table reclaims an entry whose process
+         * is confirmed gone; none left: the inventory cannot be represented
+         * and the sequence stops at the busy dialog (unresolved). */
+        for (unsigned i=0; i<d->power.count && !t; i++) if (!power_live(d,&d->power.targets[i])) t=&d->power.targets[i];
+        if (!t) {
+            if (!d->power.targets_overflow) fprintf(stderr,"[desktop] power target table full pid=%u: inventory not represented\n",pid);
+            d->power.targets_overflow=1; return;
+        }
+    }
+    memset(t,0,sizeof(*t));
     t->pid=pid; t->owned=owned; t->w32=w32;
     if (name && name[0]) snprintf(t->name,sizeof(t->name),"%s",name);
     else snprintf(t->name,sizeof(t->name),"PID %u",pid);
@@ -2062,7 +2103,7 @@ static void power_list_w32(struct desktop *d)
         p->w32_list_error=n; p->w32_list_retry=1; return;
     }
     if (p->w32_list_error) fprintf(stderr,"[desktop] power win32 list recovered programs=%d\n",n);
-    p->w32_list_error=0; p->w32_list_retry=0;
+    p->w32_list_error=0; p->w32_list_retry=0; p->w32_listed=1;
     for (int k=0; k<n && k<DESK_POWER_TARGETS; k++) {
         int known=0;
         for (unsigned j=0; j<p->count; j++) if (p->targets[j].pid==pids[k]) { p->targets[j].w32=1; known=1; }
@@ -2090,10 +2131,13 @@ static void power_w32_status(struct desktop *d)
         fprintf(stderr,"[desktop] power win32 end-session ended after %llu ms\n",(unsigned long long)((d->now_ns-p->w32_commit_ns)/1000000ull));
     }
 }
+static uint32_t power_serials;
 void desk_power_begin(struct desktop *d, int action)
 {
     if (!d->shell || d->sh.gate || d->power.state || action<1 || action>3) return;
     memset(&d->power,0,sizeof(d->power));
+    if (!++power_serials) ++power_serials;
+    d->power.serial=power_serials;
     d->power.state=DESK_POWER_CLOSING; d->power.action=action;
     d->power.previous_focus=d->focus;
     d->power.close_deadline=d->now_ns+DESK_POWER_CLOSE_NS;
@@ -2132,9 +2176,15 @@ void desk_power_begin(struct desktop *d, int action)
     d->power.window=desk_internal_open(d,DESK_INTERNAL_POWER);
     desk_theme_changed(d);
 }
+/* Review 2, finding 3: once call 73 runs the kernel may be flushing or
+ * stopping devices; the sequence cannot be taken back until it returns
+ * (EBUSY changed nothing and Cancel is possible again). */
+int desk_power_cancelable(const struct desktop *d)
+{ return d->power.state && d->power.state!=DESK_POWER_DONE && !d->power.call_started_ns && !d->power.force_power; }
 void desk_power_cancel(struct desktop *d)
 {
     if (d->power.state==DESK_POWER_DONE) return; /* flushed/stopped session cannot resume */
+    if (d->power.state && !desk_power_cancelable(d)) { fprintf(stderr,"[desktop] power cancel refused: call 73 in progress\n"); return; }
     if (d->sound_cancel) d->sound_cancel(d);
     if (!d->power.state || d->power.state==DESK_POWER_DONE) return;
     int window=d->power.window, focus=d->power.previous_focus;
@@ -2175,11 +2225,16 @@ static void power_busy(struct desktop *d)
             snprintf(p->text+n,sizeof(p->text)-n,"\n%.48s",p->targets[i].name);
             count++;
         }
-        if (!count) strcat(p->text,"\nUnknown storage holder (no client remains).");
+        if (!count) strcat(p->text,p->last_error==EAGAIN ? "\nThe desktop has not finished its own work." :
+                           p->w32_list_error || p->targets_overflow || (p->w32_unknown && !p->w32_listed) ? "\n(none known)" :
+                           "\nUnknown storage holder (no client remains).");
         size_t n=strlen(p->text);
         if (p->w32_list_error) snprintf(p->text+n,sizeof(p->text)-n,"\nThe Windows programs could not be listed (error %d).",-p->w32_list_error);
+        else if (p->w32_unknown && !p->w32_listed) snprintf(p->text+n,sizeof(p->text)-n,"\nThe Windows programs could not be listed or asked to save their work.");
         else if (w32_live && p->w32_asked && !p->w32_ended) snprintf(p->text+n,sizeof(p->text)-n,"\nThe Windows programs have not finished ending their session.");
         else if (w32_live && !p->w32_asked) snprintf(p->text+n,sizeof(p->text)-n,"\nThe Windows programs could not be asked to save their work.");
+        n=strlen(p->text);
+        if (p->targets_overflow) snprintf(p->text+n,sizeof(p->text)-n,"\nSome programs could not be tracked.");
         n=strlen(p->text);
         if (p->forced) snprintf(p->text+n,sizeof(p->text)-n,"\nClick Force again to %s the computer without waiting:\nunsaved information may be lost and ScanDisk will check the disk at the next start.",verb);
     }
@@ -2232,6 +2287,16 @@ void desk_power_tick(struct desktop *d)
             fprintf(stderr,"[desktop] power win32 %s: asking the user\n",p->w32_asked ? "end-session not finished" : "programs not asked");
             power_busy(d); return;
         }
+        /* Review 2, findings 4 and 8: an inventory that could not be listed,
+         * Win32 programs never asked with no list to show there are none, or
+         * processes the table could not hold: nothing proceeds on its own;
+         * the user cancels or forces. */
+        if (p->w32_list_error || (p->w32_unknown && !p->w32_listed) || p->targets_overflow) {
+            if (d->now_ns<p->close_deadline) return;
+            fprintf(stderr,"[desktop] power inventory unresolved list_error=%d unknown=%d listed=%d overflow=%d: asking the user\n",
+                    p->w32_list_error,p->w32_unknown,p->w32_listed,p->targets_overflow);
+            power_busy(d); return;
+        }
         if (p->action==3) {
             /* G32: retain G3 veto/close semantics, then return to logon. */
             if (pending) {
@@ -2260,10 +2325,11 @@ void desk_power_tick(struct desktop *d)
     if (p->force_power) {
         if (d->power_force_request) r=d->power_force_request(p->action);
         else { errno=ENOSYS; r=-1; }
-    } else if (d->power_request) r=d->power_request(p->action);
+    } else if (d->power_request) r=d->power_request(d,p->action);
     else { errno=ENOSYS; r=-1; }
     if (!r) { p->state=DESK_POWER_DONE; return; } /* real success never returns */
     int error=errno;
+    p->last_error=error;
     if (error==EINPROGRESS) {
         /* Review P1-1: the orderly call runs on another thread and the
          * desktop stays live; past DESK_POWER_CALL_NS the user is told and
@@ -2291,7 +2357,7 @@ void desk_power_tick(struct desktop *d)
             snprintf(p->text,sizeof(p->text),"Programs are closed and devices have stopped.\nIt is now safe to turn off your computer.\nPower-off returned error %d.",error);
         desk_theme_changed(d); return;
     }
-    if (error==EBUSY) {
+    if (error==EBUSY || error==EAGAIN) {   /* EAGAIN: the desktop's own worker or no thread (review 2, finding 2) */
         if (p->state==DESK_POWER_FORCE || d->now_ns>=p->busy_deadline) power_busy(d);
         else p->next_try=d->now_ns+DESK_POWER_RETRY_NS;
         return;
@@ -2402,11 +2468,17 @@ static int session_hung(struct desktop *d, struct desk_session_part *p, const ch
     }
     struct desk_session *s=&d->session;
     if (p->kind!=DESK_PART_WIN32 || !s->w32_pid || d->now_ns<s->w32_since+DESK_HUNG_NS) return 0;
+    if (s->w32_pid==s->w32_killed_pid && d->now_ns<s->w32_killed_ns+DESK_KILL_WAIT_NS) return 0;   /* End Task done: its exit is awaited */
     int hung=!s->w32_delivered, shown=-1, prompt=0;
     for (int i=0; i<DESK_CLIENTS; i++) if (d->clients[i].window && d->clients[i].pid==s->w32_pid && d->clients[i].version==DESK_V3_VERSION) {
-        if (shown<0 || d->clients[i].v3_win32_hwnd==s->w32_hwnd) shown=i;
-        if (d->clients[i].unresponsive) hung=1;
-        if ((int32_t)(d->clients[i].window_id-s->w32_mark)>0) prompt=1;   /* opened after the query was fetched */
+        const struct desk_client *c=&d->clients[i];
+        if (shown<0 || c->v3_win32_hwnd==s->w32_hwnd) shown=i;
+        if (c->unresponsive) hung=1;
+        /* Review 2, finding 7: a prompt is a visible modal dialog (user32
+         * marks DialogBox/MessageBox DESK_V3_MODAL) owned by a window of the
+         * same process and opened after the query was fetched. */
+        if ((int32_t)(c->window_id-s->w32_mark)>0 && (c->v3_style&DESK_V3_MODAL) && !c->minimized && c->owner_id)
+            for (int k=0; k<DESK_CLIENTS; k++) if (d->clients[k].window && d->clients[k].window_id==c->owner_id && d->clients[k].pid==s->w32_pid) prompt=1;
     }
     /* Review P2-7: a handler that fetched its WM_QUERYENDSESSION and pumps
      * messages (PONGs) without showing a prompt holds the session at most
@@ -2495,6 +2567,16 @@ static void session_step(struct desktop *d)
         s->w32_error_since=0;
         if (st.state==DESK_W32_VETOED) { desk_session_cancel(d); return; }
         if (st.state==DESK_W32_HELD || st.state==DESK_W32_ENDED) { session_agree(d,p,DESK_PART_AGREED); return; }
+        if (st.pid && st.pid==s->w32_killed_pid && d->now_ns>=s->w32_killed_ns+DESK_KILL_WAIT_NS) {
+            /* Review 2, finding 1: a process End Task killed that the broker
+             * still reports (a thread in a kernel wait keeps it and its
+             * connection alive) is not waited for any more: the Win32 part is
+             * unknown, the power sequence follows and Force becomes available. */
+            fprintf(stderr,"[desktop] end-session win32 pid=%u survived End Task for %u ms: programs not asked\n",st.pid,(unsigned)(DESK_KILL_WAIT_NS/1000000ull));
+            (void)session_w32(d,DESK_W32_SESSION_CANCEL,0,NULL);
+            s->w32_unknown=1; s->w32_pid=0;
+            p->state=DESK_PART_AGREED; p->answered=0; s->at++; continue;
+        }
         if (st.pid!=s->w32_pid || st.hwnd!=s->w32_hwnd) {
             /* T23 c42f556e: the next log names the window the session waits on. */
             if (st.pid) fprintf(stderr,"[desktop] end-session win32 turn pid=%u hwnd=%08x delivered=%u\n",st.pid,st.hwnd,st.delivered);
@@ -2667,7 +2749,12 @@ void desk_end_task_choice(struct desktop *d, int end)
     if (!r) desk_sound(d,SOUND_END_TASK);
     if (e.session) {
         if (p->kind==DESK_PART_WINDOW) session_agree(d,p,DESK_PART_GONE);
-        else d->session.w32_since=d->now_ns;  /* the broker skips the ended process's windows */
+        else {
+            /* The broker skips the ended process's windows; one it still
+             * reports DESK_KILL_WAIT_NS later survived SIGKILL (finding 1). */
+            d->session.w32_since=d->now_ns;
+            d->session.w32_killed_pid=e.pid; d->session.w32_killed_ns=d->now_ns;
+        }
     }
 }
 
@@ -3050,9 +3137,10 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
             /* T23 c42f556e: the last DESK_SYSTEM_SLOTS stay with the desktop;
              * review P2-6: the modal prompt of a program being closed may
              * take the emergency slot. */
+            int tier=DESK_SLOT_PROGRAM;
             if (!error && slot>=0 && !desk_slot_available(d,DESK_SLOT_PROGRAM)) {
-                int prompt=owner>=0 && process_being_closed(d,anchor->pid) && desk_slot_available(d,DESK_SLOT_EMERGENCY);
-                if (prompt) fprintf(stderr,"[desktop] prompt admitted pid=%u owner=%u free=%d\n",anchor->pid,d->clients[owner].window_id,desk_free_slots(d));
+                int prompt=owner>=0 && (p.style&DESK_V3_MODAL) && process_being_closed(d,anchor->pid) && desk_slot_available(d,DESK_SLOT_PROMPT);
+                if (prompt) { tier=DESK_SLOT_PROMPT; fprintf(stderr,"[desktop] prompt admitted pid=%u owner=%u free=%d\n",anchor->pid,d->clients[owner].window_id,desk_free_slots(d)); }
                 else { slot=-1; slot_refused(d,"window",anchor->pid); }
             }
             if (!error && slot<0) error=-ENOSPC;
@@ -3061,6 +3149,7 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
                 if (!pixels || pixels==MAP_FAILED) error=-ENOMEM;
                 else {
                     i=slot; struct desk_client *c=&d->clients[i]; memset(c,0,sizeof(*c));
+                    c->slot_tier=tier;
                     c->channel=anchor->channel; c->surface=m->fds[0]; c->pixels=pixels; c->info=info;
                     c->hello=1; c->version=DESK_V3_VERSION; c->window=1; c->pid=anchor->pid;
                     c->v3_peer=(unsigned)peer+1; c->v3_id=id; c->v3_generation=generation; c->v3_scale=p.scale;

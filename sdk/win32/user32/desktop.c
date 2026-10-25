@@ -92,13 +92,23 @@ BOOL u32_wire(struct u32_window *w, UINT op, const void *data, UINT n, int fd) {
                                                                 : 87);
   return 1;
 }
+/* q3exec3: an owner the desktop no longer has (closing, or no wire id)
+ * is not named; the window is created unowned there. */
+struct u32_window *u32_wire_owner(struct u32_window *w) {
+  struct u32_window *owner = u32_window(w->owner);
+  if (owner)
+    owner = u32_root(owner);
+  return owner && owner->wire && owner->generation && !owner->closing ? owner : 0;
+}
 UINT u32_style(struct u32_window *w) {
   return (w->exstyle & WS_EX_TOOLWINDOW ? DESK_V3_TOOL
           : (w->style & WS_POPUP) && !(w->style & WS_CAPTION)
               ? DESK_V3_POPUP
               : DESK_V3_OVERLAPPED) |
          (w->exstyle & WS_EX_TOPMOST ? DESK_V3_TOPMOST : 0) |
-         (w->exstyle & WS_EX_CONTEXTHELP ? DESK_V3_CONTEXTHELP : 0);
+         (w->exstyle & WS_EX_CONTEXTHELP ? DESK_V3_CONTEXTHELP : 0) |
+         /* a modal dialog's prompt, only with an owner the desktop knows (the protocol requires one) */
+         (u32_dialog_modal(w) && u32_wire_owner(w) ? DESK_V3_MODAL : 0);
 }
 BOOL u32_create_wire(struct u32_window *w) {
   if (!u32_connect())
@@ -127,12 +137,8 @@ BOOL u32_create_wire(struct u32_window *w) {
   uint8_t data[100];
   w32_fill(data, 0, sizeof(data));
   desk_put32(data, u32_style(w));
-  struct u32_window *owner = u32_window(w->owner);
-  if (owner)
-    owner = u32_root(owner);
-  /* q3exec3: an owner the desktop no longer has (closing, or no wire id)
-   * is not named; the window is created unowned there. */
-  if (owner && owner->wire && owner->generation && !owner->closing) {
+  struct u32_window *owner = u32_wire_owner(w);
+  if (owner) {
     desk_put32(data + 4, owner->wire);
     desk_put32(data + 8, owner->generation);
   }

@@ -15,12 +15,15 @@ static void shutdown_prepare(struct desktop *d)
     assert(!d->sh.gate);
     power_prepare(d); /* production descriptor cleanup, fstat/close boundary faked */
 }
-static int shutdown_request(int action)
+static int shutdown_eagain;   /* review 2, finding 2: the desktop's own worker refuses the call for now */
+static int shutdown_request(struct desktop *d, int action)
 {
-    assert(action==shutdown_desktop.power.action && shutdown_prepares==1);
+    assert(d==&shutdown_desktop && action==shutdown_desktop.power.action && shutdown_prepares==1);
+    if (power_files_pending) { power_prepare_files(); power_files_pending=0; }   /* the production worker's step */
     assert(shutdown_calls<128);
     shutdown_call_times[shutdown_calls++]=shutdown_desktop.now_ns;
     assert(shutdown_desktop.mixer_fd==-1);
+    if (shutdown_eagain) { errno=EAGAIN; return -1; }
     if (shutdown_in_progress) { errno=EINPROGRESS; return -1; }
     if (shutdown_vm_live || shutdown_busy_left) {
         if (shutdown_busy_left>0) shutdown_busy_left--;
@@ -51,7 +54,7 @@ static void shutdown_setup(void)
     shutdown_desktop.power_alive=shutdown_alive;
     shutdown_desktop.pixels=calloc(640*480,4); assert(shutdown_desktop.pixels);
     shutdown_calls=shutdown_terms=shutdown_prepares=0;
-    shutdown_error=shutdown_busy_left=shutdown_vm_live=shutdown_in_progress=0;
+    shutdown_error=shutdown_busy_left=shutdown_vm_live=shutdown_in_progress=shutdown_eagain=0;
     shutdown_progress=0;
     shutdown_external_live=1;
     shell_regular_fd=shell_directory_fd=-1;
