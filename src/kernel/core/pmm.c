@@ -212,6 +212,18 @@ static uint32_t alloc_run(int zone, uint32_t pages, uint32_t alignment)
     if (pages > high - low || zone_free[zone] < pages) return 0;
     uint32_t start = (low + alignment - 1) & ~(alignment - 1);
     while (start <= high - pages) {
+        /* Directory/parser workspaces repeatedly search past the same
+         * occupied kernel/cache prefix. Skip consecutive set bits a word
+         * at a time; first-fit, alignment and accounting stay identical.
+         * Read this hint under the same exclusion as used()/reservation. */
+        uint32_t flags=irq_save();
+        uint32_t occupied=bitmap[start>>5]>>(start&31);
+        irq_restore(flags);
+        if (occupied&1) {
+            unsigned skip=occupied==UINT32_MAX ? 32u : (unsigned)__builtin_ctz(~occupied);
+            start=(start+skip+alignment-1)&~(alignment-1);
+            continue;
+        }
         uint32_t have = 0;
         bool blocked = false;
         while (have < pages && !blocked) {

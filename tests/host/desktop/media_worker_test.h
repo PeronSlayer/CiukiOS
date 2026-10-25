@@ -77,7 +77,10 @@ static void test_late_media(void)
         if (fd>=0 && __atomic_load_n(&media_observed_serial,__ATOMIC_ACQUIRE)!=
                       __atomic_load_n(&media_fixture_serial,__ATOMIC_ACQUIRE)) {
             watch_result(&d,-1,POLLIN);wakes++;
-        }
+        } else if (fd>=0) watch_result(&d,-1,0);
+        /* 101-a: even a frequent shell/network refresh cannot rescan all
+         * drives while the native media watch reports no state change. */
+        d.sh.want_reload|=32;
 #if defined(DESK_FOOTPRINT_TEST) || defined(DESK_POLL_LEDGER_TEST)
         if (mixer_watch_fd(&d)>=0) {
             int ready=mixer_observed_serial!=mixer_fixture_serial ? POLLIN : 0;
@@ -93,6 +96,11 @@ static void test_late_media(void)
     assert(d.sh.media.removable_mask==(1u<<4) && d.sh.media.generation[4]==495);
     assert(media_worker.requested==2 && media_observed_serial==media_fixture_serial);
     assert(media_watch_fd(&d)>=0); /* idle and acknowledged: subsequent poll can sleep */
+    static const int failures[]={POLLNVAL,POLLERR,POLLHUP};
+    for (unsigned i=0;i<sizeof(failures)/sizeof(failures[0]);i++) {
+        media_events=1; watch_result(&d,-1,failures[i]);
+        assert(media_events==0 && media_watch_fd(&d)<0); /* bounded fallback, no error-ready spin */
+    }
 #if defined(DESK_FOOTPRINT_TEST) || defined(DESK_POLL_LEDGER_TEST)
     assert(mixer_wakes==1 && mixer_queries==initial_mixer_queries+2);
     assert(mixer_observed_serial==mixer_fixture_serial);mixer_available=0;

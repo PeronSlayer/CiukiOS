@@ -39,6 +39,9 @@ static struct producer_event producer_events[8];
 static unsigned producer_used, producer_lost;
 static struct sched_share_stats share_base;
 static bool forced, threshold, resched_pending;
+static uint64_t automatic_window; /* normal-boot diagnostic dumps: at most one/minute */
+static bool diagnostic_active;
+bool cpu_diagnostic_active(void) { return diagnostic_active; }
 static struct sched_stats sched_base;
 static struct {
     uint64_t start;
@@ -175,9 +178,10 @@ void cpu_irqoff_tasks(const struct task *from,const struct task *to)
 {
     if (irqoff.start) { irqoff.from=from; irqoff.to=to; }
 }
-void cpu_irqoff_end(uint64_t end)
+uint64_t cpu_irqoff_end(uint64_t end)
 {
-    if (!irqoff.start) return;
+    if (!irqoff.start) return 0;
+    uint64_t firmware=irqoff_firmware(irqoff.start,end);
     /* f2-96: bounded gaps after the section's last charge lie in the open
      * interval of the task now running (after a switch: the next task). */
     if (g_current) {
@@ -223,6 +227,7 @@ void cpu_irqoff_end(uint64_t end)
         }
     }
     irqoff.start=0;
+    return firmware;
 }
 
 static void stretch_end(struct task *t, uint64_t now, uint32_t eip)
@@ -441,7 +446,10 @@ static void cpu_emit(void)
     if (!total) { irq_restore(f); return; }
     struct irqoff_long long_section=irqoff_window;
     irqoff_window.cycles=0;
-    bool emit = forced || threshold || (g_boot.flags & (CBI_F_VERBOSE | CBI_F_DIAG_VERBOSE | CBI_F_TEST_REQUEST));
+    bool logged=!!(g_boot.flags & (CBI_F_VERBOSE | CBI_F_DIAG_VERBOSE | CBI_F_TEST_REQUEST));
+    bool automatic=threshold && (!automatic_window || now-automatic_window>=60000*per_ms());
+    bool emit = forced || automatic || logged;
+    if (automatic && !logged) automatic_window=now;
     if (g_current) {
         charge(g_current, now);
     }
@@ -500,6 +508,7 @@ static void cpu_emit(void)
     /* No scheduling point in this traversal: kernel task-list lifetime is
      * stable until we yield. IRQs may update counters, so snapshot/reset one
      * task at a time and sort only after restoring IF. */
+    diagnostic_active=emit;
     for (struct task *t = task_list; t; t = t->all_next) {
         f = irq_save();
         if (crit_label) crit_label("cpu_task");
@@ -564,7 +573,7 @@ static void cpu_emit(void)
                 order.violations, order.pairs, order.dropped);
         }
     }
-    if (!emit) return;
+    if (!emit) return; /* diagnostic_active is already false */
     struct timing_stats timing; timing_snapshot(&timing);
     struct bootlog_stats log; bootlog_snapshot(&log);
     struct kwork_stats work; kwork_snapshot(&work);
@@ -647,6 +656,7 @@ static void cpu_emit(void)
         klog_periodic("[sched] desktop_share group_pm=%u turns=%u lent_turns=%u turn_ms=%u",
             pm(share_delta.group_cycles, total), share_delta.turns, share_delta.lent_turns,
             ms(share_delta.turn_cycles));
+    diagnostic_active=false;
 }
 static void cpu_worker(void *arg)
 {
@@ -660,6 +670,8 @@ static void cpu_worker(void *arg)
 void cpu_init(void)
 {
     window_start = stamp();
+    automatic_window=0;
+    diagnostic_active=false;
     if (reclaim_init) reclaim_init();
     if (pager_init) pager_init(); /* workers; the store attaches with storage */
     stat_task = task_create_kernel("cpustat", cpu_worker, 0, P_DEVICE);

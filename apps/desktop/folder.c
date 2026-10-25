@@ -2,6 +2,7 @@
 /* SPDX-License-Identifier: MIT
  * Explicit Files operations and incremental jobs; idle polls run on a worker. */
 #include "desktop.h"
+#include "worker_role.h"
 #include "folder.h"
 #include "../files/transfer_ui.h"
 #include <errno.h>
@@ -423,6 +424,7 @@ static void folder_activity(struct folder_worker *w,const char *name)
 { __atomic_store_n(&w->activity,name,__ATOMIC_RELEASE); }
 static void *folder_poll_worker(void *arg)
 {
+    desk_worker_role("folder");
     struct folder_worker *w=arg;
     pthread_mutex_lock(&w->lock);
     for (;;) {

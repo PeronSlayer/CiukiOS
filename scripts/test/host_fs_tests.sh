@@ -16,6 +16,21 @@ missing=0
 for tool in clang ar python3 mkfs.fat fsck.fat mcopy mmd mdir mtype mdel nm nasm; do
     if ! command -v "$tool" >/dev/null; then printf 'MISSING TOOL: %s\n' "$tool"; missing=1; fi
 done
+# The RAM logger's production pacing/retention model uses this runner's
+# standard filesystem sanitizer policy; no disk/image fixture is needed.
+if [[ ${1:-} == --bootlog ]]; then
+    command -v clang >/dev/null || exit 1
+    clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+        -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread -Isrc/kernel/include \
+        tests/host/bootlog_test.c -o build/host/fs/bootlog_test
+    build/host/fs/bootlog_test
+    clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+        -ffunction-sections -fdata-sections -Wl,--gc-sections \
+        -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread -Isrc/kernel/include \
+        tests/host/bootlog_statistics_test.c src/kernel/lib/fmt.c -o build/host/fs/bootlog_statistics_test
+    build/host/fs/bootlog_statistics_test
+    exit 0
+fi
 # Focused entries keep the filesystem runner lock and sanitizer policy.
 run_startup_image_tests() {
     ((missing == 0)) || exit 1
