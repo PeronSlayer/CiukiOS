@@ -56,7 +56,10 @@ struct render3d_request {
 };
 /* sequence orders the device; ordinal is a consecutive context receipt.
  * Completed receipts remain queryable after ring reuse without retaining
- * unbounded jobs. Context/process ownership authorizes the receipt. */
+ * unbounded jobs. Completed identity is generation + owned context + ordinal;
+ * sequence is then informational (ignored, including zero). Pending receipts
+ * require the exact queued sequence/ordinal pair. No exact completed pair
+ * authentication is promised. Context/process ownership is always checked. */
 struct render3d_fence {
     uint32_t generation, context;
     uint64_t sequence, ordinal;

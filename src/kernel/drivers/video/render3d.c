@@ -312,9 +312,10 @@ int render3d_wait(struct render3d_service *s, uint32_t p, uint32_t id, struct re
     if (s->busy) return -EBUSY;
     struct render3d_context *c=context(s,p,id);
     if (!c || c->dying || f.context!=id || f.generation!=s->generation || f.generation!=c->generation ||
-        !f.ordinal || f.ordinal>c->ordinal_submitted || !f.sequence || f.sequence>c->submitted || f.sequence<f.ordinal) return -EINVAL;
+        !f.ordinal || f.ordinal>c->ordinal_submitted) return -EINVAL;
     /* Every ordinal <= ordinal_submitted identifies an actual context job.
-     * Pending pairs additionally match the immutable submission snapshot. */
+     * Completed receipts are ordinal-only: sequence is informational once
+     * complete. Pending pairs must match the immutable submission snapshot. */
     if (f.ordinal>c->ordinal_completed) {
         bool owned=false;
         for (unsigned i=0;i<R3D_JOBS;i++) if (s->jobs[i].occupied && s->jobs[i].context==id &&
@@ -359,12 +360,17 @@ int render3d_close(struct render3d_service *s)
     if (s->busy) return -EBUSY;
     /* Pending offscreen jobs are cancelled; an executing hook is synchronous
      * and must have returned with idle proof before this worker can close. */
-    for (unsigned i=0;i<R3D_CONTEXTS;i++) if (s->contexts[i].live) s->contexts[i].dying=true;
+    for (unsigned i=0;i<R3D_CONTEXTS;i++) if (s->contexts[i].live) {
+        struct render3d_context *c=&s->contexts[i];
+        c->dying=true;
+        /* A cancelled last job can collect the whole context. Mark shadows
+         * before draining so that collection cannot discard their pointers. */
+        if (c->resources) for (unsigned j=0;j<R3D_RESOURCES;j++) c->resources[j].pending_free=true;
+    }
     for (unsigned i=0;s->queued && i<R3D_JOBS*R3D_JOBS;i++) (void)render3d_step(s);
     if (s->queued) return -EIO;
     for (unsigned i=0;i<R3D_CONTEXTS;i++) if (s->contexts[i].live) {
         struct render3d_context *c=&s->contexts[i];
-        if (c->resources) for (unsigned j=0;j<R3D_RESOURCES;j++) c->resources[j].pending_free=true;
         collect(s,c);
     }
     if (!s->quarantined && s->backend && s->backend->detach) s->backend->detach(s,s->device);

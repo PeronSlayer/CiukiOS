@@ -8,7 +8,7 @@ static struct savage3d_device gpu3d;
 static struct render3d_service scratch3d;
 static uint8_t ram3d[128*1024];
 static uint32_t batch3d[32], count3d, need3d;
-static unsigned draw3d, copy3d, writes3d, memory3d, corruption3d;
+static unsigned draw3d, copy3d, writes3d, memory3d, corruption3d, allocations3d;
 static bool dropping3d, bad_restore3d;
 static uint32_t physical3d(uint32_t address,unsigned bytes)
 {
@@ -33,17 +33,27 @@ static long double ieee3d(uint32_t word)
 static void raster3d(void)
 {
     CHECK(batch3d[0]==0x800300c8u);
-    CHECK(m.reg[0x485d4/4]==0x80000024u); /* integer D16, reversed GREATER */
+    uint32_t zctrl=m.reg[0x485d4/4],local=m.reg[0x48584/4];
+    bool depth_enabled=zctrl&0x20u,depth_write=local&0x08000000u;
+    unsigned comparison=zctrl&7u;
+    CHECK((zctrl&~0x27u)==0x80000000u); /* integer D16, W-to-Z */
+    CHECK(comparison==4 || comparison==7); /* reversed GREATER or ALWAYS */
     CHECK(m.reg[0x48578/4]==0); /* not the actual local-control address */
-    CHECK(m.reg[0x48584/4]==0xcc000010u);
+    CHECK((local&~0x08000000u)==0xc4000010u);
+    CHECK(!depth_write || depth_enabled);
     CHECK(m.reg[0x4858c/4]==0x0005f040u);
     CHECK(m.reg[0x485e8/4]==0x00001818u && m.reg[0x485ec/4]==0x4f000000u);
-    CHECK(m.reg[0x4859c/4]==0x00110011u && m.reg[0x485a0/4]==0x00870407u);
     uint32_t dc=m.reg[0x485dc/4],zc=m.reg[0x485d8/4],td=m.reg[0x485a8/4];
-    CHECK((td&0x02000f00u)==0x02000300u);
+    bool textured=td&0x02000000u;
+    CHECK(m.reg[0x4859c/4]==(textured ? 0x00110011u : 0x00850405u) && m.reg[0x485a0/4]==0x00870407u);
+    CHECK((td&~0xffu)==(textured ? 0x62000300u : 0x60000000u));
     uint32_t cb=((dc>>8)&0x3fff)*2048,zb=(zc&0x3fff)*2048,tb=m.reg[0x48594/4]&~7u;
     unsigned cp=(dc&127)*128,zp=((zc>>25)&63)*128,tw=1u<<(td&15),th=1u<<((td>>4)&15);
-    CHECK(cp==256 && zp==128 && tw==32 && th==16);
+    uint32_t scissor=m.reg[0x485e4/4];
+    unsigned width=(scissor&0x7ff)+1,height=((scissor>>12)&0xfff)+1;
+    CHECK(width<=64 && height<=64 && cp==((width*4+127)&~127u));
+    CHECK(!depth_enabled || zp==((width*2+127)&~127u));
+    CHECK(!textured || ((tw==32 || tw==64) && (th==16 || th==32 || th==64)));
     long double x[3],y[3],z[3],u[3],v[3],rw[3]; uint32_t colors[3];
     for (unsigned i=0;i<3;i++) {
         const uint32_t *p=batch3d+1+i*7;
@@ -51,30 +61,47 @@ static void raster3d(void)
         z[i]=ieee3d(p[2]); rw[i]=ieee3d(p[3]); colors[i]=p[4]; u[i]=ieee3d(p[5]); v[i]=ieee3d(p[6]);
     }
     long double area=(x[1]-x[0])*(y[2]-y[0])-(y[1]-y[0])*(x[2]-x[0]);
-    CHECK(area>0);
-    for (unsigned yy=0;yy<64;yy++) for (unsigned xx=0;xx<64;xx++) {
+    if (!area) { draw3d++; return; }
+    if (area<0) {
+        /* Culling is disabled. Normalize winding together with attributes. */
+        long double *attributes[]={x,y,z,u,v,rw};
+        for (unsigned i=0;i<6;i++) {
+            long double tmp=attributes[i][1]; attributes[i][1]=attributes[i][2]; attributes[i][2]=tmp;
+        }
+        uint32_t tmp=colors[1]; colors[1]=colors[2]; colors[2]=tmp; area=-area;
+    }
+    bool inclusive[3];
+    for (unsigned i=0;i<3;i++) {
+        unsigned from=(i+1)%3,to=(i+2)%3;
+        inclusive[i]=y[to]<y[from] || (y[to]==y[from] && x[to]>x[from]);
+    }
+    for (unsigned yy=0;yy<height;yy++) for (unsigned xx=0;xx<width;xx++) {
         long double px=xx+0.5L,py=yy+0.5L;
-        long double a=((x[1]-px)*(y[2]-py)-(y[1]-py)*(x[2]-px))/area;
-        long double b=((x[2]-px)*(y[0]-py)-(y[2]-py)*(x[0]-px))/area,c=1-a-b;
-        if (a<0 || b<0 || c<0 || a==0) continue;
-        unsigned depth=(unsigned)((a*z[0]+b*z[1]+c*z[2])*65535+0.5L);
-        uint32_t da=destination3d(zb,zp,2,xx,yy);
-        if (!dropping3d && depth<=load3d(da,2)) continue;
+        /* Keep exact edge numerators until the last division. Normalizing
+         * each weight first can move an exact nearest-sampling boundary. */
+        long double a=(x[1]-px)*(y[2]-py)-(y[1]-py)*(x[2]-px);
+        long double b=(x[2]-px)*(y[0]-py)-(y[2]-py)*(x[0]-px);
+        long double c=(x[0]-px)*(y[1]-py)-(y[0]-py)*(x[1]-px);
+        if (a<0 || b<0 || c<0 || (!a && !inclusive[0]) || (!b && !inclusive[1]) || (!c && !inclusive[2])) continue;
+        unsigned depth=(unsigned)((a*z[0]+b*z[1]+c*z[2])*65535/area+0.5L);
+        uint32_t da=depth_enabled ? destination3d(zb,zp,2,xx,yy) : 0;
+        if (!dropping3d && depth_enabled && comparison==4 && depth<=load3d(da,2)) continue;
         long double rhw=a*rw[0]+b*rw[1]+c*rw[2];
-        unsigned tx=(unsigned)((a*u[0]*rw[0]+b*u[1]*rw[1]+c*u[2]*rw[2])/rhw*tw);
-        unsigned ty=(unsigned)((a*v[0]*rw[0]+b*v[1]*rw[1]+c*v[2]*rw[2])/rhw*th);
+        unsigned tx=(unsigned)((a*u[0]*rw[0]+b*u[1]*rw[1]+c*u[2]*rw[2])*tw/rhw);
+        unsigned ty=(unsigned)((a*v[0]*rw[0]+b*v[1]*rw[1]+c*v[2]*rw[2])*th/rhw);
         if (tx>=tw) tx=tw-1;
         if (ty>=th) ty=th-1;
         /* Pro texture tile: 8x2 texels per 64-byte subtile, four columns. */
         uint32_t to=(ty/16*(tw/32)+tx/32)*2048+((ty/2%8)*4+(tx/8%4))*64+(ty%2*8+tx%8)*4;
-        uint32_t texel=load3d(tb+to,4),color=0;
+        uint32_t texel=textured ? load3d(tb+to,4) : UINT32_MAX,color=0;
         for (unsigned channel=0;channel<4;channel++) {
             unsigned shift=channel*8;
-            long double diffuse=a*((colors[0]>>shift)&255)+b*((colors[1]>>shift)&255)+c*((colors[2]>>shift)&255);
+            long double diffuse=(a*((colors[0]>>shift)&255)+b*((colors[1]>>shift)&255)+c*((colors[2]>>shift)&255))/area;
             unsigned value=(unsigned)(diffuse*((texel>>shift)&255)/255+0.5L);
             color|=value<<shift;
         }
-        store3d(destination3d(cb,cp,4,xx,yy),color,4); store3d(da,depth,2);
+        store3d(destination3d(cb,cp,4,xx,yy),color,4);
+        if (depth_write) store3d(da,depth,2);
     }
     draw3d++;
 }
@@ -98,12 +125,12 @@ static void interpret3d(void)
             store3d(destination3d(batch3d[1],(bd&65535)*bytes,bytes,x,y),batch3d[3],bytes);
     } else if (cmd==0x4bcc14c0) {
         CHECK(need3d==8 && !batch3d[5] && !batch3d[6]);
-        CHECK(batch3d[2]==0x10200040 && batch3d[4]==0x11200040);
         unsigned w=batch3d[7]&65535,h=batch3d[7]>>16;
+        CHECK(batch3d[2]==(0x10200000u|w) && batch3d[4]==(0x11200000u|((w+31)&~31u)));
         m.reg[0x8178/4]=batch3d[1]; m.reg[0x817c/4]=batch3d[2];
         m.reg[0x8170/4]=batch3d[3]; m.reg[0x8174/4]=batch3d[4];
         for (unsigned y=0;y<h;y++) for (unsigned x=0;x<w;x++) {
-            uint32_t value=load3d(destination3d(batch3d[3],256,4,x,y),4);
+            uint32_t value=load3d(destination3d(batch3d[3],(batch3d[4]&65535)*4,4,x,y),4);
             store3d(batch3d[1]+(y*w+x)*4,value^(corruption3d==2 ? 1u : 0u),4);
         }
         copy3d++;
@@ -152,8 +179,9 @@ static void memory_write3d(void *ctx,bool alias,uint32_t offset,uint32_t value,u
 }
 static int lock3d(void *ctx,uint32_t generation) { (void)ctx; return fbdev_render3d_enter(generation); }
 static void unlock3d(void *ctx) { (void)ctx; fbdev_render3d_leave(); }
-static void *allocate3d(void *ctx,size_t bytes) { (void)ctx; return malloc(bytes); }
-static void free3d(void *ctx,void *p) { (void)ctx; free(p); }
+static void *allocate3d(void *ctx,size_t bytes)
+{ (void)ctx; void *p=malloc(bytes); if (p) allocations3d++; return p; }
+static void free3d(void *ctx,void *p) { (void)ctx; CHECK(p && allocations3d); allocations3d--; free(p); }
 static uint64_t clock3d(void *ctx) { (void)ctx; return m.us; }
 /* The owner attachment is a hardware-boundary fixture. The native bridge,
  * registry nomination, service and actual executing backend are production. */
@@ -191,11 +219,98 @@ static void native_consumer3d(const struct render3d_host *host,const uint32_t *t
     CHECK((pixels[16*64+16]&0xffffffu)==0x4080c0u && (pixels[12*64+48]&0xffffffu)==0xc04080u);
     CHECK(!render3d_submit(&scratch3d,7,c,&q,sizeof(q),&fence));
     before=writes3d; CHECK(!render3d_close(&scratch3d) && !gpu3d.consumer && writes3d==before);
+    CHECK(!allocations3d && !scratch3d.ram_bytes);
     CHECK(render3d_submit(&scratch3d,7,c,&q,sizeof(q),&fence)<0 && writes3d==before);
     bound=0;
 }
-static void backend3d(unsigned fault)
+static void variants3d(const struct render3d_host *host)
 {
+    CHECK(!render3d_close(&scratch3d)); gpu3d.consumer=0;
+    render3d_init(&scratch3d,host,42,savage3d_backend(),&gpu3d,gpu3d.heap);
+    const unsigned sizes[][2]={{1,1},{7,19},{31,17},{32,16},{33,31},{63,47},{64,64}};
+    const unsigned textures[][2]={{32,16},{32,32},{32,64},{64,16},{64,32},{64,64}};
+    unsigned cases=0,texture_sizes=0;
+    for (unsigned size=0;size<7;size++) for (unsigned flags=1;flags<=R3D_FEATURES;flags++)
+    for (unsigned draw=0;draw<2;draw++) {
+        if (!draw && (flags&R3D_TEXTURED)) continue;
+        unsigned w=sizes[size][0],h=sizes[size][1],t=(size+flags/2)%6;
+        unsigned tw=textures[t][0],th=textures[t][1];
+        uint32_t texture[64*64];
+        for (unsigned y=0;y<th;y++) for (unsigned x=0;x<tw;x++)
+            texture[y*tw+x]=0xff000000u|((x*3+1)<<16)|((y*3+2)<<8)|((x+y)*2+3);
+        uint32_t c,handles[4]; CHECK(!render3d_create_context(&scratch3d,7,R3D_HARDWARE_REQUIRED,&c));
+        const enum render3d_kind kinds[]={R3D_COLOR,R3D_D16,R3D_TEXTURE,R3D_LINEAR_COLOR};
+        struct render3d_resource *r[4];
+        for (unsigned i=0;i<4;i++) {
+            CHECK(!render3d_create_resource(&scratch3d,7,c,kinds[i],i==2 ? tw : w,i==2 ? th : h,
+                i==2 ? texture : 0,i==2 ? tw*th*4 : 0,&handles[i]));
+            r[i]=&scratch3d.contexts[0].resources[i];
+        }
+        for (unsigned i=0;i<w*h;i++) {
+            ((uint32_t *)r[0]->shadow)[i]=0xff203040;
+            ((uint16_t *)r[1]->shadow)[i]=32768;
+            ((uint32_t *)r[3]->shadow)[i]=0xff010101;
+        }
+        unsigned depth=flags&R3D_CLEAR_COLOR ? 49152 : 16384;
+        struct render3d_request q={.flags=flags,.target=handles[0],.count=draw ? 3 : 0,
+            .depth=flags&(R3D_CLEAR_DEPTH|R3D_DEPTH_TEST|R3D_DEPTH_WRITE) ? handles[1] : 0,
+            .texture=flags&R3D_TEXTURED ? handles[2] : 0,.copy_target=flags&R3D_COPY ? handles[3] : 0,
+            .clear_color=0xff102030,.clear_depth=40000};
+        bool perspective=flags&R3D_COPY;
+        if (draw) {
+            q.vertices[0]=(struct render3d_vertex){0,0,depth,65536,0xff804020,0,0};
+            q.vertices[1]=(struct render3d_vertex){w<<16,0,depth,perspective ? 4*65536 : 65536,0xff804020,65536,0};
+            q.vertices[2]=(struct render3d_vertex){0,h<<16,depth,65536,0xff804020,0,65536};
+            if (flags&R3D_DEPTH_WRITE) {
+                struct render3d_vertex tmp=q.vertices[1]; q.vertices[1]=q.vertices[2]; q.vertices[2]=tmp;
+            }
+        }
+        unsigned old_draws=draw3d,old_copies=copy3d;
+        struct render3d_fence fence;
+        CHECK(!render3d_submit(&scratch3d,7,c,&q,sizeof(q),&fence));
+        CHECK(render3d_step(&scratch3d)==1 && !render3d_wait(&scratch3d,7,c,fence,0));
+        CHECK(draw3d==old_draws+draw && copy3d==old_copies+!!(flags&R3D_COPY));
+        for (unsigned y=0;y<h;y++) for (unsigned x=0;x<w;x++) {
+            uint32_t expected=flags&R3D_CLEAR_COLOR ? q.clear_color : 0xff203040;
+            unsigned expected_z=flags&R3D_CLEAR_DEPTH ? q.clear_depth : 32768;
+            /* Analytic right triangle; strict hypotenuse, inclusive top/left.
+             * Exact rational UV avoids sharing the packet interpreter's FP
+             * barycentric implementation or the production scalar renderer. */
+            if (draw && (2*x+1)*h+(2*y+1)*w<2*w*h && (!(flags&R3D_DEPTH_TEST) || depth<expected_z)) {
+                expected=0xff804020;
+                if (flags&R3D_TEXTURED) {
+                    unsigned denom=2*w+(perspective ? 3*(2*x+1) : 0);
+                    unsigned tx=tw*(2*x+1)*(perspective ? 4 : 1)/denom;
+                    unsigned ty=th*(2*y+1)*w/(h*denom);
+                    uint32_t texel=texture[ty*tw+tx]; expected=0;
+                    for (unsigned channel=0;channel<4;channel++) {
+                        unsigned shift=channel*8;
+                        expected|=((((0xff804020u>>shift)&255)*((texel>>shift)&255)+127)/255)<<shift;
+                    }
+                    texture_sizes|=1u<<t;
+                }
+                if (flags&R3D_DEPTH_WRITE) expected_z=depth;
+            }
+            if (((uint32_t *)r[0]->shadow)[y*w+x]!=expected)
+                fprintf(stderr,"variant %ux%u tex=%ux%u flags=%x draw=%u pixel=%u,%u color=%08x expected=%08x\n",
+                    w,h,tw,th,flags,draw,x,y,((uint32_t *)r[0]->shadow)[y*w+x],expected);
+            CHECK(((uint32_t *)r[0]->shadow)[y*w+x]==expected);
+            CHECK(((uint16_t *)r[1]->shadow)[y*w+x]==expected_z);
+            CHECK(((uint32_t *)r[3]->shadow)[y*w+x]==(flags&R3D_COPY ? expected : 0xff010101u));
+            if (failures) exit(1);
+        }
+        CHECK(!render3d_destroy_context(&scratch3d,7,c) && !allocations3d && !scratch3d.ram_bytes);
+        CHECK(!locks && !drawing && !accel_inflight && !count3d);
+        CHECK(!m.reg[0x48c40/4] && !m.reg[0x48584/4] && !m.reg[0x485d4/4]);
+        cases++;
+    }
+    CHECK(cases==658 && texture_sizes==63);
+    CHECK(!render3d_close(&scratch3d) && !allocations3d && !scratch3d.ram_bytes);
+    printf("Savage variants: %u cases, 7 target sizes, 6 texture sizes, all 63 flag combinations, empty lists, perspective, depth masks and conversion PASS\n",cases);
+}
+static void backend3d(unsigned fault,bool variants)
+{
+    CHECK(!allocations3d);
     prepare(32); m.reg[0x48578/4]=0;
     uint32_t old_gbd[2]={m.reg[0x8168/4],m.reg[0x816c/4]};
     memset(ram3d,0x7a,sizeof(ram3d)); draw3d=copy3d=writes3d=memory3d=count3d=0;
@@ -229,17 +344,19 @@ static void backend3d(unsigned fault)
         unsigned before=writes3d; r[0]->offset-=4096;
         CHECK(savage3d_backend()->validate(&gpu3d,&q,r)==-EINVAL && writes3d==before);
         r[0]->offset+=4096;
+        if (variants) variants3d(&host);
         native_consumer3d(&host,texture);
         test_engine.io.write32=model_write;
         struct fb_rect pixel={0,0,1,1}; CHECK(!test_engine.ops.fill_rect(&test_engine,&pixel,0xabcdef));
     } else if (fault==5) CHECK(!writes3d && !memory3d && !gpu3d.lost);
     else CHECK(gpu3d.lost && test_engine.quarantined && !test_engine.active);
     /* Engine destroyed before fixture frees (models reboot, no recovery API). */
-    CHECK(!render3d_close(&scratch3d)); finish();
+    CHECK(!render3d_close(&scratch3d) && !allocations3d && !scratch3d.ram_bytes); finish();
 }
-int main(void)
+int main(int argc,char **argv)
 {
-    for (unsigned i=0;i<6;i++) backend3d(i);
+    if (argc==2 && !strcmp(argv[1],"variants")) backend3d(0,true);
+    else for (unsigned i=0;i<6;i++) backend3d(i,i==0);
     printf("Savage production packets/owner: positive textured Gouraud D16 probe, conversion, guards, restoration, rejection/fault containment: %s\n",failures ? "FAIL" : "PASS");
     fflush(stdout); return failures ? 1 : 0;
 }

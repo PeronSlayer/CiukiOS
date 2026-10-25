@@ -11,7 +11,7 @@
 #include "../../src/kernel/drivers/video/s3savage/savage3d.h"
 static struct render3d_service service;
 static uint64_t now;
-static unsigned allocations,fail_allocation,hardware_writes,entered,left,quarantines;
+static unsigned allocations,outstanding,fail_allocation,hardware_writes,entered,left,quarantines;
 static bool qualify,invalid_layout,invalid_command,stuck;
 struct ciuki_boot_info g_boot;
 static struct pci_func probe_pci={.vendor=0x5333,.device=0x8c2e,.revision=1};
@@ -26,8 +26,13 @@ void klog(const char *fmt,...)
 int savage2d_render3d_packet(struct savage2d *s,const uint32_t *words,unsigned n)
 { (void)s; (void)words; (void)n; assert(!"unqualified service emitted a packet"); return -EIO; }
 static void *alloc_mem(void *ctx,size_t bytes)
-{ (void)ctx; allocations++; return allocations==fail_allocation ? NULL : malloc(bytes); }
-static void free_mem(void *ctx,void *p) { (void)ctx; free(p); }
+{
+    (void)ctx; allocations++;
+    void *p=allocations==fail_allocation ? NULL : malloc(bytes);
+    if (p) outstanding++;
+    return p;
+}
+static void free_mem(void *ctx,void *p) { (void)ctx; assert(p && outstanding); outstanding--; free(p); }
 static uint64_t time_us(void *ctx) { (void)ctx; return now; }
 static uint64_t row_clock(void *ctx) { (void)ctx; now+=1000; return now; }
 static void cooperate(void *ctx) { (void)ctx; now+=1000; (void)render3d_step(&service); }
@@ -55,6 +60,7 @@ static const struct render3d_backend *fake_backend(void) { return &fake_family; 
 static const struct render3d_family fake_descriptor={R3D_UNQUALIFIED,1,1024,fake_backend};
 static void init(const struct render3d_backend *b)
 {
+    assert(!outstanding);
     allocations=fail_allocation=hardware_writes=entered=left=quarantines=0; now=0;
     qualify=invalid_layout=invalid_command=stuck=false;
     if (b==&fake_family) render3d_init_family(&service,&host,17,&fake_descriptor,NULL,(struct render3d_extent){0x300000,0xc00000});
@@ -230,7 +236,7 @@ static void hardware(void)
     assert(render3d_close(&service)==-EIO && service.ram_bytes==bytes && service.contexts[0].resources[0].references==1);
     /* Fixture teardown represents reboot AFTER fake engine destruction;
      * production has no same-boot release override. */
-    free(service.contexts[0].resources[0].shadow); free(service.contexts[0].resources); memset(&service,0,sizeof(service));
+    free_mem(NULL,service.contexts[0].resources[0].shadow); free_mem(NULL,service.contexts[0].resources); memset(&service,0,sizeof(service));
     puts("second family qualification, VRAM reservations, no-write rejection, idle fences and quarantine retention PASS");
 }
 static void limits(void)
@@ -304,5 +310,63 @@ static void diagnostic(void)
     assert(savage3d_mode_heap(&engine,&fb,16*1024*1024,&heap,&required)==-ENOMEM);
     puts("unchanged 2D lease, guarded full-mode buffer + minimum texture admission PASS");
 }
-int main(void)
-{ security(); software(); queues(); hardware(); limits(); layouts(); diagnostic(); puts("universal 3D host model PASS"); fflush(stdout); return 0; }
+static void queued_close(void)
+{
+    /* A full ring, two ordered jobs per context, a partial scalar slice,
+     * shared job references, pending and unused resources, and a lazy context. */
+    for (unsigned cycle=0;cycle<100;cycle++) {
+        init(NULL);
+        for (unsigned p=1;p<=2;p++) {
+            uint32_t c=create(p,R3D_SOFTWARE),t=image(p,c,R3D_COLOR,32,32,NULL);
+            image(p,c,R3D_D16,32,32,NULL);
+            struct render3d_request q=clear(t,cycle);
+            submit(p,c,&q); submit(p,c,&q);
+            if (p==1) assert(!render3d_destroy_resource(&service,p,c,t));
+        }
+        create(3,R3D_SOFTWARE);
+        assert(service.queued==R3D_JOBS && outstanding==6);
+        assert(render3d_step(&service)==1 && service.queued==R3D_JOBS);
+        assert(!render3d_close(&service));
+        assert(!outstanding && !service.ram_bytes && !service.queued);
+        for (unsigned i=0;i<R3D_CONTEXTS;i++) assert(!service.contexts[i].live);
+        assert(!render3d_close(&service) && !outstanding && !service.ram_bytes);
+    }
+    puts("queued close: 100 full-ring/partial-work cycles, zero allocations and RAM charge PASS");
+}
+static void completed_receipts(void)
+{
+    init(NULL);
+    uint32_t a=create(1,R3D_SOFTWARE),b=create(1,R3D_SOFTWARE),c=create(2,R3D_SOFTWARE);
+    uint32_t ta=image(1,a,R3D_COLOR,1,1,NULL),tb=image(1,b,R3D_COLOR,1,1,NULL),tc=image(2,c,R3D_COLOR,1,1,NULL);
+    struct render3d_request q=clear(ta,1);
+    struct render3d_fence fa=submit(1,a,&q);
+    q.target=tb; struct render3d_fence fb=submit(1,b,&q);
+    q.target=tc; struct render3d_fence fc=submit(2,c,&q);
+    q.target=ta; struct render3d_fence last=submit(1,a,&q),f=last;
+    /* Pending sequence/ordinal pairs still require the immutable snapshot. */
+    f.sequence=fb.sequence; assert(render3d_wait(&service,1,a,f,0)==-EINVAL);
+    drain();
+    for (unsigned i=0;i<8;i++) { q.target=tb; submit(1,b,&q); drain(); }
+    /* Completed identity is ordinal-only, explicitly ignoring sequence even
+     * outside the old broad bounds. Foreign sequence conveys no authority. */
+    const uint64_t informational[]={0,UINT64_MAX,fb.sequence,fc.sequence};
+    for (unsigned i=0;i<4;i++) {
+        f=fa; f.sequence=informational[i]; assert(!render3d_wait(&service,1,a,f,0));
+        f=last; f.sequence=informational[i]; assert(!render3d_wait(&service,1,a,f,0));
+    }
+    f=fa; f.ordinal=0; assert(render3d_wait(&service,1,a,f,0)==-EINVAL);
+    f=last; f.ordinal++; assert(render3d_wait(&service,1,a,f,0)==-EINVAL);
+    f=fa; f.generation++; assert(render3d_wait(&service,1,a,f,0)==-EINVAL);
+    assert(render3d_wait(&service,2,a,fa,0)==-EINVAL);
+    assert(render3d_wait(&service,1,b,fa,0)==-EINVAL);
+    assert(!render3d_close(&service) && !outstanding && !service.ram_bytes);
+    puts("completed ordinal-only receipts, pending exact pairs, owner/generation bounds and ring reuse PASS");
+}
+int main(int argc,char **argv)
+{
+    if (argc==2 && !strcmp(argv[1],"queued-close")) queued_close();
+    else if (argc==2 && !strcmp(argv[1],"completed-receipts")) completed_receipts();
+    else { security(); software(); queues(); hardware(); limits(); layouts(); diagnostic(); queued_close(); completed_receipts(); }
+    assert(!outstanding);
+    puts("universal 3D host model PASS"); fflush(stdout); return 0;
+}

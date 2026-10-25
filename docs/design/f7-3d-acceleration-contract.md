@@ -268,6 +268,13 @@ resource metadata and canonical shadows. Pending frees and quarantined
 allocations remain charged. Handles never wrap/recycle; exhaustion fails.
 Fences carry device generation, device-monotonic sequence and a process-owned
 context/consecutive receipt ordinal, so completed receipts survive ring reuse.
+For a pending receipt, sequence and ordinal must match the queued snapshot.
+After completion, identity is generation + owned context + ordinal; sequence
+is informational and is ignored, including zero or a different context's
+sequence. A completed ordinal denotes an actual submission to that context,
+not an authenticated device-sequence/ordinal pair. Invalid generations,
+foreign contexts and zero/unsubmitted ordinals remain errors. This bounded
+history rule avoids retaining an unbounded sequence map per context.
 Waits cap caller timeout at 100 ms and use an independent 1024-observation
 bound for a frozen clock. The caller supplies the worker's sleep/yield hook;
 no wait primitive is exposed directly to an untrusted caller.
@@ -287,6 +294,30 @@ COPY uses an owned `R3D_LINEAR_COLOR` buffer and canonical readback; it grants
 no scanout lease. Normal mode/native-display revocation closes admission and
 cancels pending work before the common owner's mappings are released.
 Actual delegated full-screen presentation remains f7-04.
+
+#### Lead amendment 2 review fixes (2026-10-25)
+
+Close marks every live context dying **and every resource pending-free before
+cancelling queued jobs**. Cancellation may collect a context immediately;
+its shadows must be reclaimable before that collection drops the metadata.
+Quarantined hardware allocations still remain charged and retained.
+
+The completed-receipt rule above is the lead's explicitly permitted ordinal-only
+alternative. Linux v6.1 [`savage_bci_event_wait` and `savage_reclaim_buffers`](https://github.com/torvalds/linux/blob/v6.1/drivers/gpu/drm/savage/savage_bci.c)
+compare monotonic event progress and age reclaimed buffers after a 3D wait;
+they do not authenticate a process-specific software receipt. Ciuki's ordinal
+ownership is its own service policy, separate from hardware event completion.
+
+The fake packet interpreter now needs to decode scissor dimensions, padded
+color/depth pitches, depth enable/write/compare and texture enable/dimensions
+instead of asserting the one probe state. Fixtures exercise all 63 nonzero
+flag combinations, empty lists where permitted, odd/tile-boundary target sizes
+and every admitted power-of-two texture size. Expected pixels/depth are checked
+independently of the production scalar renderer. The reference fields are
+Mesa 7.7 `savageDDDepthFunc_s4`, `savage_3d_reg.h`, `tileInfo_pro` and X.Org
+2.3.9 `SAVAGEDRISetupTiledSurfaceRegs`/`GetTileAperturePitch`, pinned above.
+No additional register writes, hardware caps or silicon qualification follow
+from this host-model coverage.
 
 Research and repository comparison: **2026-10-14**. Directive:
 [f7-00](../directives/f7-00-3d-acceleration-contract.md). Status: original research contract; the amendments above record the f7-02 implementation
