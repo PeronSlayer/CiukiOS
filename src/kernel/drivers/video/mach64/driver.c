@@ -17,6 +17,11 @@
 #include "registers.h"
 #include "../../../fs/vfs.h"
 
+#include "../render3d.h"
+static const struct render3d_family render_family = {
+    .status=R3D_NOT_IMPLEMENTED, .potential_units=1, .potential_texture_size=1024
+};
+
 static const struct display_match matches[]={
     {0x1002,0x4742,3,255},{0x1002,0x4744,3,255},{0x1002,0x4749,3,255},
     {0x1002,0x4750,3,255},{0x1002,0x4751,3,255},
@@ -269,6 +274,7 @@ static int cursor_test(const struct accel_ops *ops,uint64_t deadline,bool (*canc
     return e ? e : hidden;
 }
 const struct display_driver mach64_driver={
+    .render3d=&render_family,
     .id="mach64",.attempt_files={ATTEMPT_PATH},.name="ATI Mach64 / Rage Mobility",.matches=matches,
     .match_count=ARRAY_SIZE(matches),.framebuffer_bar=0,.probe=probe,.eligible=eligible,
     .start=start,.fallback=fallback,.attempt_begin=attempt_begin,.attempt_end=attempt_end,

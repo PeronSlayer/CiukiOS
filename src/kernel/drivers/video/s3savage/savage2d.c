@@ -57,6 +57,9 @@
 static unsigned selected_config;
 static bool initializing, probing;
 static struct savage2d engine; /* the production instance (defined below) */
+extern void savage3d_boot_diagnostic(struct savage2d *, const struct fb_device *) __attribute__((weak));
+extern void savage3d_bind_vfs(struct vfs *) __attribute__((weak));
+extern int savage3d_owner_stop(struct savage2d *) __attribute__((weak));
 static void init_record(const char *, uint32_t, unsigned, uint32_t, uint32_t);
 static void init_failure_readback(struct savage2d *);
 static void relinquish_access(void);
@@ -299,7 +302,7 @@ static int sync_engine(void *ctx)
     if (wait_idle(s)) return fault(s);
     return 0;
 }
-static int send_bci(struct savage2d *s, const uint32_t *words, unsigned n)
+static int send_bci_domain(struct savage2d *s, const uint32_t *words, unsigned n, uint32_t wait)
 {
     if (n > BCI_FIFO_WORDS - (s->supersavage ? 2u : 0u)) return -EINVAL;
     if (sync_engine(s)) return -EIO;
@@ -315,10 +318,10 @@ static int send_bci(struct savage2d *s, const uint32_t *words, unsigned n)
     s->submitted = true;
     for (unsigned i = 0; i < n; i++) s->io.write32(s->io.ctx, SAVAGE_BCI + i * 4, words[i]);
     if (s->supersavage) {
-        /* X.Org ShadowWait / DRM emit_event: wait for the 2D writes before
+        /* X.Org ShadowWait / DRM emit_event: wait for the selected engines before
          * publishing the parser tag. Poll the MMIO tag without shadow DMA.
          * Keep the burst consecutive and below the no-COB on-chip capacity. */
-        s->io.write32(s->io.ctx, SAVAGE_BCI + n * 4, BCI_WAIT_2D);
+        s->io.write32(s->io.ctx, SAVAGE_BCI + n * 4, wait);
         s->io.write32(s->io.ctx, SAVAGE_BCI + (n + 1) * 4, BCI_EVENT | s->event_tag);
     }
     /* UC read flushes posted command writes before observing completion. */
@@ -327,6 +330,20 @@ static int send_bci(struct savage2d *s, const uint32_t *words, unsigned n)
         init_record("event", SAVAGE_EVENT_STATUS, 32, s->event_tag, s->event_status);
     if (err) return fault(s);
     return 0;
+}
+static int send_bci(struct savage2d *s, const uint32_t *words, unsigned n)
+{ return send_bci_domain(s,words,n,BCI_WAIT_2D); }
+int savage2d_render3d_packet(struct savage2d *s, const uint32_t *words, unsigned n)
+{
+    if (!s || !words || !n || n>30) return -EINVAL;
+    if (!s->active || s->quarantined) return -EIO;
+    if (!s->render3d_qualified || s->chip!=SAVAGE_SUPER || s->cob_offset) return -EOPNOTSUPP;
+    /* No sliced wait may release presenter halfway through a global-state
+     * transition. This <=32-word burst retains both-engine idle/event proof. */
+    int (*pause)(void *)=s->pause; s->pause=0;
+    int e=send_bci_domain(s,words,n,BCI_WAIT_2D|0x00010000u);
+    s->pause=pause;
+    return e;
 }
 static int submit(struct savage2d *s, const uint32_t *words, unsigned n)
 {
@@ -702,6 +719,7 @@ static int start_chip_config(struct savage2d *s, const struct savage_io *io, con
     s->reason = 0; s->idle_mask = s->idle_value = s->status = 0; s->status_logged = false;
     s->status_ready = false; s->submitted = false; s->final_idle_checked = false;
     s->event_before = s->event_status = s->event_tag = 0; s->event_pending = false;
+    s->render3d_qualified=false;
     s->cpu_safe = false;
     s->reset_us = s->poll_us = 0;
     /* All operational VGA access stays on the exclusively owned ports.
@@ -1229,6 +1247,9 @@ static void relinquish_access(void)
 }
 static int runtime_stop(void *ctx)
 {
+    if (savage3d_owner_stop) {
+        int e=savage3d_owner_stop(ctx); if (e) return e;
+    }
     int err = stop_engine(ctx);
     if (err || engine.quarantined) { hw_fault(0); return err; }
     if (cob_claim >= 0) {
@@ -1436,6 +1457,7 @@ static int verify_write(void *ctx)
 }
 void savage2d_record(void)
 {
+    if (savage3d_boot_diagnostic) savage3d_boot_diagnostic(&engine,engine.fb);
     /* f2-92 protected records, outside the presenter lock: the first
      * engine-drawn request and a drawing request's quarantine. */
     if (summary_state.used_pending) {
@@ -1685,6 +1707,7 @@ static const struct accel_ops *init_with_io(const struct fb_device *d, struct vf
 /* Kernel callers: marker file I/O outside any presenter lock. */
 int savage2d_attempt_begin(struct vfs *vfs)
 {
+    if (savage3d_bind_vfs) savage3d_bind_vfs(vfs);
     load_config(vfs);
     activation_now = hw_now; activation_ctx = 0; activation_start = hw_now(0);
     trace_us = 0; attempt_in_progress = true; attempt_persisted = false;

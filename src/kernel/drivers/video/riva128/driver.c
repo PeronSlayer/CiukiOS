@@ -34,6 +34,11 @@
 #include "nv3.h"
 #include "../../../fs/vfs.h"
 
+#include "../render3d.h"
+static const struct render3d_family render_family = {
+    .status=R3D_NOT_IMPLEMENTED, .potential_units=1, .potential_texture_size=1024
+};
+
 static struct nv3_engine engine;
 static struct accel_ops ops;
 static const char *reason="pending";
@@ -360,6 +365,7 @@ static int cursor_test(const struct accel_ops *selected,uint64_t deadline,bool (
     return nv3_engine_cursor_test(&engine,now_us(0)+left*1000u,cancel,ctx);
 }
 const struct display_driver riva128_driver={
+    .render3d=&render_family,
     .id="riva128",.attempt_files={LEGACY_MARKER,MARKER},.name="NVIDIA Riva 128",.matches=matches,.match_count=ARRAY_SIZE(matches),
     .framebuffer_bar=1,.probe=probe,.eligible=eligible,.start=start,.fallback=fallback,
     .attempt_begin=attempt_begin,.attempt_end=attempt_end,.attempt_failed=attempt_failed,

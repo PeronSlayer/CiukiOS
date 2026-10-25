@@ -39,6 +39,11 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "driver.h"
 #include "registers.h"
 
+#include "../render3d.h"
+static const struct render3d_family render_family = {
+    .status=R3D_NOT_IMPLEMENTED, .potential_units=1, .potential_texture_size=1024
+};
+
 #define XRX_PORT 0x3d6u
 static struct i740_engine engine;
 static uint8_t xr(struct video_native *s, uint8_t index)
@@ -279,7 +284,8 @@ static bool summary(bool *r, bool *u, const char **why) { return video_summary(&
 static void snapshot(struct ciuki_accel_info *out) { video_snapshot(&engine.native,out); }
 static struct i740_engine engine={.native={.id="i740",.name="Intel i740",
     .marker="C:/system/settings/accel-i740.cfg",.reason="pending",.cpu_safe=true}};
-const struct display_driver i740_driver={.id="i740",.attempt_files={"C:/system/settings/accel.cfg","C:/system/settings/accel-i740.cfg"},.name="Intel i740",.matches=matches,
+const struct display_driver i740_driver={
+    .render3d=&render_family,.id="i740",.attempt_files={"C:/system/settings/accel.cfg","C:/system/settings/accel-i740.cfg"},.name="Intel i740",.matches=matches,
     .match_count=ARRAY_SIZE(matches),.framebuffer_bar=0,.probe=probe,.eligible=eligible,.start=start,
     .fallback=fallback,.attempt_begin=begin,.attempt_end=end,.attempt_failed=failed,.record=record,
     .quarantine=quarantine,.summary=summary,.snapshot=snapshot,.cursor_test=video_cursor_test};

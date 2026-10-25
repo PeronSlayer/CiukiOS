@@ -9,6 +9,11 @@
 #include "nv2d.h"
 #include "matches.h"
 
+#include "../render3d.h"
+static const struct render3d_family render_family = {
+    .status=R3D_NOT_IMPLEMENTED, .potential_units=4, .potential_texture_size=4096
+};
+
 /* f2-104 amendment 1 approves NV4-NV2x PIO; f2-105 amendment 1
  * approves the NV30/NV40 VRAM ring. DM9 remains mandatory for every
  * enabled transport, before publishing native ops. */
@@ -325,6 +330,7 @@ static int selftest(uint64_t deadline, void (*line)(void *, const char *), void 
     return e;
 }
 const struct display_driver nv2d_driver={
+    .render3d=&render_family,
     .id="nv2d",.attempt_files={"C:/system/settings/nv2d%04x.cfg"},.name="NVIDIA TNT-GeForce6",.matches=nv2d_matches,
     .match_count=ARRAY_SIZE(nv2d_matches),.framebuffer_bar=1,.probe=probe,.eligible=eligible,
     .start=start,.fallback=fallback,.attempt_begin=attempt_begin,.attempt_end=attempt_end,

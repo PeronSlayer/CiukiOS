@@ -54,6 +54,7 @@ static unsigned drawing;
  * its proven completion; it may have released the presenter lock between
  * 1 ms wait slices while keeping its `drawing` claim. Mode changes wait. */
 static bool accel_inflight;
+static bool render3d_preparing;
 static struct display_batch *batch_owner;
 static bool batch_cursor_shape;
 static uint64_t batch_slice_start;
@@ -981,11 +982,11 @@ static bool change_idle(int handle, gen_t generation)
 int fbdev_change_begin(void)
 {
     if (batch_owner) { batch_owner->cancel=true; return -EBUSY; }
-    if (!initialized || changing || accel_initializing || accel_inflight || !live()) return -EBUSY;
+    if (!initialized || changing || accel_initializing || accel_inflight || render3d_preparing || !live()) return -EBUSY;
     if (!console_framebuffer_revoke || !console_framebuffer_changed) return -ENODEV;
     changing = true; /* stop submissions before waiting for the last presenter */
     kmutex_lock(&presenter);
-    if (accel_initializing || accel_inflight) {
+    if (accel_initializing || accel_inflight || render3d_preparing) {
         changing = false; presenter_unlock(); return -EBUSY;
     }
     if (acceleration && acceleration->stop(acceleration->ctx)) {
@@ -1038,6 +1039,48 @@ void fbdev_change_end(void)
     changing = false;
     presenter_unlock();
     if (accel_vfs) fbdev_accel_schedule(accel_vfs);
+}
+
+/* F7 private worker exclusion. Persistence/preparation is outside the lock;
+ * its pin prevents mode revocation across those yielding operations. */
+int fbdev_render3d_prepare(uint32_t generation)
+{
+    if (!initialized || !live()) return -EBUSY;
+    kmutex_lock(&presenter);
+    int e=-EBUSY;
+    if (!changing && !accel_initializing && !render3d_preparing &&
+        acceleration && device.generation==generation) {
+        render3d_preparing=true; e=0;
+    }
+    presenter_unlock(); return e;
+}
+void fbdev_render3d_prepared(void)
+{
+    kmutex_lock(&presenter); render3d_preparing=false; presenter_unlock();
+}
+int fbdev_render3d_enter(uint32_t generation)
+{
+    if (!initialized || !live()) return -EBUSY;
+    kmutex_lock(&presenter);
+    unsigned empty=0;
+    if (changing || accel_initializing || accel_inflight || batch_owner || !acceleration ||
+        !device.present || generation!=device.generation ||
+        !__atomic_compare_exchange_n(&drawing,&empty,PRESENT_BUSY,false,__ATOMIC_ACQUIRE,__ATOMIC_RELAXED)) {
+        presenter_unlock(); return -EBUSY;
+    }
+    accel_inflight=true;
+    /* This unsliced transition retains presenter until both engines drain. */
+    if (acceleration->set_pause) acceleration->set_pause(acceleration->ctx,0,0);
+    if (acceleration->sync(acceleration->ctx)) {
+        accel_inflight=false; __atomic_store_n(&drawing,0,__ATOMIC_RELEASE);
+        presenter_unlock(); return -EIO;
+    }
+    return 0;
+}
+void fbdev_render3d_leave(void)
+{
+    framebuffer_write_drain(); accel_inflight=false;
+    __atomic_store_n(&drawing,0,__ATOMIC_RELEASE); presenter_unlock();
 }
 
 /* Batch ownership is deliberately stronger than presenter ownership. begin

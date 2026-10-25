@@ -7,6 +7,11 @@
 #include <ciuki/mtrr.h>
 #include <ciuki/swdib.h>
 #include "../../../fs/vfs.h"
+
+#include "../render3d.h"
+static const struct render3d_family render_family = {
+    .status=R3D_NOT_IMPLEMENTED, .potential_units=0, .potential_texture_size=0
+};
 static struct vmsvga_engine engine={.cpu_safe=true,.reason="pending"};
 static struct vmsvga_ports ports;
 static struct vmsvga_io io;
@@ -265,6 +270,7 @@ static int cursor_test(const struct accel_ops *ops,uint64_t until,bool (*cancel)
     return vmsvga_engine_cursor_test(&engine,until,cancel,ctx);
 }
 const struct display_driver vmwaresvga_driver={
+    .render3d=&render_family,
     .id="vmwaresvga",.attempt_files={MARKER},.name="VMware SVGA II",.matches=matches,.match_count=1,.framebuffer_bar=1,
     .probe=probe,.eligible=eligible,.start=start,.fallback=fallback,
     .attempt_begin=attempt_begin,.attempt_end=attempt_end,.attempt_failed=attempt_failed,

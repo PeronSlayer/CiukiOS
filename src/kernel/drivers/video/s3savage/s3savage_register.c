@@ -4,6 +4,12 @@
 #include <ciuki/display_driver.h>
 #include "savage2d.h"
 #include "supersavage_display.h"
+#include "../render3d.h"
+extern const struct render3d_backend *savage3d_backend(void) __attribute__((weak));
+static const struct render3d_family render_family = {
+    .status=R3D_UNQUALIFIED, .potential_units=2, .potential_texture_size=2048,
+    .backend=savage3d_backend
+};
 static const struct display_match matches[] = {
 #define SAVAGE_DEVICE(id, chip) {0x5333,id,3,255},
 #include "savage_ids.h"
@@ -43,7 +49,9 @@ static int cursor_test(const struct accel_ops *ops,uint64_t deadline,bool (*canc
     return e ? e : hidden;
 }
 const struct display_driver s3savage_driver = {
-    .id="s3savage", .attempt_files={"C:/system/settings/accel.cfg"}, .name="S3 Savage", .matches=matches,
+    .render3d=&render_family,
+    .id="s3savage", .attempt_files={"C:/system/settings/accel.cfg",
+        "C:/system/settings/accel-3d-s3savage-5333-%04x.cfg"}, .name="S3 Savage", .matches=matches,
     .match_count=sizeof(matches)/sizeof(matches[0]), .framebuffer_bar=1,
     .probe=savage2d_supported, .eligible=savage2d_eligible,
     .start=savage2d_init, .fallback=savage2d_fallback_ops,

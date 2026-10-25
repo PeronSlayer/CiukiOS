@@ -1,10 +1,328 @@
-# F7: native Savage 3D acceleration and libciuki3d
+# F7: universal native 3D acceleration and libciuki3d
+
+## Universal 3D driver model (owner amendment, 2026-10-25)
+
+### Lead amendment 1 implementation decisions (2026-10-25)
+
+This subsection supersedes the source-retrieval blockers below. Research uses
+the lead's read-only `build/downloads/f7-sources` cache, without importing code:
+
+| Archive | SHA-256 |
+| --- | --- |
+| [MesaLib-7.7.tar.bz2](https://archive.mesa3d.org/older-versions/7.x/7.7/MesaLib-7.7.tar.bz2) | `6252d7d4190b47f70d0e4ec0edbd5a70f2261c5f6e66859e5fd2572c1df6357a` |
+| [MesaLib-7.11.2.tar.bz2](https://archive.mesa3d.org/older-versions/7.x/7.11.2/MesaLib-7.11.2.tar.bz2) | `57746aa8c60bc6f5596ec6c6c7274de40fa12edce5ec33fe899e704fa00b5357` |
+| [xf86-video-savage-2.3.9.tar.bz2](https://www.x.org/releases/individual/driver/xf86-video-savage-2.3.9.tar.bz2) | `2c93c4db1f71e725dda0caee5821253129d4b52d7aa0fd720593e7769bceec86` |
+
+Linux source is pinned to [v6.1](https://github.com/torvalds/linux/tree/v6.1/drivers/gpu/drm/savage).
+The report records individual file hashes. Register writes follow Mesa 7.7
+`savageDDInitState_s4`, `savageUpdateRegister_s4`, `savageDDDepthFunc_s4`,
+`savageCalcViewport`, `savage_3d_reg.h` and `savage_bci.h`; tiled aperture
+programming follows X.Org 2.3.9 `SAVAGEDRISetupTiledSurfaceRegs` and
+`GetTileAperturePitch`. Linux `savage_dispatch_swap` and inline bitmap
+descriptor definitions supply the conversion-copy packet. RE046-B §10 supplies
+MMIO readback addresses (BCI selectors are not MMIO word offsets).
+
+* Integer D16 is selected explicitly: float depth off, W-to-Z on, exponent
+  offset zero; native LESS becomes hardware GREATER and stored depth is
+  `65535 - native_depth`. Vertex Z is the reversed value divided by 65535;
+  integer-only rational IEEE conversion must round ties to even. Clear and
+  readback reverse the same integer representation. Mesa's floating-D16
+  minimum-depth adjustment does not apply to this mode.
+* Local destination/Z flush bits are set; corresponding write-low watermarks
+  are zero, Z read watermarks are 24/24, destination flush is 01 and texture
+  read watermark is 15. Texture addresses are re-emitted after every upload.
+  Every small packet drains both engines and proves a fresh nonzero event.
+  No source establishes that a COB is required for these <=32-word packets.
+* SuperSavage tiled surface 0 uses `(base >> 6) | (tiles << 20) | bpp`.
+  Aperture row pitch is **8192 for color, 4096 for D16**, independent of the
+  physical tile pitch. Only this alias is temporarily programmed/restored;
+  streams, clocks, GBD and scanout are untouched. The BAR2 mapping is an alias
+  of the common owner's claimed heap, not additional memory.
+* Per-resource physical storage includes padded 128-byte destination rows,
+  16-row tiles and guard pages on both sides. Texture subtiles remain a
+  different layout. The kernel constructs PBD/SBD inline descriptors for
+  tiled-to-linear copies and restores the saved descriptor/clip state before
+  releasing presenter ownership. The probe compares independent expected
+  pixels/depth, conversion output and guards before enabling admission.
+* The 2D lease is unchanged. The heap begins above its actual end, and ends
+  below the existing cursor/firmware reserve. At 1024x768 the proposed 4 MiB
+  texture heap cannot coexist with this lease. Following §5's permitted
+  reduction, the initial minimum pool is **256 KiB**, after two full-size
+  padded color buffers, D16, per-allocation guards and linear probe scratch.
+  Failure to fit disables hardware for that mode. This is software admission
+  policy, not measured capacity or a revised hardware performance gate.
+* Before latency measurements, execution stays limited to <=64x64 resources,
+  one triangle and one queued hardware job. A successful probe qualifies only
+  that minimum; full-resolution scenes, general presentation leases and the
+  broader fixed-function subset remain f7-03..06. Offscreen linear COPY never
+  authorizes scanout. Mode/loss closes the attached service before revocation;
+  quarantine retains every claim and mapping that may still be referenced.
+
+The normal run-time token `3d=probe` is required for the first boot probe.
+The durable key is `3d-s3savage` plus the detected vendor/device; persistence
+and clearing occur outside presenter ownership. A retained marker, missing
+claim, unavailable marker store or invalid mode refuses before any write.
+The remaining silicon question is whether this local tiled setup works with
+the retained linear display on this revision. The bounded probe is the test;
+host evidence does not answer that hardware question.
+
+The emitted minimum state image is pinned to the Mesa fields above:
+
+| Selector | Value / fields |
+| --- | --- |
+| 1e | `c4000010` plus bit 27 for depth write: source ONE, destination ZERO, draw update, Gouraud, destination/Z flush |
+| 20,21 | `0005f040`: point, no mips, bias 8, dMax 15, U/V clamp |
+| 22,23 | Local, 8-byte-aligned owner texture base OR 2; re-emitted each draw |
+| 24,25 | `00110011` MODULATE including alpha (or `00850405` without a texture), `00870407` disabled stage 1 |
+| 27 | `60000000` palette size plus stage-0 enable, ARGB8888 format and log2 dimensions when textured |
+| 30,31 | Fog disabled; stencil disabled, comparison ALWAYS, read/write masks ff |
+| 32 | W-to-Z, integer depth, exponent zero; D16 enable for test/write, GREATER for native LESS or ALWAYS without test |
+| 33,34 | Owner D16/color bases in 2 KiB units; padded width in 64/32-pixel tiles, XRGB8888 destination |
+| 35,36 | Scissor starts zero, ends width/height minus one, performance bit, no cull/dither/alpha test |
+| 37,38 | `00001818` Z read 24/24 and write 0/0, `4f000000` destination flush 01 / texture read 15 / destination write-low zero |
+
+The hardware serializer also applies Mesa's `SUBPIXEL_X=-0.5` and
+`SUBPIXEL_Y=-0.375` offsets. Independent host fixtures cover these bits,
+the MMIO address/selector distinction, PBD/SBD descriptor ordering, texture
+subtiles and rational depth rounding. The silicon probe allows ±2 channel
+levels at its Gouraud sample and ±1 at its D16 sample; missing coverage,
+wrong texture quadrant, any guard damage, copy mismatch or failed restore
+is an error. These small interior-sample tolerances do not close H2/T1.
+
+Heap selection measures the registry snapshot before claiming: every live
+MMIO reservation, including quarantine, is excluded page-wise; an incomplete
+inventory refuses. The largest remaining contiguous extent must fit the
+mode proposal. For an otherwise unreserved T23 heap `[00800000,00fff000)`,
+free/largest are 8,384,512 bytes and the minimum proposal is 8,183,808 bytes.
+These are checked conditional values; actual boot records are authoritative.
+The descriptor declares the separate 3D marker in its attempt-file list, so
+the existing explicit device-keyed retry also handles an interrupted probe.
+
+This section supersedes the Savage-specific scope of the original proposal.
+The device owner, admission, copied submission ring, generation/sequence
+fences, resource lifetime, VRAM reservations, presentation authorization and
+loss policy belong to one family-neutral service. Display families nominate
+an immutable capability descriptor in the existing display registry; a backend
+provides validation, layout, packet emission, idle/flush and conversion copy.
+Only a backend qualified for the current device/display generation may execute.
+Recognition, potential hardware features and implemented capabilities are
+different facts. Applications query implemented capabilities, never a PCI ID.
+AUTO selects the scalar implementation whenever hardware is unavailable;
+HARDWARE_REQUIRED returns an explicit unsupported result. No application gets
+device addresses. AGP remains unavailable until a separate transport directive.
+
+The first interface is kernel-internal (for a later opengl32 adapter), not an
+addition to the public syscall or SDK ABI. Its callers are trusted adapters on
+one serialized display worker; they must copy user memory before invoking it.
+Worker-only entry points cannot be called directly from a syscall or IRQ.
+Backend enter/leave hooks take presenter serialization before the shared engine
+lock. Persistence and allocation happen outside those hooks. An adapter must
+close admission and drain before mode changes/revocation; no asynchronous
+presentation lease is created by an offscreen context.
+
+The following is a research/implementation order, **not advertised support**.
+Potential limits are chip-specific ceilings, not allocation promises; exact
+revision-specific state needs its own directive. `B/A` means fixed-function
+blend and alpha test. All unimplemented entries select software. The existing
+2D PCI match tables remain authoritative, including their narrower ID sets.
+
+| Order / display family | Primary public implementation references | Potential fixed-function subset | Submission / status |
+| --- | --- | --- | --- |
+| 1 s3savage | Mesa 7.7 / 7.11.2 `savage`; Linux `savage`; final DRI1 release 7.11.2 | Savage4+: 2 units, 2048 textures, D16/D24S8, B/A; earlier Savage: 1 unit | CPU BCI, optional DMA excluded; first backend, boot-probe gated |
+| 2 vmwaresvga | [Gallium svga](https://docs.mesa3d.org/drivers/svga.html), Linux `vmwgfx`; maintained Gallium, no final release | SVGA3D host caps determine units/size/depth/B/A | shared FIFO/fences; not implemented, requires SVGA3D capability |
+| 3 tdfx | Mesa 7.11 `tdfx`, Linux `tdfx`; [Glide3 upstream](https://github.com/sezero/glide) | Banshee 1 / Voodoo3–5 2 units, 256 / VSA-100 2048 textures, D16 (VSA-100 D24S8), B/A | MMIO/FIFO; not implemented |
+| 4 rage128 | Mesa 7.11 `r128`, Linux `r128` | 2 units, 1024 textures, D16/D24, B/A | PIO/CCE DMA ring; not implemented |
+| 5 radeon2d | Mesa classic `radeon`/`r200`, Linux `radeon`; 21.3 mainline then Amber | R100 3 / R200 6 units, 2048 textures, D16/D24S8, B/A | CP command ring; not implemented; R300/R4xx need separate descriptors |
+| 6 matrox | Mesa 7.11 `mga`, Linux `mga` | G200 1 / G400–450 2 units, 2048 textures, D16/D24/D32, B/A | MMIO/DMA; not implemented |
+| 7 intel2d | Mesa classic `i830` (historical), `i915`, Linux `i915`; 21.3 mainline then Amber for classic i915 | i830–855/865 4 units, 2048 textures, D16/D24S8, B/A | batch/ring/GTT; not implemented |
+| 8 i810 | Mesa 7.11 `i810`, Linux `i810` | 2 units, 2048 textures, D16, B/A | DMA ring/GTT; not implemented |
+| 9 mach64 | Mesa 7.11.2 `mach64`, historical out-of-tree DRM `mach64`, [Utah-GLX](https://utah-glx.sourceforge.net/) | Rage Pro: Mesa exposes 2 stages, 1024 textures, D16, B/A; one uploaded mip level | MMIO/GUI FIFO/DMA; not implemented; chips without triangle setup stay software |
+| 10 unichrome | Mesa 7.11.2 `unichrome`, Linux `via` | 2 units, default 512 textures (1024 with excess_mipmap), D16/D24S8/D32, B/A | MMIO/AGP command regulator; not implemented |
+| 11 sis | Mesa 7.11.2 `sis`, Linux `sis` | SiS300 2 units, 1024 textures, D16/D24/D32, B/A; 315 is not covered by this driver | MMIO/AGP queue; neither generation implemented |
+| 12 nv2d | Mesa classic `nouveau` nv04/nv10/nv20, Linux `nouveau`; 21.3 mainline then Amber | TNT 2 / GeForce1–2 2 / GeForce3–4 4 units; 1024/2048/4096 textures, D16/D24S8, B/A | PFIFO PIO/DMA push buffers; not implemented |
+| 13 riva128 | [Utah-GLX](https://utah-glx.sourceforge.net/), NVIDIA public NV3 class references; no Mesa classic DRI shipping claim | 1 unit, 1024 textures, D16, B/A restrictions need qualification | PIO FIFO; not implemented |
+| 14 i740 | Utah-GLX i740; no supported Mesa classic DRI/Linux DRM pairing established here | 1 unit, 1024 textures, D16, B/A restrictions need qualification | MMIO/FIFO/AGP; not implemented |
+| 15 s3virge | historical Mesa `s3v` / Utah-GLX; no maintained Linux DRM module; last release not established | 1 unit, 128/256 texture limits depend on revision, D16, restricted B/A | MMIO FIFO; not implemented |
+| 16 trident | historical experimental Mesa `trident`; no production DRM pairing or final shipping version established | Blade3D/CyberBlade-specific limits not established; no features advertised | MMIO; not implemented |
+| — cirrus, chipshiqv, neomagic, s3trio64, s3legacy | existing 2D families | software-only for these matched adapters | no 3D backend |
+
+Mesa's [8.0 removal list](https://docs.mesa3d.org/relnotes/8.0.html)
+establishes the DRI1 boundary; the last maintenance release is
+[7.11.2](https://docs.mesa3d.org/relnotes/7.11.2.html).
+[Amber](https://docs.mesa3d.org/amber.html) establishes the later classic
+driver boundary. Uncertain historical limits above remain research items,
+not defaults to use in code. The conservative descriptors advertise zero
+hardware features until a family backend has its own evidence.
+
+#### Family matrix source audit from the local 7.11.2 archive
+
+The archive pin above fixes these file/function references. `MaxTextureLevels`
+includes level zero: 11 levels means a 1024 side, 12 means 2048. For
+`driCalculateMaxTextureLevels` the dimension argument is a log2 side instead.
+Reported software stages do not prove simultaneous physical texture units.
+
+| Families | Inspected 7.11.2 evidence / release boundary |
+| --- | --- |
+| savage | `savage/savage_xmesa.c:savageCreateContext` (one/two units, dimension exponent 11, D16/D24); integer/float and tiling distinctions checked against 7.7. Final 7.11.2, removed for 8.0. |
+| tdfx | `tdfx/tdfx_context.c` initialization: Banshee one / others two, levels 9 versus Voodoo4/5 12, D16/D24 visuals; `tdfx_screen.c`, Glide3 calls. Final 7.11.2. |
+| rage128 | `r128/r128_context.c`: two units, dimension exponent 10; `r128_screen.c`/`r128_state.c` for visual/depth and CCE submissions. Final 7.11.2. |
+| radeon2d | `radeon/radeon_context.c` and `r200/r200_context.c`: limits/options and 12 levels; three/six maximum units in their context headers. Both remain through mainline 21.3 then Amber. These sources do not qualify later Radeon chips matched by the 2D family. |
+| matrox | `mga/mga_xmesa.c`: G200 one / G400 two, dimension exponent 11, explicit 16/24/32 depth branches; `mgastate.c` DMA. Final 7.11.2. |
+| intel2d | `i915/i830_context.c`: four units, 12 levels and 2048 rectangle side; i830 hardware support is inside the i915 directory in this archive. `intel_batchbuffer.c`/`intel_screen.c` submit through DRM i915. Classic driver persists through 21.3 then Amber. |
+| i810 | `i810/i810context.c`: two units, dimension exponent 11; screen/depth and DMA ioctl paths in `i810screen.c`/`i810ioctl.c`. Final 7.11.2. |
+| mach64 | `mach64/mach64_context.c`: **two exposed stages**, dimension exponent 10, only one uploaded mip level; `mach64_texstate.c` multitexture state. The upstream DRI project limits support to triangle-setup Rage Pro derivatives; DRM mach64 was out-of-tree, not a mainline Linux module. Final 7.11.2. |
+| unichrome | `unichrome/via_context.c`: levels 10 by default, 11 with `excess_mipmap`, two units, D16/24/32 cases; MMIO/AGP regulator in `via_ioctl.c`. Final 7.11.2. |
+| sis | `sis/sis_context.c`: 6326 one/9 levels, other supported chips two/11 levels. `sis_screen.c` and `sis_state.c` do not establish SiS315 support. Final 7.11.2 for this driver, not a release claim for 315. |
+| nv2d | `nouveau/nv04_context.c`: 11 levels; `nv10_context.c`: 12 levels; `nv20_context.c` inherits common limits and uses four units. `nv04/10/20_driver.h`: 2/2/4 units. NV20's nominal 4096 hardware limit is not advertised by this matrix as a verified 7.11.2 driver limit. PFIFO buffer submission uses nouveau. Classic NV04–20 persists through 21.3 then Amber. |
+| riva128, i740, s3virge, trident | No corresponding implementation is shipped in the inspected 7.11.2 DRI directory. Utah-GLX / historical Mesa references in the main matrix remain starting points; final shipping release and revision-specific feature limits are **not established** by this archive. They remain NOT_IMPLEMENTED. |
+| vmwaresvga | Gallium `svga` and Linux `vmwgfx`, not a 7.11.2 classic DRI driver. Query SVGA3D caps; do not use fixed host-independent limits or imply VirtualBox supports every VMware command. |
+
+Release boundaries were cross-checked against Mesa's
+[8.0 removals](https://docs.mesa3d.org/relnotes/8.0.html) and
+[Amber list](https://docs.mesa3d.org/amber.html). Mach64's module/triangle-setup
+scope is also documented by the upstream
+[DRI project](https://dri.freedesktop.org/wiki/ATIMach64/).
+The listed 7.11.2 files are research references, never kernel dependencies.
+
+### f7-02 pre-write findings and gates (2026-10-25)
+
+* `SavageSetGBD_PM` uses `TILE_DESTINATION` for **both** pixel sizes,
+  surface pitch in bits starting at 20 and base shifted by 6. The ordinary
+  Savage4/Twister recipe uses pitch starting at 24 and a byte base. Do not
+  substitute that recipe. The function also changes primary streams and
+  blanks scanout: it cannot be copied as an offscreen initialization routine.
+  [X-A](https://raw.githubusercontent.com/NetBSD/xsrc/trunk/external/mit/xf86-video-savage/dist/src/savage_accel.c).
+* `SavageMapMem` chooses BAR2 on SuperSavage. The alias is not extra VRAM.
+  `SavagePreInit` disables both DMA modes and defaults to disabled tiling,
+  referencing bug 805380. Offscreen tiling plus linear scanout remains a
+  **silicon gate**, not an established supported combination.
+  [X-D](https://raw.githubusercontent.com/NetBSD/xsrc/trunk/external/mit/xf86-video-savage/dist/src/savage_driver.c).
+* Mesa `savageChooseVertexFormat_s4` orders X,Y,Z,W,diffuse,specular,U0,V0,U1,V1.
+  Linux skip flags 08h (specular) and C0h (stage 1) give seven DWORDs for one
+  texture, or a 22-DWORD triangle packet. With wait+event this is 24, within
+  32 on-chip words. The serializer uses integer round-to-nearest-even IEEE
+  conversion, with validated coordinates/depth/positive reciprocal W.
+  [M-V](https://chromium.googlesource.com/chromium/deps/mesa/+/3a0db227ffe90888ad760c61a63226988c974e00/src/mesa/drivers/dri/savage/savagetris.c),
+  [L-H](https://sources.debian.org/src/linux/6.1.4-1/drivers/gpu/drm/savage/savage_drv.h).
+* Mesa reverses depth comparison in `savageDDDepthFunc_s4`; its viewport
+  conversion is essential. A source-backed bit-exact D16 initialization
+  requires the complete `savage_3d_reg.h` and viewport implementation.
+  The header and `savageioctl.c` could not be retrieved in this environment
+  (web cache misses; shell DNS unavailable). No guessed depth/control words
+  are emitted. [M-S](https://chromium.googlesource.com/chromium/deps/mesa/+/6da96107e2467063c72e1ec5804f0618a6ce83d3/src/mesa/drivers/dri/savage/savagestate.c).
+* Mesa forces texture address re-emission after upload and sets destination/
+  Z flush controls and watermarks; WAIT/event alone does not establish cache
+  flush. Linux's fake-DMA path is not proof of a cache-flushed no-COB 3D path.
+  Cache programming remains blocked on those complete register definitions.
+* The existing qualified idle signature, read cap, timeout, dead-MMIO and
+  event checks remain authoritative. 3D packets additionally wait for both
+  engines before publishing an event. Sequence fences are software 64-bit
+  values, independent of 16-bit event wrap; zero/stale events never complete.
+* DRM `savage_dispatch_swap` is a blit, not a flip. It does not prove that a
+  SuperSavage tiled source can be copied into the retained linear scanout.
+  Qualify conversion into a separate offscreen **linear** scratch target
+  first, with guards and known pixels. The initial diagnostic must not touch
+  scanout, stream controls, clocks, COB or PCI bus mastering.
+  [L-S](https://kernel.googlesource.com/pub/scm/linux/kernel/git/stable/linux-stable.git/+/a4da411e41892628f35aa180a78b7b0f8f1e3038/drivers/gpu/drm/savage/savage_state.c).
+
+The bounded diagnostic must refuse before its first write if any source,
+reservation, durable marker, shared-owner, status or alias prerequisite is
+missing. The report distinguishes that refusal from a successful triangle
+probe. Host fixtures establish transport/layout behavior only. Hardware
+activation must stay off until the missing definitions and T23 evidence close
+these gates; this amendment does not waive §9's pre-write requirement.
+
+### Internal minimum implementation boundary (2026-10-25)
+
+`drivers/video/render3d.h` is the worker-only adapter interface, not an SDK
+wire definition. `display_driver.render3d` nominates a family descriptor;
+`render3d_init_family` consumes that nomination without another PCI claim.
+Not-implemented nominations and an unqualified first backend advertise zero
+hardware features. The second fake family exercises the same nomination path.
+The existing 2D registration order, mappings and activation remain authoritative.
+
+The minimum implements Gouraud lists, LESS/D16 test and independent write mask,
+one nearest/clamp ARGB8888 MODULATE texture, color/depth clear and copy into
+another owned offscreen color resource. COPY does **not** authorize scanout.
+Other states are not expressible in this internal version. Coordinates are
+Q16.16, Z is integer 0..65535, reciprocal W is Q16.16 in 1/256..256 and U/V
+are Q16.16 in 0..1. Pixel centers are half-integers; top/left edges include
+samples and bottom/right edges exclude them. D16 interpolation and channels
+round half upward; hardware IEEE serialization rounds ties to even.
+
+At 1024 maximum dimension an edge product is bounded by 2^52. Barycentric
+fractions use sixteen bounded remainder steps instead of a potentially
+overflowing shifted edge numerator. Weighted reciprocal W/UV values remain
+below 2^41; perspective recovery remains below 2^40 before division. Scalar
+draw slices cover at most four rows (4096 candidate pixels); clear/copy
+slices cover sixteen rows. Admission bounds total triangle bounding-box work
+to 65536 pixels and lists to 64 triangles; unsupported larger submissions
+return EAGAIN before side effects. The worker rotates between slices while
+preserving a context's own job order. These are CPU work bounds, not measured
+millisecond throughput claims.
+
+The staging ring is exactly 256 KiB, four 64 KiB slots, two jobs/context.
+There are at most 32 contexts, four/process, and 256 resources/context.
+The 32 MiB service ceiling includes the fixed service/ring plus lazily charged
+resource metadata and canonical shadows. Pending frees and quarantined
+allocations remain charged. Handles never wrap/recycle; exhaustion fails.
+Fences carry device generation, device-monotonic sequence and a process-owned
+context/consecutive receipt ordinal, so completed receipts survive ring reuse.
+For a pending receipt, sequence and ordinal must match the queued snapshot.
+After completion, identity is generation + owned context + ordinal; sequence
+is informational and is ignored, including zero or a different context's
+sequence. A completed ordinal denotes an actual submission to that context,
+not an authenticated device-sequence/ordinal pair. Invalid generations,
+foreign contexts and zero/unsubmitted ordinals remain errors. This bounded
+history rule avoids retaining an unbounded sequence map per context.
+Waits cap caller timeout at 100 ms and use an independent 1024-observation
+bound for a frozen clock. The caller supplies the worker's sleep/yield hook;
+no wait primitive is exposed directly to an untrusted caller.
+
+Unmeasured hardware is limited to one queued <=64x64 target job, one triangle
+and <=4096 candidate pixels; backend validation can refuse further. The
+shared packet transport uses the existing idle signature/deadline/read cap,
+both-engine WAIT and nonzero event tag. Qualification is false on every
+normal activation. With `3d=probe`, the existing owner can claim a disjoint
+heap/BAR2 alias, persist the operation marker, execute the positive guarded
+probe and enable only the bounded minimum after successful marker clearing.
+An unavailable prerequisite refuses without programming. Engine/guard/restore
+failure quarantines both domains and retains the marker, allocations and
+claims. `render3d_native_init` attaches an internal consumer through the bound
+display descriptor; it selects software when no qualified backend exists.
+COPY uses an owned `R3D_LINEAR_COLOR` buffer and canonical readback; it grants
+no scanout lease. Normal mode/native-display revocation closes admission and
+cancels pending work before the common owner's mappings are released.
+Actual delegated full-screen presentation remains f7-04.
+
+#### Lead amendment 2 review fixes (2026-10-25)
+
+Close marks every live context dying **and every resource pending-free before
+cancelling queued jobs**. Cancellation may collect a context immediately;
+its shadows must be reclaimable before that collection drops the metadata.
+Quarantined hardware allocations still remain charged and retained.
+
+The completed-receipt rule above is the lead's explicitly permitted ordinal-only
+alternative. Linux v6.1 [`savage_bci_event_wait` and `savage_reclaim_buffers`](https://github.com/torvalds/linux/blob/v6.1/drivers/gpu/drm/savage/savage_bci.c)
+compare monotonic event progress and age reclaimed buffers after a 3D wait;
+they do not authenticate a process-specific software receipt. Ciuki's ordinal
+ownership is its own service policy, separate from hardware event completion.
+
+The fake packet interpreter now needs to decode scissor dimensions, padded
+color/depth pitches, depth enable/write/compare and texture enable/dimensions
+instead of asserting the one probe state. Fixtures exercise all 63 nonzero
+flag combinations, empty lists where permitted, odd/tile-boundary target sizes
+and every admitted power-of-two texture size. Expected pixels/depth are checked
+independently of the production scalar renderer. The reference fields are
+Mesa 7.7 `savageDDDepthFunc_s4`, `savage_3d_reg.h`, `tileInfo_pro` and X.Org
+2.3.9 `SAVAGEDRISetupTiledSurfaceRegs`/`GetTileAperturePitch`, pinned above.
+No additional register writes, hardware caps or silicon qualification follow
+from this host-model coverage.
 
 Research and repository comparison: **2026-10-14**. Directive:
-[f7-00](../directives/f7-00-3d-acceleration-contract.md). Status: proposed
-contract for the lead's cross-review, before implementation. This document
-contains no hardware qualification or performance result. F7-01 through
-F7-06 need written directives; this research task changes no production code.
+[f7-00](../directives/f7-00-3d-acceleration-contract.md). Status: original research contract; the amendments above record the f7-02 implementation
+for lead review. This document contains no hardware qualification or performance
+result. The later F7 directives and hardware gates remain separate.
 
 The outcome is a native triangle renderer on the T23's **5333:8c2e
 SuperSavage IX/C SDR**, shared safely with the existing 2D engine, and a
@@ -56,8 +374,8 @@ drivers and T23 measurements decide generation-specific behavior. No public
 SuperSavage register reference was located. Some historical files were
 accessible only through indexed source excerpts; these are identified by
 function above, and missing details must be resolved before their first
-hardware write. In particular, the Mesa register header was not retrieved in
-full; the register map below is checked against S3-R and L-H instead.
+hardware write. The initial research lacked the complete Mesa register header; lead amendment 1
+supplies the pinned full files and supersedes that retrieval limitation.
 
 ## 2. Existing repository behavior and required integration
 
