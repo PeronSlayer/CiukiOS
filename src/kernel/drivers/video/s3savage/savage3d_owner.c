@@ -137,8 +137,10 @@ static int scratch_create(struct render3d_service **out)
             i==2 ? texture : 0,i==2 ? sizeof(texture) : 0,&resource);
         if (!e) {
             struct render3d_resource *r=&s->contexts[0].resources[i];
-            r->hardware=true; r->offset=at;
-            e=savage3d_backend()->layout(&device,r); at+=r->reserved;
+            r->hardware=true;
+            r->offset=i==2 ? device.heap.first+device.heap.bytes-device.texture_bytes : at;
+            e=savage3d_backend()->layout(&device,r);
+            if (i!=2) at+=r->reserved;
         }
     }
     if (e) { (void)render3d_close(s); kfree(s); return e; }
@@ -188,6 +190,7 @@ void savage3d_boot_diagnostic(struct savage2d *engine,const struct fb_device *fb
     if (!e && !marker_vfs) { e=-ENODEV; reason="marker_store"; }
     if (!e) {
         device=(struct savage3d_device){.engine=engine,.generation=fb->generation,.heap=heap,
+            .texture_bytes=(heap.bytes-(required-SAVAGE3D_TEXTURE_MIN))&~4095u,
             .memory={0,memory_read,memory_write,enter,leave},.lost_notify=lost_notify};
         uint32_t bases[]={fb->phys+heap.first,alias}, sizes[]={heap.bytes,SAVAGE3D_ALIAS_BYTES};
         for (unsigned i=0;!e && i<2;i++) {

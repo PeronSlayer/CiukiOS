@@ -22,7 +22,7 @@ class RenderTests(unittest.TestCase):
                  '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
                  '-I', str(ROOT/'src/kernel/include'), '-I', str(ROOT/'tests/host'), '-I', str(OUT)]
         binary = OUT/name
-        subprocess.run(flags+[str(ROOT/p) for p in sources]+['-o',str(binary)],check=True)
+        subprocess.run(flags+[str(ROOT/p) for p in sources]+['-lm','-o',str(binary)],check=True)
         subprocess.run([str(binary),*args],check=True)
 
     def test_service(self):

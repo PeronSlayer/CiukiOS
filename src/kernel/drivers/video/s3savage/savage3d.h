@@ -8,9 +8,12 @@ uint32_t savage3d_fixed_ieee(uint32_t, unsigned);
 /* Canonical serializer fixture; hardware variant reverses integer depth. */
 int savage3d_triangle_packet(const struct render3d_vertex [3], uint32_t [22]);
 int savage3d_hw_triangle_packet(const struct render3d_vertex [3], uint32_t [22]);
-/* Pro/SuperSavage ARGB8888 texture tile, >=32x16, one unmipped level. */
+/* Pro/SuperSavage texture subtiles are 8x8 (Savage4 differs). The legacy
+ * pack wrapper covers one ARGB8888 level; mip helpers cover tiny tails. */
 int savage3d_texture_offset(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t *);
 int savage3d_pack_texture(void *, size_t, const uint32_t *, uint32_t, uint32_t);
+int savage3d_mip_offset(const struct render3d_resource *, unsigned, unsigned, unsigned, uint32_t *);
+uint32_t savage3d_texture_bytes(const struct render3d_resource *);
 /* Checked plan only; callers must subtract every registry reservation first. */
 struct savage3d_plan {
     struct render3d_extent color[2], depth, texture;
@@ -35,6 +38,7 @@ struct savage3d_device {
     struct savage3d_memory memory;
     struct render3d_extent heap;
     uint32_t generation;
+    uint32_t texture_bytes;
     bool qualified, probing, locked, lost;
     struct render3d_service *consumer;
     void (*lost_notify)(void *);

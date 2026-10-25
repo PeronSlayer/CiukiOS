@@ -46,14 +46,19 @@ void render3d_init(struct render3d_service *s, const struct render3d_host *h,
     s->backend=b; s->device=device; s->admission=generation && h->alloc && h->free && h->now_us;
     /* Registry owns/proves this heap; a zero/unaligned/wrapped extent admits
      * software only, with no device allocation or implicit scanout overlap. */
-    if (heap.bytes && !(heap.first&4095u) && !(heap.bytes&4095u) && heap.first<=UINT32_MAX-heap.bytes) {
+    if (heap.first && heap.bytes && !(heap.first&4095u) && !(heap.bytes&4095u) && heap.first<=UINT32_MAX-heap.bytes) {
         s->heap_first=heap.first; s->heap_end=heap.first+heap.bytes;
+        if (b && b->texture_pool_bytes) {
+            uint32_t n=b->texture_pool_bytes(device);
+            if (!n || (n&4095u) || n>=heap.bytes) s->heap_end=s->heap_first;
+            else s->texture_first=s->heap_end-n;
+        }
     }
 }
 void render3d_query_caps(const struct render3d_service *s, struct render3d_caps *caps)
 {
-    *caps=(struct render3d_caps){1,R3D_FEATURES,usable(s) ? s->backend->features : 0,
-        R3D_MAX_SIZE,1,R3D_JOBS*R3D_JOB_BYTES,R3D_JOB_BYTES,R3D_JOBS,R3D_RAM_LIMIT,usable(s) ? s->backend->max_size : 0u};
+    *caps=(struct render3d_caps){2,R3D_ALL_FEATURES,usable(s) ? s->backend->features : 0,
+        R3D_MAX_SIZE,2,R3D_JOBS*R3D_JOB_BYTES,R3D_JOB_BYTES,R3D_JOBS,R3D_RAM_LIMIT,usable(s) ? s->backend->max_size : 0u, s->texture_first ? s->heap_end-s->texture_first : 0u};
 }
 void render3d_init_family(struct render3d_service *s, const struct render3d_host *h,
     uint32_t generation, const struct render3d_family *family, void *owner, struct render3d_extent heap)
@@ -104,21 +109,23 @@ static bool overlap(uint32_t a, uint32_t n, uint32_t b, uint32_t m)
 static int reserve_vram(struct render3d_service *s, struct render3d_resource *r)
 {
     if (!r->reserved || (r->reserved&4095u)) return -EINVAL;
-    uint32_t at=s->heap_first;
-    for (;;) {
-        if (at>s->heap_end || r->reserved>s->heap_end-at) return -ENOMEM;
+    uint32_t at=r->kind==R3D_TEXTURE && s->texture_first ? s->texture_first : s->heap_first;
+    uint32_t end=r->kind!=R3D_TEXTURE && s->texture_first ? s->texture_first : s->heap_end;
+    for (unsigned probes=0;probes<64;probes++) {
+        if (at>end || r->reserved>end-at) return -ENOMEM;
         uint32_t next=at;
         for (unsigned i=0;i<R3D_CONTEXTS;i++) {
             struct render3d_context *c=&s->contexts[i]; if (!c->live || !c->resources) continue;
             for (unsigned j=0;j<R3D_RESOURCES;j++) {
                 const struct render3d_resource *a=&c->resources[j];
-                if (a->live && a->hardware && overlap(at,r->reserved,a->offset,a->reserved) && a->offset+a->reserved>next)
+                if (a->live && a->hardware && a->offset && overlap(at,r->reserved,a->offset,a->reserved) && a->offset+a->reserved>next)
                     next=a->offset+a->reserved;
             }
         }
         if (next==at) { r->offset=at; return 0; }
         at=next;
     }
+    return -EAGAIN;
 }
 /* AUTO can select software for a resource/layout unsupported by the first
  * backend, but only before any frame has been submitted. Existing shadows
@@ -136,8 +143,89 @@ static bool software_before_submit(struct render3d_context *c)
     }
     c->hardware=false; return true;
 }
-int render3d_create_resource(struct render3d_service *s, uint32_t p, uint32_t id,
-    enum render3d_kind kind, uint32_t w, uint32_t h, const void *pixels, size_t bytes, uint32_t *out)
+/* Only completed, unbound textures can be evicted. Their immutable canonical
+ * data remains charged in RAM; the next referencing job reuploads it. */
+static int texture_reserve(struct render3d_service *s, struct render3d_resource *r)
+{
+    if (s->texture_first && r->reserved>s->heap_end-s->texture_first) return -EOPNOTSUPP;
+    for (unsigned tries=0;tries<32;tries++) {
+        int e=reserve_vram(s,r);
+        if (e!=-ENOMEM) return e;
+        struct render3d_resource *victim=0;
+        for (unsigned i=0;i<R3D_CONTEXTS;i++) {
+            struct render3d_context *c=&s->contexts[i];
+            if (!c->live || !c->resources) continue;
+            for (unsigned j=0;j<R3D_RESOURCES;j++) {
+                struct render3d_resource *a=&c->resources[j];
+                if (a!=r && a->live && a->hardware && a->kind==R3D_TEXTURE && a->offset && !a->references &&
+                    (!victim || a->last_use<victim->last_use)) victim=a;
+            }
+        }
+        if (!victim) return -ENOMEM;
+        victim->offset=0; victim->resident=false;
+    }
+    return -EAGAIN;
+}
+static unsigned texel_bytes(uint32_t format)
+{ return format<=R3D_RGBA8888 ? 4 : format<=R3D_ARGB4444 ? 2 : 1; }
+int render3d_texture_shape(const struct render3d_resource *r)
+{
+    if (!r || r->kind!=R3D_TEXTURE || r->format>R3D_A8 || !r->levels || r->levels>R3D_MIPS ||
+        !r->width || !r->height || r->width>1024 || r->height>1024 ||
+        (r->width&(r->width-1)) || (r->height&(r->height-1))) return -EINVAL;
+    uint32_t w=r->width,h=r->height,bytes=0;
+    for (unsigned i=0;i<R3D_MIPS;i++) {
+        if (i<r->levels) {
+            if (r->level_offset[i]!=bytes) return -EINVAL;
+            bytes+=w*h*4;
+            if (w==1 && h==1 && i+1<r->levels) return -EINVAL;
+            w=w>1 ? w/2 : 1; h=h>1 ? h/2 : 1;
+        } else if (r->level_offset[i]) return -EINVAL;
+    }
+    return r->bytes==bytes && r->pitch==r->width*4 ? 0 : -EINVAL;
+}
+static int texture_description(const struct render3d_texture_desc *t,struct render3d_resource *r)
+{
+    if (!t || t->format>R3D_A8 || !t->levels || t->levels>R3D_MIPS) return -EINVAL;
+    r->format=t->format; r->levels=t->levels; r->bytes=0;
+    unsigned w=r->width,h=r->height,bpp=texel_bytes(t->format);
+    uint64_t source_bytes=0;
+    for (unsigned i=0;i<R3D_MIPS;i++) {
+        const struct render3d_texture_image *im=&t->image[i];
+        if (i>=t->levels) { if (im->pixels || im->bytes || im->pitch) return -EINVAL; continue; }
+        if (!im->pixels || im->pitch<w*bpp || im->pitch>R3D_RAM_LIMIT ||
+            im->bytes!=(uint64_t)im->pitch*h || im->bytes>UINTPTR_MAX-(uintptr_t)im->pixels) return -EINVAL;
+        source_bytes+=im->bytes;
+        if (source_bytes>R3D_RAM_LIMIT) return -EINVAL;
+        r->level_offset[i]=r->bytes; r->bytes+=w*h*4;
+        if (w==1 && h==1 && i+1<t->levels) return -EINVAL;
+        w=w>1 ? w/2 : 1; h=h>1 ? h/2 : 1;
+    }
+    return render3d_texture_shape(r);
+}
+static void texture_decode(const struct render3d_texture_desc *t,struct render3d_resource *r)
+{
+    unsigned w=r->width,h=r->height,bpp=texel_bytes(t->format);
+    for (unsigned i=0;i<t->levels;i++) {
+        uint32_t *dst=(void *)((uint8_t *)r->shadow+r->level_offset[i]);
+        for (unsigned y=0;y<h;y++) for (unsigned x=0;x<w;x++) {
+            const uint8_t *src=(const uint8_t *)t->image[i].pixels+y*t->image[i].pitch+x*bpp;
+            uint32_t v=0; memcpy(&v,src,bpp);
+            if (t->format==R3D_RGBA8888) v=((uint32_t)src[3]<<24)|((uint32_t)src[0]<<16)|((uint32_t)src[1]<<8)|src[2];
+            else if (t->format==R3D_RGB565) {
+                unsigned rr=(v>>11)&31,g=(v>>5)&63,b=v&31;
+                v=0xff000000u|(((rr<<3)|(rr>>2))<<16)|(((g<<2)|(g>>4))<<8)|((b<<3)|(b>>2));
+            } else if (t->format==R3D_ARGB4444) {
+                v=((v&0xf000)<<16)|((v&0xf00)<<12)|((v&0xf0)<<8)|((v&15)<<4); v|=v>>4;
+            } else if (t->format==R3D_L8) v=0xff000000u|v*0x010101u;
+            else if (t->format==R3D_A8) v=(v<<24)|0xffffffu;
+            dst[y*w+x]=v;
+        }
+        w=w>1 ? w/2 : 1; h=h>1 ? h/2 : 1;
+    }
+}
+static int create_resource(struct render3d_service *s, uint32_t p, uint32_t id,
+    enum render3d_kind kind, uint32_t w, uint32_t h, const struct render3d_texture_desc *t, uint32_t *out)
 {
     if (s->busy) return -EBUSY;
     struct render3d_context *c=context(s,p,id);
@@ -146,7 +234,8 @@ int render3d_create_resource(struct render3d_service *s, uint32_t p, uint32_t id
     if (!out || kind<R3D_COLOR || kind>R3D_LINEAR_COLOR || !w || !h || w>R3D_MAX_SIZE || h>R3D_MAX_SIZE) return -EINVAL;
     if (kind==R3D_TEXTURE && ((w&(w-1)) || (h&(h-1)))) return -EINVAL;
     uint32_t pitch=w*(kind==R3D_D16 ? 2u : 4u), size=pitch*h;
-    if (kind==R3D_TEXTURE ? (!pixels || bytes!=size) : (pixels || bytes)) return -EINVAL;
+    struct render3d_resource r={.kind=kind,.width=w,.height=h,.pitch=pitch,.bytes=size,.hardware=c->hardware};
+    if (kind==R3D_TEXTURE) { int e=texture_description(t,&r); if (e) return e; size=r.bytes; }
     if (!c->resources) {
         c->resources=allocate(s,R3D_RESOURCES*sizeof(*c->resources));
         if (!c->resources) return -ENOMEM;
@@ -154,7 +243,6 @@ int render3d_create_resource(struct render3d_service *s, uint32_t p, uint32_t id
     struct render3d_resource *slot=0;
     for (unsigned i=0;i<R3D_RESOURCES;i++) if (!c->resources[i].live) { slot=&c->resources[i]; break; }
     if (!slot) return -EAGAIN;
-    struct render3d_resource r={.kind=kind,.width=w,.height=h,.pitch=pitch,.bytes=size,.hardware=c->hardware};
     if (c->hardware) {
         if (!usable(s)) return -EIO;
         int e=s->backend->layout(s->device,&r);
@@ -162,12 +250,43 @@ int render3d_create_resource(struct render3d_service *s, uint32_t p, uint32_t id
         if (!c->hardware) { r.hardware=false; r.offset=r.reserved=0; }
         /* Layout must not change the canonical RAM extent or kind. */
         if (r.bytes!=size || r.pitch!=pitch || r.width!=w || r.height!=h || r.kind!=(uint32_t)kind) return -EINVAL;
-        if (c->hardware) { e=reserve_vram(s,&r); if (e) return e; }
+        /* Texture residency is established at submission, after validation.
+         * Resource creation never overwrites an in-flight device allocation. */
+        if (c->hardware && kind!=R3D_TEXTURE) { e=reserve_vram(s,&r); if (e) return e; }
     }
     r.handle=handle(s); if (!r.handle) return -ENOSPC;
     r.shadow=allocate(s,size); if (!r.shadow) return -ENOMEM;
-    if (pixels) memcpy(r.shadow,pixels,size);
+    if (t) texture_decode(t,&r);
     r.live=true; *slot=r; *out=r.handle; return 0;
+}
+int render3d_create_texture(struct render3d_service *s,uint32_t p,uint32_t c,
+    const struct render3d_texture_desc *t,uint32_t *out)
+{
+    if (!t) return -EINVAL;
+    return create_resource(s,p,c,R3D_TEXTURE,t->width,t->height,t,out);
+}
+int render3d_create_resource(struct render3d_service *s,uint32_t p,uint32_t c,
+    enum render3d_kind kind,uint32_t w,uint32_t h,const void *pixels,size_t bytes,uint32_t *out)
+{
+    if (kind==R3D_TEXTURE) {
+        struct render3d_texture_desc t={.width=w,.height=h,.levels=1,
+            .image={{pixels,bytes,w<=1024 ? w*4 : 0}}};
+        return render3d_create_texture(s,p,c,&t,out);
+    }
+    if (pixels || bytes) return -EINVAL;
+    return create_resource(s,p,c,kind,w,h,0,out);
+}
+int render3d_validate_state(const struct render3d_request *q)
+{
+    const struct render3d_state *a=&q->state;
+    if (a->depth_func>R3D_GEQUAL || a->alpha_func>R3D_GEQUAL || a->alpha_ref>255 ||
+        a->alpha_test>1 || a->blend>1 || a->flat>1 || a->source>R3D_INV_SRC_ALPHA || a->destination>R3D_INV_SRC_ALPHA)
+        return -EINVAL;
+    for (unsigned i=0;i<2;i++) {
+        const struct render3d_sampler *t=&a->sampler[i];
+        if (t->combine>R3D_DECAL || t->filter>R3D_TRILINEAR || t->repeat_u>1 || t->repeat_v>1) return -EINVAL;
+    }
+    return 0;
 }
 int render3d_destroy_resource(struct render3d_service *s, uint32_t p, uint32_t id, uint32_t h)
 {
@@ -177,16 +296,19 @@ int render3d_destroy_resource(struct render3d_service *s, uint32_t p, uint32_t i
     if (!c || c->dying || !r || r->pending_free) return -ENOENT;
     r->pending_free=true; collect(s,c); return 0;
 }
-static void resources(struct render3d_context *c, const struct render3d_request *q, struct render3d_resource *r[4])
-{ r[0]=resource(c,q->target); r[1]=resource(c,q->depth); r[2]=resource(c,q->texture); r[3]=resource(c,q->copy_target); }
-static int validate(struct render3d_context *c, const struct render3d_request *q, struct render3d_resource *r[4], uint32_t *work)
+static void resources(struct render3d_context *c, const struct render3d_request *q, struct render3d_resource *r[R3D_REFS])
+{ r[0]=resource(c,q->target); r[1]=resource(c,q->depth); r[2]=resource(c,q->texture); r[3]=resource(c,q->copy_target); r[4]=resource(c,q->texture1); }
+static int validate(struct render3d_context *c, const struct render3d_request *q, struct render3d_resource *r[R3D_REFS], uint32_t *work)
 {
-    if (!q->flags || (q->flags&~R3D_FEATURES) || q->count>R3D_VERTICES || q->count%3 || q->clear_depth>65535) return -EINVAL;
+    if (!q->flags || (q->flags&~R3D_ALL_FEATURES) || q->count>R3D_VERTICES || q->count%3 || q->clear_depth>65535) return -EINVAL;
+    if (render3d_validate_state(q)) return -EINVAL;
     resources(c,q,r);
     if (!r[0] || r[0]->pending_free || r[0]->kind!=R3D_COLOR) return -EINVAL;
     if ((q->flags&(R3D_CLEAR_DEPTH|R3D_DEPTH_TEST|R3D_DEPTH_WRITE)) ?
         (!r[1] || r[1]->pending_free || r[1]->kind!=R3D_D16 || r[1]->width!=r[0]->width || r[1]->height!=r[0]->height) : q->depth!=0) return -EINVAL;
     if ((q->flags&R3D_TEXTURED) ? (!r[2] || r[2]->pending_free || r[2]->kind!=R3D_TEXTURE || !q->count) : q->texture!=0) return -EINVAL;
+    if ((q->flags&R3D_TEXTURE1) ? (!(q->flags&R3D_TEXTURED) || !r[4] || r[4]->pending_free ||
+        r[4]->kind!=R3D_TEXTURE || !q->count) : q->texture1!=0) return -EINVAL;
     if ((q->flags&R3D_COPY) ? (!r[3] || r[3]->pending_free || r[3]==r[0] ||
         (r[3]->kind!=R3D_COLOR && r[3]->kind!=R3D_LINEAR_COLOR) ||
         r[3]->width!=r[0]->width || r[3]->height!=r[0]->height) : q->copy_target!=0) return -EINVAL;
@@ -194,7 +316,9 @@ static int validate(struct render3d_context *c, const struct render3d_request *q
     for (unsigned i=0;i<q->count;i++) {
         const struct render3d_vertex *v=&q->vertices[i];
         if (v->x<0 || v->y<0 || v->x>(int32_t)(r[0]->width<<16) || v->y>(int32_t)(r[0]->height<<16) ||
-            v->z>65535 || v->rhw<256 || v->rhw>16777216 || v->u<0 || v->u>65536 || v->v<0 || v->v>65536) return -EINVAL;
+            v->z>65535 || v->rhw<256 || v->rhw>16777216 || v->u < -16*65536 || v->u>16*65536 || v->v < -16*65536 || v->v>16*65536 ||
+            q->uv1[i][0] < -16*65536 || q->uv1[i][0]>16*65536 ||
+            q->uv1[i][1] < -16*65536 || q->uv1[i][1]>16*65536) return -EINVAL;
         if (i%3==2) {
             int32_t minx=v->x,maxx=v->x,miny=v->y,maxy=v->y;
             for (unsigned j=i-2;j<i;j++) {
@@ -209,7 +333,7 @@ static int validate(struct render3d_context *c, const struct render3d_request *q
     }
     for (unsigned i=q->count;i<R3D_VERTICES;i++) {
         static const struct render3d_vertex zero;
-        if (memcmp(&q->vertices[i],&zero,sizeof(zero))) return -EINVAL;
+        if (memcmp(&q->vertices[i],&zero,sizeof(zero)) || q->uv1[i][0] || q->uv1[i][1]) return -EINVAL;
     }
     /* Reject expensive geometry before side effects; clear/copy split in rows. */
     if (pixels>R3D_PIXEL_BUDGET) return -EAGAIN;
@@ -231,18 +355,36 @@ int render3d_submit(struct render3d_service *s, uint32_t p, uint32_t id,
     unsigned slot=(s->head+s->queued)%R3D_JOBS;
     memcpy(s->ring[slot],input,bytes);
     struct render3d_request *q=(void *)s->ring[slot];
-    struct render3d_resource *r[4]; uint32_t work;
+    struct render3d_resource *r[R3D_REFS]; uint32_t work;
     int e=validate(c,q,r,&work); if (e) return e;
+    bool software=!c->hardware;
     if (c->hardware) {
         if (!usable(s)) return -EIO;
         /* Unmeasured hardware: one tiny outstanding slice; byte limits are
          * never a claim of a calibrated 20 ms throughput budget. */
         if (s->queued || q->count>3 || work>4096 || r[0]->width>64 || r[0]->height>64) return -EAGAIN;
-        e=s->backend->validate(s->device,q,r); if (e) return e;
+        if (q->flags&~s->backend->features) {
+            if (c->policy!=R3D_AUTO) return -EOPNOTSUPP;
+            software=true;
+        }
+        if (!software) {
+            /* Pin both selected textures before eviction; a bound/in-flight
+             * texture is never a victim, including a second stage. */
+            for (unsigned i=0;i<R3D_REFS;i++) if (r[i]) r[i]->references++;
+            for (unsigned i=0;i<R3D_REFS && !e;i++) if (r[i] && r[i]->kind==R3D_TEXTURE && !r[i]->offset)
+                e=texture_reserve(s,r[i]);
+            for (unsigned i=0;i<R3D_REFS;i++) if (r[i]) r[i]->references--;
+            if (!e) e=s->backend->validate(s->device,q,r);
+            if (e==-EOPNOTSUPP && c->policy==R3D_AUTO) { software=true; e=0; }
+            if (e) return e;
+        }
     }
-    for (unsigned i=0;i<4;i++) if (r[i]) r[i]->references++;
+    for (unsigned i=0;i<R3D_REFS;i++) if (r[i]) {
+        r[i]->references++;
+        r[i]->last_use=s->sequence+1;
+    }
     struct render3d_fence f={s->generation,id,++s->sequence,++c->ordinal_submitted};
-    s->jobs[slot]=(struct render3d_job){.context=id,.fence=f,.occupied=true};
+    s->jobs[slot]=(struct render3d_job){.context=id,.fence=f,.occupied=true,.software=software};
     c->queued++; c->submitted=f.sequence; s->queued++; *out=f; return 0;
 }
 void render3d_device_lost(struct render3d_service *s)
@@ -276,11 +418,11 @@ int render3d_step(struct render3d_service *s)
         s->jobs[i].context==j->context && s->jobs[i].fence.sequence<j->fence.sequence) {
         rotate(s); return 1;
     }
-    struct render3d_request *q=(void *)s->ring[slot]; struct render3d_resource *r[4]; resources(c,q,r);
+    struct render3d_request *q=(void *)s->ring[slot]; struct render3d_resource *r[R3D_REFS]; resources(c,q,r);
     int e=0,done=1; s->busy=true;
     if (c->dying) e=-ECANCELED;
     else if (c->failure) e=c->failure;
-    else if (c->hardware) {
+    else if (c->hardware && !j->software) {
         if (!usable(s)) e=-EIO;
         else {
             e=s->backend->enter(s->device);
@@ -300,9 +442,11 @@ int render3d_step(struct render3d_service *s)
         rotate(s);
         return 1;
     }
+    if (!e && j->software && c->hardware) for (unsigned i=0;i<R3D_REFS;i++)
+        if (r[i] && r[i]->kind!=R3D_TEXTURE) r[i]->resident=false;
     if (e && !c->failure) c->failure=e;
     c->completed=j->fence.sequence; c->ordinal_completed=j->fence.ordinal; c->queued--;
-    if (!(s->quarantined && c->hardware)) for (unsigned i=0;i<4;i++) if (r[i]) r[i]->references--;
+    if (!(s->quarantined && c->hardware)) for (unsigned i=0;i<R3D_REFS;i++) if (r[i]) r[i]->references--;
     j->result=e; j->occupied=false; j->complete=true;
     memset(s->ring[slot],0,sizeof(s->ring[slot])); s->head=(s->head+1)%R3D_JOBS; s->queued--;
     collect(s,c); return e ? e : 1;
