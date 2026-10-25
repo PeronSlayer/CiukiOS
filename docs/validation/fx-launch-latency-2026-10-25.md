@@ -143,6 +143,31 @@ no earlier fix could be verified on hardware.
 
 ## Research and decisions
 
+Review corrections (2026-10-25, directive `review-fixes-fx-launch.md`):
+[Microsoft MapViewOfFile](https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-mapviewoffile)
+distinguishes read-only view permissions from coherent shared backing, and
+describes copy-on-write pages becoming private on writes. This agrees with
+CiukiOS `map_view`/`ua_alias`: a read-only extent can still have shared backing.
+`ua_pin` keeps mappings and pages alive but does not exclude alias writes.
+After pinning, the loader must therefore check every extent for private
+object backing, no shared object, and no write permission before validating,
+hashing or seeding. Checking the backing kind also covers native shared
+aliases whose extent kind is `UA_ANON`. The ordinary `W32_LDR_OPEN` private
+read-only snapshot remains accepted even when its original file changes.
+This preserves one hash per accepted snapshot without copying it again.
+
+[Microsoft time-interval guidance](https://learn.microsoft.com/en-us/windows/win32/sysinfo/acquiring-high-resolution-time-stamps)
+defines latency using the start and end events of the measured activity.
+Here the start event is entry to `proc_spawn`, including user argument
+copying and child preparation. Capture the existing `proc_launch_now()`
+clock unconditionally there; the console's quiet setting must not change
+the measured interval. This uses CiukiOS's existing 1 ms clock resolution;
+it does not adopt the modern Windows counter API or its implementation.
+The local Windows 98 Resource Kit chapter 26, `wrkc26_10.htm` paragraphs on
+VCACHE/VMM and `wrkc26_4.htm` “Optimizing Paging”, was checked for the
+existing launch/cache context; neither specifies immutable loader buffers
+or CiukiOS instrumentation boundaries. No private kit text is redistributed.
+
 The owner's Windows 98 Resource Kit (`build/rskt/`) chapter 26 “WinAlign and
 MapCache” (`wrkc26_10.htm`): restarting a program shortly after closing it
 runs much of it from VCACHE rather than from disk; chapter 26 “Optimizing
@@ -171,7 +196,8 @@ Decisions:
    (correct, slower). `cache_stats` reports buckets, pages, lookups and
    probes. The table pages sit outside the C4 byte budget (0.4 % of it).
 2. **One SHA-256 per W32_LDR_IMAGE** (`sections.c`): the section lookup
-   reuses the digest `w32_loader_image` computed over the same pinned bytes.
+   reuses the digest `w32_loader_image` computed over the same pinned,
+   private read-only bytes, as enforced by `w32_loader_call` after pinning.
    `w32_image_section_map` (process creation) still hashes once.
 3. **Start log after the burst** (`mount.c`, `vfs.c`): the flusher waits
    until no start has been queued for 10 s, at most 60 s, and still writes
@@ -257,6 +283,18 @@ index (the reclaim case rebuilds the F1 chain geometry with a stride of
 exercised); `bounded_work_test.c` (f0-44 spans) still builds one chain of
 every slot, now by choosing LBAs whose bucket is 0, and its find/unhash/
 victim walks keep their preemption bound.
+
+Review regressions: the kernel-core harness presents a read-only section
+view with a writable alias, holds image publication busy and changes the
+alias from the serialization wait callback. Before the review fix, loading
+succeeds with the old digest; afterward the source is rejected before the
+hash or wait and its pin is released. A private snapshot is accepted while
+the same callback mutates its original shared source during the wait, with
+exactly one hash and the original bytes mapped. A writable later source
+extent is rejected too. Changing the file after `W32_LDR_OPEN` leaves its
+snapshot's mapped contents intact. The launch harness advances the clock
+25 ms in the first argument range walk before `proc_launch_start`: the
+quiet record must retain the entry timestamp and include this delay.
 
 ## Expected effect on the T23
 

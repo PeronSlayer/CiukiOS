@@ -280,8 +280,8 @@ static void spawn_cleanup(void *operation)
 
 int proc_spawn(uint32_t args_va)
 {
+    uint64_t spawn_us = proc_launch_now();
     struct process *parent = proc_current();
-    uint64_t spawn_us = proc_launch_enabled() ? proc_launch_now() : 0;
     uint64_t click_us = parent->launch_pending ? parent->launch_click_us : spawn_us;
     parent->launch_pending = false; /* even an invalid or cancelled attempt consumes BEGIN */
     struct ciuki_spawn_args a;

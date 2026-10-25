@@ -8,6 +8,12 @@
 static bool quiet_boot = true;
 static unsigned launch_lines;
 static char launch_log[4096];
+static void delay_spawn_arguments(void)
+{
+    CHECK(!proc_thread_for(g_current)->launch_loading);
+    on_preempt_point = 0;
+    g_ticks += 25;
+}
 bool console_quiet(void) { return quiet_boot; }
 void klog(const char *fmt, ...)
 {
@@ -105,12 +111,15 @@ static void measurement(void)
     /* fx-launch: a quiet boot keeps only the spawn stage, as one record at
      * the end of image loading; later stages and markers stay verbose-only. */
     g_ticks=1200;
-    int quiet_pid=proc_spawn(prepare_spawn_args(desktop)); CHECK(quiet_pid>0);
+    uint32_t quiet_args=prepare_spawn_args(desktop);
+    /* Yield in the first user-range walk, before child preparation/start. */
+    walk_work=127; on_preempt_point=delay_spawn_arguments;
+    int quiet_pid=proc_spawn(quiet_args); CHECK(quiet_pid>0 && !on_preempt_point);
     struct proc_launch *q=&proc_find((uint32_t)quiet_pid)->launch;
     CHECK(q->active && q->quiet && q->finished && launch_lines==lines+1);
-    CHECK(q->spawn_us==1200000 && q->elf_us==1275000 && q->volume_bytes==16384 && q->disk_reads==32 && q->dma_ms==5);
+    CHECK(q->spawn_us==1200000 && q->elf_us==1300000 && q->volume_bytes==16384 && q->disk_reads==32 && q->dma_ms==5);
     char quiet_record[200];
-    snprintf(quiet_record,sizeof(quiet_record),"[launch-stage] name=fixture pid=%d spawn_us=1200000 elf_us=1275000 "
+    snprintf(quiet_record,sizeof(quiet_record),"[launch-stage] name=fixture pid=%d spawn_us=1200000 elf_us=1300000 "
              "read_bytes=16384 disk_bytes=16384 disk_requests=32 dma_ms=5",quiet_pid);
     CHECK(strstr(launch_log,quiet_record));
     proc_launch_volume_read(4096,4096); CHECK(q->volume_bytes==16384); /* finished: no later accounting */

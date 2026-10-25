@@ -264,6 +264,9 @@ static bool object_area(const struct ua_extent *e)
 { return e && e->backing && e->kind!=UA_SHARED &&
          (e->kind!=UA_W32 || !e->w32_type || e->w32_type==W32_MEM_PRIVATE); }
 
+bool ua_extent_private(const struct ua_extent *e)
+{ return object_area(e) && !e->shared.object && e->backing->kind==MM_BACKING_PRIVATE; }
+
 static bool span(uint32_t base, uint32_t bytes, uint32_t *end)
 {
     if (!bytes || (base & (PAGE_SIZE - 1)) || bytes > UINT32_MAX - (PAGE_SIZE - 1))

@@ -724,7 +724,7 @@ static int image_seed(
     return 0;
 }
 /* `known`: the image digest when the caller already hashed these exact,
- * pinned bytes (w32_loader_image); NULL hashes them here. */
+ * immutable bytes (w32_loader_image); NULL hashes them here. */
 static int image_section_map_inner(
     struct process *p, const struct ciuki_file *f, const struct w32_image *im, bool builtin, uint32_t *mapped,
     const uint8_t *known)
@@ -916,8 +916,8 @@ int w32_loader_image(struct process *p,const struct ciuki_file *f,struct w32_ima
     if(!reused){
         bool builtin=!!(flags&W32_LDR_BUILTIN)&&!datafile;
         uint32_t mapped=im->base;
-        /* fx-launch: the bytes stay pinned for this call, so the digest
-         * just computed identifies them; hashing every DLL a second time in
+        /* W32_LDR_IMAGE pins and checks private read-only backing, so the
+         * digest remains valid across the serialization wait. Hashing twice in
          * the section lookup doubled the SHA-256 work of each Win32 start. */
         err=image_map_serialized(p,f,im,builtin,&mapped,digest);
         if(err && !(flags&W32_LDR_EXACT) && !builtin && (im->directories[11]) && !(im->flags&1)){
