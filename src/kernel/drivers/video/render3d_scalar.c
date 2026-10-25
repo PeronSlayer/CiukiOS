@@ -32,17 +32,28 @@ static bool compare(uint32_t a,uint32_t b,unsigned func)
 }
 static int32_t coordinate(const struct render3d_vertex v[3],const int32_t uv[3],const int64_t w[3])
 {
-    int64_t denom=0,numer=0;
+    int64_t denom=0,numer=0,tail=0;
     for (unsigned i=0;i<3;i++) {
+        int64_t product=(int64_t)uv[i]*v[i].rhw;
         denom+=(int64_t)v[i].rhw*w[i];
-        numer+=((int64_t)uv[i]*v[i].rhw/65536)*w[i];
+        /* Keep all Q32 product bits. Signed mip-neighbour weights can make
+         * the unsplit weighted sum exceed int64 even though UV is bounded.
+         * Here |numer| < 2^51, |tail| < 2^39, |denom| <= 2^46+2^40. */
+        numer+=(product/65536)*w[i];
+        tail+=(product%65536)*w[i];
     }
     /* Neighbour samples behind W=0 select a maximally coarse mip. */
     if (denom<=0) return 32*65536;
+    numer+=tail/65536; tail%=65536;
     int64_t whole=numer/denom;
     if (whole>32) return 32*65536;
     if (whole < -32) return -32*65536;
-    int64_t value=whole*65536+(numer%denom)*65536/denom;
+    /* Divide only after recovery. Remainder scaling stays below 2^63;
+     * carry a fractional remainder of opposite sign toward zero as well. */
+    int64_t remainder=(numer%denom)*65536+tail;
+    int64_t value=whole*65536+remainder/denom;
+    if (value>0 && remainder%denom<0) value--;
+    if (value<0 && remainder%denom>0) value++;
     if (value>32*65536) value=32*65536;
     if (value < -32*65536) value=-32*65536;
     return (int32_t)value;

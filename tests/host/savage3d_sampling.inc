@@ -81,21 +81,44 @@ static uint32_t sample3d(unsigned stage,long double u,long double v,long double 
     }
     return out;
 }
-static uint32_t combine3d(uint32_t src,uint32_t tex,unsigned stage)
+static unsigned argument3d(unsigned selector,bool second,uint32_t diffuse,uint32_t current,uint32_t tex,unsigned shift)
+{
+    /* RE046-B MM4859C/MM485A0: Arg1 and Arg2 use different encodings.
+     * Factor/specular are outside the emitted subset, never diffuse aliases. */
+    if (second) {
+        switch (selector) {
+        case 0: return current>>shift&255;
+        case 1: return diffuse>>shift&255;
+        case 4: return tex>>shift&255;
+        default: CHECK(false); return 0;
+        }
+    }
+    switch (selector) {
+    case 0: return tex>>shift&255;
+    case 1: return diffuse>>shift&255;
+    case 3: return current>>shift&255;
+    default: CHECK(false); return 0;
+    }
+}
+static uint32_t combine3d(uint32_t diffuse,uint32_t current,uint32_t tex,unsigned stage)
 {
     uint32_t bc=m.reg[(0x4859c+stage*4)/4],out=0;
+    /* Inversion, bias, diffuse postmultiply and shifts are not emitted. */
+    CHECK(!(bc&0xe400c0e0u));
+    CHECK(!(m.reg[(0x4858c+stage*4)/4]&0xfff00000u));
     for (unsigned shift=0;shift<32;shift+=8) {
-        unsigned a=src>>shift&255,b=tex>>shift&255,c=0;
-        switch (bc) {
-        case 0x00110011: case 0x00130013: c=(a*b+127)/255; break;
-        case 0x00840410: c=b; break;
-        case 0x00850410: case 0x00870410: c=shift==24 ? a : b; break;
-        case 0x00900405: case 0x00900400: c=shift==24 ? b : a; break;
-        case 0x00852a04: case 0x00832a00: c=shift==24 ? a : (a*(255-(tex>>24))+b*(tex>>24)+127)/255; break;
-        case 0x18110c11: case 0x18130c13: c=shift==24 ? (a*b+127)/255 : a+b>255 ? 255 : a+b; break;
-        default: CHECK(false);
-        }
-        out|=c<<shift;
+        bool alpha=shift==24;
+        unsigned ctl=alpha ? bc>>16 : bc;
+        unsigned a=argument3d(ctl&3,false,diffuse,current,tex,shift);
+        unsigned b=argument3d(ctl>>2&7,true,diffuse,current,tex,shift);
+        unsigned mod1=(ctl&(alpha ? 1u<<5 : 1u<<8)) ? 0 : a;
+        unsigned mod2=ctl>>(alpha ? 6 : 9)&3,add=ctl>>(alpha ? 8 : 11)&(alpha ? 1 : 3);
+        CHECK(mod2!=3 && add<=1); /* no premod/reserved operation emitted */
+        unsigned multiplier=mod2==0 ? b : mod2==1 ? tex>>24 : 255;
+        unsigned sum=add ? b : 0;
+        bool blending=ctl&(alpha ? 1u<<9 : 1u<<13);
+        unsigned c=(mod1*multiplier+sum*(blending ? 255-(tex>>24) : 255)+127)/255;
+        out|=(c>255 ? 255 : c)<<shift;
     }
     return out;
 }

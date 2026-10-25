@@ -27,10 +27,11 @@ static void texture_fixture3d(struct render3d_texture_desc *t,unsigned format,un
         w=w>1 ? w/2 : 1;
     }
 }
-static void equivalent3d(const struct render3d_host *host,struct render3d_request *q,
-    const struct render3d_texture_desc *tex,bool software,unsigned case_id)
+static void equivalent_textures3d(const struct render3d_host *host,struct render3d_request *q,
+    const struct render3d_texture_desc *tex,const struct render3d_texture_desc *tex1,
+    bool software,unsigned case_id,const uint32_t *expected)
 {
-    uint32_t c[2],h[2][4];
+    uint32_t c[2],h[2][5];
     struct render3d_service *services[]={&scratch3d,&reference3d};
     CHECK(!render3d_create_context(services[0],9,software ? R3D_AUTO : R3D_HARDWARE_REQUIRED,&c[0]));
     CHECK(!render3d_create_context(services[1],9,R3D_SOFTWARE,&c[1]));
@@ -38,10 +39,11 @@ static void equivalent3d(const struct render3d_host *host,struct render3d_reques
         CHECK(!render3d_create_resource(services[side],9,c[side],R3D_COLOR,16,16,0,0,&h[side][0]));
         CHECK(!render3d_create_resource(services[side],9,c[side],R3D_D16,16,16,0,0,&h[side][1]));
         if (tex) CHECK(!render3d_create_texture(services[side],9,c[side],tex,&h[side][2]));
+        if (tex1) CHECK(!render3d_create_texture(services[side],9,c[side],tex1,&h[side][4]));
         CHECK(!render3d_create_resource(services[side],9,c[side],R3D_LINEAR_COLOR,16,16,0,0,&h[side][3]));
         q->target=h[side][0]; q->depth=h[side][1]; q->copy_target=h[side][3];
         q->texture=tex ? h[side][2] : 0;
-        q->texture1=q->flags&R3D_TEXTURE1 ? q->texture : 0;
+        q->texture1=q->flags&R3D_TEXTURE1 ? (tex1 ? h[side][4] : q->texture) : 0;
         struct render3d_fence f; unsigned before=writes3d;
         CHECK(!render3d_submit(services[side],9,c[side],q,sizeof(*q),&f));
         unsigned steps=0;
@@ -54,6 +56,10 @@ static void equivalent3d(const struct render3d_host *host,struct render3d_reques
     for (unsigned side=0;side<2;side++) {
         CHECK(!render3d_readback(services[side],9,c[side],h[side][3],pixels[side],sizeof(pixels[side])));
         CHECK(!render3d_readback(services[side],9,c[side],h[side][1],depth[side],sizeof(depth[side])));
+        if (expected && pixels[side][0]!=*expected) {
+            fprintf(stderr,"fixed case=%u side=%u pixel=0 actual=%08x expected=%08x\n",case_id,side,pixels[side][0],*expected);
+            CHECK(false); exit(1);
+        }
     }
     for (unsigned i=0;i<256;i++) {
         /* Sentinel outside geometry is an exact coverage oracle. */
@@ -72,6 +78,9 @@ static void equivalent3d(const struct render3d_host *host,struct render3d_reques
     CHECK(!locks && !drawing && !count3d);
     (void)host;
 }
+static void equivalent3d(const struct render3d_host *host,struct render3d_request *q,
+    const struct render3d_texture_desc *tex,bool software,unsigned case_id)
+{ equivalent_textures3d(host,q,tex,0,software,case_id,0); }
 static struct render3d_request fixed_request3d(void)
 {
     struct render3d_request q={.flags=R3D_CLEAR_COLOR|R3D_CLEAR_DEPTH|R3D_DEPTH_TEST|R3D_DEPTH_WRITE|R3D_COPY,
@@ -83,11 +92,59 @@ static struct render3d_request fixed_request3d(void)
     for (unsigned i=0;i<3;i++) { q.uv1[i][0]=q.vertices[i].v; q.uv1[i][1]=q.vertices[i].u; }
     return q;
 }
+static void replace_selectors3d(const struct render3d_host *host)
+{
+    static uint8_t first_image[sizeof(images3d[0])];
+    const unsigned second_formats[]={R3D_RGB565,R3D_L8,R3D_A8};
+    unsigned cases=0;
+    for (unsigned first=0;first<6;first++) for (unsigned second=0;second<3;second++)
+    for (unsigned combine=0;combine<4;combine++) for (unsigned fragment=0;fragment<3;fragment++) {
+        if (first==R3D_A8 && combine==R3D_DECAL) continue; /* separately tested software state */
+        struct render3d_texture_desc a,b;
+        texture_fixture3d(&a,first,16,1);
+        memcpy(first_image,a.image[0].pixels,a.image[0].bytes); a.image[0].pixels=first_image;
+        texture_fixture3d(&b,second_formats[second],32,1);
+        struct render3d_request q=fixed_request3d(); q.flags|=R3D_TEXTURED|R3D_TEXTURE1;
+        q.state.sampler[0].combine=combine; q.state.sampler[1].combine=R3D_REPLACE;
+        if (fragment==1) { q.state.blend=1; q.state.source=R3D_SRC_ALPHA; q.state.destination=R3D_INV_SRC_ALPHA; }
+        if (fragment==2) { q.state.alpha_test=1; q.state.alpha_func=R3D_LESS; q.state.alpha_ref=112; }
+        equivalent_textures3d(host,&q,&a,&b,false,10000+cases++,0);
+    }
+    CHECK(cases==207);
+    printf("Savage stage-1 REPLACE: %u distinct-texture mixed-format scalar/packet cases, alpha rejection/depth writes/blending PASS\n",cases);
+}
+static void signed_coordinates3d(const struct render3d_host *host)
+{
+    uint32_t pixels[64];
+    for (unsigned i=0;i<64;i++) pixels[i]=i==0 ? 0xffff0000u : i==63 ? 0xff0000ffu : 0xff00ff00u;
+    unsigned cases=0;
+    for (unsigned stage=0;stage<2;stage++) for (unsigned axis=0;axis<2;axis++)
+    for (unsigned sign=0;sign<2;sign++) for (unsigned varying=0;varying<2;varying++) {
+        struct render3d_texture_desc t={.format=R3D_ARGB8888,.width=axis ? 1 : 64,.height=axis ? 64 : 1,.levels=1};
+        t.image[0]=(struct render3d_texture_image){pixels,sizeof(pixels),t.width*4};
+        struct render3d_request q=fixed_request3d(); q.flags|=R3D_TEXTURED|(stage ? R3D_TEXTURE1 : 0);
+        for (unsigned i=0;i<3;i++) {
+            q.vertices[i].rhw=256+(varying ? i*128 : 0);
+            q.vertices[i].u=q.vertices[i].v=q.uv1[i][0]=q.uv1[i][1]=0;
+            int32_t coord=sign ? 128 : -128;
+            if (stage) q.uv1[i][axis]=coord;
+            else if (axis) q.vertices[i].v=coord;
+            else q.vertices[i].u=coord;
+        }
+        for (unsigned s=0;s<2;s++) q.state.sampler[s]=(struct render3d_sampler){R3D_REPLACE,R3D_NEAREST,1,1};
+        uint32_t expected=sign ? 0xffff0000u : 0xff0000ffu;
+        equivalent_textures3d(host,&q,&t,0,false,11000+cases++,&expected);
+    }
+    CHECK(cases==16);
+    printf("Savage signed perspective UV: %u contrasting-texel cases, both stages/axes, reciprocal W 1/256 and varying, signed repeat PASS\n",cases);
+}
 static void fixed_function3d(const struct render3d_host *host)
 {
     CHECK(!render3d_close(&scratch3d));
     render3d_init(&scratch3d,host,42,savage3d_backend(),&gpu3d,gpu3d.heap);
     render3d_init(&reference3d,host,42,0,0,(struct render3d_extent){0});
+    replace_selectors3d(host);
+    signed_coordinates3d(host);
     unsigned cases=0;
     for (unsigned func=0;func<8;func++) for (unsigned z=0;z<3;z++) for (unsigned write=0;write<2;write++) {
         struct render3d_request q=fixed_request3d(); q.state.depth_func=func;

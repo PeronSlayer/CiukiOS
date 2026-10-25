@@ -442,7 +442,10 @@ static int state(struct savage3d_device *d,const struct render3d_request *q,stru
         ctrl[stage]=(mips ? 10u<<3 : 0x40u)|filter|(mips ? 4u : 0u)|((mips ? t->levels-1 : 15u)<<12)|
             (s->repeat_u ? 0u : 1u<<16)|(s->repeat_v ? 0u : 1u<<18);
         bool rgb=t->format==R3D_RGB565 || t->format==R3D_L8,alpha=t->format==R3D_A8;
-        if (s->combine==R3D_REPLACE) blend[stage]=alpha ? (stage ? 0x00900400 : 0x00900405) : rgb ? 0x00850410 : 0x00840410;
+        /* RE046-B MM485A0: stage 1 preserves CURRENT, not diffuse (or
+         * the expanded white RGB of an alpha-only texture). */
+        if (s->combine==R3D_REPLACE) blend[stage]=alpha ? (stage ? 0x00900403 : 0x00900405) :
+            rgb ? (stage ? 0x00870410 : 0x00850410) : 0x00840410;
         else if (s->combine==R3D_DECAL) blend[stage]=rgb ? (stage ? 0x00870410 : 0x00850410) : (stage ? 0x00832a00 : 0x00852a04);
         else if (s->combine==R3D_ADD && !alpha) blend[stage]=stage ? 0x18130c13 : 0x18110c11;
         else blend[stage]=stage ? 0x00130013 : 0x00110011;

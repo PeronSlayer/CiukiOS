@@ -93,6 +93,7 @@ static void raster3d(void)
             long double diffuse=(a*((colors[0]>>shift)&255)+b*((colors[1]>>shift)&255)+c*((colors[2]>>shift)&255))/area;
             color|=(uint32_t)(diffuse+.5L)<<shift;
         }
+        uint32_t diffuse=color;
         for (unsigned stage=0;stage<2;stage++) {
             if (!(stage ? second : textured)) continue;
             long double *us=stage ? u1 : u,*vs=stage ? v1 : v;
@@ -110,7 +111,7 @@ static void raster3d(void)
                 if (du>rho) rho=du;
                 if (dv>rho) rho=dv;
             }
-            color=combine3d(color,sample3d(stage,uu,vv,rho),stage);
+            color=combine3d(diffuse,color,sample3d(stage,uu,vv,rho),stage);
         }
         uint32_t dc1=m.reg[0x485e4/4];
         if ((dc1&0x80000000u) && !compare3d(color>>24,m.reg[0x485e0/4]>>24,dc1>>28&7)) continue;

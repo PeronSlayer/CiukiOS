@@ -30,6 +30,9 @@ class RenderTests(unittest.TestCase):
             'src/kernel/drivers/video/render3d.c', 'src/kernel/drivers/video/render3d_scalar.c',
             'src/kernel/drivers/video/s3savage/savage3d.c'])
 
+    def test_scalar_recovery(self):
+        self.build_run('scalar_recovery', ['tests/host/render3d_scalar_test.c'])
+
     def test_shared_transport(self):
         OUT.mkdir(parents=True, exist_ok=True)
         source=(ROOT/'tests/host/savage2d_test.c').read_text()
