@@ -627,6 +627,17 @@ static int transfer(struct dosvm *v, uint32_t linear, void *buffer, unsigned byt
     while (bytes) {
         unsigned n = PAGE_SIZE - (linear & (PAGE_SIZE - 1));
         if (n > bytes) n = bytes;
+        uint32_t window;
+        if (dosvm_vbe_window(v, linear, &window)) {
+            /* war2vbe: a windowed VBE mode's A0000h-AFFFFh is 64 KiB of the
+             * VBE buffer (4F05h bank). Bank and page boundaries coincide, so
+             * this page-bounded span is one buffer page; a kernel store sets
+             * no PTE D bit, so mark the page for the presenter. */
+            int e = transfer(v, window, b, n, write, wait);
+            if (e) return e;
+            if (write) dosvm_vbe_mark(v, (window - v->vbe_buffer.base) / PAGE_SIZE, 1);
+            b += n; linear += n; bytes -= n; continue;
+        }
         /* The VBE buffer is a pool allocation. Conventional-memory DMA
          * never names it, even while a direct framebuffer is active. */
         if (linear >= VM_POOL_BASE && v->vbe_direct.pages) {

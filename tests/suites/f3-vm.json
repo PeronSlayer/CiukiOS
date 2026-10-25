@@ -6595,12 +6595,12 @@
           {
             "where": {
               "event": "DATA",
-              "case": "vbe_refusal",
+              "case": "vbe_window",
               "mode": 257
             },
             "fields": {
               "status": {
-                "eq": 335
+                "eq": 79
               },
               "active": {
                 "eq": 0
@@ -6611,12 +6611,12 @@
           {
             "where": {
               "event": "DATA",
-              "case": "vbe_refusal",
+              "case": "vbe_window",
               "mode": 259
             },
             "fields": {
               "status": {
-                "eq": 335
+                "eq": 79
               },
               "active": {
                 "eq": 0
@@ -6627,12 +6627,12 @@
           {
             "where": {
               "event": "DATA",
-              "case": "vbe_refusal",
+              "case": "vbe_window",
               "mode": 273
             },
             "fields": {
               "status": {
-                "eq": 335
+                "eq": 79
               },
               "active": {
                 "eq": 0
@@ -6643,12 +6643,12 @@
           {
             "where": {
               "event": "DATA",
-              "case": "vbe_refusal",
+              "case": "vbe_window",
               "mode": 276
             },
             "fields": {
               "status": {
-                "eq": 335
+                "eq": 79
               },
               "active": {
                 "eq": 0
@@ -7075,12 +7075,12 @@
           {
             "where": {
               "event": "DATA",
-              "case": "vbe_refusal",
+              "case": "vbe_window",
               "mode": 257
             },
             "fields": {
               "status": {
-                "eq": 335
+                "eq": 79
               },
               "active": {
                 "eq": 0
@@ -7091,12 +7091,12 @@
           {
             "where": {
               "event": "DATA",
-              "case": "vbe_refusal",
+              "case": "vbe_window",
               "mode": 259
             },
             "fields": {
               "status": {
-                "eq": 335
+                "eq": 79
               },
               "active": {
                 "eq": 0
@@ -7107,12 +7107,12 @@
           {
             "where": {
               "event": "DATA",
-              "case": "vbe_refusal",
+              "case": "vbe_window",
               "mode": 273
             },
             "fields": {
               "status": {
-                "eq": 335
+                "eq": 79
               },
               "active": {
                 "eq": 0
@@ -7123,12 +7123,12 @@
           {
             "where": {
               "event": "DATA",
-              "case": "vbe_refusal",
+              "case": "vbe_window",
               "mode": 276
             },
             "fields": {
               "status": {
-                "eq": 335
+                "eq": 79
               },
               "active": {
                 "eq": 0

@@ -612,16 +612,20 @@ WAR2_SOUND_DIR = WAR2_DIR + "/DRIVERS"
 
 def war2_files():
     """Generated [(disk path, bytes)]: DRIVERS/DIG.INI, DRIVERS/MDI.INI and
-    WAR2.BAT. WAR2.EXE stops with "run UVCONFIG" until UVCONFIG.EXE has written
-    UNIVBE.DRV for the video card (setup.exe does that at install time; it is
-    machine specific), so the launcher runs it once."""
+    WAR2.BAT. WAR2.EXE looks for a VESA BIOS first (INT 10h 4F00h/4F01h, then
+    4F02h 101h windowed and the 4F0Ah protected-mode table) and only without
+    one for UNIVBE.DRV, which UVCONFIG.EXE writes. The DOS VM's VBE BIOS serves
+    every display since war2vbe (2026-10-25, host-runner INT 10h trace), so the
+    launcher starts WAR2.EXE directly: UVCONFIG's interactive dialog detected
+    only "Generic VGA, 256 KB" in the VM and is not needed. UVCONFIG.EXE stays
+    installed with the demo."""
     files = []
     for name, device, driver in WAR2_SOUND:
         text = (";Miles Design Audio Interface Library V3.03 of 18-Jun-95\r\n"
                 f"DEVICE      {device}\r\nDRIVER      {driver}\r\nIO_ADDR     220h\r\n"
                 "IRQ         7\r\nDMA_8_BIT   1\r\nDMA_16_BIT  5\r\n")
         files.append((f"{WAR2_SOUND_DIR}/{name}", text.encode("ascii")))
-    files.append((f"{WAR2_DIR}/WAR2.BAT", b"@ECHO OFF\r\nIF NOT EXIST UNIVBE.DRV UVCONFIG.EXE\r\nWAR2.EXE\r\n"))
+    files.append((f"{WAR2_DIR}/WAR2.BAT", b"@ECHO OFF\r\nWAR2.EXE\r\n"))
     return files
 
 

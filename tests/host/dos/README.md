@@ -40,7 +40,9 @@ DOS extenders in the DOS Box (DOSX) run the same guest with two DOS/4GW
 clients of the VMM's DPMI host: `DPMI4GW.EXE` (Open Watcom's DOS/4GW 1.97:
 DPMI services, IRQ0, virtual IF, INT 21h date/time and file I/O through the
 extender) and the pinned Warcraft II demo under DOS/4GW Professional 1.97,
-with and without the `EMMXXXX0` device, until its own video check:
+with and without the `EMMXXXX0` device: its VESA start on the VM's VBE BIOS
+(INT 10h trace) and, with the device, Esc past its movies to the 640x480x256
+title screen in the window:
 
 ```sh
 nice -n 19 bash tests/host/dos/run_dos_extenders.sh
@@ -49,7 +51,8 @@ nice -n 19 bash tests/host/dos/run_dos_extenders.sh
 It needs Open Watcom under `/opt/watcom` and writes its logs under
 `build/host/dos/extenders/`. The runner has no x87, so `GUEST_NO_X87` models
 a machine without a coprocessor. Decisions and sources:
-[selector 40h and nested saved flags images](../../../docs/design/dos-dpmi-contract.md#selector-40h-and-nested-saved-flags-images-2026-10-25).
+[selector 40h and nested saved flags images](../../../docs/design/dos-dpmi-contract.md#selector-40h-and-nested-saved-flags-images-2026-10-25),
+[VBE modes in the DOS window](../../../docs/design/dos-dpmi-contract.md#vbe-modes-in-the-dos-window-2026-10-25).
 
 Run one command at a time:
 
@@ -385,7 +388,13 @@ GUEST_KERNEL=unified GUEST_INT21_TRACE=1 GUEST_PLAY_MS=40000 \
 real-mode return stub), `play:` runs `GUEST_PLAY_MS` simulated milliseconds
 with one `H61 PLAY` progress line per second, and `GUEST_PLAY_QUIT=1` leaves
 DOOM through its menu (Esc, Up, Enter, y) and requires the shell prompt with
-no EXEC frame outstanding. Not QEMU or hardware evidence. Decisions:
+no EXEC frame outstanding. `GUEST_INT10_TRACE=1` prints each INT 10h the VM's
+BIOS serves (an `I10` line with input and output registers, VBE 4F00h/4F01h
+blocks too; teletype and cursor calls left out), `GUEST_PLAY_KEYS=01@12000,...`
+presses and releases a window key (set-1 code, hex) at that simulated
+millisecond of `play:`, and the end of `play:` prints the window picture
+(`H61 PLAY FRAME`: mode, size, non-black pixels; `GUEST_PLAY_SHOT=<file.ppm>`
+writes the 640x480 image). Not QEMU or hardware evidence. Decisions:
 `docs/validation/f3-61-unified-dos-game-watchdog.md`.
 
 ## f3-63 retirement

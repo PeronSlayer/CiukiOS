@@ -67,8 +67,8 @@ static const struct desk_game_entry desk_games[] = {
     {"Wolfenstein 3D (shareware)", "Wolfenstein 3D", "\\WOLF3D\\WOLF3D.EXE", "input-gaming"},
     {"DOOM (shareware)", "DOOM", "\\DOOM\\DOOM.EXE -config CIUKI.CFG", "input-gaming"},
     {"Quake (shareware)", "Quake", "\\QUAKE\\QUAKE.EXE", "input-gaming"},
-    /* Blizzard's Warcraft II demo (owner 2026-10-25). WAR2.BAT runs UVCONFIG.EXE once (UNIVBE.DRV, machine
-     * specific) and then WAR2.EXE; DIG.INI/MDI.INI are generated for the VM's Sound Blaster. */
+    /* Blizzard's Warcraft II demo (owner 2026-10-25). WAR2.BAT starts WAR2.EXE, which uses the DOS VM's
+     * VESA BIOS (640x480x256 in the window, war2vbe); DIG.INI/MDI.INI are generated for the VM's Sound Blaster. */
     {"Warcraft II (demo)", "Warcraft II", "\\WAR2\\WAR2.BAT", "input-gaming"},
 };
 #define DESK_GAME_COUNT (sizeof(desk_games) / sizeof(desk_games[0]))

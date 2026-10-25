@@ -1682,3 +1682,158 @@ and the review's `POP ECX / AND ECX,200h / STI / SUB ESP,20h` sequence,
 including the inner POPFD/NOP and subsequent ADD ESP. Both fail on the
 reviewed `af5ecf11a`; verification commands, results and the DOOM replay
 comparison are recorded in `build/codex/war2fix-report.md` for lead review.
+
+### VBE modes in the DOS window (2026-10-25)
+
+**Symptom.** QEMU (std VGA), image of `main` with the selector 40h fix, DOS
+Box, Programs > Games > Warcraft II (demo): DOS/4GW started, then
+`Warcraft could not find a VESA video driver. Type UVCONFIG ...`; UniVBE
+5.1a's `UVCONFIG.EXE` found only "Generic VGA, 256 KB". The host runner
+(`GUEST_INT10_TRACE=1`, `tests/host/dosvm_guest.c`) shows the demo's two
+INT 10h 4F00h calls (through DPMI 0300h) failing with 014Fh, then its open
+of `UNIVBE.DRV` failing and the message.
+
+**Cause.** The VM's VBE BIOS (`dosvm_vga_vbe.c`, F3-37 amendment of
+`supersavage-fullscreen.md`) answered 4F00h-4F09h only when
+`display_fullscreen_supported(mode)` was true, i.e. when a native display
+mode provider (today only the S3 Savage driver) could scan the mode out
+full screen. Every other display (QEMU, VirtualBox, VMware, other cards)
+gave the VM no VESA BIOS at all, although the VM already owned the mode's
+memory (the pinned 1 MiB pool buffer `vbe_buffer`) and the window presenter
+already scaled it (`dosvm_vbe_present`). With 4F00h answered, a second gap
+appeared: the BIOS reported VBE 2.0 without Function 0Ah, and the demo
+called its protected-mode SetWindow pointer, still NULL, after three failed
+4F0Ah calls (`call [0x260FBC]`, page fault at 1F7:00000003; ring trace).
+
+**Research.**
+- VESA, *VBE/Core 2.0* (SciTech's copy of the standard,
+  [VBE20.DOC](https://discmaster.textfiles.com/view/10567/HPAVC%20CD-ROM.iso/pc/UGPRG.ZIP/VGA-MISC/VBE20.DOC))
+  and *VBE Core Functions 3.0*
+  ([vbe3.pdf](https://pdos.csail.mit.edu/6.828/2018/readings/hardware/vbe3.pdf)):
+  4F00h VbeInfoBlock; 4F01h ModeInfoBlock, where ModeAttributes D6 = 0
+  means a VGA-compatible windowed (banked) model exists and D7 = 1 a linear
+  buffer, D6/D7 = 0/1 "both windowed and linear"; WinAAttributes D0-D2
+  relocatable/readable/writable, WinGranularity and WinSize in KiB,
+  WinASegment A000h, WinFuncPtr the real-mode window function; 4F02h BX D14
+  selects the linear model ("If D14 is set, and a linear frame buffer model
+  is not available then the call will fail"), D15 keeps memory; 4F05h sets
+  or gets the window position in granularity units and "must fail with
+  completion code AH=03h" in a linear mode; the WinFuncPtr direct call takes
+  BH/BL/DX, and VBE 1.2 callers need not load AX, which with DX may be
+  destroyed; 4F0Ah returns ES:DI and CX of a table of word offsets to
+  relocatable 32-bit SetWindow, SetDisplayStart and SetPrimaryPalette code
+  plus a ports/memory sub-table offset ("if unsupported this must be
+  0000h"). The 2.0 text calls 4F0Ah required; 3.0 makes it optional.
+- DOSBox Staging
+  ([int10_vesa.cpp](https://github.com/dosbox-staging/dosbox-staging/blob/main/src/ints/int10_vesa.cpp)):
+  WinFuncPtr is a RETF callback running the 4F05h handler; the 4F0Ah table
+  holds a SetWindow that programs its emulated card's window register, a
+  SetPalette that writes DL to 3C8h and each entry's bytes +2, +1, +0 to
+  3C9h, and ports offset 0.
+- *Microsoft Windows 98 Resource Kit*, chapter 25, "Overview of Application
+  Support in Windows 98": "Improved support for highly graphical MS-DOS-based
+  applications. This allows you to run video-mode style applications in a
+  window rather than in a full screen"; "Running Games": a game that uses
+  graphics modes and does not start full screen is switched with ALT+ENTER.
+  Windows 98 gives windowed graphics only where its display driver can
+  virtualize the mode and otherwise runs the program full screen; CiukiOS
+  shows DOS graphics in the window by design and keeps full screen the
+  user's choice (Alt+Enter), so a mode no native provider can scan out is
+  rendered in the window from the VM's own memory.
+
+**Decision.** The VM's VBE BIOS no longer depends on a native provider:
+4F00h-4F03h, 4F05h-4F0Ah serve modes 101h, 103h, 111h, 114h (the
+`dos_video_modes.h` list) on every display, from the VM's own buffer.
+- 4F01h reports both models (attributes 9Bh, 16-bit modes BBh), window A
+  relocatable/readable/writable (07h), 64 KiB granularity and size at A000h,
+  WinFuncPtr F000:0104h, one bank, no extra image pages, PhysBasePtr the
+  VM-local token as before.
+- 4F02h without D14 selects the windowed model: A0000h-AFFFFh maps 64 KiB of
+  `vbe_buffer` (bank 0) user-writable as a new direct-window kind
+  (`VIDEO_BANK`, beside the f3-06/07 plane and chain-4 windows); with D14 the
+  linear model is unchanged (A0000h stays on the VGA model, DPMI 0800h maps
+  the token). 4F03h reports D14 as set. 4F05h moves window A (DX < 16) by
+  rewriting the 16 window PTEs, carrying the old bank's PTE dirty bits to the
+  buffer pages' D bits; window B and out-of-range positions fail with 014Fh,
+  a linear mode with 034Fh. The window function F000:0104h (in the unused
+  tail of the INT 10h ROM stub slot) is `mov ax,4F05h / pushf /
+  call far F000:0100h / retf`.
+- 4F0Ah returns the 59-byte table at F000:38C0h: SetWindow is
+  `push eax / mov ax,4F05h / int 10h / pop eax / ret` (the VM has no
+  physical bank register; the DPMI host reflects INT 10h to the VBE BIOS),
+  SetDisplayStart is `ret` (only start 0 exists, as 4F07h), SetPrimaryPalette
+  writes the DAC ports (count zero-extended, zero entries do nothing), no
+  ports/memory table.
+- Damage: the open window's D pages become buffer D bits at every collection
+  (`dosvm_vga_bank_collect`, called by the presenter sampler, `vbe_collect`,
+  `dosvm_vbe_dirty` and the full-screen flush), so the window presenter and
+  the native full-screen flush see banked stores exactly like linear ones.
+  Kernel accesses to the window (`transfer`, a DOS read into A000h) and
+  emulated aperture cycles are translated to the current bank and mark the
+  page; the synthetic VGA BIOS's own cycles (`video_bios_active`, e.g. the
+  clear of a following mode 13h set) still reach the VGA model.
+- Full screen: unchanged for providers. Entry for a VBE mode stays refused
+  (windowed continuation) without a provider; with a provider a windowed mode
+  uses the linear full-screen path, its bank window staying open in the VM's
+  RAM aperture (never remapped while a switch holds the VM; a fault after a
+  PTE restore reopens it). The window is closed before the address space is
+  destroyed (`dosvm_vga_sync` also runs in a linear full screen when the bank
+  window is open), so the aliased buffer frames are freed once.
+- With the 101-dosvid2 direct LFB lease (`display-driver-model.md`, native
+  full screen borrows the provider's LFB for the buffer's PTEs): only a
+  linear (D14) mode takes the lease (`dosvm_vbe_direct_enter` refuses a
+  windowed mode or an open bank window); a windowed mode in native full
+  screen keeps the RAM buffer, its bank window and the copy flush, because
+  the provider exposes no bank register and the window may never alias the
+  borrowed aperture (`dosvm_vbe_frame` returns no frame while a lease
+  exists). A 4F02h in full screen first closes the bank window
+  (`dosvm_vga_sync`), then revokes any lease (copy-back into the RAM buffer
+  before a clear), so the buffer the window or the presenter uses next is
+  always the authoritative RAM copy. Kernel accesses translate A000h to the
+  bank first and then, for a leased linear buffer, go to the exported LFB
+  alias; the planar string fast path stays off in both cases.
+- A VGA mode set (INT 10h AH=00h, or 4F02h with a VGA mode) harvests and
+  closes an open bank window before it clears the VBE state (Codex review
+  of 22c606fa5, P2): in a VBE full screen nothing else touches A0000h (the
+  full-screen transport leaves it to the VBE path), so the window would
+  otherwise keep aliasing the old bank and native mode 13h stores would
+  land in the VBE buffer after the return.
+- `WAR2.BAT` starts `WAR2.EXE` directly; `UVCONFIG.EXE` stays installed.
+- The QEMU full-screen probe (`vm-fullscreen`, `f3_probes_video.c`) records
+  `case=vbe_window` (004Fh, entry stays windowed, `active=0`) instead of the
+  former `case=vbe_refusal` (014Fh).
+
+**Trace of WAR2.EXE** (host runner, `GUEST_INT10_TRACE=1`). Before:
+4F00h (BX=0024h) -> 014Fh, 4F00h -> 014Fh, open `UNIVBE.DRV` fails, message.
+After: 4F00h -> 004Fh twice, 4F01h for 101h/103h/111h/114h, 4F03h (03h),
+1130h, 4F02h BX=0101h -> 004Fh (windowed), 4F01h 101h, 4F0Ah -> 004Fh
+CX=003Bh, 4F05h banks 0-4 through the 4F0Ah SetWindow code (three screen
+clears), 1A00h, mode 13h (Blizzard logo, then the intro movie), Esc, Esc,
+4F03h, 4F02h 0101h, 4F0Ah, then the 640x480x256 title screen and main menu
+in the window (presenter frames checked, 304268 non-black pixels on the
+title screen; Space then shows the main menu); Esc on the main menu leaves
+the demo with 4F02h BX=0003h and returns to `C:\WAR2>`.
+
+**Tests.** `tests/host/dosvm_vbe_window_test.inc` (`test_vbe_window`, in
+`dosvm_test`; it fails on the previous gate at its first 4F00h check):
+info block, 4F01h fields, the 4F0Ah table, the ROM window function run on
+the CPU model by a VBE 1.2-style caller (BH/BL/DX only, then stores through
+A000h), the 4F0Ah SetPrimaryPalette code run in place by a 32-bit DPMI
+client (DAC entries, registers kept), windowed set, bank
+aliasing and switching, window and kernel stores presented with the DAC
+palette, the PTE-restore retry, DPMI 0800h without a provider, the linear
+model and AH=03h, the VGA mode return clearing the planes, teardown with the
+window open (the fake PMM rejects a double free), the native linear
+full-screen flush of window stores, the direct LFB lease taken only by a
+linear mode with its copy-back visible through the bank window, and a VGA
+mode set in a VBE full screen closing the bank window (the review case:
+banked mode, native full screen, reopened bank, mode 13h, return, then a
+native mode 13h store reaches the VGA model, not the VBE buffer). `test_fullscreen_vbe` and
+`test_video_bios_ports` expectations follow the new attributes and
+availability. `tests/host/dos/run_dos_extenders.sh` checks the demo's VESA
+calls (4F00h, 4F01h 101h, 4F02h 0101h, 4F0Ah, at least five bank switches)
+in both memory profiles and, with the `EMMXXXX0` device, the title screen
+in the window after two Esc presses (`GUEST_PLAY_KEYS`, `GUEST_PLAY_SHOT`).
+Host replay, not QEMU or hardware evidence: the demo's speed and sound in
+the DOS window, and a full screen on a native provider, need the QEMU/T23
+DOS Box.

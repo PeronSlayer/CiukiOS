@@ -33,6 +33,9 @@
  * GUEST_UART_BAUD=38400 with GUEST_VERBOSE=1 advances device time during
  * monitor diagnostic output (8N1). This models the physical timer running
  * while the kernel polls the UART; the zero-time logger misses IRQ nesting.
+ * war2vbe: GUEST_INT10_TRACE=1 prints the INT 10h calls the VM's BIOS serves;
+ * GUEST_PLAY_KEYS=01@12000,... presses window keys during play:, whose end
+ * prints the window picture (H61 PLAY FRAME, GUEST_PLAY_SHOT=<file.ppm>).
  * SPDX-License-Identifier: GPL-2.0-only */
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
@@ -423,7 +426,15 @@ int dos_save_store_open(struct dos_save_file *f,struct dos_save *s,const struct 
 #undef vfs_version_unpin
 #endif
 
+/* GUEST_INT10_TRACE=1: every INT 10h the VM's BIOS serves (the end of the
+ * guest's own INT 10h chain, V86 or reflected from a DPMI client) as one
+ * line with its input and output registers; teletype/cursor/scroll calls
+ * are left out, VBE 4F00h/4F01h also print the start of the returned
+ * block. Observation only (the war2vbe VESA trace, 2026-10-25). */
+static int guest_int10_traced(struct dosvm *v, struct v86_frame *f);
+#define dosvm_vga_bios guest_int10_traced
 #include "../../src/kernel/vm/dosvm_bios.c"
+#undef dosvm_vga_bios
 #include "../../src/kernel/vm/dosvm_floppy.c"
 #include "../../src/kernel/vm/floppy_model.c"
 #include "../../src/kernel/drivers/floppy_media.c"
@@ -443,6 +454,29 @@ int dos_save_store_open(struct dos_save_file *f,struct dos_save *s,const struct 
 #include "dosvm_font.inc"
 #include "../../src/kernel/vm/dosvm_vga.c"
 #include "../../src/kernel/vm/dosvm_vga_vbe.c"
+static int guest_int10_traced(struct dosvm *v, struct v86_frame *f)
+{
+    static int on = -1;
+    static unsigned long count;
+    if (on < 0) on = getenv("GUEST_INT10_TRACE") != 0;
+    unsigned ax = (uint16_t)f->tf.eax, bx = (uint16_t)f->tf.ebx, cx = (uint16_t)f->tf.ecx, dx = (uint16_t)f->tf.edx;
+    unsigned es = (uint16_t)f->es, di = (uint16_t)f->tf.edi, ah = ax >> 8;
+    int e = dosvm_vga_bios(v, f);
+    if (!on || ah == 2 || ah == 3 || ah == 6 || ah == 7 || ah == 8 || ah == 9 || ah == 0x0A || ah == 0x0E || ah == 0x13)
+        return e;
+    printf("I10 n=%lu ax=%04x bx=%04x cx=%04x dx=%04x es:di=%04x:%04x -> e=%d ax=%04x bx=%04x cx=%04x dx=%04x vbe=%x ms=%llu\n",
+           ++count, ax, bx, cx, dx, es, di, e, (uint16_t)f->tf.eax, (uint16_t)f->tf.ebx, (uint16_t)f->tf.ecx,
+           (uint16_t)f->tf.edx, v->vbe_mode, (unsigned long long)g_ticks);
+    if (!e && (ax == 0x4F00 || ax == 0x4F01) && (uint16_t)f->tf.eax == 0x004F) {
+        uint8_t block[64];
+        if (!dosvm_read(v, ((uint32_t)es << 4) + di, block, sizeof(block))) {
+            printf("I10   block");
+            for (unsigned i = 0; i < sizeof(block); i++) printf(" %02x", block[i]);
+            printf("\n");
+        }
+    }
+    return e;
+}
 #include "../../src/kernel/vm/dosvm_dma.c"
 #include "../../src/kernel/vm/dosvm_opl.c"
 #include "../../src/kernel/vm/dosvm_sb16.c"
@@ -1314,12 +1348,62 @@ static void play_progress(uint64_t begin)
            gv->audio.sb.units, reads, failed, critical,
            (unsigned long long)instructions, xms_kb, (unsigned)(gv->memory.ems_bytes / 1024));
 }
+/* GUEST_PLAY_KEYS="01@12000,1c@20000": a window key (set-1 code, hex) is
+ * pressed and released at that simulated millisecond of the play run, as
+ * a player skips an intro (war2vbe: the Warcraft II demo's movies). */
+static bool menu_wait(uint32_t ms);
+static void play_keys(uint64_t elapsed)
+{
+    const char *keys = getenv("GUEST_PLAY_KEYS");
+    static unsigned done;
+    unsigned index = 0;
+    for (const char *k = keys; k && *k; index++) {
+        char *end;
+        unsigned code = (unsigned)strtoul(k, &end, 16);
+        CHECK(*end == '@');
+        unsigned long long at = strtoull(end + 1, &end, 10);
+        if (index >= done && elapsed >= at) {
+            CHECK(dosvm_input_focus(dosvm_key(gv), true));
+            window_key(code, 1); menu_wait(80); window_key(code, 0);
+            printf("H61 PLAY KEY code=%02x t=%llu\n", code, (unsigned long long)elapsed);
+            done = index + 1;
+        }
+        k = *end == ',' ? end + 1 : end;
+    }
+}
+/* The window picture at the end of a play run: what the DOS window shows
+ * (dosvm_frame_capture, the presenter's own rows), its non-black pixel
+ * count, and with GUEST_PLAY_SHOT=<file.ppm> the 640x480 image itself. */
+struct play_shot { FILE *ppm; unsigned nonblack; };
+static int play_shot_row(void *arg, unsigned y, const void *pixels, unsigned bytes)
+{
+    struct play_shot *shot = arg;
+    const uint32_t *p = pixels;
+    (void)y;
+    for (unsigned x = 0; x < bytes / 4; x++) {
+        if (p[x] & 0xFFFFFF) shot->nonblack++;
+        if (shot->ppm) { uint8_t rgb[3] = {(uint8_t)(p[x] >> 16), (uint8_t)(p[x] >> 8), (uint8_t)p[x]}; fwrite(rgb, 1, 3, shot->ppm); }
+    }
+    return 0;
+}
+static void play_frame(void)
+{
+    const char *path = getenv("GUEST_PLAY_SHOT");
+    struct play_shot shot = {path ? fopen(path, "wb") : 0, 0};
+    if (shot.ppm) fprintf(shot.ppm, "P6\n%u %u\n255\n", DOSVM_VIDEO_WIDTH, DOSVM_VIDEO_HEIGHT);
+    struct dosvm_frame frame = {0};
+    int e = dosvm_frame_capture(gv, g_ticks, &frame, play_shot_row, &shot);
+    if (shot.ppm) fclose(shot.ppm);
+    printf("H61 PLAY FRAME e=%d mode=%x %ux%u text=%u nonblack=%u\n", e, frame.mode, frame.width, frame.height,
+           frame.text, shot.nonblack);
+}
 static int play_run(void)
 {
     const char *limit = getenv("GUEST_PLAY_MS");
     uint64_t total = limit ? strtoull(limit, 0, 10) : 30000, begin = g_ticks;
     int r = 0;
     while (g_ticks - begin < total) {
+        play_keys(g_ticks - begin);
         menu_until = g_ticks + 1000;
         if (menu_until > begin + total) menu_until = begin + total;
         r = run(4000000000ull, menu_elapsed);
@@ -1631,6 +1715,7 @@ int main(int argc, char **argv)
                        gv->exec_pending, gv->exec_overflow, dosvm_shell_idle(gv), gv->dpmi.active, gv->dpmi.clients);
                 if (!returned || gv->exec_pending || !dosvm_shell_idle(gv)) failures++;
             }
+            if (!stopped()) play_frame();
             printf("H61 PLAY END %s returned=%u stopped=%u reason=%u vector=%u eip=%08x console=\"%s\"\n", argv[i + 1],
                    returned, stopped(), gv->info.reason, gv->info.fault_vector, gv->info.fault_eip, gv->console_line);
             unified_report("play");

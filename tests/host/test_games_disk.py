@@ -584,8 +584,9 @@ class Warcraft2DemoTests(unittest.TestCase):
         for text in (files["/WAR2/DIG.INI"], files["/WAR2/MDI.INI"]):       # BLASTER A220 I7 D1 H5
             for line in ("IO_ADDR     220h", "IRQ         7", "DMA_8_BIT   1", "DMA_16_BIT  5"):
                 self.assertIn(line.encode(), text)
-        self.assertEqual(files["/WAR2/WAR2.BAT"].count(b"\r\n"), 3)
-        self.assertIn(b"IF NOT EXIST UNIVBE.DRV UVCONFIG.EXE", files["/WAR2/WAR2.BAT"])
+        # war2vbe: the VM's VBE BIOS replaces UNIVBE.DRV; no UVCONFIG dialog at start.
+        self.assertEqual(files["/WAR2/WAR2.BAT"], b"@ECHO OFF\r\nWAR2.EXE\r\n")
+        self.assertNotIn(b"UVCONFIG", files["/WAR2/WAR2.BAT"])
         # The drivers the files name are installed members.
         _, members, _ = games.package_files(self.PACKAGE)
         names = {path for path, _, _ in members}
