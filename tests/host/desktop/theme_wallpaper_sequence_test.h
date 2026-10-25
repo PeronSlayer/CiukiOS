@@ -88,6 +88,21 @@ static void sequence_watchdog_test(struct desktop *d)
     __atomic_store_n(&desktop_watchdog.loop_ms,1000,__ATOMIC_RELEASE);
     __atomic_store_n(&desktop_watchdog.frame_ms,1000,__ATOMIC_RELEASE);
     assert(desktop_stall_record(3000,line,sizeof(line))>0); /* blocked before draining input */
+    /* T23 trial 2ca3b0b6: the idle stage (the turn's end and its sleep, at
+     * most one second outside power states) reports a loop stamp older than
+     * 3 s, never a sleep within it, never in standby. */
+    __atomic_store_n(&desktop_watchdog.pending,0,__ATOMIC_RELEASE);
+    __atomic_store_n(&desktop_watchdog.work,0,__ATOMIC_RELEASE);
+    desktop_stage(STALL_IDLE); desktop_wait("accel-cache");
+    assert(!desktop_stall_record(4000,line,sizeof(line)));
+    assert(desktop_stall_record(4001,line,sizeof(line))>0 && strstr(line,"[desktop] stall stage=idle"));
+    assert(strstr(line,"input_pending=0 work_pending=0 wait=accel-cache"));
+    /* Standby is the desktop thread's own publication with the loop stamp
+     * (review: never a read of its power structure from this thread). */
+    desktop_watchdog_loop(1000000000ull,1);
+    assert(!desktop_stall_record(60000,line,sizeof(line)));
+    desktop_watchdog_loop(1000000000ull,0);
+    assert(desktop_stall_record(60000,line,sizeof(line))>0 && strstr(line,"stage=idle"));
 
     /* Exercise the actual observer while the main thread produces no frame;
      * its console write must bypass the busy settings/mixer worker. */
@@ -101,6 +116,26 @@ static void sequence_watchdog_test(struct desktop *d)
     assert(dup2(saved,STDERR_FILENO)>=0); close(saved);
     ssize_t n=read(capture[0],line,sizeof(line)-1); close(capture[0]); assert(n>0); line[n]=0;
     assert(strstr(line,"[desktop] stall stage=render worker=idle/mixer") && strstr(line,"input_pending=1"));
+    printf("WATCHDOG %s",line);
+    /* The observer itself samples the idle stage: a loop stuck at the
+     * turn's end for 5 s is reported within the one-second idle wait. */
+    assert(!pipe(capture)); saved=dup(STDERR_FILENO); assert(saved>=0);
+    assert(dup2(capture[1],STDERR_FILENO)>=0); close(capture[1]);
+    __atomic_store_n(&desktop_watchdog.stop,0,__ATOMIC_RELEASE);
+    __atomic_store_n(&desktop_watchdog.pending,0,__ATOMIC_RELEASE);
+    __atomic_store_n(&desktop_watchdog.work,0,__ATOMIC_RELEASE);
+    desktop_stage(STALL_IDLE); desktop_wait("accel-cache");
+    desktop_watchdog_start(d); assert(desktop_watchdog.live);
+    uint32_t stale=(uint32_t)(monotonic()/1000000ull)-5000u;
+    __atomic_store_n(&desktop_watchdog.frame_ms,stale,__ATOMIC_RELEASE);
+    __atomic_store_n(&desktop_watchdog.loop_ms,stale,__ATOMIC_RELEASE);
+    struct timespec idle_pause={1,300000000}; nanosleep(&idle_pause,NULL);
+    __atomic_store_n(&desktop_watchdog.stop,1,__ATOMIC_RELEASE);
+    pthread_mutex_lock(&watchdog_lock); pthread_cond_signal(&watchdog_changed); pthread_mutex_unlock(&watchdog_lock);
+    assert(!pthread_join(desktop_watchdog.thread,NULL)); desktop_watchdog.live=0;
+    assert(dup2(saved,STDERR_FILENO)>=0); close(saved);
+    n=read(capture[0],line,sizeof(line)-1); close(capture[0]); assert(n>0); line[n]=0;
+    assert(strstr(line,"[desktop] stall stage=idle") && strstr(line,"wait=accel-cache"));
     printf("WATCHDOG %s",line);
     d->input_pending=NULL;
 }

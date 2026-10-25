@@ -20,6 +20,15 @@ bool blackbox_available(void); /* validated descriptor and durable device */
 int blackbox_checkpoint(void); /* rare checkpoint/shutdown: drain full bounded RAM */
 int blackbox_flush(void); /* direct writes + device flush, task context */
 void blackbox_panic(const char *, size_t); /* bounded emergency callback */
+/* Asynchronous checkpoint: a dedicated flusher (kernel task; host thread)
+ * started once with the storage writer. A request never waits for storage;
+ * served counts the requests whose checkpoint has finished. */
+int blackbox_flusher_start(void);
+void blackbox_flush_request(void);
+uint32_t blackbox_flush_served(void);
+#ifdef FS_HOST
+void blackbox_flusher_stop(void); /* host tests: join the flusher thread */
+#endif
 const char *blackbox_replay(size_t *);
 void blackbox_reset(void); /* quiescent detach */
 #endif

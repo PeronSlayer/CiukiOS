@@ -109,9 +109,14 @@ void ksync_priority_changed(struct task *t) __attribute__((weak));
  * the same donation walk as a kwait owner, transitively, until the waiter
  * withdraws, the owner calls ksync_depend_release(object) for that object,
  * or either task exits. Weak: harnesses without sync.c skip both calls. */
-enum { KSYNC_DEPEND_DRIVE = 1, KSYNC_DEPEND_CACHE = 2 };
+/* KSYNC_DEPEND_IO (T23 trial 2ca3b0b6): a requester waiting for its block
+ * request lends its priority to the queue's executor task (blkreq.c). */
+enum { KSYNC_DEPEND_DRIVE = 1, KSYNC_DEPEND_CACHE = 2, KSYNC_DEPEND_IO = 3 };
 void ksync_depend(struct task *owner, const void *object, unsigned reason) __attribute__((weak));
 void ksync_depend_release(const void *object) __attribute__((weak));
+/* The same release for an explicitly named owner (owner-only callers keep
+ * ksync_depend_release, which names the calling task). */
+void ksync_depend_revoke(struct task *owner, const void *object) __attribute__((weak));
 void kmutex_init(struct kmutex *m);
 /* A named class for lock-order records; same mutex semantics. */
 static inline void kmutex_init_named(struct kmutex *m, const char *name)
