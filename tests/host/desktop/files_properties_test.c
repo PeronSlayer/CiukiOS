@@ -61,6 +61,15 @@ static void dump(const char *dir,const char *name)
     FILE *f=fopen(path,"wb"); assert(f); assert(fwrite(pixels,4,760*520,f)==760*520); fclose(f);
     snprintf(path,sizeof(path),"%s/%s.size",dir,name); f=fopen(path,"w"); assert(f); fprintf(f,"760 520"); fclose(f);
 }
+/* A Win98 property sheet repaints its active page only, and switching pages leaves nothing of the previous one:
+ * the incremental paint of the pending damage must equal a full repaint of the same state. */
+static uint32_t partial[760*520];
+static void same_as_full(const char *what)
+{
+    du_render(&ui); memcpy(partial,pixels,sizeof(partial));
+    ui.dirty=1; du_render(&ui);
+    if (memcmp(partial,pixels,sizeof(partial))) { fprintf(stderr,"incremental paint differs from a full repaint: %s\n",what); abort(); }
+}
 int main(int argc,char **argv)
 {
     assert(argc==2); main_thread=pthread_self(); fake_reset(); fake_image_tree();
@@ -104,6 +113,10 @@ int main(int argc,char **argv)
     du_set_text(&ui.dialog.items[4],"DATA"); apply(); assert(label_sets==1 && !strcmp(label,"DATA"));
     struct ciuki_input_event ctrl={.type=CIUKI_INPUT_KEY,.code=DU_KEY_LCTRL,.value=1};
     du_input(&ui,&ctrl); press(DU_KEY_TAB); ctrl.value=0; du_input(&ui,&ctrl);
+    same_as_full("drive sheet, Ctrl+Tab to Tools");
+    ctrl.value=1; du_input(&ui,&ctrl); press(DU_KEY_TAB); ctrl.value=0; du_input(&ui,&ctrl);
+    same_as_full("drive sheet, Ctrl+Tab back to General");
+    ctrl.value=1; du_input(&ui,&ctrl); press(DU_KEY_TAB); ctrl.value=0; du_input(&ui,&ctrl);
     /* G14: Check Now (slot 7, id 410: slot 5 is G8's Disk Cleanup) is on the Tools page only. */
     assert(ui.dialog.items[3].active==1 && strstr(ui.dialog.text,"Check Now checks this drive") && ui.dialog.items[4].hidden &&
            !ui.dialog.items[7].hidden && ui.dialog.items[7].id==410 && !strcmp(ui.dialog.items[7].text,"Check &Now...")); dump(argv[1],"g6-tools"); cancel();
