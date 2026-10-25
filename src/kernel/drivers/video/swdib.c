@@ -308,7 +308,7 @@ int swdib_validate(const struct swdib_command *c)
         if (r->opcode==CIUKI_CMD_KEYED) v.key=r->key;
         if (r->opcode==CIUKI_CMD_SCALED) {
             v.sw=r->sw; v.sh=r->sh; v.filter=r->filter;
-            if (r->filter>1) return -EOPNOTSUPP;
+            if (r->filter>CIUKI_FILTER_NEAREST_EDGE) return -EOPNOTSUPP;
             if ((r->dw && r->dh && (!r->sw || !r->sh)) || r->sx<0 || r->sy<0 ||
                 (uint64_t)(uint32_t)r->sx+r->sw>c->src->device.width || (uint64_t)(uint32_t)r->sy+r->sh>c->src->device.height) return -EINVAL;
         }
@@ -380,9 +380,16 @@ static int64_t floor_div(int64_t x, int64_t n)
 { int64_t q=x/n; return q-(x%n<0); }
 static unsigned clamp_index(int64_t x, unsigned size)
 { return x<0 ? 0 : x>=size ? size-1 : (unsigned)x; }
+static uint32_t edge_pixel(const struct swdib_command *c,unsigned i,unsigned j)
+{
+    const struct ciuki_batch_record *r=c->record;
+    return load_pixel(&c->src->device,r->sx+(uint64_t)i*r->sw/r->dw,r->sy+(uint64_t)j*r->sh/r->dh);
+}
 static uint32_t scaled(const struct swdib_command *c, unsigned i, unsigned j)
 {
     const struct ciuki_batch_record *r=c->record; const struct fb_device *s=&c->src->device;
+    if (r->filter==CIUKI_FILTER_NEAREST_EDGE)
+        return decode(s,edge_pixel(c,i,j));
     if (!r->filter) return decode(s,load_pixel(s,r->sx+(uint64_t)(2*i+1)*r->sw/(2*r->dw),r->sy+(uint64_t)(2*j+1)*r->sh/(2*r->dh)));
     int64_t ax=2*r->dw, ay=2*r->dh, qx=(int64_t)(2*i+1)*r->sw-r->dw, qy=(int64_t)(2*j+1)*r->sh-r->dh;
     int64_t l=floor_div(qx,ax), t=floor_div(qy,ay), rx=qx-l*ax, ry=qy-t*ay;
@@ -488,7 +495,13 @@ void swdib_execute(const struct swdib_command *c, void (*pause)(void *), void *a
                     value=swdib_pack(d,bit ? r->foreground : r->background);
                 }
                 break;
-            case CIUKI_CMD_SCALED: value=swdib_pack(d,scaled(c,i,j)); break;
+            case CIUKI_CMD_SCALED:
+                /* Edge stretch is also an exact packed copy for identical
+                 * formats (including ignored X bits), like ordinary COPY. */
+                if (r->filter==CIUKI_FILTER_NEAREST_EDGE && same_layout(d,&c->src->device))
+                    value=edge_pixel(c,i,j);
+                else value=swdib_pack(d,scaled(c,i,j));
+                break;
             default: write=false; break;
             }
             if (write) store_pixel(d,x,y,value);

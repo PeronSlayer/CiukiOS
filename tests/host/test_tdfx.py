@@ -34,7 +34,7 @@ class TdfxTests(unittest.TestCase):
         subprocess.run([str(self.binary), name], check=True)
 
     def test_engine(self):
-        for name in ('goldens16', 'goldens32', 'trace', 'refusal', 'timeouts',
+        for name in ('goldens16', 'goldens32', 'stretch16', 'stretch32', 'trace', 'refusal', 'timeouts',
                      'quarantine', 'cursor16', 'cursor32', 'cursor_faults', 'slices'):
             with self.subTest(name=name):
                 self.scenario(name)

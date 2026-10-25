@@ -30,6 +30,8 @@ int display_fullscreen_begin(uint16_t mode);
 int display_fullscreen_end(void);
 bool display_fullscreen_supported(uint16_t mode);
 int display_fullscreen_write(uint32_t offset, const void *, uint32_t bytes);
+struct display_lfb;
+int display_fullscreen_lfb(struct display_lfb *);
 bool display_fullscreen_active(void);
 /* IRQ safe, records the hotkey/fault time without doing any I/O. */
 void display_fullscreen_return_request(void);

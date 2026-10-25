@@ -5,6 +5,7 @@
 #include <ciuki/abi.h>
 #include <ciuki/cpu.h>
 #include <ciuki/display.h>
+#include <ciuki/display_driver.h>
 #include <ciuki/registry.h>
 #include <ciuki/vga_ports.h>
 #include <ciuki/timing.h>
@@ -25,6 +26,7 @@ static bool session_struck, restore_failed, recovery_confirmed;
 static void *linear_window;
 static volatile uint8_t *linear_mapping;
 static uint32_t linear_phys,linear_bytes,framebuffer_bytes;
+static uint16_t linear_mode;
 static int framebuffer_handle;
 static gen_t framebuffer_generation;
 static uint8_t native_in(void *arg,uint16_t port) { (void)arg; return inb(port); }
@@ -168,6 +170,7 @@ static void outcome(const char *phase,int e)
 }
 int supersavage_display_begin(uint16_t mode)
 {
+    linear_mode=0;
     if (native_strikes>=NATIVE_STRIKE_LIMIT) return -EOPNOTSUPP;
     if (!adapter || !register_window || !aperture_window || claims_retained() || saved_mode.saved) return -EBUSY;
     session_struck=restore_failed=recovery_confirmed=false;
@@ -199,7 +202,7 @@ int supersavage_display_begin(uint16_t mode)
             fb->type!=RES_MMIO || fb->start!=linear_phys || fb->end-linear_phys<linear_bytes) {
             e=-EIO; goto failed;
         }
-        linear_mapping=vmm_replace_mmio(linear_window,DOS_VBE_BYTES,linear_phys,DOS_VBE_BYTES);
+        linear_mapping=vmm_replace_framebuffer(linear_window,DOS_VBE_BYTES,linear_phys,DOS_VBE_BYTES);
         if (!linear_mapping) { e=-ENOMEM; goto failed; }
     }
     e=supersavage_mode_save(&saved_mode,&io);
@@ -209,6 +212,7 @@ int supersavage_display_begin(uint16_t mode)
         saved_mode.sr[0x13],saved_mode.sr[0x29],saved_mode.sr[0x15],saved_mode.sr[0x1B],
         saved_mode.sr[0x54],saved_mode.sr[0x56],saved_mode.sr[0x59],saved_mode.sr[0x5B]);
     if (!e) e=supersavage_mode_enter(&saved_mode,&io,mode);
+    if (!e && dos_video_mode(mode)) linear_mode=mode;
     outcome("enter",e);
     if (e) strike(); /* preserve entry diagnostics before restore resets them */
     /* display_fullscreen_end owns rollback, including a partial save. */
@@ -220,6 +224,7 @@ failed:
 }
 int supersavage_display_end(void)
 {
+    linear_mode=0;
     /* A previous end revoked these aliases, even if proof failed. A failed
      * claim may also reach rollback without ever mapping the registers. */
     if (!register_mapping || !aperture_mapping) return release_claims();
@@ -254,5 +259,23 @@ int supersavage_display_write(uint32_t offset,const void *data,uint32_t bytes)
     if (!linear_mapping || offset>linear_bytes || bytes>linear_bytes-offset) return -EIO;
     const uint8_t *p=data;
     for (unsigned i=0;i<bytes;i++) linear_mapping[offset+i]=p[i];
+    return 0;
+}
+int supersavage_display_lfb(struct display_lfb *out)
+{
+    const struct dos_video_mode *m=dos_video_mode(linear_mode);
+    const struct resource *r=registry_get(framebuffer_handle);
+    if (!out || !m || !linear_mapping || !r || r->generation!=framebuffer_generation ||
+        r->state!=RS_QUIESCING || r->type!=RES_MMIO || r->start!=linear_phys ||
+        r->end-r->start<linear_bytes || (linear_phys&(PAGE_SIZE-1))) return -EOPNOTSUPP;
+    uint32_t cache=0;
+    /* The provider alias is already present. Find its uniform cache policy,
+     * refusing any mixed alias instead of creating a conflicting mapping. */
+    if (!vmm_cache_alias_ok(linear_phys,linear_bytes,cache)) {
+        cache=PTE_PCD|PTE_PWT;
+        if (!vmm_cache_alias_ok(linear_phys,linear_bytes,cache)) return -EOPNOTSUPP;
+    }
+    *out=(struct display_lfb){.physical=linear_phys,.bytes=linear_bytes,.pitch=m->pitch,
+        .width=m->width,.height=m->height,.bpp=m->bpp,.cache_flags=cache,.mapped=linear_mapping};
     return 0;
 }

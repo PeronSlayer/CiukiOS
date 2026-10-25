@@ -192,6 +192,7 @@ struct wire { struct ciuki_batch_header h; struct ciuki_batch_record r[3]; struc
 static struct wire wire;
 static struct display_batch job;
 static struct accel_ops command_ops;
+static uint32_t stretch_features(void *ctx) { (void)ctx; return CIUKI_CAP_STRETCH; }
 static unsigned native_calls, accepted;
 static int cmd_error;
 static unsigned error_at;
@@ -224,6 +225,19 @@ static void make_job(unsigned count)
 }
 static void batch_tests(void)
 {
+    for (unsigned enabled=0;enabled<3;enabled++) {
+        setup(); activate(); make_job(1);
+        wire.r[0]=(struct ciuki_batch_record){.opcode=CIUKI_CMD_SCALED,.record_bytes=128,.src=1,.dst=1,
+            .sx=8,.sy=0,.sw=4,.sh=1,.dw=4,.dh=2,.filter=CIUKI_FILTER_NEAREST_EDGE};
+        command_ops.command=NULL;
+        command_ops.command_features=stretch_features;
+        command_ops.stretch_rect=enabled ? command_native : NULL;
+        if (enabled==2) command_ops.command_features=NULL;
+        struct ciuki_command_info info; CHECK(!fbdev_command_info(42,&info));
+        CHECK(!!(info.capabilities&CIUKI_CAP_STRETCH)==(enabled==1));
+        CHECK(!display_batch_validate(&job)); CHECK(!fbdev_batch_execute(&job));
+        CHECK(native_calls==(enabled==1)); /* unsupported -> exact CPU fallback */
+    }
     for (unsigned op=1;op<=14;op++) {
         if (op==10) continue;
         setup(); activate(); make_job(1);
@@ -304,8 +318,43 @@ static void batch_tests(void)
     wire.r[0].clip_count=0; wire.r[0].opcode=65535; CHECK(display_batch_validate(&job)==-EOPNOTSUPP);
     printf("batch: all native opcodes, clean punt, complete preflight, no replay, quarantine/recovery ownership, sliced mode race, limits and noops PASS\n");
 }
+static void edge_sampling(unsigned bpp)
+{
+    const unsigned width=640,height=452;
+    uint32_t *input=malloc(640*480*4); CHECK(input);
+    unsigned pitch=width*(bpp/8), bytes=pitch*height;
+    uint8_t *output=malloc(bytes+32); CHECK(output);
+    struct swdib_target src={.identity=input,.kind=CIUKI_TARGET_SYSTEM,.rights=PROT_READ,
+        .device={.width=640,.height=480,.pitch=2560,.size=640*480*4,.mapped=(void *)input,
+        .bpp=32,.red_size=8,.red_pos=16,.green_size=8,.green_pos=8,.blue_size=8}};
+    struct swdib_target dst={.identity=output,.kind=CIUKI_TARGET_SYSTEM,.rights=3,
+        .device={.width=width,.height=height,.pitch=pitch,.size=bytes,.mapped=output+16,.bpp=bpp,
+        .red_size=bpp==16 ? 5 : 8,.red_pos=bpp==16 ? 11 : 16,
+        .green_size=bpp==16 ? 6 : 8,.green_pos=bpp==16 ? 5 : 8,.blue_size=bpp==16 ? 5 : 8}};
+    for (unsigned y=0;y<480;y++) for (unsigned x=0;x<640;x++) input[y*640+x]=(x*317u+y*4173u)&0xffffff;
+    for (unsigned zoom=0;zoom<3;zoom++) for (unsigned clipped=0;clipped<2;clipped++) {
+        memset(output,0xa7,bytes+32); memset(output+16,0,bytes);
+        struct ciuki_batch_clip clip={7,13,width-17,height-29};
+        struct ciuki_batch_record r={.opcode=CIUKI_CMD_SCALED,.record_bytes=128,.dst=1,.src=2,
+            .sw=640,.sh=480,.dw=zoom==2 ? 800 : 640,.dh=zoom==0 ? 452 : zoom==2 ? 600 : 480,
+            .dx=-3,.dy=-5,.filter=CIUKI_FILTER_NEAREST_EDGE,
+            .clip_count=clipped,.clip_offset=clipped ? 8 : 0};
+        struct swdib_command c={.record=&r,.src=&src,.dst=&dst,.clips=&clip};
+        CHECK(!swdib_validate(&c)); swdib_execute(&c,NULL,NULL);
+        for (unsigned y=0;y<height;y++) for (unsigned x=0;x<width;x++) {
+            bool inside=!clipped || (x>=7 && x<width-10 && y>=13 && y<height-16);
+            unsigned sx=(x+3)*640/r.dw,sy=(y+5)*480/r.dh;
+            uint32_t expected=inside && sx<640 && sy<480 ? swdib_pack(&dst.device,input[sy*640+sx]) : 0;
+            CHECK(get(&dst,x,y)==expected);
+        }
+        for (unsigned i=0;i<16;i++) CHECK(output[i]==0xa7 && output[bytes+16+i]==0xa7);
+    }
+    free(input); free(output);
+    printf("DOS edge sampling %u bpp: Fit/100/125, original phase, clipped and unclipped scalar oracle PASS\n",bpp);
+}
 int main(void)
 {
+    edge_sampling(16); edge_sampling(24); edge_sampling(32);
     goldens(16); goldens(24); goldens(32); batch_tests();
     printf("display commands: %u literal pixel checks, %u failures\n",vectors,failures);
     return failures ? 1 : 0;

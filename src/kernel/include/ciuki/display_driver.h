@@ -6,6 +6,15 @@
 #include <ciuki/registry.h>
 
 struct display_match { uint16_t vendor, device; uint8_t class_code, class_mask; };
+/* Kernel-only export, valid until provider end; no user ABI or RAM ownership.
+ * cache_flags contains PTE_PCD/PTE_PWT only, matching the retained alias. */
+struct display_lfb {
+    uint32_t physical, bytes, pitch;
+    uint16_t width, height;
+    uint8_t bpp;
+    uint32_t cache_flags;
+    volatile uint8_t *mapped;
+};
 /* display.c owns the transaction, without holding the presenter mutex.
  * supported/prepare are software preflight before grants/2D state change.
  * begin/write/end run with the mode lease pinned and the 2D engine stopped;
@@ -17,6 +26,7 @@ struct display_mode_provider {
     int (*write)(uint32_t, const void *, uint32_t);
     int (*end)(void);
     void (*complete)(bool);
+    int (*lfb)(struct display_lfb *);
 };
 struct display_selftest_result {
     unsigned tried, passed, skipped, timeouts, completed;

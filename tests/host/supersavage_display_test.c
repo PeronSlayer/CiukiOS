@@ -53,6 +53,11 @@ void *vmm_reserve_mmio(uint32_t bytes)
 { assert(nwindows<3);windows[nwindows]=calloc(1,bytes);assert(windows[nwindows]);return windows[nwindows++]; }
 void *vmm_replace_mmio(void *window,uint32_t cap,uint32_t phys,uint32_t bytes)
 { (void)phys;assert(window && cap==bytes);return ++mapped==fail_map ? 0 : window; }
+void *vmm_replace_framebuffer(void *window,uint32_t cap,uint32_t phys,uint32_t bytes)
+{ return vmm_replace_mmio(window,cap,phys,bytes); }
+static uint32_t export_cache;
+bool vmm_cache_alias_ok(uint32_t phys,uint32_t bytes,uint32_t flags)
+{ assert(phys==gpu.bar[1] && bytes==DOS_VBE_BYTES);return flags==export_cache; }
 void vmm_revoke_mmio(void *window,uint32_t bytes) { assert(window && bytes);revoked++; }
 int udelay(uint32_t us) { card.us+=us;return 0; }
 uint64_t ktime_cycles(void) { return card.us; }
@@ -151,11 +156,22 @@ static void packed_ownership(void)
         runtime_fixture();assert(supersavage_display_supported(&desktop,modes[i]) && !nwindows && !card.reads);
         assert(!supersavage_display_prepare(&desktop,modes[i]));
         assert(!supersavage_display_begin(modes[i]) && linear_mapping && mapped==3);
+        struct display_lfb exported;
+        for (unsigned cache=0;cache<2;cache++) {
+            export_cache=cache ? PTE_PCD|PTE_PWT : 0;
+            assert(!supersavage_display_lfb(&exported));
+            const struct dos_video_mode *m=dos_video_mode(modes[i]);
+            assert(exported.physical==desktop.phys && exported.mapped==linear_mapping &&
+                exported.bytes==DOS_VBE_BYTES && exported.pitch==m->pitch && exported.width==m->width &&
+                exported.height==m->height && exported.bpp==m->bpp && exported.cache_flags==export_cache);
+        }
+        export_cache=0;
         uint8_t bytes[]={1,2,3,4};
         assert(!supersavage_display_write(DOS_VBE_BYTES-4,bytes,4));
         assert(!memcmp((void *)(linear_mapping+DOS_VBE_BYTES-4),bytes,4));
         assert(supersavage_display_write(DOS_VBE_BYTES-3,bytes,4)==-EIO);
         assert(!supersavage_display_end() && !linear_mapping && revoked==3);
+        assert(supersavage_display_lfb(&exported)==-EOPNOTSUPP);
         assert(supersavage_display_write(0,bytes,4)==-EIO);
         restored();
     }

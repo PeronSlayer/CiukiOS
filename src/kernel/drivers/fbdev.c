@@ -1101,9 +1101,13 @@ static int batch_begin(void *arg, struct display_batch *b)
 static int batch_native(void *arg, const struct swdib_command *c)
 {
     (void)arg;
-    if (!acceleration || accel_blocked || !acceleration->command || !acceleration->command_bits ||
+    bool stretch=c->record->opcode==CIUKI_CMD_SCALED && c->record->filter==CIUKI_FILTER_NEAREST_EDGE;
+    if (!acceleration || accel_blocked || !acceleration->command_bits ||
         !(acceleration->command_bits(acceleration->ctx)&(1u<<c->record->opcode)) ||
         (c->dst && c->dst->kind==CIUKI_TARGET_SYSTEM) || (c->src && c->src->kind==CIUKI_TARGET_SYSTEM)) return -EOPNOTSUPP;
+    if (stretch ? (!acceleration->stretch_rect || !acceleration->command_features ||
+        !(acceleration->command_features(acceleration->ctx)&CIUKI_CAP_STRETCH)) : !acceleration->command)
+        return -EOPNOTSUPP;
     if (c->record->opcode==CIUKI_CMD_SCALED && c->record->filter==CIUKI_FILTER_BILINEAR &&
         (!acceleration->command_features || !(acceleration->command_features(acceleration->ctx)&CIUKI_CAP_BILINEAR))) return -EOPNOTSUPP;
     if (c->record->opcode==CIUKI_CMD_CURSOR_ARGB_SET) {
@@ -1112,7 +1116,7 @@ static int batch_native(void *arg, const struct swdib_command *c)
         if (!w || !h || w>64 || h>64 || c->record->dw>w || c->record->dh>h) return -EOPNOTSUPP;
     }
     framebuffer_write_drain();
-    return acceleration->command(acceleration->ctx,c);
+    return stretch ? acceleration->stretch_rect(acceleration->ctx,c) : acceleration->command(acceleration->ctx,c);
 }
 static int batch_sync(void *arg)
 {
@@ -1233,6 +1237,8 @@ int fbdev_command_info(uint32_t generation, struct ciuki_command_info *out)
         if (native&(1u<<CIUKI_CMD_SCALED)) {
             out->capabilities|=CIUKI_CAP_SCALED;
             if (acceleration->command_features) out->capabilities|=acceleration->command_features(acceleration->ctx)&CIUKI_CAP_BILINEAR;
+            if (acceleration->stretch_rect && acceleration->command_features)
+                out->capabilities|=acceleration->command_features(acceleration->ctx)&CIUKI_CAP_STRETCH;
         }
         if (native&(1u<<CIUKI_CMD_LINE)) out->capabilities|=CIUKI_CAP_LINE;
         if (native&(1u<<CIUKI_CMD_CURSOR_ARGB_SET)) {
