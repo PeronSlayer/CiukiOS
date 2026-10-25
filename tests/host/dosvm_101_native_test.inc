@@ -11,12 +11,13 @@ static void native_transfer_enter(void)
 static void native_copy_preempt(void)
 {
     if (!native_copy_vm->vbe_direct.copying) return;
-    CHECK(fullscreen_busy && fullscreen_owner==native_copy_vm);
+    CHECK(dosvm_fullscreen_pinned(native_copy_vm) && fullscreen_owner==native_copy_vm);
     CHECK(dosvm_fullscreen_leave(dosvm_key(native_copy_vm),false)==-EBUSY);
     native_copy_preempts++;
 }
 static void test_101_native(void)
 {
+    test_101_revoke_races();
     window_fixtures(); fs_vbe_available=true; fs_direct_available=true;
     (void)dosvm_fullscreen_input(INPUT_RESYNC,0,0);
     fs_direct_phys=0x300000; fs_direct_cache=0;

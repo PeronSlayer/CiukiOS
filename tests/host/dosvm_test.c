@@ -1034,10 +1034,12 @@ static void test_memory_services(bool locked)
 #include "dosvm_properties_test.inc"
 #include "dosvm_fx27_test.inc"     /* fx-27: windowed DOS graphics budgets */
 #include "dosvm_101_video_test.inc"
+#include "dosvm_101_revoke_race_test.inc"
 #include "dosvm_101_native_test.inc"
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
+    if (getenv("CIUKI_VM_101_REVOKE_RACE")) { test_101_revoke_races(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_101_BENCH")) { bench_101_video(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_101_VIDEO")) { test_101_video(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_101_NATIVE")) { test_101_native(); free(ram); fflush(stdout); return 0; }

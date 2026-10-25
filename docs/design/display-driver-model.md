@@ -124,6 +124,16 @@ and TLB rules follow [Intel SDM Vol. 3A](https://www.intel.com/content/www/us/en
 sections 4.10 and 12 (formerly 11), using the existing MTRR policy.
 Mode-change continuations pin the global display transaction across copy-back
 service points; a second return cannot restore the provider underneath them.
+The mode-change pin is independent of the display worker's busy ownership:
+neither continuation saves/restores the other's state. A leave already waiting
+at a checkpoint or in park must recheck this pin and revocation completion
+after yielding. An in-progress copy-back is a deferred return, including after
+park timeout; the VM and provider remain pinned until `pages == 0 && !copying`
+and the mode-change continuation releases its pin. Poll continuations also
+recheck the pin after checkpoint waits before requesting a leave. These are
+software lifetime requirements in addition to the unchanged Intel SDM
+4.10.4.2/4.10.4.4 invalidation rules; TLB invalidation alone cannot protect a
+kernel alias still being read by another continuation.
 Kernel pool transfers recheck the direct lease after a resolving service point.
 
 **[DM3] Batches and fences.** A new user request, `CIUKI_ACCEL_BATCH`, takes

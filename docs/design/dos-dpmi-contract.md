@@ -1029,6 +1029,13 @@ screenshots read the exported LFB alias while mapped. The display-driver-model
 PTEs and only then restores desktop ownership. Hotkey/focus loss, stop, fault,
 mode change and entry rollback all revoke; any admission refusal retains the
 pool-backed copy path. A parked VM cannot be destroyed during the transfer.
+Revocation reports whether copy-back and PTE restoration have completed;
+another continuation copying is not completion. A leave that yielded before
+copy-back began must defer provider restoration and retain the VM hold when
+revocation is incomplete, even after park timeout. Mode changes own a separate
+pin, never a saved copy of the display worker's busy flag. Existing poll/leave
+continuations recheck that pin after yielding; return resumes on a later poll
+once the copy and mode-change continuation finish.
 
 **Locked compatibility mode.** `dosvm_config.memory_locked`, set per game by
 the launcher (`/system/settings/dos-game-N.cfg` line `DOS memory=locked`,

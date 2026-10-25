@@ -229,10 +229,11 @@ void dosvm_vbe_direct_withdraw(struct dosvm *v)
     }
     irq_restore(flags);
 }
-void dosvm_vbe_direct_revoke(struct dosvm *v)
+bool dosvm_vbe_direct_revoke(struct dosvm *v)
 {
     uint32_t flags=irq_save();
-    if (!v->vbe_direct.pages || v->vbe_direct.copying) { irq_restore(flags); return; }
+    if (v->vbe_direct.copying) { irq_restore(flags); return false; }
+    if (!v->vbe_direct.pages) { irq_restore(flags); return true; }
     v->vbe_direct.copying=true;
     dosvm_vbe_direct_withdraw(v);
     irq_restore(flags);
@@ -260,6 +261,7 @@ void dosvm_vbe_direct_revoke(struct dosvm *v)
     v->vbe_direct.lfb.mapped=0; v->vbe_direct.revoking=false;
     v->video_presented=false; v->video_lut_valid=false;
     irq_restore(flags);
+    return true;
 }
 int dosvm_vbe_direct_transfer(struct dosvm *v,uint32_t linear,void *buffer,unsigned bytes,bool write)
 {

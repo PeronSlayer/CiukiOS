@@ -13,6 +13,7 @@ static unsigned fs_watchdog_returns;
 static struct dosvm *fs_expected_owner;
 static uint32_t fs_expected_ptes[32];
 static const char *fs_fail_checkpoint;
+static void (*fs_checkpoint_hook)(const char *);
 static unsigned fs_checkpoints;
 static bool fs_test_checkpoint_pin;
 static unsigned fs_recovery_ms;
@@ -69,6 +70,7 @@ int display_fullscreen_checkpoint(const char *step,int result)
     }
     if (fs_test_checkpoint_pin && !strcmp(step,"vm-park"))
         CHECK(dosvm_destroy(dosvm_focused_key(),true)==-EBUSY);
+    if (fs_checkpoint_hook) fs_checkpoint_hook(step);
     return fs_fail_checkpoint && !strcmp(step,fs_fail_checkpoint) ? -EIO : 0;
 }
 uint32_t grants_display_pid(void) { return 10; }
@@ -85,6 +87,8 @@ int display_fullscreen_begin(uint16_t mode)
 { CHECK(cvga_find_mode(mode) || (fs_vbe_available && dos_video_mode(mode))); fs_begins++; if (fs_refuse) return DISPLAY_FULLSCREEN_WINDOWED; CHECK(!fs_display); fs_display=true; return 0; }
 int display_fullscreen_end(void) {
     CHECK(fs_display);
+    if (fs_direct_available && fs_expected_owner)
+        CHECK(!fs_expected_owner->vbe_direct.pages && !fs_expected_owner->vbe_direct.copying);
     if (fs_return_order) { CHECK(fs_exit_stage==2 && !fs_ports);fs_exit_stage=3; }
     g_ticks+=fs_recovery_ms;
     for (unsigned i=0;i<fs_end_sleeps;i++) task_sleep_ms(1);

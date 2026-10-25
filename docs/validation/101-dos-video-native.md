@@ -52,3 +52,36 @@ provider writes per frame for modes 0101h/0103h/0111h/0114h respectively. Exact
 row replication reduces the synthetic Fit/100%/125% presentation records from
 273/272/310 COPYs to 172/194/156 STRETCHes; CPU upload volume is unchanged.
 These are operation counts, not measured physical timings or FPS.
+
+## Review fixes: overlapping revocation continuations
+
+The [Intel SDM Vol. 3A](https://cdrdv2-public.intel.com/825758/253668-sdm-vol-3a.pdf),
+4.10.4.2 and 4.10.4.4, requires invalidation when page mappings change and
+explains the consequences of delayed invalidation. The implementation already
+invalidates the active guest address space and otherwise relies on its next
+CR3 load. That does not settle kernel-alias lifetime: an existing leave could
+restore the provider after revocation returned early during another copy-back.
+Revocation now explicitly reports incomplete work, and leave defers while
+copy-back or the separate mode-change pin remains active. A prior park timeout
+retains its suspended/error outcome across the deferred retry. Mode changes
+never restore a saved display-worker busy flag; sleeping polls recheck the
+mode-change pin when they resume. A mode change joining worker-owned copy-back
+waits before clearing/reusing RAM, while leave defers provider restoration.
+
+The [Voodoo3 programming guide](https://bitsavers.trailing-edge.com/components/3dfx/Voodoo3_Programming_Guide_r1.4a_199906.pdf),
+7.2.23.2 and 8.4, was rechecked for the existing screen-to-screen stretch path.
+The review fixes add no register sequence, cache-policy change or STRETCH
+change. The read-only Resource Kit `wrkc24_3.htm`, lines 202–214, was also
+checked in place; its DIB fallback remains unchanged.
+
+Two coroutine regressions reproduced the review failures on `e1a82992b`:
+provider restoration during copy-back after an existing leave's park timeout,
+and a poll completing during mode-change copy-back followed by stale busy
+restoration. Both now complete their assertions for WC and UC. An additional
+reverse-order case checks a mode change joining display-worker copy-back.
+The six cases check provider/VM pins, destroy refusal, restored PTEs/accounting,
+mode clear ordering, a later successful return and retained timeout suspension.
+They run in the normal DOS VM suite as well as the focused native suite.
+The complete DOS VM assertion body passes 60,510,311 checks. Default
+LeakSanitizer still fails its sandbox finalization, so the sanitized process
+exits require a lead rerun; exact commands/results are in the report above.

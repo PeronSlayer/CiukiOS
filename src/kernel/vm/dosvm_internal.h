@@ -541,7 +541,8 @@ int dosvm_vbe_map(struct dosvm *, struct v86_frame *, unsigned);
 bool dosvm_vbe_dirty(struct dosvm *, bool clear);
 bool dosvm_vbe_direct_enter(struct dosvm *);
 void dosvm_vbe_direct_withdraw(struct dosvm *);
-void dosvm_vbe_direct_revoke(struct dosvm *);
+/* False means another continuation still owns copy-back/PTE restoration. */
+bool dosvm_vbe_direct_revoke(struct dosvm *);
 /* One page at a time, with no yield while borrowing the provider alias.
  * 0: outside direct range, 1: copied, negative: withdrawing, retry later. */
 int dosvm_vbe_direct_transfer(struct dosvm *, uint32_t, void *, unsigned, bool);

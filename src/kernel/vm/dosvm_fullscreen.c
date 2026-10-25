@@ -12,6 +12,10 @@
 #include "vga_hardware.h"
 static struct dosvm *fullscreen_owner;
 static bool fullscreen_busy, fullscreen_return;
+/* The guest's mode-change continuation can overlap a sleeping display
+ * worker. Each owns its pin; neither may restore the other's busy state. */
+static struct dosvm *fullscreen_mode_vm;
+static bool fullscreen_park_timeout; /* retained across a deferred leave */
 static bool fullscreen_background;
 static unsigned desktop_pending,desktop_next;
 static struct dosvm_key fullscreen_request;
@@ -143,7 +147,8 @@ bool dosvm_fullscreen_aperture(struct dosvm *v, uint32_t linear, unsigned bytes,
 }
 bool dosvm_fullscreen_pinned(const struct dosvm *v)
 {
-    return v->fullscreen_hold || (fullscreen_busy && (fullscreen_owner==v || transfer_vm==v));
+    return v->fullscreen_hold || fullscreen_mode_vm==v || v->vbe_direct.copying ||
+        (fullscreen_busy && (fullscreen_owner==v || transfer_vm==v));
 }
 bool dosvm_fullscreen_service(void) { return fullscreen_busy && fullscreen_service_task==g_current; }
 static bool same_key(struct dosvm_key a, struct dosvm_key b)
@@ -239,13 +244,15 @@ static int map_aperture(struct dosvm *v, bool grant)
 void dosvm_fullscreen_mode_changed(struct dosvm *v)
 {
     uint32_t flags=irq_save();
-    if (fullscreen_owner!=v) { irq_restore(flags); return; }
+    if (fullscreen_owner!=v || !v->fullscreen) { irq_restore(flags); return; }
     /* Copy-back can yield. Pin the global owner and aperture snapshot until
      * this VM's mode-change continuation has queued the ordered return. */
-    bool busy=fullscreen_busy;
-    fullscreen_busy=true;
+    fullscreen_mode_vm=v;
     irq_restore(flags);
-    dosvm_vbe_direct_revoke(v);
+    /* A display worker may already be copying after a park timeout. Let it
+     * finish before the guest can clear/reuse the retained RAM buffer. Its
+     * leave must defer while this independent pin remains held. */
+    while (!dosvm_vbe_direct_revoke(v)) task_sleep_ms(1);
     /* A guest worker cannot synchronously park itself. Finish the synthetic
      * operation, then park at its normal checkpoint for the display worker. */
     arch_vga_io(false); map_aperture(v,false);
@@ -253,7 +260,7 @@ void dosvm_fullscreen_mode_changed(struct dosvm *v)
     fullscreen_revoked=true; if (transfer_vm==v) transfer_vm=0;
     v->fullscreen_hold=true;
     display_fullscreen_return_request();
-    flags=irq_save(); fullscreen_busy=busy; irq_restore(flags);
+    flags=irq_save(); fullscreen_mode_vm=0; irq_restore(flags);
 }
 static void linear_palette(struct dosvm *v)
 {
@@ -283,6 +290,7 @@ int dosvm_fullscreen_enter(struct dosvm_key key)
     fullscreen_service_task=g_current;
     boost=boost_begin();
     fullscreen_linear=v->vbe_mode!=0; fullscreen_model_changed=false;
+    fullscreen_park_timeout=false;
     v->fullscreen_error=0; v->fullscreen_cause=DOSVM_FS_NONE; fullscreen_cause_next=0;
     /* Persistence sleeps: pin the VM before the first record can yield. */
     v->fullscreen_hold=true;
@@ -360,10 +368,14 @@ static bool capture_expired(void *arg) { return deadline_passed(*(const uint64_t
 static unsigned page_count(uint16_t pages) { unsigned n=0; for (;pages;pages&=(uint16_t)(pages-1)) n++; return n; }
 int dosvm_fullscreen_leave(struct dosvm_key key, bool background)
 {
-    if (!dosvm_fullscreen_active(key)) return 0;
-    if (fullscreen_busy || fullscreen_owner->vbe_direct.copying) return -EBUSY;
+    uint32_t flags=irq_save();
+    if (!dosvm_fullscreen_active(key)) { irq_restore(flags); return 0; }
+    if (fullscreen_busy || fullscreen_mode_vm==fullscreen_owner || fullscreen_owner->vbe_direct.copying) {
+        irq_restore(flags); return -EBUSY;
+    }
     fullscreen_busy=true;
     fullscreen_service_task=g_current;
+    irq_restore(flags);
     struct fs_boost boost=boost_begin();
     uint64_t began=g_ticks;
     struct dosvm *v=fullscreen_owner;
@@ -376,11 +388,22 @@ int dosvm_fullscreen_leave(struct dosvm_key key, bool background)
      * Revoke its physical lease and suspend it at its next VM checkpoint. */
     bool transfer=transfer_vm==v;
     int parked=park(v,FS_PARK_MS);
+    if (parked) fullscreen_park_timeout=true;
     uint64_t park_ms=g_ticks-began;
     if (parked) klog("[dosvm] fullscreen_quiesced vm=%u generation=%u park_ms=%llu transfer=%u",
         key.id,key.generation,park_ms,(unsigned)transfer);
-    dosvm_vbe_direct_revoke(v);
-    uint32_t flags=irq_save();
+    bool revoked=dosvm_vbe_direct_revoke(v);
+    flags=irq_save();
+    if (!revoked || fullscreen_mode_vm==v) {
+        /* Copy-back may have begun during guest-revoke or park. Keep the
+         * VM hold and provider lease even after timeout; a later worker
+         * poll retries once both continuations have released their pins. */
+        fullscreen_return=true; return_cause(v->fullscreen_cause);
+        fullscreen_busy=false;
+        irq_restore(flags);
+        boost_end(&boost);
+        return -EBUSY;
+    }
     arch_vga_io(false);
     uint32_t dirty=collect_dirty(v,false);
     v->fullscreen=false;
@@ -409,21 +432,22 @@ int dosvm_fullscreen_leave(struct dosvm_key key, bool background)
     uint64_t restore_began=g_ticks;
     int restored=display_fullscreen_end();
     uint64_t restore_ms=g_ticks-restore_began;
-    int revoked=e;
+    int revoke_result=e;
     if (!e) e=restored;
     /* A guest state that could not be saved within its bound leaves the VM
      * suspended in its window (f1-80 park policy): the desktop returns. */
-    if (e || parked || capture_lost) v->fullscreen_error=e ? e : -ETIMEDOUT;
+    if (e || fullscreen_park_timeout || capture_lost) v->fullscreen_error=e ? e : -ETIMEDOUT;
     fullscreen_owner=0; fullscreen_return=false;
     desktop_next=0; desktop_pending=background && fullscreen_background ? 5 : 1;
-    v->fullscreen_suspended=(parked || capture_lost || (background && v->fullscreen_pause)) && dosvm_valid(key);
+    v->fullscreen_suspended=(fullscreen_park_timeout || capture_lost || (background && v->fullscreen_pause)) && dosvm_valid(key);
+    fullscreen_park_timeout=false;
     unhold(v);
     klog("[dosvm] fullscreen_return vm=%u generation=%u park_ms=%llu park=%s transfer=%u capture=%s capture_pages=%u/%u capture_ms=%llu restore_ms=%llu total_ms=%llu result=%d",
         key.id,key.generation,park_ms,parked ? "timeout" : "parked",(unsigned)transfer,capture,
         page_count(captured),page_count(wanted),capture_ms,restore_ms,
         g_ticks-began,e);
     klog("[dosvm] fullscreen=0 vm=%u generation=%u result=%d suspended=%u revoke_result=%d restore_result=%d cause=%s",
-        key.id,key.generation,e,v->fullscreen_suspended,revoked,restored,
+        key.id,key.generation,e,v->fullscreen_suspended,revoke_result,restored,
         fullscreen_causes[v->fullscreen_cause<DOSVM_FS_CAUSES ? v->fullscreen_cause : 0]);
     fullscreen_busy=false;
     boost_end(&boost);
@@ -456,7 +480,9 @@ void dosvm_fullscreen_progress(struct dosvm *v, uint32_t cs, uint32_t ip)
 void dosvm_fullscreen_poll(void)
 {
     uint32_t flags=irq_save();
-    if (fullscreen_busy) { irq_restore(flags); return; }
+    if (fullscreen_busy || fullscreen_mode_vm || (fullscreen_owner && fullscreen_owner->vbe_direct.copying)) {
+        irq_restore(flags); return;
+    }
     struct dosvm *v=fullscreen_owner;
     if (v) fullscreen_busy=true; /* checkpoint waits must pin the owner */
     irq_restore(flags);
@@ -471,6 +497,7 @@ void dosvm_fullscreen_poll(void)
                 klog("[dosvm] fullscreen_first_frame vm=%u generation=%u tick=%llu source=linear-write",
                     v->info.key.id,v->info.key.generation,g_ticks);
                 display_fullscreen_checkpoint("first-guest-frame",0);
+                if (fullscreen_mode_vm==v || v->vbe_direct.copying) goto release;
             }
         }
         if (!fullscreen_linear && !fullscreen_frame_seen && v->as.pd_phys) {
@@ -484,6 +511,7 @@ void dosvm_fullscreen_poll(void)
                 klog("[dosvm] fullscreen_first_frame vm=%u generation=%u tick=%llu source=aperture-write",
                     v->info.key.id,v->info.key.generation,g_ticks);
                 display_fullscreen_checkpoint("first-guest-frame",0);
+                if (fullscreen_mode_vm==v || v->vbe_direct.copying) goto release;
             }
         }
         /* f3-61: once a first frame was seen, one sample per second of the
@@ -529,11 +557,15 @@ void dosvm_fullscreen_poll(void)
                  v->info.key.id,v->info.key.generation,reason,fullscreen_causes[cause],
                  cause==DOSVM_FS_STOPPING ? v->info.reason : 0,cause==DOSVM_FS_STOPPING ? v->info.fault_vector : 0);
             display_fullscreen_checkpoint("watchdog-return",0);
+            if (fullscreen_mode_vm==v || v->vbe_direct.copying) goto release;
             if (frame_timeout || progress_timeout) v->fullscreen_error=-ETIMEDOUT;
             struct dosvm_key key=v->info.key;
             fullscreen_busy=false;
             dosvm_fullscreen_leave(key,fullscreen_background);
-        } else fullscreen_busy=false;
+            return;
+        }
+release:
+        fullscreen_busy=false;
     } else if (fullscreen_request.id) {
         struct dosvm_key key=fullscreen_request;
         fullscreen_request=(struct dosvm_key){0};
