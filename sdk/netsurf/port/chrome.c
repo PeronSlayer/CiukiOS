@@ -437,14 +437,19 @@ bool ciuki_chrome_input(const struct ciuki_input_event *input)
         struct du_widget *focused=&ui.dialog.items[ui.dialog.focus];
         if(focused->kind==DU_EDIT)edit=focused;
     } else if(!ui.dialog.kind && du_focused(&ui)==URL)edit=du_get(&ui,URL);
+    /* Desktop TEXT owns printable input, including AltGr (right Alt or
+     * Ctrl+right Alt). KEY still owns editing, navigation and shortcuts. */
+    bool altgr=ui.keys[DU_KEY_RALT];
     if(e.type==CIUKI_INPUT_TEXT && edit) {
+        /* QEMU 2026-10-25: the desktop also sends the character of a
+         * Ctrl or Alt chord, so Ctrl+L selected the address and then typed
+         * "l" over it ("lhttp://..."). As in a Windows edit control, a Ctrl
+         * or (left) Alt chord is a command, never text; AltGr still types. */
+        if((ui.modifiers&(DU_CTRL|DU_ALT)) && !altgr)return true;
         char utf8[5];
         if(e.code>=32 && e.code!=127 && du_utf8_encode(e.code,utf8))du_edit_insert(edit,utf8);
         ui.dirty=1;return true;
     }
-    /* Desktop TEXT owns printable input, including AltGr (right Alt or
-     * Ctrl+right Alt). KEY still owns editing, navigation and shortcuts. */
-    bool altgr=ui.keys[DU_KEY_RALT];
     if(e.type==CIUKI_INPUT_KEY && e.value && edit &&
        (!(ui.modifiers&(DU_CTRL|DU_ALT)) || altgr) && du_keymap(DU_LAYOUT_US,e.code,0))return true;
     if(e.type==CIUKI_INPUT_WHEEL && !ui.dialog.kind && ui.capture<0 &&
@@ -591,7 +596,17 @@ void ciuki_chrome_defaults(void)
         nsoption_set_charp(http_proxy_host,internet.proxy[0]?strdup(internet.proxy):NULL);
         nsoption_set_int(http_proxy_port,internet.port);
     } else nsoption_set_int(memory_cache_size,2*1024*1024);
+#ifdef CIUKI_HOST
     nsoption_set_bool(enable_javascript,true);
+#else
+    /* Temporary (2026-10-25, docs/design/netsurf-port-plan.md): JavaScript
+     * is off by default on CiukiOS until the Duktape fault on real pages is
+     * fixed (QEMU: a script of the first remote page faulted on a NULL
+     * object in duk_hobject_find_entry_tval_ptr_stridx). A profile Choices
+     * file with enable_javascript:1 still turns it on. Host builds keep it
+     * on for the JavaScript host tests. */
+    nsoption_set_bool(enable_javascript,false);
+#endif
     nsoption_set_uint(disc_cache_size,0);
     nsoption_set_charp(disc_cache_path,NULL);nsoption_set_charp(cookie_file,NULL);nsoption_set_charp(cookie_jar,NULL);
     nsoption_set_int(max_fetchers,8);nsoption_set_int(max_fetchers_per_host,2);

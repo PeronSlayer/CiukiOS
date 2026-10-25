@@ -900,6 +900,19 @@ own mark recursion is capped at 256 levels, and the recursion behind it is not
 yet identified; the first JavaScript allocation made with less than 128 KiB of
 main stack left logs `[netsurf] deep stack` lines with the frame chain (frame
 pointers are kept) for llvm-symbolizer. A refused navigation logs
-`[netsurf] navigate error=` with the fetcher table (patch 0013: scheme string
-and slot pointers and reference counts, no URL text). Host evidence and limits are in
+`[netsurf] navigate error=`, and for NO_FETCH_HANDLER a `[netsurf] fetchers`
+line with the fetcher table (patch 0013: scheme and slot strings, no URL
+text). The address bar and the chrome's dialog edits ignore the text of a
+Ctrl or left-Alt chord, as a Windows edit control does (the desktop sends the
+chord's character too: Ctrl+L selected the address and then typed "l" over
+it, giving "lhttp://..."); AltGr still types.
+
+**Temporary decision (2026-10-25): JavaScript is off by default on CiukiOS.**
+The first remote page that loaded in QEMU (image of 89850ae0) faulted in a
+script on a NULL object (`duk_hobject_find_entry_tval_ptr_stridx`, address
+0x200). Until that Duktape/binding fault is found and fixed with a host test,
+`ciuki_chrome_defaults()` sets `enable_javascript` off on the target and the
+system Choices says `enable_javascript:0`, so pages load without scripts; a
+profile Choices with `enable_javascript:1` still enables it. Host builds keep
+JavaScript on for the JavaScript host tests. Host evidence and limits are in
 `build/codex/g26-report.md` and `build/codex/g26b-report.md`.

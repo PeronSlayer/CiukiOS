@@ -1,9 +1,7 @@
-CiukiOS: diagnostics for a typed http address refused with NO_FETCH_HANDLER
-(QEMU 2026-10-25). content/fetch.c: fetch_ciuki_describe() for a refused
-navigation (port/chrome.c logs it): the intern table census, the corestring
-"http" pointer, the URL scheme string and every fetcher slot string (pointer,
-reference count, length, hash, text), no URL text. libwapcaplet: the first
-destructions of "http"/"https" log the caller chain on the i686 target.
+CiukiOS: fetcher table diagnostic for a refused navigation (port/chrome.c logs it
+after a NO_FETCH_HANDLER navigate error): the intern table census, the
+corestring "http" pointer, the URL scheme string and every fetcher slot string
+(pointer, reference count, length, hash, text), no URL text.
 
 --- a/netsurf/content/fetch.c
 +++ b/netsurf/content/fetch.c
@@ -77,54 +75,3 @@ destructions of "http"/"https" log the caller chain on the i686 target.
  /* exported interface documented in content/fetch.h */
  bool fetch_can_fetch(const nsurl *url)
  {
---- a/libwapcaplet/src/libwapcaplet.c
-+++ b/libwapcaplet/src/libwapcaplet.c
-@@ -183,10 +183,48 @@
- 	return lwc_error_ok;
- }
- 
-+#if defined(__i386__) && defined(CIUKI_NETSURF)
-+#include <stdint.h>
-+#include <stdio.h>
-+#include <unistd.h>
-+/* CiukiOS diagnostic (QEMU 2026-10-25): the interned "http" string that
-+ * corestrings and the http fetcher hold was destroyed while still in use,
-+ * so later URLs interned a new "http" and found no fetcher. The first
-+ * destructions of "http" and "https" log the caller chain (the browser is
-+ * built with frame pointers; resolve with llvm-symbolizer). At exit they
-+ * are destroyed legitimately, after the exit report line. */
-+static void lwc__ciuki_trace(const lwc_string *str)
-+{
-+	static int reported;
-+	if (reported >= 3) return;
-+	if (!((str->len == 4 && memcmp(CSTR_OF(str), "http", 4) == 0) ||
-+	      (str->len == 5 && memcmp(CSTR_OF(str), "https", 5) == 0)))
-+		return;
-+	reported++;
-+	char line[400];
-+	int n = snprintf(line, sizeof(line), "[netsurf] lwc destroy %.*s %p:",
-+			 (int)str->len, CSTR_OF(str), (const void *)str);
-+	/* Main thread stack only: CIUKI_MAIN_STACK_RESERVATION_BASE to
-+	 * CIUKI_MAIN_STACK_LIMIT (ciuki/abi.h). */
-+	uintptr_t *fp = __builtin_frame_address(0);
-+	for (int i = 0; i < 24 && n > 0 && (size_t)n + 12 < sizeof(line); i++) {
-+		if ((uintptr_t)fp < 0xbfc00000u || (uintptr_t)fp > 0xc0000000u - 8) break;
-+		n += snprintf(line + n, sizeof(line) - (size_t)n, " %#lx", (unsigned long)fp[1]);
-+		uintptr_t *next = (uintptr_t *)fp[0];
-+		if (next <= fp) break;
-+		fp = next;
-+	}
-+	if (n > 0 && (size_t)n + 1 < sizeof(line)) { line[n++] = '\n'; (void)!write(2, line, (size_t)n); }
-+}
-+#endif
-+
- void
- lwc_string_destroy(lwc_string *str)
- {
- 	assert(str);
-+#if defined(__i386__) && defined(CIUKI_NETSURF)
-+	lwc__ciuki_trace(str);
-+#endif
- 
- 	*(str->prevptr) = str->next;
- 
