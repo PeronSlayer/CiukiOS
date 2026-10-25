@@ -2,7 +2,7 @@
 
 The production loader is assembled with NASM and its new stages run in the
 bounded host executor (loader_parser_machine.py): BIOS INT 10h/13h/16h and
-the BDA tick are host fixtures, print/menu_echo/menu_getc are observed, and
+the BDA tick/IRQ wake are host fixtures, print/menu_echo are observed, and
 every result is compared with scripts/test/loader_model.py, the model of
 docs/design/startup-recovery.md. No firmware, QEMU or hardware is involved.
 """
@@ -25,7 +25,8 @@ NAMES = (*SYMBOLS, 'startup_menu', 'startup_apply', 'startup_scan', 'startup_hot
          'bootstat_read', 'bootstat_write', 'autoscan_check', 'disk_read', 'print',
          'menu_echo', 'menu_getc', 'progress_check', 'deadline_start', 'deadline_expired',
          'startup_auto', 'autoscan_mode', 'bootstat_valid', 'sector', 'fat_lba', 'disk_op',
-         'startup_choice', 'startup_secs', 'screen_char', 'startup_prompt', 'screen_quiet')
+         'startup_choice', 'startup_secs', 'screen_char', 'startup_prompt', 'screen_quiet',
+         'menu_tick', 'menu_polls', 'selector_source')
 INFO = 0x20000
 FLAGS = 8
 PART = 2048
@@ -45,22 +46,29 @@ class Machine(LoaderParserMachine):
     def __init__(self, binary):
         super().__init__(binary, NAMES)
 
-    def setup(self, flags=0, keys=(), ctrl_until=-1, disk=None, progress_expire_at=None):
+    def setup(self, flags=0, keys=(), ctrl_until=-1, disk=None, progress_expire_at=None,
+              serial=()):
         self.reset()
         self.budget = 3000000
         self.out, self.screen, self.writes = [], [], []
         self.tick = 0
         self.keys = list(keys)  # (tick, ascii, scan)
+        self.serial = list(serial)  # (tick, byte); UART capacity is not modelled.
+        self.port_reads = []
+        self.wakes = 0
+        self.clock_running = True
+        self.iflag = True  # entry enabled IRQs before discovery and the menus.
+        self.idle = self.irq_hook
         self.ctrl_until = ctrl_until
         self.disk = dict(disk or {})
         self.progress_expire_at = progress_expire_at
         self.write(f'dword [0x{self.info + FLAGS:x}]', flags, 32)
         self.write(f'dword [0x{self.info + 0x10:x}]', PART, 32)  # partition_lba
+        self.write(f'dword [0x{self.info + 0x38:x}]', 0x3f8 if serial else 0, 32)
         self.var('fat_lba', FAT_LBA, 32)
         self.set_tick(0)
         self.hooks[self.symbols['print']] = self.print_hook
         self.hooks[self.symbols['menu_echo']] = lambda: self.out.append(chr(self.read('al')))
-        self.hooks[self.symbols['menu_getc']] = self.getc_hook
         self.hooks[self.symbols['progress_check']] = self.progress_hook
         self.hooks[self.symbols['disk_read']] = self.disk_hook
         self.interrupts[0x10] = self.video
@@ -87,18 +95,36 @@ class Machine(LoaderParserMachine):
             self.screen.append(f'@{self.read("dh")}')
 
     def keyboard(self):
-        assert self.read('ah') == 2
-        self.write('al', 4 if self.tick <= self.ctrl_until else 0)
+        assert self.iflag, 'BIOS keyboard polling needs enabled interrupts'
+        ah = self.read('ah')
+        if ah == 2:
+            self.write('al', 4 if self.tick <= self.ctrl_until else 0)
+        else:
+            assert ah in (0, 1)
+            available = bool(self.keys and self.keys[0][0] <= self.tick)
+            self.zero = not available
+            if available:
+                _, ascii, scan = self.keys[0]
+                self.write('al', ascii)
+                self.write('ah', scan)
+                if ah == 0:
+                    self.keys.pop(0)
+            else:
+                assert ah == 1, 'blocking INT 16h without a buffered key'
 
-    def getc_hook(self):
-        if self.keys and self.keys[0][0] <= self.tick:
-            _, ascii, scan = self.keys.pop(0)
-            self.write('al', ascii)
-            self.write('ah', scan)
-            self.carry = False
-            return
-        self.set_tick(self.tick + 1)  # one BIOS tick per empty poll
-        self.carry = True
+    def port_read(self, port):
+        self.port_reads.append((self.tick, port))
+        assert port in (0x3fd, 0x3f8)
+        available = bool(self.serial and self.serial[0][0] <= self.tick)
+        if port == 0x3fd:
+            return int(available)
+        assert available, 'COM1 read without data ready'
+        return self.serial.pop(0)[1]
+
+    def irq_hook(self):
+        self.wakes += 1
+        if self.clock_running:
+            self.set_tick((self.tick + 1) % model.BootMenu.DAY_TICKS)
 
     def progress_hook(self):
         self.carry = self.progress_expire_at is not None and self.tick >= self.progress_expire_at
@@ -277,6 +303,127 @@ class StartupMenuTests(unittest.TestCase):
         m.setup(**options)
         self.assertTrue(m.run('boot_menu'))
         return m
+
+    def test_real_empty_input_path_halts_for_each_timer_tick(self):
+        m = self.boot_menu()
+        self.assertEqual((m.tick, m.wakes, m.var('menu_polls')), (55, 55, 55))
+        self.assertTrue(m.iflag)
+        self.assertNotIn(m.symbols['menu_getc'], m.hooks)
+
+    def test_idle_enables_interrupts_even_after_bios_clears_if(self):
+        m = self.m
+        m.setup()
+        m.iflag = False  # Exercise menu_getc's explicit STI before BIOS input.
+        keyboard = m.keyboard
+
+        def firmware_clears_if():
+            keyboard()
+            m.iflag = False
+
+        m.interrupts[0x16] = firmware_clears_if
+        for reg, value in (('bp', 55), ('di', 0x1234), ('es', 0x3456)):
+            m.write(reg, value)
+        self.assertTrue(m.run('menu_getc'))
+        self.assertTrue(m.carry)
+        self.assertTrue(m.iflag)
+        self.assertEqual(m.wakes, 1)
+        self.assertEqual(m.var('menu_polls'), 0)  # Saturates before any deadline.
+        self.assertEqual([m.read(reg) for reg in ('bp', 'di', 'es')],
+                         [55, 0x1234, 0x3456])
+
+    def test_stalled_bda_clock_uses_a_tick_sized_idle_bound(self):
+        m = self.m
+        m.setup()
+        m.clock_running = False
+        self.assertTrue(m.run('boot_menu'))
+        self.assertEqual((m.tick, m.wakes, m.var('menu_polls')), (0, 110, 0))
+        self.assertTrue(m.joined().endswith('L:SELECT_SOURCE=menu\r\n'))
+
+    def test_deadline_checks_and_buffered_keys_do_not_count_as_ticks(self):
+        m = self.m
+        m.setup(keys=[(0, ord('x'), 0)] * 200)
+        m.write('bp', 55)
+        self.assertTrue(m.run('deadline_start'))
+        for _ in range(200):
+            self.assertTrue(m.run('menu_getc'))
+            self.assertFalse(m.carry)
+            self.assertTrue(m.run('deadline_expired'))
+            self.assertFalse(m.carry)
+        self.assertEqual((m.tick, m.wakes, m.var('menu_polls')), (0, 0, 110))
+        self.assertTrue(m.run('menu_getc'))
+        self.assertTrue(m.carry)
+        for _ in range(200):
+            self.assertTrue(m.run('deadline_expired'))
+            self.assertFalse(m.carry)
+        self.assertEqual((m.tick, m.wakes, m.var('menu_polls')), (1, 1, 109))
+
+    def test_idle_countdown_wraps_at_midnight(self):
+        m = self.m
+        m.setup()
+        m.set_tick(model.BootMenu.DAY_TICKS - 10)
+        self.assertTrue(m.run('boot_menu'))
+        self.assertEqual((m.tick, m.wakes), (45, 55))
+
+    def test_keyboard_irq_without_a_tick_keeps_the_bda_deadline(self):
+        m = self.m
+        m.setup()
+
+        def keyboard_then_timer():
+            # An extra IRQ1 wake between each pair of timer ticks.
+            m.clock_running = bool(m.wakes % 2)
+            m.irq_hook()
+
+        m.idle = keyboard_then_timer
+        self.assertTrue(m.run('boot_menu'))
+        self.assertEqual((m.tick, m.wakes), (55, 110))
+
+    def test_keyboard_precedes_serial_and_serial_has_no_function_scan_code(self):
+        m = self.m
+        m.setup(keys=[(0, 0, model.SCAN_F8)], serial=[(0, ord('N'))])
+        self.assertTrue(m.run('menu_getc'))
+        self.assertFalse(m.carry)
+        self.assertEqual((m.read('al'), m.read('ah')), (0, model.SCAN_F8))
+        self.assertEqual(m.port_reads, [])
+        self.assertTrue(m.run('menu_getc'))
+        self.assertFalse(m.carry)
+        self.assertEqual((m.read('al'), m.read('ah')), (ord('N'), 0xff))
+        self.assertEqual(m.wakes, 0)
+
+    def test_serial_selectors_and_safe_log_hardware_normal_keys(self):
+        for serial in (False, True):
+            for text, expected, ticks in (
+                ('N', 0, 1), ('H', model.CBI_F_HW_CHECK | model.CBI_F_VERBOSE, 1),
+                ('SLN', model.CBI_F_SAFE_MODE | model.CBI_F_SERIAL_LOG |
+                 model.CBI_F_VERBOSE | model.CBI_F_DIAG_VERBOSE, 1),
+                ('S', model.CBI_F_SAFE_MODE, 56),
+                ('SPf1:safe run=12345678\r', model.CBI_F_SAFE_MODE |
+                 model.CBI_F_TEST_REQUEST, 1),
+            ):
+                with self.subTest(serial=serial, text=text):
+                    options = ({'serial': [(1, ord(c)) for c in text]} if serial else
+                               {'keys': [(1, ord(c), 0) for c in text]})
+                    m = self.boot_menu(**options)
+                    self.assertEqual(m.flags(), expected)
+                    self.assertEqual((m.tick, m.wakes), (ticks, ticks))
+                    self.assertTrue(m.joined().endswith('L:SELECT_SOURCE=menu\r\n'))
+        # No key: COM1 LSR is checked once per tick; an empty UART never blocks.
+        m = self.boot_menu(serial=[(1000, ord('N'))])
+        self.assertEqual(m.port_reads, [(tick, 0x3fd) for tick in range(55)])
+
+    def test_fw_cfg_bypasses_idle_and_cfg_timeout_and_positive_safe_survive(self):
+        m = self.m
+        m.setup(flags=model.CBI_F_TEST_REQUEST)
+        self.assertTrue(m.run('boot_menu'))
+        self.assertEqual((m.tick, m.wakes), (0, 0))
+        self.assertEqual(m.joined(), 'L:SELECT_SOURCE=fw_cfg\r\n')
+        m.setup(flags=model.CBI_F_TEST_REQUEST)
+        m.var('selector_source', 2, 8)
+        self.assertTrue(m.run('boot_menu'))
+        self.assertEqual((m.tick, m.wakes), (55, 55))
+        self.assertEqual(m.flags(), model.CBI_F_TEST_REQUEST)
+        self.assertTrue(m.joined().endswith('L:SELECT_SOURCE=cfg\r\n'))
+        m = self.boot_menu(flags=model.CBI_F_SAFE_MODE, keys=[(1, ord('N'), 0)])
+        self.assertEqual(m.flags(), model.CBI_F_SAFE_MODE)
 
     def test_boot_menu_opens_the_startup_menu_for_ctrl_f8_and_failed_starts(self):
         m = self.boot_menu(ctrl_until=3)

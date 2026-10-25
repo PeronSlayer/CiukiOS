@@ -820,6 +820,7 @@ menu_echo:
     ret
 
 menu_getc:
+    sti ; BIOS keyboard services and the idle path need live IRQ0/IRQ1.
     mov ah, 1
     int 0x16
     jz .serial
@@ -840,6 +841,15 @@ menu_getc:
     clc
     ret
 .empty:
+    ; BIOS real-mode IVT/PIC are still intact (masked only at PM handoff).
+    ; SeaBIOS stacks.c:wait_irq; see docs/validation/101-loader-menu-idle.md.
+    ; Sleep only when both inputs are empty: drain queued COM1 bytes promptly.
+    sti
+    hlt
+    cmp word [menu_polls], 0
+    je .return
+    dec word [menu_polls] ; One idle IRQ wake, normally one 18.2 Hz tick.
+.return:
     stc
     ret
 
@@ -850,11 +860,12 @@ deadline_start:
     mov eax, [es:0x46c]
     mov [menu_tick], eax
     pop es
-    mov dword [menu_polls], 0x2000000 ; Also bounded if firmware tick stops.
+    mov [menu_polls], bp
+    shl word [menu_polls], 1 ; Two tick windows, allowing extra keyboard IRQs.
     ret
 deadline_expired:
-    dec dword [menu_polls]
-    jz .expired
+    cmp word [menu_polls], 0 ; Only HLT wakeups consume the safety budget.
+    je .expired
     push es
     xor ax, ax
     mov es, ax
@@ -874,7 +885,7 @@ deadline_expired:
     clc
     ret
 menu_tick dd 0
-menu_polls dd 0
+menu_polls dw 0
 
 f4_probe_names db 'optical',0,'audio-native',0,'ntfs-ro',0,'vm-audio',0,'media-remove',0,'vm-audio-jitter',0,0
 f5_probe_names db 'f5-core',0,'w32-exceptions',0,'w32-memory',0,'w32-objects',0,'w32-dialogs',0,'w32-upper-dlls',0,'w32-media',0,'w32-fixtures',0,'w32-kernel32',0,'w32-fullscreen',0,'w32-registry',0,'w32-audio',0,'w32-gdi32',0,'w32-crash',0,'w32-user32',0,'w32-codecs',0,'w32-ddraw',0,'w32-input',0,'w32-restart',0,'w32-installer-nsis',0,'w32-gl',0,'win32-diablo-shareware',0,'win32-sc',0,'win32-aoe-trial',0,'win32-half-life-uplink',0,'win32-ut-demo-348',0,'win32-wa',0,'win32-heroes3-demo',0,'win32-rct-demo',0,'win32-jazz2-shareware',0,'win32-ta-demo',0,0
