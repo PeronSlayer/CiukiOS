@@ -34,7 +34,9 @@ int main(void) {
     char huge[128]; memset(huge,'x',sizeof(huge)); memcpy(huge,locked,sizeof(locked)-1);
     write_config(huge,sizeof(huge)); assert(dosbox_memory_load(2)==CIUKI_DOSVM_MEMORY_PAGED);
     char path[128]; assert(!dosbox_setting_path(2,path,sizeof(path))); assert(!unlink(path));
-    assert(dosbox_setting_path(0,path,sizeof(path))<0 && dosbox_setting_path(4,path,sizeof(path))<0);
+    /* Slots 1..DESK_GAME_COUNT (4 since the Warcraft II demo) are valid. */
+    assert(!dosbox_setting_path(DESK_GAME_COUNT,path,sizeof(path)));
+    assert(dosbox_setting_path(0,path,sizeof(path))<0 && dosbox_setting_path(DESK_GAME_COUNT+1,path,sizeof(path))<0);
     puts("PASS unified-only read-only configuration parser: retired/malformed/oversized/NUL files default, locked accepted");
     return 0;
 }

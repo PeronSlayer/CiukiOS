@@ -7,6 +7,7 @@
  * lacks or fakes, plus ENTER with mixed operand and stack sizes. Evidence quality: an emulator, not hardware; QEMU and the
  * laptops remain the acceptance authority. SPDX-License-Identifier: GPL-2.0-only */
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -222,13 +223,28 @@ static unsigned modrm_ea(uint32_t lin, bool a32, int seg_override, uint32_t *ea)
     *ea = seg->base + off;
     return len;
 }
-/* Minimal x87 control/status unit for FPU detection (libx86emu has none). */
+/* Minimal x87 control/status unit for FPU detection (libx86emu has none).
+ * GUEST_NO_X87 (any value) models a machine without a coprocessor (i386 or
+ * i486SX, CR0.EM=0): FNINIT/FNCLEX do nothing and FNSTCW/FNSTSW store
+ * nothing, so the stored control word keeps the caller's initial value and
+ * the usual detection (Open Watcom __x87id, Borland's emulator start-up)
+ * reports no 8087. Any other x87 instruction remains an unexpected event. */
 static uint16_t fpu_cw = 0x037F, fpu_sw;
+static int fpu_absent = -1;
 static int fpu_insn(uint32_t lin, unsigned n, bool a32, int seg_override, uint8_t op)
 {
     uint8_t m;
     if (op == 0x9B) return (int)n + 1;                                   /* FWAIT */
     if (!fetch(lin + n + 1, &m)) return 0;
+    if (fpu_absent < 0) fpu_absent = getenv("GUEST_NO_X87") != 0;
+    if (fpu_absent) {
+        if ((op == 0xDB && (m == 0xE3 || m == 0xE2)) || (op == 0xDF && m == 0xE0)) return (int)n + 2;
+        unsigned reg = (m >> 3) & 7;
+        uint32_t ea;
+        unsigned len = (m >> 6) == 3 ? 0 : modrm_ea(lin + n + 1, a32, seg_override, &ea);
+        if (len && ((op == 0xD9 && (reg == 7 || reg == 5)) || (op == 0xDD && reg == 7))) return (int)(n + 1 + len);
+        return 0;
+    }
     if (op == 0xDB && m == 0xE3) { fpu_cw = 0x037F; fpu_sw = 0; return (int)n + 2; } /* FNINIT */
     if (op == 0xDB && m == 0xE2) { fpu_sw &= 0x7F00; return (int)n + 2; }          /* FNCLEX */
     if (op == 0xDF && m == 0xE0) { emu->x86.R_AX = fpu_sw; return (int)n + 2; }     /* FNSTSW AX */
@@ -290,7 +306,11 @@ static bool trap_check(struct gcpu_state *s)
     if (op == 0x9B || op == 0xD9 || op == 0xDB || op == 0xDD || op == 0xDF) {
         int len = fpu_insn(lin, n, a32, seg_override, op);
         if (len > 0) { emu->x86.R_EIP += (uint32_t)len; event->vector = 0; event->executed_descriptor = true; return false; }
-        if (op != 0x9B) ops->unexpected("x87 instruction outside the runner's control/status subset");
+        if (op != 0x9B) {
+            uint8_t m = 0; fetch(lin + n + 1, &m);
+            fprintf(stderr, "x87 instruction %02x %02x at %04x:%08x\n", op, m, emu->x86.R_CS, emu->x86.R_EIP);
+            ops->unexpected("x87 instruction outside the runner's control/status subset");
+        }
     }
     if (op == 0x0F && tcg()) {                      /* CPUID 40000000h under GUEST_TCG */
         uint8_t next = 0;

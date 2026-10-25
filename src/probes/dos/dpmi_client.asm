@@ -326,6 +326,29 @@ start:
     REFUSE 0005h
     REFUSE 000Eh
     REFUSE 000Fh
+    ; Selector 40h: the VM's BIOS data area (400h, 64 KiB, DPL 3 data), the
+    ; "bimodal" GDT selector Windows provides; the DOS/16M kernel of DOS/4GW
+    ; loads it (push 40h / pop es) in its INT 21h 2Ah/2Ch handlers.
+    ; dos-dpmi-contract.md "Selector 40h" (2026-10-25).
+    mov bx, 40h
+    verr bx
+    EXPECT nz, 19
+    verw bx
+    EXPECT nz, 20
+    lsl ax, bx
+    EXPECT nz, 21
+    cmp ax, 0FFFFh
+    EXPECT ne, 22
+    mov bx, 40h                   ; the same bytes through 0002h's alias of 0040h
+    OK 0002h
+    push es
+    mov es, ax
+    mov dx, [es:13h]              ; BIOS memory size (KiB)
+    push word 40h
+    pop es
+    cmp dx, [es:13h]
+    pop es
+    EXPECT ne, 23
 
     STAGE 5                       ; DOS memory 0100h-0102h
     mov bx, 100h

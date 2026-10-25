@@ -242,7 +242,10 @@ int dpmi_entry_complete(struct dosvm *v, struct v86_frame *f, uint16_t psp)
     cl->depth_base = d->depth;
     memcpy(cl->saved_vec, d->vec, sizeof(d->vec));
     memcpy(cl->saved_exc, d->exc, sizeof(d->exc));
-    if (c) d->client[c - 1].suspended_if_armed = d->if_armed;
+    if (c) {
+        d->client[c - 1].suspended_if_armed = d->if_armed;
+        memcpy(d->client[c - 1].suspended_armed, d->armed, sizeof(d->armed));
+    }
     d->clients++;
     dpmi_cli_sites_reset(v); /* fx-16: proofs belong to one client's code */
     struct v86_frame p;
@@ -305,6 +308,7 @@ int dpmi_terminate(struct dosvm *v, bool from_pm)
     if (!d->clients) { dpmi_unwind(v, 0); reset(v); }
     else {
         d->if_armed = d->client[d->clients - 1].suspended_if_armed;
+        memcpy(d->armed, d->client[d->clients - 1].suspended_armed, sizeof(d->armed));
         dpmi_reload_debug(v);
     }
     return 0;

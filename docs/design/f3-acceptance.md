@@ -977,7 +977,9 @@ watchpoints); `ciuki/dpmi.h` is kernel-internal (no native ABI).
   virtual devices.
 - **LDT.** One 1024-entry LDT per VM (8 KiB of kernel memory), loaded through
   GDT index 8 (selector 40h) by the scheduler hook `dosvm_task_switch` when a
-  DPMI worker is switched in, and unloaded otherwise. Indices 0–15 are kept
+  DPMI worker is switched in, and unloaded otherwise. (Since 2026-10-25 the
+  LDT descriptor is GDT index 10, selector 50h, and selector 40h is the VM's
+  BIOS data area for its clients: execution-abi.md, "Selector 40h amendment".) Indices 0–15 are kept
   for 000Dh; client allocations start at 16; the host's code and locked-stack
   selectors and 32 callback stack selectors occupy the top. Only DPL 3 data
   or non-conforming code descriptors are accepted (no system descriptors,

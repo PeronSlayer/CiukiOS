@@ -800,7 +800,8 @@ void dpmi_cli_sites_reset(struct dosvm *v)
     memset(d->cli_site, 0, sizeof(d->cli_site));
     d->cli_settled = false;
 }
-static bool arm_flags_image(struct dosvm *v, struct v86_frame *f, const struct dpmi_seg *cs)
+static bool arm_flags_image(struct dosvm *v, struct v86_frame *f, const struct dpmi_seg *cs,
+                            struct dpmi_armed *planted)
 {
     /* Neither forward proof changes the candidate image. If no possible
      * POP register or stack word even matches its low half, the old final
@@ -866,13 +867,89 @@ proven:;
         uint32_t esp = ss.big ? f->tf.user_esp : (uint16_t)f->tf.user_esp;
         if (!dpmi_ptr(v, sel, esp, width, true, &lin) || dosvm_read(v, lin, &image, width) || image != want) return false;
         image |= V86_TF;
+        *planted = (struct dpmi_armed){.offset = esp, .image = image, .ss = sel, .width = (uint8_t)width,
+                                       .client = (uint8_t)d->clients, .stack = true};
         return !dosvm_write(v, lin, &image, width);
     }
     uint32_t *r = pop_register(f, pop);
     if (!r || (width == 4 ? *r : (uint16_t)*r) != want) return false;
     *r |= V86_TF;
+    *planted = (struct dpmi_armed){.width = (uint8_t)width, .client = (uint8_t)d->clients};
     return true;
 }
+
+/* 2026-10-25 (dos-dpmi-contract.md, "Selector 40h and nested saved flags
+ * images"): the planted images still owned. Before, one owner flag was
+ * replaced by every arm and cleared by every owned trap, so an enclosing
+ * region's live image kept its TF without an owner and its POPF's #DB
+ * reached the client (Warcraft II demo, 1:000576D0 around 1:00057608).
+ * Now an image stays owned beside newer ones while it is provably live: a
+ * stack image of this client on the current stack that the stack pointer
+ * has not passed (at an arm, the slot the new image reuses counts as
+ * passed) and whose bytes are unchanged. Everything else is forgotten at
+ * the next arm or owned trap, as the flag was: register images (Watcom's
+ * flags-in-EAX restore may never POPF), images popped into a register
+ * (DOS/16M's INT 31h 0302h wrapper: POP CX / STI) and images on another
+ * stack, whose planted TF is taken out first if they are still intact, so
+ * no unowned TF is left behind. */
+static bool armed_live(struct dosvm *v, const struct v86_frame *f, const struct dpmi_armed *a, bool arming)
+{
+    if (a->client != v->dpmi.clients || !a->stack || a->ss != (uint16_t)f->tf.user_ss) return false;
+    struct dpmi_seg ss;
+    uint32_t lin, image = 0;
+    if (!dpmi_seg(v, a->ss, &ss)) return false;
+    uint32_t esp = ss.big ? f->tf.user_esp : (uint16_t)f->tf.user_esp;
+    if (arming ? a->offset <= esp : a->offset < esp) return false;
+    return dpmi_ptr(v, a->ss, a->offset, a->width, false, &lin) && !dosvm_read(v, lin, &image, a->width) &&
+           image == a->image;
+}
+static void armed_unplant(struct dosvm *v, const struct v86_frame *f, const struct dpmi_armed *a)
+{
+    uint32_t lin, image = 0;
+    if (!a->stack || a->client != v->dpmi.clients || a->ss == (uint16_t)f->tf.user_ss) return;
+    if (!dpmi_ptr(v, a->ss, a->offset, a->width, true, &lin) || dosvm_read(v, lin, &image, a->width) ||
+        image != a->image) return;
+    image &= ~V86_TF;
+    dosvm_write(v, lin, &image, a->width);
+}
+static void armed_prune(struct dosvm *v, const struct v86_frame *f, bool arming)
+{
+    struct dpmi *d = &v->dpmi;
+    unsigned kept = 0;
+    for (unsigned i = 0; i < d->if_armed && i < DPMI_IF_ARMED_MAX; i++) {
+        if (armed_live(v, f, &d->armed[i], arming)) d->armed[kept++] = d->armed[i];
+        else armed_unplant(v, f, &d->armed[i]);
+    }
+    d->if_armed = (uint8_t)kept;
+}
+static void armed_push(struct dosvm *v, const struct v86_frame *f, const struct dpmi_armed *planted)
+{
+    struct dpmi *d = &v->dpmi;
+    armed_prune(v, f, true);
+    if (d->if_armed >= DPMI_IF_ARMED_MAX) {
+        /* Deeper nesting than tracked: take the TF out of the outermost
+         * image (its POPF then restores nothing; IF recovery covers it). */
+        const struct dpmi_armed *old = &d->armed[0];
+        uint32_t lin, image = 0;
+        if (dpmi_ptr(v, old->ss, old->offset, old->width, true, &lin) &&
+            !dosvm_read(v, lin, &image, old->width) && image == old->image) {
+            image &= ~V86_TF;
+            dosvm_write(v, lin, &image, old->width);
+        }
+        memmove(&d->armed[0], &d->armed[1], (DPMI_IF_ARMED_MAX - 1) * sizeof(d->armed[0]));
+        d->if_armed = DPMI_IF_ARMED_MAX - 1;
+    }
+    d->armed[d->if_armed++] = *planted;
+}
+/* An owned POPF/IRET trap loaded one planted image (the newest, by
+ * nesting); only enclosing live images on this stack stay owned. */
+static void armed_consume(struct dosvm *v, const struct v86_frame *f)
+{
+    struct dpmi *d = &v->dpmi;
+    if (d->if_armed) d->if_armed--;
+    armed_prune(v, f, false);
+}
+
 /* BS proves a stepped instruction even if it cleared saved TF. MOV/POP SS
  * defer this trap through the following instruction. Other faulting forms
  * retain TF until the monitor has handled them (CLI/INT/#PF). */
@@ -881,7 +958,7 @@ static bool flags_restored(struct dosvm *v, struct v86_frame *f, uint32_t dr6)
     struct dpmi *d = &v->dpmi;
     bool step = f->tf.vector == 1 ? (dr6 & (1u << 14)) != 0 : (f->tf.eflags & V86_TF) != 0;
     if (!d->if_armed || d->if_step || !step) return false;
-    d->if_armed = false;
+    armed_consume(v, f);                /* enclosing regions' live images stay owned */
     f->tf.eflags &= ~V86_TF;
     dosvm_vif_restore(v, true, DOSVM_IF_POPF);
     d->stats.if_restored++;
@@ -1271,9 +1348,12 @@ static int emulate(struct dosvm *v, struct v86_frame *f)
          * virtual IF was already clear and an IRQ has long been pending. */
         d->if_waiting = false;
         d->if_steps = 0;
-        bool armed = v->monitor.vif && arm_flags_image(v, f, &cs);
+        /* An image armed by an enclosing region and still live keeps its
+         * TF and its owner beside the new one (armed_push). */
+        struct dpmi_armed planted;
+        bool armed = v->monitor.vif && arm_flags_image(v, f, &cs, &planted);
         if (armed) {
-            d->if_armed = true;
+            armed_push(v, f, &planted);
             d->stats.if_armed++;
         }
         v->monitor.vif = false;

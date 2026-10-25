@@ -863,8 +863,9 @@ static void g_descriptor(uint16_t sel, bool write, uint32_t d[2])
         if (gv->dpmi.active && i < DPMI_LDT_ENTRIES) { d[0] = gv->dpmi.ldt[i][0]; d[1] = gv->dpmi.ldt[i][1]; }
         return;
     }
-    if ((sel & ~7u) == 0x18) { d[0] = 0x0000FFFFu; d[1] = 0x00CFFA00u; }
-    if ((sel & ~7u) == 0x20) { d[0] = 0x0000FFFFu; d[1] = 0x00CFF200u; }
+    /* The GDT a DPMI worker runs with: flat user code/data, and selector
+     * 40h (the VM's BIOS data area) while the VM's LDT is loaded. */
+    dpmi_gdt_descriptor(gv, sel, d);
 }
 static void g_unexpected(const char *what)
 {
@@ -1512,10 +1513,12 @@ int main(int argc, char **argv)
 #endif
     CHECK(dosvm_create(&config, &gv) == 0);
     printf("return tracker: %s (production VM creation)\n", gv->return_tracker_tf ? "tf" : "breakpoint");
-    /* GUEST_NO_X87=1: the BIOS equipment word (0040:0010 bit 1) reports no
-     * coprocessor, so a Borland C program selects its own INT 34h-3Dh x87
-     * emulator; libx86emu has no x87 and this runner models only the
-     * control/status subset (Wolfenstein 3-D, tests/host/dos/dos_memory.py). */
+    /* GUEST_NO_X87=1: a machine without a coprocessor. The BIOS equipment
+     * word (0040:0010 bit 1) reports none and FNINIT/FNSTCW/FNSTSW store
+     * nothing (dosvm_guest_cpu.c), so a Borland C program selects its own
+     * INT 34h-3Dh x87 emulator and Open Watcom's start-up finds no 8087;
+     * libx86emu has no x87 (Wolfenstein 3-D, tests/host/dos/dos_memory.py;
+     * DOS/4GW clients, tests/host/dos/dos_extenders.py). */
     if (getenv("GUEST_NO_X87")) {
         uint16_t equipment = 0;
         CHECK(!dosvm_read(gv, 0x410, &equipment, 2));

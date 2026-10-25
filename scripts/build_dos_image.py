@@ -275,7 +275,10 @@ def build(out=None):
             _, members, _ = games.package_files(package)
             for path, data, _ in members:
                 game_files[path] = data
-        game_files["/DOOM/CIUKI.CFG"] = games._fixtures().DOOM_CONFIG
+        # The generated files (DOOM's CIUKI.CFG, the Warcraft II demo's
+        # WAR2.BAT and DRIVERS\DIG.INI/MDI.INI) from the games disk's own list.
+        for path, data, _ in games.generated_files():
+            game_files[path] = data
         refuse_local_payloads({name: hashlib.sha256(data).hexdigest() for name, data in files.items()})
         # Every folder of the installed games (WOLF3D, DOOM, QUAKE/ID1, WAR2/DATA...),
         # parents before children, so a new bundled game needs no list edit here.

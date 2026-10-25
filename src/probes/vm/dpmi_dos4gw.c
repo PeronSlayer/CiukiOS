@@ -6,8 +6,12 @@
  *   DPMI4GW BEGIN / DPMI4GW HOST <ax> <bx> <cl> / DPMI4GW PASS | FAIL <what>
  * Tests: host version, mode report, extender heap and direct DPMI memory,
  * PIC port I/O, a protected-mode IRQ0 handler with chaining, virtual IF
- * services, selector services and DOS file I/O through the extender's
- * translation, then a normal exit (INT 21h/4Ch in protected mode).
+ * services, selector services, DOS date/time and file I/O through the
+ * extender's translation, then a normal exit (INT 21h/4Ch in protected
+ * mode). 2026-10-25: DOS/4GW's own INT 21h 2Ah/2Ch handlers (the DOS/16M
+ * kernel, AT-class machines) read the BIOS tick count through GDT selector
+ * 40h; without that selector the first _dos_gettime stopped the program
+ * with "DOS/4GW error (2001): exception 0Dh ... at C7:000014AF".
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <conio.h>
 #include <dos.h>
@@ -50,6 +54,8 @@ static unsigned dpmi(unsigned ax, union REGS *r)
 int main(void)
 {
     union REGS r;
+    struct dosdate_t date, again;
+    struct dostime_t time;
     char text[48];
     unsigned long i, start, guard;
     unsigned char imr, *p;
@@ -112,6 +118,15 @@ int main(void)
     dpmi(0x0902, &r);
     if (r.h.al != 1) fail("VIF1");
     _dos_setvect(0x08, old_timer);
+
+    /* INT 21h 2Ah, 2Ch, then 2Ah again (the extender's cached-date path,
+     * which compares the tick count's midnight bits through selector 40h). */
+    _dos_getdate(&date);
+    _dos_gettime(&time);
+    _dos_getdate(&again);
+    if (date.year < 1980 || date.month < 1 || date.month > 12 || date.day < 1 || date.day > 31) fail("DATE");
+    if (again.year != date.year || again.month != date.month || again.day != date.day) fail("DATE2");
+    if (time.hour > 23 || time.minute > 59 || time.second > 59 || time.hsecond > 99) fail("TIME");
 
     f = fopen("C:\\DPMI4GW.TMP", "wb");
     if (!f) fail("FOPEN");

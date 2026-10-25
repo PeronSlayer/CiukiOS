@@ -435,14 +435,16 @@ static int probe_protection(void)
     const uint8_t *tls = (const uint8_t *)(uintptr_t)(gdtr.base + CIUKI_TLS_GDT_INDEX * 8);
     uint32_t tls_base = (uint32_t)tls[2] | ((uint32_t)tls[3] << 8) |
                         ((uint32_t)tls[4] << 16) | ((uint32_t)tls[7] << 24);
-    /* f3-04 appended the DOS VM LDT slot after TLS: outside a DPMI worker it
-     * is null and LDTR is 0 (execution-abi.md, F3-04 amendment). */
+    /* f3-04 DOS VM LDT slot (index 10 since the selector 40h amendment) and
+     * the DPMI BIOS data slot (index 8, selector 40h): outside a DPMI worker
+     * both are null and LDTR is 0 (execution-abi.md). */
     const uint8_t *ldt_slot = (const uint8_t *)(uintptr_t)(gdtr.base + ARCH_LDT_GDT_INDEX * 8);
+    const uint8_t *bios_slot = (const uint8_t *)(uintptr_t)(gdtr.base + ARCH_BIOS_GDT_INDEX * 8);
     uint16_t ldtr;
     __asm__ volatile("sldt %0" : "=m"(ldtr));
-    bool ldt_idle = ldtr == 0 && !(ldt_slot[5] & 0x80);
+    bool ldt_idle = ldtr == 0 && !(ldt_slot[5] & 0x80) && !(bios_slot[5] & 0x80);
     const uint8_t *w32_fs_slot = (const uint8_t *)(uintptr_t)(gdtr.base + CIUKI_W32_FS_INDEX * 8);
-    bool tls_valid = ldt_idle && !(w32_fs_slot[5] & 0x80) && gdtr.limit == (CIUKI_W32_FS_INDEX + 1) * 8 - 1 &&
+    bool tls_valid = ldt_idle && !(w32_fs_slot[5] & 0x80) && gdtr.limit == (ARCH_LDT_GDT_INDEX + 1) * 8 - 1 &&
                      ((uint32_t)tls[0] | ((uint32_t)tls[1] << 8)) == CIUKI_TLS_SIZE - 1 &&
                      (tls[5] & 0xfe) == 0xf2 && tls[6] == 0x40 && tls_base == 0;
     rec_emit("protection", "DATA", "case=tls_descriptor selector=%u base=%08x limit=%u valid=%u",

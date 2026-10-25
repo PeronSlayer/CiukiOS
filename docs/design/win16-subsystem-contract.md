@@ -1570,6 +1570,9 @@ validation plus frame re-checks (P1, P6).
 **Checked on main.**
 
 - GDT slot 8, selector 40h, is the only LDT slot (`src/kernel/include/ciuki/arch.h:32-37`).
+  (2026-10-25: the LDT slot is now GDT index 10, selector 50h; selector 40h
+  is the DOS VM's BIOS data area while its DPMI worker runs; execution-abi.md,
+  "Selector 40h amendment".)
   `arch_ldt_load(const void *, unsigned)` writes a type-82h descriptor and
   executes LLDT, or loads a null LDTR (`src/kernel/arch/desc.c:83-99`).
   `dosvm_task_switch` loads a VM's 1,024-entry LDT

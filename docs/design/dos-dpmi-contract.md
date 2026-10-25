@@ -1523,3 +1523,109 @@ hash, no disk reads; an mtime change of the image itself during a check
 still ends `failed step=version`; no version watch remains after a hold,
 a release, a void check or at the end. Fails on 56e58374, passes with the
 pin.
+
+### Selector 40h and nested saved flags images (2026-10-25)
+
+**Symptom.** QEMU, image of `main` 1a28f070, DOS Box, `C:\WAR2>WAR2`: the
+Warcraft II demo v1.20 (Watcom, bound to DOS/4GW Professional 1.97) stopped
+with `DOS/4GW Professional error (2001): exception 0Dh (general protection
+fault) at C7:000014AF`, ES=0, CS limit 596Fh (USE16, base 12E430h). The host
+runner (`tests/host/dosvm_guest.c` on the production VM code) reproduces the
+same selectors, bases and limits, with and without the `EMMXXXX0` device, and
+so does a ten-line Open Watcom program that calls `_dos_gettime` under the
+plain DOS/4GW 1.97: every DOS/4GW client that asks DOS for the time stopped
+there. DOOM never calls INT 21h 2Ch; Quake uses CWSDPMI-style DJGPP code.
+
+**Analysis.** C7h is the DOS/16M kernel's 5970h-byte code segment (file
+offset 9B10h of `WAR2.EXE`; the same bytes are at AF4Fh-AFF1h of Open
+Watcom's `binw/dos4gw.exe`). Its INT 21h 2Ch handler (149Bh) and the cached
+path of its 2Ah handler (1438h) run on AT-class machines (machine vector
+`[34h]` = 15h, the one it also uses for INT 15h C0h/88h) and read the BIOS
+tick count with `push 40h / pop es / mov bx,es:[6Eh]`. In the VMM, GDT index
+8 (selector 40h) was the per-VM LDT descriptor, a system descriptor, so
+`pop es` raised #GP(40h); DOS/16M's #GP handler skipped the load with ES=0 and
+the next instruction faulted for good. No INT 31h call failed and no VCPI or
+EMS path was involved (the client was on the DPMI host in both profiles).
+
+**Research.**
+- Wine `dlls/kernel/instr.c`, `INSTR_ReplaceSelector`
+  ([source](https://goma.googlesource.com/wine/+/refs/tags/wine-20040813/dlls/kernel/instr.c)):
+  loading 40h into a segment register is allowed for the "bimodal" selector
+  40h, which points to the BIOS data segment, used by (at least) Borland
+  products; Wine emulates Windows here (Schulman, *Undocumented Windows*,
+  chapter 5, `__0040H`).
+- HDPMI (HX DOS extender, `Src/HDPMI/HDPMI.ASM` lines 684-686,
+  [upstream](https://github.com/Baron-von-Riedesel/HX)): a fixed GDT entry
+  "40+3 BIOS Data" with base 400h, ring-3 data. CauseWay
+  ([User's Guide](https://open-watcom.github.io/open-watcom-v2-wikidocs/cw.html)):
+  "a fixed segment selector at 40h is always available", mapping the
+  real-mode memory at 400h.
+- Linux reserves GDT entry 8 (selector 40h) for the BIOS data area because
+  BIOS protected-mode code (APM, PnP) loads 40h as if in real mode
+  ([LKML](https://lkml.iu.edu/hypermail/linux/kernel/0609.1/1653.html)).
+- DPMI 0.9, INT 31h 0002h
+  ([specification](https://www.phatcode.net/res/262/files/dpmi09.html)): the
+  segment-to-descriptor service exists for easy access to real-mode segments
+  "such as 40h and A000h"; its descriptor has a 64 KiB limit.
+
+**Decision.** GDT index 8, selector 40h, is the running VM's BIOS data area
+for its DPMI clients: base 400h, limit FFFFh (the 0002h alias of segment
+0040h, real-mode segment semantics), present DPL 3 writable data, installed
+with the VM's LDT and cleared with it (`arch_ldt_load`, so it exists only
+while a DOS VM worker with a DPMI client runs; the VM's memory starts at
+linear 0). The LDT descriptor moved to GDT index 10, selector 50h, after the
+Win32 FS slot 9 (execution-abi.md, "Selector 40h amendment"). The host's own
+descriptor model (`dpmi_gdt_descriptor`, `dpmi_seg`) knows selector 40h, so
+`dpmi_frame_check` keeps ES/DS/FS/GS = 40h in a returned frame and the
+emulated string I/O and INT 31h pointer checks accept it like the CPU does.
+
+**Second failure, nested saved flags images.** With selector 40h the demo
+ran on and stopped with `exception 01h (debug exception) at 1F7:002427BA`
+(crash address 1:000577BA). Its code 1:000576D0 saves the flags and clears
+interrupts (`pushfd; cli`), calls 1:00057608, which does the same, and both
+restore them with Watcom's idiom `test byte [ebp+5],2 / cli / jz / sti /
+pop ebp / popfd`. A ring-3 PUSHF stores the real IF, which is always set for
+a client, so the inner restore executes STI, virtual IF is set again and the
+inner `pushfd; cli` arms its image (fx-16's Windows 95 rule: R. Chen, The Old
+New Thing, 2016-04-11, cited in `dpmi_dispatch.c`) while
+the outer image still carries the TF planted at the outer CLI. The monitor
+had one owner flag (`if_armed`): every arm replaced it and every owned trap
+cleared it, so the inner POPF trap took the outer image's ownership with it
+and the outer POPF's single-step trap reached the client. The monitor now
+keeps the planted images (`dpmi.armed[]`, `dpmi.if_armed` of them, at most
+`DPMI_IF_ARMED_MAX` = 8, saved and restored around a nested child client).
+An image stays owned beside newer ones while it is provably live: a stack
+image of this client on the current stack that the stack pointer has not
+passed and whose bytes are unchanged. Everything else is forgotten at the
+next arm or owned trap, exactly as the flag was: register images (Watcom's
+flags-in-EAX restore may never POPF), images popped into a register (the
+DOS/16M INT 31h 0302h wrapper at 0087:7350 does `pushf; cli; ...; pop cx;
+and cx,200h; jcxz; sti`, on two stacks) and images on another stack, whose
+TF is first taken out if they are still intact so no unowned TF remains.
+Each owned POPF/IRET trap consumes the newest image and restores IF. A
+first version that only counted arms kept DOS/16M's abandoned images owned
+forever and disabled the return tracker in DOOM; with the liveness rule the
+DOOM shareware host replay (12 s, sound on) is identical to 1a28f070 in
+every counter (233710 traps; flags 1324, return checkpoints 3035, IF steps
+109; 24 page flips, 1806 PM IRQs, 167359 SB16 units; 13140 VGA faults).
+Chen's description covers one region; no Microsoft document found describes
+nesting, and the rule follows from each planted TF needing its owner.
+
+**Tests.** Each fails on 1a28f070 and passes with the change:
+`tests/host/dosvm_dpmi_test.inc` `test_dpmi_bios_selector` (descriptor,
+pointer checks and returned frames), `test_dpmi_bios_selector_cpu` (the
+DOS/16M sequence on the CPU model: `#GP(40h)` before) and
+`test_dpmi_nested_flags_images` (both regions armed, both POPF traps host
+owned, no client exception); `src/probes/dos/dpmi_client.asm` stage 4 details
+19-23 (VERR/VERW/LSL of 40h and a read through it against the 0002h alias,
+in DPMI16/DPMI32.COM); `src/probes/vm/dpmi_dos4gw.c` (INT 21h 2Ah/2Ch/2Ah
+through DOS/4GW 1.97); `tests/host/dos/run_dos_extenders.sh` (DPMI4GW.EXE,
+and the demo under DOS/4GW Professional with and without `EMMXXXX0`, until
+its own "could not find a VESA video driver" check, finding
+`DRIVERS\MDI.INI` and `DRIVERS\DIG.INI`). Before: `DOS/4GW error (2001)` /
+`DOS/4GW Professional error (2001): exception 0Dh ... at C7:000014AF` in all
+three runs. Not covered by host replay: the demo's video start (UniVBE's
+`UVCONFIG.EXE`, run once by `WAR2.BAT`, is an interactive OK/Cancel dialog;
+in the runner it reports "Generic VGA, 256 Kb", and whether UniVBE accepts
+the VM's VBE 2.0 linear-only modes is open) and its sound, which need the
+QEMU/T23 DOS Box.

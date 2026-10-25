@@ -771,3 +771,7 @@ bash "$root/tests/host/dos/run_unified_file.sh"
 # XMS swap, free conventional memory against Wolfenstein 3-D 1.4's own check
 # and the game itself on the production VM code (uses the H57 qualification).
 bash "$root/tests/host/dos/run_dos_memory.sh"
+# DOS extenders: a DOS/4GW 1.97 client and the Warcraft II demo under DOS/4GW
+# Professional 1.97 (selector 40h, nested saved flags images), with and
+# without the EMMXXXX0 device (needs Open Watcom; uses the H57 qualification).
+bash "$root/tests/host/dos/run_dos_extenders.sh"

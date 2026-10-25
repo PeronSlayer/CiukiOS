@@ -402,7 +402,7 @@ class DiskTests(unittest.TestCase):
         self.assertIn("/DOOM/CIUKI.CFG", {f["path"] for f in game})
         self.assertEqual({f["path"] for f in game if f["role"] == "executable"}, {"/WOLF3D/WOLF3D.EXE", "/DOOM/DOOM.EXE", "/QUAKE/QUAKE.EXE", "/WAR2/WAR2.EXE"})
         self.assertEqual({f["path"] for f in game if f.get("generated")},
-                         {"/DOOM/CIUKI.CFG", "/WAR2/DIG.INI", "/WAR2/MDI.INI", "/WAR2/WAR2.BAT"})
+                         {"/DOOM/CIUKI.CFG", "/WAR2/DRIVERS/DIG.INI", "/WAR2/DRIVERS/MDI.INI", "/WAR2/WAR2.BAT"})
         system = {f["path"]: f["sha256"] for f in m["files"] if f["role"] == "dos_system"}
         dos_manifest = json.loads(DOSBOOT.with_suffix(".json").read_text())
         self.assertEqual(system, {p["path"]: p["sha256"] for p in dos_manifest["payloads"]})
@@ -568,7 +568,14 @@ class Warcraft2DemoTests(unittest.TestCase):
 
     def test_generated_sound_files_match_the_vm_blaster(self):
         files = dict(games.war2_files())
-        self.assertEqual(set(files), {"/WAR2/DIG.INI", "/WAR2/MDI.INI", "/WAR2/WAR2.BAT"})
+        # WAR2.EXE changes to DRIVERS and opens MDI.INI/DIG.INI there (its
+        # strings "drivers", "MDI.INI", "DIG.INI"; host-runner INT 21h trace).
+        self.assertEqual(set(files), {"/WAR2/DRIVERS/DIG.INI", "/WAR2/DRIVERS/MDI.INI", "/WAR2/WAR2.BAT"})
+        exe = next(data for path, data, _ in games.package_files(self.PACKAGE)[1] if path == "/WAR2/WAR2.EXE")
+        self.assertIn(b"drivers\0", exe)
+        self.assertIn(b"MDI.INI\0", exe)
+        self.assertIn(b"DIG.INI\0", exe)
+        files["/WAR2/DIG.INI"], files["/WAR2/MDI.INI"] = files["/WAR2/DRIVERS/DIG.INI"], files["/WAR2/DRIVERS/MDI.INI"]
         dig = files["/WAR2/DIG.INI"].decode("ascii").split("\r\n")
         self.assertEqual(dig[0], ";Miles Design Audio Interface Library V3.03 of 18-Jun-95")
         self.assertEqual([line.split()[0] for line in dig[1:7]], ["DEVICE", "DRIVER", "IO_ADDR", "IRQ", "DMA_8_BIT", "DMA_16_BIT"])
@@ -587,6 +594,42 @@ class Warcraft2DemoTests(unittest.TestCase):
         self.assertIn("[sb16.dig]", aildrvr)
         self.assertIn("Sound Blaster 16/AWE32", aildrvr)
         self.assertIn("Creative Labs Sound Blaster 16", aildrvr)
+
+
+# The DOS Box boots UNIFIED.IMG, not the games disk: before 2026-10-25 its
+# builder copied the pinned members and DOOM's CIUKI.CFG only, so C:\WAR2 had
+# no WAR2.BAT, DIG.INI or MDI.INI ("File not found" in QEMU) while the games
+# disk tests, run against a prebuilt image, passed.
+@unittest.skipUnless((ROOT / "build/unified-dos/fork-qualified.json").is_file(),
+                     "run tests/host/dos/run_unified_file.sh first (fork qualification)")
+@unittest.skipUnless(shutil.which("mcopy") and shutil.which("nasm") and (dos.WATCOM / "binl64/wcl386").is_file(),
+                     "requires mtools, nasm and Open Watcom")
+class DosImageAssemblyTests(unittest.TestCase):
+    """Runs the real scripts/build_dos_image.py build() (system payloads,
+    unified install, FAT writer) into a temporary directory, never the
+    canonical build/f0 output, and reads every generated game file back."""
+
+    def test_dos_image_installs_every_generated_game_file(self):
+        parent = ROOT / "build/host"
+        parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="dos-image-", dir=parent) as temp:
+            out = Path(temp) / "dos" / "UNIFIED.IMG"
+            image, manifest = dos.build(out)
+            self.assertEqual(manifest["image_sha256"], sha(image.read_bytes()))
+            volume = f"{image}@@{63 * 512}"
+            generated = games.generated_files()
+            self.assertEqual({path for path, _, _ in generated},
+                             {"/DOOM/CIUKI.CFG", "/WAR2/WAR2.BAT", "/WAR2/DRIVERS/DIG.INI", "/WAR2/DRIVERS/MDI.INI"})
+            for path, data, _ in generated:
+                with self.subTest(path=path):
+                    read = subprocess.run(["mcopy", "-n", "-i", volume, "::" + path, "-"], capture_output=True, env=ENV)
+                    self.assertEqual(read.returncode, 0, read.stderr.decode(errors="replace"))
+                    self.assertEqual(read.stdout, data)
+            # The pinned demo is there too, with the launcher beside WAR2.EXE.
+            listing = subprocess.run(["mdir", "-b", "-i", volume, "::/WAR2"], check=True, capture_output=True,
+                                     text=True, env=ENV).stdout.upper()
+            for name in ("WAR2.EXE", "WAR2.BAT", "UVCONFIG.EXE"):
+                self.assertIn("/WAR2/" + name, listing)
 
 
 if __name__ == "__main__":

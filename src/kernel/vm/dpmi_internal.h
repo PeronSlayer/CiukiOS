@@ -90,8 +90,20 @@ struct dpmi_record {
     uint32_t arg[4];
 };
 struct dpmi_callback { bool used; uint16_t sel, struct_sel; uint32_t off, struct_off; };
+/* 2026-10-25: a saved flags image the monitor planted TF in at a CLI
+ * (dpmi_dispatch.c arm_flags_image). A stack image (PUSHF; CLI) can be
+ * proven popped or overwritten later; a register image (PUSHF; POP r; CLI)
+ * cannot, and is forgotten at the next arm as before. */
+#define DPMI_IF_ARMED_MAX 8u
+struct dpmi_armed {
+    uint32_t offset, image;          /* SS:offset of a stack image, planted value */
+    uint16_t ss;
+    uint8_t width, client;
+    bool stack;
+};
 struct dpmi_client {
-    bool suspended_if_armed;         /* parent's deferred flags restore across a child */
+    uint8_t suspended_if_armed;      /* parent's deferred flags restores across a child */
+    struct dpmi_armed suspended_armed[DPMI_IF_ARMED_MAX];
     bool used;
     uint16_t psp, env, psp_sel, env_sel, rm_ss, rm_sp, rm_cs, rm_ip;
     unsigned depth_base;
@@ -123,8 +135,15 @@ struct dpmi {
     uint8_t kind[DPMI_LDT_ENTRIES], owner[DPMI_LDT_ENTRIES];
     bool active, bits32, shadow, rm_a20;
     /* f3-06 POPF compatibility: a flags image saved before a CLI carries
-     * TF, so its POPF/IRET traps once (dpmi_dispatch.c). */
-    bool if_armed;
+     * TF, so its POPF/IRET traps once (dpmi_dispatch.c). 2026-10-25: the
+     * number of planted images still owned, armed[0..if_armed-1], newest
+     * last. A live stack image of an enclosing region stays owned beside a
+     * newer one (Watcom's TEST [EBP+5],2/CLI/JZ/STI/POPFD restore re-enables
+     * virtual IF inside an outer region, whose image keeps its TF); any
+     * other image is forgotten at the next arm or owned trap, as the single
+     * owner flag was (dpmi_dispatch.c armed_live). */
+    uint8_t if_armed;
+    struct dpmi_armed armed[DPMI_IF_ARMED_MAX];
     /* f3-15: pending-IRQ recovery, separate from saved-image/return TF.
      * An owned step is consumed only in its original client/depth/stack. */
     bool if_waiting, if_step, if_restore_step, if_restore_vif;
@@ -188,6 +207,7 @@ struct dpmi_seg {
 void dpmi_desc_set(uint32_t d[2], uint32_t base, uint32_t limit, uint8_t access, uint8_t ext);
 uint32_t dpmi_desc_base(const uint32_t d[2]);
 uint32_t dpmi_desc_limit(const uint32_t d[2]);
+bool dpmi_gdt_descriptor(const struct dosvm *, uint16_t sel, uint32_t d[2]);
 bool dpmi_seg(const struct dosvm *, uint16_t sel, struct dpmi_seg *);
 bool dpmi_ptr(struct dosvm *, uint16_t sel, uint32_t off, uint32_t bytes, bool write, uint32_t *linear);
 int dpmi_alloc_ldt(struct dosvm *, unsigned count, uint8_t kind, uint8_t owner);
