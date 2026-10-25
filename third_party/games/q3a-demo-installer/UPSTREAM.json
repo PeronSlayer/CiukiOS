@@ -1,0 +1,34 @@
+{
+  "project": "Quake III Arena demo (Windows installer, build of 1999-06-09 stub, demo 1.11)",
+  "authors": "id Software",
+  "archive": "Q3ADemo.exe",
+  "size": 48907862,
+  "sha256": "6af96cb1b5c97535c9923d8855ca85ec21b21b65b48738b2c5e674e17c65835d",
+  "original_location": "ftp://ftp.idsoftware.com/idstuff/quake3/win32/Q3ADemo.exe",
+  "downloaded": "2026-10-25",
+  "sources": [
+    "https://ftp.gwdg.de/pub/misc/ftp.idsoftware.com/idstuff/quake3/win32/Q3ADemo.exe"
+  ],
+  "format": "MindVision Installer VISE self-extractor (69,632-byte stub plus a 48,838,230-byte obfuscated payload that begins with the ESIV marker); no host tool unpacks it, so it is installed unmodified and run by the Win32 loader",
+  "install": {
+    "directory": "Quake III Arena Demo Setup",
+    "windows_path": "C:\\Games\\Quake III Arena Demo Setup\\Q3ADemo.exe",
+    "files": [
+      {"name": "Q3ADemo.exe", "size": 48907862, "sha256": "6af96cb1b5c97535c9923d8855ca85ec21b21b65b48738b2c5e674e17c65835d", "role": "installer"}
+    ],
+    "shortcut": {
+      "path": "/WINDOWS/Start Menu/Programs/Games/Install Quake III Arena Demo.lnk",
+      "label": "Install Quake III Arena Demo",
+      "target": "C:\\Games\\Quake III Arena Demo Setup\\Q3ADemo.exe",
+      "directory": "C:\\Games\\Quake III Arena Demo Setup"
+    }
+  },
+  "license": "id Software Limited Use Software License Agreement for the Quake III: Arena demo (Q3A_EULA.txt, shown by the installer)",
+  "license_files": [
+    {"name": "Q3A_EULA.txt", "from": "vendored", "origin": "Help/Q3A_EULA.txt of linuxq3ademo-1.11-6.x86.gz.sh (SHA-256 of the script 64dee3f69b6e792d1da4fe0ac98fedc7eb1e37ea1027fb609a9fadd06150a4ec, same URL directory under linux/)", "sha256": "23ed30a9ea5875261791549f16875576e7428365ff82dd943cc07339f1173673"},
+    {"name": "README-linux-demo.txt", "from": "vendored", "origin": "README of the same Linux demo package (version 1.11 notes; platform-specific parts do not apply)", "sha256": "6f3856186c274d67a2132e232329f4aa6ff4dfa43217307c80ce96d8d855022c"}
+  ],
+  "redistribution": "free (demo, unmodified installer), recorded as the owner's bundling decision 2026-10-25",
+  "modifications": "none: the installer is shipped byte-identical and is never run during the build; the demo is installed by the user from the Start menu",
+  "game_data": "demo only (demoq3/pak0.pk3 inside the installer); no registered data"
+}
