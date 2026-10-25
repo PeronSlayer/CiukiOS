@@ -57,6 +57,7 @@ void gl_fixture_tests(void) {
     if(failed)assert(result.frames==0 && result.errors==7 && code==1 && !w32_gl_valid(&result));
     else {
       assert(code==0 && !result.errors && w32_gl_valid(&result));
+      result.pixel_formats=4;assert(!w32_gl_valid(&result));result.pixel_formats=10;
       result.checksum[0]^=1;assert(!w32_gl_valid(&result));result.checksum[0]^=1;
       result.render_width=1;assert(!w32_gl_valid(&result));result.render_width=320;
     }

@@ -3,22 +3,26 @@
 #include "internal.h"
 static struct sw_texture *texture(struct gl_context *c, unsigned name,
                                   int create) {
-  for (unsigned i = 0; i < GL_TEXTURES; i++)
-    if (c->share->textures[i].used && !c->share->textures[i].deleted &&
-        c->share->textures[i].name == name)
-      return &c->share->textures[i];
-  if (create)
-    for (unsigned i = 1; i < GL_TEXTURES; i++)
-      if (!c->share->textures[i].used) {
-        struct sw_texture *t = &c->share->textures[i];
-        *t = (struct sw_texture){.name = name,
-                                 .used = 1,
-                                 .wrap_s = GL_REPEAT,
-                                 .wrap_t = GL_REPEAT,
-                                 .min = GL_NEAREST_MIPMAP_LINEAR,
-                                 .mag = GL_LINEAR};
-        return t;
-      }
+  struct sw_texture *unused = 0;
+  for (struct gl_texture *node = c->share->textures; node; node = node->next) {
+    struct sw_texture *t = &node->value;
+    if (t->used && !t->deleted && t->name == name)
+      return t;
+    if (!t->used) unused = t;
+  }
+  if (create) {
+    if (!unused) {
+      struct gl_texture *node = gl_alloc(sizeof(*node));
+      if (!node) return 0;
+      node->next = c->share->textures;
+      c->share->textures = node;
+      unused = &node->value;
+    }
+    *unused = (struct sw_texture){.name = name, .used = 1,
+        .wrap_s = GL_REPEAT, .wrap_t = GL_REPEAT,
+        .min = GL_NEAREST_MIPMAP_LINEAR, .mag = GL_LINEAR};
+    return unused;
+  }
   return 0;
 }
 static void free_texture(struct sw_texture *t) {
@@ -27,6 +31,14 @@ static void free_texture(struct sw_texture *t) {
     gl_dealloc(t->image[l].compressed);
   }
   *t = (struct sw_texture){0};
+}
+void gl_free_textures(struct gl_share *s) {
+  while (s->textures) {
+    struct gl_texture *node = s->textures;
+    s->textures = node->next;
+    free_texture(&node->value);
+    gl_dealloc(node);
+  }
 }
 void gl_texture_ref(struct sw_texture *t, int delta) {
   if (!t || !t->name)
@@ -331,6 +343,18 @@ void gl_textures(struct gl_context *c, unsigned id, const union gl_arg *a,
   case ID_glTexParameterf:
   case ID_glTexParameteriv:
   case ID_glTexParameterfv: {
+    if (I(1) == GL_TEXTURE_BORDER_COLOR) {
+      unsigned color = 0;
+      for (int k = 0; k < 4; k++) {
+        double v = id == ID_glTexParameteriv
+          ? (double)((const int *)P(2))[k] / 2147483647.0 : ((const float *)P(2))[k];
+        if (!(v >= 0)) v = 0;
+        if (v > 1) v = 1;
+        color |= (unsigned)(v * 255) << (k == 3 ? 24 : (2-k)*8);
+      }
+      t->border_color = color;
+      break;
+    }
     int v = id == ID_glTexParameteri   ? I(2)
             : id == ID_glTexParameterf ? (int)a[2].f
             : P(2) ? (id == ID_glTexParameteriv ? *(const int *)P(2)
@@ -488,6 +512,14 @@ void gl_textures(struct gl_context *c, unsigned id, const union gl_arg *a,
   }
   case ID_glGetTexParameteriv:
   case ID_glGetTexParameterfv: {
+    if (I(1) == GL_TEXTURE_BORDER_COLOR && target(I(0)) && P(2)) {
+      for (int k = 0; k < 4; k++) {
+        unsigned value = (t->border_color >> (k == 3 ? 24 : (2-k)*8)) & 255;
+        if (id == ID_glGetTexParameteriv) ((int *)P(2))[k] = (int)((uint64_t)value * 2147483647 / 255);
+        else ((float *)P(2))[k] = (float)value / 255;
+      }
+      break;
+    }
     int v = I(1) == GL_TEXTURE_MIN_FILTER   ? t->min
             : I(1) == GL_TEXTURE_MAG_FILTER ? t->mag
             : I(1) == GL_TEXTURE_WRAP_S     ? t->wrap_s

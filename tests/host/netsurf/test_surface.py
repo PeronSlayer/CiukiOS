@@ -1,4 +1,5 @@
 """Focused v3 fixtures, sanitizer leak checking enabled."""
+import importlib.util
 import os
 from pathlib import Path
 import subprocess
@@ -10,6 +11,21 @@ ROOT=Path(__file__).resolve().parents[3]
 SOURCE=Path(os.environ.get("CIUKI_NETSURF_SOURCE",ROOT / "build/external/netsurf-host/source"))
 
 class SurfaceTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        """t23-render: test_registered_surface links the cached host prefix
+        (libnsfb, libdeskui) with this source state's port. On main
+        a347ca76b it failed at nsfb_test.c:122 (pongs==1) against a prefix
+        built on 2026-10-25 00:31, before fx-nsperf (643479b2b) changed the
+        Ciuki surface and this test, and passed against a prefix built from
+        the same source state. Verify the cache as test_local does; the
+        recipe rebuilds it only when its inputs changed."""
+        if "CIUKI_NETSURF_SOURCE" in os.environ or "CIUKI_NETSURF_PREFIX" in os.environ:
+            return
+        spec=importlib.util.spec_from_file_location("netsurf_recipe",ROOT / "sdk/netsurf/build.py")
+        recipe=importlib.util.module_from_spec(spec);spec.loader.exec_module(recipe)
+        recipe.build(host=True)
+
     def test_chrome_cursor(self):
         out=ROOT / "build/host/netsurf";out.mkdir(parents=True,exist_ok=True)
         prefix=Path(os.environ.get("CIUKI_NETSURF_PREFIX",ROOT / "build/external/netsurf-host/prefix"))

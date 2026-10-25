@@ -137,7 +137,10 @@ static void test_cost_bursts(void)
         if (guard == 4) g_need_resched = true;
         if (guard == 5) { v->monitor.pic[0].imr = 0; v86_irq_raise(&v->monitor, 1); }
         uint32_t before = v->perf.batched;
-        CHECK(!dosvm_io_burst(v, &f) && !f.tf.eip && v->perf.batched == before);
+        /* t23-dosperf: an armed flags image is no stop condition (the
+         * burst retires port cycles and register setup, never POPF/IRET). */
+        if (guard == 2) CHECK(!dosvm_io_burst(v, &f) && f.tf.eip == 2 && v->perf.batched == before + 2 && v->dpmi.if_armed);
+        else CHECK(!dosvm_io_burst(v, &f) && !f.tf.eip && v->perf.batched == before);
         v->monitor.shadow = v->dpmi.if_armed = false; v->dpmi.dr7 = 0; g_need_resched = false;
         v->monitor.pic[0].irr = 0; v->monitor.pic[0].imr = 0xFF;
     }

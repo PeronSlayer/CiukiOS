@@ -129,15 +129,22 @@ class Quake3DemoTests(unittest.TestCase):
                      '...calling CDS: ok', '...created window@0,0 (640x480)', '...hardware acceleration found',
                      '...creating GL context: succeeded', '...making context current: succeeded',
                      '...using GL_ARB_multitexture', '...using GL_EXT_compiled_vertex_array',
-                     'PIXELFORMAT: color(24-bits) Z(16-bit) stencil(0-bits)', 'MODE: 3, 640 x 480 fullscreen',
+                     'MODE: 3, 640 x 480 fullscreen',
                      'GL_RENDERER: CiukiOS', '----- finished R_Init -----', 'Loading vm file vm/ui.qvm.'):
             self.assertIn(line, log)
         self.assertNotIn('Low Desktop Color Depth', output)
+        # The pixel format Quake III asked for first (32-bit colour, 24-bit depth,
+        # 8-bit stencil) exists since f7-08; the device gamma ramp is accepted in
+        # full screen (GDI ramp -> opengl32 W32_DISPLAY_GAMMA on the lease), so
+        # the game uses hardware gamma with overbright bits.
+        self.assertRegex(log, r'PIXELFORMAT: color\(32-bits\) Z\(24-bit\) stencil\(8-bits\)')
+        self.assertRegex(log, r'GAMMA: hardware w/ \d overbright bits')
         # Frames reach the display lease (W32_DISPLAY_FRAME) at the mode the game set.
         frames = [int(n) for n in re.findall(r'^GAME frame n=(\d+) kind=lease size=640x480x32 ', output, re.M)]
-        summary = re.search(r'^GAME summary frames=(\d+) .* refused_frames=(\d+) first_to_last_ms=(\d+)', output, re.M)
+        summary = re.search(r'^GAME summary frames=(\d+) .* refused_frames=(\d+) gamma_records=(\d+) first_to_last_ms=(\d+)', output, re.M)
         self.assertTrue(frames and summary, output[-3000:])
-        count, refused, span = (int(summary[i]) for i in (1, 2, 3))
+        count, refused, gamma, span = (int(summary[i]) for i in (1, 2, 3, 4))
+        self.assertGreaterEqual(gamma, 1)
         self.assertGreaterEqual(count, 80)
         self.assertEqual(refused, 0)
         # The GL call profile (export-table thunks of h1_game.c): the menu is
@@ -185,7 +192,7 @@ class Quake3DemoTests(unittest.TestCase):
         self.assertNotIn('REPORT action=1', output)
         result = re.search(r'^(\d+) frames, ([\d.]+) seconds: ([\d.]+) fps', log, re.M)
         self.assertTrue(result, log[-3000:])
-        summary = re.search(r'^GAME summary frames=(\d+) .* refused_frames=(\d+) first_to_last_ms=(\d+) .* lease=(\S+)',
+        summary = re.search(r'^GAME summary frames=(\d+) .* refused_frames=(\d+) gamma_records=\d+ first_to_last_ms=(\d+) .* lease=(\S+)',
                             output, re.M)
         self.assertTrue(summary, output[-3000:])
         self.assertEqual(int(summary[2]), 0)

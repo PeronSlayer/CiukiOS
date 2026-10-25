@@ -3070,7 +3070,7 @@ evidence and the QEMU checklist: `docs/validation/f7-quake3-demo-2026-10-25.md`.
 | --- | --- | --- |
 | GDI32 | `DescribePixelFormat` | The four formats (24/16-bit colour, double/single buffered, 16-bit depth, no stencil) no longer set `PFD_GENERIC_FORMAT`: they belong to the system OpenGL driver (opengl32 over the 3D driver model, software or hardware), not to a GDI generic implementation. |
 | GDI32 | `GetDeviceCaps` | For a non-printer DC (screen, window, memory) HORZRES, VERTRES, BITSPIXEL and the caps derived from them (HORZSIZE, VERTSIZE, NUMCOLORS, RASTERCAPS, SIZEPALETTE, NUMRESERVED, COLORRES, DESKTOPVERTRES/HORZRES) report the display through USER's `w32_user_display_caps` (cached 250 ms): width and height of the physical mode, 8 or 16 bits as is, 24 and 32 as 32 (every window surface is XRGB8888, and 24 would trigger the games' "low depth" paths). An explicit `w32_gdi_set_desktop` keeps priority; without USER the old values remain. |
-| GDI32 | `GetDeviceGammaRamp`, `SetDeviceGammaRamp` | A display DC and a 768-WORD ramp; succeed only while USER reports a full-screen mode set by this process (`w32_user_display_mode`) and a presenter has registered that it applies the ramp on its lease (`w32_gdi_gamma_presenter`); otherwise FALSE with ERROR_NOT_SUPPORTED (50), as a Windows 98 board without downloadable ramps. Get returns the current ramp (identity until Set); Set stores it and advances the serial that `w32_gdi_gamma` returns with the ramp. No presenter registers yet (see next steps), so Quake III uses its software gamma ("GAMMA: software w/ 0 overbright bits") and the picture is correct windowed and full screen. |
+| GDI32 | `GetDeviceGammaRamp`, `SetDeviceGammaRamp` | A display DC and a 768-WORD ramp; succeed only while USER reports a full-screen mode set by this process (`w32_user_display_mode`) and a presenter has registered that it applies the ramp on its lease (`w32_gdi_gamma_presenter`); otherwise FALSE with ERROR_NOT_SUPPORTED (50), as a Windows 98 board without downloadable ramps. Get returns the current ramp (identity until Set); Set stores it and advances the serial that `w32_gdi_gamma` returns with the ramp. The presenter is opengl32 (f7-08, merged the same day): `present.c` binds both seams by name from gdi32 (`bind_gamma`), registers at `wglMakeCurrent` of a full-screen-capable window (`gl_prepare_present`, before Quake III probes the ramp), unregisters when it releases presentation, and sends `W32_DISPLAY_GAMMA` with the lease token and generation before a frame whenever the ramp serial or the lease changed; a refused record fails that swap and is retried with the next frame. So in full screen `GetDeviceGammaRamp` returns TRUE and Quake III runs with hardware gamma and overbright bits ("GAMMA: hardware w/ 1 overbright bits"); windowed, or without a GL context on a full-screen window, both calls return FALSE/ERROR_NOT_SUPPORTED and the program keeps its software gamma. |
 | USER32 | `ChangeDisplaySettingsA` | DEVMODEA (dmSize 124..156; dmFields DM_PELSWIDTH, DM_PELSHEIGHT, DM_BITSPERPEL, others ignored; missing fields take the current mode, 15 bpp is 16). A mode is valid under the DirectDraw rule: 8/16/32 bpp, a hardware size or a logical size the presenter scales (320x200 ... 1024x768), with a 16/32-bit hardware mode at least that large. Flags 0 or CDS_FULLSCREEN record a process-scoped full-screen mode and return DISP_CHANGE_SUCCESSFUL; nothing is sent to the desktop: the borderless window's first frame takes the lease, which switches the physical mode. CDS_TEST validates only. CDS_UPDATEREGISTRY, CDS_GLOBAL, CDS_SET_PRIMARY, CDS_NORESET: DISP_CHANGE_NOTUPDATED (the Display control panel owns the desktop mode). Unknown flags or FULLSCREEN with UPDATEREGISTRY: DISP_CHANGE_BADFLAGS; short DEVMODE: DISP_CHANGE_BADPARAM; invalid mode: DISP_CHANGE_BADMODE. NULL clears the record. No WM_DISPLAYCHANGE: the composed desktop does not change mode. `ChangeDisplaySettingsW` stays a Windows 9x typed failure (-1, error 120). |
 | USER32 | `EnumDisplaySettingsA` | Device NULL, "DISPLAY" or `\\.\DISPLAY1`; ENUM_CURRENT_SETTINGS returns the process's full-screen mode while set, else the physical mode; ENUM_REGISTRY_SETTINGS the physical mode; indexes 0.. list the modes ChangeDisplaySettingsA accepts by bpp, width, height, all at 60 Hz (dmFields BITSPERPEL, PELSWIDTH, PELSHEIGHT, DISPLAYFLAGS, DISPLAYFREQUENCY; dmSize and dmDriverExtra are the caller's). Past the last mode: FALSE (ERROR_NO_MORE_FILES). |
 | USER32 | `CloseWindow` | Minimizes a top-level window (`ShowWindow(SW_MINIMIZE)`), returns TRUE; a child window: FALSE; an invalid handle: FALSE, ERROR_INVALID_WINDOW_HANDLE. |
@@ -3117,43 +3117,35 @@ per second of `demo001` and the per-call profile of the arena.
 
 ### Known limits and next steps
 
-- opengl32 (the f7-glperf worker's area): 13 `wgl*` names Quake III asks
-  for are not exported by this tree's opengl32 (`wglChoosePixelFormat`,
-  `wglDescribePixelFormat`, `wglGetPixelFormat`, `wglSetPixelFormat`,
-  `wglSwapBuffers`, `wglCopyContext`, `wglCreateLayerContext`,
-  `wglDescribeLayerPlane`, `wglGetLayerPaletteEntries`,
-  `wglRealizeLayerPalette`, `wglSetLayerPaletteEntries`,
-  `wglSwapLayerBuffers`, `wglUseFontOutlinesA`); the f7-glperf worktree
-  adds the first five (`opengl32/wgl_formats.c`, delegates to GDI), the
-  eight layer-plane, copy-context and font-outline names stay absent. Each
-  is logged once as `missing-export` at load and Quake III keeps a NULL
-  pointer: the ICD path (`GLW_StartOpenGL` with `opengl32`) never calls
-  them, only a standalone 3Dfx-style driver path would. The
-  per-pixel 64-bit arithmetic in `sdk/libgl/software/renderer.c` dominates
-  the arena profile (host timedemo at 640x480: `sw_triangle` 34.5%,
-  `k32_urem` 30.3% from `coordinate()`'s GL_REPEAT `int64 % 65536`,
-  `k32_udiv` 9.5% from `interpolate()` and the perspective divide,
-  `sample_level` 4.0%): a mask for the power-of-two wrap and incremental
-  span steps instead of a division per channel are the next targets; the
-  host renders `demo001` at 1.8 frames/s at 640x480 and 5.2 at 320x240,
-  the menu at 12. Device gamma on the lease: in `gl_present`'s
-  full-screen branch, call `w32_gdi_gamma_presenter(TRUE)` once and send
-  `W32_DISPLAY_GAMMA` (the `w32_gdi_gamma` ramp) before a frame whenever
-  its serial or the lease token/generation changed; then Quake III switches
-  to hardware gamma with overbright bits (`r_ignorehwgamma 0`, the default;
-  `r_overBrightBits 1`). Until then the software gamma path is correct and
-  complete, and `SetDeviceGammaRamp` answers as a Windows 98 display driver
-  without downloadable ramps (FALSE, `ERROR_NOT_SUPPORTED`).
-- Merge note for the f7-glperf worktree, which also edits
-  `sdk/win32/gdi32/pixelformat.c`: this change's only edit to `describe()`
-  is clearing `PFD_GENERIC_FORMAT`, which that worktree does as well (with
-  the real 16/32-bit colour, D16/D24 and S8 descriptors); take theirs for
-  `describe()` and keep the gamma-ramp block appended here
-  (`GetDeviceGammaRamp`, `SetDeviceGammaRamp`, `w32_gdi_gamma_presenter`,
-  `w32_gdi_gamma`), which depends on nothing in the descriptors. With their
-  D24/S8 formats Quake III's first `GLW_ChoosePFD( 32, 24, 8 )` succeeds
-  (stencil shadows become possible); the menu test's "no stencil format"
-  expectation is not asserted, only the lines common to both.
+- opengl32: of the 13 `wgl*` names Quake III asks for, main exports the
+  five format/swap delegates since f7-08 (`opengl32/wgl_formats.c`:
+  `wglChoosePixelFormat`, `wglDescribePixelFormat`, `wglGetPixelFormat`,
+  `wglSetPixelFormat`, `wglSwapBuffers`); the eight layer-plane,
+  copy-context and font-outline names (`wglCopyContext`,
+  `wglCreateLayerContext`, `wglDescribeLayerPlane`,
+  `wglGetLayerPaletteEntries`, `wglRealizeLayerPalette`,
+  `wglSetLayerPaletteEntries`, `wglSwapLayerBuffers`, `wglUseFontOutlinesA`)
+  stay absent. Each is logged once as `missing-export` at load and Quake
+  III keeps a NULL pointer: the ICD path (`GLW_StartOpenGL` with
+  `opengl32`) never calls them, only a standalone 3Dfx-style driver path
+  would.
+- Renderer speed: before f7-08 the per-pixel 64-bit arithmetic of
+  `sdk/libgl/software/renderer.c` dominated the arena profile (host
+  timedemo at 640x480: `sw_triangle` 34.5%, `k32_urem` 30.3% from
+  `coordinate()`'s GL_REPEAT `int64 % 65536`, `k32_udiv` 9.5%,
+  `sample_level` 4.0%; `demo001` at 1.8 frames/s at 640x480, 5.2 at
+  320x240, the menu at 12). f7-08 replaced the wrap by a mask and the
+  per-channel divisions by specialized spans; the figures after the merge
+  are in the validation record.
+- Merged with f7-08 (2026-10-25 evening): `sdk/win32/gdi32/pixelformat.c`
+  keeps main's ten descriptors (XRGB/RGB565 pairs with D16/S0, D24/S0,
+  D16/S8, D24/S8, none `PFD_GENERIC_FORMAT`) and this change's gamma-ramp
+  block. In the host model GDI's two seams are weak definitions, so the
+  opengl32 tests' counting stand-ins (`tests/host/win32/gl/transport.c`)
+  take precedence there while GDI's own tests use the real ones. Quake III's
+  first `GLW_ChoosePFD( 32, 24, 8 )` now succeeds (format 9), so the menu
+  test expects `PIXELFORMAT: color(32-bits) Z(24-bit) stencil(8-bits)` and
+  `GAMMA: hardware`.
 - `r_smp 1` would swap from a second thread, which `w32_user_gl_target`
   refuses (owner thread only); the default is 0.
 - Quake III's `r_mode` table (`code/renderer/tr_init.c`): 0 320x240,
@@ -3166,3 +3158,131 @@ per second of `demo001` and the per-call profile of the arena.
   failed, ...trying next higher resolution" is the game's own text).
 - The H1 game mode has no threads, network or audio device; QEMU is the
   evidence for DirectSound, DirectInput with real input, and winsock.
+
+## q3exec4 — Wizard pages: destination read, hidden controls, placement (2026-10-25)
+
+QEMU evidence (lead, image of main 50a843517, serial
+`build/lead-scratch/q3-serial-102.log`, screenshots of the run): the whole
+wizard runs (Welcome, license, Choose Destination Location showing
+`c:\Q3Ademo`, Ready To Install, Setup copying, Finished) and the Start menu
+group is created, but the copy page shows `Copying file: \requirements.txt`,
+the uninstall log lists only `0=\quake3.exe` and `1=\requirements.txt`, the
+Finished page shows check boxes labelled `IDS_OPTION1` and `IDS_OPTION2`,
+the Ready To Install page an empty "Current settings" box, and every page
+opens 9 pixels right and 72 pixels lower than the one before (Welcome at
+240,253, Finished at 276,540 with its buttons under the taskbar).
+
+### Research
+
+- [WM_DESTROY](https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-destroy):
+  "This message is sent first to the window being destroyed and then to the
+  child windows (if any) as they are destroyed. During the processing of
+  the message, it can be assumed that all child windows still exist."
+  [DestroyWindow](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-destroywindow)
+  destroys owned windows first. Wine's `DestroyWindow` does the same:
+  owned windows, then `WM_DESTROY` to the window and recursively to its
+  children, then `WM_NCDESTROY` from the children up.
+- [Window Features, Window Visibility](https://learn.microsoft.com/en-us/windows/win32/winmsg/window-features#window-visibility):
+  the system does not draw a hidden window, and a child window is hidden
+  while its parent is hidden.
+- `vise32ex.dll` (host disassembly, no execution):
+  - Choose Destination Location (template 108, procedure 0x1000bab0) fills
+    edit control 1006 in WM_INITDIALOG and reads it back in **WM_DESTROY**
+    (0x1000bbc2: `GetDlgItemTextA(hDlg, 1006, buf, 259)` when Next ended
+    the page) into the destination variable (0x1002fc70).
+  - Finished (template 12033, procedure 0x1000fa10) sets each option check
+    box (1023-1025) from the script or hides it with
+    `ShowWindow(GetDlgItem(hDlg, id), SW_HIDE)` when the label is empty
+    (0x1000feff); the Quake III demo script leaves all three empty. Ready To
+    Install (template 12032, 0x1001f1df) hides the "Current settings" label
+    and box the same way when the script does not ask for them.
+  - Files are written with `_lcreat`/`_lwrite`; directories are created one
+    component at a time with `CreateDirectoryA` (0x100477c0).
+- `apps/desktop/client.c` `v3_place`/`v3_configure`: CREATE and PLACE give
+  the frame origin (`desk_frame`), CONFIGURE answers with the content origin
+  (`desk_content`: frame + border 3, title 24).
+
+### Findings and decisions
+
+1. Destination empty. `u32_destroy` destroyed child windows before sending
+   `WM_DESTROY` to the dialog (directive f5-10A, item 1, asked for
+   "WM_DESTROY children first"), so VISE's `GetDlgItemTextA(1006)` found no
+   control and stored an empty destination: files were installed under the
+   root of C: (`\quake3.exe`). Decision, as documented for Windows: owned
+   windows are destroyed first (the only phase that can still fail and keep
+   the window), then the window's `WM_DESTROY` while its children exist,
+   then each child (its own `WM_DESTROY` ... `WM_NCDESTROY`), then the
+   window's `WM_NCDESTROY`. This corrects the f5-10A wording, which the
+   Microsoft documentation contradicts.
+2. Copy stopping after `requirements.txt`. It follows from 1: with an empty
+   destination every file in a subdirectory of the product folder
+   (`demoq3\pak0.pk3`, `Extras\...`) was skipped, while the two files of the
+   folder itself went to `C:\`; the kernel creates rooted directories such
+   as `\demoq3\` and opens files in them correctly (checked on the real VFS
+   of `tests/host/win32/kernel32_files.c`). The silent install of the same
+   image, whose destination stayed at the script default `c:\Q3Ademo`,
+   installed the complete `demoq3\pak0.pk3` (46,853,694 bytes) and the
+   Extras tree with the same file calls, so no file-API change is made.
+3. `IDS_OPTION1`/`IDS_OPTION2` on the Finished page (and the empty "Current
+   settings" box). The labels are the template placeholders of check boxes
+   VISE hides. USER sent `WM_PAINT` to every window with an update region,
+   hidden ones included, and a child's DC drew into its root surface whether
+   or not the child was visible: the controls painted themselves after the
+   dialog was shown. Decision: a child window is painted only while it and
+   its ancestors are visible (`u32_paintable`: no `WM_PAINT`, no `QS_PAINT`,
+   `UpdateWindow` does nothing, and its DC has an empty visible region);
+   hiding a visible child (`ShowWindow(SW_HIDE)`, `SWP_HIDEWINDOW`)
+   invalidates the parent area it leaves. Top-level windows keep painting
+   their own surface while hidden (it is their first frame when shown).
+4. Pages creeping down the screen. USER sent the content origin in CREATE
+   and PLACE while the desktop takes the frame origin there, so every
+   placement round trip (MoveWindow, ShowWindow, ...) moved a captioned
+   window by its frame (3, 24); VISE reopens each page where the previous
+   one was, so the drift added up. Decision: CREATE and PLACE carry the
+   frame origin (`u32_frame_origin`), the inverse of what CONFIGURE reports.
+5. Host tests (VISE mode of `tests/host/win32/dialogs`, fixtures 142 and
+   143): the destination page reads `c:\Q3Ademo` from its edit control in
+   `WM_DESTROY` (fails without 1); the Finished page leaves no pixels of its
+   three hidden check boxes and none of a static hidden after painting
+   (fails without 3); with the fake desktop answering CREATE and PLACE as
+   `v3_place`/`v3_configure` do, the license page reopens exactly where the
+   Welcome page was (fails without 4). `tests/host/win32/user32` checks the
+   destruction order (parent `WM_DESTROY`, child `WM_DESTROY` and
+   `WM_NCDESTROY`, parent `WM_NCDESTROY`); the dialog template test now
+   shows its modeless dialog (no `WS_VISIBLE`) before expecting its
+   controls to paint.
+
+### Codex review of the change (five P2, no P1)
+
+1. A popup that a child creates in its `WM_DESTROY`, owned by the window
+   being destroyed, outlived its owner (the desktop dropped it with the
+   owner's window while USER kept its handle). Decision: after the
+   window's `WM_NCDESTROY`, USER destroys owned windows again, and the
+   child and late-owned passes repeat until none is left; a dependent whose
+   destruction fails there is released (never leaked).
+2. Hiding a control under a `WS_CLIPCHILDREN` parent left its pixels over
+   an overlapping sibling (the parent neither repaints there nor
+   invalidates its children). Decision: hiding exposes the visible siblings
+   and their children under the vacated rectangle directly.
+3. `SetWindowPos` with a move or a size and `SWP_HIDEWINDOW` exposed the new
+   rectangle. Decision: the rectangle the window occupied before the call.
+4. `SWP_SHOWWINDOW` without a move or size left a control painted earlier,
+   then hidden, blank. Decision: a window shown by `SetWindowPos` or
+   `ShowWindow` is invalidated whole, its children too.
+5. A `WM_PAINT` handler that hid its window kept drawing through its DC.
+   Decision, as Wine updates busy DCs: `struct u32_gdi` gains a v3 tail,
+   `visible(HDC, rects, count)`, and hiding a window empties the visible
+   region of the DCs it (if a child) and its children still hold;
+   `u32_set_gdi` accepts tables of versions 1 to 3.
+
+Each has a regression in `tests/host/win32/user32/user32_test.c`
+(`review_round2`, and the production `visible` tail in
+`test_production_gdi`) that fails without its fix.
+
+### Known limits
+
+- The frame origin assumes the desktop's default frame metrics (border 3,
+  title 24), as the CONFIGURE handler already does; a theme with other
+  metrics would still shift windows.
+- Moving a visible child (without hiding it) does not yet invalidate the
+  parent area it leaves.

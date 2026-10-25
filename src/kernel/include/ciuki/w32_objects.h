@@ -92,6 +92,10 @@ uint64_t w32_system_time(void);
 void w32_changed_wake(void);
 struct process *w32_process_for_memory(struct uaddr *u);
 int w32_shared_map(struct process *p);
+/* Physical frame of the page every Win32 process maps at CIUKI_W32_SHARED;
+ * 0 while no process maps it (sections.c). Published by w32_shared_publish. */
+extern uint32_t w32_shared_frame;
+void w32_shared_publish(void);
 int w32_process_init(struct process *p);
 int w32_thread_objects_init(struct proc_thread *t);
 void w32_process_cleanup(struct process *p);

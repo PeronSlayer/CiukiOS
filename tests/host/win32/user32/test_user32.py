@@ -97,7 +97,8 @@ class User32Tests(unittest.TestCase):
             '_Static_assert(sizeof(ICONINFO)==20,"ICONINFO");\n'
             '_Static_assert(sizeof(struct u32_surface)==24,"surface");\n'
             '_Static_assert(__builtin_offsetof(struct u32_gdi,window_pixel_format)==36,"GDI v1 prefix");\n'
-            '_Static_assert(sizeof(struct u32_gdi)==40,"GDI v2 interface");\n')
+            '_Static_assert(__builtin_offsetof(struct u32_gdi,visible)==40,"GDI v2 prefix");\n'
+            '_Static_assert(sizeof(struct u32_gdi)==44,"GDI v3 interface");\n')
         subprocess.run(['clang','--target=i686-pc-windows-msvc','-ffreestanding','-Wall','-Wextra','-Werror',
             '-I'+str(ROOT/'sdk/win32/include'),'-I'+str(ROOT/'src/kernel/include'),
             '-c',str(source),'-o',str(out/'layout.obj')],check=True)

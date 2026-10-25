@@ -54,16 +54,21 @@ static struct peer peers[16];
 /* fx-24: the styled-page fixture (fixtures/fx24, CIUKI_FIXTURE_SITE) as a
  * web server sends it: HTML, CSS and SVG gzip-encoded with a length,
  * images chunked, each with its media type; anything else is a 404. */
-static void site_response(struct peer *p,const char *name)
+static void site_response(struct peer *p,const char *request_name)
 {
     static const char *const types[][2]={{".html","text/html; charset=utf-8"},{".css","text/css"},{".svg","image/svg+xml"},
         {".png","image/png"},{".jpg","image/jpeg"},{".gif","image/gif"},{".webp","image/webp"}};
     const char *site=getenv("CIUKI_FIXTURE_SITE"),*type=NULL;
+    /* t23-render: a query names the same file, as the encyclopedia's
+     * thumbnail URLs (?utm_source=...) do; no explicit expiry is sent. */
+    char name[1024];snprintf(name,sizeof(name),"%s",request_name);
+    char *query=strchr(name,'?');if(query)*query=0;
     for(unsigned i=0;i<sizeof(types)/sizeof(*types);i++){
         size_t n=strlen(name),m=strlen(types[i][0]);
         if(n>m && !strcmp(name+n-m,types[i][0]))type=types[i][1];
     }
-    unsigned char body[16384];size_t bytes=0;FILE *file=NULL;
+    /* t23-render: stylesheets of a few hundred KB (gzip-encoded below). */
+    static unsigned char body[262144];size_t bytes=0;FILE *file=NULL;
     if(site && type && !strchr(name,'/') && name[0]!='.'){
         char path[1024];snprintf(path,sizeof(path),"%s/%s",site,name);file=fopen(path,"rb");
     }
@@ -82,7 +87,7 @@ static void site_response(struct peer *p,const char *name)
         }
         used+=(size_t)snprintf((char *)p->response+used,sizeof(p->response)-used,"0\r\n\r\n");
     } else {
-        unsigned char encoded[16384];z_stream z={0};
+        static unsigned char encoded[sizeof(p->response)];z_stream z={0};
         CHECK(deflateInit2(&z,9,Z_DEFLATED,31,8,Z_DEFAULT_STRATEGY)==Z_OK);
         z.next_in=body;z.avail_in=(uInt)bytes;z.next_out=encoded;z.avail_out=sizeof(encoded);
         CHECK(deflate(&z,Z_FINISH)==Z_STREAM_END);size_t n=z.total_out;deflateEnd(&z);

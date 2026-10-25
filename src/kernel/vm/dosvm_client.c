@@ -230,7 +230,13 @@ static uint32_t present_events(struct present_request *r)
 static bool present_ready(void *arg)
 {
     struct present_request *r = arg;
-    return present_interrupted(r) || present_events(r);
+    if (present_interrupted(r)) return true;
+    uint32_t events = present_events(r);
+    /* t23-dosperf: stamp the first evaluation that finds the frame ready;
+     * wait_present measures how long the presenter took to run after it. */
+    if ((events & CIUKI_DOSVM_EVENT_VIDEO) && !r->vm->present_ready_tsc)
+        r->vm->present_ready_tsc = dosvm_perf_clock();
+    return events != 0;
 }
 static int wait_present(struct binding *b, struct dosvm *v, struct process *p, struct ciuki_dosvm_command *c)
 {
@@ -239,10 +245,19 @@ static int wait_present(struct binding *b, struct dosvm *v, struct process *p, s
      * sync machinery propagates boosts and withdraws them on every wake. */
     kwait_set_owner(&v->present_wait, v->task);
     unsigned timeout=c->wait.timeout_ms>33 ? 33 : c->wait.timeout_ms;
+    v->present_ready_tsc = 0;
     kwait_wait_until(&v->present_wait, present_ready, &r, deadline_after_ms(timeout));
     kwait_set_owner(&v->present_wait, 0);
     if (present_interrupted(&r)) return -EINTR;
     c->wait.events = present_events(&r);
+    uint32_t flags = irq_save();
+    uint64_t ready = v->present_ready_tsc, now = dosvm_perf_clock();
+    v->present_ready_tsc = 0;
+    if ((c->wait.events & CIUKI_DOSVM_EVENT_VIDEO) && ready && now >= ready) {
+        v->perf.present_waits++; v->perf.present_wait_cycles += now - ready;
+        if (now - ready > v->perf.present_wait_max_cycles) v->perf.present_wait_max_cycles = now - ready;
+    }
+    irq_restore(flags);
     if (!c->wait.events) c->wait.events = CIUKI_DOSVM_EVENT_TIMEOUT;
     c->wait.frame_ms = dosvm_vga_period_ms(v);
     if (c->wait.events & CIUKI_DOSVM_EVENT_VIDEO) {

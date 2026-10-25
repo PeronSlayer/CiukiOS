@@ -30,7 +30,7 @@ def build(out,base=0x76000000,flags=None):
     if name=='GlDllMain':continue
     public=name[4:] if name.startswith('w32_gl') and name!='w32_gl_swap' else name
     exports[public]=f'_{name}@{arity}'
- libraries=[imports(objdir,'kernel32',['GetModuleHandleA@4','GetProcAddress@8']),imports(objdir,'ntdll',['w32_get_services','w32_strcmp','w32_shim_current']),imports(objdir,'gdi32',['GetPixelFormat@4','w32_gdi_gl_size@12','StretchDIBits@52','CreateDIBSection@24','DeleteObject@4','w32_gdi_gl_glyph@24'])]
+ libraries=[imports(objdir,'kernel32',['GetModuleHandleA@4','GetProcAddress@8']),imports(objdir,'ntdll',['w32_get_services','w32_strcmp','w32_shim_current']),imports(objdir,'gdi32',['ChoosePixelFormat@8','SetPixelFormat@12','GetPixelFormat@4','DescribePixelFormat@16','w32_gdi_gl_size@12','StretchDIBits@52','CreateDIBSection@24','DeleteObject@4','w32_gdi_gl_glyph@24'])]
  definition=out/'opengl32.def';definition.write_text('LIBRARY opengl32.dll\nEXPORTS\n'+''.join(f' {name}={value}\n' for name,value in sorted(exports.items())))
  rc=objdir/'version.rc';rc.write_text('1 VERSIONINFO\nFILEVERSION 0,0,0,0\nPRODUCTVERSION 0,0,0,0\nFILEFLAGSMASK 0x3f\nFILEFLAGS 0\nFILEOS 0x40004\nFILETYPE 2\nBEGIN\nBLOCK "StringFileInfo"\nBEGIN\nBLOCK "040904E4"\nBEGIN\nVALUE "FileDescription", "CiukiOS software OpenGL (TinyGL)\\0"\nEND\nEND\nEND\n');res=rc.with_suffix('.res');subprocess.run(['llvm-rc','/fo',str(res),str(rc)],check=True)
  image=out/'opengl32.dll';subprocess.run(['lld-link','/machine:x86','/dll','/entry:GlDllMain@12','/nodefaultlib','/safeseh:no','/timestamp:0','/incremental:no','/base:'+hex(base),'/subsystem:windows,4.0','/osversion:4.0','/def:'+str(definition),'/out:'+str(image),*objects,str(res),*libraries],check=True)

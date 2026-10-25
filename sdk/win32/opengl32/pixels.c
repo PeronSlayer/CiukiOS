@@ -218,6 +218,28 @@ void gl_pixels(struct gl_context *c, unsigned id, const union gl_arg *a,
   }
   int read = id == ID_glReadPixels, base = read ? 2 : 0;
   int w = a[base].i, h = a[base + 1].i, f = a[base + 2].i, t = a[base + 3].i;
+  /* Stencil readback is used by Quake's overdraw diagnostic. Pixel transfer
+   * defaults are identity; stencil is not a texture/color upload format. */
+  if (read && f == GL_STENCIL_INDEX && t == GL_UNSIGNED_BYTE) {
+    if (!c->sw.stencil) { gl_error(c, GL_INVALID_OPERATION); return; }
+    if (w < 0 || h < 0 || w > 2048 || h > 2048) { gl_error(c, GL_INVALID_VALUE); return; }
+    if (!w || !h) return;
+    uint8_t *out = (uint8_t *)a[6].p;
+    if (!out) { gl_error(c, GL_INVALID_VALUE); return; }
+    unsigned pitch = ((unsigned)(c->pack[1] ? c->pack[1] : w) + c->pack[0] - 1) & ~(unsigned)(c->pack[0]-1);
+    out += (unsigned)c->pack[2] * pitch + (unsigned)c->pack[3];
+    for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
+      int64_t px = a[0].i + x, py = a[1].i + y;
+      unsigned value = 0;
+      if (c->sw.stencil && px >= 0 && py >= 0 && (unsigned)px < c->drawable_width &&
+          (unsigned)py < c->drawable_height) {
+        px = gl_window_coord(c, px, 0); py = gl_window_coord(c, py, 1);
+        value = c->sw.stencil[(c->sw.height-1-(unsigned)py)*c->sw.width+(unsigned)px];
+      }
+      out[(unsigned)y * pitch + (unsigned)x] = value;
+    }
+    return;
+  }
   int bytes = gl_pixel_bytes(f, t);
   if (w < 0 || h < 0 || w > 2048 || h > 2048) {
     gl_error(c, GL_INVALID_VALUE);

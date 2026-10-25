@@ -1068,16 +1068,23 @@ static void quake3(void) {
   struct w32_dib surface = test_dib(pixels, 16, 8, 32, 0, 1);
   HDC window = dc_for(&surface);
   assert(GetDeviceCaps(window, 8) == 1024 && GetDeviceCaps(window, 12) == 32);
-  /* Driver formats: never PFD_GENERIC_FORMAT, 16-bit depth, double buffered
-   * 24- and 16-bit colour first (Quake III GLW_ChoosePFD keeps them). */
+  /* Driver formats (ten since f7-08: XRGB/RGB565 pairs with D16/S0 double
+   * and single buffered, then D24/S0, D16/S8, D24/S8): never
+   * PFD_GENERIC_FORMAT, depth of at least 15 bits (Quake III GLW_ChoosePFD
+   * keeps them and takes format 9 for its 32/24/8 request). */
   PIXELFORMATDESCRIPTOR pfd;
-  assert(DescribePixelFormat(window, 1, 40, &pfd) == 4);
-  for (int n = 1; n <= 4; n++) {
-    assert(DescribePixelFormat(window, n, 40, &pfd) == 4);
+  assert(DescribePixelFormat(window, 1, 40, &pfd) == 10);
+  for (int n = 1; n <= 10; n++) {
+    assert(DescribePixelFormat(window, n, 40, &pfd) == 10);
     assert(!(pfd.dwFlags & PFD_GENERIC_FORMAT) && pfd.iPixelType == PFD_TYPE_RGBA);
     assert(pfd.cDepthBits >= 15 && (pfd.dwFlags & PFD_SUPPORT_OPENGL));
-    assert(!!(pfd.dwFlags & PFD_DOUBLEBUFFER) == (n <= 2));
+    assert(!!(pfd.dwFlags & PFD_DOUBLEBUFFER) == (n != 3 && n != 4));
+    assert(pfd.cColorBits == (n & 1 ? 32 : 16) && pfd.cStencilBits == (n >= 7 ? 8 : 0));
   }
+  PIXELFORMATDESCRIPTOR want = {.nSize = 40, .nVersion = 1, .iPixelType = PFD_TYPE_RGBA,
+                                .dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER,
+                                .cColorBits = 32, .cDepthBits = 24, .cStencilBits = 8};
+  assert(ChoosePixelFormat(window, &want) == 9);
   /* Gamma ramps: no presenter, or no full-screen mode, means no device ramp
    * (FALSE, the program keeps its software gamma). */
   uint16_t ramp[3][256], set[3][256], copy[768];

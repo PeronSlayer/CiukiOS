@@ -1033,6 +1033,11 @@ static void test_memory_services(bool locked)
 #include "dosvm_fx22_test.inc"     /* fx-22: T23 trial f441c5bd full-screen return */
 #include "dosvm_properties_test.inc"
 #include "dosvm_fx27_test.inc"     /* fx-27: windowed DOS graphics budgets */
+#ifndef T23_HEAD_BASELINE
+#include "dosvm_t23dosperf_test.inc" /* t23-dosperf: trial c42f556e DOS window lag */
+#else
+static void test_t23dosperf(void) {}
+#endif
 #include "dosvm_101_video_test.inc"
 #include "dosvm_vbe_window_test.inc"  /* war2vbe: windowed VBE without a native provider */
 #include "dosvm_101_revoke_race_test.inc"
@@ -1043,7 +1048,8 @@ int main(void)
     if (getenv("CIUKI_VM_101_REVOKE_RACE")) { test_101_revoke_races(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_101_BENCH")) { bench_101_video(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_101_VIDEO")) { test_101_video(); free(ram); fflush(stdout); return 0; }
-    if (getenv("CIUKI_VM_VBE_WINDOW")) { test_vbe_window(); test_fullscreen_vbe(); free(ram); fflush(stdout); return 0; }
+    if (getenv("CIUKI_VM_VBE_WINDOW")) { test_vbe_window(); test_vbe_native_war2_t23(); test_vbe_native_lease_fast_paths(); test_fullscreen_vbe(); free(ram); fflush(stdout); return 0; }
+    if (getenv("CIUKI_VM_WAR2_FULLSCREEN")) { test_vbe_native_war2_t23(); test_vbe_native_lease_fast_paths(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_101_NATIVE")) { test_101_native(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_MPU")) { test_mpu_uart(); test_vm_midi(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_PROPERTIES")) { test_dos_properties(); free(ram); fflush(stdout); return 0; }
@@ -1062,6 +1068,7 @@ int main(void)
     if (getenv("CIUKI_VM_FX16")) { test_fx16(); printf("fx-16 checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
     if (getenv("CIUKI_VM_FX22")) { test_fx22(); printf("fx-22 checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
     if (getenv("CIUKI_VM_FX27")) { test_fx27(); printf("fx-27 checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
+    if (getenv("CIUKI_VM_T23DOSPERF")) { test_t23dosperf(); printf("t23-dosperf checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
     if (getenv("CIUKI_VM_SERIAL")) { test_serial_uart(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_WAIT_PRESENT")) {
         test_wait_present(); test_client_boundary(); test_video_presenter(); test_fullscreen_vbe();
@@ -1108,6 +1115,7 @@ int main(void)
     test_speed();
     test_cost_bursts();
     test_fx27();
+    test_t23dosperf();
     test_101_video();
     test_exit_cost();
     test_idle();
@@ -1116,6 +1124,8 @@ int main(void)
     test_fullscreen_more_modes();
     test_fullscreen_vbe();
     test_vbe_window();
+    test_vbe_native_war2_t23();
+    test_vbe_native_lease_fast_paths();
     test_101_native();
     test_fx22();
     test_startup();

@@ -6,7 +6,7 @@
 #define P(n) (a[n].p)
 static int cap(int n) {
   return n == GL_TEXTURE_1D || n == GL_TEXTURE_2D || n == GL_DEPTH_TEST ||
-         n == GL_ALPHA_TEST || n == GL_BLEND || n == GL_SCISSOR_TEST ||
+         n == GL_STENCIL_TEST || n == GL_ALPHA_TEST || n == GL_BLEND || n == GL_SCISSOR_TEST ||
          n == GL_FOG || n == GL_LIGHTING || n == GL_NORMALIZE ||
          n == GL_CULL_FACE || n == GL_COLOR_MATERIAL ||
          n == GL_POLYGON_OFFSET_FILL || n == GL_POLYGON_OFFSET_LINE ||
@@ -38,6 +38,8 @@ unsigned gl_validate(struct gl_context *c, unsigned id, const union gl_arg *a) {
   case ID_glListBase:
   case ID_glClearColor:
   case ID_glClearDepth:
+  case ID_glClearStencil:
+  case ID_glStencilMask:
   case ID_glColorMask:
   case ID_glDepthMask:
   case ID_glDepthRange:
@@ -72,9 +74,18 @@ unsigned gl_validate(struct gl_context *c, unsigned id, const union gl_arg *a) {
     return I(0) < GL_TEXTURE0_ARB || I(0) > GL_TEXTURE0_ARB + 1
                ? GL_INVALID_ENUM
                : 0;
+  case ID_glStencilFunc:
   case ID_glDepthFunc:
   case ID_glAlphaFunc:
     return I(0) < GL_NEVER || I(0) > GL_ALWAYS ? GL_INVALID_ENUM : 0;
+  case ID_glStencilOp:
+    for (int i = 0; i < 3; i++) {
+      int v = I(i);
+      if (v != GL_KEEP && v != GL_ZERO && v != GL_REPLACE &&
+          v != GL_INCR && v != GL_DECR && v != GL_INVERT)
+        return GL_INVALID_ENUM;
+    }
+    return 0;
   case ID_glBlendFunc:
     if (I(0) != GL_ZERO && I(0) != GL_ONE && I(0) != GL_DST_COLOR &&
         I(0) != GL_ONE_MINUS_DST_COLOR && I(0) != GL_SRC_ALPHA &&
@@ -91,16 +102,11 @@ unsigned gl_validate(struct gl_context *c, unsigned id, const union gl_arg *a) {
     if (I(0) & ~(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
                  GL_STENCIL_BUFFER_BIT | GL_ACCUM_BUFFER_BIT))
       return GL_INVALID_VALUE;
-    return I(0) & (GL_STENCIL_BUFFER_BIT | GL_ACCUM_BUFFER_BIT)
-               ? GL_INVALID_OPERATION
-               : 0;
+    return 0;
   case ID_glViewport:
+    return I(2) < 0 || I(3) < 0 ? GL_INVALID_VALUE : 0;
   case ID_glScissor:
-    if (I(2) < 0 || I(3) < 0 || I(2) > (id == ID_glViewport ? 2048 : 65536) ||
-        I(3) > (id == ID_glViewport ? 2048 : 65536))
-      return GL_INVALID_VALUE;
-    if (id == ID_glViewport &&
-        (I(0) < -2048 || I(0) > 2048 || I(1) < -2048 || I(1) > 2048))
+    if (I(2) < 0 || I(3) < 0 || I(2) > 65536 || I(3) > 65536)
       return GL_INVALID_VALUE;
     return 0;
   case ID_glMatrixMode:
@@ -132,6 +138,8 @@ unsigned gl_validate(struct gl_context *c, unsigned id, const union gl_arg *a) {
     return I(1) != GL_POINT && I(1) != GL_LINE && I(1) != GL_FILL
                ? GL_INVALID_ENUM
                : 0;
+  case ID_glLineWidth:
+    return !(a[0].f > 0) ? GL_INVALID_VALUE : 0;
   case ID_glPointSize:
     return !(a[0].f > 0 && a[0].f <= 64) ? GL_INVALID_VALUE : 0;
   case ID_glPushAttrib:
@@ -204,6 +212,8 @@ unsigned gl_validate(struct gl_context *c, unsigned id, const union gl_arg *a) {
     int vector = id == ID_glTexParameteriv || id == ID_glTexParameterfv;
     if (vector && !P(2))
       return GL_INVALID_VALUE;
+    if (I(1) == GL_TEXTURE_BORDER_COLOR)
+      return vector ? 0 : GL_INVALID_ENUM;
     int v = vector ? id == ID_glTexParameteriv ? *(const int *)P(2)
                                                : (int)*(const float *)P(2)
             : id == ID_glTexParameteri ? I(2)
@@ -393,8 +403,8 @@ unsigned gl_validate(struct gl_context *c, unsigned id, const union gl_arg *a) {
                : GL_INVALID_ENUM;
   case ID_glDrawBuffer:
   case ID_glReadBuffer:
-    return I(0) == GL_FRONT || I(0) == GL_BACK ||
-                   (id == ID_glDrawBuffer && I(0) == GL_FRONT_AND_BACK)
+    return I(0) == GL_FRONT || I(0) == GL_BACK || I(0) == GL_FRONT_LEFT || I(0) == GL_BACK_LEFT ||
+                   (id == ID_glDrawBuffer && (I(0) == GL_FRONT_AND_BACK || I(0) == GL_NONE))
                ? 0
                : GL_INVALID_ENUM;
   case ID_glPrioritizeTextures:

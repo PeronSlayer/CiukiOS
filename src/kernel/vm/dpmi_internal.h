@@ -130,6 +130,7 @@ struct dpmi_cli_site {
 struct dpmi_cli_stats {
     uint32_t candidates, hits, proved, control, pattern, missed;
     uint32_t seeds, seeds_skipped, irq_proofs, irq_proofs_skipped;
+    uint32_t unprovable;            /* t23-dosperf: no PUSHF/POP r before the CLI */
 };
 struct dpmi {
     uint32_t ldt[DPMI_LDT_ENTRIES][2] __attribute__((aligned(8)));
@@ -181,6 +182,14 @@ struct dpmi {
     struct dpmi_cli_stats cli;
     uint16_t shadow_cs;             /* STI shadow: CS:EIP of the shadowed instruction */
     uint32_t shadow_eip;
+    /* t23-dosperf review (2026-10-25): the monitor's own single step of
+     * the shadowed instruction when a physical IRQ lands at its address
+     * with a virtual IRQ deliverable (dpmi_dispatch.c shadow_trap); owned
+     * in this stack/depth/client like the f3-15 recovery step. */
+    bool shadow_step;
+    uint16_t shadow_step_ss;
+    uint8_t shadow_step_depth, shadow_step_client;
+    uint32_t shadow_steps;
     unsigned clients, depth;
     uint32_t lock_top, dr7, serial;
     uint16_t rstack_top;

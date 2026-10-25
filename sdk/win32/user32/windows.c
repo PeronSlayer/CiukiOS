@@ -368,6 +368,48 @@ BOOL W32API DestroyWindow(HWND h) {
     return u32_fail(5);
   return u32_destroy(w, U32_NORMAL);
 }
+/* Owned windows (PHASE 0, before WM_DESTROY), child windows (PHASE 1,
+ * after it) or owned windows again (PHASE 2, after every callback) of W.
+ * Only phase 0 can still fail and keep W; phases 1 and 2 repeat until none
+ * is left, since a callback may create another one (q3exec4 review: a
+ * popup a child creates in its WM_DESTROY, owned by W, must not outlive
+ * W, whose desktop window takes it along). */
+static BOOL u32_destroy_dependents(struct u32_window *w, UINT mode, UINT phase) {
+  HWND h = w->handle;
+  for (UINT round = 0; round < U32_WINDOWS && w->handle == h; round++) {
+    BOOL found = 0;
+    for (UINT i = 0; i < U32_WINDOWS; i++) {
+      struct u32_window *q = &u32_windows[i];
+      if (!q->handle || q->destroying ||
+          (phase == 1 ? q->parent != h : q->parent || q->owner != h))
+        continue;
+      HWND dependent = q->handle;
+      BOOL remote = 0;
+      found = 1;
+      if (mode == U32_TEARDOWN || (mode == U32_VICTIM && q->tid == w->tid))
+        u32_destroy(q, mode);
+      else if (q->tid == u32_tid())
+        u32_destroy(q, U32_NORMAL);
+      else {
+        remote = 1;
+        q->destroy_request = 1;
+        BOOL sent = SendMessageA(q->handle, U32_DESTROY, 0, 0) != 0;
+        if (q->handle == dependent && !sent && mode == U32_NORMAL && phase == 0) {
+          q->destroy_request = 0;
+          w->destroying = 0;
+          return 0;
+        }
+      }
+      /* An unreachable owner thread, or (once W's own WM_DESTROY has run) a
+       * failed destruction: release, never leak. */
+      if (q->handle == dependent && !q->destroying && (remote || phase))
+        u32_destroy(q, U32_TEARDOWN);
+    }
+    if (!found || phase == 0)
+      break;
+  }
+  return 1;
+}
 /* MODE: U32_TEARDOWN releases without any callback or send (process exit);
  * U32_NORMAL is DestroyWindow on the owning thread; U32_VICTIM releases a
  * terminated thread's window without running its procedures, while live
@@ -378,29 +420,18 @@ BOOL u32_destroy(struct u32_window *w, UINT mode) {
   if (w->destroying)
     return 1;
   w->destroying = 1;
-  /* Directive f5-10A explicitly selects children-first destruction; a
-   * dependent owned by another thread of this process is destroyed on that
-   * thread through a private sent request (DestroyWindow is thread-bound). */
-  for (UINT i = 0; i < U32_WINDOWS; i++) {
-    struct u32_window *q = &u32_windows[i];
-    if (!q->handle || (q->parent != h && q->owner != h))
-      continue;
-    if (mode == U32_TEARDOWN || (mode == U32_VICTIM && q->tid == w->tid))
-      u32_destroy(q, mode);
-    else if (q->tid == u32_tid())
-      u32_destroy(q, U32_NORMAL);
-    else {
-      q->destroy_request = 1;
-      BOOL sent = SendMessageA(q->handle, U32_DESTROY, 0, 0) != 0;
-      if (q->handle && !sent && mode == U32_NORMAL) {
-        q->destroy_request = 0;
-        w->destroying = 0;
-        return 0;
-      }
-      if (q->handle) /* unreachable owner thread: release, never leak */
-        u32_destroy(q, U32_TEARDOWN);
-    }
-  }
+  /* q3exec4: Windows order (WM_DESTROY on Microsoft Learn: "sent first to
+   * the window being destroyed and then to the child windows (if any) as
+   * they are destroyed. During the processing of the message, it can be
+   * assumed that all child windows still exist"). Owned windows go first,
+   * then the window's WM_DESTROY while its children exist (Installer VISE
+   * reads the destination folder from its edit control there), then the
+   * children, each with its own WM_DESTROY and WM_NCDESTROY, and last the
+   * window's WM_NCDESTROY. A dependent owned by another thread of this
+   * process is destroyed on that thread through a private sent request
+   * (DestroyWindow is thread-bound). */
+  if (!u32_destroy_dependents(w, mode, 0))
+    return 0;
   if (callbacks && u32_capture == h)
     ReleaseCapture();
   else if (u32_capture == h) u32_capture = 0;
@@ -413,10 +444,14 @@ BOOL u32_destroy(struct u32_window *w, UINT mode) {
   u32_input_focus();
   u32_clip_render_all(h,callbacks);
   if (callbacks) u32_invoke(h, WM_DESTROY, 0, 0);
+  /* Children last: after WM_DESTROY nothing can cancel the destruction, so
+   * an unreachable child thread's window is released (never leaked). */
+  u32_destroy_dependents(w, mode, 1);
   for (UINT i = 0; i < U32_TIMERS; i++)
     if (u32_timers[i].tid && u32_timers[i].hwnd == h)
       w32_fill(&u32_timers[i], 0, sizeof(u32_timers[i]));
   if (callbacks) u32_invoke(h, WM_NCDESTROY, 0, 0);
+  u32_destroy_dependents(w, mode, 2);
   u32_classic_destroy(h); /* USER-owned control/dialog/menu/caret records, also at thread exit */
   u32_window_region_free(w);
   u32_destroy_paint(w);
@@ -589,8 +624,12 @@ BOOL W32API SetWindowPos(HWND h, HWND after, int x, int y, int cx, int cy,
   }
   if (flags & SWP_SHOWWINDOW)
     w->style |= WS_VISIBLE;
-  if (flags & SWP_HIDEWINDOW)
+  if (flags & SWP_HIDEWINDOW) {
     w->style &= ~WS_VISIBLE;
+    /* q3exec4 review: the area it occupied before this call is exposed. */
+    if (old_style & WS_VISIBLE)
+      u32_child_hidden(w, before);
+  }
   if (!w->parent && !u32_place(w)) {
     w->rect = before;
     w->style = old_style;
@@ -607,6 +646,14 @@ BOOL W32API SetWindowPos(HWND h, HWND after, int x, int y, int cx, int cy,
     u32_restack(w, after);
   }
   u32_sync_window(w);
+  /* q3exec4 review: SWP_SHOWWINDOW paints a window that was hidden, even
+   * without a move or a size change. */
+  if ((flags & SWP_SHOWWINDOW) && !(old_style & WS_VISIBLE)) {
+    if (w->parent)
+      u32_child_shown(w);
+    else
+      InvalidateRect(h, 0, 1);
+  }
   if (before.left != w->rect.left || before.top != w->rect.top)
     u32_invoke(h, WM_MOVE, 0,
                (uint16_t)w->rect.left |
@@ -658,6 +705,10 @@ BOOL W32API ShowWindow(HWND h, int cmd) {
   u32_sync_window(w);
   if (old != !!(w->style & WS_VISIBLE))
     u32_invoke(h, WM_SHOWWINDOW, !!cmd, 0);
+  if (old && !cmd)
+    u32_child_hidden(w, w->rect);
+  else if (!old && cmd && w->parent)
+    u32_child_shown(w);
   /* A connected top-level window learns its maximised size from the desktop
    * (DESK_CONFIGURE), which sends WM_SIZE with SIZE_MAXIMIZED itself. */
   BOOL desktop_zoom = w->wire && !w->parent;

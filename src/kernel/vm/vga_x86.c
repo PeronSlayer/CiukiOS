@@ -92,6 +92,20 @@ static void set_reg(cvx_cpu *c, unsigned r, unsigned size, uint32_t v)
     else c->gpr[r] = v;
 }
 
+/* cpu->lock_sp (a monitor burst beside an owned stack image, dosvm_vga.c):
+ * an instruction whose destination register is SP/ESP is refused with
+ * CVX_UNSUPPORTED before any bus cycle or register change, so the caller
+ * stops its burst and the CPU executes the instruction natively; the
+ * monitor then observes the new stack pointer at its next exit. Checked at
+ * every register destination in cvx_execute, after the ModRM decode and
+ * before the first operand read. Byte forms never reach SP (register 4 is
+ * AH); the decoder has no implicit SP writer (no PUSH/POP/CALL/RET/ENTER/
+ * LEAVE). */
+static int sp_locked(const dec *d, unsigned reg, unsigned size)
+{
+    return d->cpu->lock_sp && size > 1 && reg == CVX_ESP;
+}
+
 static uint32_t linear(const dec *d, unsigned seg, uint32_t offset)
 {
     cvx_cpu *c = d->cpu;
@@ -657,9 +671,11 @@ int cvx_execute(cvx_cpu *cpu, const cvx_bus *bus, uint32_t budget, cvx_result *r
         status = CVX_DONE;
     } else if (op >= 0xb0 && op <= 0xbf) {
         size = op < 0xb8 ? 1 : d.osize;
+        if (sp_locked(&d, (unsigned)(op & 7), size)) return CVX_UNSUPPORTED;
         if (!fetch(&d, size, &imm)) return d.fault;
         set_reg(cpu, (unsigned)(op & 7), size, imm); status = CVX_DONE;
     } else if (op >= 0x40 && op <= 0x4f) {
+        if (sp_locked(&d, (unsigned)(op & 7), d.osize)) return CVX_UNSUPPORTED;
         a = get_reg(cpu, (unsigned)(op & 7), d.osize); b = cpu->eflags & F_CF;
         value = alu(cpu, op & 8 ? 5 : 0, a, 1, d.osize);
         cpu->eflags = (cpu->eflags & ~F_CF) | b;
@@ -673,6 +689,8 @@ int cvx_execute(cvx_cpu *cpu, const cvx_bus *bus, uint32_t budget, cvx_result *r
     } else if (op < 0x40 && (op & 7) < 4) {                            /* ALU forms */
         size = (op & 1) ? d.osize : 1;
         if (!decode_modrm(&d)) return d.fault;
+        if ((op >> 3) != 7 && ((op & 2) ? sp_locked(&d, d.reg, size) : (!d.mem && sp_locked(&d, d.rm, size))))
+            return CVX_UNSUPPORTED;
         if (!rm_read(&d, size, &a)) goto fault;
         b = get_reg(cpu, d.reg, size);
         if (op & 2) {
@@ -686,6 +704,7 @@ int cvx_execute(cvx_cpu *cpu, const cvx_bus *bus, uint32_t budget, cvx_result *r
     } else if (op >= 0x80 && op <= 0x83) {
         size = (op & 1) ? d.osize : 1;
         if (!decode_modrm(&d)) return d.fault;
+        if (d.reg != 7 && !d.mem && sp_locked(&d, d.rm, size)) return CVX_UNSUPPORTED;
         if (!fetch(&d, op == 0x81 ? size : 1, &imm)) return d.fault;
         if (op == 0x83) imm = sext(imm, 1);
         if (!rm_read(&d, size, &a)) goto fault;
@@ -701,6 +720,7 @@ int cvx_execute(cvx_cpu *cpu, const cvx_bus *bus, uint32_t budget, cvx_result *r
     } else if (op == 0x86 || op == 0x87) {
         size = (op & 1) ? d.osize : 1;
         if (!decode_modrm(&d)) return d.fault;
+        if (sp_locked(&d, d.reg, size) || (!d.mem && sp_locked(&d, d.rm, size))) return CVX_UNSUPPORTED;
         if (!rm_read(&d, size, &a)) goto fault;
         if (!rm_write(&d, size, get_reg(cpu, d.reg, size))) goto fault;
         set_reg(cpu, d.reg, size, a);
@@ -708,6 +728,7 @@ int cvx_execute(cvx_cpu *cpu, const cvx_bus *bus, uint32_t budget, cvx_result *r
     } else if (op >= 0x88 && op <= 0x8b) {
         size = (op & 1) ? d.osize : 1;
         if (!decode_modrm(&d)) return d.fault;
+        if ((op & 2) ? sp_locked(&d, d.reg, size) : (!d.mem && sp_locked(&d, d.rm, size))) return CVX_UNSUPPORTED;
         if (op & 2) {
             if (!rm_read(&d, size, &a)) goto fault;
             set_reg(cpu, d.reg, size, a);
@@ -716,6 +737,7 @@ int cvx_execute(cvx_cpu *cpu, const cvx_bus *bus, uint32_t budget, cvx_result *r
     } else if (op == 0x8c) {
         if (!decode_modrm(&d)) return d.fault;
         if (d.reg > CVX_GS) return CVX_UNSUPPORTED;
+        if (!d.mem && sp_locked(&d, d.rm, d.osize)) return CVX_UNSUPPORTED;
         /* Memory stores are always 16 bits; register forms zero-extend. */
         if (d.mem) {
             if (!mem_write(&d, d.mseg, d.moff, 2, cpu->sreg[d.reg])) goto fault;
@@ -739,12 +761,14 @@ int cvx_execute(cvx_cpu *cpu, const cvx_bus *bus, uint32_t budget, cvx_result *r
         size = (op & 1) ? d.osize : 1;
         if (!decode_modrm(&d)) return d.fault;
         if (d.reg) return CVX_UNSUPPORTED;
+        if (!d.mem && sp_locked(&d, d.rm, size)) return CVX_UNSUPPORTED;
         if (!fetch(&d, size, &imm)) return d.fault;
         if (!rm_write(&d, size, imm)) goto fault;
         status = CVX_DONE;
     } else if (op == 0xc0 || op == 0xc1 || (op >= 0xd0 && op <= 0xd3)) {
         size = (op & 1) ? d.osize : 1;
         if (!decode_modrm(&d)) return d.fault;
+        if (!d.mem && sp_locked(&d, d.rm, size)) return CVX_UNSUPPORTED;
         if (op <= 0xc1) {
             if (!fetch(&d, 1, &imm)) return d.fault;
         } else imm = op <= 0xd1 ? 1 : cpu->gpr[CVX_ECX] & 0xff;
@@ -761,6 +785,7 @@ int cvx_execute(cvx_cpu *cpu, const cvx_bus *bus, uint32_t budget, cvx_result *r
     } else if (op == 0xf6 || op == 0xf7) {
         size = (op & 1) ? d.osize : 1;
         if (!decode_modrm(&d)) return d.fault;
+        if ((d.reg == 2 || d.reg == 3) && !d.mem && sp_locked(&d, d.rm, size)) return CVX_UNSUPPORTED;
         if (d.reg < 2 && !fetch(&d, size, &imm)) return d.fault;
         if (!rm_read(&d, size, &a)) goto fault;
         switch (d.reg) {
@@ -778,6 +803,7 @@ int cvx_execute(cvx_cpu *cpu, const cvx_bus *bus, uint32_t budget, cvx_result *r
         size = (op & 1) ? d.osize : 1;
         if (!decode_modrm(&d)) return d.fault;
         if (d.reg > 1) return CVX_UNSUPPORTED;
+        if (!d.mem && sp_locked(&d, d.rm, size)) return CVX_UNSUPPORTED;
         if (!rm_read(&d, size, &a)) goto fault;
         b = cpu->eflags & F_CF;
         value = alu(cpu, d.reg ? 5 : 0, a, 1, size);
@@ -787,6 +813,7 @@ int cvx_execute(cvx_cpu *cpu, const cvx_bus *bus, uint32_t budget, cvx_result *r
     } else if (op == 0x69 || op == 0x6b) {
         size = d.osize;
         if (!decode_modrm(&d)) return d.fault;
+        if (sp_locked(&d, d.reg, size)) return CVX_UNSUPPORTED;
         if (!fetch(&d, op == 0x69 ? size : 1, &imm)) return d.fault;
         if (!rm_read(&d, size, &a)) goto fault;
         set_reg(cpu, d.reg, size,
@@ -797,6 +824,7 @@ int cvx_execute(cvx_cpu *cpu, const cvx_bus *bus, uint32_t budget, cvx_result *r
         if (op == 0xb6 || op == 0xb7 || op == 0xbe || op == 0xbf) {
             size = (op & 1) ? 2 : 1;
             if (!decode_modrm(&d)) return d.fault;
+            if (sp_locked(&d, d.reg, d.osize)) return CVX_UNSUPPORTED;
             if (!rm_read(&d, size, &a)) goto fault;
             set_reg(cpu, d.reg, d.osize, op >= 0xbe ? sext(a, size) : a);
             status = CVX_DONE;
@@ -807,6 +835,7 @@ int cvx_execute(cvx_cpu *cpu, const cvx_bus *bus, uint32_t budget, cvx_result *r
         } else if (op == 0xaf) {
             size = d.osize;
             if (!decode_modrm(&d)) return d.fault;
+            if (sp_locked(&d, d.reg, size)) return CVX_UNSUPPORTED;
             if (!rm_read(&d, size, &a)) goto fault;
             set_reg(cpu, d.reg, size, imul_trunc(cpu, get_reg(cpu, d.reg, size), a, size, &high));
             status = CVX_DONE;

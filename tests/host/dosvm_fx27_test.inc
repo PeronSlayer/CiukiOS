@@ -297,11 +297,11 @@ static void test_fx27_lean(void)
         }
         CHECK(v->perf.lean_exits == lean0 + 64 && v->perf.exits[0] == gp0 + 64);
         CHECK(v->perf.cost_count[DOSVM_COST_VGA_IO] >= 64);
-        /* Ineligible states keep the ordinary path, with identical results. */
         /* Ineligible states keep the ordinary path, with identical results:
-         * TF, an IPX VM, an idle poll, CLI-seed demand (PM), an STI or
+         * TF, an IPX VM, an idle poll, CLI-seed demand (PM), a V86 STI or
          * MOV SS shadow, and the saved return point of an open hardware
-         * interrupt record (a late native return, dpmi_irq_resync). */
+         * interrupt record (a late native return, dpmi_irq_resync). A PM
+         * STI shadow ends at this #GP and the exit is lean (t23-dosperf). */
         for (unsigned k = 0; k < 6; k++) {
             if ((k == 3 || k == 5) && !pm) continue;
             uint32_t eflags = cur.tf.eflags;
@@ -324,7 +324,11 @@ static void test_fx27_lean(void)
             }
             lean0 = v->perf.lean_exits;
             step(v, 13, 0);
-            CHECK(v->perf.lean_exits == lean0 && v->vga.seq[2] == 2 && cur.tf.eip == fx27_code(pm) + 1);
+            /* t23-dosperf: a PM STI shadow ends at any #GP(0), as pm_trap
+             * ends it; the exit after it is lean (no IRQ pending here). */
+            bool ended = k == 4 && pm;
+            CHECK(v->perf.lean_exits == lean0 + ended && v->vga.seq[2] == 2 && cur.tf.eip == fx27_code(pm) + 1);
+            CHECK(!ended || !v->dpmi.shadow);
             cur.tf.eflags = eflags & ~V86_TF;
             v->network_attached = false; v->idle.depth = 0; v->dpmi.cli_settled = true;
             v->dpmi.shadow = false; v->monitor.shadow = false;

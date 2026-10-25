@@ -34,11 +34,14 @@ struct gl_list {
   struct gl_command *head, *tail;
   unsigned reserved;
 };
-#define GL_TEXTURES 256
+struct gl_texture {
+  struct gl_texture *next;
+  struct sw_texture value;
+};
 #define GL_LISTS 2048
 struct gl_share {
   unsigned refs;
-  struct sw_texture textures[GL_TEXTURES];
+  struct gl_texture *textures;
   struct gl_list lists[GL_LISTS];
 };
 struct gl_snapshot;
@@ -52,6 +55,9 @@ struct gl_context {
   HGLRC handle;
   HDC dc;
   unsigned tid, format;
+  unsigned depth_bits, stencil_bits, doublebuffer, clear_stencil;
+  unsigned draw_buffer, read_buffer;
+  uint32_t *back_color, *front_color;
   GLContext tiny;
   ZBuffer *zb;
   struct sw_state sw;
@@ -72,6 +78,7 @@ struct gl_context {
   int compression_hint;
   float fog_density, fog_start, fog_end;
   float range[2], clear[4], clear_depth, alpha_ref, offset_factor, offset_units;
+  float line_width;
   float texcoord[2][4];
   float raster[4], raster_color[4];
   int raster_valid;
@@ -80,16 +87,20 @@ struct gl_context {
   M4 *texture_base[2], *texture_ptr[2];
   int primitive, locked_first, locked_count;
   unsigned frames, leased_window;
+  unsigned gamma_registered, gamma_valid, gamma_serial, gamma_token, gamma_generation;
   HBITMAP back;
 };
 int gl_target(HDC, unsigned *, unsigned *, unsigned *);
+void gl_prepare_present(struct gl_context *, HDC);
 int gl_refresh_target(struct gl_context *, HDC);
+void gl_select_buffer(struct gl_context *);
 void gl_window_state(struct gl_context *);
+void gl_sync_viewport(struct gl_context *);
 int gl_window_coord(struct gl_context *, double, int);
 unsigned gl_read_color(struct gl_context *, int, int);
 void gl_render_size(unsigned *, unsigned *);
 void gl_release_present(struct gl_context *);
-BOOL gl_present(struct gl_context *);
+BOOL gl_present(struct gl_context *, int);
 struct gl_context *gl_current(void);
 void gl_error(struct gl_context *, unsigned);
 void *gl_alloc(unsigned);
@@ -108,6 +119,7 @@ void gl_sync_textures(struct gl_context *);
 void gl_texture_ref(struct sw_texture *, int);
 void gl_texture_bindings(struct gl_context *, int);
 void gl_texture_cleanup(struct gl_context *);
+void gl_free_textures(struct gl_share *);
 unsigned gl_validate(struct gl_context *, unsigned, const union gl_arg *);
 void gl_triangle(GLContext *, GLVertex *, GLVertex *, GLVertex *);
 void gl_drop_state(struct gl_context *);

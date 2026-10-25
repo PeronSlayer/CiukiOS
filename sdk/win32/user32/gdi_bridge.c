@@ -263,9 +263,22 @@ static BOOL set_region(HRGN handle, const RECT *r, UINT n) {
 static BOOL window_pixel_format(HDC dc, int *slot) {
   return g.window_pixel_format(U32_PTR(dc),slot);
 }
-static const struct u32_gdi adapter = {2,          acquire,     release,
+static BOOL visible(HDC dc, const RECT *r, UINT n) {
+  for (UINT i = 0; i < 64; i++)
+    if (bindings[i].dc && bindings[i].dc == U32_PTR(dc)) {
+      DWORD clip = region(r, n);
+      if (!clip)
+        return 0;
+      BOOL ok = g.visible(bindings[i].dc, clip);
+      g.delete_object(clip);
+      return ok;
+    }
+  return 0;
+}
+static const struct u32_gdi adapter = {3,          acquire,     release,
                                        fill,       icon,        rects,
-                                       set_region, bitmap_view, create_bitmap, window_pixel_format};
+                                       set_region, bitmap_view, create_bitmap, window_pixel_format,
+                                       visible};
 /* CF_BITMAP synthesised from CF_DIB (Microsoft GetClipboardData/CreateDIBitmap):
  * the DIB's depth, colour table, BI_BITFIELDS masks and orientation are
  * converted by the gdi32 engine into a display-compatible bitmap. The USER

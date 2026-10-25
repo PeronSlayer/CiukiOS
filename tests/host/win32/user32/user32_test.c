@@ -570,8 +570,18 @@ static BOOL fill(HDC h, const RECT *rect, HBRUSH brush) {
   }
   return 1;
 }
+/* q3exec4 review: the v3 tail replaces a busy DC's visible region. */
+static BOOL visible(HDC h, const RECT *r, UINT n) {
+  struct test_dc *dc = h;
+  CHECK(n <= 64);
+  dc->clips = n;
+  if (n)
+    memcpy(dc->clip, r, n * sizeof(*r));
+  return 1;
+}
 static const struct u32_gdi test_gdi = {
-    .version = 1, .acquire = acquire, .release = release, .fill = fill};
+    .version = 3, .acquire = acquire, .release = release, .fill = fill,
+    .visible = visible};
 static HWND windows[3], child;
 static struct {
   HWND h;
@@ -1138,6 +1148,7 @@ static UINT trace_index(HWND h, UINT m) {
   return 9999;
 }
 static void failed_destroy_ping(void);
+static void review_round2(void);
 static void test_order(void) {
   const UINT quiet = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
   HWND a = CreateWindowExA(0, "USER fixture", "a", WS_VISIBLE | WS_CAPTION,
@@ -1213,6 +1224,7 @@ static void test_order(void) {
   CHECK(trace_index(owned, WM_DESTROY) < trace_index(b, WM_DESTROY) &&
         trace_index(owned, WM_NCDESTROY) < trace_index(b, WM_DESTROY));
   failed_destroy_ping();
+  review_round2();
   CHECK(DestroyWindow(a));
   printf("TRACE window order: insert-after bottom topmost notopmost owner "
          "cycle refusal cross-thread owned destruction\n");
@@ -1283,6 +1295,100 @@ static void failed_destroy_ping(void) {
   CHECK(DestroyWindow(review_parent));
   ui_kernel_schedule(0);
   CHECK(!IsWindow(review_parent) && !IsWindow(theirs));
+}
+/* q3exec4 review regressions (Codex P2 findings 1-5). */
+static HWND late_popup, late_owner;
+static LRESULT W32API late_proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
+  /* A child's WM_DESTROY creates a popup owned by the window being
+   * destroyed. */
+  if (m == WM_DESTROY && late_owner)
+    late_popup = CreateWindowExA(0, "USER fixture", "late", WS_POPUP | WS_CAPTION | WS_VISIBLE,
+                                 400, 40, 40, 40, late_owner, 0, 0, 0);
+  return DefWindowProcA(h, m, wp, lp);
+}
+static UINT selfhide_touched;
+static BOOL selfhide_ran;
+static LRESULT W32API selfhide_proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
+  /* WM_PAINT hides its own window, lets the parent repaint, then keeps
+   * drawing through the DC BeginPaint gave it. */
+  if (m == WM_PAINT) {
+    PAINTSTRUCT ps;
+    HDC dc = BeginPaint(h, &ps);
+    CHECK(dc);
+    ShowWindow(h, 0);
+    UpdateWindow(GetParent(h));
+    RECT r;
+    GetClientRect(h, &r);
+    fill(dc, &r, (HBRUSH)1);
+    selfhide_touched = ((struct test_dc *)dc)->count;
+    selfhide_ran = 1;
+    EndPaint(h, &ps);
+    return 0;
+  }
+  return DefWindowProcA(h, m, wp, lp);
+}
+static BOOL update_at(HWND h, int x, int y) {
+  struct u32_window *w = u32_window(h);
+  for (UINT i = 0; w && i < w->update.n; i++)
+    if (PtInRect(&w->update.r[i], (POINT){x, y}))
+      return 1;
+  return 0;
+}
+static void paint_all(void) {
+  MSG m;
+  for (UINT i = 0; i < 1000 && PeekMessageA(&m, 0, 0, 0, 1); i++)
+    DispatchMessageA(&m);
+}
+static void review_round2(void) {
+  WNDCLASSA late = {.lpfnWndProc = late_proc, .lpszClassName = "q3exec4 late"};
+  WNDCLASSA self = {.lpfnWndProc = selfhide_proc, .lpszClassName = "q3exec4 selfhide"};
+  CHECK(RegisterClassA(&late) && RegisterClassA(&self));
+  /* 1: the late popup goes with its owner. */
+  late_owner = CreateWindowExA(0, "USER fixture", "owner", WS_VISIBLE | WS_CAPTION,
+                               300, 30, 80, 80, 0, 0, 0, 0);
+  HWND kid = CreateWindowExA(0, "q3exec4 late", "kid", WS_CHILD | WS_VISIBLE, 0, 0, 20, 20,
+                             late_owner, (HANDLE)(uintptr_t)1, 0, 0);
+  CHECK(late_owner && kid && DestroyWindow(late_owner));
+  CHECK(late_popup && !IsWindow(late_popup) && !IsWindow(kid));
+  late_owner = 0;
+  /* 2: under WS_CLIPCHILDREN, hiding the upper of two overlapping
+   * controls repaints the lower one where they overlapped. */
+  HWND p = CreateWindowExA(0, "USER fixture", "clip", WS_VISIBLE | WS_CAPTION | WS_CLIPCHILDREN,
+                           300, 30, 140, 140, 0, 0, 0, 0);
+  HWND lower = CreateWindowExA(0, "USER fixture", "lower", WS_CHILD | WS_VISIBLE, 10, 10, 60, 60,
+                               p, (HANDLE)(uintptr_t)1, 0, 0);
+  HWND upper = CreateWindowExA(0, "USER fixture", "upper", WS_CHILD | WS_VISIBLE, 40, 40, 60, 60,
+                               p, (HANDLE)(uintptr_t)2, 0, 0);
+  CHECK(p && lower && upper);
+  paint_all();
+  CHECK(!u32_window(lower)->update.n);
+  ShowWindow(upper, 0);
+  CHECK(update_at(lower, 35, 35));
+  /* 3: moving and hiding in one SetWindowPos exposes the old rectangle. */
+  ShowWindow(upper, 5);
+  paint_all();
+  ValidateRect(p, 0);
+  CHECK(SetWindowPos(upper, 0, 110, 110, 10, 10, SWP_HIDEWINDOW | SWP_NOZORDER | SWP_NOACTIVATE));
+  CHECK(!IsWindowVisible(upper) && update_at(p, 45, 45) && update_at(p, 95, 95));
+  /* 4: SWP_SHOWWINDOW without a move or size paints a control that was
+   * painted, hidden and left without an update region. */
+  paint_all();
+  ShowWindow(lower, 0);
+  paint_all();
+  CHECK(!IsWindowVisible(lower) && !u32_window(lower)->update.n);
+  CHECK(SetWindowPos(lower, 0, 0, 0, 0, 0,
+                     SWP_SHOWWINDOW | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE));
+  CHECK(IsWindowVisible(lower) && update_at(lower, 30, 30));
+  /* 5: a WM_PAINT handler that hides its window draws nothing more. */
+  HWND hider = CreateWindowExA(0, "q3exec4 selfhide", "hider", WS_CHILD | WS_VISIBLE, 5, 5, 20, 20,
+                               p, (HANDLE)(uintptr_t)3, 0, 0);
+  CHECK(hider);
+  paint_all();
+  CHECK(selfhide_ran && !selfhide_touched && !IsWindowVisible(hider));
+  CHECK(DestroyWindow(p));
+  CHECK(UnregisterClassA("q3exec4 late", 0) && UnregisterClassA("q3exec4 selfhide", 0));
+  printf("TRACE q3exec4 review: late owned popup destroyed, clipped sibling exposed, old "
+         "rectangle exposed, SWP_SHOWWINDOW repaints, busy DC emptied on hide\n");
 }
 static RECT local_rect(HWND h) { return u32_window(h)->rect; }
 /* G4: CascadeWindows, TileWindows and ArrangeIconicWindows (Microsoft Learn,
@@ -2209,6 +2315,8 @@ static void test_production_gdi(void) {
   /* An old v1 table ends before the v2 tail. ASan guards its exact size. */
   _Alignas(struct u32_gdi) unsigned char v1[__builtin_offsetof(struct u32_gdi,window_pixel_format)];
   memcpy(v1,&test_gdi,sizeof(v1));
+  const DWORD v1_version=1; /* test_gdi is v3 (q3exec4); this copy is a v1 table */
+  memcpy(v1,&v1_version,sizeof(v1_version));
   u32_set_gdi((const struct u32_gdi *)v1);
   HDC v1_dc=GetDC(windows[0]);
   CHECK(v1_dc && ReleaseDC(windows[0],v1_dc));
@@ -2244,6 +2352,15 @@ static void test_production_gdi(void) {
   CHECK(!w32_user_gl_damage(U32_PTR(first_dc)));
   CHECK(ReleaseDC(windows[0],first_dc));
   puts("TRACE window pixel format survives simultaneous and reacquired DCs");
+  /* q3exec4 review: the production v3 tail empties a busy DC's visible
+   * region (what USER does to the DCs of a window it hides). */
+  CHECK(u32_gdi->version == 3 && u32_gdi->visible);
+  HDC busy = GetDC(windows[0]);
+  CHECK(busy && u32_gdi->visible(busy, 0, 0));
+  RECT corner = {0, 0, 40, 40};
+  FillRect(busy, &corner, (HBRUSH)9 /* COLOR_WINDOWTEXT + 1 */);
+  CHECK(ReleaseDC(windows[0], busy));
+  CHECK(w32_u32((uint8_t *)w->surface.pixels + 5 * w->surface.pitch + 5 * 4) == 0xc0c0c0);
   /* G30: GetFreeSystemResources from the window table and the production gdi32 object table. */
   {
     UINT windows_used = 0;
@@ -2362,17 +2479,27 @@ static void run(void) {
   test_g23_appearance();
   traces = 0;
   CHECK(DestroyWindow(windows[0]));
-  UINT child_destroy = 999, parent_destroy = 999;
-  for (UINT i = 0; i < traces; i++)
+  UINT child_destroy = 999, parent_destroy = 999, child_nc = 999, parent_nc = 999;
+  for (UINT i = 0; i < traces; i++) {
     if (trace[i].m == WM_DESTROY) {
       if (trace[i].h == child)
         child_destroy = i;
       if (trace[i].h == windows[0])
         parent_destroy = i;
     }
-  CHECK(child_destroy < parent_destroy && !IsWindow(child));
-  printf("TRACE destruction: child WM_DESTROY/WM_NCDESTROY parent "
-         "WM_DESTROY/WM_NCDESTROY\n");
+    if (trace[i].m == WM_NCDESTROY) {
+      if (trace[i].h == child)
+        child_nc = i;
+      if (trace[i].h == windows[0])
+        parent_nc = i;
+    }
+  }
+  /* q3exec4: WM_DESTROY reaches the window first, while its children
+   * still exist, then each child (Microsoft Learn, WM_DESTROY). */
+  CHECK(parent_destroy < child_destroy && child_destroy < child_nc &&
+        child_nc < parent_nc && parent_nc < 999 && !IsWindow(child));
+  printf("TRACE destruction: parent WM_DESTROY, child WM_DESTROY/WM_NCDESTROY, "
+         "parent WM_NCDESTROY\n");
   for (UINT i = 1; i < 3; i++) {
     ui_kernel_switch(i);
     CHECK(DestroyWindow(windows[i]));

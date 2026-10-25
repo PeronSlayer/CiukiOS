@@ -47,7 +47,7 @@ static uint32_t in_head, in_tail, focus_id, focus_generation;
 static uint32_t lease_token = 0x40, lease_generation = 0x80, lease_serial, lease_w, lease_h, lease_bpp;
 static struct ciuki_w32_message queue[QUEUE];
 static uint32_t queue_bits[QUEUE], queue_count, quit_pending, quit_code, marked, changed;
-static uint32_t frames, presents, requests, refused, first_ms, last_ms, checksum;
+static uint32_t frames, presents, requests, refused, gamma_records, first_ms, last_ms, checksum;
 static uint64_t frame_sum;
 /* Diagnostics: the last 64 gate calls and kernel records, and a watchdog
  * that reports them and ends the run after WATCHDOG_MS (a hung program
@@ -528,6 +528,8 @@ int h1_game_kernel(void *record, uint32_t size, int32_t *status) {
             refused++; a->error = 1;
             return 1;
         }
+        if (a->action == W32_DISPLAY_GAMMA)
+            gamma_records++; /* the full-screen device gamma ramp (SetDeviceGammaRamp -> opengl32 present) */
         if (a->action == W32_DISPLAY_FRAME) {
             uint32_t pitch = (lease_w * (lease_bpp / 8) + 3) & ~3u;
             frame((const uint8_t *)(uintptr_t)a->address, lease_w, lease_h, pitch, lease_bpp, "lease");
@@ -632,6 +634,7 @@ void h1_game_report(void) {
     host_print(" presents="); host_number(presents);
     host_print(" desktop_requests="); host_number(requests);
     host_print(" refused_frames="); host_number(refused);
+    host_print(" gamma_records="); host_number(gamma_records);
     host_print(" first_to_last_ms="); host_number(frames ? last_ms - first_ms : 0);
     host_print(" last_checksum="); hex(checksum);
     host_print(" lease="); host_number(lease_w); host_print("x"); host_number(lease_h); host_print("x"); host_number(lease_bpp);

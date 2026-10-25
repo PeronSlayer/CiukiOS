@@ -471,6 +471,75 @@ path does nothing for it at an I/O exit, and it keeps its owner until
 `flags_restored`. Details and the full eligibility list:
 `f3-acceptance.md`, fx-27.
 
+### t23-dosperf amendment: CLI proofs, lean CLI/STI, bursts beside an armed image (2026-10-25, proposed)
+
+Proposed for the lead's decision with the t23-dosperf merge
+(`validation/t23-dos-window-lag-2026-10-25.md`; T23 trial c42f556e, Warcraft
+II demo in the DOS window). Four rules:
+
+1. **A CLI that no rule can arm is not a miss.** Every arming rule (forward
+   proof, control-flow proof, Windows 95 pattern) needs the instruction that
+   ends at the CLI to be PUSHF or POP r after PUSHF, so its last byte, at
+   CS:EIP-1, must be 9Ch or 58h-5Fh. A candidate CLI with any other byte
+   there is refused at once: no proof, no `cli_missed`, no restart of the
+   seed demand (counted as `unprovable`, host evidence only). Arming
+   outcomes are unchanged. Warcraft II's event loop
+   (`PUSHFW; POP AX; MOV EDX,1; MOV [EBP-4],AX; MOV [EBP-0Ch],EDX; CLI`,
+   restore by `TEST AH,2; JZ; STI`) missed on every execution and kept the
+   seed demand, and therefore every lean exit, off for the whole game.
+2. **PM CLI/STI may take the lean exit** under the fx-27 conditions, with
+   the instruction emulated exactly as `emulate` does (one shared helper)
+   and the boundary work of `dpmi_pm_trap` (armed images observed, the
+   boundary seed, the decode seed). When the CLI's proof restarts the seed
+   demand or return tracking, the ordinary tail runs at that boundary.
+3. **A PM STI shadow ends at the next #GP(0)** on the lean path as in
+   `pm_trap` (any trap that is not a physical IRQ or owned execute fault at
+   the shadowed address ends it); a pending IRQ is still delivered by the
+   ordinary tail of that exit. V86 shadows keep the ordinary path.
+   **Retirement evidence (Codex review, 2026-10-25).** The shadow covers
+   exactly the next instruction (Intel SDM vol. 2 `STI`; vol. 3 section
+   6.8.3), and a physical IRQ at the shadowed CS:EIP does not say whether
+   that instruction retired: `STI; JMP $` retires at the same address, and
+   200 timer exits there kept the shadow and a pending IRQ undelivered. A
+   physical IRQ at the shadowed address with a virtual IRQ deliverable
+   single-steps the shadowed instruction once with the monitor's own TF
+   (`shadow_step`, owned in its stack/depth/client like the f3-15 recovery
+   step): the BS trap after it is the evidence, ends the shadow and lets
+   that exit deliver. The step is planted only for an instruction
+   `return_step_safe` admits (never across PUSHF, which would save the TF,
+   POPF/IRET, MOV/POP SS, INT, far transfers or a host stub) and only while
+   no client TF, other owned step or watchpoint is live; otherwise the
+   shadow is kept as before. A fault of the stepped instruction takes the
+   TF back and ends the shadow, as any non-IRQ trap did.
+4. **An armed flags image no longer stops an I/O, DAC or VGA burst**
+   (F3-33 clarification above: "owned IF ... proof"), under two conditions
+   the decoders meet. (a) **No image load or change.** The burst decoders
+   execute no POPF, IRET, POP, RET or stack transfer; the VGA and DAC bursts
+   store only to the aperture; the I/O burst's only memory operands are
+   REP OUTS elements (INS is not admitted), run by the scalar emulator with
+   its per-element segment, DF and fault checks, and an exception that
+   emulator reflects (the one stack change on that path, the same as the
+   ordinary path's) ends the burst. A burst never loads an image.
+   (b) **No hidden stack observation** (Codex review, 2026-10-25). An
+   image's ownership also rests on `armed_observe` seeing ESP above it at
+   an exit (`popped`); a batch across `out; add esp,4; out; sub esp,4; out`
+   hid that observation and left a stale owner that suppressed IF recovery
+   and delayed a pending IRQ. So while an image is armed a burst refuses,
+   before executing it, every instruction that writes SP/ESP
+   (`cvx_cpu.lock_sp`: MOV, INC/DEC, ADD/SUB and the other ALU forms, XCHG,
+   shifts, NEG and IMUL with SP/ESP as destination); the CPU runs it
+   natively and the next exit observes the stack as after native execution.
+   Checking only the final ESP of a batch is not enough. Without an armed
+   image the rule is off and the same sequences batch.
+   Return tracking (execute breakpoints), client watchpoints, TF, shadows,
+   IF-recovery steps, a deliverable IRQ and a reschedule still stop a burst.
+   Warcraft II keeps one image owned for its whole run, so its per-retrace
+   palette load (768 OUTs to 3C9h) never used the fx-27 DAC burst; that
+   loop writes no SP/ESP and batches under (b).
+
+The Sound Blaster's OPL3 ports (base+0..3, base+8/9) join the lean port
+list beside 388h-38Bh: both reach `dosvm_opl_io`.
+
 ## DOS personality and VFS bridge
 
 **[F4]** Shared-drive routing MUST live inside CIUKIDOS before FAT/LFN
@@ -1798,6 +1867,12 @@ called its protected-mode SetWindow pointer, still NULL, after three failed
   full-screen transport leaves it to the VBE path), so the window would
   otherwise keep aliasing the old bank and native mode 13h stores would
   land in the VBE buffer after the return.
+- T23 c42f556e (`supersavage-fullscreen.md`, "VBE full-screen transport"):
+  in a VBE full screen the trapped VGA ports take the fx-27 lean exits and
+  DAC burst as in the window, the first-frame record never stalls the copy
+  transport, and an effective guest palette change counts as its first
+  frame; the fast paths leave a direct LFB lease's borrowed pages to the
+  ordinary monitor.
 - `WAR2.BAT` starts `WAR2.EXE` directly; `UVCONFIG.EXE` stays installed.
 - The QEMU full-screen probe (`vm-fullscreen`, `f3_probes_video.c`) records
   `case=vbe_window` (004Fh, entry stays windowed, `active=0`) instead of the

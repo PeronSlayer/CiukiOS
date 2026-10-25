@@ -1,4 +1,4 @@
-/* Software formats and an acyclic swap dispatch into the GL owner.
+/* System OpenGL driver formats and an acyclic swap dispatch into the GL owner.
  * SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "internal.h"
 #include <w32/pixelformat.h>
@@ -9,24 +9,27 @@ extern void *W32API GetProcAddress(void *, const char *);
 extern BOOL W32API w32_gl_swap(HDC) __attribute__((weak));
 extern BOOL W32API w32_user_display_mode(DWORD *) __attribute__((weak));
 #endif
-/* f7 (Quake III): the formats belong to the system OpenGL driver
- * (opengl32.dll over the CiukiOS 3D driver model, software rasterizer or
- * hardware), not to a GDI "generic implementation". PIXELFORMATDESCRIPTOR:
- * "PFD_GENERIC_FORMAT: the pixel format is supported by the GDI software
- * implementation ... If this bit is clear, the pixel format is supported by
- * a device driver or hardware." Games of the period reject generic formats
- * (Quake III Arena 1.11 GLW_ChoosePFD unless r_allowSoftwareGL is set), so
- * the bit stays clear; depth stays the driver's 16 bits, no stencil. */
+/* Keep the original four indices stable. XRGB uses 32 storage bits and
+ * RGB 8/8/8; its unused high byte is not a destination-alpha attachment.
+ * This is CiukiOS's system driver, not the generic GDI implementation. */
+static const struct {
+  unsigned char color, depth, stencil, doublebuffer;
+} formats[] = {{32, 16, 0, 1}, {16, 16, 0, 1},
+               {32, 16, 0, 0}, {16, 16, 0, 0},
+               {32, 24, 0, 1}, {16, 24, 0, 1},
+               {32, 16, 8, 1}, {16, 16, 8, 1},
+               {32, 24, 8, 1}, {16, 24, 8, 1}};
+#define FORMAT_COUNT ((int)(sizeof(formats) / sizeof(formats[0])))
 static PIXELFORMATDESCRIPTOR describe(int n) {
   PIXELFORMATDESCRIPTOR p = {0};
   p.nSize = 40;
   p.nVersion = 1;
-  p.dwFlags = PFD_DRAW_TO_WINDOW | PFD_DRAW_TO_BITMAP | PFD_SUPPORT_OPENGL |
-              PFD_SWAP_COPY;
-  if (n <= 2)
-    p.dwFlags |= PFD_DOUBLEBUFFER;
-  p.cColorBits = (n & 1) ? 24 : 16;
-  p.cDepthBits = 16;
+  p.dwFlags = PFD_DRAW_TO_WINDOW | PFD_DRAW_TO_BITMAP | PFD_SUPPORT_OPENGL;
+  if (formats[n - 1].doublebuffer)
+    p.dwFlags |= PFD_DOUBLEBUFFER | PFD_SWAP_COPY;
+  p.cColorBits = formats[n - 1].color;
+  p.cDepthBits = formats[n - 1].depth;
+  p.cStencilBits = formats[n - 1].stencil;
   p.cRedBits = p.cBlueBits = (n & 1) ? 8 : 5;
   p.cGreenBits = (n & 1) ? 8 : 6;
   p.cRedShift = (n & 1) ? 16 : 11;
@@ -36,23 +39,52 @@ static PIXELFORMATDESCRIPTOR describe(int n) {
 int W32API DescribePixelFormat(HDC h, int n, unsigned size,
                                PIXELFORMATDESCRIPTOR *out) {
   GDI_GUARD;
-  if (!gdi_dc(h) || n < 1 || n > 4)
+  if (!gdi_dc(h) || n < 1 || n > FORMAT_COUNT)
     return 0;
   if (out) {
     if (size < 40)
       return 0;
     *out = describe(n);
   }
-  return 4;
+  return FORMAT_COUNT;
+}
+/* Prefer sufficient precision, then the smallest excess, then a lower index.
+ * Zero color/depth requests keep the original XRGB/D16 default. */
+static unsigned precision_cost(unsigned have, unsigned want) {
+  return have >= want ? have - want : 256 + want - have;
 }
 int W32API ChoosePixelFormat(HDC h, const PIXELFORMATDESCRIPTOR *p) {
   GDI_GUARD;
   if (!gdi_dc(h) || !p || p->nSize != 40 || p->nVersion != 1 ||
-      p->iPixelType != PFD_TYPE_RGBA || (p->dwFlags & PFD_STEREO) ||
+      p->iPixelType != PFD_TYPE_RGBA ||
+      ((p->dwFlags & PFD_STEREO) && !(p->dwFlags & 0x80000000u)) ||
       p->iLayerType)
     return 0;
-  return (p->dwFlags & PFD_DOUBLEBUFFER ? 0 : 2) +
-         (p->cColorBits && p->cColorBits <= 16 ? 2 : 1);
+  unsigned required = p->dwFlags & (PFD_DRAW_TO_WINDOW | PFD_DRAW_TO_BITMAP |
+                                     PFD_SUPPORT_OPENGL | PFD_SUPPORT_GDI);
+  unsigned best_cost = ~0u;
+  int best = 0;
+  for (int n = 1; n <= FORMAT_COUNT; n++) {
+    PIXELFORMATDESCRIPTOR candidate = describe(n);
+    if ((candidate.dwFlags & required) != required ||
+        (!(p->dwFlags & 0x40000000u) &&
+         !!(p->dwFlags & PFD_DOUBLEBUFFER) !=
+             !!(candidate.dwFlags & PFD_DOUBLEBUFFER)))
+      continue;
+    unsigned color = precision_cost(candidate.cColorBits,
+                                     p->cColorBits ? p->cColorBits : 32);
+    unsigned depth = (p->dwFlags & 0x20000000u)
+                         ? 0
+                         : precision_cost(candidate.cDepthBits,
+                                          p->cDepthBits ? p->cDepthBits : 16);
+    unsigned stencil = precision_cost(candidate.cStencilBits, p->cStencilBits);
+    unsigned cost = (color * 512 + depth) * 512 + stencil;
+    if (cost < best_cost) {
+      best_cost = cost;
+      best = n;
+    }
+  }
+  return best;
 }
 int W32API GetPixelFormat(HDC h) {
   GDI_GUARD;
@@ -65,7 +97,7 @@ BOOL W32API SetPixelFormat(HDC h, int n, const PIXELFORMATDESCRIPTOR *p) {
   GDI_GUARD;
   (void)p;
   struct dc *d = gdi_dc(h);
-  if (!d || n < 1 || n > 4)
+  if (!d || n < 1 || n > FORMAT_COUNT)
     return 0;
   int *slot =
       d->window_pixel_format ? d->window_pixel_format : &d->pixel_format;
@@ -167,9 +199,22 @@ BOOL W32API SetDeviceGammaRamp(HDC h, const void *ramp) {
     gamma_serial = 1;
   return 1;
 }
+/* In the host model the opengl32 tests link GDI's pixelformat.c together
+ * with their own counting stand-ins of these two seams (tests/host/win32/gl/
+ * transport.c): the stand-ins win, GDI's own tests get these, and the
+ * "no gamma seam" build of those tests (GL_TEST_NO_GAMMA) gets none, as a
+ * GDI without the device ramp. */
+#if defined(W32_HOST_MODEL) && defined(GL_TEST_NO_GAMMA)
+#define GDI_GAMMA_SEAM_ABSENT 1
+#elif defined(W32_HOST_MODEL)
+#define GDI_GAMMA_SEAM __attribute__((weak))
+#else
+#define GDI_GAMMA_SEAM
+#endif
+#ifndef GDI_GAMMA_SEAM_ABSENT
 /* Presenter seam: a presenter that applies the ramp on its full-screen
  * lease registers (TRUE) and unregisters (FALSE). Returns the count. */
-DWORD W32API w32_gdi_gamma_presenter(BOOL on) {
+DWORD W32API GDI_GAMMA_SEAM w32_gdi_gamma_presenter(BOOL on) {
   GDI_GUARD;
   if (on)
     gamma_presenters++;
@@ -179,13 +224,14 @@ DWORD W32API w32_gdi_gamma_presenter(BOOL on) {
 }
 /* Copies the current ramp (identity until SetDeviceGammaRamp) into out
  * (768 WORDs, red, green, blue) and returns its serial (0: never set). */
-DWORD W32API w32_gdi_gamma(uint16_t *out) {
+DWORD W32API GDI_GAMMA_SEAM w32_gdi_gamma(uint16_t *out) {
   GDI_GUARD;
   gamma_identity();
   if (out)
     w32_copy(out, gamma_ramp, sizeof(gamma_ramp));
   return gamma_serial;
 }
+#endif
 
 /* Selected-font raster boundary, shared by bridge-backed and native/provider
  * fonts. Coverage ownership stays in GDI; the caller receives packed bits. */

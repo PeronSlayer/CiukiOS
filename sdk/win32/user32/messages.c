@@ -306,7 +306,8 @@ void u32_mark(void) {
   for (UINT i = 0; i < U32_WINDOWS; i++) {
     struct u32_window *w = &u32_windows[i];
     if (w->handle && w->tid == tid && w->redraw &&
-        (w->update.n || w->internal_paint) && !IsIconic(w->handle))
+        (w->update.n || w->internal_paint) && !IsIconic(w->handle) &&
+        u32_paintable(w))
       bits |= QS_PAINT;
   }
   for (UINT i = 0; i < U32_TIMERS; i++)
@@ -365,7 +366,7 @@ BOOL W32API PeekMessageA(MSG *out, HWND h, UINT lo, UINT hi, UINT flags) {
     struct u32_window *w = &u32_windows[i];
     if ((mask & QS_PAINT) && w->handle && w->tid == t->id && w->redraw &&
         (w->update.n || w->internal_paint) && !IsIconic(w->handle) &&
-        filter(w->handle, WM_PAINT, h, lo, hi)) {
+        u32_paintable(w) && filter(w->handle, WM_PAINT, h, lo, hi)) {
       /* Parents paint before their children (f5-10C classic painting). */
       for (struct u32_window *p = u32_window(w->parent); p;
            p = u32_window(p->parent))
