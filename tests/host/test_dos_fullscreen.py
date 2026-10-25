@@ -50,7 +50,7 @@ class FullscreenEvidenceTests(unittest.TestCase):
         rasters=((320,240),(360,240),(320,400),(360,400),(320,480),(360,480),(640,400),(640,480))
         rows += [dict(case='mode',index=i,mode=19 if i<6 else 18,width=w,height=h,entered=1,restored=1)
                  for i,(w,h) in enumerate(rasters)]
-        rows += [dict(case='vbe_refusal',mode=mode,status=0x014F,active=0) for mode in (0x101,0x103,0x111,0x114)]
+        rows += [dict(case='vbe_window',mode=mode,status=0x004F,active=0) for mode in (0x101,0x103,0x111,0x114)]
         def parse(rows):
             parser=runner.Parser('12345678','vm-fullscreen')
             records=[('BEGIN',dict(version=1))]+[('DATA',r) for r in rows]+[('END',dict(status='PASS',error=0))]

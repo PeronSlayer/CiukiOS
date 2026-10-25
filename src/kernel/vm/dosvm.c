@@ -627,6 +627,17 @@ static int transfer(struct dosvm *v, uint32_t linear, void *buffer, unsigned byt
     while (bytes) {
         unsigned n = PAGE_SIZE - (linear & (PAGE_SIZE - 1));
         if (n > bytes) n = bytes;
+        uint32_t window;
+        if (dosvm_vbe_window(v, linear, &window)) {
+            /* war2vbe: a windowed VBE mode's A0000h-AFFFFh is 64 KiB of the
+             * VBE buffer (4F05h bank). Bank and page boundaries coincide, so
+             * this page-bounded span is one buffer page; a kernel store sets
+             * no PTE D bit, so mark the page for the presenter. */
+            int e = transfer(v, window, b, n, write, wait);
+            if (e) return e;
+            if (write) dosvm_vbe_mark(v, (window - v->vbe_buffer.base) / PAGE_SIZE, 1);
+            b += n; linear += n; bytes -= n; continue;
+        }
         if (linear >= 0xA0000 && linear < 0xC0000) {
             /* fx-22: only the adapter's owner continuation or the switch
              * service touches the physical aperture; its writes are dirty. */

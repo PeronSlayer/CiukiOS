@@ -11,10 +11,14 @@ of the VMM's DPMI host:
 - The Warcraft II demo v1.20 (third_party/games/war2-demo, WAR2.EXE bound to
   DOS/4GW Professional 1.97) started from \\WAR2 as the DOS Box types it, with
   and without the EMMXXXX0 device (CIUKIEMM.SYS): it must pass the extender
-  start, its INT 21h 2Ch call, its timer setup (nested PUSHFD/CLI regions)
-  and find DRIVERS\\MDI.INI and DRIVERS\\DIG.INI, then stop at its own video
-  check ("could not find a VESA video driver", UNIVBE.DRV is written by
-  UVCONFIG on the user's machine), with no DOS/4GW error.
+  start, its INT 21h 2Ch call, its timer setup (nested PUSHFD/CLI regions),
+  find DRIVERS\\MDI.INI and DRIVERS\\DIG.INI and pass its VESA check on the
+  VM's VBE BIOS with no native display provider (war2vbe, 2026-10-25: INT 10h
+  4F00h, 4F01h, 4F02h 101h windowed, 4F0Ah, 4F05h bank switches; no
+  UNIVBE.DRV), with no DOS/4GW error. With the EMMXXXX0 device the run goes
+  on: Esc skips the Blizzard logo and the intro movie (mode 13h) and the
+  window shows the 640x480x256 title screen (mode 101h, the presenter's
+  frame, GUEST_PLAY_SHOT=<file.ppm> saves it).
 
 Regression cover for 2026-10-25 (docs/design/dos-dpmi-contract.md,
 "Selector 40h" and "Nested saved flags images"): DOS/4GW's own INT 21h
@@ -72,18 +76,41 @@ def run(cpu, image, name, args, **extra):
     return result.returncode, log
 
 
-def war2(cpu, image, name):
-    code, log = run(cpu, image, name, ["shell:CD \\WAR2", "-", "play:WAR2.EXE", "WAR2"], GUEST_PLAY_MS="8000")
+def war2(cpu, image, name, menu):
+    # INT 10h trace (dosvm_guest.c GUEST_INT10_TRACE); with menu, Esc at 12 s
+    # and 14 s of simulated time skips the logo and intro movies.
+    extra = dict(GUEST_PLAY_MS="24000" if menu else "10000", GUEST_INT10_TRACE="1")
+    if menu:
+        extra["GUEST_PLAY_KEYS"] = "01@12000,01@14000"
+    code, log = run(cpu, image, name, ["shell:CD \\WAR2", "-", "play:WAR2.EXE", "WAR2"], **extra)
     text = "\n".join(screen(log))
     end = re.search(r"^H61 PLAY END WAR2 (.*)$", log, re.M)
     missing = re.findall(r"^H61 IFS play failed n=\d+ fn=\w+ error=\d+ name=(\S+)$", log, re.M)
-    print(f"DOSX {name}: exit={code} end=[{end.group(1) if end else '?'}] failed opens={missing}", flush=True)
+    calls = re.findall(r"^I10 n=\d+ ax=(\w+) bx=(\w+) cx=\w+ dx=\w+ es:di=\S+ -> e=0 ax=(\w+) bx=\w+ cx=(\w+)", log, re.M)
+    vbe = [(ax, bx, result, cx) for ax, bx, result, cx in calls if ax.startswith("4f")]
+    banks = sum(ax == "4f05" and result == "004f" for ax, _, result, _ in vbe)
+    frame = re.search(r"^H61 PLAY FRAME e=(-?\d+) mode=(\w+) (\d+)x(\d+) text=(\d) nonblack=(\d+)$", log, re.M)
+    print(f"DOSX {name}: exit={code} end=[{end.group(1) if end else '?'}] failed opens={missing} "
+          f"vbe calls={len(vbe)} bank switches={banks} frame=[{frame.group(0)[15:] if frame else '-'}]", flush=True)
     check(code == 0 and "guest runner: PASS" in log and "unexpected:" not in log, f"{name}: runner verdict (exit {code})")
-    check("DOS/4GW Professional Protected Mode Run-time  Version 1.97" in text, f"{name}: the bound extender started")
-    check("DOS/4GW Professional error" not in text, f"{name}: no DOS/4GW error on the screen")
-    check("Warcraft could not find a VESA video driver" in text,
-          f"{name}: the demo reached its own video check (no UNIVBE.DRV yet)")
+    check("DOS/4GW Professional Protected Mode Run-time  Version 1.97" in text or
+          'console="Copyright (c) Rational Systems, Inc. 1990-1994"' in log, f"{name}: the bound extender started")
+    check("DOS/4GW Professional error" not in text and "DOS/4GW Professional error" not in log,
+          f"{name}: no DOS/4GW error")
     check(not {"MDI.INI", "DIG.INI"} & set(missing), f"{name}: DRIVERS\\MDI.INI and DRIVERS\\DIG.INI found")
+    # The VESA check passes on the VM's VBE BIOS: no message, no UNIVBE.DRV.
+    check("Warcraft could not find a VESA video driver" not in text and "UNIVBE.DRV" not in missing,
+          f"{name}: the demo passed its VESA check without UNIVBE.DRV")
+    check(any(ax == "4f00" and result == "004f" for ax, _, result, _ in vbe), f"{name}: INT 10h 4F00h answered")
+    check(any(ax == "4f01" and result == "004f" and cx == "0101" for ax, _, result, cx in vbe), f"{name}: 4F01h 101h")
+    check(any(ax == "4f02" and bx == "0101" and result == "004f" for ax, bx, result, _ in vbe),
+          f"{name}: 4F02h 101h set in the windowed model")
+    check(any(ax == "4f0a" and result == "004f" for ax, _, result, _ in vbe), f"{name}: 4F0Ah protected-mode table")
+    check(banks >= 5, f"{name}: 4F05h bank switches through the 4F0Ah SetWindow code ({banks})")
+    if menu:
+        check(frame is not None and frame.group(1) == "0" and frame.group(2) == "101" and frame.group(3) == "640" and
+              frame.group(4) == "480" and frame.group(5) == "0" and int(frame.group(6)) > 150000,
+              f"{name}: the window shows the 640x480x256 title screen")
     return log
 
 
@@ -120,7 +147,7 @@ def main():
           f"DPMI4GW.EXE: DPMI services, IRQ0, virtual IF, INT 21h 2Ah/2Ch and file I/O under DOS/4GW (exit {code})")
     check("DOS/4GW error" not in "\n".join(screen(log)), "DPMI4GW.EXE: no DOS/4GW error on the screen")
 
-    war2(cpu, image, "war2-ems")
+    war2(cpu, image, "war2-ems", True)
     # The same guest without the EMMXXXX0 device: DOS/4GW Professional probes
     # VCPI/EMS/XMS/DPMI itself; the VMM has EMS 4.0 but no VCPI (INT 67h
     # DE00h fails), so both profiles must take the DPMI path.
@@ -131,14 +158,15 @@ def main():
     shutil.rmtree(image.parent)
     image.parent.mkdir(parents=True)
     ref.build_reference(image, programs | demo, ("D48", *folders), None, folder, guest=(plain, identity))
-    war2(cpu, image, "war2-no-ems")
+    war2(cpu, image, "war2-no-ems", False)
 
     shutil.rmtree(image.parent, ignore_errors=True)
     if failures:
         print(f"DOSX FAIL: {len(failures)} checks failed (logs in {OUT})")
         return 1
     print("DOSX PASS: DOS/4GW 1.97 client (INT 21h date/time through selector 40h) and the Warcraft II demo under "
-          "DOS/4GW Professional 1.97, with and without the EMMXXXX0 device, reach their own code with no extender error")
+          "DOS/4GW Professional 1.97, with and without the EMMXXXX0 device, pass the extender and VESA starts; "
+          "the demo's 640x480x256 title screen reaches the window")
     return 0
 
 

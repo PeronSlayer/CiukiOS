@@ -3,6 +3,17 @@
 This implements the provider anticipated by f3-26. Qualification on the T23
 remains separate from the host register model.
 
+## war2vbe amendment: guest VBE without a native provider (2026-10-25)
+
+The F3-37 rule below ("a synthetic VBE 2.0 interface only when the native
+provider supports the requested mode", "banked VBE remains unavailable") is
+superseded for the guest BIOS: the VM's VBE BIOS serves 101h/103h/111h/114h
+on every display from the VM's own buffer, in the windowed (banked, 4F05h,
+4F0Ah) and linear models, and the window presenter shows them. Native
+full-screen scanout still needs this provider; without it full-screen entry
+for a VBE mode stays windowed. Decision, sources and tests:
+`dos-dpmi-contract.md`, "VBE modes in the DOS window (2026-10-25)".
+
 ## fx-22 return transaction amendment (2026-10-23)
 
 Trial f441c5bd (Quake quit to the DOS prompt in native full screen, then

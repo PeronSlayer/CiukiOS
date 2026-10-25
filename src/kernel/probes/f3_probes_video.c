@@ -347,8 +347,10 @@ static int fullscreen_wait(struct dosvm *v,bool active)
     return 0;
 }
 /* Frozen transport cases complement the live DOOM first-frame observation.
- * QEMU has no SuperSavage device: its VBE rows must prove refusal, not claim
- * native SuperSavage scanout. Host tests exercise all four native recipes. */
+ * QEMU has no SuperSavage device: its VBE rows must not claim native
+ * SuperSavage scanout. war2vbe (2026-10-25): each VBE mode is set in the
+ * window from the VM's own buffer and full-screen entry stays windowed.
+ * Host tests exercise all four native recipes. */
 static int fullscreen_modes(struct dosvm *v)
 {
     static const struct { uint16_t mode,width,height; } modes[]={
@@ -397,10 +399,16 @@ static int fullscreen_modes(struct dosvm *v)
     for (unsigned i=0;i<ARRAY_SIZE(vbe);i++) {
         struct v86_frame f={.tf={.eax=0x4F02,.ebx=vbe[i]|0x4000}};
         int e=dosvm_vga_bios(v,&f);
-        if (e || (uint16_t)f.tf.eax!=0x014F || v->vbe_mode) return -EIO;
-        rec_emit(FS_PROBE,"DATA","case=vbe_refusal mode=%u status=%u active=%u",vbe[i],(uint16_t)f.tf.eax,dosvm_fullscreen_active(dosvm_key(v)));
+        if (e || (uint16_t)f.tf.eax!=0x004F || v->vbe_mode!=vbe[i]) return -EIO;
+        e=dosvm_fullscreen_enter(dosvm_key(v));
+        if (e!=DISPLAY_FULLSCREEN_WINDOWED) {
+            if (!e) dosvm_fullscreen_leave(dosvm_key(v),false);
+            return -EIO;
+        }
+        rec_emit(FS_PROBE,"DATA","case=vbe_window mode=%u status=%u active=%u",vbe[i],(uint16_t)f.tf.eax,dosvm_fullscreen_active(dosvm_key(v)));
     }
-    return 0;
+    struct v86_frame text={.tf={.eax=3}};
+    return dosvm_vga_bios(v,&text);
 }
 static int probe_f3_vm_fullscreen(void)
 {

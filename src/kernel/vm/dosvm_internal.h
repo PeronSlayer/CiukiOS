@@ -284,6 +284,13 @@ struct dosvm {
     cvga_state vga __attribute__((aligned(4096))); /* planes page-aligned: f3-06 direct window */
     cvbios video_bios;
     uint16_t vbe_mode;
+    /* war2vbe (2026-10-25): a VBE mode set without D14 uses the windowed
+     * model: window A at A0000h shows 64 KiB of vbe_buffer at vbe_bank
+     * (4F05h); vbe_bank_mapped is the bank whose frames the open window
+     * PTEs hold (video_direct VIDEO_BANK). video_bios_active: the synthetic
+     * VGA BIOS is running, its A0000h cycles address the VGA model. */
+    bool vbe_linear, video_bios_active;
+    uint16_t vbe_bank, vbe_bank_mapped;
     struct vm_block vbe_buffer;
     bool vbe_mapped[DPMI_CLIENTS];
     cvx_bus video_bus;
@@ -298,9 +305,10 @@ struct dosvm {
     bool video_flip_seen;
     uint32_t video_display, video_changes, video_phase, owner_pid;
     uint32_t video_faults, video_frames;
-    /* f3-06/07: direct window (0 none, 1..4 plane + 1, 5 linear). A0000h-
-     * AFFFFh maps a model plane or the VM's own linear backing user-writable;
-     * sync closes it before the VM's low-page restoration (dosvm_vga.c). */
+    /* f3-06/07: direct window (0 none, 1..4 plane + 1, 5 linear, 6 VBE
+     * bank). A0000h-AFFFFh maps a model plane, the VM's own linear backing
+     * or 64 KiB of the VBE buffer user-writable; sync closes it before the
+     * VM's low-page restoration (dosvm_vga.c). */
     unsigned video_direct;
     bool video_read_window, video_writable;
     uint16_t video_pending[4]; /* dirty plane pages deferred by PTE swaps */
@@ -533,6 +541,18 @@ bool dosvm_vbe_dirty(struct dosvm *, bool clear);
 int dosvm_vbe_flush(struct dosvm *, bool force);
 int dosvm_vbe_present(struct dosvm *, int (*)(void *, unsigned, const void *, unsigned),
                       void *, uint64_t, struct ciuki_rect *);
+/* war2vbe: VBE windowed model. dosvm_vbe_window() translates a guest
+ * A0000h-AFFFFh address to the VBE buffer while a windowed VBE mode is set
+ * (false otherwise, and while the VGA BIOS runs); dosvm_vbe_frame() is the
+ * physical frame of a buffer page (0 if absent); dosvm_vbe_mark() sets the
+ * D bit of buffer pages written through the window or by the kernel;
+ * dosvm_vga_bank_collect() moves the open window's D bits to the buffer. */
+#define DOSVM_VBE_WINDOW_FUNCTION 0x0104u /* F000:0104, 4F01h WinFuncPtr */
+#define DOSVM_VBE_PM_TABLE 0x38C0u        /* F000:38C0, 4F0Ah protected-mode table */
+bool dosvm_vbe_window(const struct dosvm *, uint32_t linear, uint32_t *buffer);
+uint32_t dosvm_vbe_frame(struct dosvm *, unsigned page);
+void dosvm_vbe_mark(struct dosvm *, unsigned page, uint32_t pages);
+void dosvm_vga_bank_collect(struct dosvm *);
 void dosvm_fullscreen_mode_changed(struct dosvm *);
 /* fx-22: true when the calling task may use the physical aperture for this
  * full-screen owner now (its continuation before the revoke, or the switch

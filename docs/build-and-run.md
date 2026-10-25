@@ -358,7 +358,7 @@ published references) and every installed member:
 | `wolf3d-shareware` | `1wolf14.zip` (Wolfenstein 3-D 1.4, episode 1) | `cb2a2ef7…59451a8` | `\WOLF3D` (all 12 files of `W3DSW14.SHR`) |
 | `doom-shareware` | `doom19s.zip` (DOOM 1.9, episode 1) | `cacf0142…1b486e6` | `\DOOM` (16 files of `DOOMS_19.1`+`.2`, without the DOOM FAQ) plus `CIUKI.CFG` |
 | `quake-shareware` | `quake106.zip` (Quake 1.06, episode 1) | `ec6c9d34…7553239` | `\QUAKE` and `\QUAKE\ID1` (all 16 original members) |
-| `war2-demo` | `war2demo.exe` (Blizzard's Warcraft II DOS demo v1.20elc, six scenarios; the final electronic release, mirrors classicdosgames.com and dosgames.com agree) | `f837a7d4…028131` | `\WAR2` and its `DATA`, `DEMODATA`, `DRIVERS`, `KALI`, `UTIL` (all 66 files of Blizzard's installer, byte-identical) plus generated `DRIVERS\DIG.INI`, `DRIVERS\MDI.INI` (Sound Blaster 16, A220 I7 D1 H5; the demo reads them in `DRIVERS`) and `WAR2.BAT` (runs `UVCONFIG.EXE` once for `UNIVBE.DRV`, then `WAR2.EXE`) |
+| `war2-demo` | `war2demo.exe` (Blizzard's Warcraft II DOS demo v1.20elc, six scenarios; the final electronic release, mirrors classicdosgames.com and dosgames.com agree) | `f837a7d4…028131` | `\WAR2` and its `DATA`, `DEMODATA`, `DRIVERS`, `KALI`, `UTIL` (all 66 files of Blizzard's installer, byte-identical) plus generated `DRIVERS\DIG.INI`, `DRIVERS\MDI.INI` (Sound Blaster 16, A220 I7 D1 H5; the demo reads them in `DRIVERS`) and `WAR2.BAT` (starts `WAR2.EXE`, which uses the DOS VM's VESA BIOS; `UVCONFIG.EXE` and `UNIVBE.DRV` are not needed) |
 
 The image build never downloads: `scripts/build_image.py` calls
 `scripts/build_games_disk.py`, which checks each archive against its pins,

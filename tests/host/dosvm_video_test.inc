@@ -143,10 +143,14 @@ static void test_video_bios_ports(void)
     struct dosvm *v = create();
     uint8_t mode = 0;
     CHECK(!dosvm_read(v, 0x449, &mode, 1) && mode == 3 && (v->vga.seq[1] & 1));
+    /* war2vbe: the VBE BIOS answers without a native display provider; a
+     * mode set still fails, leaving mode 3, when this minimum VM has no room
+     * for the 1 MiB VBE buffer. */
     struct v86_frame f = vf(0x4F00, 0, 0, 0); f.es = 0x2000;
-    CHECK(!dosvm_vga_bios(v, &f) && (f.tf.eax & 0xFFFF) == 0x014F);
+    CHECK(!dosvm_vga_bios(v, &f) && (f.tf.eax & 0xFFFF) == 0x004F);
     f = vf(0x4F02, 0x4103, 0, 0);
     CHECK(!dosvm_bios(v, &f, 0x10) && (f.tf.eax & 0xFFFF) == 0x014F && !dosvm_read(v, 0x449, &mode, 1) && mode == 3);
+    CHECK(!v->vbe_mode && !v->vbe_buffer.used);
     int10(v, 0x0013, 0, 0, 0);
     cvga_geometry g;
     CHECK(!dosvm_read(v, 0x449, &mode, 1) && mode == 0x13 && cvga_get_geometry(&v->vga, &g) && g.width == 320 && g.height == 200);

@@ -1,22 +1,59 @@
-/* Synthetic VBE with legacy VGA and linear modes. RAM stays VM-owned in both display
- * paths; no guest address is interpreted as a host physical address.
+/* Synthetic VBE with legacy VGA, windowed (banked) and linear modes. RAM stays
+ * VM-owned in both display paths; no guest address is interpreted as a host
+ * physical address. war2vbe (2026-10-25, docs/design/dos-dpmi-contract.md,
+ * "VBE modes in the DOS window"): every listed mode works on any display from
+ * the VM's own buffer; the window presenter scales it, and a native display
+ * mode provider only adds the full-screen path (dosvm_fullscreen.c).
+ * Function semantics: VESA BIOS Extension Core Functions 2.0/3.0.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
 #include <ciuki/display.h>
 #include "dosvm_internal.h"
 
+/* VBE 2.0 Function 0Ah table at F000:38C0 (war2vbe): word offsets of the
+ * 32-bit SetWindow, SetDisplayStart and SetPrimaryPalette code, no
+ * ports/memory sub-table (0000h), then relocatable 32-bit code, which callers
+ * copy or run in place (VBE Core Functions 3.0, Function 0Ah). SetWindow
+ * (BH=0, BL=window, DX=bank) is INT 10h AX=4F05h through the DPMI host;
+ * SetDisplayStart has only start 0; SetPrimaryPalette (CX entries from DX,
+ * ES:EDI blue/green/red/0) writes the VGA DAC ports. Source, nasm -f bin:
+ *   dw window-table, start-table, palette-table, 0
+ *   window: push eax / mov ax,4F05h / int 10h / pop eax / ret
+ *   start: ret
+ *   palette: push eax / push ecx / push edx / push edi / movzx ecx,cx /
+ *     mov eax,edx / mov dx,3C8h / out dx,al / inc edx / jecxz done /
+ *     next: mov al,[es:edi+2] / out dx,al / mov al,[es:edi+1] / out dx,al /
+ *     mov al,[es:edi] / out dx,al / add edi,4 / loop next /
+ *     done: pop edi / pop edx / pop ecx / pop eax / ret */
+static const uint8_t vbe_pm_table[]={
+    0x08,0x00,0x11,0x00,0x12,0x00,0x00,0x00,
+    0x50,0x66,0xB8,0x05,0x4F,0xCD,0x10,0x58,0xC3,
+    0xC3,
+    0x50,0x51,0x52,0x57,0x0F,0xB7,0xC9,0x89,0xD0,0x66,0xBA,0xC8,0x03,0xEE,0x42,0xE3,0x13,
+    0x26,0x8A,0x47,0x02,0xEE,0x26,0x8A,0x47,0x01,0xEE,0x26,0x8A,0x07,0xEE,0x83,0xC7,0x04,0xE2,0xED,
+    0x5F,0x5A,0x59,0x58,0xC3
+};
 void dosvm_vbe_init(struct dosvm *v)
 {
     /* F3000..F37ff holds the complete 8x8 font; the remaining half of
-     * this private, guest-read-only ROM page holds VBE data, never code. */
+     * this private, guest-read-only ROM page holds VBE data and the
+     * Function 0Ah table that callers copy or call in place. */
     uint8_t *rom=(uint8_t *)P2V(v->frames[0xF3])+0x800;
     const uint16_t modes[]={0x101,0x103,0x111,0x114,
                            0,1,2,3,0x0D,0x0E,0x10,0x11,0x12,0x13,0xFFFF};
     for (unsigned i=0;i<ARRAY_SIZE(modes);i++) vm_w16(rom+0x80+2*i,modes[i]);
     memcpy(rom+0x10,"CiukiOS",8);
-    memcpy(rom+0x20,"Native SuperSavage VBE",22);
+    memcpy(rom+0x20,"CiukiOS VBE",12);
     memcpy(rom+0x40,"F3-37",6);
+    memcpy(rom+(DOSVM_VBE_PM_TABLE-0x3800),vbe_pm_table,sizeof(vbe_pm_table));
+    /* WinFuncPtr (4F01h offset 0Ch), the direct-call window function, in the
+     * unused tail of the INT 10h ROM stub slot (F000:0100 is INT FEh; IRET).
+     * VBE 1.2 callers load only BH/BL/DX and may not set AX; AX and DX are
+     * destroyed (VBE 2.0/3.0, Function 05h notes):
+     *   F000:0104  mov ax,4F05h / pushf / call far F000:0100 / retf */
+    static const uint8_t window[]={0xB8,0x05,0x4F,0x9C,0x9A,0x00,0x01,0x00,0xF0,0xCB};
+    memcpy((uint8_t *)P2V(v->frames[0xF0])+DOSVM_VBE_WINDOW_FUNCTION,window,sizeof(window));
 }
 /* f3-46: the linear frame buffer is harvested by the presenter and the
  * full-screen flush from other tasks through its PTE dirty bits: its pool
@@ -30,10 +67,21 @@ static bool vbe_backing(struct dosvm *v)
     dosvm_pool_free(v,&v->vbe_buffer);
     return false;
 }
+/* war2vbe: the listed modes no longer depend on a native display mode
+ * provider (display_fullscreen_supported); the window presents them. */
 static bool vbe_available(struct dosvm *v,uint16_t mode)
 {
     (void)v;
-    return dos_video_mode(mode) && display_fullscreen_supported(mode);
+    return dos_video_mode(mode)!=0;
+}
+bool dosvm_vbe_window(const struct dosvm *v,uint32_t linear,uint32_t *buffer)
+{
+    if (!v->vbe_mode || v->vbe_linear || v->video_bios_active || !v->vbe_buffer.used ||
+        linear<0xA0000 || linear>=0xB0000) return false;
+    uint32_t offset=(uint32_t)v->vbe_bank*65536u+(linear-0xA0000);
+    if (offset>=v->vbe_buffer.bytes) return false;
+    *buffer=v->vbe_buffer.base+offset;
+    return true;
 }
 static const cvga_mode_params *vbe_vga_mode(unsigned mode)
 { return mode<=0x13 ? cvga_find_mode(mode) : 0; }
@@ -81,12 +129,16 @@ int dosvm_vbe_bios(struct dosvm *v,struct v86_frame *f)
         int e=vbe_output(v,f,info,256); if (e) return e; ok=true;
     } else if (ax==0x4F01 && !(cx&~0x41FFu) && vbe_available(v,cx&0x1FF)) {
         const struct dos_video_mode *m=dos_video_mode(cx&0x1FF);
-        /* Supported, colour, graphics, no VGA window, linear available.
-         * 16-bpp is non-VGA-compatible; neither mode advertises banking. */
-        vm_w16(info,0x00DB|(m->bpp==16 ? 0x20 : 0));
+        /* Supported, colour, graphics, VGA-compatible window (D6 clear) and
+         * linear buffer (D7); 16-bpp is non-VGA-compatible (D5). Window A:
+         * relocatable, readable, writable, 64 KiB at A000h in 64 KiB steps,
+         * WinFuncPtr F000:0104; one bank, no extra image pages. */
+        vm_w16(info,0x009B|(m->bpp==16 ? 0x20 : 0));
+        info[2]=7; vm_w16(info+4,64); vm_w16(info+6,64); vm_w16(info+8,0xA000);
+        vm_w32(info+12,0xF0000000u|DOSVM_VBE_WINDOW_FUNCTION);
         vm_w16(info+16,m->pitch); vm_w16(info+18,m->width); vm_w16(info+20,m->height);
-        info[22]=8; info[23]=16; info[24]=1; info[25]=m->bpp;
-        info[27]=m->bpp==8 ? 4 : 6;
+        info[22]=8; info[23]=16; info[24]=1; info[25]=m->bpp; info[26]=1;
+        info[27]=m->bpp==8 ? 4 : 6; info[30]=1;
         if (m->bpp==16) { info[31]=5;info[32]=11;info[33]=6;info[34]=5;info[35]=5; }
         vm_w32(info+40,DOS_VBE_PHYS);
         int e=vbe_output(v,f,info,256); if (e) return e; ok=true;
@@ -97,7 +149,8 @@ int dosvm_vbe_bios(struct dosvm *v,struct v86_frame *f)
         struct v86_frame mode=*f;
         vm_low(&mode.tf.eax,(bx&0x1FF)|((bx&0x8000)>>8));
         int e=dosvm_vga_bios(v,&mode); if (e) return e; ok=true;
-    } else if (ax==0x4F02 && (bx&0x4000) && !(bx&~0xC1FFu) && vbe_available(v,bx&0x1FF)) {
+    } else if (ax==0x4F02 && !(bx&~0xC1FFu) && vbe_available(v,bx&0x1FF)) {
+        /* D14 selects the linear model, else the windowed (banked) one. */
         if (vbe_backing(v)) {
             uint8_t ctl;
             if (dosvm_read(v,0x487,&ctl,1)) return -EFAULT;
@@ -108,14 +161,30 @@ int dosvm_vbe_bios(struct dosvm *v,struct v86_frame *f)
             if (v->fullscreen && !v->vbe_mode) dosvm_fullscreen_model_begin(v);
             if (!(bx&0x8000)) dosvm_pool_zero(v,v->vbe_buffer.base,v->vbe_buffer.pages);
             v->vbe_mode=bx&0x1FF; v->video_presented=false;
+            v->vbe_linear=(bx&0x4000)!=0; v->vbe_bank=0;
             v->video_blank=0;v->video_vblank_us=0;
             v->vga.display_changes++; dosvm_fullscreen_mode_changed(v);
+            dosvm_vga_direct(v); /* windowed model: open window A at bank 0 */
             dosvm_launch_video(v); ok=true;
         }
     } else if (ax==0x4F03 && vbe_available(v,0x101)) {
         uint8_t mode,ctl;
         if (dosvm_read(v,0x449,&mode,1) || dosvm_read(v,0x487,&ctl,1)) return -EFAULT;
-        vm_low(&f->tf.ebx,(v->vbe_mode ? v->vbe_mode|0x4000 : mode)|((ctl&0x80)<<8)); ok=true;
+        vm_low(&f->tf.ebx,(v->vbe_mode ? v->vbe_mode|(v->vbe_linear ? 0x4000 : 0) : mode)|((ctl&0x80)<<8)); ok=true;
+    } else if (ax==0x4F05 && (bx>>8)<=1) {
+        /* Window A only (B is absent); 64 KiB granularity. A linear mode
+         * fails with AH=03h (VBE Function 05h implementation note). */
+        if (v->vbe_mode && !bl && v->vbe_linear) { vm_low(&f->tf.eax,0x034F); return 0; }
+        if (!v->vbe_mode || bl) ok=false;
+        else if (bx>>8) { vm_low(&f->tf.edx,v->vbe_bank); ok=true; }
+        else if (dx<DOS_VBE_BYTES/65536u) {
+            v->vbe_bank=(uint16_t)dx;
+            dosvm_vga_direct(v);  /* collect the old bank's D pages, map the new one */
+            ok=true;
+        }
+    } else if (ax==0x4F0A && !bl) {
+        /* Real-mode pointer and length of the protected-mode table. */
+        f->es=0xF000; vm_low(&f->tf.edi,DOSVM_VBE_PM_TABLE); vm_low(&f->tf.ecx,sizeof(vbe_pm_table)); ok=true;
     } else if (ax==0x4F06 && bl==1 && v->vbe_mode) {
         const struct dos_video_mode *m=dos_video_mode(v->vbe_mode);
         vm_low(&f->tf.ebx,m->pitch); vm_low(&f->tf.ecx,m->width); vm_low(&f->tf.edx,m->height); ok=true;
@@ -167,9 +236,27 @@ static uint32_t *vbe_pte(struct dosvm *v,unsigned page)
     uint32_t *pd=P2V(v->as.pd_phys);
     return &((uint32_t *)P2V(pd[va>>22]&~0xFFFu))[(va>>12)&1023];
 }
+/* war2vbe: the buffer pages are pinned resident (vbe_backing), so a present
+ * PTE names a stable frame the bank window may alias. */
+uint32_t dosvm_vbe_frame(struct dosvm *v,unsigned page)
+{
+    if (!v->vbe_buffer.used || page>=v->vbe_buffer.pages || !v->as.pd_phys) return 0;
+    uint32_t va=v->vbe_buffer.base+page*PAGE_SIZE;
+    if (!(((uint32_t *)P2V(v->as.pd_phys))[va>>22]&PTE_P)) return 0;
+    uint32_t pte=*vbe_pte(v,page);
+    return pte&PTE_P ? pte&~0xFFFu : 0;
+}
+/* Window and kernel stores reach the presenter and the full-screen flush as
+ * the D bits a linear store sets (the VDD's Get_Mod model, fx-27). */
+void dosvm_vbe_mark(struct dosvm *v,unsigned page,uint32_t pages)
+{
+    for (unsigned i=0;i<32 && pages;i++,pages>>=1)
+        if ((pages&1) && dosvm_vbe_frame(v,page+i)) *vbe_pte(v,page+i)|=0x40u;
+}
 bool dosvm_vbe_dirty(struct dosvm *v,bool clear)
 {
     bool dirty=false;
+    dosvm_vga_bank_collect(v);
     for (unsigned i=0;i<v->vbe_buffer.pages;i++) {
         uint32_t *pte=vbe_pte(v,i);
         if (*pte&0x40) {
@@ -184,6 +271,7 @@ int dosvm_vbe_flush(struct dosvm *v,bool force)
     const struct dos_video_mode *m=dos_video_mode(v->vbe_mode);
     if (!m || !v->vbe_buffer.used) return -EIO;
     unsigned bytes=m->pitch*m->height; bool dirty=false;
+    dosvm_vga_bank_collect(v);
     for (unsigned i=0;i<(bytes+PAGE_SIZE-1)/PAGE_SIZE;i++) {
         uint32_t *pte=vbe_pte(v,i);
         if (!force && !(*pte&0x40)) continue;
@@ -207,6 +295,7 @@ static bool vbe_collect(struct dosvm *v, unsigned bytes, uint32_t pages[DOS_VBE_
      * only visible pages mark rows. */
     bool dirty = false;
     unsigned visible = (bytes + PAGE_SIZE - 1) / PAGE_SIZE;
+    dosvm_vga_bank_collect(v);
     for (unsigned i = 0; i < v->vbe_buffer.pages && i < DOS_VBE_BYTES / PAGE_SIZE; i++) {
         uint32_t *pte = vbe_pte(v, i);
         if (!(*pte & 0x40)) continue;

@@ -391,9 +391,10 @@ static void test_fullscreen_vbe(void)
         const struct dos_video_mode *m=dos_video_mode(modes[i]);
         f=vf(0x4F01,0,m->number,0);f.es=0x2000;
         CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x004F);
-        CHECK(!dosvm_read(v,0x20000,info,256) && (vm_u16(info)&0xD1)==0xD1);
+        /* war2vbe: window A (D6 clear, attributes 7) beside the linear buffer (D7). */
+        CHECK(!dosvm_read(v,0x20000,info,256) && (vm_u16(info)&0xD1)==0x91);
         CHECK(vm_u16(info+16)==m->pitch && vm_u16(info+18)==m->width && vm_u16(info+20)==m->height);
-        CHECK(info[25]==m->bpp && vm_u32(info+40)==DOS_VBE_PHYS && !info[2] && !info[3]);
+        CHECK(info[25]==m->bpp && vm_u32(info+40)==DOS_VBE_PHYS && info[2]==7 && !info[3]);
         f=vf(0x4F02,m->number|0x4000,0,0);
         CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x004F && v->vbe_mode==m->number);
         v->video_vblank_us=1000000;v->video_blank=0;
@@ -458,8 +459,9 @@ static void test_fullscreen_vbe(void)
     f=vf(0x4F08,0x0800,0,0);CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x014F);
     f=vf(0x4F07,0x0601,0,0);CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x014F);
     f=vf(0x4F07,0x0600,0,0);CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x014F);
-    /* Unsupported/banked/custom-refresh modes leave the current state intact. */
-    const unsigned bad[]={0x110|0x4000,0x113|0x4000,0x101,0x114|0x4800,0x118|0x4000,0x83,0x4003,4};
+    /* Unsupported/custom-refresh modes leave the current state intact (the
+     * windowed model of a listed mode, e.g. 101h, is valid since war2vbe). */
+    const unsigned bad[]={0x110|0x4000,0x113|0x4000,0x105,0x114|0x4800,0x118|0x4000,0x83,0x4003,4};
     for (unsigned i=0;i<ARRAY_SIZE(bad);i++) {
         uint8_t ctl=0xE5;CHECK(!dosvm_write(v,0x487,&ctl,1));
         f=vf(0x4F02,bad[i],0,0);CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x014F && v->vbe_mode==0x114);

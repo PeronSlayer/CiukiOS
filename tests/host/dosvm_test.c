@@ -1034,11 +1034,13 @@ static void test_memory_services(bool locked)
 #include "dosvm_properties_test.inc"
 #include "dosvm_fx27_test.inc"     /* fx-27: windowed DOS graphics budgets */
 #include "dosvm_101_video_test.inc"
+#include "dosvm_vbe_window_test.inc"  /* war2vbe: windowed VBE without a native provider */
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
     if (getenv("CIUKI_VM_101_BENCH")) { bench_101_video(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_101_VIDEO")) { test_101_video(); free(ram); fflush(stdout); return 0; }
+    if (getenv("CIUKI_VM_VBE_WINDOW")) { test_vbe_window(); test_fullscreen_vbe(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_MPU")) { test_mpu_uart(); test_vm_midi(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_PROPERTIES")) { test_dos_properties(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_CLIPBOARD")) { test_programmatic_clipboard(); free(ram); fflush(stdout); return 0; }
@@ -1109,6 +1111,7 @@ int main(void)
     test_fullscreen_service();
     test_fullscreen_more_modes();
     test_fullscreen_vbe();
+    test_vbe_window();
     test_fx22();
     test_startup();
     test_quake_start();
