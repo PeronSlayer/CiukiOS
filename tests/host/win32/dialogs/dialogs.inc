@@ -1293,6 +1293,33 @@ static void test_help(void) {
 static POINT vise_saved;
 static HWND vise_background;
 static UINT vise_pages, vise_visible[4], vise_owner_visible[4];
+static DWORD vise_page_wire, vise_page_generation, vise_close_pings;
+/* q3exec3: the desktop pings its windows every second. A PING it queued
+ * for the Welcome page (and one for the background) just before it read
+ * the page's DESK_CLOSE reaches USER in the same batch as the RESULT and
+ * the DESK_CLOSED answer, while DestroyWindow waits; the page's PING must
+ * not be answered (its wire id is gone), the background's must be. */
+static void vise_push(UINT op, DWORD wire, DWORD generation, UINT n, DWORD value) {
+  CHECK(in_tail - in_head < 256);
+  struct ciuki_message *m = &incoming[in_tail++ % 256];
+  desk_v3_message(m, op, n, 0, wire, generation);
+  if (n)
+    desk_put32(m->data + 16, value);
+}
+static void vise_close_hook(const struct ciuki_message *sent, BOOL after_result) {
+  if (sent->data[0] != DESK_V3_VERSION || sent->data[1] != DESK_CLOSE ||
+      desk_get32(sent->data + 8) != vise_page_wire ||
+      desk_get32(sent->data + 12) != vise_page_generation)
+    return;
+  if (!after_result) {
+    struct u32_window *b = u32_window(vise_background);
+    CHECK(b && b->wire);
+    vise_push(DESK_PING, vise_page_wire, vise_page_generation, 4, 0x51);
+    vise_push(DESK_PING, b->wire, b->generation, 4, 0x52);
+    vise_close_pings++;
+  } else
+    vise_push(DESK_CLOSED, vise_page_wire, vise_page_generation, 0, 0);
+}
 HWND GetDesktopWindow(void);
 static void vise_center(HWND dlg) {
   HWND parent = GetParent(dlg);
@@ -1318,6 +1345,11 @@ static intptr_t W32API vise_proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
       SetDlgItemTextA(h, 1200, text);
     }
     EnableWindow(GetDlgItem(h, 12), lp != 0);
+    if (!lp) {
+      struct u32_window *page = u32_window(h);
+      CHECK(page && page->wire && page->generation);
+      vise_page_wire = page->wire, vise_page_generation = page->generation;
+    }
     if (vise_saved.x == 0x8000 && vise_saved.y == 0x8000)
       vise_center(h);
     else {
@@ -1387,6 +1419,9 @@ static void vise_check_wire(UINT from) {
       continue;
     struct desk_packet p;
     DWORD wire = desk_get32(m->data + 8), generation = desk_get32(m->data + 12);
+    /* A per-window message names a live window: never window 0. */
+    CHECK(m->data[1] == DESK_HELLO || m->data[1] == DESK_V3_CLIPBOARD ||
+          m->data[1] == DESK_INPUT_SETTINGS || (wire && generation));
     struct ciuki_surface_info info = {sizeof(info), 0, 0, 0, CIUKI_SURFACE_XRGB8888, 0};
     UINT k = 0;
     while (k < known && (sizes[k].wire != wire || sizes[k].generation != generation))
@@ -1424,7 +1459,22 @@ static void test_vise(void) {
   drain(0);
   vise_saved = (POINT){0x8000, 0x8000};
   script(vise_page_script);
+  desk_reply_hook = vise_close_hook;
   CHECK(DialogBoxParamA(FIXTURE, (const char *)(uintptr_t)140, vise_background, vise_proc, 0) == IDOK);
+  desk_reply_hook = 0;
+  CHECK(vise_close_pings == 1);
+  {
+    struct u32_window *b = u32_window(vise_background);
+    UINT pongs = 0;
+    for (UINT i = from; i < outgoing_count; i++)
+      if (outgoing[i].data[0] == DESK_V3_VERSION && outgoing[i].data[1] == DESK_PONG) {
+        CHECK(desk_get32(outgoing[i].data + 8) == b->wire &&
+              desk_get32(outgoing[i].data + 12) == b->generation &&
+              desk_get32(outgoing[i].data + 16) == 0x52);
+        pongs++;
+      }
+    CHECK(pongs == 1);
+  }
   UpdateWindow(vise_background);
   script(vise_page_script);
   CHECK(DialogBoxParamA(FIXTURE, (const char *)(uintptr_t)141, vise_background, vise_proc, 1) == IDOK);
@@ -1445,6 +1495,6 @@ static void test_vise(void) {
   DestroyWindow(w);
   vise_check_wire(from);
   DestroyWindow(vise_background);
-  printf("VISE wizard: welcome -> license, owner visible, %u packets valid for the desktop\n",
+  printf("VISE wizard: welcome -> license, owner visible, close-time PING answered for the live window only, %u packets valid for the desktop\n",
          outgoing_count - from);
 }

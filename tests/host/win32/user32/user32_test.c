@@ -346,6 +346,10 @@ static UINT outgoing_count, in_head, in_tail, reject_opcode;
 static DWORD lease_token = 0x40, lease_generation = 0x80, lease_serial;
 static DWORD frames_seen, frames_refused, frame_token, frame_generation;
 static uint64_t fake_ns;
+/* q3exec3: a test may add the desktop's own events around a request's
+ * RESULT (a PING queued before the desktop read a DESK_CLOSE, the
+ * DESK_CLOSED it sends after the RESULT). */
+static void (*desk_reply_hook)(const struct ciuki_message *sent, BOOL after_result);
 /* Fake desktop lease: GRANTED (state 1) carries the full 72-byte tuple. */
 static void lease_event(DWORD id, DWORD generation, DWORD state, DWORD w,
                         DWORD h, DWORD bpp) {
@@ -405,6 +409,8 @@ DWORD w32r_gate(DWORD call, DWORD a, DWORD b, DWORD c) {
     CHECK(outgoing_count < 2048);
     struct ciuki_message *sent = (void *)(uintptr_t)b;
     outgoing[outgoing_count++] = *sent;
+    if (desk_reply_hook)
+      desk_reply_hook(sent, 0);
     if(sent->data[1]==DESK_INPUT_SETTINGS) {
       UINT key=desk_get32(sent->data+16),value=desk_get32(sent->data+20),flags=desk_get32(sent->data+24);
       if(key && key<=DESK_INPUT_VALUES){shared_input[key-1]=value;if(flags&1)saved_input[key-1]=value;}
@@ -433,6 +439,8 @@ DWORD w32r_gate(DWORD call, DWORD a, DWORD b, DWORD c) {
       if (sent->data[1] == reject_opcode)
         reject_opcode = 0;
     }
+    if (desk_reply_hook)
+      desk_reply_hook(sent, 1);
     return 0;
   }
   if (call == CIUKI_SYS_CHANNEL_RECV) {

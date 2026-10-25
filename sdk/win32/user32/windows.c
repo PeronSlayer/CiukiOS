@@ -430,8 +430,11 @@ BOOL u32_destroy(struct u32_window *w, UINT mode) {
    * every window of the connection in one step. Pending frame updates of a
    * closing window are discarded (u32_flush skips destroying windows). */
   w->damage.n = 0;
-  if (w->wire && !u32_exiting)
+  w->ping = 0;
+  if (w->wire && !u32_exiting) {
+    w->closing = 1;
     u32_wire(w, DESK_CLOSE, 0, 0, -1);
+  }
   u32_backend.drop_surface(&w->surface);
   struct w32r_reply r;
   BOOL ok = u32_directory(W32R_WINDOW_FREE, h, 0, 0, 0, "", 0, 0, &r, 0, 0);
@@ -694,9 +697,15 @@ HWND W32API SetParent(HWND h, HWND parent) {
   BOOL was_top = !w->parent;
   if (was_top && parent) {
     u32_destroy_paint(w);
+    /* q3exec3: as in u32_destroy, nothing names the old wire id after its
+     * DESK_CLOSE (no queued frame update, no PING answer). */
+    w->damage.n = 0;
+    w->ping = 0;
+    w->closing = 1;
     u32_wire(w, DESK_CLOSE, 0, 0, -1);
     u32_backend.drop_surface(&w->surface);
     w->wire = 0;
+    w->closing = 0;
   }
   w->parent = parent;
   if (!parent && !was_top && !u32_create_wire(w)) {

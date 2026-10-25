@@ -2721,26 +2721,36 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
     struct ciuki_surface_info info={0};
     if (i>=0) info=d->clients[i].info;
     struct desk_packet p;
-    /* q3exec2: a frame update (DAMAGE, PRESENT) is checked against its
-     * window's surface. One that names a window this desktop no longer has
-     * (closed, or dropped with its owner) or whose rectangle no longer fits
-     * that surface is a stale update and is refused alone. Dropping the
+    /* q3exec2/q3exec3: a per-window message is checked against the window
+     * it names. One that names a window this desktop no longer has (closed,
+     * dropped with its owner, or window/generation 0 after the program
+     * cleared its id) or a frame update whose rectangle no longer fits the
+     * window's surface is stale and is refused alone. Dropping the
      * connection for it removed every window of the program: the Quake III
      * Arena demo installer lost its background and every wizard page, whose
-     * DialogBoxParam then failed and was taken as Next. Only a packet that
-     * no surface could make valid still ends the connection. */
+     * DialogBoxParam then failed and was taken as Next (a DESK_PONG with
+     * window 0 in the QEMU run of main a347ca76b). A packet that no live
+     * window and surface could make valid, one from another sender, one
+     * carrying descriptors or one out of the HELLO order still ends the
+     * connection. */
     if (anchor->channel>=0 && anchor->hello && anchor->version==DESK_V3_VERSION &&
         m->sender_pid && (!anchor->pid || anchor->pid==m->sender_pid) && !m->fd_count &&
-        m->length>=16 && m->data[0]==DESK_V3_VERSION &&
-        (m->data[1]==DESK_DAMAGE || m->data[1]==DESK_V3_PRESENT) && !desk_parse(m,1,&info,&p)) {
+        m->length>=16 && m->data[0]==DESK_V3_VERSION && m->data[1]!=DESK_HELLO &&
+        !desk_parse(m,1,&info,&p)) {
         const struct ciuki_surface_info any={sizeof(any),CIUKI_SURFACE_DIMENSION_MAX,CIUKI_SURFACE_DIMENSION_MAX,
             CIUKI_SURFACE_DIMENSION_MAX*4,CIUKI_SURFACE_XRGB8888,CIUKI_SURFACE_MAX};
-        if (desk_parse(m,1,&any,&p)) {
+        struct ciuki_message named=*m;
+        if (!id || !generation) { desk_put32(named.data+8,id ? id : 1); desk_put32(named.data+12,generation ? generation : 1); }
+        if (desk_parse(&named,1,&any,&p)) {
             int error=i<0 ? -ENOENT : -EINVAL;
+            p.window_id=id; p.generation=generation;
             if (d->v3_stale_updates++<8)
                 fprintf(stderr,"[desktop] v3 stale update pid=%u opcode=%u window=%u generation=%u error=%d\n",
                     anchor->pid,p.opcode,id,generation,error);
-            if (p.request) v3_reply(d,peer,&p,error);
+            /* A RESULT must name a window (protocol.c): a request naming
+             * none is refused without one and the program's wait ends on
+             * its own timeout. */
+            if (p.request && id && generation) v3_reply(d,peer,&p,error);
             return error;
         }
     }

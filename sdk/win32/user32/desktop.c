@@ -50,7 +50,13 @@ BOOL u32_connect(void) {
   return 1;
 }
 BOOL u32_wire(struct u32_window *w, UINT op, const void *data, UINT n, int fd) {
-  if (!w || (!w->wire && op!=DESK_INPUT_SETTINGS) || !u32_connect())
+  /* q3exec3: every per-window message names a live wire id and generation.
+   * Once DESK_CLOSE is sent the desktop no longer has the window, and the
+   * DESK_CLOSED answer clears the id: nothing after the close may name it
+   * (a packet with window 0 ended the program's whole connection). */
+  if (!w || (!w->wire && op!=DESK_INPUT_SETTINGS) ||
+      (w->wire && !w->generation) || (w->closing && op != DESK_CLOSE) ||
+      !u32_connect())
     return 0;
   DWORD token =
       du3_request(&u32_desktop, op, w->wire, w->generation, data, n, fd);
@@ -121,8 +127,11 @@ BOOL u32_create_wire(struct u32_window *w) {
   w32_fill(data, 0, sizeof(data));
   desk_put32(data, u32_style(w));
   struct u32_window *owner = u32_window(w->owner);
-  if (owner) {
+  if (owner)
     owner = u32_root(owner);
+  /* q3exec3: an owner the desktop no longer has (closing, or no wire id)
+   * is not named; the window is created unowned there. */
+  if (owner && owner->wire && owner->generation && !owner->closing) {
     desk_put32(data + 4, owner->wire);
     desk_put32(data + 8, owner->generation);
   }
@@ -237,10 +246,16 @@ BOOL u32_place(struct u32_window *w) {
 }
 BOOL u32_order_wire(struct u32_window *w, HWND after, HWND owner, UINT flags) {
   if (!w->wire) return 1;
+  /* q3exec3: a window the desktop no longer has is never named: ordering
+   * after it is dropped, and it is no owner there. */
+  struct u32_window *named = U32_ORDER_SENTINEL(after) ? 0 : u32_window(after);
+  if ((flags & DESK_V3_ORDER_Z) && named && (!named->wire || named->closing))
+    flags &= ~DESK_V3_ORDER_Z;
+  if (!flags) return 1;
   uint8_t b[20] = {0};
   desk_put32(b, flags);
   if (flags & DESK_V3_ORDER_Z) {
-    struct u32_window *a = U32_ORDER_SENTINEL(after) ? 0 : u32_window(after);
+    struct u32_window *a = named;
     DWORD target = after == HWND_BOTTOM ? DESK_V3_ORDER_BOTTOM
                    : after == HWND_TOPMOST ? DESK_V3_ORDER_TOPMOST
                    : after == HWND_NOTOPMOST ? DESK_V3_ORDER_NOTOPMOST
@@ -250,6 +265,8 @@ BOOL u32_order_wire(struct u32_window *w, HWND after, HWND owner, UINT flags) {
   }
   if (flags & DESK_V3_ORDER_OWNER) {
     struct u32_window *o = u32_window(owner);
+    if (o && (!o->wire || !o->generation || o->closing))
+      o = 0;
     desk_put32(b + 12, o ? o->wire : 0);
     desk_put32(b + 16, o ? o->generation : 0);
   }
@@ -287,6 +304,13 @@ void u32_event(const struct desk_packet *p) {
       break;
     }
   if (!w) {
+    u32_event_release(p);
+    return;
+  }
+  /* q3exec3: DestroyWindow flushes the window's queue; while it runs, only
+   * the desktop's DESK_CLOSED answer still concerns the window (a PING
+   * taken here was answered after DESK_CLOSED had cleared the wire id). */
+  if (w->destroying && p->opcode != DESK_CLOSED) {
     u32_event_release(p);
     return;
   }
@@ -407,6 +431,7 @@ void u32_event(const struct desk_packet *p) {
     break;
   case DESK_CLOSED:
     w->wire = 0;
+    w->ping = 0;
     w->lease_wanted = 0;
     u32_display_event(w, p);
     break;
@@ -459,7 +484,10 @@ void u32_pump(void) {
   for (UINT i = 0; i < U32_WINDOWS; i++) {
     struct u32_window *w = &u32_windows[i];
     if (w->handle && w->tid == u32_tid() && w->ping) {
-      if (!du3_ui_progress(&u32_desktop, w->wire, w->generation, w->ping))
+      /* q3exec3: the answer names a live window, as u32_wire requires. */
+      if (!w->wire || !w->generation || w->destroying || w->closing)
+        w->ping = 0;
+      else if (!du3_ui_progress(&u32_desktop, w->wire, w->generation, w->ping))
         w->ping = 0;
     }
   }
