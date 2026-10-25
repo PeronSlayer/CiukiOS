@@ -20,6 +20,13 @@ static struct fat_volume volume;
 static unsigned char disk[BOOTLOG_LIMIT];
 static uint32_t disk_size, disk_position;
 static unsigned calls, turns, commits, truncations, publications;
+static unsigned batch_yields;
+void bootlog_host_yield(void)
+{
+    CHECK(!pthread_mutex_trylock(&ram_lock)); CHECK(!pthread_mutex_unlock(&ram_lock));
+    CHECK(!pthread_mutex_trylock(&fs.lock)); CHECK(!pthread_mutex_unlock(&fs.lock));
+    batch_yields++;
+}
 static uint32_t published_size;
 static int fail_seek, fail_write, fail_truncate,fail_commit;
 static bool short_write;
@@ -470,11 +477,13 @@ static void turn_budget(void)
     static char runtime[BOOTLOG_RAM];memset(runtime,'R',sizeof(runtime));
     bootlog_capture(prefix,sizeof(prefix));bootlog_capture_ring(runtime,sizeof(runtime));
     CHECK(!bootlog_activate(&fs,true,1));
+    batch_yields=0;
     CHECK(!bootlog_drain() && snapshot().writes==BOOTLOG_TURN_BLOCKS);
+    CHECK(batch_yields>=BOOTLOG_TURN_BLOCKS-1);
     CHECK(bootlog_due(model_now)); /* still due without advancing the clock */
     CHECK(!bootlog_drain() && !snapshot().queued);
     CHECK(!bootlog_shutdown());
-    puts("PASS bootlog budget: fixed four-block cap with frozen clock, pressure remains due on next turn below high water");
+    printf("PASS 101-a bootlog budget: four-block pressure drain, batch_yields=%u with no RAM/VFS lock, frozen clock, complete prefix/runtime stream drained\n",batch_yields);
 }
 static void request_during_commit(void)
 {

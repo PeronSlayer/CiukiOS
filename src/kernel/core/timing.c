@@ -89,8 +89,12 @@ void crit_end(void)
     if (!g_cpu_tsc || !crit_start)
         return;
     uint64_t end = rdtsc(), start = crit_start;
-    if (cpu_irqoff_end) cpu_irqoff_end(end);
+    uint64_t bounded = cpu_irqoff_end ? cpu_irqoff_end(end) : 0;
     uint64_t d = end - start, firmware = firmware_cycles - crit_firmware_start;
+    /* CPU budgets already accept these bounded, marked gaps (f2-96). Use
+     * that same evidence here. Adjacent probes may overlap phase marks;
+     * taking the larger credit is conservative and never counts twice. */
+    if (bounded > firmware && bounded <= d) firmware = bounded;
     if (firmware > d) firmware = 0;
     uint64_t work = d - firmware;
     if (work > crit_work_max) {

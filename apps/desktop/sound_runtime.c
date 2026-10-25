@@ -3,6 +3,7 @@
  * first frame. The worker owns WAV/audio I/O; the compositor only queues events
  * and reads completion, with no AUDIO_DRAIN or audio writes in its thread. */
 #include "desktop.h"
+#include "worker_role.h"
 #include "sounds.h"
 #include "sound_runtime.h"
 #include "sound_storage.h"
@@ -171,6 +172,7 @@ static int permitted(struct worker *w, int preview)
 }
 static void *worker(void *arg)
 {
+    desk_worker_role("sound");
     struct worker *w = arg;
     w->fd = w->mixer = -1; sound_tone(w->tone); reload(w,0);
     for (;;) {

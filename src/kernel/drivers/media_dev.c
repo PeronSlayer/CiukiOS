@@ -3,6 +3,7 @@
 #include <ciuki/files.h>
 #include <ciuki/storage.h>
 #include <ciuki/usb.h>
+#include <ciuki/media_events.h>
 
 /* fx-17b: the floppy platform is optional (no FDC, host tests). */
 bool floppy_drive_present(unsigned drive) __attribute__((weak));
@@ -14,15 +15,19 @@ static bool floppy_drive(unsigned d) { return d<2 && floppy_drive_present && flo
 int media_cd_devctl(struct process *p, struct storage *s, uint32_t op, uint32_t address, uint32_t bytes);
 /* fx-26: Windows 98 broadcasts WM_DEVICECHANGE (DBT_DEVICEARRIVAL,
  * DBT_DEVICEREMOVECOMPLETE) when a volume arrives or leaves; here every
- * change of the drive namespace (vfs.c/mount.c: a volume published or
- * withdrawn) bumps one serial and wakes poll(), and /dev/media is readable
- * until its description has read the state again. */
+ * drive publication/withdrawal, optical media transition or USB enumeration
+ * error bumps one serial and wakes poll(). /dev/media stays readable until
+ * its description has read the state again. */
 extern void net_input_changed(void) __attribute__((weak));
 static uint32_t media_serial = 1;
-void vfs_namespace_changed(void)
+void media_state_changed(void)
 {
     __atomic_fetch_add(&media_serial, 1u, __ATOMIC_RELEASE);
     if (net_input_changed) net_input_changed();
+}
+void vfs_namespace_changed(void)
+{
+    media_state_changed();
 }
 int media_poll_events(struct file_description *f)
 {

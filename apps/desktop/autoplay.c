@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "desktop.h"
+#include "worker_role.h"
 #include "autoplay.h"
 #include "shell_link.h"
 #include <errno.h>
@@ -42,6 +43,7 @@ static void budget_log(const struct ap_worker *w)
 }
 static void *autoplay_worker(void *arg)
 {
+    desk_worker_role("autoplay");
     struct ap_worker *w=arg;
     pthread_mutex_lock(&w->lock);
     for (;;) {

@@ -204,6 +204,7 @@ int shell_fcntl(int fd, int command, ...)
 static int media_available, media_error, media_query_error;
 static struct ciuki_media_state media_fixture;
 static struct ciuki_media_volume media_volumes[26];
+static struct ciuki_media_cd_state media_cd_fixture[4];
 static unsigned media_fixture_serial=1,media_observed_serial;
 #define MEDIA_FD 1002
 static int network_available, network_error;
@@ -217,7 +218,8 @@ static int mixer_available, mixer_error;
 /* fx-26: the kernel's per-description readiness (POLLIN until read). */
 static unsigned mixer_fixture_serial=1, mixer_observed_serial __attribute__((unused));
 #endif
-static int media_volume_error;
+static int media_volume_error, media_cd_error;
+static unsigned media_opens, media_closes;
 static int media_slow;
 static unsigned media_slow_queries;
 static pthread_t media_frame_thread;
@@ -240,7 +242,7 @@ static int poll_bridge, poll_snapshot, poll_equal;
 int shell_open(const char *path, int flags, ...)
 {
     if (media_available && !strcmp(path,"/dev/media")) {
-        assert(flags==(O_RDONLY|O_CLOEXEC)); POLL_OPEN(2); return MEDIA_FD;
+        assert(flags==(O_RDONLY|O_CLOEXEC)); media_opens++; POLL_OPEN(2); return MEDIA_FD;
     }
 #if defined(DESK_FOOTPRINT_TEST) || defined(DESK_POLL_LEDGER_TEST)
     if (mixer_available && !strcmp(path,"/dev/mixer")) {
@@ -260,7 +262,7 @@ int shell_open(const char *path, int flags, ...)
 }
 int shell_close(int fd)
 {
-    if (fd==MEDIA_FD) { POLL_CLOSE(2); return 0; }
+    if (fd==MEDIA_FD) { media_closes++; POLL_CLOSE(2); return 0; }
     if (fd==NETWORK_FD) { POLL_CLOSE(0); network_closes++; return 0; }
 #if defined(DESK_FOOTPRINT_TEST) || defined(DESK_POLL_LEDGER_TEST)
     if (fd==MIXER_FD) { POLL_CLOSE(1); return 0; }
@@ -398,12 +400,14 @@ int ciuki_devctl(int fd,uint32_t op,void *record,uint32_t size)
             *v=media_volumes[v->drive]; return 0;
         }
         if (op==MEDIA_CD_STATE) {
+            if (media_cd_error) { errno=EIO; return -1; }
             struct ciuki_media_cd_state *cd=record;
             assert(size==sizeof(*cd) && cd->version==CIUKI_MEDIA_CD_VERSION &&
                    cd->size==sizeof(*cd) && cd->slot<4);
             assert(!cd->present && !cd->state && !cd->generation && !cd->audio_ready &&
                    !cd->mounted && !cd->drive && !cd->reserved[0] && !cd->reserved[1] && !cd->reserved[2]);
-            /* This USB fixture has no ATAPI drive bound to any optical slot. */
+            if (media_cd_fixture[cd->slot].version) { *cd=media_cd_fixture[cd->slot]; return 0; }
+            /* By default no ATAPI drive is bound to any optical slot. */
             cd->state=CIUKI_CD_NO_MEDIUM;
             cd->drive=26;
             return 0;
@@ -1490,6 +1494,8 @@ int main(int argc,char **argv)
 {
     if (argc==2 && !strcmp(argv[1],"--g26c-path")) { test_g26c_path_queue();return 0; }
     if (argc==2 && !strcmp(argv[1],"--slow-media-panel")) { test_slow_media_panel(); return 0; }
+    if (argc==2 && !strcmp(argv[1],"--media-state-change")) { test_media_state_change(); return 0; }
+    if (argc==2 && !strcmp(argv[1],"--media-retry")) { test_media_retry(); return 0; }
     if (argc==2 && !strcmp(argv[1],"--late-media")) { test_late_media(); return 0; }
 #ifdef DESK_POLL_LEDGER_TEST
     if (argc==2 && !strcmp(argv[1],"--poll-handles")) { test_poll_handles(); return 0; }

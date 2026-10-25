@@ -78,6 +78,7 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -ffunction-sections -fdata-sections 
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -pthread \
     -I "$root/src/kernel/include" "$root/tests/host/serial_audio_test.c" "$root/src/kernel/lib/fmt.c" -o "$out/serial_audio_test"
 python3 -B -m unittest discover -s "$root/tests/host" -p test_kernel_latency.py
+python3 -B "$root/tests/host/test_general_speed.py"
 "$out/serial_audio_test"
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -pthread \
     -ffunction-sections -fdata-sections -Wl,--gc-sections \

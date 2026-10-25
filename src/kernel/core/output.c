@@ -6,6 +6,7 @@
 #include <ciuki/cpu.h>
 #include <ciuki/arch.h>
 #include <ciuki/task.h>
+#include <ciuki/cpustat.h>
 #include <ciuki/probe.h>
 #include <ciuki/bootlog.h>
 #include <ciuki/timing.h>
@@ -32,9 +33,22 @@ void kputs_raw(const char *s)
 }
 
 /* Periodic UART publications leave queue capacity reserved for evidence.
- * Disk priority is independent: klog_periodic summaries remain protected.
+ * Admitted periodic records retain their existing disk priority.
  * Boot/event logs wait in task context; IRQ/early publications never sleep
  * or poll the UART. Console work follows the bounded serial publication. */
+static bool periodic_statistic(const char *line)
+{
+    /* Only known performance statistics are opt-in. Unknown producers and
+     * driver/error/configuration records retain their existing protection. */
+    static const char *const prefixes[]={"[cpu] ","[sched] ","[mem] ",
+        "[kernel] irqoff","[kernel] stretch_","[kernel] long_paths", "[kernel] pic_mask",
+        "[kernel] bootlog","[kernel] smi count=","[kernel] smi_coincide",
+        "[ec] thinkpad ","[storage] queue", "[storage] vfs_contention",
+        "[pager] stats",NULL};
+    for (unsigned i=0;prefixes[i];i++)
+        if (!strncmp(line,prefixes[i],strlen(prefixes[i]))) return true;
+    return false;
+}
 static void log_line(const char *fmt, va_list ap, bool periodic, bool verbose)
 {
     char buf[256];
@@ -43,6 +57,12 @@ static void log_line(const char *fmt, va_list ap, bool periodic, bool verbose)
         n = sizeof(buf) - 2;
     buf[n] = '\n';
     buf[n + 1] = 0;
+    /* A tiny periodic tail still rewrites a whole aligned 32 KiB log batch.
+     * Suppress it before every sink in ordinary boots, except an admitted
+     * CPU/watchdog diagnostic window. Logged/test boots keep all records. */
+    if (periodic && !verbose && periodic_statistic(buf) &&
+        !(g_boot.flags & (CBI_F_VERBOSE|CBI_F_DIAG_VERBOSE|CBI_F_TEST_REQUEST)) &&
+        !(cpu_diagnostic_active && cpu_diagnostic_active())) return;
     if (ledger_lifecycle) ledger_lifecycle(buf,(size_t)n);
     if (blackbox_capture) blackbox_capture(buf,(size_t)n+1);
     if (verbose) bootlog_capture_verbose(buf, (size_t)n + 1);

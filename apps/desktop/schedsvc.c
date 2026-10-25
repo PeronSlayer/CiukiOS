@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 #include "schedsvc.h"
+#include "worker_role.h"
 #include "desktop.h"
 #include "../systools/systools.h"
 #include <errno.h>
@@ -229,6 +230,7 @@ static void desktop_failed(void *ctx, const char *program, int error)
 }
 static void *worker(void *arg)
 {
+    desk_worker_role("scheduler");
     struct desk_schedsvc *s = arg;
     pthread_mutex_lock(&s->lock);
     while (!s->stopping) {

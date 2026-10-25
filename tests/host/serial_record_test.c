@@ -143,7 +143,8 @@ static void saturated_producers(void)
     }
     reset_uart(true);fill_queue(false);
     klog("Ciuki VMM F0 build early - CiukiOS");CHECK(!uart_dropped && !evidence_sleeps);
-    klog_periodic("[cpu] early periodic must drop");CHECK(uart_dropped==1);drain_uart();
+    g_boot.flags=CBI_F_VERBOSE;
+    klog_periodic("[cpu] early periodic must drop");CHECK(uart_dropped==1);drain_uart();g_boot.flags=0;
     CHECK(strstr(emitted,"Ciuki VMM F0 build early - CiukiOS\r\n") && !strstr(emitted,"periodic"));
     puts("serial saturated output: boot milestones/evidence/probe DATA use reserved capacity or IRQ-woken wait queue; only periodic records dropped; early boot protected PASS");
 }
@@ -189,6 +190,7 @@ static void blackbox_publication(void)
 }
 int main(void)
 {
+    setvbuf(stdout,NULL,_IONBF,0);
     blackbox_publication();
     saturated_producers();
     evidence_sequence();

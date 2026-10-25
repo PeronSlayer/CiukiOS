@@ -256,6 +256,9 @@ static uint64_t ata_command_clock(void) { return (uint64_t)++ata_stamp_reads*100
 #undef ktime_cycles
 #include "../../src/kernel/drivers/blkpart.c"
 #include "../../src/kernel/drivers/ata_probe.c"
+#include <ciuki/media_events.h>
+static unsigned media_notifications;
+void media_state_changed(void) { media_notifications++; }
 #include "../../src/kernel/drivers/optical.c"
 #include "../../src/kernel/drivers/optical_cd.c"
 /* f5-12B2 CD-audio devctls (media_cd.c) against a flat fake user space. */

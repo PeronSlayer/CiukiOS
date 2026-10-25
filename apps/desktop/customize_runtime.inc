@@ -81,6 +81,7 @@ static int custom_open_path(const char *path)
 }
 static void *custom_thread(void *arg)
 {
+    desk_worker_role("customize");
     struct custom_worker *w=arg;
     for (;;) {
         pthread_mutex_lock(&w->lock);

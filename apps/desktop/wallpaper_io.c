@@ -2,6 +2,7 @@
  * Wallpaper disk/cache operations and asynchronous frame ownership. */
 #define _POSIX_C_SOURCE 200809L
 #include "wallpaper_io.h"
+#include "worker_role.h"
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -327,6 +328,7 @@ int desk_wall_prepare(const struct desk_wall_request *r, const char *dir, uint32
 { return wall_prepare(r,dir,out,hit,stage,NULL,NULL); }
 static void *wall_worker(void *arg)
 {
+    desk_worker_role("wallpaper");
     struct desk_wall_worker *w=arg;
     wall_activity(w,"mailbox-lock"); pthread_mutex_lock(&w->lock);
     for (;;) {

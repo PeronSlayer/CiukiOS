@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #define _POSIX_C_SOURCE 200809L
 #include "settings_io.h"
+#include "worker_role.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -46,6 +47,7 @@ int cfg_write_file(struct cfg_writer *w,const char *text,size_t n)
 { return cfg_write_at(w->path,w->temporary,text,n); }
 static void *worker(void *arg)
 {
+    desk_worker_role("settings");
     struct cfg_writer *w=arg;
     /* Heap scratch: CFG_TEXT_MAX can exceed the native stack frame budget. */
     char *text=w->scratch;

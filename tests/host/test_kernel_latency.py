@@ -379,6 +379,8 @@ static void test_irq_restore(uint32_t f) {
                 ('kernel_latency_test.c', []),
                 ('jitter_collector_latency_test.c', []),
                 ('scheduler_irqoff_test.c', []),
+                ('general_speed_stats_test.c', []),
+                ('general_speed_irqoff_test.c', []),
                 ('scheduler_priorities_test.c', []),
                 ('control_display_wait_test.c', ['apps/control/display.c']),
                 ('timer_audio_load_test.c', []),

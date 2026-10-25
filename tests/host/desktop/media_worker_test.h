@@ -77,7 +77,10 @@ static void test_late_media(void)
         if (fd>=0 && __atomic_load_n(&media_observed_serial,__ATOMIC_ACQUIRE)!=
                       __atomic_load_n(&media_fixture_serial,__ATOMIC_ACQUIRE)) {
             watch_result(&d,-1,POLLIN);wakes++;
-        }
+        } else if (fd>=0) watch_result(&d,-1,0);
+        /* 101-a: even a frequent shell/network refresh cannot rescan all
+         * drives while the native media watch reports no state change. */
+        d.sh.want_reload|=32;
 #if defined(DESK_FOOTPRINT_TEST) || defined(DESK_POLL_LEDGER_TEST)
         if (mixer_watch_fd(&d)>=0) {
             int ready=mixer_observed_serial!=mixer_fixture_serial ? POLLIN : 0;
@@ -93,6 +96,11 @@ static void test_late_media(void)
     assert(d.sh.media.removable_mask==(1u<<4) && d.sh.media.generation[4]==495);
     assert(media_worker.requested==2 && media_observed_serial==media_fixture_serial);
     assert(media_watch_fd(&d)>=0); /* idle and acknowledged: subsequent poll can sleep */
+    static const int failures[]={POLLNVAL,POLLERR,POLLHUP};
+    for (unsigned i=0;i<sizeof(failures)/sizeof(failures[0]);i++) {
+        media_events=1; watch_result(&d,-1,failures[i]);
+        assert(media_events==0 && media_watch_fd(&d)<0); /* bounded fallback, no error-ready spin */
+    }
 #if defined(DESK_FOOTPRINT_TEST) || defined(DESK_POLL_LEDGER_TEST)
     assert(mixer_wakes==1 && mixer_queries==initial_mixer_queries+2);
     assert(mixer_observed_serial==mixer_fixture_serial);mixer_available=0;
@@ -100,4 +108,94 @@ static void test_late_media(void)
     observers_close(&d);media_slow=0;media_available=0;desk_render_release(&d);free(d.sh.icons);fake_reset();
     printf("PASS T23 desktop media: +1615 ms E arrival, 25 ms queries, %u service turns, wakes=%u, requests=2, max_service_us=%llu, media/mixer readiness consumed\n",
         frames,wakes,(unsigned long long)(max/1000));
+}
+
+/* Complete one real worker request without submitting another request. */
+static void media_retry_collect(struct desktop *d)
+{
+    for (unsigned i=0;i<3000;i++) {
+        pthread_mutex_lock(&media_worker.lock);
+        int ready=media_worker.ready && media_worker.completed==media_worker.requested;
+        pthread_mutex_unlock(&media_worker.lock);
+        if (ready) { media_poll(d); return; }
+        struct timespec pause={.tv_nsec=1000000};nanosleep(&pause,NULL);
+    }
+    assert(!"media retry worker timeout");
+}
+static void test_media_retry(void)
+{
+    /* GET_STATE, a volume query and a CD query can each close the watch. */
+    for (unsigned failure=0;failure<3;failure++) {
+        static struct desktop d;
+        fake_reset();desk_init(&d,&fake_ops,640,480);desk_shell_enable(&d);
+        media_available=1;media_query_error=media_volume_error=media_cd_error=0;
+        media_fixture=(struct ciuki_media_state){.version=CIUKI_MEDIA_VERSION,.size=sizeof(media_fixture)};
+        memset(media_volumes,0,sizeof(media_volumes));media_events=-1;
+        assert(media_read(&d));media_retry_collect(&d);
+        assert(media_watch_fd(&d)>=0);watch_result(&d,-1,0);assert(media_events==1);
+        if (failure==0) media_query_error=1;
+        else if (failure==1) media_volume_error=1;
+        else media_cd_error=1;
+        unsigned closed=media_closes,opened=media_opens;
+        watch_result(&d,-1,POLLIN);shell_service(&d);media_retry_collect(&d);
+        assert(media_watch_fd(&d)<0 && media_closes==closed+1);
+        assert(media_events==-1); /* the closed watch no longer confirms readiness support */
+        unsigned requested=media_worker.requested;
+        media_query_error=media_volume_error=media_cd_error=0;
+        /* The normal two-second timer supplies this request; no explicit rescan. */
+        assert(!media_worker.rescan);
+        d.sh.network_poll_ns=d.now_ns;d.now_ns+=2000000000ull;desk_shell_tick(&d);
+        assert(d.sh.want_reload&32);shell_service(&d);
+        assert(media_worker.requested==requested+1);media_retry_collect(&d);
+        assert(media_opens==opened+1 && media_watch_fd(&d)>=0);
+        watch_result(&d,-1,0);assert(media_events==1);
+        requested=media_worker.requested;d.sh.want_reload|=32;shell_service(&d);
+        assert(media_worker.requested==requested); /* steady state stays event-driven */
+        /* A descriptor must exist even if stale confirmation survived its closure. */
+        int fd=__atomic_exchange_n(&media_worker.fd,-1,__ATOMIC_ACQ_REL);
+        d.sh.want_reload|=32;shell_service(&d);
+        assert(media_worker.requested==requested+1);media_retry_collect(&d);
+        assert(__atomic_load_n(&media_worker.fd,__ATOMIC_ACQUIRE)==fd);
+        observers_close(&d);media_available=0;desk_render_release(&d);free(d.sh.icons);fake_reset();
+    }
+    puts("PASS media retry: state/volume/CD query failure closes watch, timer reopens it, steady timer suppressed, live descriptor required");
+}
+
+/* Kernel producer coverage lives in atapi_test.inc/fx21_test.c. This consumer
+ * replay changes only CD/error state: the mounted drive snapshot stays empty. */
+static void test_media_state_change(void)
+{
+    static struct desktop d;
+    static const struct fm_vfs audio_fs={0};
+    fake_reset();desk_init(&d,&fake_ops,640,480);desk_shell_enable(&d);
+    media_available=1;media_query_error=media_volume_error=media_cd_error=0;
+    media_fixture=(struct ciuki_media_state){.version=CIUKI_MEDIA_VERSION,.size=sizeof(media_fixture)};
+    memset(media_volumes,0,sizeof(media_volumes));memset(media_cd_fixture,0,sizeof(media_cd_fixture));
+    media_events=-1;assert(media_read(&d));media_retry_collect(&d);
+    assert(media_watch_fd(&d)>=0);watch_result(&d,-1,0);assert(media_events==1);
+    struct ciuki_media_state namespace_before=media_fixture;
+    for (unsigned arrival=0;arrival<2;arrival++) {
+        media_cd_fixture[1]=(struct ciuki_media_cd_state){.version=CIUKI_MEDIA_CD_VERSION,.size=sizeof(media_cd_fixture[1]),
+            .slot=1,.present=1,.state=arrival ? CIUKI_CD_NO_MEDIUM : CIUKI_CD_READY,
+            .audio_ready=!arrival,.generation=42+arrival,.drive=26};
+        __atomic_add_fetch(&media_fixture_serial,1,__ATOMIC_RELEASE);
+        assert(media_watch_fd(&d)>=0);watch_result(&d,-1,POLLIN);shell_service(&d);
+        d.autoplay_fs=&audio_fs;media_retry_collect(&d);d.autoplay_fs=NULL;
+        assert(d.sh.autoplay.cd_seen[1]==(arrival ? 0u : 42u));
+        assert(!!(d.sh.autoplay.cd_waiting&(1u<<1))==!arrival);
+        assert(!memcmp(&namespace_before,&d.sh.media,sizeof(namespace_before)));
+    }
+    media_fixture.usb_unrecognized++;
+    __atomic_add_fetch(&media_fixture_serial,1,__ATOMIC_RELEASE);
+    watch_result(&d,-1,POLLIN);shell_service(&d);media_retry_collect(&d);
+    assert(d.sh.media.usb_unrecognized==1 && d.sh.notification.active);
+    assert(!strcmp(d.sh.notification.title,"USB Device Not Recognized"));
+    media_fixture.usb_unrecognized=0;
+    assert(!memcmp(&namespace_before,&media_fixture,sizeof(namespace_before)));
+    unsigned requested=media_worker.requested;
+    watch_result(&d,-1,0);d.sh.want_reload|=32;shell_service(&d);
+    assert(media_worker.requested==requested);
+    observers_close(&d);media_available=0;memset(media_cd_fixture,0,sizeof(media_cd_fixture));
+    desk_render_release(&d);free(d.sh.icons);fake_reset();
+    puts("PASS media non-namespace changes: audio-only CD arrival/removal reaches AutoPlay, USB error raises warning, steady state submits no scan");
 }

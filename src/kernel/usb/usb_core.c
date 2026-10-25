@@ -6,6 +6,7 @@
 #include <ciuki/input.h>
 #include <ciuki/init.h>
 #include <ciuki/smi.h>
+#include <ciuki/media_events.h>
 /* Standalone storage-only host models omit HID support. */
 #pragma weak usb_identity_serial
 #ifndef CIUKI_USB_HOST
@@ -922,6 +923,8 @@ static void unrecognized(struct usb_host *h, unsigned root, unsigned parent, uns
     if (!h->ready || h->quarantined || h->quiescing ||
         !(h->ops->port_status(h, root) & USB_PORT_CONNECTED)) return;
     uint32_t count = __atomic_add_fetch(&unrecognized_devices, 1, __ATOMIC_RELAXED);
+    /* Failed enumeration publishes no volume, but the desktop warning changed. */
+    media_notify_changed();
     klog("[usb] unrecognized controller=%s port=%u parent=%u reason=%s count=%u notify=desktop tick=%llu",
          h->owner, port + 1, parent, reason, count, (unsigned long long)h->io.now(h->io.cookie));
 }

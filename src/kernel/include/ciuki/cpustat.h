@@ -4,6 +4,9 @@
 #include <stddef.h>
 #include <ciuki/task.h>
 void cpu_init(void);
+/* True only while publishing an admitted diagnostic window, including a
+ * forced watchdog dump. Periodic producers outside it remain opt-in. */
+bool cpu_diagnostic_active(void) __attribute__((weak));
 enum cpu_irqoff_phase { CPU_IRQOFF_NONE, CPU_IRQOFF_PICK, CPU_IRQOFF_FPU,
     CPU_IRQOFF_ADDRESS, CPU_IRQOFF_LDT_DEBUG, CPU_IRQOFF_VM_ENTER, CPU_IRQOFF_OTHER,
     /* f1-94: finer scheduler phases, the resumed caller, the IRQ path and
@@ -20,7 +23,9 @@ static inline bool cpu_irqoff_bounded(enum cpu_irqoff_phase p)
 /* IF-clear scalar accounting only; the cpustat task publishes the maximum
  * once per window. timing.c supplies its existing section boundary stamps. */
 void cpu_irqoff_begin(uint64_t start,uint32_t site) __attribute__((weak));
-void cpu_irqoff_end(uint64_t end) __attribute__((weak));
+/* Return measured bounded-phase stall cycles for timing.c as well as CPU
+ * accounting. Unmarked tails and arbitrary handler/caller code return no credit. */
+uint64_t cpu_irqoff_end(uint64_t end) __attribute__((weak));
 void cpu_irqoff_mark(enum cpu_irqoff_phase) __attribute__((weak));
 void cpu_irqoff_tasks(const struct task *,const struct task *) __attribute__((weak));
 uint64_t cpu_path_clock(void) __attribute__((weak));
