@@ -463,6 +463,42 @@ class NetworkTests(unittest.TestCase):
                 self.assertTrue(retries and int(retries[1])>0,result.stderr)
             self.browser("/fx24/many.html",mode="browser-socket-limit",scheme="https",inspect=inspect,extra_env={"CIUKI_FIXTURE_SITE":site})
 
+    def test_images_fetched_once_with_slow_ui_turns(self):
+        """t23-render, T23 trial c42f556e: an encyclopedia main page made 49
+        fetches and never appeared; 18 of the fetches were its thumbnails a
+        second time. The parser fetches an img element's image when the
+        element is inserted (dom_event.c); box construction, 10 elements per
+        UI turn, reached the same element seconds later and fetched it again:
+        the thumbnail URLs carry a query and no explicit expiry, so the
+        completed first response was not reusable (llcache). With UI turns
+        of 20 ms (the trial's were about 100 ms) and 1,500 elements before
+        twelve such images, each image must be fetched once, the box must
+        take the parser's fetch, and box construction must run in a few
+        slices of at most CIUKI_BOX_SLICE_NS model time, not 150."""
+        import re
+        with tempfile.TemporaryDirectory(dir=OUT) as site:
+            image=(HERE / "fixtures/fx24/disc.png").read_bytes()
+            names=[f"thumb{i:02d}.png" for i in range(12)]
+            for name in names:(Path(site) / name).write_bytes(image)
+            (Path(site) / "main.html").write_text("<!doctype html><title>Main</title><h1>Ciuki</h1><p>"+"<i>w</i>"*1500+"</p>"+
+                "".join(f'<img src="{name}?utm_source=ciuki&amp;utm_content=thumbnail" width="20" height="20" alt="{name}">' for name in names))
+            def inspect(result):
+                records=self.fetch_records(result)
+                for name in names:
+                    # Records name the path only (privacy: no query).
+                    done=[line for line in records if f"/fx24/{name} stage=done code=200 " in line]
+                    self.assertEqual(len(done),1,name+"\n"+"\n".join(records))
+                exit_line=re.search(r"\[netsurf\] exit reason=\S+ .* box_slices=(\d+) box_elements=(\d+) box_slice_max_us=(\d+) image_reuse=(\d+) ",result.stderr)
+                self.assertIsNotNone(exit_line,result.stderr)
+                slices,elements,slice_max,reuse=map(int,exit_line.groups())
+                print(f"slow-ui page: box_slices={slices} box_elements={elements} box_slice_max_us={slice_max} image_reuse={reuse}",flush=True)
+                self.assertGreaterEqual(reuse,len(names))
+                self.assertGreaterEqual(elements,1500)
+                self.assertLessEqual(slices,elements//10//5)
+                # One 10-element step past the budget at most (model time).
+                self.assertLess(slice_max,12000)
+            self.browser("/fx24/main.html",mode="browser-slow-ui",scheme="https",inspect=inspect,extra_env={"CIUKI_FIXTURE_SITE":site})
+
     def test_navigation_during_blocked_lookup(self):
         self.browser("/",mode="browser-blocked",host="blocked.example",expected="fixture_navigation_blocked=1 completed=1 late_ignored=1")
 

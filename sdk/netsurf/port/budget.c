@@ -106,3 +106,17 @@ bool ciuki_layout_end(struct ciuki_layout_span span,bool accepted)
 }
 enum ciuki_layout_cause ciuki_layout_last_cause(void) { return last_cause; }
 uint64_t ciuki_layout_last_ns(void) { return last_ns; }
+uint64_t ciuki_box_slices, ciuki_box_elements, ciuki_box_slice_max_ns;
+unsigned ciuki_speculative_adoptions;
+struct ciuki_box_slice ciuki_box_slice_begin(void) { return (struct ciuki_box_slice){ .start=now() }; }
+bool ciuki_box_slice_expired(const struct ciuki_box_slice *slice)
+{
+    uint64_t t=now();
+    return t==UINT64_MAX || charged(t>=slice->start?t-slice->start:0)>=CIUKI_BOX_SLICE_NS;
+}
+void ciuki_box_slice_end(const struct ciuki_box_slice *slice, uint32_t elements)
+{
+    uint64_t t=now(),elapsed=charged(t!=UINT64_MAX && t>=slice->start?t-slice->start:0);
+    if(elapsed>ciuki_box_slice_max_ns)ciuki_box_slice_max_ns=elapsed;
+    ciuki_box_slices++; ciuki_box_elements+=elements;
+}

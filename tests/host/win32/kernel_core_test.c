@@ -487,6 +487,74 @@ static void test_loader_shared_alias(void)
     CHECK(!pages_used && !g_user_mappings && heap_blocks==1);
     puts("w32 loader: shared alias refusal, later writable extent, immutable snapshot across serialization/hash PASS");
 }
+#include "../../../src/kernel/proc/win32/counter.c"
+static uint64_t shared_cycles(void) { return __builtin_ia32_rdtsc(); }
+static unsigned shared_extents(const struct uaddr *u)
+{ unsigned n=0; for(const struct ua_extent *e=u->head;e;e=e->next)n++; return n; }
+/* What the tick did before t23-render for one live Win32 process
+ * (counter.c w32_shared_update at 50a843517): one ua_range, one ua_read
+ * and three ua_write calls on CIUKI_W32_SHARED. */
+static void shared_old_update(struct process *p)
+{
+    struct ciuki_w32_shared data;
+    CHECK(ua_range(p->memory,CIUKI_W32_SHARED,sizeof(data),PROT_READ));
+    CHECK(!ua_read(p->memory,&data,CIUKI_W32_SHARED,sizeof(data)));
+    CHECK(!ua_write(p->memory,CIUKI_W32_SHARED,&data.sequence,4));
+    CHECK(!ua_write(p->memory,CIUKI_W32_SHARED+4,(uint8_t *)&data+4,sizeof(data)-4));
+    CHECK(!ua_write(p->memory,CIUKI_W32_SHARED,&data.sequence,4));
+}
+/* t23-render, trial c42f556e: with the Quake III installer running, one
+ * shared tick took 1.0-1.08 ms on device-work ([work] budget exceeded
+ * site=shared_tick_work) and device-work held 274-342 permille. Every Win32
+ * process maps the same frame (w32_shared_map); the tick now publishes it
+ * once, through the direct map, without walking any process's extents. */
+static void test_shared_tick(void)
+{
+    struct process *a,*b;
+    struct proc_thread *ta=object_process(proc_supervisor(),&a),*tb=object_process(proc_supervisor(),&b);
+    CHECK(ta && tb && w32_shared_frame);
+    g_current=ta->task; ta->task->state=T_RUNNING;
+    /* An installer-sized address space beside two small ones. */
+    for(unsigned i=0;i<1500;i++){
+        struct ciuki_w32_vm r=request(0x20000000u+i*0x20000u,0x10000,W32_MEM_RESERVE,W32_PAGE_READWRITE);
+        CHECK(!w32_vm_alloc(a->memory,&r));
+    }
+    unsigned extents=shared_extents(a->memory),small=shared_extents(b->memory);
+    CHECK(extents>1500);
+    unsigned before=walk_work; uint64_t t0=shared_cycles();
+    shared_old_update(a); shared_old_update(b);
+    uint64_t old_cycles=shared_cycles()-t0; unsigned old_steps=walk_work-before;
+    CHECK(old_steps>=5*1500);
+    g_ticks+=5;
+    before=walk_work; t0=shared_cycles();
+    w32_shared_tick();
+    uint64_t new_cycles=shared_cycles()-t0;
+    CHECK(walk_work==before && !a->memory->pins && !b->memory->pins);
+    struct ciuki_w32_shared seen_a,seen_b;
+    CHECK(!ua_read(a->memory,&seen_a,CIUKI_W32_SHARED,sizeof(seen_a)));
+    CHECK(!ua_read(b->memory,&seen_b,CIUKI_W32_SHARED,sizeof(seen_b)));
+    uint64_t interrupt=((uint64_t)seen_a.interrupt_hi<<32)|seen_a.interrupt_lo;
+    uint64_t system=((uint64_t)seen_a.system_hi<<32)|seen_a.system_lo;
+    struct ciuki_timespec wall; CHECK(!file_clock_now(CLOCK_REALTIME,0,&wall));
+    CHECK(!memcmp(&seen_a,&seen_b,sizeof(seen_a)) && !(seen_a.sequence&1));
+    CHECK(seen_a.tick==(uint32_t)g_ticks && interrupt==g_ticks*10000);
+    CHECK(system/10000000==(uint64_t)wall.tv_sec+11644473600ULL);
+    uint32_t sequence=seen_a.sequence; g_ticks++;
+    w32_shared_tick();
+    CHECK(!ua_read(b->memory,&seen_b,CIUKI_W32_SHARED,sizeof(seen_b)) && seen_b.sequence==sequence+2 && seen_b.tick==(uint32_t)g_ticks);
+    /* The page stays published while any Win32 process maps it, and its
+     * frame is forgotten before the last unmap frees it. */
+    stop_collect(a);
+    CHECK(w32_shared_frame);
+    w32_shared_tick();
+    CHECK(!ua_read(b->memory,&seen_b,CIUKI_W32_SHARED,sizeof(seen_b)) && seen_b.sequence==sequence+4);
+    stop_collect(b);
+    CHECK(!w32_shared_frame);
+    w32_shared_tick();
+    CHECK(!pages_used && !g_user_mappings && heap_blocks==1);
+    printf("w32 shared tick: extents=%u+%u old_walk_steps=%u old_host_cycles=%llu new_walk_steps=0 new_host_cycles=%llu PASS\n",
+           extents,small,old_steps,(unsigned long long)old_cycles,(unsigned long long)new_cycles);
+}
 #ifdef W32_KERNEL_BRIDGE
 #define main kernel_mechanism_main
 #endif
@@ -504,6 +572,6 @@ int main(int argc, char **argv)
         free(parsed);free(b.data);return 0;
     }
     ram=calloc(HOST_PAGES,PAGE_SIZE);CHECK(ram);controller.state=T_RUNNING;g_current=&controller;
-    test_memory();test_records();test_fpu();test_context();test_spawn_exceptions();test_objects_sections();test_loader_shared_alias();
+    test_memory();test_records();test_fpu();test_context();test_spawn_exceptions();test_objects_sections();test_loader_shared_alias();test_shared_tick();
     CHECK(!pages_used&&!g_user_mappings&&heap_blocks==1);printf("w32 core: checks=%u PASS\n",checks);free(ram);return 0;
 }

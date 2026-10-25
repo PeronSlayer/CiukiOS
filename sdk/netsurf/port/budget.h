@@ -56,4 +56,19 @@ void ciuki_ui_keepalive(void);
 /* Cause and duration of the most recent ciuki_layout_end. */
 enum ciuki_layout_cause ciuki_layout_last_cause(void);
 uint64_t ciuki_layout_last_ns(void);
+/* t23-render: box construction (box_construct.c convert_xml_to_box) runs
+ * in slices of CIUKI_BOX_SLICE_NS budget time (charged like layouts, so host
+ * tests see the T23 slice), checked every 10 elements, instead of 10
+ * elements per slice; each slice costs a UI turn (one scheduler callback
+ * per turn, gui.c). Half of a 60 Hz frame: input and the desktop's PING
+ * still get a turn many times a second. */
+#define CIUKI_BOX_SLICE_NS 8000000u
+struct ciuki_box_slice { uint64_t start; };
+struct ciuki_box_slice ciuki_box_slice_begin(void);
+bool ciuki_box_slice_expired(const struct ciuki_box_slice *slice);
+void ciuki_box_slice_end(const struct ciuki_box_slice *slice, uint32_t elements);
+extern uint64_t ciuki_box_slices, ciuki_box_elements, ciuki_box_slice_max_ns;
+/* t23-render: box constructions that took the parser's earlier fetch of the
+ * same image (html/object.c) instead of fetching it again. */
+extern unsigned ciuki_speculative_adoptions;
 #endif

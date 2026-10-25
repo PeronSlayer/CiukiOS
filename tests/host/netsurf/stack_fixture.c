@@ -54,11 +54,15 @@ static struct peer peers[16];
 /* fx-24: the styled-page fixture (fixtures/fx24, CIUKI_FIXTURE_SITE) as a
  * web server sends it: HTML, CSS and SVG gzip-encoded with a length,
  * images chunked, each with its media type; anything else is a 404. */
-static void site_response(struct peer *p,const char *name)
+static void site_response(struct peer *p,const char *request_name)
 {
     static const char *const types[][2]={{".html","text/html; charset=utf-8"},{".css","text/css"},{".svg","image/svg+xml"},
         {".png","image/png"},{".jpg","image/jpeg"},{".gif","image/gif"},{".webp","image/webp"}};
     const char *site=getenv("CIUKI_FIXTURE_SITE"),*type=NULL;
+    /* t23-render: a query names the same file, as the encyclopedia's
+     * thumbnail URLs (?utm_source=...) do; no explicit expiry is sent. */
+    char name[1024];snprintf(name,sizeof(name),"%s",request_name);
+    char *query=strchr(name,'?');if(query)*query=0;
     for(unsigned i=0;i<sizeof(types)/sizeof(*types);i++){
         size_t n=strlen(name),m=strlen(types[i][0]);
         if(n>m && !strcmp(name+n-m,types[i][0]))type=types[i][1];

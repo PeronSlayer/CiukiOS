@@ -113,8 +113,12 @@ int __wrap_clock_gettime(clockid_t clock,struct timespec *out)
     return r;
 }
 bool __real_nsfb_event(nsfb_t *,nsfb_event_t *,int);
+/* t23-render browser-slow-ui: every UI turn takes 20 ms, as NetSurf's turns
+ * did on the T23 trial c42f556e (about 100 ms) while the network kept up. */
+static bool slow_ui;
 bool __wrap_nsfb_event(nsfb_t *fb,nsfb_event_t *event,int timeout)
 {
+    if(slow_ui){struct timespec turn={0,20000000};nanosleep(&turn,NULL);}
     if((blocked || reload_entropy || budget) && !capture_held){
         assert(ciuki_capture_path);capture_path=ciuki_capture_path;ciuki_capture_path=NULL;capture_held=true;
         __real_clock_gettime(CLOCK_MONOTONIC,&lookup_started);
@@ -210,6 +214,9 @@ int __wrap_main(int argc,char **argv)
     /* fx-11: a small page's layout is charged roughly 0.1-2 s here: over the
      * 75 ms sub-resource limit, under the 10 s top-level document limit. */
     if(!strcmp(mode,"browser-document"))ciuki_layout_clock_scale=20000;
+    /* t23-render: slow UI turns, budgets charged on the T23 model (32x). */
+    slow_ui=!strcmp(mode,"browser-slow-ui");
+    if(slow_ui)ciuki_layout_clock_scale=32;
     const char *cert=getenv("CIUKI_FIXTURE_CERT"),*key=getenv("CIUKI_FIXTURE_KEY");
     blocked=!strcmp(mode,"browser-blocked");fixture_begin(mode,cert?cert:"-",key?key:"-");
     int result=__real_main(argc,argv);

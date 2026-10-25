@@ -540,12 +540,10 @@ void proc_init(void)
     task_start(supervisor_task);
 }
 
-extern void w32_shared_update(struct process *) __attribute__((weak));
+extern void w32_shared_publish(void) __attribute__((weak));
 void w32_shared_tick(void)
 {
-    if (!w32_shared_update) return;
-    for (unsigned i = 1; i < CIUKI_PROCESS_MAX; i++) {
-        struct process *p = processes[i];
-        if (p && p->state == PROC_LIVE && p->personality == PROC_WIN32) w32_shared_update(p);
-    }
+    /* One page shared by every Win32 process (win32/counter.c): published
+     * once per tick, not once per process. */
+    if (w32_shared_publish) w32_shared_publish();
 }
