@@ -1629,3 +1629,37 @@ three runs. Not covered by host replay: the demo's video start (UniVBE's
 in the runner it reports "Generic VGA, 256 Kb", and whether UniVBE accepts
 the VM's VBE 2.0 linear-only modes is open) and its sound, which need the
 QEMU/T23 DOS Box.
+
+**Saved-image review fixes (2026-10-25).** Rechecked the primary sources:
+[Chen's Windows 95 implementation account](https://devblogs.microsoft.com/oldnewthing/20160411-00/?p=93281),
+[DPMI 0.9 sections 2.3 and 17](https://www.phatcode.net/res/262/files/dpmi09.html),
+and Intel SDM [Vol. 2B, POPF/POPFD](https://cdrdv2.intel.com/v1/dl/getContent/671241)
+and [Vol. 3B, single-step exception condition, section 20.3.1.4](https://cdrdv2.intel.com/v1/dl/getContent/671427).
+POPF can load TF while leaving IF unchanged at CPL 3/IOPL 0; its debug
+trap follows the next instruction. These sources justify the existing
+Windows 95 compatibility technique. The ownership bookkeeping below is
+CiukiOS's implementation rule, not a documented Windows nesting algorithm:
+
+- Prune old owners before planting a replacement TF. Two SS selectors can
+  alias the same bytes; cleanup after planting can mistake the replacement
+  for the abandoned image and erase its TF.
+- At observed protected-mode boundaries, mark stack images of the same
+  client and SS as popped once ESP has passed their slot. Later stack
+  expansion cannot make that image an enclosing owner again: the next arm
+  or owned trap prunes it. Keep its TF token until that point, with the
+  existing lifetime of a register image, because a pop can move TF into a
+  register and flat SS selectors can cover several private stacks. Dropping
+  that token immediately exposed a client #DB in the DOOM replay. Retain
+  the original slot for cleanup if another SS is used at the next arm.
+  Process a loaded TF first; an IRQ with TF still pending must retain its
+  owner. This observation also runs on lean I/O and before IF recovery.
+- Keep the existing lifetime for register images and images on other
+  stacks until an arm or owned restore. No public ABI or nesting limit
+  changes; child suspension copies the entire internal image record,
+  including its popped marker.
+
+CPU regressions in `tests/host/dosvm_dpmi_test.inc` execute SS-alias reuse
+and the review's `POP ECX / AND ECX,200h / STI / SUB ESP,20h` sequence,
+including the inner POPFD/NOP and subsequent ADD ESP. Both fail on the
+reviewed `af5ecf11a`; verification commands, results and the DOOM replay
+comparison are recorded in `build/codex/war2fix-report.md` for lead review.

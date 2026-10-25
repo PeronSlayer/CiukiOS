@@ -800,6 +800,7 @@ void dpmi_cli_sites_reset(struct dosvm *v)
     memset(d->cli_site, 0, sizeof(d->cli_site));
     d->cli_settled = false;
 }
+static void armed_prune(struct dosvm *v, const struct v86_frame *f, bool arming);
 static bool arm_flags_image(struct dosvm *v, struct v86_frame *f, const struct dpmi_seg *cs,
                             struct dpmi_armed *planted)
 {
@@ -866,6 +867,9 @@ proven:;
         if (!dpmi_seg(v, sel, &ss)) return false;
         uint32_t esp = ss.big ? f->tf.user_esp : (uint16_t)f->tf.user_esp;
         if (!dpmi_ptr(v, sel, esp, width, true, &lin) || dosvm_read(v, lin, &image, width) || image != want) return false;
+        /* An old SS may alias this slot. Clean up before planting, so its
+         * intact-image check cannot erase the replacement's TF. */
+        armed_prune(v, f, true);
         image |= V86_TF;
         *planted = (struct dpmi_armed){.offset = esp, .image = image, .ss = sel, .width = (uint8_t)width,
                                        .client = (uint8_t)d->clients, .stack = true};
@@ -873,6 +877,7 @@ proven:;
     }
     uint32_t *r = pop_register(f, pop);
     if (!r || (width == 4 ? *r : (uint16_t)*r) != want) return false;
+    armed_prune(v, f, true);
     *r |= V86_TF;
     *planted = (struct dpmi_armed){.width = (uint8_t)width, .client = (uint8_t)d->clients};
     return true;
@@ -891,10 +896,13 @@ proven:;
  * flags-in-EAX restore may never POPF), images popped into a register
  * (DOS/16M's INT 31h 0302h wrapper: POP CX / STI) and images on another
  * stack, whose planted TF is taken out first if they are still intact, so
- * no unowned TF is left behind. */
+ * no unowned TF is left behind. An observed pop permanently disqualifies
+ * that slot from enclosing a later image, even after stack expansion. Its
+ * token keeps the register-image lifetime until the next arm/owned trap:
+ * the TF may still be in a register after the pop. */
 static bool armed_live(struct dosvm *v, const struct v86_frame *f, const struct dpmi_armed *a, bool arming)
 {
-    if (a->client != v->dpmi.clients || !a->stack || a->ss != (uint16_t)f->tf.user_ss) return false;
+    if (a->client != v->dpmi.clients || !a->stack || a->popped || a->ss != (uint16_t)f->tf.user_ss) return false;
     struct dpmi_seg ss;
     uint32_t lin, image = 0;
     if (!dpmi_seg(v, a->ss, &ss)) return false;
@@ -922,10 +930,28 @@ static void armed_prune(struct dosvm *v, const struct v86_frame *f, bool arming)
     }
     d->if_armed = (uint8_t)kept;
 }
-static void armed_push(struct dosvm *v, const struct v86_frame *f, const struct dpmi_armed *planted)
+static void armed_observe(struct dosvm *v, const struct v86_frame *f)
 {
     struct dpmi *d = &v->dpmi;
-    armed_prune(v, f, true);
+    /* A loaded image must reach flags_restored first. In particular, a
+     * physical IRQ can interrupt POPF before its pending single-step. */
+    if (!d->if_armed || (f->tf.eflags & V86_TF)) return;
+    struct dpmi_seg ss;
+    if (!dpmi_seg(v, (uint16_t)f->tf.user_ss, &ss)) return;
+    uint32_t esp = ss.big ? f->tf.user_esp : (uint16_t)f->tf.user_esp;
+    for (unsigned i = 0; i < d->if_armed && i < DPMI_IF_ARMED_MAX; i++) {
+        struct dpmi_armed *a = &d->armed[i];
+        /* A popped image cannot become an enclosing stack image again.
+         * Its TF may still be in a register (or another private stack of
+         * a flat SS). Keep the existing unlocated-image lifetime through
+         * the next arm/owned trap, which retires it instead of nesting it. */
+        if (a->stack && a->client == d->clients && a->ss == (uint16_t)f->tf.user_ss && a->offset < esp)
+            a->popped = true;
+    }
+}
+static void armed_push(struct dosvm *v, const struct dpmi_armed *planted)
+{
+    struct dpmi *d = &v->dpmi;
     if (d->if_armed >= DPMI_IF_ARMED_MAX) {
         /* Deeper nesting than tracked: take the TF out of the outermost
          * image (its POPF then restores nothing; IF recovery covers it). */
@@ -1353,7 +1379,7 @@ static int emulate(struct dosvm *v, struct v86_frame *f)
         struct dpmi_armed planted;
         bool armed = v->monitor.vif && arm_flags_image(v, f, &cs, &planted);
         if (armed) {
-            armed_push(v, f, &planted);
+            armed_push(v, &planted);
             d->stats.if_armed++;
         }
         v->monitor.vif = false;
@@ -1538,6 +1564,7 @@ bool dpmi_lean_quiet(const struct dosvm *v, const struct v86_frame *f)
 void dpmi_lean_retire(struct dosvm *v, const struct v86_frame *f)
 {
     struct dpmi *d = &v->dpmi;
+    if (v->frame_pm) armed_observe(v, f);
     if (v->monitor.vif && !d->if_armed) d->cli.seeds_skipped++;
     d->decode_valid = true;
     d->decode_cs = (uint16_t)f->tf.cs;
@@ -1590,6 +1617,7 @@ int dpmi_pm_trap(struct dosvm *v, struct v86_frame *f, uint32_t cr2, uint32_t dr
         flags_preceding(v, f, &cs, 0, 0, true);
     /* The returned PC (including handler entry and emulated fall-through) is
      * a known instruction boundary. Never seed from a backwards guess. */
+    if (!e && v->frame_pm) armed_observe(v, f);
     if (!e && v->frame_pm && !checkpoint) return_boundary_seed(v, f);
     /* Every checkpoint is an observed boundary: retain its independent
      * proof even while another prediction is in flight. */
@@ -1652,6 +1680,7 @@ int dpmi_deliver(struct dosvm *v, struct v86_frame *f)
     struct dpmi *d = &v->dpmi;
     dpmi_irq_resync(v, f);
     return_resume(v, f);
+    if (v->frame_pm) armed_observe(v, f);
     if_recovery_prepare(v, f);
     if (!v->monitor.vif || v->monitor.shadow || d->shadow) return 0;
     uint32_t flags = irq_save();

@@ -100,6 +100,7 @@ struct dpmi_armed {
     uint16_t ss;
     uint8_t width, client;
     bool stack;
+    bool popped;                    /* observed past ESP: never an enclosing image again */
 };
 struct dpmi_client {
     uint8_t suspended_if_armed;      /* parent's deferred flags restores across a child */

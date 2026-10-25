@@ -1071,6 +1071,7 @@ static void test_dpmi_32bit_nested(void)
     CHECK(cur.tf.eip == before.tf.eip + 3 && !d->depth);
     /* A 32-bit nested client: allocates, hooks, terminates; parent survives. */
     d->if_armed = true; /* parent has an unloaded flags image */
+    d->armed[0] = (struct dpmi_armed){.popped = true}; /* observed-pop state must survive a child */
     struct v86_frame parent = cur;
     cur.tf.ebx = 0; cur.tf.ecx = 0x2000; int31(v, 0x0501); uint32_t pblock = ((uint32_t)r16(cur.tf.ebx) << 16) | r16(cur.tf.ecx);
     struct dpmi_vec pvec = d->vec[0x68];
@@ -1084,7 +1085,8 @@ static void test_dpmi_32bit_nested(void)
     d->decode_stack_valid = d->decode_ds_valid = true; /* parent's snapshot is not the child's */
     enter(v, true);
     CHECK(in_pm() && d->clients == 2 && d->client[1].depth_base == 1);
-    CHECK(!d->if_armed && d->client[0].suspended_if_armed);
+    CHECK(!d->if_armed && d->client[0].suspended_if_armed && d->client[0].suspended_armed[0].popped);
+    d->armed[0].popped = false; /* child does not own the parent's token */
     CHECK(!d->decode_stack_valid && !d->decode_ds_valid);
     cur.tf.ebx = 0; cur.tf.ecx = 0x3000; int31(v, 0x0501); CHECK(!cf());
     cur.tf.ebx = 0x68; cur.tf.ecx = cur.tf.cs; cur.tf.edx = 0x50; int31(v, 0x0205); CHECK(!cf() && d->vec[0x68].sel != pvec.sel);
@@ -1094,7 +1096,7 @@ static void test_dpmi_32bit_nested(void)
     /* Opposite width inside the child fails (no third client). */
     cur.tf.eax = 0x4C00; pm_int(v, 0x21);                                 /* child exits */
     CHECK(!in_pm() && cur.tf.cs == DOS_SEG && d->clients == 1 && d->depth == 1 && d->active);
-    CHECK(d->if_armed); /* child cleanup preserves only the parent's armed image */
+    CHECK(d->if_armed && d->armed[0].popped); /* child cleanup restores the parent's observation too */
     CHECK(d->vec[0x68].sel == pvec.sel && d->vec[0x68].off == pvec.off && !d->client[1].used);
     for (unsigned i = 0; i < DPMI_LDT_ENTRIES; i++) CHECK(d->owner[i] != 2);
     CHECK(v->info.pool_used == DPMI_HSTACK_BYTES + 0x2000 && d->block[0].b.base == pblock);
@@ -1270,6 +1272,78 @@ static int if_cpu_run(struct dosvm *v, struct gcpu_event *ev)
     cur.tf.ds=s.ds; cur.tf.es=s.es; cur.tf.fs=s.fs; cur.tf.gs=s.gs;
     return rc;
 }
+static void test_dpmi_flags_alias_reuse(void)
+{
+    const struct gcpu_ops ops = {if_cpu_read, if_cpu_write, if_cpu_descriptor, if_cpu_unexpected, 0};
+    gcpu_init(&ops);
+    struct dosvm *v = dpmi_vm(true); v86_start(); enter(v, true);
+    v->dpmi.ldt[(uint16_t)cur.tf.cs >> 3][1] |= 0x400000u;
+    uint16_t ss = (uint16_t)cur.tf.user_ss, alias = DPMI_SEL(900);
+    struct dpmi_seg stack; CHECK(dpmi_seg(v, ss, &stack));
+    client_desc(v, 900, stack.base, stack.limit, stack.access, stack.big ? 0x40 : 0);
+    /* STI observes the first image still live. POP ECX abandons it, then
+     * another SS selector reuses exactly the same linear PUSHFD slot.
+     * Cleanup of the old owner must not clear the replacement's TF. */
+    const uint8_t code[] = {0x9C, 0xFA, 0xFB, 0x59, 0x8E, 0xD0, 0x9C, 0xFA, 0x9D, 0x90, 0xF4};
+    CHECK(!dosvm_write(v, seg_base(v, (uint16_t)cur.tf.cs) + 0x300, code, sizeof(code)));
+    cur.tf.eip = 0x300; cur.tf.eflags = V86_IF | 2; cur.tf.eax = alias;
+    unsigned exceptions = v->dpmi.stats.exceptions, restored = v->dpmi.stats.if_restored;
+    struct gcpu_event ev;
+    CHECK(if_cpu_run(v, &ev) == GCPU_TRAP && ev.vector == 13 && cur.tf.eip == 0x301);
+    step(v, ev.vector, ev.err);
+    CHECK(!left && !v->monitor.vif && v->dpmi.if_armed == 1);
+    uint32_t slot = cur.tf.user_esp;
+    CHECK(if_cpu_run(v, &ev) == GCPU_TRAP && ev.vector == 13 && cur.tf.eip == 0x302);
+    step(v, ev.vector, ev.err);
+    CHECK(!left && v->monitor.vif && v->dpmi.if_armed == 1);
+    CHECK(if_cpu_run(v, &ev) == GCPU_TRAP && ev.vector == 13 && cur.tf.eip == 0x307 &&
+          cur.tf.user_ss == alias && cur.tf.user_esp == slot);
+    step(v, ev.vector, ev.err);
+    uint32_t linear, image;
+    CHECK(!left && !v->monitor.vif && v->dpmi.if_armed == 1 &&
+          dpmi_ptr(v, alias, slot, 4, false, &linear) && !dosvm_read(v, linear, &image, 4) &&
+          (image & V86_TF));
+    CHECK(if_cpu_run(v, &ev) == GCPU_TRAP && ev.vector == 1 && (ev.dr6 & (1u << 14)) && cur.tf.eip == 0x30A);
+    debug_dr6 = ev.dr6; step(v, ev.vector, ev.err);
+    CHECK(!left && v->monitor.vif && !v->dpmi.if_armed && !(cur.tf.eflags & V86_TF) &&
+          v->dpmi.stats.exceptions == exceptions && v->dpmi.stats.if_restored == restored + 1);
+    destroy(v, true); empty(); gcpu_done(); if_cpu_vm = 0;
+    puts("saved flags alias reuse: replacement TF survives cleanup and POPFD restores virtual IF PASS");
+}
+static void test_dpmi_flags_observed_pop(void)
+{
+    const struct gcpu_ops ops = {if_cpu_read, if_cpu_write, if_cpu_descriptor, if_cpu_unexpected, 0};
+    gcpu_init(&ops);
+    struct dosvm *v = dpmi_vm(true); v86_start(); enter(v, true);
+    v->dpmi.ldt[(uint16_t)cur.tf.cs >> 3][1] |= 0x400000u;
+    /* Exact review sequence: PUSHFD; CLI; POP ECX; AND ECX,200h; STI;
+     * SUB ESP,20h; PUSHFD; CLI; POPFD; NOP; ADD ESP,20h. The old bytes
+     * survive below ESP at STI, then look enclosing after SUB ESP. */
+    const uint8_t code[] = {0x9C, 0xFA, 0x59, 0x81, 0xE1, 0, 2, 0, 0, 0xFB,
+                            0x83, 0xEC, 0x20, 0x9C, 0xFA, 0x9D, 0x90, 0x83, 0xC4, 0x20, 0xF4};
+    CHECK(!dosvm_write(v, seg_base(v, (uint16_t)cur.tf.cs) + 0x300, code, sizeof(code)));
+    cur.tf.eip = 0x300; cur.tf.eflags = V86_IF | 2;
+    uint32_t sp = cur.tf.user_esp;
+    unsigned exceptions = v->dpmi.stats.exceptions, restored = v->dpmi.stats.if_restored;
+    struct gcpu_event ev;
+    CHECK(if_cpu_run(v, &ev) == GCPU_TRAP && ev.vector == 13 && cur.tf.eip == 0x301);
+    step(v, ev.vector, ev.err);
+    CHECK(!left && !v->monitor.vif && v->dpmi.if_armed == 1);
+    CHECK(if_cpu_run(v, &ev) == GCPU_TRAP && ev.vector == 13 && cur.tf.eip == 0x309 && cur.tf.user_esp == sp);
+    step(v, ev.vector, ev.err);
+    CHECK(!left && v->monitor.vif);
+    CHECK(if_cpu_run(v, &ev) == GCPU_TRAP && ev.vector == 13 && cur.tf.eip == 0x30E);
+    step(v, ev.vector, ev.err);
+    CHECK(!left && !v->monitor.vif);
+    CHECK(if_cpu_run(v, &ev) == GCPU_TRAP && ev.vector == 1 && (ev.dr6 & (1u << 14)) && cur.tf.eip == 0x311);
+    debug_dr6 = ev.dr6; step(v, ev.vector, ev.err);
+    CHECK(!left && v->monitor.vif && !(cur.tf.eflags & V86_TF) &&
+          v->dpmi.stats.exceptions == exceptions && v->dpmi.stats.if_restored == restored + 1);
+    CHECK(if_cpu_run(v, &ev) == GCPU_TRAP && ev.vector == 13 && cur.tf.eip == 0x314 && cur.tf.user_esp == sp);
+    CHECK(!v->dpmi.if_armed); /* no false owner can suppress subsequent tracking/recovery */
+    destroy(v, true); empty(); gcpu_done(); if_cpu_vm = 0;
+    puts("saved flags observed pop: STI marks the popped image, next arm retires it, no false enclosing owner PASS");
+}
 /* The DOS/16M sequence on the CPU model with the GDT a DPMI worker runs
  * with (dpmi_gdt_descriptor): PUSH 40h; POP ES; MOV BX,ES:[6Eh];
  * MOV CX,ES:[6Ch]; HLT. Before selector 40h, POP ES raised #GP(40h). */
@@ -1366,6 +1440,8 @@ static void test_dpmi(void)
     test_dpmi_bios_selector();
     test_dpmi_nested_flags_images();
 #ifdef CIUKI_DOSVM_GUEST_CPU
+    test_dpmi_flags_alias_reuse();
+    test_dpmi_flags_observed_pop();
     test_dpmi_if_cpu();
     test_dpmi_bios_selector_cpu();
 #else
