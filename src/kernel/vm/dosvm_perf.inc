@@ -282,8 +282,10 @@ static void perf_live(struct dosvm *v, const struct dosvm_perf_sample *s, unsign
                   id, gen, n, s->exits[0], s->exits[1], s->exits[2], s->exits[3], s->exits[4], s->exits[5]);
     rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_service vm=%u gen=%u n=%u ticks=%u timer_us=%llu audio_us=%llu port_overflow=%u",
                   id, gen, n, s->ticks, s->timer_us, s->audio_us, s->port_overflow);
-    rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_checkpoint vm=%u gen=%u n=%u hits=%u segmented=%u fallback=%u",
-                         id, gen, n, s->return_hits, s->return_segmented, s->return_fallbacks);
+    /* Reuse the short decoder checkpoint row: another row exceeds the
+     * four-VM stalled-drain record budget; remap's row is already full. */
+    rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_checkpoint vm=%u gen=%u n=%u hits=%u segmented=%u fallback=%u dac_counted=%u",
+                         id, gen, n, s->return_hits, s->return_segmented, s->return_fallbacks, s->dac_counted);
     rec_diag_disk_bootlog(dosvm_probe(v), "group=vm_perf_tracker vm=%u gen=%u n=%u armed=%u hits=%u expired=%u fallback=%u reacquired=%u segmented=%u",
                          id, gen, n, s->return_armed, s->return_hits, s->return_expired,
                          s->return_fallbacks, s->return_reacquired, s->return_segmented);
@@ -354,7 +356,7 @@ static void perf_disk_report(struct dosvm *v)
     CAPTURE(harvests); CAPTURE(direct_pages); CAPTURE(trapped_bytes);
     CAPTURE(converted_bytes); CAPTURE(rows); CAPTURE(port_remaps);
     CAPTURE(burst_insn); CAPTURE(latch_read_windows); CAPTURE(batched);
-    CAPTURE(lean_exits); CAPTURE(dac_batched); CAPTURE(linear_direct);
+    CAPTURE(lean_exits); CAPTURE(dac_batched); CAPTURE(dac_counted); CAPTURE(linear_direct);
     CAPTURE(port_overflow); CAPTURE(ticks);
     CAPTURE(present_waits); CAPTURE(present_wait_cycles); CAPTURE(present_wait_max_cycles);
     r->present_samples = v->present_samples;
@@ -435,6 +437,8 @@ static void perf_disk_report(struct dosvm *v)
     s->batched = DELTA(batched, last_batched);
     s->lean_exits = DELTA(lean_exits, last_lean_exits);
     s->dac_batched = DELTA(dac_batched, last_dac_batched);
+    s->dac_counted = DELTA(dac_counted, last_dac_counted);
+    v->perf.last_dac_counted = r->dac_counted;
     s->linear_direct = DELTA(linear_direct, last_linear_direct);
     v->perf.last_lean_exits = r->lean_exits; v->perf.last_dac_batched = r->dac_batched;
     v->perf.last_linear_direct = r->linear_direct;

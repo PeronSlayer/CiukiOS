@@ -106,7 +106,7 @@ struct dosvm_perf_sample {
     uint32_t ms, frames, flips, harvests, pages, trapped, converted, rows, present_rate;
     uint32_t exits[6], irqs[16];
     uint64_t guest_us, monitor_us, present_us, harvest_us, log_us, edges, insn[V86_INSNS];
-    uint32_t cost_count[DOSVM_COST_COUNT], batched, lean_exits, dac_batched, linear_direct;
+    uint32_t cost_count[DOSVM_COST_COUNT], batched, lean_exits, dac_batched, dac_counted, linear_direct;
     uint64_t cost_us[DOSVM_COST_COUNT];
     uint32_t idle_blocks, idle_reasons, idle_count[DOSVM_IDLE_REASONS], busy_permille;
     uint32_t port_remaps, burst_insn, latch_read_windows;
@@ -128,7 +128,7 @@ struct dosvm_perf_raw {
     uint32_t return_armed, return_expired, return_reacquired;
     uint32_t ms, frames, starts, harvests, direct_pages, trapped_bytes, converted_bytes, rows;
     uint32_t port_remaps, burst_insn, latch_read_windows, batched, port_overflow, ticks;
-    uint32_t lean_exits, dac_batched, linear_direct;
+    uint32_t lean_exits, dac_batched, dac_counted, linear_direct;
     uint32_t present_samples, present_waits;
     uint64_t present_wait_cycles, present_wait_max_cycles;
     uint32_t exits[6], irqs[16], cost_count[DOSVM_COST_COUNT];
@@ -387,6 +387,7 @@ struct dosvm {
         /* fx-27: exits retired on the lean port path, OUTs batched by the DAC
          * burst, chain-4 pages presented without a plane deinterleave. */
         uint32_t lean_exits, last_lean_exits, dac_batched, last_dac_batched;
+        uint32_t dac_counted, last_dac_counted;
         uint32_t linear_direct, last_linear_direct;
         /* t23-dosperf: WAIT_PRESENT returns with a VIDEO event and the
          * cycles from the event becoming true to that return (the
