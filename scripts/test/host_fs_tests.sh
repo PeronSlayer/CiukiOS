@@ -16,6 +16,11 @@ missing=0
 for tool in clang ar python3 mkfs.fat fsck.fat mcopy mmd mdir mtype mdel nm nasm; do
     if ! command -v "$tool" >/dev/null; then printf 'MISSING TOOL: %s\n' "$tool"; missing=1; fi
 done
+if [[ ${1:-} == --owner-policy ]]; then
+    ((missing == 0)) || exit 1
+    python3 -B -m unittest discover -s tests/host/security -p test_owner_policy.py
+    exit 0
+fi
 # The RAM logger's production pacing/retention model uses this runner's
 # standard filesystem sanitizer policy; no disk/image fixture is needed.
 if [[ ${1:-} == --bootlog ]]; then
@@ -555,6 +560,9 @@ run_startup_tests
 run_startup_image_tests
 python3 tests/host/test_boot_conversion.py
 run_convert_tests
+# sec-k02 uses this runner's existing filesystem sanitizer policy. The direct
+# H02 command retains its default LeakSanitizer setting.
+python3 -B -m unittest discover -s tests/host/security -p test_owner_policy.py
 python3 - <<'PY'
 from pathlib import Path
 root=Path('build/host/fs')

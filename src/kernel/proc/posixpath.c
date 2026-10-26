@@ -4,6 +4,15 @@
 #include <ciuki/kernel.h>
 #include <ciuki/files.h>
 #include <ciuki/security.h>
+#include "../fs/owner.h"
+#include <ciuki/sha256.h>
+/* Standalone legacy harnesses do not link the new policy engine. Its
+ * subject-aware entry points still deny when the engine is unavailable. */
+#pragma weak policy_epoch
+#pragma weak policy_root
+#pragma weak policy_child
+#pragma weak policy_check
+#pragma weak sha256
 #include <ciuki/clock.h>
 extern int32_t timezone_offset_at(int64_t) __attribute__((weak));
 #include <ciuki/fat_native.h>
@@ -21,6 +30,12 @@ extern int32_t timezone_offset_at(int64_t) __attribute__((weak));
 #pragma weak vfs_chain_clusters_locked
 
 static struct px_namespace *spaces;
+static void policy_namespace_changed(struct vfs *v,unsigned drive)
+{
+    if(drive>=26 || !v->policy[drive]) return;
+    struct policy_volume *p=v->policy[drive];
+    if(p->epoch==UINT64_MAX) p->ready=false; else p->epoch++;
+}
 
 /* No symlinks: the synthetic /mnt/<letter> transitions and cached cwd
  * ancestry determine every drive a path can visit, without filesystem I/O.
@@ -56,7 +71,14 @@ static uint32_t path_drives(struct px_namespace *s,struct px_node *cwd,const cha
         else if (kind>=2) mask|=vfs_drive_mask(kind-2);
         if (depth+1<sizeof(kinds)/sizeof(*kinds)) kinds[++depth]=kind;
     }
-    return mask | (kinds[depth]>=2 ? vfs_drive_mask(kinds[depth]-2) : 0);
+    mask|=kinds[depth]>=2 ? vfs_drive_mask(kinds[depth]-2) : 0;
+    /* The common FAT engine selects the first drive of a mounted object.
+     * A second /mnt spelling must reserve that canonical drive as well as
+     * its alias; otherwise a valid alias lookup loses its I/O reservation. */
+    for(unsigned i=0;i<26;i++) if(mask&(1u<<i))
+        for(unsigned j=0;j<26;j++) if((s->vfs->volumes[i] && s->vfs->volumes[i]==s->vfs->volumes[j]) ||
+            (s->vfs->ro_volumes[i] && s->vfs->ro_volumes[i]==s->vfs->ro_volumes[j])) mask|=1u<<j;
+    return mask;
 }
 static void reserve_paths(struct px_namespace *s,struct px_node *cwd,const char *a,const char *b)
 {
@@ -113,6 +135,7 @@ static struct px_namespace *space_find(struct vfs *v)
     for (struct px_namespace *s = spaces; s; s = s->next) if (s->vfs == v) return s;
     return 0;
 }
+struct px_namespace *files_namespace_locked(struct vfs *v) { return space_find(v); }
 static struct px_node *node_new(struct px_namespace *s, struct px_node *parent, enum px_kind kind)
 {
     if (s->next_ino == UINT64_MAX) return 0;
@@ -321,6 +344,7 @@ int px_fat_transaction_locked(struct px_node *n,struct px_node *parent,struct px
     struct vfs *v=n->space->vfs;
     bool namespace_op=a.op==FAT_TX_CREATE || a.op==FAT_TX_REMOVE || a.op==FAT_TX_RENAME || a.op==FAT_TX_RENAME_REPLACE;
     if (namespace_op && (n->namespace_busy || (replacement && replacement->namespace_busy))) return -FS_EAGAIN;
+    if(namespace_op) policy_namespace_changed(v,n->drive);
     struct px_node *old_parent=n->parent;
     px_retain(n); px_retain(parent); px_retain(replacement); px_retain(old_parent);
     if (namespace_op) { n->namespace_busy=true; if (replacement) replacement->namespace_busy=true; }
@@ -450,15 +474,27 @@ static int child_lookup(struct px_node *p, const char *name, struct px_node **ou
 #define PX_RESOLVE_UNGUARDED 2u
 #define PX_RESOLVE_GUARDED 64u /* cache-warming restarts (f1-89 A1 item 5) */
 static int resolve_once(struct px_namespace *s, struct px_node *cwd, const char *path,
-                        bool missing_leaf, struct px_path *out, bool guarded, struct px_node **busy);
+                        bool missing_leaf, struct px_path *out, bool guarded, struct px_node **busy,
+                        const struct security_subject *subject);
+static int resolve_subject_common(struct px_namespace *,struct px_node *,const char *,bool,
+                                  const struct security_subject *,struct px_path *);
 int px_resolve_locked(struct px_namespace *s, struct px_node *cwd, const char *path,
                       bool missing_leaf, struct px_path *out)
+{ return resolve_subject_common(s,cwd,path,missing_leaf,0,out); }
+int px_resolve_subject_locked(struct px_namespace *s,struct px_node *cwd,const char *path,
+                              bool missing_leaf,const struct security_subject *subject,struct px_path *out)
+{
+    if(!subject) return -EACCES;
+    return resolve_subject_common(s,cwd,path,missing_leaf,subject,out);
+}
+static int resolve_subject_common(struct px_namespace *s,struct px_node *cwd,const char *path,
+                              bool missing_leaf,const struct security_subject *subject,struct px_path *out)
 {
     int err = px_validate(path);
     if (err) return err;
     for (unsigned attempt=0;;) {
         struct px_node *busy=0;
-        err=resolve_once(s,cwd,path,missing_leaf,out,attempt>=PX_RESOLVE_UNGUARDED,&busy);
+        err=resolve_once(s,cwd,path,missing_leaf,out,attempt>=PX_RESOLVE_UNGUARDED,&busy,subject);
         if (err==-EINPROGRESS && busy) {
             px_retain(busy);
             int waited=px_error(vfs_file_wait_locked(s->vfs,&busy->namespace_busy));
@@ -471,19 +507,24 @@ int px_resolve_locked(struct px_namespace *s, struct px_node *cwd, const char *p
     }
 }
 static int resolve_once(struct px_namespace *s, struct px_node *cwd, const char *path,
-                        bool missing_leaf, struct px_path *out, bool guarded, struct px_node **busy)
+                        bool missing_leaf, struct px_path *out, bool guarded, struct px_node **busy,
+                        const struct security_subject *subject)
 {
     int err;
     reserve_paths(s,cwd,path,0);
     memset(out, 0, sizeof(*out));
     struct px_node *n = *path == '/' ? s->root : cwd ? cwd : s->root;
     if (!node_available(n)) return -ENOENT;
+    /* NULL is the legacy internal resolver only. New subject-aware callers
+     * must use a non-NULL retained subject; k03 changes public syscall routes. */
+    if(subject && (err=px_policy_check_locked(n,subject,POLICY_TRAVERSE))) return err;
     const char *p = path;
     out->trailing = path[strlen(path) - 1] == '/';
     while (*p) {
         while (*p == '/') p++;
         if (!*p) break;
         if (!directory(n)) return -ENOTDIR;
+        if(subject && (err=px_policy_check_locked(n,subject,POLICY_TRAVERSE))) return err;
         const char *start = p;
         while (*p && *p != '/') p++;
         unsigned count = (unsigned)(p - start);
@@ -503,11 +544,114 @@ static int resolve_once(struct px_namespace *s, struct px_node *cwd, const char 
             }
         }
         if (!node_available(n)) return -ENOENT;
+        if(subject && (err=px_policy_check_locked(n,subject,*next?POLICY_TRAVERSE:POLICY_READ))) return err;
     }
     if (out->trailing && !directory(n)) return -ENOTDIR;
     out->node = n;
     if (!out->parent) out->parent = n->parent;
     return 0;
+}
+
+int px_object_proof_locked(struct px_node *n,uint8_t proof[32])
+{
+    if(!n || !proof || !sha256 || !node_available(n) || !n->volume || n->mountpoint) return -EIO;
+    /* Durable object evidence, not an owner locator. Rename preserves cluster
+     * and birth fields. The namespace policy fences replacement/slot reuse;
+     * retained references separately pin n->ino and the mount generation. */
+    uint8_t b[32]={0}; fs_wr32(b,n->volume->volume_serial);
+    fs_wr32(b+4,n->entry.first); fs_wr16(b+8,n->entry.times.create_date);
+    fs_wr16(b+10,n->entry.times.create_time); b[12]=n->entry.times.create_tenths;
+    b[13]=n->entry.attr&FAT_ATTR_DIR; fs_wr32(b+16,(uint32_t)n->volume->start);
+    fs_wr32(b+20,(uint32_t)(n->volume->start>>32)); sha256(b,sizeof(b),proof); return 0;
+}
+int px_policy_label_locked(struct px_node *n,struct policy_label *out)
+{
+    if(!n || !out || !node_available(n) || !policy_root || !policy_child || !policy_epoch) return -EACCES;
+    if(n->namespace_busy) return -EBUSY;
+    struct vfs *v=n->space->vfs;
+    if(!n->volume && !n->ro) {
+        /* /mnt and /dev are synthetic namespace traversal only. Device
+         * authority is separate (k04); no synthetic node acquires a volume. */
+        n=n->space->root;
+    }
+    if(n->drive>=26) return -EACCES;
+    struct policy_volume *p=v->policy[n->drive];
+    if(!p || !p->ready || n->generation!=v->generation[n->drive]) return -EACCES;
+    if(n->policy.mount==p->mount && n->policy.epoch==policy_epoch(p) && n->policy.object==n->ino) { *out=n->policy; return 0; }
+    struct px_node *chain[FS_PATH_CHARS+1]; unsigned count=0; struct px_node *at=n;
+    while(!at->mountpoint) {
+        if(count==FS_PATH_CHARS || !node_available(at) || at->volume!=n->volume || at->ro!=n->ro) return -EIO;
+        if(at->namespace_busy) return -EBUSY;
+        chain[count++]=at; at=at->parent;
+    }
+    struct policy_label l; int e=policy_root(p,at->ino,&l); if(e) return e;
+    at->policy=l;
+    while(count) {
+        struct px_node *child=chain[--count]; uint64_t locator=0;
+        struct owner_store *s=p->owners;
+        if((l.kind==POLICY_PROFILES || l.kind==POLICY_ROOT) && s) {
+            if(!s->ready || s->busy) return -EIO;
+            unsigned total=l.kind==POLICY_PROFILES?s->profile_count:s->root_count;
+            for(unsigned i=0;i<total;i++) {
+                const struct owner_record *r=l.kind==POLICY_PROFILES?&s->profiles[i]:&s->roots[i];
+                const char *leaf=r->binding.path; for(const char *q=leaf;*q;q++) if(*q=='/') leaf=q+1;
+                if(!path_equal(leaf,child->entry.name)) continue;
+                uint8_t proof[32]; if(r->pending || px_object_proof_locked(child,proof) || memcmp(proof,r->proof,32)) return -EIO;
+                locator=r->binding.locator; break;
+            }
+            if(s->active && l.kind==POLICY_PROFILES) for(unsigned i=0;i<OWNER_PROFILES;i++) {
+                const char *leaf=s->pending[i].binding.path;
+                if(!s->pending[i].binding.locator) break;
+                for(const char *q=leaf;*q;q++) if(*q=='/') leaf=q+1;
+                if(path_equal(leaf,child->entry.name)) return -EIO;
+            }
+            if(l.kind==POLICY_ROOT && s->root_key &&
+               ((s->root_old[0] && path_equal(child->entry.name,s->root_old+1)) ||
+                (s->root_new[0] && path_equal(child->entry.name,s->root_new+1)))) return -EIO;
+        }
+        e=policy_child(p,&l,child->entry.name,child->ino,locator,&l); if(e) return e;
+        child->policy=l;
+    }
+    *out=l; return 0;
+}
+int px_policy_check_locked(struct px_node *n,const struct security_subject *subject,unsigned access)
+{
+    if(!subject || !policy_check) return -EACCES;
+    struct policy_label l; int e=px_policy_label_locked(n,&l); if(e) return e;
+    struct px_node *volume=(!n->volume && !n->ro)?n->space->root:n;
+    return policy_check(volume->space->vfs->policy[volume->drive],&l,subject,access);
+}
+int px_resolve_volume_subject_locked(struct px_namespace *s,unsigned drive,struct px_node *cwd,
+    const char *input,bool win32,bool missing,const struct security_subject *subject,struct px_path *out)
+{
+    if(!s || !input || !subject || drive>=26) return -EACCES;
+    const char *p=input; size_t length=0; while(length<CIUKI_PATH_MAX && p[length]) length++;
+    if(length==CIUKI_PATH_MAX) return -ENAMETOOLONG;
+    if(p[0] && p[1]==':') p+=2; /* drive map already selected by the caller */
+    bool absolute=*p=='/' || *p=='\\';
+    char native[CIUKI_PATH_MAX]; size_t used=0;
+    if(absolute) {
+        if(drive==2) native[used++]='/';
+        else { memcpy(native,"/mnt/a/",7); native[5]=(char)('a'+drive); used=7; }
+    } else if(!cwd || cwd->drive!=drive || (!cwd->volume && !cwd->ro)) return -EACCES;
+    while(*p) {
+        while(*p=='/' || *p=='\\') p++;
+        if(!*p) break;
+        const char *start=p; while(*p && *p!='/' && *p!='\\') p++;
+        size_t n=(size_t)(p-start);
+        if(win32) {
+            while(n && start[n-1]==' ') n--;
+            bool dot=(n==1 && start[0]=='.') || (n==2 && start[0]=='.' && start[1]=='.');
+            if(!dot) while(n && (start[n-1]=='.' || start[n-1]==' ')) n--;
+        }
+        if(!n) return -EINVAL;
+        if(used && native[used-1]!='/') { if(used+1>=sizeof(native)) return -ENAMETOOLONG; native[used++]='/'; }
+        if(n>=sizeof(native)-used) return -ENAMETOOLONG;
+        memcpy(native+used,start,n); used+=n;
+    }
+    if(!used) native[used++]='.';
+    native[used]=0;
+    return px_resolve_subject_locked(s,cwd,native,missing,subject,out);
 }
 
 int px_getcwd_locked(struct px_node *n, char out[CIUKI_PATH_MAX])
@@ -1266,6 +1410,8 @@ bool px_legacy_busy(struct vfs *v, struct fat_volume *vol, const struct fat_entr
 void px_legacy_changed(struct vfs *v, struct fat_volume *vol, const struct fat_entry *old, const struct fat_entry *entry, bool committed_write)
 {
     struct px_namespace *s = space_find(v); if (!s) return;
+    if(!entry || old->parent!=entry->parent || old->index!=entry->index || !path_equal(old->name,entry->name))
+        for(unsigned d=0;d<26;d++) if(v->volumes[d]==vol) policy_namespace_changed(v,d);
     struct px_node *n = node_find(s, vol, old);
     if (!n && entry)
         for (struct px_node *candidate = s->nodes; candidate; candidate = candidate->next)

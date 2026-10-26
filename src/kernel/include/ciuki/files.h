@@ -18,6 +18,7 @@ struct px_node {
     struct vfs_node *legacy;
     struct ciuki_timespec ctime;
     uint64_t ino;
+    struct policy_label policy;
     uint32_t refs, generation, drive;
     enum px_kind kind;
     bool linked, mountpoint, delete_pending, writing, namespace_busy;
@@ -65,6 +66,7 @@ struct px_path {
 struct file_ledger { uint32_t nodes, descriptions, pins; };
 
 int files_attach(struct vfs *vfs, struct px_namespace **out);
+struct px_namespace *files_namespace_locked(struct vfs *); /* no allocation */
 void files_detach(struct vfs *vfs); /* quiescent, from vfs_destroy */
 void files_snapshot(struct px_namespace *space, struct file_ledger *out);
 int files_bootstrap(struct vfs *vfs); /* install PID 1 cwd, stdio and loader */

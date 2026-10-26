@@ -11,6 +11,7 @@ extern void net_fd_changed(struct process *, unsigned) __attribute__((weak));
 #include <ciuki/desktop.h>
 #include <ciuki/signal.h>
 #include <ciuki/security.h>
+#include "../fs/owner_channel.h"
 
 struct channel_message {
     struct ciuki_message wire;
@@ -806,4 +807,85 @@ uint32_t channel_peer_service(const struct security_peer *peer)
     const struct desktop_description *d=(const struct desktop_description *)peer->endpoint;
     struct channel *c=d->u.endpoint.channel;
     return c->accepted && d->u.endpoint.side==1 ? c->service : 0;
+}
+
+/* PID 1 is the registered OWNER endpoint. This private dequeue uses the
+ * production frame reassembly, charges and cancellation admission boundary;
+ * no SYSTEM user process can use it as an unframed forwarding route. */
+bool channel_owner_pending(void)
+{
+    for(struct channel *c=security_channels;c;c=c->security_next)
+        if(c->service==3 && !c->revoked[0] && !c->revoked[1] && channel_security_readable(c,1)) return true;
+    return false;
+}
+void channel_owner_reap(void)
+{
+    struct process *p=proc_supervisor();
+    if(!p || security_role(p)!=CIUKI_SECURITY_ROLE_OWNER) return;
+    for(unsigned fd=0;fd<CIUKI_OPEN_MAX;fd++) {
+        struct desktop_description *d=desktop_fd(p,(int32_t)fd);
+        if(!d || d->kind!=DESKTOP_CHANNEL || d->u.endpoint.side!=1) continue;
+        struct channel *c=d->u.endpoint.channel;
+        if(c->service!=3 || !c->accepted || (c->open[0] && !c->revoked[0] && !c->revoked[1] && security_subject_live(c->subjects[0]))) continue;
+        /* A worker may still retain this exact endpoint. Detach only PID 1's
+         * fd; its retained exchange remains valid for durable completion and
+         * rejects any late reply through the revoked peer. */
+        channel_security_discard(c); c->revoked[0]=c->revoked[1]=true;
+        desktop_close(p,(int32_t)fd);
+    }
+}
+int channel_owner_next(struct owner_exchange *exchange,void *body,size_t cap,size_t *bytes)
+{
+    if(!exchange || !body || !bytes || cap<CIUKI_SECURITY_SERVICE_BODY_MAX) return -EINVAL;
+    memset(exchange,0,sizeof(*exchange)); *bytes=0;
+    struct process *p=proc_supervisor();
+    if(!p || security_role(p)!=CIUKI_SECURITY_ROLE_OWNER || !security_system(p)) return -EPERM;
+    for(struct channel *c=security_channels;c;c=c->security_next) {
+        if(c->service!=CIUKI_SECURITY_SERVICE_OWNER || c->subjects[1]!=p->subject) continue;
+        channel_security_timeout(c);
+        if(c->revoked[0] || c->revoked[1] || !channel_security_readable(c,1)) continue;
+        int fd=channel_security_server_fd(c,p); if(fd<0) continue;
+        c->accepted=true;
+        int e=channel_peer_get(p,fd,&exchange->peer); if(e) return e;
+        e=security_subject_acquire_endpoint(p,fd,c->generation[1],&exchange->subject);
+        if(e || !channel_peer_live(&exchange->peer) || c->revoked[0] || c->revoked[1] || !channel_security_readable(c,1)) {
+            channel_owner_done(exchange); return e?e:-ESRCH;
+        }
+        /* Allocation above may have yielded. The retained endpoint and exact
+         * exchange must still be the one admitted; fd numbers are insufficient. */
+        struct desktop_description *d=desktop_fd(p,fd);
+        if(!d || &d->object!=exchange->peer.endpoint || d->u.endpoint.channel!=c) { channel_owner_done(exchange); return -ESRCH; }
+        memcpy(exchange->header,c->frame_header,64); *bytes=c->received[0];
+        c->admitted=true;
+        for(unsigned i=0;i<c->received[0];i++) ((uint8_t *)body)[i]=((uint8_t *)P2V(c->body_pages[0][i/PAGE_SIZE]))[i%PAGE_SIZE];
+        c->delivered[1]=c->received[0]; c->drained[1]=true;
+        for(unsigned i=0;i<2;i++) { if(c->body_pages[0][i]) pmm_free(c->body_pages[0][i]); c->body_pages[0][i]=0; }
+        return 1;
+    }
+    return -EAGAIN;
+}
+int channel_owner_reply(struct owner_exchange *exchange,int status,const void *body,size_t bytes)
+{
+    if(!exchange || !exchange->subject || status>0 || (status && bytes) || bytes>CIUKI_SECURITY_SERVICE_BODY_MAX || (!body && bytes)) return -EINVAL;
+    if(!channel_peer_live(&exchange->peer) || !security_subject_live(exchange->subject)) return -ESRCH;
+    struct desktop_description *d=(struct desktop_description *)exchange->peer.endpoint;
+    struct channel *c=d->u.endpoint.channel;
+    if(d->u.endpoint.side!=1 || c->service!=3 || !c->exchange || !c->admitted || !c->drained[1] ||
+       memcmp(c->frame_header,exchange->header,64)) return -ESRCH;
+    size_t offset=0;
+    do {
+        unsigned n=bytes-offset>192?192:(unsigned)(bytes-offset);
+        struct ciuki_message message={.length=64+n}; uint32_t h[16]; memcpy(h,exchange->header,64);
+        h[5]=2; h[8]=c->generation[1]; h[9]=n; h[12]=(uint32_t)status; h[13]=(uint32_t)bytes; h[14]=(uint32_t)offset;
+        memcpy(message.data,h,64); if(n) memcpy(message.data+64,(const uint8_t *)body+offset,n);
+        int e=channel_security_frame(c,1,&message);
+        if(e) { channel_security_discard(c); c->revoked[0]=c->revoked[1]=true; return e; }
+        offset+=n;
+    } while(offset<bytes);
+    kwait_wake_all(&c->changed[0]); if(net_fd_changed) net_fd_changed(0,0); return 0;
+}
+void channel_owner_done(struct owner_exchange *exchange)
+{
+    if(!exchange) return;
+    security_subject_put(exchange->subject); channel_peer_put(&exchange->peer); memset(exchange,0,sizeof(*exchange));
 }
