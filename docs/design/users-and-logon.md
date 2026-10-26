@@ -17,6 +17,13 @@ unset ready-image recovery account. Standard users may create creator-owned
 root files/folders; Guest remains read-only on shared/removable media. Password
 recovery without a usable administrator uses explicit Setup CD repair, never
 an automatic empty-password account.
+Round-1 amendment: blank CiukiUser is allowed only as the sole enabled interactive
+account; password/disable is required before enabling another account or blank
+rename/demotion, and retired autologon never returns on reboot. The contracts now
+freeze explicit role-bound launch/secure-console/service operations, batch owner
+publication and seed recovery, while retaining DOS C: private FAT16/D: read-only
+system/E: removable. See the [interface delta](user-security-contract.md#delta-for-sec-k01-and-sec-user-01)
+for the implementation directives already in progress.
 
 Written 2026-10-23, after reading the G32 inventory and the batch headers.
 
