@@ -1,5 +1,7 @@
 /* Native shell client of the f5-07A copied registry RPC. SPDX-License-Identifier: MIT */
 #include "win32_adapter.h"
+#include "users.h"
+#include "session_profile.h"
 #include "startup.h"
 #include <errno.h>
 #include <pthread.h>
@@ -320,4 +322,20 @@ int ciuki_win32_startup_consume(const struct desk_startup_entry *e)
         uint32_t closed=call(r,W32R_CLOSE,key,NULL,NULL,0); if (!error) error=closed;
     }
     pthread_mutex_unlock(&registry_lock); free(r); free(current); return native_error(error);
+}
+
+extern void desk_w32_profile_state(const char *,const char *) __attribute__((weak));
+int desk_w32_profile(const struct user_profile *profile)
+{
+    uint8_t wire[sizeof(struct w32r_request)+USERS_PATH+USERS_NAME];
+    size_t p=strlen(profile->root)+1,n=strlen(profile->name)+1;
+    struct w32r_request a={.version=W32R_VERSION,.op=DESK_W32_PROFILE,
+        .path_bytes=(uint32_t)p,.name_bytes=(uint32_t)n};
+    memcpy(wire,&a,sizeof(a));memcpy(wire+sizeof(a),profile->root,p);memcpy(wire+sizeof(a)+p,profile->name,n);
+    struct w32r_reply r;uint32_t used=0;
+    uint32_t e=desk_w32_exchange(wire,(uint32_t)(sizeof(a)+p+n),&r,sizeof(r),&used);
+    if (!e && (used!=sizeof(r) || r.version!=W32R_VERSION || r.data_bytes || r.name_bytes)) e=13;
+    if (!e) e=r.error;
+    if (!e && desk_w32_profile_state) desk_w32_profile_state(profile->name,profile->root);
+    return native_error(e);
 }

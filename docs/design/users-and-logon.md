@@ -77,3 +77,81 @@ drops use the selected profile's Desktop (or the default Desktop when unset)
 and retain G8's move/copy/link effects, so shortcut creation and profile
 personalisation coexist. Window-model evidence retains all earlier scenarios
 and appends printing and the G32 gate.
+
+## g32b
+
+Research checked 2026-10-26 against the owner's read-only Resource Kit:
+`wrkc07_3.htm` (profile USER.DAT and personal folders), `wrkc09_4.htm`
+(Windows and screen saver passwords; Cancel bypasses logon),
+`wrkc18_2.htm` (local logon) and `wrkc30_4.htm` (Advanced's standby password
+option uses the screen saver password). These describe Windows 98 profiles,
+not NT access control. Keep the existing local password gate and shared FAT.
+
+Primary online references:
+
+- [Microsoft: Handling Screen Savers](https://learn.microsoft.com/en-us/windows/win32/lwef/screen-saver-library)
+  and [ScreenSaverProc](https://learn.microsoft.com/en-us/windows/win32/api/scrnsave/nf-scrnsave-screensaverproc):
+  idle/SC_SCREENSAVE activation and input termination. Track full-screen
+  Preview separately; arm the desktop-owned password gate before waking a
+  protected display. Preview never arms it. Resume uses the same gate,
+  independently of the saver option.
+- [Microsoft: GetUserNameA](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getusernamea):
+  the returned size includes the terminator and an undersized buffer fails.
+  Return the selected local name, rather than the registered owner.
+- [Microsoft: CSIDL](https://learn.microsoft.com/en-us/windows/win32/shell/csidl)
+  and [SHGetSpecialFolderPathA](https://learn.microsoft.com/en-us/windows/win32/api/shlobj_core/nf-shlobj_core-shgetspecialfolderpatha):
+  personal folders belong to the selected profile; retrieval and creation
+  are distinct. Resolve through that profile's Shell Folders keys.
+
+Implementation decisions: recover users.lock under an existing service-owned
+writer lease (the INI transaction lease), so simultaneous stale-file removers
+cannot remove a newly acquired lock. Record boot and process identities, keep
+live contention busy and retain temp/fsync/replace saves. Host filesystem
+fixtures use a permanent flock guard, which likewise releases on process exit.
+Profile publication uses a private application operation over the existing
+authenticated registry channel. The desktop is its only writer. Do not switch
+while announced Win32 clients survive; G3 must end them first. Separate USER
+hive slots under each numeric profile root retain the existing crash-safe
+registry format, rather than claiming binary Windows USER.DAT compatibility.
+Verification and outstanding lead qualification are recorded below on completion.
+
+The completed wiring also refreshes the desktop's Users policy asynchronously
+when Control Panel publishes changed settings. Display's password checkbox
+uses the same durable policy, preserves the other flags, and its Change button
+opens Passwords. Unlock authentication never republishes profile selection
+(policy changes to separate profiles apply at the next logon).
+
+Boot identity comes from the existing recovery boot counter; owner liveness
+comes from the process snapshot. Missing boot identity or an unreadable snapshot
+fails conservatively without removing a live lock. The native lock adapter is
+host-tested with injected service/recovery/process calls; the Linux filesystem
+adapter additionally exercises a real exited owner and a held flock guard.
+The [Linux flock reference](https://man7.org/linux/man-pages/man2/flock.2.html)
+documents independent opens and release at last close; the guard file itself is
+never unlinked. No new syscall, public ABI record/constant or SDK header is added.
+
+Profile hives use `USER.CRG.0`/`USER.CRG.1` beneath the existing numeric profile
+root and seed from the default hive on first selection. Each switch flushes the
+old hive, loads/validates the new hive and commits its folder bindings before
+publishing identity. Failed commits and corrupt existing slots preserve the
+current session; they never silently reseed an existing profile. Announced
+Win32 clients and open registry handles prevent changing identity. G3 logoff
+ends the clients; their exit flushes the selected hive. Service restarts inherit
+the desktop's selected name/root. PROGMAN follows the selected Programs folder;
+common CSIDLs retain system paths. Folder service failures are returned, rather
+than resolving a personal folder into another profile.
+
+`GetUserNameA/W` now uses the returned name length, including its terminator;
+the no-logon case returns ERROR_NOT_LOGGED_ON (1245). Microsoft's
+[preserved GetUserName example, Q139625](https://jeffpar.github.io/kbarchive/kb/139/Q139625/)
+confirms use of the Windows logon identity. The precise no-logon error is a
+compatibility inference: the cited Microsoft API page does not document Cancel
+on Windows 98. The lead should confirm it against original Windows 98; this
+implementation does not invent a user named Ciuki or Default.
+
+Window-model rows 108 and 109 add protected saver/SC_SCREENSAVE, Preview,
+default/disabled policy, failed DPMS wake, Cancel/wrong password, concealed
+scanout, standby failure and firmware resume counters. Native and Win32 account,
+registry and shell harnesses exercise the production paths. Exact commands and
+results, including unavailable leak checks under ptrace, are in
+`build/codex/g32b-report.md`. Guest and hardware qualification remain lead-owned.

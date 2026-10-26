@@ -501,3 +501,11 @@ uint32_t ws_call(void *svc, uint32_t pid, const struct w32r_request *a, const ch
     }
     return 120;
 }
+
+/* Profile selection has already ended old Win32 clients and conversations. */
+void ws_profile(void *opaque,const char *root)
+{
+    struct ws_shell *s=opaque;
+    snprintf(s->programs,sizeof(s->programs),"%s/Start Menu/Programs",*root ? root : s->windows);
+    s->active_group[0]=0;
+}

@@ -15,6 +15,7 @@ void desk_logon_open(struct desktop *d,int mode)
 {
     if (!d->shell || (mode!=1 && mode!=2)) return;
     desk_v3_revoke(d); desk_v3_pointer_release(d); desk_shell_drag_cancel(d); desk_menu_close(d);
+    d->saver_active=d->saver_preview=0;
     d->sh.user_previous_focus=d->focus;
     desk_focus(d,-1);
     memset(d->keys,0,sizeof(d->keys)); d->buttons=d->routed_buttons=0; d->drag=-1;
@@ -31,6 +32,10 @@ void desk_logon_open(struct desktop *d,int mode)
 void desk_session_lock(struct desktop *d)
 {
     if (!d->sh.user_gate && (d->sh.users.flags&USERS_LOCK) && d->sh.profile.name[0]) desk_logon_open(d,2);
+}
+void desk_session_resume(struct desktop *d)
+{
+    if (!d->sh.user_gate && d->sh.power_cfg.password && d->sh.profile.name[0]) desk_logon_open(d,2);
 }
 void desk_logon_done(struct desktop *d)
 {

@@ -40,6 +40,7 @@ struct user_profile {
     char root[USERS_PATH], documents[USERS_PATH], desktop[USERS_PATH];
     char programs[USERS_PATH], settings[USERS_PATH], temporary[USERS_PATH];
 };
+int users_boot_identity(char out[64]);
 int users_name_valid(const char *);
 void users_erase(void *, size_t);
 void users_derive(const char *, const uint8_t salt[16], unsigned iterations, uint8_t out[32]);

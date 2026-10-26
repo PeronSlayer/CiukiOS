@@ -13,7 +13,13 @@
 #endif
 static char *path(void *o,const char *n)
 {
-    const char *dir=o;size_t len=strlen(dir)+strlen(n)+2;char *p=malloc(len);if(p)snprintf(p,len,"%s/%s",dir,n);return p;
+    const char *dir=o;
+    /* Profile paths are rooted on the system volume; host stores remap them
+     * beneath the injected WINDOWS directory for isolated tests. */
+#ifdef __CIUKIOS__
+    if (*n=='/') { char *copy=malloc(strlen(n)+1); if (copy) strcpy(copy,n); return copy; }
+#endif
+    size_t len=strlen(dir)+strlen(n)+2;char *p=malloc(len);if(p)snprintf(p,len,"%s/%s",dir,n);return p;
 }
 static int read_file(void *o,const char *n,uint8_t **out,size_t *size)
 {
@@ -39,12 +45,14 @@ static int patch_file(void *o,const char *n,size_t off,const void *b,size_t size
 }
 static int sync_file(void *o,const char *n)
 {
-    char *p=path(o,n);if(!p)return -1;int fd=open(p,O_RDWR);free(p);if(fd<0)return -1;
+    char *p=path(o,n);if(!p)return -1;int fd=open(p,O_RDWR);if(fd<0){free(p);return -1;}
     int e=fsync(fd);if(close(fd))e=-1;
 #ifndef __CIUKIOS__
-    if(!e){fd=open(o,O_RDONLY|O_DIRECTORY);if(fd<0)return -1;e=fsync(fd);if(close(fd))e=-1;}
+    if(!e){char *slash=strrchr(p,'/');if(slash)*slash=0;
+        fd=open(slash ? p : ".",O_RDONLY|O_DIRECTORY);
+        if(fd<0)e=-1;else{e=fsync(fd);if(close(fd))e=-1;}}
 #endif
-    return e;
+    free(p);return e;
 }
 static void log_file(void *o,const char *text)
 {

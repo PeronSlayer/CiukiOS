@@ -152,7 +152,7 @@ struct desk_shell {
     struct user_profile profile;
     struct users_view users;
     struct users_request user_request;
-    int user_gate, user_focus, user_pending, user_want, user_choose, user_previous_focus;
+    int user_gate, user_focus, user_pending, user_want, user_choose, user_previous_focus, user_reload;
     char user_status[96];
     int programs_selected, programs_scroll, programs_click;
     unsigned save_game, save_op, save_bytes, save_quota, save_confirm, save_focus, save_busy;
@@ -266,6 +266,7 @@ void desk_logon_result(struct desktop *, const struct users_view *, int error);
 void desk_logon_done(struct desktop *);
 int desk_logon_input(struct desktop *, const struct ciuki_input_event *);
 void desk_session_lock(struct desktop *);
+void desk_session_resume(struct desktop *);
 void desk_shortcut_properties(struct desktop *, unsigned link, int repair);
 const char *desk_program_menu_label(const char *);
 void desk_shell_reset(struct desktop *);

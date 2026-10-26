@@ -1091,7 +1091,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         int32_t result = (c->program != DESK_APP_CONTROL && !taskman_power) || !d->shell ? -EPERM : desk_session_busy(d) ? -EBUSY : 0;
         if (!result && p.request == DESK_SETTINGS_OPEN_POWER && desk_internal_open(d,DESK_INTERNAL_SHUTDOWN)<0) result=-ENOMEM;
         if (!result && p.request==DESK_SETTINGS_SAVER_PREVIEW) result=desk_saver_start(d,p.values[0]);
-        if (!result && p.request == DESK_SETTINGS_RELOAD) d->sh.want_reload |= 1;
+        if (!result && p.request == DESK_SETTINGS_RELOAD) { d->sh.want_reload |= 1; d->sh.user_reload=1; }
         if (!result && p.request == DESK_SETTINGS_PROGRAMS) {d->sh.want_reload |= 3;d->sh.want_programs=1;d->v3_links_next=0;d->v3_links_force|=DESK_LINKS_SCAN|DESK_LINKS_GAMES;}
         if (!result && (p.request == DESK_SETTINGS_DISPLAY || p.request == DESK_SETTINGS_DISPLAY_PREVIEW)) {
             if (d->display_reply_mode) result=-EBUSY;
@@ -1172,7 +1172,7 @@ static void saver_damage(struct desktop *d)
 }
 static int saver_suppressed(const struct desktop *d)
 {
-    if (!d->shell || d->sh.gate || d->saver_external_running || d->saver_display_inhibited || desk_session_busy(d) || d->v3_lease_state ||
+    if (!d->shell || d->sh.gate || d->sh.user_gate || d->saver_external_running || d->saver_display_inhibited || desk_session_busy(d) || d->v3_lease_state ||
         d->v3_restoring || d->drag>=0 || d->sh.dnd.active) return 1;
     if (d->focus>=0) {
         const struct desk_client *c=&d->clients[d->focus];
@@ -1201,17 +1201,31 @@ int desk_saver_start(struct desktop *d, unsigned kind)
         d->saver_display_inhibited=q.inhibited!=0;
     }
     if (saver_suppressed(d) || d->monitor_off) return -EBUSY;
-    d->saver_active=1; d->saver_poll=0; d->saver_kind=kind; d->saver_frame=d->now_ns;
+    d->saver_active=1; d->saver_preview=1; d->saver_poll=0; d->saver_kind=kind; d->saver_frame=d->now_ns;
     saver_damage(d); return 0;
 }
 static int saver_wake(struct desktop *d)
 {
+    /* Gate first: even a DPMS wake must never scan out the old desktop.
+     * Suppression can also terminate a protected saver without input. */
+    if ((d->saver_active && !d->saver_preview) || (d->monitor_off && !d->saver_preview))
+        desk_session_lock(d);
     if (d->monitor_off) {
+        if (d->sh.user_gate) {
+            /* Paint while the monitor is still physically off. Merely setting
+             * user_gate would flash the previous framebuffer on DPMS wake. */
+            d->saver_active=d->saver_preview=0; d->monitor_off=0;
+            saver_damage(d); uint64_t before=d->presents;
+            int result=desk_redraw(d);
+            d->monitor_off=1;
+            if (result || d->presents==before || d->damage.count || d->present_damage.count) return -EAGAIN;
+        }
         int e=d->monitor_power ? d->monitor_power(-1) : -ENOSYS;
         if (e) return e;
         d->monitor_off=0; saver_damage(d);
     }
     if (d->saver_active) { d->saver_active=0; saver_damage(d); }
+    d->saver_preview=0;
     return 0;
 }
 int desk_saver_input(struct desktop *d, const struct ciuki_input_event *e)
@@ -1249,7 +1263,7 @@ void desk_saver_tick(struct desktop *d)
             if (q.sequence!=d->saver_sequence) {
                 d->saver_sequence=q.sequence;
                 if (q.flags&CIUKI_SCREEN_PERSIST) d->sh.want_save=1;
-                if (q.command==0xf140) (void)desk_saver_start(d,q.argument<0 ? q.saver : (unsigned)q.argument);
+                if (q.command==0xf140 && !desk_saver_start(d,q.argument<0 ? q.saver : (unsigned)q.argument)) d->saver_preview=0;
                 if (q.command==0xf170 && !saver_suppressed(d)) {
                     if (q.argument==-1) (void)saver_wake(d);
                     else if (d->monitor_power) {
@@ -1268,7 +1282,7 @@ void desk_saver_tick(struct desktop *d)
     uint64_t idle=d->now_ns>=d->saver_idle ? d->now_ns-d->saver_idle : 0;
     if (!d->saver_active && d->sh.cfg.saver_enabled && d->sh.cfg.saver_seconds>0 &&
         idle>=(uint64_t)d->sh.cfg.saver_seconds*1000000000ull)
-        (void)desk_saver_start(d,(unsigned)d->sh.cfg.saver_kind);
+        if (!desk_saver_start(d,(unsigned)d->sh.cfg.saver_kind)) d->saver_preview=0;
     if (!d->monitor_off && !d->monitor_failed && d->sh.cfg.monitor_seconds>0 &&
         idle>=(uint64_t)d->sh.cfg.monitor_seconds*1000000000ull) {
         int e=d->monitor_power ? d->monitor_power(2) : -ENOSYS;

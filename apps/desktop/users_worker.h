@@ -7,12 +7,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../control/job.h"
+extern int desk_w32_profile(const struct user_profile *) __attribute__((weak));
 struct users_worker {
     struct cp_job job;
     const char *root; /* trusted store prefix; NULL on CiukiOS */
     struct users_request request;
     struct users_view view;
-    int error;
+    int error, publish_profile; /* desktop logon boundary only; never an unlock */
     struct ciuki_settings settings;
 };
 static inline void users_work(void *ctx)
@@ -23,6 +24,9 @@ static inline void users_work(void *ctx)
     else w->error=users_execute(w->root ? w->root : "",&w->request,&w->view);
     if (!w->error && (w->request.operation==USERS_AUTH || w->request.operation==USERS_DEFAULT)) {
         struct user_profile p; users_profile(&p,w->request.name,w->view.authenticated,w->view.flags);
+        /* Use the stored spelling, even when logon matched case-insensitively. */
+        for (unsigned i=0;i<w->view.count;i++) if (w->view.ids[i]==w->view.authenticated)
+            snprintf(p.name,sizeof(p.name),"%s",w->view.names[i]);
         cfg_defaults(&w->settings);
         char path[512]; snprintf(path,sizeof(path),"%s%s",w->root ? w->root : "",p.settings);
         FILE *f=fopen(path,"rb");
@@ -37,6 +41,7 @@ static inline void users_work(void *ctx)
             }
             fclose(f);
         } else if (errno!=ENOENT) w->error=-errno;
+        if (!w->error && w->publish_profile && desk_w32_profile) w->error=desk_w32_profile(&p);
     }
     users_erase(&w->request,sizeof(w->request));
 }

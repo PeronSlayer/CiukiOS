@@ -39,6 +39,7 @@ static int alive(void *unused,uint32_t pid)
     return 0;
 }
 #endif
+extern void ws_profile(void *,const char *);
 int main(int argc,char **argv)
 {
     /* Also used by the image payload recipe to create fresh default hives.
@@ -49,6 +50,11 @@ int main(int argc,char **argv)
     if(!wr_init(&s,&io,now())){fprintf(stderr,"[win32] registry load-failed\n");return 1;}
     if(seed){uint32_t e=wr_flush(&s);wr_destroy(&s);return e?1:0;}
     s.compat_writer_pid=(uint32_t)getppid();
+    const char *user=getenv("CIUKI_SESSION_USER"), *profile=getenv("CIUKI_SESSION_ROOT");
+    if ((user && *user) || (profile && *profile)) {
+        uint32_t e=wr_select_profile(&s,user ? user : "",profile ? profile : "");
+        if (e) { fprintf(stderr,"[win32] profile load-failed error=%u\n",e); wr_destroy(&s); return 1; }
+    }
     if(argc==2 && !strcmp(argv[1],"--fresh-clients") && wr_clients_reset(&s)){
         fprintf(stderr,"[win32] client identity reset-failed\n");wr_destroy(&s);return 1;
     }
@@ -81,7 +87,7 @@ int main(int argc,char **argv)
     struct ws_fs shell_fs;ws_posix_fs(&shell_fs);
     const struct ws_config shell_config={.programs="/WINDOWS/Start Menu/Programs",.windows="/WINDOWS"};
     struct ws_shell *shell=ws_create(&shell_fs,&shell_config,&s);
-    if(shell){s.shell_call=ws_call;s.shell_exit=ws_exit;s.shell=shell;}
+    if(shell){s.shell_call=ws_call;s.shell_exit=ws_exit;s.shell_profile=ws_profile;s.shell=shell;ws_profile(shell,s.user_path);}
     else fprintf(stderr,"[win32] shell services unavailable\n");
     /* The registration is refused (error 5) while another live w32srv holds
      * it: the dead desktop's orphan did, 323 times, in q3crash 2026-10-25. */

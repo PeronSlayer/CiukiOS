@@ -139,3 +139,12 @@ void host_init(const char *root){
 }
 void host_finish(void){if(registry_live){assert(!wr_flush(&registry));wr_destroy(&registry);registry_live=0;}}
 void host_put(const char *w,const char *s){char p[1400];assert(path(w,p));FILE *f=fopen(p,"wb");assert(f);assert(fwrite(s,1,strlen(s),f)==strlen(s));assert(!fclose(f));}
+
+void host_profile(const char *name,const char *root)
+{
+  char p[1400];snprintf(p,sizeof(p),"%s%s",hive_directory,root);
+  for(char *c=p+1;;c++)if(!*c || *c=='/'){
+    char end=*c;*c=0;assert(!mkdir(p,0700) || errno==EEXIST);*c=end;if(!end)break;
+  }
+  assert(!wr_select_profile(&registry,name,root));
+}

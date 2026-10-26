@@ -142,7 +142,10 @@ static int username(void *name,uint32_t *count,int wide)
 {
     if(!count){w32r_last_error(87);return 0;}
     uint32_t e=call(W32R_USERNAME,0,NULL,NULL,0,0,0,0,0,NULL,0);
-    if(!e){if(!name||*count<6){*count=6;e=122;}else{if(wide){for(unsigned i=0;i<6;i++)((WCHAR *)name)[i]=tail[i];}else w32_copy(name,tail,6);*count=6;}}
+    if(!e){uint32_t n=reply->data_bytes;
+        if(!n || n>32 || tail[n-1])e=13;
+        else if(!name||*count<n){*count=n;e=122;}
+        else{if(wide){for(unsigned i=0;i<n;i++)((WCHAR *)name)[i]=tail[i];}else w32_copy(name,tail,n);*count=n;}}
     end(e);if(e)w32r_last_error(e);return !e;
 }
 int W32API GetUserNameA(char *n,uint32_t *c){return username(n,c,0);}

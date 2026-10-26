@@ -8,6 +8,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <signal.h>
+/* abi.h also defines __CIUKIOS__ in Linux replay fixtures. Select the
+ * actual native adapter by target architecture; tests can inject it explicitly. */
+#if defined(__i386__) || defined(USERS_NATIVE_LOCK)
+#define USERS_NATIVE_LOCK 1
+#include <ciuki/proc.h>
+#include <ciuki/recovery.h>
+#else
+#include <sys/file.h>
+#endif
+#include "../../sdk/win32/include/w32/server.h"
 #include <unistd.h>
 #ifdef __i386__
 #include <ciuki/entropy.h>
@@ -15,6 +26,94 @@
 #include <sys/random.h>
 #endif
 #define DB_BYTES 1400u
+/* The lease serializes recovery as well as writes. Unlinking an observed
+ * stale O_EXCL lock without this guard races another stale-lock remover. */
+extern uint32_t desk_w32_exchange(const void *,uint32_t,void *,uint32_t,uint32_t *) __attribute__((weak));
+static int user_lease(unsigned op)
+{
+    if (!desk_w32_exchange) return -ENOSYS;
+    struct { struct w32r_request h; char empty[2]; } in={
+        .h={.version=W32R_VERSION,.op=op,.path_bytes=1,.name_bytes=1}};
+    struct w32r_reply out; uint32_t used=0;
+    uint32_t e=desk_w32_exchange(&in,sizeof(in.h)+2,&out,sizeof(out),&used);
+    if (e) return -EIO;
+    if (used!=sizeof(out) || out.version!=W32R_VERSION) return -EIO;
+    return out.error==170 ? -EBUSY : out.error ? -EIO : 0;
+}
+int users_boot_identity(char out[64])
+{
+#ifdef USERS_NATIVE_LOCK
+    struct ciuki_recovery_status r;
+    if (ciuki_recovery_status(&r) || !(r.flags&CIUKI_RECOVERY_VALID) || !r.boots) return -EIO;
+    snprintf(out,64,"boot-%u",r.boots);
+#else
+    FILE *f=fopen("/proc/sys/kernel/random/boot_id","r");
+    if (!f) return -errno;
+    if (!fgets(out,64,f)) { fclose(f); return -EIO; }
+    fclose(f); out[strcspn(out,"\r\n")]=0;
+#endif
+    return 0;
+}
+static int owner_alive(unsigned pid)
+{
+#ifdef USERS_NATIVE_LOCK
+    struct { struct ciuki_proc_system system; struct ciuki_proc_record records[CIUKI_PROCESS_MAX]; } *s=calloc(1,sizeof(*s));
+    if (!s) return -ENOMEM;
+    int n=ciuki_proc_list(s,sizeof(*s)),live=-EIO;
+    if (n>=0 && (unsigned)n==s->system.records && (unsigned)n<=CIUKI_PROCESS_MAX) {
+        live=0;
+        for (int i=0;i<n;i++) if (s->records[i].pid==pid)
+            live=s->records[i].state==CIUKI_PROC_LIVE || s->records[i].state==CIUKI_PROC_STOPPING;
+    }
+    free(s); return live;
+#else
+    if (!pid || pid>0x7fffffffu) return 0;
+    return !kill((pid_t)pid,0) || errno!=ESRCH;
+#endif
+}
+static int lock_users(const char *root,const char *lock,int *guard)
+{
+    char boot[64],saved_boot[64],magic[16]; unsigned pid=0;
+    int e=users_boot_identity(boot); if (e) return e;
+#ifdef USERS_NATIVE_LOCK
+    e=user_lease(W32R_PROFILE_ACQUIRE); if (e) return e;
+    *guard=-2;
+#else
+    (void)user_lease;
+    char path[512]; snprintf(path,sizeof(path),"%s/system/settings/users.guard",root);
+    *guard=open(path,O_RDWR|O_CREAT|O_CLOEXEC,0600);
+    if (*guard<0) return -errno;
+    if (flock(*guard,LOCK_EX|LOCK_NB)) { e=errno==EWOULDBLOCK ? -EBUSY : -errno; close(*guard); *guard=-1; return e; }
+#endif
+    (void)root;
+    FILE *f=fopen(lock,"rb");
+    if (f) {
+        int valid=fscanf(f,"%15s %u %63s",magic,&pid,saved_boot)==3 && !strcmp(magic,"CUSR1");
+        int bad=ferror(f); fclose(f);
+        if (bad) return -EIO;
+        if (valid && !strcmp(boot,saved_boot)) {
+            int live=owner_alive(pid); if (live) return live<0 ? live : -EBUSY;
+        }
+        /* An empty legacy lock, old boot or dead process is recoverable.
+         * The guard excludes writers throughout inspection and replacement. */
+        if (unlink(lock)) return -errno;
+    } else if (errno!=ENOENT) return -errno;
+    int fd=open(lock,O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC,0600);
+    if (fd<0) return errno==EEXIST ? -EBUSY : -errno;
+    char record[112]; int n=snprintf(record,sizeof(record),"CUSR1 %u %s\n",(unsigned)getpid(),boot);
+    e=write(fd,record,(size_t)n)==n && !fsync(fd) ? 0 : -EIO;
+    if (close(fd) && !e) e=-EIO;
+    if (e) unlink(lock);
+    return e;
+}
+static void unlock_guard(int guard)
+{
+#ifdef USERS_NATIVE_LOCK
+    if (guard==-2) (void)user_lease(W32R_PROFILE_RELEASE);
+#else
+    if (guard>=0) close(guard);
+#endif
+}
 static int dirs(const char *path)
 {
     char buf[512]; if (strlen(path)>=sizeof(buf)) return -ENAMETOOLONG;
@@ -45,8 +144,9 @@ static __attribute__((noinline)) int prepare(const char *root,const struct users
     if (!(flags&USERS_PROFILES)) return 0;
     struct user_profile p; users_profile(&p,r->name,r->id,flags);
     char path[512];
-    const char *const paths[]={p.desktop,p.programs,"Favorites","Documents/Music","Documents/Pictures"};
-    for (unsigned i=0;i<5;i++) {
+    const char *const paths[]={p.desktop,p.programs,"Favorites","Documents/Music","Documents/Pictures",
+        "Application Data","Recent","SendTo","Templates","Start Menu/Programs/StartUp"};
+    for (unsigned i=0;i<sizeof(paths)/sizeof(*paths);i++) {
         if (i<2) snprintf(path,sizeof(path),"%s%s",root,paths[i]);
         else snprintf(path,sizeof(path),"%s%s/%s",root,p.root,paths[i]);
         int e=dirs(path); if (e) return e;
@@ -61,13 +161,13 @@ int users_execute(const char *root,const struct users_request *q,struct users_vi
     snprintf(path,sizeof(path),"%s/system/settings/users.dat",root);
     snprintf(temp,sizeof(temp),"%s/system/settings/users.new",root);
     snprintf(lock,sizeof(lock),"%s/system/settings/users.lock",root);
-    int mutation=q->operation!=USERS_READ && q->operation!=USERS_AUTH, locked=0, e=0;
+    int mutation=q->operation!=USERS_READ && q->operation!=USERS_AUTH, locked=0, guard=-1, e=0;
     if (mutation) {
         char parent[512]; snprintf(parent,sizeof(parent),"%s/system/settings",root);
         if ((e=dirs(parent))) return e;
-        int fd=open(lock,O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC,0600);
-        if (fd<0) return errno==EEXIST ? -EBUSY : -errno;
-        locked=1; close(fd);
+        e=lock_users(root,lock,&guard);
+        if (e) { unlock_guard(guard); return e; }
+        locked=1;
     }
     struct users_db *db=calloc(1,sizeof(*db)); unsigned char *bytes=malloc(DB_BYTES+1);
     if (!db || !bytes) { e=-ENOMEM; goto done; }
@@ -99,6 +199,7 @@ done:
     if (db) { users_erase(db,sizeof(*db)); free(db); }
     if (bytes) { users_erase(bytes,DB_BYTES+1); free(bytes); }
     if (locked) unlink(lock);
+    unlock_guard(guard);
     if (e) memset(v,0,sizeof(*v));
     return e;
 }

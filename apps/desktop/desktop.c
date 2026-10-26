@@ -790,7 +790,7 @@ static int tasks_verify(const struct desktop *d)
 static const uint32_t *store_icon(const char *object, unsigned size) { return du_icon_argb(du_icon_name(object),size); }
 static struct cfg_writer settings_writer;
 static struct users_worker user_worker;
-static int user_initial, user_switch_saving, user_default_loading, user_default_ready;
+static int user_initial, user_switch_saving, user_default_loading, user_default_ready, user_refresh_pending;
 static int links_profile_update(struct desktop *);
 static int settings_writer_started, verbose_boot, statistics_boot;
 static int settings_reload_pending, settings_reload_request, settings_reload_wallpaper;
@@ -2096,13 +2096,18 @@ static void user_service(struct desktop *d)
 {
     struct desk_shell *s=&d->sh;
     if (s->user_want && !user_worker.job.started) {
+        user_worker.publish_profile=s->user_gate==1 && s->user_request.operation==USERS_AUTH;
         int e=users_begin(&user_worker,&s->user_request,d->wake,d->wake_ctx);
         if (!e) { s->user_want=0; s->user_pending=1; users_erase(s->user_request.password,USERS_PASSWORD); }
         else { s->user_want=0; desk_logon_result(d,&s->users,e); }
     }
     struct users_view v; int e;
     if (users_poll(&user_worker,&v,&e)) {
-        if (user_default_loading) {
+        if (user_refresh_pending) {
+            user_refresh_pending=0;
+            if (!e) s->users=v;
+            else desk_shell_notify_error(d,"User options could not be refreshed",e);
+        } else if (user_default_loading) {
             user_default_loading=0; user_initial=0; s->user_pending=0;
             if (e) { s->user_choose=0; desk_logon_result(d,&s->users,e); }
             else user_default_ready=1;
@@ -2115,10 +2120,15 @@ static void user_service(struct desktop *d)
             } else desk_logon_done(d);
         } else desk_logon_result(d,&v,e);
     }
+    if (s->user_reload && !s->user_gate && !s->user_want && !s->user_pending && !user_worker.job.started) {
+        struct users_request q={.operation=USERS_READ}; user_worker.publish_profile=0;
+        if (!users_begin(&user_worker,&q,d->wake,d->wake_ctx)) { s->user_reload=0; user_refresh_pending=1; }
+    }
     if (!s->user_choose) return;
     if (s->user_choose==2 && !user_default_ready) {
         if (!user_worker.job.started) {
             struct users_request q={.operation=USERS_DEFAULT};
+            user_worker.publish_profile=1;
             int e=users_begin(&user_worker,&q,d->wake,d->wake_ctx);
             if (e) { s->user_choose=0; desk_logon_result(d,&s->users,e); }
             else { user_default_loading=1; s->user_pending=1; }
@@ -2140,6 +2150,8 @@ static void user_service(struct desktop *d)
      * is over; update its profile only at the next worker boundary. */
     struct user_profile old=s->profile;
     users_profile(&s->profile,s->user_choose==1 ? s->user_request.name : "",s->user_choose==1 ? s->users.authenticated : 0,s->users.flags);
+    for (unsigned i=0;i<s->users.count;i++) if (s->user_choose==1 && s->users.ids[i]==s->users.authenticated)
+        snprintf(s->profile.name,sizeof(s->profile.name),"%s",s->users.names[i]);
     if (!links_profile_update(d)) { s->profile=old; return; }
     if (settings_writer_started) { cfg_writer_stop(&settings_writer); settings_writer_started=0; }
     int (*run_job)(void *,size_t)=settings_writer.run_job;
