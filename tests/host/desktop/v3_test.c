@@ -210,7 +210,16 @@ static void production_lease_replay(void)
         assert(!desk_redraw(&d));d.now_ns+=1000000;desk_heartbeat(&d,d.now_ns);
         assert(!d.v3_restoring && d.v3_restore_reported && !d.v3_lease_state);cleanup();
     }
-    setup();presenter_adapter_init();int root=peer(10,42);create(root,20,1,1,0,0);d.v3_lease=real_lease;
+    setup();presenter_adapter_init();int root=peer(10,42);
+    int first=create(root,20,1,1,0,0);d.v3_lease=real_lease;
+    desk_focus(&d,first);request_lease(root,1);
+    uint32_t held=d.v3_lease_tuple.token;
+    int second=create(root,21,2,1,0,0);desk_focus(&d,second);
+    assert(d.v3_lease_state==1 && d.v3_lease_tuple.token==held && presenter_adapter_suspended());
+    int foreign=peer(11,84),other=create(foreign,22,1,1,0,0);desk_focus(&d,other);
+    assert(!d.v3_lease_state && !presenter_adapter_suspended());cleanup();
+    puts("PASS fx-q3hang display ownership: same-process focus retains CDS lease; foreign process restores desktop");
+    setup();presenter_adapter_init();root=peer(10,42);create(root,20,1,1,0,0);d.v3_lease=real_lease;
     struct ciuki_message failure;msg(&failure,DESK_V3_LEASE,16,1,1);
     desk_put32(failure.data+16,1);desk_put32(failure.data+20,320);desk_put32(failure.data+24,200);desk_put32(failure.data+28,8);
     presenter_adapter_failure(1);assert(desk_v3_receive(&d,root,&failure)==-EIO);assert(!d.v3_lease_state && !presenter_adapter_suspended());

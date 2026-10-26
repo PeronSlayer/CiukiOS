@@ -18,6 +18,7 @@
 static uint8_t page_memory[4096];
 #define P2V(p) ((void)(p),(void *)page_memory)
 volatile uint64_t g_ticks;
+struct ciuki_boot_info g_boot;
 static struct process desktop={.pid=2,.state=PROC_LIVE}, game={.pid=3,.state=PROC_LIVE,.personality=PROC_WIN32};
 static struct proc_thread dt={.process=&desktop}, gt={.process=&game};
 static struct fb_device device={.present=true,.width=640,.height=480,.pitch=2560,.bpp=32,
@@ -178,6 +179,23 @@ int main(void)
     struct ciuki_w32_display_args a=grant_args();connected=false;w32_display_call(&dt,&a);assert(a.error==EPERM&&!mode_calls);connected=true;
     a=grant_args();w32_display_call(&gt,&a);assert(a.error==EPERM&&!mode_calls);
     a=grant_args();mode_fail=true;w32_display_call(&dt,&a);assert(a.error==EIO&&!active&&!suspended);
+    strcpy(g_boot.test_request,"f5:q3-lease-eio run=1234abcd");
+    g_boot.test_request_len=sizeof("f5:q3-lease-eio run=1234abcd")-1;
+    g_boot.flags=CBI_F_SMBIOS_QEMU|CBI_F_TEST_REQUEST;
+    unsigned before_modes=mode_calls;
+    for (unsigned i=0;i<3;i++) {
+        a=grant_args();w32_display_call(&dt,&a);
+        assert(a.error==EIO && !a.result && !a.token && !a.generation);
+        assert(!active && !transfer && !suspended && !frame_running);
+        assert(device.mode_id==0x118 && mode_calls==before_modes && !writes);
+        display_present_poll();complete();
+    }
+    g_boot.flags=CBI_F_TEST_REQUEST;assert(!supervisor_interactive_test(&g_boot));
+    g_boot.flags=CBI_F_SMBIOS_QEMU;assert(!supervisor_interactive_test(&g_boot));
+    g_boot.flags=CBI_F_SMBIOS_QEMU|CBI_F_TEST_REQUEST;
+    g_boot.test_request_len--;assert(!supervisor_interactive_test(&g_boot));
+    g_boot.flags=0;
+    puts("PASS fx-q3hang three EIO grants: rollback, desktop resumed, no held lock/frame, runtime QEMU-only fault gating");
     a=grant_args();a.scale=3;w32_display_call(&dt,&a);assert(a.error==EOPNOTSUPP&&!active&&!suspended&&device.mode_id==0x118);
     struct ciuki_display_info modes={.mode_count=3};
     modes.modes[0]=(struct ciuki_display_mode){.id=0x115,.width=800,.height=600,.bpp=16,.pitch=1600,.linear=1};

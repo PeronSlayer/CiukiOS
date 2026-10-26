@@ -112,7 +112,9 @@ void desk_focus(struct desktop *d, int i)
     }
     if (i == d->focus) return;
     if (i >= 0 && d->shell && d->sh.taskbar_key) desk_shell_taskbar_leave(d);   /* a window took the focus from the taskbar */
-    if (d->v3_lease_state) desk_v3_revoke(d);
+    /* CDS may acquire before the game's drawable exists. Exclusive display
+     * ownership belongs to the process across its own window activations. */
+    if (d->v3_lease_state && (i<0 || d->clients[i].pid!=d->v3_lease_pid)) desk_v3_revoke(d);
     desk_v3_pointer_release(d);
     struct ciuki_input_event e = { .monotonic_ns = d->now_ns };
     release(d, &e);

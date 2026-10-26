@@ -115,6 +115,17 @@ class Quake3DemoTests(unittest.TestCase):
         return f'{total / frames:.0f} GL calls/frame: ' + ', '.join(
             f'{name} {count / frames:.1f}' for name, count in calls[:top])
 
+    def test_failed_fullscreen_lease(self):
+        code, output, log, _, _ = self.run_game(
+            '+set logfile 2 +set ciuki_lease_eio 1 +set ciuki_close_after_eio 1 '
+            '+wait 80 +quit', 90)
+        self.assertIn('GAME lease injected result=-5', output)
+        self.assertRegex(log, r'calling CDS:.*failed')
+        self.assertIn(code, (0, 1), output[-4000:] + log[-4000:])
+        self.assertNotIn('GAME watchdog:', output)
+        self.assertTrue('kind=window' in output or 'GAME close after failed lease' in output,
+                        output[-4000:] + log[-4000:])
+
     def test_menu_frames_through_opengl32_and_the_lease(self):
         # Quake III's "wait N" counts Cbuf_Execute calls and Com_Frame makes
         # two per frame (qcommon/common.c), so 200 waits are about 100 frames.

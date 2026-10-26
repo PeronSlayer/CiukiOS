@@ -163,6 +163,7 @@ struct desk_client {
      * responding" whether or not it answers PINGs. close_later: the program
      * answered CLOSE_ACK LATER and is showing its own prompt. */
     uint64_t end_task_ns;
+    uint64_t hang_retry_ns;       /* Wait/Cancel starts a fresh HungAppTimeout */
     int close_later;
     int slot_tier;   /* DESK_SLOT_*: the tier this slot was taken at (quota accounting) */
     uint32_t pid, serial, version, window_id;

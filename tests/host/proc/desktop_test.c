@@ -1071,13 +1071,19 @@ static void test_setup_bootstrap(void)
 static void test_pager_boot_fallback(void)
 {
     const struct ciuki_file_ops *saved = proc_get_file_ops();
-    uint32_t boot_flags = g_boot.flags;
+    struct ciuki_boot_info saved_boot = g_boot;
     unsigned releases = pager_boot_releases;
     CHECK(!bootstrap_attempted && !desktop_pid);
     g_boot.flags = CBI_F_TEST_REQUEST;
     supervisor_bootstrap();
     CHECK(!bootstrap_attempted && pager_boot_releases == releases);
-    g_boot.flags = 0; proc_set_file_ops(0);
+    /* Only the QEMU interactive failure selection is allowed to bootstrap
+     * under a test request. Ordinary diagnostics above still bypass it. */
+    g_boot.flags = CBI_F_TEST_REQUEST | CBI_F_SMBIOS_QEMU;
+    strcpy(g_boot.test_request,"f5:q3-lease-eio run=1234abcd");
+    g_boot.test_request_len=sizeof("f5:q3-lease-eio run=1234abcd")-1;
+    CHECK(supervisor_interactive_test(&g_boot));
+    proc_set_file_ops(0);
     supervisor_bootstrap(); /* desktop and stand-in absent: console fallback */
     CHECK(bootstrap_attempted && !desktop_pid && pager_boot_releases == releases + 1);
     supervisor_bootstrap(); CHECK(pager_boot_releases == releases + 1);
@@ -1086,7 +1092,7 @@ static void test_pager_boot_fallback(void)
     supervisor_poll();
     CHECK(!desktop_pid && desktop_deaths == deaths + 1 && pager_boot_releases == releases + 2);
     desktop_deaths = deaths; bootstrap_attempted = false;
-    g_boot.flags = boot_flags; proc_set_file_ops(saved);
+    g_boot = saved_boot; proc_set_file_ops(saved);
     puts("desktop pager boot: diagnostics bypass bootstrap; console fallback and death release manager; duplicate bootstrap is inert PASS");
 }
 static unsigned desktop_opens;

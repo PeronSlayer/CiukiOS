@@ -34,7 +34,7 @@ struct w32_process {
     uint32_t endpoint[2], service, diagnostic_count, priority_class;
     uint32_t peak_handles, peak_threads, exit_reason;
     struct w32_diagnostic_state *diagnostics;
-    bool closing;
+    bool closing, gui, input_idle;
 };
 struct w32_apc_node {
     struct w32_apc_node *next;

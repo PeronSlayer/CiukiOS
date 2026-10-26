@@ -1703,7 +1703,7 @@ void desk_close_timeouts(struct desktop *d)
     for (int i=0; i<DESK_CLIENTS; i++) {
         struct desk_client *c=&d->clients[i];
         if (!c->window || c->internal || !c->closing || !c->close_sent_ns || c->version==DESK_VERSION || !c->pid ||
-            !c->unresponsive || d->now_ns<c->close_sent_ns+DESK_HUNG_NS) continue;
+            !c->unresponsive || d->now_ns<c->close_sent_ns+DESK_HUNG_NS || d->now_ns<c->hang_retry_ns) continue;
         c->close_sent_ns=0; /* one dialog per close request */
         desk_end_task_open(d,DESK_HANG_NOT_RESPONDING,0,c->pid,c->window_id,c->title);
         return;
@@ -1716,7 +1716,7 @@ void desk_close_timeouts(struct desktop *d)
      * Setup" page has no Cancel). One dialog per End Task. */
     for (int i=0; i<DESK_CLIENTS; i++) {
         struct desk_client *c=&d->clients[i];
-        if (!c->window || c->internal || !c->end_task_ns || d->now_ns<c->end_task_ns) continue;
+        if (!c->window || c->internal || !c->end_task_ns || d->now_ns<c->end_task_ns || d->now_ns<c->hang_retry_ns) continue;
         uint32_t pid=c->pid;
         int shown=i;   /* the program's front window names the dialog */
         for (int k=0; k<DESK_CLIENTS; k++) if (d->clients[k].window && !d->clients[k].internal && d->clients[k].pid==pid) {
@@ -1760,6 +1760,7 @@ void desk_user_close(struct desktop *d, int i)
     if (session_escalate(d,t)) return;
     if (!c->internal && c->closing && c->version!=DESK_VERSION && c->pid && c->pid!=d->self_pid && d->terminate &&
         !desk_session_busy(d) && (c->unresponsive || !c->close_later)) {
+        if (d->now_ns<c->hang_retry_ns) return;
         if (d->end_task.kind && !d->end_task.session && d->end_task.window>=0) { desk_focus(d,d->end_task.window); return; }
         desk_end_task_open(d,DESK_HANG_NOT_RESPONDING,0,c->pid,c->window_id,c->title);
         return;
@@ -1859,6 +1860,7 @@ int desk_task_end(struct desktop *d, uint32_t window_id, uint32_t pid)
          * whose End Task terminates the authenticated host process. */
         if (!c->internal && (c->closing || c->unresponsive)) {
             if (!d->terminate || !c->pid || c->pid==d->self_pid) return -EPERM;
+            if (d->now_ns<c->hang_retry_ns) return 0;
             desk_end_task_open(d,DESK_HANG_NOT_RESPONDING,0,c->pid,c->window_id,c->title);
             return 0;
         }
@@ -2724,6 +2726,7 @@ uint64_t desk_session_deadline(const struct desktop *d)
         const struct desk_client *c=&d->clients[i];
         if (c->window && c->closing && c->close_sent_ns && c->unresponsive && c->version!=DESK_VERSION) {
             uint64_t t=c->close_sent_ns+DESK_HUNG_NS;
+            if (t<c->hang_retry_ns) t=c->hang_retry_ns;
             if (!next || t<next) next=t;
         }
         if (c->window && !c->internal && c->end_task_ns && (!next || c->end_task_ns<next)) next=c->end_task_ns;
@@ -2807,6 +2810,14 @@ void desk_end_task_choice(struct desktop *d, int end)
     }
     if (!end) {
         if (e.session) { desk_session_cancel(d); return; }
+        if (e.kind==DESK_HANG_NOT_RESPONDING)
+            for (int i=0;i<DESK_CLIENTS;i++) {
+                struct desk_client *c=&d->clients[i];
+                if (c->window && !c->internal && c->pid==e.pid) {
+                    c->hang_retry_ns=d->now_ns+DESK_HUNG_NS;
+                    if (c->end_task_ns) c->end_task_ns=c->hang_retry_ns;
+                }
+            }
         if (e.kind==DESK_HANG_DOS)   /* No: the window and its program stay */
             for (int i=0; i<DESK_CLIENTS; i++) if (d->clients[i].window && d->clients[i].pid==e.pid && d->clients[i].closing) {
                 d->clients[i].closing=0; d->clients[i].close_sent_ns=0; desk_caption_damage(d,i);

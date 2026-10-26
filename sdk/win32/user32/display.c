@@ -13,6 +13,12 @@ struct cached {
   DWORD seq, lease[7], count, rects[U32_RECTS * 4];
 };
 static struct cached cached[U32_WINDOWS];
+static struct {
+  BOOL active, changing;
+  DWORD width, height, bpp;
+  HWND carrier;
+} cds_mode;
+static void release_window(struct u32_window *);
 static BOOL subtract(struct u32_region *r, RECT cut) {
   struct u32_region out = {0};
   for (UINT i = 0; i < r->n; i++) {
@@ -137,6 +143,8 @@ static int snapshot(uintptr_t hwnd, struct dd_lease *lease, RECT *r,
 /* A busy slot leaves the caller's previous tuple untouched, so a pacing
  * worker never mistakes a concurrent GUI update for a revocation. */
 void W32API w32_user_display_poll(uintptr_t hwnd, struct dd_lease *out) {
+  /* Only a value snapshot is read by pacing workers. The drawable's cached
+   * tuple is filled by the owner-thread lease call below. */
   if (out && !snapshot(hwnd, out, 0, 0))
     w32_fill(out, 0, sizeof(*out));
 }
@@ -165,6 +173,19 @@ int32_t W32API w32_user_display_lease(uintptr_t hwnd, DWORD width, DWORD height,
   struct u32_window *w = u32_window((HWND)hwnd);
   if (!w || w->parent || w->destroying || w->tid != u32_tid() || !out ||
       !width || !height || width > 2048 || height > 2048 || (bpp != 8 && bpp != 16 && bpp != 32)) return DD_INVALID;
+  struct u32_window *carrier = u32_window(cds_mode.carrier);
+  if (cds_mode.active && carrier && carrier != w && carrier->lease.active) {
+    if (width == cds_mode.width && height == cds_mode.height && bpp == cds_mode.bpp) {
+      w->lease = carrier->lease;
+      *out = w->lease;
+      u32_display_cache();
+      return 0;
+    }
+    /* A render-resolution/depth shim may use another frame layout. Prove
+     * that layout with its own grant instead of submitting the wrong size
+     * to the preflight token. The recorded application mode stays intact. */
+    release_window(carrier);
+  }
   if (w->lease_wanted && w->lease_w == width && w->lease_h == height && w->lease_bpp == bpp) {
     *out = w->lease; return 0;
   }
@@ -172,21 +193,37 @@ int32_t W32API w32_user_display_lease(uintptr_t hwnd, DWORD width, DWORD height,
   uint8_t b[16]; desk_put32(b, 1); desk_put32(b+4, width); desk_put32(b+8, height); desk_put32(b+12, bpp);
   w->lease_w = width; w->lease_h = height; w->lease_bpp = bpp; w->lease_wanted = 1;
   if (!u32_wire(w, DESK_V3_LEASE, b, sizeof(b), -1)) {
+    w->lease_failed = GetLastError() == 31;
     w->lease_wanted = 0; w32_fill(&w->lease, 0, sizeof(w->lease)); u32_display_cache();
     return GetLastError() == 170 ? DD_EXCLUSIVE : DD_UNSUPPORTED;
   }
+  w->lease_failed = 0;
   *out = w->lease; u32_display_cache(); return 0;
+}
+static void release_window(struct u32_window *w) {
+  BOOL wanted = w->lease_wanted;
+  struct dd_lease before = w->lease;
+  if (wanted && before.active)
+    for (UINT i = 0; i < U32_WINDOWS; i++)
+      if (u32_windows[i].lease.token == before.token &&
+          u32_windows[i].lease.generation == before.generation)
+        w32_fill(&u32_windows[i].lease, 0, sizeof(w->lease));
+  if (w->destroying && w->handle == cds_mode.carrier) {
+    cds_mode.active = 0;
+    cds_mode.carrier = 0;
+  }
+  w->lease_wanted = 0; w32_fill(&w->lease, 0, sizeof(w->lease)); u32_display_cache();
+  if (wanted && w->wire && !u32_exiting) { uint8_t b[16] = {0}; u32_wire(w, DESK_V3_LEASE, b, sizeof(b), -1); }
 }
 void W32API w32_user_display_release(uintptr_t hwnd) {
   U32_GUARD;
   struct u32_window *w = u32_window((HWND)hwnd);
   if (!w || w->parent || (!w->destroying && w->tid != u32_tid())) return;
-  BOOL wanted = w->lease_wanted;
-  w->lease_wanted = 0; w32_fill(&w->lease, 0, sizeof(w->lease)); u32_display_cache();
-  if (wanted && w->wire) { uint8_t b[16] = {0}; u32_wire(w, DESK_V3_LEASE, b, sizeof(b), -1); }
+  release_window(w);
 }
 void u32_display_event(struct u32_window *w, const struct desk_packet *p) {
-  if (p->opcode == DESK_V3_ACTIVATE && !p->focused)
+  struct dd_lease before = w->lease;
+  if (p->opcode == DESK_V3_ACTIVATE && !p->focused && !p->flags)
     w32_fill(&w->lease, 0, sizeof(w->lease));
   if (p->opcode == DESK_V3_LEASE_EVENT) {
     w32_fill(&w->lease, 0, sizeof(w->lease));
@@ -199,6 +236,13 @@ void u32_display_event(struct u32_window *w, const struct desk_packet *p) {
       w->lease = (struct dd_lease){1, p->lease.token, p->lease.generation,
           p->width, p->height, p->bpp, p->lease.surface.pitch};
   }
+  /* A CDS carrier's aliases have no independent grant. Clear them before a
+   * deactivation callback or a pacing worker can reuse a revoked token. */
+  if (w->handle == cds_mode.carrier && before.active && !w->lease.active)
+    for (UINT i = 0; i < U32_WINDOWS; i++)
+      if (u32_windows[i].lease.token == before.token &&
+          u32_windows[i].lease.generation == before.generation)
+        w32_fill(&u32_windows[i].lease, 0, sizeof(w->lease));
   u32_display_cache();
 }
 
@@ -209,18 +253,17 @@ void u32_display_event(struct u32_window *w, const struct desk_packet *p) {
  * program; ChangeDisplaySettings(NULL, 0) returns to the registry mode;
  * CDS_TEST only validates. On CiukiOS the desktop composes every window and
  * owns the physical mode; a Win32 program reaches the display only through
- * the full-screen lease (DESK_V3_LEASE), which its borderless popup takes on
- * its first presented frame (DirectDraw SetDisplayMode and the GL swap of a
- * WS_POPUP window without caption, sdk/win32/opengl32/present.c). So a
- * dynamic change (flags 0 or CDS_FULLSCREEN) records a process-scoped mode
- * that the lease then switches to; nothing is sent to the desktop and the
- * composed desktop keeps its mode. Persisting a mode (CDS_UPDATEREGISTRY,
+ * the full-screen lease (DESK_V3_LEASE). Acquire synchronously through an
+ * offscreen tool window: CDS commonly precedes creation of the drawable.
+ * The drawable reuses the lease so that success means the driver accepted
+ * the mode, including when firmware is quarantined. Persisting a mode (CDS_UPDATEREGISTRY,
  * CDS_GLOBAL, CDS_SET_PRIMARY, CDS_NORESET) is the Display control panel's
  * job: DISP_CHANGE_NOTUPDATED. A mode is valid under the DirectDraw rule
  * (sdk/win32/ddraw/device.c mode_supported): 8, 16 or 32 bits per pixel and
  * either a hardware mode size or one of the logical sizes the presenter
  * scales, with a 16/32-bit hardware mode at least that large. */
 #define DISP_SUCCESSFUL 0
+#define DISP_FAILED (-1)
 #define DISP_BADMODE (-2)
 #define DISP_NOTUPDATED (-3)
 #define DISP_BADFLAGS (-4)
@@ -241,7 +284,6 @@ void u32_display_event(struct u32_window *w, const struct desk_packet *p) {
  * Unicode forms stay Windows 9x typed failures (scripts/win32/user32.py). */
 struct devmode_layout { UINT size, fields, bpp, width, height, flags, freq, minimum; };
 static const struct devmode_layout devmode_a = {36, 40, 104, 108, 112, 116, 120, 124};
-static struct { BOOL active; DWORD width, height, bpp; } cds_mode;
 static const DWORD logical_sizes[][2] = {{320, 200}, {320, 240}, {400, 300}, {512, 384},
                                          {640, 400}, {640, 480}, {800, 600}, {1024, 768}};
 static BOOL display_query(struct ciuki_display_info *d) {
@@ -273,15 +315,41 @@ static BOOL mode_valid(const struct ciuki_display_info *d, DWORD w, DWORD h, DWO
 static DWORD desktop_bpp(const struct ciuki_display_info *d) {
   return d->bpp == 8 || d->bpp == 16 ? d->bpp : 32;
 }
+static void cds_release(void) {
+  HWND carrier = cds_mode.carrier;
+  cds_mode.active = 0;
+  cds_mode.carrier = 0;
+  if (carrier) {
+    w32_user_display_release((uintptr_t)carrier);
+    DestroyWindow(carrier);
+  }
+  /* Clear aliases of the carrier tuple as well as leases reacquired by the
+   * real drawable after Alt-Tab. No stale exclusive snapshot survives CDS(0). */
+  for (UINT i = 0; i < U32_WINDOWS; i++) {
+    struct u32_window *w = &u32_windows[i];
+    if (w->handle) {
+      /* CDS resets the process mode, including a real drawable reacquired
+       * by another GUI thread after Alt-Tab. The public release API keeps
+       * its owner-thread rule; this internal reset runs under USER's lock. */
+      if (w->lease_wanted) release_window(w);
+      w32_fill(&w->lease, 0, sizeof(w->lease));
+      w->lease_failed = 0;
+    }
+  }
+  u32_display_cache();
+}
 static LONG change_settings(const uint8_t *dm, const struct devmode_layout *l, DWORD flags) {
   U32_GUARD;
+  if (cds_mode.changing) return DISP_FAILED;
+  struct u32_window *owner = u32_window(cds_mode.carrier);
+  if (owner && owner->tid != u32_tid()) return DISP_FAILED;
   if (flags & ~(CDS_PERSIST_ | CDS_TEST_ | CDS_FULLSCREEN_ | CDS_RESET_))
     return DISP_BADFLAGS;
   if ((flags & CDS_FULLSCREEN_) && (flags & CDS_UPDATEREGISTRY_))
     return DISP_BADFLAGS;
   if (!dm) {
     if (!(flags & CDS_TEST_))
-      cds_mode.active = 0;
+      cds_release();
     return DISP_SUCCESSFUL;
   }
   DWORD size = w32_u16(dm + l->size), fields = w32_u32(dm + l->fields);
@@ -303,10 +371,29 @@ static LONG change_settings(const uint8_t *dm, const struct devmode_layout *l, D
     return DISP_SUCCESSFUL;
   if (flags & CDS_PERSIST_)
     return DISP_NOTUPDATED;
+  struct u32_window *old = u32_window(cds_mode.carrier);
+  if (!(flags & CDS_RESET_) && cds_mode.active && old && old->lease.active && cds_mode.width == w &&
+      cds_mode.height == h && cds_mode.bpp == bpp) return DISP_SUCCESSFUL;
+  cds_mode.changing = 1;
+  cds_release();
+  HWND previous = GetForegroundWindow();
+  HWND carrier = CreateWindowExA(WS_EX_TOOLWINDOW, "STATIC", "", WS_POPUP | WS_VISIBLE,
+                                  -8192, -8192, 32, 32, 0, 0, 0, 0);
+  struct dd_lease lease = {0};
+  BOOL ok = carrier && SetForegroundWindow(carrier) &&
+      !w32_user_display_lease((uintptr_t)carrier, w, h, bpp, &lease) && lease.active;
+  if (!ok) {
+    if (carrier) DestroyWindow(carrier);
+    if (previous && IsWindow(previous)) SetForegroundWindow(previous);
+    cds_mode.changing = 0;
+    return DISP_FAILED;
+  }
+  cds_mode.carrier = carrier;
   cds_mode.active = 1;
   cds_mode.width = w;
   cds_mode.height = h;
   cds_mode.bpp = bpp;
+  cds_mode.changing = 0;
   return DISP_SUCCESSFUL;
 }
 LONG W32API ChangeDisplaySettingsA(void *dm, DWORD flags) {

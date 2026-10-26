@@ -5,6 +5,8 @@
 #include <string.h>
 #include <ciuki/abi.h>
 #include <ciuki/bootstat.h>
+#include <ciuki/w32_transport.h>
+_Static_assert(W32_MSG_INPUT_IDLE == 13u, "fx-q3hang input-idle query action");
 #include "../../sdk/win32/include/w32/gl_extensions.h"
 _Static_assert(GL_TEXTURE_COMPRESSION_HINT_ARB == 0x84efu,
                "f7-08 GL_TEXTURE_COMPRESSION_HINT_ARB");

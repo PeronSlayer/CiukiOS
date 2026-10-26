@@ -158,7 +158,7 @@ int w32_record_validate(const void *record, uint32_t bytes, bool win32)
     case W32_WAIT: {const struct ciuki_w32_wait_args *a=record;return (a->reserved&~W32_WAIT_NEW_INPUT)||a->result||a->error||a->count>64||a->all>1||a->alertable>1||a->wake_mask&~W32_QS_ALL?-EINVAL:0;}
     case W32_APC: {const struct ciuki_w32_apc_args *a=record;return a->result||a->error||a->action<1||a->action>3?-EINVAL:0;}
     case W32_CONTEXT: {const struct ciuki_w32_context_args *a=record;return a->result||a->error||a->action<1||a->action>4?-EINVAL:0;}
-    case W32_MESSAGE: {const struct ciuki_w32_message_args *a=record;return a->result||a->error||a->action<1||a->action>W32_MSG_START||a->bits&~W32_QS_ALL?-EINVAL:0;}
+    case W32_MESSAGE: {const struct ciuki_w32_message_args *a=record;return a->result||a->error||a->action<1||a->action>W32_MSG_INPUT_IDLE||a->bits&~W32_QS_ALL?-EINVAL:0;}
     case W32_SECTION: {const struct ciuki_w32_section_args *a=record;return a->result||a->error||a->flags&~1u?-EINVAL:0;}
     case W32_VIEW: {const struct ciuki_w32_view_args *a=record;return a->reserved||a->result||a->error||a->action<1||a->action>3?-EINVAL:0;}
     case W32_SERVICE: {const struct ciuki_w32_service_args *a=record;return a->result||a->error||a->action<1||a->action>6?-EINVAL:0;}

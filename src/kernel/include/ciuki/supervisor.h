@@ -4,6 +4,23 @@
 #define CIUKI_SUPERVISOR_H
 #include <ciuki/desktop.h>
 #include <ciuki/sha256.h>
+#include <ciuki/boot_info.h>
+/* The interactive display-failure probe needs ordinary PID 1 bootstrap.
+ * Share the exact admission rule with the grant fault; no build variant. */
+static inline bool supervisor_interactive_test(const struct ciuki_boot_info *boot)
+{
+    static const char prefix[] = "f5:q3-lease-eio run=";
+    if ((boot->flags & (CBI_F_SMBIOS_QEMU | CBI_F_TEST_REQUEST)) !=
+        (CBI_F_SMBIOS_QEMU | CBI_F_TEST_REQUEST) ||
+        boot->test_request_len != sizeof(prefix)-1+8) return false;
+    for (unsigned i=0;i<sizeof(prefix)-1;i++)
+        if (boot->test_request[i]!=prefix[i]) return false;
+    for (unsigned i=sizeof(prefix)-1;i<boot->test_request_len;i++) {
+        char c=boot->test_request[i];
+        if (!((c>='0' && c<='9') || (c>='a' && c<='f') || (c>='A' && c<='F'))) return false;
+    }
+    return true;
+}
 #define SUPERVISOR_CAPTURE_BYTES 1024u
 struct supervisor_capture {
     struct sha256_ctx digest;

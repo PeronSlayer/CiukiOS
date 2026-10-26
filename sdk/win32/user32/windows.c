@@ -456,6 +456,7 @@ BOOL u32_destroy(struct u32_window *w, UINT mode) {
   u32_destroy_dependents(w, mode, 2);
   u32_classic_destroy(h); /* USER-owned control/dialog/menu/caret records, also at thread exit */
   u32_window_region_free(w);
+  w32_user_display_release((uintptr_t)h);
   u32_destroy_paint(w);
   while (w->props) {
     struct u32_prop *p = w->props;

@@ -58,6 +58,33 @@ static int hc_alive(struct desktop *d, uint32_t pid) { (void)d; return pid>=hc_g
 static void test_t23_hang_close(void)
 {
     struct desktop *d=&shutdown_desktop;
+    /* The close timeout and End Task deadline can both expire in the same
+     * turn. Dismissing the first prompt must not expose the second deadline
+     * immediately. The desktop still moves and closes the ghost/dialog. */
+    es_setup(); d->terminate=hc_terminate; hc_terms=0;
+    int frozen=hc_client(590,"Installer waiting for child");
+    assert(!desk_task_end(d,d->clients[frozen].window_id,590));
+    d->clients[frozen].unresponsive=1;
+    shutdown_at(6000000000ull);
+    assert(d->end_task.kind==DESK_HANG_NOT_RESPONDING);
+    struct desk_box old_frame=d->clients[frozen].frame;
+    desk_move(d,frozen,old_frame.x+17,old_frame.y+11);
+    assert(d->clients[frozen].frame.x==old_frame.x+17 && d->clients[frozen].frame.y==old_frame.y+11);
+    int retry_prompt=d->end_task.window;
+    old_frame=d->clients[retry_prompt].frame;
+    desk_move(d,retry_prompt,old_frame.x+9,old_frame.y+7);
+    assert(d->clients[retry_prompt].frame.x==old_frame.x+9 && d->clients[retry_prompt].frame.y==old_frame.y+7);
+    desk_end_task_choice(d,0);
+    shutdown_at(6000000001ull);
+    assert(!d->end_task.kind && !hc_terms);
+    shutdown_at(10999999999ull);
+    assert(!d->end_task.kind && d->clients[frozen].window);
+    shutdown_at(11000000000ull);
+    assert(d->end_task.kind==DESK_HANG_NOT_RESPONDING);
+    desk_end_task_choice(d,1);
+    assert(hc_killed(590,SIGKILL)==1);
+    shutdown_cleanup();
+    puts("PASS fx-q3hang Wait: no repeated prompt before five seconds, End Task still works");
     /* 1. A full client table: programs stop DESK_SYSTEM_SLOTS short of it.
      * The Task Manager the desktop launches on Ctrl+Alt+Del takes the first
      * reserved slot (review P2-5), End Task's "This program is not

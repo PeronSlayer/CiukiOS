@@ -72,6 +72,9 @@ int w32_spawn(struct process *p, const struct ciuki_file *file, const struct pro
         w32_refusal_queue(p,im->failure&&(!strncmp(im->failure,"machine-not-i386",17)||!strncmp(im->failure,"unsupported-subsystem",21)||!strncmp(im->failure,"optional-magic-not-pe32",23)||!strncmp(im->failure,"unsupported-runtime",20))?W32_REFUSE_RUNTIME:W32_REFUSE_IMAGE,p->name,193);goto done; }
     if (im->flags & 0x2000) { klog("[win32] load check=expected-executable error=193");err = -ENOEXEC; goto done; }
     p->personality = PROC_WIN32; p->memory->win32 = true;
+    err = w32_process_init(p);
+    if (err) goto done;
+    p->w32->gui = im->subsystem == 2;
     err=w32_diagnostic_image(p,im->timestamp,im->bytes);if(err)goto done;
     p->w32_image = im->base; p->w32_stack_reserve = im->stack_reserve; p->w32_stack_commit = im->stack_commit;
     err = w32_image_map(p, file, im, false);

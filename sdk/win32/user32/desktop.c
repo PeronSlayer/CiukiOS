@@ -89,6 +89,7 @@ BOOL u32_wire(struct u32_window *w, UINT op, const void *data, UINT n, int fd) {
                     : request.error == -12                      ? 8
                     : request.error == -16                      ? 170
                     : request.error == -2                       ? 1400
+                    : request.error == -5                      ? 31
                                                                 : 87);
   return 1;
 }
