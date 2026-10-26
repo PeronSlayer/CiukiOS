@@ -3,7 +3,7 @@
 Scope: `docs/directives/fx-nsmodern.md`. This is a partial measurement and
 implementation record; it does not qualify either target site as working.
 
-## Research and evidence limits
+## Research and evidence limits (round 1)
 
 The [ALcyberCloud home page](https://www.alcybercloud.it/) is available to
 the web research tool as rendered text, redirected to `/it`. Its navigation
@@ -70,7 +70,7 @@ TLS version boundary. A server offering TLS 1.3 need not require it. Measure
 TLS 1.2 overlap with certificate verification and SNI before replacing TLS;
 there is no evidence here justifying a security or verification relaxation.
 
-## Implementation decision
+## Implementation decision (round 1)
 
 [CSS Color 4](https://www.w3.org/TR/css-color-4/#rgb-functions) defines modern
 space-separated RGB, optional slash alpha and interchangeable `rgb`/`rgba`
@@ -112,3 +112,143 @@ Acceptance is host parser tests, the existing framebuffer goldens and memory
 admission tests, followed by snapshot replay when available. Hardware and
 canonical image validation belong to the lead. This record does not authorize
 an engine replacement, a site rewrite, a proxy or a memory-budget increase.
+
+## Review round 2: amendment implementation contract
+
+The lead supplied hashed home-page snapshots under its read-only
+`build/downloads/ns-sites-2026-10-26/`. Inspection finds 579 `var()` calls
+and 44 custom declarations in ALcyberCloud CSS, 178 calls and 30 declarations
+in EDuke32Logs CSS. The supplied ALcyberCloud stylesheet has no `@layer`;
+its recorded Tailwind/Vite label does not imply a particular cascade model.
+Neither original snapshot nor full stylesheet is added to tracked fixtures.
+
+Implement token-based custom properties in libcss: preserve declaration order,
+collect matched custom declarations before resolving ordinary values, retain
+case-sensitive names, inherit computed token values, process fallback dependencies
+for cycles, and apply invalid-at-computed-value declarations as `unset` rather
+than revealing a lower-priority declaration. The normative reference is
+[CSS Variables 1](https://www.w3.org/TR/css-variables-1/), especially sections
+2.3, 3 and 3.1. Unknown `@property` rules remain ignored, including their bodies;
+this implements unregistered inherited properties, not registration descriptors.
+Keep all data under existing document admission, add explicit token/variable/work
+bounds, and return allocation errors through existing paths. Preserve the fast
+selection path for stylesheets without custom declarations or `var()`.
+
+[CSS Flexbox 1](https://www.w3.org/TR/css-flexbox-1/) and
+[CSS Grid 1](https://www.w3.org/TR/css-grid-1/) distinguish flex layout from
+track sizing and grid placement. Measure site-derived fixtures before changing
+layout; grid's existing block fallback is acceptable under amendment 1 if its
+readability is verified and its limits are reported. For color mixing follow
+[CSS Color 5](https://www.w3.org/TR/css-color-5/#color-mix), including percentage
+normalization and premultiplied alpha; only measured color spaces are candidates.
+[HTML script processing](https://html.spec.whatwg.org/multipage/scripting.html#attr-script-type)
+distinguishes module scripts from classic scripts. [Duktape](https://duktape.org/)
+is ES5.1; measure ignored-module behavior and the APIs used by the supplied
+bundle before proposing a different engine. Do not run modules as classic JS.
+
+### Implemented behavior and limits
+
+Patch `0020-css-custom-properties.patch` extends the pinned libcss parser and
+selector with retained tokens, matched-style replay and reference-counted
+per-element environments. It keeps declaration order and the existing origin /
+importance / specificity comparison; inline styles use author origin and inline
+specificity. Ancestors contribute already substituted custom tokens, including
+across elements whose styles contain no custom declarations. Pseudo-elements
+inherit their originating element's variables and may override them.
+
+Fallback dependencies participate in cycle detection even when unused. An empty
+custom value remains valid and suppresses its fallback. Missing/cyclic variables
+and invalid substituted property values produce `unset`, including every
+longhand of a shorthand; they do not reveal an older declaration. Names remain
+case sensitive. [Variables 1 section 2.1](https://www.w3.org/TR/css-variables-1/#syntax)
+also requires URL resolution in the **consuming** stylesheet, which is tested
+across two distinct stylesheet bases. Custom values are not pre-resolved as URLs.
+
+The pinned lexer needed two prerequisite corrections: two leading hyphens now
+form an identifier while `-->` remains a CDC token; and `url(...)` split after
+its initial `u` resumes the correct lexer state. Empty custom declarations are
+accepted. Unknown at-rule recovery retains its trailing-whitespace state across
+input chunks, preventing an ignored `@property` block from consuming the next
+rule. These decisions follow [CSS Syntax 3](https://www.w3.org/TR/css-syntax-3/).
+Registration syntax and descriptors remain unsupported and ignored.
+
+Limits are 1,024 tokens per value/expansion, 65,536 retained tokens and 8,192
+deferred declarations per sheet, 128 locally declared variable names per element,
+64 dependency/substitution levels, 4,096 matched styles and 262,144 work units per
+selection. Allocation / admission failures use `CSS_NOMEM`; excessive expansion
+invalidates the value. [Variables 1 section 3.3](https://www.w3.org/TR/css-variables-1/#long-variables)
+requires a bound against exponential expansion. Document, JavaScript and image
+admission limits are unchanged. Environments without overrides share their
+computed parent environment; ordinary computed styles still use the arena.
+Cousin/sibling style selection sharing is bypassed when variables or gaps are
+active, because identical ordinary styles can inherit different custom values.
+Stylesheets without either feature retain the existing selection path.
+
+Flex fixes cover the measured three-part shorthands (`flex:0 0 auto`,
+`flex:1 1 0`, and the derived fixed-basis regression), plus one/two-value `gap`,
+`row-gap` and the existing `column-gap`. Gutters participate in line wrapping,
+free-space allocation, placement, reversed directions and cross-line spacing.
+A private row-gap record participates in computed-style hashing, equality,
+cloning and composition; the public Ciuki SDK ABI is unchanged. Relative row
+lengths compute before inheritance. Normal flex gaps are zero; percentages
+against indefinite flex axes are zero. Aggregate gutter sizes are capped at
+32,767 device pixels for fixed-point arithmetic. References:
+[Flexbox 1](https://www.w3.org/TR/css-flexbox-1/) and
+[Box Alignment 3 gutters](https://www.w3.org/TR/css-align-3/#gaps).
+This is a targeted flex extension, not complete Flexbox/Box Alignment conformance.
+Math functions in gaps, general justification and all automatic minimum-size
+behavior remain outside this implementation.
+
+Grid retains the existing `display:grid` to block and `inline-grid` to inline-block
+fallback in NetSurf's `box_construct.c`. Tracks (`repeat`, `fr`, `minmax`), spans,
+placement and grid gutters are ignored. A small derived page checks source-order
+text and pixel-equivalence to an explicit block version, and saved-page goldens
+record the actual fallback. This is the fallback expressly permitted by amendment
+1, not grid layout support. Calendars and multi-column cards lose their authored
+track arrangement. [Grid 1](https://www.w3.org/TR/css-grid-1/) defines the missing
+track-sizing and placement algorithms.
+
+Patch `0021-css-srgb-mix.patch` implements the measured two-color `in srgb`
+`color-mix()` forms with omitted/complementary/normalized percentages,
+premultiplied alpha, transparent colors and bounded nesting. Unsupported color
+spaces and `currentColor` operands are rejected. The current
+[Color 5 algorithm](https://www.w3.org/TR/css-color-5/#color-mix) specifies a
+transparent result for a zero total weight; tests cover that behavior as well.
+Color 4 math, `clamp`/`calc`, transforms, sticky positioning, downloaded fonts and
+complete modern CSS remain missing.
+
+Patch `0022-ignore-module-scripts.patch` chooses the ES5-browser behavior allowed
+by the amendment: ignore inline/external module scripts before context creation
+or fetching, including ASCII-case variants, and keep classic `nomodule` scripts.
+The baseline host probe executed an external module's side effect as classic JS;
+the corrected probe does not. Module/classic distinction follows
+[HTML script processing](https://html.spec.whatwg.org/multipage/scripting.html#attr-script-type).
+The supplied bundle has 61 arrow tokens, optional chaining, nullish operators,
+async/await and numerous browser APIs. Ignoring it loses mobile-menu toggling,
+consent/preferences, RSS clipboard controls, video embedding and carousel controls.
+Its initial classic inline script adds a `js` class; the supplied CSS then hides
+mobile navigation until the module toggles a data attribute. Thus offline
+script-free replay is not evidence that the interactive mobile menu works.
+Transpiling syntax alone cannot supply matchMedia, selector queries, storage,
+clipboard, ResizeObserver or geometry/scroll bindings. An engine migration also
+requires those bindings and preservation of heap/stack/time admission;
+[Duktape features](https://duktape.org/) and
+[QuickJS's API](https://bellard.org/quickjs/quickjs.html) document the distinction.
+No transpiler, engine upgrade, network proxy or site rewrite was added.
+
+Validation is recorded in `build/codex/fx-nsmodern-report.md`, Review round 2.
+Full snapshots remain untracked; tests contain only small derived fixtures and
+hashes. Site replay disables scripts and replaces missing media references,
+uses the supplied CSS, checks both 800/1280-pixel viewports and makes no live
+requests. These goldens are regressions of this fallback renderer, not modern
+browser reference images. Final live-site, image and hardware evidence belongs
+to the lead. This round does not qualify either site as fully supported.
+
+The fixed flex parser intentionally disagrees with pinned libcss selection case
+65, which expects `flex:0 0` to leave `flex-shrink:1`. The
+[Flexbox shorthand grammar](https://www.w3.org/TR/css-flexbox-1/#flex-property)
+requires that second number to be shrink zero. The host harness applies the
+single explicit hunk in `fixtures/flex-shorthand-oracle.patch` to a disposable
+copy of `tests1.dat`; the pinned archive and extracted original remain intact.
+The other pinned expectations and all earlier framebuffer golden hashes remain
+unchanged. New direct longhand-equivalence cases cover both zero shorthands.

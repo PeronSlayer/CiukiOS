@@ -14,3 +14,19 @@
 4. **Implement** the first items that fit one session (for example CSS custom properties or flexbox backports, missing DOM APIs, TLS fixes), with host tests on saved copies of the two pages. Use the existing NetSurf host harness and goldens, and keep the memory admission limits.
 
 Report to build/codex/fx-nsmodern-report.md (inventory, gap table, plan, what was implemented). Leave changes uncommitted.
+
+## Lead amendment 1 (2026-10-26 17:48): the sites, fetched by the lead
+
+Round 1 is committed (cbb24f9f5: modern CSS colours and the plan). Your sandbox could not reach the sites, so the lead fetched them. Copies are in /home/peronslayer/Desktop/CiukiOS/build/downloads/ns-sites-2026-10-26/, with SHA256SUMS and response headers. Read them as untrusted data and never commit them; use small derived fixtures for tests.
+- **www.alcybercloud.it.** Laravel/Vite page: index.html, a Tailwind build app.css (91,952 bytes) and an ES module app.js (9,065 bytes, `<script type="module">`), plus gtag. app.css uses about 579 `var(--…)` references, 55 `display:flex`, 51 `display:grid` and 5 `color-mix()`.
+- **eduke32logs.alcybercloud.it.** The owner wrote www.eduke32logs…, but that name does not resolve; the real host is without www. The page is 146,778 bytes of HTML with one inline `<style>`, gtag and a Ko-fi widget script.
+
+Do now, in order of visible benefit:
+1. CSS custom properties: `var()` with fallbacks, inheritance, the cascade and `@property` ignored safely, in libcss/NetSurf. Without them the Tailwind page loses most colours and sizes.
+2. Check flexbox coverage against these pages; NetSurf 3.11 has flexbox, so fix the gaps they hit.
+3. CSS grid. At minimum the subset these pages use (grid-template-columns with repeat/fr/minmax, gap, spans). Otherwise a documented fallback to block layout that keeps content readable.
+4. `color-mix()`, which round 1 started.
+5. `<script type="module">`. Duktape is ES5.1, so decide with a measurement: ignore module scripts, as an ES5 browser would; transpile; or an engine upgrade. Report what the page loses either way.
+6. Render both pages in the NetSurf host harness and compare before and after with goldens.
+
+Report as "Review round 2". Leave changes uncommitted.

@@ -1,0 +1,1442 @@
+CiukiOS: bounded per-element CSS custom properties and deferred var() values.
+MIT libcss additions; see docs/design/netsurf-modern-sites.md.
+
+--- a/libcss/src/lex/lex.c
++++ b/libcss/src/lex/lex.c
+@@ -294,7 +294,8 @@
+ 	case sMATCH:
+ 		return Match(lexer, token);
+ 	case sURI:
+-		return URI(lexer, token);
++		/* A chunk can end immediately after u, before r is consumed. */
++		return URIOrUnicodeRangeOrIdentOrFunction(lexer, token);
+ 	case sIDENT:
+ 		return IdentOrFunction(lexer, token);
+ 	case sESCAPEDIDENT:
+@@ -623,11 +624,8 @@
+ 			return css_error_from_parserutils_error(perror);
+ 
+ 		if (perror == PARSERUTILS_EOF) {
+-			/* CHAR is the only match here */
+-			/* Remove the '-' we read above */
+-			lexer->bytesReadForToken -= 1;
+-			t->data.len -= 1;
+-			return emitToken(lexer, CSS_TOKEN_CHAR, token);
++			/* CSS Syntax 3: two hyphens start an identifier. */
++			return emitToken(lexer, CSS_TOKEN_IDENT, token);
+ 		}
+ 
+ 		c = *cptr;
+@@ -637,10 +635,10 @@
+ 
+ 			t->type = CSS_TOKEN_CDC;
+ 		} else {
+-			/* Remove the '-' we read above */
+-			lexer->bytesReadForToken -= 1;
+-			t->data.len -= 1;
+-			t->type = CSS_TOKEN_CHAR;
++			/* Preserve the legacy CDC token, otherwise consume --name. */
++			lexer->state = sIDENT;
++			lexer->substate = 0;
++			return IdentOrFunction(lexer, token);
+ 		}
+ 		break;
+ 
+--- a/libcss/src/parse/Makefile
++++ b/libcss/src/parse/Makefile
+@@ -1,4 +1,4 @@
+ # Sources
+-DIR_SOURCES := parse.c language.c important.c propstrings.c font_face.c mq.c
++DIR_SOURCES := parse.c custom.c language.c important.c propstrings.c font_face.c mq.c
+ 
+ include $(NSBUILD)/Makefile.subdir
+--- /dev/null
++++ b/libcss/src/parse/custom.c
+@@ -0,0 +1,233 @@
++/* CiukiOS: deferred token values, not textual stylesheet replacement.
++ * MIT; see the libcss licence. */
++#include <stdlib.h>
++#include <string.h>
++#include <strings.h>
++#include "parse/custom.h"
++#include "parse/properties/utils.h"
++
++bool css__custom_name(lwc_string *name)
++{
++	return name != NULL && lwc_string_length(name) > 2 &&
++		memcmp(lwc_string_data(name), "--", 2) == 0;
++}
++
++bool css__custom_ident(const css_token *token, const char *name)
++{
++	return token != NULL && token->idata != NULL &&
++		lwc_string_length(token->idata) == strlen(name) &&
++		strncasecmp(lwc_string_data(token->idata), name, strlen(name)) == 0;
++}
++
++css_error css__custom_tokens_create(css_custom_tokens **out)
++{
++	css_custom_tokens *t = calloc(1, sizeof(*t));
++	if (t == NULL) return CSS_NOMEM;
++	if (parserutils_vector_create(sizeof(css_token), 8, &t->vector) != PARSERUTILS_OK) {
++		free(t);
++		return CSS_NOMEM;
++	}
++	t->refs = 1;
++	*out = t;
++	return CSS_OK;
++}
++
++css_error css__custom_tokens_append(css_custom_tokens *t, const css_token *token)
++{
++	css_token copy = *token;
++	if (t->count == CSS_CUSTOM_TOKEN_LIMIT) return CSS_INVALID;
++	/* Lexer data is borrowed; only the interned string survives parsing. */
++	if (copy.idata != NULL) {
++		copy.data.data = (uint8_t *)lwc_string_data(copy.idata);
++		copy.data.len = lwc_string_length(copy.idata);
++	} else {
++		copy.data.data = (uint8_t *)" ";
++		copy.data.len = 1;
++	}
++	if (parserutils_vector_append(t->vector, &copy) != PARSERUTILS_OK)
++		return CSS_NOMEM;
++	if (copy.idata != NULL) lwc_string_ref(copy.idata);
++	t->count++;
++	return CSS_OK;
++}
++
++css_custom_tokens *css__custom_tokens_ref(css_custom_tokens *t)
++{
++	if (t != NULL) t->refs++;
++	return t;
++}
++
++void css__custom_tokens_unref(css_custom_tokens *t)
++{
++	if (t == NULL || --t->refs != 0) return;
++	int32_t i = 0;
++	const css_token *token;
++	while ((token = parserutils_vector_iterate(t->vector, &i)) != NULL)
++		if (token->idata != NULL) lwc_string_unref(token->idata);
++	parserutils_vector_destroy(t->vector);
++	free(t);
++}
++
++void css__custom_sheet_destroy(css_stylesheet *sheet)
++{
++	for (unsigned i = 0; i < sheet->custom_count; i++) {
++		lwc_string_unref(sheet->custom[i].name);
++		css__custom_tokens_unref(sheet->custom[i].tokens);
++	}
++	free(sheet->custom);
++}
++
++css_error css__custom_var(const parserutils_vector *v, int32_t start,
++		int32_t *name, int32_t *fallback, int32_t *end)
++{
++	int32_t i = start + 1;
++	const css_token *t;
++	consumeWhitespace(v, &i);
++	*name = i;
++	t = parserutils_vector_iterate(v, &i);
++	if (t == NULL || t->type != CSS_TOKEN_IDENT || !css__custom_name(t->idata))
++		return CSS_INVALID;
++	consumeWhitespace(v, &i);
++	t = parserutils_vector_peek(v, i);
++	*fallback = -1;
++	if (tokenIsChar(t, ',')) *fallback = ++i;
++	else if (!tokenIsChar(t, ')')) return CSS_INVALID;
++	unsigned depth = 0;
++	for (; (t = parserutils_vector_peek(v, i)) != NULL; i++) {
++		if (t->type == CSS_TOKEN_FUNCTION || tokenIsChar(t, '(') ||
++				tokenIsChar(t, '[') || tokenIsChar(t, '{')) {
++			if (++depth > CSS_CUSTOM_DEPTH) return CSS_INVALID;
++		} else if (tokenIsChar(t, ')') || tokenIsChar(t, ']') || tokenIsChar(t, '}')) {
++			if (depth == 0) {
++				if (!tokenIsChar(t, ')')) return CSS_INVALID;
++				*end = i;
++				return CSS_OK;
++			}
++			depth--;
++		}
++	}
++	return CSS_INVALID;
++}
++
++css_error css__custom_parse(css_language *c, const css_token *property,
++		const parserutils_vector *v, int32_t *ctx, css_rule *rule,
++		int handler, bool *handled)
++{
++	bool custom = css__custom_name(property->idata), var = false;
++	bool gap = css__custom_ident(property, "gap") || css__custom_ident(property, "row-gap");
++	if (gap) handler = css__custom_ident(property, "gap") ? CSS_CUSTOM_GAP : CSS_CUSTOM_ROW_GAP;
++	int32_t begin = *ctx, end = begin, bang = -1;
++	const css_token *t;
++	char stack[CSS_CUSTOM_DEPTH];
++	unsigned depth = 0;
++	*handled = false;
++	for (; (t = parserutils_vector_peek(v, end)) != NULL; end++) {
++		if (t->type == CSS_TOKEN_FUNCTION && css__custom_ident(t, "var")) var = true;
++	}
++	if (!custom && !var && !gap) return CSS_OK;
++	*handled = true;
++	if (handler < 0 && !custom && !gap) return CSS_INVALID;
++	/* Validate balanced component values and !important outside blocks. */
++	for (int32_t i = begin; i < end; i++) {
++		t = parserutils_vector_peek(v, i);
++		if (t->type == CSS_TOKEN_INVALID_STRING) return CSS_INVALID;
++		if (t->type == CSS_TOKEN_FUNCTION || tokenIsChar(t, '(') ||
++				tokenIsChar(t, '[') || tokenIsChar(t, '{')) {
++			if (depth == CSS_CUSTOM_DEPTH) return CSS_INVALID;
++			stack[depth++] = tokenIsChar(t, '[') ? ']' : tokenIsChar(t, '{') ? '}' : ')';
++		} else if (tokenIsChar(t, ')') || tokenIsChar(t, ']') || tokenIsChar(t, '}')) {
++			if (depth == 0 || !tokenIsChar(t, stack[--depth])) return CSS_INVALID;
++		} else if (depth == 0 && (tokenIsChar(t, '!') || tokenIsChar(t, ';'))) {
++			if (tokenIsChar(t, ';') || bang >= 0) return CSS_INVALID;
++			bang = i;
++		}
++		if (t->type == CSS_TOKEN_FUNCTION && css__custom_ident(t, "var")) {
++			int32_t name, fallback, close;
++			if (css__custom_var(v, i, &name, &fallback, &close) != CSS_OK) return CSS_INVALID;
++		}
++	}
++	if (depth != 0) return CSS_INVALID;
++	if (bang >= 0) {
++		int32_t i = bang + 1;
++		consumeWhitespace(v, &i);
++		t = parserutils_vector_iterate(v, &i);
++		if (t == NULL || t->type != CSS_TOKEN_IDENT || !css__custom_ident(t, "important"))
++			return CSS_INVALID;
++		consumeWhitespace(v, &i);
++		if (i != end) return CSS_INVALID;
++		end = bang;
++	}
++	while (begin < end && ((const css_token *)parserutils_vector_peek(v, begin))->type == CSS_TOKEN_S) begin++;
++	while (end > begin && ((const css_token *)parserutils_vector_peek(v, end - 1))->type == CSS_TOKEN_S) end--;
++	if (end - begin > CSS_CUSTOM_TOKEN_LIMIT || c->sheet->custom_count == CSS_CUSTOM_DECL_LIMIT ||
++			c->sheet->custom_tokens + (unsigned)(end - begin) > CSS_CUSTOM_SHEET_TOKENS)
++		return CSS_NOMEM; /* bounded sheet admission, never silently mis-cascade */
++	css_custom_tokens *tokens;
++	css_error error = css__custom_tokens_create(&tokens);
++	if (error != CSS_OK) return error;
++	for (int32_t i = begin; i < end; i++) {
++		css_token copy = *(const css_token *)parserutils_vector_peek(v, i);
++		/* Variables 1 section 2.1: URLs resolve in the consuming sheet. */
++		error = css__custom_tokens_append(tokens, &copy);
++		if (error != CSS_OK) break;
++	}
++	if (error == CSS_OK && gap && !var) {
++		css_custom_gap parsed;
++		error = css__custom_gap_parse(c, tokens, handler, &parsed);
++	}
++	css_style *style = NULL;
++	if (error == CSS_OK) error = css__stylesheet_style_create(c->sheet, &style);
++	if (error == CSS_OK) error = css__stylesheet_style_vappend(style, 2,
++			buildOPV((opcode_t)CSS_CUSTOM_OPCODE, bang >= 0 ? FLAG_IMPORTANT : 0, 0), c->sheet->custom_count);
++	if (error == CSS_OK) {
++		css_custom_decl *decls = realloc(c->sheet->custom,
++				(c->sheet->custom_count + 1) * sizeof(*decls));
++		if (decls == NULL) error = CSS_NOMEM;
++		else c->sheet->custom = decls;
++	}
++	if (error == CSS_OK) {
++		css_custom_decl *d = &c->sheet->custom[c->sheet->custom_count++];
++		*d = (css_custom_decl){ lwc_string_ref(property->idata), tokens, custom ? -1 : handler, bang >= 0, 0 };
++		style->custom_first = style->custom_last = c->sheet->custom_count;
++		c->sheet->custom_tokens += tokens->count;
++		c->sheet->size += sizeof(*d) + tokens->count * sizeof(css_token);
++		tokens = NULL;
++		error = css__stylesheet_rule_append_style(c->sheet, rule, style);
++		if (error == CSS_OK) style = NULL;
++	}
++	if (style != NULL) css__stylesheet_style_destroy(style);
++	css__custom_tokens_unref(tokens);
++	return error;
++}
++
++css_error css__custom_gap_parse(css_language *c, const css_custom_tokens *tokens,
++		int handler, css_custom_gap *gap)
++{
++	int32_t ctx = 0;
++	consumeWhitespace(tokens->vector, &ctx);
++	const css_token *t = parserutils_vector_peek(tokens->vector, ctx);
++	css_fixed row = 0, column = 0;
++	uint32_t row_unit = UNIT_PX, column_unit = UNIT_PX;
++	enum flag_value flag = t != NULL ? get_css_flag_value(c, t) : FLAG_VALUE__NONE;
++	bool normal = t != NULL && t->type == CSS_TOKEN_IDENT && css__custom_ident(t, "normal");
++	if (flag != FLAG_VALUE__NONE || normal) {
++		parserutils_vector_iterate(tokens->vector, &ctx);
++	} else {
++		css_error error = css__parse_unit_specifier(c, tokens->vector, &ctx, UNIT_PX, &row, &row_unit);
++		if (error != CSS_OK) return error;
++		if (row < 0 || !(row_unit & (UNIT_LENGTH | UNIT_PCT))) return CSS_INVALID;
++		column = row;
++		column_unit = row_unit;
++		consumeWhitespace(tokens->vector, &ctx);
++		if (handler == CSS_CUSTOM_GAP && parserutils_vector_peek(tokens->vector, ctx) != NULL) {
++			error = css__parse_unit_specifier(c, tokens->vector, &ctx, UNIT_PX, &column, &column_unit);
++			if (error != CSS_OK) return error;
++			if (column < 0 || !(column_unit & (UNIT_LENGTH | UNIT_PCT))) return CSS_INVALID;
++		}
++	}
++	consumeWhitespace(tokens->vector, &ctx);
++	if (parserutils_vector_peek(tokens->vector, ctx) != NULL) return CSS_INVALID;
++	*gap = (css_custom_gap){ row, column, row_unit, column_unit, flag, normal };
++	return CSS_OK;
++}
++
+--- /dev/null
++++ b/libcss/src/parse/custom.h
+@@ -0,0 +1,50 @@
++/* CiukiOS custom properties. MIT; see the libcss licence. Private API. */
++#ifndef css_ciuki_custom_h_
++#define css_ciuki_custom_h_
++#include "stylesheet.h"
++#include "parse/language.h"
++#define CSS_CUSTOM_OPCODE 1023
++#define CSS_CUSTOM_GAP -2
++#define CSS_CUSTOM_ROW_GAP -3
++#define CSS_CUSTOM_TOKEN_LIMIT 1024
++#define CSS_CUSTOM_DECL_LIMIT 8192
++#define CSS_CUSTOM_SHEET_TOKENS 65536
++#define CSS_CUSTOM_DEPTH 64
++
++typedef struct css_custom_tokens {
++	unsigned refs;
++	unsigned count;
++	parserutils_vector *vector;
++} css_custom_tokens;
++
++typedef struct css_custom_decl {
++	lwc_string *name;
++	css_custom_tokens *tokens;
++	int handler; /* -1 custom; -2/-3 gap; otherwise property_handlers index */
++	bool important;
++	unsigned next; /* index + 1 within the containing sheet */
++} css_custom_decl;
++
++typedef struct css_custom_gap {
++	css_fixed row, column;
++	uint32_t row_unit, column_unit;
++	enum flag_value flag;
++	bool normal;
++} css_custom_gap;
++css_error css__custom_gap_parse(css_language *c, const css_custom_tokens *tokens,
++		int handler, css_custom_gap *gap);
++
++bool css__custom_name(lwc_string *name);
++bool css__custom_ident(const css_token *token, const char *name);
++css_error css__custom_tokens_create(css_custom_tokens **tokens);
++css_error css__custom_tokens_append(css_custom_tokens *tokens, const css_token *token);
++css_custom_tokens *css__custom_tokens_ref(css_custom_tokens *tokens);
++void css__custom_tokens_unref(css_custom_tokens *tokens);
++void css__custom_sheet_destroy(css_stylesheet *sheet);
++css_error css__custom_parse(css_language *c, const css_token *property,
++		const parserutils_vector *vector, int32_t *ctx, css_rule *rule,
++		int handler, bool *handled);
++/* Validates and locates the name, optional fallback and matching ')'. */
++css_error css__custom_var(const parserutils_vector *v, int32_t start,
++		int32_t *name, int32_t *fallback, int32_t *end);
++#endif
+--- a/libcss/src/parse/important.c
++++ b/libcss/src/parse/important.c
+@@ -10,6 +10,7 @@
+ #include "bytecode/bytecode.h"
+ #include "bytecode/opcodes.h"
+ #include "parse/important.h"
++#include "parse/custom.h"
+ 
+ /**
+  * Parse !important
+@@ -85,6 +86,7 @@
+ 		bytecode[offset] = buildOPV(op, flags, value);
+ 
+ 		offset++;
++		if ((unsigned)op == CSS_CUSTOM_OPCODE) { offset++; continue; }
+ 
+ 		/* Advance past any property-specific data */
+ 		if (hasFlagValue(opv) == false) {
+--- a/libcss/src/parse/language.c
++++ b/libcss/src/parse/language.c
+@@ -13,6 +13,7 @@
+ #include "stylesheet.h"
+ #include "lex/lex.h"
+ #include "parse/font_face.h"
++#include "parse/custom.h"
+ #include "parse/important.h"
+ #include "parse/language.h"
+ #include "parse/mq.h"
+@@ -1861,6 +1862,10 @@
+ 				&match) == lwc_error_ok && match)
+ 			break;
+ 	}
++	bool handled;
++	error = css__custom_parse(c, property, vector, ctx, rule,
++			i <= LAST_PROP ? i - FIRST_PROP : -1, &handled);
++	if (error != CSS_OK || handled) return error;
+ 	if (i == LAST_PROP + 1)
+ 		return CSS_INVALID;
+ 
+--- a/libcss/src/parse/parse.c
++++ b/libcss/src/parse/parse.c
+@@ -6,6 +6,7 @@
+  */
+ 
+ #include <assert.h>
++#include <string.h>
+ #include <ctype.h>
+ #include <stdbool.h>
+ 
+@@ -1525,6 +1526,12 @@
+ 	{
+ 		parser_state to = { sValue1, Initial };
+ 		parser_state subsequent = { sDeclaration, AfterValue1 };
++		const css_token *property = parserutils_vector_peek(parser->tokens, 0);
++		/* Variables 1 permits an empty custom-property value. */
++		if (property != NULL && property->type == CSS_TOKEN_IDENT &&
++				lwc_string_length(property->idata) > 2 &&
++				memcmp(lwc_string_data(property->idata), "--", 2) == 0)
++			to.state = sValue0;
+ 
+ 		error = eatWS(parser);
+ 		if (error != CSS_OK)
+@@ -1545,8 +1552,9 @@
+ 		parserutils_vector_dump(parser->tokens, __func__, tprinter);
+ #endif
+ 		if (parser->event != NULL) {
+-			parser->event(CSS_PARSER_DECLARATION, parser->tokens,
++			error = parser->event(CSS_PARSER_DECLARATION, parser->tokens,
+ 					parser->event_pw);
++			if (error == CSS_NOMEM) return error;
+ 		}
+ 		break;
+ 	}
+@@ -2301,7 +2309,7 @@
+ 
+ css_error parseMalformedAtRule(css_parser *parser)
+ {
+-	enum { Initial = 0, Go = 1 };
++	enum { Initial = 0, Go = 1, WS = 2 };
+ 	parser_state *state = parserutils_stack_get_current(parser->states);
+ 	const css_token *token = NULL;
+ 	css_error error;
+@@ -2394,6 +2402,11 @@
+ 					parser->open_items) == NULL)
+ 				break;
+ 		}
++		/* Resume trailing whitespace, not the next rule, after NEEDDATA. */
++		state->substate = WS;
++		break;
++	case WS:
++		break;
+ 	}
+ 
+ 	/* Consume any trailing whitespace after the at-rule */
+--- a/libcss/src/parse/properties/flex.c
++++ b/libcss/src/parse/properties/flex.c
+@@ -123,14 +123,14 @@
+ 			   (error = css__parse_flex_grow(c, vector,
+ 				ctx, grow_style)) == CSS_OK) {
+ 			grow = false;
+-		} else if ((basis) && 
+-			   (error = css__parse_flex_basis(c, vector, 
++		} else if ((shrink) &&
++			   (error = css__parse_flex_shrink(c, vector,
++				ctx, shrink_style)) == CSS_OK) {
++			shrink = false;
++		} else if ((basis) &&
++			   (error = css__parse_flex_basis(c, vector,
+ 				ctx, basis_style)) == CSS_OK) {
+ 			basis = false;
+-		} else if ((shrink) && 
+-			   (error = css__parse_flex_shrink(c, vector, 
+-				ctx, shrink_style)) == CSS_OK) {
+-			shrink = false;
+ 		}
+ 
+ 		if (error == CSS_OK) {
+--- a/libcss/src/select/Makefile
++++ b/libcss/src/select/Makefile
+@@ -3,6 +3,6 @@
+ select_generator:
+ 	python3 src/select/select_generator.py
+ 
+-DIR_SOURCES := arena.c computed.c dispatch.c hash.c select.c strings.c font_face.c format_list_style.c unit.c
++DIR_SOURCES := arena.c computed.c dispatch.c hash.c custom.c select.c strings.c font_face.c format_list_style.c unit.c
+ 
+ include $(NSBUILD)/Makefile.subdir
+--- a/libcss/src/select/computed.c
++++ b/libcss/src/select/computed.c
+@@ -259,6 +259,9 @@
+ 		}
+ 	}
+ 
++	clone->i.ciuki_row_gap = orig->i.ciuki_row_gap;
++	clone->i.ciuki_row_gap_unit = orig->i.ciuki_row_gap_unit;
++	clone->i.ciuki_row_gap_inherit = orig->i.ciuki_row_gap_inherit;
+ 	*clone_out = clone;
+ 	return CSS_OK;
+ }
+@@ -303,6 +306,11 @@
+ 		if (error != CSS_OK)
+ 			break;
+ 	}
++
++	const css_computed_style *gap_source = child->i.ciuki_row_gap_inherit ? parent : child;
++	composed->i.ciuki_row_gap = gap_source->i.ciuki_row_gap;
++	composed->i.ciuki_row_gap_unit = gap_source->i.ciuki_row_gap_unit;
++	composed->i.ciuki_row_gap_inherit = 0;
+ 
+ 	/* Finally, compute absolute values for everything */
+ 	error = css__compute_absolute_values(parent, composed, unit_ctx);
+@@ -1281,6 +1289,12 @@
+ 	if (error != CSS_OK)
+ 		return error;
+ 
++	if (style->i.ciuki_row_gap > 0 && style->i.ciuki_row_gap_unit != CSS_UNIT_PCT) {
++		style->i.ciuki_row_gap = css_unit_len2css_px(style, unit_ctx,
++				style->i.ciuki_row_gap, style->i.ciuki_row_gap_unit);
++		style->i.ciuki_row_gap_unit = CSS_UNIT_PX;
++	}
++
+ 	/* Fix up flex-basis */
+ 	error = compute_absolute_length(style, &ex_size.data.length,
+ 			get_flex_basis, set_flex_basis);
+--- /dev/null
++++ b/libcss/src/select/custom.c
+@@ -0,0 +1,488 @@
++/* CiukiOS: per-element custom-property cascade and computed token inheritance.
++ * MIT; see the libcss licence. No public libcss ABI is changed. */
++#include <stdlib.h>
++#include <string.h>
++#include "select/custom.h"
++#include "parse/properties/properties.h"
++#include "parse/important.h"
++#include "select/computed.h"
++#include "parse/properties/utils.h"
++#include "bytecode/opcodes.h"
++#include "select/properties/helpers.h"
++
++typedef struct custom_candidate {
++	css_custom_tokens *raw;
++	prop_state rank;
++} custom_candidate;
++
++typedef struct custom_entry {
++	lwc_string *name;
++	custom_candidate candidate[CSS_ORIGIN_AUTHOR + 1];
++	css_custom_tokens *raw;
++	css_custom_tokens *value;
++	unsigned visit;
++	unsigned resolving;
++	bool cycle;
++} custom_entry;
++
++struct css_custom_env {
++	unsigned refs, count;
++	struct css_custom_env *parent;
++	custom_entry *entries;
++};
++
++struct css_custom_match {
++	const css_style *style;
++	css_pseudo_element pseudo;
++	css_origin origin;
++	uint32_t specificity;
++};
++
++static struct css_custom_env *env_ref(struct css_custom_env *e)
++{
++	if (e != NULL) e->refs++;
++	return e;
++}
++
++void css__custom_env_unref(struct css_custom_env *e)
++{
++	/* Iterative release: nesting in the DOM must not grow the C stack. */
++	while (e != NULL && --e->refs == 0) {
++		struct css_custom_env *parent = e->parent;
++		for (unsigned i = 0; i < e->count; i++) {
++			custom_entry *entry = &e->entries[i];
++			lwc_string_unref(entry->name);
++			for (unsigned j = 0; j <= CSS_ORIGIN_AUTHOR; j++)
++				css__custom_tokens_unref(entry->candidate[j].raw);
++			css__custom_tokens_unref(entry->value);
++		}
++		free(e->entries);
++		free(e);
++		e = parent;
++	}
++}
++
++bool css__custom_sheet_uses(const css_stylesheet *sheet, unsigned depth)
++{
++	if (sheet->custom_count != 0 || depth == CSS_CUSTOM_DEPTH) return true;
++	for (css_rule *r = sheet->rule_list; r != NULL; r = r->next)
++		if (r->type == CSS_RULE_IMPORT) {
++			css_stylesheet *import = ((css_rule_import *)r)->sheet;
++			if (import != NULL && css__custom_sheet_uses(import, depth + 1)) return true;
++		}
++	return false;
++}
++
++static css_error work(css_select_state *state)
++{
++	if (state->custom_work == 0) return CSS_NOMEM;
++	state->custom_work--;
++	return CSS_OK;
++}
++
++static css_error find_local(css_select_state *state, struct css_custom_env *e,
++		lwc_string *name, custom_entry **entry)
++{
++	*entry = NULL;
++	if (e == NULL) return CSS_OK;
++	for (unsigned i = 0; i < e->count; i++) {
++		bool equal;
++		if (work(state) != CSS_OK) return CSS_NOMEM;
++		if (lwc_string_isequal(e->entries[i].name, name, &equal) == lwc_error_ok && equal) {
++			*entry = &e->entries[i];
++			break;
++		}
++	}
++	return CSS_OK;
++}
++
++static css_error find_inherited(css_select_state *state, struct css_custom_env *e,
++		lwc_string *name, css_custom_tokens **value)
++{
++	*value = NULL;
++	for (; e != NULL; e = e->parent) {
++		custom_entry *entry;
++		css_error error = find_local(state, e, name, &entry);
++		if (error != CSS_OK) return error;
++		if (entry != NULL) {
++			*value = entry->value;
++			break;
++		}
++	}
++	return CSS_OK;
++}
++
++css_error css__custom_begin(css_select_state *state, void *parent)
++{
++	state->custom_collect = true;
++	state->custom_work = CSS_CUSTOM_WORK_LIMIT;
++	if (parent != NULL) {
++		struct css_node_data *data = NULL;
++		css_error error = state->handler->get_libcss_node_data(state->pw, parent, (void **)&data);
++		if (error != CSS_OK) return error;
++		if (data != NULL) state->custom_parent = env_ref(data->custom[CSS_PSEUDO_ELEMENT_NONE]);
++	}
++	return CSS_OK;
++}
++
++css_error css__custom_collect(const css_style *style, css_select_state *state)
++{
++	if (style == NULL) return CSS_OK;
++	if (state->custom_matches == CSS_CUSTOM_MATCH_LIMIT) return CSS_NOMEM;
++	if (state->custom_matches == state->custom_allocated) {
++		unsigned capacity = state->custom_allocated ? state->custom_allocated * 2 : 16;
++		struct css_custom_match *matches = realloc(state->custom_match, capacity * sizeof(*matches));
++		if (matches == NULL) return CSS_NOMEM;
++		state->custom_match = matches;
++		state->custom_allocated = capacity;
++	}
++	state->custom_match[state->custom_matches++] = (struct css_custom_match){
++		style, state->current_pseudo, state->current_origin, state->current_specificity };
++	for (unsigned at = style->custom_first; at != 0; ) {
++		const css_custom_decl *decl = &style->sheet->custom[at - 1];
++		at = decl->next;
++		if (decl->handler != -1) continue;
++		struct css_custom_env **slot = &state->node_data->custom[state->current_pseudo];
++		if (*slot == NULL) {
++			*slot = calloc(1, sizeof(**slot));
++			if (*slot == NULL) return CSS_NOMEM;
++			(*slot)->refs = 1;
++		}
++		struct css_custom_env *e = *slot;
++		custom_entry *entry;
++		css_error error = find_local(state, e, decl->name, &entry);
++		if (error != CSS_OK) return error;
++		if (entry == NULL) {
++			if (e->count == CSS_CUSTOM_ENTRY_LIMIT) return CSS_NOMEM;
++			custom_entry *entries = realloc(e->entries, (e->count + 1) * sizeof(*entries));
++			if (entries == NULL) return CSS_NOMEM;
++			e->entries = entries;
++			entry = &entries[e->count++];
++			memset(entry, 0, sizeof(*entry));
++			entry->name = lwc_string_ref(decl->name);
++		}
++		custom_candidate *candidate = &entry->candidate[state->current_origin];
++		if (css__outranks_state(&candidate->rank, decl->important, state, FLAG_VALUE__NONE)) {
++			css__custom_tokens_unref(candidate->raw);
++			candidate->raw = css__custom_tokens_ref(decl->tokens);
++		}
++	}
++	return CSS_OK;
++}
++
++static bool keyword(css_custom_tokens *t, const char *word)
++{
++	const css_token *token = t != NULL ? parserutils_vector_peek(t->vector, 0) : NULL;
++	return t != NULL && t->count == 1 && token->type == CSS_TOKEN_IDENT &&
++		css__custom_ident(token, word);
++}
++
++static void choose_candidate(css_select_state *state, custom_entry *entry)
++{
++	int ceiling = CSS_ORIGIN_AUTHOR;
++	while (ceiling >= CSS_ORIGIN_UA) {
++		prop_state rank = {0};
++		custom_candidate *winner = NULL;
++		for (int origin = CSS_ORIGIN_UA; origin <= ceiling; origin++) {
++			custom_candidate *c = &entry->candidate[origin];
++			if (!c->rank.set) continue;
++			state->current_origin = origin;
++			state->current_specificity = c->rank.specificity;
++			if (css__outranks_state(&rank, c->rank.important, state, FLAG_VALUE__NONE)) winner = c;
++		}
++		if (winner == NULL) break;
++		if (keyword(winner->raw, "revert")) {
++			ceiling = (int)rank.origin - 1;
++			continue;
++		}
++		entry->raw = winner->raw;
++		break;
++	}
++}
++
++/* Dependency analysis includes unused fallbacks, as required by Variables 1.
++ * Mark only the cycle's members, so a dependent var(--cycle, red) can recover. */
++static css_error graph(css_select_state *state, struct css_custom_env *e,
++		custom_entry *entry, custom_entry **path, unsigned depth)
++{
++	if (entry->visit == 2) return CSS_OK;
++	if (entry->visit == 1) {
++		bool member = false;
++		for (unsigned i = 0; i < depth; i++) {
++			member |= path[i] == entry;
++			if (member) path[i]->cycle = true;
++		}
++		return CSS_OK;
++	}
++	if (depth == CSS_CUSTOM_DEPTH) return CSS_NOMEM;
++	entry->visit = 1;
++	path[depth++] = entry;
++	if (entry->raw != NULL) {
++		for (unsigned i = 0; i < entry->raw->count; i++) {
++			const css_token *t = parserutils_vector_peek(entry->raw->vector, i);
++			if (work(state) != CSS_OK) return CSS_NOMEM;
++			if (t->type == CSS_TOKEN_FUNCTION && css__custom_ident(t, "var")) {
++				int32_t name, fallback, end;
++				if (css__custom_var(entry->raw->vector, i, &name, &fallback, &end) != CSS_OK) return CSS_INVALID;
++				t = parserutils_vector_peek(entry->raw->vector, name);
++				custom_entry *target;
++				css_error error = find_local(state, e, t->idata, &target);
++				if (error != CSS_OK) return error;
++				if (target != NULL) {
++					error = graph(state, e, target, path, depth);
++					if (error != CSS_OK) return error;
++				}
++			}
++		}
++	}
++	entry->visit = 2;
++	return CSS_OK;
++}
++
++static css_error resolve_entry(css_select_state *, struct css_custom_env *, custom_entry *, unsigned);
++
++static css_error substitute(css_select_state *state, struct css_custom_env *e,
++		const parserutils_vector *v, int32_t begin, int32_t end,
++		css_custom_tokens *out, unsigned depth)
++{
++	if (depth == CSS_CUSTOM_DEPTH) return CSS_INVALID;
++	for (int32_t i = begin; i < end; i++) {
++		const css_token *t = parserutils_vector_peek(v, i);
++		if (work(state) != CSS_OK) return CSS_NOMEM;
++		css_error error;
++		if (t->type == CSS_TOKEN_FUNCTION && css__custom_ident(t, "var")) {
++			int32_t name, fallback, close;
++			error = css__custom_var(v, i, &name, &fallback, &close);
++			if (error != CSS_OK) return error;
++			t = parserutils_vector_peek(v, name);
++			custom_entry *entry;
++			css_custom_tokens *value = NULL;
++			error = find_local(state, e, t->idata, &entry);
++			if (error != CSS_OK) return error;
++			if (entry != NULL) {
++				error = resolve_entry(state, e, entry, depth + 1);
++				if (error != CSS_OK) return error;
++				value = entry->value;
++			} else {
++				error = find_inherited(state, e != NULL ? e->parent : NULL, t->idata, &value);
++				if (error != CSS_OK) return error;
++			}
++			if (value != NULL) {
++				for (unsigned j = 0; j < value->count; j++) {
++					if (work(state) != CSS_OK) return CSS_NOMEM;
++					error = css__custom_tokens_append(out, parserutils_vector_peek(value->vector, j));
++					if (error != CSS_OK) return error;
++				}
++			} else if (fallback >= 0) {
++				error = substitute(state, e, v, fallback, close, out, depth + 1);
++				if (error != CSS_OK) return error;
++			} else return CSS_INVALID;
++			i = close;
++		} else {
++			error = css__custom_tokens_append(out, t);
++			if (error != CSS_OK) return error;
++		}
++	}
++	return CSS_OK;
++}
++
++static css_error resolve_entry(css_select_state *state, struct css_custom_env *e,
++		custom_entry *entry, unsigned depth)
++{
++	if (entry->resolving == 2) return CSS_OK;
++	if (entry->cycle || entry->resolving == 1 || depth == CSS_CUSTOM_DEPTH) {
++		entry->resolving = 2;
++		return CSS_OK;
++	}
++	entry->resolving = 1;
++	css_error error = CSS_OK;
++	if (entry->raw == NULL || keyword(entry->raw, "inherit") || keyword(entry->raw, "unset")) {
++		css_custom_tokens *value;
++		error = find_inherited(state, e->parent, entry->name, &value);
++		if (error == CSS_OK) entry->value = css__custom_tokens_ref(value);
++	} else if (!keyword(entry->raw, "initial")) {
++		error = css__custom_tokens_create(&entry->value);
++		if (error == CSS_OK) error = substitute(state, e, entry->raw->vector, 0,
++				entry->raw->count, entry->value, depth + 1);
++		if (error != CSS_OK) {
++			css__custom_tokens_unref(entry->value);
++			entry->value = NULL;
++			if (error == CSS_INVALID) error = CSS_OK;
++		}
++	}
++	entry->resolving = 2;
++	return error;
++}
++
++static css_error resolve_env(css_select_state *state, struct css_custom_env **slot,
++		struct css_custom_env *parent)
++{
++	struct css_custom_env *e = *slot;
++	if (e == NULL) {
++		*slot = env_ref(parent);
++		return CSS_OK;
++	}
++	e->parent = env_ref(parent);
++	for (unsigned i = 0; i < e->count; i++) choose_candidate(state, &e->entries[i]);
++	custom_entry *path[CSS_CUSTOM_DEPTH];
++	for (unsigned i = 0; i < e->count; i++) {
++		css_error error = graph(state, e, &e->entries[i], path, 0);
++		if (error != CSS_OK) return error;
++	}
++	for (unsigned i = 0; i < e->count; i++) {
++		css_error error = resolve_entry(state, e, &e->entries[i], 0);
++		if (error != CSS_OK) return error;
++		/* Keep only computed tokens in the inherited environment. */
++	}
++	for (unsigned i = 0; i < e->count; i++) {
++		custom_entry *entry = &e->entries[i];
++		for (unsigned j = 0; j <= CSS_ORIGIN_AUTHOR; j++) {
++			css__custom_tokens_unref(entry->candidate[j].raw);
++			entry->candidate[j].raw = NULL;
++		}
++		entry->raw = NULL;
++	}
++	return CSS_OK;
++}
++
++css_error css__custom_finish(css_select_state *state)
++{
++	css_error error = resolve_env(state, &state->node_data->custom[0], state->custom_parent);
++	if (error != CSS_OK) return error;
++	for (unsigned i = 1; i < CSS_PSEUDO_ELEMENT_COUNT; i++) {
++		error = resolve_env(state, &state->node_data->custom[i], state->node_data->custom[0]);
++		if (error != CSS_OK) return error;
++	}
++	state->custom_collect = false;
++	css_origin origin = CSS_ORIGIN_UA;
++	for (unsigned i = 0; i < state->custom_matches; i++) {
++		struct css_custom_match *match = &state->custom_match[i];
++		if (state->revert != NULL && match->origin != origin) {
++			for (unsigned j = 0; j < CSS_PSEUDO_ELEMENT_COUNT; j++) {
++				if (state->results->styles[j] == NULL) continue;
++				css_computed_style_destroy(state->revert[origin].style[j]);
++				state->revert[origin].style[j] = NULL;
++				error = css__computed_style_clone(state->results->styles[j], &state->revert[origin].style[j]);
++				if (error != CSS_OK) return error;
++			}
++			memcpy(state->revert[origin].props, state->props, sizeof(state->props));
++			origin = match->origin;
++		}
++		state->current_pseudo = match->pseudo;
++		state->current_origin = match->origin;
++		state->current_specificity = match->specificity;
++		state->computed = state->results->styles[match->pseudo];
++		error = css__cascade_style(match->style, state);
++		if (error != CSS_OK) return error;
++	}
++	return CSS_OK;
++}
++
++void css__custom_cleanup(css_select_state *state)
++{
++	css__custom_env_unref(state->custom_parent);
++	free(state->custom_match);
++}
++
++void css__ciuki_computed_row_gap(const css_computed_style *style,
++		css_fixed *length, css_unit *unit)
++{
++	*length = style->i.ciuki_row_gap;
++	*unit = style->i.ciuki_row_gap_unit;
++}
++
++static css_error gap_style(css_language *c, const css_custom_tokens *tokens,
++		int handler, css_style *parsed, css_select_state *state, bool important)
++{
++	css_custom_gap gap;
++	css_error parse_error = css__custom_gap_parse(c, tokens, handler, &gap);
++	if (parse_error != CSS_OK) return parse_error;
++	css_fixed row = gap.row, column = gap.column;
++	uint32_t row_unit = gap.row_unit, column_unit = gap.column_unit;
++	enum flag_value flag = gap.flag;
++	if (handler == CSS_CUSTOM_GAP) {
++		css_error error = css__stylesheet_style_append(parsed,
++				buildOPV(CSS_PROP_COLUMN_GAP, flag << 1, gap.normal ? COLUMN_GAP_NORMAL : COLUMN_GAP_SET));
++		if (error != CSS_OK) return error;
++		if (flag == FLAG_VALUE__NONE && !gap.normal) {
++			error = css__stylesheet_style_vappend(parsed, 2, (css_code_t)column, column_unit);
++			if (error != CSS_OK) return error;
++		}
++	}
++	if (css__outranks_state(&state->custom_row_gap[state->current_pseudo], important, state, flag)) {
++		css_computed_style *result = state->computed;
++		result->i.ciuki_row_gap = row;
++		result->i.ciuki_row_gap_unit = css__to_css_unit(row_unit);
++		result->i.ciuki_row_gap_inherit = flag == FLAG_VALUE_INHERIT;
++		if (flag == FLAG_VALUE_REVERT && state->revert != NULL) {
++			for (int origin = (int)state->current_origin - 1; origin >= CSS_ORIGIN_UA; origin--) {
++				css_computed_style *earlier = state->revert[origin].style[state->current_pseudo];
++				if (earlier == NULL) continue;
++				result->i.ciuki_row_gap = earlier->i.ciuki_row_gap;
++				result->i.ciuki_row_gap_unit = earlier->i.ciuki_row_gap_unit;
++				result->i.ciuki_row_gap_inherit = earlier->i.ciuki_row_gap_inherit;
++				break;
++			}
++		}
++	}
++	return CSS_OK;
++}
++
++css_error css__custom_apply(const css_custom_decl *decl, css_select_state *state,
++		css_stylesheet *sheet)
++{
++	if (decl->handler == -1) return CSS_OK;
++	css_custom_tokens *tokens = NULL;
++	css_style *parsed = NULL;
++	css_language language = {0};
++	language.sheet = sheet;
++	css_error error = css__propstrings_get(&language.strings);
++	if (error != CSS_OK) return error;
++	error = css__custom_tokens_create(&tokens);
++	if (error != CSS_OK) goto done;
++	error = substitute(state, state->node_data->custom[state->current_pseudo],
++			decl->tokens->vector, 0, decl->tokens->count, tokens, 0);
++	if (error != CSS_OK && error != CSS_INVALID) goto done;
++	if (error == CSS_OK) {
++		int32_t ctx = 0;
++		consumeWhitespace(tokens->vector, &ctx);
++		error = css__stylesheet_style_create(sheet, &parsed);
++		if (error != CSS_OK) goto done;
++		error = decl->handler < -1 ?
++				gap_style(&language, tokens, decl->handler, parsed, state, decl->important) :
++				property_handlers[decl->handler](&language, tokens->vector, &ctx, parsed);
++		if (decl->handler < -1 && error == CSS_OK) ctx = tokens->count;
++		consumeWhitespace(tokens->vector, &ctx);
++		if (error == CSS_OK && parserutils_vector_peek(tokens->vector, ctx) != NULL) error = CSS_INVALID;
++	}
++	if (error == CSS_INVALID) {
++		/* A winning invalid value still participates in the cascade. */
++		if (parsed != NULL) css__stylesheet_style_destroy(parsed);
++		parsed = NULL;
++		css__custom_tokens_unref(tokens);
++		tokens = NULL;
++		error = css__custom_tokens_create(&tokens);
++		if (error != CSS_OK) goto done;
++		css_token unset = { .type = CSS_TOKEN_IDENT };
++		if (lwc_intern_string("unset", 5, &unset.idata) != lwc_error_ok) { error = CSS_NOMEM; goto done; }
++		error = css__custom_tokens_append(tokens, &unset);
++		lwc_string_unref(unset.idata);
++		if (error != CSS_OK) goto done;
++		error = css__stylesheet_style_create(sheet, &parsed);
++		if (error != CSS_OK) goto done;
++		int32_t ctx = 0;
++		error = decl->handler < -1 ?
++				gap_style(&language, tokens, decl->handler, parsed, state, decl->important) :
++				property_handlers[decl->handler](&language, tokens->vector, &ctx, parsed);
++		if (decl->handler < -1 && error == CSS_OK) ctx = tokens->count;
++	}
++	if (error == CSS_OK) {
++		if (decl->important) css__make_style_important(parsed);
++		error = css__cascade_style(parsed, state);
++	}
++ done:
++	if (parsed != NULL) css__stylesheet_style_destroy(parsed);
++	css__custom_tokens_unref(tokens);
++	css__propstrings_unref();
++	return error;
++}
+--- /dev/null
++++ b/libcss/src/select/custom.h
+@@ -0,0 +1,20 @@
++/* CiukiOS custom-property selection. MIT; private to libcss. */
++#ifndef css_select_custom_h_
++#define css_select_custom_h_
++#include "select/select.h"
++#include "parse/custom.h"
++#define CSS_CUSTOM_ENTRY_LIMIT 128
++#define CSS_CUSTOM_MATCH_LIMIT 4096
++#define CSS_CUSTOM_WORK_LIMIT 262144
++struct css_custom_env;
++struct css_custom_match;
++void css__ciuki_computed_row_gap(const css_computed_style *style, css_fixed *length, css_unit *unit);
++void css__custom_env_unref(struct css_custom_env *env);
++css_error css__custom_begin(css_select_state *state, void *parent);
++css_error css__custom_collect(const css_style *style, css_select_state *state);
++css_error css__custom_finish(css_select_state *state);
++void css__custom_cleanup(css_select_state *state);
++css_error css__custom_apply(const css_custom_decl *decl, css_select_state *state,
++		css_stylesheet *sheet);
++bool css__custom_sheet_uses(const css_stylesheet *sheet, unsigned depth);
++#endif
+--- a/libcss/src/select/select.c
++++ b/libcss/src/select/select.c
+@@ -23,6 +23,7 @@
+ #include "select/propset.h"
+ #include "select/font_face.h"
+ #include "select/select.h"
++#include "select/custom.h"
+ #include "select/strings.h"
+ #include "select/unit.h"
+ #include "utils/parserutilserror.h"
+@@ -122,7 +123,7 @@
+ static css_error match_detail(css_select_ctx *ctx, void *node,
+ 		const css_selector_detail *detail, css_select_state *state,
+ 		bool *match, css_pseudo_element *pseudo_element);
+-static css_error cascade_style(const css_style *style, css_select_state *state);
++
+ 
+ static css_error select_font_faces_from_sheet(
+ 		const css_stylesheet *sheet,
+@@ -160,6 +161,7 @@
+ 	}
+ 
+ 	for (i = 0; i < CSS_PSEUDO_ELEMENT_COUNT; i++) {
++		css__custom_env_unref(node_data->custom[i]);
+ 		if (node_data->partial.styles[i] != NULL) {
+ 			css_computed_style_destroy(
+ 					node_data->partial.styles[i]);
+@@ -1000,6 +1002,7 @@
+ static void css_select__finalise_selection_state(
+ 		css_select_state *state)
+ {
++	css__custom_cleanup(state);
+ 	if (state->results != NULL) {
+ 		css_select_results_destroy(state->results);
+ 	}
+@@ -1275,6 +1278,20 @@
+ 	if (error != CSS_OK)
+ 		goto release_state;
+ 
++	state->custom_mode = inline_style != NULL && css__custom_sheet_uses(inline_style, 0);
++	for (i = 0; !state->custom_mode && i < ctx->n_sheets; i++)
++		state->custom_mode = css__custom_sheet_uses(ctx->sheets[i].sheet, 0);
++	if (!state->custom_mode && parent != NULL) {
++		struct css_node_data *parent_data = NULL;
++		error = handler->get_libcss_node_data(pw, parent, (void **)&parent_data);
++		if (error != CSS_OK) goto cleanup;
++		state->custom_mode = parent_data != NULL && parent_data->custom[0] != NULL;
++	}
++	if (state->custom_mode) {
++		error = css__custom_begin(state, parent);
++		if (error != CSS_OK) goto cleanup;
++	}
++
+ 	/* Fetch presentational hints */
+ 	error = handler->node_presentational_hint(pw, node, &nhints, &hints);
+ 	if (error != CSS_OK)
+@@ -1288,7 +1305,10 @@
+ 	}
+ 
+ 	/* Check if we can share another node's style */
+-	error = css_select_style__get_sharable_node_data(node, state, &share);
++	share = NULL;
++	/* Cousins with identical ordinary styles can inherit different variables. */
++	error = state->custom_mode ? CSS_OK :
++			css_select_style__get_sharable_node_data(node, state, &share);
+ 	if (error != CSS_OK) {
+ 		goto cleanup;
+ 	} else if (share != NULL) {
+@@ -1308,7 +1328,7 @@
+ #endif
+ 
+ 	/* Not sharing; need to select. */
+-	if (ctx->uses_revert ||
++	if (state->custom_mode || ctx->uses_revert ||
+ 			(inline_style != NULL && inline_style->uses_revert)) {
+ 		/* Need to track UA and USER origin styles for revert. */
+ 		state->revert = calloc(CSS_ORIGIN_AUTHOR, sizeof(*state->revert));
+@@ -1349,7 +1369,7 @@
+ 	for (i = 0; i < ctx->n_sheets; i++) {
+ 		const css_select_sheet s = ctx->sheets[i];
+ 
+-		if (state->revert != NULL && s.origin != origin) {
++		if (!state->custom_mode && state->revert != NULL && s.origin != origin) {
+ 			for (j = 0; j < CSS_PSEUDO_ELEMENT_COUNT; j++) {
+ 				if (state->results->styles[j] == NULL) {
+ 					continue;
+@@ -1390,15 +1410,22 @@
+ 
+ 		/* No bytecode if input was empty or wholly invalid */
+ 		if (sel->style != NULL) {
++			state->current_origin = CSS_ORIGIN_AUTHOR;
++			state->current_specificity = CSS_SPECIFICITY_A;
+ 			/* Inline style applies to base element only */
+ 			state->current_pseudo = CSS_PSEUDO_ELEMENT_NONE;
+ 			state->computed = state->results->styles[
+ 					CSS_PSEUDO_ELEMENT_NONE];
+ 
+-			error = cascade_style(sel->style, state);
++			error = css__cascade_style(sel->style, state);
+ 			if (error != CSS_OK)
+ 				goto cleanup;
+ 		}
++	}
++
++	if (state->custom_mode) {
++		error = css__custom_finish(state);
++		if (error != CSS_OK) goto cleanup;
+ 	}
+ 
+ 	/* Fix up any remaining unset properties. */
+@@ -2227,7 +2254,7 @@
+ 	state->current_pseudo = pseudo;
+ 	state->computed = state->results->styles[pseudo];
+ 
+-	return cascade_style(((css_rule_selector *) selector->rule)->style,
++	return css__cascade_style(((css_rule_selector *) selector->rule)->style,
+ 			state);
+ }
+ 
+@@ -2720,8 +2747,10 @@
+ 	return error;
+ }
+ 
+-css_error cascade_style(const css_style *style, css_select_state *state)
+-{
++css_error css__cascade_style(const css_style *style, css_select_state *state)
++{
++	if (state->custom_collect) return css__custom_collect(style, state);
++	if (style == NULL) return CSS_OK;
+ 	css_style s = *style;
+ 
+ 	while (s.used > 0) {
+@@ -2733,7 +2762,11 @@
+ 
+ 		op = getOpcode(opv);
+ 
+-		error = prop_dispatch[op].cascade(opv, &s, state);
++		if ((unsigned)op == CSS_CUSTOM_OPCODE) {
++			unsigned index = *s.bytecode;
++			advance_bytecode(&s, sizeof(css_code_t));
++			error = css__custom_apply(&s.sheet->custom[index], state, s.sheet);
++		} else error = prop_dispatch[op].cascade(opv, &s, state);
+ 		if (error != CSS_OK)
+ 			return error;
+ 	}
+@@ -2744,7 +2777,13 @@
+ bool css__outranks_existing(uint16_t op, bool important, css_select_state *state,
+ 		enum flag_value explicit_default)
+ {
+-	prop_state *existing = &state->props[op][state->current_pseudo];
++	return css__outranks_state(&state->props[op][state->current_pseudo],
++			important, state, explicit_default);
++}
++
++bool css__outranks_state(prop_state *existing, bool important,
++		css_select_state *state, enum flag_value explicit_default)
++{
+ 	bool outranks = false;
+ 
+ 	/* Sorting on origin & importance gives the following:
+--- a/libcss/src/select/select.h
++++ b/libcss/src/select/select.h
+@@ -56,6 +56,7 @@
+ 	css_select_results partial;
+ 	css_bloom *bloom;
+ 	css_node_flags flags;
++	struct css_custom_env *custom[CSS_PSEUDO_ELEMENT_COUNT];
+ };
+ 
+ struct revert_data {
+@@ -97,7 +98,16 @@
+ 	struct css_node_data *node_data;	/* Data we'll store on node */
+ 
+ 	prop_state props[CSS_N_PROPERTIES][CSS_PSEUDO_ELEMENT_COUNT];
++	prop_state custom_row_gap[CSS_PSEUDO_ELEMENT_COUNT];
++	bool custom_mode, custom_collect;
++	unsigned custom_matches, custom_allocated, custom_work;
++	struct css_custom_env *custom_parent;
++	struct css_custom_match *custom_match;
+ } css_select_state;
++
++css_error css__cascade_style(const css_style *style, css_select_state *state);
++bool css__outranks_state(prop_state *existing, bool important,
++		css_select_state *state, enum flag_value explicit_default);
+ 
+ static inline void advance_bytecode(css_style *style, uint32_t n_bytes)
+ {
+--- a/libcss/src/select/select_generator.py
++++ b/libcss/src/select/select_generator.py
+@@ -433,6 +433,10 @@
+         t.append()
+ 
+         t.append('struct css_computed_style_i {')
++        # CiukiOS private row-gap data participates in arena hash/equality.
++        t.append('css_fixed ciuki_row_gap;')
++        t.append('css_unit ciuki_row_gap_unit;')
++        t.append('uint32_t ciuki_row_gap_inherit;')
+ 
+         t.comment()
+         commented = []
+--- a/libcss/src/stylesheet.c
++++ b/libcss/src/stylesheet.c
+@@ -12,6 +12,7 @@
+ #include "stylesheet.h"
+ #include "bytecode/bytecode.h"
+ #include "parse/language.h"
++#include "parse/custom.h"
+ #include "parse/mq.h"
+ #include "utils/parserutilserror.h"
+ #include "utils/utils.h"
+@@ -261,6 +262,7 @@
+ 		free(sheet->title);
+ 
+ 	free(sheet->url);
++	css__custom_sheet_destroy(sheet);
+ 
+ 	for (r = sheet->rule_list; r != NULL; r = s) {
+ 		s = r->next;
+@@ -661,6 +663,7 @@
+ 	}
+ 	s->allocated = CSS_STYLE_DEFAULT_SIZE;
+ 	s->used = 0;
++	s->custom_first = s->custom_last = 0;
+ 	s->sheet = sheet;
+ 
+ 	*style = s;
+@@ -695,6 +698,12 @@
+ 			style->used * sizeof(css_code_t));
+ 
+ 	target->used += style->used;
++	if (style->custom_first != 0) {
++		if (target->custom_last != 0)
++			target->sheet->custom[target->custom_last - 1].next = style->custom_first;
++		else target->custom_first = style->custom_first;
++		target->custom_last = style->custom_last;
++	}
+ 
+ 	return CSS_OK;
+ 
+@@ -758,6 +767,7 @@
+ 		return CSS_BADPARM;
+ 
+ 	sheet = style->sheet;
++	style->custom_first = style->custom_last = 0;
+ 
+ 	if (sheet->cached_style == NULL) {
+ 		sheet->cached_style = style;
+--- a/libcss/src/stylesheet.h
++++ b/libcss/src/stylesheet.h
+@@ -31,6 +31,7 @@
+ 	uint32_t used;		      /**< number of code entries used */
+ 	uint32_t allocated;	      /**< number of allocated code entries */
+ 	struct css_stylesheet *sheet; /**< containing sheet */
++	unsigned custom_first, custom_last; /* deferred declaration indices + 1 */
+ } css_style;
+ 
+ typedef enum css_selector_type {
+@@ -188,6 +189,9 @@
+ 	bool quirks_allowed;			/**< Quirks permitted */
+ 	bool quirks_used;			/**< Quirks actually used */
+ 
++	struct css_custom_decl *custom;
++	unsigned custom_count, custom_tokens;
++
+ 	bool uses_revert;			/**< Uses 'revert' property value */
+ 
+ 	bool inline_style;			/**< Is an inline style */
+--- a/netsurf/content/handlers/html/layout_flex.c
++++ b/netsurf/content/handlers/html/layout_flex.c
+@@ -32,6 +32,7 @@
+  */
+ 
+ #include <string.h>
++#include "frontends/framebuffer/ciuki/css_gap.h"
+ 
+ #include "utils/log.h"
+ #include "utils/utils.h"
+@@ -73,6 +74,8 @@
+  * Flex line data
+  */
+ struct flex_line_data {
++	size_t in_flow;
++	int gap_total;
+ 	int main_size;
+ 	int cross_size;
+ 
+@@ -96,6 +99,7 @@
+ 
+ 	int main_size;
+ 	int cross_size;
++	int gap_main, gap_cross;
+ 
+ 	int available_main;
+ 	int available_cross;
+@@ -432,20 +436,23 @@
+ 		struct flex_item_data *item = &ctx->item.data[item_index];
+ 		struct box *b = item->box;
+ 		int pos_main;
++		int before = line->in_flow != 0 && !lh__box_is_absolute(b) ? ctx->gap_main : 0;
+ 
+ 		pos_main = ctx->horizontal ?
+ 				item->main_size :
+ 				b->height + lh__delta_outer_main(ctx->flex, b);
+ 
+ 		if (ctx->wrap == CSS_FLEX_WRAP_NOWRAP ||
+-		    pos_main + used_main <= ctx->available_main ||
++		    (int64_t)pos_main + used_main + before <= ctx->available_main ||
+ 		    lh__box_is_absolute(item->box) ||
+ 		    ctx->available_main == AUTO ||
+ 		    line->count == 0 ||
+ 		    pos_main == 0) {
+ 			if (lh__box_is_absolute(item->box) == false) {
+-				line->main_size += item->main_size;
+-				used_main += pos_main;
++				line->main_size += item->main_size + before;
++				used_main += pos_main + before;
++				line->gap_total += before;
++				line->in_flow++;
+ 
+ 				if (b->margin[start_side] == AUTO) {
+ 					line->main_auto_margin_count++;
+@@ -462,6 +469,7 @@
+ 		}
+ 	}
+ 
++	line->used_main_size = line->gap_total;
+ 	if (line->count > 0) {
+ 		ctx->line.count++;
+ 	} else {
+@@ -512,7 +520,7 @@
+ 		int available_main,
+ 		bool grow)
+ {
+-	int remaining_free_main = available_main;
++	int remaining_free_main = available_main - line->gap_total;
+ 	size_t item_count = line->first + line->count;
+ 
+ 	*unfrozen_factor_sum = 0;
+@@ -717,7 +725,7 @@
+ 	}
+ 
+ 	grow = (line->main_size < available_main);
+-	initial_free_main = available_main;
++	initial_free_main = available_main - line->gap_total;
+ 
+ 	NSLOG(flex, DEEPDEBUG, "box %p: line %zu: first: %zu, count: %zu",
+ 			ctx->flex, line - ctx->line.data,
+@@ -812,6 +820,7 @@
+ 	size_t item_count = line->first + line->count;
+ 	int extra_remainder = 0;
+ 	int extra = 0;
++	bool have_in_flow = false;
+ 
+ 	if (ctx->main_reversed) {
+ 		main_pos = lh__box_size_main(ctx->horizontal, ctx->flex) -
+@@ -853,6 +862,8 @@
+ 		box_pos_main = ctx->horizontal ? &b->x : &b->y;
+ 
+ 		if (!lh__box_is_absolute(b)) {
++			if (have_in_flow) main_pos += ctx->main_reversed ? -ctx->gap_main : ctx->gap_main;
++			have_in_flow = true;
+ 			if (b->margin[main_start] == AUTO) {
+ 				extra_pre = extra + extra_remainder;
+ 			}
+@@ -923,6 +934,7 @@
+ 			return false;
+ 		}
+ 
++		if (ctx->line.count > 1) ctx->cross_size += ctx->gap_cross;
+ 		ctx->cross_size += line->cross_size;
+ 		if (ctx->main_size < line->main_size) {
+ 			ctx->main_size = line->main_size;
+@@ -1023,6 +1035,7 @@
+ 	for (size_t i = 0; i < ctx->line.count; i++) {
+ 		struct flex_line_data *line = &ctx->line.data[i];
+ 
++		if (i > 0) line_pos += reversed ? -ctx->gap_cross : ctx->gap_cross;
+ 		line_pos += pre_multiplier * line->cross_size;
+ 		line->pos = line_pos;
+ 		line_pos += post_multiplier * line->cross_size +
+@@ -1045,6 +1058,25 @@
+  * \param[in] content          memory pool for any new boxes
+  * \return  true on success, false on memory exhaustion
+  */
++/* Gap percentages resolve only against a definite corresponding axis.
++ * Bound aggregate gutters to 32767 device pixels: flex's fixed-point free
++ * space arithmetic must not overflow on hostile lengths or large child lists. */
++static int ciuki_flex_gap(struct flex_ctx *ctx, css_fixed length, css_unit unit,
++		int dimension)
++{
++	int64_t pixels;
++	if (length <= 0) return 0;
++	if (unit == CSS_UNIT_PCT) {
++		pixels = dimension == AUTO || dimension == UNKNOWN_WIDTH ? 0 :
++				(int64_t)length * dimension / (100 * (1 << CSS_RADIX_POINT));
++	} else {
++		pixels = FIXTOINT(css_unit_len2device_px(ctx->flex->style,
++				ctx->unit_len_ctx, length, unit));
++	}
++	int limit = 32767 / (ctx->item.count + 1);
++	return pixels < 0 ? 0 : pixels > limit ? limit : (int)pixels;
++}
++
+ bool layout_flex(struct box *flex, int available_width,
+ 		html_content *content)
+ {
+@@ -1082,6 +1114,16 @@
+ 	NSLOG(flex, DEEPDEBUG, "box %p: available_cross: %i",
+ 			flex, ctx->available_cross);
+ 
++	css_fixed row_length, column_length;
++	css_unit row_unit, column_unit;
++	css__ciuki_computed_row_gap(flex->style, &row_length, &row_unit);
++	int row_gap = ciuki_flex_gap(ctx, row_length, row_unit, flex->height);
++	int column_gap = 0;
++	if (css_computed_column_gap(flex->style, &column_length, &column_unit) == CSS_COLUMN_GAP_SET)
++		column_gap = ciuki_flex_gap(ctx, column_length, column_unit, available_width);
++	ctx->gap_main = ctx->horizontal ? column_gap : row_gap;
++	ctx->gap_cross = ctx->horizontal ? row_gap : column_gap;
++
+ 	layout_flex_ctx__populate_item_data(ctx, flex, available_width);
+ 
+ 	/* Place items onto lines. */

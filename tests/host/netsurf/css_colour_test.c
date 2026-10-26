@@ -70,6 +70,16 @@ static void check(const char *value, uint32_t expected, bool valid,
 int main(void)
 {
     static const struct { const char *text; uint32_t value; } valid[] = {
+        { "color-mix(in srgb,red,blue)", 0xff800080 },
+        { "color-mix(in srgb,red 25%,blue)", 0xff4000bf },
+        { "color-mix(in srgb,25% red,75% blue)", 0xff4000bf },
+        { "color-mix(in srgb,red 80%,blue 80%)", 0xff800080 },
+        { "color-mix(in srgb,red 25%,blue 25%)", 0x80800080 },
+        { "color-mix(in srgb,#ff000080 50%,blue)", 0xc05500aa },
+        { "color-mix(in srgb,red 42%,transparent)", 0x6bff0000 },
+        { "color-mix(in srgb,transparent,blue)", 0x800000ff },
+        { "color-mix(in srgb,red 0%,blue 0%)", 0x00000000 },
+        { "color-mix(in srgb,color-mix(in srgb,red,blue),white)", 0xffc080c0 },
         { "#abc", 0xffaabbcc }, { "#aBcD", 0xddaabbcc },
         { "#010203", 0xff010203 }, { "#01020304", 0x04010203 },
         { "#f000", 0x00ff0000 }, { "#000000ff", 0xff000000 },
@@ -96,6 +106,13 @@ int main(void)
         { "light-dark(#abcd,rgba(1 2 3 / none))", 0xddaabbcc }
     };
     static const char *invalid[] = {
+        "color-mix()", "color-mix(in srgb,red)",
+        "color-mix(in srgb,red,blue,green)",
+        "color-mix(in oklab,red,blue)", "color-mix(in srgb,currentColor,red)",
+        "color-mix(in srgb,red -1%,blue)", "color-mix(in srgb,red 101%,blue)",
+        "color-mix(in srgb,red 20% 20%,blue)", "color-mix(in srgb,20% red 20%,blue)",
+        "color-mix(in srgb,red,,blue)", "color-mix(in srgb red,blue)",
+        "color-mix(in srgb,red %,blue)",
         "#12", "#12345", "#1234567", "#123456789", "#abcdexff", "#gggg",
         "rgb()", "rgb(1 2)", "rgb(1 2 3 4)", "rgb(1 2 3 /)",
         "rgb(1,2 3)", "rgb(1 2,3)", "rgb(1,2,3 / .5)",
