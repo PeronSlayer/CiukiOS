@@ -1,5 +1,26 @@
 # Credential foundation host validation
 
+## Lead amendment 2: host harness compatibility
+
+Rechecked the primary [Microsoft access-token documentation](https://learn.microsoft.com/en-us/windows/win32/secauthz/access-tokens)
+and [Open Group getuid specification](https://pubs.opengroup.org/onlinepubs/009695399/functions/getuid.html).
+Process identity comes from execution context. The production channel now
+requires a live retained subject, whereas the native poll pacing fixture
+previously constructed a bare process. Give that fixture an explicit single
+subject boundary with balanced reference checks; H01 remains the credential
+policy oracle. Process stop runs channel revocation; assert POLLHUP because
+poll checks readiness before interruption. Keep the call-101 SDK forwarding
+check alongside the existing syscall enumeration check. No runtime security
+policy or public ABI changes.
+
+The other channel consumers are the desktop/security/Win32 fixtures (which
+include production security through proc_test.c), the synthetic lwIP readiness
+fixture shared with NetSurf, and the lwIP target-only relocatable compile.
+The synthetic fixture supplies the address-conversion macro and explicit
+aborting service-only dependencies: ordinary-channel readiness must never
+invoke those boundaries.
+The latter intentionally leaves kernel dependencies to the final kernel link.
+
 Research checked on 2026-10-26 after running `date -Is`.
 
 Microsoft's [access tokens](https://learn.microsoft.com/en-us/windows/win32/secauthz/access-tokens)
