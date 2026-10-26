@@ -8,6 +8,7 @@
 #include <ciuki/abi.h>
 #include <ciuki/display_driver.h>
 #include "../../src/kernel/drivers/video/render3d.h"
+#include "../../src/kernel/drivers/video/render3d_transport.h"
 #include "../../src/kernel/drivers/video/s3savage/savage3d.h"
 static struct render3d_service service;
 static uint64_t now;
@@ -387,8 +388,23 @@ static void scalar_numeric_bounds(void)
     assert(!render3d_close(&service) && !outstanding);
     puts("scalar tiny-area derivatives, maximum texture/UV/reciprocal-W products and signed wrap PASS");
 }
+static void canonical_rgb565(void)
+{
+    init(NULL); uint32_t c=create(1,R3D_SOFTWARE),h,pixel;
+    const unsigned kinds[]={R3D_COLOR565,R3D_LINEAR565};
+    for (unsigned k=0;k<2;k++) {
+        assert(!render3d_create_resource(&service,1,c,kinds[k],1,1,NULL,0,&h));
+        assert(!render3d_readback(&service,1,c,h,&pixel,4) && pixel==0xff000000u);
+        pixel=0x00123456;
+        assert(!render3d_upload(&service,1,c,h,&pixel,4));
+        assert(!render3d_readback(&service,1,c,h,&pixel,4) && pixel==0xff103452u);
+    }
+    assert(!render3d_close(&service));
+    puts("RGB565 canonical shadows: creation, immediate upload/read quantization and absent alpha PASS");
+}
 int main(int argc,char **argv)
 {
+    canonical_rgb565();
     if (argc==2 && !strcmp(argv[1],"queued-close")) queued_close();
     else if (argc==2 && !strcmp(argv[1],"completed-receipts")) completed_receipts();
     else { security(); software(); queues(); hardware(); limits(); layouts(); diagnostic(); queued_close(); completed_receipts(); scalar_numeric_bounds(); }

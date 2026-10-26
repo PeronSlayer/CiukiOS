@@ -236,6 +236,12 @@ static void texture_decode(const struct render3d_texture_desc *t,struct render3d
         w=w>1 ? w/2 : 1; h=h>1 ? h/2 : 1;
     }
 }
+static void canonicalize_color(struct render3d_resource *r)
+{
+    if (r->kind!=R3D_COLOR565 && r->kind!=R3D_LINEAR565) return;
+    uint32_t *pixels=r->shadow;
+    for (unsigned i=0;i<r->width*r->height;i++) pixels[i]=render3d_expand565(render3d_pack565(pixels[i]));
+}
 static int create_resource(struct render3d_service *s, uint32_t p, uint32_t id,
     enum render3d_kind kind, uint32_t w, uint32_t h, const struct render3d_texture_desc *t, uint32_t *out)
 {
@@ -243,7 +249,7 @@ static int create_resource(struct render3d_service *s, uint32_t p, uint32_t id,
     struct render3d_context *c=context(s,p,id);
     if (!c || c->dying || c->generation!=s->generation) return -ENOENT;
     if (c->failure) return c->failure;
-    if (!out || kind<R3D_COLOR || kind>R3D_LINEAR_COLOR || !w || !h || w>R3D_MAX_SIZE || h>R3D_MAX_SIZE) return -EINVAL;
+    if (!out || kind<R3D_COLOR || kind>R3D_LINEAR565 || !w || !h || w>R3D_MAX_SIZE || h>R3D_MAX_SIZE) return -EINVAL;
     if (kind==R3D_TEXTURE && ((w&(w-1)) || (h&(h-1)))) return -EINVAL;
     uint32_t pitch=w*(kind==R3D_D16 ? 2u : 4u), size=pitch*h;
     struct render3d_resource r={.kind=kind,.width=w,.height=h,.pitch=pitch,.bytes=size,.hardware=c->hardware};
@@ -269,6 +275,7 @@ static int create_resource(struct render3d_service *s, uint32_t p, uint32_t id,
     r.handle=handle(s); if (!r.handle) return -ENOSPC;
     r.shadow=allocate(s,size); if (!r.shadow) return -ENOMEM;
     if (t) texture_decode(t,&r);
+    canonicalize_color(&r);
     r.live=true; *slot=r; *out=r.handle; return 0;
 }
 int render3d_create_texture(struct render3d_service *s,uint32_t p,uint32_t c,
@@ -291,6 +298,10 @@ int render3d_create_resource(struct render3d_service *s,uint32_t p,uint32_t c,
 int render3d_validate_state(const struct render3d_request *q)
 {
     const struct render3d_state *a=&q->state;
+    const struct ciuki_r3d_stencil *t=&q->stencil;
+    if (t->function>R3D_GEQUAL || t->reference>255 || t->read_mask>255 ||
+        t->write_mask>255 || t->clear>255 || t->fail>CIUKI_R3D_STENCIL_INVERT ||
+        t->zfail>CIUKI_R3D_STENCIL_INVERT || t->zpass>CIUKI_R3D_STENCIL_INVERT) return -EINVAL;
     if (a->depth_func>R3D_GEQUAL || a->alpha_func>R3D_GEQUAL || a->alpha_ref>255 ||
         a->alpha_test>1 || a->blend>1 || a->flat>1 || a->source>R3D_INV_DST_ALPHA || a->destination>R3D_INV_DST_ALPHA ||
         a->source==R3D_SRC_COLOR || a->source==R3D_INV_SRC_COLOR ||
@@ -314,23 +325,27 @@ static void resources(struct render3d_context *c, const struct render3d_request 
 { r[0]=resource(c,q->target); r[1]=resource(c,q->depth); r[2]=resource(c,q->texture); r[3]=resource(c,q->copy_target); r[4]=resource(c,q->texture1); }
 static int validate(struct render3d_context *c, const struct render3d_request *q, struct render3d_resource *r[R3D_REFS], uint32_t *work)
 {
-    if (!q->flags || (q->flags&~R3D_ALL_FEATURES) || q->count>R3D_VERTICES || q->count%3 || q->clear_depth>65535) return -EINVAL;
+    if (!q->flags || (q->flags&~R3D_ALL_FEATURES) || q->count>R3D_VERTICES || q->count%3) return -EINVAL;
     if (render3d_validate_state(q)) return -EINVAL;
     resources(c,q,r);
-    if (!r[0] || r[0]->pending_free || r[0]->kind!=R3D_COLOR) return -EINVAL;
-    if ((q->flags&(R3D_CLEAR_DEPTH|R3D_DEPTH_TEST|R3D_DEPTH_WRITE)) ?
-        (!r[1] || r[1]->pending_free || r[1]->kind!=R3D_D16 || r[1]->width!=r[0]->width || r[1]->height!=r[0]->height) : q->depth!=0) return -EINVAL;
+    if (!r[0] || r[0]->pending_free || (r[0]->kind!=R3D_COLOR && r[0]->kind!=R3D_COLOR565)) return -EINVAL;
+    if ((q->flags&R3D_DEPTH_FLAGS) ?
+        (!r[1] || r[1]->pending_free || (r[1]->kind!=R3D_D16 && r[1]->kind!=R3D_D24S8) || r[1]->width!=r[0]->width || r[1]->height!=r[0]->height) : q->depth!=0) return -EINVAL;
     if ((q->flags&R3D_TEXTURED) ? (!r[2] || r[2]->pending_free || r[2]->kind!=R3D_TEXTURE || !q->count) : q->texture!=0) return -EINVAL;
     if ((q->flags&R3D_TEXTURE1) ? (!(q->flags&R3D_TEXTURED) || !r[4] || r[4]->pending_free ||
         r[4]->kind!=R3D_TEXTURE || !q->count) : q->texture1!=0) return -EINVAL;
     if ((q->flags&R3D_COPY) ? (!r[3] || r[3]->pending_free || r[3]==r[0] ||
-        (r[3]->kind!=R3D_COLOR && r[3]->kind!=R3D_LINEAR_COLOR) ||
+        (r[0]->kind==R3D_COLOR565 ? r[3]->kind!=R3D_LINEAR565 :
+         (r[3]->kind!=R3D_COLOR && r[3]->kind!=R3D_LINEAR_COLOR)) ||
         r[3]->width!=r[0]->width || r[3]->height!=r[0]->height) : q->copy_target!=0) return -EINVAL;
+    uint32_t zmax=r[1] && r[1]->kind==R3D_D24S8 ? 16777215u : 65535u;
+    if (q->clear_depth>zmax || ((q->flags&(R3D_STENCIL_TEST|R3D_CLEAR_STENCIL)) &&
+        (!r[1] || r[1]->kind!=R3D_D24S8))) return -EINVAL;
     uint64_t pixels=0;
     for (unsigned i=0;i<q->count;i++) {
         const struct render3d_vertex *v=&q->vertices[i];
         if (v->x<0 || v->y<0 || v->x>(int32_t)(r[0]->width<<16) || v->y>(int32_t)(r[0]->height<<16) ||
-            v->z>65535 || v->rhw<256 || v->rhw>16777216 || v->u < -16*65536 || v->u>16*65536 || v->v < -16*65536 || v->v>16*65536 ||
+            v->z>zmax || v->rhw<256 || v->rhw>16777216 || v->u < -16*65536 || v->u>16*65536 || v->v < -16*65536 || v->v>16*65536 ||
             q->uv1[i][0] < -16*65536 || q->uv1[i][0]>16*65536 ||
             q->uv1[i][1] < -16*65536 || q->uv1[i][1]>16*65536) return -EINVAL;
         if (i%3==2) {
@@ -520,7 +535,7 @@ int render3d_upload(struct render3d_service *s, uint32_t p, uint32_t id,
     if (!s->admission || c->failure) return c->failure ? c->failure : -ENODEV;
     if (!input || bytes!=r->bytes || r->kind==R3D_TEXTURE) return -EINVAL;
     if (r->references) return -EAGAIN;
-    memcpy(r->shadow,input,bytes); r->resident=false; return 0;
+    memcpy(r->shadow,input,bytes); canonicalize_color(r); r->resident=false; return 0;
 }
 void render3d_process_exit(struct render3d_service *s, uint32_t p)
 {

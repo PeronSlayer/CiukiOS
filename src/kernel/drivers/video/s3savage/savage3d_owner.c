@@ -98,7 +98,7 @@ int savage3d_owner_stop(struct savage2d *engine)
 {
     if (device.engine!=engine) return 0;
     /* Called under presenter before its 2D mappings/lease can be revoked. */
-    device.qualified=device.fullsize_qualified=device.perspective_qualified=false; engine->render3d_qualified=false;
+    device.qualified=device.fullsize_qualified=device.perspective_qualified=device.depth24_qualified=device.color565_qualified=false; engine->render3d_qualified=false;
     if (device.consumer) {
         int e=render3d_close(device.consumer);
         if (e) return e;
@@ -130,7 +130,9 @@ static int scratch_create(struct render3d_service **out,unsigned width,unsigned 
     render3d_init(s,&host,device.generation,0,0,(struct render3d_extent){0});
     uint32_t context;
     int e=render3d_create_context(s,1,R3D_SOFTWARE,&context);
-    const enum render3d_kind kinds[]={R3D_COLOR,R3D_D16,R3D_TEXTURE,R3D_LINEAR_COLOR,R3D_TEXTURE};
+    const enum render3d_kind kinds[]={device.color565_testing ? R3D_COLOR565 : R3D_COLOR,
+        device.depth24_testing ? R3D_D24S8 : R3D_D16,R3D_TEXTURE,
+        device.color565_testing ? R3D_LINEAR565 : R3D_LINEAR_COLOR,R3D_TEXTURE};
     uint32_t at=device.heap.first,tex_at=device.heap.first+device.heap.bytes-device.texture_bytes;
     for (unsigned i=0;!e && i<(full ? 5u : 4u);i++) {
         uint32_t resource;
@@ -161,6 +163,7 @@ static int scratch_create(struct render3d_service **out,unsigned width,unsigned 
             r->hardware=true; r->offset=kinds[i]==R3D_TEXTURE ? tex_at : at;
             e=savage3d_backend()->layout(&device,r);
             if (kinds[i]==R3D_TEXTURE) tex_at+=r->reserved; else at+=r->reserved;
+            if (at>device.heap.first+device.heap.bytes-device.texture_bytes || tex_at>device.heap.first+device.heap.bytes) e=-ENOMEM;
         }
     }
     if (e) { (void)render3d_close(s); kfree(s); return e; }
@@ -191,6 +194,27 @@ static void fullsize_diagnostic(struct render3d_service **scratch)
         device.sample_delta_q16,device.filter_fraction_bits,device.precision_phase,device.precision_samples,
         device.measured_filter_levels[0],device.measured_filter_levels[1],device.expected,device.actual);
 }
+static void attachment_diagnostic(struct render3d_service **scratch,bool depth24)
+{
+    if (!device.fullsize_qualified || device.lost) return;
+    (void)render3d_close(*scratch); kfree(*scratch); *scratch=0;
+    struct render3d_service *reference=0;
+    device.depth24_testing=depth24; device.color565_testing=!depth24; device.fullsize_testing=true;
+    int e=scratch_create(scratch,device.mode_width,device.mode_height,true,true);
+    device.fullsize_testing=false;
+    if (!e) e=scratch_create(&reference,device.mode_width,device.mode_height,true,false);
+    if (!e) {
+        device.consumer=*scratch;
+        e=depth24 ? savage3d_depth24_probe(&device,reference) : savage3d_color565_probe(&device,reference);
+        device.consumer=0;
+    }
+    device.depth24_testing=device.color565_testing=false;
+    if (reference) { (void)render3d_close(reference); kfree(reference); }
+    klog("[3d] attachment format=%s result=%s error=%d width=%u height=%u depth_error=%u expected=%08x actual=%08x quarantined=%u",
+        depth24 ? "D24S8" : "RGB565",(depth24 ? device.depth24_qualified : device.color565_qualified) ? "qualified" : "refused",e,device.mode_width,device.mode_height,
+        device.max_depth_error,device.expected,device.actual,device.lost);
+}
+
 static bool token(void)
 {
     for (unsigned i=0;i<sizeof(g_boot.options) && g_boot.options[i];) {
@@ -238,6 +262,14 @@ void savage3d_boot_diagnostic(struct savage2d *engine,const struct fb_device *fb
             .mode_width=fb->width,.mode_height=fb->height,
             .texture_bytes=(heap.bytes-(required-SAVAGE3D_TEXTURE_MIN))&~4095u,
             .memory={0,memory_read,memory_write,enter,leave},.lost_notify=lost_notify};
+        /* Budget optional D24/S8 from this same claimed heap before fixing
+         * the texture pool. Keep its existing minimum and the scratch/guards;
+         * if it does not fit, preserve the D16 budget and decline D24. */
+        uint32_t rows=(fb->height+15)&~15u;
+        uint32_t cp=((fb->width*4+127)&~127u)*rows;
+        uint32_t depth24_required=3*((cp+4095)&~4095u)+4*8192u+24576u;
+        if (heap.bytes>=depth24_required+480u*1024)
+            device.texture_bytes=(heap.bytes-depth24_required)&~4095u;
         uint32_t bases[]={fb->phys+heap.first,alias}, sizes[]={heap.bytes,SAVAGE3D_ALIAS_BYTES};
         for (unsigned i=0;!e && i<2;i++) {
             claims[i]=registry_claim(RES_MMIO,bases[i],bases[i]+sizes[i],"savage-3d",false);
@@ -271,6 +303,8 @@ void savage3d_boot_diagnostic(struct savage2d *engine,const struct fb_device *fb
         device.consumer=0;
         if (!e) {
             fullsize_diagnostic(&scratch);
+            attachment_diagnostic(&scratch,false);
+            attachment_diagnostic(&scratch,true);
             if (device.lost) e=-EIO;
         }
     }

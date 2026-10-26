@@ -11,7 +11,9 @@ static void fullsize_resources3d(struct render3d_service *s,const struct render3
 {
     render3d_init(s,host,42,0,0,(struct render3d_extent){0});
     uint32_t c,handle; FULL_CHECK(!render3d_create_context(s,1,R3D_SOFTWARE,&c));
-    const unsigned kinds[]={R3D_COLOR,R3D_D16,R3D_TEXTURE,R3D_LINEAR_COLOR,R3D_TEXTURE};
+    const unsigned kinds[]={gpu3d.color565_testing ? R3D_COLOR565 : R3D_COLOR,
+        gpu3d.depth24_testing ? R3D_D24S8 : R3D_D16,R3D_TEXTURE,
+        gpu3d.color565_testing ? R3D_LINEAR565 : R3D_LINEAR_COLOR,R3D_TEXTURE};
     unsigned at=gpu3d.heap.first,tex=gpu3d.heap.first+gpu3d.heap.bytes-gpu3d.texture_bytes;
     for (unsigned i=0;i<5;i++) {
         if (kinds[i]==R3D_TEXTURE) {
@@ -309,7 +311,7 @@ static void large_batch3d(void)
     render3d_init(&reference3d,&host,42,0,0,(struct render3d_extent){0});
     struct render3d_service *services[]={&scratch3d,&reference3d};
     uint32_t context[2],handles[2][4];
-    const unsigned kinds[]={R3D_COLOR,R3D_D16,R3D_TEXTURE,R3D_LINEAR_COLOR};
+    const unsigned kinds[]={R3D_COLOR,gpu3d.depth24_testing ? R3D_D24S8 : R3D_D16,R3D_TEXTURE,R3D_LINEAR_COLOR};
     uint32_t pixels[64*64];
     for (unsigned i=0;i<64*64;i++) pixels[i]=0xff000000u|((i&63)*3<<16)|((i/64)*3<<8)|96;
     for (unsigned side=0;side<2;side++) {
@@ -399,6 +401,45 @@ static void large_batch3d(void)
     FULL_CHECK(!render3d_close(&scratch3d) && !render3d_close(&reference3d) && !allocations3d); finish();
 }
 #include "savage3d_shader.inc"
+static void attachments3d(unsigned w,unsigned h,bool d24,unsigned fault)
+{
+    prepare(32); m.reg[0x48578/4]=0; m.exact_clock=true;
+    memset(ram3d,0x7a,sizeof(ram3d));
+    draw3d=copy3d=writes3d=memory3d=count3d=corruption3d=0;
+    dropping3d=bad_restore3d=false; attachment_fault3d=0;
+    gpu3d=(struct savage3d_device){.engine=&test_engine,.heap={0x800000,sizeof(ram3d)},.generation=42,
+        .mode_width=w,.mode_height=h,.texture_bytes=480*1024,.memory={0,memory_read3d,memory_write3d,lock3d,unlock3d},
+        .qualified=true,.fullsize_qualified=true,.perspective_qualified=true,.fullsize_testing=true,
+        .depth24_testing=d24,.color565_testing=!d24};
+    test_engine.render3d_qualified=true; test_engine.io.write32=write_engine3d;
+    struct render3d_host host={0,allocate3d,free3d,clock3d,0};
+    fullsize_resources3d(&scratch3d,&host,w,h,true);
+    fullsize_resources3d(&reference3d,&host,w,h,false);
+    gpu3d.fullsize_testing=false; gpu3d.consumer=&scratch3d;
+    attachment_fault3d=fault<=2 ? fault : 0;
+    if (fault==3) corruption3d=1;
+    if (fault==4) corruption3d=2;
+    if (fault==5) bad_restore3d=true;
+    if (fault==6) read_delay3d=9;
+    int e=d24 ? savage3d_depth24_probe(&gpu3d,&reference3d) : savage3d_color565_probe(&gpu3d,&reference3d);
+    if (e && !fault) fprintf(stderr,"attachment d24=%u %ux%u error=%d expected=%08x actual=%08x zerror=%u\n",
+        d24,w,h,e,gpu3d.expected,gpu3d.actual,gpu3d.max_depth_error);
+    FULL_CHECK((e==0)==!fault);
+    FULL_CHECK((d24 ? gpu3d.depth24_qualified : gpu3d.color565_qualified)==!fault);
+    if (fault==1 || fault==2 || fault==4) FULL_CHECK(e==-EILSEQ && !gpu3d.lost && gpu3d.fullsize_qualified);
+    if (fault==3 || fault==5) FULL_CHECK(gpu3d.lost && test_engine.quarantined);
+    if (fault==6) FULL_CHECK(e==-ETIMEDOUT && !gpu3d.lost);
+    attachment_fault3d=read_delay3d=corruption3d=0; bad_restore3d=false;
+    FULL_CHECK(!render3d_close(&scratch3d) && !render3d_close(&reference3d) && !allocations3d);
+    finish();
+    printf("attachment format=%s %ux%u fault=%u result=%d PASS\n",d24 ? "D24S8" : "RGB565",w,h,fault,e);
+}
+static void attachment_suite3d(void)
+{
+    attachments3d(640,480,true,0); attachments3d(800,600,true,0);
+    attachments3d(640,480,false,0); attachments3d(1024,768,false,0);
+    for (unsigned fault=1;fault<=6;fault++) attachments3d(64,64,true,fault);
+}
 static void fullsize_suite3d(void)
 {
     fullsize3d(640,480,0); fullsize3d(800,600,0); fullsize3d(1024,768,0);

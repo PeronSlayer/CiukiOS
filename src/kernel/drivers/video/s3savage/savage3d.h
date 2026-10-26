@@ -42,6 +42,7 @@ struct savage3d_device {
     uint32_t texture_bytes;
     bool qualified, probing, locked, lost;
     bool fullsize_qualified, fullsize_testing, perspective_qualified;
+    bool depth24_qualified, depth24_testing, color565_qualified, color565_testing;
     uint32_t sample_delta_q16, filter_fraction_bits, precision_samples;
     uint32_t measured_filter_levels[2];
     int32_t precision_error;
@@ -62,6 +63,8 @@ int savage3d_mode_heap(const struct savage2d *, const struct fb_device *, uint32
 /* Source-complete positive qualification, entered only after claims and a
  * fresh durable operation marker. All scratch is inside device.heap. */
 int savage3d_probe(struct savage3d_device *);
+int savage3d_color565_probe(struct savage3d_device *, struct render3d_service *);
+int savage3d_depth24_probe(struct savage3d_device *, struct render3d_service *);
 int savage3d_fullsize_probe(struct savage3d_device *, struct render3d_service *);
 void savage3d_bind_vfs(struct vfs *);
 void savage3d_boot_diagnostic(struct savage2d *, const struct fb_device *);

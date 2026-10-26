@@ -30,7 +30,7 @@ void gl_kernel_setup(int qualified)
 {
     CHECK(!allocations3d);
     prepare(32); m.reg[0x48578/4]=0;
-    memset(ram3d,0x7a,sizeof(ram3d)); draw3d=copy3d=writes3d=memory3d=count3d=0;
+    memset(ram3d,0x7a,sizeof(ram3d)); draw3d=copy3d=writes3d=memory3d=count3d=attachment_fault3d=0;
     gpu3d=(struct savage3d_device){.engine=&test_engine,.heap={0x800000,sizeof(ram3d)},.generation=42,
         .memory={0,memory_read3d,memory_write3d,lock3d,unlock3d},.qualified=qualified};
     test_engine.render3d_qualified=qualified;
@@ -45,6 +45,26 @@ void gl_kernel_setup(int qualified)
         gpu3d.fullsize_testing=false; gpu3d.consumer=&scratch3d;
         CHECK(!savage3d_fullsize_probe(&gpu3d,&reference3d));
         CHECK(!render3d_close(&scratch3d) && !render3d_close(&reference3d)); gpu3d.consumer=0;
+        gpu3d.color565_testing=gpu3d.fullsize_testing=true;
+        fullsize_resources3d(&scratch3d,&host,mode_width,mode_height,true);
+        fullsize_resources3d(&reference3d,&host,mode_width,mode_height,false);
+        gpu3d.fullsize_testing=false; gpu3d.consumer=&scratch3d;
+        CHECK(!savage3d_color565_probe(&gpu3d,&reference3d));
+        CHECK(!render3d_close(&scratch3d) && !render3d_close(&reference3d)); gpu3d.consumer=0;
+        /* Full D24 mode must fit the same heap; do not enlarge the model. */
+        unsigned padded_h=(mode_height+15)&~15u;
+        unsigned buffer=(((mode_width*4+127)&~127u)*padded_h+4095)&~4095u;
+        if (3*(buffer+8192)<=gpu3d.heap.bytes-gpu3d.texture_bytes) {
+            gpu3d.depth24_testing=gpu3d.fullsize_testing=true;
+            fullsize_resources3d(&scratch3d,&host,mode_width,mode_height,true);
+            fullsize_resources3d(&reference3d,&host,mode_width,mode_height,false);
+            gpu3d.fullsize_testing=false; gpu3d.consumer=&scratch3d;
+            int e=savage3d_depth24_probe(&gpu3d,&reference3d);
+            if (e) fprintf(stderr,"D24 probe %ux%u error=%d expected=%08x actual=%08x depth_error=%u\n",
+                mode_width,mode_height,e,gpu3d.expected,gpu3d.actual,gpu3d.max_depth_error);
+            CHECK(!e);
+            CHECK(!render3d_close(&scratch3d) && !render3d_close(&reference3d)); gpu3d.consumer=0;
+        }
     }
     render3d_init(&scratch3d,&host,42,savage3d_backend(),&gpu3d,gpu3d.heap);
     gpu3d.consumer=&scratch3d; wire_pid=7;
