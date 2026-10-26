@@ -194,23 +194,31 @@ static void backoff(void)
     pid=s.pid;now+=1000000;assert(desk_w32_service_exited(&s,&o,pid,9,now));assert(deferrals==d0+1 && s.rapid_exits==4 && s.retry_ns==now+2000000000ull);
     puts("PASS supervision back-off: refused start deferred 250 ms..5 s, crash after service immediate, fourth rapid crash deferred");
 }
-/* Codex review of wt/q3crash (P2): --fresh-clients only on a cold boot. */
+/* Codex review of wt/q3crash (P2) and re-review: --fresh-clients only on a
+ * cold boot, decided by PID order (monotonic in a boot), never by ticks. */
 static void fresh_clients(void)
 {
     struct ciuki_proc_system sys={.version=CIUKI_PROC_VERSION,.size=sizeof(sys)};
     struct ciuki_proc_record r[4]={{.pid=1,.state=CIUKI_PROC_LIVE,.start_tick=0},
         {.pid=2,.state=CIUKI_PROC_LIVE,.start_tick=10},{.pid=3,.state=CIUKI_PROC_LIVE,.start_tick=20}};
     sys.records=3;assert(desk_w32_fresh_clients(&sys,r,2)==1);                 /* cold boot: PID 1, the desktop, its child */
-    r[2]=(struct ciuki_proc_record){.pid=6,.state=CIUKI_PROC_LIVE,.start_tick=5};
-    assert(desk_w32_fresh_clients(&sys,r,2)==0);                               /* a program older than this desktop: replacement */
-    r[2].state=CIUKI_PROC_STOPPING;assert(desk_w32_fresh_clients(&sys,r,2)==0);
-    r[2].state=CIUKI_PROC_ZOMBIE;assert(desk_w32_fresh_clients(&sys,r,2)==1);  /* a zombie is not a surviving client */
+    /* The survivor pid 6 and the replacement desktop pid 7 were published in
+     * the same millisecond tick: the older PID keeps its identities. */
+    r[1]=(struct ciuki_proc_record){.pid=7,.state=CIUKI_PROC_LIVE,.start_tick=10};
     r[2]=(struct ciuki_proc_record){.pid=6,.state=CIUKI_PROC_LIVE,.start_tick=10};
-    assert(desk_w32_fresh_clients(&sys,r,2)==1);                               /* same tick: not older */
-    assert(desk_w32_fresh_clients(&sys,r,9)==1);                               /* this desktop absent from the snapshot */
-    sys.version=CIUKI_PROC_VERSION+1;assert(desk_w32_fresh_clients(&sys,r,2)==1);
-    assert(desk_w32_fresh_clients(NULL,r,2)==1 && desk_w32_fresh_clients(&sys,NULL,2)==1);
-    puts("PASS fresh clients: cold boot resets, a live or stopping program older than the desktop keeps identities, zombies/unknown snapshot reset");
+    assert(desk_w32_fresh_clients(&sys,r,7)==0);
+    r[2].start_tick=5;assert(desk_w32_fresh_clients(&sys,r,7)==0);              /* older by tick too */
+    r[2].start_tick=11;assert(desk_w32_fresh_clients(&sys,r,7)==0);             /* ticks are not consulted */
+    r[2].state=CIUKI_PROC_STOPPING;assert(desk_w32_fresh_clients(&sys,r,7)==0);
+    r[2].state=CIUKI_PROC_ZOMBIE;assert(desk_w32_fresh_clients(&sys,r,7)==1);  /* a zombie is not a surviving client */
+    r[2]=(struct ciuki_proc_record){.pid=8,.state=CIUKI_PROC_LIVE,.start_tick=1};
+    assert(desk_w32_fresh_clients(&sys,r,7)==1);                               /* a newer PID is this desktop's own child */
+    assert(desk_w32_fresh_clients(&sys,r,9)==0);                               /* desktop absent: pid 7 and 8 predate pid 9 */
+    /* Snapshot failures choose the non-destructive reconcile. */
+    sys.version=CIUKI_PROC_VERSION+1;assert(desk_w32_fresh_clients(&sys,r,7)==0);
+    sys.version=CIUKI_PROC_VERSION;
+    assert(desk_w32_fresh_clients(NULL,r,7)==0 && desk_w32_fresh_clients(&sys,NULL,7)==0 && desk_w32_fresh_clients(&sys,r,1)==0);
+    puts("PASS fresh clients: cold boot resets; an older live/stopping PID (same tick too) keeps identities; zombies reset; unusable snapshot keeps");
 }
 int main(int argc,char **argv)
 {

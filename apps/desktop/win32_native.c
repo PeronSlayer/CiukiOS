@@ -132,7 +132,9 @@ static int fresh_clients(void)
     if (__atomic_load_n(&service_registered_once,__ATOMIC_ACQUIRE)) return 0;
     static struct {struct ciuki_proc_system system;struct ciuki_proc_record records[CIUKI_PROCESS_MAX];} snapshot;
     int records=ciuki_proc_list(&snapshot,sizeof(snapshot));
-    if (records<0 || (uint32_t)records!=snapshot.system.records || snapshot.system.records>CIUKI_PROCESS_MAX) return 1;
+    /* An unusable snapshot keeps the identities: the reconcile against the
+     * live processes is the non-destructive choice (Codex re-review P2). */
+    if (records<0 || (uint32_t)records!=snapshot.system.records || snapshot.system.records>CIUKI_PROCESS_MAX) return 0;
     return desk_w32_fresh_clients(&snapshot.system,snapshot.records,(uint32_t)getpid());
 }
 static int spawn_service(void *ctx)

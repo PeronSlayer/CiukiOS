@@ -10,6 +10,7 @@
 #include <string.h>
 #include <pthread.h>
 #include <time.h>
+#include <unistd.h>
 #include <ciuki/w32_diagnostics.h>
 static unsigned directory_state=CIUKI_PROC_LIVE;
 int ciuki_proc_list(void *p,uint32_t n)
@@ -72,9 +73,13 @@ uint32_t desk_w32_record(void *record,uint32_t bytes)
 static int spawn_after_registration;   /* after a registry exchange succeeded the respawn carries no --fresh-clients */
 ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],const struct ciuki_spawn_fd *maps,uint32_t count,uint32_t flags)
 {
+    /* The snapshot lists a live pid 700: a survivor of an earlier desktop
+     * when this process's pid is above it (no reset), a child otherwise;
+     * after a registry exchange succeeded the respawn carries no flag. */
+    const char *expected=700u<(uint32_t)getpid() ? NULL : "--fresh-clients";
     assert(!strcmp(path,"/System/Win32/w32srv") && !strcmp(argv[0],path));
     if(spawn_after_registration)assert(!argv[1]);
-    else assert(argv[1] && !strcmp(argv[1],"--fresh-clients") && !argv[2]);
+    else assert(expected ? argv[1] && !strcmp(argv[1],expected) && !argv[2] : !argv[1]);
     assert(env && !maps && !count && !flags);return (int)(100+ ++starts);
 }
 static unsigned kills;   /* review P2-7: the bounded shutdown's SIGKILL */

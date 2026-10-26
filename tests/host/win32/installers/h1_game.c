@@ -310,6 +310,73 @@ static void frame(const uint8_t *pixels, uint32_t w, uint32_t h, uint32_t pitch,
     }
 }
 
+/* ---- keyboard script ---------------------------------------------------- */
+/* Quake III console typing through the production user32 (QEMU 2026-10-26:
+ * every other keystroke lost). The game's command line may carry
+ * +set ciuki_keys "text" (an unknown cvar Quake accepts); after the first
+ * lease frames the stand-in desktop types ` (console), the text and Enter as
+ * the kernel would deliver them: KEY down with its TEXT on one lease frame,
+ * KEY up on the next, three idle frames between keys; the console echoes the
+ * line as "]text" in qconsole.log. */
+static struct ciuki_message *event(unsigned op, unsigned payload, uint32_t token, uint32_t id, uint32_t generation);
+static char key_script[200]; static unsigned key_at, key_phase, key_idle, key_gap = 3; static int key_active, key_burst;
+static const uint8_t key_scan[128] = {
+    ['a']=0x1e,['b']=0x30,['c']=0x2e,['d']=0x20,['e']=0x12,['f']=0x21,['g']=0x22,['h']=0x23,['i']=0x17,['j']=0x24,['k']=0x25,
+    ['l']=0x26,['m']=0x32,['n']=0x31,['o']=0x18,['p']=0x19,['q']=0x10,['r']=0x13,['s']=0x1f,['t']=0x14,['u']=0x16,['v']=0x2f,
+    ['w']=0x11,['x']=0x2d,['y']=0x15,['z']=0x2c,['0']=0x0b,['1']=0x02,['2']=0x03,['3']=0x04,['4']=0x05,['5']=0x06,['6']=0x07,
+    ['7']=0x08,['8']=0x09,['9']=0x0a,[' ']=0x39,['`']=0x29,['\n']=0x1c,['-']=0x0c,['.']=0x34,['/']=0x35};
+/* +set ciuki_keys_gap N: idle lease frames between keys (default 3); N=0
+ * puts the key up on the frame of its key down; +set ciuki_keys_burst 1
+ * delivers the whole line within one frame (a slow frame of the renderer). */
+static const char *after(const char *line, const char *marker) {
+    for (const char *p = line; p && *p; p++) {
+        unsigned k = 0;
+        while (marker[k] && p[k] == marker[k]) k++;
+        if (!marker[k]) return p + k;
+    }
+    return 0;
+}
+void h1_game_script(const char *command_line) {
+    const char *text = after(command_line, "+set ciuki_keys \"");
+    if (!text) return;
+    unsigned n = 0;
+    key_script[n++] = '`';
+    while (text[n - 1] && text[n - 1] != '"' && n < sizeof(key_script) - 2) { key_script[n] = text[n - 1]; n++; }
+    key_script[n++] = '\n'; key_script[n] = 0; key_active = 1;
+    const char *gap = after(command_line, "+set ciuki_keys_gap ");
+    if (gap) key_gap = (unsigned)(*gap - '0');
+    const char *burst = after(command_line, "+set ciuki_keys_burst ");
+    if (burst) key_burst = *burst == '1';
+    host_print("GAME keys script="); host_print(key_script); host_print(" gap="); host_number(key_gap);
+    host_print(" burst="); host_number(key_burst); host_print("\n");
+}
+static void key_event(uint32_t type, uint32_t code, uint32_t value, uint32_t ms) {
+    struct ciuki_message *m = event(DESK_KEY, 40, 0, focus_id, focus_generation);
+    host_print("GAME key frame="); host_number(frames); host_print(" type="); host_number(type); host_print(" code="); hex(code);
+    host_print(" value="); host_number(value); host_print(" ms="); host_number(ms); host_print(m ? "\n" : " DROPPED\n");
+    if (!m) return;
+    uint8_t *e = m->data + 16;
+    put32(e + 12, type); put32(e + 16, ms * 1000000u); put32(e + 20, 0); put32(e + 24, code); put32(e + 28, value);
+}
+static void key_frame(void) {
+    if (!key_active || !focus_id || frames < 40) return;
+    if (key_idle) { key_idle--; return; }
+    for (;;) {
+        char c = key_script[key_at];
+        if (!c) { key_active = 0; host_print("GAME keys done\n"); return; }
+        uint8_t scan = key_scan[(uint8_t)c];
+        uint32_t ms = now_ms() - start_ms + key_at * 400;
+        if (!key_phase) {
+            key_event(CIUKI_INPUT_KEY, scan, 1, ms);
+            key_event(CIUKI_INPUT_TEXT, c == '\n' ? '\r' : (uint8_t)c, 0, ms);
+            key_phase = 1;
+            if (key_gap && !key_burst) return;        /* the key up on the next frame */
+        }
+        key_event(CIUKI_INPUT_KEY, scan, 0, ms + 40);
+        key_phase = 0; key_at++; key_idle = key_gap;
+        if (!key_burst) return;
+    }
+}
 /* ---- fake desktop ------------------------------------------------------ */
 static struct ciuki_message *event(unsigned op, unsigned payload, uint32_t token, uint32_t id, uint32_t generation) {
     if (in_tail - in_head >= INBOX)
@@ -440,6 +507,11 @@ static int32_t message(struct ciuki_w32_message_args *a) {
     a->result = a->error = 0;
     switch (a->action) {
     case W32_MSG_POST:
+        if (key_active || key_at) if (a->message.message >= 0x100 && a->message.message <= 0x107) {
+            host_print("GAME post msg="); hex(a->message.message); host_print(" wp="); hex(a->message.wparam);
+            host_print(" scan="); hex((a->message.lparam >> 16) & 0x1ff); host_print(" time="); host_number(a->message.time);
+            host_print(" queued="); host_number(queue_count); host_print("\n");
+        }
         if (queue_count == QUEUE) { a->error = 1816; return 0; }
         queue[queue_count] = a->message;
         queue_bits[queue_count++] = a->bits ? a->bits : W32_QS_POSTMESSAGE;
@@ -450,8 +522,12 @@ static int32_t message(struct ciuki_w32_message_args *a) {
         quit_pending = 1; quit_code = a->message.wparam; changed |= W32_QS_POSTMESSAGE; a->result = 1;
         return 0;
     case W32_MSG_SELECT:
+        /* As the kernel (proc/win32/message.c): posted messages precede
+         * hardware input, so a WM_CHAR posted by TranslateMessage is taken
+         * before the key messages still queued behind it. */
+        for (unsigned pass = 0; pass < 2; pass++)
         for (uint32_t k = 0; k < queue_count; k++)
-            if (matches(a, k)) {
+            if (matches(a, k) && (!!(queue_bits[k] & (W32_QS_POSTMESSAGE | W32_QS_HOTKEY))) == (pass == 0)) {
                 a->message = queue[k];
                 a->bits = queue_bits[k];
                 if (a->token & W32_SELECT_REMOVE) {
@@ -533,6 +609,7 @@ int h1_game_kernel(void *record, uint32_t size, int32_t *status) {
         if (a->action == W32_DISPLAY_FRAME) {
             uint32_t pitch = (lease_w * (lease_bpp / 8) + 3) & ~3u;
             frame((const uint8_t *)(uintptr_t)a->address, lease_w, lease_h, pitch, lease_bpp, "lease");
+            key_frame();
         }
         a->result = 1;
         return 1;
