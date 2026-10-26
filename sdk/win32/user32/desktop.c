@@ -334,6 +334,7 @@ void u32_event(const struct desk_packet *p) {
     return;
   }
   if (w->tid != u32_tid() || w->creating) {
+    if (w->tid == u32_tid()) u32_self_deferred = 1;   /* this thread's own event: not ready yet (creating) */
     struct u32_thread *t = u32_thread_for(w->tid);
     if (!t || t->event_count >= 256) {
       u32_event_release(p);
@@ -463,6 +464,25 @@ void u32_event_release(const struct desk_packet *p)
   if (p->opcode==DESK_DROP_FILES && p->attachment_fd>=0)
     u32_backend.gate(CIUKI_SYS_CLOSE,(DWORD)p->attachment_fd,0,0);
 }
+BOOL u32_self_deferred;
+/* This thread's deferred events, oldest first, until the list is empty or an
+ * event deferred itself again (its window is still being created): that
+ * bound keeps a creating window's events from spinning the pump. */
+static void deferred_drain(struct u32_thread *t) {
+  while (t && t->events) {
+    struct u32_pending_event *e = t->events;
+    t->events = e->next;
+    if (!t->events)
+      t->events_tail = 0;
+    t->event_count--;
+    struct desk_packet packet = e->packet;
+    u32_free(e);
+    u32_self_deferred = 0;
+    u32_event(&packet);
+    if (u32_self_deferred)
+      break;
+  }
+}
 void u32_pump(void) {
   u32_session_pump();
   u32_palette_deliver();
@@ -476,23 +496,17 @@ void u32_pump(void) {
    * WM_CHAR then stayed pending with the previous key's time: every other
    * keystroke lost in the console, QEMU 2026-10-26). */
   struct u32_thread *t = u32_thread();
-  UINT pending = t ? t->event_count : 0;
-  while (t && t->events && pending--) {
-    struct u32_pending_event *e = t->events;
-    t->events = e->next;
-    if (!t->events)
-      t->events_tail = 0;
-    t->event_count--;
-    struct desk_packet packet = e->packet;
-    u32_free(e);
-    u32_event(&packet);
-  }
+  deferred_drain(t);
   struct desk_packet p;
   for (UINT i = 0; i < 256; i++) {
     int r = du3_next(&u32_desktop, &p);
     if (r != 1)
       break;
     u32_event(&p);
+    /* A window procedure run by that event releases the USER lock; another
+     * thread may have deferred a key down to this thread meanwhile. It is
+     * older than the next packet: take it first (Codex review P2). */
+    deferred_drain(t);
   }
   /* q3exec2: every window of the program is gone with the connection and
    * no new one can be shown; record it once on the serial log. */

@@ -220,6 +220,7 @@ void u32_clipboard_changed(DWORD);
 void u32_event(const struct desk_packet *);
 void u32_event_release(const struct desk_packet *);
 void u32_input(struct u32_window *, const struct ciuki_input_event *);
+extern BOOL u32_self_deferred;   /* u32_event deferred an event of the calling thread's own window (still creating) */
 extern UINT u32_input_depth;   /* an input event is being turned into messages: no wire round trip (desktop channel pump) inside */
 void u32_clear_input(void);
 void u32_clear_thread_input(void);

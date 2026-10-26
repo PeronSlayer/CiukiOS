@@ -424,11 +424,13 @@ void u32_settings(void) {
     return;
   read_once = 1;
   last = now;
-  reading = 1;
   DWORD saved_error = GetLastError();
   char *data = u32_alloc(32769);
-  if (!data)
-    return;
+  if (!data) {
+    SetLastError(saved_error);
+    return;                      /* retried after a second (Codex review P2: the guard was left set) */
+  }
+  reading = 1;
   UINT saved = u32_suspend();
   HANDLE file = CreateFileA("C:\\system\\settings\\desktop.cfg", 0x80000000, 7,
                             0, 3, 0, 0);

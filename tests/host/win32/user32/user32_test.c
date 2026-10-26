@@ -601,7 +601,7 @@ static BOOL g5b_display;
 
 static void (*quake_hook)(HWND h, UINT m);
 static LRESULT W32API procedure(HWND h, UINT m, WPARAM wp, LPARAM lp) {
-  if (quake_hook && (m==WM_KEYDOWN || m==WM_KEYUP || m==WM_CHAR)) quake_hook(h,m);
+  if (quake_hook && (m==WM_KEYDOWN || m==WM_KEYUP || m==WM_CHAR || m==WM_SIZE)) quake_hook(h,m);
   if (m==WM_RENDERFORMAT && wp==CF_LOCALE) {
     HANDLE locale=GlobalAlloc(2,4); CHECK(locale); w32_put32(GlobalLock(locale),0x409);
     CHECK(SetClipboardData(CF_LOCALE,locale)==locale); g5b_locale_renders++; return 0;
@@ -934,8 +934,65 @@ static void quake_refresh_pump(struct u32_window *w, const char *line)
   CHECK(refreshes>=3);                                            /* the one-second refresh fired during the typing */
   CHECK(!strcmp(typed,line) && downs==strlen(line) && ups==strlen(line) && !u32_thread()->text_count);
 }
+/* Codex review P2: a deferred DESK_CONFIGURE runs WM_SIZE, which releases
+ * the USER lock; the other thread drains and defers the next key down during
+ * it, and its TEXT and key up arrive afterwards. The pump must take that key
+ * down before the newer packets. */
+static unsigned size_hooks; static HWND size_window;
+static void size_hook(HWND h, UINT m)
+{
+  if (m!=WM_SIZE || h!=size_window) return;
+  size_hooks++;
+  struct u32_window *w=u32_window(size_window);
+  q3_event(w,CIUKI_INPUT_KEY,0x20,1,20000);                      /* 'd' down arrives while WM_SIZE runs */
+  ui_kernel_switch(1); u32_pump(); ui_kernel_switch(0);           /* the other thread defers it to us */
+  CHECK(u32_thread()->event_count==1);
+  q3_event(w,CIUKI_INPUT_TEXT,'d',0,20000);                       /* its TEXT and key up come after */
+  q3_event(w,CIUKI_INPUT_KEY,0x20,0,20040);
+}
+static void quake_configure_callback_pump(void)
+{
+  /* A window of its own: the CONFIGURE resizes it, the shared fixture
+   * windows keep their surfaces for the later tests. */
+  size_window=CreateWindowExA(0,"USER fixture","console",WS_VISIBLE|WS_CAPTION,20,20,200,120,0,0,0,0);
+  CHECK(size_window); discard();
+  struct u32_window *w=u32_window(size_window);
+  discard(); u32_clear_input(); SetFocus(size_window);
+  UINT configure[]={264,120,(UINT)w->serial+1,9,0,32,0,0};
+  event(w,DESK_CONFIGURE,configure,8);
+  ui_kernel_switch(1); u32_pump(); ui_kernel_switch(0);           /* the CONFIGURE is deferred to our thread */
+  CHECK(u32_thread()->event_count==1);
+  quake_hook=size_hook; size_hooks=0;
+  char typed[8]; UINT n=0; MSG msg;
+  while (PeekMessageA(&msg,0,0,0,0)) {                            /* the pump runs the deferred CONFIGURE: WM_SIZE */
+    CHECK(GetMessageA(&msg,0,0,0));
+    TranslateMessage(&msg);
+    if (msg.message==WM_CHAR && n<7) typed[n++]=(char)msg.wParam;
+    DispatchMessageA(&msg);
+  }
+  quake_hook=0; typed[n]=0;
+  if (strcmp(typed,"d")) fprintf(stderr,"quake pump configure callback: typed \"%s\" size_hooks=%u pending=%u\n",typed,size_hooks,u32_thread()->text_count);
+  CHECK(size_hooks==1 && !strcmp(typed,"d") && !u32_thread()->text_count);
+  CHECK(DestroyWindow(size_window)); size_window=0; discard();
+}
+/* Codex review P2: the settings refresh must survive a failed 32 KiB
+ * allocation (the guard was left set for the life of the process). */
+static void settings_allocation_failure(void)
+{
+  void *hog=u32_alloc(4*1024*1024-32*1024-64); CHECK(hog);      /* leaves less than 32769 bytes of USER heap */
+  ui_kernel_pause(1100); u32_pump();                             /* refresh due: the allocation fails */
+  u32_free(hog);
+  UINT before=outgoing_count;
+  ui_kernel_pause(1100); u32_pump();                             /* due again: refreshes */
+  UINT refreshes=0;
+  for (UINT k=before;k<outgoing_count;k++) if (outgoing[k].data[0]==DESK_V3_VERSION && outgoing[k].data[1]==DESK_INPUT_SETTINGS) refreshes++;
+  CHECK(refreshes==1);
+  puts("PASS settings refresh: a failed allocation does not disable it");
+}
 static void test_quake_pump(void) {
   struct u32_window *w = u32_window(windows[0]);
+  quake_configure_callback_pump();
+  settings_allocation_failure();
   for (unsigned delivery=0; delivery<6; delivery++) {
     discard(); u32_clear_input(); SetFocus(w->handle);
     quake_pump(w,"map q3dm17",delivery);

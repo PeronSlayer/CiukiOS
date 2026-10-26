@@ -259,6 +259,24 @@ deferred by a second thread, the one-second refresh firing during typing).
 The lead must check in QEMU: "map q3dm17" and "demo demo001" typed at 0.4 s
 per key and at the QA's speed arrive complete in the console.
 
+### Codex review of wt/q3crash2 (two P2, 2026-10-26) — fixed
+
+- The deferred-event FIFO of `u32_pump` drained a snapshotted count before
+  new packets; a deferred `DESK_CONFIGURE` runs `WM_SIZE`, which releases
+  the USER lock, so a key down deferred by another thread during it was
+  overtaken by its TEXT and key up. Now `deferred_drain()` runs before every
+  new packet and stops a pass only when an event deferred itself again (its
+  window still creating, `u32_self_deferred`). Test: a deferred CONFIGURE
+  whose `WM_SIZE` lets the second thread defer `d`'s key down, TEXT and key
+  up arriving after; `d` is typed (fails before).
+- `u32_settings()` set its re-entry guard before the 32 KiB allocation and
+  left it set on failure, disabling the refresh for the process. The guard
+  is now set only after the allocation and cleared on every exit. Test: the
+  USER heap budget nearly exhausted, a due refresh fails, memory freed, the
+  next due refresh issues `DESK_INPUT_SETTINGS` (fails before).
+- Suites: `test_user32.py`, `test_input.py`, `test_dialogs.py` (20) OK; the
+  real-binary console typing test at three pacings OK.
+
 ## What the lead must check in QEMU
 
 1. `quake3.exe` on a clean image: no panic; the game reaches the menu and
