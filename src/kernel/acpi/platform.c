@@ -60,6 +60,10 @@ static const void *map(uint32_t a, uint32_t n)
     return vmm_map_physical_ro(a, n);
 }
 static void unmap(const void *p, uint32_t n) { vmm_revoke_mmio((void *)p, n); }
+/* fx-acpioff: the same read-only firmware windows for core/power_acpi_s5.c
+ * (its once-per-boot table parse); no ACPICA state is involved. */
+const void *acpi_firmware_table_map(uint32_t a, uint32_t n) { return map(a, n); }
+void acpi_firmware_table_unmap(const void *p, uint32_t n) { unmap(p, n); }
 static uint64_t clock100ns(void)
 {
     static uint64_t last;
