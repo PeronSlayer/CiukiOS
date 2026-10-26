@@ -1432,7 +1432,7 @@ int desk_small_damage(const struct desktop *d, uint64_t now)
     if (area*16>(uint64_t)d->width*d->height) return 0;
     for (int i=0;i<DESK_CLIENTS;i++) {
         const struct desk_client *c=&d->clients[i];
-        if (c->gfx_pending || c->gl_present_request || c->awaiting_frame || c->launch_frame_pending ||
+        if (c->gfx_pending || c->gl_present_request || (c->awaiting_frame && !c->launch_feedback_remote) || c->launch_frame_pending ||
             (c->dosbox && c->window && !c->minimized && !c->collapsed)) return 0;
     }
     return 1;
@@ -2496,6 +2496,7 @@ int desk_redraw(struct desktop *d)
                 uint64_t click=c->launch_input_ns ? c->launch_input_ns : c->launched_ns;
                 if (click && (!input || click<input)) input=click;
                 c->launch_frame_pending=0;
+                if (c->launch_feedback_remote && d->launch_presented) d->launch_presented(d,c->pid);
                 if (d->launch_mark) d->launch_mark(CIUKI_LAUNCH_FRAME,c->pid,0);
                 if (d->first_frame) d->first_frame(d,c,end);
             }
@@ -2562,8 +2563,9 @@ uint64_t desk_launch_wait(const struct desktop *d, uint64_t now)
     /* A stalled app must not make the desktop poll faster forever. */
     for (int i=0; i<DESK_CLIENTS; i++) {
         const struct desk_client *c=&d->clients[i];
-        /* fx-8: a spawn still running on the launcher worker wakes the loop itself. */
-        if (c->channel>=0 && c->awaiting_frame && !c->spawn_pending && now>=c->launched_ns &&
+        /* Worker completions and Win32 channel input wake the loop themselves;
+         * kernel-owned feedback must not enable legacy startup polling. */
+        if (c->channel>=0 && c->awaiting_frame && !c->launch_feedback_remote && !c->spawn_pending && now>=c->launched_ns &&
             now-c->launched_ns<5000000000ull) return 1000000;
     }
     return 10000000;

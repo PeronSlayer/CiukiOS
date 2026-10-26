@@ -3310,7 +3310,8 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
          * and completes the launch there (the STARTUPINFO feedback rule). */
         if (anchor->awaiting_frame && c->window) {
             c->awaiting_frame=1; c->launch_input_ns=anchor->launch_input_ns; c->launched_ns=anchor->launched_ns;
-            c->window_ns=anchor->window_ns; anchor->awaiting_frame=0; client_frame_ready(d,c);
+            c->window_ns=anchor->window_ns; c->launch_feedback_remote=anchor->launch_feedback_remote;
+            anchor->awaiting_frame=0; client_frame_ready(d,c);
         }
         /* A pending resize stretches the old backing (surface_damage). */
         int visible=desk_client_damage(d,i,surface_damage(c,(uint32_t)p.x,(uint32_t)p.y,p.width,p.height));

@@ -240,6 +240,13 @@ static void test_records(void)
     display.surface.width=0;display.count=1;CHECK(w32_record_validate(&display,sizeof(display),true)==-EINVAL);
     display.action=W32_DISPLAY_PALETTE;CHECK(!w32_record_validate(&display,sizeof(display),true));
     display.error=1;CHECK(w32_record_validate(&display,sizeof(display),true)==-EINVAL);
+    struct ciuki_w32_system_args feedback={.header={1,sizeof(feedback),W32_SYSTEM,0},.action=W32_S_LAUNCH_FEEDBACK};
+    CHECK(!w32_record_validate(&feedback,sizeof(feedback),false));
+    CHECK(!w32_record_validate(&feedback,sizeof(feedback),true));
+    feedback.high=1;CHECK(w32_record_validate(&feedback,sizeof(feedback),false)==-EINVAL);feedback.high=0;
+    feedback.action=W32_S_TIME;CHECK(w32_record_validate(&feedback,sizeof(feedback),false)==-EPERM);
+    feedback.action=W32_S_LAUNCH_IDLE;CHECK(!w32_record_validate(&feedback,sizeof(feedback),true));
+    CHECK(w32_record_validate(&feedback,sizeof(feedback),false)==-EINVAL);
     puts("w32 records: all sizes, versions, reserved fields, personality, protections, errors, identity, FS encoding, PIT rollover, display transport PASS");
 }
 static void test_fpu(void)
@@ -333,6 +340,47 @@ static void test_advpack_process_flags(struct proc_thread *parent)
         CHECK(!w32_handle_close(parent->process,a.process_handle) && !w32_handle_close(parent->process,a.thread_handle));
         proc_discard(child);
     }
+    /* fx-launchfb: real CreateProcess publication, independent pending children,
+     * FORCEOFF/ON, delegated desktop query, presentation, idle, exit and timeout. */
+    struct process *children[4];
+    const uint32_t feedback_flags[]={0,0x40,0x80,0xc0};
+    struct ciuki_w32_system_args denied={.action=W32_S_LAUNCH_FEEDBACK};
+    CHECK(!w32_system_call(parent,&denied) && denied.error==5);
+    for(unsigned i=0;i<4;i++){
+        struct ciuki_w32_startup startup={.flags=feedback_flags[i]};
+        CHECK(!ua_write(parent->process->memory,scratch.address+768,&startup,sizeof(startup)));
+        struct ciuki_w32_spawn_args spawn={.image=scratch.address,.command=scratch.address+256,
+            .environment=scratch.address+512,.environment_bytes=sizeof(env),.startup=scratch.address+768};
+        CHECK(!w32_process_call(parent,&spawn) && !spawn.error);
+        children[i]=proc_find(spawn.pid);CHECK(children[i]);
+        CHECK(!!children[i]->w32->launch_feedback_until==(i<2));
+        CHECK(!w32_handle_close(parent->process,spawn.process_handle));
+        CHECK(!w32_handle_close(parent->process,spawn.thread_handle));
+    }
+    uint32_t saved_desktop=fake_desktop_pid;
+    struct w32_process desktop_w32={.service=W32_SERVICE_DESKTOP};
+    struct process desktop={.pid=0x123456,.state=PROC_LIVE,.personality=PROC_NATIVE,.w32=&desktop_w32};
+    struct proc_thread desktop_thread={.process=&desktop};fake_desktop_pid=desktop.pid;
+    parent->process->w32->launch_feedback_until=0;
+    struct ciuki_w32_system_args query={.action=W32_S_LAUNCH_FEEDBACK};
+    CHECK(!w32_system_call(&desktop_thread,&query) && !query.error && query.result==2);
+    query.value=children[0]->pid;
+    CHECK(!w32_system_call(&desktop_thread,&query) && !query.error && query.result==1);
+    struct proc_thread child_thread={.process=children[1]};
+    struct ciuki_w32_system_args idle={.action=W32_S_LAUNCH_IDLE};
+    CHECK(!w32_system_call(&child_thread,&idle) && !idle.error);
+    query.value=0;CHECK(!w32_system_call(&desktop_thread,&query) && query.result==0);
+    children[0]->w32->launch_feedback_until=w32_now()+5000;
+    children[1]->w32->launch_feedback_until=w32_now()+5000;
+    children[1]->state=PROC_ZOMBIE;
+    CHECK(!w32_system_call(&desktop_thread,&query) && query.result==1);
+    uint64_t saved_ticks=g_ticks;g_ticks+=5000;
+    CHECK(!w32_system_call(&desktop_thread,&query) && !query.result && !query.low && !query.high);
+    g_ticks=saved_ticks;
+    children[1]->state=PROC_LIVE;
+    for(unsigned i=0;i<4;i++)proc_discard(children[i]);
+    fake_desktop_pid=saved_desktop;
+    puts("PASS fx-launchfb kernel: CreateProcess default/ON/OFF/both, overlap, authority, present, idle, exit, timeout");
     struct ciuki_w32_spawn_args bad={.flags=0x04000202};
     CHECK(!w32_process_call(parent,&bad) && bad.error==87 && !bad.pid && !bad.process_handle && !bad.thread_handle);
     struct ciuki_w32_vm release={.address=scratch.address,.flags=W32_MEM_RELEASE};

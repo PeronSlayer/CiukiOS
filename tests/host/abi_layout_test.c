@@ -5,6 +5,9 @@
 #include <string.h>
 #include <ciuki/abi.h>
 #include <ciuki/bootstat.h>
+#include <ciuki/w32_core.h>
+_Static_assert(W32_S_LAUNCH_FEEDBACK == 14, "fx-launchfb desktop query");
+_Static_assert(W32_S_LAUNCH_IDLE == 15, "fx-launchfb GetMessage completion");
 #include "../../sdk/win32/include/w32/gl_extensions.h"
 _Static_assert(GL_TEXTURE_COMPRESSION_HINT_ARB == 0x84efu,
                "f7-08 GL_TEXTURE_COMPRESSION_HINT_ARB");

@@ -143,6 +143,7 @@ int w32_spawn(struct process *p, const struct ciuki_file *file, const struct pro
         if (!err) task_native_frame(t->task, top);
     }
 done:
+    if (!err && p->w32) p->w32->launch_feedback_until = w32_now() + 5000;
     pmm_free(scratch);
     return err;
 }
