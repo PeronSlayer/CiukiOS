@@ -36,7 +36,15 @@ static const char *const reasons[]={"admit","format","scissor","color-mask","fog
   "sampler","stage-env-or-q","w-range","uv-range","mip-gradient","state-or-coverage","non-triangle"};
 static unsigned option(void) {
   char value[16]={0};
-#ifdef W32_HOST_MODEL
+#if defined(CIUKI_GL_NATIVE)
+  /* Native programs opt in through their own environment. */
+  const char *text=ciuki_gl_native_option("CIUKI_GL_CENSUS");
+  if (!text) return 0;
+  unsigned length=0;
+  while (length<sizeof(value) && text[length]) length++;
+  if (length==sizeof(value)) return 0; /* longer than any valid count */
+  for (unsigned i=0;i<length;i++) value[i]=text[i];
+#elif defined(W32_HOST_MODEL)
   extern unsigned gl_census_test_option(char *,unsigned) __attribute__((weak));
   if (!gl_census_test_option || !gl_census_test_option(value,sizeof(value))) return 0;
 #else
@@ -243,7 +251,9 @@ static void integer(struct census_line *l,int n) {
   number(l,n<0 ? (uint64_t)-(int64_t)n : (unsigned)n);
 }
 static void debug_write(const char *line,unsigned bytes) {
-#ifdef W32_HOST_MODEL
+#if defined(CIUKI_GL_NATIVE)
+  ciuki_gl_native_log(line,bytes);
+#elif defined(W32_HOST_MODEL)
   const struct w32_services *s=w32_get_services();
   if (s->diagnostic) s->diagnostic(s->opaque,"info","opengl32.dll",line);
   (void)bytes;

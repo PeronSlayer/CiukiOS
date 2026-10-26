@@ -81,7 +81,10 @@ int w32_record_validate(const void *record, uint32_t bytes, bool win32)
     if (bytes < sizeof(struct ciuki_w32_header)) return -EINVAL;
     const struct ciuki_w32_header *h = record;
     if (h->version != 1 || h->size != bytes || h->reserved) return -EINVAL;
-    if(!win32 && h->operation!=W32_SERVICE && h->operation!=W32_DISPLAY && h->operation!=W32_REPORT)return -EPERM;
+    /* f7-14: the copied render3d wire is process-keyed and personality
+     * neutral; native GL programs use it like the Win32 personality. */
+    if(!win32 && h->operation!=W32_SERVICE && h->operation!=W32_DISPLAY && h->operation!=W32_REPORT &&
+       h->operation!=W32_RENDER3D)return -EPERM;
     uint32_t size = w32_record_size(h->operation);
     if (!size) return -ENOSYS;
     if (size != bytes) return -EINVAL;

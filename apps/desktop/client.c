@@ -20,6 +20,9 @@ extern int desk_recovery_win(struct desktop *) __attribute__((weak)); /* G14 */
 static void power_target(struct desktop *, uint32_t, const char *, int owned, int w32);
 static void v3_configure(struct desktop *, int);
 static void session_answer(struct desktop *, int, uint32_t, uint32_t);
+static void v3_lease_event(struct desktop *, int, unsigned);
+static int lease_request(struct desktop *, int, const struct desk_packet *);
+static void v2_lease_refused(struct desktop *, int, const struct desk_packet *, int);
 static void session_pong(struct desktop *, int, uint32_t);
 static void session_ping_sent(struct desktop *, int);
 static void queued_attachments_close(struct desktop *d,const struct ciuki_message *m)
@@ -936,6 +939,14 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         c->accept_files=(int)p.flags; break;
     case DESK_SET_CURSOR:
         c->cursor=p.flags; desk_cursor_update(d); break;
+    case DESK_LEASE: {
+        /* f7-14: native full screen through the common present lease. A
+         * refused request is answered by an event with state 0 and the error. */
+        if (!c->window || c->closing || c->dosbox) break;
+        int e=lease_request(d,i,&p);
+        if (e) v2_lease_refused(d,i,&p,e);
+        break;
+    }
     case DESK_SET_TITLE:
         if (strcmp(c->title, p.title)) {
             memcpy(c->title, p.title, sizeof(c->title));
@@ -2886,18 +2897,56 @@ void desk_v3_pointer_release(struct desktop *d)
     }
     d->v3_pointer_window=0; d->v3_cursor_hidden=0; d->cursor_dirty=1;
 }
+/* The lease event goes in the client's own envelope: v3 personality bridge
+ * windows or, since f7-14, native v2 clients (DESK_LEASE_EVENT). */
 static void v3_lease_event(struct desktop *d, int i, unsigned state)
 {
     struct ciuki_message m; struct desk_client *c=&d->clients[i];
-    desk_v3_message(&m,DESK_V3_LEASE_EVENT,72,0,c->v3_id,c->v3_generation);
-    desk_put32(m.data+16,state); desk_put32(m.data+20,d->v3_lease_generation);
-    desk_put32(m.data+24,d->v3_lease_w); desk_put32(m.data+28,d->v3_lease_h); desk_put32(m.data+32,d->v3_lease_bpp);
+    int v3=c->version==DESK_V3_VERSION;
+    if (v3) desk_v3_message(&m,DESK_V3_LEASE_EVENT,72,0,c->v3_id,c->v3_generation);
+    else desk_message(&m,DESK_LEASE_EVENT,76);
+    uint8_t *b=m.data+(v3 ? 16 : 4);
+    desk_put32(b,state); desk_put32(b+4,d->v3_lease_generation);
+    desk_put32(b+8,d->v3_lease_w); desk_put32(b+12,d->v3_lease_h); desk_put32(b+16,d->v3_lease_bpp);
     const struct desk_lease_tuple *t=&d->v3_lease_tuple;
     const uint32_t words[]={t->token,t->generation,t->mode,t->scale,t->surface.width,t->surface.height,
         t->surface.pitch,t->surface.size,t->surface.format,t->native_width,t->native_height,t->native_bpp,
         (uint32_t)d->v3_lease_error};
-    for (unsigned k=0;k<sizeof(words)/sizeof(*words);k++) desk_put32(m.data+36+4*k,words[k]);
+    for (unsigned k=0;k<sizeof(words)/sizeof(*words);k++) desk_put32(b+20+4*k,words[k]);
     desk_queue(d,i,&m);
+}
+/* A refused v2 request: state 0, the requested source (a valid 1x1x32 for a
+ * release) and the signed error; no lease tuple. */
+static void v2_lease_refused(struct desktop *d, int i, const struct desk_packet *p, int error)
+{
+    struct ciuki_message m; desk_message(&m,DESK_LEASE_EVENT,76);
+    uint8_t *b=m.data+4;
+    desk_put32(b,0); desk_put32(b+4,d->v3_lease_generation ? d->v3_lease_generation : 1);
+    desk_put32(b+8,p->flags ? p->width : 1); desk_put32(b+12,p->flags ? p->height : 1); desk_put32(b+16,p->flags ? p->bpp : 32);
+    desk_put32(b+68,(uint32_t)(error<0 && error>=-4095 ? error : -EIO));
+    desk_queue(d,i,&m);
+}
+/* One lease request path for both envelopes; returns the signed error. */
+static int lease_request(struct desktop *d, int i, const struct desk_packet *p)
+{
+    struct desk_client *c=&d->clients[i]; int error=0;
+    if (!p->flags) {
+        c->v3_lease_wanted=0;
+        if(d->v3_reactivate_pending==i+1)d->v3_reactivate_pending=0;
+        if (d->v3_lease_state && d->v3_lease_window!=c->window_id) error=-EPERM;
+        else if (d->v3_lease_state) { desk_v3_revoke(d); if (d->v3_lease_state) error=-EBUSY; }
+    }
+    else if (d->focus!=i || d->power.state || d->sh.user_gate || d->sh.levels || d->v3_lease_state) error=-EBUSY;
+    else if (!d->v3_lease) error=-ENOSYS;
+    else {
+        if (!++d->v3_lease_generation) ++d->v3_lease_generation;
+        d->v3_lease_error=0;
+        error=d->v3_lease(d,c->pid,1,p->width,p->height,p->bpp,d->v3_lease_generation);
+        if (!error) { c->v3_lease_wanted=1; c->v3_lease_w=p->width; c->v3_lease_h=p->height; c->v3_lease_bpp=p->bpp;
+            d->v3_lease_started=d->now_ns; d->v3_lease_state=1; d->v3_lease_window=c->window_id; d->v3_lease_pid=c->pid;
+            d->v3_lease_w=p->width; d->v3_lease_h=p->height; d->v3_lease_bpp=p->bpp; c->v3_lease_mode=d->v3_lease_tuple.mode; v3_lease_event(d,i,1); }
+    }
+    return error;
 }
 void desk_v3_revoke(struct desktop *d)
 {
@@ -3406,22 +3455,7 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
         }
         desk_cursor_update(d); break;
     case DESK_V3_LEASE:
-        if (!p.flags) {
-            c->v3_lease_wanted=0;
-            if(d->v3_reactivate_pending==i+1)d->v3_reactivate_pending=0;
-            if (d->v3_lease_state && d->v3_lease_window!=c->window_id) error=-EPERM;
-            else if (d->v3_lease_state) { desk_v3_revoke(d); if (d->v3_lease_state) error=-EBUSY; }
-        }
-        else if (d->focus!=i || d->power.state || d->sh.user_gate || d->sh.levels || d->v3_lease_state) error=-EBUSY;
-        else if (!d->v3_lease) error=-ENOSYS;
-        else {
-            if (!++d->v3_lease_generation) ++d->v3_lease_generation;
-            d->v3_lease_error=0;
-            error=d->v3_lease(d,c->pid,1,p.width,p.height,p.bpp,d->v3_lease_generation);
-            if (!error) { c->v3_lease_wanted=1; c->v3_lease_w=p.width; c->v3_lease_h=p.height; c->v3_lease_bpp=p.bpp;
-                d->v3_lease_started=d->now_ns; d->v3_lease_state=1; d->v3_lease_window=c->window_id; d->v3_lease_pid=c->pid;
-                d->v3_lease_w=p.width; d->v3_lease_h=p.height; d->v3_lease_bpp=p.bpp; c->v3_lease_mode=d->v3_lease_tuple.mode; v3_lease_event(d,i,1); }
-        }
+        error=lease_request(d,i,&p);
         break;
     case DESK_V3_CRASH: case DESK_V3_RESTART: {
         if (d->v3_dialog_kind) { error=-EBUSY; break; }

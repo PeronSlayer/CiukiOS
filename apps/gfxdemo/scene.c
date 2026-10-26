@@ -1,4 +1,5 @@
-/* TinyGL scenes; exact approved Ciuki texture. SPDX-License-Identifier: MIT */
+/* OpenGL scenes on the shared engine; exact approved Ciuki texture.
+ * SPDX-License-Identifier: MIT */
 #include "gfxdemo.h"
 #include <GL/gl.h>
 #include <ciuki/gl.h>
@@ -12,9 +13,9 @@ static GLuint texture;
 static int begin(struct gfx_scene *s,const uint32_t *portrait)
 {
     unsigned w=s->width ? s->width : GFX_W,h=s->height ? s->height : GFX_H;
-    s->error=0;
-    if (w>GFX_MAX_W || h>GFX_MAX_H) { s->error=-EINVAL;return 0; }
-    s->error=ciuki_gl_bind(s->pixels,w,h,w);
+    s->error=0;s->presented=0;
+    if (s->target ? w>GFX_FULL_MAX_W || h>GFX_FULL_MAX_H : w>GFX_MAX_W || h>GFX_MAX_H) { s->error=-EINVAL;return 0; }
+    s->error=ciuki_gl_bind(s->target ? s->target : s->pixels,w,h,w);
     if (s->error) return 0;
     if (texture_generation!=ciuki_gl_generation() || texture_source!=portrait || !texture) {
         unsigned char *rgb=malloc(256*256*3);
@@ -27,6 +28,13 @@ static int begin(struct gfx_scene *s,const uint32_t *portrait)
         if (!texture) glGenTextures(1,&texture);
         glBindTexture(GL_TEXTURE_2D,texture);
         glTexImage2D(GL_TEXTURE_2D,0,3,256,256,0,GL_RGB,GL_UNSIGNED_BYTE,rgb);
+        /* Bilinear, edge-clamped level 0: the sampler state the qualified
+         * hardware path admits (f7-11) and the scalar path renders alike. */
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
+        glTexEnvi(GL_TEXTURE_ENV,GL_TEXTURE_ENV_MODE,GL_MODULATE);
         free(rgb);texture_source=portrait;texture_generation=ciuki_gl_generation();
     }
     glBindTexture(GL_TEXTURE_2D,texture);
@@ -39,7 +47,10 @@ static int begin(struct gfx_scene *s,const uint32_t *portrait)
 }
 static void finish(struct gfx_scene *s)
 {
-    ciuki_gl_finish();
+    /* A leased full-screen frame completes through the present path: a GPU
+     * copy on a qualified provider, otherwise the finished pixels by CPU. */
+    if (s->lease) s->presented=ciuki_gl_present(s->lease);
+    else ciuki_gl_finish();
     GLenum error=glGetError();if (error) s->error=(int)error;
 }
 void gfx_cube(struct gfx_scene *s,uint64_t ns,const uint32_t *portrait,int gouraud)

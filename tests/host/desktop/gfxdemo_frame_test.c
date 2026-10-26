@@ -4,6 +4,7 @@
 #include "resize_transport.h"
 #include "../../../apps/desktop/rows.h"
 #include <assert.h>
+#include <ciuki/present_abi.h>
 static uint64_t test_now=1000000000ull;
 static uint64_t frame_now(void) { return test_now; }
 #define du_now frame_now
@@ -128,6 +129,76 @@ static void telemetry(void)
     free(r);
     puts("PASS timed benchmark arguments, exact deadline, completed-frame average/p95 and no-frame failure");
 }
+/* f7-14: full screen through the production desktop lease path and the
+ * native GL present. The host library has no render3d transport, so frames
+ * take the CPU W32_DISPLAY_FRAME path checked here like the kernel does. */
+static unsigned host_frames,host_token=500,host_generation=9,lease_grants,lease_revokes;
+static uint32_t host_pixel;
+int32_t ciuki_gl_host_display_frame(struct ciuki_w32_display_args *a,const void *payload)
+{
+    assert(a->header.operation==W32_DISPLAY && a->header.size==sizeof(*a) && a->action==W32_DISPLAY_FRAME);
+    if (a->token!=host_token || a->generation!=host_generation) { a->error=EACCES; return 0; }
+    memcpy(&host_pixel,(const uint8_t *)payload+(384*1024+512)*4,4);
+    host_frames++; a->result=1; return 0;
+}
+static int fake_lease(struct desktop *p,uint32_t pid,int acquire,uint32_t w,uint32_t h,uint32_t bpp,uint32_t gen)
+{
+    (void)pid;(void)gen; assert(p==d && bpp==32);
+    if (!acquire) { lease_revokes++; return 0; }
+    assert(w==1024 && h==768); lease_grants++;
+    p->v3_lease_tuple=(struct desk_lease_tuple){.token=host_token,.generation=host_generation,.mode=0x118,.scale=1,
+        .surface={w,h,w*4,w*h*4,CIUKI_PRESENT_XRGB8888},.native_width=1024,.native_height=768,.native_bpp=32};
+    return 0;
+}
+static void full_screen(struct runtime *r,int client)
+{
+    d->v3_lease=fake_lease;d->focus=client;
+    r->app.request=request;r->app.request_ctx=r;
+    r->app.have_info=1;r->app.display_w=1024;r->app.display_h=768;
+    unsigned sent=r->serial;
+    du_post(&r->ui,DU_EV_ACTIVATE,GFX_FULLSCREEN,0);
+    assert(r->app.full_state==GFX_FULL_REQUESTED);
+    assert(du_window_turn(&r->window,test_now)>0);drain(client);
+    assert(d->v3_lease_state==1 && lease_grants==1);
+    assert(du_window_turn(&r->window,test_now)>0 && r->app.full_state==GFX_FULL_ACTIVE);
+    assert(r->lease.token==host_token && r->lease.width==1024 && r->lease.height==768 && r->full_pixels);
+    uint64_t frames=r->app.total_frames;
+    for (unsigned k=0;k<3;k++) {
+        test_now+=GFX_FRAME_NS;demo_idle(r);drain(client);
+        assert(host_frames==k+1 && r->app.total_frames==frames+k+1 && host_pixel);
+    }
+    assert(r->serial==sent); /* no windowed frame under the lease */
+    /* Focus loss (Alt+Tab) revokes; refocus reactivates and the demo
+     * takes the new lease again (DirectDraw exclusive-mode behaviour). */
+    desk_focus(d,-1);assert(!d->v3_lease_state && lease_revokes==1);drain(client);
+    assert(du_window_turn(&r->window,test_now)>0 && r->app.full_state==GFX_WINDOWED && r->full_wanted);
+    host_token=501;desk_focus(d,client);assert(d->v3_lease_state==1 && lease_grants==2);drain(client);
+    assert(du_window_turn(&r->window,test_now)>0 && r->app.full_state==GFX_FULL_ACTIVE && r->lease.token==501);
+    test_now+=GFX_FRAME_NS;demo_idle(r);drain(client);assert(host_frames==4);
+    assert(r->app.gl.frames>=4 && r->app.gl.presents==4 && !r->app.gl.hardware_presents);
+    assert(!strcmp(gfx_present_name(&r->app),"cpu-copy"));
+    /* The window keeps its own surface: a status repaint renders no scene. */
+    uint64_t rendered=r->app.gl.frames;r->ui.dirty=1;assert(du_window_turn(&r->window,test_now)>0);
+    gfx_gl_status(&r->app);assert(r->app.gl.frames==rendered);
+    /* Esc releases; the desktop revokes and the demo returns to its window. */
+    for (int v=1;v>=0;v--) du_input(&r->ui,&(struct ciuki_input_event){.type=CIUKI_INPUT_KEY,.code=DU_KEY_ESC,.value=v});
+    assert(du_window_turn(&r->window,test_now)>0);drain(client);
+    assert(!d->v3_lease_state && lease_revokes==2);
+    assert(du_window_turn(&r->window,test_now)>0 && r->app.full_state==GFX_WINDOWED && !r->full_pixels && !r->app.full_error);
+    assert(!r->full_wanted);desk_focus(d,-1);desk_focus(d,client);assert(!d->v3_lease_state && lease_grants==2);drain(client);
+    test_now=d->next_frame_ns;assert(!desk_redraw(d));drain(client);
+    for (unsigned k=0;k<4 && r->serial==sent;k++) {
+        assert(du_window_turn(&r->window,test_now)>0);demo_idle(r);drain(client);
+        test_now=d->next_frame_ns;assert(!desk_redraw(d));drain(client);
+    }
+    assert(r->serial!=sent && host_frames==4);
+    /* A refused request leaves the demo windowed with the error shown. */
+    d->focus=-1;du_post(&r->ui,DU_EV_ACTIVATE,GFX_FULLSCREEN,0);
+    assert(du_window_turn(&r->window,test_now)>0);drain(client);
+    assert(du_window_turn(&r->window,test_now)>0 && r->app.full_state==GFX_WINDOWED && r->app.full_error==-EBUSY);
+    d->focus=client;d->v3_lease=NULL;r->app.full_error=0;
+    puts("PASS full screen: production lease request/grant, leased CPU frames counted as completions, no windowed frames, Alt+Tab revoke and refocus, Esc release and refusal");
+}
 int main(void)
 {
     scaling();packets();telemetry();rt_reset();
@@ -178,10 +249,10 @@ int main(void)
     assert(du_window_turn(&r->window,test_now)>0 && r->window.info.width==760);
     test_now=d->next_frame_ns;assert(!desk_redraw(d));drain(client);
     assert(du_window_turn(&r->window,test_now)>0 && r->window.info.width==560);demo_idle(r);drain(client);drain(client);
-    assert(d->clients[client].info.width==560 && d->clients[client].gfx_width==261);
+    assert(d->clients[client].info.width==560 && d->clients[client].gfx_width==226); /* f7-14: two control rows */
     assert(du_window_turn(&r->window,test_now)>0);demo_idle(r);drain(client);test_now=d->next_frame_ns;
     assert(!desk_redraw(d));verify_scene(r,client);drain(client);assert(du_window_turn(&r->window,test_now)>0);
-    assert(r->app.scene.width==261 && r->app.scene.height==196);
+    assert(r->app.scene.width==226 && r->app.scene.height==170);
     /* Pause suppresses animation; hidden completion never changes FPS. */
     uint64_t frames=r->app.total_frames;r->app.paused=1;r->app.animation_due=0;r->app.scene_ready=0;
     test_now+=GFX_FRAME_NS;demo_idle(r);assert(!r->window.present_pending && r->app.total_frames==frames);
@@ -210,6 +281,7 @@ int main(void)
         previous=slot;demo_idle(r);drain(client);
     }
     upload_cost=0;
+    full_screen(r,client);
     assert(upload_count && !d->stats.overruns);free(frozen);
     desk_drop_client(d,client);du_window_destroy(&r->window);desk_render_release(d);rt_close(3);
     assert(!rt_handles() && !rt_mappings() && !rt_surfaces());rt_reset();

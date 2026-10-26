@@ -209,6 +209,39 @@ void desk_clip_dims(uint32_t n, uint32_t *width, uint32_t *height)
     uint32_t w=pixels<2048 ? pixels : 2048;
     *width=w; *height=(pixels+w-1)/w;
 }
+/* f7-14: the lease payloads are shared by DESK_V3_LEASE/LEASE_EVENT and the
+ * v2 DESK_LEASE/LEASE_EVENT of native clients. */
+static int lease_request_fields(const uint8_t *b, struct desk_packet *p)
+{
+    p->flags=desk_get32(b); p->width=desk_get32(b+4); p->height=desk_get32(b+8); p->bpp=desk_get32(b+12);
+    if (p->flags>1 || (!p->flags && (p->width || p->height || p->bpp)) ||
+        (p->flags && (!p->width || !p->height || p->width>2048 || p->height>2048 ||
+            (p->bpp!=8 && p->bpp!=16 && p->bpp!=32)))) return 0;
+    return 1;
+}
+static int lease_event_fields(const uint8_t *b, unsigned n, struct desk_packet *p)
+{
+    if (n!=20 && n!=72) return 0;
+    p->flags=desk_get32(b); p->serial=desk_get32(b+4); p->width=desk_get32(b+8); p->height=desk_get32(b+12); p->bpp=desk_get32(b+16);
+    if (p->flags>3 || !p->serial || !p->width || !p->height || p->width>2048 || p->height>2048 ||
+        (p->bpp!=8 && p->bpp!=16 && p->bpp!=32)) return 0;
+    if (n==72) {
+        p->lease=(struct desk_lease_tuple){.token=desk_get32(b+20),.generation=desk_get32(b+24),
+            .mode=desk_get32(b+28),.scale=desk_get32(b+32),
+            .surface={desk_get32(b+36),desk_get32(b+40),desk_get32(b+44),desk_get32(b+48),desk_get32(b+52)},
+            .native_width=desk_get32(b+56),.native_height=desk_get32(b+60),.native_bpp=desk_get32(b+64)};
+        p->result=(int32_t)desk_get32(b+68);
+        if (p->result>0 || p->result < -4095) return 0;
+        if (p->flags==1 && (!p->lease.token || !p->lease.generation ||
+            !p->lease.scale || p->lease.scale>3 || p->lease.mode>65535 ||
+            p->lease.surface.width!=p->width || p->lease.surface.height!=p->height ||
+            p->lease.surface.format<1 || p->lease.surface.format>4 ||
+            p->lease.native_width<p->width*p->lease.scale ||
+            p->lease.native_height<p->height*p->lease.scale ||
+            (p->lease.native_bpp!=16 && p->lease.native_bpp!=32) || p->result)) return 0;
+    }
+    return 1;
+}
 static int v3_parse(const struct ciuki_message *m, int client,
                     const struct ciuki_surface_info *s, struct desk_packet *p)
 {
@@ -390,11 +423,7 @@ static int v3_parse(const struct ciuki_message *m, int client,
         if (!client || n!=8) return 0;
         p->x=(int32_t)desk_get32(b); p->y=(int32_t)desk_get32(b+4); expected=8; break;
     case DESK_V3_LEASE:
-        if (!client || n!=16) return 0;
-        p->flags=desk_get32(b); p->width=desk_get32(b+4); p->height=desk_get32(b+8); p->bpp=desk_get32(b+12);
-        if (p->flags>1 || (!p->flags && (p->width || p->height || p->bpp)) ||
-            (p->flags && (!p->width || !p->height || p->width>2048 || p->height>2048 ||
-                (p->bpp!=8 && p->bpp!=16 && p->bpp!=32)))) return 0;
+        if (!client || n!=16 || !lease_request_fields(b,p)) return 0;
         expected=16; break;
     case DESK_V3_POINTER_STATE:
         if (client || n!=4) return 0;
@@ -432,25 +461,7 @@ static int v3_parse(const struct ciuki_message *m, int client,
         if (p->focused>1 || p->flags>1 || (client && p->focused!=p->flags)) return 0;
         expected=8; break;
     case DESK_V3_LEASE_EVENT:
-        if (client || (n!=20 && n!=72)) return 0;
-        p->flags=desk_get32(b); p->serial=desk_get32(b+4); p->width=desk_get32(b+8); p->height=desk_get32(b+12); p->bpp=desk_get32(b+16);
-        if (p->flags>3 || !p->serial || !p->width || !p->height || p->width>2048 || p->height>2048 ||
-            (p->bpp!=8 && p->bpp!=16 && p->bpp!=32)) return 0;
-        if (n==72) {
-            p->lease=(struct desk_lease_tuple){.token=desk_get32(b+20),.generation=desk_get32(b+24),
-                .mode=desk_get32(b+28),.scale=desk_get32(b+32),
-                .surface={desk_get32(b+36),desk_get32(b+40),desk_get32(b+44),desk_get32(b+48),desk_get32(b+52)},
-                .native_width=desk_get32(b+56),.native_height=desk_get32(b+60),.native_bpp=desk_get32(b+64)};
-            p->result=(int32_t)desk_get32(b+68);
-            if (p->result>0 || p->result < -4095) return 0;
-            if (p->flags==1 && (!p->lease.token || !p->lease.generation ||
-                !p->lease.scale || p->lease.scale>3 || p->lease.mode>65535 ||
-                p->lease.surface.width!=p->width || p->lease.surface.height!=p->height ||
-                p->lease.surface.format<1 || p->lease.surface.format>4 ||
-                p->lease.native_width<p->width*p->lease.scale ||
-                p->lease.native_height<p->height*p->lease.scale ||
-                (p->lease.native_bpp!=16 && p->lease.native_bpp!=32) || p->result)) return 0;
-        }
+        if (client || !lease_event_fields(b,n,p)) return 0;
         expected=n; break;
     case DESK_KEY: case DESK_MOTION: case DESK_BUTTON: case DESK_V3_RELATIVE_EVENT: {
         if (client || n!=40) return 0;
@@ -566,6 +577,14 @@ int desk_parse(const struct ciuki_message *m, int client,
             p->damage_x>p->source_w || p->damage_y>p->source_h ||
             p->damage_w>p->source_w-p->damage_x || p->damage_h>p->source_h-p->damage_y) return 0;
         n=m->length; break;
+    case DESK_LEASE:
+        if (!client || m->data[0]!=DESK_SHELL_VERSION || m->length!=20 || m->fd_count ||
+            !lease_request_fields(m->data+4,p)) return 0;
+        n=20; break;
+    case DESK_LEASE_EVENT:
+        if (client || m->data[0]!=DESK_SHELL_VERSION || m->length!=76 || m->fd_count ||
+            !lease_event_fields(m->data+4,72,p)) return 0;
+        n=76; break;
     case DESK_GFX_PRESENTED:
         if (client || !resize || (m->length!=32 && m->length!=64) || desk_get32(m->data+28)) return 0;
         p->serial=desk_get32(m->data+4); p->result=(int32_t)desk_get32(m->data+8);

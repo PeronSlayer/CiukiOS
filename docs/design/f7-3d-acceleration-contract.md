@@ -319,6 +319,24 @@ Mesa 7.7 `savageDDDepthFunc_s4`, `savage_3d_reg.h`, `tileInfo_pro` and X.Org
 No additional register writes, hardware caps or silicon qualification follow
 from this host-model coverage.
 
+### f7-14 implementation note (2026-10-26): native API and Graphics Demo consumer
+
+[f7-14](../directives/f7-14-native-gl-hardware.md) implements the native half
+of section 7 and the f7-05 consumer with the native OpenGL library instead of
+a separate `ciuki3d_` API: `libgl` builds the opengl32 engine, journal,
+admission and provider sources, so native and Win32 programs share one GL
+semantics, capability snapshot and whole-context fallback (7.2). The backend
+policy of 7.1 is `ciuki_gl_set_backend` (automatic, software, hardware with
+`-ENODEV` when unavailable); completion accounting is `ciuki_gl_status`;
+full screen is the common lease of section 6 (v2 `DESK_LEASE`, kernel grant
+to the desktop's channel peer) presented by `ciuki_gl_present` as `gpu-copy`
+or `cpu-copy`. Graphics Demo gains the backend, native-resolution and
+full-screen controls and logs completed-copy FPS with GPU/CPU frame counts,
+refusals and fallbacks. Decisions and evidence:
+[opengl-software.md](opengl-software.md), [graphics-demo.md](graphics-demo.md),
+[f7-14 validation](../validation/f7-14-native-gl.md). The T2 textured scene
+(floor, wall, eight cubes) is not part of f7-14.
+
 Research and repository comparison: **2026-10-14**. Directive:
 [f7-00](../directives/f7-00-3d-acceleration-contract.md). Status: original research contract; the amendments above record the f7-02 implementation
 for lead review. This document contains no hardware qualification or performance

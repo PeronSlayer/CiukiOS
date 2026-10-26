@@ -286,7 +286,7 @@ def desktop_license_payloads():
     sources["/system/licenses/f1-120-alsa-NOTICES.txt"] = ROOT / "docs/licenses/f1-120-alsa-NOTICES.txt"
     sources["/system/licenses/f1-120-GPL-2.0.txt"] = ROOT / "LICENSE"
     for name in ("FreeType-FTL.txt", "FreeType-LICENSE.txt", "FreeType-NOTICE.txt",
-                 "TinyGL-LICENSE.txt", "TinyGL-NOTICE.txt"):
+                 "TinyGL-LICENSE.txt", "TinyGL-NOTICE.txt", "opengl-engine-LGPL-2.1.txt"):
         sources[f"/system/licenses/{name}"] = SDK / "licenses" / name
     for name in ("lwip-2.2.1-BSD-3-Clause.txt", "lwip-2.2.1-NOTICES.txt"):
         sources[f"/system/licenses/{name}"] = ROOT / "docs/licenses" / name
