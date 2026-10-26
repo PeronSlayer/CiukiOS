@@ -730,7 +730,10 @@ SYS_SECURITY=101 after NET_INFO=100, leaving F6's 92–95 gap untouched. Its
 credentials/authorization supersede the old per-binary security grants when
 implemented; existing native record prefixes and Win32 call 96 stay frozen.
 The [account contract](user-security-contract.md) specifies provisioning and
-session lifecycle. This is a design reservation, not a header/runtime change.
+session lifecycle. [Lead amendment 1 interface delta](user-security-contract.md#delta-for-sec-k01-and-sec-user-01)
+extends the family to fourteen operations with explicit role-bound session launch,
+secure-console handoff and service connections; original record offsets stay fixed.
+This is a design reservation, not a header/runtime change.
 
 ## F2 extension: native ABI version 1
 
