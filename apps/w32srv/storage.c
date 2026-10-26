@@ -216,14 +216,15 @@ uint32_t wr_select_profile(struct wr_server *s,const char *name,const char *root
     struct wr_server *c=calloc(1,sizeof(*c)); if (!c) return 8;
     c->io=s->io; c->now=s->now; strcpy(c->user_path,root);
     if (!wr_load_hive(c,1)) { wr_destroy(c); free(c); return 1016; }
-    if (*root && !c->hive[1].sequence) {
+    int created=!c->hive[1].sequence;
+    if (*root && created) {
         /* No profile slots: discard its empty root and copy the default hive.
          * Corrupt existing slots fail above and are never replaced by defaults. */
         wr_destroy(c); c->io=s->io; c->now=s->now;
         if (!wr_load_hive(c,1)) { wr_destroy(c); free(c); return 1016; }
         strcpy(c->user_path,root); c->hive[1].sequence=0; c->hive[1].slot=0; c->hive[1].dirty=1;
     }
-    e=profile_folders(c,root);
+    e=created ? profile_folders(c,root) : 0;
     if (!e) e=wr_commit(c,1);
     if (e) { wr_destroy(c); free(c); return e; }
     struct wr_key **at=&s->keys;

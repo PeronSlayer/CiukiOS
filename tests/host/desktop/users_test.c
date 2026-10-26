@@ -112,12 +112,13 @@ static void io(const char *root)
     }
     int status; assert(waitpid(child,&status,0)==child && WIFEXITED(status) && !WEXITSTATUS(status));
     request(USERS_DELETE,"Bob",""); assert(!users_execute(root,&q,&v));
-    /* A legacy empty lock is recoverable too, but only under the guard. */
+    /* An incomplete legacy record cannot prove owner death, even after a service restart. */
     f=fopen(path,"wb"); assert(f); fclose(f);
     char guard_path[512]; snprintf(guard_path,sizeof(guard_path),"%s/system/settings/users.guard",root);
     int guard=open(guard_path,O_RDWR); assert(guard>=0 && !flock(guard,LOCK_EX|LOCK_NB));
     request(USERS_CREATE,"Bob",""); assert(users_execute(root,&q,&v)==-EBUSY);
     assert(!access(path,F_OK)); assert(!close(guard));
+    assert(users_execute(root,&q,&v)==-EBUSY); assert(!unlink(path));
     assert(!users_execute(root,&q,&v));
     request(USERS_DELETE,"Bob",""); assert(!users_execute(root,&q,&v));
     snprintf(path,sizeof(path),"%s%s",root,p.settings); struct stat st; assert(!stat(path,&st));

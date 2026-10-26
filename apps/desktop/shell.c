@@ -2046,14 +2046,19 @@ static void standby_service(struct desktop *d)
             /* Firmware may wake scanout before returning to us. Conceal the
              * framebuffer before sleeping, after every program has agreed. */
             desk_logon_open(d,2); prepared=1;
-            uint64_t before=d->presents;
-            int monitor_was_off=d->monitor_off; d->monitor_off=0;
-            paint_error=desk_redraw(d) || d->presents==before || d->damage.count || d->present_damage.count;
-            d->monitor_off=monitor_was_off;
+            if (!d->monitor_off) {
+                uint64_t before=d->presents;
+                paint_error=desk_redraw(d) || d->presents==before || d->damage.count || d->present_damage.count;
+            } /* DPMS already published black before suspending grants. */
         }
-        int r = paint_error ? (errno=EAGAIN,-1) : desk_session_busy(d) || d->sh.gate ? (errno=EBUSY,-1) :
-            d->power_standby ? d->power_standby() : (errno = ENOSYS, -1);
-        if (r && prepared) desk_logon_done(d);
+        int attempted=0,r;
+        if (paint_error) { errno=EAGAIN; r=-1; }
+        else if (desk_session_busy(d) || d->sh.gate) { errno=EBUSY; r=-1; }
+        else if (!d->power_standby) { errno=ENOSYS; r=-1; }
+        else { attempted=1; r=d->power_standby(); }
+        /* The native error may come from recovery after actual firmware
+         * sleep. Only a locally refused request proves sleep never happened. */
+        if (r && prepared && !attempted) desk_logon_done(d);
         b->standby_error = r ? (errno ? errno : EIO) : 0; b->standbys++;
         fprintf(stderr,"[desktop] standby result=%d\n",r ? -b->standby_error : 0);
         uint32_t failure = r ? PP_PBTF_RESUMEFROMFAILURE : 0;

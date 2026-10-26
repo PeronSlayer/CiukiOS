@@ -655,10 +655,36 @@ static void user_profiles(void)
     CHECK(!rpc(&s,10,W32R_OPEN,W32R_HKCU,"Seed","",0,NULL,0,0));key=r.key;
     CHECK(!get(&s,key,"Marker") && !memcmp(result+40,"default",8));
     CHECK(!rpc(&s,10,W32R_CLOSE,key,"","",0,NULL,0,0));
+    /* Redirect one family and delete a value/the other family. Both logon
+     * selection and a server restart must preserve application edits. */
+    CHECK(!wr_select_profile(&s,"Alice","/Windows/Profiles/u00000001"));
+    const char *folder_key="Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders";
+    CHECK(!rpc(&s,10,W32R_OPEN,W32R_HKCU,folder_key,"",0,NULL,0,0));key=r.key;
+    const char redirect[]="C:\\Windows\\Profiles\\u00000001\\Redirected";
+    uint8_t redirected[sizeof(redirect)*2];
+    for(unsigned i=0;i<sizeof(redirect);i++){redirected[i*2]=(uint8_t)redirect[i];redirected[i*2+1]=0;}
+    CHECK(!rpc(&s,10,W32R_SET,key,"","Personal",1,redirected,sizeof(redirected),0));
+    CHECK(!rpc(&s,10,W32R_DELETE_VALUE,key,"","Favorites",0,NULL,0,0));
+    CHECK(!rpc(&s,10,W32R_CLOSE,key,"","",0,NULL,0,0));
+    const char *user_key="Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders";
+    CHECK(!rpc(&s,10,W32R_DELETE_KEY,W32R_HKCU,user_key,"",0,NULL,0,0));
+    for(unsigned restart=0;restart<2;restart++) {
+        CHECK(!wr_select_profile(&s,"",""));
+        if(restart){wr_destroy(&s);start(&s,&d);s.compat_writer_pid=99;}
+        CHECK(!wr_select_profile(&s,"Alice","/Windows/Profiles/u00000001"));
+        CHECK(!rpc(&s,10,W32R_OPEN,W32R_HKCU,folder_key,"",0,NULL,0,0));key=r.key;
+        CHECK(!get(&s,key,"Personal") && r.data_bytes==sizeof(redirected) && !memcmp(result+40,redirected,sizeof(redirected)));
+        CHECK(get(&s,key,"Favorites")==2);
+        CHECK(!rpc(&s,10,W32R_CLOSE,key,"","",0,NULL,0,0));
+        CHECK(rpc(&s,10,W32R_OPEN,W32R_HKCU,user_key,"",0,NULL,0,0)==2);
+    }
+    CHECK(!wr_select_profile(&s,"",""));
+    puts("PASS g32b folder edits: redirection, value deletion and key deletion survive logon and service restart");
     /* A failed switch never changes the current profile, and corrupted
      * existing profile slots must not be silently reseeded from defaults. */
     d.fail=d.event+1;
-    CHECK(wr_select_profile(&s,"Bob","/Windows/Profiles/u00000002")==1016 && !s.user_name[0]);d.fail=0;
+    /* Only a new hive commits inherited defaults; fail that commit. */
+    CHECK(wr_select_profile(&s,"Carol","/Windows/Profiles/u00000003")==1016 && !s.user_name[0]);d.fail=0;
     struct file *a=file(&d,"/Windows/Profiles/u00000001/USER.CRG.0"),*b=file(&d,"/Windows/Profiles/u00000001/USER.CRG.1");
     CHECK(a->n && b->n);a->data[0]^=1;b->data[0]^=1;
     CHECK(wr_select_profile(&s,"Alice","/Windows/Profiles/u00000001")==1016 && !s.user_name[0]);

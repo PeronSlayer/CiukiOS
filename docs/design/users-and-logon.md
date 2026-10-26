@@ -104,10 +104,10 @@ Primary online references:
   are distinct. Resolve through that profile's Shell Folders keys.
 
 Implementation decisions: recover users.lock under an existing service-owned
-writer lease (the INI transaction lease), so simultaneous stale-file removers
-cannot remove a newly acquired lock. Record boot and process identities, keep
-live contention busy and retain temp/fsync/replace saves. Host filesystem
-fixtures use a permanent flock guard, which likewise releases on process exit.
+writer lease (the INI transaction lease), with atomic owner publication in a
+nonempty directory as the restart-safe fence (review round 1 below). Record boot
+and process identities, keep live contention busy and retain temp/fsync/replace
+saves. Host filesystem fixtures use a permanent flock guard, which likewise releases on process exit.
 Profile publication uses a private application operation over the existing
 authenticated registry channel. The desktop is its only writer. Do not switch
 while announced Win32 clients survive; G3 must end them first. Separate USER
@@ -121,7 +121,8 @@ uses the same durable policy, preserves the other flags, and its Change button
 opens Passwords. Unlock authentication never republishes profile selection
 (policy changes to separate profiles apply at the next logon).
 
-Boot identity comes from the existing recovery boot counter; owner liveness
+Boot identity comes from the durably committed, nonsaturated recovery boot counter
+(binding failure is logged and never reports VALID); owner liveness
 comes from the process snapshot. Missing boot identity or an unreadable snapshot
 fails conservatively without removing a live lock. The native lock adapter is
 host-tested with injected service/recovery/process calls; the Linux filesystem
@@ -132,12 +133,14 @@ never unlinked. No new syscall, public ABI record/constant or SDK header is adde
 
 Profile hives use `USER.CRG.0`/`USER.CRG.1` beneath the existing numeric profile
 root and seed from the default hive on first selection. Each switch flushes the
-old hive, loads/validates the new hive and commits its folder bindings before
-publishing identity. Failed commits and corrupt existing slots preserve the
-current session; they never silently reseed an existing profile. Announced
+old hive and loads/validates the new hive before publishing identity. A new
+profile alone inherits and rebinds default folder values; existing profiles
+preserve redirections and deleted values/keys. Failed commits and corrupt
+existing slots preserve the current session; they never silently reseed an existing profile. Announced
 Win32 clients and open registry handles prevent changing identity. G3 logoff
 ends the clients; their exit flushes the selected hive. Service restarts inherit
-the desktop's selected name/root. PROGMAN follows the selected Programs folder;
+the desktop's selected name/root under the publication/snapshot mutex. PROGMAN
+follows the selected Programs folder;
 common CSIDLs retain system paths. Folder service failures are returned, rather
 than resolving a personal folder into another profile.
 
@@ -151,7 +154,35 @@ implementation does not invent a user named Ciuki or Default.
 
 Window-model rows 108 and 109 add protected saver/SC_SCREENSAVE, Preview,
 default/disabled policy, failed DPMS wake, Cancel/wrong password, concealed
-scanout, standby failure and firmware resume counters. Native and Win32 account,
+scanout, suspended DPMS drawing grants, locally refused standby, device recovery
+failure after sleep and firmware resume counters. Native and Win32 account,
 registry and shell harnesses exercise the production paths. Exact commands and
 results, including unavailable leak checks under ptrace, are in
 `build/codex/g32b-report.md`. Guest and hardware qualification remain lead-owned.
+
+### g32b review round 1
+
+The review fixes retain the Windows 98 profile model above. Rechecked the
+Microsoft screen saver, ScreenSaverProc, GetUserName and CSIDL references:
+conceal scanout before DPMS suspends display grants; wake from that concealed
+frame before drawing the password gate. Standby keeps the gate after calling
+the firmware-facing operation even on errors, since device recovery may fail
+after sleep. Locally refused entry may discard only the gate it prepared.
+
+Account acquisition must publish its owner atomically and survive service-lease
+loss. FAT has no hard links in the native SDK. Publish a nonempty lock directory
+by rename, containing a complete owner record with a unique acquisition name.
+Rename cannot replace a nonempty directory ([Linux man-pages, rename(2)](https://man7.org/linux/man-pages/man2/rename.2.html));
+`proc/posixpath.c:rename_inner` enforces the same rule. Recovery removes only the
+observed owner's uniquely named entry, then the empty directory, so an old
+recoverer cannot remove a replacement owner's record. Incomplete legacy records
+fail busy because their boot/owner cannot be established safely. The existing
+service lease remains a fast contention guard, rather than the safety fence.
+
+Use the amendment's durable-counter alternative for boot identity: accept a
+bootstat binding only after increment write and flush succeed, refuse saturation,
+and report bind failure at mount. No public ABI extension is needed. Profile
+publication acknowledgement and cache update share a mutex with restart's
+snapshot and spawn. Rebind inherited shell folder defaults only when a profile
+hive is first created; persisted redirections and deletions remain authoritative.
+No kernel user-security contract or future SYSTEM-service policy is implemented.

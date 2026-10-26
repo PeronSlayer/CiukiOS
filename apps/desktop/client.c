@@ -1204,6 +1204,22 @@ int desk_saver_start(struct desktop *d, unsigned kind)
     d->saver_active=1; d->saver_preview=1; d->saver_poll=0; d->saver_kind=kind; d->saver_frame=d->now_ns;
     saver_damage(d); return 0;
 }
+static int saver_monitor_off(struct desktop *d, int state)
+{
+    if (d->monitor_off) return 0;
+    /* DPMS suspends display grants. Publish a black frame while drawing is
+     * still permitted, so firmware wake cannot expose the previous desktop. */
+    unsigned active=d->saver_active,kind=d->saver_kind;
+    d->saver_active=1; d->saver_kind=0;
+    uint64_t before=d->presents;
+    int e=desk_redraw(d);
+    d->saver_active=active; d->saver_kind=kind;
+    saver_damage(d);
+    if (e || d->presents==before) return -EAGAIN;
+    e=d->monitor_power ? d->monitor_power(state) : -ENOSYS;
+    if (!e) d->monitor_off=1;
+    return e;
+}
 static int saver_wake(struct desktop *d)
 {
     /* Gate first: even a DPMS wake must never scan out the old desktop.
@@ -1211,15 +1227,7 @@ static int saver_wake(struct desktop *d)
     if ((d->saver_active && !d->saver_preview) || (d->monitor_off && !d->saver_preview))
         desk_session_lock(d);
     if (d->monitor_off) {
-        if (d->sh.user_gate) {
-            /* Paint while the monitor is still physically off. Merely setting
-             * user_gate would flash the previous framebuffer on DPMS wake. */
-            d->saver_active=d->saver_preview=0; d->monitor_off=0;
-            saver_damage(d); uint64_t before=d->presents;
-            int result=desk_redraw(d);
-            d->monitor_off=1;
-            if (result || d->presents==before || d->damage.count || d->present_damage.count) return -EAGAIN;
-        }
+        /* The pre-DPMS black frame conceals scanout until grants resume. */
         int e=d->monitor_power ? d->monitor_power(-1) : -ENOSYS;
         if (e) return e;
         d->monitor_off=0; saver_damage(d);
@@ -1267,8 +1275,7 @@ void desk_saver_tick(struct desktop *d)
                 if (q.command==0xf170 && !saver_suppressed(d)) {
                     if (q.argument==-1) (void)saver_wake(d);
                     else if (d->monitor_power) {
-                        int e=d->monitor_power(q.argument);
-                        if (!e) d->monitor_off=1;
+                        (void)saver_monitor_off(d,q.argument);
                     }
                 }
             }
@@ -1285,9 +1292,8 @@ void desk_saver_tick(struct desktop *d)
         if (!desk_saver_start(d,(unsigned)d->sh.cfg.saver_kind)) d->saver_preview=0;
     if (!d->monitor_off && !d->monitor_failed && d->sh.cfg.monitor_seconds>0 &&
         idle>=(uint64_t)d->sh.cfg.monitor_seconds*1000000000ull) {
-        int e=d->monitor_power ? d->monitor_power(2) : -ENOSYS;
-        if (!e) d->monitor_off=1;
-        else { d->monitor_failed=1; snprintf(d->notice,sizeof(d->notice),"Monitor power is unavailable (%d).",-e); }
+        int e=saver_monitor_off(d,2);
+        if (e) { d->monitor_failed=1; snprintf(d->notice,sizeof(d->notice),"Monitor power is unavailable (%d).",-e); }
     }
     if (d->saver_active && !d->monitor_off && d->now_ns>=d->saver_frame) {
         saver_damage(d); d->saver_frame=d->saver_kind ? d->now_ns+50000000ull : UINT64_MAX;

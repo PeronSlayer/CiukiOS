@@ -4,6 +4,7 @@
 #include "settings_io.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -71,9 +72,49 @@ static int owner_alive(unsigned pid)
     return !kill((pid_t)pid,0) || errno!=ESRCH;
 #endif
 }
-static int lock_users(const char *root,const char *lock,int *guard)
+/* Publish the complete owner as a nonempty directory: native FAT has no
+ * hard links, but rename refuses replacing a nonempty directory. A unique
+ * child name also fences a stale remover against a replacement owner. */
+static int recover_lock(const char *lock,const char *boot)
 {
-    char boot[64],saved_boot[64],magic[16]; unsigned pid=0;
+    char saved_boot[64],magic[16],entry[96]={0},path[640]; unsigned pid=0;
+    DIR *dir=opendir(lock);
+    if (dir) {
+        struct dirent *d; int e=0;
+        errno=0;
+        while ((d=readdir(dir))) {
+            if (!strcmp(d->d_name,".") || !strcmp(d->d_name,"..")) continue;
+            if (entry[0] || strncmp(d->d_name,"owner-",6) || strlen(d->d_name)>=sizeof(entry)) { e=-EBUSY; break; }
+            strcpy(entry,d->d_name);
+        }
+        if (!e && errno) e=-errno;
+        closedir(dir);
+        if (e) return e;
+        /* A published directory always starts nonempty. Empty means an
+         * owner/remover already released it; rmdir cannot delete a new owner. */
+        if (!entry[0]) return !rmdir(lock) ? 0 : errno==ENOENT || errno==ENOTEMPTY ? -EBUSY : -errno;
+        snprintf(path,sizeof(path),"%s/%s",lock,entry);
+    } else {
+        if (errno==ENOENT) return 0;
+        if (errno!=ENOTDIR) return -errno;
+        snprintf(path,sizeof(path),"%s",lock); /* Complete CUSR1 migration. */
+    }
+    FILE *f=fopen(path,"rb");
+    if (!f) return errno==ENOENT ? -EBUSY : -errno;
+    int valid=fscanf(f,"%15s %u %63s",magic,&pid,saved_boot)==3 && !strcmp(magic,"CUSR1");
+    int bad=ferror(f); fclose(f);
+    if (bad) return -EIO;
+    if (!valid) return -EBUSY;
+    if (!strcmp(boot,saved_boot)) {
+        int live=owner_alive(pid); if (live) return live<0 ? live : -EBUSY;
+    }
+    if (unlink(path)) return errno==ENOENT ? -EBUSY : -errno;
+    if (entry[0] && rmdir(lock)) return errno==ENOENT || errno==ENOTEMPTY ? -EBUSY : -errno;
+    return 0;
+}
+static int lock_users(const char *root,const char *lock,int *guard,char owner[640])
+{
+    char boot[64];
     int e=users_boot_identity(boot); if (e) return e;
 #ifdef USERS_NATIVE_LOCK
     e=user_lease(W32R_PROFILE_ACQUIRE); if (e) return e;
@@ -86,25 +127,27 @@ static int lock_users(const char *root,const char *lock,int *guard)
     if (flock(*guard,LOCK_EX|LOCK_NB)) { e=errno==EWOULDBLOCK ? -EBUSY : -errno; close(*guard); *guard=-1; return e; }
 #endif
     (void)root;
-    FILE *f=fopen(lock,"rb");
-    if (f) {
-        int valid=fscanf(f,"%15s %u %63s",magic,&pid,saved_boot)==3 && !strcmp(magic,"CUSR1");
-        int bad=ferror(f); fclose(f);
-        if (bad) return -EIO;
-        if (valid && !strcmp(boot,saved_boot)) {
-            int live=owner_alive(pid); if (live) return live<0 ? live : -EBUSY;
-        }
-        /* An empty legacy lock, old boot or dead process is recoverable.
-         * The guard excludes writers throughout inspection and replacement. */
-        if (unlink(lock)) return -errno;
-    } else if (errno!=ENOENT) return -errno;
-    int fd=open(lock,O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC,0600);
-    if (fd<0) return errno==EEXIST ? -EBUSY : -errno;
+    e=recover_lock(lock,boot); if (e) return e;
+    unsigned char nonce[16];
+#ifdef __i386__
+    if (getentropy(nonce,sizeof(nonce))) return -errno;
+#else
+    if (getrandom(nonce,sizeof(nonce),0)!=(ssize_t)sizeof(nonce)) return -EIO;
+#endif
+    char token[33],claim[576],record_path[672];
+    for (unsigned i=0;i<sizeof(nonce);i++) snprintf(token+i*2,3,"%02x",nonce[i]);
+    snprintf(claim,sizeof(claim),"%s.claim-%s",lock,token);
+    if (mkdir(claim,0700)) return -errno;
+    snprintf(record_path,sizeof(record_path),"%s/owner-%s",claim,token);
+    int fd=open(record_path,O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC,0600);
+    if (fd<0) { e=-errno; (void)rmdir(claim); return e; }
     char record[112]; int n=snprintf(record,sizeof(record),"CUSR1 %u %s\n",(unsigned)getpid(),boot);
     e=write(fd,record,(size_t)n)==n && !fsync(fd) ? 0 : -EIO;
     if (close(fd) && !e) e=-EIO;
-    if (e) unlink(lock);
-    return e;
+    if (!e && rename(claim,lock)) e=errno==EEXIST || errno==ENOTEMPTY || errno==ENOTDIR ? -EBUSY : -errno;
+    if (e) { (void)unlink(record_path); (void)rmdir(claim); return e; }
+    snprintf(owner,640,"%s/owner-%s",lock,token);
+    return 0;
 }
 static void unlock_guard(int guard)
 {
@@ -156,7 +199,7 @@ static __attribute__((noinline)) int prepare(const char *root,const struct users
 int users_execute(const char *root,const struct users_request *q,struct users_view *v)
 {
     memset(v,0,sizeof(*v));
-    char path[512], temp[512], lock[512];
+    char path[512], temp[512], lock[512], owner[640];
     if (!root || strlen(root)>300) return -EINVAL;
     snprintf(path,sizeof(path),"%s/system/settings/users.dat",root);
     snprintf(temp,sizeof(temp),"%s/system/settings/users.new",root);
@@ -165,7 +208,7 @@ int users_execute(const char *root,const struct users_request *q,struct users_vi
     if (mutation) {
         char parent[512]; snprintf(parent,sizeof(parent),"%s/system/settings",root);
         if ((e=dirs(parent))) return e;
-        e=lock_users(root,lock,&guard);
+        e=lock_users(root,lock,&guard,owner);
         if (e) { unlock_guard(guard); return e; }
         locked=1;
     }
@@ -198,7 +241,7 @@ int users_execute(const char *root,const struct users_request *q,struct users_vi
 done:
     if (db) { users_erase(db,sizeof(*db)); free(db); }
     if (bytes) { users_erase(bytes,DB_BYTES+1); free(bytes); }
-    if (locked) unlink(lock);
+    if (locked) { (void)unlink(owner); (void)rmdir(lock); }
     unlock_guard(guard);
     if (e) memset(v,0,sizeof(*v));
     return e;

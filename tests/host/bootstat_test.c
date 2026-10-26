@@ -18,7 +18,7 @@ static unsigned failures;
 
 #define START 2048u
 static uint8_t disk[(START + 200) * 512];
-static unsigned writes, flushes, fail_writes;
+static unsigned writes, flushes, fail_writes, fail_flushes, checking_bind;
 static char logs[8192];
 void klog(const char *f, ...)
 {
@@ -35,11 +35,12 @@ static int rd(struct blkdev *d, uint64_t lba, uint32_t n, void *b)
 }
 static int wr(struct blkdev *d, uint64_t lba, uint32_t n, const void *b)
 {
+    if (checking_bind) CHECK(!bootstat_bound());
     if (blkdev_range(d, lba, n)) return -FS_EINVAL;
     if (fail_writes) { fail_writes--; return -FS_EIO; }
     memcpy(disk + lba * 512, b, n * 512); writes++; return 0;
 }
-static int fl(struct blkdev *d) { (void)d; flushes++; return 0; }
+static int fl(struct blkdev *d) { (void)d; if (checking_bind) CHECK(!bootstat_bound()); flushes++; if (fail_flushes) { fail_flushes--; return -FS_EIO; } return 0; }
 static struct blkdev dev = { .read = rd, .write = wr, .flush = fl, .capacity = START + 200,
                              .sector_size = 512, .write_cache_state = BLKDEV_CACHE_ENABLED };
 
@@ -69,7 +70,10 @@ static int boot(uint32_t extra_flags)
     if (!(flags & CBI_F_TEST_REQUEST) && bootstat_decode(sector9(), &r)) sector9()[BOOTSTAT_OFF_STATE] = 1;
     g_boot.flags = flags;
     logs[0] = 0;
-    return bootstat_bind(&dev, START, 200);
+    checking_bind=1;
+    int e=bootstat_bind(&dev, START, 200);
+    checking_bind=0;
+    return e;
 }
 
 static void test_adoption_and_refusals(void)
@@ -229,14 +233,37 @@ static void test_record_codec(void)
     CHECK(!strcmp(bootstat_class_name(BOOTSTAT_POWER), "power") && !strcmp(bootstat_class_name(9), "unknown"));
 }
 
+static void test_boot_identity_requires_durable_increment(void)
+{
+    struct ciuki_recovery_status s;
+    volume(true); fail_writes=1;
+    CHECK(boot(0)==-FS_EIO && !bootstat_bound());
+    bootstat_status(&s); CHECK(!(s.flags&CIUKI_RECOVERY_VALID));
+    CHECK(!boot(0)); bootstat_status(&s); CHECK((s.flags&CIUKI_RECOVERY_VALID) && s.boots==1);
+    fail_flushes=1;
+    CHECK(boot(0)==-FS_EIO && !bootstat_bound());
+    bootstat_status(&s); CHECK(!(s.flags&CIUKI_RECOVERY_VALID));
+    CHECK(!boot(0)); bootstat_status(&s); CHECK((s.flags&CIUKI_RECOVERY_VALID) && s.boots==3);
+    struct bootstat_record r=disk_record(); r.boots=UINT32_MAX;
+    bootstat_encode(sector9(),&r);
+    CHECK(boot(0)==-FS_EIO && !bootstat_bound());
+    bootstat_status(&s); CHECK(!(s.flags&CIUKI_RECOVERY_VALID));
+    CHECK(disk_record().boots==UINT32_MAX);
+    r.boots=UINT32_MAX-1; bootstat_encode(sector9(),&r);
+    CHECK(boot(0)==-FS_EIO && !bootstat_bound());
+    puts("PASS g32b boot identity: failed write/flush never VALID; next durable increment differs; saturation refused");
+}
+
 int main(void)
 {
+    setvbuf(stdout,NULL,_IONBF,0);
     test_record_codec();
     test_adoption_and_refusals();
     test_two_failures_skip_a_class();
     test_failures_outside_classes_and_recovery();
     test_completion_waits_for_active_classes();
     test_configure_requests_and_menu_once();
+    test_boot_identity_requires_durable_increment();
     printf("bootstat: %u failures\n", failures);
     return failures != 0;
 }

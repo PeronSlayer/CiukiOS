@@ -23,7 +23,7 @@ class UsersTests(unittest.TestCase):
                             "-fno-sanitize-recover=undefined", "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections", "-I", str(ROOT / "apps/desktop"),
                             "-I", str(ROOT / "src/kernel/include"),
                             *[str(ROOT / name) for name in sources], "-pthread", "-o", str(binary)], check=True)
-            result = subprocess.run([str(binary), str(store)], text=True, capture_output=True)
+            result = subprocess.run([str(binary), str(store)], text=True, capture_output=True,timeout=30)
             print(result.stdout, end="")
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
@@ -42,8 +42,8 @@ class UsersTests(unittest.TestCase):
             obj=work/"users_io.o"
             subprocess.run(["clang",*flags,"-DUSERS_NATIVE_LOCK=1","-c",str(ROOT/"apps/desktop/users_io.c"),"-o",str(obj)],check=True)
             sources=["tests/host/desktop/users_guest_lock_test.c","apps/desktop/users.c","apps/desktop/settings_io.c","src/kernel/lib/sha256.c"]
-            subprocess.run(["clang",*flags,*[str(ROOT/s) for s in sources],str(obj),"-Wl,--gc-sections","-pthread","-o",str(binary)],check=True)
-            result=subprocess.run([str(binary),str(store)],text=True,capture_output=True)
+            subprocess.run(["clang",*flags,*[str(ROOT/s) for s in sources],str(obj),"-Wl,--gc-sections","-Wl,--wrap=rename","-Wl,--wrap=cfg_write_at","-Wl,--wrap=getpid","-pthread","-o",str(binary)],check=True)
+            result=subprocess.run([str(binary),str(store)],text=True,capture_output=True,timeout=30)
             print(result.stdout,end="")
             self.assertEqual(result.returncode,0,result.stdout+result.stderr)
 

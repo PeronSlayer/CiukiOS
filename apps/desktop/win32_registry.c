@@ -324,7 +324,8 @@ int ciuki_win32_startup_consume(const struct desk_startup_entry *e)
     pthread_mutex_unlock(&registry_lock); free(r); free(current); return native_error(error);
 }
 
-extern void desk_w32_profile_state(const char *,const char *) __attribute__((weak));
+extern uint32_t desk_w32_profile_exchange(const char *,const char *,const void *,uint32_t,
+                                         struct w32r_reply *,uint32_t *) __attribute__((weak));
 int desk_w32_profile(const struct user_profile *profile)
 {
     uint8_t wire[sizeof(struct w32r_request)+USERS_PATH+USERS_NAME];
@@ -333,9 +334,11 @@ int desk_w32_profile(const struct user_profile *profile)
         .path_bytes=(uint32_t)p,.name_bytes=(uint32_t)n};
     memcpy(wire,&a,sizeof(a));memcpy(wire+sizeof(a),profile->root,p);memcpy(wire+sizeof(a)+p,profile->name,n);
     struct w32r_reply r;uint32_t used=0;
-    uint32_t e=desk_w32_exchange(wire,(uint32_t)(sizeof(a)+p+n),&r,sizeof(r),&used);
+    uint32_t bytes=(uint32_t)(sizeof(a)+p+n);
+    uint32_t e=desk_w32_profile_exchange ?
+        desk_w32_profile_exchange(profile->name,profile->root,wire,bytes,&r,&used) :
+        desk_w32_exchange(wire,bytes,&r,sizeof(r),&used);
     if (!e && (used!=sizeof(r) || r.version!=W32R_VERSION || r.data_bytes || r.name_bytes)) e=13;
     if (!e) e=r.error;
-    if (!e && desk_w32_profile_state) desk_w32_profile_state(profile->name,profile->root);
     return native_error(e);
 }
