@@ -417,6 +417,7 @@ static bool ready_record(struct dosvm *v)
         else paragraphs = paragraphs * 16 + d;
     }
     if (!major || !paragraphs || paragraphs > 0xA000) return false;
+    if (!v->info.dos_ready && dosvm_mouse_install(v)) return false;
     v->info.dos_major = major; v->info.dos_minor = minor;
     v->info.free_paragraphs = paragraphs; v->info.drive = v->line[25] - 'A';
     v->info.dos_ready = true;

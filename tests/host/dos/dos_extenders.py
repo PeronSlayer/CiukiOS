@@ -79,19 +79,21 @@ def run(cpu, image, name, args, *, no_x87=True, **extra):
                UBSAN_OPTIONS="halt_on_error=1", **extra)
     if not no_x87:
         env.pop("GUEST_NO_X87", None)
-    result = subprocess.run([str(cpu), str(image), *args], cwd=ROOT, env=env, capture_output=True, text=True,
-                            timeout=1800)
-    log = result.stdout + result.stderr
-    (OUT / f"{name}.log").write_text(log)
+    path = OUT / f"{name}.log"
+    with path.open("w") as stream:
+        result = subprocess.run([str(cpu), str(image), *args], cwd=ROOT, env=env, stdout=stream,
+                                stderr=subprocess.STDOUT, text=True, timeout=1800)
+    log = path.read_text()
     return result.returncode, log
 
 
 def war2(cpu, image, name, menu):
-    # INT 10h trace (dosvm_guest.c GUEST_INT10_TRACE); with menu, Esc at 12 s
-    # and 14 s of simulated time skips the logo and intro movies.
-    extra = dict(GUEST_PLAY_MS="24000" if menu else "10000", GUEST_INT10_TRACE="1")
+    # INT 10h/33h trace; Esc at 12/14 s skips the logo/intro and 22 s
+    # opens the menu. Four window mouse events then run the real callback.
+    extra = dict(GUEST_PLAY_MS="36000" if menu else "10000", GUEST_INT10_TRACE="1", GUEST_INT33_TRACE="1")
     if menu:
-        extra["GUEST_PLAY_KEYS"] = "01@12000,01@14000"
+        extra["GUEST_PLAY_KEYS"] = "01@12000,01@14000,01@22000"
+        extra["GUEST_PLAY_MOUSE"] = "1"
     code, log = run(cpu, image, name, ["shell:CD \\WAR2", "-", "play:WAR2.EXE", "WAR2"], **extra)
     text = "\n".join(screen(log))
     end = re.search(r"^H61 PLAY END WAR2 (.*)$", log, re.M)
@@ -121,6 +123,15 @@ def war2(cpu, image, name, menu):
         check(frame is not None and frame.group(1) == "0" and frame.group(2) == "101" and frame.group(3) == "640" and
               frame.group(4) == "480" and frame.group(5) == "0" and int(frame.group(6)) > 150000,
               f"{name}: the window shows the 640x480x256 title screen")
+        check(re.search(r"^I33 ax=000c cx=001f es:dx=f000:[0-9a-f]+ -> e=0", log, re.M) is not None,
+              f"{name}: actual DOS/4GW mouse handler installation")
+        rows = re.findall(r"^H61 MOUSE stage=(\d+) x=(\d+) y=(\d+) buttons=(\d+).*callbacks=(\d+)", log, re.M)
+        end_mouse = re.search(r"^H61 MOUSE END mask=1f pending=0 active=0 callbacks=(\d+) x=(\d+) y=(\d+) buttons=0$", log, re.M)
+        check(len(rows) == 4 and rows[0][1:3] != rows[1][1:3] and int(rows[2][3]) == 1 and int(rows[3][3]) == 0,
+              f"{name}: absolute movement, left press and release reached INT33")
+        check(end_mouse is not None and int(end_mouse.group(1)) >= 4,
+              f"{name}: real extender callbacks ran and returned without pending work")
+        print(f"DOSX {name} mouse: {end_mouse.group(0) if end_mouse else 'no completion'}", flush=True)
     return log
 
 
@@ -192,6 +203,30 @@ def duke3d(cpu, image, name):
     return log
 
 
+def polling_games(cpu, image):
+    for name, command, label in (("doom", "DOOM.EXE -config CIUKI.CFG -nosound -nomusic", "DOOM"),
+                                  ("wolf3d", "WOLF3D.EXE", "WOLF3D"),
+                                  ("quake", "QUAKE.EXE -nosound -nocdaudio", "QUAKE")):
+        code, log = run(cpu, image, name + "-mouse", ["shell:CD \\" + label, "-", "play:" + command, label],
+                        GUEST_PLAY_MS="12000", GUEST_PLAY_MOUSE="1", GUEST_PLAY_MOUSE_POLL="1",
+                        GUEST_PLAY_MOUSE_AT="4000", GUEST_INT33_TRACE="1")
+        reset = re.search(r"^I33 ax=0000 .* -> e=0 ax=ffff", log, re.M)
+        # libx86emu has no x87. Quake requires it before input startup; the
+        # production INT33 polling profile has separate 16/32-bit host cover.
+        if name == "quake" and not reset and code != 0 and \
+                "unexpected: x87 instruction outside the runner's control/status subset" in log:
+            print(f"DOSX quake mouse: BLOCKED before INT33 startup (x87 unavailable); exit={code}", flush=True)
+            continue
+        moved = re.search(r"^I33 ax=000b .* -> e=0 .* cx=0025 dx=0015", log, re.M)
+        if name == "wolf3d":
+            # Its menu uses absolute position (3), not gameplay deltas (B).
+            moved = re.search(r"^I33 ax=0003 .* -> e=0 .* cx=0089 dx=0028", log, re.M)
+        pressed = re.search(r"^I33 ax=0003 .* -> e=0 .* bx=0001", log, re.M)
+        check(code == 0 and "guest runner: PASS" in log and reset and moved and pressed,
+              f"{name}: detected mouse, read injected raw movement and left-button press")
+        print(f"DOSX {name} mouse: exit={code} reset={bool(reset)} motion={bool(moved)} press={bool(pressed)}", flush=True)
+
+
 def main():
     if not Path("/usr/include/x86emu.h").exists():
         print("DOSX: unavailable (libx86emu development headers missing)")
@@ -208,12 +243,19 @@ def main():
     with tempfile.TemporaryDirectory(prefix="watcom-", dir=OUT) as work:
         client, extender = dos.watcom_build("src/probes/vm/dpmi_dos4gw.c", "DPMI4GW.EXE", Path(work))
     programs = {"/DOSREADY.COM": h56.assemble(ROOT / "src/probes/doscompat/dosready.asm", OUT / "DOSREADY.COM"),
+                "/DOSMOUSE.COM": h56.assemble(ROOT / "tests/host/dos/dosmouse.asm", OUT / "DOSMOUSE.COM"),
                 "/DPMI4GW.EXE": client, "/DOS4GW.EXE": extender}
     _, members, _ = games.package_files("war2-demo")
     demo = {path: data for path, data, _ in members}
     _, duke, _ = games.package_files("duke3d-shareware")
     demo.update({path: data for path, data, _ in duke})
-    demo.update({path: data for path, data, _ in games.generated_files() if path.startswith(("/WAR2/", "/DUKE3D/"))})
+    generated = ("/WAR2/", "/DUKE3D/")
+    if os.environ.get("DOSX_MOUSE_GAMES"):
+        for package in ("doom-shareware", "wolf3d-shareware", "quake-shareware"):
+            _, members, _ = games.package_files(package)
+            demo.update({path: data for path, data, _ in members})
+        generated += ("/DOOM/", "/WOLF3D/", "/QUAKE/")
+    demo.update({path: data for path, data, _ in games.generated_files() if path.startswith(generated)})
     folders = sorted({"/".join(p.strip("/").split("/")[:k]) for p in demo for k in range(1, p.strip("/").count("/") + 1)},
                      key=lambda d: (d.count("/"), d))
     image = OUT / "img/UNIFIED.IMG"
@@ -227,6 +269,15 @@ def main():
           f"DPMI4GW.EXE: DPMI services, IRQ0, virtual IF, INT 21h 2Ah/2Ch and file I/O under DOS/4GW (exit {code})")
     check("DOS/4GW error" not in "\n".join(screen(log)), "DPMI4GW.EXE: no DOS/4GW error on the screen")
 
+    code, log = run(cpu, image, "dosmouse", ["play:DOSMOUSE.COM", "DOSMOUSE"],
+                    GUEST_PLAY_MOUSE="1", GUEST_PLAY_MOUSE_AT="100", GUEST_PLAY_MS="6000")
+    check(code == 0 and "guest: DOSMOUSE PASS" in log and "guest: DOSMOUSE FAIL" not in log,
+          "DOSMOUSE.COM: driver detection, show/hide, V86 handler, movement and left click/release")
+    print(f"DOSX DOSMOUSE.COM: exit={code} mouse-driven DOS Box program " +
+          ("PASS" if "guest: DOSMOUSE PASS" in log else "FAIL"), flush=True)
+
+    if os.environ.get("DOSX_MOUSE_GAMES"):
+        polling_games(cpu, image)
     war2(cpu, image, "war2-ems", True)
     duke3d(cpu, image, "duke3d-ems")
     if os.environ.get("DOSX_PERF"):

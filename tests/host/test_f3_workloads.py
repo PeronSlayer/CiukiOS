@@ -372,7 +372,7 @@ class SyntheticFixture(unittest.TestCase):
             got = subprocess.run(['mcopy', '-i', str(base), '::' + path, '-'], capture_output=True, check=True).stdout
             self.assertEqual(got, data, path)
         cfg = fx.DOOM_CONFIG.decode()
-        for line in ('snd_sfxdevice 3', 'snd_musicdevice 3', 'snd_sbport 544', 'snd_sbirq 7', 'snd_sbdma 1', 'use_mouse 0'):
+        for line in ('snd_sfxdevice 3', 'snd_musicdevice 3', 'snd_sbport 544', 'snd_sbirq 7', 'snd_sbdma 1', 'use_mouse 1'):
             self.assertIn(line + '\r\n', cfg)
         base.unlink()
 
