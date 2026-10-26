@@ -5,8 +5,8 @@ void render3d_wire_caps(const struct render3d_service *s,struct ciuki_r3d_caps *
 {
     struct render3d_caps c; render3d_query_caps(s,&c);
     *out=(struct ciuki_r3d_caps){.version=CIUKI_R3D_VERSION,.generation=s->generation};
-    if (c.hardware_features && s->backend->capabilities) {
-        *out=*s->backend->capabilities; out->generation=s->generation;
+    if (c.hardware_features && (s->backend->capabilities || s->backend->query_caps)) {
+        render3d_backend_caps(s,out); out->generation=s->generation;
         out->features &= c.hardware_features;
         if (out->max_size>c.hardware_max_size) out->max_size=c.hardware_max_size;
         out->texture_bytes=c.texture_heap_bytes;
@@ -17,6 +17,8 @@ void render3d_filter_caps(const struct ciuki_r3d_caps *snapshot,
 {
     *out=(struct ciuki_r3d_caps){.version=CIUKI_R3D_VERSION,.generation=snapshot->generation};
     if (a->width && a->height && a->width<=snapshot->max_size && a->height<=snapshot->max_size &&
+        (!snapshot->max_width || a->width<=snapshot->max_width) &&
+        (!snapshot->max_height || a->height<=snapshot->max_height) &&
         a->format==CIUKI_R3D_ARGB8888 && a->kind==CIUKI_R3D_D16 && !a->levels)
         *out=*snapshot;
 }
@@ -93,7 +95,7 @@ int render3d_transport_dispatch(struct render3d_transport *t, uint32_t p,
         /* Completed tiled-to-linear copy first; callback re-proves the existing
          * lease for each bounded scanout write. No raw front address in wire. */
         if (!t->present || !a->token || bytes!=a->width*a->height*4u ||
-            !a->width || !a->height || a->width>64 || a->height>64 ||
+            !a->width || !a->height || a->width>R3D_MAX_SIZE || a->height>R3D_MAX_SIZE ||
             a->pitch!=a->width*4u) return -EOPNOTSUPP;
         int e=finish(s,p,a->context,f,100);
         if (!e) e=render3d_readback(s,p,a->context,a->resource,data,bytes);

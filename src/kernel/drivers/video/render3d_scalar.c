@@ -112,14 +112,27 @@ static unsigned lod(uint32_t rho,unsigned levels)
     unsigned value=whole*256+frac,max=(levels-1)*256;
     return value>max ? max : value;
 }
-static unsigned factor(unsigned mode,unsigned alpha)
-{ return mode==R3D_ONE ? 255 : mode==R3D_ZERO ? 0 : mode==R3D_SRC_ALPHA ? alpha : 255-alpha; }
+static unsigned factor(unsigned mode,uint32_t src,uint32_t dst,unsigned shift)
+{
+    switch (mode) {
+    case R3D_ONE: return 255;
+    case R3D_ZERO: return 0;
+    case R3D_SRC_ALPHA: return src>>24;
+    case R3D_INV_SRC_ALPHA: return 255-(src>>24);
+    case R3D_DST_COLOR: return dst>>shift&255;
+    case R3D_SRC_COLOR: return src>>shift&255;
+    case R3D_INV_DST_COLOR: return 255-(dst>>shift&255);
+    case R3D_INV_SRC_COLOR: return 255-(src>>shift&255);
+    case R3D_DST_ALPHA: return dst>>24;
+    default: return 255-(dst>>24);
+    }
+}
 static uint32_t blend(uint32_t src,uint32_t dst,const struct render3d_state *s)
 {
     if (!s->blend) return src;
-    unsigned sf=factor(s->source,src>>24),df=factor(s->destination,src>>24);
     uint32_t out=0;
     for (unsigned shift=0;shift<32;shift+=8) {
+        unsigned sf=factor(s->source,src,dst,shift),df=factor(s->destination,src,dst,shift);
         unsigned c=(((src>>shift)&255)*sf+((dst>>shift)&255)*df+127)/255;
         out|=(c>255 ? 255 : c)<<shift;
     }

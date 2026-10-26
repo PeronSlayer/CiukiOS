@@ -23,7 +23,9 @@ static struct render3d_resource *resource(struct render3d_context *c, uint32_t h
 }
 static void *allocate(struct render3d_service *s, uint32_t bytes)
 {
-    if (bytes>R3D_RAM_LIMIT-sizeof(*s)-s->ram_bytes) return 0;
+    uint32_t backend=s->backend ? s->backend->resident_bytes : 0;
+    if (backend>R3D_RAM_LIMIT-sizeof(*s) || s->ram_bytes>R3D_RAM_LIMIT-sizeof(*s)-backend ||
+        bytes>R3D_RAM_LIMIT-sizeof(*s)-backend-s->ram_bytes) return 0;
     void *p=s->host.alloc(s->host.ctx,bytes);
     if (p) { s->ram_bytes+=bytes; memset(p,0,bytes); }
     return p;
@@ -55,10 +57,20 @@ void render3d_init(struct render3d_service *s, const struct render3d_host *h,
         }
     }
 }
+void render3d_backend_caps(const struct render3d_service *s,struct ciuki_r3d_caps *caps)
+{
+    *caps=(struct ciuki_r3d_caps){0};
+    if (!usable(s)) return;
+    if (s->backend->query_caps) s->backend->query_caps(s->device,caps);
+    else if (s->backend->capabilities) *caps=*s->backend->capabilities;
+    else *caps=(struct ciuki_r3d_caps){.max_size=s->backend->max_size,
+        .max_vertices=3,.max_pixel_work=4096};
+}
 void render3d_query_caps(const struct render3d_service *s, struct render3d_caps *caps)
 {
+    struct ciuki_r3d_caps hw; render3d_backend_caps(s,&hw);
     *caps=(struct render3d_caps){2,R3D_ALL_FEATURES,usable(s) ? s->backend->features : 0,
-        R3D_MAX_SIZE,2,R3D_JOBS*R3D_JOB_BYTES,R3D_JOB_BYTES,R3D_JOBS,R3D_RAM_LIMIT,usable(s) ? s->backend->max_size : 0u, s->texture_first ? s->heap_end-s->texture_first : 0u};
+        R3D_MAX_SIZE,2,R3D_JOBS*R3D_JOB_BYTES,R3D_JOB_BYTES,R3D_JOBS,R3D_RAM_LIMIT,hw.max_size, s->texture_first ? s->heap_end-s->texture_first : 0u};
 }
 void render3d_init_family(struct render3d_service *s, const struct render3d_host *h,
     uint32_t generation, const struct render3d_family *family, void *owner, struct render3d_extent heap)
@@ -280,7 +292,9 @@ int render3d_validate_state(const struct render3d_request *q)
 {
     const struct render3d_state *a=&q->state;
     if (a->depth_func>R3D_GEQUAL || a->alpha_func>R3D_GEQUAL || a->alpha_ref>255 ||
-        a->alpha_test>1 || a->blend>1 || a->flat>1 || a->source>R3D_INV_SRC_ALPHA || a->destination>R3D_INV_SRC_ALPHA)
+        a->alpha_test>1 || a->blend>1 || a->flat>1 || a->source>R3D_INV_DST_ALPHA || a->destination>R3D_INV_DST_ALPHA ||
+        a->source==R3D_SRC_COLOR || a->source==R3D_INV_SRC_COLOR ||
+        a->destination==R3D_DST_COLOR || a->destination==R3D_INV_DST_COLOR)
         return -EINVAL;
     for (unsigned i=0;i<2;i++) {
         const struct render3d_sampler *t=&a->sampler[i];
@@ -336,7 +350,7 @@ static int validate(struct render3d_context *c, const struct render3d_request *q
         if (memcmp(&q->vertices[i],&zero,sizeof(zero)) || q->uv1[i][0] || q->uv1[i][1]) return -EINVAL;
     }
     /* Reject expensive geometry before side effects; clear/copy split in rows. */
-    if (pixels>R3D_PIXEL_BUDGET) return -EAGAIN;
+    if (pixels>UINT32_MAX) return -EAGAIN;
     *work=(uint32_t)pixels;
     return 0;
 }
@@ -358,11 +372,14 @@ int render3d_submit(struct render3d_service *s, uint32_t p, uint32_t id,
     struct render3d_resource *r[R3D_REFS]; uint32_t work;
     int e=validate(c,q,r,&work); if (e) return e;
     bool software=!c->hardware;
+    if (software && work>R3D_PIXEL_BUDGET) return -EAGAIN;
     if (c->hardware) {
         if (!usable(s)) return -EIO;
-        /* Unmeasured hardware: one tiny outstanding slice; byte limits are
-         * never a claim of a calibrated 20 ms throughput budget. */
-        if (s->queued || q->count>3 || work>4096 || r[0]->width>64 || r[0]->height>64) return -EAGAIN;
+        struct ciuki_r3d_caps hw; render3d_backend_caps(s,&hw);
+        /* One outstanding hardware job, including after full-size qualification.
+         * Dynamic limits belong to the qualified generation, never the PCI ID. */
+        if (s->queued || q->count>hw.max_vertices || work>hw.max_pixel_work ||
+            r[0]->width>hw.max_size || r[0]->height>hw.max_size) return -EAGAIN;
         if (q->flags&~s->backend->features) {
             if (c->policy!=R3D_AUTO) return -EOPNOTSUPP;
             software=true;
@@ -379,6 +396,7 @@ int render3d_submit(struct render3d_service *s, uint32_t p, uint32_t id,
             if (e) return e;
         }
     }
+    if (software && work>R3D_PIXEL_BUDGET) return -EAGAIN;
     for (unsigned i=0;i<R3D_REFS;i++) if (r[i]) {
         r[i]->references++;
         r[i]->last_use=s->sequence+1;
@@ -428,8 +446,12 @@ int render3d_step(struct render3d_service *s)
             e=s->backend->enter(s->device);
             if (!e) {
                 e=s->backend->execute(s->device,q,r);
-                if (!e) e=s->backend->idle(s->device);
-                if (e) render3d_device_lost(s);
+                int idle=s->backend->idle(s->device);
+                if (!e) e=idle;
+                /* A bounded CPU transfer can time out after completed engine
+                 * work and successful restoration. Fail that context without
+                 * quarantining an owner that still proves idle. */
+                if (e && (e!=-ETIMEDOUT || idle)) render3d_device_lost(s);
                 s->backend->leave(s->device);
             } else if (e!=-EAGAIN && e!=-EBUSY) render3d_device_lost(s);
         }

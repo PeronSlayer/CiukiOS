@@ -3,7 +3,7 @@
  * contract. Scalar output itself is deterministic. No tolerance for a hole,
  * guard error, wrong occlusion or address. SPDX-License-Identifier: GPL-2.0-only */
 static struct render3d_service reference3d;
-static uint8_t images3d[R3D_MIPS][64*64*4+64*3];
+static uint8_t images3d[R3D_MIPS][256*256*4+256*3];
 static void texture_fixture3d(struct render3d_texture_desc *t,unsigned format,unsigned side,unsigned levels)
 {
     memset(t,0,sizeof(*t)); t->format=format; t->width=t->height=side; t->levels=levels;
@@ -12,7 +12,8 @@ static void texture_fixture3d(struct render3d_texture_desc *t,unsigned format,un
         unsigned pitch=w*bpp+3;
         t->image[level]=(struct render3d_texture_image){images3d[level],pitch*w,pitch};
         for (unsigned y=0;y<w;y++) for (unsigned x=0;x<w;x++) {
-            unsigned a=96+level*12,r=32+x*2+level*8,g=48+y*2+level*8,b=64+level*12;
+            unsigned a=96+level*12,r=32+(side>64 ? x*32/w : x*2)+level*8,
+                g=48+(side>64 ? y*32/w : y*2)+level*8,b=64+level*12;
             uint32_t c=a<<24|r<<16|g<<8|b;
             uint8_t *dst=images3d[level]+y*pitch+x*bpp;
             if (format==R3D_RGBA8888) { dst[0]=r; dst[1]=g; dst[2]=b; dst[3]=a; }
@@ -213,18 +214,20 @@ static void texture_security3d(const struct render3d_host *host)
     struct render3d_fence f;
     CHECK(!render3d_submit(&scratch3d,9,c,&good,sizeof(good),&f)); CHECK(render3d_step(&scratch3d)==1);
     unsigned before=writes3d,mem=memory3d;
-    for (unsigned mutation=0;mutation<17;mutation++) {
+    for (unsigned mutation=0;mutation<19;mutation++) {
         struct render3d_request q=good;
         switch (mutation) {
         case 0: q.state.depth_func=8; break; case 1: q.state.alpha_func=8; break;
         case 2: q.state.alpha_ref=256; break; case 3: q.state.alpha_test=2; break;
-        case 4: q.state.source=4; break; case 5: q.state.destination=4; break;
+        case 4: q.state.source=R3D_SRC_COLOR; break; case 5: q.state.destination=R3D_DST_COLOR; break;
         case 6: q.state.flat=2; break; case 7: q.state.blend=2; break;
         case 8: q.state.sampler[0].combine=4; break; case 9: q.state.sampler[1].filter=5; break;
         case 10: q.state.sampler[0].repeat_u=2; break; case 11: q.state.sampler[1].repeat_v=2; break;
         case 12: q.uv1[0][0]=INT32_MIN; break; case 13: q.vertices[0].u=INT32_MAX; break;
         case 14: q.flags&=~R3D_TEXTURED; break; case 15: q.clear_depth=65536; break;
         case 16: q.texture1=UINT32_MAX; break;
+        case 17: q.state.source=R3D_INV_DST_ALPHA+1; break;
+        case 18: q.state.destination=R3D_INV_DST_ALPHA+1; break;
         }
         CHECK(render3d_submit(&scratch3d,9,c,&q,sizeof(q),&f)==-EINVAL);
         CHECK(writes3d==before && memory3d==mem && !scratch3d.queued);

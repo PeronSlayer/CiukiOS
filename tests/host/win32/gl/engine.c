@@ -301,7 +301,10 @@ static uint64_t now(void) {
   return (uint64_t)t.tv_sec * 1000000000ull + t.tv_nsec;
 }
 int main(int argc, char **argv) {
-  setvbuf(stdout, 0, _IONBF, 0);
+  setvbuf(stdout,0,_IONBF,0); /* Keep evidence even if a sanitizer exit scan fails. */
+  if (argc>1 && !strcmp(argv[1],"--census")) {
+    extern void gl_census_tests(void); gl_census_tests(); test_reset(); return 0;
+  }
   extern void gl_kernel_replay(void);
   if (argc > 1 && !strcmp(argv[1], "--kernel-transport")) { gl_kernel_replay(); test_reset(); return 0; }
   if (argc > 1 && !strcmp(argv[1], "--hardware")) {
@@ -310,7 +313,9 @@ int main(int argc, char **argv) {
   if (argc > 1 && (!strcmp(argv[1], "--hardware-quake3") ||
                    !strcmp(argv[1], "--hardware-quake3-default"))) {
     gl_hardware_enable(); gl_quake3_benchmark(3,!strcmp(argv[1], "--hardware-quake3-default"));
-    gl_hardware_stats(); test_reset(); return 0;
+    gl_hardware_stats();
+    if (!strcmp(argv[1],"--hardware-quake3")) { extern void gl_quake3_savage(void); gl_quake3_savage(); }
+    test_reset(); return 0;
   }
   if (argc > 1 && !strcmp(argv[1], "--amendment2")) {
     gl_amendment2_tests(argc > 2 ? argv[2] : 0);

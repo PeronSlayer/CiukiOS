@@ -48,6 +48,15 @@ static uint32_t texel3d(unsigned stage,unsigned level,int x,int y)
     if (fmt==5) return ((t>>12)*17<<24)|((t>>8&15)*17<<16)|((t>>4&15)*17<<8)|(t&15)*17;
     return t;
 }
+/* Internal widths are intentionally parameters: upstream documents only the
+ * float input format and perspective operation, not these silicon widths. */
+static long double interpolant3d(long double v)
+{
+    if (!v || !sampling3d.interpolant_bits) return v;
+    int exponent;
+    long double a=frexpl(v,&exponent),scale=ldexpl(1,sampling3d.interpolant_bits);
+    return ldexpl(roundl(a*scale)/scale,exponent);
+}
 static long double sample_channel3d(unsigned stage,unsigned level,long double u,long double v,unsigned shift,bool linear)
 {
     uint32_t td=m.reg[0x485a8/4]>>(stage*12);
@@ -55,10 +64,29 @@ static long double sample_channel3d(unsigned stage,unsigned level,long double u,
     if (!w) w=1;
     if (!h) h=1;
     long double x=u*w-(linear ? .5L : 0),y=v*h-(linear ? .5L : 0);
+    x+=sampling3d.bias; y+=sampling3d.bias;
+    unsigned integer_bits=gpu3d.fullsize_qualified && gpu3d.fullsize_testing && probe_address_bits3d ?
+        probe_address_bits3d : sampling3d.address_integer_bits;
+    if (integer_bits) {
+        /* Signed fixed-point address accumulator, before repeat/clamp.
+         * Width is a model/probe parameter, not an S3 specification claim. */
+        long double period=ldexpl(1,integer_bits),half=period/2;
+        x-=floorl((x+half)/period)*period; y-=floorl((y+half)/period)*period;
+    }
+    if (sampling3d.address_bits) {
+        long double scale=ldexpl(1,sampling3d.address_bits);
+        x=floorl(x*scale)/scale; y=floorl(y*scale)/scale;
+    }
     int ix=(int)floorl(x),iy=(int)floorl(y);
     unsigned a=(texel3d(stage,level,ix,iy)>>shift)&255;
     if (!linear) return a;
     long double fx=x-ix,fy=y-iy;
+    unsigned bits=gpu3d.fullsize_qualified && gpu3d.fullsize_testing && probe_filter_bits3d ? probe_filter_bits3d : sampling3d.filter_bits;
+    if (bits) {
+        long double scale=ldexpl(1,bits);
+        fx=(sampling3d.round_weights ? roundl(fx*scale) : floorl(fx*scale))/scale;
+        fy=(sampling3d.round_weights ? roundl(fy*scale) : floorl(fy*scale))/scale;
+    }
     unsigned b=(texel3d(stage,level,ix+1,iy)>>shift)&255;
     unsigned c=(texel3d(stage,level,ix,iy+1)>>shift)&255;
     unsigned d=(texel3d(stage,level,ix+1,iy+1)>>shift)&255;
@@ -70,6 +98,7 @@ static uint32_t sample3d(unsigned stage,long double u,long double v,long double 
     unsigned filter=tc&3,max=tc>>12&15;
     CHECK(filter!=2 && ((tc>>3)&511)==((tc&4) ? 10 : 8)); /* pinned Mesa mip LOD offset */
     long double l=(tc&4) && rho>1 ? log2l(rho) : 0;
+    if (gpu3d.fullsize_qualified && gpu3d.fullsize_testing) l+=probe_lod_bias3d;
     if (l>max) l=max;
     unsigned level=filter==3 ? (unsigned)l : (unsigned)(l+.5L);
     bool linear=filter!=0;
@@ -125,11 +154,12 @@ static uint32_t combine3d(uint32_t diffuse,uint32_t current,uint32_t tex,unsigne
 static uint32_t blend3d(uint32_t src,uint32_t dst,uint32_t local)
 {
     unsigned sf=local>>4&7,df=local&7,alpha=src>>24;
-    unsigned factors[8]={0,255,0,0,alpha,255-alpha,0,0};
-    CHECK((sf==0 || sf==1 || sf==4 || sf==5) && (df==0 || df==1 || df==4 || df==5));
     uint32_t out=0;
     for (unsigned shift=0;shift<32;shift+=8) {
-        unsigned c=(((src>>shift)&255)*factors[sf]+((dst>>shift)&255)*factors[df]+127)/255;
+        unsigned s=src>>shift&255,d=dst>>shift&255;
+        unsigned sources[8]={0,255,d,255-d,alpha,255-alpha,dst>>24,255-(dst>>24)};
+        unsigned destinations[8]={0,255,s,255-s,alpha,255-alpha,dst>>24,255-(dst>>24)};
+        unsigned c=(s*sources[sf]+d*destinations[df]+127)/255;
         out|=(c>255 ? 255 : c)<<shift;
     }
     return out;

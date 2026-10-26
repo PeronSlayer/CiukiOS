@@ -46,12 +46,15 @@ struct gl_share {
   struct gl_list lists[GL_LISTS];
 };
 struct gl_snapshot;
+struct gl_census;
 struct gl_texgen {
   int enabled, mode;
   double object[4], eye[4];
 };
 struct gl_context {
+  struct gl_census *census;
   struct gl_hw_context *hardware;
+  unsigned hardware_failed; /* Permanent for this HGLRC, including resize/rebind. */
   struct gl_snapshot *attributes, *client_attributes;
   unsigned attribute_depth, client_depth;
   HGLRC handle;
@@ -93,6 +96,12 @@ struct gl_context {
   HBITMAP back;
 };
 int gl_target(HDC, unsigned *, unsigned *, unsigned *);
+void gl_census_open(struct gl_context *);
+void gl_census_draw(struct gl_context *, const struct sw_vertex *);
+void gl_census_clear(struct gl_context *, unsigned);
+void gl_census_frame(struct gl_context *);
+void gl_census_other(struct gl_context *);
+void gl_census_close(struct gl_context *);
 void gl_prepare_present(struct gl_context *, HDC);
 int gl_refresh_target(struct gl_context *, HDC);
 void gl_select_buffer(struct gl_context *);

@@ -5618,7 +5618,7 @@ the native render3d contract; unknown state is rejected before submission.
 
 ```c
 #define W32_RENDER3D 514u
-#define CIUKI_R3D_VERSION 1u
+#define CIUKI_R3D_VERSION 2u
 #define CIUKI_R3D_QUERY 1u
 #define CIUKI_R3D_OPEN 2u
 #define CIUKI_R3D_CLOSE 3u
@@ -5635,6 +5635,29 @@ the native render3d contract; unknown state is rejected before submission.
 #define CIUKI_R3D_RGB565 4u
 #define CIUKI_R3D_ARGB4444 8u
 #define CIUKI_R3D_WIRE_LIMIT 6291456u
+```
+
+Per-boot sample-space qualification: shared reciprocal W ratio <=4,
+native UV -16..16, <=256 textures, linear/qualified mip filtering and Q4
+coverage. Sampled-alpha/blend envelopes and adapter-specific recovery/LOD
+bounds are defined in docs/design/savage-fullsize-admission.md.
+
+```c
+#define CIUKI_R3D_PROJECTIVE_BILINEAR 1u
+```
+
+Earlier exact affine subset remains available after precision refusal.
+
+```c
+#define CIUKI_R3D_AFFINE_EXACT 2u
+```
+
+Qualified sample-space policy, not a silicon precision specification.
+
+```c
+#define CIUKI_R3D_SAMPLE_DELTA_Q16 4096u
+#define CIUKI_R3D_FILTER_FRACTION_BITS 8u
+#define CIUKI_R3D_LOD_DELTA_Q8 16u
 #define CIUKI_R3D_TEXTURED 1u
 #define CIUKI_R3D_CLEAR_COLOR 2u
 #define CIUKI_R3D_CLEAR_DEPTH 4u
@@ -5654,6 +5677,19 @@ the native render3d contract; unknown state is rejected before submission.
 #define CIUKI_R3D_ZERO 1u
 #define CIUKI_R3D_SRC_ALPHA 2u
 #define CIUKI_R3D_INV_SRC_ALPHA 3u
+```
+
+Colour selectors are slot-specific: DST_COLOR/INV_DST_COLOR are source
+factors; SRC_COLOR/INV_SRC_COLOR are destination factors. Alpha selectors
+and ONE/ZERO work in either slot. Caps contain the union of selector bits.
+
+```c
+#define CIUKI_R3D_DST_COLOR 4u
+#define CIUKI_R3D_SRC_COLOR 5u
+#define CIUKI_R3D_INV_DST_COLOR 6u
+#define CIUKI_R3D_INV_SRC_COLOR 7u
+#define CIUKI_R3D_DST_ALPHA 8u
+#define CIUKI_R3D_INV_DST_ALPHA 9u
 #define CIUKI_R3D_MODULATE 0u
 #define CIUKI_R3D_REPLACE 1u
 #define CIUKI_R3D_ADD 2u
@@ -5711,9 +5747,9 @@ struct ciuki_r3d_draw {
     uint32_t count;
     uint32_t texture1;
     struct ciuki_r3d_state state;
-    uint32_t flat_color[64];
-    int32_t uv1[192][2];
-    struct ciuki_r3d_vertex vertices[192];
+    uint32_t flat_color[256];
+    int32_t uv1[768][2];
+    struct ciuki_r3d_vertex vertices[768];
 };
 struct ciuki_r3d_caps {
     uint32_t version;
@@ -5734,6 +5770,9 @@ struct ciuki_r3d_caps {
     uint32_t filters;
     uint32_t polygon_offset;
     uint32_t max_pixel_work;
+    uint32_t max_width;
+    uint32_t max_height;
+    uint32_t sampling_features;
 };
 ```
 

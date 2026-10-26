@@ -19,14 +19,17 @@ unsigned gl_kernel_writes(void);
 unsigned gl_kernel_presents(void);
 const uint32_t *gl_kernel_pixels(void);
 extern const struct gl_hw_driver *w32_gdi_render3d_native(unsigned);
+struct gl_context *gl_current(void);
+static unsigned replay_width=64,replay_height=64;
+static unsigned replay_stencil;
 static HDC make_kernel_context(HGLRC *rc) {
   HDC dc=CreateCompatibleDC(0);
-  BITMAPINFO bi={.bmiHeader={.biSize=40,.biWidth=64,.biHeight=-64,.biPlanes=1,.biBitCount=32}};
+  BITMAPINFO bi={.bmiHeader={.biSize=40,.biWidth=replay_width,.biHeight=-(int)replay_height,.biPlanes=1,.biBitCount=32}};
   void *bits=0;
   HBITMAP bitmap=CreateDIBSection(dc,&bi,DIB_RGB_COLORS,&bits,0,0);
   assert(bitmap && SelectObject(dc,bitmap));
   PIXELFORMATDESCRIPTOR f={.nSize=40,.nVersion=1,.dwFlags=PFD_DRAW_TO_BITMAP|PFD_SUPPORT_OPENGL|PFD_DOUBLEBUFFER,
-    .cColorBits=32,.cDepthBits=16};
+    .cColorBits=32,.cDepthBits=16,.cStencilBits=replay_stencil};
   int pf=ChoosePixelFormat(dc,&f); assert(pf && SetPixelFormat(dc,pf,&f));
   *rc=wglCreateContext(dc); assert(*rc && wglMakeCurrent(dc,*rc));
   /* GDI retains the selected bitmap; teardown restores and deletes it. */
@@ -42,7 +45,7 @@ static void triangle_kernel(unsigned color) {
 }
 static void replay(uint32_t *pixels,int hardware) {
   HGLRC rc; HDC dc=make_kernel_context(&rc);
-  glViewport(0,0,64,64); glClearColor(.1f,.2f,.3f,1); glClearDepth(1);
+  glViewport(0,0,replay_width,replay_height); glClearColor(.1f,.2f,.3f,1); glClearDepth(1);
   glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT); glEnable(GL_DEPTH_TEST); glDepthFunc(GL_LEQUAL);
   unsigned char texels[16]={160,200,240,255,240,80,120,255,40,160,80,255,200,120,40,255};
   for (unsigned u=0;u<2;u++) {
@@ -57,26 +60,88 @@ static void replay(uint32_t *pixels,int hardware) {
   }
   glActiveTextureARB(GL_TEXTURE0_ARB);
   unsigned capture=0;
-  for (unsigned i=0;i<12;i++) triangle_kernel(0xff806040u);
-  glReadPixels(0,0,64,64,GL_RGBA,GL_UNSIGNED_BYTE,pixels+4096*capture++);
+  for (unsigned i=0;i<(replay_width==64 ? 12u : 4u);i++) triangle_kernel(0xff806040u);
+  glReadPixels(0,0,replay_width,replay_height,GL_RGBA,GL_UNSIGNED_BYTE,pixels+replay_width*replay_height*capture++);
   glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
   glEnable(GL_ALPHA_TEST); glAlphaFunc(GL_GREATER,.1f); triangle_kernel(0x8080c040u);
-  glReadPixels(0,0,64,64,GL_RGBA,GL_UNSIGNED_BYTE,pixels+4096*capture++);
+  glReadPixels(0,0,replay_width,replay_height,GL_RGBA,GL_UNSIGNED_BYTE,pixels+replay_width*replay_height*capture++);
   /* DST_COLOR and polygon offset deliberately exercise whole-draw fallback. */
   glBlendFunc(GL_DST_COLOR,GL_ZERO); triangle_kernel(0xff80ffffu);
-  glReadPixels(0,0,64,64,GL_RGBA,GL_UNSIGNED_BYTE,pixels+4096*capture++);
+  glReadPixels(0,0,replay_width,replay_height,GL_RGBA,GL_UNSIGNED_BYTE,pixels+replay_width*replay_height*capture++);
   glDisable(GL_BLEND); glEnable(GL_POLYGON_OFFSET_FILL); glPolygonOffset(1,1); triangle_kernel(0xff4080c0u);
-  glReadPixels(0,0,64,64,GL_RGBA,GL_UNSIGNED_BYTE,pixels+4096*capture++);
+  glReadPixels(0,0,replay_width,replay_height,GL_RGBA,GL_UNSIGNED_BYTE,pixels+replay_width*replay_height*capture++);
   glDisable(GL_POLYGON_OFFSET_FILL);
   glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
   triangle_kernel(0xff804020u);
-  glFinish(); glReadPixels(0,0,64,64,GL_RGBA,GL_UNSIGNED_BYTE,pixels+4096*capture++);
+  glFinish(); glReadPixels(0,0,replay_width,replay_height,GL_RGBA,GL_UNSIGNED_BYTE,pixels+replay_width*replay_height*capture++);
   assert(capture==5);
   assert(glGetError()==GL_NO_ERROR);
   if (hardware) assert(gl_kernel_draws()>0);
   HBITMAP bitmap=GetCurrentObject(dc,OBJ_BITMAP);
   assert(wglMakeCurrent(0,0) && wglDeleteContext(rc));
   assert(DeleteDC(dc) && DeleteObject(bitmap));
+}
+static void decoded_texture_replay(const struct gl_hw_driver *d) {
+  struct gl_hw_format f={64,64,16,0,0};
+  unsigned pixels[16],output[4096]; uint16_t depth[4096];
+  for (unsigned i=0;i<16;i++) pixels[i]=0x00ff0000;
+  for (unsigned format=0;format<2;format++) {
+    unsigned id,handle; assert(!d->open(0,&f,&id));
+    struct sw_texture t={.wrap_s=GL_REPEAT,.wrap_t=GL_REPEAT,.min=GL_NEAREST,.mag=GL_NEAREST};
+    t.image[0]=(struct sw_image){.w=4,.h=4,.pixels=pixels,.internal=format ? 0x83f1 : 0x83f0};
+    assert(!d->texture(id,&t,&handle));
+    struct gl_hw_command g={.state={.width=64,.height=64,.color=output,.depth=depth,
+      .color_mask=~0u,.depth_test=1,.depth_write=1,.depth_func=GL_LESS,
+      .alpha_test=1,.alpha_func=GL_GEQUAL,.alpha_ref=128},.count=3,
+      .clear_mask=GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT,.clear_color=0xff0000ff,.clear_depth=65535};
+    g.texture[0]=handle; g.state.unit[0]=(struct sw_unit){.enabled=1,.mode=GL_REPLACE,.texture=&t};
+    for (unsigned i=0;i<3;i++) g.vertices[i]=(struct sw_vertex){.x=i==1 ? 1024 : 0,
+      .y=i==2 ? 1024 : 0,.z=1000,.qw={1048576,1048576},.uv={{32768,32768}},.color={255,255,255,128}};
+    int submitted=d->submit(id,&g),finished=submitted ? 0 : d->finish(id);
+    int read=(submitted || finished) ? 0 : d->read(id,&g.state);
+    if (submitted || finished || read) fprintf(stderr,"decoded texture format=%u submit=%d finish=%d read=%d\n",format,submitted,finished,read);
+    assert(!submitted && !finished && !read);
+    unsigned at=56*64+8;
+    assert(output[at]==(format ? 0xff0000ffu : 0x80ff0000u));
+    assert(depth[at]==(format ? 65535 : 1000));
+    d->free_texture(id,handle); d->close(id);
+  }
+  puts("PASS decoded S3TC RGB/RGBA wire upload: opaque RGB alpha, RGB REPLACE preserves vertex alpha, sampled-alpha rejection and depth");
+}
+static void pixel_work_replay(void) {
+  extern void gl_kernel_work_reset(void),gl_kernel_work_check(unsigned,unsigned);
+  HGLRC rc; HDC dc=make_kernel_context(&rc);
+  glViewport(0,0,replay_width,replay_height);
+  glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT); glFinish();
+  assert(gl_hw_active(gl_current()));
+  gl_kernel_work_reset(); unsigned before=gl_kernel_draws();
+  for (unsigned i=0;i<5;i++) {
+    glBegin(GL_TRIANGLES);
+    glVertex2f(-1,-1); glVertex2f(1,-1); glVertex2f(-1,1);
+    glEnd();
+  }
+  glFinish();
+  gl_kernel_work_check(replay_width,replay_height);
+  assert(gl_kernel_draws()==before+5 && gl_hw_active(gl_current()));
+  /* The same HGLRC must continue submitting after the formerly refused merge. */
+  triangle_kernel(0xffffffffu); glFinish();
+  assert(gl_kernel_draws()==before+6 && gl_hw_active(gl_current()));
+  assert(glGetError()==GL_NO_ERROR);
+  HBITMAP bitmap=GetCurrentObject(dc,OBJ_BITMAP);
+  assert(wglMakeCurrent(0,0) && wglDeleteContext(rc));
+  assert(DeleteDC(dc) && DeleteObject(bitmap));
+  replay_stencil=8; dc=make_kernel_context(&rc);
+  PIXELFORMATDESCRIPTOR format;
+  assert(DescribePixelFormat(dc,GetPixelFormat(dc),sizeof(format),&format));
+  assert(format.cDepthBits==16 && format.cStencilBits==8 && !glIsEnabled(GL_STENCIL_TEST));
+  assert(!gl_hw_active(gl_current()));
+  before=gl_kernel_draws();
+  glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT); triangle_kernel(0xffffffffu); glFinish();
+  assert(gl_kernel_draws()==before && !gl_hw_active(gl_current()));
+  bitmap=GetCurrentObject(dc,OBJ_BITMAP);
+  assert(wglMakeCurrent(0,0) && wglDeleteContext(rc));
+  assert(DeleteDC(dc) && DeleteObject(bitmap)); replay_stencil=0;
+  puts("PASS production D16/S8 with stencil disabled: provider stays closed, clear/draw remain software");
 }
 void gl_kernel_replay(void) {
   uint32_t golden[4096*5],actual[4096*5];
@@ -91,7 +156,7 @@ void gl_kernel_replay(void) {
   printf("PASS real GL/GDI/copied wire/validator/fake Savage replay: %u channel differences <=2; %u GPU triangles\n",different,gl_kernel_draws());
   const struct gl_hw_driver *d=w32_gdi_render3d_native(GL_HW_VERSION);
   struct gl_hw_format f={64,64,16,0,0}; struct gl_hw_caps caps; unsigned id;
-  assert(d->query(0,&f,&caps) && caps.texture_units==2 && caps.max_vertices==3);
+  assert(d->query(0,&f,&caps) && caps.texture_units==2 && caps.max_vertices==3 && caps.max_pixel_work==4096);
   f.depth_bits=24; assert(!d->query(0,&f,&caps)); f.depth_bits=16;
   f.stencil_bits=8; assert(!d->query(0,&f,&caps)); f.stencil_bits=0;
   f.width=65; assert(!d->query(0,&f,&caps)); f.width=64;
@@ -101,8 +166,23 @@ void gl_kernel_replay(void) {
   assert(d->present(id,1234,42,64,64,32,256)==1);
   assert(gl_kernel_copies()==1 && gl_kernel_presents()==1 && gl_kernel_pixels()[0]==0xff123456);
   gl_kernel_revoke(); assert(d->present(id,1234,42,64,64,32,256)<0 && gl_kernel_presents()==1);
+  decoded_texture_replay(d);
   assert(!d->submit(id,&q)); gl_kernel_process_exit();
   assert(d->finish(id)<0); d->close(id); gl_kernel_teardown();
   gl_hardware_native(0);
   puts("PASS format/mode refusal, completed GPU linear copy, revoked lease and process death mid-frame; zero retained allocations");
+  static uint32_t full_golden[640*480*5],full_actual[640*480*5];
+  replay_width=640; replay_height=480; gl_hardware_native(1);
+  gl_kernel_setup(0); replay(full_golden,0); assert(!gl_kernel_writes()); gl_kernel_teardown();
+  gl_kernel_setup(2); unsigned before=gl_kernel_draws(); replay(full_actual,1);
+  assert(gl_kernel_draws()>before);
+  for (unsigned i=0;i<640*480*5;i++) for (unsigned c=0;c<4;c++) {
+    int delta=(int)(full_actual[i]>>(c*8)&255)-(int)(full_golden[i]>>(c*8)&255);
+    assert(delta>=-2 && delta<=2);
+  }
+  struct gl_hw_format full_format={640,480,16,0,0};
+  assert(d->query(0,&full_format,&caps) && caps.max_pixel_work==4*640*480);
+  pixel_work_replay();
+  gl_kernel_teardown(); gl_hardware_native(0); replay_width=replay_height=64;
+  puts("PASS 640x480 real GL/GDI/copied-wire/fake Savage: full-size boot qualification, lightmap/depth/blend/HUD replay equals software golden within two levels; unqualified zero writes");
 }

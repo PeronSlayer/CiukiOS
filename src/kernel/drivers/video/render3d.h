@@ -12,7 +12,7 @@
 #define R3D_RESOURCES 256u
 #define R3D_JOBS 4u
 #define R3D_JOB_BYTES 65536u
-#define R3D_VERTICES 192u
+#define R3D_VERTICES 768u
 #define R3D_RAM_LIMIT (32u * 1024u * 1024u)
 #define R3D_MAX_SIZE 1024u
 #define R3D_PIXEL_BUDGET 65536u
@@ -43,7 +43,13 @@ enum render3d_blend {
     R3D_ONE = CIUKI_R3D_ONE,
     R3D_ZERO = CIUKI_R3D_ZERO,
     R3D_SRC_ALPHA = CIUKI_R3D_SRC_ALPHA,
-    R3D_INV_SRC_ALPHA = CIUKI_R3D_INV_SRC_ALPHA
+    R3D_INV_SRC_ALPHA = CIUKI_R3D_INV_SRC_ALPHA,
+    R3D_DST_COLOR = CIUKI_R3D_DST_COLOR,
+    R3D_SRC_COLOR = CIUKI_R3D_SRC_COLOR,
+    R3D_INV_DST_COLOR = CIUKI_R3D_INV_DST_COLOR,
+    R3D_INV_SRC_COLOR = CIUKI_R3D_INV_SRC_COLOR,
+    R3D_DST_ALPHA = CIUKI_R3D_DST_ALPHA,
+    R3D_INV_DST_ALPHA = CIUKI_R3D_INV_DST_ALPHA
 };
 enum render3d_combine {
     R3D_MODULATE = CIUKI_R3D_MODULATE,
@@ -168,6 +174,8 @@ struct render3d_backend {
     void (*detach)(struct render3d_service *, void *);
     uint32_t (*texture_pool_bytes)(void *);
     const struct ciuki_r3d_caps *capabilities;
+    void (*query_caps)(void *, struct ciuki_r3d_caps *);
+    uint32_t resident_bytes; /* Backend-owned staging charged to the ceiling. */
 };
 struct render3d_host {
     void *ctx;
@@ -198,6 +206,7 @@ void render3d_init(struct render3d_service *, const struct render3d_host *, uint
 /* Pass the descriptor of the already bound display owner; no PCI re-probe. */
 void render3d_init_family(struct render3d_service *, const struct render3d_host *, uint32_t,
                          const struct render3d_family *, void *, struct render3d_extent);
+void render3d_backend_caps(const struct render3d_service *, struct ciuki_r3d_caps *);
 void render3d_query_caps(const struct render3d_service *, struct render3d_caps *);
 int render3d_create_context(struct render3d_service *, uint32_t, enum render3d_policy, uint32_t *);
 int render3d_destroy_context(struct render3d_service *, uint32_t, uint32_t);

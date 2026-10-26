@@ -17,6 +17,33 @@ OUT = ROOT / 'build/host/render3d'
 VIDEO = ROOT / 'src/kernel/drivers/video'
 
 class RenderTests(unittest.TestCase):
+    def test_submission_cost_model(self):
+        # Explicit assumptions, not a host timing extrapolation to silicon.
+        # 1 GHz Pentium III, 120 cycles/UC word, 250/status observation,
+        # 100 MiB/s readback, 256 triangles/batch. The 3000/4600 lists
+        # match the existing single/two-pass Quake-like GL replay workloads.
+        mhz = 1000
+        self.assertEqual(256*28,7168)
+        self.assertLess(28772,65536)
+        for triangles in (1024,3000,4600):
+            batches=(triangles+255)//256
+            # Draw: 17 state + 17 restore + bitmap restore + one draw event.
+            small_words,events=17*2+17*2+5,36
+            # Final color-to-linear copy: 8 words + 18 restore packets/events.
+            present_words=8+17*2+5+19*2
+            words=triangles*28+batches*(small_words+events*2)+present_words
+            observations=(triangles*28+7)//8+batches*events*2+19*2
+            submit_us=(words*120+observations*250)/mhz
+            for w,h in ((640,480),(800,600),(1024,768)):
+                # Every geometry job reads color/D16; present reads both
+                # the color target and its linear copy. No asynchronous DMA.
+                read_bytes=(batches*6+8)*w*h
+                read_ms=read_bytes/(100*1024*1024)*1000
+                print(f'PIII MODEL {w}x{h}: {triangles} triangles/{batches} batches, '
+                      f'{words} UC words/frame, submission={submit_us/1000:.3f} ms, '
+                      f'readback={read_bytes} bytes/{read_ms:.3f} ms at assumed 100 MiB/s; '
+                      'excludes initial uploads/clear, FIFO stalls, scalar fallback, raster latency and scanout')
+
     def build_run(self, name, sources, args=(), flags=()):
         OUT.mkdir(parents=True, exist_ok=True)
         sanitizer = 'address,undefined' if os.environ.get('CIUKI_DISPLAY_ASAN') else 'undefined'
@@ -54,13 +81,13 @@ class RenderTests(unittest.TestCase):
         keys=['sizeof.ciuki_r3d_draw','offsetof.ciuki_r3d_draw.uv1',
               'offsetof.ciuki_r3d_draw.vertices','rows.ciuki_r3d_draw.uv1',
               'components.ciuki_r3d_draw.uv1','strideof.ciuki_r3d_draw.uv1']
-        expected=(7268,356,1892,192,2,8)
+        expected=(28772,1124,7268,768,2,8)
         flags=runpy.run_path(str(ROOT/'scripts/build_kernel.py'))['CFLAGS']
         OUT.mkdir(parents=True,exist_ok=True)
         with tempfile.TemporaryDirectory(dir=OUT) as tmp:
             folder=Path(tmp)
-            for shape in ('[192][2]','[96][4]'):
-                changed=header.replace('uv1[192][2]','uv1'+shape)
+            for shape in ('[768][2]','[384][4]'):
+                changed=header.replace('uv1[768][2]','uv1'+shape)
                 found=expressions(changed)
                 self.assertTrue(set(keys)<=found.keys())
                 (folder/'abi.h').write_text(changed)
@@ -72,11 +99,11 @@ class RenderTests(unittest.TestCase):
                 subprocess.run(['llvm-objcopy','--dump-section',f'.shape={folder}/shape.bin',str(folder/'shape.o')],check=True)
                 actual=struct.unpack('<6I',(folder/'shape.bin').read_bytes())
                 self.assertEqual(actual[:3],expected[:3])
-                if shape=='[192][2]': self.assertEqual(actual,expected)
+                if shape=='[768][2]': self.assertEqual(actual,expected)
                 else:
-                    self.assertEqual(actual[3:],(96,4,16))
+                    self.assertEqual(actual[3:],(384,4,16))
                     self.assertNotEqual(actual[3:],expected[3:])
-        print('PASS i686 UV oracle: 192 rows/2 components/8-byte stride; same-size 96x4 mutation rejected')
+        print('PASS i686 UV oracle: 768 rows/2 components/8-byte stride; same-size 384x4 mutation rejected')
 
     def test_encoder_capabilities(self):
         self.build_run('encoder', ['tests/host/render3d_encoder_test.c'])
@@ -97,6 +124,7 @@ class RenderTests(unittest.TestCase):
         source=(ROOT/'tests/host/savage2d_test.c').read_text()
         (OUT/'savage2d_fixture.inc').write_text(source.replace('\nint main(void)\n','\nint frozen_2d_main(void)\n'))
         self.build_run('backend',['tests/host/savage3d_backend_test.c','src/kernel/lib/fmt.c',
+            'sdk/libgl/software/renderer.c',
             'src/kernel/drivers/video/render3d.c','src/kernel/drivers/video/render3d_scalar.c',
             'src/kernel/drivers/video/render3d_native.c',
             'src/kernel/drivers/video/s3savage/savage3d.c'])
@@ -108,6 +136,32 @@ class RenderTests(unittest.TestCase):
             'src/kernel/drivers/video/s3savage/savage3d_owner.c'], args=['0'])
         for variant in range(1,15):
             subprocess.run([str(OUT/'owner'),str(variant)],check=True)
+
+    def test_fullsize(self):
+        OUT.mkdir(parents=True, exist_ok=True)
+        source=(ROOT/'tests/host/savage2d_test.c').read_text()
+        (OUT/'savage2d_fixture.inc').write_text(source.replace('\nint main(void)\n','\nint frozen_2d_main(void)\n'))
+        self.build_run('fullsize',['tests/host/savage3d_backend_test.c','src/kernel/lib/fmt.c',
+            'sdk/libgl/software/renderer.c',
+            'src/kernel/drivers/video/render3d.c','src/kernel/drivers/video/render3d_scalar.c',
+            'src/kernel/drivers/video/render3d_native.c',
+            'src/kernel/drivers/video/s3savage/savage3d.c'],args=['fullsize'])
+
+    def test_review4(self):
+        self.run_shader_case("review4")
+
+    def test_sampled_shaders(self):
+        self.run_shader_case("shader")
+
+    def run_shader_case(self, case):
+        OUT.mkdir(parents=True, exist_ok=True)
+        source=(ROOT/'tests/host/savage2d_test.c').read_text()
+        (OUT/'savage2d_fixture.inc').write_text(source.replace('\nint main(void)\n','\nint frozen_2d_main(void)\n'))
+        self.build_run('shader',['tests/host/savage3d_backend_test.c','src/kernel/lib/fmt.c',
+            'sdk/libgl/software/renderer.c',
+            'src/kernel/drivers/video/render3d.c','src/kernel/drivers/video/render3d_scalar.c',
+            'src/kernel/drivers/video/render3d_native.c',
+            'src/kernel/drivers/video/s3savage/savage3d.c'],args=[case])
 
     def test_registry(self):
         expected={'tdfx','rage128','radeon2d','mach64','matrox','i740','i810','intel2d',

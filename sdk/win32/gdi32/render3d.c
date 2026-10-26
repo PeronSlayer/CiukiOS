@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "internal.h"
 #include "../opengl32/encode.h"
+#include "../opengl32/admission.h"
 struct provider_context {
   unsigned id, color, depth, linear, width, height;
   struct ciuki_r3d_caps caps;
@@ -27,7 +28,7 @@ static struct provider_context *lookup(unsigned id) {
   return 0;
 }
 static int query_caps(const struct gl_hw_format *f,struct ciuki_r3d_caps *c) {
-  if (f->rgb565 || f->depth_bits!=16 || f->stencil_bits) return 0;
+  if (!gl_hw_format_supported(f)) return 0;
   struct ciuki_w32_render3d_args a={.action=CIUKI_R3D_QUERY,.width=f->width,
     .height=f->height,.kind=CIUKI_R3D_D16,.format=CIUKI_R3D_ARGB8888,.bytes=sizeof(*c)};
   return !exchange(&a,c) && c->version==CIUKI_R3D_VERSION && c->features &&
@@ -37,7 +38,7 @@ static int query(unsigned dc,const struct gl_hw_format *f,struct gl_hw_caps *out
   (void)dc;
   struct ciuki_r3d_caps c={0};
   if (!query_caps(f,&c)) return 0;
-  *out=(struct gl_hw_caps){GL_HW_VERSION,c.generation,c.max_size,c.max_vertices,c.texture_units,c.texture_bytes};
+  *out=(struct gl_hw_caps){GL_HW_VERSION,c.generation,c.max_size,c.max_vertices,c.texture_units,c.texture_bytes,c.max_pixel_work};
   return 1;
 }
 static struct ciuki_w32_render3d_args args(struct provider_context *c,unsigned action) {
@@ -79,7 +80,7 @@ static int accept(unsigned id,const struct sw_state *s,unsigned mask,const struc
   g->state=*s; g->clear_mask=mask; g->count=count; g->clear_depth=65535;
   if (v && count) w32_copy(g->vertices,v,count*sizeof(*v));
   int e=gl_hw_encode(&c->caps,g,c->color,c->depth,0,r);
-  gdi_free(g,sizeof(*g)); gdi_free(r,sizeof(*r)); return !e;
+  gdi_free(g,sizeof(*g)); gdi_free(r,sizeof(*r)); return e ? -1 : 1;
 }
 static int transfer(unsigned id,struct sw_state *s,unsigned action) {
   struct provider_context *c=lookup(id);
@@ -115,7 +116,11 @@ static int texture(unsigned id,const struct sw_texture *s,unsigned *out) {
   unsigned at=0;
   for (unsigned i=0;i<levels;i++) {
     unsigned n=s->image[i].w*s->image[i].h*4;
-    w32_copy((uint8_t *)data+at,s->image[i].pixels,n); at+=n;
+    uint32_t *pixels=(void *)((uint8_t *)data+at);
+    w32_copy(pixels,s->image[i].pixels,n);
+    if (gl_hw_texture_rgb(s->image[i].internal))
+      for (unsigned j=0;j<n/4;j++) pixels[j]|=0xff000000u;
+    at+=n;
   }
   struct ciuki_w32_render3d_args a=args(c,CIUKI_R3D_TEXTURE);
   a.width=s->image[0].w; a.height=s->image[0].h; a.levels=levels;

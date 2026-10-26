@@ -4,8 +4,8 @@
 #ifndef W32_GL_BACKEND_H
 #define W32_GL_BACKEND_H
 #include "../../libgl/software/renderer.h"
-#define GL_HW_VERSION 1u
-#define GL_HW_VERTICES 192u
+#define GL_HW_VERSION 2u
+#define GL_HW_VERTICES 768u
 #define GL_HW_TEXTURES 64u
 #define GL_HW_BATCHES 64u
 struct gl_hw_format {
@@ -13,6 +13,7 @@ struct gl_hw_format {
 };
 struct gl_hw_caps {
   unsigned version, generation, max_size, max_vertices, texture_units, texture_bytes;
+  unsigned max_pixel_work;
 };
 /* GL bottom-left coordinates and the exact sw_vertex fixed-point scales.
  * State contains process-local RAM pointers for checkpoint/replay only.
@@ -32,7 +33,9 @@ struct gl_hw_driver {
   /* close cancels/drains; on unproven idle the kernel quarantines resources. */
   void (*close)(unsigned context);
   /* Check ALL state, sampler, precision, origin and coverage semantics.
-   * A NULL vertex list denotes clear; mask contains GL buffer bits. */
+   * A NULL vertex list denotes clear; mask contains GL buffer bits.
+   * 1=accept, 0=temporary refusal, negative=keep this context in software;
+   * the caller drains/closes and replays its pending journal before fallback. */
   int (*accept)(unsigned context, const struct sw_state *, unsigned mask,
                 const struct sw_vertex *, unsigned count);
   /* Upload/read full canonical top-down color and D16/D24/S8 attachments.

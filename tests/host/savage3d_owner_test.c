@@ -25,7 +25,7 @@ void klog(const char *fmt,...)
 {
     assert(!locked3); logs3++;
     char line[512]; va_list ap; va_start(ap,fmt); vsnprintf(line,sizeof(line),fmt,ap); va_end(ap);
-    assert(strstr(line,"[3d] probe") || strstr(line,"[accel] retry "));
+    assert(strstr(line,"[3d] probe") || strstr(line,"[3d] fullsize") || strstr(line,"[3d] precision") || strstr(line,"[accel] retry "));
 }
 void *kmalloc(size_t bytes)
 {
@@ -47,7 +47,7 @@ int registry_claim(enum res_type type,uint32_t first,uint32_t end,const char *ow
 {
     assert(!locked3 && prepared3 && claimed3<2 && type==RES_MMIO && !share && !strcmp(owner,"savage-3d"));
     if (!claimed3) assert(first==0xe0800000 && end==0xe0fff000);
-    else assert(first==0xf0000000 && end==0xf0080000);
+    else assert(first==0xf0000000 && end==0xf0800000);
     unsigned i=claimed3++;
     claims3[i]=(struct resource){.type=type,.start=first,.end=end,.owner=owner,.generation=7+i,.state=RS_CLAIMED};
     return (int)i;
@@ -107,6 +107,8 @@ static void write_engine3(void *ctx,uint32_t reg,uint32_t value)
 static void drain_engine3(void *ctx) { (void)ctx; }
 static uint64_t clock_engine3(void *ctx) { (void)ctx; return 0; }
 static void fault_engine3(void *ctx) { (void)ctx; engine3.cpu_safe=false; }
+int savage2d_render3d_batch(struct savage2d *s,const uint32_t *words,unsigned n)
+{ (void)s; (void)words; (void)n; assert(0); return -EIO; }
 int savage2d_render3d_packet(struct savage2d *s,const uint32_t *words,unsigned n)
 { assert(s==&engine3 && words && n && locked3 && size_of(THREE_KEY)==14 && !opened && !table_open); packets3++; return -EIO; }
 int main(int argc,char **argv)
