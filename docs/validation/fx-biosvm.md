@@ -51,3 +51,40 @@ The later requests select a different VBE identifier with the desktop's
 Host evidence and outstanding hardware validation are recorded in
 `build/codex/fx-biosvm-report.md` by the implementer. No image or guest execution
 is part of this change's host verification.
+
+## Review round 1: APM soft-off and panel mode ownership
+
+Lead amendment 1 supersedes native-first selection on an unqualified flat
+panel. The private serial and disk records were read in place. Register
+readback alone did not establish a usable panel scanout.
+
+- X.Org [Savage's manual](https://xorg.freedesktop.org/archive/X11R7.5/doc/man/man4/savage.4.html)
+  defaults `UseBIOS` on because mobile LCD timings need firmware knowledge.
+  The upstream [2.3.9 source release](https://www.x.org/releases/individual/driver/xf86-video-savage-2.3.9.tar.bz2),
+  inspected locally, sets that default in `savage_driver.c:1352`, identifies
+  CR6B bit 1 as ActiveLCD at lines 982–988, and implements the BIOS mode
+  transaction in `savage_vbe.c:59–93`. CiukiOS must refuse native panel
+  entry before blanking, VRAM transfer or clock programming, restore the
+  temporary register locks, and release its claims. This clean refusal is
+  not a hardware strike. Only the single CRT head retains native admission;
+  panel, dual-head, TV and unknown routing use firmware or remain windowed
+  on firmware failure. There is no native retry after a panel BIOS failure.
+- The generic display service owns the fallback for both present leases and
+  DOS. [VESA VBE 2.0, sections 4.4–4.7](https://www.phatcode.net/res/221/files/vbe20.pdf)
+  defines 4F01 mode information, 4F02 bit 14 for LFB, 4F03 verification and
+  4F04 state save/restore. The DOS firmware transaction admits only the four
+  existing synthetic DOS VBE modes, validates the actual geometry, pitch,
+  pixel format and physical aperture before borrowing the stopped desktop's
+  framebuffer, and revokes its alias before restoring desktop ownership.
+  The existing guest buffer, banked copy path and direct LFB lease remain
+  the transport. No raw guest INT10 forwarding is added.
+- The local Windows 98 Resource Kit `wrkc30_4.htm`, “Understanding Advanced
+  Power Management”, assigns APM power control to BIOS. Linux's
+  [APM implementation](https://raw.githubusercontent.com/torvalds/linux/master/arch/x86/kernel/apm_32.c)
+  and [APM constants](https://raw.githubusercontent.com/torvalds/linux/master/include/uapi/linux/apm_bios.h)
+  corroborate real-mode connect/version negotiation and all-device Off.
+  Replay the production APM backend through the production BIOS broker and
+  V86 monitor: 5301 at F000:462D writes ED, 530E negotiates 1.2, 5307 uses
+  BX=0001/CX=0003 after shutdown proof. A returning Off call remains an
+  error: host transport success cannot prove that physical power disappeared.
+  ACPI S5 belongs to the separate directive and is unchanged here.

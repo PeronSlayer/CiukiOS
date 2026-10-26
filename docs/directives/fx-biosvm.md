@@ -18,3 +18,13 @@
    - The existing biosvm, display, apm/power and Win32 display suites stay green.
 
 Report to build/codex/fx-biosvm-report.md. Leave changes uncommitted.
+
+## Lead amendment 1 (2026-10-26 16:58): power off, and BIOS VBE first on flat panels
+
+Your work is committed as 50e7de9fa.
+Amendment for fx-biosvm after its first round (owner trial 5bb73dba, shutdown):
+Power off ended with "[power] no qualified soft-off provider=apm; devices stopped, safe to turn off" and the owner saw error 95 (EOPNOTSUPP), then had to switch off by hand. APM was not qualified because the BIOS VM was quarantined by the INT 15h 5301 port 0xED denial. Verify that after the fix APM connect (5301), version (530E) and soft-off (5307 BX=0001 CX=0003) qualify on the ThinkPad path in the host replay (an ACPI S5 fallback is implemented separately in wt/fx-acpioff).
+
+Second item, Warcraft II full screen on the T23 panel (owner photo: the LCD shows washed-out vertical colour bands, the classic look of a flat panel driven with timings it cannot display): BOOT.LOG shows `[dosvm] fullscreen_request mode=257` (101h 640x480x8) through `[display] native_supersavage state ... cr31=09 cr3a=d5 cr58=13 cr66=89 cr67=d0 cr69=00 panel=02 sr12=cb sr13=d6 sr29=06 sr15=00 sr1b=80 sr54=1f sr56=1f sr59=10 sr5b=08`, `phase=enter result=0 stage=native-mode-readback`, then `fullscreen_watchdog reason=first-frame-timeout` and return. The native SuperSavage mode set does not drive the flat panel correctly. X.Org savage (2.3.9) defaults to UseBIOS and sets modes through VBE (SavageSetVESAMode) precisely because panel/FP programming (expansion, centering, IGA routing) is done by the video BIOS. CORRECTION to scope item 4 of this directive: on a flat-panel head the mode change goes through the BIOS VBE call in the (now unquarantined) BIOS VM first, as X.Org does; a native path is used only where it is proven on that head (CRT, or panel registers fully programmed from primary sources with a readback check of the panel state). Apply the same to the Win32 full-screen lease and the DOS full screen. Add a host replay of the logged register state.
+
+Report as 'Review round 1'. Leave changes uncommitted.

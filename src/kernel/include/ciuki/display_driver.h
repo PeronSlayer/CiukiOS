@@ -18,7 +18,10 @@ struct display_lfb {
 /* display.c owns the transaction, without holding the presenter mutex.
  * supported/prepare are software preflight before grants/2D state change.
  * begin/write/end run with the mode lease pinned and the 2D engine stopped;
- * complete follows desktop commit/mediated recovery, before lease release. */
+ * complete follows desktop commit/mediated recovery, before lease release.
+ * begin may return -EOPNOTSUPP for an unqualified head before scanout
+ * mutation. After successful end, the service may select firmware; other
+ * entry failures retain the normal rollback policy. */
 struct display_mode_provider {
     bool (*supported)(const struct fb_device *, uint16_t);
     int (*prepare)(const struct fb_device *, uint16_t);

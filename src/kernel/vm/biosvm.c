@@ -16,6 +16,7 @@
 #include <ciuki/display.h>
 #include <ciuki/init.h>
 #include <ciuki/apm_ports.h>
+#include <ciuki/dos_video_modes.h>
 
 extern void v86_enter(const struct v86_frame *f, uint32_t *continuation);
 extern void v86_leave(uint32_t continuation) __attribute__((noreturn));
@@ -1327,10 +1328,11 @@ static int fullscreen_call(struct biosvm_regs *r, uint32_t *budget, bool vbe, bo
     if (!e && !recovery) e=logged;
     return e;
 }
-int biosvm_video_fullscreen_begin(uint8_t mode)
+int biosvm_video_fullscreen_begin(uint16_t mode, uint8_t info[256])
 {
     bool standard=mode<=3 || mode==0x0D || mode==0x0E || mode==0x10 || mode==0x11 || mode==0x12 || mode==0x13;
-    if (!standard || !g_current || g_current==vm_thread || !(read_eflags()&V86_IF)) return -EINVAL;
+    bool packed=dos_video_mode(mode)!=0;
+    if ((!standard && !packed) || (packed && !info) || !g_current || g_current==vm_thread || !(read_eflags()&V86_IF)) return -EINVAL;
     int e=biosvm_video_prepare();
     if (e) return e;
     kmutex_lock(&request_mutex);
@@ -1350,13 +1352,20 @@ int biosvm_video_fullscreen_begin(uint8_t mode)
     if ((e=fullscreen_call(&r,&budget,true,false))) goto revoke_fs;
     memcpy(fullscreen_saved,P2V(BIOSVM_SCRATCH+0x800),bytes);
     fullscreen_bytes=bytes;
-    /* No VBE/extension mode from a DOS VM is accepted. */
-    r=(struct biosvm_regs){.interrupt=0x10,.eax=mode};
-    e=fullscreen_call(&r,&budget,false,false);
+    /* The fixed synthetic inventory is selected by the display service;
+     * guest registers/firmware pointers are never forwarded. */
+    r=(struct biosvm_regs){.interrupt=0x10,.eax=packed ? 0x4F02 : mode,.ebx=packed ? mode|0x4000 : 0};
+    e=fullscreen_call(&r,&budget,packed,false);
     if (!e) {
-        r=(struct biosvm_regs){.interrupt=0x10,.eax=0x0F00};
-        e=fullscreen_call(&r,&budget,false,false);
-        if (!e && (r.eax&0x7F)!=mode) e=-V86_EIO;
+        r=(struct biosvm_regs){.interrupt=0x10,.eax=packed ? 0x4F03 : 0x0F00};
+        e=fullscreen_call(&r,&budget,packed,false);
+        if (!e && (packed ? (r.ebx&0x7FFF)!=(mode|0x4000) : (r.eax&0x7F)!=mode)) e=-V86_EIO;
+    }
+    if (!e && packed) {
+        memset(P2V(BIOSVM_SCRATCH+0x800),0,256);
+        r=(struct biosvm_regs){.interrupt=0x10,.eax=0x4F01,.ecx=mode,
+            .es=BIOSVM_SCRATCH>>4,.edi=0x800};
+        if (!(e=fullscreen_call(&r,&budget,true,false))) memcpy(info,P2V(BIOSVM_SCRATCH+0x800),256);
     }
     /* Even a failed mode set may have touched hardware: retain the saved
      * state and leases so the caller can execute the rollback transaction. */

@@ -69,7 +69,9 @@ int biosvm_video_switch(uint16_t mode, uint8_t info[256]);
 int biosvm_video_dpms(unsigned state); /* VBE states 0, 1, 4 */
 /* Full-screen transaction, only after LFB revocation. Retains VGA leases;
  * save/restore VBE state mask 000Fh, bounded private scratch, no guest API. */
-int biosvm_video_fullscreen_begin(uint8_t mode);
+/* Standard VGA or one of dos_video_mode's fixed VBE modes. VBE requires
+ * info for validated LFB transport; this remains a kernel-only service. */
+int biosvm_video_fullscreen_begin(uint16_t mode, uint8_t info[256]);
 int biosvm_video_fullscreen_end(uint16_t desktop_mode, uint8_t info[256]);
 enum biosvm_backend biosvm_backend_state(void);
 void biosvm_stats(struct v86_stats *out);

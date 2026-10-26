@@ -402,6 +402,10 @@ Primary-source comparison for this implementation:
   and restores that snapshot; `complete` receives the final commit/recovery
   result. A provider without this hook continues through the mediated firmware
   path. Equal width, height, depth and pitch skip both providers and firmware.
+  A provider may refuse an unqualified head with `-EOPNOTSUPP` from `begin`
+  before scanout mutation. Only after successful `end` and `complete` may the
+  generic service enter firmware. This applies to Win32 and DOS; no family
+  selection or panel-register policy belongs in generic display code.
   See [BIOS isolation and lease validation](../validation/fx-biosvm.md).
 - [X.org EXA](https://raw.githubusercontent.com/XQuartz/xorg-server/master/exa/exa.h)
   permits refusal before drawing, orders overlapping copies by direction, and

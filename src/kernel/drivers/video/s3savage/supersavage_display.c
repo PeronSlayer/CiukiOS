@@ -228,7 +228,9 @@ int supersavage_display_begin(uint16_t mode)
     if (!e) e=supersavage_mode_enter(&saved_mode,&io,mode);
     if (!e && dos_video_mode(mode)) linear_mode=mode;
     outcome("enter",e);
-    if (e) strike(); /* preserve entry diagnostics before restore resets them */
+    /* A head refusal before any scanout mutation is ordinary firmware
+     * selection, not evidence of unsafe native hardware. */
+    if (e && (e!=-EOPNOTSUPP || saved_mode.saved || saved_mode.touched)) strike();
     /* display_fullscreen_end owns rollback, including a partial save. */
     return e;
 failed:

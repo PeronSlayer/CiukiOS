@@ -52,7 +52,18 @@ int main(void)
     g_boot.display.modes[1].pitch=1280;
     acceleration=&test_acceleration;accel_ports_owned=true;
     lease(0x111);
+    fixture(); is_supersavage=native_supported=true; native_begin_error=-EOPNOTSUPP;
+    desktop.state=other.state=PROC_LIVE; other.personality=PROC_WIN32;
+    struct proc_thread thread={.process=&desktop};
+    struct ciuki_w32_display_args a={.action=W32_DISPLAY_GRANT,.pid=other.pid,.mode=0x111,.scale=1,
+        .surface={640,480,2560,640*480*4,CIUKI_PRESENT_XRGB8888}};
+    assert(!w32_display_call(&thread,&a) && !a.error && a.result);
+    assert(switches==1 && native_begins==1 && native_ends==1 && !native_publishes && !present_provider);
+    a.action=W32_DISPLAY_REVOKE;
+    assert(!w32_display_call(&thread,&a) && !a.error && a.result && !display_present_active() && !suspended);
+    assert(switches==2 && called[1]==0x118 && fbdev_get()->mode_id==0x118 && native_begins==1);
     free(aperture);free(window);
+    free(firmware_window);
     puts("PASS fx-biosvm actual Win32 leases: grant/revoke of boot-layout alias makes zero mode sets; native packed lease restores desktop without BIOS");
     return 0;
 }

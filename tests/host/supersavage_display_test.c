@@ -215,7 +215,7 @@ static void refusal_and_recovery(void)
     assert(leases[1].state==RS_ACTIVE);
     runtime_fixture();assert(!supersavage_display_prepare(&desktop,0x13));card.cr[0x6B]=0x82;
     assert(supersavage_display_begin(0x13)==-EOPNOTSUPP && !card.memcycles);
-    assert(!supersavage_display_end() && native_strikes==1);
+    assert(!supersavage_display_end() && !native_strikes);
     supersavage_display_complete(true);
     puts("PASS f3-39 resources: transient claim/map refusal costs no strike, activation quarantine persists until ownership released/replaced; no foreign generation mutated");
     runtime_fixture();card.sr[0x58]=0;
@@ -312,6 +312,16 @@ static void present_handoff(void)
 int main(void)
 {
     present_handoff();ownership();accelerator_quarantine();packed_ownership();refusal_and_recovery();strikes_and_retry();
+    runtime_fixture(); card.cr[0x6B]=2;
+    for (unsigned n=0;n<4;n++) {
+        assert(!supersavage_display_prepare(&desktop,0x101));
+        assert(supersavage_display_begin(0x101)==-EOPNOTSUPP && !card.memcycles && !card.pll_edges);
+        assert(!supersavage_display_end() && !native_strikes);
+        supersavage_display_complete(true);
+        assert(!saved_mode.saved && !register_mapping && !aperture_mapping && !linear_mapping);
+        for (unsigned i=0;i<nleases;i++) assert(leases[i].state==RS_RELEASED);
+    }
+    puts("PASS Review round 1 panel provider: repeated clean refusal releases every mapping/claim, no native strikes or programmed pixels/clocks");
     for (unsigned i=0;i<nwindows;i++) free(windows[i]);
     puts("SuperSavage display provider host tests: PASS");return 0;
 }

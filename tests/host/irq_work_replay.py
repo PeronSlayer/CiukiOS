@@ -128,6 +128,7 @@ def main():
         # f1-121's APM cases time with clock_gettime; the model header is
         # included before v86_test.c's own feature macro.
         replay(folder, 'firmware-input', 'v86_test.c', [('irq_input', 'BIOS-input-capture', 100)], [],
+               ['src/kernel/core/apm.c'],
                flags=['-D_POSIX_C_SOURCE=200809L'])
         source = (HOST / 'i8042_test.c').read_text()
         source = source.replace('!arg && prio == P_DEVICE', '!arg && prio == P_INTERACTIVE')

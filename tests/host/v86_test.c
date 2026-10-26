@@ -11,6 +11,7 @@
 #include <ciuki/registry.h>
 #include <ciuki/biosvm.h>
 #include <ciuki/fwinput.h>
+#include "../../src/kernel/core/apm.h"
 #undef WIFEXITED
 #undef WEXITSTATUS
 #undef WIFSIGNALED
@@ -1557,10 +1558,10 @@ static void test_fullscreen_calls(void)
     video_rom=true; ivt(0x10,0xF000,0x700); ram[0xF0700]=0xCF;
     CHECK(!biosvm_video_prepare()); video_current_mode=0x118;
     video_checkpoint_error=-EIO;
-    CHECK(biosvm_video_fullscreen_begin(0x13)==-EIO && !video_claimed && !video_call_count);
+    CHECK(biosvm_video_fullscreen_begin(0x13,NULL)==-EIO && !video_claimed && !video_call_count);
     video_checkpoint_error=0;
     unsigned checkpoints=video_checkpoints;
-    CHECK(!biosvm_video_fullscreen_begin(0x13));
+    CHECK(!biosvm_video_fullscreen_begin(0x13,NULL));
     CHECK(video_checkpoints>checkpoints);
     CHECK(fullscreen_video && fullscreen_bytes==1024 && video_claimed && video_lease_count==4);
     CHECK(!video_active && !firmware.io && !vm_memory(0,0xA0000,1,false));
@@ -1576,12 +1577,22 @@ static void test_fullscreen_calls(void)
     CHECK(video_current_mode==0x118 && !fullscreen_video && !video_claimed && !video_lease_count);
     CHECK(video_call_count==7 && video_calls[3]==0x0F00 && video_calls[4]==0x4F04 && video_calls[5]==0x4F03 && video_calls[6]==0x4F01);
     video_state_blocks=33; video_call_count=0;
-    CHECK(biosvm_video_fullscreen_begin(3)==-EOPNOTSUPP && !video_claimed && video_call_count==1);
-    CHECK(biosvm_video_fullscreen_begin(0xFF)==-EINVAL);
+    CHECK(biosvm_video_fullscreen_begin(3,NULL)==-EOPNOTSUPP && !video_claimed && video_call_count==1);
+    CHECK(biosvm_video_fullscreen_begin(0xFF,NULL)==-EINVAL);
     video_state_blocks=16; video_call_count=0;
-    CHECK(!biosvm_video_fullscreen_begin(1)); video_fail_ax=0x4F04;
+    CHECK(!biosvm_video_fullscreen_begin(1,NULL)); video_fail_ax=0x4F04;
     CHECK(biosvm_video_fullscreen_end(0x118,info)==-V86_EIO && !video_claimed && !fullscreen_video);
-    puts("PASS biosvm full-screen: bounded 4F04(000F) save/restore, standard VGA-only, persistent leases, serialized VBE refusal, restore errors");
+    boot_fixture(true); video_rom=true; ivt(0x10,0xF000,0x700); ram[0xF0700]=0xCF;
+    video_current_mode=0x118;
+    CHECK(biosvm_video_fullscreen_begin(0x101,NULL)==-EINVAL);
+    CHECK(biosvm_video_fullscreen_begin(0x118,info)==-EINVAL && !video_call_count);
+    CHECK(!biosvm_video_fullscreen_begin(0x101,info) && fullscreen_video && video_current_mode==0x101);
+    CHECK(video_call_count==5 && video_calls[2]==0x4F02 && video_calls[3]==0x4F03 && video_calls[4]==0x4F01);
+    CHECK(!biosvm_video_fullscreen_end(0x118,info) && video_current_mode==0x118 && !video_claimed);
+    video_call_count=0; video_fail_ax=0x4F02;
+    CHECK(biosvm_video_fullscreen_begin(0x101,info)==-V86_EIO && fullscreen_video);
+    CHECK(!biosvm_video_fullscreen_end(0x118,info) && !video_claimed);
+    puts("PASS biosvm full-screen: bounded 4F04(000F) save/restore, standard VGA and fixed VBE LFB set/query/readback, persistent leases, restore after set failure");
 }
 /* fx-18: the T23 APM BIOS installation check as executed in the trial of
  * e831e685 (f000:4ccf: IN AL,DX with DX=1004h), followed by the
@@ -1766,6 +1777,71 @@ static void test_apm_probe(void)
     puts("PASS APM BIOS VM: fixed 5300, native/firmware input, unchanged allowlist, native I/O denial, timeout quarantine");
 }
 /* Replay the failing instruction at the trial's exact firmware address. */
+static unsigned t23_connects,t23_versions,t23_offs,t23_proofs;
+static bool t23_stopped;
+static int t23_power_call(void *ctx,struct biosvm_regs *r,uint32_t ms)
+{
+    (void)ctx;
+    uint16_t fn=(uint16_t)r->eax;
+    uint8_t code[32]; unsigned n=0;
+    if (fn==0x5300) {
+        const uint8_t probe[]={0xB8,0x02,0x01,0xBB,0x4D,0x50,0xB9,0x03,0x00};
+        memcpy(code,probe,sizeof(probe)); n=sizeof(probe);
+    } else if (fn==0x5301) {
+        CHECK(!r->ebx && !r->ecx); t23_connects++;
+        const uint8_t connect[]={0xE6,0xED,0x24,0x7F,0xE6,0x80};
+        memcpy(code,connect,sizeof(connect)); n=sizeof(connect);
+    } else if (fn==0x530E) {
+        CHECK(!r->ebx && r->ecx==0x0102); t23_versions++;
+        const uint8_t version[]={0xB8,0x02,0x01};
+        memcpy(code,version,sizeof(version)); n=sizeof(version);
+    } else if (fn==0x5310) {
+        CHECK(!r->ebx); code[n++]=0xB9; code[n++]=0; code[n++]=0;
+    } else if (fn==0x5307) {
+        CHECK(r->ebx==1 && r->ecx==3 && t23_stopped && t23_proofs); t23_offs++;
+        const uint8_t off[]={0xBA,0x04,0x10,0xB8,0x00,0x3C,0xEF};
+        memcpy(code,off,sizeof(off)); n=sizeof(off);
+    } else CHECK(fn==0x5304); /* returned Off must disconnect and report failure */
+    code[n++]=0xF8; code[n++]=0xCA; code[n++]=2; code[n++]=0; /* CLC; RETF 2 */
+    ivt(0x15,0xF000,0x462D); memcpy(ram+0xF462D,code,n);
+    int e=biosvm_apm_call(r,ms);
+    CHECK(!e && !family_quarantined[BIOS_APM] && !quarantined);
+    return e;
+}
+static bool t23_power_acpi(void *ctx) { (void)ctx; return false; }
+static int t23_power_reserve(void *ctx) { (void)ctx; return 0; }
+static void t23_power_release(void *ctx,bool uncertain) { (void)ctx; CHECK(!uncertain); }
+static uint64_t t23_power_now(void *ctx) { (void)ctx; return g_ticks; }
+static int t23_power_step(void *ctx,enum apm_stage stage,uint64_t deadline)
+{ (void)ctx; (void)stage; CHECK(deadline>g_ticks); return 0; }
+static int t23_power_resume(void *ctx,uint16_t event,uint16_t info)
+{ (void)ctx; (void)event; (void)info; return 0; }
+static void t23_power_publish(void *ctx,const struct apm_status *status)
+{ (void)ctx; CHECK(status!=0); }
+static int t23_power_proof(void *ctx,uint64_t deadline)
+{ (void)ctx; CHECK(deadline>g_ticks); t23_proofs++; return t23_stopped ? 0 : -EAGAIN; }
+static void test_t23_power_sequence(void)
+{
+    boot_fixture(true); g_boot.flags=0;
+    t23_connects=t23_versions=t23_offs=t23_proofs=0; t23_stopped=false;
+    const struct apm_pm_blocks fadt={.pm1a_cnt=0x1004,.pm1_cnt_len=2,.smi_cmd=0xB2};
+    struct apm_port_window w; apm_port_window_build(&w,&fadt,0x1000,128);
+    CHECK(!biosvm_apm_set_window(&w));
+    struct apm_backend backend;
+    const struct apm_ops ops={.real_call=t23_power_call,.acpi_present=t23_power_acpi,
+        .reserve=t23_power_reserve,.release=t23_power_release,.now_ms=t23_power_now,
+        .step=t23_power_step,.resume=t23_power_resume,.publish=t23_power_publish,.orderly_shutdown=t23_power_proof};
+    apm_backend_init(&backend,&ops);
+    CHECK(!apm_backend_probe(&backend) && !apm_backend_connect(&backend));
+    CHECK(backend.state==APM_CONNECTED && t23_connects==1 && t23_versions==1);
+    CHECK(!hw_writes); /* both ED and 80 are absorbed by the production broker */
+    CHECK(apm_backend_off(&backend)==-EAGAIN && !t23_offs);
+    t23_stopped=true;
+    CHECK(apm_backend_off(&backend)==-EIO && t23_offs==1 && hw_writes==1);
+    CHECK(backend.state==APM_FAILED && !backend.transport_error && !family_quarantined[BIOS_APM]);
+    CHECK(physical[0x1004]==0); /* 3C00h, SCI_EN remains clear */
+    puts("PASS Review round 1 APM: production backend + BIOS VM + V86, T23 5301 OUT ED/80, 530E 1.2, shutdown proof then 5307 BX=1 CX=3 and PM1_CNT write; returned Off is EIO, no quarantine");
+}
 static void test_delay_and_family_isolation(void)
 {
     for (unsigned input = 0; input < 2; input++) {
@@ -1846,6 +1922,7 @@ int main(void)
     test_fullscreen_calls();
     test_apm_probe();
     test_delay_and_family_isolation();
+    test_t23_power_sequence();
     test_apm_t23_window();
     test_apm_t23_retf();
     printf("firmware diagnostics: max=%u bytes (strictly below 240)\n", diagnostic_max);
