@@ -19,6 +19,8 @@ int supersavage_display_end(void) { return -EOPNOTSUPP; }
 void supersavage_display_complete(bool ok) { (void)ok; }
 int supersavage_display_lfb(struct display_lfb *out)
 { (void)out; return -EOPNOTSUPP; }
+int supersavage_display_publish(struct fb_device *out)
+{ (void)out; return -EOPNOTSUPP; }
 
 static bool early_bus, wrong_status, corrupt_cob;
 static unsigned early_reads, later_reads, cob_programs;

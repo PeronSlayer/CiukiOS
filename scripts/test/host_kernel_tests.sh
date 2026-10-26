@@ -396,7 +396,8 @@ bash "$root/tests/host/joystick/run.sh"
 
 # F1 V86 decoder, device models, worker aborts and firmware event adapter.
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
-    -I "$root/src/kernel/include" "$root/tests/host/v86_test.c" -o "$out/v86_test"
+    -I "$root/src/kernel/include" "$root/tests/host/v86_test.c" \
+    "$root/src/kernel/core/apm.c" -o "$out/v86_test"
 "$out/v86_test"
 
 # F3 lifecycle, BIOS/disk preflight and record channel. Keep paging production

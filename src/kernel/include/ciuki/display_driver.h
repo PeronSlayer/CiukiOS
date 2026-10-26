@@ -18,7 +18,10 @@ struct display_lfb {
 /* display.c owns the transaction, without holding the presenter mutex.
  * supported/prepare are software preflight before grants/2D state change.
  * begin/write/end run with the mode lease pinned and the 2D engine stopped;
- * complete follows desktop commit/mediated recovery, before lease release. */
+ * complete follows desktop commit/mediated recovery, before lease release.
+ * begin may return -EOPNOTSUPP for an unqualified head before scanout
+ * mutation. After successful end, the service may select firmware; other
+ * entry failures retain the normal rollback policy. */
 struct display_mode_provider {
     bool (*supported)(const struct fb_device *, uint16_t);
     int (*prepare)(const struct fb_device *, uint16_t);
@@ -27,6 +30,15 @@ struct display_mode_provider {
     int (*end)(void);
     void (*complete)(bool);
     int (*lfb)(struct display_lfb *);
+    /* Optional Win32 present handoff, after begin: export verified packed
+     * scanout, revoke temporary aliases and release all mode claims before
+     * fbdev claims the layout. Retain the original desktop snapshot; end
+     * reacquires mode resources to restore it, complete confirms recovery.
+     * No callback may keep a framebuffer alias across this handoff. */
+    int (*publish)(struct fb_device *);
+    /* Actual component precision programmed and checked by begin for
+     * indexed packed modes (6 or 8); unrelated to framebuffer bpp. */
+    uint8_t indexed_dac_bits;
 };
 struct display_selftest_result {
     unsigned tried, passed, skipped, timeouts, completed;

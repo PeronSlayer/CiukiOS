@@ -31,8 +31,9 @@ int biosvm_input_fallback(void);
 int biosvm_call(struct biosvm_regs *regs, uint32_t deadline_ms);
 /* Kernel-only real-mode APM broker. INT15/5300..530F and 5380/BH=7F query;
  * 5302/5303 PM connections are refused. Serialized V86, 1..2000 ms budget
- * including mutex/queue admission. Faults/timeouts quarantine the VM; no
- * bypass for disconnect. Native-owned ports remain denied. No DOS entry. */
+ * including mutex/queue admission. Faults/timeouts quarantine APM for this
+ * boot, including disconnect; input and video keep separate fault latches.
+ * Native-owned ports remain denied. No DOS entry. */
 int biosvm_apm_call(struct biosvm_regs *regs, uint32_t deadline_ms);
 /* Kernel-only, fixed INT15/5300 installation check, 100 ms. Does not
  * connect, accept caller registers, or widen input/DOS firmware access. */
@@ -68,7 +69,9 @@ int biosvm_video_switch(uint16_t mode, uint8_t info[256]);
 int biosvm_video_dpms(unsigned state); /* VBE states 0, 1, 4 */
 /* Full-screen transaction, only after LFB revocation. Retains VGA leases;
  * save/restore VBE state mask 000Fh, bounded private scratch, no guest API. */
-int biosvm_video_fullscreen_begin(uint8_t mode);
+/* Standard VGA or one of dos_video_mode's fixed VBE modes. VBE requires
+ * info for validated LFB transport; this remains a kernel-only service. */
+int biosvm_video_fullscreen_begin(uint16_t mode, uint8_t info[256]);
 int biosvm_video_fullscreen_end(uint16_t desktop_mode, uint8_t info[256]);
 enum biosvm_backend biosvm_backend_state(void);
 void biosvm_stats(struct v86_stats *out);
