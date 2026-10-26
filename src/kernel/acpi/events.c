@@ -136,6 +136,29 @@ int acpi_pm_blocks(struct apm_pm_blocks *out)
     if (!out || !pm_blocks_valid) return -2; /* ENOENT */
     *out = pm_blocks; return 0;
 }
+/* fx-acpioff: \_S5 as the loaded tables evaluate it (AcpiGetSleepTypeData:
+ * one encoded integer or two or more integer elements), captured right
+ * after the load in any inventory mode and before ownership is decided, so
+ * the S5 register fallback (core/power_acpi_s5.c) can use it when its own
+ * walker finds no Name(\_S5, Package) in the DSDT or an SSDT. Budgeted
+ * like every other inventory stage; a failure leaves no hint. */
+static uint8_t s5_hint_a, s5_hint_b;
+static bool s5_hint_valid;
+void fw_s5_hint_capture(void)
+{
+    UINT8 a = 0xff, b = 0xff;
+    fw_budget_begin(100000, 250);
+    ACPI_STATUS s = AcpiGetSleepTypeData(ACPI_STATE_S5, &a, &b);
+    if (fw_error()) s = fw_error();
+    fw_budget_end();
+    s5_hint_valid = !s && a <= 7 && b <= 7;
+    if (s5_hint_valid) { s5_hint_a = a; s5_hint_b = b; }
+}
+int acpi_s5_hint(uint8_t *typa, uint8_t *typb)
+{
+    if (!typa || !typb || !s5_hint_valid) return -2; /* ENOENT */
+    *typa = s5_hint_a; *typb = s5_hint_b; return 0;
+}
 ACPI_STATUS fw_power_collect(ACPI_HANDLE h, uint32_t caps, uint32_t id, bool power_button, bool sleep_button)
 {
     ACPI_STATUS s = AE_OK;

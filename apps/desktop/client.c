@@ -2404,11 +2404,21 @@ void desk_power_tick(struct desktop *d)
     int progress=d->power_state ? d->power_state() : 0;
     if (progress>=0 && (progress&(CIUKI_POWER_STOPPED|CIUKI_POWER_UNCERTAIN))) {
         p->state=DESK_POWER_DONE;
+        /* fx-acpioff: ENOTSUP is the kernel's "no soft-off method on this
+         * computer" (T23 image 5bb73dba showed "error 95"): a normal ending,
+         * the Windows 98 "It is now safe to turn off your computer" screen
+         * without an error code. Any other error means a method existed
+         * and the machine stayed on: it is shown. */
+        char error_text[48];
+        if (error==ENOTSUP) snprintf(error_text,sizeof(error_text),"no power-off method");
+        else snprintf(error_text,sizeof(error_text),"error %d",error);
         if (p->force_power)
-            snprintf(p->text,sizeof(p->text),"The computer could not be %s automatically (error %d).\nInformation not yet written to disk may be lost.\nTurn the computer off with its power button;\nScanDisk will check the disk at the next start.",
-                     p->action==1 ? "restarted" : "turned off",error);
+            snprintf(p->text,sizeof(p->text),"The computer could not be %s automatically (%s).\nInformation not yet written to disk may be lost.\nTurn the computer off with its power button;\nScanDisk will check the disk at the next start.",
+                     p->action==1 ? "restarted" : "turned off",error_text);
         else if (progress&CIUKI_POWER_UNCERTAIN)
             snprintf(p->text,sizeof(p->text),"Shutdown could not complete (error %d).\nA device or disk could not be stopped safely.\nIts resources remain reserved.\nUse the computer's reset button to restart CiukiOS.",error);
+        else if (error==ENOTSUP)
+            snprintf(p->text,sizeof(p->text),"Programs are closed and devices have stopped.\nIt is now safe to turn off your computer.");
         else
             snprintf(p->text,sizeof(p->text),"Programs are closed and devices have stopped.\nIt is now safe to turn off your computer.\nPower-off returned error %d.",error);
         desk_theme_changed(d); return;

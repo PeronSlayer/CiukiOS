@@ -76,6 +76,18 @@ int storage_sync_bounded(uint64_t end)
     if (!force_flushes++) stage('F');
     (void)end; return force_flush_result;
 }
+/* fx-acpioff: the ACPI S5 register fallback as power.c sees it (weak in
+ * power.c; strong here). It must only ever run after a latch. */
+static bool s5_qualified;
+static int s5_result=-EIO;
+static unsigned s5_offs, s5_forced_offs;
+bool power_s5_fallback_qualified(void) { return s5_qualified; }
+const char *power_s5_fallback_state(void) { return s5_qualified ? "available" : "s5"; }
+int power_s5_fallback_off(bool forced)
+{
+    assert(!power_source_orderly_shutdown(0) || power_source_emergency_stopped());
+    stage('X'); s5_offs++; if (forced) s5_forced_offs++; return s5_result;
+}
 #include "../../src/kernel/core/power_source.c"
 #include "../../src/kernel/core/power.c"
 static void provide(enum power_source_kind kind)
@@ -91,6 +103,7 @@ static void reset(void)
     power_progress=0; stopped=false; power_running=storage_flushed=false; power_requests=0;
     during_sync=0; nested_result=0;
     order[0]=durable[0]=last[0]=0; sync_error=quiesce_error=0; off_error=-EIO; qualified=true;
+    s5_qualified=false; s5_result=-EIO; s5_offs=s5_forced_offs=0;
     provide(POWER_SOURCE_ACPI);
 }
 /* f9 Setup authority: only Setup's capability holder in Setup mode, and it
@@ -385,6 +398,68 @@ static void test_forced(void)
     emergency_stopped=false;
     puts("PASS power runtime T23 forced: runs beside a blocked REBOOT/OFF, flush bounded to 3 s, device fence bounded to 2 s, reset regardless, soft-off only on a proved fence through the provider's forced entry (the orderly proof stays strict), desktop only");
 }
+/* fx-acpioff: provider order. The active provider (ACPI owned by the OS,
+ * else APM) goes first; the ACPI S5 register fallback runs only when no
+ * provider is qualified or after the provider's Off returned, always after
+ * the orderly latch (or the emergency one on the forced path), never on a
+ * reboot. Without the fallback the two-provider behaviour is unchanged. */
+static void test_s5_fallback(void)
+{
+    /* No qualified provider: QUERY reports CAN_OFF; OFF runs the fallback after S, N, Q and the latch. */
+    reset(); qualified=false; s5_qualified=true;
+    assert(power_syscall(CIUKI_POWER_QUERY)==3 && !stages);
+    assert(power_syscall(CIUKI_POWER_OFF)==-EIO && !strcmp(order,"SNQX") && s5_offs==1 && !s5_forced_offs);
+    assert(strstr(durable,"acpi s5 fallback returned error=-5") && (power_syscall(CIUKI_POWER_QUERY)&CIUKI_POWER_STOPPED));
+    assert(power_syscall(CIUKI_POWER_OFF)==-EIO && !strcmp(order,"SNQXX")); /* stopped: straight to the fallback */
+    reset(); power_source_release(POWER_SOURCE_ACPI,false,0); s5_qualified=true;
+    assert(power_syscall(CIUKI_POWER_QUERY)==3);
+    assert(power_syscall(CIUKI_POWER_OFF)==-EIO && !strcmp(order,"SNQX") && strstr(durable,"acpi s5 fallback returned"));
+    /* The provider first; the fallback only after its Off returned (ACPI and APM alike). */
+    reset(); s5_qualified=true;
+    assert(power_syscall(CIUKI_POWER_OFF)==-EIO && !strcmp(order,"SNQPX") && strstr(durable,"fallback returned"));
+    reset(); provide(POWER_SOURCE_APM); s5_qualified=true;
+    assert(power_syscall(CIUKI_POWER_OFF)==-EIO && !strcmp(order,"SNQPX"));
+    reset(); provide(POWER_SOURCE_APM); s5_qualified=false;
+    assert(power_syscall(CIUKI_POWER_OFF)==-EIO && !strcmp(order,"SNQP") && !s5_offs); /* APM Off works today: unchanged */
+    /* No fallback: the safe-to-turn-off ending names the fallback's state. */
+    reset(); qualified=false;
+    assert(power_syscall(CIUKI_POWER_QUERY)==1 && power_syscall(CIUKI_POWER_OFF)==-ENOTSUP && !strcmp(order,"SNQ"));
+    assert(strstr(durable,"provider=acpi acpi_s5=s5") && strstr(durable,"safe to turn off"));
+    /* Never before the latch: a refused flush or device stop keeps it out; a reboot never uses it. */
+    reset(); qualified=false; s5_qualified=true; sync_error=-EBUSY;
+    assert(power_syscall(CIUKI_POWER_OFF)==-EBUSY && !strcmp(order,"S") && !s5_offs);
+    reset(); qualified=false; s5_qualified=true; quiesce_error=-EBUSY;
+    assert(power_syscall(CIUKI_POWER_OFF)==-EBUSY && !strcmp(order,"SNQ") && !s5_offs);
+    reset(); s5_qualified=true; if (!setjmp(reboot_return)) { (void)power_syscall(CIUKI_POWER_REBOOT); assert(0); }
+    assert(!strcmp(order,"SNQR") && !s5_offs);
+    /* Forced: after the proved fence and the emergency latch, the provider's
+     * forced entry first, then the fallback (forced=1) when the provider has
+     * none or its Off returned; a failed fence refuses everything. */
+    platform_ready=true; fence_result=0; force_flush_result=0; ata_fence_result=0;
+    reset(); force_flushes=0; fence_steps=0; power_running=true; s5_qualified=true; power_source_release(source.provider,false,0);
+    assert(power_syscall(CIUKI_POWER_FORCE_OFF)==-EIO && !strcmp(order,"FDAX") && s5_forced_offs==1 && power_source_emergency_stopped());
+    assert(strstr(last,"forced acpi s5 fallback returned error=-5"));
+    emergency_stopped=false;
+    reset(); force_flushes=0; fence_steps=0; power_running=true; s5_qualified=true; ordinary_offs=0;
+    power_source_release(source.provider,false,0);
+    { const struct power_source_ops ops={.soft_off=ordinary_off};
+      assert(!power_source_reserve(POWER_SOURCE_ACPI,&ops) && !power_source_activate(POWER_SOURCE_ACPI)); }
+    assert(power_syscall(CIUKI_POWER_FORCE_OFF)==-EIO && !strcmp(order,"FDAX") && !ordinary_offs && s5_forced_offs==1);
+    emergency_stopped=false;
+    reset(); force_flushes=0; fence_steps=0; power_running=true; s5_qualified=true; forced_offs=0; ordinary_offs=0;
+    power_source_release(source.provider,false,0);
+    { const struct power_source_ops ops={.soft_off=ordinary_off,.soft_off_forced=forced_off};
+      assert(!power_source_reserve(POWER_SOURCE_ACPI,&ops) && !power_source_activate(POWER_SOURCE_ACPI)); }
+    assert(power_syscall(CIUKI_POWER_FORCE_OFF)==-EIO && !strcmp(order,"FDAPX") && forced_offs==1 && !ordinary_offs && s5_forced_offs==1);
+    emergency_stopped=false;
+    reset(); force_flushes=0; fence_steps=0; fence_result=-EAGAIN; power_running=true; s5_qualified=true;
+    power_source_release(source.provider,false,0);
+    assert(power_syscall(CIUKI_POWER_FORCE_OFF)==-EBUSY && !strcmp(order,"FDA") && !s5_forced_offs && !power_source_emergency_stopped());
+    fence_result=0;
+    reset(); force_flushes=0; fence_steps=0; power_running=true; power_source_release(source.provider,false,0);
+    assert(power_syscall(CIUKI_POWER_FORCE_OFF)==-ENOTSUP && strstr(last,"no soft-off provider acpi_s5=s5"));
+    puts("PASS power runtime fx-acpioff: provider order (ACPI/APM first, S5 register fallback after a returned Off or without a provider), CAN_OFF, latch-only, no reboot use, forced path order and fence refusal");
+}
 int main(void)
 {
     test_forced();
@@ -421,5 +496,6 @@ int main(void)
     test_setup_authority();
     test_repeated_requests();
     test_g11();
+    test_s5_fallback();
     return 0;
 }

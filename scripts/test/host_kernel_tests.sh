@@ -274,6 +274,11 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/power_runtime_test.c" -o "$out/power_runtime_test"
 "$out/power_runtime_test"
+# fx-acpioff: the ACPI S5 register fallback (SCI_EN handshake, status/GPE
+# clearing, PM1a/PM1b writes, bounds, registry owner refusal, hint states).
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/power_s5_test.c" -o "$out/power_s5_test"
+"$out/power_s5_test"
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/sdk/sysroot-overlay/include" -I "$root/src/kernel/include" \
     "$root/tests/host/power_sdk_test.c" -o "$out/power_sdk_test"
