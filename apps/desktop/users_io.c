@@ -112,7 +112,7 @@ static int recover_lock(const char *lock,const char *boot)
     if (entry[0] && rmdir(lock)) return errno==ENOENT || errno==ENOTEMPTY ? -EBUSY : -errno;
     return 0;
 }
-static int lock_users(const char *root,const char *lock,int *guard,char owner[640])
+static __attribute__((noinline)) int lock_users(const char *root,const char *lock,int *guard,char owner[640])
 {
     char boot[64];
     int e=users_boot_identity(boot); if (e) return e;
