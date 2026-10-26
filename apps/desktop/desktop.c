@@ -273,7 +273,8 @@ static int scenario_hold(const struct desktop *d, uint64_t now)
 {
     for (int i=0; i<DESK_CLIENTS; i++) {
         const struct desk_client *c=&d->clients[i];
-        if (c->channel>=0 && c->awaiting_frame && now-c->launched_ns<GATE_HOLD_MAX_NS) return 1;
+        /* Remote startup feedback is visual only; it never gates input. */
+        if (c->channel>=0 && c->awaiting_frame && !c->launch_feedback_remote && now-c->launched_ns<GATE_HOLD_MAX_NS) return 1;
     }
     return 0;
 }

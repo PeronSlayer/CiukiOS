@@ -224,9 +224,9 @@ void desk_cursor_update(struct desktop *d)
             d->v3_cursor_hidden=vc->v3_visibility<0 || (vc->v3_pointer&DESK_V3_HIDDEN);
         }
     }
-    /* Launch feedback is desktop-wide, including custom/hidden client cursors.
-     * A busy application, an interactive drag or a blocking system dialog
-     * retains its own feedback. Requests time out even during a slow spawn. */
+    /* Startup feedback decorates only the system's default arrow. Client
+     * shapes and visibility, interactive operations and full-screen ownership
+     * retain precedence. Requests time out even during a slow spawn. */
     int starting=(d->launch_link_until>d->now_ns || d->launch_run_until>d->now_ns ||
         (d->launch_remote_count && d->launch_remote_until>d->now_ns));
     for (int k=0;!starting && k<DESK_CLIENTS;k++) {
@@ -235,10 +235,9 @@ void desk_cursor_update(struct desktop *d)
             (c->spawn_pending || c->awaiting_frame || c->launch_frame_pending) &&
             d->now_ns>=c->launched_ns && d->now_ns-c->launched_ns<5000000000ull) starting=1;
     }
-    if (starting && shape!=DESK_CURSOR_BUSY && !d->power.state && !d->sh.user_gate &&
-        d->drag<0 && !d->sh.dnd.active) {
+    if (starting && shape==DESK_CURSOR_ARROW && !d->v3_cursor_id && !d->v3_cursor_hidden &&
+        !d->v3_lease_state && !d->power.state && !d->sh.user_gate && d->drag<0 && !d->sh.dnd.active) {
         shape=DESK_CURSOR_ARROW_BUSY;
-        d->v3_cursor_id=0; d->v3_cursor_hidden=0;
     }
     if (old_custom!=d->v3_cursor_id || old_slot!=d->v3_cursor_slot || old_hidden!=d->v3_cursor_hidden) {
         trail_damage(d);d->pointer_trail_count=0;d->cursor_dirty=1;

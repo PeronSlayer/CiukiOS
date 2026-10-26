@@ -10,3 +10,11 @@
 4. **Tests.** Window-model rows for each case: native, Win32, DOS, failure, timeout, overlapping launches, application cursor precedence. Existing desktop suites stay green and the goldens are updated only for the intended change.
 
 Report to build/codex/fx-launchfb-report.md. Leave changes uncommitted.
+
+## Lead amendment 1 (2026-10-26 17:49): review fixes
+
+Your work is committed (4b113cbcd). The review found no blocker; full text in /home/peronslayer/Desktop/CiukiOS/build/lead-scratch/launchfb-duke3d-review.md. Fix these two P2s:
+1. **Waiting for the first frame must cost nothing.** Marking each new Win32 client "awaiting first frame" switches the desktop to a 1 ms poll and holds gated input for up to 5 s. Input must never wait for launch feedback, and the wait must not busy-poll: use the existing event or wakeup paths.
+2. **The launch cursor must not cover an application's own cursor.** It overrides hidden and custom client cursors and can flash over a full-screen game. Show it only where the system cursor would be shown: over desktop-owned surfaces and windows that use the default arrow. Never show it over a client that set its own or a hidden cursor, and never in full screen.
+
+Also look at P3 "a completing Link launch can clear an overlapping one" and fix it if it is cheap. Add regressions. Report as "Review round 1". Leave changes uncommitted.

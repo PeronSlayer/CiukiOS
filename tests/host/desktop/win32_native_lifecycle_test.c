@@ -22,7 +22,7 @@ int ciuki_proc_list(void *p,uint32_t n)
     struct ciuki_proc_record *r=(void *)(s+1);r->pid=700;r->state=directory_state;return 1;
 }
 extern int desk_restart_process_alive(uint32_t);
-static unsigned starts,signals,feedback_pending;
+static unsigned starts,signals,feedback_pending,accept_pending;
 static int authorized=1;
 static pthread_t desktop_thread;
 static unsigned native_launches,dos_launches;
@@ -76,7 +76,10 @@ uint32_t desk_w32_record(void *record,uint32_t bytes)
         return 0;
     }assert(a->service==1);
     if(a->action==1){if(authorized)a->result=1;else a->error=5;}
-    else assert(a->action==3);
+    else {
+        assert(a->action==3);
+        if(accept_pending){a->result=1;a->endpoint=61;a->pid=701;accept_pending=0;}
+    }
     return 0;
 }
 static int spawn_after_registration;   /* after a registry exchange succeeded the respawn carries no --fresh-clients */
@@ -93,7 +96,7 @@ ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],co
 }
 static unsigned kills;   /* review P2-7: the bounded shutdown's SIGKILL */
 int __wrap_kill(pid_t pid,int signo){assert(pid==(int)(100+starts) && (signo==SIGTERM || signo==SIGKILL));if(signo==SIGKILL)kills++;else signals++;return 0;}
-int desk_add_client(struct desktop *d,int fd){(void)d;(void)fd;assert(0);return -1;}
+int desk_add_client(struct desktop *d,int fd){assert(fd==61);d->clients[1].channel=fd;return 1;}
 int ciuki_channel_pair(int *fds){(void)fds;assert(0);return -1;}
 int ciuki_channel_send(int fd,const struct ciuki_message *m,uint32_t flags)
 {
@@ -162,7 +165,8 @@ int main(void)
     static struct desktop d;
     authorized=0;desk_w32_start(&d);desk_w32_poll(&d);assert(!starts);
     authorized=1;desk_w32_start(&d);assert(starts==1);
-    feedback_pending=2;desk_w32_poll(&d);
+    feedback_pending=2;accept_pending=1;desk_w32_poll(&d);
+    assert(d.clients[1].pid==701 && d.clients[1].awaiting_frame && d.clients[1].launch_feedback_remote);
     assert(d.launch_remote_count==2 && d.launch_remote_until==5000000000ull && d.launch_presented);
     d.launch_presented(&d,701);assert(d.launch_remote_count==1);
     feedback_pending=0;desk_w32_poll(&d);assert(!d.launch_remote_count && !d.launch_remote_until);

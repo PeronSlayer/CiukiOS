@@ -1491,10 +1491,51 @@ static void test_g26c_path_queue(void)
     struct desk_launch_record record={.label="Browser",.target="/Programs/netsurf",.arguments="\"https://ciuki.example/\"",.show=1};
     assert(link_launch_async(d,&record)==-EBUSY);w->launch_requested=0;
     assert(!link_launch_async(d,&record) && w->launch_requested==3 && !memcmp(&w->requested_record,&record,sizeof(record)));
+    uint64_t first_until=d->launch_link_until;
+    d->now_ns+=1000000000ull;
+    assert(link_launch_async(d,&record)==-EBUSY && d->launch_link_until==first_until);
+    w->launch_requested=0; w->launch_busy=1;
+    assert(link_launch_async(d,&record)==-EBUSY && d->launch_link_until==first_until);
+    w->launch_busy=0; w->completed=1; w->result=123;
+    assert(link_launch_async(d,&record)==-EBUSY && d->launch_link_until==first_until);
+    assert(!run_submit(d,"other.exe"));
+    uint64_t run_until=d->launch_run_until;
+    links_service(d);
+    assert(!d->launch_link_until && d->launch_run_until==run_until && w->run_requested);
+    assert(!link_launch_async(d,&record) && d->launch_link_until==d->now_ns+5000000000ull);
+    w->run_requested=0;
+    puts("PASS fx-launchfb review 1: queued/busy/unconsumed Link completion rejects overlap; completing Link preserves Run and a later Link re-arms feedback");
     w->launch_requested=0;strcpy(record.target,"https://ciuki.example/");record.arguments[0]=0;
     assert(!desk_shell_open_record(d,&record,0) && w->launch_requested==4 && !strcmp(w->source,record.target));
     links_worker=previous;pthread_cond_destroy(&w->changed);pthread_mutex_destroy(&w->mutex);free(w);free(d);
     puts("PASS G26C shared path queue: saved document and URL use resolver mode 4; explicit records mode 3; busy refusal preserves record");
+}
+static void test_feedback_wait(void)
+{
+    static struct desktop d;
+    fake_reset(); desk_init(&d,&fake_ops,640,480);
+    fake_channel(60); int i=desk_add_client(&d,60); assert(i>=0);
+    struct desk_client *c=&d.clients[i];
+    c->awaiting_frame=1; c->launch_feedback_remote=1; c->launched_ns=1000000000ull;
+    d.damage.count=0;
+    /* No window or first frame ever arrives: input stays eligible and the
+     * event loop can sleep until channel input or an existing completion. */
+    for (unsigned ms=0;ms<=6000;ms+=250) {
+        uint64_t now=c->launched_ns+(uint64_t)ms*1000000;
+        assert(!scenario_hold(&d,now));
+        assert(desk_launch_wait(&d,now)==10000000ull);
+        assert(desktop_pause_ns(&d,now,0,UINT64_MAX)==UINT64_MAX);
+        assert(!desktop_pause_ns(&d,now,1,UINT64_MAX));
+    }
+    desk_damage_add(&d.damage,(struct desk_box){40,60,8,8},d.width,d.height);
+    assert(desk_small_damage(&d,c->launched_ns)); /* unrelated small updates retain their normal cadence */
+    /* The pre-existing native test-script readiness hold remains distinct. */
+    c->launch_feedback_remote=0;
+    assert(!desk_small_damage(&d,c->launched_ns));
+    assert(scenario_hold(&d,c->launched_ns));
+    assert(desk_launch_wait(&d,c->launched_ns)==1000000ull);
+    drop_all(&d); fake_reset();
+    puts("PASS fx-launchfb review 1: remote first-frame wait never gates input or shortens event/legacy waits");
 }
 int main(int argc,char **argv)
 {
@@ -1522,6 +1563,7 @@ int main(int argc,char **argv)
     test_clock_double_click();
     test_media_removal_service();
     test_music_mixer();
+    test_feedback_wait();
     static struct desktop d;
     fake_reset(); desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d);
     struct desk_program program={"demo","/Programs/demo"};
@@ -1558,6 +1600,17 @@ int main(int argc,char **argv)
     /* The gate scenarios hold input for a launched program until its first frame (desktop.c scenario_hold). */
     assert(d.clients[0].awaiting_frame && scenario_hold(&d,d.clients[0].launched_ns));
     assert(!scenario_hold(&d,d.clients[0].launched_ns+GATE_HOLD_MAX_NS));
+    d.clients[0].launch_feedback_remote=1;
+    assert(!scenario_hold(&d,d.clients[0].launched_ns));
+    /* A Win32-style pending frame does not stop real client key delivery. */
+    desk_menu_close(&d);
+    struct ciuki_input_event early={.type=CIUKI_INPUT_KEY,.code=0x1e,.value=1};
+    unsigned sent_before=fake_sent;
+    desk_input(&d,&early); early.value=0; desk_input(&d,&early); desk_flush(&d,0);
+    int delivered=0;
+    for (unsigned k=sent_before;k<fake_sent;k++) if (fake_messages[k].data[1]==DESK_KEY) delivered++;
+    assert(delivered==2 && d.clients[0].awaiting_frame);
+    d.clients[0].launch_feedback_remote=0;
     desk_message(&m,DESK_DAMAGE,20); m.data[0]=2; m.sender_pid=100; desk_put32(m.data+12,240); desk_put32(m.data+16,160);
     desk_receive(&d,0,&m); assert(!d.clients[0].awaiting_frame && !scenario_hold(&d,d.clients[0].launched_ns));
     /* f2-30: the A edges count whatever shell stage they arrive in (the 8042 may deliver them before the

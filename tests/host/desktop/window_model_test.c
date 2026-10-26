@@ -781,15 +781,38 @@ static void row_feedback_precedence(unsigned m)
     struct fake_app *a=app_open("files",240,160,160,70); step("existing window");
     assert(!desk_task_launch(&d,"calc",NULL)); step("new launch");
     struct desk_client *c=&d.clients[a->slot]; struct desk_box b=desk_content(c);
+    feedback_at(b.x+20,b.y+20,DESK_CURSOR_ARROW_BUSY); step("over default arrow");
     c->cursor=DESK_CURSOR_TEXT;
-    feedback_at(b.x+20,b.y+20,DESK_CURSOR_ARROW_BUSY); step("over text cursor");
+    feedback_at(b.x+20,b.y+20,DESK_CURSOR_TEXT); step("application text wins");
+    c->cursor=DESK_CURSOR_HAND;
+    feedback_at(b.x+20,b.y+20,DESK_CURSOR_HAND); step("application link wins");
     c->cursor=DESK_CURSOR_BUSY;
     feedback_at(b.x+20,b.y+20,DESK_CURSOR_BUSY); step("application busy wins");
+    feedback_at(c->frame.x+60,c->frame.y+8,DESK_CURSOR_ARROW_BUSY); step("over system title bar");
+    feedback_at(c->frame.x+2,c->frame.y+c->frame.h/2,DESK_CURSOR_RESIZE_EW); step("resize wins");
     int v=wm_v3_window(DESK_V3_OVERLAPPED,-1,160,70,240,160); assert(v>=0);
     c=&d.clients[v]; b=desk_content(c);
-    c->cursor=DESK_CURSOR_ARROW; c->v3_cursor=7; c->v3_visibility=-1;
+    c->cursor=DESK_CURSOR_ARROW; c->v3_cursor=1; c->v3_cursor_valid=1;
+    for (unsigned k=0;k<1024;k++) c->v3_cursor_pixels[0][k]=0xff804020u;
+    feedback_at(b.x+20,b.y+20,DESK_CURSOR_ARROW);
+    assert(d.v3_cursor_id==1 && !d.v3_cursor_hidden); step("custom visible cursor wins");
+    c->v3_visibility=-1;
+    feedback_at(b.x+20,b.y+20,DESK_CURSOR_ARROW);
+    assert(d.v3_cursor_id==1 && d.v3_cursor_hidden); step("custom hidden cursor wins");
+    c->v3_cursor=0;
+    feedback_at(b.x+20,b.y+20,DESK_CURSOR_ARROW);
+    assert(!d.v3_cursor_id && d.v3_cursor_hidden); step("negative visibility wins");
+    c->v3_visibility=0; c->v3_pointer=DESK_V3_HIDDEN;
+    feedback_at(b.x+20,b.y+20,DESK_CURSOR_ARROW);
+    assert(d.v3_cursor_hidden); step("hidden pointer flag wins");
+    c->v3_pointer=0;
     feedback_at(b.x+20,b.y+20,DESK_CURSOR_ARROW_BUSY);
-    assert(!d.v3_cursor_id && !d.v3_cursor_hidden); step("custom hidden cursor yields");
+    assert(!d.v3_cursor_id && !d.v3_cursor_hidden); step("default arrow resumes feedback");
+    d.v3_lease_state=1;
+    feedback_at(b.x+20,b.y+20,DESK_CURSOR_ARROW); /* no startup cursor while full screen owns the display */
+    feedback_at(600,430,DESK_CURSOR_ARROW);
+    d.v3_lease_state=0;
+    feedback_at(600,430,DESK_CURSOR_ARROW_BUSY); step("feedback resumes after full-screen ownership");
     wm_end();
 }
 static void feedback_presented(struct desktop *dd,uint32_t pid)
