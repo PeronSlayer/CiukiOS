@@ -18,6 +18,11 @@
  * failed after shutdown began: retain a terminal diagnostic and require reset. */
 /* G11B: CANCEL_STANDBY rejects a pending APM BIOS sleep request after an
  * application veto. Desktop only, idempotent, EBUSY once sleep starts. */
+/* T23 c42f556e: FORCE_REBOOT / FORCE_OFF end a shutdown that cannot finish
+ * (programs that do not end, a disk operation that does not return), only
+ * after the user chose it: a bounded best-effort flush, then reset or
+ * soft-off; data not yet written may be lost. Usable while an orderly
+ * REBOOT/OFF call is still blocked on another thread. */
 int ciuki_power(uint32_t action);
 /* Read-only cached firmware status of the one active power provider (ACPI,
  * or APM 1.2 when the OS does not own ACPI; see `provider`); initializes version/size

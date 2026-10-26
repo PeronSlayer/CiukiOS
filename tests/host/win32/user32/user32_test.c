@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: LGPL-2.1-or-later */
 #define _GNU_SOURCE
 #include "../../../../sdk/win32/user32/internal.h"
+#include <w32/controls.h>
 #include "../../../../apps/desktop/help_request.h"
 #include "../../../../apps/desktop/sounds.h"
 #include <assert.h>
@@ -593,6 +594,7 @@ static UINT traces;
 static int nesting;
 static int minmax_set;
 static int keep_on_close; /* G3: WM_CLOSE answered by a cancelled "Save changes?" */
+static int ignore_sc_close; /* T23 c42f556e: the Quake III installer background ignores SC_CLOSE */
 static unsigned g5_render_count,g5_all_count;
 static HWND g5_all_window;
 static HANDLE g5b_bitmap;
@@ -632,6 +634,8 @@ static LRESULT W32API procedure(HWND h, UINT m, WPARAM wp, LPARAM lp) {
   trace[traces].wp = wp;
   trace[traces++].lp = lp;
   if (m == WM_CLOSE && keep_on_close)
+    return 0;
+  if (m == WM_SYSCOMMAND && (wp & 0xfff0) == SC_CLOSE && ignore_sc_close)
     return 0;
   if (m == WM_USER + 1) {
     CHECK(InSendMessage());
@@ -718,6 +722,74 @@ static UINT close_acks(UINT from, UINT wire) {
     }
   return n;
 }
+/* Review 3, finding 5: the desktop admits a program's save prompt from the
+ * reserved prompt slot only when its CREATE packet already says modal and
+ * names the owner; a later PLACE is too late. DialogBox must send it at
+ * creation, a modeless CreateDialog must not. */
+static intptr_t W32API end_at_init(HWND h, UINT m, WPARAM wp, LPARAM lp) {
+  (void)wp; (void)lp;
+  if (m == WM_INITDIALOG) { EndDialog(h, 7); return 1; }
+  return 0;
+}
+/* The template header and its three empty arrays (menu, class, title). */
+static const struct { DLGTEMPLATE t; uint16_t menu, klass, title; } prompt_template = {   /* no padding: the WORDs follow the 18-byte header */
+    .t = {.style = WS_POPUP | WS_CAPTION | WS_VISIBLE | DS_MODALFRAME, .cdit = 0, .x = 10, .y = 10, .cx = 120, .cy = 60}};
+/* Review 4, finding 6: windows created while a modal dialog is being set up
+ * (inside its WM_INITDIALOG) are not modal themselves. */
+static HWND nested_window, nested_dialog;
+static intptr_t W32API nest_at_init(HWND h, UINT m, WPARAM wp, LPARAM lp) {
+  (void)wp; (void)lp;
+  if (m == WM_INITDIALOG) {
+    nested_window = CreateWindowExA(0, "USER fixture", "nested", WS_VISIBLE | WS_CAPTION, 50, 50, 80, 60, h, 0, 0, 0);
+    nested_dialog = CreateDialogIndirectParamA(0, &prompt_template.t, h, end_at_init, 0);
+    EndDialog(h, 9);
+    return 1;
+  }
+  return 0;
+}
+static int create_style_after(UINT from, UINT *style, UINT *owner) {
+  for (UINT i = from; i < outgoing_count; i++)
+    if (outgoing[i].data[0] == 3 && outgoing[i].data[1] == DESK_CREATE_WINDOW) {
+      *style = desk_get32(outgoing[i].data + 16); *owner = desk_get32(outgoing[i].data + 20);
+      return 1;
+    }
+  return 0;
+}
+static void test_modal_prompt_wire(void) {
+  HWND owner = CreateWindowExA(0, "USER fixture", "program", WS_VISIBLE | WS_CAPTION, 40, 40, 200, 120, 0, 0, 0, 0);
+  CHECK(owner);
+  struct u32_window *ow = u32_window(owner);
+  CHECK(ow && ow->wire);
+  const DLGTEMPLATE *prompt = &prompt_template.t;
+  UINT before = outgoing_count, style = 0, wire_owner = 0;
+  CHECK(DialogBoxIndirectParamA(0, prompt, owner, end_at_init, 0) == 7);
+  CHECK(create_style_after(before, &style, &wire_owner));
+  CHECK((style & DESK_V3_MODAL) && wire_owner == ow->wire);
+  before = outgoing_count;
+  HWND modeless = CreateDialogIndirectParamA(0, prompt, owner, end_at_init, 0);
+  CHECK(modeless && create_style_after(before, &style, &wire_owner));
+  CHECK(!(style & DESK_V3_MODAL) && wire_owner == ow->wire);
+  DestroyWindow(modeless);
+  /* Nested creations during the modal dialog's WM_INITDIALOG: exactly one
+   * CREATE packet is modal (the dialog's), the nested window's and the
+   * nested modeless dialog's are not, and an ordinary owned window created
+   * afterwards is not either. */
+  before = outgoing_count;
+  CHECK(DialogBoxIndirectParamA(0, prompt, owner, nest_at_init, 0) == 9);
+  UINT modal_creates = 0, plain_creates = 0;
+  for (UINT i = before; i < outgoing_count; i++)
+    if (outgoing[i].data[0] == 3 && outgoing[i].data[1] == DESK_CREATE_WINDOW) {
+      if (desk_get32(outgoing[i].data + 16) & DESK_V3_MODAL) modal_creates++; else plain_creates++;
+    }
+  CHECK(modal_creates == 1 && plain_creates == 2);
+  CHECK(nested_window && nested_dialog && !IsWindow(nested_window) && !IsWindow(nested_dialog));   /* owned by the ended dialog */
+  before = outgoing_count;
+  HWND plain = CreateWindowExA(0, "USER fixture", "plain owned", WS_VISIBLE | WS_CAPTION, 60, 60, 80, 60, owner, 0, 0, 0);
+  CHECK(plain && create_style_after(before, &style, &wire_owner) && !(style & DESK_V3_MODAL) && !(GetWindowLongA(plain, GWL_EXSTYLE) & U32_EX_MODAL_PROMPT));
+  DestroyWindow(plain);
+  DestroyWindow(owner);
+  puts("PASS T23 modal prompt wire: DialogBox creates its desktop window modal and owned, CreateDialog and nested creations do not");
+}
 /* G3: the desktop's close request reaches WM_CLOSE; a window that survives
  * (the program's prompt was cancelled) declines with CLOSE_ACK 0, so the
  * desktop's "Closing..." ends; a destroyed window sends no decline. */
@@ -747,6 +819,48 @@ static void test_desktop_close(void) {
     DispatchMessageA(&msg);
   CHECK(!IsWindow(h) && !close_acks(before, wire));
   puts("PASS G3 desktop close: WM_CLOSE posted, a surviving window declines once, own WM_CLOSE silent, destroyed window silent");
+  /* T23 c42f556e: the close request is Windows' close button, WM_SYSCOMMAND
+   * SC_CLOSE. The Quake III installer's background grays Close in its system
+   * menu and ignores SC_CLOSE: it must survive (one decline, no WM_CLOSE);
+   * a direct WM_CLOSE reached DefWindowProc and destroyed it. */
+  h = CreateWindowExA(0, "USER fixture", "VISE background", WS_VISIBLE | WS_CAPTION | 0x80000u /* WS_SYSMENU */,
+                      40, 40, 60, 60, 0, 0, 0, 0);
+  CHECK(h);
+  ValidateRect(h, 0);
+  w = u32_window(h);
+  CHECK(w && w->wire);
+  wire = w->wire;
+  ignore_sc_close = 1;
+  before = outgoing_count;
+  UINT first = traces;
+  event(w, DESK_CLOSE_REQUEST, 0, 0);
+  for (UINT i = 0; i < 100 && PeekMessageA(&msg, 0, 0, 0, 1); i++)
+    DispatchMessageA(&msg);
+  BOOL syscommand = 0, closed = 0;
+  for (UINT i = first; i < traces; i++) {
+    if (trace[i].h == h && trace[i].m == WM_SYSCOMMAND && (trace[i].wp & 0xfff0) == SC_CLOSE) syscommand = 1;
+    if (trace[i].h == h && trace[i].m == WM_CLOSE) closed = 1;
+  }
+  CHECK(IsWindow(h) && syscommand && !closed && close_acks(before, wire) == 1 && !w->desktop_close);
+  ignore_sc_close = 0;
+  /* Close grayed in the system menu: declined at once, nothing dispatched. */
+  CHECK(EnableMenuItem(GetSystemMenu(h, 0), SC_CLOSE, MF_BYCOMMAND | MF_GRAYED) != (UINT)-1);
+  before = outgoing_count;
+  first = traces;
+  event(w, DESK_CLOSE_REQUEST, 0, 0);
+  for (UINT i = 0; i < 100 && PeekMessageA(&msg, 0, 0, 0, 1); i++)
+    DispatchMessageA(&msg);
+  for (UINT i = first; i < traces; i++)
+    CHECK(!(trace[i].h == h && (trace[i].m == WM_CLOSE || trace[i].m == WM_SYSCOMMAND)));
+  CHECK(IsWindow(h) && close_acks(before, wire) == 1 && !w->desktop_close);
+  /* Enabled again, the close button closes it through DefWindowProc. */
+  CHECK(EnableMenuItem(GetSystemMenu(h, 0), SC_CLOSE, MF_BYCOMMAND) != (UINT)-1);
+  before = outgoing_count;
+  event(w, DESK_CLOSE_REQUEST, 0, 0);
+  for (UINT i = 0; i < 100 && PeekMessageA(&msg, 0, 0, 0, 1); i++)
+    DispatchMessageA(&msg);
+  CHECK(!IsWindow(h) && !close_acks(before, wire));
+  puts("PASS T23 desktop close is SC_CLOSE: an SC_CLOSE-ignoring window survives and declines, grayed Close declines at once, enabled Close destroys");
 }
 static void test_send(void) {
   ui_kernel_schedule(schedule_peer);
@@ -2506,6 +2620,7 @@ static void run(void) {
   }
   ui_kernel_switch(0);
   test_desktop_close();
+  test_modal_prompt_wire();
   test_lifecycle();
   CHECK(UnregisterClassA("USER fixture", 0));
   #ifndef U32_TEST_EXTERNAL_MODULES

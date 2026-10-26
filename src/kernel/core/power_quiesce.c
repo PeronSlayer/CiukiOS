@@ -7,11 +7,25 @@
 extern int audio_power_quiesce(void);
 extern int usb_power_quiesce(void);
 extern int net_power_quiesce(void);
+/* The platform's quiesce step (APM critical suspend, the forced fence's
+ * first part): network, audio and USB. Never storage: a critical suspend
+ * resumes, and ATA has its own reversible transition (ata_power_suspend /
+ * ata_power_resume below). Review 4, finding 5. */
 int power_devices_quiesce(void)
 {
     int e = net_power_quiesce();
     if (!e) e = audio_power_quiesce();
     if (!e) e = usb_power_quiesce();
+    return e;
+}
+/* The terminal barrier of call 73 (orderly shutdown after storage_sync):
+ * the same, then the ATA storage fence (review 3, finding 3): the channels
+ * refuse new submissions and stop or revoke their bus mastering and
+ * interrupts, so no disk DMA outlives it. Terminal for this boot. */
+int power_devices_quiesce_terminal(void)
+{
+    int e = power_devices_quiesce();
+    if (!e) e = ata_power_quiesce();
     return e;
 }
 /* Unlike S5, these owners keep all allocations and claims. A failed owner

@@ -158,6 +158,273 @@
     the windows that agreed.
   - ExitWindowsEx sessions (no HOLD) are unchanged.
 
+### Amendments after the T23 trial of image c42f556e (2026-10-25)
+
+Evidence and timeline: `docs/validation/t23-win32-hang-shutdown-2026-10-25.md`
+(four Quake III Arena demo installers at once; closing did nothing, Shut
+Down and Restart did not complete). Additional sources:
+
+- [HungAppTimeout](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-2000-server/cc978614(v=technet.10)):
+  "how long the system waits for user processes to end after the user
+  clicks the End Task command button", default 5000 ms; past it "the End
+  Task dialog box appears, stating that the process did not respond".
+- [WaitToKillAppTimeout](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-2000-server/cc978624(v=technet.10))
+  and [AutoEndTasks](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-server-2003/cc736867(v=ws.10)):
+  at shut down a process that does not end gets the End Task dialog unless
+  processes are ended automatically.
+- [EndTask](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-endtask):
+  a gentle WM_CLOSE first; forcing destroys the program when that fails.
+- Windows 98 SE shut-down dialog quoted by a user
+  ([BleepingComputer](https://www.bleepingcomputer.com/forums/t/14143/windows-98se-shutdown-problems/)):
+  "This program is not responding. It may be busy, waiting for a response
+  from you, or it may have stopped running ... To close this program
+  immediately, click End Task", for a hidden notification window too.
+
+Decisions (they supersede the matching parts of items 3, 6, 7 and 8):
+
+1. **End Task waits HungAppTimeout for the program to end.** Task Manager's
+   End Task on a responsive window still sends WM_CLOSE; when a window of
+   that process is still open 5 s later, "This program is not responding"
+   opens whether or not the program answers PINGs or declined (a busy
+   installer that ignores the close). One dialog per End Task.
+2. **A second close of a "Closing..." window offers End Task.** The title
+   button, Alt+F4, the caption icon and the task button's Close
+   (`desk_user_close`) on a window whose close request is still pending open
+   the dialog at once, unless the program answered `CLOSE_ACK LATER` and is
+   answering PINGs (it shows its own prompt).
+3. **The close button is SC_CLOSE for Win32 windows.** user32 delivers the
+   desktop's `CLOSE_REQUEST` as WM_SYSCOMMAND SC_CLOSE (Windows' close
+   button and Alt+F4); a window with Close grayed in its system menu or a
+   `CS_NOCLOSE` class declines at once. End Task remains the way to end such
+   a program (`docs/design/win32-personality-contract.md`, "t23close").
+4. **System dialogs always have a client slot.** Program connections and
+   program windows leave the last `DESK_SYSTEM_SLOTS` of the 16 client
+   slots free for the End Task, Shut Down, shutdown progress and session
+   message windows. Refusals are recorded (`[desktop] client table full ...`,
+   `[desktop] built-in window unavailable ...`,
+   `[desktop] end task dialog unavailable ...`). Superseded in detail by
+   decisions 10 and 11 (three tiered slots).
+5. **The Win32 turn treats a windowless process as a window.** A process
+   holding its WM_QUERYENDSESSION for 5 s with no window on the desktop
+   (connection ended, hidden windows only) is not responding, as Windows 98
+   shows the dialog for hidden windows. Each window the session waits on is
+   recorded (`[desktop] end-session win32 turn pid=... hwnd=...`).
+6. **The power sequence ends every Win32 process.** Besides the desktop's
+   clients and children, every live process of the Win32 broker
+   (`W32R_SHUTDOWN_LIST`) is a target: closed, named in "Some programs are
+   still running" as "Windows program (PID n)". **Force is SIGKILL**
+   (TerminateProcess) for every remaining target. (The automatic SIGTERM at
+   the 3 s deadline is qualified by decision 7 below.)
+
+Decisions after the Codex review of `63c964019` (2026-10-25; findings P1-1
+to P2-7 in `docs/validation/t23-win32-hang-shutdown-2026-10-25.md`):
+
+7. **No automatic end while WM_ENDSESSION may run (P1-2).** After the
+   session's broker COMMIT the power sequence polls the broker STATUS; a
+   Win32 target gets its SIGTERM only after the broker reported every
+   WM_ENDSESSION delivery done (`DESK_W32_ENDED`, as Windows ends a process
+   after its WM_ENDSESSION returns). Not done
+   [WaitToKillAppTimeout](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-2000-server/cc978624(v=technet.10))
+   (`DESK_WAIT_TO_KILL_NS`, 20 s) after the COMMIT, the sequence stops at
+   "Some programs are still running ... have not finished ending their
+   session" and the user's Force is the consent. Native targets keep the
+   3 s rule (they were queried and told END_SESSION(1)).
+8. **A broker error is not an agreement (P1-3).** BEGIN or STATUS failing
+   (a stalled w32srv, an ExitWindowsEx restart that owns the broker: EBUSY)
+   is retried for `DESK_SESSION_BROKER_NS` (5 s); past that the Win32
+   programs are *unknown*: no COMMIT, their windows get the ordinary close
+   (SC_CLOSE, their own prompts allowed by decision 11), no automatic
+   SIGTERM, and the busy dialog says "The Windows programs could not be
+   asked to save their work" with Force and Cancel. Records:
+   `[desktop] end-session win32 broker begin|status failed result=... : retrying`,
+   `... unavailable result=...: programs not asked`,
+   `[desktop] end-session agreed ... win32=committed|unknown|none`.
+9. **The inventory keeps its errors (P2-4).** The target table holds
+   `DESK_POWER_TARGETS` (64, the kernel's process limit); `power_w32_pids`
+   returns `-errno`, a failed `W32R_SHUTDOWN_LIST` is recorded
+   (`[desktop] power win32 list unavailable error=...`), fetched again on
+   every tick and before Force (reconciliation), and named in the busy
+   dialog ("The Windows programs could not be listed").
+10. **Reserved slots are tiered (P2-5).** `DESK_SYSTEM_SLOTS` is 3:
+    programs (connections, windows, every ordinary built-in window and
+    message box) need more than 3 free; the Task Manager the desktop itself
+    launches on Ctrl+Alt+Del (`desk_add_client_tier(DESK_SLOT_EMERGENCY)`)
+    may take the first reserve; End Task, Shut Down, the shutdown progress
+    and a message box during a session or shutdown take the last two, so
+    End Task and Shut Down always open together. Records:
+    `[desktop] emergency connection admitted`, `[desktop] built-in window unavailable kind=... system=...`.
+11. **Application prompts have bounded capacity (P2-6).** A v3 window with
+    an owner (a DialogBox/MessageBox) created by a process that is being
+    closed (a close request pending, the session's Win32 turn, or the power
+    sequence) may take the emergency reserve (`[desktop] prompt admitted`);
+    unowned windows and programs not being closed are still refused there.
+12. **A prompt is a new window, not PONG activity (P2-7).** The Win32 turn
+    records the window-id watermark of the poll before the query was
+    fetched; a window of that process newer than it is its prompt and is
+    waited for without a deadline while it answers. Without one, a fetched
+    query held for `DESK_WAIT_TO_KILL_NS` (20 s) gets "This program is not
+    responding" (End Task / Cancel). The w32srv shutdown flush is bounded
+    too: SIGKILL 10 s after its SIGTERM, a reaped kill is a lost flush
+    (recorded, the shutdown goes on), unreaped 10 s later it is abandoned
+    (`DESK_W32_SHUTDOWN_MS`, `apps/desktop/win32_native.c`).
+13. **Call 73 off the desktop thread, and a forced way out (P1-1).** The
+    orderly REBOOT/OFF runs on a worker thread (`power_request` returns
+    `EINPROGRESS` meanwhile); the kernel bounds every shutdown preflight
+    wait to 5 s (`vfs-storage-contract.md`). A call that has not returned
+    after `DESK_POWER_CALL_NS` (15 s) stops at "... waiting for a disk
+    operation that has not finished"; Force then, or a second Force after
+    SIGKILL left the kernel at EBUSY, is `CIUKI_POWER_FORCE_REBOOT` /
+    `FORCE_OFF` (`execution-abi.md`): a 3 s best-effort flush, then reset or
+    soft-off; the dialog says unsaved information may be lost and ScanDisk
+    checks the disk at the next start. Record: `[desktop] power forced action=... reason=call-73-not-returned|second-force`.
+
+Decisions after the second Codex review (of `bc9881f62`, 2026-10-25;
+findings 1–8 in the validation record):
+
+14. **An End Task survivor is given up (finding 1).** A process End Task
+    killed during the Win32 turn that the broker still reports
+    `DESK_KILL_WAIT_NS` (5 s) later (a thread in a kernel wait keeps it and
+    its broker connection alive) is not waited for: no second dialog
+    meanwhile, then the Win32 part is unknown, the session finishes, the
+    power sequence lists the process, and Force, then the forced action,
+    follow. Record: `[desktop] end-session win32 pid=... survived End Task for 5000 ms: programs not asked`.
+15. **Nothing blocking on the input thread (finding 2).** `power_prepare`
+    only closes observer channels and snapshots the descriptors to keep;
+    `fflush`, `fstat` and `close` run on the power worker before call 73
+    (`power_prepare_files`). No synchronous fallback: without a thread the
+    call is refused with `EAGAIN`, as it is while the desktop's own
+    run/history worker is busy; the tick treats `EAGAIN` like `EBUSY`
+    (retry, then the busy dialog "The desktop has not finished its own
+    work", Force) and is never gated by an auxiliary worker.
+16. **No Cancel while call 73 runs (finding 3).** `desk_power_cancelable`
+    is false from the worker's start to its return; the dialog draws no
+    Cancel, Esc/Enter and the close box are ignored, `desk_power_cancel`
+    refuses (`[desktop] power cancel refused`). A result arriving for an
+    earlier request (`power.serial`) is recorded and discarded, never taken
+    by a later one.
+17. **An unresolved inventory never proceeds alone (findings 4 and 8).** A
+    failed `W32R_SHUTDOWN_LIST`, Win32 programs never asked with no list
+    proving there are none, or a live process the 64-entry table could not
+    hold stop the sequence at the busy dialog (Cancel or Force) at the close
+    deadline, even with zero known targets. The table reclaims entries whose
+    process is confirmed gone before refusing one (`[desktop] power target table full pid=...: inventory not represented`),
+    and the broker's own overflow is `-ENOSPC`, not a cut.
+18. **Tiered slots (finding 6).** `DESK_SYSTEM_SLOTS` is 4 and each slot
+    records its tier (`slot_tier`): programs 12, Task Manager 1, a closing
+    program's modal prompt 1, system dialogs 2. Admission checks the tier's
+    own occupancy, so Task Manager, the prompt, End Task and Shut Down
+    coexist whatever the order; a Task Manager or prompt takes a program
+    slot while one is free.
+19. **A prompt is a visible modal dialog (finding 7).** user32 marks a
+    modal dialog (DialogBox, MessageBox) with `DESK_V3_MODAL` when its owner
+    is on the wire; the Win32 turn counts as a prompt only a window newer
+    than the watermark that is modal, visible (not hidden/minimized) and
+    owned by a window of the same process. Unowned progress windows, hidden
+    dialogs or non-modal owned windows leave the 20 s bound in force. The
+    explicit escalation route: Alt+F4/close or End Task on any window of the
+    program the session waits for opens the session's "not responding"
+    dialog at once (`[desktop] end-session win32 escalation pid=...`).
+20. **The forced power off has a device fence (finding 5, kernel).**
+    `power_force` runs the platform's nonblocking quiesce step
+    (`power_source_quiesce_dma`, the orderly sequence's native DMA/IRQ stop
+    on its own worker) for at most 2 s; a reset follows regardless; an Off
+    is refused (`EBUSY`, "turn the computer off with its power button")
+    unless the fence proved every device stopped, and then publishes the
+    emergency latch (`power_source_mark_emergency_stopped`), distinct from
+    the orderly proof (see decision 24 for how providers consume it).
+
+Decisions after the third Codex review (of `42b2445bc`, 2026-10-25;
+findings 1–6 in the validation record):
+
+21. **The desktop's own readiness is bounded (finding 1).** The sound tail
+    and `shutdown_wait` (settings, wallpaper, folder, AutoPlay, media and
+    custom workers) are polled as before, but from the first refusal a
+    `DESK_POWER_CALL_NS` (15 s) deadline runs; past it the busy dialog says
+    "The desktop has not finished its own work" and Force runs the forced
+    action without consulting them (their resources stay as they are).
+    Record: `[desktop] power desktop work not finished after N ms: asking the user`.
+22. **Never cancellable while the worker is in flight (finding 2).**
+    `worker_inflight` is set at the first `EINPROGRESS` and cleared only by
+    the worker's result; `desk_power_cancelable` reads it (and `call_stuck`),
+    never the timer, so the 15 s busy dialog has no Cancel.
+23. **The device fence stops storage too (finding 3).**
+    `power_devices_quiesce` ends with `ata_power_quiesce`: every discovered
+    channel refuses new submissions, masks its interrupt and stops or revokes
+    bus mastering (`ata_channel_idle`) without waiting on a stuck owner; a
+    channel that cannot prove itself idle is quarantined and the fence
+    fails. The orderly path gains the same barrier after `storage_sync`.
+    `kernel_reboot` tries, after the 8042 pulse and before the CPU-only
+    triple fault, the ICH/PIIX reset control register 0CF9h (a hard PCI
+    reset asserting PCIRST#: SYS_RST then RST_CPU rising, FULL_RST bit 3
+    clear; ICH3 datasheet 82801CA 5.11.1.2 and 9.7.5) when bus 0 has an
+    Intel ISA/LPC bridge (class 0601h, vendor 8086h); otherwise nothing
+    changes. The forced restart runs the fence (DMA revoked) before the
+    reset in any case (see decision 29 for the order when the fence fails).
+24. **The orderly proof stays strict (finding 4).**
+    `power_source_orderly_shutdown` and `power_source_soft_off` accept the
+    orderly latch only. The forced Off goes through
+    `power_source_soft_off_forced`, which needs the emergency latch and the
+    provider's own `soft_off_forced` entry: APM's `apm_backend_off_forced`
+    consults `forced_shutdown` (the fence's proof) and never the orderly
+    one; ACPI's forced entry is the same S5 write. A provider without a
+    forced entry refuses (ENOTSUP) and the user uses the power button.
+25. **Modality is on the wire from the first packet (finding 5).** user32
+    marks the dialog being created (`creating_modal`, before
+    `CreateWindowExA`) so the CREATE packet of a DialogBox/MessageBox
+    already carries `DESK_V3_MODAL` with its owner; a modeless
+    CreateDialog does not. The desktop's prompt admission reads that packet.
+26. **Explicit escalation is latched (finding 6).** `session.escalated`
+    keeps the user-requested End Task dialog open while the prompt keeps
+    answering; it ends only on the user's answer, when the broker's turn
+    moves to another window, or when the session ends. The automatic
+    (hang-detected) dialog still closes when the program answers again.
+
+Decisions after the fourth Codex review (of `343690707`, 2026-10-26;
+findings 1–7 in the validation record):
+
+27. **The forced preparation joins nothing (finding 1).** On the forced
+    path `power_prepare` closes the observer channels only
+    (`observers_detach`); the custom and media workers are not joined, their
+    threads and resources stay as they are. The ordinary path keeps
+    `observers_close`.
+28. **A session dialog never outlives its participant (finding 2).** Every
+    path that leaves a participant (broker BEGIN/STATUS abandonment, the End
+    Task survivor, `session_finish`) dismisses the open dialog, latched or
+    not; `desk_end_task_choice` applies an answer only when the dialog's
+    participant is still the current one (Win32: `w32_pid`; native: the
+    part's window id), otherwise it is dismissed
+    (`[desktop] end task dialog stale ...`).
+29. **No CPU-only reset while DMA is unresolved (finding 3; review 5,
+    finding 1).** `power_force` runs the ATA storage fence itself
+    (terminal, whatever the platform step said); the ATA fence stops or
+    revokes every channel's bus master even when a device cannot prove
+    itself idle, so a disk proof failure leaves no DMA and `kernel_reboot`
+    (8042 pulse, triple fault) is safe. A failed or timed-out platform step
+    (network, audio, USB keep uncertain claims) leaves DMA unresolved: then
+    only the qualified 0CF9h hard PCI reset is written
+    (`kernel_reboot_pci_only`, PCIRST#); without an Intel ISA/LPC bridge,
+    or when the written reset did not take, the kernel keeps every resource
+    and returns `EBUSY` (`[power] forced reset refused: DMA unresolved ...
+    use the computer's reset button`) and the desktop shows the
+    reset-button message.
+30. **A confirmed-empty ATA channel never blocks a shutdown (finding 4).**
+    `ata_power_quiesce` fences a channel without present devices through
+    `ata_channel_fence_empty`: submissions refused, NIEN, bus mastering
+    stopped or revoked, interrupt source detached, and no read of its
+    floating status (FFh is not BSY|DRQ); only a present device that cannot
+    prove itself idle fails the fence.
+31. **Suspend and terminal fencing are separate (finding 5).**
+    `power_devices_quiesce` (the platform's step, APM critical suspend)
+    stops network, audio and USB as before and never storage; ATA keeps its
+    reversible `ata_power_suspend`/`ata_power_resume` transition.
+    `power_devices_quiesce_terminal` (call 73's orderly barrier) and the
+    forced path add the ATA fence.
+32. **Modality travels with the window (finding 6).** user32 passes
+    `U32_EX_MODAL_PROMPT`, an internal creation argument, to
+    `CreateWindowExA` for a modal dialog; the window records `modal_prompt`
+    and strips the bit before anything else sees its extended style. No
+    process-global state spans the waits inside window creation.
+
 ### Not covered (gaps, owned elsewhere)
 
 - Stand by (PW-6, G11) and Restart in MS-DOS mode (DOS-9) in the Shut Down

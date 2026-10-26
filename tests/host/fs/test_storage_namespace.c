@@ -427,10 +427,12 @@ static void *latency_media(void *arg)
     return 0;
 }
 static unsigned observed_volume_waits,observed_namespace_waits;
+static bool shutdown_waits; /* T23: the bounded shutdown test records its own timed-out waits */
 void vfs_wait_observer(char drive,uint32_t ms,char holder,const char *reason,
                        const struct fs_task_identity *task,const struct vfs_hold_info *owner)
 {
     (void)task; (void)owner;
+    if (__atomic_load_n(&shutdown_waits,__ATOMIC_ACQUIRE)) { LAT_ASSERT(strstr(reason,"timeout") || strstr(reason,"cancelled") || !strcmp(reason,"volume") || !strcmp(reason,"namespace")); return; }
     LAT_ASSERT(ms>100);
     if (!strcmp(reason,"volume")) { LAT_ASSERT(drive=='E' && holder=='E'); __atomic_add_fetch(&observed_volume_waits,1,__ATOMIC_RELAXED); }
     else { LAT_ASSERT(!strcmp(reason,"namespace")); __atomic_add_fetch(&observed_namespace_waits,1,__ATOMIC_RELAXED); }
@@ -563,6 +565,112 @@ static void writer_shutdown_test(void)
     puts("PASS shutdown/writeback race: namespace remains available, writer drains before shutdown preflight, delayed EIO remains sticky");
 }
 
+/* T23 trial c42f556e: the shutdown preflight waits for the writer's batch
+ * and for every drive reservation at most storage_shutdown_wait_ms, then
+ * refuses with EBUSY before any change; call 73 returns and the desktop can
+ * offer Force or the forced restart. Before, both waits were unbounded (the
+ * first case below never returned). */
+static pthread_mutex_t holder_mutex=PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t holder_changed=PTHREAD_COND_INITIALIZER;
+static bool holder_held,holder_release;
+static void *drive_holder(void *arg)
+{
+    struct storage *s=arg;
+    vfs_lock(&s->vfs,vfs_drive_mask(2)); struct vfs_io_state io=vfs_io_begin_locked(&s->vfs);
+    pthread_mutex_lock(&holder_mutex); holder_held=true; pthread_cond_broadcast(&holder_changed);
+    while (!holder_release) pthread_cond_wait(&holder_changed,&holder_mutex);
+    pthread_mutex_unlock(&holder_mutex);
+    vfs_io_end_locked(&s->vfs,io); vfs_unlock(&s->vfs);
+    return 0;
+}
+static void bounded_shutdown_test(void)
+{
+    struct px_namespace *space; struct storage *s=namespace_start(&space);
+    uint32_t saved_wait=storage_shutdown_wait_ms; storage_shutdown_wait_ms=200;
+    __atomic_store_n(&shutdown_waits,true,__ATOMIC_RELEASE);
+    uint8_t sector[512]; OK(cache_read(&s->cache,&s->volumes[2].io,0,sector));
+    OK(cache_write(&s->cache,&s->volumes[2].io,0,sector));
+    int (*saved)(struct blkdev *,uint64_t,uint32_t,const void *)=media[0].dev.write;
+    media[0].dev.write=blocked_writer_error; writer_entered=writer_release=false;
+    struct writer_call write={.s=s}; pthread_t a;
+    CHECK(!pthread_create(&a,0,writer_call_run,&write));
+    pthread_mutex_lock(&writer_mutex);
+    while (!writer_entered) pthread_cond_wait(&writer_changed,&writer_mutex);
+    pthread_mutex_unlock(&writer_mutex);
+    uint32_t start=fs_now_ms();
+    CHECK(storage_shutdown(s)==-FS_EBUSY);
+    uint32_t spent=fs_now_ms()-start; CHECK(spent>=190 && spent<2000);
+    vfs_lock(&s->vfs,0); CHECK(s->writer_running && !s->writer_quiescing && !s->stopped); vfs_unlock(&s->vfs);
+    pthread_mutex_lock(&writer_mutex); writer_release=true; pthread_cond_broadcast(&writer_changed); pthread_mutex_unlock(&writer_mutex);
+    CHECK(!pthread_join(a,0)); media[0].dev.write=saved; CHECK(write.result==-FS_EIO);
+    /* A task holds C: (a long read) past the bound. */
+    holder_held=holder_release=false; pthread_t h;
+    CHECK(!pthread_create(&h,0,drive_holder,s));
+    pthread_mutex_lock(&holder_mutex);
+    while (!holder_held) pthread_cond_wait(&holder_changed,&holder_mutex);
+    pthread_mutex_unlock(&holder_mutex);
+    start=fs_now_ms();
+    CHECK(storage_shutdown(s)==-FS_EBUSY);
+    spent=fs_now_ms()-start; CHECK(spent>=190 && spent<2000);
+    vfs_lock(&s->vfs,0); CHECK(!s->writer_quiescing && !s->stopped); vfs_unlock(&s->vfs);
+    pthread_mutex_lock(&holder_mutex); holder_release=true; pthread_cond_broadcast(&holder_changed); pthread_mutex_unlock(&holder_mutex);
+    CHECK(!pthread_join(h,0));
+    /* Free again: the shutdown completes (the writer's EIO stays sticky). */
+    CHECK(storage_shutdown(s)==-FS_EIO && s->stopped && !s->writer_quiescing);
+    storage_shutdown_wait_ms=saved_wait;
+    namespace_stop(s,true);
+    __atomic_store_n(&shutdown_waits,false,__ATOMIC_RELEASE);
+    puts("PASS T23 bounded shutdown: a writer batch and a drive holder that outlive 200 ms give EBUSY with nothing changed; free, the shutdown completes");
+}
+/* Review P1-1 of 63c964019: a task ended while it waits for a drive (the
+ * kernel's SIGKILL sets the thread's interrupted flag, which the posix layer
+ * exposes as the request's `cancelled`) must leave the wait at once with
+ * nothing reserved, although the holder never releases the drive; the
+ * holder's own later release still works. Before the request model this
+ * wait was unbounded; this test pins the contract the desktop's Force relies
+ * on (SIGKILL ends a program blocked in a storage wait). */
+static bool cancel_flag;
+static bool cancel_check(void *arg) { (void)arg; return __atomic_load_n(&cancel_flag,__ATOMIC_ACQUIRE); }
+static uint64_t cancel_now(void *arg) { (void)arg; return (uint64_t)fs_now_ms()*1000u; }
+static void cancel_pause(void *arg) { (void)arg; struct timespec t={0,1000000}; nanosleep(&t,0); }
+struct admit_call { struct storage *s; int result; bool done; };
+static void *admit_run(void *arg)
+{
+    struct admit_call *c=arg;
+    struct vfs_request request={.deadline=UINT64_MAX/2,.now=cancel_now,.cancelled=cancel_check,.pause=cancel_pause,
+        .operation="read",.site="native"};
+    c->result=vfs_admit(&c->s->vfs,vfs_drive_mask(2),&request);
+    if (!c->result) vfs_unlock(&c->s->vfs);
+    __atomic_store_n(&c->done,true,__ATOMIC_RELEASE);
+    return 0;
+}
+static void cancelled_wait_test(void)
+{
+    struct px_namespace *space; struct storage *s=namespace_start(&space);
+    __atomic_store_n(&shutdown_waits,true,__ATOMIC_RELEASE);
+    holder_held=holder_release=false; pthread_t h;
+    CHECK(!pthread_create(&h,0,drive_holder,s));
+    pthread_mutex_lock(&holder_mutex);
+    while (!holder_held) pthread_cond_wait(&holder_changed,&holder_mutex);
+    pthread_mutex_unlock(&holder_mutex);
+    __atomic_store_n(&cancel_flag,false,__ATOMIC_RELEASE);
+    struct admit_call call={.s=s}; pthread_t a;
+    CHECK(!pthread_create(&a,0,admit_run,&call));
+    struct timespec settle={0,150000000}; nanosleep(&settle,0);
+    CHECK(!__atomic_load_n(&call.done,__ATOMIC_ACQUIRE));   /* blocked behind the holder */
+    uint32_t start=fs_now_ms();
+    __atomic_store_n(&cancel_flag,true,__ATOMIC_RELEASE);   /* the task was ended */
+    CHECK(!pthread_join(a,0));
+    uint32_t spent=fs_now_ms()-start;
+    CHECK(call.result==-VFS_ECANCELLED && spent<1000);
+    pthread_mutex_lock(&holder_mutex); holder_release=true; pthread_cond_broadcast(&holder_changed); pthread_mutex_unlock(&holder_mutex);
+    CHECK(!pthread_join(h,0));
+    /* The drive is free again: an ordinary admission and the shutdown work. */
+    vfs_lock(&s->vfs,vfs_drive_mask(2)); vfs_unlock(&s->vfs);
+    __atomic_store_n(&shutdown_waits,false,__ATOMIC_RELEASE);
+    namespace_stop(s,true);
+    printf("PASS cancelled drive wait: an ended task leaves a held C: wait in %u ms with -VFS_ECANCELLED and nothing reserved; the holder releases normally\n",spent);
+}
 static int forbidden_media_check(struct blkdev *d) { (void)d; abort(); }
 static void latency_tests(void)
 {
@@ -681,7 +789,7 @@ int main(int argc, char **argv)
     CHECK(argc == 4);
     for (unsigned i = 0; i < 3; i++) OK(fake_open(&media[i], argv[i + 1]));
     baseline(); media[2].undo_enabled = true;
-    latency_tests(); healthy_writer_reservation_test(); writer_shutdown_test(); cwd_tests(); busy_tests(); removable_namespace_tests(); detach_tests(); namespace_probe_tests(); floppy_namespace_tests();
+    latency_tests(); healthy_writer_reservation_test(); writer_shutdown_test(); bounded_shutdown_test(); cancelled_wait_test(); cwd_tests(); busy_tests(); removable_namespace_tests(); detach_tests(); namespace_probe_tests(); floppy_namespace_tests();
     for (unsigned i = 0; i < 3; i++) fake_close(&media[i]);
     printf("STORAGE NAMESPACE RESULT checks=%u records=%u failures=0 ASan/UBSan=enabled\n", checks, records);
     return 0;

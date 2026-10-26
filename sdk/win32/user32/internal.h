@@ -73,9 +73,11 @@ struct u32_window {
   BOOL lease_wanted;
   BOOL destroy_request; /* U32_DESTROY is honoured only when USER sent it */
   BOOL closing;         /* q3exec3: DESK_CLOSE sent; nothing else names the window */
-  BOOL desktop_close;   /* G3: a desktop CLOSE_REQUEST posted WM_CLOSE; a window that survives its
-                         * dispatch (the user cancelled the program's prompt) declines with CLOSE_ACK 0 */
+  BOOL desktop_close;   /* G3: a desktop CLOSE_REQUEST posted WM_SYSCOMMAND SC_CLOSE (T23 c42f556e; it
+                         * was WM_CLOSE); a window that survives its dispatch (the user cancelled the
+                         * program's prompt, or it ignored SC_CLOSE) declines with CLOSE_ACK 0 */
   BOOL flash;
+  BOOL modal_prompt;    /* review 4, finding 6: created as a modal dialog (U32_EX_MODAL_PROMPT), known before its CREATE packet */
   /* f5-10C classic state: control/dialog records, menus, scroll bars. */
   void *control, *dialog;
   HANDLE menu, system_menu;
@@ -238,6 +240,12 @@ void u32_activate(struct u32_window *, BOOL, BOOL);
 POINT u32_origin(struct u32_window *);
 void u32_frame(DWORD, DWORD, int *, int *);
 UINT u32_style(struct u32_window *);
+struct u32_window *u32_wire_owner(struct u32_window *); /* the owner the desktop is told, or NULL */
+/* Internal creation argument (never an application style bit): the dialog
+ * being created is modal. CreateWindowExA records it on the window and
+ * strips it before anything else sees the extended style. */
+#define U32_EX_MODAL_PROMPT 0x40000000u
+BOOL u32_dialog_modal(struct u32_window *);
 void u32_region_add(struct u32_region *, RECT);
 void u32_region_sub(struct u32_region *, RECT);
 void u32_damage(struct u32_window *, RECT);

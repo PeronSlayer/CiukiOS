@@ -281,7 +281,8 @@ int acpi_soft_off_parse(acpi_map_fn map, void *ctx, uint32_t rsdp_phys,
 }
 
 #if !defined(POWER_HOST) || defined(POWER_HOST_RUNTIME)
-extern int power_devices_quiesce(void) __attribute__((weak));
+extern int power_devices_quiesce_terminal(void) __attribute__((weak));
+extern int ata_power_quiesce(void) __attribute__((weak));
 extern int audio_settings_flush(void) __attribute__((weak));
 static uint32_t power_progress;
 static void power_checkpoint(void)
@@ -331,7 +332,7 @@ static int power_sequence(bool off)
         /* EBUSY before any irreversible step: the session continues intact. */
         if (e) { if (e != -EBUSY) power_progress = CIUKI_POWER_UNCERTAIN; return e; }
         power_progress = CIUKI_POWER_UNCERTAIN;
-        e = power_devices_quiesce ? power_devices_quiesce() : -ENOTSUP;
+        e = power_devices_quiesce_terminal ? power_devices_quiesce_terminal() : -ENOTSUP;
         if (e) { klog("[power] native quiesce failed: %d", e); power_checkpoint(); return -EBUSY; }
         power_progress = CIUKI_POWER_STOPPED;
         /* The orderly-shutdown proof for every provider: ACPI S5 and APM Off. */
@@ -346,6 +347,71 @@ static int power_sequence(bool off)
     klog("[power] stage=%s-off state=quiescent", name); power_checkpoint();
     e = power_source_soft_off();
     klog("[power] %s soft-off returned error=%d; stopped devices and leases retained", name, e); power_checkpoint();
+    return e;
+}
+/* T23 trial c42f556e (docs/validation/t23-win32-hang-shutdown-2026-10-25.md):
+ * the forced end of a shutdown that cannot finish, after the user chose it.
+ * It runs beside a REBOOT/OFF still blocked on another thread (no
+ * power_running), takes no storage lock itself and waits for nothing
+ * unbounded: a best-effort durable flush through the bounded suspend-flush
+ * worker (POWER_FORCE_FLUSH_MS), then a bounded device fence through the
+ * platform's nonblocking quiesce step (power_source_quiesce_dma, the same
+ * native DMA/IRQ stop path as the orderly sequence, on its own worker;
+ * POWER_FORCE_QUIESCE_MS), the UNCERTAIN latch, then reset, or the
+ * provider's soft-off only when the fence proved every device stopped
+ * (emergency latch, distinct from the orderly proof; review 2 finding 5).
+ * A reset needs no fence; an Off with active DMA is refused (EBUSY) and
+ * the user turns the machine off with its power button. */
+#define POWER_FORCE_FLUSH_MS 3000u
+#define POWER_FORCE_QUIESCE_MS 2000u
+static int power_force(bool off, uint32_t pid)
+{
+    klog("[power] forced %s requested by pid %u running=%u progress=%u storage=%s", off ? "power off" : "reboot",
+         pid, power_running, power_progress, storage_flushed ? "durable" : "pending");
+    if (!storage_flushed) {
+        uint64_t end = deadline_after_ms(POWER_FORCE_FLUSH_MS);
+        int e;
+        while ((e = storage_sync_bounded(end)) == -EAGAIN && !deadline_passed(end)) task_sleep_ms(10);
+        klog("[power] forced flush result=%d", e == -EAGAIN ? -ETIMEDOUT : e);
+    }
+    int fence;
+    {
+        uint64_t end = deadline_after_ms(POWER_FORCE_QUIESCE_MS);
+        while ((fence = power_source_quiesce_dma(end)) == -EAGAIN && !deadline_passed(end)) task_sleep_ms(10);
+        if (fence == -EAGAIN) fence = -ETIMEDOUT;
+        /* Review 4, finding 5: the platform step is the suspend-capable stop
+         * (network, audio, USB); the ATA storage fence is terminal and runs
+         * here, on the forced path only, whatever the platform step said. */
+        int devices = fence;
+        int disks = ata_power_quiesce ? ata_power_quiesce() : 0;
+        if (!fence) fence = disks;
+        klog("[power] forced device fence result=%d devices=%d storage=%d", fence, devices, disks);
+        power_progress |= CIUKI_POWER_UNCERTAIN;
+        if (!off) {
+            /* Review 4 finding 3 and review 5 finding 1: the 8042 pulse and
+             * the triple fault are a CPU INIT that leaves bus masters running.
+             * The ATA fence stops or revokes every channel's bus master even
+             * when a device cannot prove itself idle, so a failed disk proof
+             * leaves no DMA; a failed or timed-out platform step (network,
+             * audio, USB keep their uncertain claims) does. Then only the
+             * qualified hard PCI reset (PCIRST#) may be written; without one,
+             * or when it did not take, everything is kept and the user resets
+             * the machine (the desktop shows the reset-button message). */
+            if (devices) {
+                klog("[power] stage=forced-reset order=pci-reset-only devices=%d", devices);
+                int e = kernel_reboot_pci_only();
+                klog("[power] forced reset refused: DMA unresolved and %s; use the computer's reset button",
+                     e == -ENOTSUP ? "no qualified hard reset" : "the hard reset did not take");
+                return -EBUSY;
+            }
+            klog("[power] stage=forced-reset fallback=8042-triple-fault"); kernel_reboot();
+        }
+    }
+    if (!power_source_can_off()) { klog("[power] forced off: no soft-off provider"); return -ENOTSUP; }
+    if (fence) { klog("[power] forced off refused: devices not quiescent (error %d); turn the computer off with its power button", fence); return -EBUSY; }
+    power_source_mark_emergency_stopped();
+    int e = power_source_soft_off_forced();   /* the forced authorization, never the orderly entry (review 3, finding 4) */
+    klog("[power] forced soft-off returned error=%d", e);
     return e;
 }
 /* The desktop, or Setup's capability holder in Setup mode, owns call 73's
@@ -487,6 +553,8 @@ int32_t power_syscall(uint32_t action)
         f=irq_save(); power_running=false; irq_restore(f);
         return e;
     }
+    if (action == CIUKI_POWER_FORCE_REBOOT || action == CIUKI_POWER_FORCE_OFF)
+        return power_force(action == CIUKI_POWER_FORCE_OFF, caller->pid);
     if (action != CIUKI_POWER_REBOOT && action != CIUKI_POWER_OFF) return -EINVAL;
     bool off = action == CIUKI_POWER_OFF;
     uint32_t f = irq_save();

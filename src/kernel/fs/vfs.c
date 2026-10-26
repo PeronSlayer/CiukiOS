@@ -329,6 +329,14 @@ void vfs_reserve_file_locked(struct vfs *v,uint32_t mask,struct vfs_file_identit
     struct fs_request_scope scope; fs_request_enter(&scope,0);
     (void)reserve_file_request(v,mask,0,file); fs_request_leave(&scope);
 }
+/* T23 c42f556e: an admission-style reservation that ends at the request's
+ * deadline (cleanly withdrawn, nothing reserved) for a caller that already
+ * holds the namespace; the storage shutdown preflight uses it. */
+int vfs_reserve_request_locked(struct vfs *v,uint32_t mask,const struct vfs_request *request) {
+    struct fs_request_scope scope; fs_request_enter(&scope,request);
+    int error=reserve_request(v,mask,request); fs_request_leave(&scope);
+    return error;
+}
 void vfs_reserve_locked(struct vfs *v,uint32_t mask) {
     /* Legacy void helpers cannot return partial admission. They are also used
      * to retire published references; only int-returning admission may cancel. */

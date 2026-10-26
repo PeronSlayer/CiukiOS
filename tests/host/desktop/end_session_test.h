@@ -8,9 +8,11 @@ static void es_logoff(struct desktop *desktop) { es_logoffs++; desk_logon_open(d
 static unsigned es_terms; static uint32_t es_term_pid; static int es_term_sig;
 static int es_terminate(uint32_t pid, int sig) { es_terms++; es_term_pid=pid; es_term_sig=sig; return 0; }
 static unsigned es_w32_calls[8]; static uint32_t es_w32_flags; static struct desk_w32_status es_w32_next;
+static int es_w32_error;   /* review P1-3: BEGIN/STATUS fail with this -errno while set */
 static int es_w32(struct desktop *d, unsigned action, uint32_t flags, struct desk_w32_status *st)
 {
     (void)d; assert(action<8 && st); es_w32_calls[action]++;
+    if (es_w32_error && (action==DESK_W32_SESSION_BEGIN || action==DESK_W32_SESSION_STATUS)) return es_w32_error;
     if (action==DESK_W32_SESSION_BEGIN) es_w32_flags=flags;
     *st=action==DESK_W32_SESSION_STATUS ? es_w32_next : (struct desk_w32_status){0};
     return 0;
@@ -19,7 +21,7 @@ static void es_setup(void)
 {
     shutdown_setup();
     shutdown_desktop.terminate=es_terminate; es_terms=es_term_pid=0; es_term_sig=0;
-    memset(es_w32_calls,0,sizeof(es_w32_calls)); es_w32_flags=0; memset(&es_w32_next,0,sizeof(es_w32_next));
+    memset(es_w32_calls,0,sizeof(es_w32_calls)); es_w32_flags=0; memset(&es_w32_next,0,sizeof(es_w32_next)); es_w32_error=0;
 }
 static void es_send(int i, uint32_t pid, unsigned op, unsigned length, uint32_t a, uint32_t b)
 {
@@ -56,6 +58,58 @@ static void es_run(uint64_t from, uint64_t to, const int *slots, const uint32_t 
         for (unsigned k=0; pids[k]; k++) { drain(&shutdown_desktop,slots[k]); es_pong(slots[k],pids[k]); }
         shutdown_at(t);
     }
+}
+/* T23 c42f556e: a Win32 program's own prompt is a window of its process
+ * (a v3 window on its own connection); it answers PINGs while it is shown. */
+static unsigned es_v3_token;
+static int es_v3_window(uint32_t pid, const char *title)
+{
+    struct desktop *d=&shutdown_desktop;
+    int root=0;
+    while (root<DESK_CLIENTS && (d->clients[root].channel>=0 || d->clients[root].internal)) root++;
+    assert(root<DESK_CLIENTS);
+    fake_channel(40+root); assert(desk_add_client(d,40+root)==root);
+    struct ciuki_message m; desk_v3_message(&m,DESK_HELLO,0,0,0,0); m.sender_pid=pid;
+    assert(!desk_v3_receive(d,root,&m));
+    fake_surface(60+root,160,80,0x335577u);
+    unsigned n=(unsigned)strlen(title);
+    desk_v3_message(&m,DESK_CREATE_WINDOW,36+n,++es_v3_token,1,1); m.sender_pid=pid; m.fd_count=1; m.fds[0]=60+root;
+    desk_put32(m.data+16,DESK_V3_OVERLAPPED); desk_put32(m.data+20,0); desk_put32(m.data+24,0);
+    desk_put32(m.data+28,40); desk_put32(m.data+32,40); desk_put32(m.data+36,160); desk_put32(m.data+40,80);
+    desk_put32(m.data+44,1); desk_put32(m.data+48,n); memcpy(m.data+52,title,n);
+    assert(!desk_v3_receive(d,root,&m));
+    for (int k=0;k<DESK_CLIENTS;k++)
+        if (d->clients[k].window && d->clients[k].version==DESK_V3_VERSION && d->clients[k].v3_peer==(unsigned)root+1) return k;
+    assert(0); return -1;
+}
+/* A second v3 window on the connection of `owner`: owned (its process's
+ * prompt when DESK_V3_MODAL) or not; -ENOSPC when the desktop refuses it. */
+static int es_v3_owned(int owner, int owned, uint32_t style, const char *title)
+{
+    struct desktop *d=&shutdown_desktop; struct desk_client *o=&d->clients[owner];
+    int root=(int)o->v3_peer-1; uint32_t pid=o->pid;
+    unsigned id=1; for (int k=0;k<DESK_CLIENTS;k++) if (d->clients[k].v3_peer==o->v3_peer && d->clients[k].v3_id>=id) id=d->clients[k].v3_id+1;
+    fake_surface(90+(int)id,160,80,0x775533u);
+    unsigned n=(unsigned)strlen(title); struct ciuki_message m;
+    desk_v3_message(&m,DESK_CREATE_WINDOW,36+n,++es_v3_token,id,1); m.sender_pid=pid; m.fd_count=1; m.fds[0]=90+(int)id;
+    desk_put32(m.data+16,style); desk_put32(m.data+20,owned ? o->v3_id : 0); desk_put32(m.data+24,owned ? o->v3_generation : 0);
+    desk_put32(m.data+28,60); desk_put32(m.data+32,60); desk_put32(m.data+36,160); desk_put32(m.data+40,80);
+    desk_put32(m.data+44,1); desk_put32(m.data+48,n); memcpy(m.data+52,title,n);
+    int e=desk_v3_receive(d,root,&m);
+    if (e) return e;   /* the desktop closed the refused surface */
+    for (int k=0;k<DESK_CLIENTS;k++)
+        if (d->clients[k].window && d->clients[k].v3_peer==o->v3_peer && d->clients[k].v3_id==id) return k;
+    assert(0); return -1;
+}
+static void es_v3_pong(int i)
+{
+    struct desktop *d=&shutdown_desktop; struct desk_client *c=&d->clients[i];
+    int root=(int)c->v3_peer-1;
+    drain(d,root);
+    if (!c->window || !c->ping_pending) return;
+    struct ciuki_message m; desk_v3_message(&m,DESK_PONG,4,0,c->v3_id,c->v3_generation);
+    desk_put32(m.data+16,c->serial); m.sender_pid=c->pid;
+    assert(!desk_v3_receive(d,root,&m));
 }
 static int es_intact(const int *slots, unsigned n)
 {
@@ -197,12 +251,18 @@ static void test_end_session(void)
     es_answer(b,341,DESK_SESSION_AGREE);
     assert(es_w32_calls[DESK_W32_SESSION_BEGIN]==1 && es_w32_flags==(DESK_EWX_SHUTDOWN|DESK_EWX_POWEROFF|DESK_W32_SESSION_HOLD));
     es_w32_next=(struct desk_w32_status){DESK_W32_PENDING,500,0x1234,1};   /* its save prompt is open */
-    { int s[]={b}; uint32_t p[]={341,0}; es_run(1000000000ull,40000000000ull,s,p); }
+    /* T23 c42f556e: the prompt is a modal dialog owned by a window of pid 500 (review 2, finding 7) */
+    int program=es_v3_window(500,"Program"), prompt=es_v3_owned(program,1,DESK_V3_OVERLAPPED|DESK_V3_MODAL,"Save changes?");
+    assert(prompt>=0);
+    for (uint64_t t=1000000000ull; t<=40000000000ull; t+=250000000ull) {
+        drain(d,b); es_pong(b,341); es_v3_pong(program); es_v3_pong(prompt); shutdown_at(t);
+    }
     assert(d->session.state && !d->end_task.kind && !es_terms && es_w32_calls[DESK_W32_SESSION_STATUS]>100);
     es_w32_next.state=DESK_W32_VETOED; shutdown_at(40100000000ull);
     { int s[]={b}; assert(es_intact(s,1)); }
     assert(es_last(b,DESK_END_SESSION).focused==0 && es_w32_calls[DESK_W32_SESSION_CANCEL]==1 && !es_w32_calls[DESK_W32_SESSION_COMMIT]);
     assert(!shutdown_calls && !es_terms);
+    desk_drop_client(d,(int)d->clients[program].v3_peer-1);   /* Cancel closed the program's prompt */
     memset(es_w32_calls,0,sizeof(es_w32_calls));
     es_w32_next=(struct desk_w32_status){DESK_W32_PENDING,501,0x1240,0};
     desk_session_begin(d,1); es_answer(b,341,DESK_SESSION_AGREE);

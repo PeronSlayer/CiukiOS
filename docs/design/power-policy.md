@@ -336,8 +336,12 @@ At G11 allocation the highest call-73 action on `main` was STATUS (4). G11 adds:
 | `CIUKI_POWER_POLICY` | 6 | C = `struct ciuki_power_policy`, D = its size | 0, EINVAL, EFAULT, ENODEV (no ATA disk); desktop only |
 | `CIUKI_POWER_EVENTS` | 7 | C = `struct ciuki_power_events`, D = its size | 0; any native client, cached, no firmware call |
 | `CIUKI_POWER_CANCEL_STANDBY` (G11B) | 8 | none | 0 if no pending BIOS request; rejects it otherwise; desktop only; EBUSY during sleep/shutdown |
+| `CIUKI_POWER_FORCE_REBOOT` (T23 c42f556e) | 9 | none | the forced end of a shutdown that cannot finish, after the user's Force: a 3 s best-effort flush, UNCERTAIN, reset; allowed beside a blocked REBOOT/OFF; desktop only; does not return |
+| `CIUKI_POWER_FORCE_OFF` (T23 c42f556e) | 10 | none | as above with a 2 s bounded device fence (`power_source_quiesce_dma`, ATA storage fence included); the provider's forced entry (`soft_off_forced`; APM `apm_backend_off_forced` on `forced_shutdown`) only on a proved fence (emergency latch, never the orderly proof): EBUSY otherwise, ENOTSUP without a forced entry, EIO if the machine stayed on |
 
-QUERY gains `CIUKI_POWER_CAN_STANDBY` (16).
+QUERY gains `CIUKI_POWER_CAN_STANDBY` (16). Actions 9 and 10 are specified in
+`execution-abi.md` ("Power control amendment") and modelled in
+`tests/host/power_runtime_test.c` (`test_forced`).
 
 `struct ciuki_power_policy` (version 1, 32 bytes): `version`, `size`,
 `disk_seconds` (in), `disks`, `refused`, `applied_seconds`, `error`
