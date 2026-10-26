@@ -34,7 +34,7 @@ The binding account defaults are:
 
 | Installation | Accounts and authentication |
 | --- | --- |
-| Ready-made image, including raw/QEMU/VirtualBox/VMware distribution | Initially CiukiUser uid 1000, Administrators+Users, empty password, direct logon only as the sole enabled interactive account. A1-1 permanently retires this exception before another account may be enabled, or CiukiUser renamed/demoted unless already disabled. |
+| Ready-made image, including raw/QEMU/VirtualBox/VMware distribution | Initially CiukiUser uid 1000, Administrators+Users, empty password, direct logon only as the sole enabled interactive account. A1-1 permanently retires this exception by setting a password before another account may be enabled or CiukiUser renamed/demoted (A2-7). |
 | Setup installation | Mandatory custom user uid 1000, first administrator; no CiukiUser. Setup asks for the CiukiAdministrator password. |
 | Both | CiukiAdministrator uid 500 is built-in, disabled and hidden normally; Safe Mode exposes its password-authenticated recovery logon, or an administrator explicitly enables it. Guest uid 501 exists, disabled by default. |
 
@@ -77,6 +77,14 @@ already running sec-k01/sec-user-01 implementations. The three original ABI
 records keep their sizes/offsets; operations 8..14 and three new records make
 launch, secure console and role-bound connections explicit.
 
+Round 2: A2-1..A2-8 in the final Decisions table apply
+[Lead amendment 2](../directives/sec-contract.md#lead-amendment-2-2026-10-26-1245-cross-review-round-2).
+The main half freezes the complete challenge relay, durable account STATUS,
+OWNER-resolved staging/checkpoints, password-first replacement and PROFILE query.
+Below, two epoch fields in the launch record and three fields in the console
+record replace reserved words without changing record sizes; role routes and
+SERVICE_CANCEL semantics are amended relative to f3b388722.
+
 ## Primary research and comparison
 
 These sources were consulted on the contract date. General API pages describe
@@ -117,6 +125,15 @@ main contract's R3/R4/R8 were rechecked during reconciliation. Microsoft
 distinguishes client logon-screen power from authenticated user rights; K-Q8
 explicitly admits Guest too. [NIST's historical password guidance](https://pages.nist.gov/800-63-3/sp800-63b.html#memsecretver)
 is identified as superseded; the approved 8-63-byte bound is a CiukiOS choice.
+
+Round 2 rechecked Microsoft [desktops](https://learn.microsoft.com/en-us/windows/win32/winstation/desktops),
+[access tokens](https://learn.microsoft.com/en-us/windows/win32/secauthz/access-tokens)
+and [cancellation](https://learn.microsoft.com/en-us/windows/win32/fileio/canceling-pending-i-o-operations).
+Only one input domain is active; process identity must accompany work; requesting
+cancellation does not itself prove a cancelled result. The exact epochs and
+best-effort transport/durable ACCOUNTS STATUS distinction below are CiukiOS
+choices. See main section 2.1 for source scope, POSIX fetch limitations and the
+current inode counter's unsuitability as an owner locator.
 
 ### Repository evidence
 
@@ -227,8 +244,9 @@ A standard user's child remains standard even if named setup, control or
 w32srv. Ready-image autologon uses the same session path with CiukiUser's
 explicit empty-password verifier and persisted autologon choice, only while it
 is the sole enabled interactive account. A1-1 in the main contract permanently
-retires this exception on password/disable/replacement/name/type transitions;
-enabling another account while it is blank/enabled is refused, including Guest.
+retires this exception when its password is first set (A2-7); enabling another
+account while it is blank/enabled is refused, including Guest. Replacement is
+password-first through ordinary single-target operations, never an atomic swap.
 Reboot never restores retired autologon.
 
 Logoff retains G3's application save/veto protocol:
@@ -422,7 +440,8 @@ On uncertain recovery, keep the affected root inaccessible and retain the
 old committed metadata. A stale/missing owner map must never turn a profile
 into publicly writable data. Exhausted bounds return ENOSPC/ENOMEM. Mounting
 or logon can enter authenticated recovery; no new panic or default profile.
-The account/owner PREPARE/COMMIT/ABORT/STATUS handshake, durable uid reservation
+The account/owner RESERVE/PREPARE/COMMIT/ABORT/STATUS and CHECKPOINT/COMPACT
+protocol, OWNER-issued root identities/shared manifest, durable uid reservation
 and cross-store recovery order are in the main contract section 3.5. The
 kernel-registered OWNER endpoint is service 3 with ACCOUNT/boot-SETUP role
 checks, full batch codec, durable receipts and STATUS retention in main section
@@ -794,7 +813,9 @@ ciuki_security_launch: size 96, alignment 4.
 | uint32_t grant_generation | 68 | 4 |
 | uint32_t state | 72 | 4 |
 | int32_t error | 76 | 4 |
-| uint32_t reserved[4] | 80 | 16 |
+| uint32_t activation_console_epoch | 80 | 4 |
+| uint32_t activation_authentication_epoch | 84 | 4 |
+| uint32_t reserved[2] | 88 | 8 |
 
 ciuki_security_console: size 64, alignment 4.
 
@@ -810,7 +831,10 @@ ciuki_security_console: size 64, alignment 4.
 | uint32_t restore_cookie_lo | 28 | 4 |
 | uint32_t restore_cookie_hi | 32 | 4 |
 | uint32_t state | 36 | 4 |
-| uint32_t reserved[6] | 40 | 24 |
+| uint32_t authentication_required | 40 | 4 |
+| uint32_t console_epoch | 44 | 4 |
+| uint32_t authentication_epoch | 48 | 4 |
+| uint32_t reserved[3] | 52 | 12 |
 
 ciuki_security_link: size 64, alignment 4.
 
@@ -923,19 +947,29 @@ above apply. All new output records must be nonzero/aligned/writable and exactly
 with the same overlap rejection as credential outputs. No separate unfrozen
 supervisor entry may perform these handoffs.
 
+For pre-session authentication LOGON may call SECURE_ENTER with session_id=0,
+session_generation=0 and reason=ATTENTION only, querying/establishing the existing
+trusted boot gate idempotently; if an interactive session already exists, this
+session-0 form returns EBUSY instead. It returns that gate's actual console generation,
+epochs and cookie; session 0 never gets user grants. SECURE_LEAVE(session 0) is
+EACCES. SESSION_CREATE retains this console coordinator's current epochs rather
+than resetting them; readiness activation still needs the authenticated launch
+authority. SESSION_QUERY(0) remains outside the interactive-session query. This
+is how LOGON binds BEGIN_AUTH before any user session exists.
+
 | Operation | Input record | Result |
 | --- | --- | --- |
 | SESSION_LAUNCH | launch: version=1, size=96, purpose=DESKTOP or W32SRV, session_id matching args, session_generation from SESSION_QUERY (args.result); all other fields zero | Complete launch record. One child of each purpose per session; duplicates EBUSY. The child is prepared with that session's immutable credential and the fixed sealed-role image (`/Programs/desktop` or `/System/Win32/w32srv`), never an arbitrary spawn path. |
 | LAUNCH_POLL | launch: version/size, session id/generation, purpose, launch_id/generation; remaining fields zero | Snapshot PREPARING/READY/RUNNING/FAILED with original pid/process generation, current session/service/grant generations and descriptors; error is zero except FAILED, then negative errno. No wait. A pending handshake returns PREPARING, not an erroneous partial launch. |
-| SECURE_ENTER | console: version=1,size=64,session id/generation,reason=LOCK/SAVER/RESUME/ATTENTION; other fields zero | TRUSTED state, fresh nonzero console/grant generation and one-use u64 restore cookie. Idempotent same-reason enter while already trusted returns current binding; it does not remint a cookie. |
-| SECURE_LEAVE | console: exact current id/session/console/grant generations, reason and restore cookie; state/reserved zero | USER state after LOGON authorizes the matching owner's unlock. Consumes cookie; stale/replayed generations return EAGAIN, foreign session EACCES. Never mints another session or credential. |
+| SECURE_ENTER | console: version=1,size=64,session id/generation,reason=LOCK/SAVER/RESUME/ATTENTION; other fields zero | TRUSTED state, console/grant generations, console/authentication epochs, persistent authentication_required (0/1), one-use u64 restore cookie. Transition table below governs idempotence and lock precedence. |
+| SECURE_LEAVE | console: exact current id/session/console/grant generations, reason, authentication_required, both epochs and restore cookie; state/reserved zero | USER only after release guards below and LOGON's matching owner authentication when required. Consumes cookie; stale/replayed binding EAGAIN, foreign session EACCES, pair not ready EBUSY. Never mints another session or credential. |
 
 SESSION_CREATE still publishes kernel session ACTIVE, initially generation 1,
 while presentation stays trusted. SESSION_QUERY returns current session generation
 in args.result (state unchanged); no new session id is needed. Launch admission,
 console handoff and CLOSING each advance the nonzero session generation; callers
 refresh after a transition. Console, grant, launch, process, service and endpoint
-generations never wrap/reuse during a boot; exhaustion EAGAIN before mutation.
+generations and both epochs never wrap/reuse during a boot; exhaustion EAGAIN before mutation.
 On a required secure transition, exhaustion keeps the neutral trusted screen
 and allows terminal teardown/cleanup without allocating another generation.
 A pending launch is bound to the stable session id and its retained object, not
@@ -968,10 +1002,18 @@ CIUKI_SESSION_*/CIUKI_LAUNCH_* environment labels (decimal values), and grant/
 service labels appropriate to its purpose. These labels describe installed fds;
 editing them grants nothing. Ready means the service registered and loaded the
 correct profile/hive and the desktop has a complete concealed first frame.
-Both children must be ready before desktop POLL atomically changes the pair to
-RUNNING, transfers the user console and makes the first user frame/input visible.
-w32srv readiness alone stays READY. Start w32srv then desktop, refreshing the
-session generation between launches. Maximum two launch records per session.
+Both children must be ready. The initial desktop launch captures the kernel's
+current console_epoch/authentication_epoch in its two activation fields (caller
+inputs zero). Desktop POLL may atomically change the pair to RUNNING and transfer
+user presentation **only** if both captured epochs still match, the initial
+logon activation grant remains unconsumed, authentication_required=0 and no
+subsequent secure entry/service death has superseded it. Otherwise readiness
+becomes READY, applications stay concealed and POLL never clears the gate.
+w32srv readiness alone stays READY. LOGON must explicitly release the current
+gate with SECURE_LEAVE after both are ready; that operation may perform the first
+activation with current epochs and a current authentication proof if required.
+Start w32srv then desktop, refreshing session generation between launches.
+Maximum two launch records per session. Ready states are not unlock authority.
 
 Prepare/copy/resource failure rolls back the unpublished child, role registration,
 all endpoints/console/grants and charges, returning unchanged output. Once a child
@@ -991,25 +1033,67 @@ files and background work continue while locked; only presentation/input is
 suspended. Reject screenshot/readback/synthetic unlock routes. Returning from
 trusted presentation creates fresh map/lease generations; stale mappings do not
 become writable again. LOGON verifies the current owner's password via AUTH
-before LEAVE for LOCK/SAVER/RESUME. ATTENTION can return from the security menu
-without a password only when it did not request a protected lock; a blank account
+before LEAVE whenever authentication_required=1, regardless of the most recent
+reason. ATTENTION can return from the security menu without a password only
+when authentication_required=0; a blank account
 gets set-password guidance, never a claim of password protection. Kernel-observed
 physical Ctrl+Alt+Delete enters this same trusted transition and notifies LOGON;
 ordinary input cannot manufacture that event. Resume arms the transition before
 restoring a user frame.
 
-LOGON/LOGON_UI/ACCOUNT crash while locked invalidates pending authentication,
-retires the restore cookie and keeps applications running concealed; PID 1
-restarts the fixed service role, obtains a fresh cookie through ENTER and demands
-fresh authentication. LOGON failure while a session is running also enters the
-trusted gate. If a restore cookie was invalidated by service death, ENTER creates a fresh
-binding for the replacement registered LOGON, overriding the ordinary idempotent
-return rule but never restoring user presentation. If the trusted UI cannot
-restart, the neutral error/shutdown screen
-stays in control. No stale successful reply can call LEAVE. Session termination
-uses END_BEGIN/END_COLLECT and the existing drain contract, not an unlock shortcut.
-Sec-k01 implements the operations/role checks and host-testable grant adapter;
-sec-k07 integrates **all** real input/display backends before any secure-lock claim.
+#### Secure-console transition table (A2-3)
+
+The kernel session retains state TRUSTED/USER, authentication_required (initially
+0), console_epoch and authentication_epoch (nonzero, inherited from the current
+boot console coordinator, whose epochs start at 1), plus current
+reason/cookie and the initial activation grant. The required bit persists across
+trusted menu changes, launch readiness and all service respawns for that session;
+it is cleared only by authenticated SECURE_LEAVE or terminal session teardown.
+It is not a disk-persistent lock across a reboot; reboot destroys the session.
+Every nonidempotent secure entry and LOGON/LOGON_UI/ACCOUNT death advances both
+epochs, retires the old cookie and all attempts, and invalidates initial automatic
+activation. USER restoration advances console_epoch and grant generation,
+consumes the cookie and retires the successful authentication proof. A repeated
+entry with the same reason while TRUSTED, same live LOGON binding and unchanged
+required bit returns the existing tuple; it cannot reset an epoch or clear a bit.
+
+| Current state / condition | Event | New state and release guard |
+| --- | --- | --- |
+| New session, pair preparing, required=0 | Both ready, desktop POLL | USER only with unchanged captured epochs and initial activation grant. Otherwise READY/TRUSTED until explicit current LEAVE. |
+| USER or initial TRUSTED, required=0 | ATTENTION | TRUSTED, required=0, new epochs/cookie; initial activation revoked. Cancel/menu return requires current LOGON LEAVE and ready pair; it cannot rely on a later POLL. |
+| Any live state | LOCK, protected SAVER or armed RESUME | Conceal first, TRUSTED, required=1, new epochs/cookie except same-binding idempotence. Owner authentication for that exact epoch is mandatory. |
+| TRUSTED, required=1 (any reason) | ATTENTION / Ctrl+Alt+Delete | TRUSTED, required remains 1, new epochs/cookie. A security-menu Cancel cannot restore USER, even though the latest reason is ATTENTION. |
+| TRUSTED, required=1 | Cancel, wrong password, stale outcome/cookie, late ready/POLL | Unchanged concealed state and required=1; no grant transfer. A stale LEAVE fails EAGAIN. |
+| TRUSTED, required=1 | Current owner's correlated success and ready pair, current LOGON LEAVE | USER, clear required, consume proof/cookie, fresh console/grants; applications/credential remain the same. Pair not ready: EBUSY, remain concealed; retain only a still-current proof. |
+| Any live state | LOGON/LOGON_UI/ACCOUNT death or respawn boundary | TRUSTED, set required=1 for any existing interactive session (boot gate has no owner). Advance epochs, revoke initial activation, attempts and cookie. No respawn/POLL releases presentation. |
+| TRUSTED after service replacement | New registered LOGON ENTER | Fresh binding/cookie (even same reason), preserve required; require fresh owner authentication when set. A blank owner can only end the concealed session and use trusted logon/shutdown guidance; no empty-password unlock or false protected-lock claim. |
+| Any | END_BEGIN/failed child/session teardown | CLOSING, trusted gate; revoke all restore/activation authority. Only END_COLLECT and new authenticated session admission can proceed. |
+
+An authentication proof is LOGON's consumed AUTH_OUTCOME for the same retained
+session/uid, UI endpoint, console generation, authentication_epoch, account and
+service generations. Kernel LEAVE trusts only the registered SYSTEM LOGON role
+to hold this proof; UI/DESKTOP fields cannot supply it. LOGON checks the tuple
+again immediately before LEAVE. ENTER/physical attention/death and LEAVE are
+serialized under the same console transition lock, without waiting under it.
+A blank-account LOCK request is handled as set-password guidance before arming
+a protected lock; physical secure attention can still conceal it. No path
+silently treats an empty password as an authenticated unlock.
+
+PID 1 restarts only fixed trusted roles with fresh generations. Service restart
+keeps applications running concealed, obtains a new ENTER binding and discards
+all old successes. If trusted UI cannot restart, retain neutral error/shutdown
+presentation. Session termination uses END_BEGIN/END_COLLECT, not an unlock
+shortcut. Sec-k01 supplies operations/state machine and host grant adapter;
+sec-k07 qualifies every real display/input backend before a secure-lock claim.
+
+Mandatory H01/H09 sequences, repeated with service generations/process/fd reuse:
+(1) pending launch -> SECURE_ENTER(LOCK) -> both ready -> LAUNCH_POLL: READY and
+concealed, no handoff until current authenticated LEAVE; (2) LOCK -> physical
+Ctrl+Alt+Delete -> Cancel: required stays 1, no desktop frame/input; (3) insert
+LOGON, LOGON_UI and ACCOUNT restart separately between entry/readiness/Cancel
+and between successful AUTH_OUTCOME/LEAVE in those sequences: old attempts,
+cookies/epochs and initial activation fail, fresh owner authentication alone
+restores the session. Check unchanged application progress and credential.
 
 ### Service identities, connection and retained subjects (A1-3)
 
@@ -1032,14 +1116,20 @@ parents, session and generation before publication; a public copy/spawn/exec get
 ROLE_NONE. No public REGISTER operation, PID/name discovery or administrator role
 registration. uid 0 without the required role is denied. Singleton death removes
 the registration; only PID 1 can reestablish it with a fresh service generation.
+Singleton service generations are scoped by role, start at 1 on first bootstrap
+each boot and increase on every death/respawn, without reuse. Both AUTH/ACCOUNTS
+use ACCOUNT's same role generation. Initial LOGON=1 and ACCOUNT=1, plus ACCOUNT
+and LOGON's consumed in-memory latch, are required for AUTOLOGON; a role restart
+cannot lose the latch and then impersonate its first instance. No public boot-id
+or autologon-latch operation is added.
 
 | Service id / registered server | Allowed connecting clients and purpose |
 | --- | --- |
-| 1 AUTH / ACCOUNT | LOGON_UI only: list eligible logon names, authenticate, unlock and trusted enrollment; no ordinary client's password-to-session primitive. |
-| 2 ACCOUNTS / ACCOUNT | Admitted native/Win32 client: filtered lookup, self-password/picture change; administrator-only management checked on each request, not merely CONNECT. LOGON and LOGON_UI can get public state. |
+| 1 AUTH / ACCOUNT | LOGON_UI: LIST only. LOGON: LIST, complete CHALLENGE/verification/ENROLL_PLAN/ENROLL relay and retained-ready-tuple AUTOLOGON. ACCOUNT trusts only LOGON to forward the kernel-observed UI->LOGON endpoint generation; no direct UI verification/session primitive. |
+| 2 ACCOUNTS / ACCOUNT | Admitted native/Win32 client: filtered lookup, authorized PROFILE, self-password/picture change, caller-owned RESERVE/STATUS; administrator management checked on each request, not merely CONNECT. LOGON and LOGON_UI can get public state. |
 | 3 OWNER / OWNER | ACCOUNT, or boot SETUP only for explicit confirmed repair of an identified installation: full destination batch in main section 3.5. Initial Setup stages data without owner COMMIT; installed ACCOUNT promotes the seed. A uid supplied by a caller is not a subject. |
 | 4 REGISTRY / REGISTRY | Admitted native/Win32 clients and registered same-session W32SRV: logical key operations authorized as retained subject, never raw backing paths; machine restart maintenance additionally requires the broker's administrator-checked queue protocol. |
-| 5 LOGON / LOGON | ACCOUNT and LOGON_UI only: correlated authentication completion, trusted lock/menu/power events. Only ACCOUNT can report verified authentication; LOGON_UI cannot claim a successful verification. |
+| 5 LOGON / LOGON | ACCOUNT: AUTH_OUTCOME only, success or failure with full attempt correlation. LOGON_UI: ENROLL_PLAN/BEGIN_AUTH/SUBMIT_AUTH and trusted lock/menu/power events. Same-session kernel-established DESKTOP: SESSION_LOCK only, never unlock/authentication/menu-return. Other roles/scopes denied. |
 | 6 W32SRV / W32SRV | Admitted same-session clients, native or Win32, for existing supported registry/USER compatibility work; another session cannot choose a target session id. |
 
 SERVICE_CONNECT inputs args.spawn_address -> link (version=1,size=64,service,
@@ -1059,14 +1149,32 @@ QUERY_PEER remains the credential query; link peer_role is kernel output and
 services also use the retained internal subject rather than trusting copied bytes.
 
 SERVICE_CANCEL input link includes service, owned endpoint_fd/generation and
-nonzero request_id_lo/hi; others zero, no output buffer. It marks the matching
-exchange cancelled: args.result=1 if cancelled before the durable point, 0 if
-already irrevocable/completed. Closing a link, session revocation or peer death
-performs the same cancellation. No cancelled reply/fd attachment may reach a new
-endpoint or session. Cancellation after COMMIT_REQUIRED cannot roll back durable
-work; caller learns the result by the transaction STATUS protocol after reconnect.
-A partial uncommitted request is discarded. Reconnection always gets a fresh
-endpoint generation, never a continuation using a recycled fd number.
+nonzero request_id_lo/hi; others zero, no output buffer. This is **best effort
+before server admission**, not a durable-state oracle (A2-4). Admission for this
+purpose is the first successful dequeue/copy of any fragment of that request to
+the server process; channel receive and CANCEL serialize that dequeue against
+queue removal. args.result=1 only if no fragment has reached the server and all
+queued fragments/reassembly have been discarded atomically. args.result=0 means
+**irrevocable-or-unknown**: some fragment was admitted, the request completed,
+or it cannot prove pre-admission cancellation. It does not promise a commit or
+an abort. A partial admitted body may still fail validation without mutation. result=1
+concerns this transport attempt only: cancelling an unadmitted retry does not
+undo an earlier same-operation-id commit; STATUS remains authoritative.
+No server-side durable admission/completion notification is required: kernel
+transport deliberately makes no claim about COMMIT_REQUIRED or service storage.
+
+Close/session revocation/death discards future replies and unadmitted work;
+accepted work retains its subject and follows the service's durable recovery
+protocol. No cancelled reply/attachment may reach a new endpoint/session.
+Revoked subjects cannot admit new effects; an already durable COMMIT_REQUIRED
+intent is finished only by ACCOUNT's explicit SYSTEM recovery subject. Clients
+resolve uncertain mutations through caller-authorized ACCOUNTS STATUS=7 with
+the persisted client_operation_id, not OWNER STATUS (ordinary clients cannot
+connect there). Same-id retry never reexecutes a committed/expired operation.
+A fresh connection always has a fresh endpoint generation; it cannot continue
+an old transport request by reusing its fd/request_id. Durable status does not
+restore the revoked session or grant another user's result. H01/H03 race cancel
+against first dequeue, durable intent, OWNER COMMIT, reply loss and reconnect.
 
 Reuse `channel_connect` (`channel.c:307-326`) duplex queues/description accounting,
 close/wait/poll cleanup, extending it with retained peer credentials/process and
@@ -1612,8 +1720,9 @@ permitted. Run suites serially at nice 19. No host suite runs for this design.
 ## Decisions
 
 Binding sources: [sec-lead-decisions.md](../directives/sec-lead-decisions.md) and
-[Lead amendment 1](../directives/sec-contract.md#lead-amendment-1-2026-10-26-1145-cross-review-round-1).
-A1-n identifies the amendment's numbered decision n.
+[Lead amendment 1](../directives/sec-contract.md#lead-amendment-1-2026-10-26-1145-cross-review-round-1) and
+[Lead amendment 2](../directives/sec-contract.md#lead-amendment-2-2026-10-26-1245-cross-review-round-2).
+A1-n/A2-n identify those amendments' numbered decisions; A2 takes precedence.
 M-Qn means its sec-model Qn answer; K-Qn means its sec-kernel K-Qn answer.
 These close the former open-question tables in both drafts. Interface details
 are frozen in the kernel half; account/owner transactions, service storage and
@@ -1636,7 +1745,7 @@ consumer behavior are coordinated in the main half.
 | K-Q6 | Exact XP default parity is unnecessary; document CiukiOS choices. No persistent lockout, one-second bounded retry. Historical gaps are not implementation blockers. |
 | K-Q7 | Ready 500 unset, 8-63-byte custom/Guest passwords, and explicit Setup CD account repair if all administrator credentials/verifiers are lost or corrupt. No implicit empty recovery. |
 | K-Q8 | Local shutdown/restart for all interactive users including Guest and on logon screen; mixer/display/input preferences per session, machine defaults admin-only. Sec-k04 audits INPUT_KEYBOARD_SET and CIUKI_SETUP_NET_QUERY and refuses unsupported routes until fixed. |
-| A1-1 | Sole-enabled-account blank CiukiUser; password-or-disable before enabling any other interactive account or blank rename/demotion. Monotonic auto_logon_retired and reboot/transition tests (main 3.1/3.3/4.2, H03/H10). |
+| A1-1 | Sole-enabled-account blank CiukiUser; A2-7 supersedes password-or-disable/atomic replacement with password-first ordinary operations before another enable/blank rename/demotion. Monotonic auto_logon_retired and reboot/transition tests (main 3.1/3.3/4.2, H03/H10). |
 | A1-2 | Call-101 SESSION_LAUNCH/LAUNCH_POLL/SECURE_ENTER/LEAVE require kernel-established SYSTEM LOGON role; exact purpose/descriptor/generation/readiness/rollback/crash contract, apps alive while locked (kernel ABI, H01/H09). |
 | A1-3 | Fixed bootstrap roles and service ids, CONNECT/ACCEPT/CANCEL, noninheritable retained peers and bounded framed requests; no claimed-name/uid authority (kernel ABI, main 4.1, H01/H03). |
 | A1-4 | One full-vector owner/account batch, one G and reserved owner generation, exact request/reply, durable receipts/STATUS, nonreuse and every commit-order recovery; three-account and sixteen-profile fixtures (main 3.5, H02/H03/H08). |
@@ -1647,6 +1756,15 @@ consumer behavior are coordinated in the main half.
 | A1-9 | sec-k06 owns native libreg reads/generation/import/export/errors adapter, preserves personal preference backend and tests production applets with backing access denied (main 6.2, H07). |
 | A1-10 | sec-user-05 migrates console backing/startup, internal logs and temp consumers; generated validated TZ/LC_ALL/profile settings reconcile k01 allowlist (main 8.2, kernel ABI, H01/H11). |
 | A1-11 | Remove unsupported XP Home Safe Mode attribution; M-Q1 remains the explicit CiukiOS decision, KB814777's Server/RIS scope is identified (main R4, kernel R9). |
+
+| A2-1 | Main 4.1 freezes selector-bearing BEGIN_AUTH, LOGON-originated CHALLENGE/verification with kernel-observed UI endpoint generation, correlated success/failure outcomes, ENROLL_PLAN/staged/final ENROLL and retained-ready-tuple-only AUTOLOGON. AUTH verification trusts LOGON role only (H01/H03/H10). |
+| A2-2 | LOGON service SESSION_LOCK=5 accepts only kernel-established same-session DESKTOP and can request only lock; no unlock/menu-return/authentication authority (kernel service table, main 4.1, H01/H09/H10). |
+| A2-3 | Persistent session authentication_required plus console/authentication epochs; ATTENTION cannot lower a lock, POLL/readiness cannot release a newer gate, service death preserves concealment and invalidates old success/cookie (kernel transition table, H01/H09). |
+| A2-4 | SERVICE_CANCEL proves cancellation only before first server dequeue; otherwise irrevocable-or-unknown. ACCOUNTS RESERVE/STATUS binds durable client operation ids to original uid/content across reconnection, with bounded expiry/nonreexecution (main 4.1, H01/H03). |
+| A2-5 | All request locators zero; OWNER resolves/reserves CREATE roots and existing owner keys itself. Both sides independently validate identical protected destination manifest/tree/map evidence before publication; no stat-derived identity (main 3.5, H02/H03/H08). |
+| A2-6 | Metadata/password/unchanged-binding updates use ACCOUNT journal only. OWNER RESERVE includes early ABORTED capacity; CHECKPOINT/COMPACT preserves maps/watermarks/floors with bounded terminal windows and crash recovery, no lifetime management limit (main 3.5/4.1, H02/H03). |
+| A2-7 | CiukiUser receives a password before any other interactive account may be enabled. Replacement uses ordinary create/enable then logoff/disable/demote with last-admin protection, no atomic replacement (main 3.1/4.2, H03/H10/H12). |
+| A2-8 | Authorized ACCOUNTS PROFILE=8 returns canonical committed root, home and supported shell without uid-derived spelling; closes sec-k01 report question 3 through a service query, no extra syscall (main 4.1/8.4, H03/H11). |
 
 No new policy question remains open in this reconciliation. Lead cross-review,
 implementation, target KDF measurements, runtime security/installer evidence and
