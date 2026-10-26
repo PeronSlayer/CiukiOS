@@ -180,9 +180,7 @@ static int entry_proof(struct owner_vfs *b,const char *name,uint8_t proof[32])
     char path[FS_PATH_BYTES]; int e=absolute(b,name,path); if(e) return e;
     struct fat_entry entry; e=vfs_stat(b->table,path,&entry); if(e) return e;
     struct fat_volume *v=b->table->vfs->volumes[b->drive]; if(!v) return -EIO;
-    uint8_t data[32]={0}; fs_wr32(data,v->volume_serial); fs_wr32(data+4,entry.first); fs_wr16(data+8,entry.times.create_date);
-    fs_wr16(data+10,entry.times.create_time); data[12]=entry.times.create_tenths; data[13]=entry.attr&FAT_ATTR_DIR;
-    fs_wr32(data+16,(uint32_t)v->start); fs_wr32(data+20,(uint32_t)(v->start>>32)); sha256(data,32,proof); return 0;
+    owner_object_proof(v,&entry,proof); return 0;
 }
 static int backend_reserve(void *ctx,const struct owner_request *q,struct owner_record *records,bool recheck)
 {

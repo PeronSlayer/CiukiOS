@@ -5,6 +5,11 @@
 #include "fs_port.h"
 struct security_subject;
 struct ciuki_security_profile;
+struct fat_volume;
+struct fat_entry;
+/* Backing consistency evidence, used with a nonreused protected owner key.
+ * Namespace replacement/rename still requires the owner transaction. */
+void owner_object_proof(const struct fat_volume *, const struct fat_entry *, uint8_t proof[32]);
 #define OWNER_PROFILES 32u
 #define OWNER_ROOTS 256u
 #define OWNER_RECEIPTS 1024u

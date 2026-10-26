@@ -9,6 +9,42 @@ static void real_file(struct vfs_table *t,const char *name,const void *data,size
     int fd=vfs_open(t,name,VFS_WRITE|VFS_CREATE|VFS_TRUNCATE,VFS_DENY_ALL,0); CHECK(fd>=0);
     size_t n=0; CHECK(!vfs_write(t,fd,data,bytes,&n) && n==bytes); CHECK(!vfs_commit(t,fd)); CHECK(!vfs_close(t,fd));
 }
+static void real_metadata(struct vfs_table *t,const char *path)
+{
+    struct fat_entry entry; CHECK(!vfs_stat(t,path,&entry));
+    struct fat_times times={.create_date=0x2821,.create_time=0x1234,.create_tenths=42,
+        .access_date=0x2822,.write_date=0x2823,.write_time=0x2345};
+    CHECK(!vfs_times(t,path,&times)); CHECK(!vfs_attrib(t,path,(entry.attr&FAT_ATTR_DIR)|FAT_ATTR_HIDDEN));
+    CHECK(!vfs_flush_drive(t,t->drive));
+}
+static void real_mutable_owners(struct vfs_table *table,struct owner_store *s,struct owner_backend *io)
+{
+    struct owner_record profile; CHECK(!owner_profile(s,1000,&profile));
+    char path[128]; ksnprintf(path,sizeof(path),"C:%s",profile.binding.path); real_metadata(table,path);
+    CHECK(!io->verify(io->ctx,&profile));
+    real_file(table,"C:/System/Security/Staging/root-file","before",6);
+    struct fat_entry entry; CHECK(!vfs_stat(table,"C:/System/Security/Staging/root-file",&entry));
+    uint8_t proof[32]; owner_object_proof(table->vfs->volumes[2],&entry,proof);
+    struct owner_record root; CHECK(!owner_root_reserve(s,&alice,"/mutable-root.txt",proof,&root));
+    CHECK(!vfs_rename(table,"C:/System/Security/Staging/root-file","C:/mutable-root.txt"));
+    CHECK(!vfs_stat(table,"C:/mutable-root.txt",&entry)); owner_object_proof(table->vfs->volumes[2],&entry,proof);
+    CHECK(!owner_root_finish(s,root.binding.key,proof,false)); CHECK(!owner_label(s,root.binding.locator,&root));
+    uint32_t old_first=entry.first;
+    int fd=vfs_open(table,"C:/mutable-root.txt",VFS_WRITE,VFS_DENY_ALL,0); CHECK(fd>=0);
+    CHECK(!vfs_truncate(table,fd,0)); CHECK(!vfs_close(table,fd));
+    CHECK(!vfs_stat(table,"C:/mutable-root.txt",&entry) && !entry.first && old_first);
+    CHECK(!io->verify(io->ctx,&root));
+    static const char payload[4096]="rewritten";
+    real_file(table,"C:/mutable-root.txt",payload,sizeof(payload)); real_metadata(table,"C:/mutable-root.txt");
+    CHECK(!io->verify(io->ctx,&root));
+    /* Rename changes a regular file's slot; the existing owner transaction
+     * publishes its new evidence, without changing key, uid or generation. */
+    CHECK(!owner_root_change(s,&alice,root.binding.key,"/renamed-owner-root.txt",root.proof));
+    CHECK(!vfs_rename(table,"C:/mutable-root.txt","C:/renamed-owner-root.txt"));
+    CHECK(!vfs_stat(table,"C:/renamed-owner-root.txt",&entry)); owner_object_proof(table->vfs->volumes[2],&entry,proof);
+    CHECK(!owner_root_finish(s,root.binding.key,proof,false)); CHECK(!owner_label(s,root.binding.locator,&root));
+    CHECK(!io->verify(io->ctx,&root)); CHECK(root.binding.uid==alice.credential.uid);
+}
 static void test_owner_real_vfs_case(const char *image,unsigned count,bool imported)
 {
     struct fake *disk=calloc(1,sizeof(*disk)); struct block_cache *cache=calloc(1,sizeof(*cache));
@@ -47,8 +83,11 @@ static void test_owner_real_vfs_case(const char *image,unsigned count,bool impor
         .owner_key_lo=(uint32_t)record.binding.key,.owner_generation_lo=(uint32_t)record.binding.generation};
     memcpy(descriptor.path,record.binding.path,64); descriptor.path_bytes=(uint32_t)strlen(descriptor.path)+1;
     CHECK(!security_owner_verify(&descriptor)); descriptor.owner_key_lo++; CHECK(security_owner_verify(&descriptor)==-EIO);
+    real_mutable_owners(table,s,&io);
     owner_close(s); CHECK(!owner_vfs_backend(backend,table,31,&account,&io)); CHECK(!owner_open(s,&io,owner_sid,31,false));
-    CHECK(s->profile_count==count && s->generation==1); CHECK(!call(s,&evidence.request,OWNER_STATUS,reply) && fs_rd32(reply+8)==OWNER_COMMITTED);
+    CHECK(s->profile_count==count && s->generation==1 && s->root_count==1); CHECK(!call(s,&evidence.request,OWNER_STATUS,reply) && fs_rd32(reply+8)==OWNER_COMMITTED);
+    CHECK(!s->roots[0].retired && !s->roots[0].pending && s->roots[0].binding.uid==alice.credential.uid);
+    puts("H02 review 1 real FAT: profile metadata, creator-file truncate/rewrite/metadata/rename, coherent owner-store reload PASS");
     owner_close(s);
     /* A coherent store cannot be rebound to a replacement profile directory. */
     char original[128]; ksnprintf(original,sizeof(original),"C:%s",evidence.request.bindings[2].path);

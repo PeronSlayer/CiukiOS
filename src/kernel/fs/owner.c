@@ -3,8 +3,25 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include "owner_internal.h"
 #include "path.h"
+#include "fat.h"
 #include <ciuki/security.h>
 static struct owner_store *installed_owners;
+
+void owner_object_proof(const struct fat_volume *v,const struct fat_entry *entry,uint8_t proof[32])
+{
+    /* Directories retain their allocation root through rename and metadata
+     * updates. Files retain their namespace slot through chain replacement and
+     * all metadata updates; owner_root_finish records the new slot on rename.
+     * Never use file clusters, length, attributes or user-settable birth times.
+     * The sealed key/generation and namespace protocol fence deletion/reuse;
+     * this hash alone is not an ownership credential. */
+    uint8_t data[32]={0}; memcpy(data,"OWN2",4); fs_wr32(data+4,v->volume_serial);
+    fs_wr32(data+8,(uint32_t)v->start); fs_wr32(data+12,(uint32_t)(v->start>>32));
+    data[16]=entry->attr&FAT_ATTR_DIR;
+    if(data[16]) fs_wr32(data+20,entry->first);
+    else { fs_wr32(data+20,entry->parent); fs_wr32(data+24,entry->index); }
+    sha256(data,sizeof(data),proof);
+}
 
 static bool enter(struct owner_store *s)
 { bool expected=false; return __atomic_compare_exchange_n(&s->busy,&expected,true,false,__ATOMIC_ACQUIRE,__ATOMIC_RELAXED); }

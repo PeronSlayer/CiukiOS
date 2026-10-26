@@ -50,6 +50,64 @@ User.dat) and `wrkc18_2.htm` (local/network logon distinction). It supplies
 historical profile context, not the new isolation policy. No book/media content
 was copied into the repository. DOS architecture is unchanged.
 
+## Review round 1: research and implementation decisions
+
+The lead amendment was checked against the following primary sources before
+implementation:
+
+* Microsoft's [DOS path formats](https://learn.microsoft.com/en-us/dotnet/standard/io/file-path-formats)
+  distinguishes drive-rooted input from drive-relative input and limits parent
+  navigation to that drive. The volume adapter must walk from its mounted root,
+  clamp `..` there, and disable native synthetic `/mnt` and `/dev` transitions.
+  Absolute input must not resolve or authorize an unrelated cwd. Preserve a final
+  separator so the existing directory check returns ENOTDIR for regular files.
+* Microsoft's [file naming](https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file)
+  describes long/short aliases and trailing-dot/space rules. Apply policy to the
+  resolved long name after the existing frontend conversion, including hive slots
+  reached through short aliases.
+* Microsoft's [SetFileTime](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfiletime)
+  permits creation-time changes. Repository `fat_truncate` replaces a file's
+  chain, and `file_info_set_inner` changes creation time. Neither can identify
+  an owner root. Use one shared backing-evidence encoder: a directory's first
+  cluster (stable across metadata changes and staging rename), or a regular
+  file's parent directory/short-entry slot (stable across write/truncate/metadata),
+  together with volume serial, partition start and object type. These are
+  consistency guards for the protected nonreused owner key/generation, never
+  standalone authority or exported file indices. Creator-file rename updates
+  the evidence through `owner_root_change`/`owner_root_finish`; delete/replacement
+  must retire the old record and fence retained objects in sec-k03. No FAT
+  reserved bytes or user timestamps are repurposed. Old experimental proofs
+  fail closed; retained pre-amendment test stores require trusted reprovisioning.
+* Microsoft's [registry key rights](https://learn.microsoft.com/en-us/windows/win32/sysinfo/registry-key-security-and-access-rights)
+  distinguish logical key operations. The contract additionally seals backing
+  files to SYSTEM. `apps/w32srv/{main,storage}.c` actually use `/Windows/`
+  `SYSTEM.CRG.0/1` and `USER.CRG.0/1`; seal both legacy `.CRG` inputs as well.
+  A fixed six-name child rule also protects profile-root migration files;
+  profile `Settings/Registry` already seals all slots and journals. This bounded
+  rule does not spend one trie node per slot or relax the 32-node maximum.
+* Microsoft's [least-privileged gaming guidance](https://learn.microsoft.com/en-us/windows/win32/dxtecharts/gaming-with-least-privileged-user-accounts)
+  and [MS02-064](https://learn.microsoft.com/en-us/security-updates/securitybulletins/2002/ms02-064)
+  support separating writable data from trusted launch locations. Contract 6.1
+  keeps `/Documents/Desktop` shared. Only its designated `Quake III Arena Demo`
+  presentation subtree is program-classified; its ancestors remain anchors
+  against replacement. Other Desktop children keep shared-data permissions.
+
+Review regressions exercise all six global/profile/Registry hive names with
+five subject classes and real LFN/8.3 aliases, shared Desktop siblings and the
+designated launch anchor, absolute/relative drive confinement including a second
+letter for the same mount, inaccessible/missing cwd, and terminal separators.
+Native labels are invalidated and rechecked after real truncation and creation
+time/attribute changes. The real FAT OWNER backend verifies those changes and
+creator-file rename through a complete store reload, for both the three-account
+and eighteen-binding fixtures. Replaced profile directories, retired creator
+records and retained references still deny. Default policy uses 28 of 32 trie
+nodes; one million direct and 100000 native warm checks add no storage reads.
+
+The supplied Windows 98 Resource Kit profile/logon sections were reread in place;
+they remain historical context, not evidence for the new isolation policy.
+The Open Group pathname-resolution chapter was unavailable (HTTP 403); ENOTDIR
+here is the directive's requirement and the repository's native behavior.
+
 ## Private interfaces and integration order
 
 1. Supply a destination VFS table and a protected, nonzero installation/volume

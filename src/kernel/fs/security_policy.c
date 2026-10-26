@@ -14,6 +14,13 @@ static bool administrator(const struct ciuki_credential *c)
         if (c->groups[i]==CIUKI_GID_ADMINISTRATORS) return true;
     return false;
 }
+static bool hive_backing(const char *name)
+{
+    static const char *const names[]={"SYSTEM.CRG","SYSTEM.CRG.0","SYSTEM.CRG.1",
+                                     "USER.CRG","USER.CRG.0","USER.CRG.1"};
+    for(unsigned i=0;i<sizeof(names)/sizeof(*names);i++) if(path_equal(name,names[i])) return true;
+    return false;
+}
 uint64_t policy_epoch(const struct policy_volume *v)
 {
     if(!v) return 0;
@@ -72,7 +79,8 @@ int policy_init(struct policy_volume *v,uint64_t id,uint64_t mount,bool system,
         {"/System/PAGEFILE.SWP",POLICY_SECRET},{"/System/VMM.ELF",POLICY_SEALED},
         {"/System/BOOT.CFG",POLICY_SEALED},{"/Programs",POLICY_PROGRAM},{"/Programs/setup",POLICY_SEALED},
         {"/Program Files",POLICY_PROGRAM},{"/Documents",POLICY_SHARED},
-        {"/Documents/Desktop",POLICY_PROGRAM},{"/CIUKILDR",POLICY_SEALED},
+        {"/Documents/Desktop",POLICY_SHARED},
+        {"/Documents/Desktop/Quake III Arena Demo",POLICY_PROGRAM},{"/CIUKILDR",POLICY_SEALED},
         {"/BOOT.CFG",POLICY_SEALED}
     };
     if (system) for (unsigned i=0;i<sizeof(defaults)/sizeof(*defaults);i++) {
@@ -144,6 +152,14 @@ int policy_child(const struct policy_volume *v,const struct policy_label *p,
             l.kind=p->kind==POLICY_PROFILES?POLICY_PROFILE:POLICY_CREATOR;
             l.anchor=p->kind==POLICY_PROFILES;
         }
+    }
+    /* Fixed child rules keep all real hive slots and migration inputs sealed
+     * without spending the bounded trie on individual slot filenames. Match
+     * resolved names, including when reached through an 8.3 alias. */
+    bool windows=p->trie<v->count && v->rules[p->trie].parent==0 &&
+                 path_equal(v->rules[p->trie].component,"Windows");
+    if((windows || (p->kind==POLICY_PROFILE && p->anchor)) && hive_backing(name)) {
+        l.kind=POLICY_SECRET; l.anchor=1;
     }
     /* Ownership never overrides a more specific service-only subtree. */
     if (p->kind==POLICY_PROFILE && p->anchor && p->trie!=POLICY_RULES && path_equal(name,"Settings")) { l.trie=POLICY_RULES; l.anchor=1; }

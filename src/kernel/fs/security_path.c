@@ -14,13 +14,17 @@ int vfs_resolve_subject_locked(struct vfs_table *t,const struct security_subject
     if(drive>=26 || !t->vfs->policy[drive]) return -EACCES;
     /* Resolve the actual cwd before relative components. Never pre-normalize
      * input strings: that would erase an unauthorized intermediate directory. */
-    struct px_path cwd;
-    int e=px_resolve_volume_subject_locked(s,drive,s->root,t->cwd[drive],false,false,subject,&cwd);
-    if(e) return e;
-    uint32_t cluster=t->cwd_cluster[drive];
-    if(!cluster && cwd.node->volume && cwd.node->volume->type==32) cluster=cwd.node->volume->root;
-    if(cwd.node->volume && cwd.node->entry.first!=cluster) return -EIO;
-    return px_resolve_volume_subject_locked(s,drive,cwd.node,path,win32,missing,subject,out);
+    struct px_node *start=s->root;
+    if(path[0]!='/' && path[0]!='\\') {
+        struct px_path cwd;
+        int e=px_resolve_volume_subject_locked(s,drive,s->root,t->cwd[drive],false,false,subject,&cwd);
+        if(e) return e;
+        uint32_t cluster=t->cwd_cluster[drive];
+        if(!cluster && cwd.node->volume && cwd.node->volume->type==32) cluster=cwd.node->volume->root;
+        if(cwd.node->volume && cwd.node->entry.first!=cluster) return -EIO;
+        start=cwd.node;
+    }
+    return px_resolve_volume_subject_locked(s,drive,start,path,win32,missing,subject,out);
 }
 int policy_reference_get_locked(struct px_node *node,struct security_subject *subject,unsigned access,struct policy_reference *out)
 {

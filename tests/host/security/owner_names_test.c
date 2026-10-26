@@ -8,6 +8,7 @@ static struct security_subject name_alice={.credential={.version=1,.size=64,.uid
 static struct security_subject name_bob={.credential={.version=1,.size=64,.uid=1001,.group_count=1,.groups={545},.flags=1},.live=true};
 static struct security_subject name_guest={.credential={.version=1,.size=64,.uid=501,.group_count=1,.groups={546},.flags=1},.live=true};
 static struct security_subject name_admin={.credential={.version=1,.size=64,.uid=500,.group_count=2,.groups={544,545},.flags=1},.live=true};
+static struct security_subject name_system={.credential={.version=1,.size=64,.uid=0,.group_count=1,.groups={0},.flags=1},.live=true};
 static int authorized(const char *path,struct px_node *cwd,const struct security_subject *subject,unsigned access,struct px_node **out)
 {
     struct px_path result; vfs_lock(&vfs,0);
@@ -27,6 +28,128 @@ static void profile_record(struct owner_store *owners,unsigned index,uint32_t ui
     struct owner_record *r=&owners->profiles[index]; memset(r,0,sizeof(*r));
     r->binding=(struct owner_binding){.uid=uid,.action=1,.volume=31,.key=index+1,.locator=index+1,.generation=1};
     memcpy(r->binding.path,path,strlen(path)+1); CHECK(!px_object_proof_locked(result.node,r->proof));
+}
+static void test_hive_names(struct vfs_table *table)
+{
+    const struct security_subject *subjects[]={&name_system,&name_admin,&name_alice,&name_bob,&name_guest};
+    const char *parents[]={"/Windows","/Windows/Profiles/u00000003","/Windows/Profiles/u00000003/Settings/Registry"};
+    const char *names[]={"SYSTEM.CRG","SYSTEM.CRG.0","SYSTEM.CRG.1","USER.CRG","USER.CRG.0","USER.CRG.1"};
+    for(unsigned scope=0;scope<3;scope++) for(unsigned file=0;file<6;file++) {
+        char path[256],alias[256],input[256]; ksnprintf(path,sizeof(path),"C:%s/%s",parents[scope],names[file]);
+        file_create(table,path); struct fat_entry entry; CHECK(!vfs_stat(table,path,&entry));
+        ksnprintf(alias,sizeof(alias),"%s/%s",parents[scope],entry.alias);
+        for(unsigned who=0;who<5;who++) for(unsigned bit=1;bit<=POLICY_META;bit<<=1) {
+            CHECK(authorized(path+2,space->root,subjects[who],bit,0)==(who?-EACCES:0));
+            CHECK(authorized(alias,space->root,subjects[who],bit,0)==(who?-EACCES:0));
+        }
+        ksnprintf(input,sizeof(input),"C:%s/%s. ",parents[scope],entry.alias);
+        struct px_path resolved; vfs_lock(&vfs,0);
+        CHECK(vfs_resolve_subject_locked(table,&name_admin,input,true,false,&resolved)==-EACCES);
+        CHECK(!vfs_resolve_subject_locked(table,&name_system,input,true,false,&resolved));
+        CHECK(!px_policy_check_locked(resolved.node,&name_system,POLICY_ALL)); vfs_unlock(&vfs);
+    }
+    file_create(table,"C:/Windows/USER.CRG.01");
+    CHECK(!authorized("/Windows/USER.CRG.01",space->root,&name_admin,POLICY_WRITE,0));
+    CHECK(!authorized("/Windows/USER.CRG.01",space->root,&name_bob,POLICY_READ,0));
+    puts("H02 review 1 hives: six real/legacy names, global/profile/Registry scopes, five subjects, aliases and Win32 trimming PASS");
+}
+static void test_volume_paths(struct vfs_table *table,struct px_node *private_cwd)
+{
+    /* Real C: directories named mnt/dev are data in a drive namespace. */
+    const char *dirs[]={"C:/mnt","C:/mnt/d","C:/dev","D:/dir"};
+    for(unsigned i=0;i<4;i++) { int e=vfs_mkdir(table,dirs[i],0); CHECK(!e || e==-EEXIST); }
+    file_create(table,"C:/c-file"); file_create(table,"D:/d-file");
+    file_create(table,"C:/mnt/d/local-file"); file_create(table,"C:/dev/local-file");
+    CHECK(!vfs_chdir(table,"C:/Windows/Profiles/u00000003"));
+    /* The legacy VFS frontend does not mount duplicate drive aliases. Supply
+     * its per-drive cwd boundary for the new resolved-volume adapter. */
+    memcpy(table->cwd[4],table->cwd[2],sizeof(table->cwd[4])); table->cwd_cluster[4]=table->cwd_cluster[2];
+    struct px_path r; vfs_lock(&vfs,0);
+    CHECK(!vfs_resolve_subject_locked(table,&name_alice,"E:/Windows/Profiles/u00000003/private.txt",false,false,&r));
+    CHECK(r.node->volume==&volumes[0]);
+    CHECK(vfs_resolve_subject_locked(table,&name_bob,"E:/Windows/Profiles/u00000003/private.txt",false,false,&r)==-EACCES);
+    CHECK(!vfs_resolve_subject_locked(table,&name_alice,"E:private.txt",false,false,&r));
+    CHECK(vfs_resolve_subject_locked(table,&name_bob,"E:private.txt",false,false,&r)==-EACCES);
+    for(unsigned win32=0;win32<2;win32++) {
+        CHECK(!vfs_resolve_subject_locked(table,&name_bob,"C:/c-file",win32,false,&r)); CHECK(r.node->volume==&volumes[0]);
+        CHECK(!vfs_resolve_subject_locked(table,&name_bob,"\\c-file",win32,false,&r));
+        CHECK(vfs_resolve_subject_locked(table,&name_bob,"C:private.txt",win32,false,&r)==-EACCES);
+        CHECK(!vfs_resolve_subject_locked(table,&name_alice,"C:private.txt",win32,false,&r));
+        CHECK(!px_resolve_volume_subject_locked(space,3,space->root,"D:\\..\\..\\d-file",win32,false,&name_bob,&r));
+        CHECK(r.node->volume==&volumes[1]);
+        CHECK(px_resolve_volume_subject_locked(space,3,space->root,"D:\\..\\..\\c-file",win32,false,&name_bob,&r)==-ENOENT);
+        CHECK(!vfs_resolve_subject_locked(table,&name_bob,"C:\\mnt\\d\\local-file",win32,false,&r)); CHECK(r.node->volume==&volumes[0]);
+        CHECK(vfs_resolve_subject_locked(table,&name_bob,"C:\\mnt\\d\\d-file",win32,false,&r)==-ENOENT);
+        CHECK(!vfs_resolve_subject_locked(table,&name_bob,"C:\\dev\\local-file",win32,false,&r)); CHECK(r.node->volume==&volumes[0]);
+        CHECK(vfs_resolve_subject_locked(table,&name_bob,"C:\\dev\\null",win32,false,&r)==-ENOENT);
+        CHECK(vfs_resolve_subject_locked(table,&name_bob,"D:\\d-file\\",win32,false,&r)==-ENOTDIR);
+        CHECK(vfs_resolve_subject_locked(table,&name_bob,"D:/d-file///",win32,false,&r)==-ENOTDIR);
+        CHECK(!vfs_resolve_subject_locked(table,&name_bob,"D:\\dir\\",win32,false,&r)); CHECK(r.trailing);
+        CHECK(!vfs_resolve_subject_locked(table,&name_bob,"D:\\..\\..\\",win32,false,&r)); CHECK(r.node->mountpoint && r.node->drive==3 && r.trailing);
+        CHECK(vfs_resolve_subject_locked(table,&name_alice,"C:/Windows/Profiles/u000003ef/../u00000003/private.txt",win32,false,&r)==-EACCES);
+    }
+    CHECK(!px_resolve_subject_locked(space,space->root,"/mnt/d/d-file",false,&name_bob,&r)); CHECK(r.node->volume==&volumes[1]);
+    struct px_node *data_cwd; CHECK(!px_resolve_subject_locked(space,space->root,"/mnt/d/dir",false,&name_bob,&r)); data_cwd=r.node;
+    CHECK(!px_resolve_volume_subject_locked(space,3,data_cwd,"..\\..\\d-file",false,false,&name_bob,&r)); CHECK(r.node->volume==&volumes[1]);
+    CHECK(px_resolve_volume_subject_locked(space,3,data_cwd,"..\\..\\c-file",false,false,&name_bob,&r)==-ENOENT);
+    CHECK(px_resolve_volume_subject_locked(space,2,private_cwd,"../u000003ef/../u00000003/private.txt",false,false,&name_alice,&r)==-EACCES);
+    strcpy(table->cwd[2],"/no-such-cwd");
+    CHECK(!vfs_resolve_subject_locked(table,&name_bob,"C:\\c-file",false,false,&r));
+    CHECK(vfs_resolve_subject_locked(table,&name_bob,"C:c-file",false,false,&r)==-ENOENT);
+    vfs_unlock(&vfs); CHECK(!vfs_chdir(table,"C:/"));
+    puts("H02 review 1 paths: selected-volume confinement, physical mnt/dev, cwd-independent absolute input, checked relative traversal and terminal separators PASS");
+}
+static void test_shared_desktop(struct vfs_table *table)
+{
+    const char *dirs[]={"/Documents","/Documents/Desktop","/Documents/Desktop/Quake III Arena Demo","/Documents/Desktop/My notes"};
+    for(unsigned i=0;i<4;i++) { int e=make_dir(dirs[i]); CHECK(!e || e==-EEXIST); }
+    file_create(table,"C:/Documents/Desktop/Quake III Arena Demo/Install Quake III Arena Demo.lnk");
+    file_create(table,"C:/Documents/Desktop/My notes/edit.txt");
+    const struct security_subject *subjects[]={&name_system,&name_admin,&name_alice,&name_bob,&name_guest};
+    for(unsigned who=0;who<5;who++) {
+        CHECK(!authorized("/Documents/Desktop/My notes/edit.txt",space->root,subjects[who],POLICY_READ,0));
+        CHECK(authorized("/Documents/Desktop/My notes/edit.txt",space->root,subjects[who],POLICY_WRITE|POLICY_REMOVE|POLICY_RENAME,0)==(who==4?-EACCES:0));
+        CHECK(authorized("/Documents/Desktop/My notes",space->root,subjects[who],POLICY_ADD,0)==(who==4?-EACCES:0));
+        CHECK(!authorized("/Documents/Desktop/Quake III Arena Demo/Install Quake III Arena Demo.lnk",space->root,subjects[who],POLICY_READ|POLICY_EXEC,0));
+        CHECK(authorized("/Documents/Desktop/Quake III Arena Demo/Install Quake III Arena Demo.lnk",space->root,subjects[who],POLICY_WRITE|POLICY_RENAME|POLICY_REMOVE,0)==(who<2?0:-EACCES));
+        CHECK(authorized(dirs[2],space->root,subjects[who],POLICY_ADD,0)==(who<2?0:-EACCES));
+        for(unsigned dir=0;dir<3;dir++) CHECK(authorized(dirs[dir],space->root,subjects[who],POLICY_RENAME|POLICY_REMOVE,0)==(who? -EACCES:0));
+    }
+    struct fat_entry entry; CHECK(!vfs_stat(table,"C:/Documents/Desktop/Quake III Arena Demo",&entry));
+    char alias[256]; ksnprintf(alias,sizeof(alias),"/Documents/Desktop/%s/Install Quake III Arena Demo.lnk",entry.alias);
+    CHECK(authorized(alias,space->root,&name_alice,POLICY_WRITE,0)==-EACCES);
+    CHECK(!authorized(alias,space->root,&name_alice,POLICY_READ,0));
+    puts("H02 review 1 Desktop: shared files/siblings writable, designated launch anchor/aliases/ancestors protected PASS");
+}
+static void test_mutable_labels(struct vfs_table *table,struct owner_store *owners)
+{
+    file_create(table,"C:/owned-root.txt"); struct px_path r; CHECK(!resolve_path("/owned-root.txt",&r));
+    struct px_node *file=r.node; struct owner_record *root=&owners->roots[0];
+    root->binding=(struct owner_binding){.uid=1007,.action=1,.volume=31,.key=3,.locator=3,.generation=1};
+    memcpy(root->binding.path,"/owned-root.txt",16); CHECK(!px_object_proof_locked(file,root->proof)); owners->root_count=1; owners->sequence++;
+    CHECK(!authorized("/owned-root.txt",space->root,&name_alice,POLICY_WRITE,0));
+    uint32_t old_first=file->entry.first; CHECK(old_first);
+    int fd=file_open(client,"/owned-root.txt",O_RDWR,0); CHECK(fd>=0);
+    struct file_description *description=file_fd(client,fd); CHECK(!locked_truncate(description,0));
+    CHECK(!file->entry.first && file->entry.first!=old_first);
+    CHECK(!file_close(client,fd));
+    CHECK(!info_set("/owned-root.txt",CIUKI_FILE_INFO_CREATED|CIUKI_FILE_INFO_ATTRIBUTES,
+        (struct ciuki_file_info){.created=946684800,.created_ms=420,.attributes=CIUKI_ATTR_HIDDEN}));
+    CHECK(!info_set("/Windows/Profiles/u00000003",CIUKI_FILE_INFO_CREATED,
+        (struct ciuki_file_info){.created=946684800,.created_ms=420}));
+    owners->sequence++; /* Force both file and profile proofs to be checked again. */
+    CHECK(!authorized("/owned-root.txt",space->root,&name_alice,POLICY_WRITE,0));
+    CHECK(authorized("/owned-root.txt",space->root,&name_bob,POLICY_WRITE,0)==-EACCES);
+    CHECK(!authorized("/Windows/Profiles/u00000003/private.txt",space->root,&name_alice,POLICY_WRITE,0));
+    CHECK(authorized("/Windows/Profiles/u00000003/private.txt",space->root,&name_bob,POLICY_READ,0)==-EACCES);
+    struct policy_reference ref; name_alice.refs=1; vfs_lock(&vfs,0);
+    CHECK(!policy_reference_get_locked(file,&name_alice,POLICY_READ,&ref)); vfs_unlock(&vfs);
+    CHECK(!remove_path_native("/owned-root.txt",false)); file_create(table,"C:/owned-root.txt");
+    vfs_lock(&vfs,0); CHECK(policy_reference_check_locked(&ref,POLICY_READ)==-EIO); policy_reference_put_locked(&ref); vfs_unlock(&vfs);
+    CHECK(name_alice.refs==1);
+    root->retired=true; owners->sequence++;
+    CHECK(authorized("/owned-root.txt",space->root,&name_alice,POLICY_WRITE,0)==-EACCES);
+    puts("H02 review 1 labels: truncate and mutable creation time preserve owner/private policy; replaced retained references deny PASS");
 }
 int main(int argc,char **argv)
 {
@@ -66,6 +189,7 @@ int main(int argc,char **argv)
     CHECK(!authorized("/Windows/Profiles/u00000003/private.txt",space->root,&name_admin,POLICY_WRITE,0));
     CHECK(authorized("/Windows/Profiles/u00000003/Settings/Registry",space->root,&name_alice,POLICY_READ,0)==-EACCES);
     struct px_node *cwd; CHECK(!authorized("/Windows/Profiles/u00000003",space->root,&name_alice,POLICY_READ,&cwd));
+    test_hive_names(table); test_volume_paths(table,cwd); test_shared_desktop(table); test_mutable_labels(table,owners);
     CHECK(!authorized("./private.txt",cwd,&name_alice,POLICY_WRITE,0));
     CHECK(authorized("private.txt",cwd,0,POLICY_READ,0)==-EACCES);
     CHECK(!authorized("/Systematic/public.txt",space->root,&name_alice,POLICY_READ,0));

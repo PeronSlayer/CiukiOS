@@ -265,7 +265,8 @@ static void test_matrix(void)
         {"/System/Settings/users.dat",1,1},{"/System/Settings/users.new",1,1},{"/System/Settings/users.lock",1,1},
         {"/Windows/USER.CRG",1,1},{"/System/PAGEFILE.SWP",1,1},{"/System/VMM.ELF",31,1},
         {"/System/BOOT.CFG",31,1},{"/Programs",31,3},{"/Programs/setup",31,1},
-        {"/Program Files",31,3},{"/Documents",31,15},{"/Documents/Desktop",31,3},
+        {"/Program Files",31,3},{"/Documents",31,15},{"/Documents/Desktop",31,15},
+        {"/Documents/Desktop/Quake III Arena Demo",31,3},
         {"/CIUKILDR",31,1},{"/BOOT.CFG",31,1}
     };
     CHECK(v.count==1+sizeof(expected)/sizeof(*expected));
@@ -291,6 +292,19 @@ static void test_matrix(void)
     struct policy_label registry; CHECK(!policy_child(&v,&profile,"Settings",11,0,&registry)); CHECK(!policy_child(&v,&registry,"Registry",12,0,&registry));
     for(unsigned i=1;i<5;i++) CHECK(policy_check(&v,&registry,subjects[i],POLICY_READ)==-EACCES);
     CHECK(!policy_check(&v,&registry,&system_subject,POLICY_WRITE));
+    static const char *const hives[]={"SYSTEM.CRG","SYSTEM.CRG.0","SYSTEM.CRG.1","USER.CRG","USER.CRG.0","USER.CRG.1"};
+    for(unsigned scope=0;scope<3;scope++) for(unsigned file=0;file<6;file++) {
+        struct policy_label parent=scope==0?policy_path(&v,"/Windows",0):scope==1?profile:registry, hive;
+        CHECK(!policy_child(&v,&parent,hives[file],100+file,0,&hive));
+        for(unsigned who=0;who<5;who++) for(unsigned bit=1;bit<=POLICY_META;bit<<=1)
+            CHECK((policy_check(&v,&hive,subjects[who],bit)==0)==(who==0));
+    }
+    struct policy_label shared=policy_path(&v,"/Documents/Desktop/notes.txt",0);
+    struct policy_label launch=policy_path(&v,"/Documents/Desktop/Quake III Arena Demo/Install Quake III Arena Demo.lnk",0);
+    for(unsigned who=0;who<5;who++) {
+        CHECK((policy_check(&v,&shared,subjects[who],POLICY_WRITE|POLICY_REMOVE|POLICY_RENAME)==0)==(who<4));
+        CHECK((policy_check(&v,&launch,subjects[who],POLICY_WRITE|POLICY_REMOVE|POLICY_RENAME)==0)==(who<2));
+    }
     struct policy_label preferences;
     CHECK(!policy_child(&v,&profile,"Documents",20,0,&preferences));
     CHECK(!policy_child(&v,&preferences,"Settings",21,0,&preferences));
