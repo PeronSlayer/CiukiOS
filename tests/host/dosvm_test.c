@@ -1042,9 +1042,11 @@ static void test_t23dosperf(void) {}
 #include "dosvm_vbe_window_test.inc"  /* war2vbe: windowed VBE without a native provider */
 #include "dosvm_101_revoke_race_test.inc"
 #include "dosvm_101_native_test.inc"
+#include "dosvm_mouse_test.inc"
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
+    if (getenv("CIUKI_VM_DOSMOUSE")) { test_dos_mouse(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_101_REVOKE_RACE")) { test_101_revoke_races(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_101_BENCH")) { bench_101_video(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_101_VIDEO")) { test_101_video(); free(ram); fflush(stdout); return 0; }
@@ -1093,7 +1095,7 @@ int main(void)
     test_maximum_creation();
     test_maximum_teardown();
     test_vga_transaction_bound();
-    test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors(); test_memory_services(true); test_memory_services(false); test_devices(); test_audio(); test_dpmi();
+    test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors(); test_memory_services(true); test_memory_services(false); test_devices(); test_audio(); test_dpmi(); test_dos_mouse();
     test_video();
     test_programmatic_clipboard();
     test_wait_present();

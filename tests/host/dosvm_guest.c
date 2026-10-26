@@ -432,15 +432,31 @@ int dos_save_store_open(struct dos_save_file *f,struct dos_save *s,const struct 
  * are left out, VBE 4F00h/4F01h also print the start of the returned
  * block. Observation only (the war2vbe VESA trace, 2026-10-25). */
 static int guest_int10_traced(struct dosvm *v, struct v86_frame *f);
+static int guest_int33_traced(struct dosvm *v, struct v86_frame *f);
 #define dosvm_vga_bios guest_int10_traced
+#define dosvm_mouse_bios guest_int33_traced
 #include "../../src/kernel/vm/dosvm_bios.c"
 #undef dosvm_vga_bios
+#undef dosvm_mouse_bios
 #include "../../src/kernel/vm/dosvm_floppy.c"
 #include "../../src/kernel/vm/floppy_model.c"
 #include "../../src/kernel/drivers/floppy_media.c"
 #include "../../src/kernel/vm/dosvm_pit.c"
 #include "../../src/kernel/vm/dosvm_kbd.c"
 #include "../../src/kernel/vm/dosvm_mouse.c"
+static int guest_int33_traced(struct dosvm *v, struct v86_frame *f)
+{
+    static unsigned count[256];
+    unsigned ax=(uint16_t)f->tf.eax, cx=(uint16_t)f->tf.ecx, dx=(uint16_t)f->tf.edx, es=(uint16_t)f->es;
+    int e=dosvm_mouse_bios(v,f);
+    if (getenv("GUEST_INT33_TRACE") && (ax>=256 || count[ax]++<32 ||
+        (ax==0xB && ((uint16_t)f->tf.ecx || (uint16_t)f->tf.edx)) ||
+        (ax==3 && ((uint16_t)f->tf.ebx&7))))
+        printf("I33 ax=%04x cx=%04x es:dx=%04x:%04x -> e=%d ax=%04x bx=%04x cx=%04x dx=%04x mask=%x ms=%llu\n",
+               ax,cx,es,dx,e,(uint16_t)f->tf.eax,(uint16_t)f->tf.ebx,(uint16_t)f->tf.ecx,
+               (uint16_t)f->tf.edx,v->mouse.mask,(unsigned long long)g_ticks);
+    return e;
+}
 #include "dosvm_uart_seams.inc"
 #include "../../src/kernel/vm/uart16550.c"
 #include "../../src/kernel/vm/dosvm_uart.c"
@@ -1400,6 +1416,25 @@ static void play_keys(uint64_t elapsed)
         k = *end == ',' ? end + 1 : end;
     }
 }
+/* fx-dosmouse: inject through the focused window API after the game's
+ * actual INT33 handler is installed, and leave time for its thunk to run. */
+static void play_mouse(uint64_t elapsed)
+{
+    static unsigned stage;
+    const char *start=getenv("GUEST_PLAY_MOUSE_AT");
+    uint64_t at=start ? strtoull(start,0,10) : 28000;
+    if (!getenv("GUEST_PLAY_MOUSE") || (!gv->mouse.mask && !getenv("GUEST_PLAY_MOUSE_POLL")) ||
+        elapsed<at+stage*1000 || stage>=4) return;
+    if (!stage) CHECK(dosvm_input_focus(dosvm_key(gv),true));
+    struct ciuki_input_event e={.type=CIUKI_INPUT_MOTION,.value=100,.value2=100};
+    if (stage==1) { e.value=137; e.value2=121; }
+    else if (stage>=2) { e.type=CIUKI_INPUT_BUTTON; e.code=1; e.value=stage==2; }
+    CHECK(dosvm_input_event(dosvm_key(gv),&e));
+    printf("H61 MOUSE stage=%u x=%d y=%d buttons=%u pending=%x callbacks=%llu active=%u pm=%u\n",
+           stage,gv->mouse.x,gv->mouse.y,gv->mouse.buttons,gv->mouse.pending_mask,
+           (unsigned long long)gv->dpmi.stats.callbacks,gv->mouse.active,gv->frame_pm);
+    stage++;
+}
 /* The window picture at the end of a play run: what the DOS window shows
  * (dosvm_frame_capture, the presenter's own rows), its non-black pixel
  * count, and with GUEST_PLAY_SHOT=<file.ppm> the 640x480 image itself. */
@@ -1433,15 +1468,20 @@ static int play_run(void)
     int r = 0;
     while (g_ticks - begin < total) {
         play_keys(g_ticks - begin);
+        play_mouse(g_ticks - begin);
         menu_until = g_ticks + 1000;
         if (menu_until > begin + total) menu_until = begin + total;
         r = run(4000000000ull, menu_elapsed);
         play_progress(begin);
-        if (r == 2 && prompt()) break;      /* the game returned to the shell */
+        if (r == 2 && dosvm_shell_idle(gv) && prompt()) break;
         if (r == -1 || stopped()) break;
         if (r == 0) { printf("H61 PLAY instruction budget exhausted\n"); break; }
         if (r == 2) waiting_input = false; /* a game waiting for a key: keep time running */
     }
+    if (getenv("GUEST_PLAY_MOUSE"))
+        printf("H61 MOUSE END mask=%x pending=%x active=%u callbacks=%llu x=%d y=%d buttons=%u\n",
+               gv->mouse.mask,gv->mouse.pending_mask,gv->mouse.active,(unsigned long long)gv->dpmi.stats.callbacks,
+               gv->mouse.x,gv->mouse.y,gv->mouse.buttons);
     return r;
 }
 static bool menu_wait(uint32_t ms)
@@ -1725,7 +1765,7 @@ int main(int argc, char **argv)
         type(command);
         if (play) {
             int pr = play_run();
-            bool returned = pr == 2 && prompt();
+            bool returned = pr == 2 && dosvm_shell_idle(gv) && prompt();
             /* f3-61 GUEST_PLAY_QUIT=1: leave DOOM through its own menu (Esc,
              * Up to Quit Game, Enter, y) as a player does, then require the
              * shell prompt: the EXEC frame completes and the shell is idle. */
@@ -1738,7 +1778,7 @@ int main(int argc, char **argv)
                 }
                 menu_until = g_ticks + 60000;
                 pr = run(4000000000ull, menu_elapsed);
-                returned = pr == 2 && prompt();
+                returned = pr == 2 && dosvm_shell_idle(gv) && prompt();
                 if (pr == 2) { waiting_input = false; run(20000000ull, 0); }
                 printf("H61 QUIT returned=%u exec_pending=%u overflow=%u shell_idle=%u dpmi=%u clients=%u\n", returned,
                        gv->exec_pending, gv->exec_overflow, dosvm_shell_idle(gv), gv->dpmi.active, gv->dpmi.clients);

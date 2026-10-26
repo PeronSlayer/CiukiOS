@@ -322,7 +322,7 @@ static void test_device_irq_delivery(void)
     uint64_t edges=v->pit.edges; uint32_t halt=f.tf.eip;
     device_hook_arm(v,50,device_pointer); CHECK(device_insn(v,&f,0,&hlt,1));
     CHECK(!sleep_hook && v->pit.edges>=edges+48 && (v->monitor.pic[0].irr&1) && !v->monitor.stats.delivered[0]);
-    CHECK((uint16_t)f.tf.eax==3 && (uint16_t)f.tf.ebx==1 && (uint16_t)f.tf.ecx==336 && (uint16_t)f.tf.edx==96 &&
+    CHECK((uint16_t)f.tf.eax==3 && (uint16_t)f.tf.ebx==1 && (uint16_t)f.tf.ecx==24 && (uint16_t)f.tf.edx==0 &&
           (uint16_t)f.tf.esi==17 && (uint16_t)f.tf.edi==8);
     guest_callback(v,&f,&g,halt+1); CHECK(f.tf.cs==0x200);
     /* Pass 2: button held. The focus release becomes pending while IF is clear,

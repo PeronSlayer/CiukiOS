@@ -1144,7 +1144,8 @@ static void if_recovery_prepare(struct dosvm *v, struct v86_frame *f)
     struct dpmi *d = &v->dpmi;
     uint32_t flags = irq_save();
     dosvm_pic_cascade(&v->monitor);
-    bool pending = dosvm_pic_pending(&v->monitor) >= 0;
+    bool pending = dosvm_pic_pending(&v->monitor) >= 0 ||
+        (v->mouse.pending_mask && v->mouse.mask && !v->mouse.active);
     uint64_t tick = g_ticks;
     irq_restore(flags);
     if (!v->frame_pm || v->monitor.vif || !pending) { if_recovery_end(v, f); return; }

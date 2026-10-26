@@ -152,10 +152,10 @@ static bool lean_before(const struct dosvm *v, const struct v86_frame *f)
         v->fullscreen_hold || v->fullscreen_suspended || v->idle.depth || v->network_attached ||
         v->audio.sb.irq_entry_ready || v->monitor.state == V86_HALTED || g_need_resched) return false;
     if (v->dpmi.active && !dpmi_lean_eligible(v, f)) return false;
+    if (v->mouse.pending_mask && v->mouse.mask && !v->mouse.active) return false;
     if (v->frame_pm) return true;
     if (v->monitor.shadow || (f->tf.eflags & V86_TF)) return false;
-    const struct dosvm_mouse *m = &v->mouse;
-    return !(m->pending_mask && m->mask && !m->active);
+    return true;
 }
 /* IF clear: nothing may become pending between this check and IRET. */
 static bool lean_after(struct dosvm *v, const struct v86_frame *f)
@@ -167,6 +167,7 @@ static bool lean_after(struct dosvm *v, const struct v86_frame *f)
     dosvm_pic_cascade(&v->monitor);
     if (dosvm_pic_pending(&v->monitor) >= 0) return false;
     if (v->dpmi.active && !dpmi_lean_quiet(v, f)) return false;
+    if (v->mouse.pending_mask && v->mouse.mask && !v->mouse.active) return false;
     if (v->frame_pm) return true;
     if (v->launch_exec && f->tf.cs == v->launch_cs && f->tf.eip == v->launch_ip &&
         f->tf.user_ss == v->launch_ss && (uint16_t)f->tf.user_esp == v->launch_sp) return false;
@@ -897,7 +898,7 @@ static bool wake_condition(void *arg)
     struct dosvm *v = arg;
     return v->info.state == DOSVM_STOPPING ||
            (v->monitor.vif && !v->monitor.shadow && !v->dpmi.shadow &&
-            (v86_irq_pending(&v->monitor) >= 0 || (!v->frame_pm && v->mouse.pending_mask)));
+            (v86_irq_pending(&v->monitor) >= 0 || (!v->mouse.active && v->mouse.pending_mask)));
 }
 void dosvm_idle_wake(struct dosvm *v)
 {
@@ -917,7 +918,7 @@ static bool idle_event(void *arg)
     struct dosvm *v = w->v;
     return v->info.state >= DOSVM_STOPPING || v->idle.events != w->events ||
            (w->halt ? wake_condition(v) :
-            (v86_irq_pending(&v->monitor) >= 0 || (!v->frame_pm && v->mouse.pending_mask) ||
+            (v86_irq_pending(&v->monitor) >= 0 || (!v->mouse.active && v->mouse.pending_mask) ||
              v->key_count || dosvm_kbd_irq_ready(v)));
 }
 static uint64_t idle_deadline(const struct dosvm *v)
@@ -1090,7 +1091,7 @@ static int dosvm_deliver_irq(struct dosvm *v, struct v86_frame *f)
     int e = 0;
     uint32_t flags = irq_save();
     e = dosvm_network_dispatch(v, f);
-    if (!v->frame_pm && !e) e = dosvm_mouse_dispatch(v, f);
+    if (!e) e = dosvm_mouse_dispatch(v, f);
     if (!v->dpmi.active && !e) e = v86_irq_deliver(&v->monitor, f);
     irq_restore(flags);
     if (v->dpmi.active && !e) e = dpmi_deliver(v, f);
@@ -2125,6 +2126,7 @@ bool dosvm_input_event(struct dosvm_key key, const struct ciuki_input_event *e)
             if (dx < INT32_MIN || dx > INT32_MAX || dy < INT32_MIN || dy > INT32_MAX) { ok = false; break; }
             dosvm_mouse_event(v, dx, dy, v->mouse.buttons);
         }
+        dosvm_mouse_absolute(v,e->value,e->value2);
         v->input_x = e->value; v->input_y = e->value2; v->pointer_known = true; break;
     case CIUKI_INPUT_BUTTON:
         if (e->code < 1 || e->code > 3 || (e->value != 0 && e->value != 1)) { ok = false; break; }

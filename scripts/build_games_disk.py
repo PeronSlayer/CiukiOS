@@ -635,7 +635,7 @@ def generated_files(fixtures=None):
     games disk and the DOS image (scripts/build_dos_image.py) both install
     exactly this list, so a generated file cannot reach only one of them."""
     fixtures = fixtures or _fixtures()
-    # f3-06 DOOM defaults (dos_fixtures.DOOM_CONFIG): SB16 at 220h/IRQ 7/DMA 1, no mouse or joystick.
+    # DOOM defaults: SB16 at 220h/IRQ 7/DMA 1, mouse enabled, no joystick.
     files = [("/DOOM/CIUKI.CFG", fixtures.DOOM_CONFIG, {"package": None, "role": "config",
                                                         "redistribution": REDISTRIBUTION, "generated": True})]
     for path, data in war2_files():
