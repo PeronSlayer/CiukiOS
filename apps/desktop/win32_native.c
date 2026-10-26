@@ -5,6 +5,7 @@
 #include <ciuki/channel.h>
 #include <ciuki/proc.h>
 #include <ciuki/spawn.h>
+#include <ciuki/w32_core.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -582,11 +583,24 @@ static int w32_power_pids(struct desktop *d,uint32_t *pids,unsigned cap)
 }
 int ciuki_win32_shell_restart(uint32_t pid,uint32_t flags)
 {return !authorized || !owner?-EPIPE:desk_restart_begin(&restart,&restart_ops,pid,flags,clock_ns()/1000000);}
+/* One kernel snapshot counts all live launches, even before USER connects.
+ * Completion is reported only after a successful compositor presentation. */
+static void launch_feedback_poll(struct desktop *d,uint32_t presented)
+{
+    struct ciuki_w32_system_args a={.header={1,sizeof(a),W32_SYSTEM,0},
+        .action=W32_S_LAUNCH_FEEDBACK,.value=presented};
+    if (desk_w32_record(&a,sizeof(a)) || a.error) {
+        d->launch_remote_count=0; d->launch_remote_until=0;
+    } else {
+        d->launch_remote_count=a.result;
+        d->launch_remote_until=((uint64_t)a.high<<32 | a.low)*1000000ull;
+    }
+}
 void desk_w32_start(struct desktop *d)
 {
     owner=d;struct w32r_service a;uint32_t e=service(1,1,&a);
     if(e || !a.result){fprintf(stderr,"[win32] desktop endpoint unavailable error=%u\n",e);return;}
-    authorized=1;d->w32_session=w32_session;d->w32_power=w32_power;d->power_w32_pids=w32_power_pids;desk_w32_supervise(&supervisor,&supervision,clock_ns());
+    authorized=1;d->launch_presented=launch_feedback_poll;d->w32_session=w32_session;d->w32_power=w32_power;d->power_w32_pids=w32_power_pids;desk_w32_supervise(&supervisor,&supervision,clock_ns());
 }
 void desk_w32_poll(struct desktop *d)
 {
@@ -611,7 +625,11 @@ void desk_w32_poll(struct desktop *d)
     for(unsigned k=0;k<DESK_CLIENTS;k++){
         if(service(3,1,&a) || !a.result)break;
         int i=desk_add_client(d,(int)a.endpoint);
-        if(i<0)close((int)a.endpoint);else d->clients[i].pid=a.pid;
+        if(i<0)close((int)a.endpoint);else {
+            struct desk_client *c=&d->clients[i];
+            c->pid=a.pid; c->awaiting_frame=1; c->launch_feedback_remote=1;
+            c->launched_ns=now;
+        }
     }
     if(__atomic_load_n(&launch_published,__ATOMIC_ACQUIRE)){
         pthread_mutex_lock(&launch_lock);
@@ -640,6 +658,8 @@ void desk_w32_poll(struct desktop *d)
         __atomic_store_n(&launch_published,0,__ATOMIC_RELEASE);
         pthread_mutex_unlock(&launch_lock);
     }
+    launch_feedback_poll(d,0);
+    desk_cursor_update(d);
 }
 void desk_w32_child_exited(struct desktop *d,uint32_t pid,int status)
 {

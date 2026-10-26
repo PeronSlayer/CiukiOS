@@ -12,6 +12,8 @@
 #include <time.h>
 #include <unistd.h>
 #include <ciuki/w32_diagnostics.h>
+#include <ciuki/w32_core.h>
+void desk_cursor_update(struct desktop *d) { (void)d; }
 static unsigned directory_state=CIUKI_PROC_LIVE;
 int ciuki_proc_list(void *p,uint32_t n)
 {
@@ -20,7 +22,7 @@ int ciuki_proc_list(void *p,uint32_t n)
     struct ciuki_proc_record *r=(void *)(s+1);r->pid=700;r->state=directory_state;return 1;
 }
 extern int desk_restart_process_alive(uint32_t);
-static unsigned starts,signals;
+static unsigned starts,signals,feedback_pending;
 static int authorized=1;
 static pthread_t desktop_thread;
 static unsigned native_launches,dos_launches;
@@ -61,6 +63,13 @@ void desk_shell_message(struct desktop *d,const char *title,const char *text,int
 {(void)d;(void)title;(void)text;(void)error;assert(0);}
 uint32_t desk_w32_record(void *record,uint32_t bytes)
 {
+    if(((struct ciuki_w32_header *)record)->operation==W32_SYSTEM){
+        struct ciuki_w32_system_args *a=record;
+        assert(bytes==sizeof(*a) && a->action==W32_S_LAUNCH_FEEDBACK);
+        if(a->value){assert(a->value==701);feedback_pending--;}
+        a->result=feedback_pending; a->low=feedback_pending?5000:0;
+        return 0;
+    }
     if(((struct ciuki_w32_header *)record)->operation==W32_REPORT){assert(bytes==sizeof(struct ciuki_w32_report_args));return 0;}
     struct w32r_service *a=record;assert(bytes==sizeof(*a));if(a->service==2){
         if(__atomic_load_n(&idle_enabled,__ATOMIC_ACQUIRE)){a->result=1;a->endpoint=7;}else a->error=1062;
@@ -153,6 +162,11 @@ int main(void)
     static struct desktop d;
     authorized=0;desk_w32_start(&d);desk_w32_poll(&d);assert(!starts);
     authorized=1;desk_w32_start(&d);assert(starts==1);
+    feedback_pending=2;desk_w32_poll(&d);
+    assert(d.launch_remote_count==2 && d.launch_remote_until==5000000000ull && d.launch_presented);
+    d.launch_presented(&d,701);assert(d.launch_remote_count==1);
+    feedback_pending=0;desk_w32_poll(&d);assert(!d.launch_remote_count && !d.launch_remote_until);
+    puts("PASS fx-launchfb native: pending Win32 launches queried, first presentation completes one, exit clears feedback");
     desk_w32_child_exited(&d,101,SIGSEGV);assert(starts==2);
     desk_w32_child_exited(&d,102,SIGKILL);assert(starts==3);
     d.power.state=DESK_POWER_RETRY;

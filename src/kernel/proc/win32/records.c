@@ -81,7 +81,7 @@ int w32_record_validate(const void *record, uint32_t bytes, bool win32)
     if (bytes < sizeof(struct ciuki_w32_header)) return -EINVAL;
     const struct ciuki_w32_header *h = record;
     if (h->version != 1 || h->size != bytes || h->reserved) return -EINVAL;
-    if(!win32 && h->operation!=W32_SERVICE && h->operation!=W32_DISPLAY && h->operation!=W32_REPORT)return -EPERM;
+    if(!win32 && h->operation!=W32_SERVICE && h->operation!=W32_DISPLAY && h->operation!=W32_REPORT && h->operation!=W32_SYSTEM)return -EPERM;
     uint32_t size = w32_record_size(h->operation);
     if (!size) return -ENOSYS;
     if (size != bytes) return -EINVAL;
@@ -139,6 +139,10 @@ int w32_record_validate(const void *record, uint32_t bytes, bool win32)
     }
     case W32_SYSTEM: {
         const struct ciuki_w32_system_args *a=record;
+        if (a->action==W32_S_LAUNCH_FEEDBACK || a->action==W32_S_LAUNCH_IDLE)
+            return a->handle||a->low||a->high||a->extra||a->result||a->error||
+                (a->action==W32_S_LAUNCH_IDLE && (!win32 || a->value))?-EINVAL:0;
+        if (!win32) return -EPERM;
         if (a->action==W32_S_READ_MEMORY || a->action==W32_S_WRITE_MEMORY)
             return a->result||a->error?-EINVAL:0;
         return a->result||a->error||a->low||a->high||(a->extra&&(a->action!=W32_S_TERMINATE_THREAD||a->handle))||a->action<1||a->action>W32_S_WRITE_MEMORY?-EINVAL:0;

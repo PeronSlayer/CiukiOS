@@ -733,7 +733,7 @@ static unsigned launch_service(struct desktop *d)
         int exit_status=0, gone=launch_exited(pid,&exit_status);
         if (live) {
             c->spawn_pending=0; c->pid=pid;
-            c->launched_ns=monotonic(); /* AppStarting runs from the process's creation */
+            /* Keep the request time: a slow spawn must also time out. */
         }
         if (!gone) d->children[job->child].pid=pid;
         desk_launch_completed(d,&job->request,job->program.name,(int)pid);
@@ -2801,16 +2801,17 @@ static int link_launch_async(struct desktop *d,const struct desk_launch_record *
     if (!desk_launch_valid(record)) { pthread_mutex_unlock(&w->mutex); return -EINVAL; }
     if (source) { snprintf(w->source,sizeof(w->source),"%s",source); w->launch_requested=1; }
     else { w->requested_record=*record; w->launch_requested=3; }
+    d->launch_link_until=d->now_ns+5000000000ull;
+    desk_cursor_update(d);
     pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->mutex); return 0;
 }
 static int run_submit(struct desktop *d,const char *command)
 {
-    (void)d;
     if (!command || strlen(command)>=DESK_RUN_MAX) return -E2BIG;
     struct links_worker *w=links_worker; if (!w) return -ENOSYS;
     pthread_mutex_lock(&w->mutex); int result=0;
     if (w->run_requested || w->run_busy || w->run_done) result=-EBUSY;
-    else { strcpy(w->run_command,command); w->run_requested=1; pthread_cond_signal(&w->changed); }
+    else { d->launch_run_until=d->now_ns+5000000000ull; desk_cursor_update(d); strcpy(w->run_command,command); w->run_requested=1; pthread_cond_signal(&w->changed); }
     pthread_mutex_unlock(&w->mutex); return result;
 }
 static int shell_open_path(struct desktop *d,const char *path)
@@ -2822,7 +2823,7 @@ static int shell_open_path(struct desktop *d,const char *path)
     if (!w || pthread_mutex_trylock(&w->mutex)) return -EBUSY;
     int e=0;
     if (w->launch_requested || w->launch_busy || w->completed) e=-EBUSY;
-    else { strcpy(w->source,path); w->launch_requested=4; pthread_cond_signal(&w->changed); }
+    else { d->launch_link_until=d->now_ns+5000000000ull; desk_cursor_update(d); strcpy(w->source,path); w->launch_requested=4; pthread_cond_signal(&w->changed); }
     pthread_mutex_unlock(&w->mutex); return e;
 }
 extern uint32_t desk_w32_exchange(const void *,uint32_t,void *,uint32_t,uint32_t *) __attribute__((weak));
@@ -2841,7 +2842,7 @@ static int install_program(struct desktop *d,const char *path)
     int e=0;
     if(w->launch_requested || w->launch_busy || w->completed)e=-EBUSY;
     else if(strlen(path)>=sizeof(w->source))e=-ENAMETOOLONG;
-    else {strcpy(w->source,path);w->launch_requested=2;pthread_cond_signal(&w->changed);}
+    else {d->launch_link_until=d->now_ns+5000000000ull;desk_cursor_update(d);strcpy(w->source,path);w->launch_requested=2;pthread_cond_signal(&w->changed);}
     pthread_mutex_unlock(&w->mutex);return e;
 }
 static void links_start(struct desktop *d)
@@ -2915,6 +2916,13 @@ static void links_service(struct desktop *d)
         if(edit_result<0)desk_shell_message(d,"Shortcut Properties","The shortcut could not be saved. Check that the file is still available and writable.",1);
     }
     if (save_done) desk_game_data_result(d,save_game,save_op,save_result,&save_command);
+    /* The worker may publish a PE after this turn's Win32 poll. Transfer
+     * feedback before removing preparation, without a one-frame gap. */
+    if (((completed && result>=0) || (run_done && run_result>=0)) && d->launch_presented)
+        d->launch_presented(d,0);
+    if (completed) d->launch_link_until=0;
+    if (run_done) d->launch_run_until=0;
+    if (completed || run_done) desk_cursor_update(d);
     if (completed && result<0) desk_shell_message(d,"Programs","This shortcut is unavailable or its target could not be started.",1);
     if (run_done) desk_run_result(d,command,run_result<0 ? run_result : 0);
     if (history_error) desk_shell_notify_error(d,"Run history could not be saved",-history_error);

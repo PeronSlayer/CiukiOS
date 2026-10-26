@@ -2496,6 +2496,7 @@ int desk_redraw(struct desktop *d)
                 uint64_t click=c->launch_input_ns ? c->launch_input_ns : c->launched_ns;
                 if (click && (!input || click<input)) input=click;
                 c->launch_frame_pending=0;
+                if (c->launch_feedback_remote && d->launch_presented) d->launch_presented(d,c->pid);
                 if (d->launch_mark) d->launch_mark(CIUKI_LAUNCH_FRAME,c->pid,0);
                 if (d->first_frame) d->first_frame(d,c,end);
             }

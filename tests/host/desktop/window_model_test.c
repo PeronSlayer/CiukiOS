@@ -720,6 +720,97 @@ static struct fake_app *app_open(const char *name, int w, int h, int x, int y)
     app_paint(a,0,0,(unsigned)a->w,(unsigned)a->h,a->salt);
     return a;
 }
+/* fx-launchfb: production cursor/lifecycle and presentation on every backend. */
+static void feedback_at(int x,int y,unsigned expected)
+{
+    pointer_to(x,y); desk_cursor_update(&d);
+    assert(d.cursor_shape==expected);
+}
+static void row_feedback_native(unsigned m)
+{
+    row_name="launch feedback native"; wm_begin(m,1);
+    assert(!desk_task_launch(&d,"calc",NULL)); struct fake_app *a=last_app;
+    step("request"); feedback_at(600,430,DESK_CURSOR_ARROW_BUSY);
+    app_spawned(a); app_create_window(a); step("window before damage");
+    assert(d.cursor_shape==DESK_CURSOR_ARROW_BUSY);
+    app_paint(a,0,0,a->w,a->h,a->salt);
+    feedback_at(600,430,DESK_CURSOR_ARROW_BUSY); /* damage is not presentation */
+    step("first successful presentation");
+    feedback_at(600,430,DESK_CURSOR_ARROW); step("feedback ended"); wm_end();
+}
+static void row_feedback_dos(unsigned m)
+{
+    row_name="launch feedback DOS"; wm_begin(m,1);
+    assert(!desk_task_launch(&d,"dosbox","C:\\GAME.COM")); struct fake_app *a=last_app;
+    step("DOS Box queued"); feedback_at(600,430,DESK_CURSOR_ARROW_BUSY);
+    app_spawned(a); app_create_window(a); app_paint(a,0,0,a->w,a->h,a->salt);
+    step("DOS Box presented"); feedback_at(600,430,DESK_CURSOR_ARROW); step("ended"); wm_end();
+}
+static void row_feedback_failure(unsigned m)
+{
+    row_name="launch feedback failure"; wm_begin(m,1);
+    assert(!desk_task_launch(&d,"calc",NULL)); struct fake_app *a=last_app;
+    step("queued"); feedback_at(600,430,DESK_CURSOR_ARROW_BUSY);
+    desk_drop_client(&d,a->slot); step("spawn failure drops reserved slot");
+    feedback_at(600,430,DESK_CURSOR_ARROW);
+    assert(desk_task_launch(&d,"missing",NULL)==-ENOENT); step("lookup failure");
+    assert(d.cursor_shape==DESK_CURSOR_ARROW); wm_end();
+}
+static void row_feedback_timeout(unsigned m)
+{
+    row_name="launch feedback timeout"; wm_begin(m,1);
+    assert(!desk_task_launch(&d,"calc",NULL));
+    step("queued"); feedback_at(600,430,DESK_CURSOR_ARROW_BUSY);
+    turn(5000000000ull); step("spawn still pending after timeout");
+    feedback_at(600,430,DESK_CURSOR_ARROW); wm_end();
+}
+static void row_feedback_overlap(unsigned m)
+{
+    row_name="launch feedback overlap"; wm_begin(m,1);
+    assert(!desk_task_launch(&d,"calc",NULL)); struct fake_app *a=last_app;
+    assert(!desk_task_launch(&d,"dosbox",NULL)); struct fake_app *b=last_app;
+    step("two pending"); feedback_at(600,430,DESK_CURSOR_ARROW_BUSY);
+    app_spawned(a); app_create_window(a); app_paint(a,0,0,a->w,a->h,a->salt);
+    step("one presented"); feedback_at(600,430,DESK_CURSOR_ARROW_BUSY);
+    desk_drop_client(&d,b->slot); step("second process exits before window");
+    feedback_at(600,430,DESK_CURSOR_ARROW); step("ended"); wm_end();
+}
+static void row_feedback_precedence(unsigned m)
+{
+    row_name="launch feedback cursor precedence"; wm_begin(m,1);
+    struct fake_app *a=app_open("files",240,160,160,70); step("existing window");
+    assert(!desk_task_launch(&d,"calc",NULL)); step("new launch");
+    struct desk_client *c=&d.clients[a->slot]; struct desk_box b=desk_content(c);
+    c->cursor=DESK_CURSOR_TEXT;
+    feedback_at(b.x+20,b.y+20,DESK_CURSOR_ARROW_BUSY); step("over text cursor");
+    c->cursor=DESK_CURSOR_BUSY;
+    feedback_at(b.x+20,b.y+20,DESK_CURSOR_BUSY); step("application busy wins");
+    int v=wm_v3_window(DESK_V3_OVERLAPPED,-1,160,70,240,160); assert(v>=0);
+    c=&d.clients[v]; b=desk_content(c);
+    c->cursor=DESK_CURSOR_ARROW; c->v3_cursor=7; c->v3_visibility=-1;
+    feedback_at(b.x+20,b.y+20,DESK_CURSOR_ARROW_BUSY);
+    assert(!d.v3_cursor_id && !d.v3_cursor_hidden); step("custom hidden cursor yields");
+    wm_end();
+}
+static void feedback_presented(struct desktop *dd,uint32_t pid)
+{
+    (void)pid; dd->launch_remote_count=0; dd->launch_remote_until=0;
+}
+static void row_feedback_win32(unsigned m)
+{
+    row_name="launch feedback Win32"; wm_begin(m,1);
+    d.launch_remote_count=1; d.launch_remote_until=d.now_ns+5000000000ull;
+    step("kernel reports child before USER connects"); feedback_at(600,430,DESK_CURSOR_ARROW_BUSY);
+    struct fake_app *a=app_open("netsurf",240,160,160,70);
+    struct desk_client *c=&d.clients[a->slot]; c->launch_feedback_remote=1;
+    d.launch_presented=feedback_presented;
+    feedback_at(600,430,DESK_CURSOR_ARROW_BUSY); step("Win32 first window presented");
+    feedback_at(600,430,DESK_CURSOR_ARROW); step("kernel completion observed");
+    d.launch_remote_count=1; d.launch_remote_until=d.now_ns+5000000000ull;
+    step("another child"); feedback_at(600,430,DESK_CURSOR_ARROW_BUSY);
+    d.launch_remote_count=0; step("child exits or first input idle");
+    feedback_at(600,430,DESK_CURSOR_ARROW); wm_end();
+}
 static void row_create(unsigned m)
 {
     /* Window created: CREATE_WINDOW shows frame and (erased) client area at
@@ -2722,7 +2813,9 @@ static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overl
     row_g30b_performance, row_g30b_schedule, row_g30b_network, row_g26c_print, row_g26c_download,
     row_g26c_programs, row_g26c_launch_error, row_common_files, row_common_script,
     row_common_folder_rename, row_g27b_statistics, row_g27b_viewer_save, row_g27b_terminal,
-    row_g27b_serial, row_protected_saver, row_resume_password};
+    row_g27b_serial, row_protected_saver, row_resume_password,
+    row_feedback_native, row_feedback_win32, row_feedback_dos, row_feedback_failure,
+    row_feedback_timeout, row_feedback_overlap, row_feedback_precedence};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).

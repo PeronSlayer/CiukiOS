@@ -1,5 +1,46 @@
 # F2-50 desktop rendering architecture
 
+## Launch feedback (fx-launchfb, 2026-10-26)
+
+Microsoft's [STARTUPINFO reference](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/ns-processthreadsapi-startupinfoa)
+specifies FORCEONFEEDBACK (0x40), FORCEOFFFEEDBACK (0x80), staged 2/5/5-second
+startup timing and termination on GetMessage. The original Microsoft February
+2003 SDK [STARTUPINFO page](https://is.muni.cz/el/1433/jaro2010/PB167/um/cv5/startupinfo_str.pdf)
+documents these flags alongside explicit Windows 95/98/Me exclusions for other
+flags; it lists no such exclusion for feedback. Microsoft's
+[cursor reference](https://learn.microsoft.com/en-us/windows/win32/menurc/about-cursors)
+distinguishes IDC_APPSTARTING (32650) from IDC_WAIT (32514). The Windows 98
+Resource Kit, `build/rskt/wrkapph_3.htm` (read in the main checkout), confirms
+configurable pointers and the animated hourglass; it does not specify launch
+timing. These sources do not establish byte-for-byte Windows 98 timing.
+
+The directive chooses a bounded five-second shell policy: show the existing
+theme's arrow+busy from the launch request until successful first-window
+presentation, exit, failure or timeout. Pending requests are independent, so
+finishing one leaves the others active. Application busy cursors take precedence;
+other window cursors yield to startup feedback. Native/DOS launches retain their
+existing launch slots. Win32 processes retain kernel-owned startup deadlines,
+queried by the delegated desktop; FORCEOFF suppresses that child's feedback,
+FORCEON enables it, and GetMessage ends it. The desktop reports successful
+presentation back by PID. This also covers CreateProcess children before they
+have connected to the desktop. No cursor or Ciuki identity artwork changes.
+
+The window-model replay adds these rows on all five presenters:
+
+| Case | Production behavior checked |
+| --- | --- |
+| Native | Feedback begins at request; damage alone does not complete it; successful presentation does. |
+| Win32 | A child without a USER connection still contributes feedback; presentation, exit or input idle removes it. |
+| DOS | DOS Box startup uses the same request and first-presentation lifecycle. |
+| Failure | A failed reserved spawn and an unsuccessful lookup leave no feedback. |
+| Timeout | A spawn that has not returned also stops contributing after five seconds. |
+| Overlap | Presenting one launch leaves another pending launch active; its exit removes the last contribution. |
+| Cursor precedence | Startup feedback replaces text and custom/hidden non-busy pointers; application busy wins. |
+
+The production Win32 kernel tests separately exercise default, FORCEON,
+FORCEOFF and both flags; native record admission, desktop authority, independent
+children, presentation completion, GetMessage completion, exit and timeout.
+
 Research and implementation contract, 2026-10-13. The existing desktop wire
 protocol, client painting, themes, approved Ciuki portrait and pixel goldens
 remain unchanged. Qualification on the T23 belongs to the lead.

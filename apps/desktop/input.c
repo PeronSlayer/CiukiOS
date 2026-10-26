@@ -205,14 +205,7 @@ void desk_cursor_update(struct desktop *d)
             }
         }
         if (shape==DESK_CURSOR_ARROW && !edges && d->shell) shape=desk_shell_cursor(d);
-        if (shape==DESK_CURSOR_ARROW && !edges) for (int k=0;k<DESK_CLIENTS;k++) {
-            const struct desk_client *c=&d->clients[k];
-            /* AppStarting: from the click while the process is created (fx-8), then
-             * until its first frame or 5 s after the process exists. */
-            if (c->spawn_pending || (c->awaiting_frame && d->now_ns>=c->launched_ns && d->now_ns-c->launched_ns<5000000000ull)) {
-                shape=DESK_CURSOR_ARROW_BUSY; break;
-            }
-        }
+
     }
     if (edges) {
         unsigned horizontal=edges&(DESK_EDGE_LEFT|DESK_EDGE_RIGHT), vertical=edges&(DESK_EDGE_TOP|DESK_EDGE_BOTTOM);
@@ -230,6 +223,22 @@ void desk_cursor_update(struct desktop *d)
             d->v3_cursor_id=vc->v3_cursor; d->v3_cursor_slot=(unsigned)vi;
             d->v3_cursor_hidden=vc->v3_visibility<0 || (vc->v3_pointer&DESK_V3_HIDDEN);
         }
+    }
+    /* Launch feedback is desktop-wide, including custom/hidden client cursors.
+     * A busy application, an interactive drag or a blocking system dialog
+     * retains its own feedback. Requests time out even during a slow spawn. */
+    int starting=(d->launch_link_until>d->now_ns || d->launch_run_until>d->now_ns ||
+        (d->launch_remote_count && d->launch_remote_until>d->now_ns));
+    for (int k=0;!starting && k<DESK_CLIENTS;k++) {
+        const struct desk_client *c=&d->clients[k];
+        if (c->channel>=0 && !c->launch_feedback_remote &&
+            (c->spawn_pending || c->awaiting_frame || c->launch_frame_pending) &&
+            d->now_ns>=c->launched_ns && d->now_ns-c->launched_ns<5000000000ull) starting=1;
+    }
+    if (starting && shape!=DESK_CURSOR_BUSY && !d->power.state && !d->sh.user_gate &&
+        d->drag<0 && !d->sh.dnd.active) {
+        shape=DESK_CURSOR_ARROW_BUSY;
+        d->v3_cursor_id=0; d->v3_cursor_hidden=0;
     }
     if (old_custom!=d->v3_cursor_id || old_slot!=d->v3_cursor_slot || old_hidden!=d->v3_cursor_hidden) {
         trail_damage(d);d->pointer_trail_count=0;d->cursor_dirty=1;
