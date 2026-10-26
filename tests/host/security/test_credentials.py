@@ -8,6 +8,34 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 class CredentialTests(unittest.TestCase):
+    def test_fd_revocation(self):
+        out = ROOT / 'build/host/security'
+        out.mkdir(parents=True, exist_ok=True)
+        source = (ROOT / 'src/kernel/proc/fdtable.c').read_text()
+        # Compile the literal common detachment bodies; no rewritten model.
+        snippets = []
+        for start, end in [('int file_fd_slot(', 'int file_fd_reserve('),
+                           ('struct proc_object *file_fd_object(', 'struct file_description *file_fd('),
+                           ('int file_close(', 'int file_fcntl(')]:
+            snippets.append(source[source.index(start):source.index(end)])
+        (out / 'fd_detach.inc').write_text('\n'.join(snippets))
+        program = out / 'fd_revocation'
+        env = dict(os.environ, TMPDIR=str(out))
+        subprocess.run([
+            'clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+            '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
+            '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
+            '-I', str(out), '-I', str(ROOT / 'src/kernel/include'),
+            str(ROOT / 'tests/host/security/fd_revocation_test.c'),
+            str(ROOT / 'tests/host/proc/signal_legacy.c'),
+            str(ROOT / 'src/kernel/lib/sha256.c'), str(ROOT / 'src/kernel/lib/fmt.c'),
+            str(ROOT / 'src/kernel/probes/selector.c'), '-o', str(program),
+        ], check=True, env=env)
+        result = subprocess.run([str(program)], capture_output=True, text=True, env=env, timeout=30)
+        print(result.stdout, end='')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('H01 review (a):', result.stdout)
+
     def test_sdk_credentials(self):
         out = ROOT / 'build/host/security/sdk'
         (out / 'ciuki').mkdir(parents=True, exist_ok=True)
@@ -55,6 +83,7 @@ static inline int ciuki_error(uint32_t r) { return r >= (uint32_t)-4095 ? -(int3
             str(ROOT / 'tests/host/security/credentials_test.c'),
             str(ROOT / 'tests/host/proc/signal_legacy.c'),
             str(ROOT / 'src/kernel/lib/sha256.c'),
+            str(ROOT / 'src/kernel/lib/tzrule.c'),
             str(ROOT / 'src/kernel/lib/fmt.c'),
             str(ROOT / 'src/kernel/probes/selector.c'), '-o', str(program),
         ], check=True, env=env)

@@ -1094,7 +1094,8 @@ static int desktop_open_error;
 static int desktop_open(void *cwd, const char *path, struct ciuki_file *file)
 {
     (void)cwd;
-    if (!strcmp(path,"/System/Security/accounts")) return -ENOENT;
+    /* Transitional fixture has no sealed security-service images. */
+    if (!strncmp(path,"/System/Services/",sizeof("/System/Services/")-1)) return -ENOENT;
     CHECK(!strcmp(path, "/Programs/desktop"));
     desktop_opens++;
     if (desktop_open_error) return desktop_open_error;

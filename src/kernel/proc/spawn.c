@@ -6,6 +6,15 @@
 #include <ciuki/cpu.h>
 #include <ciuki/process.h>
 #include <ciuki/security.h>
+#include <ciuki/desktop.h>
+#include <ciuki/tzrule.h>
+#pragma weak desktop_close
+#pragma weak channel_pair
+#pragma weak channel_endpoint_handoff
+#pragma weak channel_control_bind
+#pragma weak desktop_fd
+#pragma weak tzr_parse
+extern int security_profile_timezone(const struct security_subject *,const struct ciuki_security_profile *,char *,uint32_t) __attribute__((weak));
 #include <ciuki/supervisor.h>
 #include <ciuki/signal.h>
 
@@ -277,16 +286,26 @@ struct spawn_operation {
     char *path;
     struct ciuki_file file;
     struct credential_copy *security_copy;
+    bool control_owned;
+    int32_t control_fd;
+    struct process *controller;
+    struct proc_object *control_object;
+    uint32_t preparing_session;
 };
 
 static void spawn_cleanup(void *operation)
 {
     struct spawn_operation *op = operation;
     op->thread->launch_loading = 0;
+    if (op->control_owned && desktop_close && op->controller->fds &&
+        op->controller->fds[op->control_fd].object==op->control_object)
+        desktop_close(op->controller,op->control_fd);
+    if (op->control_object) op->control_object->release(op->control_object);
     if (op->file.close)
         op->file.close(op->file.cookie);
     if (op->child)
         proc_discard(op->child);
+    if (op->preparing_session) security_launch_preparation_done(op->preparing_session);
     proc_strings_free(op->strings);
     kfree(op->fds);
     kfree(op->path);
@@ -362,9 +381,17 @@ static void credential_text(char *out, const char *key, const char *root, const 
     memcpy(out + at, suffix, strlen(suffix) + 1);
 }
 static int credential_environment(struct proc_strings **strings, struct credential_copy *c,
-                                   const struct ciuki_security_profile *profile)
+                                   const struct ciuki_security_profile *profile, struct process *child)
 {
-    static const char *const keys[] = {"USER", "LOGNAME", "HOME", "USERPROFILE", "CIUKI_PROFILE", "TEMP", "TMP", "TMPDIR", "PATH"};
+    static const char *const keys[] = {"USER", "LOGNAME", "HOME", "USERPROFILE", "CIUKI_PROFILE", "TEMP", "TMP", "TMPDIR", "PATH", "LC_ALL", "TZ", "CIUKI_PROFILE_SETTINGS"};
+    char timezone[CIUKI_TIME_RULE_MAX]={0};
+    int tzerr=security_profile_timezone ? security_profile_timezone(child->subject,profile,timezone,sizeof(timezone)) : -ENOENT;
+    if (tzerr && tzerr!=-ENOENT) return tzerr;
+    if (tzerr==-ENOENT) memcpy(timezone,"UTC0",5);
+    unsigned tn=0; while (tn<sizeof(timezone) && timezone[tn]) tn++;
+    if (tn==sizeof(timezone)) return -EINVAL;
+    struct tzr rule;
+    if (tzr_parse ? !tzr_parse(timezone,&rule) : strncmp(timezone,"UTC0",5)!=0) return -EINVAL;
     bool seen[ARRAY_SIZE(keys)] = {0};
     struct proc_strings *old = *strings, *clean = proc_strings_new();
     if (!clean) return -ENOMEM;
@@ -408,6 +435,9 @@ static int credential_environment(struct proc_strings **strings, struct credenti
                 char expected[128];
                 const char *suffix = key == 2 ? "/Documents" : key >= 5 && key <= 7 ? "/Local Settings/Temp" : "";
                 if (key == 8) memcpy(expected, "/Programs:/System", sizeof("/Programs:/System"));
+                else if (key==9) memcpy(expected,"C",2);
+                else if (key==10) memcpy(expected,timezone,tn+1);
+                else if (key==11) credential_text(expected,0,profile->path,"/Settings/desktop.cfg");
                 else credential_text(expected, 0, profile->path, suffix);
                 if (strncmp(value, expected, strlen(expected) + 1)) err = -EINVAL;
             }
@@ -417,6 +447,9 @@ static int credential_environment(struct proc_strings **strings, struct credenti
     for (unsigned i = 2; i < ARRAY_SIZE(keys) && !err; i++) if (!seen[i]) {
         const char *suffix = i == 2 ? "/Documents" : i >= 5 && i <= 7 ? "/Local Settings/Temp" : "";
         if (i == 8) credential_text(c->text, keys[i], "/Programs:/System", "");
+        else if (i==9) credential_text(c->text,keys[i],"C","");
+        else if (i==10) credential_text(c->text,keys[i],timezone,"");
+        else if (i==11) credential_text(c->text,keys[i],profile->path,"/Settings/desktop.cfg");
         else credential_text(c->text, keys[i], profile->path, suffix);
         err = proc_strings_add(clean, c->text, (uint32_t)strlen(c->text) + 1, true);
     }
@@ -431,7 +464,7 @@ extern int security_exec_open(struct process *, const char *, struct ciuki_file 
 int proc_spawn_credential(uint32_t spawn, uint32_t session, uint32_t outer, uint32_t *pid)
 {
     struct process *parent = proc_current();
-    if (!security_system(parent)) return -EPERM;
+    if (!security_logon(parent)) return -EPERM;
     struct ciuki_spawn_args a;
     if (!spawn || spawn > UINT32_MAX - sizeof(a)) return -EFAULT;
     if (spawn & 3) return -EINVAL;
@@ -457,10 +490,10 @@ int proc_spawn_credential(uint32_t spawn, uint32_t session, uint32_t outer, uint
     if (err) { if (err == -E2BIG) err = -ENAMETOOLONG; goto out; }
     memcpy(op->path, c->text, bytes);
     if ((err = credential_vector(c, op->strings, a.argv, false)) ||
-        (err = credential_vector(c, op->strings, a.envp, true)) ||
-        (err = credential_environment(&op->strings, c, &profile))) goto out;
+        (err = credential_vector(c, op->strings, a.envp, true))) goto out;
     if ((err = proc_prepare(parent, &op->child)) ||
-        (err = security_session_attach(op->child, session))) goto out;
+        (err = security_session_attach(op->child, session)) ||
+        (err = credential_environment(&op->strings, c, &profile, op->child))) goto out;
     proc_set_name(op->child, op->path);
     credential_text(c->text, 0, profile.path, "/Documents");
     if (!px_security_cwd) { err = -EIO; goto out; }
@@ -475,10 +508,108 @@ int proc_spawn_credential(uint32_t spawn, uint32_t session, uint32_t outer, uint
     }
     if (op->file.close) op->file.close(op->file.cookie);
     op->file.close = 0;
+    /* Adapter close may yield, stop a parent or end this session. */
+    if (!security_process_live(op->child) || op->child->state != PROC_PREPARING ||
+        !security_process_live(parent) || parent->state != PROC_LIVE || proc_signal_caught(self)) {
+        err = -EACCES; goto out;
+    }
     proc_publish(op->child, a.flags);
     *pid = op->child->pid;
     op->child = 0;
 out:
+    proc_thread_cleanup(self);
+    return err;
+}
+
+int security_launch_environment(struct proc_strings *strings, const struct ciuki_security_launch *l)
+{
+    static const char *const keys[]={"CIUKI_SESSION_ID","CIUKI_SESSION_GENERATION",
+        "CIUKI_LAUNCH_ID","CIUKI_LAUNCH_GENERATION","CIUKI_LAUNCH_PURPOSE",
+        "CIUKI_LAUNCH_READY_FD","CIUKI_CONSOLE_FD","CIUKI_DISPLAY_FD","CIUKI_INPUT_FD","CIUKI_SERVICE_FD",
+        "CIUKI_GRANT_GENERATION","CIUKI_SERVICE_GENERATION","CIUKI_PROCESS_GENERATION"};
+    int32_t values[]={(int32_t)l->session_id,(int32_t)l->session_generation,(int32_t)l->launch_id,
+        (int32_t)l->launch_generation,(int32_t)l->purpose,l->child_ready_fd,l->child_console_fd,
+        l->child_display_fd,l->child_input_fd,l->child_service_fd,
+        (int32_t)l->grant_generation,(int32_t)l->service_generation,(int32_t)l->process_generation};
+    for (unsigned i=0;i<ARRAY_SIZE(keys);i++) {
+        char text[64],digits[10]; unsigned n=(unsigned)strlen(keys[i]),count=0;
+        memcpy(text,keys[i],n); text[n++]='=';
+        uint32_t value=(uint32_t)values[i];
+        if (i>=5 && i<10 && values[i]<0) { text[n++]='-'; value=0u-value; }
+        do { digits[count++]=(char)('0'+value%10); value/=10; } while (value);
+        while (count) text[n++]=digits[--count];
+        text[n]=0;
+        int err=proc_strings_add(strings,text,n+1,true);
+        if (err) return err;
+    }
+    return 0;
+}
+int proc_security_launch_prepare(struct process *parent, struct ciuki_security_launch *l, struct process **out)
+{
+    if (!security_logon(parent)) return -EPERM;
+    if (!channel_pair || !channel_endpoint_handoff || !channel_control_bind || !desktop_fd || !px_security_cwd || !security_exec_open) return -EIO;
+    struct proc_thread *self=proc_thread_for(g_current);
+    if (!self || self->process!=parent) return -EPERM;
+    struct spawn_operation *op=kzalloc(sizeof(*op));
+    if (!op) return -ENOMEM;
+    op->thread=self; op->controller=parent; op->preparing_session=l->session_id;
+    self->operation=op; self->cleanup=spawn_cleanup;
+    const char *path=security_role_image(l->purpose==1 ? CIUKI_SECURITY_ROLE_DESKTOP : CIUKI_SECURITY_ROLE_W32SRV);
+    struct ciuki_security_profile profile;
+    int err=security_session_profile(l->session_id,&profile);
+    if (err) goto done;
+    op->strings=proc_strings_new(); op->security_copy=kzalloc(sizeof(*op->security_copy));
+    if (!op->strings || !op->security_copy) { err=-ENOMEM; goto done; }
+    if ((err=proc_strings_add(op->strings,path,(uint32_t)strlen(path)+1,false)) ||
+        (err=proc_prepare(parent,&op->child)) || (err=security_session_attach(op->child,l->session_id)) ||
+        (err=credential_environment(&op->strings,op->security_copy,&profile,op->child))) goto done;
+    if ((err=security_role_prepare(parent,op->child,l->purpose==1 ? 6 : 7,path))) goto done;
+    l->service_generation=security_role_generation(op->child);
+    l->pid=op->child->pid; l->process_generation=security_process_generation(op->child);
+    proc_set_name(op->child,path); proc_share_group(op->child);
+    if (w32_service_delegate) w32_service_delegate(parent,op->child,path);
+    credential_text(op->security_copy->text,0,profile.path,"/Documents");
+    if ((err=px_security_cwd(op->child,op->security_copy->text)) ||
+        (err=security_launch_resources(op->child,l))) goto done;
+    /* The adapter owns fresh private stdio, console/grant/notification fds.
+     * No live SYSTEM description is inherited even when its flags change. */
+    int32_t required[]={l->child_console_fd,l->purpose==1 ? l->child_display_fd : l->child_service_fd,
+        l->purpose==1 ? l->child_input_fd : l->child_service_fd};
+    for (unsigned i=0;i<ARRAY_SIZE(required);i++) if (required[i]<3 || required[i]>=CIUKI_OPEN_MAX ||
+        !op->child->fds[required[i]].object) { err=-EIO; goto done; }
+    if (required[0]==required[1] || required[0]==required[2] ||
+        (l->purpose==1 && required[1]==required[2]) ||
+        (l->purpose==1 ? l->child_service_fd!=-1 : l->child_display_fd!=-1 || l->child_input_fd!=-1)) {
+        err=-EIO; goto done;
+    }
+    struct proc_object *console=op->child->fds[l->child_console_fd].object;
+    for (unsigned i=0;i<3;i++) if (op->child->fds[i].object!=console) { err=-EIO; goto done; }
+    for (unsigned i=0;i<CIUKI_OPEN_MAX;i++) if (op->child->fds[i].object) {
+        op->child->fds[i].object->inheritable=false;
+        op->child->fds[i].flags|=FD_CLOEXEC;
+    }
+    int32_t pair[2];
+    if ((err=channel_pair(parent,pair))) goto done;
+    op->control_fd=pair[0]; op->control_owned=true;
+    op->control_object=parent->fds[pair[0]].object; op->control_object->retain(op->control_object);
+    err=channel_endpoint_handoff(parent,pair[1],op->child,&l->child_ready_fd,true);
+    if (err) { desktop_close(parent,pair[1]); goto done; }
+    if ((err=channel_control_bind(parent,pair[0]))) goto done;
+    desktop_fd(parent,pair[0])->object.inheritable=false;
+    l->control_fd=pair[0];
+    if ((err=security_launch_environment(op->strings,l))) goto done;
+    self->launch_loading=op->child;
+    if ((err=security_exec_open(op->child,path,&op->file))) goto done;
+    if (w32_is_pe && w32_is_pe(&op->file)) { err=-ENOEXEC; goto done; }
+    if ((err=prepare_image(op->child,&op->file,op->strings,0))) goto done;
+    if (op->file.close) op->file.close(op->file.cookie);
+    op->file.close=0;
+    if (!security_logon(parent) || parent->state!=PROC_LIVE || !security_process_live(op->child) ||
+        op->child->state!=PROC_PREPARING || proc_signal_caught(self) ||
+        parent->fds[op->control_fd].object!=op->control_object) { err=-EACCES; goto done; }
+    *out=op->child; op->child=0; op->control_owned=false;
+done:
+    if (err) l->control_fd=-1; /* cleanup consumes the exact owned descriptor */
     proc_thread_cleanup(self);
     return err;
 }

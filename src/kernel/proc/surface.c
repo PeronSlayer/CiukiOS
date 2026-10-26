@@ -100,6 +100,12 @@ int desktop_fd_install(struct process *p, struct desktop_description *d, uint32_
     return fd;
 }
 
+bool desktop_object_is_channel(const struct proc_object *o)
+{
+    return o && o->release == description_release &&
+        ((const struct desktop_description *)o)->kind == DESKTOP_CHANNEL;
+}
+
 int desktop_close(struct process *p, int32_t fd)
 {
     if (!p || !p->fds || fd < 0 || fd >= CIUKI_OPEN_MAX || !p->fds[fd].object)

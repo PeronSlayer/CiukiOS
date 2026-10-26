@@ -13,6 +13,7 @@ extern void w32_process_died(struct process *) __attribute__((weak));
 extern void w32_thread_died(struct proc_thread *) __attribute__((weak));
 extern void w32_process_stopping(struct process *, uint32_t) __attribute__((weak));
 extern void net_fd_changed(struct process *, unsigned) __attribute__((weak));
+extern void channel_fd_closed(struct process *, struct proc_object *) __attribute__((weak));
 extern int channel_process_prepare(struct process *) __attribute__((weak));
 extern void channel_process_publish(struct process *) __attribute__((weak));
 extern void channel_process_abort(struct process *) __attribute__((weak));
@@ -344,8 +345,10 @@ static void close_resources(struct process *p)
         for (unsigned i = 0; i < CIUKI_OPEN_MAX; i++) {
             struct proc_object *o = p->fds[i].object;
             p->fds[i].object = 0;        /* detach before potentially blocking release */
-            if (o)
+            if (o) {
+                if (channel_fd_closed) channel_fd_closed(p, o);
                 o->release(o);
+            }
         }
         kfree(p->fds);
         p->fds = 0;
@@ -548,8 +551,8 @@ static void supervisor_main(void *arg)
 
 void proc_init(void)
 {
-    security_init(&supervisor);
     supervisor.pid = supervisor.ppid = supervisor.pgid = 1;
+    security_init(&supervisor);
     proc_set_name(&supervisor, "supervisor");
     supervisor.state = PROC_LIVE;
     supervisor.published = true;
@@ -564,6 +567,7 @@ void proc_init(void)
 extern void w32_shared_publish(void) __attribute__((weak));
 void w32_shared_tick(void)
 {
+    security_tick();
     /* One page shared by every Win32 process (win32/counter.c): published
      * once per tick, not once per process. */
     if (w32_shared_publish) w32_shared_publish();

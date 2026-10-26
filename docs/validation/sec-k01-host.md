@@ -33,14 +33,57 @@ adapter; it cannot accept a descriptor merely because its fields look valid.
 Exact commands, results, bootstrap decisions and remaining integration gates
 are recorded in `build/codex/sec-k01-report.md`.
 
+## Lead amendment 1 research and implementation decision
+
+Rechecked 2026-10-26 after `date -Is`. Microsoft's
+[desktops](https://learn.microsoft.com/en-us/windows/win32/winstation/desktops)
+describes one active input desktop and restricted Winlogon presentation;
+[access tokens](https://learn.microsoft.com/en-us/windows/win32/secauthz/access-tokens)
+associates execution and work with the process identity;
+[cancellation](https://learn.microsoft.com/en-us/windows/win32/fileio/canceling-pending-i-o-operations)
+distinguishes requesting cancellation from observing a cancelled operation.
+These support the frozen contract's separate presentation/CPU state, retained
+subjects and pre-dequeue cancellation boundary. Exact epochs, fixed roles,
+framing and transport result values are CiukiOS choices in the reconciled
+contract, rather than Windows API compatibility claims.
+
+The partial amendment already covered operations 8-14, but inspection found
+missing fixed-role respawn, reused child-fd reporting, and a failed-fence
+admission guard. Complete these inside k01; preserve the interim bootstrap
+only before the trusted LOGON role is first reserved. Carry target-subject
+profile metadata into generated LC_ALL/TZ/settings rather than consulting
+SYSTEM's environment. PROFILE=8 is an ACCOUNTS service query supplied by
+sec-user-01 and consumed by sec-user-05; it adds no seventh public ABI record
+or fifteenth syscall operation here. K02/K03 supply the committed owner and
+atomic child-subject executable adapters, and k07 qualifies real device fences.
+
 ## Implemented boundaries
 
-The seven SECURITY operations use the frozen records unchanged. Subjects are
+The fourteen SECURITY operations use the six frozen records. Subjects are
 assigned in `proc_prepare`, retained by channels and released after process
 collection. Native and Win32 child/thread publication rechecks session liveness.
-Channel-pair preparation reserves its first child binding privately; publication
-commits it, abort preserves the old peer, and subsequent duplication keeps that
-binding. Closing/reusing an fd cannot retarget a retained request.
+Ordinary channel inheritance and duplication preserve the established peer and
+generation. Initial handoff is explicit. Common close, dup2 replacement and
+teardown detach before revoking the last owner fd. Retained work cannot retarget
+through fd reuse. Readiness has a kernel-owned coordinator endpoint and may be
+recovered only by a replacement registered LOGON; it never transfers to a child.
+
+Purpose-specific launch prepares private safe console/stdio, suspended grants,
+role/service metadata, generated environment and a private ready endpoint before
+publication. POLL reports the paired handshake or its 5000 ms failure; it cannot
+release a superseding secure gate. Closed child descriptors report -1 even when
+the slot is reused. Service links enforce retained role/session routes, no
+inheritance/transfer, one exchange per link and eight total. Body reassembly
+uses at most two pages per exchange, including one-byte fragmentation; only a
+complete bounded body becomes readable. CANCEL proves cancellation only before
+the first successful server copy. Closing/revocation destroys buffered replies.
+
+Console transitions serialize with interrupts masked and nonblocking backend
+conceal/activate callbacks. A fence still draining returns EBUSY under neutral
+presentation. The authentication-required bit, console/authentication epochs
+and one-use cookie survive LOGON/UI/ACCOUNT replacement; applications keep their
+credential and execution. Failed containment holds CLOSING until a retry fences
+the device. Backend qualification and physical-input routing remain k07 work.
 
 Cross-credential spawn accepts no descriptor list or inherited stdio, resolves
 a new cwd from the boot namespace root, and rebuilds only the approved
@@ -51,17 +94,20 @@ EIO. The required k02 `security_owner_verify(profile)` adapter likewise returns
 EIO when absent. This stage supplies neither a synthetic committed owner store
 nor a fallback that opens an executable under the SYSTEM caller.
 
-The interim bootstrap proposal uses a kernel-created uid 1000 administrator
+The approved interim bootstrap uses a kernel-created uid 1000 administrator
 session for the desktop and retains session 0/SYSTEM for Setup and service/test
 boots. The desktop receives newly constructed stdio and grants; it receives no
 SYSTEM descriptor table or cwd. Its existing fixed HOME/TMPDIR defaults remain
 until sec-user-03 installs the real profile/logon flow. An unpublished failed
 desktop releases its provisional bootstrap session. The fixed internal account
-service entry is `/System/Security/accounts`; normal boot attempts it once,
-missing-image ENOENT is tolerated for this transition, and a second live
-instance is refused. Sec-user-01 supplies its image. Public spawning that pathname inherits the caller's
-identity. These bootstrap choices require lead confirmation: the referenced
-contracts did not actually contain the interim rule mentioned by the directive.
+service entry is now `/System/Services/accounts`, as frozen by amendment 1.
+The manifest also fixes LOGON, LOGON_UI and REGISTRY; OWNER is PID 1's kernel
+endpoint and SETUP is the sealed installation entry. Missing LOGON ENOENT keeps
+the approved interim boot before any LOGON reservation. After the first trusted
+LOGON reservation that choice is irreversible for the boot: a service crash
+cannot reopen legacy registration or a fallback desktop. PID 1 respawns only
+fixed roles it previously started, with fresh nonreused generations. Public
+spawns and descendants retain their credential and receive ROLE_NONE.
 
 ## Evidence limits
 

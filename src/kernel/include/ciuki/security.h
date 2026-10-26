@@ -49,4 +49,59 @@ void channel_fd_closed(struct process *p, struct proc_object *object);
 int channel_process_prepare(struct process *child);
 void channel_process_publish(struct process *child);
 void channel_process_abort(struct process *child);
+/* Internal role bootstrap. Only PID 1's fixed manifest uses this interface. */
+uint32_t security_role(const struct process *p);
+uint32_t security_process_generation(const struct process *p);
+uint32_t security_role_generation(const struct process *p);
+bool security_logon(const struct process *p);
+const char *security_role_image(uint32_t role);
+int security_role_prepare(struct process *parent, struct process *child, uint32_t role, const char *image);
+struct process *security_service_server(uint32_t service, uint32_t session);
+struct process *security_session_desktop(uint32_t session);
+bool security_roles_active(void); /* sticky after first LOGON reservation */
+int security_service_allowed(const struct process *client, uint32_t service);
+int security_subject_acquire_endpoint(struct process *, int32_t, uint32_t, struct security_subject **);
+/* action = (service << 16) | operation; scope = required peer session (0 = any).
+ * This checks transport liveness and role routes; servers additionally check
+ * account/object permissions under this retained credential. */
+int security_subject_check(const struct security_subject *, uint32_t action, uint32_t scope);
+uint32_t security_subject_role(const struct security_subject *);
+uint32_t security_subject_pid(const struct security_subject *);
+uint32_t security_subject_process_generation(const struct security_subject *);
+uint32_t security_session_generation(uint32_t session);
+int channel_endpoint_handoff(struct process *, int32_t, struct process *, int32_t *, bool);
+int channel_security_link(struct process *, uint32_t operation, const struct ciuki_security_link *,
+                          struct ciuki_security_link *, uint32_t *result);
+int channel_kernel_receive(struct process *, int32_t, struct ciuki_message *);
+int channel_control_bind(struct process *, int32_t);
+int channel_control_install(struct process *, struct proc_object *);
+void channel_security_revoke(struct process *);
+void channel_security_poll(void);
+uint32_t channel_peer_service(const struct security_peer *);
+/* k07 installs the backend only after qualifying fences/maps/leases. Missing
+ * adapter fails closed. prepare installs fresh session console/stdio and
+ * purpose grants; it must never duplicate the caller's descriptions. All
+ * prepare/trusted may yield. conceal/activate are nonblocking console
+ * transitions, called with interrupts masked; conceal masks presentation/input
+ * and starts fences, returning EBUSY while they drain. No device wait or
+ * allocation belongs in these two callbacks. */
+struct security_grant_ops {
+    int (*prepare)(struct process *, uint32_t purpose, struct ciuki_security_launch *);
+    int (*conceal)(uint32_t session, uint32_t grant_generation);
+    int (*activate)(uint32_t session, uint32_t grant_generation);
+    void (*release)(uint32_t session);
+    int (*trusted)(struct process *); /* LOGON_UI private console/input/display */
+};
+void security_set_grant_ops(const struct security_grant_ops *ops);
+int security_trusted_prepare(struct process *p);
+int security_launch_resources(struct process *, struct ciuki_security_launch *);
+int security_launch_environment(struct proc_strings *, const struct ciuki_security_launch *);
+int proc_security_launch_prepare(struct process *parent, struct ciuki_security_launch *, struct process **);
+void security_launch_preparation_done(uint32_t session);
+int security_console_attention(uint32_t reason); /* kernel physical input/resume only */
+void security_tick(void); /* bounded deadline wake; no I/O or waits */
+void security_poll(void); /* PID 1 maintenance: deadlines and pair failures */
+/* Committed per-profile TZ loader. Absent key => UTC0; absent adapter may use
+ * UTC0, never the SYSTEM process environment. EIO/corruption fails launch. */
+int security_profile_timezone(const struct security_subject *, const struct ciuki_security_profile *, char *, uint32_t);
 #endif

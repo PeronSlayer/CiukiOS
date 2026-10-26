@@ -794,6 +794,45 @@ enum ciuki_w32_syscall { CIUKI_SYS_W32 = 96 };
 #define CIUKI_SECURITY_SPAWN_CREDENTIAL 5u
 #define CIUKI_SECURITY_SESSION_END 6u
 #define CIUKI_SECURITY_SESSION_QUERY 7u
+#define CIUKI_SECURITY_SESSION_LAUNCH 8u
+#define CIUKI_SECURITY_LAUNCH_POLL 9u
+#define CIUKI_SECURITY_SECURE_ENTER 10u
+#define CIUKI_SECURITY_SECURE_LEAVE 11u
+#define CIUKI_SECURITY_SERVICE_CONNECT 12u
+#define CIUKI_SECURITY_SERVICE_ACCEPT 13u
+#define CIUKI_SECURITY_SERVICE_CANCEL 14u
+#define CIUKI_SECURITY_LAUNCH_DESKTOP 1u
+#define CIUKI_SECURITY_LAUNCH_W32SRV 2u
+#define CIUKI_SECURITY_LAUNCH_PREPARING 1u
+#define CIUKI_SECURITY_LAUNCH_READY 2u
+#define CIUKI_SECURITY_LAUNCH_RUNNING 3u
+#define CIUKI_SECURITY_LAUNCH_FAILED 4u
+#define CIUKI_SECURITY_SECURE_LOCK 1u
+#define CIUKI_SECURITY_SECURE_SAVER 2u
+#define CIUKI_SECURITY_SECURE_RESUME 3u
+#define CIUKI_SECURITY_SECURE_ATTENTION 4u
+#define CIUKI_SECURITY_CONSOLE_TRUSTED 1u
+#define CIUKI_SECURITY_CONSOLE_USER 2u
+#define CIUKI_SECURITY_ROLE_NONE 0u
+#define CIUKI_SECURITY_ROLE_LOGON 1u
+#define CIUKI_SECURITY_ROLE_LOGON_UI 2u
+#define CIUKI_SECURITY_ROLE_ACCOUNT 3u
+#define CIUKI_SECURITY_ROLE_OWNER 4u
+#define CIUKI_SECURITY_ROLE_REGISTRY 5u
+#define CIUKI_SECURITY_ROLE_DESKTOP 6u
+#define CIUKI_SECURITY_ROLE_W32SRV 7u
+#define CIUKI_SECURITY_ROLE_SETUP 8u
+#define CIUKI_SECURITY_SERVICE_AUTH 1u
+#define CIUKI_SECURITY_SERVICE_ACCOUNTS 2u
+#define CIUKI_SECURITY_SERVICE_OWNER 3u
+#define CIUKI_SECURITY_SERVICE_REGISTRY 4u
+#define CIUKI_SECURITY_SERVICE_LOGON 5u
+#define CIUKI_SECURITY_SERVICE_W32SRV 6u
+#define CIUKI_SECURITY_SERVICE_BODY_MAX 8192u
+#define CIUKI_SECURITY_SERVICE_PENDING_MAX 8u
+#define CIUKI_SECURITY_SERVICE_FRAGMENT_MAX 192u
+#define CIUKI_SECURITY_LAUNCH_TIMEOUT_MS 5000u
+#define CIUKI_SECURITY_SERVICE_TIMEOUT_MS 5000u
 #define CIUKI_SECURITY_END_BEGIN 0x00000001u
 #define CIUKI_SECURITY_END_COLLECT 0x00000002u
 #define CIUKI_SECURITY_SESSION_ACTIVE 1u
@@ -841,6 +880,64 @@ struct ciuki_security_args {
     uint32_t output_bytes;
     uint32_t result;
     uint32_t state;
+    uint32_t reserved[2];
+};
+struct ciuki_security_launch {
+    uint32_t version;
+    uint32_t size;
+    uint32_t purpose;
+    uint32_t flags;
+    uint32_t session_id;
+    uint32_t session_generation;
+    uint32_t launch_id;
+    uint32_t launch_generation;
+    uint32_t pid;
+    uint32_t process_generation;
+    int32_t control_fd;
+    int32_t child_ready_fd;
+    int32_t child_console_fd;
+    int32_t child_display_fd;
+    int32_t child_input_fd;
+    int32_t child_service_fd;
+    uint32_t service_generation;
+    uint32_t grant_generation;
+    uint32_t state;
+    int32_t error;
+    uint32_t activation_console_epoch;
+    uint32_t activation_authentication_epoch;
+    uint32_t reserved[2];
+};
+struct ciuki_security_console {
+    uint32_t version;
+    uint32_t size;
+    uint32_t session_id;
+    uint32_t session_generation;
+    uint32_t console_generation;
+    uint32_t reason;
+    uint32_t grant_generation;
+    uint32_t restore_cookie_lo;
+    uint32_t restore_cookie_hi;
+    uint32_t state;
+    uint32_t authentication_required;
+    uint32_t console_epoch;
+    uint32_t authentication_epoch;
+    uint32_t reserved[3];
+};
+struct ciuki_security_link {
+    uint32_t version;
+    uint32_t size;
+    uint32_t service;
+    uint32_t flags;
+    int32_t endpoint_fd;
+    uint32_t endpoint_generation;
+    uint32_t server_role;
+    uint32_t peer_pid;
+    uint32_t peer_process_generation;
+    uint32_t peer_role;
+    uint32_t session_id;
+    uint32_t service_generation;
+    uint32_t request_id_lo;
+    uint32_t request_id_hi;
     uint32_t reserved[2];
 };
 #pragma pack(pop)
