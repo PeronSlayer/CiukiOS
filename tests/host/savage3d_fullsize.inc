@@ -1,6 +1,15 @@
 /* Full-size boot gate and Quake-sized ordered lists on independent packets. */
 #define FULL_CHECK(condition) do { CHECK(condition); if (failures) exit(1); } while (0)
 static unsigned pressure_reads3d;
+static unsigned qualification_yields3d;
+static int qualification_checkpoint3d(void *ctx)
+{
+    (void)ctx;
+    FULL_CHECK(!locks && !drawing && !accel_inflight && !count3d);
+    FULL_CHECK(!m.reg[0x48c40/4] && !m.reg[0x850c/4] && !m.reg[0x48584/4]);
+    qualification_yields3d++;
+    return 0;
+}
 static uint32_t read_pressure3d(void *ctx,uint32_t reg)
 {
     if (reg==SAVAGE_STATUS && m.fifo_used==32) m.fifo_drain=(++pressure_reads3d&1) ? 0 : 8;
@@ -54,7 +63,10 @@ static void fullsize3d(unsigned w,unsigned h,unsigned fault)
     if (fault==13) probe_address_bits3d=7;
     if (fault==4) gpu3d.heap.bytes-=4*1024*1024; /* preflight, before entry/writes */
     read_delay3d=fault==5 ? 2 : fault==6 ? 9 : 0;
+    qualification_yields3d=0;
+    if (!fault) gpu3d.probe_checkpoint=qualification_checkpoint3d;
     int e=savage3d_fullsize_probe(&gpu3d,&reference3d);
+    gpu3d.probe_checkpoint=0;
     read_delay3d=0; slow_guard3d=false; sampling3d.affine=false; sampling3d.bias=0; probe_filter_bits3d=0; probe_lod_bias3d=0; probe_address_bits3d=0;
     if (e && !fault) fprintf(stderr,"fullsize %ux%u error=%d phase=%u expected=%08x actual=%08x channel=%u depth=%u\n",
         w,h,e,gpu3d.failed_phase,gpu3d.expected,gpu3d.actual,gpu3d.max_channel_error,gpu3d.max_depth_error);
@@ -62,7 +74,7 @@ static void fullsize3d(unsigned w,unsigned h,unsigned fault)
     FULL_CHECK((e==0)==success && gpu3d.fullsize_qualified==success);
     if (fault==7) FULL_CHECK(e==-EIO && gpu3d.lost && test_engine.quarantined && gpu3d.guard_offset==gpu3d.heap.first+508);
     if (fault>=8) FULL_CHECK(!gpu3d.perspective_qualified && gpu3d.precision_error==-EILSEQ && !gpu3d.lost && gpu3d.fullsize_qualified);
-    if (!fault) FULL_CHECK(gpu3d.perspective_qualified && gpu3d.precision_samples);
+    if (!fault) FULL_CHECK(gpu3d.perspective_qualified && gpu3d.precision_samples && qualification_yields3d);
     if (success) FULL_CHECK(gpu3d.sample_count==4*w*((h-1)/16+1+!!((h-1)%16)) &&
         gpu3d.max_channel_error<=2 && gpu3d.max_depth_error<=1);
     else if (fault==2 || fault==4 || fault==6) FULL_CHECK(!gpu3d.lost && gpu3d.qualified); /* safe refusal retains minimum */

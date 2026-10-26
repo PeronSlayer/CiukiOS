@@ -56,6 +56,8 @@ struct display_driver {
     int (*attempt_end)(struct vfs *);
     int (*attempt_failed)(struct vfs *);
     void (*record)(void);
+    /* Notification only, outside presenter, after a completed desktop frame. */
+    void (*desktop_presented)(uint32_t generation);
     /* Presenter held: no VFS/ATA, summary/snapshot are cached, nonwaiting.
      * quarantine disables submissions and offscreen spans; never proves idle.
      * ops->stop is the sole stop authority; retain ops if it fails. */
@@ -103,6 +105,7 @@ int display_driver_mode_bind(const struct fb_device *, const struct display_mode
 bool display_accel_disabled(const char **reason);
 void display_driver_software(const char *reason);
 void display_driver_record(void);
+void display_driver_desktop_presented(uint32_t generation);
 /* Refresh only under presenter, after deferred initialization completes.
  * info reads this cache and never calls a driver snapshot without its lock. */
 bool display_driver_refresh(void);

@@ -144,7 +144,7 @@ struct render3d_context {
     struct render3d_resource *resources;
 };
 struct render3d_job {
-    uint32_t context, row, triangle, phase;
+    uint32_t context, row, triangle, phase, column;
     struct render3d_fence fence;
     int result;
     bool occupied, complete;
@@ -188,6 +188,8 @@ struct render3d_host {
  * cursor, firmware, COB and the 2D offscreen reservation. No BAR alias is
  * another heap. Unsupported AGP never receives an allocation. */
 struct render3d_service {
+    /* Optional trusted background allocation pacing; never a wire callback. */
+    int (*allocation_checkpoint)(void *);
     struct render3d_host host;
     const struct render3d_backend *backend;
     void *device;
@@ -231,6 +233,7 @@ int render3d_close(struct render3d_service *);
 /* Native/Win32 trusted adapter boundary: uses the already bound display
  * nomination, never chooses a family or grants a presentation lease. */
 int render3d_native_init(struct render3d_service *, const struct render3d_host *);
+int render3d_native_refresh(struct render3d_service *);
 /* Private fbdev exclusion; successful enter must pair with leave on the
  * same task. No allocation, file I/O or logging inside this interval. */
 int fbdev_render3d_enter(uint32_t);
@@ -241,4 +244,6 @@ void render3d_device_lost(struct render3d_service *);
 /* Private software slice; returns 1 when complete, 0 for another slice. */
 int render3d_scalar_slice(const struct render3d_request *, struct render3d_resource *const [R3D_REFS],
                           struct render3d_job *, const struct render3d_host *);
+int render3d_scalar_sample_slice(const struct render3d_request *, struct render3d_resource *const [R3D_REFS],
+                                 struct render3d_job *, const struct render3d_host *);
 #endif

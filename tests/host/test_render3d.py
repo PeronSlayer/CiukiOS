@@ -17,6 +17,32 @@ OUT = ROOT / 'build/host/render3d'
 VIDEO = ROOT / 'src/kernel/drivers/video'
 
 class RenderTests(unittest.TestCase):
+    def test_probe_cost_model(self):
+        # The repository's PIII-933 coefficients, rounded into conservative
+        # per-fragment scalar classes: 1400 cycles dual bilinear, 4500 with
+        # finite-difference mip/tri-linear sampling, 420 on early depth reject.
+        # These are analytic estimates, never measured T23 read bandwidth.
+        for w,h in ((640,480),(800,600),(1024,768)):
+            pixels=w*h
+            sampled=w*((h-1)//16+1+bool((h-1)%16))
+            bus=(sampled*10+5*8192*2)/(100*1024*1024)*1000
+            print(f'PROBE MODEL {w}x{h} samples={sampled} readback_bytes={sampled*10} '
+                  f'guard_read_bound=81920 assumed_read_ms={bus:.3f}')
+            total=0
+            for name,cycles,work,count in (
+                ('fullsize-1',1400,pixels,1),('fullsize-2',420,pixels,1),
+                ('fullsize-3',4500,pixels,1),('fullsize-4',1400,32768,1),
+                ('precision-bilinear',1400,pixels,10),('precision-mip',4500,pixels,13)):
+                old_ms=work*cycles/933000
+                new_ms=0 if name.startswith('precision') else old_ms*sampled/pixels
+                total+=count*old_ms
+                print(f'PROBE PHASE {w}x{h} phase={name} count={count} '
+                      f'old_reference_ms={old_ms:.3f} sampled_reference_ms={new_ms:.3f} '
+                      f'old_reference_plus_reads_ms={old_ms+bus:.3f}')
+            self.assertLess(sampled,pixels/14)
+            print(f'PROBE TOTAL {w}x{h} old_reference_ms={total:.3f} '
+                  'excludes precision envelope search, GPU raster, uploads, allocation, storage, scheduling')
+
     def test_submission_cost_model(self):
         # Explicit assumptions, not a host timing extrapolation to silicon.
         # 1 GHz Pentium III, 120 cycles/UC word, 250/status observation,
@@ -111,6 +137,10 @@ class RenderTests(unittest.TestCase):
     def test_scalar_recovery(self):
         self.build_run('scalar_recovery', ['tests/host/render3d_scalar_test.c'])
 
+    def test_sampled_scalar(self):
+        self.build_run('scalar_sample', ['tests/host/render3d_scalar_sample_test.c',
+            'src/kernel/drivers/video/render3d_scalar.c'])
+
     def test_shared_transport(self):
         OUT.mkdir(parents=True, exist_ok=True)
         source=(ROOT/'tests/host/savage2d_test.c').read_text()
@@ -134,7 +164,7 @@ class RenderTests(unittest.TestCase):
             'src/kernel/drivers/video/attempt.c','src/kernel/drivers/video/render3d.c',
             'src/kernel/drivers/video/render3d_scalar.c','src/kernel/drivers/video/s3savage/savage3d.c',
             'src/kernel/drivers/video/s3savage/savage3d_owner.c'], args=['0'])
-        for variant in range(1,15):
+        for variant in range(1,21):
             subprocess.run([str(OUT/'owner'),str(variant)],check=True)
 
     def test_fullsize(self):
@@ -149,6 +179,9 @@ class RenderTests(unittest.TestCase):
 
     def test_review4(self):
         self.run_shader_case("review4")
+
+    def test_background_qualification(self):
+        self.run_shader_case("background")
 
     def test_sampled_shaders(self):
         self.run_shader_case("shader")

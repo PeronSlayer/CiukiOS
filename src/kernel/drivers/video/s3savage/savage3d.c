@@ -408,6 +408,10 @@ static int validate(void *device,const struct render3d_request *q,struct render3
     return 0;
 }
 static uint32_t base(const struct render3d_resource *r) { return r->offset+4096; }
+static int probe_checkpoint(struct savage3d_device *d)
+{ return d->probe_checkpoint ? d->probe_checkpoint(d->probe_ctx) : 0; }
+static void probe_phase(struct savage3d_device *d,const char *name,unsigned index,bool begin,int error)
+{ if (d->probe_phase) d->probe_phase(d->probe_ctx,name,index,begin,error); }
 static uint32_t memory_read(struct savage3d_device *d,bool alias,uint32_t off,unsigned bytes)
 { return d->memory.read(d->memory.ctx,alias,off,bytes); }
 static void memory_write(struct savage3d_device *d,bool alias,uint32_t off,uint32_t value,unsigned bytes)
@@ -422,6 +426,9 @@ static int guards(struct savage3d_device *d,struct render3d_resource *r,bool ini
 {
     uint64_t start=0;
     for (unsigned side=0;side<2;side++) for (unsigned i=0;i<4096;i+=4) {
+        if (!(i%512) && d->probe_checkpoint && !d->locked) {
+            int e=probe_checkpoint(d); if (e) return e;
+        }
         if (!(i%512)) start=d->engine->io.now_us(d->engine->io.ctx);
         uint32_t off=r->offset+(side ? r->reserved-4096 : 0)+i;
         if (initialize) memory_write(d,false,off,0xa55ac33cu,4);
@@ -436,7 +443,7 @@ static int guards(struct savage3d_device *d,struct render3d_resource *r,bool ini
 static int upload(struct savage3d_device *d,struct render3d_resource *r)
 {
     if (r->resident) return guards(d,r,false);
-    guards(d,r,true);
+    int e=guards(d,r,true); if (e) return e;
     if (r->kind==R3D_COLOR || r->kind==R3D_D16) {
         int e=tile(d,r); if (e) return e;
         unsigned bytes=r->kind==R3D_D16 ? 2 : 4, pitch=bytes==2 ? 4096 : 8192;
@@ -452,6 +459,9 @@ static int upload(struct savage3d_device *d,struct render3d_resource *r)
             unsigned pw=tail ? 4 : w<8 ? 8 : w,ph=tail ? 4 : h<8 ? 8 : h;
             uint32_t first; (void)savage3d_mip_offset(r,level,0,0,&first);
             for (unsigned y=0;y<ph;y++) for (unsigned x=0;x<pw;x++) {
+                if (!((y*pw+x)%128) && d->probe_checkpoint && !d->locked) {
+                    int e=probe_checkpoint(d); if (e) return e;
+                }
                 uint32_t off,value=((uint32_t *)((uint8_t *)r->shadow+r->level_offset[level]))[(y%h)*w+x%w];
                 if (tail) off=first+(y*8+x)*bpp;
                 else {
@@ -567,7 +577,8 @@ static int execute(void *device,const struct render3d_request *q,struct render3d
     struct saved_state saved;
     d->failed_phase=1; e=save_state(d,&saved); if (e) return e;
     d->failed_phase=2; e=checked_mmio(d,0x850c,saved.agd|0x8000u);
-    for (unsigned i=0;!e && i<R3D_REFS;i++) if (r[i]) e=upload(d,r[i]);
+    if (!d->probe_transfers)
+        for (unsigned i=0;!e && i<R3D_REFS;i++) if (r[i]) e=upload(d,r[i]);
     /* CPU transfers are separate bounded work from the engine's unchanged
      * execution window. No command has been submitted by upload(). */
     d->slice_started=d->engine->io.now_us(d->engine->io.ctx);
@@ -598,7 +609,7 @@ static int execute(void *device,const struct render3d_request *q,struct render3d
             base(r[0]),descriptor(r[0],true),0,0,(r[0]->height<<16)|r[0]->width};
         e=packet(d,words,8); if (!e) d->copies++;
     }
-    if (!e) {
+    if (!e && !d->probe_transfers) {
         d->failed_phase=8;
         for (unsigned i=0;i<R3D_REFS && !e;i++) if (r[i]) e=read_resource(d,r[i]);
     }
@@ -650,6 +661,81 @@ static void quarantine(void *device)
     d->engine->reason="render3d_fault";
     if (d->engine->io.fault) d->engine->io.fault(d->engine->io.ctx);
     if (d->lost_notify) d->lost_notify(d->memory.ctx);
+}
+/* A qualification owns disjoint offscreen extents and pins their generation.
+ * Linear texture/guard transfers need no shared register. Alias reads borrow
+ * only AGD/tile registers for <=128 pixels, then restore before a CPU yield.
+ * No scalar work, allocation, persistence or logging runs under presenter. */
+static int probe_read(struct savage3d_device *d,struct render3d_resource *r)
+{
+    if (r->kind==R3D_TEXTURE) return guards(d,r,false);
+    bool alias=r->kind!=R3D_LINEAR_COLOR;
+    unsigned bytes=r->kind==R3D_D16 ? 2 : 4,pitch=alias ? (bytes==2 ? 4096 : 8192) : r->pitch;
+    for (unsigned y=0;y<r->height;y++) {
+        if (d->fullsize_testing && y%16 && y!=r->height-1) continue;
+        for (unsigned first=0;first<r->width;first+=128) {
+            int e=probe_checkpoint(d); if (e) return e;
+            uint32_t saved_tile=0,saved_agd=0;
+            if (alias) {
+                e=enter(d); if (e) return e;
+                saved_tile=mmio_read(d,0x48c40); saved_agd=mmio_read(d,0x850c);
+                e=checked_mmio(d,0x850c,saved_agd|0x8000u);
+                if (!e) e=tile(d,r);
+            }
+            uint64_t start=d->engine->io.now_us(d->engine->io.ctx);
+            unsigned end=first+128; if (end>r->width) end=r->width;
+            for (unsigned x=first;!e && x<end;x++) {
+                uint32_t v=memory_read(d,alias,(alias ? 0 : base(r))+y*pitch+x*bytes,bytes);
+                if (bytes==2) v=65535-(v&65535);
+                memcpy((uint8_t *)r->shadow+y*r->pitch+x*bytes,&v,bytes);
+            }
+            if (!e && d->engine->io.now_us(d->engine->io.ctx)-start>=1000) e=-ETIMEDOUT;
+            if (alias) {
+                int a=checked_mmio(d,0x48c40,saved_tile);
+                int b=checked_mmio(d,0x850c,saved_agd);
+                if (a || b) { quarantine(d); e=-EIO; }
+                leave(d);
+            }
+            if (e) return e;
+        }
+    }
+    return guards(d,r,false);
+}
+static int probe_draw(struct savage3d_device *d,const struct render3d_request *q,
+                      struct render3d_resource *const r[R3D_REFS])
+{
+    int e=probe_checkpoint(d); if (e) return e;
+    if (d->probe_checkpoint) {
+        /* First use clears complete color/depth targets and overwrites copy.
+         * Later phases preserve resident attachments. No CPU target upload. */
+        for (unsigned i=0;i<R3D_REFS;i++) if (r[i]) {
+            if (r[i]->kind==R3D_TEXTURE) e=upload(d,r[i]);
+            else if (r[i]->resident) e=guards(d,r[i],false);
+            else {
+                unsigned flag=r[i]->kind==R3D_COLOR ? R3D_CLEAR_COLOR : r[i]->kind==R3D_D16 ? R3D_CLEAR_DEPTH : R3D_COPY;
+                if (!(q->flags&flag)) return -EINVAL;
+                e=guards(d,r[i],true);
+                if (!e) r[i]->resident=true;
+            }
+            if (e) { if (e!=-ETIMEDOUT) quarantine(d); return e; }
+        }
+        d->engine->io.drain(d->engine->io.ctx);
+    }
+    e=enter(d); if (e) return e;
+    d->probe_transfers=d->probe_checkpoint!=0;
+    uint64_t start=d->engine->io.now_us(d->engine->io.ctx);
+    e=execute(d,q,r);
+    if (d->fullsize_testing) d->fullsize_us+=d->engine->io.now_us(d->engine->io.ctx)-start;
+    d->probe_transfers=false;
+    if (e && (e!=-ETIMEDOUT || idle(d))) quarantine(d);
+    leave(d);
+    if (!e && d->probe_checkpoint) {
+        d->failed_phase=8;
+        for (unsigned i=0;i<R3D_REFS && !e;i++) if (r[i]) e=probe_read(d,r[i]);
+        if (e && e!=-ETIMEDOUT && e!=-EBUSY) quarantine(d);
+    }
+    if (!e) e=probe_checkpoint(d);
+    return e;
 }
 extern int savage3d_owner_attach(struct render3d_service *,const struct render3d_host *,uint32_t) __attribute__((weak));
 static void detach(struct render3d_service *s,void *owner)
@@ -713,9 +799,8 @@ int savage3d_probe(struct savage3d_device *d)
     q->vertices[1]=(struct render3d_vertex){56<<16,8<<16,16384,65536,0xffffffffu,65536,0};
     q->vertices[2]=(struct render3d_vertex){8<<16,56<<16,16384,65536,0xffffffffu,0,65536};
     int e=validate(d,q,r); if (e) return e;
-    e=enter(d); if (e) return e;
     d->probing=true; d->engine->render3d_qualified=true;
-    e=execute(d,q,r);
+    e=probe_draw(d,q,r);
     if (!e) {
         d->failed_phase=7;
         uint32_t color=((uint32_t *)r[0]->shadow)[16*64+16]&0xffffffu;
@@ -733,7 +818,7 @@ int savage3d_probe(struct savage3d_device *d)
     if (!e) {
         q->flags=R3D_TEXTURED|R3D_DEPTH_TEST|R3D_DEPTH_WRITE|R3D_COPY;
         for (unsigned i=0;i<3;i++) { q->vertices[i].z=49152; q->vertices[i].color=0xffff0000u; }
-        e=execute(d,q,r);
+        e=probe_draw(d,q,r);
         if (!e) d->failed_phase=7;
         if (!e && ((((uint32_t *)r[0]->shadow)[16*64+16]&0xffffffu)!=0x4080c0u ||
             (((uint32_t *)r[3]->shadow)[16*64+16]&0xffffffu)!=0x4080c0u)) e=-EIO;
@@ -741,7 +826,7 @@ int savage3d_probe(struct savage3d_device *d)
     if (!e) {
         q->flags=R3D_FEATURES;
         for (unsigned i=0;i<3;i++) { q->vertices[i].z=16384; q->vertices[i].color=0xff000000u|(0xffu<<(16-i*8)); }
-        e=execute(d,q,r);
+        e=probe_draw(d,q,r);
         if (!e) {
             d->failed_phase=7;
             uint32_t pixel=((uint32_t *)r[0]->shadow)[16*64+16];
@@ -756,9 +841,10 @@ int savage3d_probe(struct savage3d_device *d)
         if ((((uint32_t *)r[0]->shadow)[i]&0xffffffu)!=(((uint32_t *)r[3]->shadow)[i]&0xffffffu)) { e=-EIO; break; }
     if (!e) e=idle(d);
     d->probing=false;
-    if (e) quarantine(d);
+    if (e && e!=-EBUSY && (e!=-ETIMEDOUT || idle(d))) quarantine(d);
     else { d->qualified=true; d->failed_phase=0; }
-    leave(d); return e;
+    if (e) d->qualified=false;
+    return e;
 }
 
 /* Trusted boot-only scene. All storage is allocated by the owner before entry.
@@ -808,6 +894,7 @@ static int fullsize_compare(struct savage3d_device *d,struct render3d_resource *
     for (unsigned i=0;i<hw[0]->width*hw[0]->height;i++) {
         unsigned row=i/hw[0]->width;
         if (row%16 && row!=hw[0]->height-1) continue;
+        if (!(i%128)) { int e=probe_checkpoint(d); if (e) return e; }
         if (a[i]!=copy[i] || (a[i]==0xff102030u)!=(b[i]==0xff102030u)) return -EILSEQ;
         for (unsigned shift=0;shift<32;shift+=8) {
             unsigned ac=a[i]>>shift&255,bc=b[i]>>shift&255,delta=ac>bc ? ac-bc : bc-ac;
@@ -826,7 +913,7 @@ static int fullsize_compare(struct savage3d_device *d,struct render3d_resource *
     d->hardware_checksum=ah; d->reference_checksum=bh; return 0;
 }
 #include "savage3d_precision.h"
-static void precision_scene(struct render3d_request *q,struct render3d_resource *const r[R3D_REFS],unsigned phase)
+static int precision_scene(struct savage3d_device *d,struct render3d_request *q,struct render3d_resource *const r[R3D_REFS],unsigned phase)
 {
     fullsize_scene(q,r[0]->width,r[0]->height,0);
     for (unsigned stage=0;stage<2;stage++) {
@@ -837,6 +924,7 @@ static void precision_scene(struct render3d_request *q,struct render3d_resource 
             if (!height) height=1;
             uint32_t *pixels=(void *)((uint8_t *)t->shadow+t->level_offset[level]);
             for (unsigned y=0;y<height;y++) for (unsigned x=0;x<width;x++) {
+                if (!((y*width+x)%128)) { int e=probe_checkpoint(d); if (e) return e; }
                 unsigned ramp=phase&1 ? ((x+y+level)&1)*255 : width>1 ? x*255/(width-1) : level*37;
                 unsigned cross=phase&1 ? ((x/2+y/3+level)&1)*255 : height>1 ? y*255/(height-1) : level*29;
                 unsigned alpha=phase>=9 ? ((x*17+y*29+level*37)&255) : 255;
@@ -892,46 +980,41 @@ static void precision_scene(struct render3d_request *q,struct render3d_resource 
             R3D_INV_SRC_COLOR,R3D_INV_DST_ALPHA,R3D_DST_ALPHA,R3D_SRC_ALPHA};
         q->state.blend=1; q->state.source=src[phase-11]; q->state.destination=dst[phase-11];
     }
+    return 0;
 }
 static int precision_probe(struct savage3d_device *d,struct render3d_request *q,
-    struct render3d_resource *const hardware[R3D_REFS],struct render3d_resource *const reference[R3D_REFS])
+    struct render3d_resource *const hardware[R3D_REFS])
 {
     d->sample_delta_q16=CIUKI_R3D_SAMPLE_DELTA_Q16;
     d->filter_fraction_bits=CIUKI_R3D_FILTER_FRACTION_BITS;
     int e=0;
     for (unsigned phase=0;phase<23 && !e;phase++) {
-        struct render3d_resource *hw[R3D_REFS],*ref[R3D_REFS];
-        for (unsigned i=0;i<R3D_REFS;i++) { hw[i]=hardware[i]; ref[i]=reference[i]; }
+        probe_phase(d,"precision",phase+1,true,0);
+        struct render3d_resource *hw[R3D_REFS];
+        for (unsigned i=0;i<R3D_REFS;i++) hw[i]=hardware[i];
         /* Qualify 256-square addressing and mip selection in EACH unit while
          * reusing the same two allocations and their guard extents. */
         if (phase==8 || phase==10 || phase>=16) {
-            hw[2]=hardware[4]; hw[4]=hardware[2]; ref[2]=reference[4]; ref[4]=reference[2];
+            hw[2]=hardware[4]; hw[4]=hardware[2];
         }
         uint32_t levels[2][8]={{0}};
+        struct precision_work work={.ctx=d->probe_ctx,.checkpoint=d->probe_checkpoint};
         d->precision_phase=phase+1;
-        precision_scene(q,hw,phase);
-        for (unsigned t=2;t<=4;t+=2) memcpy(ref[t]->shadow,hw[t]->shadow,hw[t]->bytes);
-        struct render3d_job job={0};
-        while (!render3d_scalar_slice(q,ref,&job,&d->consumer->host)) {}
-        e=validate(d,q,hw); if (e) break;
-        e=enter(d); if (e) break;
-        uint64_t start=d->engine->io.now_us(d->engine->io.ctx);
-        e=execute(d,q,hw);
-        d->fullsize_us+=d->engine->io.now_us(d->engine->io.ctx)-start;
-        if (e && (e!=-ETIMEDOUT || idle(d))) quarantine(d);
-        leave(d);
-        if (e) break;
+        e=precision_scene(d,q,hw,phase);
+        if (!e) e=validate(d,q,hw);
+        if (!e) e=probe_draw(d,q,hw);
         const uint32_t *a=hw[0]->shadow,*copy=hw[3]->shadow;
         const uint16_t *az=hw[1]->shadow;
         for (unsigned y=0;y<hw[0]->height && !e;y++) {
             if (y%16 && y!=hw[0]->height-1) continue;
             for (unsigned x=0;x<hw[0]->width;x++) {
+                if (!(x%16)) { e=probe_checkpoint(d); if (e) break; }
                 unsigned at=y*hw[0]->width+x;
                 /* Full rectangle has no holes; D16/coverage/copy are separate
                  * from colour envelopes and never inherit their tolerance. */
                 if (a[at]!=copy[at] ||
-                    !precision_pixel(q,hw,x,y,a[at],az[at],d->sample_delta_q16,d->filter_fraction_bits)) {
-                    d->expected=((uint32_t *)ref[0]->shadow)[at]; d->actual=a[at]; e=-EILSEQ; break;
+                    !precision_pixel_controlled(q,hw,x,y,a[at],az[at],d->sample_delta_q16,d->filter_fraction_bits,&work)) {
+                    d->expected=0; d->actual=a[at]; e=work.error ? work.error : -EILSEQ; break;
                 }
                 d->precision_samples++;
                 if (phase==6) { /* One-dimensional white/black transitions
@@ -949,6 +1032,8 @@ static int precision_probe(struct savage3d_device *d,struct render3d_request *q,
              * one-dimensional black/white edge; eight produce >=255. */
             if (count<192) e=-EILSEQ;
         }
+        if (!e) e=probe_checkpoint(d);
+        probe_phase(d,"precision",phase+1,false,e);
     }
     if (!e) d->precision_phase=0;
     return e;
@@ -968,28 +1053,27 @@ int savage3d_fullsize_probe(struct savage3d_device *d,struct render3d_service *r
     struct render3d_request *q=(void *)d->consumer->ring[0];
     int e=0;
     for (unsigned phase=0;phase<4 && !e;phase++) {
+        probe_phase(d,"fullsize",phase+1,true,0);
         fullsize_scene(q,d->mode_width,d->mode_height,phase);
-        e=validate(d,q,hw); if (e) break;
+        e=validate(d,q,hw);
         struct render3d_job job={0};
-        while (!render3d_scalar_slice(q,ref,&job,&reference->host)) {}
-        e=enter(d); if (e) break;
-        uint64_t start=d->engine->io.now_us(d->engine->io.ctx);
-        e=execute(d,q,hw);
-        d->fullsize_us+=d->engine->io.now_us(d->engine->io.ctx)-start;
-        if (e && (e!=-ETIMEDOUT || idle(d))) quarantine(d);
-        leave(d);
+        while (!e && !render3d_scalar_sample_slice(q,ref,&job,&reference->host)) e=probe_checkpoint(d);
+        if (!e) e=probe_draw(d,q,hw);
         if (!e) { d->failed_phase=9; e=fullsize_compare(d,hw,ref); }
+        if (!e) e=probe_checkpoint(d);
+        probe_phase(d,"fullsize",phase+1,false,e);
     }
     d->fullsize_testing=false;
     if (!e) {
         d->fullsize_qualified=true; d->failed_phase=0;
         d->fullsize_testing=true;
-        d->precision_error=precision_probe(d,q,hw,ref);
+        d->precision_error=precision_probe(d,q,hw);
         d->fullsize_testing=false;
         d->perspective_qualified=!d->precision_error;
         /* A restored numeric mismatch refuses perspective only. Integrity,
          * engine and restoration failures keep their existing containment. */
-        if (d->lost || (d->precision_error && d->precision_error!=-EILSEQ && d->precision_error!=-ETIMEDOUT))
+        if (d->lost || (d->precision_error && d->precision_error!=-EILSEQ &&
+            (d->probe_checkpoint || d->precision_error!=-ETIMEDOUT)))
             e=d->precision_error;
     }
     if (!e) d->failed_phase=0;

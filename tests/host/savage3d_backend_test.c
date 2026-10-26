@@ -15,6 +15,7 @@ static bool dropping3d, bad_restore3d;
 static unsigned read_delay3d;
 static uint64_t fragments3d;
 static bool slow_guard3d;
+static bool background_minimum3d;
 struct sampling_model3d { unsigned interpolant_bits, address_bits, filter_bits; bool round_weights, affine; long double bias; unsigned address_integer_bits; };
 static struct sampling_model3d sampling3d={24,12,8,false,false,0,14};
 static unsigned probe_filter_bits3d;
@@ -202,7 +203,7 @@ static void write_engine3d(void *ctx,uint32_t off,uint32_t value)
 }
 static uint32_t memory_read3d(void *ctx,bool alias,uint32_t offset,unsigned bytes)
 {
-    (void)ctx; CHECK(locks==1); memory3d++;
+    (void)ctx; CHECK(locks==1 || (gpu3d.probe_checkpoint && !alias)); memory3d++;
     m.us+=read_delay3d;
     if (slow_guard3d && !alias && offset>=gpu3d.heap.first && offset<gpu3d.heap.first+4096) m.us+=9;
     if (alias) {
@@ -215,7 +216,7 @@ static uint32_t memory_read3d(void *ctx,bool alias,uint32_t offset,unsigned byte
 }
 static void memory_write3d(void *ctx,bool alias,uint32_t offset,uint32_t value,unsigned bytes)
 {
-    (void)ctx; CHECK(locks==1); memory3d++;
+    (void)ctx; CHECK(locks==1 || (gpu3d.probe_checkpoint && !alias)); memory3d++;
     if (alias) {
         uint32_t desc=m.reg[0x48c40/4]; unsigned bpp=desc>>30,pitch=bpp==2 ? 4096 : 8192;
         offset=destination3d((desc&0xfffffu)<<6,(desc>>20&63)*128,bytes,(offset%pitch)/bytes,offset/pitch);
@@ -243,7 +244,18 @@ static void native_consumer3d(const struct render3d_host *host,const uint32_t *t
 {
     CHECK(!render3d_close(&scratch3d)); gpu3d.consumer=0;
     bound=&native_driver3d;
+    gpu3d.qualified=false;
     CHECK(!render3d_native_init(&scratch3d,host));
+    uint32_t software;
+    CHECK(!render3d_native_refresh(&scratch3d) && !scratch3d.backend);
+    CHECK(!render3d_create_context(&scratch3d,7,R3D_SOFTWARE,&software));
+    gpu3d.qualified=true;
+    CHECK(!render3d_native_refresh(&scratch3d) && !scratch3d.backend);
+    CHECK(!render3d_destroy_context(&scratch3d,7,software));
+    uint32_t previous_handle=scratch3d.next_handle;
+    scratch3d.sequence=123;
+    CHECK(!render3d_native_refresh(&scratch3d) && scratch3d.backend &&
+        scratch3d.next_handle==previous_handle && scratch3d.sequence==123);
     struct render3d_caps caps; render3d_query_caps(&scratch3d,&caps);
     CHECK(caps.hardware_features==R3D_ALL_FEATURES && caps.hardware_max_size==64);
     uint32_t c,handles[4]; CHECK(!render3d_create_context(&scratch3d,7,R3D_HARDWARE_REQUIRED,&c));
@@ -267,6 +279,7 @@ static void native_consumer3d(const struct render3d_host *host,const uint32_t *t
     CHECK(!allocations3d && !scratch3d.ram_bytes);
     CHECK(render3d_submit(&scratch3d,7,c,&q,sizeof(q),&fence)<0 && writes3d==before);
     bound=0;
+    puts("native late admission: live software context retained, empty service attached, handles/fence sequence preserved PASS");
 }
 static void variants3d(const struct render3d_host *host)
 {
@@ -355,6 +368,7 @@ static void variants3d(const struct render3d_host *host)
 }
 #include "savage3d_fixed_function.inc"
 #include "savage3d_fullsize.inc"
+#include "savage3d_background.inc"
 static void backend3d(unsigned fault,bool variants)
 {
     CHECK(!allocations3d);
@@ -378,9 +392,19 @@ static void backend3d(unsigned fault,bool variants)
         CHECK(!savage3d_backend()->layout(&gpu3d,r)); if (i!=2) at+=r->reserved;
     }
     gpu3d.consumer=&scratch3d; test_engine.io.write32=write_engine3d;
+    if (background_minimum3d) {
+        gpu3d.probe_checkpoint=background_checkpoint3d;
+        background_start3d=background_phase_start3d=m.us;
+        background_cpu3d=0; background_frames3d=0; m.exact_clock=true;
+    }
     CHECK(!fbdev_render3d_prepare(42)); CHECK(fbdev_change_begin()==-EBUSY);
     if (fault==5) scratch3d.contexts[0].resources[1].offset=gpu3d.heap.first-4096;
     int e=savage3d_probe(&gpu3d);
+    gpu3d.probe_checkpoint=0;
+    if (background_minimum3d) {
+        CHECK(background_frames3d>0);
+        printf("background minimum: desktop_frames=%u, three restored draws/copies PASS\n",background_frames3d);
+    }
     fbdev_render3d_prepared();
     CHECK((e==0)==(fault==0)); CHECK(!locks && !drawing && !accel_inflight);
     CHECK(m.reg[0x8168/4]==old_gbd[0] && m.reg[0x816c/4]==old_gbd[1]);
@@ -405,7 +429,10 @@ static void backend3d(unsigned fault,bool variants)
 int main(int argc,char **argv)
 {
     setvbuf(stdout,0,_IONBF,0);
-    if (argc==2 && !strcmp(argv[1],"fullsize")) fullsize_suite3d();
+    if (argc==2 && !strcmp(argv[1],"background")) {
+        background_suite3d(); background_minimum3d=true; backend3d(0,false);
+    }
+    else if (argc==2 && !strcmp(argv[1],"fullsize")) fullsize_suite3d();
     else if (argc==2 && !strcmp(argv[1],"review4")) review4_suite3d();
     else if (argc==2 && !strcmp(argv[1],"shader")) shader_precision3d();
     else if (argc==2 && !strcmp(argv[1],"variants")) backend3d(0,true);

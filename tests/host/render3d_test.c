@@ -307,6 +307,10 @@ static void diagnostic(void)
     struct render3d_extent heap; uint32_t required;
     assert(!savage3d_mode_heap(&engine,&fb,16*1024*1024,&heap,&required));
     assert(heap.first==8*1024*1024 && heap.bytes==8*1024*1024-4096 && required==8183808);
+    engine.cursor_offset=15532032-4096;
+    assert(savage3d_mode_heap(&engine,&fb,15532032,&heap,&required)==-ENOMEM);
+    assert(heap.first==8388608 && heap.bytes==7139328 && required==8183808);
+    engine.cursor_offset=16*1024*1024-4096;
     assert(savage3d_mode_heap(&engine,&fb,8*1024*1024,&heap,&required)==-EOPNOTSUPP);
     engine.cursor_offset=heap.first+4096;
     assert(savage3d_mode_heap(&engine,&fb,16*1024*1024,&heap,&required)==-ENOMEM);

@@ -70,6 +70,7 @@ static void cleanup(void *arg)
     drop(j);
 }
 extern int display_present_render3d(void *,uint32_t,const struct ciuki_w32_render3d_args *,const void *,uint32_t);
+extern int render3d_native_refresh(struct render3d_service *) __attribute__((weak));
 void w32_render3d_poll(void)
 {
     if (polling) return;
@@ -80,6 +81,7 @@ void w32_render3d_poll(void)
             struct process *p=c->live ? proc_find(c->process) : 0;
             if (c->live && (!p || p->state!=PROC_LIVE)) render3d_process_exit(service,c->process);
         }
+        if (render3d_native_refresh) (void)render3d_native_refresh(service);
         (void)render3d_step(service);
     }
     uint32_t flags=irq_save();

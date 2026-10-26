@@ -27,7 +27,16 @@ static void *allocate(struct render3d_service *s, uint32_t bytes)
     if (backend>R3D_RAM_LIMIT-sizeof(*s) || s->ram_bytes>R3D_RAM_LIMIT-sizeof(*s)-backend ||
         bytes>R3D_RAM_LIMIT-sizeof(*s)-backend-s->ram_bytes) return 0;
     void *p=s->host.alloc(s->host.ctx,bytes);
-    if (p) { s->ram_bytes+=bytes; memset(p,0,bytes); }
+    if (p) {
+        if (s->allocation_checkpoint) {
+            for (uint32_t at=0;at<bytes;at+=65536) {
+                if (s->allocation_checkpoint(s->host.ctx)) { s->host.free(s->host.ctx,p); return 0; }
+                uint32_t n=bytes-at; if (n>65536) n=65536;
+                memset((uint8_t *)p+at,0,n);
+            }
+        } else memset(p,0,bytes);
+        s->ram_bytes+=bytes;
+    }
     return p;
 }
 static void release(struct render3d_service *s, void *p, uint32_t bytes)

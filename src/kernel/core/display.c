@@ -324,8 +324,11 @@ int display_check_end(void)
     return check_result;
 }
 
+extern void display_driver_desktop_presented(uint32_t) __attribute__((weak));
 void display_frame_complete(uint32_t generation, bool full_frame)
 {
+    if (full_frame && generation==fbdev_get()->generation && display_driver_desktop_presented)
+        display_driver_desktop_presented(generation);
     if (!switching && awaiting_frame && (full_frame || awaiting_restored_frame) &&
         generation == fbdev_get()->generation && !deadline_passed(frame_deadline)) {
         if (awaiting_native_frame && fullscreen_return_timed)

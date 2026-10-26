@@ -139,7 +139,7 @@ static uint32_t blend(uint32_t src,uint32_t dst,const struct render3d_state *s)
     return out;
 }
 static void triangle(const struct render3d_request *q, struct render3d_resource *const r[R3D_REFS],
-                     struct render3d_job *j, const struct render3d_host *host, uint64_t start)
+                     struct render3d_job *j, const struct render3d_host *host, uint64_t start, bool sampled)
 {
     unsigned indices[3]={j->triangle*3,j->triangle*3+1,j->triangle*3+2};
     struct render3d_vertex v[3]; memcpy(v,&q->vertices[j->triangle*3],sizeof(v));
@@ -157,8 +157,13 @@ static void triangle(const struct render3d_request *q, struct render3d_resource 
     unsigned row=j->row ? j->row : first, stop=row+4;
     if (stop>end) stop=end;
     for (unsigned y=row;y<stop;y++) {
+      if (sampled && y%16 && y!=r[0]->height-1) continue;
       if (y>row && host && host->now_us(host->ctx)-start>=1000) { stop=y; break; }
-      for (unsigned x=(unsigned)minx>>16;x<(unsigned)(maxx+65535)>>16;x++) {
+      unsigned left=sampled && j->column ? j->column : (unsigned)minx>>16;
+      for (unsigned x=left;x<(unsigned)(maxx+65535)>>16;x++) {
+        if (sampled && x>left && !(x%64) && host && host->now_us(host->ctx)-start>=1000) {
+            j->row=y; j->column=x; return;
+        }
         int64_t px=((int64_t)x<<16)+32768, py=((int64_t)y<<16)+32768;
         int64_t a=edge(&v[1],&v[2],px,py), b=edge(&v[2],&v[0],px,py), c=edge(&v[0],&v[1],px,py);
         if (a<0 || b<0 || c<0 || (!a && !top_left(&v[1],&v[2])) ||
@@ -213,18 +218,20 @@ static void triangle(const struct render3d_request *q, struct render3d_resource 
         *destination=blend(shaded,*destination,&q->state);
         if (q->flags&R3D_DEPTH_WRITE) *depth=(uint16_t)z;
       }
+      j->column=0;
     }
     j->row=stop;
     if (stop==end) { j->row=0; j->triangle++; }
 }
-int render3d_scalar_slice(const struct render3d_request *q, struct render3d_resource *const r[R3D_REFS],
-                          struct render3d_job *j, const struct render3d_host *host)
+static int scalar_slice(const struct render3d_request *q, struct render3d_resource *const r[R3D_REFS],
+                          struct render3d_job *j, const struct render3d_host *host, bool sampled)
 {
     uint64_t start=host ? host->now_us(host->ctx) : 0;
     if (!j->phase) {
         if (q->flags&(R3D_CLEAR_COLOR|R3D_CLEAR_DEPTH)) {
             unsigned end=j->row+16; if (end>r[0]->height) end=r[0]->height;
             for (unsigned y=j->row;y<end;y++) {
+              if (sampled && y%16 && y!=r[0]->height-1) continue;
               if (y>j->row && host && host->now_us(host->ctx)-start>=1000) { end=y; break; }
               for (unsigned x=0;x<r[0]->width;x++) {
                 if (q->flags&R3D_CLEAR_COLOR) ((uint32_t *)r[0]->shadow)[y*r[0]->width+x]=q->clear_color;
@@ -237,12 +244,13 @@ int render3d_scalar_slice(const struct render3d_request *q, struct render3d_reso
         if ((q->flags&(R3D_CLEAR_COLOR|R3D_CLEAR_DEPTH)) && host && host->now_us(host->ctx)-start>=1000) return 0;
     }
     if (j->phase==1) {
-        if (j->triangle<q->count/3) { triangle(q,r,j,host,start); return 0; }
+        if (j->triangle<q->count/3) { triangle(q,r,j,host,start,sampled); return 0; }
         j->row=0; j->phase=2;
     }
     if (q->flags&R3D_COPY) {
         unsigned end=j->row+16; if (end>r[0]->height) end=r[0]->height;
         for (unsigned y=j->row;y<end;y++) {
+            if (sampled && y%16 && y!=r[0]->height-1) continue;
             if (y>j->row && host && host->now_us(host->ctx)-start>=1000) { end=y; break; }
             memcpy((uint8_t *)r[3]->shadow+y*r[3]->pitch,
                    (uint8_t *)r[0]->shadow+y*r[0]->pitch,r[0]->pitch);
@@ -251,3 +259,10 @@ int render3d_scalar_slice(const struct render3d_request *q, struct render3d_reso
     }
     j->phase=3; return 1;
 }
+int render3d_scalar_slice(const struct render3d_request *q, struct render3d_resource *const r[R3D_REFS],
+                         struct render3d_job *j, const struct render3d_host *host)
+{ return scalar_slice(q,r,j,host,false); }
+/* Trusted qualification only: identical fragments on the compared tile rows. */
+int render3d_scalar_sample_slice(const struct render3d_request *q, struct render3d_resource *const r[R3D_REFS],
+                                struct render3d_job *j, const struct render3d_host *host)
+{ return scalar_slice(q,r,j,host,true); }

@@ -5,6 +5,8 @@
 #include <ciuki/abi.h>
 #include <ciuki/mm.h>
 #include <ciuki/display_driver.h>
+#include <ciuki/task.h>
+#include "../../../fs/fs_port.h"
 #include "savage3d.h"
 static struct savage3d_device device;
 static struct vfs *marker_vfs;
@@ -13,7 +15,59 @@ static void *linear_window, *aperture_window;
 static uint32_t linear_capacity;
 static int claims[2]={-1,-1};
 static gen_t generations[2];
-static bool reported, marker_fresh;
+static bool reported, marker_fresh, marker_retained, marker_unknown;
+static struct savage2d *pending_engine;
+static struct fb_device pending_fb;
+static struct task *probe_task;
+static struct kwait probe_wait;
+static bool desktop_ready;
+static uint32_t desktop_generation;
+static uint64_t probe_started, phase_started, phase_deadline;
+static const char *budget_reason;
+static unsigned checkpoint_count;
+static uint64_t probe_now(void)
+{ return pending_engine->io.now_us(pending_engine->io.ctx); }
+static int probe_check(void)
+{
+    if (!budget_reason && probe_now()-probe_started>=SAVAGE3D_PROBE_TOTAL_US) budget_reason="budget_total";
+    if (!budget_reason && probe_now()>=phase_deadline) budget_reason="budget_phase";
+    return budget_reason ? -ETIMEDOUT : 0;
+}
+static int probe_checkpoint(void *ctx)
+{
+    (void)ctx;
+    if (++checkpoint_count>1000000) budget_reason="budget_work"; /* frozen-clock bound */
+    if (probe_check()) return -ETIMEDOUT;
+    task_yield();
+    return probe_check();
+}
+static void probe_phase(void *ctx,const char *name,unsigned index,bool begin,int error)
+{
+    (void)ctx;
+    if (begin) {
+        phase_started=probe_now();
+        phase_deadline=phase_started+(!strncmp(name,"marker",6) ? SAVAGE3D_PROBE_MARKER_US : SAVAGE3D_PROBE_PHASE_US);
+    }
+    klog("[3d] probe phase=%s index=%u state=%s elapsed_us=%llu total_us=%llu error=%d",
+        name,index,begin ? "begin" : "end",probe_now()-phase_started,probe_now()-probe_started,error);
+}
+static uint64_t marker_now(void *ctx) { (void)ctx; return probe_now()/1000; }
+static void marker_pause(void *ctx) { (void)ctx; task_sleep_ms(1); }
+static int probe_marker(const struct pci_func *pci,bool clear,bool *previous)
+{
+    const char *name=clear ? "marker_clear" : "marker_begin";
+    probe_phase(0,name,0,true,0);
+    uint64_t until=probe_started+SAVAGE3D_PROBE_TOTAL_US;
+    if (until>phase_deadline) until=phase_deadline;
+    struct vfs_request request={.deadline=until/1000,.now=marker_now,.pause=marker_pause,
+        .operation="3d-probe-marker",.site="native",.background=true};
+    struct fs_request_scope scope;
+    fs_request_enter(&scope,&request);
+    int e=display_attempt_marker(marker_vfs,"3d-s3savage",pci->vendor,pci->device,0,clear,previous,0);
+    fs_request_leave(&scope);
+    probe_phase(0,name,0,false,e);
+    return e;
+}
 void savage3d_bind_vfs(struct vfs *vfs) { marker_vfs=vfs; }
 static uint32_t memory_read(void *ctx,bool alias,uint32_t offset,unsigned bytes)
 {
@@ -41,7 +95,7 @@ static bool safe_extent(uint32_t first,uint32_t bytes)
     }
     return !(first<g_boot.kernel_end && (uint64_t)first+bytes>g_boot.kernel_start);
 }
-static void available_heap(const struct fb_device *fb,struct render3d_extent *heap,
+static int available_heap(const struct fb_device *fb,struct render3d_extent *heap,
                            uint32_t *free_bytes,uint32_t *largest_bytes)
 {
     struct registry_inventory_copy inventory;
@@ -50,6 +104,7 @@ static void available_heap(const struct fb_device *fb,struct render3d_extent *he
     *free_bytes=*largest_bytes=0;
     uint32_t end=heap->first+heap->bytes;
     for (uint32_t at=heap->first;at<end;at+=4096) {
+        if (!((at-heap->first)%65536)) { int e=probe_checkpoint(0); if (e) return e; }
         uint64_t physical=(uint64_t)fb->phys+at;
         bool used=inventory.truncated;
         for (unsigned i=0;i<inventory.resource_count;i++) {
@@ -63,6 +118,7 @@ static void available_heap(const struct fb_device *fb,struct render3d_extent *he
         }
     }
     *heap=(struct render3d_extent){largest_first,*largest_bytes};
+    return 0;
 }
 static bool release_proof(int handle,gen_t generation)
 {
@@ -128,11 +184,13 @@ static int scratch_create(struct render3d_service **out,unsigned width,unsigned 
     struct render3d_service *s=kmalloc(sizeof(*s)); if (!s) return -ENOMEM;
     const struct render3d_host host={0,host_alloc,host_free,host_now,0};
     render3d_init(s,&host,device.generation,0,0,(struct render3d_extent){0});
+    s->allocation_checkpoint=probe_checkpoint;
     uint32_t context;
     int e=render3d_create_context(s,1,R3D_SOFTWARE,&context);
     const enum render3d_kind kinds[]={R3D_COLOR,R3D_D16,R3D_TEXTURE,R3D_LINEAR_COLOR,R3D_TEXTURE};
     uint32_t at=device.heap.first,tex_at=device.heap.first+device.heap.bytes-device.texture_bytes;
     for (unsigned i=0;!e && i<(full ? 5u : 4u);i++) {
+        e=probe_checkpoint(0); if (e) break;
         uint32_t resource;
         uint32_t *pixels=(void *)s->ring[2];
         if (full && kinds[i]==R3D_TEXTURE) {
@@ -144,12 +202,15 @@ static int scratch_create(struct render3d_service **out,unsigned width,unsigned 
             struct render3d_texture_desc desc={.format=R3D_ARGB8888,.width=base,.height=base,.levels=levels};
             unsigned offset=0;
             for (unsigned level=0,side=base;level<levels;level++,side=side>1 ? side/2 : 1) {
-                for (unsigned y=0;y<side;y++) for (unsigned x=0;x<side;x++)
+                for (unsigned y=0;y<side && !e;y++) {
+                    e=probe_checkpoint(0); if (e) break;
+                    for (unsigned x=0;x<side;x++)
                     pixels[offset+y*side+x]=0xff000000u|((96+x*32/side+level*4)<<16)|((112+y*32/side+level*4)<<8)|(128+level*4+i);
+                }
                 desc.image[level]=(struct render3d_texture_image){pixels+offset,side*side*4,side*4};
                 offset+=side*side;
             }
-            e=render3d_create_texture(s,1,context,&desc,&resource);
+            if (!e) e=render3d_create_texture(s,1,context,&desc,&resource);
             kfree(pixels);
         } else {
             if (i==2) for (unsigned j=0;j<32*16;j++) pixels[j]=(j%32)<16 ? 0xff4080c0u : 0xffc04080u;
@@ -166,16 +227,18 @@ static int scratch_create(struct render3d_service **out,unsigned width,unsigned 
     if (e) { (void)render3d_close(s); kfree(s); return e; }
     *out=s; return 0;
 }
-static void fullsize_diagnostic(struct render3d_service **scratch)
+static int fullsize_diagnostic(struct render3d_service **scratch)
 {
     /* Minimum probe has completed/restored. Scratch allocation and scalar
      * reference rendering never occur inside presenter/engine ownership. */
     (void)render3d_close(*scratch); kfree(*scratch); *scratch=0;
     struct render3d_service *reference=0;
+    probe_phase(0,"fullsize_prepare",0,true,0);
     device.fullsize_testing=true;
     int e=scratch_create(scratch,device.mode_width,device.mode_height,true,true);
     device.fullsize_testing=false;
     if (!e) e=scratch_create(&reference,device.mode_width,device.mode_height,true,false);
+    probe_phase(0,"fullsize_prepare",0,false,e);
     if (!e) {
         device.consumer=*scratch;
         e=savage3d_fullsize_probe(&device,reference);
@@ -190,6 +253,7 @@ static void fullsize_diagnostic(struct render3d_service **scratch)
         device.perspective_qualified ? "qualified" : "refused",device.precision_error,
         device.sample_delta_q16,device.filter_fraction_bits,device.precision_phase,device.precision_samples,
         device.measured_filter_levels[0],device.measured_filter_levels[1],device.expected,device.actual);
+    return e;
 }
 static bool token(void)
 {
@@ -202,21 +266,37 @@ static bool token(void)
     }
     return false;
 }
-void savage3d_boot_diagnostic(struct savage2d *engine,const struct fb_device *fb)
+static void qualification(void)
 {
-    if (reported || !token()) return;
-    reported=true;
+    struct savage2d *engine=pending_engine;
+    const struct fb_device *fb=&pending_fb;
+    if (desktop_generation!=fb->generation) {
+        klog("[3d] probe result=blocked reason=mode_changed error=%d hardware=0 marker=clear elapsed_us=0",-ENODEV);
+        return;
+    }
+    probe_started=probe_now();
+    probe_phase(0,"prepare",0,true,0);
     const struct pci_func *pci=display_driver_owner();
-    klog("[3d] probe phase=identity pci=%04x:%04x revision=%u bar0=%08x bar1=%08x bar2=%08x active=%u quarantine=%u idle_mask=%08x idle_value=%08x",
+    klog("[3d] probe phase=identity pci=%04x:%04x revision=%u bar0=%08x bar1=%08x bar2=%08x active=%u quarantine=%u idle_mask=%08x idle_value=%08x elapsed_us=%llu",
         pci ? pci->vendor : 0,pci ? pci->device : 0,pci ? pci->revision : 0,
         pci ? pci->bar[0] : 0,pci ? pci->bar[1] : 0,pci ? pci->bar[2] : 0,
-        engine->active,engine->quarantined,engine->idle_mask,engine->idle_value);
+        engine->active,engine->quarantined,engine->idle_mask,engine->idle_value,probe_now()-probe_started);
     uint32_t required=0;
     struct render3d_extent heap={0};
-    int e=savage3d_mode_heap(engine,fb,g_boot.display.vram_bytes,&heap,&required);
+    int e;
+    /* The first desktop frame may finish while the 2D marker CLEAR is still
+     * retiring. Wait here, never in .record, within the preparation budget. */
+    do {
+        e=probe_checkpoint(0); if (e) break;
+        e=fbdev_render3d_prepare(fb->generation);
+        if (e==-EBUSY) task_sleep_ms(1);
+    } while (e==-EBUSY);
+    bool pinned=!e;
+    if (!e) e=savage3d_mode_heap(engine,fb,g_boot.display.vram_bytes,&heap,&required);
     uint32_t free_bytes=0,largest_bytes=0;
     if (heap.bytes && fb) {
-        available_heap(fb,&heap,&free_bytes,&largest_bytes);
+        int inventory=available_heap(fb,&heap,&free_bytes,&largest_bytes);
+        if (!e) e=inventory;
         if (!e && largest_bytes<required) e=-ENOMEM;
     }
     const char *reason="mode_heap";
@@ -227,17 +307,16 @@ void savage3d_boot_diagnostic(struct savage2d *engine,const struct fb_device *fb
         fb->phys!=(pci->bar[1]&~15u) || fb->phys>UINT32_MAX-heap.first || !safe_extent(fb->phys+heap.first,heap.bytes))) {
         e=-ENODEV; reason="identity_alias";
     }
-    klog("[3d] probe phase=preflight vram=%u scanout=%u offscreen_end=%u cursor=%u free_vram=%u largest_vram=%u required=%u host_free_pages=%u host_reserved_pages=%u",
+    klog("[3d] probe phase=preflight vram=%u scanout=%u offscreen_end=%u cursor=%u free_vram=%u largest_vram=%u required=%u host_free_pages=%u host_reserved_pages=%u elapsed_us=%llu",
         g_boot.display.vram_bytes,fb ? fb->size : 0,fb ? engine->rows*fb->pitch : 0,
-        engine->cursor_offset,free_bytes,largest_bytes,required,pmm_free_count(),pmm_total_usable()-pmm_free_count());
-    bool pinned=false;
-    if (!e) { e=fbdev_render3d_prepare(fb->generation); pinned=!e; reason="presenter_pin"; }
+        engine->cursor_offset,free_bytes,largest_bytes,required,pmm_free_count(),pmm_total_usable()-pmm_free_count(),probe_now()-probe_started);
     if (!e && !marker_vfs) { e=-ENODEV; reason="marker_store"; }
     if (!e) {
         device=(struct savage3d_device){.engine=engine,.generation=fb->generation,.heap=heap,
             .mode_width=fb->width,.mode_height=fb->height,
             .texture_bytes=(heap.bytes-(required-SAVAGE3D_TEXTURE_MIN))&~4095u,
-            .memory={0,memory_read,memory_write,enter,leave},.lost_notify=lost_notify};
+            .memory={0,memory_read,memory_write,enter,leave},.lost_notify=lost_notify,
+            .probe_checkpoint=probe_checkpoint,.probe_phase=probe_phase};
         uint32_t bases[]={fb->phys+heap.first,alias}, sizes[]={heap.bytes,SAVAGE3D_ALIAS_BYTES};
         for (unsigned i=0;!e && i<2;i++) {
             claims[i]=registry_claim(RES_MMIO,bases[i],bases[i]+sizes[i],"savage-3d",false);
@@ -258,26 +337,41 @@ void savage3d_boot_diagnostic(struct savage2d *engine,const struct fb_device *fb
     }
     struct render3d_service *scratch=0;
     if (!e) { e=scratch_create(&scratch,64,64,false,true); reason="scratch"; }
+    if (!e) e=probe_checkpoint(0);
+    probe_phase(0,"prepare",0,false,e);
     if (!e) {
         bool previous=false;
-        e=display_attempt_marker(marker_vfs,"3d-s3savage",pci->vendor,pci->device,0,false,&previous,0);
+        e=probe_marker(pci,false,&previous);
+        marker_retained=previous;
+        marker_unknown=e && !previous; /* failed commit/close may have left BEGIN */
         if (previous) e=-EACCES;
         marker_fresh=!e; reason=previous ? "retained_marker" : "marker_begin";
     }
     if (!e) {
-        klog("[3d] probe phase=armed heap_first=%u heap_bytes=%u bar2_mapped=%u marker=durable",heap.first,heap.bytes,SAVAGE3D_ALIAS_BYTES);
+        e=probe_checkpoint(0);
+    }
+    if (!e) {
+        klog("[3d] probe phase=armed heap_first=%u heap_bytes=%u bar2_mapped=%u marker=durable elapsed_us=%llu",
+            heap.first,heap.bytes,SAVAGE3D_ALIAS_BYTES,probe_now()-probe_started);
         device.consumer=scratch;
+        probe_phase(0,"minimum",0,true,0);
         e=savage3d_probe(&device); reason="engine_probe";
+        if (!e) e=probe_checkpoint(0);
+        probe_phase(0,"minimum",0,false,e);
         device.consumer=0;
         if (!e) {
-            fullsize_diagnostic(&scratch);
+            e=fullsize_diagnostic(&scratch); reason="fullsize";
             if (device.lost) e=-EIO;
         }
     }
-    if (marker_fresh && !device.lost) {
-        int clear=display_attempt_marker(marker_vfs,"3d-s3savage",pci->vendor,pci->device,0,true,0,0);
+    if (!e) e=probe_check();
+    if (budget_reason) { e=-ETIMEDOUT; reason=budget_reason; }
+    if (e) device.qualified=device.fullsize_qualified=device.perspective_qualified=false;
+    if (marker_fresh && !device.lost && !budget_reason) {
+        int clear=probe_marker(pci,true,0);
         if (clear) { e=clear; reason="marker_clear"; device.qualified=false; }
         else marker_fresh=false;
+        if (probe_check()) { e=-ETIMEDOUT; reason=budget_reason; device.qualified=false; }
     }
     if (scratch) {
         if (device.lost) {
@@ -293,8 +387,36 @@ void savage3d_boot_diagnostic(struct savage2d *engine,const struct fb_device *fb
         if (released) { device.lost=true; engine->quarantined=true; engine->active=false; }
     }
     if (pinned) fbdev_render3d_prepared();
-    klog("[3d] probe result=%s reason=%s error=%d hardware=%u phase=%u expected=%08x actual=%08x guard=%u status=%08x packets=%llu triangles=%llu copies=%llu marker=%s",
+    device.probe_checkpoint=0; device.probe_phase=0;
+    klog("[3d] probe result=%s reason=%s error=%d hardware=%u phase=%u expected=%08x actual=%08x guard=%u status=%08x packets=%llu triangles=%llu copies=%llu marker=%s elapsed_us=%llu",
         !e ? "qualified" : device.lost ? "failed" : "blocked",!e ? "pixel_depth_copy_guards_restore" : reason,e,
         engine->render3d_qualified,device.failed_phase,device.expected,device.actual,device.guard_offset,
-        engine->status,device.packets,device.triangles,device.copies,marker_fresh ? "retained" : "clear");
+        engine->status,device.packets,device.triangles,device.copies,
+        marker_fresh || marker_retained ? "retained" : marker_unknown ? "unknown" : "clear",probe_now()-probe_started);
+}
+static bool probe_ready(void *ctx) { (void)ctx; return desktop_ready; }
+static void probe_main(void *ctx)
+{
+    (void)ctx;
+    (void)kwait_wait_until(&probe_wait,probe_ready,0,UINT64_MAX);
+    qualification();
+}
+void savage3d_desktop_presented(uint32_t generation)
+{
+    desktop_generation=generation;
+    if (!probe_task || desktop_ready) return;
+    desktop_ready=true;
+    kwait_wake_all(&probe_wait);
+}
+void savage3d_boot_diagnostic(struct savage2d *engine,const struct fb_device *fb)
+{
+    if (reported || !token() || !engine || !engine->active || !fb) return;
+    reported=true;
+    pending_engine=engine; pending_fb=*fb;
+    desktop_ready=desktop_generation!=0;
+    kwait_init(&probe_wait);
+    probe_task=task_create_kernel("savage-3d-probe",probe_main,0,P_IDLE);
+    if (!probe_task) { klog("[3d] probe result=blocked reason=worker_memory error=%d",-ENOMEM); return; }
+    klog("[3d] probe phase=queued elapsed_us=0 budget_us=%u after=desktop_frame priority=idle",SAVAGE3D_PROBE_TOTAL_US);
+    task_start(probe_task);
 }
