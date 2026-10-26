@@ -149,6 +149,7 @@ int ata_channel_setup(struct ata_channel *channel, unsigned index,
 int ata_channel_discover(struct ata_channel *channel);
 void ata_channel_irq(struct ata_channel *channel);
 bool ata_channel_idle(struct ata_channel *channel);
+bool ata_channel_fence_empty(struct ata_channel *channel); /* a confirmed-empty channel: stop bus master and IRQ, no status read */
 bool ata_registry_idle(int handle, gen_t generation); /* registry_quiesce proof */
 int ata_init(void);                 /* thread context, after kwork_init */
 struct ata_device *ata_device_get(unsigned channel, unsigned unit);

@@ -19,7 +19,11 @@ struct reboot_ops {
 };
 /* Bounded even when the controller is missing or its input buffer is stuck. */
 void reboot_sequence(const struct reboot_ops *, void *);
+/* The qualified hard PCI reset first (PCIRST# stops bus masters the fence
+ * could not prove stopped), then the 8042 pulse and the triple fault. */
+void reboot_sequence_hard_first(const struct reboot_ops *, void *);
 __attribute__((noreturn)) void kernel_reboot(void);
+__attribute__((noreturn)) void kernel_reboot_hard_first(void);
 
 struct storage;
 /* Only the existing boot-volume SYSTEM/BOOT.CFG is writable through this seam.

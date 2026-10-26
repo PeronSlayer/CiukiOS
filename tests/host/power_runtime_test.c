@@ -25,7 +25,8 @@ static char order[32], durable[256], last[256];
 static unsigned stages, checkpoints;
 bool setup_mode(void) { return setup_active; }
 static jmp_buf reboot_return;
-int power_devices_quiesce(void) __attribute__((weak));
+int power_devices_quiesce_terminal(void) __attribute__((weak));
+int ata_power_quiesce(void) __attribute__((weak));
 static void stage(char c) { assert(stages<sizeof(order)-1); order[stages++]=c; order[stages]=0; }
 struct process *proc_current(void) { return &desktop; }
 uint32_t supervisor_desktop_pid(void) { return 42; }
@@ -40,7 +41,11 @@ int storage_sync(void)
     return sync_error;
 }
 void net_shutdown(void) { assert(disk.stopped); stage('N'); }
-int power_devices_quiesce(void) { assert(disk.stopped); net_shutdown(); stage('Q'); return quiesce_error; }
+int power_devices_quiesce_terminal(void) { assert(disk.stopped); net_shutdown(); stage('Q'); return quiesce_error; }
+/* Review 4, findings 3-5: the forced path's own ATA storage fence (terminal), the hard-PCI-reset-first reboot. */
+static int ata_fence_result;
+int ata_power_quiesce(void) { stage('A'); return ata_fence_result; }
+__attribute__((noreturn)) void kernel_reboot_hard_first(void) { stage('H'); longjmp(reboot_return,1); }
 /* fx-9b: the audio settings flush (a key-applied master to AUDIO.CFG) runs
  * before the storage flush, only while a test enables the stage. */
 static bool audio_stage;
@@ -303,12 +308,14 @@ static void test_forced(void)
     reset(); force_flushes=0; power_running=true;   /* an orderly OFF blocked on another thread */
     assert(power_syscall(CIUKI_POWER_OFF)==-EBUSY && !stages);
     if (!setjmp(reboot_return)) { (void)power_syscall(CIUKI_POWER_FORCE_REBOOT); assert(0); }
-    assert(!strcmp(order,"FDR") && (power_progress&CIUKI_POWER_UNCERTAIN) && strstr(last,"forced-reset"));
+    assert(!strcmp(order,"FDAR") && (power_progress&CIUKI_POWER_UNCERTAIN) && strstr(last,"forced-reset"));
     /* A flush worker that never completes ends at its 3 s bound; a fence
-     * that never completes ends at its 2 s bound and a reset still follows. */
+     * that never completes ends at its 2 s bound and a reset still follows,
+     * the hard PCI reset first since the DMA was not proved stopped (review
+     * 4, finding 3); the ATA fence is still attempted. */
     reset(); force_flushes=0; fence_steps=0; force_flush_result=-EAGAIN; fence_result=-EAGAIN; fake_ms=1000; power_running=true;
     if (!setjmp(reboot_return)) { (void)power_syscall(CIUKI_POWER_FORCE_REBOOT); assert(0); }
-    assert(!strcmp(order,"FDR") && fake_ms>=1000+POWER_FORCE_FLUSH_MS+POWER_FORCE_QUIESCE_MS && fake_ms<1000+POWER_FORCE_FLUSH_MS+POWER_FORCE_QUIESCE_MS+40);
+    assert(!strcmp(order,"FDAH") && strstr(last,"pci-reset-first") && fake_ms>=1000+POWER_FORCE_FLUSH_MS+POWER_FORCE_QUIESCE_MS && fake_ms<1000+POWER_FORCE_FLUSH_MS+POWER_FORCE_QUIESCE_MS+40);
     assert(force_flushes>=POWER_FORCE_FLUSH_MS/10 && force_flushes<=POWER_FORCE_FLUSH_MS/10+2);
     assert(fence_steps>=POWER_FORCE_QUIESCE_MS/10 && fence_steps<=POWER_FORCE_QUIESCE_MS/10+2);
     /* Forced off with the fence timing out: refused (EBUSY), no soft-off, no
@@ -317,8 +324,18 @@ static void test_forced(void)
     power_source_release(source.provider, false, 0);
     { const struct power_source_ops ops = {.soft_off=ordinary_off,.soft_off_forced=forced_off};
       assert(!power_source_reserve(POWER_SOURCE_ACPI, &ops) && !power_source_activate(POWER_SOURCE_ACPI)); }
-    assert(power_syscall(CIUKI_POWER_FORCE_OFF)==-EBUSY && !strcmp(order,"FD") && !forced_offs && !ordinary_offs);
+    assert(power_syscall(CIUKI_POWER_FORCE_OFF)==-EBUSY && !strcmp(order,"FDA") && !forced_offs && !ordinary_offs);
     assert(!power_source_emergency_stopped() && power_source_orderly_shutdown(0)==-EBUSY && strstr(last,"power button"));
+    /* A disk channel that cannot prove itself idle fails the fence too (review 4, finding 4/5: the storage fence is the forced path's own). */
+    reset(); force_flushes=0; fence_steps=0; fence_result=0; ata_fence_result=-EBUSY; power_running=true; forced_offs=0;
+    power_source_release(source.provider, false, 0);
+    { const struct power_source_ops ops = {.soft_off=ordinary_off,.soft_off_forced=forced_off};
+      assert(!power_source_reserve(POWER_SOURCE_ACPI, &ops) && !power_source_activate(POWER_SOURCE_ACPI)); }
+    assert(power_syscall(CIUKI_POWER_FORCE_OFF)==-EBUSY && !strcmp(order,"FDA") && !forced_offs);
+    reset(); force_flushes=0; fence_steps=0; power_running=true;
+    if (!setjmp(reboot_return)) { (void)power_syscall(CIUKI_POWER_FORCE_REBOOT); assert(0); }
+    assert(!strcmp(order,"FDAH"));
+    ata_fence_result=0;
     assert(power_syscall(CIUKI_POWER_QUERY)&CIUKI_POWER_UNCERTAIN);
     /* The fence proved every device stopped: the emergency latch (not the
      * orderly one), then the provider's soft-off. */
@@ -326,7 +343,7 @@ static void test_forced(void)
     power_source_release(source.provider, false, 0);
     { const struct power_source_ops ops = {.soft_off=ordinary_off,.soft_off_forced=forced_off};
       assert(!power_source_reserve(POWER_SOURCE_ACPI, &ops) && !power_source_activate(POWER_SOURCE_ACPI)); }
-    assert(power_syscall(CIUKI_POWER_FORCE_OFF)==-EIO && !strcmp(order,"FDP") && forced_offs==1 && !ordinary_offs);
+    assert(power_syscall(CIUKI_POWER_FORCE_OFF)==-EIO && !strcmp(order,"FDAP") && forced_offs==1 && !ordinary_offs);
     /* Review 3, finding 4: the emergency latch is not the orderly proof (APM
      * reads that one before BIOS Off) and the ordinary entry refuses it. */
     assert(power_source_emergency_stopped() && !stopped && power_source_orderly_shutdown(0)==-EBUSY && power_source_soft_off()==-EBUSY && !ordinary_offs);
@@ -338,21 +355,21 @@ static void test_forced(void)
     power_source_release(source.provider, false, 0);
     { const struct power_source_ops ops = {.soft_off=ordinary_off};
       assert(!power_source_reserve(POWER_SOURCE_ACPI, &ops) && !power_source_activate(POWER_SOURCE_ACPI)); }
-    assert(power_syscall(CIUKI_POWER_FORCE_OFF)==-ENOTSUP && !strcmp(order,"FD") && !ordinary_offs);
+    assert(power_syscall(CIUKI_POWER_FORCE_OFF)==-ENOTSUP && !strcmp(order,"FDA") && !ordinary_offs);
     emergency_stopped=false;
     reset(); force_flushes=0; fence_steps=0; power_running=true; power_source_release(source.provider, false, 0);
-    assert(power_syscall(CIUKI_POWER_FORCE_OFF)==-ENOTSUP && !strcmp(order,"FD"));
+    assert(power_syscall(CIUKI_POWER_FORCE_OFF)==-ENOTSUP && !strcmp(order,"FDA"));
     /* Storage already durable: no second flush; the fence still runs. */
     reset(); force_flushes=0; fence_steps=0; storage_flushed=true;
     if (!setjmp(reboot_return)) { (void)power_syscall(CIUKI_POWER_FORCE_REBOOT); assert(0); }
-    assert(!strcmp(order,"DR") && !force_flushes);
+    assert(!strcmp(order,"DAR") && !force_flushes);
     /* No platform (a safe-mode boot): the fence is unavailable, a forced off is refused. */
     platform_ready=false; fence_steps=0;
     reset(); force_flushes=0; power_running=true; forced_offs=0;
     power_source_release(source.provider, false, 0);
     { const struct power_source_ops ops = {.soft_off=forced_off};
       assert(!power_source_reserve(POWER_SOURCE_ACPI, &ops) && !power_source_activate(POWER_SOURCE_ACPI)); }
-    assert(power_syscall(CIUKI_POWER_FORCE_OFF)==-EBUSY && !strcmp(order,"F") && !fence_steps && !forced_offs);
+    assert(power_syscall(CIUKI_POWER_FORCE_OFF)==-EBUSY && !strcmp(order,"FA") && !fence_steps && !forced_offs);
     emergency_stopped=false;
     puts("PASS power runtime T23 forced: runs beside a blocked REBOOT/OFF, flush bounded to 3 s, device fence bounded to 2 s, reset regardless, soft-off only on a proved fence through the provider's forced entry (the orderly proof stays strict), desktop only");
 }

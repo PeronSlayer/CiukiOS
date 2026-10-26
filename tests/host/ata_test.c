@@ -1442,6 +1442,23 @@ static void test_constant_pic_masks(void)
     busy.status = ATA_BSY;
     CHECK(!ata_channel_idle(&busy.channel) && (busy.control & ATA_NIEN) && masked[15]);
     CHECK(masks + unmasks == before + 1 && busy.channel.quiescing);
+    /* Review 4, finding 4: a channel discovery found empty (QEMU's secondary
+     * channel) floats FFh, which the present-device predicate reads as
+     * BSY|DRQ; the empty-channel fence stops bus mastering and the IRQ
+     * source without consulting the status and proves idle. */
+    struct fake empty;
+    fresh(&empty, false);
+    native_attach(&empty, 1);
+    for (unsigned u = 0; u < ATA_DEVICES; u++) empty.channel.devices[u].present = false;
+    empty.status = 0xff;
+    before = masks + unmasks;
+    CHECK(!ata_channel_idle(&empty.channel));   /* read as a present device: not provable */
+    struct fake empty2;
+    fresh(&empty2, false);
+    native_attach(&empty2, 1);
+    for (unsigned u = 0; u < ATA_DEVICES; u++) empty2.channel.devices[u].present = false;
+    empty2.status = 0xff;
+    CHECK(ata_channel_fence_empty(&empty2.channel) && empty2.channel.quiescing && (empty2.control & ATA_NIEN) && !empty2.channel.active);
     free(data); free(expected);
     puts("ATA PIC: primary/secondary LBA28/48 PIO/MULTIPLE/DMA/FLUSH, ATAPI/peer, late IRQ and clean stop=0 writes after attach; quarantine=1 mask PASS");
 }

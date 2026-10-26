@@ -1485,6 +1485,16 @@ static void observers_close(struct desktop *d)
     observer_close(&d->network_fd);
     observer_close(&d->mixer_observer_fd);
 }
+/* Review 4, finding 1: the forced preparation. The custom and media workers
+ * are not joined (one of them may be the stuck work Force is bypassing);
+ * their threads and resources stay as they are, the observer channels the
+ * input thread polls are closed. */
+static void observers_detach(struct desktop *d)
+{
+    observer_close(&d->media_fd);
+    observer_close(&d->network_fd);
+    observer_close(&d->mixer_observer_fd);
+}
 static void network_read(struct desktop *d)
 {
     if (d->power.state && d->power.prepared) return;
@@ -2058,7 +2068,8 @@ static int power_alive(struct desktop *d, uint32_t pid)
 }
 static void power_prepare(struct desktop *d)
 {
-    observers_close(d);   /* observer channels and idle workers: no VFS lock */
+    if (d->power.force_power) observers_detach(d);   /* review 4, finding 1: no join on the forced path */
+    else observers_close(d);   /* observer channels and idle workers: no VFS lock */
     if (d->mixer_fd>=0) { close(d->mixer_fd); d->mixer_fd=-1; d->sh.mixer_state=1; }
     /* Settings, wallpaper and icon readers use scoped FILE/DIR handles.
      * Also release inherited file-backed logs, preserving input, display,

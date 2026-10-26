@@ -23,9 +23,20 @@ int ata_power_resume(void) { step('d',0); return resume_fail==4 ? -EIO : 0; }
 int net_power_quiesce(void) { return 0; }
 int audio_power_quiesce(void) { return 0; }
 int usb_power_quiesce(void) { return 0; }
+static unsigned ata_fences;   /* review 4, finding 5: the terminal ATA fence never runs on the suspend path */
+int ata_power_quiesce(void) { ata_fences++; return 0; }
 #include "../../src/kernel/core/power_quiesce.c"
 int main(void)
 {
+    /* The platform's quiesce step (APM critical suspend) leaves the disks
+     * reversible: suspend/resume still goes through ata_power_suspend /
+     * ata_power_resume; only call 73's terminal barrier fences ATA. */
+    assert(!power_devices_quiesce() && !ata_fences);
+    used=0; assert(!power_devices_suspend() && !strcmp(order,"NAUD") && !ata_fences);
+    used=0; assert(!power_devices_resume() && !strcmp(order,"duan") && !ata_fences);
+    assert(!power_devices_quiesce_terminal() && ata_fences==1);
+    puts("PASS power sleep: the suspend stop and the suspend/resume transaction never fence storage; the terminal barrier does");
+    used=0; order[0]=0;
     for (missing=1;missing<=4;missing++) {
         assert(!power_devices_resume_ready());
         assert(power_devices_suspend()==-ENOTSUP && !used);

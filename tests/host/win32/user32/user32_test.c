@@ -721,6 +721,22 @@ static intptr_t W32API end_at_init(HWND h, UINT m, WPARAM wp, LPARAM lp) {
   if (m == WM_INITDIALOG) { EndDialog(h, 7); return 1; }
   return 0;
 }
+/* The template header and its three empty arrays (menu, class, title). */
+static const struct { DLGTEMPLATE t; uint16_t menu, klass, title; } prompt_template = {   /* no padding: the WORDs follow the 18-byte header */
+    .t = {.style = WS_POPUP | WS_CAPTION | WS_VISIBLE | DS_MODALFRAME, .cdit = 0, .x = 10, .y = 10, .cx = 120, .cy = 60}};
+/* Review 4, finding 6: windows created while a modal dialog is being set up
+ * (inside its WM_INITDIALOG) are not modal themselves. */
+static HWND nested_window, nested_dialog;
+static intptr_t W32API nest_at_init(HWND h, UINT m, WPARAM wp, LPARAM lp) {
+  (void)wp; (void)lp;
+  if (m == WM_INITDIALOG) {
+    nested_window = CreateWindowExA(0, "USER fixture", "nested", WS_VISIBLE | WS_CAPTION, 50, 50, 80, 60, h, 0, 0, 0);
+    nested_dialog = CreateDialogIndirectParamA(0, &prompt_template.t, h, end_at_init, 0);
+    EndDialog(h, 9);
+    return 1;
+  }
+  return 0;
+}
 static int create_style_after(UINT from, UINT *style, UINT *owner) {
   for (UINT i = from; i < outgoing_count; i++)
     if (outgoing[i].data[0] == 3 && outgoing[i].data[1] == DESK_CREATE_WINDOW) {
@@ -734,9 +750,6 @@ static void test_modal_prompt_wire(void) {
   CHECK(owner);
   struct u32_window *ow = u32_window(owner);
   CHECK(ow && ow->wire);
-  /* The template header and its three empty arrays (menu, class, title). */
-  static const struct { DLGTEMPLATE t; uint16_t menu, klass, title; } prompt_template = {   /* no padding: the WORDs follow the 18-byte header */
-      .t = {.style = WS_POPUP | WS_CAPTION | WS_VISIBLE | DS_MODALFRAME, .cdit = 0, .x = 10, .y = 10, .cx = 120, .cy = 60}};
   const DLGTEMPLATE *prompt = &prompt_template.t;
   UINT before = outgoing_count, style = 0, wire_owner = 0;
   CHECK(DialogBoxIndirectParamA(0, prompt, owner, end_at_init, 0) == 7);
@@ -747,8 +760,25 @@ static void test_modal_prompt_wire(void) {
   CHECK(modeless && create_style_after(before, &style, &wire_owner));
   CHECK(!(style & DESK_V3_MODAL) && wire_owner == ow->wire);
   DestroyWindow(modeless);
+  /* Nested creations during the modal dialog's WM_INITDIALOG: exactly one
+   * CREATE packet is modal (the dialog's), the nested window's and the
+   * nested modeless dialog's are not, and an ordinary owned window created
+   * afterwards is not either. */
+  before = outgoing_count;
+  CHECK(DialogBoxIndirectParamA(0, prompt, owner, nest_at_init, 0) == 9);
+  UINT modal_creates = 0, plain_creates = 0;
+  for (UINT i = before; i < outgoing_count; i++)
+    if (outgoing[i].data[0] == 3 && outgoing[i].data[1] == DESK_CREATE_WINDOW) {
+      if (desk_get32(outgoing[i].data + 16) & DESK_V3_MODAL) modal_creates++; else plain_creates++;
+    }
+  CHECK(modal_creates == 1 && plain_creates == 2);
+  CHECK(nested_window && nested_dialog && !IsWindow(nested_window) && !IsWindow(nested_dialog));   /* owned by the ended dialog */
+  before = outgoing_count;
+  HWND plain = CreateWindowExA(0, "USER fixture", "plain owned", WS_VISIBLE | WS_CAPTION, 60, 60, 80, 60, owner, 0, 0, 0);
+  CHECK(plain && create_style_after(before, &style, &wire_owner) && !(style & DESK_V3_MODAL) && !(GetWindowLongA(plain, GWL_EXSTYLE) & U32_EX_MODAL_PROMPT));
+  DestroyWindow(plain);
   DestroyWindow(owner);
-  puts("PASS T23 modal prompt wire: DialogBox creates its desktop window modal and owned, CreateDialog does not");
+  puts("PASS T23 modal prompt wire: DialogBox creates its desktop window modal and owned, CreateDialog and nested creations do not");
 }
 /* G3: the desktop's close request reaches WM_CLOSE; a window that survives
  * (the program's prompt was cancelled) declines with CLOSE_ACK 0, so the

@@ -281,7 +281,8 @@ int acpi_soft_off_parse(acpi_map_fn map, void *ctx, uint32_t rsdp_phys,
 }
 
 #if !defined(POWER_HOST) || defined(POWER_HOST_RUNTIME)
-extern int power_devices_quiesce(void) __attribute__((weak));
+extern int power_devices_quiesce_terminal(void) __attribute__((weak));
+extern int ata_power_quiesce(void) __attribute__((weak));
 extern int audio_settings_flush(void) __attribute__((weak));
 static uint32_t power_progress;
 static void power_checkpoint(void)
@@ -331,7 +332,7 @@ static int power_sequence(bool off)
         /* EBUSY before any irreversible step: the session continues intact. */
         if (e) { if (e != -EBUSY) power_progress = CIUKI_POWER_UNCERTAIN; return e; }
         power_progress = CIUKI_POWER_UNCERTAIN;
-        e = power_devices_quiesce ? power_devices_quiesce() : -ENOTSUP;
+        e = power_devices_quiesce_terminal ? power_devices_quiesce_terminal() : -ENOTSUP;
         if (e) { klog("[power] native quiesce failed: %d", e); power_checkpoint(); return -EBUSY; }
         power_progress = CIUKI_POWER_STOPPED;
         /* The orderly-shutdown proof for every provider: ACPI S5 and APM Off. */
@@ -378,10 +379,20 @@ static int power_force(bool off, uint32_t pid)
         uint64_t end = deadline_after_ms(POWER_FORCE_QUIESCE_MS);
         while ((fence = power_source_quiesce_dma(end)) == -EAGAIN && !deadline_passed(end)) task_sleep_ms(10);
         if (fence == -EAGAIN) fence = -ETIMEDOUT;
-        klog("[power] forced device fence result=%d", fence);
+        /* Review 4, finding 5: the platform step is the suspend-capable stop
+         * (network, audio, USB); the ATA storage fence is terminal and runs
+         * here, on the forced path only, whatever the platform step said. */
+        int disks = ata_power_quiesce ? ata_power_quiesce() : 0;
+        if (!fence) fence = disks;
+        klog("[power] forced device fence result=%d storage=%d", fence, disks);
     }
     power_progress |= CIUKI_POWER_UNCERTAIN;
-    if (!off) { klog("[power] stage=forced-reset fallback=8042-triple-fault"); kernel_reboot(); }
+    if (!off) {
+        /* Review 4, finding 3: with the DMA proved stopped the 8042 pulse is
+         * enough; otherwise the hard PCI reset (PCIRST#) comes first. */
+        if (fence) { klog("[power] stage=forced-reset order=pci-reset-first fence=%d", fence); kernel_reboot_hard_first(); }
+        klog("[power] stage=forced-reset fallback=8042-triple-fault"); kernel_reboot();
+    }
     if (!power_source_can_off()) { klog("[power] forced off: no soft-off provider"); return -ENOTSUP; }
     if (fence) { klog("[power] forced off refused: devices not quiescent (error %d); turn the computer off with its power button", fence); return -EBUSY; }
     power_source_mark_emergency_stopped();

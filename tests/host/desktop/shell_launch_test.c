@@ -221,6 +221,7 @@ static unsigned mixer_fixture_serial=1, mixer_observed_serial __attribute__((unu
 static int media_volume_error, media_cd_error;
 static unsigned media_opens, media_closes;
 static int media_slow;
+static int media_block;   /* review 4, finding 1: the worker's query never returns until released */
 static unsigned media_slow_queries;
 static pthread_t media_frame_thread;
 #ifdef DESK_POLL_LEDGER_TEST
@@ -382,6 +383,7 @@ int ciuki_devctl(int fd,uint32_t op,void *record,uint32_t size)
     if (poll_snapshot) desktop_poll_host_check(poll_equal);
 #endif
     if (fd==MEDIA_FD) {
+        while (__atomic_load_n(&media_block,__ATOMIC_ACQUIRE)) { struct timespec pause={.tv_sec=0,.tv_nsec=1000000}; nanosleep(&pause,NULL); }
         if (media_slow) {
             assert(!pthread_equal(pthread_self(),media_frame_thread));
             __atomic_add_fetch(&media_slow_queries,1,__ATOMIC_RELAXED);
@@ -459,6 +461,9 @@ static int media_wait_read(struct desktop *d)
     }
     assert(!"media worker timeout");return 0;
 }
+/* The production entry under its own name (review 4, finding 1: case 19
+ * starts the worker and leaves its query blocked). */
+static int (*const media_read_production)(struct desktop *)=media_read;
 #define media_read media_wait_read
 static uint32_t last_power_action;
 int ciuki_power(uint32_t action) { last_power_action=action; errno=ENOSYS; return -1; }

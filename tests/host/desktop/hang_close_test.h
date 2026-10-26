@@ -547,26 +547,32 @@ static void test_t23_hang_close(void)
     shutdown_cleanup();
     puts("PASS T23 prompt recognition: unowned, non-modal or hidden windows do not hold the session past 20 s");
 
-    /* 19. Review 3, finding 1: the desktop's own readiness check (the sound
-     * tail, settings/wallpaper/folder/media workers through shutdown_wait)
-     * never completes. After 15 s the busy dialog names it; Force runs the
-     * forced action past it. Before, the sequence waited forever and the
-     * 15 s call timer never started. */
+    /* 19. Review 3 finding 1 and review 4 finding 1: the production readiness
+     * check (shutdown_wait) with the media worker stuck in a device query
+     * that never returns. After 15 s the busy dialog names the desktop's own
+     * work; Force runs the production preparation (power_prepare) without
+     * joining the stuck worker and the forced action follows. Before, the
+     * sequence waited forever; then Force joined the worker and froze. */
     es_setup(); d->terminate=hc_terminate; hc_terms=0; d->power_force_request=hc_force_request; hc_forces=0; d->power_w32_pids=NULL;
-    d->sound_shutdown=shutdown_sound; shutdown_sound_deadline=UINT64_MAX; shutdown_sound_checks=0;
+    d->sound_shutdown=shutdown_wait;                  /* production: custom/media workers, settings, wallpaper, folder */
+    media_available=1; __atomic_store_n(&media_block,1,__ATOMIC_RELEASE);
+    observer_open(&d->media_fd,"/dev/media"); assert(media_read_production(d) >= 0 && media_worker.started);
+    for (unsigned i=0;i<200 && !media_busy();i++) { struct timespec pause={0,1000000}; nanosleep(&pause,NULL); }
+    assert(media_busy());                             /* the worker is inside the blocked query */
     desk_power_begin(d,2);
     for (uint64_t t=1250000000ull; t<=16000000000ull; t+=250000000ull) shutdown_at(t);
-    assert(!shutdown_calls && shutdown_sound_checks>50 && d->power.state==DESK_POWER_RETRY);
+    assert(!shutdown_calls && !shutdown_prepares && d->power.state==DESK_POWER_RETRY);
     shutdown_at(16250000000ull);
     assert(d->power.state==DESK_POWER_BUSY && d->power.aux_stuck && strstr(d->power.text,"desktop has not finished its own work"));
     shutdown_progress=CIUKI_POWER_UNCERTAIN;
     desk_power_force(d);
     assert(d->power.force_power);
-    unsigned checks=shutdown_sound_checks; shutdown_at(16500000000ull);
-    assert(hc_forces==1 && hc_force_action==2 && shutdown_sound_checks==checks && d->power.state==DESK_POWER_DONE);
+    shutdown_at(16500000000ull);                      /* power_prepare runs here: it must not join the worker */
+    assert(shutdown_prepares==1 && media_worker.started && media_busy() && hc_forces==1 && hc_force_action==2 && d->power.state==DESK_POWER_DONE);
+    __atomic_store_n(&media_block,0,__ATOMIC_RELEASE); media_stop(); media_available=0;
     d->sound_shutdown=NULL;
     shutdown_cleanup();
-    puts("PASS T23 desktop work bound: an unfinished readiness check leads to the busy dialog at 15 s and Force bypasses it");
+    puts("PASS T23 desktop work bound: a stuck media worker leads to the busy dialog at 15 s, Force prepares without joining it and the forced action runs");
 
     /* 20. Review 3, finding 2: the 15 s timeout of a call 73 in flight
      * never makes the sequence cancellable: the busy dialog has no Cancel,
@@ -615,4 +621,45 @@ static void test_t23_hang_close(void)
     desk_drop_client(d,(int)d->clients[app2].v3_peer-1);
     shutdown_cleanup();
     puts("PASS T23 escalation latch: the user's End Task dialog survives ticks with a responsive prompt, closes when the turn moves on, End Task ends the program");
+
+    /* 22. Review 4, finding 2: the escalated dialog never outlives its
+     * participant. The broker abandoning the Win32 turn dismisses it (the
+     * native participant that follows gets its own query untouched), and an
+     * answer whose participant is no longer the current one is only
+     * dismissed. Before, the dialog survived and End Task marked the next
+     * native participant gone. */
+    es_setup(); d->w32_session=es_w32; d->terminate=hc_terminate; hc_terms=0;
+    int app3=es_v3_window(95,"Quake III Arena Demo");
+    { struct ciuki_message hw; desk_v3_message(&hw,DESK_V3_WIN32_HWND,4,++es_v3_token,d->clients[app3].v3_id,d->clients[app3].v3_generation);
+      desk_put32(hw.data+16,0x9500); hw.sender_pid=95; assert(!desk_v3_receive(d,(int)d->clients[app3].v3_peer-1,&hw)); }
+    int editor2=shutdown_client(96,"CiukNote",1,2); es_register(editor2,96);
+    desk_focus(d,app3);                               /* the Win32 turn comes first, the native editor after it */
+    es_w32_next=(struct desk_w32_status){DESK_W32_PENDING,95,0x9500,1};
+    desk_session_begin(d,2);
+    assert(d->session.count==2 && d->session.parts[0].kind==DESK_PART_WIN32 && d->session.parts[1].kind==DESK_PART_WINDOW);
+    int ask3=es_v3_owned(app3,1,DESK_V3_OVERLAPPED|DESK_V3_MODAL,"Save changes?");
+    assert(ask3>=0);
+    shutdown_at(1250000000ull);
+    desk_focus(d,ask3); hc_alt_f4();
+    assert(d->end_task.kind==DESK_HANG_NOT_RESPONDING && d->session.escalated && d->end_task.pid==95);
+    es_w32_error=-EIO;                                /* the broker goes away: retried 5 s, then abandoned */
+    for (uint64_t t=1500000000ull; t<=6750000000ull; t+=250000000ull) { es_v3_pong(app3); es_v3_pong(ask3); shutdown_at(t); }
+    assert(!d->end_task.kind && !d->session.escalated && !hc_terms);
+    assert(d->session.state && d->session.at==1 && es_count(editor2,DESK_QUERY_END_SESSION)==1);   /* the editor's own query */
+    es_w32_error=0;
+    desk_session_cancel(d);
+    /* An answer for a participant that is no longer current is dismissed. */
+    es_w32_next=(struct desk_w32_status){DESK_W32_PENDING,95,0x9500,1};
+    d->clients[app3].order=++d->order;                /* the editor's query had raised it: the Win32 window on top again */
+    desk_session_begin(d,2);
+    assert(d->session.parts[0].kind==DESK_PART_WIN32 && d->session.w32_pid==95);
+    desk_focus(d,ask3); hc_alt_f4();
+    assert(d->end_task.kind==DESK_HANG_NOT_RESPONDING && d->end_task.pid==95);
+    d->end_task.pid=12345;                            /* a dialog that outlived its participant */
+    desk_end_task_choice(d,1);
+    assert(!hc_terms && !d->end_task.kind && d->session.state && d->session.at==0);
+    desk_session_cancel(d);
+    desk_drop_client(d,(int)d->clients[app3].v3_peer-1);
+    shutdown_cleanup();
+    puts("PASS T23 escalation lifetime: the dialog ends with its participant (broker abandonment), a stale answer is dismissed");
 }

@@ -2453,6 +2453,7 @@ void desk_session_cancel(struct desktop *d)
 static void session_finish(struct desktop *d)
 {
     struct desk_session *s=&d->session;
+    session_close_dialog(d);   /* no participant is left for a dialog (review 4, finding 2) */
     int action=s->action, w32=0;
     for (unsigned k=0; k<s->count; k++) {
         struct desk_session_part *p=&s->parts[k];
@@ -2570,6 +2571,7 @@ static void session_step(struct desktop *d)
             if (r==-ENODEV) { p->state=DESK_PART_AGREED; s->at++; continue; }   /* no Win32 subsystem on this desktop */
             if (r) {
                 if (!session_broker_failed(d,s,"begin",r)) return;
+                session_close_dialog(d);   /* review 4, finding 2: the participant leaves, its dialog with it */
                 p->state=DESK_PART_AGREED; p->answered=0; s->at++; continue;
             }
             s->w32_error_since=0;
@@ -2584,6 +2586,7 @@ static void session_step(struct desktop *d)
         if (r) {
             if (!session_broker_failed(d,s,"status",r)) return;
             (void)session_w32(d,DESK_W32_SESSION_CANCEL,0,NULL);   /* best effort: a late broker frees its queried windows */
+            session_close_dialog(d);
             p->state=DESK_PART_AGREED; p->answered=0; s->at++; continue;
         }
         s->w32_error_since=0;
@@ -2596,6 +2599,7 @@ static void session_step(struct desktop *d)
              * unknown, the power sequence follows and Force becomes available. */
             fprintf(stderr,"[desktop] end-session win32 pid=%u survived End Task for %u ms: programs not asked\n",st.pid,(unsigned)(DESK_KILL_WAIT_NS/1000000ull));
             (void)session_w32(d,DESK_W32_SESSION_CANCEL,0,NULL);
+            session_close_dialog(d);
             s->w32_unknown=1; s->w32_pid=0;
             p->state=DESK_PART_AGREED; p->answered=0; s->at++; continue;
         }
@@ -2759,6 +2763,14 @@ void desk_end_task_choice(struct desktop *d, int end)
     if (end<0) return;
     struct desk_session_part *p=e.session ? session_current(d) : NULL;
     if (e.session && !p) return;
+    if (e.session && end>=0) {
+        /* Review 4, finding 2: the answer applies to the participant the
+         * dialog was opened for; a dialog that outlived its participant is
+         * only dismissed. */
+        int matches=p->kind==DESK_PART_WIN32 ? d->session.w32_pid==e.pid :
+                    p->kind==DESK_PART_WINDOW ? e.target && p->window_id==e.target : 0;
+        if (!matches) { fprintf(stderr,"[desktop] end task dialog stale pid=%u target=%u: dismissed\n",e.pid,e.target); return; }
+    }
     if (!end) {
         if (e.session) { desk_session_cancel(d); return; }
         if (e.kind==DESK_HANG_DOS)   /* No: the window and its program stay */

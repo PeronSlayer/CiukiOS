@@ -354,11 +354,12 @@ findings 1–6 in the validation record):
     channel that cannot prove itself idle is quarantined and the fence
     fails. The orderly path gains the same barrier after `storage_sync`.
     `kernel_reboot` tries, after the 8042 pulse and before the CPU-only
-    triple fault, the ICH/PIIX reset control register 0CF9h (full reset,
-    SYS_RST with RST_CPU; ICH3 datasheet 82801CA 5.11.1.2 and 9.7.5) when
-    bus 0 has an Intel ISA/LPC bridge (class 0601h, vendor 8086h); otherwise
-    nothing changes. The forced restart runs the fence (DMA revoked) before
-    the reset in any case.
+    triple fault, the ICH/PIIX reset control register 0CF9h (a hard PCI
+    reset asserting PCIRST#: SYS_RST then RST_CPU rising, FULL_RST bit 3
+    clear; ICH3 datasheet 82801CA 5.11.1.2 and 9.7.5) when bus 0 has an
+    Intel ISA/LPC bridge (class 0601h, vendor 8086h); otherwise nothing
+    changes. The forced restart runs the fence (DMA revoked) before the
+    reset in any case (see decision 29 for the order when the fence fails).
 24. **The orderly proof stays strict (finding 4).**
     `power_source_orderly_shutdown` and `power_source_soft_off` accept the
     orderly latch only. The forced Off goes through
@@ -377,6 +378,45 @@ findings 1–6 in the validation record):
     answering; it ends only on the user's answer, when the broker's turn
     moves to another window, or when the session ends. The automatic
     (hang-detected) dialog still closes when the program answers again.
+
+Decisions after the fourth Codex review (of `343690707`, 2026-10-26;
+findings 1–7 in the validation record):
+
+27. **The forced preparation joins nothing (finding 1).** On the forced
+    path `power_prepare` closes the observer channels only
+    (`observers_detach`); the custom and media workers are not joined, their
+    threads and resources stay as they are. The ordinary path keeps
+    `observers_close`.
+28. **A session dialog never outlives its participant (finding 2).** Every
+    path that leaves a participant (broker BEGIN/STATUS abandonment, the End
+    Task survivor, `session_finish`) dismisses the open dialog, latched or
+    not; `desk_end_task_choice` applies an answer only when the dialog's
+    participant is still the current one (Win32: `w32_pid`; native: the
+    part's window id), otherwise it is dismissed
+    (`[desktop] end task dialog stale ...`).
+29. **PCI reset first when the DMA was not proved stopped (finding 3).**
+    `power_force` runs the ATA storage fence itself (terminal, whatever the
+    platform step said); a forced restart with a failed fence uses
+    `kernel_reboot_hard_first` (the qualified 0CF9h hard PCI reset, then the
+    8042 pulse and the triple fault); with the fence proved the ordinary
+    `kernel_reboot` suffices.
+30. **A confirmed-empty ATA channel never blocks a shutdown (finding 4).**
+    `ata_power_quiesce` fences a channel without present devices through
+    `ata_channel_fence_empty`: submissions refused, NIEN, bus mastering
+    stopped or revoked, interrupt source detached, and no read of its
+    floating status (FFh is not BSY|DRQ); only a present device that cannot
+    prove itself idle fails the fence.
+31. **Suspend and terminal fencing are separate (finding 5).**
+    `power_devices_quiesce` (the platform's step, APM critical suspend)
+    stops network, audio and USB as before and never storage; ATA keeps its
+    reversible `ata_power_suspend`/`ata_power_resume` transition.
+    `power_devices_quiesce_terminal` (call 73's orderly barrier) and the
+    forced path add the ATA fence.
+32. **Modality travels with the window (finding 6).** user32 passes
+    `U32_EX_MODAL_PROMPT`, an internal creation argument, to
+    `CreateWindowExA` for a modal dialog; the window records `modal_prompt`
+    and strips the bit before anything else sees its extended style. No
+    process-global state spans the waits inside window creation.
 
 ### Not covered (gaps, owned elsewhere)
 
