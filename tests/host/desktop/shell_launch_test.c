@@ -250,6 +250,12 @@ int shell_open(const char *path, int flags, ...)
         assert(flags==(O_RDONLY|O_CLOEXEC)); POLL_OPEN(1); return MIXER_FD;
     }
 #endif
+    /* Device nodes belong to the fixture: never fall through to the host's own /dev (udev can
+     * create a real /dev/media directory, whose descriptor the fake close would then reject). */
+    if (!media_available && !strcmp(path,"/dev/media")) { errno=ENOENT; return -1; }
+#if defined(DESK_FOOTPRINT_TEST) || defined(DESK_POLL_LEDGER_TEST)
+    if (!mixer_available && !strcmp(path,"/dev/mixer")) { errno=ENOENT; return -1; }
+#endif
     if (!strcmp(path, "/dev/net")) {
         assert(flags == (O_RDONLY | O_CLOEXEC)); network_opens++;
         if (network_available) { POLL_OPEN(0); return NETWORK_FD; }
