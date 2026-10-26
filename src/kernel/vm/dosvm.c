@@ -87,7 +87,7 @@ static bool dosvm_in_irq(const struct dosvm *v)
 
 /* ---- fx-27 lean port exits ----
  * A trapped IN/OUT to a hot emulated port (the VGA register file, PIT,
- * PIC, AdLib/OPL and the DMA controllers) is the windowed VM's most frequent
+ * PIC, AdLib/OPL and the DMA controllers) is a VM's most frequent
  * exit: DOOM's Mode Y selects the plane of every column with an OUT to
  * 3C5h (about 950 per frame), Quake loads 768 DAC bytes per palette change
  * and reads the PIT and DMA counters several thousand times a second. The
@@ -110,7 +110,8 @@ static bool dosvm_in_irq(const struct dosvm *v)
 static bool lean_port(const struct dosvm *v, uint16_t port, unsigned width)
 {
     if ((port >= 0x3C0 && port <= 0x3CF) || port == 0x3D4 || port == 0x3D5 || port == 0x3DA ||
-        port == 0x3B4 || port == 0x3B5 || port == 0x3BA) return width <= 2;
+        port == 0x3B4 || port == 0x3B5 || port == 0x3BA)
+        return width <= 2 && dosvm_vga_ports_modeled(v);
     if (width != 1) return false;
     /* t23-dosperf: the Sound Blaster's own OPL3 ports (base+0..3, base+8/9)
      * reach the same dosvm_opl_io as 388h-38Bh (dosvm_sb16.c sb_io).
@@ -148,7 +149,11 @@ static bool lean_fetch(struct dosvm *v, const struct v86_frame *f, const struct 
 }
 static bool lean_before(const struct dosvm *v, const struct v86_frame *f)
 {
-    if (v->info.state >= DOSVM_STOPPING || !v->info.dos_ready || !dosvm_vga_ports_modeled(v) ||
+    /* fx-doomfs2: only VGA ports depend on display ownership. OPL, PIC,
+     * PIT, DMA and PM flags stay virtualized in a VGA full screen too;
+     * gating them on modeled VGA cost DOOM 0.8-1.3 s per 5 s under load
+     * on the T23. Keep all transition and interrupt obligations below. */
+    if (v->info.state >= DOSVM_STOPPING || !v->info.dos_ready ||
         v->fullscreen_hold || v->fullscreen_suspended || v->idle.depth || v->network_attached ||
         v->audio.sb.irq_entry_ready || v->monitor.state == V86_HALTED || g_need_resched) return false;
     if (v->dpmi.active && !dpmi_lean_eligible(v, f)) return false;
