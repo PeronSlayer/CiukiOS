@@ -104,7 +104,8 @@ class KernelLatencyTests(unittest.TestCase):
             # f1-114: an exclusively claimed ECP ISA route is masked once at admission.
             ('drivers/lpt.c', 'lpt_admit'): ['pic_mask(r->irq)'],
             ('drivers/ata.c', 'failure'): ['pic_mask(c->irq)'],
-            ('drivers/ata.c', 'ata_channel_idle'): ['pic_mask(c->irq)'],
+            # T23 c42f556e: the fence shared by ata_channel_idle and the empty-channel fence.
+            ('drivers/ata.c', 'channel_fence'): ['pic_mask(c->irq)'],
             ('drivers/ata.c', 'ata_init'): ['pic_unmask(c->irq)'],
             ('drivers/i8042.c', 'quarantine'): ['pic_mask(1)', 'pic_mask(12)'],
             ('drivers/i8042.c', 'i8042_init'): ['pic_unmask(1)', 'pic_unmask(12)'],

@@ -3,15 +3,16 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/reboot.h>
 #ifndef REBOOT_HOST
+#include <ciuki/abi.h>   /* EIO, ENOTSUP of kernel_reboot_pci_only */
 #include <ciuki/cpu.h>
 #include <ciuki/kernel.h>
 #endif
 
-static void hard_reset(const struct reboot_ops *ops, void *ctx)
+static bool hard_reset(const struct reboot_ops *ops, void *ctx)
 {
-    if (!ops->hard) return;
-    ops->hard(ctx);
+    if (!ops->hard || !ops->hard(ctx)) return false;
     for (unsigned n = 0; n < 100; n++) ops->delay(ctx);
+    return true;
 }
 static void cpu_reset(const struct reboot_ops *ops, void *ctx, bool hard_after)
 {
@@ -29,14 +30,13 @@ void reboot_sequence(const struct reboot_ops *ops, void *ctx)
     ops->disable(ctx);
     cpu_reset(ops, ctx, true);
 }
-/* Review 4, finding 3: the keyboard pulse is a CPU INIT and leaves PCI bus
- * masters running; when the device fence did not prove them stopped the
- * hard PCI reset comes first (where qualified), the CPU-only steps after. */
-void reboot_sequence_hard_first(const struct reboot_ops *ops, void *ctx)
+/* Review 4 finding 3 and review 5 finding 1: the keyboard pulse is a CPU
+ * INIT and leaves PCI bus masters running; when the device fence left DMA
+ * unresolved only the hard PCI reset (PCIRST#) may be used, and a CPU-only
+ * fallback never follows it. The caller keeps interrupts and resources. */
+bool reboot_pci_reset(const struct reboot_ops *ops, void *ctx)
 {
-    ops->disable(ctx);
-    hard_reset(ops, ctx);
-    cpu_reset(ops, ctx, false);
+    return hard_reset(ops, ctx);
 }
 #ifndef REBOOT_HOST
 static void disable(void *ctx) { (void)ctx; __asm__ volatile("cli" ::: "memory"); }
@@ -69,11 +69,12 @@ static bool intel_bridge(void)
     }
     return false;
 }
-static void hard(void *ctx)
+static bool hard(void *ctx)
 {
     (void)ctx;
-    if (!intel_bridge()) return;
+    if (!intel_bridge()) return false;
     outb(0xcf9, 0x02); delay(0); outb(0xcf9, 0x06);
+    return true;
 }
 __attribute__((noreturn)) void kernel_reboot(void)
 {
@@ -88,14 +89,16 @@ __attribute__((noreturn)) void kernel_reboot(void)
     reboot_sequence(&ops, 0);
     for (;;) __asm__ volatile("cli; hlt");
 }
-__attribute__((noreturn)) void kernel_reboot_hard_first(void)
+int kernel_reboot_pci_only(void)
 {
     static const struct reboot_ops ops = { disable, status, pulse, delay, triple, hard };
     if (serial_present()) for (unsigned n = 0; n < 10000; n++) {
         if (inb((uint16_t)g_boot.uart_base + 5) & 0x40) break;
         delay(0);
     }
-    reboot_sequence_hard_first(&ops, 0);
-    for (;;) __asm__ volatile("cli; hlt");
+    uint32_t f = irq_save();
+    bool written = reboot_pci_reset(&ops, 0);
+    irq_restore(f);
+    return written ? -EIO : -ENOTSUP;
 }
 #endif

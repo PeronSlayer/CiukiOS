@@ -45,7 +45,9 @@ int power_devices_quiesce_terminal(void) { assert(disk.stopped); net_shutdown();
 /* Review 4, findings 3-5: the forced path's own ATA storage fence (terminal), the hard-PCI-reset-first reboot. */
 static int ata_fence_result;
 int ata_power_quiesce(void) { stage('A'); return ata_fence_result; }
-__attribute__((noreturn)) void kernel_reboot_hard_first(void) { stage('H'); longjmp(reboot_return,1); }
+/* Review 5, finding 1: the PCI-only reset; -ENOTSUP without a qualified bridge, -EIO when written and not taken. */
+static int pci_reset_result;
+int kernel_reboot_pci_only(void) { stage('H'); if (!pci_reset_result) longjmp(reboot_return,1); return pci_reset_result; }
 /* fx-9b: the audio settings flush (a key-applied master to AUDIO.CFG) runs
  * before the storage flush, only while a test enables the stage. */
 static bool audio_stage;
@@ -313,9 +315,18 @@ static void test_forced(void)
      * that never completes ends at its 2 s bound and a reset still follows,
      * the hard PCI reset first since the DMA was not proved stopped (review
      * 4, finding 3); the ATA fence is still attempted. */
-    reset(); force_flushes=0; fence_steps=0; force_flush_result=-EAGAIN; fence_result=-EAGAIN; fake_ms=1000; power_running=true;
+    reset(); force_flushes=0; fence_steps=0; force_flush_result=-EAGAIN; fence_result=-EAGAIN; fake_ms=1000; power_running=true; pci_reset_result=0;
     if (!setjmp(reboot_return)) { (void)power_syscall(CIUKI_POWER_FORCE_REBOOT); assert(0); }
-    assert(!strcmp(order,"FDAH") && strstr(last,"pci-reset-first") && fake_ms>=1000+POWER_FORCE_FLUSH_MS+POWER_FORCE_QUIESCE_MS && fake_ms<1000+POWER_FORCE_FLUSH_MS+POWER_FORCE_QUIESCE_MS+40);
+    assert(!strcmp(order,"FDAH") && fake_ms>=1000+POWER_FORCE_FLUSH_MS+POWER_FORCE_QUIESCE_MS && fake_ms<1000+POWER_FORCE_FLUSH_MS+POWER_FORCE_QUIESCE_MS+40);
+    /* Review 5, finding 1: DMA unresolved and no qualified hard reset, or one
+     * that did not take: no CPU-only reset; everything kept, EBUSY, the
+     * reset-button message. */
+    reset(); force_flushes=0; fence_steps=0; fence_result=-EAGAIN; power_running=true; pci_reset_result=-ENOTSUP;
+    assert(power_syscall(CIUKI_POWER_FORCE_REBOOT)==-EBUSY && !strcmp(order,"FDAH") && strstr(last,"reset button") && strstr(last,"no qualified"));
+    assert(power_syscall(CIUKI_POWER_QUERY)&CIUKI_POWER_UNCERTAIN);
+    reset(); force_flushes=0; fence_steps=0; fence_result=-EAGAIN; power_running=true; pci_reset_result=-EIO;
+    assert(power_syscall(CIUKI_POWER_FORCE_REBOOT)==-EBUSY && !strcmp(order,"FDAH") && strstr(last,"did not take"));
+    pci_reset_result=0; fence_result=0;
     assert(force_flushes>=POWER_FORCE_FLUSH_MS/10 && force_flushes<=POWER_FORCE_FLUSH_MS/10+2);
     assert(fence_steps>=POWER_FORCE_QUIESCE_MS/10 && fence_steps<=POWER_FORCE_QUIESCE_MS/10+2);
     /* Forced off with the fence timing out: refused (EBUSY), no soft-off, no
@@ -332,9 +343,10 @@ static void test_forced(void)
     { const struct power_source_ops ops = {.soft_off=ordinary_off,.soft_off_forced=forced_off};
       assert(!power_source_reserve(POWER_SOURCE_ACPI, &ops) && !power_source_activate(POWER_SOURCE_ACPI)); }
     assert(power_syscall(CIUKI_POWER_FORCE_OFF)==-EBUSY && !strcmp(order,"FDA") && !forced_offs);
+    /* A disk proof failure alone leaves no DMA (bus masters stopped or revoked): the CPU reset is safe. */
     reset(); force_flushes=0; fence_steps=0; power_running=true;
     if (!setjmp(reboot_return)) { (void)power_syscall(CIUKI_POWER_FORCE_REBOOT); assert(0); }
-    assert(!strcmp(order,"FDAH"));
+    assert(!strcmp(order,"FDAR"));
     ata_fence_result=0;
     assert(power_syscall(CIUKI_POWER_QUERY)&CIUKI_POWER_UNCERTAIN);
     /* The fence proved every device stopped: the emergency latch (not the

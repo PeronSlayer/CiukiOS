@@ -394,12 +394,19 @@ findings 1–7 in the validation record):
     participant is still the current one (Win32: `w32_pid`; native: the
     part's window id), otherwise it is dismissed
     (`[desktop] end task dialog stale ...`).
-29. **PCI reset first when the DMA was not proved stopped (finding 3).**
-    `power_force` runs the ATA storage fence itself (terminal, whatever the
-    platform step said); a forced restart with a failed fence uses
-    `kernel_reboot_hard_first` (the qualified 0CF9h hard PCI reset, then the
-    8042 pulse and the triple fault); with the fence proved the ordinary
-    `kernel_reboot` suffices.
+29. **No CPU-only reset while DMA is unresolved (finding 3; review 5,
+    finding 1).** `power_force` runs the ATA storage fence itself
+    (terminal, whatever the platform step said); the ATA fence stops or
+    revokes every channel's bus master even when a device cannot prove
+    itself idle, so a disk proof failure leaves no DMA and `kernel_reboot`
+    (8042 pulse, triple fault) is safe. A failed or timed-out platform step
+    (network, audio, USB keep uncertain claims) leaves DMA unresolved: then
+    only the qualified 0CF9h hard PCI reset is written
+    (`kernel_reboot_pci_only`, PCIRST#); without an Intel ISA/LPC bridge,
+    or when the written reset did not take, the kernel keeps every resource
+    and returns `EBUSY` (`[power] forced reset refused: DMA unresolved ...
+    use the computer's reset button`) and the desktop shows the
+    reset-button message.
 30. **A confirmed-empty ATA channel never blocks a shutdown (finding 4).**
     `ata_power_quiesce` fences a channel without present devices through
     `ata_channel_fence_empty`: submissions refused, NIEN, bus mastering

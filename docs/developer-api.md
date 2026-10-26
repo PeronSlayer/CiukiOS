@@ -2542,6 +2542,19 @@ call.
 #define CIUKI_POWER_POLICY 6u
 #define CIUKI_POWER_EVENTS 7u
 #define CIUKI_POWER_CANCEL_STANDBY 8u
+```
+
+T23 c42f556e: the forced end of a shutdown that cannot finish (desktop
+only, after the user's explicit choice). Never waits for the orderly
+sequence, a lock or a program: at most 3 s of best-effort flush through
+the bounded suspend-flush worker, then UNCERTAIN, then reset (FORCE_REBOOT
+does not return) or the provider's soft-off (FORCE_OFF returns ENOTSUP
+without one, EIO if the machine stayed on). Allowed while an orderly
+REBOOT/OFF is still running.
+
+```c
+#define CIUKI_POWER_FORCE_REBOOT 9u
+#define CIUKI_POWER_FORCE_OFF 10u
 #define CIUKI_POWER_CAN_STANDBY 16u
 #define CIUKI_POWER_POLICY_VERSION 1u
 #define CIUKI_POWER_EVENTS_VERSION 1u
@@ -7163,6 +7176,12 @@ failed after shutdown began: retain a terminal diagnostic and require reset.
 
 G11B: CANCEL_STANDBY rejects a pending APM BIOS sleep request after an
 application veto. Desktop only, idempotent, EBUSY once sleep starts.
+
+T23 c42f556e: FORCE_REBOOT / FORCE_OFF end a shutdown that cannot finish
+(programs that do not end, a disk operation that does not return), only
+after the user chose it: a bounded best-effort flush, then reset or
+soft-off; data not yet written may be lost. Usable while an orderly
+REBOOT/OFF call is still blocked on another thread.
 
 ```c
 int ciuki_power(uint32_t action);

@@ -11,19 +11,24 @@ struct reboot_ops {
     void (*pulse)(void *);
     void (*delay)(void *);
     void (*triple)(void *);
-    /* Optional (T23 c42f556e, review 3 finding 3): a qualified hard reset
-     * (ICH/PIIX reset control register 0CF9h, full reset) tried after the
-     * 8042 pulse and before the CPU-only triple fault, on Intel ISA/LPC
-     * bridges only; NULL or unqualified: nothing. */
-    void (*hard)(void *);
+    /* Optional (T23 c42f556e, review 3 finding 3): a qualified hard PCI
+     * reset (ICH/PIIX reset control register 0CF9h: SYS_RST then RST_CPU,
+     * PCIRST# asserted; not FULL_RST) tried after the 8042 pulse and before
+     * the CPU-only triple fault, on Intel ISA/LPC bridges only. Returns
+     * whether it was written (unqualified: false, nothing written). */
+    bool (*hard)(void *);
 };
 /* Bounded even when the controller is missing or its input buffer is stuck. */
 void reboot_sequence(const struct reboot_ops *, void *);
-/* The qualified hard PCI reset first (PCIRST# stops bus masters the fence
- * could not prove stopped), then the 8042 pulse and the triple fault. */
-void reboot_sequence_hard_first(const struct reboot_ops *, void *);
+/* The qualified hard PCI reset alone (review 5, finding 1): for a forced
+ * restart whose device fence left DMA unresolved, PCIRST# is the only safe
+ * reset; the CPU-only steps are never taken. Returns false when unqualified
+ * (nothing written) and true when written but the machine is still running. */
+bool reboot_pci_reset(const struct reboot_ops *, void *);
 __attribute__((noreturn)) void kernel_reboot(void);
-__attribute__((noreturn)) void kernel_reboot_hard_first(void);
+/* -ENOTSUP without a qualified bridge, -EIO when the written reset did not
+ * take; both leave every resource as it is (the user resets the machine). */
+int kernel_reboot_pci_only(void);
 
 struct storage;
 /* Only the existing boot-volume SYSTEM/BOOT.CFG is writable through this seam.

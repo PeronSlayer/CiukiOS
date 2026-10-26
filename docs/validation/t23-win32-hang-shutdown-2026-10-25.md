@@ -410,6 +410,34 @@ bypass and no orderly FAT corruption, and left seven gaps (1 P1, 5 P2,
   passing that bit to CreateWindowEx would mark its window modal on the
   wire and lose the bit from GWL_EXSTYLE (Windows does not define it).
 
+## Sixth round: the fifth Codex review (xhigh, of `da25daf37`, 2026-10-26)
+
+No P1; review-4 findings 1, 2, 4, 5 and 6 closed. Remaining:
+
+| Finding | Fix (files) | Test |
+| --- | --- | --- |
+| **1 (P2)** a forced restart with a failed fence and no qualified hard reset (or one that did not take) still fell to the 8042/triple-fault CPU-only reset with DMA unresolved | `power.c`: the platform step's result (`devices`) decides. The ATA fence stops or revokes every channel's bus master even on a failed proof, so a disk-only failure leaves no DMA and `kernel_reboot` is used; a failed/timed-out platform step → `kernel_reboot_pci_only` (`reboot.c` `reboot_pci_reset`: the qualified 0CF9h hard PCI reset alone, never the CPU-only steps), and when it is unqualified (-ENOTSUP) or did not take (-EIO) the call returns `EBUSY` with UNCERTAIN latched and every resource kept: `[power] forced reset refused: DMA unresolved and no qualified hard reset / the hard reset did not take; use the computer's reset button`; the desktop shows "could not be restarted automatically ... power button". `hard` now returns whether it was written | `power_runtime_test.c`: platform timeout + qualified reset → `FDAH` (reset); + unqualified → `EBUSY`, "no qualified", UNCERTAIN; + reset not taken → `EBUSY`, "did not take"; disk proof failure alone → `FDAR`. `sweep_test.c`: `reboot_pci_reset` writes only the hard reset (no pulse, no triple), unqualified writes nothing |
+| **2 (P2)** `test_kernel_latency.test_pic_mask_write_sites` expected `ata_channel_idle` as the PIC mask owner | ownership tuple → `channel_fence` (the fence shared by `ata_channel_idle` and the empty-channel fence); the strict audit is unchanged | `tests.host.test_kernel_latency` whole module (results below) |
+| **3 (P3)** "full reset" in `reboot.h` | header: "hard PCI reset (SYS_RST then RST_CPU, PCIRST# asserted; not FULL_RST)" | wording |
+
+Also in this round: the canonical build of main plus this branch failed in
+`apps/tcc/build_tcc.py` ("stale developer API reference"): the new call-73
+actions changed `abi.h` without `python3 scripts/gen_api_reference.py`.
+Regenerated (`docs/developer-api.md`, +19 lines: `CIUKI_POWER_FORCE_REBOOT`
+9 and `CIUKI_POWER_FORCE_OFF` 10 with their comment); the ABI oracle rows
+for both constants were already present (`tests/host/abi_layout_test.c`,
+2940 checks PASS in the second round). No other public constant or record
+was added by these rounds.
+
+### Sixth-round results (host, systemd scope MemoryMax=3G)
+
+- `power_runtime_test` PASS (PCI-only reset scenarios); `test_sweep` 6 OK;
+  `tests.host.test_kernel_latency` whole module 15 OK (85 s).
+- Compile-only with the kernel's i686 flags: `power.c`, `reboot.c`.
+- `scripts/gen_api_reference.py` rerun: idempotent (no further change).
+- The desktop code is unchanged in this round (the fifth-round desktop
+  suite result, 224 OK, stands).
+
 ## Host tests
 
 - `tests/host/desktop/hang_close_test.h` (run by

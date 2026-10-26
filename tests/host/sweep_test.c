@@ -119,8 +119,8 @@ static void pulse(void *c) { (void)c; assert(stage==1); stage=2; }
 static void delay(void *c) { (void)c; assert(stage==1 || stage==2); delays++; }
 static void triple(void *c) { (void)c; assert(stage==(stuck ? 1u : 2u)); assert(delays>=100); stage=3; }
 /* Review 3, finding 3: the qualified hard reset follows the 8042 pulse and its settle time, before the triple fault. */
-static unsigned hards, hard_stage; static bool hard_first;
-static void hard(void *c) { (void)c; if (!hard_first) assert(stage==(stuck ? 1u : 2u) && delays>=100); hard_stage=stage; hards++; }
+static unsigned hards, hard_stage; static bool hard_first, hard_qualified=true;
+static bool hard(void *c) { (void)c; if (!hard_first) assert(stage==(stuck ? 1u : 2u) && delays>=100); hard_stage=stage; if (hard_qualified) hards++; return hard_qualified; }
 int main(void)
 {
     selection_tests(); order_tests(); operator_tests();
@@ -131,10 +131,13 @@ int main(void)
     const struct reboot_ops with_hard = {disable,status,pulse,delay,triple,hard};
     stuck=false; stage=delays=polls=0; reboot_sequence(&with_hard,0);
     assert(stage==3 && hards==1 && delays==200);   /* pulse, 100 delays, hard reset, 100 delays, triple */
-    /* Review 4, finding 3: with the DMA not proved stopped the hard PCI reset comes first, then the CPU-only steps. */
-    hard_first=true; stuck=false; stage=delays=polls=hards=0; reboot_sequence_hard_first(&with_hard,0);
-    assert(stage==3 && hards==1 && hard_stage==1 && polls==1 && delays==200);
-    hard_first=false; stage=delays=polls=hards=0; reboot_sequence_hard_first(&ops,0);   /* unqualified: the former sequence */
-    assert(stage==3 && !hards && polls==1 && delays==100);
+    /* Review 5, finding 1: with the DMA unresolved only the hard PCI reset is
+     * written, never the CPU-only steps; unqualified, nothing at all. */
+    hard_first=true; stuck=false; stage=1; delays=polls=hards=0;
+    assert(reboot_pci_reset(&with_hard,0) && hards==1 && hard_stage==1 && !polls && delays==100 && stage==1);
+    hard_qualified=false; stage=1; delays=polls=hards=0;
+    assert(!reboot_pci_reset(&with_hard,0) && !hards && !polls && !delays && stage==1);
+    assert(!reboot_pci_reset(&ops,0) && !polls && !delays);   /* no hard op: unqualified */
+    hard_qualified=true; hard_first=false;
     puts("PASS sweep: selectors, stable tables, continue after failure, F2 framing, bounded 8042/triple order");
 }

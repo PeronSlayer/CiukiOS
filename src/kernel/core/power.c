@@ -382,16 +382,30 @@ static int power_force(bool off, uint32_t pid)
         /* Review 4, finding 5: the platform step is the suspend-capable stop
          * (network, audio, USB); the ATA storage fence is terminal and runs
          * here, on the forced path only, whatever the platform step said. */
+        int devices = fence;
         int disks = ata_power_quiesce ? ata_power_quiesce() : 0;
         if (!fence) fence = disks;
-        klog("[power] forced device fence result=%d storage=%d", fence, disks);
-    }
-    power_progress |= CIUKI_POWER_UNCERTAIN;
-    if (!off) {
-        /* Review 4, finding 3: with the DMA proved stopped the 8042 pulse is
-         * enough; otherwise the hard PCI reset (PCIRST#) comes first. */
-        if (fence) { klog("[power] stage=forced-reset order=pci-reset-first fence=%d", fence); kernel_reboot_hard_first(); }
-        klog("[power] stage=forced-reset fallback=8042-triple-fault"); kernel_reboot();
+        klog("[power] forced device fence result=%d devices=%d storage=%d", fence, devices, disks);
+        power_progress |= CIUKI_POWER_UNCERTAIN;
+        if (!off) {
+            /* Review 4 finding 3 and review 5 finding 1: the 8042 pulse and
+             * the triple fault are a CPU INIT that leaves bus masters running.
+             * The ATA fence stops or revokes every channel's bus master even
+             * when a device cannot prove itself idle, so a failed disk proof
+             * leaves no DMA; a failed or timed-out platform step (network,
+             * audio, USB keep their uncertain claims) does. Then only the
+             * qualified hard PCI reset (PCIRST#) may be written; without one,
+             * or when it did not take, everything is kept and the user resets
+             * the machine (the desktop shows the reset-button message). */
+            if (devices) {
+                klog("[power] stage=forced-reset order=pci-reset-only devices=%d", devices);
+                int e = kernel_reboot_pci_only();
+                klog("[power] forced reset refused: DMA unresolved and %s; use the computer's reset button",
+                     e == -ENOTSUP ? "no qualified hard reset" : "the hard reset did not take");
+                return -EBUSY;
+            }
+            klog("[power] stage=forced-reset fallback=8042-triple-fault"); kernel_reboot();
+        }
     }
     if (!power_source_can_off()) { klog("[power] forced off: no soft-off provider"); return -ENOTSUP; }
     if (fence) { klog("[power] forced off refused: devices not quiescent (error %d); turn the computer off with its power button", fence); return -EBUSY; }
