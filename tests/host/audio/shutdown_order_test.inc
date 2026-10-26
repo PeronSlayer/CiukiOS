@@ -14,6 +14,8 @@ int net_power_quiesce(void)
     strcat(quiesce_order,"N"); return 0;
 }
 int usb_power_quiesce(void) { strcat(quiesce_order,"U"); return 0; }
+/* ATA fencing belongs to the storage driver, outside this audio fixture. */
+int ata_power_quiesce(void) { return 0; }
 /* Reversible sleep of the other device owners is outside this shutdown
  * fixture. Instrumentation retains these references even in an S5 replay. */
 bool net_power_resume_ready(void) { return false; }
