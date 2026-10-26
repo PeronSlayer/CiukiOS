@@ -137,11 +137,32 @@ static int fresh_clients(void)
     if (records<0 || (uint32_t)records!=snapshot.system.records || snapshot.system.records>CIUKI_PROCESS_MAX) return 0;
     return desk_w32_fresh_clients(&snapshot.system,snapshot.records,(uint32_t)getpid());
 }
+static pthread_mutex_t profile_lock=PTHREAD_MUTEX_INITIALIZER;
+static char session_user[32],session_root[128];
+uint32_t desk_w32_profile_exchange(const char *name,const char *root,const void *wire,uint32_t bytes,
+                                  struct w32r_reply *reply,uint32_t *used)
+{
+    pthread_mutex_lock(&profile_lock);
+    uint32_t e=desk_w32_exchange(wire,bytes,reply,sizeof(*reply),used);
+    if (!e && (*used!=sizeof(*reply) || reply->version!=W32R_VERSION || reply->data_bytes || reply->name_bytes)) e=13;
+    if (!e && !reply->error) {
+        snprintf(session_user,sizeof(session_user),"%s",name);
+        snprintf(session_root,sizeof(session_root),"%s",root);
+    }
+    pthread_mutex_unlock(&profile_lock);
+    return e;
+}
 static int spawn_service(void *ctx)
 {
     (void)ctx;char *argv[]={"/System/Win32/w32srv",fresh_clients()?"--fresh-clients":NULL,NULL};
-    char *env[]={"LC_ALL=C","PATH=/Programs",NULL};
-    int pid=ciuki_spawn(argv[0],argv,env,NULL,0,0);return pid<0 ? -errno : pid;
+    char user_env[64],root_env[160];
+    pthread_mutex_lock(&profile_lock);
+    snprintf(user_env,sizeof(user_env),"CIUKI_SESSION_USER=%s",session_user);
+    snprintf(root_env,sizeof(root_env),"CIUKI_SESSION_ROOT=%s",session_root);
+    char *env[]={"LC_ALL=C","PATH=/Programs",user_env,root_env,NULL};
+    int pid=ciuki_spawn(argv[0],argv,env,NULL,0,0);
+    pthread_mutex_unlock(&profile_lock);
+    return pid<0 ? -errno : pid;
 }
 static void record_service(void *ctx,const char *event,int pid,uint64_t elapsed)
 {(void)ctx;fprintf(stderr,"%s pid=%d elapsed_ms=%llu\n",event,pid,(unsigned long long)(elapsed/1000000));}

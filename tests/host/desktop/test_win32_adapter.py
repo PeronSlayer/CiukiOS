@@ -90,3 +90,19 @@ class Win32AdapterTests(unittest.TestCase):
         result=subprocess.run([binary],env=env,capture_output=True,text=True,timeout=10)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         (ROOT/'build/codex/f5-09b-native-lifecycle.log').write_text(result.stdout+result.stderr)
+
+    def test_profile_publication_serializes_restart_snapshot(self):
+        work=ROOT/'build/host/desktop-win32';work.mkdir(parents=True,exist_ok=True)
+        binary=work/'profile-restart-test'
+        sources=['tests/host/desktop/profile_restart_test.c','apps/desktop/win32_registry.c',
+                 'apps/desktop/win32_restart.c','apps/desktop/win32_service.c',
+                 'apps/desktop/win32_launch.c','apps/desktop/protocol.c']
+        subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror','-D_POSIX_C_SOURCE=200809L',
+                        '-include',str(ROOT/'tests/host/desktop/replay_base.h'),'-fsanitize=address,undefined',
+                        '-fno-sanitize-recover=undefined','-ffunction-sections','-fdata-sections','-Wl,--gc-sections',
+                        '-I'+str(ROOT/'apps/desktop'),'-I'+str(ROOT/'src/kernel/include'),
+                        '-I'+str(ROOT/'sdk/win32/include'),'-idirafter',str(ROOT/'sdk/sysroot-overlay/include'),
+                        *(str(ROOT/s) for s in sources),'-pthread','-o',str(binary)],check=True)
+        result=subprocess.run([binary],capture_output=True,text=True,timeout=15)
+        print(result.stdout,end='')
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)

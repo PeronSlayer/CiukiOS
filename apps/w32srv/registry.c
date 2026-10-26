@@ -2,6 +2,7 @@
  * Copyright 2026 CiukiOS contributors. Single-threaded authenticated owner. */
 #define _POSIX_C_SOURCE 200809L
 #include "registry.h"
+#include "../desktop/session_profile.h"
 #include <stdlib.h>
 #include <string.h>
 #include "../../sdk/libreg/casefold.h"
@@ -352,6 +353,12 @@ uint32_t wr_dispatch(struct wr_server *s, uint32_t pid, const void *input, size_
     const void *data = name + a.name_bytes;
     if (path[a.path_bytes - 1] || name[a.name_bytes - 1] ||
         memchr(path, 0, a.path_bytes - 1) || memchr(name, 0, a.name_bytes - 1) || !wr_name(name)) { r.error = 87; goto done; }
+    if (a.op==DESK_W32_PROFILE) {
+        if (pid!=s->compat_writer_pid) r.error=5;
+        else if (a.key || a.index || a.type || a.access || a.flags || a.data_bytes) r.error=87;
+        else r.error=wr_select_profile(s,name,path);
+        goto done;
+    }
     if(a.op==W32R_COMPAT){
         struct wr_key *k=s->roots[0];
         const char *parts[]={"Software","CiukiOS","Win32","AppCompat"};
@@ -394,8 +401,10 @@ uint32_t wr_dispatch(struct wr_server *s, uint32_t pid, const void *input, size_
         r.error = wr_directory_call(s, pid, &a, name, data, &r, bytes); goto done;
     }
     if (a.op == W32R_USERNAME) {
-        if (cap < sizeof(r) + 6) { r.error = 87; goto done; }
-        memcpy(bytes, "Ciuki", 6); r.data_bytes = 6; goto done;
+        if (!s->user_name[0]) { r.error=1245; goto done; } /* ERROR_NOT_LOGGED_ON, Windows 9x */
+        size_t len=strlen(s->user_name)+1;
+        if (cap < sizeof(r)+len) { r.error=87; goto done; }
+        memcpy(bytes,s->user_name,len); r.data_bytes=(uint32_t)len; goto done;
     }
     struct wr_key *k = NULL;
     uint32_t required = a.op == W32R_SET || a.op == W32R_DELETE_VALUE ? 2 :

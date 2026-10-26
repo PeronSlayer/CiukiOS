@@ -110,16 +110,17 @@ static int parse(struct wr_server *s,unsigned h,const uint8_t *text,size_t n)
     char *path=malloc(W32R_PATH);if(!path)return 0;
     int ok=parse_body(s,h,text,n,path);free(path);return ok;
 }
-static void filename(char *out,size_t cap,unsigned h,unsigned slot)
+static void filename(struct wr_server *s,char *out,size_t cap,unsigned h,unsigned slot)
 {
-    snprintf(out,cap,"%s.CRG.%u",h?"USER":"SYSTEM",slot);
+    snprintf(out,cap,"%s%s%s.CRG.%u",h && s->user_path[0] ? s->user_path : "",
+        h && s->user_path[0] ? "/" : "",h?"USER":"SYSTEM",slot);
 }
 uint32_t wr_commit(struct wr_server *s,unsigned h)
 {
     struct wr_hive *v=&s->hive[h];if(!v->dirty)return 0;
     if(v->sequence>=UINT64_MAX-1)return 1016;
     size_t n;uint8_t *b=serialise(s,h,&n);if(!b)return 8;
-    char name[32];unsigned slot=v->sequence ? 1-v->slot : 0;filename(name,sizeof(name),h,slot);
+    char name[160];unsigned slot=v->sequence ? 1-v->slot : 0;filename(s,name,sizeof(name),h,slot);
     uint8_t mark[4];put32(mark,COMMITTED);
     int ok=!s->io.write(s->io.opaque,name,b,n) && !s->io.sync(s->io.opaque,name) &&
            !s->io.patch(s->io.opaque,name,32,mark,4) && !s->io.sync(s->io.opaque,name);
@@ -127,13 +128,13 @@ uint32_t wr_commit(struct wr_server *s,unsigned h)
     if(!ok){s->io.log(s->io.opaque,"[win32] registry commit-failed");return 1016;}
     v->sequence++;v->slot=slot;v->dirty=0;return 0;
 }
-int wr_load(struct wr_server *s)
+int wr_load_hive(struct wr_server *s,unsigned h)
 {
-    for(unsigned h=0;h<2;h++) {
+    {
         uint8_t *b[2]={NULL,NULL};size_t n[2]={0,0};uint64_t seq[2]={0,0};int status[2],ok[2]={0,0};
         struct wr_server candidate[2];memset(candidate,0,sizeof(candidate));
         for(unsigned i=0;i<2;i++) {
-            char name[32];filename(name,sizeof(name),h,i);status[i]=s->io.read(s->io.opaque,name,&b[i],&n[i]);
+            char name[160];filename(s,name,sizeof(name),h,i);status[i]=s->io.read(s->io.opaque,name,&b[i],&n[i]);
             if(status[i]<0){free(b[0]);free(b[1]);wr_destroy(&candidate[0]);wr_destroy(&candidate[1]);return 0;}
             if(status[i]>0 && valid(b[i],n[i],h,&seq[i]))ok[i]=parse(&candidate[i],h,b[i]+HEADER,n[i]-HEADER);
         }
@@ -149,6 +150,95 @@ int wr_load(struct wr_server *s)
         }
         free(b[0]);free(b[1]);wr_destroy(&candidate[0]);wr_destroy(&candidate[1]);
     }
+    return 1;
+}
+int wr_load(struct wr_server *s)
+{
+    for (unsigned h=0;h<2;h++) if (!wr_load_hive(s,h)) return 0;
     s->roots[2]=wr_add_key(s,NULL,"HKCC",2);s->roots[3]=wr_add_key(s,NULL,"HKDD",3);
     return s->roots[2] && s->roots[3] && wr_defaults(s,640,480,16);
+}
+
+/* Load and validate the new hive before replacing any active identity.
+ * A profile change is a G3 boundary: all announced Win32 programs end first. */
+static int profile_name(const char *s)
+{
+    size_t n=strlen(s); if (n>=32) return 0;
+    for (size_t i=0;i<n;i++) if (!((s[i]>='a' && s[i]<='z') ||
+        (s[i]>='A' && s[i]<='Z') || (s[i]>='0' && s[i]<='9') || s[i]=='_' || s[i]=='-')) return 0;
+    return 1;
+}
+static struct wr_key *profile_key(struct wr_server *s,const char *path)
+{
+    struct wr_key *k=s->roots[1]; char part[256];
+    while (*path) {
+        const char *end=strchr(path,'\\'); size_t n=end ? (size_t)(end-path) : strlen(path);
+        if (!n || n>=sizeof(part)) return NULL;
+        memcpy(part,path,n); part[n]=0;
+        struct wr_key *next=wr_child(s,k,part);
+        k=next ? next : wr_add_key(s,k,part,1); if (!k) return NULL;
+        if (!end) break; path=end+1;
+    }
+    return k;
+}
+static uint32_t profile_folders(struct wr_server *s,const char *root)
+{
+    static const char *const names[]={"Personal","Desktop","Programs","Start Menu","Favorites", "AppData","Recent","SendTo","Templates","Startup"};
+    static const char *const suffix[]={"Documents","Documents/Desktop","Start Menu/Programs","Start Menu","Favorites", "Application Data","Recent","SendTo","Templates","Start Menu/Programs/StartUp"};
+    for (unsigned u=0;u<2;u++) {
+        struct wr_key *k=profile_key(s,u ? ".DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders" :
+            ".DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders");
+        if (!k) return 8;
+        for (unsigned i=0;i<sizeof(names)/sizeof(*names);i++) {
+            char path[260]; uint8_t wide[520];
+            if (*root) snprintf(path,sizeof(path),"C:%s/%s",root,suffix[i]);
+            else if (i==0) snprintf(path,sizeof(path),"C:/Documents");
+            else if (i==1) snprintf(path,sizeof(path),"C:/WINDOWS/Desktop");
+            else snprintf(path,sizeof(path),"C:/WINDOWS/%s",suffix[i]);
+            size_t n=strlen(path)+1;
+            for (size_t b=0;b<n;b++) { wide[b*2]=(uint8_t)(path[b]=='/' ? '\\' : path[b]); wide[b*2+1]=0; }
+            uint32_t e=wr_put(s,k,names[i],1,wide,(uint32_t)n*2); if (e) return e;
+        }
+    }
+    return 0;
+}
+uint32_t wr_select_profile(struct wr_server *s,const char *name,const char *root)
+{
+    static const char prefix[]="/Windows/Profiles/u";
+    if (!profile_name(name) || strlen(root)>=sizeof(s->user_path)) return 87;
+    if (*root) {
+        if (!*name || strncmp(root,prefix,sizeof(prefix)-1) || strlen(root)!=sizeof(prefix)-1+8) return 87;
+        for (const char *p=root+sizeof(prefix)-1;*p;p++) if (!((*p>='0' && *p<='9') || (*p>='a' && *p<='f') || (*p>='A' && *p<='F'))) return 87;
+    }
+    if (!strcmp(s->user_name,name) && !strcmp(s->user_path,root)) return 0;
+    if (s->live_count || s->handles || s->profile_owner) return 170;
+    uint32_t e=wr_flush(s); if (e) return e;
+    struct wr_server *c=calloc(1,sizeof(*c)); if (!c) return 8;
+    c->io=s->io; c->now=s->now; strcpy(c->user_path,root);
+    if (!wr_load_hive(c,1)) { wr_destroy(c); free(c); return 1016; }
+    int created=!c->hive[1].sequence;
+    if (*root && created) {
+        /* No profile slots: discard its empty root and copy the default hive.
+         * Corrupt existing slots fail above and are never replaced by defaults. */
+        wr_destroy(c); c->io=s->io; c->now=s->now;
+        if (!wr_load_hive(c,1)) { wr_destroy(c); free(c); return 1016; }
+        strcpy(c->user_path,root); c->hive[1].sequence=0; c->hive[1].slot=0; c->hive[1].dirty=1;
+    }
+    e=created ? profile_folders(c,root) : 0;
+    if (!e) e=wr_commit(c,1);
+    if (e) { wr_destroy(c); free(c); return e; }
+    struct wr_key **at=&s->keys;
+    while (*at) {
+        struct wr_key *k=*at;
+        if (k->hive!=1) { at=&k->next; continue; }
+        *at=k->next;
+        while (k->values) { struct wr_value *v=k->values; k->values=v->next; free(v->name); free(v->data); free(v); }
+        free(k->name); free(k);
+    }
+    *at=c->keys; c->keys=NULL;
+    s->roots[1]=c->roots[1]; s->hive[1]=c->hive[1];
+    strcpy(s->user_path,root); strcpy(s->user_name,name);
+    free(c);
+    if (s->shell_profile) s->shell_profile(s->shell,root);
+    return 0;
 }

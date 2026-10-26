@@ -295,7 +295,7 @@ static void power_policy_page(void)
     assert(saves==5 && !strstr(saved,"Presentation") && strstr(saved,"power_scheme=auto\n"));
     /* Advanced: the meter, the password (G32), the button; no lid on a desktop with unknown lid. */
     power_emit(DU_EV_SELECT,PW_TABS,2,NULL);
-    assert(du_get(&u,PW_SHOW_METER)->value && du_get(&u,PW_PASSWORD)->disabled && !du_get(&u,PW_LID));
+    assert(du_get(&u,PW_SHOW_METER)->value && !du_get(&u,PW_PASSWORD)->disabled && !du_get(&u,PW_LID));
     at_click_widget(&u,PW_BUTTON); assert(u.popup_count==1 && popup_has("Shut down")); du_menu_close(&u);
     at_click_widget(&u,PW_SHOW_METER); assert(saves==6 && strstr(saved,"power_meter=0\n"));
     cp_detach(&a);
@@ -313,6 +313,9 @@ static void power_policy_page(void)
     assert(strstr(saved,"power_alarm_low=1,2,0,1,0,0\n") && strstr(saved,"power_alarm_critical=1,1,1,1,2,0\n"));
     assert(du_get(&u,PW_CRIT_LEVEL)->value==1);   /* critical moved below low */
     power_emit(DU_EV_SELECT,PW_TABS,3,NULL);
+    assert(!du_get(&u,PW_PASSWORD)->disabled);
+    at_click_widget(&u,PW_PASSWORD); assert(strstr(saved,"power_password=1\n"));
+    at_click_widget(&u,PW_PASSWORD); assert(strstr(saved,"power_password=0\n"));
     at_click_widget(&u,PW_BUTTON); assert(u.popup_count==2); power_pick("Stand by"); assert(strstr(saved,"power_button=standby\n"));
     at_click_widget(&u,PW_LID); assert(u.popup_count==3); power_pick("Stand by"); assert(strstr(saved,"power_lid=standby\n"));
     assert(!strcmp(du_get(&u,PW_ADV_NOTE)->text,"This computer can stand by."));
@@ -395,6 +398,14 @@ static void users_controls(void)
     user_error=-EACCES; cp_tick(&a); assert(!a.user_busy && strstr(du_get(&u,1612)->text,"incorrect")); user_error=0;
     at_click_widget(&u,1614); assert(user_pending.operation==USERS_READ); cp_tick(&a); assert(!a.user_busy);
     cp_detach(&a);
+    attach(CP_HOME); a.host.user_begin=user_begin; a.host.user_poll=user_poll;
+    cp_open(&a,CP_DISPLAY); a.display_tab=CP_SCREEN_SAVER;
+    struct du_event tab={.type=DU_EV_SELECT,.id=CP_DISPLAY_TABS_ID,.index=CP_SCREEN_SAVER};
+    u.event(&u,&tab,u.user); cp_tick(&a);
+    assert(du_get(&u,CP_SAVER_PASSWORD) && !du_get(&u,CP_SAVER_PASSWORD)->disabled);
+    at_click_widget(&u,CP_SAVER_PASSWORD);
+    assert(user_pending.operation==USERS_POLICY && user_pending.flags==(USERS_LOGON|USERS_PROFILES));
+    cp_tick(&a); cp_detach(&a);
     if (previous) { assert(!setenv("USER",previous,1)); free(previous); } else unsetenv("USER");
     puts("PASS G32 Users and Passwords: list, masked secret canvases, create, delete Cancel, options, old/new/confirm, asynchronous failure");
 }

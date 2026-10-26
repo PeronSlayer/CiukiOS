@@ -327,8 +327,10 @@ int storage_add_disk(struct storage *s, unsigned disk, struct blkdev *dev)
         }
         if (!e && boot && s==&system_storage && blackbox_bind)
             blackbox_bind(dev,part->start,part->count,blackbox_serial_replay);
-        if (!e && boot && s==&system_storage && bootstat_bind && v->fat.type==32)
-            (void)bootstat_bind(dev,part->start,part->count);
+        if (!e && boot && s==&system_storage && bootstat_bind && v->fat.type==32) {
+            int status=bootstat_bind(dev,part->start,part->count);
+            if (status) klog("[bootstat] unavailable error=%d",status);
+        }
         v->writes_before_gate = v->writes;
         if (!e) {
             v->read_gate = !(v->fat.ro_reasons & ~(FAT_RO_REQUEST | FAT_RO_DURABILITY | FAT_RO_DIRTY | FAT_RO_LOST | FAT_RO_IO_FLAG));

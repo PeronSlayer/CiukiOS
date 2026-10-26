@@ -443,3 +443,23 @@ window id and generation keep replies bound to that native window.
 explicit dequeue/decision replies. The bridge never acknowledges a power
 query from an I/O thread implicitly; the owning UI decides, just as for
 its explicit PONG. Win32 windows continue using WM_POWERBROADCAST.
+
+### g32b: password on resume (2026-10-26)
+
+The Advanced password checkbox now saves `power_password` through the existing
+scheme/settings writer. A named profile uses its local password gate when a
+successful Stand by call returns or a cached firmware resume counter advances.
+The first counter snapshot is historical and does not lock. This option is
+independent of the saver checkbox; default-profile sessions never prompt.
+
+Resource Kit chapter 30, `wrkc30_4.htm`, was reread: Advanced's standby option
+uses the screen saver password. CiukiOS routes it to the G32 local profile gate.
+To avoid waking a previous framebuffer, the desktop paints the opaque gate
+after suspend consent and before calling firmware, including when the monitor
+is already off. Failed entry restores the prior unlocked state; an existing
+lock remains locked. Resume restarts idle timing and preserves G11 broadcasts.
+`tests/host/desktop/window_model_test.c` row 109 exercises the real notification
+and standby paths; Control Panel and power-policy tests cover persistence.
+Host assertions do not qualify firmware sleep/resume or physical scanout.
+See `users-and-logon.md` g32b and `build/codex/g32b-report.md` for exact commands,
+LeakSanitizer limitations and the lead's outstanding guest checklist.

@@ -2,6 +2,7 @@
  * Production server and public API tests. No guest or image construction. */
 #define _POSIX_C_SOURCE 200809L
 #include "../../../apps/w32srv/registry.h"
+#include "../../../apps/desktop/session_profile.h"
 #include "../../../sdk/win32/services/files.h"
 #include <assert.h>
 #include <errno.h>
@@ -14,22 +15,22 @@
 #include <unistd.h>
 #define CHECK(x) do { checks++; if(!(x)){fprintf(stderr,"%s:%d: %s\n",__FILE__,__LINE__,#x);abort();} } while(0)
 static unsigned checks;
-struct file {char name[32];uint8_t *data;size_t n;};
-struct disk {struct file f[6];int event,fail;size_t cut;unsigned logs;};
+struct file {char name[160];uint8_t *data;size_t n;};
+struct disk {struct file f[16];int event,fail;size_t cut;unsigned logs;};
 static struct file *file(struct disk *d,const char *name)
 {
-    struct file *empty=NULL;for(unsigned i=0;i<6;i++){if(!strcmp(d->f[i].name,name))return &d->f[i];if(!d->f[i].name[0])empty=&d->f[i];}
+    struct file *empty=NULL;for(unsigned i=0;i<16;i++){if(!strcmp(d->f[i].name,name))return &d->f[i];if(!d->f[i].name[0])empty=&d->f[i];}
     CHECK(empty);snprintf(empty->name,sizeof(empty->name),"%s",name);return empty;
 }
-static void clear(struct disk *d){for(unsigned i=0;i<6;i++)free(d->f[i].data);memset(d,0,sizeof(*d));}
+static void clear(struct disk *d){for(unsigned i=0;i<16;i++)free(d->f[i].data);memset(d,0,sizeof(*d));}
 static void clone(struct disk *out,const struct disk *in)
 {
-    memset(out,0,sizeof(*out));for(unsigned i=0;i<6;i++)if(in->f[i].name[0]){
+    memset(out,0,sizeof(*out));for(unsigned i=0;i<16;i++)if(in->f[i].name[0]){
         struct file *f=&out->f[i];*f=in->f[i];f->data=malloc(f->n?f->n:1);CHECK(f->data);if(f->n)memcpy(f->data,in->f[i].data,f->n);}
 }
 static int read_memory(void *o,const char *name,uint8_t **out,size_t *n)
 {
-    struct disk *d=o;for(unsigned i=0;i<6;i++)if(!strcmp(d->f[i].name,name)){
+    struct disk *d=o;for(unsigned i=0;i<16;i++)if(!strcmp(d->f[i].name,name)){
         *n=d->f[i].n;*out=malloc(*n?*n:1);CHECK(*out);if(*n)memcpy(*out,d->f[i].data,*n);return 1;}
     return 0;
 }
@@ -53,7 +54,7 @@ static uint8_t result[W32R_MAX];
 static uint32_t rpc(struct wr_server *s,uint32_t pid,unsigned op,uint32_t key,const char *path,const char *name,unsigned type,const void *data,uint32_t n,uint32_t index)
 {
     uint8_t input[W32R_MAX];struct w32r_request a={1,op,key,index,type,0xf003f,0,(uint32_t)strlen(path)+1,(uint32_t)strlen(name)+1,n};
-    if (op==W32R_PROFILE_ACQUIRE || op==W32R_PROFILE_RELEASE) a.access=0;
+    if (op==W32R_PROFILE_ACQUIRE || op==W32R_PROFILE_RELEASE || op==DESK_W32_PROFILE) a.access=0;
     memcpy(input,&a,40);memcpy(input+40,path,a.path_bytes);memcpy(input+40+a.path_bytes,name,a.name_bytes);if(n)memcpy(input+40+a.path_bytes+a.name_bytes,data,n);
     size_t used;CHECK(!wr_dispatch(s,pid,input,40+a.path_bytes+a.name_bytes+n,result,sizeof(result),&used));memcpy(&r,result,40);return r.error;
 }
@@ -145,6 +146,7 @@ static void basics(void)
     CHECK(RegDeleteValueA(W32R_HKLM,"missing")==2);
     uint32_t cc;CHECK(!RegOpenKeyExA(W32R_HKCC,"Display\\Settings",0,0xf003f,&cc));size=4;CHECK(!RegQueryValueExA(cc,"BitsPerPixel",NULL,&type,out,&size));CHECK(type==4&&out[0]==16);
     CHECK(RegSetValueExA(cc,"BitsPerPixel",0,4,out,4)==5);CHECK(!RegCloseKey(cc));CHECK(!RegCloseKey(W32R_HKDD));
+    strcpy(s.user_name,"Ciuki");
     char user[6];count=1;CHECK(!GetUserNameA(user,&count)&&count==6&&last_error==122);count=6;CHECK(GetUserNameA(user,&count)&&!strcmp(user,"Ciuki"));
     uint32_t cu,alias;CHECK(!RegCreateKeyA(W32R_HKCU,"Example",&cu));CHECK(!RegOpenKeyExA(W32R_HKU,".DEFAULT\\example",0,1,&alias));CHECK(!RegCloseKey(alias));CHECK(!RegCloseKey(cu));
     CHECK(!RegCreateKeyA(W32R_HKLM,"CrossEncoding",&cu));
@@ -501,6 +503,7 @@ static void upper_registry(void)
     uint32_t subs=0,vals=0;CHECK(!RegQueryInfoKeyW(w,NULL,NULL,NULL,&subs,NULL,NULL,&vals,NULL,NULL,NULL,NULL)&&subs==1&&vals==1);
     count=32;uint32_t vtype=0;CHECK(!RegEnumValueW(w,0,name,&count,NULL,&vtype,NULL,NULL)&&weq(name,"v")&&vtype==1);
     CHECK(!RegDeleteValueW(w,L16("v"))&&RegDeleteValueW(w,L16("v"))==2);CHECK(!RegCloseKey(w));
+    strcpy(s.user_name,"Ciuki");
     WCHAR user[16];uint32_t user_size=16;CHECK(GetUserNameW(user,&user_size)&&user_size==6);user_size=1;
     CHECK(!GetUserNameW(user,&user_size)&&user_size==6&&last_error==122);
     forgotten=0;CHECK(!RegCloseKey(k)&&forgotten==1);CHECK(RegCloseKey(k)==6&&forgotten==1);
@@ -605,10 +608,102 @@ static void handle_deletion(void)
     wr_destroy(&s);clear(&d);
     puts("PASS f5-20B NtDeleteKey by handle: DELETE access, subtree, ERROR_KEY_DELETED, roots and compatibility tree refused");
 }
+static void user_profiles(void)
+{
+    struct disk d={0}; struct wr_server s; start(&s,&d); s.compat_writer_pid=99;
+    uint32_t n=32; char name[32]="unchanged";
+    CHECK(!GetUserNameA(name,&n) && last_error==1245 && !strcmp(name,"unchanged"));
+    CHECK(!rpc(&s,10,W32R_CREATE,W32R_HKCU,"Seed","",0,NULL,0,0)); uint32_t key=r.key;
+    CHECK(!rpc(&s,10,W32R_SET,key,"","Marker",3,"default",8,0));
+    CHECK(!rpc(&s,10,W32R_CLOSE,key,"","",0,NULL,0,0));
+    CHECK(rpc(&s,10,DESK_W32_PROFILE,0,"/Windows/Profiles/u00000001","Alice",0,NULL,0,0)==5);
+    CHECK(rpc(&s,99,DESK_W32_PROFILE,0,"/Windows/Profiles/../bad","Alice",0,NULL,0,0)==87);
+    CHECK(!rpc(&s,99,DESK_W32_PROFILE,0,"/Windows/Profiles/u00000001","Alice",0,NULL,0,0));
+    n=1; CHECK(!GetUserNameA(name,&n) && n==6 && last_error==122);
+    n=sizeof(name); CHECK(GetUserNameA(name,&n) && n==6 && !strcmp(name,"Alice"));
+    CHECK(!rpc(&s,10,W32R_OPEN,W32R_HKCU,"Seed","",0,NULL,0,0)); key=r.key;
+    CHECK(!get(&s,key,"Marker") && r.data_bytes==8 && !memcmp(result+40,"default",8));
+    CHECK(!rpc(&s,10,W32R_SET,key,"","Marker",3,"alice",6,0));
+    CHECK(!rpc(&s,10,W32R_CLOSE,key,"","",0,NULL,0,0));
+    CHECK(!wr_client_join(&s,10));
+    CHECK(rpc(&s,99,DESK_W32_PROFILE,0,"/Windows/Profiles/u00000002","Bob",0,NULL,0,0)==170);
+    n=sizeof(name);CHECK(GetUserNameA(name,&n) && !strcmp(name,"Alice"));
+    CHECK(!wr_exit(&s,10));
+    CHECK(!rpc(&s,99,DESK_W32_PROFILE,0,"/Windows/Profiles/u00000002","Bob",0,NULL,0,0));
+    CHECK(!rpc(&s,10,W32R_OPEN,W32R_HKCU,"Seed","",0,NULL,0,0)); key=r.key;
+    CHECK(!get(&s,key,"Marker") && !memcmp(result+40,"default",8));
+    CHECK(!rpc(&s,10,W32R_CLOSE,key,"","",0,NULL,0,0));
+    CHECK(!wr_flush(&s)); wr_destroy(&s); start(&s,&d); s.compat_writer_pid=99;
+    CHECK(!wr_select_profile(&s,"Alice","/Windows/Profiles/u00000001"));
+    CHECK(!rpc(&s,10,W32R_OPEN,W32R_HKCU,"Seed","",0,NULL,0,0)); key=r.key;
+    CHECK(!get(&s,key,"Marker") && r.data_bytes==6 && !memcmp(result+40,"alice",6));
+    CHECK(!rpc(&s,10,W32R_CLOSE,key,"","",0,NULL,0,0));
+    const char *names[]={"Personal","Desktop","Programs","Start Menu","Favorites","AppData","Recent","SendTo","Templates"};
+    const char *suffix[]={"Documents","Documents\\Desktop","Start Menu\\Programs","Start Menu","Favorites","Application Data","Recent","SendTo","Templates"};
+    for (unsigned u=0;u<2;u++) {
+        char path[160];snprintf(path,sizeof(path),"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\%sShell Folders",u ? "User " : "");
+        CHECK(!rpc(&s,10,W32R_OPEN,W32R_HKCU,path,"",0,NULL,0,0));key=r.key;
+        for (unsigned i=0;i<9;i++) {
+            CHECK(!get(&s,key,names[i]) && r.type==1);
+            char expected[260];snprintf(expected,sizeof(expected),"C:\\Windows\\Profiles\\u00000001\\%s",suffix[i]);
+            CHECK(r.data_bytes==(strlen(expected)+1)*2);
+            for (unsigned b=0;b<r.data_bytes/2;b++) CHECK(result[40+b*2]==(uint8_t)expected[b] && !result[41+b*2]);
+        }
+        CHECK(!rpc(&s,10,W32R_CLOSE,key,"","",0,NULL,0,0));
+    }
+    CHECK(!wr_select_profile(&s,"",""));n=sizeof(name);CHECK(!GetUserNameA(name,&n) && last_error==1245);
+    CHECK(!rpc(&s,10,W32R_OPEN,W32R_HKCU,"Seed","",0,NULL,0,0));key=r.key;
+    CHECK(!get(&s,key,"Marker") && !memcmp(result+40,"default",8));
+    CHECK(!rpc(&s,10,W32R_CLOSE,key,"","",0,NULL,0,0));
+    /* Redirect one family and delete a value/the other family. Both logon
+     * selection and a server restart must preserve application edits. */
+    CHECK(!wr_select_profile(&s,"Alice","/Windows/Profiles/u00000001"));
+    const char *folder_key="Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders";
+    CHECK(!rpc(&s,10,W32R_OPEN,W32R_HKCU,folder_key,"",0,NULL,0,0));key=r.key;
+    const char redirect[]="C:\\Windows\\Profiles\\u00000001\\Redirected";
+    uint8_t redirected[sizeof(redirect)*2];
+    for(unsigned i=0;i<sizeof(redirect);i++){redirected[i*2]=(uint8_t)redirect[i];redirected[i*2+1]=0;}
+    CHECK(!rpc(&s,10,W32R_SET,key,"","Personal",1,redirected,sizeof(redirected),0));
+    CHECK(!rpc(&s,10,W32R_DELETE_VALUE,key,"","Favorites",0,NULL,0,0));
+    CHECK(!rpc(&s,10,W32R_CLOSE,key,"","",0,NULL,0,0));
+    const char *user_key="Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders";
+    CHECK(!rpc(&s,10,W32R_DELETE_KEY,W32R_HKCU,user_key,"",0,NULL,0,0));
+    for(unsigned restart=0;restart<2;restart++) {
+        CHECK(!wr_select_profile(&s,"",""));
+        if(restart){wr_destroy(&s);start(&s,&d);s.compat_writer_pid=99;}
+        CHECK(!wr_select_profile(&s,"Alice","/Windows/Profiles/u00000001"));
+        CHECK(!rpc(&s,10,W32R_OPEN,W32R_HKCU,folder_key,"",0,NULL,0,0));key=r.key;
+        CHECK(!get(&s,key,"Personal") && r.data_bytes==sizeof(redirected) && !memcmp(result+40,redirected,sizeof(redirected)));
+        CHECK(get(&s,key,"Favorites")==2);
+        CHECK(!rpc(&s,10,W32R_CLOSE,key,"","",0,NULL,0,0));
+        CHECK(rpc(&s,10,W32R_OPEN,W32R_HKCU,user_key,"",0,NULL,0,0)==2);
+    }
+    CHECK(!wr_select_profile(&s,"",""));
+    puts("PASS g32b folder edits: redirection, value deletion and key deletion survive logon and service restart");
+    /* A failed switch never changes the current profile, and corrupted
+     * existing profile slots must not be silently reseeded from defaults. */
+    d.fail=d.event+1;
+    /* Only a new hive commits inherited defaults; fail that commit. */
+    CHECK(wr_select_profile(&s,"Carol","/Windows/Profiles/u00000003")==1016 && !s.user_name[0]);d.fail=0;
+    struct file *a=file(&d,"/Windows/Profiles/u00000001/USER.CRG.0"),*b=file(&d,"/Windows/Profiles/u00000001/USER.CRG.1");
+    CHECK(a->n && b->n);a->data[0]^=1;b->data[0]^=1;
+    CHECK(wr_select_profile(&s,"Alice","/Windows/Profiles/u00000001")==1016 && !s.user_name[0]);
+    a->data[0]^=1;b->data[0]^=1;
+    CHECK(!wr_select_profile(&s,"Alice","/Windows/Profiles/u00000001"));
+    CHECK(!rpc(&s,10,W32R_OPEN,W32R_HKCU,"Seed","",0,NULL,0,0));key=r.key;
+    CHECK(wr_select_profile(&s,"Bob","/Windows/Profiles/u00000002")==170);
+    CHECK(!rpc(&s,10,W32R_CLOSE,key,"","",0,NULL,0,0));
+    const char *long_name="ABCDEFGHIJKLMNOPQRSTUVWXYZ12345";
+    CHECK(!wr_select_profile(&s,long_name,""));n=sizeof(name);CHECK(GetUserNameA(name,&n) && n==32 && !strcmp(name,long_name));
+    WCHAR wide[32];n=31;CHECK(!GetUserNameW(wide,&n) && n==32 && last_error==122);
+    n=32;CHECK(GetUserNameW(wide,&n) && n==32);for(unsigned i=0;i<32;i++)CHECK(wide[i]==(uint8_t)long_name[i]);
+    wr_destroy(&s);clear(&d);current=NULL;
+    puts("PASS g32b identity: default error, authenticated publication, buffers, seeded isolated durable HKCU, live identity, personal folder keys, failed/corrupt switch preserves session");
+}
 int main(int argc,char **argv)
 {
     CHECK(argc>=2);
-    if(!strcmp(argv[1],"compat"))compatibility();else if(!strcmp(argv[1],"basics"))basics();else if(!strcmp(argv[1],"limits"))limits();else if(!strcmp(argv[1],"faults"))faults();
+    if(!strcmp(argv[1],"users"))user_profiles();else if(!strcmp(argv[1],"compat"))compatibility();else if(!strcmp(argv[1],"basics"))basics();else if(!strcmp(argv[1],"limits"))limits();else if(!strcmp(argv[1],"faults"))faults();
     else if(!strcmp(argv[1],"lifecycle")){lifecycle();reconciliation();batch_reconciliation();default_deletions();}else if(!strcmp(argv[1],"concurrent"))concurrent();else if(!strcmp(argv[1],"malformed"))malformed();
     else if(!strcmp(argv[1],"version")){CHECK(argc==3);version_tests(argv[2]);}else if(!strcmp(argv[1],"lz")){CHECK(argc==3);lz_tests(argv[2]);}else if(!strcmp(argv[1],"upper")){upper_registry();upper_security();}else if(!strcmp(argv[1],"handle-delete"))handle_deletion();else CHECK(0);
     printf("w32srv %s checks=%u PASS\n",argv[1],checks);return 0;

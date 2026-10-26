@@ -79,8 +79,11 @@ int bootstat_bind(struct blkdev *d, uint64_t start, uint64_t count)
         memset(&rec, 0, sizeof(rec));
         adopt = true;
     }
+    /* A saturated counter cannot identify another boot. Keep recovery
+     * unbound rather than publishing an identity reused across boots. */
+    if (rec.boots >= UINT32_MAX-1) return -FS_EIO;
     fs_lock_init(&guard);
-    device = d; lba = start + BOOTSTAT_SECTOR; bound = true;
+    device = d; lba = start + BOOTSTAT_SECTOR;
     bool failed = (g_boot.flags & CBI_F_BOOT_FAILED) != 0;
     if (rec.boots != UINT32_MAX) rec.boots++;
     uint8_t blamed_before = rec.active;
@@ -90,13 +93,16 @@ int bootstat_bind(struct blkdev *d, uint64_t start, uint64_t count)
      * request into CBI_F_SCANDISK. The Diagnostic startup request is once. */
     rec.request &= (uint8_t)~(BOOTSTAT_REQ_SCANDISK | BOOTSTAT_REQ_THOROUGH | BOOTSTAT_REQ_MENU);
     g_boot.flags |= (uint32_t)(rec.skipped | rec.disabled) << CBI_F_SKIP_SHIFT;
+    e = store();
+    if (e) return e;
+    bound = true; /* VALID requires a durably committed increment. */
     if (klog) {
         klog("[bootstat] bound adopt=%u previous_failed=%u failures=%u blamed=0x%x disabled=0x%x skipped=0x%x boot=%u",
              adopt, failed, rec.failures, blamed_before, rec.disabled, rec.skipped, rec.boots);
         for (unsigned c = 0; c < BOOTSTAT_CLASSES; c++) if (newly & (1u << c))
             klog("[asd] skip class=%s failures=%u boot=%u", bootstat_class_name(c), rec.fail_count[c], rec.boots);
     }
-    return store();
+    return 0;
 }
 
 bool bootstat_bound(void) { return bound; }

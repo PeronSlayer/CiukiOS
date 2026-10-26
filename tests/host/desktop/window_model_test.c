@@ -1817,6 +1817,91 @@ static void row_logon(unsigned m)
     v.authenticated=1; desk_logon_result(&d,&v,0); assert(!d.sh.user_gate); step("authenticated unlock exposes desktop");
     wm_end();
 }
+static int grant_suspended;
+static unsigned suspended_calls;
+static int (*awake_present)(int,int,const struct ciuki_rect *);
+static int (*awake_info)(int,struct ciuki_framebuffer_info *);
+static int (*awake_accel)(int,const struct ciuki_accel_request *);
+static int (*awake_batch)(int,const void *,uint32_t,struct ciuki_batch_reply *);
+static int (*awake_fence)(int,uint64_t,uint16_t,uint32_t,struct ciuki_batch_reply *);
+static int grant_present(int a,int b,const struct ciuki_rect *r)
+{ if(grant_suspended){suspended_calls++;return -EBUSY;} return awake_present(a,b,r); }
+static int grant_info(int a,struct ciuki_framebuffer_info *r)
+{ if(grant_suspended){suspended_calls++;return -EBUSY;} return awake_info(a,r); }
+static int grant_accel(int a,const struct ciuki_accel_request *r)
+{ if(grant_suspended){suspended_calls++;return -EBUSY;} return awake_accel(a,r); }
+static int grant_batch(int a,const void *b,uint32_t n,struct ciuki_batch_reply *r)
+{ if(grant_suspended){suspended_calls++;return -EBUSY;} return awake_batch(a,b,n,r); }
+static int grant_fence(int a,uint64_t b,uint16_t c,uint32_t n,struct ciuki_batch_reply *r)
+{ if(grant_suspended){suspended_calls++;return -EBUSY;} return awake_fence(a,b,c,n,r); }
+static void mock_monitor_grants(void)
+{
+    grant_suspended=0; suspended_calls=0;
+    awake_present=d.ops.present; d.ops.present=grant_present;
+    awake_info=d.display_info; if(awake_info)d.display_info=grant_info;
+    awake_accel=d.accel; if(awake_accel)d.accel=grant_accel;
+    awake_batch=d.batch; if(awake_batch)d.batch=grant_batch;
+    awake_fence=d.fence; if(awake_fence)d.fence=grant_fence;
+}
+static int protected_monitor(int state)
+{
+    /* Firmware enables scanout before drawing grants resume. Both entry and
+     * wake must see the fully presented black frame, including 16 bpp. */
+    for (unsigned y=0;y<d.height;y++) for(unsigned x=0;x<d.width;x++) {
+        if(pixel_bpp==16){uint16_t pixel;memcpy(&pixel,(uint8_t *)scanout+(size_t)y*d.width*4+x*2,2);assert(!pixel);}
+        else assert(!(scanout[(size_t)y*d.width+x]&0xffffff));
+    }
+    if(state==-1)assert(grant_suspended);
+    int e=saver_monitor(state);
+    if(!e)grant_suspended=state!=-1;
+    return e;
+}
+static void row_protected_saver(unsigned m)
+{
+    row_name="g32b protected saver and DPMS"; wm_begin(m,1);
+    (void)app_open("files",260,180,60,60);
+    d.now_ns=wm_clock+=3000000000ull;
+    d.sh.cfg.saver_enabled=1; d.sh.cfg.saver_seconds=1;
+    struct ciuki_input_event motion={.type=CIUKI_INPUT_MOTION,.value=1};
+    struct users_view v={.authenticated=1,.flags=USERS_LOCK};
+    /* Default and disabled policy never open a password gate. */
+    d.sh.users.flags=USERS_LOCK;
+    d.saver_idle=d.now_ns-2000000000ull; desk_saver_tick(&d);
+    assert(d.saver_active); desk_input(&d,&motion); assert(!d.sh.user_gate); step("default profile dismisses without password");
+    strcpy(d.sh.profile.name,"Alice"); d.sh.users.flags=0;
+    d.saver_idle=d.now_ns-2000000000ull; desk_saver_tick(&d);
+    desk_input(&d,&motion); assert(!d.sh.user_gate); step("saver password disabled");
+    d.sh.users.flags=USERS_LOCK;
+    assert(!desk_saver_start(&d,0)); desk_input(&d,&motion);
+    assert(!d.sh.user_gate && !d.saver_active); step("named profile Preview never asks for password");
+    d.saver_idle=d.now_ns-2000000000ull; desk_saver_tick(&d);
+    assert(d.saver_active && !d.saver_preview); step("protected idle saver covers applications");
+    desk_input(&d,&motion); assert(!d.saver_active && d.sh.user_gate==2); step("idle dismissal opens opaque password gate");
+    desk_logon_result(&d,&v,-EACCES); step("wrong saver password stays concealed");
+    tap(DU_KEY_ESC); assert(d.sh.user_gate==2 && !d.sh.user_choose); step("Cancel keeps saver session locked");
+    desk_logon_result(&d,&v,0); assert(!d.sh.user_gate); step("correct password restores desktop");
+    d.screen_control=saver_control; memset(&saver_shared,0,sizeof(saver_shared));
+    saver_shared.version=CIUKI_SCREEN_VERSION; saver_shared.size=sizeof(saver_shared);
+    saver_shared.sequence=1; saver_shared.command=0xf140; saver_shared.argument=0;
+    d.saver_poll=0; desk_saver_tick(&d); assert(d.saver_active && !d.saver_preview);
+    desk_input(&d,&motion); assert(d.sh.user_gate==2); step("SC_SCREENSAVE dismissal opens password gate");
+    desk_logon_result(&d,&v,0); d.screen_control=NULL;
+    d.sh.cfg.saver_enabled=0; d.sh.cfg.monitor_seconds=1;
+    mock_monitor_grants(); d.monitor_power=protected_monitor; saver_monitor_error=0;
+    d.saver_idle=d.now_ns-2000000000ull; desk_saver_tick(&d); assert(d.monitor_off);
+    saver_monitor_error=-EIO; desk_input(&d,&motion);
+    assert(d.monitor_off && d.sh.user_gate==2 && grant_suspended);
+    assert(!desk_redraw(&d) && grant_suspended && !suspended_calls);
+    /* Reproduce the kernel refusal even if a caller incorrectly clears monitor_off. */
+    struct ciuki_rect full={0,0,0,0,d.width,d.height};
+    assert(d.ops.present(7,d.output,&full)==-EBUSY); suspended_calls=0;
+    /* The frame oracle runs after wake: grants really are unavailable here. */
+    saver_monitor_error=0; desk_input(&d,&motion);
+    assert(!d.monitor_off && d.sh.user_gate==2 && !grant_suspended && !suspended_calls); step("DPMS wake gates after concealed scanout");
+    tap(DU_KEY_ESC); assert(d.sh.user_gate==2); step("Cancel after DPMS remains locked");
+    desk_logon_result(&d,&v,0);
+    wm_end();
+}
 static void row_regional(unsigned m)
 {
     row_name="regional settings"; wm_begin(m,1);
@@ -1914,6 +1999,59 @@ static void row_power_resume(unsigned m)
     assert(d.sh.notification.active); step("DOS suspend notice");
     for (unsigned n=0;n<8 && !d.pbt.standbys;n++) desk_power_policy_tick(&d);
     assert(d.pbt.standbys==1); step("resume repaints the entire desktop");
+    wm_end();
+}
+static int failed_standby(void) { assert(d.sh.user_gate==2); errno=EIO; return -1; }
+static void row_resume_password(unsigned m)
+{
+    row_name="g32b standby password"; wm_begin(m,1);
+    d.now_ns=wm_clock+=3000000000ull;
+    (void)app_open("files",260,180,60,60);
+    d.sh.power_can_standby=1; d.power_standby=row_standby;
+    d.sh.power_cfg.password=1; /* independent of USERS_LOCK */
+    for (unsigned trial=0;trial<5;trial++) {
+        strcpy(d.sh.profile.name,trial==0 ? "" : "Alice");
+        d.sh.power_cfg.password=trial!=2;
+        d.power_standby=trial==3 ? failed_standby : trial==4 ? NULL : row_standby;
+        if (trial==1) {
+            mock_monitor_grants(); d.monitor_power=protected_monitor; saver_monitor_error=0;
+            d.sh.cfg.monitor_seconds=1; d.saver_idle=d.now_ns-2000000000ull;
+            desk_saver_tick(&d); assert(d.monitor_off && grant_suspended);
+            d.sh.cfg.monitor_seconds=0;
+        }
+        unsigned n=d.pbt.standbys; d.sh.want_standby=1;
+        for (unsigned tick=0;tick<20 && d.pbt.standbys==n;tick++) desk_power_policy_tick(&d);
+        assert(d.pbt.standbys==n+1);
+        assert(d.sh.user_gate==(trial==1 || trial==3 ? 2 : 0));
+        if (trial==1) {
+            struct ciuki_input_event motion={.type=CIUKI_INPUT_MOTION,.value=1};
+            desk_input(&d,&motion); assert(!d.monitor_off && d.sh.user_gate==2 && !grant_suspended && !suspended_calls);
+            step("successful standby resume conceals named profile, including an off monitor");
+            tap(DU_KEY_ESC); assert(d.sh.user_gate==2); step("resume Cancel remains locked");
+            struct users_view v={.authenticated=1}; desk_logon_result(&d,&v,0);
+        } else if (trial==3) {
+            assert(d.pbt.standby_error==EIO);
+            step("device recovery failure after sleep retains password gate");
+            tap(DU_KEY_ESC); assert(d.sh.user_gate==2);
+            struct users_view v={.authenticated=1}; desk_logon_result(&d,&v,0);
+        } else step(trial==0 ? "default profile resume has no password" : trial==2 ? "resume password disabled" : "locally refused standby removes only prepared gate");
+        d.sh.notification.active=0;
+        for (unsigned tick=0;tick<4;tick++) desk_power_policy_tick(&d);
+    }
+    /* The cached firmware resume notification is also a gate entry point. */
+    struct ciuki_power_events e={.version=CIUKI_POWER_EVENTS_VERSION,.size=sizeof(e),.resumes=1};
+    strcpy(d.sh.profile.name,"Alice"); d.sh.power_cfg.password=1;
+    desk_shell_power_events(&d,&e,CIUKI_POWER_CAN_STANDBY);
+    assert(!d.sh.user_gate); e.resumes++;
+    desk_shell_power_events(&d,&e,CIUKI_POWER_CAN_STANDBY);
+    assert(d.sh.user_gate==2); step("resume counter notification opens the same gate");
+    struct users_view v={.authenticated=1}; desk_logon_result(&d,&v,0);
+    desk_shell_power_events(&d,&e,CIUKI_POWER_CAN_STANDBY); assert(!d.sh.user_gate);
+    d.sh.power_cfg.password=0; e.resumes++;
+    desk_shell_power_events(&d,&e,CIUKI_POWER_CAN_STANDBY); assert(!d.sh.user_gate);
+    d.sh.power_cfg.password=1; d.sh.profile.name[0]=0; e.resumes++;
+    desk_shell_power_events(&d,&e,CIUKI_POWER_CAN_STANDBY); assert(!d.sh.user_gate);
+    step("unchanged counters, disabled option and default profile do not lock");
     wm_end();
 }
 /* G22B, appended after every existing scenario. Render the actual Volume
@@ -2584,7 +2722,7 @@ static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overl
     row_g30b_performance, row_g30b_schedule, row_g30b_network, row_g26c_print, row_g26c_download,
     row_g26c_programs, row_g26c_launch_error, row_common_files, row_common_script,
     row_common_folder_rename, row_g27b_statistics, row_g27b_viewer_save, row_g27b_terminal,
-    row_g27b_serial};
+    row_g27b_serial, row_protected_saver, row_resume_password};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).

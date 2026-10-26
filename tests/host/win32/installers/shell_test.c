@@ -210,11 +210,32 @@ static void versions(void){
   assert(bytes==52 && w32_u32((uint8_t *)fixed+8)==0x4000a && w32_u32((uint8_t *)fixed+12)==(2222u<<16));
   puts("PASS manifest version / force-install redirect preserves builtin store");
 }
+static void profile_folders(void){
+  const unsigned ids[]={0,16,2,5,6,7,8,9,11,21,26};
+  const char *suffix[]={"Documents\\Desktop","Documents\\Desktop","Start Menu\\Programs","Documents","Favorites", "Start Menu\\Programs\\StartUp","Recent","SendTo","Start Menu","Templates","Application Data"};
+  for(unsigned profile=1;profile<3;profile++){
+    char root[128];snprintf(root,sizeof(root),"/Windows/Profiles/u%08x",profile);
+    host_profile(profile==1 ? "Alice" : "Bob",root);
+    for(unsigned i=0;i<sizeof(ids)/sizeof(*ids);i++){
+      char a[260],expected[260];WCHAR w[260];void *pidl=0;
+      snprintf(expected,sizeof(expected),"C:\\Windows\\Profiles\\u%08x\\%s",profile,suffix[i]);
+      assert(SHGetSpecialFolderPathA(0,a,(int)ids[i],0) && !strcmp(a,expected));
+      if(i==0)assert(GetFileAttributesA(a)==~0u);
+      assert(SHGetSpecialFolderPathW(0,w,(int)ids[i],1) && shell_ansi(w,a,260) && !strcmp(a,expected));
+      assert(GetFileAttributesA(a)&16);
+      assert(!SHGetSpecialFolderLocation(0,(int)ids[i],&pidl));
+      assert(SHGetPathFromIDListA(pidl,a) && !strcmp(a,expected));shell_free(pidl);
+    }
+    char common[260];assert(SHGetSpecialFolderPathA(0,common,25,0) && !strcmp(common,"C:\\WINDOWS\\Desktop"));
+  }
+  host_profile("","");char path[260];assert(SHGetSpecialFolderPathA(0,path,5,0) && !strcmp(path,"C:\\Documents"));
+  puts("PASS g32b Shell A/W/PIDL: Alice/Bob personal folders, CREATE, common folder and default profile");
+}
 int main(int argc,char **argv){
   setvbuf(stdout,0,_IONBF,0);assert(argc==2);host_init(argv[1]);
   char path[260];const unsigned ids[]={2,5,7,11,16,20,22,23,24,25,26,35,36,37,38,43,46};
   for(unsigned i=0;i<sizeof(ids)/sizeof(*ids);i++)assert(SHGetSpecialFolderPathA(0,path,(int)ids[i],1));
   assert(!SHGetSpecialFolderPathA(0,path,3,0) && !path[0]);
   assert(!SHGetSpecialFolderPathA(0,path,31,0) && !path[0]);
-  recent_sendto();folder_identifiers();links();operations();recycle();execute();versions();host_finish();puts("PASS installer shell host adapter");return 0;
+  recent_sendto();folder_identifiers();links();operations();recycle();execute();versions();profile_folders();host_finish();puts("PASS installer shell host adapter");return 0;
 }

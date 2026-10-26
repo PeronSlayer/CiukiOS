@@ -440,6 +440,7 @@ struct desktop {
     const uint32_t *portrait;
     uint64_t saver_idle, saver_frame, saver_poll;
     unsigned saver_active, saver_kind, saver_sequence, saver_reported;
+    unsigned saver_preview;
     int monitor_off, monitor_failed, saver_external_running, saver_display_inhibited;
     int (*screen_control)(struct ciuki_screen_control *);
     int (*monitor_power)(int);

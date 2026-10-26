@@ -17,10 +17,11 @@ static void user_submit(struct cp_app *a,unsigned op)
     snprintf(q->current,sizeof(q->current),"%s",current ? current : "");
     q->operation=op;
     if (op==USERS_POLICY) {
-        q->flags=0;
-        if ((w=du_get(a->ui,U_LOGON)) && w->value) q->flags|=USERS_LOGON;
-        if ((w=du_get(a->ui,U_PROFILES)) && w->value) q->flags|=USERS_PROFILES;
-        if ((w=du_get(a->ui,U_LOCK)) && w->value) q->flags|=USERS_LOCK;
+        q->flags=a->users.flags;
+        if ((w=du_get(a->ui,U_LOGON))) q->flags=(q->flags&~USERS_LOGON)|(w->value ? USERS_LOGON : 0);
+        if ((w=du_get(a->ui,U_PROFILES))) q->flags=(q->flags&~USERS_PROFILES)|(w->value ? USERS_PROFILES : 0);
+        if ((w=du_get(a->ui,U_LOCK))) q->flags=(q->flags&~USERS_LOCK)|(w->value ? USERS_LOCK : 0);
+        if ((w=du_get(a->ui,CP_SAVER_PASSWORD))) q->flags=(q->flags&~USERS_LOCK)|(w->value ? USERS_LOCK : 0);
     }
     int e=a->host.user_begin ? a->host.user_begin(a->host.ctx,q) : -ENOSYS;
     user_wipe(a);
@@ -45,7 +46,7 @@ static void user_poll(struct cp_app *a)
         a->user_operation==USERS_DELETE ? "The user was removed. Profile files were kept." :
         a->user_operation==USERS_POLICY ? "Options saved. Profile choices apply at the next logon." : "User settings loaded.");
     if (!e && a->user_operation!=USERS_READ && a->host.apply) a->host.apply(a->host.ctx,1,0,0);
-    if (user_page(a)) build(a);
+    if (user_page(a) || (a->page==CP_DISPLAY && a->display_tab==CP_SCREEN_SAVER)) build(a);
 }
 static void user_build(struct cp_app *a)
 {

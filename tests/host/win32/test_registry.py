@@ -75,6 +75,7 @@ class RegistryTests(unittest.TestCase):
                              env=dict(os.environ,ASAN_OPTIONS='detect_leaks=1'))
         self.assertEqual(p.returncode,0,p.stdout+p.stderr)
         print(p.stdout,end='')
+    def test_user_profiles_identity_and_folders(self):self.execute('users')
     def test_registry_public_api_errors_and_aliases(self):self.execute('basics')
     def test_compatibility_reader_and_authorized_writer(self):self.execute('compat')
     def test_all_types_names_and_hive_limits(self):self.execute('limits')

@@ -1915,6 +1915,7 @@ void desk_shell_power_events(struct desktop *d, const struct ciuki_power_events 
                 desk_shell_notify(d,"Power","Stand by is not available on this computer.",DU_DLG_ICON_INFO,SH_NOTIFY_DETAILS);
             }
         }
+        if (sh->power_events_valid && e->resumes!=sh->power_events.resumes) desk_session_resume(d);
         sh->power_events = *e; sh->power_events_valid = 1;
     }
     sh->power_monitor_seconds = pp_timer(&sh->power_cfg, &sh->power_summary, PP_MONITOR);
@@ -2040,14 +2041,35 @@ static void standby_service(struct desktop *d)
     case DESK_STANDBY_SUSPEND: {
         if (!broadcast_finished(d, PP_PBT_SUSPEND)) return;
         errno = 0;
-        int r = desk_session_busy(d) || d->sh.gate ? (errno=EBUSY,-1) :
-            d->power_standby ? d->power_standby() : (errno = ENOSYS, -1);
+        int prepared=0,paint_error=0;
+        if (d->sh.power_cfg.password && d->sh.profile.name[0] && !d->sh.user_gate) {
+            /* Firmware may wake scanout before returning to us. Conceal the
+             * framebuffer before sleeping, after every program has agreed. */
+            desk_logon_open(d,2); prepared=1;
+            if (!d->monitor_off) {
+                uint64_t before=d->presents;
+                paint_error=desk_redraw(d) || d->presents==before || d->damage.count || d->present_damage.count;
+            } /* DPMS already published black before suspending grants. */
+        }
+        int attempted=0,r;
+        if (paint_error) { errno=EAGAIN; r=-1; }
+        else if (desk_session_busy(d) || d->sh.gate) { errno=EBUSY; r=-1; }
+        else if (!d->power_standby) { errno=ENOSYS; r=-1; }
+        else { attempted=1; r=d->power_standby(); }
+        /* The native error may come from recovery after actual firmware
+         * sleep. Only a locally refused request proves sleep never happened. */
+        if (r && prepared && !attempted) desk_logon_done(d);
         b->standby_error = r ? (errno ? errno : EIO) : 0; b->standbys++;
         fprintf(stderr,"[desktop] standby result=%d\n",r ? -b->standby_error : 0);
         uint32_t failure = r ? PP_PBTF_RESUMEFROMFAILURE : 0;
         desk_power_broadcast(d, PP_PBT_RESUMEAUTOMATIC, 0);
         if (r) { if (d->power_cancel_standby) (void)d->power_cancel_standby(); b->resume_pending=0; desk_power_broadcast(d, PP_PBT_RESUMESUSPEND, failure); }
-        else { b->resume_pending=1; b->resume_input_ns=d->last_input_ns; }
+        else {
+            /* Successful firmware resume, before any desktop repaint/input.
+             * PW-8 is independent of the screen saver's USERS_LOCK option. */
+            desk_session_resume(d);
+            b->resume_pending=1; b->resume_input_ns=d->last_input_ns;
+        }
         damage(d,(struct desk_box){0,0,d->width,d->height});
         d->last_input_ns = d->now_ns;   /* the idle timer restarts at resume */
         b->resume_input_ns=d->last_input_ns;

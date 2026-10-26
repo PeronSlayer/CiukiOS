@@ -1058,6 +1058,14 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
             a->cfg.monitor_seconds=e->index*60; save=1; build(a);
         }
         break;
+    case CP_SAVER_PASSWORD:
+        if (e->type==DU_EV_CHANGE && a->user_loaded && !a->user_busy) {
+            user_submit(a,USERS_POLICY); build(a);
+        }
+        break;
+    case CP_SAVER_CHANGE:
+        if (e->type==DU_EV_ACTIVATE) cp_open(a,CP_PASSWORDS);
+        break;
     case CP_SAVER_POWER:
         if (e->type==DU_EV_ACTIVATE && a->host.open_applet &&
             a->host.open_applet(a->host.ctx,CP_POWER))
@@ -1958,15 +1966,17 @@ static void build(struct cp_app *a)
             w=add(a,DU_BUTTON,CP_SAVER_KIND,40,202,234,24,names[choice]);
             add(a,DU_BUTTON,CP_SAVER_SETTINGS,286,202,104,24,"Settings...")->disabled=!choice;
             add(a,DU_BUTTON,CP_SAVER_PREVIEW,400,202,104,24,"Preview")->disabled=!choice || !a->host.apply;
-            add(a,DU_CHECKBOX,CP_SAVER_PASSWORD,40,232,210,22,"Password protected")->disabled=1;
-            add(a,DU_BUTTON,CP_SAVER_CHANGE,400,232,104,22,"Change...")->disabled=1;
+            w=add(a,DU_CHECKBOX,CP_SAVER_PASSWORD,40,232,210,22,"Password protected");
+            w->value=!!(a->users.flags&USERS_LOCK); w->disabled=!a->user_loaded || a->user_busy || !a->host.user_begin;
+            add(a,DU_BUTTON,CP_SAVER_CHANGE,400,232,104,22,"Change...")->disabled=!a->host.user_begin;
+            if (!a->user_loaded && !a->user_busy && a->host.user_begin) user_submit(a,USERS_READ);
             add(a,DU_LABEL,1977,40,266,42,18,"&Wait:");
             char wait[16]; snprintf(wait,sizeof(wait),"%d",a->cfg.saver_seconds/60);
             w=add(a,DU_EDIT,CP_SAVER_WAIT,94,262,50,24,wait); w->disabled=!choice; w->edit_up_down=1;
             add(a,DU_BUTTON,CP_SAVER_UP,144,262,20,12,"+")->disabled=!choice;
             add(a,DU_BUTTON,CP_SAVER_DOWN,144,274,20,12,"-")->disabled=!choice;
             add(a,DU_LABEL,1978,174,266,90,16,"minutes");
-            add(a,DU_LABEL,1976,40,288,460,14,"Password protection unavailable: session lock is not installed.");
+            add(a,DU_LABEL,1976,40,288,460,14,"Uses the named profile password; change it in Passwords.");
             add(a,DU_GROUP,1975,24,316,CP_WIDTH-48,42,"Energy saving features of monitor");
             add(a,DU_LABEL,1974,40,336,338,16,"Configure monitor power saving.");
             add(a,DU_BUTTON,CP_SAVER_POWER,400,330,104,24,"Settings...")->disabled=!a->host.open_applet;

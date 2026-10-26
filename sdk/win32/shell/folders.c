@@ -67,6 +67,7 @@ int shell_mkdirs(const char *path) {
 }
 static const struct {unsigned id;const char *path;} folders[]={
  {0,"C:\\WINDOWS\\Desktop"},{2,"C:\\WINDOWS\\Start Menu\\Programs"},
+ {6,"C:\\WINDOWS\\Favorites"},{21,"C:\\WINDOWS\\Templates"},
  {5,"C:\\Documents"},{7,"C:\\WINDOWS\\Start Menu\\Programs\\StartUp"},
  {8,"C:\\WINDOWS\\Recent"},{9,"C:\\WINDOWS\\SendTo"},
  {11,"C:\\WINDOWS\\Start Menu"},{16,"C:\\WINDOWS\\Desktop"},
@@ -78,11 +79,34 @@ static const struct {unsigned id;const char *path;} folders[]={
  {37,"C:\\WINDOWS\\SYSTEM"},{38,"C:\\Program Files"},
  {43,"C:\\Program Files\\Common Files"},{46,"C:\\Documents"}
 };
+extern LONG W32API RegOpenKeyExA(DWORD,const char *,DWORD,DWORD,DWORD *);
+extern LONG W32API RegQueryValueExA(DWORD,const char *,void *,DWORD *,void *,DWORD *);
+extern LONG W32API RegCloseKey(DWORD);
+static int personal_folder(unsigned id,char out[260]) {
+  static const struct {unsigned id;const char *name;} names[]={
+    {0,"Desktop"},{16,"Desktop"},{2,"Programs"},{5,"Personal"},{6,"Favorites"},
+    {7,"Startup"},{8,"Recent"},{9,"SendTo"},{11,"Start Menu"},{21,"Templates"},{26,"AppData"},{28,"AppData"}};
+  for(unsigned i=0;i<sizeof(names)/sizeof(*names);i++)if(names[i].id==id){
+    DWORD h,type=0,n=260;
+    LONG e=RegOpenKeyExA(0x80000001u,"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders",0,1,&h);
+    if(e){SetLastError((DWORD)e);return -1;}
+    e=RegQueryValueExA(h,names[i].name,0,&type,out,&n);RegCloseKey(h);
+    if(e || type!=1 || n<4 || n>260 || out[n-1] || out[1]!=':' || out[2]!='\\'){
+      SetLastError(e ? (DWORD)e : 13);return -1;
+    }
+    return 1;
+  }
+  return 0;
+}
 BOOL W32API SHGetSpecialFolderPathA(HANDLE w,char *out,int id,BOOL create) {
   (void)w;if(!out){SetLastError(87);return 0;}out[0]=0;
   for(unsigned i=0;i<sizeof(folders)/sizeof(*folders);i++)if(folders[i].id==((unsigned)id&255)) {
-    if((create || (id&0x8000)) && !shell_mkdirs(folders[i].path))return 0;
-    return shell_copy(out,260,folders[i].path);
+    char path[260];
+    int personal=personal_folder((unsigned)id&255,path);
+    if(personal<0)return 0;
+    if(!personal && !shell_copy(path,260,folders[i].path))return 0;
+    if((create || (id&0x8000)) && !shell_mkdirs(path))return 0;
+    return shell_copy(out,260,path);
   }
   SetLastError(87);return 0;
 }

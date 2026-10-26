@@ -41,6 +41,7 @@ struct wr_server {
     struct wr_handle *handles;
     struct wr_hive hive[2];
     struct wr_io io;
+    char user_path[128], user_name[32];
     uint32_t next_id, reserved_id, profile_owner;
     uint32_t compat_writer_pid; /* authenticated desktop owner; zero denies writes */
     uint64_t now;
@@ -56,6 +57,7 @@ struct wr_server {
     uint32_t (*shell_call)(void *, uint32_t, const struct w32r_request *, const char *,
                            const char *, struct w32r_reply *, uint8_t *, size_t);
     void (*shell_exit)(void *, uint32_t);
+    void (*shell_profile)(void *, const char *);
     void *shell;
     /* One pending end-session request (ExitWindowsEx without a desktop
      * window, InitiateSystemShutdown): consumed by the desktop's POLL. */
@@ -89,6 +91,8 @@ uint32_t wr_remove_value(struct wr_server *, struct wr_key *, const char *);
 struct wr_key *wr_walk(struct wr_server *, unsigned hive, const char *path);
 int wr_defaults(struct wr_server *, unsigned width, unsigned height, unsigned bpp);
 int wr_load(struct wr_server *);
+int wr_load_hive(struct wr_server *, unsigned);
+uint32_t wr_select_profile(struct wr_server *, const char *, const char *);
 uint32_t wr_commit(struct wr_server *, unsigned);
 int wr_directory_init(struct wr_server *);
 void wr_directory_free(struct wr_server *);

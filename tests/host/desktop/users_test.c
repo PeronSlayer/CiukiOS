@@ -8,6 +8,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/file.h>
+#include <sys/wait.h>
+#include <fcntl.h>
 #include <unistd.h>
 
 static struct users_db db, decoded;
@@ -94,9 +97,30 @@ static void io(const char *root)
     assert(!rmdir(path));
     request(USERS_READ,"",""); assert(!users_execute(root,&q,&v) && v.count==1);
     request(USERS_CREATE,"Bob",""); assert(!users_execute(root,&q,&v));
-    snprintf(path,sizeof(path),"%s/system/settings/users.lock",root); f=fopen(path,"wb"); assert(f); fclose(f);
-    request(USERS_DELETE,"Bob",""); assert(users_execute(root,&q,&v)==-EBUSY); assert(!unlink(path));
+    char boot[64]; assert(!users_boot_identity(boot));
+    snprintf(path,sizeof(path),"%s/system/settings/users.lock",root);
+    f=fopen(path,"wb"); assert(f); fprintf(f,"CUSR1 %u %s\n",(unsigned)getpid(),boot); fclose(f);
+    request(USERS_DELETE,"Bob",""); assert(users_execute(root,&q,&v)==-EBUSY);
+    /* The same PID from an earlier boot must not block account management. */
+    f=fopen(path,"wb"); assert(f); fprintf(f,"CUSR1 %u previous-boot\n",(unsigned)getpid()); fclose(f);
     assert(!users_execute(root,&q,&v));
+    request(USERS_CREATE,"Bob",""); assert(!users_execute(root,&q,&v));
+    pid_t child=fork(); assert(child>=0);
+    if (!child) {
+        FILE *dead=fopen(path,"wb"); if (!dead) _exit(1);
+        fprintf(dead,"CUSR1 %u %s\n",(unsigned)getpid(),boot); fclose(dead); _exit(0);
+    }
+    int status; assert(waitpid(child,&status,0)==child && WIFEXITED(status) && !WEXITSTATUS(status));
+    request(USERS_DELETE,"Bob",""); assert(!users_execute(root,&q,&v));
+    /* An incomplete legacy record cannot prove owner death, even after a service restart. */
+    f=fopen(path,"wb"); assert(f); fclose(f);
+    char guard_path[512]; snprintf(guard_path,sizeof(guard_path),"%s/system/settings/users.guard",root);
+    int guard=open(guard_path,O_RDWR); assert(guard>=0 && !flock(guard,LOCK_EX|LOCK_NB));
+    request(USERS_CREATE,"Bob",""); assert(users_execute(root,&q,&v)==-EBUSY);
+    assert(!access(path,F_OK)); assert(!close(guard));
+    assert(users_execute(root,&q,&v)==-EBUSY); assert(!unlink(path));
+    assert(!users_execute(root,&q,&v));
+    request(USERS_DELETE,"Bob",""); assert(!users_execute(root,&q,&v));
     snprintf(path,sizeof(path),"%s%s",root,p.settings); struct stat st; assert(!stat(path,&st));
     worker_test(root,USERS_AUTH);
     snprintf(path,sizeof(path),"%s/system/settings/users.dat",root); f=fopen(path,"wb"); assert(f); fputs("corrupt",f); fclose(f);

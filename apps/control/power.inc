@@ -141,8 +141,8 @@ static void pw_build(struct cp_app *a)
     } else {
         w = add(a, DU_CHECKBOX, PW_SHOW_METER, 24, 44, 400, 22, "Show &power meter on taskbar"); w->value = c->show_meter;
         w = add(a, DU_CHECKBOX, PW_PASSWORD, 24, 70, 500, 22, "Prompt for pass&word when computer goes off stand by");
-        w->value = c->password; w->disabled = 1;
-        add(a, DU_LABEL, PW_PASSWORD_NOTE, 48, 94, 480, 16, "Logon passwords are not available yet.");
+        w->value = c->password;
+        add(a, DU_LABEL, PW_PASSWORD_NOTE, 48, 94, 480, 16, "Uses the logged-on profile password. FAT files remain shared.");
         w = add(a, DU_GROUP, PW_BUTTONS_GROUP, 16, 116, CP_WIDTH - 32, 124, "Power buttons"); w->anchors = DU_ANCHOR_GROW_X;
         add(a, DU_LABEL, PW_BUTTON_L, 32, 136, 480, 16, "When I press the power &button on my computer:");
         add(a, DU_BUTTON, PW_BUTTON, 32, 156, 200, 24,
@@ -257,6 +257,9 @@ static int pw_event(struct cp_app *a, const struct du_event *e)
         return 1;
     case PW_DETAILS:
         if (e->type == DU_EV_CHANGE) { a->pw_details = e->index != 0; build(a); }
+        return 1;
+    case PW_PASSWORD:
+        if (e->type == DU_EV_CHANGE) { c->password = e->index != 0; pw_save(a); }
         return 1;
     case PW_SHOW_METER:
         if (e->type == DU_EV_CHANGE) { c->show_meter = e->index != 0; pw_save(a); }
