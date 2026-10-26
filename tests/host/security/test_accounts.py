@@ -20,9 +20,10 @@ class AccountTests(unittest.TestCase):
         cls.tmp = tempfile.TemporaryDirectory(prefix="accounts-", dir=parent)
         cls.addClassCleanup(cls.tmp.cleanup)
         cls.binary = Path(cls.tmp.name) / "accounts-test"
-        sources = ["tests/host/security/accounts_test.c", "tests/host/security/fake.c",
+        sources = ["tests/host/security/accounts_test.c", "tests/host/security/fake.c", "tests/host/security/round2_test.c",
                    *[f"apps/accounts/{name}.c" for name in
-                     ("crypto", "codec", "owner", "bootstrap", "protocol", "store", "service", "migration")],
+                     ("crypto", "codec", "owner", "bootstrap", "protocol", "store", "service", "migration",
+                      "persist", "results", "auth", "enrollment", "manifest", "checkpoint", "logon")],
                    "apps/desktop/users.c", "src/kernel/lib/sha256.c"]
         subprocess.run(["clang", "-std=c17", "-D_POSIX_C_SOURCE=200809L", "-O1", "-g",
                         "-Wall", "-Wextra", "-Werror", "-fsanitize=address,undefined",
@@ -37,6 +38,65 @@ class AccountTests(unittest.TestCase):
         if check:
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return result
+
+    def test_shared_manifest(self):
+        self.run_case("round2-manifest")
+
+    def test_auth_wire_independent_oracle(self):
+        path = Path(self.tmp.name) / "auth-wire.bin"
+        result = self.run_case("round2-wire", path, check=False)
+        begin = bytearray(64)
+        struct.pack_into("<IIIIII", begin, 0, 1, 2, 0, 0, 1, 1000)
+        def challenge(attempt):
+            p = bytearray(64)
+            struct.pack_into("<IIQIIIIIIIIQ", p, 0, 1, 2, attempt, 1000, 0, 1, 1, 1, 1, 1, 0, 1)
+            return p
+        success = bytearray(304)
+        success[:64] = challenge(1)
+        struct.pack_into("<iII", success, 64, 0, 1, 0)
+        struct.pack_into("<Q", success, 80, 1)
+        struct.pack_into("<IIIIIII", success, 96, 1, 64, 1000, 545, 2, 544, 545)
+        struct.pack_into("<II", success, 96 + 52, 0, 1)
+        root = b"/Windows/Profiles/u000003e8"
+        struct.pack_into("<IIIIQQQII", success, 160, 1, 112, 1000, 0, 1234, 7, 103, len(root) + 1, 0)
+        success[208:208 + len(root)] = root
+        success[272:281] = b"CiukiUser"
+        failure = bytearray(304)
+        failure[:64] = challenge(2)
+        struct.pack_into("<iII", failure, 64, -13, 4, 1000)
+        struct.pack_into("<Q", failure, 80, 1)
+        management = bytearray(312)
+        struct.pack_into("<I", management, 0, 1)
+        struct.pack_into("<IIQ", management, 32, 9, 1000, 1)
+        management[144:153] = b"password1"
+        digest = hashlib.sha256(struct.pack("<I", 2) + management).digest()
+        self.assertEqual(path.read_bytes(), begin + challenge(1) + success + failure + digest)
+        print("PASS Python independent full authentication and management-digest oracle")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_checkpoint_cuts(self):
+        self.run_case("round2-checkpoint-faults")
+
+    def test_durable_cancellation(self):
+        self.run_case("round2-cancellation")
+
+    def test_logon_relay(self):
+        self.run_case("round2-logon")
+
+    def test_durable_results_and_metadata_window(self):
+        self.run_case("round2-results")
+
+    def test_owner_compaction_and_reservations(self):
+        self.run_case("round2-owner")
+
+    def test_profile_mapping(self):
+        self.run_case("round2-profile")
+
+    def test_autologon_route(self):
+        self.run_case("round2-autologon")
+
+    def test_enrollment_exchange(self):
+        self.run_case("round2-enrollment")
 
     def test_crypto(self):
         expected = hashlib.pbkdf2_hmac("sha256", b"password", bytes(range(16)), 10000)
@@ -64,7 +124,7 @@ class AccountTests(unittest.TestCase):
         path = Path(self.tmp.name) / "owner.bin"
         result = self.run_case("batch", path, check=False)
         # Independent complete bootstrap request/reply oracle, including the
-        # actual destination manifest, DB hash, resolver locators and keys.
+        # actual destination manifest, DB hash, zero request locators and OWNER keys.
         db = bytearray(96 + 3 * 256)
         db[:8] = b"CIUKISEC"
         struct.pack_into("<IIQIIII", db, 8, 2, 96, 1, 1001, 3, 0, 256)
@@ -89,13 +149,22 @@ class AccountTests(unittest.TestCase):
         request[16:28] = bytes(range(1, 13))
         struct.pack_into("<QQQQ", request, 32, 1234, 1, 0, 0)
         request[64:96] = hashlib.sha256(db).digest()
-        manifest = bytearray()
+        manifest = bytearray(64 + 256 * 3)
+        manifest[:8] = b"CIUKISTG"
+        struct.pack_into("<IIII", manifest, 8, 1, 64, 3, 0)
+        manifest[24:36] = bytes(range(1, 13))
+        struct.pack_into("<QQ", manifest, 40, 1234, 1)
+        tree = struct.pack("<I", 1) + b"\0" + struct.pack("<IQ", 1, 0) + bytes(32)
         for i, (uid, root) in enumerate(roots):
-            manifest += root.ljust(64, b"\0") + struct.pack("<I", uid)
             off = 160 + 128 * i
-            locator = int.from_bytes(hashlib.sha256(root).digest()[:8], "little")
-            struct.pack_into("<IIQQQQII", request, off, uid, 1, 0, 0, 1234, locator, len(root) + 1, 1)
+            struct.pack_into("<IIQQQQII", request, off, uid, 1, 0, 0, 1234, 0, len(root) + 1, 1)
             request[off + 48:off + 48 + len(root)] = root
+            off = 64 + 256 * i
+            struct.pack_into("<IIII", manifest, off, uid, 0, 1, 1)
+            manifest[off + 16:off + 16 + len(root)] = root
+            staging = f"/System/Security/Staging/g{1:016x}/p{uid:08x}".encode()
+            manifest[off + 144:off + 144 + len(staging)] = staging
+            manifest[off + 208:off + 240] = hashlib.sha256(tree).digest()
         request[96:128] = hashlib.sha256(manifest).digest()
         digest = hashlib.sha256(request).digest()
         request[128:160] = digest

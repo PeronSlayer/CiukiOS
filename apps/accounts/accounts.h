@@ -53,6 +53,10 @@ int acct_decode(struct acct_db *, int seed, const void *, size_t);
 #define ACCT_OWNER_BODY_MAX (160u + 128u * 32u)
 #define ACCT_OWNER_REPLY_MAX (96u + 32u * 32u)
 struct acct_store;
+struct acct_service;
+struct acct_job;
+struct acct_request;
+struct acct_response;
 int acct_owner_encode(const struct acct_owner_request *, unsigned, void *, size_t, size_t *);
 int acct_owner_decode(struct acct_owner_request *, unsigned *, const void *, size_t);
 int acct_owner_reply_encode(const struct acct_owner_reply *, void *, size_t, size_t *);
@@ -84,6 +88,25 @@ struct acct_store {
 int acct_store_recover(struct acct_store *, struct acct_db *);
 int acct_store_commit(struct acct_store *, const struct acct_db *,
                       const struct acct_db *, const struct acct_owner_request *, unsigned);
+int acct_store_load_watermarks(struct acct_store *, const uint32_t sid[3]);
+int acct_store_reserve_generation(struct acct_store *, const uint32_t sid[3], uint64_t, uint32_t);
+int acct_store_local_recover(struct acct_store *);
+int acct_store_local_commit(struct acct_store *, const struct acct_db *, const struct acct_db *);
+int acct_blob_read(struct acct_store *, const char *, void *, size_t, size_t *, uint64_t *);
+int acct_blob_write(struct acct_store *, const char *, const void *, size_t, uint64_t *);
+int acct_results_open(struct acct_service *);
+int acct_results_execute(struct acct_service *, struct acct_job *, struct acct_response *);
+int acct_results_cancel(struct acct_service *, const struct acct_job *);
+int acct_results_admit(struct acct_service *, struct acct_job *, struct acct_response *, int *cached);
+int acct_results_finish(struct acct_service *, const struct acct_request *, int);
+int acct_management_digest(const struct acct_request *, uint8_t[32]);
+#define ACCT_MANIFEST_MAX (64u + 32u * 256u)
+#define ACCT_CHECKPOINT_MAX (160u + 32u * 112u + 256u * (8u + ACCT_OWNER_BODY_MAX + ACCT_OWNER_REPLY_MAX))
+int acct_manifest_validate(const struct acct_owner_request *, const void *, size_t);
+int acct_tree_digest(const void *, size_t, uint8_t[32]);
+int acct_owner_checkpoint(struct acct_store *, const struct acct_db *, int force);
+int acct_owner_checkpoint_recover(struct acct_store *, const struct acct_db *);
+int acct_checkpoint_validate(const struct acct_store *, const struct acct_db *, const void *, size_t, uint64_t);
 int acct_store_bootstrap(struct acct_store *, struct acct_db *);
 int acct_boot_identity(struct acct_store *, struct acct_db *, int create);
 int acct_owner_requests(struct acct_store *, const struct acct_db *,
@@ -92,15 +115,31 @@ int acct_owner_requests(struct acct_store *, const struct acct_db *,
 enum acct_operation {
     ACCT_LIST = 1, ACCT_AUTH, ACCT_UNLOCK, ACCT_CREATE, ACCT_DELETE,
     ACCT_RENAME, ACCT_ENABLE, ACCT_ROLE, ACCT_PASSWORD, ACCT_PICTURE,
-    ACCT_ENROLL_VERIFY, ACCT_REPLACE, ACCT_UPDATE, ACCT_LOOKUP
+    ACCT_ENROLL_VERIFY, ACCT_UPDATE, ACCT_LOOKUP, ACCT_CHALLENGE,
+    ACCT_AUTOLOGON, ACCT_ENROLL_PLAN, ACCT_STATUS, ACCT_RESERVE, ACCT_PROFILE
+};
+struct acct_challenge {
+    uint32_t action, uid, session, console, authentication_epoch;
+    uint32_t ui_generation, logon_generation, account_generation, flags;
+    uint64_t attempt, accounts_generation;
+};
+struct acct_begin {
+    uint32_t action, session, console, selector, uid;
+    char name[32];
 };
 struct acct_request {
     uint32_t operation, uid, flags, groups;
     uint64_t generation;
     char name[32], picture[96];
     char password[64], confirm[64], old_password[64];
+    struct acct_challenge challenge;
+    struct acct_begin begin;
+    uint64_t client_operation_id;
+    uint8_t request_digest[32];
     uint64_t attempt;
     uint64_t request_id;
+    uint32_t plan_count, first_old_id;
+    struct { uint32_t old_id; char name[32]; } plan[16];
     uint32_t session, console, selectors, service, self_password, wire_operation;
 };
 struct acct_public {
@@ -112,6 +151,8 @@ struct acct_response {
     int error;
     uint32_t retry_after_ms, authenticated_uid, change_required, count;
     struct acct_public records[ACCT_MAX];
+    size_t body_bytes;
+    uint8_t body[272]; /* challenge, STATUS, PROFILE, RESERVE or progress */
 };
 struct acct_job {
     uint64_t ticket;
@@ -119,13 +160,48 @@ struct acct_job {
     struct acct_request request;
     int occupied;
 };
+#define ACCT_RECEIPTS 1024u
+#define ACCT_RECEIPT_RESERVED 1u
+#define ACCT_RECEIPT_PENDING 2u
+#define ACCT_RECEIPT_COMMITTED 3u
+#define ACCT_RECEIPT_ABORTED 4u
+#define ACCT_RECEIPT_EXPIRED 5u
+struct acct_receipt {
+    uint64_t id, generation, planned_generation;
+    uint32_t state, operation, requester, target;
+    int32_t status;
+    uint8_t digest[32];
+};
+struct acct_results {
+    uint64_t high, floor, sequence;
+    unsigned count;
+    struct acct_receipt receipts[ACCT_RECEIPTS];
+};
+struct acct_attempt {
+    struct acct_challenge challenge;
+    struct acct_begin begin;
+    struct acct_subject logon;
+    uint64_t started;
+    int occupied;
+};
+struct acct_enrollment {
+    uint64_t generation;
+    uint8_t plan_digest[32];
+    uint32_t staged, map_count;
+    struct acct_db draft;
+    struct { uint32_t old_id, uid; char root[64]; } map[16];
+};
 struct acct_service {
     struct acct_store store;
     struct acct_db db;
     atomic_flag queue_lock, worker_lock;
     struct acct_job active, pending;
     struct acct_response completion;
-    uint64_t next_ticket, retry_at;
+    uint64_t next_ticket, retry_at, high_attempt;
+    struct acct_results *results;
+    struct acct_attempt attempts[8];
+    struct acct_enrollment enrollment;
+    int autologon_used, faulted;
     int leased, completed;
     atomic_int available;
 };
@@ -150,6 +226,8 @@ int acct_work(struct acct_service *, struct acct_response *);
 #define ACCT_ROLE_UI 2u
 #define ACCT_ROLE_ACCOUNT 3u
 #define ACCT_ROLE_OWNER 4u
+#define ACCT_ROLE_DESKTOP 6u
+#define ACCT_ROLE_W32SRV 7u
 #define ACCT_ENDPOINT_AUTH 1u
 #define ACCT_ENDPOINT_ACCOUNTS 2u
 #define ACCT_ENDPOINT_LOGON 5u
@@ -164,11 +242,47 @@ struct acct_ui_event { uint32_t action, session, console; uint64_t attempt; };
 int acct_event_encode(unsigned operation, int challenge_reply, const struct acct_ui_event *, void *, size_t);
 int acct_event_decode(unsigned operation, int challenge_reply, struct acct_ui_event *, const void *, size_t);
 struct acct_auth_outcome {
-    uint32_t action, endpoint_generation, console_generation;
-    uint64_t attempt, accounts_generation;
+    struct acct_challenge challenge;
+    int32_t status;
+    uint32_t disposition, retry_after_ms;
+    uint64_t resulting_generation;
     uint8_t credential[64], profile[112];
     char name[32];
 };
+int acct_begin_encode(const struct acct_begin *, int internal, void *, size_t);
+int acct_begin_decode(struct acct_begin *, int internal, const void *, size_t);
+int acct_challenge_encode(const struct acct_challenge *, int proposal, void *, size_t);
+int acct_challenge_decode(struct acct_challenge *, int proposal, const void *, size_t);
+int acct_auth_execute(struct acct_service *, struct acct_job *, struct acct_response *);
+void acct_attempts_clear(struct acct_service *);
+int acct_enrollment_recover(struct acct_service *);
+int acct_enrollment_source(struct acct_service *, const void *, size_t);
+int acct_enrollment_execute(struct acct_service *, struct acct_job *, struct acct_response *);
+int acct_auth_result(struct acct_service *, struct acct_job *, struct acct_response *, int,
+                     unsigned disposition, const struct acct_record *);
+int acct_verify(const struct acct_record *, const char *);
+int acct_set_password(struct acct_service *, struct acct_record *, const char *);
+struct acct_logon_attempt {
+    struct acct_subject ui;
+    struct acct_begin begin;
+    struct acct_challenge challenge;
+    uint64_t started;
+    int occupied, resolved, submitted;
+};
+struct acct_logon {
+    struct acct_kernel kernel;
+    struct acct_logon_attempt attempts[8];
+    uint64_t next_attempt;
+    int autologon_used;
+};
+int acct_logon_begin(struct acct_logon *, const struct acct_subject *, const void *, size_t, void *relay128);
+int acct_logon_autologon(struct acct_logon *, int safe, int logged_off_or_locked, void *relay128);
+int acct_logon_challenged(struct acct_logon *, const struct acct_subject *account, const void *, size_t);
+int acct_logon_submit(struct acct_logon *, const struct acct_subject *ui, const void *, size_t, void *relay272);
+int acct_logon_outcome(struct acct_logon *, const struct acct_subject *account, uint64_t current_accounts_generation,
+                       const void *, size_t, struct acct_auth_outcome *, void *progress16);
+void acct_logon_clear(struct acct_logon *);
+int acct_logon_session_lock(const struct acct_kernel *, const struct acct_subject *, const void *, size_t, void *progress);
 int acct_outcome_decode(struct acct_auth_outcome *, int frame_status, const void *, size_t);
 int acct_submit_body(struct acct_service *, int endpoint, unsigned service, unsigned operation,
                      void *, size_t, uint64_t frame_generation, uint64_t request_id, struct acct_response *);

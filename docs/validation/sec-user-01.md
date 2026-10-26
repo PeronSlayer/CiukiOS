@@ -3,6 +3,30 @@
 Scope: directive [sec-user-01](../directives/sec-user-01.md). Runtime sealing,
 kernel/owner binding, image integration and hardware durability remain lead work.
 
+## Review round 2 research and implementation rule
+
+Research checked before changing code, after `date` reported Mon Oct 26
+13:15:28 CET 2026. Microsoft [cancellation considerations](https://learn.microsoft.com/en-us/windows/win32/fileio/canceling-pending-i-o-operations)
+distinguish an attempted cancellation from completion. Consequently transport
+cancellation never asserts storage rollback: caller-owned durable operation IDs
+and STATUS resolve uncertain management results. Microsoft [access tokens](https://learn.microsoft.com/en-us/windows/win32/secauthz/access-tokens)
+attach identity to execution; the retained LOGON role, not UI-supplied fields,
+attests the relayed UI connection. Microsoft [desktops](https://learn.microsoft.com/en-us/windows/win32/winstation/desktops)
+separates trusted input/presentation; outcomes must retain both console and
+authentication epochs, and a DESKTOP request can only enter the lock gate.
+[RFC 8018 section 5.2](https://www.rfc-editor.org/rfc/rfc8018.html#section-5.2)
+continues to govern the existing KDF; this amendment changes no KDF parameters.
+The supplied read-only Resource Kit profile/logon ranges were checked again;
+its default-profile fallback is superseded by this contract's closed gate.
+
+Repository comparison: the round-1 core still authenticated direct UI peers,
+used 240-byte success-only outcomes, allocated locators during ACCOUNT staging,
+sent metadata changes to OWNER, and exposed a private atomic replacement. Round
+2 replaces those interfaces with the frozen challenge/relay/outcome codecs,
+OWNER-only reservations, ACCOUNT-only metadata commits and password-first
+ordinary operations. Real kernel/owner storage qualification remains separate
+from the production-linked host fakes.
+
 Primary sources inspected before implementation:
 
 - [RFC 8018 sections 4 and 5.2](https://www.rfc-editor.org/rfc/rfc8018.html#section-5.2):
@@ -100,3 +124,53 @@ unpublished until real adapters are integrated.
 
 Exact verification results, persistence-cut counts and the unchanged sanitizer
 restriction are recorded in the Review round 1 section of the worktree report.
+
+## Review round 2 implementation and host evidence
+
+This section supersedes round 1's direct-UI verification, success-only outcomes,
+caller-resolved locators, lifetime owner receipts, metadata KEEP transactions and
+private atomic replacement. The amended implementation uses the full LOGON
+challenge/relay/outcome exchange and retained selector, durable ENROLL_PLAN and
+staged/final enrollment, LOGON-only one-shot autologon, and the same-session
+DESKTOP lock adapter. The private LOGON core supplies correlation without an
+alternative session creation or secure-leave path. Peer role generations and
+connected-server generations remain separate.
+
+ACCOUNTS RESERVE/STATUS uses permanent operation-id watermarks and bounded
+caller-owned result checkpoints. Exact retries never repeat a KDF/CREATE;
+EXPIRED never implies rollback. Metadata changes use ACCOUNT-only local intents,
+including permanent bootstrap retirement. OWNER alone reserves root identities;
+request locators are zero. Both sides validate the same CIUKISTG bytes and tree
+hashes. Reserved ABORTED batches count toward the receipt window; coherent
+snapshot/ACCOUNT marker/OWNER floor publication reclaims the log. The private
+CIUKIOCP versioned snapshot is documented in apps/accounts/README.md for the
+real k02 binding; it includes every allocation watermark and retained owner map.
+
+Sequential nice-19 final commands:
+
+- `nice -n 19 python3 -B -m unittest discover -s tests/host/security -p test_accounts.py`
+  runs 25 tests. All C assertion groups and independent Python full-byte/hash
+  oracles complete; 25 shutdowns fail with the sandbox's LeakSanitizer ptrace
+  diagnostic. Exit 1, not a green H03 gate.
+- `nice -n 19 python3 -B -m unittest discover -s tests/host/security -p test_logon.py`
+  runs five tests. All assertion groups complete; five identical LeakSanitizer
+  shutdown failures. Exit 1, not a green H10 gate.
+- `nice -n 19 python3 -B -m unittest tests.host.desktop.test_users` runs one test.
+  Unchanged G32 model/I/O assertions complete, then the same shutdown error.
+  Exit 1, not a green RUS gate.
+
+No C assertion, ASan memory-access or UBSan diagnostic remains. No sanitizer
+setting or leak suppression was changed. New evidence includes 2055 successful
+metadata updates with interleaved passwords and aborted results without OWNER
+log growth, 2055 RESERVED-to-ABORTED CREATE batches with nonreused keys/locators,
+and complete recovery at 15 OWNER checkpoint and 70 ACCOUNT result checkpoint
+boundaries. Existing fault enumerations cover 125 ready bootstrap, 68 password,
+94 CREATE, 51 cancellation and 116 eighteen-binding migration boundaries.
+Unrecoverable incomplete bootstrap evidence stays closed; no partial vector or
+acknowledged-password rollback is admitted.
+
+Actual kernel/owner endpoints, resolver/tree fences, native durability, event
+loops/UI confirmation, target KDF timing and runtime qualification remain the
+lead/follow-on tasks. Live publication still refuses unbound/test adapters.
+The exact commands, logs and integration checklist are recorded in
+`build/codex/sec-user01-report.md`.

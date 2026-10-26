@@ -6,24 +6,25 @@
 
 static int valid(const struct acct_owner_request *q)
 {
-    if (!q || !q->count || q->count>32 || !q->transaction || !q->volume ||
-        azero(q->sid,12) || q->expected_accounts_generation>=q->transaction ||
+    if (!q || q->count>32 || !q->transaction || !q->volume ||
+        azero(q->sid,12) || (q->count && q->expected_accounts_generation>=q->transaction) ||
         azero(q->target_digest,32) || azero(q->manifest_digest,32)) return 0;
     for (unsigned i=0;i<q->count;++i) {
         const struct acct_owner_binding *b=&q->bindings[i];
         if ((i && q->bindings[i-1].uid>=b->uid) ||
             (b->uid!=500 && b->uid!=501 && (b->uid<1000 || b->uid==UINT32_MAX)) ||
-            b->action<1 || b->action>3 || b->volume!=q->volume || !b->locator ||
+            b->action<1 || b->action>3 || b->volume!=q->volume || b->locator ||
             !acct_profile_root_valid(b->root) ||
             (b->action==ACCT_OWNER_CREATE ? (b->key || b->generation) : (!b->key || !b->generation))) return 0;
         for (unsigned j=0;j<i;++j)
-            if (b->locator==q->bindings[j].locator || !strcmp(b->root,q->bindings[j].root)) return 0;
+            if (!strcmp(b->root,q->bindings[j].root)) return 0;
     }
     return 1;
 }
 int acct_owner_encode(const struct acct_owner_request *q, unsigned op, void *v, size_t cap, size_t *n)
 {
-    if (!valid(q) || op<1 || op>4 || !v || !n) return -EINVAL;
+    if (!valid(q) || op<1 || op>7 || !v || !n) return -EINVAL;
+    if((op==5 || op==6)?q->count!=0:q->count==0) return -EINVAL;
     *n=160+128*q->count;
     if (cap<*n) return -ENOSPC;
     uint8_t *p=v; memset(p,0,*n);
@@ -46,7 +47,7 @@ int acct_owner_decode(struct acct_owner_request *q, unsigned *op, const void *v,
 {
     const uint8_t *p=v;
     if (!q || !op || !p || n<160 || a32(p)!=1 || a32(p+4)!=160 || a32(p+28) ||
-        !a32(p+12) || a32(p+12)>32 || n!=160+128*a32(p+12) || a32(p+8)<1 || a32(p+8)>4) return -EINVAL;
+        a32(p+12)>32 || n!=160+128*a32(p+12) || a32(p+8)<1 || a32(p+8)>7) return -EINVAL;
     struct acct_owner_request t={0}; t.count=a32(p+12);
     for(unsigned i=0;i<3;++i) t.sid[i]=a32(p+16+4*i);
     t.volume=a64(p+32); t.transaction=a64(p+40);
@@ -67,7 +68,7 @@ int acct_owner_decode(struct acct_owner_request *q, unsigned *op, const void *v,
 }
 int acct_owner_reply_encode(const struct acct_owner_reply *r, void *v, size_t cap, size_t *n)
 {
-    if (!r || !v || !n || r->count>32 || r->state>3 || (!r->state && (r->count || r->generation))) return -EINVAL;
+    if (!r || !v || !n || r->count>32 || r->state>5 || ((r->state==0 || r->state==4) && (r->count || r->generation))) return -EINVAL;
     *n=96+32*r->count; if(cap<*n) return -ENOSPC;
     uint8_t *p=v; memset(p,0,*n); w32(p,1); w32(p+4,96); w32(p+8,r->state); w32(p+12,r->count);
     for (unsigned i=0;i<3;++i) w32(p+16+4*i,r->sid[i]);
@@ -81,15 +82,14 @@ int acct_owner_reply_encode(const struct acct_owner_reply *r, void *v, size_t ca
 int acct_owner_reply_decode(struct acct_owner_reply *r, const struct acct_owner_request *q, const void *v, size_t n)
 {
     const uint8_t *p=v;
-    if (!r || !q || !p || n<96 || a32(p)!=1 || a32(p+4)!=96 || a32(p+8)>3 || a32(p+28) || a64(p+56) ||
+    if (!r || !q || !p || n<96 || a32(p)!=1 || a32(p+4)!=96 || a32(p+8)>5 || a32(p+28) || a64(p+56) ||
         a32(p+12)>32 || n!=96+32*a32(p+12) || a64(p+32)!=q->volume || a64(p+40)!=q->transaction ||
         !acct_equal_secret(p+64,q->digest,32)) return -EIO;
     struct acct_owner_reply t={0}; t.state=a32(p+8); t.count=a32(p+12); t.generation=a64(p+48);
-    if ((!t.state && (t.count || t.generation)) || (t.state==ACCT_OWNER_PENDING && t.count!=q->count) ||
+    if (((t.state==0 || t.state==4) && (t.count || t.generation)) || ((t.state==ACCT_OWNER_PENDING || t.state==ACCT_OWNER_RESERVED) && t.count!=q->count) ||
         (t.state==ACCT_OWNER_COMMITTED && t.count!=q->count) ||
-        (t.state==ACCT_OWNER_ABORTED && t.count && t.count!=q->count) ||
-        (t.state==ACCT_OWNER_ABORTED && (!t.count ? t.generation!=0 : t.generation<=q->expected_generation)) ||
-        ((t.state==1 || t.state==2) && t.generation<=q->expected_generation)) return -EIO;
+        (t.state==ACCT_OWNER_ABORTED && (t.count!=q->count || t.generation<=q->expected_generation)) ||
+        ((t.state==1 || t.state==2 || t.state==5) && t.generation<=q->expected_generation)) return -EIO;
     for (unsigned i=0;i<3;++i) { t.sid[i]=a32(p+16+4*i); if(t.sid[i]!=q->sid[i]) return -EIO; }
     t.volume=q->volume; t.transaction=q->transaction; memcpy(t.digest,p+64,32);
     for (unsigned i=0;i<t.count;++i) {
@@ -110,5 +110,6 @@ int acct_owner_call(struct acct_store *s, unsigned op, const struct acct_owner_r
     if(!e) e=acct_owner_encode(q,op,request,sizeof(request),&n);
     if(!e) e=s->owner.call(s->owner.ctx,request,n,reply,sizeof(reply),&m);
     if(!e) e=acct_owner_reply_decode(r,q,reply,m);
+    if(!e && (op==5 || op==6) && r->state!=ACCT_OWNER_CHECKPOINTED) e=-EIO;
     acct_wipe(request,sizeof(request)); acct_wipe(reply,sizeof(reply)); return e;
 }

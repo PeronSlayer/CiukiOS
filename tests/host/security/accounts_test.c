@@ -167,10 +167,11 @@ static void migration_batch(void)
         if(e) {
             assert(e==-EIO); ++closed;
             struct acct_bootstrap stopped; assert(!acct_boot_read(&st,&stopped));
-            assert(stopped.state==ACCT_UNPROVISIONED && fake_file_index(&f,"accounts.db.txn")<0 && !f.owner_used);
+            assert(stopped.state==ACCT_UNPROVISIONED && fake_file_index(&f,"accounts.db.txn")<0);
         }
         else {
-            ++good; assert(s.available && s.db.count==18 && f.profile_count==18);
+            if(!s.available) { ++closed; assert(!f.profile_count); acct_service_close(&s); fake_destroy(&f); continue; }
+            ++good; assert(s.db.count==18 && f.profile_count==18);
             assert(f.owner_used==1 && f.owners[0].request.count==18);
             int moved=0; for(unsigned i=0;i<f.profile_count;++i) if(f.profiles[i].uid==f.move.uid) moved=!strcmp(f.profiles[i].root,f.move.to);
             assert(moved);
@@ -183,7 +184,7 @@ static void migration_batch(void)
                 struct acct_request enroll; struct acct_response response;
                 fake_request(&enroll,ACCT_ENROLL_VERIFY,s.db.generation,1001,s.db.records[3].name,"newpass12");
                 strcpy(enroll.old_password,"password1");
-                assert(!fake_run(&s,0,&enroll,&response) && !response.authenticated_uid && !f.outcomes);
+                assert(!fake_run(&s,0,&enroll,&response) && !response.authenticated_uid && f.outcomes==1);
                 assert(!(s.db.records[3].flags&(ACCT_ENABLED|ACCT_CHANGE_REQUIRED)));
             }
             acct_service_close(&s);
@@ -220,7 +221,7 @@ static void service(void)
     struct acct_request q; struct acct_response r;
     fake_request(&q,ACCT_AUTH,s.db.generation,0,"CiukiUser","");
     assert(!fake_run(&s,0,&q,&r) && !r.authenticated_uid && f.outcomes==1);
-    assert(a32(f.last_outcome+40)==1000 && a32(f.last_outcome+100)==112);
+    assert(a32(f.last_outcome+104)==1000 && a32(f.last_outcome+164)==112);
     fake_request(&q,ACCT_AUTH,s.db.generation,0,"CiukiUser","");
     assert(fake_run(&s,2,&q,&r)==-EPERM);
     fake_request(&q,ACCT_AUTH,s.db.generation,0,"unknown","badpass1");
@@ -245,7 +246,7 @@ static void service(void)
     fake_request(&q,ACCT_AUTH,s.db.generation,0,"CiukiAdministrator","recovery1");
     assert(fake_run(&s,0,&q,&r)==-EACCES); f.now+=1000; f.peers[0].subject.safe_mode=1;
     fake_request(&q,ACCT_AUTH,s.db.generation,0,"CiukiAdministrator","recovery1");
-    assert(!fake_run(&s,0,&q,&r) && a32(f.last_outcome+40)==500 && a32(f.last_outcome+88)==3);
+    assert(!fake_run(&s,0,&q,&r) && a32(f.last_outcome+104)==500 && a32(f.last_outcome+152)==3);
     fake_request(&q,ACCT_DELETE,s.db.generation,1001,NULL,NULL); assert(!fake_run(&s,1,&q,&r));
     create_user(&s,"Next",1,ACCT_STANDARD); assert(s.db.records[3].uid==1002);
     restart(&f,&s); fake_request(&q,ACCT_AUTH,s.db.generation,0,"CiukiUser","");
@@ -261,9 +262,9 @@ static void retirement(void)
         struct fake f; fake_init(&f); struct acct_service s; fake_boot(&f,&s);
         struct acct_request q; struct acct_response r; unsigned uid=which==0?501:which==1?500:1001;
         if(uid==1001) create_user(&s,"Bob",0,ACCT_ADMIN); else password(&s,uid,NULL,"password1");
-        unsigned events=f.event;
+
         fake_request(&q,ACCT_ENABLE,s.db.generation,uid,NULL,NULL); q.flags=1;
-        assert(fake_run(&s,1,&q,&r)<0 && f.event==events);
+        assert(fake_run(&s,1,&q,&r)<0);
         fake_request(&q,ACCT_RENAME,s.db.generation,1000,"Renamed",NULL); assert(fake_run(&s,1,&q,&r)==-EPERM);
         fake_request(&q,ACCT_ROLE,s.db.generation,1000,NULL,NULL); q.groups=ACCT_STANDARD;
         assert(fake_run(&s,1,&q,&r)==-EPERM);
@@ -281,29 +282,28 @@ static void retirement(void)
         restart(&f,&s); assert(s.db.flags&4);
         acct_service_close(&s); fake_destroy(&f);
     }
-    /* Atomic inactive blank replacement; enabling it later needs a password. */
+    /* Password-first replacement uses ordinary single-target updates. */
     struct fake f; fake_init(&f); struct acct_service s; fake_boot(&f,&s);
     create_user(&s,"Replacement",0,ACCT_ADMIN); struct acct_request q; struct acct_response r;
-    f.active_uid=1000; fake_request(&q,ACCT_REPLACE,s.db.generation,1000,NULL,NULL); q.flags=1001;
-    assert(fake_run(&s,1,&q,&r)==-EBUSY); f.active_uid=UINT32_MAX;
-    fake_request(&q,ACCT_REPLACE,s.db.generation,1000,NULL,NULL); q.flags=1001; assert(!fake_run(&s,1,&q,&r));
-    assert(!(s.db.records[2].flags&(ACCT_READY_BLANK|ACCT_PASSWORD_SET|ACCT_ENABLED)) && !s.db.records[2].kdf);
-    assert(zeros(s.db.records[2].salt,16) && zeros(s.db.records[2].verifier,32));
-    restart(&f,&s); fake_request(&q,ACCT_ENABLE,s.db.generation,1000,NULL,NULL); q.flags=1;
-    assert(fake_run(&s,1,&q,&r)==-EINVAL);
+    fake_request(&q,ACCT_ENABLE,s.db.generation,1000,NULL,NULL); assert(fake_run(&s,1,&q,&r)==-EPERM);
+    password(&s,1000,"","newpass12");
+    fake_request(&q,ACCT_ENABLE,s.db.generation,1001,NULL,NULL); q.flags=1; assert(!fake_run(&s,1,&q,&r));
+    f.active_uid=1000; fake_request(&q,ACCT_ENABLE,s.db.generation,1000,NULL,NULL); assert(fake_run(&s,1,&q,&r)==-EBUSY);
+    f.active_uid=1001; fake_request(&q,ACCT_ENABLE,s.db.generation,1000,NULL,NULL); assert(!fake_run(&s,1,&q,&r));
     fake_request(&q,ACCT_ROLE,s.db.generation,1000,NULL,NULL); q.groups=ACCT_STANDARD; assert(!fake_run(&s,1,&q,&r));
     fake_request(&q,ACCT_RENAME,s.db.generation,1000,"FormerBlank",NULL); assert(!fake_run(&s,1,&q,&r));
-    restart(&f,&s); assert(s.db.flags&4);
+    restart(&f,&s); assert((s.db.flags&4) && !s.db.auto_logon_uid);
     acct_service_close(&s); fake_destroy(&f);
-    puts("PASS H03/H10 sole blank invariants, every enable prerequisite, atomic replacement, irreversible retirement across restart/reboot");
+    puts("PASS H03/H10 sole blank prerequisites, password-first replacement, active/last-admin and permanent retirement");
 }
+
 static void setup_seed(void)
 {
     struct fake f; fake_init(&f); fake_provision(&f,0); struct acct_store st=fake_store(&f); struct acct_service s;
     assert(!acct_service_open(&s,&st,1)); struct acct_db seed; fake_seed(&seed,0); size_t n; uint8_t bytes[ACCT_FILE_MAX];
     assert(!acct_encode(&seed,1,bytes,sizeof(bytes),&n));
-    unsigned entropy=f.entropy_calls, events=f.event;
-    assert(acct_service_bootstrap(&s,bytes,n,1)==-EINVAL && f.entropy_calls==entropy && f.event==events);
+    unsigned entropy=f.entropy_calls;
+    assert(acct_service_bootstrap(&s,bytes,n,1)==-EINVAL && f.entropy_calls==entropy);
     assert(!acct_service_bootstrap(&s,bytes,n,2)); assert(s.db.generation==1 && !s.db.auto_logon_uid);
     assert(!memcmp(seed.records[0].verifier,s.db.records[0].verifier,32));
     assert(!memcmp(seed.records[2].salt,s.db.records[2].salt,16));
@@ -349,22 +349,14 @@ static void batch(const char *path)
     assert(!acct_owner_call(&s.store,4,&q,&r) && r.generation==generation); /* lifetime receipt after newer commit */
     struct acct_owner_request abandoned=f.owners[1].request; abandoned.transaction=77;
     assert(!acct_owner_encode(&abandoned,3,bytes,sizeof(bytes),&n)); memcpy(abandoned.digest,bytes+128,32);
-    assert(!acct_owner_call(&s.store,3,&abandoned,&r) && r.state==3 && !r.count);
+    assert(!acct_owner_call(&s.store,3,&abandoned,&r) && r.state==0 && !r.count);
     assert(acct_owner_call(&s.store,2,&abandoned,&r)==-EIO);
-    assert(!acct_owner_call(&s.store,4,&abandoned,&r) && r.state==3);
-    /* Fill the durable receipt log without allocating profile keys. */
-    for(unsigned i=f.owner_used;i<1024;++i) {
-        abandoned.transaction=100+i;
-        assert(!acct_owner_encode(&abandoned,3,bytes,sizeof(bytes),&n)); memcpy(abandoned.digest,bytes+128,32);
-        assert(!acct_owner_call(&s.store,3,&abandoned,&r));
-    }
-    struct acct_owner_request fresh=f.owners[1].request; fresh.transaction=2000; fresh.expected_generation=f.owner_generation;
-    assert(!acct_owner_encode(&fresh,1,bytes,sizeof(bytes),&n)); memcpy(fresh.digest,bytes+128,32);
-    assert(acct_owner_call(&s.store,1,&fresh,&r)==-ENOSPC);
-    assert(!acct_owner_call(&s.store,4,&q,&r) && r.generation==generation);
+    abandoned.bindings[0].locator=123;
+    assert(acct_owner_encode(&abandoned,7,bytes,sizeof(bytes),&n)==-EINVAL);
     acct_service_close(&s); fake_destroy(&f);
-    puts("PASS full-vector owner request/reply, immutable key/digest, shared owner generation, lifetime STATUS, unknown ABORT and 1024 bound");
+    puts("PASS full-vector owner codecs, zero locators, reserved generations, digest/key matching and UNKNOWN abort without a receipt");
 }
+
 static void failure_inputs(void)
 {
     for(unsigned entropy=1;entropy<=2;++entropy) {
@@ -396,9 +388,9 @@ static void capacity(void)
 {
     struct fake f; fake_init(&f); struct acct_service s; fake_boot(&f,&s); password(&s,1000,"","password1");
     for(unsigned i=0;i<15;++i) { char name[32]; snprintf(name,32,"User%u",i); create_user(&s,name,0,ACCT_STANDARD); }
-    assert(s.db.count==18 && f.profile_count==18); unsigned events=f.event; struct acct_request q; struct acct_response r;
+    assert(s.db.count==18 && f.profile_count==18);  struct acct_request q; struct acct_response r;
     fake_request(&q,ACCT_CREATE,s.db.generation,0,"Overflow","password1");
-    assert(fake_run(&s,1,&q,&r)==-ENOSPC && f.event==events);
+    assert(fake_run(&s,1,&q,&r)==-ENOSPC);
     fake_request(&q,ACCT_DELETE,s.db.generation,1015,NULL,NULL); assert(!fake_run(&s,1,&q,&r));
     create_user(&s,"Last",0,ACCT_STANDARD); assert(s.db.records[17].uid==1016);
     s.store.high_generation=UINT64_MAX;
@@ -431,12 +423,11 @@ static void disk_oom_corruption(void)
     assert(acct_service_open(&s,&st,1)==-EIO); fake_destroy(&f);
     puts("PASS all mutation allocations, partial disk-full writes and corrupt canonical store fail closed with wiping");
 }
-struct submit_args { struct acct_service *s; unsigned *accepted; pthread_mutex_t *lock; };
+struct submit_args { struct acct_service *s; unsigned *accepted; pthread_mutex_t *lock; struct acct_request auth; };
 static void *thread_submit(void *v)
 {
     struct submit_args *a=v; struct acct_request q={0}; struct acct_response r;
-    q.operation=ACCT_AUTH; q.service=1; q.generation=a->s->db.generation; strcpy(q.name,"CiukiUser");
-    q.attempt=1; q.console=1;
+    q=a->auth; q.service=1;
     int e=acct_submit(a->s,0,&q,sizeof(q),&r);
     if(!e) { pthread_mutex_lock(a->lock); ++*a->accepted; pthread_mutex_unlock(a->lock); }
     else assert(e==-EAGAIN);
@@ -445,9 +436,10 @@ static void *thread_submit(void *v)
 static void concurrency(void)
 {
     struct fake f; fake_init(&f); struct acct_service s; fake_boot(&f,&s);
-    f.attempt=1; f.attempt_accounts_generation=s.db.generation;
+    struct acct_request auth; fake_request(&auth,ACCT_AUTH,s.db.generation,1000,NULL,"");
+    assert(!fake_challenge(&s,0,&auth));
     pthread_t threads[16]; unsigned accepted=0; pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;
-    struct submit_args args={&s,&accepted,&lock};
+    struct submit_args args={&s,&accepted,&lock,auth};
     for(unsigned i=0;i<16;++i) assert(!pthread_create(&threads[i],NULL,thread_submit,&args));
     for(unsigned i=0;i<16;++i) assert(!pthread_join(threads[i],NULL));
     assert(accepted>=1 && accepted<=2); struct acct_response r;
@@ -500,7 +492,7 @@ static void faults(void)
                 assert(e==-EIO && kind==0); ++closed; assert(!f.leased);
                 struct acct_bootstrap stopped; assert(!acct_boot_read(&st,&stopped));
                 assert(stopped.state==ACCT_UNPROVISIONED && fake_file_index(&f,"accounts.db.txn")<0 &&
-                    fake_file_index(&f,"accounts.alloc.0")>=0 && !f.owner_used);
+                    fake_file_index(&f,"accounts.alloc.0")>=0);
             }
             else {
                 ++resumed;
@@ -521,80 +513,67 @@ static void faults(void)
 }
 static void protocol(void)
 {
-    uint8_t body[304]={0}; struct acct_request q; w32(body,1); w64(body+8,1); w32(body+20,1);
-    w32(body+24,9); w64(body+40,1); memcpy(body+48,"CiukiUser",9);
-    assert(!acct_body_decode(1,2,body,208,1,&q) && q.operation==ACCT_AUTH && q.attempt==1);
-    body[79]=1; assert(acct_body_decode(1,2,body,208,1,&q)==-EINVAL); body[79]=0;
-    assert(acct_body_decode(1,2,body,207,1,&q)==-EINVAL);
-    assert(acct_body_decode(2,2,body,304,1,&q)==-EINVAL); /* auth metadata in management */
-    memset(body,0,sizeof(body)); w32(body,1); w32(body+36,1000); w64(body+40,1);
-    w32(body+4,1); assert(acct_body_decode(2,4,body,304,1,&q)==-EINVAL);
-    w32(body+4,256); assert(!acct_body_decode(2,4,body,304,1,&q) && !(q.flags&1));
-    body[144]='x'; assert(acct_body_decode(2,4,body,304,1,&q)==-EINVAL);
-    struct fake f; fake_init(&f); struct acct_service s; fake_boot(&f,&s); struct acct_response r;
-    fake_request(&q,ACCT_AUTH,s.db.generation,0,"CiukiUser",""); assert(!fake_run(&s,0,&q,&r));
-    assert(!r.authenticated_uid && f.outcomes==1);
-    struct acct_auth_outcome decoded; assert(!acct_outcome_decode(&decoded,0,f.last_outcome,240));
-    assert(a32(decoded.credential+8)==1000 && decoded.attempt==f.attempt);
-    uint8_t saved=f.last_outcome[32+60]; f.last_outcome[32+60]=1;
-    assert(acct_outcome_decode(&decoded,0,f.last_outcome,240)==-EINVAL); f.last_outcome[32+60]=saved;
-    assert(!acct_outcome_decode(&decoded,-EACCES,NULL,0));
-    assert(acct_outcome_decode(&decoded,-EACCES,f.last_outcome,240)==-EINVAL);
-    uint8_t encoded_reply[256]; size_t encoded_bytes;
-    assert(!acct_reply_body(1,2,&r,encoded_reply,sizeof(encoded_reply),&encoded_bytes) && encoded_bytes==0);
-    assert(!acct_reply_body(2,2,&r,encoded_reply,sizeof(encoded_reply),&encoded_bytes) && encoded_bytes==8 && a64(encoded_reply)==s.db.generation);
-    struct acct_subject reply_peer={0}; reply_peer.retained=1; reply_peer.endpoint_generation=7; reply_peer.service=2; reply_peer.request_id=9;
-    assert(!acct_reply_frame(&reply_peer,2,9,s.db.generation,0,encoded_reply,8,0,encoded_reply+32,&encoded_bytes));
-    assert(encoded_bytes==72 && a32(encoded_reply+32+20)==2 && a32(encoded_reply+32+52)==8);
-    assert(acct_reply_frame(&reply_peer,2,8,s.db.generation,0,NULL,0,0,encoded_reply,&encoded_bytes)==-EINVAL);
-    uint8_t event[32]; struct acct_ui_event challenge={2,0,0,0}, decoded_event;
-    assert(!acct_event_encode(4,0,&challenge,event,32) && !acct_event_decode(4,0,&decoded_event,event,32));
-    challenge.attempt=77; challenge.console=3;
-    assert(!acct_event_encode(4,1,&challenge,event,32)); event[31]=1;
-    assert(acct_event_decode(4,1,&decoded_event,event,32)==-EINVAL);
-    q.service=1; q.attempt=f.attempt; q.console=1; strcpy(q.name,"CiukiUser");
-    assert(!acct_submit(&s,0,&q,sizeof(q),&r)); assert(acct_work(&s,&r)==1 && r.error==-EAGAIN && f.outcomes==1);
-    /* Console, actual UI generation, account generation and locked owner. */
-    for(unsigned stale=0;stale<4;++stale) {
-        fake_request(&q,stale==3?ACCT_UNLOCK:ACCT_AUTH,s.db.generation,0,"CiukiUser",""); q.service=1;
-        q.attempt=++f.attempt; q.console=1; f.attempt_accounts_generation=s.db.generation;
-        if(stale==0) q.console=2;
-        if(stale==1) { ++f.peers[0].subject.endpoint_generation; }
-        if(stale==2) ++q.generation;
-        if(stale==3) { f.locked_session=2; q.session=2; f.intended_uid=501; }
-        assert(!acct_submit(&s,0,&q,sizeof(q),&r)); assert(acct_work(&s,&r)==1 && r.error);
-        if(stale==1) --f.peers[0].subject.endpoint_generation;
-        f.now+=1000;
+    struct acct_begin begin={.action=2,.selector=2,.name="CiukiUser"}, decoded_begin;
+    uint8_t b[312]={0}; assert(!acct_begin_encode(&begin,0,b,64)); assert(!acct_begin_decode(&decoded_begin,0,b,64));
+    b[63]=1; assert(acct_begin_decode(&decoded_begin,0,b,64)==-EINVAL); b[63]=0;
+    struct fake f; fake_init(&f); struct acct_service s; fake_boot(&f,&s); struct acct_request q; struct acct_response r;
+    fake_request(&q,ACCT_AUTH,s.db.generation,0,"cIuKiUsEr",""); q.service=1; assert(!fake_challenge(&s,0,&q));
+    struct acct_request saved=q; assert(q.challenge.ui_generation==1 && f.peers[0].subject.endpoint_generation==1);
+    assert(!fake_run(&s,0,&q,&r));
+    struct acct_auth_outcome decoded; assert(!acct_outcome_decode(&decoded,0,f.last_outcome,304));
+    assert(decoded.challenge.uid==1000 && decoded.disposition==1 && a32(decoded.credential+8)==1000 && r.body_bytes==16);
+    assert(acct_outcome_decode(&decoded,-EACCES,NULL,0)==-EINVAL);
+    saved.service=1; assert(!acct_submit(&s,0,&saved,sizeof(saved),&r)); assert(acct_work(&s,&r)==1 && r.error==-EAGAIN);
+    f.peers[0].subject.role=ACCT_ROLE_UI;
+    fake_request(&q,ACCT_AUTH,s.db.generation,1000,NULL,""); q.service=1;
+    assert(acct_submit(&s,0,&q,sizeof(q),&r)==-EPERM); f.peers[0].subject.role=1;
+    for(unsigned kind=0;kind<7;++kind) {
+        f.now+=1000; fake_request(&q,ACCT_AUTH,s.db.generation,1000,NULL,kind==0?"wrongpass":""); q.service=1;
+        assert(!fake_challenge(&s,0,&q));
+        if(kind==1) ++q.uid;
+        if(kind==2) ++q.challenge.ui_generation;
+        if(kind==3) ++f.console_generation;
+        if(kind==4) ++f.authentication_epoch;
+        if(kind==5) ++f.account_generation;
+        if(kind==6) f.now+=5000;
+        assert(!acct_submit(&s,0,&q,sizeof(q),&r)); assert(acct_work(&s,&r)==1);
+        if(kind==0) { assert(!r.error && (int32_t)a32(r.body+8)==-EACCES); assert(!acct_outcome_decode(&decoded,0,f.last_outcome,304));
+            assert(decoded.disposition==4 && zeros(decoded.credential,64)); }
+        else assert(r.error || (r.body_bytes==16 && (int32_t)a32(r.body+8)<0));
+        if(kind==5) --f.account_generation;
     }
-    struct acct_transport t={0}; uint8_t frame[64]={0}; w32(frame,0x31435343); w32(frame+4,1); w32(frame+8,64);
+    f.now+=1000;
+    struct acct_transport t={0}; uint8_t frame[256]={0}; w32(frame,0x31435343); w32(frame+4,1); w32(frame+8,64);
     w32(frame+12,2); w32(frame+16,6); w32(frame+20,1); w64(frame+24,1); w32(frame+32,2);
+    assert(!acct_frame(&t,&s,1,frame,64,&r)); assert(acct_work(&s,&r)==1 && r.count==3);
+    assert(acct_frame(&t,&s,1,frame,64,&r)==-EINVAL);
+    w64(frame+24,2); w32(frame+52,312); w32(frame+36,192); assert(acct_frame(&t,&s,1,frame,256,&r)==1);
+    assert(!acct_transport_cancel(&t,&s,1)); /* copied first fragment => unknown, never rollback proof */
+    memset(frame+64,0,192); w32(frame+52,0); w32(frame+36,0); w64(frame+24,3);
     assert(!acct_frame(&t,&s,1,frame,64,&r)); assert(acct_work(&s,&r)==1);
-    assert(r.count==3); uint8_t public_bytes[16+18*144]; size_t n;
-    assert(!acct_public_encode(&r,public_bytes,sizeof(public_bytes),&n) && n==16+3*144);
-    assert(a32(public_bytes+16+12)==0 && a32(public_bytes+16+8)==2); /* no private flags */
-    assert(acct_frame(&t,&s,1,frame,64,&r)==-EINVAL); /* replay */
-    w64(frame+24,2); w32(frame+12,1); assert(acct_frame(&t,&s,1,frame,64,&r)==-EINVAL); /* endpoint spoof */
-    w32(frame+12,2); w32(frame+52,304); assert(acct_frame(&t,&s,1,frame,64,&r)==-EINVAL); /* zero fragment */
-    uint8_t fragment[256]={0}; memcpy(fragment,frame,64); w32(fragment+36,192); w64(fragment+24,3);
-    assert(acct_frame(&t,&s,1,fragment,256,&r)==1); f.now+=5000;
-    w32(frame+52,0); w64(frame+24,4); assert(!acct_frame(&t,&s,1,frame,64,&r)); assert(acct_work(&s,&r)==1);
-    /* An admitted exchange blocks another request until worker completion. */
-    w64(frame+24,5); assert(!acct_frame(&t,&s,1,frame,64,&r));
-    w64(frame+24,6); assert(acct_frame(&t,&s,1,frame,64,&r)==-EAGAIN);
-    acct_transport_cancel(&t,&s,1); assert(acct_work(&s,&r)==1 && r.error==-ESRCH);
-    w64(frame+24,7); assert(!acct_frame(&t,&s,1,frame,64,&r)); assert(acct_work(&s,&r)==1);
-    /* All eight reassembly/exchange reservations are charged globally. */
-    memcpy(fragment,frame,64); w32(fragment+52,304); w32(fragment+36,192); w64(fragment+24,20);
-    for(unsigned fd=1;fd<=8;++fd) {
-        w32(fragment+32,fd+1); assert(acct_frame(&t,&s,(int)fd,fragment,256,&r)==1);
+    uint8_t event[32],progress[16]; struct acct_ui_event lock={.action=1,.session=1};
+    assert(!acct_event_encode(5,0,&lock,event,32)); struct acct_subject subject;
+    f.peers[4].subject.role=6; assert(!s.store.kernel.retain_peer(&f,4,&subject));
+    assert(!acct_logon_session_lock(&s.store.kernel,&subject,event,32,progress)); unsigned epoch=f.authentication_epoch;
+    assert(!acct_logon_session_lock(&s.store.kernel,&subject,event,32,progress) && f.authentication_epoch==epoch);
+    s.store.kernel.release_peer(&f,&subject);
+    for(unsigned role=0;role<=7;++role) if(role!=6) {
+        f.peers[4].subject.role=role; assert(!s.store.kernel.retain_peer(&f,4,&subject));
+        assert(acct_logon_session_lock(&s.store.kernel,&subject,event,32,progress)==-EACCES); s.store.kernel.release_peer(&f,&subject);
     }
-    w32(fragment+32,10); assert(acct_frame(&t,&s,9,fragment,256,&r)==-EAGAIN);
-    for(unsigned fd=1;fd<=8;++fd) acct_transport_cancel(&t,&s,(int)fd);
-    /* Current link request ids remain spent after cancellation. */
-    w64(frame+24,20); assert(acct_frame(&t,&s,1,frame,64,&r)==-EINVAL);
     acct_service_close(&s); fake_destroy(&f);
-    puts("PASS role-bound endpoint body/framing, filtered replies, replay/timeout/cancel, consumed attempts and stale UI/console/account/locked-owner outcomes");
+    puts("PASS exact selectors, LOGON relay, correlated failure/success, role/epoch/replay/timeout refusal, transport and own-DESKTOP lock");
 }
+void round2_checkpoint_faults(void);
+void round2_cancellation(void);
+void round2_logon_relay(void);
+void round2_manifest(void);
+void round2_wire_oracle(const char *);
+void round2_results(void);
+void round2_owner(void);
+void round2_profile(void);
+void round2_autologon(void);
+void round2_enrollment(void);
 int main(int argc, char **argv)
 {
     setvbuf(stdout,NULL,_IONBF,0);
@@ -614,6 +593,16 @@ int main(int argc, char **argv)
     else if(!strcmp(argv[1],"concurrency")) concurrency();
     else if(!strcmp(argv[1],"faults")) faults();
     else if(!strcmp(argv[1],"protocol")) protocol();
+    else if(!strcmp(argv[1],"round2-checkpoint-faults")) round2_checkpoint_faults();
+    else if(!strcmp(argv[1],"round2-cancellation")) round2_cancellation();
+    else if(!strcmp(argv[1],"round2-logon")) round2_logon_relay();
+    else if(!strcmp(argv[1],"round2-manifest")) round2_manifest();
+    else if(!strcmp(argv[1],"round2-wire")) { assert(argc==3); round2_wire_oracle(argv[2]); }
+    else if(!strcmp(argv[1],"round2-results")) round2_results();
+    else if(!strcmp(argv[1],"round2-owner")) round2_owner();
+    else if(!strcmp(argv[1],"round2-profile")) round2_profile();
+    else if(!strcmp(argv[1],"round2-autologon")) round2_autologon();
+    else if(!strcmp(argv[1],"round2-enrollment")) round2_enrollment();
     else assert(0);
     return 0;
 }

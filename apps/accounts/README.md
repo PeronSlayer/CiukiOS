@@ -1,136 +1,144 @@
 # SYSTEM account service core
 
-This private service implements sec-user-01 and its first review amendment. It
-installs no runtime endpoint and leaves G32 desktop logon unchanged. Build the
-core from `crypto.c`, `codec.c`, `owner.c`, `bootstrap.c`, `protocol.c`, `store.c`,
-`service.c`, `migration.c`, repository SHA-256 and G32's read-only v1 decoder.
-No implementation is vendored or included through a `.c` include.
+This private service implements sec-user-01 through Lead amendment 2. It installs
+no runtime endpoint and leaves G32 desktop logon unchanged. Link `crypto.c`,
+`codec.c`, `owner.c`, `bootstrap.c`, `protocol.c`, `store.c`, `service.c`,
+`migration.c`, `persist.c`, `results.c`, `auth.c`, `enrollment.c`, `manifest.c`,
+`checkpoint.c`, `logon.c`, repository SHA-256 and G32's read-only decoder.
+No source is vendored or included through a `.c` include.
 
 `acct_service_open(..., host_test=0)` requires real sealed kernel, OWNER and
-protected destination-storage adapters. Host tests explicitly select test mode.
-Only sealed boot code supplies adapter tables. These are integration seams, not
-client flags or an alternative kernel/public SDK ABI.
+protected storage adapters. Only sealed boot code supplies these tables; host
+tests explicitly select test mode. No fake endpoint is installed at runtime.
 
-`adapter.h` binds the frozen call-101 role, link and retained-subject model.
-`service_link` maps operations 12 CONNECT, 13 ACCEPT and 14 CANCEL to the exact
-64-byte private link record. ACCOUNT has no session-creation/launch/unlock hook;
-operations 8–11 remain registered LOGON authority. Identity, role, actual Safe
-Mode, endpoint/service generations, active accounts and the exclusive live lease
-come from the kernel. uid 0 alone never authorizes account management or AUTH.
-Public spawns, copied names and environment strings cannot acquire these roles.
+`adapter.h` follows the frozen call-101 operations 8..14 and 64-byte link record.
+Retained peer `role_generation` identifies the remote registered role instance;
+it is distinct from the connected server's `service_generation`. ACCOUNT trusts
+the retained LOGON role to relay the actual UI->LOGON endpoint generation. It
+never substitutes the LOGON->ACCOUNT generation. Kernel attestation supplies
+roles, credentials, Safe Mode, active sessions, epochs and service generations;
+request uid/name/environment fields grant no authority. `subject_get` retains a
+link subject across exchanges; `peer_alive` must check its original process/link
+revocation generation. Registration and all authority fds remain nontransferable.
 
-`protocol.c` supplies the 208-byte AUTH and 304-byte ACCOUNTS body codecs,
-144-byte filtered public records, 8-byte mutation replies, 240-byte AUTH_OUTCOME
-validation, 32-byte LOGON event/challenge codecs and bounded CSC1 framing. Unknown
-operations, flags, fields, lengths, padding and unselected UPDATE data fail before
-dispatch. SELF_PASSWORD cannot become an administrator reset of a different uid;
-reset uses UPDATE and only targets another inactive account. No reply exposes a
-salt, verifier, private path or reusable credential to the UI.
+The private codecs are little-endian, with canonical padding and no attachments:
 
-The channel adapter must reject all attachments before `acct_frame`. It accepts
-only the six kernel role-bound service endpoints; AUTH accepts LOGON_UI only.
-One exchange per actual link and eight globally include reassembly, queued work
-and queued replies. `exchange_begin` admits/spends request ids in kernel link
-state; cancellation and reconnect cannot reset them on the same link. Fragments
-are contiguous, at most 192 bytes, with an 8192-byte total and 5000 ms admission
-expiry. A transport is driven serially by its receiver. Cancel calls operation
-14 rather than interpreting caller-provided CANCEL bytes. `deliver_reply` checks
-and retains the original subject/link/request through final queue drain;
-`exchange_end` drops the worker reference, not queued reply ownership. Close,
-revocation, timeout and all error exits wipe buffers and release charges.
+- BEGIN_AUTH 64; challenge 64; CHALLENGE relay 128; UI submission 208;
+  verification relay 272; correlated AUTH_OUTCOME 304; public progress 16 bytes.
+- Management 312, including client_operation_id at 304; filtered public records
+  144; successful mutation generation 8; RESERVE request/reply 48/16; STATUS
+  request/reply 32/80; authorized PROFILE 272 bytes.
+- OWNER batch request 160+128*N and reply 96+32*N; checkpoint requests are 160
+  bytes with zero bindings. Every binding's request locator is zero.
 
-`claim_attempt` atomically consumes a LOGON-issued attempt, rechecking actual UI
-endpoint, action, session, console and accounts generations. It binds the resolved
-account uid at consumption; UNLOCK already names the locked owner. ACCOUNT sends
-successful credential/profile/name outcomes only on its own retained connection
-to registered LOGON. Failed outcomes carry status with no body. LOGON revalidates
-and consumes them once before its own session/launch/console transitions. Fresh
-ready autologon is LOGON-initiated; `acct_autologon_eligible` checks the complete
-consumed-state tuple and Safe Mode/Log Off/Lock exclusions. No list response is a
-challenge. The private direct request API is for sealed internal workers/tests;
-production channel ingress always uses the frozen body decoder.
+AUTH LIST permits LOGON_UI or LOGON. All challenge, verification, enrollment and
+AUTOLOGON operations require LOGON. ACCOUNT retains each resolved selector,
+challenge, snapshot and original LOGON subject, consumes it once and reports
+success or failure to LOGON with the complete challenge. Errors carry zero
+identity/profile/name. ENROLL_STAGED/COMMITTED also carry zero identity: a fresh
+LOGON challenge is required. Cancellation, timeout, changed epochs, target,
+account/service generations or a different connection cannot authorize a result.
+`auth_binding` must validate LOGON's cross-connection UI attestation against its
+retained attempt, not infer it from ACCOUNT's endpoint. `auth_outcome` sends on
+the private ACCOUNT->LOGON connection and waits for acknowledgment while the
+receiver continues draining outcomes independently of verification replies.
 
-ACCOUNT never launches a process or copies SYSTEM environment, settings, stdin
-or fds into a user session. At integration LOGON/k01 alone generates the allowlist:
-LC_ALL=C, validated committed TZ, generated CIUKI_PROFILE_SETTINGS and the
-purpose-specific session/launch/descriptor labels. AUTH accepts none of these as
-input. The outcome contains only the frozen credential/profile/name records.
+`logon.c` supplies the private coordinator's selector/challenge/submission/outcome
+correlation and one-shot autologon latch. Its outcome generation argument must
+come from trusted current ACCOUNT state, never a UI assertion. The later LOGON
+event loop binds transport, invalidation on cancellation/disconnect, secure
+attention, and actual session creation/launch/unlock. SESSION_LOCK accepts only
+a retained same-session DESKTOP and calls the current trusted lock backend; it
+cannot release a gate or expose its cookie. Blank-owner guidance belongs to the
+trusted UI. ACCOUNT has no session creation, process launch or SECURE_LEAVE hook.
 
-The v2 store uses explicit little-endian 96-byte headers and 256-byte sorted
-records. `auto_logon_retired` is monotonic in both accounts and bootstrap state.
-Blank CiukiUser must be the sole enabled interactive account; enabling Guest,
-500 or an ordinary user while it remains blank fails before persistent writes.
-Blank rename/demotion requires prior password or disablement. A disabled former
-blank becomes unset and cannot be enabled without a nonempty password. The
-private authorized ACCT_REPLACE operation atomically disables inactive blank
-CiukiUser and enables its already configured inactive replacement administrator.
-It is deliberately not assigned an unfrozen public endpoint operation. Restoring
-names/types, deleting other users, service restart and reboot never rearm blank
-logon. Confirmation/UI integration belongs to the later account-controls task.
+Both ACCOUNT and LOGON consume AUTOLOGON eligibility before issuing a challenge.
+It requires the exact retained ready tuple, CONSUMED bootstrap, normal boot and
+both singleton role generations=1. The coordinator clears eligibility on Log
+Off/Lock; either role restart suppresses it for that boot. Persistent retirement
+is monotonic. Ordinary password-first operations replace blank CiukiUser: set
+its password, enable another configured administrator, change active session,
+then disable/demote it. There is no atomic replacement operation or wire codec.
+Last-admin and active-account checks apply after each operation.
 
-Every mutation uses one complete OWNER batch: request 160+128*N, reply 96+32*N,
-key (SID, destination volume, G). All accounts, including disabled built-ins,
-have bindings; account-only operations use KEEP, deletion RETIRE preserves data.
-`stage` resolves destination-issued stable locators, proves any protected G32
-mapping/collision moves, stages under deny-first labels and flushes destination
-files/directories/volume metadata. `validate_stage` rechecks that immutable
-manifest and its objects during recovery; missing/corrupt staging closes the
-gate. Neither callback may mutate source media/session data or reinterpret a
-client LBA/directory slot as a stable locator. Real OWNER enforces aliases,
-32-profile capacity, nonreused keys/generations and lifetime STATUS receipts
-bounded at 1024; the fault backend models that contract, not live enforcement.
+`results.c` issues durable monotonic client IDs and records caller uid, operation
+and the SHA-256 of operation||management-with-zero-id. Client recovery state
+persists the id/digest/non-secret selectors before sending; it never persists
+plaintext secrets. PENDING precedes mutation effects. Exact retries return their
+retained result before stale-generation checks and never repeat a KDF or CREATE.
+Same-uid reconnect STATUS is permitted; admin membership does not expose another
+uid's receipt. IDs above the watermark return ESRCH; discarded IDs return EXPIRED
+without owner/result information, and old mutations return EAGAIN. EXPIRED never
+means rollback. Before COMMIT_REQUIRED a revoked request can abort; afterward
+explicit SYSTEM recovery finishes it and suppresses delivery to the dead link.
 
-Durability files are all SYSTEM-only below `/System/Security`:
+Result checkpoints retain at most 1024 receipts, compact proactively at 768 and
+keep 256 terminal results when possible. An independent two-slot operation-id
+watermark prevents reuse after a lost reservation reply. Full snapshots include
+database hash/generation and allocation watermarks; candidate/previous files are
+validated before forward recovery. PENDING recovery compares the unique planned
+G with the recovered coherent database; no new caller authority is inferred.
+One unsubmitted reservation per uid may be replaced; a pending writer blocks it.
+No plaintext secret is stored in the result journal.
 
-- `accounts.alloc.0`/`.1`: two checksummed allocation slots, each 96 bytes, sealing
-  SID/volume and highest reserved G/next_uid. Never overwrite the newest slot;
-  aborted or cancelled reservations survive old database restoration.
-- `accounts.db.txn`: immutable checksummed reservation with the full encoded
-  request, target database bytes/digest and prior database digest. It seals all
-  intended enabled/disabled records and the complete output before publication.
-- `acct.prepared`, `acct.commit`, `acct.owner`, `acct.done`, `acct.abort`: keyed,
-  checksummed phase records. `acct.commit` is COMMIT_REQUIRED and irrevocable.
-  Cancellation before it aborts the entire vector; afterwards only reply delivery
-  is cancelled and recovery finishes publication.
-- `accounts.db.new`/`.bak`: flushed staging and prior recovery evidence. OWNER
-  commits before database installation. Durable DONE, bootstrap consumption and
-  retirement precede acknowledgement. Remove backups durably before the intent;
-  a leftover backup without an intent is contradictory, never password fallback.
+Ownership-neutral passwords, pictures, labels, roles and enablement use a full
+ACCOUNT-only local intent and verify existing committed bindings. They allocate
+no OWNER receipt. That intent includes the complete target database and retired
+bootstrap flag, so interruption cannot restore an acknowledged password or blank
+exception. CREATE/RETIRE/mapping changes use one full OWNER batch, including the
+three bootstrap bindings or all sixteen G32 profiles plus both built-ins.
 
-`bootstrap.c` exports the exact 160-byte CIUKIBST state codec for user-02.
-Only matching, flushed UNPROVISIONED seed/state/origin/volume evidence with no
-prior reservations/owners/database may begin fresh provisioning. ACCOUNT never
-creates this initial state. `bootstrap.sid` seals the entropy-backed SID to that
-recipe; `machine.sid` is flushed before deriving the ready empty verifier. A
-matching pre-SID_READY retry reuses the SID. The full reservation then seals G,
-manifest and output; SID_READY never generates a new identity/verifier. Promotion
-advances OWNERS_READY, ACCOUNTS_READY and CONSUMED using `.new`/`.txn`/`.bak`, with
-checksums on every candidate and intent. Both flags and generations never regress.
-Missing or contradictory evidence closes recovery. CONSUMED never replays a seed,
-even if accounts.db disappears. The seed may remain as harmless consumed evidence.
+ACCOUNT stages exact CIUKISTG bytes at the deterministic destination path,
+validates its target uid/legacy map and independently checks canonical tree
+hashes. OWNER independently reads/hashes those same bytes and resolves its own
+objects. `stage`/`tree_digest` are protected destination-I/O seams; they never
+return locators. RESERVE alone persists nonreused locators/keys/owner generation,
+fences the objects/ancestors/aliases and manifest/tree, and reserves one receipt
+slot including an early ABORT. PREPARE requires RESERVED. UNKNOWN ABORT allocates
+nothing. COMMIT_REQUIRED is durable before OWNER COMMIT. Retired data and roots
+remain protected and consume permanent profile capacity.
 
-Ready CIUKISEE has generation 0, exactly three records, uid 1000 flags=9/KDF=0,
-unset 500/501 and zero SID. Publication produces flags=13 and a fresh salted
-empty verifier. Setup retains both independent entered verifiers, disabled 500,
-unset Guest and enabled custom uid 1000. No ready recipe is accepted on a Setup
-destination. Protected enrollment uses origin 3 and its own manifest, not a seed.
+`checkpoint.c` checks OWNER's versioned CIUKIOCP snapshot codec: 160-byte header,
+112-byte sorted full-map records (including retired roots), and length-prefixed
+canonical request/reply pairs for the latest 256 terminal receipts. Header fields
+are version/header/counts at 8/12/16/20, SID at 24, volume/floor/accounts G at
+40/48/56, database digest at 64, committed/reserved owner generations at 96/104,
+permanent key/locator watermarks at 112/120, and ACCOUNT G/uid watermarks at
+128/136 (zero padding through 160). ACCOUNT verifies maps, results,
+generations and hashes before publishing its protected marker. OWNER CHECKPOINT
+retains the previous store; COMPACT requires that durable marker before installing
+its floor and trimming prefixes. Recovery completes the same pair, including an
+interruption after floor publication but before trim. G<=floor cannot execute,
+even with changed request bytes; STATUS returns CHECKPOINTED. The real k02 adapter
+must share/bind this private snapshot codec; no kernel owner store is delivered
+here. `recover_orphans` aborts reserved batches lacking an ACCOUNT intent.
 
-The G32 adapter only decodes v1 and returns a disabled enrollment draft plus
-explicit old-id/new-uid/existing-root maps. It preserves verifiers and all sixteen
-profiles; unknown old password length never enables an imported account.
-Trusted enrollment verifies the old secret and commits a conforming replacement
-without creating a session or silently enabling it. user-02 owns actual source
-protection, collision relocation, enrollment approval and destination promotion.
-Shared /Documents and desktop behavior remain unchanged.
+`enrollment.c` durably stages a protected source, confirmed plan, old-id/new-uid
+map, provisional catalogue and selected verifiers. Changed plans retire prior
+uids/attempts and reserve a fresh G. Imported old secrets, including short ones,
+are verified only here; blank/fresh records and recovery 500 require an empty old
+secret plus the confirmed gate. Every replacement must satisfy 8..63 bytes.
+Only the complete batch enables accounts. `enrollment_authorized` requires the
+confirmed protected workflow and no conflicting ordinary session. user-02 owns
+actual source protection/removal, destination relocation and UI confirmation.
 
-Run host gates serially, keeping ASan/UBSan and default leak detection:
+`protocol.c` accepts contiguous CSC1 fragments of at most 192 bytes, 8192 per
+logical body, one exchange/link and eight globally. The channel boundary rejects
+attachments. `exchange_begin` spends request ids at first server admission;
+CANCEL=14 returns 1 only with proven pre-dequeue queue removal, otherwise 0
+(irrevocable-or-unknown). Neither result undoes a prior same-id operation. Reply
+delivery rechecks the original link/request and keeps its subject until final
+drain; stale replies cannot reach a reused fd/session. All temporary secrets,
+worker buffers and allocated snapshots are wiped before release.
 
-```
-nice -n 19 python3 -B -m unittest discover -s tests/host/security -p test_accounts.py
-nice -n 19 python3 -B -m unittest discover -s tests/host/security -p test_logon.py
-nice -n 19 python3 -B -m unittest tests.host.desktop.test_users
-```
+ACCOUNT accepts no client environment/stdin/settings/fds. LOGON/k01 generates
+LC_ALL=C, validated committed TZ, CIUKI_PROFILE_SETTINGS and purpose-specific
+launch/descriptor labels. PROFILE uses the actual committed owner root, adds
+`/Documents` for home and returns `/Programs/terminal`; it never infers a root
+from uid. Ordinary/Guest callers get their own mapping, administrators and
+retained LOGON/ACCOUNT roles may query others. The main contract governs policy.
 
-H10 here covers amendment service invariants; later user-03 owns ordinary logon
-UI tests. Research and evidence are in `docs/validation/sec-user-01.md`; exact
-commands, limitations and lead handoff are in `build/codex/sec-user01-report.md`.
+H03/H10 link production code with faulting boundary adapters, independent Python
+wire/PBKDF2/hash oracles, >2048-result/owner-window streams and persistence-cut
+fixtures. RUS retains the unchanged G32 regression. Exact results, research and
+remaining integration work are in `build/codex/sec-user01-report.md`.

@@ -2,59 +2,107 @@
 #include "accounts.h"
 #include "wire.h"
 #include <errno.h>
+#include <ciuki/sha256.h>
 
+static int strings(const uint8_t *p)
+{
+    return apadded(p+48,32) && apadded(p+80,64) && apadded(p+144,64) &&
+        a32(p+24)==strlen((const char *)p+48) && a32(p+28)==strlen((const char *)p+80) &&
+        a32(p+32)==strlen((const char *)p+144) &&
+        acct_password_valid((const char *)p+80,1) && acct_password_valid((const char *)p+144,1);
+}
+int acct_management_digest(const struct acct_request *q, uint8_t digest[32])
+{
+    if(!q || q->wire_operation<2 || q->wire_operation>5) return -EINVAL;
+    uint8_t p[316]={0}; w32(p,q->wire_operation); w32(p+4,1);
+    uint32_t flags=q->flags;
+    if(q->operation==ACCT_CREATE) flags=(q->flags&1)|(q->groups==ACCT_ADMIN?2:0);
+    w32(p+8,flags); w32(p+28,(uint32_t)strlen(q->name)); w32(p+32,(uint32_t)strlen(q->old_password));
+    w32(p+36,(uint32_t)strlen(q->password)); w32(p+40,q->uid); w64(p+44,q->generation);
+    memcpy(p+52,q->name,32); memcpy(p+84,q->old_password,64); memcpy(p+148,q->password,64); memcpy(p+212,q->picture,96);
+    sha256(p,sizeof(p),digest); acct_wipe(p,sizeof(p)); return 0;
+}
 int acct_body_decode(unsigned service, unsigned op, const void *v, size_t n, uint64_t gen, struct acct_request *q)
 {
     if(!q) return -EINVAL;
     struct acct_request t={0}; t.service=service; t.generation=gen; t.wire_operation=op;
+    const uint8_t *p=v; int e=0;
     if((service==1 && op==1) || (service==2 && op==6)) {
         if(n) return -EINVAL;
         t.operation=ACCT_LIST; *q=t; return 0;
     }
     if(service!=1 && service!=2) return -EOPNOTSUPP;
-    if(!op || (service==1?op>4:op>5)) return -EOPNOTSUPP;
-    const uint8_t *p=v;
-    if(!p || n!=(service==1?208u:304u) || a32(p)!=1 ||
-        !apadded(p+48,32) || !apadded(p+80,64) || !apadded(p+144,64) ||
-        a32(p+24)!=strlen((const char *)p+48) || a32(p+28)!=strlen((const char *)p+80) ||
-        a32(p+32)!=strlen((const char *)p+144) || a64(p+40)!=gen) return -EINVAL;
-    t.flags=a32(p+4); t.attempt=a64(p+8); t.session=a32(p+16); t.console=a32(p+20); t.uid=a32(p+36);
-    memcpy(t.name,p+48,32); memcpy(t.old_password,p+80,64); memcpy(t.password,p+144,64);
-    if(!acct_password_valid(t.old_password,1) || !acct_password_valid(t.password,1)) { acct_wipe(&t,sizeof(t)); return -EINVAL; }
-    if(service==1) {
-        if(t.flags || !t.attempt || !t.console || !gen || !acct_name_valid(t.name) ||
-            (op==2 && (t.session || t.uid || t.password[0])) ||
-            (op==3 && (!t.session || t.uid || t.password[0])) ||
-            (op==4 && (!t.uid || !acct_password_valid(t.password,0)))) { acct_wipe(&t,sizeof(t)); return -EINVAL; }
-        t.operation=op==2?ACCT_AUTH:op==3?ACCT_UNLOCK:ACCT_ENROLL_VERIFY;
-        if(op!=4) { memcpy(t.password,t.old_password,64); memset(t.old_password,0,64); }
+    if(!op || (service==1?op>7:op>9)) return -EOPNOTSUPP;
+    if(service==1 && op==7) {
+        if(!p || n<72 || a32(p)!=1 || !a32(p+4) || a32(p+4)>16 || n!=32+40*a32(p+4) || a32(p+12) || a64(p+24)) return -EINVAL;
+        t.operation=ACCT_ENROLL_PLAN; t.plan_count=a32(p+4); t.first_old_id=a32(p+8); t.generation=a64(p+16);
+        if(t.generation!=gen) return -EINVAL;
+        for(unsigned i=0;i<t.plan_count;++i) {
+            const uint8_t *b=p+32+40*i; t.plan[i].old_id=a32(b);
+            if(!apadded(b+4,32) || !acct_name_valid((const char *)b+4) || a32(b+36) ||
+                (i && t.plan[i-1].old_id>=t.plan[i].old_id)) return -EINVAL;
+            memcpy(t.plan[i].name,b+4,32);
+        }
+    } else if(service==1 && op==5) {
+        if(!p || n!=128 || acct_begin_decode(&t.begin,1,p,64) || acct_challenge_decode(&t.challenge,1,p+64,64) ||
+            t.begin.action!=t.challenge.action || t.begin.session!=t.challenge.session ||
+            (t.begin.action==3 && t.begin.console!=t.challenge.console)) return -EINVAL;
+        t.operation=ACCT_CHALLENGE;
+    } else if(service==1) {
+        if(!p || (op==6?n!=64:n!=272) || acct_challenge_decode(&t.challenge,0,p,64)) return -EINVAL;
+        t.operation=op==2?ACCT_AUTH:op==3?ACCT_UNLOCK:op==4?ACCT_ENROLL_VERIFY:ACCT_AUTOLOGON;
+        if(t.challenge.action!=(op==6?5:op)) return -EINVAL;
+        t.uid=t.challenge.uid; t.generation=t.challenge.accounts_generation; t.attempt=t.challenge.attempt;
+        t.session=t.challenge.session; t.console=t.challenge.console;
+        if(gen!=t.generation) return -EINVAL;
+        if(op!=6) {
+            p+=64;
+            if(a32(p)!=1 || a32(p+4) || !strings(p) || a64(p+8)!=t.attempt || a32(p+16)!=t.session ||
+                a32(p+20)!=t.console || a32(p+36)!=t.uid || a64(p+40)!=t.generation || (op!=4 && a32(p+32))) return -EINVAL;
+            memcpy(t.name,p+48,32); memcpy(t.old_password,p+80,64); memcpy(t.password,p+144,64);
+            if(op!=4) { memcpy(t.password,t.old_password,64); memset(t.old_password,0,64); }
+        }
+    } else if(op==7 || op==9) {
+        if(!p || n!=(op==7?32u:48u) || a32(p)!=1) return -EINVAL;
+        if(op==7) {
+            if(a32(p+4) || !a64(p+8) || !azero(p+16,16)) return -EINVAL;
+            t.operation=ACCT_STATUS; t.client_operation_id=a64(p+8);
+        } else {
+            if(a32(p+4)<2 || a32(p+4)>5 || azero(p+8,32) || a64(p+40)) return -EINVAL;
+            t.operation=ACCT_RESERVE; t.flags=a32(p+4); memcpy(t.request_digest,p+8,32);
+        }
     } else {
-        if(t.attempt || t.session || t.console || !apadded(p+208,96)) { acct_wipe(&t,sizeof(t)); return -EINVAL; }
-        memcpy(t.picture,p+208,96);
-        if(op!=1 && !gen) { acct_wipe(&t,sizeof(t)); return -EINVAL; }
+        if(!p || n!=312 || a32(p)!=1 || !strings(p) || !apadded(p+208,96) ||
+            a64(p+8) || a32(p+16) || a32(p+20) || a64(p+40)!=gen) return -EINVAL;
+        t.flags=a32(p+4); t.uid=a32(p+36); t.client_operation_id=a64(p+304);
+        memcpy(t.name,p+48,32); memcpy(t.old_password,p+80,64); memcpy(t.password,p+144,64); memcpy(t.picture,p+208,96);
+        if((op==1 || op==8)?t.client_operation_id!=0:!t.client_operation_id) e=-EINVAL;
+        if(op!=1 && op!=8 && !gen) e=-EINVAL;
         switch(op) {
-        case 1: case 5:
-            if(t.flags || t.name[0] || t.password[0] || t.old_password[0] || t.picture[0] || !t.uid) { acct_wipe(&t,sizeof(t)); return -EINVAL; }
-            t.operation=op==1?ACCT_LOOKUP:ACCT_DELETE; break;
+        case 1: case 8:
+            if(t.flags || t.password[0] || t.old_password[0] || t.picture[0] || (!!t.uid==!!t.name[0]) ||
+                (t.name[0] && !acct_name_valid(t.name))) e=-EINVAL;
+            t.operation=op==1?ACCT_LOOKUP:ACCT_PROFILE; break;
+        case 5:
+            if(t.flags || t.name[0] || t.password[0] || t.old_password[0] || t.picture[0] || !t.uid) e=-EINVAL;
+            t.operation=ACCT_DELETE; break;
         case 2:
-            if(t.flags || !t.uid || t.name[0] || t.picture[0] || !acct_password_valid(t.password,0)) { acct_wipe(&t,sizeof(t)); return -EINVAL; }
+            if(t.flags || !t.uid || t.name[0] || t.picture[0] || !acct_password_valid(t.password,0)) e=-EINVAL;
             t.operation=ACCT_PASSWORD; t.self_password=1; break;
         case 3:
-            if((t.flags&~3u) || t.uid || t.old_password[0] || t.picture[0] ||
-                !acct_name_valid(t.name) || !acct_password_valid(t.password,0)) { acct_wipe(&t,sizeof(t)); return -EINVAL; }
+            if((t.flags&~3u) || t.uid || t.old_password[0] || t.picture[0] || !acct_name_valid(t.name) || !acct_password_valid(t.password,0)) e=-EINVAL;
             t.operation=ACCT_CREATE; t.groups=(t.flags&2)?ACCT_ADMIN:ACCT_STANDARD; t.flags&=1; break;
         case 4:
             t.selectors=t.flags&0x1f00;
             if(!t.uid || !t.selectors || (t.flags&~0x1f03u) || t.old_password[0] ||
                 ((t.flags&1) && !(t.selectors&256)) || ((t.flags&2) && !(t.selectors&512)) ||
-                (!(t.selectors&1024) && t.name[0]) || (!(t.selectors&2048) && t.password[0]) ||
-                (!(t.selectors&4096) && t.picture[0]) ||
-                ((t.selectors&1024) && !acct_name_valid(t.name)) ||
-                ((t.selectors&2048) && !acct_password_valid(t.password,0))) { acct_wipe(&t,sizeof(t)); return -EINVAL; }
+                (!(t.selectors&1024) && t.name[0]) || (!(t.selectors&2048) && t.password[0]) || (!(t.selectors&4096) && t.picture[0]) ||
+                ((t.selectors&1024) && !acct_name_valid(t.name)) || ((t.selectors&2048) && !acct_password_valid(t.password,0))) e=-EINVAL;
             t.operation=ACCT_UPDATE; break;
         }
     }
-    memcpy(t.confirm,t.password,64); *q=t; acct_wipe(&t,sizeof(t)); return 0;
+    if(!e) { memcpy(t.confirm,t.password,64); *q=t; }
+    acct_wipe(&t,sizeof(t)); return e;
 }
 int acct_public_encode(const struct acct_response *r, void *v, size_t cap, size_t *n)
 {
@@ -159,14 +207,10 @@ int acct_frame(struct acct_transport *t, struct acct_service *s, int fd, const v
 }
 int acct_event_encode(unsigned op, int reply, const struct acct_ui_event *e, void *v, size_t n)
 {
-    if(!e || !v || n!=32 || op<2 || op>4 || (reply && op!=4)) return -EINVAL;
-    if(op==4) {
-        if((e->action!=2 && e->action!=3) || (e->action==2 && e->session) ||
-            (e->action==3 && !e->session) || (reply?(!e->attempt || !e->console):(e->attempt || e->console))) return -EINVAL;
-    } else if(e->action<1 || e->action>4 || e->attempt || !e->console ||
-        (op==2 && (e->action>2 || !e->session)) || (op==3 && e->action<3)) return -EINVAL;
-    uint8_t *p=v; memset(p,0,32); w32(p,1); w32(p+4,e->action); w32(p+8,e->session);
-    w32(p+12,e->console); w64(p+16,e->attempt); return 0;
+    if(!e || !v || n!=32 || reply || op<2 || op>5 || op==4 || e->attempt) return -EINVAL;
+    if(op==5 ? (e->action!=1 || !e->session || e->console) :
+        (!e->console || (op==2?(e->action<1 || e->action>2 || !e->session):(e->action<3 || e->action>4)))) return -EINVAL;
+    uint8_t *p=v; memset(p,0,32); w32(p,1); w32(p+4,e->action); w32(p+8,e->session); w32(p+12,e->console); return 0;
 }
 int acct_event_decode(unsigned op, int reply, struct acct_ui_event *e, const void *v, size_t n)
 {
@@ -175,36 +219,17 @@ int acct_event_decode(unsigned op, int reply, struct acct_ui_event *e, const voi
     struct acct_ui_event t={a32(p+4),a32(p+8),a32(p+12),a64(p+16)}; uint8_t canonical[32];
     int error=acct_event_encode(op,reply,&t,canonical,32); if(!error) *e=t; return error;
 }
-int acct_outcome_decode(struct acct_auth_outcome *out, int status, const void *v, size_t n)
-{
-    if(status) return status<0 && !n?0:-EINVAL;
-    const uint8_t *p=v;
-    if(!out || !p || n!=240 || a32(p)!=1 || (a32(p+4)!=2 && a32(p+4)!=3) ||
-        !a64(p+8) || !a32(p+16) || !a32(p+20) || !a64(p+24) ||
-        !apadded(p+208,32) || !acct_name_valid((const char *)p+208)) return -EINVAL;
-    const uint8_t *c=p+32, *r=p+96; unsigned uid=a32(c+8), gid=a32(c+12), count=a32(c+16), flags=a32(c+56);
-    if(a32(c)!=1 || a32(c+4)!=64 || a32(c+60) || !uid || uid==UINT32_MAX ||
-        (flags!=1 && !(flags==3 && uid==500)) || (a32(p+4)==2?a32(c+52)!=0:!a32(c+52))) return -EINVAL;
-    unsigned expected=count==2?544:uid==501?546:545;
-    if((count!=1 && count!=2) || (uid==501?(count!=1 || gid!=546):gid!=545) ||
-        (uid!=500 && uid!=501 && uid<1000) || (uid==500 && count!=2) ||
-        a32(c+20)!=expected || (count==2 && a32(c+24)!=545) || !azero(c+20+4*count,4*(8-count))) return -EINVAL;
-    if(a32(r)!=1 || a32(r+4)!=112 || a32(r+8)!=uid || a32(r+12) || !a64(r+16) ||
-        !a64(r+24) || !a64(r+32) || a32(r+44) || !apadded(r+48,64) ||
-        !acct_profile_root_valid((const char *)r+48) || a32(r+40)!=strlen((const char *)r+48)+1) return -EINVAL;
-    struct acct_auth_outcome t={0}; t.action=a32(p+4); t.attempt=a64(p+8); t.endpoint_generation=a32(p+16);
-    t.console_generation=a32(p+20); t.accounts_generation=a64(p+24);
-    memcpy(t.credential,c,64); memcpy(t.profile,r,112); memcpy(t.name,p+208,32); *out=t; return 0;
-}
 int acct_reply_body(unsigned service, unsigned operation, const struct acct_response *r, void *v, size_t cap, size_t *n)
 {
     if(!r || !n || r->error>0) return -EINVAL;
     *n=0;
-    if(r->error) return 0; /* frame carries negative errno and no body */
-    if(service==1) return operation>=1 && operation<=4 ?
-        (operation==1?acct_public_encode(r,v,cap,n):0):-EOPNOTSUPP;
-    if(service!=2 || !operation || operation>6) return -EOPNOTSUPP;
-    if(operation==1 || operation==6) return acct_public_encode(r,v,cap,n);
+    if(r->error) return 0;
+    if(r->body_bytes) {
+        if(!v || r->body_bytes>sizeof(r->body) || cap<r->body_bytes) return -ENOSPC;
+        memcpy(v,r->body,r->body_bytes); *n=r->body_bytes; return 0;
+    }
+    if((service==1 && (operation==1 || operation==7)) || (service==2 && (operation==1 || operation==6))) return acct_public_encode(r,v,cap,n);
+    if(service!=2 || operation<2 || operation>5) return -EOPNOTSUPP;
     if(!v || cap<8 || !r->generation) return -EINVAL;
     w64(v,r->generation); *n=8; return 0;
 }

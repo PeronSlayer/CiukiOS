@@ -20,11 +20,11 @@ static int adapter_valid(const struct acct_store *s)
 {
     const struct acct_kernel *k = &s->kernel;
     return s->volume && k->lease_acquire && k->lease_release && k->retain_peer &&
-        k->peer_alive && k->release_peer && k->active_uid && k->monotonic_ms &&
+        k->subject_get && k->peer_alive && k->release_peer && k->active_uid && k->monotonic_ms &&
         k->entropy && k->allocate && k->deallocate && k->picture_valid &&
-        k->claim_attempt && k->auth_outcome && k->service_link &&
+        k->auth_binding && k->role_generations && k->auth_outcome && k->enrollment_authorized && k->session_lock && k->service_link &&
         k->exchange_begin && k->exchange_end && k->deliver_reply &&
-        s->owner.authenticate && s->owner.generation && s->owner.binding && s->owner.stage && s->owner.validate_stage && s->owner.call &&
+        s->owner.authenticate && s->owner.generation && s->owner.binding && s->owner.stage && s->owner.tree_digest && s->owner.validate_stage && s->owner.snapshot && s->owner.checkpoint_floor && s->owner.recover_orphans && s->owner.call &&
         s->io.read && s->io.write && s->io.flush && s->io.barrier && s->io.rename && s->io.remove;
 }
 static int pictures_valid(const struct acct_kernel *k, const struct acct_db *d)
@@ -47,8 +47,11 @@ int acct_service_open(struct acct_service *s, const struct acct_store *store, in
     e = store->owner.authenticate(store->owner.ctx);
     if (!e) e = acct_store_recover(&s->store, &s->db);
     if (!e && !pictures_valid(&store->kernel, &s->db)) e = -EIO;
+    if (!e) e=acct_results_open(s);
     if (!e) s->available = 1;
     else if (e != -ENOENT) { acct_service_close(s); return e; }
+    e=acct_enrollment_recover(s);
+    if(e) { acct_service_close(s); return e; }
     s->next_ticket = 1;
     return 0;
 }
@@ -58,6 +61,8 @@ void acct_service_close(struct acct_service *s)
     struct acct_kernel *k = &s->store.kernel;
     if (s->active.occupied) { k->exchange_end(k->ctx,&s->active.subject); k->release_peer(k->ctx, &s->active.subject); }
     if (s->pending.occupied) { k->exchange_end(k->ctx,&s->pending.subject); k->release_peer(k->ctx, &s->pending.subject); }
+    acct_attempts_clear(s);
+    if(s->results) { acct_wipe(s->results,sizeof(*s->results)); k->deallocate(k->ctx,s->results,sizeof(*s->results)); }
     if (s->leased) k->lease_release(k->ctx);
     acct_wipe(s, sizeof(*s));
 }
@@ -93,7 +98,7 @@ int acct_service_bootstrap(struct acct_service *s, const void *seed, size_t byte
         if (!e) { r->kdf = 1; r->iterations = ACCT_ITERATIONS; r->flags |= ACCT_PASSWORD_SET; }
     }
     if (!e) e = acct_store_bootstrap(&s->store, d);
-    if (!e) { s->db = *d; s->available = 1; }
+    if (!e) { s->db = *d; e=acct_results_open(s); if(!e) s->available=1; }
     if (d) { acct_wipe(d, sizeof(*d)); k->deallocate(k->ctx, d, sizeof(*d)); }
     unlock(&s->worker_lock);
     return e;
@@ -106,7 +111,7 @@ static int admin(const struct acct_subject *subject)
     return 0;
 }
 static int authentication(unsigned op)
-{ return op == ACCT_AUTH || op == ACCT_UNLOCK || op == ACCT_ENROLL_VERIFY; }
+{ return op == ACCT_AUTH || op == ACCT_UNLOCK || op == ACCT_ENROLL_VERIFY || op == ACCT_AUTOLOGON || op == ACCT_CHALLENGE || op == ACCT_ENROLL_PLAN; }
 static uint32_t retry_ms(struct acct_service *s)
 {
     uint64_t now = s->store.kernel.monotonic_ms(s->store.kernel.ctx);
@@ -120,8 +125,8 @@ int acct_submit(struct acct_service *s, int endpoint, struct acct_request *q, si
     memset(out, 0, sizeof(*out));
     if (!q || bytes != sizeof(*q)) return out->error = -EINVAL;
     int e = 0;
-    if (!s->leased || !s->available) e = -EIO;
-    else if (q->operation < ACCT_LIST || q->operation > ACCT_LOOKUP ||
+    if (!s->leased || s->faulted || (!s->available && !(authentication(q->operation) || q->operation==ACCT_LIST))) e = -EIO;
+    else if (q->operation < ACCT_LIST || q->operation > ACCT_PROFILE ||
              !memchr(q->name, 0, 32) || !memchr(q->picture, 0, 96) ||
              !acct_password_valid(q->password, 1) || !acct_password_valid(q->confirm, 1) ||
              !acct_password_valid(q->old_password, 1)) e = -EINVAL;
@@ -133,11 +138,11 @@ int acct_submit(struct acct_service *s, int endpoint, struct acct_request *q, si
     if (!e && (!subject.retained || !subject.group_count || subject.group_count > 8)) e = -EACCES;
     if (!e && (q->service != subject.service ||
         (subject.service != ACCT_ENDPOINT_AUTH && subject.service != ACCT_ENDPOINT_ACCOUNTS))) e=-EPERM;
-    if (!e && subject.service==ACCT_ENDPOINT_AUTH && subject.role!=ACCT_ROLE_UI) e=-EPERM;
+    if (!e && subject.service==ACCT_ENDPOINT_AUTH && subject.role!=ACCT_ROLE_UI && subject.role!=ACCT_ROLE_LOGON) e=-EPERM;
     if (!e && subject.service==ACCT_ENDPOINT_AUTH && !authentication(q->operation) && q->operation!=ACCT_LIST) e=-EPERM;
     if (!e && q->self_password && subject.uid!=q->uid) e=-EPERM;
     if (!e && authentication(q->operation) &&
-        (subject.role != ACCT_ROLE_UI || subject.service != ACCT_ENDPOINT_AUTH ||
+        (subject.role != ACCT_ROLE_LOGON || subject.service != ACCT_ENDPOINT_AUTH ||
          !subject.endpoint_generation || subject.uid || subject.session_id)) e = -EPERM;
     if (!e) {
         if (!try_lock(&s->queue_lock)) e = -EAGAIN;
@@ -148,7 +153,7 @@ int acct_submit(struct acct_service *s, int endpoint, struct acct_request *q, si
             } else if (!s->next_ticket) e = -EAGAIN;
             else {
                 struct acct_job *job = !s->active.occupied ? &s->active :
-                    authentication(q->operation) && subject.role==ACCT_ROLE_UI && !s->pending.occupied ? &s->pending : NULL;
+                    authentication(q->operation) && subject.role==ACCT_ROLE_LOGON && !s->pending.occupied ? &s->pending : NULL;
                 if (!job) { e = -EAGAIN; out->retry_after_ms = 1000; }
                 else {
                     job->ticket = s->next_ticket++;
@@ -187,7 +192,7 @@ static void snapshot(const struct acct_db *d, const struct acct_subject *subject
         memcpy(p->name, r->name, 32); memcpy(p->picture, r->picture, 96);
     }
 }
-static int verify(const struct acct_record *r, const char *password)
+int acct_verify(const struct acct_record *r, const char *password)
 {
     uint8_t salt[16] = {0}, expected[32] = {0}, actual[32];
     if (r && (r->flags & ACCT_PASSWORD_SET)) {
@@ -207,7 +212,7 @@ static int has_administrator(const struct acct_db *d)
     }
     return 0;
 }
-static int set_password(struct acct_service *s, struct acct_record *r, const char *password)
+int acct_set_password(struct acct_service *s, struct acct_record *r, const char *password)
 {
     int e = s->store.kernel.entropy(s->store.kernel.ctx, r->salt, 16);
     if (!e) e = acct_derive(password, r->salt, ACCT_ITERATIONS, r->verifier);
@@ -246,7 +251,7 @@ static int mutate(struct acct_service *s, struct acct_job *job)
         int personal=q->operation==ACCT_PASSWORD || q->operation==ACCT_PICTURE || q->operation==ACCT_RENAME ||
             (q->operation==ACCT_UPDATE && !(q->selectors&~(1024u|4096u)));
         if (!is_admin && !(self && personal)) return -EPERM;
-        int destructive=q->operation==ACCT_DELETE || q->operation==ACCT_ROLE || q->operation==ACCT_REPLACE ||
+        int destructive=q->operation==ACCT_DELETE || q->operation==ACCT_ROLE ||
             (q->operation==ACCT_ENABLE && !(q->flags&ACCT_ENABLED)) ||
             (q->operation==ACCT_PASSWORD && !self) ||
             (q->operation==ACCT_UPDATE && ((q->selectors&512) || ((q->selectors&256) && !(q->flags&1)) || (q->selectors&2048)));
@@ -267,7 +272,7 @@ static int mutate(struct acct_service *s, struct acct_job *job)
     case ACCT_CREATE:
         r=&next->records[next->count++]; memset(r,0,sizeof(*r)); r->uid=next->next_uid;
         r->groups=q->groups; r->flags=q->flags; strcpy(r->name,q->name);
-        e=set_password(s,r,q->password);
+        e=acct_set_password(s,r,q->password);
         if(next->next_uid==ACCT_LAST_UID) { next->next_uid=UINT32_MAX; next->flags|=ACCT_EXHAUSTED; }
         else ++next->next_uid;
         break;
@@ -276,16 +281,6 @@ static int mutate(struct acct_service *s, struct acct_job *job)
         if(was_blank) { next->flags|=ACCT_AUTO_RETIRED; next->auto_logon_uid=0; }
         memmove(r,r+1,(next->count-(unsigned)index-1)*sizeof(*r)); memset(&next->records[--next->count],0,sizeof(*r));
         break;
-    case ACCT_REPLACE: {
-        int replacement=find_uid(next,q->flags);
-        if(replacement<0 || replacement==index || next->records[replacement].groups!=ACCT_ADMIN ||
-            !(next->records[replacement].flags&ACCT_PASSWORD_SET) || (next->records[replacement].flags&ACCT_CHANGE_REQUIRED)) { e=-EINVAL; break; }
-        int active=k->active_uid(k->ctx,q->flags); if(active) { e=active<0?active:-EBUSY; break; }
-        r->flags&=~ACCT_ENABLED;
-        if(was_blank) { r->flags&=~ACCT_PASSWORD_SET; retire_blank(next,r); }
-        next->records[replacement].flags|=ACCT_ENABLED;
-        break;
-    }
     case ACCT_ENABLE:
         if((q->flags&~1u) || (q->flags && (!(r->flags&ACCT_PASSWORD_SET) || (r->flags&ACCT_CHANGE_REQUIRED)))) { e=-EINVAL; break; }
         r->flags=(r->flags&~1u)|q->flags;
@@ -301,8 +296,8 @@ static int mutate(struct acct_service *s, struct acct_job *job)
         memset(r->name,0,32); strcpy(r->name,q->name); break;
     case ACCT_PASSWORD:
         if(!acct_password_valid(q->password,0) || strcmp(q->password,q->confirm)) { e=-EINVAL; break; }
-        if(self && !verify(r,q->old_password)) { e=-EACCES; break; }
-        e=set_password(s,r,q->password); if(!e && r->uid==1000 && next->origin==ACCT_READY) retire_blank(next,r);
+        if(self && !acct_verify(r,q->old_password)) { e=-EACCES; break; }
+        e=acct_set_password(s,r,q->password); if(!e && r->uid==1000 && next->origin==ACCT_READY) retire_blank(next,r);
         break;
     case ACCT_PICTURE:
         if(!acct_picture_syntax(q->picture) || !k->picture_valid(k->ctx,r->uid,q->picture)) { e=-EINVAL; break; }
@@ -324,7 +319,7 @@ static int mutate(struct acct_service *s, struct acct_job *job)
         }
         if(q->selectors&2048) {
             if(!acct_password_valid(q->password,0)) { e=-EINVAL; break; }
-            e=set_password(s,r,q->password); if(!e && r->uid==1000 && next->origin==ACCT_READY) retire_blank(next,r);
+            e=acct_set_password(s,r,q->password); if(!e && r->uid==1000 && next->origin==ACCT_READY) retire_blank(next,r);
         }
         if(q->selectors&4096) {
             if(!acct_picture_syntax(q->picture) || !k->picture_valid(k->ctx,r->uid,q->picture)) { e=-EINVAL; break; }
@@ -339,78 +334,68 @@ static int mutate(struct acct_service *s, struct acct_job *job)
     if(!e && !k->peer_alive(k->ctx,subject)) e=-ESRCH;
     if(!e) {
         s->store.subject=subject;
-        e=acct_store_commit(&s->store,&s->db,next,NULL,0);
+        e=(q->operation==ACCT_CREATE || q->operation==ACCT_DELETE)?
+            acct_store_commit(&s->store,&s->db,next,NULL,0):acct_store_local_commit(&s->store,&s->db,next);
         s->store.subject=NULL;
-        if(!e) s->db=*next; else s->available=0;
+        if(!e) s->db=*next; else { s->available=0; s->faulted=1; }
     }
     acct_wipe(next,sizeof(*next)); k->deallocate(k->ctx,next,sizeof(*next)); return e;
 }
-static int outcome(struct acct_service *s, struct acct_job *job, const struct acct_record *r)
+static int profile(struct acct_service *s, struct acct_job *job, struct acct_response *out)
 {
-    uint8_t body[240]={0}; char root[64]={0}; struct acct_owner_binding b={0};
-    int e=s->store.owner.binding(s->store.owner.ctx,s->store.volume,r->uid,root,&b);
-    if(e || !b.key || !b.generation || !acct_profile_root_valid(root)) return -EIO;
-    w32(body,1); w32(body+4,job->request.operation==ACCT_UNLOCK?3:2); w64(body+8,job->request.attempt);
-    w32(body+16,job->subject.endpoint_generation); w32(body+20,job->request.console); w64(body+24,s->db.generation);
-    uint8_t *c=body+32; w32(c,1); w32(c+4,64); w32(c+8,r->uid);
-    w32(c+12,r->groups==ACCT_GUEST?546:545); w32(c+16,r->groups==ACCT_ADMIN?2:1);
-    w32(c+20,r->groups==ACCT_ADMIN?544:r->groups==ACCT_GUEST?546:545);
-    if(r->groups==ACCT_ADMIN) w32(c+24,545);
-    w32(c+52,job->request.operation==ACCT_UNLOCK?job->request.session:0);
-    w32(c+56,1u|((r->uid==500 && !(r->flags&ACCT_ENABLED) && job->subject.safe_mode)?2u:0u));
-    uint8_t *p=body+96; w32(p,1); w32(p+4,112); w32(p+8,r->uid);
-    w64(p+16,s->store.volume); w64(p+24,b.generation); w64(p+32,b.key);
-    w32(p+40,(uint32_t)strlen(root)+1); memcpy(p+48,root,64); memcpy(body+208,r->name,32);
-    e=s->store.kernel.auth_outcome(s->store.kernel.ctx,&job->subject,job->request.attempt,0,body,sizeof(body));
-    acct_wipe(body,sizeof(body)); return e;
+    struct acct_request *q=&job->request; int i=q->uid?find_uid(&s->db,q->uid):find_name(&s->db,q->name);
+    int trusted=job->subject.role==ACCT_ROLE_LOGON || job->subject.role==ACCT_ROLE_ACCOUNT;
+    /* Deny a foreign selector before disclosing whether that mapping exists. */
+    if(!admin(&job->subject) && !trusted && (q->uid?q->uid!=job->subject.uid:
+        (i<0 || s->db.records[i].uid!=job->subject.uid))) return -EACCES;
+    if(i<0) return -ESRCH;
+    if(q->generation!=s->db.generation) return -EAGAIN;
+    char root[64]={0}; struct acct_owner_binding b={0}; uint64_t generation=0;
+    int e=s->store.owner.generation(s->store.owner.ctx,&generation);
+    if(!e) e=s->store.owner.binding(s->store.owner.ctx,s->store.volume,s->db.records[i].uid,root,&b);
+    if(e==-ENOENT || e==-EACCES) return -EACCES;
+    if(e) return e;
+    if(!b.key || !b.generation || b.generation>generation || b.uid!=s->db.records[i].uid || b.volume!=s->store.volume ||
+        b.action==ACCT_OWNER_RETIRE || !acct_profile_root_valid(root)) return -EIO;
+    size_t len=strlen(root); if(len+sizeof("/Documents")>96) return -EOVERFLOW;
+    memset(out->body,0,272); w32(out->body,1); w32(out->body+4,272); w32(out->body+8,b.uid);
+    w64(out->body+16,s->db.generation); w64(out->body+24,b.generation); memcpy(out->body+32,root,len);
+    memcpy(out->body+96,root,len); memcpy(out->body+96+len,"/Documents",11);
+    memcpy(out->body+192,"/Programs/terminal",19); out->body_bytes=272; return 0;
 }
 static int execute(struct acct_service *s, struct acct_job *job, struct acct_response *out)
 {
-    struct acct_kernel *k = &s->store.kernel;
-    struct acct_request *q = &job->request;
-    if (!s->available) return -EIO;
-    if (!k->peer_alive(k->ctx, &job->subject)) return -ESRCH;
-    if (q->operation == ACCT_LIST || q->operation == ACCT_LOOKUP) {
-        snapshot(&s->db, &job->subject, out);
+    struct acct_kernel *k=&s->store.kernel; struct acct_request *q=&job->request;
+    if(!k->peer_alive(k->ctx,&job->subject)) {
+        int e=job->subject.service==2?acct_results_cancel(s,job):0;
+        return e?e:-ESRCH;
+    }
+    if(authentication(q->operation)) return acct_auth_execute(s,job,out);
+    if(q->operation==ACCT_LIST && !s->available) {
+        if(!s->enrollment.generation) return -ENODATA;
+        out->count=s->enrollment.draft.count; out->generation=s->enrollment.generation;
+        for(unsigned i=0;i<out->count;++i) {
+            const struct acct_record *r=&s->enrollment.draft.records[i];
+            out->records[i].uid=r->uid; out->records[i].groups=r->groups; out->records[i].flags=r->groups==ACCT_ADMIN?2:0;
+            memcpy(out->records[i].name,r->name,32);
+        }
+        return 0;
+    }
+    if(!s->available) return -EIO;
+    if(q->operation==ACCT_LIST || q->operation==ACCT_LOOKUP) {
+        snapshot(&s->db,&job->subject,out);
         if(q->operation==ACCT_LOOKUP) {
-            unsigned i=0; while(i<out->count && out->records[i].uid!=q->uid) ++i;
-            if(i==out->count) return -ENOENT;
+            unsigned i=0; while(i<out->count && (q->uid?out->records[i].uid!=q->uid:!acct_name_equal(out->records[i].name,q->name))) ++i;
+            if(i==out->count) return -ESRCH;
             out->records[0]=out->records[i]; out->count=1;
         }
         return 0;
     }
-    if (!authentication(q->operation)) return mutate(s, job);
-    if (q->generation != s->db.generation) return -EAGAIN;
-    int i = find_name(&s->db, q->name);
-    const struct acct_record *r = i < 0 ? NULL : &s->db.records[i];
-    uint32_t intended_uid=0;
-    int challenge=k->claim_attempt(k->ctx,&job->subject,q->attempt,q->operation==ACCT_UNLOCK?3:2,
-                                   q->session,q->console,q->generation,r?r->uid:UINT32_MAX,&intended_uid);
-    if(challenge) return challenge;
-    int eligible = r && r->uid==intended_uid && ((r->flags & ACCT_ENABLED) ||
-        (q->operation==ACCT_ENROLL_VERIFY && r->legacy_id && q->uid==r->uid && (r->flags&ACCT_CHANGE_REQUIRED)) ||
-        (r->uid == 500 && job->subject.safe_mode && (r->flags & ACCT_PASSWORD_SET)));
-    int match = verify(eligible ? r : NULL, q->operation==ACCT_ENROLL_VERIFY?q->old_password:q->password);
-    if (!k->peer_alive(k->ctx, &job->subject)) return -ESRCH;
-    if (!eligible || !match) {
-        k->auth_outcome(k->ctx,&job->subject,q->attempt,-EACCES,NULL,0);
-        return -EACCES;
-    }
-    if (r->flags & ACCT_CHANGE_REQUIRED) {
-        if (q->operation != ACCT_ENROLL_VERIFY) return -EACCES;
-        if(q->uid!=r->uid || !acct_password_valid(q->password,0)) return -EINVAL;
-        struct acct_db *next=k->allocate(k->ctx,sizeof(*next)); if(!next) return -ENOMEM;
-        *next=s->db;
-        int e=s->store.high_generation==UINT64_MAX?-EOVERFLOW:0;
-        if(!e) { next->generation=s->store.high_generation+1; next->next_uid=s->store.high_uid;
-            e=set_password(s,&next->records[i],q->password); }
-        if(!e) { s->store.subject=&job->subject; e=acct_store_commit(&s->store,&s->db,next,NULL,0); s->store.subject=NULL;
-            if(!e) s->db=*next; else s->available=0; }
-        acct_wipe(next,sizeof(*next)); k->deallocate(k->ctx,next,sizeof(*next));
-        return e;
-    }
-    if(q->operation==ACCT_ENROLL_VERIFY) return -EINVAL;
-    return outcome(s,job,r); /* UI receives progress only; LOGON owns launch. */
+    if(q->operation==ACCT_PROFILE) return profile(s,job,out);
+    if(q->operation==ACCT_STATUS || q->operation==ACCT_RESERVE) return acct_results_execute(s,job,out);
+    int cached=0; int e=acct_results_admit(s,job,out,&cached); if(e || cached) return e;
+    e=mutate(s,job);
+    return acct_results_finish(s,q,e);
 }
 int acct_work(struct acct_service *s, struct acct_response *out)
 {
@@ -431,7 +416,7 @@ int acct_work(struct acct_service *s, struct acct_response *out)
         memset(&s->completion, 0, sizeof(s->completion));
         s->completion.ticket = job.ticket;
         s->completion.error = execute(s, &job, &s->completion);
-        if (!s->completion.error) s->completion.generation = s->db.generation;
+        if (!s->completion.error && !s->completion.generation) s->completion.generation = s->db.generation;
         s->completed = 1;
         acct_wipe(&job, sizeof(job));
         /* Contention never spins or repeats a committed mutation/KDF. A later

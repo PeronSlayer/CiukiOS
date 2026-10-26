@@ -42,6 +42,7 @@ struct acct_subject {
     /* Kernel/supervisor attestation, never bits in an account IPC request. */
     int safe_mode;
     uint32_t role, service, endpoint_generation, service_generation;
+    uint32_t role_generation; /* retained peer role instance, distinct from server link generation */
 };
 struct acct_kernel {
     void *ctx;
@@ -49,6 +50,7 @@ struct acct_kernel {
     int (*lease_acquire)(void *); /* sealed SYSTEM/session 0 only; one live lease */
     void (*lease_release)(void *);
     int (*retain_peer)(void *, int endpoint, struct acct_subject *);
+    void (*subject_get)(void *, const struct acct_subject *);
     int (*peer_alive)(void *, const struct acct_subject *);
     void (*release_peer)(void *, struct acct_subject *);
     int (*active_uid)(void *, uint32_t); /* 1 active/closing, 0 inactive, -errno */
@@ -57,16 +59,20 @@ struct acct_kernel {
     void *(*allocate)(void *, size_t);
     void (*deallocate)(void *, void *, size_t); /* caller wipes first */
     int (*picture_valid)(void *, uint32_t uid, const char *relative);
-    /* LOGON owns challenges and consumes them once; ACCOUNT cannot mint one.
-     * claim validates UI link/action/session/console and account generation.
-     * outcome transmits the 240-byte body only to a retained ROLE_LOGON peer.
-     */
-    int (*claim_attempt)(void *, const struct acct_subject *, uint64_t attempt,
-                         uint32_t action, uint32_t session, uint32_t console,
-                         uint64_t accounts_generation, uint32_t resolved_uid,
-                         uint32_t *intended_uid);
+    /* Read current kernel-retained gate/role epochs; LOGON alone attests its
+     * retained UI->LOGON generation across the separate LOGON->ACCOUNT link. */
+    int (*auth_binding)(void *, const struct acct_subject *, uint32_t ui_generation,
+                        uint32_t session, uint32_t console, uint32_t auth_epoch,
+                        uint32_t logon_generation, uint32_t account_generation,
+                        uint32_t *locked_uid);
+    int (*gate_state)(void *, uint32_t session, uint32_t *console, uint32_t *authentication_epoch, uint32_t *locked_uid);
+    int (*role_generations)(void *, uint32_t *logon, uint32_t *account);
     int (*auth_outcome)(void *, const struct acct_subject *, uint64_t attempt,
-                        int status, const void *, size_t);
+                        int frame_status, const void *, size_t);
+    /* LOGON only: enter trusted LOCK using the actual current console binding.
+     * The callback verifies DESKTOP retained session/process generation. */
+    int (*enrollment_authorized)(void *, const struct acct_subject *);
+    int (*session_lock)(void *, const struct acct_subject *, uint32_t session);
     int (*service_link)(void *, unsigned operation, const struct acct_security_link *,
                         struct acct_security_link *); /* call 101, 12..14 */
     int (*exchange_begin)(void *, const struct acct_subject *, uint64_t request_id);
@@ -79,9 +85,11 @@ struct acct_kernel {
 };
 
 enum acct_owner_op { ACCT_OWNER_PREPARE = 1, ACCT_OWNER_COMMIT,
-                     ACCT_OWNER_ABORT, ACCT_OWNER_STATUS };
+                     ACCT_OWNER_ABORT, ACCT_OWNER_STATUS, ACCT_OWNER_CHECKPOINT,
+                     ACCT_OWNER_COMPACT, ACCT_OWNER_RESERVE };
 enum acct_owner_state { ACCT_OWNER_NONE, ACCT_OWNER_PENDING,
-                        ACCT_OWNER_COMMITTED, ACCT_OWNER_ABORTED };
+                        ACCT_OWNER_COMMITTED, ACCT_OWNER_ABORTED,
+                        ACCT_OWNER_CHECKPOINTED, ACCT_OWNER_RESERVED };
 enum acct_owner_action { ACCT_OWNER_CREATE = 1, ACCT_OWNER_RETIRE, ACCT_OWNER_KEEP };
 struct acct_owner_binding {
     uint32_t uid, action;
@@ -105,6 +113,7 @@ struct acct_owner_reply {
     uint8_t digest[32];
     struct { uint32_t uid, index, action; uint64_t key, generation; } results[32];
 };
+struct acct_db;
 struct acct_owner {
     void *ctx;
     int real;
@@ -112,21 +121,20 @@ struct acct_owner {
     int (*generation)(void *, uint64_t *);
     int (*binding)(void *, uint64_t volume, uint32_t uid, char root[64],
                    struct acct_owner_binding *); /* ENOENT if never owned; retired denies */
-    /* Destination-only deny-first staging and resolver-issued locators. Flush
-     * all profile/hive data and namespace metadata before returning its digest.
-     * An enrollment implementation validates its protected mapping/move manifest.
-     */
-    int (*stage)(void *, uint64_t volume, struct acct_owner_binding *, unsigned,
-                 uint8_t manifest_digest[32]);
+    /* ACCOUNT stages the exact shared CIUKISTG bytes at the deterministic
+     * destination path. No callback supplies a locator to ACCOUNT. */
+    int (*stage)(void *, const struct acct_owner_request *, void *manifest,
+                 size_t capacity, size_t *bytes);
+    int (*tree_digest)(void *, uint64_t transaction, uint32_t uid, uint8_t digest[32]);
     int (*validate_stage)(void *, const struct acct_owner_request *);
-    /* PREPARE stages inaccessible defaults/resolves the root and reserves capacity.
-     * CREATE refuses occupied roots (including retained G32/retired roots).
-     * RETIRE preserves data and retired-id evidence. All operations are idempotent
-     * by (SID,volume,G) and the full immutable vector/digest. Existing-key calls
-     * retain their lifetime receipt regardless of current generations; changed
-     * content returns EIO. STATUS survives service restart. The real OWNER
-     * enforces the 1024-receipt and 32-profile bounds. No user chown route.
-     */
+    /* OWNER's versioned snapshot codec is shared with ACCOUNT; snapshot emits
+     * the complete map/watermarks and most recent terminal receipts. */
+    int (*snapshot)(void *, const struct acct_db *, uint64_t account_high, uint32_t account_uid_high,
+                    void *, size_t, size_t *, uint64_t *floor);
+    int (*recover_orphans)(void *, uint64_t volume, uint64_t active_transaction);
+    int (*checkpoint_floor)(void *, uint64_t *, unsigned *receipt_count);
+    /* RESERVE alone allocates durable keys/locators/generation and a receipt
+     * slot, including early ABORT. PREPARE requires RESERVED. */
     int (*call)(void *, const void *request, size_t, void *reply, size_t, size_t *);
 };
 
