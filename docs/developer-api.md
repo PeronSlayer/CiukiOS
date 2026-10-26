@@ -831,6 +831,7 @@ CIUKI_SYS_TIME = 97,
     CIUKI_SYS_FILE_INFO = 98,
     CIUKI_SYS_RECOVERY = 99,
     CIUKI_SYS_NET_INFO = 100,
+    CIUKI_SYS_SECURITY = 101,
 };
 ```
 
@@ -839,6 +840,85 @@ free for F6). Only Win32-personality processes may use it.
 
 ```c
 enum ciuki_w32_syscall { CIUKI_SYS_W32 = 96 };
+```
+
+sec-k01: frozen credential/session transport; user-security-kernel.md.
+
+```c
+#define CIUKI_SECURITY_VERSION 1u
+#define CIUKI_UID_SYSTEM 0u
+#define CIUKI_UID_ADMINISTRATOR 500u
+#define CIUKI_UID_GUEST 501u
+#define CIUKI_UID_FIRST_USER 1000u
+#define CIUKI_UID_LAST_USER 0xfffffffeu
+#define CIUKI_UID_INVALID 0xffffffffu
+#define CIUKI_GID_SYSTEM 0u
+#define CIUKI_GID_ADMINISTRATORS 544u
+#define CIUKI_GID_USERS 545u
+#define CIUKI_GID_GUESTS 546u
+#define CIUKI_GID_INVALID 0xffffffffu
+#define CIUKI_SECURITY_GROUP_MAX 8u
+#define CIUKI_SECURITY_PROFILE_PATH_MAX 64u
+#define CIUKI_SECURITY_SESSION_MAX 4u
+#define CIUKI_CRED_INTERACTIVE 0x00000001u
+#define CIUKI_CRED_SAFE_RECOVERY 0x00000002u
+#define CIUKI_SECURITY_QUERY_SELF 1u
+#define CIUKI_SECURITY_QUERY_PROCESS 2u
+#define CIUKI_SECURITY_QUERY_PEER 3u
+#define CIUKI_SECURITY_SESSION_CREATE 4u
+#define CIUKI_SECURITY_SPAWN_CREDENTIAL 5u
+#define CIUKI_SECURITY_SESSION_END 6u
+#define CIUKI_SECURITY_SESSION_QUERY 7u
+#define CIUKI_SECURITY_END_BEGIN 0x00000001u
+#define CIUKI_SECURITY_END_COLLECT 0x00000002u
+#define CIUKI_SECURITY_SESSION_ACTIVE 1u
+#define CIUKI_SECURITY_SESSION_CLOSING 2u
+#define CIUKI_SECURITY_SESSION_DEAD 3u
+#pragma pack(push, 4)
+struct ciuki_credential {
+    uint32_t version;
+    uint32_t size;
+    uint32_t uid;
+    uint32_t primary_gid;
+    uint32_t group_count;
+    uint32_t groups[8];
+    uint32_t session_id;
+    uint32_t flags;
+    uint32_t reserved;
+};
+struct ciuki_security_profile {
+    uint32_t version;
+    uint32_t size;
+    uint32_t uid;
+    uint32_t flags;
+    uint32_t volume_id_lo;
+    uint32_t volume_id_hi;
+    uint32_t owner_generation_lo;
+    uint32_t owner_generation_hi;
+    uint32_t owner_key_lo;
+    uint32_t owner_key_hi;
+    uint32_t path_bytes;
+    uint32_t reserved;
+    char path[64];
+};
+struct ciuki_security_args {
+    uint32_t version;
+    uint32_t size;
+    uint32_t operation;
+    uint32_t flags;
+    uint32_t credential_address;
+    uint32_t spawn_address;
+    uint32_t session_id;
+    uint32_t target_pid;
+    int32_t endpoint_fd;
+    uint32_t profile_address;
+    uint32_t output_address;
+    uint32_t output_bytes;
+    uint32_t result;
+    uint32_t state;
+    uint32_t reserved[2];
+};
+#pragma pack(pop)
 ```
 
 f2-39: diagnostic markers, no copied wire record. See execution-abi.md.
@@ -7690,6 +7770,35 @@ static inline struct ciuki_tcb *ciuki_tcb(void) {
 uint32_t ciuki_heap_high_water(void);
 void __ciuki_pthread_main(void);
 void __ciuki_sigreturn(void);
+#endif
+```
+
+## `ciuki/security.h`
+
+Source: `sdk/sysroot-overlay/include/ciuki/security.h`.
+
+SPDX-License-Identifier: MIT
+
+```c
+#ifndef CIUKI_SDK_SECURITY_H
+#define CIUKI_SDK_SECURITY_H
+#include <ciuki/abi.h>
+```
+
+Call 101. Records/constants are copied from the canonical ABI at SDK build.
+Return 0, or -1 with errno; buffers remain unchanged on failure.
+
+```c
+int ciuki_security(struct ciuki_security_args *args);
+int ciuki_security_self(struct ciuki_credential *credential);
+int ciuki_security_process(uint32_t pid, struct ciuki_credential *credential);
+int ciuki_security_peer(int fd, struct ciuki_credential *credential);
+```
+
+Read-only state query; a session id is never a transferable credential.
+
+```c
+int ciuki_security_session(uint32_t session, uint32_t *state);
 #endif
 ```
 

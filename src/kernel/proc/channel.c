@@ -10,6 +10,7 @@ struct process;
 extern void net_fd_changed(struct process *, unsigned) __attribute__((weak));
 #include <ciuki/desktop.h>
 #include <ciuki/signal.h>
+#include <ciuki/security.h>
 
 struct channel_message {
     struct ciuki_message wire;
@@ -21,6 +22,10 @@ struct channel {
     struct channel_queue inbox[2];
     struct kwait changed[2];
     bool open[2];
+    bool revoked[2], handed[2];
+    uint32_t generation[2];
+    struct security_subject *subjects[2];
+    struct security_subject *pending[2];
     struct { uint32_t id, generation; } receiver[2];
 };
 
@@ -78,12 +83,17 @@ void channel_release(struct desktop_description *d)
     if (net_fd_changed) net_fd_changed(0, 0);
     if (!c->open[side ^ 1]) {
         desktop_objects.channels--;
+        security_subject_put(c->subjects[0]);
+        security_subject_put(c->subjects[1]);
+        security_subject_put(c->pending[0]);
+        security_subject_put(c->pending[1]);
         kfree(c);
     }
 }
 
 int channel_pair(struct process *p, int32_t fds[2])
 {
+    if (!security_process_live(p)) return -EACCES;
     int a = desktop_fd_slot(p, 0);
     int b = a < 0 ? a : desktop_fd_slot(p, (unsigned)a + 1);
     if (b < 0) return -EMFILE;
@@ -99,10 +109,23 @@ int channel_pair(struct process *p, int32_t fds[2])
             return -ENOMEM;
         }
     }
+    int err = security_process_live(p) ? security_subject_get(p->subject) : -EACCES;
+    if (!err) {
+        err = security_subject_get(p->subject);
+        if (err) security_subject_put(p->subject);
+    }
+    if (err) {
+        ends[0]->object.release(&ends[0]->object);
+        ends[1]->object.release(&ends[1]->object);
+        kfree(c);
+        return err;
+    }
     for (unsigned i = 0; i < 2; i++) {
         ends[i]->u.endpoint.channel = c;
         ends[i]->u.endpoint.side = i;
         c->open[i] = true;
+        c->subjects[i] = p->subject;
+        c->generation[i] = 1;
         kwait_init(&c->changed[i]);
     }
     desktop_objects.channels++;
@@ -160,6 +183,7 @@ int channel_send(struct process *p, int32_t fd, uint32_t message, uint32_t flags
 {
     struct desktop_description *d = desktop_fd(p, fd);
     if (!d || d->kind != DESKTOP_CHANNEL) return -EBADF;
+    if (!security_process_live(p) || !security_subject_matches(d->u.endpoint.channel->subjects[d->u.endpoint.side], p)) return -EACCES;
     if (flags & ~(DONTWAIT | CIUKI_CHANNEL_FOCUS | CIUKI_CHANNEL_UNFOCUS | CIUKI_CHANNEL_INPUT)) return -EINVAL;
     unsigned hints = flags & ~DONTWAIT;
     if ((hints & CIUKI_CHANNEL_FOCUS) && (hints & CIUKI_CHANNEL_UNFOCUS)) return -EINVAL;
@@ -187,6 +211,7 @@ int channel_send(struct process *p, int32_t fd, uint32_t message, uint32_t flags
     struct channel *c = d->u.endpoint.channel;
     unsigned peer = d->u.endpoint.side ^ 1;
     for (;;) {
+        if (!security_process_live(p)) return channel_end(op, -EACCES);
         if (p->state == PROC_STOPPING) return channel_end(op, -EINTR);
         if (!c->open[peer]) {
             struct proc_thread *t = proc_thread_for(g_current);
@@ -246,6 +271,7 @@ int channel_recv(struct process *p, int32_t fd, uint32_t message, uint32_t flags
 {
     struct desktop_description *d = desktop_fd(p, fd);
     if (!d || d->kind != DESKTOP_CHANNEL) return -EBADF;
+    if (!security_process_live(p) || !security_subject_matches(d->u.endpoint.channel->subjects[d->u.endpoint.side], p)) return -EACCES;
     if (flags & ~DONTWAIT) return -EINVAL;
     /* The syscall contract has no ENOMEM result for receive. A small
      * operation lives on the retained kernel stack, without allocation. */
@@ -261,6 +287,7 @@ int channel_recv(struct process *p, int32_t fd, uint32_t message, uint32_t flags
     struct channel *c = d->u.endpoint.channel;
     unsigned side = d->u.endpoint.side;
     for (;;) {
+        if (!security_process_live(p)) { err = -EACCES; break; }
         if (p->state == PROC_STOPPING) { err = -EINTR; break; }
         struct channel_queue *q = &c->inbox[side];
         struct channel_message *m = q->head;
@@ -308,18 +335,117 @@ int channel_recv(struct process *p, int32_t fd, uint32_t message, uint32_t flags
  * move the peer into the server without exposing a cross-process F2 syscall. */
 int channel_connect(struct process *client, struct process *server, int32_t fds[2])
 {
+    if (!security_process_live(client) || !security_process_live(server)) return -EACCES;
+    if (!security_same(client, server) && !security_system(client) && !security_system(server)) return -EACCES;
     int slot=desktop_fd_slot(server,0);
     if(slot<0)return -EMFILE;
     int err=channel_pair(client,fds);if(err)return err;
     /* channel_pair allocates and can reach a voluntary point. Recheck the
      * destination and both lifetimes before publishing the transferred end. */
     slot=desktop_fd_slot(server,0);
-    if(slot<0 || client->state==PROC_STOPPING || server->state!=PROC_LIVE){
+    if(slot<0 || client->state==PROC_STOPPING || server->state!=PROC_LIVE ||
+       !security_process_live(client) || !security_process_live(server)){
         desktop_close(client,fds[0]);desktop_close(client,fds[1]);return slot<0?-EMFILE:-EINTR;
     }
+    struct desktop_description *end = desktop_fd(client, fds[1]);
+    struct channel *c = end->u.endpoint.channel;
+    if ((err = security_subject_get(server->subject))) {
+        desktop_close(client, fds[0]); desktop_close(client, fds[1]); return err;
+    }
+    security_subject_put(c->subjects[1]);
+    c->subjects[1] = server->subject;
+    c->handed[1] = true;
     server->fds[slot]=client->fds[fds[1]];
     client->fds[fds[1]]=(struct proc_fd){0};
     fds[1]=slot;return 0;
+}
+
+int channel_peer_get(struct process *p, int32_t fd, struct security_peer *out)
+{
+    struct desktop_description *d = desktop_fd(p, fd);
+    if (!d || d->kind != DESKTOP_CHANNEL) return -EBADF;
+    struct channel *c = d->u.endpoint.channel;
+    unsigned side = d->u.endpoint.side, peer = side ^ 1;
+    if (!security_process_live(p) || !security_subject_matches(c->subjects[side], p)) return -EACCES;
+    if (!c->open[peer] || c->revoked[side] || c->revoked[peer] || !security_subject_live(c->subjects[peer])) return -ESRCH;
+    int err = security_subject_get(c->subjects[peer]);
+    if (err) return err;
+    d->object.retain(&d->object);
+    *out = (struct security_peer){ &d->object, c->subjects[peer], c->generation[peer] };
+    return 0;
+}
+bool channel_peer_live(const struct security_peer *p)
+{
+    if (!p || !p->endpoint || !p->subject) return false;
+    const struct desktop_description *d = (const struct desktop_description *)p->endpoint;
+    struct channel *c = d->u.endpoint.channel;
+    unsigned side = d->u.endpoint.side, peer = side ^ 1;
+    return c->open[peer] && !c->revoked[side] && !c->revoked[peer] &&
+        c->generation[peer] == p->generation && c->subjects[peer] == p->subject && security_subject_live(p->subject);
+}
+void channel_peer_put(struct security_peer *p)
+{
+    if (!p) return;
+    security_subject_put(p->subject);
+    if (p->endpoint) p->endpoint->release(p->endpoint);
+    *p = (struct security_peer){0};
+}
+void channel_fd_closed(struct process *p, struct proc_object *object)
+{
+    /* Called after detaching the slot. A duplicate still owns the endpoint. */
+    for (unsigned i = 0; i < CIUKI_OPEN_MAX; i++)
+        if (p->fds[i].object == object) return;
+    struct desktop_description *d = (struct desktop_description *)object;
+    if (d->kind == DESKTOP_CHANNEL) {
+        struct channel *c = d->u.endpoint.channel;
+        unsigned side = d->u.endpoint.side;
+        if (c->subjects[side] == p->subject) c->revoked[side] = true;
+    }
+}
+int channel_process_prepare(struct process *child)
+{
+    for (unsigned fd = 0; fd < CIUKI_OPEN_MAX; fd++) {
+        struct desktop_description *d = desktop_fd(child, (int32_t)fd);
+        if (!d || d->kind != DESKTOP_CHANNEL) continue;
+        struct channel *c = d->u.endpoint.channel;
+        unsigned side = d->u.endpoint.side;
+        if (!security_subject_matches(c->subjects[side], child) || c->revoked[side]) return -EACCES;
+        if (c->handed[side] || c->pending[side] == child->subject) continue;
+        if (c->pending[side]) return -EBUSY;
+        if (c->generation[side] == UINT32_MAX) return -EAGAIN;
+        int err = security_subject_get(child->subject);
+        if (err) return err;
+        c->pending[side] = child->subject;
+    }
+    return 0;
+}
+void channel_process_publish(struct process *child)
+{
+    for (unsigned fd = 0; fd < CIUKI_OPEN_MAX; fd++) {
+        struct desktop_description *d = desktop_fd(child, (int32_t)fd);
+        if (!d || d->kind != DESKTOP_CHANNEL) continue;
+        struct channel *c = d->u.endpoint.channel;
+        unsigned side = d->u.endpoint.side;
+        if (c->pending[side] != child->subject) continue;
+        security_subject_put(c->subjects[side]);
+        c->subjects[side] = c->pending[side];
+        c->pending[side] = 0;
+        c->generation[side]++;
+        c->handed[side] = true;
+    }
+}
+void channel_process_abort(struct process *child)
+{
+    if (!child->fds) return;
+    for (unsigned fd = 0; fd < CIUKI_OPEN_MAX; fd++) {
+        struct desktop_description *d = desktop_fd(child, (int32_t)fd);
+        if (!d || d->kind != DESKTOP_CHANNEL) continue;
+        struct channel *c = d->u.endpoint.channel;
+        unsigned side = d->u.endpoint.side;
+        if (c->pending[side] != child->subject) continue;
+        security_subject_put(c->pending[side]);
+        c->pending[side] = 0;
+    }
 }
 
 /* Readiness is observed before poll atomically registers/rechecks its global

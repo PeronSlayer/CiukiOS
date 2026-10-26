@@ -37,6 +37,7 @@ void supervisor_set_io_ops(const struct supervisor_io_ops *ops);
 int supervisor_spawn(const char *path, const char *const argv[], const char *cwd,
                       bool desktop, struct process **out);
 int supervisor_spawn_gate(bool supplement, struct process **out);
+int supervisor_spawn_account_service(struct process **out);
 int supervisor_spawn_standin(struct process *parent, struct process **out);
 /* The selected controller owns the observer. Capture associates every byte
  * with the emitting PID, including writes through duplicated console fds. */

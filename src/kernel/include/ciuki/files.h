@@ -86,6 +86,9 @@ int px_resolve_locked(struct px_namespace *, struct px_node *cwd, const char *,
                       bool missing_leaf, struct px_path *out);
 int px_getcwd_locked(struct px_node *, char out[CIUKI_PATH_MAX]);
 int px_chdir(struct process *, const char *);
+/* Prepare a fresh cwd from the boot namespace root, without copying a
+ * service's cwd capability across credentials. Unpublished child only. */
+int px_security_cwd(struct process *, const char *);
 int px_stat_locked(struct px_node *, struct ciuki_stat *);
 /* G6 file_info (call 98): check validates the copied record; get fills it
  * for a resolved node; set takes the writer turn, resolves and publishes. */

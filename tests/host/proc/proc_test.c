@@ -30,6 +30,7 @@ static void (*on_schedule)(void);
 static jmp_buf exited;
 static bool expect_exit;
 static unsigned trap_calls;
+static int copy_fail_after = -1; /* input-copy boundary failure injection */
 char copy_user_fault_start[8], copy_user_fault_end[1], copy_user_fixup[1];
 void trap_dispatch(struct trap_frame *tf) { (void)tf; trap_calls++; }
 struct task *g_current;
@@ -132,6 +133,10 @@ void schedule(void)
 void task_sleep_ms(uint32_t ms) { g_ticks += ms ? ms - 1 : 0; g_current->state = T_BLOCKED; schedule(); }
 int copy_user(void *dst, const void *src, uint32_t bytes)
 {
+    if ((uintptr_t)src <= UINT32_MAX) {
+        if (!copy_fail_after) return -EFAULT;
+        if (copy_fail_after > 0) copy_fail_after--;
+    }
     struct process *p = proc_current();
     if ((uintptr_t)src <= UINT32_MAX)
         return ua_read(p->memory, dst, (uint32_t)(uintptr_t)src, bytes);
@@ -160,6 +165,7 @@ void proc_test_signal_post(struct process *p, struct proc_thread *t, uint32_t si
 #include "../../../src/kernel/proc/elf.c"
 #include "../../../src/kernel/proc/waitword.c"
 #include "../../../src/kernel/proc/process.c"
+#include "../../../src/kernel/proc/security.c"
 #include "../../../src/kernel/proc/thread.c"
 #include "../../../src/kernel/proc/spawn.c"
 #define supervisor_desktop_pid proc_test_desktop_pid

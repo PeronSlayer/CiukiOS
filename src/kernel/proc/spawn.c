@@ -5,6 +5,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
 #include <ciuki/process.h>
+#include <ciuki/security.h>
 #include <ciuki/supervisor.h>
 #include <ciuki/signal.h>
 
@@ -244,7 +245,7 @@ int proc_spawn_file(struct process *parent, const struct ciuki_file *file,
         err = prepare_image(p, file, strings, mask);
     struct proc_thread *self = proc_thread_for(g_current);
     if (self && self->process == parent) self->launch_loading = 0;
-    if (!err && parent->state != PROC_LIVE)
+    if (!err && (!security_process_live(p) || parent->state != PROC_LIVE))
         err = -EINTR;
     if (err) {
         proc_discard(p);
@@ -255,6 +256,19 @@ int proc_spawn_file(struct process *parent, const struct ciuki_file *file,
     return (int)p->pid;
 }
 
+/* At most 517 input spans, stored in two independently allocated pages.
+ * Strings use proc_strings pages; no allocation exceeds the kernel heap class. */
+struct credential_span_entry { uint32_t at, bytes; };
+struct credential_copy {
+    uint32_t span_pages[2];
+    unsigned count;
+    char text[CIUKI_PATH_MAX];
+};
+_Static_assert(sizeof(struct credential_copy) <= 2040, "credential snapshot fits kernel heap");
+static struct credential_span_entry *credential_entry(struct credential_copy *c, unsigned index)
+{
+    return &((struct credential_span_entry *)P2V(c->span_pages[index / 512]))[index % 512];
+}
 struct spawn_operation {
     struct proc_thread *thread;
     struct process *child;
@@ -262,6 +276,7 @@ struct spawn_operation {
     struct ciuki_spawn_fd *fds;
     char *path;
     struct ciuki_file file;
+    struct credential_copy *security_copy;
 };
 
 static void spawn_cleanup(void *operation)
@@ -275,7 +290,197 @@ static void spawn_cleanup(void *operation)
     proc_strings_free(op->strings);
     kfree(op->fds);
     kfree(op->path);
+    if (op->security_copy)
+        for (unsigned i = 0; i < 2; i++)
+            if (op->security_copy->span_pages[i]) pmm_free(op->security_copy->span_pages[i]);
+    kfree(op->security_copy);
     kfree(op);
+}
+
+static int credential_span(struct credential_copy *c, uint32_t at, uint32_t bytes)
+{
+    if (!at || at > UINT32_MAX - bytes) return -EFAULT;
+    for (unsigned i = 0; i < c->count; i++) {
+        const struct credential_span_entry *entry = credential_entry(c, i);
+        if (at < entry->at + entry->bytes && entry->at < at + bytes) return -EINVAL;
+    }
+    if (c->count == CIUKI_ARGV_MAX + CIUKI_ENVP_MAX + 5) return -E2BIG;
+    unsigned page = c->count / 512;
+    if (!c->span_pages[page] && !(c->span_pages[page] = pmm_alloc())) return -ENOMEM;
+    *credential_entry(c, c->count++) = (struct credential_span_entry){ at, bytes };
+    return 0;
+}
+static int credential_string(struct credential_copy *c, uint32_t address, unsigned limit, unsigned *bytes)
+{
+    for (unsigned n = 0; n < limit; n++) {
+        if (address > UINT32_MAX - n || copy_from_user(c->text + n, address + n, 1)) return -EFAULT;
+        if (!c->text[n]) {
+            *bytes = n + 1;
+            return credential_span(c, address, n + 1);
+        }
+    }
+    return -E2BIG;
+}
+static int credential_vector(struct credential_copy *c, struct proc_strings *s, uint32_t address, bool env)
+{
+    if (!address) return env ? 0 : -EINVAL;
+    if (address & 3) return -EINVAL;
+    unsigned limit = env ? CIUKI_ENVP_MAX : CIUKI_ARGV_MAX;
+    /* Snapshot the vector before reading strings. A later vector mutation
+     * cannot change either overlap checks or the selected strings. */
+    uint32_t entries[CIUKI_ARGV_MAX + 1];
+    unsigned n = 0;
+    for (; n <= limit; n++) {
+        if (address > UINT32_MAX - 4 * (n + 1) ||
+            copy_from_user(&entries[n], address + 4 * n, 4)) return -EFAULT;
+        if (!entries[n]) break;
+    }
+    if (n > limit) return -E2BIG;
+    if (!n && !env) return -EINVAL;
+    int err = credential_span(c, address, 4 * (n + 1));
+    if (err) return err;
+    for (unsigned i = 0; i < n; i++) {
+        if ((err = start_string(s, env))) return err;
+        unsigned bytes = 0;
+        for (;;) {
+            uint8_t value;
+            if (entries[i] > UINT32_MAX - bytes || copy_from_user(&value, entries[i] + bytes, 1)) return -EFAULT;
+            bytes++;
+            if ((err = append_byte(s, value))) return err;
+            if (!fits(s)) return -E2BIG;
+            if (!value) break;
+        }
+        if ((err = credential_span(c, entries[i], bytes))) return err;
+    }
+    return 0;
+}
+static void credential_text(char *out, const char *key, const char *root, const char *suffix)
+{
+    unsigned at = 0;
+    if (key) { at = (unsigned)strlen(key); memcpy(out, key, at); out[at++] = '='; }
+    unsigned n = (unsigned)strlen(root); memcpy(out + at, root, n); at += n;
+    memcpy(out + at, suffix, strlen(suffix) + 1);
+}
+static int credential_environment(struct proc_strings **strings, struct credential_copy *c,
+                                   const struct ciuki_security_profile *profile)
+{
+    static const char *const keys[] = {"USER", "LOGNAME", "HOME", "USERPROFILE", "CIUKI_PROFILE", "TEMP", "TMP", "TMPDIR", "PATH"};
+    bool seen[ARRAY_SIZE(keys)] = {0};
+    struct proc_strings *old = *strings, *clean = proc_strings_new();
+    if (!clean) return -ENOMEM;
+    int err = 0;
+    for (unsigned i = 0; i < old->argc + old->envc && !err; i++) {
+        bool env = i >= old->argc;
+        unsigned at = env ? old->envp[i - old->argc] : old->argv[i];
+        if (!env) {
+            err = start_string(clean, false);
+            uint8_t value;
+            while (!err) {
+                value = ((const uint8_t *)P2V(old->pages[at / PAGE_SIZE]))[at % PAGE_SIZE];
+                at++;
+                err = append_byte(clean, value);
+                if (!value) break;
+            }
+            continue;
+        }
+        unsigned n = 0;
+        do {
+            c->text[n] = ((const char *)P2V(old->pages[at / PAGE_SIZE]))[at % PAGE_SIZE];
+            at++;
+        } while (c->text[n++] && n < sizeof(c->text));
+        if (c->text[n - 1]) { err = -EINVAL; break; }
+        if (env) {
+            unsigned key = 0;
+            for (; key < ARRAY_SIZE(keys); key++) {
+                unsigned k = (unsigned)strlen(keys[key]);
+                if (!strncmp(c->text, keys[key], k) && c->text[k] == '=') break;
+            }
+            if (key == ARRAY_SIZE(keys) || seen[key]) { err = -EINVAL; break; }
+            seen[key] = true;
+            const char *value = c->text + strlen(keys[key]) + 1;
+            if (key < 2) {
+                unsigned length = (unsigned)strlen(value);
+                if (!length || length > 31) { err = -EINVAL; break; }
+                for (unsigned j = 0; j < length; j++)
+                    if (!((value[j] >= 'a' && value[j] <= 'z') || (value[j] >= 'A' && value[j] <= 'Z') ||
+                          (value[j] >= '0' && value[j] <= '9') || value[j] == '_' || value[j] == '-' || value[j] == '.')) err = -EINVAL;
+            } else {
+                char expected[128];
+                const char *suffix = key == 2 ? "/Documents" : key >= 5 && key <= 7 ? "/Local Settings/Temp" : "";
+                if (key == 8) memcpy(expected, "/Programs:/System", sizeof("/Programs:/System"));
+                else credential_text(expected, 0, profile->path, suffix);
+                if (strncmp(value, expected, strlen(expected) + 1)) err = -EINVAL;
+            }
+        }
+        if (!err) err = proc_strings_add(clean, c->text, n, env);
+    }
+    for (unsigned i = 2; i < ARRAY_SIZE(keys) && !err; i++) if (!seen[i]) {
+        const char *suffix = i == 2 ? "/Documents" : i >= 5 && i <= 7 ? "/Local Settings/Temp" : "";
+        if (i == 8) credential_text(c->text, keys[i], "/Programs:/System", "");
+        else credential_text(c->text, keys[i], profile->path, suffix);
+        err = proc_strings_add(clean, c->text, (uint32_t)strlen(c->text) + 1, true);
+    }
+    if (err) proc_strings_free(clean);
+    else { *strings = clean; proc_strings_free(old); }
+    return err;
+}
+extern int px_security_cwd(struct process *, const char *) __attribute__((weak));
+/* k03 supplies resolved executable authorization under the prepared child.
+ * Its absence must not open an executable as the SYSTEM caller. */
+extern int security_exec_open(struct process *, const char *, struct ciuki_file *) __attribute__((weak));
+int proc_spawn_credential(uint32_t spawn, uint32_t session, uint32_t outer, uint32_t *pid)
+{
+    struct process *parent = proc_current();
+    if (!security_system(parent)) return -EPERM;
+    struct ciuki_spawn_args a;
+    if (!spawn || spawn > UINT32_MAX - sizeof(a)) return -EFAULT;
+    if (spawn & 3) return -EINVAL;
+    if (spawn < outer + 64 && outer < spawn + sizeof(a)) return -EINVAL;
+    int err = copy_from_user(&a, spawn, sizeof(a));
+    if (err) return err;
+    if (a.size != 32 || a.reserved || a.fd_count || a.fd_list || (a.flags & ~CIUKI_SPAWN_NEW_GROUP)) return -EINVAL;
+    struct ciuki_security_profile profile;
+    if ((err = security_session_profile(session, &profile))) return err;
+    struct proc_thread *self = proc_thread_for(g_current);
+    struct spawn_operation *op = kzalloc(sizeof(*op));
+    if (!op) return -ENOMEM;
+    op->thread = self;
+    self->operation = op;
+    self->cleanup = spawn_cleanup;
+    struct credential_copy *c = op->security_copy = kzalloc(sizeof(*c));
+    op->strings = proc_strings_new();
+    op->path = kmalloc(CIUKI_PATH_MAX);
+    if (!c || !op->strings || !op->path) { err = -ENOMEM; goto out; }
+    if ((err = credential_span(c, outer, 64)) || (err = credential_span(c, spawn, 32))) goto out;
+    unsigned bytes;
+    err = credential_string(c, a.path, CIUKI_PATH_MAX, &bytes);
+    if (err) { if (err == -E2BIG) err = -ENAMETOOLONG; goto out; }
+    memcpy(op->path, c->text, bytes);
+    if ((err = credential_vector(c, op->strings, a.argv, false)) ||
+        (err = credential_vector(c, op->strings, a.envp, true)) ||
+        (err = credential_environment(&op->strings, c, &profile))) goto out;
+    if ((err = proc_prepare(parent, &op->child)) ||
+        (err = security_session_attach(op->child, session))) goto out;
+    proc_set_name(op->child, op->path);
+    credential_text(c->text, 0, profile.path, "/Documents");
+    if (!px_security_cwd) { err = -EIO; goto out; }
+    if ((err = px_security_cwd(op->child, c->text))) goto out;
+    if (!security_exec_open) { err = -EIO; goto out; }
+    self->launch_loading = op->child;
+    if ((err = security_exec_open(op->child, op->path, &op->file))) goto out;
+    if (w32_is_pe && w32_is_pe(&op->file)) { err = -ENOEXEC; goto out; }
+    if ((err = prepare_image(op->child, &op->file, op->strings, 0))) goto out;
+    if (!security_process_live(op->child) || parent->state != PROC_LIVE || proc_signal_caught(self)) {
+        err = -EACCES; goto out;
+    }
+    if (op->file.close) op->file.close(op->file.cookie);
+    op->file.close = 0;
+    proc_publish(op->child, a.flags);
+    *pid = op->child->pid;
+    op->child = 0;
+out:
+    proc_thread_cleanup(self);
+    return err;
 }
 
 int proc_spawn(uint32_t args_va)
@@ -344,25 +549,29 @@ int proc_spawn(uint32_t args_va)
     err = file_ops->open(op->child->cwd, path, &op->file);
     if (err)
         goto out;
-    if (self->process->state != PROC_LIVE) {
+    if (self->process->state != PROC_LIVE || !security_process_live(op->child)) {
         err = -EINTR;
         goto out;
     }
     err = prepare_image(op->child, &op->file, strings, mask);
-    if (!err && (self->process->state != PROC_LIVE || proc_signal_caught(self)))
+    if (!err && (self->process->state != PROC_LIVE || !security_process_live(op->child) || proc_signal_caught(self)))
         err = -EINTR;
     if (!err) {
         /* Release the immutable file snapshot before publication. */
         if (op->file.close)
             op->file.close(op->file.cookie);
         op->file.close = 0;
-        if (self->process->state != PROC_LIVE) {
+        if (self->process->state != PROC_LIVE || !security_process_live(op->child)) {
             err = -EINTR;
             goto out;
         }
         if (supervisor_dosvm_delegate)
             supervisor_dosvm_delegate(self->process, op->child, path);
         if(w32_service_delegate)w32_service_delegate(self->process,op->child,path);
+        if (!security_process_live(op->child) || self->process->state != PROC_LIVE) {
+            err = -EACCES;
+            goto out;
+        }
         proc_publish(op->child, a.flags);
         err = (int)op->child->pid;
         op->child = 0;

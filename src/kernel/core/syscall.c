@@ -21,6 +21,7 @@ extern int32_t power_syscall(uint32_t action) __attribute__((weak));
 extern int32_t power_status_query(uint32_t address, uint32_t bytes) __attribute__((weak));
 extern int32_t power_record_call(uint32_t action, uint32_t address, uint32_t bytes) __attribute__((weak));
 extern int32_t dosvm_client_syscall(struct trap_frame *) __attribute__((weak));
+extern int security_syscall(struct trap_frame *) __attribute__((weak));
 
 extern int copy_user(void *dst, const void *src, uint32_t len);
 extern bool probe_f2_libc_report(struct task *, const char *, uint32_t) __attribute__((weak));
@@ -167,6 +168,9 @@ void syscall_dispatch(struct trap_frame *tf)
     case CIUKI_SYS_W32:
         if (w32_syscall) { w32_syscall(tf); return; }
         r = -ENOSYS;
+        break;
+    case CIUKI_SYS_SECURITY:
+        r = security_syscall ? security_syscall(tf) : -ENOSYS;
         break;
     case CIUKI_SYS_DOSVM:
         /* Weak like dosvm_trap: host harnesses link syscall.c without the VM. */

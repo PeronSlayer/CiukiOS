@@ -10,6 +10,7 @@
 #include <ciuki/storage.h>
 #include <ciuki/splash.h>
 #include <ciuki/systime.h>
+#include <ciuki/security.h>
 #pragma weak timezone_env
 #pragma weak console_splash_phase
 extern void dosvm_client_poll(void) __attribute__((weak));
@@ -21,7 +22,9 @@ extern void w32_services_desktop_died(uint32_t) __attribute__((weak));
 
 static const struct supervisor_io_ops *supervisor_io;
 extern void w32_service_delegate(struct process *,struct process *,const char *) __attribute__((weak));
+extern int px_security_cwd(struct process *, const char *) __attribute__((weak));
 static uint32_t desktop_pid, desktop_deaths;
+static uint32_t account_service_pid;
 static bool bootstrap_attempted;
 /* G13 (ER-3): an abnormal death of the bootstrap desktop restarts it, as
  * Windows 9x restarts a crashed Explorer shell. At most three restarts in a
@@ -119,6 +122,9 @@ static int spawn_process(const char *path, const char *const argv[], const char 
     struct proc_thread *thread = 0;
     uint32_t esp = 0;
     if (!err) err = proc_prepare(proc_supervisor(), &p);
+    if (!err && desktop) err = security_bootstrap_desktop(p);
+    if (!err && desktop && proc_supervisor()->cwd)
+        err = px_security_cwd ? px_security_cwd(p, "/") : -EIO;
     /* f1-98: the desktop's threads keep a minimum CPU share beside a game. */
     if (!err && desktop) proc_share_group(p);
     if (!err) proc_set_name(p, path);
@@ -166,11 +172,25 @@ static int spawn_process(const char *path, const char *const argv[], const char 
     }
     if (file.close) file.close(file.cookie);
     proc_strings_free(strings);
+    if (!err && !security_process_live(p)) err = -EACCES;
     if (err) { if (p) proc_discard(p); return err; }
     if(w32_service_delegate)w32_service_delegate(proc_supervisor(),p,path);
+    if (!security_process_live(p)) { proc_discard(p); return -EACCES; }
     proc_publish(p, CIUKI_SPAWN_NEW_GROUP);
     *out = p;
     return (int)p->pid;
+}
+
+/* Fixed sealed service entry; never dispatched by a public spawn path or
+ * selected using argv/environment. The service image lands in sec-user-01. */
+int supervisor_spawn_account_service(struct process **out)
+{
+    struct process *existing = proc_find(account_service_pid);
+    if (existing && existing->state != PROC_ZOMBIE) return -EBUSY;
+    const char *argv[] = { "accounts", 0 };
+    int result = spawn_process("/System/Security/accounts", argv, 0, false, false, out);
+    if (result >= 0) account_service_pid = (*out)->pid;
+    return result;
 }
 
 /* f3-02: the DOS window authority (syscall 70) follows only an exact
@@ -255,6 +275,12 @@ void supervisor_bootstrap(void)
         if (pager_bootstrap_complete) pager_bootstrap_complete();
         return;
     }
+    /* sec-user-01 supplies this sealed image. Its absence during the k01
+     * transition leaves the existing boot working; other failures are visible. */
+    struct process *accounts = 0;
+    int account_result = supervisor_spawn_account_service(&accounts);
+    if (account_result < 0 && account_result != -ENOENT && account_result != -EBUSY)
+        klog("[supervisor] account service unavailable: %d", account_result);
     /* G14 (docs/design/startup-recovery.md 2.3): Safe mode's corner labels
      * and notice; Command prompt only runs one Terminal and no shell. */
     const char *argv[4] = { "desktop", 0, 0, 0 };

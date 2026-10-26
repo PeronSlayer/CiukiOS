@@ -4,6 +4,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
 #include <ciuki/process.h>
+#include <ciuki/security.h>
 #include <ciuki/signal.h>
 #include <ciuki/supervisor.h>
 
@@ -12,6 +13,9 @@ extern void w32_process_died(struct process *) __attribute__((weak));
 extern void w32_thread_died(struct proc_thread *) __attribute__((weak));
 extern void w32_process_stopping(struct process *, uint32_t) __attribute__((weak));
 extern void net_fd_changed(struct process *, unsigned) __attribute__((weak));
+extern int channel_process_prepare(struct process *) __attribute__((weak));
+extern void channel_process_publish(struct process *) __attribute__((weak));
+extern void channel_process_abort(struct process *) __attribute__((weak));
 
 static struct process *processes[CIUKI_PROCESS_MAX];
 static struct process supervisor;
@@ -35,6 +39,8 @@ struct process *proc_at_slot(unsigned slot)
     struct process *p=slot<CIUKI_PROCESS_MAX ? processes[slot] : 0;
     return p && p->published ? p : 0;
 }
+struct process *proc_reserved_at_slot(unsigned slot)
+{ return slot < CIUKI_PROCESS_MAX ? processes[slot] : 0; }
 
 struct process *proc_current(void)
 {
@@ -65,6 +71,7 @@ void proc_snapshot(struct proc_ledger *out)
 
 int proc_prepare(struct process *parent, struct process **out)
 {
+    if (!security_process_live(parent)) return -EACCES;
     unsigned slot = 1;
     while (slot < CIUKI_PROCESS_MAX && processes[slot])
         slot++;
@@ -80,12 +87,18 @@ int proc_prepare(struct process *parent, struct process **out)
     p->state = PROC_PREPARING;
     processes[slot] = p;                /* private reservation, not findable */
     kwait_init(&p->changed);
+    int credential_error = security_process_prepare(p, parent);
+    if (credential_error) { proc_discard(p); return credential_error; }
     p->fds = kzalloc(CIUKI_OPEN_MAX * sizeof(*p->fds));
     p->actions = kzalloc((SIGCHLD + 1) * sizeof(*p->actions));
     p->memory = kzalloc(sizeof(*p->memory));
     if (!p->fds || !p->actions || !p->memory || ua_init(p->memory, p)) {
         proc_discard(p);
         return -ENOMEM;
+    }
+    if (!security_process_live(parent) || !security_process_live(p)) {
+        proc_discard(p);
+        return -EACCES;
     }
     p->cwd = parent->cwd;
     p->cwd_retain = parent->cwd_retain;
@@ -125,6 +138,7 @@ int proc_fd_validate(const struct process *parent, const struct ciuki_spawn_fd *
 int proc_inherit(struct process *child, const struct process *parent,
                  const struct ciuki_spawn_fd *list, uint32_t count)
 {
+    if (!security_same(child, parent)) return count ? -EPERM : 0;
     int err = proc_fd_validate(parent, list, count);
     if (err)
         return err;
@@ -146,7 +160,7 @@ int proc_inherit(struct process *child, const struct process *parent,
             child->fds[list[i].target].object = object;
             object->retain(object);
         }
-    return 0;
+    return channel_process_prepare ? channel_process_prepare(child) : 0;
 }
 
 /* Image basename for enumeration: printable ASCII only, at most 31 bytes,
@@ -212,6 +226,7 @@ unsigned proc_list_snapshot(struct ciuki_proc_record *out, unsigned capacity, un
 
 void proc_publish(struct process *p, uint32_t flags)
 {
+    if (channel_process_publish) channel_process_publish(p);
     if (flags & CIUKI_SPAWN_NEW_GROUP)
         p->pgid = p->pid;
     p->start_tick = g_ticks;
@@ -256,6 +271,7 @@ void proc_stop(struct process *p, int raw_code, uint32_t signal)
         return;
     if(w32_process_stopping)w32_process_stopping(p,signal);
     p->state = PROC_STOPPING;            /* no new syscall/creation can publish */
+    security_process_stopping(p);
     if (net_fd_changed) net_fd_changed(0, 0);
     p->raw_exit = raw_code;
     p->status = signal ? (int32_t)(signal & 0x7f) : (raw_code & 0xff) << 8;
@@ -319,6 +335,7 @@ void disk_process_exit(struct process *) __attribute__((weak));
 void net_resolve_process_exit(struct process *) __attribute__((weak));
 static void close_resources(struct process *p)
 {
+    if (channel_process_abort) channel_process_abort(p);
     if(w32_process_cleanup)w32_process_cleanup(p);
     /* f9-02: death revokes a destination-disk lease (no disk I/O). */
     if (disk_process_exit) disk_process_exit(p);
@@ -369,6 +386,7 @@ static void release_threads(struct process *p)
 void proc_discard(struct process *p)
 {
     p->state = PROC_STOPPING;
+    security_process_stopping(p);
     for (unsigned i = 0; i < CIUKI_THREAD_MAX; i++) {
         struct proc_thread *t = proc_thread_slot(i);
         if (t && t->process == p && t->task)
@@ -377,6 +395,7 @@ void proc_discard(struct process *p)
     close_resources(p);
     release_threads(p);
     processes[p->slot] = 0;
+    security_process_release(p);
     kfree(p);
 }
 
@@ -407,6 +426,7 @@ int proc_reap(struct process *parent, struct process *child)
         child->state != PROC_ZOMBIE || !child->published)
         return -ECHILD;
     processes[slot] = 0;
+    security_process_release(child);
     kfree(child);
     return 0;
 }
@@ -528,6 +548,7 @@ static void supervisor_main(void *arg)
 
 void proc_init(void)
 {
+    security_init(&supervisor);
     supervisor.pid = supervisor.ppid = supervisor.pgid = 1;
     proc_set_name(&supervisor, "supervisor");
     supervisor.state = PROC_LIVE;

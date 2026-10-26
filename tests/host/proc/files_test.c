@@ -1743,6 +1743,23 @@ static void test_file_info(void)
     CHECK(media_label_locked_apply(&vfs, &none, 0) == -ENOENT);
     puts("files G6 devices/synthetic nodes, volume labels (BS_VolLab + root entry, removal, rules, read-only) PASS");
 }
+static void test_security_cwd(void)
+{
+    struct process *boot=proc_supervisor();void *saved=boot->cwd;
+    void (*saved_retain)(void *)=boot->cwd_retain, (*saved_release)(void *)=boot->cwd_release;
+    boot->cwd=space->root;px_retain(boot->cwd);boot->cwd_retain=px_retain;boot->cwd_release=px_release;
+    struct process *child;CHECK(!proc_prepare(client,&child));
+    CHECK(!security_bootstrap_desktop(child));
+    CHECK(security_credential(child)->uid==1000 && !security_system(child) && !child->cwd);
+    CHECK(px_security_cwd(child,"relative")==-EINVAL && !child->cwd);
+    CHECK(px_security_cwd(child,"/missing-security-profile")==-ENOENT && !child->cwd);
+    CHECK(!px_security_cwd(child,"/") && child->cwd==space->root);
+    CHECK(px_security_cwd(child,"/")==-EINVAL);
+    uint32_t id=security_credential(child)->session_id,state;
+    proc_discard(child);CHECK(!security_session_end(id,true,&state) && state==3);
+    px_release(boot->cwd);boot->cwd=saved;boot->cwd_retain=saved_retain;boot->cwd_release=saved_release;
+    puts("files security cwd: uid 1000 bootstrap, fresh root lookup, relative/missing/second assignment denied, zero leaked references PASS");
+}
 int main(int argc, char **argv)
 {
     CHECK(argc==3 || argc==4 || argc==5);
@@ -1757,6 +1774,7 @@ int main(int argc, char **argv)
     CHECK(!files_attach(&vfs,&space));
     client_thread=make_process(proc_supervisor(),&client); g_current=client_thread->task; g_current->state=T_RUNNING;
     client->cwd=space->root; px_retain(client->cwd); client->cwd_retain=px_retain; client->cwd_release=px_release;
+    test_security_cwd();
     test_paths(); test_fds(); test_io(); test_namespace(); test_syscalls(); test_read_interruption(); test_peer_walk_copy(); test_lifetime_and_legacy(); test_overwrite_ctime(); test_concurrent_append(); test_clocks(); test_net_node(); test_media_node();
     test_com_nodes(); test_lpt_nodes(); test_uname(); test_optical_native();
     test_launch_reads(); test_launch_throughput(); test_launch_sparse(); test_launch_pe_view();
