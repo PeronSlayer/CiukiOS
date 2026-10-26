@@ -37,7 +37,8 @@ static css_stylesheet *custom_sheet_at(const char *text, bool inlined, size_t ch
 		css_error error = css_stylesheet_append_data(sheet, (const uint8_t *)text + i, count);
 		assert(error == CSS_OK || error == CSS_NEEDDATA);
 	}
-	assert(css_stylesheet_data_done(sheet) == CSS_OK);
+	css_error error = css_stylesheet_data_done(sheet);
+	assert(error == CSS_OK || error == CSS_IMPORTS_PENDING);
 	return sheet;
 }
 
@@ -273,6 +274,155 @@ static void custom_bounds(void)
 	fflush(stdout);
 }
 
+static void custom_memory(void)
+{
+	assert(css__custom_memory_used() == 0);
+	/* Full admission: absolutely no allocator call on failure. */
+	size_t limit = css__custom_memory_limit();
+	printf("PASS custom byte budget limit=%zu bytes\n", limit);
+	assert(css__custom_reserve(limit));
+	css_custom_tokens *tokens = NULL;
+	allocation_count = 0;
+	assert(css__custom_tokens_create(&tokens) == CSS_NOMEM && tokens == NULL);
+	assert(allocation_count == 0 && css__custom_memory_used() == limit);
+	css__custom_release(limit);
+	/* Vector capacity and retained strings are admitted before append. */
+	assert(css__custom_tokens_create(&tokens) == CSS_OK);
+	css_token space = { .type = CSS_TOKEN_S };
+	for (unsigned i = 0; i < 8; i++) assert(css__custom_tokens_append(tokens, &space) == CSS_OK);
+	size_t used = css__custom_memory_used();
+	assert(css__custom_reserve(limit - used));
+	allocation_count = 0;
+	assert(css__custom_tokens_append(tokens, &space) == CSS_NOMEM);
+	assert(allocation_count == 0 && tokens->count == 8);
+	css__custom_release(limit - used);
+	css__custom_tokens_unref(tokens);
+	assert(css__custom_memory_used() == 0);
+
+	/* Raw declarations in many sheets all use the SAME budget. */
+	css_stylesheet *sheets[32];
+	unsigned count = 0;
+	size_t held = limit - 8192;
+	assert(css__custom_reserve(held));
+	css_stylesheet_params params = { .params_version = CSS_STYLESHEET_PARAMS_VERSION_1,
+		.level = CSS_LEVEL_21, .charset = "UTF-8", .url = "file:raw-budget", .resolve = custom_resolve };
+	css_error error = CSS_OK;
+	while (count < 32 && error == CSS_OK) {
+		css_stylesheet *sheet;
+		assert(css_stylesheet_create(&params, &sheet) == CSS_OK);
+		sheets[count++] = sheet;
+		const char *css = "*{--a:red red red red red red red red red red red red red red red red}";
+		error = css_stylesheet_append_data(sheet, (const uint8_t *)css, strlen(css));
+		if (error == CSS_OK || error == CSS_NEEDDATA) error = css_stylesheet_data_done(sheet);
+		assert(error == CSS_OK || error == CSS_NOMEM);
+		assert(css__custom_memory_used() <= limit);
+	}
+	assert(error == CSS_NOMEM && count > 1 && count < 32);
+	for (unsigned i = 0; i < count; i++) css_stylesheet_destroy(sheets[i]);
+	assert(css__custom_memory_used() == held);
+	css__custom_release(held);
+
+	/* A universal rule must share its large immutable literal, rather than
+	 * retain another token vector per element. Use a tight aggregate budget. */
+	char css[4096];
+	size_t len = snprintf(css, sizeof(css), "*{--a:");
+	for (unsigned i = 0; i < 256; i++) len += snprintf(css + len, sizeof(css) - len, "red ");
+	snprintf(css + len, sizeof(css) - len, ";}");
+	for (unsigned computed = 0; computed < 2; computed++) {
+		if (computed) strcpy(css, "*{--a:red red red red red red red red;--b:var(--a) var(--a) var(--a) var(--a)}");
+		css_stylesheet *sheet = custom_sheet(css, false, 4096);
+		css_select_ctx *select;
+		assert(css_select_ctx_create(&select) == CSS_OK);
+		assert(css_select_ctx_append_sheet(select, sheet, CSS_ORIGIN_AUTHOR, NULL) == CSS_OK);
+		held = limit - css__custom_memory_used() - 65536;
+		assert(css__custom_reserve(held));
+		node *root = custom_node("html", NULL);
+		line_ctx ctx = { .media = { .type = CSS_MEDIA_SCREEN } };
+		unit_ctx.root_style = NULL;
+		custom_select(select, root, &ctx, NULL);
+		unsigned selected = 0;
+		for (; selected < 1024; selected++) {
+			node *child = custom_node("p", root);
+			css_select_results *result = NULL;
+			error = css_select_style(select, child, &unit_ctx, &ctx.media, NULL,
+					&select_handler, &ctx, &result);
+			assert(css__custom_memory_used() <= limit);
+			if (error != CSS_OK) { assert(error == CSS_NOMEM && result == NULL); break; }
+			child->sr = result;
+		}
+		assert(selected < 1024);
+		if (!computed) assert(selected >= 32); /* would exhaust on the first copies */
+		else assert(selected >= 1);
+		/* Node references keep tokens charged after the source sheet dies. */
+		css_select_ctx_destroy(select);
+		css_stylesheet_destroy(sheet);
+		assert(css__custom_memory_used() > held);
+		destroy_tree(root);
+		unit_ctx.root_style = NULL;
+		assert(css__custom_memory_used() == held);
+		css__custom_release(held);
+		assert(css__custom_memory_used() == 0);
+		printf("PASS document-wide custom byte admission: %s selected=%u bounded, cleanup=0\n",
+				computed ? "substituted" : "shared literal", selected);
+	}
+}
+
+static void custom_feature_cache(void)
+{
+	char rules[32768];
+	size_t used = 0;
+	for (unsigned i = 0; i < 1000; i++)
+		used += snprintf(rules + used, sizeof(rules) - used, ".unused%u{color:red}", i);
+	css_stylesheet *sheet = custom_sheet(rules, false, 4096);
+	css_select_ctx *select;
+	assert(css_select_ctx_create(&select) == CSS_OK);
+	assert(css_select_ctx_append_sheet(select, sheet, CSS_ORIGIN_AUTHOR, NULL) == CSS_OK);
+	assert(!css__custom_sheet_uses(sheet, 0));
+	size_t scans = sheet->custom_feature_scans;
+	assert(scans >= 1000);
+	node *root = custom_node("html", NULL);
+	line_ctx ctx = { .media = { .type = CSS_MEDIA_SCREEN } };
+	unit_ctx.root_style = NULL;
+	custom_select(select, root, &ctx, NULL);
+	for (unsigned i = 0; i < 100; i++) {
+		/* Inline parsing/destruction in another element is unrelated to this
+		 * import graph and must not force its full scan again. */
+		css_stylesheet *inlined = custom_sheet("color:blue", true, 4096);
+		custom_select(select, custom_node("p", root), &ctx, inlined);
+		css_stylesheet_destroy(inlined);
+	}
+	assert(sheet->custom_feature_scans == scans);
+	css_select_ctx_destroy(select);
+	css_stylesheet_destroy(sheet);
+	destroy_tree(root);
+	unit_ctx.root_style = NULL;
+
+	/* Cache a negative graph, then register a late, nested custom import. */
+	css_stylesheet *top = custom_sheet("@import 'middle.css';p{color:var(--x,blue)}", false, 4096);
+	css_stylesheet *middle = custom_sheet("@import 'leaf.css';p{color:red}", false, 4096);
+	css_stylesheet *leaf = custom_sheet("p{--x:lime}", false, 4096);
+	css_stylesheet *ordinary = custom_sheet("@import 'ordinary.css';p{color:red}", false, 4096);
+	assert(!css__custom_sheet_uses(ordinary, 0));
+	assert(css_stylesheet_register_import(ordinary, middle) == CSS_OK);
+	assert(!css__custom_sheet_uses(ordinary, 0));
+	scans = ordinary->custom_feature_scans + middle->custom_feature_scans;
+	for (unsigned i = 0; i < 100; i++) assert(!css__custom_sheet_uses(ordinary, 0));
+	assert(scans == ordinary->custom_feature_scans + middle->custom_feature_scans);
+	assert(css_stylesheet_register_import(middle, leaf) == CSS_OK);
+	assert(css__custom_sheet_uses(ordinary, 0));
+	scans = ordinary->custom_feature_scans + middle->custom_feature_scans;
+	for (unsigned i = 0; i < 100; i++) assert(css__custom_sheet_uses(ordinary, 0));
+	assert(scans == ordinary->custom_feature_scans + middle->custom_feature_scans);
+	assert(css_stylesheet_register_import(top, middle) == CSS_OK);
+	assert(css__custom_sheet_uses(top, 0));
+	css_stylesheet_destroy(top);
+	css_stylesheet_destroy(ordinary);
+	css_stylesheet_destroy(middle);
+	css_stylesheet_destroy(leaf);
+	assert(css__custom_memory_used() == 0);
+	puts("PASS feature cache: 1000-rule sheet x 101 selections scans once; nested late imports invalidate");
+}
+
 int main(void)
 {
 	setvbuf(stdout, NULL, _IONBF, 0);
@@ -295,6 +445,9 @@ int main(void)
 		{ "html{--a:red}p{--a:unset;color:var(--a)}", "p{color:red}" },
 		{ "html{--a:red}p{--a:var(--a);color:var(--a,blue)}", "p{color:blue}" },
 		{ "p{--a:var(--b);--b:var(--a);color:var(--a,red)}", "p{color:red}" },
+		{ "p{--a:var(--b) var(--c);--b:var(--a);--c:var(--b,red);color:var(--c,blue)}", "p{color:blue}" },
+		{ "p{--c:var(--b,red);--b:var(--a);--a:var(--b) var(--c);color:var(--c,blue)}", "p{color:blue}" },
+		{ "p{--a:var(--b) var(--c);--b:var(--a);--c:var(--b,red);--d:var(--c,lime);color:var(--d)}", "p{color:lime}" },
 		{ "p{--a:var(--b,red);--b:var(--a,blue);color:var(--a,green)}", "p{color:green}" },
 		{ "p{--a:var(--b,red);--b:var(--a);--c:var(--a,green);color:var(--c)}", "p{color:green}" },
 		{ "p{--a:red;--b:var(--a,var(--b));color:var(--b,blue)}", "p{color:blue}" },
@@ -335,12 +488,23 @@ int main(void)
 	custom_gap_check("p{gap:7px;gap:var(--absent)}", 0, -1);
 	custom_gap_check("main{row-gap:2em;font-size:16px}p{row-gap:inherit;font-size:24px}", 32, -1);
 	custom_gap_check("p{gap:normal}", 0, -1);
+	custom_gap_check("p{gap:3px;gap:normal 2px}", 0, 2);
+	custom_gap_check("p{gap:3px;gap:2px normal}", 2, -1);
+	custom_gap_check("p{gap:3px;gap:normal normal}", 0, -1);
+	custom_gap_check("p{--g:normal 2px;gap:var(--g)}", 0, 2);
+	custom_gap_check("p{--g:2px normal;gap:var(--g)}", 2, -1);
+	custom_gap_check("p{gap:3px;gap:normal 2px 4px}", 3, 3);
+	custom_gap_check("p{gap:3px;gap:inherit 2px}", 3, 3);
+	custom_gap_check("p{gap:3px;gap:2px inherit}", 3, 3);
 	custom_gap_check("p{gap:7px!important;row-gap:2px}", 7, 7);
-	puts("PASS 11 gap cascade/defaulting/inheritance cases");
+	puts("PASS 19 gap cascade/defaulting/inheritance cases");
 	custom_url();
 	custom_inline_ancestor();
 	custom_oom();
 	custom_bounds();
+	custom_memory();
+	custom_feature_cache();
+	assert(css__custom_memory_used() == 0);
 	lwc_iterate_strings(printing_lwc_iterator, NULL);
 	assert(!fail_because_lwc_leaked);
 	puts("PASS CSS variables: cascade, inheritance, fallback, cycles, invalid values, shorthand, media, inline, cleanup");

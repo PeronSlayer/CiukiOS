@@ -113,7 +113,8 @@ class CustomPropertyTests(unittest.TestCase):
                  "parse/properties/utils.c", "lex/lex.c", "parse/parse.c")
         subprocess.run([
             "clang", "-std=c17", "-D_DEFAULT_SOURCE", "-D_ALIGNED=", "-O1", "-g",
-            "-include", "strings.h", "-fsanitize=address,undefined",
+            "-include", "strings.h", "-DCIUKI_NETSURF", "-I" + str(ROOT),
+            "-fsanitize=address,undefined",
             "-fno-sanitize-recover=all", "-I" + str(css / "src"),
             "-I" + str(css / "test"), "-I" + str(HERE), "-I" + str(prefix / "include"), str(driver),
             *[str(css / "src" / unit) for unit in units],

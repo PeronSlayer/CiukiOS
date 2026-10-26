@@ -30,3 +30,14 @@ Do now, in order of visible benefit:
 6. Render both pages in the NetSurf host harness and compare before and after with goldens.
 
 Report as "Review round 2". Leave changes uncommitted.
+
+## Lead amendment 2 (2026-10-26 23:32): review of round 2
+
+Fix every finding of the Codex review in build/codex/fx-nsmodern-review-latest.md, each with a regression test:
+- P1: charge raw and computed custom-property storage against a document-wide byte budget before allocating. Return CSS_NOMEM when the budget is exhausted, release the charges during cleanup, and share immutable values.
+- P2: cycle detection must invalidate every member of overlapping cycles. Use bounded strongly-connected-component detection, and test both declaration orders.
+- P2: cache feature usage per stylesheet and import graph, so the full-rule scan does not run for every element.
+- P2: color-mix() must keep missing-component (none) semantics.
+- P2: parse the two components of the gap shorthand independently, so 'normal 2px' and '2px normal' are valid.
+
+Keep the site goldens and the existing goldens. Report as "Review round 3". Leave changes uncommitted.

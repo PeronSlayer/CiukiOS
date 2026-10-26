@@ -252,3 +252,48 @@ single explicit hunk in `fixtures/flex-shorthand-oracle.patch` to a disposable
 copy of `tests1.dat`; the pinned archive and extracted original remain intact.
 The other pinned expectations and all earlier framebuffer golden hashes remain
 unchanged. New direct longhand-equivalence cases cover both zero shorthands.
+
+
+## Review round 3: amendment 2 repair contract
+
+The [CSS Variables cycle rules](https://www.w3.org/TR/css-variables-1/#cycles)
+require all members of overlapping dependency cycles to be invalid, including
+edges in unused fallbacks. Use bounded Tarjan strongly connected components;
+retain the existing entry, recursion, expansion and operation bounds.
+[Color 4 missing-component interpolation](https://www.w3.org/TR/css-color-4/#interpolation-missing)
+requires carrying missing RGB/alpha flags through nested colors, filling from
+the other operand before premultiplication, and retaining components missing
+from both operands. The [gap shorthand grammar](https://www.w3.org/TR/css-gaps-1/#gap-shorthand)
+permits independent `normal`/length values on either axis.
+
+The raw and computed custom-property representations need byte admission in
+addition to per-selection counts. Use one shared pool for all documents and
+cached/imported sheets: this is stricter than separate per-document budgets,
+prevents sharing or document recreation from resetting admission, and counts
+shared immutable values only once. Its limit is one eighth of the same free
+memory query used by the existing DOM/box admission (7 MiB in the existing
+56 MiB host model). No DOM, box, image or JS limit increases. Reserve before
+allocation/growth and retained-string references; charge vector capacity and
+conservative allocator/string overhead, declaration arrays, environments and
+match arrays. Roll back failed allocations and release on final reference.
+Literal computed custom values share their immutable raw token vectors;
+inheritance continues sharing computed values. Exhaustion returns CSS_NOMEM
+through existing error paths. This new pool comes from the half of free memory
+already reserved for styles, caches and work; it is not a measured total-heap
+cap and does not replace the existing ledgers.
+
+Cache deferred-feature usage in each stylesheet for the complete import graph.
+Invalidate the local cache on rule/custom-declaration changes and destruction;
+advance a shared generation for mutations of imported sheets and import
+registration. Unrelated inline sheets leave the graph caches intact. Selection on an unchanged ordinary sheet reads
+the cache without visiting its rules; a generation change recomputes each
+reachable sheet once. Depth remains bounded, conservatively enabling custom
+selection on excessive/cyclic imports. This does not change upstream import
+ownership or claim general cyclic-import selection support.
+
+The admission-failure regression exposed pending lexer-token references in the
+pinned parser destructor (also present in the inspected
+[upstream parser](https://raw.githubusercontent.com/netsurf-browser/libcss/master/src/parse/parse.c)).
+Destroying a parser after CSS_NOMEM now discards its pending vector and releases
+the separately owned pushback token before freeing either storage. The raw-sheet
+exhaustion test verifies final custom charges and the interned-string dictionary.

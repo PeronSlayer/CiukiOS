@@ -71,6 +71,17 @@ int main(void)
 {
     static const struct { const char *text; uint32_t value; } valid[] = {
         { "color-mix(in srgb,red,blue)", 0xff800080 },
+        { "color-mix(in srgb,rgb(none 0 0),red)", 0xffff0000 },
+        { "color-mix(in srgb,red,rgb(none 0 0))", 0xffff0000 },
+        { "color-mix(in srgb,rgb(0 none 0),lime)", 0xff00ff00 },
+        { "color-mix(in srgb,rgb(0 0 none),blue)", 0xff0000ff },
+        { "color-mix(in srgb,rgb(255 0 0 / none),rgb(0 0 255 / 50%))", 0x80800080 },
+        { "color-mix(in srgb,rgb(none 0 0 / none),red 25%)", 0xffff0000 },
+        { "color-mix(in srgb,rgb(none 0 0),rgb(none 0 255))", 0xff000080 },
+        { "color-mix(in srgb,color-mix(in srgb,rgb(none 0 0),rgb(none 0 0)),red)", 0xffff0000 },
+        { "color-mix(in srgb,light-dark(rgb(none 0 0),blue),red)", 0xffff0000 },
+        { "color-mix(in srgb,color-mix(in srgb,rgb(255 0 0 / none),rgb(0 0 255 / none)),lime)", 0xff408040 },
+        { "color-mix(in srgb,rgb(255 0 0 / none),rgb(0 0 255 / none))", 0x00800080 },
         { "color-mix(in srgb,red 25%,blue)", 0xff4000bf },
         { "color-mix(in srgb,25% red,75% blue)", 0xff4000bf },
         { "color-mix(in srgb,red 80%,blue 80%)", 0xff800080 },
