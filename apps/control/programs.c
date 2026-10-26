@@ -97,6 +97,30 @@ static int read_record(const char *file,struct desk_launch_record *out)
     int result=!bad && desk_link_decode(bytes,(unsigned)n,out) ? 0 : -EINVAL;
     free(bytes);return result;
 }
+/* A DOS Box record belongs to a game when one of its argument tokens names the
+ * game's executable inside the location (kept out of records()' recursive frame). */
+static __attribute__((noinline)) int dosbox_game(const struct desk_launch_record *r,const char *location)
+{
+    char launcher[260];
+    if(!normal(r->target,launcher) || strcasecmp(launcher,"/Programs/dosbox"))return 0;
+    /* Match a complete executable token, independently of optional
+     * switches, path separators, drive case and catalog spelling. */
+    const char *arg=r->arguments;
+    while(*arg){
+        while(*arg==' ' || *arg=='\t')arg++;
+        char token[260];unsigned n=0;int quoted=*arg=='"';if(quoted)arg++;
+        while(*arg && (quoted ? *arg!='"' : *arg!=' ' && *arg!='\t')){
+            if(n+1<sizeof(token))token[n++]=*arg;arg++;
+        }
+        if(quoted && *arg=='"')arg++;token[n]=0;
+        char executable[260];
+        if(normal(token,executable) && cp_program_contains(location,executable)){
+            const char *base=strrchr(executable,'/');
+            if(base && (!strcasecmp(base,"/DOOM.EXE") || !strcasecmp(base,"/WOLF3D.EXE") || !strcasecmp(base,"/QUAKE.EXE") || !strcasecmp(base,"/WAR2.BAT") || !strcasecmp(base,"/WAR2.EXE") || !strcasecmp(base,"/DUKE3D.BAT") || !strcasecmp(base,"/DUKE3D.EXE")))return 1;
+        }
+    }
+    return 0;
+}
 /* A .ciuki launch record uses the existing CIUKLNK3 encoding, avoiding another
  * executable/argument parser. Shell .lnk records are also recognized. */
 static int records(struct cp_program_store *s,const char *dir,const char *location,
@@ -124,25 +148,7 @@ static int records(struct cp_program_store *s,const char *dir,const char *locati
             if(read_error==-EINVAL)continue;
             if(read_error){error=read_error;break;}
             int belongs=cp_program_contains(location,r.target);
-            char launcher[260];
-            if(!belongs && normal(r.target,launcher) && !strcasecmp(launcher,"/Programs/dosbox")){
-                /* Match a complete executable token, independently of optional
-                 * switches, path separators, drive case and catalog spelling. */
-                const char *arg=r.arguments;
-                while(*arg){
-                    while(*arg==' ' || *arg=='\t')arg++;
-                    char token[260];unsigned n=0;int quoted=*arg=='"';if(quoted)arg++;
-                    while(*arg && (quoted ? *arg!='"' : *arg!=' ' && *arg!='\t')){
-                        if(n+1<sizeof(token))token[n++]=*arg;arg++;
-                    }
-                    if(quoted && *arg=='"')arg++;token[n]=0;
-                    char executable[260];
-                    if(normal(token,executable) && cp_program_contains(location,executable)){
-                        const char *base=strrchr(executable,'/');
-                        if(base && (!strcasecmp(base,"/DOOM.EXE") || !strcasecmp(base,"/WOLF3D.EXE") || !strcasecmp(base,"/QUAKE.EXE") || !strcasecmp(base,"/WAR2.BAT") || !strcasecmp(base,"/WAR2.EXE") || !strcasecmp(base,"/DUKE3D.BAT") || !strcasecmp(base,"/DUKE3D.EXE")))belongs=1;
-                    }
-                }
-            }
+            if(!belongs)belongs=dosbox_game(&r,location);
             if(!belongs)continue;
             if(found)*found=r;
             if(remove==1 && unlink(full)){error=-errno;break;}
