@@ -270,4 +270,9 @@ void presenter_adapter_failure(int kind)
 {if(kind==1)mode_fail=true;else if(kind==2)connected=false;}
 int presenter_adapter_suspended(void){return suspended;}
 void presenter_adapter_timeout(void){g_ticks+=10000;display_present_poll();}
+void presenter_adapter_frame(void)
+{
+    struct ciuki_w32_display_args a={.action=W32_DISPLAY_FRAME,.token=token,.generation=fb_generation};
+    w32_display_call(&gt,&a);assert(!a.error && !awaiting_first_frame);
+}
 #endif

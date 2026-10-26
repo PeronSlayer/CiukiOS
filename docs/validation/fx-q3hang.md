@@ -47,3 +47,37 @@ The supervisor ordinarily skips bootstrap for test requests; this exact
 selection is the sole exception so the ordinary desktop can run against the
 injected grant failures. A shared predicate gates bootstrap and injection;
 other tests and physical boot retain their existing behavior.
+
+## Review round 1
+
+The lead amendment replaces the broad same-process focus exception. A CDS
+preflight carrier is explicitly marked by an internal desktop lease action;
+only its first handoff to an unowned, nonmodal popup matching the logical mode
+may retain the grant. A subsequent activation, including a same-process dialog
+or error console after a successful frame, restores composition. This follows
+the error-dialog and drawable lifecycle in
+[id Software's win_glimp.c](https://github.com/id-Software/Quake-III-Arena/blob/master/code/win32/win_glimp.c).
+Borrowers retain the carrier's HWND so GL teardown or composed presentation
+can synchronously release its real grant and invalidate every alias.
+
+[Microsoft's WaitForInputIdle contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-waitforinputidle)
+requires immediate return for a process without a message queue.
+[Microsoft's runtime-queue explanation](https://devblogs.microsoft.com/oldnewthing/20160812-00/?p=94075)
+specifically identifies WAIT_FAILED before a GUI executable creates its queue.
+PE subsystem metadata alone is insufficient: query live threads for a runtime
+queue before waiting, while preserving an already satisfied input-idle latch.
+Use ERROR_INVALID_GUI_PROCESS_HANDLE (1471) for an unavailable GUI queue.
+
+The interactive fault observer must sleep after READY; returning reaches the
+generic evidence slideshow, whose console overlay bypasses desktop ownership.
+Driver refusal remains DISP_CHANGE_FAILED (-1), as specified by
+[Microsoft ChangeDisplaySettingsA](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-changedisplaysettingsa);
+-5 means an invalid parameter. No syscall record or public structure layout
+change is needed. The desktop SDK's carrier action is pinned in
+`tests/host/abi_layout_test.c`; the API reference includes the new action.
+
+The host GL lifecycle fixture recreates a context on the existing window/DC.
+It reuses GetPixelFormat rather than trying to set the window's format twice:
+[Microsoft SetPixelFormat](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-setpixelformat)
+allows a window's pixel format to be set only once. Production WGL policy is
+unchanged by this fixture correction.

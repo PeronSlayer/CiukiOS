@@ -1899,6 +1899,12 @@ static void child_becomes_idle(void) {
 static void test_input_idle(void) {
   HANDLE h = (HANDLE)(uintptr_t)ui_kernel_child_handle(1);
   DWORD start = GetTickCount();
+  /* GUI PE metadata is not a runtime queue. INFINITE must not enter the
+   * parent's sleep/pump loop until a child thread has created a queue. */
+  CHECK(WaitForInputIdle(h, 25) == W32_WAIT_FAILED && GetLastError() == 1471);
+  CHECK(GetTickCount() == start);
+  CHECK(WaitForInputIdle(h, W32_INFINITE) == W32_WAIT_FAILED && GetTickCount() == start);
+  ui_kernel_child_wait(0, 0); /* create a runtime queue without becoming idle */
   CHECK(WaitForInputIdle(h, 0) == W32_WAIT_TIMEOUT);
   CHECK(WaitForInputIdle(h, 25) == W32_WAIT_TIMEOUT && GetTickCount() - start == 25);
   ui_kernel_child_wait(1, 1); /* pending input is not idle */
@@ -1930,7 +1936,7 @@ static void test_input_idle(void) {
   CHECK(GetTickCount() == start);
   ui_kernel_close_handle(U32_PTR(h));
   ui_kernel_child_wait(0, 0);
-  puts("TRACE fx-q3hang input idle: busy timeout, pending input, first idle latch, invalid/console, USER lock released");
+  puts("TRACE fx-q3hang input idle: no-queue GUI fails immediately, busy timeout, pending input, first idle latch, invalid/console, USER lock released");
 }
 static void test_quake3(void) {
   BOOL saved = host_modules;
@@ -1952,6 +1958,35 @@ static void test_quake3(void) {
   CHECK(!w32_user_display_mode(mode));
   lease_eio = 0;
   CHECK(ChangeDisplaySettingsA(dm, 4) == 0);
+  HWND borrower=CreateWindowExA(0,"USER fixture","borrower",WS_POPUP|WS_VISIBLE,
+                                  0,0,640,480,0,0,0,0);
+  HWND alias=CreateWindowExA(0,"USER fixture","alias",WS_POPUP|WS_VISIBLE,
+                               0,0,640,480,0,0,0,0);
+  struct dd_lease borrowed, shared;
+  CHECK(borrower && alias && !w32_user_display_lease((uintptr_t)borrower,640,480,32,&borrowed));
+  CHECK(!w32_user_display_lease((uintptr_t)alias,640,480,32,&shared));
+  HWND carrier=u32_window(borrower)->lease_carrier;
+  CHECK(carrier && borrowed.active && shared.token==borrowed.token);
+  leases=sent_count(DESK_V3_LEASE);
+  w32_user_display_release((uintptr_t)borrower);
+  CHECK(sent_count(DESK_V3_LEASE)==leases+1 && IsWindow(carrier));
+  CHECK(!u32_window(carrier)->lease.active && !u32_window(carrier)->lease_wanted);
+  w32_user_display_poll((uintptr_t)alias,&shared);
+  CHECK(!shared.active && !u32_window(alias)->lease_carrier);
+  w32_user_display_release((uintptr_t)borrower);
+  w32_user_display_release((uintptr_t)alias);
+  CHECK(sent_count(DESK_V3_LEASE)==leases+1);
+  CHECK(DestroyWindow(borrower) && DestroyWindow(alias));
+  CHECK(ChangeDisplaySettingsA(dm,4)==0);
+  /* Keep the original active-carrier destruction regression as well. */
+  borrower=CreateWindowExA(0,"USER fixture","carrier lifetime",WS_POPUP|WS_VISIBLE,
+                            0,0,640,480,0,0,0,0);
+  CHECK(borrower && !w32_user_display_lease((uintptr_t)borrower,640,480,32,&borrowed));
+  carrier=u32_window(borrower)->lease_carrier;
+  CHECK(borrowed.active && carrier && DestroyWindow(carrier) && !w32_user_display_mode(mode));
+  w32_user_display_poll((uintptr_t)borrower,&shared);
+  CHECK(!shared.active && !u32_window(borrower)->lease_carrier);
+  CHECK(DestroyWindow(borrower) && ChangeDisplaySettingsA(dm,4)==0);
   HWND scaled=CreateWindowExA(0,"USER fixture","scaled drawable",WS_POPUP|WS_VISIBLE,
                                0,0,640,480,0,0,0,0);
   struct dd_lease scaled_lease;
@@ -2048,11 +2083,30 @@ static void test_gl_failure(void) {
   for (UINT i=0;i<U32_WINDOWS;i++)
     if (u32_windows[i].handle && u32_windows[i].lease_wanted && u32_windows[i].lease.active)
       carrier=u32_windows[i].handle;
-  CHECK(carrier && carrier!=good && DestroyWindow(carrier));
+  CHECK(carrier && carrier!=good);
+  CHECK(u32_window(good)->lease_carrier==carrier);
+  /* GL teardown must revoke the real grant without destroying its carrier. */
+  before=sent_count(DESK_V3_LEASE);
+  ui_gl_close();
+  CHECK(sent_count(DESK_V3_LEASE)==before+1 && IsWindow(carrier));
+  CHECK(!u32_window(carrier)->lease.active && !u32_window(carrier)->lease_wanted);
   struct dd_lease expired;
   w32_user_display_poll((uintptr_t)good,&expired);
-  CHECK(!expired.active && !w32_user_display_mode(0));
+  CHECK(!expired.active && !u32_window(good)->lease_carrier);
+  /* Borrow again, then switch a live GL context to composed presentation. */
+  CHECK(ChangeDisplaySettingsA(dm,4)==0);
+  CHECK(ui_gl_frame(U32_PTR(good_dc)));
+  carrier=u32_window(good)->lease_carrier;
+  CHECK(carrier && IsWindow(carrier));
+  before=sent_count(DESK_V3_LEASE);
+  CHECK(SetWindowLongA(good,GWL_STYLE,WS_CAPTION|WS_VISIBLE));
+  CHECK(ui_gl_frame(U32_PTR(good_dc)));
+  CHECK(sent_count(DESK_V3_LEASE)==before+1 && IsWindow(carrier));
+  CHECK(!u32_window(carrier)->lease.active && !u32_window(carrier)->lease_wanted);
+  w32_user_display_poll((uintptr_t)good,&expired);
+  CHECK(!expired.active && !u32_window(good)->lease_carrier);
   ui_gl_close();
+  CHECK(DestroyWindow(carrier) && !w32_user_display_mode(0));
   CHECK(ChangeDisplaySettingsA(0,0)==0);
   CHECK(ReleaseDC(good,good_dc) && DestroyWindow(good));
   HWND w = CreateWindowExA(0,"USER fixture","GL failure",WS_POPUP|WS_VISIBLE,

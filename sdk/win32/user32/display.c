@@ -177,6 +177,8 @@ int32_t W32API w32_user_display_lease(uintptr_t hwnd, DWORD width, DWORD height,
   if (cds_mode.active && carrier && carrier != w && carrier->lease.active) {
     if (width == cds_mode.width && height == cds_mode.height && bpp == cds_mode.bpp) {
       w->lease = carrier->lease;
+      w->lease_carrier = carrier->handle;
+      w->lease_failed = 0;
       *out = w->lease;
       u32_display_cache();
       return 0;
@@ -186,11 +188,13 @@ int32_t W32API w32_user_display_lease(uintptr_t hwnd, DWORD width, DWORD height,
      * to the preflight token. The recorded application mode stays intact. */
     release_window(carrier);
   }
+  if (w->lease_carrier) release_window(w);
   if (w->lease_wanted && w->lease_w == width && w->lease_h == height && w->lease_bpp == bpp) {
     *out = w->lease; return 0;
   }
   if (w->lease_wanted) w32_user_display_release(hwnd);
-  uint8_t b[16]; desk_put32(b, 1); desk_put32(b+4, width); desk_put32(b+8, height); desk_put32(b+12, bpp);
+  uint8_t b[16]; desk_put32(b, w->handle == cds_mode.carrier ? DESK_V3_LEASE_CARRIER : 1);
+  desk_put32(b+4, width); desk_put32(b+8, height); desk_put32(b+12, bpp);
   w->lease_w = width; w->lease_h = height; w->lease_bpp = bpp; w->lease_wanted = 1;
   if (!u32_wire(w, DESK_V3_LEASE, b, sizeof(b), -1)) {
     w->lease_failed = GetLastError() == 31;
@@ -201,13 +205,20 @@ int32_t W32API w32_user_display_lease(uintptr_t hwnd, DWORD width, DWORD height,
   *out = w->lease; u32_display_cache(); return 0;
 }
 static void release_window(struct u32_window *w) {
+  HWND borrowed = w->lease_carrier;
+  w->lease_carrier = 0;
+  struct u32_window *carrier = u32_window(borrowed);
+  if (carrier && carrier != w) release_window(carrier);
   BOOL wanted = w->lease_wanted;
   struct dd_lease before = w->lease;
-  if (wanted && before.active)
+  if (wanted)
     for (UINT i = 0; i < U32_WINDOWS; i++)
-      if (u32_windows[i].lease.token == before.token &&
-          u32_windows[i].lease.generation == before.generation)
+      if (u32_windows[i].lease_carrier == w->handle ||
+          (before.active && u32_windows[i].lease.token == before.token &&
+           u32_windows[i].lease.generation == before.generation)) {
         w32_fill(&u32_windows[i].lease, 0, sizeof(w->lease));
+        u32_windows[i].lease_carrier = 0;
+      }
   if (w->destroying && w->handle == cds_mode.carrier) {
     cds_mode.active = 0;
     cds_mode.carrier = 0;
@@ -333,6 +344,7 @@ static void cds_release(void) {
        * its owner-thread rule; this internal reset runs under USER's lock. */
       if (w->lease_wanted) release_window(w);
       w32_fill(&w->lease, 0, sizeof(w->lease));
+      w->lease_carrier = 0;
       w->lease_failed = 0;
     }
   }
@@ -379,11 +391,13 @@ static LONG change_settings(const uint8_t *dm, const struct devmode_layout *l, D
   HWND previous = GetForegroundWindow();
   HWND carrier = CreateWindowExA(WS_EX_TOOLWINDOW, "STATIC", "", WS_POPUP | WS_VISIBLE,
                                   -8192, -8192, 32, 32, 0, 0, 0, 0);
+  cds_mode.carrier = carrier;
   struct dd_lease lease = {0};
   BOOL ok = carrier && SetForegroundWindow(carrier) &&
       !w32_user_display_lease((uintptr_t)carrier, w, h, bpp, &lease) && lease.active;
   if (!ok) {
     if (carrier) DestroyWindow(carrier);
+    cds_mode.carrier = 0;
     if (previous && IsWindow(previous)) SetForegroundWindow(previous);
     cds_mode.changing = 0;
     return DISP_FAILED;

@@ -69,6 +69,7 @@ struct u32_window {
   UINT dcs;
   int pixel_format;
   struct dd_lease lease;
+  HWND lease_carrier; /* borrowed grant: release the actual carrier synchronously */
   DWORD lease_w, lease_h, lease_bpp;
   BOOL lease_wanted;
   BOOL lease_failed; /* permanent driver failure: GL uses composition */

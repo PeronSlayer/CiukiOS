@@ -15,3 +15,12 @@
 4. **Tests.** Host reproductions of both problems, before and after the fix. Existing Win32, desktop, display and render3d suites stay green. Run one at a time with nice -n 19.
 
 Write the exact QEMU reproduction the lead should run (injected lease failure through an existing test hook, or a new runtime-only test selection, without build variants) in build/codex/fx-q3hang-report.md. Leave changes uncommitted.
+
+## Lead amendment 1 (2026-10-26 21:46): review round 1
+
+Committed as f9786b22e. A Codex xhigh review found one P1 and three P2 (full text build/codex/fx-q3hang-review1.md); fix all with regressions:
+1. P1 same-process dialogs can leave the screen frozen: apps/desktop/input.c:117 retains the lease for every same-PID activation including a composed MessageBox or error console; composition stays suspended and the first-frame watchdog no longer applies (display_present.c:266). Restrict retention to the carrier-to-drawable handoff; any other same-process window must resume composition.
+2. P2 releasing a borrowed lease does not release the carrier's grant (sdk/win32/user32/display.c:179/:216): track the borrower's relationship to the carrier and revoke synchronously on GL teardown or transition to composed presentation.
+3. P2 WaitForInputIdle can wait forever for a GUI-subsystem process that never creates a message queue (personality.c:77, message.c:229): follow Microsoft's documented behaviour (immediate return / WAIT_FAILED as documented) based on runtime queue presence.
+4. P2 the interactive QEMU reproduction paints the evidence slideshow over the desktop (f5_probes_observers.c:35 -> probes.c:1140 show_evidence_forever): give that selection a sleeping continuation.
+Also use DISP_CHANGE_FAILED (-1) where the driver failed, per the reviewer's note. Report as "Review round 1". Leave changes uncommitted.

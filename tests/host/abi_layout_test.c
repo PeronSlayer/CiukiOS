@@ -34,6 +34,7 @@ _Static_assert(WM_SIZECLIPBOARD==0x30bu,"G5b WM_SIZECLIPBOARD");
 _Static_assert(WM_ASKCBFORMATNAME==0x30cu,"G5b WM_ASKCBFORMATNAME");
 _Static_assert(WM_HSCROLLCLIPBOARD==0x30eu,"G5b WM_HSCROLLCLIPBOARD");
 #include "../../apps/desktop/protocol.h"
+_Static_assert(DESK_V3_LEASE_CARRIER == 2u, "fx-q3hang CDS carrier lease action");
 #include "../../apps/desktop/settings_catalog.h"
 _Static_assert(DESK_CLIP_DISPLAY==11 && DESK_CLIP_DISPLAY_REPLY==12 && DESK_CLIP_DISPLAY_EVENT==5,"G5b owner-display wire IDs");
 #include "../../apps/libdeskui/deskui.h"

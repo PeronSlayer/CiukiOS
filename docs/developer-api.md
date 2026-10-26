@@ -6351,6 +6351,12 @@ G15 WS_EX_CONTEXTHELP: the "?" caption button (it replaces minimise and zoom)
 #define DESK_V3_HIDDEN 8u
 ```
 
+Internal CDS preflight: one carrier-to-drawable focus handoff.
+
+```c
+#define DESK_V3_LEASE_CARRIER 2u
+```
+
 WINDOW_ORDER flags; order targets occupy a separate namespace from ids.
 
 ```c
@@ -6369,7 +6375,7 @@ PLACE: x,y,w,h,scale,show (0 normal,1 minimized,2 hidden),style;
 TITLE: byte-count,UTF-8; CURSOR: shape,id,visibility-count;
 CURSOR_BITMAP: id,hot-x,hot-y + one 32x32 ARGB8888 surface fd;
 POINTER: flags,clip-x,clip-y,clip-w,clip-h; WARP: logical client x,y;
-LEASE: action (0 release,1 request),w,h,bpp;
+LEASE: action (0 release,1 request,2 CDS carrier request),w,h,bpp;
 RESULT: request-opcode,signed errno; CONFIGURE: w,h,scale,configure-serial,physical-client-x,physical-client-y,show,style;
 ACTIVATE: focus,active; LEASE_EVENT: state,generation,w,h,bpp;
 additive 72-byte LEASE_EVENT: above + token,fb-generation,mode,scale,

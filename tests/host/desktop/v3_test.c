@@ -106,18 +106,21 @@ static int peer(int fd, unsigned pid)
     struct ciuki_message m; desk_v3_message(&m,DESK_HELLO,0,0,0,0); m.sender_pid=pid;
     assert(!desk_v3_receive(&d,root,&m)); return root;
 }
-static int create(int root, int fd, unsigned id, unsigned generation, unsigned style, unsigned owner)
+static int create_size(int root, int fd, unsigned id, unsigned generation, unsigned style, unsigned owner,
+                       unsigned width, unsigned height)
 {
-    fake_surface(fd,200,100,0x7498b0);
+    fake_surface(fd,width,height,0x7498b0);
     struct ciuki_message m; msg(&m,DESK_CREATE_WINDOW,40,id,generation); m.sender_pid=d.clients[root].pid;
     m.fd_count=1; m.fds[0]=fd;
     desk_put32(m.data+16,style); desk_put32(m.data+20,owner); desk_put32(m.data+24,owner ? 1 : 0);
     desk_put32(m.data+28,80+id*20); desk_put32(m.data+32,100+id*24);
-    desk_put32(m.data+36,200); desk_put32(m.data+40,100); desk_put32(m.data+44,1); desk_put32(m.data+48,4); memcpy(m.data+52,"Test",4);
+    desk_put32(m.data+36,width); desk_put32(m.data+40,height); desk_put32(m.data+44,1); desk_put32(m.data+48,4); memcpy(m.data+52,"Test",4);
     assert(!desk_v3_receive(&d,root,&m));
     for (int i=0;i<DESK_CLIENTS;i++) if (d.clients[i].v3_peer==(unsigned)root+1 && d.clients[i].v3_id==id) return i;
     assert(0); return -1;
 }
+static int create(int root, int fd, unsigned id, unsigned generation, unsigned style, unsigned owner)
+{ return create_size(root,fd,id,generation,style,owner,200,100); }
 static void setup(void)
 {
     fake_reset(); desk_init(&d,&fake_ops,800,600); d.portrait=portrait;
@@ -153,7 +156,7 @@ static void request_lease(int root,unsigned id)
 #ifdef DESKTOP_ADAPTER_FIXTURE
 int ciuki_win32_presenter_lease(struct desktop *,uint32_t,int,int,uint32_t,uint32_t,uint32_t,uint32_t);
 void desk_w32_presenter_poll(struct desktop *);
-void presenter_adapter_init(void),presenter_adapter_failure(int),presenter_adapter_timeout(void);
+void presenter_adapter_init(void),presenter_adapter_failure(int),presenter_adapter_timeout(void),presenter_adapter_frame(void);
 int presenter_desktop_info(int,struct ciuki_framebuffer_info *),presenter_adapter_suspended(void);
 static int real_lease(struct desktop *p,uint32_t pid,int acquire,uint32_t w,uint32_t h,uint32_t bpp,uint32_t gen)
 {
@@ -210,15 +213,33 @@ static void production_lease_replay(void)
         assert(!desk_redraw(&d));d.now_ns+=1000000;desk_heartbeat(&d,d.now_ns);
         assert(!d.v3_restoring && d.v3_restore_reported && !d.v3_lease_state);cleanup();
     }
-    setup();presenter_adapter_init();int root=peer(10,42);
-    int first=create(root,20,1,1,0,0);d.v3_lease=real_lease;
-    desk_focus(&d,first);request_lease(root,1);
-    uint32_t held=d.v3_lease_tuple.token;
-    int second=create(root,21,2,1,0,0);desk_focus(&d,second);
-    assert(d.v3_lease_state==1 && d.v3_lease_tuple.token==held && presenter_adapter_suspended());
-    int foreign=peer(11,84),other=create(foreign,22,1,1,0,0);desk_focus(&d,other);
-    assert(!d.v3_lease_state && !presenter_adapter_suspended());cleanup();
-    puts("PASS fx-q3hang display ownership: same-process focus retains CDS lease; foreign process restores desktop");
+    int root;
+    for (unsigned path=0;path<7;path++) {
+        setup();presenter_adapter_init();root=peer(10,42);
+        int first=create(root,20,1,1,DESK_V3_TOOL,0);d.v3_lease=real_lease;
+        d.ops.present=ordered_present;
+        desk_focus(&d,first);
+        struct ciuki_message m;msg(&m,DESK_V3_LEASE,16,1,1);
+        desk_put32(m.data+16,path==6 ? 1 : DESK_V3_LEASE_CARRIER);desk_put32(m.data+20,320);
+        desk_put32(m.data+24,200);desk_put32(m.data+28,8);
+        assert(!desk_v3_receive(&d,root,&m));
+        uint32_t held=d.v3_lease_tuple.token;
+        if (path>=2 && path<6) {
+            int drawable=create_size(root,21,2,1,DESK_V3_POPUP,0,320,200);desk_focus(&d,drawable);
+            assert(d.v3_lease_state==1 && d.v3_lease_tuple.token==held && presenter_adapter_suspended());
+            presenter_adapter_frame();presenter_adapter_timeout();
+            assert(d.v3_lease_state==1 && presenter_adapter_suspended());
+        }
+        /* Modal prompts/error consoles before or after the first frame, a
+         * second mode-sized popup, and a foreign process all restore composition. */
+        unsigned style=path==0 || path==2 ? DESK_V3_MODAL : path==4 || path==6 ? DESK_V3_POPUP : 0;
+        unsigned owner=style==DESK_V3_MODAL ? (path>=2 ? 2 : 1) : 0;
+        int target_root=path==5 ? peer(11,84) : root;
+        int other=create_size(target_root,22,3,1,style,owner,320,200);desk_focus(&d,other);
+        assert(!d.v3_lease_state && !presenter_adapter_suspended());
+        assert(!desk_redraw(&d));cleanup();
+    }
+    puts("PASS fx-q3hang review 1 focus: one CDS carrier handoff; same-process modal/error/popup restores composition after first frame");
     setup();presenter_adapter_init();root=peer(10,42);create(root,20,1,1,0,0);d.v3_lease=real_lease;
     struct ciuki_message failure;msg(&failure,DESK_V3_LEASE,16,1,1);
     desk_put32(failure.data+16,1);desk_put32(failure.data+20,320);desk_put32(failure.data+24,200);desk_put32(failure.data+28,8);

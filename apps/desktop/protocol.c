@@ -392,7 +392,7 @@ static int v3_parse(const struct ciuki_message *m, int client,
     case DESK_V3_LEASE:
         if (!client || n!=16) return 0;
         p->flags=desk_get32(b); p->width=desk_get32(b+4); p->height=desk_get32(b+8); p->bpp=desk_get32(b+12);
-        if (p->flags>1 || (!p->flags && (p->width || p->height || p->bpp)) ||
+        if (p->flags>DESK_V3_LEASE_CARRIER || (!p->flags && (p->width || p->height || p->bpp)) ||
             (p->flags && (!p->width || !p->height || p->width>2048 || p->height>2048 ||
                 (p->bpp!=8 && p->bpp!=16 && p->bpp!=32)))) return 0;
         expected=16; break;

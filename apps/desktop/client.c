@@ -2926,7 +2926,7 @@ void desk_v3_revoke(struct desktop *d)
     if (d->v3_lease && d->v3_lease(d,d->v3_lease_pid,0,
         d->v3_lease_w,d->v3_lease_h,d->v3_lease_bpp,d->v3_lease_generation)) return;
     if (i>=0) v3_lease_event(d,i,3);
-    d->v3_lease_state=0; d->v3_lease_window=0;
+    d->v3_lease_state=0; d->v3_lease_window=0; d->v3_lease_carrier=0;
     desk_v3_pointer_release(d); d->cursor_dirty=1; d->scanout_valid=0;
     desk_accel_reset(d,0); d->cursor_loaded=DESK_CURSOR_COUNT; d->hw_cursor=0;
     desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
@@ -3424,6 +3424,8 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
             else if (d->v3_lease_state) { desk_v3_revoke(d); if (d->v3_lease_state) error=-EBUSY; }
         }
         else if (d->focus!=i || d->power.state || d->sh.user_gate || d->sh.levels || d->v3_lease_state) error=-EBUSY;
+        else if (p.flags==DESK_V3_LEASE_CARRIER &&
+                 ((c->v3_style&3)!=DESK_V3_TOOL || c->owner_id)) error=-EINVAL;
         else if (!d->v3_lease) error=-ENOSYS;
         else {
             if (!++d->v3_lease_generation) ++d->v3_lease_generation;
@@ -3431,6 +3433,7 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
             error=d->v3_lease(d,c->pid,1,p.width,p.height,p.bpp,d->v3_lease_generation);
             if (!error) { c->v3_lease_wanted=1; c->v3_lease_w=p.width; c->v3_lease_h=p.height; c->v3_lease_bpp=p.bpp;
                 d->v3_lease_started=d->now_ns; d->v3_lease_state=1; d->v3_lease_window=c->window_id; d->v3_lease_pid=c->pid;
+                d->v3_lease_carrier=p.flags==DESK_V3_LEASE_CARRIER ? c->window_id : 0;
                 d->v3_lease_w=p.width; d->v3_lease_h=p.height; d->v3_lease_bpp=p.bpp; c->v3_lease_mode=d->v3_lease_tuple.mode; v3_lease_event(d,i,1); }
         }
         break;
@@ -3515,6 +3518,7 @@ void desk_v3_reactivate(struct desktop *d, int i)
     if (error) {d->v3_lease_error=error;v3_lease_event(d,i,0);return;}
     d->v3_lease_started=d->now_ns;
     d->v3_lease_state=1; d->v3_lease_window=c->window_id; d->v3_lease_pid=c->pid;
+    d->v3_lease_carrier=0;
     d->v3_lease_w=c->v3_lease_w; d->v3_lease_h=c->v3_lease_h; d->v3_lease_bpp=c->v3_lease_bpp;
     v3_lease_event(d,i,1);
 }

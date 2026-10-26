@@ -112,9 +112,25 @@ void desk_focus(struct desktop *d, int i)
     }
     if (i == d->focus) return;
     if (i >= 0 && d->shell && d->sh.taskbar_key) desk_shell_taskbar_leave(d);   /* a window took the focus from the taskbar */
-    /* CDS may acquire before the game's drawable exists. Exclusive display
-     * ownership belongs to the process across its own window activations. */
-    if (d->v3_lease_state && (i<0 || d->clients[i].pid!=d->v3_lease_pid)) desk_v3_revoke(d);
+    if (d->v3_lease_state) {
+        /* CDS can precede the drawable. Consume exactly one handoff from its
+         * marked carrier to a mode-sized popup, never to a composed dialog.
+         * After a frame the kernel watchdog no longer protects an invisible
+         * dialog, even when that dialog belongs to the lease's own process. */
+        int handoff=0;
+        if (d->v3_lease_state==1 && d->v3_lease_carrier==d->v3_lease_window &&
+            d->v3_lease_carrier && d->focus>=0 &&
+            d->clients[d->focus].window_id==d->v3_lease_carrier && i>=0) {
+            const struct desk_client *c=&d->clients[i];
+            struct desk_box b=desk_content(c);
+            handoff=c->pid==d->v3_lease_pid && c->version==DESK_V3_VERSION &&
+                (c->v3_style&(3u|DESK_V3_MODAL))==DESK_V3_POPUP && !c->owner_id &&
+                c->v3_scale && (uint32_t)b.w/c->v3_scale==d->v3_lease_w &&
+                (uint32_t)b.h/c->v3_scale==d->v3_lease_h;
+        }
+        if (handoff) d->v3_lease_carrier=0;
+        else desk_v3_revoke(d);
+    }
     desk_v3_pointer_release(d);
     struct ciuki_input_event e = { .monotonic_ns = d->now_ns };
     release(d, &e);

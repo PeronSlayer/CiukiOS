@@ -20,8 +20,11 @@ BOOL ui_gl_frame(DWORD dc)
         PIXELFORMATDESCRIPTOR p={.nSize=sizeof(p),.nVersion=1,
             .dwFlags=PFD_DRAW_TO_WINDOW|PFD_SUPPORT_OPENGL|PFD_DOUBLEBUFFER,
             .cColorBits=32,.cDepthBits=16};
-        int format=ChoosePixelFormat(dc,&p);
-        assert(format && SetPixelFormat(dc,format,&p));
+        int format=GetPixelFormat(dc);
+        if (!format) {
+            format=ChoosePixelFormat(dc,&p);
+            assert(format && SetPixelFormat(dc,format,&p));
+        }
         context=wglCreateContext(dc);
         assert(context && wglMakeCurrent(dc,context));
     }

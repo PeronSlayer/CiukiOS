@@ -32,6 +32,8 @@ static int probe_q3_lease_eio(void)
     }
     supervisor_bootstrap();
     rec_emit("q3-lease-eio","READY","fault=EIO desktop=interactive");
-    return 0;
+    /* The dispatcher's normal continuation overlays evidence pages. Keep the
+     * ordinary desktop in charge throughout this interactive reproduction. */
+    for (;;) task_sleep_ms(60000);
 }
 CIUKI_F5_PROBE("q3-lease-eio",probe_q3_lease_eio);
