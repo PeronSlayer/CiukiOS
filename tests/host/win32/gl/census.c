@@ -1,5 +1,6 @@
 /* Opt-in census ABI, whole-context verdict and disabled-path accounting. MIT */
 #include "../../../../sdk/win32/opengl32/internal.h"
+#include "../../../../sdk/win32/opengl32/admission.h"
 #include "../gdi32/support.h"
 #undef NDEBUG /* TinyGL's private header disables its own assertions. */
 #include <assert.h>
@@ -8,6 +9,7 @@
 static const char *setting;
 static unsigned queries,rows,classes,recording;
 static char summary[1024],last_class[1024];
+static char last_clear[1024];
 static char logical[1024];
 static unsigned logical_used,next_part,last_record,physical_lines,max_physical;
 unsigned gl_census_test_option(char *out,unsigned cap) {
@@ -35,6 +37,8 @@ void test_gl_diagnostic(const char *line) {
     rows++; assert(strlen(line)<sizeof(summary)); strcpy(summary,line);
   } else if (!strncmp(line,"GL_CENSUS_CLASS ",16)) {
     classes++; assert(strlen(line)<sizeof(last_class)); strcpy(last_class,line);
+  } else if (!strncmp(line,"GL_CENSUS_CLEAR ",16)) {
+    assert(strlen(line)<sizeof(last_clear)); strcpy(last_clear,line);
   }
   puts(line);
 }
@@ -122,8 +126,53 @@ void gl_census_tests(void) {
   c.sw.box[2]=31; gl_census_clear(&c,GL_COLOR_BUFFER_BIT);
   c.frames++; gl_census_frame(&c); assert(strstr(summary,"context_hw=0"));
   gl_census_close(&c); assert(test_allocations==before);
+  /* Same production bound: five target-sized boxes form batches of 4+1,
+   * despite raster coverage being less than half a box for each triangle. */
+  c.sw=(struct sw_state){.width=32,.height=32,.color_mask=~0u,
+    .depth_test=1,.depth_func=GL_LESS,.depth_write=1};
+  for (unsigned i=0;i<3;i++) v[i]=(struct sw_vertex){.x=i==1 ? 512 : 0,
+    .y=i==2 ? 512 : 0,.z=1000,.color={255,255,255,255}};
+  gl_census_open(&c);
+  for (unsigned i=0;i<5;i++) gl_census_draw(&c,v);
+  c.frames++; gl_census_frame(&c);
+  assert(strstr(summary,"draws=5 coverage_fragments=2480 refused=0 hardware_frames=1 context_hw=1"));
+  assert(strstr(summary,"candidate_batches=2 candidate_pixel_work=5120 max_batch_work=4096"));
+  /* Independent span fixture: ceil(1/16)*ceil(17/16)=2, not covered pixels
+   * or ceil(max)-floor(min). Include both windings and translated vertices. */
+  struct sw_vertex sub[3]={{.x=15,.y=15},{.x=16,.y=15},{.x=15,.y=32}};
+  assert(gl_hw_triangle_work(sub)==2);
+  struct sw_vertex swapped=sub[1]; sub[1]=sub[2]; sub[2]=swapped;
+  assert(gl_hw_triangle_work(sub)==2);
+  for (unsigned i=0;i<3;i++) { sub[i].x+=7; sub[i].y+=7; }
+  assert(gl_hw_triangle_work(sub)==2);
+  /* Vertex count remains an independent boundary even at zero pixel work. */
+  const struct sw_vertex zero[3]={{0},{0},{0}};
+  for (unsigned i=0;i<257;i++) gl_census_draw(&c,zero);
+  c.frames++; gl_census_frame(&c);
+  assert(strstr(summary,"candidate_batches=2 candidate_pixel_work=0 max_batch_work=0"));
+  gl_census_clear(&c,GL_COLOR_BUFFER_BIT); gl_census_draw(&c,v);
+  c.frames++; gl_census_frame(&c);
+  assert(strstr(summary,"candidate_batches=2 candidate_pixel_work=1024 max_batch_work=1024"));
+  gl_census_close(&c);
+  /* Provider rejects attachments, regardless of GL_STENCIL_TEST. Check clear
+   * and draw independently on fresh reference contexts. */
+  for (unsigned clear=0;clear<2;clear++) {
+    uint8_t stencil=0;
+    c.stencil_bits=8; c.sw.stencil=&stencil; c.sw.stencil_test=0;
+    gl_census_open(&c);
+    if (clear) gl_census_clear(&c,GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+    else gl_census_draw(&c,v);
+    c.frames++; gl_census_frame(&c);
+    assert(strstr(clear ? last_clear : last_class,"verdict=format"));
+    assert(strstr(summary,"hardware_frames=0 context_hw=0"));
+    assert(strstr(summary,"framebuffer=16,8,0"));
+    assert(strstr(summary,"candidate_batches=0 candidate_pixel_work=0 max_batch_work=0"));
+    gl_census_close(&c);
+  }
+  c.stencil_bits=0; c.sw.stencil=0;
+  assert(test_allocations==before);
   assert(!logical_used && !next_part && physical_lines>rows+classes && max_physical==240);
   setting=0; recording=0;
-  puts("PASS census: default-off no allocation/scans/logs, N-frame histogram, exact coverage, persistent context refusal, cleanup");
+  puts("PASS census: default-off no allocation/scans/logs, N-frame histogram, exact coverage, persistent context refusal, work/vertex splits, D16/S8 draw+clear format refusal, cleanup");
   fflush(stdout);
 }

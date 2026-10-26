@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "encode.h"
 #include "internal.h"
+#include "admission.h"
 #define CENSUS_BINS 256
 struct census_key {
   int stage[2][9]; /* enabled, width, height, min, mag, S/T wrap, env, internal */
@@ -10,6 +11,7 @@ struct census_key {
   int scissor[5];
   unsigned w_class, uv_class, reason;
   unsigned width, height;
+  unsigned depth_bits, stencil_bits, rgb565;
 };
 struct census_bin {
   struct census_key key;
@@ -20,6 +22,10 @@ struct gl_census {
   unsigned period, frames, bins, pinned, frame_bad, frame_open, partial;
   uint64_t draws, fragments, refused, hardware_frames, overflow_draws, overflow_fragments, other_calls;
   uint64_t clear_reasons[16];
+  uint64_t candidate_batches, candidate_pixel_work, max_batch_work, batch_work;
+  uint64_t batch_revision[2];
+  unsigned batch_vertices, journal_batches;
+  struct sw_state batch_state;
   struct census_bin bin[CENSUS_BINS];
   struct gl_hw_command command;
   struct render3d_request request;
@@ -55,15 +61,18 @@ void gl_census_open(struct gl_context *c) {
 }
 /* The reference is the fully qualified Savage profile, independent of the
  * installed adapter. The same encoder used by GDI makes the final verdict. */
-static unsigned verdict(struct gl_census *c) {
+static unsigned verdict(struct gl_context *context) {
+  struct gl_census *c=context->census;
   struct gl_hw_command *g=&c->command;
   const struct sw_state *s=&g->state;
+  const struct gl_hw_format format={s->width,s->height,context->depth_bits,
+    context->stencil_bits,(unsigned)s->rgb565};
+  if (!gl_hw_format_supported(&format) || s->depth24 || s->stencil) return C_FORMAT;
   const struct ciuki_r3d_caps caps={.features=127,.max_size=1024,.max_width=1024,.max_height=1024,
     .max_vertices=R3D_VERTICES,.texture_units=2,.max_texture_size=256,.depth_functions=255,
     .alpha_functions=255,.blend_factors=1023,.combine_modes=15,.filters=31,
     .sampling_features=CIUKI_R3D_AFFINE_EXACT|CIUKI_R3D_PROJECTIVE_BILINEAR};
   if (!gl_hw_encode(&caps,g,1,2,0,&c->request)) return C_ADMIT;
-  if (s->depth24 || s->rgb565 || (s->stencil_test && s->stencil)) return C_FORMAT;
   if (g->clear_mask&~(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT)) return C_STATE;
   if (!gl_hw_scissor_full(s)) return C_SCISSOR;
   if (s->color_disabled || s->color2 || s->color_mask!=~0u) return C_MASK;
@@ -104,12 +113,41 @@ static unsigned bucket(unsigned n) {
   while (n>1) { b++; n>>=1; }
   return b;
 }
+/* Model mandatory production boundaries independently of whether the current
+ * adapter has a provider. Candidates are not claimed to have executed. */
+static void candidate(struct gl_census *c) {
+  const struct gl_hw_command *g=&c->command;
+  struct sw_state state=g->state;
+  uint64_t revisions[2]={0};
+  for (unsigned u=0;u<2;u++) {
+    if (g->count && state.unit[u].enabled) revisions[u]=state.unit[u].texture->revision;
+    else state.unit[u].texture=0;
+  }
+  const struct gl_hw_caps caps={.max_vertices=GL_HW_VERTICES,
+    .max_pixel_work=4*state.width*state.height};
+  uint64_t work=g->count ? gl_hw_triangle_work(g->vertices) : 0;
+  if (c->journal_batches==GL_HW_BATCHES) {
+    c->batch_vertices=0; c->journal_batches=0;
+  }
+  if (!g->count || !c->batch_vertices ||
+      !gl_hw_batch_room(&caps,c->batch_vertices,c->batch_work,work) ||
+      memcmp(&state,&c->batch_state,sizeof(state)) ||
+      memcmp(revisions,c->batch_revision,sizeof(revisions))) {
+    c->candidate_batches++; c->journal_batches++;
+    c->batch_vertices=0; c->batch_work=0; c->batch_state=state;
+    memcpy(c->batch_revision,revisions,sizeof(revisions));
+  }
+  c->batch_vertices+=g->count; c->batch_work+=work;
+  c->candidate_pixel_work+=work;
+  if (c->batch_work>c->max_batch_work) c->max_batch_work=c->batch_work;
+}
 void gl_census_clear(struct gl_context *context,unsigned mask) {
   if (!mask) return;
   struct gl_census *c=context->census;
   c->command.state=context->sw; c->command.count=0;
   c->command.clear_mask=mask; c->command.clear_depth=65535;
-  unsigned reason=verdict(c);
+  unsigned reason=verdict(context);
+  if (!reason) candidate(c); else c->batch_vertices=0;
   c->clear_reasons[reason]++; c->frame_open=1;
   if (reason) c->frame_bad=1;
 }
@@ -146,8 +184,11 @@ void gl_census_draw(struct gl_context *context,const struct sw_vertex *v) {
   const struct sw_state *s=&context->sw;
   c->command.state=*s; c->command.count=3; c->command.clear_mask=0;
   memcpy(c->command.vertices,v,3*sizeof(*v));
-  key.reason=verdict(c); key.blend=s->blend; key.source=s->sfactor; key.destination=s->dfactor;
+  key.reason=verdict(context);
+  if (!key.reason) candidate(c); else c->batch_vertices=0;
+  key.blend=s->blend; key.source=s->sfactor; key.destination=s->dfactor;
   key.width=s->width; key.height=s->height;
+  key.depth_bits=context->depth_bits; key.stencil_bits=context->stencil_bits; key.rgb565=s->rgb565;
   key.alpha=s->alpha_test; key.alpha_func=s->alpha_func; key.alpha_ref=s->alpha_ref;
   key.depth=s->depth_test; key.depth_func=s->depth_func; key.depth_mask=s->depth_write;
   key.fog=s->fog; key.offset=s->offset;
@@ -237,7 +278,11 @@ static void flush(struct gl_context *context) {
   field(&l," hardware_frames=",c->hardware_frames); field(&l," context_hw=",!c->pinned);
   field(&l," other_calls=",c->other_calls);
   field(&l," width=",context->sw.width); field(&l," height=",context->sw.height);
+  field(&l," framebuffer=",context->depth_bits); field(&l,",",context->stencil_bits); field(&l,",",context->sw.rgb565);
   field(&l," partial=",c->partial);
+  field(&l," candidate_batches=",c->candidate_batches);
+  field(&l," candidate_pixel_work=",c->candidate_pixel_work);
+  field(&l," max_batch_work=",c->max_batch_work);
   field(&l," overflow_draws=",c->overflow_draws); field(&l," overflow_fragments=",c->overflow_fragments); emit(context,&l);
   for (unsigned i=0;i<sizeof(reasons)/sizeof(reasons[0]);i++) if (c->clear_reasons[i]) {
     l=(struct census_line){0}; word(&l,"GL_CENSUS_CLEAR verdict="); word(&l,reasons[i]);
@@ -248,6 +293,7 @@ static void flush(struct gl_context *context) {
     l=(struct census_line){0}; word(&l,"GL_CENSUS_CLASS verdict="); word(&l,reasons[k->reason]);
     field(&l," draws=",b->draws); field(&l," coverage_fragments=",b->fragments);
     field(&l," size=",k->width); field(&l,",",k->height);
+    field(&l," framebuffer=",k->depth_bits); field(&l,",",k->stencil_bits); field(&l,",",k->rgb565);
     for (unsigned u=0;u<2;u++) {
       word(&l,u ? " stage1=" : " stage0=");
       for (unsigned j=0;j<9;j++) { if (j) word(&l,","); number(&l,(unsigned)k->stage[u][j]); }
@@ -263,6 +309,7 @@ static void flush(struct gl_context *context) {
   c->frames=c->bins=0; c->draws=c->fragments=c->refused=c->hardware_frames=0;
   c->overflow_draws=c->overflow_fragments=0; memset(c->bin,0,sizeof(c->bin));
   c->other_calls=0;
+  c->candidate_batches=c->candidate_pixel_work=c->max_batch_work=0;
   c->partial=0;
   memset(c->clear_reasons,0,sizeof(c->clear_reasons));
 }
@@ -270,12 +317,14 @@ void gl_census_frame(struct gl_context *context) {
   struct gl_census *c=context->census;
   c->pinned|=c->frame_bad; c->hardware_frames+=!c->pinned;
   c->frame_bad=c->frame_open=0;
+  c->batch_vertices=c->journal_batches=0;
   if (++c->frames==c->period) flush(context);
 }
 void gl_census_other(struct gl_context *context) {
   /* Non-triangle operations cannot be qualified by a triangle state census. */
   context->census->frame_bad=1; context->census->frame_open=1;
   context->census->other_calls++;
+  context->census->batch_vertices=0;
 }
 void gl_census_close(struct gl_context *context) {
   if (!context->census) return;

@@ -4,7 +4,7 @@
 #ifndef W32_GL_BACKEND_H
 #define W32_GL_BACKEND_H
 #include "../../libgl/software/renderer.h"
-#define GL_HW_VERSION 1u
+#define GL_HW_VERSION 2u
 #define GL_HW_VERTICES 768u
 #define GL_HW_TEXTURES 64u
 #define GL_HW_BATCHES 64u
@@ -13,6 +13,7 @@ struct gl_hw_format {
 };
 struct gl_hw_caps {
   unsigned version, generation, max_size, max_vertices, texture_units, texture_bytes;
+  unsigned max_pixel_work;
 };
 /* GL bottom-left coordinates and the exact sw_vertex fixed-point scales.
  * State contains process-local RAM pointers for checkpoint/replay only.

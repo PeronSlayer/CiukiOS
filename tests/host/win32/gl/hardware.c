@@ -32,7 +32,7 @@ static void free_image(struct sw_texture *t) {
 static int query(unsigned dc, const struct gl_hw_format *f, struct gl_hw_caps *out) {
   (void)dc;
   if (!enabled || f->width > 1024 || f->height > 1024) return 0;
-  *out = (struct gl_hw_caps){GL_HW_VERSION, generation, 1024, max_vertices, 2, budget};
+  *out = (struct gl_hw_caps){GL_HW_VERSION, generation, 1024, max_vertices, 2, budget, 4*f->width*f->height};
   return 1;
 }
 static int open_model(unsigned dc, const struct gl_hw_format *f, unsigned *id) {

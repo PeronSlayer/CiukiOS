@@ -1,6 +1,7 @@
 /* Bounded command journal, immutable texture LRU and coherent scalar fallback.
  * This layer has no device names/registers. SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "internal.h"
+#include "admission.h"
 struct hw_texture {
   const struct sw_texture *source;
   uint64_t revision, age;
@@ -10,6 +11,7 @@ struct hw_texture {
 struct hw_batch {
   struct hw_batch *next;
   unsigned submitted;
+  uint64_t work;
   struct hw_texture *textures[2];
   struct gl_hw_command command;
 };
@@ -174,6 +176,7 @@ void gl_hw_probe(struct gl_context *c) {
   struct gl_hw_caps caps = {0};
   if (!d->query(c->dc, &f, &caps) || caps.version != GL_HW_VERSION || !caps.generation ||
       caps.max_vertices < 3 || caps.max_vertices > GL_HW_VERTICES ||
+      !caps.max_pixel_work ||
       caps.texture_units > 2 || caps.max_size < f.width || caps.max_size < f.height ||
       caps.texture_bytes > 32u * 1024u * 1024u) {
     gl_hw_close(c); return;
@@ -265,6 +268,8 @@ static struct hw_batch *batch(struct gl_context *c, unsigned mask,
   int accepted=h->driver->accept(h->context, &c->sw, mask, v, v ? 3 : 0);
   if (accepted<0) { fail(c); return 0; }
   if (!accepted) return 0;
+  uint64_t work=v ? gl_hw_triangle_work(v) : 0;
+  if (v && !gl_hw_batch_room(&h->caps,0,0,work)) { fail(c); return 0; }
   if (h->batches == GL_HW_BATCHES) gl_hw_sync(c);
   if (!ready(c)) return 0;
   struct sw_state state = c->sw;
@@ -278,7 +283,7 @@ static struct hw_batch *batch(struct gl_context *c, unsigned mask,
   }
   struct hw_batch *b = h->tail;
   if (v && b && !b->submitted && !b->command.clear_mask &&
-      b->command.count + 3 <= h->caps.max_vertices &&
+      gl_hw_batch_room(&h->caps,b->command.count,b->work,work) &&
       !memcmp(&b->command.state, &state, sizeof(state))) {
     for (unsigned u = 0; u < 2; u++) if (textures[u]) textures[u]->pins--;
     return b;
@@ -304,6 +309,7 @@ int gl_hw_triangle(struct gl_context *c, const struct sw_vertex *v) {
   if (!b) { gl_hw_software(c); return 0; }
   w32_copy(&b->command.vertices[b->command.count], v, 3 * sizeof(*v));
   b->command.count += 3;
+  b->work += gl_hw_triangle_work(v);
   return 1;
 }
 int gl_hw_clear(struct gl_context *c, unsigned mask, unsigned color, unsigned depth) {

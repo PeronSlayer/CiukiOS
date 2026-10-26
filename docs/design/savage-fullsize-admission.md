@@ -1,5 +1,53 @@
 # Savage full-size admission (f7-11)
 
+## Review round 5: production batch work and framebuffer census
+
+Research rechecked on 2026-10-26 before the amendment-5 code changes:
+[OpenGL 1.1](https://registry.khronos.org/OpenGL/specs/gl/glspec11.pdf),
+sections 2.6/3.5 and appendix A, preserves primitive order and framebuffer
+semantics across implementation batching. Quake III's upstream
+[`R_DrawElements`/ordered shader passes](https://raw.githubusercontent.com/id-Software/Quake-III-Arena/master/code/renderer/tr_shade.c)
+must therefore split without dropping or reordering triangles. The pinned
+[Linux v6.1 Savage BCI source](https://github.com/torvalds/linux/blob/v6.1/drivers/gpu/drm/savage/savage_bci.c),
+`savage_bci_wait_fifo_s4`/`savage_fake_dma_flush`, retains bounded occupancy
+checks while streaming; [RE046-B](https://vgamuseum.info/images/doc/s3/savage4_registers.pdf)
+MM8508/MM48C18 distinguishes FIFO capacity from geometry work. Neither source
+defines Ciuki's pixel-work limit: that is the existing per-generation policy
+in `savage3d.c:query_caps`, enforced by `render3d.c:validate`/`render3d_submit`.
+Online Linux/Mesa/X.Org retrieval failed; the existing pinned Linux and Mesa
+vertex-format routines were read locally. No silicon, precision, tiling or
+watchdog policy changes are needed.
+
+The private GL/GDI capability handoff now carries the actual qualified
+`max_pixel_work`, with a private interface version bump. The journal splits
+before either the vertex count or accumulated bounding-box work would exceed
+the limit. Work is `ceil(maxX-minX) * ceil(maxY-minY)` per triangle, including
+subpixel spans, using the kernel's measure rather than covered fragments.
+Clear commands remain separate and charge zero geometry work.
+
+The census uses the same provider framebuffer predicate before encoding draws
+or clears: XRGB with D16 and no stencil attachment. Disabling stencil testing
+does not make a D16/S8 framebuffer eligible. Its reference batch model uses
+the same vertex/work bounds, state and immutable texture revisions, separate
+clears, the 64-command journal bound and frame boundaries. Reference display
+dimensions equal the drawable dimensions, so its work limit is conservatively
+`4 * width * height`; a larger qualified physical mode may allow larger
+batches. `candidate_batches`, `candidate_pixel_work` and `max_batch_work` count
+eligible candidate commands, including candidates in frames later pinned to
+software; they do not claim GPU execution or timing. Covered fragments remain
+a separate raster count. Resource eviction and explicit application syncs
+can cause additional production boundaries.
+
+Quake III's upstream
+[`GLW_InitDriver`](https://raw.githubusercontent.com/id-Software/Quake-III-Arena/master/code/win32/win_glimp.c)
+chooses D24 for a >16-bit desktop when `r_depthbits=0`, and allows stencil
+only at depth >=24. The H1 default-format replay explicitly requests XRGB32,
+D24/S8 and selects Ciuki pixel-format index 9. That context cannot open on
+the current Savage provider. The separate D16/S0 H1 replay is the eligible
+hardware profile; a hardware trial must explicitly select `r_depthbits 16`
+and `r_stencilbits 0`. Default-format software results are not evidence of
+Savage acceleration.
+
 Research checked 2026-10-26 before implementation. This implements the lead's
 [f7-11 directive](../directives/f7-11-full-size-admission.md) and supersedes only
 the earlier size/list limits after a second, per-boot qualification.

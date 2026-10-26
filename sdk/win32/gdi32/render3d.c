@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "internal.h"
 #include "../opengl32/encode.h"
+#include "../opengl32/admission.h"
 struct provider_context {
   unsigned id, color, depth, linear, width, height;
   struct ciuki_r3d_caps caps;
@@ -27,7 +28,7 @@ static struct provider_context *lookup(unsigned id) {
   return 0;
 }
 static int query_caps(const struct gl_hw_format *f,struct ciuki_r3d_caps *c) {
-  if (f->rgb565 || f->depth_bits!=16 || f->stencil_bits) return 0;
+  if (!gl_hw_format_supported(f)) return 0;
   struct ciuki_w32_render3d_args a={.action=CIUKI_R3D_QUERY,.width=f->width,
     .height=f->height,.kind=CIUKI_R3D_D16,.format=CIUKI_R3D_ARGB8888,.bytes=sizeof(*c)};
   return !exchange(&a,c) && c->version==CIUKI_R3D_VERSION && c->features &&
@@ -37,7 +38,7 @@ static int query(unsigned dc,const struct gl_hw_format *f,struct gl_hw_caps *out
   (void)dc;
   struct ciuki_r3d_caps c={0};
   if (!query_caps(f,&c)) return 0;
-  *out=(struct gl_hw_caps){GL_HW_VERSION,c.generation,c.max_size,c.max_vertices,c.texture_units,c.texture_bytes};
+  *out=(struct gl_hw_caps){GL_HW_VERSION,c.generation,c.max_size,c.max_vertices,c.texture_units,c.texture_bytes,c.max_pixel_work};
   return 1;
 }
 static struct ciuki_w32_render3d_args args(struct provider_context *c,unsigned action) {
