@@ -3,7 +3,8 @@
 
 The public header supplies expressions only. Literal contract expectations live
 in tests/host/abi_layout_test.c, independently of this discovery/dump step.
-Output is a flat JSON object: sizeof.*, alignof.*, offsetof.* and constant.*.
+Output is a flat JSON object: sizeof.*, alignof.*, offsetof.*, constant.*,
+and rows.*, components.*, strideof.* for two-dimensional arrays.
 Artifacts and compiler temporary files stay under build/host/abi-layout/.
 """
 from __future__ import annotations
@@ -52,11 +53,17 @@ def expressions(header: str) -> dict[str, str]:
         result[f"sizeof.{name}"] = f"sizeof(struct {name})"
         result[f"alignof.{name}"] = f"_Alignof(struct {name})"
         # Array extents may be literal counts or ABI constants (CD TOC tracks).
-        for field, extent in re.findall(r"^\s+(?:struct\s+\w+|\w+)\s+(\w+)(?:\[(\w+)\])?;", body, re.M):
+        for field, dimensions in re.findall(r"^\s+(?:struct\s+\w+|\w+)\s+(\w+)((?:\[\w+\])*)?;", body, re.M):
             result[f"offsetof.{name}.{field}"] = f"__builtin_offsetof(struct {name}, {field})"
+            extents = re.findall(r"\[(\w+)\]", dimensions)
+            array = f"((struct {name} *)0)->{field}"
+            if len(extents) == 2:
+                result[f"rows.{name}.{field}"] = f"sizeof({array}) / sizeof({array}[0])"
+                result[f"components.{name}.{field}"] = f"sizeof({array}[0]) / sizeof({array}[0][0])"
+                result[f"strideof.{name}.{field}"] = f"sizeof({array}[0])"
             # Each saved general slot has a listed offset in the contract.
             if name == "ciuki_ucontext" and field == "gregs":
-                for i in range(int(extent)):
+                for i in range(int(extents[0])):
                     result[f"offsetof.{name}.{field}[{i}]"] = f"__builtin_offsetof(struct {name}, {field}[{i}])"
     for name in ("char", "short", "int", "long", "long long", "void *",
                  "float", "double", "long double"):

@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <ciuki/abi.h>
 
 #define R3D_CONTEXTS 32u
 #define R3D_RESOURCES 256u
@@ -15,35 +16,58 @@
 #define R3D_RAM_LIMIT (32u * 1024u * 1024u)
 #define R3D_MAX_SIZE 1024u
 #define R3D_PIXEL_BUDGET 65536u
-#define R3D_TEXTURED 1u
-#define R3D_CLEAR_COLOR 2u
-#define R3D_CLEAR_DEPTH 4u
-#define R3D_DEPTH_TEST 8u
-#define R3D_DEPTH_WRITE 16u
-#define R3D_COPY 32u
+#define R3D_TEXTURED CIUKI_R3D_TEXTURED
+#define R3D_CLEAR_COLOR CIUKI_R3D_CLEAR_COLOR
+#define R3D_CLEAR_DEPTH CIUKI_R3D_CLEAR_DEPTH
+#define R3D_DEPTH_TEST CIUKI_R3D_DEPTH_TEST
+#define R3D_DEPTH_WRITE CIUKI_R3D_DEPTH_WRITE
+#define R3D_COPY CIUKI_R3D_COPY
 #define R3D_FEATURES 63u
-#define R3D_TEXTURE1 64u
+#define R3D_TEXTURE1 CIUKI_R3D_TEXTURE1
 #define R3D_ALL_FEATURES 127u
 #define R3D_REFS 5u
 #define R3D_MIPS 11u
 
-/* Zero state preserves the f7-02 minimum. These records remain kernel-private. */
-enum render3d_compare { R3D_LESS, R3D_NEVER, R3D_ALWAYS, R3D_EQUAL,
-    R3D_LEQUAL, R3D_GREATER, R3D_NOTEQUAL, R3D_GEQUAL };
-enum render3d_blend { R3D_ONE, R3D_ZERO, R3D_SRC_ALPHA, R3D_INV_SRC_ALPHA };
-enum render3d_combine { R3D_MODULATE, R3D_REPLACE, R3D_ADD, R3D_DECAL };
-enum render3d_filter { R3D_NEAREST, R3D_BILINEAR, R3D_NEAREST_MIP,
-    R3D_BILINEAR_MIP, R3D_TRILINEAR };
-enum render3d_format { R3D_ARGB8888, R3D_RGBA8888, R3D_RGB565,
-    R3D_ARGB4444, R3D_L8, R3D_A8 };
-struct render3d_sampler {
-    uint32_t combine, filter, repeat_u, repeat_v;
+/* Zero state preserves the f7-02 minimum. Public wire ordinals have one source. */
+enum render3d_compare {
+    R3D_LESS = CIUKI_R3D_LESS,
+    R3D_NEVER = CIUKI_R3D_NEVER,
+    R3D_ALWAYS = CIUKI_R3D_ALWAYS,
+    R3D_EQUAL = CIUKI_R3D_EQUAL,
+    R3D_LEQUAL = CIUKI_R3D_LEQUAL,
+    R3D_GREATER = CIUKI_R3D_GREATER,
+    R3D_NOTEQUAL = CIUKI_R3D_NOTEQUAL,
+    R3D_GEQUAL = CIUKI_R3D_GEQUAL
 };
-struct render3d_state {
-    uint32_t depth_func, alpha_func, alpha_ref, alpha_test;
-    uint32_t blend, source, destination, flat;
-    struct render3d_sampler sampler[2];
+enum render3d_blend {
+    R3D_ONE = CIUKI_R3D_ONE,
+    R3D_ZERO = CIUKI_R3D_ZERO,
+    R3D_SRC_ALPHA = CIUKI_R3D_SRC_ALPHA,
+    R3D_INV_SRC_ALPHA = CIUKI_R3D_INV_SRC_ALPHA
 };
+enum render3d_combine {
+    R3D_MODULATE = CIUKI_R3D_MODULATE,
+    R3D_REPLACE = CIUKI_R3D_REPLACE,
+    R3D_ADD = CIUKI_R3D_ADD,
+    R3D_DECAL = CIUKI_R3D_DECAL
+};
+enum render3d_filter {
+    R3D_NEAREST = CIUKI_R3D_NEAREST,
+    R3D_BILINEAR = CIUKI_R3D_BILINEAR,
+    R3D_NEAREST_MIP = CIUKI_R3D_NEAREST_MIP,
+    R3D_BILINEAR_MIP = CIUKI_R3D_BILINEAR_MIP,
+    R3D_TRILINEAR = CIUKI_R3D_TRILINEAR
+};
+enum render3d_format {
+    R3D_ARGB8888 = CIUKI_R3D_TEX_ARGB8888,
+    R3D_RGBA8888 = CIUKI_R3D_TEX_RGBA8888,
+    R3D_RGB565 = CIUKI_R3D_TEX_RGB565,
+    R3D_ARGB4444 = CIUKI_R3D_TEX_ARGB4444,
+    R3D_L8 = CIUKI_R3D_TEX_L8,
+    R3D_A8 = CIUKI_R3D_TEX_A8
+};
+#define render3d_sampler ciuki_r3d_sampler
+#define render3d_state ciuki_r3d_state
 struct render3d_texture_image {
     const void *pixels;
     size_t bytes;
@@ -55,7 +79,12 @@ struct render3d_texture_desc {
 };
 
 enum render3d_policy { R3D_AUTO, R3D_SOFTWARE, R3D_HARDWARE_REQUIRED };
-enum render3d_kind { R3D_COLOR = 1, R3D_D16, R3D_TEXTURE, R3D_LINEAR_COLOR };
+enum render3d_kind {
+    R3D_COLOR = CIUKI_R3D_RESOURCE_COLOR,
+    R3D_D16 = CIUKI_R3D_RESOURCE_D16,
+    R3D_TEXTURE = CIUKI_R3D_RESOURCE_TEXTURE,
+    R3D_LINEAR_COLOR = CIUKI_R3D_RESOURCE_LINEAR_COLOR
+};
 enum render3d_status { R3D_SOFTWARE_ONLY, R3D_NOT_IMPLEMENTED, R3D_UNQUALIFIED };
 struct render3d_backend;
 /* Potential features are research metadata, NEVER application capabilities. */
@@ -73,25 +102,13 @@ struct render3d_caps {
 /* Screen X/Y Q16.16 [0,1024]; normalized Z Q0.16 [0,65535];
  * reciprocal W Q16.16 [1/256,256]; U/V Q16.16 [-16,16].
  * RGBA is packed 0xAARRGGBB. No kernel FP or implicit API-origin conversion. */
-struct render3d_vertex {
-    int32_t x, y;
-    uint32_t z, rhw, color;
-    int32_t u, v;
-};
+#define render3d_vertex ciuki_r3d_vertex
 /* Typed, fully copied list. Unknown bits and nonzero unused vertices fail.
  * Zero state selects D16 LESS, Gouraud, nearest/clamp, MODULATE.
  * texture/vertices.u,v select stage 0; texture1/uv1 select stage 1.
  * flat_color is explicit per triangle, independent of provoking-vertex rules.
  * COPY copies to an owned offscreen presentation buffer, never scanout. */
-struct render3d_request {
-    uint32_t flags, target, depth, texture, copy_target;
-    uint32_t clear_color, clear_depth, count;
-    uint32_t texture1;
-    struct render3d_state state;
-    uint32_t flat_color[R3D_VERTICES/3];
-    int32_t uv1[R3D_VERTICES][2];
-    struct render3d_vertex vertices[R3D_VERTICES];
-};
+#define render3d_request ciuki_r3d_draw
 /* sequence orders the device; ordinal is a consecutive context receipt.
  * Completed receipts remain queryable after ring reuse without retaining
  * unbounded jobs. Completed identity is generation + owned context + ordinal;
@@ -150,6 +167,7 @@ struct render3d_backend {
     uint32_t max_size;
     void (*detach)(struct render3d_service *, void *);
     uint32_t (*texture_pool_bytes)(void *);
+    const struct ciuki_r3d_caps *capabilities;
 };
 struct render3d_host {
     void *ctx;

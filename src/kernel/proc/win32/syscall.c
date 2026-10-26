@@ -9,6 +9,7 @@ extern uint32_t w32_snapshot_call(struct proc_thread *,struct ciuki_w32_snapshot
 extern uint32_t w32_process_call(struct proc_thread *,struct ciuki_w32_spawn_args *);
 extern uint32_t w32_file_call(struct proc_thread *,struct ciuki_w32_file_args *);
 extern uint32_t w32_system_call(struct proc_thread *,struct ciuki_w32_system_args *);
+extern uint32_t w32_render3d_call(struct proc_thread *,struct ciuki_w32_render3d_args *);
 static uint32_t create_thread(struct proc_thread *self, struct ciuki_w32_thread *a)
 {
     struct process *p = self->process;
@@ -69,6 +70,7 @@ int32_t w32_syscall(struct trap_frame *tf)
         case W32_SECTION: status=w32_section_call(self,(void *)record);break;
         case W32_VIEW: status=w32_view_call(self,(void *)record);break;
         case W32_SERVICE: status=w32_service_call(self,(void *)record);break;
+        case W32_RENDER3D: status=w32_render3d_call(self,(void *)record);break;
         case W32_DISPLAY: status=w32_display_call(self,(void *)record);break;
         case W32_IDENTITY: w32_identity((void *)record); break;
         case W32_COUNTER: {

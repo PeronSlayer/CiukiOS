@@ -23,6 +23,8 @@ uint32_t display_change_counter(void);
 void display_frame_complete(uint32_t generation, bool full_frame);
 void display_watchdog_poll(void);
 int display_worker_start(void);
+/* Publish queued work before notifying; the predicate closes the sleep race. */
+void display_worker_wake(void);
 /* Entry refused safely: desktop is still/restored writable. No guest lease.
  * Negative entry results mean recovery failed; zero grants full screen. */
 #define DISPLAY_FULLSCREEN_WINDOWED 1

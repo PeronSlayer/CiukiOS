@@ -144,6 +144,34 @@ static void race(void){
     assert(!q.error||q.error==EACCES);racing=false;complete();
     puts("PASS pthread revocation race: revoke waits for paused native write; zero writes after return");
 }
+static void render3d_frames(void)
+{
+    uint32_t pixels[64*64];
+    for (unsigned i=0;i<64*64;i++) pixels[i]=0xff123456;
+    for (unsigned schedule=0;schedule<5;schedule++) {
+        game.state=PROC_LIVE;revoked_writes=0;
+        struct ciuki_w32_display_args a=grant_args();
+        a.surface=(struct ciuki_present_surface){64,64,256,sizeof(pixels),CIUKI_PRESENT_XRGB8888};
+        a.scale=1; w32_display_call(&dt,&a); assert(!a.error);
+        struct ciuki_w32_render3d_args r={.token=a.token,.generation=a.generation,
+            .width=64,.height=64,.pitch=256};
+        unsigned before=writes;
+        if (schedule==1) r.token++;
+        if (schedule==2) on_yield=revoke_now;
+        if (schedule==3) on_yield=die_now;
+        if (schedule==4) r.pitch++;
+        int e=display_present_render3d(0,3,&r,pixels,sizeof(pixels));
+        if (!schedule) assert(!e && writes>before && !awaiting_first_frame);
+        else if (schedule==4) assert(e==-EOPNOTSUPP && writes==before);
+        else assert(e==-EACCES);
+        if (active) assert(display_present_revoke_kernel()==1);
+        before=writes;
+        assert(display_present_render3d(0,3,&r,pixels,sizeof(pixels))==-EACCES && writes==before);
+        assert(!suspended && device.mode_id==0x118); complete();
+    }
+    game.state=PROC_LIVE;
+    puts("PASS render3d common presenter: completed frame, token/layout refusal, mid-frame revoke/death, desktop restoration, zero writes after revoke");
+}
 int main(void)
 {
     memset(user,1,sizeof(user));
@@ -202,7 +230,7 @@ int main(void)
     q=holder_args(&a,W32_DISPLAY_FRAME);unsigned prior=writes;grant_available=false;
     w32_display_call(&gt,&q);assert(q.error==EACCES&&writes==prior);grant_available=true;
     assert(display_present_revoke_kernel()==1);complete();
-    native_formats();race();printf("PASS production lease: revoke at pin/read/copy/pacing, death, stale tokens, authority, mode failure/rollback, cleanup; writes=%u returns=%u\n",writes,returns);
+    native_formats();race();render3d_frames();printf("PASS production lease: revoke at pin/read/copy/pacing, death, stale tokens, authority, mode failure/rollback, cleanup; writes=%u returns=%u\n",writes,returns);
     return 0;
 }
 #ifdef DESKTOP_ADAPTER_FIXTURE

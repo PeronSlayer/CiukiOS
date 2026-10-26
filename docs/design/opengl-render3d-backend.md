@@ -92,3 +92,21 @@ triangles only with constant UV and reciprocal-W and lossless Q20/Q16 conversion
 and native premultiplication. All other textured triangles fall back per draw;
 the broad adapter's capability contract is unchanged. This conservative subset
 avoids a per-pixel admission scan and retains exact constant-coordinate draws.
+
+### f7-10 integration amendment
+
+The production GDI getter, copied Win32 records and display-worker dispatch now
+exist; [the integration design](render3d-hardware-integration.md) supersedes the
+missing-provider and minimum-only integration status above. The positive boot
+probe and existing 64x64/one-triangle hardware limits remain in force. Native
+capabilities come from the backend descriptor, with per-format admission and
+explicit state masks. The encoder checks both samplers and admits exact constant
+UV/Q and Q/W, including magnification with a complete mip chain; other precision
+cases retain per-draw software fallback. A completed owned GPU conversion copy
+can feed the existing lease presenter, which still performs CPU scanout upload.
+This is not qualification of direct GPU scanout or Quake III-sized targets.
+
+The f7-03 perspective-product fix removes the old 8x8 scalar counterexample.
+The minimum test now proves the remaining Q16-weight/GL-plane difference with
+U=32770/32767/32767 over a 3x3 triangle, checking opposite red/green samples at
+native pixel (0,6). The conservative varying-coordinate refusal is preserved.

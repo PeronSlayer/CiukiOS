@@ -13,7 +13,7 @@ from scripts.win32 import stubs
 from scripts import build_kernel
 
 SOURCES = ('dib.c', 'region.c', 'objects.c', 'clip.c', 'bitmap.c', 'palette.c',
-           'draw.c', 'printing.c', 'text.c', 'font.c', 'compat.c', 'upper.c', 'metafile.c',
+           'draw.c', 'render3d.c', 'printing.c', 'text.c', 'font.c', 'compat.c', 'upper.c', 'metafile.c',
            'uniscribe.c', 'bridge.c', 'pixelformat.c', 'compiler.c', 'compiler.S')
 C_EXPORTS = ('w32_dib_validate','w32_dib_raw','w32_dib_rgb','w32_dib_encode',
              'w32_dib_put','w32_gdi_rop3','w32_dib_blt')
@@ -28,11 +28,11 @@ def build(out, base=0x72000000, flags=None):
     core = ROOT/'sdk/win32'
     objects, exports = [], {}
     sources = [core/'gdi32'/n for n in SOURCES]
-    sources += [core/'kernel32/compiler.c', core/'kernel32/compiler.S', core/'services/bytes.c', core/'services/stack.S']
+    sources += [core/'kernel32/compiler.c', core/'kernel32/compiler.S', core/'services/bytes.c', core/'services/stack.S', core/'advapi32/gate.S']
     for i, source in enumerate(sources):
         obj = out/f'gdi32-{i}.obj'
         subprocess.run(['clang', *FLAGS, '-Wno-unused-command-line-argument',
-                        '-I'+str(core/'include'), '-c', str(source), '-o', str(obj)], check=True)
+                        '-I'+str(core/'include'), '-I'+str(ROOT/'src/kernel/include'), '-c', str(source), '-o', str(obj)], check=True)
         objects.append(str(obj))
         nm = subprocess.run(['llvm-nm', '--defined-only', str(obj)], check=True, capture_output=True, text=True).stdout
         if source.parent.name == 'gdi32' and source.name not in ('compiler.c', 'compiler.S'):

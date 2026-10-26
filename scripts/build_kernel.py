@@ -242,7 +242,7 @@ def main() -> int:
                     list((SRC / "arch").glob("*.c")) + list((SRC / "probes").glob("*.c")) +
                     list((SRC / "drivers").glob("*.c")) +
                     [SRC / "drivers/video" / name for name in ("registry.c", "attempt.c", "swdib.c", "native.c", "batch.c",
-                        "native_hw.c", "render3d.c", "render3d_scalar.c", "render3d_native.c", "intel2d/engine.c", "intel2d/driver.c", "unichrome/engine.c",
+                        "native_hw.c", "render3d.c", "render3d_scalar.c", "render3d_native.c", "render3d_transport.c", "intel2d/engine.c", "intel2d/driver.c", "unichrome/engine.c",
                         "unichrome/driver.c", "sis/engine.c", "sis/cursor.c", "sis/register.c",
                         "vmwaresvga/engine.c", "vmwaresvga/driver.c", "vmwaresvga/io.c", "mach64/engine.c",
                         "mach64/driver.c", "rage128/driver.c", "rage128/engine.c", "cirrus/engine.c",

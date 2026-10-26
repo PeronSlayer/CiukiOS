@@ -158,7 +158,11 @@ static int present(unsigned id, unsigned token, unsigned gen, unsigned w,
 }
 static const struct gl_hw_driver fake = {GL_HW_VERSION, sizeof(fake), query,
   open_model, close_model, accept, load, read_model, upload, drop, submit, finish, present};
+static int native_provider;
+void gl_hardware_native(int on) { native_provider=on; }
 const struct gl_hw_driver *w32_gdi_render3d(unsigned version) {
+  extern const struct gl_hw_driver *w32_gdi_render3d_native(unsigned);
+  if (native_provider) return w32_gdi_render3d_native(version);
   assert(version == GL_HW_VERSION); return &fake;
 }
 void gl_hardware_enable(void) { enabled = 1; }
