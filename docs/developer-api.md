@@ -2547,10 +2547,14 @@ call.
 T23 c42f556e: the forced end of a shutdown that cannot finish (desktop
 only, after the user's explicit choice). Never waits for the orderly
 sequence, a lock or a program: at most 3 s of best-effort flush through
-the bounded suspend-flush worker, then UNCERTAIN, then reset (FORCE_REBOOT
-does not return) or the provider's soft-off (FORCE_OFF returns ENOTSUP
-without one, EIO if the machine stayed on). Allowed while an orderly
-REBOOT/OFF is still running.
+the bounded suspend-flush worker, then UNCERTAIN, then reset or the
+provider's soft-off. FORCE_REBOOT does not return when the reset takes;
+it returns EBUSY, with UNCERTAIN latched and every resource kept, when
+device DMA could not be stopped and no qualified hard PCI reset exists or
+it did not take (the user must press the reset button). FORCE_OFF returns
+ENOTSUP without a soft-off provider, EBUSY when the device fence did not
+prove every device stopped, EIO if the machine stayed on. Allowed while
+an orderly REBOOT/OFF is still running.
 
 ```c
 #define CIUKI_POWER_FORCE_REBOOT 9u
