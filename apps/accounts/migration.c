@@ -46,7 +46,8 @@ int acct_import_g32(const void *bytes, size_t n, const struct acct_import_option
         strcpy(r->name, name); memcpy(r->salt, source->salt, 16); memcpy(r->verifier, source->verifier, 32);
         uint8_t blank[32];
         e = acct_derive("", r->salt, ACCT_ITERATIONS, blank);
-        if (!e && !acct_equal_secret(blank, r->verifier, 32)) r->flags |= ACCT_ENABLED;
+        /* Password length is absent from v1. All imported credentials stay disabled
+         * until explicit trusted enrollment, including nonempty old secrets. */
         acct_wipe(blank, sizeof(blank));
         if (e) break;
         mapping[i].legacy_id = source->id; mapping[i].uid = r->uid;

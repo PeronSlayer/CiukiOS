@@ -78,8 +78,8 @@ static int padded(const char *s, size_t n)
 
 int acct_validate(const struct acct_db *d, int seed)
 {
-    if (!d || !d->generation || d->count < 2 || d->count > ACCT_MAX ||
-        (d->flags & ~3u) || d->origin < ACCT_READY || d->origin > ACCT_UPGRADE ||
+    if (!d || (seed ? d->generation != 0 : !d->generation) || d->count < 2 || d->count > ACCT_MAX ||
+        (d->flags & ~7u) || d->origin < ACCT_READY || d->origin > ACCT_UPGRADE ||
         (seed && d->origin == ACCT_UPGRADE) ||
         (seed ? !zero(d->sid, sizeof(d->sid)) : zero(d->sid, sizeof(d->sid))) ||
         (d->next_uid < 1000) ||
@@ -88,6 +88,7 @@ int acct_validate(const struct acct_db *d, int seed)
         (d->origin != ACCT_UPGRADE && (d->flags & ACCT_MIGRATED)) ||
         (d->auto_logon_uid && (d->auto_logon_uid != 1000 || d->origin != ACCT_READY))) return -EINVAL;
     int ready = 0, normal_admin = 0;
+    unsigned enabled = 0;
     for (unsigned i = 0; i < d->count; ++i) {
         const struct acct_record *r = &d->records[i];
         if ((i && d->records[i - 1].uid >= r->uid) || (r->flags & ~31u) ||
@@ -106,14 +107,18 @@ int acct_validate(const struct acct_db *d, int seed)
                                                        !strcmp(r->name, "CiukiUser")))) return -EINVAL;
         }
         if (r->legacy_id && (d->origin != ACCT_UPGRADE || r->uid < 1000)) return -EINVAL;
-        if ((r->flags & ACCT_CHANGE_REQUIRED) && !r->legacy_id) return -EINVAL;
+        if ((r->flags & ACCT_CHANGE_REQUIRED) &&
+            (!r->legacy_id || (r->flags & ACCT_ENABLED) || !(r->flags & ACCT_PASSWORD_SET))) return -EINVAL;
+        enabled += !!(r->flags & ACCT_ENABLED);
         for (unsigned j = 0; j < i; ++j)
             if (acct_name_equal(r->name, d->records[j].name) ||
                 (r->legacy_id && r->legacy_id == d->records[j].legacy_id)) return -EINVAL;
         if (r->flags & ACCT_READY_BLANK) {
             if (r->uid != 1000 || d->origin != ACCT_READY || strcmp(r->name, "CiukiUser") ||
                 r->groups != ACCT_ADMIN ||
-                (r->flags & ACCT_CHANGE_REQUIRED) || r->legacy_id) return -EINVAL;
+                (r->flags & ACCT_CHANGE_REQUIRED) || r->legacy_id ||
+                !(r->flags & ACCT_ENABLED) || d->auto_logon_uid != 1000 ||
+                (d->flags & ACCT_AUTO_RETIRED)) return -EINVAL;
             ready = !!(r->flags & ACCT_ENABLED);
         }
         if (r->flags & ACCT_PASSWORD_SET) {
@@ -127,12 +132,21 @@ int acct_validate(const struct acct_db *d, int seed)
             ((r->flags & ACCT_PASSWORD_SET) || (seed && (r->flags & ACCT_READY_BLANK)))) normal_admin = 1;
     }
     if (!normal_admin) return -EINVAL;
-    if (d->auto_logon_uid && !ready) return -EINVAL;
-    if (seed && (d->generation != 1 || d->count != 3 || d->records[2].uid != 1000 ||
+    if ((ready && enabled != 1) || (d->auto_logon_uid && !ready) ||
+        ((d->flags & ACCT_AUTO_RETIRED) && d->auto_logon_uid)) return -EINVAL;
+    if (seed && (d->flags || d->next_uid != 1001 || d->count != 3 || d->records[2].uid != 1000 ||
                  d->records[2].groups != ACCT_ADMIN || !(d->records[2].flags & ACCT_ENABLED) ||
                  (d->records[0].flags & ACCT_ENABLED) || (d->records[1].flags & ACCT_ENABLED) ||
                  (d->origin == ACCT_READY && (!ready || d->auto_logon_uid != 1000 || (d->records[0].flags & ACCT_PASSWORD_SET))) ||
-                 (d->origin == ACCT_SETUP && (ready || !(d->records[0].flags & ACCT_PASSWORD_SET))))) return -EINVAL;
+                 (d->origin == ACCT_SETUP && (ready || d->auto_logon_uid || !(d->records[0].flags & ACCT_PASSWORD_SET))))) return -EINVAL;
+    if (seed) {
+        const struct acct_record *a = d->records;
+        if (a[0].flags != (d->origin == ACCT_READY ? 2u : 6u) || a[1].flags != 2 ||
+            a[2].flags != (d->origin == ACCT_READY ? 9u : 5u)) return -EINVAL;
+        for (unsigned i = 0; i < 3; ++i)
+            if (a[i].legacy_id || a[i].picture[0]) return -EINVAL;
+        if (d->origin == ACCT_SETUP && !memcmp(a[0].salt, a[2].salt, 16)) return -EINVAL;
+    }
     return 0;
 }
 

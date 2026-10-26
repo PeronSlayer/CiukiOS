@@ -59,3 +59,44 @@ XOR/OR comparison with branches depending on the public length only, with no
 memcmp replacement or mismatch early exit. This is compiler/host inspection,
 not a target-hardware timing measurement. No runtime or disk-image evidence is
 claimed.
+
+## Review round 1
+
+The amended main sections 3.1–3.6/4.1 and kernel A1-2/A1-3 now govern the account
+core. They supersede the earlier single-binding transaction and provision.used
+implementation described by the initial evidence above.
+
+Primary research was rechecked before the code changes: [RFC 8018](https://www.rfc-editor.org/rfc/rfc8018.html#section-5.2)
+retains explicit salt/count/PRF parameters; [Microsoft access tokens](https://learn.microsoft.com/en-us/windows/win32/secauthz/access-tokens)
+bind identity/groups to execution; [well-known SIDs](https://learn.microsoft.com/en-us/windows/win32/secauthz/well-known-sids)
+distinguish built-in account/group authorities. Microsoft-authored XP material,
+[account policy](https://flylib.com/books/en/2.922.1.130/1/),
+[accounts/groups](https://flylib.com/books/en/2.922.1.135/1/) and
+[account visibility/enablement](https://flylib.com/books/en/2.732.1.17/1/), remains
+historical context. The [historical NIST reference](https://pages.nist.gov/800-63-3/sp800-63b.html#memsecretver)
+is superseded; the approved 63-byte maximum remains a project decision. The
+[upstream fsync documentation](https://man7.org/linux/man-pages/man2/fsync.2.html)
+supports retaining separate data and namespace barriers. The supplied read-only
+Resource Kit profile/local-logon ranges were re-read without copying book text.
+
+Resulting decisions follow the reviewed CiukiOS contract rather than an assertion
+of exact XP defaults: permanently retire the sole enabled blank exception; bind
+consumed attempts to actual roles/endpoints/console/account generations; send
+outcomes only to LOGON; reserve one G and one complete destination owner vector;
+retain durable allocation watermarks independently of the database; cross
+COMMIT_REQUIRED before owner COMMIT and never roll it back; admit authentication
+only after CIUKIBST CONSUMED. The 96+256*N CIUKISEE and 160-byte bootstrap codecs
+are shared entry points for user-02. All three bootstrap bindings and all eighteen
+migration bindings are exercised through the production batch/store code.
+
+H03 adds independent Python full-byte seed, bootstrap-state and owner request/
+reply oracles, all receipt states and capacity, whole-vector cancellation/retry,
+retirement across restart/reboot, endpoint framing/cancellation and consumed
+attempt generations. H10 repeats the retirement/protocol assertions through the
+same production core. The fault backend retains owner receipts across simulated
+account-service restart and validates staged manifest identities. It is boundary
+fault injection, not evidence of a real k01/k02 binding. Runtime endpoints stay
+unpublished until real adapters are integrated.
+
+Exact verification results, persistence-cut counts and the unchanged sanitizer
+restriction are recorded in the Review round 1 section of the worktree report.
