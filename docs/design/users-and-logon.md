@@ -1,10 +1,22 @@
 # Users, logon and passwords (G32)
 
 Security-model supersession: the owner's real-user decision is specified in
-[user-security-contract.md](user-security-contract.md), pending lead review and
-implementation. The profile-only model, optional logon and Cancel-to-default
+[user-security-contract.md](user-security-contract.md) and its
+[kernel enforcement/ABI half](user-security-kernel.md), reconciled under
+[sec-contract](../directives/sec-contract.md) and the binding
+[lead answers](../directives/sec-lead-decisions.md). Implementation and runtime
+evidence remain pending; the single [implementation plan](user-security-contract.md#implementation-plan)
+covers both halves. The profile-only model, optional logon and Cancel-to-default
 below describe historical G32 behavior, not acceptance criteria for the new
 kernel-enforced model. Earlier host evidence remains evidence for G32 only.
+The replacement uses SYSTEM uid/gid 0, administrator/Standard/Guest credentials,
+explicit G32 enrollment into new uids, mapped numeric private profiles and
+shared /Documents. It removes anonymous cancellation, provides a trusted lock
+and session teardown, and distinguishes passworded Safe Mode uid 500 from an
+unset ready-image recovery account. Standard users may create creator-owned
+root files/folders; Guest remains read-only on shared/removable media. Password
+recovery without a usable administrator uses explicit Setup CD repair, never
+an automatic empty-password account.
 
 Written 2026-10-23, after reading the G32 inventory and the batch headers.
 

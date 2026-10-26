@@ -723,6 +723,15 @@ remain with the lead.
   threads and their priority.
 - `f0-acceptance.md`: probe names and `probe_report` record format.
 
+## User-security precedence (sec-contract)
+
+The reconciled [kernel security contract](user-security-kernel.md) reserves
+SYS_SECURITY=101 after NET_INFO=100, leaving F6's 92–95 gap untouched. Its
+credentials/authorization supersede the old per-binary security grants when
+implemented; existing native record prefixes and Win32 call 96 stay frozen.
+The [account contract](user-security-contract.md) specifies provisioning and
+session lifecycle. This is a design reservation, not a header/runtime change.
+
 ## F2 extension: native ABI version 1
 
 Author: Codex. Directive: f2-00. Revised after cross-review 2026-10-10;
@@ -2312,7 +2321,7 @@ The `w32-objects-qemu-t23` case is registered and deliberately unrun.
 
 ## F5-08 delegated presentation amendment (2026-10-19)
 
-Call 101 adds copied operation `W32_DISPLAY=0x201`, the 80-byte record in
+Call 96 carries copied operation `W32_DISPLAY=0x201`, the 80-byte record in
 `ciuki/present_abi.h`. The desktop's accepted F5-04 endpoint authenticates its
 Win32 client. Only the authorized desktop can grant/revoke an exact
 PID/token/framebuffer-generation lease; the holder can present a pinned RAM

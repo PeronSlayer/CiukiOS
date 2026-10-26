@@ -1,11 +1,15 @@
 # User security: kernel enforcement contract
 
-Implementer draft for lead cross-review, recorded 2026-10-26 after checking
-the workstation date. Source baseline: 17fd29b2a4d09aa78ba9b1109b11e0f25b0e8b85,
-branch wt/sec-kernel. Authority: [sec-kernel directive](../directives/sec-kernel.md).
-This document specifies future implementation; it does not claim that the
-current kernel enforces these rules. No source, ABI header or SDK changes
-accompany it.
+Reconciled 2026-10-26 after running `date`; inspected worktree HEAD:
+`7f31324b8f2099ee8ade98b3601b12e25857e058`. Authority:
+[sec-kernel](../directives/sec-kernel.md),
+[sec-contract](../directives/sec-contract.md) and the binding
+[lead answers](../directives/sec-lead-decisions.md). M-Q1..M-Q7 identify
+model answers; K-Q1..K-Q8 identify kernel answers. This specifies future
+implementation, not delivered security. The coordinated
+[Implementation plan](user-security-contract.md#implementation-plan) is the
+single directive/dependency plan for both halves. No source or public header
+changes accompany this document.
 
 ## Decisions and precedence
 
@@ -76,14 +80,14 @@ Each numbered conclusion below is followed by the CiukiOS decision it informs.
 | --- | --- | --- |
 | R1 | Microsoft [well-known SIDs](https://learn.microsoft.com/en-us/windows/win32/secauthz/well-known-sids) distinguishes account RIDs, builtin groups and logon identities. | Use the lead's numeric uid/group assignments. These numbers are not complete Windows SIDs and uid 0 is not RID 500. |
 | R2 | Microsoft [access tokens](https://learn.microsoft.com/en-us/windows/win32/secauthz/access-tokens) associates user, groups and logon identity with processes; [privilege constants](https://learn.microsoft.com/en-us/windows/win32/secauthz/privilege-constants) distinguishes system privileges from object rights. | Immutable process credentials; separate resource ownership from administrator membership. No thread impersonation in this step. |
-| R3 | Microsoft's [MS02-064 XP root baseline](https://learn.microsoft.com/en-us/security-updates/securitybulletins/2002/ms02-064) contrasts the Windows 2000 writable root with XP. XP permits Users to create root subdirectories; it does not grant unrestricted root file creation or overwrite. | Protected installed anchors plus creator-owned root data directories, rather than claiming that every XP root entry was read-only. |
+| R3 | Microsoft's [MS02-064 XP root baseline](https://learn.microsoft.com/en-us/security-updates/securitybulletins/2002/ms02-064) permits root folders and creator ownership; root file creation is inherited below root. | M-Q7 adopts creator-owned root folders and explicitly extends the rule to root files for old installers. Protected anchors/other owners are not writable. |
 | R4 | Microsoft [gaming with least-privileged accounts](https://learn.microsoft.com/en-us/windows/win32/dxtecharts/gaming-with-least-privileged-user-accounts) gives XP NTFS folder defaults, FAT32's lack of security, read-only HKLM and per-user HKCU storage. | Protect OS/program paths, permit own profile data, provide explicit shared documents, and enforce the policy on FAT ourselves. Games patch machine installs as administrator. |
 | R5 | Microsoft [registry key security](https://learn.microsoft.com/en-us/windows/win32/sysinfo/registry-key-security-and-access-rights) checks requested key rights and inherits key security from the parent; [registry structure](https://learn.microsoft.com/en-us/troubleshoot/windows-server/performance/windows-registry-advanced-users) distinguishes HKLM, HKU and HKCU. | Authorize each registry operation against its authenticated client and namespace; protect entire hive backing files against bypass. |
 | R6 | The Microsoft [Windows XP Security Guide, chapter 3](https://learn.microsoft.com/ko-kr/security-updates/security/20213971), retained in Korean with English policy names, assigns shutdown to Administrators+Users and clock/driver/volume maintenance to administrators in its client configurations. These are configuration recommendations, not proof of every XP default. | Allow local interactive shutdown/restart; reserve machine configuration and maintenance for administrators. |
 | R7 | Microsoft [SetTimeZoneInformation](https://learn.microsoft.com/en-us/windows/win32/api/timezoneapi/nf-timezoneapi-settimezoneinformation) explicitly requires SeSystemtimePrivilege on XP/2000; the separate time-zone privilege applies to later Windows. | Both system clock and system time zone require administrator. Per-process TZ conversion can remain unprivileged. |
 | R8 | Microsoft [format/eject removable media policy](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-server-2012-r2-and-2012/jj852171(v=ws.11)) includes XP and distinguishes use of media from format/eject rights; [media-burning device permissions](https://learn.microsoft.com/en-us/windows/win32/imapi/providing-user-permissions-for-media-burning-devices) identifies XP's extra device permissions. | Ordinary file use is per-session. Formatting/raw snapshots require administrator. Allow safe removal/tray use to the local session as an explicit CiukiOS usability choice. No media-burning permission is implied. |
 | R9 | Microsoft [KB814777](https://learn.microsoft.com/en-us/troubleshoot/windows-client/windows-security/access-computer-after-administrator-disabled) documents Safe Mode access to a disabled local administrator in its server/RIS scenario. [Advisory 906574](https://learn.microsoft.com/en-us/security-updates/securityadvisories/2005/906574) explains XP Guest/ForceGuest network behavior. | Follow the owner's explicit CiukiAdministrator/Guest defaults, not an assertion that every XP edition disabled Administrator or that Guest visibility is equivalent to network authentication. |
-| R10 | Microsoft [lockout threshold](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-server-2012-r2-and-2012/hh994574(v=ws.11)) describes zero/no lockout and gives later client defaults; [MS-GPSB lockout policy](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-gpsb/2cd39c97-97cd-4859-a7b4-1229dad5f53d) defines zero as disabled. | Propose threshold zero plus bounded authentication work, with no permanent lockout by failed guesses. Exact XP template evidence remains Q6. |
+| R10 | Microsoft-authored XP Resource Kit [Authentication Policy Options](https://flylib.com/books/en/2.922.1.130/1/) (mirror) states that Local Security Policy workstation lockout is disabled by default. | K-Q6 fixes no persistent lockout plus the model's one-second backoff. No exact XP template parity is required. |
 | R11 | The Open Group [getuid, SUS Issue 6](https://pubs.opengroup.org/onlinepubs/009695399/functions/getuid.html) returns the calling process's real uid; [access](https://pubs.opengroup.org/onlinepubs/9699919799/functions/access.html) explains why prechecking a path cannot authorize a later operation. | Real/effective ids coincide; authorization belongs inside the actual operation. The getgroups reference was inaccessible (HTTP 403); its planned wrapper contract is specified below without claiming a new POSIX conformance level. |
 | R12 | [RFC 8018 sections 4 and 5.2](https://www.rfc-editor.org/rfc/rfc8018.html) specifies salt/iteration parameters and PBKDF2. | Keep G32's algorithm and 10,000 iterations pending target measurement; do not lower cost based on a host benchmark. |
 
@@ -98,8 +102,14 @@ Research limits are explicit: no factory XP security-template dump was
 available here. Exact HKU subkey exceptions, XP lockout defaults and
 edition-specific Welcome-screen filtering are not inferred from a modern
 Server page or community answers. The owner already fixes CiukiOS's logon
-behavior. Q6 records the remaining historical evidence, independently of
-the kernel's normative access matrix.
+behavior. K-Q6 closes these historical-template gaps as nonblocking: the
+normative access matrix documents CiukiOS choices rather than exact XP parity.
+The Microsoft-authored XP account/Welcome material and lockout evidence in the
+main contract's R3/R4/R8 were rechecked during reconciliation. Microsoft
+[logon-screen shutdown policy](https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-server-2012-r2-and-2012/jj852274(v=ws.11))
+distinguishes client logon-screen power from authenticated user rights; K-Q8
+explicitly admits Guest too. [NIST's historical password guidance](https://pages.nist.gov/800-63-3/sp800-63b.html#memsecretver)
+is identified as superseded; the approved 8-63-byte bound is a CiukiOS choice.
 
 ### Repository evidence
 
@@ -132,9 +142,10 @@ Contract references read before source inspection:
 [users/logon](users-and-logon.md) and
 [CD Setup](cd-setup-plan.md).
 Their old security statements are superseded only as listed here. In
-particular, the execution ABI at line 2315 says "Call 101" for delegated
-display, while its header/actual dispatcher use W32_DISPLAY under call 96.
-Use the implemented call 96; reserve no new security number from that typo.
+particular, the old execution-ABI display amendment incorrectly said "Call
+101"; this reconciliation corrects it to W32_DISPLAY under call 96, matching
+abi.h:769 and proc/win32/syscall.c:73–74. The distinct new SECURITY call 101
+follows the allocation rule; it does not rename or move the Win32 transport.
 The "90 reserved ENOSYS" prose at lines 2678–2683 is also superseded by the
 implemented call-90 amendment at lines 2725–2733.
 
@@ -144,7 +155,7 @@ implemented call-90 amendment at lines 2725–2733.
 
 Each process MUST retain one immutable credential value before publication:
 uid, primary group, bounded sorted unique supplementary group set, security
-session id and kernel-validated flags. Eight group slots are proposed;
+session id and kernel-validated flags. Eight group slots are fixed;
 group-set overflow is an error, never truncation. An ordinary administrator
 has primary gid 545 and groups 544+545; standard users have 545; Guest has
 primary/group 546. SYSTEM has uid/gid 0 and the explicit SYSTEM predicate.
@@ -161,7 +172,7 @@ service. The current native ABI has spawn but no public exec syscall; this
 rule also applies to libc's implementation and any future exec entry.
 Orphan adoption by PID 1 changes ppid, never credential or session.
 
-Only SYSTEM may use the proposed SPAWN_CREDENTIAL operation. It prepares a
+Only SYSTEM may use the frozen SPAWN_CREDENTIAL operation. It prepares a
 new unpublished child with the selected live session's immutable credential,
 checks executable access as that child, sanitizes cwd/environment/stdio and
 descriptor sources, reserves resources, then publishes atomically. It MUST
@@ -179,11 +190,11 @@ this path. Kernel bootstrap of a trusted service uses a distinct internal
 operation, not a user-requested executable path.
 
 Account role/password changes update the database for future logons.
-Existing credentials remain immutable. Disabling/deleting an account or
-removing administrator membership MUST make the account service end that
-account's live session before reporting effective revocation; otherwise the
-UI must report that logoff is pending. Password change alone need not revoke
-the owner's active session. Only SYSTEM may add/remove groups in the database;
+Existing credentials remain immutable. Role/type changes, disablement and
+deletion of the active account return EBUSY before writes; log off first, then
+retry. SYSTEM session termination handles crash/recovery, not in-place token
+editing. This adopts the model half's conservative active-account rule (M-Q3).
+Password change alone need not revoke the owner's active session. Only SYSTEM may add/remove groups in the database;
 the service accepts such management requests only from an administrator.
 A user changing their own password must authenticate the old password.
 
@@ -221,8 +232,10 @@ Logoff retains G3's application save/veto protocol:
 4. SYSTEM services finish already accepted bounded saves tagged to the old
    session, flush that user's settings, then retire their peer links/hive state.
    A failed save is reported; it does not resurrect user execution or change
-   the destination uid. Only after teardown is complete does the session
-   become DEAD and the secure logon UI regain exclusive input/display.
+   the destination uid. The secure UI takes exclusive input/display as soon as
+   CLOSING begins.
+   Only after teardown is complete does the session become DEAD and the UI
+   permit a fresh logon; it never leaves a draining desktop in control.
 
 No wait for a client or disk may hold the session lock. Closure is idempotent.
 An issued write may complete to its original object during draining; there is
@@ -239,7 +252,8 @@ QUERY_SELF returns the complete public immutable credential. libc supplies
 32-bit uid_t/gid_t, getuid=geteuid=uid and getgid=getegid=primary gid.
 getgroups(0,NULL) reports the required supplementary count; a negative or
 insufficient count fails EINVAL without partial output. The supplementary
-list may include the primary gid, consistently, and is sorted. Identity
+list includes the primary gid and is sorted: SYSTEM [0], administrator
+[544,545], Standard [545], Guest [546]. Identity
 setters are unsupported/EPERM, including requests from administrator uid 500;
 they do not become setuid gateways.
 
@@ -247,14 +261,15 @@ Win32 OpenProcessToken/GetTokenInformation/CheckTokenMembership must query
 the kernel credential, not an advapi32 or desktop cache that a process can
 edit. TokenUser, TokenGroups and session queries are read-only views; requests
 to create/assign/adjust credentials are refused. A query token handle is not
-an authority transferable to CreateProcessAsUser. Full Windows SID encoding
-and SDK facade coverage require the coordinated reservation in Q2.
+an authority transferable to CreateProcessAsUser. The SID/token facade and
+privilege view below are frozen with the transport under K-Q2/M-Q3; they cannot change credentials.
 
 QUERY_PROCESS permits an administrator to query other non-SYSTEM processes,
 or a process to query its own uid in its own session; SYSTEM can query all.
 It returns no password material, environment, command line or file contents.
-PID 1 and services disclose only the explicitly public system identity.
-Regular process listings remain bounded public diagnostic summaries; private
+QUERY_PROCESS on protected PID 1/services requires SYSTEM. Public process
+summaries and direct QUERY_PEER on an owned broker link may disclose only the
+public SYSTEM credential, without private process details. Regular process listings remain bounded public diagnostic summaries; private
 module paths/registers/socket ownership details are filtered as specified below.
 
 Kernel-created IPC links retain the actual peer process and credential/session.
@@ -282,10 +297,12 @@ This is a CiukiOS policy over FAT12/FAT16/FAT32 volumes, not an on-disk FAT
 ACL or NTFS security descriptor. The system-volume binding uses the mounted
 volume identity, not the text "C:" alone. Every /mnt/drive alias, POSIX path,
 DOS drive mapping and Win32 path resolves to the same mount/object policy.
-An unrecognised fixed volume is admin-writable/readable data by default for
-administrators and read-only public data for ordinary users; it cannot become
-an unrestricted second route into the system volume. See Q3 for additional
-managed data roots.
+Additional fixed volumes are managed data volumes with the same creator-owner
+root rule (K-Q3), never aliases that shed the system volume's protection.
+Existing ordinary entries without owner records are public-readable and
+administrator-writable; new Standard-created root files/folders require a
+committed owner record. Missing/corrupt managed metadata denies new root
+creation and access to ownership-classified data; it cannot relax policy.
 
 Authorize the resolved object/parent and operation under the existing VFS
 namespace synchronization. Prefixes consist of canonical path components
@@ -312,11 +329,12 @@ labels by generation. Existing references retain mount/media generation
 and the original object identity; deletion/reuse of a FAT directory slot
 must not retarget a retained reference.
 
-### Proposed rule table
+### Rule table
 
 Paths below use the native system-volume spelling. G32's numeric profile
-layout is the proposed canonical PROFILE(uid) =
-/Windows/Profiles/u%08x; Q1 requires agreement with the other contract part.
+layout is the canonical new PROFILE(uid) = /Windows/Profiles/u%08x (K-Q1).
+Imported numeric roots may retain their old spelling through explicit
+old-id -> new-uid owner mapping; no suffix is an authority or alias for 500/501.
 "Read" includes lookup/stat/enumeration and loading executable bytes when the
 object is executable by existing format rules. "Modify" includes create,
 write, delete, rename, truncate, attributes and timestamps, subject to the
@@ -325,33 +343,38 @@ share/range locks, mount state and the device lease rules.
 
 | Prefix / object | Standard Users | Guest | Administrators | SYSTEM / special rule |
 | --- | --- | --- | --- | --- |
-| System volume root | Read; create a new ordinary data directory, not a root file | Read only | Read/modify ordinary entries | Installed anchors are sealed against rename/delete/replacement; new root data directories receive creator metadata before publication. |
+| Every managed fixed-volume root | Read; create new ordinary files and folders, creator full control; other Users read/execute | Read only | Full ordinary-data control | M-Q7/K-Q3: commit creator metadata before publication; sealed installed anchors cannot be replaced. |
 | /Windows, /Windows/System, /Windows/System32, /Windows/Fonts | Read | Read | Read/modify application/shared files | More specific sealed/security/profile rules win. No global writable TEMP exception. |
-| /System and /Programs, /Program Files, Common Files, bundled game binaries | Read | Read | Read/modify ordinary program content | Protect the sealed executable/boot-input subset separately. Existing Win32 denial of all C:/System writes remains an additional restriction until its consumers migrate; see Q4. |
+| /System and /Programs, /Program Files, Common Files, bundled game binaries | Read | Read | Read/modify ordinary program content | Protect the sealed executable/boot-input subset separately. K-Q4 replaces the extra Win32 all-C:/System write denial with this common prefix policy; F5 builtin-store protections remain. |
 | Kernel/boot inputs, SYSTEM service images and security policy manifests | Read executable/nonsecret content only | Same | Read only | SYSTEM maintenance only; path ancestors cannot be renamed or replaced. Includes files consumed as privileged code/configuration during the next boot. |
 | /System/Security, account verifiers, owner map, security journal/backup/temp/locks | No access | No access | No direct access | SYSTEM only. Parent enumeration must not disclose file contents; account management uses the authenticated broker. |
 | /Windows/Profiles container | Enumerate nonsecret account directory names, traverse only an allowed profile | Same | Read | SYSTEM creates/removes/relocates profile root anchors. A user's name is not their ownership proof. |
 | PROFILE(uid), including Documents, Desktop, Favorites, Start Menu, application data, settings and Temp | Owner read/modify; others no access | Only Guest's own profile | Read/modify other profiles' ordinary data | SYSTEM maintains root ownership. Security subtrees remain SYSTEM-only even to a profile owner. |
 | Default profile template | Read only | Read only | Read/modify template data | SYSTEM creates each private profile by copy under its new owner. The template never creates an anonymous session. |
 | All Users/common Start Menu and desktop | Read | Read | Read/modify | Shared executable launch configuration cannot be changed by ordinary users. |
-| /Documents (legacy default/shared documents) | Read/modify shared data | Read only | Read/modify | Explicit shared-data choice; never the automatic private Documents path for uid 1000. No SYSTEM service executes code/configuration from here. Migration ownership is Q1. |
-| /system/settings and /System/Registry machine settings | Read nonsecret values; no direct modification | Same | Read/modify ordinary machine settings | Security records excluded; Hardware is read-only inventory; broker-owned hive/journal files excluded. Private Desktop/Users/Programs preferences move under PROFILE(uid). |
-| Registry broker hive backing files, transaction slots and journals | No direct access | No direct access | No direct access | SYSTEM registry owner only; logical key requests checked as the client. This includes old SYSTEM.CRG/USER.CRG and their alternate slots until migrated. |
-| Per-profile registry files managed directly by native libreg | Owner read/modify | Owner only | Read/modify | May contain only that user's preferences, never account roles, machine policy or another user's data. |
+| /Documents (legacy default/shared documents) | Read/modify shared data | Read only | Read/modify | Explicit shared-data choice; never the automatic private Documents path for uid 1000. No SYSTEM service executes code/configuration from here. K-Q1 keeps it shared; migration never assigns it to the next logon. |
+| /system/settings and /System/Registry machine settings | Read nonsecret values; no direct modification | Same | Read/modify ordinary machine settings | Security records excluded; Hardware is read-only inventory; broker-owned hive/journal files excluded. Private Desktop/Users/Programs preferences move under PROFILE(uid); authoritative machine-registry files are broker-only. |
+| Authoritative registry hive backing files, transaction slots and journals | No direct access | No direct access | No direct access | SYSTEM registry broker only, including personal hive persistence under PROFILE(uid)/Settings/Registry; session w32srv uses scoped requests. Old SYSTEM.CRG/USER.CRG are protected migration inputs. |
+| Non-authoritative per-profile native libreg preferences outside Settings/Registry | Owner read/modify | Owner only | Read/modify | May contain only that user's preferences, never account roles, machine policy or another user's data. |
 | Pagefile, disk/security logs and retained crash-register reports | No direct read/write | No direct read/write | Read nonsecret diagnostics via API; no raw backing access | SYSTEM-owned; stale paging bytes must not be readable through raw disk or file opens. Per-user crash reports may instead be placed in the owning profile. |
-| Unknown fixed-volume ordinary data | Read | Read | Read/modify | SYSTEM can provision an explicit managed/shared/owner root; no implicit metadata trust from FAT labels. |
-| Unmanaged removable FAT/USB/floppy | Local active session read/modify ordinary files | Same local-session rule | Same | Shared media has no cross-user confidentiality promise; no trust in foreign owner maps, autorun or service registration. |
+| Additional fixed-volume existing ordinary data | Read/execute; new root entries follow creator rule | Read only | Read/modify | Same root policy and 256-entry owner bound per volume; never import authority from foreign FAT labels/maps. |
+| Unmanaged removable FAT/USB/floppy | Local active session read/modify ordinary files | Read only | Local active session read/modify | Shared media has no cross-user confidentiality promise; no trust in foreign owner maps, autorun or service registration. |
 | CD/ISO, read-only NTFS and write-protected media | Read | Read | Read | Mutations remain EROFS for every identity. |
 | VM private logical disk/COW and saved game overlay | VM owner's session only | Own VM only | Own VM; other users' saved data only through explicit administrative file management | Kernel provider mediates sectors. Persistent saves are under the owning profile, not a machine-global writable COW. |
 
-The root directory creation exception requires a SYSTEM-only side record
-mapping each root-created data directory to its creator. Until that record
-can be committed, ordinary users cannot create the directory. The rest of
-that directory inherits owner-private access; there is no arbitrary public
-write permission inherited from the root. This is a bounded CiukiOS
-approximation of XP Creator Owner, not general NTFS ACL inheritance.
-If the lead chooses a simpler read-only root, it must be an explicit
-departure recorded by Q3, not silently called the XP default.
+Creator-owned root entries are ordinary files or folders, up to 256 per
+volume, with ownership inherited by descendants. The creator and administrators
+may modify/delete their ordinary content; other Users read/execute, Guest
+read-only. Read/execute is not permission to modify an unowned child. Installed
+system/boot/profile anchors remain protected even from their nominal creator.
+Unlike the former kernel draft, these roots are shared-readable, not private;
+private data belongs in PROFILE(uid). Unlike the former model draft, Users may
+create `C:\GAME` and root files. Microsoft's R3 baseline allows root folders;
+root files are the lead-approved compatibility extension, not exact XP parity.
+Every creation/rename/deletion commits its bounded side record atomically with
+namespace publication or remains inaccessible pending recovery. Exhaustion
+returns ENOSPC before any directory/file appears; no fallback to an ownerless
+writable entry. No general NTFS ACL inheritance is introduced.
 
 ### Owner metadata and consistency
 
@@ -365,10 +388,13 @@ check their generation. Account deletion leaves the old uid's tree owned
 by that retired uid. A new account or recreated directory with the same
 name does not inherit those files or their policy record.
 
-Only SYSTEM provisioning may create/remove/rebind an ownership root.
-User rename/delete of an ownership anchor, a sealed prefix, its ancestor
-or a managed-volume alias is refused. Renaming content inside an ownership
-root is permitted if both sides authorize it. Profile renames update the
+Only SYSTEM provisioning may create/remove/rebind a profile ownership anchor.
+User rename/delete of a profile or hive anchor, sealed prefix, its ancestor
+or managed-volume alias is refused. Creator-owned ordinary root files/folders
+can be renamed/deleted by their owner or administrators, with the kernel
+transactionally updating/retiring the side record and fencing retained handles;
+this exception does not permit changing the recorded uid. Renaming content
+inside an ownership root is permitted if both sides authorize it. Profile renames update the
 account display name, not the numeric storage root.
 
 Use bounded records, checksums, generation and the registry contract's
@@ -379,6 +405,11 @@ On uncertain recovery, keep the affected root inaccessible and retain the
 old committed metadata. A stale/missing owner map must never turn a profile
 into publicly writable data. Exhausted bounds return ENOSPC/ENOMEM. Mounting
 or logon can enter authenticated recovery; no new panic or default profile.
+The account/owner PREPARE/COMMIT/ABORT/STATUS handshake, durable uid reservation
+and cross-store recovery order are in the main contract section 3.5. The
+SYSTEM-only boot-installed owner-service endpoint is private provisioning IPC,
+not a second public credential setter. SESSION_CREATE validates only committed
+owner keys/generations through the frozen profile descriptor.
 The account-service lock is a kernel-owned mutex/endpoint lifetime lock;
 death releases ownership and wakes waiters. Persistent intent is recoverable
 transaction state, never an immortal exclusive .lock file.
@@ -393,7 +424,8 @@ transaction state, never an immortal exclusive .lock file.
 | Write / pwrite / append / truncate | Require an existing writable description and current subject permission. Recheck at admission/commit after waits or namespace/policy-generation changes. A read-only fd never becomes writable because its holder is an administrator. |
 | Unlink / rmdir | Authorize removal on the parent and the child; preserve anchor, open-directory, sharing and busy checks. Being allowed to add a file cannot authorize removal of a sealed child. |
 | Rename / replacement | Check source object+parent, destination parent and any replaced object; reserve both namespace sides under the normal ordering. Check the destination policy, not just write permission on the source. No path visibility changes before the complete check. |
-| Move between owner/policy roots | Ordinary users receive EACCES even if they can write both roots; use copy then delete with independent checks instead. Administrator/SYSTEM may relocate ordinary content only after destination classification and handle invalidation are reserved. Root anchors never move through ordinary rename. Different volumes retain EXDEV. |
+| Move between owner/policy roots | Ordinary users receive EACCES even if they can write both roots; use copy then delete with independent checks instead. Administrator/SYSTEM may relocate ordinary content only after destination classification and handle invalidation are reserved. Profile/sealed anchors never move through ordinary rename; the explicit
+creator-owned root-entry rename transaction described above is permitted. Different volumes retain EXDEV. |
 | Exec / ELF or PE snapshot / DLL load / DOS EXEC/overlay | Authorize the actual executable/source read before snapshot or cache hit. A shared image cache retains bytes, not an authorization grant. Execute access is checked again when creating a process; shared code pages cannot disclose a denied file through query/debug routes. |
 | mmap / section/view | Native anonymous mmap remains unchanged (no file-backed native API). Win32 file mappings require the file's read/write rights; new views and flush/writeback use the retained subject. Writable mappings cannot survive session teardown or a policy-boundary move without revocation. |
 | Attribute / timestamp / FAT readonly clear | Require MODIFY_METADATA on the resolved object, including Setup FAT attrib, native FILE_INFO_SET and Win32/DOS equivalents. FAT readonly is an additional check, not administrator authorization. |
@@ -419,9 +451,9 @@ may finish, but no fresh request receives the old user's authority.
 
 ### Removable media, DOS and Win32
 
-Removable media is shared local data: Users and an enabled interactive Guest
-may read/write files, launch programs as themselves, use CD audio, and request
-safe removal after the existing blockers/flush checks. No media grants
+Removable media is shared local data: Users may read/write files; enabled
+Guest has read-only access (M-Q7). Both may launch programs as themselves,
+use CD audio and request safe removal after the existing blockers/flush checks. No media grants
 administrator status, trusted driver loading or autorun execution as SYSTEM.
 Formatting, conversion, defrag, volume-wide scanning and raw floppy snapshots
 remain administrator operations. A removable drive holding a managed system
@@ -457,12 +489,19 @@ an anonymous writable HKCU. HKCC/Hardware inventory is read-only to users.
 Reads/writes/deletes/enumeration/import/export and key-handle reuse must all
 apply the same key rights; opening KEY_READ cannot later authorize SET_VALUE.
 
-The proposed minimal split keeps per-session w32srv under the user's
+The binding K-Q5 split keeps per-session w32srv under the user's
 credential for USER/clipboard/window work and uses a narrow SYSTEM registry
 broker for machine hives. The broker authorizes logical HKLM/HKU operations
-as the retained client and owns the raw backing files exclusively. Native
-libreg private roots move to the profile; machine roots remain protected.
-Q5 requires agreement on this service split before implementation. Running
+as the retained client and owns raw machine and authoritative personal hive
+files exclusively. Per-profile hive storage is SYSTEM-only at
+PROFILE(uid)/Settings/Registry, protected against ancestor rename/removal.
+Personal native libreg preference files outside that subtree may be
+owner-writable; they contain no authority or machine settings. Direct client
+links, or a registered w32srv with the identical session credential, establish
+the broker subject; forwarded uid/pid bytes cannot establish authority.
+Per-process-sensitive operations require a direct retained client link.
+Native machine-registry mutations use this broker; machine backing files are
+service-only. The main contract section 6.2 specifies the same split. Running
 the entire desktop/Win32 shell as SYSTEM to make old files writable is forbidden.
 
 ## Devices, administration and authority migration
@@ -486,10 +525,10 @@ lease, quiescence, firmware and recovery checks still decide whether it is safe.
 | Display/input grants, channel FOCUS/UNFOCUS/INPUT hints | Own-session designated compositor/input owner; SYSTEM supplies and revokes the exclusive grants. Surface fd possession never gives input snooping. Secure logon/lock uses SYSTEM-owned display/input while user grants are revoked. |
 | w32 service/desktop/native-control launch roles | Own-session endpoint ownership registered by SYSTEM, plus peer/session checks. Native Control Panel access is no longer a privilege for that exact path; administrative RPCs test the requester. A client cannot register a replacement SYSTEM service. |
 | Delegated Win32 presentation, accelerated batch/fence, DOS fullscreen | Own-session compositor/VM/presentation holder with exact resource token/generation. No cross-session input, framebuffer, shared object or cursor access. |
-| /dev/ataN raw pread | Administrator; SYSTEM for managed security/boot/pagefile sectors. Proposed conservative rule: deny administrator raw reads of any managed system disk, allow non-system disk reads. Q4 settles the SYSTEM-only/administrator boundary without exposing verifiers through sectors. |
-| /dev/ataN pwrite, DISK_PARTITION_ACQUIRE | Administrator on non-system disks plus exclusive lease; SYSTEM Setup plus Setup mode for the destination boot disk. Never write mounted/pagefile/log disks. Check the actual caller at each raw I/O even for an inherited fd. |
+| /dev/ataN raw pread | K-Q4: refuse every user, including administrators, on the whole managed system disk until exact readable-sector classification exists. SYSTEM services perform admitted maintenance after an administrator check. Non-system disk raw reads require administrator and existing device checks. |
+| /dev/ataN pwrite, DISK_PARTITION_ACQUIRE | K-Q4: refuse user raw writes on the managed system disk; administrator on non-system disks plus exclusive lease; SYSTEM Setup plus Setup mode for the destination boot disk. Never write mounted/pagefile/log disks. Check the actual caller at each raw I/O even for an inherited fd. |
 | DISK_LEASE_ACQUIRE/PUBLISH/RECHECK/SET_PHASE | SYSTEM Setup-only transaction as today; check uid 0 in addition to Setup boot/lease ownership. DISK_LEASE_RELEASE/FLUSH require the actual authorized lease holder. |
-| Format/partition/convert/ScanDisk/defrag | Administrator, plus exclusive volume/device admission. Boot repair runs internally as SYSTEM. Read-only public geometry/status queries remain anyone; scans must not expose private filenames or bypass ACL-like policy. |
+| Format/partition/convert/ScanDisk/defrag | Administrator check, plus exclusive volume/device admission; on the system disk only the SYSTEM maintenance service executes the operation. Boot repair runs internally as SYSTEM. Read-only public geometry/status queries remain anyone; scans must not expose private filenames or bypass ACL-like policy. |
 | Driver installation/loading, hardware profile, BOOT.CFG, startup selection | Administrator requests supported changes; SYSTEM consumes protected boot plans and owns hardware bindings. No dynamic driver-loader syscall exists here; do not invent one. Unimplemented operations keep ENOSYS/EOPNOTSUPP. |
 | Shutdown/restart/standby/cancel standby, including FORCE actions | Authenticated active interactive session (Users or enabled Guest), through session owner/normal shutdown protocol; SYSTEM Setup/logon may also act. Direct privileged execution checks session ownership. FORCE retains explicit coordinator confirmation, stopped/DMA proof and bounded existing deadlines. |
 | Persistent machine power policy | Administrator; current-session display blanking/DPMS and user preference are own-session. Hardware status/events are anyone, without consuming another session's input. |
@@ -516,19 +555,77 @@ each other's address spaces; Win32 READ_MEMORY/WRITE_MEMORY/CONTEXT remain
 self/same-process as currently supported. No new cross-process debugger is
 introduced by this contract.
 
-## Proposed ABI additions (not implemented)
+## Frozen ABI for sec-k01 (not implemented)
 
-The lead must reserve the syscall/operation numbers jointly with the user
-contract (Q2). Names below are proposals, not occupied numbers. Preserve
-native ABI version 1 and every existing record prefix. Add a separately
-versioned CIUKI_SYS_SECURITY transport with copied version/size/op/reserved
-header, fixed u32 addresses, scoped pack(4), six-register convention and
-negative errno. No compiler enum, native pointer, uid_t, time_t or host long
-may appear in its wire records.
+K-Q2 delegates the freeze to this reconciliation. Reserve **CIUKI_SYS_SECURITY
+= 101**, following the highest native allocation, NET_INFO=100
+(abi.h:761–765). Do not fill F6's 92–95 gap. W32_DISPLAY=0x201 is a suboperation
+of call **96**, not a global call 101. Native ABI version 1, old syscall numbers,
+existing structure prefixes and call 70's 80-byte proc_record stay unchanged.
 
-Proposed ciuki_credential, size 64, alignment 4:
+Call convention: EAX=101, EBX=user address of ciuki_security_args,
+ECX=64, EDX=ESI=EDI=EBP=0. Return EAX=0 on success or negative Linux-i386 errno;
+results live in copied output fields. This family is available to admitted
+native and Win32 processes; guests cannot supply a host syscall subject.
+All wire integers are little-endian fixed-width values, scoped pack(4),
+alignment 4; addresses are u32 user virtual addresses, never native pointers.
 
-| Field (one declaration per line in the eventual header) | Offset | Bytes |
+### Constants and bounds
+
+Every identifier in this table is a literal public constant to be added by
+sec-k01, with an independent oracle expectation. Shorthand op names below
+refer to the exact CIUKI_SECURITY_ names here.
+
+| Constant | Frozen value / meaning |
+| --- | --- |
+| CIUKI_SYS_SECURITY | 101 |
+| CIUKI_SECURITY_VERSION | 1 (all three security records) |
+| CIUKI_UID_SYSTEM | 0 |
+| CIUKI_UID_ADMINISTRATOR | 500 |
+| CIUKI_UID_GUEST | 501 |
+| CIUKI_UID_FIRST_USER | 1000 |
+| CIUKI_UID_LAST_USER | 0xfffffffe |
+| CIUKI_UID_INVALID | 0xffffffff; never allocated |
+| CIUKI_GID_SYSTEM | 0 |
+| CIUKI_GID_ADMINISTRATORS | 544 |
+| CIUKI_GID_USERS | 545 |
+| CIUKI_GID_GUESTS | 546 |
+| CIUKI_GID_INVALID | 0xffffffff; never a membership |
+| CIUKI_SECURITY_GROUP_MAX | 8; no truncation |
+| CIUKI_SECURITY_PROFILE_PATH_MAX | 64 bytes, including NUL |
+| CIUKI_SECURITY_SESSION_MAX | 4 retained records, including constructing/closing |
+| CIUKI_CRED_INTERACTIVE | 0x00000001 |
+| CIUKI_CRED_SAFE_RECOVERY | 0x00000002; only uid 500 in kernel-observed Safe Mode |
+| CIUKI_SECURITY_QUERY_SELF | 1 |
+| CIUKI_SECURITY_QUERY_PROCESS | 2 |
+| CIUKI_SECURITY_QUERY_PEER | 3 |
+| CIUKI_SECURITY_SESSION_CREATE | 4 |
+| CIUKI_SECURITY_SPAWN_CREDENTIAL | 5 |
+| CIUKI_SECURITY_SESSION_END | 6 |
+| CIUKI_SECURITY_SESSION_QUERY | 7 |
+| CIUKI_SECURITY_END_BEGIN | 0x00000001 |
+| CIUKI_SECURITY_END_COLLECT | 0x00000002; mutually exclusive with BEGIN |
+| CIUKI_SECURITY_SESSION_ACTIVE | 1 |
+| CIUKI_SECURITY_SESSION_CLOSING | 2 |
+| CIUKI_SECURITY_SESSION_DEAD | 3 |
+
+Session 0 is SYSTEM boot/services only, never an interactive session. Allocate
+interactive session ids monotonically 1..0xffffffff per boot, without wrap;
+exhaustion EAGAIN. A free internal slot is not session id 0 and is not a public
+state. Retired slots may be reclaimed only after final references drain;
+SYSTEM can query any issued retired id as DEAD using the allocation high-water
+mark without an unbounded tombstone list. UID allocation is persistent, with
+0xffffffff reserved for libc's invalid-id convention; no uid is reused.
+
+### Records
+
+Each declaration below occupies one field per line in the eventual abi.h and
+SDK copy. These tables, including array extents, are the independent layout
+specification. No C enum, bitfield, host long or pointer is a wire field.
+
+ciuki_credential: size 64, alignment 4.
+
+| Declaration | Offset | Bytes |
 | --- | ---: | ---: |
 | uint32_t version | 0 | 4 |
 | uint32_t size | 4 | 4 |
@@ -540,78 +637,210 @@ Proposed ciuki_credential, size 64, alignment 4:
 | uint32_t flags | 56 | 4 |
 | uint32_t reserved | 60 | 4 |
 
-The internal record is immutable after construction; version/size are
-wire-only overhead if the kernel uses an internal shared representation.
-Proposed flags describe INTERACTIVE and SAFE_RECOVERY only; no writable
-ADMIN/SYSTEM flag. Unused group slots/reserved are zero; groups are sorted,
-unique and validated against the accepted account type.
+Groups include the primary gid, sorted ascending, unique, count 1..8 and zero
+unused slots. Accepted session templates are exactly administrator (uid 500 or
+ordinary uid, primary 545, groups [544,545]), Standard (ordinary uid, primary
+545, groups [545]), or Guest (uid 501, primary 546, groups [546]). Session id
+in a create template is zero and INTERACTIVE is required. SAFE_RECOVERY also
+requires uid 500 and actual Safe Mode; ordinary enabled uid 500 logon uses
+INTERACTIVE only. Reserved uid ranges, SYSTEM templates, unknown flags and
+arbitrary group combinations fail EINVAL. SYSTEM queries return uid/primary
+0, group_count=1, groups[0]=0, session=0, flags=0. Administrator membership is
+derived by the kernel; no caller-set ADMIN/SYSTEM bit exists.
 
-Proposed ciuki_security_args, size 64, alignment 4:
+ciuki_security_profile: size 112, alignment 4. This is a descriptor of an
+already committed owner binding, not permission to create/rebind one.
 
-| Field | Offset | Bytes |
+| Declaration | Offset | Bytes |
+| --- | ---: | ---: |
+| uint32_t version | 0 | 4 |
+| uint32_t size | 4 | 4 |
+| uint32_t uid | 8 | 4 |
+| uint32_t flags | 12 | 4 |
+| uint32_t volume_id_lo | 16 | 4 |
+| uint32_t volume_id_hi | 20 | 4 |
+| uint32_t owner_generation_lo | 24 | 4 |
+| uint32_t owner_generation_hi | 28 | 4 |
+| uint32_t owner_key_lo | 32 | 4 |
+| uint32_t owner_key_hi | 36 | 4 |
+| uint32_t path_bytes | 40 | 4 |
+| uint32_t reserved | 44 | 4 |
+| char path[64] | 48 | 64 |
+
+flags/reserved=0; uid matches the template; volume_id identifies the mounted
+system volume, not a caller-selected drive letter. Each lo/hi pair encodes one
+opaque u64; owner key/generation are nonzero, nonreused committed values.
+path_bytes is 1..64 including exactly one terminal NUL, zero padding follows.
+The path is the canonical ASCII numeric profile path, including an explicitly
+mapped retained G32 numeric root, matching the resolved owner entry exactly.
+No relative path, alias, embedded NUL, dot component, arbitrary UTF-8 name or
+client-supplied HOME can select a different root. Pending or retired ownership
+fails EACCES; generation mismatch EAGAIN; missing/corrupt store EIO. No owner
+store I/O occurs on a warm query/read/write path.
+
+ciuki_security_args: size 64, alignment 4.
+
+| Declaration | Offset | Bytes |
 | --- | ---: | ---: |
 | uint32_t version | 0 | 4 |
 | uint32_t size | 4 | 4 |
 | uint32_t operation | 8 | 4 |
-| uint32_t reserved0 | 12 | 4 |
+| uint32_t flags | 12 | 4 |
 | uint32_t credential_address | 16 | 4 |
 | uint32_t spawn_address | 20 | 4 |
 | uint32_t session_id | 24 | 4 |
 | uint32_t target_pid | 28 | 4 |
-| uint32_t profile_address | 32 | 4 |
-| uint32_t profile_bytes | 36 | 4 |
+| int32_t endpoint_fd | 32 | 4 |
+| uint32_t profile_address | 36 | 4 |
 | uint32_t output_address | 40 | 4 |
 | uint32_t output_bytes | 44 | 4 |
-| uint32_t flags | 48 | 4 |
-| uint32_t result | 52 | 4 |
-| uint32_t reserved1[2] | 56 | 8 |
+| uint32_t result | 48 | 4 |
+| uint32_t state | 52 | 4 |
+| uint32_t reserved[2] | 56 | 8 |
 
-| Proposed operation | Authority and copied inputs/outputs |
-| --- | --- |
-| QUERY_SELF | Anyone; output_address/output_bytes exactly one credential; all other input/output fields zero. |
-| QUERY_PROCESS | Own-session/same uid or administrator for nonprotected targets; SYSTEM for all. target_pid, output credential. |
-| QUERY_PEER | Only the owning endpoint server; target_pid is instead forbidden and flags identifies the reserved endpoint-selector form to be frozen in Q2. Return the kernel-retained peer credential, never request-provided identity. Prefer a dedicated fd field in the final record if both contract parts need it. |
-| SESSION_CREATE | SYSTEM account service only; credential_address selects a copied uid/groups template with session_id zero, profile_address/bytes selects a bounded root descriptor. Kernel verifies registered owner metadata, allocates the session id and returns it in result. |
-| SPAWN_CREDENTIAL | SYSTEM only; session_id selects the live immutable template, spawn_address names a copied existing spawn record; other credential inputs zero. Kernel sets the provisional child's credential and returns the new pid in result. |
-| SESSION_END | SYSTEM only, selected session_id; flags=BEGIN or COLLECT as jointly reserved. BEGIN prevents new work; COLLECT reports bounded pending teardown instead of waiting indefinitely. |
-| SESSION_QUERY | Own-session or SYSTEM; session_id, result=ACTIVE/CLOSING/DEAD. Administrator may query another session's nonsecret state but cannot impersonate it. |
+### Operations, copying and errors
 
-QUERY_PEER's exact field shape and the profile descriptor require the joint
-freeze; do not implement the placeholder flags encoding above. A native
-credential query and read-only Win32 token query must expose the same value.
-Do not add new identity fields to the existing 80-byte proc_record: either
-use QUERY_PROCESS or a new versioned enumeration. Call 70's old prefix stays
-binary compatible. No external Windows SID mapping may be guessed in libc.
+Input version=1, size=64. Fields not expressly listed as inputs below are zero,
+including result/state and endpoint_fd on other operations. Nested record
+version/size must be exactly 1/64 or 1/112 as appropriate. Unknown versions
+return EOPNOTSUPP, unknown operations/flags and wrong sizes EINVAL. Before side
+effects copy/validate all input records and nested spawn strings/fd lists,
+check overflow and pin all output spans writable. Output credential buffers
+must be nonzero, exactly 64 bytes and four-byte aligned. Misalignment EINVAL;
+inaccessible/wrapping spans EFAULT. Reject overlapping record/output/nested
+input spans with EINVAL, rather than relying on copy ordering. On failure,
+user outputs are unchanged and no child/session is published. Pinning failure
+cannot follow a successful session mutation. On success unused outputs and
+all padding are zero, input selector fields are preserved.
 
-Authorization failures are EPERM for privileged operations, EACCES for
-object/path access, EBADF for invalid fd, ESRCH for stale permitted process
-lookups, EINVAL for malformed/unknown flags, EOPNOTSUPP for unsupported
-version, EFAULT for inaccessible spans, EAGAIN for transient generation/
-allocation-limit contention, EBUSY for a closing/moving/live mapping barrier,
-ENOMEM for allocation failure, ENOSPC for persistent bounded storage.
-Unauthorized target queries must not return private data before failing.
-Native existing fd I/O rows need their error sets extended to permit EACCES
-on revoked rights; do not translate a security denial into "read-only media".
-Win32 maps object denials to ERROR_ACCESS_DENIED (5), privilege denials to
-ERROR_PRIVILEGE_NOT_HELD (1314) when that API requires it, and transport
-denials to STATUS_ACCESS_DENIED. DOS uses access denied 5.
+| Operation | Nonzero/meaningful inputs | Authority and output |
+| --- | --- | --- |
+| QUERY_SELF | output_address, output_bytes=64 | Any admitted process; complete self credential in output. |
+| QUERY_PROCESS | target_pid (1..INT32_MAX), output_address, output_bytes=64 | Same uid and session for ordinary targets; administrator may query other nonprotected targets; SYSTEM all. Output is the immutable credential only. Protected SYSTEM targets require SYSTEM; public process-list summaries are separate. |
+| QUERY_PEER | endpoint_fd (0..127), output_address, output_bytes=64 | Caller must own the live receiving channel endpoint/accepted service link. Snapshot the kernel-retained peer credential and endpoint generation, not a request uid or PID lookup. An ordinary client may query the public credential of its connected SYSTEM broker; this grants no service role. No token for acting as that peer is returned. |
+| SESSION_CREATE | credential_address -> 64-byte template, profile_address -> 112-byte descriptor | SYSTEM only; one console session, fully checked committed owner binding. Prepare privately, then publish ACTIVE with fresh id in result. No process is started implicitly; UI remains at the trusted gate until desktop ready. |
+| SPAWN_CREDENTIAL | session_id, spawn_address -> existing 32-byte ciuki_spawn_args | SYSTEM only; live ACTIVE interactive session. Use its immutable credential; no alternate template/profile fields. Publish one native child, result=pid; standard native spawn path/image/ARG_MAX checks apply. |
+| SESSION_END | session_id, flags exactly END_BEGIN or END_COLLECT | SYSTEM only. BEGIN idempotently changes ACTIVE to CLOSING and schedules bounded teardown; COLLECT polls cleanup without blocking on disk/client. state=CLOSING or DEAD, result=0; repeat on issued retired id returns DEAD. Never permit session 0. |
+| SESSION_QUERY | session_id | Same current session, or administrator for retained nonsecret session state, or SYSTEM for all issued ids. state=ACTIVE/CLOSING/DEAD, result=0. Unknown id ESRCH; retired ids are queryable only by SYSTEM after their last record is freed. |
 
-All new records and every public constant, including uid/group/flag/op/
-session-state numbers, need independent literal oracle expectations in
-tests/host/abi_layout_test.c. Record size, alignment, array length and every
-field offset must be covered; abi.h and every public SDK header declare one
-struct field per line so the target layout extractor sees them. Synchronize
-kernel/SDK copies and the pointer-free i686 dump. Run the ABI section of
-scripts/test/host_kernel_tests.sh serially under nice -n 19 using the
-repository's existing sanitizer settings, then python3 scripts/gen_api_reference.py.
-No ABI files changed in this design task, so these commands are not run here.
-No code was vendored; future vendoring that includes a .c file also requires
-an nm duplicate-external-symbol check against every linked library.
+A second ACTIVE console session or a still-unfenced CLOSING one returns EBUSY
+on CREATE. Four retained slots include unpublished construction and draining
+records; exhaustion returns EAGAIN. A failed spawn leaves the session admitted
+but launches nothing; the account service must end it before returning to
+LOGON. GROUP/uid fields are trusted only on the SYSTEM-only CREATE route,
+never on public spawn/exec/Win32 records. No operation changes a live token.
+
+SPAWN_CREDENTIAL copies the current ciuki_spawn_args (size=32, reserved=0,
+flags limited to CIUKI_SPAWN_NEW_GROUP) but requires fd_count=0/fd_list=0:
+all caller fds including 0–2 are dropped, cwd becomes that profile's Documents,
+envp is an explicit copied allowlist, never an inherited SYSTEM environment.
+Accept only USER/LOGNAME (the service-supplied validated 1-31-byte account
+label), HOME (profile/Documents), USERPROFILE/CIUKI_PROFILE (profile root),
+TEMP/TMP/TMPDIR (profile/Local Settings/Temp), and PATH (fixed /Programs:/System).
+Reject duplicates, unknown keys or mismatching path values with EINVAL; add
+missing path values from the committed profile. USER/LOGNAME are labels only,
+not authority. Never copy SYSTEM environment/stdio by default.
+Trusted service endpoints and display/input leases are installed only by the
+internal supervisor's explicit session-role path, not by this public spawn
+record. Public native/Win32 child creation thereafter inherits the credential
+and allowed same-session fds normally. Account-store/raw-disk/privileged
+service descriptors never enter an ordinary child.
+
+Endpoint identity is retained at service CONNECT/ACCEPT and channel creation;
+cross-credential handoff is only an explicit SYSTEM-installed broker channel.
+Dup/inheritance do not change its peer, and fd close/reuse cannot retarget a
+retained request. Closed/revoked links or dead peer sessions return ESRCH, wrong fd/kind
+EBADF; querying another process's fd is impossible. Ordinary same-session
+links reject a sender whose credential differs from the bound peer. Services
+must hold an actual endpoint/subject reference across asynchronous work;
+QUERY_PEER's copied answer alone is not a revocation-proof authorization lease.
+Sec-k01 provides retained-subject primitives; later brokers use them.
+
+Privilege-family denial is EPERM before target-dependent side effects;
+object/profile/target-scope denial EACCES, absent permitted pid/session ESRCH,
+invalid fd EBADF, malformed record/flags EINVAL, unsupported version
+EOPNOTSUPP, invalid span EFAULT, transient generation/slot/id exhaustion
+EAGAIN, active/closing session or mapping barrier EBUSY, allocation ENOMEM,
+persistent owner capacity ENOSPC, corrupt/unavailable committed metadata EIO.
+No silent success, partial record output, uid truncation or new panic path.
+All returned values use the existing errno constants, not a private numbering.
+Existing file/worker APIs must additionally permit EACCES after revocation;
+EROFS continues to mean actual read-only media. Win32 object denial maps to
+ERROR_ACCESS_DENIED (5), privilege-required APIs to ERROR_PRIVILEGE_NOT_HELD
+(1314), NT transport to STATUS_ACCESS_DENIED; DOS denial is error 5.
+
+### Read-only token/SID facade and privilege view
+
+Sec-k01 implements native credential queries, not new W32 token opcodes.
+Sec-k06 supplies kernel token-object handles and sec-user-05 supplies the SDK
+facade using this same credential/query authorization. Query tokens are
+noninheritable, closeable, session-bound handles, never transferable authority
+or a credential-setter input. The handle retains its immutable subject and
+revocation generation; cross-user/session duplication is refused. A live
+process exiting invalidates new process queries; a retained query token remains
+readable only while its owning session is live, then is revoked at teardown.
+
+Use local account SID S-1-5-21-A-B-C-uid, SYSTEM S-1-5-18 and built-in groups
+S-1-5-32-544/545/546. SYSTEM's native group 0 has no fabricated built-in group
+SID: TokenPrimaryGroup maps to S-1-5-18. A/B/C come from protected per-install
+entropy-backed first-boot state (M-Q6). No network lookup, impersonation,
+assignment, ACL editing, SeDebug/SeTcb or automatic elevation is added.
+
+TokenUser and TokenOwner are the account SID; TokenGroups contains the actual
+non-SYSTEM membership with attributes SE_GROUP_MANDATORY(1) |
+SE_GROUP_ENABLED_BY_DEFAULT(2) | SE_GROUP_ENABLED(4) = 7. For SYSTEM the group
+view contains S-1-5-18 with those attributes. TokenPrimaryGroup is Users/Guests
+as above; TokenType=TokenPrimary(1); TokenSessionId is the kernel session.
+GetTokenInformation supports only these classes and TokenPrivileges, following
+the existing 32-bit Windows SDK layouts and required-buffer-size semantics.
+No Windows pointer-bearing TOKEN_* record crosses SYS_SECURITY: the SDK
+builds caller-local SID/pointer layouts from the retained kernel query handle.
+OpenProcessToken accepts TOKEN_QUERY only; changing rights are denied.
+CheckTokenMembership(NULL,...) checks the authenticated current user/groups;
+an explicit primary-token handle fails ERROR_BAD_TOKEN_TYPE(1349), as required
+by the Microsoft API. DuplicateToken/impersonation remain outside this step.
+
+Freeze the privilege names below as CiukiOS's read-only operation view. LUIDs
+are local opaque pairs (LowPart listed, HighPart=0), not a claim of Windows
+internal LUID numbers. LookupPrivilegeValue resolves only these names for the
+local machine; unknown name ERROR_NO_SUCH_PRIVILEGE(1313), unsupported remote
+lookup ERROR_NOT_SUPPORTED(50). TokenPrivileges lists granted entries only,
+attributes SE_PRIVILEGE_ENABLED_BY_DEFAULT(1) | SE_PRIVILEGE_ENABLED(2) = 3.
+
+| Name / local LUID LowPart | SYSTEM | Administrator | Standard / Guest |
+| --- | --- | --- | --- |
+| SeShutdownPrivilege / 1 | Granted | Granted in an interactive session | Granted in an interactive session |
+| SeSystemtimePrivilege / 2 | Granted | Granted | Absent |
+| SeLoadDriverPrivilege / 3 | Granted | Granted to request supported managed driver changes | Absent |
+
+Privilege queries never skip operation scope, exclusive leases, unsupported
+loader checks or SYSTEM-only sealed-file maintenance. Local shutdown still
+requires the active session/coordinator; driver privilege enables an approved
+management request, never arbitrary kernel code or direct ports. There is no
+separate SeTimeZonePrivilege in this XP-inspired subset. AdjustTokenPrivileges,
+SetTokenInformation, LogonUser, CreateProcessAsUser and thread-token assignment
+fail explicitly using existing typed refusal conventions. Authoritative
+checks always occur in the kernel/broker, not in client-built SID memory.
+
+### Implementation obligations
+
+Add every new record and public constant, including syscall/version/uid/gid,
+array bounds, credential/end flags, operations and session states, to
+`tests/host/abi_layout_test.c` with independent literal size/alignment/offset/
+array-length/value expectations. Keep one field per line in abi.h and public
+SDK copies; synchronize kernel/SDK layout extraction and the i686 JSON oracle.
+Run the ABI section of `scripts/test/host_kernel_tests.sh` serially under
+`nice -n 19`, preserving its existing sanitizer policy, then
+`python3 scripts/gen_api_reference.py`. Extend public Win32 record/constant
+oracles when sec-k06/sec-user-05 publish token headers. No such command runs in
+this documentation-only task. Future vendoring that includes a .c file also
+requires an nm duplicate-external-symbol check against linked libraries.
 
 ## Bounded cost, errors and authentication storage
 
-Proposed initial limits are at most 32 static policy prefixes, 32 registered
-profile roots, 32 creator-owned root data directories, eight groups and four
+Fixed initial limits are at most 32 static policy prefixes, 32 registered
+profile roots on the system volume, 256 creator-owned root entries per volume,
+eight groups and four
 session records including closing/provisional records. These are reviewable
 metadata bounds, not a change to process/VM memory caps. At 64 processes,
 one inline 64-byte public-shaped credential would cost at most 4096 bytes;
@@ -622,7 +851,7 @@ Permission checks on read/write/fault/writeback are O(1): subject/session
 state, granted operation mask, policy generation, mount/media generation
 and node label. Prefix selection is bounded by path components and at most
 32 static rules at initial resolution. Ownership is inherited from registered
-root anchors (at most 64 dynamic owner records), without scanning the owner
+root anchors (32 profiles plus at most 256 creator records per volume), without scanning the owner
 database on each open. Permission checks perform no PBKDF2, registry parsing,
 disk I/O or whole-profile scan. Existing lookups already read directory
 entries; resolving an alias adds no independent security-name scan.
@@ -653,15 +882,20 @@ registry exports, crash-report records or a token query.
 PBKDF2 runs on one bounded service worker with a bounded request queue.
 Cancelled/unknown-user/disabled-account attempts do not bypass scheduling
 bounds or leak verifier records. Rate-limit attempts without holding global
-locks during derivation. The proposed default account lockout threshold is
+locks during derivation. The approved account lockout threshold is
 zero: failed guesses never create an indefinite lockout or disable the
 recovery account. A delayed retry/backoff is not a persisted account lock.
-Exact delay/queue/user-limit constants and ready-image recovery-password
-provisioning remain joint lead decisions (Q1/Q6/Q7).
+M-Q5/K-Q6 fix a 1000 ms monotonic retry interval after failure, no persistent
+lockout, one active KDF and one pending trusted-gate request; excess work
+returns EAGAIN without growing a queue. M-Q2/K-Q7 leave ready-image uid 500
+unset and unauthenticatable until an administrator sets an 8-63-byte password.
+Custom accounts/Guest also require 8-63 printable ASCII bytes; only ready-image
+CiukiUser may be enabled with an empty password. All lost/corrupt administrator
+verifiers require explicit Setup CD repair (main contract section 5.3).
 
-Target acceptance should measure derivation on the PIII baseline with the
-production SHA-256 implementation and record median/max latency and UI
-responsiveness under load. Propose a 250–1000 ms authentication-work target,
+Target acceptance measures derivation on the PIII baseline with the
+production SHA-256 implementation and records median/max latency and UI
+responsiveness under load. The common target is <=1000 ms per verification,
 not a measured result. Do not tune down to that range without lead review;
 do not perform KDFs while holding the VFS, session or input/display locks.
 
@@ -792,8 +1026,9 @@ not a statement that credentials already exist.
 | 99 CIUKI_SYS_RECOVERY | STATUS/REPORT public; recovery_capability for SET/ENABLE/SCANDISK. | anyone status/report; administrator configuration/scan; SYSTEM boot recovery | src/kernel/include/ciuki/abi.h:764; src/kernel/proc/syscalls_recovery.c:20; docs/design/execution-abi.md:2836 |
 | 100 CIUKI_SYS_NET_INFO | Public config/stats/routes and all-socket snapshot. | anyone config/stats/routes; own-session own sockets; administrator all non-SYSTEM sockets | src/kernel/include/ciuki/abi.h:765; src/kernel/net/lwip/syscalls.c:109; src/kernel/include/ciuki/abi.h:3789 |
 
-Numbers 92–95 are unassigned; 101 and later are not allocated by this
-contract. Do not repurpose them without the joint lead reservation.
+Numbers 92–95 remain unassigned in the F6 reservation. This contract reserves
+101 for SYS_SECURITY as specified above; later calls remain unallocated. The
+inventory above describes the existing header; call 101 is future sec-k01 work.
 
 ### Native multiplexed actions
 
@@ -839,7 +1074,7 @@ checks, including accesses through poll, mmap/sections, dup and inheritance.
 | INPUT_HID_CALIBRATE | Input owner, persistent joystick helper; input_abi.h:8; proc/grants.c:376–379 | own-session for current user's calibration; administrator if modifying a machine default. |
 | INPUT_JOY_CONTROL: CIUKI_JOY_QUERY, CIUKI_JOY_GET_ROUTE, CIUKI_JOY_NEXT, CIUKI_JOY_SAVE_STATUS, CIUKI_JOY_GET_GAME | Input owner; abi.h:24–35; proc/grants.c:349–379 | own-session input owner, with only that user's route/game preference. |
 | INPUT_JOY_CONTROL: CIUKI_JOY_CALIBRATE, CIUKI_JOY_ROUTE, CIUKI_JOY_CONFIGURE, CIUKI_JOY_SAVE_GAME | Input owner, hardware tuple/settings; abi.h:26–31; proc/grants.c:349 | own-session transient/user preference; administrator permanent machine configuration. |
-| INPUT_KEYBOARD_SET | Declared input-owner command, handled by proc/grants.c:353; abi.h:2739. The inspected devctl forwarding condition at proc/syscalls_file.c:385 omits this constant. | own-session keyboard policy; audit/fix the existing routing in the later directive, without claiming it works here. |
+| INPUT_KEYBOARD_SET | Declared input-owner command, handled by proc/grants.c:353; abi.h:2739. The inspected devctl forwarding condition at proc/syscalls_file.c:385 omits this constant. | own-session keyboard policy; audit/fix the routing in sec-k04 (K-Q8), without claiming it works here. |
 | COM_GET_LINE, COM_GET_STATUS, COM_GET_OWNER | Correct COM fd/controller generation; abi.h:73, :75, :77; drivers/com.c:578–588 | own-session port owner, or anyone for a separate nonsecret inventory query. |
 | COM_SET_LINE, COM_SET_MODEM | Writable COM owner; abi.h:74, :76; drivers/com.c:588 | own-session bounded line/modem control; never another session/VM/SYSTEM logger's port. |
 | COM_SET_MOUSE, including OFF/Microsoft/Logitech/Systems/Wheel protocol | Writable owner; abi.h:78–88; drivers/com.c:588–592 | administrator to change machine input binding; SYSTEM serial-mouse provider performs actual binding. |
@@ -848,11 +1083,11 @@ checks, including accesses through poll, mmap/sections, dup and inheritance.
 | NET_GET_STATE, NET_QUERY_DRIVER_PACK | Public /dev/net query; abi.h:913–914; execution-abi.md:2725–2733 | anyone; pack inspection cannot activate/install drivers. |
 | CIUKI_SETUP_FAT_QUERY, CIUKI_SETUP_FAT_ATTRIB | Setup mode plus noninherited Setup flag; abi.h:1028–1029; proc/setup_file.c:24–26 | SYSTEM Setup only; even read metadata retains the Setup transaction boundary. |
 | CIUKI_SETUP_CLOCK_SET | Setup mode plus Setup flag; abi.h:1030; proc/setup_clock.c:10–12 | SYSTEM Setup only; no alternate public clock setter. |
-| CIUKI_SETUP_NET_QUERY | Declared at abi.h:1031; no special handler in inspected proc/syscalls_file.c:369–421 | Keep unsupported routing unsupported until audited; if implemented, SYSTEM Setup query only. |
+| CIUKI_SETUP_NET_QUERY | Declared at abi.h:1031; no special handler in inspected proc/syscalls_file.c:369–421 | Sec-k04 must audit the route (K-Q8); reject it until fixed, then SYSTEM Setup query only. |
 | DISPLAY_GET_MONITOR, DISPLAY_GET_REFRESH | Valid display grant; abi.h:2326–2327; proc/syscalls_file.c:370–384 | own-session grant form; public non-fd inventory can use call 74. |
 | MEDIA_GET_STATE, MEDIA_GET_VOLUME, MEDIA_GET_SPACE, MEDIA_GET_BLOCKERS | /dev/media; abi.h:1125–1149, :1189; drivers/media_dev.c:137–266 | anyone nonsecret inventory; blocker rows disclose process name/pid only, never private file paths. |
 | MEDIA_SAFE_REMOVE, MEDIA_FLOPPY_LOAD | /dev/media, media/generation/blocker checks; abi.h:1126, :1185; drivers/media_dev.c:230 | own-session local media use; refuse busy/protected system media and retain flush/generation checks. |
-| MEDIA_GET_LABEL, MEDIA_SET_LABEL | /dev/media, FAT writable-volume checks; abi.h:1209–1210; drivers/media_dev.c:146 | anyone GET; own-session SET on unmanaged removable, administrator SET fixed data volume; SYSTEM sealed/system volume identity. |
+| MEDIA_GET_LABEL, MEDIA_SET_LABEL | /dev/media, FAT writable-volume checks; abi.h:1209–1210; drivers/media_dev.c:146 | anyone GET; own-session Users (not Guest) SET on unmanaged removable, administrator SET fixed data volume; SYSTEM sealed/system volume identity. |
 | MEDIA_GET_FORMAT, MEDIA_GET_CONVERT | /dev/media queries; abi.h:1229, :1301; drivers/media_dev.c:147–176 | anyone geometry/capability query. |
 | MEDIA_FORMAT, QUICK/full/LOW_LEVEL choices; MEDIA_CONVERT | /dev/media plus existing exclusive/busy/fixed restrictions; abi.h:1230–1236, :1302; drivers/media_dev.c:147–176 | administrator, including removable format; SYSTEM privileged boot-volume maintenance. Authorization does not enable unsupported fixed-media formatting. |
 | MEDIA_FLOPPY_READ, MEDIA_FLOPPY_WRITE | Exclusive raw diskette snapshot via /dev/media; abi.h:1238–1239; drivers/media_dev.c:143 | administrator, correct medium generation; no host raw disk delegation to DOS. |
@@ -999,64 +1234,47 @@ actions, not user-authorizable APIs (execution-abi.md:538–565, :1207–1274,
 :2785–2813). A diagnostic/test selector cannot be set from an ordinary process
 to obtain those internal rights.
 
-## Host test plan and implementation directives
+## Host acceptance and implementation sequence
 
-No host test is needed to establish this design: the current authorization
-gaps above are visible in the inspected production branches. The tests in
-this section are future acceptance obligations, not claimed results.
-The lead owns cross-review and writes the final implementation directives.
-Run every host suite serially with nice -n 19, preserve repository ASan/UBSan
-and leak-detection settings, and retain exact commands/results in each report.
-No QEMU, systemd scope or image build is part of these implementer directives.
+The [main contract Implementation plan](user-security-contract.md#implementation-plan)
+is the single ordered dependency/parallelism plan for sec-k01..k08 and
+sec-user-01..06. It assigns files/areas, exact future host commands, acceptance
+cases and lead runtime gates. Do not use the two superseded draft sequences.
+New security harnesses must exercise production enforcement paths, including
+all selectors in the inventory, with spy backends and fault-injected namespace,
+endpoint, ownership, raw-I/O and teardown races. Test both errno and unchanged
+external state on denial; preserve partial counts only for admitted issued I/O.
+No new panic path, test-only privilege fallback or sanitizer relaxation is
+permitted. Run suites serially at nice 19. No host suite runs for this design.
 
-| Proposed directive / dependencies | Host-testable implementation scope | Acceptance criteria and meaningful adversarial cases |
-| --- | --- | --- |
-| sec-k01: credential/process ABI; joint Q2 freeze | Immutable credential/session primitives, SYS_SECURITY query/create/spawn/end, libc queries, independent ABI oracle, kernel/SDK copies | Production proc_prepare/spawn/thread/Win32 spawn/exec replacement inherit exact uid/groups/session; adoption and arbitrary path/env/authority fd cannot elevate. SYSTEM alternate spawn publishes only after full validation; fault every allocation/copy/descriptor step. Test uid/group/session overflow, zeroed reserved fields, group sorting, group-set overflow, stale pid/peer and protected-token query denial. All size/alignment/offset/constant oracle rows pass i686/native adapters; generate API reference. |
-| sec-k02: managed volume policy and owner store; k01, Q1/Q3 | Shared explicit-subject VFS API, mount binding, bounded policy trie, owner provisioning/recovery, denied-by-default missing subjects | Same policy result through native, DOS-style VFS and Win32 paths. Test every rule with SYSTEM/admin/standard/other-user/Guest, LFN+8.3 alias, ASCII/non-ASCII case, /mnt aliases, relative cwd, dot/dotdot, prefix sibling, Win32 trailing dots/spaces, malformed UTF-8/LFN, missing policy/owner map and injected allocation/I/O failure. Corrupt/new/backup/journal combinations never expose a profile or recycle a uid. |
-| sec-k03: all file/VM/mapping enforcement; k02 | Open/create/read/write/pread/pwrite/stat/getdents/exec/snapshot/mkdir/rmdir/rename/unlink/truncate/attrs/times/sections, shared caching and workers | A direct lower-level production API cannot bypass checks. Use a spy backend to prove denied calls issue zero writes/reads of private data. Race namespace relabel/move, replacement, slot reuse, policy generation, retained fds/views, deferred delete, queued writeback and unmap; same-root rename succeeds, cross-root unauthorized rename is atomic refusal, unrevokeable map returns EBUSY. Cached executable hit still denies a different user. Retained buffers/charges are released on every fault. |
-| sec-k04: administration/devices; k01/k02, Q4 | Remove path booleans as privilege, credential checks for every inventory device action, raw disk reads/writes/partition lease, media/recovery/network/time/power/display | Table-driven coverage includes every action above and unknown action/version. Standard user's exact /Programs/control, terminal or setup never grants admin rights; env/--authority-fd spoofing fails. Raw protected sectors cannot reveal verifiers/pagefile, nonboot partition acquisition requires admin, inherited raw fd rechecks caller, writes still require quiescent exclusive lease. Own-session media/audio/display/input work; other-session takeover is refused. Probe actual production dispatch, including keyboard and Setup-net declaration gaps. |
-| sec-k05: DOS/native-save boundary; k03/k04 | VM credential attribution, every file-hook/redirector/FCB/LFN/EXEC path, virtual raw disks, per-user COW/save/print output, clipboard | Run production VM host harness with forged PSP/DFV2/registers/drive/LBA and raw INT13/25/26/block-IOCTL cases; no physical-device callback reachable. Denied bound-drive request returns DOS error 5 without local-FAT fallback. Two users running the same title get separate saves; reset/export targets only caller and destination policy; machine uninstall admin-only. No memory-cap change or NTVDM substitution. |
-| sec-k06: Win32/registry broker; k01/k03, Q5 | Kernel token queries, session object/process/window namespaces, authenticated w32srv subjects, HKCU/HKU rebinding and machine-hive broker, installer queues | Actual production Win32 dispatcher and service backend tests, not only facade mocks: standard/Guest cannot mutate HKLM via key handles, raw hive files, imports, INI/shortcut/RunOnce helpers or forged uid fields. HKCU/private roots cannot address another uid. Cross-session named object, APC, message/reply, context, process handle/terminate, dup, snapshot/module paths, crash mailbox and pixels are denied. Admin machine installer succeeds; standard per-profile install succeeds or reports a real unsupported engine, never elevation. Existing self-memory restrictions stay in force. |
-| sec-k07: logon/session integration and recovery; k01–k06, joint user contract | SYSTEM account service/bootstrap/secure UI, revocation/drain, logoff, saver lock boundary, Setup/custom-user and ready-image account manifests | End-to-end host state machine uses production process/VFS/service/VM teardown: save veto leaves same session; confirmed logoff blocks spawn/queued requests and ends orphans/VMs, drains issued I/O, destroys handles/maps/clipboard/fault replies and prevents stale-worker access to the next session. Failure to fence blocks admission without panic. SYSTEM service crash releases lock/recoverable journal; password/entropy/OOM/disk faults never create a default anonymous session. Safe Mode still needs uid 500's valid password; disabled Guest cannot log on. |
-| sec-k08: coverage/performance close; all above | Inventory-to-dispatch audit, bounded warm-path counters/benchmarks and ledger regressions | An independent source-derived list of syscall/subaction selectors maps to one policy test each; adding a selector without a policy row/test fails the audit. Denied access cannot be bypassed via alternate native/DOS/Win32/private-worker route. Warm fd operations perform zero new storage lookups and bounded constant-time checks; document metadata/high-water deltas at process/handle/root limits. Target KDF/PIII latency and physical/runtime qualification are explicitly left to the lead. |
+## Decisions
 
-Existing host suites supply reusable production seams: the ABI section of
-scripts/test/host_kernel_tests.sh; tests/host/proc/disk_test.c for disk fd
-dispatch; tests/host/net/settings_test.c and settings_run.py for network
-control; tests/host/win32/registry_test.c, registry_facades_test.c and
-test_registry.py for registry services; tests/host/desktop/users_test.c and
-test_users.py for G32 formats; tests/host/fs/test_registry_commit.c for
-transaction recovery. They are regression inputs, not proof that the future
-security rules are already covered. The lead must name the exact new harness
-commands in each directive; inventing executable test names here would not
-constitute verification.
+Binding source: [sec-lead-decisions.md](../directives/sec-lead-decisions.md).
+M-Qn means its sec-model Qn answer; K-Qn means its sec-kernel K-Qn answer.
+These close the former open-question tables in both drafts. Interface details
+are frozen in the kernel half; account/owner transactions, service storage and
+consumer behavior are coordinated in the main half.
 
-Acceptance must distinguish authorization failure from I/O failure: seed
-single-error cases for EACCES/EPERM/EBADF/ESRCH and preserve positive partial
-counts after issued I/O. Exercise both returned errno and unchanged external
-state. Fault injection must cover credential/endpoint release, root owner
-publication, disk fencing, pending logoff, profile recovery and the last
-descriptor/view reference. Sanitizer/ledger checks must prove no retained
-secret buffer, fd, pin, process, mapped page or VM survives successful teardown.
+| Decision id | Applied decision / location |
+| --- | --- |
+| M-Q1 | Configured uid 500 may authenticate with its password in Safe Mode while disabled normally; visibility alone is insufficient. Both account tables and recovery flows use this exception. |
+| M-Q2 | Ready images leave 500 unset and unable to authenticate until an administrator sets its nonempty password in User Accounts; no distributed recovery password. |
+| M-Q3 | One credential/peer ABI, SYSTEM gid/group 0, retained sender identity, active-account EBUSY, coordinated owner/account commit (main section 3.5), service-only authoritative hive files, trusted physical Ctrl+Alt+Delete and session drain. Privilege queries are the frozen read-only view. |
+| M-Q4 | Explicit restartable G32 enrollment chooses first administrator; other imported users are Standard with fresh nonreused uids; ordinary boot stops until committed. |
+| M-Q5 | 8-63 printable ASCII bytes for custom users/500/Guest; sole enabled blank exception ready-image CiukiUser. Missing unattended secrets fail before writes; secret transport deferred. Historical NIST rationale is identified without a current-compliance claim. |
+| M-Q6 | Per-install machine SID from entropy before account publication on first boot, protected, durable and idempotent. Ready clones do not ship one published machine identity. |
+| M-Q7 | Standard root files/folders use Creator Owner full control, administrators full ordinary-data control, other Users read/execute, Guest read-only. Approved Guest limits include read-only removable media. Keep personal/machine split, 10,000 KDF pending PIII measurement and no persistent lockout. |
+| K-Q1 | Private numeric profiles under /Windows/Profiles, SYSTEM metadata under /System/Security; explicit old-root to uid >=1000 mapping, never 500/501. Shared /Documents stays shared; deletion retires owners permanently. |
+| K-Q2 | SYS_SECURITY=101 is frozen in the kernel half with three layouts, seven operations, peer fd, profile descriptor, errors/flags/bounds and the read-only SID/token facade. W32_DISPLAY remains under call 96. |
+| K-Q3 | 32 policy rules, 32 profile roots, 256 creator-owned root files/folders per volume. Additional fixed volumes follow the same root rule as data volumes, never unprotected system aliases. |
+| K-Q4 | Sealed SYSTEM-only boot/service set; all user raw reads/writes on managed system disk refused pending exact sector classification. Maintenance/Setup acts through SYSTEM after admin checks. Common prefix policy replaces Win32 all-/System denial; F5 builtin-store protections remain. |
+| K-Q5 | Per-session user w32srv plus SYSTEM machine-registry broker; no SYSTEM desktop. All authoritative hive backing files service-only; HKCU/HKU/.DEFAULT correctly bound; personal non-authoritative libreg preferences may remain owner-writable. |
+| K-Q6 | Exact XP default parity is unnecessary; document CiukiOS choices. No persistent lockout, one-second bounded retry. Historical gaps are not implementation blockers. |
+| K-Q7 | Ready 500 unset, 8-63-byte custom/Guest passwords, and explicit Setup CD account repair if all administrator credentials/verifiers are lost or corrupt. No implicit empty recovery. |
+| K-Q8 | Local shutdown/restart for all interactive users including Guest and on logon screen; mixer/display/input preferences per session, machine defaults admin-only. Sec-k04 audits INPUT_KEYBOARD_SET and CIUKI_SETUP_NET_QUERY and refuses unsupported routes until fixed. |
 
-## Open questions and lead decisions needed
-
-None of these items overrides the shared identity/credential/FAT/account
-decisions. Recommended choices are proposals for cross-review; unresolved
-choices block the listed implementation slice, not this design deliverable.
-
-| Id | Decision needed / recommendation | Blocks |
-| --- | --- | --- |
-| Q1 | Agree with the other user contract on canonical profile/account paths and G32 migration. Recommend retaining /Windows/Profiles/u%08x for private data, /System/Security for SYSTEM metadata, and explicitly migrating existing default /Documents/shared settings; do not silently assign all legacy data to the next logon. Define handling of legacy profile ids below 1000 and prevent collision with 500/501; preserve data and retire mapped ids permanently. | k02, k07 |
-| Q2 | Jointly reserve SECURITY syscall/operations, complete QUERY_PEER fd representation and the profile descriptor, flags/errors/group bounds and read-only Win32 token/SID facade. This draft's 64-byte records are proposals, not an ABI freeze. Current W32_DISPLAY is under call 96, despite the old "101" prose. | k01, k06 |
-| Q3 | Approve root Creator Owner side records, 32-rule/32-profile/32-root-directory bounds and the explicit shared-data/Guest/fixed-volume matrix. A read-only root is a simpler alternative but differs from the cited XP root baseline. Define additional managed data roots without turning unknown fixed disks into unrestricted system aliases. | k02 |
-| Q4 | Approve the SYSTEM-only sealed boot/service set and raw managed-system-disk read restriction. Admin raw reads otherwise defeat the shared SYSTEM-only verifier rule. Keep conservative refusal until an exact readable-sector classification exists. Also decide whether to retain Win32's current extra all-/System write denial or replace it with the common prefix policy; no silent divergence. | k04; machine installer compatibility |
-| Q5 | Agree on per-user w32srv plus SYSTEM machine-registry broker, native per-profile roots and protected hive backing paths. A SYSTEM w32srv alternative would need operation-by-operation explicit client attribution across files, hives, helpers and deferred work; never just set the whole desktop to SYSTEM. Coordinate HKU/HKCU ownership, .DEFAULT and profile INI leases. | k06 |
-| Q6 | Close historical-source gaps with original XP setup security templates/edition-specific documentation if exact default parity is required. The inspected primary material establishes mechanisms and major folder/HKLM rules, but not every HKU exception, XP lockout default or Welcome-screen filtering rule. Propose zero persistent lockout with bounded backoff; jointly fix queue/backoff constants. Do not cite a later Server default as XP proof. | account policy freeze; exact-default historical claims |
-| Q7 | Specify how ready-made images provision CiukiAdministrator's verifier/password while disabled: Setup chooses it, ready images bypass Setup and must not ship an undisclosed shared password or enable empty-password recovery implicitly. Also agree empty-password rules for custom accounts and how authenticated recovery behaves if all verifiers are corrupt. No bypass is implemented by this draft. | ready-image/recovery provisioning in k07 |
-| Q8 | Confirm local Guest power permission and per-session mixer/media/display preferences versus persistent machine defaults with the other contract part. Audit existing INPUT_KEYBOARD_SET forwarding and CIUKI_SETUP_NET_QUERY routing before claiming device acceptance. Reject unsupported paths until the respective implementation directive fixes them. | k04, user-facing permissions matrix |
-
-Cross-review, the final implementation directives, integration, commits and
-runtime/hardware qualification remain the lead's work. No code, build,
-QEMU run, host runtime test or security-performance measurement is delivered
-by this contract.
+No new policy question remains open in this reconciliation. Lead cross-review,
+implementation, target KDF measurements, runtime security/installer evidence and
+hardware qualification remain outstanding. The proposed security QEMU suite
+still needs the lead's existing policy authorization before execution; this
+document grants none. No runtime evidence is claimed by the design.
