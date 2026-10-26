@@ -489,6 +489,17 @@ int render3d_readback(struct render3d_service *s, uint32_t p, uint32_t id, uint3
      * A new resource's zero/texture shadow is also its defined initial data. */
     memcpy(out,r->shadow,bytes); return 0;
 }
+int render3d_upload(struct render3d_service *s, uint32_t p, uint32_t id,
+    uint32_t h, const void *input, size_t bytes)
+{
+    if (s->busy) return -EBUSY;
+    struct render3d_context *c=context(s,p,id); struct render3d_resource *r=resource(c,h);
+    if (!c || c->dying || !r || r->pending_free) return -ENOENT;
+    if (!s->admission || c->failure) return c->failure ? c->failure : -ENODEV;
+    if (!input || bytes!=r->bytes || r->kind==R3D_TEXTURE) return -EINVAL;
+    if (r->references) return -EAGAIN;
+    memcpy(r->shadow,input,bytes); r->resident=false; return 0;
+}
 void render3d_process_exit(struct render3d_service *s, uint32_t p)
 {
     for (unsigned i=0;i<R3D_CONTEXTS;i++) {

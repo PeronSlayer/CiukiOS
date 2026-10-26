@@ -3,6 +3,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/w32_objects.h>
 #include <ciuki/w32_core.h>
+#include "../../drivers/video/render3d_transport.h"
 uint32_t w32_status(int error)
 {
     switch (error) {
@@ -63,6 +64,7 @@ uint32_t w32_record_size(uint32_t operation)
     case W32_SECTION: return sizeof(struct ciuki_w32_section_args);
     case W32_VIEW: return sizeof(struct ciuki_w32_view_args);
     case W32_SERVICE: return sizeof(struct ciuki_w32_service_args);
+    case W32_RENDER3D: return sizeof(struct ciuki_w32_render3d_args);
     case W32_DISPLAY: return sizeof(struct ciuki_w32_display_args);
     default: return 0;
     }
@@ -160,6 +162,10 @@ int w32_record_validate(const void *record, uint32_t bytes, bool win32)
     case W32_SECTION: {const struct ciuki_w32_section_args *a=record;return a->result||a->error||a->flags&~1u?-EINVAL:0;}
     case W32_VIEW: {const struct ciuki_w32_view_args *a=record;return a->reserved||a->result||a->error||a->action<1||a->action>3?-EINVAL:0;}
     case W32_SERVICE: {const struct ciuki_w32_service_args *a=record;return a->result||a->error||a->action<1||a->action>6?-EINVAL:0;}
+    case W32_RENDER3D: {
+        const struct ciuki_w32_render3d_args *a=record;
+        return render3d_wire_valid(a) ? 0 : -EINVAL;
+    }
     case W32_DISPLAY: {
         const struct ciuki_w32_display_args *a=record;
         if (a->result || a->error || a->action<1 || a->action>5) return -EINVAL;

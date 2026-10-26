@@ -388,10 +388,12 @@ void display_watchdog_poll(void)
     } else if (!fbdev_change_begin()) { restore(); fbdev_change_end(); }
     switching = false;
 }
+extern void w32_render3d_poll(void) __attribute__((weak));
 static void watchdog_main(void *arg)
 {
     (void)arg;
     for (;;) {
+        if (w32_render3d_poll) w32_render3d_poll();
         task_sleep_ms(fullscreen_display || awaiting_native_frame ||
             (display_present_active && display_present_active()) ? 10 : 100);
         display_watchdog_poll();

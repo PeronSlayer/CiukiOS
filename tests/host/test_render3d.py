@@ -30,6 +30,14 @@ class RenderTests(unittest.TestCase):
             'src/kernel/drivers/video/render3d.c', 'src/kernel/drivers/video/render3d_scalar.c',
             'src/kernel/drivers/video/s3savage/savage3d.c'])
 
+    def test_worker(self):
+        self.build_run('worker', ['tests/host/render3d_worker_test.c',
+            'src/kernel/drivers/video/render3d.c','src/kernel/drivers/video/render3d_scalar.c',
+            'src/kernel/drivers/video/render3d_transport.c'])
+
+    def test_encoder_capabilities(self):
+        self.build_run('encoder', ['tests/host/render3d_encoder_test.c'])
+
     def test_scalar_recovery(self):
         self.build_run('scalar_recovery', ['tests/host/render3d_scalar_test.c'])
 
@@ -86,11 +94,13 @@ class RenderTests(unittest.TestCase):
                 exec(compile(ast.Module(body=[node],type_ignores=[]),'<flags>','exec'),env)
         OUT.mkdir(parents=True,exist_ok=True)
         changed=subprocess.check_output(['git','diff','--name-only'],cwd=ROOT,text=True).splitlines()
-        new=['src/kernel/drivers/video/'+n for n in ('render3d.c','render3d_scalar.c','render3d_native.c',
+        new=['src/kernel/drivers/video/'+n for n in ('render3d.c','render3d_scalar.c','render3d_native.c','render3d_transport.c',
             's3savage/savage3d.c','s3savage/savage3d_owner.c')]
+        new += ['src/kernel/core/'+n for n in ('render3d_transport.c','display_present.c','display.c')]
+        new += ['src/kernel/proc/win32/'+n for n in ('syscall.c','records.c')]
         objects=[]
         for rel in sorted(set(changed+new)):
-            if not rel.startswith('src/kernel/drivers/') or not rel.endswith('.c'): continue
+            if not rel.startswith('src/kernel/') or not rel.endswith('.c'): continue
             obj=OUT/(rel.removeprefix('src/kernel/').replace('/','_')+'.o')
             subprocess.run(['clang',*env['CFLAGS'],'-I',str(ROOT/'src/kernel/include'),
                             '-c',str(ROOT/rel),'-o',str(obj)],check=True)
@@ -104,7 +114,7 @@ class RenderTests(unittest.TestCase):
                 if len(parts)!=3 or parts[1].upper()=='W': continue
                 self.assertNotIn(parts[2],definitions,(parts[2],obj,definitions.get(parts[2])))
                 definitions[parts[2]]=obj
-        for name in ('render3d.c','render3d_scalar.c','render3d_native.c','s3savage_savage3d.c','s3savage_savage3d_owner.c'):
+        for name in ('render3d.c','render3d_scalar.c','render3d_native.c','render3d_transport.c','s3savage_savage3d.c','s3savage_savage3d_owner.c'):
             obj=OUT/('drivers_video_'+name+'.o')
             dis=subprocess.check_output(['objdump','-d',str(obj)],text=True)
             self.assertNotRegex(dis,r'\b(?:xmm\d|mm[0-7]|fld|fst|fadd|fmul|fdiv)\b')

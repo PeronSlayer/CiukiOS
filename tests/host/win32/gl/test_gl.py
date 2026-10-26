@@ -25,10 +25,16 @@ class GLTests(unittest.TestCase):
   units=[ROOT/'sdk/win32/gdi32'/n for n in gdi32.SOURCES if n not in ('compiler.c','compiler.S')]
   units += [ROOT/'sdk/win32/services/bytes.c',ROOT/'tests/host/win32/gdi32/support.c',HERE/'engine.c',HERE/'amendment.c',HERE/'review.c',HERE/'amendment2.c',HERE/'transport.c',HERE/'fixture.c',HERE/'quake3.c',HERE/'raster.c',HERE/'raster_reference.c']
   units += list((ROOT/'sdk/win32/opengl32').glob('*.c'))+[ROOT/'sdk/libgl/software/renderer.c']
-  units += [HERE/'hardware.c']
+  fixture_source=(ROOT/'tests/host/savage3d_backend_test.c').read_text()
+  (out/'savage3d_backend_fixture.inc').write_text(fixture_source.replace('int main(int argc,char **argv)','int frozen_3d_main(int argc,char **argv)'))
+  fixture_source=(ROOT/'tests/host/savage2d_test.c').read_text()
+  (out/'savage2d_fixture.inc').write_text(fixture_source.replace('\nint main(void)\n','\nint frozen_2d_main(void)\n'))
+  units += [HERE/'hardware.c',HERE/'kernel_engine.c',HERE/'kernel_replay.c']
+  units += [ROOT/'src/kernel/drivers/video'/n for n in ('render3d.c','render3d_scalar.c','render3d_native.c','render3d_transport.c','s3savage/savage3d.c')]
+  units += [ROOT/'src/kernel/lib/fmt.c']
   cls.binary=out/(('engine' if sanitize else 'benchmark')+('' if gamma_hooks else '-no-gamma'))
   flags=['-std=c17','-D_GNU_SOURCE','-DW32_HOST_MODEL','-O2','-g','-ffp-contract=off','-Wall','-Wextra','-Werror','-Wno-unused-function','-fno-vectorize','-fno-slp-vectorize','-I'+str(ROOT/'sdk/win32/include'),'-I'+str(ROOT/'sdk/libgl/vendor/include')]
-  flags+=['-I'+str(ROOT/'src/kernel/include')]
+  flags+=['-I'+str(ROOT/'src/kernel/include'),'-I'+str(ROOT/'tests/host'),'-I'+str(out)]
   if sanitize:flags+=['-fsanitize=address,undefined','-fno-sanitize-recover=all']
   if profile:flags+=['-DSW_PROFILE']
   if not gamma_hooks:flags+=['-DGL_TEST_NO_GAMMA']
@@ -108,6 +114,9 @@ class GLTests(unittest.TestCase):
   p=subprocess.run([str(self.binary),'--quake3'],capture_output=True,text=True,timeout=120)
   print(p.stdout,end='');self.assertEqual(p.returncode,0,p.stdout+p.stderr)
   check_quake3(p.stdout,sanitize=True)
+ def test_kernel_transport(self):
+  p=subprocess.run([str(self.binary),'--kernel-transport'],capture_output=True,text=True,timeout=120)
+  print(p.stdout,end='');self.assertEqual(p.returncode,0,p.stdout+p.stderr)
  def test_hardware_adapter(self):
   p=subprocess.run([str(self.binary),'--hardware'],capture_output=True,text=True,timeout=60)
   print(p.stdout,end='');self.assertEqual(p.returncode,0,p.stdout+p.stderr)

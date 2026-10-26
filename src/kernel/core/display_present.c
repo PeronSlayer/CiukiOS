@@ -215,6 +215,60 @@ static int frame(struct proc_thread *t, struct ciuki_w32_display_args *a)
     t->cleanup=0; t->operation=0; frame_cleanup(&op);
     return e;
 }
+/* F7: presentation of a completed, owned linear render3d copy. Conversion
+ * into that buffer used the GPU; scanout upload uses the existing CPU/gamma
+ * presenter. This is deliberately reported as gpu-copy + cpu-present. */
+int display_present_render3d(void *unused, uint32_t pid,
+    const struct ciuki_w32_render3d_args *r, const void *pixels, uint32_t bytes)
+{
+    (void)unused;
+    struct ciuki_w32_display_args a={.token=r->token,.generation=r->generation};
+    struct process *p=proc_find(pid);
+    uint32_t page=pmm_alloc();
+    if (!page) return -ENOMEM;
+    kmutex_lock(&lease_lock);
+    int e=!valid(p,&a) ? -EACCES : frame_running ? -EBUSY : 0;
+    struct ciuki_present_surface s=layout;
+    struct fb_device f=*fbdev_get();
+    unsigned n=scale;
+    if (!e && (s.format!=CIUKI_PRESENT_XRGB8888 || s.width!=r->width ||
+        s.height!=r->height || s.pitch!=r->pitch || s.size!=bytes)) e=-EOPNOTSUPP;
+    if (!e) frame_running=true;
+    kmutex_unlock(&lease_lock);
+    if (e) { pmm_free(page); return e; }
+    uint8_t *out=P2V(page);
+    cvp_format fmt={.pitch=f.pitch,.width=(uint16_t)f.width,.height=(uint16_t)f.height,
+        .bytes=f.bpp/8,.red_size=f.red_size,.red_pos=f.red_pos,.green_size=f.green_size,
+        .green_pos=f.green_pos,.blue_size=f.blue_size,.blue_pos=f.blue_pos};
+    unsigned w=s.width*n,h=s.height*n,ox=(f.width-w)/2,oy=(f.height-h)/2;
+    for (unsigned y=0;y<f.height && !e;y++) for (unsigned x=0;x<f.width && !e;x+=256) {
+        unsigned count=f.width-x;
+        if (count>256) count=256;
+        memset(out,0,count*fmt.bytes);
+        unsigned l=x>ox ? x : ox,rgt=x+count<ox+w ? x+count : ox+w;
+        kmutex_lock(&lease_lock);
+        if (!valid(proc_find(pid),&a)) e=-EACCES;
+        if (!e && y>=oy && y<oy+h && l<rgt) {
+            unsigned first=(l-ox)/n,source_count=(rgt-ox+n-1)/n-first;
+            struct ciuki_present_surface tile={source_count,1,source_count*4,source_count*4,s.format};
+            const uint8_t *input=(const uint8_t *)pixels+(y-oy)/n*s.pitch+first*4;
+            if (cvp_surface_row(&tile,input,palette,&gamma,&fmt,n,(l-ox)%n,rgt-l,
+                out+(l-x)*fmt.bytes,PAGE_SIZE-(l-x)*fmt.bytes)) e=-EINVAL;
+        }
+        if (!e) e=fbdev_present_native(a.generation,x,y,out,count);
+        kmutex_unlock(&lease_lock);
+        kpreempt_point();
+    }
+    kmutex_lock(&lease_lock);
+    if (!e && !valid(proc_find(pid),&a)) e=-EACCES;
+    if (!e) {
+        next_frame=cvp_present_deadline(g_ticks*UINT64_C(1000000));
+        awaiting_first_frame=false;
+    }
+    frame_running=false;
+    kmutex_unlock(&lease_lock);
+    pmm_free(page); return e;
+}
 uint32_t w32_display_call(struct proc_thread *t, struct ciuki_w32_display_args *a)
 {
     struct process *p=t->process;

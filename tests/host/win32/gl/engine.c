@@ -302,6 +302,8 @@ static uint64_t now(void) {
 }
 int main(int argc, char **argv) {
   setvbuf(stdout, 0, _IONBF, 0);
+  extern void gl_kernel_replay(void);
+  if (argc > 1 && !strcmp(argv[1], "--kernel-transport")) { gl_kernel_replay(); test_reset(); return 0; }
   if (argc > 1 && !strcmp(argv[1], "--hardware")) {
     gl_hardware_tests(); test_reset(); return 0;
   }

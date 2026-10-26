@@ -564,10 +564,16 @@ static uint32_t texture_pool_bytes(void *owner)
 }
 const struct render3d_backend *savage3d_backend(void)
 {
+    static const struct ciuki_r3d_caps capabilities={
+        .version=CIUKI_R3D_VERSION,.features=R3D_ALL_FEATURES,.max_size=64,
+        .max_vertices=3,.texture_units=2,.max_texture_size=1024,
+        .depth_formats=CIUKI_R3D_D16,.color_formats=CIUKI_R3D_ARGB8888,
+        .texture_formats=63,.depth_functions=255,.alpha_functions=255,
+        .blend_factors=15,.combine_modes=15,.filters=31,.max_pixel_work=4096};
     static const struct render3d_backend backend={.features=R3D_ALL_FEATURES,.qualified=qualified,
         .layout=layout,.validate=validate,.enter=enter,.leave=leave,.execute=execute,
         .idle=idle,.quarantine=quarantine,.attach=savage3d_owner_attach,.max_size=64,.detach=detach,
-        .texture_pool_bytes=texture_pool_bytes};
+        .texture_pool_bytes=texture_pool_bytes,.capabilities=&capabilities};
     return &backend;
 }
 

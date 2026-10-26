@@ -5595,6 +5595,170 @@ struct ciuki_w32_header {
 };
 ```
 
+F7 copied render3d records. Addresses name bounded user RAM, never VRAM.
+All dispatch runs on the existing display worker. State enum ordinals follow
+the native render3d contract; unknown state is rejected before submission.
+
+```c
+#define W32_RENDER3D 514u
+#define CIUKI_R3D_VERSION 1u
+#define CIUKI_R3D_QUERY 1u
+#define CIUKI_R3D_OPEN 2u
+#define CIUKI_R3D_CLOSE 3u
+#define CIUKI_R3D_RESOURCE 4u
+#define CIUKI_R3D_FREE 5u
+#define CIUKI_R3D_UPLOAD 6u
+#define CIUKI_R3D_READ 7u
+#define CIUKI_R3D_TEXTURE 8u
+#define CIUKI_R3D_SUBMIT 9u
+#define CIUKI_R3D_WAIT 10u
+#define CIUKI_R3D_PRESENT 11u
+#define CIUKI_R3D_D16 1u
+#define CIUKI_R3D_ARGB8888 1u
+#define CIUKI_R3D_RGB565 4u
+#define CIUKI_R3D_ARGB4444 8u
+#define CIUKI_R3D_WIRE_LIMIT 6291456u
+#define CIUKI_R3D_TEXTURED 1u
+#define CIUKI_R3D_CLEAR_COLOR 2u
+#define CIUKI_R3D_CLEAR_DEPTH 4u
+#define CIUKI_R3D_DEPTH_TEST 8u
+#define CIUKI_R3D_DEPTH_WRITE 16u
+#define CIUKI_R3D_COPY 32u
+#define CIUKI_R3D_TEXTURE1 64u
+#define CIUKI_R3D_LESS 0u
+#define CIUKI_R3D_NEVER 1u
+#define CIUKI_R3D_ALWAYS 2u
+#define CIUKI_R3D_EQUAL 3u
+#define CIUKI_R3D_LEQUAL 4u
+#define CIUKI_R3D_GREATER 5u
+#define CIUKI_R3D_NOTEQUAL 6u
+#define CIUKI_R3D_GEQUAL 7u
+#define CIUKI_R3D_ONE 0u
+#define CIUKI_R3D_ZERO 1u
+#define CIUKI_R3D_SRC_ALPHA 2u
+#define CIUKI_R3D_INV_SRC_ALPHA 3u
+#define CIUKI_R3D_MODULATE 0u
+#define CIUKI_R3D_REPLACE 1u
+#define CIUKI_R3D_ADD 2u
+#define CIUKI_R3D_DECAL 3u
+#define CIUKI_R3D_NEAREST 0u
+#define CIUKI_R3D_BILINEAR 1u
+#define CIUKI_R3D_NEAREST_MIP 2u
+#define CIUKI_R3D_BILINEAR_MIP 3u
+#define CIUKI_R3D_TRILINEAR 4u
+#define CIUKI_R3D_TEX_ARGB8888 0u
+#define CIUKI_R3D_TEX_RGBA8888 1u
+#define CIUKI_R3D_TEX_RGB565 2u
+#define CIUKI_R3D_TEX_ARGB4444 3u
+#define CIUKI_R3D_TEX_L8 4u
+#define CIUKI_R3D_TEX_A8 5u
+#define CIUKI_R3D_RESOURCE_COLOR 1u
+#define CIUKI_R3D_RESOURCE_D16 2u
+#define CIUKI_R3D_RESOURCE_TEXTURE 3u
+#define CIUKI_R3D_RESOURCE_LINEAR_COLOR 4u
+
+struct ciuki_r3d_sampler {
+    uint32_t combine;
+    uint32_t filter;
+    uint32_t repeat_u;
+    uint32_t repeat_v;
+};
+struct ciuki_r3d_state {
+    uint32_t depth_func;
+    uint32_t alpha_func;
+    uint32_t alpha_ref;
+    uint32_t alpha_test;
+    uint32_t blend;
+    uint32_t source;
+    uint32_t destination;
+    uint32_t flat;
+    struct ciuki_r3d_sampler sampler[2];
+};
+struct ciuki_r3d_vertex {
+    int32_t x;
+    int32_t y;
+    uint32_t z;
+    uint32_t rhw;
+    uint32_t color;
+    int32_t u;
+    int32_t v;
+};
+struct ciuki_r3d_draw {
+    uint32_t flags;
+    uint32_t target;
+    uint32_t depth;
+    uint32_t texture;
+    uint32_t copy_target;
+    uint32_t clear_color;
+    uint32_t clear_depth;
+    uint32_t count;
+    uint32_t texture1;
+    struct ciuki_r3d_state state;
+    uint32_t flat_color[64];
+    int32_t uv1[192][2];
+    struct ciuki_r3d_vertex vertices[192];
+};
+struct ciuki_r3d_caps {
+    uint32_t version;
+    uint32_t generation;
+    uint32_t features;
+    uint32_t max_size;
+    uint32_t max_vertices;
+    uint32_t texture_units;
+    uint32_t texture_bytes;
+    uint32_t max_texture_size;
+    uint32_t depth_formats;
+    uint32_t color_formats;
+    uint32_t texture_formats;
+    uint32_t depth_functions;
+    uint32_t alpha_functions;
+    uint32_t blend_factors;
+    uint32_t combine_modes;
+    uint32_t filters;
+    uint32_t polygon_offset;
+    uint32_t max_pixel_work;
+};
+```
+
+QUERY: width/height, format=color mask, kind=depth mask, levels=stencil bits;
+address/bytes receive caps, with zero features unless the probe admits them.
+OPEN/CLOSE: process-owned context. RESOURCE: resource kind and dimensions.
+UPLOAD/READ: exact canonical attachment extent. TEXTURE: format is TEX_*;
+levels tightly packed, largest first; input rows have width*texel_bytes.
+SUBMIT: one complete ciuki_r3d_draw, copied before validation; returns fence.
+WAIT: 64-bit sequence/ordinal split into halves; timeout capped at 100 ms.
+Completed receipts authenticate generation/context/ordinal (sequence is then
+informational). PRESENT: exact existing lease token, owned linear resource,
+dimensions/pitch, completed fence; no user payload or framebuffer mapping.
+Other actions require the queried generation. result=1 means success;
+error is positive native errno. No backend packets or VRAM addresses.
+
+```c
+struct ciuki_w32_render3d_args {
+    struct ciuki_w32_header header;
+    uint32_t action;
+    uint32_t context;
+    uint32_t resource;
+    uint32_t kind;
+    uint32_t width;
+    uint32_t height;
+    uint32_t format;
+    uint32_t levels;
+    uint32_t address;
+    uint32_t bytes;
+    uint32_t generation;
+    uint32_t sequence_lo;
+    uint32_t sequence_hi;
+    uint32_t ordinal_lo;
+    uint32_t ordinal_hi;
+    uint32_t timeout_ms;
+    uint32_t token;
+    uint32_t pitch;
+    uint32_t result;
+    uint32_t error;
+};
+```
+
 f5-05B additive loader services. OPEN returns a private read-only raw
 snapshot; IMAGE maps that snapshot through the image-section service.
 flags: bit 0 exact placement, bit 1 builtin region, bit 2 DATAFILE. address is in/out;

@@ -27,7 +27,7 @@ int main(void) {
   struct render3d_resource target={.width=8,.height=8,.pitch=32,.shadow=native},
     z={.width=8,.height=8,.pitch=16,.shadow=native_depth},
     tex={.width=2,.height=2,.pitch=8,.shadow=texels};
-  struct render3d_resource *resources[4]={&target,&z,&tex,0};
+  struct render3d_resource *resources[R3D_REFS]={&target,&z,&tex,0,0};
   unsigned comparisons=0;
   for (unsigned textured=0;textured<2;textured++)
     for (unsigned reverse=0;reverse<2;reverse++) {
@@ -63,10 +63,12 @@ int main(void) {
       }
       assert(coverage==28);
     }
-  /* A sub-Q16 interpolation error can cross an entire texel boundary. */
-  command.vertices[0]=vertex(0,0,1000,0xffffffff,32767,0);
-  command.vertices[1]=vertex(8,0,1000,0xffffffff,32771,0);
-  command.vertices[2]=vertex(0,8,1000,0xffffffff,32771,0);
+  /* f7-03 preserves perspective-product fractions, so the original 8x8
+   * 32767/32771/32771 example now agrees. A 3x3 triangle still proves the
+   * barycentric-Q16 versus GL-plane difference at a nearest boundary. */
+  command.vertices[0]=vertex(0,0,1000,0xffffffff,32770,0);
+  command.vertices[1]=vertex(3,0,1000,0xffffffff,32767,0);
+  command.vertices[2]=vertex(0,3,1000,0xffffffff,32767,0);
   /* Independently demonstrate the rejected native request's full-channel
    * error, rather than relying only on the encoder's admission decision. */
   request=(struct render3d_request){.target=1,.depth=2,.texture=3,.count=3,
@@ -79,7 +81,7 @@ int main(void) {
   struct render3d_job boundary={0};
   while (!render3d_scalar_slice(&request,resources,&boundary,0)) {}
   sw_triangle(&command.state,command.vertices,command.vertices+1,command.vertices+2);
-  assert(color[7*8]==0xffff0000 && native[7*8]==0xff00ff00);
+  assert(color[6*8]==0xff00ff00 && native[6*8]==0xffff0000);
   assert(gl_hw_minimum_encode(&command,1,2,0,&request));
   /* Constant coordinates survive only when native conversion is lossless. */
   for (unsigned i=0;i<3;i++) command.vertices[i].uv[0][0]=32767;

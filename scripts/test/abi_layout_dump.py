@@ -52,7 +52,7 @@ def expressions(header: str) -> dict[str, str]:
         result[f"sizeof.{name}"] = f"sizeof(struct {name})"
         result[f"alignof.{name}"] = f"_Alignof(struct {name})"
         # Array extents may be literal counts or ABI constants (CD TOC tracks).
-        for field, extent in re.findall(r"^\s+(?:struct\s+\w+|\w+)\s+(\w+)(?:\[(\w+)\])?;", body, re.M):
+        for field, extent in re.findall(r"^\s+(?:struct\s+\w+|\w+)\s+(\w+)(?:\[(\w+)\])?(?:\[\w+\])*;", body, re.M):
             result[f"offsetof.{name}.{field}"] = f"__builtin_offsetof(struct {name}, {field})"
             # Each saved general slot has a listed offset in the contract.
             if name == "ciuki_ucontext" and field == "gregs":
