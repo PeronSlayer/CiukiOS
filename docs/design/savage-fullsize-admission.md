@@ -318,7 +318,7 @@ There are no histogram allocations, state scans, encoder calls or log writes
 on the disabled path; draw/swap hooks perform only a null-pointer branch.
 Remove the value for performance measurements.
 
-`GL_CENSUS version=1 reference=savage-qualified` summaries report draws,
+`GL_CENSUS version=1 reference=qualified-3d` summaries report draws,
 coverage_fragments, refused draws, hardware_frames, persistent context_hw,
 render size, other_calls and overflow counts. A draw is one post-clipping
 triangle; fragments count exact top-left geometric coverage before alpha,

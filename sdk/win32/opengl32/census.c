@@ -272,7 +272,7 @@ static void emit(const struct gl_context *context,struct census_line *l) {
 }
 static void flush(struct gl_context *context) {
   struct gl_census *c=context->census;
-  struct census_line l={0}; word(&l,"GL_CENSUS version=1 reference=savage-qualified");
+  struct census_line l={0}; word(&l,"GL_CENSUS version=1 reference=qualified-3d");
   field(&l," frame=",context->frames+c->partial); field(&l," frames=",c->frames); field(&l," draws=",c->draws);
   field(&l," coverage_fragments=",c->fragments); field(&l," refused=",c->refused);
   field(&l," hardware_frames=",c->hardware_frames); field(&l," context_hw=",!c->pinned);
