@@ -46,6 +46,7 @@ static bool video_rom;
 static unsigned dpms_caps=5, dpms_set;
 static bool dpms_set_failure;
 static uint16_t video_fail_ax, video_current_mode;
+static uint16_t video_fault_ax;
 static uint16_t video_calls[16];
 static unsigned video_call_count;
 static unsigned video_state_blocks=16;
@@ -295,6 +296,7 @@ void v86_enter(const struct v86_frame *initial, uint32_t *saved)
         CHECK(vm_memory(0, 0xA0000, 0x20000, true) == ram + 0xA0000);
         CHECK(video_call_count < ARRAY_SIZE(video_calls));
         video_calls[video_call_count++] = (uint16_t)ax;
+        if (video_fault_ax && ax==video_fault_ax) execution_fault=2;
         live.tf.eax = ax == video_fail_ax ? 0x014F : 0x004F;
         if (ax == video_fail_ax) video_fail_ax = 0;
         else if (ax==0x4F04) {
@@ -1060,7 +1062,7 @@ static void boot_fixture(bool irq_reservations)
     memset(family_quarantined, 0, sizeof(family_quarantined));
     input_enabled = video_active = video_claimed = video_dispi = false;
     video_lease_count = 0; fullscreen_video=false; fullscreen_bytes=0; video_state_blocks=16;
-    video_rom = false; video_fail_ax = video_current_mode = 0; video_call_count = 0;
+    video_rom = false; video_fail_ax = video_fault_ax = video_current_mode = 0; video_call_count = 0;
     request_pending = request_done = controller_status_valid = false;
     vm_thread = adapter = 0;
     input_service = 0; input_observer = 0;
@@ -1594,6 +1596,47 @@ static void test_fullscreen_calls(void)
     CHECK(!biosvm_video_fullscreen_end(0x118,info) && !video_claimed);
     puts("PASS biosvm full-screen: bounded 4F04(000F) save/restore, standard VGA and fixed VBE LFB set/query/readback, persistent leases, restore after set failure");
 }
+static void test_fullscreen_fault_apm(void)
+{
+    /* Fail after the state save, while entering the game's physical mode,
+     * or later during desktop restoration. Never reset registry quarantine. */
+    const uint16_t faults[]={0x4F02,0x4F03,0x4F01,0x4F04};
+    for (unsigned input=0;input<2;input++) for (unsigned n=0;n<ARRAY_SIZE(faults);n++) {
+        boot_fixture(true);
+        g_boot.input_policy=input ? CBI_INPUT_FIRMWARE : CBI_INPUT_NATIVE;
+        pci[0]=(struct pci_func){.vendor=0x1234,.device=0x1111,.class_code=3}; npci=1;
+        video_rom=true; ivt(0x10,0xF000,0x700); ram[0xF0700]=0xCF;
+        ivt(0x15,0xF000,0x400); ram[0xF0400]=0xCF;
+        video_current_mode=0x118;
+        uint8_t info[256]; struct biosvm_regs r;
+        if (faults[n]==0x4F04) {
+            CHECK(!biosvm_video_fullscreen_begin(0x101,info));
+            unsigned before=enters;
+            CHECK(biosvm_apm_probe(&r)==-EBUSY && enters==before);
+            video_fault_ax=faults[n];
+            CHECK(biosvm_video_fullscreen_end(0x118,info)==-V86_ETIMEDOUT);
+        } else {
+            video_fault_ax=faults[n];
+            CHECK(biosvm_video_fullscreen_begin(0x101,info)==-V86_ETIMEDOUT);
+        }
+        CHECK(family_quarantined[BIOS_VIDEO] && !family_disabled(BIOS_APM) && !quarantined);
+        CHECK(!fullscreen_video && video_claimed && video_lease_count==4);
+        CHECK(!video_active && !firmware.io && !firmware.max_call_ms && !continuation && !request_pending);
+        CHECK(!vm_memory(0,0xA0000,1,false));
+        unsigned before=enters;
+        CHECK(biosvm_video_fullscreen_end(0x118,info)==-V86_EIO && enters==before);
+        CHECK(!fullscreen_video && !fullscreen_bytes);
+        execution_fault=0; /* fake CPU fault injection ends; quarantine stays */
+        CHECK(!biosvm_apm_probe(&r) && enters==before+1);
+        CHECK(!family_disabled(BIOS_APM) && family_quarantined[BIOS_VIDEO]);
+        CHECK(video_claimed && video_lease_count==4);
+        for (unsigned i=0;i<video_lease_count;i++)
+            CHECK(registry_get(video_leases[i].handle)->state==RS_QUARANTINED);
+        before=enters;
+        CHECK(biosvm_video_fullscreen_begin(0x101,info)==-V86_EIO && enters==before);
+    }
+    puts("PASS fx-biosvm review 2: fatal full-screen entry/restore, cleanup keeps quarantined leases, healthy APM admitted; live video still EBUSY");
+}
 /* fx-18: the T23 APM BIOS installation check as executed in the trial of
  * e831e685 (f000:4ccf: IN AL,DX with DX=1004h), followed by the
  * software SMI (OUT B2h) and a POST/delay write (OUT 80h). Without the
@@ -1920,6 +1963,7 @@ int main(void)
     test_dpms();
     test_video_calls();
     test_fullscreen_calls();
+    test_fullscreen_fault_apm();
     test_apm_probe();
     test_delay_and_family_isolation();
     test_t23_power_sequence();

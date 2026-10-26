@@ -792,7 +792,9 @@ int biosvm_apm_call(struct biosvm_regs *regs, uint32_t ms)
     if (g_current == vm_thread) return -EBUSY;
     if (!kmutex_lock_until(&request_mutex, end)) return -V86_ETIMEDOUT;
     if (family_disabled(BIOS_APM)) e = -V86_EIO;
-    else if ((video_claimed && !family_disabled(BIOS_VIDEO)) || fullscreen_video || firmware.io) e = -EBUSY;
+    /* Quarantined video leases stay pinned, but their returned worker is
+     * no longer an active video transaction and must not block APM. */
+    else if (((video_claimed || fullscreen_video) && !family_disabled(BIOS_VIDEO)) || firmware.io) e = -EBUSY;
     else if (deadline_passed(end)) e = -V86_ETIMEDOUT;
     else {
         /* The worker subtracts queue time before entering V86. Expired
@@ -1368,8 +1370,9 @@ int biosvm_video_fullscreen_begin(uint16_t mode, uint8_t info[256])
         if (!(e=fullscreen_call(&r,&budget,true,false))) memcpy(info,P2V(BIOSVM_SCRATCH+0x800),256);
     }
     /* Even a failed mode set may have touched hardware: retain the saved
-     * state and leases so the caller can execute the rollback transaction. */
-    fullscreen_video=true;
+     * state and leases for rollback if execution is still safe. A fatal
+     * fault pins the leases without keeping an active transaction. */
+    fullscreen_video=!family_disabled(BIOS_VIDEO);
 revoke_fs:
     fullscreen_aperture(false);
     if (!fullscreen_video && !family_disabled(BIOS_VIDEO) && release_video()) e=-V86_EIO;
@@ -1382,7 +1385,13 @@ int biosvm_video_fullscreen_end(uint16_t mode, uint8_t info[256])
     if (!info || !g_current || g_current==vm_thread || !(read_eflags()&V86_IF)) return -EINVAL;
     kmutex_lock(&request_mutex);
     int e=-V86_EIO;
-    if (!fullscreen_video || !fullscreen_bytes || family_disabled(BIOS_VIDEO)) goto done_restore;
+    if (family_disabled(BIOS_VIDEO)) {
+        /* Execution returned and revoked its aperture. Drop transaction
+         * metadata only; quarantined leases must never be reclaimed. */
+        fullscreen_video=false; fullscreen_bytes=0;
+        goto done_restore;
+    }
+    if (!fullscreen_video || !fullscreen_bytes) goto done_restore;
     fullscreen_aperture(true);
     uint32_t budget=2000;
     memcpy(P2V(BIOSVM_SCRATCH+0x800),fullscreen_saved,fullscreen_bytes);

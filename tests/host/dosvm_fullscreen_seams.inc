@@ -20,6 +20,10 @@ static bool fs_test_checkpoint_pin;
 static unsigned fs_recovery_ms;
 static unsigned fs_end_sleeps; /* fx-22: safe points inside the native restore */
 static bool fs_vbe_available;
+static unsigned fs_dac_bits=8;
+static unsigned fs_palette_writes;
+static uint8_t fs_palette_bytes[256*3];
+unsigned display_fullscreen_dac_bits(void) { CHECK(fs_display); return fs_dac_bits; }
 static uint8_t fs_linear[DOS_VBE_BYTES];
 static unsigned fs_linear_writes;
 static unsigned fs_linear_bytes;
@@ -100,7 +104,10 @@ static uint8_t inb(uint16_t p)
     uint8_t byte=cvga_read_port(&fs_card,p,0);
     return fs_stuck_blank && p==0x3C5 && fs_card.seq_index==1 ? byte|0x20 : byte;
 }
-static void outb(uint16_t p,uint8_t b) { cvga_write_port(&fs_card,p,b); }
+static void outb(uint16_t p,uint8_t b) {
+    if (p==0x3C9) fs_palette_bytes[fs_palette_writes++%sizeof(fs_palette_bytes)]=b;
+    cvga_write_port(&fs_card,p,b);
+}
 void arch_vga_io(bool on) { fs_ports=on; arch_vga_bitmap(fs_bitmap,on); }
 void *vmm_map_mmio(uint32_t p,uint32_t bytes,bool uncached)
 { CHECK(p==0xA0000 && bytes==0x20000 && uncached); return P2V(p); }

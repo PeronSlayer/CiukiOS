@@ -88,3 +88,26 @@ readback alone did not establish a usable panel scanout.
   BX=0001/CX=0003 after shutdown proof. A returning Off call remains an
   error: host transport success cannot prove that physical power disappeared.
   ACPI S5 belongs to the separate directive and is unchanged here.
+
+## Review round 2: DAC precision and quarantined video ownership
+
+- [VESA VBE 2.0, section 4.2 and section 4.11](https://www.phatcode.net/res/221/files/vbe20.pdf)
+  specifies six-bit DAC precision after a mode set. Eight-bit operation
+  requires an explicit 4F08 change. [SeaBIOS 1.16.3, vbe_104f08](https://raw.githubusercontent.com/coreboot/seabios/rel-1.16.3/vgasrc/vbe.c)
+  implements that separate format service. Keep BIOS full-screen modes at
+  their mandated six-bit default, without extra firmware calls or budget.
+  The existing native packed setup selects and checks SR1B bit 4 for an
+  eight-bit CLUT. Export the provider's indexed precision through the
+  kernel-only display contract: six-bit guest components pass unchanged to
+  a six-bit DAC and expand only for an eight-bit DAC. Direct-colour scanout
+  requires no palette upload. No guest or public SDK ABI changes are needed.
+- Windows 98 Resource Kit, chapter 30, `wrkc30_4.htm`, “Understanding
+  Advanced Power Management”, assigns APM power control to the BIOS;
+  [Linux's APM power-off implementation](https://raw.githubusercontent.com/torvalds/linux/master/arch/x86/kernel/apm_32.c)
+  also issues a dedicated firmware power request. Neither source defines
+  CiukiOS's quarantine mechanism. The local admission decision is to
+  distinguish an active video transaction from permanently retained video
+  resources: a completed fatal video execution must still pin its leases,
+  disable subsequent video entry, and revoke temporary I/O/mappings, while
+  permitting a healthy APM family after the worker returns. Cleanup clears
+  full-screen transaction metadata without reclaiming quarantined hardware.

@@ -21,7 +21,7 @@ static const struct display_mode_provider modes = {
     supersavage_display_supported, supersavage_display_prepare,
     supersavage_display_begin, supersavage_display_write,
     supersavage_display_end, supersavage_display_complete, supersavage_display_lfb,
-    supersavage_display_publish
+    supersavage_display_publish, 8 /* packed setup verifies SR1B bit 4 */
 };
 static int selftest(uint64_t deadline, void (*line)(void *, const char *), void *ctx,
                     struct display_selftest_result *out)

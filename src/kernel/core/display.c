@@ -695,6 +695,13 @@ int display_fullscreen_lfb(struct display_lfb *out)
     *out=fullscreen_lfb;
     return 0;
 }
+unsigned display_fullscreen_dac_bits(void)
+{
+    if (!fullscreen_display || switching) return 0;
+    /* VBE mode setting restores six-bit precision (VBE 2.0, 4.2/4.11).
+     * Native providers describe the precision their packed setup verifies. */
+    return fullscreen_native ? fullscreen_provider->indexed_dac_bits : 6;
+}
 static int fullscreen_map(uint16_t mode,const uint8_t info[256])
 {
     const struct dos_video_mode *m=dos_video_mode(mode);

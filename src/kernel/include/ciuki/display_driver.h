@@ -36,6 +36,9 @@ struct display_mode_provider {
      * reacquires mode resources to restore it, complete confirms recovery.
      * No callback may keep a framebuffer alias across this handoff. */
     int (*publish)(struct fb_device *);
+    /* Actual component precision programmed and checked by begin for
+     * indexed packed modes (6 or 8); unrelated to framebuffer bpp. */
+    uint8_t indexed_dac_bits;
 };
 struct display_selftest_result {
     unsigned tried, passed, skipped, timeouts, completed;

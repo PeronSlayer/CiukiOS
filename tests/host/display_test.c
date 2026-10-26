@@ -98,7 +98,7 @@ static int native_publish(struct fb_device *out)
 }
 static const struct display_mode_provider fixture_modes = {
     supersavage_display_supported,supersavage_display_prepare,supersavage_display_begin,
-    supersavage_display_write,supersavage_display_end,supersavage_display_complete,NULL,native_publish
+    supersavage_display_write,supersavage_display_end,supersavage_display_complete,NULL,native_publish,8
 };
 const struct display_mode_provider *display_driver_modes(const struct fb_device *fb)
 { (void)fb; return is_supersavage ? &fixture_modes : NULL; }
@@ -467,6 +467,7 @@ static void panel_firmware_tests(void)
         fixture();is_supersavage=native_supported=true;native_begin_error=-EOPNOTSUPP;
         acceleration=&test_acceleration;accel_ports_owned=true;
         assert(!display_fullscreen_begin(modes[i]) && !fullscreen_native && suspended);
+        assert(display_fullscreen_dac_bits()==6);
         assert(native_begins==1 && native_ends==1 && native_completes==1 && native_recovered);
         struct display_lfb lfb;
         assert(!display_fullscreen_lfb(&lfb) && lfb.mapped==firmware_window);
@@ -476,6 +477,7 @@ static void panel_firmware_tests(void)
         assert(display_fullscreen_write(DOS_VBE_BYTES,&pixel,1)==-EINVAL);
         assert(display_fullscreen_write(UINT32_MAX,&pixel,2)==-EINVAL);
         assert(!display_fullscreen_end() && fbdev_get()->present && !suspended && !fullscreen_lfb.mapped);
+        assert(!display_fullscreen_dac_bits());
         assert(display_fullscreen_lfb(&lfb)==-EOPNOTSUPP && display_fullscreen_write(0,&pixel,1)==-EIO);
         /* The temporary LFB alias is revoked before firmware restores. */
         unsigned restore_at=0;
@@ -527,7 +529,9 @@ static void fullscreen_tests(void)
     assert(!display_fullscreen_begin(3) && suspended && !fullscreen_native && native_ends==1 && !switches);
     assert(!display_fullscreen_end() && fbdev_get()->present);
     fixture();is_supersavage=native_supported=true;
-    assert(!display_fullscreen_begin(0x101)); native_end_error=-EIO;
+    assert(!display_fullscreen_begin(0x101));
+    assert(fullscreen_native && display_fullscreen_dac_bits()==8);
+    native_end_error=-EIO;
     display_fullscreen_return_request();g_ticks+=1180;
     assert(!display_fullscreen_end() && fbdev_get()->present && fbdev_get()->mapped && switches==1);
     assert(!suspended && !fullscreen_display && !changing && !switching && awaiting_frame);
