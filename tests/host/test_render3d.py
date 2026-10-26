@@ -147,6 +147,16 @@ class RenderTests(unittest.TestCase):
             'src/kernel/drivers/video/render3d_native.c',
             'src/kernel/drivers/video/s3savage/savage3d.c'],args=['fullsize'])
 
+    def test_sampled_shaders(self):
+        OUT.mkdir(parents=True, exist_ok=True)
+        source=(ROOT/'tests/host/savage2d_test.c').read_text()
+        (OUT/'savage2d_fixture.inc').write_text(source.replace('\nint main(void)\n','\nint frozen_2d_main(void)\n'))
+        self.build_run('shader',['tests/host/savage3d_backend_test.c','src/kernel/lib/fmt.c',
+            'sdk/libgl/software/renderer.c',
+            'src/kernel/drivers/video/render3d.c','src/kernel/drivers/video/render3d_scalar.c',
+            'src/kernel/drivers/video/render3d_native.c',
+            'src/kernel/drivers/video/s3savage/savage3d.c'],args=['shader'])
+
     def test_registry(self):
         expected={'tdfx','rage128','radeon2d','mach64','matrox','i740','i810','intel2d',
                   's3savage','s3virge','sis','unichrome','riva128','nv2d','trident','vmwaresvga'}

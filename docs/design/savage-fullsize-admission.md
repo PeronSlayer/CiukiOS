@@ -181,3 +181,180 @@ With assumed 100 MiB/s readback, one 640x480 color+D16 checkpoint plus reload
 costs 35.156 ms and the 1024x768 pair costs 90 ms, before command submission.
 This rules out repeated GPU/software switching for this backend. The chosen
 context policy follows contract 7.2; larger engine windows or DMA are not added.
+
+## Review round 3: real shader states and census
+
+Research checked before implementation: RE046-B MM48584 (printed pp.188–189)
+defines eight source/destination blend selectors, destination-write flushing,
+and depth writes after alpha testing. Mesa 7.11.2 `savageBlendFunc_s4` maps
+these selectors and sets `wrZafterAlphaTst`; its source/destination colour
+selectors differ. OpenGL 1.1 sections 4.1.3–4.1.6 place alpha rejection before
+depth updates and blend the sampled source against the destination. These
+primary sources are linked above; the pinned Mesa source was read locally.
+Quake III's `tr_shade.c` uses ordered shader stages and texture-coordinate
+modifiers. Its real demo state distribution must be measured, not inferred
+from the asset-free H1 replay.
+
+The round-3 implementation propagates independent source-channel intervals
+through blending against an exact destination. Alpha rejection is ambiguous
+only where the sampled-alpha interval contains both passing and failing
+integer values; either complete pixel outcome is accepted there. All other
+coverage, colour and depth outcomes remain mandatory. Mip selection enters
+the alpha interval too. The existing sample/LOD tolerances are unchanged.
+
+The extended boot probe must qualify 128/256 textures, both independent stages,
+large signed REPEAT coordinates, sampled-alpha thresholds and the supported
+blend selectors before advertising the extended set. GL rebases REPEAT by a
+common integer per triangle and scales shared reciprocal W before Q16 encoding;
+these transformations preserve the exact projective quotient. Numeric ranges,
+the input-error budget and census instructions are recorded with the final
+verification results below. The whole-context fallback policy remains binding.
+
+### Extended numeric domain and boot phases
+
+The qualified maximum is 256x256 per unit, including 128x128 lightmaps.
+Mesa's advertised hardware maximum is 2048x2048, but it provides no proof of
+precision at that limit. Larger resources remain outside this qualification.
+The existing VRAM inventory and claimed extent determine the texture pool;
+there is no increase to a memory limit or unmeasured VRAM reservation. Boot
+scratch needs 480 KiB of that existing pool for a 256-square nine-level chain,
+a 128-square eight-level chain and guards. Insufficient space refuses before
+engine entry. A temporary host staging allocation replaces the old 64 KiB
+command-ring scratch; it is freed immediately after the copied texture upload.
+
+GL accepts shared positive Q20 reciprocal W in [1, 2^28], ratio <=4. It scales
+each triangle's maximum reciprocal W to 256 before rounding to Q16, so the
+minimum is >=64. An integer common REPEAT translation reduces raw coordinates
+within [-4096,4096] to [-16,16]; a triangle whose span cannot fit is refused.
+CLAMP_TO_EDGE coordinates must already fit [-16,16]. No per-vertex modulo is
+used: that would change interpolation across a repeat boundary.
+
+Coordinate recovery contributes <256/65536 = 0.003907 texel; reciprocal-W
+rounding contributes at most
+`256 * 32 * epsilon / (1-epsilon)`, `epsilon=1/(2*65536*64)`, or 0.000977 texel.
+The combined input error is <0.005 texel, leaving >0.0575 texel of the unchanged
+1/16-texel policy for the interpolator/address arithmetic. The fake engine
+parameterizes 24 significant interpolant bits, a signed 14-bit texel-address
+integer accumulator, 12 address-fraction bits and 8 filter-fraction bits.
+These are explicit model assumptions, not documented silicon guarantees.
+The admitted texel positions fit [-4096.5,4096.5], inside that address domain;
+the real chip must still pass the same colour envelope. Repeat addressing and
+texture layout remain exact; a narrower accumulator that loses address bits
+is a refusal. Nearest sampling remains limited to the prior exact constant
+sampling subset. The existing mip reciprocal-W-gradient bound still applies.
+
+There are now 23 precision phases. Phases 1–7 retain the original independent
+ramps, checkers, mip scenes and filter-level sweep. Phases 8–9 exercise signed
+large coordinates at reciprocal W 64..256 and 256/128 textures in both unit
+orders. Phases 10–11 test sampled alpha, including mip discontinuities;
+phases 12–21 test all selector kinds and the six required Quake blend pairs,
+with sampled-alpha/mip state. Phases 22–23 check both signs of constant
+UV=16 with CLAMP_TO_EDGE, which exposes address overflow that REPEAT can
+hide. Each scene keeps the same 20 ms engine window,
+chunked readback, sampled rows, full guard verification and restoration.
+Only success of all phases exposes the extended texture/blend capabilities.
+A restored precision mismatch keeps the full-size affine capability and the
+64-square texture limit. Depth-plane translation implements the scalar
+polygon offset only when every translated vertex remains in D16 range;
+otherwise the context falls back. No undocumented offset register is used.
+
+### Opt-in real-game census
+
+Set **`CIUKI_GL_CENSUS=N` in the Win32 process environment before creating
+its GL context**, where N is 1..10000 successful swaps per report. For example,
+a Win32 parent can call `SetEnvironmentVariableA("CIUKI_GL_CENSUS","60")`
+before launching Quake with `CreateProcessA`; explicit environment blocks must
+include that value. The existing kernel32 environment API is resolved once
+at context creation. Missing, zero, empty or invalid values disable the census.
+There are no histogram allocations, state scans, encoder calls or log writes
+on the disabled path; draw/swap hooks perform only a null-pointer branch.
+Remove the value for performance measurements.
+
+`GL_CENSUS version=1 reference=savage-qualified` summaries report draws,
+coverage_fragments, refused draws, hardware_frames, persistent context_hw,
+render size, other_calls and overflow counts. A draw is one post-clipping
+triangle; fragments count exact top-left geometric coverage before alpha,
+depth and scissor rejection, not framebuffer visibility or a bounding box.
+`GL_CENSUS_CLASS` rows aggregate matching state tuples with draw/fragment
+counts and the shared encoder's admission verdict or a refusal reason.
+Stage tuples are `enabled,width,height,min,mag,wrapS,wrapT,env,internal`; blend tuples
+are `enabled,source,destination`; alpha/depth tuples contain enable,
+function and reference/write mask. Values are GL numeric enums. Fog, signed
+polygon offset, Q20 reciprocal-W min/max and Q16 absolute UV maximum follow.
+W/UV power-of-two ranges distinguish otherwise matching classes. Up to 256
+classes are retained per interval; overflow counts remain explicit in the
+summary. A nonzero overflow means the detailed histogram is incomplete.
+
+`hardware_frames` assumes the fully qualified 1024-square Savage capability
+and adequate resource residency, independently of QEMU's installed adapter.
+Once an unsupported draw or non-triangle raster operation occurs, the
+reference context stays in software for the rest of its lifetime. No census
+record enables hardware, changes the real provider or relaxes its admission.
+Because the context remains pinned after its first refusal, `hardware_frames=K`
+within an N-frame interval means its first K frames qualify and all subsequent
+frames require software. The first refused frame is
+`frame - frames + hardware_frames + 1`, when K < N. Context teardown emits any
+final interval, marks an unswapped final frame with `partial=1`, and frees all
+census memory.
+The complete H1 replay and real-demo census are different evidence: only the
+lead's real-game run can establish its state distribution and residual refusals.
+
+Sink comparison: `services/ciuki.c:diagnostic` and the kernel's
+`w32_diagnostic_record` deliberately reject free-form informational/debug
+records. The census therefore uses the existing `CIUKI_SYS_DEBUG_WRITE` sink,
+as `sdk/win32/audio/mcicd.c:log_path` already does. This needs no new syscall or
+relaxed Win32 diagnostic validation. Each physical line is <=240 bytes and
+appears as `[user <task>] GL_CENSUS_PART c=<context> r=<record> p=<part>
+end=<0|1> data=<text>`. Join consecutive data fields with matching task,
+context and record, checking part numbers from zero through end=1, to recover
+the logical GL_CENSUS / GL_CENSUS_CLASS / GL_CENSUS_CLEAR records above.
+The host sink verifies this physical bound and reassembles the same format.
+Clear admission/refusal is counted separately so a state rejected during a
+clear also pins the reference context. No other diagnostic route is changed.
+
+Additional primary-source check: [EXT_texture_compression_s3tc, issue 4 and
+base-format table](https://registry.khronos.org/OpenGL/extensions/EXT/EXT_texture_compression_s3tc.txt)
+distinguishes opaque RGB DXT1 from transparent RGBA DXT1/3/5. The repository
+already owns decoded canonical pixels for these images. Their admission uses
+those pixels, with RGB alpha normalized to one during the copied upload;
+no compressed layout or new decoder enters the driver. GDI's existing XRGB
+pixel formats explicitly advertise zero alpha bits. Consequently GL destination
+alpha blend factors translate to ONE/ZERO, as in the software GL, while native
+ARGB render3d retains the real destination-alpha selectors. Both interfaces
+are tested separately. RGB REPLACE uses the opaque uploaded alpha with DECAL
+to replace RGB while preserving incoming alpha, exactly as GL requires.
+
+Quake III's primary [`GL_SetDefaultState`](https://raw.githubusercontent.com/id-Software/Quake-III-Arena/master/code/renderer/tr_init.c)
+enables scissoring; [`SetViewportAndScissor` and `RB_SetGL2D`](https://raw.githubusercontent.com/id-Software/Quake-III-Arena/master/code/renderer/tr_backend.c)
+set the view/full-screen box. A box containing the entire target is an exact
+no-op and is admitted, including clear operations. Partial scissor boxes still
+refuse the context because the wire does not carry an arbitrary clip rectangle.
+The census records the box and a distinct `scissor` refusal.
+
+OpenGL 1.1 section 3.8 distinguishes GL_CLAMP's border filtering from edge
+clamping. Non-mip LINEAR GL_CLAMP is admitted only when every projected vertex
+stays between the outer texel centres, allowing 1/32 texel for the existing
+coordinate envelope. Positive shared W keeps all interior samples in that
+convex interval. Replacing an outlying hardware tap by the edge texel then
+corresponds to a reference sample at that outer centre within 1/16 texel.
+Border-dependent coordinates and mipmapped GL_CLAMP still refuse; the oracle
+retains the actual border colour rather than treating GL_CLAMP as REPEAT.
+
+The boot envelope keeps rational projected coordinates in Q24 before texel
+Q16 conversion. Its reference error is below two texel-Q16 steps at size 256;
+those steps are subtracted from the declared radius, not added to it. Two Q8
+LOD steps are reserved for reference-logarithm and quotient recovery error.
+Larger textures therefore do not inherit the old 32-square reference error.
+
+For varying mip sampling, let G be the sum of absolute barycentric gradients
+in pixel units, S the larger texture dimension, R the reciprocal-W ratio
+rounded up, and U the maximum local coordinate magnitude rounded up. With
+normalized W>=64, relative W recovery error <=2^-23 and UV Q16 recovery, a
+conservative derivative-error bound is
+`S*(33+2*U)/2^21*(R*G+1/32)` texels/pixel. Admission additionally requires this
+to be <=1/256. Finite-neighbour error, recovery error and the reference's
+reserved LOD steps then satisfy
+`log2(32/31)+log2(257/256)+2/256 < 1/16` octave. Skinny mipmapped triangles
+outside this proof refuse with `mip-gradient`, retaining the whole-context
+software policy; this limit is explicit for the real-game census. Zero-area
+triangles generate no samples and do not require a LOD bound.

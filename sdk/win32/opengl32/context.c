@@ -283,6 +283,7 @@ HGLRC W32API wglCreateContext(HDC dc) {
   gl_window_state(c);
   glViewport(0, 0, w, h);
   gl_defaults(c);
+  gl_census_open(c);
   contexts[slot] = c;
   gl_selected_context = 0;
   return c->handle;
@@ -301,6 +302,7 @@ BOOL W32API wglDeleteContext(HGLRC h) {
   if (!c || (c->tid && c->tid != tid()))
     return 0;
   gl_hw_close(c);
+  gl_census_close(c);
   for (unsigned i = 0; i < 16; i++)
     if (contexts[i] == c)
       contexts[i] = 0;
@@ -448,6 +450,7 @@ BOOL W32API w32_gl_swap(HDC dc) {
     w32_copy(c->front_color, c->back_color, c->sw.width * c->sw.height * 4);
   }
   c->frames++;
+  if (c->census) gl_census_frame(c);
   return 1;
 }
 BOOL W32API GlDllMain(void *m, DWORD why, void *reserved) {

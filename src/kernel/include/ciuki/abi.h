@@ -3393,9 +3393,10 @@ _Static_assert(sizeof(struct ciuki_w32_header) == 16, "ciuki_w32_header frozen s
 #define CIUKI_R3D_RGB565 4u
 #define CIUKI_R3D_ARGB4444 8u
 #define CIUKI_R3D_WIRE_LIMIT 6291456u
-/* Per-boot sample-space qualification: shared reciprocal W 0.5..2, ratio
- * <=4, UV -4..4, <=64 textures, linear/qualified mip filtering, Q4 coverage.
- * Sampled-alpha thresholds and unsupported states still use software. */
+/* Per-boot sample-space qualification: shared reciprocal W ratio <=4,
+ * native UV -16..16, <=256 textures, linear/qualified mip filtering and Q4
+ * coverage. Sampled-alpha/blend envelopes and adapter-specific recovery/LOD
+ * bounds are defined in docs/design/savage-fullsize-admission.md. */
 #define CIUKI_R3D_PROJECTIVE_BILINEAR 1u
 /* Earlier exact affine subset remains available after precision refusal. */
 #define CIUKI_R3D_AFFINE_EXACT 2u
@@ -3422,6 +3423,15 @@ _Static_assert(sizeof(struct ciuki_w32_header) == 16, "ciuki_w32_header frozen s
 #define CIUKI_R3D_ZERO 1u
 #define CIUKI_R3D_SRC_ALPHA 2u
 #define CIUKI_R3D_INV_SRC_ALPHA 3u
+/* Colour selectors are slot-specific: DST_COLOR/INV_DST_COLOR are source
+ * factors; SRC_COLOR/INV_SRC_COLOR are destination factors. Alpha selectors
+ * and ONE/ZERO work in either slot. Caps contain the union of selector bits. */
+#define CIUKI_R3D_DST_COLOR 4u
+#define CIUKI_R3D_SRC_COLOR 5u
+#define CIUKI_R3D_INV_DST_COLOR 6u
+#define CIUKI_R3D_INV_SRC_COLOR 7u
+#define CIUKI_R3D_DST_ALPHA 8u
+#define CIUKI_R3D_INV_DST_ALPHA 9u
 #define CIUKI_R3D_MODULATE 0u
 #define CIUKI_R3D_REPLACE 1u
 #define CIUKI_R3D_ADD 2u

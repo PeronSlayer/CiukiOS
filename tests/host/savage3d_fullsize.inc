@@ -12,10 +12,10 @@ static void fullsize_resources3d(struct render3d_service *s,const struct render3
     render3d_init(s,host,42,0,0,(struct render3d_extent){0});
     uint32_t c,handle; FULL_CHECK(!render3d_create_context(s,1,R3D_SOFTWARE,&c));
     const unsigned kinds[]={R3D_COLOR,R3D_D16,R3D_TEXTURE,R3D_LINEAR_COLOR,R3D_TEXTURE};
-    unsigned at=gpu3d.heap.first,tex=gpu3d.heap.first+gpu3d.heap.bytes-SAVAGE3D_TEXTURE_MIN;
+    unsigned at=gpu3d.heap.first,tex=gpu3d.heap.first+gpu3d.heap.bytes-gpu3d.texture_bytes;
     for (unsigned i=0;i<5;i++) {
         if (kinds[i]==R3D_TEXTURE) {
-            struct render3d_texture_desc t; texture_fixture3d(&t,R3D_ARGB8888,32,6);
+            struct render3d_texture_desc t; texture_fixture3d(&t,R3D_ARGB8888,i==2 ? 256 : 128,i==2 ? 9 : 8);
             FULL_CHECK(!render3d_create_texture(s,1,c,&t,&handle));
         } else FULL_CHECK(!render3d_create_resource(s,1,c,kinds[i],w,h,0,0,&handle));
         if (hardware) {
@@ -32,7 +32,7 @@ static void fullsize3d(unsigned w,unsigned h,unsigned fault)
     memset(ram3d,0x7a,sizeof(ram3d));
     draw3d=copy3d=writes3d=memory3d=count3d=corruption3d=0; dropping3d=bad_restore3d=false;
     gpu3d=(struct savage3d_device){.engine=&test_engine,.heap={0x800000,sizeof(ram3d)},.generation=42,
-        .mode_width=w,.mode_height=h,.memory={0,memory_read3d,memory_write3d,lock3d,unlock3d}};
+        .mode_width=w,.mode_height=h,.texture_bytes=480*1024,.memory={0,memory_read3d,memory_write3d,lock3d,unlock3d}};
     struct render3d_host host={0,allocate3d,free3d,clock3d,0};
     FULL_CHECK(savage3d_fullsize_probe(&gpu3d,&reference3d)==-ENODEV && !writes3d);
     gpu3d.qualified=true; test_engine.render3d_qualified=true; gpu3d.fullsize_testing=true;
@@ -51,10 +51,11 @@ static void fullsize3d(unsigned w,unsigned h,unsigned fault)
     if (fault==10) probe_filter_bits3d=1;
     if (fault==11) probe_lod_bias3d=1;
     if (fault==12) probe_filter_bits3d=7;
+    if (fault==13) probe_address_bits3d=7;
     if (fault==4) gpu3d.heap.bytes-=4*1024*1024; /* preflight, before entry/writes */
     read_delay3d=fault==5 ? 2 : fault==6 ? 9 : 0;
     int e=savage3d_fullsize_probe(&gpu3d,&reference3d);
-    read_delay3d=0; slow_guard3d=false; sampling3d.affine=false; sampling3d.bias=0; probe_filter_bits3d=0; probe_lod_bias3d=0;
+    read_delay3d=0; slow_guard3d=false; sampling3d.affine=false; sampling3d.bias=0; probe_filter_bits3d=0; probe_lod_bias3d=0; probe_address_bits3d=0;
     if (e && !fault) fprintf(stderr,"fullsize %ux%u error=%d phase=%u expected=%08x actual=%08x channel=%u depth=%u\n",
         w,h,e,gpu3d.failed_phase,gpu3d.expected,gpu3d.actual,gpu3d.max_channel_error,gpu3d.max_depth_error);
     bool success=!fault || fault==5 || fault>=8;
@@ -155,7 +156,8 @@ static void projective3d(const uint32_t handles[2][4],const uint32_t contexts[2]
         texture.min=texture.mag=GL_NEAREST; FULL_CHECK(gl_hw_encode(&caps,&command,1,2,3,&q));
         texture.min=texture.mag=GL_LINEAR;
 
-        command.state.alpha_test=1; FULL_CHECK(gl_hw_encode(&caps,&command,1,2,3,&q)); command.state.alpha_test=0;
+        command.state.alpha_test=1; command.state.alpha_func=GL_GEQUAL;
+        FULL_CHECK(!gl_hw_encode(&caps,&command,1,2,3,&q)); command.state.alpha_test=0;
         command.state.blend=1; command.state.sfactor=GL_SRC_ALPHA; command.state.dfactor=GL_ONE_MINUS_SRC_ALPHA; FULL_CHECK(!gl_hw_encode(&caps,&command,1,2,3,&q)); command.state.blend=0;
         int saved_qw=command.vertices[0].qw[0];
         command.vertices[0].qw[0]=524272; FULL_CHECK(gl_hw_encode(&caps,&command,1,2,3,&q));
@@ -299,7 +301,7 @@ static void large_batch3d(void)
     memset(ram3d,0x7a,sizeof(ram3d)); count3d=corruption3d=draw3d=copy3d=0;
     dropping3d=bad_restore3d=false;
     gpu3d=(struct savage3d_device){.engine=&test_engine,.heap={0x800000,sizeof(ram3d)},.generation=42,
-        .qualified=true,.fullsize_qualified=true,.perspective_qualified=true,.mode_width=640,.mode_height=480,
+        .qualified=true,.fullsize_qualified=true,.perspective_qualified=true,.texture_bytes=480*1024,.mode_width=640,.mode_height=480,
         .memory={0,memory_read3d,memory_write3d,lock3d,unlock3d}};
     test_engine.render3d_qualified=true; test_engine.io.write32=write_engine3d;
     struct render3d_host host={0,allocate3d,free3d,clock3d,0};
@@ -396,9 +398,10 @@ static void large_batch3d(void)
     puts("bounded CPU readback: 2 us/read completes and restores; 9 us/read refuses and restores without quarantine PASS");
     FULL_CHECK(!render3d_close(&scratch3d) && !render3d_close(&reference3d) && !allocations3d); finish();
 }
+#include "savage3d_shader.inc"
 static void fullsize_suite3d(void)
 {
     fullsize3d(640,480,0); fullsize3d(800,600,0); fullsize3d(1024,768,0);
-    for (unsigned fault=1;fault<=12;fault++) fullsize3d(640,480,fault);
+    for (unsigned fault=1;fault<=13;fault++) fullsize3d(640,480,fault);
     large_batch3d();
 }

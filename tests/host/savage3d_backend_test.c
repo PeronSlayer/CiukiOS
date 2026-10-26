@@ -15,9 +15,10 @@ static bool dropping3d, bad_restore3d;
 static unsigned read_delay3d;
 static uint64_t fragments3d;
 static bool slow_guard3d;
-struct sampling_model3d { unsigned interpolant_bits, address_bits, filter_bits; bool round_weights, affine; long double bias; };
-static struct sampling_model3d sampling3d={24,12,8,false,false,0};
+struct sampling_model3d { unsigned interpolant_bits, address_bits, filter_bits; bool round_weights, affine; long double bias; unsigned address_integer_bits; };
+static struct sampling_model3d sampling3d={24,12,8,false,false,0,14};
 static unsigned probe_filter_bits3d;
+static unsigned probe_address_bits3d;
 static long double probe_lod_bias3d;
 static uint32_t physical3d(uint32_t address,unsigned bytes)
 {
@@ -404,6 +405,7 @@ int main(int argc,char **argv)
 {
     setvbuf(stdout,0,_IONBF,0);
     if (argc==2 && !strcmp(argv[1],"fullsize")) fullsize_suite3d();
+    else if (argc==2 && !strcmp(argv[1],"shader")) shader_precision3d();
     else if (argc==2 && !strcmp(argv[1],"variants")) backend3d(0,true);
     else for (unsigned i=0;i<6;i++) backend3d(i,i==0);
     printf("Savage shaded fragments=%llu\n",(unsigned long long)fragments3d);

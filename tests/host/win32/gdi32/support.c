@@ -44,7 +44,13 @@ static void wake_word(void *opaque, volatile uint32_t *p) {
   (void)opaque;
   syscall(SYS_futex, p, 129, 0x7fffffff, 0, 0, 0);
 }
+static void diagnostic(void *ctx,const char *level,const char *module,const char *line) {
+  (void)ctx; (void)level; (void)module;
+  extern void test_gl_diagnostic(const char *) __attribute__((weak));
+  if (test_gl_diagnostic) test_gl_diagnostic(line);
+}
 static const struct w32_services services = {.alloc = allocate,
+                                             .diagnostic = diagnostic,
                                              .free = release,
                                              .thread_id = tid,
                                              .wait_word = wait_word,

@@ -122,6 +122,9 @@ static uint64_t host_now(void *ctx)
 { (void)ctx; return device.engine->io.now_us(device.engine->io.ctx); }
 static int scratch_create(struct render3d_service **out,unsigned width,unsigned height,bool full,bool hardware)
 {
+    /* The existing inventory-derived pool must contain both mip chains and
+     * their guards. This is preflight, never a larger VRAM claim or limit. */
+    if (full && hardware && device.texture_bytes<480u*1024) return -ENOMEM;
     struct render3d_service *s=kmalloc(sizeof(*s)); if (!s) return -ENOMEM;
     const struct render3d_host host={0,host_alloc,host_free,host_now,0};
     render3d_init(s,&host,device.generation,0,0,(struct render3d_extent){0});
@@ -133,15 +136,21 @@ static int scratch_create(struct render3d_service **out,unsigned width,unsigned 
         uint32_t resource;
         uint32_t *pixels=(void *)s->ring[2];
         if (full && kinds[i]==R3D_TEXTURE) {
-            struct render3d_texture_desc desc={.format=R3D_ARGB8888,.width=32,.height=32,.levels=6};
+            unsigned base=i==2 ? 256 : 128,levels=i==2 ? 9 : 8;
+            /* The copied texture outlives this bounded staging allocation.
+             * Never use a 64 KiB command-ring slot for a 256-square image. */
+            pixels=kmalloc(base*base*4*2);
+            if (!pixels) { e=-ENOMEM; break; }
+            struct render3d_texture_desc desc={.format=R3D_ARGB8888,.width=base,.height=base,.levels=levels};
             unsigned offset=0;
-            for (unsigned level=0,side=32;level<6;level++,side=side>1 ? side/2 : 1) {
+            for (unsigned level=0,side=base;level<levels;level++,side=side>1 ? side/2 : 1) {
                 for (unsigned y=0;y<side;y++) for (unsigned x=0;x<side;x++)
-                    pixels[offset+y*side+x]=0xff000000u|((96+x*2+level*8)<<16)|((112+y*2+level*8)<<8)|(128+level*8+i);
+                    pixels[offset+y*side+x]=0xff000000u|((96+x*32/side+level*4)<<16)|((112+y*32/side+level*4)<<8)|(128+level*4+i);
                 desc.image[level]=(struct render3d_texture_image){pixels+offset,side*side*4,side*4};
                 offset+=side*side;
             }
             e=render3d_create_texture(s,1,context,&desc,&resource);
+            kfree(pixels);
         } else {
             if (i==2) for (unsigned j=0;j<32*16;j++) pixels[j]=(j%32)<16 ? 0xff4080c0u : 0xffc04080u;
             e=render3d_create_resource(s,1,context,kinds[i],i==2 ? 32 : width,i==2 ? 16 : height,

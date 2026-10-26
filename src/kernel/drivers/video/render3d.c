@@ -292,7 +292,9 @@ int render3d_validate_state(const struct render3d_request *q)
 {
     const struct render3d_state *a=&q->state;
     if (a->depth_func>R3D_GEQUAL || a->alpha_func>R3D_GEQUAL || a->alpha_ref>255 ||
-        a->alpha_test>1 || a->blend>1 || a->flat>1 || a->source>R3D_INV_SRC_ALPHA || a->destination>R3D_INV_SRC_ALPHA)
+        a->alpha_test>1 || a->blend>1 || a->flat>1 || a->source>R3D_INV_DST_ALPHA || a->destination>R3D_INV_DST_ALPHA ||
+        a->source==R3D_SRC_COLOR || a->source==R3D_INV_SRC_COLOR ||
+        a->destination==R3D_DST_COLOR || a->destination==R3D_INV_DST_COLOR)
         return -EINVAL;
     for (unsigned i=0;i<2;i++) {
         const struct render3d_sampler *t=&a->sampler[i];

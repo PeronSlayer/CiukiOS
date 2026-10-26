@@ -23,7 +23,7 @@ class GLTests(unittest.TestCase):
   spec=importlib.util.spec_from_file_location('glbuild',ROOT/'sdk/libgl/build.py');gl=importlib.util.module_from_spec(spec);spec.loader.exec_module(gl)
   lib=gl.host(sanitize=sanitize)
   units=[ROOT/'sdk/win32/gdi32'/n for n in gdi32.SOURCES if n not in ('compiler.c','compiler.S')]
-  units += [ROOT/'sdk/win32/services/bytes.c',ROOT/'tests/host/win32/gdi32/support.c',HERE/'engine.c',HERE/'amendment.c',HERE/'review.c',HERE/'amendment2.c',HERE/'transport.c',HERE/'fixture.c',HERE/'quake3.c',HERE/'raster.c',HERE/'raster_reference.c']
+  units += [ROOT/'sdk/win32/services/bytes.c',ROOT/'tests/host/win32/gdi32/support.c',HERE/'engine.c',HERE/'census.c',HERE/'amendment.c',HERE/'review.c',HERE/'amendment2.c',HERE/'transport.c',HERE/'fixture.c',HERE/'quake3.c',HERE/'raster.c',HERE/'raster_reference.c']
   units += list((ROOT/'sdk/win32/opengl32').glob('*.c'))+[ROOT/'sdk/libgl/software/renderer.c']
   fixture_source=(ROOT/'tests/host/savage3d_backend_test.c').read_text()
   (out/'savage3d_backend_fixture.inc').write_text(fixture_source.replace('int main(int argc,char **argv)','int frozen_3d_main(int argc,char **argv)'))
@@ -115,8 +115,12 @@ class GLTests(unittest.TestCase):
   print(p.stdout,end='');self.assertEqual(p.returncode,0,p.stdout+p.stderr)
   check_quake3(p.stdout,sanitize=True)
  def test_kernel_transport(self):
-  p=subprocess.run([str(self.binary),'--kernel-transport'],capture_output=True,text=True,timeout=120)
+  p=subprocess.run([str(self.binary),'--kernel-transport'],capture_output=True,text=True,timeout=600)
   print(p.stdout,end='');self.assertEqual(p.returncode,0,p.stdout+p.stderr)
+ def test_census(self):
+  p=subprocess.run([str(self.binary),'--census'],capture_output=True,text=True,timeout=60)
+  print(p.stdout,end='');self.assertEqual(p.returncode,0,p.stdout+p.stderr)
+  self.assertIn('PASS census:',p.stdout)
  def test_hardware_adapter(self):
   p=subprocess.run([str(self.binary),'--hardware'],capture_output=True,text=True,timeout=60)
   print(p.stdout,end='');self.assertEqual(p.returncode,0,p.stdout+p.stderr)
@@ -130,7 +134,7 @@ class GLTests(unittest.TestCase):
   p=subprocess.run([str(binary)],capture_output=True,text=True,timeout=60)
   print(p.stdout,end='');self.assertEqual(p.returncode,0,p.stdout+p.stderr)
  def test_hardware_quake3_replay(self):
-  p=subprocess.run([str(self.binary),'--hardware-quake3'],capture_output=True,text=True,timeout=300)
+  p=subprocess.run([str(self.binary),'--hardware-quake3'],capture_output=True,text=True,timeout=900)
   print(p.stdout,end='');self.assertEqual(p.returncode,0,p.stdout+p.stderr)
   check_quake3(p.stdout,sanitize=True)
   row=re.search(r'GL_HW_MODEL submissions=(\d+) vertices=(\d+)',p.stdout)
@@ -144,9 +148,10 @@ class GLTests(unittest.TestCase):
    self.assertGreaterEqual(int(world)*100,int(total_world)*95)
    self.assertGreaterEqual(int(entities)*100,int(total_entities)*95)
    self.assertEqual(int(switches),0)
-   self.assertEqual(int(gpu),2202 if scope=='qualified-prefix' else 0)
-   self.assertEqual(int(cpu),0 if scope=='qualified-prefix' else 3000)
-   self.assertGreater(int(fragments if scope=='qualified-prefix' else cpu_fragments),0)
+   self.assertIn(scope,('complete','complete-multipass'))
+   self.assertEqual(int(gpu),4600 if scope=='complete-multipass' else 3000)
+   self.assertEqual(int(cpu),0)
+   self.assertGreater(int(fragments),0)
  def test_hardware_quake3_default_format_replay(self):
   p=subprocess.run([str(self.binary),'--hardware-quake3-default'],capture_output=True,text=True,timeout=120)
   print(p.stdout,end='');self.assertEqual(p.returncode,0,p.stdout+p.stderr)

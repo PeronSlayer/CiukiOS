@@ -115,7 +115,11 @@ static int texture(unsigned id,const struct sw_texture *s,unsigned *out) {
   unsigned at=0;
   for (unsigned i=0;i<levels;i++) {
     unsigned n=s->image[i].w*s->image[i].h*4;
-    w32_copy((uint8_t *)data+at,s->image[i].pixels,n); at+=n;
+    uint32_t *pixels=(void *)((uint8_t *)data+at);
+    w32_copy(pixels,s->image[i].pixels,n);
+    if (gl_hw_texture_rgb(s->image[i].internal))
+      for (unsigned j=0;j<n/4;j++) pixels[j]|=0xff000000u;
+    at+=n;
   }
   struct ciuki_w32_render3d_args a=args(c,CIUKI_R3D_TEXTURE);
   a.width=s->image[0].w; a.height=s->image[0].h; a.levels=levels;

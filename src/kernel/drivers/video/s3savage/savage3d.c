@@ -330,10 +330,8 @@ static int validate(void *device,const struct render3d_request *q,struct render3
     if (!(q->flags&R3D_TEXTURE1) && r[4]) return -EINVAL;
     for (unsigned stage=0;stage<2;stage++) if (q->flags&(stage ? R3D_TEXTURE1 : R3D_TEXTURED)) {
         const struct render3d_resource *t=r[stage ? 4 : 2];
-        /* The boot probe qualifies <=64x64 resources only. Larger texture
-         * layouts/shadows remain available to scalar draws until f7-06
-         * measures bounded upload costs; host tests do not raise this cap. */
-        if (t->width>64 || t->height>64) return -EOPNOTSUPP;
+        unsigned limit=d->perspective_qualified || d->fullsize_testing ? 256 : 64;
+        if (t->width>limit || t->height>limit) return -EOPNOTSUPP;
         /* DECAL of alpha-only textures has no GL-defined hardware meaning. */
         if (q->state.sampler[stage].combine==R3D_DECAL && t->format==R3D_A8) return -EOPNOTSUPP;
     }
@@ -342,19 +340,22 @@ static int validate(void *device,const struct render3d_request *q,struct render3
     if ((q->flags&R3D_COPY) && r[3]->kind==R3D_COLOR) return -EOPNOTSUPP;
     for (unsigned i=0;i<q->count;i++) if (q->vertices[i].x<0 || q->vertices[i].y<0 ||
         q->vertices[i].x>(int32_t)(r[0]->width<<16) || q->vertices[i].y>(int32_t)(r[0]->height<<16)) return -EINVAL;
+    if (!d->fullsize_testing && !d->perspective_qualified && q->state.blend &&
+        (q->state.source>R3D_INV_SRC_ALPHA || q->state.destination>R3D_INV_SRC_ALPHA)) return -EOPNOTSUPP;
     if (d->fullsize_qualified && !d->fullsize_testing && (q->flags&R3D_TEXTURED))
       for (unsigned first=0;first<q->count;first+=3) {
         bool varying=q->vertices[first].rhw!=q->vertices[first+1].rhw ||
                      q->vertices[first].rhw!=q->vertices[first+2].rhw;
         if (!varying) continue;
         if (!d->perspective_qualified) return -EOPNOTSUPP;
+        unsigned lo=UINT32_MAX,hi=0;
         for (unsigned i=first;i<first+3;i++) {
             const struct render3d_vertex *v=&q->vertices[i];
-            if (v->rhw<32768 || v->rhw>131072 || (v->x&4095) || (v->y&4095) ||
-                v->u < -4*65536 || v->u>4*65536 || v->v < -4*65536 || v->v>4*65536 ||
-                ((q->flags&R3D_TEXTURE1) && (q->uv1[i][0] < -4*65536 || q->uv1[i][0]>4*65536 ||
-                  q->uv1[i][1] < -4*65536 || q->uv1[i][1]>4*65536))) return -EOPNOTSUPP;
+            if (v->rhw<32768 || v->rhw>16777216 || (v->x&4095) || (v->y&4095)) return -EOPNOTSUPP;
+            if (v->rhw<lo) lo=v->rhw;
+            if (v->rhw>hi) hi=v->rhw;
         }
+        if (hi>4*lo) return -EOPNOTSUPP;
       }
     uint32_t words[28]; unsigned count;
     for (unsigned first=0;first<q->count;first+=3) {
@@ -447,7 +448,7 @@ static int clear_resource(struct savage3d_device *d,struct render3d_resource *r,
 }
 static int state(struct savage3d_device *d,const struct render3d_request *q,struct render3d_resource *const r[R3D_REFS])
 {
-    static const uint8_t depth_func[]={4,0,7,2,6,1,5,3},alpha_func[]={1,0,7,2,3,4,5,6},factors[]={1,0,4,5};
+    static const uint8_t depth_func[]={4,0,7,2,6,1,5,3},alpha_func[]={1,0,7,2,3,4,5,6},factors[]={1,0,4,5,2,2,3,3,6,7};
     uint32_t ctrl[2]={0x5f040,0x5f040},blend[2]={0x00850405,0x00870407},desc=0x60000000;
     for (unsigned stage=0;stage<2;stage++) if (q->flags&(stage ? R3D_TEXTURE1 : R3D_TEXTURED)) {
         const struct render3d_resource *t=r[stage ? 4 : 2];
@@ -622,7 +623,10 @@ static void query_caps(void *owner,struct ciuki_r3d_caps *out)
         out->max_vertices=R3D_VERTICES;
         out->max_pixel_work=4*d->mode_width*d->mode_height;
         out->sampling_features=CIUKI_R3D_AFFINE_EXACT;
-        if (d->perspective_qualified) out->sampling_features|=CIUKI_R3D_PROJECTIVE_BILINEAR;
+        if (d->perspective_qualified) {
+            out->sampling_features|=CIUKI_R3D_PROJECTIVE_BILINEAR;
+            out->max_texture_size=256; out->blend_factors=1023;
+        }
     }
 }
 static uint32_t texture_pool_bytes(void *owner)
@@ -634,7 +638,7 @@ const struct render3d_backend *savage3d_backend(void)
 {
     static const struct ciuki_r3d_caps capabilities={
         .version=CIUKI_R3D_VERSION,.features=R3D_ALL_FEATURES,.max_size=64,
-        .max_vertices=3,.texture_units=2,.max_texture_size=1024,
+        .max_vertices=3,.texture_units=2,.max_texture_size=64,
         .depth_formats=CIUKI_R3D_D16,.color_formats=CIUKI_R3D_ARGB8888,
         .texture_formats=63,.depth_functions=255,.alpha_functions=255,
         .blend_factors=15,.combine_modes=15,.filters=31,.max_pixel_work=4096};
@@ -791,13 +795,14 @@ static void precision_scene(struct render3d_request *q,struct render3d_resource 
             for (unsigned y=0;y<height;y++) for (unsigned x=0;x<width;x++) {
                 unsigned ramp=phase&1 ? ((x+y+level)&1)*255 : width>1 ? x*255/(width-1) : level*37;
                 unsigned cross=phase&1 ? ((x/2+y/3+level)&1)*255 : height>1 ? y*255/(height-1) : level*29;
-                pixels[y*width+x]=stage ? 0xffff0000u|(ramp<<8)|cross : 0xff00ff00u|(ramp<<16)|cross;
+                unsigned alpha=phase>=9 ? ((x*17+y*29+level*37)&255) : 255;
+                pixels[y*width+x]=(alpha<<24)|(stage ? 0xff0000u|(ramp<<8)|cross : 0x00ff00u|(ramp<<16)|cross);
                 if (phase==6) pixels[y*width+x]=stage ? 0xffff00ffu|(((x&1)*255)<<8) : 0xff00ffffu|(((x&1)*255)<<16);
             }
         }
         t->resident=false;
         q->state.sampler[stage]=(struct render3d_sampler){R3D_MODULATE,
-            phase<4 || phase==6 ? R3D_BILINEAR : phase==4 ? R3D_BILINEAR_MIP : R3D_TRILINEAR,1,1};
+            phase<4 || (phase>=6 && phase<10) || phase>=21 ? R3D_BILINEAR : phase==4 || phase==10 ? R3D_BILINEAR_MIP : R3D_TRILINEAR,phase<21,phase<21};
     }
     for (unsigned i=0;i<6;i++) {
         struct render3d_vertex *v=&q->vertices[i];
@@ -819,15 +824,45 @@ static void precision_scene(struct render3d_request *q,struct render3d_resource 
             v->u=(32768+x*65536)/r[2]->width; v->v=32768/r[2]->height;
             q->uv1[i][0]=(32768+(1-x)*65536)/r[4]->width; q->uv1[i][1]=32768/r[4]->height;
         }
+        if (phase>=7) {
+            v->rhw=(x ? 256u : 64u)*65536;
+            v->u=(int32_t)(x*30*65536)-15*65536+1385;
+            v->v=(int32_t)(y*28*65536)-14*65536+1190;
+            q->uv1[i][0]=(int32_t)(y*28*65536)-14*65536+3522;
+            q->uv1[i][1]=(int32_t)(x*30*65536)-15*65536+3570;
+        }
+        if (phase>=21) {
+            /* Constant extreme coordinates isolate address overflow before
+             * CLAMP_TO_EDGE; REPEAT alone can hide lost high address bits. */
+            v->u=(phase==21 ? -16 : 16)*65536; v->v=-v->u;
+            q->uv1[i][0]=-v->u; q->uv1[i][1]=v->u;
+        }
+    }
+    if (phase>=9 && phase<21) {
+        q->state.alpha_test=1; q->state.alpha_func=R3D_GEQUAL; q->state.alpha_ref=64;
+    }
+    if (phase>=11 && phase<21) {
+        static const unsigned src[]={R3D_ONE,R3D_SRC_ALPHA,R3D_ONE,R3D_DST_COLOR,R3D_ZERO,R3D_ONE,
+            R3D_INV_DST_COLOR,R3D_DST_ALPHA,R3D_INV_DST_ALPHA,R3D_INV_SRC_ALPHA};
+        static const unsigned dst[]={R3D_ONE,R3D_INV_SRC_ALPHA,R3D_INV_SRC_ALPHA,R3D_ZERO,R3D_SRC_COLOR,R3D_ZERO,
+            R3D_INV_SRC_COLOR,R3D_INV_DST_ALPHA,R3D_DST_ALPHA,R3D_SRC_ALPHA};
+        q->state.blend=1; q->state.source=src[phase-11]; q->state.destination=dst[phase-11];
     }
 }
 static int precision_probe(struct savage3d_device *d,struct render3d_request *q,
-    struct render3d_resource *const hw[R3D_REFS],struct render3d_resource *const ref[R3D_REFS])
+    struct render3d_resource *const hardware[R3D_REFS],struct render3d_resource *const reference[R3D_REFS])
 {
     d->sample_delta_q16=CIUKI_R3D_SAMPLE_DELTA_Q16;
     d->filter_fraction_bits=CIUKI_R3D_FILTER_FRACTION_BITS;
     int e=0;
-    for (unsigned phase=0;phase<7 && !e;phase++) {
+    for (unsigned phase=0;phase<23 && !e;phase++) {
+        struct render3d_resource *hw[R3D_REFS],*ref[R3D_REFS];
+        for (unsigned i=0;i<R3D_REFS;i++) { hw[i]=hardware[i]; ref[i]=reference[i]; }
+        /* Qualify 256-square addressing and mip selection in EACH unit while
+         * reusing the same two allocations and their guard extents. */
+        if (phase==8 || phase==10 || phase>=16) {
+            hw[2]=hardware[4]; hw[4]=hardware[2]; ref[2]=reference[4]; ref[4]=reference[2];
+        }
         uint32_t levels[2][8]={{0}};
         d->precision_phase=phase+1;
         precision_scene(q,hw,phase);
@@ -843,15 +878,15 @@ static int precision_probe(struct savage3d_device *d,struct render3d_request *q,
         leave(d);
         if (e) break;
         const uint32_t *a=hw[0]->shadow,*copy=hw[3]->shadow;
-        const uint16_t *az=hw[1]->shadow,*bz=ref[1]->shadow;
+        const uint16_t *az=hw[1]->shadow;
         for (unsigned y=0;y<hw[0]->height && !e;y++) {
             if (y%16 && y!=hw[0]->height-1) continue;
             for (unsigned x=0;x<hw[0]->width;x++) {
                 unsigned at=y*hw[0]->width+x;
                 /* Full rectangle has no holes; D16/coverage/copy are separate
                  * from colour envelopes and never inherit their tolerance. */
-                if (a[at]!=copy[at] || az[at]+1u<bz[at] || az[at]>bz[at]+1u ||
-                    !precision_pixel(q,hw,x,y,a[at],d->sample_delta_q16,d->filter_fraction_bits)) {
+                if (a[at]!=copy[at] ||
+                    !precision_pixel(q,hw,x,y,a[at],az[at],d->sample_delta_q16,d->filter_fraction_bits)) {
                     d->expected=((uint32_t *)ref[0]->shadow)[at]; d->actual=a[at]; e=-EILSEQ; break;
                 }
                 d->precision_samples++;

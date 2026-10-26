@@ -924,7 +924,7 @@ establish 60 distinct LCD refreshes. Vblank timing evidence is required to
 claim displayed/vsynced FPS. If the measured refresh is below 60 Hz, report
 that separately rather than redefining throughput.
 
-The f7-11 review-round-2 sample-space policy supersedes colour-distance
+The f7-11 review-round-3 sample-space policy supersedes colour-distance
 admission for textured geometry. Unknown silicon precision must pass the
 per-boot perspective probe before the projective feature is advertised.
 
@@ -936,6 +936,9 @@ per-boot perspective probe before the projective feature is advertised.
 | Filter fractions | At least 8 bits; truncation/rounding uncertainty <=1/256; isolated edge sweep resolves >=192 levels/unit |
 | Mip LOD | <=1/16 octave; both selected-level boundaries and trilinear weights enter the envelope |
 | Texture colour | Envelope of reference samples over that position/weight neighbourhood, independent for each stage, plus one final channel level |
+| Sampled blending | Propagate the source colour/alpha envelope through the supported blend equation against the exact destination; one final channel level |
+| Sampled alpha test | If the integer alpha envelope contains passing and failing values, accept either complete local colour/depth outcome; otherwise the result must match; mip uncertainty enters alpha too |
+| Extended numeric domain | Boot-qualified textures <=256 square in either unit; shared W ratio <=4, normalized reciprocal W 64..256; REPEAT raw UV <=4096, common integer rebase to absolute UV <=16; input error <0.005 texel |
 | Unknown arithmetic | Parameterized host model and boot probe; these bounds are acceptance policy, not a vendor precision claim |
 
 See [Savage full-size admission](savage-fullsize-admission.md) for numeric

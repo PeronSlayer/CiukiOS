@@ -305,6 +305,7 @@ int gl_hw_triangle(struct gl_context *c, const struct sw_vertex *v) {
   return 1;
 }
 int gl_hw_clear(struct gl_context *c, unsigned mask, unsigned color, unsigned depth) {
+  if (c->census) gl_census_clear(c,mask);
   /* Accumulation is outside this backend's semantics. */
   if (!mask || (mask & GL_ACCUM_BUFFER_BIT)) { gl_hw_software(c); return 0; }
   struct hw_batch *b = batch(c, mask, 0);

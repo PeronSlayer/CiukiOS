@@ -25,6 +25,7 @@ void gl_kernel_setup(int qualified)
     test_engine.io.write32=write_engine3d;
     struct render3d_host host={0,allocate3d,free3d,clock3d,0};
     if (qualified==2) {
+        gpu3d.texture_bytes=480*1024;
         m.exact_clock=true;
         gpu3d.mode_width=mode_width; gpu3d.mode_height=mode_height; gpu3d.fullsize_testing=true;
         fullsize_resources3d(&scratch3d,&host,mode_width,mode_height,true);
@@ -104,7 +105,7 @@ void gl_savage_end(unsigned w,unsigned h,unsigned frame,unsigned gpu_draws,uint6
     printf("GL_SAVAGE_H1 scope=%s width=%u height=%u frame=%u gpu_draws=%u gpu_fragments=%llu cpu_draws=%llu cpu_fragments=%llu "
         "eligible_world=%llu/%llu eligible_entities=%llu/%llu queued_gpu=%llu direct_cpu=%llu switches=%u queued_switches=%u "
         "refused_alpha=%llu refused_blend=%llu refused_fog=%llu refused_offset=%llu refused_numeric=%llu context_software=%llu\n",
-        admission_scope ? "qualified-prefix" : "complete",w,h,frame,gpu_draws,(unsigned long long)gpu_fragments,(unsigned long long)cpu_draws,(unsigned long long)cpu_fragments,
+        admission_scope ? "complete-multipass" : "complete",w,h,frame,gpu_draws,(unsigned long long)gpu_fragments,(unsigned long long)cpu_draws,(unsigned long long)cpu_fragments,
         (unsigned long long)admission_world_ok,(unsigned long long)admission_world,
         (unsigned long long)admission_entities_ok,(unsigned long long)admission_entities,
         (unsigned long long)admission_gpu,(unsigned long long)admission_cpu,gpu_draws ? admission_switches : 0,admission_switches,
@@ -114,6 +115,6 @@ void gl_savage_end(unsigned w,unsigned h,unsigned frame,unsigned gpu_draws,uint6
     CHECK(admission_world && admission_entities);
     CHECK(admission_world_ok*100>=95*admission_world && admission_entities_ok*100>=95*admission_entities);
     CHECK(admission_switches<=1);
-    if (admission_scope) CHECK(gpu_draws==2202 && gpu_fragments && !cpu_draws && !admission_switches);
-    else CHECK(!gpu_draws && cpu_draws==3000);
+    CHECK(gpu_draws==(admission_scope ? 4600u : 3000u) && gpu_fragments && !cpu_draws && !admission_switches);
+    for (unsigned i=0;i<6;i++) CHECK(!admission_refused[i]);
 }

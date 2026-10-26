@@ -89,6 +89,7 @@ void gl_triangle(GLContext *tiny, GLVertex *a, GLVertex *b, GLVertex *d) {
           c->depth_bits == 24 ? 16777215 : 65535);
     }
   }
+  if (c->census) gl_census_draw(c,v);
   int hardware=gl_hw_triangle(c,v);
 #ifdef W32_HOST_MODEL
   extern void gl_host_draw(const struct sw_state *,const struct sw_vertex *,int) __attribute__((weak));
@@ -99,6 +100,7 @@ void gl_triangle(GLContext *tiny, GLVertex *a, GLVertex *b, GLVertex *d) {
 }
 void gl_compat_line(GLContext *tiny, GLVertex *a, GLVertex *b) {
   struct gl_context *c = tiny->software_state;
+  if (c->census) gl_census_other(c);
   gl_hw_software(c);
   c->sw.offset = 0;
   int point = a == b;

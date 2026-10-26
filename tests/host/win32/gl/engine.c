@@ -301,7 +301,10 @@ static uint64_t now(void) {
   return (uint64_t)t.tv_sec * 1000000000ull + t.tv_nsec;
 }
 int main(int argc, char **argv) {
-  setvbuf(stdout, 0, _IONBF, 0);
+  setvbuf(stdout,0,_IONBF,0); /* Keep evidence even if a sanitizer exit scan fails. */
+  if (argc>1 && !strcmp(argv[1],"--census")) {
+    extern void gl_census_tests(void); gl_census_tests(); test_reset(); return 0;
+  }
   extern void gl_kernel_replay(void);
   if (argc > 1 && !strcmp(argv[1], "--kernel-transport")) { gl_kernel_replay(); test_reset(); return 0; }
   if (argc > 1 && !strcmp(argv[1], "--hardware")) {
