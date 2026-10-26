@@ -8,21 +8,24 @@ import ast
 import os
 import re
 import subprocess
+import runpy
+import struct
+import tempfile
 import unittest
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / 'build/host/render3d'
 VIDEO = ROOT / 'src/kernel/drivers/video'
 
 class RenderTests(unittest.TestCase):
-    def build_run(self, name, sources, args=()):
+    def build_run(self, name, sources, args=(), flags=()):
         OUT.mkdir(parents=True, exist_ok=True)
         sanitizer = 'address,undefined' if os.environ.get('CIUKI_DISPLAY_ASAN') else 'undefined'
-        flags = ['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+        command = ['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                  '-fsanitize='+sanitizer, '-fno-sanitize-recover=undefined',
                  '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
                  '-I', str(ROOT/'src/kernel/include'), '-I', str(ROOT/'tests/host'), '-I', str(OUT)]
         binary = OUT/name
-        subprocess.run(flags+[str(ROOT/p) for p in sources]+['-lm','-o',str(binary)],check=True)
+        subprocess.run(command+list(flags)+[str(ROOT/p) for p in sources]+['-lm','-o',str(binary)],check=True)
         subprocess.run([str(binary),*args],check=True)
 
     def test_service(self):
@@ -34,6 +37,46 @@ class RenderTests(unittest.TestCase):
         self.build_run('worker', ['tests/host/render3d_worker_test.c',
             'src/kernel/drivers/video/render3d.c','src/kernel/drivers/video/render3d_scalar.c',
             'src/kernel/drivers/video/render3d_transport.c'])
+        subprocess.run([str(OUT/'worker'),'budget'],check=True)
+
+    def test_worker_scheduling(self):
+        self.build_run('scheduling', ['tests/host/render3d_scheduling_test.c',
+            'sdk/win32/gdi32/render3d.c','sdk/win32/services/bytes.c',
+            'src/kernel/drivers/video/render3d.c','src/kernel/drivers/video/render3d_scalar.c',
+            'src/kernel/drivers/video/render3d_transport.c'],
+            flags=['-DW32_HOST_MODEL','-I',str(ROOT/'sdk/win32/include')])
+
+    def test_abi_uv_shape(self):
+        # Same-byte-size reshape: independent row/component/stride expectations
+        # must fail while the enclosing size and every offset still agree.
+        expressions=runpy.run_path(str(ROOT/'scripts/test/abi_layout_dump.py'))['expressions']
+        header=(ROOT/'src/kernel/include/ciuki/abi.h').read_text()
+        keys=['sizeof.ciuki_r3d_draw','offsetof.ciuki_r3d_draw.uv1',
+              'offsetof.ciuki_r3d_draw.vertices','rows.ciuki_r3d_draw.uv1',
+              'components.ciuki_r3d_draw.uv1','strideof.ciuki_r3d_draw.uv1']
+        expected=(7268,356,1892,192,2,8)
+        flags=runpy.run_path(str(ROOT/'scripts/build_kernel.py'))['CFLAGS']
+        OUT.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=OUT) as tmp:
+            folder=Path(tmp)
+            for shape in ('[192][2]','[96][4]'):
+                changed=header.replace('uv1[192][2]','uv1'+shape)
+                found=expressions(changed)
+                self.assertTrue(set(keys)<=found.keys())
+                (folder/'abi.h').write_text(changed)
+                (folder/'shape.c').write_text('#include "abi.h"\n'
+                    '__attribute__((used,section(".shape"))) const uint32_t shape[] = {'+
+                    ','.join(found[k] for k in keys)+'};\n')
+                subprocess.run(['clang',*flags,'-I',str(ROOT/'src/kernel/include'),
+                    '-c',str(folder/'shape.c'),'-o',str(folder/'shape.o')],check=True)
+                subprocess.run(['llvm-objcopy','--dump-section',f'.shape={folder}/shape.bin',str(folder/'shape.o')],check=True)
+                actual=struct.unpack('<6I',(folder/'shape.bin').read_bytes())
+                self.assertEqual(actual[:3],expected[:3])
+                if shape=='[192][2]': self.assertEqual(actual,expected)
+                else:
+                    self.assertEqual(actual[3:],(96,4,16))
+                    self.assertNotEqual(actual[3:],expected[3:])
+        print('PASS i686 UV oracle: 192 rows/2 components/8-byte stride; same-size 96x4 mutation rejected')
 
     def test_encoder_capabilities(self):
         self.build_run('encoder', ['tests/host/render3d_encoder_test.c'])

@@ -25,6 +25,9 @@ struct render3d_transport {
 };
 int render3d_transport_dispatch(struct render3d_transport *, uint32_t,
     struct ciuki_w32_render3d_args *, void *, uint32_t);
+void render3d_wire_caps(const struct render3d_service *, struct ciuki_r3d_caps *);
+void render3d_filter_caps(const struct ciuki_r3d_caps *,
+    const struct ciuki_w32_render3d_args *, struct ciuki_r3d_caps *);
 int render3d_upload(struct render3d_service *, uint32_t, uint32_t, uint32_t, const void *, size_t);
 void w32_render3d_poll(void);
 #endif

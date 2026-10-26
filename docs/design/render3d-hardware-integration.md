@@ -53,3 +53,29 @@ fraction-preserving recovery makes the old 8x8 minimum-test example agree;
 the replacement 3x3 example uses U=32770/32767/32767 and still gives opposite
 red/green nearest samples at native pixel (0,6). The test retains its full
 255-channel counterexample instead of removing the precision assertion.
+
+## Lead amendment 1: probe latency, resident budget and UV shape
+
+The [Linux 6.1 wait-event documentation](https://docs.kernel.org/6.1/driver-api/basics.html#wait-queues-and-wake-events)
+requires publishing the condition before waking its queue. Repository review
+found the display worker used unconditional 10/100 ms sleeps and query calls
+allocated and queued a job every time. Keep a copied capability snapshot in
+the kernel, stamped with the framebuffer generation, and answer repeated
+positive and negative queries without worker scheduling or allocation. Refresh
+it on the worker and check live qualification before advertising hardware.
+Use a predicate wait with enqueue notification for initialization and mutations;
+the periodic watchdog deadlines remain 10/100 ms. A mode change must invalidate
+the snapshot before it can authorize a query in the new generation.
+
+The production surface allocator rounds each allocation to 4096-byte pages.
+The render3d adapter's eight-byte allocation prefix therefore doubles the cost
+of a 4096-byte texture shadow. Enforce one 32 MiB resident ledger in that adapter
+for page-rounded allocations including prefixes, service storage, wire jobs,
+staging and quarantine. Reserve before allocating, refund failed allocation,
+and release charges only after the backing storage is freed. The generic
+service's logical resource counter remains an additional admission bound.
+
+The ABI oracle must independently freeze the second UV array's 192 rows,
+two components and eight-byte row stride. A same-size reshape to 96 by 4
+must fail, even though the containing record size and following offsets agree.
+These are host-verifiable corrections; hardware admission remains unchanged.

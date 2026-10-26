@@ -389,14 +389,29 @@ void display_watchdog_poll(void)
     switching = false;
 }
 extern void w32_render3d_poll(void) __attribute__((weak));
+static struct kwait worker_requests;
+static bool worker_requested;
+static bool worker_has_request(void *arg)
+{ (void)arg; return worker_requested; }
+void display_worker_wake(void)
+{
+    uint32_t flags=irq_save();
+    worker_requested=true;
+    irq_restore(flags);
+    kwait_wake_all(&worker_requests);
+}
 static void watchdog_main(void *arg)
 {
     (void)arg;
     for (;;) {
         if (w32_render3d_poll) w32_render3d_poll();
-        task_sleep_ms(fullscreen_display || awaiting_native_frame ||
-            (display_present_active && display_present_active()) ? 10 : 100);
         display_watchdog_poll();
+        (void)kwait_wait_until(&worker_requests,worker_has_request,0,
+            deadline_after_ms(fullscreen_display || awaiting_native_frame ||
+                (display_present_active && display_present_active()) ? 10 : 100));
+        uint32_t flags=irq_save();
+        worker_requested=false;
+        irq_restore(flags);
     }
 }
 /* f3-21: the worker also services queued DOS full-screen requests

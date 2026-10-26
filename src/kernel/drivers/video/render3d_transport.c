@@ -1,6 +1,25 @@
 /* Display-worker copied-wire adapter. GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include "render3d_transport.h"
+void render3d_wire_caps(const struct render3d_service *s,struct ciuki_r3d_caps *out)
+{
+    struct render3d_caps c; render3d_query_caps(s,&c);
+    *out=(struct ciuki_r3d_caps){.version=CIUKI_R3D_VERSION,.generation=s->generation};
+    if (c.hardware_features && s->backend->capabilities) {
+        *out=*s->backend->capabilities; out->generation=s->generation;
+        out->features &= c.hardware_features;
+        if (out->max_size>c.hardware_max_size) out->max_size=c.hardware_max_size;
+        out->texture_bytes=c.texture_heap_bytes;
+    }
+}
+void render3d_filter_caps(const struct ciuki_r3d_caps *snapshot,
+    const struct ciuki_w32_render3d_args *a,struct ciuki_r3d_caps *out)
+{
+    *out=(struct ciuki_r3d_caps){.version=CIUKI_R3D_VERSION,.generation=snapshot->generation};
+    if (a->width && a->height && a->width<=snapshot->max_size && a->height<=snapshot->max_size &&
+        a->format==CIUKI_R3D_ARGB8888 && a->kind==CIUKI_R3D_D16 && !a->levels)
+        *out=*snapshot;
+}
 static int finish(struct render3d_service *s, uint32_t p, uint32_t id,
                   struct render3d_fence f, uint32_t ms)
 {
@@ -26,20 +45,8 @@ int render3d_transport_dispatch(struct render3d_transport *t, uint32_t p,
     switch (a->action) {
     case CIUKI_R3D_QUERY: {
         if (bytes!=sizeof(struct ciuki_r3d_caps)) return -EINVAL;
-        struct render3d_caps c; render3d_query_caps(s,&c);
-        struct ciuki_r3d_caps out={0};
-        out.version=CIUKI_R3D_VERSION; out.generation=s->generation;
-        if (c.hardware_features && a->width && a->height &&
-            a->width<=c.hardware_max_size && a->height<=c.hardware_max_size &&
-            a->format==CIUKI_R3D_ARGB8888 && a->kind==CIUKI_R3D_D16 && !a->levels) {
-            const struct ciuki_r3d_caps *native=s->backend->capabilities;
-            if (native) {
-                out=*native; out.generation=s->generation;
-                out.features &= c.hardware_features;
-                if (out.max_size>c.hardware_max_size) out.max_size=c.hardware_max_size;
-                out.texture_bytes=c.texture_heap_bytes;
-            }
-        }
+        struct ciuki_r3d_caps snapshot,out;
+        render3d_wire_caps(s,&snapshot); render3d_filter_caps(&snapshot,a,&out);
         memcpy(data,&out,sizeof(out)); return 0;
     }
     case CIUKI_R3D_OPEN:
