@@ -1,5 +1,11 @@
 # Users, logon and passwords (G32)
 
+Security-model supersession: the owner's real-user decision is specified in
+[user-security-contract.md](user-security-contract.md), pending lead review and
+implementation. The profile-only model, optional logon and Cancel-to-default
+below describe historical G32 behavior, not acceptance criteria for the new
+kernel-enforced model. Earlier host evidence remains evidence for G32 only.
+
 Written 2026-10-23, after reading the G32 inventory and the batch headers.
 
 ## Reference behaviour and implementation decision
