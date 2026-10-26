@@ -401,10 +401,12 @@ static void backend3d(unsigned fault,bool variants)
     /* Engine destroyed before fixture frees (models reboot, no recovery API). */
     CHECK(!render3d_close(&scratch3d) && !allocations3d && !scratch3d.ram_bytes); finish();
 }
+#include "savage3d_review4.inc"
 int main(int argc,char **argv)
 {
     setvbuf(stdout,0,_IONBF,0);
     if (argc==2 && !strcmp(argv[1],"fullsize")) fullsize_suite3d();
+    else if (argc==2 && !strcmp(argv[1],"review4")) review4_suite3d();
     else if (argc==2 && !strcmp(argv[1],"shader")) shader_precision3d();
     else if (argc==2 && !strcmp(argv[1],"variants")) backend3d(0,true);
     else for (unsigned i=0;i<6;i++) backend3d(i,i==0);

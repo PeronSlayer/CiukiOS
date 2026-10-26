@@ -10,7 +10,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-static unsigned enabled, generation = 1, reject_blend, fail_submit, fail_finish, fail_read;
+static unsigned enabled, generation = 1, reject_blend, fail_accept, fail_submit, fail_finish, fail_read;
+static unsigned opens;
 static unsigned submissions, vertices, uploads, reads, loads, closes, presents, live, texture_live;
 static unsigned max_vertices = GL_HW_VERTICES, budget = 4 * 1024 * 1024;
 static uint64_t submitted_bytes, upload_bytes, checkpoint_bytes, load_bytes;
@@ -46,7 +47,7 @@ static int open_model(unsigned dc, const struct gl_hw_format *f, unsigned *id) {
     else m->target.depth = calloc(n, 2);
     if (f->stencil_bits) m->target.stencil = calloc(n, 1);
     assert(m->target.color && m->target.color2 && (m->target.depth || m->target.depth24));
-    *id = i+1; live++; return 0;
+    *id = i+1; live++; opens++; return 0;
   }
   return -1;
 }
@@ -62,7 +63,7 @@ static void close_model(unsigned id) {
 static int accept(unsigned id, const struct sw_state *s, unsigned mask,
                    const struct sw_vertex *v, unsigned count) {
   (void)model(id); (void)mask; (void)v; (void)count;
-  return !s->fog && !(reject_blend && s->blend);
+  return fail_accept ? -1 : !s->fog && !(reject_blend && s->blend);
 }
 static int load(unsigned id, const struct sw_state *s) {
   struct sw_state *t = &model(id)->target;
@@ -349,6 +350,33 @@ void gl_hardware_tests(void) {
   glViewport(0,0,16,16); glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT); triangle(0);
   assert(SwapBuffers(dc) && presents==presented+2);
   end(dc,rc); gl_test_dc=0; gl_test_popup=0; gl_test_generation=12; gl_test_token=11;
+  /* Fatal/unsupported-state fallback belongs to the HGLRC, not its current
+   * drawable/provider. Resize, capability change and rebind cannot reopen it. */
+  for (unsigned fault=0;fault<4;fault++) {
+    dc=make(&rc);
+    gl_test_dc=dc; gl_test_owner=pthread_self(); gl_test_width=gl_test_height=32; gl_test_popup=1;
+    if (!fault) { /* Unsupported state after a submitted hardware prefix. */
+      unsigned before=submissions;
+      glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT); triangle(0); glFlush();
+      assert(submissions>before);
+    }
+    fail_accept=fault==0; fail_submit=fault==1 ? submissions+1 : 0;
+    fail_finish=fault==2; fail_read=fault==3;
+    scene(); assert(checksum()==golden && !live);
+    fail_accept=fail_submit=fail_finish=fail_read=0;
+    unsigned submitted=submissions,opened=opens;
+    generation++;
+    gl_test_width=gl_test_height=16;
+    glViewport(0,0,16,16); glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT); triangle(0); glFinish();
+    assert(submissions==submitted && opens==opened && !live);
+    assert(wglMakeCurrent(0,0) && wglMakeCurrent(dc,rc));
+    glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT); triangle(0); glFinish();
+    assert(submissions==submitted && opens==opened && !live && glGetError()==GL_NO_ERROR);
+    end(dc,rc); gl_test_dc=0; gl_test_popup=0;
+    /* A fresh HGLRC can still acquire the healthy provider. */
+    dc=make(&rc); scene(); assert(submissions>submitted && opens>opened && checksum()==golden); end(dc,rc);
+  }
+  puts("PASS permanent fallback: unsupported state/submit/finish/read failures survive resize, generation and rebind; new HGLRC reopens");
   enabled=0;
   gl_hardware_stats();
   puts("PASS render3d adapter: mixed draws, delayed submit, partial read failure, replay recovery, mode generation, CopyTexImage, texture versions/LRU, process detach");

@@ -358,3 +358,39 @@ reserved LOD steps then satisfy
 outside this proof refuse with `mip-gradient`, retaining the whole-context
 software policy; this limit is explicit for the real-game census. Zero-area
 triangles generate no samples and do not require a LOD bound.
+
+## Review round 4: admission parity and joint sample witnesses
+
+Rechecked the pinned Mesa 7.7/7.11.2 shared-W vertex/filter setup, Linux v6.1
+skip/stride validation, X.Org 2.3.9 tile setup, S3 RE046-B MM4858C/MM48590,
+and OpenGL 1.1 sections 3.8/4.1 (primary links above). No source changes the
+empirical precision limits: a filtered sample is one RGBA vector, and its
+alpha controls the subsequent alpha test and blend factors.
+
+Native admission now repeats both mip proofs from the GL encoder for each
+active sampler, including constant-W mip draws. A per-pixel reciprocal-W
+change above 1/32, or the round-3 derivative-recovery error above 1/256
+texel/pixel, refuses before submission/IO. Degenerate triangles have no LOD
+samples. Bilinear draws retain their existing admission.
+
+The host and boot oracles use channel intervals only to prune a search. An
+accepted colour needs a concrete common (u,v,LOD) witness per stage for all
+four channels. Filtering, texture combination, alpha test and blending use
+that same sample. The alpha-fail alternative must preserve both attachments;
+an alpha-pass witness must produce the observed colour and depth together.
+Both mip levels derive from the same normalized UV displacement, bounded in
+base-level texels; their filter fractions are then quantized explicitly to
+at least eight bits, consistently for RGBA. The declared sample/filter/LOD
+neighbourhood and final one-level rounding remain unchanged. A witness
+chooses a common filter accumulation rule for RGBA: either one bilinear
+accumulation or rounded horizontal rows followed by vertical accumulation. These are the packet model's and scalar model's
+existing arithmetic choices; the vendor sources do not specify the internal
+accumulation width. The choice is consistent across all four channels, and
+is not independent per-channel rounding freedom. Explicit fraction
+quantization includes half-channel rounding planes that arbitrary
+unquantized point searches can miss. The bounded search refuses on
+exhaustion; it never promotes an unresolved channel box to a colour proof.
+
+The permanent software-only latch belongs to the HGLRC. Replacing drawable
+attachments or a provider, changing capability generations, and rebinding a
+DC do not clear it. A newly created HGLRC has its own admission lifetime.

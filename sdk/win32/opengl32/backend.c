@@ -16,7 +16,7 @@ struct hw_batch {
 struct gl_hw_context {
   const struct gl_hw_driver *driver;
   struct gl_hw_caps caps;
-  unsigned context, failed, loaded, bytes, batches;
+  unsigned context, loaded, bytes, batches;
   uint64_t age;
   struct hw_texture textures[GL_HW_TEXTURES];
   struct hw_batch *head, *tail;
@@ -98,7 +98,9 @@ static void evict(struct gl_hw_context *h, struct hw_texture *t) {
   h->bytes -= t->bytes;
   *t = (struct hw_texture){0};
 }
-static void fail(struct gl_hw_context *h) {
+static void fail(struct gl_context *c) {
+  struct gl_hw_context *h = c->hardware;
+  c->hardware_failed = 1;
   /* close first: no engine may still access user staging or target storage. */
   h->driver->close(h->context);
   discard(h, 1);
@@ -109,14 +111,13 @@ static void fail(struct gl_hw_context *h) {
     *t = (struct hw_texture){0};
   }
   h->context = h->bytes = h->loaded = 0;
-  h->failed = 1;
 }
 void gl_hw_flush(struct gl_context *c) {
   struct gl_hw_context *h = c->hardware;
   if (!h || !h->context) return;
   for (struct hw_batch *b = h->head; b; b = b->next)
     if (!b->submitted) {
-      if (h->driver->submit(h->context, &b->command)) { fail(h); return; }
+      if (h->driver->submit(h->context, &b->command)) { fail(c); return; }
       b->submitted = 1;
     }
 }
@@ -130,7 +131,7 @@ void gl_hw_sync(struct gl_context *c) {
   unsigned pixels = s.width * s.height;
   unsigned bytes = pixels * (4 + (s.color2 ? 4 : 0) + (s.depth24 ? 4 : 2) + (s.stencil ? 1 : 0));
   uint8_t *staging = gl_alloc(bytes);
-  if (!staging) { fail(h); return; }
+  if (!staging) { fail(c); return; }
   s.color = (uint32_t *)staging;
   unsigned at = pixels * 4;
   if (s.color2) { s.color2 = (uint32_t *)(staging + at); at += pixels * 4; }
@@ -138,7 +139,7 @@ void gl_hw_sync(struct gl_context *c) {
   else { s.depth = (uint16_t *)(staging + at); at += pixels * 2; }
   if (s.stencil) s.stencil = staging + at;
   if (h->driver->finish(h->context) || h->driver->read(h->context, &s)) {
-    gl_dealloc(staging); fail(h); return;
+    gl_dealloc(staging); fail(c); return;
   }
   const struct sw_state *old = &h->head->command.state;
   w32_copy(old->color, s.color, pixels * 4);
@@ -165,6 +166,7 @@ void gl_hw_close(struct gl_context *c) {
   c->hardware = 0;
 }
 void gl_hw_probe(struct gl_context *c) {
+  if (c->hardware_failed) return;
   const struct gl_hw_driver *d = driver();
   if (!d) { gl_hw_close(c); return; }
   struct gl_hw_format f = {c->sw.width, c->sw.height, c->depth_bits,
@@ -185,7 +187,7 @@ void gl_hw_probe(struct gl_context *c) {
     c->hardware = h;
     if (d->open(c->dc, &f, &h->context) || !h->context) {
       if (h->context) d->close(h->context);
-      h->context = 0; h->failed = 1;
+      h->context = 0; c->hardware_failed = 1;
     }
   }
 }
@@ -193,7 +195,7 @@ static int ready(struct gl_context *c) {
   struct gl_hw_context *h = c->hardware;
   if (!h || !h->context) return 0;
   if (!h->loaded) {
-    if (h->driver->load(h->context, &c->sw)) { fail(h); return 0; }
+    if (h->driver->load(h->context, &c->sw)) { fail(c); return 0; }
     h->loaded = 1;
   }
   return 1;
@@ -261,7 +263,7 @@ static struct hw_batch *batch(struct gl_context *c, unsigned mask,
   struct gl_hw_context *h = c->hardware;
   if (!h || !h->context) return 0;
   int accepted=h->driver->accept(h->context, &c->sw, mask, v, v ? 3 : 0);
-  if (accepted<0) { fail(h); return 0; }
+  if (accepted<0) { fail(c); return 0; }
   if (!accepted) return 0;
   if (h->batches == GL_HW_BATCHES) gl_hw_sync(c);
   if (!ready(c)) return 0;
@@ -323,6 +325,6 @@ int gl_hw_present(struct gl_context *c, unsigned token, unsigned generation,
   if (c->sw.color != c->back_color) return 0;
   gl_hw_flush(c);
   if (!h->context) return 0;
-  if (h->driver->finish(h->context)) { fail(h); return 0; }
+  if (h->driver->finish(h->context)) { fail(c); return 0; }
   return h->driver->present(h->context, token, generation, width, height, bpp, pitch);
 }

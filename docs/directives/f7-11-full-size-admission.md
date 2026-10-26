@@ -38,3 +38,11 @@ Amendment 2 is committed as d056f47c2. Its own measurement shows the problem: on
 6. Tests: blend and alpha-test differential cases with perspective checkers/ramps and both stages, straddling-threshold cases, 128x128/256x256 textures with large REPEAT coordinates, census output format and its off-by-default cost.
 
 Update the report (section "Review round 3"), the admission document and the contract tolerance table. Leave changes uncommitted.
+
+## Lead amendment 4 (2026-10-26 12:52): review of amendment 2 (final fix round before integration)
+
+Amendment 3 is committed as 58db4c4ea. A Codex review of amendment 2 (commit d056f47c2) found three P2s; check each against the current code (amendment 3 may have moved lines) and fix it with a regression:
+1. Native admission omits the mip-gradient bound: `savage3d.c` (around :345 in d056f47c2) checks varying-W vertex ranges but not the per-pixel reciprocal-W change bound that `encode.h` (around :112) enforces. Accepted counterexample: screen (0,0),(16,0),(0,16), reciprocal W (0.5,2,0.5), U (0,0.875,0), V 0, 64x64 mipmapped texture; exact LOD 3.548789 vs packet 3.320520 at (0,0), error 0.228 octave > 1/16, nearest mip 3 instead of 4. Enforce the same bound (and the round-3 derivative-error bound) natively for both samplers before submission.
+2. The envelope accepts colours impossible under any permitted sample: `tests/host/savage3d_oracle.inc` (:71) and `savage3d_precision.h` (:131) bound each channel independently. Counterexample: 64x64 texture alternating green and magenta columns, white vertices, constant Q20 W 1048576, constant UV (32799,32768); correct sampling can give ff788778, a R/G-swapped layout gives ff877878 and is accepted. Keep joint colour constraints with one common sample position per stage (both in the host oracle and the boot check, also through blending and alpha after amendment 3). Add this layout-fault regression.
+3. Permanent software fallback forgotten on drawable resize: the failure latch lives in gl_hw_context (`backend.c` ~:264) and a resize of the same HGLRC recreates it (`context.c` ~:197), so hardware reopens (submissions 1 -> 2 after resize). Store the software-only latch in the GL context and keep it across attachment/provider recreation.
+Rerun the suites of round 3. Add a section "Review round 4" to the report. Leave changes uncommitted.

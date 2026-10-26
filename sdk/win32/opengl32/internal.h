@@ -54,6 +54,7 @@ struct gl_texgen {
 struct gl_context {
   struct gl_census *census;
   struct gl_hw_context *hardware;
+  unsigned hardware_failed; /* Permanent for this HGLRC, including resize/rebind. */
   struct gl_snapshot *attributes, *client_attributes;
   unsigned attribute_depth, client_depth;
   HGLRC handle;

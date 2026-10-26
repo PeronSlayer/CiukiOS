@@ -147,7 +147,13 @@ class RenderTests(unittest.TestCase):
             'src/kernel/drivers/video/render3d_native.c',
             'src/kernel/drivers/video/s3savage/savage3d.c'],args=['fullsize'])
 
+    def test_review4(self):
+        self.run_shader_case("review4")
+
     def test_sampled_shaders(self):
+        self.run_shader_case("shader")
+
+    def run_shader_case(self, case):
         OUT.mkdir(parents=True, exist_ok=True)
         source=(ROOT/'tests/host/savage2d_test.c').read_text()
         (OUT/'savage2d_fixture.inc').write_text(source.replace('\nint main(void)\n','\nint frozen_2d_main(void)\n'))
@@ -155,7 +161,7 @@ class RenderTests(unittest.TestCase):
             'sdk/libgl/software/renderer.c',
             'src/kernel/drivers/video/render3d.c','src/kernel/drivers/video/render3d_scalar.c',
             'src/kernel/drivers/video/render3d_native.c',
-            'src/kernel/drivers/video/s3savage/savage3d.c'],args=['shader'])
+            'src/kernel/drivers/video/s3savage/savage3d.c'],args=[case])
 
     def test_registry(self):
         expected={'tdfx','rage128','radeon2d','mach64','matrox','i740','i810','intel2d',

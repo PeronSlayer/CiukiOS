@@ -306,6 +306,45 @@ static int draw_packet(const struct render3d_request *q,unsigned first,uint32_t 
     }
     *count=1+3*stride; return 0;
 }
+/* Same sample/LOD proof as the GL encoder, evaluated on native packet inputs.
+ * Work in Q4 screen units: qualified coordinates are multiples of 1/16 pixel.
+ * At <=1024 pixels, W<=256 and |UV|<=16 all products fit signed 64 bits. */
+static bool mip_gradient(const struct render3d_request *q,unsigned first,unsigned stage,
+                         const struct render3d_resource *t)
+{
+    const struct render3d_vertex *v=q->vertices+first;
+    int64_t x[3],y[3],lo=UINT32_MAX,hi=0,perimeter=0;
+    unsigned magnitude=0;
+    for (unsigned i=0;i<3;i++) {
+        if ((v[i].x&4095) || (v[i].y&4095) || v[i].rhw<32768 || v[i].rhw>16777216) return false;
+        x[i]=v[i].x/4096; y[i]=v[i].y/4096;
+        if (v[i].rhw<lo) lo=v[i].rhw;
+        if (v[i].rhw>hi) hi=v[i].rhw;
+        for (unsigned axis=0;axis<2;axis++) {
+            int64_t uv=stage ? q->uv1[first+i][axis] : axis ? v[i].v : v[i].u;
+            if (uv < -16*65536 || uv>16*65536) return false;
+            unsigned n=(unsigned)(((uv<0 ? -uv : uv)+65535)/65536);
+            if (n>magnitude) magnitude=n;
+        }
+    }
+    if (hi>4*lo) return false;
+    int64_t dx=x[1]-x[0],dy=y[1]-y[0],ex=x[2]-x[0],ey=y[2]-y[0];
+    int64_t area=dx*ey-dy*ex;
+    if (!area) return true; /* No fragments or LOD samples. */
+    int64_t gx=((int64_t)v[1].rhw-v[0].rhw)*ey-((int64_t)v[2].rhw-v[0].rhw)*dy;
+    int64_t gy=((int64_t)v[2].rhw-v[0].rhw)*dx-((int64_t)v[1].rhw-v[0].rhw)*ex;
+    if (area<0) area=-area;
+    if (gx<0) gx=-gx;
+    if (gy<0) gy=-gy;
+    if ((gx+gy)*16*32>area*lo) return false;
+    for (unsigned i=0;i<3;i++) {
+        int64_t a=x[(i+1)%3]-x[i],b=y[(i+1)%3]-y[i];
+        perimeter+=(a<0 ? -a : a)+(b<0 ? -b : b);
+    }
+    unsigned size=t->width>t->height ? t->width : t->height;
+    int64_t ratio=(hi+lo-1)/lo;
+    return (int64_t)size*(33+2*magnitude)*(512*ratio*perimeter+area)<=262144*area;
+}
 static int validate(void *device,const struct render3d_request *q,struct render3d_resource *const r[R3D_REFS])
 {
     struct savage3d_device *d=device;
@@ -357,6 +396,11 @@ static int validate(void *device,const struct render3d_request *q,struct render3
         }
         if (hi>4*lo) return -EOPNOTSUPP;
       }
+    if (d->fullsize_qualified && !d->fullsize_testing)
+      for (unsigned stage=0;stage<2;stage++) if ((q->flags&(stage ? R3D_TEXTURE1 : R3D_TEXTURED)) &&
+          q->state.sampler[stage].filter>=R3D_NEAREST_MIP)
+        for (unsigned first=0;first<q->count;first+=3)
+            if (!mip_gradient(q,first,stage,r[stage ? 4 : 2])) return -EOPNOTSUPP;
     uint32_t words[28]; unsigned count;
     for (unsigned first=0;first<q->count;first+=3) {
         int e=draw_packet(q,first,words,&count); if (e) return e;
