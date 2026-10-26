@@ -173,6 +173,14 @@ int acct_results_admit(struct acct_service *s, struct acct_job *job, struct acct
     x->state=2; x->target=q->uid; x->planned_generation=s->store.high_generation+1;
     e=save(s); if(e) { s->available=0; s->faulted=1; } return e;
 }
+int acct_results_replan(struct acct_service *s, const struct acct_request *q)
+{
+    struct acct_receipt *x=find(s->results,q->client_operation_id);
+    if(!x || x->state!=ACCT_RECEIPT_PENDING) return -EIO;
+    if(s->store.high_generation==UINT64_MAX) return -EOVERFLOW;
+    x->planned_generation=s->store.high_generation+1;
+    int e=save(s); if(e) { s->available=0; s->faulted=1; } return e;
+}
 int acct_results_finish(struct acct_service *s, const struct acct_request *q, int result)
 {
     struct acct_receipt *x=find(s->results,q->client_operation_id); if(!x || x->state!=2) return -EIO;

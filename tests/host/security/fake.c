@@ -112,6 +112,7 @@ static int retain(void *ctx, int endpoint, struct acct_subject *s)
     else {
         *s = p->subject;
         s->retained = ((uintptr_t)p->epoch << 8) | (unsigned)(endpoint + 1);
+        if(f->distinct_handles) s->retained|=(uintptr_t)++f->retained_serial<<32;
         ++p->refs;
     }
     pthread_mutex_unlock(&f->peer_lock);
@@ -122,10 +123,16 @@ static int alive(void *ctx, const struct acct_subject *s)
     struct fake *f = ctx;
     unsigned n = (s->retained & 255u) - 1;
     pthread_mutex_lock(&f->peer_lock);
-    int yes = n < FAKE_PEERS && f->peers[n].alive && f->peers[n].epoch == s->retained >> 8 &&
+    int yes = n < FAKE_PEERS && f->peers[n].alive && f->peers[n].epoch == ((s->retained >> 8)&0xffffffu) &&
         (!s->request_id || (f->peers[n].active_request==s->request_id && f->peers[n].cancelled_request!=s->request_id));
     pthread_mutex_unlock(&f->peer_lock);
     return yes;
+}
+static int same_link(void *ctx, const struct acct_subject *a, const struct acct_subject *b)
+{
+    return alive(ctx,a) && alive(ctx,b) && (uint32_t)a->retained==(uint32_t)b->retained &&
+        a->endpoint_generation==b->endpoint_generation && a->service_generation==b->service_generation &&
+        a->role_generation==b->role_generation;
 }
 static void release(void *ctx, struct acct_subject *s)
 {
@@ -176,6 +183,18 @@ static int binding(void *ctx, uint64_t volume, uint32_t uid, char root[64], stru
         *r=f->profiles[i]; memcpy(root,r->root,64); return 0;
     }
     return -ENOENT;
+}
+static int root_occupied(void *ctx, uint64_t volume, const char *root)
+{
+    struct fake *f=ctx; if(f->failed || f->wrong_owner) return -EIO;
+    for(unsigned i=0;i<f->profile_count;++i)
+        if(f->profiles[i].volume==volume && !strcmp(f->profiles[i].root,root)) return 1;
+    for(unsigned i=0;i<f->owner_used;++i) if(f->owners[i].reply.state==1 || f->owners[i].reply.state==5) {
+        const struct acct_owner_request *q=&f->owners[i].request;
+        for(unsigned j=0;j<q->count;++j)
+            if(q->bindings[j].volume==volume && !strcmp(q->bindings[j].root,root)) return 1;
+    }
+    return 0;
 }
 static uint64_t locator(const char *root)
 { uint8_t sum[32]; sha256(root,strlen(root),sum); return a64(sum); }
@@ -458,10 +477,10 @@ struct acct_store fake_store(struct fake *f)
     s.volume = 1234;
     s.io = (struct acct_io){f, 0, read_file, write_file, flush_file, barrier, rename_file, remove_file};
     s.kernel = (struct acct_kernel){.ctx=f, .lease_acquire=lease,.lease_release=unlease,.retain_peer=retain,.subject_get=subject_get,
-        .peer_alive=alive,.release_peer=release,.active_uid=active,.monotonic_ms=clock_ms,.entropy=entropy,.allocate=allocate,.deallocate=deallocate,
+        .peer_alive=alive,.same_link=same_link,.release_peer=release,.active_uid=active,.monotonic_ms=clock_ms,.entropy=entropy,.allocate=allocate,.deallocate=deallocate,
         .picture_valid=picture,.auth_binding=auth_binding,.gate_state=gate_state,.role_generations=roles,.auth_outcome=outcome,.enrollment_authorized=enrollment_authorized,
         .session_lock=session_lock,.service_link=service_link,.exchange_begin=exchange_begin,.deliver_reply=deliver_reply,.exchange_end=exchange_end};
-    s.owner = (struct acct_owner){.ctx=f,.authenticate=owner_auth,.generation=generation,.binding=binding,.stage=stage,.tree_digest=tree_digest,.validate_stage=validate_stage,
+    s.owner = (struct acct_owner){.ctx=f,.authenticate=owner_auth,.generation=generation,.binding=binding,.root_occupied=root_occupied,.stage=stage,.tree_digest=tree_digest,.validate_stage=validate_stage,
         .snapshot=snapshot,.recover_orphans=orphans,.checkpoint_floor=owner_floor,.call=owner_call};
     return s;
 }

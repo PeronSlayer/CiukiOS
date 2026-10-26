@@ -175,7 +175,8 @@ int acct_enrollment_execute(struct acct_service *s, struct acct_job *job, struct
     if(!en->generation) {
         struct acct_db next=s->db; next.generation=s->store.high_generation+1;
         e=acct_set_password(s,&next.records[index],q->password);
-        if(!e) { s->store.subject=&job->subject; e=acct_store_local_commit(&s->store,&s->db,&next); s->store.subject=NULL; }
+        if(!e) { s->store.subject=&job->subject; e=acct_store_local_commit(&s->store,&s->db,&next); s->store.subject=NULL;
+            if(e) { s->available=0; s->faulted=1; } }
         if(!e) s->db=next;
         acct_wipe(&next,sizeof(next));
         return e?e:acct_auth_result(s,job,out,0,3,NULL);
@@ -195,6 +196,7 @@ int acct_enrollment_execute(struct acct_service *s, struct acct_job *job, struct
         for(unsigned j=0;j<en->map_count;++j) if(en->map[j].uid==b->uid) memcpy(b->root,en->map[j].root,64);
     }
     e=acct_store_commit(&s->store,NULL,&final,&owner,1);
+    if(e) { s->available=0; s->faulted=1; }
     if(!e) { s->db=final; s->available=1; e=acct_results_open(s); }
     if(!e) e=save(s,1);
     if(!e) { en->generation=0; e=acct_auth_result(s,job,out,0,3,NULL); }

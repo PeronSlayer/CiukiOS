@@ -574,6 +574,12 @@ void round2_owner(void);
 void round2_profile(void);
 void round2_autologon(void);
 void round2_enrollment(void);
+void round3_faulted_queue(void);
+void round3_root_collision(void);
+void round3_enrollment_outcome(void);
+void round3_logon_restart(void);
+void round3_distinct_handles(void);
+void round3_intent_bounds(void);
 int main(int argc, char **argv)
 {
     setvbuf(stdout,NULL,_IONBF,0);
@@ -603,6 +609,12 @@ int main(int argc, char **argv)
     else if(!strcmp(argv[1],"round2-profile")) round2_profile();
     else if(!strcmp(argv[1],"round2-autologon")) round2_autologon();
     else if(!strcmp(argv[1],"round2-enrollment")) round2_enrollment();
+    else if(!strcmp(argv[1],"round3-faulted-queue")) round3_faulted_queue();
+    else if(!strcmp(argv[1],"round3-root-collision")) round3_root_collision();
+    else if(!strcmp(argv[1],"round3-enrollment-outcome")) round3_enrollment_outcome();
+    else if(!strcmp(argv[1],"round3-logon-restart")) round3_logon_restart();
+    else if(!strcmp(argv[1],"round3-distinct-handles")) round3_distinct_handles();
+    else if(!strcmp(argv[1],"round3-intent-bounds")) round3_intent_bounds();
     else assert(0);
     return 0;
 }

@@ -60,17 +60,38 @@ static int verify_image(struct acct_store *s, const struct acct_db *d, const str
     if(!e && d->generation==q->expected_accounts_generation) e=acct_checkpoint_validate(s,d,p,n,q->transaction);
     acct_wipe(p,ACCT_CHECKPOINT_MAX); s->kernel.deallocate(s->kernel.ctx,p,ACCT_CHECKPOINT_MAX); return e;
 }
+static int publish_marker(struct acct_store *s, const uint8_t pending[192], const struct acct_owner_request *q)
+{
+    uint8_t old[192]; size_t n; uint64_t sequence=0; struct acct_owner_request previous;
+    int e=acct_blob_read(s,"owner.checkpoint",old,sizeof(old),&n,&sequence);
+    if(e && e!=-ENOENT) return e;
+    if(!e) {
+        e=marker_request(s,old,n,&previous); if(e) return e;
+        if(previous.transaction==q->transaction) return memcmp(old,pending,192)?-EIO:0;
+        if(previous.transaction>q->transaction) return -EIO;
+    }
+    return acct_blob_write(s,"owner.checkpoint",pending,192,&sequence);
+}
 int acct_owner_checkpoint_recover(struct acct_store *s, const struct acct_db *d)
 {
     uint8_t p[192]; size_t n; uint64_t sequence=0; struct acct_owner_request q;
-    int e=acct_blob_read(s,"owner.checkpoint",p,sizeof(p),&n,&sequence); if(e==-ENOENT) return 0; if(e) return e;
+    int e=acct_blob_read(s,"owner.checkpoint.pending",p,sizeof(p),&n,&sequence);
+    int pending=e!=-ENOENT;
+    if(!pending) e=acct_blob_read(s,"owner.checkpoint",p,sizeof(p),&n,&sequence);
+    if(e==-ENOENT) return 0; if(e) return e;
     e=marker_request(s,p,n,&q); if(e) return e;
     uint64_t floor; unsigned count; e=s->owner.checkpoint_floor(s->owner.ctx,&floor,&count); if(e) return e;
     if(floor>q.transaction) return -EIO;
-    if(floor<q.transaction && d->generation!=q.expected_accounts_generation) return -EIO;
+    if((pending || floor<q.transaction) && d->generation!=q.expected_accounts_generation) return -EIO;
     e=verify_image(s,d,&q); struct acct_owner_reply reply;
+    /* The exact request survives even a lost CHECKPOINT reply. Never build a
+     * different candidate for this floor before completing the retained pair. */
+    if(!e && pending) e=acct_owner_call(s,ACCT_OWNER_CHECKPOINT,&q,&reply);
+    if(!e && pending) e=publish_marker(s,p,&q);
     if(!e) e=acct_owner_call(s,ACCT_OWNER_COMPACT,&q,&reply);
     if(!e) { e=s->owner.checkpoint_floor(s->owner.ctx,&floor,&count); if(!e && floor!=q.transaction) e=-EIO; }
+    if(!e && pending) e=s->io.remove(s->io.ctx,"owner.checkpoint.pending");
+    if(!e && pending) e=s->io.barrier(s->io.ctx);
     return e;
 }
 int acct_owner_checkpoint(struct acct_store *s, const struct acct_db *d, int force)
@@ -95,15 +116,11 @@ int acct_owner_checkpoint(struct acct_store *s, const struct acct_db *d, int for
     if(!e) e=s->io.flush(s->io.ctx,path);
     if(!e) e=s->io.barrier(s->io.ctx);
     acct_wipe(image,ACCT_CHECKPOINT_MAX); s->kernel.deallocate(s->kernel.ctx,image,ACCT_CHECKPOINT_MAX);
-    struct acct_owner_reply reply; uint8_t marker[192]={0}; size_t bytes;
+    uint8_t marker[192]={0}; size_t bytes;
     if(!e) e=acct_owner_encode(&q,5,marker,sizeof(marker),&bytes);
-    if(!e) { memcpy(q.digest,marker+128,32); e=acct_owner_call(s,5,&q,&reply); }
     uint64_t sequence=0;
-    if(!e) {
-        uint8_t old[192]; size_t m; int found=acct_blob_read(s,"owner.checkpoint",old,sizeof(old),&m,&sequence);
-        if(found && found!=-ENOENT) e=found;
-    }
-    if(!e) { w64(marker+160,s->high_generation); w32(marker+168,s->high_uid); e=acct_blob_write(s,"owner.checkpoint",marker,192,&sequence); }
+    if(!e) { w64(marker+160,s->high_generation); w32(marker+168,s->high_uid);
+        e=acct_blob_write(s,"owner.checkpoint.pending",marker,192,&sequence); }
     if(!e) e=acct_owner_checkpoint_recover(s,d);
     return e;
 }

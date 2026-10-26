@@ -3,6 +3,37 @@
 Scope: directive [sec-user-01](../directives/sec-user-01.md). Runtime sealing,
 kernel/owner binding, image integration and hardware durability remain lead work.
 
+## Review round 3 research and implementation rules
+
+The amendment-3 review was checked against the frozen challenge/OWNER protocols
+and [kernel retained-subject contract](../design/user-security-kernel.md).
+Microsoft [access tokens](https://learn.microsoft.com/en-us/windows/win32/secauthz/access-tokens)
+bind security context to execution, not to the numeric value of a reference
+handle. Use a private `same_link` kernel adapter that checks both retained
+subjects' live process/link/revocation generations; independently acquired
+handles may differ. LOGON attempt IDs combine its registered role generation
+with a bounded counter, so a respawn cannot reuse ACCOUNT's consumed IDs.
+Enrollment keeps the exact original challenge but checks ENROLL_COMMITTED
+against its resulting generation; its credential/profile/name remain zero.
+
+The upstream [fsync documentation](https://man7.org/linux/man-pages/man2/fsync.2.html)
+requires separate namespace durability. Journal the exact pending checkpoint
+request and flushed snapshot before sending OWNER CHECKPOINT; recovery replays
+that pair, publishes ACCOUNT's marker, completes COMPACT and durably clears the
+pending journal before admitting changes. CREATE queries OWNER for occupied
+roots, including retained imported/retired roots and reservations, and durably
+skips conflicting IDs. Its pending client receipt must track the actual planned
+commit generation after skips. OWNER still resolves and reserves destinations.
+
+Microsoft [cancellation considerations](https://learn.microsoft.com/en-us/windows/win32/fileio/canceling-pending-i-o-operations)
+do not establish rollback after cancellation. A storage error closes all queued
+verification and clears outstanding attempts until store recovery completes;
+it cannot authorize an old in-memory verifier. Bound a local intent to
+`64 + ACCT_FILE_MAX` before copying its payload. [RFC 8018 section 5.2](https://www.rfc-editor.org/rfc/rfc8018.html#section-5.2)
+was rechecked; these fixes leave the KDF parameters unchanged. The supplied
+read-only Resource Kit profile and local/network-logon ranges remain historical
+context; its default-profile fallback does not override the closed gate.
+
 ## Review round 2 research and implementation rule
 
 Research checked before changing code, after `date` reported Mon Oct 26
@@ -174,3 +205,36 @@ loops/UI confirmation, target KDF timing and runtime qualification remain the
 lead/follow-on tasks. Live publication still refuses unbound/test adapters.
 The exact commands, logs and integration checklist are recorded in
 `build/codex/sec-user01-report.md`.
+
+
+## Review round 3 verification
+
+Continued and reviewed the existing amendment-3 edits against all seven findings.
+H03 runs all seven production-linked regressions: faulted queued authentication,
+checkpoint replay before later mutations, imported/retired root skipping with
+caller STATUS recovery, final enrollment correlation, LOGON respawn attempts,
+distinct references to the same kernel link, and oversized local-intent payloads.
+H10 repeats the four authentication/LOGON regressions.
+
+Final commands ran serially, with leak detection unchanged:
+
+| Exact command | Observed result |
+| --- | --- |
+| `nice -n 19 python3 -B -m unittest discover -s tests/host/security -p test_accounts.py` | Exit 1: all 31 assertion groups and independent Python oracles complete, then 31 LeakSanitizer ptrace-denial shutdown failures. |
+| `nice -n 19 python3 -B -m unittest discover -s tests/host/security -p test_logon.py` | Exit 1: all nine assertion groups complete, then nine identical LeakSanitizer failures. |
+| `nice -n 19 python3 -B -m unittest tests.host.desktop.test_users` | Exit 1: unchanged G32 model/I/O assertions complete, then one identical LeakSanitizer failure. |
+| `git diff --check` | Exit 0. |
+
+No C assertion, ASan memory-access or UBSan failure was observed. These are not
+green host gates: the lead must rerun them where leak scanning is permitted.
+The new OWNER checkpoint journal is exercised at 24 write/flush/namespace/OWNER
+boundaries, with a password change before retrying compaction and a later CREATE.
+The imported-root CREATE regression covers 94 boundaries with restart, STATUS and
+nonreuse checks, plus retained retired-root occupancy. Existing 70-boundary
+ACCOUNT result/local-intent recovery and other persistence suites remain covered.
+
+The explicit `same_link` private adapter is the chosen resolution for finding 6.
+Real kernel/OWNER binding must supply it and the private `root_occupied` query;
+missing bindings refuse open. No public ABI or new OWNER wire operation was added.
+Detailed per-finding changes, primary-source links, exact redirected commands and
+logs are in `build/codex/sec-user01-report.md`, section “Review round 3”.

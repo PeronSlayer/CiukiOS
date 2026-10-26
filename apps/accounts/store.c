@@ -421,7 +421,8 @@ int acct_store_reserve_generation(struct acct_store *s, const uint32_t sid[3], u
  * owner checkpoint/bindings are checked, but no OWNER receipt is allocated. */
 static int local_run(struct acct_store *s, struct workspace *w)
 {
-    if(w->intent_bytes<64 || memcmp(w->intent,"CIACTLC4",8) || a32(w->intent+8)!=w->intent_bytes || a32(w->intent+12)) return -EIO;
+    if(w->intent_bytes<64 || w->intent_bytes>64+ACCT_FILE_MAX || memcmp(w->intent,"CIACTLC4",8) ||
+        a32(w->intent+8)!=w->intent_bytes || a32(w->intent+12)) return -EIO;
     w->db_bytes=w->intent_bytes-64; memcpy(w->bytes,w->intent+64,w->db_bytes);
     int e=acct_decode(&w->next,0,w->bytes,w->db_bytes); if(e) return e;
     uint64_t old=a64(w->intent+16); if(!old || w->next.generation<=old) return -EIO;
@@ -473,6 +474,7 @@ int acct_store_local_commit(struct acct_store *s, const struct acct_db *old, con
     size_t n=0; if(!e) e=read_db(s,DB,w->current_bytes,&w->current,&n);
     if(!e && w->current.generation!=old->generation) e=-EAGAIN;
     if(!e) e=bindings(s,old);
+    if(!e) e=acct_owner_checkpoint_recover(s,old);
     if(!e && s->subject && !s->kernel.peer_alive(s->kernel.ctx,s->subject)) e=-ESRCH;
     if(!e) e=watermarks(s,next->sid,1,next->generation,next->next_uid);
     if(!e) {

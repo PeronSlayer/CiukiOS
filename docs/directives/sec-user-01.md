@@ -19,3 +19,15 @@ Your work is committed (sec-user-01 commit on wt/sec-user01); the lead's run out
 ## Lead amendment 2 (2026-10-26 13:14): contract round 2
 
 Amendment 1 is committed; the lead's run outside the sandbox passes all security and users tests (18). The contract's round 2 is merged into your branch (wt/sec-contract 15dba44b5). Apply every sec-user-01 row of the round-2 delta in docs/design/user-security-contract.md: the full challenge exchange with the account selector, the LOGON->ACCOUNT autologon route for the retained ready tuple, the ENROLL flow, best-effort cancellation with the durable caller-authorized STATUS keyed by a client operation id, OWNER resolving and reserving CREATE roots (ACCOUNT never supplies a destination identity), metadata-only self-service updates outside owner transactions plus the receipt checkpoint/compaction protocol and reservation counting ABORTED receipts, password-first CiukiUser replacement (no atomic replacement operation: this answers your report question), and the profile query fields. Keep the private kernel adapter in step with the frozen operations. Tests as the delta names. Update your report with "Review round 2". Leave changes uncommitted.
+
+## Lead amendment 3 (2026-10-26 14:45): code review round 1
+
+Amendment 2 is committed (81858a48d); the lead's run outside the sandbox passes all 31 tests. A Codex xhigh review found one P1 and six P2, each reproduced with production-linked probes; full text in build/codex/sec-user01-review1.md. Fix all seven with a regression each:
+1. P1 queued authentication after a storage fault: service.c:373 dispatches queued AUTH before the availability check set at :340 (ENOSPC password change -> AUTHENTICATED with the old password). Reject queued authentication when faulted, invalidate outstanding attempts, require recovery first.
+2. P2 interrupted OWNER checkpoint (checkpoint.c:100/:66): journal the exact pending checkpoint request before sending it and recover that pair before admitting changes.
+3. P2 CREATE vs numeric roots retained by imported profiles (service.c:273, store.c:89): detect occupied roots, durably skip conflicting ids, retry allocation, never fault the service.
+4. P2 final enrollment rejected (enrollment.c:189 vs logon.c:97): validate a committed enrollment against its resulting generation while keeping the original challenge correlation and the zero-credential requirement.
+5. P2 attempt ids reset by a LOGON restart (logon.c:37 vs auth.c:97): unique across respawns, for example the registered LOGON generation plus a bounded counter.
+6. P2 retained handles compared as identities (auth.c:161, logon.c:79): compare the guaranteed link identity/generations (user-security-kernel.md:1225), or add an explicit same-link adapter operation that sec-k01 can implement; say which.
+7. P2 intent recovery copies before the bound check (store.c:425): enforce intent_bytes <= 64 + ACCT_FILE_MAX before copying.
+Add "Review round 3" to the report. Leave changes uncommitted.

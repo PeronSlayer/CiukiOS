@@ -15,6 +15,18 @@ class LogonTests(unittest.TestCase):
     def test_enrollment(self):
         self.run_case("round2-enrollment")
 
+    def test_committed_enrollment_outcome(self):
+        self.run_case("round3-enrollment-outcome")
+
+    def test_logon_respawn_attempts(self):
+        self.run_case("round3-logon-restart")
+
+    def test_distinct_retained_handles(self):
+        self.run_case("round3-distinct-handles")
+
+    def test_faulted_queued_authentication(self):
+        self.run_case("round3-faulted-queue")
+
     def test_blank_retirement_and_reboot(self):
         self.run_case("retirement")
 

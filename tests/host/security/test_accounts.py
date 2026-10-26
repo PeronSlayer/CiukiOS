@@ -77,6 +77,24 @@ class AccountTests(unittest.TestCase):
     def test_checkpoint_cuts(self):
         self.run_case("round2-checkpoint-faults")
 
+    def test_faulted_queued_authentication(self):
+        self.run_case("round3-faulted-queue")
+
+    def test_imported_numeric_root_allocation(self):
+        self.run_case("round3-root-collision")
+
+    def test_committed_enrollment_outcome(self):
+        self.run_case("round3-enrollment-outcome")
+
+    def test_logon_respawn_attempts(self):
+        self.run_case("round3-logon-restart")
+
+    def test_distinct_retained_handles(self):
+        self.run_case("round3-distinct-handles")
+
+    def test_local_intent_payload_bound(self):
+        self.run_case("round3-intent-bounds")
+
     def test_durable_cancellation(self):
         self.run_case("round2-cancellation")
 

@@ -48,6 +48,8 @@ struct fake {
     unsigned outcomes;
     uint8_t last_outcome[304];
     int fail_outcome, revoke_after_commit;
+    int distinct_handles;
+    uint32_t retained_serial;
     struct fake_peer peers[FAKE_PEERS];
     uint64_t owner_generation, now;
     unsigned allocations, fail_alloc, outstanding, entropy_calls, fail_entropy;

@@ -213,6 +213,7 @@ static void clone_persistent(struct fake *out, const struct fake *in)
     out->locator_high=in->locator_high; out->owner_generation=in->owner_generation; out->owner_floor=in->owner_floor;
     out->checkpoint_candidate=in->checkpoint_candidate; out->checkpoint_floor_candidate=in->checkpoint_floor_candidate;
     out->profile_count=in->profile_count; memcpy(out->profiles,in->profiles,sizeof(out->profiles));
+    out->enrollment_count=in->enrollment_count; memcpy(out->enrollment,in->enrollment,sizeof(out->enrollment)); out->move=in->move;
     memcpy(out->owners,in->owners,FAKE_OWNERS*sizeof(*in->owners));
     for(unsigned i=0;i<FAKE_FILES;++i) if(in->files[i].durable_name[0])
         fake_put(out,in->files[i].durable_name,in->files[i].durable_data,in->files[i].durable_size);
@@ -232,8 +233,14 @@ void round2_checkpoint_faults(void)
         f.event=0; f.cut=cut; int e=acct_owner_checkpoint(&s.store,&s.db,0);
         if(!cut) { assert(!e); boundaries=f.event; } else assert(e==-EIO);
         acct_service_close(&s); fake_powercut(&f); assert(!acct_service_open(&s,&st,1));
+        /* Regression 3-2: mutate before retrying compaction. A lost OWNER
+         * CHECKPOINT reply must not strand a candidate with the old DB hash. */
+        set_password(&s);
         assert(!acct_owner_checkpoint(&s.store,&s.db,0)); assert(f.owner_used==256 && f.owner_floor);
-        set_password(&s); acct_service_close(&s); fake_destroy(&f);
+        struct acct_request create; struct acct_response created;
+        fake_request(&create,ACCT_CREATE,s.db.generation,0,"AfterCheckpoint","password1");
+        assert(!fake_run(&s,1,&create,&created) && s.available);
+        acct_service_close(&s); fake_destroy(&f);
     }
     fake_destroy(&baseline);
     printf("PASS OWNER checkpoint every %u snapshot/ACCOUNT-marker/floor/trim cut recovers and later password management succeeds\n",boundaries);
@@ -366,4 +373,193 @@ void round2_wire_oracle(const char *path)
     uint8_t digest[32]; assert(!acct_management_digest(&q,digest)); assert(fwrite(digest,1,32,file)==32 && !fclose(file));
     acct_service_close(&s); fake_destroy(&f);
     puts("PASS complete BEGIN/challenge/success/failure and secret-bearing management digest independent wire oracle");
+}
+
+void round3_faulted_queue(void)
+{
+    struct fake f; fake_init(&f); struct acct_service s; fake_boot(&f,&s); set_password(&s);
+    struct acct_request auth,change; struct acct_response r;
+    fake_request(&auth,ACCT_AUTH,s.db.generation,1000,NULL,"password1"); auth.service=1;
+    assert(!fake_challenge(&s,0,&auth));
+    fake_request(&change,ACCT_PASSWORD,s.db.generation,1000,NULL,"password2"); strcpy(change.old_password,"password1"); change.service=2;
+    assert(!fake_reserve(&s,1,&change));
+    assert(!acct_submit(&s,1,&change,sizeof(change),&r));
+    assert(!acct_submit(&s,0,&auth,sizeof(auth),&r) && s.pending.occupied);
+    f.write_error=ENOSPC; strcpy(f.write_error_name,"accounts.db.new");
+    unsigned outcomes=f.outcomes;
+    assert(acct_work(&s,&r)==1 && r.error==-ENOSPC && s.faulted && !s.available);
+    for(unsigned i=0;i<8;++i) assert(!s.attempts[i].occupied);
+    assert(acct_work(&s,&r)==1 && r.error==-EIO && !r.body_bytes && !r.authenticated_uid && f.outcomes==outcomes);
+    fake_request(&auth,ACCT_AUTH,s.db.generation,1000,NULL,"password1");
+    assert(fake_run(&s,0,&auth,&r)==-EIO && f.outcomes==outcomes);
+    f.write_error=0; restart(&f,&s);
+    fake_request(&auth,ACCT_AUTH,s.db.generation,1000,NULL,"password1"); assert(fake_run(&s,0,&auth,&r)==-EACCES);
+    f.now+=1000; fake_request(&auth,ACCT_AUTH,s.db.generation,1000,NULL,"password2"); assert(!fake_run(&s,0,&auth,&r));
+    acct_service_close(&s); fake_destroy(&f);
+    puts("PASS queued AUTH after ENOSPC is rejected, all attempts invalidated, only recovery admits the new password");
+}
+static void collision_boot(struct fake *f, struct acct_service *s, unsigned count)
+{
+    struct users_db old={.count=count,.next_id=1003};
+    for(unsigned i=0;i<count;++i) {
+        old.records[i].id=1001+i; snprintf(old.records[i].name,32,"Imported%u",i);
+        users_derive("password1",old.records[i].salt,10000,old.records[i].verifier);
+    }
+    uint8_t raw[1400]; size_t n=users_encode(&old,raw,sizeof(raw)); assert(n);
+    enrollment_boot(f,s,raw,n);
+    struct acct_request plan={.operation=ACCT_ENROLL_PLAN,.service=1,.plan_count=count,.first_old_id=1001};
+    for(unsigned i=0;i<count;++i) { plan.plan[i].old_id=1001+i; memcpy(plan.plan[i].name,old.records[i].name,32); }
+    struct acct_response r; assert(!acct_submit(s,0,&plan,sizeof(plan),&r)); assert(acct_work(s,&r)==1 && !r.error);
+    f->enrollment_count=s->enrollment.map_count;
+    for(unsigned i=0;i<f->enrollment_count;++i) {
+        f->enrollment[i].legacy_id=s->enrollment.map[i].old_id; f->enrollment[i].uid=s->enrollment.map[i].uid;
+        memcpy(f->enrollment[i].root,s->enrollment.map[i].root,64);
+    }
+    for(unsigned i=0;i<count+2;++i) if(i!=1) {
+        struct acct_request q; fake_request(&q,ACCT_ENROLL_VERIFY,s->enrollment.generation,i?998+i:500,NULL,"password1");
+        if(i) strcpy(q.old_password,"password1");
+        assert(!fake_run(s,0,&q,&r));
+    }
+    assert(s->available && s->store.high_uid==1000+count);
+}
+void round3_root_collision(void)
+{
+    struct fake baseline; fake_init(&baseline); struct acct_service s; collision_boot(&baseline,&s,1);
+    acct_service_close(&s); unsigned boundaries=0;
+    for(unsigned cut=0;cut<=boundaries;++cut) {
+        struct fake f; clone_persistent(&f,&baseline); struct acct_store st=fake_store(&f); assert(!acct_service_open(&s,&st,1));
+        struct acct_request q; struct acct_response r; fake_request(&q,ACCT_CREATE,s.db.generation,0,"Created","password1");
+        assert(!fake_reserve(&s,1,&q)); q.service=2; f.event=0; f.cut=cut;
+        int e=fake_run(&s,1,&q,&r);
+        if(!cut) { assert(!e && s.available && !s.faulted && s.db.records[3].uid==1002); boundaries=f.event; }
+        else assert(e==-EIO);
+        restart(&f,&s);
+        int committed=s.db.count==4;
+        status(&s,1,q.client_operation_id,&r); assert(a32(r.body+8)==(committed?3u:4u));
+        for(unsigned i=0;i<s.db.count;++i) assert(s.db.records[i].uid!=1001);
+        fake_request(&q,ACCT_CREATE,s.db.generation,0,"Later","password1"); assert(!fake_run(&s,1,&q,&r));
+        assert(s.db.records[s.db.count-1].uid>=1002 && s.available && !s.faulted);
+        restart(&f,&s); assert(s.store.high_uid>=1003);
+        acct_service_close(&s); fake_destroy(&f);
+    }
+    fake_destroy(&baseline);
+    /* A retired imported root remains occupied after its account is deleted. */
+    struct fake f; fake_init(&f); collision_boot(&f,&s,2);
+    struct acct_request q; struct acct_response r; fake_request(&q,ACCT_DELETE,s.db.generation,1001,NULL,NULL);
+    assert(!fake_run(&s,1,&q,&r)); restart(&f,&s);
+    fake_request(&q,ACCT_CREATE,s.db.generation,0,"AfterRetire","password1");
+    assert(!fake_run(&s,1,&q,&r) && s.db.records[3].uid==1003 && s.available && !s.faulted);
+    acct_service_close(&s); fake_destroy(&f);
+    printf("PASS imported/retired numeric roots skipped durably, all %u CREATE cuts retain nonreuse and correct client STATUS\n",boundaries);
+}
+static void logon_peers(struct fake *f, struct acct_service *s, struct acct_logon *l,
+                        struct acct_subject *ui, struct acct_subject *account)
+{
+    l->kernel=s->store.kernel;
+    f->peers[4].subject=(struct acct_subject){.role=2,.service=5,.group_count=1,.endpoint_generation=41,.service_generation=1,.role_generation=1};
+    f->peers[5].subject=f->peers[4].subject; /* deliberately equal visible fields, different link */
+    f->peers[6].subject=(struct acct_subject){.role=3,.service=1,.group_count=1,.endpoint_generation=61,.service_generation=1,.role_generation=1};
+    assert(!l->kernel.retain_peer(f,4,ui)); assert(!l->kernel.retain_peer(f,6,account)); f->attempt_endpoint_generation=41;
+}
+static void relay_issue(struct fake *f, struct acct_service *s, struct acct_logon *l,
+                        const struct acct_subject *ui, const struct acct_subject *account,
+                        unsigned action, uint32_t uid, struct acct_challenge *c)
+{
+    (void)f; struct acct_begin b={.action=action,.selector=1,.uid=uid}; uint8_t begin[64],relay[128];
+    assert(!acct_begin_encode(&b,0,begin,64)); assert(!acct_logon_begin(l,ui,begin,64,relay));
+    struct acct_request q={.operation=ACCT_CHALLENGE,.service=1,.begin=b}; struct acct_response r;
+    assert(!acct_challenge_decode(&q.challenge,1,relay+64,64));
+    assert(!acct_submit(s,0,&q,sizeof(q),&r)); assert(acct_work(s,&r)==1 && !r.error);
+    assert(!acct_logon_challenged(l,account,r.body,r.body_bytes)); assert(!acct_challenge_decode(c,0,r.body,r.body_bytes));
+}
+static void submit_bytes(const struct acct_challenge *c, const char *secret, const char *replacement, uint8_t p[208])
+{
+    memset(p,0,208); w32(p,1); w64(p+8,c->attempt); w32(p+16,c->session); w32(p+20,c->console);
+    w32(p+28,(uint32_t)strlen(secret)); w32(p+36,c->uid); w64(p+40,c->accounts_generation); memcpy(p+80,secret,strlen(secret));
+    if(replacement) { w32(p+32,(uint32_t)strlen(replacement)); memcpy(p+144,replacement,strlen(replacement)); }
+}
+void round3_enrollment_outcome(void)
+{
+    struct fake f; fake_init(&f); struct acct_service s; enrollment_boot(&f,&s,NULL,0);
+    struct acct_request q={.operation=ACCT_ENROLL_PLAN,.service=1,.plan_count=1}; strcpy(q.plan[0].name,"Alice");
+    struct acct_response r; assert(!acct_submit(&s,0,&q,sizeof(q),&r)); assert(acct_work(&s,&r)==1 && !r.error);
+    fake_request(&q,ACCT_ENROLL_VERIFY,s.enrollment.generation,500,NULL,"password1"); assert(!fake_run(&s,0,&q,&r));
+    struct acct_logon l={0}; struct acct_subject ui,account; logon_peers(&f,&s,&l,&ui,&account);
+    struct acct_challenge c; relay_issue(&f,&s,&l,&ui,&account,4,1000,&c);
+    uint8_t submit[208],relay[272]; submit_bytes(&c,"","password1",submit);
+    assert(!acct_logon_submit(&l,&ui,submit,208,relay));
+    assert(!acct_submit_body(&s,0,1,4,relay,272,c.accounts_generation,0,&r)); assert(acct_work(&s,&r)==1 && !r.error);
+    assert(s.available && s.db.generation>c.accounts_generation && a32(f.last_outcome+68)==3);
+    assert(azero(f.last_outcome+96,208));
+    account.service=5; struct acct_auth_outcome o; uint8_t progress[16],bad[304];
+    memcpy(bad,f.last_outcome,304); bad[96]=1; assert(acct_logon_outcome(&l,&account,s.db.generation,bad,304,&o,progress)==-EINVAL);
+    memcpy(bad,f.last_outcome,304); w64(bad+8,c.attempt+1); assert(acct_logon_outcome(&l,&account,s.db.generation,bad,304,&o,progress)==-EAGAIN);
+    struct acct_logon saved=l; /* negative probes consume only their matching attempt */
+    l.kernel.subject_get(&f,&saved.attempts[0].ui);
+    assert(acct_logon_outcome(&l,&account,c.accounts_generation,f.last_outcome,304,&o,progress)==-EAGAIN);
+    l=saved; /* restore the separately retained test slot, balanced below */
+    assert(!acct_logon_outcome(&l,&account,s.db.generation,f.last_outcome,304,&o,progress));
+    assert(o.disposition==3 && o.resulting_generation==s.db.generation && azero(o.credential,sizeof(o.credential)) && azero(o.profile,sizeof(o.profile)));
+    assert(acct_logon_outcome(&l,&account,s.db.generation,f.last_outcome,304,&o,progress)==-EAGAIN);
+    acct_logon_clear(&l); l.kernel.release_peer(&f,&ui); l.kernel.release_peer(&f,&account);
+    acct_service_close(&s); fake_destroy(&f);
+    puts("PASS final production enrollment relays the original challenge at the resulting generation, rejects stale/forged/replayed outcomes and exports no credentials");
+}
+void round3_logon_restart(void)
+{
+    struct fake f; fake_init(&f); struct acct_service s; fake_boot(&f,&s);
+    struct acct_logon l={0}; struct acct_subject ui,account; logon_peers(&f,&s,&l,&ui,&account); struct acct_challenge c;
+    for(unsigned i=0;i<7;++i) relay_issue(&f,&s,&l,&ui,&account,2,1000,&c);
+    uint64_t high=s.high_attempt; acct_logon_clear(&l);
+    ++f.logon_generation; f.peers[0].subject.role_generation=f.logon_generation; ++f.peers[0].epoch;
+    l=(struct acct_logon){.kernel=s.store.kernel}; relay_issue(&f,&s,&l,&ui,&account,2,1000,&c);
+    assert(c.attempt>high && c.attempt==((uint64_t)f.logon_generation<<32|1));
+    l.next_attempt=UINT32_MAX-1; relay_issue(&f,&s,&l,&ui,&account,2,1000,&c);
+    assert((uint32_t)c.attempt==UINT32_MAX);
+    struct acct_begin b={.action=2,.selector=1,.uid=1000}; uint8_t begin[64],relay[128]; assert(!acct_begin_encode(&b,0,begin,64));
+    assert(acct_logon_begin(&l,&ui,begin,64,relay)==-EAGAIN); /* no wrap */
+    ++f.logon_generation; f.peers[0].subject.role_generation=f.logon_generation;
+    relay_issue(&f,&s,&l,&ui,&account,2,1000,&c); assert((uint32_t)c.attempt==1);
+    acct_logon_clear(&l); l.kernel.release_peer(&f,&ui); l.kernel.release_peer(&f,&account);
+    acct_service_close(&s); fake_destroy(&f);
+    puts("PASS LOGON respawn attempts exceed surviving ACCOUNT watermark, bounded counter cannot wrap and next role generation resumes");
+}
+void round3_distinct_handles(void)
+{
+    struct fake f; fake_init(&f); f.distinct_handles=1; struct acct_service s; fake_boot(&f,&s);
+    struct acct_request q; struct acct_response r; fake_request(&q,ACCT_AUTH,s.db.generation,1000,NULL,"");
+    assert(!fake_challenge(&s,0,&q)); uintptr_t original=s.attempts[0].logon.retained;
+    struct acct_subject other; assert(!s.store.kernel.retain_peer(&f,0,&other)); assert(other.retained!=original);
+    s.store.kernel.release_peer(&f,&other); assert(!fake_run(&s,0,&q,&r) && a32(f.last_outcome+68)==1);
+    /* Identical public epochs cannot authorize a different kernel link. */
+    fake_request(&q,ACCT_AUTH,s.db.generation,1000,NULL,""); assert(!fake_challenge(&s,0,&q)); q.service=1;
+    f.peers[7].subject=f.peers[0].subject;
+    assert(!acct_submit(&s,7,&q,sizeof(q),&r)); assert(acct_work(&s,&r)==1 && !r.error && a32(r.body+4)==4);
+    assert((int32_t)a32(r.body+8)==-EAGAIN);
+    struct acct_logon l={0}; struct acct_subject ui,account; logon_peers(&f,&s,&l,&ui,&account);
+    /* The fake helper's small IDs must not precede the real LOGON stream. */
+    struct acct_challenge c; relay_issue(&f,&s,&l,&ui,&account,2,1000,&c);
+    uint8_t submit[208],relay[272]; submit_bytes(&c,"",NULL,submit);
+    assert(!l.kernel.retain_peer(&f,5,&other)); assert(acct_logon_submit(&l,&other,submit,208,relay)==-EAGAIN);
+    l.kernel.release_peer(&f,&other); assert(!l.kernel.retain_peer(&f,4,&other)); assert(other.retained!=ui.retained);
+    assert(!acct_logon_submit(&l,&other,submit,208,relay)); l.kernel.release_peer(&f,&other);
+    acct_logon_clear(&l); l.kernel.release_peer(&f,&ui); l.kernel.release_peer(&f,&account);
+    acct_service_close(&s); fake_destroy(&f);
+    puts("PASS separate retained handles for the same link authenticate/submit; different links with equal visible generations fail");
+}
+void round3_intent_bounds(void)
+{
+    struct fake f; fake_init(&f); struct acct_service s; fake_boot(&f,&s);
+    uint8_t intent[192+ACCT_OWNER_BODY_MAX+ACCT_FILE_MAX]={0};
+    const size_t sizes[]={64+ACCT_FILE_MAX+1,sizeof(intent)};
+    uint64_t generation=s.db.generation, high=s.store.high_generation;
+    for(unsigned i=0;i<2;++i) {
+        size_t n=sizes[i]; memset(intent,0,sizeof(intent)); memcpy(intent,"CIACTLC4",8); w32(intent+8,(uint32_t)n); w64(intent+16,generation);
+        size_t db_bytes; assert(!acct_encode(&s.db,0,intent+64,ACCT_FILE_MAX,&db_bytes));
+        uint64_t sequence=0; assert(!acct_blob_write(&s.store,"accounts.local",intent,n,&sequence));
+        assert(acct_store_local_recover(&s.store)==-EIO && s.db.generation==generation && s.store.high_generation==high);
+        assert(!s.store.io.remove(&f,"accounts.local")); assert(!s.store.io.barrier(&f));
+    }
+    acct_service_close(&s); fake_destroy(&f);
+    puts("PASS checksummed local intents over 64+ACCT_FILE_MAX are rejected before payload copy/decoding at both boundary and maximum blob size");
 }

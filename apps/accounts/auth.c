@@ -146,6 +146,7 @@ int acct_auth_result(struct acct_service *s, struct acct_job *job, struct acct_r
 }
 int acct_auth_execute(struct acct_service *s, struct acct_job *job, struct acct_response *out)
 {
+    if(s->faulted) { acct_attempts_clear(s); return -EIO; }
     if(job->request.operation==ACCT_CHALLENGE) return issue(s,job,out);
     if(job->request.operation==ACCT_ENROLL_PLAN) return acct_enrollment_execute(s,job,out);
     struct acct_request *q=&job->request; struct acct_attempt saved={0};
@@ -158,8 +159,7 @@ int acct_auth_execute(struct acct_service *s, struct acct_job *job, struct acct_
     if(!saved.occupied) return -EAGAIN;
     uint8_t expected[64], got[64]; acct_challenge_encode(&saved.challenge,0,expected,64);
     int e=acct_challenge_encode(&q->challenge,0,got,64); uint32_t locked=0;
-    if(!e && (memcmp(expected,got,64) || saved.logon.retained!=job->subject.retained ||
-        saved.logon.endpoint_generation!=job->subject.endpoint_generation ||
+    if(!e && (memcmp(expected,got,64) || s->store.kernel.same_link(s->store.kernel.ctx,&saved.logon,&job->subject)!=1 ||
         s->store.kernel.monotonic_ms(s->store.kernel.ctx)-saved.started>=5000)) e=-EAGAIN;
     if(!e) e=live(s,&job->subject,&q->challenge,&locked);
     struct acct_db *d=catalogue(s,q->challenge.action); const struct acct_record *r=record(d,&saved.begin);

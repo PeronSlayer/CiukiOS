@@ -52,6 +52,9 @@ struct acct_kernel {
     int (*retain_peer)(void *, int endpoint, struct acct_subject *);
     void (*subject_get)(void *, const struct acct_subject *);
     int (*peer_alive)(void *, const struct acct_subject *);
+    /* 1 only for the same live kernel link/process/revocation generations,
+     * 0 for different links, -errno on failure. Reference handles are opaque. */
+    int (*same_link)(void *, const struct acct_subject *, const struct acct_subject *);
     void (*release_peer)(void *, struct acct_subject *);
     int (*active_uid)(void *, uint32_t); /* 1 active/closing, 0 inactive, -errno */
     uint64_t (*monotonic_ms)(void *);
@@ -121,6 +124,9 @@ struct acct_owner {
     int (*generation)(void *, uint64_t *);
     int (*binding)(void *, uint64_t volume, uint32_t uid, char root[64],
                    struct acct_owner_binding *); /* ENOENT if never owned; retired denies */
+    /* 1 occupied, 0 free, -errno. Includes imported/retired roots and live
+     * reservations on this volume. This query never allocates a destination. */
+    int (*root_occupied)(void *, uint64_t volume, const char *root);
     /* ACCOUNT stages the exact shared CIUKISTG bytes at the deterministic
      * destination path. No callback supplies a locator to ACCOUNT. */
     int (*stage)(void *, const struct acct_owner_request *, void *manifest,

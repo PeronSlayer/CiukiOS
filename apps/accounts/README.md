@@ -1,6 +1,6 @@
 # SYSTEM account service core
 
-This private service implements sec-user-01 through Lead amendment 2. It installs
+This private service implements sec-user-01 through Lead amendment 3. It installs
 no runtime endpoint and leaves G32 desktop logon unchanged. Link `crypto.c`,
 `codec.c`, `owner.c`, `bootstrap.c`, `protocol.c`, `store.c`, `service.c`,
 `migration.c`, `persist.c`, `results.c`, `auth.c`, `enrollment.c`, `manifest.c`,
@@ -20,6 +20,12 @@ roles, credentials, Safe Mode, active sessions, epochs and service generations;
 request uid/name/environment fields grant no authority. `subject_get` retains a
 link subject across exchanges; `peer_alive` must check its original process/link
 revocation generation. Registration and all authority fds remain nontransferable.
+The required private `same_link(ctx, a, b)` adapter returns 1 only when both
+retained subjects denote the same live link and process/revocation generations,
+0 for different links and negative errno on failure. It must consult the kernel
+retained-subject identity; comparing opaque reference handles is insufficient.
+Both ACCOUNT verification and LOGON submission use this check, including when
+separate acquisitions produce different handles. Missing bindings refuse open.
 
 The private codecs are little-endian, with canonical padding and no attachments:
 
@@ -51,6 +57,12 @@ attention, and actual session creation/launch/unlock. SESSION_LOCK accepts only
 a retained same-session DESKTOP and calls the current trusted lock backend; it
 cannot release a gate or expose its cookie. Blank-owner guidance belongs to the
 trusted UI. ACCOUNT has no session creation, process launch or SECURE_LEAVE hook.
+LOGON allocates attempts as `(registered_logon_generation << 32) | counter`,
+with a nonzero 32-bit counter that refuses to wrap. Each respawn must use its
+new kernel-registered role generation and keep this coordinator for its lifetime.
+ENROLL_COMMITTED retains its original challenge correlation but validates the
+trusted current ACCOUNT generation against `resulting_accounts_generation`.
+Its zero-credential/profile/name rule still requires a fresh LOGON challenge.
 
 Both ACCOUNT and LOGON consume AUTOLOGON eligibility before issuing a challenge.
 It requires the exact retained ready tuple, CONSUMED bootstrap, normal boot and
@@ -87,6 +99,15 @@ no OWNER receipt. That intent includes the complete target database and retired
 bootstrap flag, so interruption cannot restore an acknowledged password or blank
 exception. CREATE/RETIRE/mapping changes use one full OWNER batch, including the
 three bootstrap bindings or all sixteen G32 profiles plus both built-ins.
+Before allocating a CREATE uid, the required OWNER `root_occupied` adapter
+checks the candidate numeric root on this volume, including retained imported
+and retired mappings and live reservations (1 occupied, 0 free, negative errno).
+Conflicting uids are durably consumed through the allocation watermarks and
+allocation retries the next uid. The pending client receipt is durably replanned
+to the actual commit generation after skips. OWNER still resolves/reserves the
+destination; this read-only query never supplies a key, locator or other identity.
+Storage faults close queued authentication and invalidate all outstanding
+attempts; close/open recovery is required before verification resumes.
 
 ACCOUNT stages exact CIUKISTG bytes at the deterministic destination path,
 validates its target uid/legacy map and independently checks canonical tree
@@ -105,7 +126,12 @@ are version/header/counts at 8/12/16/20, SID at 24, volume/floor/accounts G at
 40/48/56, database digest at 64, committed/reserved owner generations at 96/104,
 permanent key/locator watermarks at 112/120, and ACCOUNT G/uid watermarks at
 128/136 (zero padding through 160). ACCOUNT verifies maps, results,
-generations and hashes before publishing its protected marker. OWNER CHECKPOINT
+generations and hashes before publishing its protected marker. The exact
+192-byte pending request/watermark record is first journaled as
+`owner.checkpoint.pending` after the snapshot is flushed and before sending
+OWNER CHECKPOINT. Recovery replays that exact request, durably publishes the
+matching `owner.checkpoint` marker, completes COMPACT, and durably removes the
+pending journal before admitting account changes. OWNER CHECKPOINT
 retains the previous store; COMPACT requires that durable marker before installing
 its floor and trimming prefixes. Recovery completes the same pair, including an
 interruption after floor publication but before trim. G<=floor cannot execute,

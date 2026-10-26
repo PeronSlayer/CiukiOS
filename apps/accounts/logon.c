@@ -24,20 +24,26 @@ static struct acct_logon_attempt *find(struct acct_logon *l, uint64_t attempt)
 { for(unsigned i=0;i<8;++i) if(l->attempts[i].occupied && l->attempts[i].challenge.attempt==attempt) return &l->attempts[i]; return NULL; }
 static int begin(struct acct_logon *l, const struct acct_subject *ui, const struct acct_begin *b, void *relay)
 {
-    if(!l || !relay || !l->kernel.gate_state || !l->kernel.subject_get) return -EINVAL;
+    if(!l || !relay || !l->kernel.gate_state || !l->kernel.subject_get || !l->kernel.same_link) return -EINVAL;
+    struct acct_challenge c={.action=b->action,.session=b->session,
+        .ui_generation=ui?ui->endpoint_generation:0,.flags=b->action==5?1:0};
+    int e=l->kernel.role_generations(l->kernel.ctx,&c.logon_generation,&c.account_generation);
+    if(e) return e;
+    if(!c.logon_generation || c.logon_generation<l->attempt_generation) return -EAGAIN;
+    if(c.logon_generation!=l->attempt_generation) {
+        acct_logon_clear(l); l->attempt_generation=c.logon_generation; l->next_attempt=0;
+    }
     uint64_t now=l->kernel.monotonic_ms(l->kernel.ctx); struct acct_logon_attempt *slot=NULL;
     for(unsigned i=0;i<8;++i) {
         struct acct_logon_attempt *a=&l->attempts[i];
         if(a->occupied && ((a->ui.retained && !l->kernel.peer_alive(l->kernel.ctx,&a->ui)) ||
             (!a->submitted && now-a->started>=5000) ||
-            (ui && a->ui.retained==ui->retained && a->ui.endpoint_generation==ui->endpoint_generation))) drop(l,a);
+            (ui && l->kernel.same_link(l->kernel.ctx,&a->ui,ui)==1))) drop(l,a);
         if(!a->occupied && !slot) slot=a;
     }
-    if(!slot || l->next_attempt==UINT64_MAX) return -EAGAIN;
-    struct acct_challenge c={.action=b->action,.attempt=++l->next_attempt,.session=b->session,
-        .ui_generation=ui?ui->endpoint_generation:0,.flags=b->action==5?1:0};
-    uint32_t uid; int e=l->kernel.role_generations(l->kernel.ctx,&c.logon_generation,&c.account_generation);
-    if(!e) e=l->kernel.gate_state(l->kernel.ctx,b->session,&c.console,&c.authentication_epoch,&uid);
+    if(!slot || l->next_attempt==UINT32_MAX) return -EAGAIN;
+    c.attempt=((uint64_t)c.logon_generation<<32)|++l->next_attempt;
+    uint32_t uid; e=l->kernel.gate_state(l->kernel.ctx,b->session,&c.console,&c.authentication_epoch,&uid);
     if(!e && b->action==3 && b->console!=c.console) e=-EAGAIN;
     if(!e) e=acct_begin_encode(b,1,relay,64);
     if(!e) e=acct_challenge_encode(&c,1,(uint8_t *)relay+64,64);
@@ -76,8 +82,8 @@ int acct_logon_submit(struct acct_logon *l, const struct acct_subject *ui, const
     const uint8_t *p=v;
     if(!p || n!=208 || !relay || !ui || ui->role!=2 || ui->service!=5 || !l->kernel.peer_alive(l->kernel.ctx,ui)) return -EACCES;
     struct acct_logon_attempt *a=find(l,a64(p+8));
-    if(!a || !a->resolved || a->submitted || a->challenge.action==5 || a->ui.retained!=ui->retained ||
-        a->ui.endpoint_generation!=ui->endpoint_generation || current(l,&a->challenge) ||
+    if(!a || !a->resolved || a->submitted || a->challenge.action==5 ||
+        l->kernel.same_link(l->kernel.ctx,&a->ui,ui)!=1 || current(l,&a->challenge) ||
         l->kernel.monotonic_ms(l->kernel.ctx)-a->started>=5000) return -EAGAIN;
     uint8_t body[272]; acct_challenge_encode(&a->challenge,0,body,64); memcpy(body+64,p,208);
     struct acct_request q={0}; int e=acct_body_decode(1,a->challenge.action,body,272,a->challenge.accounts_generation,&q);
@@ -94,7 +100,8 @@ int acct_logon_outcome(struct acct_logon *l, const struct acct_subject *account,
         !l->kernel.peer_alive(l->kernel.ctx,account)) return -EACCES;
     struct acct_logon_attempt *a=find(l,o.challenge.attempt); if(!a || !a->resolved || (!a->submitted && o.challenge.action!=5)) return -EAGAIN;
     uint8_t expected[64]; acct_challenge_encode(&a->challenge,0,expected,64);
-    if(memcmp(expected,v,64) || current(l,&o.challenge) || generation!=o.challenge.accounts_generation ||
+    uint64_t expected_generation=o.disposition==3?o.resulting_generation:o.challenge.accounts_generation;
+    if(memcmp(expected,v,64) || current(l,&o.challenge) || generation!=expected_generation ||
         (a->ui.retained && !l->kernel.peer_alive(l->kernel.ctx,&a->ui))) e=-EAGAIN;
     if(!e) {
         uint8_t *p=progress; memset(p,0,16); w32(p,1); w32(p+4,o.disposition); w32(p+8,(uint32_t)o.status); w32(p+12,o.retry_after_ms);

@@ -99,6 +99,7 @@ int acct_results_execute(struct acct_service *, struct acct_job *, struct acct_r
 int acct_results_cancel(struct acct_service *, const struct acct_job *);
 int acct_results_admit(struct acct_service *, struct acct_job *, struct acct_response *, int *cached);
 int acct_results_finish(struct acct_service *, const struct acct_request *, int);
+int acct_results_replan(struct acct_service *, const struct acct_request *);
 int acct_management_digest(const struct acct_request *, uint8_t[32]);
 #define ACCT_MANIFEST_MAX (64u + 32u * 256u)
 #define ACCT_CHECKPOINT_MAX (160u + 32u * 112u + 256u * (8u + ACCT_OWNER_BODY_MAX + ACCT_OWNER_REPLY_MAX))
@@ -272,7 +273,7 @@ struct acct_logon_attempt {
 struct acct_logon {
     struct acct_kernel kernel;
     struct acct_logon_attempt attempts[8];
-    uint64_t next_attempt;
+    uint32_t next_attempt, attempt_generation;
     int autologon_used;
 };
 int acct_logon_begin(struct acct_logon *, const struct acct_subject *, const void *, size_t, void *relay128);

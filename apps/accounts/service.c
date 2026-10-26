@@ -20,11 +20,11 @@ static int adapter_valid(const struct acct_store *s)
 {
     const struct acct_kernel *k = &s->kernel;
     return s->volume && k->lease_acquire && k->lease_release && k->retain_peer &&
-        k->subject_get && k->peer_alive && k->release_peer && k->active_uid && k->monotonic_ms &&
+        k->subject_get && k->peer_alive && k->same_link && k->release_peer && k->active_uid && k->monotonic_ms &&
         k->entropy && k->allocate && k->deallocate && k->picture_valid &&
         k->auth_binding && k->role_generations && k->auth_outcome && k->enrollment_authorized && k->session_lock && k->service_link &&
         k->exchange_begin && k->exchange_end && k->deliver_reply &&
-        s->owner.authenticate && s->owner.generation && s->owner.binding && s->owner.stage && s->owner.tree_digest && s->owner.validate_stage && s->owner.snapshot && s->owner.checkpoint_floor && s->owner.recover_orphans && s->owner.call &&
+        s->owner.authenticate && s->owner.generation && s->owner.binding && s->owner.root_occupied && s->owner.stage && s->owner.tree_digest && s->owner.validate_stage && s->owner.snapshot && s->owner.checkpoint_floor && s->owner.recover_orphans && s->owner.call &&
         s->io.read && s->io.write && s->io.flush && s->io.barrier && s->io.rename && s->io.remove;
 }
 static int pictures_valid(const struct acct_kernel *k, const struct acct_db *d)
@@ -230,6 +230,22 @@ static void retire_blank(struct acct_db *next, struct acct_record *r)
         r->kdf = r->iterations = 0; memset(r->salt,0,16); memset(r->verifier,0,32);
     }
 }
+static int skip_occupied_roots(struct acct_service *s, const struct acct_request *q)
+{
+    int skipped=0;
+    while(s->store.high_uid!=UINT32_MAX) {
+        char root[64]; snprintf(root,sizeof(root),"/Windows/Profiles/u%08x",s->store.high_uid);
+        int occupied=s->store.owner.root_occupied(s->store.owner.ctx,s->store.volume,root);
+        if(occupied<0) return occupied;
+        if(!occupied) return skipped?acct_results_replan(s,q):0;
+        if(s->store.high_generation==UINT64_MAX) return -EOVERFLOW;
+        uint32_t next=s->store.high_uid==ACCT_LAST_UID?UINT32_MAX:s->store.high_uid+1;
+        int e=acct_store_reserve_generation(&s->store,s->db.sid,s->store.high_generation+1,next);
+        if(e) { s->available=0; s->faulted=1; return e; }
+        skipped=1;
+    }
+    return -ENOSPC;
+}
 static int mutate(struct acct_service *s, struct acct_job *job)
 {
     struct acct_request *q = &job->request;
@@ -256,6 +272,9 @@ static int mutate(struct acct_service *s, struct acct_job *job)
             (q->operation==ACCT_PASSWORD && !self) ||
             (q->operation==ACCT_UPDATE && ((q->selectors&512) || ((q->selectors&256) && !(q->flags&1)) || (q->selectors&2048)));
         if (destructive) { int active=k->active_uid(k->ctx,q->uid); if(active) return active<0?active:-EBUSY; }
+    }
+    if(q->operation==ACCT_CREATE) {
+        int e=skip_occupied_roots(s,q); if(e) return e;
     }
     if (s->store.high_generation==UINT64_MAX) return -EOVERFLOW;
     struct acct_db *next=k->allocate(k->ctx,sizeof(*next)); if(!next) return -ENOMEM;
@@ -366,6 +385,7 @@ static int profile(struct acct_service *s, struct acct_job *job, struct acct_res
 static int execute(struct acct_service *s, struct acct_job *job, struct acct_response *out)
 {
     struct acct_kernel *k=&s->store.kernel; struct acct_request *q=&job->request;
+    if(s->faulted) return -EIO;
     if(!k->peer_alive(k->ctx,&job->subject)) {
         int e=job->subject.service==2?acct_results_cancel(s,job):0;
         return e?e:-ESRCH;
@@ -405,7 +425,7 @@ int acct_work(struct acct_service *s, struct acct_response *out)
     if (!try_lock(&s->queue_lock)) { unlock(&s->worker_lock); return -EAGAIN; }
     if (!s->active.occupied) { unlock(&s->queue_lock); unlock(&s->worker_lock); return 0; }
     uint32_t retry = s->completed ? 0 : retry_ms(s);
-    if (retry && (authentication(s->active.request.operation) || s->active.request.operation == ACCT_PASSWORD)) {
+    if (!s->faulted && retry && (authentication(s->active.request.operation) || s->active.request.operation == ACCT_PASSWORD)) {
         out->retry_after_ms = retry;
         unlock(&s->queue_lock); unlock(&s->worker_lock); return -EAGAIN;
     }
@@ -416,6 +436,7 @@ int acct_work(struct acct_service *s, struct acct_response *out)
         memset(&s->completion, 0, sizeof(s->completion));
         s->completion.ticket = job.ticket;
         s->completion.error = execute(s, &job, &s->completion);
+        if(s->faulted) acct_attempts_clear(s);
         if (!s->completion.error && !s->completion.generation) s->completion.generation = s->db.generation;
         s->completed = 1;
         acct_wipe(&job, sizeof(job));
