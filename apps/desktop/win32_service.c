@@ -2,22 +2,22 @@
 #include "win32_adapter.h"
 #include <sys/wait.h>
 #include <ciuki/abi.h>
-/* PIDs are monotonic within a boot and restart at the next one, so the
- * window server's persisted owners are valid exactly when they predate this
- * desktop in the same boot: a live process older than this desktop (PID 1
- * aside) means a replacement after a desktop death; none means a cold boot
- * and the identities of the previous boot are reset (Codex review P2). */
+/* PIDs are monotonic within a boot (process.c) and restart at the next one,
+ * so the window server's persisted owners are valid exactly when they
+ * predate this desktop in the same boot. A live or stopping process with a
+ * PID below this desktop's (PID 1 aside) is such a survivor: replacement
+ * after a desktop death, identities kept. None means a cold boot, whose
+ * reused PIDs make the previous boot's identities stale: reset. Ticks are
+ * not compared (publication records the millisecond tick, which a survivor
+ * and the new desktop can share) and an unknown snapshot chooses the
+ * non-destructive reconcile (Codex re-review of wt/q3crash, P2). */
 int desk_w32_fresh_clients(const struct ciuki_proc_system *s, const struct ciuki_proc_record *r, uint32_t self_pid)
 {
-    if (!s || !r || s->version!=CIUKI_PROC_VERSION) return 1;
-    uint64_t self_start=0; int found=0;
-    for (uint32_t i=0;i<s->records;i++) if (r[i].pid==self_pid) { self_start=r[i].start_tick; found=1; break; }
-    if (!found) return 1;
+    if (!s || !r || s->version!=CIUKI_PROC_VERSION || self_pid<=1) return 0;
     for (uint32_t i=0;i<s->records;i++) {
         const struct ciuki_proc_record *p=&r[i];
-        if (p->pid<=1 || p->pid==self_pid) continue;
-        if (p->state!=CIUKI_PROC_LIVE && p->state!=CIUKI_PROC_STOPPING) continue;
-        if (p->start_tick<self_start) return 0;
+        if (p->pid<=1 || p->pid>=self_pid) continue;
+        if (p->state==CIUKI_PROC_LIVE || p->state==CIUKI_PROC_STOPPING) return 0;
     }
     return 1;
 }

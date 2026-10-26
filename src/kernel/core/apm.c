@@ -438,7 +438,7 @@ int apm_backend_service(struct apm_backend *b)
     return b->emergency ? emergency_step(b) : 0;
 }
 
-int apm_backend_off(struct apm_backend *b)
+static int off_with(struct apm_backend *b, int (*proof)(void *, uint64_t))
 {
     if (!b || b->state != APM_CONNECTED) return -ENODEV;
     if (b->ops.acpi_present(b->ops.ctx)) return failed(b, -EBUSY);
@@ -451,7 +451,7 @@ int apm_backend_off(struct apm_backend *b)
         b->off_deadline = now + APM_QUIESCE_MS;
     }
     if (now >= b->off_deadline) { b->off_started = false; return -V86_ETIMEDOUT; }
-    int e = b->ops.orderly_shutdown(b->ops.ctx, b->off_deadline);
+    int e = proof(b->ops.ctx, b->off_deadline);
     if (e) { if (e != -EAGAIN) b->off_started = false; return e; }
     b->off_started = false;
     if (b->ops.now_ms(b->ops.ctx) >= b->off_deadline) return -V86_ETIMEDOUT;
@@ -460,4 +460,16 @@ int apm_backend_off(struct apm_backend *b)
     e = call(b, 0x5307, 1, 3, APM_POWER_MS, &r);
     /* Successful Off must remove power. Returning cannot count as success. */
     return failed(b, e ? e : -EIO);
+}
+int apm_backend_off(struct apm_backend *b)
+{
+    return off_with(b, b ? b->ops.orderly_shutdown : 0);
+}
+/* Review 3, finding 4: the forced Off consults the forced proof only (the
+ * emergency device fence); the orderly latch is never read here, and the
+ * ordinary entry never accepts the emergency one. */
+int apm_backend_off_forced(struct apm_backend *b)
+{
+    if (!b || !b->ops.forced_shutdown) return -ENOTSUP;
+    return off_with(b, b->ops.forced_shutdown);
 }

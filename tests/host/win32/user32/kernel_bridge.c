@@ -13,6 +13,7 @@ void klog(const char *fmt, ...) {
   vprintf(fmt, args);
   va_end(args);
   putchar('\n');
+  if (on_klog) on_klog(fmt);
 }
 static struct process *ui_processes[2];
 static struct proc_thread *ui_threads[3];

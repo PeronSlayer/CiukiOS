@@ -230,6 +230,8 @@ HWND W32API CreateWindowExA(DWORD ex, const char *klass, const char *title,
   w->tid = u32_tid();
   w->pid = u32_pid();
   w->style = style;
+  w->modal_prompt = !!(ex & U32_EX_MODAL_PROMPT);   /* review 4, finding 6: per-window, before the CREATE packet */
+  ex &= ~U32_EX_MODAL_PROMPT;
   w->exstyle = ex;
   w->proc = c->c.lpfnWndProc;
   w->unicode = c->unicode;

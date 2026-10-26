@@ -167,6 +167,22 @@ refusal keeps storage usable but does not reactivate that sink. Existing
 sticky write/flush errors remain errors and MUST NOT be converted into a
 successful clean shutdown.
 
+**[T23 c42f556e amendment, 2026-10-25]** Every wait of the shutdown
+preflight is bounded: the namespace, the storage writer's current batch,
+each drive reservation and the boot log's last writes wait at most
+`storage_shutdown_wait_ms` (5000 ms; writable for host tests). Past the
+bound the call is a refusal before any change (`-EBUSY`, recorded as
+`[storage] shutdown busy holder=namespace|writer|reservation wait_ms=...`),
+exactly as a busy volume already was, so call 73 always returns to the
+desktop, which keeps its loop alive and can offer Force and, past that, the
+forced restart or power off (`CIUKI_POWER_FORCE_*`, `execution-abi.md`). A
+task ended while it waits for a drive (SIGKILL sets its interrupted flag,
+the request's `cancelled`) leaves the wait at once with `-VFS_ECANCELLED`
+and nothing reserved; the holder's later release is unaffected
+(`tests/host/fs/test_storage_namespace.c`, `bounded_shutdown_test` and
+`cancelled_wait_test`). Review: Codex on `63c964019`, finding P1-1
+(`docs/validation/t23-win32-hang-shutdown-2026-10-25.md`).
+
 - Default size 8 MiB (`boot-memory.md` budget), adjustable at boot.
 - Dirty blocks become eligible for the `device`-priority writer after
   1 second or at the dirty budget (F1-82 below), on explicit `flush`, before unmount, and

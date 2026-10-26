@@ -398,6 +398,48 @@ static void test_resize(void)
     }
     puts("PASS resize peer isolation: wrong version/serial/size/non-surface/map failure, every fd and mapping released");
 }
+/* Quake III console (QEMU, 2026-10-26): "map q3dm17" arrived as "map q3d17",
+ * "demo demo001" as "demo deo001". The QA driver types each character as a
+ * key down, 40 ms, key up, 60 ms gap; Alt had been tapped earlier (the
+ * installer's Alt+Y, Alt+Enter). Every key down, its character and its key
+ * up must reach the focused program. */
+static const int scan_of[128]={['m']=0x32,['a']=0x1e,['p']=0x19,[' ']=0x39,['q']=0x10,['3']=0x04,['d']=0x20,['1']=0x02,['7']=0x08,['e']=0x12,['o']=0x18,['0']=0x0b};
+static void type_text(const char *text)
+{
+    for (const char *c=text;*c;c++) {
+        int scan=scan_of[(unsigned char)*c]; assert(scan);
+        event(CIUKI_INPUT_KEY,scan,1,0); event(CIUKI_INPUT_TEXT,(unsigned char)*c,0,0); event(CIUKI_INPUT_KEY,scan,0,0);
+    }
+}
+static void count_keys(const char *text,unsigned *downs,unsigned *ups,unsigned *chars,char *received)
+{
+    *downs=*ups=*chars=0; unsigned n=0;
+    for (unsigned k=0;k<fake_sent;k++) {
+        struct desk_packet p; if (!desk_parse(&fake_messages[k],0,NULL,&p) || p.opcode!=DESK_KEY) continue;
+        if (p.event.type==CIUKI_INPUT_KEY) { if (p.event.value) (*downs)++; else (*ups)++; }
+        else if (p.event.type==CIUKI_INPUT_TEXT) { (*chars)++; if (n<127) received[n++]=(char)p.event.code; }
+    }
+    received[n]=0; (void)text;
+}
+static void test_console_typing(void)
+{
+    setup(640,480); desk_shell_enable(&d);
+    int a=client(10,11,200,100,0x112233); assert(d.focus==a); flush_all();
+    /* An Alt tap before the typing (nothing else pressed with it). */
+    event(CIUKI_INPUT_KEY,0x38,1,0); event(CIUKI_INPUT_KEY,0x38,0,0); flush_all(); fake_sent=0;
+    const char *lines[]={"map q3dm17","demo demo001"};
+    for (unsigned l=0;l<2;l++) {
+        fake_sent=0; type_text(lines[l]); flush_all();
+        unsigned downs,ups,chars; char received[128]; count_keys(lines[l],&downs,&ups,&chars,received);
+        if (strcmp(received,lines[l]) || downs!=strlen(lines[l]) || ups!=strlen(lines[l]))
+            fprintf(stderr,"console typing: \"%s\" -> \"%s\" downs=%u ups=%u\n",lines[l],received,downs,ups);
+        assert(!strcmp(received,lines[l]) && chars==strlen(lines[l]));
+        assert(downs==strlen(lines[l]) && ups==strlen(lines[l]));
+        for (int k=0;k<=0x200;k++) assert(!d.keys[k]);
+    }
+    cleanup();
+    puts("PASS console typing: after an Alt tap every key down, character and key up of \"map q3dm17\" and \"demo demo001\" reaches the focused program");
+}
 static void test_input(void)
 {
     setup(640,480);
@@ -1298,7 +1340,7 @@ int main(void)
 {
     test_joystick_broker();
     test_protocol(); test_titles(); test_cursor_requests(); test_resize_protocol(); test_damage();
-    test_resize(); test_resize_title_buttons(); test_input(); test_lifecycle();
+    test_resize(); test_resize_title_buttons(); test_input(); test_console_typing(); test_lifecycle();
     test_compositor(); test_shell(); test_media_shell(); test_graphics_menu();
     test_graphics_service(); test_menu(); test_ide_launch(); test_note_wordpad(); test_terminal();
     test_volume_steps(); test_hid_consumer(); test_dos_fullscreen_menu(); test_dos_fullscreen_restore_frame();

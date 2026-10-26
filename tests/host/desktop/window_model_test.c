@@ -226,7 +226,7 @@ static int wm_v3_window(unsigned style, int owner, int x, int y, unsigned w, uns
     if (!v3_live()) { v3_peer(take_fd()); memset(v3_generations,0,sizeof(v3_generations)); }
     unsigned id=1; while (id<=DESK_CLIENTS && v3_slot(id)>=0) id++;
     int used=0; for (int k=0;k<DESK_CLIENTS;k++) used+=d.clients[k].channel>=0 || d.clients[k].internal;
-    if (id>DESK_CLIENTS || used>=DESK_CLIENTS-2 || fds_left()<8) return -1;
+    if (id>DESK_CLIENTS || used>=DESK_CLIENTS-DESK_SYSTEM_SLOTS || fds_left()<8) return -1;   /* the program quota (desk_slot_available) */
     unsigned gen=++v3_generations[id];
     int fd=take_fd(); fake_surface(fd,w,h,0);
     struct ciuki_message m; v3msg(&m,DESK_CREATE_WINDOW,40,id,gen); m.fd_count=1; m.fds[0]=fd;
@@ -234,7 +234,7 @@ static int wm_v3_window(unsigned style, int owner, int x, int y, unsigned w, uns
     desk_put32(m.data+24,owner>=0 ? d.clients[owner].v3_generation : 0);
     desk_put32(m.data+28,(uint32_t)x); desk_put32(m.data+32,(uint32_t)y);
     desk_put32(m.data+36,w); desk_put32(m.data+40,h); desk_put32(m.data+44,1); desk_put32(m.data+48,4); memcpy(m.data+52,"Wine",4);
-    if (desk_v3_receive(&d,v3_root,&m)) { (void)fake_ops.close(fd); return -1; }
+    if (desk_v3_receive(&d,v3_root,&m)) return -1;   /* the desktop closed the refused surface (close_attachments) */
     int i=v3_slot(id); assert(i>=0); fill_pattern(i,id*0x070707u+gen);
     any_damage(i,0,0,w,h);
     return i;

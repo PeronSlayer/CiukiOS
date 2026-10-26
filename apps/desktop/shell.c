@@ -1333,7 +1333,7 @@ static void act(struct desktop *d, const struct sh_item *it)
         }
         break;
     case SH_ACT_TASK_MINIMIZE: if (it->arg >= 0 && it->arg < DESK_CLIENTS && !d->clients[it->arg].minimized) desk_minimize(d, it->arg); break;
-    case SH_ACT_TASK_CLOSE: desk_request_close(d, it->arg); break;
+    case SH_ACT_TASK_CLOSE: desk_user_close(d, it->arg); break;
     case SH_ACT_DOS_MARK: case SH_ACT_DOS_COPY: case SH_ACT_DOS_PASTE: case SH_ACT_DOS_QUICKEDIT: case SH_ACT_DOS_EXCLUSIVE:
         if (it->arg>=0 && it->arg<DESK_CLIENTS && d->clients[it->arg].dosbox) {
             desk_focus(d,it->arg); struct ciuki_message message;
@@ -3782,7 +3782,7 @@ int desk_shell_caption_icon(struct desktop *d, int i, uint64_t stamp, int menu_w
     if (again) {
         d->icon_click_window = -1;
         if (d->sh.levels) desk_menu_close(d);
-        desk_request_close(d, i);
+        desk_user_close(d, i);
         return 1;
     }
     if (menu_was_open && d->icon_click_window == i) { d->icon_click_window = -1; return 1; }
@@ -3864,11 +3864,23 @@ int desk_internal_open(struct desktop *d, int kind)
     }
     if (i >= 0) desk_drop_client(d, i);   /* one message at a time: the newest wins */
     for (i = 0; i < DESK_CLIENTS; i++) if (d->clients[i].channel < 0 && !d->clients[i].internal) break;
-    if (i == DESK_CLIENTS) return -1;
+    /* T23 c42f556e, review P2-5: the slots programs leave free
+     * (DESK_SYSTEM_SLOTS) are for the system dialogs: End Task, Shut Down,
+     * the shutdown progress, and a message box while a session or shutdown
+     * runs (the Shut Down error). Any other built-in window, a message box
+     * included, is an ordinary program window and never takes a reserve. */
+    int system = kind == DESK_INTERNAL_END_TASK || kind == DESK_INTERNAL_SHUTDOWN || kind == DESK_INTERNAL_POWER ||
+                 (kind == DESK_INTERNAL_MESSAGE && desk_session_busy(d));
+    int tier = system ? DESK_SLOT_SYSTEM : DESK_SLOT_PROGRAM;
+    if (i < DESK_CLIENTS && !desk_slot_available(d, tier)) i = DESK_CLIENTS;
+    if (i == DESK_CLIENTS) {
+        fprintf(stderr, "[desktop] built-in window unavailable kind=%d system=%d free=%d\n", kind, system, desk_free_slots(d));
+        return -1;
+    }
     struct desk_client *c = &d->clients[i];
     uint32_t w, h;
     internal_size(d, kind, &w, &h);
-    c->internal = kind; c->window = 1;
+    c->internal = kind; c->window = 1; c->slot_tier = tier;
     c->owner_id=owner;
     if (kind != DESK_INTERNAL_MESSAGE && kind != DESK_INTERNAL_POWER)
         desk_sound(d,kind == DESK_INTERNAL_SHUTDOWN ? SOUND_QUESTION : kind==DESK_INTERNAL_END_TASK ? du_message_sound(DU_DLG_ICON_WARNING) : SOUND_WINDOW_OPEN);
@@ -4359,7 +4371,8 @@ void desk_internal_paint(struct desktop *d, int index, struct desk_box content, 
         break;
     case DESK_INTERNAL_POWER:
         multiline(&c, content.x + 14, content.y + 18, d->power.text, SH_INK);
-        if (d->power.state!=DESK_POWER_DONE)
+        /* Review 2, finding 3: no Cancel while call 73 runs (it cannot be taken back). */
+        if (desk_power_cancelable(d))
             push_button(&c, button_box(content, 0, d->power.state==DESK_POWER_BUSY ? 2 : 1), "Cancel", 1);
         if (d->power.state==DESK_POWER_BUSY) push_button(&c, button_box(content, 1, 2), "&Force", 0);
         break;
@@ -4402,14 +4415,15 @@ int desk_power_input(struct desktop *d, const struct ciuki_input_event *e)
     if (!d->power.state) return 0;
     if (d->power.state==DESK_POWER_DONE) return 1;
     int i=d->power.window;
+    int cancelable=desk_power_cancelable(d);
     if (e->type==CIUKI_INPUT_KEY && e->value==1) {
-        if (e->code==DU_KEY_ESC || e->code==DU_KEY_ENTER) desk_power_cancel(d);
+        if ((e->code==DU_KEY_ESC || e->code==DU_KEY_ENTER) && cancelable) desk_power_cancel(d);
         else if (e->code==0x21 && d->power.state==DESK_POWER_BUSY) desk_power_force(d);
     } else if (e->type==CIUKI_INPUT_BUTTON && e->code==CIUKI_BUTTON_LEFT && e->value==1 && i>=0) {
         struct desk_box content=desk_content(&d->clients[i]);
         int count=d->power.state==DESK_POWER_BUSY ? 2 : 1;
-        if (desk_contains(button_box(content,0,count),d->mouse_x,d->mouse_y) ||
-            desk_contains(desk_close_box(&d->clients[i]),d->mouse_x,d->mouse_y)) desk_power_cancel(d);
+        if (cancelable && (desk_contains(button_box(content,0,count),d->mouse_x,d->mouse_y) ||
+            desk_contains(desk_close_box(&d->clients[i]),d->mouse_x,d->mouse_y))) desk_power_cancel(d);
         else if (count==2 && desk_contains(button_box(content,1,2),d->mouse_x,d->mouse_y)) desk_power_force(d);
     }
     return 1;
@@ -5620,7 +5634,7 @@ int desk_shell_key(struct desktop *d, int code, int value)
         if (code == DU_KEY_F4) {
             if (value == 1) {
                 if (d->sh.levels) desk_menu_close(d);
-                else if (d->focus >= 0) desk_request_close(d, d->focus);
+                else if (d->focus >= 0) desk_user_close(d, d->focus);
                 else desk_internal_open(d, DESK_INTERNAL_SHUTDOWN);
             }
             d->sh.alt_used = 1;

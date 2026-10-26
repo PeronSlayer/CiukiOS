@@ -132,7 +132,9 @@ static int fresh_clients(void)
     if (__atomic_load_n(&service_registered_once,__ATOMIC_ACQUIRE)) return 0;
     static struct {struct ciuki_proc_system system;struct ciuki_proc_record records[CIUKI_PROCESS_MAX];} snapshot;
     int records=ciuki_proc_list(&snapshot,sizeof(snapshot));
-    if (records<0 || (uint32_t)records!=snapshot.system.records || snapshot.system.records>CIUKI_PROCESS_MAX) return 1;
+    /* An unusable snapshot keeps the identities: the reconcile against the
+     * live processes is the non-destructive choice (Codex re-review P2). */
+    if (records<0 || (uint32_t)records!=snapshot.system.records || snapshot.system.records>CIUKI_PROCESS_MAX) return 0;
     return desk_w32_fresh_clients(&snapshot.system,snapshot.records,(uint32_t)getpid());
 }
 static int spawn_service(void *ctx)
@@ -271,16 +273,34 @@ int desk_w32_native_shortcut(struct desktop *d,const struct desk_launch_record *
     return pid==-1 ? -(error ? error : EIO) : pid;
 }
 /* SIGTERM runs the production f5-07A wr_flush exit boundary. Reap must
- * confirm success before power-off; no endpoint permission is needed here. */
-static int shutdown_pending,shutdown_done,shutdown_error;
+ * confirm success before power-off; no endpoint permission is needed here.
+ * Review P2-7 (T23 c42f556e): the wait is bounded. A service that has not
+ * exited DESK_W32_SHUTDOWN_MS after SIGTERM gets SIGKILL (its flush is
+ * lost, recorded); one that is not reaped DESK_W32_SHUTDOWN_MS after that
+ * (a thread in a kernel wait) is abandoned and the shutdown proceeds (call
+ * 73 then reports its holders as EBUSY and the user may Force). */
+#define DESK_W32_SHUTDOWN_MS 10000u
+static int shutdown_pending,shutdown_done,shutdown_error,shutdown_killed;
+static uint64_t shutdown_sent_ms;
 int desk_w32_shutdown(void)
 {
+    uint64_t now=clock_ns()/1000000;
     if(!shutdown_pending){
-        supervisor.stopping=1;shutdown_pending=1;shutdown_done=0;shutdown_error=0;
+        supervisor.stopping=1;shutdown_pending=1;shutdown_done=0;shutdown_error=0;shutdown_killed=0;shutdown_sent_ms=now;
         if(!supervisor.pid)shutdown_error=-EIO;
         else if(kill((int)supervisor.pid,SIGTERM)<0)shutdown_error=-errno;
     }
-    return shutdown_error ? shutdown_error : shutdown_done ? 1 : 0;
+    if(shutdown_error)return shutdown_error;
+    if(shutdown_done)return 1;
+    if(!shutdown_killed && now>=shutdown_sent_ms+DESK_W32_SHUTDOWN_MS){
+        shutdown_killed=1;shutdown_sent_ms=now;
+        fprintf(stderr,"[win32] w32srv shutdown-flush timeout after %u ms: SIGKILL\n",DESK_W32_SHUTDOWN_MS);
+        if(supervisor.pid && kill((int)supervisor.pid,SIGKILL)<0 && errno==ESRCH){shutdown_done=1;return 1;}
+    }else if(shutdown_killed && now>=shutdown_sent_ms+DESK_W32_SHUTDOWN_MS){
+        fprintf(stderr,"[win32] w32srv shutdown-flush abandoned: not reaped %u ms after SIGKILL\n",DESK_W32_SHUTDOWN_MS);
+        shutdown_done=1;return 1;
+    }
+    return 0;
 }
 /* f5-07B native binding. The state machine never waits for a process or a
  * launch worker on the input thread. A registry round trip gates all PE use. */
@@ -518,13 +538,34 @@ static void w32_session_reap(struct desktop *d,uint64_t ms)
         (void)restart_call(NULL,W32R_ENDSESSION,W32R_SESSION_RESET,0,&r,NULL,0);w32_session_open=0;
     }else if(r.key==3)(void)restart_call(NULL,W32R_ENDSESSION,W32R_SESSION_CANCEL,0,&r,NULL,0);
 }
+/* T23 c42f556e: the live Win32 processes for the power sequence (the
+ * broker's authenticated clients, W32R_SHUTDOWN_LIST, as the ExitWindowsEx
+ * restart uses), also those whose desktop connection ended. */
+static int w32_power_pids(struct desktop *d,uint32_t *pids,unsigned cap)
+{
+    (void)d;
+    if(!authorized)return -ENODEV;
+    if(!pids || !cap)return -EINVAL;
+    struct w32r_reply r;uint8_t bytes[4*64];
+    uint32_t e=restart_call(NULL,W32R_SHUTDOWN,W32R_SHUTDOWN_LIST,0,&r,bytes,sizeof(bytes));
+    /* Review P2-4: an error is reported, never "no programs". */
+    if(e || r.count>64 || r.data_bytes!=r.count*4){fprintf(stderr,"[win32] power list unavailable error=%u\n",e);return e==1115?-EBUSY:-EIO;}
+    unsigned n=0;
+    for(unsigned i=0;i<r.count;i++){
+        uint32_t pid=(uint32_t)bytes[i*4]|(uint32_t)bytes[i*4+1]<<8|(uint32_t)bytes[i*4+2]<<16|(uint32_t)bytes[i*4+3]<<24;
+        if(!pid)continue;
+        if(n>=cap){fprintf(stderr,"[win32] power list truncated count=%u cap=%u\n",r.count,cap);return -ENOSPC;}
+        pids[n++]=pid;
+    }
+    return (int)n;
+}
 int ciuki_win32_shell_restart(uint32_t pid,uint32_t flags)
 {return !authorized || !owner?-EPIPE:desk_restart_begin(&restart,&restart_ops,pid,flags,clock_ns()/1000000);}
 void desk_w32_start(struct desktop *d)
 {
     owner=d;struct w32r_service a;uint32_t e=service(1,1,&a);
     if(e || !a.result){fprintf(stderr,"[win32] desktop endpoint unavailable error=%u\n",e);return;}
-    authorized=1;d->w32_session=w32_session;d->w32_power=w32_power;desk_w32_supervise(&supervisor,&supervision,clock_ns());
+    authorized=1;d->w32_session=w32_session;d->w32_power=w32_power;d->power_w32_pids=w32_power_pids;desk_w32_supervise(&supervisor,&supervision,clock_ns());
 }
 void desk_w32_poll(struct desktop *d)
 {
@@ -588,6 +629,9 @@ void desk_w32_child_exited(struct desktop *d,uint32_t pid,int status)
         if(supervisor.stopping){
             shutdown_done=1;
             shutdown_error=WIFEXITED(status) && !WEXITSTATUS(status) ? 0 : -EIO;
+            /* Review P2-7: ended by the desktop's own SIGKILL after the bound,
+             * its flush is lost (recorded) and the shutdown goes on. */
+            if(shutdown_killed && shutdown_error){fprintf(stderr,"[win32] w32srv shutdown-flush lost: ended by SIGKILL after the %u ms bound\n",DESK_W32_SHUTDOWN_MS);shutdown_error=0;}
             fprintf(stderr,"[win32] w32srv shutdown-flush result=%d\n",shutdown_error);
         }else desk_w32_supervise(&supervisor,&supervision,clock_ns());
     }

@@ -41,6 +41,11 @@ struct power_source_ops {
     /* Called in preemptible task context, only after the orderly-shutdown
      * latch (power_source_mark_stopped). Marshal onto the provider worker. */
     int (*soft_off)(void *);
+    /* Optional: the forced Off after the emergency fence
+     * (power_source_mark_emergency_stopped), with the forced authorization
+     * carried explicitly (APM: no orderly proof is consulted). NULL: a
+     * forced Off is refused (ENOTSUP) and the user uses the power button. */
+    int (*soft_off_forced)(void *);
     /* Optional and cache-only: false while firmware Off is unqualified
      * (ACPI without an evaluated \_S5). NULL: an active provider may try. */
     bool (*can_off)(void *);
@@ -72,6 +77,11 @@ int power_source_resume(uint16_t event, uint16_t info);
  * succeeded. It latches this; the latch is never cleared because the
  * session cannot resume afterwards. */
 void power_source_mark_stopped(void);
+/* The forced power off's proof: devices stopped by the bounded fence,
+ * storage possibly dirty (T23 c42f556e, review 2 finding 5). */
+void power_source_mark_emergency_stopped(void);
+bool power_source_emergency_stopped(void);
+int power_source_soft_off_forced(void);   /* EBUSY without the emergency latch, ENOTSUP without a forced entry */
 /* 0 once stopped, EBUSY before. Performs no shutdown work itself. */
 int power_source_orderly_shutdown(uint64_t deadline_ms);
 /* Reservation excludes both active and failed/uncertain providers.

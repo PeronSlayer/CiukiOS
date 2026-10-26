@@ -3286,3 +3286,47 @@ Each has a regression in `tests/host/win32/user32/user32_test.c`
   metrics would still shift windows.
 - Moving a visible child (without hiding it) does not yet invalidate the
   parent area it leaves.
+## t23close — The desktop's close button is SC_CLOSE (2026-10-25)
+
+T23 evidence (image c42f556e, `docs/validation/t23-win32-hang-shutdown-2026-10-25.md`):
+four Quake III Arena demo installers; "closing does nothing".
+
+### Research
+
+- [WM_SYSCOMMAND](https://learn.microsoft.com/en-us/windows/win32/menurc/wm-syscommand):
+  "A window receives this message when the user chooses a command from the
+  Window menu ... or when the user chooses the maximize button, minimize
+  button, restore button, or close button"; SC_CLOSE "Closes the window";
+  "DefWindowProc ... carries out the window menu request for the predefined
+  actions" (for SC_CLOSE it sends WM_CLOSE, as user32's DefWindowProc does).
+- [WM_CLOSE](https://learn.microsoft.com/en-us/windows/win32/winmsg/wm-close):
+  sent "as a signal that a window or an application should terminate";
+  DefWindowProc calls DestroyWindow.
+- The installer engine (host disassembly of `vise32ex.dll`, see q3exec2):
+  the background window's procedure (0x10016e00) grays SC_CLOSE with
+  `EnableMenuItem(GetSystemMenu(h, FALSE), SC_CLOSE, MF_GRAYED)` in WM_CREATE,
+  returns 0 for WM_SYSCOMMAND SC_CLOSE and passes every other message,
+  WM_CLOSE included, to DefWindowProc.
+
+### Decision
+
+user32 delivered the desktop's `DESK_CLOSE_REQUEST` (title button, Alt+F4,
+the task button's Close, End Task) as a posted WM_CLOSE, which Windows never
+sends for the close button. The installer background then reached
+DefWindowProc and was destroyed with its owned wizard page, and the engine
+went on without a window. user32 now posts WM_SYSCOMMAND SC_CLOSE, so the
+program decides as on Windows 98; a window whose system menu has Close
+grayed or disabled, or whose class has `CS_NOCLOSE` (0x200), declines at
+once (`CLOSE_ACK 0`) without a message. A window that survives the SC_CLOSE
+dispatch declines as after WM_CLOSE (G3). End Task keeps ending such a
+program through the desktop's HungAppTimeout dialog
+(`docs/design/desktop-shell.md`, amendments after c42f556e).
+
+### Host test
+
+`tests/host/win32/user32` `test_desktop_close`: a window that ignores
+SC_CLOSE survives the close request, sees WM_SYSCOMMAND SC_CLOSE and no
+WM_CLOSE, and declines once; with Close grayed the request declines at once
+and nothing is dispatched; enabled again, the request destroys the window.
+It fails on the previous user32 (`USER CHECK ... error 1400`: the window was
+destroyed).

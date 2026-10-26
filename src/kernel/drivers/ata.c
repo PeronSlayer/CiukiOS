@@ -1788,7 +1788,7 @@ static int ata_emergency_write(struct blkdev *b,uint64_t lba,const void *data) {
     return e;
 }
 
-bool ata_channel_idle(struct ata_channel *c)
+static bool channel_fence(struct ata_channel *c, bool device_present)
 {
     if (!c)
         return false;
@@ -1798,9 +1798,11 @@ bool ata_channel_idle(struct ata_channel *c)
     bool master_idle = ata_dma_stop(c);
     if (!master_idle) ata_dma_revoke(c);
     /* No queued driver callbacks exist. An uncertain busy device/master
-     * cannot supply a release proof; quarantine retains its claims. */
+     * cannot supply a release proof; quarantine retains its claims. A
+     * channel discovery found empty has no device to read: its floating
+     * status (FFh) is not BSY|DRQ (review 4, finding 4). */
     bool idle = !c->active && !c->mutex.owner && master_idle && !c->stopped &&
-                !(alternate(c) & (ATA_BSY | ATA_DRQ));
+                (!device_present || !(alternate(c) & (ATA_BSY | ATA_DRQ)));
     if (c->native) {
         if (c->native_irq) {
             if (idle && c->native_irq_attached) {
@@ -1814,7 +1816,32 @@ bool ata_channel_idle(struct ata_channel *c)
     }
     return idle;
 }
+bool ata_channel_idle(struct ata_channel *c) { return channel_fence(c, true); }
+/* A channel discovery found empty (no present device, QEMU's secondary
+ * channel, a laptop's unused connector): bus mastering and the interrupt
+ * source are still stopped, the status register is not consulted. */
+bool ata_channel_fence_empty(struct ata_channel *c) { return channel_fence(c, false); }
 
+/* T23 c42f556e (review 3, finding 3): the power path's storage fence.
+ * Every discovered channel stops taking submissions (quiescing rejects even
+ * those queued on the mutex), masks its interrupt and stops or revokes bus
+ * mastering, without waiting on a stuck owner; a channel with a present
+ * device that cannot prove itself idle is quarantined with its claims; a
+ * confirmed-empty channel is fenced without reading its floating status
+ * (review 4, finding 4). 0 when every channel proved idle, -FS_EBUSY
+ * otherwise. Terminal for the boot, as the orderly shutdown's device stop is. */
+int ata_power_quiesce(void)
+{
+    int e = 0;
+    for (unsigned i = 0; i < ATA_CHANNELS; i++) {
+        struct ata_channel *c = &channels[i];
+        if (!c->discovered) continue;
+        bool present = false;
+        for (unsigned u = 0; u < ATA_DEVICES; u++) present |= c->devices[u].present;
+        if (!channel_fence(c, present)) e = -FS_EBUSY;
+    }
+    return e;
+}
 bool ata_registry_idle(int handle, gen_t generation)
 {
     bool matched=false, idle=true;

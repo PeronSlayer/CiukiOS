@@ -1967,6 +1967,8 @@ in `ciuki/power.h` (`-1` with errno on failure).
 | `CIUKI_POWER_REBOOT` | 1 | Flush storage, then `kernel_reboot()` (8042 reset pulse, then triple fault). Does not return on success. |
 | `CIUKI_POWER_OFF` | 2 | Flush storage, then ACPI S5 soft-off. Returns `ENOTSUP` when no soft-off method was found and `EIO` when the S5 write left the machine running after 2 s; in both cases storage is already stopped and the caller shows "It is now safe to turn off your computer". |
 | `CIUKI_POWER_QUERY` | 3 | Returns `CIUKI_POWER_CAN_REBOOT` (1) and, when ACPI soft-off was found, `CIUKI_POWER_CAN_OFF` (2). No side effect except the one-time table parse. |
+| `CIUKI_POWER_FORCE_REBOOT` | 9 | T23 c42f556e (2026-10-25): the forced end of a shutdown that cannot finish, after the user's explicit choice. Never waits for the orderly sequence, a lock or a program: at most 3 s of best-effort flush through the bounded suspend-flush worker (`storage_sync_bounded`), then `CIUKI_POWER_UNCERTAIN`, then `kernel_reboot()`. Allowed while an orderly REBOOT/OFF is still running on another thread. Returns `EBUSY` (UNCERTAIN latched, resources kept, reset-button message in the desktop) when device DMA could not be stopped and no qualified hard PCI reset exists or it did not take; otherwise it does not return. |
+| `CIUKI_POWER_FORCE_OFF` | 10 | As FORCE_REBOOT (flush, then a bounded 2 s device fence: the platform's suspend-capable stop through `power_source_quiesce_dma` for network/audio/USB, then the terminal ATA storage fence `ata_power_quiesce`: submissions refused, bus mastering and interrupts stopped or revoked, empty channels fenced without a status read), then the provider's **forced** soft-off entry (`power_source_soft_off_forced`) only when the fence proved every native DMA/IRQ owner stopped (emergency latch, `power_source_mark_emergency_stopped`; the orderly proof stays strict and never accepts it): `EBUSY` when the fence failed or timed out (the user turns the machine off with its power button), `ENOTSUP` without a forced soft-off entry, `EIO` if the machine stayed on. FORCE_REBOOT with a failed platform fence (DMA unresolved) writes only the qualified 0CF9h hard PCI reset and otherwise returns `EBUSY` with every resource kept (the user presses the reset button); a failed disk proof alone (bus masters stopped or revoked) still resets through the 8042 pulse. Volumes left dirty are checked by ScanDisk at the next start. |
 
 **Authority.** Only the process whose PID is the supervisor's live desktop
 (`supervisor_desktop_pid()`, the `/Programs/desktop` spawned by PID 1 with
@@ -1979,7 +1981,11 @@ is returned unchanged before any power action: `EBUSY` while any process
 still has a file open on a FAT volume (the desktop closes its applications
 and DOS windows first), or the flush error. A FAT volume left dirty mounts
 read-only on the next boot (`FAT_RO_DIRTY`), so no power action follows a
-failed flush.
+failed flush. Since 2026-10-25 (T23 c42f556e, review P1-1) every preflight
+wait of `storage_sync()` is bounded by `storage_shutdown_wait_ms` (5 s) and
+a timeout is the same `EBUSY` refusal (`vfs-storage-contract.md`); the
+desktop runs the call on a worker thread and, when it has not returned after
+15 s, offers Force, whose second press is `CIUKI_POWER_FORCE_*`.
 
 **ACPI soft-off.** Once per boot (on a normal boot right after the desktop
 bootstrap, otherwise at the first QUERY or OFF) the kernel reads, through

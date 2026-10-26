@@ -8,6 +8,7 @@
 #include <ciuki/abi.h>
 #include "../../src/kernel/core/apm.h"
 
+static int forced_ok, forced_calls;   /* review 3, finding 4: the forced Off's proof model */
 static unsigned checks, failures;
 #define CHECK(x) do { checks++; if (!(x)) { fprintf(stderr, "FAIL %d: %s\n", __LINE__, #x); failures++; } } while (0)
 struct model {
@@ -109,7 +110,7 @@ static int pm(void *p, struct biosvm_regs *r, uint32_t ms)
         if (r->ecx == 5) m->rejects++;
         else if (r->ecx == 4) m->processings++;
         else {
-            CHECK(m->flushes && m->stops);
+            CHECK((m->flushes && m->stops) || (forced_ok && forced_calls));   /* the forced Off brings its own proof */
             m->ack_at = m->now; m->ack_bx = (uint16_t)r->ebx; m->ack_cx = (uint16_t)r->ecx;
             if (r->ecx == 1) { m->standbys++; trace(m, 'B'); }
             else if (r->ecx == 2) { m->suspends++; trace(m, 'S'); }
@@ -159,6 +160,12 @@ static int orderly(void *p, uint64_t end)
     int e = step(p, APM_FLUSH, end);
     return e ? e : step(p, APM_STOP_DMA, end);
 }
+/* Review 3, finding 4: the forced Off's proof (the emergency device fence). */
+static int forced(void *p, uint64_t end)
+{
+    (void)p; (void)end; forced_calls++;
+    return forced_ok ? 0 : -EBUSY;
+}
 static void fixture(struct model *m, struct apm_backend *b)
 {
     memset(m, 0, sizeof(*m));
@@ -166,7 +173,7 @@ static void fixture(struct model *m, struct apm_backend *b)
     m->status_bx = 0x0100; m->status_cx = 0x014b; m->status_dx = 0x805a;
     struct apm_ops ops = {.ctx=m, .real_call=real, .acpi_present=acpi, .reserve=reserve,
         .release=release, .now_ms=now, .step=step, .resume=resume,
-        .publish=publish, .orderly_shutdown=orderly, .now_us=now_us, .low_battery=low, .handoff=handoff};
+        .publish=publish, .orderly_shutdown=orderly, .forced_shutdown=forced, .now_us=now_us, .low_battery=low, .handoff=handoff};
     apm_backend_init(b, &ops);
 }
 static void connected(struct model *m, struct apm_backend *b)
@@ -311,7 +318,17 @@ static void test_emergency_off(void)
     m.stop_error = 0; m.order_size = 0; m.order[0] = 0;
     CHECK(apm_backend_off(&b) == -EIO && !strcmp(m.order, "FXODR"));
     CHECK(m.offs == 1 && m.ack_bx == 1 && m.ack_cx == 3);
-    puts("APM: low/critical flush-stop-ack budget, polls during quiescence, retained errors, orderly off ordering PASS");
+    /* Review 3, finding 4: the forced Off never reads the orderly proof (no
+     * F/X steps) and the orderly Off never reads the forced one. */
+    connected(&m, &b); m.flush_error = -EIO; forced_ok = 0; forced_calls = 0; m.order_size = 0; m.order[0] = 0;
+    CHECK(apm_backend_off_forced(&b) == -EBUSY && forced_calls == 1 && !m.offs && !m.flushes);
+    forced_ok = 1;
+    CHECK(apm_backend_off_forced(&b) == -EIO && forced_calls == 2 && m.offs == 1 && !m.flushes && !strcmp(m.order, "ODR"));
+    connected(&m, &b); m.flush_error = -EIO; forced_ok = 1;
+    CHECK(apm_backend_off(&b) == -EIO && !m.offs);   /* the orderly proof still fails on its own terms */
+    struct apm_backend plain = b; plain.ops.forced_shutdown = 0;
+    CHECK(apm_backend_off_forced(&plain) == -ENOTSUP && !m.offs);
+    puts("APM: low/critical flush-stop-ack budget, polls during quiescence, retained errors, orderly off ordering, forced off on its own proof PASS");
 }
 static void benchmark_poll(void)
 {

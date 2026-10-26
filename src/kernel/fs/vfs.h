@@ -262,6 +262,10 @@ void vfs_destroy(struct vfs *);
 static inline uint32_t vfs_drive_mask(unsigned d) { return d < 26 ? 1u << d : 0; }
 void vfs_lock(struct vfs *, uint32_t drives);
 void vfs_reserve_locked(struct vfs *, uint32_t drives);
+/* T23 c42f556e: reserve under a held namespace, ending at the request's
+ * deadline or cancellation (0, or -VFS_ETIMEOUT/-VFS_ECANCELLED/-FS_EBUSY
+ * with nothing reserved). */
+int vfs_reserve_request_locked(struct vfs *, uint32_t drives, const struct vfs_request *);
 void vfs_reserve_file_locked(struct vfs *, uint32_t drives,struct vfs_file_identity *);
 void vfs_unlock(struct vfs *);
 /* Diagnostic tag only: call under namespace before starting a mutation. */

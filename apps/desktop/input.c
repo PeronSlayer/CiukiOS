@@ -538,7 +538,7 @@ static void input(struct desktop *d, const struct ciuki_input_event *in)
                 struct desk_client *c = &d->clients[i];
                 title_press(d, desk_title_code(d, d->mouse_x, d->mouse_y));
                 if (desk_contains(desk_close_box(c), d->mouse_x, d->mouse_y)) {
-                    if (d->shell) { desk_request_close(d,i); break; }
+                    if (d->shell) { desk_user_close(d,i); break; }
                     struct ciuki_message m;
                     desk_message(&m, DESK_CLOSED, 4);
                     m.data[0] = (uint8_t)c->version; m.data[2] = (uint8_t)c->minor;
