@@ -310,7 +310,9 @@ int main(int argc, char **argv) {
   if (argc > 1 && (!strcmp(argv[1], "--hardware-quake3") ||
                    !strcmp(argv[1], "--hardware-quake3-default"))) {
     gl_hardware_enable(); gl_quake3_benchmark(3,!strcmp(argv[1], "--hardware-quake3-default"));
-    gl_hardware_stats(); test_reset(); return 0;
+    gl_hardware_stats();
+    if (!strcmp(argv[1],"--hardware-quake3")) { extern void gl_quake3_savage(void); gl_quake3_savage(); }
+    test_reset(); return 0;
   }
   if (argc > 1 && !strcmp(argv[1], "--amendment2")) {
     gl_amendment2_tests(argc > 2 ? argv[2] : 0);

@@ -25,7 +25,7 @@ void klog(const char *fmt,...)
 {
     assert(!locked3); logs3++;
     char line[512]; va_list ap; va_start(ap,fmt); vsnprintf(line,sizeof(line),fmt,ap); va_end(ap);
-    assert(strstr(line,"[3d] probe") || strstr(line,"[3d] fullsize") || strstr(line,"[accel] retry "));
+    assert(strstr(line,"[3d] probe") || strstr(line,"[3d] fullsize") || strstr(line,"[3d] precision") || strstr(line,"[accel] retry "));
 }
 void *kmalloc(size_t bytes)
 {

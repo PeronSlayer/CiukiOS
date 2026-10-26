@@ -924,6 +924,23 @@ establish 60 distinct LCD refreshes. Vblank timing evidence is required to
 claim displayed/vsynced FPS. If the measured refresh is below 60 Hz, report
 that separately rather than redefining throughput.
 
+The f7-11 review-round-2 sample-space policy supersedes colour-distance
+admission for textured geometry. Unknown silicon precision must pass the
+per-boot perspective probe before the projective feature is advertised.
+
+| Quantity | Qualified tolerance / gate |
+| --- | --- |
+| Coverage, shared edges, copy and texture addressing | Exact; missing pixels, cracks and layout errors fail |
+| D16 / occlusion | +/-1 D16 numeric rounding; wrong occlusion fails |
+| Projected sample position | <=1/16 texel per axis from the exact rational sample |
+| Filter fractions | At least 8 bits; truncation/rounding uncertainty <=1/256; isolated edge sweep resolves >=192 levels/unit |
+| Mip LOD | <=1/16 octave; both selected-level boundaries and trilinear weights enter the envelope |
+| Texture colour | Envelope of reference samples over that position/weight neighbourhood, independent for each stage, plus one final channel level |
+| Unknown arithmetic | Parameterized host model and boot probe; these bounds are acceptance policy, not a vendor precision claim |
+
+See [Savage full-size admission](savage-fullsize-admission.md) for numeric
+ranges, probe scenes, primary-source limits and fallback decisions.
+
 Hardware comparison uses predeclared tolerances for coverage/interpolation
 and color/depth precision; exact scalar-to-scalar images remain deterministic.
 Missing pixels, cracks, wrong occlusion or incorrect texture layout are

@@ -109,7 +109,9 @@ static void mesh(unsigned count, unsigned columns, float z, float opacity,
   glTexCoordPointer(2, GL_FLOAT, 16, &uv[0][2]);
   glClientActiveTextureARB(GL_TEXTURE0_ARB);
 }
+void gl_savage_class(unsigned);
 static void draw(unsigned n) {
+  gl_savage_class(n==800 ? 1 : n==300 ? 2 : 0);
   glLockArraysEXT(0, n * 4);
   glDrawElements(GL_TRIANGLES, n * 6, GL_UNSIGNED_INT, indices);
   glUnlockArraysEXT();
@@ -149,13 +151,13 @@ static void frame(int multipass) {
   draw(1); /* sky: 2 triangles */
   glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
   glActiveTextureARB((GL_TEXTURE0_ARB + 1));
-  if (!multipass)
+  if (multipass<=0)
     glEnable(GL_TEXTURE_2D);
   glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
   glActiveTextureARB(GL_TEXTURE0_ARB);
   mesh(800, 40, 0.5f, 1, 1);
   draw(800); /* lightmapped world: 1600 */
-  if (multipass) {
+  if (multipass>0) {
     glBindTexture(GL_TEXTURE_2D, 1025);
     glEnable(GL_BLEND);
     glBlendFunc(GL_DST_COLOR, GL_ZERO);
@@ -170,6 +172,7 @@ static void frame(int multipass) {
   glActiveTextureARB(GL_TEXTURE0_ARB);
   mesh(300, 30, 0.25f, 1, 1);
   draw(300); /* models: 600 */
+  if (multipass<0) return; /* Qualified H1 prefix, reported separately. */
   glEnable(GL_ALPHA_TEST);
   glAlphaFunc(GL_GEQUAL, 128.0f / 255);
   glDepthMask(GL_FALSE);
@@ -567,4 +570,51 @@ void gl_quake3_benchmark(unsigned iterations, int default_format) {
     assert(DeleteDC(dc));
     free(pixels);
   }
+}
+
+/* Same H1 frame stream, now production GL/GDI/wire and fake Savage packets.
+ * No game assets. The unsupported cutout pass pins the context to software. */
+void gl_quake3_savage(void) {
+  extern void gl_hardware_native(int),gl_kernel_setup(int),gl_kernel_teardown(void);
+  extern void gl_kernel_mode(unsigned,unsigned),gl_savage_begin(void);
+  extern unsigned gl_kernel_draws(void);
+  extern uint64_t gl_kernel_fragments(void);
+  extern void gl_savage_end(unsigned,unsigned,unsigned,unsigned,uint64_t,uint64_t,uint64_t);
+  gl_hardware_native(1);
+  for (unsigned size=0;size<2;size++) {
+    unsigned w=size ? 1024 : 640,h=size ? 768 : 480;
+    gl_kernel_mode(w,h); gl_kernel_setup(2);
+    for (unsigned scenario=0;scenario<2;scenario++) {
+      unsigned *pixels=calloc(w*h,4); assert(pixels);
+      struct w32_dib dib=test_dib(pixels,w,h,32,0,1);
+      HDC dc=w32_gdi_surface_dc(&dib,(POINT){0},0,0); assert(dc);
+      PIXELFORMATDESCRIPTOR p={.nSize=40,.nVersion=1,.dwFlags=PFD_DOUBLEBUFFER|PFD_SUPPORT_OPENGL,
+        .cColorBits=32,.cDepthBits=16};
+      assert(SetPixelFormat(dc,ChoosePixelFormat(dc,&p),&p));
+      HGLRC rc=wglCreateContext(dc); assert(rc && wglMakeCurrent(dc,rc));
+      glViewport(0,0,w,h); glEnableClientState(GL_VERTEX_ARRAY); glEnableClientState(GL_COLOR_ARRAY);
+      for (unsigned u=0;u<2;u++) {
+        glActiveTextureARB(GL_TEXTURE0_ARB+u); texture(1024+u,64>>u);
+        glClientActiveTextureARB(GL_TEXTURE0_ARB+u); glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+      }
+      glActiveTextureARB(GL_TEXTURE0_ARB); glClientActiveTextureARB(GL_TEXTURE0_ARB);
+      for (unsigned f=0;f<3;f++) {
+        unsigned before=gl_kernel_draws(); uint64_t fragments=gl_kernel_fragments();
+#ifdef SW_PROFILE
+        memset(work,0,sizeof(work));
+#endif
+        extern void gl_savage_scope(unsigned);
+        gl_savage_scope(scenario); gl_savage_begin(); frame(scenario ? -1 : 0); glFinish();
+#ifdef SW_PROFILE
+        gl_savage_end(w,h,f,gl_kernel_draws()-before,gl_kernel_fragments()-fragments,work[SW_TRIANGLE],work[SW_FRAGMENT]);
+#else
+        gl_savage_end(w,h,f,gl_kernel_draws()-before,gl_kernel_fragments()-fragments,0,0);
+#endif
+        assert(glGetError()==GL_NO_ERROR);
+      }
+      assert(wglMakeCurrent(0,0) && wglDeleteContext(rc)); assert(DeleteDC(dc)); free(pixels);
+    }
+    gl_kernel_teardown();
+  }
+  gl_kernel_mode(640,480); gl_hardware_native(0);
 }

@@ -5637,11 +5637,26 @@ the native render3d contract; unknown state is rejected before submission.
 #define CIUKI_R3D_WIRE_LIMIT 6291456u
 ```
 
-Exact Q16 conversion, dyadic integer-pixel area 256..32768, Q/W 0.5..2,
-UV -1..1, <=64 textures, LINEAR min/mag, no alpha test/blend.
+Per-boot sample-space qualification: shared reciprocal W 0.5..2, ratio
+<=4, UV -4..4, <=64 textures, linear/qualified mip filtering, Q4 coverage.
+Sampled-alpha thresholds and unsupported states still use software.
 
 ```c
 #define CIUKI_R3D_PROJECTIVE_BILINEAR 1u
+```
+
+Earlier exact affine subset remains available after precision refusal.
+
+```c
+#define CIUKI_R3D_AFFINE_EXACT 2u
+```
+
+Qualified sample-space policy, not a silicon precision specification.
+
+```c
+#define CIUKI_R3D_SAMPLE_DELTA_Q16 4096u
+#define CIUKI_R3D_FILTER_FRACTION_BITS 8u
+#define CIUKI_R3D_LOD_DELTA_Q8 16u
 #define CIUKI_R3D_TEXTURED 1u
 #define CIUKI_R3D_CLEAR_COLOR 2u
 #define CIUKI_R3D_CLEAR_DEPTH 4u

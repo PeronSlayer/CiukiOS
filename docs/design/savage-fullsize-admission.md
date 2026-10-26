@@ -114,3 +114,70 @@ two-dimensional checkerboard counterexample exceeds the two-level tolerance
 and is refused; varying W and other nonintegral planes fall back per draw.
 Host evidence covers 96 admitted cases with independently varying stage UV,
 two-dimensional checkerboards, signed wrap/clamp, both windings and area limits.
+
+
+## Review round 2: sample-space qualification
+
+Primary-source review on 2026-10-26: Mesa 7.7/7.11.2 `savagetris.c`
+(`savageChooseVertexFormat_s4`) emits IEEE float XYZ, reciprocal W, diffuse,
+ST0 and ST1 with one shared W. `savagetex.c` selects bilinear/mip filtering
+and wrap/clamp; Linux v6.1 `savage_state.c` validates vertex skip/stride, not
+interpolator precision. X.Org 2.3.9 retains the documented tile apertures.
+RE046-B MM4858C/MM485A0 and MM485A8 describe filtering and perspective;
+they do not specify internal interpolation or filter-weight fraction bits.
+OpenGL 1.1 section 3.8 defines sampling without requiring the software
+renderer's eight-bit truncation. The links above identify these sources.
+
+The declared qualification policy is **delta = 1/16 texel per axis**, at
+least **8 filter-fraction bits**, and one final channel level of rounding.
+These are Ciuki acceptance thresholds, not claimed Savage specifications.
+Unknown arithmetic is parameterized in the fake silicon. The boot probe
+checks the resulting sample envelope with independent perspective gradients
+and high-contrast transitions in each texture stage. Failing that check
+retains full-size affine qualification and refuses the projective feature.
+Coverage/copy and guard integrity remain exact; D16 remains within one level.
+The envelope splits at texel boundaries, includes extrema within each cell,
+and propagates independent stage intervals through modulation.
+
+Admitted GL geometry uses shared reciprocal W in [0.5,2], W ratio <=4,
+normalized coordinates in [-4,4], textures <=64x64, and exact Q4 coverage.
+The encoder rounds W to Q16 and coordinates to Q16; the worst input recovery
+error is below 0.009 texel in this range. The remaining declared budget is
+reserved for the unknown interpolator. Independent stage Q, alpha thresholds
+with uncertain sampled alpha and unsupported state still fall back cleanly.
+The earlier requirement for dyadic triangles, integral Q20 planes and
+bit-identical colours is superseded by this section.
+
+
+The mip policy additionally bounds LOD error by 1/16 octave (the S3 bias
+register has S4.4 encoding, but this is still a qualification threshold).
+Varying mipmapped GL triangles must bound the sum of reciprocal-W gradients
+per pixel to 1/32 of minimum reciprocal W. The finite-neighbour quotient
+versus exact derivative differs by at most log2(32/31) < 1/16 octave in
+that range. The probe includes nearest-mip and trilinear scenes with distinct
+mip contents; the envelope includes level-selection discontinuities.
+
+Seven precision phases reuse existing full-size scratch: independent smooth
+and checker gradients under W ratios through four in each axis, two mip
+scenes, then two independent one-dimensional black/white edge sweeps. The
+last phase must resolve at least 192 different channel values per unit; a
+seven-bit filter can produce at most 129 on that fixture. This prevents a
+coarse filter from passing merely by spending the position-error budget.
+The observed levels and precision-phase/error are logged. Qualification is
+empirical for this boot, chip and mode; no undocumented silicon width is
+inferred from the float vertex format alone.
+
+The H1 complete frame contains unsupported sampled-alpha thresholds. The
+native provider returns a context-wide refusal before submitting that draw;
+GL closes/drains and replays the pending journal, then keeps this context in
+software. For the measured H1 stream the whole pending frame fits its journal,
+so no frame triangle is submitted before this decision. Generic temporary
+resource refusals retain the existing recovery path. Other streams that
+already flushed have a coherent checkpoint and one permanent transition,
+not per-frame alternation. The separately labelled H1 world/entity prefix
+measures only the qualified set and does not qualify the complete game frame.
+
+With assumed 100 MiB/s readback, one 640x480 color+D16 checkpoint plus reload
+costs 35.156 ms and the 1024x768 pair costs 90 ms, before command submission.
+This rules out repeated GPU/software switching for this backend. The chosen
+context policy follows contract 7.2; larger engine windows or DMA are not added.

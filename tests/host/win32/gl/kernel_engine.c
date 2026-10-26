@@ -3,7 +3,10 @@
 #include "savage3d_backend_fixture.inc"
 #include "../../../../src/kernel/drivers/video/render3d_transport.h"
 static unsigned wire_pid=7, lease_token, lease_generation, wire_presented;
-static uint32_t frame_pixels[640*480];
+static uint32_t frame_pixels[1024*768];
+static unsigned mode_width=640,mode_height=480;
+void gl_kernel_mode(unsigned w,unsigned h) { mode_width=w; mode_height=h; }
+uint64_t gl_kernel_fragments(void) { return fragments3d; }
 static int present_wire(void *ctx,uint32_t pid,const struct ciuki_w32_render3d_args *a,
                         const void *data,uint32_t bytes)
 {
@@ -23,9 +26,9 @@ void gl_kernel_setup(int qualified)
     struct render3d_host host={0,allocate3d,free3d,clock3d,0};
     if (qualified==2) {
         m.exact_clock=true;
-        gpu3d.mode_width=640; gpu3d.mode_height=480; gpu3d.fullsize_testing=true;
-        fullsize_resources3d(&scratch3d,&host,640,480,true);
-        fullsize_resources3d(&reference3d,&host,640,480,false);
+        gpu3d.mode_width=mode_width; gpu3d.mode_height=mode_height; gpu3d.fullsize_testing=true;
+        fullsize_resources3d(&scratch3d,&host,mode_width,mode_height,true);
+        fullsize_resources3d(&reference3d,&host,mode_width,mode_height,false);
         gpu3d.fullsize_testing=false; gpu3d.consumer=&scratch3d;
         CHECK(!savage3d_fullsize_probe(&gpu3d,&reference3d));
         CHECK(!render3d_close(&scratch3d) && !render3d_close(&reference3d)); gpu3d.consumer=0;
@@ -62,4 +65,55 @@ int w32_render3d_host_exchange(struct ciuki_w32_render3d_args *a,void *payload)
     if (!e && output) memcpy(payload,data,copied.bytes);
     if (!e) *a=copied;
     free(data); return e;
+}
+
+/* H1 measurements run after the real per-boot fake-silicon qualification. */
+static unsigned admission_live,admission_class,admission_scope;
+void gl_savage_scope(unsigned s) { admission_scope=s; }
+static uint64_t admission_gpu,admission_cpu,admission_world,admission_entities;
+static uint64_t admission_world_ok,admission_entities_ok,admission_refused[6];
+static unsigned admission_switches,admission_previous;
+void gl_savage_class(unsigned which) { admission_class=which; }
+void gl_savage_begin(void) {
+    admission_live=1; admission_gpu=admission_cpu=admission_world=admission_entities=0;
+    admission_world_ok=admission_entities_ok=admission_switches=admission_previous=0;
+    memset(admission_refused,0,sizeof(admission_refused));
+}
+void gl_host_draw(const struct sw_state *s,const struct sw_vertex *v,int hardware) {
+    if (!admission_live) return;
+    static struct gl_hw_command g;
+    static struct render3d_request q;
+    struct ciuki_r3d_caps caps; savage3d_backend()->query_caps(&gpu3d,&caps);
+    g=(struct gl_hw_command){.state=*s,.count=3}; memcpy(g.vertices,v,3*sizeof(*v));
+    bool eligible=!gl_hw_encode(&caps,&g,1,2,0,&q);
+    if (admission_class==1) { admission_world++; admission_world_ok+=eligible; }
+    if (admission_class==2) { admission_entities++; admission_entities_ok+=eligible; }
+    if (!eligible) {
+        unsigned reason=s->alpha_test ? 0 : s->blend && (s->sfactor==GL_DST_COLOR || s->dfactor==GL_DST_COLOR) ? 1 :
+            s->fog ? 2 : s->offset ? 3 : 4;
+        admission_refused[reason]++;
+    } else if (!hardware) admission_refused[5]++; /* context already software */
+    if (hardware) admission_gpu++; else admission_cpu++;
+    unsigned current=hardware ? 1 : 2;
+    if (admission_previous && current!=admission_previous) admission_switches++;
+    admission_previous=current;
+}
+void gl_savage_end(unsigned w,unsigned h,unsigned frame,unsigned gpu_draws,uint64_t gpu_fragments,
+                   uint64_t cpu_draws,uint64_t cpu_fragments) {
+    admission_live=0;
+    printf("GL_SAVAGE_H1 scope=%s width=%u height=%u frame=%u gpu_draws=%u gpu_fragments=%llu cpu_draws=%llu cpu_fragments=%llu "
+        "eligible_world=%llu/%llu eligible_entities=%llu/%llu queued_gpu=%llu direct_cpu=%llu switches=%u queued_switches=%u "
+        "refused_alpha=%llu refused_blend=%llu refused_fog=%llu refused_offset=%llu refused_numeric=%llu context_software=%llu\n",
+        admission_scope ? "qualified-prefix" : "complete",w,h,frame,gpu_draws,(unsigned long long)gpu_fragments,(unsigned long long)cpu_draws,(unsigned long long)cpu_fragments,
+        (unsigned long long)admission_world_ok,(unsigned long long)admission_world,
+        (unsigned long long)admission_entities_ok,(unsigned long long)admission_entities,
+        (unsigned long long)admission_gpu,(unsigned long long)admission_cpu,gpu_draws ? admission_switches : 0,admission_switches,
+        (unsigned long long)admission_refused[0],(unsigned long long)admission_refused[1],
+        (unsigned long long)admission_refused[2],(unsigned long long)admission_refused[3],
+        (unsigned long long)admission_refused[4],(unsigned long long)admission_refused[5]);
+    CHECK(admission_world && admission_entities);
+    CHECK(admission_world_ok*100>=95*admission_world && admission_entities_ok*100>=95*admission_entities);
+    CHECK(admission_switches<=1);
+    if (admission_scope) CHECK(gpu_draws==2202 && gpu_fragments && !cpu_draws && !admission_switches);
+    else CHECK(!gpu_draws && cpu_draws==3000);
 }

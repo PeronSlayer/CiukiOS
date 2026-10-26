@@ -18,7 +18,7 @@ class GLTests(unittest.TestCase):
  def setUpClass(cls):
   cls.build(sanitize=True)
  @classmethod
- def build(cls,sanitize,profile=False,gamma_hooks=True):
+ def build(cls,sanitize,profile=True,gamma_hooks=True):
   out=ROOT/'build/host/win32/gl';out.mkdir(parents=True,exist_ok=True);cls.out=out
   spec=importlib.util.spec_from_file_location('glbuild',ROOT/'sdk/libgl/build.py');gl=importlib.util.module_from_spec(spec);spec.loader.exec_module(gl)
   lib=gl.host(sanitize=sanitize)
@@ -130,13 +130,23 @@ class GLTests(unittest.TestCase):
   p=subprocess.run([str(binary)],capture_output=True,text=True,timeout=60)
   print(p.stdout,end='');self.assertEqual(p.returncode,0,p.stdout+p.stderr)
  def test_hardware_quake3_replay(self):
-  p=subprocess.run([str(self.binary),'--hardware-quake3'],capture_output=True,text=True,timeout=120)
+  p=subprocess.run([str(self.binary),'--hardware-quake3'],capture_output=True,text=True,timeout=300)
   print(p.stdout,end='');self.assertEqual(p.returncode,0,p.stdout+p.stderr)
   check_quake3(p.stdout,sanitize=True)
   row=re.search(r'GL_HW_MODEL submissions=(\d+) vertices=(\d+)',p.stdout)
   self.assertIsNotNone(row);self.assertGreater(int(row[2]),10000)
   self.assertLess(int(row[1])*3,int(row[2]))
   self.assertEqual(len(re.findall(r'^GL_HW_REPLAY .* frames=4 ',p.stdout,re.M)),4)
+  rows=re.findall(r'^GL_SAVAGE_H1 scope=(\S+) width=(\d+) height=(\d+) frame=(\d+) gpu_draws=(\d+) gpu_fragments=(\d+) cpu_draws=(\d+) cpu_fragments=(\d+) eligible_world=(\d+)/(\d+) eligible_entities=(\d+)/(\d+).* switches=(\d+) ',p.stdout,re.M)
+  self.assertEqual(len(rows),12)
+  for scope,w,h,frame,gpu,fragments,cpu,cpu_fragments,world,total_world,entities,total_entities,switches in rows:
+   self.assertIn((w,h),(('640','480'),('1024','768')))
+   self.assertGreaterEqual(int(world)*100,int(total_world)*95)
+   self.assertGreaterEqual(int(entities)*100,int(total_entities)*95)
+   self.assertEqual(int(switches),0)
+   self.assertEqual(int(gpu),2202 if scope=='qualified-prefix' else 0)
+   self.assertEqual(int(cpu),0 if scope=='qualified-prefix' else 3000)
+   self.assertGreater(int(fragments if scope=='qualified-prefix' else cpu_fragments),0)
  def test_hardware_quake3_default_format_replay(self):
   p=subprocess.run([str(self.binary),'--hardware-quake3-default'],capture_output=True,text=True,timeout=120)
   print(p.stdout,end='');self.assertEqual(p.returncode,0,p.stdout+p.stderr)

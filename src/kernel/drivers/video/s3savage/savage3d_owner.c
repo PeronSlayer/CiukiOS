@@ -98,7 +98,7 @@ int savage3d_owner_stop(struct savage2d *engine)
 {
     if (device.engine!=engine) return 0;
     /* Called under presenter before its 2D mappings/lease can be revoked. */
-    device.qualified=device.fullsize_qualified=false; engine->render3d_qualified=false;
+    device.qualified=device.fullsize_qualified=device.perspective_qualified=false; engine->render3d_qualified=false;
     if (device.consumer) {
         int e=render3d_close(device.consumer);
         if (e) return e;
@@ -177,6 +177,10 @@ static void fullsize_diagnostic(struct render3d_service **scratch)
         !e ? "qualified" : "refused",e,device.mode_width,device.mode_height,device.sample_count,
         device.reference_checksum,device.hardware_checksum,device.max_channel_error,device.max_depth_error,
         device.fullsize_us,device.failed_phase,device.guard_offset,device.lost);
+    klog("[3d] precision result=%s error=%d delta_q16=%u filter_bits=%u lod_delta_q8=16 phase=%u samples=%u levels0=%u levels1=%u expected=%08x actual=%08x",
+        device.perspective_qualified ? "qualified" : "refused",device.precision_error,
+        device.sample_delta_q16,device.filter_fraction_bits,device.precision_phase,device.precision_samples,
+        device.measured_filter_levels[0],device.measured_filter_levels[1],device.expected,device.actual);
 }
 static bool token(void)
 {

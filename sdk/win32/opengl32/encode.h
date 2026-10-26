@@ -39,13 +39,12 @@ static int gl_hw_texture_complete(const struct sw_texture *t) {
   }
   return 0;
 }
-/* Dyadic coverage weights alone do not bound two independent bilinear stages.
- * Admit varying UV only when constant W and integral pixel-center Q20 planes
- * remove GL's intermediate truncation. Other perspective draws use software. */
-static int gl_hw_projective_bilinear(const struct ciuki_r3d_caps *caps,
+/* Preserve the previously qualified exact-affine subset when the new
+ * sample-space probe refuses perspective precision. */
+static int gl_hw_affine_exact(const struct ciuki_r3d_caps *caps,
     const struct gl_hw_command *g,unsigned first,unsigned unit) {
   const struct sw_texture *t=g->state.unit[unit].texture;
-  if (!(caps->sampling_features&CIUKI_R3D_PROJECTIVE_BILINEAR) ||
+  if (!(caps->sampling_features&(CIUKI_R3D_AFFINE_EXACT|CIUKI_R3D_PROJECTIVE_BILINEAR)) ||
       t->min!=GL_LINEAR || t->mag!=GL_LINEAR || t->image[0].w>64 || t->image[0].h>64 ||
       g->state.alpha_test || g->state.blend) return 0;
   int64_t x[3],y[3];
@@ -75,6 +74,44 @@ static int gl_hw_projective_bilinear(const struct ciuki_r3d_caps *caps,
         ((2*a+dx+dy)*1048576)%(2*qw)) return 0;
   }
   return 1;
+}
+/* Sample-space admission: input quantization consumes <0.009 texel at
+ * 64x64, |UV|<=4 and Q20 W>=0.5. Internal precision is boot-qualified.
+ * Alpha-test discontinuities remain outside this smooth-filter proof. */
+static int gl_hw_projective_bilinear(const struct ciuki_r3d_caps *caps,
+    const struct gl_hw_command *g,unsigned first,unsigned unit) {
+  if (gl_hw_affine_exact(caps,g,first,unit)) return 1;
+  const struct sw_texture *t=g->state.unit[unit].texture;
+  if (!(caps->sampling_features&CIUKI_R3D_PROJECTIVE_BILINEAR) ||
+      t->mag!=GL_LINEAR || t->image[0].w>64 || t->image[0].h>64 ||
+      (t->min!=GL_LINEAR && t->min!=GL_LINEAR_MIPMAP_NEAREST &&
+       t->min!=GL_LINEAR_MIPMAP_LINEAR) || g->state.alpha_test) return 0;
+  int lo=2097152,hi=0;
+  for (unsigned i=0;i<3;i++) {
+    const struct sw_vertex *v=&g->vertices[first+i];
+    if (v->x<0 || v->y<0 || (unsigned)v->x>g->state.width*16 ||
+        (unsigned)v->y>g->state.height*16 || v->qw[unit]<524288 || v->qw[unit]>2097152) return 0;
+    if (v->qw[unit]<lo) lo=v->qw[unit];
+    if (v->qw[unit]>hi) hi=v->qw[unit];
+    for (unsigned axis=0;axis<2;axis++)
+      if ((int64_t)v->uv[unit][axis]*1048576 < -(int64_t)4*65536*v->qw[unit] ||
+          (int64_t)v->uv[unit][axis]*1048576 > (int64_t)4*65536*v->qw[unit]) return 0;
+  }
+  if (t->min!=GL_LINEAR) {
+    const struct sw_vertex *a=&g->vertices[first],*b=a+1,*c=a+2;
+    int64_t dx=b->x-a->x,dy=b->y-a->y,ex=c->x-a->x,ey=c->y-a->y;
+    int64_t area=dx*ey-dy*ex;
+    if (!area) return 0;
+    int64_t gx=(int64_t)(b->qw[unit]-a->qw[unit])*ey-(int64_t)(c->qw[unit]-a->qw[unit])*dy;
+    int64_t gy=(int64_t)(c->qw[unit]-a->qw[unit])*dx-(int64_t)(b->qw[unit]-a->qw[unit])*ex;
+    if (area<0) area=-area;
+    if (gx<0) gx=-gx;
+    if (gy<0) gy=-gy;
+    /* Bound one-pixel reciprocal-W change. Finite-neighbour hardware LOD
+     * versus exact quotient derivatives then differs by <1/16 octave. */
+    if ((gx+gy)*16*32>area*lo) return 0;
+  }
+  return hi<=4*lo;
 }
 static int gl_hw_encode(const struct ciuki_r3d_caps *caps, const struct gl_hw_command *g, unsigned target,
     unsigned depth, unsigned copy, struct render3d_request *out) {
@@ -135,9 +172,17 @@ static int gl_hw_encode(const struct ciuki_r3d_caps *caps, const struct gl_hw_co
     if (u) out->texture1=g->texture[u]; else out->texture=g->texture[u];
     out->state.sampler[u].combine=mode;
     /* Constant sampling selects magnification even with a mipmapped MIN
-     * filter. Varying sampling below requires identical LINEAR min/mag;
-     * neither case discards a potentially used filter or mip state. */
+     * filter. Qualified varying sampling preserves linear minification,
+     * including mip selection; no potentially used mip state is discarded. */
     out->state.sampler[u].filter=filter;
+    bool varying=false;
+    for (unsigned i=0;i<g->count;i++) {
+      const struct sw_vertex *v=&g->vertices[i],*a=&g->vertices[i-i%3];
+      if (v->qw[u]!=a->qw[u] || v->uv[u][0]!=a->uv[u][0] || v->uv[u][1]!=a->uv[u][1]) varying=true;
+    }
+    if (varying && (t->min==GL_LINEAR_MIPMAP_NEAREST || t->min==GL_LINEAR_MIPMAP_LINEAR))
+      out->state.sampler[u].filter=t->min==GL_LINEAR_MIPMAP_LINEAR ? R3D_TRILINEAR : R3D_BILINEAR_MIP;
+    if (!(caps->filters&(1u<<out->state.sampler[u].filter))) return -1;
     out->state.sampler[u].repeat_u=t->wrap_s==GL_REPEAT;
     out->state.sampler[u].repeat_v=t->wrap_t==GL_REPEAT;
   }
@@ -159,26 +204,26 @@ static int gl_hw_encode(const struct ciuki_r3d_caps *caps, const struct gl_hw_co
     r->color = (unsigned)v->color[3] << 24 | (unsigned)v->color[0] << 16 |
                (unsigned)v->color[1] << 8 | (unsigned)v->color[2];
     for (unsigned unit=0;unit<2;unit++) if (out->flags & (unit ? R3D_TEXTURE1 : R3D_TEXTURED)) {
-      if (v->qw[unit] < 4096 || v->qw[unit] > 268435456 || (v->qw[unit] & 15)) return -1;
+      if (v->qw[unit] < 4096 || v->qw[unit] > 268435456) return -1;
+      bool precise=gl_hw_projective_bilinear(caps,g,i-i%3,unit);
+      if (!precise && (v->qw[unit]&15)) return -1;
       /* Even a sub-Q16 difference can choose a different nearest texel.
        * Only the qualified smooth-filter subset relaxes constant sampling. */
       const struct sw_vertex *first = &g->vertices[i - i % 3];
       if ((v->qw[unit] != first->qw[unit] || v->uv[unit][0] != first->uv[unit][0] ||
           v->uv[unit][1] != first->uv[unit][1]) &&
-          !gl_hw_projective_bilinear(caps,g,i-i%3,unit)) return -1;
+          !precise) return -1;
       int64_t uq = (int64_t)v->uv[unit][0] * 1048576;
       int64_t tq = (int64_t)v->uv[unit][1] * 1048576;
-      if (uq % v->qw[unit] || tq % v->qw[unit]) return -1;
+      if (!precise && (uq % v->qw[unit] || tq % v->qw[unit])) return -1;
       int64_t u = uq / v->qw[unit], t = tq / v->qw[unit];
       if (u < -16*65536 || u > 16*65536 || t < -16*65536 || t > 16*65536) return -1;
-      if ((v->qw[unit]!=first->qw[unit] || v->uv[unit][0]!=first->uv[unit][0] ||
-           v->uv[unit][1]!=first->uv[unit][1]) &&
-          (u < -65536 || u>65536 || t < -65536 || t>65536)) return -1;
       if (unit) { out->uv1[i][0]=(int32_t)u; out->uv1[i][1]=(int32_t)t; }
       else { r->u=(int32_t)u; r->v=(int32_t)t; }
-      if (unit && r->rhw!=(unsigned)v->qw[unit]/16) return -1;
-      r->rhw = (unsigned)v->qw[unit] / 16;
-      if ((u * r->rhw) % 65536 || (t * r->rhw) % 65536) return -1;
+      unsigned rw=((unsigned)v->qw[unit]+(precise ? 8 : 0))/16;
+      if (unit && v->qw[unit]!=v->qw[0]) return -1;
+      r->rhw=rw;
+      if (!precise && ((u * r->rhw) % 65536 || (t * r->rhw) % 65536)) return -1;
     }
   }
   if (out->flags & ~caps->features) return -1;

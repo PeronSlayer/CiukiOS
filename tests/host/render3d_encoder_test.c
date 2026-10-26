@@ -40,6 +40,10 @@ int main(void)
     tex.wrap_s=GL_REPEAT;assert(!gl_hw_encode(&caps,&g,1,2,0,&q));
     assert(q.state.sampler[0].filter==R3D_BILINEAR && q.state.sampler[0].repeat_u);
     caps.filters=1;assert(gl_hw_encode(&caps,&g,1,2,0,&q));caps.filters=31;
+    caps.sampling_features=CIUKI_R3D_PROJECTIVE_BILINEAR;
+    g.vertices[0].x=16; g.vertices[2].x=INT32_MIN;
+    assert(gl_hw_encode(&caps,&g,1,2,0,&q)); /* Reject all coordinates before mip-gradient arithmetic. */
+    g.vertices[0].x=g.vertices[2].x=0;
     tex.min=GL_NEAREST;tex.mag=GL_NEAREST;
     uint32_t d24=0;g.state.depth24=&d24;assert(gl_hw_encode(&caps,&g,1,2,0,&q));
     puts("PASS capability-driven encoder: two stages, depth/alpha/blend masks, filter/combiner mismatch, sampling boundary, D24 and offset refusal");

@@ -79,7 +79,7 @@ static int accept(unsigned id,const struct sw_state *s,unsigned mask,const struc
   g->state=*s; g->clear_mask=mask; g->count=count; g->clear_depth=65535;
   if (v && count) w32_copy(g->vertices,v,count*sizeof(*v));
   int e=gl_hw_encode(&c->caps,g,c->color,c->depth,0,r);
-  gdi_free(g,sizeof(*g)); gdi_free(r,sizeof(*r)); return !e;
+  gdi_free(g,sizeof(*g)); gdi_free(r,sizeof(*r)); return e ? -1 : 1;
 }
 static int transfer(unsigned id,struct sw_state *s,unsigned action) {
   struct provider_context *c=lookup(id);

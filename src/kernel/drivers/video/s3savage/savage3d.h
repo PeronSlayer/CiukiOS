@@ -41,7 +41,11 @@ struct savage3d_device {
     uint32_t generation;
     uint32_t texture_bytes;
     bool qualified, probing, locked, lost;
-    bool fullsize_qualified, fullsize_testing;
+    bool fullsize_qualified, fullsize_testing, perspective_qualified;
+    uint32_t sample_delta_q16, filter_fraction_bits, precision_samples;
+    uint32_t measured_filter_levels[2];
+    int32_t precision_error;
+    uint32_t precision_phase;
     uint32_t mode_width, mode_height;
     uint32_t sample_count, reference_checksum, hardware_checksum;
     uint32_t max_channel_error, max_depth_error;

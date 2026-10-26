@@ -342,6 +342,20 @@ static int validate(void *device,const struct render3d_request *q,struct render3
     if ((q->flags&R3D_COPY) && r[3]->kind==R3D_COLOR) return -EOPNOTSUPP;
     for (unsigned i=0;i<q->count;i++) if (q->vertices[i].x<0 || q->vertices[i].y<0 ||
         q->vertices[i].x>(int32_t)(r[0]->width<<16) || q->vertices[i].y>(int32_t)(r[0]->height<<16)) return -EINVAL;
+    if (d->fullsize_qualified && !d->fullsize_testing && (q->flags&R3D_TEXTURED))
+      for (unsigned first=0;first<q->count;first+=3) {
+        bool varying=q->vertices[first].rhw!=q->vertices[first+1].rhw ||
+                     q->vertices[first].rhw!=q->vertices[first+2].rhw;
+        if (!varying) continue;
+        if (!d->perspective_qualified) return -EOPNOTSUPP;
+        for (unsigned i=first;i<first+3;i++) {
+            const struct render3d_vertex *v=&q->vertices[i];
+            if (v->rhw<32768 || v->rhw>131072 || (v->x&4095) || (v->y&4095) ||
+                v->u < -4*65536 || v->u>4*65536 || v->v < -4*65536 || v->v>4*65536 ||
+                ((q->flags&R3D_TEXTURE1) && (q->uv1[i][0] < -4*65536 || q->uv1[i][0]>4*65536 ||
+                  q->uv1[i][1] < -4*65536 || q->uv1[i][1]>4*65536))) return -EOPNOTSUPP;
+        }
+      }
     uint32_t words[28]; unsigned count;
     for (unsigned first=0;first<q->count;first+=3) {
         int e=draw_packet(q,first,words,&count); if (e) return e;
@@ -368,8 +382,8 @@ static int guards(struct savage3d_device *d,struct render3d_resource *r,bool ini
         if (initialize) memory_write(d,false,off,0xa55ac33cu,4);
         else {
             uint32_t value=memory_read(d,false,off,4);
-            if (i%512==508 && d->engine->io.now_us(d->engine->io.ctx)-start>=1000) return -ETIMEDOUT;
             if (value!=0xa55ac33cu) { d->expected=0xa55ac33cu; d->actual=value; d->guard_offset=off; return -EIO; }
+            if (i%512==508 && d->engine->io.now_us(d->engine->io.ctx)-start>=1000) return -ETIMEDOUT;
         }
     }
     return 0;
@@ -585,7 +599,7 @@ static void quarantine(void *device)
 {
     struct savage3d_device *d=device;
     if (!d || d->lost) return;
-    d->qualified=d->fullsize_qualified=false; d->lost=true;
+    d->qualified=d->fullsize_qualified=d->perspective_qualified=false; d->lost=true;
     d->engine->render3d_qualified=false;
     d->engine->quarantined=true; d->engine->active=false;
     d->engine->reason="render3d_fault";
@@ -607,7 +621,8 @@ static void query_caps(void *owner,struct ciuki_r3d_caps *out)
         out->max_width=d->mode_width; out->max_height=d->mode_height;
         out->max_vertices=R3D_VERTICES;
         out->max_pixel_work=4*d->mode_width*d->mode_height;
-        out->sampling_features=CIUKI_R3D_PROJECTIVE_BILINEAR;
+        out->sampling_features=CIUKI_R3D_AFFINE_EXACT;
+        if (d->perspective_qualified) out->sampling_features|=CIUKI_R3D_PROJECTIVE_BILINEAR;
     }
 }
 static uint32_t texture_pool_bytes(void *owner)
@@ -720,7 +735,7 @@ static void fullsize_scene(struct render3d_request *q,unsigned w,unsigned h,unsi
         unsigned x=corners[i][0],y=corners[i][1];
         q->vertices[i]=(struct render3d_vertex){(int32_t)(x*w<<16),(int32_t)(y*h<<16),
             phase==1 ? 49152u : phase==2 ? 8192u : 32768u,
-            (1+x+y)*65536,phase==1 ? 0xffff0000u : phase==2 ? 0x8090b0d0u : 0xffe0c0a0u,
+            65536,phase==1 ? 0xffff0000u : phase==2 ? 0x8090b0d0u : 0xffe0c0a0u,
             (int32_t)(x*(phase==2 ? 16 : 1)*65536),(int32_t)(y*(phase==2 ? 16 : 1)*65536)};
         q->uv1[i][0]=q->vertices[i].v; q->uv1[i][1]=q->vertices[i].u;
     }
@@ -730,7 +745,7 @@ static void fullsize_scene(struct render3d_request *q,unsigned w,unsigned h,unsi
             unsigned i=triangle*3+v;
             unsigned x=(triangle%16)*(w-16)/15+(v==1 ? 16 : 0);
             unsigned y=(triangle/16)*(h-16)/15+(v==2 ? 16 : 0);
-            q->vertices[i]=(struct render3d_vertex){x<<16,y<<16,4096,32768u<<v,0xffc0e0a0u,
+            q->vertices[i]=(struct render3d_vertex){x<<16,y<<16,4096,65536,0xffc0e0a0u,
                 v==1 ? 49152 : 16384,v==2 ? 49152 : 16384};
             q->uv1[i][0]=q->vertices[i].v; q->uv1[i][1]=q->vertices[i].u;
         }
@@ -762,6 +777,103 @@ static int fullsize_compare(struct savage3d_device *d,struct render3d_resource *
     }
     d->hardware_checksum=ah; d->reference_checksum=bh; return 0;
 }
+#include "savage3d_precision.h"
+static void precision_scene(struct render3d_request *q,struct render3d_resource *const r[R3D_REFS],unsigned phase)
+{
+    fullsize_scene(q,r[0]->width,r[0]->height,0);
+    for (unsigned stage=0;stage<2;stage++) {
+        struct render3d_resource *t=r[stage ? 4 : 2];
+        for (unsigned level=0;level<t->levels;level++) {
+            unsigned width=t->width>>level,height=t->height>>level;
+            if (!width) width=1;
+            if (!height) height=1;
+            uint32_t *pixels=(void *)((uint8_t *)t->shadow+t->level_offset[level]);
+            for (unsigned y=0;y<height;y++) for (unsigned x=0;x<width;x++) {
+                unsigned ramp=phase&1 ? ((x+y+level)&1)*255 : width>1 ? x*255/(width-1) : level*37;
+                unsigned cross=phase&1 ? ((x/2+y/3+level)&1)*255 : height>1 ? y*255/(height-1) : level*29;
+                pixels[y*width+x]=stage ? 0xffff0000u|(ramp<<8)|cross : 0xff00ff00u|(ramp<<16)|cross;
+                if (phase==6) pixels[y*width+x]=stage ? 0xffff00ffu|(((x&1)*255)<<8) : 0xff00ffffu|(((x&1)*255)<<16);
+            }
+        }
+        t->resident=false;
+        q->state.sampler[stage]=(struct render3d_sampler){R3D_MODULATE,
+            phase<4 || phase==6 ? R3D_BILINEAR : phase==4 ? R3D_BILINEAR_MIP : R3D_TRILINEAR,1,1};
+    }
+    for (unsigned i=0;i<6;i++) {
+        struct render3d_vertex *v=&q->vertices[i];
+        unsigned x=v->x!=0,y=v->y!=0;
+        v->rhw=phase<2 ? (x ? 131072 : 32768) : (y ? 32768 : 131072);
+        v->color=0xffffffffu;
+        v->u=(int32_t)(x*4*65536)-2*65536+1385;
+        v->v=(int32_t)(y*2*65536)-65536+1190;
+        q->uv1[i][0]=(int32_t)(y*3*65536)-65536+3522;
+        q->uv1[i][1]=(int32_t)(x*2*65536)-65536+3570;
+        if (phase==4 || phase==5) {
+            v->u=(int32_t)(x*30*65536)-15*65536+1385;
+            v->v=(int32_t)(y*28*65536)-14*65536+1190;
+            q->uv1[i][0]=(int32_t)(y*28*65536)-14*65536+3522;
+            q->uv1[i][1]=(int32_t)(x*30*65536)-15*65536+3570;
+        }
+        if (phase==6) {
+            v->rhw=65536;
+            v->u=(32768+x*65536)/r[2]->width; v->v=32768/r[2]->height;
+            q->uv1[i][0]=(32768+(1-x)*65536)/r[4]->width; q->uv1[i][1]=32768/r[4]->height;
+        }
+    }
+}
+static int precision_probe(struct savage3d_device *d,struct render3d_request *q,
+    struct render3d_resource *const hw[R3D_REFS],struct render3d_resource *const ref[R3D_REFS])
+{
+    d->sample_delta_q16=CIUKI_R3D_SAMPLE_DELTA_Q16;
+    d->filter_fraction_bits=CIUKI_R3D_FILTER_FRACTION_BITS;
+    int e=0;
+    for (unsigned phase=0;phase<7 && !e;phase++) {
+        uint32_t levels[2][8]={{0}};
+        d->precision_phase=phase+1;
+        precision_scene(q,hw,phase);
+        for (unsigned t=2;t<=4;t+=2) memcpy(ref[t]->shadow,hw[t]->shadow,hw[t]->bytes);
+        struct render3d_job job={0};
+        while (!render3d_scalar_slice(q,ref,&job,&d->consumer->host)) {}
+        e=validate(d,q,hw); if (e) break;
+        e=enter(d); if (e) break;
+        uint64_t start=d->engine->io.now_us(d->engine->io.ctx);
+        e=execute(d,q,hw);
+        d->fullsize_us+=d->engine->io.now_us(d->engine->io.ctx)-start;
+        if (e && (e!=-ETIMEDOUT || idle(d))) quarantine(d);
+        leave(d);
+        if (e) break;
+        const uint32_t *a=hw[0]->shadow,*copy=hw[3]->shadow;
+        const uint16_t *az=hw[1]->shadow,*bz=ref[1]->shadow;
+        for (unsigned y=0;y<hw[0]->height && !e;y++) {
+            if (y%16 && y!=hw[0]->height-1) continue;
+            for (unsigned x=0;x<hw[0]->width;x++) {
+                unsigned at=y*hw[0]->width+x;
+                /* Full rectangle has no holes; D16/coverage/copy are separate
+                 * from colour envelopes and never inherit their tolerance. */
+                if (a[at]!=copy[at] || az[at]+1u<bz[at] || az[at]>bz[at]+1u ||
+                    !precision_pixel(q,hw,x,y,a[at],d->sample_delta_q16,d->filter_fraction_bits)) {
+                    d->expected=((uint32_t *)ref[0]->shadow)[at]; d->actual=a[at]; e=-EILSEQ; break;
+                }
+                d->precision_samples++;
+                if (phase==6) { /* One-dimensional white/black transitions
+                                * isolate the two units' filter fractions. */
+                    unsigned r=a[at]>>16&255,g=a[at]>>8&255;
+                    levels[0][r/32]|=1u<<(r%32); levels[1][g/32]|=1u<<(g%32);
+                }
+            }
+        }
+        if (phase==6 && !e) for (unsigned stage=0;stage<2;stage++) {
+            unsigned count=0;
+            for (unsigned i=0;i<8;i++) for (unsigned bit=0;bit<32;bit++) count+=(levels[stage][i]>>bit)&1;
+            d->measured_filter_levels[stage]=count;
+            /* Seven fractional bits produce at most 129 colours on a
+             * one-dimensional black/white edge; eight produce >=255. */
+            if (count<192) e=-EILSEQ;
+        }
+    }
+    if (!e) d->precision_phase=0;
+    return e;
+}
 int savage3d_fullsize_probe(struct savage3d_device *d,struct render3d_service *reference)
 {
     if (!d || !d->qualified || d->lost || d->fullsize_qualified || !d->consumer || !reference ||
@@ -790,6 +902,18 @@ int savage3d_fullsize_probe(struct savage3d_device *d,struct render3d_service *r
         if (!e) { d->failed_phase=9; e=fullsize_compare(d,hw,ref); }
     }
     d->fullsize_testing=false;
-    if (!e) { d->fullsize_qualified=true; d->failed_phase=0; }
+    if (!e) {
+        d->fullsize_qualified=true; d->failed_phase=0;
+        d->fullsize_testing=true;
+        d->precision_error=precision_probe(d,q,hw,ref);
+        d->fullsize_testing=false;
+        d->perspective_qualified=!d->precision_error;
+        /* A restored numeric mismatch refuses perspective only. Integrity,
+         * engine and restoration failures keep their existing containment. */
+        if (d->lost || (d->precision_error && d->precision_error!=-EILSEQ && d->precision_error!=-ETIMEDOUT))
+            e=d->precision_error;
+    }
+    if (!e) d->failed_phase=0;
+    else if (!d->precision_error) d->precision_error=e;
     return e;
 }

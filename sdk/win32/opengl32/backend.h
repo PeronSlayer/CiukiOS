@@ -32,7 +32,9 @@ struct gl_hw_driver {
   /* close cancels/drains; on unproven idle the kernel quarantines resources. */
   void (*close)(unsigned context);
   /* Check ALL state, sampler, precision, origin and coverage semantics.
-   * A NULL vertex list denotes clear; mask contains GL buffer bits. */
+   * A NULL vertex list denotes clear; mask contains GL buffer bits.
+   * 1=accept, 0=temporary refusal, negative=keep this context in software;
+   * the caller drains/closes and replays its pending journal before fallback. */
   int (*accept)(unsigned context, const struct sw_state *, unsigned mask,
                 const struct sw_vertex *, unsigned count);
   /* Upload/read full canonical top-down color and D16/D24/S8 attachments.

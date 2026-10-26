@@ -259,8 +259,10 @@ rejected:
 static struct hw_batch *batch(struct gl_context *c, unsigned mask,
                               const struct sw_vertex *v) {
   struct gl_hw_context *h = c->hardware;
-  if (!h || !h->context || !h->driver->accept(h->context, &c->sw, mask, v, v ? 3 : 0))
-    return 0;
+  if (!h || !h->context) return 0;
+  int accepted=h->driver->accept(h->context, &c->sw, mask, v, v ? 3 : 0);
+  if (accepted<0) { fail(h); return 0; }
+  if (!accepted) return 0;
   if (h->batches == GL_HW_BATCHES) gl_hw_sync(c);
   if (!ready(c)) return 0;
   struct sw_state state = c->sw;

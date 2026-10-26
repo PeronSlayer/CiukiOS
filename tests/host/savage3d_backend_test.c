@@ -13,6 +13,12 @@ static uint32_t batch3d[32], count3d, need3d;
 static unsigned draw3d, copy3d, writes3d, memory3d, corruption3d, allocations3d;
 static bool dropping3d, bad_restore3d;
 static unsigned read_delay3d;
+static uint64_t fragments3d;
+static bool slow_guard3d;
+struct sampling_model3d { unsigned interpolant_bits, address_bits, filter_bits; bool round_weights, affine; long double bias; };
+static struct sampling_model3d sampling3d={24,12,8,false,false,0};
+static unsigned probe_filter_bits3d;
+static long double probe_lod_bias3d;
 static uint32_t physical3d(uint32_t address,unsigned bytes)
 {
     CHECK(address>=gpu3d.heap.first && (uint64_t)address+bytes<=gpu3d.heap.first+gpu3d.heap.bytes);
@@ -103,8 +109,11 @@ static void raster3d(void)
         for (unsigned stage=0;stage<2;stage++) {
             if (!(stage ? second : textured)) continue;
             long double *us=stage ? u1 : u,*vs=stage ? v1 : v;
-            long double uu=(a*us[0]*rw[0]+b*us[1]*rw[1]+c*us[2]*rw[2])/rhw;
-            long double vv=(a*vs[0]*rw[0]+b*vs[1]*rw[1]+c*vs[2]*rw[2])/rhw;
+            long double denom=interpolant3d(rhw/area);
+            long double uu=interpolant3d((a*interpolant3d(us[0]*rw[0])+b*interpolant3d(us[1]*rw[1])+c*interpolant3d(us[2]*rw[2]))/area)/denom;
+            long double vv=interpolant3d((a*interpolant3d(vs[0]*rw[0])+b*interpolant3d(vs[1]*rw[1])+c*interpolant3d(vs[2]*rw[2]))/area)/denom;
+            if (sampling3d.affine) { uu=(a*us[0]+b*us[1]+c*us[2])/area; vv=(a*vs[0]+b*vs[1]+c*vs[2])/area; }
+            uu=interpolant3d(uu); vv=interpolant3d(vv);
             long double rho=0;
             for (unsigned axis=0;axis<2;axis++) {
                 long double aa=a+(axis ? x[2]-x[1] : y[1]-y[2]);
@@ -119,6 +128,7 @@ static void raster3d(void)
             }
             color=combine3d(diffuse,color,sample3d(stage,uu,vv,rho),stage);
         }
+        fragments3d++;
         uint32_t dc1=m.reg[0x485e4/4];
         if ((dc1&0x80000000u) && !compare3d(color>>24,m.reg[0x485e0/4]>>24,dc1>>28&7)) continue;
         CHECK(!(dc1&0x80000000u) || (local&0x02000000u));
@@ -160,6 +170,7 @@ static void interpret3d(void)
     } else if ((cmd==0x800300c8 || cmd==0x80030008)) raster3d();
     else CHECK(false);
     if (corruption3d==1 && draw3d) ram3d[0]=0;
+    if (corruption3d==3 && draw3d) ram3d[508]=0;
 }
 static void write_engine3d(void *ctx,uint32_t off,uint32_t value)
 {
@@ -192,6 +203,7 @@ static uint32_t memory_read3d(void *ctx,bool alias,uint32_t offset,unsigned byte
 {
     (void)ctx; CHECK(locks==1); memory3d++;
     m.us+=read_delay3d;
+    if (slow_guard3d && !alias && offset>=gpu3d.heap.first && offset<gpu3d.heap.first+4096) m.us+=9;
     if (alias) {
         uint32_t desc=m.reg[0x48c40/4]; unsigned bpp=desc>>30,physical_pitch=(desc>>20&63)*128;
         CHECK(bpp==2 || bpp==3);
@@ -390,9 +402,11 @@ static void backend3d(unsigned fault,bool variants)
 }
 int main(int argc,char **argv)
 {
+    setvbuf(stdout,0,_IONBF,0);
     if (argc==2 && !strcmp(argv[1],"fullsize")) fullsize_suite3d();
     else if (argc==2 && !strcmp(argv[1],"variants")) backend3d(0,true);
     else for (unsigned i=0;i<6;i++) backend3d(i,i==0);
+    printf("Savage shaded fragments=%llu\n",(unsigned long long)fragments3d);
     printf("Savage production packets/owner: positive textured Gouraud D16 probe, conversion, guards, restoration, rejection/fault containment: %s\n",failures ? "FAIL" : "PASS");
     fflush(stdout); return failures ? 1 : 0;
 }
