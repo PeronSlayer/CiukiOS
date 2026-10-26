@@ -46,7 +46,7 @@ start:
     jnz fail
     cmp cx,136
     jne fail
-    cmp dx,48
+    cmp dx,40
     jne fail
     mov si,passed
     jmp finish

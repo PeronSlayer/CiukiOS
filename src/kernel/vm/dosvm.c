@@ -2092,15 +2092,21 @@ bool dosvm_input_focus(struct dosvm_key key, bool focused)
         task_input_withdraw(previous->task);
         dosvm_kbd_release(previous); dosvm_mouse_event(previous, 0, 0, 0);
         previous->pointer_known = false;
+        previous->mouse_captured = false;
         if (previous->fullscreen_pause && !previous->fullscreen) previous->fullscreen_suspended=true;
     }
     v->window_input = true;
     bool resumed = focused && v->fullscreen_suspended;
-    if (focused) { input_focus = key; v->pointer_known = false; v->fullscreen_suspended=false; }
+    if (focused) {
+        input_focus = key;
+        if (previous != v) { v->pointer_known = false; v->mouse_captured=false; }
+        v->fullscreen_suspended=false;
+    }
     else if (input_focus.id == key.id && input_focus.generation == key.generation) {
         task_input_withdraw(v->task);
         dosvm_kbd_release(v); dosvm_mouse_event(v, 0, 0, 0);
         v->pointer_known = false; input_focus = (struct dosvm_key){0};
+        v->mouse_captured = false;
         if (v->fullscreen_pause && !v->fullscreen) v->fullscreen_suspended=true;
     }
     if (resumed) kwait_wake_all(&v->wake); /* fx-22: a parked VM blocks on it */
@@ -2108,6 +2114,14 @@ bool dosvm_input_focus(struct dosvm_key key, bool focused)
     return true;
 }
 struct dosvm_key dosvm_focused_key(void) { return input_focus; }
+static bool window_key_held(const struct dosvm *v, unsigned code)
+{ return v->kbd.held[code >> 3] & (1u << (code & 7)); }
+static void window_mouse_release(struct dosvm *v)
+{
+    v->mouse_captured=false;
+    v->pointer_known=false;
+    dosvm_mouse_event(v,0,0,0);
+}
 bool dosvm_input_event(struct dosvm_key key, const struct ciuki_input_event *e)
 {
     struct dosvm *v = dosvm_lookup(key);
@@ -2115,25 +2129,39 @@ bool dosvm_input_event(struct dosvm_key key, const struct ciuki_input_event *e)
         input_focus.id != key.id || input_focus.generation != key.generation) return false;
     uint32_t flags = irq_save(); bool ok = true;
     switch (e->type) {
-    case CIUKI_INPUT_KEY: ok = dosvm_kbd_event(v, e->code, e->value); break;
+    case CIUKI_INPUT_KEY:
+        ok = dosvm_kbd_event(v, e->code, e->value);
+        if (ok && e->value && !v->fullscreen) {
+            bool alt=window_key_held(v,0x38) || window_key_held(v,0x138);
+            bool ctrl=window_key_held(v,0x1D) || window_key_held(v,0x11D);
+            if (alt && (ctrl || e->code==0x0F)) window_mouse_release(v);
+        }
+        break;
     case CIUKI_INPUT_TEXT: break; /* KEY already supplies the guest keyboard */
     case CIUKI_INPUT_WHEEL:
         if (e->value<-127 || e->value>127) { ok=false; break; }
-        dosvm_mouse_wheel(v,-e->value); break;
+        if (v->mouse_captured || v->fullscreen) dosvm_mouse_wheel(v,-e->value);
+        break;
     case CIUKI_INPUT_MOTION:
-        if (v->pointer_known) {
+        if (v->pointer_known && (v->mouse_captured || v->fullscreen)) {
             int64_t dx = (int64_t)e->value - v->input_x, dy = (int64_t)e->value2 - v->input_y;
             if (dx < INT32_MIN || dx > INT32_MAX || dy < INT32_MIN || dy > INT32_MAX) { ok = false; break; }
             dosvm_mouse_event(v, dx, dy, v->mouse.buttons);
         }
-        dosvm_mouse_absolute(v,e->value,e->value2);
+        if (v->mouse_captured || v->fullscreen) dosvm_mouse_absolute(v,e->value,e->value2);
         v->input_x = e->value; v->input_y = e->value2; v->pointer_known = true; break;
     case CIUKI_INPUT_BUTTON:
         if (e->code < 1 || e->code > 3 || (e->value != 0 && e->value != 1)) { ok = false; break; }
+        if (!v->mouse_captured && !v->fullscreen) {
+            if (!e->value || !v->pointer_known || v->input_x<0 || v->input_y<0 ||
+                (unsigned)v->input_x>=DOSVM_VIDEO_WIDTH || (unsigned)v->input_y>=DOSVM_VIDEO_HEIGHT) break;
+            v->mouse_captured=true;
+            dosvm_mouse_absolute(v,v->input_x,v->input_y);
+        }
         dosvm_mouse_event(v, 0, 0, e->value ? v->mouse.buttons | (1u << (e->code - 1)) :
                          v->mouse.buttons & ~(1u << (e->code - 1))); break;
     case CIUKI_INPUT_RESYNC:
-        dosvm_kbd_release(v); dosvm_mouse_event(v, 0, 0, 0); v->pointer_known = false; break;
+        dosvm_kbd_release(v); window_mouse_release(v); break;
     default: ok = false;
     }
     if (ok && e->type != CIUKI_INPUT_TEXT) dosvm_idle_wake(v);

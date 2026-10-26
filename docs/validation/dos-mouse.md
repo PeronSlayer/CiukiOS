@@ -48,6 +48,39 @@ replays; hardware and native display qualification belong to the lead.
 
 ## Delivery decision
 
+### Review round 1
+
+Research rechecked on 2026-10-27 before these corrections:
+[Microsoft Mouse Programmer's Reference (1989), function 0, p. 116](https://www.bitsavers.org/pdf/microsoft/mouse/Microsoft_Mouse_Programmers_Reference_1989.pdf)
+sets reset limits from the current virtual screen, centres/hides the cursor
+and clears the ordinary user handler. The
+[1991 reference, function 21, p. 168](https://www.bitsavers.org/pdf/microsoft/mouse/Microsoft_-_Microsoft_Mouse_Programmers_Reference_2nd_1991.pdf)
+describes the save buffer used when another mouse program interrupts one.
+[RBIL 15h](https://fd.lod.bz/rbil/interrup/io_mouse/330015.html),
+[16h](https://www.delorie.com/djgpp/doc/rbinter/id/98/59.html) and
+[17h](https://fd.lod.bz/rbil/interrup/io_mouse/330017.html) define an opaque
+driver-state buffer at ES:DX; Microsoft does not require BX on save/restore.
+Save settings and counters, never host frames or in-flight return records;
+validate restored data and recheck DPMI thunk liveness before delivery.
+[DPMI 0304h](https://www.delorie.com/djgpp/doc/dpmi/api/310304.html)
+releases a callback address: remove mouse registrations targeting that
+address, or the terminating client's callback slots, before further input.
+[DPMI callbacks](https://www.delorie.com/djgpp/doc/dpmi/ch4.6.html)
+still return through the checked host stack. Reset inside a live callback
+preserves that continuation while dropping its registration and events.
+[RBIL range semantics](https://fd.lod.bz/rbil/interrup/io_mouse/330007.html)
+retain text cell rounding. Reversed endpoints are swapped; invalid handler,
+text-cursor and ratio arguments leave the previous settings intact.
+Reset derives defaults from the active text/VGA/VBE geometry.
+
+Window absolute coordinates use the VGA presenter's centred integer-scaled
+rectangle (text and mode 13h occupy rows 40..439); VBE uses all 640x480.
+The lead's capture policy applies before INT33: a click captures window
+mouse input; Alt+Tab, Ctrl+Alt, focus loss and RESYNC release it. Full-screen
+input stays exclusive. DOOM retains `use_mouse 1`. The local Windows 98
+Resource Kit `wrkc30_3.htm` confirms that HID and PS/2 minidrivers feed the
+same VMD data path; this policy applies equally to both devices.
+
 Use the existing checked `dpmi_to_real_call` continuation, also used by IPX,
 for a mouse FAR callback interrupting protected-mode code. Keep the mouse
 return stub's stack/depth checks and restore the full suspended DPMI frame.
@@ -102,13 +135,18 @@ DPMI 0300h INT33 initialization, 0303h callbacks and 000Ch/0014h handler
 installation/exchange. It covers checked returns, register restoration,
 mouse-only virtual-IF recovery demand, shadows, temporary stack exhaustion,
 window range endpoints, relative full-screen input and raw-counter polling.
+Review round 1 also covers text/mode-13h letterbox endpoints, mode-12h and
+80x50/VBE reset defaults, reversed ranges, invalid cursor/ratio/handler
+arguments, state-buffer guard bytes and malformed restores, freed callbacks,
+ordinary/stuck-client exits, nested reset with a checked callback return,
+click capture and all release routes (including duplicate focus requests).
 The full DOS VM suite includes it.
 
 `DOSX_MOUSE_GAMES=1 bash tests/host/dos/run_dos_extenders.sh` runs the real
 unified guest and installed DOS binaries. Warcraft II delivers four DPMI
 callbacks (two movements, left press/release), finishing at virtual position
 274,121 with no active/pending callback and no DPMI fault. DOOM reads 37,21
-raw mickeys and the press; Wolfenstein's menu reads position 137,50 and the
+raw mickeys and the press; Wolfenstein's menu reads position 137,40 and the
 press. DOSMOUSE.COM completes its movement/click-driven checks and exits to
 the prompt. Quake is explicitly reported blocked by the CPU runner's x87
 limit. This is host evidence, not a physical display or T23 result.

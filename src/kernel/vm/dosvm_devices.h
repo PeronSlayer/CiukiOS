@@ -63,6 +63,7 @@ int dosvm_kbd_bios(struct dosvm *);
 bool dosvm_kbd_irq_ready(const struct dosvm *);
 void dosvm_mouse_init(struct dosvm *);
 int dosvm_mouse_install(struct dosvm *);
+void dosvm_mouse_callback_free(struct dosvm *, uint16_t cs, unsigned ip, unsigned bytes);
 void dosvm_mouse_event(struct dosvm *, int32_t dx, int32_t dy, unsigned buttons);
 void dosvm_mouse_absolute(struct dosvm *, int32_t x, int32_t y);
 void dosvm_mouse_wheel(struct dosvm *, int32_t delta);

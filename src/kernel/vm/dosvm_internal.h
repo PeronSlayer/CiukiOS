@@ -198,7 +198,7 @@ struct dosvm {
     struct dosvm_floppy floppy;
     bool window_input;
     int32_t input_x, input_y;
-    bool pointer_known;
+    bool pointer_known, mouse_captured;
     bool fullscreen, fullscreen_hold, fullscreen_parked, fullscreen_pause, fullscreen_model;
     bool fullscreen_suspended;
     bool window_marking;

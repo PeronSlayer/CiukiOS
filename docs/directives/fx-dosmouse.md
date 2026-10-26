@@ -20,3 +20,16 @@
    - The existing DOS, DPMI and unified DOS suites stay green.
 
 Report to build/codex/fx-dosmouse-report.md. Leave changes uncommitted.
+
+## Lead amendment 1 (2026-10-26 23:54): review round 1
+
+Your work is committed (f28d7e28c). The review (full text in build/codex/fx-dosmouse-review1.md) found two P1 and four P2. Fix all of them, each with a regression test:
+1. P1: tests/host/test_f3_workloads.py:374-376 expects 'use_mouse 0'; update it to the new DOOM config and run the whole test file.
+2. P1: in the DOS window, text 80x25 and 320x200 (mode 13h) are drawn at rows 40-439, so map clicks through the actual drawn rectangle. Fix the expected values encoded in dosmouse.asm:49 and dos_extenders.py:172.
+3. P2: a DOS/4GW program that ends without removing its mouse handler (crash, Ctrl+C, extender error) must not fault the VM on the next movement. The same goes for a stuck callback followed by a reset: drop or revalidate the handler on client exit and on reset.
+4. P2: bad INT 33h arguments must not stop the VM. Follow the Microsoft driver (swap min/max, clamp).
+5. P2: reset (function 00h) must set the range from the current video mode (640x480, 50-line text and so on).
+6. P2: implement functions 15h, 16h and 17h (state buffer size, save, restore) as the Microsoft driver does.
+7. Lead decision on the DOOM mouse default (P3): keep use_mouse 1. In a window, mouse input reaches the game only after the user clicks inside the window to capture it, as in Windows 98's DOS box. Release the capture with Alt+Tab or Ctrl+Alt. Full screen always delivers. Add tests.
+
+Also amend docs/design/f3-acceptance.md (fx-27) and docs/design/dos-dpmi-contract.md where they still say full screen keeps the ordinary exit; fx-doomfs2 is merged on main. Before you finish, merge main into this branch yourself (resolve dos_extenders.py by keeping both sides; Duke3D is on main). Report as "Review round 1". Leave changes uncommitted.

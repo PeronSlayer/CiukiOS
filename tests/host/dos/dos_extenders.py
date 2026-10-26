@@ -169,7 +169,7 @@ def polling_games(cpu, image):
         moved = re.search(r"^I33 ax=000b .* -> e=0 .* cx=0025 dx=0015", log, re.M)
         if name == "wolf3d":
             # Its menu uses absolute position (3), not gameplay deltas (B).
-            moved = re.search(r"^I33 ax=0003 .* -> e=0 .* cx=0089 dx=0032", log, re.M)
+            moved = re.search(r"^I33 ax=0003 .* -> e=0 .* cx=0089 dx=0028", log, re.M)
         pressed = re.search(r"^I33 ax=0003 .* -> e=0 .* bx=0001", log, re.M)
         check(code == 0 and "guest runner: PASS" in log and reset and moved and pressed,
               f"{name}: detected mouse, read injected raw movement and left-button press")

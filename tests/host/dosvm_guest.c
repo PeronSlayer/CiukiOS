@@ -1425,7 +1425,6 @@ static void play_mouse(uint64_t elapsed)
     uint64_t at=start ? strtoull(start,0,10) : 28000;
     if (!getenv("GUEST_PLAY_MOUSE") || (!gv->mouse.mask && !getenv("GUEST_PLAY_MOUSE_POLL")) ||
         elapsed<at+stage*1000 || stage>=4) return;
-    if (!stage) CHECK(dosvm_input_focus(dosvm_key(gv),true));
     struct ciuki_input_event e={.type=CIUKI_INPUT_MOTION,.value=100,.value2=100};
     if (stage==1) { e.value=137; e.value2=121; }
     else if (stage>=2) { e.type=CIUKI_INPUT_BUTTON; e.code=1; e.value=stage==2; }
@@ -1466,6 +1465,16 @@ static int play_run(void)
     const char *limit = getenv("GUEST_PLAY_MS");
     uint64_t total = limit ? strtoull(limit, 0, 10) : 30000, begin = g_ticks;
     int r = 0;
+    if (getenv("GUEST_PLAY_MOUSE")) {
+        /* Capture before the application's reset/handler installation, so
+         * the activation click cannot satisfy its later click assertions. */
+        CHECK(dosvm_input_focus(dosvm_key(gv),true));
+        struct ciuki_input_event capture={.type=CIUKI_INPUT_MOTION,.value=100,.value2=100};
+        CHECK(dosvm_input_event(dosvm_key(gv),&capture));
+        capture=(struct ciuki_input_event){.type=CIUKI_INPUT_BUTTON,.code=1,.value=1};
+        CHECK(dosvm_input_event(dosvm_key(gv),&capture));
+        capture.value=0; CHECK(dosvm_input_event(dosvm_key(gv),&capture));
+    }
     while (g_ticks - begin < total) {
         play_keys(g_ticks - begin);
         play_mouse(g_ticks - begin);

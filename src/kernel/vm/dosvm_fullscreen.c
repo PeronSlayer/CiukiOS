@@ -442,7 +442,7 @@ int dosvm_fullscreen_leave(struct dosvm_key key, bool background)
     fullscreen_dirty=0;
     v->fullscreen_model=false;
     v->video_presented=false; v->video_lut_valid=false; v->video_read_window=false;
-    dosvm_kbd_release(v); dosvm_mouse_event(v,0,0,0); v->pointer_known=false;
+    dosvm_kbd_release(v); dosvm_mouse_event(v,0,0,0); v->pointer_known=false; v->mouse_captured=false;
     uint64_t restore_began=g_ticks;
     int restored=display_fullscreen_end();
     uint64_t restore_ms=g_ticks-restore_began;

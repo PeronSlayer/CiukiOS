@@ -471,6 +471,21 @@ path does nothing for it at an I/O exit, and it keeps its owner until
 `flags_restored`. Details and the full eligibility list:
 `f3-acceptance.md`, fx-27.
 
+#### fx-doomfs2 and fx-dosmouse review round 1 amendment
+
+Non-VGA hot ports and PM CLI/STI may take the fx-27 lean exit in any full
+screen under the same eligibility checks. VGA register ports qualify only
+while modeled (window or VBE full screen); native VGA full screen passes
+them to the adapter, and any trapped VGA access uses the ordinary exit.
+Pending mouse callbacks refuse lean exits in real and protected mode.
+Protected-mode mouse delivery far-calls the installed real-mode thunk via
+`dpmi_to_real_call`; a DPMI 0303h thunk enters the client's protected-mode
+handler through the existing checked callback/IRET mechanism. Freeing a
+callback or terminating its client removes mouse registrations targeting
+the freed slots and drops unwound active mouse continuations. INT33 reset
+and state restore preserve a still-live return frame, never reconstruct it
+from a guest state buffer. Research: `docs/validation/dos-mouse.md`.
+
 ### t23-dosperf amendment: CLI proofs, lean CLI/STI, bursts beside an armed image (2026-10-25, proposed)
 
 Proposed for the lead's decision with the t23-dosperf merge
