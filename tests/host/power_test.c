@@ -72,6 +72,67 @@ static int parse(struct acpi_soft_off *r, const char **why)
     return acpi_soft_off_parse(map, 0, RSDP, r, why);
 }
 
+static void test_register_validation(const uint8_t *aml, unsigned size)
+{
+    static const struct { unsigned legacy, gas, bytes, access; const char *why; } blocks[] = {
+        {64, 172, 2, 2, "pm1a_cnt"}, {68, 184, 2, 2, "pm1b_cnt"},
+        {56, 148, 4, 2, "pm1a_evt"}, {60, 160, 4, 2, "pm1b_evt"},
+        {80, 220, 4, 1, "gpe0"}, {84, 232, 4, 1, "gpe1"}
+    };
+    struct acpi_soft_off r;
+    const char *why;
+    for (unsigned b = 0; b < sizeof(blocks) / sizeof(blocks[0]); b++) {
+        unsigned gas = blocks[b].gas;
+        /* Each extended block is independent: all absent optional blocks
+         * are accepted, all unsupported present blocks refuse. */
+        tables(aml, size, 0x604, 0); header(FADT, "FACP", 244, 3);
+        put32(FADT + blocks[b].legacy, 0);
+        mem[FADT + 92] = mem[FADT + 93] = 4;
+        mem[FADT + gas] = 1; mem[FADT + gas + 1] = blocks[b].bytes * 8;
+        mem[FADT + gas + 3] = blocks[b].access;
+        put32(FADT + gas + 4, 0x700); seal(FADT);
+        CHECK(parse(&r, &why) == 0);
+        mem[FADT + gas] = 0; seal(FADT); /* present SystemMemory */
+        CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, blocks[b].why));
+        mem[FADT + gas] = 1;
+        mem[FADT + gas + 2] = 1; seal(FADT);
+        CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, blocks[b].why));
+        mem[FADT + gas + 2] = 0;
+        mem[FADT + gas + 1] = 8; seal(FADT);
+        CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, blocks[b].why));
+        mem[FADT + gas + 1] = blocks[b].bytes * 8;
+        mem[FADT + gas + 3] = 3; seal(FADT);
+        CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, blocks[b].why));
+        mem[FADT + gas + 3] = 0; seal(FADT); /* unspecified access is valid */
+        CHECK(parse(&r, &why) == 0);
+        put32(FADT + gas + 8, 1); seal(FADT);
+        CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, blocks[b].why));
+        put32(FADT + gas + 8, 0);
+        put32(FADT + gas + 4, 0x10000 - blocks[b].bytes); seal(FADT);
+        CHECK(parse(&r, &why) == 0); /* last complete extent */
+        put32(FADT + gas + 4, 0x10001 - blocks[b].bytes); seal(FADT);
+        CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, blocks[b].why));
+        /* The same extent guard applies to legacy fields. */
+        put32(FADT + gas + 4, 0);
+        put32(FADT + blocks[b].legacy, 0x10000 - blocks[b].bytes); seal(FADT);
+        CHECK(parse(&r, &why) == 0);
+        put32(FADT + blocks[b].legacy, 0x10001 - blocks[b].bytes); seal(FADT);
+        CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, blocks[b].why));
+        put32(FADT + blocks[b].legacy, 0x10000); seal(FADT);
+        CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, blocks[b].why));
+    }
+    /* A present unsupported extended PM1b must not be hidden by legacy IO. */
+    tables(aml, size, 0x604, 0x644); header(FADT, "FACP", 244, 3);
+    mem[FADT + 185] = 16; put32(FADT + 188, 0x700); seal(FADT);
+    CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, "pm1b_cnt"));
+    mem[FADT + 184] = 1; seal(FADT);
+    CHECK(parse(&r, &why) == 0 && r.pm1b_cnt == 0x700);
+    tables(aml, size, 0x604, 0); put32(FADT + 48, 0x10000); seal(FADT);
+    CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, "smi_cmd"));
+    tables(aml, size, 0x604, 0); mem[FADT + 89] = 4; seal(FADT);
+    CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, "pm1_cnt_len"));
+    puts("PASS Review round 1 P2: absent/valid/unsupported GAS, independent blocks, metadata, precedence and full legacy/GAS I/O extents");
+}
 int main(void)
 {
     struct acpi_soft_off r;
@@ -223,6 +284,7 @@ int main(void)
     tables(none, sizeof(none), 0x604, 0x644);
     CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, "s5") && r.pm1b_cnt == 0x644 && r.source == ACPI_S5_SOURCE_NONE);
 
+    test_register_validation(qemu, sizeof(qemu));
     printf("power: acpi soft-off parser, %u failures (%u maps)\n", failures, maps);
     return failures ? 1 : 0;
 }

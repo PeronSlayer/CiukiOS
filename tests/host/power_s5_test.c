@@ -51,37 +51,56 @@ static const uint8_t no_s5[] = { 0x08, '_', 'S', '4', '_', 0x12, 0x06, 0x04, 0, 
 /* ---- the chipset ------------------------------------------------------- */
 static uint16_t port16[0x10000];
 static uint8_t port8[0x10000];
-static char trace[32768];               /* the enable timeout records 3000 polls */
+static char trace[196608];              /* bounded enable + rollback polls of A and B */
 static unsigned trace_len, enable_polls_needed, stalls_ms;
-static bool powered_off, enable_ignored;
+static unsigned disable_polls_needed, disable_requested_ms;
+static bool powered_off, enable_ignored, disable_ignored, sleep_ignored, sci_in_b;
+static bool enable_requested, disable_requested, change_enable_masks;
 static jmp_buf off_jump;
 static void record(const char *fmt, ...)
 {
     va_list ap; va_start(ap, fmt);
     int n = vsnprintf(trace + trace_len, sizeof(trace) - trace_len, fmt, ap);
-    va_end(ap); if (n > 0) trace_len += (unsigned)n;
+    va_end(ap); assert(n >= 0 && (unsigned)n < sizeof(trace) - trace_len); trace_len += (unsigned)n;
 }
 static uint16_t fake_inw(uint16_t p) { record("r%04x", p); return port16[p]; }
+static uint8_t fake_inb(uint16_t p) { record("i%04x", p); return port8[p]; }
 static void fake_outb(uint16_t p, uint8_t v)
 {
     record("b%04x=%02x", p, v);
     port8[p] = v;
     if (p == 0xB2 && v == 0xF1 && !enable_ignored) {
-        if (!enable_polls_needed) port16[0x604] |= 1; /* immediate */
+        enable_requested = true;
+        if (!enable_polls_needed) port16[sci_in_b ? 0x644 : 0x604] |= 1;
+        if (change_enable_masks) {
+            port16[0x602] = port16[0x642] = 0;
+            port8[0x60E] = port8[0x60F] = port8[0x622] = port8[0x623] = 0;
+        }
+    }
+    if (p == 0xB2 && v == 0xF0) {
+        disable_requested = true; disable_requested_ms = stalls_ms;
+        if (!disable_ignored && !disable_polls_needed) { port16[0x604] &= ~1u; port16[0x644] &= ~1u; }
     }
 }
 static void fake_outw(uint16_t p, uint16_t v)
 {
     record("w%04x=%04x", p, v);
     if (p == 0x600 || p == 0x640) { port16[p] &= ~v; return; } /* PM1 status: write 1 clears */
-    port16[p] = v & ~0x2000; /* SLP_EN reads as zero */
-    if ((p == 0x604) && (v & 0x2000) && (port16[0x604] & 1)) { powered_off = true; }
+    if (p == 0x604 || p == 0x644) {
+        /* SCI_EN is read-only; SLP_EN reads as zero. */
+        port16[p] = (v & ~0x2001u) | (port16[p] & 1u);
+        if (p == 0x604 && (v & 0x2000) && ((port16[0x604] | port16[0x644]) & 1) && !sleep_ignored) powered_off = true;
+    } else port16[p] = v;
 }
 static void fake_stall(unsigned ms)
 {
     if (powered_off) longjmp(off_jump, 1); /* real hardware never returns from here */
     stalls_ms += ms;
-    if (enable_polls_needed && stalls_ms >= enable_polls_needed) port16[0x604] |= 1;
+    if (enable_requested && !disable_requested && enable_polls_needed && stalls_ms >= enable_polls_needed)
+        port16[sci_in_b ? 0x644 : 0x604] |= 1;
+    if (disable_requested && !disable_ignored && stalls_ms - disable_requested_ms >= disable_polls_needed) {
+        port16[0x604] &= ~1u; port16[0x644] &= ~1u;
+    }
 }
 /* The IRQ trace is kept apart from the I/O trace: qualified()'s state latch
  * takes the lock too. io_at_restore tells whether I/O followed a restore. */
@@ -113,6 +132,7 @@ static const char *fake_owner(uint16_t start, unsigned len)
 #define s5_allowed() allowed
 #define s5_port_owner(start, len) fake_owner(start, len)
 #define s5_inw(p) fake_inw(p)
+#define s5_inb(p) fake_inb(p)
 #define s5_outb(p, v) fake_outb(p, v)
 #define s5_outw(p, v) fake_outw(p, v)
 #define s5_stall_ms(ms) fake_stall(ms)
@@ -130,6 +150,8 @@ static void reset(void)
     trace[0] = 0; trace_len = 0; all_logs[0] = 0; last_log[0] = 0; irq_trace[0] = 0; io_at_restore = 0;
     maps = unmaps = map_bytes = 0; enable_polls_needed = stalls_ms = 0;
     powered_off = enable_ignored = false; allowed = acpi_decided = true;
+    disable_ignored = sleep_ignored = sci_in_b = enable_requested = disable_requested = change_enable_masks = false;
+    disable_polls_needed = disable_requested_ms = 0;
     hint_result = -ENOENT; port_owner = NULL; rsdp_phys = RSDP;
 }
 /* Runs the Off and reports whether the fake machine turned off. */
@@ -190,23 +212,22 @@ static void test_off_sequence(void)
     reset(); tables(s5_ich, sizeof(s5_ich), 0, 0xB2, 0xF1);
     port16[0x604] = 0x0001 | 0x0002; /* SCI_EN, BM_RLD kept */
     CHECK(run_off(false, &off) == 0 && off);
-    CHECK(!strcmp(trace, "r0604w0600=c731b060e=00b060f=00b060c=ffb060d=ffr0604w0604=1c03w0604=3c03"));
+    CHECK(strstr(trace, "w0600=c731b060e=00b060f=00b060c=ffb060d=ffr0604w0604=1c03w0604=3c03"));
     CHECK(!strcmp(irq_trace, "CSC")); /* the latch's pair, then IF=0 for the sequence; never restored: the machine went off */
     CHECK(strstr(all_logs, "mode=acpi pm1a=1c03 pm1b=1c03 events=cleared"));
     /* The log before the sequence names the source and the ports. */
     CHECK(strstr(all_logs, "acpi s5 fallback: source=dsdt typ=7/7 pm1a_cnt=0604 pm1b_cnt=0000 forced=0"));
-    /* PM1b present: written after PM1a each time, with PM1a's non-sleep bits. */
+    /* PM1b present: written after PM1a each time, with A OR B's non-sleep bits. */
     reset(); tables(s5_qemu, sizeof(s5_qemu), 0x644, 0xB2, 0xF1);
     port16[0x604] = 0x0001;
     CHECK(run_off(true, &off) == 0 && off);
-    CHECK(strstr(trace, "w0600=c731w0640=c731") && strstr(trace, "r0604w0604=0001w0644=0001w0604=2001w0644=2001"));
+    CHECK(strstr(trace, "w0600=c731w0640=c731") && strstr(trace, "r0604r0644w0604=0001w0644=0001w0604=2001w0644=2001"));
     CHECK(strstr(all_logs, "forced=1"));
     /* Legacy mode with SMI_CMD/ACPI_ENABLE: one ACPI_ENABLE write, SCI_EN
      * polled (here set after 5 ms), then the same sequence. */
     reset(); tables(s5_ich, sizeof(s5_ich), 0, 0xB2, 0xF1); enable_polls_needed = 5;
     CHECK(run_off(false, &off) == 0 && off);
-    static const char enabled[] = "r0604b00b2=f1r0604r0604r0604r0604r0604r0604w0600=c731";
-    CHECK(!strncmp(trace, enabled, sizeof(enabled) - 1) && stalls_ms == 5);
+    CHECK(strstr(trace, "r0604b00b2=f1r0604r0604r0604r0604r0604r0604w0600=c731") && stalls_ms == 5);
     CHECK(strstr(all_logs, "mode=enabled"));
     /* SMI_CMD zero: always ACPI mode (ACPICA acpi_hw_get_mode), no write to port 0. */
     reset(); tables(s5_qemu, sizeof(s5_qemu), 0, 0, 0xF1);
@@ -228,11 +249,11 @@ static void test_off_sequence(void)
     CHECK(!strcmp(irq_trace, "CSCS") && io_at_restore == trace_len);
     unsigned enables = 0; for (const char *p = trace; (p = strstr(p, "b00b2=f1")); p++) enables++;
     CHECK(enables == 1);
-    /* Oversized or odd GPE blocks are left alone; the PM1 write still happens. */
+    /* Unsupported present GPE blocks refuse qualification before any I/O. */
     reset(); tables(s5_qemu, sizeof(s5_qemu), 0, 0xB2, 0xF1); mem[FADT + 92] = 64; seal(FADT); port16[0x604] = 1;
-    CHECK(run_off(false, &off) == 0 && off && !strstr(trace, "b060"));
+    CHECK(run_off(false, &off) == -ENOTSUP && !off && !trace_len);
     reset(); tables(s5_qemu, sizeof(s5_qemu), 0, 0xB2, 0xF1); mem[FADT + 92] = 3; seal(FADT); port16[0x604] = 1;
-    CHECK(run_off(false, &off) == 0 && off && !strstr(trace, "b060"));
+    CHECK(run_off(false, &off) == -ENOTSUP && !off && !trace_len);
     /* Another owner of the PM1 control ports: refused before any I/O. */
     reset(); tables(s5_qemu, sizeof(s5_qemu), 0x644, 0xB2, 0xF1); port_owner = "acpi-power"; owner_start = 0x604; owner_end = 0x606;
     CHECK(run_off(false, &off) == -ENOTSUP && !off && !trace_len && !strcmp(irq_trace, "CS") && strstr(last_log, "held by acpi-power"));
@@ -245,10 +266,95 @@ static void test_off_sequence(void)
     CHECK(power_s5_fallback_off(false) == -ENOTSUP && !trace_len);
     puts("PASS s5 fallback: SCI_EN handshake (set, SMI_CMD zero, no enable value, timeout), status/GPE clearing in ACPI mode only, PM1a then PM1b, two writes, bounded waits, IF restored, registry owner refusal");
 }
+static void seed_masks(void)
+{
+    put32(FADT + 84, 0x620); mem[FADT + 93] = 4; seal(FADT);
+    port16[0x602] = 0x0121; port16[0x642] = 0x0400;
+    port8[0x60E] = 0x12; port8[0x60F] = 0xA5;
+    port8[0x622] = 0x78; port8[0x623] = 0xFF;
+}
+static void check_masks(void)
+{
+    CHECK(port16[0x602] == 0x0121 && port16[0x642] == 0x0400);
+    CHECK(port8[0x60E] == 0x12 && port8[0x60F] == 0xA5 && port8[0x622] == 0x78 && port8[0x623] == 0xFF);
+}
+static void test_review_round_1(void)
+{
+    bool off;
+    /* P1: capture firmware masks before a takeover that changes them, then
+     * hand ownership back with bounded polling before IF is restored. */
+    reset(); tables(s5_ich, sizeof(s5_ich), 0x644, 0xB2, 0xF1); seed_masks();
+    sleep_ignored = change_enable_masks = true; disable_polls_needed = 7;
+    CHECK(run_off(false, &off) == -EIO && !off);
+    CHECK(stalls_ms == S5_SETTLE_MS + S5_RETRY_MS + 7 && !(port16[0x604] & 1));
+    const char *masked = strstr(trace, "w0602=0000"), *disabled = strstr(trace, "b00b2=f0"), *restored = strstr(trace, "w0602=0121");
+    CHECK(masked && disabled && restored && masked < disabled && disabled < restored);
+    CHECK(strstr(all_logs, "rollback=firmware incoming=legacy") && !s5.ownership_uncertain);
+    CHECK(io_at_restore == trace_len && !strcmp(irq_trace, "CSCS")); check_masks();
+
+    /* Incoming ACPI is preserved, with each block's own enable masks. */
+    reset(); tables(s5_ich, sizeof(s5_ich), 0x644, 0xB2, 0xF1); seed_masks();
+    port16[0x604] = 1; sleep_ignored = true;
+    CHECK(run_off(true, &off) == -EIO && !off && (port16[0x604] & 1) && !strstr(trace, "b00b2="));
+    check_masks();
+
+    /* ACPI_ENABLE cannot be sent without a rollback command. */
+    reset(); tables(s5_qemu, sizeof(s5_qemu), 0, 0xB2, 0xF1); mem[FADT + 53] = 0; seal(FADT);
+    CHECK(run_off(false, &off) == -EIO && !off && !strstr(trace, "b00b2="));
+    CHECK(strstr(all_logs, "mode=legacy_no_disable_value") && !s5.ownership_uncertain);
+
+    /* An enable timeout can still complete during S5: always cancel it and
+     * verify hand-back, including SCI_EN implemented only in B. */
+    reset(); tables(s5_ich, sizeof(s5_ich), 0x644, 0xB2, 0xF1); seed_masks();
+    sleep_ignored = sci_in_b = true; enable_polls_needed = S5_ENABLE_POLLS + 1; disable_polls_needed = 4;
+    CHECK(run_off(false, &off) == -EIO && !off && disable_requested);
+    CHECK(stalls_ms == S5_ENABLE_POLLS + S5_SETTLE_MS + S5_RETRY_MS + 4);
+    CHECK(strstr(all_logs, "mode=legacy_enable_timeout") && !s5.ownership_uncertain && !(port16[0x644] & 1)); check_masks();
+    reset(); tables(s5_qemu, sizeof(s5_qemu), 0, 0xB2, 0xF1); enable_ignored = true;
+    CHECK(run_off(false, &off) == -EIO && disable_requested && !s5.ownership_uncertain);
+
+    /* Failed rollback stays explicit, events stay masked, subsequent calls
+     * refuse without I/O rather than treating ownership as firmware-safe. */
+    reset(); tables(s5_ich, sizeof(s5_ich), 0x644, 0xB2, 0xF1); seed_masks();
+    sleep_ignored = disable_ignored = sci_in_b = true;
+    CHECK(run_off(false, &off) == -EIO && !off);
+    CHECK(stalls_ms == S5_SETTLE_MS + S5_RETRY_MS + S5_ENABLE_POLLS);
+    CHECK(!strcmp(power_s5_fallback_state(), "ownership_uncertain") && !power_s5_fallback_qualified());
+    CHECK(!port16[0x602] && !port16[0x642] && !port8[0x60E] && !port8[0x60F] && !port8[0x622] && !port8[0x623]);
+    CHECK(strstr(all_logs, "rollback=ownership_uncertain") && io_at_restore == trace_len);
+    unsigned before = trace_len;
+    CHECK(power_s5_fallback_off(false) == -EIO && power_s5_fallback_off(true) == -EIO && trace_len == before);
+
+    /* P2: B-only SCI_EN, non-sleep bits in both blocks and differing SLP_TYP.
+     * No enable command; no incoming SLP_TYP leaks into either output. */
+    static const uint8_t different[] = {0x08,'_','S','5','_',0x12,4,2,1,0};
+    reset(); tables(different, sizeof(different), 0x644, 0xB2, 0xF1);
+    port16[0x604] = 0x1002; port16[0x644] = 0x0901;
+    CHECK(run_off(false, &off) == 0 && off && !strstr(trace, "b00b2="));
+    CHECK(strstr(trace, "r0604r0644w0604=0503w0644=0103w0604=2503w0644=2103"));
+    reset(); tables(different, sizeof(different), 0x644, 0xB2, 0xF1); sci_in_b = true; enable_polls_needed = 3;
+    CHECK(run_off(false, &off) == 0 && off && stalls_ms == 3 && strstr(all_logs, "mode=enabled"));
+
+    /* P2 register qualification: mixed IO/Memory PM1 blocks and wrapped GPE
+     * extents are refused before any hardware access, including hint use. */
+    reset(); tables(no_s5, sizeof(no_s5), 0, 0xB2, 0xF1); header(FADT, "FACP", 244, 3);
+    mem[FADT + 185] = 16; put32(FADT + 188, 0x644); seal(FADT); hint_result = 0;
+    CHECK(run_off(false, &off) == -ENOTSUP && !trace_len && !strcmp(power_s5_fallback_state(), "pm1b_cnt"));
+    reset(); tables(s5_qemu, sizeof(s5_qemu), 0, 0xB2, 0xF1); put32(FADT + 80, 0xFFFE); seal(FADT);
+    CHECK(run_off(false, &off) == -ENOTSUP && !trace_len && !strcmp(power_s5_fallback_state(), "gpe0"));
+    /* Largest admitted GPE block: all 16 saved enable bytes survive failure. */
+    reset(); tables(s5_qemu, sizeof(s5_qemu), 0, 0xB2, 0xF1); mem[FADT + 92] = 32; seal(FADT);
+    for (unsigned i = 0; i < 16; i++) port8[0x61C + i] = (uint8_t)(i + 1);
+    sleep_ignored = true;
+    CHECK(run_off(false, &off) == -EIO && !s5.ownership_uncertain);
+    for (unsigned i = 0; i < 16; i++) CHECK(port8[0x61C + i] == i + 1);
+    puts("PASS Review round 1 P1/P2: mode/mask rollback, rollback requirement, enable timeout, uncertain ownership, B-only SCI_EN and combined non-sleep bits with separate SLP_TYP");
+}
 int main(void)
 {
     test_parse_and_state();
     test_off_sequence();
+    test_review_round_1();
     printf("power s5 fallback: %u failures\n", failures);
     return failures ? 1 : 0;
 }

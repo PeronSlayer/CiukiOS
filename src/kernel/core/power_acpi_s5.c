@@ -17,14 +17,17 @@
  * 3. with interrupts disabled (ACPICA hwxfsleep.c: acpi_enter_sleep_state
  *    "MUST BE CALLED WITH INTERRUPTS DISABLED"; Linux acpi_power_off does
  *    local_irq_disable first): if SCI_EN is clear and the FADT names SMI_CMD
- *    and ACPI_ENABLE, the ACPI_ENABLE handshake with the 3 s poll of
+ *    and ACPI_ENABLE/ACPI_DISABLE, the ACPI_ENABLE handshake with the 3 s poll of
  *    ACPICA's acpi_enable (SMI_CMD zero means always ACPI mode, hwacpi.c
  *    acpi_hw_get_mode); in ACPI mode the fixed status bits (WAK_STS and the
  *    others, aclocal.h ACPI_BITMASK_ALL_FIXED_STATUS) are cleared and the
  *    GPE enables zeroed as acpi_hw_legacy_sleep does, so no pending wake
  *    event turns the machine back on; then SLP_TYPx, then SLP_TYPx|SLP_EN,
  *    to PM1a and PM1b (hwsleep.c, two writes "to work around poorly
- *    implemented hardware"), a bounded wait, ACPICA's one retry, -EIO.
+ *    implemented hardware"), a bounded wait, ACPICA's one retry, -EIO;
+ * 4. if S5 returns, restore saved enable masks and incoming ownership before
+ *    restoring IF. A takeover requires bounded ACPI_DISABLE rollback; failed
+ *    rollback keeps events masked and an explicit ownership_uncertain state.
  * No AML runs: \_PTS(5) and \_GTS are not evaluated (the risk is recorded
  * in the design document; the ACPICA-owned provider runs \_PTS and is
  * always preferred when it exists). No panic path: every refusal returns.
@@ -79,6 +82,7 @@ static const char *s5_port_owner(uint16_t start, unsigned len)
     return NULL;
 }
 static uint16_t s5_inw(uint16_t p) { return cpu_inw(p); }
+static uint8_t s5_inb(uint16_t p) { return inb(p); }
 static void s5_outb(uint16_t p, uint8_t v) { outb(p, v); }
 static void s5_outw(uint16_t p, uint16_t v) { cpu_outw(p, v); }
 /* Bounded stall with IF=0: udelay admits 50 us per call there; without a
@@ -109,7 +113,7 @@ static void s5_irq_restore(uint32_t f) { irq_restore(f); }
 enum { S5_IDLE, S5_PARSING, S5_PARSED };
 static struct {
     unsigned state;
-    bool qualified, final;
+    bool qualified, final, ownership_uncertain;
     const char *why;
     struct acpi_soft_off off;
 } s5;
@@ -181,6 +185,7 @@ static void s5_parse(void)
 }
 bool power_s5_fallback_qualified(void)
 {
+    if (s5.ownership_uncertain) return false;
     if (!s5_allowed()) { s5.why = "policy"; return false; }
     uint32_t f = s5_irq_save();
     unsigned state = s5.state;
@@ -193,6 +198,7 @@ bool power_s5_fallback_qualified(void)
 }
 const char *power_s5_fallback_state(void)
 {
+    if (s5.ownership_uncertain) return "ownership_uncertain";
     if (s5.qualified) return "available";
     if (s5.state == S5_PARSING) return "parsing";
     if (s5.state == S5_PARSED && !s5.final) return "pending";
@@ -202,19 +208,55 @@ const char *power_s5_fallback_state(void)
  * set, or no SMI_CMD, is ACPI mode; otherwise ACPI_ENABLE to SMI_CMD and
  * poll SCI_EN. A platform that never answers still gets the SLP_EN write,
  * in legacy mode, because the alternative is the user's power button. */
-static const char *s5_enter_acpi_mode(const struct acpi_soft_off *o, bool *acpi_mode)
+static uint16_t s5_read_control(const struct acpi_soft_off *o)
+{
+    uint16_t value = s5_inw(o->pm1a_cnt);
+    if (o->pm1b_cnt) value |= s5_inw(o->pm1b_cnt);
+    return (uint16_t)(value & ~S5_SLP_MASK);
+}
+static const char *s5_enter_acpi_mode(const struct acpi_soft_off *o, bool *acpi_mode,
+                                     bool *enable_attempted)
 {
     *acpi_mode = true;
-    if (s5_inw(o->pm1a_cnt) & S5_SCI_EN) return "acpi";
+    if (s5_read_control(o) & S5_SCI_EN) return "acpi";
     if (!o->smi_cmd) return "acpi_no_smi_cmd";
     if (!o->acpi_enable) { *acpi_mode = false; return "legacy_no_enable_value"; }
+    if (!o->acpi_disable) { *acpi_mode = false; return "legacy_no_disable_value"; }
+    *enable_attempted = true;
+    s5.ownership_uncertain = true; /* Remains set until hand-back is proved. */
     s5_outb(o->smi_cmd, o->acpi_enable);
     for (unsigned i = 0; i < S5_ENABLE_POLLS; i++) {
-        if (s5_inw(o->pm1a_cnt) & S5_SCI_EN) return "enabled";
+        if (s5_read_control(o) & S5_SCI_EN) return "enabled";
         s5_stall_ms(1);
     }
     *acpi_mode = false;
     return "legacy_enable_timeout";
+}
+/* Save before ACPI_ENABLE: firmware can change these masks during takeover.
+ * The parser admits only 4-byte PM1 events and even GPE blocks <= 32 bytes. */
+struct s5_saved {
+    uint16_t control, pm1_enable[2];
+    uint8_t gpe_enable[2][S5_GPE_MAX / 2];
+};
+static void s5_save_enables(const struct acpi_soft_off *o, struct s5_saved *saved)
+{
+    const uint16_t events[2] = {o->pm1a_evt, o->pm1b_evt}, blocks[2] = {o->gpe0, o->gpe1};
+    const unsigned lengths[2] = {o->gpe0_len, o->gpe1_len};
+    for (unsigned b = 0; b < 2; b++) {
+        if (events[b]) saved->pm1_enable[b] = s5_inw((uint16_t)(events[b] + 2));
+        for (unsigned i = 0; blocks[b] && i < lengths[b] / 2; i++)
+            saved->gpe_enable[b][i] = s5_inb((uint16_t)(blocks[b] + lengths[b] / 2 + i));
+    }
+}
+static void s5_set_enables(const struct acpi_soft_off *o, const struct s5_saved *saved)
+{
+    const uint16_t events[2] = {o->pm1a_evt, o->pm1b_evt}, blocks[2] = {o->gpe0, o->gpe1};
+    const unsigned lengths[2] = {o->gpe0_len, o->gpe1_len};
+    for (unsigned b = 0; b < 2; b++) {
+        if (events[b]) s5_outw((uint16_t)(events[b] + 2), saved ? saved->pm1_enable[b] : 0);
+        for (unsigned i = 0; blocks[b] && i < lengths[b] / 2; i++)
+            s5_outb((uint16_t)(blocks[b] + lengths[b] / 2 + i), saved ? saved->gpe_enable[b][i] : 0);
+    }
 }
 /* ACPI mode only: these registers belong to OSPM there (in legacy mode the
  * firmware's SMI handler owns them). PM1x status is the first half of the
@@ -241,6 +283,7 @@ static void s5_write(const struct acpi_soft_off *o, uint16_t a, uint16_t b)
 }
 int power_s5_fallback_off(bool forced)
 {
+    if (s5.ownership_uncertain) return -EIO;
     if (!power_s5_fallback_qualified()) return -ENOTSUP;
     const struct acpi_soft_off *o = &s5.off;
     const char *owner = s5_port_owner(o->pm1a_cnt, o->pm1_cnt_len);
@@ -252,11 +295,13 @@ int power_s5_fallback_off(bool forced)
     s5_log("[power] acpi s5 fallback: source=%s typ=%u/%u pm1a_cnt=%04x pm1b_cnt=%04x forced=%u", s5_source_name(o->source),
            o->slp_typa, o->slp_typb, o->pm1a_cnt, o->pm1b_cnt, (unsigned)forced);
     uint32_t f = s5_irq_save();
-    bool acpi_mode;
-    const char *mode = s5_enter_acpi_mode(o, &acpi_mode);
+    struct s5_saved saved = {.control = s5_read_control(o)};
+    s5_save_enables(o, &saved);
+    bool acpi_mode, enable_attempted = false;
+    const char *mode = s5_enter_acpi_mode(o, &acpi_mode, &enable_attempted);
     if (acpi_mode) s5_clear_events(o);
-    /* ACPICA hwsleep.c: PM1b takes PM1a's non-sleep bits. */
-    uint16_t a = (uint16_t)(s5_inw(o->pm1a_cnt) & ~S5_SLP_MASK), b = a;
+    /* ACPI 1.0b 4.7: A OR B except the block-specific SLP_TYP fields. */
+    uint16_t a = s5_read_control(o), b = a;
     a |= (uint16_t)(o->slp_typa << 10); b |= (uint16_t)(o->slp_typb << 10);
     s5_log("[power] acpi s5 fallback: mode=%s pm1a=%04x pm1b=%04x events=%s", mode, a, b, acpi_mode ? "cleared" : "firmware");
     s5_write(o, a, b);
@@ -265,6 +310,23 @@ int power_s5_fallback_off(bool forced)
     s5_stall_ms(S5_SETTLE_MS);
     s5_write(o, a, b);
     s5_stall_ms(S5_RETRY_MS);
+    /* S5 failed. Hand firmware its policy back before restoring IF, even
+     * after a timed-out enable request (the transition may be delayed).
+     * Incoming ACPI mode is never disabled by this fallback. */
+    if (enable_attempted) {
+        s5_set_enables(o, NULL);
+        s5_write(o, saved.control, saved.control);
+        s5_outb(o->smi_cmd, o->acpi_disable);
+        for (unsigned i = 0; i < S5_ENABLE_POLLS; i++) {
+            if (!(s5_read_control(o) & S5_SCI_EN)) { s5.ownership_uncertain = false; break; }
+            s5_stall_ms(1);
+        }
+        if (!s5.ownership_uncertain) s5_set_enables(o, &saved);
+        s5_log("[power] acpi s5 fallback: rollback=%s incoming=legacy", s5.ownership_uncertain ? "ownership_uncertain" : "firmware");
+    } else if (acpi_mode) {
+        s5_write(o, saved.control, saved.control);
+        s5_set_enables(o, &saved);
+    }
     s5_irq_restore(f);
     s5_log("[power] acpi s5 fallback: machine still running after %u ms mode=%s", S5_SETTLE_MS + S5_RETRY_MS, mode);
     return -EIO;

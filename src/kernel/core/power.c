@@ -219,13 +219,24 @@ int acpi_s5_find(const uint8_t *aml, uint32_t len, uint8_t *typa, uint8_t *typb)
     return s5_terms(aml, len, 0, typa, typb);
 }
 
-static uint16_t io_port(const uint8_t *fadt, uint32_t len, uint32_t legacy, uint32_t gas)
+enum io_block_state { IO_BLOCK_ABSENT, IO_BLOCK_VALID, IO_BLOCK_UNSUPPORTED };
+static enum io_block_state io_port(const uint8_t *fadt, uint32_t len, uint32_t legacy,
+                                    uint32_t gas, unsigned bytes, unsigned access, uint16_t *out)
 {
     uint32_t port = rd32(fadt + legacy);
-    /* The extended block counts only in SystemIO space (space id 1). */
-    if (!port && len >= gas + 12 && fadt[gas] == 1 && !rd32(fadt + gas + 8))
+    *out = 0;
+    /* ACPI 2.0c: a present extended address supersedes the legacy block.
+     * Unsupported is never equivalent to an optional, absent block. */
+    if (len >= gas + 12 && (rd32(fadt + gas + 4) || rd32(fadt + gas + 8))) {
+        if (fadt[gas] != 1 || rd32(fadt + gas + 8) || fadt[gas + 2] ||
+            fadt[gas + 1] != bytes * 8u ||
+            (fadt[gas + 3] && fadt[gas + 3] != access)) return IO_BLOCK_UNSUPPORTED;
         port = rd32(fadt + gas + 4);
-    return port <= 0xFFFFu ? (uint16_t)port : 0;
+    }
+    if (!port) return IO_BLOCK_ABSENT;
+    if (!bytes || (uint64_t)port + bytes > 0x10000u) return IO_BLOCK_UNSUPPORTED;
+    *out = (uint16_t)port;
+    return IO_BLOCK_VALID;
 }
 
 /* fx-acpioff: \_S5 may live in an SSDT (ACPI 2.0 5.2.11.2: SSDT definition
@@ -279,25 +290,35 @@ int acpi_soft_off_parse(acpi_map_fn map, void *ctx, uint32_t rsdp_phys,
     r.fadt_revision = fadt[8];
     r.flags = rd32(fadt + 112);
     r.sci_int = (uint16_t)(fadt[46] | fadt[47] << 8);
-    r.pm1a_cnt = io_port(fadt, fadt_len, 64, 172);
-    r.pm1b_cnt = io_port(fadt, fadt_len, 68, 184);
-    r.pm1a_evt = io_port(fadt, fadt_len, 56, 148);
-    r.pm1b_evt = io_port(fadt, fadt_len, 60, 160);
-    r.gpe0 = io_port(fadt, fadt_len, 80, 220);
-    r.gpe1 = io_port(fadt, fadt_len, 84, 232);
     r.pm1_evt_len = fadt[88]; r.pm1_cnt_len = fadt[89];
     r.gpe0_len = fadt[92]; r.gpe1_len = fadt[93];
     uint32_t smi = rd32(fadt + 48);
-    r.smi_cmd = smi <= 0xFFFFu ? (uint16_t)smi : 0;
+    *why = "smi_cmd";
+    if (smi > 0xFFFFu) return -ENOTSUP;
+    r.smi_cmd = (uint16_t)smi;
     r.acpi_enable = fadt[52]; r.acpi_disable = fadt[53];
     /* ACPI 5.0 HW_REDUCED_ACPI (flags bit 20): no PM1 registers exist;
      * the SLEEP_CONTROL_REG path is not implemented. */
     *why = "hw_reduced";
     if (r.fadt_revision >= 5 && (r.flags & (1u << 20))) return -ENOTSUP;
-    *why = "pm1a_cnt";
-    if (!r.pm1a_cnt) return -ENOTSUP;
     *why = "pm1_cnt_len";
-    if (r.pm1_cnt_len < 2) return -ENOTSUP;
+    if (r.pm1_cnt_len != 2) return -ENOTSUP;
+    *why = "pm1a_cnt";
+    if (io_port(fadt, fadt_len, 64, 172, r.pm1_cnt_len, 2, &r.pm1a_cnt) != IO_BLOCK_VALID) return -ENOTSUP;
+    *why = "pm1b_cnt";
+    if (io_port(fadt, fadt_len, 68, 184, r.pm1_cnt_len, 2, &r.pm1b_cnt) == IO_BLOCK_UNSUPPORTED) return -ENOTSUP;
+    *why = "pm1a_evt";
+    if (io_port(fadt, fadt_len, 56, 148, r.pm1_evt_len, 2, &r.pm1a_evt) == IO_BLOCK_UNSUPPORTED ||
+        (r.pm1a_evt && r.pm1_evt_len != 4)) return -ENOTSUP;
+    *why = "pm1b_evt";
+    if (io_port(fadt, fadt_len, 60, 160, r.pm1_evt_len, 2, &r.pm1b_evt) == IO_BLOCK_UNSUPPORTED ||
+        (r.pm1b_evt && r.pm1_evt_len != 4)) return -ENOTSUP;
+    *why = "gpe0";
+    if (io_port(fadt, fadt_len, 80, 220, r.gpe0_len, 1, &r.gpe0) == IO_BLOCK_UNSUPPORTED ||
+        (r.gpe0 && ((r.gpe0_len & 1) || r.gpe0_len > 32))) return -ENOTSUP;
+    *why = "gpe1";
+    if (io_port(fadt, fadt_len, 84, 232, r.gpe1_len, 1, &r.gpe1) == IO_BLOCK_UNSUPPORTED ||
+        (r.gpe1 && ((r.gpe1_len & 1) || r.gpe1_len > 32))) return -ENOTSUP;
     uint32_t dsdt_phys = rd32(fadt + 40);
     if (!dsdt_phys && fadt_len >= 148 && !rd32(fadt + 144))
         dsdt_phys = rd32(fadt + 140);
@@ -402,8 +423,9 @@ static int power_sequence(bool off)
         klog("[power] stage=acpi-s5-off provider=fallback after=%s error=%d", name, e);
     } else klog("[power] stage=acpi-s5-off provider=fallback state=quiescent unqualified=%s", name);
     power_checkpoint();
-    e = power_s5_fallback_off(false);
-    klog("[power] acpi s5 fallback returned error=%d; stopped devices and leases retained", e); power_checkpoint();
+    int fallback_error = power_s5_fallback_off(false);
+    klog("[power] acpi s5 fallback returned error=%d; stopped devices and leases retained", fallback_error); power_checkpoint();
+    if (!active || fallback_error != -ENOTSUP) e = fallback_error;
     return e;
 }
 /* T23 trial c42f556e (docs/validation/t23-win32-hang-shutdown-2026-10-25.md):
@@ -478,8 +500,9 @@ static int power_force(bool off, uint32_t pid)
          * without a forced entry (ENOTSUP) or whose Off returned is followed
          * by the register fallback, never preceded by it. */
         klog("[power] stage=acpi-s5-off provider=fallback forced=1 after=%d", e);
-        e = power_s5_fallback_off(true);
-        klog("[power] forced acpi s5 fallback returned error=%d", e);
+        int fallback_error = power_s5_fallback_off(true);
+        klog("[power] forced acpi s5 fallback returned error=%d", fallback_error);
+        if (fallback_error != -ENOTSUP) e = fallback_error;
     }
     return e;
 }

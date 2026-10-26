@@ -306,7 +306,7 @@ static void test_g11(void)
  * POWER_FORCE_FLUSH_MS through the bounded worker, latch UNCERTAIN, then
  * reset or soft-off. Before them, call 73 action 9/10 was EINVAL. */
 static unsigned forced_offs, ordinary_offs;
-static int forced_off(void *ctx) { (void)ctx; stage('P'); forced_offs++; return -EIO; }
+static int forced_off(void *ctx) { (void)ctx; stage('P'); forced_offs++; return off_error; }
 static int ordinary_off(void *ctx) { (void)ctx; ordinary_offs++; return -EIO; }   /* must never run on the forced path */
 /* Review 2, finding 5: the platform's nonblocking device fence (power_platform.c
  * quiesce step) as the forced actions see it: -EAGAIN while the stop runs. */
@@ -421,6 +421,14 @@ static void test_s5_fallback(void)
     assert(power_syscall(CIUKI_POWER_OFF)==-EIO && !strcmp(order,"SNQPX"));
     reset(); provide(POWER_SOURCE_APM); s5_qualified=false;
     assert(power_syscall(CIUKI_POWER_OFF)==-EIO && !strcmp(order,"SNQP") && !s5_offs); /* APM Off works today: unchanged */
+    /* Review round 1: a registry-owned ACPI fallback can be qualified but
+     * refuse at entry. Preserve the provider's EIO/timeout, not ENOTSUP. */
+    for (unsigned i = 0; i < 2; i++) {
+        reset(); s5_qualified=true; s5_result=-ENOTSUP; off_error=i ? -ETIMEDOUT : -EIO;
+        assert(power_syscall(CIUKI_POWER_OFF)==off_error && !strcmp(order,"SNQPX"));
+    }
+    reset(); qualified=false; s5_qualified=true; s5_result=-ENOTSUP;
+    assert(power_syscall(CIUKI_POWER_OFF)==-ENOTSUP && !strcmp(order,"SNQX"));
     /* No fallback: the safe-to-turn-off ending names the fallback's state. */
     reset(); qualified=false;
     assert(power_syscall(CIUKI_POWER_QUERY)==1 && power_syscall(CIUKI_POWER_OFF)==-ENOTSUP && !strcmp(order,"SNQ"));
@@ -451,6 +459,15 @@ static void test_s5_fallback(void)
     { const struct power_source_ops ops={.soft_off=ordinary_off,.soft_off_forced=forced_off};
       assert(!power_source_reserve(POWER_SOURCE_ACPI,&ops) && !power_source_activate(POWER_SOURCE_ACPI)); }
     assert(power_syscall(CIUKI_POWER_FORCE_OFF)==-EIO && !strcmp(order,"FDAPX") && forced_offs==1 && !ordinary_offs && s5_forced_offs==1);
+    for (unsigned i = 0; i < 2; i++) {
+        emergency_stopped=false;
+        reset(); force_flushes=0; fence_steps=0; s5_qualified=true; s5_result=-ENOTSUP;
+        off_error=i ? -ETIMEDOUT : -EIO;
+        power_source_release(source.provider,false,0);
+        const struct power_source_ops ops={.soft_off=ordinary_off,.soft_off_forced=forced_off};
+        assert(!power_source_reserve(POWER_SOURCE_ACPI,&ops) && !power_source_activate(POWER_SOURCE_ACPI));
+        assert(power_syscall(CIUKI_POWER_FORCE_OFF)==off_error && !strcmp(order,"FDAPX"));
+    }
     emergency_stopped=false;
     reset(); force_flushes=0; fence_steps=0; fence_result=-EAGAIN; power_running=true; s5_qualified=true;
     power_source_release(source.provider,false,0);

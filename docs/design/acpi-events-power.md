@@ -740,13 +740,37 @@ the fallback's. `REBOOT` never uses the fallback.
 
 ### The fallback
 
+Review round 1 (2026-10-26):
+
+- [ACPI 1.0b §§4.7, 4.7.2.5, 5.2.5](https://stuff.mit.edu/afs/sipb/contrib/doc/specs/protocol/acpi/acpi10b.pdf)
+  defines A-or-B control reads (except SLP_TYP) and ACPI_DISABLE hand-back.
+  Save incoming mode and PM1/GPE enable masks before ACPI_ENABLE. Require
+  ACPI_DISABLE before requesting ownership. If S5 returns, mask events,
+  restore non-sleep control bits, issue ACPI_DISABLE after any enable
+  attempt (including timeout), and poll for at most 3000 ms. Restore incoming
+  masks only after confirmed hand-back. If incoming mode was ACPI, restore
+  masks without disabling it. Failed hand-back retains an explicit
+  `ownership_uncertain` state, masks events, refuses further attempts and
+  reports EIO. Status bits already cleared cannot be reconstructed.
+- [ACPI 2.0c §§5.2.3.1, 5.2.8](https://uefi.org/sites/default/files/resources/ACPI_2_Errata_C.pdf)
+  defines independent GAS blocks. Distinguish absent, valid and unsupported
+  registers. A nonzero extended address takes precedence. Admit only complete
+  SystemIO extents with zero bit offset, matching block width and unspecified
+  or compatible access size: word accesses for 2-byte PM1 control / 4-byte
+  events, byte accesses for even GPE blocks up to 32 bytes. Refuse unsupported
+  present blocks and out-of-range SMI_CMD, rather than silently omitting them.
+- Provider order and the registry guard remain binding. When the fallback
+  refuses with ENOTSUP, retain the active provider's original error on both
+  orderly and forced paths. Insert SLP_TYPa/b separately into the shared
+  non-sleep bits read from A OR B.
+
 - Qualification (once per boot, read-only, cache-only afterwards; skipped
   on safe and hardware-check boots and when the power class is skipped):
   `core/power.c acpi_soft_off_parse` through the ACPI backend's firmware
   windows (`acpi_firmware_table_map`: BIOS window or E820 ACPI/NVS,
   reserved pages, every table at most 256 KiB, at most 96 windows): RSDP,
   RSDT (or XSDT), FADT (116 bytes or more, not hardware-reduced,
-  PM1a_CNT_BLK present, PM1_CNT_LEN at least 2), the DSDT, then every SSDT
+  PM1a_CNT_BLK present, PM1_CNT_LEN exactly 2), the DSDT, then every SSDT
   the root table names. `\_S5` is accepted only as `Name(_S5, Package)`
   at the root or inside `Scope(\)`, with the first two elements ZeroOp,
   OneOp or Byte/Word/DWord constants of at most 7 (two- and four-element
@@ -765,18 +789,19 @@ the fallback's. `REBOOT` never uses the fallback.
   the quarantine rule of the providers applies to the fallback as well.
 - Sequence (interrupts disabled from the mode check to the last wait, as
   ACPICA and Linux require; nothing needs service after the fence):
-  SCI_EN set, or SMI_CMD zero, is ACPI mode; otherwise ACPI_ENABLE is
-  written to SMI_CMD once and SCI_EN polled for 3000 ms in 1 ms steps; a
-  platform that does not answer, or has no ACPI_ENABLE value, is written
+  SCI_EN from A OR B set, or SMI_CMD zero, is ACPI mode; otherwise ACPI_ENABLE
+  is written to SMI_CMD once if ACPI_DISABLE is also available, and SCI_EN
+  polled for 3000 ms in 1 ms steps; a platform that does not answer, or has
+  no ACPI_ENABLE or ACPI_DISABLE value, is written
   in legacy mode anyway (logged `mode=legacy_*`) because the alternative
   is the power button. In ACPI mode only, the fixed status bits (0xC731)
   are cleared in PM1a/PM1b_STS and every admitted GPE block (even length,
   at most 32 bytes) has its enables zeroed and its status cleared, so no
-  pending wake event turns the machine back on. Then PM1a's non-sleep bits
-  with SLP_TYPa (PM1b takes PM1a's bits with SLP_TYPb), PM1a before PM1b,
+  pending wake event turns the machine back on. Then A OR B's non-sleep bits
+  with SLP_TYPa (PM1b takes the same bits with SLP_TYPb), PM1a before PM1b,
   then the same with SLP_EN; a 2 s wait, ACPICA's one SLP_EN rewrite, a
-  1 s wait, interrupts restored, `-EIO` ("machine still running"). No AML
-  method runs.
+  1 s wait, bounded ownership/mask rollback as above, interrupts restored,
+  `-EIO` ("machine still running"). No AML method runs.
 - Risk accepted: `_PTS(5)` and `_GTS` are not evaluated. The ACPI
   specification requires `_PTS` before any sleep state; some firmware
   needs it (an EC or GPIO step) and may stay on or freeze. The fallback
