@@ -108,3 +108,31 @@ Before retrying a real hang, first boot with the retained marker and confirm
 that the desktop starts using software rendering. The host model verifies
 the scheduling, bounded refusal and marker policy; it cannot identify the
 unrecorded probe boot's exact hardware failure or prove T23 timing.
+
+## Integration with f7-12 and review fixes (2026-10-26)
+
+The merge with the f7-12 default formats keeps both features; the review of
+both branches added these rules (design detail in
+[savage-default-formats.md](../design/savage-default-formats.md)).
+
+* The optional RGB565 and D24/S8 gates follow the full-size and precision
+  phases through the same paced helpers. Expect `rgb565_prepare`, `rgb565`
+  1–4, `d24s8_prepare` and `d24s8` 1–34 begin/end records, then
+  `[3d] attachment format=RGB565|D24S8 result=... budget=ok|<reason>`.
+  A budget overrun anywhere, including an optional gate, refuses the attempt
+  as above (`hardware=0`, budget reason, `marker=retained`); no optional gate
+  starts after one. A clean optional refusal leaves the other formats.
+* A clean full-size refusal (allocation or texture-pool preflight `-ENOMEM`,
+  a numeric mismatch or a local transfer timeout, all restored) keeps the
+  qualified minimum, as [the f7-11 contract](../design/savage-fullsize-admission.md)
+  requires. Only budget overruns and integrity failures (device lost) reset
+  admission and release the claims.
+* The marker request passes microseconds: `now` is the probe clock and the
+  deadline the lesser of the total and marker-phase deadlines, unscaled. The
+  block layer converts the remainder to milliseconds (`blkreq.c`); the earlier
+  division by 1000 turned the 1 s marker budget into a 1 ms request timeout.
+  The owner test now runs the marker I/O through the real request scope.
+* The finished worker is reaped by the next display notification or record
+  hook on another task, exactly once, after `task_exit` made it a zombie.
+* Partial D24/S8 clears of ordinary jobs are bounded windows with a 20 ms
+  absolute deadline; between windows only the presenter mutex is yielded.

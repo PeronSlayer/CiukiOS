@@ -19,7 +19,10 @@ void render3d_filter_caps(const struct ciuki_r3d_caps *snapshot,
     if (a->width && a->height && a->width<=snapshot->max_size && a->height<=snapshot->max_size &&
         (!snapshot->max_width || a->width<=snapshot->max_width) &&
         (!snapshot->max_height || a->height<=snapshot->max_height) &&
-        a->format==CIUKI_R3D_ARGB8888 && a->kind==CIUKI_R3D_D16 && !a->levels)
+        (a->format==CIUKI_R3D_ARGB8888 || a->format==CIUKI_R3D_RGB565) &&
+        (snapshot->color_formats&a->format) && !(a->format==CIUKI_R3D_RGB565 && a->kind==CIUKI_R3D_D24S8) && (a->kind==CIUKI_R3D_D16 || a->kind==CIUKI_R3D_D24S8) &&
+        (snapshot->depth_formats&a->kind) &&
+        (!a->levels || (a->kind==CIUKI_R3D_D24S8 && a->levels==8)))
         *out=*snapshot;
 }
 static int finish(struct render3d_service *s, uint32_t p, uint32_t id,
@@ -108,7 +111,7 @@ int render3d_transport_dispatch(struct render3d_transport *t, uint32_t p,
                 for (unsigned j=0;j<R3D_RESOURCES;j++) {
                     struct render3d_resource *r=&c->resources[j];
                     if (r->live && !r->pending_free && r->handle==a->resource &&
-                        r->kind==R3D_LINEAR_COLOR && r->width==a->width && r->height==a->height) linear=true;
+                        (r->kind==R3D_LINEAR_COLOR || r->kind==R3D_LINEAR565) && r->width==a->width && r->height==a->height) linear=true;
                 }
         }
         return linear ? t->present(t->present_ctx,p,a,data,bytes) : -EINVAL;

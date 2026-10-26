@@ -50,7 +50,7 @@ class RenderTests(unittest.TestCase):
         # match the existing single/two-pass Quake-like GL replay workloads.
         mhz = 1000
         self.assertEqual(256*28,7168)
-        self.assertLess(28772,65536)
+        self.assertLess(28804,65536)
         for triangles in (1024,3000,4600):
             batches=(triangles+255)//256
             # Draw: 17 state + 17 restore + bitmap restore + one draw event.
@@ -107,7 +107,7 @@ class RenderTests(unittest.TestCase):
         keys=['sizeof.ciuki_r3d_draw','offsetof.ciuki_r3d_draw.uv1',
               'offsetof.ciuki_r3d_draw.vertices','rows.ciuki_r3d_draw.uv1',
               'components.ciuki_r3d_draw.uv1','strideof.ciuki_r3d_draw.uv1']
-        expected=(28772,1124,7268,768,2,8)
+        expected=(28804,1124,7268,768,2,8)
         flags=runpy.run_path(str(ROOT/'scripts/build_kernel.py'))['CFLAGS']
         OUT.mkdir(parents=True,exist_ok=True)
         with tempfile.TemporaryDirectory(dir=OUT) as tmp:
@@ -160,11 +160,26 @@ class RenderTests(unittest.TestCase):
             'src/kernel/drivers/video/s3savage/savage3d.c'])
 
     def test_owner(self):
+        OUT.mkdir(parents=True, exist_ok=True)
+        # The marker deadline is checked through the real block-request scope
+        # and its millisecond conversion (blkreq.c, host build).
+        sanitizer = 'address,undefined' if os.environ.get('CIUKI_DISPLAY_ASAN') else 'undefined'
+        blkreq = OUT/'owner_blkreq.o'
+        subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-DFS_HOST',
+                        '-D_POSIX_C_SOURCE=200809L', '-pthread', '-fsanitize='+sanitizer,
+                        '-fno-sanitize-recover=undefined', '-ffunction-sections', '-fdata-sections',
+                        '-I', str(ROOT/'src/kernel/include'), '-I', str(ROOT/'src/kernel/fs'),
+                        '-c', str(ROOT/'src/kernel/fs/blkreq.c'), '-o', str(blkreq)], check=True)
+        # Variants 21-23 replace the engine gates at link time to test the
+        # owner's decisions after a qualified minimum; others call them.
+        wraps = ['-Wl,--wrap='+n for n in ('savage3d_probe', 'savage3d_fullsize_probe',
+                                           'savage3d_color565_probe', 'savage3d_depth24_probe')]
         self.build_run('owner',['tests/host/savage3d_owner_test.c','src/kernel/lib/fmt.c',
             'src/kernel/drivers/video/attempt.c','src/kernel/drivers/video/render3d.c',
             'src/kernel/drivers/video/render3d_scalar.c','src/kernel/drivers/video/s3savage/savage3d.c',
-            'src/kernel/drivers/video/s3savage/savage3d_owner.c'], args=['0'])
-        for variant in range(1,21):
+            'src/kernel/drivers/video/s3savage/savage3d_owner.c',str(blkreq)], args=['0'],
+            flags=['-pthread',*wraps])
+        for variant in range(1,24):
             subprocess.run([str(OUT/'owner'),str(variant)],check=True)
 
     def test_fullsize(self):
@@ -176,6 +191,9 @@ class RenderTests(unittest.TestCase):
             'src/kernel/drivers/video/render3d.c','src/kernel/drivers/video/render3d_scalar.c',
             'src/kernel/drivers/video/render3d_native.c',
             'src/kernel/drivers/video/s3savage/savage3d.c'],args=['fullsize'])
+
+    def test_optional_formats(self):
+        self.run_shader_case("formats")
 
     def test_review4(self):
         self.run_shader_case("review4")

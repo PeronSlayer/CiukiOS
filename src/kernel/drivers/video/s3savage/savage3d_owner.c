@@ -19,6 +19,7 @@ static bool reported, marker_fresh, marker_retained, marker_unknown;
 static struct savage2d *pending_engine;
 static struct fb_device pending_fb;
 static struct task *probe_task;
+static bool probe_finished;
 static struct kwait probe_wait;
 static bool desktop_ready;
 static uint32_t desktop_generation;
@@ -51,7 +52,9 @@ static void probe_phase(void *ctx,const char *name,unsigned index,bool begin,int
     klog("[3d] probe phase=%s index=%u state=%s elapsed_us=%llu total_us=%llu error=%d",
         name,index,begin ? "begin" : "end",probe_now()-phase_started,probe_now()-probe_started,error);
 }
-static uint64_t marker_now(void *ctx) { (void)ctx; return probe_now()/1000; }
+/* The VFS request clock and deadline are microseconds; the block layer
+ * converts the remainder to milliseconds itself (blkreq.c). */
+static uint64_t marker_now(void *ctx) { (void)ctx; return probe_now(); }
 static void marker_pause(void *ctx) { (void)ctx; task_sleep_ms(1); }
 static int probe_marker(const struct pci_func *pci,bool clear,bool *previous)
 {
@@ -59,7 +62,7 @@ static int probe_marker(const struct pci_func *pci,bool clear,bool *previous)
     probe_phase(0,name,0,true,0);
     uint64_t until=probe_started+SAVAGE3D_PROBE_TOTAL_US;
     if (until>phase_deadline) until=phase_deadline;
-    struct vfs_request request={.deadline=until/1000,.now=marker_now,.pause=marker_pause,
+    struct vfs_request request={.deadline=until,.now=marker_now,.pause=marker_pause,
         .operation="3d-probe-marker",.site="native",.background=true};
     struct fs_request_scope scope;
     fs_request_enter(&scope,&request);
@@ -86,6 +89,7 @@ static void memory_write(void *ctx,bool alias,uint32_t offset,uint32_t value,uns
 static int enter(void *ctx,uint32_t generation)
 { (void)ctx; return fbdev_render3d_enter(generation); }
 static void leave(void *ctx) { (void)ctx; fbdev_render3d_leave(); }
+static void job_yield(void *ctx) { (void)ctx; fbdev_render3d_yield(); }
 static bool safe_extent(uint32_t first,uint32_t bytes)
 {
     if (first<0x100000 || !bytes || bytes>UINT32_MAX-first) return false;
@@ -154,7 +158,7 @@ int savage3d_owner_stop(struct savage2d *engine)
 {
     if (device.engine!=engine) return 0;
     /* Called under presenter before its 2D mappings/lease can be revoked. */
-    device.qualified=device.fullsize_qualified=device.perspective_qualified=false; engine->render3d_qualified=false;
+    device.qualified=device.fullsize_qualified=device.perspective_qualified=device.depth24_qualified=device.color565_qualified=false; engine->render3d_qualified=false;
     if (device.consumer) {
         int e=render3d_close(device.consumer);
         if (e) return e;
@@ -187,7 +191,9 @@ static int scratch_create(struct render3d_service **out,unsigned width,unsigned 
     s->allocation_checkpoint=probe_checkpoint;
     uint32_t context;
     int e=render3d_create_context(s,1,R3D_SOFTWARE,&context);
-    const enum render3d_kind kinds[]={R3D_COLOR,R3D_D16,R3D_TEXTURE,R3D_LINEAR_COLOR,R3D_TEXTURE};
+    const enum render3d_kind kinds[]={device.color565_testing ? R3D_COLOR565 : R3D_COLOR,
+        device.depth24_testing ? R3D_D24S8 : R3D_D16,R3D_TEXTURE,
+        device.color565_testing ? R3D_LINEAR565 : R3D_LINEAR_COLOR,R3D_TEXTURE};
     uint32_t at=device.heap.first,tex_at=device.heap.first+device.heap.bytes-device.texture_bytes;
     for (unsigned i=0;!e && i<(full ? 5u : 4u);i++) {
         e=probe_checkpoint(0); if (e) break;
@@ -222,6 +228,7 @@ static int scratch_create(struct render3d_service **out,unsigned width,unsigned 
             r->hardware=true; r->offset=kinds[i]==R3D_TEXTURE ? tex_at : at;
             e=savage3d_backend()->layout(&device,r);
             if (kinds[i]==R3D_TEXTURE) tex_at+=r->reserved; else at+=r->reserved;
+            if (at>device.heap.first+device.heap.bytes-device.texture_bytes || tex_at>device.heap.first+device.heap.bytes) e=-ENOMEM;
         }
     }
     if (e) { (void)render3d_close(s); kfree(s); return e; }
@@ -255,6 +262,33 @@ static int fullsize_diagnostic(struct render3d_service **scratch)
         device.measured_filter_levels[0],device.measured_filter_levels[1],device.expected,device.actual);
     return e;
 }
+static int attachment_diagnostic(struct render3d_service **scratch,bool depth24)
+{
+    /* Never started after a budget overrun or an integrity failure. */
+    if (!device.fullsize_qualified || device.lost) return -ENODEV;
+    if (budget_reason) return -ETIMEDOUT;
+    const char *prepare=depth24 ? "d24s8_prepare" : "rgb565_prepare";
+    (void)render3d_close(*scratch); kfree(*scratch); *scratch=0;
+    struct render3d_service *reference=0;
+    probe_phase(0,prepare,0,true,0);
+    device.depth24_testing=depth24; device.color565_testing=!depth24; device.fullsize_testing=true;
+    int e=scratch_create(scratch,device.mode_width,device.mode_height,true,true);
+    device.fullsize_testing=false;
+    if (!e) e=scratch_create(&reference,device.mode_width,device.mode_height,true,false);
+    probe_phase(0,prepare,0,false,e);
+    if (!e) {
+        device.consumer=*scratch;
+        e=depth24 ? savage3d_depth24_probe(&device,reference) : savage3d_color565_probe(&device,reference);
+        device.consumer=0;
+    }
+    device.depth24_testing=device.color565_testing=false;
+    if (reference) { (void)render3d_close(reference); kfree(reference); }
+    klog("[3d] attachment format=%s result=%s error=%d width=%u height=%u depth_error=%u expected=%08x actual=%08x quarantined=%u budget=%s",
+        depth24 ? "D24S8" : "RGB565",(depth24 ? device.depth24_qualified : device.color565_qualified) ? "qualified" : "refused",e,device.mode_width,device.mode_height,
+        device.max_depth_error,device.expected,device.actual,device.lost,budget_reason ? budget_reason : "ok");
+    return e;
+}
+
 static bool token(void)
 {
     for (unsigned i=0;i<sizeof(g_boot.options) && g_boot.options[i];) {
@@ -315,8 +349,16 @@ static void qualification(void)
         device=(struct savage3d_device){.engine=engine,.generation=fb->generation,.heap=heap,
             .mode_width=fb->width,.mode_height=fb->height,
             .texture_bytes=(heap.bytes-(required-SAVAGE3D_TEXTURE_MIN))&~4095u,
-            .memory={0,memory_read,memory_write,enter,leave},.lost_notify=lost_notify,
+            .memory={0,memory_read,memory_write,enter,leave},.job_yield=job_yield,.lost_notify=lost_notify,
             .probe_checkpoint=probe_checkpoint,.probe_phase=probe_phase};
+        /* Budget optional D24/S8 from this same claimed heap before fixing
+         * the texture pool. Keep its existing minimum and the scratch/guards;
+         * if it does not fit, preserve the D16 budget and decline D24. */
+        uint32_t rows=(fb->height+15)&~15u;
+        uint32_t cp=((fb->width*4+127)&~127u)*rows;
+        uint32_t depth24_required=3*((cp+4095)&~4095u)+4*8192u+24576u;
+        if (heap.bytes>=depth24_required+480u*1024)
+            device.texture_bytes=(heap.bytes-depth24_required)&~4095u;
         uint32_t bases[]={fb->phys+heap.first,alias}, sizes[]={heap.bytes,SAVAGE3D_ALIAS_BYTES};
         for (unsigned i=0;!e && i<2;i++) {
             claims[i]=registry_claim(RES_MMIO,bases[i],bases[i]+sizes[i],"savage-3d",false);
@@ -360,18 +402,29 @@ static void qualification(void)
         probe_phase(0,"minimum",0,false,e);
         device.consumer=0;
         if (!e) {
-            e=fullsize_diagnostic(&scratch); reason="fullsize";
+            /* A clean full-size refusal (allocation/preflight, numeric or a
+             * local transfer timeout, all restored) keeps the qualified
+             * minimum (savage-fullsize-admission.md). Only a budget overrun
+             * or an integrity failure (device lost) resets admission below. */
+            (void)fullsize_diagnostic(&scratch);
+            /* Optional formats follow a full-size qualification. Their budget
+             * timeout propagates: no further optional gate starts after it. */
+            for (unsigned depth24=0;depth24<2;depth24++)
+                if (attachment_diagnostic(&scratch,depth24)==-ETIMEDOUT && budget_reason) break;
             if (device.lost) e=-EIO;
         }
     }
     if (!e) e=probe_check();
     if (budget_reason) { e=-ETIMEDOUT; reason=budget_reason; }
-    if (e) device.qualified=device.fullsize_qualified=device.perspective_qualified=false;
+    if (e) device.qualified=device.fullsize_qualified=device.perspective_qualified=
+        device.depth24_qualified=device.color565_qualified=false;
     if (marker_fresh && !device.lost && !budget_reason) {
         int clear=probe_marker(pci,true,0);
-        if (clear) { e=clear; reason="marker_clear"; device.qualified=false; }
+        if (clear) { e=clear; reason="marker_clear"; }
         else marker_fresh=false;
-        if (probe_check()) { e=-ETIMEDOUT; reason=budget_reason; device.qualified=false; }
+        if (probe_check()) { e=-ETIMEDOUT; reason=budget_reason; }
+        if (e) device.qualified=device.fullsize_qualified=device.perspective_qualified=
+            device.depth24_qualified=device.color565_qualified=false;
     }
     if (scratch) {
         if (device.lost) {
@@ -400,16 +453,30 @@ static void probe_main(void *ctx)
     (void)ctx;
     (void)kwait_wait_until(&probe_wait,probe_ready,0,UINT64_MAX);
     qualification();
+    __atomic_store_n(&probe_finished,true,__ATOMIC_RELEASE);
+}
+/* A task cannot reap itself: its return reaches task_exit and leaves a
+ * zombie (stack and task allocations). A later display notification on
+ * another task takes the pointer exactly once and reaps that zombie. */
+static void reap_probe(void)
+{
+    if (!__atomic_load_n(&probe_finished,__ATOMIC_ACQUIRE)) return;
+    struct task *t=__atomic_exchange_n(&probe_task,(struct task *)0,__ATOMIC_ACQ_REL);
+    if (!t) return;
+    if (t!=g_current && t->state==T_ZOMBIE) { task_reap(t); return; }
+    __atomic_store_n(&probe_task,t,__ATOMIC_RELEASE); /* still exiting */
 }
 void savage3d_desktop_presented(uint32_t generation)
 {
     desktop_generation=generation;
+    reap_probe();
     if (!probe_task || desktop_ready) return;
     desktop_ready=true;
     kwait_wake_all(&probe_wait);
 }
 void savage3d_boot_diagnostic(struct savage2d *engine,const struct fb_device *fb)
 {
+    reap_probe();
     if (reported || !token() || !engine || !engine->active || !fb) return;
     reported=true;
     pending_engine=engine; pending_fb=*fb;

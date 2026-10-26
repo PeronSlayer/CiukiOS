@@ -82,7 +82,8 @@ static int unused_execute(void *ctx,const struct render3d_request *q,struct rend
 static int unused_enter(void *ctx) { (void)ctx;assert(false);return -EIO; }
 static void unused_leave(void *ctx) { (void)ctx;assert(false); }
 static void snapshots(void) {
-    static const struct ciuki_r3d_caps caps={.version=1,.max_size=64,.features=R3D_FEATURES};
+    static const struct ciuki_r3d_caps caps={.version=CIUKI_R3D_VERSION,.max_size=64,.features=R3D_FEATURES,
+        .depth_formats=CIUKI_R3D_D16,.color_formats=CIUKI_R3D_ARGB8888};
     static const struct render3d_backend backend={.features=R3D_FEATURES,.qualified=is_qualified,
         .layout=unused_layout,.validate=unused_execute,.enter=unused_enter,.leave=unused_leave,
         .execute=unused_execute,.idle=unused_enter,.quarantine=unused_leave,.max_size=64,.capabilities=&caps};
@@ -118,7 +119,7 @@ static void exchange(struct ciuki_w32_render3d_args *a) {
 }
 static void full_transfers(void) {
     static const struct ciuki_r3d_caps caps={.version=CIUKI_R3D_VERSION,.max_size=1024,
-        .max_width=1024,.max_height=1024,.features=R3D_FEATURES,.max_pixel_work=4*1024*1024};
+        .max_width=1024,.max_height=1024,.depth_formats=CIUKI_R3D_D16,.color_formats=CIUKI_R3D_ARGB8888,.features=R3D_FEATURES,.max_pixel_work=4*1024*1024};
     static const struct render3d_backend backend={.features=R3D_FEATURES,.qualified=is_qualified,
         .layout=full_layout,.validate=full_validate,.enter=full_enter,.leave=full_leave,
         .execute=full_execute,.idle=full_enter,.quarantine=unused_leave,.max_size=1024,.capabilities=&caps};

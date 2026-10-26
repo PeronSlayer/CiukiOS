@@ -24,7 +24,10 @@
 #define R3D_COPY CIUKI_R3D_COPY
 #define R3D_FEATURES 63u
 #define R3D_TEXTURE1 CIUKI_R3D_TEXTURE1
-#define R3D_ALL_FEATURES 127u
+#define R3D_ALL_FEATURES 511u
+#define R3D_STENCIL_TEST CIUKI_R3D_STENCIL_TEST
+#define R3D_CLEAR_STENCIL CIUKI_R3D_CLEAR_STENCIL
+#define R3D_DEPTH_FLAGS (R3D_CLEAR_DEPTH|R3D_DEPTH_TEST|R3D_DEPTH_WRITE|R3D_STENCIL_TEST|R3D_CLEAR_STENCIL)
 #define R3D_REFS 5u
 #define R3D_MIPS 11u
 
@@ -89,8 +92,18 @@ enum render3d_kind {
     R3D_COLOR = CIUKI_R3D_RESOURCE_COLOR,
     R3D_D16 = CIUKI_R3D_RESOURCE_D16,
     R3D_TEXTURE = CIUKI_R3D_RESOURCE_TEXTURE,
-    R3D_LINEAR_COLOR = CIUKI_R3D_RESOURCE_LINEAR_COLOR
+    R3D_LINEAR_COLOR = CIUKI_R3D_RESOURCE_LINEAR_COLOR,
+    R3D_D24S8 = CIUKI_R3D_RESOURCE_D24S8,
+    R3D_COLOR565 = CIUKI_R3D_RESOURCE_COLOR565,
+    R3D_LINEAR565 = CIUKI_R3D_RESOURCE_LINEAR565
 };
+static inline uint32_t render3d_pack565(uint32_t p)
+{ return ((p>>8)&0xf800)|((p>>5)&0x7e0)|((p>>3)&31); }
+static inline uint32_t render3d_expand565(uint32_t p)
+{
+    unsigned r=p>>11&31,g=p>>5&63,b=p&31;
+    return 0xff000000u|((r<<3|r>>2)<<16)|((g<<2|g>>4)<<8)|(b<<3|b>>2);
+}
 enum render3d_status { R3D_SOFTWARE_ONLY, R3D_NOT_IMPLEMENTED, R3D_UNQUALIFIED };
 struct render3d_backend;
 /* Potential features are research metadata, NEVER application capabilities. */
@@ -106,6 +119,7 @@ struct render3d_caps {
     uint32_t texture_heap_bytes;
 };
 /* Screen X/Y Q16.16 [0,1024]; normalized Z Q0.16 [0,65535];
+ * D24S8 uses normalized Z 0..16777215 instead;
  * reciprocal W Q16.16 [1/256,256]; U/V Q16.16 [-16,16].
  * RGBA is packed 0xAARRGGBB. No kernel FP or implicit API-origin conversion. */
 #define render3d_vertex ciuki_r3d_vertex
@@ -238,6 +252,8 @@ int render3d_native_refresh(struct render3d_service *);
  * same task. No allocation, file I/O or logging inside this interval. */
 int fbdev_render3d_enter(uint32_t);
 void fbdev_render3d_leave(void);
+/* Inside enter/leave only: yields the presenter mutex, keeps the job's claim. */
+void fbdev_render3d_yield(void);
 int fbdev_render3d_prepare(uint32_t);
 void fbdev_render3d_prepared(void);
 void render3d_device_lost(struct render3d_service *);

@@ -1082,6 +1082,16 @@ void fbdev_render3d_leave(void)
     framebuffer_write_drain(); accel_inflight=false;
     __atomic_store_n(&drawing,0,__ATOMIC_RELEASE); presenter_unlock();
 }
+/* Between bounded CPU windows of an entered render3d job (f2-92 slicing):
+ * release only the presenter mutex and its preemption hold. The job keeps
+ * its drawing claim and accel_inflight, so no CPU writer, engine user or
+ * mode change can observe its partly applied state meanwhile. */
+void fbdev_render3d_yield(void)
+{
+    framebuffer_write_drain(); presenter_unlock();
+    if (grants_display_yield) grants_display_yield();
+    kmutex_lock(&presenter);
+}
 
 /* Batch ownership is deliberately stronger than presenter ownership. begin
  * claims the entire drawing domain even on a software-only boot; that claim

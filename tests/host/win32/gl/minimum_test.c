@@ -24,9 +24,9 @@ int main(void) {
   command.state=(struct sw_state){.width=8,.height=8,.color=color,.depth=depth,
     .depth_test=1,.depth_write=1,.depth_func=GL_LESS,.color_mask=UINT32_MAX};
   command.count=3; command.texture[0]=3;
-  struct render3d_resource target={.width=8,.height=8,.pitch=32,.shadow=native},
-    z={.width=8,.height=8,.pitch=16,.shadow=native_depth},
-    tex={.width=2,.height=2,.pitch=8,.shadow=texels};
+  struct render3d_resource target={.kind=R3D_COLOR,.width=8,.height=8,.pitch=32,.shadow=native},
+    z={.kind=R3D_D16,.width=8,.height=8,.pitch=16,.shadow=native_depth},
+    tex={.kind=R3D_TEXTURE,.width=2,.height=2,.pitch=8,.shadow=texels};
   struct render3d_resource *resources[R3D_REFS]={&target,&z,&tex,0,0};
   unsigned comparisons=0;
   for (unsigned textured=0;textured<2;textured++)

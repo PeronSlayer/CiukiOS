@@ -64,5 +64,47 @@ static void background3d(unsigned slow)
         slow==0 ? "slow-bus" : slow==1 ? "slow-cpu" : "total-budget",(unsigned long long)(m.us-background_start3d),
         background_frames3d,background_phases3d);
 }
+/* f7-13 review P1: the optional D24/S8 gate runs through the same paced
+ * helpers. The desktop presents at every checkpoint, including between
+ * partial-clear windows; a slow bus or the total budget refuses cleanly. */
+static void background_attachment3d(unsigned slow)
+{
+    prepare(32); m.reg[0x48578/4]=0;
+    memset(ram3d,0x7a,sizeof(ram3d));
+    draw3d=copy3d=writes3d=memory3d=count3d=corruption3d=0;
+    dropping3d=bad_restore3d=slow_guard3d=false;
+    gpu3d=(struct savage3d_device){.engine=&test_engine,.heap={0x800000,sizeof(ram3d)},.generation=42,
+        .mode_width=640,.mode_height=480,.texture_bytes=480*1024,
+        .qualified=true,.fullsize_qualified=true,.perspective_qualified=true,.fullsize_testing=true,.depth24_testing=true};
+    gpu3d.memory=(struct savage3d_memory){0,memory_read3d,memory_write3d,lock3d,unlock3d};
+    test_engine.render3d_qualified=true;
+    struct render3d_host host={0,allocate3d,free3d,clock3d,0};
+    fullsize_resources3d(&scratch3d,&host,640,480,true);
+    fullsize_resources3d(&reference3d,&host,640,480,false);
+    gpu3d.fullsize_testing=false; gpu3d.consumer=&scratch3d;
+    test_engine.io.write32=write_engine3d; m.exact_clock=true;
+    background_cpu3d=slow==2 ? SAVAGE3D_PROBE_TOTAL_US : 0;
+    read_delay3d=slow==1 ? 7 : 0;
+    background_frames3d=background_phases3d=0; background_total3d=false;
+    background_start3d=background_phase_start3d=m.us;
+    gpu3d.probe_checkpoint=background_checkpoint3d; gpu3d.probe_phase=background_phase3d;
+    FULL_CHECK(!fbdev_render3d_prepare(42));
+    int e=savage3d_depth24_probe(&gpu3d,&reference3d);
+    fbdev_render3d_prepared();
+    read_delay3d=0; gpu3d.probe_checkpoint=0; gpu3d.probe_phase=0;
+    FULL_CHECK(!gpu3d.lost && !test_engine.quarantined && test_engine.cpu_safe && !test_engine.event_pending &&
+        !locks && !drawing && !accel_inflight && background_frames3d && background_phases3d);
+    FULL_CHECK(gpu3d.depth24_qualified==!slow && (e==0)==!slow && (!slow || e==-ETIMEDOUT));
+    FULL_CHECK(background_total3d==(slow==2) && (slow!=2 || background_phases3d==1));
+    if (!slow) FULL_CHECK(background_phases3d==34);
+    FULL_CHECK(!render3d_close(&scratch3d) && !render3d_close(&reference3d) && !allocations3d);
+    finish();
+    printf("background D24S8 gate model=%s result=%d elapsed_us=%llu desktop_frames=%u phases=%u restored=1 quarantine=0 PASS\n",
+        slow==0 ? "nominal" : slow==1 ? "slow-bus" : "total-budget",e,(unsigned long long)(m.us-background_start3d),
+        background_frames3d,background_phases3d);
+}
 static void background_suite3d(void)
-{ background3d(0); background3d(1); background3d(2); }
+{
+    background3d(0); background3d(1); background3d(2);
+    background_attachment3d(0); background_attachment3d(1); background_attachment3d(2);
+}

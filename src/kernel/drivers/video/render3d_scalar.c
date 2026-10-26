@@ -15,6 +15,15 @@ static uint32_t fraction(uint64_t a, uint64_t b)
     for (unsigned i=0;i<16;i++) { a*=2; q<<=1; if (a>=b) { a-=b; q++; } }
     return q;
 }
+/* D24 needs finer barycentric weights than the legacy colour/D16 Q16.
+ * Edges are at most 2^53; long division keeps the remainder bounded. */
+static uint64_t fraction32(uint64_t a,uint64_t b)
+{
+    uint64_t q=0;
+    if (a==b) return 1ull<<32;
+    for (unsigned i=0;i<32;i++) { a*=2; q<<=1; if (a>=b) { a-=b; q++; } }
+    return q;
+}
 static uint32_t interpolate(uint32_t a, uint32_t b, uint32_t c, const uint32_t w[3])
 { return (uint32_t)(((uint64_t)a*w[0]+(uint64_t)b*w[1]+(uint64_t)c*w[2]+32768)>>16); }
 static bool compare(uint32_t a,uint32_t b,unsigned func)
@@ -29,6 +38,20 @@ static bool compare(uint32_t a,uint32_t b,unsigned func)
     case R3D_NOTEQUAL: return a!=b;
     default: return a>=b;
     }
+}
+static void stencil_update(uint32_t *word,const struct ciuki_r3d_stencil *s,unsigned op)
+{
+    unsigned old=*word>>24,value=old;
+    switch (op) {
+    case CIUKI_R3D_STENCIL_ZERO: value=0; break;
+    case CIUKI_R3D_STENCIL_REPLACE: value=s->reference; break;
+    case CIUKI_R3D_STENCIL_INCR: if (value<255) value++; break;
+    case CIUKI_R3D_STENCIL_DECR: if (value) value--; break;
+    case CIUKI_R3D_STENCIL_INVERT: value^=255; break;
+    default: break;
+    }
+    value=(old&~s->write_mask)|(value&s->write_mask);
+    *word=(*word&0xffffffu)|(value<<24);
 }
 static int32_t coordinate(const struct render3d_vertex v[3],const int32_t uv[3],const int64_t w[3])
 {
@@ -171,8 +194,18 @@ static void triangle(const struct render3d_request *q, struct render3d_resource 
         uint32_t w[3]={fraction((uint64_t)a,(uint64_t)area),fraction((uint64_t)b,(uint64_t)area),0};
         w[2]=65536-w[0]-w[1];
         uint32_t z=interpolate(v[0].z,v[1].z,v[2].z,w);
-        uint16_t *depth=r[1] ? (uint16_t *)r[1]->shadow+y*r[1]->width+x : 0;
-        if ((q->flags&R3D_DEPTH_TEST) && !compare(z,*depth,q->state.depth_func)) continue;
+        if (r[1] && r[1]->kind==R3D_D24S8) {
+            uint64_t wa=fraction32((uint64_t)a,(uint64_t)area),wb=fraction32((uint64_t)b,(uint64_t)area);
+            uint64_t wc=(1ull<<32)-wa-wb;
+            z=(uint32_t)(((uint64_t)v[0].z*wa+(uint64_t)v[1].z*wb+(uint64_t)v[2].z*wc+(1ull<<31))>>32);
+        }
+        unsigned at=y*r[0]->width+x;
+        uint16_t *depth=r[1] && r[1]->kind==R3D_D16 ? (uint16_t *)r[1]->shadow+at : 0;
+        uint32_t *packed=r[1] && r[1]->kind==R3D_D24S8 ? (uint32_t *)r[1]->shadow+at : 0;
+        bool depth_pass=!(q->flags&R3D_DEPTH_TEST) || compare(z,packed ? *packed&0xffffffu : *depth,q->state.depth_func);
+        bool stencil_pass=!(q->flags&R3D_STENCIL_TEST) || compare(q->stencil.reference&q->stencil.read_mask,
+            (*packed>>24)&q->stencil.read_mask,q->stencil.function);
+        if (!(q->flags&R3D_STENCIL_TEST) && !depth_pass) continue;
         uint32_t shaded=q->flat_color[j->triangle];
         if (!q->state.flat) {
             shaded=0;
@@ -214,9 +247,16 @@ static void triangle(const struct render3d_request *q, struct render3d_resource 
             shaded=combine(shaded,texel,s->combine,tex->format);
         }
         if (q->state.alpha_test && !compare(shaded>>24,q->state.alpha_ref,q->state.alpha_func)) continue;
+        if (q->flags&R3D_STENCIL_TEST) stencil_update(packed,&q->stencil,
+            !stencil_pass ? q->stencil.fail : !depth_pass ? q->stencil.zfail : q->stencil.zpass);
+        if (!stencil_pass || !depth_pass) continue;
         uint32_t *destination=(uint32_t *)r[0]->shadow+y*r[0]->width+x;
         *destination=blend(shaded,*destination,&q->state);
-        if (q->flags&R3D_DEPTH_WRITE) *depth=(uint16_t)z;
+        if (r[0]->kind==R3D_COLOR565) *destination=render3d_expand565(render3d_pack565(*destination));
+        if (q->flags&R3D_DEPTH_WRITE) {
+            if (packed) *packed=(*packed&0xff000000u)|z;
+            else *depth=(uint16_t)z;
+        }
       }
       j->column=0;
     }
@@ -228,20 +268,28 @@ static int scalar_slice(const struct render3d_request *q, struct render3d_resour
 {
     uint64_t start=host ? host->now_us(host->ctx) : 0;
     if (!j->phase) {
-        if (q->flags&(R3D_CLEAR_COLOR|R3D_CLEAR_DEPTH)) {
+        if (q->flags&(R3D_CLEAR_COLOR|R3D_CLEAR_DEPTH|R3D_CLEAR_STENCIL)) {
             unsigned end=j->row+16; if (end>r[0]->height) end=r[0]->height;
             for (unsigned y=j->row;y<end;y++) {
               if (sampled && y%16 && y!=r[0]->height-1) continue;
               if (y>j->row && host && host->now_us(host->ctx)-start>=1000) { end=y; break; }
               for (unsigned x=0;x<r[0]->width;x++) {
-                if (q->flags&R3D_CLEAR_COLOR) ((uint32_t *)r[0]->shadow)[y*r[0]->width+x]=q->clear_color;
-                if (q->flags&R3D_CLEAR_DEPTH) ((uint16_t *)r[1]->shadow)[y*r[1]->width+x]=(uint16_t)q->clear_depth;
+                if (q->flags&R3D_CLEAR_COLOR) ((uint32_t *)r[0]->shadow)[y*r[0]->width+x]=
+                    r[0]->kind==R3D_COLOR565 ? render3d_expand565(render3d_pack565(q->clear_color)) : q->clear_color;
+                if (r[1] && r[1]->kind==R3D_D24S8) {
+                    uint32_t *word=(uint32_t *)r[1]->shadow+y*r[1]->width+x;
+                    if (q->flags&R3D_CLEAR_DEPTH) *word=(*word&0xff000000u)|q->clear_depth;
+                    if (q->flags&R3D_CLEAR_STENCIL) {
+                        struct ciuki_r3d_stencil s=q->stencil; s.reference=s.clear;
+                        stencil_update(word,&s,CIUKI_R3D_STENCIL_REPLACE);
+                    }
+                } else if (q->flags&R3D_CLEAR_DEPTH) ((uint16_t *)r[1]->shadow)[y*r[1]->width+x]=(uint16_t)q->clear_depth;
               }
             }
             j->row=end; if (end<r[0]->height) return 0;
         }
         j->row=0; j->phase=1;
-        if ((q->flags&(R3D_CLEAR_COLOR|R3D_CLEAR_DEPTH)) && host && host->now_us(host->ctx)-start>=1000) return 0;
+        if ((q->flags&(R3D_CLEAR_COLOR|R3D_CLEAR_DEPTH|R3D_CLEAR_STENCIL)) && host && host->now_us(host->ctx)-start>=1000) return 0;
     }
     if (j->phase==1) {
         if (j->triangle<q->count/3) { triangle(q,r,j,host,start,sampled); return 0; }

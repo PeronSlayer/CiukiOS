@@ -586,7 +586,7 @@ void gl_quake3_benchmark(unsigned iterations, int default_format) {
 
 /* Complete H1 frames through production GL/GDI/wire and fake Savage packets.
  * No game assets; both one-pass and two-pass lightmapped worlds. */
-void gl_quake3_savage(void) {
+void gl_quake3_savage(int default_format) {
   extern void gl_hardware_native(int),gl_kernel_setup(int),gl_kernel_teardown(void);
   extern void gl_kernel_mode(unsigned,unsigned),gl_savage_begin(void);
   extern unsigned gl_kernel_draws(void);
@@ -601,8 +601,19 @@ void gl_quake3_savage(void) {
       struct w32_dib dib=test_dib(pixels,w,h,32,0,1);
       HDC dc=w32_gdi_surface_dc(&dib,(POINT){0},0,0); assert(dc);
       PIXELFORMATDESCRIPTOR p={.nSize=40,.nVersion=1,.dwFlags=PFD_DOUBLEBUFFER|PFD_SUPPORT_OPENGL,
-        .cColorBits=32,.cDepthBits=16};
-      assert(SetPixelFormat(dc,ChoosePixelFormat(dc,&p),&p));
+        .cColorBits=32,.cDepthBits=default_format ? 24 : 16,.cStencilBits=default_format ? 8 : 0};
+      int chosen=ChoosePixelFormat(dc,&p);
+      if (default_format) {
+        extern int gl_quake3_enumerate_format(HDC,unsigned);
+        int strict=gl_quake3_enumerate_format(dc,8);
+        if (!strict) strict=gl_quake3_enumerate_format(dc,0);
+        assert(strict==chosen);
+      }
+      PIXELFORMATDESCRIPTOR actual; assert(DescribePixelFormat(dc,chosen,40,&actual));
+      assert(!(actual.dwFlags&PFD_GENERIC_FORMAT));
+      printf("GL_SAVAGE_FORMAT width=%u height=%u request=%u/%u selected=%d depth=%u stencil=%u flags=%08x\n",
+          w,h,p.cDepthBits,p.cStencilBits,chosen,actual.cDepthBits,actual.cStencilBits,actual.dwFlags);
+      assert(SetPixelFormat(dc,chosen,&p));
       HGLRC rc=wglCreateContext(dc); assert(rc && wglMakeCurrent(dc,rc));
       glViewport(0,0,w,h); glEnable(GL_SCISSOR_TEST); glScissor(0,0,w,h);
       glEnableClientState(GL_VERTEX_ARRAY); glEnableClientState(GL_COLOR_ARRAY);

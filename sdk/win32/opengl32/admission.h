@@ -3,7 +3,8 @@
 #define W32_GL_ADMISSION_H
 #include "backend.h"
 static inline int gl_hw_format_supported(const struct gl_hw_format *f) {
-  return !f->rgb565 && f->depth_bits==16 && !f->stencil_bits;
+  return ((f->depth_bits==16 && !f->stencil_bits) ||
+    (!f->rgb565 && f->depth_bits==24 && (f->stencil_bits==0 || f->stencil_bits==8)));
 }
 /* Same measure as render3d.c validate(): sum ceil(span X)*ceil(span Y),
  * not raster coverage. Q4 -> Q16 conversion and Y reflection preserve spans. */

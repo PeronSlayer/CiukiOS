@@ -12,7 +12,7 @@ static uint8_t ram3d[0x7ff000];
 static uint32_t batch3d[32], count3d, need3d;
 static unsigned draw3d, copy3d, writes3d, memory3d, corruption3d, allocations3d;
 static bool dropping3d, bad_restore3d;
-static unsigned read_delay3d;
+static unsigned read_delay3d,attachment_fault3d;
 static uint64_t fragments3d;
 static bool slow_guard3d;
 static bool background_minimum3d;
@@ -42,6 +42,10 @@ static void store3d(uint32_t address,uint32_t value,unsigned bytes)
 static long double ieee3d(uint32_t word)
 { float v; memcpy(&v,&word,4); return v; }
 #include "savage3d_sampling.inc"
+static uint32_t expand_color565_3d(uint32_t p) {
+    unsigned r=p>>11&31,g=p>>5&63,b=p&31;
+    return 0xff000000u|((r<<3|r>>2)<<16)|((g<<2|g>>4)<<8)|(b<<3|b>>2);
+}
 static void raster3d(void)
 {
     CHECK(batch3d[0]==0x800300c8u || batch3d[0]==0x80030008u);
@@ -49,21 +53,27 @@ static void raster3d(void)
     uint32_t zctrl=m.reg[0x485d4/4],local=m.reg[0x48584/4];
     bool depth_enabled=zctrl&0x20u,depth_write=local&0x08000000u;
     unsigned comparison=zctrl&7u;
-    CHECK((zctrl&~0x27u)==0x80000000u); /* integer D16, W-to-Z */
+    CHECK((zctrl&~0x00ff0027u)==0x80000000u); /* integer D16, W-to-Z */
     CHECK(m.reg[0x48578/4]==0); /* not the actual local-control address */
     CHECK(!(local&~0xde000077u) && (local&0xc4000000u)==0xc4000000u);
     CHECK(!depth_write || depth_enabled);
     CHECK(m.reg[0x485e8/4]==0x00001818u && m.reg[0x485ec/4]==0x4f000000u);
     uint32_t dc=m.reg[0x485dc/4],zc=m.reg[0x485d8/4],td=m.reg[0x485a8/4];
+    bool d24=zc&0x80000000u;
+    unsigned zbytes=d24 ? 4 : 2,zmax=d24 ? 16777215u : 65535u;
+    uint32_t stencil=m.reg[0x485d0/4];
+    bool stencil_enabled=stencil&8u;
+    CHECK(!stencil_enabled || (d24 && depth_enabled));
     bool textured=td&0x02000000u,second=td&0x04000000u;
     CHECK(second==(stride==9));
     CHECK(!!(td&0x01000000u)==second); /* required texture blending loop */
     uint32_t cb=((dc>>8)&0x3fff)*2048,zb=(zc&0x3fff)*2048;
     unsigned cp=(dc&127)*128,zp=((zc>>25)&63)*128;
+    bool color565=!(dc&128u); unsigned colorbytes=color565 ? 2 : 4;
     uint32_t scissor=m.reg[0x485e4/4];
     unsigned width=(scissor&0x7ff)+1,height=((scissor>>12)&0xfff)+1;
-    CHECK(width<=1024 && height<=1024 && cp==((width*4+127)&~127u));
-    CHECK(!depth_enabled || zp==((width*2+127)&~127u));
+    CHECK(width<=1024 && height<=1024 && cp==((width*colorbytes+127)&~127u));
+    CHECK(!depth_enabled || zp==((width*zbytes+127)&~127u));
     long double x[3],y[3],z[3],u[3],v[3],u1[3],v1[3],rw[3]; uint32_t colors[3];
     for (unsigned i=0;i<3;i++) {
         const uint32_t *p=batch3d+1+i*stride;
@@ -98,9 +108,13 @@ static void raster3d(void)
         long double b=(x[2]-px)*(y[0]-py)-(y[2]-py)*(x[0]-px);
         long double c=(x[0]-px)*(y[1]-py)-(y[0]-py)*(x[1]-px);
         if (a<0 || b<0 || c<0 || (!a && !inclusive[0]) || (!b && !inclusive[1]) || (!c && !inclusive[2])) continue;
-        unsigned depth=(unsigned)((a*z[0]+b*z[1]+c*z[2])*65535/area+0.5L);
-        uint32_t da=depth_enabled ? destination3d(zb,zp,2,xx,yy) : 0;
-        if (!dropping3d && depth_enabled && !compare3d(depth,load3d(da,2),comparison)) continue;
+        unsigned depth=(unsigned)((a*z[0]+b*z[1]+c*z[2])*zmax/area+0.5L);
+        uint32_t da=depth_enabled ? destination3d(zb,zp,zbytes,xx,yy) : 0;
+        uint32_t old=depth_enabled ? load3d(da,zbytes) : 0;
+        bool zpass=!depth_enabled || compare3d(depth,old&zmax,comparison);
+        bool spass=!stencil_enabled || compare3d((zctrl>>16&255)&(stencil>>4&255),
+            (old>>24)&(stencil>>4&255),stencil&7);
+        if (!dropping3d && !stencil_enabled && !zpass) continue;
         long double rhw=a*rw[0]+b*rw[1]+c*rw[2];
         uint32_t color=0;
         for (unsigned shift=0;shift<32;shift+=8) {
@@ -134,9 +148,27 @@ static void raster3d(void)
         uint32_t dc1=m.reg[0x485e4/4];
         if ((dc1&0x80000000u) && !compare3d(color>>24,m.reg[0x485e0/4]>>24,dc1>>28&7)) continue;
         CHECK(!(dc1&0x80000000u) || (local&0x02000000u));
-        uint32_t ca=destination3d(cb,cp,4,xx,yy);
-        store3d(ca,blend3d(color,load3d(ca,4),local),4);
-        if (depth_write) store3d(da,depth,2);
+        if (stencil_enabled) {
+            unsigned op=stencil>>(!spass ? 20 : !zpass ? 23 : 26)&7;
+            unsigned value=old>>24;
+            if (op==1) value=0;
+            else if (op==2) value=zctrl>>16&255;
+            else if (op==3 && value<255) value++;
+            else if (op==4 && value) value--;
+            else if (op==5) value^=255;
+            unsigned mask=stencil>>12&255;
+            value=((old>>24)&~mask)|(value&mask);
+            old=(old&0xffffffu)|(value<<24);
+            store3d(da,old,zbytes);
+        }
+        if (!spass || (!dropping3d && !zpass)) continue;
+        uint32_t ca=destination3d(cb,cp,colorbytes,xx,yy);
+        uint32_t dest=load3d(ca,colorbytes);
+        if (color565) dest=expand_color565_3d(dest);
+        color=blend3d(color,dest,local);
+        if (color565) color=((color>>8)&0xf800)|((color>>5)&0x7e0)|((color>>3)&31);
+        store3d(ca,color,colorbytes);
+        if (depth_write) store3d(da,((d24 ? old&0xff000000u : 0)|depth)^(attachment_fault3d==1 ? 0x100u : attachment_fault3d==2 ? 0x1000000u : 0),zbytes);
     }
     draw3d++;
 }
@@ -161,12 +193,14 @@ static void interpret3d(void)
     } else if (cmd==0x4bcc14c0) {
         CHECK(need3d==8 && !batch3d[5] && !batch3d[6]);
         unsigned w=batch3d[7]&65535,h=batch3d[7]>>16;
-        CHECK(batch3d[2]==(0x10200000u|w) && batch3d[4]==(0x11200000u|((w+31)&~31u)));
+        unsigned bytes=(batch3d[2]>>16&255)/8;
+        CHECK((bytes==2 || bytes==4) && batch3d[2]==(0x10000000u|(bytes*8u<<16)|w) &&
+            batch3d[4]==(0x11000000u|(bytes*8u<<16)|(((w*bytes+127)&~127u)/bytes)));
         m.reg[0x8178/4]=batch3d[1]; m.reg[0x817c/4]=batch3d[2];
         m.reg[0x8170/4]=batch3d[3]; m.reg[0x8174/4]=batch3d[4];
         for (unsigned y=0;y<h;y++) for (unsigned x=0;x<w;x++) {
-            uint32_t value=load3d(destination3d(batch3d[3],(batch3d[4]&65535)*4,4,x,y),4);
-            store3d(batch3d[1]+(y*w+x)*4,value^(corruption3d==2 ? 1u : 0u),4);
+            uint32_t value=load3d(destination3d(batch3d[3],(batch3d[4]&65535)*bytes,bytes,x,y),bytes);
+            store3d(batch3d[1]+(y*w+x)*bytes,value^(corruption3d==2 ? 1u : 0u),bytes);
         }
         copy3d++;
     } else if ((cmd==0x800300c8 || cmd==0x80030008)) raster3d();
@@ -432,6 +466,7 @@ int main(int argc,char **argv)
     if (argc==2 && !strcmp(argv[1],"background")) {
         background_suite3d(); background_minimum3d=true; backend3d(0,false);
     }
+    else if (argc==2 && !strcmp(argv[1],"formats")) attachment_suite3d();
     else if (argc==2 && !strcmp(argv[1],"fullsize")) fullsize_suite3d();
     else if (argc==2 && !strcmp(argv[1],"review4")) review4_suite3d();
     else if (argc==2 && !strcmp(argv[1],"shader")) shader_precision3d();

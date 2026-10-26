@@ -20,7 +20,9 @@ static void fullsize_resources3d(struct render3d_service *s,const struct render3
 {
     render3d_init(s,host,42,0,0,(struct render3d_extent){0});
     uint32_t c,handle; FULL_CHECK(!render3d_create_context(s,1,R3D_SOFTWARE,&c));
-    const unsigned kinds[]={R3D_COLOR,R3D_D16,R3D_TEXTURE,R3D_LINEAR_COLOR,R3D_TEXTURE};
+    const unsigned kinds[]={gpu3d.color565_testing ? R3D_COLOR565 : R3D_COLOR,
+        gpu3d.depth24_testing ? R3D_D24S8 : R3D_D16,R3D_TEXTURE,
+        gpu3d.color565_testing ? R3D_LINEAR565 : R3D_LINEAR_COLOR,R3D_TEXTURE};
     unsigned at=gpu3d.heap.first,tex=gpu3d.heap.first+gpu3d.heap.bytes-gpu3d.texture_bytes;
     for (unsigned i=0;i<5;i++) {
         if (kinds[i]==R3D_TEXTURE) {
@@ -321,7 +323,7 @@ static void large_batch3d(void)
     render3d_init(&reference3d,&host,42,0,0,(struct render3d_extent){0});
     struct render3d_service *services[]={&scratch3d,&reference3d};
     uint32_t context[2],handles[2][4];
-    const unsigned kinds[]={R3D_COLOR,R3D_D16,R3D_TEXTURE,R3D_LINEAR_COLOR};
+    const unsigned kinds[]={R3D_COLOR,gpu3d.depth24_testing ? R3D_D24S8 : R3D_D16,R3D_TEXTURE,R3D_LINEAR_COLOR};
     uint32_t pixels[64*64];
     for (unsigned i=0;i<64*64;i++) pixels[i]=0xff000000u|((i&63)*3<<16)|((i/64)*3<<8)|96;
     for (unsigned side=0;side<2;side++) {
@@ -411,6 +413,121 @@ static void large_batch3d(void)
     FULL_CHECK(!render3d_close(&scratch3d) && !render3d_close(&reference3d) && !allocations3d); finish();
 }
 #include "savage3d_shader.inc"
+static unsigned attachment_phases3d;
+static void attachment_phase3d(void *ctx,const char *name,unsigned index,bool begin,int error)
+{
+    (void)ctx; (void)error;
+    FULL_CHECK(!locks && !drawing && !accel_inflight);
+    FULL_CHECK(!strcmp(name,gpu3d.depth24_testing ? "d24s8" : "rgb565"));
+    if (begin) { FULL_CHECK(index==attachment_phases3d+1); attachment_phases3d++; }
+}
+/* f7-13 review P1: an ordinary job's partial D24/S8 clear runs in <=128-pixel
+ * windows that restore AGD/tile before the presenter mutex is yielded, keep
+ * the job's drawing claim and stop at one absolute deadline. */
+static unsigned clear_yields3d;
+static uint32_t clear_tile3d,clear_agd3d;
+static void clear_yield3d(void *ctx)
+{
+    (void)ctx;
+    FULL_CHECK(locks==1 && m.reg[0x48c40/4]==clear_tile3d && m.reg[0x850c/4]==clear_agd3d);
+    unsigned before=preempt_calls;
+    fbdev_render3d_yield(); /* fixture hook: no lock, drawing claim kept, mode change refused */
+    FULL_CHECK(preempt_calls==before+1 && locks==1 && drawing==PRESENT_BUSY && accel_inflight);
+    clear_yields3d++;
+}
+static int clear_job3d(unsigned flags,uint32_t depth,unsigned mask,unsigned value)
+{
+    struct render3d_resource *r[R3D_REFS]={&scratch3d.contexts[0].resources[0],&scratch3d.contexts[0].resources[1]};
+    struct render3d_request *q=(void *)scratch3d.ring[0];
+    memset(q,0,sizeof(*q)); q->flags=flags; q->clear_depth=depth;
+    q->stencil.write_mask=mask; q->stencil.clear=value;
+    const struct render3d_backend *b=savage3d_backend();
+    FULL_CHECK(!b->validate(&gpu3d,q,r));
+    uint32_t tile=m.reg[0x48c40/4],agd=m.reg[0x850c/4];
+    clear_tile3d=tile; clear_agd3d=agd|0x8000u; clear_yields3d=0;
+    FULL_CHECK(!b->enter(&gpu3d));
+    int e=b->execute(&gpu3d,q,r);
+    FULL_CHECK(!b->idle(&gpu3d)); b->leave(&gpu3d);
+    FULL_CHECK(!locks && !drawing && !accel_inflight && !gpu3d.lost && !test_engine.quarantined);
+    FULL_CHECK(m.reg[0x48c40/4]==tile && m.reg[0x850c/4]==agd); /* job restoration */
+    return e;
+}
+static void runtime_partial3d(unsigned w,unsigned h)
+{
+    gpu3d.job_yield=clear_yield3d;
+    const uint32_t *z=scratch3d.contexts[0].resources[1].shadow;
+    unsigned windows=h*((w+127)/128);
+    /* Engine rectangle for both components; then depth only; then four
+     * stencil bits. Readback publishes complete canonical attachments. */
+    FULL_CHECK(!clear_job3d(R3D_CLEAR_DEPTH|R3D_CLEAR_STENCIL,0x111111,255,0xa5) && !clear_yields3d);
+    for (unsigned i=0;i<w*h;i++) FULL_CHECK(z[i]==0xa5111111u);
+    uint64_t start=m.us; unsigned reads=memory3d;
+    FULL_CHECK(!clear_job3d(R3D_CLEAR_DEPTH,0x345678,0,0) && clear_yields3d==windows-1);
+    for (unsigned i=0;i<w*h;i++) FULL_CHECK(z[i]==0xa5345678u);
+    FULL_CHECK(!clear_job3d(R3D_CLEAR_STENCIL,0,0x0f,0x5a) && clear_yields3d==windows-1);
+    for (unsigned i=0;i<w*h;i++) FULL_CHECK(z[i]==0xaa345678u);
+    FULL_CHECK(memory3d-reads>=4u*w*h);
+    /* Slow bus: every window stays below 1 ms, the whole surface would take
+     * >2 s. The absolute deadline refuses at 20 ms, restored and unquarantined. */
+    read_delay3d=7; start=m.us;
+    int e=clear_job3d(R3D_CLEAR_DEPTH,0x222222,0,0);
+    /* Both resident attachments' 8 KiB guards are verified before the clear. */
+    uint64_t elapsed=m.us-start-2u*(8192u/4u)*7u; read_delay3d=0;
+    FULL_CHECK(e==-ETIMEDOUT && elapsed>=SAVAGE3D_PARTIAL_CLEAR_US && elapsed<SAVAGE3D_PARTIAL_CLEAR_US+2000);
+    FULL_CHECK(clear_yields3d>=SAVAGE3D_PARTIAL_CLEAR_US/(128*7)-1 && clear_yields3d<=SAVAGE3D_PARTIAL_CLEAR_US/(128*7)+1);
+    printf("runtime partial D24S8 clear %ux%u: windows=%u yields=%u, slow bus refused after %llu us yields=%u, restored, no quarantine PASS\n",
+        w,h,windows,windows-1,(unsigned long long)elapsed,clear_yields3d);
+    gpu3d.job_yield=0;
+}
+static void attachments3d(unsigned w,unsigned h,bool d24,unsigned fault,bool paced)
+{
+    prepare(32); m.reg[0x48578/4]=0; m.exact_clock=true;
+    memset(ram3d,0x7a,sizeof(ram3d));
+    draw3d=copy3d=writes3d=memory3d=count3d=corruption3d=0;
+    dropping3d=bad_restore3d=false; attachment_fault3d=0;
+    gpu3d=(struct savage3d_device){.engine=&test_engine,.heap={0x800000,sizeof(ram3d)},.generation=42,
+        .mode_width=w,.mode_height=h,.texture_bytes=480*1024,.memory={0,memory_read3d,memory_write3d,lock3d,unlock3d},
+        .qualified=true,.fullsize_qualified=true,.perspective_qualified=true,.fullsize_testing=true,
+        .depth24_testing=d24,.color565_testing=!d24};
+    test_engine.render3d_qualified=true; test_engine.io.write32=write_engine3d;
+    struct render3d_host host={0,allocate3d,free3d,clock3d,0};
+    fullsize_resources3d(&scratch3d,&host,w,h,true);
+    fullsize_resources3d(&reference3d,&host,w,h,false);
+    gpu3d.fullsize_testing=false; gpu3d.consumer=&scratch3d;
+    attachment_fault3d=fault<=2 ? fault : 0;
+    if (fault==3) corruption3d=1;
+    if (fault==4) corruption3d=2;
+    if (fault==5) bad_restore3d=true;
+    if (fault==6) read_delay3d=9;
+    qualification_yields3d=attachment_phases3d=0;
+    if (paced) { gpu3d.probe_checkpoint=qualification_checkpoint3d; gpu3d.probe_phase=attachment_phase3d; }
+    int e=d24 ? savage3d_depth24_probe(&gpu3d,&reference3d) : savage3d_color565_probe(&gpu3d,&reference3d);
+    gpu3d.probe_checkpoint=0; gpu3d.probe_phase=0;
+    if (e && !fault) fprintf(stderr,"attachment d24=%u %ux%u paced=%u error=%d expected=%08x actual=%08x zerror=%u\n",
+        d24,w,h,paced,e,gpu3d.expected,gpu3d.actual,gpu3d.max_depth_error);
+    FULL_CHECK((e==0)==!fault);
+    FULL_CHECK((d24 ? gpu3d.depth24_qualified : gpu3d.color565_qualified)==!fault);
+    if (fault==1 || fault==2 || fault==4) FULL_CHECK(e==-EILSEQ && !gpu3d.lost && gpu3d.fullsize_qualified);
+    if (fault==3 || fault==5) FULL_CHECK(gpu3d.lost && test_engine.quarantined);
+    if (fault==6) FULL_CHECK(e==-ETIMEDOUT && !gpu3d.lost);
+    /* Paced: one begin/end record per phase and checkpoints with every
+     * window restored and the presenter released (qualification_checkpoint3d). */
+    if (paced && !fault) FULL_CHECK(qualification_yields3d && attachment_phases3d==(d24 ? 34u : 4u));
+    attachment_fault3d=read_delay3d=corruption3d=0; bad_restore3d=false;
+    if (d24 && !fault && !paced && w==640) runtime_partial3d(w,h);
+    FULL_CHECK(!render3d_close(&scratch3d) && !render3d_close(&reference3d) && !allocations3d);
+    finish();
+    printf("attachment format=%s %ux%u fault=%u paced=%u phases=%u checkpoints=%u result=%d PASS\n",
+        d24 ? "D24S8" : "RGB565",w,h,fault,paced,attachment_phases3d,qualification_yields3d,e);
+}
+static void attachment_suite3d(void)
+{
+    attachments3d(640,480,true,0,false); attachments3d(800,600,true,0,false);
+    attachments3d(640,480,false,0,false); attachments3d(1024,768,false,0,false);
+    attachments3d(640,480,true,0,true); attachments3d(800,600,true,0,true);
+    attachments3d(1024,768,false,0,true);
+    for (unsigned fault=1;fault<=6;fault++) { attachments3d(64,64,true,fault,false); attachments3d(64,64,true,fault,true); }
+}
 static void fullsize_suite3d(void)
 {
     fullsize3d(640,480,0); fullsize3d(800,600,0); fullsize3d(1024,768,0);
