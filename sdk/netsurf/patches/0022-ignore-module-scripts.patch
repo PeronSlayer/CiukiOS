@@ -1,0 +1,42 @@
+CiukiOS: ignore modules before context creation or fetch; retain classic scripts.
+
+--- a/netsurf/content/handlers/html/script.c
++++ b/netsurf/content/handlers/html/script.c
+@@ -569,6 +569,18 @@
+ 	dom_string *src, *mimetype;
+ 	dom_hubbub_error err = DOM_HUBBUB_OK;
+ 
++	exc = dom_element_get_attribute(node, corestring_dom_type, &mimetype);
++	if (exc != DOM_NO_ERR || mimetype == NULL) {
++		mimetype = dom_string_ref(corestring_dom_text_javascript);
++	}
++	/* Duktape is a classic ES5.1 engine. Do not fetch or reinterpret a
++	 * module as a classic script, even if its source happens to parse. */
++	if (dom_string_byte_length(mimetype) == 6 &&
++			strncasecmp(dom_string_data(mimetype), "module", 6) == 0) {
++		dom_string_unref(mimetype);
++		return DOM_HUBBUB_OK;
++	}
++
+ 	/* ensure javascript context is available */
+ 	/* We should only ever be here if scripting was enabled for this
+ 	 * content so it's correct to make a javascript context if there
+@@ -581,6 +593,7 @@
+ 		NSLOG(netsurf, INFO, "javascript context %p ", c->jsthread);
+ 		if (c->jsthread == NULL) {
+ 			/* no context and it could not be created, abort */
++			dom_string_unref(mimetype);
+ 			return DOM_HUBBUB_OK;
+ 		}
+ 	}
+@@ -588,10 +601,6 @@
+ 	NSLOG(netsurf, INFO, "content %p parser %p node %p", c, c->parser,
+ 	      node);
+ 
+-	exc = dom_element_get_attribute(node, corestring_dom_type, &mimetype);
+-	if (exc != DOM_NO_ERR || mimetype == NULL) {
+-		mimetype = dom_string_ref(corestring_dom_text_javascript);
+-	}
+ 
+ 	exc = dom_element_get_attribute(node, corestring_dom_src, &src);
+ 	if (exc != DOM_NO_ERR || src == NULL) {
