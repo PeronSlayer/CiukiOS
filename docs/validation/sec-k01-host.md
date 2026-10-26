@@ -1,5 +1,42 @@
 # Credential foundation host validation
 
+## Lead amendment 4: retained link equality
+
+Research rechecked after `date -Is` returned 2026-10-26T15:21:57+01:00.
+Microsoft's [access tokens](https://learn.microsoft.com/en-us/windows/win32/secauthz/access-tokens)
+associate authority with process security context; its
+[cancellation considerations](https://learn.microsoft.com/en-us/windows/win32/fileio/canceling-pending-i-o-operations)
+require observing an operation's outcome rather than assuming a cancellation
+request completes it. The [desktop documentation](https://learn.microsoft.com/en-us/windows/win32/winstation/desktops)
+describes restricted logon presentation. The precise retained-link comparison
+is a CiukiOS contract requirement, not a Windows API compatibility claim.
+
+Repository comparison: each endpoint acquisition allocates a new subject but
+retains the actual endpoint object, originating process subject and generation.
+Compare those retained identities only after validating both leases; numeric
+reference handles, descriptor numbers and copied uid/pid fields cannot establish
+equality. Reject missing/non-endpoint subjects with EACCES and revoked subjects
+with ESRCH. Repeated acquisitions of one live endpoint compare equal, while a
+second link from the same process does not. Keeping the retained objects alive
+prevents allocator reuse from aliasing their identities. No public syscall or
+SDK ABI extension is needed.
+
+`sdk/private/accounts_link.c` supplies `ciuki_accounts_same_link` with the exact
+`acct_kernel.same_link` callback type in sec-user-01's `apps/accounts/adapter.h`.
+It forwards the two opaque retained handles through a sealed binding; that
+binding must resolve both in the caller's owned lease table before invoking the
+kernel primitive. It never compares handles or snapshot metadata, casts a
+userspace value to a kernel pointer, or falls back to QUERY_PEER. Missing binding
+fails EIO. This is private service glue, not an installed SDK header or a new
+syscall. Runtime lease transport remains part of the lead's existing service
+adapter integration; no endpoint is published here.
+
+H01's optional `CIUKI_ACCOUNTS_ADAPTER_INCLUDE` path compiles this source against
+the actual account branch header and assigns the callback to `acct_kernel`.
+Its owned-table boundary calls the production retained-subject comparison.
+The ordinary H01 path requires no external checkout and tests all five mandated
+kernel cases. Neither path disables leak detection.
+
 ## Lead amendment 3: pending service endpoint lifetime
 
 Rechecked Microsoft's [cancellation considerations](https://learn.microsoft.com/en-us/windows/win32/fileio/canceling-pending-i-o-operations),

@@ -61,6 +61,10 @@ struct process *security_session_desktop(uint32_t session);
 bool security_roles_active(void); /* sticky after first LOGON reservation */
 int security_service_allowed(const struct process *client, uint32_t service);
 int security_subject_acquire_endpoint(struct process *, int32_t, uint32_t, struct security_subject **);
+/* Private service seam: 1 for the same live endpoint/process lease, 0 for
+ * different live links, -EACCES for missing/non-link subjects, -ESRCH revoked.
+ * Separate acquisitions may have different reference addresses. */
+int security_subject_same_link(const struct security_subject *, const struct security_subject *);
 /* action = (service << 16) | operation; scope = required peer session (0 = any).
  * This checks transport liveness and role routes; servers additionally check
  * account/object permissions under this retained credential. */

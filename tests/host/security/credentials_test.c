@@ -3,6 +3,19 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #define CIUKI_DESKTOP_HOST_MAIN security_unused_desktop_main
 #include "../proc/desktop_test.c"
+#ifdef CIUKI_ACCOUNTS_LINK_ADAPTER
+#include "adapter.h"
+#include "accounts_link.h"
+/* The host boundary resolves opaque handles in an owned table. Production
+ * binding must do the same across its sealed transport, never pointer casts. */
+struct account_link_fixture { struct security_subject *subjects[3]; };
+static int account_link_compare(void *context,uintptr_t a,uintptr_t b)
+{
+    struct account_link_fixture *f=context;
+    if (a<41 || a>43 || b<41 || b>43) return -EACCES;
+    return security_subject_same_link(f->subjects[a-41],f->subjects[b-41]);
+}
+#endif
 
 static bool owner_available;
 static unsigned owner_calls, image_opens;
@@ -698,6 +711,95 @@ static int cancel_security(struct proc_thread *t,const struct ciuki_security_lin
         .endpoint_generation=l->endpoint_generation,.request_id_lo=(uint32_t)id,.request_id_hi=(uint32_t)(id>>32)};
     return extended_call(t,14,0,&in,0,64);
 }
+static struct security_subject *retain_security(struct proc_thread *server,
+                                                const struct ciuki_security_link *link)
+{
+    struct security_subject *subject=0;
+    CHECK(!security_subject_acquire_endpoint(server->process,link->endpoint_fd,
+                                             link->endpoint_generation,&subject));
+    CHECK(subject); return subject;
+}
+static void test_review_same_link(struct proc_thread *logon,struct proc_thread *at)
+{
+    unsigned heap_before=heap_blocks,pages_before=pages_used;
+    struct process *account=at->process;
+    struct ciuki_security_link client=connect_security(logon,2),server=accept_security(at,2);
+    struct security_subject *a=retain_security(at,&server),*b=retain_security(at,&server);
+    CHECK(a!=b && security_subject_same_link(a,b)==1 && security_subject_same_link(b,a)==1);
+    CHECK(security_subject_same_link(a,a)==1);
+    CHECK(security_subject_same_link(0,a)==-EACCES && security_subject_same_link(a,0)==-EACCES);
+    CHECK(security_subject_same_link(account->subject,a)==-EACCES);
+    CHECK(security_subject_same_link(account->subject,account->subject)==-EACCES);
+    int duplicate=desktop_dup(account,server.endpoint_fd,0,false,0); CHECK(duplicate>=0);
+    struct ciuki_security_link alias=server; alias.endpoint_fd=duplicate;
+    struct security_subject *dup=retain_security(at,&alias);
+    CHECK(dup!=a && security_subject_same_link(a,dup)==1);
+    CHECK(!desktop_close(account,duplicate)); security_subject_put(dup);
+    struct ciuki_security_link other_client=connect_security(logon,2),other_server=accept_security(at,2);
+    struct security_subject *other=retain_security(at,&other_server);
+    CHECK(!memcmp(security_subject_credential(a),security_subject_credential(other),64));
+    CHECK(security_subject_same_link(a,other)==0 && security_subject_same_link(other,a)==0);
+#ifdef CIUKI_ACCOUNTS_LINK_ADAPTER
+    struct account_link_fixture fixture={.subjects={a,b,other}};
+    struct ciuki_accounts_link_binding binding={.context=&fixture,.same_link=account_link_compare};
+    struct acct_kernel adapter={.ctx=&binding,.same_link=ciuki_accounts_same_link};
+    struct acct_subject aa={.retained=41,.uid=1},ab={.retained=42,.uid=2},ac={.retained=43,.uid=1};
+    CHECK(adapter.same_link(adapter.ctx,&aa,&ab)==1 && adapter.same_link(adapter.ctx,&aa,&aa)==1);
+    CHECK(adapter.same_link(adapter.ctx,&aa,&ac)==0);
+    CHECK(adapter.same_link(0,&aa,&ab)==-EIO);
+    struct ciuki_accounts_link_binding missing={0}; CHECK(adapter.same_link(&missing,&aa,&ab)==-EIO);
+    CHECK(adapter.same_link(adapter.ctx,0,&ab)==-EACCES);
+    ab.retained=0; CHECK(adapter.same_link(adapter.ctx,&aa,&ab)==-EACCES);
+    ab.retained=99; CHECK(adapter.same_link(adapter.ctx,&ab,&ab)==-EACCES);
+    ab.retained=42;
+#endif
+    struct security_subject *reverse=retain_security(logon,&client);
+    CHECK(security_subject_same_link(a,reverse)==0); security_subject_put(reverse);
+    CHECK(!desktop_close(logon->process,client.endpoint_fd));
+    CHECK(security_subject_same_link(a,b)==-ESRCH && security_subject_same_link(a,a)==-ESRCH);
+#ifdef CIUKI_ACCOUNTS_LINK_ADAPTER
+    CHECK(adapter.same_link(adapter.ctx,&aa,&ab)==-ESRCH);
+    CHECK(adapter.same_link(adapter.ctx,&aa,&aa)==-ESRCH);
+    CHECK(adapter.same_link(adapter.ctx,&ab,&ac)==-ESRCH);
+    puts("H01 review 4 adapter: actual ACCOUNT callback, distinct handles, forged snapshots, missing binding, invalid handles and revocation PASS");
+#endif
+    CHECK(!desktop_close(account,server.endpoint_fd));
+    struct ciuki_security_link reused_client=connect_security(logon,2),reused_server=accept_security(at,2);
+    CHECK(reused_client.endpoint_fd==client.endpoint_fd && reused_server.endpoint_fd==server.endpoint_fd);
+    CHECK(reused_server.endpoint_generation!=server.endpoint_generation);
+    struct security_subject *reused=retain_security(at,&reused_server);
+    CHECK(security_subject_same_link(a,reused)==-ESRCH && security_subject_same_link(reused,a)==-ESRCH);
+    CHECK(security_subject_same_link(reused,reused)==1 && security_subject_same_link(reused,other)==0);
+    security_subject_put(a); security_subject_put(b); security_subject_put(other); security_subject_put(reused);
+    CHECK(!desktop_close(logon->process,other_client.endpoint_fd));
+    CHECK(!desktop_close(account,other_server.endpoint_fd));
+    CHECK(!desktop_close(logon->process,reused_client.endpoint_fd));
+    CHECK(!desktop_close(account,reused_server.endpoint_fd));
+
+    struct process *dying; struct proc_thread *dt=make_process(logon->process,&dying);
+    uint32_t pid=dying->pid,generation=security_process_generation(dying);
+    connect_security(dt,2); server=accept_security(at,2);
+    a=retain_security(at,&server); b=retain_security(at,&server);
+    CHECK(security_subject_same_link(a,b)==1);
+    stop_collect(dying);
+    CHECK(security_subject_same_link(a,b)==-ESRCH);
+    CHECK(!desktop_close(account,server.endpoint_fd));
+    /* Production PIDs are monotonic. Force numeric reuse at the fixture
+     * boundary too, so equality must still honor the retained incarnation. */
+    uint32_t saved_next_pid=next_pid; next_pid=pid;
+    struct process *replacement; dt=make_process(logon->process,&replacement); next_pid=saved_next_pid;
+    CHECK(replacement->pid==pid && security_process_generation(replacement)>generation);
+    connect_security(dt,2); reused_server=accept_security(at,2);
+    CHECK(reused_server.endpoint_fd==server.endpoint_fd);
+    reused=retain_security(at,&reused_server);
+    CHECK(security_subject_pid(a)==security_subject_pid(reused));
+    CHECK(security_subject_same_link(a,reused)==-ESRCH && security_subject_same_link(reused,a)==-ESRCH);
+    CHECK(security_subject_same_link(reused,reused)==1);
+    security_subject_put(a); security_subject_put(b); security_subject_put(reused);
+    stop_collect(replacement); CHECK(!desktop_close(account,reused_server.endpoint_fd));
+    CHECK(heap_blocks==heap_before && pages_used==pages_before);
+    puts("H01 review 4: separate acquisitions and dup match; different links, revoked leases, reused descriptors and process generations cannot alias PASS");
+}
 static void test_review_service_accept(struct proc_thread *logon,struct proc_thread *at)
 {
     struct process *account=at->process;
@@ -785,6 +887,7 @@ static void test_amendment_service(struct proc_thread *logon)
 {
     struct process *account;struct proc_thread *at=role_fixture(3,&account);
     struct process *ui;struct proc_thread *uit=role_fixture(2,&ui);
+    test_review_same_link(logon,at);
     test_review_service_accept(logon,at);
     test_review_service_disconnect(logon,at);
     for (uint32_t operation=4;operation<=11;operation++) if (operation!=7) {

@@ -466,6 +466,19 @@ int security_subject_acquire_endpoint(struct process *p, int32_t fd, uint32_t ge
     *out=s;
     return 0;
 }
+int security_subject_same_link(const struct security_subject *a, const struct security_subject *b)
+{
+    if (!a || !b || !a->origin || !b->origin || !a->peer.endpoint || !b->peer.endpoint)
+        return -EACCES;
+    /* The leases pin both endpoint and origin, so neither identity can be
+     * recycled beneath this comparison. No allocation, wait or callback. */
+    if (!security_subject_live(a) || !security_subject_live(b)) return -ESRCH;
+    return a->origin == b->origin && a->pid == b->pid &&
+        a->process_generation == b->process_generation &&
+        a->role_generation == b->role_generation &&
+        a->peer.endpoint == b->peer.endpoint && a->peer.subject == b->peer.subject &&
+        a->peer.generation == b->peer.generation;
+}
 int security_subject_check(const struct security_subject *s, uint32_t action, uint32_t scope)
 {
     if (!s) return -EACCES;

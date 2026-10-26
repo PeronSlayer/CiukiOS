@@ -75,11 +75,20 @@ static inline int ciuki_error(uint32_t r) { return r >= (uint32_t)-4095 ? -(int3
         out.mkdir(parents=True, exist_ok=True)
         program = out / 'credentials'
         env = dict(os.environ, TMPDIR=str(out))
+        adapter_flags = []
+        if os.environ.get('CIUKI_ACCOUNTS_ADAPTER_INCLUDE'):
+            adapter_flags = [
+                '-DCIUKI_ACCOUNTS_LINK_ADAPTER',
+                '-I', os.environ['CIUKI_ACCOUNTS_ADAPTER_INCLUDE'],
+                '-I', str(ROOT / 'sdk/private'),
+                str(ROOT / 'sdk/private/accounts_link.c'),
+            ]
         subprocess.run([
             'clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
             '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
             '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
             '-I', str(ROOT / 'src/kernel/include'),
+            *adapter_flags,
             str(ROOT / 'tests/host/security/credentials_test.c'),
             str(ROOT / 'tests/host/proc/signal_legacy.c'),
             str(ROOT / 'src/kernel/lib/sha256.c'),
@@ -94,6 +103,9 @@ static inline int ciuki_error(uint32_t r) { return r >= (uint32_t)-4095 ? -(int3
         self.assertIn('H01 credentials: PASS', result.stdout)
         self.assertIn('H01 review 3 (a):', result.stdout)
         self.assertIn('H01 review 3 (b):', result.stdout)
+        self.assertIn('H01 review 4:', result.stdout)
+        if adapter_flags:
+            self.assertIn('H01 review 4 adapter:', result.stdout)
 
 
 if __name__ == '__main__':
