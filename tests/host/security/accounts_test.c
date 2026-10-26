@@ -110,7 +110,7 @@ static void migration(void)
     b[70] ^= 1; assert(acct_import_g32(b, n, &options, &imported, maps, &count) == -EIO); b[70] ^= 1;
     assert(acct_import_g32(b, n - 1, &options, &imported, maps, &count) == -EIO);
     old.count = 0; n = users_encode(&old, b, sizeof(b));
-    assert(acct_import_g32(b, n, &options, &imported, maps, &count) == -ENODATA);
+    assert(acct_import_g32(b, n, &options, &imported, maps, &count) == -ENOENT);
     old.count = 16; old.next_id = 1001;
     for (unsigned i = 0; i < 16; ++i) {
         old.records[i] = old.records[0]; old.records[i].id = i == 15 ? 1000 : 1 + i;

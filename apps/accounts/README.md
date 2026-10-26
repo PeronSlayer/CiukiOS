@@ -1,15 +1,60 @@
 # SYSTEM account service core
 
-This private service implements sec-user-01 through Lead amendment 3. It installs
-no runtime endpoint and leaves G32 desktop logon unchanged. Link `crypto.c`,
-`codec.c`, `owner.c`, `bootstrap.c`, `protocol.c`, `store.c`, `service.c`,
-`migration.c`, `persist.c`, `results.c`, `auth.c`, `enrollment.c`, `manifest.c`,
-`checkpoint.c`, `logon.c`, repository SHA-256 and G32's read-only decoder.
-No source is vendored or included through a `.c` include.
+This private service implements sec-user-01 through Lead amendment 3. The core
+links `crypto.c`, `codec.c`, `owner.c`, `bootstrap.c`, `protocol.c`, `store.c`,
+`service.c`, `migration.c`, `persist.c`, `results.c`, `auth.c`, `enrollment.c`,
+`manifest.c`, `checkpoint.c`, `logon.c`, repository SHA-256 and G32's read-only
+decoder. No source is vendored or included through a `.c` include.
 
 `acct_service_open(..., host_test=0)` requires real sealed kernel, OWNER and
 protected storage adapters. Only sealed boot code supplies these tables; host
 tests explicitly select test mode. No fake endpoint is installed at runtime.
+
+## Image binding (sec-int-01)
+
+`build_accounts.py` links the core with `kernel_adapter.c`, `server.c`,
+`kernel_sys_ciuki.c`, `owner_interim.c`, `storage_posix.c`, `main.c` and the
+private `sdk/private/accounts_link.c` into `/System/Services/accounts`, the
+kernel's fixed ACCOUNT role image. PID 1 starts it from the sealed manifest and
+respawns it with a fresh role generation; `main.c` never exits on its own.
+G32 desktop logon and the interim uid-1000 desktop are unchanged.
+
+- `kernel_adapter.c` binds every `acct_kernel` callback to call 101 and the
+  kernel service channels. The lease is QUERY_SELF (SYSTEM, session 0) plus a
+  self CONNECT to ACCOUNTS whose server must be this process with the ACCOUNT
+  role; Safe Mode is this start's kernel boot flag and an unreadable flag fails
+  the lease. A retained subject is a lease on an accepted endpoint descriptor
+  kept open until its last lease and exchange are gone (retirement is deferred
+  until then), revalidated through QUERY_PEER generation equality. `same_link`
+  (`ciuki_accounts_same_link`, decision u01-D1) compares the kernel's
+  never-reused pair generation, peer incarnation and service of two live
+  leases, never the handles. `active_uid` and `enrollment_authorized` scan the
+  issued session ids with SESSION_QUERY; a live session's owner is the uid of
+  its live processes (QUERY_PROCESS), and a live session without a process
+  counts as busy for every uid. `auth_binding` checks the retained LOGON
+  instance, both role generations and, for UNLOCK, an ACTIVE session whose
+  owner becomes the locked uid; console/authentication epochs and the UI->LOGON
+  generation are LOGON's attestation (the kernel exposes them to LOGON only).
+  `gate_state` is LOGON-only (EPERM); `session_lock` is SECURE_ENTER(LOCK),
+  which the kernel grants to LOGON only. `auth_outcome` sends AUTH_OUTCOME=1 on
+  the ACCOUNT->LOGON link and waits up to 5000 ms for LOGON's acknowledgment.
+- `server.c` accepts AUTH/ACCOUNTS links, feeds complete kernel-delivered
+  requests to `acct_frame`, answers requests it cannot admit (EIO while the
+  service is closed) with a status-only CSC1 reply, retires revoked links,
+  retries a refused open every 30 s and closes/reopens after a storage fault.
+  CANCEL is a client operation; the server drops partial exchanges with
+  `acct_transport_drop` instead.
+- `owner_interim.c` stands in for sec-k02 (decision u01-D2): every owner-store
+  operation, `root_occupied` included, returns ENOSYS, so a provisioned store
+  never opens and no owner transaction is published.
+- `storage_posix.c` stores the protected files below `/System/Security`;
+  absolute names must lie below it (the OWNER staging tree) and get their
+  missing directories created; barriers commit the base and every changed
+  directory; rename never replaces.
+
+`tests/host/security/test_account_adapter.py` runs this binding against the
+kernel host harness (call 101 through `proc_syscall`, kernel channels/sessions,
+LOGON and LOGON_UI as registered roles, a LOGON acknowledgment responder).
 
 `adapter.h` follows the frozen call-101 operations 8..14 and 64-byte link record.
 Retained peer `role_generation` identifies the remote registered role instance;
@@ -23,7 +68,8 @@ revocation generation. Registration and all authority fds remain nontransferable
 The required private `same_link(ctx, a, b)` adapter returns 1 only when both
 retained subjects denote the same live link and process/revocation generations,
 0 for different links and negative errno on failure. It must consult the kernel
-retained-subject identity; comparing opaque reference handles is insufficient.
+link identity (see Image binding above); comparing opaque reference handles is
+insufficient.
 Both ACCOUNT verification and LOGON submission use this check, including when
 separate acquisitions produce different handles. Missing bindings refuse open.
 

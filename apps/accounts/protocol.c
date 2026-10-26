@@ -152,6 +152,19 @@ int acct_transport_cancel(struct acct_transport *t, struct acct_service *s, int 
     }
     return result;
 }
+/* Server-side teardown of a revoked link: forget its partial exchanges and
+ * replay high water. CANCEL is a client operation; the kernel refuses it on
+ * the server end, so this never calls service_link. */
+void acct_transport_drop(struct acct_transport *t, struct acct_service *s, int fd)
+{
+    if(!t || !s) return;
+    for(unsigned i=0;i<8;++i) {
+        struct acct_exchange *x=&t->exchanges[i];
+        if(x->endpoint!=fd) continue;
+        if(x->occupied) drop(s,x);
+        memset(x,0,sizeof(*x));
+    }
+}
 int acct_frame(struct acct_transport *t, struct acct_service *s, int fd, const void *v, size_t n, struct acct_response *out)
 {
     if(!t || !s || !v || n<64 || n>256) return -EINVAL;

@@ -392,7 +392,7 @@ static int execute(struct acct_service *s, struct acct_job *job, struct acct_res
     }
     if(authentication(q->operation)) return acct_auth_execute(s,job,out);
     if(q->operation==ACCT_LIST && !s->available) {
-        if(!s->enrollment.generation) return -ENODATA;
+        if(!s->enrollment.generation) return -ENOENT; /* no catalogue yet (ENODATA is outside the ABI errno set) */
         out->count=s->enrollment.draft.count; out->generation=s->enrollment.generation;
         for(unsigned i=0;i<out->count;++i) {
             const struct acct_record *r=&s->enrollment.draft.records[i];

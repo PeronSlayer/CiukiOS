@@ -18,6 +18,9 @@ struct workspace {
     struct acct_owner_reply r;
     struct acct_db next;
     struct acct_db current;
+    uint8_t manifest[ACCT_MANIFEST_MAX];
+    uint8_t seed[ACCT_FILE_MAX], enrollment[1464], expected[ACCT_FILE_MAX];
+    struct acct_db recipe;
 };
 static int rm(struct acct_store *s, const char *p)
 { int e=s->io.remove(s->io.ctx,p); return e==-ENOENT?0:e; }
@@ -276,12 +279,14 @@ int acct_store_commit(struct acct_store *s, const struct acct_db *old, const str
     uint8_t probe[1];
     if(!e) { int found=s->io.read(s->io.ctx,TXN,probe,1,&n); if(found!=-ENOENT) e=-EBUSY; }
     if(!e && old) {
-        struct acct_db d; uint8_t b[ACCT_FILE_MAX], expected[ACCT_FILE_MAX]; size_t m;
-        e=read_db(s,DB,b,&d,&n);
-        if(!e) e=acct_encode(old,0,expected,sizeof(expected),&m);
+        /* The workspace's current/expected records serve as scratch here;
+         * both are rewritten before any later use and wiped by finish. */
+        struct acct_db *d=&w->current; uint8_t *b=w->current_bytes, *expected=w->expected; size_t m;
+        e=read_db(s,DB,b,d,&n);
+        if(!e) e=acct_encode(old,0,expected,ACCT_FILE_MAX,&m);
         if(!e && (n!=m || memcmp(b,expected,n))) e=-EAGAIN;
         if(!e) memcpy(w->intent+32,b+64,32);
-        acct_wipe(&d,sizeof(d)); acct_wipe(b,sizeof(b)); acct_wipe(expected,sizeof(expected));
+        acct_wipe(d,sizeof(*d)); acct_wipe(b,ACCT_FILE_MAX); acct_wipe(expected,ACCT_FILE_MAX);
     }
     if(!e && old) e=acct_owner_checkpoint(s,old,0);
     if(!e) {
@@ -317,8 +322,8 @@ int acct_store_commit(struct acct_store *s, const struct acct_db *old, const str
         }
     }
     if(!e) {
-        uint8_t manifest[ACCT_MANIFEST_MAX]; size_t mn=0; char path[128];
-        e=s->owner.stage(s->owner.ctx,&w->q,manifest,sizeof(manifest),&mn);
+        uint8_t *manifest=w->manifest; size_t mn=0; char path[128];
+        e=s->owner.stage(s->owner.ctx,&w->q,manifest,ACCT_MANIFEST_MAX,&mn);
         if(!e) e=acct_manifest_validate(&w->q,manifest,mn);
         for(unsigned i=0;!e && i<w->q.count;++i) {
             uint8_t actual_tree[32]; e=s->owner.tree_digest(s->owner.ctx,w->q.transaction,w->q.bindings[i].uid,actual_tree);
@@ -330,7 +335,7 @@ int acct_store_commit(struct acct_store *s, const struct acct_db *old, const str
         snprintf(path,sizeof(path),"/System/Security/Staging/g%016llx/manifest",(unsigned long long)w->q.transaction);
         if(!e) e=durable(s,path,manifest,mn);
         if(!e) sha256(manifest,mn,w->q.manifest_digest);
-        acct_wipe(manifest,sizeof(manifest));
+        acct_wipe(manifest,ACCT_MANIFEST_MAX);
     }
     if(!e) {
         sha256(w->bytes,w->db_bytes,w->q.target_digest);
@@ -353,14 +358,15 @@ int acct_store_bootstrap(struct acct_store *s, struct acct_db *d)
 {
     struct acct_bootstrap b; int e=acct_boot_read(s,&b); if(e) return e;
     if(!d || b.state!=ACCT_UNPROVISIONED || b.origin!=d->origin || b.volume!=s->volume) return -EIO;
-    uint8_t seed[ACCT_FILE_MAX], digest[32]; size_t n; struct acct_db decoded;
-    e=s->io.read(s->io.ctx,"provision.seed",seed,sizeof(seed),&n);
-    if(!e) e=acct_decode(&decoded,1,seed,n);
-    if(!e) { sha256(seed,n,digest); if(memcmp(digest,b.seed_digest,32) || decoded.origin!=b.origin) e=-EIO; }
+    struct workspace *w=alloc(s); if(!w) return -ENOMEM;
+    uint8_t digest[32]; size_t n;
+    e=s->io.read(s->io.ctx,"provision.seed",w->seed,ACCT_FILE_MAX,&n);
+    if(!e) e=acct_decode(&w->recipe,1,w->seed,n);
+    if(!e) { sha256(w->seed,n,digest); if(memcmp(digest,b.seed_digest,32) || w->recipe.origin!=b.origin) e=-EIO; }
     if(!e) e=watermarks(s,d->sid,0,0,0);
     if(!e && s->high_generation) e=-EIO; /* evidence of any prior reservation is not fresh */
     if(!e) { d->generation=1; e=acct_store_commit(s,NULL,d,NULL,0); }
-    acct_wipe(seed,sizeof(seed)); acct_wipe(&decoded,sizeof(decoded)); return e;
+    return finish(s,w,e);
 }
 int acct_store_recover(struct acct_store *s, struct acct_db *d)
 {
@@ -381,23 +387,21 @@ int acct_store_recover(struct acct_store *s, struct acct_db *d)
     if(b.state==ACCT_UNPROVISIONED) {
         if(e!=-ENOENT) return finish(s,w,-EIO);
         if(b.origin==ACCT_UPGRADE) return finish(s,w,-ENOENT);
-        uint8_t enrollment[1464]; size_t en=0; uint64_t seq=0;
-        int er=acct_blob_read(s,"enrollment.source",enrollment,sizeof(enrollment),&en,&seq);
-        acct_wipe(enrollment,sizeof(enrollment));
+        size_t en=0; uint64_t seq=0;
+        int er=acct_blob_read(s,"enrollment.source",w->enrollment,sizeof(w->enrollment),&en,&seq);
         if(!er) return finish(s,w,-ENOENT);
         if(er!=-ENOENT) return finish(s,w,er);
-        uint8_t seed[ACCT_FILE_MAX], digest[32]; struct acct_db recipe; uint64_t owner_g=0;
-        e=s->io.read(s->io.ctx,"provision.seed",seed,sizeof(seed),&n);
-        if(!e) e=acct_decode(&recipe,1,seed,n);
-        if(!e) { sha256(seed,n,digest); if(memcmp(digest,b.seed_digest,32) || recipe.origin!=b.origin) e=-EIO; }
-        if(!e) { int identity=acct_boot_identity(s,&recipe,0); if(identity && identity!=-ENOENT) e=identity; }
+        uint8_t digest[32]; uint64_t owner_g=0;
+        e=s->io.read(s->io.ctx,"provision.seed",w->seed,ACCT_FILE_MAX,&n);
+        if(!e) e=acct_decode(&w->recipe,1,w->seed,n);
+        if(!e) { sha256(w->seed,n,digest); if(memcmp(digest,b.seed_digest,32) || w->recipe.origin!=b.origin) e=-EIO; }
+        if(!e) { int identity=acct_boot_identity(s,&w->recipe,0); if(identity && identity!=-ENOENT) e=identity; }
         static const char *const absent[]={NEW,BAK,"accounts.alloc.0","accounts.alloc.1"};
         for(unsigned i=0;!e && i<sizeof(absent)/sizeof(*absent);++i) {
             int x=s->io.read(s->io.ctx,absent[i],w->bytes,sizeof(w->bytes),&n); if(x!=-ENOENT) e=-EIO;
         }
         if(!e) e=s->owner.generation(s->owner.ctx,&owner_g);
         if(!e && owner_g) e=-EIO;
-        acct_wipe(&recipe,sizeof(recipe)); acct_wipe(seed,sizeof(seed));
         return finish(s,w,e?(e==-ENOENT?-EIO:e):-ENOENT);
     }
     if(e || b.state!=ACCT_CONSUMED || b.accounts_generation!=w->next.generation ||

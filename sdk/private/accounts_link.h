@@ -5,10 +5,15 @@
 #include <stdint.h>
 struct acct_subject;
 /* Sealed bootstrap supplies this context. The backend resolves both retained
- * handles in the caller's private lease table and invokes
- * security_subject_same_link on the retained kernel subjects. It must never
- * cast a userspace handle to a kernel pointer or compare handles as identity.
- * Missing runtime transport is an error; QUERY_PEER is not a substitute. */
+ * handles in the caller's private lease table; it must never cast a
+ * userspace handle to a kernel pointer or compare handles as identity. A
+ * kernel-resident broker invokes security_subject_same_link on its retained
+ * kernel subjects. The user-space ACCOUNT service (apps/accounts/
+ * kernel_adapter.c, sec-int-01) keeps every leased endpoint descriptor open
+ * and compares the kernel's never-reused per-pair endpoint generation, peer
+ * process incarnation and service after revalidating both links through
+ * QUERY_PEER generation equality; a copied QUERY_PEER credential alone is
+ * not a substitute. A missing binding is an error. */
 struct ciuki_accounts_link_binding {
     void *context;
     int (*same_link)(void *, uintptr_t, uintptr_t);

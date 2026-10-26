@@ -38,6 +38,10 @@ struct acct_db {
     struct acct_record records[ACCT_MAX];
 };
 void acct_wipe(void *, size_t);
+/* Zeroed heap frame for records too large for a 4 KiB target stack frame;
+ * free wipes before returning the memory. */
+void *acct_frame_alloc(const struct acct_kernel *, size_t);
+void acct_frame_free(const struct acct_kernel *, void *, size_t);
 int acct_equal_secret(const void *, const void *, size_t);
 int acct_password_valid(const char *, int allow_short);
 int acct_name_valid(const char *);
@@ -298,6 +302,7 @@ struct acct_transport { struct acct_exchange exchanges[8]; };
 int acct_frame(struct acct_transport *, struct acct_service *, int endpoint,
                const void *, size_t, struct acct_response *);
 int acct_transport_cancel(struct acct_transport *, struct acct_service *, int endpoint);
+void acct_transport_drop(struct acct_transport *, struct acct_service *, int endpoint);
 int acct_autologon_eligible(const struct acct_db *, const struct acct_bootstrap *,
                            int safe_mode, int logged_off, int locked);
 

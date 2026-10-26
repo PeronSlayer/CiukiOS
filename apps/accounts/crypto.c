@@ -69,3 +69,14 @@ int acct_derive(const char *password, const uint8_t salt[16], uint32_t count, ui
     acct_wipe(u, sizeof(u));
     return 0;
 }
+void *acct_frame_alloc(const struct acct_kernel *k, size_t n)
+{
+    void *p = k->allocate(k->ctx, n);
+    if (p) memset(p, 0, n);
+    return p;
+}
+void acct_frame_free(const struct acct_kernel *k, void *p, size_t n)
+{
+    if (!p) return;
+    acct_wipe(p, n); k->deallocate(k->ctx, p, n);
+}

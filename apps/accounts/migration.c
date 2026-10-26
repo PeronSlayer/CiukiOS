@@ -12,7 +12,7 @@ int acct_import_g32(const void *bytes, size_t n, const struct acct_import_option
     struct users_db old = {0};
     int e = users_decode(&old, bytes, n);
     if (e) { acct_wipe(&old, sizeof(old)); return -EIO; }
-    if (!old.count) { acct_wipe(&old, sizeof(old)); return -ENODATA; }
+    if (!old.count) { acct_wipe(&old, sizeof(old)); return -ENOENT; } /* empty G32 store: nothing to import */
     for (unsigned i = 1; i < old.count; ++i) {
         struct users_record record = old.records[i];
         unsigned j = i;
@@ -24,8 +24,11 @@ int acct_import_g32(const void *bytes, size_t n, const struct acct_import_option
     for (unsigned i = 0; i < old.count; ++i)
         if (old.records[i].id == options->first_legacy_id) chosen = (int)i;
     if (chosen < 0) { acct_wipe(&old, sizeof(old)); return -EINVAL; }
-    struct acct_db draft = {0};
-    struct acct_import_map mapping[16] = {0};
+    /* The caller's records serve as the draft and map; both are wiped on
+     * failure (no 4.7 KiB database copy on the target stack). */
+    struct acct_db *draft_p = out; struct acct_import_map *mapping = maps;
+    memset(draft_p, 0, sizeof(*draft_p)); memset(mapping, 0, 16 * sizeof(*mapping));
+#define draft (*draft_p)
     draft.generation = 1; draft.origin = ACCT_UPGRADE; draft.flags = ACCT_MIGRATED;
     draft.next_uid = 1000 + old.count; draft.count = old.count + 2;
     draft.records[0].uid = 500; draft.records[0].flags = ACCT_BUILTIN; draft.records[0].groups = ACCT_ADMIN;
@@ -56,7 +59,9 @@ int acct_import_g32(const void *bytes, size_t n, const struct acct_import_option
     if (!e) for (unsigned i = 2; i < draft.count; ++i)
         for (unsigned j = 2; j < i; ++j)
             if (acct_name_equal(draft.records[i].name, draft.records[j].name)) e = -EEXIST;
-    if (!e) { *out = draft; memcpy(maps, mapping, sizeof(mapping)); *count = old.count; }
-    acct_wipe(&draft, sizeof(draft)); acct_wipe(mapping, sizeof(mapping)); acct_wipe(&old, sizeof(old));
+    if (!e) *count = old.count;
+    else { acct_wipe(&draft, sizeof(draft)); acct_wipe(mapping, 16 * sizeof(*mapping)); }
+#undef draft
+    acct_wipe(&old, sizeof(old));
     return e;
 }

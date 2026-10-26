@@ -59,15 +59,15 @@ static int save(struct acct_service *s)
     memset(p,0,n); memcpy(p,"CIUKIRSL",8); w32(p+8,1); w32(p+12,r->count);
     w64(p+16,r->high); w64(p+24,r->floor); w64(p+32,s->db.generation);
     w64(p+40,s->store.high_generation); w32(p+48,s->store.high_uid); memcpy(p+52,s->db.sid,12);
-    uint8_t db[ACCT_FILE_MAX]; size_t bytes;
-    int e=acct_encode(&s->db,0,db,sizeof(db),&bytes);
+    uint8_t *db=acct_frame_alloc(&s->store.kernel,ACCT_FILE_MAX); size_t bytes;
+    int e=db?acct_encode(&s->db,0,db,ACCT_FILE_MAX,&bytes):-ENOMEM;
     if(!e) sha256(db,bytes,p+64);
     for(unsigned i=0;i<r->count;++i) {
         public_receipt(&r->receipts[i],r->receipts[i].id,p+128+96*i);
         w64(p+128+96*i+80,r->receipts[i].planned_generation);
     }
     if(!e) e=acct_blob_write(&s->store,"accounts.results",p,n,&r->sequence);
-    acct_wipe(db,sizeof(db)); acct_wipe(p,n); s->store.kernel.deallocate(s->store.kernel.ctx,p,n); return e;
+    acct_frame_free(&s->store.kernel,db,ACCT_FILE_MAX); acct_wipe(p,n); s->store.kernel.deallocate(s->store.kernel.ctx,p,n); return e;
 }
 static void compact(struct acct_results *r)
 {
@@ -95,9 +95,9 @@ int acct_results_open(struct acct_service *s)
             a64(p+24)>a64(p+16) || a64(p+32)>s->db.generation || a64(p+40)>s->store.high_generation ||
             a32(p+48)>s->store.high_uid || memcmp(p+52,s->db.sid,12) || !azero(p+96,32)) e=-EIO;
         if(!e && a64(p+32)==s->db.generation) {
-            uint8_t db[ACCT_FILE_MAX], digest[32]; size_t bytes;
-            e=acct_encode(&s->db,0,db,sizeof(db),&bytes); if(!e) { sha256(db,bytes,digest); if(memcmp(digest,p+64,32)) e=-EIO; }
-            acct_wipe(db,sizeof(db));
+            uint8_t *db=acct_frame_alloc(k,ACCT_FILE_MAX), digest[32]; size_t bytes;
+            e=db?acct_encode(&s->db,0,db,ACCT_FILE_MAX,&bytes):-ENOMEM; if(!e) { sha256(db,bytes,digest); if(memcmp(digest,p+64,32)) e=-EIO; }
+            acct_frame_free(k,db,ACCT_FILE_MAX);
         }
         if(!e) {
             struct acct_results *r=s->results; r->high=a64(p+16); r->floor=a64(p+24); r->sequence=sequence; r->count=count;
