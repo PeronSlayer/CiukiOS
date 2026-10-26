@@ -12,12 +12,15 @@
 #include <ciuki/display_driver.h>
 #include <ciuki/edid.h>
 static const struct display_mode_provider *fullscreen_provider;
+static const struct display_mode_provider *present_provider;
+static struct fb_device present_previous;
 
 static bool switching, awaiting_frame;
 static bool awaiting_restored_frame;
 static bool fullscreen_display;
 static bool fullscreen_native;
 static bool awaiting_native_frame;
+static bool awaiting_present_frame;
 static bool fullscreen_return_timed;
 static bool fullscreen_log_failed;
 static bool fullscreen_recovering;
@@ -125,6 +128,7 @@ void display_present_returned(void)
     changed();
     previous=*fbdev_get();
     awaiting_frame=true; awaiting_restored_frame=true; awaiting_native_frame=false;
+    awaiting_present_frame=true;
     frame_deadline=deadline_after_ms(10000);
 }
 
@@ -241,7 +245,7 @@ static int check_restore(void)
 int display_check_begin(uint16_t id)
 {
     if (!(g_boot.flags & CBI_F_HW_CHECK) || grants_display_pid()) return -EPERM;
-    if (check_display || switching || fullscreen_display || awaiting_frame) return -EBUSY;
+    if (check_display || switching || fullscreen_display || present_provider || awaiting_frame) return -EBUSY;
     if (!listed(id) || !listed(fbdev_get()->mode_id)) return -EOPNOTSUPP;
     if (!fbdev_get()->present) return -ENODEV;
     if (display_worker_start()) return -ENOMEM;
@@ -334,6 +338,7 @@ void display_frame_complete(uint32_t generation, bool full_frame)
                 (unsigned)(g_ticks-fullscreen_return_tick>fullscreen_return_budget));
         awaiting_frame = false;
         awaiting_native_frame = false;
+        awaiting_present_frame = false;
         awaiting_restored_frame = false;
     }
 }
@@ -380,11 +385,13 @@ void display_watchdog_poll(void)
     switching = true;
     awaiting_frame = false;
     awaiting_restored_frame = false;
-    if (awaiting_native_frame) {
-        /* The native provider already restored and verified scanout. A
-         * missing desktop repaint cannot authorize a quarantined BIOS call. */
-        klog("[display] native_driver desktop_frame_timeout");
+    if (awaiting_native_frame || awaiting_present_frame) {
+        /* Native and present-lease returns already verified scanout. A
+         * missing desktop repaint cannot authorize another BIOS mode set. */
+        if (awaiting_present_frame) klog("[display] present_lease desktop_frame_timeout");
+        else klog("[display] native_driver desktop_frame_timeout");
         awaiting_native_frame=false;
+        awaiting_present_frame=false;
     } else if (!fbdev_change_begin()) { restore(); fbdev_change_end(); }
     switching = false;
 }
@@ -436,23 +443,70 @@ int display_set_for_present(struct process *p, uint16_t id, bool delegated)
     if (switching || fullscreen_display || check_display || awaiting_frame || grants_display_busy()) return refuse(id, -EBUSY);
     if (!fbdev_get()->present) return refuse(id, -ENODEV);
     if (!listed(fbdev_get()->mode_id)) return refuse(id, -EOPNOTSUPP); /* cannot promise restore */
-    if (id == fbdev_get()->mode_id) return refuse(id, 0);
+    const struct fb_device *f=fbdev_get();
+    /* Firmware mode numbers can alias one scanout layout. In particular a
+     * lease of the boot layout must work even when firmware is unavailable. */
+    if (m->width==f->width && m->height==f->height && m->bpp==f->bpp && m->pitch==f->pitch)
+        return refuse(id, 0);
+    const struct display_mode_provider *provider=present_provider;
+    bool returning=provider!=0;
+    if (returning && id!=present_previous.mode_id) return refuse(id,-EBUSY);
+    if (!returning && delegated) {
+        int binding=display_driver_mode_bind(f,&provider);
+        if (binding) return refuse(id,binding);
+        if (provider && (!provider->publish || (m->bpp!=16 && m->bpp!=32) || !provider->supported(f,id)))
+            provider=0;
+        if (provider) {
+            int ready=provider->prepare(f,id);
+            if (ready==-EOPNOTSUPP) provider=0; /* clean software refusal */
+            else if (ready) return refuse(id,ready);
+        }
+    }
     if (display_worker_start()) return refuse(id, -ENOMEM);
     switching = true;
     previous = *fbdev_get();
-    int e = biosvm_video_prepare();
+    int e = provider ? 0 : biosvm_video_prepare();
     if (e) { switching = false; return refuse(id, -EIO); }
     if (grants_display_busy()) { switching = false; return refuse(id, -EBUSY); }
     e = fbdev_change_begin();
     if (!e) {
         struct fb_device next;
-        e = apply(id, &next);
-        if (e) restore();
-        else {
+        if (!provider) {
+            e=apply(id,&next);
+            if (e) restore();
+        } else if (returning) {
+            e=provider->end();
+            if (!e) e=fbdev_change_commit(&present_previous);
+            if (e && !biosvm_video_prepare()) e=apply(id,&next);
+            provider->complete(!e);
+            if (!e) present_provider=0;
+        } else {
+            e=provider->begin(id);
+            if (!e) e=provider->publish(&next);
+            if (!e && (next.width!=m->width || next.height!=m->height ||
+                next.bpp!=m->bpp || next.pitch!=m->pitch)) e=-EIO;
+            if (!e) e=fbdev_change_commit(&next);
+            if (!e) {
+                present_previous=previous;
+                present_provider=provider;
+            } else {
+                int recovered=provider->end();
+                if (!recovered) recovered=fbdev_change_commit(&previous);
+                if (recovered && !biosvm_video_prepare()) recovered=restore();
+                provider->complete(!recovered);
+                if (recovered) {
+                    present_previous=previous;
+                    present_provider=provider; /* retain recovery ownership */
+                    e=recovered;
+                }
+            }
+        }
+        if (!e) {
             changed();
             awaiting_frame = !delegated;
             awaiting_restored_frame = false;
             awaiting_native_frame = false;
+            awaiting_present_frame = false;
             frame_deadline = deadline_after_ms(10000);
         }
         fbdev_change_end();
@@ -601,7 +655,7 @@ int32_t display_syscall(struct trap_frame *tf)
     return e ? e : copy_to_user(tf->ecx, &out, sizeof(out));
 }
 
-bool display_fullscreen_active(void) { return fullscreen_display; }
+bool display_fullscreen_active(void) { return fullscreen_display || present_provider; }
 bool display_fullscreen_supported(uint16_t mode)
 {
     const struct display_mode_provider *p = display_driver_modes(fbdev_get());
@@ -643,7 +697,7 @@ int display_fullscreen_begin(uint16_t mode)
         klog("[display] fullscreen_refused reason=%s owner_pid=%u mode=%u",why,grants_display_pid(),mode);
         return fullscreen_windowed(-EPERM);
     }
-    if (switching || fullscreen_display || (awaiting_frame && !reclaimed) || grants_display_busy()) {
+    if (switching || fullscreen_display || present_provider || (awaiting_frame && !reclaimed) || grants_display_busy()) {
         klog("[display] fullscreen_refused reason=busy switching=%u active=%u awaiting_frame=%u presenting=%u",
             (unsigned)switching,(unsigned)fullscreen_display,(unsigned)awaiting_frame,(unsigned)grants_display_busy());
         return fullscreen_windowed(-EBUSY);

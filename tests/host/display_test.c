@@ -41,7 +41,8 @@ static int blackbox_error;
 int blackbox_checkpoint(void) { blackbox_syncs++; return blackbox_error; }
 static bool native_supported;
 static int native_begin_error,native_end_error;
-static unsigned native_prepares,native_begins,native_ends,native_completes;
+static unsigned native_prepares,native_begins,native_ends,native_completes,native_publishes;
+static int native_publish_error;
 static bool native_recovered;
 static char native_results[256],return_timing[256],frame_timing[256];
 void bootlog_snapshot(struct bootlog_stats *s) { memset(s,0,sizeof(*s));s->active=log_active; }
@@ -54,12 +55,14 @@ extern int display_present_revoke_kernel(void) __attribute__((weak));
 extern void dosvm_fullscreen_poll(void) __attribute__((weak));
 static bool delegated_test, delegated_dos_request;
 static unsigned delegated_revokes;
+#ifndef DISPLAY_PRESENT_MODE_TEST
 bool display_present_active(void){return delegated_test;}
 void display_present_poll(void){}
 int display_present_revoke_kernel(void){
     if(!delegated_test)return 0;
     delegated_test=false;delegated_revokes++;display_present_returned();return 1;
 }
+#endif
 void dosvm_fullscreen_poll(void){
     if(delegated_dos_request){delegated_dos_request=false;assert(!display_fullscreen_begin(0x13));}
 }
@@ -83,9 +86,18 @@ int supersavage_display_end(void)
 { assert(suspended && !fbdev_get()->present); native_ends++; event(12); return native_end_error; }
 void supersavage_display_complete(bool recovered)
 { native_completes++;native_recovered=recovered; }
+static int native_publish(struct fb_device *out)
+{
+    assert(suspended && !fbdev_get()->present); native_publishes++;
+    if (native_publish_error) return native_publish_error;
+    *out=(struct fb_device){.mode_id=0x111,.phys=0xE0000000,.size=640*480*2,
+        .width=640,.height=480,.pitch=1280,.bpp=16,
+        .red_size=5,.red_pos=11,.green_size=6,.green_pos=5,.blue_size=5};
+    return 0;
+}
 static const struct display_mode_provider fixture_modes = {
     supersavage_display_supported,supersavage_display_prepare,supersavage_display_begin,
-    supersavage_display_write,supersavage_display_end,supersavage_display_complete,NULL
+    supersavage_display_write,supersavage_display_end,supersavage_display_complete,NULL,native_publish
 };
 const struct display_mode_provider *display_driver_modes(const struct fb_device *fb)
 { (void)fb; return is_supersavage ? &fixture_modes : NULL; }
@@ -191,7 +203,7 @@ static unsigned workers_created, workers_started;
 struct task *task_create_kernel(const char *n, void (*fn)(void *), void *a, enum task_prio p) { assert(!strcmp(n, "display-watchdog") && fn && !a && p == P_NORMAL); workers_created++; return &timer; }
 void task_start(struct task *t) { assert(t == &timer); workers_started++; }
 struct process *proc_current(void) { return current; }
-struct process *proc_find(uint32_t pid) { return pid==desktop.pid ? &desktop : 0; }
+struct process *proc_find(uint32_t pid) { return pid==desktop.pid ? &desktop : pid==other.pid ? &other : 0; }
 int grants_display_suspend(bool on) { if (on && (busy || suspended)) return -EBUSY; suspended=on; return 0; }
 int biosvm_video_fullscreen_begin(uint8_t mode) {
     assert(suspended && !fbdev_get()->present && !accel_ports_owned && (mode==3 || mode==0x13));
@@ -225,7 +237,8 @@ static int stop_accel(void *ctx)
     event(0); accel_stops++; accel_ports_owned=false;
     return 0;
 }
-static const struct accel_ops test_acceleration={.ctx=&accel_ports_owned,.stop=stop_accel};
+static unsigned test_accel_caps(void *ctx) { (void)ctx;return 0; }
+static const struct accel_ops test_acceleration={.ctx=&accel_ports_owned,.stop=stop_accel,.capabilities=test_accel_caps};
 
 void console_framebuffer_revoke(void) { event(2); }
 void console_framebuffer_changed(const struct fb_device *f) { assert(f->mapped && f->present); event(8); }
@@ -235,14 +248,15 @@ static void fixture(void)
 {
     free(aperture); free(window); aperture = window = 0;
     fullscreen_display=fullscreen_native=awaiting_native_frame=suspended=fs_begin_failure=fs_end_failure=false;
-    native_supported=false;native_begin_error=native_end_error=0;
+    native_supported=false;native_begin_error=native_end_error=native_publish_error=0;
+    present_provider=0; native_publishes=0;
     fullscreen_return_timed=false;fullscreen_return_tick=0;
     fullscreen_recovering=fullscreen_log_failed=false;
     native_prepares=native_begins=native_ends=native_completes=blackbox_syncs=0;native_recovered=false;blackbox_error=0;
     native_results[0]=return_timing[0]=frame_timing[0]=0;
     is_supersavage=false;log_active=true;log_sync_error=0;log_syncs=0;
     log_requests=log_errors=0;
-    awaiting_restored_frame=false;
+    awaiting_restored_frame=awaiting_present_frame=false;
     initialized = changing = switching = awaiting_frame = check_display = check_boot = check_sweeping = false;
     check_result=0; check_deadline=0;
     acceleration=0; accel_ports_owned=false; accel_stops=0;
@@ -330,6 +344,44 @@ static void query_tests(void)
     t.ecx=sizeof(user)-8; memcpy(user+t.ecx,&monitor,8); assert(display_syscall(&t)==-EFAULT);
     puts("PASS G23 EDID: absent/bad checksum/header, copied monitor identity/ranges/DTD, exact rate, unknown scanout, invalid mode/version and syscall bounds");
     puts("PASS display query/syscall: v1/v2 bootinfo, PCI, exact wire layout, header/pointers/operation/rights");
+}
+static void present_mode_tests(void)
+{
+    fixture(); prepare_failure=true;
+    uint32_t original=fbdev_get()->generation;
+    g_boot.display.mode_count=3;
+    g_boot.display.modes[2]=g_boot.display.modes[0];
+    g_boot.display.modes[2].id=0x112; /* T23: alias of boot mode 0x118 */
+    assert(!display_set_for_present(&desktop,0x112,true));
+    assert(!switches && !sequence_count && fbdev_get()->generation==original);
+    assert(fbdev_get()->mode_id==0x118 && !watchdog);
+    /* Every geometry component matters, including pitch and depth. */
+    for (unsigned part=0;part<4;part++) {
+        g_boot.display.modes[2]=g_boot.display.modes[0];g_boot.display.modes[2].id=0x112;
+        if (part==0) g_boot.display.modes[2].width++;
+        if (part==1) g_boot.display.modes[2].height++;
+        if (part==2) g_boot.display.modes[2].bpp=16;
+        if (part==3) g_boot.display.modes[2].pitch+=16;
+        assert(display_set_for_present(&desktop,0x112,true)==-EIO && !switches);
+    }
+    fixture(); is_supersavage=native_supported=prepare_failure=suspended=true;
+    g_boot.display.modes[1].pitch=1280;
+    acceleration=&test_acceleration;accel_ports_owned=true;
+    assert(!display_set_for_present(&desktop,0x111,true));
+    assert(!switches && native_prepares==1 && native_begins==1 && native_publishes==1 && !native_ends);
+    assert(present_provider && fbdev_get()->present && fbdev_get()->pitch==1280 && !awaiting_frame);
+    assert(!display_set_for_present(&desktop,0x118,true));
+    assert(!switches && native_ends==1 && native_completes==1 && native_recovered && !present_provider);
+    assert(fbdev_get()->present && fbdev_get()->mode_id==0x118 && fbdev_get()->pitch==4112);
+    /* Entry/readback and publication failures restore natively with BIOS off. */
+    for (unsigned publish=0;publish<2;publish++) {
+        fixture(); is_supersavage=native_supported=prepare_failure=suspended=true;
+        g_boot.display.modes[1].pitch=1280;
+        if (publish) native_publish_error=-EIO; else native_begin_error=-EIO;
+        assert(display_set_for_present(&desktop,0x111,true)==-EIO);
+        assert(!switches && native_ends==1 && native_recovered && fbdev_get()->present && !present_provider);
+    }
+    puts("PASS fx-biosvm present: layout alias skips all mode sets; geometry/pitch changes require transactions; native packed grant/restore and failed-entry rollback with BIOS unavailable");
 }
 static void switch_tests(void)
 {
@@ -644,6 +696,7 @@ static void monitor_test(void)
 }
 int main(void)
 {
+    present_mode_tests();
     screen_policy_test(); monitor_test();
     delegated_takeover_tests();
     native_upload_tests();

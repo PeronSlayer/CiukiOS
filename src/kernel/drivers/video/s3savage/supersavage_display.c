@@ -27,6 +27,7 @@ static void *linear_window;
 static volatile uint8_t *linear_mapping;
 static uint32_t linear_phys,linear_bytes,framebuffer_bytes;
 static uint16_t linear_mode;
+static bool published;
 static int framebuffer_handle;
 static gen_t framebuffer_generation;
 static uint8_t native_in(void *arg,uint16_t port) { (void)arg; return inb(port); }
@@ -168,14 +169,9 @@ static void outcome(const char *phase,int e)
         reg>=0x100 && reg<0x200 ? reg-0x100 : reg,
         saved_mode.expected,saved_mode.actual,saved_mode.mask,saved_mode.restore_us);
 }
-int supersavage_display_begin(uint16_t mode)
+static int claim_registers(void)
 {
-    linear_mode=0;
-    if (native_strikes>=NATIVE_STRIKE_LIMIT) return -EOPNOTSUPP;
-    if (!adapter || !register_window || !aperture_window || claims_retained() || saved_mode.saved) return -EBUSY;
-    session_struck=restore_failed=recovery_confirmed=false;
-    int e=display_fullscreen_checkpoint("native-claim",0);
-    if (e) return e;
+    int e;
     /* VGA I/O as two ranges (Windows assignment): 3BCh-3BFh is a parallel port.
      * The mode code reaches the monochrome CRTC aliases when MISC bit 0 is 0. */
     const enum res_type types[]={RES_PORT,RES_MMIO,RES_MMIO,RES_PORT};
@@ -193,6 +189,24 @@ int supersavage_display_begin(uint16_t mode)
     register_mapping=vmm_replace_mmio(register_window,MODE_MMIO_BYTES,starts[1],MODE_MMIO_BYTES);
     aperture_mapping=vmm_replace_mmio(aperture_window,0x20000,0xA0000,0x20000);
     if (!register_mapping || !aperture_mapping) { e=-ENOMEM; goto failed; }
+    return 0;
+failed:
+    {
+        int released=release_claims();
+        return released ? released : e;
+    }
+}
+int supersavage_display_begin(uint16_t mode)
+{
+    linear_mode=0;
+    published=false;
+    if (native_strikes>=NATIVE_STRIKE_LIMIT) return -EOPNOTSUPP;
+    if (!adapter || !register_window || !aperture_window || claims_retained() || saved_mode.saved) return -EBUSY;
+    session_struck=restore_failed=recovery_confirmed=false;
+    int e=display_fullscreen_checkpoint("native-claim",0);
+    if (e) return e;
+    e=claim_registers();
+    if (e) goto failed;
     if (linear_bytes) {
         /* fbdev_change_begin has stopped acceleration, revoked desktop
          * aliases and proved this lease idle. Borrow it only for this
@@ -225,6 +239,11 @@ failed:
 int supersavage_display_end(void)
 {
     linear_mode=0;
+    if (published && !register_mapping && !aperture_mapping) {
+        if (claims_retained()) return -EIO;
+        int e=claim_registers();
+        if (e) return e;
+    }
     /* A previous end revoked these aliases, even if proof failed. A failed
      * claim may also reach rollback without ever mapping the registers. */
     if (!register_mapping || !aperture_mapping) return release_claims();
@@ -251,6 +270,7 @@ void supersavage_display_complete(bool recovered)
     }
     if (!recovered) return;
     restore_failed=false;
+    published=false;
     recovery_confirmed=true;
     (void)claims_retained();
 }
@@ -278,4 +298,21 @@ int supersavage_display_lfb(struct display_lfb *out)
     *out=(struct display_lfb){.physical=linear_phys,.bytes=linear_bytes,.pitch=m->pitch,
         .width=m->width,.height=m->height,.bpp=m->bpp,.cache_flags=cache,.mapped=linear_mapping};
     return 0;
+}
+
+/* Publish packed scanout without retaining a second owner/alias of fbdev's
+ * new generation. Register programming/readback is the same as the DOS path. */
+int supersavage_display_publish(struct fb_device *out)
+{
+    const struct dos_video_mode *m=dos_video_mode(linear_mode);
+    struct display_lfb lfb;
+    if (!out || !m || m->bpp!=16 || supersavage_display_lfb(&lfb)) return -EOPNOTSUPP;
+    *out=(struct fb_device){.phys=lfb.physical,.size=m->pitch*m->height,
+        .pitch=m->pitch,.width=m->width,.height=m->height,.bpp=m->bpp,
+        .red_size=5,.red_pos=11,.green_size=6,.green_pos=5,.blue_size=5,
+        .mode_id=m->number};
+    /* Keep published true on release failure so end can attempt recovery;
+     * a retained unsafe registry claim still refuses reacquisition. */
+    published=true;
+    return release_claims();
 }

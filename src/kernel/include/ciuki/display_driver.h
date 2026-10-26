@@ -27,6 +27,12 @@ struct display_mode_provider {
     int (*end)(void);
     void (*complete)(bool);
     int (*lfb)(struct display_lfb *);
+    /* Optional Win32 present handoff, after begin: export verified packed
+     * scanout, revoke temporary aliases and release all mode claims before
+     * fbdev claims the layout. Retain the original desktop snapshot; end
+     * reacquires mode resources to restore it, complete confirms recovery.
+     * No callback may keep a framebuffer alias across this handoff. */
+    int (*publish)(struct fb_device *);
 };
 struct display_selftest_result {
     unsigned tried, passed, skipped, timeouts, completed;
