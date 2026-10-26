@@ -132,6 +132,8 @@ uint32_t w32_native_path(struct process *p,const char *n,char *out,char *full){(
 int px_chdir(struct process *p,const char *path){(void)p;(void)path;return -ENOENT;}
 #include "../../../src/kernel/proc/win32/process.c"
 uint32_t w32_file_call(struct proc_thread *t,struct ciuki_w32_file_args *a){(void)t;(void)a;return W32_STATUS_NOT_IMPLEMENTED;}
+uint32_t w32_render3d_call(struct proc_thread *t,struct ciuki_w32_render3d_args *a) __attribute__((weak));
+uint32_t w32_render3d_call(struct proc_thread *t,struct ciuki_w32_render3d_args *a){(void)t;(void)a;return W32_STATUS_NOT_IMPLEMENTED;}
 void task_yield(void){if(on_schedule)schedule();}
 #include "../../../src/kernel/proc/win32/system.c"
 #include "../../../src/kernel/proc/win32/snapshot.c"
