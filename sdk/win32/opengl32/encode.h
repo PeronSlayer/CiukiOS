@@ -39,9 +39,9 @@ static int gl_hw_texture_complete(const struct sw_texture *t) {
   }
   return 0;
 }
-/* Exact dyadic coverage weights avoid the known Q16 barycentric boundary.
- * The tested smooth-filter subset bounds GL's Q20 plane truncation, including
- * contrasting texels. Discontinuous nearest/mip/alpha decisions stay refused. */
+/* Dyadic coverage weights alone do not bound two independent bilinear stages.
+ * Admit varying UV only when constant W and integral pixel-center Q20 planes
+ * remove GL's intermediate truncation. Other perspective draws use software. */
 static int gl_hw_projective_bilinear(const struct ciuki_r3d_caps *caps,
     const struct gl_hw_command *g,unsigned first,unsigned unit) {
   const struct sw_texture *t=g->state.unit[unit].texture;
@@ -51,7 +51,8 @@ static int gl_hw_projective_bilinear(const struct ciuki_r3d_caps *caps,
   int64_t x[3],y[3];
   for (unsigned i=0;i<3;i++) {
     const struct sw_vertex *v=&g->vertices[first+i];
-    if ((v->x&15) || (v->y&15) || v->qw[unit]<524288 || v->qw[unit]>2097152) return 0;
+    if ((v->x&15) || (v->y&15) || v->qw[unit]<524288 || v->qw[unit]>2097152 ||
+        v->qw[unit]!=g->vertices[first].qw[unit]) return 0;
     for (unsigned axis=0;axis<2;axis++) {
       int64_t uv=(int64_t)v->uv[unit][axis]*1048576/v->qw[unit];
       if (uv < -65536 || uv>65536) return 0;
@@ -59,8 +60,21 @@ static int gl_hw_projective_bilinear(const struct ciuki_r3d_caps *caps,
     x[i]=v->x/16; y[i]=v->y/16;
   }
   int64_t area=(x[1]-x[0])*(y[2]-y[0])-(y[1]-y[0])*(x[2]-x[0]);
-  if (area<0) area=-area;
-  return area>=256 && area<=32768 && !(area&(area-1));
+  int64_t magnitude=area<0 ? -area : area;
+  if (magnitude<256 || magnitude>32768 || (magnitude&(magnitude-1))) return 0;
+  for (unsigned axis=0;axis<2;axis++) {
+    int64_t a=g->vertices[first].uv[unit][axis];
+    int64_t b=g->vertices[first+1].uv[unit][axis]-a;
+    int64_t c=g->vertices[first+2].uv[unit][axis]-a;
+    int64_t dx=b*(y[2]-y[0])-c*(y[1]-y[0]);
+    int64_t dy=c*(x[1]-x[0])-b*(x[2]-x[0]);
+    if (dx%area || dy%area) return 0;
+    dx/=area; dy/=area;
+    int64_t qw=g->vertices[first].qw[unit];
+    if ((dx+dy)%2 || (dx*1048576)%qw || (dy*1048576)%qw ||
+        ((2*a+dx+dy)*1048576)%(2*qw)) return 0;
+  }
+  return 1;
 }
 static int gl_hw_encode(const struct ciuki_r3d_caps *caps, const struct gl_hw_command *g, unsigned target,
     unsigned depth, unsigned copy, struct render3d_request *out) {

@@ -12,6 +12,7 @@ static uint8_t ram3d[0x7ff000];
 static uint32_t batch3d[32], count3d, need3d;
 static unsigned draw3d, copy3d, writes3d, memory3d, corruption3d, allocations3d;
 static bool dropping3d, bad_restore3d;
+static unsigned read_delay3d;
 static uint32_t physical3d(uint32_t address,unsigned bytes)
 {
     CHECK(address>=gpu3d.heap.first && (uint64_t)address+bytes<=gpu3d.heap.first+gpu3d.heap.bytes);
@@ -190,6 +191,7 @@ static void write_engine3d(void *ctx,uint32_t off,uint32_t value)
 static uint32_t memory_read3d(void *ctx,bool alias,uint32_t offset,unsigned bytes)
 {
     (void)ctx; CHECK(locks==1); memory3d++;
+    m.us+=read_delay3d;
     if (alias) {
         uint32_t desc=m.reg[0x48c40/4]; unsigned bpp=desc>>30,physical_pitch=(desc>>20&63)*128;
         CHECK(bpp==2 || bpp==3);

@@ -75,3 +75,42 @@ Qualification belongs to the existing framebuffer generation. A real mode
 change closes it; there is no implicit retry of this boot-only diagnostic.
 Test a smaller Quake mode in a window, or boot in the same physical mode as
 the full-screen test. Reboot for another physical mode's qualification.
+
+## Review round 1 corrections
+
+The production syscall's attachment payload bound is now 1024x1024x4 bytes,
+under the unchanged 6 MiB wire ceiling. Exact owned resource sizes, formats,
+generation and presentation authority are still checked by the dispatcher.
+Worker tests exercise full-size uploads, reads and completed-copy presentation
+through `w32_render3d_call`, including D16 and rejected size mismatches.
+
+The lead's review decision separates completed CPU readback from the unchanged
+20 ms engine execution window. Canonical shadows receive at most 128 reads per
+chunk, checked against a fresh 1 ms budget, including guard reads. Boot
+qualification reads rows 0, 16, 32, ... and the final row of color, D16 and copy;
+comparison/checksums use precisely those rows. All columns and guards are still
+checked. Ordinary jobs read every row. No DMA or new buffer is introduced.
+CPU uploads precede the engine window; they submit no BCI command.
+
+When completion proves idle and no event remains pending, restoration gets its
+own bounded 20 ms window even after a readback/work timeout. A restored CPU
+timeout fails the affected context and refuses boot qualification while keeping
+the working engine available. Unproven writers and integrity/restoration faults
+retain quarantine. Initial failed MMIO preflight still emits no BCI command.
+This follows Linux v6.1's distinction between bounded FIFO waits and completed
+events (`savage_bci.c`, linked above), and retains the source-backed X.Org tile
+and AGD restoration. The timeout is a Ciuki scheduling policy, not an upstream
+hardware timing guarantee. Total synchronous readback cost remains material.
+
+The earlier varying-W GL subset is superseded. Varying UV now requires constant
+reciprocal W per triangle, integral Q20 planes at pixel centers, and integral
+projected coordinate gradients/centers. The dyadic geometry, lossless conversion,
+UV/texture/filter bounds and alpha/blend refusals remain. These conditions remove
+the intermediate GL plane truncation instead of assuming independent stages
+have correlated sampling errors. OpenGL 1.1 sections 3.5/3.8 and
+[OpenGL 1.2.1 appendix F.2](https://registry.khronos.org/OpenGL/specs/gl/glspec121.pdf)
+require independent texture coordinates and sequential application. The exact
+two-dimensional checkerboard counterexample exceeds the two-level tolerance
+and is refused; varying W and other nonintegral planes fall back per draw.
+Host evidence covers 96 admitted cases with independently varying stage UV,
+two-dimensional checkerboards, signed wrap/clamp, both windings and area limits.

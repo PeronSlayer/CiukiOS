@@ -12,7 +12,9 @@ static inline bool render3d_wire_valid(const struct ciuki_w32_render3d_args *a)
     case CIUKI_R3D_OPEN: case CIUKI_R3D_CLOSE: case CIUKI_R3D_RESOURCE:
     case CIUKI_R3D_FREE: case CIUKI_R3D_WAIT: return !a->bytes;
     case CIUKI_R3D_READ: case CIUKI_R3D_UPLOAD: case CIUKI_R3D_PRESENT:
-        return a->bytes && a->bytes<=64u*64u*4u;
+        /* Canonical color attachments can span the qualified display. The
+         * dispatcher still checks the exact owned resource size/format. */
+        return a->bytes && a->bytes<=R3D_MAX_SIZE*R3D_MAX_SIZE*4u;
     case CIUKI_R3D_TEXTURE: return a->bytes && a->levels && a->levels<=R3D_MIPS &&
         a->width && a->height && a->width<=1024 && a->height<=1024;
     default: return false;

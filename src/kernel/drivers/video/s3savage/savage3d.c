@@ -361,11 +361,14 @@ static int tile(struct savage3d_device *d,const struct render3d_resource *r)
 }
 static int guards(struct savage3d_device *d,struct render3d_resource *r,bool initialize)
 {
+    uint64_t start=0;
     for (unsigned side=0;side<2;side++) for (unsigned i=0;i<4096;i+=4) {
+        if (!(i%512)) start=d->engine->io.now_us(d->engine->io.ctx);
         uint32_t off=r->offset+(side ? r->reserved-4096 : 0)+i;
         if (initialize) memory_write(d,false,off,0xa55ac33cu,4);
         else {
             uint32_t value=memory_read(d,false,off,4);
+            if (i%512==508 && d->engine->io.now_us(d->engine->io.ctx)-start>=1000) return -ETIMEDOUT;
             if (value!=0xa55ac33cu) { d->expected=0xa55ac33cu; d->actual=value; d->guard_offset=off; return -EIO; }
         }
     }
@@ -478,13 +481,24 @@ static int read_resource(struct savage3d_device *d,struct render3d_resource *r)
     bool alias=r->kind!=R3D_LINEAR_COLOR;
     int e=alias ? tile(d,r) : 0; if (e) return e;
     unsigned bytes=r->kind==R3D_D16 ? 2 : 4, pitch=alias ? (bytes==2 ? 4096 : 8192) : r->pitch;
-    for (unsigned y=0;y<r->height;y++) for (unsigned x=0;x<r->width;x++) {
-        uint32_t value=memory_read(d,alias,(alias ? 0 : base(r))+y*pitch+x*bytes,bytes);
-        if (bytes==2) value=65535-(value&65535);
-        memcpy((uint8_t *)r->shadow+y*r->pitch+x*bytes,&value,bytes);
+    for (unsigned y=0;y<r->height;y++) {
+        /* Boot qualification samples tile rows plus the final row; ordinary
+         * jobs must publish complete canonical attachments. */
+        if (d->fullsize_testing && y%16 && y!=r->height-1) continue;
+        for (unsigned first=0;first<r->width;first+=128) {
+            uint64_t start=d->engine->io.now_us(d->engine->io.ctx);
+            unsigned end=first+128; if (end>r->width) end=r->width;
+            for (unsigned x=first;x<end;x++) {
+                uint32_t value=memory_read(d,alias,(alias ? 0 : base(r))+y*pitch+x*bytes,bytes);
+                if (bytes==2) value=65535-(value&65535);
+                memcpy((uint8_t *)r->shadow+y*r->pitch+x*bytes,&value,bytes);
+            }
+            if (d->engine->io.now_us(d->engine->io.ctx)-start>=1000) return -ETIMEDOUT;
+        }
     }
     return guards(d,r,false);
 }
+static void quarantine(void *device);
 static int execute(void *device,const struct render3d_request *q,struct render3d_resource *const r[R3D_REFS])
 {
     struct savage3d_device *d=device;
@@ -495,6 +509,9 @@ static int execute(void *device,const struct render3d_request *q,struct render3d
     d->failed_phase=1; e=save_state(d,&saved); if (e) return e;
     d->failed_phase=2; e=checked_mmio(d,0x850c,saved.agd|0x8000u);
     for (unsigned i=0;!e && i<R3D_REFS;i++) if (r[i]) e=upload(d,r[i]);
+    /* CPU transfers are separate bounded work from the engine's unchanged
+     * execution window. No command has been submitted by upload(). */
+    d->slice_started=d->engine->io.now_us(d->engine->io.ctx);
     if (!e) d->failed_phase=3;
     if (!e && (q->flags&R3D_CLEAR_COLOR)) e=clear_resource(d,r[0],q->clear_color);
     if (!e && (q->flags&R3D_CLEAR_DEPTH)) e=clear_resource(d,r[1],q->clear_depth);
@@ -526,8 +543,17 @@ static int execute(void *device,const struct render3d_request *q,struct render3d
         d->failed_phase=8;
         for (unsigned i=0;i<R3D_REFS && !e;i++) if (r[i]) e=read_resource(d,r[i]);
     }
-    /* Never restore/retry on an unproven writer. Preserve its mappings. */
-    if (!e) { d->failed_phase=6; e=restore_state(d,&saved); }
+    /* A completed event permits restoration even after a CPU read timeout or
+     * an expired work deadline. Never write again without that idle proof. */
+    if ((!e || e==-ETIMEDOUT || d->failed_phase>=3) &&
+        d->engine->cpu_safe && !d->engine->event_pending && !d->engine->quarantined) {
+        uint32_t phase=d->failed_phase;
+        d->slice_started=d->engine->io.now_us(d->engine->io.ctx);
+        d->failed_phase=6;
+        int restored=restore_state(d,&saved);
+        if (restored) { quarantine(d); return restored; }
+        d->failed_phase=phase;
+    }
     if (!e) d->failed_phase=0;
     return e;
 }
@@ -558,7 +584,7 @@ static int idle(void *device)
 static void quarantine(void *device)
 {
     struct savage3d_device *d=device;
-    if (!d) return;
+    if (!d || d->lost) return;
     d->qualified=d->fullsize_qualified=false; d->lost=true;
     d->engine->render3d_qualified=false;
     d->engine->quarantined=true; d->engine->active=false;
@@ -717,6 +743,8 @@ static int fullsize_compare(struct savage3d_device *d,struct render3d_resource *
     const uint16_t *az=hw[1]->shadow,*bz=ref[1]->shadow;
     uint32_t ah=2166136261u,bh=2166136261u;
     for (unsigned i=0;i<hw[0]->width*hw[0]->height;i++) {
+        unsigned row=i/hw[0]->width;
+        if (row%16 && row!=hw[0]->height-1) continue;
         if (a[i]!=copy[i] || (a[i]==0xff102030u)!=(b[i]==0xff102030u)) return -EILSEQ;
         for (unsigned shift=0;shift<32;shift+=8) {
             unsigned ac=a[i]>>shift&255,bc=b[i]>>shift&255,delta=ac>bc ? ac-bc : bc-ac;
@@ -726,12 +754,12 @@ static int fullsize_compare(struct savage3d_device *d,struct render3d_resource *
         unsigned delta=az[i]>bz[i] ? az[i]-bz[i] : bz[i]-az[i];
         if (delta>d->max_depth_error) d->max_depth_error=delta;
         if (delta>1) { d->expected=bz[i]; d->actual=az[i]; return -EILSEQ; }
-        /* Every row and column is read, including tile boundaries and corners.
+        /* Sampled rows cover every column, tile boundaries and corners.
          * Raw hashes are evidence; tolerance comparisons above are normative. */
         ah=(ah^a[i])*16777619u; ah=(ah^az[i])*16777619u;
         bh=(bh^b[i])*16777619u; bh=(bh^bz[i])*16777619u;
+        d->sample_count++;
     }
-    d->sample_count+=hw[0]->width*hw[0]->height;
     d->hardware_checksum=ah; d->reference_checksum=bh; return 0;
 }
 int savage3d_fullsize_probe(struct savage3d_device *d,struct render3d_service *reference)
@@ -757,7 +785,7 @@ int savage3d_fullsize_probe(struct savage3d_device *d,struct render3d_service *r
         uint64_t start=d->engine->io.now_us(d->engine->io.ctx);
         e=execute(d,q,hw);
         d->fullsize_us+=d->engine->io.now_us(d->engine->io.ctx)-start;
-        if (e) quarantine(d);
+        if (e && (e!=-ETIMEDOUT || idle(d))) quarantine(d);
         leave(d);
         if (!e) { d->failed_phase=9; e=fullsize_compare(d,hw,ref); }
     }

@@ -444,8 +444,12 @@ int render3d_step(struct render3d_service *s)
             e=s->backend->enter(s->device);
             if (!e) {
                 e=s->backend->execute(s->device,q,r);
-                if (!e) e=s->backend->idle(s->device);
-                if (e) render3d_device_lost(s);
+                int idle=s->backend->idle(s->device);
+                if (!e) e=idle;
+                /* A bounded CPU transfer can time out after completed engine
+                 * work and successful restoration. Fail that context without
+                 * quarantining an owner that still proves idle. */
+                if (e && (e!=-ETIMEDOUT || idle)) render3d_device_lost(s);
                 s->backend->leave(s->device);
             } else if (e!=-EAGAIN && e!=-EBUSY) render3d_device_lost(s);
         }

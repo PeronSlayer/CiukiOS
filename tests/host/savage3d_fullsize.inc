@@ -46,13 +46,23 @@ static void fullsize3d(unsigned w,unsigned h,unsigned fault)
     if (fault==2) corruption3d=2;
     if (fault==3) bad_restore3d=true;
     if (fault==4) gpu3d.heap.bytes-=4*1024*1024; /* preflight, before entry/writes */
+    read_delay3d=fault==5 ? 2 : fault==6 ? 9 : 0;
     int e=savage3d_fullsize_probe(&gpu3d,&reference3d);
+    read_delay3d=0;
     if (e && !fault) fprintf(stderr,"fullsize %ux%u error=%d phase=%u expected=%08x actual=%08x channel=%u depth=%u\n",
         w,h,e,gpu3d.failed_phase,gpu3d.expected,gpu3d.actual,gpu3d.max_channel_error,gpu3d.max_depth_error);
-    FULL_CHECK((e==0)==!fault && gpu3d.fullsize_qualified==!fault);
-    if (!fault) FULL_CHECK(gpu3d.sample_count==4*w*h && gpu3d.max_channel_error<=2 && gpu3d.max_depth_error<=1);
-    else if (fault==2 || fault==4) FULL_CHECK(!gpu3d.lost && gpu3d.qualified); /* safe refusal retains minimum */
+    bool success=!fault || fault==5;
+    FULL_CHECK((e==0)==success && gpu3d.fullsize_qualified==success);
+    if (success) FULL_CHECK(gpu3d.sample_count==4*w*((h-1)/16+1+!!((h-1)%16)) &&
+        gpu3d.max_channel_error<=2 && gpu3d.max_depth_error<=1);
+    else if (fault==2 || fault==4 || fault==6) FULL_CHECK(!gpu3d.lost && gpu3d.qualified); /* safe refusal retains minimum */
     else FULL_CHECK(gpu3d.lost && test_engine.quarantined);
+    if (fault==3) FULL_CHECK(m.fault_count==1); /* execute + caller report one loss */
+    if (fault==5 || fault==6) {
+        FULL_CHECK(test_engine.cpu_safe && !test_engine.event_pending && !test_engine.quarantined);
+        FULL_CHECK(!m.reg[0x850c/4] && !m.reg[0x48c40/4] && !m.reg[0x48584/4]);
+        FULL_CHECK(fault==5 ? gpu3d.fullsize_us>20000 : e==-ETIMEDOUT && gpu3d.failed_phase==8);
+    }
     if (fault==4) FULL_CHECK(!writes3d && !memory3d);
     FULL_CHECK(!locks && !count3d);
     if (!fault) {
@@ -83,10 +93,11 @@ static void projective3d(const uint32_t handles[2][4],const uint32_t contexts[2]
     struct render3d_service *services[]={&scratch3d,&reference3d};
     struct ciuki_r3d_caps caps; savage3d_backend()->query_caps(&gpu3d,&caps);
     unsigned cases=0;
-    for (unsigned pattern=0;pattern<2;pattern++) for (unsigned wrap=0;wrap<2;wrap++)
+    for (unsigned pattern=0;pattern<3;pattern++) for (unsigned wrap=0;wrap<2;wrap++)
     for (unsigned rw=0;rw<2;rw++) for (unsigned winding=0;winding<2;winding++)
     for (unsigned shape=0;shape<4;shape++) {
-        for (unsigned i=0;i<64*64;i++) pixels[i]=pattern ? (i&1 ? 0xffff00ffu : 0xff00ff00u) :
+        for (unsigned i=0;i<64*64;i++) pixels[i]=pattern==2 ? (((i%64)^(i/64))&1 ? 0xffffffffu : 0) :
+            pattern ? (i&1 ? 0xffff00ffu : 0xff00ff00u) :
             0xff000000u|((i&63)*3<<16)|((i/64)*3<<8)|96;
         texture.wrap_s=texture.wrap_t=wrap ? GL_REPEAT : GL_CLAMP_TO_EDGE;
         command=(struct gl_hw_command){.state={.width=640,.height=480,.color=golden,.depth=golden_z,
@@ -100,10 +111,12 @@ static void projective3d(const uint32_t handles[2][4],const uint32_t contexts[2]
             *v=(struct sw_vertex){.x=xy[shape][i][0]*16,.y=xy[shape][i][1]*16,.z=1000,
                 .color={255,255,255,255},.fog=255};
             for (unsigned unit=0;unit<2;unit++) {
-                v->qw[unit]=(rw ? 2097152 : 524288)>>(rw ? i : 0);
-                int u=i==1 ? 49152 : -16384,t=i==2 ? 49152 : -16384;
-                v->uv[unit][0]=(int64_t)(unit ? t : u)*v->qw[unit]/1048576;
-                v->uv[unit][1]=(int64_t)(unit ? u : t)*v->qw[unit]/1048576;
+                v->qw[unit]=rw ? 2097152 : 524288;
+                int x=v->x/16,y=v->y/16;
+                int u=unit ? 8192-x*32+y*128 : -16384+x*128+y*64;
+                int t=unit ? 16384+x*64-y*128 : -8192+x*32+y*256;
+                v->uv[unit][0]=(int64_t)u*v->qw[unit]/1048576;
+                v->uv[unit][1]=(int64_t)t*v->qw[unit]/1048576;
             }
         }
         if (winding) { struct sw_vertex tmp=command.vertices[1]; command.vertices[1]=command.vertices[2]; command.vertices[2]=tmp; }
@@ -137,11 +150,72 @@ static void projective3d(const uint32_t handles[2][4],const uint32_t contexts[2]
         int saved_qw=command.vertices[0].qw[0];
         command.vertices[0].qw[0]=524272; FULL_CHECK(gl_hw_encode(&caps,&command,1,2,3,&q));
         command.vertices[0].qw[0]=saved_qw;
+        command.vertices[1].uv[1][0]+=2; FULL_CHECK(gl_hw_encode(&caps,&command,1,2,3,&q));
+        command.vertices[1].uv[1][0]-=2;
+        saved_qw=command.vertices[1].qw[0];
+        command.vertices[1].qw[0]=command.vertices[1].qw[1]=1048576;
+        FULL_CHECK(gl_hw_encode(&caps,&command,1,2,3,&q));
+        command.vertices[1].qw[0]=command.vertices[1].qw[1]=saved_qw;
         command.vertices[1].x++; FULL_CHECK(gl_hw_encode(&caps,&command,1,2,3,&q));
         cases++;
     }
-    FULL_CHECK(cases==64);
-    puts("projective sampling: 64 GL-plane/scalar/independent-packet cases, contrasting texels, two stages, signed repeat/clamp, Q/W 0.5..2, both windings, dyadic area extrema and slanted edges, exact coverage and <=2 channel error PASS");
+    FULL_CHECK(cases==96);
+    puts("varying sampling: 96 GL-plane/scalar/packet cases, 2D checkerboards, independent stage UV, constant W, integral planes, <=2 channel error PASS");
+}
+static void checkerboard_refusal3d(const uint32_t handles[2][4],const uint32_t contexts[2],uint32_t *pixels)
+{
+    static struct gl_hw_command command;
+    static struct render3d_request q;
+    static uint32_t golden[64*64];
+    struct sw_texture texture={.used=1,.target=GL_TEXTURE_2D,.min=GL_LINEAR,.mag=GL_LINEAR,
+        .wrap_s=GL_REPEAT,.wrap_t=GL_REPEAT};
+    texture.image[0]=(struct sw_image){.w=64,.h=64,.pixels=pixels,.internal=GL_RGBA};
+    for (unsigned y=0;y<64;y++) for (unsigned x=0;x<64;x++) pixels[y*64+x]=(x^y)&1 ? ~0u : 0;
+    command=(struct gl_hw_command){.state={.width=64,.height=64,.color=golden,.color_mask=~0u},.count=3};
+    static const int uv[2][3][2]={{{-5362,-1766},{13308,-22958},{-23524,13486}},
+        {{18450,-4344},{-17516,26844},{-31274,16628}}};
+    for (unsigned unit=0;unit<2;unit++)
+        command.state.unit[unit]=(struct sw_unit){.enabled=1,.mode=GL_MODULATE,.texture=&texture};
+    for (unsigned i=0;i<3;i++) {
+        struct sw_vertex *v=&command.vertices[i];
+        *v=(struct sw_vertex){.x=i==1 ? 16*16 : 0,.y=i==2 ? 16*16 : 0,.color={255,255,255,255}};
+        for (unsigned unit=0;unit<2;unit++) {
+            v->qw[unit]=524288;
+            memcpy(v->uv[unit],uv[unit][i],sizeof(v->uv[unit]));
+        }
+    }
+    sw_triangle(&command.state,command.vertices,command.vertices+1,command.vertices+2);
+    const unsigned sample=58*64;
+    FULL_CHECK(golden[sample]==0xeaeaeaeau);
+    struct ciuki_r3d_caps caps; savage3d_backend()->query_caps(&gpu3d,&caps);
+    FULL_CHECK(gl_hw_encode(&caps,&command,1,0,0,&q));
+    /* Reproduce the reviewed packet explicitly, solely to prove that this
+     * fixture exceeds tolerance when the admission predicate is bypassed. */
+    q=(struct render3d_request){.flags=R3D_CLEAR_COLOR|R3D_TEXTURED|R3D_TEXTURE1,.count=3};
+    q.state.sampler[0]=q.state.sampler[1]=(struct render3d_sampler){R3D_MODULATE,R3D_BILINEAR,1,1};
+    for (unsigned i=0;i<3;i++) {
+        q.vertices[i]=(struct render3d_vertex){command.vertices[i].x*4096,
+            (64*16-command.vertices[i].y)*4096,0,32768,~0u,uv[0][i][0]*2,uv[0][i][1]*2};
+        q.uv1[i][0]=uv[1][i][0]*2; q.uv1[i][1]=uv[1][i][1]*2;
+    }
+    struct render3d_service *services[]={&scratch3d,&reference3d};
+    for (unsigned side=0;side<2;side++) {
+        uint32_t target;
+        FULL_CHECK(!render3d_create_resource(services[side],7,contexts[side],R3D_COLOR,64,64,0,0,&target));
+        struct render3d_resource *texture_resource=&services[side]->contexts[0].resources[2];
+        memcpy(texture_resource->shadow,pixels,64*64*4); texture_resource->resident=false;
+        q.target=target; q.texture=q.texture1=handles[side][2];
+        struct render3d_fence fence;
+        FULL_CHECK(!render3d_submit(services[side],7,contexts[side],&q,sizeof(q),&fence));
+        while (services[side]->queued) FULL_CHECK(render3d_step(services[side])==1);
+        FULL_CHECK(!render3d_wait(services[side],7,contexts[side],fence,0));
+        uint32_t image[64*64];
+        FULL_CHECK(!render3d_readback(services[side],7,contexts[side],target,image,sizeof(image)));
+        if (!side) FULL_CHECK(image[sample]==0xededededu);
+        if (!side) FULL_CHECK(abs((int)(image[sample]&255)-(int)(golden[sample]&255))>2);
+        FULL_CHECK(!render3d_destroy_resource(services[side],7,contexts[side],target));
+    }
+    puts("checkerboard counterexample: GL eaeaeaea, packet edededed at (0,58); production encoder refuses PASS");
 }
 static void large_batch3d(void)
 {
@@ -219,11 +293,35 @@ static void large_batch3d(void)
     FULL_CHECK(savage2d_render3d_batch(&test_engine,invalid,28)==-EINVAL && writes3d==before);
     m.fifo_model=false;
     projective3d(handles,context,pixels);
+    checkerboard_refusal3d(handles,context,pixels);
+    /* Ordinary jobs need every row, unlike the boot checksum. Slow completed
+     * reads may exceed 20 ms in total while each CPU chunk stays bounded. */
+    q=(struct render3d_request){.target=handles[0][0],.copy_target=handles[0][3],.flags=R3D_COPY};
+    read_delay3d=2;
+    FULL_CHECK(!render3d_submit(&scratch3d,7,context[0],&q,sizeof(q),&fence));
+    FULL_CHECK(render3d_step(&scratch3d)==1 && !scratch3d.queued);
+    FULL_CHECK(!render3d_wait(&scratch3d,7,context[0],fence,0));
+    FULL_CHECK(!m.reg[0x850c/4] && !m.reg[0x48c40/4] && !m.reg[0x48584/4]);
+    read_delay3d=9;
+    FULL_CHECK(!render3d_submit(&scratch3d,7,context[0],&q,sizeof(q),&fence));
+    FULL_CHECK(render3d_step(&scratch3d)==-ETIMEDOUT && !scratch3d.queued);
+    read_delay3d=0;
+    FULL_CHECK(render3d_wait(&scratch3d,7,context[0],fence,0)==-ETIMEDOUT);
+    FULL_CHECK(!scratch3d.quarantined && !gpu3d.lost && gpu3d.fullsize_qualified &&
+        test_engine.cpu_safe && !test_engine.event_pending && !test_engine.quarantined);
+    FULL_CHECK(!m.reg[0x850c/4] && !m.reg[0x48c40/4] && !m.reg[0x48584/4]);
+    uint32_t fresh_context,fresh_target;
+    FULL_CHECK(!render3d_create_context(&scratch3d,7,R3D_HARDWARE_REQUIRED,&fresh_context));
+    FULL_CHECK(!render3d_create_resource(&scratch3d,7,fresh_context,R3D_COLOR,16,16,0,0,&fresh_target));
+    q=(struct render3d_request){.target=fresh_target,.flags=R3D_CLEAR_COLOR,.clear_color=0xff123456};
+    FULL_CHECK(!render3d_submit(&scratch3d,7,fresh_context,&q,sizeof(q),&fence));
+    FULL_CHECK(render3d_step(&scratch3d)==1 && !render3d_wait(&scratch3d,7,fresh_context,fence,0));
+    puts("bounded CPU readback: 2 us/read completes and restores; 9 us/read refuses and restores without quarantine PASS");
     FULL_CHECK(!render3d_close(&scratch3d) && !render3d_close(&reference3d) && !allocations3d); finish();
 }
 static void fullsize_suite3d(void)
 {
     fullsize3d(640,480,0); fullsize3d(800,600,0); fullsize3d(1024,768,0);
-    for (unsigned fault=1;fault<=4;fault++) fullsize3d(640,480,fault);
+    for (unsigned fault=1;fault<=6;fault++) fullsize3d(640,480,fault);
     large_batch3d();
 }
