@@ -96,9 +96,9 @@ static void engine_tests(void)
     fb_tick(&f,0);assert(f.done&&fat.commits==1);
     puts("PASS firstboot triggers, crash/resume, durability, idempotence, time bounds, actions");
 }
-static unsigned present=15,queries;
+static unsigned present=31,queries;
 static int game(void *ctx,unsigned id,int remove,uint32_t *bytes)
-{(void)ctx;assert(!remove&&id>=1&&id<=4);queries++;*bytes=4096;return !!(present&(1u<<(id-1)));}
+{(void)ctx;assert(!remove&&id>=1&&id<=5);queries++;*bytes=4096;return !!(present&(1u<<(id-1)));}
 int ciuki_devices(struct ciuki_devices_info *v){(void)v;errno=ENOSYS;return -1;}
 static void games_test(const char *directory)
 {

@@ -18,7 +18,7 @@
 #endif
 #define WALK_DEPTH 16u
 #define WALK_ENTRIES 16384u
-static const char *const packages[]={"wolf3d-shareware","doom-shareware","quake-shareware","war2-demo"};
+static const char *const packages[]={"wolf3d-shareware","doom-shareware","quake-shareware","war2-demo","duke3d-shareware"};
 static int path(struct cp_program_store *s,const char *relative,char *out,size_t cap)
 {
     int n=snprintf(out,cap,"%s%s",s->root ? s->root : "",relative);
@@ -139,7 +139,7 @@ static int records(struct cp_program_store *s,const char *dir,const char *locati
                     char executable[260];
                     if(normal(token,executable) && cp_program_contains(location,executable)){
                         const char *base=strrchr(executable,'/');
-                        if(base && (!strcasecmp(base,"/DOOM.EXE") || !strcasecmp(base,"/WOLF3D.EXE") || !strcasecmp(base,"/QUAKE.EXE") || !strcasecmp(base,"/WAR2.BAT") || !strcasecmp(base,"/WAR2.EXE")))belongs=1;
+                        if(base && (!strcasecmp(base,"/DOOM.EXE") || !strcasecmp(base,"/WOLF3D.EXE") || !strcasecmp(base,"/QUAKE.EXE") || !strcasecmp(base,"/WAR2.BAT") || !strcasecmp(base,"/WAR2.EXE") || !strcasecmp(base,"/DUKE3D.BAT") || !strcasecmp(base,"/DUKE3D.EXE")))belongs=1;
                     }
                 }
             }
@@ -262,7 +262,7 @@ int cp_program_list(struct cp_program_store *s,struct desk_uninstall_entry *out,
         struct desk_uninstall_entry *r=&out[n];
         *r=(struct desk_uninstall_entry){.kind=DESK_PROGRAM_GAME,.game=game,.disk_bytes=bytes};
         snprintf(r->name,sizeof(r->name),"%s",desk_games[game-1].label);
-        snprintf(r->location,sizeof(r->location),"/%s",game==1 ? "WOLF3D" : game==2 ? "DOOM" : game==3 ? "QUAKE" : "WAR2");
+        snprintf(r->location,sizeof(r->location),"/%s",game==1 ? "WOLF3D" : game==2 ? "DOOM" : game==3 ? "QUAKE" : game==4 ? "WAR2" : "DUKE3D");
         int e=game_metadata(s,game,r);if(e)return e;n++;
     }
     const char *const roots[]={"/Games","/Programs"};
