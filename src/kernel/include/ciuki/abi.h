@@ -3363,7 +3363,7 @@ _Static_assert(sizeof(struct ciuki_w32_header) == 16, "ciuki_w32_header frozen s
  * All dispatch runs on the existing display worker. State enum ordinals follow
  * the native render3d contract; unknown state is rejected before submission. */
 #define W32_RENDER3D 514u
-#define CIUKI_R3D_VERSION 1u
+#define CIUKI_R3D_VERSION 2u
 #define CIUKI_R3D_QUERY 1u
 #define CIUKI_R3D_OPEN 2u
 #define CIUKI_R3D_CLOSE 3u
@@ -3380,6 +3380,9 @@ _Static_assert(sizeof(struct ciuki_w32_header) == 16, "ciuki_w32_header frozen s
 #define CIUKI_R3D_RGB565 4u
 #define CIUKI_R3D_ARGB4444 8u
 #define CIUKI_R3D_WIRE_LIMIT 6291456u
+/* Exact Q16 conversion, dyadic integer-pixel area 256..32768, Q/W 0.5..2,
+ * UV -1..1, <=64 textures, LINEAR min/mag, no alpha test/blend. */
+#define CIUKI_R3D_PROJECTIVE_BILINEAR 1u
 #define CIUKI_R3D_TEXTURED 1u
 #define CIUKI_R3D_CLEAR_COLOR 2u
 #define CIUKI_R3D_CLEAR_DEPTH 4u
@@ -3456,9 +3459,9 @@ struct ciuki_r3d_draw {
     uint32_t count;
     uint32_t texture1;
     struct ciuki_r3d_state state;
-    uint32_t flat_color[64];
-    int32_t uv1[192][2];
-    struct ciuki_r3d_vertex vertices[192];
+    uint32_t flat_color[256];
+    int32_t uv1[768][2];
+    struct ciuki_r3d_vertex vertices[768];
 };
 struct ciuki_r3d_caps {
     uint32_t version;
@@ -3479,6 +3482,9 @@ struct ciuki_r3d_caps {
     uint32_t filters;
     uint32_t polygon_offset;
     uint32_t max_pixel_work;
+    uint32_t max_width;
+    uint32_t max_height;
+    uint32_t sampling_features;
 };
 /* QUERY: width/height, format=color mask, kind=depth mask, levels=stencil bits;
  * address/bytes receive caps, with zero features unless the probe admits them.

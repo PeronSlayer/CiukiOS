@@ -39,12 +39,35 @@ static int gl_hw_texture_complete(const struct sw_texture *t) {
   }
   return 0;
 }
+/* Exact dyadic coverage weights avoid the known Q16 barycentric boundary.
+ * The tested smooth-filter subset bounds GL's Q20 plane truncation, including
+ * contrasting texels. Discontinuous nearest/mip/alpha decisions stay refused. */
+static int gl_hw_projective_bilinear(const struct ciuki_r3d_caps *caps,
+    const struct gl_hw_command *g,unsigned first,unsigned unit) {
+  const struct sw_texture *t=g->state.unit[unit].texture;
+  if (!(caps->sampling_features&CIUKI_R3D_PROJECTIVE_BILINEAR) ||
+      t->min!=GL_LINEAR || t->mag!=GL_LINEAR || t->image[0].w>64 || t->image[0].h>64 ||
+      g->state.alpha_test || g->state.blend) return 0;
+  int64_t x[3],y[3];
+  for (unsigned i=0;i<3;i++) {
+    const struct sw_vertex *v=&g->vertices[first+i];
+    if ((v->x&15) || (v->y&15) || v->qw[unit]<524288 || v->qw[unit]>2097152) return 0;
+    for (unsigned axis=0;axis<2;axis++) {
+      int64_t uv=(int64_t)v->uv[unit][axis]*1048576/v->qw[unit];
+      if (uv < -65536 || uv>65536) return 0;
+    }
+    x[i]=v->x/16; y[i]=v->y/16;
+  }
+  int64_t area=(x[1]-x[0])*(y[2]-y[0])-(y[1]-y[0])*(x[2]-x[0]);
+  if (area<0) area=-area;
+  return area>=256 && area<=32768 && !(area&(area-1));
+}
 static int gl_hw_encode(const struct ciuki_r3d_caps *caps, const struct gl_hw_command *g, unsigned target,
     unsigned depth, unsigned copy, struct render3d_request *out) {
   const struct sw_state *s = &g->state;
   *out = (struct render3d_request){0};
   if (!s->width || !s->height || s->width > R3D_MAX_SIZE || s->height > R3D_MAX_SIZE ||
-      g->count > caps->max_vertices || g->count % 3 || s->depth24 || s->rgb565 ||
+      g->count > caps->max_vertices || g->count>R3D_VERTICES || g->count % 3 || s->depth24 || s->rgb565 ||
       s->color_disabled || s->color2 || s->color_mask != UINT32_MAX || s->scissor ||
       (s->stencil_test && s->stencil) || s->fog || s->offset ||
       (g->clear_mask & ~(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT))) return -1;
@@ -59,7 +82,9 @@ static int gl_hw_encode(const struct ciuki_r3d_caps *caps, const struct gl_hw_co
   out->clear_color = g->clear_color;
   if (g->clear_depth > 65535) return -1;
   out->clear_depth = g->clear_depth;
-  if (!caps->features || s->width>caps->max_size || s->height>caps->max_size) return -1;
+  if (!caps->features || s->width>caps->max_size || s->height>caps->max_size ||
+      (caps->max_width && s->width>caps->max_width) ||
+      (caps->max_height && s->height>caps->max_height)) return -1;
   if (s->depth_test) {
     int f=gl_r3d_compare(s->depth_func);
     if (f<0 || !(caps->depth_functions & (1u<<f))) return -1;
@@ -95,9 +120,9 @@ static int gl_hw_encode(const struct ciuki_r3d_caps *caps, const struct gl_hw_co
     out->flags|=u ? R3D_TEXTURE1 : R3D_TEXTURED;
     if (u) out->texture1=g->texture[u]; else out->texture=g->texture[u];
     out->state.sampler[u].combine=mode;
-    /* The vertex checks below prove constant exact UV/Q and Q/W. Both
-     * derivatives are zero, so GL selects magnification and level zero even
-     * with a mipmapped MIN filter. Never discard a potentially used min state. */
+    /* Constant sampling selects magnification even with a mipmapped MIN
+     * filter. Varying sampling below requires identical LINEAR min/mag;
+     * neither case discards a potentially used filter or mip state. */
     out->state.sampler[u].filter=filter;
     out->state.sampler[u].repeat_u=t->wrap_s==GL_REPEAT;
     out->state.sampler[u].repeat_v=t->wrap_t==GL_REPEAT;
@@ -121,17 +146,20 @@ static int gl_hw_encode(const struct ciuki_r3d_caps *caps, const struct gl_hw_co
                (unsigned)v->color[1] << 8 | (unsigned)v->color[2];
     for (unsigned unit=0;unit<2;unit++) if (out->flags & (unit ? R3D_TEXTURE1 : R3D_TEXTURED)) {
       if (v->qw[unit] < 4096 || v->qw[unit] > 268435456 || (v->qw[unit] & 15)) return -1;
-      /* Native interpolation rounds; software planes truncate. Even a sub-Q16
-       * difference can choose a different nearest texel. Until equivalence is
-       * qualified, admit only constant, exactly representable sampling. */
+      /* Even a sub-Q16 difference can choose a different nearest texel.
+       * Only the qualified smooth-filter subset relaxes constant sampling. */
       const struct sw_vertex *first = &g->vertices[i - i % 3];
-      if (v->qw[unit] != first->qw[unit] || v->uv[unit][0] != first->uv[unit][0] ||
-          v->uv[unit][1] != first->uv[unit][1]) return -1;
+      if ((v->qw[unit] != first->qw[unit] || v->uv[unit][0] != first->uv[unit][0] ||
+          v->uv[unit][1] != first->uv[unit][1]) &&
+          !gl_hw_projective_bilinear(caps,g,i-i%3,unit)) return -1;
       int64_t uq = (int64_t)v->uv[unit][0] * 1048576;
       int64_t tq = (int64_t)v->uv[unit][1] * 1048576;
       if (uq % v->qw[unit] || tq % v->qw[unit]) return -1;
       int64_t u = uq / v->qw[unit], t = tq / v->qw[unit];
       if (u < -16*65536 || u > 16*65536 || t < -16*65536 || t > 16*65536) return -1;
+      if ((v->qw[unit]!=first->qw[unit] || v->uv[unit][0]!=first->uv[unit][0] ||
+           v->uv[unit][1]!=first->uv[unit][1]) &&
+          (u < -65536 || u>65536 || t < -65536 || t>65536)) return -1;
       if (unit) { out->uv1[i][0]=(int32_t)u; out->uv1[i][1]=(int32_t)t; }
       else { r->u=(int32_t)u; r->v=(int32_t)t; }
       if (unit && r->rhw!=(unsigned)v->qw[unit]/16) return -1;

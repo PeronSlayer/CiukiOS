@@ -256,10 +256,14 @@ static uint32_t padded_bytes(const struct render3d_resource *r)
     uint32_t pitch=(r->width*bpp+127)&~127u;
     return (pitch*((r->height+15)&~15u)+4095)&~4095u;
 }
+static bool fullsize(const struct savage3d_device *d)
+{ return d && (d->fullsize_qualified || d->fullsize_testing) && d->mode_width && d->mode_height; }
+static bool dimensions(const struct savage3d_device *d,const struct render3d_resource *r)
+{ return fullsize(d) ? r->width<=d->mode_width && r->height<=d->mode_height : r->width<=64 && r->height<=64; }
 static int layout(void *device,struct render3d_resource *r)
 {
-    (void)device;
-    if (!r || !r->width || !r->height || (r->kind==R3D_TEXTURE ? (r->width>1024 || r->height>1024) : (r->width>64 || r->height>64)) ||
+    const struct savage3d_device *d=device;
+    if (!r || !r->width || !r->height || (r->kind==R3D_TEXTURE ? (r->width>1024 || r->height>1024) : !dimensions(d,r)) ||
         r->kind<R3D_COLOR || r->kind>R3D_LINEAR_COLOR) return -EOPNOTSUPP;
     if (r->kind==R3D_TEXTURE && render3d_texture_shape(r)) return -EINVAL;
     r->reserved=padded_bytes(r)+8192;
@@ -269,7 +273,7 @@ static bool extent(const struct savage3d_device *d,const struct render3d_resourc
 {
     uint32_t pool=d->heap.first+d->heap.bytes-(d->texture_bytes ? d->texture_bytes : SAVAGE3D_TEXTURE_MIN);
     return r && r->kind>=R3D_COLOR && r->kind<=R3D_LINEAR_COLOR &&
-        r->hardware && r->shadow && r->width && r->height && (r->kind==R3D_TEXTURE ? !render3d_texture_shape(r) : (r->width<=64 && r->height<=64)) &&
+        r->hardware && r->shadow && r->width && r->height && (r->kind==R3D_TEXTURE ? !render3d_texture_shape(r) : dimensions(d,r)) &&
         r->offset>=d->heap.first && !(r->offset&4095u) &&
         (uint64_t)r->offset+r->reserved<=(uint64_t)d->heap.first+d->heap.bytes &&
         (r->kind==R3D_TEXTURE ? r->offset>=pool : (uint64_t)r->offset+r->reserved<=pool) &&
@@ -278,26 +282,26 @@ static bool extent(const struct savage3d_device *d,const struct render3d_resourc
 }
 static uint32_t signed_ieee(int32_t v)
 { return savage3d_fixed_ieee((uint32_t)(v<0 ? -v : v),16)|(v<0 ? 0x80000000u : 0); }
-static int draw_packet(const struct render3d_request *q,uint32_t out[28],unsigned *count)
+static int draw_packet(const struct render3d_request *q,unsigned first,uint32_t out[28],unsigned *count)
 {
-    struct render3d_vertex v[3]; memcpy(v,q->vertices,sizeof(v));
+    struct render3d_vertex v[3]; memcpy(v,q->vertices+first,sizeof(v));
     for (unsigned i=0;i<3;i++) {
         if (v[i].u < -16*65536 || v[i].u>16*65536 || v[i].v < -16*65536 || v[i].v>16*65536 ||
-            q->uv1[i][0] < -16*65536 || q->uv1[i][0]>16*65536 ||
-            q->uv1[i][1] < -16*65536 || q->uv1[i][1]>16*65536) return -EINVAL;
+            q->uv1[first+i][0] < -16*65536 || q->uv1[first+i][0]>16*65536 ||
+            q->uv1[first+i][1] < -16*65536 || q->uv1[first+i][1]>16*65536) return -EINVAL;
         v[i].u=v[i].v=0;
-        if (q->state.flat) v[i].color=q->flat_color[0];
+        if (q->state.flat) v[i].color=q->flat_color[first/3];
     }
     uint32_t minimum[22]; int e=savage3d_hw_triangle_packet(v,minimum); if (e) return e;
     unsigned stride=q->flags&R3D_TEXTURE1 ? 9 : 7;
     out[0]=stride==9 ? 0x80030008u : 0x800300c8u;
     for (unsigned i=0;i<3;i++) {
         memcpy(out+1+i*stride,minimum+1+i*7,5*4);
-        out[1+i*stride+5]=signed_ieee(q->vertices[i].u);
-        out[1+i*stride+6]=signed_ieee(q->vertices[i].v);
+        out[1+i*stride+5]=signed_ieee(q->vertices[first+i].u);
+        out[1+i*stride+6]=signed_ieee(q->vertices[first+i].v);
         if (stride==9) {
-            out[1+i*stride+7]=signed_ieee(q->uv1[i][0]);
-            out[1+i*stride+8]=signed_ieee(q->uv1[i][1]);
+            out[1+i*stride+7]=signed_ieee(q->uv1[first+i][0]);
+            out[1+i*stride+8]=signed_ieee(q->uv1[first+i][1]);
         }
     }
     *count=1+3*stride; return 0;
@@ -310,7 +314,7 @@ static int validate(void *device,const struct render3d_request *q,struct render3
         (uint64_t)d->heap.first+d->heap.bytes>16u*1024*1024 || d->heap.bytes<=SAVAGE3D_TEXTURE_MIN ||
         (d->texture_bytes && ((d->texture_bytes&4095u) || d->texture_bytes<SAVAGE3D_TEXTURE_MIN || d->texture_bytes>=d->heap.bytes)) ||
         !q || !r || !q->flags || (q->flags&~R3D_ALL_FEATURES) ||
-        render3d_validate_state(q) || q->count>3 || q->count%3 || q->clear_depth>65535 || !extent(d,r[0]) || r[0]->kind!=R3D_COLOR) return -EINVAL;
+        render3d_validate_state(q) || q->count>(fullsize(d) ? R3D_VERTICES : 3u) || q->count%3 || q->clear_depth>65535 || !extent(d,r[0]) || r[0]->kind!=R3D_COLOR) return -EINVAL;
     for (unsigned i=0;i<R3D_REFS;i++) if (r[i]) {
         if (!extent(d,r[i])) return -EINVAL;
         for (unsigned j=0;j<i;j++) if (r[j] && r[i]!=r[j] && overlaps((struct render3d_extent){r[i]->offset,r[i]->reserved},
@@ -339,7 +343,10 @@ static int validate(void *device,const struct render3d_request *q,struct render3
     for (unsigned i=0;i<q->count;i++) if (q->vertices[i].x<0 || q->vertices[i].y<0 ||
         q->vertices[i].x>(int32_t)(r[0]->width<<16) || q->vertices[i].y>(int32_t)(r[0]->height<<16)) return -EINVAL;
     uint32_t words[28]; unsigned count;
-    return q->count ? draw_packet(q,words,&count) : 0;
+    for (unsigned first=0;first<q->count;first+=3) {
+        int e=draw_packet(q,first,words,&count); if (e) return e;
+    }
+    return 0;
 }
 static uint32_t base(const struct render3d_resource *r) { return r->offset+4096; }
 static uint32_t memory_read(struct savage3d_device *d,bool alias,uint32_t off,unsigned bytes)
@@ -494,10 +501,18 @@ static int execute(void *device,const struct render3d_request *q,struct render3d
     if (!e) d->failed_phase=4;
     if (!e && q->count) {
         e=state(d,q,r);
-        uint32_t words[28]; unsigned count=0;
-        if (!e) e=draw_packet(q,words,&count);
-        if (!e) e=packet(d,words,count);
-        if (!e) d->triangles++;
+        unsigned total=0;
+        for (unsigned first=0;!e && first<q->count;first+=3) {
+            unsigned count=0;
+            e=draw_packet(q,first,d->commands+total,&count); total+=count;
+        }
+        if (!e && q->count<=3) e=packet(d,d->commands,total);
+        else if (!e) {
+            if (d->engine->io.now_us(d->engine->io.ctx)-d->slice_started>=20000) e=-ETIMEDOUT;
+            else e=savage2d_render3d_batch(d->engine,d->commands,total);
+            if (!e) d->packets++;
+        }
+        if (!e) d->triangles+=q->count/3;
     }
     if (!e) d->failed_phase=5;
     if (!e && (q->flags&R3D_COPY)) {
@@ -544,7 +559,7 @@ static void quarantine(void *device)
 {
     struct savage3d_device *d=device;
     if (!d) return;
-    d->qualified=false; d->lost=true;
+    d->qualified=d->fullsize_qualified=false; d->lost=true;
     d->engine->render3d_qualified=false;
     d->engine->quarantined=true; d->engine->active=false;
     d->engine->reason="render3d_fault";
@@ -556,6 +571,18 @@ static void detach(struct render3d_service *s,void *owner)
 {
     struct savage3d_device *d=owner;
     if (d && d->consumer==s) d->consumer=0;
+}
+static void query_caps(void *owner,struct ciuki_r3d_caps *out)
+{
+    const struct savage3d_device *d=owner;
+    *out=*savage3d_backend()->capabilities;
+    if (d && d->fullsize_qualified && !d->lost) {
+        out->max_size=d->mode_width>d->mode_height ? d->mode_width : d->mode_height;
+        out->max_width=d->mode_width; out->max_height=d->mode_height;
+        out->max_vertices=R3D_VERTICES;
+        out->max_pixel_work=4*d->mode_width*d->mode_height;
+        out->sampling_features=CIUKI_R3D_PROJECTIVE_BILINEAR;
+    }
 }
 static uint32_t texture_pool_bytes(void *owner)
 {
@@ -573,7 +600,8 @@ const struct render3d_backend *savage3d_backend(void)
     static const struct render3d_backend backend={.features=R3D_ALL_FEATURES,.qualified=qualified,
         .layout=layout,.validate=validate,.enter=enter,.leave=leave,.execute=execute,
         .idle=idle,.quarantine=quarantine,.attach=savage3d_owner_attach,.max_size=64,.detach=detach,
-        .texture_pool_bytes=texture_pool_bytes,.capabilities=&capabilities};
+        .texture_pool_bytes=texture_pool_bytes,.capabilities=&capabilities,.query_caps=query_caps,
+        .resident_bytes=(sizeof(struct savage3d_device)+4095u)&~4095u};
     return &backend;
 }
 
@@ -642,4 +670,98 @@ int savage3d_probe(struct savage3d_device *d)
     if (e) quarantine(d);
     else { d->qualified=true; d->failed_phase=0; }
     leave(d); return e;
+}
+
+/* Trusted boot-only scene. All storage is allocated by the owner before entry.
+ * The scalar and packet engines share input, never rasterization or sampling. */
+static void fullsize_scene(struct render3d_request *q,unsigned w,unsigned h,unsigned phase)
+{
+    memset(q,0,sizeof(*q));
+    q->flags=R3D_TEXTURED|R3D_TEXTURE1|R3D_DEPTH_TEST|R3D_DEPTH_WRITE|R3D_COPY;
+    if (!phase) q->flags|=R3D_CLEAR_COLOR|R3D_CLEAR_DEPTH;
+    q->clear_color=0xff102030; q->clear_depth=65535; q->count=6;
+    q->state.sampler[0]=(struct render3d_sampler){R3D_MODULATE,R3D_BILINEAR,0,0};
+    q->state.sampler[1]=(struct render3d_sampler){R3D_MODULATE,R3D_BILINEAR,0,0};
+    if (phase==2) {
+        q->state.blend=1; q->state.source=R3D_SRC_ALPHA; q->state.destination=R3D_INV_SRC_ALPHA;
+        q->state.sampler[0].filter=R3D_BILINEAR_MIP;
+        q->state.sampler[1].filter=R3D_TRILINEAR;
+        q->state.sampler[0].repeat_u=q->state.sampler[0].repeat_v=1;
+        q->state.sampler[1].repeat_u=q->state.sampler[1].repeat_v=1;
+    }
+    static const unsigned corners[6][2]={{0,0},{1,0},{0,1},{1,0},{1,1},{0,1}};
+    for (unsigned i=0;i<6;i++) {
+        unsigned x=corners[i][0],y=corners[i][1];
+        q->vertices[i]=(struct render3d_vertex){(int32_t)(x*w<<16),(int32_t)(y*h<<16),
+            phase==1 ? 49152u : phase==2 ? 8192u : 32768u,
+            (1+x+y)*65536,phase==1 ? 0xffff0000u : phase==2 ? 0x8090b0d0u : 0xffe0c0a0u,
+            (int32_t)(x*(phase==2 ? 16 : 1)*65536),(int32_t)(y*(phase==2 ? 16 : 1)*65536)};
+        q->uv1[i][0]=q->vertices[i].v; q->uv1[i][1]=q->vertices[i].u;
+    }
+    if (phase==3) {
+        q->count=R3D_VERTICES;
+        for (unsigned triangle=0;triangle<256;triangle++) for (unsigned v=0;v<3;v++) {
+            unsigned i=triangle*3+v;
+            unsigned x=(triangle%16)*(w-16)/15+(v==1 ? 16 : 0);
+            unsigned y=(triangle/16)*(h-16)/15+(v==2 ? 16 : 0);
+            q->vertices[i]=(struct render3d_vertex){x<<16,y<<16,4096,32768u<<v,0xffc0e0a0u,
+                v==1 ? 49152 : 16384,v==2 ? 49152 : 16384};
+            q->uv1[i][0]=q->vertices[i].v; q->uv1[i][1]=q->vertices[i].u;
+        }
+    }
+}
+static int fullsize_compare(struct savage3d_device *d,struct render3d_resource *const hw[R3D_REFS],
+                            struct render3d_resource *const ref[R3D_REFS])
+{
+    const uint32_t *a=hw[0]->shadow,*b=ref[0]->shadow,*copy=hw[3]->shadow;
+    const uint16_t *az=hw[1]->shadow,*bz=ref[1]->shadow;
+    uint32_t ah=2166136261u,bh=2166136261u;
+    for (unsigned i=0;i<hw[0]->width*hw[0]->height;i++) {
+        if (a[i]!=copy[i] || (a[i]==0xff102030u)!=(b[i]==0xff102030u)) return -EILSEQ;
+        for (unsigned shift=0;shift<32;shift+=8) {
+            unsigned ac=a[i]>>shift&255,bc=b[i]>>shift&255,delta=ac>bc ? ac-bc : bc-ac;
+            if (delta>d->max_channel_error) d->max_channel_error=delta;
+            if (delta>2) { d->expected=b[i]; d->actual=a[i]; return -EILSEQ; }
+        }
+        unsigned delta=az[i]>bz[i] ? az[i]-bz[i] : bz[i]-az[i];
+        if (delta>d->max_depth_error) d->max_depth_error=delta;
+        if (delta>1) { d->expected=bz[i]; d->actual=az[i]; return -EILSEQ; }
+        /* Every row and column is read, including tile boundaries and corners.
+         * Raw hashes are evidence; tolerance comparisons above are normative. */
+        ah=(ah^a[i])*16777619u; ah=(ah^az[i])*16777619u;
+        bh=(bh^b[i])*16777619u; bh=(bh^bz[i])*16777619u;
+    }
+    d->sample_count+=hw[0]->width*hw[0]->height;
+    d->hardware_checksum=ah; d->reference_checksum=bh; return 0;
+}
+int savage3d_fullsize_probe(struct savage3d_device *d,struct render3d_service *reference)
+{
+    if (!d || !d->qualified || d->lost || d->fullsize_qualified || !d->consumer || !reference ||
+        d->mode_width<64 || d->mode_height<64 || d->mode_width>1024 || d->mode_height>1024 ||
+        !d->consumer->contexts[0].resources || !reference->contexts[0].resources) return -ENODEV;
+    struct render3d_resource *hw[R3D_REFS],*ref[R3D_REFS];
+    for (unsigned i=0;i<R3D_REFS;i++) {
+        hw[i]=&d->consumer->contexts[0].resources[i]; ref[i]=&reference->contexts[0].resources[i];
+        if (!hw[i]->shadow || !ref[i]->shadow || hw[i]->bytes!=ref[i]->bytes) return -EINVAL;
+    }
+    if (hw[0]->width!=d->mode_width || hw[0]->height!=d->mode_height) return -EINVAL;
+    d->fullsize_testing=true;
+    struct render3d_request *q=(void *)d->consumer->ring[0];
+    int e=0;
+    for (unsigned phase=0;phase<4 && !e;phase++) {
+        fullsize_scene(q,d->mode_width,d->mode_height,phase);
+        e=validate(d,q,hw); if (e) break;
+        struct render3d_job job={0};
+        while (!render3d_scalar_slice(q,ref,&job,&reference->host)) {}
+        e=enter(d); if (e) break;
+        uint64_t start=d->engine->io.now_us(d->engine->io.ctx);
+        e=execute(d,q,hw);
+        d->fullsize_us+=d->engine->io.now_us(d->engine->io.ctx)-start;
+        if (e) quarantine(d);
+        leave(d);
+        if (!e) { d->failed_phase=9; e=fullsize_compare(d,hw,ref); }
+    }
+    d->fullsize_testing=false;
+    if (!e) { d->fullsize_qualified=true; d->failed_phase=0; }
+    return e;
 }

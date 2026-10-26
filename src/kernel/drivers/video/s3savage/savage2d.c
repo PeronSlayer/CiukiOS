@@ -152,7 +152,23 @@ static bool idle_status(struct savage2d *s, uint32_t value)
     }
     return s->idle_mask && (value & s->idle_mask) == s->idle_value;
 }
-static int wait_idle(struct savage2d *s)
+struct bci_budget { uint64_t start; unsigned reads; };
+static bool budget_expired(struct savage2d *s,const struct bci_budget *budget)
+{
+    if (budget && s->io.now_us(s->io.ctx)-budget->start>=WAIT_US) {
+        s->reason="render3d_deadline"; return true;
+    }
+    return false;
+}
+static bool budget_read(struct savage2d *s,struct bci_budget *budget)
+{
+    if (budget_expired(s,budget)) return false;
+    if (budget && budget->reads++>=SLICED_POLLS) {
+        s->reason="render3d_poll_limit"; return false;
+    }
+    return true;
+}
+static int wait_idle_budget(struct savage2d *s,struct bci_budget *budget)
 {
     s->idle_waits++;
     bool first = !s->status_logged;
@@ -185,6 +201,7 @@ static int wait_idle(struct savage2d *s)
             if (delay > WAIT_US - elapsed) delay = (uint32_t)(WAIT_US - elapsed);
             if (s->io.delay_us(s->io.ctx, delay)) { s->reason = "delay_failed"; break; }
         }
+        if (!budget_read(s,budget)) break;
         uint32_t status = s->io.read32(s->io.ctx, s->status_reg);
         uint64_t elapsed = s->io.now_us(s->io.ctx) - start;
         if (first && count < STATUS_SAMPLES) {
@@ -225,6 +242,7 @@ static int wait_idle(struct savage2d *s)
     s->cpu_safe = !result;
     return result;
 }
+static int wait_idle(struct savage2d *s) { return wait_idle_budget(s,0); }
 static int fault(struct savage2d *s)
 {
     if (!s->quarantined) {
@@ -370,7 +388,7 @@ static bool valid_rect(struct savage2d *s, const struct fb_rect *r)
  * deadline, pacing and slices as the completion wait. */
 static bool fifo_busy; /* the last queue read showed used entries */
 static unsigned fifo_free; /* entries known free since that read */
-static int fifo_space(struct savage2d *s, unsigned need)
+static int fifo_space(struct savage2d *s, unsigned need,struct bci_budget *budget)
 {
     if (fifo_free >= need) return 0;
     uint64_t start = s->io.now_us(s->io.ctx), slice = start;
@@ -387,6 +405,7 @@ static int fifo_space(struct savage2d *s, unsigned need)
         }
         /* Busy reads keep the completion wait's pacing. */
         if ((i || fifo_busy) && s->io.delay_us(s->io.ctx, POLL_US)) { s->reason = "delay_failed"; return -EIO; }
+        if (!budget_read(s,budget)) return -EIO;
         uint32_t status = s->io.read32(s->io.ctx, s->status_reg);
         if (status == UINT32_MAX) { s->reason = "dead_mmio"; return -EIO; }
         uint32_t used = status & s->fifo_mask;
@@ -401,17 +420,59 @@ static int fifo_space(struct savage2d *s, unsigned need)
 /* Chunked BCI writes, each chunk from the window start like every packet
  * here (X.Org rewinds with BCI_RESET, savage_bci.h:48; the queue does not
  * decode the offset). */
-static int fifo_send(struct savage2d *s, const uint32_t *words, unsigned n)
+static int fifo_send_budget(struct savage2d *s, const uint32_t *words, unsigned n,
+                            struct bci_budget *budget)
 {
     while (n) {
         /* As many entries as the last read proved free, at least one. */
-        if (fifo_space(s, 1)) return -EIO;
+        if (budget_expired(s,budget) || fifo_space(s,1,budget)) return -EIO;
         unsigned chunk = n < fifo_free ? n : fifo_free;
         if (chunk > FIFO_CHUNK) chunk = FIFO_CHUNK;
         for (unsigned i = 0; i < chunk; i++) s->io.write32(s->io.ctx, SAVAGE_BCI + i * 4, words[i]);
         fifo_free -= chunk; words += chunk; n -= chunk;
     }
     return 0;
+}
+static int fifo_send(struct savage2d *s,const uint32_t *words,unsigned n)
+{ return fifo_send_budget(s,words,n,0); }
+int savage2d_render3d_batch(struct savage2d *s,const uint32_t *words,unsigned n)
+{
+    /* Only validated triangle-list packets may enter this stream. Validate
+     * every header/length before sync or the first MMIO write. */
+    if (!s || !words || !n || n>256u*28u) return -EINVAL;
+    unsigned triangles=0;
+    for (unsigned at=0;at<n;) {
+        unsigned size=words[at]==0x800300c8u ? 22 : words[at]==0x80030008u ? 28 : 0;
+        if (!size || size>n-at || ++triangles>256) return -EINVAL;
+        at+=size;
+    }
+    if (!s->active || s->quarantined) return -EIO;
+    if (!s->render3d_qualified || s->chip!=SAVAGE_SUPER || s->cob_offset) return -EOPNOTSUPP;
+    int (*pause)(void *)=s->pause; s->pause=0;
+    int e=sync_engine(s);
+    if (!e) {
+        s->event_before=s->io.read32(s->io.ctx,SAVAGE_EVENT_STATUS);
+        if (s->event_before==UINT32_MAX) e=fail(s,"dead_event_mmio");
+    }
+    if (!e) {
+        s->event_tag=(uint16_t)(s->event_before+1u);
+        if (!s->event_tag) s->event_tag=1;
+        s->event_pending=true; s->cpu_safe=false; s->submitted=true;
+        s->io.drain(s->io.ctx);
+        fifo_busy=false; fifo_free=0;
+        struct bci_budget budget={.start=s->io.now_us(s->io.ctx)};
+        for (unsigned at=0;at<n && !e;) {
+            unsigned size=words[at]==0x800300c8u ? 22 : 28;
+            e=fifo_send_budget(s,words+at,size,&budget); at+=size;
+        }
+        const uint32_t fence[]={BCI_WAIT_2D|0x00010000u,BCI_EVENT|s->event_tag};
+        if (!e) e=fifo_send_budget(s,fence,2,&budget);
+        if (!e && fifo_busy && s->io.delay_us(s->io.ctx,POLL_US)) { s->reason="delay_failed"; e=-EIO; }
+        fifo_busy=false; fifo_free=0;
+        if (!e) e=wait_idle_budget(s,&budget);
+        if (e) e=fault(s);
+    }
+    s->pause=pause; return e;
 }
 /* f2-92 host-to-screen image write: X.Org EXA SavageUploadToScreen
  * (savage_exa.c:433-561): RECT | XP | YP | CLIP_LR | SRC_COLOR, ROP CC,

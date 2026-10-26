@@ -19,9 +19,10 @@ unsigned gl_kernel_writes(void);
 unsigned gl_kernel_presents(void);
 const uint32_t *gl_kernel_pixels(void);
 extern const struct gl_hw_driver *w32_gdi_render3d_native(unsigned);
+static unsigned replay_width=64,replay_height=64;
 static HDC make_kernel_context(HGLRC *rc) {
   HDC dc=CreateCompatibleDC(0);
-  BITMAPINFO bi={.bmiHeader={.biSize=40,.biWidth=64,.biHeight=-64,.biPlanes=1,.biBitCount=32}};
+  BITMAPINFO bi={.bmiHeader={.biSize=40,.biWidth=replay_width,.biHeight=-(int)replay_height,.biPlanes=1,.biBitCount=32}};
   void *bits=0;
   HBITMAP bitmap=CreateDIBSection(dc,&bi,DIB_RGB_COLORS,&bits,0,0);
   assert(bitmap && SelectObject(dc,bitmap));
@@ -42,7 +43,7 @@ static void triangle_kernel(unsigned color) {
 }
 static void replay(uint32_t *pixels,int hardware) {
   HGLRC rc; HDC dc=make_kernel_context(&rc);
-  glViewport(0,0,64,64); glClearColor(.1f,.2f,.3f,1); glClearDepth(1);
+  glViewport(0,0,replay_width,replay_height); glClearColor(.1f,.2f,.3f,1); glClearDepth(1);
   glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT); glEnable(GL_DEPTH_TEST); glDepthFunc(GL_LEQUAL);
   unsigned char texels[16]={160,200,240,255,240,80,120,255,40,160,80,255,200,120,40,255};
   for (unsigned u=0;u<2;u++) {
@@ -57,20 +58,20 @@ static void replay(uint32_t *pixels,int hardware) {
   }
   glActiveTextureARB(GL_TEXTURE0_ARB);
   unsigned capture=0;
-  for (unsigned i=0;i<12;i++) triangle_kernel(0xff806040u);
-  glReadPixels(0,0,64,64,GL_RGBA,GL_UNSIGNED_BYTE,pixels+4096*capture++);
+  for (unsigned i=0;i<(replay_width==64 ? 12u : 4u);i++) triangle_kernel(0xff806040u);
+  glReadPixels(0,0,replay_width,replay_height,GL_RGBA,GL_UNSIGNED_BYTE,pixels+replay_width*replay_height*capture++);
   glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
   glEnable(GL_ALPHA_TEST); glAlphaFunc(GL_GREATER,.1f); triangle_kernel(0x8080c040u);
-  glReadPixels(0,0,64,64,GL_RGBA,GL_UNSIGNED_BYTE,pixels+4096*capture++);
+  glReadPixels(0,0,replay_width,replay_height,GL_RGBA,GL_UNSIGNED_BYTE,pixels+replay_width*replay_height*capture++);
   /* DST_COLOR and polygon offset deliberately exercise whole-draw fallback. */
   glBlendFunc(GL_DST_COLOR,GL_ZERO); triangle_kernel(0xff80ffffu);
-  glReadPixels(0,0,64,64,GL_RGBA,GL_UNSIGNED_BYTE,pixels+4096*capture++);
+  glReadPixels(0,0,replay_width,replay_height,GL_RGBA,GL_UNSIGNED_BYTE,pixels+replay_width*replay_height*capture++);
   glDisable(GL_BLEND); glEnable(GL_POLYGON_OFFSET_FILL); glPolygonOffset(1,1); triangle_kernel(0xff4080c0u);
-  glReadPixels(0,0,64,64,GL_RGBA,GL_UNSIGNED_BYTE,pixels+4096*capture++);
+  glReadPixels(0,0,replay_width,replay_height,GL_RGBA,GL_UNSIGNED_BYTE,pixels+replay_width*replay_height*capture++);
   glDisable(GL_POLYGON_OFFSET_FILL);
   glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
   triangle_kernel(0xff804020u);
-  glFinish(); glReadPixels(0,0,64,64,GL_RGBA,GL_UNSIGNED_BYTE,pixels+4096*capture++);
+  glFinish(); glReadPixels(0,0,replay_width,replay_height,GL_RGBA,GL_UNSIGNED_BYTE,pixels+replay_width*replay_height*capture++);
   assert(capture==5);
   assert(glGetError()==GL_NO_ERROR);
   if (hardware) assert(gl_kernel_draws()>0);
@@ -105,4 +106,15 @@ void gl_kernel_replay(void) {
   assert(d->finish(id)<0); d->close(id); gl_kernel_teardown();
   gl_hardware_native(0);
   puts("PASS format/mode refusal, completed GPU linear copy, revoked lease and process death mid-frame; zero retained allocations");
+  static uint32_t full_golden[640*480*5],full_actual[640*480*5];
+  replay_width=640; replay_height=480; gl_hardware_native(1);
+  gl_kernel_setup(0); replay(full_golden,0); assert(!gl_kernel_writes()); gl_kernel_teardown();
+  gl_kernel_setup(2); unsigned before=gl_kernel_draws(); replay(full_actual,1);
+  assert(gl_kernel_draws()>before);
+  for (unsigned i=0;i<640*480*5;i++) for (unsigned c=0;c<4;c++) {
+    int delta=(int)(full_actual[i]>>(c*8)&255)-(int)(full_golden[i]>>(c*8)&255);
+    assert(delta>=-2 && delta<=2);
+  }
+  gl_kernel_teardown(); gl_hardware_native(0); replay_width=replay_height=64;
+  puts("PASS 640x480 real GL/GDI/copied-wire/fake Savage: full-size boot qualification, lightmap/depth/blend/HUD replay equals software golden within two levels; unqualified zero writes");
 }

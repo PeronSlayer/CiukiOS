@@ -22,7 +22,8 @@ struct savage3d_plan {
 int savage3d_plan_vram(uint32_t, const struct render3d_extent *, unsigned,
                       uint32_t, uint32_t, struct savage3d_plan *);
 const struct render3d_backend *savage3d_backend(void);
-#define SAVAGE3D_ALIAS_BYTES (64u * 8192u)
+#define SAVAGE3D_ALIAS_BYTES (1024u * 8192u)
+#define SAVAGE3D_BATCH_WORDS (256u * 28u)
 #define SAVAGE3D_TEXTURE_MIN (256u * 1024u)
 /* Linear offsets are absolute VRAM bytes; aperture offsets are alias-local.
  * Only the owner creates these callbacks/mappings. No client sees them. */
@@ -40,6 +41,12 @@ struct savage3d_device {
     uint32_t generation;
     uint32_t texture_bytes;
     bool qualified, probing, locked, lost;
+    bool fullsize_qualified, fullsize_testing;
+    uint32_t mode_width, mode_height;
+    uint32_t sample_count, reference_checksum, hardware_checksum;
+    uint32_t max_channel_error, max_depth_error;
+    uint64_t fullsize_us;
+    uint32_t commands[SAVAGE3D_BATCH_WORDS];
     struct render3d_service *consumer;
     void (*lost_notify)(void *);
     uint64_t packets, triangles, copies;
@@ -51,6 +58,7 @@ int savage3d_mode_heap(const struct savage2d *, const struct fb_device *, uint32
 /* Source-complete positive qualification, entered only after claims and a
  * fresh durable operation marker. All scratch is inside device.heap. */
 int savage3d_probe(struct savage3d_device *);
+int savage3d_fullsize_probe(struct savage3d_device *, struct render3d_service *);
 void savage3d_bind_vfs(struct vfs *);
 void savage3d_boot_diagnostic(struct savage2d *, const struct fb_device *);
 int savage3d_owner_stop(struct savage2d *);

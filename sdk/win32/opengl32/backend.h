@@ -5,7 +5,7 @@
 #define W32_GL_BACKEND_H
 #include "../../libgl/software/renderer.h"
 #define GL_HW_VERSION 1u
-#define GL_HW_VERTICES 192u
+#define GL_HW_VERTICES 768u
 #define GL_HW_TEXTURES 64u
 #define GL_HW_BATCHES 64u
 struct gl_hw_format {

@@ -98,7 +98,7 @@ int savage3d_owner_stop(struct savage2d *engine)
 {
     if (device.engine!=engine) return 0;
     /* Called under presenter before its 2D mappings/lease can be revoked. */
-    device.qualified=false; engine->render3d_qualified=false;
+    device.qualified=device.fullsize_qualified=false; engine->render3d_qualified=false;
     if (device.consumer) {
         int e=render3d_close(device.consumer);
         if (e) return e;
@@ -120,31 +120,63 @@ static void *host_alloc(void *ctx,size_t bytes) { (void)ctx; return kmalloc(byte
 static void host_free(void *ctx,void *p) { (void)ctx; kfree(p); }
 static uint64_t host_now(void *ctx)
 { (void)ctx; return device.engine->io.now_us(device.engine->io.ctx); }
-static int scratch_create(struct render3d_service **out)
+static int scratch_create(struct render3d_service **out,unsigned width,unsigned height,bool full,bool hardware)
 {
     struct render3d_service *s=kmalloc(sizeof(*s)); if (!s) return -ENOMEM;
     const struct render3d_host host={0,host_alloc,host_free,host_now,0};
     render3d_init(s,&host,device.generation,0,0,(struct render3d_extent){0});
     uint32_t context;
     int e=render3d_create_context(s,1,R3D_SOFTWARE,&context);
-    uint32_t texture[32*16];
-    for (unsigned i=0;i<32*16;i++) texture[i]=(i%32)<16 ? 0xff4080c0u : 0xffc04080u;
-    const enum render3d_kind kinds[]={R3D_COLOR,R3D_D16,R3D_TEXTURE,R3D_LINEAR_COLOR};
-    uint32_t at=device.heap.first;
-    for (unsigned i=0;!e && i<4;i++) {
+    const enum render3d_kind kinds[]={R3D_COLOR,R3D_D16,R3D_TEXTURE,R3D_LINEAR_COLOR,R3D_TEXTURE};
+    uint32_t at=device.heap.first,tex_at=device.heap.first+device.heap.bytes-device.texture_bytes;
+    for (unsigned i=0;!e && i<(full ? 5u : 4u);i++) {
         uint32_t resource;
-        e=render3d_create_resource(s,1,context,kinds[i],i==2 ? 32 : 64,i==2 ? 16 : 64,
-            i==2 ? texture : 0,i==2 ? sizeof(texture) : 0,&resource);
-        if (!e) {
+        uint32_t *pixels=(void *)s->ring[2];
+        if (full && kinds[i]==R3D_TEXTURE) {
+            struct render3d_texture_desc desc={.format=R3D_ARGB8888,.width=32,.height=32,.levels=6};
+            unsigned offset=0;
+            for (unsigned level=0,side=32;level<6;level++,side=side>1 ? side/2 : 1) {
+                for (unsigned y=0;y<side;y++) for (unsigned x=0;x<side;x++)
+                    pixels[offset+y*side+x]=0xff000000u|((96+x*2+level*8)<<16)|((112+y*2+level*8)<<8)|(128+level*8+i);
+                desc.image[level]=(struct render3d_texture_image){pixels+offset,side*side*4,side*4};
+                offset+=side*side;
+            }
+            e=render3d_create_texture(s,1,context,&desc,&resource);
+        } else {
+            if (i==2) for (unsigned j=0;j<32*16;j++) pixels[j]=(j%32)<16 ? 0xff4080c0u : 0xffc04080u;
+            e=render3d_create_resource(s,1,context,kinds[i],i==2 ? 32 : width,i==2 ? 16 : height,
+                i==2 ? pixels : 0,i==2 ? 32*16*4 : 0,&resource);
+        }
+        if (!e && hardware) {
             struct render3d_resource *r=&s->contexts[0].resources[i];
-            r->hardware=true;
-            r->offset=i==2 ? device.heap.first+device.heap.bytes-device.texture_bytes : at;
+            r->hardware=true; r->offset=kinds[i]==R3D_TEXTURE ? tex_at : at;
             e=savage3d_backend()->layout(&device,r);
-            if (i!=2) at+=r->reserved;
+            if (kinds[i]==R3D_TEXTURE) tex_at+=r->reserved; else at+=r->reserved;
         }
     }
     if (e) { (void)render3d_close(s); kfree(s); return e; }
     *out=s; return 0;
+}
+static void fullsize_diagnostic(struct render3d_service **scratch)
+{
+    /* Minimum probe has completed/restored. Scratch allocation and scalar
+     * reference rendering never occur inside presenter/engine ownership. */
+    (void)render3d_close(*scratch); kfree(*scratch); *scratch=0;
+    struct render3d_service *reference=0;
+    device.fullsize_testing=true;
+    int e=scratch_create(scratch,device.mode_width,device.mode_height,true,true);
+    device.fullsize_testing=false;
+    if (!e) e=scratch_create(&reference,device.mode_width,device.mode_height,true,false);
+    if (!e) {
+        device.consumer=*scratch;
+        e=savage3d_fullsize_probe(&device,reference);
+        device.consumer=0;
+    }
+    if (reference) { (void)render3d_close(reference); kfree(reference); }
+    klog("[3d] fullsize result=%s error=%d width=%u height=%u samples=%u reference=%08x hardware=%08x channel_error=%u depth_error=%u elapsed_us=%llu phase=%u guard=%u quarantined=%u",
+        !e ? "qualified" : "refused",e,device.mode_width,device.mode_height,device.sample_count,
+        device.reference_checksum,device.hardware_checksum,device.max_channel_error,device.max_depth_error,
+        device.fullsize_us,device.failed_phase,device.guard_offset,device.lost);
 }
 static bool token(void)
 {
@@ -190,6 +222,7 @@ void savage3d_boot_diagnostic(struct savage2d *engine,const struct fb_device *fb
     if (!e && !marker_vfs) { e=-ENODEV; reason="marker_store"; }
     if (!e) {
         device=(struct savage3d_device){.engine=engine,.generation=fb->generation,.heap=heap,
+            .mode_width=fb->width,.mode_height=fb->height,
             .texture_bytes=(heap.bytes-(required-SAVAGE3D_TEXTURE_MIN))&~4095u,
             .memory={0,memory_read,memory_write,enter,leave},.lost_notify=lost_notify};
         uint32_t bases[]={fb->phys+heap.first,alias}, sizes[]={heap.bytes,SAVAGE3D_ALIAS_BYTES};
@@ -211,7 +244,7 @@ void savage3d_boot_diagnostic(struct savage2d *engine,const struct fb_device *fb
         }
     }
     struct render3d_service *scratch=0;
-    if (!e) { e=scratch_create(&scratch); reason="scratch"; }
+    if (!e) { e=scratch_create(&scratch,64,64,false,true); reason="scratch"; }
     if (!e) {
         bool previous=false;
         e=display_attempt_marker(marker_vfs,"3d-s3savage",pci->vendor,pci->device,0,false,&previous,0);
@@ -223,6 +256,10 @@ void savage3d_boot_diagnostic(struct savage2d *engine,const struct fb_device *fb
         device.consumer=scratch;
         e=savage3d_probe(&device); reason="engine_probe";
         device.consumer=0;
+        if (!e) {
+            fullsize_diagnostic(&scratch);
+            if (device.lost) e=-EIO;
+        }
     }
     if (marker_fresh && !device.lost) {
         int clear=display_attempt_marker(marker_vfs,"3d-s3savage",pci->vendor,pci->device,0,true,0,0);

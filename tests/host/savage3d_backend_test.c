@@ -5,9 +5,10 @@
 #include "savage2d_fixture.inc"
 #include <math.h>
 #include "../../src/kernel/drivers/video/s3savage/savage3d.h"
+#include "../../sdk/win32/opengl32/encode.h"
 static struct savage3d_device gpu3d;
 static struct render3d_service scratch3d;
-static uint8_t ram3d[1024*1024];
+static uint8_t ram3d[0x7ff000];
 static uint32_t batch3d[32], count3d, need3d;
 static unsigned draw3d, copy3d, writes3d, memory3d, corruption3d, allocations3d;
 static bool dropping3d, bad_restore3d;
@@ -52,7 +53,7 @@ static void raster3d(void)
     unsigned cp=(dc&127)*128,zp=((zc>>25)&63)*128;
     uint32_t scissor=m.reg[0x485e4/4];
     unsigned width=(scissor&0x7ff)+1,height=((scissor>>12)&0xfff)+1;
-    CHECK(width<=64 && height<=64 && cp==((width*4+127)&~127u));
+    CHECK(width<=1024 && height<=1024 && cp==((width*4+127)&~127u));
     CHECK(!depth_enabled || zp==((width*2+127)&~127u));
     long double x[3],y[3],z[3],u[3],v[3],u1[3],v1[3],rw[3]; uint32_t colors[3];
     for (unsigned i=0;i<3;i++) {
@@ -76,7 +77,11 @@ static void raster3d(void)
         unsigned from=(i+1)%3,to=(i+2)%3;
         inclusive[i]=y[to]<y[from] || (y[to]==y[from] && x[to]>x[from]);
     }
-    for (unsigned yy=0;yy<height;yy++) for (unsigned xx=0;xx<width;xx++) {
+    unsigned left=(unsigned)fmaxl(0,floorl(fminl(x[0],fminl(x[1],x[2]))));
+    unsigned right=(unsigned)fminl(width,ceill(fmaxl(x[0],fmaxl(x[1],x[2]))));
+    unsigned top=(unsigned)fmaxl(0,floorl(fminl(y[0],fminl(y[1],y[2]))));
+    unsigned bottom=(unsigned)fminl(height,ceill(fmaxl(y[0],fmaxl(y[1],y[2]))));
+    for (unsigned yy=top;yy<bottom;yy++) for (unsigned xx=left;xx<right;xx++) {
         long double px=xx+0.5L,py=yy+0.5L;
         /* Keep exact edge numerators until the last division. Normalizing
          * each weight first can move an exact nearest-sampling boundary. */
@@ -162,17 +167,25 @@ static void write_engine3d(void *ctx,uint32_t off,uint32_t value)
         CHECK(off==0x48c40 || off==0x850c || test_engine.quarantined);
         model_write(ctx,off,value); return;
     }
+    CHECK(off>=SAVAGE_BCI && off<SAVAGE_BCI+128 && !(off&3));
+    if (m.fifo_model) {
+        m.fifo_used++;
+        if (m.fifo_used>m.fifo_peak) m.fifo_peak=m.fifo_used;
+        CHECK(m.fifo_used<=32);
+    }
+    writes3d++;
+    if (!count3d && value==0xc0030000u) return;
+    if (!count3d && (value&0xffff0000u)==0x98000000u) {
+        CHECK(value&65535); m.reg[SAVAGE_EVENT_STATUS/4]=value&65535; return;
+    }
     if (!count3d) {
         need3d=(value&0xff000000)==0x96000000 ? ((value>>16)&255)+1 :
             value==0x80030008 ? 28 : value==0x800300c8 ? 22 : value==0x4bcc8c00 ? 6 : value==0x4bcc14c0 ? 8 : 0;
         CHECK(need3d && need3d<=30);
     }
-    CHECK(off==SAVAGE_BCI+count3d*4 && count3d<32);
-    batch3d[count3d++]=value; writes3d++;
-    if (count3d==need3d+2) {
-        CHECK(batch3d[need3d]==0xc0030000u && (value&0xffff0000u)==0x98000000u && (value&65535));
-        interpret3d(); m.reg[SAVAGE_EVENT_STATUS/4]=value&65535; count3d=0;
-    }
+    CHECK(count3d<32); batch3d[count3d++]=value;
+    if (count3d==need3d) { interpret3d(); count3d=0; }
+
 }
 static uint32_t memory_read3d(void *ctx,bool alias,uint32_t offset,unsigned bytes)
 {
@@ -326,6 +339,7 @@ static void variants3d(const struct render3d_host *host)
     printf("Savage variants: %u cases, 7 target sizes, 6 texture sizes, all 63 flag combinations, empty lists, perspective, depth masks and conversion PASS\n",cases);
 }
 #include "savage3d_fixed_function.inc"
+#include "savage3d_fullsize.inc"
 static void backend3d(unsigned fault,bool variants)
 {
     CHECK(!allocations3d);
@@ -374,7 +388,8 @@ static void backend3d(unsigned fault,bool variants)
 }
 int main(int argc,char **argv)
 {
-    if (argc==2 && !strcmp(argv[1],"variants")) backend3d(0,true);
+    if (argc==2 && !strcmp(argv[1],"fullsize")) fullsize_suite3d();
+    else if (argc==2 && !strcmp(argv[1],"variants")) backend3d(0,true);
     else for (unsigned i=0;i<6;i++) backend3d(i,i==0);
     printf("Savage production packets/owner: positive textured Gouraud D16 probe, conversion, guards, restoration, rejection/fault containment: %s\n",failures ? "FAIL" : "PASS");
     fflush(stdout); return failures ? 1 : 0;

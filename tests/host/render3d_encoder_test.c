@@ -15,6 +15,8 @@ int main(void)
     }
     struct render3d_request q;
     assert(!gl_hw_encode(&caps,&g,1,2,0,&q) && q.state.depth_func==R3D_LEQUAL);
+    caps.max_width=63; assert(gl_hw_encode(&caps,&g,1,2,0,&q)); caps.max_width=64;
+    caps.max_height=63; assert(gl_hw_encode(&caps,&g,1,2,0,&q)); caps.max_height=64;
     caps.depth_functions&=~(1u<<R3D_LEQUAL); assert(gl_hw_encode(&caps,&g,1,2,0,&q)); caps.depth_functions=255;
     g.state.blend=1;g.state.sfactor=GL_SRC_ALPHA;g.state.dfactor=GL_ONE_MINUS_SRC_ALPHA;
     assert(!gl_hw_encode(&caps,&g,1,2,0,&q));

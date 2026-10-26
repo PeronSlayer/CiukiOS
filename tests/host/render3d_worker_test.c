@@ -137,7 +137,7 @@ int main(int argc,char **argv) {
     struct ciuki_w32_render3d_args a=query();
     assert(!w32_render3d_call(&thread,&a) && !a.error && a.result && dispatches==1);
     struct ciuki_r3d_caps c;memcpy(&c,user_memory,sizeof(c));
-    assert(c.version==1 && c.generation==42 && !c.features && allocations==1 && !staging && !pending);
+    assert(c.version==CIUKI_R3D_VERSION && c.generation==42 && !c.features && allocations==1 && !staging && !pending);
     if (argc==2 && !strcmp(argv[1],"budget")) { budget(); goto done; }
     unsigned calls=dispatches, sleeps=sleep_count;
     for (unsigned i=0;i<10000;i++) {

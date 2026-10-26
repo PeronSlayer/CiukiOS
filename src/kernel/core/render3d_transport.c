@@ -27,7 +27,8 @@ static void *ralloc(void *ctx,size_t bytes)
     uint32_t extent=(uint32_t)bytes+8;
     uint32_t charge=(extent+PAGE_SIZE-1)&~(PAGE_SIZE-1);
     uint32_t flags=irq_save();
-    bool fits=charge<=R3D_RAM_LIMIT-resident_bytes;
+    uint32_t backend=service && service->backend ? service->backend->resident_bytes : 0;
+    bool fits=backend<=R3D_RAM_LIMIT-resident_bytes && charge<=R3D_RAM_LIMIT-resident_bytes-backend;
     if (fits) resident_bytes+=charge;
     irq_restore(flags);
     if (!fits) return 0;

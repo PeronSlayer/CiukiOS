@@ -23,6 +23,8 @@ void klog(const char *fmt,...)
     char text[512]; va_list ap; va_start(ap,fmt); vsnprintf(text,sizeof(text),fmt,ap); va_end(ap);
     (void)text;
 }
+int savage2d_render3d_batch(struct savage2d *s,const uint32_t *words,unsigned n)
+{ (void)s; (void)words; (void)n; assert(!"unqualified service emitted a batch"); return -EIO; }
 int savage2d_render3d_packet(struct savage2d *s,const uint32_t *words,unsigned n)
 { (void)s; (void)words; (void)n; assert(!"unqualified service emitted a packet"); return -EIO; }
 static void *alloc_mem(void *ctx,size_t bytes)

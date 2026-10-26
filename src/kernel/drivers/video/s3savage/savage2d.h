@@ -107,6 +107,7 @@ int savage2d_start(struct savage2d *, const struct savage_io *, const struct fb_
 /* Internal packet transport, caller holds presenter then engine ownership.
  * Uses this exact 2D owner/status/quarantine; creates no mapping or reset. */
 int savage2d_render3d_packet(struct savage2d *, const uint32_t *, unsigned);
+int savage2d_render3d_batch(struct savage2d *, const uint32_t *, unsigned);
 /* Early chips require a disjoint driver-owned 128 KiB VRAM COB. Zero means
  * unavailable. No register access on invalid family/geometry/reservation. */
 int savage2d_start_chip(struct savage2d *, const struct savage_io *, const struct fb_device *,

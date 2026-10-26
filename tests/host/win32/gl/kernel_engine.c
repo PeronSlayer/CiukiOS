@@ -3,7 +3,7 @@
 #include "savage3d_backend_fixture.inc"
 #include "../../../../src/kernel/drivers/video/render3d_transport.h"
 static unsigned wire_pid=7, lease_token, lease_generation, wire_presented;
-static uint32_t frame_pixels[64*64];
+static uint32_t frame_pixels[640*480];
 static int present_wire(void *ctx,uint32_t pid,const struct ciuki_w32_render3d_args *a,
                         const void *data,uint32_t bytes)
 {
@@ -21,6 +21,15 @@ void gl_kernel_setup(int qualified)
     test_engine.render3d_qualified=qualified;
     test_engine.io.write32=write_engine3d;
     struct render3d_host host={0,allocate3d,free3d,clock3d,0};
+    if (qualified==2) {
+        m.exact_clock=true;
+        gpu3d.mode_width=640; gpu3d.mode_height=480; gpu3d.fullsize_testing=true;
+        fullsize_resources3d(&scratch3d,&host,640,480,true);
+        fullsize_resources3d(&reference3d,&host,640,480,false);
+        gpu3d.fullsize_testing=false; gpu3d.consumer=&scratch3d;
+        CHECK(!savage3d_fullsize_probe(&gpu3d,&reference3d));
+        CHECK(!render3d_close(&scratch3d) && !render3d_close(&reference3d)); gpu3d.consumer=0;
+    }
     render3d_init(&scratch3d,&host,42,savage3d_backend(),&gpu3d,gpu3d.heap);
     gpu3d.consumer=&scratch3d; wire_pid=7;
     lease_token=1234; lease_generation=42; wire_presented=0;
