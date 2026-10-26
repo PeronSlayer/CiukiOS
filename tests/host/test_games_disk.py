@@ -14,7 +14,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
-PACKAGES = ("wolf3d-shareware", "doom-shareware", "quake-shareware", "war2-demo")
+PACKAGES = ("wolf3d-shareware", "doom-shareware", "quake-shareware", "war2-demo", "duke3d-shareware")
 
 
 def load(name, path):
@@ -397,12 +397,13 @@ class DiskTests(unittest.TestCase):
         self.assertEqual([p["name"] for p in m["packages"]], list(PACKAGES))
         game = [f for f in m["files"] if f["role"] != "dos_system"]
         self.assertEqual({f["path"].rsplit("/", 1)[0] for f in game}, {"/WOLF3D", "/DOOM", "/QUAKE", "/QUAKE/ID1", "/WAR2", "/WAR2/DATA", "/WAR2/DEMODATA",
-                                                                                    "/WAR2/DRIVERS", "/WAR2/KALI", "/WAR2/UTIL"})
+                                                                                    "/WAR2/DRIVERS", "/WAR2/KALI", "/WAR2/UTIL", "/DUKE3D"})
         self.assertTrue(all(f["redistribution"] == "free" and len(f["sha256"]) == 64 for f in game))
         self.assertIn("/DOOM/CIUKI.CFG", {f["path"] for f in game})
-        self.assertEqual({f["path"] for f in game if f["role"] == "executable"}, {"/WOLF3D/WOLF3D.EXE", "/DOOM/DOOM.EXE", "/QUAKE/QUAKE.EXE", "/WAR2/WAR2.EXE"})
+        self.assertEqual({f["path"] for f in game if f["role"] == "executable"}, {"/WOLF3D/WOLF3D.EXE", "/DOOM/DOOM.EXE", "/QUAKE/QUAKE.EXE", "/WAR2/WAR2.EXE", "/DUKE3D/DUKE3D.EXE"})
         self.assertEqual({f["path"] for f in game if f.get("generated")},
-                         {"/DOOM/CIUKI.CFG", "/WAR2/DRIVERS/DIG.INI", "/WAR2/DRIVERS/MDI.INI", "/WAR2/WAR2.BAT"})
+                         {"/DOOM/CIUKI.CFG", "/WAR2/DRIVERS/DIG.INI", "/WAR2/DRIVERS/MDI.INI", "/WAR2/WAR2.BAT",
+                          "/DUKE3D/DUKE3D.CFG", "/DUKE3D/DUKE3D.BAT", "/DUKE3D/DUKESB.COM"})
         system = {f["path"]: f["sha256"] for f in m["files"] if f["role"] == "dos_system"}
         dos_manifest = json.loads(DOSBOOT.with_suffix(".json").read_text())
         self.assertEqual(system, {p["path"]: p["sha256"] for p in dos_manifest["payloads"]})
@@ -597,6 +598,57 @@ class Warcraft2DemoTests(unittest.TestCase):
         self.assertIn("Creative Labs Sound Blaster 16", aildrvr)
 
 
+class Duke3DSharewareTests(unittest.TestCase):
+    def test_original_release_and_complete_licence_file_list(self):
+        record, files, docs = games.package_files("duke3d-shareware")
+        self.assertEqual(record["sha256"], "c67efd179022bc6d9bde54f404c707cbcbdc15423c20be72e277bc2bdddf3d0e")
+        self.assertEqual(record["install"]["excluded"], {})
+        paths = {path.rsplit("/", 1)[-1]: data for path, data, _ in files}
+        self.assertEqual(len(paths), 17)
+        self.assertEqual(hashlib.md5(paths["DUKE3D.GRP"]).hexdigest(), "c03558e3a78d1c5356dc69b6134c5b55")
+        self.assertEqual(sha(paths["DUKE3D.EXE"]), "6e6f5159f21e795302221622df8be89325ede968c099126d5421dbec589ab3be")
+        self.assertIn(b"DOS/4GW Professional Protected Mode Run-time", paths["DUKE3D.EXE"])
+        self.assertEqual(dict(docs)["LICENSE.TXT"], paths["LICENSE.TXT"])
+        for line in paths["LICENSE.TXT"].decode("cp437").splitlines():
+            words = line.split()
+            if words and words[0] == "■":
+                self.assertIn(f"{words[1]}.{words[2]}".upper(), paths)
+        outer, inner = games.unpack(record, games.archive("duke3d-shareware", record))
+        self.assertEqual(outer["LICENSE.TXT"], inner["LICENSE.TXT"])
+        self.assertEqual(set(paths), set(inner))
+        games.refuse_registered(files)
+
+    def test_retail_or_unpinned_duke_files_are_refused(self):
+        _, files, _ = games.package_files("duke3d-shareware")
+        for path, data, info in files:
+            if path.endswith(("DUKE3D.GRP", "DUKE3D.EXE")):
+                for package in (None, "doom-shareware", "duke3d-shareware"):
+                    with self.subTest(path=path, package=package):
+                        with self.assertRaisesRegex((ValueError, SystemExit), "Duke 3D|unpinned|commercial"):
+                            games.refuse_registered([(path, data + b"retail", {"package": package})])
+                with self.assertRaisesRegex(ValueError, "Duke 3D"):
+                    games.refuse_registered([(path, data, {"package": "doom-shareware"})])
+
+    def test_generated_config_launcher_and_catalogue_agree(self):
+        import configparser
+        files = {path: data for path, data, _ in games.generated_files()}
+        cfg = configparser.ConfigParser(interpolation=None)
+        cfg.read_string(files["/DUKE3D/DUKE3D.CFG"].decode("ascii"))
+        self.assertEqual([cfg.getint("Screen Setup", key) for key in ("ScreenMode", "ScreenWidth", "ScreenHeight")], [0, 320, 200])
+        self.assertEqual([cfg.getint("Sound Setup", key) for key in
+                          ("FXDevice", "MusicDevice", "BlasterType", "BlasterInterrupt", "BlasterDma8", "BlasterDma16", "MusicToggle")],
+                         [0, 0, 6, 5, 1, 5, 1])
+        self.assertEqual(int(cfg["Sound Setup"]["BlasterAddress"], 0), 0x220)
+        batch = files["/DUKE3D/DUKE3D.BAT"]
+        self.assertIn(b"DUKESB.COM 5\r\nSET BLASTER=A220 I5 D1 H5 T6\r\nDUKE3D.EXE\r\n", batch)
+        self.assertTrue(batch.endswith(b"DUKESB.COM 7\r\nSET BLASTER=A220 I7 D1 H5 T6\r\n"))
+        self.assertTrue(files["/DUKE3D/DUKESB.COM"].endswith(b"\xb8\x00\x4c\xcd\x21"))
+        self.assertEqual([f for f in games.PACKAGES if f.startswith("duke")], ["duke3d-shareware"])
+        component = next(c for c in json.loads((ROOT / "config/cd-components.json").read_text())["components"]
+                         if c.get("package") == "duke3d-shareware")
+        self.assertIn("WRITTEN PERMISSION", component["conditions"])
+
+
 # The DOS Box boots UNIFIED.IMG, not the games disk: before 2026-10-25 its
 # builder copied the pinned members and DOOM's CIUKI.CFG only, so C:\WAR2 had
 # no WAR2.BAT, DIG.INI or MDI.INI ("File not found" in QEMU) while the games
@@ -620,7 +672,8 @@ class DosImageAssemblyTests(unittest.TestCase):
             volume = f"{image}@@{63 * 512}"
             generated = games.generated_files()
             self.assertEqual({path for path, _, _ in generated},
-                             {"/DOOM/CIUKI.CFG", "/WAR2/WAR2.BAT", "/WAR2/DRIVERS/DIG.INI", "/WAR2/DRIVERS/MDI.INI"})
+                             {"/DOOM/CIUKI.CFG", "/WAR2/WAR2.BAT", "/WAR2/DRIVERS/DIG.INI", "/WAR2/DRIVERS/MDI.INI",
+                              "/DUKE3D/DUKE3D.CFG", "/DUKE3D/DUKE3D.BAT", "/DUKE3D/DUKESB.COM"})
             for path, data, _ in generated:
                 with self.subTest(path=path):
                     read = subprocess.run(["mcopy", "-n", "-i", volume, "::" + path, "-"], capture_output=True, env=ENV)

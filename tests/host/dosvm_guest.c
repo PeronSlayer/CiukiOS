@@ -1349,11 +1349,13 @@ static void play_progress(uint64_t begin)
     unsigned xms_kb = 0;   /* XMS and EMS the game holds (DOS Box memory, dos_memory.py) */
     for (unsigned i = 0; i < VM_MEM_HANDLES; i++) if (gv->memory.xms[i].used) xms_kb += gv->memory.xms[i].bytes / 1024;
     printf("H61 PLAY t=%llu mode=%02x vbe=%x unchained=%u flips=%u irq_pm=%u dpmi=%u clients=%u terminations=%u faults=%u "
-           "sb_units=%u ifs_reads=%u ifs_failed=%u ifs_critical=%u instr=%llu xms_kb=%u ems_kb=%u\n",
+           "sb_units=%u ifs_reads=%u ifs_failed=%u ifs_critical=%u instr=%llu xms_kb=%u ems_kb=%u "
+           "sb_irq=%u sb_dma8=%u sb_dma16=%u\n",
            (unsigned long long)(g_ticks - begin), video.mode, gv->vbe_mode, video.unchained, video.starts,
            gv->dpmi.stats.irqs_pm, gv->dpmi.active, gv->dpmi.clients, gv->dpmi.stats.terminations, gv->dpmi.stats.faults,
            gv->audio.sb.units, reads, failed, critical,
-           (unsigned long long)instructions, xms_kb, (unsigned)(gv->memory.ems_bytes / 1024));
+           (unsigned long long)instructions, xms_kb, (unsigned)(gv->memory.ems_bytes / 1024),
+           gv->audio.sb.irq, gv->audio.sb.dma8, gv->audio.sb.dma16);
     /* t23-dosperf GUEST_PLAY_PERF=1: cumulative exit causes, lean exits,
      * the fx-16 PM CLI proof cache (BOOT.LOG [vm-audio] cadence_clock
      * cli_hits/cli_learned/cli_missed) and the seed demand that keeps

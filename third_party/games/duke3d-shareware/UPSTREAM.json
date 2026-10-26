@@ -1,0 +1,174 @@
+{
+  "project": "Duke Nukem 3D v1.3d shareware (Episode One)",
+  "version": "1.3d",
+  "authors": "3D Realms Entertainment / Apogee Software, Ltd.",
+  "archive": "3dduke13.zip",
+  "size": 5924374,
+  "sha256": "c67efd179022bc6d9bde54f404c707cbcbdc15423c20be72e277bc2bdddf3d0e",
+  "sha1": "72b832734d72c829cecaffd8d8ae0eb38995aeb3",
+  "md5": "04e4ca70b8a2d59ed56c451c5c1d5d39",
+  "original_location": "ftp://ftp.3drealms.com/share/3dduke13.zip",
+  "downloaded": "2026-10-26 (read from lead download cache; sandbox DNS unavailable)",
+  "sources": [
+    "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/3dduke13.zip",
+    "https://ftp.gamefilearchive.com/ftp.3drealms.com/stuff/Downloads.html"
+  ],
+  "hash_references": [
+    {
+      "reference": "Existing CiukiOS config/dos-titles.json pin; publisher FTP mirror (cached archive remeasured)",
+      "url": "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/3dduke13.zip",
+      "sha256": "c67efd179022bc6d9bde54f404c707cbcbdc15423c20be72e277bc2bdddf3d0e",
+      "md5": "04e4ca70b8a2d59ed56c451c5c1d5d39"
+    },
+    {
+      "reference": "Debian game-data-packager upstream duke3d.yaml, original shareware release",
+      "url": "https://sources.debian.org/src/game-data-packager/67/data/duke3d.yaml/",
+      "md5": "04e4ca70b8a2d59ed56c451c5c1d5d39",
+      "sha1": "72b832734d72c829cecaffd8d8ae0eb38995aeb3"
+    }
+  ],
+  "unpack": {
+    "format": "zip-sfx",
+    "member": "DN3DSW13.SHR",
+    "notes": "Nested ZIP read with zipfile CRC checks; all 17 original installed members retained."
+  },
+  "extender": "DOS/4GW Professional 1.97 bound into DUKE3D.EXE (no external DOS4GW.EXE required)",
+  "license": "3D Realms Episode One shareware LICENSE.TXT (V.7.16.98)",
+  "license_files": [
+    {
+      "name": "LICENSE.TXT",
+      "from": "installed",
+      "sha256": "38cd7edf73ba672db785a2c30ae0f2cceded7f94a6297397548ee8ce5312547d"
+    }
+  ],
+  "redistribution": "free (shareware, unmodified package)",
+  "bundling": "LICENSE.TXT [3][A]/[B]: no-charge individual sharing and free download services; [3][C]: complete unchanged files; [3][D]: other distribution including CD-ROM requires WRITTEN PERMISSION and a fee or mutually agreed benefit (not on file). Owner requested pre-installation; lead owns publication decision.",
+  "game_data": "Only the pinned v1.3d shareware DUKE3D.GRP (11035779 bytes); never retail data.",
+  "modifications": "All 17 original members unchanged; generated DUKE3D.CFG, DUKE3D.BAT and DUKESB.COM added separately. No icon file in original release; Tango input-gaming used.",
+  "license_clauses": [
+    {
+      "source": "LICENSE.TXT [3][A]",
+      "text": " [A] INDIVIDUALS are encouraged to share and give copies of the Game to\n     friends, family, coworkers, and members of any not-for-profit\n     organization, but only without charge."
+    },
+    {
+      "source": "LICENSE.TXT [3][B]",
+      "text": " [B] ONLINE SERVICES (including BBSs, and WWW and FTP sites) that are free\n     (except for any subscription fees or incidental Internet access charges),\n     and BBSs with 250 or fewer nodes (regardless of any charges to users) may\n     make the Game available for downloading."
+    },
+    {
+      "source": "LICENSE.TXT [3][C]",
+      "text": " [C] These grants are subject to the conditions that no copyright information\n     or trademark will be added or removed, and all of the Game's files as\n     released by 3D Realms will be included without modification (except for\n     \"New Levels\" as permitted below by this license)."
+    },
+    {
+      "source": "LICENSE.TXT [3][D]",
+      "text": "[D]  *ALL* other distribution, including by lease, rental, online service\n     (other than a fewer than 250 node BBS) that charges for online access\n     time, online service providing multiplayer use, CD-ROM, catalog, and\n     retail rack REQUIRES WRITTEN PERMISSION (which 3D Realms may withhold in\n     its discretion) AND PRE-PAYMENT OF A LICENSE FEE OR OTHER MUTUALLY AGREED\n     BENEFIT.  Interested persons are invited to contact 3D Realms (proposals\n     welcome)."
+    }
+  ],
+  "install": {
+    "directory": "DUKE3D",
+    "files": [
+      {
+        "name": "COMMIT.EXE",
+        "size": 25942,
+        "sha256": "63c12997aaed8048cff56944603d17b7202d096812b05ab2b53cc4d407c6d8c4",
+        "role": "data"
+      },
+      {
+        "name": "DEFS.CON",
+        "size": 28893,
+        "sha256": "20d415b974191ac53ca1d453ced487408462a6c627f8dff409b20e05d5a6d839",
+        "role": "data"
+      },
+      {
+        "name": "DEMO1.DMO",
+        "size": 6226,
+        "sha256": "28e05772cdf1e6b4d8c11649f96fbd3a76bf73e335ba7fe255dc8f6ab4a938a3",
+        "role": "data"
+      },
+      {
+        "name": "DEMO2.DMO",
+        "size": 9701,
+        "sha256": "5c6021b85a8a23ba235819c6498a8c4b0a4015d64bff24d1a8d48d2ed4dbb780",
+        "role": "data"
+      },
+      {
+        "name": "DEMO3.DMO",
+        "size": 3759,
+        "sha256": "c86efbdef20dbdefbb1aa2480bc02e096225e9ef7f9f01fb5d970c382196ba6d",
+        "role": "data"
+      },
+      {
+        "name": "DN3DHELP.EXE",
+        "size": 73594,
+        "sha256": "5dccdf4da37aff04cca4a64af129587ebeead7c39a3986acf4afba5f4f26d177",
+        "role": "data"
+      },
+      {
+        "name": "DUKE.RTS",
+        "size": 188954,
+        "sha256": "3fbc1d9b221f2a6952825a511ed63756f8eac4f98001eb094a81f17cb0fd05e5",
+        "role": "data"
+      },
+      {
+        "name": "DUKE3D.EXE",
+        "size": 1178963,
+        "sha256": "6e6f5159f21e795302221622df8be89325ede968c099126d5421dbec589ab3be",
+        "role": "executable"
+      },
+      {
+        "name": "DUKE3D.GRP",
+        "size": 11035779,
+        "sha256": "f943d0c2e2a0803a644a2107c81ea897dec87596d9dd1a6a432131ad6f5818d6",
+        "role": "data"
+      },
+      {
+        "name": "GAME.CON",
+        "size": 99639,
+        "sha256": "b3095352dc2303b5616d6180bffbe24ddd1a853d2105b384dab0e8535814e0e4",
+        "role": "data"
+      },
+      {
+        "name": "LICENSE.TXT",
+        "size": 9108,
+        "sha256": "38cd7edf73ba672db785a2c30ae0f2cceded7f94a6297397548ee8ce5312547d",
+        "role": "license"
+      },
+      {
+        "name": "MODEM.PCK",
+        "size": 4125,
+        "sha256": "8a4a11b45eb361f7f5bc8dd0369ec4604f90bbcd2d301b46d2e600bd414e42fa",
+        "role": "data"
+      },
+      {
+        "name": "README.DOC",
+        "size": 2760,
+        "sha256": "bba1b4050f8f6d9d80d125dd911fa229c6883a1d6314a8d31a488a6c7b5f719e",
+        "role": "data"
+      },
+      {
+        "name": "SETMAIN.EXE",
+        "size": 95177,
+        "sha256": "09012d6a5ea099e1fcfaa92f28dbb4ff34526c8e50943732d5ab69e07cf2c735",
+        "role": "data"
+      },
+      {
+        "name": "SETUP.EXE",
+        "size": 27153,
+        "sha256": "79154ab8d112fcf534c4f61392896e15bf40575bba9a0f97a429cf61be84ba92",
+        "role": "data"
+      },
+      {
+        "name": "ULTRAMID.INI",
+        "size": 6871,
+        "sha256": "2df529ccb0188fa861e40326a03b88bdda5b858c6dd0b26c095a4adbdb4e6cfe",
+        "role": "data"
+      },
+      {
+        "name": "USER.CON",
+        "size": 36960,
+        "sha256": "1e872508f1abaa9f5e0504292e275de73a86bc57b29bce35f210c61d29b7255f",
+        "role": "data"
+      }
+    ],
+    "excluded": {}
+  }
+}

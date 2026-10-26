@@ -10,7 +10,7 @@
 #include <unistd.h>
 static struct cp_program_store store;
 static struct desk_uninstall_entry entries[96];
-static unsigned games=15,registered=1,keep_key,runs,logs,icons,save_failure,saves,key_checks;
+static unsigned games=31,registered=1,keep_key,runs,logs,icons,save_failure,saves,key_checks;
 static int check_key(void *ctx,const char *key){(void)ctx;assert(!strcmp(key,"HKCU/fixture"));key_checks++;return registered;}
 static int persist(void *ctx){(void)ctx;saves++;return save_failure ? -EIO : 0;}
 static char logged[256];
@@ -27,7 +27,7 @@ static void file(const char *,const void *,size_t);
 static int exists(const char *);
 static int game(void *ctx,unsigned id,int remove,uint32_t *bytes)
 {
-    (void)ctx;assert(id && id<=4);*bytes=8192;
+    (void)ctx;assert(id && id<=5);*bytes=8192;
     char pending[64];snprintf(pending,sizeof(pending),"/System/REMOVE%u.PND",id);
     if(remove){games&=~(1u<<(id-1));file(pending,"",0);return 1;}
     return exists(pending) ? 2 : !!(games&(1u<<(id-1)));
@@ -92,6 +92,12 @@ int main(int argc,char **argv)
     assert(!exists("/System/REMOVE3.PND") && !exists("/system/settings/dos-game-3.cfg") && !exists("/Windows/Desktop/Quake.lnk") && icons>=7);
     assert(strstr(logged,"[control] remove name=Quake (shareware) kind=bundled-dos result=0") && logs==12);
     assert(exists("/system/licenses/quake-shareware-UPSTREAM.json"));
+    link_file("/Windows/Desktop/Duke.lnk","Duke shortcut","/Programs/dosbox","--name=Duke Nukem 3D \\DUKE3D\\DUKE3D.BAT");
+    i=find("Duke Nukem 3D (shareware)");assert(entries[i].kind==DESK_PROGRAM_GAME && entries[i].game==5 && !strcmp(entries[i].location,"/DUKE3D") &&
+        !strcmp(entries[i].version,"1.3d") && strstr(entries[i].publisher,"3D Realms") &&
+        !strcmp(entries[i].licence,"/system/licenses/duke3d-shareware-LICENSE.TXT"));
+    assert(!cp_program_remove(&store,&entries[i]) && !(games&16) && !exists("/System/REMOVE5.PND") && !exists("/Windows/Desktop/Duke.lnk"));
+    assert(exists("/system/licenses/duke3d-shareware-UPSTREAM.json") && (games&1));
     /* Owner 2026-10-25: the Warcraft II demo is the fourth bundled DOS game (/WAR2, package war2-demo). */
     link_file("/Windows/Desktop/Warcraft.lnk","Warcraft shortcut","/Programs/dosbox","--name=Warcraft II \\WAR2\\WAR2.BAT");
     i=find("Warcraft II (demo)");assert(entries[i].kind==DESK_PROGRAM_GAME && entries[i].game==4 && !strcmp(entries[i].location,"/WAR2") &&
