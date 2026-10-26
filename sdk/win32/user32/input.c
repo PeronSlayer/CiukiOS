@@ -69,8 +69,20 @@ BOOL W32API SetDoubleClickTime(UINT t) {
   U32_GUARD;
   return u32_input_setting(DESK_INPUT_DOUBLE_CLICK,t ? (t>5000 ? 5000 : t) : 500,0);
 }
+UINT u32_input_depth;
+static void input_event(struct u32_window *root, const struct ciuki_input_event *e);
+/* Quake III console (QEMU 2026-10-26, every other keystroke lost): the
+ * settings refresh inside the key down (DESK_INPUT_SETTINGS, once a second)
+ * is a wire round trip whose wait pumps the channel, so the same key's TEXT
+ * and key up were handled first (WM_KEYUP before WM_KEYDOWN, the WM_CHAR
+ * stranded with the previous key's time). Settings are refreshed by the pump
+ * before a packet is taken; nothing inside an event may pump. */
 void u32_input(struct u32_window *root, const struct ciuki_input_event *e) {
-  u32_settings();
+  u32_input_depth++;
+  input_event(root, e);
+  u32_input_depth--;
+}
+static void input_event(struct u32_window *root, const struct ciuki_input_event *e) {
   struct u32_thread *t = u32_thread();
   if (!root || !t)
     return;

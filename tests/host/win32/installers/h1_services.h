@@ -15,3 +15,4 @@ int h1_game_gate(uint32_t,uint32_t,uint32_t,uint32_t,int32_t *);
 void h1_game_report(void);
 void h1_game_module(const char *,void *); /* after a DLL's successful DLL_PROCESS_ATTACH: GL call profile hooks */
 #endif
+void h1_game_script(const char *command_line);   /* +set ciuki_keys "text": console typing on the lease frames */

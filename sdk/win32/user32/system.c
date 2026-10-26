@@ -273,7 +273,7 @@ void u32_input_refresh(void)
 {
   static BOOL busy,read;static DWORD last;
   DWORD now=u32_ticks();
-  if(busy || (read && now-last<1000))return;
+  if(busy || u32_input_depth || (read && now-last<1000))return;   /* no wire round trip inside an input event */
   busy=1;read=1;last=now;
   DWORD error=GetLastError();(void)u32_input_setting(0,0,0);SetLastError(error);busy=0;
 }

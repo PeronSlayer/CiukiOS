@@ -414,14 +414,17 @@ BOOL u32_appearance_commit(const struct appearance *a) {
 /* G12: the desktop owns session settings (keyboard repeat, double-click, wheel) and requested durable writes;
  * G23: the appearance record and the layout still come from the plain configuration file. */
 void u32_settings(void) {
+  static BOOL read_once, reading;
+  if (u32_input_depth || reading)
+    return;                      /* never a file read or a wire round trip inside an input event */
   u32_input_refresh();
-  static BOOL read_once;
   static DWORD last;
   DWORD now = u32_ticks();
   if (read_once && (DWORD)(now - last) < 1000)
     return;
   read_once = 1;
   last = now;
+  reading = 1;
   DWORD saved_error = GetLastError();
   char *data = u32_alloc(32769);
   if (!data)
@@ -466,6 +469,7 @@ void u32_settings(void) {
   }
   u32_free(data);
   SetLastError(saved_error);
+  reading = 0;
 }
 
 void u32_clear_thread_input(void) {

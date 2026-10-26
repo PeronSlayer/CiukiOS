@@ -468,6 +468,25 @@ void u32_pump(void) {
   u32_palette_deliver();
   if (!connected)
     return;
+  u32_settings();   /* once a second, before any packet is taken (see u32_input) */
+  /* Events another thread of the program drained for this thread's windows
+   * (u32_event defers them) are older than anything still in the channel:
+   * they go first, or a key down deferred by the second thread of Quake III
+   * came after the key up and the character its owner drained itself (the
+   * WM_CHAR then stayed pending with the previous key's time: every other
+   * keystroke lost in the console, QEMU 2026-10-26). */
+  struct u32_thread *t = u32_thread();
+  UINT pending = t ? t->event_count : 0;
+  while (t && t->events && pending--) {
+    struct u32_pending_event *e = t->events;
+    t->events = e->next;
+    if (!t->events)
+      t->events_tail = 0;
+    t->event_count--;
+    struct desk_packet packet = e->packet;
+    u32_free(e);
+    u32_event(&packet);
+  }
   struct desk_packet p;
   for (UINT i = 0; i < 256; i++) {
     int r = du3_next(&u32_desktop, &p);
@@ -481,18 +500,6 @@ void u32_pump(void) {
   if (u32_desktop.disconnected && !lost) {
     lost = 1;
     w32_diag("warning", "user32.dll", "desktop-connection-lost");
-  }
-  struct u32_thread *t = u32_thread();
-  UINT pending = t ? t->event_count : 0;
-  while (t && t->events && pending--) {
-    struct u32_pending_event *e = t->events;
-    t->events = e->next;
-    if (!t->events)
-      t->events_tail = 0;
-    t->event_count--;
-    struct desk_packet packet = e->packet;
-    u32_free(e);
-    u32_event(&packet);
   }
   struct ciuki_w32_message_args wake = {.action = W32_MSG_MARK,
                                         .bits =

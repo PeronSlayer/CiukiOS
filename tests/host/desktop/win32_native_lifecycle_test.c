@@ -10,6 +10,7 @@
 #include <string.h>
 #include <pthread.h>
 #include <time.h>
+#include <unistd.h>
 #include <ciuki/w32_diagnostics.h>
 static unsigned directory_state=CIUKI_PROC_LIVE;
 int ciuki_proc_list(void *p,uint32_t n)
@@ -71,7 +72,11 @@ uint32_t desk_w32_record(void *record,uint32_t bytes)
 }
 ciuki_pid_t ciuki_spawn(const char *path,char *const argv[],char *const env[],const struct ciuki_spawn_fd *maps,uint32_t count,uint32_t flags)
 {
-    assert(!strcmp(path,"/System/Win32/w32srv") && !strcmp(argv[0],path) && argv[1] && !strcmp(argv[1],"--fresh-clients") && !argv[2]);
+    /* The snapshot lists a live pid 700: a survivor of an earlier desktop
+     * when this process's pid is above it (no reset), a child otherwise. */
+    const char *expected=700u<(uint32_t)getpid() ? NULL : "--fresh-clients";
+    assert(!strcmp(path,"/System/Win32/w32srv") && !strcmp(argv[0],path));
+    assert(expected ? argv[1] && !strcmp(argv[1],expected) && !argv[2] : !argv[1]);
     assert(env && !maps && !count && !flags);return (int)(100+ ++starts);
 }
 int __wrap_kill(pid_t pid,int signo){assert(pid==(int)(100+starts) && signo==SIGTERM);signals++;return 0;}

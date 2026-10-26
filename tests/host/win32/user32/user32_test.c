@@ -599,7 +599,9 @@ static HANDLE g5b_bitmap;
 static unsigned g5b_bitmap_renders,g5b_display_paints,g5b_display_sizes,g5b_display_scrolls,g5b_locale_renders;
 static BOOL g5b_display;
 
+static void (*quake_hook)(HWND h, UINT m);
 static LRESULT W32API procedure(HWND h, UINT m, WPARAM wp, LPARAM lp) {
+  if (quake_hook && (m==WM_KEYDOWN || m==WM_KEYUP || m==WM_CHAR)) quake_hook(h,m);
   if (m==WM_RENDERFORMAT && wp==CF_LOCALE) {
     HANDLE locale=GlobalAlloc(2,4); CHECK(locale); w32_put32(GlobalLock(locale),0x409);
     CHECK(SetClipboardData(CF_LOCALE,locale)==locale); g5b_locale_renders++; return 0;
@@ -824,6 +826,131 @@ static void test_queues(void) {
   CHECK(!PeekMessageA(&m, 0, 0, 0, 1));
   printf(
       "TRACE modal-filter new-input: posted input paint paint timer quit=8\n");
+}
+/* Quake III Arena 1.11 console (QEMU, 2026-10-26): "map q3dm17" arrived as
+ * "ma 3m7", every other keystroke lost at any typing speed. Its pump is
+ * PeekMessage(PM_NOREMOVE), GetMessage, TranslateMessage, DispatchMessage
+ * per message; the console text comes from WM_CHAR. Each key is a KEY down,
+ * its TEXT and a KEY up with its own millisecond stamp. */
+static void q3_event(struct u32_window *w, UINT type, UINT code, UINT value, UINT ms)
+{
+  UINT data[10]={0,0,0,type,ms*1000000u,0,code,value,0,0};event(w,DESK_KEY,data,10);
+}
+static void q3_key(struct u32_window *w, char c, UINT ms)
+{
+  static const UINT scan[128]={['m']=0x32,['a']=0x1e,['p']=0x19,[' ']=0x39,['q']=0x10,['3']=0x04,['d']=0x20,['1']=0x02,['7']=0x08};
+  q3_event(w,CIUKI_INPUT_KEY,scan[(unsigned char)c],1,ms);
+  q3_event(w,CIUKI_INPUT_TEXT,(unsigned char)c,0,ms);
+  q3_event(w,CIUKI_INPUT_KEY,scan[(unsigned char)c],0,ms+40);
+}
+/* Where the next key's three events reach the client, relative to Quake's
+ * loop: 0 before PeekMessage (one key per pump), 1 all keys before one pump
+ * (a slow software-GL frame), 2 between PeekMessage and GetMessage, 3
+ * between GetMessage and TranslateMessage (TranslateMessage drains the
+ * desktop channel itself), 4 between TranslateMessage and DispatchMessage,
+ * 5 inside the window procedure during a SetCursorPos round trip (Quake's
+ * mouse code recentres the cursor; the wire request pumps the channel). */
+static struct u32_window *quake_window; static const char *quake_next; static UINT quake_ms;
+static void quake_feed(void) { if (quake_next && *quake_next) { q3_key(quake_window,*quake_next,quake_ms); quake_ms+=400; quake_next++; } }
+static void quake_cursor_hook(HWND h, UINT m) { (void)h; (void)m; quake_feed(); CHECK(SetCursorPos(100,100)); }
+static void quake_pump(struct u32_window *w, const char *line, unsigned delivery)
+{
+  char typed[32]; UINT n=0, downs=0, ups=0; MSG msg;
+  quake_window=w; quake_next=line; quake_ms=5000; quake_hook=delivery==5 ? quake_cursor_hook : 0;
+  if (delivery==1) while (*quake_next) quake_feed();
+  if (delivery==2 || delivery==3 || delivery==4 || delivery==5) quake_feed();   /* the first key starts the loop */
+  for (;;) {
+    if (delivery==0) quake_feed();
+    BOOL pending=PeekMessageA(&msg,0,0,0,0);
+    if (delivery==2 && pending) quake_feed();
+    if (!pending) { if (*quake_next) { if (delivery!=0) quake_feed(); continue; } break; }
+    CHECK(GetMessageA(&msg,0,0,0));
+    if (delivery==3 && msg.message==WM_KEYDOWN) quake_feed();
+    TranslateMessage(&msg);
+    if (delivery==4 && msg.message==WM_KEYDOWN) quake_feed();
+    if (msg.message==WM_CHAR && n<31) typed[n++]=(char)msg.wParam;
+    if (msg.message==WM_KEYDOWN) downs++;
+    if (msg.message==WM_KEYUP) ups++;
+    DispatchMessageA(&msg);
+  }
+  quake_hook=0; typed[n]=0;
+  if (strcmp(typed,line)) fprintf(stderr,"quake pump delivery=%u: \"%s\" -> \"%s\" downs=%u ups=%u\n",delivery,line,typed,downs,ups);
+  CHECK(!strcmp(typed,line) && downs==strlen(line) && ups==strlen(line));
+}
+/* delivery 6: Quake III's second thread (Sys_InitStreamThread) drains the
+ * desktop channel while the key is down; the key down is deferred to the
+ * window's thread, which then drains the TEXT and the key up itself. The
+ * deferred key down must still come first (every other keystroke was lost
+ * in the console, QEMU 2026-10-26: the pump handled new packets before the
+ * deferred ones, so the WM_CHAR stayed pending with the previous key's time). */
+static void quake_other_thread_pump(struct u32_window *w, const char *line, const char *reordered)
+{
+  char typed[32]; UINT n=0, ms=9000, downs=0, ups=0; MSG msg;
+  for (const char *c=line; *c; c++, ms+=400) {
+    static const UINT scan[128]={['m']=0x32,['a']=0x1e,['p']=0x19,[' ']=0x39,['q']=0x10,['3']=0x04,['d']=0x20,['1']=0x02,['7']=0x08};
+    q3_event(w,CIUKI_INPUT_KEY,scan[(unsigned char)*c],1,ms);
+    if (strchr(reordered,*c)) {                                 /* the other thread drains this key down */
+      ui_kernel_switch(1); u32_pump(); ui_kernel_switch(0);
+      CHECK(u32_thread()->event_count==1);                      /* deferred to the window's thread */
+    }
+    q3_event(w,CIUKI_INPUT_TEXT,(unsigned char)*c,0,ms);
+    q3_event(w,CIUKI_INPUT_KEY,scan[(unsigned char)*c],0,ms+40);
+    while (PeekMessageA(&msg,0,0,0,0)) {
+      CHECK(GetMessageA(&msg,0,0,0));
+      TranslateMessage(&msg);
+      if (msg.message==WM_CHAR && n<31) typed[n++]=(char)msg.wParam;
+      if (msg.message==WM_KEYDOWN) downs++;
+      if (msg.message==WM_KEYUP) ups++;
+      DispatchMessageA(&msg);
+    }
+  }
+  typed[n]=0;
+  if (strcmp(typed,line)) fprintf(stderr,"quake pump other thread (%s): \"%s\" -> \"%s\" downs=%u ups=%u\n",reordered,line,typed,downs,ups);
+  CHECK(!strcmp(typed,line) && downs==strlen(line) && ups==strlen(line));
+  CHECK(!u32_thread()->text_count);                             /* no character left pending */
+}
+/* The QEMU case: 0.4 s per key and the one-second settings refresh
+ * (DESK_INPUT_SETTINGS) due inside every other key down; each key's three
+ * packets are already in the channel when the pump takes the key down. */
+static void quake_refresh_pump(struct u32_window *w, const char *line)
+{
+  char typed[32]; UINT n=0, ms=12000, downs=0, ups=0; MSG msg;
+  for (const char *c=line; *c; c++, ms+=400) {
+    ui_kernel_pause(400);
+    q3_key(w,*c,ms);
+    while (PeekMessageA(&msg,0,0,0,0)) {
+      CHECK(GetMessageA(&msg,0,0,0));
+      TranslateMessage(&msg);
+      if (msg.message==WM_CHAR && n<31) typed[n++]=(char)msg.wParam;
+      if (msg.message==WM_KEYDOWN) downs++;
+      if (msg.message==WM_KEYUP) ups++;
+      DispatchMessageA(&msg);
+    }
+  }
+  typed[n]=0;
+  UINT refreshes=0;
+  for (UINT k=0;k<outgoing_count;k++) if (outgoing[k].data[0]==DESK_V3_VERSION && outgoing[k].data[1]==DESK_INPUT_SETTINGS) refreshes++;
+  fprintf(stderr,"quake pump settings refresh: \"%s\" -> \"%s\" downs=%u ups=%u settings_requests=%u pending=%u\n",line,typed,downs,ups,refreshes,u32_thread()->text_count);
+  CHECK(refreshes>=3);                                            /* the one-second refresh fired during the typing */
+  CHECK(!strcmp(typed,line) && downs==strlen(line) && ups==strlen(line) && !u32_thread()->text_count);
+}
+static void test_quake_pump(void) {
+  struct u32_window *w = u32_window(windows[0]);
+  for (unsigned delivery=0; delivery<6; delivery++) {
+    discard(); u32_clear_input(); SetFocus(w->handle);
+    quake_pump(w,"map q3dm17",delivery);
+  }
+  discard(); u32_clear_input(); SetFocus(w->handle);
+  quake_refresh_pump(w,"map q3dm17");
+  /* One key drained by the other thread after keys the window's thread
+   * drained itself (the QEMU case: "map q3dm17" arrived as "ma 3m7"), then
+   * every key, then every other key. */
+  for (unsigned v=0; v<3; v++) {
+    discard(); u32_clear_input(); SetFocus(w->handle);
+    quake_other_thread_pump(w,"map q3dm17",v==0 ? "d" : v==1 ? "map q3d17" : "pq1");
+  }
+  u32_clear_input();
+  puts("PASS Quake III pump: PeekMessage(PM_NOREMOVE)/GetMessage/TranslateMessage per message types every character of \"map q3dm17\" for six arrival points of the next key");
 }
 static void test_input(void) {
   MSG msg;
@@ -2458,6 +2585,7 @@ static void run(void) {
   test_queues();
   puts("STEP input");
   test_input();
+  test_quake_pump();
   puts("STEP paint");
   test_paint();
   puts("STEP clipboard");

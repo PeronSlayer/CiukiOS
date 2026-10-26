@@ -691,6 +691,7 @@ int host_main(int argc, char **argv) {
     host.services.report = installer_report;
     if (game_exec) {
         h1_game_init(h1_kernel);
+        h1_game_script(argv[3]);   /* +set ciuki_keys "..." in the game's command line */
         host_exec_heap = 1;
     }
 #endif

@@ -44,10 +44,11 @@ void fpu_fxrstor(const void *p) { CHECK(!(fake_cr0 & CR0_TS) && (fake_cr4 & CR4_
 void fpu_fnsave(void *p) { CHECK(!(fake_cr0 & CR0_TS)); memcpy(p, hardware, 108); memset(hardware, 0, 108); }
 void fpu_frstor(const void *p) { CHECK(!(fake_cr0 & CR0_TS)); memcpy(hardware, p, 108); }
 void fpu_reset_state(int sse) { CHECK(!sse); memset(hardware, 0, 512); }
-#ifndef W32_KERNEL_BRIDGE
 /* A console record may sleep on serial backpressure: a test hook runs other
- * tasks' work during the record (Codex review of wt/q3crash, P1). */
+ * tasks' work during the record (Codex review of wt/q3crash, P1). The USER
+ * bridge prints its own klog and runs the same hook. */
 static void (*on_klog)(const char *fmt);
+#ifndef W32_KERNEL_BRIDGE
 void klog(const char *fmt, ...) { if (on_klog) on_klog(fmt); }
 #endif
 void arch_w32_fs_switch(uint32_t base) { (void)base; }

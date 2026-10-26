@@ -175,6 +175,23 @@ class Quake3DemoTests(unittest.TestCase):
               f'run {seconds:.1f} s, screenshot {shots[0].name}: red {red} black {black}; '
               + self.profile_text(output))
 
+    def test_console_typing_through_window_messages(self):
+        """Typing in the console the way the desktop delivers keys (KEY down
+        with TEXT, then KEY up, on consecutive lease frames): Quake III reads
+        WM_KEYDOWN/WM_CHAR (win_wndproc.c) and echoes the entered line as
+        "]text" (Console_Key). In QEMU every other keystroke was lost."""
+        text = 'echo ciuki typing q3dm17 demo001'
+        for pacing in ('+set ciuki_keys_gap 3', '+set ciuki_keys_gap 0', '+set ciuki_keys_burst 1'):
+            code, output, log, seconds, root = self.run_game(
+                f'+set logfile 2 +set ciuki_keys "{text}" {pacing} +wait 1200 +quit', 600)
+            self.assertEqual(code, 0, output[-4000:] + log[-4000:])
+            self.assertIn('GAME keys done', output, output[-3000:])
+            # Outside a game the console prepends a backslash (Console_Key) and
+            # echoes the line as "]\\text".
+            echoed = re.findall(r'^\]\\?(.*)$', log, re.M)
+            print(f'\nQuake III console typing on the H1 host ({pacing[5:]}): echoed {echoed}, run {seconds:.0f} s')
+            self.assertEqual(echoed, [text], log[-3000:])   # the typed line, complete and in order
+
     def test_timedemo_demo001_headless(self):
         """The arena demo as a timedemo (every demo frame rendered once, as fast
         as the renderer goes), to the console's "N frames, S seconds: R fps"

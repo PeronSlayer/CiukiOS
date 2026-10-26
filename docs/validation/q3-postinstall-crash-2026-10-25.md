@@ -186,17 +186,23 @@ with a host test that fails on the committed `c2a784bc4` and passes now.
   of programs that survived the desktop's death; the earlier claim that
   they "reconnect as after any w32srv restart" was too strong. Now
   `desk_w32_fresh_clients()` (`apps/desktop/win32_service.c`, used by
-  `spawn_service`) passes the flag only on a cold boot: a live or stopping
-  process older than this desktop (PID 1 aside) in `ciuki_proc_list` means a
-  replacement in the same boot, where PIDs are monotonic and the persisted
-  owners are valid; `wr_reconcile` with the live-process check then keeps
-  them. Tests: the decision function (cold boot, older live/stopping
-  program, zombie, same tick, absent self, bad snapshot); the registry
-  harness (`registry_test.c reconciliation`): a live owner's HWND and local
-  atom keep their values across a server restart without the reset and
-  are removed by `wr_clients_reset`. Limit: a boot-time service started
-  before the desktop would also read as a replacement; none exists today
-  (the desktop is PID 2 in both logs).
+  `spawn_service`) passes the flag only on a cold boot. Re-review
+  (2026-10-26): the first version compared `start_tick`s strictly, but
+  publication records the millisecond tick (`process.c proc_publish`), so a
+  survivor and the replacement desktop could share it and the survivor lost
+  its identities; a failed snapshot also chose the reset. Now the decision
+  is by PID order, which is monotonic within a boot: a live or stopping
+  process with `1 < pid < desktop pid` is a survivor (replacement, no
+  reset); none means a cold boot; a NULL/invalid snapshot or a failed
+  `ciuki_proc_list` chooses the non-destructive reconcile (`wr_reconcile`
+  against the live processes keeps surviving owners). Tests: the decision
+  function (cold boot; older PID at the same, an earlier and a later tick;
+  stopping; zombie; newer PID; desktop absent; invalid version/NULL/pid 1
+  snapshot → keep); the registry harness (`registry_test.c reconciliation`):
+  a live owner's HWND and local atom keep their values across a server
+  restart without the reset and are removed by `wr_clients_reset`. Limit: a
+  boot-time service with a PID below the desktop's would also read as a
+  replacement; none exists today (the desktop is PID 2 in both logs).
 - **P3 — fatal `poll()` errors returned 1 silently.** `desktop.c` now logs
   `desktop: exit: poll errno=N` before returning.
 
@@ -205,6 +211,53 @@ at `kernel_objects_test.inc:298`), `test_win32_adapter.py` OK (4 tests,
 incl. the lifecycle fixture's `--fresh-clients` on a cold-boot snapshot),
 `test_registry.py` OK (16 tests); `desktop.c`, `win32_native.c`,
 `win32_service.c`, `client.c` compile with the SDK compiler.
+
+## Quake III console: every other keystroke lost (2026-10-26)
+
+Evidence (lead, QEMU, main `fa6d33a53`): with one key per 0.4 s (press 40 ms,
+release, 400 ms gap) the console received "ma 3m7" for "map q3dm17"; with
+the QA's faster typing one character per line was lost. Quake III 1.11 reads
+the keyboard through WM_KEYDOWN/WM_KEYUP/WM_CHAR (win_wndproc.c; its
+DirectInput device is the mouse only, win_input.c) and pumps with
+PeekMessage(PM_NOREMOVE), GetMessage, TranslateMessage, DispatchMessage per
+message (win_main.c Sys_GetEvent).
+
+Reproduction on the host with the real binary: `tests/host/win32/installers/
+test_quake3.py test_console_typing_through_window_messages` runs quake3.exe
+on the production DLLs under the H1 stand-in desktop (`h1_game.c`), which
+types `+set ciuki_keys "text"` on the lease frames the way the kernel
+delivers keys (KEY down with its TEXT, KEY up; `ciuki_keys_gap` idle frames
+between keys, `ciuki_keys_burst 1` for a whole line in one frame) and reads
+the console's `]\text` echo from qconsole.log. Before the fix, gap 0 typed
+"echo ciuki typing q3m17 demo001" (the `d` lost); the stand-in's `GAME post`
+trace showed WM_KEYUP posted before the same key's WM_KEYDOWN and no WM_CHAR,
+right after a `DESK_INPUT_SETTINGS` request.
+
+Cause (`sdk/win32/user32/input.c`): `u32_input()` began with
+`u32_settings()`, whose `u32_input_refresh()` issues a `DESK_INPUT_SETTINGS`
+wire request once a second; `u32_wire()` waits by pumping the desktop
+channel, so the TEXT and KEY up of the key being processed were handled
+first (WM_KEYUP posted, the WM_CHAR left pending under the *previous* key's
+time, never matched by TranslateMessage) and the WM_KEYDOWN was posted last.
+At 0.4 s per key the one-second refresh fell inside every other key down.
+
+Fix: no wire round trip or file read inside an input event
+(`u32_input_depth`; `u32_settings()` and `u32_input_refresh()` return while
+it is set — `GetDoubleClickTime()` in the button branch had the same
+hazard); the pump refreshes the settings before taking a packet
+(`u32_pump`). Also `u32_pump` now handles the events another thread deferred
+to the window's thread before draining new packets (FIFO; a unit test
+reorders one key down through the second thread and fails on the old order).
+The stand-in kernel queue of h1_game.c now returns posted messages before
+hardware input as `proc/win32/message.c` does (otherwise a burst of keys put
+Enter's WM_KEYDOWN before the characters, a fixture artefact).
+
+Host evidence: the real-binary test passes at gap 3, gap 0 and burst
+(fails before at gap 0); `tests/host/win32/user32/test_user32.py` OK with the
+Quake-shaped pump tests (six arrival points of the next key, a key down
+deferred by a second thread, the one-second refresh firing during typing).
+The lead must check in QEMU: "map q3dm17" and "demo demo001" typed at 0.4 s
+per key and at the QA's speed arrive complete in the console.
 
 ## What the lead must check in QEMU
 
