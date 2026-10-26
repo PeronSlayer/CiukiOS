@@ -30,7 +30,6 @@ struct channel {
     struct { uint32_t id, generation; } receiver[2];
     struct channel *security_next;
     uint32_t service, service_generation;
-    int32_t client_fd, server_fd;
     bool accepted, exchange, admitted, complete[2], replying;
     bool readiness, ready_sent;
     uint64_t request_id, last_request_id, deadline;
@@ -40,6 +39,7 @@ struct channel {
 };
 
 static void channel_security_discard(struct channel *c);
+static void channel_security_reclaim(struct channel *c);
 static int channel_security_frame(struct channel *, unsigned, const struct ciuki_message *);
 static void channel_security_timeout(struct channel *c);
 static bool channel_security_readable(struct channel *c, unsigned side)
@@ -81,6 +81,9 @@ void channel_release(struct desktop_description *d)
     struct channel *c = d->u.endpoint.channel;
     if (!c) return;
     unsigned side = d->u.endpoint.side;
+    /* Keep this side open while reclaim releases the unaccepted peer: its
+     * final release must not free the channel underneath this release. */
+    if (!side) channel_security_reclaim(c);
     uint32_t f = irq_save();
     struct task *receiver = channel_receiver(c, side);
     if (receiver && receiver->focused) task_focus(0);
@@ -478,6 +481,7 @@ void channel_fd_closed(struct process *p, struct proc_object *object)
             c->revoked[side] = true;
             if (c->service) channel_security_discard(c);
             kwait_wake_all(&c->changed[0]); kwait_wake_all(&c->changed[1]);
+            channel_security_reclaim(c);
         }
     }
 }
@@ -591,14 +595,44 @@ static void channel_security_timeout(struct channel *c)
         kwait_wake_all(&c->changed[0]); kwait_wake_all(&c->changed[1]);
     }
 }
+static int channel_security_server_fd(const struct channel *c, const struct process *p)
+{
+    for (unsigned fd=0;fd<CIUKI_OPEN_MAX;fd++) {
+        struct desktop_description *d=desktop_fd(p,(int32_t)fd);
+        if (d && d->kind==DESKTOP_CHANNEL && d->u.endpoint.channel==c && d->u.endpoint.side==1)
+            return (int)fd;
+    }
+    return -EBADF;
+}
+static void channel_security_reclaim(struct channel *c)
+{
+    if (!c->service || c->accepted) return;
+    /* OWNER is the kernel supervisor, outside the published process table. */
+    struct process *server=proc_supervisor();
+    if (server->subject!=c->subjects[1]) server=proc_find(security_subject_pid(c->subjects[1]));
+    if (!server || server->subject!=c->subjects[1]) return;
+    int fd=channel_security_server_fd(c,server);
+    if (fd<0) return;
+    struct proc_object *endpoint=server->fds[fd].object;
+    /* Hold the exact object across duplicate detachment and recursive close
+     * hooks. A reused original fd belongs to somebody else. No allocation,
+     * user copy or voluntary scheduling point occurs in this cleanup. */
+    endpoint->retain(endpoint);
+    for (unsigned i=0;i<CIUKI_OPEN_MAX;i++)
+        if (server->fds[i].object==endpoint) desktop_close(server,(int32_t)i);
+    endpoint->release(endpoint); /* May free c; callers must own an end or stop using c. */
+}
 void channel_security_revoke(struct process *p)
 {
-    for (struct channel *c=security_channels;c;c=c->security_next)
+    for (struct channel *c=security_channels,*next;c;c=next) {
+        next=c->security_next;
         for (unsigned side=0;side<2;side++) if (c->subjects[side]==p->subject) {
             c->revoked[side]=true;
             if (c->service) channel_security_discard(c);
             kwait_wake_all(&c->changed[0]); kwait_wake_all(&c->changed[1]);
         }
+        if (c->revoked[0] || c->revoked[1]) channel_security_reclaim(c);
+    }
 }
 static int channel_security_frame(struct channel *c, unsigned side, const struct ciuki_message *m)
 {
@@ -680,11 +714,11 @@ static void channel_security_message(struct channel *c, unsigned side, struct ci
         out->data[64+i]=((const uint8_t *)P2V(c->body_pages[sender][at/PAGE_SIZE]))[at%PAGE_SIZE];
     }
 }
-static void channel_link_output(struct channel *c, unsigned side, struct ciuki_security_link *out)
+static void channel_link_output(struct channel *c, unsigned side, int32_t fd, struct ciuki_security_link *out)
 {
     struct security_subject *peer=c->subjects[side^1];
     *out=(struct ciuki_security_link){.version=1,.size=64,.service=c->service,
-        .endpoint_fd=side ? c->server_fd : c->client_fd,.endpoint_generation=c->generation[side],
+        .endpoint_fd=fd,.endpoint_generation=c->generation[side],
         .server_role=security_subject_role(c->subjects[1]),.peer_pid=security_subject_pid(peer),
         .peer_process_generation=security_subject_process_generation(peer),.peer_role=security_subject_role(peer),
         .session_id=security_subject_credential(c->subjects[0])->session_id,.service_generation=c->service_generation};
@@ -706,6 +740,7 @@ int channel_security_link(struct process *p, uint32_t operation, const struct ci
          * worker's retained subject revokes and its durable protocol recovers. */
         channel_security_discard(c); c->revoked[0]=c->revoked[1]=true;
         kwait_wake_all(&c->changed[0]); kwait_wake_all(&c->changed[1]);
+        channel_security_reclaim(c);
         return 0;
     }
     if (operation==CIUKI_SECURITY_SERVICE_ACCEPT) {
@@ -715,7 +750,9 @@ int channel_security_link(struct process *p, uint32_t operation, const struct ci
         for (struct channel *c=security_channels;c;c=c->security_next) {
             if (c->service!=in->service || c->accepted || c->subjects[1]!=p->subject ||
                 c->revoked[0] || c->revoked[1] || !security_subject_live(c->subjects[0])) continue;
-            c->accepted=true; channel_link_output(c,1,out); return 0;
+            int fd=channel_security_server_fd(c,p);
+            if (fd<0) continue;
+            c->accepted=true; channel_link_output(c,1,fd,out); return 0;
         }
         return -EAGAIN;
     }
@@ -734,9 +771,8 @@ int channel_security_link(struct process *p, uint32_t operation, const struct ci
     struct desktop_description *d=desktop_fd(p,fds[0]);
     struct channel *c=d->u.endpoint.channel;
     c->service=in->service; c->service_generation=generation;
-    c->client_fd=fds[0]; c->server_fd=fds[1];
     d->object.inheritable=false; desktop_fd(server,fds[1])->object.inheritable=false;
-    channel_link_output(c,0,out);
+    channel_link_output(c,0,fds[0],out);
     return 0;
 }
 /* Private readiness dequeue. It consumes only the exact retained child end,
@@ -758,7 +794,11 @@ int channel_kernel_receive(struct process *p, int32_t fd, struct ciuki_message *
 
 void channel_security_poll(void)
 {
-    for (struct channel *c=security_channels;c;c=c->security_next) channel_security_timeout(c);
+    for (struct channel *c=security_channels,*next;c;c=next) {
+        next=c->security_next;
+        channel_security_timeout(c);
+        if (c->revoked[0] || c->revoked[1]) channel_security_reclaim(c);
+    }
 }
 uint32_t channel_peer_service(const struct security_peer *peer)
 {

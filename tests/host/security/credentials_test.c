@@ -698,10 +698,95 @@ static int cancel_security(struct proc_thread *t,const struct ciuki_security_lin
         .endpoint_generation=l->endpoint_generation,.request_id_lo=(uint32_t)id,.request_id_hi=(uint32_t)(id>>32)};
     return extended_call(t,14,0,&in,0,64);
 }
+static void test_review_service_accept(struct proc_thread *logon,struct proc_thread *at)
+{
+    struct process *account=at->process;
+    int original=desktop_fd_slot(account,0);
+    struct ciuki_security_link client=connect_security(logon,2);
+    struct proc_object *endpoint=account->fds[original].object;
+    CHECK(endpoint);
+    int duplicate=desktop_dup(account,original,0,false,0); CHECK(duplicate>=0);
+    CHECK(!desktop_close(account,original) && safe_install(account)==original);
+    struct proc_object *replacement=account->fds[original].object;
+    struct ciuki_security_link accepted=accept_security(at,2);
+    CHECK(accepted.endpoint_fd==duplicate && account->fds[accepted.endpoint_fd].object==endpoint);
+    CHECK(accepted.endpoint_generation==client.endpoint_generation && accepted.peer_pid==logon->process->pid);
+    CHECK(!frame_send(logon,&client,1,1,0,0,0)); desktop_select(at);
+    CHECK(channel_recv(account,accepted.endpoint_fd,SEC_OUT,DONTWAIT)==1);
+    CHECK(!desktop_close(logon->process,client.endpoint_fd));
+    CHECK(account->fds[duplicate].object==endpoint && account->fds[original].object==replacement);
+    CHECK(!desktop_close(account,duplicate) && !desktop_close(account,original));
+    puts("H01 review 3 (b): ACCEPT resolves duplicated pending endpoint after original fd reuse; receive succeeds; accepted endpoint stays owned PASS");
+}
+static void test_review_service_disconnect(struct proc_thread *logon,struct proc_thread *at)
+{
+    struct process *account=at->process;
+    unsigned heap_before=heap_blocks,pages_before=pages_used;
+    struct ciuki_security_link in={.version=1,.size=64,.service=2},out;
+    for (unsigned i=0;i<2*CIUKI_OPEN_MAX;i++) {
+        int original=desktop_fd_slot(account,0);
+        struct ciuki_security_link client=connect_security(logon,2);
+        CHECK(account->fds[original].object);
+        CHECK(!desktop_close(logon->process,client.endpoint_fd));
+        CHECK(!account->fds[original].object && heap_blocks==heap_before && pages_used==pages_before);
+    }
+    CHECK(extended_call(at,13,0,&in,&out,64)==-EAGAIN);
+    int original=desktop_fd_slot(account,0);
+    struct ciuki_security_link client=connect_security(logon,2);
+    CHECK(!frame_send(logon,&client,1,1,200,0,1));
+    CHECK(cancel_security(logon,&client,1)==1 && !account->fds[original].object);
+    CHECK(!service_exchanges && pages_used==pages_before);
+    CHECK(!desktop_close(logon->process,client.endpoint_fd));
+    client=connect_security(logon,2);
+    int duplicate=desktop_dup(account,original,0,false,0); CHECK(duplicate>=0);
+    CHECK(!desktop_close(account,original) && safe_install(account)==original);
+    struct proc_object *replacement=account->fds[original].object;
+    CHECK(!desktop_close(logon->process,client.endpoint_fd));
+    CHECK(!account->fds[duplicate].object && account->fds[original].object==replacement);
+    CHECK(!desktop_close(account,original));
+    client=connect_security(logon,2);
+    CHECK(!desktop_close(account,original) && safe_install(account)==original);
+    replacement=account->fds[original].object;
+    CHECK(extended_call(at,13,0,&in,&out,64)==-EAGAIN);
+    CHECK(frame_send(logon,&client,1,1,0,0,0)==-ESRCH);
+    CHECK(!desktop_close(logon->process,client.endpoint_fd) && account->fds[original].object==replacement);
+    CHECK(!desktop_close(account,original));
+    struct process *dying; struct proc_thread *dt=make_process(logon->process,&dying);
+    struct security_peer peer;
+    client=connect_security(dt,2);
+    CHECK(!channel_peer_get(account,original,&peer));
+    connect_security(dt,2); stop_collect(dying);
+    CHECK(!account->fds[original].object && desktop_fd_slot(account,0)==original);
+    CHECK(!channel_peer_live(&peer)); channel_peer_put(&peer);
+    CHECK(extended_call(at,13,0,&in,&out,64)==-EAGAIN);
+    struct ciuki_credential credential=standard(1460);
+    struct ciuki_security_profile profile=profile_for(credential.uid);
+    uint32_t id; CHECK(!security_session_create(&credential,&profile,&id));
+    dt=session_process(logon->process,id,&dying);
+    connect_security(dt,2); connect_security(dt,2); retire(id);
+    CHECK(!account->fds[original].object && extended_call(at,13,0,&in,&out,64)==-EAGAIN);
+    client=connect_security(logon,2);
+    CHECK(!frame_send(logon,&client,1,1,200,0,1)); g_ticks+=5000; security_poll();
+    CHECK(!account->fds[original].object && !service_exchanges && pages_used==pages_before);
+    CHECK(!desktop_close(logon->process,client.endpoint_fd));
+    CHECK(heap_blocks==heap_before && pages_used==pages_before);
+    /* Kernel OWNER's table is outside proc_find(), but has the same pending
+     * endpoint ownership obligation as a published ACCOUNT process. */
+    int owner_fd=desktop_fd_slot(proc_supervisor(),0);
+    for (unsigned i=0;i<2*CIUKI_OPEN_MAX;i++) {
+        client=connect_security(at,3);
+        CHECK(proc_supervisor()->fds[owner_fd].object);
+        CHECK(!desktop_close(account,client.endpoint_fd));
+        CHECK(!proc_supervisor()->fds[owner_fd].object && heap_blocks==heap_before);
+    }
+    puts("H01 review 3 (a): repeated unaccepted disconnects, cancellation, process/session death, timeout and duplicate cleanup reclaim exact server endpoints; retained peers and reused slots survive PASS");
+}
 static void test_amendment_service(struct proc_thread *logon)
 {
     struct process *account;struct proc_thread *at=role_fixture(3,&account);
     struct process *ui;struct proc_thread *uit=role_fixture(2,&ui);
+    test_review_service_accept(logon,at);
+    test_review_service_disconnect(logon,at);
     for (uint32_t operation=4;operation<=11;operation++) if (operation!=7) {
         struct ciuki_security_args denied=security_args(operation);
         CHECK(invoke(at,&denied)==-EPERM);

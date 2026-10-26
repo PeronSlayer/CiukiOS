@@ -92,6 +92,8 @@ static inline int ciuki_error(uint32_t r) { return r >= (uint32_t)-4095 ? -(int3
         print(result.stdout, end='')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('H01 credentials: PASS', result.stdout)
+        self.assertIn('H01 review 3 (a):', result.stdout)
+        self.assertIn('H01 review 3 (b):', result.stdout)
 
 
 if __name__ == '__main__':

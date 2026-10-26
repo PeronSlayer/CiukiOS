@@ -1,5 +1,30 @@
 # Credential foundation host validation
 
+## Lead amendment 3: pending service endpoint lifetime
+
+Rechecked Microsoft's [cancellation considerations](https://learn.microsoft.com/en-us/windows/win32/fileio/canceling-pending-i-o-operations),
+[access tokens](https://learn.microsoft.com/en-us/windows/win32/secauthz/access-tokens)
+and [CloseHandle](https://learn.microsoft.com/en-us/windows/win32/api/handleapi/nf-handleapi-closehandle).
+Cancellation and object lifetime are separate; process identity accompanies
+work, while closing a handle drops that handle's object reference. The exact
+CiukiOS pre-accept cleanup rule remains the lead's contract decision.
+
+Repository comparison found that SERVICE_CONNECT installs the server endpoint
+before ACCEPT, revocation only discards messages, and ACCEPT reports a cached
+fd number. Reclaim every descriptor of the exact unaccepted endpoint when the
+link is revoked, checking the retained server subject and endpoint object;
+leave accepted endpoints for server cleanup. Resolve the currently owned
+endpoint descriptor at ACCEPT, so closing/reusing its original slot cannot
+retarget the result. Preserve retained peer references and cancellation's
+existing admission/result semantics. H01 exercises disconnect exhaustion,
+cancel/death, endpoint duplication, slot reuse and accepted-link cleanup.
+The kernel OWNER service uses the supervisor's separate fd table, so lookup
+also recognizes its exact subject. Cleanup pins the endpoint across duplicate
+detachment, and revocation/poll iteration saves its next link before cleanup
+can release the current channel. Timeout cleanup runs in service polling.
+The ordinary-channel pacing fixture aborts if service-only process lookup or
+desktop cleanup is reached. No public ABI or role/authority change is required.
+
 ## Lead amendment 2: host harness compatibility
 
 Rechecked the primary [Microsoft access-token documentation](https://learn.microsoft.com/en-us/windows/win32/secauthz/access-tokens)

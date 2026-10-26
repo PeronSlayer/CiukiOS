@@ -70,6 +70,11 @@ void pmm_free(uint32_t page) { (void)page; CHECK(false); }
 uint32_t pmm_alloc(void) { CHECK(false); return 0; }
 void security_process_stopping(struct process *p)
 { CHECK(p && p->subject==fixture_subject()); channel_security_revoke(p); }
+/* Pending service endpoint reclamation is outside this ordinary-channel
+ * pacing fixture; H01 exercises its real process lookup and fd cleanup. */
+struct process *proc_find(uint32_t pid) { (void)pid; CHECK(false); return NULL; }
+struct process *proc_supervisor(void) { CHECK(false); return NULL; }
+int desktop_close(struct process *p,int32_t fd) { (void)p;(void)fd;CHECK(false);return -EBADF; }
 #include "../../src/kernel/drivers/i8042.c"
 #include "../../src/kernel/net/lwip/sockets.c"
 

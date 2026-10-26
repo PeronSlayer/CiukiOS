@@ -27,3 +27,10 @@ Lead run of commit 864af854a outside the sandbox (scripts/test/host_kernel_tests
 2. tests/host/test_kernel_latency.py: the latency harness links src/kernel/proc/channel.c without the security subject code: undefined references to security_subject_put (channel.c:86-89, channel_release) and security_process_live (channel.c:96,112, channel_pair). Add the security sources (or the harness's usual stubs) to every host harness that links channel.c; rg for others.
 Known environmental failures in a worktree (not yours): irq_work_replay audio link (fixed on main by fx-testfix2), unified DOS (third_party/freedos archive absent), test_kernel_loader (Wine cache/advpack fixture).
 Run the two tests and the ABI section. Add 'Review round 2' to the report. Leave changes uncommitted.
+
+## Lead amendment 3 (2026-10-26 15:00): code review round 2
+
+Amendment 2 is committed as 0303cbf4f. A Codex review of amendment 1 (702ad0f3d) found two P2, both reproduced with the H01 harness:
+1. Unaccepted service links leak server descriptors after disconnect: channel.c:715 skips revoked links during ACCEPT while close/cancel/death never removes their unreported server endpoints; repeated CONNECT(ACCOUNTS)+close exhausts the ACCOUNT descriptor table (four disconnects kept four descriptors, ACCEPT returned EAGAIN). Reclaim the exact unaccepted server endpoint on revocation (check object identity before detaching); keep accepted endpoints for normal server cleanup.
+2. ACCEPT can return a recycled descriptor: channel.c:686 returns a cached server_fd; after the server dups the pending endpoint, closes the original and reuses the slot, ACCEPT returns the reused number (fd 4 while the channel is fd 5; receive EBADF). Resolve the currently owned descriptor of the exact endpoint object at ACCEPT, or keep pending endpoints private until acceptance.
+Regressions for both in H01. Add "Review round 3" to the report. Leave changes uncommitted.
