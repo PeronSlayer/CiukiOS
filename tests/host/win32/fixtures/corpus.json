@@ -1427,10 +1427,10 @@
     "rules": [
       "pe-offset-alignment"
     ],
-    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); first check pe-offset-alignment.",
+    "runtime": "Refuse with ERROR_BAD_EXE_FORMAT (193); the changed offset points at an invalid PE signature.",
     "evidence": "structural-only; guest execution pending",
     "census": {
-      "error": "pe-offset-alignment"
+      "error": "pe-signature"
     },
     "patches": [
       {

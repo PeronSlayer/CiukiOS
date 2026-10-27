@@ -115,7 +115,7 @@ uint32_t pmm_alloc_contig(uint32_t pages)
 {
     creation_cost_charge(4000 * pages);
     if (allocation_fails() || ++contiguous_calls == fail_contiguous_at) return 0;
-    for (unsigned first = 4096; first + pages <= HOST_PAGES; first++) {
+    for (unsigned first = PMM_NORMAL_START_PFN; pages && pages <= HOST_PAGES && first <= HOST_PAGES - pages; first++) {
         unsigned n = 0;
         while (n < pages && !allocated[first + n]) n++;
         if (n != pages) { first += n; continue; }

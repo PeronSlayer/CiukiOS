@@ -167,6 +167,18 @@ int main(int argc,char **argv)
     struct ap_inf quoted;
     const char *quoted_text="[autorun]\nopen=\"SETUP\\INSTALL.COM\" /S\nlabel=\"Ciuki Games\"\n";
     assert(!ap_parse(&quoted,quoted_text,strlen(quoted_text)) && !strcmp(quoted.open,"\"SETUP\\INSTALL.COM\" /S") && !strcmp(quoted.label,"Ciuki Games"));
+    const char *period_inf="[ AutoRun ] ; period mastering tool\rOPEN=SETUP.COM /S\runknown=\001\377\rlabel=Caf\xc3\xa9\ricon=disc.ico\r";
+    assert(!ap_parse(&quoted,period_inf,strlen(period_inf)));
+    assert(!strcmp(quoted.open,"SETUP.COM /S") && !strcmp(quoted.label,"Caf\xc3\xa9") && !strcmp(quoted.icon,"disc.ico"));
+    char long_inf[1200];
+    strcpy(long_inf,"[autorun]\nopen=SETUP.COM\n"); size_t used=strlen(long_inf);
+    memset(long_inf+used,'x',1000); used+=1000;
+    strcpy(long_inf+used,"\nicon=disc.ico\nlabel=Games\n");
+    assert(!ap_parse(&quoted,long_inf,strlen(long_inf)) && !strcmp(quoted.open,"SETUP.COM") && !strcmp(quoted.icon,"disc.ico"));
+    long_inf[strlen("[autorun]\nopen=SETUP.COM\n")]='[';
+    assert(!ap_parse(&quoted,long_inf,strlen(long_inf)) && !strcmp(quoted.open,"SETUP.COM") && !quoted.icon[0]);
+    const char *utf8_edge="[autorun]\nlabel=1234567890123456789012345678901\xc3\xa9\n";
+    assert(!ap_parse(&quoted,utf8_edge,strlen(utf8_edge)) && strlen(quoted.label)==31);
     assert(!strcmp(d.sh.autoplay.content.inf.label,"Ciuki Games") && !strcmp(d.sh.autoplay.content.inf.icon,"disc.ico"));
     char label[33]; assert(!ap_drive_label(&fake_vfs,3,label) && !strcmp(label,"Ciuki Games")); render();
     select_action(AP_RUN); key(DU_KEY_ENTER); autoplay_drain(&d);

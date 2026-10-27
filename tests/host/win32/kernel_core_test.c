@@ -393,6 +393,8 @@ static void test_spawn_exceptions(void)
     proc_init();make_pe(pe_data,false);make_pe(loader_data,true);
     struct ciuki_file f={pe_data,sizeof(pe_data),pe_read,0};struct w32_image *im=malloc(sizeof(*im));CHECK(im);
     CHECK(w32_is_pe(&f)&&!w32_pe_validate(&f,im));
+    memmove(pe_data+0x81,pe_data+0x80,24+224+40);put32(pe_data+60,0x81);
+    CHECK(!w32_pe_validate(&f,im) && im->entry==0x1000 && im->section[0].offset==512);make_pe(pe_data,false);
     put32(pe_data+60,UINT32_MAX);CHECK(w32_is_pe(&f)&&w32_pe_validate(&f,im)==-ENOEXEC);make_pe(pe_data,false);
     put32(pe_data+0x98+96+4*8,0x2300);put32(pe_data+0x98+100+4*8,8);CHECK(!w32_pe_validate(&f,im));make_pe(pe_data,false);
     const struct ciuki_file_ops ops={.open=loader_open};proc_set_file_ops(&ops);

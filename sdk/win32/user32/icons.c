@@ -210,7 +210,7 @@ BOOL W32API DestroyIcon(HICON h) {
   return 1;
 }
 /* f5-20B: one RT_ICON/RT_CURSOR image (BITMAPINFOHEADER, XOR image, AND
- * mask; cursors start with the hotspot) of any square size up to 256
+ * mask; cursors start with the hotspot) with each dimension up to 256
  * pixels and 1/4/8/24/32 bits, resampled to USER's 32x32 icon by nearest
  * neighbour. PNG images (Windows Vista) are refused as on Windows 98. */
 static struct icon *from_bits(const uint8_t *b, DWORD n, BOOL cursor) {
@@ -229,28 +229,28 @@ static struct icon *from_bits(const uint8_t *b, DWORD n, BOOL cursor) {
     return (struct icon *)(uintptr_t)u32_fail(13);
   LONG width = (LONG)w32_u32(b + 4), height2 = (LONG)w32_u32(b + 8);
   UINT depth = w32_u16(b + 14);
-  if (width <= 0 || width > 256 || height2 != 2 * width ||
+  if (width <= 0 || width > 256 || height2 <= 0 || height2 > 512 || (height2 & 1) ||
       (depth != 1 && depth != 4 && depth != 8 && depth != 24 && depth != 32))
     return (struct icon *)(uintptr_t)u32_fail(13);
-  UINT size = (UINT)width;
+  UINT size = (UINT)width, height = (UINT)height2 / 2;
   UINT colors =
       depth <= 8 ? (w32_u32(b + 32) ? w32_u32(b + 32) : 1u << depth) : 0;
   if (colors > 256)
     return (struct icon *)(uintptr_t)u32_fail(13);
   UINT pitch = ((size * depth + 31) / 32) * 4, offset = 40 + colors * 4,
        mask_pitch = ((size + 31) / 32) * 4;
-  if ((uint64_t)offset + (uint64_t)pitch * size + (uint64_t)mask_pitch * size >
+  if ((uint64_t)offset + (uint64_t)pitch * height + (uint64_t)mask_pitch * height >
       n)
     return (struct icon *)(uintptr_t)u32_fail(13);
   struct icon *i = allocate(cursor);
   if (!i)
     return 0;
   i->hotx = size == 32 ? hotx : hotx * 32 / size;
-  i->hoty = size == 32 ? hoty : hoty * 32 / size;
+  i->hoty = height == 32 ? hoty : hoty * 32 / height;
   for (UINT y = 0; y < 32; y++)
     for (UINT x = 0; x < 32; x++) {
-      UINT sx = x * size / 32, sy = y * size / 32;
-      const uint8_t *row = b + offset + (size - 1 - sy) * pitch;
+      UINT sx = x * size / 32, sy = y * height / 32;
+      const uint8_t *row = b + offset + (height - 1 - sy) * pitch;
       UINT p = y * 32 + x;
       DWORD c = 0;
       if (depth == 32)
@@ -268,7 +268,7 @@ static struct icon *from_bits(const uint8_t *b, DWORD n, BOOL cursor) {
         }
         c = w32_u32(b + 40 + idx * 4);
       }
-      BOOL mask = !!(b[offset + pitch * size + (size - 1 - sy) * mask_pitch +
+      BOOL mask = !!(b[offset + pitch * height + (height - 1 - sy) * mask_pitch +
                        sx / 8] &
                      (128 >> (sx & 7)));
       i->mask[p] = mask;

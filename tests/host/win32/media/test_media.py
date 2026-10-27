@@ -51,6 +51,15 @@ def golden(test, name, text):
 
 
 class Media(unittest.TestCase):
+    def test_format0_header_compatibility(self):
+        OUT.mkdir(parents=True, exist_ok=True)
+        exe = compile_program('classaudit-midi', [HERE / 'classaudit_midi.c',
+                              ROOT / 'sdk/win32/services/bytes.c'],
+                              ['-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections,-z,start-stop-gc'])
+        result = subprocess.run([str(exe)], capture_output=True, text=True, env=env())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('PASS MIDI format-0', result.stdout)
+
     @classmethod
     def setUpClass(cls):
         OUT.mkdir(parents=True, exist_ok=True)

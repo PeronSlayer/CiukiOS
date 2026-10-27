@@ -252,8 +252,11 @@ static uint32_t load(struct seq *s, HANDLE f) {
   s->format = (uint32_t)p[at + 8] << 8 | p[at + 9];
   uint32_t declared = (uint32_t)p[at + 10] << 8 | p[at + 11];
   s->division = (uint32_t)p[at + 12] << 8 | p[at + 13];
-  if (s->format > 1 || !declared || declared > SEQ_TRACKS ||
-      (s->format == 0 && declared != 1) || !s->division)
+  if (s->format == 0 && declared != 1) {
+    OutputDebugStringA("[midi] field=format0_track_count action=use_one\n");
+    declared = 1;
+  }
+  if (s->format > 1 || !declared || declared > SEQ_TRACKS || !s->division)
     return MCIERR_INVALID_FILE;
   if (s->division & 0x8000) {
     int fps = -(int8_t)(s->division >> 8);

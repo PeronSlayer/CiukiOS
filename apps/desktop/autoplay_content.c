@@ -45,28 +45,49 @@ int ap_parse(struct ap_inf *out,const char *text,size_t size)
     if (!text || size>AP_INF_MAX || memchr(text,0,size)) return -EINVAL;
     int section=0; size_t at=0;
     while (at<size) {
-        size_t end=at; while (end<size && text[end]!='\n') end++;
+        size_t end=at; while (end<size && text[end]!='\n' && text[end]!='\r') end++;
         char line[FM_PATH+128]; size_t n=end-at;
-        if (n>=sizeof(line)) { memset(out,0,sizeof(*out)); return -EINVAL; }
-        memcpy(line,text+at,n); line[n]=0; at=end+1;
+        size_t next=end; if (next<size && text[next]=='\r') next++;
+        if (next<size && text[next]=='\n') next++;
+        if (n>=sizeof(line)) {
+            fprintf(stderr,"[autoplay] field=line bytes=%zu action=ignore reason=capacity\n",n);
+            size_t first=at; while (first<end && (text[first]==' ' || text[first]=='\t')) first++;
+            if (first<end && text[first]=='[') section=0;
+            at=next; continue;
+        }
+        memcpy(line,text+at,n); line[n]=0; at=next;
         char *s=trim(line);
         if (*s==';' || !*s) continue;
-        if (*s=='[') { section=!strcasecmp(s,"[autorun]"); continue; }
+        if (*s=='[') {
+            char *close=strchr(s+1,']');
+            if (close) *close=0;
+            section=close && !strcasecmp(trim(s+1),"autorun"); continue;
+        }
         if (!section) continue;
         char *eq=strchr(s,'='); if (!eq) continue; *eq++=0;
         s=trim(s); eq=trim(eq);
-        for (const char *p=eq;*p;p++) if ((unsigned char)*p<32 || (unsigned char)*p>126) { memset(out,0,sizeof(*out)); return -EINVAL; }
         char *dst=NULL; size_t cap=0;
         if (!strcasecmp(s,"open")) { dst=out->open; cap=sizeof(out->open); }
         if (!strcasecmp(s,"icon")) { dst=out->icon; cap=sizeof(out->icon); }
         if (!strcasecmp(s,"label")) { dst=out->label; cap=sizeof(out->label); }
         if (dst) {
+            /* Unknown keys and unrelated malformed lines cannot discard a
+             * valid open/icon/label. Preserve native UTF-8 path bytes. */
+            int bad=0;
+            for (const char *p=eq;*p;p++) if ((unsigned char)*p<32 && *p!='\t') bad=1;
+            if (bad) { fprintf(stderr,"[autoplay] field=%s action=ignore reason=control_byte\n",s); continue; }
             /* Quotes group the executable token for open; only metadata
              * values strip an enclosing quote pair here. */
             size_t value_size=strlen(eq);
             if (dst!=out->open && value_size>=2 && eq[0]=='"' && eq[value_size-1]=='"') { eq[value_size-1]=0; eq++; }
-            if (strlen(eq)>=cap && dst!=out->label) { memset(out,0,sizeof(*out)); return -EINVAL; }
-            snprintf(dst,cap,"%s",eq);
+            if (strlen(eq)>=cap && dst!=out->label) {
+                fprintf(stderr,"[autoplay] field=%s action=ignore reason=capacity\n",s); continue;
+            }
+            if (strlen(eq)>=cap) {
+                size_t length=cap-1;
+                while (length && ((unsigned char)eq[length]&0xc0)==0x80) length--;
+                memcpy(dst,eq,length); dst[length]=0;
+            } else snprintf(dst,cap,"%s",eq);
         }
     }
     return 0;

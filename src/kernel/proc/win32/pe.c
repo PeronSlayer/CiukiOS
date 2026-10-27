@@ -29,7 +29,7 @@ int w32_pe_validate(const struct ciuki_file *f, struct w32_image *im)
     PE_CHECK(!read_file(f, 0, dos, 64), "dos-header-truncated");
     PE_CHECK(pe16(dos) == 0x5a4d, "dos-magic");
     uint32_t off = pe32(dos + 60);
-    PE_CHECK(!(off & 3), "pe-offset-alignment");
+    if (off & 3) klog("[win32] image field=pe_offset value=%u action=accept_unaligned",off);
     PE_CHECK(off >= 64 && !read_file(f, off, pe, 24), "pe-header-bounds");
     PE_CHECK(pe32(pe) == 0x4550, "pe-signature");
     PE_CHECK(pe16(pe + 4) == 0x14c, "machine-not-i386");

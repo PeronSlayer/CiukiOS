@@ -198,6 +198,16 @@ class OpticalHarness(unittest.TestCase):
 
 
 class RootRecords(OpticalHarness):
+    def test_reserved_directory_flags_are_diagnostic(self):
+        for joliet in (False,True):
+            a=root_record_fixture(self.directory,(),joliet)
+            p=Path(a['path']); data=bytearray(p.read_bytes())
+            for descriptor in descriptors(data):
+                if data[descriptor] in (1,2):
+                    for record in directory_records(data,descriptor): data[record+25]|=0x60
+            p.write_bytes(data)
+            self.assertIn('field=flags_interleave result=0',self.check_image(a))
+
     def test_python_directory_mastering_mounts_both_hierarchies(self):
         source=self.directory/'python-source'
         source.mkdir()
@@ -337,9 +347,9 @@ class Optical(OpticalHarness):
                                  (17,7,'volume_flags'),(18,6,'descriptor_version')):
             with self.subTest(lba=lba,field=field):
                 data=bytearray(original); data[lba*BLOCK+offset]=1 if offset==7 else 0; p.write_bytes(data)
-                self.assertIn(f'field={field} result=-5',self.check_image(a,True))
+                self.assertIn(f'field={field} result=0',self.check_image(a))
         data=bytearray(original); data[18*BLOCK]=0; p.write_bytes(data)
-        self.assertIn('descriptor=set field=terminator result=-5',self.check_image(a,True))
+        self.assertIn('descriptor=set field=terminator result=0',self.check_image(a))
         data=bytearray(original); data[16*BLOCK+156]=0; p.write_bytes(data)
         self.assertIn('descriptor=pvd field=root_directory_record result=-5',self.check_image(a,True))
 
@@ -435,7 +445,7 @@ class Optical(OpticalHarness):
                   ([headers[1],headers[2],headers[255],headers[255],bytes(BLOCK)],False),
                   ([headers[2],headers[255]],True),
                   ([headers[255],headers[1],headers[2]],True),
-                  ([headers[1],headers[2],boot],True)]
+                  ([headers[1],headers[2],boot],False)]
         for index,(records,refused) in enumerate(variants):
             with self.subTest(index=index):
                 data=bytearray(original); session=len(data)//BLOCK
@@ -467,6 +477,8 @@ class Optical(OpticalHarness):
         both(target+10,2048); data[target+25]|=128
         both(target+length+2,extent+1); both(target+length+10,4099-2048)
         p.write_bytes(data); self.check_image(a)
+        data[target+25]|=0x20; data[target+length+25]|=0x40
+        p.write_bytes(data); self.check_image(a)  # reserved bits can differ per section
         both(target+length+2,len(data)//2048+20); p.write_bytes(data); self.check_image(a,True)
 
     def test_runner_slots_actions_and_manifest_refusal(self):

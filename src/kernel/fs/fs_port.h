@@ -124,24 +124,20 @@ static inline void fs_event_wait_ms(struct fs_event *q, fs_lock *l, uint32_t ms)
 static inline void *fs_alloc(size_t n) { return n <= KHEAP_MAX_REQUEST ? malloc(n) : NULL; }
 static inline void fs_free(void *p) { free(p); }
 extern unsigned fs_host_page_fail;
-static inline void *fs_page_alloc(void) {
-    if (fs_host_page_fail && !--fs_host_page_fail) return NULL;
-    return calloc(1, 4096);
-}
-static inline void *fs_normal_page_alloc(void) { return fs_page_alloc(); }
-static inline void fs_page_free(void *p) { free(p); }
+void *fs_page_alloc(void);
+void *fs_normal_page_alloc(void);
+void fs_page_free(void *);
+/* Configure a synthetic E820 map only with no outstanding allocations.
+ * The default map is the architectural upper bound, not hardware proof. */
+void fs_host_memory_configure(unsigned normal_pages, unsigned dma_pages);
+unsigned fs_host_memory_live(void);
+unsigned fs_host_memory_pfn(const void *);
 static inline void fs_panic(const char *s) { (void)s; abort(); }
 /* Mount-time parser workspaces (f4-04): zeroed, page-aligned, page-rounded.
  * Host tests make the Nth next allocation fail through fs_host_contig_fail. */
 extern unsigned fs_host_contig_fail, fs_host_contig_live;
-static inline void *fs_contig_alloc(size_t n) {
-    if (fs_host_contig_fail && !--fs_host_contig_fail) return NULL;
-    size_t bytes = (n + 4095) & ~(size_t)4095;
-    void *p = bytes ? aligned_alloc(4096, bytes) : NULL;
-    if (p) { memset(p, 0, bytes); __atomic_add_fetch(&fs_host_contig_live,1,__ATOMIC_RELAXED); }
-    return p;
-}
-static inline void fs_contig_free(void *p, size_t n) { (void)n; if (p) { __atomic_sub_fetch(&fs_host_contig_live,1,__ATOMIC_RELAXED); free(p); } }
+void *fs_contig_alloc(size_t n);
+void fs_contig_free(void *, size_t n);
 uint32_t fs_host_clock_ms(void) __attribute__((weak)); /* deterministic fixture boundary */
 static inline uint32_t fs_now_ms(void) {
     if (fs_host_clock_ms) return fs_host_clock_ms();
@@ -258,6 +254,7 @@ static inline void fs_panic(const char *s) { panic("fs: %s", s); }
 /* Mount-time parser workspaces (f4-04): zeroed contiguous pages from the
  * physical allocator, reached through the direct map. */
 static inline void *fs_contig_alloc(size_t n) {
+    if (!n || n>(size_t)(PMM_MAX_PAGES-PMM_NORMAL_START_PFN)*PAGE_SIZE) return 0;
     uint32_t pages = (uint32_t)((n + PAGE_SIZE - 1) >> 12);
     uint32_t p = pages ? pmm_alloc_contig(pages) : 0;
     if (!p) return 0;
