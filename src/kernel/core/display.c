@@ -2,6 +2,7 @@
  * independent desktop-frame watchdog. See docs/design/f1-acceptance.md.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/security_device.h>
 #include <ciuki/cpu.h>
 #include <ciuki/display.h>
 #include <ciuki/biosvm.h>
@@ -579,7 +580,10 @@ static int screen_control(struct process *p, struct ciuki_screen_control *q)
 {
     if (q->version!=CIUKI_SCREEN_VERSION || q->size!=sizeof(*q) ||
         (q->flags&~CIUKI_SCREEN_PERSIST)) return -EINVAL;
-    bool desktop=p && p->pid==supervisor_desktop_pid();
+    bool trusted=security_device_system(p) && security_role(p)==CIUKI_SECURITY_ROLE_LOGON_UI;
+    bool desktop=security_device_desktop(p) || trusted;
+    if (!trusted && (!security_device_session(p) || (!desktop &&
+        !security_same(p,proc_find(supervisor_desktop_pid()))))) return -EPERM;
     if ((q->action==CIUKI_SCREEN_CONFIG || q->action==CIUKI_SCREEN_STATUS) && !desktop) return -EPERM;
     uint32_t action=q->action;
     bool inhibited=fullscreen_display || (display_present_active && display_present_active());

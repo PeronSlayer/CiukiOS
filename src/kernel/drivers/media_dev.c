@@ -1,5 +1,7 @@
 /* Copied removable-media control. SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/security_device.h>
+#include <ciuki/security_storage.h>
 #include <ciuki/files.h>
 #include <ciuki/storage.h>
 #include <ciuki/usb.h>
@@ -83,7 +85,8 @@ static int media_label_locked_apply(struct vfs *vfs, struct ciuki_media_label *r
     vfs_unlock(vfs);
     return e;
 }
-static int media_label(struct storage *s,uint32_t op,uint32_t address,uint32_t bytes)
+static int media_label(struct process *p, const struct security_subject *subject,
+                       struct storage *s,uint32_t op,uint32_t address,uint32_t bytes)
 {
     struct ciuki_media_label r;
     if (bytes!=sizeof(r)) return -EINVAL;
@@ -97,6 +100,18 @@ static int media_label(struct storage *s,uint32_t op,uint32_t address,uint32_t b
         if ((e=media_label_encode(r.label,padded))) return e;
     }
     if (!s || !s->ready) return -ENOENT;
+    if (!security_process_live(p)) return -EACCES;
+    if (op==MEDIA_SET_LABEL) {
+        vfs_lock(&s->vfs,0);
+        const struct ciuki_credential *c=security_subject_credential(subject);
+        bool system=security_storage_system_drive(s,r.drive);
+        bool removable=s->volumes[r.drive].removable;
+        int denied=system ? security_storage_broker(subject,s,r.drive)!=0 :
+            removable ? (!c || c->uid==CIUKI_UID_GUEST || !security_subject_live(subject)) :
+            !security_storage_admin(subject);
+        vfs_unlock(&s->vfs);
+        if (denied) return -EPERM;
+    }
     e=media_label_locked_apply(&s->vfs,&r,op==MEDIA_SET_LABEL ? padded : 0);
     return e ? e : op==MEDIA_SET_LABEL ? 0 : copy_to_user(address,&r,sizeof(r));
 }
@@ -117,7 +132,8 @@ static int floppy_user_copy(void *ctx,uint32_t offset,void *buffer,uint32_t byte
     struct floppy_image_operation *o=ctx;
     return output ? copy_to_user(o->address+offset,buffer,bytes) : copy_from_user(buffer,o->address+offset,bytes);
 }
-static int floppy_image_call(struct process *p, struct storage *s, uint32_t op, uint32_t address, uint32_t bytes)
+static int floppy_image_call(struct process *p, const struct security_subject *subject,
+                             struct storage *s, uint32_t op, uint32_t address, uint32_t bytes)
 {
     struct ciuki_floppy_image r;
     if (bytes!=sizeof(r)) return -EINVAL;
@@ -130,24 +146,51 @@ static int floppy_image_call(struct process *p, struct storage *s, uint32_t op, 
     struct proc_thread *thread=proc_thread_for(g_current);
     if (thread) { thread->cleanup=floppy_image_free; thread->operation=o; }
     if (!e) { e=ua_pin(p->memory,&o->pin,r.buffer,length,op==MEDIA_FLOPPY_READ); o->pinned=!e; }
+    if (!e && !security_storage_admin(subject)) e=-EPERM;
     if (!e) e=px_error(storage_floppy_copy(s,&r,floppy_user_copy,o,op==MEDIA_FLOPPY_WRITE));
     if (thread) { thread->cleanup=0; thread->operation=0; }
     floppy_image_free(o); return e;
 }
-int media_devctl(struct process *p,int32_t fd,uint32_t op,uint32_t address,uint32_t bytes)
+int media_devctl_subject(struct process *p, const struct security_subject *subject,
+                         int32_t fd,uint32_t op,uint32_t address,uint32_t bytes)
 {
     if (!file_fd_object(p,fd)) return -EBADF;
     struct file_description *f=file_fd(p,fd);
     if (!f || f->node->kind!=PX_MEDIA) return -ENOTTY;
+    if (!security_process_live(p) || !security_subject_live(subject)) return -EACCES;
+    if (subject!=p->subject && !security_device_system(p)) return -EPERM;
     struct storage *s=storage_get();
-    if (op==MEDIA_FLOPPY_READ || op==MEDIA_FLOPPY_WRITE) return floppy_image_call(p,s,op,address,bytes);
+    bool admin=security_storage_admin(subject);
+    switch (op) {
+    case MEDIA_FLOPPY_READ: case MEDIA_FLOPPY_WRITE:
+    case MEDIA_FORMAT: case MEDIA_CONVERT: case MEDIA_DEFRAG_ANALYZE: case MEDIA_DEFRAG_STEP:
+        if (!admin) return -EPERM;
+        break;
+    case MEDIA_SAFE_REMOVE: case MEDIA_FLOPPY_LOAD:
+    case MEDIA_CD_READ_AUDIO: case MEDIA_CD_TRAY: case MEDIA_CD_PLAY: case MEDIA_CD_PAUSE:
+        if (!security_device_session(p) && !security_device_system(p)) return -EPERM;
+        break;
+    case MEDIA_GET_STATE: case MEDIA_GET_VOLUME: case MEDIA_GET_SPACE: case MEDIA_GET_BLOCKERS:
+    case MEDIA_GET_LABEL: case MEDIA_SET_LABEL: case MEDIA_GET_FORMAT: case MEDIA_GET_CONVERT:
+    case MEDIA_CD_STATE: case MEDIA_CD_INFO: case MEDIA_CD_TOC: case MEDIA_CD_POSITION:
+        break;
+    default: return -ENOTTY;
+    }
+    if (op==MEDIA_FLOPPY_READ || op==MEDIA_FLOPPY_WRITE) return floppy_image_call(p,subject,s,op,address,bytes);
     if (op>=MEDIA_CD_STATE && op<=MEDIA_CD_POSITION) return media_cd_devctl(p,s,op,address,bytes);
-    if (op==MEDIA_GET_LABEL || op==MEDIA_SET_LABEL) return media_label(s,op,address,bytes);
+    if (op==MEDIA_GET_LABEL || op==MEDIA_SET_LABEL) return media_label(p,subject,s,op,address,bytes);
     if (op==MEDIA_GET_CONVERT || op==MEDIA_CONVERT) {
         struct ciuki_media_convert r;
         if (bytes!=sizeof(r)) return -EINVAL;
         int e=copy_from_user(&r,address,sizeof(r)); if (e) return e;
         if (r.version!=CIUKI_MEDIA_VERSION) return -EOPNOTSUPP;
+        if (op==MEDIA_CONVERT) {
+            if (r.drive>=26 || !s || !s->ready) return -EINVAL;
+            vfs_lock(&s->vfs,0);
+            e=security_storage_broker(subject,s,r.drive);
+            vfs_unlock(&s->vfs);
+            if (e) return e;
+        }
         e=px_error(storage_convert(s,&r,op==MEDIA_CONVERT));
         return e ? e : copy_to_user(address,&r,sizeof(r));
     }
@@ -156,6 +199,11 @@ int media_devctl(struct process *p,int32_t fd,uint32_t op,uint32_t address,uint3
         if (bytes!=sizeof(r)) return -EINVAL;
         int e=copy_from_user(&r,address,sizeof(r)); if (e) return e;
         if (r.version!=CIUKI_MEDIA_VERSION) return -EOPNOTSUPP;
+        if (r.drive>=26 || !s || !s->ready) return -EINVAL;
+        vfs_lock(&s->vfs,0);
+        e=security_storage_broker(subject,s,r.drive);
+        vfs_unlock(&s->vfs);
+        if (e) return e;
         e=px_error(storage_defrag(s,&r,op==MEDIA_DEFRAG_STEP));
         return e ? e : copy_to_user(address,&r,sizeof(r));
     }
@@ -165,6 +213,13 @@ int media_devctl(struct process *p,int32_t fd,uint32_t op,uint32_t address,uint3
         int e=copy_from_user(&r,address,sizeof(r)); if (e) return e;
         if (r.version!=CIUKI_MEDIA_VERSION) return -EOPNOTSUPP;
         if (r.size!=sizeof(r) || r.drive>=26 || !r.generation || r.reserved) return -EINVAL;
+        if (op==MEDIA_FORMAT) {
+            if (!s || !s->ready) return -ENODEV;
+            vfs_lock(&s->vfs,0);
+            e=security_storage_broker(subject,s,r.drive);
+            vfs_unlock(&s->vfs);
+            if (e) return e;
+        }
         e=px_error(storage_format_removable(s,&r,op==MEDIA_FORMAT));
         return e ? e : copy_to_user(address,&r,sizeof(r));
     }
@@ -327,9 +382,21 @@ int media_devctl(struct process *p,int32_t fd,uint32_t op,uint32_t address,uint3
         int e=copy_from_user(&r,address,bytes); if (e) return e;
         if (r.version!=CIUKI_MEDIA_VERSION && r.version!=CIUKI_MEDIA_VERSION_1) return -EOPNOTSUPP;
         if (r.size!=sizeof(r) || r.drive<3 || r.drive>=26 || !r.generation) return -EINVAL;
+        if (!s || !s->ready) return -ENODEV;
+        vfs_lock(&s->vfs,0);
+        bool live=security_subject_live(subject) && security_process_live(p);
+        bool protected=security_storage_system_drive(s,r.drive);
+        vfs_unlock(&s->vfs);
+        if (!live) return -EACCES;
+        if (protected) return -EBUSY;
         e=optical_eject(s,r.drive,r.generation);
         if (e!=-FS_ENOENT) return px_error(e);
         return px_error(usb_storage_eject(s,r.drive,r.generation));
     }
     return -ENOTTY;
+}
+
+int media_devctl(struct process *p,int32_t fd,uint32_t op,uint32_t address,uint32_t bytes)
+{
+    return media_devctl_subject(p,p ? p->subject : 0,fd,op,address,bytes);
 }

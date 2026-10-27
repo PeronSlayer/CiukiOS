@@ -63,6 +63,14 @@ static int op(uint32_t operation, struct ciuki_time_zone *q)
     q->version = CIUKI_TIME_VERSION; q->size = sizeof(*q); q->operation = operation;
     return timezone_call(client, q);
 }
+static void time_test_authority(bool admin)
+{
+    /* Fake account admission; production timezone_call queries credentials. */
+    client->subject->credential=(struct ciuki_credential){.version=1,.size=64,.uid=1000,
+        .primary_gid=545,.session_id=1,.flags=CIUKI_CRED_INTERACTIVE,
+        .group_count=admin ? 2 : 1,.groups={admin ? 544 : 545,admin ? 545 : 0}};
+    client->time_capability=!admin; /* stale compatibility flags are irrelevant */
+}
 static unsigned rtc_writes(void) { return setup_rtc_writes; }
 
 static void test_boot_and_dst(void)
@@ -89,9 +97,9 @@ static void test_boot_and_dst(void)
     CHECK(rtc_writes() == w + 1 && rtc_get() == civil(2026, 4, 1, 13, 0, 0) && store_writes == 1);
     CHECK(strstr(store, "rtc_bias_minutes=120\n"));
     CHECK(!op(CIUKI_TIME_GET, &q) && rtc_writes() == w + 1 && (q.flags & CIUKI_TIME_ADJUSTED));
-    client->time_capability = false;
+    time_test_authority(false);
     CHECK(op(CIUKI_TIME_ACKNOWLEDGE, &q) == -EPERM);
-    client->time_capability = true;
+    time_test_authority(true);
     CHECK(!op(CIUKI_TIME_ACKNOWLEDGE, &q) && !(q.flags & CIUKI_TIME_ADJUSTED) && (q.flags & CIUKI_TIME_AUTHORITY));
     w = rtc_writes();
     /* Running across the spring change: 01:59 CET -> 03:00 CEST. */
@@ -131,13 +139,13 @@ static void test_set(void)
 {
     struct ciuki_time_zone q = {0};
     boot(120, civil(2026, 10, 24, 20, 0, 0), 1);
-    client->time_capability = false;
+    time_test_authority(false);
     unsigned w = rtc_writes();
     q.local_seconds = civil(2026, 12, 24, 18, 0, 0);
     CHECK(op(CIUKI_TIME_SET_LOCAL, &q) == -EPERM && rtc_writes() == w);
     CHECK(op(CIUKI_TIME_SET_UTC, &q) == -EPERM && op(CIUKI_TIME_SET_ZONE, &q) == -EPERM);
     CHECK(!op(CIUKI_TIME_GET, &q) && !(q.flags & CIUKI_TIME_AUTHORITY));
-    client->time_capability = true;
+    time_test_authority(true);
     /* Repeated hour: first occurrence (CEST). */
     q.local_seconds = civil(2026, 10, 25, 2, 30, 0);
     CHECK(!op(CIUKI_TIME_SET_LOCAL, &q) && now() == civil(2026, 10, 25, 0, 30, 0));
@@ -204,7 +212,7 @@ static void test_fat(void)
     CHECK((summer->entry.times.create_time >> 11) == 12);
     struct ciuki_stat st; CHECK(!locked_stat(summer, &st) && st.st_mtim.tv_sec == civil(2026, 7, 1, 10, 0, 0));
     CHECK(!file_close(client, fd));
-    client->time_capability = true;
+    time_test_authority(true);
     q.local_seconds = civil(2026, 12, 1, 9, 0, 0);
     CHECK(!op(CIUKI_TIME_SET_LOCAL, &q));
     fd = file_open(client, "/winter.txt", O_CREAT | O_EXCL | O_RDWR, 0666); CHECK(fd >= 0);
@@ -235,7 +243,10 @@ static void test_fat(void)
     puts("localtime FAT: stamps in local time (CEST and CET), stat in UTC through the stamp's own rule PASS");
 }
 
-int main(int argc, char **argv)
+#ifndef CIUKI_LOCALTIME_HOST_MAIN
+#define CIUKI_LOCALTIME_HOST_MAIN main
+#endif
+int CIUKI_LOCALTIME_HOST_MAIN(int argc, char **argv)
 {
     CHECK(argc == 3);
     ram = calloc(HOST_PAGES, PAGE_SIZE); CHECK(ram);
@@ -246,6 +257,7 @@ int main(int argc, char **argv)
     CHECK(!files_attach(&vfs, &space));
     client_thread = make_process(proc_supervisor(), &client); g_current = client_thread->task; g_current->state = T_RUNNING;
     client->cwd = space->root; px_retain(client->cwd); client->cwd_retain = px_retain; client->cwd_release = px_release;
+    time_test_authority(false);
     test_boot_and_dst(); test_set(); test_fat();
     all_closed(); stop_collect(client);
     for (unsigned i = 0; i < 2; i++) CHECK(!vfs_detach(&vfs, i + 2));

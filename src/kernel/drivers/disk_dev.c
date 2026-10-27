@@ -6,10 +6,13 @@
 #include <ciuki/kernel.h>
 #include <ciuki/files.h>
 #include <ciuki/storage.h>
+#include <ciuki/security_device.h>
 
 static struct storage_caller caller(const struct process *p)
 {
-    return (struct storage_caller){ p ? p->pid : 0, p && p->setup_capability };
+    return (struct storage_caller){ .pid = p ? p->pid : 0,
+        .setup_capability = security_device_setup(p),
+        .administrator = security_device_admin(p), .system = security_device_system(p) };
 }
 /* storage_add_disk records the slot's device once at boot and never clears
  * it; ATAPI and empty slots stay NULL. Safe without the namespace lock. */
@@ -84,5 +87,5 @@ void disk_process_exit(struct process *p)
 bool disk_write_denied(unsigned drive)
 {
     struct process *p = proc_current();
-    return storage_disk_write_denied(storage_get(), drive, p && p->setup_capability ? p->pid : 0);
+    return storage_disk_write_denied(storage_get(), drive, security_device_setup(p) ? p->pid : 0);
 }

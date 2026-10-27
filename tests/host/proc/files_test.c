@@ -1531,7 +1531,7 @@ static void test_setup_metadata(void)
     struct ciuki_setup_fat q={.version=CIUKI_SETUP_FAT_VERSION,.size=sizeof(q),.cluster_index=CIUKI_SETUP_INDEX_NONE};
     CHECK(!ua_write(client->memory,USER,&q,sizeof(q)));
     CHECK(call(CIUKI_SYS_DEVCTL,fd,CIUKI_SETUP_FAT_QUERY,USER,sizeof(q),0)==-EPERM);
-    client->setup_capability=true;
+    client->setup_capability=true; client->subject->role=CIUKI_SECURITY_ROLE_SETUP;
     CHECK(call(CIUKI_SYS_DEVCTL,fd,CIUKI_SETUP_FAT_QUERY,USER,sizeof(q),0)==-EPERM);
     setup_test_mode=true;
     CHECK(!call(CIUKI_SYS_DEVCTL,fd,CIUKI_SETUP_FAT_QUERY,USER,sizeof(q),0));
@@ -1573,7 +1573,7 @@ static void test_setup_metadata(void)
     CHECK(!ua_write(client->memory,USER,&net,sizeof(net)));
     CHECK(!call(CIUKI_SYS_DEVCTL,netfd,CIUKI_SETUP_NET_QUERY,USER,sizeof(net),0));
     CHECK(!ua_read(client->memory,&net,USER,sizeof(net)) && net.count==0);
-    client->setup_capability=false;
+    client->setup_capability=false; client->subject->role=0;
     CHECK(call(CIUKI_SYS_DEVCTL,netfd,CIUKI_SETUP_NET_QUERY,USER,sizeof(net),0)==-EPERM);
     CHECK(!file_close(client,netfd));
     CHECK(file_setup_clock(client,&clock)==-EPERM);
@@ -1704,15 +1704,15 @@ static void test_file_info(void)
     CHECK(media_label_encode("\xc3\xa8", padded) == -EINVAL && media_label_encode("", padded) == 0 && !memcmp(padded, "           ", 11));
     struct ciuki_media_label request={.version=CIUKI_MEDIA_VERSION,.size=sizeof(request),.drive=2};
     CHECK(!ua_write(client->memory,USER2,&request,sizeof(request)));
-    CHECK(media_label(NULL,MEDIA_GET_LABEL,USER2,sizeof(request)-1)==-EINVAL);
-    CHECK(media_label(NULL,MEDIA_GET_LABEL,UINT32_MAX-8,sizeof(request))==-EFAULT);
-    CHECK(media_label(NULL,MEDIA_GET_LABEL,USER2,sizeof(request))==-ENOENT);
+    CHECK(media_label(client,client->subject,NULL,MEDIA_GET_LABEL,USER2,sizeof(request)-1)==-EINVAL);
+    CHECK(media_label(client,client->subject,NULL,MEDIA_GET_LABEL,UINT32_MAX-8,sizeof(request))==-EFAULT);
+    CHECK(media_label(client,client->subject,NULL,MEDIA_GET_LABEL,USER2,sizeof(request))==-ENOENT);
     request.version=1; CHECK(!ua_write(client->memory,USER2,&request,sizeof(request)));
-    CHECK(media_label(NULL,MEDIA_GET_LABEL,USER2,sizeof(request))==-EOPNOTSUPP);
+    CHECK(media_label(client,client->subject,NULL,MEDIA_GET_LABEL,USER2,sizeof(request))==-EOPNOTSUPP);
     request.version=CIUKI_MEDIA_VERSION; request.drive=26; CHECK(!ua_write(client->memory,USER2,&request,sizeof(request)));
-    CHECK(media_label(NULL,MEDIA_GET_LABEL,USER2,sizeof(request))==-EINVAL);
+    CHECK(media_label(client,client->subject,NULL,MEDIA_GET_LABEL,USER2,sizeof(request))==-EINVAL);
     request.drive=2; memset(request.label,'A',sizeof(request.label)); CHECK(!ua_write(client->memory,USER2,&request,sizeof(request)));
-    CHECK(media_label(NULL,MEDIA_SET_LABEL,USER2,sizeof(request))==-EINVAL);
+    CHECK(media_label(client,client->subject,NULL,MEDIA_SET_LABEL,USER2,sizeof(request))==-EINVAL);
     for (unsigned i = 0; i < mounted_volumes; i++) {
         struct ciuki_media_label label = {.drive = volume_drive(i)};
         int label_error=media_label_locked_apply(&vfs, &label, "DATA DISK  ");

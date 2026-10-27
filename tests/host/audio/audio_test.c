@@ -1541,6 +1541,30 @@ static void test_stream_syscalls(void)
     CHECK(!file_close(client,fd));
     puts("audio fds: copied EFAULT, short/EAGAIN/EINTR/partial/EIO, reset generation, dup/inheritance/final close and quota PASS");
 }
+uint32_t supervisor_desktop_pid(void) { return fake_desktop_pid; }
+static void test_security_mixer(void)
+{
+    audio_locks_init();audio.ready=false;audio.initialized=true;audio_settings_load(&vfs);
+    client->subject->credential=(struct ciuki_credential){.version=1,.size=64,.uid=1001,
+        .session_id=1,.flags=CIUKI_CRED_INTERACTIVE,.primary_gid=545,.group_count=1,.groups={545}};
+    fake_desktop_pid=client->pid;
+    int mixer=file_open(client,"/dev/mixer",O_RDONLY,0);CHECK(mixer>=0);
+    struct ciuki_mixer_master m={.version=1,.size=sizeof(m),.left=31,.right=42};
+    CHECK(ctl(mixer,MIXER_SET_MASTER,&m,sizeof(m))==-EACCES);
+    file_fd(client,mixer)->mixer_control=true;
+    unsigned sequence=saved_sequence;uint64_t writes=disk[0].writes;
+    CHECK(!ctl(mixer,MIXER_SET_MASTER,&m,sizeof(m)) && m.left==31 && m.right==42);
+    CHECK(m.save_state==CIUKI_MIXER_UNSAVED && m.save_error==-EOPNOTSUPP);
+    CHECK(master_session && !master_pending && saved_sequence==sequence && disk[0].writes==writes);
+    CHECK(!audio_settings_flush() && saved_sequence==sequence && disk[0].writes==writes);
+    client->subject->credential.uid=501;client->subject->credential.groups[0]=546;
+    m=(struct ciuki_mixer_master){.version=1,.size=sizeof(m),.left=40,.right=40};
+    CHECK(!ctl(mixer,MIXER_SET_MASTER,&m,sizeof(m)) && saved_sequence==sequence && disk[0].writes==writes);
+    fake_desktop_pid=0;m.save_state=m.save_error=0;
+    CHECK(ctl(mixer,MIXER_SET_MASTER,&m,sizeof(m))==-EACCES);
+    CHECK(!file_close(client,mixer));audio.initialized=false;
+    puts("H05 mixer: Standard/Guest designated control changes current mixer only, no machine writes/flush; ordinary fd and lost owner denied PASS");
+}
 static void test_persistence(void)
 {
     CHECK(!make_dir("/system"));
@@ -1789,6 +1813,7 @@ int main(int argc,char **argv)
     for(unsigned i=0;i<2;i++){CHECK(!fat_mount(&volumes[i],&cache,&disk[i].dev,0,disk[i].dev.capacity,true));CHECK(!vfs_attach(&vfs,i+2,&volumes[i]));}
     CHECK(!files_attach(&vfs,&space));client_thread=make_process(proc_supervisor(),&client);g_current=client_thread->task;g_current->state=T_RUNNING;
     client->cwd=space->root;px_retain(client->cwd);client->cwd_retain=px_retain;client->cwd_release=px_release;
+    if(getenv("CIUKI_AUDIO_SECURITY")) { test_security_mixer(); goto security_done; }
     test_ich_input();
     test_transient_transport();
     test_cmipci();
@@ -1803,6 +1828,7 @@ int main(int argc,char **argv)
     test_ac97_qualification();
     test_emu10k1();
     test_emu10k1_public();
+security_done:
     all_closed();stop_collect(client);for(unsigned i=0;i<2;i++)CHECK(!vfs_detach(&vfs,i+2));vfs_destroy(&vfs);cache_destroy(&cache);
     for(unsigned i=0;i<2;i++){fake_reset(&disk[i]);fake_close(&disk[i]);}
     CHECK(!pages_used&&!audio.commitment_pages);printf("audio production: %u checks PASS\n",checks);free(ram);return 0;

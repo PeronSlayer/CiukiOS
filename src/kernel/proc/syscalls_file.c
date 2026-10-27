@@ -386,8 +386,15 @@ static int file_dispatch(struct process *p, struct trap_frame *tf)
             if(!e) e=display_refresh_query ? display_refresh_query(&q) : -ENOTTY;
             return e ? e : copy_to_user(tf->edx,&q,sizeof(q));
         }
-        if (tf->ecx==INPUT_HID_GET_CAPS || tf->ecx==INPUT_HID_GET_STATE || tf->ecx==INPUT_HID_CALIBRATE || tf->ecx==INPUT_JOY_CONTROL)
+        /* sec-k04 device dispatch: merge this block together. */
+        if (tf->ecx==INPUT_KEYBOARD_SET || tf->ecx==INPUT_HID_GET_CAPS || tf->ecx==INPUT_HID_GET_STATE ||
+            tf->ecx==INPUT_HID_CALIBRATE || tf->ecx==INPUT_JOY_CONTROL) {
+            if (tf->edi || tf->ebp) return -EINVAL;
             return grant_input_devctl ? grant_input_devctl(p,(int32_t)tf->ebx,tf->ecx,tf->edx,tf->esi) : -ENOTTY;
+        }
+        /* CIUKI_SETUP_NET_QUERY is routed only through the PX_NET branch
+         * below. net_devctl checks the SYSTEM Setup role and boot mode. */
+        /* end sec-k04 device dispatch */
         struct file_description *d = file_fd(p, (int32_t)tf->ebx);
         if (d && d->node->kind==PX_LPT)
             return lpt_devctl ? lpt_devctl(p,(int32_t)tf->ebx,tf->ecx,tf->edx,tf->esi) : -ENOTTY;
