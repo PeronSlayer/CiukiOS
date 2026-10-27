@@ -159,7 +159,7 @@ static int accel_write(struct process *p, const struct ciuki_accel_request *q, s
                     err = -EFAULT;
             if (err) break;
             struct fb_rect rect = {(int32_t)(dx + x), (int32_t)(dy + y), (int32_t)tw, (int32_t)bh};
-            int e = fbdev_accel_write(q->generation, &rect, &rect, buffer, tw * 4u);
+            int e = fbdev_accel_write_epoch(q->generation, &rect, &rect, buffer, tw * 4u, q->background);
             if (e < 0) err = e;
             else if (e) cpu = 1;
             kpreempt_point();

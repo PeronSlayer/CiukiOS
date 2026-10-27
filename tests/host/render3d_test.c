@@ -315,6 +315,18 @@ static void diagnostic(void)
     assert(savage3d_mode_heap(&engine,&fb,8*1024*1024,&heap,&required)==-EOPNOTSUPP);
     engine.cursor_offset=heap.first+4096;
     assert(savage3d_mode_heap(&engine,&fb,16*1024*1024,&heap,&required)==-ENOMEM);
+    /* T23 census: 1280 cached rows after the 768-row desktop. Borrowing
+     * them is explicit; the checked layout never silently overlaps 2D. */
+    static const unsigned widths[]={1024,1024,640,640},heights[]={768,768,480,480},bpps[]={32,16,32,16};
+    for (unsigned i=0;i<4;i++) {
+        fb.width=widths[i]; fb.height=heights[i]; fb.bpp=bpps[i];
+        fb.pitch=fb.width*(fb.bpp/8); fb.size=fb.pitch*fb.height;
+        engine.height=fb.height; engine.rows=fb.height; engine.cursor_offset=15532032-4096;
+        assert(!savage3d_mode_heap(&engine,&fb,15532032,&heap,&required));
+        assert(heap.first==fb.size && heap.first+heap.bytes==engine.cursor_offset && heap.bytes>=required);
+        printf("T23 plan %ux%ux%u scanout=%u heap_first=%u heap_bytes=%u D16_required=%u PASS\n",
+            fb.width,fb.height,fb.bpp,fb.size,heap.first,heap.bytes,required);
+    }
     puts("unchanged 2D lease, guarded full-mode buffer + minimum texture admission PASS");
 }
 static void queued_close(void)

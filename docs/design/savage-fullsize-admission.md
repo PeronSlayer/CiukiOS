@@ -1,5 +1,8 @@
 # Savage full-size admission (f7-11)
 
+The [f7-15 target and VRAM contract](savage-modes-vram.md) supersedes the
+scanout-generation, permanent 2D cache and CPU masked-clear rules below.
+
 The [f7-12 default format extension](savage-default-formats.md) supersedes
 the D16-only attachment and default-launch limitations below when its
 additional current-mode probes pass. The original D16 and precision gates

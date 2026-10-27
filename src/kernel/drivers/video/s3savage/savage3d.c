@@ -169,7 +169,7 @@ int savage3d_mode_heap(const struct savage2d *s, const struct fb_device *fb,
                       uint32_t vram, struct render3d_extent *heap, uint32_t *required)
 {
     if (!s || !fb || !heap || !required || !fb->width || !fb->height ||
-        fb->width>1024 || fb->height>1024 || fb->bpp!=32 || !fb->pitch ||
+        fb->width>1024 || fb->height>1024 || (fb->bpp!=32 && fb->bpp!=16) || fb->pitch<fb->width*(fb->bpp/8) ||
         s->chip!=SAVAGE_SUPER || s->rows<s->height || s->rows>2048 ||
         vram<4096 || vram>16u*1024*1024 || !s->cursor_offset || s->cursor_offset>vram-4096u)
         return -EOPNOTSUPP;
@@ -194,7 +194,7 @@ static const uint8_t selectors[]={0x1e,0x20,0x21,0x22,0x23,0x24,0x25,0x27,
 static const uint32_t masks[]={0xfe0003ffu,0xffffffffu,0xffffffffu,0xfffffffbu,
     0xfffffffbu,0xffffffffu,0xffffffffu,0xefffffffu,0xefffffffu,0x1fffffffu,
     0xc3ff7fa7u,0xfe003fffu,0xe03fffffu,0xffffffffu,0xffffffffu,0x3f3f3f3fu,0xcfffffffu};
-struct saved_state { uint32_t state[17], tile, agd, bitmap[4]; };
+struct saved_state { uint32_t state[17], tile, agd, bitmap[4], write_mask; };
 static uint32_t mmio_read(struct savage3d_device *d,uint32_t reg)
 { return d->engine->io.read32(d->engine->io.ctx,reg); }
 static int packet(struct savage3d_device *d,const uint32_t *words,unsigned n)
@@ -227,6 +227,7 @@ static int save_state(struct savage3d_device *d,struct saved_state *saved)
         if (value==UINT32_MAX) return -EIO;
         saved->state[i]=value&masks[i];
     }
+    saved->write_mask=bitmap_read(d,0x8128);
     saved->tile=mmio_read(d,0x48c40); saved->agd=mmio_read(d,0x850c);
     if (saved->tile==UINT32_MAX || saved->agd==UINT32_MAX) return -EIO;
     /* PBD/SBD are the only 2D descriptors this path modifies. Halfword
@@ -239,6 +240,8 @@ static int restore_state(struct savage3d_device *d,const struct saved_state *sav
     for (unsigned i=0;i<17;i++) {
         int e=setreg(d,selectors[i],saved->state[i]); if (e) return e;
     }
+    int mask_error=setreg(d,0xd7,saved->write_mask);
+    if (mask_error || bitmap_read(d,0x8128)!=saved->write_mask) return mask_error ? mask_error : -EIO;
     uint32_t bitmap[5]={0x960400e2u,saved->bitmap[0],saved->bitmap[1],saved->bitmap[2],saved->bitmap[3]};
     int e=packet(d,bitmap,5); if (e) return e;
     for (unsigned i=0;i<4;i++) if (bitmap_read(d,0x8170+i*4)!=saved->bitmap[i]) return -EIO;
@@ -449,7 +452,10 @@ static int guards(struct savage3d_device *d,struct render3d_resource *r,bool ini
         else {
             uint32_t value=memory_read(d,false,off,4);
             if (value!=0xa55ac33cu) { d->expected=0xa55ac33cu; d->actual=value; d->guard_offset=off; return -EIO; }
-            if (i%512==508 && d->engine->io.now_us(d->engine->io.ctx)-start>=1000) return -ETIMEDOUT;
+            if (i%512==508) {
+                uint64_t now=d->engine->io.now_us(d->engine->io.ctx);
+                if (now-start>=1000 || (d->readback_until && now>=d->readback_until)) return -ETIMEDOUT;
+            }
         }
     }
     return 0;
@@ -518,21 +524,18 @@ static int clear_resource(struct savage3d_device *d,struct render3d_resource *r,
     uint32_t words[]={0x4bcc8c00u,base(r),descriptor(r,true),value,0,(r->height<<16)|r->width};
     return packet(d,words,6);
 }
-/* A D24/S8 clear that must preserve the depth component, the stencil byte or
- * unmasked stencil bits has no single-rectangle encoding here. It is a CPU
- * read-modify-write through the tiled alias (clear_partial, below). */
-static bool partial_clear(const struct render3d_request *q,const struct render3d_resource *r)
-{
-    unsigned both=R3D_CLEAR_DEPTH|R3D_CLEAR_STENCIL;
-    return r && r->kind==R3D_D24S8 && (q->flags&both) &&
-        ((q->flags&both)!=both || q->stencil.write_mask!=255);
-}
-/* Engine rectangles only: D16, or both D24/S8 components with every stencil bit. */
+/* Linux v6.1 savage_dispatch_clear: BITPLANEWTMASK gates rectangle writes.
+ * Integer depth is reversed; stencil retains its native high-byte encoding. */
 static int clear_depth_stencil(struct savage3d_device *d,const struct render3d_request *q,
                               struct render3d_resource *r)
 {
     if (r->kind==R3D_D16) return clear_resource(d,r,q->clear_depth);
-    return clear_resource(d,r,(q->stencil.clear<<24)|(q->clear_depth^0xffffffu));
+    uint32_t mask=(q->flags&R3D_CLEAR_DEPTH) ? 0xffffffu : 0;
+    if (q->flags&R3D_CLEAR_STENCIL) mask|=(uint32_t)q->stencil.write_mask<<24;
+    int e=setreg(d,0xd7,mask);
+    if (!e) e=clear_resource(d,r,(q->stencil.clear<<24)|(q->clear_depth^0xffffffu));
+    if (!e) e=setreg(d,0xd7,UINT32_MAX);
+    return e;
 }
 static int state(struct savage3d_device *d,const struct render3d_request *q,struct render3d_resource *const r[R3D_REFS])
 {
@@ -616,13 +619,13 @@ static int read_resource(struct savage3d_device *d,struct render3d_resource *r)
             uint64_t start=d->engine->io.now_us(d->engine->io.ctx);
             unsigned end=first+128; if (end>r->width) end=r->width;
             for (unsigned x=first;x<end;x++) read_pixel(d,r,x,y);
-            if (d->engine->io.now_us(d->engine->io.ctx)-start>=1000) return -ETIMEDOUT;
+            uint64_t now=d->engine->io.now_us(d->engine->io.ctx);
+            if (now-start>=1000 || (d->readback_until && now>=d->readback_until)) return -ETIMEDOUT;
         }
     }
     return guards(d,r,false);
 }
 static void quarantine(void *device);
-static int clear_partial(struct savage3d_device *,const struct render3d_request *,struct render3d_resource *,bool);
 static int execute(void *device,const struct render3d_request *q,struct render3d_resource *const r[R3D_REFS])
 {
     struct savage3d_device *d=device;
@@ -634,16 +637,13 @@ static int execute(void *device,const struct render3d_request *q,struct render3d
     d->failed_phase=2; e=checked_mmio(d,0x850c,saved.agd|0x8000u);
     if (!d->probe_transfers)
         for (unsigned i=0;!e && i<R3D_REFS;i++) if (r[i]) e=upload(d,r[i]);
-    /* A partial D24/S8 clear follows the uploads and precedes every command
-     * of this job, on idle engines. It has its own windows and absolute
-     * deadline; paced qualification has already run it in separate windows. */
-    if (!e && !d->probe_transfers && partial_clear(q,r[1])) { d->failed_phase=3; e=clear_partial(d,q,r[1],false); }
     /* CPU transfers are separate bounded work from the engine's unchanged
      * execution window. No command has been submitted by upload(). */
     d->slice_started=d->engine->io.now_us(d->engine->io.ctx);
     if (!e) d->failed_phase=3;
+    if (!e) e=setreg(d,0xd7,UINT32_MAX);
     if (!e && (q->flags&R3D_CLEAR_COLOR)) e=clear_resource(d,r[0],q->clear_color);
-    if (!e && (q->flags&(R3D_CLEAR_DEPTH|R3D_CLEAR_STENCIL)) && !partial_clear(q,r[1])) e=clear_depth_stencil(d,q,r[1]);
+    if (!e && (q->flags&(R3D_CLEAR_DEPTH|R3D_CLEAR_STENCIL))) e=clear_depth_stencil(d,q,r[1]);
     if (!e) d->failed_phase=4;
     if (!e && q->count) {
         e=state(d,q,r);
@@ -670,7 +670,9 @@ static int execute(void *device,const struct render3d_request *q,struct render3d
     }
     if (!e && !d->probe_transfers) {
         d->failed_phase=8;
+        d->readback_until=d->engine->io.now_us(d->engine->io.ctx)+SAVAGE3D_READBACK_US;
         for (unsigned i=0;i<R3D_REFS && !e;i++) if (r[i]) e=read_resource(d,r[i]);
+        d->readback_until=0;
     }
     /* A completed event permits restoration even after a CPU read timeout or
      * an expired work deadline. Never write again without that idle proof. */
@@ -684,6 +686,47 @@ static int execute(void *device,const struct render3d_request *q,struct render3d
         d->failed_phase=phase;
     }
     if (!e) d->failed_phase=0;
+    return e;
+}
+/* Authorized 1:1 native presentation. Linux savage_dispatch_swap uses the
+ * same PBD source rectangle (using inline SBD instead of its retained GBD); the current framebuffer
+ * supplies the linear destination stride, never the old scanout mode. */
+static int scanout(void *owner,const struct render3d_resource *source,const struct fb_device *fb)
+{
+    struct savage3d_device *d=owner;
+    unsigned bytes=pixel_bytes(source);
+    if (!d || !d->locked || d->lost || !fb || !fb->present || fb->generation!=d->generation ||
+        source->width>fb->width || source->height>fb->height || fb->bpp!=bytes*8 ||
+        fb->pitch%bytes || fb->pitch/bytes>65535 || fb->pitch<fb->width*bytes ||
+        (uint64_t)fb->pitch*fb->height>fb->size || fb->size>d->heap.first ||
+        !d->engine->fb || fb->phys!=d->engine->fb->phys || !extent(d,source) ||
+        fb->green_size!=(bytes==2 ? 6 : 8) || fb->green_pos!=(bytes==2 ? 5 : 8) ||
+        fb->red_size!=(bytes==2 ? 5 : 8) || fb->red_pos!=(bytes==2 ? 11 : 16) ||
+        fb->blue_size!=(bytes==2 ? 5 : 8) || fb->blue_pos) return -EOPNOTSUPP;
+    struct saved_state saved;
+    d->slice_started=d->engine->io.now_us(d->engine->io.ctx);
+    int e=save_state(d,&saved); if (e) return e;
+    e=checked_mmio(d,0x850c,saved.agd|0x8000u);
+    if (!e) e=setreg(d,0xd7,UINT32_MAX);
+    uint32_t bd=0x10000000u|(fb->bpp<<16)|(fb->pitch/bytes);
+    unsigned ox=(fb->width-source->width)/2,oy=(fb->height-source->height)/2;
+    if (!e && (ox || oy || fb->width!=source->width || fb->height!=source->height)) {
+        uint32_t border[]={0x4bcc8c00u,0,bd,0,0,(fb->height<<16)|fb->width};
+        e=packet(d,border,6);
+    }
+    uint32_t words[]={0x4bcc14c0u,0,bd,base(source),descriptor(source,true),
+        0,(oy<<16)|ox,(source->height<<16)|source->width};
+    if (!e) e=packet(d,words,8);
+    if (!e) {
+        d->copies++; d->scanouts++;
+        struct render3d_resource checked=*source;
+        e=guards(d,&checked,false);
+    }
+    if (d->engine->cpu_safe && !d->engine->event_pending && !d->engine->quarantined) {
+        d->slice_started=d->engine->io.now_us(d->engine->io.ctx);
+        int restored=restore_state(d,&saved);
+        if (restored) { quarantine(d); return restored; }
+    }
     return e;
 }
 static bool qualified(void *device,uint32_t generation)
@@ -726,6 +769,15 @@ static void quarantine(void *device)
  * Linear texture/guard transfers need no shared register. Alias reads borrow
  * only AGD/tile registers for <=128 pixels, then restore before a CPU yield.
  * No scalar work, allocation, persistence or logging runs under presenter. */
+static int probe_enter(struct savage3d_device *d)
+{
+    for (unsigned attempt=0;attempt<4096;attempt++) {
+        int e=enter(d);
+        if (e!=-EBUSY || !d->probe_checkpoint) return e;
+        e=probe_checkpoint(d); if (e) return e;
+    }
+    return -ETIMEDOUT;
+}
 static int probe_read(struct savage3d_device *d,struct render3d_resource *r)
 {
     if (r->kind==R3D_TEXTURE) return guards(d,r,false);
@@ -736,7 +788,7 @@ static int probe_read(struct savage3d_device *d,struct render3d_resource *r)
             int e=probe_checkpoint(d); if (e) return e;
             uint32_t saved_tile=0,saved_agd=0;
             if (alias) {
-                e=enter(d); if (e) return e;
+                e=probe_enter(d); if (e) return e;
                 saved_tile=mmio_read(d,0x48c40); saved_agd=mmio_read(d,0x850c);
                 e=checked_mmio(d,0x850c,saved_agd|0x8000u);
                 if (!e) e=tile(d,r);
@@ -755,54 +807,6 @@ static int probe_read(struct savage3d_device *d,struct render3d_resource *r)
         }
     }
     return guards(d,r,false);
-}
-/* Partial D24/S8 clear (review of f7-12/f7-13, P1): read-modify-write of every
- * pixel through the tiled alias, after the engines proved idle at entry, so
- * it preserves the other component, masked stencil bits and rows that a
- * sampled qualification never reads back. A window covers <=128 pixels and
- * borrows only AGD/tile, restoring both before the presenter is released.
- * Paced qualification leaves, passes its checkpoint (yield and budgets) and
- * re-enters per window. An ordinary job keeps its drawing claim, so no other
- * writer or mode change sees its state, and yields the presenter mutex (and
- * its preemption hold) between windows. One absolute deadline bounds the
- * whole surface; no window ever restarts it or the engine's slice. */
-static int clear_partial(struct savage3d_device *d,const struct render3d_request *q,
-                         struct render3d_resource *r,bool paced)
-{
-    struct savage_io *io=&d->engine->io;
-    uint64_t until=io->now_us(io->ctx)+SAVAGE3D_PARTIAL_CLEAR_US;
-    uint32_t mask=q->flags&R3D_CLEAR_DEPTH ? 0xffffffu : 0,value=q->clear_depth;
-    if (q->flags&R3D_CLEAR_STENCIL) {
-        mask|=(uint32_t)q->stencil.write_mask<<24;
-        value|=(uint32_t)q->stencil.clear<<24;
-    }
-    value&=mask;
-    for (unsigned y=0;y<r->height;y++) for (unsigned first=0;first<r->width;first+=128) {
-        int e=0;
-        if (paced) {
-            e=probe_checkpoint(d);
-            if (!e) e=enter(d);
-            if (e) return e;
-        } else if ((y || first) && d->job_yield) d->job_yield(d->memory.ctx);
-        uint32_t saved_tile=mmio_read(d,0x48c40),saved_agd=mmio_read(d,0x850c);
-        e=checked_mmio(d,0x850c,saved_agd|0x8000u);
-        if (!e) e=tile(d,r);
-        uint64_t start=io->now_us(io->ctx);
-        unsigned end=first+128; if (end>r->width) end=r->width;
-        for (unsigned x=first;!e && x<end;x++) {
-            uint32_t old=memory_read(d,true,y*8192+x*4,4)^0xffffffu;
-            memory_write(d,true,y*8192+x*4,((old&~mask)|value)^0xffffffu,4);
-        }
-        io->drain(io->ctx);
-        uint64_t now=io->now_us(io->ctx);
-        if (!e && (now-start>=1000 || now>=until)) e=-ETIMEDOUT;
-        int a=checked_mmio(d,0x48c40,saved_tile);
-        int b=checked_mmio(d,0x850c,saved_agd);
-        if (a || b) { quarantine(d); e=-EIO; }
-        if (paced) leave(d);
-        if (e) return e;
-    }
-    return 0;
 }
 /* First use of a qualification attachment: a complete engine clear (both
  * D24/S8 components, every stencil bit) or the copy; never a CPU upload. */
@@ -834,13 +838,9 @@ static int probe_draw(struct savage3d_device *d,const struct render3d_request *q
             if (e) { if (e!=-ETIMEDOUT) quarantine(d); return e; }
         }
         d->engine->io.drain(d->engine->io.ctx);
-        /* Its own restored windows, before the job's engine window. */
-        if (partial_clear(q,r[1])) {
-            d->failed_phase=3; e=clear_partial(d,q,r[1],true);
-            if (e) { if (e!=-ETIMEDOUT && e!=-EBUSY) quarantine(d); return e; }
-        }
+
     }
-    e=enter(d); if (e) return e;
+    e=probe_enter(d); if (e) return e;
     d->probe_transfers=d->probe_checkpoint!=0;
     uint64_t start=d->engine->io.now_us(d->engine->io.ctx);
     e=execute(d,q,r);
@@ -856,11 +856,25 @@ static int probe_draw(struct savage3d_device *d,const struct render3d_request *q
     if (!e) e=probe_checkpoint(d);
     return e;
 }
+extern int savage3d_owner_prepare(uint32_t) __attribute__((weak));
 extern int savage3d_owner_attach(struct render3d_service *,const struct render3d_host *,uint32_t) __attribute__((weak));
 static void detach(struct render3d_service *s,void *owner)
 {
     struct savage3d_device *d=owner;
-    if (d && d->consumer==s) d->consumer=0;
+    if (d && d->consumer==s) {
+        d->consumer=0;
+        if (d->detach_owner) d->detach_owner(d);
+    }
+}
+static int reserve_context(void *owner)
+{
+    struct savage3d_device *d=owner;
+    return d && d->reserve ? d->reserve(d) : 0;
+}
+static void unreserve_context(void *owner)
+{
+    struct savage3d_device *d=owner;
+    if (d && d->unreserve) d->unreserve(d);
 }
 static void query_caps(void *owner,struct ciuki_r3d_caps *out)
 {
@@ -898,7 +912,8 @@ const struct render3d_backend *savage3d_backend(void)
         .layout=layout,.validate=validate,.enter=enter,.leave=leave,.execute=execute,
         .idle=idle,.quarantine=quarantine,.attach=savage3d_owner_attach,.max_size=64,.detach=detach,
         .texture_pool_bytes=texture_pool_bytes,.capabilities=&capabilities,.query_caps=query_caps,
-        .resident_bytes=(sizeof(struct savage3d_device)+4095u)&~4095u};
+        .resident_bytes=(sizeof(struct savage3d_device)+4095u)&~4095u,
+        .reserve=reserve_context,.unreserve=unreserve_context,.prepare=savage3d_owner_prepare,.scanout=scanout};
     return &backend;
 }
 

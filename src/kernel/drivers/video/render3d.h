@@ -143,6 +143,7 @@ struct render3d_extent { uint32_t first, bytes; };
 struct render3d_resource {
     uint32_t handle, kind, width, height, pitch, bytes, offset, reserved;
     uint32_t references;
+    uint32_t copied_from; /* Invalidate when the completed tiled source changes. */
     bool live, pending_free, hardware, resident;
     uint32_t format, levels, level_offset[R3D_MIPS];
     uint64_t last_use;
@@ -164,6 +165,7 @@ struct render3d_job {
     bool occupied, complete;
     bool software;
 };
+struct fb_device;
 struct render3d_service;
 struct render3d_host;
 /* Hooks share the display driver's existing owner: enter takes presenter,
@@ -190,6 +192,11 @@ struct render3d_backend {
     const struct ciuki_r3d_caps *capabilities;
     void (*query_caps)(void *, struct ciuki_r3d_caps *);
     uint32_t resident_bytes; /* Backend-owned staging charged to the ceiling. */
+    /* First/last hardware context: revocable owner heap, outside execution. */
+    int (*prepare)(uint32_t); /* Optional short mode check before lease publication. */
+    int (*reserve)(void *);
+    void (*unreserve)(void *);
+    int (*scanout)(void *, const struct render3d_resource *, const struct fb_device *);
 };
 struct render3d_host {
     void *ctx;
@@ -246,6 +253,8 @@ void render3d_process_exit(struct render3d_service *, uint32_t);
 int render3d_close(struct render3d_service *);
 /* Native/Win32 trusted adapter boundary: uses the already bound display
  * nomination, never chooses a family or grants a presentation lease. */
+int render3d_native_prepare(void);
+int render3d_scanout(struct render3d_service *, uint32_t, const struct ciuki_w32_render3d_args *, const struct fb_device *);
 int render3d_native_init(struct render3d_service *, const struct render3d_host *);
 int render3d_native_refresh(struct render3d_service *);
 /* Private fbdev exclusion; successful enter must pair with leave on the
@@ -256,6 +265,7 @@ void fbdev_render3d_leave(void);
 void fbdev_render3d_yield(void);
 int fbdev_render3d_prepare(uint32_t);
 void fbdev_render3d_prepared(void);
+int fbdev_render3d_cache(uint32_t, int (*)(void *, bool), void *, bool);
 void render3d_device_lost(struct render3d_service *);
 /* Private software slice; returns 1 when complete, 0 for another slice. */
 int render3d_scalar_slice(const struct render3d_request *, struct render3d_resource *const [R3D_REFS],

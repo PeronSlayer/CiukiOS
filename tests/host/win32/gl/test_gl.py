@@ -142,16 +142,18 @@ class GLTests(unittest.TestCase):
   self.assertLess(int(row[1])*3,int(row[2]))
   self.assertEqual(len(re.findall(r'^GL_HW_REPLAY .* frames=4 ',p.stdout,re.M)),4)
   check_savage_h1(p.stdout)
+  self.assertEqual(len(re.findall(r'^GL_T23_LEASE .* retained_targets=1 minimum_recheck=1 PASS$',p.stdout,re.M)),2)
  def test_hardware_quake3_default_format_replay(self):
   p=subprocess.run([str(self.binary),'--hardware-quake3-default'],capture_output=True,text=True,timeout=900)
   print(p.stdout,end='');self.assertEqual(p.returncode,0,p.stdout+p.stderr)
   check_quake3(p.stdout,sanitize=True,default_format=True)
   check_savage_h1(p.stdout)
+  self.assertEqual(len(re.findall(r'^GL_T23_LEASE .* retained_targets=1 minimum_recheck=1 PASS$',p.stdout,re.M)),2)
   formats=re.findall(r'^GL_SAVAGE_FORMAT width=(\d+) height=(\d+) request=24/8 selected=(\d+) depth=(\d+) stencil=(\d+)',p.stdout,re.M)
   self.assertEqual(len(formats),4)
   self.assertEqual(sorted(w for w,h,selected,depth,stencil in formats),['1024','1024','640','640'])
   for w,h,selected,depth,stencil in formats:
-   self.assertEqual((selected,depth,stencil),('9','24','8') if w=='640' else ('1','16','0'))
+   self.assertEqual((selected,depth,stencil),('9','24','8'))
  def test_quake3_default_format_replay(self):
   p=subprocess.run([str(self.binary),'--quake3-default'],capture_output=True,text=True,timeout=120)
   print(p.stdout,end='');self.assertEqual(p.returncode,0,p.stdout+p.stderr)

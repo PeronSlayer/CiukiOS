@@ -673,7 +673,7 @@ struct desktop {
     struct ciuki_rect copy_rect;
     /* f2-92: offscreen rows [vram_first, vram_end), their surface caches,
      * the next window stability check and an engine lost while in use. */
-    uint32_t vram_first, vram_end, vram_queries, vram_failures;
+    uint32_t vram_first, vram_end, vram_queries, vram_failures, vram_epoch;
     struct desk_vram_entry vram[DESK_VRAM_ENTRIES];
     uint64_t vram_check_ns, vram_query_ns;
     int accel_lost;

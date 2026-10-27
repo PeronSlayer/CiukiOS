@@ -53,10 +53,10 @@ class RenderTests(unittest.TestCase):
         self.assertLess(28804,65536)
         for triangles in (1024,3000,4600):
             batches=(triangles+255)//256
-            # Draw: 17 state + 17 restore + bitmap restore + one draw event.
-            small_words,events=17*2+17*2+5,36
-            # Final color-to-linear copy: 8 words + 18 restore packets/events.
-            present_words=8+17*2+5+19*2
+            # Draw: 17 state, write-mask setup/restore, bitmap restore and events.
+            small_words,events=18*2+18*2+5,38
+            # Final color-to-linear copy, write mask and complete state restore.
+            present_words=8+2+18*2+5+21*2
             words=triangles*28+batches*(small_words+events*2)+present_words
             observations=(triangles*28+7)//8+batches*events*2+19*2
             submit_us=(words*120+observations*250)/mhz
@@ -179,7 +179,7 @@ class RenderTests(unittest.TestCase):
             'src/kernel/drivers/video/render3d_scalar.c','src/kernel/drivers/video/s3savage/savage3d.c',
             'src/kernel/drivers/video/s3savage/savage3d_owner.c',str(blkreq)], args=['0'],
             flags=['-pthread',*wraps])
-        for variant in range(1,24):
+        for variant in range(1,26):
             subprocess.run([str(OUT/'owner'),str(variant)],check=True)
 
     def test_fullsize(self):
@@ -192,11 +192,23 @@ class RenderTests(unittest.TestCase):
             'src/kernel/drivers/video/render3d_native.c',
             'src/kernel/drivers/video/s3savage/savage3d.c'],args=['fullsize'])
 
+    def test_large_batch(self):
+        self.run_shader_case("batch")
+
     def test_optional_formats(self):
         self.run_shader_case("formats")
 
     def test_review4(self):
         self.run_shader_case("review4")
+
+    def test_scanout(self):
+        self.run_shader_case("scanout")
+
+    def test_t23_formats(self):
+        self.run_shader_case("t23")
+
+    def test_cache_epoch(self):
+        self.run_shader_case("cache")
 
     def test_background_qualification(self):
         self.run_shader_case("background")

@@ -332,6 +332,26 @@ static void family_lifecycle(uint16_t id,unsigned injection)
             CHECK(cursor_phys+PAGE_SIZE<=device.phys+(cob ? cob : g_boot.display.vram_bytes));
             CHECK((uint64_t)engine.rows*device.pitch<=cursor_phys-device.phys);
         }
+        if (!injection && offscreen_claim>=0) {
+            unsigned rows=engine.rows,old=(unsigned)offscreen_claim;
+            gen_t previous=offscreen_generation;
+            engine.event_pending=true;
+            CHECK(savage2d_cache_transfer(&engine,true)==-EIO && (unsigned)offscreen_claim==old && engine.rows==rows);
+            engine.event_pending=false;
+            acceleration=&engine.ops;
+            uint32_t epoch=video_cache_epoch;
+            CHECK(!fbdev_render3d_cache(device.generation,savage2d_cache_transfer,&engine,true));
+            CHECK(offscreen_claim<0 && family_leases[old].state==RS_RELEASED && engine.rows==engine.height);
+            CHECK(video_cache_epoch==epoch+1 && !engine.offscreen_ok);
+            CHECK(!fbdev_render3d_cache(device.generation,savage2d_cache_transfer,&engine,false));
+            CHECK(offscreen_claim>=0 && offscreen_generation!=previous && engine.rows==rows);
+            CHECK(!engine.offscreen_ok && engine.write_state==0 && video_cache_epoch==epoch+1);
+            CHECK(!fbdev_render3d_cache(device.generation,savage2d_cache_transfer,&engine,true));
+            engine.write_state=-1; /* a failed 2D write gate is not a cache miss */
+            CHECK(!fbdev_render3d_cache(device.generation,savage2d_cache_transfer,&engine,false));
+            CHECK(engine.write_state==-1 && !engine.offscreen_ok && video_cache_epoch==epoch+2);
+            puts("revocable Savage cache: idle/event proof, released claim, new claim generation, invalid content/epoch, failed write gate preserved PASS");
+        }
         int saved_cob=cob_claim;
         if (injection==3) {
             m.fail_after_submit=true;

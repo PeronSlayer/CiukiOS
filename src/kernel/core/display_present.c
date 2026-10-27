@@ -81,6 +81,7 @@ void display_present_poll(void)
     kmutex_unlock(&lease_lock);
     if (needed) (void)revoke(key,generation,pid);
 }
+extern int render3d_native_prepare(void) __attribute__((weak));
 static int grant(struct process *d, struct ciuki_w32_display_args *a)
 {
     struct process *p=proc_find(a->pid);
@@ -105,6 +106,13 @@ static int grant(struct process *d, struct ciuki_w32_display_args *a)
     const struct fb_device *f=fbdev_get();
     unsigned chosen=cvp_surface_scale(&a->surface,f->width,f->height,a->scale);
     if (!e && (!chosen || (f->bpp!=16 && f->bpp!=32))) e=-EOPNOTSUPP;
+    /* Retained target evidence is rebound before publishing the new lease.
+     * This may wait for 2D activation/marker I/O outside all display locks;
+     * it does not consume a later GL QUERY's unchanged 2 s wire deadline.
+     * A clean 3D refusal retains the ordinary software-capable lease. */
+    uint32_t prepared_generation=f->generation;
+    if (!e && render3d_native_prepare) (void)render3d_native_prepare();
+    if (!e && (!f->present || f->generation!=prepared_generation)) e=-EAGAIN;
     /* Transactions can yield; re-prove both process identities on publication. */
     if (!e && (!owner_live(a->pid) || !owner_live(d->pid))) e=-ESRCH;
     if (!e && !w32_service_desktop_client(d,a->pid)) e=-EPERM;
@@ -215,13 +223,14 @@ static int frame(struct proc_thread *t, struct ciuki_w32_display_args *a)
     t->cleanup=0; t->operation=0; frame_cleanup(&op);
     return e;
 }
-/* F7: presentation of a completed, owned linear render3d copy. Conversion
- * into that buffer used the GPU; scanout upload uses the existing CPU/gamma
- * presenter. This is deliberately reported as gpu-copy + cpu-present. */
-int display_present_render3d(void *unused, uint32_t pid,
+/* Completed owned-copy presentation. A matching tiled receipt can go
+ * directly to the authorized native scanout; conversion/gamma uses CPU. */
+struct render3d_service;
+extern int render3d_scanout(struct render3d_service *,uint32_t,const struct ciuki_w32_render3d_args *,
+                           const struct fb_device *) __attribute__((weak));
+int display_present_render3d(void *service, uint32_t pid,
     const struct ciuki_w32_render3d_args *r, const void *pixels, uint32_t bytes)
 {
-    (void)unused;
     struct ciuki_w32_display_args a={.token=r->token,.generation=r->generation};
     struct process *p=proc_find(pid);
     uint32_t page=pmm_alloc();
@@ -233,9 +242,20 @@ int display_present_render3d(void *unused, uint32_t pid,
     unsigned n=scale;
     if (!e && (s.format!=CIUKI_PRESENT_XRGB8888 || s.width!=r->width ||
         s.height!=r->height || s.pitch!=r->pitch || s.size!=bytes)) e=-EOPNOTSUPP;
+    bool direct=n==1 && s.width<=f.width && s.height<=f.height;
     if (!e) frame_running=true;
     kmutex_unlock(&lease_lock);
     if (e) { pmm_free(page); return e; }
+    if (direct && service && render3d_scanout) {
+        kmutex_lock(&lease_lock);
+        bool identity=true;
+        for (unsigned i=0;i<256 && identity;i++)
+            if (gamma.red[i]!=i*257u || gamma.green[i]!=i*257u || gamma.blue[i]!=i*257u) identity=false;
+        e=!valid(proc_find(pid),&a) ? -EACCES : !identity ? -EOPNOTSUPP : render3d_scanout(service,pid,r,&f);
+        kmutex_unlock(&lease_lock);
+        if (e!=-EOPNOTSUPP) goto complete;
+        e=0;
+    }
     uint8_t *out=P2V(page);
     cvp_format fmt={.pitch=f.pitch,.width=(uint16_t)f.width,.height=(uint16_t)f.height,
         .bytes=f.bpp/8,.red_size=f.red_size,.red_pos=f.red_pos,.green_size=f.green_size,
@@ -259,6 +279,7 @@ int display_present_render3d(void *unused, uint32_t pid,
         kmutex_unlock(&lease_lock);
         kpreempt_point();
     }
+complete:
     kmutex_lock(&lease_lock);
     if (!e && !valid(proc_find(pid),&a)) e=-EACCES;
     if (!e) {

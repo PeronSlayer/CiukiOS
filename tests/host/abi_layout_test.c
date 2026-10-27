@@ -1105,6 +1105,7 @@ static const struct expectation expectations[] = {
 
     {"constant.CIUKI_ACCEL_BATCH", CIUKI_ACCEL_BATCH, 10u},
     {"constant.CIUKI_ACCEL_FENCE", CIUKI_ACCEL_FENCE, 11u},
+    {"constant.CIUKI_ACCEL_CACHE_EPOCH", CIUKI_ACCEL_CACHE_EPOCH, 14u},
     {"constant.CIUKI_ACCEL_QUERY_COMMANDS", CIUKI_ACCEL_QUERY_COMMANDS, 12u},
     {"constant.CIUKI_BATCH_VERSION", CIUKI_BATCH_VERSION, 1u},
     {"constant.CIUKI_BATCH_MAGIC", CIUKI_BATCH_MAGIC, 826426435u},

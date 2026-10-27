@@ -2474,6 +2474,9 @@ enum { CIUKI_ACCEL_QUERY, CIUKI_ACCEL_COPY, CIUKI_ACCEL_FILL,
 #define CIUKI_ACCEL_FENCE 11u
 #define CIUKI_ACCEL_QUERY_COMMANDS 12u
 #define CIUKI_ACCEL_QUERY_SURFACE 13u
+/* Revocable offscreen cache epoch. Offscreen COPY/WRITE background and VIDEO
+ * target reserved[0] must equal this value; other reserved words stay zero. */
+#define CIUKI_ACCEL_CACHE_EPOCH 14u
 #define CIUKI_BATCH_VERSION 1u
 #define CIUKI_BATCH_MAGIC 826426435u
 #define CIUKI_BATCH_MAX_BYTES 1048576u
@@ -2563,7 +2566,7 @@ struct ciuki_batch_target {
     uint32_t handle; /* 4 */
     uint32_t generation; /* 8 */
     uint32_t flags; /* 12 */
-    uint32_t reserved[4]; /* 16 */
+    uint32_t reserved[4]; /* 16; VIDEO: cache epoch in [0], [1..3]=0 */
 };
 _Static_assert(sizeof(struct ciuki_batch_target) == 32, "ciuki_batch_target size");
 struct ciuki_batch_clip {

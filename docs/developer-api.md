@@ -4197,6 +4197,13 @@ created with the BATCH_* formats; they cannot be mapped into user space.
 #define CIUKI_ACCEL_FENCE 11u
 #define CIUKI_ACCEL_QUERY_COMMANDS 12u
 #define CIUKI_ACCEL_QUERY_SURFACE 13u
+```
+
+Revocable offscreen cache epoch. Offscreen COPY/WRITE background and VIDEO
+target reserved[0] must equal this value; other reserved words stay zero.
+
+```c
+#define CIUKI_ACCEL_CACHE_EPOCH 14u
 #define CIUKI_BATCH_VERSION 1u
 #define CIUKI_BATCH_MAGIC 826426435u
 #define CIUKI_BATCH_MAX_BYTES 1048576u
@@ -4414,7 +4421,7 @@ uint32_t flags;
 uint32_t reserved[4];
 ```
 
-16
+16; VIDEO: cache epoch in [0], [1..3]=0
 
 ```c
 };

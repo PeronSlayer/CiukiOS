@@ -107,7 +107,7 @@ void w32_render3d_poll(void)
             }
         }
         if (!e) {
-            struct render3d_transport t={service,0,display_present_render3d};
+            struct render3d_transport t={service,service,display_present_render3d};
             e=render3d_transport_dispatch(&t,j->process,&j->args,j->data,j->args.bytes);
         }
         p=proc_find(j->process);

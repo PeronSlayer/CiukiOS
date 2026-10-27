@@ -9,10 +9,11 @@
 static struct savage3d_device gpu3d;
 static struct render3d_service scratch3d;
 static uint8_t ram3d[0x7ff000];
+static uint8_t *ram_storage3d;
 static uint32_t batch3d[32], count3d, need3d;
 static unsigned draw3d, copy3d, writes3d, memory3d, corruption3d, allocations3d;
 static bool dropping3d, bad_restore3d;
-static unsigned read_delay3d,attachment_fault3d;
+static unsigned read_delay3d,attachment_fault3d,scanout_copies3d;
 static uint64_t fragments3d;
 static bool slow_guard3d;
 static bool background_minimum3d;
@@ -35,10 +36,10 @@ static uint32_t destination3d(uint32_t base,unsigned pitch,unsigned bytes,unsign
 }
 static uint32_t load3d(uint32_t address,unsigned bytes)
 {
-    uint32_t value=0; memcpy(&value,ram3d+physical3d(address,bytes),bytes); return value;
+    uint32_t value=0; memcpy(&value,(ram_storage3d ? ram_storage3d : ram3d)+physical3d(address,bytes),bytes); return value;
 }
 static void store3d(uint32_t address,uint32_t value,unsigned bytes)
-{ memcpy(ram3d+physical3d(address,bytes),&value,bytes); }
+{ memcpy((ram_storage3d ? ram_storage3d : ram3d)+physical3d(address,bytes),&value,bytes); }
 static long double ieee3d(uint32_t word)
 { float v; memcpy(&v,&word,4); return v; }
 #include "savage3d_sampling.inc"
@@ -179,30 +180,44 @@ static void interpret3d(void)
         unsigned n=(cmd>>16)&255,reg=cmd&65535;
         CHECK(n+1==need3d);
         for (unsigned i=0;i<n;i++) {
-            uint32_t addr=reg+i>=0xe2 ? 0x8170+(reg+i-0xe2)*4 : 0x4850c+(reg+i)*4;
+            uint32_t addr=reg+i==0xd7 ? 0x8128 : reg+i>=0xe2 ? 0x8170+(reg+i-0xe2)*4 : 0x4850c+(reg+i)*4;
             CHECK(addr!=0x8168 && addr!=0x816c); /* retained GBD */
             if (!(bad_restore3d && reg==0x1e && draw3d)) m.reg[addr/4]=batch3d[i+1];
         }
     } else if (cmd==0x4bcc8c00) {
         CHECK(need3d==6);
         uint32_t bd=batch3d[2]; unsigned bytes=(bd>>16&255)/8,w=batch3d[5]&65535,h=batch3d[5]>>16;
-        CHECK((bd&0x13000000u)==0x11000000u && !batch3d[4]);
+        bool front=batch3d[1]==0;
+        CHECK((bd&0x13000000u)==(front ? 0x10000000u : 0x11000000u) && !batch3d[4]);
         m.reg[0x8170/4]=batch3d[1]; m.reg[0x8174/4]=bd;
-        for (unsigned y=0;y<h;y++) for (unsigned x=0;x<w;x++)
-            store3d(destination3d(batch3d[1],(bd&65535)*bytes,bytes,x,y),batch3d[3],bytes);
+        uint32_t mask=m.reg[0x8128/4];
+        for (unsigned y=0;y<h;y++) for (unsigned x=0;x<w;x++) {
+            if (front) {
+                CHECK(w==device.width && h==device.height && bytes==device.bpp/8 && mask==UINT32_MAX);
+                memcpy(device.mapped+y*device.pitch+x*bytes,&batch3d[3],bytes);
+            } else {
+                uint32_t address=destination3d(batch3d[1],(bd&65535)*bytes,bytes,x,y);
+                store3d(address,(load3d(address,bytes)&~mask)|(batch3d[3]&mask),bytes);
+            }
+        }
     } else if (cmd==0x4bcc14c0) {
-        CHECK(need3d==8 && !batch3d[5] && !batch3d[6]);
+        CHECK(need3d==8 && !batch3d[5]);
         unsigned w=batch3d[7]&65535,h=batch3d[7]>>16;
         unsigned bytes=(batch3d[2]>>16&255)/8;
-        CHECK((bytes==2 || bytes==4) && batch3d[2]==(0x10000000u|(bytes*8u<<16)|w) &&
+        bool front=batch3d[1]==0;
+        CHECK((bytes==2 || bytes==4) && batch3d[2]==(0x10000000u|(bytes*8u<<16)|(front ? device.pitch/bytes : w)) &&
             batch3d[4]==(0x11000000u|(bytes*8u<<16)|(((w*bytes+127)&~127u)/bytes)));
         m.reg[0x8178/4]=batch3d[1]; m.reg[0x817c/4]=batch3d[2];
         m.reg[0x8170/4]=batch3d[3]; m.reg[0x8174/4]=batch3d[4];
         for (unsigned y=0;y<h;y++) for (unsigned x=0;x<w;x++) {
             uint32_t value=load3d(destination3d(batch3d[3],(batch3d[4]&65535)*bytes,bytes,x,y),bytes);
-            store3d(batch3d[1]+(y*w+x)*bytes,value^(corruption3d==2 ? 1u : 0u),bytes);
+            if (front) {
+                unsigned ox=batch3d[6]&65535,oy=batch3d[6]>>16;
+                CHECK(ox+w<=device.width && oy+h<=device.height && bytes==device.bpp/8);
+                memcpy(device.mapped+(y+oy)*device.pitch+(x+ox)*bytes,&value,bytes);
+            } else store3d(batch3d[1]+(y*w+x)*bytes,value^(corruption3d==2 ? 1u : 0u),bytes);
         }
-        copy3d++;
+        copy3d++; if (front) scanout_copies3d++;
     } else if ((cmd==0x800300c8 || cmd==0x80030008)) raster3d();
     else CHECK(false);
     if (corruption3d==1 && draw3d) ram3d[0]=0;
@@ -257,7 +272,12 @@ static void memory_write3d(void *ctx,bool alias,uint32_t offset,uint32_t value,u
     }
     store3d(offset,value,bytes);
 }
-static int lock3d(void *ctx,uint32_t generation) { (void)ctx; return fbdev_render3d_enter(generation); }
+static unsigned transient_busy3d;
+static int lock3d(void *ctx,uint32_t generation) {
+    (void)ctx;
+    if (transient_busy3d) { transient_busy3d--; return -EBUSY; }
+    return fbdev_render3d_enter(generation);
+}
 static void unlock3d(void *ctx) { (void)ctx; fbdev_render3d_leave(); }
 static void *allocate3d(void *ctx,size_t bytes)
 { (void)ctx; void *p=malloc(bytes); if (p) allocations3d++; return p; }
@@ -406,7 +426,7 @@ static void variants3d(const struct render3d_host *host)
 static void backend3d(unsigned fault,bool variants)
 {
     CHECK(!allocations3d);
-    prepare(32); m.reg[0x48578/4]=0;
+    prepare(32); m.exact_clock=true; m.reg[0x48578/4]=0;
     uint32_t old_gbd[2]={m.reg[0x8168/4],m.reg[0x816c/4]};
     memset(ram3d,0x7a,sizeof(ram3d)); draw3d=copy3d=writes3d=memory3d=count3d=0;
     corruption3d=fault==1 || fault==2 ? fault : 0; dropping3d=fault==3; bad_restore3d=fault==4;
@@ -459,6 +479,102 @@ static void backend3d(unsigned fault,bool variants)
     /* Engine destroyed before fixture frees (models reboot, no recovery API). */
     CHECK(!render3d_close(&scratch3d) && !allocations3d && !scratch3d.ram_bytes); finish();
 }
+static int cache_rows3d(void *ctx,bool take)
+{
+    struct savage2d *s=ctx;
+    s->rows=take ? s->height : s->height+16;
+    return 0;
+}
+static void cache_epoch3d(void)
+{
+    prepare(32); m.exact_clock=true;
+    test_engine.rows=test_engine.height+16; test_engine.offscreen_first=test_engine.height;
+    test_engine.write_state=1; test_engine.offscreen_ok=true;
+    kmutex_lock(&presenter); presenter_unlock();
+    struct swdib_target old;
+    CHECK(!fbdev_batch_video_target(42,&old));
+    struct display_batch *b=calloc(1,sizeof(*b)); CHECK(b);
+    b->header.generation=42; b->header.target_count=1; b->targets[0]=old;
+    CHECK(!batch_begin(0,b));
+    uint32_t epoch=video_cache_epoch;
+    CHECK(fbdev_render3d_cache(42,cache_rows3d,&test_engine,true)==-EBUSY && video_cache_epoch==epoch);
+    batch_end(b);
+    CHECK(!fbdev_render3d_cache(42,cache_rows3d,&test_engine,true));
+    CHECK(!fbdev_render3d_cache(42,cache_rows3d,&test_engine,false));
+    CHECK(video_cache_epoch==epoch+1 && batch_begin(0,b)==-EAGAIN && !drawing);
+    struct ciuki_accel_request q={.size=sizeof(q),.generation=42,.operation=CIUKI_ACCEL_COPY,
+        .rect={0,(int32_t)test_engine.height,0,0,8,1},.background=epoch};
+    unsigned packets=m.packets;
+    CHECK(fbdev_accel_request(&q)==-EAGAIN && m.packets==packets);
+    uint32_t pixels[8]={0}; struct fb_rect dst={0,(int32_t)test_engine.height,8,1};
+    CHECK(fbdev_accel_write_epoch(42,&dst,&dst,pixels,sizeof(pixels),epoch)==-EAGAIN && m.packets==packets);
+    CHECK(!fbdev_batch_video_target(42,&b->targets[0]) && !batch_begin(0,b)); batch_end(b);
+    free(b); finish();
+    puts("cache epoch: active batch excludes transfer; old batch/COPY/WRITE refused before pixels; fresh generation admits PASS");
+}
+static bool scanout_rgb3d(unsigned x,unsigned y,uint32_t rgb)
+{ uint32_t value; memcpy(&value,device.mapped+y*device.pitch+x*4,4); return (value&0xffffffu)==rgb; }
+static void scanout_receipt3d(void)
+{
+    prepare(32); m.exact_clock=true; device.width=64;
+    gpu3d=(struct savage3d_device){.engine=&test_engine,.heap={0x800000,sizeof(ram3d)},.generation=42,
+        .qualified=true,.memory={0,memory_read3d,memory_write3d,lock3d,unlock3d}};
+    test_engine.render3d_qualified=true; test_engine.io.write32=write_engine3d;
+    struct render3d_host host={0,allocate3d,free3d,clock3d,0};
+    render3d_init(&scratch3d,&host,42,savage3d_backend(),&gpu3d,gpu3d.heap); gpu3d.consumer=&scratch3d;
+    unsigned c,color,linear;
+    CHECK(!render3d_create_context(&scratch3d,7,R3D_HARDWARE_REQUIRED,&c));
+    CHECK(!render3d_create_resource(&scratch3d,7,c,R3D_COLOR,64,64,0,0,&color));
+    CHECK(!render3d_create_resource(&scratch3d,7,c,R3D_LINEAR_COLOR,64,64,0,0,&linear));
+    struct render3d_request q={.target=color,.copy_target=linear,.flags=R3D_CLEAR_COLOR|R3D_COPY,.clear_color=0xff123456};
+    struct render3d_fence fence;
+    CHECK(!render3d_submit(&scratch3d,7,c,&q,sizeof(q),&fence) && render3d_step(&scratch3d)==1);
+    struct ciuki_w32_render3d_args a={.context=c,.resource=linear,.width=64,.height=64,.generation=42};
+    unsigned before=scanout_copies3d;
+    m.reg[0x8128/4]=0x0f0f0f0f;
+    CHECK(!render3d_scanout(&scratch3d,7,&a,&device) && scanout_copies3d==before+1);
+    CHECK(m.reg[0x8128/4]==0x0f0f0f0f && scanout_rgb3d(63,63,0x123456));
+    a.generation=41; CHECK(render3d_scanout(&scratch3d,7,&a,&device)==-EOPNOTSUPP); a.generation=42;
+    CHECK(render3d_scanout(&scratch3d,8,&a,&device)==-EOPNOTSUPP && scanout_copies3d==before+1);
+    /* A later draw invalidates the old tiled receipt, but preserves the
+     * independently owned linear copy for CPU/gamma presentation. */
+    q.flags=R3D_CLEAR_COLOR; q.copy_target=0; q.clear_color=0xffabcdef;
+    CHECK(!render3d_submit(&scratch3d,7,c,&q,sizeof(q),&fence) && render3d_step(&scratch3d)==1);
+    CHECK(render3d_scanout(&scratch3d,7,&a,&device)==-EOPNOTSUPP && scanout_rgb3d(0,0,0x123456));
+    q.flags=R3D_COPY; q.copy_target=linear;
+    CHECK(!render3d_submit(&scratch3d,7,c,&q,sizeof(q),&fence) && render3d_step(&scratch3d)==1);
+    CHECK(!render3d_scanout(&scratch3d,7,&a,&device) && scanout_rgb3d(0,0,0xabcdef));
+    device.width=96; /* desktop-mode lease with a smaller drawable */
+    CHECK(!render3d_scanout(&scratch3d,7,&a,&device));
+    CHECK(scanout_rgb3d(0,0,0) && scanout_rgb3d(15,63,0) && scanout_rgb3d(16,0,0xabcdef) &&
+        scanout_rgb3d(79,63,0xabcdef) && scanout_rgb3d(80,0,0));
+    CHECK(!render3d_destroy_resource(&scratch3d,7,c,color));
+    CHECK(render3d_scanout(&scratch3d,7,&a,&device)==-EOPNOTSUPP);
+    CHECK(!render3d_close(&scratch3d) && !allocations3d); finish();
+    puts("GPU scanout: padded current pitch, tiled copy, exact inherited mask restore, stale generation/owner refusal, modified/freed source receipt refusal PASS");
+}
+static void scanout_5653d(void)
+{
+    prepare(16); m.exact_clock=true; device.width=64;
+    gpu3d=(struct savage3d_device){.engine=&test_engine,.heap={0x800000,sizeof(ram3d)},.generation=42,
+        .qualified=true,.color565_qualified=true,.memory={0,memory_read3d,memory_write3d,lock3d,unlock3d}};
+    test_engine.render3d_qualified=true; test_engine.io.write32=write_engine3d;
+    struct render3d_host host={0,allocate3d,free3d,clock3d,0};
+    render3d_init(&scratch3d,&host,42,savage3d_backend(),&gpu3d,gpu3d.heap); gpu3d.consumer=&scratch3d;
+    unsigned c,color,linear;
+    CHECK(!render3d_create_context(&scratch3d,7,R3D_HARDWARE_REQUIRED,&c));
+    CHECK(!render3d_create_resource(&scratch3d,7,c,R3D_COLOR565,64,64,0,0,&color));
+    CHECK(!render3d_create_resource(&scratch3d,7,c,R3D_LINEAR565,64,64,0,0,&linear));
+    struct render3d_request q={.target=color,.copy_target=linear,.flags=R3D_CLEAR_COLOR|R3D_COPY,.clear_color=0xff123456};
+    struct render3d_fence fence;
+    CHECK(!render3d_submit(&scratch3d,7,c,&q,sizeof(q),&fence) && render3d_step(&scratch3d)==1);
+    struct ciuki_w32_render3d_args a={.context=c,.resource=linear,.width=64,.height=64,.generation=42};
+    unsigned before=scanout_copies3d;
+    CHECK(!render3d_scanout(&scratch3d,7,&a,&device) && scanout_copies3d==before+1);
+    uint16_t pixel; memcpy(&pixel,device.mapped+63*device.pitch+63*2,2); CHECK(pixel==0x11aa);
+    CHECK(!render3d_close(&scratch3d) && !allocations3d); finish();
+    puts("GPU scanout RGB565: native packed pixels, padded current stride, guards and restoration PASS");
+}
 #include "savage3d_review4.inc"
 int main(int argc,char **argv)
 {
@@ -466,8 +582,14 @@ int main(int argc,char **argv)
     if (argc==2 && !strcmp(argv[1],"background")) {
         background_suite3d(); background_minimum3d=true; backend3d(0,false);
     }
+    else if (argc==2 && !strcmp(argv[1],"scanout")) { scanout_receipt3d(); scanout_5653d(); }
+    else if (argc==2 && !strcmp(argv[1],"cache")) cache_epoch3d();
+    else if (argc==2 && !strcmp(argv[1],"t23")) {
+        attachments3d(1024,768,true,0,false); attachments3d(1024,768,true,0,true);
+    }
     else if (argc==2 && !strcmp(argv[1],"formats")) attachment_suite3d();
     else if (argc==2 && !strcmp(argv[1],"fullsize")) fullsize_suite3d();
+    else if (argc==2 && !strcmp(argv[1],"batch")) large_batch3d();
     else if (argc==2 && !strcmp(argv[1],"review4")) review4_suite3d();
     else if (argc==2 && !strcmp(argv[1],"shader")) shader_precision3d();
     else if (argc==2 && !strcmp(argv[1],"variants")) backend3d(0,true);

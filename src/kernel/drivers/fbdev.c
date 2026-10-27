@@ -55,6 +55,7 @@ static unsigned drawing;
  * 1 ms wait slices while keeping its `drawing` claim. Mode changes wait. */
 static bool accel_inflight;
 static bool render3d_preparing;
+static uint32_t video_cache_epoch;
 static struct display_batch *batch_owner;
 static bool batch_cursor_shape;
 static uint64_t batch_slice_start;
@@ -647,7 +648,7 @@ static int row_band(int32_t y, uint32_t height, uint32_t first, uint32_t end)
 
 int fbdev_accel_request(const struct ciuki_accel_request *q)
 {
-    if (!q || q->size != sizeof(*q) || q->operation > CIUKI_ACCEL_OFFSCREEN ||
+    if (!q || q->size != sizeof(*q) || (q->operation > CIUKI_ACCEL_OFFSCREEN && q->operation!=CIUKI_ACCEL_CACHE_EPOCH) ||
         q->operation == CIUKI_ACCEL_WRITE) return -EINVAL;
     if (changing) return -EBUSY;
     kmutex_lock(&presenter);
@@ -655,6 +656,7 @@ int fbdev_accel_request(const struct ciuki_accel_request *q)
     if (!live()) goto done;
     if ((accel_inflight || accel_initializing) && q->operation != CIUKI_ACCEL_QUERY) { err = -EBUSY; goto done; }
     if (q->generation != device.generation) { err = -EAGAIN; goto done; }
+    if (q->operation==CIUKI_ACCEL_CACHE_EPOCH) { err=(int)video_cache_epoch; goto done; }
     if (q->operation == CIUKI_ACCEL_QUERY) {
         err = (int)fbdev_native_capabilities(); goto done;
     }
@@ -683,6 +685,7 @@ int fbdev_accel_request(const struct ciuki_accel_request *q)
             -1 : row_band(c.src_y, c.height, first, end);
         int db = c.width > INT32_MAX || c.dst_x < 0 || (uint64_t)(uint32_t)c.dst_x + c.width > device.width ?
             -1 : row_band(c.dst_y, c.height, first, end);
+        if ((sb>0 || db>0) && q->background!=video_cache_epoch) { err=-EAGAIN; goto done; }
         if (sb < 0 || db < 0) { err = -EINVAL; goto done; }
         struct fb_rect r = {c.src_x,c.src_y,(int32_t)c.width,(int32_t)c.height};
         service_begin();
@@ -749,8 +752,8 @@ done:
  * written. Returns 0 when the engine wrote the band, 1 when the CPU did
  * (visible rows, engine absent or failed after a proven idle), -EAGAIN for
  * offscreen rows the engine could not write. */
-int fbdev_accel_write(uint32_t generation, const struct fb_rect *dst, const struct fb_rect *limit,
-                      void *rows, uint32_t stride)
+int fbdev_accel_write_epoch(uint32_t generation, const struct fb_rect *dst, const struct fb_rect *limit,
+                      void *rows, uint32_t stride, uint32_t epoch)
 {
     if (!dst || !limit || !rows || !fbdev_rect_valid(dst) || !fbdev_rect_valid(limit) ||
         dst->x < 0 || dst->y < 0 || dst->width <= 0 || dst->height <= 0 ||
@@ -767,6 +770,7 @@ int fbdev_accel_write(uint32_t generation, const struct fb_rect *dst, const stru
     uint32_t first = 0, end = offscreen_end(&first);
     int band = (uint64_t)(uint32_t)dst->x + (uint32_t)dst->width > device.width ? -1 :
         row_band(dst->y, (uint32_t)dst->height, first, end);
+    if (band>0 && epoch!=video_cache_epoch) { err=-EAGAIN; (void)present_end(&device,&busy,false); goto done; }
     if (band < 0) { err = -EINVAL; (void)present_end(&device,&busy,false); goto done; }
     struct fb_rect c = *dst;
     {
@@ -799,6 +803,10 @@ done:
     display_driver_record();
     return err;
 }
+int fbdev_accel_write(uint32_t generation,const struct fb_rect *dst,const struct fb_rect *limit,
+                       void *rows,uint32_t stride)
+{ return fbdev_accel_write_epoch(generation,dst,limit,rows,stride,0); }
+
 
 /* No calls to the software-dispatch wrappers below: a pass proves native
  * execution. Only a small saved visible block is read, under exclusive
@@ -1058,6 +1066,21 @@ void fbdev_render3d_prepared(void)
 {
     kmutex_lock(&presenter); render3d_preparing=false; presenter_unlock();
 }
+int fbdev_render3d_enter(uint32_t);
+void fbdev_render3d_leave(void);
+int fbdev_render3d_cache(uint32_t generation,int (*transfer)(void *,bool),void *ctx,bool take)
+{
+    if (!transfer) return -EINVAL;
+    int e=fbdev_render3d_enter(generation);
+    if (e) return e;
+    if (take && video_cache_epoch==INT32_MAX) e=-ENOSPC;
+    else {
+        e=transfer(ctx,take);
+        if (!e && take) video_cache_epoch++;
+    }
+    fbdev_render3d_leave();
+    return e;
+}
 int fbdev_render3d_enter(uint32_t generation)
 {
     if (!initialized || !live()) return -EBUSY;
@@ -1103,6 +1126,7 @@ static int video_target_snapshot(uint32_t generation, uint32_t first, uint32_t e
     uint64_t offset=(uint64_t)first*device.pitch, size=(uint64_t)(end-first)*device.pitch;
     if (size>CIUKI_BATCH_MAX_EXTENT || (uint64_t)device.phys+offset+size>UINT32_MAX) return -EOVERFLOW;
     *out=(struct swdib_target){.device=device,.identity=&device,.offset=offset,.rights=PROT_READ|PROT_WRITE,.kind=CIUKI_TARGET_VIDEO};
+    out->cache_epoch=video_cache_epoch;
     out->device.phys+=(uint32_t)offset; out->device.height=end-first;
     out->device.size=(uint32_t)size; out->device.mapped=NULL;
     return 0;
@@ -1141,7 +1165,7 @@ static int batch_begin(void *arg, struct display_batch *b)
     for (unsigned i=0;i<b->header.target_count;i++) if (b->targets[i].kind==CIUKI_TARGET_VIDEO) {
         struct swdib_target now;
         int e=video_target_locked(b->targets[i].device.generation,&now); if (e) return e;
-        if (now.offset!=b->targets[i].offset || now.device.size!=b->targets[i].device.size ||
+        if (now.cache_epoch!=b->targets[i].cache_epoch || now.offset!=b->targets[i].offset || now.device.size!=b->targets[i].device.size ||
             now.device.phys!=b->targets[i].device.phys) return -EAGAIN;
     }
     unsigned idle=0;

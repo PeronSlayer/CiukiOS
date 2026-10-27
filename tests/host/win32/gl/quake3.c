@@ -595,7 +595,8 @@ void gl_quake3_savage(int default_format) {
   gl_hardware_native(1); savage_frames=1;
   for (unsigned size=0;size<2;size++) {
     unsigned w=size ? 1024 : 640,h=size ? 768 : 480;
-    gl_kernel_mode(w,h); gl_kernel_setup(2);
+    gl_kernel_mode(w,h);
+    extern void gl_kernel_fullscreen_setup(unsigned,unsigned); gl_kernel_fullscreen_setup(w,h);
     for (unsigned scenario=0;scenario<2;scenario++) {
       unsigned *pixels=calloc(w*h,4); assert(pixels);
       struct w32_dib dib=test_dib(pixels,w,h,32,0,1);
@@ -629,6 +630,7 @@ void gl_quake3_savage(int default_format) {
 #endif
         extern void gl_savage_scope(unsigned);
         gl_savage_scope(scenario); gl_savage_begin(); frame(scenario); glFinish();
+        extern void gl_kernel_present_lease(const uint32_t *,unsigned,unsigned); gl_kernel_present_lease(pixels,w,h);
 #ifdef SW_PROFILE
         gl_savage_end(w,h,f,gl_kernel_draws()-before,gl_kernel_fragments()-fragments,work[SW_TRIANGLE],work[SW_FRAGMENT]);
 #else

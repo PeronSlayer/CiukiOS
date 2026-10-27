@@ -1,5 +1,8 @@
 # Qualified default pixel formats (f7-12)
 
+The [f7-15 target and VRAM contract](savage-modes-vram.md) supersedes the
+scanout-generation, permanent 2D cache and CPU masked-clear rules below.
+
 Research and implementation contract, 2026-10-26. This extends the f7-03 and
 f7-11 contracts; their ownership, bounded execution, restoration, guards and
 sample-space rules continue to apply.

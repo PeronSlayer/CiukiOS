@@ -89,7 +89,10 @@ static void background_attachment3d(unsigned slow)
     background_start3d=background_phase_start3d=m.us;
     gpu3d.probe_checkpoint=background_checkpoint3d; gpu3d.probe_phase=background_phase3d;
     FULL_CHECK(!fbdev_render3d_prepare(42));
+    transient_busy3d=3; /* passing contention in restored admission windows */
     int e=savage3d_depth24_probe(&gpu3d,&reference3d);
+    FULL_CHECK(!transient_busy3d || slow==2);
+    transient_busy3d=0;
     fbdev_render3d_prepared();
     read_delay3d=0; gpu3d.probe_checkpoint=0; gpu3d.probe_phase=0;
     FULL_CHECK(!gpu3d.lost && !test_engine.quarantined && test_engine.cpu_safe && !test_engine.event_pending &&

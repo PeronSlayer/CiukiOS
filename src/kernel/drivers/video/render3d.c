@@ -2,6 +2,7 @@
  * See docs/design/f7-3d-acceleration-contract.md. GPL-2.0-only. */
 #include <ciuki/kernel.h>
 #include <ciuki/abi.h>
+#include <ciuki/fbdev.h>
 #include "render3d.h"
 _Static_assert(sizeof(struct render3d_request) <= R3D_JOB_BYTES, "job bound");
 _Static_assert(sizeof(((struct render3d_service *)0)->ring) == 262144, "ring bound");
@@ -102,6 +103,14 @@ int render3d_create_context(struct render3d_service *s, uint32_t p, enum render3
     }
     if (owned>=4 || !free) return -EAGAIN;
     uint32_t id=handle(s); if (!id) return -ENOSPC;
+    bool first=true;
+    for (unsigned i=0;i<R3D_CONTEXTS;i++)
+        if (s->contexts[i].live && s->contexts[i].hardware) first=false;
+    if (hw && first && s->backend->reserve) {
+        int e=s->backend->reserve(s->device);
+        if (e && policy==R3D_HARDWARE_REQUIRED) return e;
+        if (e) hw=false;
+    }
     *free=(struct render3d_context){.handle=id,.process=p,.generation=s->generation,.policy=policy,.live=true,.hardware=hw};
     *out=id; return 0;
 }
@@ -114,7 +123,12 @@ static void collect(struct render3d_service *s, struct render3d_context *c)
     }
     if (c->dying && !c->queued) {
         if (s->quarantined && c->hardware) return;
+        bool hardware=c->hardware;
         release(s,c->resources,R3D_RESOURCES*sizeof(*c->resources)); memset(c,0,sizeof(*c));
+        bool last=true;
+        for (unsigned i=0;i<R3D_CONTEXTS;i++)
+            if (s->contexts[i].live && s->contexts[i].hardware) last=false;
+        if (hardware && last && s->backend && s->backend->unreserve) s->backend->unreserve(s->device);
     }
 }
 int render3d_destroy_context(struct render3d_service *s, uint32_t p, uint32_t id)
@@ -488,6 +502,10 @@ int render3d_step(struct render3d_service *s)
         rotate(s);
         return 1;
     }
+    if (!e && (q->count || (q->flags&R3D_CLEAR_COLOR)))
+        for (unsigned i=0;i<R3D_RESOURCES;i++)
+            if (c->resources[i].copied_from==q->target) c->resources[i].copied_from=0;
+    if (!e && (q->flags&R3D_COPY)) r[3]->copied_from=j->software ? 0 : q->target;
     if (!e && j->software && c->hardware) for (unsigned i=0;i<R3D_REFS;i++)
         if (r[i] && r[i]->kind!=R3D_TEXTURE) r[i]->resident=false;
     if (e && !c->failure) c->failure=e;
@@ -544,7 +562,42 @@ int render3d_upload(struct render3d_service *s, uint32_t p, uint32_t id,
     if (!s->admission || c->failure) return c->failure ? c->failure : -ENODEV;
     if (!input || bytes!=r->bytes || r->kind==R3D_TEXTURE) return -EINVAL;
     if (r->references) return -EAGAIN;
+    for (unsigned i=0;i<R3D_RESOURCES;i++)
+        if (c->resources[i].copied_from==h) c->resources[i].copied_from=0;
+    r->copied_from=0;
     memcpy(r->shadow,input,bytes); canonicalize_color(r); r->resident=false; return 0;
+}
+/* Only the lease presenter calls this, after its authority/gamma/scale
+ * checks. A retained linear shadow is not proof that its former tiled source
+ * still has those pixels; the receipt is invalidated by writes/uploads. */
+int render3d_scanout(struct render3d_service *s,uint32_t p,const struct ciuki_w32_render3d_args *a,
+                     const struct fb_device *fb)
+{
+    if (!s || !a || !fb || !usable(s) || !s->backend->scanout) return -EOPNOTSUPP;
+    if (s->busy) return -EBUSY;
+    struct render3d_context *c=context(s,p,a->context);
+    struct render3d_resource *linear=resource(c,a->resource);
+    struct render3d_resource *source=linear ? resource(c,linear->copied_from) : 0;
+    if (!c || c->dying || c->failure || !c->hardware || !linear || !source ||
+        !linear->hardware || !linear->resident || linear->pending_free || linear->references ||
+        !source->hardware || !source->resident || source->pending_free || source->references ||
+        (linear->kind!=R3D_LINEAR_COLOR && linear->kind!=R3D_LINEAR565) ||
+        (source->kind!=R3D_COLOR && source->kind!=R3D_COLOR565) ||
+        source->width!=a->width || source->height!=a->height || linear->width!=source->width ||
+        linear->height!=source->height || fb->generation!=s->generation || a->generation!=s->generation)
+        return -EOPNOTSUPP;
+    s->busy=true; source->references++; linear->references++;
+    int e=s->backend->enter(s->device);
+    if (!e) {
+        e=s->backend->scanout(s->device,source,fb);
+        int idle=s->backend->idle(s->device);
+        if (!e) e=idle;
+        if (e && e!=-EOPNOTSUPP && (e!=-ETIMEDOUT || idle)) render3d_device_lost(s);
+        s->backend->leave(s->device);
+    } else if (e!=-EBUSY && e!=-EAGAIN) render3d_device_lost(s);
+    if (!s->quarantined) { source->references--; linear->references--; }
+    s->busy=false; collect(s,c);
+    return e;
 }
 void render3d_process_exit(struct render3d_service *s, uint32_t p)
 {
