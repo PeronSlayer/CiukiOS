@@ -843,25 +843,38 @@ uint32_t dosvm_task_quantum(const struct task *t, uint32_t normal)
     if (focused) return normal < 8u ? normal : 8u;
     return normal < 4u ? normal : 4u;
 }
-/* fx-doswin3: no preference while the VM's own presenter has been woken
- * for a frame and has not yet run (present_ready, wait_present). Bounded:
- * a presenter that does not run within DOSVM_PRESENT_DISPATCH_MS no longer
- * suspends it. Only a windowed VM has a waiting presenter. Never inside a
- * guest hardware-interrupt handler: a handler that sends its EOI early and
- * re-enables interrupts (DMX's timer service) would be re-entered by the
- * IRQ0 edges of a longer absence (f3-12: DMX returns without EOI once its
- * private IRQ stacks are exhausted). */
+/* fx-doswin3: the VM's own presenter has been woken for a frame and has not
+ * yet run (present_ready, wait_present). Bounded: a presenter that does not
+ * run within DOSVM_PRESENT_DISPATCH_MS no longer counts. Only a windowed VM
+ * has a waiting presenter. Not while a guest hardware-interrupt handler is
+ * visibly in progress: an open DPMI hardware-interrupt record, or an
+ * in-service bit on the virtual PIC (a real-mode handler before its EOI).
+ * A handler that sends its EOI early and re-enables interrupts (DMX's
+ * timer service) would be re-entered by the IRQ0 edges of a longer absence
+ * (f3-12: DMX returns without EOI once its private IRQ stacks are
+ * exhausted); a V86 handler after its own EOI is not visible here. */
 static bool present_pending(const struct dosvm *v)
 {
-    return v->present_dispatch && !v->fullscreen && g_ticks - v->present_dispatch_tick < DOSVM_PRESENT_DISPATCH_MS &&
-           !dosvm_in_irq(v);
+    return v->present_dispatch && v->present_waiter && !v->fullscreen &&
+           g_ticks - v->present_dispatch_tick < DOSVM_PRESENT_DISPATCH_MS &&
+           !dosvm_in_irq(v) && !v->monitor.pic[0].isr && !v->monitor.pic[1].isr;
 }
 const struct task *dosvm_task_focus(void)
 {
     struct dosvm *v = dosvm_lookup(input_focus);
     return v && v->owner_pid && v->window_input && v->info.state < DOSVM_STOPPING &&
-           v->info.state != DOSVM_BLOCKED && !v->window_marking && !v->fullscreen_suspended && !idle_recent(v) &&
-           !present_pending(v) ? v->task : 0;
+           v->info.state != DOSVM_BLOCKED && !v->window_marking && !v->fullscreen_suspended && !idle_recent(v) ?
+           v->task : 0;
+}
+/* fx-doswin3 round 3: the presenter the scheduler may run ahead of the
+ * focused VM's preference (task.c rq_pop), for at most PRESENT_SLICE ticks;
+ * the VM stays the focus, so every other task picked while it is ready
+ * keeps its 2-tick cap, and a pending virtual timer/SB IRQ still wins
+ * (dosvm_task_irq is asked first). */
+const struct task *dosvm_task_present(void)
+{
+    struct dosvm *v = dosvm_lookup(input_focus);
+    return v && present_pending(v) ? v->present_waiter : 0;
 }
 const struct task *dosvm_task_irq(void)
 {

@@ -83,6 +83,7 @@ struct desk_frame_stats {
      * fell back to software, and rows served from the offscreen caches. */
     uint64_t accel_fills, accel_copies, accel_writes, accel_fallback, cache_rows;
     uint64_t copy_bytes, compare_px; /* clipped RAM copies and pixel equality proofs */
+    uint64_t direct_px; /* fx-doswin3 round 3: presented straight from a DOS window's surface */
 };
 /* f2-92: an unchanged surface kept in engine-only video memory below the
  * scanout (CIUKI_ACCEL_OFFSCREEN rows): the wallpaper/icon background, or a
@@ -477,6 +478,12 @@ struct desktop {
     int frame_valid, scanout_valid;
     int restore_cpu_frame; /* a changed display lease needs one full CPU present */
     struct desk_damage move_damage;
+    /* fx-doswin3 round 3: screen boxes presented straight from an unobscured
+     * DOS window's surface (compositor.c direct_present), whose RAM frame
+     * pixels are older than the scanout until recomposed (desk_redraw,
+     * desk_direct_settle); direct_settling: that recomposition's frame. */
+    struct desk_damage direct_stale;
+    int direct_settling;
     /* fx-2: the stacking the composed frame shows (window id per slot, 0
      * when hidden, and its order). desk_stack_damage reconciles it: a
      * changed relative order invalidates the pair's overlap. */
@@ -881,6 +888,7 @@ int desk_frame_due(const struct desktop *, uint64_t now);
 int desk_small_damage(const struct desktop *, uint64_t now);
 uint64_t desk_frame_time(const struct desktop *, uint64_t now);
 void desk_gfx_complete(struct desktop *, int index, int result, uint64_t completed, uint64_t next);
+void desk_direct_settle(struct desktop *) __attribute__((weak));
 void desk_stats_sample(struct desktop *);
 void desk_display_reply(struct desktop *, int result);
 uint64_t desk_launch_wait(const struct desktop *, uint64_t now); /* ns; short startup polling only */

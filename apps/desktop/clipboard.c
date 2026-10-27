@@ -213,6 +213,9 @@ static void clip_destroy_locked(struct desktop *d)
 }
 static int clip_capture_locked(struct desktop *d, int active)
 {
+    /* fx-doswin3 round 3: a DOS window presented straight from its surface
+     * left older pixels in the RAM frame; compose them before the copy. */
+    if (desk_direct_settle) desk_direct_settle(d);
     struct desk_box box={0,0,d->width,d->height};
     if (active) { if (d->focus<0) return -ENOENT; box=desk_outer(&d->clients[d->focus]); }
     if (box.x<0) { box.w+=box.x; box.x=0; } if (box.y<0) { box.h+=box.y; box.y=0; }

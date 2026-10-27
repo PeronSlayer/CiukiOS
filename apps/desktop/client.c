@@ -754,7 +754,12 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         else close_attachments(d,m,-1);
         break;
     case DESK_GFX_FRAME: {
-        if (!c->gfxdemo || !c->window || c->closing || c->gfx_pending) {
+        /* fx-doswin3 round 3: a DOS window sends the scene-less form after
+         * the DAMAGE of a frame; its PRESENTED reply says that frame is on
+         * screen (or was not needed), so the DOS Box converts no frame the
+         * desktop would never show. */
+        int composed_ack=c->dosbox && !p.width && !p.height && m->length==64;
+        if ((!c->gfxdemo && !composed_ack) || !c->window || c->closing || c->gfx_pending) {
             /* A rejected request never changes the persistent scene mapping. */
             desk_message(&reply,DESK_GFX_PRESENTED,32);
             desk_put32(reply.data+4,p.serial);

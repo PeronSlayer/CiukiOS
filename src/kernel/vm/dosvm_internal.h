@@ -48,12 +48,14 @@ _Static_assert(DOSVM_PORTS >= 23, "integrated peripheral port ranges");
 #define DOSVM_VIDEO_BAND 8u
 #define DOSVM_CURSOR_TICKS 250u
 #define DOSVM_BLINK_TICKS 500u
-/* fx-doswin3: a guest that changed its CRTC start address within this many
- * ms is page flipping; its presenter wakes on the displayed page (flip,
- * display registers, palette), not on every back-buffer store. */
-#define DOSVM_FLIP_HOLD_MS 250u
-/* fx-doswin3: the longest the focused VM yields its preference to its
- * woken presenter (dosvm_task_focus) before the presenter has run. */
+/* fx-doswin3: a guest that changed its CRTC start address within its flip
+ * hold (twice its last flip gap, at least one refresh, at most this many ms;
+ * dosvm_vga.c flip_hold_ms) is page flipping; its presenter wakes on the
+ * displayed page (flip, display registers, palette), not on every
+ * back-buffer store. 50 ms: Windows 9x's default WindowUpdateTime. */
+#define DOSVM_FLIP_HOLD_MS 50u
+/* fx-doswin3: the longest a woken presenter may be run ahead of its
+ * focused VM (dosvm_task_present) before it has run. */
 #define DOSVM_PRESENT_DISPATCH_MS 20u
 #define DOSVM_HEARTBEAT_TICKS 2000u
 #define DOSVM_HEARTBEAT_LIMIT 60u
@@ -233,9 +235,11 @@ struct dosvm {
      * (VM context, present_ready), consumed by its WAIT_PRESENT return. */
     uint64_t present_ready_tsc;
     /* fx-doswin3: tick of that wake while the presenter has not yet run;
-     * the focused VM yields its scheduling preference to it meanwhile
-     * (dosvm_task_focus), bounded by DOSVM_PRESENT_DISPATCH_MS. */
+     * the scheduler may run that presenter (present_waiter, the task inside
+     * WAIT_PRESENT) ahead of the focused VM meanwhile (dosvm_task_present,
+     * task.c PRESENT_SLICE), bounded by DOSVM_PRESENT_DISPATCH_MS. */
     uint64_t present_dispatch_tick;
+    const struct task *present_waiter;
     bool present_dispatch;
     struct {
         bool sleeping, seen;
@@ -333,6 +337,7 @@ struct dosvm {
     /* fx-doswin3: host tick of the last write that changed the CRTC start
      * address (a page flip), merged or not into video_flip_us. */
     uint64_t video_flip_tick;
+    unsigned video_flip_hold_ms; /* that flip's hold (dosvm_vga.c flip_hold_ms) */
     unsigned video_flip_run, video_present_rate;
     bool video_flip_seen;
     uint32_t video_display, video_changes, video_phase, owner_pid;
@@ -553,6 +558,7 @@ void dosvm_launch_video(struct dosvm *);
 uint32_t dosvm_task_quantum(const struct task *, uint32_t normal);
 const struct task *dosvm_task_focus(void);
 const struct task *dosvm_task_irq(void);
+const struct task *dosvm_task_present(void);
 int dosvm_io_burst(struct dosvm *, struct v86_frame *);
 /* fx-27: dosvm_io_burst, then the DAC palette burst after a DAC write. */
 int dosvm_port_bursts(struct dosvm *, struct v86_frame *);
@@ -657,7 +663,7 @@ void dosvm_present_checkpoint(struct dosvm *);
 static inline bool dosvm_present_store_wake(const struct dosvm *v, uint64_t tick)
 {
     return !(v->video_flip_seen && !v->vbe_mode && !v->video_geometry.text &&
-             tick - v->video_flip_tick <= DOSVM_FLIP_HOLD_MS);
+             tick - v->video_flip_tick <= v->video_flip_hold_ms);
 }
 #include "dosvm_clock.h" /* fx-9 VM clock task */
 _Static_assert(DOSVM_CLOCK_SLOTS == DOSVM_LIMIT, "vm-clock serves every VM slot");

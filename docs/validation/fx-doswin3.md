@@ -234,7 +234,10 @@ image build or hardware run; physical figures are trial `5bb73dba`.
   is inside a guest hardware-interrupt handler (DMX's timer service sends
   its EOI early and re-enables interrupts; the edges of a longer absence
   re-enter it, and four deep it returns without EOI, f3-12); IRQ urgency
-  (`dosvm_task_irq`), the desktop share and every quantum are unchanged.
+  (`dosvm_task_irq`) and the desktop share are unchanged. Corrected in round
+  3: the suspension also lifted the 2-tick cap on any task picked while the
+  focused VM was ready (`task.c`), so the presenter or another base-9 task
+  could run a full 10-tick quantum; round 3 replaces it (below).
 - **Evidence for the next trial.** The desktop's `[desktop] accel` record
   (every 2 s window with engine work, published once a minute) now carries
   `composite_us`, `present_us`, `presents` and `scene_px`, so a DOS window
@@ -306,3 +309,145 @@ display names/model/commands, presenter, Savage family, splash, desktop
 accel/performance/native, DOS Box properties, seven i686 production units
 with the kernel flags. Commands and the next-trial comparison table are in
 `build/codex/fx-doswin3-report.md` (Round 2).
+
+## Round 3 (2026-10-27): review fixes, direct DOS window presentation, composed acknowledgement
+
+Host evidence only, on round 2's sources (`dddd59079`); no QEMU, image
+build or hardware run. Review: `build/lead-scratch/fx-doswin3-review2.md`
+(no P1, three P2, four P3).
+
+### Sources and decisions
+
+- **TLB invariant (review P3-2).** Re-checked against the text of Intel SDM
+  Vol. 3A rev. 090 ([PDF](https://cdrdv2-public.intel.com/874249/253668-090-sdm-vol-3a.pdf),
+  extracted locally): the sentence "the processor does not cache a
+  translation for a page number unless the accessed flag is 1 in each of
+  the paging-structure entries used during translation; before caching a
+  translation, the processor sets any of these accessed flags that is not
+  already 1" is in **5.10.2.3 "Details of TLB Use"** (5.10.2.2 is "Caching
+  Translations in TLBs"), as round 2 cited. **5.10.4.3 "Optional
+  Invalidation"**: "If a paging-structure entry is modified to change the
+  accessed flag from 0 to 1, no invalidation is necessary (assuming that an
+  invalidation was performed the last time the accessed flag was changed
+  from 1 to 0). This is because no TLB entry or paging-structure cache entry
+  is created with information from a paging-structure entry in which the
+  accessed flag is 0." Preconditions of `as_replace_pages`' accessed-only
+  INVLPG, now written next to it (`vmm.c`) and in `mm.h`: one CPU (no
+  application processor is started), CR4.PGE and CR4.PCIDE clear
+  (`entry.asm` clears PGE; `mtrr.c` only restores CR4, `fpu.c` changes only
+  OSFXSR/OSXMMEXCPT; nothing sets PCIDE), and every writer that clears A in
+  a present entry invalidates while its space is current (`as_sample_page`,
+  `dosvm_pool` `pte_set`/`pte_sample`, `dosvm_fullscreen` `map_aperture`,
+  `dosvm_xms`, `uaddr` `set_pte`/`alias_sample`, `as_replace_pages`
+  itself). Revisit if SMP, PGE or PCID arrive. AMD: no equivalent sentence
+  was found in a search of the AMD64 APM Vol. 2; the cross-vendor basis for
+  the baseline's AMD desktops is FreeBSD's i386 `pmap_enter`, which applies
+  the same rule on every x86 vendor.
+- **Presenter slice (review P2-1).** Round 2's suspension of the VM's focus
+  also removed the 2-tick cap that `task.c` puts on any task picked while
+  the focused VM is ready, so the presenter, or any other base-9 task queued
+  ahead of it, could run a full 10-tick quantum while the VM's IRQ0 waited
+  (DMX's timer period is about 7.1 ms). Decision: the VM keeps the focus;
+  `rq_pop` asks a new hook, `dosvm_task_present`, inside the focus branch
+  (after a pending virtual timer/SB IRQ, which still wins, and after
+  foreground input/donation boosts) and dispatches only that woken presenter
+  ahead of the VM, for at most `PRESENT_SLICE` = 4 ticks; every other task
+  keeps the 2-tick cap. Host test (`kernel_latency_test.c`, production
+  scheduler): presenter 4 ticks, VM IRQ latency at most 4 ms, another
+  base-9 task at most 2 ticks; the round-2 rule as negative control gives
+  10 ticks and 10 ms.
+- **Visible IRQ handler guard (review P3-1).** `present_pending` now also
+  holds while the virtual PIC has an in-service bit (a real-mode handler
+  before its EOI), besides an open DPMI hardware-interrupt record; the
+  comment no longer claims more (a V86 handler after an early EOI is not
+  visible).
+- **Flip hold (review P2-2).** The fixed 250 ms hold delayed Wolfenstein's
+  fizzles, menus and pause screens (they draw into the shown page without a
+  flip). Decision: the hold is twice the last flip gap, at least one
+  refresh, at most 50 ms (`flip_hold_ms`; Windows 9x's default
+  `WindowUpdateTime`, `SYSTEM.INI [386Enh]`, see
+  `t23-dos-window-lag-2026-10-25.md` 3). A first or single start-address
+  change (initial set, one hardware scroll) holds for one refresh. Host
+  test: 15 Hz flips hold 50 ms and a store after they stop is shown within
+  two gaps; 70 Hz flips hold 30 ms; a first flip 15 ms.
+- **Full screen (review P2-3).** Round 2's "full-screen paths unchanged"
+  was wrong: VBE full screen models its ports, and on `main` since
+  fx-doomfs2 `lean_before` no longer requires modeled ports, so the lean
+  V86 CLI/STI path (and the shadow retirement before it) also runs in VGA
+  full screen. Its semantics are the ordinary path's; a VGA full-screen host
+  case now compares both paths and the window in the eight CLI/STI cases
+  (on this branch the exits stay ordinary in VGA full screen; on the merged
+  tree they are lean, which the case accepts). Full-screen banks stay the
+  trial's control.
+- **Direct DOS window presentation (round 3 lever).** The production
+  replay (`tests/host/desktop/dos_window_replay.c`) of a changed Mode Y Fit
+  frame: 241,280 composed pixels, 512,000 upload bytes, 113,280 engine-copy
+  pixels in 354 requests (one-row uploads alternating with one-row copies of
+  the kernel's line-doubled rows); trial-derived 50 us of desktop time per
+  VM row. Decision: when every damaged box shows only an unobscured DOS
+  window (`client_only`: on top, no shadow, overlay, menu, chrome or other
+  window over it; hardware pointer or a software pointer that no damaged box
+  touches; no Magnifier; surface 1:1 with the content), the desktop presents
+  the damage straight from the window's own surface through the kernel's
+  ordinary surface present (`grants.c grant_present`, as for its own
+  frame): one request per damaged run of rows, nothing composed. Its RAM
+  frame keeps older pixels there (`direct_stale`) until a frame that moves
+  or copies windows, draws a software pointer over them, shows the
+  Magnifier or damages them recomposes and presents them first; that frame
+  skips the scroll and old-pixel command plans, which compare the RAM frame
+  with the scanout. Print Screen and the graphics benchmark compose them
+  first (`desk_direct_settle`). No display-model or driver change, no family
+  name. Price on the T23: 965,120 bytes a frame at its 134 MB/s upload rate
+  (f4-20; 1024x768x32 with a write-combining MTRR in trial `5bb73dba`) =
+  7.2 ms, 18.0 us per VM row.
+- **Composed acknowledgement.** After a frame's DAMAGE the DOS Box sends
+  the scene-less `DESK_GFX_FRAME` (f2-59's completion protocol, the 64-byte
+  form, now accepted from a v2.0 client and from a launched DOS window
+  only); the desktop answers `DESK_GFX_PRESENTED` once the frame is on screen
+  (`-EAGAIN` at once when nothing is pending or the window is minimized). A
+  frame carries the marker only when none is outstanding; the DOS Box may
+  convert one more frame, then waits for the answer (at most 100 ms, serving
+  its channel with `poll`), so it is at most one frame ahead of the desktop
+  and converts no frame the desktop would coalesce away. It waits only once
+  the desktop has answered once. A serial form (no overlap of the two
+  stages) was measured and rejected (results). No public header changed
+  (`protocol.h` untouched; `protocol.c` parse rules only).
+
+### Results
+
+T23 replay (`tests/host/dos/window_parity.py`, round 2's fixed trial
+prices; desktop direct price 18.0 us per VM row, the 965,120-byte upload of
+a 400-row Mode Y frame at 134 MB/s; 60 Hz desktop cadence; DOS Box share
+0.20 as in round 2):
+
+| Frames shown per s (factor full/window) | DOOM | Wolfenstein 3-D |
+| --- | ---: | ---: |
+| full screen (round-3 sources) | 33.25 | 70.03 |
+| round 2 | 13.90 (2.39) | 22.55 (3.11) |
+| round 3, review fixes only | 13.95 (2.38) | 22.55 (3.11) |
+| round 3 delivered (direct presentation, one-frame-ahead acknowledgement) | 19.65 (1.69) | 38.61 (1.81) |
+| window obscured (composed fallback) | 13.65 | 22.16 |
+
+Full screen is unchanged within 0.3 % (Warcraft II 43.92 against 43.93 M
+instructions per s). The replay's Warcraft II demo title is static; by the
+trial's row prices its in-game frame now costs 50 instead of 81 us per row.
+The acknowledgement never holds the DOS Box when the desktop presents
+directly; with the composed fallback it removes Wolfenstein's 13 dropped
+conversions per s (409 -> 349 ms of presentation CPU per s). Remaining per
+DOOM frame: 8.8 ms of plane-select exits and 13.7 ms of presentation CPU;
+Wolfenstein shows 38.6 of 57.5 rendered frames, limited by the DOS Box
+stage (20.9 us of kernel conversion and viewport copy per VM row), then the
+desktop's 60 Hz cadence. What-ifs: with no DOS Box viewport copy and
+engine-doubled rows, DOOM 24.00 (1.39) and Wolfenstein 56.71 (1.23); plus
+4x cheaper plane selects, DOOM 30.65 (1.08).
+
+Host tests: full DOS body (61,112,054 checks), fx-doswin3 rounds 1-3,
+fx-27, t23-dosperf, fx-16, WAIT_PRESENT, the production game launch
+(`/Programs/dosbox` over the production client), file API, unified DOS,
+kernel latency (incl. the presenter-turn case), VM, audio, VGA x86, display
+names/model/commands, presenter, Savage family, splash, desktop accel and
+performance (incl. the direct DOS window replay), the DOS Box loading
+replay and properties, eight i686 kernel units with the kernel flags; of the
+34 desktop model tests 33 pass and `test_shell_launcher` fails, identically
+on the committed round-2 tree (pre-existing). Commands and the next-trial records are in
+`build/codex/fx-doswin3-report.md` (Round 3).

@@ -503,9 +503,18 @@ int as_replace_pages(struct aspace *as, uint32_t va, const uint32_t *frames,
      * every path that clears A in a present entry invalidates it while its
      * space is current (this function, as_sample_page, dosvm_pool
      * pte_sample; a CR3 load flushes the others: no CR4.PGE), so an entry
-     * replaced with A clear has no TLB entry to invalidate. FreeBSD's i386
-     * pmap_enter applies the same rule (sys/i386/i386/pmap.c: invalidate
-     * only when the old PTE had PG_A). INVLPG is a serializing instruction
+     * replaced with A clear has no TLB entry to invalidate; SDM 5.10.4.3
+     * "Optional Invalidation": changing the accessed flag from 0 to 1 needs
+     * no invalidation (assuming one was performed when it last changed from
+     * 1 to 0), "because no TLB entry or paging-structure cache entry is
+     * created with information from a paging-structure entry in which the
+     * accessed flag is 0". Preconditions, revisit if any changes: one CPU
+     * (no application processor is started, so no other TLB), CR4.PGE and
+     * CR4.PCIDE clear (entry.asm clears PGE; nothing sets either), and the
+     * A 1->0 writers named above invalidate while their space is current.
+     * FreeBSD's i386 pmap_enter applies the same rule on every x86 vendor
+     * (sys/i386/i386/pmap.c: invalidate only when the old PTE had PG_A),
+     * the basis for the baseline's AMD desktops. INVLPG is a serializing instruction
      * (SDM Vol. 3A, "Serializing Instructions"). A Mode Y plane switch
      * touches about four of the window's sixteen pages per column (one
      * page holds 51 rows of a plane), so most of each switch's sixteen

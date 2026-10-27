@@ -1173,26 +1173,35 @@ static void saver_scene(struct desktop *d, struct desk_box clip)
         }
     }
 }
+/* The client whose opaque backing store alone shows in CLIP (on screen,
+ * inside its content, no higher window, shadow, shell overlay or chrome
+ * over it), or -1. */
+static int client_only(const struct desktop *d, struct desk_box clip)
+{
+    if (d->geometry_outline || d->animation.active || d->menu_open || d->sh.levels || d->sh.volume_open || d->sh.network_open || d->sh.media_open || d->sh.tooltip || desk_shell_chrome_intersects(d,clip) || d->sh.switcher ||
+        clip.y<DESK_BAR || (d->shell && !(clip.x+clip.w<=desk_taskbar(d).x || clip.x>=desk_taskbar(d).x+desk_taskbar(d).w || clip.y+clip.h<=desk_taskbar(d).y || clip.y>=desk_taskbar(d).y+desk_taskbar(d).h)))
+        return -1;
+    for (int i=0;i<DESK_CLIENTS;i++) {
+        const struct desk_client *c=&d->clients[i];
+        if (!c->window || c->minimized || c->collapsed || c->internal || !c->pixels) continue;
+        struct desk_box content=desk_content(c), b;
+        if (c->info.width<(unsigned)content.w || c->info.height<(unsigned)content.h ||
+            !desk_intersect(content,clip,&b) || memcmp(&b,&clip,sizeof(b))) continue;
+        int clear=1;
+        for (int j=0;j<DESK_CLIENTS;j++) if (d->clients[j].window && !d->clients[j].minimized &&
+            d->clients[j].order>c->order && desk_intersect(desk_outer(&d->clients[j]),clip,&b)) { clear=0; break; }
+        if (clear) return i;
+    }
+    return -1;
+}
 static void scene(struct desktop *d, struct desk_box clip)
 {
     if (d->saver_active) { saver_scene(d,clip); return; }
     if (!desk_intersect(clip,(struct desk_box){0,0,(int32_t)d->width,(int32_t)d->height},&clip)) return;
     /* A client-only update writes its opaque backing store directly. Higher
      * windows' shadows and shell overlays still need the ordinary painter. */
-    if (!d->geometry_outline && !d->animation.active && !d->menu_open && !d->sh.levels && !d->sh.volume_open && !d->sh.network_open && !d->sh.media_open && !d->sh.tooltip && !desk_shell_chrome_intersects(d,clip) && !d->sh.switcher &&
-        clip.y>=DESK_BAR && (!d->shell || (clip.x+clip.w<=desk_taskbar(d).x || clip.x>=desk_taskbar(d).x+desk_taskbar(d).w || clip.y+clip.h<=desk_taskbar(d).y || clip.y>=desk_taskbar(d).y+desk_taskbar(d).h))) {
-        for (int i=0;i<DESK_CLIENTS;i++) {
-            struct desk_client *c=&d->clients[i];
-            if (!c->window || c->minimized || c->collapsed || c->internal || !c->pixels) continue;
-            struct desk_box content=desk_content(c), b;
-            if (c->info.width<(unsigned)content.w || c->info.height<(unsigned)content.h ||
-                !desk_intersect(content,clip,&b) || memcmp(&b,&clip,sizeof(b))) continue;
-            int clear=1;
-            for (int j=0;j<DESK_CLIENTS;j++) if (d->clients[j].window && !d->clients[j].minimized &&
-                d->clients[j].order>c->order && desk_intersect(desk_outer(&d->clients[j]),clip,&b)) { clear=0; break; }
-            if (clear) { DESK_PROFILE("windows",client_rows(d,c,clip)); return; }
-        }
-    }
+    int only=client_only(d,clip);
+    if (only>=0) { DESK_PROFILE("windows",client_rows(d,&d->clients[only],clip)); return; }
     const struct desk_theme *t=desk_theme;
     struct desk_paint p=paint_of(d,clip);
     int windows[DESK_CLIENTS]; unsigned count=0;
@@ -2021,7 +2030,7 @@ static void command_capture_previous(struct desktop *d)
 {
     free(d->command_old_pixels); d->command_old_pixels=NULL;
     if (!(d->command_caps&(CIUKI_CAP_INVERT|CIUKI_CAP_KEYED)) || !d->hw_cursor || !d->scanout_valid ||
-        d->copy_pending || d->move_damage.count || d->damage.count!=1) return;
+        d->copy_pending || d->move_damage.count || d->damage.count!=1 || d->direct_settling) return;
     struct desk_box b;
     if (!desk_intersect(d->damage.boxes[0],(struct desk_box){0,0,(int)d->width,(int)d->height},&b) ||
         (uint64_t)b.w*b.h*4>65536) return;
@@ -2263,6 +2272,100 @@ static int region_covers(const pixman_region32_t *region, struct desk_box box)
     pixman_box32_t b=region_box(box);
     return pixman_region32_contains_rectangle(region,&b)==PIXMAN_REGION_IN;
 }
+/* ---- fx-doswin3 round 3: direct presentation of an unobscured DOS window ----
+ * A DOS game window's frame changes hundreds of full-width rows of the DOS
+ * Box surface (DOOM: about 346 a frame, Wolfenstein 3-D 213). Composing
+ * them into the RAM frame (client_rows) and presenting that frame row by
+ * row (present_box_raw alternates a one-row upload and a one-row engine
+ * copy for each line-doubled pair) cost the T23 about 50 us of desktop time
+ * per row (trial 5bb73dba). When every damaged box shows only that window
+ * (client_only: on top, no shadow, overlay, menu, chrome or other window
+ * over it), the surface is 1:1 with the content and nothing else needs the
+ * RAM frame this frame, the damage is presented straight from the
+ * window's own surface: one present request per damaged run of rows, the
+ * kernel's ordinary surface-to-scanout path (grants.c grant_present, as for
+ * the desktop's own surface). The RAM frame keeps older pixels there
+ * (direct_stale) until a frame that composes, presents, copies or reads
+ * those pixels recomposes them first (direct_settle_damage), or
+ * desk_direct_settle does before a screen capture. */
+static int direct_frame_eligible(struct desktop *d)
+{
+    if (!d->damage.count || d->move_damage.count || d->present_damage.count || d->copy_pending ||
+        !d->frame_valid || !d->scanout_valid || d->restore_cpu_frame || d->recovering_fence || d->saver_active) return 0;
+    struct desk_box access[2];
+    if (desk_access_overlay && desk_access_overlay(d,access)) return 0;  /* the Magnifier mirrors the RAM frame */
+    /* The hardware pointer, or a software pointer that no damaged box
+     * touches (its save-under is the RAM frame's). */
+    if (d->hw_cursor_shown && !d->hw_cursor) return 0;
+    if (!d->hw_cursor && (!d->cursor_valid || d->cursor_dirty || d->v3_cursor_hidden || d->v3_cursor_id)) return 0;
+    return 1;
+}
+static int direct_client(struct desktop *d)
+{
+    if (!direct_frame_eligible(d)) return -1;
+    int index=-1;
+    for (unsigned i=0;i<d->damage.count;i++) {
+        struct desk_box b, ignored;
+        if (!desk_intersect(d->damage.boxes[i],(struct desk_box){0,0,(int)d->width,(int)d->height},&b)) continue;
+        int only=client_only(d,b);
+        if (only<0 || (index>=0 && only!=index)) return -1;
+        if (!d->hw_cursor && d->cursor_valid && desk_intersect(b,d->cursor_box,&ignored)) return -1;
+        index=only;
+    }
+    if (index<0) return -1;
+    const struct desk_client *c=&d->clients[index];
+    struct desk_box content=desk_content(c);
+    if (!c->dosbox || c->surface<0 || content.w!=(int)c->info.width || content.h!=(int)c->info.height ||
+        c->gfx_width || c->gfx_height) return -1;
+    return index;
+}
+static int direct_present(struct desktop *d, int index)
+{
+    const struct desk_client *c=&d->clients[index];
+    struct desk_box content=desk_content(c);
+    pixman_region32_t region; region_load(d,&region,&d->damage);
+    int n, result=0; const pixman_box32_t *r=pixman_region32_rectangles(&region,&n);
+    for (int k=0;k<n && !result;k++) {
+        struct desk_box b=box_region(r[k]);
+        struct ciuki_rect rect={b.x-content.x,b.y-content.y,b.x,b.y,(uint32_t)b.w,(uint32_t)b.h};
+        desk_damage_add(&d->direct_stale,b,d->width,d->height);
+        if (d->ops.present(d->display,c->surface,&rect)) { result=-1; break; }
+        uint64_t px=(uint64_t)b.w*b.h;
+        d->frame_stats.damage_px+=px; d->frame_stats.direct_px+=px;
+        d->frame_stats.lfb_bytes+=px*(d->lfb_bytes_per_pixel ? d->lfb_bytes_per_pixel : 4);
+        d->presents++; d->frame_stats.presents++;
+    }
+    pixman_region32_fini(&region);
+    return result;
+}
+/* A frame that is not direct recomposes the stale boxes (and presents them
+ * again) before anything reads the RAM frame there: when it moves or copies
+ * windows, draws a software pointer, shows the Magnifier, or its damage
+ * touches them. Scroll and old-pixel command plans, which compare the RAM
+ * frame with the scanout, are skipped in that frame. */
+static void direct_settle_damage(struct desktop *d)
+{
+    if (!d->direct_stale.count) return;
+    int settle=d->copy_pending || d->move_damage.count || !d->frame_valid || !d->scanout_valid;
+    int soft=!d->hw_cursor && !d->hw_cursor_shown;
+    struct desk_box access[2];
+    if (desk_access_overlay && desk_access_overlay(d,access)) settle=1;
+    for (unsigned i=0;!settle && i<d->direct_stale.count;i++) {
+        struct desk_box ignored;
+        if (soft && ((d->cursor_valid && desk_intersect(d->direct_stale.boxes[i],d->cursor_box,&ignored)) ||
+                     desk_intersect(d->direct_stale.boxes[i],pointer_box(d),&ignored))) settle=1;
+        for (unsigned j=0;!settle && j<d->damage.count;j++) if (desk_intersect(d->direct_stale.boxes[i],d->damage.boxes[j],&ignored)) settle=1;
+        for (unsigned j=0;!settle && j<d->present_damage.count;j++) if (desk_intersect(d->direct_stale.boxes[i],d->present_damage.boxes[j],&ignored)) settle=1;
+    }
+    if (!settle) return;
+    for (unsigned i=0;i<d->direct_stale.count;i++) desk_damage_add(&d->damage,d->direct_stale.boxes[i],d->width,d->height);
+    d->direct_stale.count=0; d->direct_settling=1;
+}
+void desk_direct_settle(struct desktop *d)
+{
+    for (unsigned i=0;i<d->direct_stale.count;i++) scene(d,d->direct_stale.boxes[i]);
+    d->direct_stale.count=0;
+}
 static void latency_record(struct desktop *d, uint64_t latency)
 {
     struct desk_frame_stats *s=&d->stats;
@@ -2389,6 +2492,15 @@ int desk_redraw(struct desktop *d)
         if (!d->hw_cursor && d->hw_cursor_shown) pointer_hide(d);
     }
     s->present_ns+=time_now(d)-begin;
+    /* fx-doswin3 round 3: only an unobscured DOS window changed: present
+     * its damage straight from its surface (direct_present). Otherwise a
+     * frame that touches its older RAM pixels recomposes them first. */
+    int direct=direct_client(d), complete=1;
+    if (direct<0) direct_settle_damage(d);
+    if (direct>=0) {
+        begin=time_now(d);
+        if (direct_present(d,direct)) complete=0;
+    } else {
     /* f2-95: the frame is the region of its damage; nothing outside it is
      * composed or presented. */
     pixman_region32_t move_region, damage_region;
@@ -2408,7 +2520,7 @@ int desk_redraw(struct desktop *d)
     int moving=d->copy_pending && d->frame_valid;
     int engine_copy=moving && d->accel && (d->accel_caps&1u) && d->hw_cursor && d->scanout_valid;
     pixman_region32_t copied;pixman_region32_init(&copied);
-    int scrolling=!moving && scroll_plan(d,&copy,&copied);
+    int scrolling=!moving && !d->direct_settling && scroll_plan(d,&copy,&copied);
     engine_copy|=scrolling;
     if (moving) {
         pixman_region32_fini(&copied);
@@ -2445,7 +2557,6 @@ int desk_redraw(struct desktop *d)
     magnifier_compose(d);   /* G25: after the software pointer, over the composed damage */
     s->composite_ns=time_now(d)-begin;
     begin=time_now(d);
-    int complete=1;
     if (engine_copy && copy_each(d,&copied,&copy,1)) complete=0;
     /* Move exposure excludes the exact scanout copy. General damage (new
      * client pixels, changed captions) must still overwrite that destination. */
@@ -2458,6 +2569,8 @@ int desk_redraw(struct desktop *d)
         if (present_box(d,dirty)) { complete=0; break; }
     }
     pixman_region32_fini(&copied);pixman_region32_fini(&move_region); pixman_region32_fini(&damage_region);
+    }
+    d->direct_settling=0;
     /* Faults hide the hardware pointer (the kernel clears it when it stops
      * or quarantines the engine). Reconstruct with a software cursor before
      * acknowledging either launch or a display-mode change. */
@@ -2525,7 +2638,7 @@ int desk_redraw(struct desktop *d)
     d->stats.accel_fills+=s->accel_fills; d->stats.accel_copies+=s->accel_copies;
     d->stats.accel_writes+=s->accel_writes; d->stats.accel_fallback+=s->accel_fallback;
     d->stats.cache_rows+=s->cache_rows;
-    d->stats.copy_bytes+=s->copy_bytes;d->stats.compare_px+=s->compare_px;
+    d->stats.copy_bytes+=s->copy_bytes;d->stats.compare_px+=s->compare_px;d->stats.direct_px+=s->direct_px;
     d->stats.composite_ns+=s->composite_ns; d->stats.present_ns+=s->present_ns;
     uint64_t slot=frame_begin;
     if (d->next_frame_ns && d->next_frame_ns<=frame_begin)

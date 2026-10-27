@@ -59,6 +59,15 @@ h56, unified, games = memory.h56, memory.unified, memory.games
 # desktop (desktop CPU above its full-screen level per frame). Overridden
 # per run with --present KERNEL,DOSBOX,DESKTOP,FRAME.
 PRESENT_TRIAL = "13900,7000,50000,250"
+# Round 3 (fx-doswin3): an unobscured DOS window's damage presented straight
+# from its surface (compositor.c direct_present): the desktop stage is the
+# upload alone. The host replay of the production pipeline
+# (tests/host/desktop/dos_window_replay.c, dos-window-direct) presents
+# 241,280 pixels in one request for a full Mode Y Fit frame of 400 VM rows:
+# 965,120 bytes at the T23's 134 MB/s upload rate (f4-20) = 7.20 ms, 18.0 us
+# per VM row, against the composed path's 241,280 composed pixels, 512,000
+# upload bytes and 354 requests (50 us per row, trial-derived).
+PRESENT_DIRECT = "13900,7000,18000,250"
 # Guest instructions per simulated ms (GUEST_SLICE), calibrated in round 2:
 # DOOM's attract demo executes about 1.07 M runner instructions per frame;
 # the trial's DOOM window bank (n=4) spent 1,038 ms of guest time for 87
@@ -132,7 +141,8 @@ def build_image():
 
 
 def run(cpu, image, title, mode, seconds, slice_, present, tag, more=(), delay=0, trap_ns=0, invlpg_ns=0,
-        vga_scale=1.0, pf_scale=1.0, share=0.2, model="fixed", xchg_ns=0.0, desktop_share=0.25):
+        vga_scale=1.0, pf_scale=1.0, share=0.2, model="fixed", xchg_ns=0.0, desktop_share=0.25, ack=0,
+        desktop_hz=60.0):
     args, extra, _ = TITLES[title]
     extra = dict(extra, **dict(item.split("=", 1) for item in more))
     env = dict(os.environ, GUEST_KERNEL="unified", ASAN_OPTIONS="detect_leaks=0:halt_on_error=1",
@@ -142,6 +152,7 @@ def run(cpu, image, title, mode, seconds, slice_, present, tag, more=(), delay=0
                GUEST_T23_INVLPG_NS=str(invlpg_ns), GUEST_T23_VGA_SCALE=str(vga_scale),
                GUEST_T23_PF_SCALE=str(pf_scale), GUEST_T23_PRESENT_SHARE=str(share), GUEST_T23_XCHG_NS=str(xchg_ns),
                GUEST_T23_DESKTOP_SHARE=str(desktop_share), GUEST_T23_STRETCH_SPLIT="1",
+               GUEST_T23_ACK=str(ack), GUEST_T23_DESKTOP_HZ=str(desktop_hz),
                **extra)
     if mode == "full":
         env["GUEST_T23_FULLSCREEN"] = "1"
@@ -174,7 +185,7 @@ def rates(log, interval):
            "mode": "%02x" % int(play[b]["mode"]), "vbe": int(play[b]["vbe"])}
     for key in ("t23_ms", "t23_vga_ms", "t23_db_ms", "present_frames", "present_rows", "present_ms", "off_ms",
                 "traps", "lean", "remaps", "db", "vga_io", "ret", "present_wakes", "invlpg", "trap_ms", "invlpg_ms",
-                "shown_frames", "shown_rows"):
+                "shown_frames", "shown_rows", "ack_timeouts"):
         if key in perf[a] and key in perf[b]:
             out[key + "_s"] = (perf[b][key] - perf[a][key]) / span
     return out
@@ -198,7 +209,11 @@ def main():
                    help="fixed: the trial's per-cause prices (deterministic); fx27: host-time scaled")
     p.add_argument("--xchg-ns", type=float, default=XCHG_NS,
                    help="T23 price of one locked PTE exchange per remapped entry (this round's sources)")
-    p.add_argument("--present", default=PRESENT_TRIAL)
+    p.add_argument("--present", default=PRESENT_TRIAL,
+                   help="KERNEL,DOSBOX,DESKTOP,FRAME prices; 'direct' for the round-3 direct present")
+    p.add_argument("--ack", type=int, default=0, choices=(0, 1, 2),
+                   help="the DOS Box's composed acknowledgement (round 3): 1 serial, 2 one frame ahead (production)")
+    p.add_argument("--desktop-hz", type=float, default=60.0, help="desktop frame cadence (0: none)")
     p.add_argument("--tag", default="run")
     p.add_argument("--runner", help="a prebuilt runner (e.g. over earlier sources); default: build this tree's")
     p.add_argument("--env", action="append", default=[], help="extra runner environment NAME=VALUE")
@@ -212,9 +227,10 @@ def main():
     results = {}
     for title in a.games.split(","):
         for mode in a.modes.split(","):
-            code, log = run(cpu, image, title, mode, a.seconds, a.slice, a.present, a.tag, a.env, a.delay, a.trap_ns,
+            present = PRESENT_DIRECT if a.present == "direct" else a.present
+            code, log = run(cpu, image, title, mode, a.seconds, a.slice, present, a.tag, a.env, a.delay, a.trap_ns,
                             a.invlpg_ns, a.vga_scale if a.vga_scale is not None else (VGA_SCALE if a.model == "fx27" else 1.0),
-                            a.pf_scale, a.share, a.model, a.xchg_ns, a.desktop_share)
+                            a.pf_scale, a.share, a.model, a.xchg_ns, a.desktop_share, a.ack, a.desktop_hz)
             r = rates(log, TITLES[title][2])
             ok = code == 0 and "guest runner: PASS" in log
             results[f"{title}/{mode}"] = dict(r or {}, exit=code, runner_pass=ok)

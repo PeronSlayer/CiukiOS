@@ -76,6 +76,20 @@ static uint64_t vga_frame_us(const cvga_state *g)
     if (lines < 262) lines = 449;                 /* unprogrammed or nonsensical: 70 Hz */
     return lines * 1000000u / VGA_LINE_HZ;
 }
+/* fx-doswin3 round 3: how long after a CRTC start-address change only the
+ * displayed page wakes the presenter (dosvm_present_store_wake): twice the
+ * gap since the previous change, at least one refresh, at most
+ * DOSVM_FLIP_HOLD_MS (Windows 9x refreshed a windowed DOS display every
+ * WindowUpdateTime, 50 ms by default). A first or single change holds for
+ * one refresh; fizzles, menus and pause screens that draw into the shown
+ * page without a flip appear after at most that hold. */
+static unsigned flip_hold_ms(uint64_t gap_us, uint64_t period_us)
+{
+    uint64_t hold = gap_us > DOSVM_FLIP_HOLD_MS * 1000u ? DOSVM_FLIP_HOLD_MS * 1000u : 2 * gap_us;
+    if (hold < period_us) hold = period_us;
+    if (hold > DOSVM_FLIP_HOLD_MS * 1000u) hold = DOSVM_FLIP_HOLD_MS * 1000u;
+    return ((uint32_t)hold + 999u) / 1000u;
+}
 uint8_t dosvm_vga_status(struct dosvm *v, uint64_t tick)
 {
     uint64_t now = tick * 1000u;
@@ -184,6 +198,7 @@ int dosvm_vga_port(struct dosvm *v, uint16_t port, unsigned width,
                         uint64_t gap = now - v->video_flip_us;
                         v->video_flip_run = v->video_flip_seen && gap >= period / 2 && gap <= period * 3 / 2 ?
                             v->video_flip_run + (v->video_flip_run < 2) : 0;
+                        v->video_flip_hold_ms = flip_hold_ms(v->video_flip_seen ? gap : 0, period);
                         v->video_flip_us = now; v->video_flip_seen = true;
                     }
                 }

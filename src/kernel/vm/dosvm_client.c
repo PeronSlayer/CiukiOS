@@ -229,7 +229,8 @@ static uint32_t present_events(struct present_request *r)
      * those wake the presenter: each sample then shows a completed frame
      * (T23 trial 5bb73dba, DOOM window bank n=4: 76 samples and 87 flips
      * for 34 changed frames). A guest that stops flipping returns to the
-     * store-driven wake after DOSVM_FLIP_HOLD_MS. */
+     * store-driven wake after its flip hold (twice its last flip gap, one
+     * refresh to DOSVM_FLIP_HOLD_MS; dosvm_vga.c flip_hold_ms). */
     if (!v->fullscreen && !v->fullscreen_hold && deadline_passed(v->present_due_us / 1000u) &&
         (!v->video_presented || (!v->vbe_mode && v->video_geometry.text) || deadline_passed(v->video_due_us / 1000u)) &&
         (b->video_pending || !b->observed || (dosvm_present_store_wake(v, g_ticks) && b->changes != v->vga.changes) ||
@@ -247,11 +248,12 @@ static bool present_ready(void *arg)
      * wait_present measures how long the presenter took to run after it. */
     if ((events & CIUKI_DOSVM_EVENT_VIDEO) && !r->vm->present_ready_tsc)
         r->vm->present_ready_tsc = dosvm_perf_clock();
-    /* fx-doswin3: from this wake until the presenter runs, the focused VM
-     * gives up its scheduling preference (dosvm_task_focus), so the woken
-     * presenter (base 9 above the VM's 7) runs at the next dispatch instead
-     * of behind the VM's eight focused ticks (trial 5bb73dba: WAIT dispatch
-     * 7.7-12.8 ms average, 100 ms maximum, for Wolfenstein 3-D and DOOM). */
+    /* fx-doswin3: from this wake until the presenter runs, the scheduler
+     * may run the woken presenter (base 9 above the VM's 7) ahead of the
+     * focused VM's preference for at most PRESENT_SLICE ticks
+     * (dosvm_task_present, task.c rq_pop) instead of behind the VM's eight
+     * focused ticks (trial 5bb73dba: WAIT dispatch 7.7-12.8 ms average,
+     * 100 ms maximum, for Wolfenstein 3-D and DOOM). */
     if ((events & CIUKI_DOSVM_EVENT_VIDEO) && !r->vm->present_dispatch) {
         r->vm->present_dispatch = true;
         r->vm->present_dispatch_tick = g_ticks;
@@ -266,9 +268,11 @@ static int wait_present(struct binding *b, struct dosvm *v, struct process *p, s
     kwait_set_owner(&v->present_wait, v->task);
     unsigned timeout=c->wait.timeout_ms>33 ? 33 : c->wait.timeout_ms;
     v->present_ready_tsc = 0;
+    v->present_waiter = g_current;
     kwait_wait_until(&v->present_wait, present_ready, &r, deadline_after_ms(timeout));
     kwait_set_owner(&v->present_wait, 0);
     v->present_dispatch = false; /* the presenter runs: the VM's preference returns */
+    v->present_waiter = 0;
     if (present_interrupted(&r)) return -EINTR;
     c->wait.events = present_events(&r);
     uint32_t flags = irq_save();

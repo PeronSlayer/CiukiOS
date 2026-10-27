@@ -1187,6 +1187,20 @@ static int perf_row(void *arg, unsigned y, const void *pixels, unsigned bytes)
  * (window_parity.py); the wake, row and frame counts are the production
  * code's. Not hardware evidence. */
 #define PRESENT_WAKE_US 60.0
+/* fx-doswin3 round 3: GUEST_T23_ACK models the DOS Box's composed
+ * acknowledgement (dosbox.c, at most DOSBOX_ACK_MS = 100 ms of waiting).
+ * 1: after handing a frame to the desktop it converts the next one only once
+ * the desktop has shown it (no overlap of the two stages). 2 (production):
+ * a frame carries the marker when none is outstanding; the DOS Box may
+ * convert one more frame, then waits for the marker's answer, so it is at
+ * most one frame ahead of the desktop. GUEST_T23_DESKTOP_HZ (default 60) is
+ * the desktop's frame cadence (compositor.c: a frame starts at least
+ * DESK_FRAME_NS, 1/60 s, after the previous one started). */
+static unsigned t23_ack;
+static double t23_desktop_slot_us = 1e6 / 60.0;
+static bool ack_wait, pending_ack, desktop_frame_ack;
+static unsigned ack_unmarked;
+static uint64_t ack_since, desktop_next_us, ack_timeouts;
 static double PRESENT_SHARE = 0.20, DESKTOP_SHARE = 0.25;
 static bool t23_present;
 static double t23_present_row_ns, t23_present_frame_ns, t23_desktop_row_ns;
@@ -1235,10 +1249,13 @@ static void t23_present_tick(void)
     struct dosvm *v = gv;
     /* Stage 2: the desktop composes the latest damage it was given. */
     if (desktop_debt_ns > 0) drain(&desktop_debt_ns, DESKTOP_SHARE);
-    if (desktop_debt_ns <= 0 && desktop_pending) {
+    if (desktop_debt_ns <= 0 && desktop_frame_ack) { ack_wait = false; desktop_frame_ack = false; ack_unmarked = 0; }
+    if (desktop_debt_ns <= 0 && desktop_pending && (double)g_ticks * 1000.0 >= (double)desktop_next_us) {
         double ns = t23_present_frame_ns + (double)desktop_pending * t23_desktop_row_ns;
         desktop_debt_ns += ns; present_charged_ns += ns;
         desktop_frames++; desktop_rows += desktop_pending; desktop_pending = 0;
+        desktop_frame_ack = pending_ack; pending_ack = false;
+        desktop_next_us = g_ticks * 1000u + (uint64_t)t23_desktop_slot_us;
     }
     /* Stage 1: the DOS Box loop. */
     if (present_debt_ns > 0) {
@@ -1248,6 +1265,12 @@ static void t23_present_tick(void)
     if (present_handoff) {                        /* DESK_DAMAGE sent: coalesced if busy */
         if (present_handoff > desktop_pending) desktop_pending = present_handoff;
         present_handoff = 0;
+        if (t23_ack && !ack_wait) { pending_ack = ack_wait = true; ack_since = g_ticks; ack_unmarked = 0; }
+        else if (t23_ack) ack_unmarked++;
+    }
+    if (ack_wait && (t23_ack == 1 || ack_unmarked)) {   /* the composed acknowledgement */
+        if (g_ticks - ack_since < 100) return;
+        ack_wait = pending_ack = desktop_frame_ack = false; ack_unmarked = 0; ack_timeouts++;
     }
     if (!present_seen.waiting) {
         if (!present_video_event()) return;
@@ -1635,7 +1658,7 @@ static void play_progress(uint64_t begin)
                "rm=%u cli_cand=%u hits=%u proved=%u pattern=%u control=%u missed=%u unprovable=%u seeds=%u skipped=%u "
                "seed_wanted=%u irq0_lost=%llu irq0_reinjected=%llu frames=%u t23_ms=%.1f t23_pit_ms=%.1f t23_flags_ms=%.1f dac=%u armed=%u ret=%u "
                "t23_vga_ms=%.1f t23_db_ms=%.1f present_frames=%llu present_rows=%llu present_ms=%.1f off_ms=%.1f remaps=%u "
-               "present_wakes=%llu invlpg=%llu trap_ms=%.1f invlpg_ms=%.1f shown_frames=%llu shown_rows=%llu\n",
+               "present_wakes=%llu invlpg=%llu trap_ms=%.1f invlpg_ms=%.1f shown_frames=%llu shown_rows=%llu ack_timeouts=%llu\n",
                (unsigned long long)(g_ticks - begin), (unsigned long long)traps, gv->perf.lean_exits,
                n[DOSVM_COST_PM_FLAGS], n[DOSVM_COST_PM_INT], n[DOSVM_COST_PIT_PIC], n[DOSVM_COST_VGA_IO],
                n[DOSVM_COST_IO], n[DOSVM_COST_DB], n[DOSVM_COST_TIMER],
@@ -1651,7 +1674,7 @@ static void play_progress(uint64_t begin)
                (unsigned long long)present_rows, present_charged_ns / 1e6, t23_off_total_ns / 1e6,
                gv->perf.port_remaps, (unsigned long long)present_wakes, (unsigned long long)invlpg_calls,
                t23_trap_total_ns / 1e6, t23_invlpg_total_ns / 1e6, (unsigned long long)desktop_frames,
-               (unsigned long long)desktop_rows);
+               (unsigned long long)desktop_rows, (unsigned long long)ack_timeouts);
     }
 }
 /* GUEST_PLAY_KEYS="01@12000,1c@20000": a window key (set-1 code, hex) is
@@ -1904,11 +1927,20 @@ int main(int argc, char **argv)
         CHECK(t23_present_delay <= 1000);
         t23_present_row_ns = kernel + dosbox; t23_desktop_row_ns = desktop;
         t23_present_frame_ns = frame * 1000.0;
+        t23_ack = getenv("GUEST_T23_ACK") ? (unsigned)strtoul(getenv("GUEST_T23_ACK"), 0, 10) : 0;
+        CHECK(t23_ack <= 2);
+        if (getenv("GUEST_T23_DESKTOP_HZ")) {
+            double hz = strtod(getenv("GUEST_T23_DESKTOP_HZ"), 0);
+            CHECK(hz >= 0 && hz <= 1000);
+            t23_desktop_slot_us = hz > 0 ? 1e6 / hz : 0;
+        }
         present_surface = calloc((size_t)DOSVM_VIDEO_WIDTH * DOSVM_VIDEO_HEIGHT, 4);
         CHECK(present_surface);
         printf("T23 present model: DOS Box %.0f ns per written row, desktop %.0f ns per row and %.0f us per frame, "
-               "%.0f us per wake, dispatch %u ms, shares %.0f/%.0f %%%s\n", t23_present_row_ns, t23_desktop_row_ns, frame,
+               "%.0f us per wake, dispatch %u ms, shares %.0f/%.0f %%, desktop %.0f Hz, composed ack %s%s\n", t23_present_row_ns, t23_desktop_row_ns, frame,
                PRESENT_WAKE_US, t23_present_delay, PRESENT_SHARE * 100, DESKTOP_SHARE * 100,
+               t23_desktop_slot_us > 0 ? 1e6 / t23_desktop_slot_us : 0.0,
+               t23_ack == 2 ? "one frame ahead" : t23_ack ? "serial" : "off",
                t23_fullscreen ? " (full screen: not charged)" : "");
     }
     if (guest_perf) {

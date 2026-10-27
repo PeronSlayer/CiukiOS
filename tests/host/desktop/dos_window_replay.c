@@ -10,12 +10,20 @@
 static struct desktop d;
 static uint32_t *scanout;
 static uint64_t uploaded, copied, filled, requests;
+static const uint32_t *client_surface;     /* fx-doswin3 round 3: the DOS window's own surface (fd 20) */
+static uint64_t direct_uploads;
 static int upload(int display,int surface,const struct ciuki_rect *r)
 {
-    (void)display;(void)surface;
+    (void)display;
+    /* The kernel's surface present: from the desktop's frame, or straight
+     * from a client surface (640 pixels a row) for a direct present. */
+    int direct=surface==20;
+    const uint32_t *source=direct ? client_surface : d.pixels; unsigned stride=direct ? 640u : d.width;
+    assert(!direct || (r->src_x+r->width<=640 && r->src_y+r->height<=480));
     for (unsigned y=0;y<r->height;y++)memcpy(scanout+(r->dst_y+y)*d.width+r->dst_x,
-        d.pixels+(r->src_y+y)*d.width+r->src_x,r->width*4);
+        source+(r->src_y+y)*stride+r->src_x,r->width*4);
     uploaded+=(uint64_t)r->width*r->height;requests++;
+    if (direct) direct_uploads+=(uint64_t)r->width*r->height;
     return 0;
 }
 static int engine(int display,const struct ciuki_accel_request *q)
@@ -44,6 +52,25 @@ static void check_frame(void)
     uint32_t *reference=calloc((size_t)d.width*d.height,4);assert(reference);
     uint32_t *pixels=d.pixels;d.pixels=reference;
     desk_composite(&d,(struct desk_box){0,0,(int)d.width,(int)d.height});d.pixels=pixels;
+    assert(!memcmp(reference,scanout,(size_t)d.width*d.height*4));
+    /* A direct present leaves older pixels in the RAM frame inside its
+     * stale boxes only; everything else is the composed frame. */
+    for (unsigned y=0;y<d.height;y++) for (unsigned x=0;x<d.width;x++) {
+        int stale=0;
+        for (unsigned i=0;i<d.direct_stale.count && !stale;i++) {
+            struct desk_box b=d.direct_stale.boxes[i];
+            stale=(int)x>=b.x && (int)x<b.x+b.w && (int)y>=b.y && (int)y<b.y+b.h;
+        }
+        if (!stale) assert(pixels[y*d.width+x]==reference[y*d.width+x]);
+    }
+    free(reference);
+}
+static void check_settled(void)
+{
+    desk_direct_settle(&d); assert(!d.direct_stale.count);
+    uint32_t *reference=calloc((size_t)d.width*d.height,4);assert(reference);
+    uint32_t *pixels=d.pixels;d.pixels=reference;
+    desk_composite(&d,(struct desk_box){0,0,(int)d.width,(int)d.height});d.pixels=pixels;
     assert(!memcmp(reference,pixels,(size_t)d.width*d.height*4));
     assert(!memcmp(reference,scanout,(size_t)d.width*d.height*4));
     free(reference);
@@ -63,6 +90,7 @@ static void replay(unsigned title,unsigned zoom)
     desk_put32(m.data+4,640);desk_put32(m.data+8,480);desk_put32(m.data+12,4);
     memcpy(m.data+16,"Test",4);desk_receive(&d,client,&m);
     desk_move(&d,client,100,100);assert(d.clients[client].window);
+    client_surface=d.clients[client].pixels;
     struct dosbox_window w={0};dosbox_profile_default(&w.profile,"TEST.EXE");w.profile.zoom=zoom;
     uint32_t *guest=calloc(640*480,4);assert(guest);
     struct du_canvas canvas={.pixels=(uint32_t *)d.clients[client].pixels,.width=640,.height=480,
@@ -110,8 +138,140 @@ static void replay(unsigned title,unsigned zoom)
     desk_render_release(&d);free(d.sh.icons);free(d.sh.wall);free(d.pixels);free(scanout);
     assert(!fake_live());
 }
+/* fx-doswin3 round 3: the same production pipeline for a launched DOS
+ * window (dosbox=1). Unobscured, its damage is presented straight from its
+ * surface (one request per damaged run of rows, nothing composed); a
+ * window over it, a scroll or a capture recomposes the older RAM pixels
+ * first. The scanout always equals a full composition. The scene-less
+ * GFX_FRAME after a frame's DAMAGE is answered once that frame is shown. */
+static void frame_pixels(uint32_t *guest, unsigned frame)
+{
+    for (unsigned y=0;y<480;y++)for (unsigned x=0;x<640;x++)
+        guest[y*640+x]=(y<40 || y>=440) ? 0 : (((x/2+(y/2)*7)^(frame*29))&255u)*0x010101u;
+}
+static void damage_frame(struct dosbox_window *w, struct du_canvas *canvas, uint32_t *guest, int client, unsigned frame)
+{
+    uint32_t source[15]={0},damage[15]={0};
+    for (unsigned y=40;y<440;y++)source[y/32]|=1u<<(y%32);
+    frame_pixels(guest,frame);
+    db_paint_rows(w,canvas,guest,source,damage);
+    struct desk_box content=desk_content(&d.clients[client]);
+    for (unsigned y=0;y<480;) {
+        if (!(damage[y/32]&(1u<<(y%32)))) { y++;continue; }
+        unsigned first=y++;
+        while(y<480 && (damage[y/32]&(1u<<(y%32))))y++;
+        desk_client_damage(&d,client,(struct desk_box){content.x,content.y+(int)first,640,(int)(y-first)});
+    }
+}
+static int window_client(int fd,int surface,uint32_t w,uint32_t h,uint32_t colour)
+{
+    fake_channel(fd);fake_surface(surface,w,h,colour);
+    int client=desk_add_client(&d,fd);assert(client>=0);
+    struct ciuki_message m;desk_message(&m,DESK_HELLO,4);m.sender_pid=(uint32_t)(42+fd);
+    desk_receive(&d,client,&m);
+    desk_message(&m,DESK_CREATE_WINDOW,20);m.sender_pid=(uint32_t)(42+fd);m.fd_count=1;m.fds[0]=surface;
+    desk_put32(m.data+4,w);desk_put32(m.data+8,h);desk_put32(m.data+12,4);
+    memcpy(m.data+16,"Test",4);desk_receive(&d,client,&m);
+    assert(d.clients[client].window);
+    return client;
+}
+static int presented_reply(int client,uint32_t serial,int32_t *result)
+{
+    struct desk_client *c=&d.clients[client];
+    for (unsigned k=0;k<c->tx_count;k++) {
+        const struct ciuki_message *m=&c->tx[(c->tx_head+k)%DESK_TX_MAX];
+        struct desk_packet p;
+        if (m->data[1]==DESK_GFX_PRESENTED && desk_parse(m,0,NULL,&p) && p.serial==serial) { *result=p.result; return 1; }
+    }
+    return 0;
+}
+static void composed_frame(int client,uint32_t serial)
+{
+    struct ciuki_message m;desk_message(&m,DESK_GFX_FRAME,64);m.sender_pid=(uint32_t)(42+10);
+    desk_put32(m.data+4,serial);desk_receive(&d,client,&m);
+}
+static void direct_replay(void)
+{
+    fake_reset();struct desk_ops ops=fake_ops;ops.present=upload;
+    desk_init(&d,&ops,1024,768);d.display=7;
+    d.pixels=calloc((size_t)d.width*d.height,4);
+    scanout=calloc((size_t)d.width*d.height,4);assert(d.pixels && scanout);
+    d.accel=engine;desk_accel_reset(&d,55);
+    int client=window_client(10,20,640,480,4);
+    d.clients[client].dosbox=1;              /* desktop.c: a launched "dosbox" */
+    desk_move(&d,client,100,100);
+    client_surface=d.clients[client].pixels;
+    struct dosbox_window w={0};dosbox_profile_default(&w.profile,"TEST.EXE");w.profile.zoom=0;
+    uint32_t *guest=calloc(640*480,4);assert(guest);
+    struct du_canvas canvas={.pixels=(uint32_t *)d.clients[client].pixels,.width=640,.height=480,.clip={0,0,640,480}};
+    db_paint(&w,&canvas,guest);assert(!desk_redraw(&d));check_frame();
+    /* 1. Unobscured: presented straight from the surface. */
+    uint64_t direct_requests=0, direct_px=0;
+    for (unsigned frame=1;frame<=4;frame++) {
+        damage_frame(&w,&canvas,guest,client,frame);
+        uint64_t calls=requests; direct_uploads=0;
+        if (getenv("DIRECT_DEBUG")) fprintf(stderr,"damage=%u move=%u present=%u copy=%d frame=%d scanout=%d restore=%d hw=%d shown=%d valid=%d dirty=%d box=%d,%d,%d,%d\n",
+            d.damage.count,d.move_damage.count,d.present_damage.count,d.copy_pending,d.frame_valid,d.scanout_valid,d.restore_cpu_frame,
+            d.hw_cursor,d.hw_cursor_shown,d.cursor_valid,d.cursor_dirty,d.damage.boxes[0].x,d.damage.boxes[0].y,d.damage.boxes[0].w,d.damage.boxes[0].h);
+        assert(!desk_redraw(&d));check_frame();
+        assert(!d.frame_stats.scene_px && d.frame_stats.direct_px==direct_uploads && direct_uploads>=300u*640u);
+        direct_requests+=requests-calls; direct_px+=direct_uploads;
+        assert(d.direct_stale.count);
+    }
+    assert(direct_requests==4);              /* one damaged run of rows a frame (Fit: 377) */
+    /* 2. The composed acknowledgement: answered after the frame is shown. */
+    damage_frame(&w,&canvas,guest,client,5);
+    composed_frame(client,7); int32_t result=1;
+    assert(d.clients[client].gfx_pending && !presented_reply(client,7,&result));
+    assert(!desk_redraw(&d));check_frame();
+    assert(!d.clients[client].gfx_pending && presented_reply(client,7,&result) && result==0);
+    desk_flush(&d,client);
+    composed_frame(client,8);                /* nothing pending: answered at once */
+    assert(presented_reply(client,8,&result) && result==-EAGAIN);
+    desk_flush(&d,client);
+    /* 3. A window over part of it: composed, the older pixels first. */
+    int other=window_client(11,21,200,150,0x00ff00u);
+    desk_move(&d,other,300,250);
+    assert(!desk_redraw(&d));check_frame();
+    damage_frame(&w,&canvas,guest,client,6);
+    direct_uploads=0;
+    assert(!desk_redraw(&d));check_frame();
+    assert(!direct_uploads && d.frame_stats.scene_px && !d.direct_stale.count);
+    check_settled();
+    /* Closed again: direct presents resume. */
+    desk_drop_client(&d,other);
+    assert(!desk_redraw(&d));check_frame();
+    damage_frame(&w,&canvas,guest,client,7);
+    direct_uploads=0; assert(!desk_redraw(&d));check_frame(); assert(direct_uploads==direct_px/4);
+    /* 4. Moved after direct frames: the move copies and repaints exactly
+     * (the older RAM pixels are recomposed first). */
+    damage_frame(&w,&canvas,guest,client,9);
+    assert(!desk_redraw(&d));check_frame(); assert(d.direct_stale.count);
+    desk_move(&d,client,140,120);
+    assert(!desk_redraw(&d));check_frame(); assert(!d.direct_stale.count);
+    check_settled();
+    damage_frame(&w,&canvas,guest,client,10);
+    direct_uploads=0; assert(!desk_redraw(&d));check_frame(); assert(direct_uploads);
+    /* 5. A capture (Print Screen) composes the older pixels first. */
+    check_settled();
+    damage_frame(&w,&canvas,guest,client,8);
+    assert(!desk_redraw(&d));check_frame();
+    /* 6. A non-DOS client may not use the scene-less form. */
+    int plain=window_client(12,22,100,80,0x0000ffu);
+    desk_move(&d,plain,700,500);
+    struct ciuki_message m;desk_message(&m,DESK_GFX_FRAME,64);m.sender_pid=42+12;
+    desk_put32(m.data+4,9);desk_receive(&d,plain,&m);
+    assert(presented_reply(plain,9,&result) && result==-EPERM);
+    assert(!desk_redraw(&d));check_frame();check_settled();
+    printf("dos-window-direct frames=4 requests_per_frame=%llu direct_px_per_frame=%llu scene_px=0 ack=presented/eagain/eperm overlap=composed move=exact capture=settled\n",
+           (unsigned long long)(direct_requests/4),(unsigned long long)(direct_px/4));
+    free(guest);for(int i=0;i<DESK_CLIENTS;i++)desk_drop_client(&d,i);
+    desk_render_release(&d);free(d.sh.icons);free(d.sh.wall);free(d.pixels);free(scanout);
+    assert(!fake_live());
+}
 int main(void)
 {
+    direct_replay();
     for(unsigned title=0;title<3;title++)for(unsigned zoom=0;zoom<3;zoom++)replay(title,zoom);
     puts("PASS fx-doswin3 viewport/compositor/COPY replay, full RAM and scanout oracle, unchanged frames have zero requests");
     return 0;

@@ -122,7 +122,10 @@ int as_seal_borrowed(struct aspace *, uint32_t va, uint32_t phys);
 /* Replace 1..32 already-present pages within one table; no allocation or
  * ownership change. Caller excludes guest execution/interrupts. Return old
  * D/A bits as page masks, clear D, and INVLPG each changed entry of the
- * active AS (fx-27: never a whole-TLB CR3 reload).
+ * active AS (fx-27: never a whole-TLB CR3 reload) whose replaced value had
+ * A or D set (fx-doswin3; Intel SDM Vol. 3A 5.10.2.3, 5.10.4.3). Valid only
+ * on one CPU with CR4.PGE and CR4.PCIDE clear, with every A 1->0 writer
+ * invalidating while its space is current (vmm.c as_replace_pages).
  * frames == NULL keeps frames/permissions (dirty collection only). */
 int as_replace_pages(struct aspace *, uint32_t va, const uint32_t *frames,
                      unsigned count, uint32_t flags, uint32_t *dirty, uint32_t *accessed);
