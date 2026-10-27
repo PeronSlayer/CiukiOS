@@ -547,15 +547,16 @@ fi
 
 # F1 firmware queue: fake-time scheduler and the existing production VM fakes.
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
-    -I "$root/src/kernel/include" "$root/tests/host/fwqueue_test.c" -o "$out/fwqueue_test"
+    -I "$root/src/kernel/include" "$root/tests/host/fwqueue_test.c" \
+    "$root/src/kernel/core/apm.c" -o "$out/fwqueue_test"
 "$out/fwqueue_test"
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -DFWQUEUE_FIRMWARE_TEST -I "$root/src/kernel/include" \
-    "$root/tests/host/fwqueue_test.c" -o "$out/fwqueue_firmware_test"
+    "$root/tests/host/fwqueue_test.c" "$root/src/kernel/core/apm.c" -o "$out/fwqueue_firmware_test"
 "$out/fwqueue_firmware_test"
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -DFWQUEUE_SERVICE_TEST -I "$root/src/kernel/include" \
-    "$root/tests/host/fwqueue_test.c" -o "$out/fwqueue_service_test"
+    "$root/tests/host/fwqueue_test.c" "$root/src/kernel/core/apm.c" -o "$out/fwqueue_service_test"
 "$out/fwqueue_service_test"
 
 # F2 production parser, mappings, wait queues, stack and lifecycle with fake
