@@ -52,6 +52,22 @@ G32 desktop logon and the interim uid-1000 desktop are unchanged.
   missing directories created; barriers commit the base and every changed
   directory; rename never replaces.
 
+- `firstboot.c` (sec-user-02) runs around every open in `server.c`.
+  `acct_firstboot_prepare`, under the lease and before open, protects a G32
+  upgrade: when `/System/Settings/users.dat` exists and no v2 evidence does, it
+  copies users.dat/users.new/users.lock to SYSTEM-only `migration.*` evidence,
+  writes `migration.marker`, stages an origin-3 UNPROVISIONED `bootstrap.state`
+  bound to the evidence digest and removes the shared originals; every step is
+  restartable from the marker, and a G32 file beside v2 evidence fails closed.
+  `acct_firstboot_promote`, after an open that found no published database,
+  promotes an origin 1/2 `provision.seed` (staged by the image builder or
+  Setup) through `acct_service_bootstrap` and then removes the residual seed,
+  or hands the origin-3 evidence to `acct_enrollment_source`. It never creates
+  a seed, password or account. `firstboot_posix.c` binds the G32 directory.
+  A first boot cut after the allocation watermark and before the account
+  intent resumes with the same SID intent at the next generation (`store.c`,
+  marked sec-user-02); any other prior reservation stays closed.
+
 `tests/host/security/test_account_adapter.py` runs this binding against the
 kernel host harness (call 101 through `proc_syscall`, kernel channels/sessions,
 LOGON and LOGON_UI as registered roles, a LOGON acknowledgment responder).

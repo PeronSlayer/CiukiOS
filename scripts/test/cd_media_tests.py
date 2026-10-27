@@ -92,10 +92,16 @@ PAYLOAD = {
     "/WINDOWS/SYSTEM/soundfonts.json": b"{}\n",
     "/Documents/empty.txt": b"",
     "/Documents/A long Mixed Case name.txt": b"long name\n",
+    # sec-user-02: the ready image's seed and state (excluded from the CD).
+    "/System/Security/provision.seed": bi.ready_seed(),
+    "/System/Security/bootstrap.state": bi.bootstrap_state(1, 2048 << 32 | 0x1234ABCD, hashlib.sha256(bi.ready_seed()).digest()),
+    "/System/Services/accounts": b"\x7fELF placeholder account service for the host fixture\n",
 }
 DIRECTORIES = ["/Documents", "/Documents/Desktop", "/Games", "/Program Files", "/Program Files/Common Files",
                "/Programs", "/System", "/System/Win32", "/System/licenses", "/System/dos", "/System/sdk",
-               "/System/sdk/include", "/WINDOWS", "/WINDOWS/FONTS", "/WINDOWS/SYSTEM"]
+               "/System/sdk/include", "/WINDOWS", "/WINDOWS/FONTS", "/WINDOWS/SYSTEM", "/System/Security", "/System/Services"]
+PROVISIONING = {"kind": "ready", "origin": 1, "seed": "/System/Security/provision.seed", "state": "/System/Security/bootstrap.state"}
+CD_PAYLOAD = {p: d for p, d in PAYLOAD.items() if not p.casefold().startswith("/system/security/")}  # what Setup media carry
 
 
 def assemble(work):
@@ -143,7 +149,8 @@ def make_disk_image(work):
                 "image": "ciukios.img", "image_sha256": sha(image.read_bytes()), "kernel_sha256": kernel,
                 "kernel_full_sha256": full_kernel,
                 "build_epoch": EPOCH, "payloads": [{"path": p, "sha256": sha(d), "size": len(d)} for p, d in sorted(PAYLOAD.items())],
-                "games": {"packages": [{"name": n} for n in ("wolf3d-shareware", "doom-shareware", "quake-shareware", "war2-demo", "duke3d-shareware")]}}
+                "games": {"packages": [{"name": n} for n in ("wolf3d-shareware", "doom-shareware", "quake-shareware", "war2-demo", "duke3d-shareware")]},
+                "provisioning": PROVISIONING}
     (directory / "build-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     (directory / "build-clock.json").write_text(json.dumps({"utc_epoch": EPOCH, "kernel_sha256": full_kernel, "version": version}) + "\n")
     volume.unlink()
@@ -233,7 +240,7 @@ class EligibilityTests(unittest.TestCase):
     def setUp(self):
         self.config = json.loads(cd.COMPONENTS.read_text())
         self.games = ["wolf3d-shareware", "doom-shareware", "quake-shareware", "war2-demo", "duke3d-shareware"]
-        self.paths = sorted({*PAYLOAD, "/Programs/setup", "/system/RELEASE.JSON"})
+        self.paths = sorted({*CD_PAYLOAD, "/Programs/setup", "/system/RELEASE.JSON"})
         self.assertIn("/Programs/hwreport", self.paths)
 
     def test_every_fixture_path_has_a_row(self):
@@ -352,6 +359,19 @@ class MediaTests(unittest.TestCase):
         cls.boot = cls.a / "ciukios-setup-boot.img"
         cls.iso = cls.a / "ciukios-setup.iso"
 
+    def test_no_account_state_on_setup_media(self):
+        """sec-user-02 (contract 5.2): the ready seed/state stay off the CD; the
+        sample answer file carries no password key."""
+        files = [r["path"] for r in self.manifest["boot_image"]["files"]]
+        self.assertFalse([p for p in files if p.casefold().startswith("/system/security/")])
+        self.assertIn("/System/Services/accounts", files)
+        listing = subprocess.run(["mdir", "-a", "-b", "-s", "-i", f"{self.boot}@@{2048 * 512}", "::/System"],
+                                 capture_output=True, text=True, env=env()).stdout.casefold()
+        self.assertNotIn("provision.seed", listing)
+        self.assertNotIn("bootstrap.state", listing)
+        self.assertIn("Version=2", cd.ANSWER_SAMPLE)
+        self.assertFalse(re.search(r"(?im)^\s*\w*password\s*=", cd.ANSWER_SAMPLE))
+
     def read(self, path, offset, size):
         with path.open("rb") as f:
             f.seek(offset)
@@ -435,7 +455,7 @@ class MediaTests(unittest.TestCase):
         self.assertEqual(release["git_revision"], disk["git_revision"])
         self.assertEqual(release["version"], disk["version"])
         self.assertEqual(release["boot_options"], cfg.decode())
-        self.assertEqual(release["payload_files"], len(PAYLOAD) + 2)          # + setup, RELEASE.JSON
+        self.assertEqual(release["payload_files"], len(CD_PAYLOAD) + 2)       # + setup, RELEASE.JSON
         self.assertEqual(release["content_digest"], self.manifest["content_digest"])
         boot = self.manifest["boot_image"]
         self.assertEqual(boot["boot_cfg_template"].encode("ascii"), PAYLOAD["/system/BOOT.CFG"])
@@ -444,7 +464,7 @@ class MediaTests(unittest.TestCase):
         self.assertTrue(all(r["attributes"] & 16 for r in boot["directories"]))
         self.assertTrue(all(isinstance(r["attributes"], int) for r in boot["files"]))
         records = {r["path"]: r for r in boot["files"]}
-        for path, data in PAYLOAD.items():
+        for path, data in CD_PAYLOAD.items():
             if path == "/system/BOOT.CFG":
                 continue
             self.assertEqual(records[path]["sha256"], sha(data))
@@ -559,7 +579,7 @@ class MediaTests(unittest.TestCase):
                 self.assertEqual(sorted(archive.namelist()), ["ciukios/LICENSE", "ciukios/Makefile", "ciukios/VERSION"])
                 self.assertEqual(archive.read("ciukios/Makefile"), (ROOT / "Makefile").read_bytes())
             sample = (out / "SETUPINF.TXT").read_text()
-            self.assertIn("[Setup]\nVersion=1\n", sample)
+            self.assertIn("[Setup]\nVersion=2\n", sample)   # sec-user-02: schema 2, no password keys
             copy_ = json.loads((out / "CDMANIFE.JSN").read_text())
             self.assertEqual(copy_["boot_image"]["sha256"], self.manifest["boot_image"]["sha256"])
             self.assertNotIn("iso", copy_)

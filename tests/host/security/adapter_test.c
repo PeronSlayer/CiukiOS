@@ -338,8 +338,11 @@ static void test_lease_and_gate(void)
     CHECK(!acct_srv.kernel.safe_mode);
     struct acct_service other;
     CHECK(acct_service_open(&other,&acct_srv.tables,1)==-EBUSY);
+    /* sec-user-02: the server's first-boot adapter promoted the staged seed
+     * during open; a second explicit bootstrap is refused. */
     struct acct_db seed; fake_seed(&seed,1); uint8_t bytes[ACCT_FILE_MAX]; size_t n;
-    CHECK(!acct_encode(&seed,1,bytes,sizeof(bytes),&n)); CHECK(!acct_service_bootstrap(&acct_srv.service,bytes,n,ACCT_READY));
+    CHECK(acct_srv.firstboot_result==ACCT_FIRSTBOOT_PROMOTED);
+    CHECK(!acct_encode(&seed,1,bytes,sizeof(bytes),&n)); CHECK(acct_service_bootstrap(&acct_srv.service,bytes,n,ACCT_READY)==-EPERM);
     CHECK(acct_srv.service.available && acct_srv.service.db.count==3);
     k=&acct_srv.service.store.kernel;
     uint32_t lg=9,ag=9; CHECK(!k->role_generations(k->ctx,&lg,&ag) && lg==1 && ag==1);

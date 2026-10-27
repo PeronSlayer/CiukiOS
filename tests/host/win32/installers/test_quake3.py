@@ -270,15 +270,17 @@ class Quake3InstallerTests(unittest.TestCase):
         shutil.rmtree(root, ignore_errors=True)
         service = host_services.Services(root, library, program)
         service.request_timeout = 600
-        folder = root / 'C/Documents/Desktop/Quake III Arena Demo'
+        # sec-user-02: the image ships the installer in the protected store
+        # (scripts/q3a_demo.py); the desktop shortcut uses it as working directory.
+        folder = root / 'C/Programs/Installers/Quake III Arena Demo'
         folder.mkdir(parents=True)
         done = subprocess.run(['cp', '--reflink=auto', '--', str(INSTALLER), str(folder)])
         self.assertEqual(done.returncode, 0)
-        image = 'C:\\Documents\\Desktop\\Quake III Arena Demo\\Q3ADemo.exe'
+        image = 'C:\\Programs\\Installers\\Quake III Arena Demo\\Q3ADemo.exe'
         began = time.monotonic()
         child = service.start_adapter(['game-exec', image, f'"{image}" +set ciuki_installer 4000 +set ciuki_installer_max 8 '
                                        '+set ciuki_installer_keys .y +set ciuki_installer_untitled 1'],
-                                      'Q3ADemo', cwd='C:\\Documents\\Desktop\\Quake III Arena Demo')
+                                      'Q3ADemo', cwd='C:\\Programs\\Installers\\Quake III Arena Demo')
         code, output = child.finish(600)
         seconds = time.monotonic() - began
         (OUT / 'installer.log').write_text(output)

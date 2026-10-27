@@ -2,6 +2,10 @@
 #include "../../../apps/setup/setup.h"
 #include "../../../sdk/libsetup/fake/fake.h"
 #include "../../../apps/hwreport/textframe.h"
+#include "../../../apps/accounts/accounts.h"
+#include "../../../apps/accounts/production.h"
+#include <ciuki/sha256.h>
+#include <sys/stat.h>
 #include <assert.h>
 #include <errno.h>
 #include <stdio.h>
@@ -18,7 +22,7 @@ static struct st_app a;
 static struct du_ui ui;
 static uint32_t pixels[ST_W*ST_H], portrait[256*256];
 static const char *folder;
-static const char valid[]="[Setup]\nVersion=1\nAcceptLicences=yes\nEraseDisk=yes\nDisk=auto\nReinstall=no\nComponents=dos,windows,netsurf,games,devtools,soundfont,sources\nUserName=Ciuki\nComputerName=CIUKI-PC\nKeyboard=us\nTimeZone=+01:00\nClock=local\nNetwork=dhcp\nIPX=yes\nRestart=wait\n";
+static const char valid[]="[Setup]\nVersion=2\nAcceptLicences=yes\nEraseDisk=yes\nDisk=auto\nReinstall=no\nComponents=dos,windows,netsurf,games,devtools,soundfont,sources\nUserName=Ciuki\nComputerName=CIUKI-PC\nKeyboard=us\nTimeZone=+01:00\nClock=local\nNetwork=dhcp\nIPX=yes\nRestart=wait\n";
 struct fixture {
     struct st_disk disks[4]; int disks_n;
     struct st_volume volumes[4]; int volumes_n;
@@ -33,6 +37,8 @@ struct fixture {
     /* report_app fake: result and reason to return, the text it produces, calls. */
     int report_result, no_report_hook; unsigned report_calls; const char *report_reason, *report_text;
     char records[8192], written[1024], last_path[128], first_path[128];
+    /* sec-user-02: entropy failures, the repair store directory per letter. */
+    int entropy_fail; unsigned entropy_calls; char repair_root[512]; char repair_letter;
 } f;
 static void tap(unsigned code){st_key(&a,code,1);st_key(&a,code,0);}
 static uint64_t mono(void *c){return ((struct fixture *)c)->now;}
@@ -79,6 +85,9 @@ static int power_status(void *c,struct ciuki_power_status *s){
     s->provider=CIUKI_POWER_PROVIDER_ACPI;s->shutdown_requests=f.power_requests;return 0;
 }
 static char letter(void *c){(void)c;return 'E';}
+static int entropy(void *c,void *out,size_t n){(void)c;f.entropy_calls++;if(f.entropy_fail)return -EAGAIN;for(size_t i=0;i<n;i++)((uint8_t *)out)[i]=(uint8_t)(f.entropy_calls*31u+i*7u+1u);return 0;}
+static struct acct_posix_io repair_posix;
+static int repair_io(void *c,char l,struct acct_io *out){(void)c;if(!f.repair_root[0]||l!=f.repair_letter)return -ENOENT;return acct_io_posix(&repair_posix,f.repair_root,out);}
 static void frame(const char *name){
     st_render(&a);char path[1024];snprintf(path,sizeof(path),"%s/%s.frame",folder,name);
     FILE *fp=fopen(path,"wb");assert(fp);assert(fwrite(pixels,4,ST_W*ST_H,fp)==ST_W*ST_H);assert(!fclose(fp));
@@ -135,7 +144,7 @@ static void fixture(void){
     setup_fake.entered=entered;
 }
 static void init(void){
-    struct st_host h={.ctx=&f,.monotonic=mono,.realtime=rtc,.input=input,.idle=idle,.present=present,.devices=dev,.memory=mem,.display=display,.framebuffer=fb,.disks=disks,.volumes=volumes,.cd=cd,.catalogue=sizes,.release=release,.read_file=read_file,.write_file=write_file,.make_dir=make_dir,.list_dir=list,.report_app=f.no_report_hook?NULL:report_app,.record=record,.eject=eject,.media_present=media,.reboot=reboot,.power_off=power_off,.power_status=power_status,.dest_letter=letter,.portrait=portrait};
+    struct st_host h={.ctx=&f,.monotonic=mono,.realtime=rtc,.input=input,.idle=idle,.present=present,.devices=dev,.memory=mem,.display=display,.framebuffer=fb,.disks=disks,.volumes=volumes,.cd=cd,.catalogue=sizes,.release=release,.read_file=read_file,.write_file=write_file,.make_dir=make_dir,.list_dir=list,.report_app=f.no_report_hook?NULL:report_app,.record=record,.eject=eject,.media_present=media,.reboot=reboot,.power_off=power_off,.power_status=power_status,.dest_letter=letter,.portrait=portrait,.entropy=entropy,.repair_io=repair_io};
     du_init(&ui,pixels,ST_W,ST_H);ui.focused_window=1;assert(!st_init(&a,&ui,&h));
 }
 static void no_writes(void){assert(!setup_fake.execute_calls&&!setup_fake.mutations&&!f.writes);}
@@ -145,6 +154,17 @@ static void type(const char *s){
     for(;*s;s++){const char *p=strchr(keys,*s);unsigned k=p?0x10+(unsigned)(p-keys):0;
         if(!k&&(p=strchr(keys2,*s)))k=0x1e + (unsigned)(p-keys2);
         if(!k&&(p=strchr(keys3,*s)))k=0x2c+(unsigned)(p-keys3);assert(k);tap(k);}
+}
+/* sec-user-02: the Passwords page, typed through the masked fields. */
+static int all_zero(const void *p,size_t n){const uint8_t *b=p;for(size_t i=0;i<n;i++)if(b[i])return 0;return 1;}
+static void passwords(const char *user,const char *recovery){
+    assert(a.page==ST_PAGE_ACCOUNT&&!a.acct.seed_ready&&!a.answers.account_seed);
+    focus(ST_ID_SECRET);type(user);tap(DU_KEY_TAB);type(user);tap(DU_KEY_TAB);type(recovery);tap(DU_KEY_TAB);type(recovery);
+    assert(!strcmp(a.acct.secret[0],user)&&!strcmp(a.acct.secret[3],recovery));
+    tap(DU_KEY_F10);
+    assert(all_zero(a.acct.secret,sizeof(a.acct.secret)));
+    if(a.page==ST_PAGE_NETWORK){assert(a.acct.seed_ready&&a.answers.account_seed==a.acct.seed&&a.answers.account_seed_length==CIUKI_PROVISION_SEED_BYTES);
+        assert(!strstr(f.records,user)&&!strstr(f.records,recovery));}
 }
 static void summary(void){
     tap(DU_KEY_F10);assert(a.page==ST_PAGE_LICENCE);no_writes();
@@ -164,15 +184,26 @@ static void summary(void){
     focus(ST_ID_TZ);tap(DU_KEY_DOWN);assert(a.tz_chosen&&a.tz==st_zone_find("Europe/Rome")+1);tap(DU_KEY_UP);
     focus(ST_ID_KBD);tap(DU_KEY_DOWN);assert(a.tz==st_zone_find("Europe/Rome"));tap(DU_KEY_UP);
     focus(ST_ID_USER);
-    type("ciuki");tap(DU_KEY_TAB);type("ciukipc");tap(DU_KEY_F10);assert(a.page==ST_PAGE_NETWORK);no_writes();
+    type("ciuki");tap(DU_KEY_TAB);type("ciukipc");tap(DU_KEY_F10);assert(a.page==ST_PAGE_ACCOUNT);no_writes();
+    passwords("ciukiciuki","rescuedog");assert(a.page==ST_PAGE_NETWORK);no_writes();
     assert(!strcmp(a.answers.tz_zone,"Europe/Rome")&&a.answers.tz_minutes==60&&!strcmp(a.answers.keyboard,"it"));
     tap(DU_KEY_F10);assert(a.page==ST_PAGE_SUMMARY&&a.plan_ok);assert(setup_fake.prepare_calls==1);no_writes();frame("summary");
+    assert(a.plan.answers.account_seed==a.acct.seed);
+    int shown=0;for(unsigned i=0;i<a.view.count;i++)if(strstr(a.view.lines[i].text,"Password set"))shown=1;assert(shown);
 }
 static void parser(void){
     struct setup_answers ans;struct setup_inf_status st;
-    assert(!setup_inf_parse(valid,strlen(valid),&ans,&st));assert(!setup_inf_complete(&ans,&st));assert(ans.components==SETUP_COMP_ALL);
+    assert(!setup_inf_parse(valid,strlen(valid),&ans,&st));assert(ans.components==SETUP_COMP_ALL);
+    /* sec-user-02: no answer-file transport for the passwords (contract 5.2). */
+    assert(setup_inf_complete(&ans,&st)<0&&!strcmp(st.reason,SETUP_ST_MISSING)&&!strcmp(st.key,"UserPassword"));
+    {static const uint8_t fake_seed[CIUKI_PROVISION_SEED_BYTES];struct setup_answers seeded=ans;seeded.account_seed=fake_seed;seeded.account_seed_length=sizeof(fake_seed);assert(!setup_inf_complete(&seeded,&st));}
+    {char v1[2048];snprintf(v1,sizeof(v1),"%s",valid);assert(v1[16]=='2');v1[16]='1';assert(!setup_inf_parse(v1,strlen(v1),&ans,&st));assert(setup_inf_complete(&ans,&st)<0&&!strcmp(st.key,"UserPassword"));}
+    assert(!setup_valid_user("CiukiUser")&&!setup_valid_user("ciukiuser")&&!setup_valid_user("GUEST")&&!setup_valid_user("Administrators")&&!setup_valid_user("SYSTEM")&&!setup_valid_user("CiukiAdministrator"));
+    assert(!setup_valid_user("Ciuki Dog")&&!setup_valid_user("Ciuk\xc3\xa0")&&setup_valid_user("ciuki_dog-2")&&!setup_valid_user(""));
+    assert(setup_valid_user("abcdefghijklmnopqrstuvwxyz01234")&&!setup_valid_user("abcdefghijklmnopqrstuvwxyz012345"));
     static const struct {const char *text,*reason,*key;} bad[]={
-        {"[Other]\nVersion=1\n",SETUP_ST_SECTION,"Other"},{"[Setup]\nVersion=2\n",SETUP_ST_VERSION,"Version"},
+        {"[Other]\nVersion=1\n",SETUP_ST_SECTION,"Other"},{"[Setup]\nVersion=3\n",SETUP_ST_VERSION,"Version"},
+        {"[Setup]\nVersion=2\nUserName=CiukiUser\n",SETUP_ST_VALUE,"UserName"},
         {"[Setup]\nVersion=1\nBogus=x\n",SETUP_ST_UNKNOWN_KEY,"Bogus"},{"[Setup]\nVersion=1\nversion=1\n",SETUP_ST_DUPLICATE,"Version"},
         {"[Setup]\n",SETUP_ST_MISSING,"Version"},{"[Setup]\nVersion=1\nKeyboard=zz\n",SETUP_ST_VALUE,"Keyboard"},
         {"[Setup]\nVersion=1\nComponents=games\n",SETUP_ST_DEPENDENCY,"Components"},
@@ -384,8 +415,13 @@ static void memory_failures(void){
     puts("PASS start allocation failures and preflight memory stop");
 }
 static void unattended(void){
-    fixture();f.cd_inf=valid;f.usb_inf="invalid";init();assert(a.unattended&&a.page==ST_PAGE_WELCOME&&!strcmp(a.answers.source,"D:\\SETUP.INF"));
-    for(unsigned i=0;i<12&&a.page!=ST_PAGE_RESTART;i++)st_turn(&a);assert(a.page==ST_PAGE_RESTART&&setup_fake.execute_calls==1&&!f.writes);assert(a.plan.answers.tz_minutes==60);st_free(&a);
+    /* sec-user-02 (contract 5.2, M-Q5): a complete answer file still lacks the
+     * two passwords; explicitly unattended mode stops before any disk write. */
+    fixture();f.cd_inf=valid;f.usb_inf="invalid";init();assert(a.unattended&&a.page==ST_PAGE_STATUS&&!strcmp(a.answers.source,"D:\\SETUP.INF"));
+    assert(!strcmp(a.status.reason,SETUP_ST_MISSING)&&!strcmp(a.status.key,"UserPassword")&&strstr(f.records,"status=stopped reason=missing_answer key=UserPassword"));
+    for(unsigned i=0;i<12;i++)st_turn(&a);assert(a.page==ST_PAGE_STATUS&&!setup_fake.prepare_calls&&!setup_fake.execute_calls&&!f.writes);st_free(&a);
+    fixture();f.usb_inf=valid;init();assert(a.page==ST_PAGE_STATUS&&!strcmp(a.status.key,"UserPassword")&&f.writes==1&&!strcmp(f.last_path,"F:\\SETUP.STS"));
+    assert(strstr(f.written,"reason=missing_answer key=UserPassword")&&!setup_fake.execute_calls);st_free(&a);
     fixture();f.usb_inf="[Setup]\nVersion=1\nUnknown=yes\n";init();assert(a.page==ST_PAGE_STATUS);assert(strstr(f.records,"status=stopped reason=unknown_key key=Unknown"));assert(f.writes==1&&!strcmp(f.last_path,"F:\\SETUP.STS"));assert(!setup_fake.execute_calls);st_free(&a);
     fixture();f.usb_inf="[Setup]\nVersion=1\n";init();assert(a.page==ST_PAGE_STATUS&&!strcmp(a.status.reason,SETUP_ST_MISSING));st_free(&a);
     fixture();init();char result[200];assert(!st_rescue_copy(&a,result,sizeof(result)));assert(f.writes==2&&!setup_fake.execute_calls);assert(!st_save_report(&a,result,sizeof(result)));st_free(&a);
@@ -393,4 +429,94 @@ static void unattended(void){
     f.usb_inf=without_erase;f.disks[0].part_count=0;f.disks[0].occupied=1;init();assert(a.page==ST_PAGE_STATUS&&!strcmp(a.status.reason,SETUP_ST_CONSENT));assert(!setup_fake.execute_calls);st_free(&a);
     puts("PASS CD precedence, unattended completion/status, USB-only rescue");
 }
-int main(int argc,char **argv){setvbuf(stdout,NULL,_IOLBF,0);assert(argc==3);folder=argv[2];FILE *fp=fopen(argv[1],"rb");assert(fp);assert(fread(portrait,4,256*256,fp)==256*256);fclose(fp);parser();renders();interactive();errors();power_button();rescue_report();memory_failures();unattended();native_tests(portrait);link_tests();return 0;}
+/* sec-user-02: Passwords page rules, wiping, entropy failure and Back. */
+static void account_page(void){
+    fixture();init();
+    tap(DU_KEY_F10);focus(ST_ID_ACCEPT);tap(DU_KEY_SPACE);tap(DU_KEY_F10);tap(DU_KEY_F10);tap(DU_KEY_F10);tap(DU_KEY_F10);assert(a.page==ST_PAGE_USER);
+    focus(ST_ID_USER);type("ciukiuser");tap(DU_KEY_TAB);type("pc");tap(DU_KEY_F10);
+    assert(a.page==ST_PAGE_USER&&ui.dialog.kind&&strstr(ui.dialog.text,"reserved"));tap(DU_KEY_ENTER);
+    struct du_widget *user=du_get(&ui,ST_ID_USER);du_set_text(user,"ciuki");tap(DU_KEY_F10);assert(a.page==ST_PAGE_ACCOUNT);frame("account-empty");
+    /* Mismatched confirmation, too short, mismatched recovery: nothing kept. */
+    static const char *const cases[][4]={{"ciukiciuki","ciukiciuk","rescuedog","rescuedog"},{"short","short","rescuedog","rescuedog"},
+        {"ciukiciuki","ciukiciuki","rescuedog","rescuedgo"},{"ciukiciuki","ciukiciuki","dog","dog"}};
+    for(unsigned k=0;k<4;k++){
+        focus(ST_ID_SECRET);for(unsigned i=0;i<4;i++){type(cases[k][i]);if(i<3)tap(DU_KEY_TAB);}
+        if(!k)frame("account-typed");
+        tap(DU_KEY_F10);assert(a.page==ST_PAGE_ACCOUNT&&ui.dialog.kind&&!a.acct.seed_ready&&all_zero(a.acct.secret,sizeof(a.acct.secret)));
+        tap(DU_KEY_ENTER);assert(!ui.dialog.kind);
+    }
+    /* Backspace edits the masked field; entropy failure keeps nothing. */
+    focus(ST_ID_SECRET);type("ciukiciukix");tap(DU_KEY_BACKSPACE);assert(!strcmp(a.acct.secret[0],"ciukiciuki"));
+    tap(DU_KEY_TAB);type("ciukiciuki");tap(DU_KEY_TAB);type("rescuedog");tap(DU_KEY_TAB);type("rescuedog");
+    f.entropy_fail=1;tap(DU_KEY_F10);assert(a.page==ST_PAGE_ACCOUNT&&ui.dialog.kind&&strstr(ui.dialog.text,"randomness")&&!a.acct.seed_ready);
+    assert(all_zero(&a.acct,sizeof(a.acct)));tap(DU_KEY_ENTER);f.entropy_fail=0;
+    passwords("ciukiciuki","rescuedog");assert(a.page==ST_PAGE_NETWORK);
+    /* The seed is the exact Setup recipe of the account codec, no CiukiUser. */
+    struct acct_db *d=calloc(1,sizeof(*d));assert(d);assert(!acct_decode(d,1,a.acct.seed,sizeof(a.acct.seed)));
+    assert(d->origin==2&&d->count==3&&!strcmp(d->records[2].name,"ciuki")&&d->records[2].flags==5&&d->records[0].flags==6&&d->records[1].flags==2);
+    uint8_t v[32];assert(!acct_derive("ciukiciuki",d->records[2].salt,ACCT_ITERATIONS,v)&&!memcmp(v,d->records[2].verifier,32));
+    assert(!acct_derive("rescuedog",d->records[0].salt,ACCT_ITERATIONS,v)&&!memcmp(v,d->records[0].verifier,32));free(d);
+    /* Back to the Passwords page clears the seed and starts from empty fields. */
+    tap(DU_KEY_ESC);assert(a.page==ST_PAGE_ACCOUNT&&!a.acct.seed_ready&&!a.answers.account_seed&&all_zero(&a.acct,sizeof(a.acct)));
+    tap(DU_KEY_F10);assert(a.page==ST_PAGE_ACCOUNT&&ui.dialog.kind);tap(DU_KEY_ENTER);
+    no_writes();assert(!strstr(a.log.text,"ciukiciuki")&&!strstr(a.log.text,"rescuedog"));st_free(&a);
+    /* Install success and failure both wipe the seed after libsetup ran. */
+    fixture();init();summary();copy_steps(2);tap(DU_KEY_F10);assert(a.page==ST_PAGE_RESTART&&setup_fake.execute_calls==1);
+    assert(!a.acct.seed_ready&&all_zero(&a.acct,sizeof(a.acct))&&!a.plan.answers.account_seed);st_free(&a);
+    puts("PASS Passwords page: account-name rules, 8-63 byte policy, confirmations, masked fields, entropy failure, wiping on Back/finish, exact Setup seed without CiukiUser");
+}
+/* A provisioned installation store: CONSUMED bootstrap.state, accounts.db and
+ * allocation watermark, written with the account service's codecs. */
+static void store_file(const char *root,const char *name,const void *p,size_t n){
+    char path[700];snprintf(path,sizeof(path),"%s/%s",root,name);FILE *fp=fopen(path,"wb");assert(fp);assert(fwrite(p,1,n,fp)==n);assert(!fclose(fp));
+}
+static void provisioned_store(const char *root){
+    mkdir(root,0700);
+    struct acct_db *d=calloc(1,sizeof(*d));assert(d);
+    d->generation=7;d->next_uid=1002;d->count=4;d->origin=2;d->sid[0]=11;d->sid[1]=22;d->sid[2]=33;
+    d->records[0]=(struct acct_record){.uid=500,.flags=6,.groups=3,.kdf=1,.iterations=ACCT_ITERATIONS,.name="CiukiAdministrator"};
+    d->records[1]=(struct acct_record){.uid=501,.flags=2,.groups=4,.name="Guest"};
+    d->records[2]=(struct acct_record){.uid=1000,.flags=5,.groups=3,.kdf=1,.iterations=ACCT_ITERATIONS,.name="Alice"};
+    d->records[3]=(struct acct_record){.uid=1001,.flags=5,.groups=2,.kdf=1,.iterations=ACCT_ITERATIONS,.name="Bob"};
+    for(unsigned i=0;i<4;i++)if(d->records[i].kdf){memset(d->records[i].salt,(int)(i+1),16);assert(!acct_derive("forgotten1",d->records[i].salt,ACCT_ITERATIONS,d->records[i].verifier));}
+    static uint8_t bytes[ACCT_FILE_MAX];size_t n;assert(!acct_encode(d,0,bytes,sizeof(bytes),&n));store_file(root,"accounts.db",bytes,n);
+    struct acct_bootstrap b={.state=5,.origin=2,.volume=(uint64_t)2048<<32|0x1234abcdu,.sid={11,22,33},.next_uid=1002,.flags=3,
+        .transaction=7,.accounts_generation=7,.owner_generation=3,.generation=9};
+    memset(b.seed_digest,0x5a,32);uint8_t state[160];assert(!acct_boot_encode(&b,state,160));store_file(root,"bootstrap.state",state,160);
+    uint8_t alloc[96]={0};memcpy(alloc,"CIUKIALC",8);for(unsigned i=0;i<8;i++)alloc[8+i]=(uint8_t)(b.volume>>(8*i));
+    for(unsigned j=0;j<3;j++){alloc[16+4*j]=(uint8_t)d->sid[j];}alloc[28]=0xea;alloc[29]=3;alloc[32]=7;sha256(alloc,64,alloc+64);
+    store_file(root,"accounts.alloc.0",alloc,96);free(d);
+}
+static void repair(void){
+    char root[600];snprintf(root,sizeof(root),"%s/repair-store",folder);provisioned_store(root);
+    fixture();snprintf(f.repair_root,sizeof(f.repair_root),"%s",root);f.repair_letter='E';
+    f.volumes_n=3;f.volumes[2]=(struct st_volume){.letter='E',.usb=0,.writable=1};strcpy(f.volumes[2].fs,"FAT32");init();
+    st_action(&a,ST_ID_RESCUE);assert(a.page==ST_PAGE_RESCUE);frame("rescue-repair-link");
+    focus(ST_ID_REPAIR);tap(DU_KEY_ENTER);assert(a.page==ST_PAGE_REPAIR&&a.repair_volumes==1&&a.repair_letters[0]=='E'&&!a.repair_state);
+    assert(strstr(a.repair_status,"intact")&&a.repair.count==4&&a.repair.generation==7);frame("repair");
+    /* Mismatch: refused before any write. Decline: nothing written. */
+    focus(ST_ID_SECRET);type("newrecovery");tap(DU_KEY_TAB);type("newrecoverx");st_action(&a,ST_ID_REPAIR_RUN);
+    assert(ui.dialog.kind&&ui.dialog.id==ST_DLG_MESSAGE&&all_zero(a.acct.secret,sizeof(a.acct.secret)));tap(DU_KEY_ENTER);
+    char probe[700];struct stat sb;snprintf(probe,sizeof(probe),"%s/accounts.local",root);assert(stat(probe,&sb));
+    focus(ST_ID_SECRET);type("newrecovery");tap(DU_KEY_TAB);type("newrecovery");st_action(&a,ST_ID_REPAIR_RUN);
+    assert(ui.dialog.kind&&ui.dialog.id==ST_DLG_REPAIR&&strstr(ui.dialog.text,"drive E:"));frame("repair-confirm");
+    tap(DU_KEY_ENTER);assert(!ui.dialog.kind&&stat(probe,&sb)&&all_zero(a.acct.secret,sizeof(a.acct.secret))&&strstr(f.records,"result=declined"));
+    /* Confirmed: two reserved generations and the local intent, nothing else. */
+    focus(ST_ID_SECRET);type("newrecovery");tap(DU_KEY_TAB);type("newrecovery");st_action(&a,ST_ID_REPAIR_RUN);
+    tap(DU_KEY_LEFT);tap(DU_KEY_ENTER);
+    assert(a.repair_state==1&&!stat(probe,&sb)&&a.repair.next_generation==9&&strstr(f.records,"action=account_repair result=ok letter=E generation=9"));
+    assert(!strstr(f.records,"newrecovery")&&!strstr(a.log.text,"newrecovery")&&all_zero(a.acct.secret,sizeof(a.acct.secret)));frame("repair-done");
+    snprintf(probe,sizeof(probe),"%s/accounts.db",root);FILE *fp=fopen(probe,"rb");assert(fp);static uint8_t db_bytes[ACCT_FILE_MAX];size_t dn=fread(db_bytes,1,sizeof(db_bytes),fp);fclose(fp);
+    struct acct_db *d=calloc(1,sizeof(*d));assert(d&&!acct_decode(d,0,db_bytes,dn)&&d->generation==7);free(d); /* accounts.db itself untouched */
+    st_free(&a);
+    /* A second repair before the next start finds the pending change. */
+    fixture();snprintf(f.repair_root,sizeof(f.repair_root),"%s",root);f.repair_letter='E';
+    f.volumes_n=3;f.volumes[2]=(struct st_volume){.letter='E',.writable=1};init();st_action(&a,ST_ID_RESCUE);st_action(&a,ST_ID_REPAIR);
+    assert(a.page==ST_PAGE_REPAIR&&a.repair_state==2&&strstr(a.repair_status,"waiting to finish")&&du_get(&ui,ST_ID_REPAIR_RUN)->disabled);
+    no_writes();st_free(&a);
+    /* No installation: no candidate, nothing enabled. */
+    fixture();init();st_action(&a,ST_ID_RESCUE);st_action(&a,ST_ID_REPAIR);assert(a.page==ST_PAGE_REPAIR&&!a.repair_volumes&&du_get(&ui,ST_ID_REPAIR_RUN)->disabled);
+    tap(DU_KEY_ESC);assert(a.page==ST_PAGE_RESCUE);no_writes();st_free(&a);
+    puts("PASS confirmed account repair: identified installation, backup warning, confirmation, decline/mismatch write nothing, local intent only, pending change refused, secrets wiped and never logged");
+}
+int main(int argc,char **argv){setvbuf(stdout,NULL,_IOLBF,0);assert(argc==3);folder=argv[2];FILE *fp=fopen(argv[1],"rb");assert(fp);assert(fread(portrait,4,256*256,fp)==256*256);fclose(fp);parser();renders();interactive();errors();power_button();rescue_report();memory_failures();unattended();account_page();repair();native_tests(portrait);link_tests();return 0;}
