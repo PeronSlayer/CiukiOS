@@ -39,7 +39,8 @@ class WallpaperStartupTests(unittest.TestCase):
             binary = Path(folder) / "test"
             subprocess.run(["clang", "-std=c17", "-O2", "-Wall", "-Wextra", "-Werror", "-pthread",
                             "-I", str(ROOT / "apps/desktop"), str(ROOT / "tests/host/desktop/settings_io_test.c"),
-                            str(ROOT / "apps/desktop/settings_io.c"), "-Wl,--wrap=rename", "-o", str(binary)], check=True)
+                            str(ROOT / "apps/desktop/settings_io.c"),
+                            "-Wl,--wrap=rename,--wrap=fopen,--wrap=fread,--wrap=ferror,--wrap=fclose", "-o", str(binary)], check=True)
             result = subprocess.run([str(binary)], check=True, capture_output=True, text=True)
             lines = [line for line in result.stderr.splitlines() if line.startswith("[desktop] stage=")]
             self.assertEqual(len(lines), 10)
