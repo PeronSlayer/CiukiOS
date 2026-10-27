@@ -35,15 +35,62 @@ def command(args):
         raise ValueError('ISO fixture command failed: ' + ' '.join(map(str, args)) + '\n' + p.stderr[-3000:])
     return p
 
-def generate(spec, directory, index=0):
+def descriptor_offsets(image):
+    """Byte offsets of the primary and supplementary volume descriptors.
+
+    ECMA-119 8.1/8.4/8.5: the volume descriptor set starts at logical sector
+    16 (2048-byte sectors); type 1 is the primary, type 2 a supplementary
+    (Joliet) descriptor, type 255 the terminator. Bytes 1..5 are "CD001"."""
+    offsets = []
+    with Path(image).open('rb') as stream:
+        for sector in range(16, 16 + 32):
+            stream.seek(sector * 2048)
+            head = stream.read(7)
+            if len(head) < 7 or head[1:6] != b'CD001':
+                raise ValueError('ISO volume descriptor set is not terminated')
+            if head[0] == 255:
+                return offsets
+            if head[0] in (1, 2):
+                offsets.append(sector * 2048)
+    raise ValueError('ISO volume descriptor set exceeds 32 sectors')
+
+
+def set_volume_sequence(image, number):
+    """Write the Volume Sequence Number (ECMA-119 8.4.13, BP 125-128: a both-byte
+    order 16-bit field, little- then big-endian) of every primary and
+    supplementary descriptor. Mastering tools always write 1; discs pressed with
+    0 there exist (fx-accept: the T23 refused one as malformed_iso9660)."""
+    if type(number) is not int or not 0 <= number <= 0xFFFF:
+        raise ValueError('volume sequence number must be 0..65535')
+    patched = []
+    with Path(image).open('r+b') as stream:
+        for offset in descriptor_offsets(image):
+            stream.seek(offset + 124)
+            stream.write(number.to_bytes(2, 'little') + number.to_bytes(2, 'big'))
+            patched.append(offset // 2048)
+    return patched
+
+
+def root_entries(entries):
+    """Names directly below the root of an extraction manifest."""
+    return sorted(e['path'] for e in entries if e['path'].count('/') == 1)
+
+
+def generate(spec, directory, index=0, media_name=None):
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     level = spec.get('level', 3)
     if level not in (1, 2, 3) or spec.get('seed', 1) != 1:
         raise ValueError('unsupported ISO level/seed')
-    source = directory / f'iso-source-{index}'
-    extracted = directory / f'iso-extracted-{index}'
-    image = directory / f'fixture-{index}.iso'
+    label = spec.get('label', 'CIUKI_F4')
+    if not isinstance(label, str) or not 1 <= len(label) <= 32 or not all(c.isupper() or c.isdigit() or c == '_' for c in label):
+        raise ValueError('ISO volume label must be 1..32 characters A-Z, 0-9 or _')
+    if media_name is not None and (not isinstance(media_name, str) or not media_name.replace('-', '').isalnum()):
+        raise ValueError('ISO fixture name must be letters, digits and dashes')
+    stem = media_name or str(index)
+    source = directory / f'iso-source-{stem}'
+    extracted = directory / f'iso-extracted-{stem}'
+    image = directory / (f'media-{media_name}.iso' if media_name else f'fixture-{index}.iso')
     if source.exists() or extracted.exists():
         raise ValueError('ISO scratch directory already exists')
     files = {'README.TXT': b'Ciuki F4 optical fixture seed=1\n',
@@ -62,7 +109,7 @@ def generate(spec, directory, index=0):
         for p in [*source.rglob('*'), source]:
             os.utime(p, (EPOCH, EPOCH))
         args = ['xorriso', '-as', 'mkisofs', '-iso-level', str(level),
-                '--norock', '-V', 'CIUKI_F4', '--modification-date=' + DATE,
+                '--norock', '-V', label, '--modification-date=' + DATE,
                 '--set_all_file_dates', DATE, '-uid', '0', '-gid', '0']
         if spec.get('joliet'):
             args += ['-J']
@@ -82,6 +129,11 @@ def generate(spec, directory, index=0):
                     'entries': entries, 'independent_tool': 'xorriso -osirrox on -extract /',
                     'tool_version': command(['xorriso', '-version']).stdout,
                     'extract_output': (result.stdout + result.stderr)[-3000:]}
+        manifest['label'] = label
+        manifest['root_entries'] = root_entries(entries)
+        if spec.get('volume_sequence') is not None:
+            manifest['volume_sequence'] = spec['volume_sequence']
+            manifest['volume_sequence_sectors'] = set_volume_sequence(image, spec['volume_sequence'])
         if spec.get('malformed'):
             # Broken root extent, with agreeing little/big-endian encodings.
             with image.open('r+b') as f:
@@ -90,7 +142,7 @@ def generate(spec, directory, index=0):
                 f.write(extent.to_bytes(4, 'little') + extent.to_bytes(4, 'big'))
             manifest['malformed'] = 'root_extent_outside_volume'
         manifest['sha256'] = sha(image)
-        (directory / f'fixture-{index}-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+        (directory / (f'media-{media_name}-manifest.json' if media_name else f'fixture-{index}-manifest.json')).write_text(json.dumps(manifest, indent=2) + '\n')
         return manifest
     finally:
         for tree in (source,extracted):
@@ -129,6 +181,8 @@ if __name__ == '__main__':
     parser.add_argument('--level', type=int, choices=(1, 2, 3), default=3)
     parser.add_argument('--joliet', action='store_true')
     parser.add_argument('--malformed', action='store_true')
+    parser.add_argument('--volume-sequence', type=int, dest='volume_sequence',
+                        help='Volume Sequence Number written into every primary/supplementary descriptor')
     parser.add_argument('--source', type=Path, help='directory for Python-only mastering')
     parser.add_argument('--audio-seconds', type=int, help='authored mixed-mode CUE/PCM fixture')
     args = parser.parse_args()

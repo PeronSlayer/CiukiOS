@@ -461,6 +461,10 @@ struct dosvm {
     unsigned console_length;
     cvga_geometry video_geometry;
     bool video_modex, video_chain4;
+    /* fx-accept: the last windowed video layout recorded ([dosvm-window]
+     * video), at most DOSVM_WINDOW_VIDEO_RECORDS per VM. */
+    uint64_t window_video_key;
+    uint8_t window_video_records;
     bool clipboard_mark, clipboard_screen;
     struct {
         struct kwait wait;

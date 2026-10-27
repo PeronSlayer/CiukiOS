@@ -28,6 +28,7 @@ make upper             # only the reused Wine DLLs (cached; needs make apps firs
 make test-host         # T0: kernel library, loader statics, runner, fixtures, loader model
 python3 scripts/loader_budget.py   # loader bytes per section and free bytes in its fixed 48-sector extent
 make qemu-test-full    # T2: f0-smoke through scripts/test/run.py
+make qemu-acceptance   # before every hardware image: the owner's trial list (acc-t23), build/test-runs/acc-t23/summary.txt
 python3 scripts/test/run.py f0-core    # T3: ten-boot matrix and the nine non-fatal probes
 python3 scripts/test/run.py f0-panic   # T3: destructive panic cases
 make qemu-run-full     # interactive boot (scripts/run_f0.sh "f0:boot run=00000001" to pass a request)
@@ -143,6 +144,23 @@ keeps the overlay, `screen.ppm` when taken and `screen-fail.ppm`. Because
 `f0-smoke` is the first prerequisite of the other suites, a failed normal
 boot stops the campaign there. The case kind and its rules are in
 [test architecture](design/test-architecture.md#normal-boot-cases-amendment-2026-10-11).
+
+### Acceptance before a hardware image (acc-t23)
+
+`scripts/test/acceptance.sh` (`make qemu-acceptance`; `--case <id>` for one
+case) runs the owner's trial list on `qemu-t23` the way a user works: normal
+boot and desktop at 1024x768 with no error notice and generated CDs (items 1
+and 4), the Quake III Arena demo installer and game (2), the five DOS games
+of the Games menu with full screen and return (3), NetSurf on the local copies
+of the owner's two sites (5, snapshots in `build/downloads/ns-sites-2026-10-26`
+or `$CIUKI_NS_SITES`, never committed), Safe Mode, Restart and Shut Down (6, 7,
+8) and, once fx-is5boot is merged, an InstallShield 5 setup (9). The image must
+come from a tree that has the acceptance records (the desktop's diagnostic
+lines and `[dosvm-window] video`). The verdict and one line per item are in
+`build/test-runs/acc-t23/summary.txt`; ACCEPTED is the only passing exit
+status, a failing item blocks the image (known QEMU deviations are shown as
+PASS* with their directive). Rules and predicates:
+[test architecture](design/test-architecture.md#acceptance-cases-amendment-fx-accept-2026-10-27).
 
 ## Version
 

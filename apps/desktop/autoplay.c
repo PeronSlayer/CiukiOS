@@ -3,6 +3,7 @@
 #include "worker_role.h"
 #include "autoplay.h"
 #include "shell_link.h"
+#include "diag_record.h"
 #include <errno.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -41,6 +42,20 @@ static void budget_log(const struct ap_worker *w)
     fprintf(stderr,"%s\n",line);
 #endif
 }
+/* fx-accept: one line per AutoPlay event, also in quiet boots: the content
+ * probe of a new volume (the root listing count the acceptance suite compares
+ * with the generated disc), the prompt and the launched action. */
+static void autoplay_record(const char *line, int n)
+{
+    if (n<=0 || n>=128) return;
+    desk_diag_record(line,n);
+}
+static void probe_log(const struct ap_worker *w,int result)
+{
+    char line[128]; int n=snprintf(line,sizeof(line),"[desktop] autoplay probe drive=%c entries=%u run_kind=%u music=%u pictures=%u result=%d",
+        'A'+w->volume.drive,w->content.entries,(unsigned)w->content.run_kind,!!w->content.music[0],!!w->content.picture[0],result);
+    autoplay_record(line,n);
+}
 static void *autoplay_worker(void *arg)
 {
     desk_worker_role("autoplay");
@@ -54,11 +69,13 @@ static void *autoplay_worker(void *arg)
         pthread_mutex_unlock(&w->lock);
         w->error=0; w->saved=-1;
         if (job==AP_JOB_PROBE) {
-            if (ap_probe_workspace(w->fs,w->volume.drive,&w->content,w->workspace)) {
+            int probed=ap_probe_workspace(w->fs,w->volume.drive,&w->content,w->workspace);
+            if (probed) {
                 memset(&w->content,0,sizeof(w->content));
                 snprintf(w->content.root,sizeof(w->content.root),"/mnt/%c",'a'+w->volume.drive);
             }
             if (w->content.budget) budget_log(w);
+            probe_log(w,probed);
             activity(w,"preference-read");
             if (!w->content.budget && w->volume.id[0] && w->preference)
                 w->saved=w->preference(w->desktop,w->volume.id,NULL,-1);
@@ -240,6 +257,8 @@ int desk_autoplay_launch(struct desktop *d)
     if (action==AP_PICTURES) pid=desk_task_launch(d,"viewer",a->content.picture);
     if (action==AP_RUN) { const char *args[]={a->content.command}; pid=desk_task_launch_args(d,"dosbox",args,1); }
     memset(&d->launch_request,0,sizeof(d->launch_request)); /* the CD Player route does not consume it */
+    char line[128]; int n=snprintf(line,sizeof(line),"[desktop] autoplay launch action=%d pid=%d",action,pid);
+    autoplay_record(line,n);
     if (pid<0) desk_shell_message(d,"AutoPlay","The selected program could not be started.",1);
     else remember(d);
     return pid;
@@ -287,7 +306,13 @@ void desk_autoplay_service(struct desktop *d)
             a->selected=a->saved; execute_later(d); return;
         }
         if (desk_internal_open(d,DESK_INTERNAL_AUTOPLAY)<0) a->phase=AP_READY;
-        else a->open=1;
+        else {
+            a->open=1;
+            char line[128]; int n=a->content.cd_audio ?
+                snprintf(line,sizeof(line),"[desktop] autoplay prompt audio_cd=%u default=%d",(unsigned)a->content.cd_slot,a->selected) :
+                snprintf(line,sizeof(line),"[desktop] autoplay prompt drive=%c default=%d",'A'+(int)(a->active.drive<26 ? a->active.drive : 25),a->selected);
+            autoplay_record(line,n);
+        }
         return;
     }
     if (a->cd_waiting) for (unsigned i=0;i<4;i++) if (a->cd_waiting&(1u<<i)) {

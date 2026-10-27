@@ -16,6 +16,7 @@
 #include "schedsvc.h"
 #include "resources.h"
 #include "wallpaper_io.h"
+#include "diag_record.h"
 #ifdef __i386__
 #include <ciuki/devices.h>
 #endif
@@ -684,6 +685,23 @@ static void first_frame_record(struct desktop *d, const struct desk_client *c, u
     (void)write(STDERR_FILENO,line,(size_t)n);
     (void)write(STDERR_FILENO,"\n",1);
 #endif
+}
+/* fx-accept: the desktop's display mode once startup applied (or kept) the
+ * saved preference, also in quiet boots: the acceptance suite checks a normal
+ * boot at 1024x768 and that Safe mode's 640x480 never carries over (fx-dispmode).
+ * saved is the stored preference after startup; safe is G14's Safe mode. */
+static void display_start_record(const struct desktop *d)
+{
+    struct ciuki_display_info info = {.version = CIUKI_DISPLAY_VERSION, .size = sizeof(info)};
+    unsigned width = d->width, height = d->height, bpp = 0;
+    if (!ciuki_display_query(&info))
+        for (unsigned i = 0; i < info.mode_count && i < 32; i++)
+            if (info.modes[i].current) { width = info.modes[i].width; height = info.modes[i].height; bpp = info.modes[i].bpp; }
+    char line[160];
+    int n = snprintf(line, sizeof(line), "[desktop] display start mode=%u %ux%ux%u saved=%u safe=%u",
+                     (unsigned)d->display_mode, width, height, bpp, (unsigned)d->sh.cfg.display_mode, (unsigned)!!d->safe_mode);
+    if (n <= 0 || (size_t)n >= sizeof(line)) return;
+    desk_diag_record(line, n);
 }
 /* Input thread: an exit reaped while a spawn may still be unbound. */
 static void launch_note_exit(struct desktop *d, uint32_t pid, int status)
@@ -3102,6 +3120,7 @@ int main(int argc, char **argv)
     }
     if (fullscreen_test) d->realtime_second=12*3600;
     display_start(d);
+    if (!gate) display_start_record(d);
     if(firstboot_pages&(1u<<FB_DISPLAY))desk_task_launch_args(d,"control",(const char *const[]){"--panel=display"},1);
     if(firstboot_pages&(1u<<FB_CHANGE_CLOCK))desk_task_launch_args(d,"control",(const char *const[]){"--panel=datetime"},1);
     /* f3-02: --launch=<name> starts one /Programs menu program through the same

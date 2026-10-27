@@ -7,6 +7,7 @@
 #include "gate.h"
 #include "help_request.h"
 #include "browser_launch.h"
+#include "diag_record.h"
 #include <errno.h>
 #include <string.h>
 #include <strings.h>
@@ -184,6 +185,18 @@ void desk_drop_client(struct desktop *d, int i)
     if (d->shell) desk_damage_add(&d->damage,desk_taskbar(d),d->width,d->height);
     desk_cursor_update(d);
 }
+/* fx-accept: a window entering or leaving the "Not responding" state, also in
+ * quiet boots (the state was only drawn on the caption and the task button):
+ * cause ping = a PING unanswered for 5 s, busy = the v3 delivery ring full,
+ * pong = the program answered again, drained = the ring drained. */
+static void unresponsive_record(const struct desk_client *c, int state, const char *cause)
+{
+    char line[160], app[25];
+    desk_diag_token(app, sizeof(app), c->application[0] ? c->application : c->title);
+    int n = snprintf(line, sizeof(line), "[desktop] not-responding pid=%u window=%u state=%d cause=%s app=%s",
+                     (unsigned)c->pid, (unsigned)c->window_id, state, cause, app);
+    if (n > 0 && (size_t)n < sizeof(line)) desk_diag_record(line, n);
+}
 /* f2-91: v3 pointer motion is merged exactly like older protocols when the client is behind (last
  * position wins, only inside a trailing motion run of the same window), keys/buttons/everything else
  * keep their order. A full ring never drops the window: the message waits in an ordered overflow,
@@ -208,8 +221,8 @@ static void v3_set_busy(struct desktop *d, int pi, int busy)
     for (int j=0;j<DESK_CLIENTS;j++) {
         struct desk_client *w=&d->clients[j];
         if (w->channel<0 || w->v3_peer!=(unsigned)pi+1 || !w->window) continue;
-        if (busy && !w->unresponsive) { w->unresponsive=1; w->v3_busy_mark=1; }
-        else if (!busy && w->v3_busy_mark) { w->unresponsive=0; w->v3_busy_mark=0; }
+        if (busy && !w->unresponsive) { w->unresponsive=1; w->v3_busy_mark=1; unresponsive_record(w,1,"busy"); }
+        else if (!busy && w->v3_busy_mark) { w->unresponsive=0; w->v3_busy_mark=0; unresponsive_record(w,0,"drained"); }
         else continue;
         desk_damage_add(&d->damage,desk_outer(w),d->width,d->height);
         /* fx-2: the task button shows the state too ("Not responding"). */
@@ -1171,6 +1184,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
             c->ping_pending = c->ping_queued = 0; c->next_ping_ns = d->now_ns + 1000000000ull;
             if (c->unresponsive) {
                 c->unresponsive = 0;
+                unresponsive_record(c, 0, "pong");
                 desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
                 if (d->shell) desk_damage_add(&d->damage, desk_task_button(d, i), d->width, d->height);
             }
@@ -1365,6 +1379,7 @@ void desk_heartbeat(struct desktop *d, uint64_t now)
         if (c->ping_pending && !c->ping_queued && now >= c->ping_sent_ns && now - c->ping_sent_ns >= 5000000000ull && !c->unresponsive &&
             (!d->drain_ns || d->drain_ns >= c->ping_sent_ns + 5000000000ull)) {
             c->unresponsive = 1;
+            unresponsive_record(c, 1, "ping");
             if (c->window) desk_damage_add(&d->damage, desk_outer(c), d->width, d->height);
             if (c->window && d->shell) desk_damage_add(&d->damage, desk_task_button(d, i), d->width, d->height);
         }
@@ -3529,6 +3544,7 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
     case DESK_PONG:
         if (c->ping_pending && p.serial==c->serial) {
             if (c->unresponsive) {
+                unresponsive_record(c,0,"pong");
                 desk_damage_add(&d->damage,desk_outer(c),d->width,d->height);
                 if (d->shell) desk_damage_add(&d->damage,desk_task_button(d,i),d->width,d->height);
             }

@@ -28,6 +28,38 @@ extern void desk_access_flash_draw(struct desktop *, struct desk_box) __attribut
 extern void desk_access_magnifier_set(struct desktop *, int on) __attribute__((weak));
 extern int desk_access_magnifier_on(const struct desktop *) __attribute__((weak));
 #include <strings.h>
+#include "diag_record.h"
+
+/* fx-accept: one diagnostic line per notification balloon and message box
+ * the user is shown, also in quiet boots, so the acceptance suite and the
+ * T23 serial logs tell an error notification from an information one:
+ *   [desktop] notify icon=<none|info|warning|error|question> title="..." text="..."
+ *   [desktop] message icon=<...> title="..." text="..."
+ * Bytes outside printable ASCII become '.', a double quote becomes ', a line
+ * break becomes '|'; the line stays within debug_write's 240 bytes. */
+static void shell_notice_append(char *line, size_t *n, size_t cap, const char *text, size_t limit)
+{
+    size_t used = 0;
+    for (const unsigned char *p = (const unsigned char *)(text ? text : ""); *p && used < limit && *n + 1 < cap; p++, used++) {
+        unsigned char c = *p;
+        line[(*n)++] = c == '\n' ? '|' : c == '"' ? '\'' : (c >= 32 && c < 127) ? (char)c : '.';
+    }
+    line[*n] = 0;
+}
+static void shell_notice_record(const char *kind, int icon, const char *title, const char *text)
+{
+    static const char *const icons[] = { "none", "info", "warning", "error", "question" };
+    char line[232]; size_t n = 0;
+    int head = snprintf(line, sizeof(line), "[desktop] %s icon=%s title=\"", kind,
+                        icon >= 0 && icon < (int)(sizeof(icons) / sizeof(icons[0])) ? icons[icon] : "other");
+    if (head < 0 || (size_t)head >= sizeof(line)) return;
+    n = (size_t)head;
+    shell_notice_append(line, &n, sizeof(line), title, 48);
+    shell_notice_append(line, &n, sizeof(line), "\" text=\"", 8);
+    shell_notice_append(line, &n, sizeof(line) - 1, text, sizeof(line));
+    shell_notice_append(line, &n, sizeof(line), "\"", 1);
+    desk_diag_record(line, (int)n);
+}
 
 /* ---- theme hooks ------------------------------------------------------- */
 /* Every shell colour is a theme colour (desk_theme; DU_* are the same
@@ -2295,6 +2327,7 @@ void desk_shell_notify(struct desktop *d,const char *title,const char *text,int 
     int attention=icon==DU_DLG_ICON_WARNING || icon==DU_DLG_ICON_ERROR;
     if (n->active && n->balloon && !attention && action!=SH_NOTIFY_MEDIA && d->now_ns<n->expires) return;
     int repeat=n->active && n->action==SH_NOTIFY_VOLUME && action==SH_NOTIFY_VOLUME;
+    if (!repeat) shell_notice_record("notify",icon,title,text);
     if (n->active) damage(d,notification_outer(d));
     program_balloon_dismiss(d,0x403);
     n->slide=repeat ? n->slide : 20;
@@ -3975,6 +4008,7 @@ void desk_shell_confirm(struct desktop *d, const char *title, const char *text, 
     d->sh.message_kind = icon; d->sh.confirm = action;
     desk_sound(d,du_message_sound(icon));
     if (!d->shell) { d->sh.confirm = 0; desk_folder_cancelled(d); return; }
+    shell_notice_record("message",icon,title,text);
     desk_internal_open(d, DESK_INTERNAL_MESSAGE);
 }
 void desk_shell_bin_state(struct desktop *d, int full)
@@ -3998,6 +4032,7 @@ void desk_shell_message_class(struct desktop *d, const char *title, const char *
     d->sh.message_kind = error;
     desk_sound(d,du_message_sound(error));
     if (!d->shell) return;
+    shell_notice_record("message",error,title,text);
     desk_internal_open(d, DESK_INTERNAL_MESSAGE);
 }
 static struct desk_box button_box(struct desk_box content, int index, int count)
