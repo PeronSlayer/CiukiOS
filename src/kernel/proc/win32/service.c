@@ -36,7 +36,8 @@ bool w32_service_desktop_client(struct process *desktop, uint32_t pid)
         (security_roles_active() ? security_role(desktop)!=CIUKI_SECURITY_ROLE_DESKTOP : service_pid[0]!=desktop->pid)) return false;
     for (struct service_link *l=links;l;l=l->next)
         if (l->server==desktop && l->client->pid==pid && l->accepted &&
-            l->client->state==PROC_LIVE && l->service==W32_SERVICE_DESKTOP &&
+            l->client->state==PROC_LIVE && security_same(desktop,l->client) &&
+            security_process_live(l->client) && l->service==W32_SERVICE_DESKTOP &&
             desktop->fds && l->client->fds &&
             desktop->fds[l->server_fd].object==l->server_end &&
             l->client->fds[l->client_fd].object==l->client_end) return true;
@@ -81,10 +82,12 @@ static uint32_t connect_service(struct process *client, uint32_t service, uint32
     /* Preserve interim boots until the new paired launch is installed. Once
      * LOGON exists, the global legacy registration is never authority. */
     if (!server && !security_roles_active()) server=server_for(service);
-    if (!server)
-        return 1062;
+    if (!server) return 1062;
+    if (!security_process_live(server) || !security_same(client,server)) return 5;
     for (struct service_link *l = links; l; l = l->next)
-        if (l->client == client && l->server == server && l->service == service) {
+        if (l->client == client && l->server == server && l->service == service &&
+            client->fds && client->fds[l->client_fd].object==l->client_end &&
+            server->fds && server->fds[l->server_fd].object==l->server_end) {
             *endpoint = (uint32_t)l->client_fd;
             return 0;
         }
@@ -255,6 +258,9 @@ uint32_t w32_service_call(struct proc_thread *t, struct ciuki_w32_service_args *
         }
         for (struct service_link *l = links; l; l = l->next)
             if (l->server == p && l->service == a->service && !l->accepted) {
+                if (!security_same(p,l->client) || !security_process_live(l->client) ||
+                    !p->fds || p->fds[l->server_fd].object!=l->server_end ||
+                    !l->client->fds || l->client->fds[l->client_fd].object!=l->client_end) continue;
                 l->accepted = true;
                 a->pid = l->client->pid;
                 a->endpoint = (uint32_t)l->server_fd;

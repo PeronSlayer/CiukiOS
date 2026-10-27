@@ -772,6 +772,10 @@ clang++ -std=c++17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -I 
 "$out/opl3_ref_test"
 python3 "$root/tests/host/test_opl3_tables.py"
 
+# sec-k06: production Win32 isolation, SYSTEM registry and restart journals.
+python3 -B -m unittest discover -s "$root/tests/host/security" -p test_win32_broker.py
+# end sec-k06
+
 # F5 personality mechanisms, fixture parity and core selector wiring.
 python3 -B -m unittest discover -s "$root/tests/host/win32" -p test_kernel_core.py
 python3 -B -m unittest discover -s "$root/tests/host/win32" -p test_registry.py

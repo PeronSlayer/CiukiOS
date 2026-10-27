@@ -18,6 +18,10 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include "win32_crash.h"
+#if defined(__CIUKIOS__) && !defined(__linux__)
+#include "../../sdk/libreg/transport.h"
+static struct reg_remote registry_broker={.fd=-1};
+#endif
 uint32_t desk_w32_record(void *,uint32_t);
 extern int desk_w32_crash_store(const char *,const struct ciuki_w32_fault *) __attribute__((weak));
 extern void desk_w32_fault_dialog(struct desktop *,const struct ciuki_w32_fault *) __attribute__((weak));
@@ -100,6 +104,14 @@ uint32_t desk_w32_exchange(const void *input,uint32_t n,void *output,uint32_t ca
 {
     if(!input || !output || !used || n>W32R_MAX || n<sizeof(struct w32r_request)+2)return 87;
     *used=0;pthread_mutex_lock(&rpc_lock);
+#if defined(__CIUKIOS__) && !defined(__linux__)
+    const struct w32r_request *request=input;
+    if(request->op<=W32R_FLUSH||request->op==W32R_COMPAT){
+        size_t count=0;int e=reg_remote_win32(&registry_broker,input,n,output,cap,&count);
+        uint32_t result=e?(errno==EACCES||errno==EPERM?5:errno==ENOMEM?8:errno==EINVAL?87:1062):0;
+        if(!e)*used=(uint32_t)count;pthread_mutex_unlock(&rpc_lock);return result;
+    }
+#endif
     struct w32r_service a;uint32_t error=service(2,2,&a);
     if(!error && !a.result)error=1062;
     uint32_t id=++serial;if(!id)id=++serial;

@@ -63,7 +63,8 @@ class RegistryTests(unittest.TestCase):
     def test_connection_lifetime_client_announcement(self):
         binary=self.out/'service-transport'
         sources=['sdk/win32/ntdll/server.c','sdk/win32/services/bytes.c',
-                 'tests/host/win32/service_transport_test.c']
+                 'tests/host/win32/service_transport_test.c','apps/registry/broker.c',
+                 'sdk/libreg/registry.c','sdk/libreg/storage.c','sdk/libreg/transport.c']
         sources+=['apps/w32srv/'+n+'.c' for n in ('registry','storage','defaults','directory','protocol','posix_io')]
         subprocess.run(['clang','-std=c17','-D_POSIX_C_SOURCE=200809L','-DW32_HOST_MODEL',
                         '-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',

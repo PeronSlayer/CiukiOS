@@ -472,6 +472,13 @@ def application_payloads(stage=None):
     # path, plus its SYSTEM-only store directory (empty until provisioning).
     accounts_sources, accounts_directories, accounts_metadata = accounts_build.image_payloads()
     sources.update(accounts_sources)
+    # sec-k06: the kernel's sealed REGISTRY role image and protected stores.
+    registry_spec = importlib.util.spec_from_file_location("image_registry", ROOT / "apps/registry/build_registry.py")
+    registry_build = importlib.util.module_from_spec(registry_spec)
+    registry_spec.loader.exec_module(registry_build)
+    registry_sources, registry_directories, registry_metadata = registry_build.image_payloads()
+    sources.update(registry_sources)
+    # end sec-k06
     directories = {"/Programs", "/tmp", "/Documents", "/Documents/Desktop", "/System", "/system/tests",
                    "/system/licenses", "/system/assets", TEST_PATH}
     directories.update(f"{TEST_PATH}/{name}" for name in manifest["test_directories"])
@@ -488,6 +495,10 @@ def application_payloads(stage=None):
     metadata["desktop"] = desktop_metadata
     metadata["tcc"] = tcc_metadata
     metadata["w32srv"] = w32_metadata
+    # sec-k06
+    directories.update(registry_directories)
+    metadata["registry"] = registry_metadata
+    # end sec-k06
     metadata["accounts"] = accounts_metadata
     metadata["native_elf"] = strip_payloads(sources, stage) if stage is not None else []
     # The gate's relative supplement argv uses TEST_PATH. Retain the f2-07
@@ -867,7 +878,13 @@ def registry_payloads(directory):
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / "System.reg"
     path.write_text(text, encoding="utf-8")
-    return {"/System/Registry/System.reg": path}, {"/System", "/System/Registry"}
+    # sec-k06: native machine roots use only the SYSTEM broker's backing tree.
+    programs = directory / "Programs.reg"
+    programs.write_text("; ciuki-registry generation=0\n[Programs]\n", encoding="utf-8")
+    machine = "/System/Security/Registry/Machine"
+    return {machine + "/System.reg": path, machine + "/Programs.reg": programs}, {
+        "/System", "/System/Security", "/System/Security/Registry", machine}
+    # end sec-k06
 
 
 def build(kernel, out, boot_cfg):

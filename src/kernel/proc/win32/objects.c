@@ -5,6 +5,7 @@
 #include <ciuki/cpu.h>
 #include <ciuki/w32_objects.h>
 #include <ciuki/files.h>
+#include <ciuki/security.h>
 extern void w32_snapshot_destroy(struct w32_object *);
 extern void w32_find_destroy(struct w32_object *) __attribute__((weak));
 extern void w32_file_handle_close(struct process *,struct w32_object *) __attribute__((weak));
@@ -65,7 +66,7 @@ uint64_t w32_now(void)
 }
 struct w32_object *w32_object_new(uint32_t type)
 {
-    if (type < W32_OBJ_PROCESS || type > W32_OBJ_SNAPSHOT || w32_accounts.objects >= W32_OBJECT_MAX)
+    if (type < W32_OBJ_PROCESS || type > W32_OBJ_TOKEN || w32_accounts.objects >= W32_OBJECT_MAX)
         return 0;
     struct w32_object *o = w32_alloc(sizeof(*o));
     if (!o)
@@ -182,11 +183,30 @@ struct w32_object *w32_lookup(struct proc_thread *t, uint32_t h, uint32_t type)
         if (e)
             o = e->object;
     }
+    if (o && o->type == W32_OBJ_TOKEN) {
+        uint32_t state = 0;
+        const struct ciuki_credential *c = security_credential(t->process);
+        if (!c || !security_process_live(t->process) ||
+            c->uid != o->security_uid || c->session_id != o->security_session ||
+            (o->u.token.session_id && (security_session_query(t->process,
+                o->u.token.session_id, &state) || state != CIUKI_SECURITY_SESSION_ACTIVE)))
+            return 0;
+    }
     return o && (!type || o->type == type) ? o : 0;
+}
+bool w32_handle_access(struct proc_thread *t, uint32_t h, uint32_t rights)
+{
+    if (h == W32_CURRENT_PROCESS || h == W32_CURRENT_THREAD) return true;
+    struct w32_handle_entry *e = entry(t->process, h);
+    return e && (e->access & rights) == rights;
 }
 uint32_t w32_handle_install(
     struct process *p, struct w32_object *o, uint32_t access, bool inherit, uint32_t *h)
 {
+    if (o->type == W32_OBJ_TOKEN) {
+        const struct ciuki_credential *c=security_credential(p);
+        if(inherit||!c||!security_process_live(p)||c->uid!=o->security_uid||c->session_id!=o->security_session)return 5;
+    }
     if (!p->w32 && w32_process_init(p))
         return 8;
     if (p->w32->closing || p->state == PROC_STOPPING || p->state == PROC_ZOMBIE)
@@ -238,6 +258,7 @@ uint32_t w32_handles_inherit(struct process *child, const struct process *parent
 {
     if (child->personality != PROC_WIN32 || !parent->w32)
         return 0;
+    if (!security_same(child, parent)) return 5;
     if (w32_process_init(child))
         return 8;
     /* Transactional: provision all chunks before installing any reference. */
@@ -311,10 +332,12 @@ uint32_t w32_named_create(struct process *p, uint32_t type, const uint16_t *name
         if (len > 260)
             return 206;
     }
+    const struct ciuki_credential *credential = security_credential(p);
+    if (!credential || !security_process_live(p)) return 5;
     *existing = false;
     struct w32_object *o = 0;
     for (struct w32_object *it = w32_objects; name && it; it = it->next)
-        if (name_equal(it->name, name)) {
+        if (it->security_session == credential->session_id && name_equal(it->name, name)) {
             o = it;
             break;
         }
@@ -329,6 +352,8 @@ uint32_t w32_named_create(struct process *p, uint32_t type, const uint16_t *name
         o = w32_object_new(type);
         if (!o)
             return 8;
+        o->security_uid = credential->uid;
+        o->security_session = credential->session_id;
         if (name) {
             o->name = w32_alloc((len + 1) * 2);
             if (!o->name) {
@@ -368,15 +393,18 @@ static struct process *process_handle(struct proc_thread *t, uint32_t h)
 static uint32_t duplicate(struct proc_thread *t, struct ciuki_w32_object_args *a)
 {
     struct process *src = process_handle(t, a->source), *dst = process_handle(t, a->target);
-    if (!src)
-        return 6;
+    if (!src) return 6;
+    if (!security_same(t->process, src) || (dst && !security_same(t->process, dst)) ||
+        !w32_handle_access(t, a->source, 0x40) ||
+        (dst && !w32_handle_access(t, a->target, 0x40))) return 5;
     struct w32_handle_entry *e = entry(src, a->handle);
     struct w32_object *o = e ? e->object : 0;
     if (src == t->process && (a->handle == W32_CURRENT_PROCESS || a->handle == W32_CURRENT_THREAD))
         o = w32_lookup(t, a->handle, 0);
     uint32_t access = e ? e->access : UINT32_MAX, error = 0;
-    if (!o)
-        error = 6;
+    if (!o) error = 6;
+    else if (!(a->flags & W32_DUP_SAME_ACCESS) && (a->access & ~access)) return 5;
+    else if (o->type == W32_OBJ_TOKEN && (src != dst || a->value)) return 5;
     else {
         w32_retain(o);
         if (!dst)
@@ -394,6 +422,7 @@ uint32_t w32_object_call(struct proc_thread *t, struct ciuki_w32_object_args *a)
 {
     uint32_t error = 0;
     struct w32_object *o = 0;
+    if (!security_process_live(t->process)) { a->error=5; return 0; }
     if (a->action == W32_OBJ_CLOSE)
         error = w32_handle_close(t->process, a->handle);
     else if (a->action == W32_OBJ_DUPLICATE) {
@@ -406,17 +435,41 @@ uint32_t w32_object_call(struct proc_thread *t, struct ciuki_w32_object_args *a)
         error = copy_name(a->name, name);
         if (error)
             goto done;
-        if (a->type == W32_OBJ_PROCESS || a->type == W32_OBJ_THREAD) {
+        if (a->type == W32_OBJ_TOKEN) {
+            struct process *target = process_handle(t, a->source);
+            struct ciuki_credential c;
+            if (a->action != W32_OBJ_CREATE || a->access != 8 || a->flags ||
+                !target || (!w32_handle_access(t,a->source,0x400)&&!w32_handle_access(t,a->source,0x1000)) ||
+                security_query_process(t->process, target->pid, &c)) { error=5; goto done; }
+            uint32_t target_pid=target->pid,target_generation=security_process_generation(target);
+            o=w32_object_new(W32_OBJ_TOKEN);
+            if (!o) { error=8; goto done; }
+            if(proc_find(target_pid)!=target||security_process_generation(target)!=target_generation||
+               target->state!=PROC_LIVE||!security_process_live(target)){
+                w32_release(o);error=6;goto done;
+            }
+            const struct ciuki_credential *owner=security_credential(t->process);
+            o->security_uid=owner->uid; o->security_session=owner->session_id;
+            o->u.token=c;
+            error=w32_handle_install(t->process,o,8,false,&a->result);
+            w32_release(o);
+        } else if (a->type == W32_OBJ_PROCESS || a->type == W32_OBJ_THREAD) {
             struct process *p = proc_find(a->value);
             if (a->type == W32_OBJ_PROCESS)
                 o = p && p->w32 ? p->w32->identity : 0;
             else
                 for (unsigned i = 0; i < CIUKI_THREAD_MAX; i++) {
                     struct proc_thread *v = proc_thread_slot(i);
-                    if (v && v->tid == a->value && v->w32)
-                        o = v->w32->identity;
+                    if (v && v->tid == a->value && v->w32) {
+                        o = v->w32->identity; p=v->process;
+                    }
                 }
-            error = o ? w32_handle_install(t->process, o, a->access, !!a->flags, &a->result) : 6;
+            struct ciuki_credential queried;
+            if (o && (!p || security_query_process(t->process,p->pid,&queried) ||
+                (!security_same(t->process,p) &&
+                 (a->type != W32_OBJ_PROCESS || (a->access & ~(0x400u|0x1000u|1u|0x100000u))))))
+                error=5;
+            else error = o ? w32_handle_install(t->process, o, a->access, !!a->flags, &a->result) : 6;
         } else if (a->type == W32_OBJ_FILE) {
             struct file_description *d = file_fd(t->process, (int32_t)a->source);
             if (!d)
@@ -445,7 +498,8 @@ uint32_t w32_object_call(struct proc_thread *t, struct ciuki_w32_object_args *a)
             bool exists = false;
             if (a->action == W32_OBJ_OPEN) {
                 for (struct w32_object *it = w32_objects; it; it = it->next)
-                    if (name_equal(it->name, flat_name(name))) {
+                    if (it->security_session == security_credential(t->process)->session_id &&
+                        name_equal(it->name, flat_name(name))) {
                         o = it;
                         break;
                     }
@@ -481,6 +535,12 @@ uint32_t w32_object_call(struct proc_thread *t, struct ciuki_w32_object_args *a)
             error = 6;
             goto done;
         }
+        if(a->action==W32_OBJ_QUERY&&a->type==W32_OBJ_TOKEN&&o->type!=W32_OBJ_TOKEN){error=6;goto done;}
+        uint32_t right = (a->action == W32_OBJ_SET || a->action == W32_OBJ_RESET ||
+            a->action == W32_OBJ_PULSE || a->action == W32_OBJ_RELEASE ||
+            a->action == W32_OBJ_TIMER_SET || a->action == W32_OBJ_TIMER_CANCEL) ?
+            (o->type == W32_OBJ_MUTEX ? 1u : 2u) : 0;
+        if (right && !w32_handle_access(t,a->handle,right)) { error=5; goto done; }
         switch (a->action) {
         case W32_OBJ_SET:
         case W32_OBJ_RESET:
@@ -517,6 +577,20 @@ uint32_t w32_object_call(struct proc_thread *t, struct ciuki_w32_object_args *a)
                 error = 6;
             break;
         case W32_OBJ_QUERY: {
+            if (o->type == W32_OBJ_TOKEN) {
+                a->result=sizeof(struct ciuki_credential);a->type=W32_OBJ_TOKEN;a->access=8;a->flags=0;
+                if (!w32_handle_access(t,a->handle,8)) error=5;
+                else if (a->maximum < sizeof(struct ciuki_credential)) error=122;
+                else if (copy_to_user(a->name,&o->u.token,sizeof(o->u.token))) error=998;
+                else {
+                    bool admin=o->u.token.uid==CIUKI_UID_SYSTEM;
+                    for (unsigned i=0;i<o->u.token.group_count;i++)
+                        admin |= o->u.token.groups[i]==CIUKI_GID_ADMINISTRATORS;
+                    a->value=(o->u.token.session_id || o->u.token.uid==CIUKI_UID_SYSTEM ? 1u : 0u) |
+                        (admin ? 6u : 0u);
+                }
+                break;
+            }
             struct w32_handle_entry *e = entry(t->process, a->handle);
             a->access = e ? e->access : UINT32_MAX;
             a->flags = e ? e->inherit : 0;
@@ -526,10 +600,9 @@ uint32_t w32_object_call(struct proc_thread *t, struct ciuki_w32_object_args *a)
         }
         case W32_OBJ_SET_INHERIT: {
             struct w32_handle_entry *e = entry(t->process, a->handle);
-            if (!e)
-                error = 6;
-            else
-                e->inherit = !!a->value;
+            if (!e) error = 6;
+            else if (o->type == W32_OBJ_TOKEN && a->value) error=5;
+            else e->inherit = !!a->value;
             break;
         }
         case W32_OBJ_TIMER_SET:
