@@ -340,12 +340,16 @@ int main(int argc, char **argv)
     a->show_bin_properties = bin_properties; a->find_initial = find;
     a->show_folder_options=folder_options;
     if (files_setup(a, &m->ui, fm_native_vfs(), path)) { du_window_destroy(&m->window); free(m); return 1; }
+    /* fx-exeicons: own icons are extracted off the UI thread (a CD spinning
+     * up never stalls the window); scripted gate runs extract in line. */
+    if (!test && du_file_icons_start(m->ui.wake, m->ui.wake_ctx)) fprintf(stderr, "Files: icon worker unavailable\n");
     if (shell_action) files_shell_action(a,shell_action,shell_path);
     if (open_document) files_open_document(a,open_document);
     /* Fixed placement keeps the scripted desktop case deterministic. */
     if (test) du_window_move(&m->window, 4, 36);
     int r = du_run(&m->window, idle, a);
     files_destroy(a);
+    du_file_icons_stop();
     du_window_destroy(&m->window);
     free(m);
     return r < 0 ? 1 : 0;

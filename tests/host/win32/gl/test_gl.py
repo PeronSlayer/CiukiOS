@@ -92,7 +92,7 @@ class GLTests(unittest.TestCase):
  def build_compositor(cls,sanitize=True):
   from tests.host.desktop.test_desktop import SHELL_SOURCES
   sources=[ROOT/'apps/desktop'/n for n in ('protocol.c','client.c','input.c','compositor.c','theme.c','gl_present.c')]
-  sources+=SHELL_SOURCES+[ROOT/'apps/libdeskui'/n for n in ('icons.c','icon_map.c','v3.c')]
+  sources+=SHELL_SOURCES+[ROOT/'apps/libdeskui'/n for n in ('icons.c','icon_map.c','iconx.c','fileicon.c','v3.c')]
   sources+=[ROOT/'tests/host/desktop'/n for n in ('fake.c','v3_test.c')]
   binary=cls.out/('compositor' if sanitize else 'compositor-benchmark')
   subprocess.run(['clang','-std=c17','-D_POSIX_C_SOURCE=200809L','-O1','-g','-Wall','-Wextra','-Werror',

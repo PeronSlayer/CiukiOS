@@ -145,10 +145,11 @@ int ciuki_win32_uninstall_list(struct desk_uninstall_entry *out, unsigned cap)
             if(error)break;
             uint32_t key=r->header.key;
             uint32_t e=string(r,key,"DisplayName",entry.name,sizeof(entry.name));
-            const char *names[]={"UninstallString","DisplayVersion","Publisher","InstallLocation"};
-            char *values[]={entry.command,entry.version,entry.publisher,entry.location};
-            unsigned sizes[]={sizeof(entry.command),sizeof(entry.version),sizeof(entry.publisher),sizeof(entry.location)};
-            for(unsigned k=0;!e && k<4;k++) {
+            /* fx-exeicons: DisplayIcon ("file[,index]") names the program's icon. */
+            const char *names[]={"UninstallString","DisplayVersion","Publisher","InstallLocation","DisplayIcon"};
+            char *values[]={entry.command,entry.version,entry.publisher,entry.location,entry.icon};
+            unsigned sizes[]={sizeof(entry.command),sizeof(entry.version),sizeof(entry.publisher),sizeof(entry.location),sizeof(entry.icon)};
+            for(unsigned k=0;!e && k<5;k++) {
                 uint32_t q=string(r,key,names[k],values[k],sizes[k]);if(q && q!=2)e=q;
             }
             const char *nums[]={"EstimatedSize","NoRemove","NoModify","SystemComponent"};

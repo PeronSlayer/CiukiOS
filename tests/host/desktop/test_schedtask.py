@@ -22,7 +22,7 @@ FLAGS = ["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_PO
          "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections"]
 TOOLKIT = ["apps/libdeskui/draw.c", "apps/libdeskui/widgets.c", "apps/libdeskui/list.c", "apps/libdeskui/menu.c",
            "apps/libdeskui/dialog.c", "apps/libdeskui/controls.c", "apps/libdeskui/commdlg.c", "apps/libdeskui/textarea.c", "apps/libdeskui/keymap.c", "apps/desktop/compositor.c",
-           "apps/desktop/theme.c", "apps/libdeskui/icons.c", "apps/libdeskui/icon_map.c"]
+           "apps/desktop/theme.c", "apps/libdeskui/icons.c", "apps/libdeskui/icon_map.c", "apps/libdeskui/iconx.c", "apps/libdeskui/fileicon.c"]
 SOURCES = ["apps/systools/schedtask_ui.c", "apps/systools/sched.c", "apps/systools/service.c", "tests/host/desktop/schedtask_test.c"]
 PIN = "PIN-FROM-FIRST-RUN"
 # fixd: visually reviewed combined G11/G19/G23/G30 integration frames (2026-10-24).

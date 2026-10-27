@@ -309,6 +309,13 @@ static int v3_parse(const struct ciuki_message *m, int client,
         p->x=(int32_t)desk_get32(b+12); p->y=(int32_t)desk_get32(b+16);
         if (!p->serial) return 0;
         expected=20; break;
+    case DESK_V3_WINDOW_ICON:
+        if (!client || n!=4) return 0;
+        p->index=desk_get32(b);
+        if (p->index!=0 && p->index!=16 && p->index!=32) return 0;
+        fd=p->index!=0;
+        if (fd && (!desk_surface_valid(s) || s->width!=p->index || s->height!=p->index)) return 0;
+        expected=4; break;
     case DESK_V3_FLASH: case DESK_ACCEPT_FILES:
         if (!client || n!=4 || (p->flags=desk_get32(b))>1) return 0;
         expected=4; break;

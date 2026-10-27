@@ -211,6 +211,88 @@ static __attribute__((noinline)) void uninstall_location(struct desk_uninstall_e
     if(system_path(directory) || !strcasecmp(directory,"/Programs") || !strcasecmp(directory,"/Games") || !strcasecmp(directory,"/Program Files"))return;
     snprintf(entry->location,sizeof(entry->location),"%s",directory);
 }
+/* fx-exeicons: the icon of a Windows program's entry, as a libdeskui file
+ * icon key. DisplayIcon names it ("file[,index]": Windows Installer's
+ * ARPPRODUCTICON); without it, Windows 2000/XP's Add/Remove Programs took
+ * the Start menu shortcut whose name shares the most words with DisplayName
+ * (R. Chen, "How does Add/Remove Programs get the size and other
+ * information?", The Old New Thing, 2004-07-09). Here a shortcut whose
+ * target lies in the program's folder outranks a name match, and the
+ * shortcut that runs the uninstaller never wins. Bounded walk of the Start
+ * menu: three levels, SHORTCUT_SCAN entries, CIUKLNK3 records only. */
+#define SHORTCUT_SCAN 256u
+static unsigned words_shared(const char *a,const char *b)
+{
+    char wa[16][24];unsigned na=0,shared=0;
+    for(const char *p=a;*p && na<16;){
+        while(*p && !((*p>='a' && *p<='z') || (*p>='A' && *p<='Z') || (*p>='0' && *p<='9')))p++;
+        unsigned n=0;while((*p>='a' && *p<='z') || (*p>='A' && *p<='Z') || (*p>='0' && *p<='9')){if(n<23)wa[na][n++]=(char)(*p>='A' && *p<='Z' ? *p+32 : *p);p++;}
+        if(n>1){wa[na][n]=0;na++;}
+    }
+    for(const char *p=b;*p;){
+        while(*p && !((*p>='a' && *p<='z') || (*p>='A' && *p<='Z') || (*p>='0' && *p<='9')))p++;
+        char w[24];unsigned n=0;while((*p>='a' && *p<='z') || (*p>='A' && *p<='Z') || (*p>='0' && *p<='9')){if(n<23)w[n++]=(char)(*p>='A' && *p<='Z' ? *p+32 : *p);p++;}
+        w[n]=0;
+        for(unsigned k=0;n>1 && k<na;k++)if(!strcmp(wa[k],w)){wa[k][0]=0;shared++;break;}
+    }
+    return shared;
+}
+struct icon_scan { struct cp_program_store *s; const struct desk_uninstall_entry *r; char uninstaller[260]; unsigned budget; int best; char path[260]; };
+static void icon_folder(struct icon_scan *x,const char *dir,const char *folder_label,unsigned depth)
+{
+    char full[1024];if(path(x->s,dir,full,sizeof(full)))return;
+    DIR *d=opendir(full);if(!d)return;
+    struct dirent *ent;
+    while(x->budget && (ent=readdir(d))){
+        x->budget--;
+        if(ent->d_name[0]=='.')continue;
+        char rel[260],child[1024];
+        if(snprintf(rel,sizeof(rel),"%s/%s",dir,ent->d_name)>=(int)sizeof(rel) || path(x->s,rel,child,sizeof(child)))continue;
+        struct stat st;if(program_stat(child,&st))continue;
+        size_t n=strlen(ent->d_name);
+        if(S_ISDIR(st.st_mode)){if(depth)icon_folder(x,rel,ent->d_name,depth-1);continue;}
+        if(n<5 || strcasecmp(ent->d_name+n-4,".lnk"))continue;
+        char label[300];snprintf(label,sizeof(label),"%.*s %s",(int)(n-4),ent->d_name,folder_label);
+        int score=(int)words_shared(x->r->name,label);
+        struct desk_launch_record *record=malloc(sizeof(*record));
+        if(!record)break;
+        if(!read_record(child,record)){
+            char target[260];
+            if(normal(record->target,target)){
+                if(x->uninstaller[0] && !strcasecmp(target,x->uninstaller))score=-1;
+                else {
+                    const char *ext=strrchr(target,'.');
+                    int program=ext && !strcasecmp(ext,".exe");
+                    if(x->r->location[0] && cp_program_contains(x->r->location,target))score+=program ? 100 : 50;
+                    else if(score>0 && program)score++;   /* a name match that starts a program */
+                }
+            }
+        } else score=score ? score : -1;
+        free(record);
+        if(score>0 && score>x->best){x->best=score;snprintf(x->path,sizeof(x->path),"%s",rel);}
+    }
+    closedir(d);
+}
+static __attribute__((noinline)) void program_icon(struct cp_program_store *s,struct desk_uninstall_entry *r)
+{
+    char location[300],native[260];
+    snprintf(location,sizeof(location),"%s",r->icon);r->icon[0]=0;
+    if(location[0]){
+        /* "C:\Path\File.exe,3": split the trailing integer index. */
+        char *comma=strrchr(location,',');long index=0;
+        if(comma){char *end;index=strtol(comma+1,&end,10);while(*end==' ')end++;if(!*end && end!=comma+1)*comma=0;else index=0;}
+        char *q=location;while(*q==' ' || *q=='"')q++;
+        size_t n=strlen(q);while(n && (q[n-1]==' ' || q[n-1]=='"'))q[--n]=0;
+        if(normal(q,native)){snprintf(r->icon,sizeof(r->icon),"%s|%ld",native,index);return;}
+    }
+    struct icon_scan *x=calloc(1,sizeof(*x));if(!x)return;
+    x->s=s;x->r=r;x->budget=SHORTCUT_SCAN;
+    struct desk_launch_record record;
+    if(desk_uninstall_command(r->command,&record))(void)normal(record.target,x->uninstaller);
+    icon_folder(x,"/Windows/Start Menu/Programs","",2);
+    if(x->best>0)snprintf(r->icon,sizeof(r->icon),"%s",x->path);
+    free(x);
+}
 static int compare(const void *a,const void *b)
 {
     const struct desk_uninstall_entry *x=a,*y=b;int n=strcasecmp(x->name,y->name);
@@ -257,6 +339,7 @@ int cp_program_list(struct cp_program_store *s,struct desk_uninstall_entry *out,
     if(n && out[0].inventory_more)s->overflow=1;
     for(int i=0;i<n;i++){
         uninstall_location(&out[i]);
+        program_icon(s,&out[i]);
         out[i].kind=DESK_PROGRAM_WIN32;out[i].disk_bytes=(uint64_t)out[i].estimated_kb*1024;
         if(out[i].system_component || system_path(out[i].location))out[i].no_remove=1;
         if(!out[i].command[0])out[i].no_remove=1;

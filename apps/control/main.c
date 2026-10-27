@@ -44,7 +44,7 @@
 #include "network_io.inc"
 #include "../dosbox/port_settings.h"
 
-struct cp_main { struct users_worker users_worker; char settings_temp[160]; struct cp_network_worker network_worker; struct cp_app app; struct du_ui ui; struct du_window window; struct cfg_writer writer;
+struct cp_main { unsigned icon_generation; /* fx-exeicons: du_file_icons_generation() shown */ struct users_worker users_worker; char settings_temp[160]; struct cp_network_worker network_worker; struct cp_app app; struct du_ui ui; struct du_window window; struct cfg_writer writer;
     int writer_started, reload_pending, hwid_loaded, usb_hwid_loaded; char *hwid_pci, *hwid_usb; uint32_t portrait[256 * 256]; uint32_t install_serial, serial, display_serial, audio_serial, engine_serial;
     struct ciuki_display_engine_info generic_engine;
     struct ciuki_accel_info engine; int engine_ok; uint64_t engine_next; int title_page;
@@ -709,6 +709,8 @@ static void idle(void *arg)
     struct cp_main *m=arg;
     if (m->app.page==CP_DISPLAY || m->app.page==CP_SYSTEM || m->app.page==CP_DEVICES || m->app.page==CP_DRIVERS) m->assets_requested=1;
     if (m->window.configured && m->ui.frame_count) programs_poll(m);
+    unsigned icons=du_file_icons_generation();   /* fx-exeicons: program icons the worker published */
+    if (icons!=m->icon_generation) { m->icon_generation=icons; cp_uninstall_icons(&m->app); }
     if (m->assets.started && cp_job_ready(&m->assets) && m->ui.capture<0 && !m->ui.dialog.kind) {
         cp_job_finish(&m->assets); m->assets_ready=1;
         m->hwid_pci=m->pci_cache; m->hwid_usb=m->usb_cache;
@@ -992,7 +994,9 @@ int main(int argc, char **argv)
     }
     if (game) cp_game_open(&m->app,game);
     if (set_wallpaper && cp_wallpaper_set(&m->app,set_wallpaper)) fprintf(stderr,"control: wallpaper path is not a supported image\n");
+    if (du_file_icons_start(m->ui.wake, m->ui.wake_ctx)) fprintf(stderr,"control: icon worker unavailable\n");   /* fx-exeicons */
     int r = control_run(m);
+    du_file_icons_stop();
     cp_decoder_stop();
     cp_job_finish(&m->users_worker.job);
     cp_job_finish(&m->menu_job);

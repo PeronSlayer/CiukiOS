@@ -43,7 +43,9 @@ BOOL W32API CreateDirectoryA(const char *w,SECURITY_ATTRIBUTES *sa){(void)sa;cha
 BOOL W32API RemoveDirectoryA(const char *w){char p[1400];return path(w,p) && (!rmdir(p) || fail());}
 BOOL W32API DeleteFileA(const char *w){char p[1400];return path(w,p) && (!unlink(p) || fail());}
 BOOL W32API MoveFileA(const char *a,const char *b){char p[1400],q[1400];return path(a,p) && path(b,q) && (!rename(p,q) || fail());}
-DWORD W32API GetFileAttributesA(const char *w){char p[1400];struct stat st;if(!path(w,p) || stat(p,&st)){fail();return ~0u;}return S_ISDIR(st.st_mode)?16:128;}
+DWORD W32API GetFileAttributesA(const char *w){char p[1400];struct stat st;if(!path(w,p) || stat(p,&st)){fail();return ~0u;}
+  /* A host mode without owner write is FILE_ATTRIBUTE_READONLY (fx-exeicons: desktop.ini folders). */
+  DWORD ro=st.st_mode&0200?0:1;return S_ISDIR(st.st_mode)?16|ro:ro?ro:128;}
 DWORD W32API GetFullPathNameA(const char *w,DWORD cap,char *p,char **part){
   char source[260],out[260];unsigned ends[130],depth=0,n=3;
   if(strlen(w)>=sizeof(source) || w[1]!=':'){error=123;return 0;}

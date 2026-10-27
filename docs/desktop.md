@@ -561,6 +561,17 @@ keeps `applications-games`), Clock `appointment-new` (Date & Time keeps
 banner) are area-averaged conversions of the approved portrait, whose
 `#375564` surround is made transparent.
 
+Own icons (fx-exeicons, 2026-10-27; [file icons](design/file-icons.md)): a
+program or library, an icon file, a shortcut (its IconLocation or its
+target's icon), a PIF, an Internet shortcut, a read-only or system folder
+with a desktop.ini and a CD with an AUTORUN.INF `icon=` show their own icon
+wherever the shell shows them; the Tango icon above stays their type's
+default. libdeskui extracts them on a worker (`du_file_icon`, the bounded
+`iconx` core); the shell repaints its icons, open menus, AutoPlay and the
+taskbar when the worker publishes. Win32 windows send their icon
+(`DESK_V3_WINDOW_ICON`: WM_SETICON, the class icon, else the executable's)
+for the caption, the taskbar button and Alt+Tab.
+
 Desktop icon labels (Windows Vista/7 style, readable on any wallpaper): white
 Inter 13 (`DESK_FONT_LABEL`), up to two centred lines broken by width in a
 96 x 94 cell, over a soft dark halo: the glyph coverage blurred twice by the

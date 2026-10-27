@@ -379,6 +379,7 @@ void cp_detach(struct cp_app *);
 int cp_page_index(const char *name);
 void cp_tick(struct cp_app *);
 void cp_open(struct cp_app *, int page);
+void cp_uninstall_icons(struct cp_app *);   /* fx-exeicons: refresh Add/Remove icons after the icon worker published */
 int cp_snapshot_valid(const struct ciuki_devices_info *);
 int cp_hwid_lookup_json(const char *json, unsigned vendor, unsigned device, char *out, size_t size);
 void cp_tree_build(struct cp_app *);

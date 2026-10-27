@@ -2906,6 +2906,38 @@ static void test_production_gdi(void) {
 #include "../shell/clients.inc"
 #include "g18_test.inc"
 #endif
+/* fx-exeicons: a captioned top-level window tells the desktop its icon
+ * (DESK_V3_WINDOW_ICON, 32 then 16 px, one surface each): WM_SETICON, else
+ * the class icon; WM_GETICON answers the WM_SETICON icons, ICON_SMALL2 the
+ * small one or else the big one. A window without a caption sends none. */
+static UINT window_icon_sends(UINT from, UINT size) {
+  UINT n = 0;
+  for (UINT i = from; i < outgoing_count; i++)
+    if (outgoing[i].data[0] == DESK_V3_VERSION && outgoing[i].data[1] == DESK_V3_WINDOW_ICON &&
+        outgoing[i].fd_count == 1 && desk_get32(outgoing[i].data + 16) == size)
+      n++;
+  return n;
+}
+static void test_window_icons(void) {
+  WNDCLASSA c = {.lpfnWndProc = DefWindowProcA, .lpszClassName = "fx-exeicons",
+                 .hIcon = LoadIconA(0, (const char *)(uintptr_t)32515)};
+  CHECK(c.hIcon && RegisterClassA(&c));
+  UINT begin = outgoing_count;
+  HWND h = CreateWindowExA(0, "fx-exeicons", "Icon", WS_CAPTION, 10, 10, 120, 80, 0, 0, 0, 0);
+  CHECK(h && window_icon_sends(begin, 32) == 1 && window_icon_sends(begin, 16) == 1);
+  CHECK(!SendMessageA(h, 0x7f, 1, 0) && !SendMessageA(h, 0x7f, 0, 0));
+  HICON other = LoadIconA(0, (const char *)(uintptr_t)32513);
+  begin = outgoing_count;
+  CHECK(!SendMessageA(h, 0x80, 1, (LPARAM)other));
+  CHECK((HICON)SendMessageA(h, 0x7f, 1, 0) == other && (HICON)SendMessageA(h, 0x7f, 2, 0) == other);
+  CHECK(window_icon_sends(begin, 32) == 1 && window_icon_sends(begin, 16) == 1);
+  CHECK((HICON)SendMessageA(h, 0x80, 1, 0) == other);
+  begin = outgoing_count;
+  HWND bare = CreateWindowExA(0, "fx-exeicons", "Popup", WS_POPUP, 10, 10, 50, 50, 0, 0, 0, 0);
+  CHECK(bare && !window_icon_sends(begin, 32) && !window_icon_sends(begin, 16));
+  CHECK(DestroyWindow(bare) && DestroyWindow(h));
+  discard();
+}
 static void run(void) {
   puts("STEP init");
   ui_kernel_init();
@@ -2969,6 +3001,7 @@ static void run(void) {
   test_g18_shell();
   test_shell_folder();
 #endif
+  test_window_icons();
   test_order();
   test_arrange();
   test_zoom_limits();

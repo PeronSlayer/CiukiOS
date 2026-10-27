@@ -7,30 +7,11 @@ extern void *W32API GlobalLock(HANDLE);
 extern BOOL W32API GlobalUnlock(HANDLE);
 extern DWORD W32API GlobalSize(HANDLE);
 extern HANDLE W32API GlobalFree(HANDLE);
-struct fileinfo {HICON icon;int index;DWORD attributes;char display[260],type[80];};
 UINT W32API ExtractIconExA(const char *file,int index,HICON *large,HICON *small,UINT count){
   return PrivateExtractIconExA(file,index,large,small,count);
 }
 UINT W32API ExtractIconExW(const WCHAR *file,int index,HICON *large,HICON *small,UINT count){char a[260];return shell_ansi(file,a,260)?ExtractIconExA(a,index,large,small,count):0;}
-HICON W32API ExtractIconA(HINSTANCE instance,const char *file,UINT index){
-  (void)instance;if(index==~0u)return (HICON)(uintptr_t)PrivateExtractIconsA(file,0,32,32,0,0,0,0);
-  HICON icon=0;return PrivateExtractIconsA(file,(int)index,32,32,&icon,0,1,0)==1?icon:0;
-}
-HICON W32API ExtractIconW(HINSTANCE instance,const WCHAR *file,UINT index){char a[260];return shell_ansi(file,a,260)?ExtractIconA(instance,a,index):0;}
-uintptr_t W32API SHGetFileInfoA(const char *file,DWORD attr,struct fileinfo *out,UINT size,UINT flags){
-  if(!file || !out || size<sizeof(*out) || (flags&8)){SetLastError(87);return 0;}
-  w32_fill(out,0,sizeof(*out));
-  if(!(flags&0x10)){attr=GetFileAttributesA(file);if(attr==~0u)return 0;}
-  out->attributes=attr;
-  const char *base=file;for(const char *s=file;*s;s++)if(*s=='\\' || *s=='/')base=s+1;
-  if(flags&0x200)if(!shell_copy(out->display,260,base))return 0;
-  if(flags&0x400)shell_copy(out->type,80,attr&16?"File folder":"File");
-  if(flags&0x100)out->icon=ExtractIconA(0,file,0);
-  /* The returned index is meaningful only with an image-list handle. No
-   * process-shared shell image list exists yet: never invent its handle. */
-  if(flags&0x4000){if(out->icon)DestroyIcon(out->icon);out->icon=0;SetLastError(120);return 0;}
-  return 1;
-}
+/* ExtractIconA/W and SHGetFileInfoA: icons.c (fx-exeicons). */
 void W32API DragAcceptFiles(HWND window,BOOL accept){
   LONG style=GetWindowLongA(window,-20);
   SetWindowLongA(window,-20,accept?style|0x10:style&~0x10);

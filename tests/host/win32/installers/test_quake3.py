@@ -35,6 +35,15 @@ PAK_SIZE = 46853694
 CANDIDATES = ('build/downloads/win32/q3a-demo-installed/Q3Ademo', 'build/lead-scratch/q3-installed/Q3Ademo')
 
 
+def file_icon_tool():
+    """tests/host/desktop/file_icon_tool.py (fx-exeicons), loaded by path."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('file_icon_tool', ROOT / 'tests/host/desktop/file_icon_tool.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def game_tree():
     """The installed demo tree, or None (never fetched or copied into tracked files)."""
     paths = ([Path(os.environ['CIUKI_Q3A_DEMO'])] if os.environ.get('CIUKI_Q3A_DEMO') else []) + \
@@ -306,6 +315,17 @@ class Quake3InstallerTests(unittest.TestCase):
         self.assertLess(requests, 50000)
         print(f'\nQuake III installer (VISE) on the H1 host: run {seconds:.0f} s, first folder to Finished page '
               f'{end} ms, {requests} w32srv requests, {len(launches)} folders opened')
+        # fx-exeicons: the shortcut the installer created shows the game's own
+        # icon (quake3.exe's first icon group), through libdeskui's service.
+        tool = file_icon_tool()
+        binary = tool.build(OUT / 'icons')
+        game = tool.extract_fnv(binary, root / 'C/Q3Ademo/quake3.exe')
+        self.assertIsNotNone(game)
+        shortcut = tool.resolve(binary, root / 'C', '/WINDOWS/Start Menu/Programs/' + PROGRAMS + '/quake3.lnk')
+        self.assertEqual((shortcut['own'], shortcut.get('loaded')), ('1', '1'), shortcut)
+        if shortcut['file'].lower() == '/q3ademo/quake3.exe' and shortcut['index'] == '0':
+            self.assertEqual(shortcut['fnv'], game)
+        print(f"quake3.lnk icon: {shortcut['file']},{shortcut['index']} fnv={shortcut['fnv']} (quake3.exe: {game})")
         shutil.rmtree(root, ignore_errors=True)
 
 

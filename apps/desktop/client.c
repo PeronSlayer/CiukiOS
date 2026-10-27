@@ -3239,6 +3239,40 @@ static int input_setting(struct desktop *d, const struct desk_packet *p)
     return 0;
 }
 
+/* fx-exeicons: a Win32 window's icon (user32: WM_SETICON, else its class
+ * icon, else its executable's first icon group) for the caption, taskbar
+ * button and Alt+Tab. A 32 px icon alone also gives the 16 px one by the
+ * 2x2 alpha-weighted average, as Windows shrinks hIcon when hIconSm is NULL. */
+static int window_icon(struct desktop *d, int i, const struct desk_packet *p, const struct ciuki_surface_info *info, int fd)
+{
+    struct desk_client *c=&d->clients[i];
+    if (!p->index) c->v3_icon_mask=0;
+    else {
+        const uint8_t *pixels=d->ops.map(fd,PROT_READ);
+        if (!pixels || pixels==MAP_FAILED) return -ENOMEM;
+        uint32_t *dst=p->index==16 ? c->v3_icon16 : c->v3_icon32;
+        for (unsigned y=0;y<p->index;y++) memcpy(dst+y*p->index,pixels+(size_t)y*info->stride,(size_t)p->index*4);
+        d->ops.unmap((void *)pixels,info->allocation_bytes);
+        if (p->index==16) c->v3_icon_mask=(c->v3_icon_mask|1u)&~4u;
+        else {
+            c->v3_icon_mask|=2u;
+            if (!(c->v3_icon_mask&1u) || (c->v3_icon_mask&4u)) {
+                for (unsigned y=0;y<16;y++) for (unsigned x=0;x<16;x++) {
+                    uint32_t a=0,r=0,g=0,b=0;
+                    for (unsigned k=0;k<4;k++) {
+                        uint32_t q=c->v3_icon32[(2*y+k/2)*32+2*x+k%2],qa=q>>24;
+                        a+=qa; r+=(q>>16&255)*qa; g+=(q>>8&255)*qa; b+=(q&255)*qa;
+                    }
+                    c->v3_icon16[y*16+x]=a ? ((a+2)/4)<<24|((r+a/2)/a)<<16|((g+a/2)/a)<<8|(b+a/2)/a : 0;
+                }
+                c->v3_icon_mask|=1u|4u;
+            }
+        }
+    }
+    desk_damage_add(&d->damage,desk_outer(c),d->width,d->height);
+    desk_damage_add(&d->damage,desk_task_button(d,i),d->width,d->height);
+    return 0;
+}
 int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
 {
     struct desk_client *anchor=&d->clients[peer];
@@ -3383,6 +3417,10 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
     }
     case DESK_V3_TRAY_ICON:
         error=desk_shell_program_icon(d,i,&p,&info,m->fd_count ? m->fds[0] : -1);
+        if (!error && m->fd_count) d->ops.close(m->fds[0]);
+        break;
+    case DESK_V3_WINDOW_ICON:
+        error=window_icon(d,i,&p,&info,m->fd_count ? m->fds[0] : -1);
         if (!error && m->fd_count) d->ops.close(m->fds[0]);
         break;
     case DESK_V3_TRAY_BALLOON:

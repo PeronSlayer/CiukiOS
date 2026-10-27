@@ -34,6 +34,7 @@ struct files_drive_label {
 };
 struct files_app {
     unsigned job_publication;
+    unsigned icon_generation;   /* fx-exeicons: du_file_icons_generation() the rows show */
     uint64_t job_ui_ns;
     struct files_worker *worker;
     struct files_transfer *transfer;

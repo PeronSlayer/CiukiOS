@@ -17,7 +17,10 @@
 enum { SH_ROOT_START, SH_ROOT_PROGRAMS, SH_ROOT_QUICK, SH_ROOT_LINKS, SH_ROOT_DESKTOP, SH_ROOT_CUSTOM, SH_ROOT_FAVORITES=SH_ROOT_CUSTOM+CFG_TOOLBARS, SH_ROOTS };
 /* icon: the du_icon_name() object of the entry ("program:calc", "menu:games", "type:.txt"), resolved by
  * sh_folder_scan from the shortcut target; empty means the generic folder/program icon. */
-struct sh_folder_item { char label[64], path[CFG_PATH_MAX], icon[40]; int folder, parent; };
+/* own_icon (fx-exeicons): the entry shows its own icon (a shortcut's
+ * IconLocation or target program, a program, an icon file); the shell asks
+ * libdeskui's file icon cache for it by path, icon stays its default. */
+struct sh_folder_item { char label[64], path[CFG_PATH_MAX], icon[40]; int folder, parent, own_icon; };
 struct sh_folder_snapshot {
     char folders[SH_FOLDERS][CFG_PATH_MAX];
     struct sh_folder_item entries[SH_ENTRIES];

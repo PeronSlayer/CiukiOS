@@ -269,6 +269,23 @@ class LocalEngineTests(unittest.TestCase):
         self.assertNotIn('REPORT action=1', log, diagnostics(service))
         self.assertGreater(size, 300 << 20, 'installed %d files, %d bytes' % (len(installed), size))
         print('Half-Life H1: install complete, engine exit 0, %d files, %d bytes' % (len(installed), size))
+        # fx-exeicons: the Start menu shortcuts the installer created show the
+        # programs' own icons (read in place under the scratch C:).
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('file_icon_tool', ROOT / 'tests/host/desktop/file_icon_tool.py')
+        tool = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(tool)
+        binary = tool.build(OUT / 'icons')
+        menu = service.root / 'C/WINDOWS/Start Menu/Programs'
+        links = sorted(menu.rglob('*.lnk'))
+        self.assertTrue(links, 'no Start menu shortcuts')
+        own = 0
+        for link in links:
+            r = tool.resolve(binary, service.root / 'C', '/' + link.relative_to(service.root / 'C').as_posix())
+            own += r['own'] == '1' and r.get('loaded') == '1'
+            print('Half-Life shortcut %s: own=%s loaded=%s icon=%s,%s' % (link.name, r['own'], r.get('loaded'), r.get('file'), r.get('index')))
+        game = [link for link in links if link.stem.lower() == 'half-life']
+        self.assertTrue(game and own, 'the Half-Life shortcut has no own icon')
 
 
 if __name__ == '__main__':

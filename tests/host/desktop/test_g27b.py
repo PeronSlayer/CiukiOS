@@ -24,7 +24,7 @@ class G27BTests(unittest.TestCase):
                    'autoplay_registry', 'settings', 'power_policy', 'wallpaper',
                    'keymap', 'folder', 'recovery_view']
         toolkit = ['draw', 'widgets', 'list', 'menu', 'dialog', 'controls',
-                   'commdlg', 'textarea', 'icons', 'icon_map']
+                   'commdlg', 'textarea', 'icons', 'icon_map', 'iconx', 'fileicon']
         sources = [*(f'apps/desktop/{n}.c' for n in desktop),
                    *(f'apps/libdeskui/{n}.c' for n in toolkit),
                    'apps/files/model.c', 'apps/files/transfer.c',

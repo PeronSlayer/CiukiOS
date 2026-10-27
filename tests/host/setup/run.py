@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.dont_write_bytecode = True
 SOURCES = [*(f"apps/setup/{n}.c" for n in ("app", "pages", "hw", "catalog", "text", "view", "inf", "rescue", "native", "media", "setup_info", "report_link")),
            "sdk/libsetup/fake/fake.c", "src/kernel/lib/tzrule.c", "apps/hwreport/report.c", "apps/hwreport/textlink.c", "tests/host/setup/setup_test.c", "tests/host/setup/native_test.c", "tests/host/setup/link_test.c",
-           *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map")),
+           *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map", "iconx", "fileicon")),
            *(f"apps/desktop/{n}.c" for n in ("theme", "settings", "compositor", "sounds"))]
 def main():
     with tempfile.TemporaryDirectory(prefix="ciuki-setup-") as temp:

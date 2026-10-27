@@ -131,6 +131,10 @@ struct desk_client {
     uint32_t v3_lease_w, v3_lease_h, v3_lease_bpp, v3_lease_wanted, v3_lease_mode;
     uint32_t v3_cursor_pixels[4][1024];
     uint8_t v3_hot_x[4], v3_hot_y[4];
+    /* fx-exeicons DESK_V3_WINDOW_ICON: the window's own icon (straight
+     * ARGB); mask bit 0 16 px, bit 1 32 px, bit 2 the 16 px one is derived. */
+    uint32_t v3_icon16[256], v3_icon32[1024];
+    unsigned v3_icon_mask;
     uint32_t owner_id;           /* shell modal owner, stable across slot reuse */
     uint32_t v3_limits[4];       /* G4: WM_GETMINMAXINFO track sizes (min w/h, max w/h), 0 default */
     int minimized, internal, closing, program;   /* internal: DESK_INTERNAL_* kind; program: 1 Files, 2 CiukNote, 3 Control Panel */
