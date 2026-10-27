@@ -1139,6 +1139,7 @@ int main(void)
     test_idle();
     test_fullscreen_transport();
     test_fullscreen_service();
+    test_fullscreen_dpmi_refusal();
     test_fullscreen_more_modes();
     test_fullscreen_vbe();
     test_vbe_window();

@@ -196,7 +196,11 @@ static bool park_released(void *arg)
 void dosvm_fullscreen_checkpoint(struct dosvm *v)
 {
     if (!v->fullscreen_hold && !v->fullscreen_suspended && !v->window_marking && !v->clipboard_mark) return;
+    uint32_t flags=irq_save();
+    v->fullscreen_park_tick=g_ticks;
+    uint64_t cycles=dosvm_perf_clock();
     v->fullscreen_parked=true;
+    irq_restore(flags);
     /* fx-22: a suspended VM is not scheduled (VMM Suspend_VM; VPICD
      * simulates no interrupt into it). The former 1 ms sleep loop kept the
      * focused VM runnable, with its pending virtual IRQ urgent, every tick:
@@ -205,7 +209,23 @@ void dosvm_fullscreen_checkpoint(struct dosvm *v)
      * wake this queue; the bound covers a resume path without a wake. */
     while (!park_released(v))
         (void)kwait_wait_until(&v->wake,park_released,v,deadline_after_ms(FS_PARK_RECHECK_MS));
+    flags=irq_save();
+    uint64_t paused=g_ticks-v->fullscreen_park_tick;
+    cycles=dosvm_perf_clock()-cycles;
+    /* fx-biosvm2: sleeping in a display transaction is not guest ISR
+     * execution. Preserve the remaining 50 ms completion guard and its
+     * exact IRET/trampoline records, including a refused mode switch. */
+    for (unsigned irq=0;irq<16;irq++)
+        if (v->irq.rm[irq].active) v->irq.rm[irq].tick+=paused;
+    for (unsigned i=0;i<v->dpmi.depth;i++) {
+        struct dpmi_record *r=&v->dpmi.rec[i];
+        if ((r->flags&DPMI_RF_HWINT) && r->isr_measured) {
+            r->isr_tick+=paused;
+            r->isr_tsc+=cycles;
+        }
+    }
     v->fullscreen_parked=false;
+    irq_restore(flags);
 }
 static int park(struct dosvm *v,unsigned timeout)
 {

@@ -25,6 +25,16 @@ retries the unqualified native panel path. Standard VGA modes use BIOS INT10.
 Sources, the logged-register replay and APM shutdown coverage are recorded in
 [BIOS service isolation, review round 1](../validation/fx-biosvm.md#review-round-1-apm-soft-off-and-panel-mode-ownership).
 
+The fx-biosvm2 state transaction queries the BIOS-defined count of 64-byte
+blocks and admits up to 16 KiB. Its ES:BX save/restore area occupies
+12000h–15FFFh inside the reserved BIOS workspace, separate from the
+10000h scratch/mouse page and 11000h stack. A kernel copy survives other
+firmware calls; mode information still uses the scratch tail. The T23's
+BX=003Bh (3776 bytes) fits this bound. A refused request retains the guest
+BIOS/DPMI continuation, and suspended time does not expire its held-IRQ
+guard. Sources and regression boundaries:
+[BIOS buffers and continuations](../validation/fx-biosvm2.md).
+
 ## war2vbe amendment: guest VBE without a native provider (2026-10-25)
 
 The F3-37 rule below ("a synthetic VBE 2.0 interface only when the native
