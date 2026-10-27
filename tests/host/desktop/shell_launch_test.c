@@ -119,6 +119,18 @@ static FILE *sequence_fopen(const char *path,const char *mode)
 }
 #define fopen sequence_fopen
 #endif
+static int snapshot_read_error;
+static int snapshot_read(const char *path,char *text,size_t capacity,size_t *length)
+{
+    if (snapshot_read_error) { memcpy(text,"theme=bad\n",10); *length=10; return snapshot_read_error; }
+#ifdef DESK_FOOTPRINT_TEST
+    if (sequence_settings_path && !strcmp(path,CFG_FILE)) {
+        sequence_main_reads++; path=sequence_settings_path;
+    }
+#endif
+    return cfg_read_at(path,text,capacity,length);
+}
+#define cfg_read_at snapshot_read
 /* The model has no BIOS display service, including in i686 compile checks. */
 #ifdef __i386__
 static inline uint32_t shell_screen_unavailable(uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d,uintptr_t e,uintptr_t f)
@@ -127,6 +139,7 @@ static inline uint32_t shell_screen_unavailable(uintptr_t a,uintptr_t b,uintptr_
 #define CU_CALL(n,a,b,c,d,e,f) shell_screen_unavailable(a,b,c,d,e,f)
 #endif
 #include "../../../apps/desktop/desktop.c"
+#undef cfg_read_at
 #undef CU_CALL
 #undef write
 #undef opendir
@@ -1566,8 +1579,45 @@ static void test_feedback_wait(void)
     drop_all(&d); fake_reset();
     puts("PASS fx-launchfb review 1: remote first-frame wait never gates input or shortens event/legacy waits");
 }
+static void test_failed_settings_snapshot(void)
+{
+    static struct desktop d;
+    fake_reset(); desk_init(&d,&fake_ops,640,480); desk_shell_enable(&d);
+    char directory[]="build/host/snapshot-XXXXXX"; assert(mkdtemp(directory));
+    snprintf(d.sh.profile.settings,sizeof(d.sh.profile.settings),"%s/desktop.cfg",directory);
+    snprintf(d.sh.profile.temporary,sizeof(d.sh.profile.temporary),"%s/desktop.new",directory);
+    const char original[]="theme=light\nwallpaper=/Documents/Normal.png\ndisplay_mode=324\naudit_unknown=keep\n";
+    assert(!cfg_write_at(d.sh.profile.settings,d.sh.profile.temporary,original,sizeof(original)-1));
+    settings_snapshot_loaded=settings_snapshot_error=0;
+    snapshot_read_error=EIO; settings_load(&d);
+    assert(settings_snapshot_error==EIO && !settings_snapshot_loaded);
+    settings_writer=(struct cfg_writer){0};
+    assert(!cfg_writer_start(&settings_writer,d.sh.profile.settings,d.sh.profile.temporary)); settings_writer_started=1;
+    d.sh.cfg.clock_24h=0; assert(settings_save(&d)==-1 && errno==EIO);
+    snapshot_read_error=0; settings_load(&d); assert(!settings_snapshot_error && settings_snapshot_loaded);
+    assert(!strcmp(d.sh.cfg.wallpaper,"/Documents/Normal.png"));
+    snapshot_read_error=EIO; settings_load(&d);
+    assert(!strcmp(d.sh.cfg.wallpaper,"/Documents/Normal.png") && strstr(d.sh.cfg.extra,"audit_unknown=keep"));
+    assert(settings_save(&d)==-1 && errno==EIO);
+    static char text[CFG_TEXT_MAX]; size_t n;
+    assert(!cfg_read_at(d.sh.profile.settings,text,sizeof(text),&n) && n==sizeof(original)-1 && !memcmp(text,original,n));
+    snapshot_read_error=0; settings_load(&d); assert(!settings_save(&d));
+    cfg_writer_stop(&settings_writer); settings_writer_started=0;
+    assert(!unlink(d.sh.profile.settings));
+    settings_load(&d); assert(settings_snapshot_error==ENOENT && !strcmp(d.sh.cfg.wallpaper,"/Documents/Normal.png"));
+    assert(settings_save(&d)==-1 && errno==ENOENT);
+    settings_snapshot_loaded=settings_snapshot_error=0;
+    settings_load(&d); assert(!settings_snapshot_error); /* ENOENT first boot only */
+    memset(&settings_writer,0,sizeof(settings_writer));
+    assert(!cfg_writer_start(&settings_writer,d.sh.profile.settings,d.sh.profile.temporary)); settings_writer_started=1;
+    assert(!settings_save(&d)); cfg_writer_stop(&settings_writer); settings_writer_started=0;
+    assert(!unlink(d.sh.profile.settings) && !rmdir(directory));
+    settings_snapshot_loaded=settings_snapshot_error=0; memset(&settings_writer,0,sizeof(settings_writer)); fake_reset();
+    puts("PASS Round 2 desktop: failed initial/repeated snapshot reads block saves, preserve prior settings/file, retry succeeds, ENOENT only at first boot");
+}
 int main(int argc,char **argv)
 {
+    test_failed_settings_snapshot();
     if (argc==2 && !strcmp(argv[1],"--g26c-path")) { test_g26c_path_queue();return 0; }
     if (argc==2 && !strcmp(argv[1],"--slow-media-panel")) { test_slow_media_panel(); return 0; }
     if (argc==2 && !strcmp(argv[1],"--media-state-change")) { test_media_state_change(); return 0; }

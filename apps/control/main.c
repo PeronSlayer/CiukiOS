@@ -162,12 +162,9 @@ static void remember_size(struct cp_main *m)
 static int load(void *ctx, char *text, size_t size, size_t *length)
 {
     (void)ctx;
-    FILE *f = fopen(profile_settings(), "rb");
-    if (!f) return -1;
-    *length = fread(text, 1, size, f);
-    int ok = !ferror(f) && *length < size;
-    fclose(f);
-    return ok ? 0 : -1;
+    int error=cfg_read_at(profile_settings(),text,size,length);
+    if (error) { errno=error; return -1; }
+    return 0;
 }
 static int save(void *ctx, const char *text, size_t length)
 {

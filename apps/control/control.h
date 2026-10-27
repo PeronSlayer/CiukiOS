@@ -105,7 +105,7 @@ struct cp_host {
     int (*pack_preview)(void *, struct dp_plan *, const char *, const char *, const struct ndp_device *, char reason[160]);
     int (*pack_install)(void *, const struct dp_plan *, const char *, char reason[160]);
     int (*pack_remove)(void *, const struct ndp_device *, char reason[160]);
-    int (*load)(void *, char *text, size_t size, size_t *length);      /* desktop.cfg; -1 when absent */
+    int (*load)(void *, char *text, size_t size, size_t *length); /* complete desktop.cfg; -1/errno on failure */
     int (*save)(void *, const char *text, size_t length);
     int save_async; /* save queued; main calls cp_settings_saved after durable completion */
     int (*wallpapers)(void *, char names[][CFG_PATH_MAX], unsigned capacity);   /* absolute paths */
@@ -254,6 +254,7 @@ struct cp_app {
     int pw_menu_value[16];
     char pw_cells[PP_SOURCES][PP_TIMERS][24], pw_text[3][128];
     struct ciuki_settings cfg;
+    int cfg_loaded; /* complete snapshot observed or a save submitted */
     struct ciuki_settings display_original;
     int icon_appearance;
     struct du_item icon_font_items[DESK_FONTS];

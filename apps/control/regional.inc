@@ -64,9 +64,11 @@ static void regional_save(struct cp_app *a,int accept)
 {
     if(!regional_pull(a)) return;
     static struct ciuki_settings current; static char out[CFG_TEXT_MAX];
-    load(a,&current); current.regional=a->regional_edit;
+    if (load(a,&current)) return;
+    current.regional=a->regional_edit;
     size_t n=cfg_format(&current,out,sizeof(out));
     if(!n || !a->host.save || a->host.save(a->host.ctx,out,n)) { text(a,C_STATUS,"Regional settings could not be saved."); return; }
+    a->cfg_loaded=1;
     a->regional_accept=accept;
     a->regional_saving=a->host.save_async;
     if(a->host.apply) a->host.apply(a->host.ctx,DESK_SETTINGS_RELOAD,0,0);

@@ -33,7 +33,8 @@ class DesktopPerformanceTests(unittest.TestCase):
                        ["-DF125_WRAP_ALLOC", "-Wl,--wrap=malloc"])
 
     def test_settings_worker(self):
-        self.run_model("settings", ["tests/host/desktop/settings_io_test.c", "apps/desktop/settings_io.c"], ["apps/desktop"], ["-Wl,--wrap=rename"])
+        self.run_model("settings", ["tests/host/desktop/settings_io_test.c", "apps/desktop/settings_io.c"], ["apps/desktop"],
+                       ["-Wl,--wrap=rename,--wrap=fopen,--wrap=fread,--wrap=ferror,--wrap=fclose"])
 
     def test_dos_window_replay(self):
         self.run_model("dos-window", ["tests/host/desktop/dos_window_replay.c", "tests/host/desktop/fake.c",

@@ -382,7 +382,9 @@ def build(out, entries=2048, only=None):
     libpath=Path("/usr/lib/libntfs-3g.so").resolve()
     if libpath.exists(): tools["libntfs-3g"]={"path":str(libpath),"sha256":sha(libpath)}
     temp=out/"payload.tmp"; images=[]
-    deps={"attribute-list":{"fragmented"},"index-cycle":{"large"}}
+    deps={"attribute-list":{"fragmented"},"index-cycle":{"large"},
+          "dirty-clean-log":{"log-recovery"},"dirty-log-recovery":{"log-recovery"},
+          "dirty-hibernated":{"hibernated"}}
     wanted=None if only is None else set(only).union(*(deps.get(k,set()) for k in only))
     def want(*kinds): return wanted is None or any(k in wanted for k in kinds)
     base=out/"clean.img"; format_image(base)
@@ -559,6 +561,9 @@ def build(out, entries=2048, only=None):
                 d.f.seek(off); d.f.write(raw)
             d.close()
         if kind=="tail": images.append(manifest(image,tools,kind=kind))
+        elif kind=="dirty":
+            oracle=next(row for row in images if row["image"]==source.name)
+            images.append({**oracle,"image":image.name,"image_sha256":sha(image),"kind":kind})
         else:
             oracle=next(row for row in images if row["image"]==source.name)
             expected_files=dict(oracle["files"])
@@ -568,8 +573,29 @@ def build(out, entries=2048, only=None):
                            "source_files":expected_files,"source_listings":oracle["listings"],
                            "hash_source":"independent ntfscat on the source before structural corruption; data extents unchanged",
                            "error":-95 if kind in ("encrypted","reparse") else -5,
-                           "reason":{"dirty":3,"recovery":4,"hibernated":5,
+                           "reason":{"recovery":4,"hibernated":5,
                                      "log-recovery":4,"log-hibernated":5}.get(kind,1)})
+    # Dirty-bit policy is independent of the journal and hibernation state.
+    # Reuse the independently hashed source data, changing only state metadata.
+    for kind,source_kind in (("dirty-clean-log","log-recovery"),
+                             ("dirty-log-recovery","log-recovery"),
+                             ("dirty-hibernated","hibernated")):
+        if not want(kind): continue
+        source_row=next(row for row in images if row["kind"]==source_kind)
+        image=out/(kind+".img"); copy_image(out/source_row["image"],image)
+        d=Layout(image)
+        p,a=d.data_attr(3,0x70); put16(p,a+get16(p,a+20)+10,1); d.save_record(3,p)
+        if kind=="dirty-clean-log":
+            p,a=d.data_attr(2); mapping=runs(p,a)
+            for page in range(2):
+                off=d.physical(mapping,page*4096); d.f.seek(off); idx=unfix(d.f.read(4096))
+                put16(idx,get16(idx,24)+14,2) # RESTART_VOLUME_IS_CLEAN
+                d.f.seek(off); d.f.write(refix(idx))
+        d.close()
+        row={**source_row,"kind":kind,"image":image.name,"image_sha256":sha(image)}
+        if kind=="dirty-clean-log":
+            row.pop("reason"); row.pop("error")
+        images.append(row)
     temp.unlink()
     images=[r for r in images if only is None or r["kind"] in only]
     result={"schema":1,"serial":SERIAL,"timestamp":EPOCH,"fixtures":images}

@@ -702,11 +702,31 @@ NTFS security descriptors are not a promise of Windows ACL enforcement under
 the F2 single-user capability model. Existing path/component bounds apply;
 native 64-bit offsets remain 64-bit, and DOS-unrepresentable values fail.
 
-**[F4]** Dirty/recovery-required or detected hibernated volumes MUST be refused
+**[F4, amended by fx-classaudit lead amendment 1, 2026-10-27]** A dirty
+volume may mount read-only when the existing bounded `$LogFile` restart-page
+validation proves clean shutdown (including an empty, all-FF
+log). The dirty bit alone is advisory; it is never cleared.
+The parser returns the existing `NTFS_RO_DIRTY` reason as an advisory on
+successful mounts; the adapter logs it and retains the ordinary `ntfs`
+successful-mount diagnostic. Callers must check the mount return code.
+Recovery flags, a journal needing redo/undo, and detected hibernation still
+refuse the mount
 with distinct reasons: no log replay, dirty-bit clearing, hibernation removal
 or repair. Validate required metadata before exposing a mount; malformed
 fixups/runlists/indexes return `EIO` and never trigger salvage writes. Read-only
 MFT reads and unmount must issue zero block writes/flush-for-write requests.
+The amendment compares Linux v6.12
+[ntfs3/super.c](https://raw.githubusercontent.com/torvalds/linux/v6.12/fs/ntfs3/super.c),
+which gates dirty-volume refusal on writable mounts and distinguishes replay
+from dirtiness, with ntfs-3g's
+[restart-area clean test](https://raw.githubusercontent.com/tuxera/ntfs-3g/2022.10.3/libntfs-3g/logfile.c)
+and [hibernation check](https://raw.githubusercontent.com/tuxera/ntfs-3g/2022.10.3/libntfs-3g/volume.c).
+Ciuki deliberately continues to refuse replay-required and hibernated mounts;
+Linux's broader read-only tolerance is not adopted. Files queries immutable
+mount results through `MEDIA_GET_NTFS_STATUS` (one bounded copied record per
+slot, including refused partitions) and explains recovery/hibernation in
+Computer. The query does not issue disk I/O or expose a refused namespace.
+
 All mutating VFS operations fail `EROFS`. Partition/mount generation and
 shared DOS routing use the same rules as other host volumes. The driver owns
 no private block cache; read workspaces are bounded and charged.

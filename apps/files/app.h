@@ -84,6 +84,9 @@ struct files_app {
     int (*media_label)(unsigned drive, char out[33]);
     int (*media_label_key)(unsigned drive, struct files_label_key *);
     int (*media_read)(struct ciuki_media_state *);
+    int (*ntfs_status)(unsigned slot, struct ciuki_ntfs_status *);
+    char ntfs_notice[DU_DIALOG_TEXT];
+    int ntfs_notified;
     int (*media_remove)(unsigned drive, uint32_t generation);
     int (*media_blockers)(unsigned drive, uint32_t generation, struct ciuki_media_blockers *);
     /* fx-17b: read the diskette in floppy drive A:/B: (MEDIA_FLOPPY_LOAD);

@@ -12,6 +12,7 @@ enum ntfs_ro_error {
 };
 enum ntfs_ro_reason {
     NTFS_RO_OK, NTFS_RO_INVALID, NTFS_RO_UNSUPPORTED,
+    /* DIRTY is advisory on a successful read-only mount; check the return code. */
     NTFS_RO_DIRTY, NTFS_RO_RECOVERY_REQUIRED, NTFS_RO_HIBERNATED
 };
 /* No write or flush operation exists. Success means every requested byte

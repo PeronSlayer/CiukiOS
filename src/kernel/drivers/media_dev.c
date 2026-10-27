@@ -228,6 +228,30 @@ int media_devctl(struct process *p,int32_t fd,uint32_t op,uint32_t address,uint3
         e=floppy_mount(r.drive);
         return !e ? 0 : e==-FS_EBUSY ? -EBUSY : -ENXIO;
     }
+    if (op==MEDIA_GET_NTFS_STATUS) {
+        _Static_assert(STORAGE_NTFS==CIUKI_MEDIA_NTFS_SLOTS,"NTFS status slots");
+        struct ciuki_ntfs_status out;
+        if (bytes!=sizeof(out)) return -EINVAL;
+        int e=copy_from_user(&out,address,bytes); if (e) return e;
+        if (out.version!=CIUKI_MEDIA_VERSION) return -EOPNOTSUPP;
+        if (out.size!=sizeof(out) || out.slot>=STORAGE_NTFS || out.disk || out.partition || out.error) return -EINVAL;
+        for (unsigned i=0;i<sizeof(out.reason);i++) if (out.reason[i]) return -EINVAL;
+        if (!s || !s->ready) return -ENOENT;
+        vfs_lock(&s->vfs,0);
+        const struct storage_ntfs *n=&s->ntfs[out.slot];
+        e=n->present ? 0 : -ENOENT;
+        if (!e) {
+            out.disk=n->disk; out.partition=n->partition; out.error=n->error;
+            const char *why=n->ro.diagnostic;
+            const char *message=!n->error ? "" :
+                why && !strncmp(why,"ntfs_recovery_required",sizeof("ntfs_recovery_required")) ? "NTFS needs recovery. Start Windows and check this disk." :
+                why && !strncmp(why,"ntfs_hibernated",sizeof("ntfs_hibernated")) ? "Windows is hibernated. Resume Windows and shut it down fully." :
+                "NTFS could not be opened safely. Check this disk in Windows.";
+            ksnprintf(out.reason,sizeof(out.reason),"%s",message);
+        }
+        vfs_unlock(&s->vfs);
+        return e ? e : copy_to_user(address,&out,bytes);
+    }
     if (op==MEDIA_GET_SPACE) {
         struct ciuki_media_space sp;
         if (bytes!=sizeof(sp)) return -EINVAL;

@@ -4,6 +4,34 @@ Research and implementation record for `docs/directives/fx-classaudit.md`.
 The detailed case inventory and command results are delivered in
 `build/codex/fx-classaudit-report.md`.
 
+## Round 2 decisions and sources
+
+Lead amendment 1 permits read-only NTFS access when only the dirty bit is
+set and the journal proves clean. Linux v6.12
+[ntfs3/super.c](https://raw.githubusercontent.com/torvalds/linux/v6.12/fs/ntfs3/super.c)
+separates volume dirtiness from log replay and gates the dirty-bit refusal
+on writable mounts. Ciuki retains its stricter no-replay requirement and
+active-hibernation refusal. The existing restart-page clean test follows
+[ntfs-3g logfile.c](https://raw.githubusercontent.com/tuxera/ntfs-3g/2022.10.3/libntfs-3g/logfile.c):
+no active log client or the clean-shutdown flag. No journal code is imported.
+See the amended NTFS section of `f4-audio-media-contract.md`.
+
+Preference loading must publish only a complete read, preserve the previous
+snapshot on error, and distinguish missing-at-first-boot from failed I/O.
+Microsoft's [fread documentation](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/fread)
+requires distinguishing short EOF from errors with `ferror`; its
+[fopen documentation](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/fopen-wfopen)
+requires checking the failure and `errno`. The local Windows 98 Resource Kit
+`wrkc27_3.htm`, "Troubleshooting Windows 98 Startup", describes Safe Mode's
+minimal VGA/driver state and temporary diagnostic edits; it does not justify
+replacing normal preferences after an unsuccessful read. Merge/save paths
+must stop on a failed snapshot read; ENOENT authorizes defaults only before
+a complete snapshot has been established. Runtime UI defaults after a failed
+initial read are usable but cannot be saved until a complete load succeeds.
+
+The six deferred format/interchange findings from Round 1 are recorded as
+`gap` rows in `os-feature-inventory.md`; no decoder expansion is authorized.
+
 ## Decisions supported by primary sources
 
 * Microsoft [FAT specification, sections 3–5](https://academy.cba.mit.edu/classes/networking_communications/SD/FAT.pdf)
@@ -53,13 +81,16 @@ assemble contiguous runs across a zone boundary. Keep target stack tests
 and user-copy permission/fault tests distinct from host libc execution.
 No hardware-memory limit is changed by this audit.
 
-## Findings requiring coordination with the display-preference task
+## Round 1 findings superseded by lead amendment 1
 
 Control Panel's `app.c` initializes a merge snapshot to defaults and ignores
 read failure before saving it. The desktop's startup `settings_load` also
 treats every read failure as first boot; its asynchronous reload correctly
 distinguishes ENOENT from other errors. A transient read error must not let
 a later unrelated preference write replace normal preferences with defaults.
-These shared files are owned by running display-preference work. The report
-records the required error/ENOENT distinction and fault-injection regression
-for the lead, without making a competing multi-line edit.
+Lead amendment 1 explicitly assigns both fixes to Round 2 of this audit.
+The shared complete-read helper now rejects partial/error/oversize snapshots;
+Control Panel's ordinary, Display, Power and Regional merge saves stop on a
+read error. Desktop startup/reload preserves the last complete snapshot and
+blocks saves until a complete read succeeds; later ENOENT is not first boot.
+The display-mode/lease policy itself remains owned by `fx-dispmode`.

@@ -789,12 +789,38 @@ static void floppy_namespace_tests(void)
     namespace_stop(s,true);
     puts("PASS fx-17b floppy namespace: /dev/media floppy type, Retry load without and with a diskette, volume space, A: listed first under /mnt, files readable, no /mnt/c, B: absent, removal");
 }
+static void ntfs_status_tests(void)
+{
+    struct px_namespace *space; struct storage *s=namespace_start(&space); (void)space;
+    int fd=file_open(&supervisor,"/dev/media",O_RDONLY,0); CHECK(fd>=0);
+    for (unsigned i=0;i<3;i++) {
+        struct storage_ntfs *n=&s->ntfs[i];
+        n->present=true; n->disk=1; n->partition=i+1;
+        n->error=i ? -FS_EUCLEAN : 0;
+        n->ro.diagnostic=i==1 ? "ntfs_recovery_required" : i==2 ? "ntfs_hibernated" : "ntfs";
+        struct ciuki_ntfs_status r={.version=CIUKI_MEDIA_VERSION,.size=sizeof(r),.slot=i}; media_user=&r;
+        OK(media_devctl(&supervisor,fd,MEDIA_GET_NTFS_STATUS,1,sizeof(r)));
+        CHECK(r.disk==1 && r.partition==i+1 && r.error==n->error);
+        CHECK(i==0 ? !r.reason[0] : strstr(r.reason,i==1 ? "needs recovery" : "hibernated")!=NULL);
+        CHECK(!n->reads && !n->writes && !n->flushes);
+        n->present=false;
+    }
+    struct ciuki_ntfs_status r={.version=CIUKI_MEDIA_VERSION,.size=sizeof(r)}; media_user=&r;
+    CHECK(media_devctl(&supervisor,fd,MEDIA_GET_NTFS_STATUS,1,sizeof(r))==-ENOENT);
+    r.slot=CIUKI_MEDIA_NTFS_SLOTS; CHECK(media_devctl(&supervisor,fd,MEDIA_GET_NTFS_STATUS,1,sizeof(r))==-EINVAL);
+    r.slot=0; r.reason[127]=1; CHECK(media_devctl(&supervisor,fd,MEDIA_GET_NTFS_STATUS,1,sizeof(r))==-EINVAL);
+    r.reason[127]=0; r.version=0; CHECK(media_devctl(&supervisor,fd,MEDIA_GET_NTFS_STATUS,1,sizeof(r))==-EOPNOTSUPP);
+    CHECK(media_devctl(&supervisor,fd,MEDIA_GET_NTFS_STATUS,1,sizeof(r)-1)==-EINVAL);
+    OK(file_close(&supervisor,fd)); namespace_stop(s,true);
+    puts("PASS Round 2 NTFS status: mounted/replay/hibernation reasons, no disk I/O, absent slot and input bounds");
+}
 int main(int argc, char **argv)
 {
     setvbuf(stdout,0,_IOLBF,0);
     CHECK(argc == 4);
     for (unsigned i = 0; i < 3; i++) OK(fake_open(&media[i], argv[i + 1]));
     baseline(); media[2].undo_enabled = true;
+    ntfs_status_tests();
     latency_tests(); healthy_writer_reservation_test(); writer_shutdown_test(); bounded_shutdown_test(); cancelled_wait_test(); cwd_tests(); busy_tests(); removable_namespace_tests(); detach_tests(); namespace_probe_tests(); floppy_namespace_tests();
     for (unsigned i = 0; i < 3; i++) fake_close(&media[i]);
     printf("STORAGE NAMESPACE RESULT checks=%u records=%u failures=0 ASan/UBSan=enabled\n", checks, records);
