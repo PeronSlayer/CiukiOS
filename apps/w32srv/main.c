@@ -14,6 +14,7 @@
 #include <ciuki/channel.h>
 #include <ciuki/display.h>
 #include <ciuki/proc.h>
+#include <ciuki/security.h>
 #endif
 /* W32SRV_GUEST: the image's service, linked with libfont (build_w32srv.py);
  * host replays of this loop build without the font engine. */
@@ -47,11 +48,17 @@ int main(int argc,char **argv)
     int seed=argc==3&&!strcmp(argv[1],"--seed");
     const char *dir=seed?argv[2]:"/WINDOWS";
     struct wr_io io;wr_posix_io(&io,dir);struct wr_server s;
-    if(!wr_init(&s,&io,now())){fprintf(stderr,"[win32] registry load-failed\n");return 1;}
+#if defined(__CIUKIOS__) && !defined(__linux__)
+    char session_directory[160];
+    int initialized=seed?wr_init(&s,&io,now()):wr_user_start(&s,&io,session_directory,now());
+#else
+    int initialized=wr_init(&s,&io,now());
+#endif
+    if(!initialized){fprintf(stderr,"[win32] registry load-failed\n");return 1;}
     if(seed){uint32_t e=wr_flush(&s);wr_destroy(&s);return e?1:0;}
     s.compat_writer_pid=(uint32_t)getppid();
     const char *user=getenv("CIUKI_SESSION_USER"), *profile=getenv("CIUKI_SESSION_ROOT");
-    if ((user && *user) || (profile && *profile)) {
+    if (!s.session_only && ((user && *user) || (profile && *profile))) {
         uint32_t e=wr_select_profile(&s,user ? user : "",profile ? profile : "");
         if (e) { fprintf(stderr,"[win32] profile load-failed error=%u\n",e); wr_destroy(&s); return 1; }
     }
@@ -63,7 +70,7 @@ int main(int argc,char **argv)
     /* Start failures are said on the console (io.log is the kernel debug
      * write; stderr is not collected): q3crash 2026-10-25 had 323 silent exits. */
     char failure[96];
-    if(!ciuki_display_query(&display)&&!wr_defaults(&s,display.width,display.height,display.bpp)){
+    if(!ciuki_display_query(&display)&&!s.session_only&&!wr_defaults(&s,display.width,display.height,display.bpp)){
         io.log(io.opaque,"[win32] w32srv start-failed stage=defaults");wr_destroy(&s);return 1;
     }
     struct w32r_service a;
@@ -116,9 +123,19 @@ int main(int argc,char **argv)
         while(service(3,&a)>0){
             unsigned i=0;while(i<64&&clients[i].fd>=0)i++;
             if(i==64){close((int)a.endpoint);continue;}
+#if !defined(__linux__)
+            struct ciuki_credential peer,self;
+            if(ciuki_security_self(&self)||ciuki_security_peer((int)a.endpoint,&peer)||memcmp(&self,&peer,sizeof(peer))){close((int)a.endpoint);continue;}
+#endif
             clients[i].fd=(int)a.endpoint;clients[i].session.pid=a.pid;
         }
         for(unsigned i=0;i<64;i++)if(clients[i].fd>=0){
+#if !defined(__linux__)
+            struct ciuki_credential peer,self;
+            if(ciuki_security_self(&self)||ciuki_security_peer(clients[i].fd,&peer)||memcmp(&self,&peer,sizeof(peer))){
+                wr_exit(&s,clients[i].session.pid);wr_session_close(&clients[i].session);close(clients[i].fd);clients[i].fd=-1;continue;
+            }
+#endif
             struct ciuki_message m;int r=ciuki_channel_recv(clients[i].fd,&m,1);
             if(r<0&&errno==EAGAIN)continue;
             if(r<=0){wr_exit(&s,clients[i].session.pid);wr_session_close(&clients[i].session);close(clients[i].fd);clients[i].fd=-1;continue;}
@@ -134,7 +151,7 @@ int main(int argc,char **argv)
         if(time>=display_deadline){
             struct ciuki_display_info active={.version=CIUKI_DISPLAY_VERSION,.size=sizeof(active)};
             if(!ciuki_display_query(&active)&&(active.width!=display.width||active.height!=display.height||active.bpp!=display.bpp)){
-                if(wr_defaults(&s,active.width,active.height,active.bpp))display=active;
+                if(!s.session_only&&wr_defaults(&s,active.width,active.height,active.bpp))display=active;
             }
             display_deadline=time+2000;
         }

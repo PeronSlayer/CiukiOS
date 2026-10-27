@@ -410,7 +410,7 @@ static void test_advpack_process_flags(struct proc_thread *parent)
     }
     uint32_t saved_desktop=fake_desktop_pid;
     struct w32_process desktop_w32={.service=W32_SERVICE_DESKTOP};
-    struct process desktop={.pid=0x123456,.state=PROC_LIVE,.personality=PROC_NATIVE,.w32=&desktop_w32};
+    struct process desktop={.pid=0x123456,.state=PROC_LIVE,.personality=PROC_NATIVE,.w32=&desktop_w32,.subject=parent->process->subject};
     struct proc_thread desktop_thread={.process=&desktop};fake_desktop_pid=desktop.pid;
     parent->process->w32->launch_feedback_until=0;
     struct ciuki_w32_system_args query={.action=W32_S_LAUNCH_FEEDBACK};
@@ -672,6 +672,7 @@ static void test_shared_tick(void)
 #ifdef W32_KERNEL_BRIDGE
 #define main kernel_mechanism_main
 #endif
+#include "../security/win32_isolation_test.inc"
 int main(int argc, char **argv)
 {
     if (argc == 3 && !strcmp(argv[1], "--pe")) {
@@ -686,6 +687,10 @@ int main(int argc, char **argv)
         free(parsed);free(b.data);return 0;
     }
     ram=calloc(HOST_PAGES,PAGE_SIZE);CHECK(ram);controller.state=T_RUNNING;g_current=&controller;
+    if(argc==2&&!strcmp(argv[1],"--security")){
+        setvbuf(stdout,NULL,_IONBF,0);test_security_isolation();
+        CHECK(!pages_used&&!g_user_mappings&&heap_blocks==1);free(ram);return 0;
+    }
     test_memory();test_records();test_fpu();test_context();test_spawn_exceptions();test_objects_sections();test_loader_shared_alias();test_shared_tick();
     CHECK(!pages_used&&!g_user_mappings&&heap_blocks==1);printf("w32 core: checks=%u PASS\n",checks);free(ram);return 0;
 }

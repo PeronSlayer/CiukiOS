@@ -66,7 +66,12 @@ enum w32_object_type {
     W32_OBJ_WINSTATION,
     W32_OBJ_ENDPOINT,
     W32_OBJ_FIND,
-    W32_OBJ_SNAPSHOT
+    W32_OBJ_SNAPSHOT,
+    /* sec-k06: CREATE(source=process handle, access=8) opens a query token.
+     * QUERY(name=credential VA, maximum=sizeof(ciuki_credential)) copies the
+     * frozen credential; result=required bytes, value=privilege bit mask.
+     * Tokens cannot be inherited or transferred to another process. */
+    W32_OBJ_TOKEN
 };
 enum w32_object_action {
     W32_OBJ_CREATE = 1,

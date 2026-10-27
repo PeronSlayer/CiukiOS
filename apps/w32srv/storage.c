@@ -112,6 +112,11 @@ static int parse(struct wr_server *s,unsigned h,const uint8_t *text,size_t n)
 }
 static void filename(struct wr_server *s,char *out,size_t cap,unsigned h,unsigned slot)
 {
+    if(s->secured){
+        if(h&&s->user_path[0])snprintf(out,cap,"%s/Settings/Registry/USER.CRG.%u",s->user_path,slot);
+        else snprintf(out,cap,"/System/Security/Registry/Machine/%s.CRG.%u",h?"USER":"SYSTEM",slot);
+        return;
+    }
     snprintf(out,cap,"%s%s%s.CRG.%u",h && s->user_path[0] ? s->user_path : "",
         h && s->user_path[0] ? "/" : "",h?"USER":"SYSTEM",slot);
 }
@@ -202,29 +207,44 @@ static uint32_t profile_folders(struct wr_server *s,const char *root)
     }
     return 0;
 }
+static uint32_t clear_template_startup(struct wr_server *s)
+{
+    static const char *const queues[]={"Run","RunOnce","RunServices","RunServicesOnce"};
+    for(unsigned i=0;i<sizeof(queues)/sizeof(*queues);i++){
+        char path[128];snprintf(path,sizeof(path),".DEFAULT\\Software\\Microsoft\\Windows\\CurrentVersion\\%s",queues[i]);
+        struct wr_key *k=wr_walk(s,1,path);
+        while(k&&k->values){uint32_t e=wr_remove_value(s,k,k->values->name);if(e)return e;}
+    }
+    return 0;
+}
 uint32_t wr_select_profile(struct wr_server *s,const char *name,const char *root)
 {
-    static const char prefix[]="/Windows/Profiles/u";
     if (!profile_name(name) || strlen(root)>=sizeof(s->user_path)) return 87;
     if (*root) {
-        if (!*name || strncmp(root,prefix,sizeof(prefix)-1) || strlen(root)!=sizeof(prefix)-1+8) return 87;
-        for (const char *p=root+sizeof(prefix)-1;*p;p++) if (!((*p>='0' && *p<='9') || (*p>='a' && *p<='f') || (*p>='A' && *p<='F'))) return 87;
+        const char *base="/Windows/Profiles/";size_t n=strlen(base);
+        if(!*name||strncmp(root,base,n)||!root[n])return 87;
+        if(root[n]=='u'){
+            if(strlen(root)!=n+9)return 87;
+            for(const char *p=root+n+1;*p;p++)if(!((*p>='0'&&*p<='9')||(*p>='a'&&*p<='f')||(*p>='A'&&*p<='F')))return 87;
+        }else for(const char *p=root+n;*p;p++)if(*p<'0'||*p>'9')return 87;
     }
     if (!strcmp(s->user_name,name) && !strcmp(s->user_path,root)) return 0;
     if (s->live_count || s->handles || s->profile_owner) return 170;
     uint32_t e=wr_flush(s); if (e) return e;
     struct wr_server *c=calloc(1,sizeof(*c)); if (!c) return 8;
-    c->io=s->io; c->now=s->now; strcpy(c->user_path,root);
+    c->io=s->io; c->now=s->now; c->secured=s->secured; strcpy(c->user_path,root);
     if (!wr_load_hive(c,1)) { wr_destroy(c); free(c); return 1016; }
     int created=!c->hive[1].sequence;
     if (*root && created) {
         /* No profile slots: discard its empty root and copy the default hive.
          * Corrupt existing slots fail above and are never replaced by defaults. */
-        wr_destroy(c); c->io=s->io; c->now=s->now;
+        wr_destroy(c); c->io=s->io; c->now=s->now; c->secured=s->secured;
         if (!wr_load_hive(c,1)) { wr_destroy(c); free(c); return 1016; }
         strcpy(c->user_path,root); c->hive[1].sequence=0; c->hive[1].slot=0; c->hive[1].dirty=1;
     }
-    e=created ? profile_folders(c,root) : 0;
+    /* Templates provide preferences, never ownership of deferred commands. */
+    e=created&&s->secured ? clear_template_startup(c) : 0;
+    if(!e)e=created ? profile_folders(c,root) : 0;
     if (!e) e=wr_commit(c,1);
     if (e) { wr_destroy(c); free(c); return e; }
     struct wr_key **at=&s->keys;

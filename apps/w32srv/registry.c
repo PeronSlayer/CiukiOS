@@ -181,14 +181,23 @@ int wr_init(struct wr_server *s, const struct wr_io *io, uint64_t now)
     if (!wr_load(s) || !wr_directory_init(s)) { wr_destroy(s); return 0; }
     return 1;
 }
+int wr_init_secure(struct wr_server *s,const struct wr_io *io,uint64_t now)
+{
+    memset(s,0,sizeof(*s));s->io=*io;s->now=now;s->secured=1;
+    strcpy(s->user_branch,".DEFAULT"); /* SYSTEM logon/template context only */
+    if(!wr_load(s)){wr_destroy(s);return 0;}
+    return 1;
+}
 uint32_t wr_flush(struct wr_server *s)
 {
+    if(s->session_only)return 0;
     for (unsigned h = 0; h < 2; h++) { uint32_t e = wr_commit(s, h); if (e) return e; }
     return 0;
 }
 uint32_t wr_tick(struct wr_server *s, uint64_t now)
 {
     s->now = now;
+    if(s->session_only)return 0;
     for (unsigned h = 0; h < 2; h++) if (s->hive[h].dirty && now >= s->hive[h].dirty_since && now - s->hive[h].dirty_since >= 2000) {
         uint32_t e = wr_commit(s, h); if (e) return e;
     }
@@ -207,13 +216,37 @@ uint32_t wr_exit(struct wr_server *s, uint32_t pid)
     struct wr_handle **at = &s->handles;
     while (*at) { struct wr_handle *h = *at; if (h->pid == pid) { *at = h->next; free(h); } else at = &h->next; }
     collect_deleted(s);
-    uint32_t d = wr_directory_exit(s, pid); return e ? e : d;
+    uint32_t d = s->directory&&!s->secured?wr_directory_exit(s, pid):0; return e ? e : d;
+}
+static int wr_administrator(const struct wr_server *s)
+{
+    if(!s->subject.uid)return 1;
+    for(unsigned i=0;i<s->subject.group_count&&i<8;i++)if(s->subject.groups[i]==544)return 1;
+    return 0;
+}
+uint32_t wr_key_policy(struct wr_server *s,struct wr_key *k,uint32_t access)
+{
+    if(!s->secured)return 0;
+    if(!k||s->subject.group_count>8)return 5;
+    int write=!!(access&~0x20019u);
+    if(k->hive>1)return write?5:0;
+    if(k->hive==0){
+        struct wr_key *top=k;while(top->parent&&top->parent->parent)top=top->parent;
+        if(top->parent&&(wr_equal(top->name,"SAM")||wr_equal(top->name,"SECURITY")))return 5;
+        if(top->parent&&wr_equal(top->name,"HARDWARE"))return write?5:0;
+        return write&&!wr_administrator(s)?5:0;
+    }
+    struct wr_key *top=k;while(top->parent&&top->parent->parent)top=top->parent;
+    if(!top->parent)return 0; /* prospective child is checked before traversal */
+    if(wr_equal(top->name,".DEFAULT"))return s->subject.uid?5:0;
+    if(!wr_equal(top->name,s->user_branch)&&!wr_administrator(s))return 5;
+    return 0;
 }
 static uint32_t resolve(struct wr_server *s, uint32_t pid, uint32_t id, uint32_t access, struct wr_key **key)
 {
     if (id == W32R_HKLM) *key = s->roots[0];
     else if (id == W32R_HKU) *key = s->roots[1];
-    else if (id == W32R_HKCU) *key = wr_child(s, s->roots[1], ".DEFAULT");
+    else if (id == W32R_HKCU) *key = wr_child(s, s->roots[1], s->secured?s->user_branch:".DEFAULT");
     else if (id == W32R_HKCR) {
         struct wr_key *software = wr_child(s, s->roots[0], "Software");
         *key = software ? wr_child(s, software, "Classes") : NULL;
@@ -223,11 +256,11 @@ static uint32_t resolve(struct wr_server *s, uint32_t pid, uint32_t id, uint32_t
         for (struct wr_handle *h = s->handles; h; h = h->next) if (h->id == id && h->pid == pid) {
             if (h->key->deleted) return 1018;
             if ((h->access & access) != access) return 5;
-            *key = h->key; return 0;
+            *key = h->key; return wr_key_policy(s,*key,access);
         }
         return 6;
     }
-    return *key ? 0 : 2;
+    return *key ? wr_key_policy(s,*key,access) : 2;
 }
 static uint32_t walk(struct wr_server *s, struct wr_key *k, const char *path, int create, struct wr_key **out, uint32_t *disposition)
 {
@@ -239,7 +272,10 @@ static uint32_t walk(struct wr_server *s, struct wr_key *k, const char *path, in
         if (!n || n >= sizeof(component)) return 87;
         memcpy(component, path, n); component[n] = 0;
         if (!wr_name(component)) return 87;
+        struct wr_key prospective={.parent=k,.name=component,.hive=k->hive};
+        uint32_t denied=wr_key_policy(s,&prospective,create?4u:0u);if(denied)return denied;
         struct wr_key *next = wr_child(s, k, component);
+        if(s->secured&&!next&&k==s->roots[1])return 2; /* only broker-loaded hives */
         if (!next) {
             if (!create) return 2;
             if (k->hive > 1) return 5;
@@ -273,6 +309,7 @@ static int predefined(struct wr_server *s, struct wr_key *k)
     struct wr_key *software = wr_child(s, s->roots[0], "Software");
     return !k->parent || k == s->roots[2] || k == s->roots[3] ||
            k == wr_child(s, s->roots[1], ".DEFAULT") ||
+           (s->secured&&k==wr_child(s,s->roots[1],s->user_branch)) ||
            (software && k == wr_child(s, software, "Classes"));
 }
 static int compat_protected(struct wr_server *s,struct wr_key *k,const char *path,int ancestor)
@@ -353,8 +390,13 @@ uint32_t wr_dispatch(struct wr_server *s, uint32_t pid, const void *input, size_
     const void *data = name + a.name_bytes;
     if (path[a.path_bytes - 1] || name[a.name_bytes - 1] ||
         memchr(path, 0, a.path_bytes - 1) || memchr(name, 0, a.name_bytes - 1) || !wr_name(name)) { r.error = 87; goto done; }
+    if(s->session_only&&(a.op<=W32R_FLUSH||a.op==DESK_W32_PROFILE)){r.error=5;goto done;}
+    if(s->session_only&&a.op==W32R_COMPAT){
+        if(!s->compat_rpc){r.error=1062;goto done;}
+        return s->compat_rpc(input,n,output,cap,used);
+    }
     if (a.op==DESK_W32_PROFILE) {
-        if (pid!=s->compat_writer_pid) r.error=5;
+        if (s->secured || pid!=s->compat_writer_pid) r.error=5;
         else if (a.key || a.index || a.type || a.access || a.flags || a.data_bytes) r.error=87;
         else r.error=wr_select_profile(s,name,path);
         goto done;
@@ -419,15 +461,18 @@ uint32_t wr_dispatch(struct wr_server *s, uint32_t pid, const void *input, size_
         goto done;
     }
     r.error = resolve(s, pid, a.key, required, &k); if (r.error) goto done;
-    if(pid!=s->compat_writer_pid &&
+    if(s->secured&&k==s->roots[1]&&a.op!=W32R_OPEN&&a.op!=W32R_CREATE&&required&~0x20019u){r.error=5;goto done;}
+    if((s->secured ? !wr_administrator(s) : pid!=s->compat_writer_pid) &&
        (a.op==W32R_CREATE||a.op==W32R_SET||a.op==W32R_DELETE_VALUE||a.op==W32R_DELETE_KEY)&&
        compat_protected(s,k,(a.op==W32R_CREATE||a.op==W32R_DELETE_KEY)?path:"",a.op==W32R_DELETE_KEY)){
         r.error=5;goto done;
     }
     if (a.op == W32R_OPEN || a.op == W32R_CREATE) {
         if (a.flags || a.type || (a.access & ~0x000f003fu)) { r.error = 87; goto done; }
-        if (a.op == W32R_OPEN && !*path && (a.key & 0x80000000u)) { r.key = a.key; goto done; }
+        r.error=wr_key_policy(s,k,a.access);if(r.error)goto done;
         r.error = walk(s, k, path, a.op == W32R_CREATE, &k, &r.disposition); if (r.error) goto done;
+        r.error=wr_key_policy(s,k,a.access);if(r.error)goto done;
+        if(s->secured&&k==s->roots[1]&&(a.access&~0x20019u)){r.error=5;goto done;}
         struct wr_handle *h = calloc(1, sizeof(*h)); if (!h) { r.error = 8; goto done; }
         h->id = wr_new_id(s);
         if (!h->id) { free(h); r.error = 1016; goto done; }
@@ -447,6 +492,7 @@ uint32_t wr_dispatch(struct wr_server *s, uint32_t pid, const void *input, size_
          * handle opened on the key a root names) is never deleted. */
         if ((!*path && ((a.key & 0x80000000u) || predefined(s, k))) || k->hive > 1) { r.error = 5; goto done; }
         uint32_t d; r.error = walk(s, k, path, 0, &k, &d); if (r.error) goto done;
+        if(s->secured&&predefined(s,k)){r.error=5;goto done;}
         for (struct wr_key *x = s->keys; x; x = x->next) if (!x->deleted && descendant(x, k)) {
             s->hive[x->hive].text -= key_path_size(x) + 3;
             for (struct wr_value *v = x->values; v; v = v->next) s->hive[x->hive].text -= value_cost(v);
@@ -455,7 +501,7 @@ uint32_t wr_dispatch(struct wr_server *s, uint32_t pid, const void *input, size_
         dirty(s, k->hive); collect_deleted(s);
     } else if (a.op == W32R_ENUM_KEY) {
         struct wr_key *found = NULL; uint32_t i = 0;
-        for (struct wr_key *x = s->keys; x; x = x->next) if (!x->deleted && x->parent == k && i++ == a.index) { found = x; break; }
+        for (struct wr_key *x = s->keys; x; x = x->next) if (!x->deleted && x->parent == k && !wr_key_policy(s,x,0) && i++ == a.index) { found = x; break; }
         if (!found) r.error = 259;
         else { r.name_bytes = strlen(found->name); if (cap < sizeof(r) + r.name_bytes + 1) r.error = 87; else memcpy(bytes, found->name, r.name_bytes + 1); }
     } else if (a.op == W32R_ENUM_VALUE) {
@@ -467,7 +513,7 @@ uint32_t wr_dispatch(struct wr_server *s, uint32_t pid, const void *input, size_
             else { memcpy(bytes, v->name, r.name_bytes + 1); if (v->bytes) memcpy(bytes + r.name_bytes + 1, v->data, v->bytes); }
         }
     } else if (a.op == W32R_INFO) {
-        for (struct wr_key *x = s->keys; x; x = x->next) if (!x->deleted && x->parent == k) { r.count++; uint32_t len = characters(x->name, a.flags != 0); if (len > r.max_name) r.max_name = len; }
+        for (struct wr_key *x = s->keys; x; x = x->next) if (!x->deleted && x->parent == k && !wr_key_policy(s,x,0)) { r.count++; uint32_t len = characters(x->name, a.flags != 0); if (len > r.max_name) r.max_name = len; }
         for (struct wr_value *v = k->values; v; v = v->next) {
             r.disposition++; uint32_t len = characters(v->name, a.flags != 0); if (len > r.name_bytes) r.name_bytes = len;
             uint32_t bytes = !a.flags && (v->type == 1 || v->type == 2 || v->type == 7) ? (v->bytes + 1) / 2 : v->bytes;

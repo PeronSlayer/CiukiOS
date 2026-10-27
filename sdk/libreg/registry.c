@@ -2,6 +2,9 @@
 #define _POSIX_C_SOURCE 200809L
 #include "internal.h"
 #ifndef CIUKI_REG_PARSE_ONLY
+#include "transport.h"
+#endif
+#ifndef CIUKI_REG_PARSE_ONLY
 #include <errno.h>
 #include <limits.h>
 #include <stdio.h>
@@ -326,6 +329,11 @@ int reg_load(struct reg_root *r)
 {
     struct rt *t;
     if (!r) return reg_fail(EINVAL);
+    if (r->remote) {
+        int result=reg_remote_load(r->remote,&r->tree);
+        if(result){reg_tree_free(r->tree);r->tree=NULL;}
+        return result;
+    }
     if (!strcmp(r->name, "Hardware")) {
         t = reg_hardware(r->tree ? r->tree->generation : REG_GENERATION_ERROR);
         if (!t && !errno && r->tree) return 0;
@@ -350,17 +358,30 @@ struct reg_root *reg_open_root_at(const char *name, const char *directory)
     const char *canonical = NULL;
     for (unsigned i = 0; i < 5; i++) if (reg_name_equal(names[i], name)) canonical = names[i];
     if (!canonical || !directory || *directory != '/') { reg_fail(EINVAL); return NULL; }
+#if defined(__CIUKIOS__) && !defined(__linux__)
+    if(!strcmp(canonical,"Desktop")&&!strcmp(directory,REG_DIRECTORY)){
+        directory=getenv("CIUKI_PROFILE_SETTINGS");
+        if(!directory||strncmp(directory,"/Windows/Profiles/",18)){reg_fail(EACCES);return NULL;}
+    }
+#endif
     struct reg_root *r = calloc(1, sizeof(*r)); if (!r) return NULL;
     r->name = canonical; r->directory = strdup(directory);
     if (r->directory) {
         size_t n = strlen(r->directory);
         while (n > 1 && r->directory[n - 1] == '/') r->directory[--n] = 0;
     }
+#if (defined(__CIUKIOS__) && !defined(__linux__)) || defined(CIUKI_REG_REMOTE)
+    if(!strcmp(canonical,"System")||!strcmp(canonical,"Programs")||!strcmp(canonical,"Users")){
+        r->remote=calloc(1,sizeof(*r->remote));
+        if(!r->remote){reg_close_root(r);return NULL;}
+        r->remote->fd=-1;r->remote->root=!strcmp(canonical,"System")?1:!strcmp(canonical,"Programs")?2:3;
+    }
+#endif
     if (!r->directory || reg_load(r)) { int e = errno; reg_close_root(r); errno = e; return NULL; }
     return r;
 }
 struct reg_root *reg_open_root(const char *name) { return reg_open_root_at(name, REG_DIRECTORY); }
-void reg_close_root(struct reg_root *r) { if (r) { reg_tree_free(r->tree); free(r->snapshot); free(r->directory); free(r); } }
+void reg_close_root(struct reg_root *r) { if (r) { if(r->remote){reg_remote_close(r->remote);free(r->remote);} reg_tree_free(r->tree); free(r->snapshot); free(r->directory); free(r); } }
 const char *reg_root_name(const struct reg_root *r) { return r ? r->name : NULL; }
 int reg_read_only(const struct reg_root *r) { return r && !strcmp(r->name, "Hardware"); }
 uint64_t reg_generation(struct reg_root *r) { return reg_load(r) ? REG_GENERATION_ERROR : r->tree->generation; }
@@ -374,6 +395,7 @@ int reg_commit(struct reg_root *r, struct rt *tree, uint64_t generation)
 {
     if (generation >= UINT64_MAX - 1) return reg_fail(EOVERFLOW);
     tree->generation = generation + 1;
+    if(r->remote)return reg_remote_commit(r->remote,tree,generation);
     size_t n; char *text = reg_serialise(tree, NULL, &n), *path = root_file(r);
     if (!text || !path) { free(text); free(path); return -1; }
     /* Re-read without touching the caller's mutation tree. */
@@ -510,7 +532,7 @@ int reg_export(struct reg_root *r, const char *key, const char *path)
     /* Reject registry directory aliases too: no . or .. components allowed. */
     if (strstr(path, "/../") || strstr(path, "/./") || strstr(path, "//")) return reg_fail(EINVAL);
     size_t dir = strlen(r->directory);
-    if (strlen(path) >= dir) {
+    if (!r->remote && strlen(path) >= dir) {
         char *prefix = strndup(path, dir); if (!prefix) return -1;
         int reserved = reg_name_equal(prefix, r->directory) && (path[dir] == '/' || !path[dir]);
         free(prefix); if (reserved) return reg_fail(EACCES);
