@@ -15,9 +15,12 @@ ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "build/apps/desktop"
 SDK = ROOT / "build/tools/ciuki-sdk"
 CFLAGS = ["-O2", "-Wall", "-Wextra", "-Werror"]
-# Tango store and its notices: /system/icons/<key> in the image (scripts/build_image.py).
-ICON_NOTICES = {"TANGO.TXT": "upstream/COPYING", "AUTHORS.TXT": "upstream/AUTHORS", "CREDITS.TXT": "CREDITS.TXT"}
-ICON_FILES = ("tango.cis", *ICON_NOTICES)
+# Tango-first store, selected supplements, PNG assets and per-icon provenance.
+_icon_spec = importlib.util.spec_from_file_location("desktop_system_icons", ROOT / "apps/desktop/system_icons.py")
+_system_icons = importlib.util.module_from_spec(_icon_spec)
+_icon_spec.loader.exec_module(_system_icons)
+ICON_NOTICES = _system_icons.NOTICES
+ICON_FILES = ("tango.cis", *ICON_NOTICES, *_system_icons.output_names())
 # Accessories recovered from the 0.8 line (apps/accessories; launcher names in apps/desktop/catalog.h).
 ACCESSORIES = {
     "clipbrd": ["clipbrd_main.c"],
@@ -89,7 +92,7 @@ def inputs():
     files.append(ROOT / "src/probes/win32_core/controller.h")
     files.extend(ROOT / "assets/cursors" / name for name in ("cursors.h", "README.md", "paint.h", "paint.md"))
     files.append(ROOT / "assets/fonts/LICENSES.TXT")
-    files.append(ROOT / "assets/icons/upstream/tango-icon-theme-0.8.90.tar.gz")
+    files.extend(ROOT / "assets/icons" / name for name in ("upstream/tango-icon-theme-0.8.90.tar.gz", "upstream/haiku-icons.tar.gz", "system-store.json", "inventory.json"))
     files.extend(ROOT / "assets/icons" / name for name in ICON_NOTICES.values())
     # UI fonts (apps/desktop/ui_fonts.h is generated from these by convert_fonts.py).
     for face in ("inter", "inconsolata"):
@@ -115,14 +118,14 @@ def current_build(expected):
 def validate_payloads():
     lua = module("desktop_sdk_validator", ROOT / "apps/lua/build_lua.py")
     lua.validate_sdk()
-    icons = module("desktop_icon_check", ROOT / "apps/desktop/convert_icons.py")
+    icons = module("desktop_icon_check", ROOT / "apps/desktop/system_icons.py")
     icons.check()
     module("desktop_font_check", ROOT / "apps/desktop/convert_fonts.py").check()
     if not current_build(inputs()):
         raise ValueError("missing/stale desktop payloads; run make desktop")
     m = json.loads((OUT / "manifest.json").read_text())
     if m["files"]["tango.cis"] != icons.store_record()["store_sha256"] or m["icons"] != icon_record(icons):
-        raise ValueError("Tango icon store provenance mismatch")
+        raise ValueError("System icon store provenance mismatch")
     converter = module("desktop_portrait", ROOT / "apps/desktop/convert_portrait.py")
     converter.check_geometry()
     if (m["files"]["ciuki-portrait.xrgb"] != converter.ARRAY_SHA256 or
@@ -145,20 +148,19 @@ def portrait_record(c):
 
 def icon_record(icons):
     record = icons.store_record()
-    return {"path": "/system/icons/tango.cis", "record": "apps/desktop/tango-store.json",
+    return {"path": "/system/icons/tango.cis", "record": "assets/icons/system-store.json",
             "store_sha256": record["store_sha256"], "store_bytes": record["store_bytes"],
             "decoded_sha256": record["decoded_sha256"], "archive_sha256": record["archive_sha256"],
             "names": record["names"], "images": record["images"], "members": len(record["members"]),
-            "sizes": record["sizes"], "notices": {name: "assets/icons/" + source for name, source in ICON_NOTICES.items()}}
+            "sizes": record["sizes"], "supplements": record["supplements"], "notices": {name: "assets/icons/" + source for name, source in ICON_NOTICES.items()}}
 
 
 def build():
     lua = module("desktop_sdk_build", ROOT / "apps/lua/build_lua.py")
     lua.validate_sdk()
     lua.build(ROOT / "build/downloads/newlib/lua-5.4.8.tar.gz", ROOT / "build/downloads/newlib/lua-5.4.8-tests.tar.gz", 1)
-    icons = module("desktop_icon_build", ROOT / "apps/desktop/convert_icons.py")
+    icons = module("desktop_icon_build", ROOT / "apps/desktop/system_icons.py")
     icons.check()
-    icons.check_store_record()
     module("desktop_font_build", ROOT / "apps/desktop/convert_fonts.py").check()
     c = module("desktop_portrait", ROOT / "apps/desktop/convert_portrait.py")
     c.check_geometry()
@@ -239,9 +241,8 @@ def build():
         audit_integer(obj, sdk)
         obj.unlink()
     (OUT / "ciuki-portrait.xrgb").write_bytes(data)
-    store, _ = icons.build_store()
-    icons.check_store(store)
-    (OUT / "tango.cis").write_bytes(store)
+    for name, content in icons.payloads().items():
+        (OUT / name).write_bytes(content)
     for name, source in ICON_NOTICES.items():
         (OUT / name).write_bytes((ROOT / "assets/icons" / source).read_bytes())
     m = {"schema_version": 1, "application": "Ciuki desktop", "protocol_version": 1,

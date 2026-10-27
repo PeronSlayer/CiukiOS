@@ -353,7 +353,7 @@ def desktop_payloads():
     sources["/system/fonts/LICENSES.TXT"] = ROOT / "assets/fonts/LICENSES.TXT"
     font_sources, fonts = font_payloads()
     sources.update(font_sources)
-    # Tango 0.8.90 system icon store and its Public Domain notice/authors/credits.
+    # Tango-first system store, selected PNGs, per-icon manifest and all notices.
     sources.update({f"/system/icons/{name}": DESKTOP / name for name in desktop_build.ICON_FILES})
     hwids = ROOT / "assets/hwids"
     sources["/System/hwids/pci-ids.json"] = hwids / "pci-ids.json"

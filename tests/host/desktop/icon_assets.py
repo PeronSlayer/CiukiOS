@@ -40,7 +40,7 @@ def _fresh(path, expected, produce):
 
 
 def store():
-    icons = load("host_icon_store", ROOT / "apps/desktop/convert_icons.py")
+    icons = load("host_icon_store", ROOT / "apps/desktop/system_icons.py")
     return _fresh(FOLDER / "tango.cis", icons.store_record()["store_sha256"], lambda: icons.build_store()[0])
 
 
