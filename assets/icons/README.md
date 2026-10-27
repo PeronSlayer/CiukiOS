@@ -22,8 +22,8 @@ CiukiOS preserves these credits even though the upstream icon release does not
 require attribution. Its Public Domain declaration applies to the upstream
 icons; this document does not relabel it as a different license such as CC0.
 
-The F2 desktop ships the complete Tango 0.8.90 PNG set as its default and only
-icon style (see below). This family does not import extracted Microsoft
+The desktop retains the complete Tango 0.8.90 vocabulary as its default
+family; selected Haiku application icons fill subjects Tango lacks (see below). This family does not import extracted Microsoft
 Windows or Apple Macintosh icons. It does not imply an endorsement by Tango's
 authors.
 
@@ -45,12 +45,13 @@ in the boot splash.
 ## System icon store (F2 desktop)
 
 `apps/desktop/convert_icons.py` converts every PNG member of the vendored
-archive into one store file, `build/apps/desktop/tango.cis`, installed as
+Tango archive into a pinned baseline. `apps/desktop/system_icons.py` adds the
+selected Haiku subjects to the production store file, `build/apps/desktop/tango.cis`, installed as
 `/system/icons/tango.cis` next to `TANGO.TXT` (upstream COPYING), `AUTHORS.TXT`
 and `CREDITS.TXT`. The desktop, libdeskui and every libdeskui application read
 it at run time; no sprite is compiled into a binary.
 
-- Content: 246 names (214 Tango icons of actions, apps, categories, devices,
+- Original Tango baseline content (production supplements are described below): 246 names (214 Tango icons of actions, apps, categories, devices,
   emblems, emotes, mimetypes, places and status, plus the 32 frames
   `process-working-00` to `-31` of `animations/process-working`), each at 16,
   22, 32 and 48 pixels; 645 archive members.
@@ -122,3 +123,26 @@ not the source of the graphical HDD installer's file selection.
 
 See [CREDITS.TXT](CREDITS.TXT) for the plain ASCII attribution shipped with
 CiukiOS.
+
+## Selected supplemental application icons
+
+The pinned `upstream/haiku-icons.tar.gz` (SHA-256
+`e956e60f84c12bd1d946a68c4df6f49c49ab7329365390c434e6dbbdb9a560b5`)
+comes from [darealshinji/haiku-icons](https://github.com/darealshinji/haiku-icons).
+Its exact [MIT license](upstream/HAIKU-LICENSE), copyright Haiku, Inc., and
+[upstream source/author/trademark notes](upstream/HAIKU-README.md) stay beside
+it. They ship as `HAIKU.TXT` and `HAIKU-AUTHORS.TXT` in `/system/icons`.
+No Haiku logo or leaf is selected.
+
+Eight subjects supplement Tango: Clock, Log Viewer, Serial Terminal, Registry
+Editor, System Monitor, Resource Meter, System Information and Minesweeper.
+The archive is preserved; only selected exports enter the runtime store.
+`system-store.json` pins this combined store independently of the original
+Tango baseline above. `inventory.json` records object and drawing references,
+prior stand-ins, generic fallbacks and source-size gaps. Preparation emits
+only referenced PNGs at 16/32/48, and ships `MANIFEST.JSON` (set, source paths,
+license and PNG hashes) plus `INVENTORY.JSON`. Runtime still uses the same
+CIUKICS1 reader. Existing Tango pixels and identity sources are unchanged.
+
+See [the preparation contract](../../docs/design/system-icons.md) for source
+research, selection, conversion, identity composition and host verification.

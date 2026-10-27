@@ -1,10 +1,11 @@
 /* SPDX-License-Identifier: MIT
- * CiukiOS objects -> Tango 0.8.90 icon names (icons.c, deskui.h).
+ * CiukiOS objects -> Tango-first system icon names (icons.c, deskui.h).
  *
  * Tango 0.8.90 follows the freedesktop.org Icon Naming Specification draft
  * of its time (https://specifications.freedesktop.org/icon-naming-spec/latest/);
- * names here exist in the pinned archive at 16, 22 and 32 px
- * (48 px derived), which tests/host/desktop/test_icons.py verifies for every
+ * Tango names here exist in the pinned archive at 16, 22 and 32 px
+ * (48 px derived); haiku-* names are selected MIT exports (system_icons.py).
+ * tests/host/desktop/test_icons.py and test_system_icons.py verify every
  * entry. Identity objects (Computer, About, the Ciuki button) use the
  * approved portrait (DU_ICON_CIUKI), never a Tango or redrawn dog.
  * One icon per object everywhere: the desktop shell's own tables (shell.c
@@ -20,11 +21,11 @@ const struct du_icon_map du_icon_map[] = {
     {"program:scandisk", "drive-harddisk"},
     {"program:msconfig", "preferences-system"},
     {"program:printers", "printer"},
-    {"program:resmeter", "applications-system"},
+    {"program:resmeter", "haiku-resource-meter"},
     {"program:schedtask", "x-office-calendar"},
-    {"program:sysinfo", "document-properties"},
-    {"program:sysmon", "network-transmit-receive"},
-    {"program:regedit", "x-office-address-book"},
+    {"program:sysinfo", "haiku-system-info"},
+    {"program:sysmon", "haiku-system-monitor"},
+    {"program:regedit", "haiku-registry"},
     {"program:*", "application-x-executable"},
     {"program:files", "system-file-manager"},
     {"program:control", "preferences-desktop"},
@@ -48,19 +49,19 @@ const struct du_icon_map du_icon_map[] = {
     {"program:recorder", "audio-input-microphone"},
     {"program:calc", "accessories-calculator"},
     {"program:charmap", "accessories-character-map"},
-    {"program:clock", "appointment-new"},              /* a clock face (Tango 0.8.90 has no clock app icon) */
+    {"program:clock", "haiku-clock"},              /* Tango has no clock application icon */
     {"program:help", "help-browser"},
-    {"program:logview", "x-office-spreadsheet"},             /* Log Viewer (G13) */
+    {"program:logview", "haiku-log-viewer"},             /* Log Viewer (G13) */
     {"program:music", "audio-x-generic"},
     {"program:mixer", "audio-volume-high"},
     {"program:viewer", "image-x-generic"},
     {"program:paint", "applications-graphics"},
     {"program:wordpad", "x-office-document"},                  /* G28 */
-    {"program:mines", "face-smile"},                   /* G27 Minesweeper */
+    {"program:mines", "haiku-mines"},                   /* G27 Minesweeper */
     {"program:solitaire", "applications-games"},       /* G27 Solitaire */
-    {"program:freecell", "face-glasses"},        /* G27 FreeCell */
+    {"program:freecell", "applications-games"},        /* G27 FreeCell */
     {"program:hearts", "emblem-favorite"},             /* G27 Hearts */
-    {"program:serial", "network-wired"},               /* G27 Serial Terminal */
+    {"program:serial", "haiku-serial"},               /* G27 Serial Terminal */
 
     /* Start menu */
     {"menu:*", "application-x-executable"},

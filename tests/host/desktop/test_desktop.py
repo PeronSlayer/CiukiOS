@@ -751,7 +751,7 @@ class DesktopTests(unittest.TestCase):
         self.assertEqual(set(m["files"]), {"desktop", "shell-launch", "demo", "gfxdemo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", "libdeskui.a",
                                            "ciuki-portrait.xrgb",  # f3-02 /Programs/dosbox; desktop shell /Programs/control
                                            "tango.cis", "TANGO.TXT", "AUTHORS.TXT", "CREDITS.TXT",  # Tango store
-                                           "calc", "charmap", "clock", "help", "hwreport", "mixer", "music", "paint", "viewer", "mines", "solitaire", "freecell", "hearts", "serial", "clipbrd", "logview", "printers", "printspool", "msconfig", "recorder", "resmeter", "schedtask", "scandisk", "sysinfo", "sysmon", "wordpad"})  # legacy-recovery accessories, the f9-07 Hardware Report, system tools and games
+                                           "calc", "charmap", "clock", "help", "hwreport", "mixer", "music", "paint", "viewer", "mines", "solitaire", "freecell", "hearts", "serial", "clipbrd", "logview", "printers", "printspool", "msconfig", "recorder", "resmeter", "schedtask", "scandisk", "sysinfo", "sysmon", "wordpad"} | set(build.ICON_FILES))  # legacy-recovery accessories, the f9-07 Hardware Report, system tools and games
         self.assertEqual(m["icons"]["store_sha256"], m["files"]["tango.cis"])
         expected = build.inputs()
         self.assertTrue(build.current_build(expected))
@@ -767,7 +767,7 @@ class DesktopTests(unittest.TestCase):
                                         *licenses, "/system/fonts/LICENSES.TXT",
                                         *image.font_payloads()[0],
                                         *(f"/system/fonts/{p.name}" for p in (ROOT / "assets/fonts/native").glob("*.CFN")),
-                                        "/system/icons/tango.cis",
+                                        *(f"/system/icons/{name}" for name in build.ICON_FILES),
                                         "/system/icons/TANGO.TXT", "/system/icons/AUTHORS.TXT", "/system/icons/CREDITS.TXT",
                                         "/system/wallpapers/Ciuk1.png", "/system/wallpapers/Ciuk2.png", "/system/wallpapers/Ciuk3.png",
                                         "/System/hwids/pci-ids.json", "/System/hwids/usb-ids.json",
