@@ -62,6 +62,15 @@ static int values(struct fs_ro_volume *v, uint64_t lba, const char *source,
                 category == 0 ? "invalid" : category == 1 ? "endian_mismatch" : "directory_rounding");
     return e;
 }
+/* Volume set fields only catalogue a disc; Linux isofs_read_inode accepts
+ * any value and period mastering tools wrote 0. Diagnose, never refuse. */
+static void informative(struct fs_ro_volume *v, uint64_t lba, const char *source,
+                        enum iso_field field, const uint8_t *p, uint64_t available)
+{
+    uint32_t le = fs_rd16(p), be = be16(p + 2);
+    if (le != 1) values(v, lba, source, field, 0, 0, le, be, 1, 1, 1, available);
+    else if (le != be) values(v, lba, source, field, 0, 1, le, be, 1, 1, 1, available);
+}
 /* Match Linux isofs: a valid BE half never rescues an impossible LE value. */
 static int number(struct fs_ro_volume *v, uint64_t lba, const char *source,
                   enum iso_field field, const uint8_t *p, unsigned width, uint32_t *out,
@@ -116,8 +125,7 @@ static __attribute__((noinline)) int record_named(struct fs_ro_volume *v, uint64
         return -FS_EIO;
     }
     struct iso_state *s = v->state;
-    uint32_t sequence;
-    e = number(v, lba, source, ISO_SEQUENCE, p + 28, 2, &sequence, 1, 1, s->blocks); if (e) return e;
+    informative(v, lba, source, ISO_SEQUENCE, p + 28, s->blocks);
     if (r->extended > s->blocks)
         return values(v, lba, source, ISO_EXTENT, -FS_EIO, 0, fs_rd32(p + 2), be32(p + 6),
                       0, s->blocks, 1, r->extended);
@@ -301,8 +309,8 @@ static int descriptor(struct fs_ro_volume *v, uint64_t lba, const uint8_t *b, ui
     if (e) return e;
     uint32_t value;
     e = number(v, lba, name, ISO_BLOCK_SIZE, b + 128, 2, &value, ISO_BLOCK, ISO_BLOCK, v->sectors); if (e) return e;
-    e = number(v, lba, name, ISO_SET_SIZE, b + 120, 2, &value, 1, 1, v->sectors); if (e) return e;
-    e = number(v, lba, name, ISO_SEQUENCE, b + 124, 2, &value, 1, 1, v->sectors); if (e) return e;
+    informative(v, lba, name, ISO_SET_SIZE, b + 120, v->sectors);
+    informative(v, lba, name, ISO_SEQUENCE, b + 124, v->sectors);
     if (b[881] != 1) return values(v, lba, name, ISO_STRUCTURE_VERSION, -FS_EIO, 0, b[881], 0, 1, 1, 1, v->sectors);
     /* We traverse directory records, never path tables. Like isofs, don't
      * refuse readable files because an unused table copy is broken. */

@@ -235,7 +235,7 @@ class RootRecords(OpticalHarness):
     def test_impossible_le_values_and_raw_diagnostics(self):
         for joliet in (False,True):
             for offset,width,value,field in ((10,4,0,'data_length'),(10,4,0xffffffff,'data_length'),
-                                             (2,4,49,'extent'),(28,2,0,'volume_sequence_number')):
+                                             (2,4,49,'extent')):
                 with self.subTest(joliet=joliet,field=field,value=value):
                     a=root_record_fixture(self.directory,(),joliet)
                     p=Path(a['path']); data=bytearray(p.read_bytes())
@@ -247,6 +247,14 @@ class RootRecords(OpticalHarness):
                     self.assertIn(f'le={value} be={be}',line)
                     for operand in ('min=','max=','align=','available='): self.assertIn(operand,line)
                     self.assertEqual(output.count(f'field={field} result=-5'),1)
+
+    def test_directory_volume_sequence_zero_mounts(self):
+        for joliet in (False,True):
+            with self.subTest(joliet=joliet):
+                a=root_record_fixture(self.directory,(),joliet)
+                p=Path(a['path']); data=bytearray(p.read_bytes())
+                both(data,(17 if joliet else 16)*BLOCK+156+28,0,2); p.write_bytes(data)
+                self.assertIn('field=volume_sequence_number result=0 le=0',self.check_image(a))
 
     def test_sub_block_directory_and_readable_end(self):
         a=root_record_fixture(self.directory)
@@ -313,8 +321,6 @@ class Optical(OpticalHarness):
         a=iso_fixtures.generate({'joliet':True},self.directory,301)
         p=Path(a['path']); original=p.read_bytes()
         cases=[(16,80,4,0,'pvd','volume_space_size'),
-               (16,120,2,2,'pvd','volume_set_size'),
-               (16,124,2,2,'pvd','volume_sequence_number'),
                (16,128,2,512,'pvd','logical_block_size'),
                (17,128,2,512,'svd','logical_block_size'),
                (17,80,4,0,'svd','volume_space_size')]
@@ -322,6 +328,11 @@ class Optical(OpticalHarness):
             with self.subTest(field=field,descriptor=descriptor):
                 data=bytearray(original); both(data,lba*BLOCK+offset,value,width); p.write_bytes(data)
                 self.assertIn(f'descriptor={descriptor} field={field} result=-5',self.check_image(a,True))
+        # Volume set fields are informative, as in Linux isofs: any value mounts.
+        for offset,value,field in ((120,2,'volume_set_size'),(124,0,'volume_sequence_number'),(124,2,'volume_sequence_number')):
+            with self.subTest(field=field,value=value):
+                data=bytearray(original); both(data,16*BLOCK+offset,value,2); p.write_bytes(data)
+                self.assertIn(f'descriptor=pvd field={field} result=0 le={value}',self.check_image(a))
         for lba,offset,field in ((16,881,'file_structure_version'),(16,6,'descriptor_version'),
                                  (17,7,'volume_flags'),(18,6,'descriptor_version')):
             with self.subTest(lba=lba,field=field):
@@ -342,7 +353,8 @@ class Optical(OpticalHarness):
                         data=bytearray(original)
                         at=lba*BLOCK+offset+(width if broken=='big' else 0)
                         data[at:at+width]=b'\0'*width
-                        p.write_bytes(data); self.check_image(a,broken=='little')
+                        # Volume set fields (120, 124) are informative and never refuse.
+                        p.write_bytes(data); self.check_image(a,broken=='little' and offset not in (120,124))
             # Exercise root AND ordinary records in both hierarchies, including
             # bounds checks and the empty file's valid zero length.
             for offset,width in ((2,4),(10,4),(28,2)):
@@ -352,7 +364,7 @@ class Optical(OpticalHarness):
                     for record in records:
                         at=record+offset+(width if broken=='big' else 0)
                         data[at:at+width]=(0 if width==2 else (1<<(width*8))-1).to_bytes(width,'little')
-                    p.write_bytes(data); self.check_image(a,broken=='little')
+                    p.write_bytes(data); self.check_image(a,broken=='little' and offset!=28)
         # Both values plausible: Linux's little-endian preference is stable.
         data=bytearray(original); data[16*BLOCK+84]^=1; data[17*BLOCK+84]^=1
         p.write_bytes(data); self.check_image(a)
