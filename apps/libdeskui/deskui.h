@@ -198,7 +198,7 @@ struct du_icon_source {
     int resolved;                          /* the file was read: fallback is what it shows; 0 the caller's default */
 };
 struct du_file_icon_stats { uint32_t lookups, hits, queued, extracted, defaults, stale, evicted, refused, entries, bytes; };
-int du_file_icon_candidate(const char *name, int directory);   /* may show an own icon (by extension; folders always) */
+int du_file_icon_candidate(const char *name, int directory);   /* own icon/type resolution candidate; includes extensionless Programs entries */
 int du_file_icon_shortcut(const char *name);                   /* .lnk, .ciuki, .pif, .url: drawn with the shortcut overlay */
 /* Synchronous resolution and extraction (file I/O; workers and tools).
  * resolve: 1 own icon at out->file/index, 0 the default out->fallback, <0 error. */
