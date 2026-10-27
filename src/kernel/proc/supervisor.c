@@ -402,6 +402,8 @@ static void desktop_restart_step(void)
 void supervisor_poll(void)
 {
     security_poll();
+    extern void owner_service_poll(void) __attribute__((weak));
+    if(owner_service_poll) owner_service_poll();
     /* Restart only roles that this manifest actually started. Missing images
      * on transitional/test boots never become a public registration route. */
     for (unsigned role=1;role<ARRAY_SIZE(trusted_roles);role++) {

@@ -563,6 +563,8 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 
 # sec-k01 H01: immutable production subjects and call-101 transactions.
 python3 -B -m unittest discover -s "$root/tests/host/security" -p test_credentials.py
+# sec-k02 H02: OWNER batches/checkpoints and resolved FAT path policy.
+python3 -B -m unittest discover -s "$root/tests/host/security" -p test_owner_policy.py
 
 # F2 production parser, mappings, wait queues, stack and lifecycle with fake
 # physical memory/scheduling; no guest execution or host runner lock.
