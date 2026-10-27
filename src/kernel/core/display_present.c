@@ -8,6 +8,17 @@
 #include <ciuki/win32.h>
 #include "../vm/vga_presenter.h"
 extern bool w32_service_desktop_client(struct process *, uint32_t);
+extern bool channel_connected(const struct process *, const struct process *);
+/* f7-14: a Win32 client holds a desktop service link; a native client holds
+ * a channel with the desktop (libdeskui). Both may be granted the lease. */
+static bool present_client(struct process *desktop, uint32_t pid)
+{
+    struct process *p=proc_find(pid);
+    if (!p || p->state!=PROC_LIVE || !desktop) return false;
+    if (p->personality==PROC_WIN32) return w32_service_desktop_client(desktop,pid);
+    return p->personality==PROC_NATIVE && desktop->pid==supervisor_desktop_pid() &&
+        desktop->state==PROC_LIVE && channel_connected(desktop,p);
+}
 
 /* Lock order: lease -> framebuffer presenter. Mode transactions NEVER hold
  * either mutex across firmware. transfer excludes all new operations there.
@@ -76,7 +87,7 @@ void display_present_poll(void)
     uint32_t key=token, generation=fb_generation, pid=holder;
     bool needed=active && (!owner_live(holder) || !owner_live(desktop_pid) ||
         !grants_display_owner(proc_find(desktop_pid)) ||
-        !w32_service_desktop_client(proc_find(desktop_pid),holder) ||
+        !present_client(proc_find(desktop_pid),holder) ||
         (awaiting_first_frame && deadline_passed(first_frame_deadline)));
     kmutex_unlock(&lease_lock);
     if (needed) (void)revoke(key,generation,pid);
@@ -85,7 +96,7 @@ extern int render3d_native_prepare(void) __attribute__((weak));
 static int grant(struct process *d, struct ciuki_w32_display_args *a)
 {
     struct process *p=proc_find(a->pid);
-    if (!p || p->personality!=PROC_WIN32 || p->state!=PROC_LIVE) return -ESRCH;
+    if (!p || (p->personality!=PROC_WIN32 && p->personality!=PROC_NATIVE) || p->state!=PROC_LIVE) return -ESRCH;
     if (!cvp_surface_valid(&a->surface) || a->scale>3 || a->mode>UINT16_MAX) return -EINVAL;
     kmutex_lock(&lease_lock);
     if (active || transfer || frame_running || display_fullscreen_active()) {
@@ -115,7 +126,7 @@ static int grant(struct process *d, struct ciuki_w32_display_args *a)
     if (!e && (!f->present || f->generation!=prepared_generation)) e=-EAGAIN;
     /* Transactions can yield; re-prove both process identities on publication. */
     if (!e && (!owner_live(a->pid) || !owner_live(d->pid))) e=-ESRCH;
-    if (!e && !w32_service_desktop_client(d,a->pid)) e=-EPERM;
+    if (!e && !present_client(d,a->pid)) e=-EPERM;
     if (e) {
         if (suspended && f->mode_id!=saved_mode) {
             int rollback=display_set_for_present(d,saved_mode,true);
@@ -307,7 +318,7 @@ uint32_t w32_display_call(struct proc_thread *t, struct ciuki_w32_display_args *
     int e=0;
     if (a->action==W32_DISPLAY_GRANT || a->action==W32_DISPLAY_REVOKE) {
         if (p->pid!=supervisor_desktop_pid() || !grants_display_owner(p)) e=-EPERM;
-        else if (a->action==W32_DISPLAY_GRANT && !w32_service_desktop_client(p,a->pid)) e=-EPERM;
+        else if (a->action==W32_DISPLAY_GRANT && !present_client(p,a->pid)) e=-EPERM;
         else if (a->action==W32_DISPLAY_GRANT) e=grant(p,a);
         else {
             e=a->token ? revoke(a->token,a->generation,a->pid) : -EACCES;

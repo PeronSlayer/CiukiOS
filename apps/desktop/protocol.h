@@ -219,7 +219,18 @@ enum desk_opcode {
      *   items: count u32 formats, or count name bytes for a NAME reply.
      *   A successful GET reply with bytes carries one read-only surface. */
     DESK_CLIPBOARD = 92, DESK_CLIPBOARD_EVENT = 93,
-    DESK_DOS_CLIPBOARD = 94 /* v2 desktop to DOS window: u32 action 1 Mark, 2 Copy, 3 Paste, 4 toggle QuickEdit, 5 toggle Exclusive mode */
+    DESK_DOS_CLIPBOARD = 94 /* v2 desktop to DOS window: u32 action 1 Mark, 2 Copy, 3 Paste, 4 toggle QuickEdit, 5 toggle Exclusive mode */,
+    /* f7-14: the common present lease for native (v2) clients, with the v3
+     * LEASE/LEASE_EVENT payloads after the 4-byte header (DESK_SHELL_VERSION).
+     * LEASE (client to desktop, 20 bytes): action (0 release, 1 request),
+     *   w, h, bpp. The focused window of the client is the lease window.
+     * LEASE_EVENT (desktop to client, 76 bytes): the additive 72-byte v3
+     *   event: state (0 refused/ended, 1 granted, 2 pending, 3 revoked),
+     *   generation, w, h, bpp, token, fb-generation, mode, scale, source
+     *   w/h/pitch/size/format, native w/h/bpp, signed error. The holder
+     *   presents through W32_DISPLAY_FRAME or the render3d GPU copy with
+     *   the token and fb-generation (ciuki_gl_present). */
+    DESK_LEASE = 95, DESK_LEASE_EVENT = 96
 };
 enum desk_clip_op { DESK_CLIP_QUERY = 1, DESK_CLIP_EMPTY, DESK_CLIP_PUT, DESK_CLIP_CLOSE,
                     DESK_CLIP_GET, DESK_CLIP_WATCH, DESK_CLIP_REGISTER, DESK_CLIP_NAME, DESK_CLIP_OPEN, DESK_CLIP_RELEASE, DESK_CLIP_DISPLAY, DESK_CLIP_DISPLAY_REPLY };

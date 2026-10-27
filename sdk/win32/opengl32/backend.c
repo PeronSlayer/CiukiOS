@@ -39,7 +39,12 @@ void gl_hw_texture_changed(struct sw_texture *t) {
   t->revision = texture_revision == UINT64_MAX ? 0 : ++texture_revision;
 }
 static const struct gl_hw_driver *driver(void) {
-#ifdef W32_HOST_MODEL
+#if defined(CIUKI_GL_NATIVE)
+  /* The native provider is linked into the library; it answers zero without
+   * a qualified kernel transport or under the software policy. */
+  extern const struct gl_hw_driver *ciuki_gl_native_render3d(unsigned);
+  const struct gl_hw_driver *d = ciuki_gl_native_render3d(GL_HW_VERSION);
+#elif defined(W32_HOST_MODEL)
   extern const struct gl_hw_driver *w32_gdi_render3d(unsigned) __attribute__((weak));
   const struct gl_hw_driver *d = w32_gdi_render3d ? w32_gdi_render3d(GL_HW_VERSION) : 0;
 #else
@@ -109,7 +114,9 @@ static void evict(struct gl_hw_context *h, struct hw_texture *t) {
 }
 static void lose(struct gl_context *c, int permanent) {
   struct gl_hw_context *h = c->hardware;
-  if (permanent) c->hardware_failed = 1;
+  /* fallbacks counts permanent whole-context fallbacks (contract 7.2,
+   * f7-14); a revocation by a new display generation is not one. */
+  if (permanent) { c->hardware_failed = 1; c->fallbacks++; }
   /* close first: no engine may still access user staging or target storage. */
   h->driver->close(h->context);
   /* Replay onto the RAM checkpoint. After a gpu_only span that checkpoint
@@ -222,6 +229,15 @@ int gl_hw_swap_front(struct gl_context *c) {
   int gpu = h->context && h->presented && h->driver->read_presented;
   h->presented = 0; h->front_pending = gpu;
   return gpu;
+}
+/* The presented journal is complete and submitted: nothing is read back
+ * into, or replayed onto, the released pixels; the next target is loaded
+ * from its own pixels unless its first command overwrites it entirely. */
+void gl_hw_release(struct gl_context *c) {
+  struct gl_hw_context *h = c->hardware;
+  if (!h) return;
+  discard(h, 0);
+  h->gpu_only = h->presented = h->front_pending = h->loaded = 0;
 }
 void gl_hw_software(struct gl_context *c) {
   gl_hw_sync(c);
@@ -379,7 +395,7 @@ static struct hw_batch *batch(struct gl_context *c, unsigned mask,
   if (!h || !h->context) return 0;
   int accepted=h->driver->accept(h->context, &c->sw, mask, v, v ? 3 : 0);
   if (accepted<0) { refuse(c); return 0; }
-  if (!accepted) return 0;
+  if (!accepted) { c->refusals++; return 0; }
   uint64_t work=v ? gl_hw_triangle_work(v) : 0;
   if (v && !gl_hw_batch_room(&h->caps,0,0,work)) { refuse(c); return 0; }
   if (h->batches == GL_HW_BATCHES) drop_journal(c);
@@ -414,6 +430,7 @@ static struct hw_batch *batch(struct gl_context *c, unsigned mask,
 rejected:
   for (unsigned u = 0; u < 2; u++)
     if (textures[u] && textures[u]->pins) textures[u]->pins--;
+  c->refusals++;
   return 0;
 }
 int gl_hw_triangle(struct gl_context *c, const struct sw_vertex *v) {
@@ -422,6 +439,7 @@ int gl_hw_triangle(struct gl_context *c, const struct sw_vertex *v) {
   w32_copy(&b->command.vertices[b->command.count], v, 3 * sizeof(*v));
   b->command.count += 3;
   b->work += gl_hw_triangle_work(v);
+  c->hardware_draws++; c->frame_hardware_draws++;
   return 1;
 }
 int gl_hw_clear(struct gl_context *c, unsigned mask, unsigned color, unsigned depth) {
@@ -432,6 +450,7 @@ int gl_hw_clear(struct gl_context *c, unsigned mask, unsigned color, unsigned de
   if (!b) { gl_hw_software(c); return 0; }
   b->command.clear_mask = mask; b->command.clear_color = color;
   b->command.clear_depth = depth; b->command.clear_stencil = c->clear_stencil;
+  c->hardware_draws++; c->frame_hardware_draws++;
   if (full_clear(c, mask)) rebase(c->hardware, b);
   return 1;
 }

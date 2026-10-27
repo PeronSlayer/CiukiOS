@@ -775,6 +775,85 @@ static struct desk_packet graphics_reply(int i)
     struct ciuki_message m=c->tx[(c->tx_head+c->tx_count-1)%DESK_TX_MAX];struct desk_packet p;
     assert(desk_parse(&m,0,NULL,&p));c->tx_count=0;return p;
 }
+/* f7-14: the common present lease for a native (v2) client. */
+static unsigned native_grants,native_revokes;
+static int native_lease_error;
+static int native_lease(struct desktop *p,uint32_t pid,int acquire,uint32_t w,uint32_t h,uint32_t bpp,uint32_t gen)
+{
+    assert(p==&d && pid==42 && w==640 && h==480 && bpp==32 && gen);
+    if (native_lease_error) return native_lease_error;
+    if (!acquire) { native_revokes++; return 0; }
+    native_grants++;
+    p->v3_lease_tuple=(struct desk_lease_tuple){.token=100+native_grants,.generation=7,.mode=0x111,.scale=1,
+        .surface={640,480,2560,640*480*4,CIUKI_PRESENT_XRGB8888},.native_width=640,.native_height=480,.native_bpp=32};
+    return 0;
+}
+static void lease_message(struct ciuki_message *m,unsigned on,unsigned w,unsigned h,unsigned bpp)
+{
+    request(m,DESK_LEASE,20); m->data[0]=DESK_SHELL_VERSION;
+    desk_put32(m->data+4,on); desk_put32(m->data+8,w); desk_put32(m->data+12,h); desk_put32(m->data+16,bpp);
+}
+/* The last DESK_LEASE_EVENT queued for client i, parsed as the client does. */
+static int lease_event(int i,struct desk_packet *out)
+{
+    struct desk_client *c=&d.clients[i]; int found=0;
+    for (unsigned k=0;k<c->tx_count;k++) {
+        struct ciuki_message m=c->tx[(c->tx_head+k)%DESK_TX_MAX]; struct desk_packet p;
+        if (m.data[1]!=DESK_LEASE_EVENT) continue;
+        assert(m.data[0]==DESK_SHELL_VERSION && desk_parse(&m,0,NULL,&p) && !desk_parse(&m,1,NULL,&p));
+        assert(desk_parse(&m,0,NULL,out)); found++;
+    }
+    c->tx_count=0; return found;
+}
+static void test_native_lease(void)
+{
+    setup(800,600);
+    fake_surface(1,800,600,0); d.output=1; d.pixels=fake_ops.map(1,PROT_READ); assert(d.pixels);
+    int a=client(10,20,200,100,0x336699),b=client(11,21,200,100,0x993366);
+    d.clients[a].version=d.clients[b].version=DESK_SHELL_VERSION;
+    struct ciuki_message m; struct desk_packet p;
+    /* Bounds: action, size, depth, length and direction. */
+    lease_message(&m,1,640,480,24); assert(!desk_parse(&m,1,NULL,&p));
+    lease_message(&m,1,0,480,32); assert(!desk_parse(&m,1,NULL,&p));
+    lease_message(&m,1,4096,480,32); assert(!desk_parse(&m,1,NULL,&p));
+    lease_message(&m,2,640,480,32); assert(!desk_parse(&m,1,NULL,&p));
+    lease_message(&m,0,640,0,0); assert(!desk_parse(&m,1,NULL,&p));
+    lease_message(&m,1,640,480,32); m.length=24; assert(!desk_parse(&m,1,NULL,&p));
+    lease_message(&m,1,640,480,32); m.data[0]=DESK_VERSION; assert(!desk_parse(&m,1,NULL,&p));
+    lease_message(&m,1,640,480,32); assert(desk_parse(&m,1,NULL,&p) && !desk_parse(&m,0,NULL,&p));
+    lease_event(a,&p); lease_event(b,&p);
+    /* No present service: refused with ENOSYS. */
+    desk_focus(&d,a); lease_event(a,&p);
+    desk_receive(&d,a,&m); assert(lease_event(a,&p)==1 && p.flags==0 && p.result==-ENOSYS && !d.v3_lease_state);
+    /* Only the focused window may ask. */
+    d.v3_lease=native_lease; desk_receive(&d,b,&m);
+    assert(lease_event(b,&p)==1 && p.flags==0 && p.result==-EBUSY && !native_grants);
+    /* Granted: composition stops and the tuple reaches the client. */
+    desk_receive(&d,a,&m);
+    assert(lease_event(a,&p)==1 && p.flags==1 && !p.result && p.width==640 && p.height==480 && p.bpp==32);
+    assert(p.lease.token==101 && p.lease.generation==7 && p.lease.surface.format==CIUKI_PRESENT_XRGB8888 && p.lease.surface.pitch==2560);
+    assert(d.v3_lease_state==1 && d.v3_lease_window==d.clients[a].window_id && d.v3_lease_pid==42 && native_grants==1);
+    /* A second request and another window's release are refused. */
+    desk_receive(&d,a,&m); assert(lease_event(a,&p)==1 && p.flags==0 && p.result==-EBUSY);
+    lease_message(&m,0,0,0,0); desk_receive(&d,b,&m);
+    assert(lease_event(b,&p)==1 && p.flags==0 && p.result==-EPERM && p.width==1 && d.v3_lease_state==1);
+    /* Focus loss revokes; refocus reactivates the wanted lease. */
+    desk_focus(&d,b); assert(!d.v3_lease_state && native_revokes==1 && lease_event(a,&p)==1 && p.flags==3);
+    desk_focus(&d,a); assert(d.v3_lease_state==1 && native_grants==2 && lease_event(a,&p)==1 && p.flags==1 && p.lease.token==102);
+    /* The holder's release ends it and is not reactivated. */
+    desk_receive(&d,a,&m); assert(!d.v3_lease_state && native_revokes==2 && lease_event(a,&p)==1 && p.flags==3);
+    desk_focus(&d,b); desk_focus(&d,a); assert(!d.v3_lease_state && native_grants==2);
+    /* A kernel refusal reaches the client; a lost client loses the lease. */
+    lease_message(&m,1,640,480,32); native_lease_error=-EBUSY; desk_receive(&d,a,&m);
+    assert(lease_event(a,&p)==1 && p.flags==0 && p.result==-EBUSY && !d.v3_lease_state);
+    native_lease_error=0; desk_receive(&d,a,&m); assert(d.v3_lease_state==1 && native_grants==3);
+    desk_drop_client(&d,a); assert(!d.v3_lease_state && native_revokes==3);
+    d.v3_lease=NULL;
+    for (int i=0;i<DESK_CLIENTS;i++) desk_drop_client(&d,i);
+    desk_render_release(&d); fake_ops.unmap(d.pixels,(800*600*4+4095)&~4095u); fake_ops.close(1); d.pixels=NULL;
+    assert(!fake_live());
+    puts("PASS native present lease (v2 DESK_LEASE): bounds, focus authority, grant tuple, refusals, focus revoke/reactivate, release and client loss");
+}
 static void test_graphics_service(void)
 {
     setup(640,480);int i=client(10,11,120,80,0);d.clients[i].version=2;d.clients[i].tx_count=0;
@@ -1342,7 +1421,7 @@ int main(void)
     test_protocol(); test_titles(); test_cursor_requests(); test_resize_protocol(); test_damage();
     test_resize(); test_resize_title_buttons(); test_input(); test_console_typing(); test_lifecycle();
     test_compositor(); test_shell(); test_media_shell(); test_graphics_menu();
-    test_graphics_service(); test_menu(); test_ide_launch(); test_note_wordpad(); test_terminal();
+    test_graphics_service(); test_native_lease(); test_menu(); test_ide_launch(); test_note_wordpad(); test_terminal();
     test_volume_steps(); test_hid_consumer(); test_dos_fullscreen_menu(); test_dos_fullscreen_restore_frame();
     test_game_data_properties();
     test_power_status();

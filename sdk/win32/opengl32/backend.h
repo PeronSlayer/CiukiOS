@@ -70,6 +70,10 @@ void gl_hw_sync(struct gl_context *);
 void gl_hw_coherent(struct gl_context *);
 void gl_hw_finish(struct gl_context *);
 int gl_hw_swap_front(struct gl_context *);
+/* Native targets (f7-14): the caller rebinds or closes right after a frame
+ * the GPU presented, before any further draw; that journal is dropped
+ * without readback or replay (the old pixels may already be freed). */
+void gl_hw_release(struct gl_context *);
 void gl_hw_software(struct gl_context *);
 int gl_hw_triangle(struct gl_context *, const struct sw_vertex *);
 int gl_hw_clear(struct gl_context *, unsigned, unsigned, unsigned);

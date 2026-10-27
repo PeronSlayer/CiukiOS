@@ -49,16 +49,20 @@ static void semantics(void)
     glDisable(GL_DEPTH_TEST);triangle(0.8f,0,0,1);ciuki_gl_finish();assert((p[24*64+32]&0xffff00u)==0 && (p[24*64+32]&0xffu)>=0xf0u);
     glBindTexture(-1,0);glDrawBuffer(-1);
     assert(glGetError()==GL_INVALID_ENUM);assert(glGetError()==GL_NO_ERROR);
-    GLuint buffers[32];glGenBuffers(32,buffers);
-    for (unsigned i=0;i<32;i++) {
-        assert(buffers[i] && glIsBuffer(buffers[i]));
-        for (unsigned j=0;j<i;j++) assert(buffers[i]!=buffers[j]);
-    }
-    glDeleteBuffers(32,buffers);for (unsigned i=0;i<32;i++) assert(!glIsBuffer(buffers[i]));
+    /* f7-14: the shared engine's texture objects and status report. */
+    GLuint names[8];glGenTextures(8,names);
+    for (unsigned i=0;i<8;i++) { assert(names[i]); for (unsigned j=0;j<i;j++) assert(names[i]!=names[j]); }
+    glDeleteTextures(8,names);assert(!glIsTexture(names[0]));
+    struct ciuki_gl_status status={.size=sizeof(status)};
+    assert(!ciuki_gl_status(&status) && status.backend==CIUKI_GL_BACKEND_SOFTWARE && status.frames>=3 &&
+        status.software_frames==status.frames && !status.hardware_draws && status.software_draws);
+    assert(ciuki_gl_set_backend(CIUKI_GL_BACKEND_HARDWARE)==-ENODEV && !ciuki_gl_set_backend(CIUKI_GL_BACKEND_AUTO));
+    assert(ciuki_gl_get_proc_address("glActiveTextureARB") && !ciuki_gl_get_proc_address("glNothing"));
     unsigned char *rgb=malloc(256*256*3);assert(rgb);
     for (unsigned i=0;i<256*256;i++) { rgb[i*3]=255;rgb[i*3+1]=0;rgb[i*3+2]=255; }
     GLuint texture;glGenTextures(1,&texture);glBindTexture(GL_TEXTURE_2D,(int)texture);
     glTexImage2D(GL_TEXTURE_2D,0,3,256,256,0,GL_RGB,GL_UNSIGNED_BYTE,rgb);free(rgb);
+    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
     glEnable(GL_TEXTURE_2D);glColor3f(1,1,1);glBegin(GL_QUADS);
     glTexCoord2f(0,0);glVertex3f(-1,-1,0);glTexCoord2f(1,0);glVertex3f(1,-1,0);
     glTexCoord2f(1,1);glVertex3f(1,1,0);glTexCoord2f(0,1);glVertex3f(-1,1,0);glEnd();

@@ -9,6 +9,10 @@
 
 bool w32_service_desktop_client(struct process *p,uint32_t pid)
 { return p==&desktop && pid==other.pid; }
+/* f7-14 native lease holders are desktop channel peers; this test drives
+ * only Win32 leases (display_present_test.c covers the native holder). */
+bool channel_connected(const struct process *a,const struct process *b)
+{ (void)a;(void)b; return false; }
 gen_t gen_alloc(void) { return ++generation; }
 uint32_t pmm_alloc(void) { return 0; }
 void pmm_free(uint32_t page) { assert(!page); }

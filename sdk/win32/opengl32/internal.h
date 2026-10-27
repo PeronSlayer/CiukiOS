@@ -6,8 +6,14 @@
 typedef unsigned GLbitfield;
 #include "../../../sdk/libgl/software/extensions.h"
 #include "../../../sdk/libgl/software/renderer.h"
+#ifdef CIUKI_GL_NATIVE
+/* f7-14: the native library builds the same engine over libc and the native
+ * render3d provider; Win32 types and byte helpers come from this shim. */
+#include "../../libgl/native/platform.h"
+#else
 #include <w32/opengl32.h>
 #include <w32/services.h>
+#endif
 #include "backend.h"
 union gl_arg {
   int64_t i;
@@ -94,6 +100,12 @@ struct gl_context {
   unsigned frames, leased_window;
   unsigned gamma_registered, gamma_valid, gamma_serial, gamma_token, gamma_generation;
   HBITMAP back;
+  /* f7-14 completion accounting shared by SwapBuffers and the native frame
+   * boundary: draws/clears executed by the provider versus the scalar path,
+   * provider refusals (temporary) and whole-context fallbacks (permanent).
+   * frame_* counts reset at each frame boundary. */
+  uint64_t hardware_draws, software_draws, refusals, fallbacks;
+  uint64_t frame_hardware_draws, frame_software_draws;
 };
 int gl_target(HDC, unsigned *, unsigned *, unsigned *);
 void gl_census_open(struct gl_context *);

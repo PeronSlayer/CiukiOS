@@ -19,7 +19,10 @@ static uint8_t page_memory[4096];
 #define P2V(p) ((void)(p),(void *)page_memory)
 volatile uint64_t g_ticks;
 static struct process desktop={.pid=2,.state=PROC_LIVE}, game={.pid=3,.state=PROC_LIVE,.personality=PROC_WIN32};
-static struct proc_thread dt={.process=&desktop}, gt={.process=&game};
+/* f7-14: a native libdeskui client holds a channel with the desktop. */
+static struct process native={.pid=5,.state=PROC_LIVE,.personality=PROC_NATIVE};
+static bool channel_open=true;
+static struct proc_thread dt={.process=&desktop}, gt={.process=&game}, nt={.process=&native};
 static struct fb_device device={.present=true,.width=640,.height=480,.pitch=2560,.bpp=32,
     .red_size=8,.red_pos=16,.green_size=8,.green_pos=8,.blue_size=8,.generation=1,.mode_id=0x118};
 static uint8_t user[70000],scanout[640*480*4];
@@ -31,12 +34,13 @@ static uint32_t native_frame[640*480];
 static uint32_t fresh;
 static void (*on_pin)(void),(*on_read)(void),(*on_yield)(void),(*on_sleep)(void),(*on_write)(void);
 const struct fb_device *fbdev_get(void){return &device;}
-struct process *proc_find(uint32_t pid){return pid==desktop.pid?&desktop:pid==game.pid?&game:NULL;}
+struct process *proc_find(uint32_t pid){return pid==desktop.pid?&desktop:pid==game.pid?&game:pid==native.pid?&native:NULL;}
+bool channel_connected(const struct process *a,const struct process *b){return a==&desktop&&b==&native&&channel_open;}
 uint32_t supervisor_desktop_pid(void){return 2;}
 uint64_t deadline_after_ms(uint32_t n){return g_ticks+n;}
 bool deadline_passed(uint64_t d){return g_ticks-d<(UINT64_C(1)<<63);}
 bool grants_display_owner(const struct process *p){return p==&desktop&&grant_available;}
-bool w32_service_desktop_client(struct process *p,uint32_t pid){return p==&desktop&&pid==game.pid&&connected;}
+bool w32_service_desktop_client(struct process *p,uint32_t pid){assert(pid!=native.pid);return p==&desktop&&pid==game.pid&&connected;}
 bool display_fullscreen_active(void){return false;}
 int display_worker_start(void){return 0;}
 void fbdev_cursor_hide(void){assert(suspended);}
@@ -275,6 +279,16 @@ int main(void)
     q=holder_args(&a,W32_DISPLAY_FRAME);unsigned prior=writes;grant_available=false;
     w32_display_call(&gt,&q);assert(q.error==EACCES&&writes==prior);grant_available=true;
     assert(display_present_revoke_kernel()==1);complete();
+    /* f7-14: a native desktop client is granted the same lease through its
+     * channel, presents XRGB frames and loses it when the channel closes. */
+    a=grant_args();a.pid=native.pid;a.surface=(struct ciuki_present_surface){100,100,400,40000,CIUKI_PRESENT_XRGB8888};
+    channel_open=false;w32_display_call(&dt,&a);assert(a.error==EPERM&&!active);channel_open=true;
+    a=grant_args();a.pid=native.pid;a.surface=(struct ciuki_present_surface){100,100,400,40000,CIUKI_PRESENT_XRGB8888};
+    w32_display_call(&dt,&a);assert(!a.error&&active&&suspended);
+    q=holder_args(&a,W32_DISPLAY_FRAME);q.pid=native.pid;q.address=0;prior=writes;
+    w32_display_call(&gt,&q);assert(q.error==EACCES&&writes==prior); /* the Win32 client is not the holder */
+    q=holder_args(&a,W32_DISPLAY_FRAME);q.pid=native.pid;q.address=0;w32_display_call(&nt,&q);assert(!q.error&&q.result&&writes>prior);
+    channel_open=false;display_present_poll();assert(!active&&!suspended);channel_open=true;complete();
     native_formats();race();render3d_frames();printf("PASS production lease: revoke at pin/read/copy/pacing, death, stale tokens, authority, mode failure/rollback, cleanup; writes=%u returns=%u\n",writes,returns);
     render3d_native_frame();
     return 0;
