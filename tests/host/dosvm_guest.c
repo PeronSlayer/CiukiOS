@@ -75,6 +75,19 @@ static uint64_t read_tsc_serialized(void)
     if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t)) abort();
     return (uint64_t)t.tv_sec * 1000000000u + (uint64_t)t.tv_nsec;
 }
+/* fx-doomwin: the exit boundary stamps (dosvm_perf_stamp) are RDTSC alone
+ * on the T23; here the same host clock, counted apart. */
+static uint64_t host_plain_calls;
+#ifndef FX27_HEAD_BASELINE
+static uint64_t read_tsc_unserialized(void)
+{
+    if (!guest_perf) return 0;
+    host_plain_calls++;
+    struct timespec t;
+    if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t)) abort();
+    return (uint64_t)t.tv_sec * 1000000000u + (uint64_t)t.tv_nsec;
+}
+#endif
 #include <ciuki/kernel.h>
 #include <ciuki/task.h>
 #include <ciuki/input.h>
@@ -629,6 +642,27 @@ static uint64_t t23x_code_ns[DOSVM_COST_COUNT], t23x_ser[DOSVM_COST_COUNT], t23x
 /* fx-27: the same split for exits retired on the lean path. */
 static uint64_t t23x_lean_ns[DOSVM_COST_COUNT], t23x_lean_exits[DOSVM_COST_COUNT], t23x_lean_charged[DOSVM_COST_COUNT];
 static bool t23x_lean_exit;
+/* fx-doomwin: exits retired by dosvm_trap_fast (a subset of the lean ones),
+ * and their host code time apart from the lean path's for the same cause. */
+static bool t23x_fast_exit;
+static uint64_t t23x_fast_ns[DOSVM_COST_COUNT], t23x_fast_exits[DOSVM_COST_COUNT];
+/* T23 price of a plain RDTSC (dosvm_perf_stamp): about 42 clocks on the P6
+ * line (Agner Fog's instruction tables), 37 ns at 1.13 GHz. */
+#define T23_PLAIN_NS 37.0
+/* fx-doomwin GUEST_T23_STAMP_NS (default 230): what the trial's per-cause
+ * averages paid inside each exit's measured interval for its serialized
+ * boundary stamps and these sources no longer do: the second CPUID of the
+ * entry read_tsc_serialized and the first of the exit's, about 130 clocks
+ * each (Agner Fog), 2 x 115 ns at 1.13 GHz. Subtracted from every fixed
+ * price; the CPUIDs outside the interval (one at entry, one or three at the
+ * return) are left in the trial's guest time, uncredited. 0 restores the
+ * fx-doswin3 prices for a replay of earlier sources. */
+static double t23_stamp_ns = 230.0;
+/* GUEST_T23_FAST_NS (default 0): the fixed model's what-if saving of a
+ * plane select retired by dosvm_trap_fast against fx-27's lean VGA exit,
+ * beyond the stamps. The measured host code time ratio of the two paths
+ * (H61 T23X lines, GUEST_NO_FAST=1 for the lean path) gives its scale. */
+static double t23_fast_ns;
 /* T23 us per exit (trial e831e685 n=7/8 as fx-16; V86 flag/IRET exits and
  * the keyboard from trial f441c5bd n=3); 0: variable work, fx-16 scaling. */
 static double t23x_average(unsigned cause)
@@ -713,28 +747,34 @@ static double t23_fixed_price(unsigned cause, bool lean)
     default: return 23200;                     /* other */
     }
 }
-static void t23_charge_calls(uint64_t serialized, uint64_t path)
+static void t23_charge_calls(uint64_t serialized, uint64_t path, uint64_t plain)
 {
     if (!t23_model || !g_tsc_per_ms) return;
+    unsigned cause = gv->perf.cause < DOSVM_COST_COUNT ? gv->perf.cause : DOSVM_COST_OTHER;
+    double trap = (double)gv->perf.trap_cycles * 1000000.0 / (double)g_tsc_per_ms;
+    /* fx-doomwin: the boundary stamps are plain reads (dosvm_perf_stamp):
+     * the entry and exit stamps (half of each inside the interval) and, for
+     * an ordinary exit, the return to guest time after it. Every serialized
+     * read is now inside the interval. */
+    uint64_t boundary = t23x_lean_exit || t23x_fast_exit ? 2 : 3;
+    uint64_t inner = plain >= boundary ? plain - boundary : 0;
+    double code = trap - (double)(serialized + inner + 1 + path) * host_clock_ns;
+    if (code < 0) code = 0;
+    if (t23x_fast_exit) { t23x_fast_ns[cause] += (uint64_t)code; t23x_fast_exits[cause]++; }
+    else if (t23x_lean_exit) { t23x_lean_ns[cause] += (uint64_t)code; t23x_lean_exits[cause]++; }
     if (t23_fixed) {
-        unsigned cause = gv->perf.cause < DOSVM_COST_COUNT ? gv->perf.cause : DOSVM_COST_OTHER;
-        double ns = t23_fixed_price(cause, t23x_lean_exit);
+        double ns = t23_fixed_price(cause, t23x_lean_exit) - t23_stamp_ns;
+        if (t23x_fast_exit) ns -= t23_fast_ns;
+        if (ns < 0) ns = 0;
         if (!t23_fullscreen && cause == DOSVM_COST_VGA_PF) ns *= t23_pf_scale;
         if (!t23_fullscreen && cause == DOSVM_COST_VGA_IO) ns *= t23_vga_scale;   /* what-if only */
         t23_charged_ns[cause] += (uint64_t)ns; t23_exits[cause]++;
         t23_monitor += (uint64_t)(ns * guest_slice / 1000000.0);
-        (void)serialized; (void)path;
         return;
     }
-    unsigned cause = gv->perf.cause < DOSVM_COST_COUNT ? gv->perf.cause : DOSVM_COST_OTHER;
-    double trap = (double)gv->perf.trap_cycles * 1000000.0 / (double)g_tsc_per_ms;
-    /* Boundary reads: the entry and exit stamps (half of each inside the
-     * interval) and the return to guest time after it. */
-    uint64_t inner = serialized >= 3 ? serialized - 3 : 0;
-    double code = trap - (double)(inner + 1 + path) * host_clock_ns;
-    if (code < 0) code = 0;
-    t23x_code_ns[cause] += (uint64_t)code; t23x_ser[cause] += inner + 1; t23x_path[cause] += path;
-    double clocks = (double)(inner + 1) * T23_SERIALIZED_NS + (double)path * T23_PATH_NS;
+    t23x_code_ns[cause] += (uint64_t)code; t23x_ser[cause] += serialized; t23x_path[cause] += path;
+    double clocks = (double)serialized * T23_SERIALIZED_NS + (double)path * T23_PATH_NS +
+        (double)(inner + 1) * T23_PLAIN_NS;
     double average = t23x_average(cause) * 1000.0, ns;
     if (t23x_lean_exit) {
         /* HEAD's ordinary exit of the same cause: one serialized read, and
@@ -742,8 +782,8 @@ static void t23_charge_calls(uint64_t serialized, uint64_t path)
         double head_clocks = T23_SERIALIZED_NS + (cause == DOSVM_COST_VGA_IO ? 2 * T23_PATH_NS : 0);
         double base = average ? average : 21600.0;
         ns = t23_doomfs2 ? 6600.0 : (base - head_clocks) * code / t23x_head_code_ns(cause) + clocks;
-        t23x_lean_ns[cause] += (uint64_t)code; t23x_lean_exits[cause]++; t23x_lean_charged[cause] += (uint64_t)ns;
-    } else ns = average ? average : trap * t23_ratio(cause);
+        t23x_lean_charged[cause] += (uint64_t)ns;
+    } else ns = average ? average - t23_stamp_ns : trap * t23_ratio(cause);
     if (!t23_fx27 && !t23_doomfs2) return;
     if (t23_fullscreen && (cause == DOSVM_COST_VGA_IO || cause == DOSVM_COST_VGA_PF)) ns = 1000.0;
     else if (cause == DOSVM_COST_VGA_IO) ns *= t23_vga_scale;
@@ -1140,12 +1180,24 @@ static void deliver(unsigned vector, uint32_t err, uint32_t cr2)
     uint32_t lean_before = gv->perf.lean_exits;
 #endif
     uint64_t calls = host_clock_calls, harvest = gv->perf.harvest_cycles, ports = 0, invlpgs = invlpg_calls;
+    uint64_t plain0 = host_plain_calls;
+#ifndef FX27_HEAD_BASELINE
+    uint32_t fast_before = gv->perf.fast_exits;
+#endif
     uint32_t remaps0 = gv->perf.port_remaps;
     for (unsigned i = 0; i < DOSVM_VGA_REGS; i++) ports += gv->perf.port_count[i];
     bool saved_fullscreen = gv->fullscreen;
     if (t23_doomfs2 && t23_fullscreen && vector == 13 && !err && (cost == 4 || cost == 8 || cost == 10))
         gv->fullscreen = true;
-    if (!setjmp(guest_return)) { CHECK(dosvm_trap(&hw.tf)); cpu = hw; }
+    /* fx-doomwin: trap_dispatch offers a VM's #GP to dosvm_trap_fast first
+     * (GUEST_NO_FAST=1: fx-27's lean path alone, for A/B replays). */
+    if (!setjmp(guest_return)) {
+#ifndef FX27_HEAD_BASELINE
+        if (getenv("GUEST_NO_FAST") || !dosvm_trap_fast(&hw.tf))
+#endif
+            CHECK(dosvm_trap(&hw.tf));
+        cpu = hw;
+    }
     else cpu = gv->frame;
     gv->fullscreen = saved_fullscreen;
     t23_charge();
@@ -1156,7 +1208,10 @@ static void deliver(unsigned vector, uint32_t err, uint32_t cr2)
 #ifndef FX27_HEAD_BASELINE
     t23x_lean_exit = gv->perf.lean_exits != lean_before;
 #endif
-    t23_charge_calls(total - path, path);
+#ifndef FX27_HEAD_BASELINE
+    t23x_fast_exit = gv->perf.fast_exits != fast_before;
+#endif
+    t23_charge_calls(total - path, path, host_plain_calls - plain0);
     if (isr_ring_on && (gv->monitor.pic[0].isr != isr_before || gv->dpmi.depth != depth_before)) {
         isr_ring[isr_ring_pos++ % ISR_RING] = (struct isr_event){g_ticks, eip_before, cs_before, (uint8_t)vector,
             isr_before, gv->monitor.pic[0].isr, gv->monitor.pic[0].irr, depth_before, (uint8_t)gv->dpmi.depth,
@@ -1701,12 +1756,12 @@ static void play_progress(uint64_t begin)
                    gv->monitor.pic[0].imr, gv->monitor.pic[1].irr, gv->monitor.pic[1].isr, gv->dpmi.depth,
                    gv->dpmi.if_armed, gv->dpmi.if_waiting, gv->dpmi.if_step, gv->dpmi.return_steps,
                    (unsigned long long)t23_off, (unsigned long long)t23_monitor);
-        printf("H61 PERF t=%llu traps=%llu lean=%u pm_flags=%u pm_int=%u pit_pic=%u vga_io=%u io=%u db=%u timer=%u "
+        printf("H61 PERF t=%llu traps=%llu fast=%u lean=%u pm_flags=%u pm_int=%u pit_pic=%u vga_io=%u io=%u db=%u timer=%u "
                "rm=%u cli_cand=%u hits=%u proved=%u pattern=%u control=%u missed=%u unprovable=%u seeds=%u skipped=%u "
                "seed_wanted=%u irq0_lost=%llu irq0_reinjected=%llu frames=%u t23_ms=%.1f t23_pit_ms=%.1f t23_flags_ms=%.1f dac=%u armed=%u ret=%u "
                "t23_vga_ms=%.1f t23_db_ms=%.1f present_frames=%llu present_rows=%llu present_ms=%.1f off_ms=%.1f remaps=%u "
                "present_wakes=%llu invlpg=%llu trap_ms=%.1f invlpg_ms=%.1f shown_frames=%llu shown_rows=%llu ack_timeouts=%llu\n",
-               (unsigned long long)(g_ticks - begin), (unsigned long long)traps, gv->perf.lean_exits,
+               (unsigned long long)(g_ticks - begin), (unsigned long long)traps, gv->perf.fast_exits, gv->perf.lean_exits,
                n[DOSVM_COST_PM_FLAGS], n[DOSVM_COST_PM_INT], n[DOSVM_COST_PIT_PIC], n[DOSVM_COST_VGA_IO],
                n[DOSVM_COST_IO], n[DOSVM_COST_DB], n[DOSVM_COST_TIMER],
                n[DOSVM_COST_RM_INT] + n[DOSVM_COST_RM_IRET] + n[DOSVM_COST_RM_FLAGS] + n[DOSVM_COST_RM_PUSHF] +
@@ -1969,6 +2024,9 @@ int main(int argc, char **argv)
     t23_fx27 = t23_model && getenv("GUEST_T23_MODEL") && (!strcmp(getenv("GUEST_T23_MODEL"), "fx27") || t23_fixed);
     t23_doomfs2 = t23_model && getenv("GUEST_T23_MODEL") && !strcmp(getenv("GUEST_T23_MODEL"), "doomfs2");
     if (getenv("GUEST_T23_XCHG_NS")) t23_xchg_ns = strtod(getenv("GUEST_T23_XCHG_NS"), 0);
+    if (getenv("GUEST_T23_STAMP_NS")) t23_stamp_ns = strtod(getenv("GUEST_T23_STAMP_NS"), 0);
+    if (getenv("GUEST_T23_FAST_NS")) t23_fast_ns = strtod(getenv("GUEST_T23_FAST_NS"), 0);
+    CHECK(t23_stamp_ns >= 0 && t23_stamp_ns <= 2000 && t23_fast_ns >= 0 && t23_fast_ns <= 5000);
     if (guest_perf) {
         /* Host cost of one monitor clock read (a CLOCK_THREAD_CPUTIME_ID
          * system call); the median of five 20000-call batches. */
@@ -2318,6 +2376,14 @@ int main(int argc, char **argv)
     printf("debug traps: rm=%llu flags=%llu returns=%llu other=%llu\n",
            (unsigned long long)db_rm, (unsigned long long)db_flags,
            (unsigned long long)db_return, (unsigned long long)db_other);
+    /* fx-doomwin: host code time per exit (clock reads removed) of the lean
+     * and trap-entry paths, by cause, for the fixed model's fast price. */
+    for (unsigned c = 0; c < DOSVM_COST_COUNT; c++) if (t23x_lean_exits[c] || t23x_fast_exits[c])
+        printf("H61 T23X cause=%u lean=%llu lean_ns=%.1f fast=%llu fast_ns=%.1f\n", c,
+               (unsigned long long)t23x_lean_exits[c],
+               t23x_lean_exits[c] ? (double)t23x_lean_ns[c] / (double)t23x_lean_exits[c] : 0.0,
+               (unsigned long long)t23x_fast_exits[c],
+               t23x_fast_exits[c] ? (double)t23x_fast_ns[c] / (double)t23x_fast_exits[c] : 0.0);
     printf("debug trap owners:");
     for (unsigned i = 0; i < 16 && db_owners[i].owner; i++)
         printf(" %s=%llu", db_owners[i].owner, (unsigned long long)db_owners[i].count);

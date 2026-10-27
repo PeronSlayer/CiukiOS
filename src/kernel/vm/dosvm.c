@@ -287,6 +287,96 @@ static int lean_io(struct dosvm *v, struct v86_frame *f, int *error)
     return 2;
 }
 
+/* fx-doomwin: a plane select (OUT DX,AL/AX to the sequencer or graphics
+ * controller, dosvm_vga_select_fast) retired at trap entry, before
+ * trap_dispatch's per-exit accounting and dosvm_trap's frame copy. DOOM's
+ * planar renderer selects a plane for every wall column and four times
+ * per span (25,000-30,000 OUT DX,AL to 3C5h per second in a window); on
+ * the T23 each took 5.4-5.9 us on fx-27's lean path (trial 6c3b7800, bank
+ * n=4: 132,973 exits, 761 ms per 5 s), of which about 2 us was the 16-PTE
+ * plane exchange and the rest the generic exit around a one-byte register
+ * store. Here physical IF stays clear from the gate to the IRET: one
+ * IRQ-off section (crit_begin here, crit_end in isr.asm), no frame copy,
+ * no per-exit task stamps (cpu_trap_enter/cpu_user_return) and the exit's
+ * two boundary stamps only (dosvm_perf_stamp). Taken only where fx-27's
+ * lean path would retire the exit with nothing left to do: lean_before
+ * (state, full-screen holds, DPMI obligations, mouse, reschedule) and no
+ * STI or MOV SS shadow; the instruction is decoded exactly (EE, EF or
+ * 66 EF, no other prefix, its operand size from the code segment). After
+ * it, dpmi_lean_retire leaves the DPMI boundary state the lean exit does,
+ * and lean_after decides: any obligation (a pending virtual IRQ, a
+ * reschedule, an interrupted context's return point, EXEC/launch frames)
+ * hands the retired instruction to dosvm_trap's ordinary tail
+ * (fast_retired), exactly as lean_io's result 2. For everything else it is
+ * false with no VM state changed (at most the monitor's entry stamp taken),
+ * and trap_dispatch continues as before. */
+static struct dosvm *owner(const struct task *t);
+bool dosvm_trap_fast(struct trap_frame *tf)
+{
+    if (tf->vector != 13 || tf->err) return false;
+    uint16_t port = (uint16_t)tf->edx;
+    if (port != 0x3C4 && port != 0x3C5 && port != 0x3CE && port != 0x3CF) return false;
+    struct dosvm *v = owner(g_current);
+    if (!v || !v->continuation || v->fast_retired) return false;
+    bool pm = !(tf->eflags & V86_VM);
+    /* trap_dispatch hands a ring-3 frame to the monitor only for a running
+     * DPMI client (dosvm_client); anything else keeps its ordinary route. */
+    if (pm != v->frame_pm || (pm && !v->dpmi.active)) return false;
+    /* The monitor's time starts here, refused or not: dosvm_perf_enter
+     * and dosvm_trap find phase 2 and keep this stamp (or, as dosvm_trap,
+     * an earlier monitor stamp still pending). */
+    crit_begin();
+    if (crit_label) crit_label("dosvm_fast");
+    if (v->perf.phase != 2) perf_boundary(v, 2);
+    struct v86_frame *f = (struct v86_frame *)tf;
+    if ((pm ? v->dpmi.shadow : v->monitor.shadow) || !lean_before(v, f)) return false;
+    if (v->monitor.io != dosvm_io) return false;
+    unsigned video = v->port_hint[2];
+    if (video >= DOSVM_PORTS || v->ports[video].handler != dosvm_vga_port ||
+        port < v->ports[video].first || port > v->ports[video].last) return false;
+    struct dpmi_seg seg, *cs = 0;
+    if (pm) {
+        if (!dpmi_seg(v, (uint16_t)tf->cs, &seg) || !seg.code || !seg.present) return false;
+        cs = &seg;
+    }
+    uint8_t op;
+    unsigned len = 1;
+    bool wide = cs && cs->big;
+    if (!lean_fetch(v, f, cs, 0, &op)) return false;
+    if (op == 0x66) {
+        wide = !wide;
+        if (!lean_fetch(v, f, cs, len++, &op)) return false;
+    }
+    if (op != 0xEE && (op != 0xEF || wide)) return false;
+    unsigned width = op == 0xEE ? 1 : 2;
+    if (!dosvm_vga_select_ok(v, port, width, tf->eax)) return false;
+    v->perf.trap_active = true; v->perf.trap_cycles = 0;
+    v->perf.cause = DOSVM_COST_VGA_IO;
+    v->perf.io_port = port; v->perf.io_valid = true;
+    v->perf.io_dispatches++;
+    dosvm_vga_select_fast(v, port, width, tf->eax);
+    tf->eip += len;
+    if (!cs || !cs->big) tf->eip &= 0xFFFF;
+    if (pm) dpmi_lean_retire(v, f);
+    else {
+        v->monitor.stats.insn[V86_OUT]++;
+        if (v->dpmi.active) v->dpmi.if_steps = 0; /* dpmi_deliver's if_recovery_end */
+    }
+    if (!lean_after(v, f)) {
+        /* An obligation: dosvm_trap runs the ordinary tail only. */
+        v->fast_retired = true; v->fast_port = port;
+        v->perf.trap_active = false; v->perf.io_valid = false;
+        return false;
+    }
+    if (!pm) v86_prepare_return(&v->monitor, f);   /* fx-27's lean return sequence */
+    v->perf.exits[0]++;
+    if (pm) v->perf.exits[5]++;
+    v->perf.lean_exits++; v->perf.fast_exits++;
+    perf_exit_end(v);
+    v->perf.phase = 1;      /* guest time starts at the closing stamp */
+    return true;
+}
+
 void dosvm_launch_video(struct dosvm *v)
 {
     if (v->launch_armed && v->launch_exec && !v->launch_failed && !v->launch_ready) {
@@ -484,6 +574,7 @@ static const char *dosvm_step_owner(const struct dosvm *v, const struct v86_fram
     if (d->if_armed) return "pm_flags";
     if (d->return_step && (uint16_t)f->tf.cs == d->return_step_target_cs && (uint16_t)f->tf.user_ss == d->return_ss &&
         d->depth == d->return_depth && d->clients == d->return_client) return "pm_return";
+    if (d->shadow_step) return "pm_shadow";   /* fx-doomwin: t23-dosperf's STI-shadow step */
     return "client";
 }
 
@@ -1121,7 +1212,7 @@ int dosvm_wait(struct dosvm *v, bool keyboard, uint64_t deadline)
 void dosvm_perf_enter(void)
 {
     struct dosvm *v = owner(g_current);
-    if (v && v->continuation && v->perf.phase == 1) perf_phase(v, 2);
+    if (v && v->continuation && v->perf.phase == 1) perf_boundary(v, 2);
 }
 
 /* f3-46: IRQ arbitration and frame construction run with physical IF clear
@@ -1177,7 +1268,7 @@ bool dosvm_trap(struct trap_frame *tf)
     crit_begin();
     if (crit_label) crit_label("dosvm_entry");
     bool pm = !(tf->eflags & V86_VM);
-    if (v->perf.phase != 2) perf_phase(v, 2);
+    if (v->perf.phase != 2) perf_boundary(v, 2);
     v->perf.trap_active = true; v->perf.trap_cycles = 0; v->perf.io_valid = false;
     v->perf.cause = tf->vector == 1 ? DOSVM_COST_DB : tf->vector == 0x20 ? DOSVM_COST_TIMER :
         tf->vector > 0x20 && tf->vector < 0x30 ? DOSVM_COST_HOST_IRQ : DOSVM_COST_OTHER;
@@ -1195,8 +1286,14 @@ bool dosvm_trap(struct trap_frame *tf)
     v->video_dac_burst = false;
     crit_end();
     sti();
-    int lean_error = 0;
-    int lean = tf->vector == 13 && !tf->err ? lean_io(v, f, &lean_error) : 0;
+    int lean_error = 0, lean = 0;
+    if (v->fast_retired) {
+        /* fx-doomwin: dosvm_trap_fast retired the plane select already. */
+        v->fast_retired = false;
+        lean = 2;
+        v->perf.cause = DOSVM_COST_VGA_IO;
+        v->perf.io_port = v->fast_port; v->perf.io_valid = true;
+    } else if (tf->vector == 13 && !tf->err) lean = lean_io(v, f, &lean_error);
     if (lean == 1) {
         /* fx-27: the ordinary return sequence below, IF already clear. */
         if (!v->frame_pm) v86_prepare_return(&v->monitor, f);
@@ -1418,7 +1515,7 @@ stop_return:
     if (!v->frame_pm) v86_prepare_return(&v->monitor, f);
     if (v->frame_pm != pm) v->perf.cause = DOSVM_COST_SWITCH;
     perf_exit_end(v);
-    perf_phase(v, 1);
+    perf_boundary(v, 1);
     /* A mode-changing frame re-enters through worker after v86_leave's STI.
      * Keep its timestamp pending across any scheduling in that interval. */
     if (v->frame_pm == pm && v->audio.sb.irq_entry_ready)

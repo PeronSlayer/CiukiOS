@@ -725,7 +725,12 @@ static void worker_main(void *arg)
             delivery.budget_yields++;
             task_sleep_ms(1);
         }
-        kwait_wait_until(&wake, worker_ready, 0, family_disabled(BIOS_INPUT) ? deadline_after_ms(1000) : poll);
+        /* fx-doomwin: the 10 ms poll serves the firmware input service
+         * only. A worker without it (native PS/2/USB input; trial 6c3b7800:
+         * "[input] ... firmware=0") waits for a request, whose submit wakes
+         * it, instead of 100 empty P_DEVICE turns a second. */
+        bool polling = !family_disabled(BIOS_INPUT) && (input_enabled || synthetic);
+        kwait_wait_until(&wake, worker_ready, 0, polling ? poll : deadline_after_ms(1000));
     }
 }
 

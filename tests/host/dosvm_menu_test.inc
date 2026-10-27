@@ -509,14 +509,26 @@ static void test_menu_near_return(void)
             cur.tf.eip = 0x400; cur.tf.user_esp += consumed + w + (bits ? 12 : 2);
             debug_dr6 = 1u << v->dpmi.return_slot; step(v, 1, 0);
             CHECK(!v->dpmi.return_steps && !(cur.tf.eflags & V86_TF) && v->monitor.vif);
+            uint32_t cli_esp = cur.tf.user_esp;
             cur.tf.eip = 0x402; cur.tf.eax = V86_IF | 2; step(v, 13, 0);
             CHECK(v->dpmi.if_armed && !v->monitor.vif && (cur.tf.eax & V86_TF));
-            /* A restored image returns to DMX's value-computing epilogue.
-             * It must acquire the next caller boundary with IF unchanged. */
+            /* fx-doomwin: the CLI's site is now cached, so no seed is wanted
+             * and the restore acquires no boundary. */
+            cur.tf.eip = 0x100; cur.tf.user_esp = 0x600; cur.tf.eflags |= V86_TF;
+            debug_dr6 = 1u << 14; step(v, 1, 0);
+            CHECK(!v->dpmi.if_armed && v->monitor.vif && !v->dpmi.return_steps && !dpmi_seed_wanted(v) &&
+                  !(cur.tf.eflags & V86_TF) && v->dpmi.stats.if_restored == 1);
+            /* The cached site arms again; with seeds wanted (an unproven CLI
+             * elsewhere) a restored image returning to DMX's value-computing
+             * epilogue must acquire the next caller boundary, IF unchanged. */
+            cur.tf.eip = 0x402; cur.tf.user_esp = cli_esp; cur.tf.eax = cur.tf.eflags = V86_IF | 2;
+            step(v, 13, 0);
+            CHECK(v->dpmi.if_armed && !v->monitor.vif && (cur.tf.eax & V86_TF));
+            dpmi_cli_sites_reset(v);
             cur.tf.eip = 0x100; cur.tf.user_esp = 0x600; cur.tf.eflags |= V86_TF;
             debug_dr6 = 1u << 14; step(v, 1, 0);
             CHECK(!v->dpmi.if_armed && v->monitor.vif && v->dpmi.return_steps == DPMI_RETURN_STEPS &&
-                  !(cur.tf.eflags & V86_TF) && v->dpmi.stats.if_restored == 1);
+                  !(cur.tf.eflags & V86_TF) && v->dpmi.stats.if_restored == 2);
         }
         destroy(v, true); empty();
     }

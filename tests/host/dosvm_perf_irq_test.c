@@ -82,6 +82,7 @@ static void irq_restore(uint32_t f)
 void crit_label(const char *name)
 { CHECK(!(cpu_flags & 0x200) && (!strcmp(name,"dosvm_perf_snapshot") || !strcmp(name,"dosvm_serial_snapshot") || !strcmp(name,"record_publish"))); labels++; }
 static uint64_t read_tsc_serialized(void) { return fake_tsc; }
+static uint64_t read_tsc_unserialized(void) { return fake_tsc; } /* fx-doomwin stamps */
 static bool dosvm_in_irq(const struct dosvm *v) { (void)v; return false; }
 #ifndef F186_BUDGET
 void rec_diag_disk_bootlog(const char *probe, const char *fmt, ...)

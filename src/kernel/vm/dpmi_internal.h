@@ -180,7 +180,7 @@ struct dpmi {
      * for DPMI_SEED_IDLE_MS, no seed is acquired until a CLI misses. */
     struct dpmi_cli_site cli_site[DPMI_CLI_SITES];
     uint32_t cli_clock;
-    uint64_t cli_miss_tick;
+    uint64_t cli_miss_tick;         /* fx-doomwin: last CLI left without a cached site */
     bool cli_settled;               /* a site was proven since the last reset */
     struct dpmi_cli_stats cli;
     uint16_t shadow_cs;             /* STI shadow: CS:EIP of the shadowed instruction */

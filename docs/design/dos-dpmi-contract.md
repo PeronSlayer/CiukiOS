@@ -555,6 +555,58 @@ II demo in the DOS window). Four rules:
 The Sound Blaster's OPL3 ports (base+0..3, base+8/9) join the lean port
 list beside 388h-38Bh: both reach `dosvm_opl_io`.
 
+### fx-doomwin amendment: seed demand, plane selects at trap entry, exit stamps (2026-10-27, proposed)
+
+Proposed for the lead's decision with the fx-doomwin merge
+(`validation/fx-doomwin.md`; T23 trial 6c3b7800, DOOM in the DOS window).
+
+1. **Only a CLI left without a cached site restarts the seed demand.** The
+   fx-16 rule above restarted `DPMI_SEED_IDLE_MS` of seeds at every CLI that
+   needed a proof, including those the proof just cached, and the
+   control-flow proof was never cached, so each of DOOM's learned sites
+   kept the return tracker's 32-hop breakpoint chains going for a second,
+   seeded at every PM trap: in the window that is 25-40 thousand port exits
+   a second plus DOOM's busy waits (title, menus, wipes). Trial bank n=4:
+   11,241 checkpoint hits of 12,132 #DB exits, 454 ms per 5 s; the host
+   DOOM replay, 12,282 of 17,940 #DB in 30 s. Now a proven CLI (forward,
+   control-flow or pattern rule) is cached and wants no seed; the demand
+   restarts for a CLI no rule can arm (`cli_missed`), a provisional site a
+   decode disproves, and a proof whose site cannot be stored. A
+   control-flow proof is cached like a forward proof: both decode from an
+   observed boundary and clear their remembered instructions at every
+   transfer, so PUSHF [POP r] physically precedes the CLI in both, and the
+   kept bytes and the live image check guard every later arm. The seed
+   machinery itself (tracker, IRQ-boundary proofs, stack snapshots) is
+   unchanged and still serves the first site and every miss.
+2. **Plane selects retire at trap entry.** `trap_dispatch` offers a VM's
+   #GP(0) to `dosvm_trap_fast` before its per-exit task accounting. It
+   retires `OUT DX,AL`/`OUT DX,AX` (EE, EF, 66 EF; operand size from the
+   code segment) to the sequencer or graphics-controller index, to SR02,
+   or to GR04/GR05, in an unchained planar VGA in the window (not full
+   screen or VBE, chain-4 off, the CPU window closed or on one plane), and
+   only where the fx-27 lean exit would retire it: `lean_before`, no STI
+   or MOV SS shadow, the VGA handler registered for the port, and for a
+   ring-3 frame a running DPMI client (the routing `dosvm_client` gives
+   `trap_dispatch`). The state
+   reached is exactly `dosvm_vga_port`'s (the f3-19 select and its 16-PTE
+   exchange, `dosvm_vga_select_fast`), followed by `dpmi_lean_retire`; any
+   obligation after the instruction (`lean_after`) hands the retired
+   instruction to `dosvm_trap`'s ordinary tail, as fx-27's result 2.
+   Physical IF stays clear from the gate to the IRET (one IRQ-off section,
+   bounded by the 16-entry exchange). Not taken: other indexes, OUT DX,EAX,
+   string OUTs, the CRTC, the DAC; bursts start only on the lean path.
+3. **Exit boundary stamps read the TSC without CPUID** (`dosvm_perf_stamp`:
+   trap entry, exit end, return to guest time). RDTSC alone may read the
+   counter before earlier instructions complete (Intel SDM Vol. 2B,
+   RDTSC), by at most the P6 reorder window, against exits of thousands of
+   clocks; interior measurements keep `read_tsc_serialized`. Every
+   `vm_perf_cost` average after this change excludes the two CPUIDs
+   (about 0.23 us on the T23) the earlier records included.
+4. **Records.** `vm_perf_checkpoint` adds `fast=` (lean exits retired at
+   trap entry, a subset of `vm_perf_remap lean=`; the remap row has no room
+   under the 240-byte record bound); a #DB of the STI-shadow step is
+   attributed `pm_shadow` in the step-owner diagnostics.
+
 ## DOS personality and VFS bridge
 
 **[F4]** Shared-drive routing MUST live inside CIUKIDOS before FAT/LFN

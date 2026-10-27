@@ -15,6 +15,11 @@ static void test_irq_restore_delivery(void)
         cur.tf.eip = 0x300; step(v, 0x20, 0);
         cur.tf.eip = 0x302; cur.tf.eax = V86_IF | 2; op1(v, 0xFA);
         CHECK(v->dpmi.if_armed && !v->monitor.vif && (cur.tf.eax & V86_TF));
+        /* fx-doomwin: the proven site is cached and wants no seed. The case
+         * below was written when every proof restarted the demand: forget
+         * the site so its seed (a live near-return slot) is wanted again. */
+        CHECK(!dpmi_seed_wanted(v));
+        dpmi_cli_sites_reset(v);
         /* POPF; NOP retired: the saved-image #DB and a PIT edge coincide.
          * A live near-return slot seeds the sparse return checkpoint. */
         pm_push(v, 0x400);
