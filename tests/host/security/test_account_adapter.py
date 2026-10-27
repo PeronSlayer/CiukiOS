@@ -31,7 +31,8 @@ class AccountAdapterTests(unittest.TestCase):
         user = [f"apps/accounts/{name}.c" for name in SERVICE]
         user += ["apps/accounts/kernel_adapter.c", "apps/accounts/server.c", "apps/accounts/owner_interim.c",
                  "apps/accounts/storage_posix.c", "sdk/private/accounts_link.c",
-                 "tests/host/security/fake.c", "apps/desktop/users.c"]
+                 "tests/host/security/fake.c", "apps/desktop/users.c",
+                 "apps/accounts/firstboot.c"]  # sec-user-02: server.c calls the first-boot adapter
         for source in user:
             obj = out / (source.replace("/", "_") + ".o")
             subprocess.run(["clang", *WARN, "-D_POSIX_C_SOURCE=200809L", *SANITIZE, *include,

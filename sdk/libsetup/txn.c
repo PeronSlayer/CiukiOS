@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT */
 #include <ciuki/tzdata.h>
 #include "internal.h"
+#include "../private/provision.h"
 #include <errno.h>
 #include <limits.h>
 #include <stdio.h>
@@ -229,10 +230,21 @@ static bool generated(const char *path)
     return !strcasecmp(p,"SYSTEM/BOOT.CFG") || !strcasecmp(p,"SYSTEM/SETUP.STATE") ||
         !strcasecmp(p,"SYSTEM/SETUP.LOG") || !strcasecmp(p,"SYSTEM/HARDWARE.TXT") || !strcasecmp(p,"SYSTEM/PAGEFILE.SWP");
 }
+/* sec-user-02: SYSTEM-only account/owner state is never copied from the
+ * source medium. The ready image's seed and bootstrap.state are excluded from
+ * the CD; a manifest carrying any file below System/Security is a wrong or
+ * altered medium (contract 5.2: no ready auto-logon/account database may
+ * reach a Setup destination). Empty directories stay ordinary records. */
+static bool security_file(const struct st_record *f)
+{
+    const char *p=relative(f->path);
+    return !f->directory && !strncasecmp(p,"SYSTEM/SECURITY/",16);
+}
 static int boot_options(char out[128]);
 static int prepare_record(void *ctx,const struct st_record *f)
 {
     struct disk_payload *payload=ctx;
+    if(security_file(f))return fail(SETUP_ERR_SOURCE_MISMATCH,EPERM,f->path,0,0,0);
     if(!(T.plan.components&f->component))return 0;
     const char *path=relative(f->path);
     struct st_info info;
@@ -266,6 +278,13 @@ static int validate(const struct setup_answers *a)
         (a->log && (a->log->start>=SETUP_LOG_BYTES || a->log->length>SETUP_LOG_BYTES)) ||
         (a->hardware_report_length && !a->hardware_report) || a->hardware_report_length>65536 ||
         (a->network==SETUP_NET_STATIC && !setup_static_valid(a->ip,a->prefix,a->gateway,a->dns)))return -EINVAL;
+    /* sec-user-02: the Setup seed (contract 3.6) for exactly this user name:
+     * uid 1000 record's name field at 96 + 2 * 256 + 24. Field validation of
+     * the verifiers is the account service's at promotion. */
+    if(ciuki_provision_seed_header(a->account_seed,a->account_seed_length,CIUKI_PROVISION_SETUP) ||
+        ciuki_provision_get32(a->account_seed+96+512)!=1000 ||
+        strncmp((const char *)a->account_seed+96+512+24,a->user_name,32) ||
+        a->account_seed[96+512+24+strlen(a->user_name)])return -EINVAL;
     if(a->unattended) { struct setup_inf_status status; if(setup_inf_complete(a,&status))return -EINVAL; }
     return 0;
 }
@@ -359,6 +378,46 @@ static int parents(const char *path)
         if(e && e!=-EEXIST)return destination(e,p,false);
     }
     return 0;
+}
+/* sec-user-02: stage the Setup seed and its UNPROVISIONED bootstrap.state on
+ * the destination prefix (contract 3.6/5.1), flushed and read back before
+ * the volume is sealed. The first installed boot's ACCOUNT promotes it
+ * (machine SID from entropy, owner batch, accounts.db). Only salted
+ * verifiers are written; the log records the step, never the bytes. */
+static void provision_digest(const void *p,size_t n,uint8_t out[32])
+{ struct disk_sha256 s; disk_sha256_init(&s); disk_sha256_update(&s,p,n); disk_sha256_final(&s,out); }
+static int read_back(const char *path,const void *data,unsigned n)
+{
+    int h=T.io->open(T.io->ctx,T.dest,path,false); if(h<0)return destination(h,path,false);
+    unsigned got=0; int e=0;
+    while(!e && got<=n) {
+        int k=T.io->read(T.io->ctx,h,buffer+got,(unsigned)(sizeof(buffer)-got));
+        if(k<0)e=k; else if(!k)break; else got+=(unsigned)k;
+    }
+    int c=T.io->close(T.io->ctx,h); if(!e)e=c;
+    if(e)return destination(e,path,false);
+    return got!=n || memcmp(buffer,data,n) ? fail(SETUP_ERR_CONSISTENCY,EIO,path,0,0,0) : 0;
+}
+static int provision(const struct setup_answers *a)
+{
+    uint64_t volume=ciuki_provision_volume_id(T.disk.geo.part_start,T.disk.volume_id);
+    uint8_t digest[32],state[CIUKI_PROVISION_STATE_BYTES];
+    if(!volume)return fail(SETUP_ERR_INTERNAL,EINVAL,"volume identity",0,0,0);
+    provision_digest(a->account_seed,a->account_seed_length,digest);
+    if(ciuki_provision_state(state,CIUKI_PROVISION_SETUP,volume,digest,provision_digest))
+        return fail(SETUP_ERR_INTERNAL,EINVAL,CIUKI_PROVISION_STATE,0,0,0);
+    int e=parents(CIUKI_PROVISION_SEED);
+    /* The profile container; OWNER installs each private root at first boot. */
+    if(!e) { int m=T.io->mkdir(T.io->ctx,T.dest,"WINDOWS"); if(m && m!=-EEXIST)e=destination(m,"WINDOWS",false); }
+    if(!e) { int m=T.io->mkdir(T.io->ctx,T.dest,CIUKI_PROVISION_PROFILES); if(m && m!=-EEXIST)e=destination(m,CIUKI_PROVISION_PROFILES,false); }
+    if(!e)e=write_file(CIUKI_PROVISION_SEED,a->account_seed,(unsigned)a->account_seed_length);
+    if(!e)e=write_file(CIUKI_PROVISION_STATE,state,CIUKI_PROVISION_STATE_BYTES);
+    if(!e)e=disk_result(disk_flush(0));
+    if(!e)e=read_back(CIUKI_PROVISION_SEED,a->account_seed,(unsigned)a->account_seed_length);
+    if(!e)e=read_back(CIUKI_PROVISION_STATE,state,CIUKI_PROVISION_STATE_BYTES);
+    if(!e)event("accounts staged origin=setup records=3",NULL);
+    memset(digest,0,sizeof(digest));
+    return e;
 }
 static int marker(const char *name)
 {
@@ -535,6 +594,8 @@ int setup_txn_execute(const struct setup_plan *plan,const struct setup_callbacks
     if(!e) {
         phase(SETUP_PHASE_CONFIGURE); e=cancel_point();
         if(!e)e=destination(T.io->configure(T.io->ctx,T.dest,&plan->answers),"configuration writers",false);
+        if(!e)e=cancel_point();
+        if(!e)e=provision(&plan->answers);   /* sec-user-02 */
         if(!e)e=cancel_point();
         if(!e)e=write_file("SYSTEM/HARDWARE.TXT",plan->answers.hardware_report,(unsigned)plan->answers.hardware_report_length);
         if(!e)e=write_log();

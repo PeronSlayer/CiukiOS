@@ -4,12 +4,14 @@
  * mutation stays exclusively inside the real setup_txn_execute backend. */
 #include "native.h"
 #include "setup_info.h"
+#include "../accounts/production.h"   /* sec-user-02: acct_io_posix for the account repair */
 #include "../../sdk/libdisk/include/libdisk.h"
 #include "../../sdk/sysroot-overlay/include/ciuki/devices.h"
 #include "../../sdk/sysroot-overlay/include/ciuki/display.h"
 #include <ciuki/media.h>
 #include "../../sdk/sysroot-overlay/include/ciuki/net.h"
 #include "../../sdk/sysroot-overlay/include/ciuki/power.h"
+#include "../../sdk/sysroot-overlay/include/ciuki/entropy.h"
 #include <ciuki/proc.h>
 #include <ciuki/channel.h>
 #include <ciuki/spawn.h>
@@ -265,6 +267,19 @@ static int reboot(void *c){(void)c;return ciuki_power(CIUKI_POWER_REBOOT);}
 static int power_off(void *c){(void)c;return ciuki_power(CIUKI_POWER_OFF);}
 static int power_status(void *c,struct ciuki_power_status *s){(void)c;return ciuki_power_status(s)?-errno:0;}
 static char dest_letter(void *c){(void)c;if(disk_enumerate(&N.disks))return 0;return N.disks.disk[0].volumes?N.disks.disk[0].volume[0].letter:0;}
+/* sec-user-02: kernel entropy for salts (never a fallback), and the
+ * protected account store of one identified installed volume for the
+ * confirmed repair. The account service's own POSIX store binding is reused:
+ * names stay below that volume's /System/Security, rename never replaces. */
+static int entropy(void *c,void *out,size_t n){(void)c;return getentropy(out,n)?-errno:0;}
+static struct acct_posix_io repair_state;
+static int repair_io(void *c,char letter,struct acct_io *out)
+{
+    (void)c;if(letter<'E'||letter>'Z')return -EINVAL;
+    char base[64];int n=snprintf(base,sizeof(base),ST_NATIVE_ROOT "/mnt/%c/System/Security",letter-'A'+'a');
+    if(n<0||(size_t)n>=sizeof(base))return -ENAMETOOLONG;
+    return acct_io_posix(&repair_state,base,out);
+}
 int st_native_open(struct st_host *h,int display_fd,int input_fd)
 {
     memset(&N,0,sizeof(N));N.surface=N.media=-1;N.display=display_fd;N.input=input_fd;
@@ -281,7 +296,8 @@ int st_native_open(struct st_host *h,int display_fd,int input_fd)
     if(r||length!=sizeof(N.portrait)){st_native_close();return r?r:-EINVAL;}
     *h=(struct st_host){.monotonic=monotonic,.realtime=realtime,.input=input,.present=present,.idle=idle,
         .devices=devices,.memory=memory,.display=display,.framebuffer=framebuffer,.network=network,.disks=disks,.volumes=volumes,.cd=cd,.catalogue=catalogue,.release=release,
-        .read_file=read_file,.write_file=write_file,.copy_file=copy_file,.make_dir=make_dir,.list_dir=list_dir,.report_app=report_app,.record=record,.eject=eject,.media_present=media_present,.reboot=reboot,.power_off=power_off,.power_status=power_status,.dest_letter=dest_letter,.portrait=N.portrait};
+        .read_file=read_file,.write_file=write_file,.copy_file=copy_file,.make_dir=make_dir,.list_dir=list_dir,.report_app=report_app,.record=record,.eject=eject,.media_present=media_present,.reboot=reboot,.power_off=power_off,.power_status=power_status,.dest_letter=dest_letter,.portrait=N.portrait,
+        .entropy=entropy,.repair_io=repair_io};
     return 0;
 }
 void st_native_close(void){if(N.pixels){munmap(N.pixels,N.mapped);N.pixels=NULL;}if(N.surface>=0){close(N.surface);N.surface=-1;}if(N.media>=0){close(N.media);N.media=-1;}}

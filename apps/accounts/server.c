@@ -67,7 +67,19 @@ int acct_server_open(struct acct_server *s, uint64_t now)
 {
     if (s->opened) return 1;
     if (now<s->next_open) return 0;
+    /* sec-user-02 first-boot adapter (firstboot.h): protect G32 evidence
+     * before open; promote a staged seed or register the enrollment source
+     * after an open that found no published database. */
+    int prepared=acct_firstboot_prepare(&s->tables,s->legacy);
+    if (prepared<0) note("first-boot migration refused",prepared);
     int e=acct_service_open(&s->service,&s->tables,s->host_test);
+    if (!e && !s->service.available) {
+        s->firstboot_result=acct_firstboot_promote(&s->service);
+        if (s->firstboot_result<0) note("first-boot promotion refused",s->firstboot_result);
+        else if (s->firstboot_result==ACCT_FIRSTBOOT_PROMOTED) note("first boot: provisioning seed promoted",0);
+        else if (s->firstboot_result==ACCT_FIRSTBOOT_ENROLLMENT) note("first boot: G32 enrollment required",0);
+    }
+    /* end sec-user-02 */
     if (!e) {
         s->opened=1; s->last_open_error=0;
         note(s->service.available ? "open; account database available" : "open; no published database",0);

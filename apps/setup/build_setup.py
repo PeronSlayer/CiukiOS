@@ -15,10 +15,16 @@ ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "build/apps/setup"
 SDK = ROOT / "build/tools/ciuki-sdk"
 SOURCES = tuple(f"apps/setup/{name}.c" for name in
-                ("setup", "setup_info", "app", "pages", "hw", "catalog", "text", "view", "inf", "rescue", "native", "media", "report_link")) + (
-                    "apps/desktop/settings.c", "apps/desktop/sounds.c")
+                ("setup", "setup_info", "app", "pages", "hw", "catalog", "text", "view", "inf", "rescue", "native", "media", "report_link",
+                 "accounts")) + (
+                    "apps/desktop/settings.c", "apps/desktop/sounds.c",
+                    # sec-user-02: account seed/state/store codecs shared with the ACCOUNT service
+                    "apps/accounts/crypto.c", "apps/accounts/codec.c", "apps/accounts/bootstrap.c", "apps/accounts/persist.c",
+                    "apps/accounts/storage_posix.c", "src/kernel/lib/sha256.c")
 HEADERS = ("apps/setup/setup.h", "apps/setup/setup_info.h", "apps/setup/native.h", "apps/setup/report_link.h", "apps/hwreport/textframe.h",
-           "sdk/libsetup/include/setup_txn.h", "sdk/libsetup/include/setup_inf.h")
+           "sdk/libsetup/include/setup_txn.h", "sdk/libsetup/include/setup_inf.h",
+           "sdk/private/provision.h", "apps/accounts/accounts.h", "apps/accounts/adapter.h", "apps/accounts/wire.h",
+           "apps/accounts/production.h", "src/kernel/include/ciuki/sha256.h")
 LIBRARIES = (ROOT / "build/apps/desktop/libdeskui.a", SDK / "sysroot/lib/libsetup.a", SDK / "sysroot/lib/libdisk.a", SDK / "sysroot/lib/libreg.a")
 CFLAGS = ["-O2", "-Wall", "-Wextra", "-Werror"]
 
@@ -62,6 +68,8 @@ def build(validate_sdk=True):
     env = dict(os.environ, TMPDIR=str(OUT))
     command = [str(SDK / "bin/ciuki-cc"), *CFLAGS, "-ffunction-sections", "-fdata-sections",
                "-I", str(ROOT / "apps/setup"), "-I", str(ROOT / "sdk/libsetup/include"),
+               # sec-user-02: the kernel's ciuki/sha256.h for the shared account codecs (SDK headers win).
+               "-idirafter" + str(ROOT / "src/kernel/include"),
                *(str(ROOT / name) for name in SOURCES), "-Wl,--gc-sections",
                # G5: libdeskui widgets reference the system clipboard weakly; -u pulls
                # clipboard.o out of the archive (no weak undefined symbol, check_sdk).

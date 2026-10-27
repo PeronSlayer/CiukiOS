@@ -62,16 +62,19 @@ LOADER_HEADER = struct.Struct("<4sHHIHH")
 TOOLS = ("mkfs.fat", "fsck.fat", "mmd", "mcopy", "mdir", "mattrib", "xorriso", "git")
 
 # cd-setup-plan.md section 8, schema version 1 (the sample; \SETUP.INF itself is absent).
-ANSWER_SAMPLE = """; CiukiOS Setup answer file sample (cd-setup-plan.md section 8, schema 1).
+ANSWER_SAMPLE = """; CiukiOS Setup answer file sample (cd-setup-plan.md section 8, schema 2).
 ; Copy it as SETUP.INF to the root of a FAT USB stick for an unattended installation.
+; Passwords are never stored in an answer file: Setup stops before writing to the disk
+; (status missing_answer, key UserPassword) until a secure way to supply them exists.
+; Without SETUP.INF, Setup asks for your password and the CiukiAdministrator recovery password.
 [Setup]
-Version=1
+Version=2
 AcceptLicences=yes            ; required: yes
 EraseDisk=yes                 ; required whenever the destination holds any partition or filesystem; explicit consent to erase
 Disk=ata0                     ; ata0 (the only installable disk in the Beta) | model="<IDENTIFY model>" serial="<serial>" | auto
 Reinstall=no                  ; yes allows erasing a disk whose SETUP.STATE says installed with the same release
 Components=dos,windows,netsurf,games,devtools,soundfont,sources   ; system is implicit; names from the catalogue
-UserName=<1..32 chars>
+UserName=<1..31 letters, digits, - or _; the first administrator account; not CiukiUser>
 ComputerName=<1..15 chars, LAN rules>
 Keyboard=us                   ; a layout id of the keyboard page
 TimeZone=+01:00               ; offset; Clock=local|utc (RTC convention; default local)
@@ -729,7 +732,17 @@ def build(image, out_dir, setup_elf, config_path=COMPONENTS, limit_sectors=CD_LI
                 f"{sibling} is {sibling_state}; build_image.py writes the loader of this build there")
         tree = mattrib_tree(f"{image}@@{start * SECTOR}", epoch)
         stage = work / "boot"
-        files = stage_payloads(image, start, [p for p in payloads if p["path"] != "/system/BOOT.CFG"], stage, epoch)
+        # sec-user-02 (user-security-contract.md 5.2): the ready image's account
+        # seed and bootstrap.state never reach the Setup medium; Setup stages
+        # its own origin-2 seed on the destination. No other account state may
+        # be on the CD either.
+        provisioning = manifest.get("provisioning") or {}
+        require(provisioning.get("kind") == "ready", "build-manifest.json lacks the ready-image provisioning record")
+        ready_only = {provisioning["seed"].casefold(), provisioning["state"].casefold()}
+        files = stage_payloads(image, start, [p for p in payloads if p["path"] != "/system/BOOT.CFG"
+                                              and p["path"].casefold() not in ready_only], stage, epoch)
+        require(not [p for p in files if p.casefold().startswith("/system/security/")],
+                "the Setup CD must not carry account state below /System/Security")
         # CD-only files: the placeholder Setup program and the Setup boot options.
         disk_cfg = (stage / "system/BOOT.CFG.disk")
         run(["mcopy", "-n", "-i", f"{image}@@{start * SECTOR}", "::/system/BOOT.CFG", disk_cfg], epoch)

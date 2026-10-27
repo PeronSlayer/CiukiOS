@@ -364,8 +364,11 @@ int acct_store_bootstrap(struct acct_store *s, struct acct_db *d)
     if(!e) e=acct_decode(&w->recipe,1,w->seed,n);
     if(!e) { sha256(w->seed,n,digest); if(memcmp(digest,b.seed_digest,32) || w->recipe.origin!=b.origin) e=-EIO; }
     if(!e) e=watermarks(s,d->sid,0,0,0);
-    if(!e && s->high_generation) e=-EIO; /* evidence of any prior reservation is not fresh */
-    if(!e) { d->generation=1; e=acct_store_commit(s,NULL,d,NULL,0); }
+    /* sec-user-02: a prior reservation is accepted only as the interrupted
+     * bootstrap of this same SID intent (acct_store_recover checked it); the
+     * reserved generation is retired and never reused. */
+    if(!e && s->high_generation==UINT64_MAX) e=-EOVERFLOW;
+    if(!e) { d->generation=s->high_generation+1; e=acct_store_commit(s,NULL,d,NULL,0); }
     return finish(s,w,e);
 }
 int acct_store_recover(struct acct_store *s, struct acct_db *d)
@@ -395,11 +398,25 @@ int acct_store_recover(struct acct_store *s, struct acct_db *d)
         e=s->io.read(s->io.ctx,"provision.seed",w->seed,ACCT_FILE_MAX,&n);
         if(!e) e=acct_decode(&w->recipe,1,w->seed,n);
         if(!e) { sha256(w->seed,n,digest); if(memcmp(digest,b.seed_digest,32) || w->recipe.origin!=b.origin) e=-EIO; }
-        if(!e) { int identity=acct_boot_identity(s,&w->recipe,0); if(identity && identity!=-ENOENT) e=identity; }
-        static const char *const absent[]={NEW,BAK,"accounts.alloc.0","accounts.alloc.1"};
+        int identity=-ENOENT;
+        if(!e) { identity=acct_boot_identity(s,&w->recipe,0); if(identity && identity!=-ENOENT) e=identity; }
+        static const char *const absent[]={NEW,BAK};
         for(unsigned i=0;!e && i<sizeof(absent)/sizeof(*absent);++i) {
             int x=s->io.read(s->io.ctx,absent[i],w->bytes,sizeof(w->bytes),&n); if(x!=-ENOENT) e=-EIO;
         }
+        /* sec-user-02 (contract 3.5/3.6, H08): a first boot interrupted after
+         * its durable allocation watermark but before the account intent may
+         * resume only with this installation's own SID intent (bootstrap.sid
+         * bound to the seed digest/volume, machine.sid) and watermarks sealed
+         * with that SID; the orphan owner reservation was aborted above and
+         * bootstrap continues at the next generation. Any other prior
+         * reservation stays contradictory and closed. */
+        for(unsigned i=0;!e && i<2;++i) {
+            int x=s->io.read(s->io.ctx,i?"accounts.alloc.1":"accounts.alloc.0",w->bytes,sizeof(w->bytes),&n);
+            if(x==-ENOENT) continue;
+            if(identity || watermarks(s,w->recipe.sid,0,0,0) || !s->high_generation) e=-EIO;
+        }
+        /* end sec-user-02 */
         if(!e) e=s->owner.generation(s->owner.ctx,&owner_g);
         if(!e && owner_g) e=-EIO;
         return finish(s,w,e?(e==-ENOENT?-EIO:e):-ENOENT);

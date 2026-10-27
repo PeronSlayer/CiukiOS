@@ -16,8 +16,10 @@ SDK = ROOT / 'build/tools/ciuki-sdk'
 IMAGE_PATH = '/System/Services/accounts'
 STORE_DIRECTORY = '/System/Security'
 SERVICE_SOURCES = ('crypto.c', 'codec.c', 'owner.c', 'bootstrap.c', 'protocol.c', 'store.c', 'service.c', 'migration.c',
-                   'persist.c', 'results.c', 'auth.c', 'enrollment.c', 'manifest.c', 'checkpoint.c', 'logon.c')
-PRODUCTION_SOURCES = ('kernel_adapter.c', 'server.c', 'kernel_sys_ciuki.c', 'owner_interim.c', 'storage_posix.c', 'main.c')
+                   'persist.c', 'results.c', 'auth.c', 'enrollment.c', 'manifest.c', 'checkpoint.c', 'logon.c',
+                   'firstboot.c')  # sec-user-02 first-boot adapter
+PRODUCTION_SOURCES = ('kernel_adapter.c', 'server.c', 'kernel_sys_ciuki.c', 'owner_interim.c', 'storage_posix.c', 'main.c',
+                      'firstboot_posix.c')
 SHARED_SOURCES = ('apps/desktop/users.c', 'src/kernel/lib/sha256.c', 'sdk/private/accounts_link.c')
 CFLAGS = ['-O2', '-Wall', '-Wextra', '-Werror']
 

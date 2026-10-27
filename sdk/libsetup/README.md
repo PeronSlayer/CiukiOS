@@ -27,6 +27,16 @@ writer). Setup calls the writer directly and starts no settings worker. Link des
 and theme, libreg and libdisk as the application recipe does. The checked RTC
 write happens during P4. IPX/lobby persistence remains deferred by the lead.
 
+Account provisioning (sec-user-02, user-security-contract.md 3.6/5.1): the
+configuration step stages the application's origin-2 seed (salted verifiers
+only, `setup_answers.account_seed`) as `System/Security/provision.seed` with an
+UNPROVISIONED `bootstrap.state` bound to the formatted volume
+(`sdk/private/provision.h`: partition LBA << 32 | BPB serial), creates the
+`Windows/Profiles` container, flushes and reads both back before the volume is
+sealed. Prepare refuses answers without that seed or with a seed for another
+name, and a CD manifest carrying any file below `System/Security`. Private
+profile roots are installed by OWNER on the first installed boot.
+
 Run host tests serially:
 
 ```sh

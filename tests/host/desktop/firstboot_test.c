@@ -40,7 +40,7 @@ static int step(void *ctx,unsigned s,int start,char *text,size_t cap)
 static void record(void *ctx,const char *line)
 {(void)ctx;fat.records++;assert(strstr(fat.durable,"step="));strcat(fat.log,line);strcat(fat.log,"\n");}
 static void action(void *ctx,unsigned a){(void)ctx;assert(a<2);fat.actions[a]++;}
-static struct fb_host host={NULL,rd,append,step,NULL,record,action};
+static struct fb_host host={NULL,rd,append,step,NULL,record,action,NULL};
 static void reset(const char *fixture){memset(&fat,0,sizeof(fat));if(fixture)strcpy(fat.bytes,fixture);else fat.absent=1;strcpy(fat.durable,fat.bytes);}
 static const char pending[]="phase=installed\nrelease=fixture\nfirstboot=pending\n";
 static void run(struct firstboot *f)
