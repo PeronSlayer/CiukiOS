@@ -299,6 +299,15 @@ void proc_signal_return_to_user(struct trap_frame *tf)
     if ((tf->cs & 3) != 3)
         return;
     if (ndis_user_return) ndis_user_return(tf);
+    /* fx-doomwin: only a native thread (task_create_native, user task) has
+     * a proc_thread; proc_thread_for scans all CIUKI_THREAD_MAX slots and
+     * every live thread's task to find none for a kernel task. A DOS VM
+     * worker returns to its DPMI client's ring-3 code through here on
+     * every protected-mode exit (25-40 thousand per second for DOOM in a
+     * window), after the monitor's closing stamp, so the scan was hidden
+     * in the guest's time. V86 frames never come here (isr.asm). */
+    if (!g_current || !g_current->user)
+        return;
     struct proc_thread *t = proc_thread_for(g_current);
     if (!t)
         return;                        /* F0 */

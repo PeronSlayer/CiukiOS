@@ -120,6 +120,68 @@ static unsigned video_register(const cvga_state *v, unsigned p)
     if (p >= 0x3C6 && p <= 0x3C9) return DOSVM_VGA_DAC;
     return DOSVM_VGA_OTHER;
 }
+/* f3-19: a map-mask (SR02), read-map-select (GR04) or graphics-mode (GR05)
+ * data write: the register update and, when the CPU's plane window changes,
+ * one 16-PTE exchange. Shared by dosvm_vga_port and dosvm_vga_select_fast. */
+static void video_select(struct dosvm *v, unsigned p, uint8_t byte)
+{
+    uint8_t data = byte & (p == 0x3C5 ? 15 : v->vga.gc_index == 4 ? 3 : 0x7B);
+    uint8_t old = p == 0x3C5 ? v->vga.seq[2] : v->vga.gc[v->vga.gc_index];
+    bool was_read = v->video_read_window;
+    if (p == 0x3C5) v->video_read_window = false;
+    else if (v->vga.gc_index == 4 && cvga_direct_read_plane(&v->vga) >= 0)
+        v->video_read_window = true;
+    if (data != old || was_read != v->video_read_window) {
+        dosvm_vga_model(v); /* linear backing uses the OLD memory state */
+        cvga_write_port(&v->vga, (uint16_t)p, data);
+        video_direct(v, true);
+    }
+}
+/* fx-doomwin: the plane selects dosvm_trap_fast retires at trap entry,
+ * physical IF clear for the whole exit. An unchained planar VGA in the
+ * window (not a full screen, not VBE, chain-4 off, the CPU window closed
+ * or on one plane) takes only sequencer/graphics-controller index writes
+ * and the f3-19 data writes above: an OUT DX,AL to 3C4h/3CEh, to 3C5h with
+ * index 2, to 3CFh with index 4 or 5, or an OUT DX,AX to 3C4h with AL=2 or
+ * to 3CEh with AL=4/5. With chain-4 off cvga_direct_linear is false (it
+ * requires SR04 bits 1-3), so the window never becomes the linear backing
+ * here: no harvest or 64 KiB chain-4 seed (up to 512 us, dosvm_vga_sync),
+ * only the bounded 16-entry exchange (vmm.c as_replace_pages). The state
+ * reached is exactly dosvm_vga_port's for the same bytes;
+ * dosvm_vga_select_ok decides, without changing anything. Windows 3.x/9x's
+ * VDD likewise traps the ports of a windowed VM, keeps their values and
+ * maps the video pages its virtual controller state selects (Windows 3.0
+ * DDK, Virtual Device Adaptation Guide, 18.1.3 "VDD I/O Trapping and Hooked
+ * Pages"); DOSBox (vga_seq.cpp write_p3c5) and QEMU (vga.c
+ * vga_ioport_write) also only store SR02 and apply it at each emulated
+ * store. */
+bool dosvm_vga_select_ok(const struct dosvm *v, uint16_t port, unsigned width, uint32_t value)
+{
+    if (v->fullscreen || v->vbe_mode || !v->as.pd_phys || v->video_direct >= VIDEO_LINEAR ||
+        (v->vga.seq[4] & 8) || (v->launch_exec && !v->launch_ready)) return false;
+    uint8_t low = (uint8_t)value;
+    return width == 1 ? port == 0x3C4 || port == 0x3CE ||
+        (port == 0x3C5 && v->vga.seq_index == 2) ||
+        (port == 0x3CF && (v->vga.gc_index == 4 || v->vga.gc_index == 5)) :
+        width == 2 && ((port == 0x3C4 && (low & 7) == 2) ||
+                       (port == 0x3CE && ((low & 15) == 4 || (low & 15) == 5)));
+}
+void dosvm_vga_select_fast(struct dosvm *v, uint16_t port, unsigned width, uint32_t value)
+{
+    uint64_t begin = dosvm_perf_stamp();
+    unsigned remaps = v->perf.port_remaps, reg = 0;
+    for (unsigned i = 0; i < width; i++) {
+        unsigned p = port + i;
+        uint8_t byte = (uint8_t)(value >> (8 * i));
+        reg = video_register(&v->vga, p);
+        v->perf.vga_reg = reg; v->perf.port_count[reg]++;
+        if (p == 0x3C4 || p == 0x3CE) cvga_write_port(&v->vga, (uint16_t)p, byte);
+        else video_select(v, p, byte);
+    }
+    uint64_t elapsed = dosvm_perf_stamp() - begin;
+    v->perf.port_cycles[reg] += elapsed;
+    if (v->perf.port_remaps != remaps) v->perf.remap_cycles += elapsed;
+}
 int dosvm_vga_port(struct dosvm *v, uint16_t port, unsigned width,
                       bool write, uint32_t *value, void *arg)
 {
@@ -144,19 +206,8 @@ int dosvm_vga_port(struct dosvm *v, uint16_t port, unsigned width,
                 bool fast = (p == 0x3C5 && v->vga.seq_index == 2) ||
                     (p == 0x3CF && (v->vga.gc_index == 4 || v->vga.gc_index == 5));
                 if (fast && (!v->launch_exec || v->launch_ready)) {
-                    uint8_t data = (uint8_t)(*value >> (8 * i)) &
-                        (p == 0x3C5 ? 15 : v->vga.gc_index == 4 ? 3 : 0x7B);
-                    uint8_t old = p == 0x3C5 ? v->vga.seq[2] : v->vga.gc[v->vga.gc_index];
-                    bool was_read = v->video_read_window;
-                    if (p == 0x3C5) v->video_read_window = false;
-                    else if (v->vga.gc_index == 4 && cvga_direct_read_plane(&v->vga) >= 0)
-                        v->video_read_window = true;
                     unsigned remaps = v->perf.port_remaps;
-                    if (data != old || was_read != v->video_read_window) {
-                        dosvm_vga_model(v); /* linear backing uses the OLD memory state */
-                        cvga_write_port(&v->vga, (uint16_t)p, data);
-                        video_direct(v, true);
-                    }
+                    video_select(v, p, (uint8_t)(*value >> (8 * i)));
                     uint64_t elapsed = dosvm_perf_task_clock() - begin;
                     v->perf.port_cycles[reg] += elapsed;
                     /* Share the enclosing clock pair: remap attribution

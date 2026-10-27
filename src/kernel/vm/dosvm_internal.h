@@ -116,6 +116,7 @@ struct dosvm_perf_sample {
     uint32_t exits[6], irqs[16];
     uint64_t guest_us, monitor_us, present_us, harvest_us, log_us, edges, insn[V86_INSNS];
     uint32_t cost_count[DOSVM_COST_COUNT], batched, lean_exits, dac_batched, dac_counted, linear_direct;
+    uint32_t fast_exits;            /* fx-doomwin: plane selects retired at trap entry */
     uint64_t cost_us[DOSVM_COST_COUNT];
     uint32_t idle_blocks, idle_reasons, idle_count[DOSVM_IDLE_REASONS], busy_permille;
     uint32_t port_remaps, burst_insn, latch_read_windows;
@@ -137,7 +138,7 @@ struct dosvm_perf_raw {
     uint32_t return_armed, return_expired, return_reacquired;
     uint32_t ms, frames, starts, harvests, direct_pages, trapped_bytes, converted_bytes, rows;
     uint32_t port_remaps, burst_insn, latch_read_windows, batched, port_overflow, ticks;
-    uint32_t lean_exits, dac_batched, dac_counted, linear_direct;
+    uint32_t lean_exits, dac_batched, dac_counted, linear_direct, fast_exits;
     uint32_t present_samples, present_waits;
     uint64_t present_wait_cycles, present_wait_max_cycles;
     uint32_t exits[6], irqs[16], cost_count[DOSVM_COST_COUNT];
@@ -359,6 +360,11 @@ struct dosvm {
      * into the planes, and the pages the presenter has not consumed yet. */
     uint16_t video_linear_stale, video_linear_damage;
     bool video_dac_burst;      /* a DAC data/index OUT retired in this exit */
+    /* fx-doomwin: dosvm_trap_fast retired this exit's plane select but an
+     * obligation appeared (lean_after); dosvm_trap runs only the tail, with
+     * the select's port as the exit's cause. */
+    bool fast_retired;
+    uint16_t fast_port;
     bool video_index_linear;   /* video_indexes rows hold x-ordered linear bytes */
     bool video_linear_rows;    /* every chain-4 row base is dword aligned */
     bool video_row_proven;     /* the row being written differs from the last frame */
@@ -413,6 +419,9 @@ struct dosvm {
         /* fx-27: exits retired on the lean port path, OUTs batched by the DAC
          * burst, chain-4 pages presented without a plane deinterleave. */
         uint32_t lean_exits, last_lean_exits, dac_batched, last_dac_batched;
+        /* fx-doomwin: the subset of lean_exits retired by dosvm_trap_fast
+         * (sequencer/graphics-controller selects at trap entry). */
+        uint32_t fast_exits, last_fast_exits;
         uint32_t dac_counted, last_dac_counted;
         uint32_t linear_direct, last_linear_direct;
         /* t23-dosperf: WAIT_PRESENT returns with a VIDEO event and the
@@ -571,6 +580,7 @@ int dosvm_port_bursts(struct dosvm *, struct v86_frame *);
 int dosvm_vga_dac_burst(struct dosvm *, struct v86_frame *);
 bool dosvm_io_fast(struct dosvm *, struct v86_frame *, const struct dpmi_seg *, int *);
 uint64_t dosvm_perf_clock(void);
+uint64_t dosvm_perf_stamp(void);   /* fx-doomwin: exit boundary stamp, RDTSC without CPUID */
 uint64_t dosvm_perf_task_clock(void);
 void dosvm_vif_restore(struct dosvm *, bool, enum dosvm_if_path);
 void dosvm_isr_begin(struct dosvm *, struct dpmi_record *, unsigned irq);
@@ -634,6 +644,9 @@ int dosvm_vga_fault_pm(struct dosvm *, struct v86_frame *);
  * state; sync harvests stored pages for the presenter (and closes the
  * window, restoring the VM's own frames, if unmap). */
 void dosvm_vga_direct(struct dosvm *);
+/* fx-doomwin: plane selects retired by dosvm_trap_fast (dosvm_vga.c). */
+bool dosvm_vga_select_ok(const struct dosvm *, uint16_t port, unsigned width, uint32_t value);
+void dosvm_vga_select_fast(struct dosvm *, uint16_t port, unsigned width, uint32_t value);
 void dosvm_vga_sync(struct dosvm *, bool unmap);
 /* Close only the linear window before a consumer uses/modifies the planes. */
 void dosvm_vga_model(struct dosvm *);

@@ -183,7 +183,7 @@ def rates(log, interval):
            "flips_s": (play[b]["flips"] - play[a]["flips"]) / span,
            "minstr_s": (play[b]["instr"] - play[a]["instr"]) / span / 1e6,
            "mode": "%02x" % int(play[b]["mode"]), "vbe": int(play[b]["vbe"])}
-    for key in ("t23_ms", "t23_vga_ms", "t23_db_ms", "present_frames", "present_rows", "present_ms", "off_ms",
+    for key in ("fast", "t23_ms", "t23_vga_ms", "t23_db_ms", "present_frames", "present_rows", "present_ms", "off_ms",
                 "traps", "lean", "remaps", "db", "vga_io", "ret", "present_wakes", "invlpg", "trap_ms", "invlpg_ms",
                 "shown_frames", "shown_rows", "ack_timeouts"):
         if key in perf[a] and key in perf[b]:

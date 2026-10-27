@@ -184,6 +184,7 @@ void dosvm_expect(struct dosvm *, const char *name);   /* resets the verdict lat
 const uint16_t *dosvm_verdict_text(const struct dosvm *);
 /* Scheduler/arch ownership hooks, identity for every other task. */
 bool dosvm_trap(struct trap_frame *);
+bool dosvm_trap_fast(struct trap_frame *); /* fx-doomwin: plane selects at trap entry */
 bool dosvm_client(const struct task *);       /* f3-04: worker running a DPMI client frame */
 void dosvm_task_switch(const struct task *);  /* f3-04: per-VM LDT and watchpoints */
 uint32_t dosvm_task_cr3(const struct task *, uint32_t normal);

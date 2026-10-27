@@ -55,6 +55,8 @@ uint64_t g_tsc_per_ms;
 static uint64_t fake_tsc;
 static uint64_t (*tsc_clock_hook)(void);
 static uint64_t read_tsc_serialized(void) { return tsc_clock_hook ? tsc_clock_hook() : fake_tsc; }
+/* fx-doomwin: exit boundary stamps (dosvm_perf_stamp) read the same fake TSC. */
+static uint64_t read_tsc_unserialized(void) { return read_tsc_serialized(); }
 static void write_cr3(uint32_t x) { cpu_cr3 = x; cr3_reloads++; }
 static uint32_t fake_cr2 = 0xDEAD000;
 static uint32_t read_cr2(void) { return fake_cr2; }
@@ -1049,6 +1051,7 @@ static void test_t23dosperf(void) {}
 #include "dosvm_doswin3_r2_test.inc"
 #include "dosvm_doswin3_test.inc"
 #endif
+#include "dosvm_doomwin_test.inc"   /* fx-doomwin: trial 6c3b7800 DOOM window */
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
@@ -1082,6 +1085,7 @@ int main(void)
     if (getenv("CIUKI_VM_FX27")) { test_fx27(); printf("fx-27 checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
     if (getenv("CIUKI_VM_DOOMFS2")) { test_doomfs2(); printf("fx-doomfs2 checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
     if (getenv("CIUKI_VM_T23DOSPERF")) { test_t23dosperf(); printf("t23-dosperf checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
+    if (getenv("CIUKI_VM_DOOMWIN")) { test_doomwin(); printf("fx-doomwin checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
     if (getenv("CIUKI_VM_SERIAL")) { test_serial_uart(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_WAIT_PRESENT")) {
         test_wait_present(); test_client_boundary(); test_video_presenter(); test_fullscreen_vbe();
@@ -1134,6 +1138,7 @@ int main(void)
 #ifndef FX_DOSWIN3_BASELINE
     test_doswin3();
 #endif
+    test_doomwin();
     test_101_video();
     test_exit_cost();
     test_idle();
