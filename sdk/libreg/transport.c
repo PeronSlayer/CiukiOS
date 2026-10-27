@@ -79,17 +79,19 @@ int reg_registry_rpc(struct reg_remote *r,unsigned op,const void *in,size_t n,vo
 #endif
 #endif
 static const char *native_name(unsigned root){return root==RB_SYSTEM?"System":root==RB_PROGRAMS?"Programs":"Users";}
-int reg_remote_load(struct reg_remote *r,struct rt **tree)
+/* The 8 KiB page buffers live on the heap: the SDK target limits frames to
+ * 4 KiB (-Wframe-larger-than=4096). */
+static int remote_load(struct reg_remote *r,struct rt **tree,uint8_t *out)
 {
-    uint8_t in[32],out[RB_BODY_MAX];size_t used=0;header(in,r,0,0,0);
-    if(reg_registry_rpc(r,RB_NATIVE_READ,in,32,out,sizeof(out),&used))return -1;
+    uint8_t in[32];size_t used=0;header(in,r,0,0,0);
+    if(reg_registry_rpc(r,RB_NATIVE_READ,in,32,out,RB_BODY_MAX,&used))return -1;
     if(used!=32||rd32(out)!=1||rd32(out+4)!=r->root||rd32(out+8)||rd64(out+24))return reg_fail(EINVAL);
     uint32_t total=rd32(out+12);uint64_t generation=rd64(out+16);
     if(total>RB_ROOT_MAX||generation==UINT64_MAX)return reg_fail(EIO);
     char *text=malloc((size_t)total+1);if(!text)return -1;
     uint32_t at=0;int error=0;
     while(at<total){header(in,r,at,total,generation);
-        if(reg_registry_rpc(r,RB_NATIVE_PAGE,in,32,out,sizeof(out),&used)){error=errno;break;}
+        if(reg_registry_rpc(r,RB_NATIVE_PAGE,in,32,out,RB_BODY_MAX,&used)){error=errno;break;}
         size_t take=total-at;if(take>RB_PAGE)take=RB_PAGE;
         if(used!=32+take||rd32(out)!=1||rd32(out+4)!=r->root||rd32(out+8)!=at||rd32(out+12)!=total||
            rd64(out+16)!=generation||rd64(out+24)){error=EAGAIN;break;}
@@ -100,10 +102,15 @@ int reg_remote_load(struct reg_remote *r,struct rt **tree)
     if(next->generation!=generation){reg_tree_free(next);return reg_fail(EIO);}
     reg_tree_free(*tree);*tree=next;return 0;
 }
-int reg_remote_commit(struct reg_remote *r,struct rt *tree,uint64_t generation)
+int reg_remote_load(struct reg_remote *r,struct rt **tree)
+{
+    uint8_t *out=malloc(RB_BODY_MAX);if(!out)return -1;
+    int e=remote_load(r,tree,out);free(out);return e;
+}
+static int remote_commit(struct reg_remote *r,struct rt *tree,uint64_t generation,uint8_t *in)
 {
     size_t n=0;char *text=reg_serialise(tree,NULL,&n);if(!text)return -1;
-    uint8_t in[RB_BODY_MAX],out[32];size_t used=0;int error=0;
+    uint8_t out[32];size_t used=0;int error=0;
     header(in,r,0,(uint32_t)n,generation);
     if(reg_registry_rpc(r,RB_NATIVE_BEGIN,in,32,out,sizeof(out),&used)){error=errno;goto done;}
     for(size_t at=0;at<n;){size_t take=n-at;if(take>RB_PAGE)take=RB_PAGE;
@@ -115,6 +122,11 @@ int reg_remote_commit(struct reg_remote *r,struct rt *tree,uint64_t generation)
     }
     if(error){int saved=error;header(in,r,0,0,0);(void)reg_registry_rpc(r,RB_NATIVE_ABORT,in,32,out,sizeof(out),&used);error=saved;}
 done:free(text);return error?reg_fail(error):0;
+}
+int reg_remote_commit(struct reg_remote *r,struct rt *tree,uint64_t generation)
+{
+    uint8_t *in=malloc(RB_BODY_MAX);if(!in)return -1;
+    int e=remote_commit(r,tree,generation,in);free(in);return e;
 }
 int reg_remote_win32(struct reg_remote *r,const void *input,size_t n,void *output,size_t cap,size_t *used)
 {
