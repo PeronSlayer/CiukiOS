@@ -555,6 +555,12 @@ int dosvm_io(void *arg, uint16_t port, unsigned width, bool write, uint32_t *val
         v->perf.cause = DOSVM_COST_PIT_PIC;
         if (width != 1) return -V86_EPERM;
         uint32_t flags = irq_save();
+        if (write && !(port & 1) && (*value & 0x10)) {
+            /* ICW1 cancels latched requests, including those held outside
+             * IRR until the current handler returns. */
+            v->irq.owed &= port >= 0xA0 ? 0x00FFu : 0xFF00u;
+            if (port < 0xA0) v->pit.owed = 0;
+        }
         uint8_t b = dosvm_pic_register(&v->monitor.pic[port >= 0xA0], port & 1, write, (uint8_t)*value);
         dosvm_pic_cascade(&v->monitor);
         v->monitor.stats.io[V86_PIC]++;

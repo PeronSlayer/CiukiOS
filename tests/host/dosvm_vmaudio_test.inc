@@ -732,6 +732,11 @@ static void test_doom_late_ack_cadence(void)
          * that gap; lifecycle/adaptation is exercised by f4-31 separately. */
         audio.lead_periods=AUDIO_LEAD; audio.output=AUDIO_LEAD*AUDIO_QUANTUM;
         struct dosvm *v = audio_vm_create(); unity(v); dsp_reset(v);
+        /* fx-dospic: retire this protocol replay's synthetic CPU IRQ frame.
+         * EOI alone no longer means the handler has returned. */
+        const uint16_t ivt[2] = {0, 0x210};
+        const uint8_t iret = 0xCF;
+        CHECK(!dosvm_write(v, 15 * 4, ivt, sizeof(ivt)) && !dosvm_write(v, 0x2100, &iret, 1));
         vq_time(1200); vq_run(2);
         uint8_t bytes[1024];
         for (unsigned i = 0; i < 256; i++) {
@@ -764,7 +769,8 @@ static void test_doom_late_ack_cadence(void)
                 a_in(v, SB + 0xE); CHECK(v->audio.sb.causes == 2); /* wrong width does not ack */
                 a_in(v, SB + 0xF);
                 CHECK(!v->audio.sb.causes && v->audio.sb.units == units);
-                a_out(v, 0x20, 0x20); v->monitor.vif = true;
+                a_out(v, 0x20, 0x20);
+                CHECK(device_trap(v, &f, 13) && !dosvm_irq_held(v, 7) && v->monitor.vif);
             }
             audio.played_output = played + t * 48;
             if (audio.played_output > audio.output && audio.played_output - audio.output > underrun)

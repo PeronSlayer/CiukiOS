@@ -1030,6 +1030,7 @@ static void test_memory_services(bool locked)
 #include "dosvm_uart_test.inc"
 #include "dosvm_fx4_test.inc"
 #include "dosvm_fx16_test.inc"     /* fx-16: T23 trial e831e685 replays */
+#include "dosvm_dospic_test.inc"   /* fx-dospic: early EOI and handler completion */
 #include "dosvm_fx22_test.inc"     /* fx-22: T23 trial f441c5bd full-screen return */
 #include "dosvm_properties_test.inc"
 #include "dosvm_fx27_test.inc"     /* fx-27: windowed DOS graphics budgets */
@@ -1069,6 +1070,7 @@ int main(void)
         free(ram);fflush(stdout);return 0;
     }
     if (getenv("CIUKI_VM_FX16")) { test_fx16(); printf("fx-16 checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
+    if (getenv("CIUKI_VM_DOSPIC")) { test_dospic(); printf("fx-dospic checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
     if (getenv("CIUKI_VM_FX22")) { test_fx22(); printf("fx-22 checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
     if (getenv("CIUKI_VM_FX27")) { test_fx27(); printf("fx-27 checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
     if (getenv("CIUKI_VM_DOOMFS2")) { test_doomfs2(); printf("fx-doomfs2 checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
@@ -1111,6 +1113,7 @@ int main(void)
     test_fx4b_launch_paths();
     test_timer();
     test_fx16();
+    test_dospic();
     test_menu();
     test_irq_stall();
     test_isr_recovery_boundary(); test_isr_nested_hardware();

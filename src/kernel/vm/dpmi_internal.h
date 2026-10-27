@@ -67,6 +67,9 @@ enum dpmi_op { DPMI_OP_ENTRY = 1, DPMI_OP_DOS_ALLOC, DPMI_OP_DOS_FREE, DPMI_OP_D
 #define DPMI_RF_IRET 1u                 /* REFLECT: emulate IRET from the PM stack on return */
 #define DPMI_RF_HWINT 2u                /* restore the interrupted frame completely */
 #define DPMI_RF_RESULTS 4u              /* PMINT from V86: copy registers back (INT 23h/24h) */
+/* Existing F3-44 ISR obligation bound; also used for V86 IRQ completion.
+ * VPICD's configurable IRET timeout model, with our existing 50 ms policy. */
+#define DPMI_ISR_WAIT_MS 50u
 
 struct dpmi_vec { uint32_t off; uint16_t sel; };
 struct dpmi_record {

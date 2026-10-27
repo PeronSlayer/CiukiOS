@@ -157,6 +157,10 @@ static void test_menu_pm_devices(void)
         int31(v, 0x0901); CHECK(cur.tf.eip == 0x700); /* pending timer has priority */
         uint8_t eoi[] = {0xE6, 0x20}, in[] = {0xE4, 0x60};
         cur.tf.eax = 0x20; exec(v, eoi, sizeof(eoi), 13, 0); pm_iret(v); at_stub(v, DPMI_PM_IRQRET);
+        /* fx-dospic: return releases one already-paced tick owed from the
+         * 100 ms CLI interval. The next owed tick still waits half a period. */
+        CHECK(cur.tf.eip == 0x700 && v->monitor.stats.delivered[0] == 2);
+        cur.tf.eax = 0x20; exec(v, eoi, sizeof(eoi), 13, 0); pm_iret(v); at_stub(v, DPMI_PM_IRQRET);
         for (unsigned byte = 0; byte < 2; byte++) {
             CHECK(cur.tf.eip == 0x800 && !v->monitor.vif);
             exec(v, in, sizeof(in), 13, 0); CHECK((cur.tf.eax & 255) == (byte ? 0x81 : 0x01));
@@ -165,7 +169,7 @@ static void test_menu_pm_devices(void)
         CHECK(cur.tf.eip == 0x900 && !v->kbd.count && v->kbd.reads == 2);
         a_in(v, SB + 0xE);
         cur.tf.eax = 0x20; exec(v, eoi, sizeof(eoi), 13, 0); pm_iret(v); at_stub(v, DPMI_PM_IRQRET);
-        CHECK(v->monitor.vif && v->monitor.stats.delivered[0] == 1 && v->monitor.stats.delivered[1] == 2 &&
+        CHECK(v->monitor.vif && v->monitor.stats.delivered[0] == 2 && v->monitor.stats.delivered[1] == 2 &&
               v->monitor.stats.delivered[7] == 1 && !v->monitor.pic[0].isr);
         destroy(v, true); empty();
     }

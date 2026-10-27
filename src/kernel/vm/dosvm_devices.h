@@ -14,11 +14,13 @@ struct dosvm_pit_channel {
     uint8_t access, mode, write_phase, read_phase, latch_phase, write_byte, status;
     bool latched, status_latched, null_count, bcd, gate, running, out, load;
 };
-/* fx-16: IRQ0 edges that found IRQ0 still requested (or arrived together
- * in one advance) are owed and re-raised once the guest has finished the
- * previous one, at most one per half timer period (KVM i8254 "reinject",
- * paced). At most DOSVM_PIT_OWED_MAX ticks are owed; beyond, the guest is
- * slower than its own timer and the edge is dropped (counted). */
+/* fx-16/fx-dospic: IRQ0 edges that found its handler still running, IRQ0
+ * still requested (or arrived together in one advance) are owed and
+ * re-raised once the guest has finished the
+ * previous one, at most one per half timer period (VPICD IRET/timeout
+ * guard plus paced reinjection). At most DOSVM_PIT_OWED_MAX ticks are owed;
+ * beyond, the guest is slower than its own timer and the edge is dropped
+ * (counted). */
 #define DOSVM_PIT_OWED_MAX 4u
 struct dosvm_pit {
     struct dosvm_pit_channel channel[3];

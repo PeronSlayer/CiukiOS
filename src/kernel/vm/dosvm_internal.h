@@ -175,6 +175,12 @@ struct dosvm {
     uint32_t frames[DOSVM_PAGES];
     struct task *task;
     struct v86 monitor;
+    /* fx-dospic: IRQ completion is independent of an early PIC EOI.
+     * DPMI already owns records; V86 owns the exact reflected IRET frame. */
+    struct {
+        struct { uint64_t tick; uint16_t ss, sp; bool active; } rm[16];
+        uint16_t owed; /* non-PIT requests retain one latched request/line */
+    } irq;
     struct v86_frame frame;  /* working copy of the trapped frame (f3-04) */
     struct dos_file *files; /* published only after f3-50's checked BIND */
     struct dos_file_volume *file_volume;
@@ -547,6 +553,9 @@ uint64_t dosvm_perf_task_clock(void);
 void dosvm_vif_restore(struct dosvm *, bool, enum dosvm_if_path);
 void dosvm_isr_begin(struct dosvm *, struct dpmi_record *, unsigned irq);
 void dosvm_isr_end(struct dosvm *, const struct dpmi_record *);
+bool dosvm_irq_held(const struct dosvm *, unsigned irq);
+void dosvm_irq_release(struct dosvm *);
+int dosvm_rm_irq_deliver(struct dosvm *, struct v86_frame *);
 void dosvm_perf_report(struct dosvm *);
 void dosvm_perf_dump(struct dosvm *);
 void dosvm_startup_report(struct dosvm *, bool force);

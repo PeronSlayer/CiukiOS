@@ -73,7 +73,7 @@ static struct dosvm_key input_focus;
  * recursive IRQ0s. DMX exhausts its private IRQ stacks after four such
  * entries and returns without EOI (f3-12 validation). Snapshot now, print
  * only outside the whole IRQ chain, including its real calls/callbacks.
- * Never change delivery, virtual IF, device time or the guest's EOI. */
+ * Formatting must never change virtual IF, device time or the guest's EOI. */
 static bool dosvm_in_irq(const struct dosvm *v)
 {
     for (unsigned i = 0; i < v->dpmi.depth; i++)
@@ -82,6 +82,7 @@ static bool dosvm_in_irq(const struct dosvm *v)
 }
 
 #include "dosvm_perf.inc"
+#include "dosvm_irq.inc"
 #include "dosvm_io_burst.inc"
 #include "dosvm_clipboard.inc"
 
@@ -1097,7 +1098,10 @@ static int dosvm_deliver_irq(struct dosvm *v, struct v86_frame *f)
     uint32_t flags = irq_save();
     e = dosvm_network_dispatch(v, f);
     if (!e) e = dosvm_mouse_dispatch(v, f);
-    if (!v->dpmi.active && !e) e = v86_irq_deliver(&v->monitor, f);
+    if (!v->dpmi.active && !e) {
+        dosvm_irq_release(v);
+        e = dosvm_rm_irq_deliver(v, f);
+    }
     irq_restore(flags);
     if (v->dpmi.active && !e) e = dpmi_deliver(v, f);
     if (v->monitor.stats.delivered[v->audio.sb.irq & 15] != sb_delivered)
@@ -1200,6 +1204,7 @@ bool dosvm_trap(struct trap_frame *tf)
             v86_retire_shadow(&v->monitor, f);
             if (!dosvm_io_fast(v, f, 0, &e)) {
                 uint64_t ints = v->monitor.stats.insn[V86_INT], irets = v->monitor.stats.insn[V86_IRET];
+                uint16_t iret_ss = (uint16_t)f->tf.user_ss, iret_sp = (uint16_t)f->tf.user_esp;
                 uint64_t flags_insn[4] = {0}, hlts = 0;
                 {
                     for (unsigned i = 0; i < 4; i++) flags_insn[i] = v->monitor.stats.insn[V86_PUSHF + i];
@@ -1207,6 +1212,8 @@ bool dosvm_trap(struct trap_frame *tf)
                 }
                 v->perf.cause = DOSVM_COST_RM_FLAGS;
                 e = v86_emulate(&v->monitor, f);
+                if (e >= 0 && v->monitor.stats.insn[V86_IRET] != irets)
+                    dosvm_rm_irq_return(v, iret_ss, iret_sp);
                 if (v->monitor.stats.insn[V86_INT] != ints) v->perf.cause = DOSVM_COST_RM_INT;
                 if (v->monitor.stats.insn[V86_IRET] != irets) v->perf.cause = DOSVM_COST_RM_IRET;
                 {
@@ -1950,7 +1957,8 @@ bool dosvm_irq_raise(struct dosvm_key key, unsigned irq)
     struct dosvm *v = dosvm_lookup(key);
     if (!v || !dosvm_valid(key) || irq >= 16) return false;
     uint32_t flags = irq_save();
-    v86_irq_raise(&v->monitor, irq);
+    if (dosvm_irq_held(v, irq)) v->irq.owed |= 1u << irq;
+    else v86_irq_raise(&v->monitor, irq);
     irq_restore(flags);
     dosvm_idle_wake(v);
     return true;
@@ -2014,6 +2022,7 @@ bool dosvm_clock_turn(unsigned slot, uint32_t *generation)
     v->clock_ms += elapsed;
     uint64_t begin = dosvm_perf_clock();
     if (elapsed) dosvm_pit_advance(v, elapsed);
+    dosvm_irq_release(v);
     uint64_t audio = dosvm_perf_clock();
     bool pending = dosvm_audio_advance(v, elapsed);
     uint64_t end = dosvm_perf_clock();
