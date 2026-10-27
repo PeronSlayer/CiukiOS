@@ -431,6 +431,8 @@ static int32_t desktop_send(const struct ciuki_message *m) {
         host_print("GAME desktop op="); host_number(op); host_print(" window="); host_number(id);
         host_print(" generation="); host_number(generation); host_print(" bytes="); host_number(m->length);
         if (op == DESK_CREATE_WINDOW && m->length > DESK_V3_HEADER + 36) {
+            if (get32(m->data + DESK_V3_HEADER) & DESK_V3_MODAL)
+                host_print(" modal=1");
             char title[80]; unsigned n = m->length - DESK_V3_HEADER - 36;
             if (n > 79) n = 79;
             w32_copy(title, m->data + DESK_V3_HEADER + 36, n); title[n] = 0;

@@ -60,9 +60,13 @@ void w32_thread_cleanup(struct proc_thread *t)
     }
 }
 
+/* Only the two IS5 stub operations are replaced; no Win16 code is run. */
+#include "is5boot.h"
 int w32_spawn(struct process *p, const struct ciuki_file *file, const struct proc_strings *s, uint64_t mask)
 {
     if (!s->argc || s->argc > 2) return -EINVAL;
+    int bootstrap = is5_redirect(p, file, s, mask);
+    if (bootstrap != 1) return bootstrap;
     uint32_t scratch = pmm_alloc();
     if (!scratch) return -ENOMEM;
     struct w32_image *im = P2V(scratch);

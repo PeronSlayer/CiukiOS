@@ -311,12 +311,60 @@ static void make_pe(uint8_t *b,bool dll){memset(b,0,0x2400);put16(b,0x5a4d);put3
     }
 }
 static bool loader_missing;
+static bool is5_siblings, is5_helper_missing, is5_cleanup_record;
+static uint8_t is5_ini[0x2400]="[file0]\r\nmain=C:\\TEMP\\_INS1234._MP\r\nexeostype=1\r\nalt0=C:\\TEMP\\ZDataI51.dll\r\nalt1=C:\\TEMP\\_WUTL951.DLL\r\n";
 static int loader_open(void *cwd,const char *path,struct ciuki_file *out){
     (void)cwd;
+    if(!strcmp(path,"/WINDOWS/_delis43.ini")) {
+        if(!is5_cleanup_record)return -ENOENT;
+        *out=(struct ciuki_file){is5_ini,(uint32_t)strlen((char *)is5_ini),pe_read,0};return 0;
+    }
+    if(!strcmp(path,"/SETUP.INS") || !strcmp(path,"/_INST32I.EX_")) {
+        if(!is5_siblings)return -ENOENT;
+        *out=(struct ciuki_file){pe_data,sizeof(pe_data),pe_read,0};return 0;
+    }
+    if(!strncmp(path,"/_INST32",8))return -ENOENT;
+    if(!strcmp(path,"/System/Win32/is5boot.exe")) {
+        if(is5_helper_missing)return -ENOENT;
+        *out=(struct ciuki_file){pe_data,sizeof(pe_data),pe_read,0};return 0;
+    }
     if(!strcmp(path,"/fixture.exe")){*out=(struct ciuki_file){pe_data,sizeof(pe_data),pe_read,0};return 0;}
     if(!strcmp(path,"/fixture.dll")){*out=(struct ciuki_file){dll_data,sizeof(dll_data),pe_read,0};return 0;}
     CHECK(!strcmp(path,"/System/Win32/ntdll.dll"));if(loader_missing)return -ENOENT;
     *out=(struct ciuki_file){loader_data,sizeof(loader_data),pe_read,0};return 0;
+}
+static void test_is5_spawn(void) {
+    unsigned baseline=pages_used;uint8_t ne[0x2400]={0};
+    put16(ne,0x5a4d);put32(ne+60,128);put16(ne+128,0x454e);ne[128+54]=2;
+    struct ciuki_file f={ne,sizeof(ne),pe_read,0};
+    struct proc_strings *s=proc_strings_new();CHECK(s);
+    CHECK(!proc_strings_add(s,"/setup.exe",11,false));
+    const char command[]="\"/setup.exe\" -s -f1\"C:\\a b.iss\" -SMS";
+    CHECK(!proc_strings_add(s,command,sizeof(command),false));
+    CHECK(!proc_strings_add(s,"A=B",4,true));
+    struct process *p=0;
+    CHECK(proc_spawn_file(proc_supervisor(),&f,s,0,0,0,0,&p)==-ENOEXEC);
+    is5_siblings=true;is5_helper_missing=true;
+    CHECK(proc_spawn_file(proc_supervisor(),&f,s,0,0,0,0,&p)==-ENOENT);
+    is5_helper_missing=false;
+    CHECK(proc_spawn_file(proc_supervisor(),&f,s,0,0,0,0,&p)>0);
+    uint32_t at=0;struct ciuki_w32_parameters params;char text[128];
+    CHECK(!ua_read(p->memory,&at,p->w32_peb+16,4));CHECK(!ua_read(p->memory,&params,at,sizeof(params)));
+    CHECK(!ua_read(p->memory,text,params.image_path,28));CHECK(!strcmp(text,"C:\\System\\Win32\\is5boot.exe"));
+    CHECK(!ua_read(p->memory,text,params.command_line,sizeof(command)));CHECK(!strcmp(text,command));
+    CHECK(!ua_read(p->memory,text,params.environment,5));CHECK(!memcmp(text,"A=B\0\0",5));
+    proc_stop(p,0,0);proc_collect();
+    ne[128+54]=1;CHECK(proc_spawn_file(proc_supervisor(),&f,s,0,0,0,0,&p)==-ENOEXEC);
+    ne[128+54]=2;put16(ne+128+12,0x8000);CHECK(proc_spawn_file(proc_supervisor(),&f,s,0,0,0,0,&p)==-ENOEXEC);
+    is5_siblings=false;proc_strings_free(s);
+    put16(ne+128+12,0);s=proc_strings_new();CHECK(s);
+    CHECK(!proc_strings_add(s,"/_ISDEL.EXE",12,false));
+    CHECK(proc_spawn_file(proc_supervisor(),&f,s,0,0,0,0,&p)==-ENOEXEC);
+    is5_cleanup_record=true;
+    CHECK(proc_spawn_file(proc_supervisor(),&f,s,0,0,0,0,&p)>0);
+    proc_stop(p,0,0);proc_collect();is5_cleanup_record=false;
+    proc_strings_free(s);CHECK(pages_used==baseline);
+    puts("w32 IS5 admission: NE+sibling evidence, generic/OS2/DLL refusal, helper rollback, argv/environment and teardown PASS");
 }
 static void test_advpack_process_flags(struct proc_thread *parent)
 {
@@ -395,6 +443,7 @@ static void test_spawn_exceptions(void)
     put32(pe_data+60,UINT32_MAX);CHECK(w32_is_pe(&f)&&w32_pe_validate(&f,im)==-ENOEXEC);make_pe(pe_data,false);
     put32(pe_data+0x98+96+4*8,0x2300);put32(pe_data+0x98+100+4*8,8);CHECK(!w32_pe_validate(&f,im));make_pe(pe_data,false);
     const struct ciuki_file_ops ops={.open=loader_open};proc_set_file_ops(&ops);
+    test_is5_spawn();
     struct proc_strings *s=proc_strings_new();CHECK(s);CHECK(!proc_strings_add(s,"/fixture.exe",13,false));CHECK(!proc_strings_add(s,"\"quoted  argument\"",19,false));
     struct process *p;loader_missing=true;unsigned baseline=pages_used;
     CHECK(proc_spawn_file(proc_supervisor(),&f,s,0,0,0,0,&p)==-ENOENT&&pages_used==baseline);
