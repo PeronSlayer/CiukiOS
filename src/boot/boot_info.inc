@@ -33,6 +33,7 @@
 %define CBI_F_SCANDISK_SKIP   (1 << 20) ; Esc at the ScanDisk message
 %define CBI_F_SCANDISK_THOROUGH (1 << 21)
 %define CBI_F_MENU_SHOWN      (1 << 22)
+%define CBI_F_SELF_TEST       (1 << 23) ; T: unattended self-test boot
 %define CBI_F_SKIP_SHIFT      24        ; bits 24-31: skipped driver classes
 %define CBI_A20_ALREADY_ON    1
 %define CBI_A20_INT15         2

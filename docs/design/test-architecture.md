@@ -263,6 +263,15 @@ hook and the runner should be part of foundation phase F0, so every later
 phase is tested this way from its first boot.
 
 
+### Self-test boot (fx-selftest)
+
+Owner decision 2026-10-27: a T23 trial starts with one unattended self-test
+boot (loader `T` or Startup menu choice 9). It runs bounded checks of the
+hardware-only paths in one ordinary boot, without a test request, a sweep or a
+reboot, and writes `C:\SYSTEM\LOGS\SELFTEST.LOG` plus `probe=selftest`
+records; `scripts/test/selftest_report.py` summarizes either copy. Contract,
+check table and report format: [self-test](self-test.md).
+
 ### F1-28: unattended hardware sweep and reset research
 
 A hardware sweep uses one verified image, one run id and one serial capture.

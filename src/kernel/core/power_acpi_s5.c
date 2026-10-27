@@ -196,6 +196,13 @@ bool power_s5_fallback_qualified(void)
     else if (!s5.final) s5_hint_check();
     return s5.qualified;
 }
+/* fx-selftest: the parsed description (read-only copy, no hardware access). */
+bool power_s5_fallback_data(struct acpi_soft_off *out)
+{
+    if (!out || s5.state != S5_PARSED) return false;
+    *out = s5.off;
+    return true;
+}
 const char *power_s5_fallback_state(void)
 {
     if (s5.ownership_uncertain) return "ownership_uncertain";

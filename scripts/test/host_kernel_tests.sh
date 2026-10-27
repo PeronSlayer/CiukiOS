@@ -30,6 +30,8 @@ python3 -B -m unittest discover -s "$root/tests/host" -p test_loader_menu.py
 # (assembled loader), the kernel's boot-status/ASD module, and Registry
 # Checker, System File Checker and the ScanDisk report text.
 python3 -B -m unittest discover -s "$root/tests/host" -p test_startup_menu.py
+# fx-selftest: model, check table (bare and T23 fakes), parser, loader entry.
+python3 -B -m unittest discover -s "$root/tests/host" -p test_selftest.py
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=undefined \
     -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread -I "$root/src/kernel/include" -I "$root/src/kernel/fs" \
     "$root/tests/host/bootstat_test.c" "$root/src/kernel/core/bootstat.c" -o "$out/bootstat_test"

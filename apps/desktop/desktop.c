@@ -1929,6 +1929,37 @@ static void startup_launch(struct desktop *d,const char *name)
     for (unsigned i=0;i<d->program_count;i++) if (!strcmp(d->programs[i].name,name)) d->action=(int)i;
     if (d->action<0) snprintf(d->notice,sizeof(d->notice),"%.40s is not in /Programs",name);
 }
+/* fx-selftest (docs/design/self-test.md): on a T self-test boot the kernel's
+ * inventory row 0x7F000 asks for one DOS box ("launch-dosbox", once per
+ * generation) and finally carries "Self-test complete: N passed, M failed,
+ * K skipped" (or "Self-test stalled in <check>"), shown as a dialog. */
+static struct { int boot; uint32_t launched, shown; uint64_t next_ns; } selftest_view;
+static void selftest_poll(struct desktop *d)
+{
+#ifdef __i386__
+    if (!selftest_view.boot || d->now_ns<selftest_view.next_ns) return;
+    selftest_view.next_ns=d->now_ns+500000000ull;
+    static struct ciuki_devices_info info;
+    info.version=CIUKI_DEVICES_VERSION; info.size=sizeof(info);
+    if (ciuki_devices(&info)) return;
+    for (unsigned i=0;i<info.count && i<CIUKI_DEVICES_MAX;i++) {
+        const struct ciuki_device_record *v=&info.devices[i];
+        if (v->id!=0x7F000u || strcmp(v->driver,"selftest")) continue;
+        if (!strcmp(v->reason,"launch-dosbox")) {
+            if (selftest_view.launched!=v->generation) { selftest_view.launched=v->generation; startup_launch(d,"dosbox"); }
+        } else if (!strncmp(v->reason,"Self-test ",10) && selftest_view.shown!=v->generation) {
+            selftest_view.shown=v->generation;
+            char text[200];
+            snprintf(text,sizeof(text),"%s.\nThe full report is in C:\\SYSTEM\\LOGS\\SELFTEST.LOG.",v->reason);
+            desk_shell_message_class(d,"CiukiOS self-test",text,
+                strstr(v->reason," 0 failed") ? DU_DLG_ICON_INFO : DU_DLG_ICON_WARNING);
+        }
+        break;
+    }
+#else
+    (void)d;
+#endif
+}
 /* f3-61 f3:vm-game: one Programs > Games entry launched at startup through
  * the menu's own path, optionally asserting --dos-kernel=unified. */
 static int startup_game_index=-1;
@@ -3022,6 +3053,7 @@ int main(int argc, char **argv)
     if (!ciuki_devices(&devices)) {
         verbose_boot=!!(devices.boot_flags&(1u<<11)); /* CBI_F_VERBOSE */
         statistics_boot=!!(devices.boot_flags&((1u<<11)|(1u<<12)|(1u<<6))); /* logged, diagnostic, test */
+        selftest_view.boot=!!(devices.boot_flags&(1u<<23)); /* CBI_F_SELF_TEST (fx-selftest) */
     }
 #endif
     int display = 3, input = 4, test = 0, gate = 0, cycles = 1, demo_count = 0, fullscreen_test = 0;
@@ -3361,6 +3393,7 @@ int main(int argc, char **argv)
         desktop_stage(STALL_REPORT); startup_flush();
         if (!gate && d->shell && d->presents && !startup_sound) { startup_sound=1; desk_sound(d,SOUND_STARTUP); desk_sound(d,SOUND_LOGON); }
         if (!gate && d->shell && d->presents && !accel_noticed && (accel_noticed=accel_notice(d))) d->accel_lost=0;
+        if (!gate && d->shell && d->presents) selftest_poll(d);
         if (d->accel_lost && accel_noticed) {
             /* f2-92: the engine was quarantined after the notice: say so. */
             d->accel_lost=0; accel_noticed=0;

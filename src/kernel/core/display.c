@@ -12,6 +12,7 @@
 #include <ciuki/display_driver.h>
 #include <ciuki/edid.h>
 #include <ciuki/dos_video_modes.h>
+#include <ciuki/selftest.h>
 static const struct display_mode_provider *fullscreen_provider;
 static const struct display_mode_provider *present_provider;
 static struct fb_device present_previous;
@@ -37,6 +38,16 @@ extern bool display_present_active(void) __attribute__((weak));
 extern int display_present_revoke_kernel(void) __attribute__((weak));
 extern void display_present_poll(void) __attribute__((weak));
 static uint32_t changes;
+/* fx-selftest observations: full desktop frames, last refusal, provider. */
+static uint32_t desktop_frames;
+static int fullscreen_refusal;
+static unsigned fullscreen_last_provider;
+void display_selftest_info(struct display_selftest_info *out)
+{
+    uint32_t flags=irq_save();
+    *out=(struct display_selftest_info){desktop_frames,awaiting_frame,fullscreen_refusal,fullscreen_last_provider};
+    irq_restore(flags);
+}
 static uint64_t frame_deadline;
 static struct fb_device previous;
 static struct task *watchdog;
@@ -247,7 +258,8 @@ static int check_restore(void)
 }
 int display_check_begin(uint16_t id)
 {
-    if (!(g_boot.flags & CBI_F_HW_CHECK) || grants_display_pid()) return -EPERM;
+    /* H page and the T self-test (before its desktop) only. */
+    if (!(g_boot.flags & (CBI_F_HW_CHECK | CBI_F_SELF_TEST)) || grants_display_pid()) return -EPERM;
     if (check_display || switching || fullscreen_display || present_provider || awaiting_frame) return -EBUSY;
     if (!listed(id) || !listed(fbdev_get()->mode_id)) return -EOPNOTSUPP;
     if (!fbdev_get()->present) return -ENODEV;
@@ -334,6 +346,7 @@ int display_check_end(void)
 extern void display_driver_desktop_presented(uint32_t) __attribute__((weak));
 void display_frame_complete(uint32_t generation, bool full_frame)
 {
+    if (full_frame && generation==fbdev_get()->generation) desktop_frames++;
     if (full_frame && generation==fbdev_get()->generation && display_driver_desktop_presented)
         display_driver_desktop_presented(generation);
     if (!switching && awaiting_frame && (full_frame || awaiting_restored_frame) &&
@@ -743,6 +756,7 @@ static int fullscreen_map(uint16_t mode,const uint8_t info[256])
 }
 static int fullscreen_windowed(int error)
 {
+    fullscreen_refusal=error;
     klog("[display] fullscreen=0 continuation=windowed error=%d",error);
     return DISPLAY_FULLSCREEN_WINDOWED;
 }
@@ -826,6 +840,8 @@ int display_fullscreen_begin(uint16_t mode)
         if (!e && dos_video_mode(mode)) e=fullscreen_map(mode,info);
     }
     fullscreen_display=true; /* also brackets rollback of a partially set mode */
+    fullscreen_last_provider=native ? 1u : 2u;
+    if (!e) fullscreen_refusal=0;
     switching=false;
     if (e) {
         if (native && e==-EOPNOTSUPP)

@@ -9,6 +9,7 @@
 #include <ciuki/power_sleep.h>
 #include <ciuki/apm_ports.h>
 #include <ciuki/registry.h>
+#include <ciuki/selftest.h>
 #include "apm.h"
 
 /* fx-18: the ACPI layer supplies the FADT blocks and the legacy-EC hold;
@@ -353,10 +354,29 @@ static void service_once(void)
         }
     }
 }
+/* fx-selftest: discovery finished (connected or not) and its outcome. */
+static bool discovery_done;
+static int discovery_error;
+static const char *discovery_reason;
+void apm_platform_selftest(struct apm_selftest *out)
+{
+    uint32_t f = irq_save();
+    *out = (struct apm_selftest){.attempted = attempted, .finished = discovery_done,
+        .connected = backend.state == APM_CONNECTED, .capabilities_valid = backend.capabilities_valid,
+        .state = backend.state, .version = backend.version, .flags = backend.flags,
+        .capabilities = backend.capabilities, .last_function = backend.last_function,
+        .bios_error = backend.bios_error, .units = backend.units,
+        .error = discovery_error, .transport_error = backend.transport_error,
+        .reason = discovery_reason};
+    irq_restore(f);
+}
 static void worker(void *unused)
 {
     (void)unused;
-    if (discover()) return;
+    int found = discover();
+    discovery_error = found; discovery_reason = reason(found);
+    __atomic_store_n(&discovery_done, true, __ATOMIC_RELEASE);
+    if (found) return;
     while (backend.state == APM_CONNECTED) {
         service_once();
         task_sleep_ms(10);

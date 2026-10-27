@@ -53,6 +53,7 @@ int acpi_s5_find(const uint8_t *aml, uint32_t len, uint8_t *typa, uint8_t *typb)
  * the machine stays on, -ENOTSUP when not qualified. */
 bool power_s5_fallback_qualified(void);
 const char *power_s5_fallback_state(void);
+bool power_s5_fallback_data(struct acpi_soft_off *out); /* fx-selftest: parsed copy only */
 int power_s5_fallback_off(bool forced);
 
 #ifndef POWER_HOST

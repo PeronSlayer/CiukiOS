@@ -12,6 +12,7 @@
 #include <ciuki/registry.h>
 #include <ciuki/vga_ports.h>
 #include <ciuki/biosvm.h>
+#include <ciuki/selftest.h>
 #include <ciuki/abi.h>
 #include <ciuki/display.h>
 #include <ciuki/init.h>
@@ -1322,6 +1323,16 @@ _Static_assert(BIOSVM_VIDEO_STATE >= BIOSVM_STACK + PAGE_SIZE &&
     BIOSVM_VIDEO_STATE + BIOSVM_VIDEO_STATE_SIZE <= 0x20000u &&
     BIOSVM_VIDEO_STATE_SIZE <= 0x10000u, "VBE state must fit the BIOS reservation and ES segment");
 static unsigned fullscreen_bytes;
+/* fx-selftest: what the last 4F04 query/save/restore reported. bytes keeps
+ * the BIOS's requested size even when it exceeds the state area. */
+static struct biosvm_video_state video_state;
+void biosvm_video_state_snapshot(struct biosvm_video_state *out)
+{
+    /* Small diagnostic copy; the mutex may never have been initialized. */
+    uint32_t flags=irq_save();
+    *out=video_state;
+    irq_restore(flags);
+}
 static void fullscreen_aperture(bool active)
 {
     uint32_t *pt = P2V(low_pt);
@@ -1363,13 +1374,19 @@ int biosvm_video_fullscreen_begin(uint16_t mode, uint8_t info[256])
     uint32_t budget=2000;
     struct biosvm_regs r={.interrupt=0x10,.eax=0x4F04,.ecx=15};
     fullscreen_bytes=0;
-    if ((e=fullscreen_call(&r,&budget,true,false))) goto revoke_fs;
+    video_state.queries++;
+    if ((e=fullscreen_call(&r,&budget,true,false))) { video_state.query_result=e; goto revoke_fs; }
     unsigned bytes=(uint16_t)r.ebx*64u;
-    if (!bytes || bytes>sizeof(fullscreen_saved)) { e=-EOPNOTSUPP; goto revoke_fs; }
+    video_state.bytes=bytes;
+    if (!bytes || bytes>sizeof(fullscreen_saved)) { e=video_state.query_result=-EOPNOTSUPP; goto revoke_fs; }
+    video_state.query_result=0;
     memset(P2V(BIOSVM_VIDEO_STATE),0,bytes);
     r=(struct biosvm_regs){.interrupt=0x10,.eax=0x4F04,.ecx=15,.edx=1,
         .es=BIOSVM_VIDEO_STATE>>4,.ebx=0};
-    if ((e=fullscreen_call(&r,&budget,true,false))) goto revoke_fs;
+    video_state.saves++;
+    e=fullscreen_call(&r,&budget,true,false);
+    video_state.save_result=e;
+    if (e) goto revoke_fs;
     memcpy(fullscreen_saved,P2V(BIOSVM_VIDEO_STATE),bytes);
     fullscreen_bytes=bytes;
     /* The fixed synthetic inventory is selected by the display service;
@@ -1415,7 +1432,10 @@ int biosvm_video_fullscreen_end(uint16_t mode, uint8_t info[256])
     memcpy(P2V(BIOSVM_VIDEO_STATE),fullscreen_saved,fullscreen_bytes);
     struct biosvm_regs r={.interrupt=0x10,.eax=0x4F04,.ecx=15,.edx=2,
         .es=BIOSVM_VIDEO_STATE>>4,.ebx=0};
-    if ((e=fullscreen_call(&r,&budget,true,true))) goto revoke_restore;
+    video_state.restores++;
+    e=fullscreen_call(&r,&budget,true,true);
+    video_state.restore_result=e;
+    if (e) goto revoke_restore;
     r=(struct biosvm_regs){.interrupt=0x10,.eax=0x4F03};
     if ((e=fullscreen_call(&r,&budget,true,true))) goto revoke_restore;
     if ((r.ebx&0x7FFF)!=(mode|0x4000)) { e=-V86_EIO; goto revoke_restore; }

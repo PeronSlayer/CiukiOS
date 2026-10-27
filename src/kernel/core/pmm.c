@@ -185,17 +185,26 @@ static uint32_t alloc_zone(int zone)
     return 0;
 }
 
+/* fx-selftest: public allocations that returned 0 (no frame/run). */
+static uint32_t refusals;
+static uint32_t counted(uint32_t phys)
+{
+    if (!phys) __atomic_add_fetch(&refusals, 1, __ATOMIC_RELAXED);
+    return phys;
+}
+uint32_t pmm_refusals(void) { return __atomic_load_n(&refusals, __ATOMIC_RELAXED); }
+
 uint32_t pmm_alloc_zone(int zone)
 {
     if (ledger_assert_pinned_context) ledger_assert_pinned_context(true,(uintptr_t)__builtin_return_address(0));
-    return alloc_zone(zone);
+    return counted(alloc_zone(zone));
 }
 
 uint32_t pmm_alloc(void)
 {
     if (ledger_assert_pinned_context) ledger_assert_pinned_context(true,(uintptr_t)__builtin_return_address(0));
     uint32_t p = alloc_zone(ZONE_NORMAL);
-    return p ? p : alloc_zone(ZONE_DMA);
+    return counted(p ? p : alloc_zone(ZONE_DMA));
 }
 
 /* Physically contiguous run for mount-time parser workspaces (f4-04). NORMAL
@@ -254,14 +263,14 @@ uint32_t pmm_alloc_contig(uint32_t pages)
     if (ledger_assert_pinned_context) ledger_assert_pinned_context(true,(uintptr_t)__builtin_return_address(0));
     if (!pages) return 0;
     uint32_t p = alloc_run(ZONE_NORMAL, pages, 1);
-    return p ? p : alloc_run(ZONE_DMA, pages, 1);
+    return counted(p ? p : alloc_run(ZONE_DMA, pages, 1));
 }
 
 uint32_t pmm_alloc_dma_run(uint32_t pages, uint32_t alignment)
 {
     if (ledger_assert_pinned_context) ledger_assert_pinned_context(true,(uintptr_t)__builtin_return_address(0));
     if (!pages || pages > 3840 || !alignment || alignment > 4096 || (alignment & (alignment - 1))) return 0;
-    return alloc_run(ZONE_DMA, pages, alignment);
+    return counted(alloc_run(ZONE_DMA, pages, alignment));
 }
 
 void pmm_free(uint32_t phys)

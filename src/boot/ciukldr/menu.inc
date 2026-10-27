@@ -672,6 +672,10 @@ boot_menu:
     je .hardware
     cmp al, 'H'
     je .hardware
+    cmp al, 't'
+    je .selftest
+    cmp al, 'T'
+    je .selftest
 .deadline:
     call deadline_expired
     jnc .poll
@@ -733,6 +737,16 @@ boot_menu:
     call .cancel_cfg
     or dword [B(flags)], CBI_F_HW_CHECK | CBI_F_VERBOSE
     mov byte [screen_quiet], 0
+    jmp .done
+.selftest:
+    ; fx-selftest: one unattended self-test boot that ends at the desktop
+    ; (docs/design/self-test.md). Like H it replaces a BOOT.CFG sweep; a
+    ; positive safe-mode source persists. No BOOT.CFG token exists for it.
+    call .cancel_cfg
+    or byte [B(flags)+2], CBI_F_SELF_TEST >> 16
+    mov byte [screen_quiet], 0
+    mov si, selftest_selected
+    call print
     jmp .done
 .probe:
     call .cancel_cfg
@@ -797,6 +811,7 @@ source_cfg db 'cfg'
 newline db 13,10,0
 safe_confirmation db 'Safe mode; P for a probe, or wait',13,10,0
 safe_selected db 'L:SAFE=1',13,10,0
+selftest_selected db 'L:SELFTEST=1',13,10,0
 menu_text db 'SELECT_READY',13,10
     db 'CiukiOS ', CIUKI_VERSION, ': N Normal / S Safe / L Log / H Hardware / P Probe (3 s)',13,10,0
 probe_prompt db 'fN:<probe> run=<8hex>: ',0

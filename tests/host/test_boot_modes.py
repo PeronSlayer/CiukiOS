@@ -433,8 +433,9 @@ int main(void)
     bad += !!cbi_quiet_console(CBI_F_VERBOSE);
     bad += !!cbi_quiet_console(CBI_F_TEXT_MODE);
     bad += !!cbi_quiet_console(CBI_F_HW_CHECK);
-    bad += CBI_F_VERBOSE != 0x800u || CBI_F_DIAG_VERBOSE != 0x1000u;
-    bad += CBI_F_INPUT_DETECTED != 0x4000u || CBI_F_DEFINED_MASK != 0xFF7FFFFFu;
+    bad += !!cbi_quiet_console(CBI_F_SELF_TEST);
+    bad += CBI_F_VERBOSE != 0x800u || CBI_F_DIAG_VERBOSE != 0x1000u || CBI_F_SELF_TEST != 0x800000u;
+    bad += CBI_F_INPUT_DETECTED != 0x4000u || CBI_F_DEFINED_MASK != 0xFFFFFFFFu;
     bad += CBI_F_BOOT_FAILED != 0x8000u || CBI_F_MENU_SHOWN != 0x400000u || CBI_F_SKIP_SHIFT != 24u;
     bad += !cbi_quiet_console(CBI_F_CMD_ONLY | CBI_F_BOOT_FAILED | CBI_F_SKIP_MASK);
     printf("quiet predicate: %u failures\n", bad);
