@@ -171,13 +171,16 @@ class NtfsRunner(unittest.TestCase):
             with self.assertRaises(runner.EvidenceError): parsed(records).check(expected)
 
     def test_refusals_and_unsupported_content(self):
-        dirty = self.rows["dirty"]; item = {"kind": "dirty", "oracle": dirty}
-        FIX.verify_records(item, parsed(probe_records("dirty", dirty)).records)
+        dirty = self.rows["recovery"]; item = {"kind": "recovery", "oracle": dirty}
+        FIX.verify_records(item, parsed(probe_records("recovery", dirty)).records)
         for index in (1, 2):
-            records = probe_records("dirty", dirty); records[index]["reason"] = "ntfs_malformed"
+            records = probe_records("recovery", dirty); records[index]["reason"] = "ntfs_malformed"
             with self.assertRaises(ValueError): FIX.verify_records(item, parsed(records).records)
-        records = probe_records("dirty", dirty); records.insert(3, dict(event="DATA", case="entry", cycle=1, id=1, kind="file", attr=33, status=0, plen=1, path_sha256="0" * 64))
+        records = probe_records("recovery", dirty); records.insert(3, dict(event="DATA", case="entry", cycle=1, id=1, kind="file", attr=33, status=0, plen=1, path_sha256="0" * 64))
         with self.assertRaises(ValueError): FIX.verify_records(item, parsed(records).records)
+        row=self.rows["dirty"]
+        self.assertNotIn("reason",row)
+        FIX.verify_records({"kind":"dirty","oracle":row},parsed(probe_records("dirty",row)).records)
         compressed = self.rows["compressed"]
         records = probe_records("compressed", compressed)
         FIX.verify_records({"kind": "compressed", "oracle": compressed}, parsed(records).records)

@@ -9,6 +9,7 @@
 #include "control.h"
 #include "acc_test.h"
 #include "display_fixture.h"
+#include <errno.h>
 
 static int autoplay_count=2, autoplay_error;
 static int autoplay_list(void *ctx,struct ap_preference *out,unsigned cap)
@@ -21,8 +22,13 @@ static int autoplay_list(void *ctx,struct ap_preference *out,unsigned cap)
 static int autoplay_forget(void *ctx,const char *id)
 { (void)ctx; assert(!strcmp(id,"iso-1234567890123456")); autoplay_count--; return 0; }
 static char saved[CFG_TEXT_MAX]; static size_t saved_n; static unsigned saves, applies, decodes; static const char *folder;
-static int save_error;
-static int load(void *c, char *t, size_t s, size_t *n) { (void)c; if (!saved_n || saved_n > s) return -1; memcpy(t, saved, saved_n); *n = saved_n; return 0; }
+static int save_error, load_error;
+static int load(void *c, char *t, size_t s, size_t *n) {
+    (void)c;
+    if (load_error) { memcpy(t,"theme=bad\n",10); *n=10; errno=load_error; return -1; }
+    if (!saved_n || saved_n > s) { errno=saved_n ? EFBIG : ENOENT; return -1; }
+    memcpy(t,saved,saved_n); *n=saved_n; return 0;
+}
 static int save(void *c, const char *t, size_t n) { (void)c; if (save_error || n >= sizeof(saved)) return -1; memcpy(saved, t, n); saved[n] = 0; saved_n = n; saves++; return 0; }
 static int apply(void *c, unsigned r, int v, int m) { (void)c; (void)v; (void)m; assert(r == DESK_SETTINGS_RELOAD); applies++; return 0; }
 static int mixer_volume=70;
@@ -435,6 +441,38 @@ static void internet_page(void)
     at_click_widget(&u,1716);at_click_widget(&u,1717);assert(internet_defaulted==1 && internet_programs_opened==1);
     cp_detach(&a);puts("PASS G26 Internet Properties: page/catalog, home/proxy/cache Apply, invalid values preserve saved settings");
 }
+static void failed_snapshot_reads(void)
+{
+    static struct ciuki_settings prior,parsed;
+    cfg_defaults(&prior); strcpy(prior.wallpaper,"/Documents/Normal.png");
+    strcpy(prior.extra,"audit_unknown=keep\n"); prior.display_mode=0x144;
+    saved_n=cfg_format(&prior,saved,sizeof(saved)); assert(saved_n);
+    static char before[CFG_TEXT_MAX]; memcpy(before,saved,saved_n); size_t before_n=saved_n;
+    attach(CP_TASKBAR); unsigned writes=saves,notifications=applies;
+    load_error=EIO; at_click_widget(&u,1960);
+    assert(saves==writes && applies==notifications && saved_n==before_n && !memcmp(saved,before,before_n));
+    assert(strstr(du_get(&u,3)->text,"could not be read"));
+    cp_open(&a,CP_DISPLAY); assert(!strcmp(a.cfg.wallpaper,prior.wallpaper));
+    a.display_dirty=1; assert(cp_display_store(&a)==-1 && saves==writes);
+    a.display_dirty=0; cp_open(&a,CP_POWER);
+    struct du_event power={.type=DU_EV_ACTIVATE,.id=1905}; u.event(&u,&power,u.user);
+    assert(saves==writes && applies==notifications);
+    cp_open(&a,CP_REGIONAL);
+    struct du_event regional={.type=DU_EV_ACTIVATE,.id=1802}; u.event(&u,&regional,u.user);
+    assert(saves==writes && applies==notifications);
+    cp_detach(&a);
+    /* A failed first read leaves a usable UI but cannot authorize defaults. */
+    attach(CP_TASKBAR); at_click_widget(&u,1960); assert(saves==writes);
+    load_error=0; at_click_widget(&u,1960); assert(saves==writes+1);
+    cfg_defaults(&parsed); cfg_parse(&parsed,saved,saved_n);
+    assert(parsed.display_mode==prior.display_mode && !strcmp(parsed.wallpaper,prior.wallpaper) && strstr(parsed.extra,"audit_unknown=keep"));
+    /* Disappearance after a known snapshot is not first boot. */
+    saved_n=0; writes=saves; at_click_widget(&u,1960); assert(saves==writes);
+    cp_detach(&a);
+    attach(CP_TASKBAR); at_click_widget(&u,1960); assert(saves==writes+1 && saved_n);
+    cp_detach(&a); saved_n=0; saves=applies=0;
+    puts("PASS Round 2 Control Panel: partial EIO preserves snapshot, merge/display saves stop, retry preserves unrelated keys, ENOENT only at first boot");
+}
 int main(int argc, char **argv)
 {
     if(argc==2 && !strcmp(argv[1],"--internet-only")) { setvbuf(stdout,NULL,_IONBF,0);internet_page();return 0; }
@@ -442,6 +480,7 @@ int main(int argc, char **argv)
     assert(argc == 3 || argc == 4);
     FILE *f = fopen(argv[1], "rb"); assert(f && fread(portrait, 4, 256 * 256, f) == 256 * 256); fclose(f);
     folder = argv[2];
+    failed_snapshot_reads();
     const char *renders = argc == 4 ? argv[3] : NULL;
 
     joystick_page();

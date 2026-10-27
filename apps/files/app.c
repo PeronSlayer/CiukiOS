@@ -958,6 +958,18 @@ static void *scan_run(void *arg)
             if (s->kind == SCAN_MEDIA || s->kind == SCAN_REFRESH ||
                 (s->kind == SCAN_NAVIGATE && !a->model.history_count)) {
                 struct ciuki_media_state state = a->media;
+                if (a->ntfs_status && !a->ntfs_notified && !scan_cancelled(s)) {
+                    size_t used=0; a->ntfs_notice[0]=0;
+                    for (unsigned slot=0;slot<CIUKI_MEDIA_NTFS_SLOTS;slot++) {
+                        struct ciuki_ntfs_status status;
+                        if (a->ntfs_status(slot,&status) || !status.error) continue;
+                        status.reason[sizeof(status.reason)-1]=0;
+                        int n=snprintf(a->ntfs_notice+used,sizeof(a->ntfs_notice)-used,
+                            "Disk %u, partition %u: %s\n",status.disk,status.partition,status.reason);
+                        if (n<0 || (size_t)n>=sizeof(a->ntfs_notice)-used) break;
+                        used+=(size_t)n;
+                    }
+                }
                 if (a->media_read && !scan_cancelled(s) && !a->media_read(&state)) {
                     int d = media_drive(a->model.path);
                     int expired = d >= 0 && (a->media.removable_mask & (1u << d)) &&
@@ -1045,6 +1057,8 @@ static int scan_submit(struct files_app *a, enum scan_kind kind, const char *pat
     memcpy(b->leaf, a->leaf, sizeof(b->leaf)); b->leaf_count = a->leaf_count;
     b->media = a->media; memcpy(b->drive_labels, a->drive_labels, sizeof(b->drive_labels));
     b->media_read = a->media_read; b->media_label_key = a->media_label_key; b->media_label = a->media_label;
+    b->ntfs_status=a->ntfs_status; b->ntfs_notified=a->ntfs_notified;
+    memcpy(b->ntfs_notice,a->ntfs_notice,sizeof(b->ntfs_notice));
     b->media_load = a->media_load; b->model.drive_slots = a->model.drive_slots;
     b->view_loaded=a->view_loaded; b->attribute_column=a->attribute_column;
     b->model.show_hidden = a->model.show_hidden; b->model.hide_system = a->model.hide_system;
@@ -1201,6 +1215,7 @@ static void scan_poll(struct files_app *a)
     if (!s->error && a->show_bin_properties && fm_is_recycle(a->model.path)) { a->show_bin_properties = 0; bin_properties(a); }
     int pending = s->error ? 0 : a->pending_command;
     a->pending_command = 0;
+    memcpy(a->ntfs_notice,b->ntfs_notice,sizeof(a->ntfs_notice));
     scan_free(s);
     if (a->shell_action) {
         int action=a->shell_action; a->shell_action=0;
@@ -1215,6 +1230,10 @@ static void scan_poll(struct files_app *a)
         command(a,action);
     } else if (pending) command(a, pending);
     if (a->find_initial) { a->find_initial = 0; files_find(a); }
+    if (!a->ntfs_notified && !a->model.path[0] && a->ntfs_notice[0] && !du_dialog_id(a->ui)) {
+        a->ntfs_notified=1;
+        du_message(a->ui,D_INFO,"Some NTFS volumes could not be opened",a->ntfs_notice,DU_DLG_ICON_WARNING,NULL,0,0,0);
+    }
 }
 static void scan_stop(struct files_app *a)
 {

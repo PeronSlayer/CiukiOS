@@ -41,7 +41,7 @@ static int pw_refresh(struct cp_app *a)
 static void pw_open(struct cp_app *a)
 {
     static struct ciuki_settings now;
-    load(a, &now);
+    if (load(a,&now)) now=a->cfg;
     (void)pp_load(&a->pw_cfg, now.extra);
     a->pw_tab = power_meter_requested ? 2 : 0; a->pw_details = 1;
     power_meter_requested = 0;
@@ -50,10 +50,11 @@ static void pw_open(struct cp_app *a)
 static void pw_save(struct cp_app *a)
 {
     static struct ciuki_settings now; static char out[CFG_TEXT_MAX];
-    load(a, &now);   /* keep what the desktop wrote meanwhile */
+    if (load(a,&now)) return; /* keep what the desktop wrote meanwhile */
     pp_alarm_fix(&a->pw_cfg);
     size_t n = pp_store(&a->pw_cfg, now.extra, sizeof(now.extra)) ? 0 : cfg_format(&now, out, sizeof(out));
     if (!n || !a->host.save || a->host.save(a->host.ctx, out, n)) { text(a, C_STATUS, "The power settings could not be saved."); return; }
+    a->cfg_loaded=1;
     int r = a->host.apply ? a->host.apply(a->host.ctx, DESK_SETTINGS_RELOAD, 0, 0) : -1;
     text(a, C_STATUS, a->host.save_async ? "Saving settings..." : r ? "Saved. The desktop applies it at its next start." : "Saved and applied.");
 }

@@ -28,6 +28,8 @@
   - **absent:** nothing in the build provides the behaviour. "(scope)" marks a
     feature that an existing contract or owner decision deliberately leaves
     out; it still counts as absent.
+  - **gap:** an audited compatibility feature remains unimplemented; the
+    evidence identifies its source and does not claim runtime equivalence.
 - **Paths** are relative to the repository root, with `file:line` where the
   line matters. The line numbers belong to source state `e5d40038`.
 ## Reference keys
@@ -565,6 +567,23 @@ area should correct it.
 - `docs/design/desktop-interaction-audit.md` (2026-10-15) marks the desktop
   icons and taskbar rows "ok". The rows DT-3 to DT-7 and TB-2 to TB-5 above
   are not.
+## External-format compatibility gaps (fx-classaudit, Round 2)
+
+These are deferred findings from the Round 1 refusal audit, carried forward
+by `docs/directives/fx-classaudit.md`, lead amendment 1 item 3. They are not
+implemented in Round 2. The detailed refusal inventory is in
+`build/codex/fx-classaudit-report.md` and its research record in
+`docs/validation/fx-classaudit.md`.
+
+| ID | Feature | Status | Finding and source |
+| --- | --- | --- | --- |
+| XF-1 | COREHEADER and RLE BMP input | gap | `sdk/win32/gdi32/bitmap.c` requires BITMAPINFOHEADER and BI_RGB/BI_BITFIELDS; it has no COREHEADER or RLE decoder. Compare Microsoft's [bitmap header types](https://learn.microsoft.com/en-us/windows/win32/gdi/bitmap-header-types) and [bitmap compression](https://learn.microsoft.com/en-us/windows/win32/gdi/bitmap-compression). Finding: fx-classaudit Round 1, Class 1 BMP row. |
+| XF-2 | Extended ICO/CUR DIB layouts | gap | `sdk/win32/user32/icons.c` accepts bounded uncompressed legacy DIBs, including the corrected rectangular case; CORE/V4/V5/bitfield layouts need decoder work. Compare [Wine's icon decoder](https://github.com/wine-mirror/wine/blob/wine-10.0/dlls/user32/cursoricon.c). Vista PNG icons are outside the Win98 target. Finding: Round 1 ICO/CUR row. |
+| XF-3 | Standard MIDI File type 2 | gap | `sdk/win32/audio/mciseq.c` supports formats 0/1, not independent-sequence format 2. Compare the [MIDI Association SMF specification](https://midi.org/standard-midi-files-specification) and [Wine MCI MIDI](https://github.com/wine-mirror/wine/blob/wine-10.0/dlls/mciseq/mcimidi.c). Finding: Round 1 MIDI row; no Windows 98 differential execution claimed. |
+| XF-4 | Wider AVI layouts and index arrangements | gap | `sdk/win32/codecs/avi.c` has bounded stream/frame/index tables and layout restrictions. Broader duplicate/layout/index handling needs a reference corpus and playback policy. Compare Microsoft's [AVI RIFF reference](https://learn.microsoft.com/en-us/windows/win32/directshow/avi-riff-file-reference). Finding: Round 1 AVI row. |
+| XF-5 | Windows .reg/hive interchange | gap | `sdk/libreg/registry.c` and `storage.c` implement Ciuki's native grammar, not REGEDIT4/System.dat/User.dat interchange. Resource Kit RK-reg (`wrkc31_2.htm`) describes the Windows tools; [Microsoft registry files](https://learn.microsoft.com/en-us/windows/win32/sysinfo/registry-files) documents hive files. Finding: Round 1 Registry row; Win32 registry calls are a separate service. |
+| XF-6 | ZIP consumers used by installers | gap | The native/Win32 admission units audited in Round 1 contain no independent generic ZIP reader. Installer-owned decompressors and staged-package host extraction do not establish runtime ZIP coverage. Source: Round 1 ZIP row and its installer-admission/pinned-package inspection; [PKWARE APPNOTE](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT) is the format reference for future consumer/corpus work. |
+
 ## Prioritised gap list (directive-sized work items)
 ### How the list is ordered
 Items are ranked by what a user on the T23 meets in the first ten minutes.

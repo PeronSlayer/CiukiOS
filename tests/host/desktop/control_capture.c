@@ -7,8 +7,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 static char saved[CFG_TEXT_MAX]; static size_t saved_n;
-static int load(void *c, char *t, size_t s, size_t *n) { (void)c; if (!saved_n || saved_n > s) return -1; memcpy(t, saved, saved_n); *n = saved_n; return 0; }
+static int load(void *c, char *t, size_t s, size_t *n) { (void)c; if (!saved_n || saved_n > s) { errno=saved_n ? EFBIG : ENOENT; return -1; } memcpy(t, saved, saved_n); *n = saved_n; return 0; }
 static int save(void *c, const char *t, size_t n) { (void)c; if (n > sizeof(saved)) return -1; memcpy(saved, t, n); saved_n = n; return 0; }
 static int mixer(void *c, int *v, int *m) { (void)c; *v = 70; *m = 0; return 0; }
 static int apply(void *c, unsigned r, int v, int m) { (void)c; (void)r; (void)v; (void)m; return 0; }

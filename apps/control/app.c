@@ -71,7 +71,7 @@ static void text(struct cp_app *a, int id, const char *s)
 { struct du_widget *w = du_get(a->ui, id); if (w && strcmp(w->text,s)) { du_set_text(w,s); du_invalidate(a->ui,w->box); } }
 #include "datetime.inc"   /* G1: Date/Time Properties */
 static void changed(struct cp_app *a);
-static void load(struct cp_app *a, struct ciuki_settings *out);
+static int load(struct cp_app *a, struct ciuki_settings *out);
 static void list_style(struct du_widget *w, const char *title);
 #include "access.inc"     /* G25: Accessibility Options */
 
@@ -86,11 +86,20 @@ static void list_style(struct du_widget *w, const char *title);
 #include "hardware.inc"   /* G30: device actions, Add New Hardware, Performance, Hardware Profiles */
 
 /* ---- settings: merge the panel's keys into the file as it is now ---- */
-static void load(struct cp_app *a, struct ciuki_settings *out)
+static int load(struct cp_app *a, struct ciuki_settings *out)
 {
     static char buffer[CFG_TEXT_MAX]; size_t n = 0;
+    errno=0;
+    int result=a->host.load ? a->host.load(a->host.ctx,buffer,sizeof(buffer),&n) : -1;
+    int error=errno ? errno : EIO;
+    if ((result && (error!=ENOENT || a->cfg_loaded)) || (!result && n>=sizeof(buffer))) {
+        text(a,C_STATUS,"Settings could not be read. Your saved preferences have been kept.");
+        errno=result ? error : EFBIG; return -1;
+    }
     cfg_defaults(out);
-    if (a->host.load && !a->host.load(a->host.ctx, buffer, sizeof(buffer), &n)) cfg_parse(out, buffer, n);
+    if (!result) cfg_parse(out,buffer,n);
+    if (!result) a->cfg_loaded=1;
+    return 0;
 }
 static int sound_commit(struct cp_app *a, const struct sound_scheme *next)
 {
@@ -106,7 +115,7 @@ static int sound_commit(struct cp_app *a, const struct sound_scheme *next)
 static void changed(struct cp_app *a)
 {
     static struct ciuki_settings now;
-    load(a, &now);            /* keep what the desktop wrote meanwhile: recent documents, unknown keys */
+    if (load(a,&now)) return; /* never merge against a failed/partial read */
     if (a->page==CP_MOUSE) { now.mouse_speed=a->cfg.mouse_speed; now.mouse_spi_speed=a->cfg.mouse_spi_speed; now.double_click_ms=a->cfg.double_click_ms;
         now.mouse_swap=a->cfg.mouse_swap; now.mouse_trails=a->cfg.mouse_trails;
         now.wheel_lines=a->cfg.wheel_lines; now.pointer_scheme=a->cfg.pointer_scheme; }
@@ -129,6 +138,7 @@ static void changed(struct cp_app *a)
     static char out[CFG_TEXT_MAX];
     size_t n = cfg_format(&now, out, sizeof(out));
     if (!n || !a->host.save || a->host.save(a->host.ctx, out, n)) { text(a, C_STATUS, "The settings could not be saved."); return; }
+    a->cfg_loaded=1;
     a->menu_cleared=0;
     int r = a->host.apply ? a->host.apply(a->host.ctx, DESK_SETTINGS_RELOAD, 0, 0) : -1;
     text(a, C_STATUS, a->host.save_async ? "Saving settings..." : r ? "Saved. The desktop applies it at its next start." : "Saved and applied.");
@@ -159,7 +169,8 @@ static void display_copy(struct ciuki_settings *to, const struct ciuki_settings 
 int cp_display_store(struct cp_app *a)
 {
     static struct ciuki_settings current; static char out[CFG_TEXT_MAX];
-    load(a, &current); display_copy(&current, &a->cfg);
+    if (load(a,&current)) return -1;
+    display_copy(&current, &a->cfg);
     if(a->display_sounds_dirty && a->host.save_sounds) {
         size_t sounds=sound_format(&a->sounds,a->sound_text,sizeof(a->sound_text));
         if(!sounds || a->host.save_sounds(a->host.ctx,a->sound_text,sounds)) {
@@ -177,6 +188,7 @@ int cp_display_store(struct cp_app *a)
     }
     if(a->display_sounds_dirty && a->host.apply) a->host.apply(a->host.ctx,DESK_SETTINGS_SOUND_RELOAD,0,0);
     du_theme_use(a->ui,a->cfg.theme);
+    a->cfg_loaded=1;
     if(a->cfg.appearance_set) desk_appearance_apply(&a->cfg.appearance);
     a->display_preview = 1; a->display_dirty = 0;
     a->display_write = a->host.save_async;
@@ -2269,6 +2281,7 @@ int cp_attach(struct cp_app *a, struct du_ui *u, int page)
 {
     a->ui = u;
     a->page=CP_HOME;
+    if (!a->cfg_loaded) cfg_defaults(&a->cfg); /* UI fallback; saves still require load() */
     load(a, &a->cfg); du_theme_use(u, a->cfg.theme);
     refresh(a); /* Boot-selected profile is part of the inventory snapshot. */
     hw_load_state(a);

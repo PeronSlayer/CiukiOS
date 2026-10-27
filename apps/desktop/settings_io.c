@@ -12,6 +12,18 @@
 const char *const cfg_startup_stage_names[CFG_STARTUP_STAGES]={"entry","settings_read","fonts_icons_ready",
     "first_frame_presented","wallpaper_file_read","wallpaper_decoded","wallpaper_scaled",
     "wallpaper_applied","first_input_handled","wallpaper_cache_read"};
+int cfg_read_at(const char *path,char *text,size_t capacity,size_t *length)
+{
+    *length=0;
+    FILE *f=fopen(path,"rb");
+    if (!f) return errno ? errno : EIO;
+    errno=0;
+    size_t n=fread(text,1,capacity,f);
+    int error=ferror(f) ? (errno ? errno : EIO) : n==capacity ? EFBIG : 0;
+    if (fclose(f) && !error) error=errno ? errno : EIO;
+    if (!error) *length=n;
+    return error;
+}
 int cfg_write_at(const char *path,const char *temporary,const char *text,size_t n)
 {
     char parent[512];size_t length=strlen(path);
@@ -80,11 +92,8 @@ static void *worker(void *arg)
                 cached ? (stage==4 ? " cache_hit=1" : " cache_hit=1 skipped=1") : "");
             e=fwrite(text,1,n,stderr)==n ? 0 : EIO;
         } else if (job) e=w->run_job(text,n);
-        else if (reading) {
-            FILE *f=fopen(w->path,"rb"); n=0;
-            if (!f) e=errno;
-            else { n=fread(text,1,CFG_TEXT_MAX,f); if (ferror(f)) e=errno ? errno : EIO; fclose(f); }
-        } else e=logging ? (fwrite(text,1,n,stderr)==n ? 0 : EIO) : w->write(w,text,n);
+        else if (reading) e=cfg_read_at(w->path,text,CFG_TEXT_MAX,&n);
+        else e=logging ? (fwrite(text,1,n,stderr)==n ? 0 : EIO) : w->write(w,text,n);
         pthread_mutex_lock(&w->lock);
         w->busy=0; w->activity=0;
         if (job) {

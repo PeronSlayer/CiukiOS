@@ -187,7 +187,7 @@ class NtfsReadOnly(unittest.TestCase):
                 self.assertEqual(v.lookup(v.root(),"compressed.bin:other")[0],-95)
 
     def test_mount_refusals_and_corruption(self):
-        for kind in ("dirty","recovery","hibernated","fixup","index","sequence","bitmap",
+        for kind in ("recovery","hibernated","fixup","index","sequence","bitmap",
                      "log-recovery","log-hibernated","log-fixup","index-fixup","index-vcn"):
             with self.subTest(kind=kind):
                 v=self.volume(kind)
@@ -200,6 +200,16 @@ class NtfsReadOnly(unittest.TestCase):
         v=self.volume("index-cycle"); self.assertEqual(v.error,0)
         err,n=v.lookup(v.root(),"many"); self.assertEqual(err,0)
         self.assertEqual(v.listing(n)[0],-5)
+
+    def test_dirty_bit_requires_clean_log_and_no_hibernation(self):
+        for kind in ("dirty","dirty-clean-log"):
+            with self.subTest(kind=kind):
+                v=self.volume(kind); self.assertEqual((v.error,v.reason.value),(0,3))
+                error,node=v.lookup(v.root(),"resident.txt"); self.assertEqual(error,0)
+                self.assertEqual(v.hash(node),self.fixtures["clean"]["files"]["/resident.txt"])
+        for kind,reason in (("dirty-log-recovery",4),("dirty-hibernated",5)):
+            with self.subTest(kind=kind):
+                v=self.volume(kind); self.assertEqual((v.error,v.reason.value),(-5,reason)); self.assertFalse(v.v)
 
     def test_partition_bounds_and_short_io(self):
         v=self.volume("clean",sectors=1); self.assertEqual(v.error,-5)

@@ -1326,6 +1326,24 @@ background (FAT32 FSInfo unknown) and free_clusters is its upper bound.
 
 ```c
 #define MEDIA_GET_SPACE 0x4d06u
+```
+
+Read-only mount diagnostics; slot enumeration also includes refused volumes.
+Unused slots return ENOENT. Input: version, size, slot; other fields zero.
+
+```c
+#define MEDIA_GET_NTFS_STATUS 0x4d22u
+#define CIUKI_MEDIA_NTFS_SLOTS 8u
+struct ciuki_ntfs_status {
+    uint32_t version;
+    uint32_t size;
+    uint32_t slot;
+    uint32_t disk;
+    uint32_t partition;
+    int32_t error;
+    char reason[128];
+};
+
 #define CIUKI_MEDIA_SPACE_COUNTING 1u
 struct ciuki_media_space {
     uint32_t version;

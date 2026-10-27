@@ -9,6 +9,22 @@
 #include <unistd.h>
 #include <time.h>
 int __real_rename(const char *,const char *);
+FILE *__real_fopen(const char *,const char *);
+size_t __real_fread(void *,size_t,size_t,FILE *);
+int __real_ferror(FILE *);
+int __real_fclose(FILE *);
+static int open_error, partial_read_error, close_error;
+static FILE *failed_stream;
+FILE *__wrap_fopen(const char *path,const char *mode)
+{ if (open_error) { errno=open_error; return NULL; } return __real_fopen(path,mode); }
+size_t __wrap_fread(void *p,size_t size,size_t count,FILE *f)
+{
+    if (partial_read_error) { failed_stream=f; errno=EIO; return __real_fread(p,size,count>8 ? 8 : count,f); }
+    return __real_fread(p,size,count,f);
+}
+int __wrap_ferror(FILE *f) { return f==failed_stream ? 1 : __real_ferror(f); }
+int __wrap_fclose(FILE *f)
+{ int r=__real_fclose(f); if (f==failed_stream) failed_stream=NULL; if (close_error) { errno=close_error; return -1; } return r; }
 static int rename_error;
 int __wrap_rename(const char *from,const char *to)
 { if(rename_error){errno=rename_error;return -1;}return __real_rename(from,to); }
@@ -18,12 +34,18 @@ static void durable_destination(void)
     char path[512],temporary[512],text[32]={0};
     snprintf(path,sizeof(path),"%s/desktop.cfg",directory);snprintf(temporary,sizeof(temporary),"%s/desktop.new",directory);
     assert(!cfg_write_at(path,temporary,"first\n",6));
+    size_t length=123;
+    open_error=EIO; assert(cfg_read_at(path,text,sizeof(text),&length)==EIO && !length); open_error=0;
+    partial_read_error=1; assert(cfg_read_at(path,text,sizeof(text),&length)==EIO && !length); partial_read_error=0;
+    close_error=EIO; assert(cfg_read_at(path,text,sizeof(text),&length)==EIO && !length); close_error=0;
+    assert(cfg_read_at(path,text,6,&length)==EFBIG && !length);
+    assert(!cfg_read_at(path,text,sizeof(text),&length) && length==6 && !memcmp(text,"first\n",6));
     rename_error=EIO;assert(cfg_write_at(path,temporary,"second\n",7)==EIO);rename_error=0;
     FILE *f=fopen(path,"rb");assert(f&&fread(text,1,sizeof(text),f)==6&&!memcmp(text,"first\n",6));assert(!fclose(f));
     assert(!cfg_write_at(path,temporary,"second\n",7));
     memset(text,0,sizeof(text));f=fopen(path,"rb");assert(f&&fread(text,1,sizeof(text),f)==7&&!memcmp(text,"second\n",7));assert(!fclose(f));
     assert(!unlink(path)&&!rmdir(directory));
-    puts("PASS shared destination writer: prefixed path, durable replacement, EIO preserves the prior file, staging cleanup");
+    puts("PASS shared snapshot I/O: injected open/partial-read/close EIO and full buffer reject; prior durable file preserved");
 }
 static pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t changed=PTHREAD_COND_INITIALIZER;

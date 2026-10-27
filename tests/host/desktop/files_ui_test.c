@@ -586,6 +586,25 @@ static void file_drag_tests(void)
     files_destroy(&app); fake_assert_clean();
 }
 
+static int ntfs_status(unsigned slot,struct ciuki_ntfs_status *r)
+{
+    if (slot>2) return -ENOENT;
+    *r=(struct ciuki_ntfs_status){.disk=1,.partition=slot+1,.error=slot ? -EUCLEAN : 0};
+    snprintf(r->reason,sizeof(r->reason),"%s",slot==1 ? "NTFS needs recovery. Start Windows and check this disk." :
+             slot==2 ? "Windows is hibernated. Resume Windows and shut it down fully." : "");
+    return 0;
+}
+static void ntfs_warning_tests(void)
+{
+    fake_image_tree(); memset(&app,0,sizeof(app)); du_init(&ui,pixels,WIDTH,HEIGHT);
+    app.ntfs_status=ntfs_status;
+    assert(!files_setup(&app,&ui,&fake_vfs,FM_COMPUTER));
+    assert(app.ntfs_notified && strstr(ui.dialog.text,"Disk 1, partition 2") && strstr(ui.dialog.text,"needs recovery"));
+    assert(strstr(ui.dialog.text,"partition 3") && strstr(ui.dialog.text,"hibernated") && !strstr(ui.dialog.text,"partition 1"));
+    du_dialog_close(&ui); key(DU_KEY_F5); assert(!du_dialog_id(&ui));
+    files_destroy(&app); fake_assert_clean();
+    puts("PASS Round 2 Files: refused NTFS volumes carry plain-language recovery/hibernation reasons, shown once in Computer");
+}
 int main(int argc, char **argv)
 {
     out_dir = argc > 1 ? argv[1] : NULL;
@@ -770,6 +789,7 @@ int main(int argc, char **argv)
     files_destroy(&app);
     fake_assert_clean();
     computer_ui_tests();
+    ntfs_warning_tests();
     removable_ui_tests();
     floppy_ui_tests();
     external_removal_tests();

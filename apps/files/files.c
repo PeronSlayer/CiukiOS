@@ -186,6 +186,12 @@ static int media_read(struct ciuki_media_state *s)
     int fd=open("/dev/media",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
     int e=ciuki_devctl(fd,MEDIA_GET_STATE,s,sizeof(*s)) ? -errno : 0; close(fd); return e;
 }
+static int ntfs_status(unsigned slot,struct ciuki_ntfs_status *s)
+{
+    *s=(struct ciuki_ntfs_status){.version=CIUKI_MEDIA_VERSION,.size=sizeof(*s),.slot=slot};
+    int fd=open("/dev/media",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
+    int e=ciuki_devctl(fd,MEDIA_GET_NTFS_STATUS,s,sizeof(*s)) ? -errno : 0; close(fd); return e;
+}
 static int media_remove(unsigned d,uint32_t generation)
 {
     int fd=open("/dev/media",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
@@ -324,7 +330,7 @@ int main(int argc, char **argv)
     a->shell_paths=shell_paths; a->shell_count=shell_count;
     a->user = m; a->test = test; a->spawn = launch; a->drop=drop; a->drag_begin=drag_begin; a->drag_status=drag_status; a->close = close_window; a->close_declined=close_declined; a->portrait = portrait;
     a->poll_clipboard=1; a->media_label_key=media_label_key; a->media_label=media_label; a->media_read=media_read; a->media_remove=media_remove; a->media_blockers=media_blockers;
-    a->media_load=media_load; a->media_space=media_space;
+    a->media_load=media_load; a->media_space=media_space; a->ntfs_status=ntfs_status;
     a->media_defrag=media_defrag; a->media_convert=media_convert; a->media_format=media_format; a->cleanup_fs=fm_native_cleanup_vfs();
     a->backup_call=native_backup; a->media_image=media_image; a->media_format=media_format; a->cleanup_fs=fm_native_cleanup_vfs();
     a->file_info=native_info; a->set_attributes=native_attributes; a->set_label=native_label; a->volume_label=native_volume_label; a->version_info=fm_native_version;

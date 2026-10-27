@@ -54,7 +54,7 @@ static int poll_done(void *c, struct cp_preview_done *o)
 static void cancel(void *c) { (void)c; cancels++; }
 static int display(void *c, struct ciuki_display_info *d) { (void)c; display_fixture(d); return 0; }
 static int engine_slow(void *c, struct ciuki_accel_info *i) { (void)c; (void)i; engine_calls++; return -EAGAIN; }
-static int load(void *c, char *t, size_t s, size_t *n) { (void)c; (void)t; (void)s; (void)n; return -1; }
+static int load(void *c, char *t, size_t s, size_t *n) { (void)c; (void)t; (void)s; (void)n; errno=ENOENT; return -1; }
 static void attach(int page, int engine, int async)
 {
     memset(&a, 0, sizeof(a)); sync_decodes = begins = polls = engine_calls = 0;

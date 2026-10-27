@@ -795,6 +795,7 @@ static int user_initial, user_switch_saving, user_default_loading, user_default_
 static int links_profile_update(struct desktop *);
 static int settings_writer_started, verbose_boot, statistics_boot;
 static int settings_reload_pending, settings_reload_request, settings_reload_wallpaper;
+static int settings_snapshot_loaded, settings_snapshot_error;
 static int theme_read_pending;
 static struct desk_wall_worker wallpaper_worker;
 static int wallpaper_worker_started, wallpaper_worker_failed;
@@ -1053,38 +1054,19 @@ static int mixer_line_apply(struct desktop *d,const struct ciuki_mixer_line *lin
     return mixer_submit(&job);
 }
 /* ---- desktop shell services: the file and kernel side of shell.c ---- */
-static int read_file(const char *path, size_t limit, uint8_t **out, size_t *size)
-{
-    *out=NULL; *size=0;
-    FILE *f=fopen(path,"rb");
-    if (!f) return -1;
-    size_t cap=4096, n=0;
-    uint8_t *buffer=malloc(cap);
-    int ok=buffer!=NULL;
-    while (ok) {
-        if (n==cap) {
-            if (cap>=limit) { ok=0; errno=EFBIG; break; }
-            size_t next=cap*2>limit ? limit : cap*2;
-            uint8_t *grown=realloc(buffer,next);
-            if (!grown) { ok=0; break; }
-            buffer=grown; cap=next;
-        }
-        size_t got=fread(buffer+n,1,cap-n,f);
-        n+=got;
-        if (got==0) { ok=!ferror(f); break; }
-    }
-    if (fclose(f)) ok=0;
-    if (!ok) { free(buffer); return -1; }
-    *out=buffer; *size=n;
-    return 0;
-}
 static void settings_load(struct desktop *d)
 {
+    static char text[CFG_TEXT_MAX]; size_t n;
+    int error=cfg_read_at(d->sh.profile.settings[0] ? d->sh.profile.settings : CFG_FILE,text,sizeof(text),&n);
+    if (error && (error!=ENOENT || settings_snapshot_loaded)) {
+        settings_snapshot_error=error;
+        snprintf(d->notice,sizeof(d->notice),"Settings could not be read; saved preferences have been kept.");
+        return;
+    }
+    settings_snapshot_error=0;
+    if (!error) settings_snapshot_loaded=1;
     cfg_defaults(&d->sh.cfg);
-    uint8_t *text; size_t n;
-    if (read_file(d->sh.profile.settings[0] ? d->sh.profile.settings : CFG_FILE,CFG_TEXT_MAX,&text,&n)) return;   /* first boot: defaults */
-    int rejected=cfg_parse(&d->sh.cfg,(const char *)text,n);
-    free(text);
+    int rejected=error ? 0 : cfg_parse(&d->sh.cfg,text,n);
     if (rejected) snprintf(d->notice,sizeof(d->notice),"desktop.cfg: %d line(s) ignored",rejected);
     (void)pp_load(&d->sh.power_cfg,d->sh.cfg.extra);   /* G11: the power_* lines */
     d->sh.power_meter_hidden=!d->sh.power_cfg.show_meter;
@@ -1102,7 +1084,7 @@ static int theme_poll_async(struct desktop *d,uint64_t now)
     }
     if (!cfg_writer_read_result(&settings_writer,text,&n,&error)) return 0;
     theme_read_pending=0;
-    if (error && error!=ENOENT) return 0;
+    if (error) return 0; /* polling must never replace a durable theme with defaults */
     static struct ciuki_settings incoming;
     cfg_defaults(&incoming);
     if(!error) (void)cfg_parse(&incoming,text,n);
@@ -1120,6 +1102,7 @@ static int settings_save(struct desktop *d)
     /* A queued Control Panel reload owns the newest disk snapshot. Do not
      * overwrite it with the pre-reload theme/wallpaper while its read waits. */
     if (settings_reload_pending || (d->sh.want_reload&1)) { d->sh.want_save=1; return 0; }
+    if (settings_snapshot_error) { errno=settings_snapshot_error; return -1; }
     static char text[CFG_TEXT_MAX];
     static struct ciuki_settings durable;
     desk_preferences_persistent(d,&durable);
@@ -1128,6 +1111,7 @@ static int settings_save(struct desktop *d)
     if (!settings_writer_started) { errno=EIO; return -1; }
     int result=cfg_writer_try_submit(&settings_writer,text,n);
     if (result && errno==EAGAIN) { d->sh.want_save=1; return 0; }
+    if (!result) settings_snapshot_loaded=1;
     return result;
 }
 static int media_busy(void);
@@ -2174,6 +2158,7 @@ static void user_service(struct desktop *d)
     desk_folder_destroy(d);
     settings_reload_pending=settings_reload_request=settings_reload_wallpaper=theme_read_pending=0;
     s->cfg=user_worker.settings;
+    settings_snapshot_loaded=1; settings_snapshot_error=0;
     d->pictures_exists=!!s->profile.root[0] || d->pictures_exists;
     s->icon_count=0; desk_shell_apply(d);
     int error=d->autoplay_fs ? desk_folder_init_async(d,d->autoplay_fs) : -ENOSYS;
@@ -2283,10 +2268,13 @@ static void shell_service(struct desktop *d)
     if (settings_reload_pending && !settings_reload_request && settings_writer_started &&
         cfg_writer_read_result(&settings_writer,reload_text,&reload_size,&reload_error)) {
         settings_reload_pending=0;
-        if (reload_error && reload_error!=ENOENT) {
+        if (reload_error && (reload_error!=ENOENT || settings_snapshot_loaded)) {
+            settings_snapshot_error=reload_error;
             desk_shell_notify_error(d,"Settings not loaded",reload_error);
             settings_reload_wallpaper=0;
         } else {
+            settings_snapshot_error=0;
+            if (!reload_error) settings_snapshot_loaded=1;
             int old_tray_width = desk_shell_tray_box(d).w;
             int old_bar_edge=sh->cfg.taskbar_edge,old_bar_size=sh->cfg.taskbar_size;
             int old_bar_top=sh->cfg.taskbar_top,old_bar_hide=sh->cfg.taskbar_autohide,old_start_small=sh->cfg.start_small;
