@@ -168,31 +168,52 @@ static bool optical_path(struct vfs *v,const char *full) {
   const char *name=v->ro_volumes[drive]->ops->name;
   return path_equal(name,"CDFS") || path_equal(name,"ISO9660");
 }
+/* F5 W14: the builtin store C:\System\Win32 and the personality's system
+ * fonts stay read-only to Win32 processes. K-Q4 (sec-k03): on a managed
+ * system volume the common prefix policy (px_policy_check_locked) replaces
+ * the former Win32-only ban on all of C:\System; an unmanaged (not yet
+ * provisioned) volume keeps that ban until its policy is bound. */
+static bool system_managed(const struct px_node *n) {
+  return n && n->drive < 26 && n->space->vfs->policy[n->drive];
+}
 static bool system_node(const struct px_node *n) {
   if(n && windows_fonts(n->parent) && w32_system_font_name(n->entry.name))return true;
+  bool managed = system_managed(n);
+  const struct px_node *child = 0;
   while (n && n->parent && n != n->parent) {
     if (n->drive == 2 && n->parent->mountpoint &&
         path_equal(n->entry.name, "System"))
-      return true;
+      return !managed || (child && path_equal(child->entry.name, "Win32"));
+    child = n;
     n = n->parent;
   }
   return false;
 }
+static bool lexical_prefix(const char *path, const char *prefix) {
+  unsigned n = (unsigned)strlen(prefix);
+  if (strlen(path) < n) return false;
+  for (unsigned i = 0; i < n; i++)
+    if (path_upper((uint8_t)path[i]) != (uint8_t)prefix[i]) return false;
+  return !path[n] || path[n] == '/';
+}
 static bool protected_path(struct px_namespace *s, struct px_node *cwd,
-                           const char *path) {
+                           const char *path, const struct security_subject *subject) {
   struct px_path r;
-  int e = px_resolve_locked(s, cwd, path, true, &r);
+  /* sec-k03: classified through the caller's resolver; an object the caller
+   * cannot reach is never read on its behalf (the open itself denies). */
+  int e = px_resolve_as_locked(s, cwd, path, true, subject, &r);
   if (!e && system_node(r.node ? r.node : r.parent))
     return true;
   if(!e && !r.node && windows_fonts(r.parent) && w32_system_font_name(r.name))return true;
+  bool managed = s->root && system_managed(s->root);
+  if (!e && !r.node && managed && r.parent && r.parent->drive == 2 && r.parent->parent &&
+      r.parent->parent->mountpoint && path_equal(r.parent->entry.name, "System") &&
+      path_equal(r.name, "Win32"))
+    return true;
   /* Guard missing children as well as aliases, including a missing System. */
-  if (path[0] != '/' || strlen(path) < 7)
+  if (path[0] != '/')
     return false;
-  const char *prefix = "/SYSTEM";
-  for (unsigned i = 0; i < 7; i++)
-    if (path_upper((uint8_t)path[i]) != (uint8_t)prefix[i])
-      return false;
-  return !path[7] || path[7] == '/';
+  return managed ? lexical_prefix(path, "/SYSTEM/WIN32") : lexical_prefix(path, "/SYSTEM");
 }
 static void file_info(struct ciuki_w32_file_info *f, const struct fat_entry *e,
                       uint64_t size) {
@@ -215,10 +236,14 @@ struct find_state {
 void w32_find_destroy(struct w32_object *o) {
   w32_free(o->u.section, sizeof(struct find_state));
 }
-static struct vfs_table *temporary_table(struct vfs *v) {
+/* sec-k03: the find table is attributed to the calling process's retained
+ * subject, borrowed for this one synchronous call (the process outlives it). */
+static struct vfs_table *temporary_table(struct vfs *v, struct process *p) {
   struct vfs_table *table = w32_alloc(sizeof(*table));
   if (table) {
     table->vfs = v;
+    const struct security_subject *subject = px_process_subject(p);
+    table->subject = subject == PX_KERNEL ? 0 : (struct security_subject *)subject;
     table->drive = 2;
     for (unsigned i = 0; i < 26; i++)
       memcpy(table->cwd[i], "/", 2);
@@ -275,7 +300,7 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
     if (!error && a->action == W32_F_FULLPATH && (a->flags & 3)) {
       vfs_lock(s->vfs, 0);
       struct px_path r;
-      int e = px_resolve_locked(s, cwd, path, false, &r);
+      int e = px_resolve_as_locked(s, cwd, path, false, px_process_subject(p), &r);
       if (e)
         error = dos_error(e);
       else {
@@ -396,10 +421,12 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
       w32_release(o);
       goto done;
     }
-    struct vfs_table *table = temporary_table(s->vfs);
+    struct vfs_table *table = temporary_table(s->vfs, p);
     struct fat_entry *entry = w32_alloc(sizeof(*entry));
     if (!table || !entry)
       error = 8;
+    else if (!px_process_subject(p)) /* sec-k03: no unattributed find table */
+      error = 5;
     else {
       int e = a->action == W32_F_FIRST
                   ? vfs_find_first(table, full, 0x37, &state->search, entry)
@@ -550,6 +577,7 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
         struct ciuki_w32_file_info f;
         if (!(o->u.file.access & 0x40000000u) || system_node(d->node))
           e = -EACCES;
+        else if ((e = file_description_authorize_locked(d, POLICY_META))) { } /* sec-k03 */
         else if (a->bytes != sizeof(f) ||
                  copy_from_user(&f, a->buffer, sizeof(f)))
           e = -EFAULT;
@@ -605,8 +633,8 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
                    : a->action == W32_F_DELETE || a->action == W32_F_MOVE ||
                          a->action == W32_F_MKDIR || a->action == W32_F_RMDIR ||
                          a->action == W32_F_ATTR || a->action == W32_F_TIMES;
-  if (write && (protected_path(s, cwd, path) ||
-                (a->path2 && protected_path(s, cwd, path2))))
+  if (write && (protected_path(s, cwd, path, px_process_subject(p)) ||
+                (a->path2 && protected_path(s, cwd, path2, px_process_subject(p)))))
     error = 5;
   if(write && (optical_path(s->vfs,full) ||
       (a->path2 && optical_path(s->vfs,full2))))error=19;
@@ -614,7 +642,7 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
    * namespace. New installed faces remain ordinary writable files. */
   if(write && (a->action==W32_F_MOVE || a->action==W32_F_RMDIR)) {
     struct px_path r;
-    if(!px_resolve_locked(s,cwd,path,false,&r) &&
+    if(!px_resolve_as_locked(s,cwd,path,false,px_process_subject(p),&r) &&
        (windows_fonts(r.node) || windows_root(r.node)))error=5;
   }
   if(write&&(driver_destination(full)||(a->path2&&driver_destination(full2)))){
@@ -639,7 +667,7 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
       if (a->disposition == 5)
         flags |= O_TRUNC;
       struct px_path r;
-      bool exists = !px_resolve_locked(s, cwd, path, true, &r) && r.node;
+      bool exists = !px_resolve_as_locked(s, cwd, path, true, px_process_subject(p), &r) && r.node;
       if (exists && (r.node->kind == PX_DIRECTORY)) {
         if (!(a->flags & 0x02000000u) || a->disposition != 3 ||
             a->access & 0x40000000u || (a->flags&0x04000000u))
@@ -668,7 +696,7 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
             ((a->flags & 6) != (r.node->entry.attr & 6)))
           error = 5;
         if (!error)
-          e = px_open_locked(s, cwd, path, flags, d);
+          e = px_open_as_locked(s, cwd, path, flags, d, px_process_subject(p));
         if (!error && !e && d->node->kind==PX_FILE && d->node->volume)
           e=px_error(vfs_identity_get(s->vfs,d->node->volume,&d->node->entry,&d->identity));
         if (!error && !e && !exists && d->node->volume && (a->flags & 39)) {
@@ -708,7 +736,7 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
     struct px_path r;
     switch (a->action) {
     case W32_F_STAT:
-      e = px_resolve_locked(s, cwd, path, false, &r);
+      e = px_resolve_as_locked(s, cwd, path, false, px_process_subject(p), &r);
       if (!e) {
         struct ciuki_w32_file_info f;
         file_info(&f, &r.node->entry,
@@ -722,33 +750,36 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
        * so no other mutation can retire the resolved entry meanwhile. */
       uint32_t turn = 0;
       e = px_turn_take_path_locked(s, cwd, path, &turn);
-      if (!e) e=px_resolve_locked(s,cwd,path,false,&r);
+      if (!e) e=px_resolve_as_locked(s,cwd,path,false,px_process_subject(p),&r);
       if (!e && r.node->kind!=PX_FILE) error=5;
       if (!e && !error && px_share_locked(r.node,4,0)) error=32;
       if (!e && !error && ((r.node->entry.attr&1) || r.node->delete_pending)) error=5;
       if (!e && !error) {
-        r.node->delete_pending=true;
-        e=px_delete_finish_locked(r.node);
+        /* sec-k03: REMOVE intent authorized now; deferred to the last
+         * close of this identity only, never a later path lookup. */
+        e=px_delete_as_locked(r.node,px_process_subject(p));
+        if (e==-EBUSY) { e=0; error=32; }
       }
       vfs_turn_drop_locked(s->vfs, turn);
       break;
     }
     case W32_F_RMDIR:
-      e = px_remove_locked(s, cwd, path, true);
+      e = px_remove_as_locked(s, cwd, path, true, px_process_subject(p));
       break;
     case W32_F_MKDIR:
-      e = px_mkdir_locked(s, cwd, path, 0777);
+      e = px_mkdir_as_locked(s, cwd, path, 0777, px_process_subject(p));
       break;
     case W32_F_MOVE:
-      e = px_resolve_locked(s, cwd, path2, true, &r);
+      e = px_resolve_as_locked(s, cwd, path2, true, px_process_subject(p), &r);
       if (!e) {
         if (r.node)
           error = 183;
         else {
           struct px_path from;
-          e=px_resolve_locked(s,cwd,path,false,&from);
+          e=px_resolve_as_locked(s,cwd,path,false,px_process_subject(p),&from);
           if (!e && px_share_locked(from.node,4,0)) error=32;
-          if (!e && !error) e = px_rename_locked(s, cwd, path, path2);
+          if (!e && !error) e = px_rename_as_locked(s, cwd, path, path2, px_process_subject(p));
+          if (e==-EBUSY) { e=0; error=32; }
         }
       }
       break;
@@ -758,10 +789,11 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
        * between the resolution and the attribute transaction. */
       uint32_t turn = 0;
       e = px_turn_take_path_locked(s, cwd, path, &turn);
-      if (!e) e = px_resolve_locked(s, cwd, path, false, &r);
+      if (!e) e = px_resolve_as_locked(s, cwd, path, false, px_process_subject(p), &r);
       if (!e) {
         if (!r.node->volume)
           e = -EROFS;
+        else if ((e = px_policy_check_locked(r.node, px_process_subject(p), POLICY_META))) { } /* sec-k03 */
         else
           e = px_error(px_fat_transaction_locked(
               r.node, r.node->parent, 0,

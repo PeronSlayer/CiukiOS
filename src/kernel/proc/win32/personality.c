@@ -4,6 +4,9 @@
 #include <ciuki/cpu.h>
 #include <ciuki/w32_objects.h>
 #include <ciuki/files.h>
+/* sec-k03: weak for the personality RAM fixtures; the kernel links fdtable.c. */
+extern int file_image_open_as(struct px_node *, const struct security_subject *, const char *, bool,
+                              struct ciuki_file *) __attribute__((weak));
 
 static int copy_string(struct uaddr *u, uint32_t dst, const struct proc_strings *s,
                        uint32_t offset, uint32_t *bytes)
@@ -85,7 +88,9 @@ int w32_spawn(struct process *p, const struct ciuki_file *file, const struct pro
     if (err) {klog("[win32] load check=image-address-range error=193");goto done;}
     const struct ciuki_file_ops *ops = proc_get_file_ops();
     struct ciuki_file loader = {0};
-    err = ops ? ops->open(p->cwd, "/System/Win32/ntdll.dll", &loader) : -ENOENT;
+    /* sec-k03: the builtin loader is read as the process it will run in. */
+    err = !ops ? -ENOENT : file_image_open_as ? file_image_open_as(p->cwd, p->subject, "/System/Win32/ntdll.dll", false, &loader) :
+        ops->open(p->cwd, "/System/Win32/ntdll.dll", &loader);
     if (err) { klog("[win32] load pid=%u check=missing-dll error=126",p->pid);w32_refusal_queue(p,W32_REFUSE_MISSING_DLL,"ntdll.dll",126); goto done; }
     err = w32_pe_validate(&loader, im);
     if (!err && !(im->flags & 0x2000)) err = -ENOEXEC;
