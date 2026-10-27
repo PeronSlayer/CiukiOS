@@ -34,6 +34,7 @@ import win32_fixtures
 import win32_runner
 import win32_inventory
 import https_fixture
+import acceptance
 from mount_fixtures import place_marker, WriteGate, classify_crash_checker, check_crash_files, check_recovered_fixture
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -326,7 +327,7 @@ def load_suite(name):
         # Preserve the existing physical import behavior: prerequisite physical
         # gates remain separate, while alias and requested-suite imports apply.
         if part_name in names:
-            for flag in ('host_tests','physical_import_required'):
+            for flag in ('host_tests','physical_import_required','acceptance'):
                 if part.get(flag):suite[flag] = True
             suite.setdefault('physical_cases',[]).extend(part.get('physical_cases',[]))
     for part_name in names:add(part_name, name != 'all')
@@ -1200,6 +1201,9 @@ def case_kind(case):
     """
     kind = case.get('kind')
     if kind is None and case.get('probe') != NORMAL_BOOT_KIND:return 'probe'
+    if kind == acceptance.KIND:
+        # fx-accept: a normal boot driven like a user, judged on serial lines.
+        return acceptance.validate_case(case,ROOT)
     if kind in win32_runner.KINDS:
         # f5-17B installers/titles tiers: structural validation here, the
         # screen pins and probe registration at boot time (not_run, never pass).
@@ -1752,7 +1756,8 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
     inputs=input_devices(profile,case)
     serial_patterns(case.get('expected',{}))
     requested=None
-    normal=case_kind(case)==NORMAL_BOOT_KIND
+    accept=case_kind(case)==acceptance.KIND
+    normal=case_kind(case)==NORMAL_BOOT_KIND or accept
     if normal:
         # No fw_cfg item and no BOOT.CFG probe line: the loader menu times out
         # into a normal boot, as on a physical PC. A profile platform override
@@ -1833,7 +1838,9 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
     # -no-reboot turns a host system_reset into a shutdown (QEMU 'SHUTDOWN
     # reason=host-qmp-system-reset'), so warm-restart cases omit it; guest
     # resets are still caught by the RESET event count against expected_resets.
-    if case.get('boot_kind')!='restart': args.append('-no-reboot')
+    # fx-accept: an acceptance case that restarts the guest (Start > Shut Down >
+    # Restart) needs QEMU to reboot it; every other guest reset still fails it.
+    if case.get('boot_kind')!='restart' and not (accept and case.get('resets',0)): args.append('-no-reboot')
     # Instruction counting makes guest time independent of host stalls and
     # TCG translation work (f0-acceptance.md, "Emulation profiles"); it is a
     # TCG-only option, so the fast KVM profile never sets it.
@@ -1883,6 +1890,7 @@ def qemu_args(executable,profile,case,run_id,overlay,firmware):
             # backend keeps the name QMP media actions address.
             args+=['-drive',f'file=fixture-{index}.iso,format=raw,if=none,readonly=on,id=ciuki-optical',
                    '-device','ide-cd,drive=ciuki-optical,bus=ide.1,unit=1']
+    if accept:args+=acceptance.qemu_args(case)
     if case.get('crash_cut'):args=['stdbuf','-oL',*args]
     return args,request
 
@@ -1945,11 +1953,17 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
     if case.get('sweep'): directory /= 'boot-' + str(case.get('_sweep_boot', 1))
     overlay=shared_overlay or directory/'run.qcow2';fifo=directory/'serial.fifo';gate=directory/'gate'
     unit='ciuki-test-'+run_id+('-boot-'+str(case.get('_sweep_boot',1)) if case.get('sweep') else '')+'.scope';identity=git_identity(root)
-    fixture_server=None
+    fixture_server=None;sites_absent=None
     if browser_case(case):
         # The fixture lives for this boot only; its ports enter the QEMU
         # arguments, its request log the result (browser_fixture).
-        fixture_server=https_fixture.FixtureServer(ROOT/'tests/suites/fixtures/f6-browser').start()
+        # fx-accept: browser_sites serves the owner's local site snapshots
+        # (never committed); absent snapshots make the case not_run below.
+        sites=None
+        if case.get('browser_sites') is not None:
+            try:sites=https_fixture.load_sites(case['browser_sites'],ROOT)
+            except https_fixture.SitesAbsent as e:sites_absent=str(e)
+        fixture_server=https_fixture.FixtureServer(ROOT/'tests/suites/fixtures/f6-browser',sites=sites).start()
         case={**case,'_browser_ports':(fixture_server.http_port,fixture_server.https_port)}
     try:
         args,request=qemu_args(executable,profile,case,run_id,overlay,firmware)
@@ -1981,10 +1995,11 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
     result['operator_confirmation'] = False
     result['operator_confirmation_required'] = case.get('operator_confirmation',False)
     normal=case_kind(case)==NORMAL_BOOT_KIND
+    accept=case_kind(case)==acceptance.KIND;accept_session=None
     win32=case_kind(case) in win32_runner.KINDS;session=None
     # Probe and sweep cases are judged on CIUKI_TEST records; a normal boot on
     # serial milestones and a screendump, with no test request at all.
-    result['evidence_kind']=NORMAL_BOOT_KIND if normal else 'ciuki-test-records'
+    result['evidence_kind']=NORMAL_BOOT_KIND if normal else acceptance.KIND if accept else 'ciuki-test-records'
     if win32:result['win32']={'tier':win32_runner.KINDS[case['kind']],'workload':case['win32']['workload'],'scene':case['win32']['scene'],'verdict':None}
     if normal:
         result['normal_boot']={'fw_cfg_request':None,'ciuki_test_records_required':False,
@@ -1996,6 +2011,9 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
     directory.mkdir(parents=True,exist_ok=False)
     launched=None
     process=qmp=cgroup=None;parser=(SweepParser if case.get('sweep') else NormalBootParser if normal else Parser)(run_id,case['probe']);fd=None;dirfd=None;logs=[]
+    if accept:
+        accept_session=acceptance.Session(case,run_id,directory,ROOT,read_ppm=read_ppm,observe_screen=observe_normal_boot_screen)
+        parser=accept_session.parser
     pending=b'';panic_start=None;armed_stats=None;terminal_time=None
     screen_before = directory/'desktop-before.ppm'
     screen_after = directory/'desktop-after.ppm'
@@ -2012,6 +2030,10 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         # f5-17B: pins still pending or an unregistered probe end the case as
         # not_run before an overlay or a fixture image is created.
         if win32:win32_runner.precheck(case,ROOT)
+        # fx-accept: a pending item and absent site snapshots end as not_run
+        # before an overlay or a generated image is created.
+        if accept:accept_session.precheck()
+        if sites_absent:raise https_fixture.SitesAbsent(sites_absent)
         if case.get('probe')=='title':
             if len(case.get('fixtures',[]))!=1:raise res.Refusal('title requires one private fixture')
             title=case['fixtures'][0].get('title')
@@ -2030,6 +2052,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             result['marker_manifest']=[place_marker(host,overlay,directory,image.stat().st_size,case['preboot_marker'])]
         result['overlay_path']=str(overlay)
         result['fixtures']=prepare_fixtures(host,case,directory,image,result['image']['sha256'])
+        if accept:result['acceptance_media']=accept_session.prepare()
         if win32:
             # The session binds the parser to the image hash, the fixture's
             # payload identity and the scene; pins pending, a probe name the
@@ -2042,7 +2065,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         launched=time.monotonic()
         deadline=launched+(NORMAL_BOOT_LOADER_SECONDS if normal else case['timeout'])
         host_ms=lambda:int((time.monotonic()-launched)*1000)
-        if normal:parser.clock=lambda:time.monotonic()-launched
+        if normal or accept:parser.clock=lambda:time.monotonic()-launched
         process=host.launch(scoped,directory)
         os.set_blocking(process.stdout.fileno(),False)
         # The wrapper cannot exec QEMU until both systemd properties and kernel
@@ -2147,7 +2170,8 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                     if not case.get('sweep'): raise
                     sweep_exit()
                     break
-                if unexpected_resets(qmp.events,expected_resets) or not case.get('sweep') and any(e.get('event')=='SHUTDOWN' and e.get('data',{}).get('reason')=='guest-reset' for e in qmp.events):
+                # An acceptance session judges RESET/SHUTDOWN itself (armed by its steps).
+                if not accept and (unexpected_resets(qmp.events,expected_resets) or not case.get('sweep') and any(e.get('event')=='SHUTDOWN' and e.get('data',{}).get('reason')=='guest-reset' for e in qmp.events)):
                     raise EvidenceError('unexpected reset')
                 result['observed_qemu_status']=status
             now=time.monotonic()
@@ -2190,6 +2214,20 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                         result['normal_boot']['screendump_after_seconds']=round(time.monotonic()-launched,3)
                         if result['screen']['failures']:
                             raise EvidenceError('normal-boot screen heuristic failed: '+', '.join(result['screen']['failures']))
+                        break
+            if accept:
+                # A forbidden line fails the case after a 1 s grace (or at
+                # once near the deadline) that collects the lines after it.
+                if parser.failure:
+                    if failure_at is None:failure_at=now
+                    if now-failure_at>=1 or deadline-now<.2:
+                        accept_session.abandon(parser.failure_reason());raise EvidenceError(parser.failure_reason())
+                elif qmp:
+                    accept_session.tick(now,qmp)
+                    if accept_session.failed:raise EvidenceError('acceptance: '+accept_session.failed)
+                    if accept_session.done:
+                        while select.select([fd],[],[],0)[0]:collect(fd)
+                        if parser.failure:raise EvidenceError(parser.failure_reason())
                         break
             if case.get('window_screen') and qmp:
                 spec = case['window_screen']
@@ -2318,6 +2356,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             pending_stimulus=actions.pending_stimulus(parser)
             result['stimulus']['pending']=pending_stimulus
             if session:result['timeout']['pending_win32']=session.pending()
+            if accept_session:result['timeout']['pending_acceptance']=accept_session.pending()
             if pending_stimulus:
                 if write_gate:pending_stimulus.update(write_gate.pending_stimulus(parser.records))
                 result['timeout']['pending_stimulus']=pending_stimulus
@@ -2334,6 +2373,12 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             result['browser_fixture']=fixture_server.snapshot()
             try:(directory/'fixture.log').write_text(json.dumps(result['browser_fixture'],indent=1)+'\n')
             except OSError:pass
+            if fixture_server.sites and result['outcome']!='not_run':
+                # fx-accept: fetch and layout records of the site snapshots.
+                try:acceptance.browser_sites_report(result,(directory/'serial.log').read_text(errors='replace'))
+                except OSError as e:result['browser_sites']={'error':str(e)}
+        if accept_session and result['outcome']!='not_run' and not accept_session.done and not accept_session.failed:
+            accept_session.abandon(result['reason'])
         # Capture before sending quit or terminating anything. A QMP reset/EOF
         # can precede reaping the wrapper by a few scheduler ticks. Never use
         # the status of our later SIGTERM/SIGKILL as the original failure.
@@ -2343,7 +2388,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
             except subprocess.TimeoutExpired: pass
         # A failed desktop or DOS-window case keeps its final screen for diagnosis
         # (failure artifacts are retained; passing runs delete everything but serial.log).
-        if result.get('outcome')!='pass' and qmp and (case.get('desktop_screen') or case.get('window_screen') or normal):
+        if result.get('outcome')!='pass' and qmp and (case.get('desktop_screen') or case.get('window_screen') or normal or accept):
             try:qmp.command('screendump',{'filename':str(directory/'screen-fail.ppm')})
             except (OSError,RuntimeError,ValueError):pass
         # Ownership is held until this sequence finishes, including verification.
@@ -2482,6 +2527,21 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
                 if result['audio']['failures']: raise EvidenceError('audio waveform: '+', '.join(result['audio']['failures']))
             except (OSError, ValueError, RuntimeError, EOFError, wave.Error) as e:
                 result['outcome']='fail'; result['reason']=str(e)
+        if accept_session is not None and result['outcome']!='not_run':
+            # fx-accept: the independent C: delta of an installer case after a
+            # verified teardown, then the step/assertion/figure summary.
+            disk=None
+            if case.get('disk'):
+                try:
+                    if not result['cleanup']['clean']:raise EvidenceError('QEMU must stop before the overlay inventory')
+                    if not overlay.is_file():raise EvidenceError('no overlay to inventory')
+                    delta=win32_inventory.overlay_delta(host,image,overlay,directory)
+                except (OSError,ValueError,RuntimeError,subprocess.SubprocessError) as e:
+                    delta={'error':str(e)}
+                disk=acceptance.disk_check(case['disk'],delta)
+            try:accept_session.finish(result,disk)
+            except (OSError,ValueError,RuntimeError,KeyError) as e:
+                result['outcome']='fail';result['reason']='acceptance summary failed: '+str(e)
         if session is not None and session.tier=='installers' and session.parser.started:
             # f5-15C: the independent C: delta of this run (canonical image
             # versus the overlay), after verified teardown only.
@@ -2528,7 +2588,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         # --keep retains failure evidence for review, not passing overlays;
         # all passing runs always retain exactly these contract artifacts
         # (a normal boot also keeps its evaluated screendump).
-        passing=['serial.log','screen.ppm'] if normal else ['serial.log']
+        passing=['serial.log','screen.ppm'] if normal else ['serial.log',*accept_session.screens] if accept else ['serial.log']
         if case.get('_win32_calibrate'):
             # f5-15C calibration keeps its screenshots and the manifest proposal.
             passing+=[p.name for p in directory.iterdir() if p.name.startswith(('ui-','screen-')) or p.name=='calibration.json']
@@ -2546,7 +2606,7 @@ def _run_boot(root,suite,case,profile,image,executable,firmware,host=None,keep=F
         result['artifacts']={k:v for k,v in result['artifacts'].items() if (directory/k).is_file()}
         result['retention']={'keep_requested':keep,'passing_files':['result.json',*passing]}
         (directory/'result.json').write_text(json.dumps(result,indent=2)+'\n')
-        res.prune(directory.parent.parent if case.get('sweep') else directory.parent)
+        res.prune(directory.parent.parent if case.get('sweep') else directory.parent,max(5,case.get('_prune_keep',5)))
     return result,directory
 
 
@@ -2794,8 +2854,9 @@ def select_cases(suite, identities):
     """Select explicit cases for one title without changing suite predicates."""
     if not identities:
         return suite
-    if any(c.get('kind') not in win32_runner.KINDS for c in suite['cases'] if not c.get('_smoke')):
-        raise res.Refusal('--case currently supports only Win32 acceptance tiers')
+    # fx-accept: any case of an acceptance suite (acc-t23) may be run alone.
+    if not suite.get('acceptance') and any(c.get('kind') not in win32_runner.KINDS for c in suite['cases'] if not c.get('_smoke')):
+        raise res.Refusal('--case currently supports only Win32 acceptance tiers and acceptance suites')
     missing = set(identities) - {c.get('id') for c in suite['cases']}
     if missing:
         raise res.Refusal('unknown suite case: ' + ', '.join(sorted(missing)))
@@ -2866,6 +2927,11 @@ def main(argv=None):
             toolchain=json.loads((ROOT/'config/toolchain.json').read_text())
             firmware=find_firmware(executable)
             cases=expand_cases(suite);summary=[]
+            accept_suite=bool(suite.get('acceptance'))
+            if accept_suite:
+                # fx-accept: one suite run keeps every case directory (retention
+                # still deletes passing overlays) and older runs are pruned.
+                cases=[{**c,'_prune_keep':len(cases)+1} for c in cases]
             for index,case in enumerate(cases):
                 name=options.profile or case['profile']
                 if not all(c.isalnum() or c in '-_' for c in name):raise res.Refusal('invalid profile name')
@@ -2877,13 +2943,22 @@ def main(argv=None):
                 if host_evidence is not None:
                     result['host_probe']=host_evidence
                     (directory/'result.json').write_text(json.dumps(result,indent=2)+'\n')
-                summary.append({'case':case.get('id',case['probe']),'attempt':case.get('attempt',1),'boot_kind':case.get('boot_kind','cold'),'run_id':result['run_id'],'outcome':result['outcome'],'result':str(directory/'result.json'),'evidence':result})
+                summary.append({'case':case.get('id',case['probe']),'attempt':case.get('attempt',1),'boot_kind':case.get('boot_kind','cold'),'run_id':result['run_id'],'outcome':result['outcome'],'result':str(directory/'result.json'),'evidence':result,
+                                **({'item':case.get('item'),'title':case.get('title'),'blocking':case.get('blocking',True)} if accept_suite else {})})
                 # Preserve essential textual evidence before the next run can
                 # prune old directories (the ten-boot matrix exceeds five runs).
                 checkpoint=ROOT/'build/test-runs'/options.suite/'summary.json'
                 atomic_write(checkpoint,json.dumps({'schema_version':1,'suite':options.suite,'cases':summary},indent=2)+'\n')
                 print(result['outcome'].upper()+': '+summary[-1]['case']+' — '+result['reason'],flush=True)
-                if failed_prerequisite(case,result):
+                if accept_suite:
+                    # Acceptance items are independent; only a gate (the first
+                    # boot to the desktop) stops the run when it fails.
+                    gate=case.get('gate')
+                    checks=(result.get('acceptance') or {}).get('checks',{})
+                    if gate and result['outcome']=='fail' and (gate is True or not checks or checks.get(gate,{}).get('status')=='fail'):
+                        summary.extend({'case':c.get('id',c['probe']),'outcome':'not_run','reason':'gate %s failed'%case.get('id'),
+                                        'item':c.get('item'),'title':c.get('title'),'blocking':c.get('blocking',True)} for c in cases[index+1:]);break
+                elif failed_prerequisite(case,result):
                     summary.extend({'case':c.get('id',c['probe']),'outcome':'not_run','reason':'prerequisite failed'} for c in cases[index+1:]);break
             if suite.get('physical_import_required'):
                 from physical import import_evidence
@@ -2914,6 +2989,10 @@ def main(argv=None):
                                     'reason':'operator-confirmed evidence imported' if imports else 'operator-confirmed physical records required','imports':imports})
             dest=ROOT/'build/test-runs'/options.suite/'summary.json'
             atomic_write(dest,json.dumps({'schema_version':1,'suite':options.suite,'cases':summary},indent=2)+'\n')
+            if accept_suite:
+                # fx-accept: the one-page summary next to summary.json.
+                print(acceptance.write_summary(options.suite,summary,dest.with_name('summary.txt')),end='',flush=True)
+                return 0 if acceptance.verdict(summary)[0]=='ACCEPTED' else 1
             return 0 if all(r['outcome']=='pass' for r in summary) else 1
     except (res.Refusal,OSError,ValueError,subprocess.SubprocessError) as e:
         print('REFUSED: '+str(e),file=sys.stderr);return 2

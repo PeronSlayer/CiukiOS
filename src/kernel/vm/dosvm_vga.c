@@ -1347,6 +1347,26 @@ void dosvm_present_checkpoint(struct dosvm *v)
     dosvm_present_notify(v);
 }
 
+/* fx-accept: one record per change of the windowed layout, also in quiet
+ * boots: the acceptance suite (tests/suites/acc-t23.json) and the T23
+ * captures see a DOS game leave the text prompt for its graphics mode (the
+ * demo loop or gameplay follows). vbe is the VBE mode number (0 for the VGA
+ * model), width/height the presented geometry, text 1 for a text mode. The
+ * prefix is not "[dosvm]" on purpose: the f3 records keep their counts. */
+#define DOSVM_WINDOW_VIDEO_RECORDS 32u
+static void window_video_record(struct dosvm *v, unsigned vbe, unsigned width, unsigned height, unsigned text)
+{
+    /* bit 63 set: never 0, the value of a new VM */
+    uint64_t key = 1ull << 63 | (uint64_t)(vbe & 0xffffu) << 32 | (uint64_t)(width & 0x7fffu) << 16 |
+                   (uint64_t)(height & 0x7fffu) << 1 | (text ? 1u : 0u);
+    if (key == v->window_video_key) return;
+    v->window_video_key = key;
+    if (v->window_video_records >= DOSVM_WINDOW_VIDEO_RECORDS) return;
+    v->window_video_records++;
+    klog("[dosvm-window] video vm=%u gen=%u vbe=%x width=%u height=%u text=%u",
+         v->info.key.id, v->info.key.generation, vbe, width, height, text);
+}
+
 int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *, unsigned),
                       void *arg, uint64_t tick, struct ciuki_rect *damage)
 {
@@ -1355,10 +1375,15 @@ int dosvm_vga_present(struct dosvm *v, int (*row)(void *, unsigned, const void *
     memset(v->video_rows,0,sizeof(v->video_rows));
     if (v->fullscreen || v->fullscreen_hold) return 0;
     if (v->launch_armed && !v->launch_ready) return 0;
-    if (v->vbe_mode) return dosvm_vbe_present(v,row,arg,tick,damage);
+    if (v->vbe_mode) {
+        const struct dos_video_mode *m = dos_video_mode(v->vbe_mode);
+        if (m) window_video_record(v, v->vbe_mode, m->width, m->height, 0);
+        return dosvm_vbe_present(v,row,arg,tick,damage);
+    }
     uint64_t period = dosvm_vga_period_us(v, tick);
     cvga_geometry current = {0};
     cvga_get_geometry(&v->vga, &current);
+    window_video_record(v, 0, current.width, current.height, current.text ? 1u : 0u);
     v->video_present_rate = (unsigned)((1000000u + period / 2) / period);
     if (!v->video_presented || v->video_period_us != period) {
         v->video_due_us = v->video_presented ? v->video_tick * 1000u + period : tick * 1000u;

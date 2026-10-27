@@ -1,6 +1,7 @@
 #include "input_text.h"
 /* SPDX-License-Identifier: MIT */
 #include "desktop.h"
+#include "diag_record.h"
 #include <string.h>
 #include <errno.h>
 #include <stdio.h>
@@ -101,6 +102,22 @@ int desk_next_window(const struct desktop *d, int excluded, uint32_t pid, const 
     }
     return next;
 }
+/* fx-accept: which window holds the keyboard focus, once per change, also in
+ * quiet boots. The acceptance suite presses an installer's wizard keys only
+ * while one of its untitled pages has the focus (Installer VISE creates its
+ * pages without a title, its progress window and message boxes with one) and
+ * closes the Files windows an installer opens over its last page. index -1
+ * is the desktop (or the taskbar) itself. */
+static void focus_record(const struct desktop *d, int i)
+{
+    char line[160], app[25];
+    const struct desk_client *c = i >= 0 && i < DESK_CLIENTS ? &d->clients[i] : NULL;
+    desk_diag_token(app, sizeof(app), c ? (c->application[0] ? c->application : c->title) : "desktop");
+    int n = snprintf(line, sizeof(line), "[desktop] focus pid=%u window=%u titled=%u internal=%d app=%s",
+                     c ? (unsigned)c->pid : 0u, c ? (unsigned)c->window_id : 0u, c && c->title[0] ? 1u : 0u,
+                     c ? c->internal : -1, app);
+    if (n > 0 && (size_t)n < sizeof(line)) desk_diag_record(line, n);
+}
 void desk_focus(struct desktop *d, int i)
 {
     i=desk_modal_target(d,i);
@@ -148,6 +165,7 @@ void desk_focus(struct desktop *d, int i)
         focus_damage(d,d->focus);
     }
     d->focus = i;
+    focus_record(d, i);
     /* Publish the new lease generation before activation can dispatch a
      * WM_ACTIVATEAPP handler that immediately calls DirectDraw Restore. */
     desk_v3_reactivate(d,i);

@@ -252,6 +252,63 @@ identity, monotonic counters and optional checkpoints, while `sys_probe_report`
 consumes its summaries. Forwarding the validated summaries is therefore the
 cheapest available publisher and preserves the existing input schedule.
 
+## Acceptance cases (amendment, fx-accept, 2026-10-27)
+
+Owner decision 2026-10-27 (`docs/directives/fx-accept.md`): every hardware
+image first passes the owner's trial list on the `qemu-t23` profile; a
+failing item blocks the image. The suite is `tests/suites/acc-t23.json`
+(`"acceptance": true`), run with `scripts/test/acceptance.sh` or
+`make qemu-acceptance`; besides `summary.json` the runner writes the one-page
+`build/test-runs/acc-t23/summary.txt` (verdict ACCEPTED, BLOCKED or
+INCOMPLETE, one line per trial item, key figures and evidence paths).
+
+- **Case kind `acceptance`** (`scripts/test/acceptance.py`): a boot without a
+  test request, driven like a user. The runner presses `n` at
+  `SELECT_READY` (Normal at once: the menu's 3 s wait costs about 270 host
+  seconds under TCG with `-icount`) or F5 (Startup menu item 3, Safe mode,
+  `L:STARTUP=3`), then the desktop's own keys (Ctrl+Esc and menu letters,
+  Win+R, Alt+Enter, Alt+F4, the Shut Down dialog's R/S), through QMP
+  [`input-send-event`](https://www.qemu.org/docs/master/interop/qemu-qmp-ref.html#command-input-send-event).
+  Generated ISO images (`scripts/test/iso_fixtures.py`, never real media)
+  enter an empty `ide-cd` on the secondary master (the T23 drive position;
+  an `-drive if=none` backend without a file) through `blockdev-change-medium`
+  and leave through `eject`. A guest RESET is legal only after a step armed
+  it and within the case's `resets`; `-no-reboot` is omitted only for such a
+  case, and `-no-shutdown` stays, so ACPI S5 pauses QEMU with a SHUTDOWN event
+  of reason `guest-shutdown`
+  ([QEMU invocation](https://www.qemu.org/docs/master/system/invocation.html)).
+- **Predicates** are line-anchored regular expressions over the serial
+  capture, never a frame digest: kernel `klog` lines, program output
+  (`[console] ...`) and the desktop's diagnostic records
+  (`[user N] [desktop] display start|focus|not-responding|notify|message|autoplay ...`,
+  `apps/desktop/diag_record.h`, written through diagnostic call 2 also in
+  quiet boots) and `[dosvm-window] video` (`src/kernel/vm/dosvm_vga.c`, one
+  line per change of a DOS window's layout). Steps wait for patterns in order
+  and capture values (`<<name>>`); assertions count lines between steps;
+  figures summarize (the `[dosvm] perf` window counters of the T23 logs).
+  Installed files and Start-menu links are compared on the overlay after a
+  verified teardown (`win32_inventory.overlay_delta`). Screendumps only pace
+  the input (`screen_settle`; an installer `wizard` presses its next key once
+  the screen has been still for some seconds and the focused window is one
+  of the installer's untitled pages) and check geometry and the desktop
+  layout colours of `observe_normal_boot_screen`.
+- **Known failures** name their directive (`known_failure`, optionally only
+  for a `fail` pattern): the summary shows the item as PASS* and they do not
+  block. Today: the DOS full-screen entry refused by QEMU's standard VGA
+  readback (f3-29) and the empty CD drive that has no letter yet.
+- Items are independent: a failing case does not stop the run, except the
+  `gate` check of the first boot. One run keeps every case directory of the
+  suite (pruning keeps the number of cases plus one); a passing case keeps
+  `result.json`, `serial.log` and its evaluated screendumps, a failing one
+  also its overlay, generated images and failure screendumps.
+- **Browser cases** of the suite are `f6:browser` probe cases with
+  `browser_sites`: the owner's site snapshots (never committed) are served by
+  the HTTPS fixture as `/site/<n>/`, so no host name enters a tracked file;
+  absent snapshots make the case `not_run`. Same-site fetch errors fail it,
+  other hosts are recorded.
+- A pending item (`pending`: directive, required paths, reason) is `not_run`
+  and does not block (item 9 until fx-is5boot is merged).
+
 ## Migration
 
 The pre-cleanup test scripts were archived in

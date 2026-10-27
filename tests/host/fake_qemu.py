@@ -90,6 +90,20 @@ def emit(items=None):
 
 stream=conn.makefile('rb');started=False
 input_pending=None
+key_counts={};qmp_counts={}
+
+def emit_mixed(items):
+    """fx-accept hooks: serial lines (strings or records), QMP events
+    ({"qmp_event": {...}}) and pauses ({"delay": seconds}), in order, on a
+    thread so a pause never blocks the QMP loop."""
+    def run():
+        for item in items:
+            if isinstance(item,dict) and 'delay' in item:time.sleep(item['delay'])
+            elif isinstance(item,dict) and 'qmp_event' in item:
+                event={'timestamp':{'seconds':int(time.time()),'microseconds':0},**item['qmp_event']}
+                conn.sendall(json.dumps(event).encode()+b'\n')
+            else:emit([item])
+    threading.Thread(target=run,daemon=True).start()
 input_motion=scenario.get('input_motion',0);input_buttons=scenario.get('input_buttons',0)
 
 def suspend_gate():
@@ -193,6 +207,20 @@ for raw in stream:
         # (segment ends, next ARM, summaries), keyed by the decimal batch count.
         if str(count) in scenario.get('after_inputs',{}):
             emit(scenario['after_inputs'][str(count)])
+    if cmd=='input-send-event':
+        # fx-accept: lines/events after the Nth press of a key ("ret#2"), or
+        # after every press of it ("ret").
+        for event in request['arguments']['events']:
+            if event['type']=='key' and event['data']['down']:
+                code=event['data']['key']['data'];key_counts[code]=key_counts.get(code,0)+1
+                hooks=scenario.get('on_key',{})
+                hook=hooks.get('%s#%d'%(code,key_counts[code]),hooks.get(code))
+                if hook:emit_mixed(hook)
+    if cmd in ('blockdev-change-medium','eject'):
+        qmp_counts[cmd]=qmp_counts.get(cmd,0)+1
+        with Path('fake-media.jsonl').open('a') as log:log.write(json.dumps(request['arguments'])+'\n')
+        hook=scenario.get('on_qmp',{}).get('%s#%d'%(cmd,qmp_counts[cmd]))
+        if hook:emit_mixed(hook)
     if cmd=='quit':Path('fake-stopped').touch()
     if scenario.get('reset') and cmd=='query-status':conn.sendall(('{"timestamp":{"seconds":%d,"microseconds":0},"event":"RESET","data":{"guest":true,"reason":"guest-reset"}}\n'%int(time.time())).encode())
 if scenario.get('child'):
