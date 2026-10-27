@@ -789,6 +789,8 @@ def win32_payloads(folder=None):
     require(any(d["name"] == "ntdll.dll" for d in store["dlls"]), "missing builtin ntdll")
     binary=struct.pack("<II", 1, len(store["dlls"]))
     sources={"/System/Win32/builtin-store.json": manifest,
+             "/System/Win32/is5boot.exe": folder / "is5boot.exe",
+             "/system/licenses/IS5-blast.txt": ROOT / "sdk/win32/is5boot/blast-LICENSE.txt",
              "/System/Win32/SHIMS.INI": ROOT / "assets/win32/SHIMS.INI",
              "/System/Win32/BUILTIN.BIN": folder / "BUILTIN.BIN",
              "/system/licenses/WIN32-LGPL.txt": ROOT / "sdk/win32/COPYING.LIB",

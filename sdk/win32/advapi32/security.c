@@ -26,6 +26,30 @@ uint32_t W32API GetLengthSid(const void *sid) {
   const uint8_t *s = sid;
   return s ? 8u + 4u * s[1] : 0;
 }
+/* fx-is5boot (InstallShield 5 engine imports). EqualSid compares two valid
+ * SIDs byte for byte and clears the last error, as Windows and Wine
+ * (kernelbase EqualSid over RtlEqualSid); an invalid SID is ERROR_INVALID_SID.
+ * Nothing in this ADVAPI32 allocates a SID (AllocateAndInitializeSid fails as
+ * on Windows 9x), so FreeSid succeeds (NULL) for NULL and returns any other
+ * pointer, its documented failure, instead of freeing memory it never owned. */
+int W32API EqualSid(const void *a, const void *b) {
+  uint32_t n = sid_length(a), m = sid_length(b);
+  if (!n || !m)
+    return fail(1337);
+  w32r_last_error(0);
+  const uint8_t *x = a, *y = b;
+  if (n != m)
+    return 0;
+  for (uint32_t i = 0; i < n; i++)
+    if (x[i] != y[i])
+      return 0;
+  return 1;
+}
+void *W32API FreeSid(void *sid) {
+  if (sid)
+    w32r_last_error(87);
+  return sid;
+}
 /* ACL header: revision, sbz1, size, ACE count, sbz2. */
 int W32API InitializeAcl(void *acl, uint32_t length, uint32_t revision) {
   if (!acl || (revision != 2 && revision != 4) || length > 0xffff)

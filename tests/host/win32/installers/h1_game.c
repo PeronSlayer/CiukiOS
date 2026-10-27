@@ -46,7 +46,7 @@
 static int32_t (*kernel_call)(void *, uint32_t);
 static int enabled;
 static struct { uint8_t *pixels; uint32_t width, height, pitch, bytes; int used; } surfaces[SURFACES];
-static struct { uint32_t id, generation, fd; int titled; } windows[64];
+static struct { uint32_t id, generation, fd, gdi_frames; int titled; } windows[64];
 static uint32_t launches;
 static struct ciuki_message inbox[INBOX];
 static uint32_t in_head, in_tail, focus_id, focus_generation;
@@ -484,6 +484,54 @@ static void key_frame(void) {
         if (!key_burst) return;
     }
 }
+/* fx-is5boot: the game-exec harness option "defaults=IDLE_MS,MAX" is the
+ * guest operator's "defaults" action (scripts/win32/operator_program.py):
+ * once no window or file activity happened for IDLE_MS, Enter (key down,
+ * TEXT CR, key up) goes to the focused window, at most MAX times, so each
+ * dialog takes its default button. It is a separate adapter argument,
+ * never part of the program's command line. */
+static uint32_t defaults_idle, defaults_max, defaults_sent, last_activity;
+/* "answers=..y": the Nth default action types the Nth character instead of
+ * Enter ('.' keeps Enter): a letter is a dialog mnemonic (&Yes, &No). */
+static char answers[32];
+void h1_game_options(const char *text) {
+    const char *v = after(text, "defaults=");
+    if (!v)
+        return;
+    uint32_t idle = 0, max = 0;
+    while (*v >= '0' && *v <= '9')
+        idle = idle * 10 + (uint32_t)(*v++ - '0');
+    if (*v == ',')
+        for (v++; *v >= '0' && *v <= '9'; v++)
+            max = max * 10 + (uint32_t)(*v - '0');
+    defaults_idle = idle; defaults_max = max;
+    const char *a = after(text, "answers=");
+    for (unsigned i = 0; a && i < sizeof(answers) - 1 && ((a[i] >= 'a' && a[i] <= 'z') || a[i] == '.'); i++)
+        answers[i] = a[i];
+    host_print("GAME defaults idle_ms="); host_number(idle); host_print(" max="); host_number(max);
+    host_print(" answers="); host_print(answers); host_print("\n");
+}
+static void default_key(void) {
+    if (defaults_sent >= defaults_max || !focus_id || INBOX - (in_tail - in_head) < 3)
+        return;
+    uint32_t t = now_ms();
+    if (t - last_activity < defaults_idle)
+        return;
+    int open = 0;
+    for (unsigned i = 0; i < 64; i++)
+        open |= windows[i].id == focus_id && windows[i].generation == focus_generation;
+    if (!open)
+        return;
+    defaults_sent++;
+    last_activity = t;
+    host_print("GAME default n="); host_number(defaults_sent); host_print(" window="); host_number(focus_id);
+    host_print(" generation="); host_number(focus_generation); host_print("\n");
+    char c = defaults_sent <= sizeof(answers) ? answers[defaults_sent - 1] : 0;
+    uint8_t scan = c && c != '.' ? key_scan[(uint8_t)c] : 0x1c;
+    key_event(CIUKI_INPUT_KEY, scan, 1, t - start_ms);
+    key_event(CIUKI_INPUT_TEXT, c && c != '.' ? (uint8_t)c : '\r', 0, t - start_ms);
+    key_event(CIUKI_INPUT_KEY, scan, 0, t - start_ms + 40);
+}
 /* ---- fake desktop ------------------------------------------------------ */
 static struct ciuki_message *event(unsigned op, unsigned payload, uint32_t token, uint32_t id, uint32_t generation) {
     if (in_tail - in_head >= INBOX)
@@ -529,12 +577,35 @@ static int32_t desktop_send(const struct ciuki_message *m) {
         return 0; /* HELLO and other legacy-form messages need no answer */
     uint32_t token = get32(m->data + 4), id = get32(m->data + 8), generation = get32(m->data + 12);
     requests++;
-    if ((opcode_log < 200 || installer_idle_ms) && op != DESK_DAMAGE && op != DESK_V3_PRESENT && op != DESK_V3_PLACE &&
+    /* Window activity: a blinking caret's DAMAGE and the input-settings
+     * poll of an idle GUI are not. */
+    if (op != DESK_INPUT_SETTINGS && op != DESK_DAMAGE)
+        last_activity = now_ms();
+    /* DESK_INPUT_SETTINGS is the input-settings query user32 repeats while
+     * a GUI program idles; it would use up the record budget (fx-is5boot). */
+    if ((opcode_log < 400 || installer_idle_ms) && op != DESK_DAMAGE && op != DESK_V3_PRESENT && op != DESK_V3_PLACE &&
         op != DESK_INPUT_SETTINGS) {
         opcode_log++;
         host_print("GAME desktop op="); host_number(op); host_print(" window="); host_number(id);
         host_print(" generation="); host_number(generation); host_print(" bytes="); host_number(m->length);
+        if (op == DESK_CREATE_WINDOW && m->length >= DESK_V3_HEADER + 36) {
+            /* Wire fields only (fx-is5boot); the title stays last so a
+             * caller can cut the program's own text from the record. */
+            host_print(" style="); host_number(get32(m->data + DESK_V3_HEADER));
+            host_print(" owner="); host_number(get32(m->data + DESK_V3_HEADER + 4));
+            host_print(" size="); host_number(get32(m->data + DESK_V3_HEADER + 20));
+            host_print("x"); host_number(get32(m->data + DESK_V3_HEADER + 24));
+        }
+        if (op == DESK_V3_WIN32_HWND && m->length >= DESK_V3_HEADER + 4) {
+            host_print(" hwnd="); host_number(get32(m->data + DESK_V3_HEADER));
+        }
+        if (op == DESK_V3_PLACE && m->length >= DESK_V3_HEADER + 28) {
+            host_print(" state="); host_number(get32(m->data + DESK_V3_HEADER + 20));
+            host_print(" style="); host_number(get32(m->data + DESK_V3_HEADER + 24));
+        }
         if (op == DESK_CREATE_WINDOW && m->length > DESK_V3_HEADER + 36) {
+            if (get32(m->data + DESK_V3_HEADER) & DESK_V3_MODAL)
+                host_print(" modal=1");
             char title[80]; unsigned n = m->length - DESK_V3_HEADER - 36;
             if (n > 79) n = 79;
             w32_copy(title, m->data + DESK_V3_HEADER + 36, n); title[n] = 0;
@@ -549,6 +620,7 @@ static int32_t desktop_send(const struct ciuki_message *m) {
             if (!windows[i].id || (windows[i].id == id && windows[i].generation != generation)) {
                 windows[i].id = id; windows[i].generation = generation; windows[i].fd = (uint32_t)m->fds[0];
                 windows[i].titled = m->length > DESK_V3_HEADER + 36;
+                windows[i].gdi_frames = 0;
                 break;
             }
     }
@@ -592,12 +664,45 @@ static int32_t desktop_send(const struct ciuki_message *m) {
     if (op == DESK_V3_PRESENT || op == DESK_DAMAGE) {
         presents++;
         installer_present_ms = now_ms();
+        int shown = 0;
         for (unsigned i = 0; i < 64 && op == DESK_V3_PRESENT; i++)
             if (windows[i].id == id && windows[i].generation == generation) {
                 uint32_t k = windows[i].fd - SURFACE_FD;
-                if (k < SURFACES && surfaces[k].used)
+                if (k < SURFACES && surfaces[k].used) {
                     frame(surfaces[k].pixels, surfaces[k].width, surfaces[k].height, surfaces[k].pitch, 32, "window");
+                    shown = 1;
+                }
             }
+        /* fx-is5boot: GDI windows (dialogs, installer pages) publish
+         * DAMAGE, not PRESENT. Their frames get their own counter and kind,
+         * so lease/GL frame numbering and the summary stay unchanged. No
+         * pixels are written: only the surface checksum is recorded. */
+        for (unsigned i = 0; i < 64 && op == DESK_DAMAGE; i++)
+            if (windows[i].id == id && windows[i].generation == generation) {
+                uint32_t k = windows[i].fd - SURFACE_FD;
+                if (k >= SURFACES || !surfaces[k].used)
+                    continue;
+                static uint32_t gdi_frames;
+                gdi_frames++;
+                shown = 1;
+                /* Each window's first frame, then the global sampling. */
+                if (windows[i].gdi_frames++ && gdi_frames > 4 && (gdi_frames & (gdi_frames - 1)))
+                    continue;
+                uint32_t sum = 2166136261u;
+                for (uint32_t y = 0; y < surfaces[k].height; y += 7)
+                    for (uint32_t x = 0; x < surfaces[k].width * 4; x += 13)
+                        sum = (sum ^ surfaces[k].pixels[y * surfaces[k].pitch + x]) * 16777619u;
+                host_print("GAME frame n="); host_number(gdi_frames); host_print(" kind=gdi window=");
+                host_number(id); host_print(" generation="); host_number(generation);
+                host_print(" size="); host_number(surfaces[k].width); host_print("x"); host_number(surfaces[k].height);
+                host_print(" checksum="); hex(sum); host_print("\n");
+            }
+        static unsigned unmatched;
+        if (op == DESK_V3_PRESENT && !shown && unmatched < 8) {
+            unmatched++;
+            host_print("GAME present without surface window="); host_number(id);
+            host_print(" generation="); host_number(generation); host_print("\n");
+        }
     }
     if (op == DESK_INPUT_SETTINGS) {
         struct ciuki_message *s = event(DESK_INPUT_STATE, DESK_INPUT_VALUES * 4 + 8, token, id, generation);
@@ -715,6 +820,11 @@ int h1_game_kernel(void *record, uint32_t size, int32_t *status) {
     static uint32_t sampled;
     if (installer_stacks && !(++sampled % 100000u))
         installer_stack("record", h->operation, size >= 20 ? ((const uint32_t *)record)[4] : 0);
+    /* A copy without repaints is not idle; user32's periodic settings-file
+     * open is (only writes and process operations count). */
+    if ((h->operation == W32_FILE && size >= 20 && ((const uint32_t *)record)[4] == W32_F_WRITE) ||
+        h->operation == W32_PROCESS)
+        last_activity = now_ms();
     if (h->operation == W32_SERVICE && size == sizeof(struct ciuki_w32_service_args)) {
         struct ciuki_w32_service_args *a = record;
         if (a->action != W32_SVC_CONNECT || a->service != W32_SERVICE_DESKTOP)
@@ -845,6 +955,8 @@ int h1_game_gate(uint32_t call, uint32_t a, uint32_t b, uint32_t c, int32_t *out
     case CIUKI_SYS_CHANNEL_RECV:
         if (a != DESKTOP_FD) return 0;
         if (in_head == in_tail) installer_tick();
+        if (in_head == in_tail && defaults_max)
+            default_key();
         if (in_head == in_tail) { *out = -11; return 1; }
         *(struct ciuki_message *)(uintptr_t)b = inbox[in_head++ % INBOX];
         *out = 1;

@@ -39,6 +39,7 @@ def build(out):
                'LoadLibraryExA': 12, 'FreeLibrary': 4, 'FindResourceA': 12,
                'LoadResource': 8, 'SizeofResource': 8}
     imports.update(CopyFileA=12,GetModuleFileNameA=12,GetLastError=0,GetFileAttributesA=4)
+    imports.update(GetComputerNameA=8)  # RegConnectRegistry local-name check
     definition = out / 'kernel32-imports.def'
     definition.write_text('LIBRARY kernel32.dll\nEXPORTS\n' + ''.join(f' {n}@{a}\n' for n, a in imports.items()))
     run(['llvm-dlltool', '-m', 'i386', '-k', '-d', definition, '-l', out/'kernel32.lib'])

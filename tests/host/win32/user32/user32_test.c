@@ -1831,6 +1831,13 @@ static void test_zoom_limits(void) {
     if (trace[i].h == h && trace[i].m == WM_SIZE && trace[i].wp == SIZE_MAXIMIZED)
       size_zoom++;
   CHECK(size_zoom == 1 && IsZoomed(h) && !IsIconic(h));
+  /* fx-is5boot: GetWindowPlacement reports the state USER holds. */
+  extern BOOL W32API GetWindowPlacement(HWND, void *);
+  struct { UINT length, flags, show; POINT minimum, maximum; RECT normal; } place;
+  memset(&place, 0x5a, sizeof(place));
+  CHECK(GetWindowPlacement(h, &place) && place.length == 44 && !place.flags && place.show == 3 &&
+        place.minimum.x == -1 && place.maximum.y == -1);
+  CHECK(!GetWindowPlacement((HWND)(uintptr_t)0x7ff0, &place) && GetLastError() == 1400);
   /* the desktop restores it (title button): state 0 clears the maximised state */
   traces = 0;
   UINT normal[] = {220, 160, 1, 10, 30, 40, 0, 0};
@@ -1841,6 +1848,10 @@ static void test_zoom_limits(void) {
     if (trace[i].h == h && trace[i].m == WM_SIZE && trace[i].wp == SIZE_RESTORED)
       size_restore++;
   CHECK(size_restore == 1 && !IsZoomed(h));
+  RECT frame_rect, area;
+  CHECK(GetWindowPlacement(h, &place) && place.show == 1 && GetWindowRect(h, &frame_rect) &&
+        SystemParametersInfoA(48, 0, &area, 0) && place.normal.left == frame_rect.left - area.left &&
+        place.normal.bottom == frame_rect.bottom - area.top);
   CHECK(DestroyWindow(h));
   printf("TRACE zoom: placement state 3, SIZE_MAXIMIZED, SIZE_RESTORED, "
          "WM_GETMINMAXINFO track sizes sent once\n");

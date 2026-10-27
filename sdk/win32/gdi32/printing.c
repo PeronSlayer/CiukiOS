@@ -537,6 +537,59 @@ BOOL W32API EnumPrintersW(DWORD f, WCHAR *n, DWORD l, void *b, DWORD s,
   GDI_GUARD;
   return enum_printers(f, n, l, b, s, z, r, 1);
 }
+/* EnumPorts lists the native spool queue's output devices, /dev/lpt0 to
+ * /dev/lpt2 (the Printers port list), spelled exactly as PRINTER_INFO_2/5
+ * report pPortName. Print to file names a path, not a port. Local server
+ * only (NULL or empty name), levels 1 and 2, exact required-size reporting.
+ * The InstallShield 5 engine imports EnumPortsA. */
+#define NATIVE_PORTS 3u
+static const char *const native_ports[NATIVE_PORTS] = {"/dev/lpt0", "/dev/lpt1",
+                                                       "/dev/lpt2"};
+static const char *const port_descriptions[NATIVE_PORTS] = {
+    "Printer Port (LPT1)", "Printer Port (LPT2)", "Printer Port (LPT3)"};
+static BOOL enum_ports(int remote, DWORD level, void *out, DWORD bytes,
+                       DWORD *needed, DWORD *returned, int wide) {
+  if (!needed || !returned)
+    return fail(87);
+  *needed = *returned = 0;
+  if (level != 1 && level != 2)
+    return fail(124);
+  if (remote)
+    return fail(50);
+  DWORD record = level == 1 ? sizeof(PORT_INFO_1A) : sizeof(PORT_INFO_2A);
+  for (unsigned i = 0; i < NATIVE_PORTS; i++)
+    *needed += record + str_bytes(native_ports[i], wide) +
+               (level == 2 ? str_bytes("CiukiOS native", wide) +
+                                 str_bytes(port_descriptions[i], wide)
+                           : 0);
+  if (bytes < *needed || !out)
+    return fail(122);
+  uint8_t *next = (uint8_t *)out + record * NATIVE_PORTS;
+  for (unsigned i = 0; i < NATIVE_PORTS; i++) {
+    void *port = pack_string(&next, native_ports[i], wide);
+    if (level == 1) {
+      ((PORT_INFO_1A *)out)[i].pName = port;
+    } else {
+      PORT_INFO_2A *r = (PORT_INFO_2A *)out + i;
+      r->pPortName = port;
+      r->pMonitorName = pack_string(&next, "CiukiOS native", wide);
+      r->pDescription = pack_string(&next, port_descriptions[i], wide);
+      r->fPortType = PORT_TYPE_WRITE;
+      r->Reserved = 0;
+    }
+    (*returned)++;
+  }
+  return 1;
+}
+BOOL W32API EnumPortsA(char *n, DWORD l, void *b, DWORD s, DWORD *z, DWORD *r) {
+  GDI_GUARD;
+  return enum_ports(n && *n, l, b, s, z, r, 0);
+}
+BOOL W32API EnumPortsW(WCHAR *n, DWORD l, void *b, DWORD s, DWORD *z,
+                       DWORD *r) {
+  GDI_GUARD;
+  return enum_ports(n && *n, l, b, s, z, r, 1);
+}
 static BOOL get_default(void *out, DWORD *size, int wide) {
   if (!size)
     return fail(87);

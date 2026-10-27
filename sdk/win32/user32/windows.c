@@ -539,6 +539,33 @@ BOOL W32API GetWindowRect(HWND h, RECT *r) {
   }
   return 1;
 }
+/* fx-is5boot (InstallShield 5 engine import). The desktop minimizes and
+ * zooms a window without a separate restore rectangle, so rcNormalPosition
+ * is the current rectangle: parent client coordinates for a child, work-area
+ * coordinates for a top-level window. Minimized/maximized positions were
+ * never set: (-1, -1). showCmd follows WS_MINIMIZE/WS_MAXIMIZE. */
+struct u32_placement {
+  UINT length, flags, show;
+  POINT minimum, maximum;
+  RECT normal;
+};
+BOOL W32API GetWindowPlacement(HWND h, struct u32_placement *p) {
+  U32_GUARD;
+  struct u32_window *w = u32_window(h);
+  if (!w)
+    return u32_fail(1400);
+  if (!p)
+    return u32_fail(998);
+  p->length = sizeof(*p);
+  p->flags = 0;
+  p->show = w->style & WS_MINIMIZE ? 2 : w->style & WS_MAXIMIZE ? 3 : 1;
+  p->minimum.x = p->minimum.y = p->maximum.x = p->maximum.y = -1;
+  p->normal = w->rect;
+  RECT area;
+  if (!w->parent && SystemParametersInfoA(48, 0, &area, 0))
+    OffsetRect(&p->normal, -area.left, -area.top);
+  return 1;
+}
 BOOL W32API ClientToScreen(HWND h, POINT *p) {
   U32_GUARD;
   if (h == U32_DESKTOP && p)

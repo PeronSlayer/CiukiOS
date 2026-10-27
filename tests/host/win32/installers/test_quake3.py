@@ -298,7 +298,7 @@ class Quake3InstallerTests(unittest.TestCase):
         self.assertEqual(sorted(path for path, _ in launches), [base, base + '/Extras', base + '/Extras/Help'])
         # From the first folder to the Finished page (the last untitled window)
         # the engine no longer waits: ten five-second FindWindow loops before.
-        pages = [int(ms) for ms in re.findall(r'^GAME desktop op=2 window=\d+ generation=\d+ bytes=52 ms=(\d+)$', output, re.M)]
+        pages = [int(ms) for ms in re.findall(r'^GAME desktop op=2 window=\d+ generation=\d+ bytes=52(?: [a-z]+=\S+)* ms=(\d+)$', output, re.M)]
         end = pages[-1] - int(launches[0][1])
         self.assertLess(end, 10000, output[-4000:])
         # The FindWindow polling cost 710,110 w32srv requests on the H1 host before.

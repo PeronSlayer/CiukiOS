@@ -43,7 +43,14 @@ EnumJobs level 1 and SetJob pause/resume/cancel/delete. Output buffers include
 records and strings with an exact byte requirement. Job enumeration snapshots
 metadata before packing it, so concurrent queue changes cannot enlarge a
 previously sized output record. Unknown network/provider flags and other levels
-return explicit failures. See Microsoft's [EnumJobs](https://learn.microsoft.com/en-us/windows/win32/printdocs/enumjobs)
+return explicit failures. [EnumPorts](https://learn.microsoft.com/en-us/windows/win32/printdocs/enumports)
+(fx-is5boot; the InstallShield 5 engine imports `EnumPortsA`) lists, for the
+local server only (NULL or empty name; any other name is ERROR_NOT_SUPPORTED as
+for EnumPrinters), the native queue's output devices `/dev/lpt0` to
+`/dev/lpt2` at levels 1 and 2 with exact sizes, spelled as PRINTER_INFO_2/5
+report `pPortName` so a program can match the two. Level-2 records name the
+`CiukiOS native` monitor, `Printer Port (LPTn)` and PORT_TYPE_WRITE. Print to
+file names a path, not a port, so no `FILE:` entry is invented. See Microsoft's [EnumJobs](https://learn.microsoft.com/en-us/windows/win32/printdocs/enumjobs)
 and [SetJob](https://learn.microsoft.com/en-us/windows/win32/printdocs/setjob).
 
 GDI printer DCs use 96 DPI logical monochrome pages. PostScript uses the

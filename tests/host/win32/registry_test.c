@@ -392,6 +392,7 @@ static char loaded_path[300];static unsigned frees;
 static uint8_t strings_block[64];
 void *LoadLibraryExA(const char *p,void *f,uint32_t flags){CHECK(!f&&flags==2);snprintf(loaded_path,sizeof(loaded_path),"%s",p);return strstr(p,"missing")?NULL:(void *)0x1000;}
 int FreeLibrary(void *h){CHECK(h==(void *)0x1000);frees++;return 1;}
+int GetComputerNameA(char *out,uint32_t *n){CHECK(out&&n&&*n>=8);strcpy(out,"CIUKIOS");*n=7;return 1;}
 void *FindResourceA(void *h,const char *name,const char *type){CHECK(h==(void *)0x1000&&(uintptr_t)type==6);return (uintptr_t)name==2?strings_block:NULL;}
 void *LoadResource(void *h,void *r){(void)h;return r;}
 uint32_t SizeofResource(void *h,void *r){(void)h;(void)r;return sizeof(strings_block);}
@@ -424,6 +425,7 @@ DECL(int,CreateProcessAsUserW,(void *,const WCHAR *,WCHAR *,void *,void *,int,ui
 DECL(int,GetFileSecurityW,(const WCHAR *,uint32_t,void *,uint32_t,uint32_t *));DECL(int,GetFileSecurityA,(const char *,uint32_t,void *,uint32_t,uint32_t *));
 DECL(int,SetFileSecurityW,(const WCHAR *,uint32_t,void *));DECL(int,LookupPrivilegeValueW,(const WCHAR *,const WCHAR *,void *));
 DECL(uint32_t,CommandLineFromMsiDescriptor,(const WCHAR *,WCHAR *,uint32_t *));
+DECL(int,EqualSid,(const void *,const void *));DECL(void *,FreeSid,(void *));DECL(LONG,RegConnectRegistryA,(const char *,uint32_t,uint32_t *));DECL(LONG,RegConnectRegistryW,(const WCHAR *,uint32_t,uint32_t *));
 static const WCHAR *L16(const char *a){static WCHAR b[8][128];static unsigned n;WCHAR *w=b[n++%8];unsigned i=0;for(;a[i];i++)w[i]=(uint8_t)a[i];w[i]=0;return w;}
 static int weq(const WCHAR *w,const char *a){for(;*a;a++,w++)if(*w!=(uint8_t)*a)return 0;return !*w;}
 static void upper_registry(void)
@@ -503,17 +505,34 @@ static void upper_registry(void)
     uint32_t subs=0,vals=0;CHECK(!RegQueryInfoKeyW(w,NULL,NULL,NULL,&subs,NULL,NULL,&vals,NULL,NULL,NULL,NULL)&&subs==1&&vals==1);
     count=32;uint32_t vtype=0;CHECK(!RegEnumValueW(w,0,name,&count,NULL,&vtype,NULL,NULL)&&weq(name,"v")&&vtype==1);
     CHECK(!RegDeleteValueW(w,L16("v"))&&RegDeleteValueW(w,L16("v"))==2);CHECK(!RegCloseKey(w));
+    /* RegConnectRegistry: a local name opens the predefined root, which is
+     * that root's own handle (RegOpenKey(hKey, NULL), as w32srv answers an
+     * empty-path OPEN of a root); remote names fail. */
+    uint32_t remote=0,probe=0;CHECK(!RegConnectRegistryA(NULL,W32R_HKLM,&remote)&&remote==W32R_HKLM);
+    CHECK(!RegOpenKeyExA(remote,"Software\\Upper",0,1,&probe));CHECK(!RegCloseKey(probe));CHECK(!RegCloseKey(remote));
+    CHECK(!RegConnectRegistryA("",W32R_HKU,&remote)&&remote==W32R_HKU);CHECK(!RegCloseKey(remote));
+    CHECK(!RegConnectRegistryA("\\\\ciukios",W32R_HKLM,&remote));CHECK(!RegCloseKey(remote));
+    CHECK(!RegConnectRegistryW(L16("CIUKIOS"),W32R_HKLM,&remote));CHECK(!RegCloseKey(remote));
+    remote=7;CHECK(RegConnectRegistryA("\\\\SERVER",W32R_HKLM,&remote)==53&&remote==0);
+    CHECK(RegConnectRegistryW(L16("CIUKIOS2"),W32R_HKLM,&remote)==53&&RegConnectRegistryA("CIUKIO",W32R_HKLM,&remote)==53);
+    CHECK(RegConnectRegistryA(NULL,W32R_HKLM,NULL)==87);
     strcpy(s.user_name,"Ciuki");
     WCHAR user[16];uint32_t user_size=16;CHECK(GetUserNameW(user,&user_size)&&user_size==6);user_size=1;
     CHECK(!GetUserNameW(user,&user_size)&&user_size==6&&last_error==122);
     forgotten=0;CHECK(!RegCloseKey(k)&&forgotten==1);CHECK(RegCloseKey(k)==6&&forgotten==1);
     wr_destroy(&s);clear(&d);
-    puts("PASS f5-20A registry access normalization RegGetValue trees RegDeleteKeyEx MUI strings close notification");
+    puts("PASS f5-20A registry access normalization RegGetValue trees RegDeleteKeyEx MUI strings close notification RegConnectRegistry");
 }
 static void upper_security(void)
 {
     uint8_t sid[16]={1,2,0,0,0,0,0,5,32,0,0,0,32,2,0,0},bad_sid[8]={2,0};
     CHECK(GetLengthSid(sid)==16&&!GetLengthSid(NULL));
+    /* fx-is5boot: EqualSid compares valid SIDs and clears the error; FreeSid
+     * frees nothing this ADVAPI32 never allocated. */
+    uint8_t same[16],other[16];memcpy(same,sid,16);memcpy(other,sid,16);other[15]=1;
+    last_error=77;CHECK(EqualSid(sid,same)&&last_error==0);CHECK(!EqualSid(sid,other)&&last_error==0);
+    CHECK(!EqualSid(sid,bad_sid)&&last_error==1337);CHECK(!EqualSid(NULL,sid)&&last_error==1337);
+    CHECK(!FreeSid(NULL));CHECK(FreeSid(sid)==sid&&last_error==87);
     uint8_t acl[64];last_error=0;
     CHECK(!InitializeAcl(acl,4,2)&&last_error==122);CHECK(!InitializeAcl(acl,64,3)&&last_error==87);CHECK(!InitializeAcl(acl,0x10000,2)&&last_error==87);
     CHECK(InitializeAcl(acl,63,2)&&acl[0]==2&&w32_u16(acl+2)==60&&!w32_u16(acl+4));
