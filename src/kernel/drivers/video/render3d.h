@@ -144,7 +144,9 @@ struct render3d_resource {
     uint32_t handle, kind, width, height, pitch, bytes, offset, reserved;
     uint32_t references;
     uint32_t copied_from; /* Invalidate when the completed tiled source changes. */
-    bool live, pending_free, hardware, resident;
+    /* stale: the resident device copy is newer than the canonical shadow
+     * (backends with download only); the shadow is synchronized on demand. */
+    bool live, pending_free, hardware, resident, stale;
     uint32_t format, levels, level_offset[R3D_MIPS];
     uint64_t last_use;
     void *shadow;
@@ -197,6 +199,11 @@ struct render3d_backend {
     int (*reserve)(void *);
     void (*unreserve)(void *);
     int (*scanout)(void *, const struct render3d_resource *, const struct fb_device *);
+    /* Optional, inside enter/leave: copy one resident attachment's device
+     * pixels into its canonical shadow (bounded, may yield the presenter).
+     * A backend with download leaves attachments device-resident after
+     * execute; one without it keeps every shadow current in execute. */
+    int (*download)(void *, struct render3d_resource *);
 };
 struct render3d_host {
     void *ctx;
@@ -248,6 +255,7 @@ int render3d_submit(struct render3d_service *, uint32_t, uint32_t,
                    const struct render3d_request *, size_t, struct render3d_fence *);
 int render3d_step(struct render3d_service *);
 int render3d_wait(struct render3d_service *, uint32_t, uint32_t, struct render3d_fence, uint32_t);
+/* Synchronizes a device-resident attachment first (only when it is stale). */
 int render3d_readback(struct render3d_service *, uint32_t, uint32_t, uint32_t, void *, size_t);
 void render3d_process_exit(struct render3d_service *, uint32_t);
 int render3d_close(struct render3d_service *);

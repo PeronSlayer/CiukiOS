@@ -19,6 +19,7 @@ static bool reported, marker_fresh, marker_retained, marker_unknown;
 static bool cache_borrowed, stopping, probe_active, revalidation_pending, cache_return_pending;
 static uint32_t scheduled_generation;
 static uint64_t runtime_triangles, runtime_copies, runtime_scanouts;
+static uint64_t runtime_downloads, runtime_download_pixels, runtime_uploads, runtime_upload_pixels, runtime_upload_skips;
 /* Raster evidence survives scanout generations, never a different device or
  * firmware VRAM layout. The layout key is deliberately stricter than PCI ID. */
 static struct {
@@ -51,6 +52,14 @@ static void select_target(const struct fb_device *fb)
         uint32_t color=((fb->width*4+127)&~127u)*rows;
         uint32_t d24=3*((color+4095)&~4095u)+4*8192u+24576u;
         if ((uint64_t)d24+device.texture_bytes>device.heap.bytes) device.depth24_qualified=false;
+        /* The texture pool is what this mode's largest admitted targets
+         * leave (f7-1213 review P3-1): a refused D24/S8 returns its share. */
+        uint32_t d16=2*((color+4095)&~4095u)+((((fb->width*2+127)&~127u)*rows+4095)&~4095u)+4*8192u+24576u;
+        uint32_t targets_bytes=device.depth24_qualified ? d24 : d16;
+        if (device.heap.bytes>targets_bytes+SAVAGE3D_TEXTURE_MIN) {
+            uint32_t pool=(device.heap.bytes-targets_bytes)&~4095u;
+            if (pool>device.texture_bytes) device.texture_bytes=pool;
+        }
         break;
     }
 }
@@ -61,17 +70,53 @@ static bool probe_finished;
 static struct kwait probe_wait;
 static bool desktop_ready;
 static uint32_t desktop_generation;
-static uint64_t probe_started, phase_started, phase_deadline, revalidate_deadline;
+static uint64_t probe_started, phase_started, phase_deadline=UINT64_MAX, revalidate_deadline;
 static const char *budget_reason;
+/* f7-1213 review P2-1 (lead decision, amendment 1): every gate after the
+ * qualified minimum is optional. It must finish SAVAGE3D_PROBE_MARKER_US
+ * before the total so that the marker CLEAR keeps its own budget, and an
+ * overrun there (or of the cached-revalidation deadline) is contained in
+ * optional_reason: with a restored, proven-idle engine it refuses only that
+ * gate and the marker is cleared normally. budget_reason stays reserved for
+ * mandatory phases and non-idle outcomes (retained marker). */
+static bool optional_gate, optional_stop, optional_phase;
+static const char *optional_reason;
 static unsigned checkpoint_count;
 static uint64_t probe_now(void)
 { return pending_engine->io.now_us(pending_engine->io.ctx); }
 static int probe_check(void)
 {
-    if (!budget_reason && revalidate_deadline && probe_now()>=revalidate_deadline) budget_reason="budget_revalidate";
-    if (!budget_reason && probe_now()-probe_started>=SAVAGE3D_PROBE_TOTAL_US) budget_reason="budget_total";
-    if (!budget_reason && probe_now()>=phase_deadline) budget_reason="budget_phase";
-    return budget_reason ? -ETIMEDOUT : 0;
+    if (!budget_reason && !optional_reason) {
+        uint64_t now=probe_now();
+        uint64_t total=optional_gate ? SAVAGE3D_PROBE_TOTAL_US-SAVAGE3D_PROBE_MARKER_US : SAVAGE3D_PROBE_TOTAL_US;
+        const char *reason=0;
+        bool phase=false;
+        if (revalidate_deadline && now>=revalidate_deadline) reason="budget_revalidate";
+        else if (now-probe_started>=total) reason="budget_total";
+        else if (now>=phase_deadline) { reason="budget_phase"; phase=true; }
+        if (reason && (optional_gate || revalidate_deadline)) { optional_reason=reason; optional_phase=phase; }
+        else if (reason) budget_reason=reason;
+    }
+    return budget_reason || optional_reason ? -ETIMEDOUT : 0;
+}
+/* After an optional gate or the cached revalidation: is an overrun contained
+ * (restored, idle engine)? A phase overrun refuses only that gate; a total
+ * overrun also stops the remaining optional gates. */
+static bool engine_restored(void)
+{
+    return !device.lost && device.engine && device.engine->active && device.engine->cpu_safe &&
+        !device.engine->event_pending && !device.engine->quarantined;
+}
+static bool optional_contained(const char *gate)
+{
+    if (!optional_reason) return !budget_reason && !device.lost && !optional_stop;
+    if (!engine_restored()) { budget_reason=optional_reason; optional_reason=0; return false; }
+    bool phase=optional_phase;
+    klog("[3d] probe phase=optional_refused gate=%s reason=%s width=%u height=%u restored=1 marker=clear_pending elapsed_us=%llu",
+        gate,optional_reason,device.mode_width,device.mode_height,probe_now()-probe_started);
+    optional_reason=0;
+    if (!phase) optional_stop=true;
+    return phase && !optional_stop;
 }
 static int probe_checkpoint(void *ctx)
 {
@@ -87,7 +132,7 @@ static void probe_phase(void *ctx,const char *name,unsigned index,bool begin,int
     if (begin) {
         phase_started=probe_now();
         phase_deadline=phase_started+(!strncmp(name,"marker",6) ? SAVAGE3D_PROBE_MARKER_US : SAVAGE3D_PROBE_PHASE_US);
-    }
+    } else phase_deadline=UINT64_MAX; /* cleanup/logging after a phase is not budget_phase (P3-4) */
     klog("[3d] probe phase=%s index=%u state=%s elapsed_us=%llu total_us=%llu error=%d",
         name,index,begin ? "begin" : "end",probe_now()-phase_started,probe_now()-probe_started,error);
 }
@@ -240,8 +285,10 @@ static void return_heap(void *ctx)
         device.lost=true; lost_notify(0);
     }
     fbdev_render3d_prepared();
-    klog("[3d] runtime state=release generation=%u triangles=%llu copies=%llu scanouts=%llu error=%d",
-        device.generation,device.triangles-runtime_triangles,device.copies-runtime_copies,device.scanouts-runtime_scanouts,e);
+    klog("[3d] runtime state=release generation=%u triangles=%llu copies=%llu scanouts=%llu downloads=%llu download_pixels=%llu uploads=%llu upload_pixels=%llu upload_skips=%llu error=%d",
+        device.generation,device.triangles-runtime_triangles,device.copies-runtime_copies,device.scanouts-runtime_scanouts,
+        device.downloads-runtime_downloads,device.download_pixels-runtime_download_pixels,device.uploads-runtime_uploads,
+        device.upload_pixels-runtime_upload_pixels,device.upload_skips-runtime_upload_skips,e);
 }
 static int reserve_heap(void *ctx)
 {
@@ -249,9 +296,21 @@ static int reserve_heap(void *ctx)
     if (device.lost || !device.qualified) return -ENODEV;
     cache_return_pending=false;
     if (cache_borrowed && linear && aperture) return 0;
-    int e=fbdev_render3d_prepare(device.generation);
+    /* A passing desktop draw, batch or cursor write holds the drawing domain
+     * for a moment: retry for at most 100 ms (1 ms sleeps, no lock held but
+     * the preparation pin) instead of turning the GL OPEN into a permanent
+     * software context (f7-15 review). The pin keeps the mode stable. */
+    int e=-EBUSY;
+    for (unsigned attempt=0;attempt<100 && e==-EBUSY;attempt++) {
+        if (attempt) task_sleep_ms(1);
+        e=fbdev_render3d_prepare(device.generation);
+    }
     if (e) return e;
-    e=cache_transfer(true);
+    e=-EBUSY;
+    for (unsigned attempt=0;attempt<100 && e==-EBUSY;attempt++) {
+        if (attempt) task_sleep_ms(1);
+        e=cache_transfer(true);
+    }
     struct render3d_extent heap={0}; uint32_t required=0,free_bytes=0,largest=0;
     if (!e) e=savage3d_mode_heap(device.engine,&pending_fb,g_boot.display.vram_bytes,&heap,&required);
     if (!e) e=available_heap(&pending_fb,&heap,&free_bytes,&largest);
@@ -266,8 +325,11 @@ static int reserve_heap(void *ctx)
     fbdev_render3d_prepared();
     if (!e) {
         runtime_triangles=device.triangles; runtime_copies=device.copies; runtime_scanouts=device.scanouts;
-        klog("[3d] runtime state=reserve generation=%u width=%u height=%u heap_first=%u heap_bytes=%u texture_bytes=%u",
-            device.generation,device.mode_width,device.mode_height,device.heap.first,device.heap.bytes,device.texture_bytes);
+        runtime_downloads=device.downloads; runtime_download_pixels=device.download_pixels;
+        runtime_uploads=device.uploads; runtime_upload_pixels=device.upload_pixels; runtime_upload_skips=device.upload_skips;
+        klog("[3d] runtime state=reserve generation=%u width=%u height=%u heap_first=%u heap_bytes=%u texture_bytes=%u transfer_bound_us=%u revalidate_bound_us=%u mode_ready_bound_us=%u",
+            device.generation,device.mode_width,device.mode_height,device.heap.first,device.heap.bytes,device.texture_bytes,
+            SAVAGE3D_READBACK_US,SAVAGE3D_REVALIDATE_US,SAVAGE3D_MODE_READY_US);
     }
     return e;
 }
@@ -298,16 +360,18 @@ int savage3d_owner_prepare(uint32_t generation)
         /* The full-screen lease can reach GL before the new mode's 2D
          * marker worker or first presentation. Wait without presenter for
          * that activation, then nominate the cached short check ourselves. */
-        uint64_t until=probe_now()+SAVAGE3D_MODE_READY_US;
+        uint64_t started=probe_now(),until=started+SAVAGE3D_MODE_READY_US;
         int ready=-EBUSY;
         for (unsigned tries=0;tries<SAVAGE3D_MODE_READY_US/1000 && ready==-EBUSY;tries++) {
             ready=fbdev_render3d_prepare(generation);
             if (!ready) fbdev_render3d_prepared();
             else if (ready==-EBUSY) {
-                if (probe_now()>=until) return -ENODEV;
+                if (probe_now()>=until) { ready=-ETIMEDOUT; break; }
                 task_sleep_ms(1);
             }
         }
+        klog("[3d] probe phase=mode_ready generation=%u waited_us=%llu bound_us=%u result=%d",
+            generation,probe_now()-started,SAVAGE3D_MODE_READY_US,ready);
         if (ready) return -ENODEV;
         const struct fb_device *fb=fbdev_get();
         if (!fb || fb->generation!=generation) return -ENODEV;
@@ -317,7 +381,9 @@ int savage3d_owner_prepare(uint32_t generation)
         revalidation_pending=false;
         qualification();
     }
-    if (!device.qualified || marker_fresh || device.lost || generation!=device.generation) return -ENODEV;
+    /* A qualification still finishing (marker clear, claim/cache return)
+     * admits nothing yet; the native refresh attaches once it is done. */
+    if (!device.qualified || marker_fresh || probe_active || device.lost || generation!=device.generation) return -ENODEV;
     return 0;
 }
 int savage3d_owner_attach(struct render3d_service *s,const struct render3d_host *host,uint32_t generation)
@@ -460,6 +526,7 @@ static void qualification(void)
         return;
     }
     probe_active=true; budget_reason=0; checkpoint_count=0; revalidate_deadline=0;
+    optional_gate=optional_stop=false; optional_reason=0; phase_deadline=UINT64_MAX;
     probe_started=probe_now();
     probe_phase(0,"prepare",0,true,0);
     const struct pci_func *pci=display_driver_owner();
@@ -552,6 +619,14 @@ static void qualification(void)
         if (!e) e=probe_checkpoint(0);
         probe_phase(0,"minimum",0,false,e);
         device.consumer=0;
+        revalidate_deadline=0;
+        if (optional_reason) {
+            /* The cached revalidation missed its 50 ms deadline. A restored,
+             * idle engine refuses this mode cleanly; the marker is cleared. */
+            reason=optional_reason;
+            if (engine_restored()) { optional_reason=0; e=-ETIMEDOUT; }
+            else { budget_reason=optional_reason; optional_reason=0; }
+        }
         if (!e) {
             bool same=layout_key.valid && layout_key.vendor==pci->vendor && layout_key.id==pci->device &&
                 layout_key.revision==pci->revision && layout_key.lfb==fb->phys && layout_key.alias==alias &&
@@ -559,8 +634,12 @@ static void qualification(void)
             if (!same) {
                 memset(targets,0,sizeof(targets));
                 layout_key.valid=false;
-                const unsigned widths[]={640,800,1024},heights[]={480,600,768};
-                for (unsigned i=0;i<3 && !budget_reason && !device.lost;i++) {
+                /* Quake III's 640x480 first, then the desktop-mode lease size,
+                 * D24/S8 (its default 24/8 request) before RGB565: an overrun
+                 * that stops the optional gates keeps what the T23 plays. */
+                const unsigned widths[]={640,1024,800},heights[]={480,768,600};
+                optional_gate=true;
+                for (unsigned i=0;i<3 && !budget_reason && !device.lost && !optional_stop;i++) {
                     device.mode_width=widths[i]; device.mode_height=heights[i];
                     device.sample_count=device.reference_checksum=device.hardware_checksum=0;
                     device.max_channel_error=device.max_depth_error=device.failed_phase=0;
@@ -568,18 +647,22 @@ static void qualification(void)
                     device.precision_error=0; device.precision_phase=device.precision_samples=0;
                     device.fullsize_qualified=device.perspective_qualified=device.depth24_qualified=device.color565_qualified=false;
                     (void)fullsize_diagnostic(&scratch);
-                    for (unsigned depth24=0;depth24<2;depth24++)
-                        if (attachment_diagnostic(&scratch,depth24)==-ETIMEDOUT && budget_reason) break;
+                    bool more=optional_contained("fullsize");
+                    for (unsigned depth24=2;more && depth24-->0;) {
+                        (void)attachment_diagnostic(&scratch,depth24);
+                        more=optional_contained(depth24 ? "d24s8" : "rgb565");
+                    }
                     save_target(i);
                 }
+                optional_gate=false;
                 if (!budget_reason && !device.lost) {
                     layout_key.vendor=pci->vendor; layout_key.id=pci->device; layout_key.revision=pci->revision;
                     layout_key.lfb=fb->phys; layout_key.alias=alias; layout_key.vram=g_boot.display.vram_bytes;
                     layout_key.cursor=engine->cursor_offset; layout_key.generation++;
                     layout_key.valid=true;
                 }
-            } else klog("[3d] probe phase=revalidate layout=%u generation=%u pitch=%u width=%u height=%u elapsed_us=%llu",
-                layout_key.generation,fb->generation,fb->pitch,fb->width,fb->height,probe_now()-probe_started);
+            } else klog("[3d] probe phase=revalidate layout=%u generation=%u pitch=%u width=%u height=%u bound_us=%u elapsed_us=%llu",
+                layout_key.generation,fb->generation,fb->pitch,fb->width,fb->height,SAVAGE3D_REVALIDATE_US,probe_now()-probe_started);
             select_target(fb);
             if (device.lost) { layout_key.valid=false; e=-EIO; }
         }

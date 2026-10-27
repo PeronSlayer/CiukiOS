@@ -28,7 +28,9 @@ const struct render3d_backend *savage3d_backend(void);
 #define SAVAGE3D_PROBE_TOTAL_US 5000000u
 #define SAVAGE3D_PROBE_PHASE_US 500000u
 #define SAVAGE3D_PROBE_MARKER_US 1000000u
-/* One total normal-job readback deadline, including all attachment guards. */
+/* One absolute deadline for each runtime CPU transfer: the uploads of one
+ * job, or one on-demand attachment download, including its guards. Windows
+ * of 128 accesses yield the presenter mutex; none restarts the deadline. */
 #define SAVAGE3D_READBACK_US 200000u
 #define SAVAGE3D_REVALIDATE_US 50000u
 #define SAVAGE3D_MODE_READY_US 2000000u
@@ -65,6 +67,9 @@ struct savage3d_device {
     struct render3d_service *consumer;
     void (*lost_notify)(void *);
     uint64_t packets, triangles, copies, scanouts;
+    /* Trial evidence: on-demand downloads and CPU target uploads (pixels),
+     * uploads skipped because the job initialized the whole attachment. */
+    uint64_t downloads, download_pixels, uploads, upload_pixels, upload_skips;
     uint64_t slice_started, readback_until;
     uint32_t failed_phase, expected, actual, guard_offset;
     /* Private qualification callbacks: called only outside engine ownership. */

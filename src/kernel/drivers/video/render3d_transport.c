@@ -101,7 +101,6 @@ int render3d_transport_dispatch(struct render3d_transport *t, uint32_t p,
             !a->width || !a->height || a->width>R3D_MAX_SIZE || a->height>R3D_MAX_SIZE ||
             a->pitch!=a->width*4u) return -EOPNOTSUPP;
         int e=finish(s,p,a->context,f,100);
-        if (!e) e=render3d_readback(s,p,a->context,a->resource,data,bytes);
         if (e) return e;
         /* Require the owned linear destination, never an arbitrary texture. */
         bool linear=false;
@@ -114,7 +113,14 @@ int render3d_transport_dispatch(struct render3d_transport *t, uint32_t p,
                         (r->kind==R3D_LINEAR_COLOR || r->kind==R3D_LINEAR565) && r->width==a->width && r->height==a->height) linear=true;
                 }
         }
-        return linear ? t->present(t->present_ctx,p,a,data,bytes) : -EINVAL;
+        if (!linear) return -EINVAL;
+        /* GPU-resident frame: NULL pixels ask the presenter for its direct
+         * native path only. The linear copy is read back (on demand) only
+         * when presentation needs the CPU (conversion, gamma, scaling). */
+        e=t->present(t->present_ctx,p,a,0,bytes);
+        if (e!=-EOPNOTSUPP) return e;
+        e=render3d_readback(s,p,a->context,a->resource,data,bytes);
+        return e ? e : t->present(t->present_ctx,p,a,data,bytes);
     }
     default: return -EINVAL;
     }

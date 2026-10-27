@@ -460,14 +460,48 @@ static int guards(struct savage3d_device *d,struct render3d_resource *r,bool ini
     }
     return 0;
 }
-static int upload(struct savage3d_device *d,struct render3d_resource *r)
+static bool initialized_by(const struct render3d_request *,const struct render3d_resource *);
+/* Runtime CPU transfers (a job's uploads, an on-demand download) keep the
+ * job's drawing claim and accel_inflight and yield only the presenter mutex
+ * between 128-access windows (fbdev_render3d_yield, the f2-92 slice rule),
+ * under the transfer's one absolute deadline. Qualification never yields
+ * here: its paced checkpoints run outside engine ownership. */
+static int transfer_window(struct savage3d_device *d,unsigned *count)
 {
-    if (r->resident) return guards(d,r,false);
+    if (++*count%128) return 0;
+    if (d->readback_until && d->engine->io.now_us(d->engine->io.ctx)>=d->readback_until) return -ETIMEDOUT;
+    if (d->locked && d->job_yield && !d->probe_checkpoint) d->job_yield(d->memory.ctx);
+    return 0;
+}
+/* Runtime frames (COPY jobs) sample each guard page every 256 bytes: an
+ * engine overrun of a whole span is caught once per frame without 2048
+ * uncached reads per attachment per job. Downloads, native scanout sources
+ * and every qualification read check the complete guard pages. */
+static int guards_sample(struct savage3d_device *d,const struct render3d_resource *r)
+{
+    for (unsigned side=0;side<2;side++) for (unsigned i=0;i<4096;i+=256) {
+        uint32_t off=r->offset+(side ? r->reserved-4096 : 0)+i;
+        uint32_t value=memory_read(d,false,off,4);
+        if (value!=0xa55ac33cu) { d->expected=0xa55ac33cu; d->actual=value; d->guard_offset=off; return -EIO; }
+    }
+    return 0;
+}
+static int upload(struct savage3d_device *d,struct render3d_resource *r,const struct render3d_request *q)
+{
+    /* Resident runtime attachments are already in VRAM: no per-job reads. */
+    if (r->resident) return q ? 0 : guards(d,r,false);
     int e=guards(d,r,true); if (e) return e;
+    /* A job whose first engine operation overwrites the whole attachment (a
+     * complete clear, or the copy into the linear target) never uploads the
+     * previous contents: a frame that starts with a full clear is GPU-only. */
+    if (q && r->kind!=R3D_TEXTURE && initialized_by(q,r)) { r->resident=true; d->upload_skips++; return 0; }
+    if (q && r->kind!=R3D_TEXTURE) { d->uploads++; d->upload_pixels+=r->width*r->height; }
+    unsigned window=0;
     if (r->kind==R3D_COLOR || r->kind==R3D_D16 || r->kind==R3D_D24S8 || r->kind==R3D_COLOR565) {
         e=tile(d,r); if (e) return e;
         unsigned bytes=pixel_bytes(r), pitch=bytes==2 ? 4096 : 8192;
         for (unsigned y=0;y<r->height;y++) for (unsigned x=0;x<r->width;x++) {
+            e=transfer_window(d,&window); if (e) return e;
             uint32_t value=0; memcpy(&value,(uint8_t *)r->shadow+y*r->pitch+x*(r->kind==R3D_D16 ? 2 : 4),r->kind==R3D_D16 ? 2 : 4);
             if (r->kind==R3D_D16) value=65535-value;
             else if (r->kind==R3D_COLOR565) value=render3d_pack565(value);
@@ -484,6 +518,7 @@ static int upload(struct savage3d_device *d,struct render3d_resource *r)
                 if (!((y*pw+x)%128) && d->probe_checkpoint && !d->locked) {
                     int e=probe_checkpoint(d); if (e) return e;
                 }
+                e=transfer_window(d,&window); if (e) return e;
                 uint32_t off,value=((uint32_t *)((uint8_t *)r->shadow+r->level_offset[level]))[(y%h)*w+x%w];
                 if (tail) off=first+(y*8+x)*bpp;
                 else {
@@ -500,6 +535,7 @@ static int upload(struct savage3d_device *d,struct render3d_resource *r)
             at+=mip_size(w,h,bpp); w=w>1 ? w/2 : 1; h=h>1 ? h/2 : 1;
         }
     } else for (unsigned y=0;y<r->height;y++) for (unsigned x=0;x<r->width;x++) {
+        e=transfer_window(d,&window); if (e) return e;
         uint32_t off=y*r->pitch+x*4,value;
         memcpy(&value,(uint8_t *)r->shadow+off,4);
         if (r->kind==R3D_TEXTURE) (void)savage3d_texture_offset(r->width,r->height,x,y,&off);
@@ -612,10 +648,11 @@ static int read_resource(struct savage3d_device *d,struct render3d_resource *r)
     if (r->kind==R3D_TEXTURE) return guards(d,r,false);
     int e=aliased(r) ? tile(d,r) : 0; if (e) return e;
     for (unsigned y=0;y<r->height;y++) {
-        /* Boot qualification samples tile rows plus the final row; ordinary
-         * jobs must publish complete canonical attachments. */
-        if (d->fullsize_testing && y%16 && y!=r->height-1) continue;
+        /* On-demand downloads publish complete canonical attachments
+         * (qualification samples in probe_read, never here). */
         for (unsigned first=0;first<r->width;first+=128) {
+            /* Runtime download: yield the presenter between windows. */
+            if ((y || first) && d->locked && d->job_yield && !d->probe_checkpoint) d->job_yield(d->memory.ctx);
             uint64_t start=d->engine->io.now_us(d->engine->io.ctx);
             unsigned end=first+128; if (end>r->width) end=r->width;
             for (unsigned x=first;x<end;x++) read_pixel(d,r,x,y);
@@ -635,8 +672,11 @@ static int execute(void *device,const struct render3d_request *q,struct render3d
     struct saved_state saved;
     d->failed_phase=1; e=save_state(d,&saved); if (e) return e;
     d->failed_phase=2; e=checked_mmio(d,0x850c,saved.agd|0x8000u);
-    if (!d->probe_transfers)
-        for (unsigned i=0;!e && i<R3D_REFS;i++) if (r[i]) e=upload(d,r[i]);
+    if (!d->probe_transfers) {
+        d->readback_until=d->engine->io.now_us(d->engine->io.ctx)+SAVAGE3D_READBACK_US;
+        for (unsigned i=0;!e && i<R3D_REFS;i++) if (r[i]) e=upload(d,r[i],q);
+        d->readback_until=0;
+    }
     /* CPU transfers are separate bounded work from the engine's unchanged
      * execution window. No command has been submitted by upload(). */
     d->slice_started=d->engine->io.now_us(d->engine->io.ctx);
@@ -667,13 +707,12 @@ static int execute(void *device,const struct render3d_request *q,struct render3d
         uint32_t words[]={0x4bcc14c0u,base(r[3]),descriptor(r[3],false),
             base(r[0]),descriptor(r[0],true),0,0,(r[0]->height<<16)|r[0]->width};
         e=packet(d,words,8); if (!e) d->copies++;
+        /* One sampled guard check per presented frame (see guards_sample). */
+        for (unsigned i=0;!e && !d->probe_transfers && i<R3D_REFS;i++) if (r[i]) e=guards_sample(d,r[i]);
     }
-    if (!e && !d->probe_transfers) {
-        d->failed_phase=8;
-        d->readback_until=d->engine->io.now_us(d->engine->io.ctx)+SAVAGE3D_READBACK_US;
-        for (unsigned i=0;i<R3D_REFS && !e;i++) if (r[i]) e=read_resource(d,r[i]);
-        d->readback_until=0;
-    }
+    /* No readback here (f7-15 lead decision): attachments stay resident in
+     * VRAM; render3d marks their shadows stale and downloads one only when
+     * the CPU needs its pixels (READ, a scalar job, a CPU presentation). */
     /* A completed event permits restoration even after a CPU read timeout or
      * an expired work deadline. Never write again without that idle proof. */
     if ((!e || e==-ETIMEDOUT || d->failed_phase>=3) &&
@@ -729,6 +768,29 @@ static int scanout(void *owner,const struct render3d_resource *source,const stru
     }
     return e;
 }
+/* On-demand download of one resident attachment into its canonical shadow
+ * (render3d sync, inside enter/leave on proven-idle engines). Only AGD and
+ * the tile register are borrowed, restored and verified at the end; the job
+ * keeps its drawing claim across the presenter yields between windows, so
+ * no other register user can observe them. One absolute deadline. */
+static int download(void *device,struct render3d_resource *r)
+{
+    struct savage3d_device *d=device;
+    if (!d || !d->locked || d->lost || !r || !r->hardware || !r->resident || r->kind==R3D_TEXTURE ||
+        !extent(d,r) || !d->engine->cpu_safe || d->engine->event_pending) return -EINVAL;
+    struct savage_io *io=&d->engine->io;
+    uint32_t saved_tile=mmio_read(d,0x48c40),saved_agd=mmio_read(d,0x850c);
+    if (saved_tile==UINT32_MAX || saved_agd==UINT32_MAX) return -EIO;
+    d->failed_phase=8;
+    d->readback_until=io->now_us(io->ctx)+SAVAGE3D_READBACK_US;
+    int e=checked_mmio(d,0x850c,saved_agd|0x8000u);
+    if (!e) e=read_resource(d,r);
+    d->readback_until=0;
+    int a=checked_mmio(d,0x48c40,saved_tile),b=checked_mmio(d,0x850c,saved_agd);
+    if (a || b) { quarantine(d); return -EIO; }
+    if (!e) { d->failed_phase=0; d->downloads++; d->download_pixels+=r->width*r->height; }
+    return e;
+}
 static bool qualified(void *device,uint32_t generation)
 {
     struct savage3d_device *d=device;
@@ -778,17 +840,27 @@ static int probe_enter(struct savage3d_device *d)
     }
     return -ETIMEDOUT;
 }
+/* Paced qualification reads linear VRAM without engine ownership; a
+ * trusted unpaced caller (no checkpoint) holds it for every window. */
+static int probe_guards(struct savage3d_device *d,struct render3d_resource *r)
+{
+    if (d->probe_checkpoint) return guards(d,r,false);
+    int e=probe_enter(d); if (e) return e;
+    e=guards(d,r,false);
+    leave(d);
+    return e;
+}
 static int probe_read(struct savage3d_device *d,struct render3d_resource *r)
 {
-    if (r->kind==R3D_TEXTURE) return guards(d,r,false);
-    bool alias=aliased(r);
+    if (r->kind==R3D_TEXTURE) return probe_guards(d,r);
+    bool alias=aliased(r),lock=alias || !d->probe_checkpoint;
     for (unsigned y=0;y<r->height;y++) {
         if (d->fullsize_testing && y%16 && y!=r->height-1) continue;
         for (unsigned first=0;first<r->width;first+=128) {
             int e=probe_checkpoint(d); if (e) return e;
             uint32_t saved_tile=0,saved_agd=0;
+            if (lock) { e=probe_enter(d); if (e) return e; }
             if (alias) {
-                e=probe_enter(d); if (e) return e;
                 saved_tile=mmio_read(d,0x48c40); saved_agd=mmio_read(d,0x850c);
                 e=checked_mmio(d,0x850c,saved_agd|0x8000u);
                 if (!e) e=tile(d,r);
@@ -801,12 +873,12 @@ static int probe_read(struct savage3d_device *d,struct render3d_resource *r)
                 int a=checked_mmio(d,0x48c40,saved_tile);
                 int b=checked_mmio(d,0x850c,saved_agd);
                 if (a || b) { quarantine(d); e=-EIO; }
-                leave(d);
             }
+            if (lock) leave(d);
             if (e) return e;
         }
     }
-    return guards(d,r,false);
+    return probe_guards(d,r);
 }
 /* First use of a qualification attachment: a complete engine clear (both
  * D24/S8 components, every stencil bit) or the copy; never a CPU upload. */
@@ -828,7 +900,7 @@ static int probe_draw(struct savage3d_device *d,const struct render3d_request *q
         /* First use clears complete color/depth targets and overwrites copy.
          * Later phases preserve resident attachments. No CPU target upload. */
         for (unsigned i=0;i<R3D_REFS;i++) if (r[i]) {
-            if (r[i]->kind==R3D_TEXTURE) e=upload(d,r[i]);
+            if (r[i]->kind==R3D_TEXTURE) e=upload(d,r[i],0);
             else if (r[i]->resident) e=guards(d,r[i],false);
             else {
                 if (!initialized_by(q,r[i])) return -EINVAL;
@@ -848,7 +920,9 @@ static int probe_draw(struct savage3d_device *d,const struct render3d_request *q
     d->probe_transfers=false;
     if (e && (e!=-ETIMEDOUT || idle(d))) quarantine(d);
     leave(d);
-    if (!e && d->probe_checkpoint) {
+    /* execute leaves attachments in VRAM; every qualification compares the
+     * restored-window readback, paced or not (trusted unpaced callers). */
+    if (!e) {
         d->failed_phase=8;
         for (unsigned i=0;i<R3D_REFS && !e;i++) if (r[i]) e=probe_read(d,r[i]);
         if (e && e!=-ETIMEDOUT && e!=-EBUSY) quarantine(d);
@@ -913,7 +987,8 @@ const struct render3d_backend *savage3d_backend(void)
         .idle=idle,.quarantine=quarantine,.attach=savage3d_owner_attach,.max_size=64,.detach=detach,
         .texture_pool_bytes=texture_pool_bytes,.capabilities=&capabilities,.query_caps=query_caps,
         .resident_bytes=(sizeof(struct savage3d_device)+4095u)&~4095u,
-        .reserve=reserve_context,.unreserve=unreserve_context,.prepare=savage3d_owner_prepare,.scanout=scanout};
+        .reserve=reserve_context,.unreserve=unreserve_context,.prepare=savage3d_owner_prepare,.scanout=scanout,
+        .download=download};
     return &backend;
 }
 

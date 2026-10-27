@@ -31,3 +31,15 @@
    - Run host tests one at a time with nice -n 19.
 
 Write the T23 procedure (Start menu launch of Quake III, the timedemo, the expected [3d] records) in build/codex/f7-15-report.md. Leave changes uncommitted.
+
+## Lead amendment 1 (2026-10-27 02:47): review follow-ups and decisions
+
+Round 1 is committed. Lead decisions on your questions: the 200 ms normal readback, 50 ms cached check and 2 s 2D-ready bounds and the cache-epoch semantics are accepted for the T23 trial (the trial records must show them). Then apply the items below; several may already be done by round 1 — verify each with file:line and implement what is missing:
+Lead amendment for f7-15 after its first round (from the Opus review of f7-1213, /home/peronslayer/Desktop/CiukiOS/build/lead-scratch/f7-1213-review.md):
+1. P2 budget (lead decision: adopt the reviewer's recommendation): reserve the attempt-marker clear time inside the 5 s total; an overrun inside an optional format gate (RGB565, D24/S8) with a restored, idle engine refuses only that format and keeps the qualified minimum and full-size results; the marker is cleared normally in that case (the marker covers the whole S3 Savage driver and a retained marker would also cost 2D acceleration on the next boot).
+2. P2 D24/S8 partial clears: the engine's masked clear (BITPLANEWTMASK, Linux savage_state.c) replaces the CPU read-modify-write (already in this directive, item 4); the boot gate must test the same path the runtime uses.
+3. P3: guard render3d_close(NULL) when the RGB565 scratch allocation fails; retry a transient -EBUSY from fbdev_render3d_enter instead of refusing (item 4); do not check the per-phase deadline after the last phase (cleanup/logging must not become budget_phase); return the texture pool after a refused D24 gate; fix the design-doc wording about register restore in runtime windows.
+4. Main-line issue: runtime readback reads every row of every attachment per job under the presenter with the 1 ms timer restarting every 128 pixels (~0.9 M uncached reads per job at 640x480) — apply the yield-plus-absolute-deadline pattern and read back only what the job needs (item 4 total time bound).
+5. Lead decision on the per-frame readback (from f7-14's report: every hardware frame reads colour and depth back into RAM, 1.8 MB at 640x480 and 4.7 MB at 1024x768, which limits the T23 frame rate): render targets stay GPU-resident; read back only when the CPU really needs the pixels (a software-fallback draw for that context, glReadPixels, a CPU present path); a frame that starts with a full clear never reads back the previous contents. Shared opengl32 code; coordinate with wt/f7-14 (native GL, committed) whose provider moved from sdk/win32/gdi32/render3d.c into sdk/win32/opengl32/provider.inc.
+
+Report as 'Review round 1'. Leave changes uncommitted.

@@ -61,13 +61,19 @@ class RenderTests(unittest.TestCase):
             observations=(triangles*28+7)//8+batches*events*2+19*2
             submit_us=(words*120+observations*250)/mhz
             for w,h in ((640,480),(800,600),(1024,768)):
-                # Every geometry job reads color/D16; present reads both
-                # the color target and its linear copy. No asynchronous DMA.
-                read_bytes=(batches*6+8)*w*h
+                # Round 1 read color/D16 back after every geometry job and
+                # the linear copy at present. f7-15 review: GPU-resident
+                # targets read only sampled guards (16 words per guard page,
+                # color/depth/linear/2 textures) on the COPY job and the full
+                # guard pages of the native scanout source.
+                old_bytes=(batches*6+8)*w*h
+                read_bytes=5*2*16*4+2*4096
+                self.assertLess(read_bytes*100,w*h*4) # under 1% of one colour attachment
                 read_ms=read_bytes/(100*1024*1024)*1000
                 print(f'PIII MODEL {w}x{h}: {triangles} triangles/{batches} batches, '
                       f'{words} UC words/frame, submission={submit_us/1000:.3f} ms, '
-                      f'readback={read_bytes} bytes/{read_ms:.3f} ms at assumed 100 MiB/s; '
+                      f'readback={read_bytes} bytes/{read_ms:.3f} ms (round 1: {old_bytes} bytes/'
+                      f'{old_bytes/(100*1024*1024)*1000:.3f} ms) at assumed 100 MiB/s; '
                       'excludes initial uploads/clear, FIFO stalls, scalar fallback, raster latency and scanout')
 
     def build_run(self, name, sources, args=(), flags=()):
@@ -179,7 +185,7 @@ class RenderTests(unittest.TestCase):
             'src/kernel/drivers/video/render3d_scalar.c','src/kernel/drivers/video/s3savage/savage3d.c',
             'src/kernel/drivers/video/s3savage/savage3d_owner.c',str(blkreq)], args=['0'],
             flags=['-pthread',*wraps])
-        for variant in range(1,26):
+        for variant in range(1,28):
             subprocess.run([str(OUT/'owner'),str(variant)],check=True)
 
     def test_fullsize(self):

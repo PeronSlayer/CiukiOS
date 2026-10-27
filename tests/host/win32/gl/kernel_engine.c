@@ -3,6 +3,7 @@
 #include "savage3d_backend_fixture.inc"
 #include "../../../../src/kernel/drivers/video/render3d_transport.h"
 static unsigned wire_pid=7, lease_token, lease_generation, wire_presented;
+static unsigned wire_reads, wire_uploads, direct_presented;
 static uint32_t frame_pixels[1024*768];
 static unsigned mode_width=640,mode_height=480;
 static bool t23_presenting;
@@ -25,6 +26,14 @@ static int present_wire(void *ctx,uint32_t pid,const struct ciuki_w32_render3d_a
 {
     (void)ctx;
     if (pid!=7 || a->token!=lease_token || a->generation!=lease_generation) return -EACCES;
+    /* f7-15 transport: NULL pixels ask for the direct native path only. */
+    if (!data) {
+        if (!t23_presenting) return -EOPNOTSUPP;
+        CHECK(bytes==device.width*device.height*4);
+        int e=render3d_scanout(&scratch3d,pid,a,&device);
+        if (!e) { wire_presented++; direct_presented++; }
+        return e;
+    }
     if (t23_presenting) {
         CHECK(bytes==device.width*device.height*4);
         struct fb_surface source={data,device.width,device.height,device.width*4,bytes};
@@ -164,9 +173,13 @@ void gl_kernel_present_lease(const uint32_t *pixels,unsigned w,unsigned h)
         .context=context->handle,.resource=linear,.width=w,.height=h,.pitch=w*4,.bytes=w*h*4,
         .sequence_lo=(uint32_t)fence.sequence,.sequence_hi=fence.sequence>>32,
         .ordinal_lo=(uint32_t)fence.ordinal,.ordinal_hi=fence.ordinal>>32};
-    unsigned before=wire_presented,front=scanout_copies3d;
+    unsigned before=wire_presented,front=scanout_copies3d,direct=direct_presented;
     struct render3d_transport t={&scratch3d,&scratch3d,present_wire};
     CHECK(!render3d_transport_dispatch(&t,7,&a,frame_pixels,w*h*4) && wire_presented==before+1 && scanout_copies3d==front+1);
+    /* GPU-resident frame: presented directly; the linear copy is read here
+     * only as the test oracle (production reads it back only for the CPU). */
+    CHECK(direct_presented==direct+1);
+    CHECK(!render3d_readback(&scratch3d,7,context->handle,linear,frame_pixels,w*h*4));
     a.generation--;
     CHECK(present_wire(0,7,&a,pixels,w*h*4)==-EACCES && wire_presented==before+1);
     /* glFinish leaves the hardware back buffer authoritative; the window DIB
@@ -179,6 +192,69 @@ void gl_kernel_present_lease(const uint32_t *pixels,unsigned w,unsigned h)
     }
     CHECK(!mismatches);
 }
+/* f7-15 review P1: the real Quake III order. The context is created and
+ * draws in the desktop generation; its first SwapBuffers takes the
+ * full-screen lease, whose mode switch revokes that generation. Cached
+ * target evidence is a controlled fixture as above; the minimum recheck,
+ * wire, BCI, scanout and opengl32 recovery are production code. */
+static unsigned lease_switch_w,lease_switch_h;
+extern unsigned gl_test_generation,gl_test_token;
+static void t23_qualify(unsigned generation,unsigned w,unsigned h)
+{
+    struct render3d_host host={0,allocate3d,free3d,clock3d,0};
+    uint32_t required;
+    CHECK(!savage3d_mode_heap(&test_engine,&device,15532032,&gpu3d.heap,&required));
+    gpu3d.generation=generation; gpu3d.texture_bytes=2887680; gpu3d.qualified=false;
+    gpu3d.probe_checkpoint=0; gpu3d.probe_phase=0; gpu3d.color565_testing=gpu3d.depth24_testing=false;
+    gpu3d.fullsize_qualified=gpu3d.perspective_qualified=gpu3d.depth24_qualified=gpu3d.color565_qualified=false;
+    render3d_init(&scratch3d,&host,generation,0,0,(struct render3d_extent){0});
+    unsigned c,rh; CHECK(!render3d_create_context(&scratch3d,1,R3D_SOFTWARE,&c));
+    uint32_t tex[512]; for (unsigned i=0;i<512;i++) tex[i]=(i%32)<16 ? 0xff4080c0 : 0xffc04080;
+    enum render3d_kind kinds[]={R3D_COLOR,R3D_D16,R3D_TEXTURE,R3D_LINEAR_COLOR};
+    unsigned at=gpu3d.heap.first;
+    for (unsigned i=0;i<4;i++) {
+        CHECK(!render3d_create_resource(&scratch3d,1,c,kinds[i],i==2 ? 32 : 64,i==2 ? 16 : 64,
+            i==2 ? tex : 0,i==2 ? sizeof(tex) : 0,&rh));
+        struct render3d_resource *r=&scratch3d.contexts[0].resources[i]; r->hardware=true;
+        r->offset=i==2 ? gpu3d.heap.first+gpu3d.heap.bytes-gpu3d.texture_bytes : at;
+        CHECK(!savage3d_backend()->layout(&gpu3d,r)); if (i!=2) at+=r->reserved;
+    }
+    gpu3d.consumer=&scratch3d; CHECK(!savage3d_probe(&gpu3d));
+    CHECK(!render3d_close(&scratch3d)); gpu3d.consumer=0;
+    gpu3d.mode_width=w; gpu3d.mode_height=h;
+    gpu3d.fullsize_qualified=gpu3d.perspective_qualified=gpu3d.depth24_qualified=gpu3d.color565_qualified=true;
+    gpu3d.sample_delta_q16=CIUKI_R3D_SAMPLE_DELTA_Q16;
+    gpu3d.filter_fraction_bits=CIUKI_R3D_FILTER_FRACTION_BITS;
+    render3d_init(&scratch3d,&host,generation,savage3d_backend(),&gpu3d,gpu3d.heap); gpu3d.consumer=&scratch3d;
+}
+void gl_kernel_desktop_setup(unsigned w,unsigned h)
+{
+    gl_kernel_setup(0);
+    CHECK(!render3d_close(&scratch3d)); gpu3d.consumer=0;
+    t23_scanout(1024,768,42);
+    ram_storage3d=t23_ram; memset(t23_ram,0x7a,sizeof(t23_ram));
+    t23_qualify(42,1024,768);
+    lease_switch_w=w; lease_switch_h=h;
+    gl_test_generation=lease_generation=42; gl_test_token=lease_token=1234;
+    wire_reads=wire_uploads=direct_presented=0; t23_presenting=false;
+}
+void gl_test_lease_hook(void)
+{
+    if (!lease_switch_w) return;
+    unsigned w=lease_switch_w,h=lease_switch_h; lease_switch_w=0;
+    /* Owner stop under the mode change: the old service, its contexts and
+     * VRAM are revoked; the new mode passes the short minimum recheck. */
+    CHECK(!render3d_close(&scratch3d)); gpu3d.consumer=0;
+    t23_scanout(w,h,43);
+    t23_qualify(43,w,h);
+    gl_test_generation=lease_generation=43; t23_presenting=true;
+    printf("GL_T23_SWITCH desktop=1024x768 lease=%ux%u generation=42->43 heap_first=%u heap_bytes=%u PASS\n",
+        w,h,gpu3d.heap.first,gpu3d.heap.bytes);
+}
+void gl_kernel_counters(unsigned out[5])
+{ out[0]=wire_reads; out[1]=wire_uploads; out[2]=direct_presented; out[3]=memory3d; out[4]=gpu3d.generation; }
+const uint8_t *gl_kernel_scanout(void) { return device.mapped; }
+unsigned gl_kernel_scanout_pitch(void) { return device.pitch; }
 void gl_kernel_teardown(void)
 {
     CHECK(!render3d_close(&scratch3d)); CHECK(!allocations3d && !scratch3d.ram_bytes);
@@ -204,6 +280,8 @@ int w32_render3d_host_exchange(struct ciuki_w32_render3d_args *a,void *payload)
     }
     struct render3d_transport t={&scratch3d,0,present_wire};
     int e=render3d_transport_dispatch(&t,wire_pid,&copied,data,copied.bytes);
+    if (!e && a->action==CIUKI_R3D_READ) wire_reads++;
+    if (!e && a->action==CIUKI_R3D_UPLOAD) wire_uploads++;
     if (a->action==CIUKI_R3D_SUBMIT) {
         const struct render3d_request *q=data;
         if (e) work_refusals++;

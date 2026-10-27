@@ -143,12 +143,14 @@ class GLTests(unittest.TestCase):
   self.assertEqual(len(re.findall(r'^GL_HW_REPLAY .* frames=4 ',p.stdout,re.M)),4)
   check_savage_h1(p.stdout)
   self.assertEqual(len(re.findall(r'^GL_T23_LEASE .* retained_targets=1 minimum_recheck=1 PASS$',p.stdout,re.M)),2)
+  check_lease_flow(p.stdout,16)
  def test_hardware_quake3_default_format_replay(self):
   p=subprocess.run([str(self.binary),'--hardware-quake3-default'],capture_output=True,text=True,timeout=900)
   print(p.stdout,end='');self.assertEqual(p.returncode,0,p.stdout+p.stderr)
   check_quake3(p.stdout,sanitize=True,default_format=True)
   check_savage_h1(p.stdout)
   self.assertEqual(len(re.findall(r'^GL_T23_LEASE .* retained_targets=1 minimum_recheck=1 PASS$',p.stdout,re.M)),2)
+  check_lease_flow(p.stdout,24)
   formats=re.findall(r'^GL_SAVAGE_FORMAT width=(\d+) height=(\d+) request=24/8 selected=(\d+) depth=(\d+) stencil=(\d+)',p.stdout,re.M)
   self.assertEqual(len(formats),4)
   self.assertEqual(sorted(w for w,h,selected,depth,stencil in formats),['1024','1024','640','640'])
@@ -182,6 +184,21 @@ class GLTests(unittest.TestCase):
     seen.add(name);body=bodies[name]
     self.assertNotRegex(body,r'\b(?:sdiv|udiv|srem|urem) i64\b',name)
     pending += [n for n in re.findall(r'\bcall\b[^\n]*@([\w.]+)\(',body) if n in bodies]
+
+def check_lease_flow(output,depth):
+ # f7-15 review: context in the desktop generation, the first SwapBuffers'
+ # lease switches mode; hardware is regained and frames stay GPU-resident.
+ assert len(re.findall(r'^GL_T23_SWITCH desktop=1024x768 lease=640x480 generation=42->43 .* PASS$',output,re.M))==1
+ rows=re.findall(r'^GL_T23_SWAP depth=(\d+) frame=(\d+) generation=(\d+) gpu_draws=(\d+) reads=(\d+) uploads=(\d+) direct=(\d+) vram_accesses=(\d+)$',output,re.M)
+ assert [int(r[1]) for r in rows]==[0,1,2,3],rows
+ for d,frame,generation,gpu,reads,uploads,direct,vram in rows:
+  assert int(d)==depth and generation=='43' and gpu==('3003' if frame=='0' else '3000')
+  if frame=='0': assert (reads,uploads,direct)==('2','2' if depth==24 else '0','0')
+  else:
+   assert reads=='0' and direct=='1'
+   assert uploads==('2' if frame=='1' and depth==24 else '0')
+   if int(frame)>1: assert int(vram)<4096
+ assert len(re.findall(r'^GL_T23_LEASE_FLOW depth=%d .* PASS$'%depth,output,re.M))==1
 
 def check_savage_h1(output):
  rows=re.findall(r'^GL_SAVAGE_H1 scope=(\S+) width=(\d+) height=(\d+) frame=(\d+) gpu_draws=(\d+) gpu_fragments=(\d+) cpu_draws=(\d+) cpu_fragments=(\d+) eligible_world=(\d+)/(\d+) eligible_entities=(\d+)/(\d+).* switches=(\d+) ',output,re.M)

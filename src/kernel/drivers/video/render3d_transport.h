@@ -23,6 +23,8 @@ static inline bool render3d_wire_valid(const struct ciuki_w32_render3d_args *a)
 struct render3d_transport {
     struct render3d_service *service;
     void *present_ctx;
+    /* NULL pixels: direct native path only, -EOPNOTSUPP when presentation
+     * needs the CPU copy; the dispatcher then reads back and calls again. */
     int (*present)(void *, uint32_t, const struct ciuki_w32_render3d_args *, const void *, uint32_t);
 };
 int render3d_transport_dispatch(struct render3d_transport *, uint32_t,

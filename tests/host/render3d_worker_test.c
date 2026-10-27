@@ -62,9 +62,13 @@ void task_sleep_ms(uint32_t ms) { g_ticks+=ms;sleep_count++;if (!stop_worker) { 
 int render3d_native_init(struct render3d_service *s,const struct render3d_host *h) {
     render3d_init(s,h,device.generation,0,0,(struct render3d_extent){0});return 0;
 }
+static unsigned direct_presents;
 int display_present_render3d(void *x,uint32_t p,const struct ciuki_w32_render3d_args *a,const void *v,uint32_t b) {
     (void)x;
     assert(p==7 && a->token==1234 && a->pitch==a->width*4 && b==a->width*a->height*4);
+    /* f7-15 contract: NULL pixels first ask for the direct path only; this
+     * presenter has none, so the dispatcher reads back and calls again. */
+    if (!v) { direct_presents++; return -EOPNOTSUPP; }
     for (unsigned i=0;i<b;i++) assert(((const unsigned char *)v)[i]==(unsigned char)(i*37));
     presents++;return 0;
 }
@@ -152,7 +156,7 @@ static void full_transfers(void) {
         a=(struct ciuki_w32_render3d_args){.generation=device.generation,.context=context,
             .action=CIUKI_R3D_CLOSE};exchange(&a);
     }
-    assert(presents==4 && allocations==1);
+    assert(presents==4 && direct_presents==4 && allocations==1);
     unsigned before=dispatches;
     for (unsigned action=CIUKI_R3D_UPLOAD;action<=CIUKI_R3D_PRESENT;action++) {
         if (action!=CIUKI_R3D_UPLOAD && action!=CIUKI_R3D_READ && action!=CIUKI_R3D_PRESENT) continue;

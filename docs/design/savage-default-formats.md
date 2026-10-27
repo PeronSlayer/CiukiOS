@@ -130,6 +130,16 @@ where they differ; the formats, encodings and tolerances are unchanged.
   falls back as before). Because the boot gate runs the same full-surface
   clears under the same deadline, a mode whose bus cannot meet it refuses
   D24/S8 at boot and keeps accelerated D16.
+  *Correction (f7-15 review round 1, f7-1213 review P3-5):* in an ordinary
+  job only the paced qualification windows restored AGD/tile before releasing
+  the presenter mutex. A runtime window kept the job's own values (AGD with
+  bit 15 and the last tile descriptor) programmed across the presenter yield;
+  the inherited values came back only at the end of `execute`. That was safe
+  because `drawing` and `accel_inflight` exclude every other register user,
+  not because of a per-window restore. f7-15 removed this CPU path: the
+  engine masked clear (`BITPLANEWTMASK`) replaced it, and the same rule now
+  describes the runtime upload and download windows
+  ([f7-15 contract](savage-modes-vram.md)).
 * **The optional gates use the paced helpers.** RGB565 (4 phases) and D24/S8
   (34 phases) record `[3d] probe phase=rgb565|d24s8 index=N state=begin|end`
   and `rgb565_prepare`/`d24s8_prepare`, render only the compared rows of the

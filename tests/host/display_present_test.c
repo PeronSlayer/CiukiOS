@@ -83,6 +83,7 @@ int fbdev_present_native(uint32_t generation,unsigned x,unsigned y,const void *p
     memcpy(scanout+y*device.pitch+x*4,p,count*4);if(on_write)on_write();return 0;
 }
 #include "../../src/kernel/core/display_present.c"
+static unsigned busy_scanouts;
 int render3d_native_prepare(void)
 {
     assert(suspended && transfer && !active && !lease_lock.owner);
@@ -94,6 +95,7 @@ int render3d_scanout(struct render3d_service *s,uint32_t pid,const struct ciuki_
 {
     assert((void *)s==(void *)1 && pid==game.pid && frame_running && lease_lock.owner && active);
     assert(a->generation==fb->generation && a->width==fb->width && a->height==fb->height);
+    if (busy_scanouts) { busy_scanouts--; return -EBUSY; }
     gpu_presents++; memcpy(scanout,native_frame,sizeof(scanout)); return 0;
 }
 static struct ciuki_w32_display_args grant_args(void){return (struct ciuki_w32_display_args){
@@ -201,11 +203,18 @@ static void render3d_native_frame(void)
     assert(gpu_presents==gpu+1 && writes==before && !memcmp(scanout,native_frame,sizeof(scanout)));
     a.token++; assert(display_present_render3d((void *)1,game.pid,&a,native_frame,sizeof(native_frame))==-EACCES);
     assert(gpu_presents==gpu+1 && writes==before); a.token--;
+    /* f7-15: a GPU-resident frame (NULL pixels) uses only the direct path;
+     * a passing presenter conflict is retried outside the lease lock. */
+    busy_scanouts=3; uint64_t ticks=g_ticks;
+    assert(!display_present_render3d((void *)1,game.pid,&a,0,sizeof(native_frame)));
+    assert(gpu_presents==gpu+2 && writes==before && !busy_scanouts && g_ticks==ticks+3 && !frame_running);
     gamma.red[0]=257; /* nonidentity gamma retains the canonical CPU path */
+    assert(display_present_render3d((void *)1,game.pid,&a,0,sizeof(native_frame))==-EOPNOTSUPP);
+    assert(gpu_presents==gpu+2 && writes==before && !frame_running);
     assert(!display_present_render3d((void *)1,game.pid,&a,native_frame,sizeof(native_frame)));
-    assert(gpu_presents==gpu+1 && writes>before && !frame_running);
+    assert(gpu_presents==gpu+2 && writes>before && !frame_running);
     assert(display_present_revoke_kernel()==1); complete();
-    puts("render3d lease scanout: authority before GPU, no CPU upload on native identity frame, gamma fallback, stale token refusal PASS");
+    puts("render3d lease scanout: authority before GPU, no CPU upload on native identity frame, GPU-resident direct-only call, 3 transient EBUSY retried, gamma -> read-back CPU path, stale token refusal PASS");
 }
 int main(void)
 {

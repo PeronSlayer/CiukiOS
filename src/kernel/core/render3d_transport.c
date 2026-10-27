@@ -49,6 +49,9 @@ static void rfree(void *ctx,void *data)
     }
 }
 static uint64_t now(void *ctx) { (void)ctx; return g_ticks*1000; }
+/* Only on a passing presenter conflict while synchronizing a GPU-resident
+ * attachment (render3d.c); the worker holds no lock across it. */
+static void pause_ms(void *ctx) { (void)ctx; task_sleep_ms(1); }
 static void drop(struct wire_job *j)
 {
     uint32_t flags=irq_save();
@@ -99,7 +102,7 @@ void w32_render3d_poll(void)
         }
         if (!e && !service) {
             service=ralloc(0,sizeof(*service));
-            struct render3d_host h={.alloc=ralloc,.free=rfree,.now_us=now};
+            struct render3d_host h={.alloc=ralloc,.free=rfree,.now_us=now,.yield=pause_ms};
             if (!service) e=-ENOMEM;
             else {
                 e=render3d_native_init(service,&h);

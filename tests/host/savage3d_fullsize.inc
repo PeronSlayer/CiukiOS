@@ -2,6 +2,8 @@
 #define FULL_CHECK(condition) do { CHECK(condition); if (failures) exit(1); } while (0)
 static unsigned pressure_reads3d;
 static unsigned qualification_yields3d;
+static unsigned job_yields3d;
+static void job_yield3d(void *ctx) { (void)ctx; job_yields3d++; fbdev_render3d_yield(); }
 static int qualification_checkpoint3d(void *ctx)
 {
     (void)ctx;
@@ -67,6 +69,7 @@ static void fullsize3d(unsigned w,unsigned h,unsigned fault)
     read_delay3d=fault==5 ? 2 : fault==6 ? 9 : 0;
     qualification_yields3d=0;
     if (!fault) gpu3d.probe_checkpoint=qualification_checkpoint3d;
+    uint64_t gate_start=m.us;
     int e=savage3d_fullsize_probe(&gpu3d,&reference3d);
     gpu3d.probe_checkpoint=0;
     read_delay3d=0; slow_guard3d=false; sampling3d.affine=false; sampling3d.bias=0; probe_filter_bits3d=0; probe_lod_bias3d=0; probe_address_bits3d=0;
@@ -85,7 +88,10 @@ static void fullsize3d(unsigned w,unsigned h,unsigned fault)
     if (fault==5 || fault==6) {
         FULL_CHECK(test_engine.cpu_safe && !test_engine.event_pending && !test_engine.quarantined);
         FULL_CHECK(!m.reg[0x850c/4] && !m.reg[0x48c40/4] && !m.reg[0x48584/4]);
-        FULL_CHECK(fault==5 ? gpu3d.fullsize_us>20000 : e==-ETIMEDOUT && gpu3d.failed_phase==8);
+        /* f7-15: the readback runs in restored windows after execute, so the
+         * slow completed reads (fault 5) exceed 20 ms outside the engine
+         * window; each window still stays under 1 ms. */
+        FULL_CHECK(fault==5 ? m.us-gate_start>20000 && gpu3d.fullsize_us<20000 : e==-ETIMEDOUT && gpu3d.failed_phase==8);
     }
     if (fault==4) FULL_CHECK(!writes3d && !memory3d);
     FULL_CHECK(!locks && !count3d);
@@ -156,6 +162,7 @@ static void projective3d(const uint32_t handles[2][4],const uint32_t contexts[2]
             FULL_CHECK(!render3d_submit(services[side],7,contexts[side],&q,sizeof(q),&fence));
             while (services[side]->queued) FULL_CHECK(render3d_step(services[side])==1);
             FULL_CHECK(!render3d_wait(services[side],7,contexts[side],fence,0));
+            sync3d(services[side]);
             uint32_t *image=services[side]->contexts[0].resources[0].shadow;
             uint16_t *z=services[side]->contexts[0].resources[1].shadow;
             for (unsigned i=0;i<640*480;i++) {
@@ -295,6 +302,7 @@ static void lightmap_precision3d(const uint32_t handles[2][4],const uint32_t con
             FULL_CHECK(!render3d_submit(services[engine],7,contexts[engine],&q,sizeof(q),&fence));
             while (services[engine]->queued) FULL_CHECK(render3d_step(services[engine])==1);
             FULL_CHECK(!render3d_wait(services[engine],7,contexts[engine],fence,0));
+            sync3d(services[engine]);
             uint32_t *image=services[engine]->contexts[0].resources[0].shadow;
             uint16_t *z=services[engine]->contexts[0].resources[1].shadow;
             for (unsigned y=464;y<480;y++) for (unsigned x=0;x<16;x++) {
@@ -366,6 +374,7 @@ static void large_batch3d(void)
     }
     struct render3d_resource *hw[R3D_REFS],*ref[R3D_REFS];
     for (unsigned i=0;i<4;i++) { hw[i]=&scratch3d.contexts[0].resources[i]; ref[i]=&reference3d.contexts[0].resources[i]; }
+    sync3d(&scratch3d);
     for (unsigned i=0;i<640*480;i++) {
         uint32_t a=((uint32_t *)hw[0]->shadow)[i],b=((uint32_t *)ref[0]->shadow)[i];
         FULL_CHECK(a==((uint32_t *)hw[3]->shadow)[i]);
@@ -387,28 +396,53 @@ static void large_batch3d(void)
     projective3d(handles,context,pixels);
     review_counterexamples3d(handles,context,pixels);
     lightmap_precision3d(handles,context);
-    /* Ordinary jobs need every row, unlike the boot checksum. Slow completed
-     * reads may exceed 20 ms in total while each CPU chunk stays bounded. */
+    /* f7-15 lead decision: a hardware frame stays in VRAM. The job itself
+     * reads nothing back, even on a slow bus; one on-demand download (READ)
+     * publishes every row, yields the presenter between 128-read windows and
+     * has one absolute 200 ms deadline that no window restarts. */
     q=(struct render3d_request){.target=handles[0][0],.copy_target=handles[0][3],.flags=R3D_COPY};
-    read_delay3d=0;
+    gpu3d.job_yield=job_yield3d; job_yields3d=0;
+    read_delay3d=1;
+    unsigned reads_before=memory3d;
     FULL_CHECK(!render3d_submit(&scratch3d,7,context[0],&q,sizeof(q),&fence));
     FULL_CHECK(render3d_step(&scratch3d)==1 && !scratch3d.queued);
     FULL_CHECK(!render3d_wait(&scratch3d,7,context[0],fence,0));
+    struct render3d_resource *linear=&scratch3d.contexts[0].resources[3];
+    unsigned copy_job_reads=memory3d-reads_before;
+    FULL_CHECK(linear->stale && copy_job_reads==2*32); /* sampled frame guards of colour and linear only */
     FULL_CHECK(!m.reg[0x850c/4] && !m.reg[0x48c40/4] && !m.reg[0x48584/4]);
-    read_delay3d=1;
-    FULL_CHECK(!render3d_submit(&scratch3d,7,context[0],&q,sizeof(q),&fence));
-    FULL_CHECK(render3d_step(&scratch3d)==-ETIMEDOUT && !scratch3d.queued);
     read_delay3d=0;
+    static uint32_t frame_copy[640*480];
+    reads_before=memory3d;
+    FULL_CHECK(!render3d_readback(&scratch3d,7,context[0],handles[0][3],frame_copy,sizeof(frame_copy)) && !linear->stale);
+    FULL_CHECK(memory3d-reads_before==640*480+2048 && job_yields3d==640*480/128-1);
+    static uint32_t color_copy[640*480];
+    FULL_CHECK(!render3d_readback(&scratch3d,7,context[0],handles[0][0],color_copy,sizeof(color_copy)));
+    FULL_CHECK(!memcmp(frame_copy,color_copy,sizeof(frame_copy)));
+    /* A second READ of an unchanged copy reads no VRAM. */
+    reads_before=memory3d;
+    FULL_CHECK(!render3d_readback(&scratch3d,7,context[0],handles[0][3],frame_copy,sizeof(frame_copy)) && memory3d==reads_before);
+    FULL_CHECK(!render3d_submit(&scratch3d,7,context[0],&q,sizeof(q),&fence));
+    FULL_CHECK(render3d_step(&scratch3d)==1 && linear->stale);
+    read_delay3d=1;
+    uint64_t download_start=m.us;
+    FULL_CHECK(render3d_readback(&scratch3d,7,context[0],handles[0][3],frame_copy,sizeof(frame_copy))==-ETIMEDOUT);
+    uint64_t download_us=m.us-download_start;
+    read_delay3d=0;
+    FULL_CHECK(download_us>=SAVAGE3D_READBACK_US && download_us<SAVAGE3D_READBACK_US+2000);
     FULL_CHECK(render3d_wait(&scratch3d,7,context[0],fence,0)==-ETIMEDOUT);
     FULL_CHECK(!scratch3d.quarantined && !gpu3d.lost && gpu3d.fullsize_qualified &&
         test_engine.cpu_safe && !test_engine.event_pending && !test_engine.quarantined);
     FULL_CHECK(!m.reg[0x850c/4] && !m.reg[0x48c40/4] && !m.reg[0x48584/4]);
+    gpu3d.job_yield=0;
     uint32_t fresh_context,fresh_target;
     FULL_CHECK(!render3d_create_context(&scratch3d,7,R3D_HARDWARE_REQUIRED,&fresh_context));
     FULL_CHECK(!render3d_create_resource(&scratch3d,7,fresh_context,R3D_COLOR,16,16,0,0,&fresh_target));
     q=(struct render3d_request){.target=fresh_target,.flags=R3D_CLEAR_COLOR,.clear_color=0xff123456};
     FULL_CHECK(!render3d_submit(&scratch3d,7,fresh_context,&q,sizeof(q),&fence));
     FULL_CHECK(render3d_step(&scratch3d)==1 && !render3d_wait(&scratch3d,7,fresh_context,fence,0));
+    printf("GPU-resident frame: COPY job reads %u words (sampled guards); on-demand READ 640x480 with %u presenter yields; unchanged copy re-read free; slow bus stops at %llu us (200 ms absolute) restored without quarantine PASS\n",
+        copy_job_reads,640*480/128-1,(unsigned long long)download_us);
     puts("bounded CPU readback: nominal completes; 1 us/read hits total deadline with every chunk under 1 ms; restores without quarantine PASS");
     FULL_CHECK(!render3d_close(&scratch3d) && !render3d_close(&reference3d) && !allocations3d); finish();
 }
@@ -433,6 +467,8 @@ static int clear_job3d(unsigned flags,uint32_t depth,unsigned mask,unsigned valu
     uint32_t tile=m.reg[0x48c40/4],agd=m.reg[0x850c/4];
     FULL_CHECK(!b->enter(&gpu3d));
     int e=b->execute(&gpu3d,q,r);
+    /* The clear stays in VRAM (f7-15); the fixture downloads it on demand. */
+    if (!e) e=b->download(&gpu3d,r[1]);
     FULL_CHECK(!b->idle(&gpu3d)); b->leave(&gpu3d);
     FULL_CHECK(!locks && !drawing && !accel_inflight && !gpu3d.lost && !test_engine.quarantined);
     FULL_CHECK(m.reg[0x48c40/4]==tile && m.reg[0x850c/4]==agd); /* job restoration */
@@ -449,7 +485,7 @@ static void runtime_partial3d(unsigned w,unsigned h)
     FULL_CHECK(!clear_job3d(R3D_CLEAR_STENCIL,0,0x0f,0x5a));
     for (unsigned i=0;i<w*h;i++) FULL_CHECK(z[i]==0xaa345678u);
     FULL_CHECK(m.reg[0x8128/4]==saved_mask);
-    /* Every 128-read chunk fits 1 ms, but the whole readback misses the 200 ms deadline. */
+    /* Every 128-read chunk fits 1 ms, but the whole download misses the 200 ms deadline. */
     read_delay3d=1;
     uint64_t start=m.us;
     int e=clear_job3d(R3D_CLEAR_DEPTH,0x222222,0,0);

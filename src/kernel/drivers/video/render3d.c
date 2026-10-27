@@ -443,6 +443,38 @@ int render3d_submit(struct render3d_service *s, uint32_t p, uint32_t id,
     s->jobs[slot]=(struct render3d_job){.context=id,.fence=f,.occupied=true,.software=software};
     c->queued++; c->submitted=f.sequence; s->queued++; *out=f; return 0;
 }
+/* GPU-resident attachments (f7-15 lead decision): the shadow is read back
+ * only when the CPU needs it (READ, a scalar job of a hardware context, a
+ * CPU presentation copy). Caller owns s->busy. A passing presenter conflict
+ * is retried for at most R3D_SYNC_RETRY_US; a download timeout fails only the
+ * context after proven idle, any other error loses the device. */
+#define R3D_SYNC_RETRY_US 20000u
+static int sync_owned(struct render3d_service *s, struct render3d_context *c, struct render3d_resource *r)
+{
+    if (!r || !r->stale || !r->hardware || !r->resident || r->kind==R3D_TEXTURE) return 0;
+    if (!usable(s) || !s->backend->download) return -EIO;
+    uint64_t start=s->host.now_us(s->host.ctx);
+    int e=-EBUSY;
+    for (unsigned attempt=0;attempt<1024 && e==-EBUSY;attempt++) {
+        if (attempt) {
+            if (s->host.now_us(s->host.ctx)-start>=R3D_SYNC_RETRY_US) break;
+            if (s->host.yield) s->host.yield(s->host.ctx);
+        }
+        e=s->backend->enter(s->device);
+        if (e==-EBUSY || e==-EAGAIN) { e=-EBUSY; continue; }
+        if (e) { render3d_device_lost(s); return e; }
+        r->references++;
+        e=s->backend->download(s->device,r);
+        int idle=s->backend->idle(s->device);
+        if (!e) e=idle;
+        if (e && (e!=-ETIMEDOUT || idle)) render3d_device_lost(s);
+        s->backend->leave(s->device);
+        if (!s->quarantined) r->references--;
+    }
+    if (!e) r->stale=false;
+    else if (c && !c->failure && e!=-EBUSY) c->failure=e;
+    return e;
+}
 void render3d_device_lost(struct render3d_service *s)
 {
     /* Permanent for the boot; do not reset, retry or release referenced VRAM. */
@@ -493,9 +525,21 @@ int render3d_step(struct render3d_service *s)
                 s->backend->leave(s->device);
             } else if (e!=-EAGAIN && e!=-EBUSY) render3d_device_lost(s);
         }
-    } else done=render3d_scalar_slice(q,r,j,&s->host);
+    } else {
+        /* A scalar job of a hardware context reads and writes the shadows:
+         * synchronize device-resident attachments first (no-op when fresh). */
+        if (c->hardware) for (unsigned i=0;!e && i<R3D_REFS;i++) e=sync_owned(s,c,r[i]);
+        if (!e) done=render3d_scalar_slice(q,r,j,&s->host);
+    }
     s->busy=false;
     if (e==-EAGAIN || e==-EBUSY) return e;
+    /* Device-resident result: shadows of written attachments are now stale. */
+    if (!e && c->hardware && !j->software && s->backend && s->backend->download) {
+        if (r[0] && (q->count || (q->flags&R3D_CLEAR_COLOR))) r[0]->stale=true;
+        if (r[1] && ((q->flags&(R3D_CLEAR_DEPTH|R3D_CLEAR_STENCIL)) ||
+            (q->count && (q->flags&(R3D_DEPTH_WRITE|R3D_STENCIL_TEST))))) r[1]->stale=true;
+        if (r[3] && (q->flags&R3D_COPY)) r[3]->stale=true;
+    }
     if (!done && !e) {
         /* Round-robin at every bounded scalar slice, without a second ring
          * or a large stack copy. A full ring rotates by changing head only. */
@@ -549,8 +593,15 @@ int render3d_readback(struct render3d_service *s, uint32_t p, uint32_t id, uint3
     if (c->failure) return c->failure;
     if (!out || bytes!=r->bytes) return -EINVAL;
     if (r->references) return -EAGAIN;
-    /* Executing backends synchronize canonical shadows before completion.
-     * A new resource's zero/texture shadow is also its defined initial data. */
+    /* A device-resident attachment is downloaded now, on demand. Otherwise
+     * the shadow is current (backends without download synchronize it in
+     * execute); a new resource's zero/texture shadow is its initial data. */
+    if (r->stale) {
+        s->busy=true;
+        int e=sync_owned(s,c,r);
+        s->busy=false;
+        if (e) return e;
+    }
     memcpy(out,r->shadow,bytes); return 0;
 }
 int render3d_upload(struct render3d_service *s, uint32_t p, uint32_t id,
@@ -565,7 +616,7 @@ int render3d_upload(struct render3d_service *s, uint32_t p, uint32_t id,
     for (unsigned i=0;i<R3D_RESOURCES;i++)
         if (c->resources[i].copied_from==h) c->resources[i].copied_from=0;
     r->copied_from=0;
-    memcpy(r->shadow,input,bytes); canonicalize_color(r); r->resident=false; return 0;
+    memcpy(r->shadow,input,bytes); canonicalize_color(r); r->resident=false; r->stale=false; return 0;
 }
 /* Only the lease presenter calls this, after its authority/gamma/scale
  * checks. A retained linear shadow is not proof that its former tiled source

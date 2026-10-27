@@ -233,8 +233,10 @@ int display_present_render3d(void *service, uint32_t pid,
 {
     struct ciuki_w32_display_args a={.token=r->token,.generation=r->generation};
     struct process *p=proc_find(pid);
-    uint32_t page=pmm_alloc();
-    if (!page) return -ENOMEM;
+    /* NULL pixels: the frame is GPU-resident; only the direct native path
+     * may run, -EOPNOTSUPP asks the caller for the read-back CPU copy. */
+    uint32_t page=pixels ? pmm_alloc() : 0;
+    if (pixels && !page) return -ENOMEM;
     kmutex_lock(&lease_lock);
     int e=!valid(p,&a) ? -EACCES : frame_running ? -EBUSY : 0;
     struct ciuki_present_surface s=layout;
@@ -242,18 +244,26 @@ int display_present_render3d(void *service, uint32_t pid,
     unsigned n=scale;
     if (!e && (s.format!=CIUKI_PRESENT_XRGB8888 || s.width!=r->width ||
         s.height!=r->height || s.pitch!=r->pitch || s.size!=bytes)) e=-EOPNOTSUPP;
-    bool direct=n==1 && s.width<=f.width && s.height<=f.height;
+    bool direct=n==1 && s.width<=f.width && s.height<=f.height && service && render3d_scanout;
+    if (!e && !pixels && !direct) e=-EOPNOTSUPP;
     if (!e) frame_running=true;
     kmutex_unlock(&lease_lock);
-    if (e) { pmm_free(page); return e; }
-    if (direct && service && render3d_scanout) {
-        kmutex_lock(&lease_lock);
-        bool identity=true;
-        for (unsigned i=0;i<256 && identity;i++)
-            if (gamma.red[i]!=i*257u || gamma.green[i]!=i*257u || gamma.blue[i]!=i*257u) identity=false;
-        e=!valid(proc_find(pid),&a) ? -EACCES : !identity ? -EOPNOTSUPP : render3d_scanout(service,pid,r,&f);
-        kmutex_unlock(&lease_lock);
-        if (e!=-EOPNOTSUPP) goto complete;
+    if (e) { if (page) pmm_free(page); return e; }
+    if (direct) {
+        /* A passing presenter/drawing conflict (2D activation, a cursor or
+         * console write) is retried briefly outside the lease lock: one busy
+         * moment must not fail SwapBuffers, which Quake III treats as fatal. */
+        for (unsigned attempt=0;attempt<20;attempt++) {
+            if (attempt) task_sleep_ms(1);
+            kmutex_lock(&lease_lock);
+            bool identity=true;
+            for (unsigned i=0;i<256 && identity;i++)
+                if (gamma.red[i]!=i*257u || gamma.green[i]!=i*257u || gamma.blue[i]!=i*257u) identity=false;
+            e=!valid(proc_find(pid),&a) ? -EACCES : !identity ? -EOPNOTSUPP : render3d_scanout(service,pid,r,&f);
+            kmutex_unlock(&lease_lock);
+            if (e!=-EBUSY) break;
+        }
+        if (e!=-EOPNOTSUPP || !pixels) goto complete;
         e=0;
     }
     uint8_t *out=P2V(page);
@@ -288,7 +298,8 @@ complete:
     }
     frame_running=false;
     kmutex_unlock(&lease_lock);
-    pmm_free(page); return e;
+    if (page) pmm_free(page);
+    return e;
 }
 uint32_t w32_display_call(struct proc_thread *t, struct ciuki_w32_display_args *a)
 {

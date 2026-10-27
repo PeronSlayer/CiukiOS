@@ -20,6 +20,7 @@ static struct savage2d engine3;
 static struct resource claims3[16];
 static unsigned variant3, claimed3, released3, quarantined3, locked3, stores3, packets3, logs3;
 static bool prepared3, return_busy3;
+static unsigned take_busy3;
 static void *allocations3[512];
 static unsigned allocations_count3, reserves3;
 static void (*worker3)(void *);
@@ -31,7 +32,7 @@ static struct savage3d_device *observed3;
 static unsigned minimum_calls3;
 static struct task worker_task3;
 struct task *g_current;
-static unsigned reaped3, marker_checks3, optional_calls3[2], fullsize_calls3, d24_logs3;
+static unsigned reaped3, marker_checks3, optional_calls3[2], fullsize_calls3, d24_logs3, optional_refusals3;
 void task_reap(struct task *t)
 { assert(t==&worker_task3 && t!=g_current && t->state==T_ZOMBIE && !reaped3); reaped3++; t->state=T_DEAD; }
 void kwait_init(struct kwait *q) { memset(q,0,sizeof(*q)); }
@@ -71,7 +72,14 @@ void klog(const char *fmt,...)
         strstr(line,"[3d] runtime") || strstr(line,"[3d] attachment") || strstr(line,"[accel] retry "));
     if ((variant3==5 || variant3==11) && strstr(line,"[3d] probe result=")) assert(strstr(line,"marker=unknown"));
     if (strstr(line,"d24s8") || strstr(line,"D24S8")) d24_logs3++;
-    if (variant3==22 && strstr(line,"[3d] probe result=")) assert(strstr(line,"reason=budget_phase") && strstr(line,"marker=retained"));
+    if (variant3==22 && strstr(line,"[3d] probe result=")) assert(strstr(line,"result=qualified") && strstr(line,"marker=clear"));
+    if ((variant3==22 || variant3==26) && strstr(line,"phase=optional_refused")) {
+        assert(strstr(line,variant3==22 ? "gate=rgb565 reason=budget_phase" : "gate=d24s8 reason=budget_total"));
+        optional_refusals3++;
+    }
+    if (variant3==26 && strstr(line,"[3d] probe result=")) assert(strstr(line,"result=qualified") && strstr(line,"marker=clear"));
+    if (variant3==27 && strstr(line,"[3d] probe result=")) assert(strstr(line,"reason=budget_total") && strstr(line,"marker=retained"));
+    if (variant3==25 && strstr(line,"[3d] probe result=") && strstr(line,"budget_revalidate")) assert(strstr(line,"marker=clear"));
 }
 void *kmalloc(size_t bytes)
 {
@@ -147,6 +155,7 @@ int fbdev_render3d_cache(uint32_t generation,int (*fn)(void *,bool),void *ctx,bo
 {
     assert(generation==fb3.generation && prepared3 && !locked3);
     if (!take && return_busy3) { return_busy3=false; return -EBUSY; }
+    if (take && take_busy3 && worker_running3==false) { take_busy3--; return -EBUSY; }
     return fn(ctx,take);
 }
 int fbdev_render3d_prepare(uint32_t generation)
@@ -205,10 +214,24 @@ static int optional3(struct savage3d_device *d,bool depth24)
     assert(d->consumer && (depth24 ? d->depth24_testing : d->color565_testing) && !locked3);
     optional_calls3[depth24]++;
     if (variant3==22 && !depth24) {
-        /* A phase overrun inside the optional gate: the checkpoint reports the
-         * budget timeout, which must propagate and stop further gates. */
+        /* A phase overrun inside the optional gate with a restored, idle
+         * engine refuses only that format (amendment 1, f7-1213 P2-1). */
+        d->probe_phase(d->probe_ctx,"rgb565",1,true,0);
         now3+=SAVAGE3D_PROBE_PHASE_US;
-        int e=d->probe_checkpoint(d->probe_ctx); assert(e==-ETIMEDOUT); return e;
+        int e=d->probe_checkpoint(d->probe_ctx); assert(e==-ETIMEDOUT);
+        d->probe_phase(d->probe_ctx,"rgb565",1,false,e);
+        return e;
+    }
+    if ((variant3==26 || variant3==27) && depth24) {
+        /* The optional gates must stop before the marker CLEAR reserve. */
+        d->probe_phase(d->probe_ctx,"d24s8",1,true,0);
+        assert(!d->probe_checkpoint(d->probe_ctx));
+        now3+=SAVAGE3D_PROBE_TOTAL_US-SAVAGE3D_PROBE_MARKER_US;
+        int e=d->probe_checkpoint(d->probe_ctx); assert(e==-ETIMEDOUT);
+        d->probe_phase(d->probe_ctx,"d24s8",1,false,e);
+        /* Variant 27: the overrun left an engine that is not proven idle. */
+        if (variant3==27) savage3d_backend()->quarantine(d);
+        return e;
     }
     if (variant3==23 && !depth24) return -EILSEQ; /* clean numeric refusal */
     if (depth24) d->depth24_qualified=true; else d->color565_qualified=true;
@@ -230,8 +253,8 @@ int main(int argc,char **argv)
         .io={.read32=read_engine3,.write32=write_engine3,.now_us=clock_engine3,
             .drain=drain_engine3,.fault=fault_engine3,.read16=read16_engine3}};
     if (variant3==1) engine3.cursor_offset=0x801000;
-    /* Variants 22-23: fewer 2D rows leave room for full-size and D24 scratch. */
-    if (variant3==22 || variant3==23) { engine3.rows=768; heap_first3=0x300000; }
+    /* Variants 22-23, 26-27: fewer 2D rows leave room for full-size and D24 scratch. */
+    if (variant3==22 || variant3==23 || variant3==26 || variant3==27) { engine3.rows=768; heap_first3=0x300000; }
     storage_observer=marker_deadline3;
     if (variant3==17 || variant3==24 || variant3==25) { g_boot.display.vram_bytes=15532032; engine3.cursor_offset=15532032-4096; }
     if (variant3==2) put(THREE_KEY,"accel=attempt\n");
@@ -259,7 +282,7 @@ int main(int argc,char **argv)
         savage3d_boot_diagnostic(&engine3,&fb3); savage3d_desktop_presented(42); assert(reaped3==1);
         assert(worker_task3.state==T_DEAD);
     }
-    bool admitted=variant3==21 || variant3==23 || variant3==24 || variant3==25;
+    bool admitted=variant3==21 || variant3==22 || variant3==23 || variant3==24 || variant3==25 || variant3==26;
     assert(!locked3 && !prepared3 && engine3.render3d_qualified==admitted);
     /* Every marker operation reached the real block-request conversion. */
     assert(!commits || marker_checks3);
@@ -273,16 +296,24 @@ int main(int argc,char **argv)
          * 23: a clean optional refusal does not stop the other gate. */
         assert(claimed3==2 && released3==2 && !quarantined3 && !stores3 && !size_of(THREE_KEY) &&
             commits==2 && truncates==1 && engine3.active && !engine3.quarantined);
-        assert(fullsize_calls3==3);
-        assert(optional_calls3[0]==3 && optional_calls3[1]==3);
-        assert(d24_logs3==9); /* prepare begin/end, result */
+        if (variant3==26) {
+            /* Total overrun in the first D24/S8 gate: only that gate is
+             * refused, no further gate starts, the 640x480 full-size target
+             * is kept and the marker CLEAR still had its 1 s reserve. */
+            assert(fullsize_calls3==1 && !optional_calls3[0] && optional_calls3[1]==1 && optional_refusals3==1);
+        } else {
+            assert(fullsize_calls3==3);
+            assert(optional_calls3[0]==3 && optional_calls3[1]==3);
+            assert(d24_logs3==9 || variant3==22); /* prepare begin/end, result */
+            if (variant3==22) assert(optional_refusals3==3);
+        }
     }
-    else if (variant3==22) {
-        /* Budget overrun in the RGB565 gate: no D24/S8 gate starts; the
-         * attempt is refused, restored, released and its marker retained. */
-        assert(claimed3==2 && released3==2 && !quarantined3 && !stores3 && size_of(THREE_KEY)==14 &&
-            commits==1 && !truncates && engine3.active && !engine3.quarantined);
-        assert(fullsize_calls3==1 && optional_calls3[0]==1 && !optional_calls3[1] && !d24_logs3);
+    else if (variant3==27) {
+        /* An overrun without a restored, idle engine is not contained: no
+         * further gate, claims quarantined and the marker retained. */
+        assert(engine3.quarantined && !engine3.active && quarantined3==2 && !released3 &&
+            size_of(THREE_KEY)==14 && commits==1 && !truncates);
+        assert(fullsize_calls3==1 && !optional_calls3[0] && optional_calls3[1]==1);
     }
     else if (variant3==7 || variant3==10 || variant3==18 || variant3==19 || variant3==17) {
         assert(engine3.quarantined && !engine3.active && quarantined3==2 && !released3 &&
@@ -331,9 +362,11 @@ int main(int argc,char **argv)
             int attach=savage3d_owner_attach(client,&h,fb3.generation);
             if (variant3==25 && mode) {
                 worker_running3=false;
-                assert(attach==-ENODEV && !engine3.render3d_qualified && size_of(THREE_KEY)==14 &&
-                    claimed3==released3 && !quarantined3 && !observed3->lost);
-                puts("T23 cached minimum recheck: 50 ms expiry, no raster rerun, no admission, marker retained, claims/cache returned PASS");
+                /* Amendment 1: a missed 50 ms deadline with a restored, idle
+                 * engine refuses this mode only; the marker is cleared. */
+                assert(attach==-ENODEV && !engine3.render3d_qualified && !size_of(THREE_KEY) &&
+                    claimed3==released3 && !quarantined3 && !observed3->lost && engine3.rows==2048);
+                puts("T23 cached minimum recheck: 50 ms expiry, no raster rerun, no admission, marker cleared, claims/cache returned PASS");
                 break;
             }
             assert(!attach);
@@ -342,8 +375,16 @@ int main(int argc,char **argv)
             struct ciuki_r3d_caps caps; render3d_backend_caps(client,&caps);
             assert(caps.max_width==fb3.width && caps.max_height==fb3.height && (caps.depth_formats&CIUKI_R3D_D24S8));
             assert(engine3.rows==2048 && claimed3-released3==0); /* query borrows nothing */
+            /* A passing drawing-domain conflict at the first OPEN is retried
+             * (1 ms sleeps), never a permanent software context. */
+            take_busy3=variant3==24 && mode==0 ? 3 : 0;
+            uint64_t before_open=now3;
             unsigned c[2]; assert(!render3d_create_context(client,7,R3D_HARDWARE_REQUIRED,&c[0]));
-            assert(engine3.rows==engine3.height && claimed3-released3==2);
+            assert(engine3.rows==engine3.height && claimed3-released3==2 && !take_busy3);
+            if (variant3==24 && mode==0) {
+                assert(now3-before_open==3000);
+                puts("T23 first hardware OPEN: transient drawing-domain EBUSY retried 3 x 1 ms, reservation taken PASS");
+            }
             assert(!render3d_create_context(client,7,R3D_HARDWARE_REQUIRED,&c[1]));
             assert(!render3d_destroy_context(client,7,c[0]) && claimed3-released3==2);
             return_busy3=variant3==24 && mode==0;

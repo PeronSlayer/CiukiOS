@@ -194,8 +194,18 @@ static int present(unsigned id,unsigned token,unsigned generation,unsigned width
   e=exchange(&a,0);
   return e ? e : 1;
 }
+/* f7-15: the owned linear copy of the last present is the front buffer of a
+ * GPU swap. The kernel reads it back from VRAM only on this request. */
+static int read_presented(unsigned id,uint32_t *pixels,unsigned width,unsigned height) {
+  struct provider_context *c=lookup(id);
+  if (!c || !pixels || width!=c->width || height!=c->height || c->rgb565) return -EOPNOTSUPP;
+  struct ciuki_w32_render3d_args a=args(c,CIUKI_R3D_READ);
+  a.resource=c->linear; a.bytes=width*height*4;
+  return exchange(&a,pixels);
+}
 static const struct gl_hw_driver provider={GL_HW_VERSION,sizeof(provider),query,open_provider,
-  close_provider,accept,load,read_provider,texture,free_texture,submit,finish_provider,present};
+  close_provider,accept,load,read_provider,texture,free_texture,submit,finish_provider,present,
+  read_presented};
 #ifdef W32_HOST_MODEL
 const struct gl_hw_driver *w32_gdi_render3d_native(unsigned version) {
   return version==GL_HW_VERSION ? &provider : 0;
