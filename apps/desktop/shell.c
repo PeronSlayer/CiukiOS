@@ -1200,11 +1200,11 @@ static void act(struct desktop *d, const struct sh_item *it)
         break;
     case SH_ACT_ICON_AUTO:
         d->sh.cfg.icon_auto_arrange=!d->sh.cfg.icon_auto_arrange;
-        if (d->sh.cfg.icon_auto_arrange) cfg_icons_arrange_at(&d->sh.cfg,d->width,d->height);
+        if (!d->safe_mode && d->sh.cfg.icon_auto_arrange) cfg_icons_arrange_at(&d->sh.cfg,d->width,d->height);
         d->sh.want_save=1; d->sh.icon_selected=-1; d->sh.icon_count=0; desk_shell_apply(d);
         break;
     case SH_ACT_ARRANGE: {
-        if (!it->arg) cfg_icons_arrange_at(&d->sh.cfg,d->width,d->height);
+        if (!it->arg) { if (!d->safe_mode) cfg_icons_arrange_at(&d->sh.cfg,d->width,d->height); }
         else {
             uint8_t occupied[512]={0};
             int cw=d->sh.icon_count ? d->sh.icons[0].box.w : 96;
@@ -1224,7 +1224,7 @@ static void act(struct desktop *d, const struct sh_item *it)
                 int slot=(col*rows+row)%cells;
                 while (occupied[slot/8] & (1u<<(slot%8))) slot=(slot+1)%cells;
                 occupied[slot/8]|=1u<<(slot%8);
-                cfg_icon_move_at(&d->sh.cfg,icon_position_name(d,k),d->width,d->height,8+(slot/rows)*cw,DESK_BAR+10+(slot%rows)*ch);
+                if (!d->safe_mode) cfg_icon_move_at(&d->sh.cfg,icon_position_name(d,k),d->width,d->height,8+(slot/rows)*cw,DESK_BAR+10+(slot%rows)*ch);
             }
         }
         d->sh.want_save=1;
@@ -2408,7 +2408,7 @@ static void icons_layout(struct desktop *d)
             if (py<top) py=top;
         }
         d->sh.icons[k].box = (struct desk_box){px, py, desk_metric(AP_ICON_X,ICON_CELL_W), desk_metric(AP_ICON_Y,ICON_CELL_H)};
-        if (d->sh.cfg.icon_auto_arrange && cfg_icon_move_at(&d->sh.cfg,name,d->width,d->height,px,py)) d->sh.want_save=1;
+        if (!d->safe_mode && d->sh.cfg.icon_auto_arrange && cfg_icon_move_at(&d->sh.cfg,name,d->width,d->height,px,py)) d->sh.want_save=1;
         y += desk_metric(AP_ICON_Y,ICON_CELL_H);
     }
 }
@@ -3245,7 +3245,7 @@ void desk_shell_drag_cancel(struct desktop *d)
 static void dnd_reposition(struct desktop *d)
 {
     struct sh_dnd *g = &d->sh.dnd;
-    if (d->sh.cfg.icon_auto_arrange) { d->sh.cfg.icon_auto_arrange=0; d->sh.want_save=1; }
+    if (!d->safe_mode && d->sh.cfg.icon_auto_arrange) { d->sh.cfg.icon_auto_arrange=0; d->sh.want_save=1; }
     int dx = g->menu ? g->menu_x - g->start_x : d->mouse_x - g->start_x, dy = g->menu ? g->menu_y - g->start_y : d->mouse_y - g->start_y;
     int saved = 1;
     for (int k = 0; k < d->sh.icon_count; k++) if (desk_shell_icon_marked(d, k)) {
@@ -3255,7 +3255,9 @@ static void dnd_reposition(struct desktop *d)
         if (b->x + b->w > (int)d->width) b->x = (int)d->width - b->w;
         if (b->y < DESK_BAR + 10) b->y = DESK_BAR + 10;
         if (b->y + b->h > (int)d->height - DESK_BAR) b->y = (int)d->height - DESK_BAR - b->h;
-        if (cfg_icon_move_at(&d->sh.cfg, icon_position_name(d, k),d->width,d->height, b->x, b->y)) d->sh.want_save = 1; else saved = 0;
+        if (!d->safe_mode) {
+            if (cfg_icon_move_at(&d->sh.cfg, icon_position_name(d, k),d->width,d->height, b->x, b->y)) d->sh.want_save = 1; else saved = 0;
+        }
         damage(d, *b);
     }
     d->sh.background_valid = 0;
@@ -4454,6 +4456,7 @@ int desk_power_input(struct desktop *d, const struct ciuki_input_event *e)
 static void shutdown_commit(struct desktop *d, int index)
 {
     int sel = d->sh.shutdown_sel;
+    fprintf(stderr,"[desktop] shutdown choice=%d mode=%u geometry=%ux%u\n",sel,d->display_mode,d->width,d->height);
     if (sel == SD_STANDBY && d->sh.power_can_standby) d->sh.want_standby = 1;
     else d->sh.want_power = sel == SD_RESTART ? 1 : 2;
     desk_request_close(d, index);

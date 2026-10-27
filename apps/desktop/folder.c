@@ -352,7 +352,7 @@ int desk_folder_transfer(struct desktop *d, char *const *paths, unsigned count, 
                 snprintf(record->label,sizeof(record->label),"%.63s",fm_basename(paths[i]));
             }
             if (!r) r=fm_shortcut(target,record,link);
-            if (!r && place) { cfg_icon_move_at(&d->sh.cfg,fm_basename(link),d->width,d->height,x+(int)i*16,y+(int)i*16); d->sh.want_save=1; }
+            if (!r && place && !d->safe_mode) { cfg_icon_move_at(&d->sh.cfg,fm_basename(link),d->width,d->height,x+(int)i*16,y+(int)i*16); d->sh.want_save=1; }
             if (!r) r=fm_refresh(target);
         }
         fm_destroy(target); free(target); free(record);
@@ -381,7 +381,7 @@ static void positions_after(struct desktop *d, struct fm_job *j)
         if (!fm_parent(parent,j->sources[i]) && fm_same_path(parent,folder_path(d)) && !fm_same_path(j->destination,folder_path(d)))
             { cfg_icon_forget(&d->sh.cfg,fm_basename(j->sources[i])); changed=1; }
     }
-    if (f->place && fm_same_path(j->destination,folder_path(d))) {
+    if (!d->safe_mode && f->place && fm_same_path(j->destination,folder_path(d))) {
         int top=DESK_BAR+10, cell_h=94, rows=((int)d->height-DESK_BAR-4-top)/cell_h;
         if (rows<1) rows=1;
         for (unsigned k=0;k<j->created_count;k++) {

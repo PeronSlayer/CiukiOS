@@ -214,15 +214,23 @@ static void log_mode(uint16_t mode, int result)
 
 static int refuse(uint16_t mode, int e) { log_mode(mode, e); return e; }
 
+static int mode_failure(uint16_t id, const char *stage, int error)
+{
+    klog("[display] mode_failure mode=%u stage=%s error=%d",id,stage,error);
+    return -EIO;
+}
 static int apply(uint16_t id, struct fb_device *out)
 {
     uint8_t info[256];
     int e = biosvm_video_switch(id, info);
-    if (e) return -EIO;
-    if (fbdev_mode_decode(id, info, out)) return -EIO;
+    if (e) return mode_failure(id,"bios-switch",e);
+    e=fbdev_mode_decode(id, info, out);
+    if (e) return mode_failure(id,"mode-decode",e);
     const struct ciuki_boot_display_mode *m = listed(id);
-    if (!m || m->width != out->width || m->height != out->height || m->bpp != out->bpp) return -EIO;
-    return fbdev_change_commit(out) ? -EIO : 0;
+    if (!m || m->width != out->width || m->height != out->height || m->bpp != out->bpp)
+        return mode_failure(id,"mode-inventory",-EINVAL);
+    e=fbdev_change_commit(out);
+    return e ? mode_failure(id,"framebuffer-commit",e) : 0;
 }
 
 static int restore(void)
@@ -472,9 +480,10 @@ int display_set_for_present(struct process *p, uint16_t id, bool delegated)
     switching = true;
     previous = *fbdev_get();
     int e = provider ? 0 : biosvm_video_prepare();
-    if (e) { switching = false; return refuse(id, -EIO); }
+    if (e) { switching = false; return refuse(id, mode_failure(id,"bios-prepare",e)); }
     if (grants_display_busy()) { switching = false; return refuse(id, -EBUSY); }
     e = fbdev_change_begin();
+    if (e) mode_failure(id,"framebuffer-begin",e);
     if (!e) {
         struct fb_device next;
         if (!provider) {

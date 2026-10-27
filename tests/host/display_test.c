@@ -45,6 +45,7 @@ static unsigned native_prepares,native_begins,native_ends,native_completes,nativ
 static int native_publish_error;
 static bool native_recovered;
 static char native_results[256],return_timing[256],frame_timing[256];
+static char mode_failure_record[256];
 void bootlog_snapshot(struct bootlog_stats *s) { memset(s,0,sizeof(*s));s->active=log_active; }
 int bootlog_sync(bool (*cancel)(void *),void (*pause)(void *),void *arg)
 { assert(cancel && pause && !cancel(arg)); log_syncs++; return log_sync_error; }
@@ -134,7 +135,8 @@ int biosvm_video_switch(uint16_t id, uint8_t m[256])
 }
 void klog(const char *fmt, ...) {
     if (strstr(fmt,"fullscreen_log error=")) log_errors++;
-    char *out=strstr(fmt,"native_result=") ? native_results :
+    char *out=strstr(fmt,"mode_failure mode=") ? mode_failure_record :
+        strstr(fmt,"native_result=") ? native_results :
         strstr(fmt,"lease_return_ms=") ? return_timing :
         strstr(fmt,"desktop_frame_ms=") ? frame_timing : NULL;
     if (out) { va_list ap;va_start(ap,fmt);vsnprintf(out,256,fmt,ap);va_end(ap); }
@@ -278,6 +280,7 @@ static void fixture(void)
     fullscreen_recovering=fullscreen_log_failed=false;
     native_prepares=native_begins=native_ends=native_completes=blackbox_syncs=0;native_recovered=false;blackbox_error=0;
     native_results[0]=return_timing[0]=frame_timing[0]=0;
+    mode_failure_record[0]=0;
     is_supersavage=false;log_active=true;log_sync_error=0;log_syncs=0;
     log_requests=log_errors=0;
     awaiting_restored_frame=awaiting_present_frame=false;
@@ -429,15 +432,19 @@ static void switch_tests(void)
     assert(!fbdev_present(&s, &r)); assert(fbdev_get()->mapped[0] == 0 && fbdev_get()->mapped[1] == 0xFC);
     fixture(); fail_firmware = true;
     assert(display_set(&desktop, 0x111) == -EIO && switches == 2 && called[1] == 0x118);
+    assert(strstr(mode_failure_record,"stage=bios-switch error=-5"));
     assert(fbdev_get()->present && fbdev_get()->mode_id == 0x118 && display_change_counter() == 1 && !awaiting_frame);
     fixture(); bad_info = true;
     assert(display_set(&desktop, 0x111) == -EIO && switches == 2 && fbdev_get()->mode_id == 0x118);
+    assert(strstr(mode_failure_record,"stage=mode-decode"));
     fixture(); fail_restore = true;
     assert(display_set(&desktop, 0x111) == -EIO && switches == 2 && !fbdev_get()->present && !fbdev_get()->mapped);
     fixture(); prepare_failure = true;
     assert(display_set(&desktop, 0x111) == -EIO && !switches && !sequence_count && fbdev_get()->present);
+    assert(strstr(mode_failure_record,"stage=bios-prepare error=-1"));
     fixture(); fail_window = true;
     assert(display_set(&desktop, 0x111) == -EIO && !switches && fbdev_get()->present);
+    assert(strstr(mode_failure_record,"stage=framebuffer-begin error=-12"));
     fixture(); acceleration=&test_acceleration; accel_ports_owned=true;
     assert(!display_set(&desktop,0x111) && accel_stops==1 && !accel_ports_owned);
     const unsigned with_accel[]={0,1,2,3,4,5,6,7,8};
