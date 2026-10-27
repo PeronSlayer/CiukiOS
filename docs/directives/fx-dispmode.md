@@ -18,3 +18,7 @@
 5. The desktop, display, power and Win32 display suites stay green.
 
 Report to build/codex/fx-dispmode-report.md. Leave changes uncommitted.
+
+## Lead note 1 (2026-10-27 11:25): the session before boot 4 was Safe Mode
+
+The owner started that session in Safe Mode. Safe Mode runs the desktop at 640x480, and `display_start` copies the current mode into `cfg.display_mode` before returning, so the Safe Mode mode became the saved preference and the next normal boot applied it. Windows 98 Safe Mode never changes the normal-mode display settings: Safe Mode must neither save nor overwrite the display preference (nor other per-mode desktop settings that depend on it), and a normal boot keeps the user's mode. Item 1 of the scope is therefore this path; still check the others listed there.
