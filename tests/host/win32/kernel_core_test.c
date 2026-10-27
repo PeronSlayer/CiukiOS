@@ -1,6 +1,7 @@
 /* Production personality mechanisms on the native process RAM fixture.
  * Only hardware/scheduling/VFS endpoints are mocked.
  * SPDX-License-Identifier: GPL-2.0-only */
+#include <ciuki/kheap_limits.h>
 #define kmalloc fixture_kmalloc
 #define kzalloc fixture_kzalloc
 #define kfree fixture_kfree
@@ -12,12 +13,12 @@
 #undef kzalloc
 #undef kfree
 static void (*w32_allocation_hook)(void);
-void *kmalloc(size_t n){
-    void *p=n>2040?0:fixture_kmalloc(n);
+void *(kmalloc)(size_t n) { if (n > KHEAP_MAX_REQUEST) return 0;
+    void *p=fixture_kmalloc(n);
     if(p&&w32_allocation_hook){void (*hook)(void)=w32_allocation_hook;w32_allocation_hook=0;hook();}
     return p;
 }
-void *kzalloc(size_t n){void *p=kmalloc(n);if(p)memset(p,0,n);return p;}
+void *(kzalloc)(size_t n) { if (n > KHEAP_MAX_REQUEST) return 0;void *p=kmalloc(n);if(p)memset(p,0,n);return p;}
 void kfree(void *p){fixture_kfree(p);}
 uint32_t pmm_alloc_contig(uint32_t n){if(fail_alloc()||!n)return 0;for(unsigned first=1;first+n<=HOST_PAGES;first++){unsigned i=0;while(i<n&&!allocated[first+i])i++;if(i!=n){first+=i;continue;}for(i=0;i<n;i++){allocated[first+i]=true;pages_used++;memset(P2V((first+i)*PAGE_SIZE),0xa5,PAGE_SIZE);}return first*PAGE_SIZE;}return 0;}
 #undef fpu_task_release

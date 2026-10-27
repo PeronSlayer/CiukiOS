@@ -29,7 +29,7 @@ static struct proc_thread *thread_id(uint32_t tid)
 }
 static uint32_t queue_charge(uint32_t bytes)
 {
-    if (bytes > 2040)
+    if (bytes > KHEAP_MAX_REQUEST)
         return PAGE_ALIGN_UP(bytes);
     uint32_t charge = 32;
     while (charge < bytes + 8)

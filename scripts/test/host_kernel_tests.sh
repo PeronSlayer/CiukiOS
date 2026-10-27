@@ -6,6 +6,8 @@ out="$root/build/host"
 mkdir -p "$out"
 export TMPDIR="$out" PYTHONDONTWRITEBYTECODE=1
 
+python3 -B "$root/tests/host/test_kheap_limits.py"
+
 # f1-112: real COM arbitration, serial PnP/mouse codecs and virtual UART.
 python3 -B "$root/tests/host/test_com.py"
 python3 -B "$root/tests/host/test_serial_peripheral.py"

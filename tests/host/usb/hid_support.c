@@ -1,9 +1,10 @@
 /* Heap adapter for transport fixtures without a kernel heap. GPL-2.0-only */
+#include <ciuki/kheap_limits.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <ciuki/sync.h>
 void *kzalloc(size_t bytes) __attribute__((weak));
-void *kzalloc(size_t bytes) { if (bytes>2040) abort(); return calloc(1,bytes); }
+void *(kzalloc)(size_t bytes) { if (bytes > KHEAP_MAX_REQUEST) return 0; return calloc(1,bytes); }
 void kfree(void *p) __attribute__((weak));
 void kfree(void *p) { free(p); }
 unsigned usb_count(void) __attribute__((weak));

@@ -5,6 +5,7 @@
 #include <ciuki/desktop.h>
 #include <ciuki/supervisor.h>
 #include <ciuki/signal.h>
+#include "fd_storage.h"
 #include <ciuki/audio.h>
 #include <ciuki/com.h>
 #pragma weak com_device_close
@@ -429,7 +430,7 @@ int files_bootstrap(struct vfs *v)
     if (err) return err;
     struct process *p = proc_supervisor();
     if (!p->cwd) { p->cwd = s->root; px_retain(p->cwd); p->cwd_retain = px_retain; p->cwd_release = px_release; }
-    if (!p->fds) { p->fds = kzalloc(CIUKI_OPEN_MAX * sizeof(*p->fds)); if (!p->fds) return -ENOMEM; }
+    if (!p->fds) { p->fds = proc_fds_new(); if (!p->fds) return -ENOMEM; }
     static const struct supervisor_io_ops ops = { files_stdio, px_chdir };
     supervisor_set_io_ops(&ops);
     static const struct ciuki_file_ops executable_ops = { image_open, image_open_whole };

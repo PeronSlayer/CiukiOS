@@ -5,40 +5,35 @@
 #include <ciuki/audio.h>
 #include <ciuki/files.h>
 #include <ciuki/cpu.h>
+#include <ciuki/desktop.h>
 #include "../../../sdk/sysroot-overlay/include/ciuki/audio_preference.h"
 #include "../../../sdk/libreg/internal.h"
 
 /* Adapt only the pure libreg parser; storage/recovery remains in user space.
  * Local errno and allocations are used only while boot settings are loaded. */
 static int parser_errno;
-struct parser_alloc { size_t size; uint32_t phys, pages; };
+struct parser_alloc { size_t size; bool page_backed; };
 static void *parser_malloc(size_t n)
 {
     if (n > SIZE_MAX - sizeof(struct parser_alloc)) { parser_errno = ENOMEM; return 0; }
     struct parser_alloc *p;
-    uint32_t phys = 0, pages = 0;
-#ifndef FS_HOST
-    /* The kernel heap stops at 2 KiB. Larger parser buffers use a bounded
-     * contiguous page run, and every page is freed after the boot read. */
-    if (n + sizeof(*p) > 2000) {
+    bool page_backed = false;
+    /* Use the same page-backed path on host and kernel for larger parser
+     * buffers. Every allocation is released after the boot settings read. */
+    if (n + sizeof(*p) > KHEAP_MAX_REQUEST) {
         if (n > 2u * REG_TEXT_MAX + 2u) { parser_errno = ENOMEM; return 0; }
-        pages = PAGE_ALIGN_UP(n + sizeof(*p)) / PAGE_SIZE;
-        phys = pmm_alloc_contig(pages);
-        p = phys ? P2V(phys) : 0;
-    } else
-#endif
-    p = kmalloc(sizeof(*p) + n);
+        page_backed = true;
+        p = desktop_buffer_alloc(n + sizeof(*p),MM_IO_REQUEST);
+    } else p = kmalloc(sizeof(*p) + n);
     if (!p) { parser_errno = ENOMEM; return 0; }
-    p->size = n; p->phys = phys; p->pages = pages; return p + 1;
+    p->size = n; p->page_backed = page_backed; return p + 1;
 }
 static void parser_free(void *p)
 {
     if (!p) return;
     struct parser_alloc *h = (struct parser_alloc *)p - 1;
-    if (h->phys) {
-        uint32_t phys = h->phys, pages = h->pages;
-        for (unsigned i = 0; i < pages; i++) pmm_free(phys + i * PAGE_SIZE);
-    } else kfree(h);
+    if (h->page_backed) desktop_buffer_free(h,h->size+sizeof(*h),MM_IO_REQUEST);
+    else kfree(h);
 }
 static void *parser_calloc(size_t n, size_t size)
 {

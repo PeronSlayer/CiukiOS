@@ -1,6 +1,7 @@
 /* Production FAT, boot logger and DOS disk service over interrupted media.
  * No guest execution: the DOS service opens its base/overlay and loads program
  * sectors through the real VFS/cache. SPDX-License-Identifier: GPL-2.0-only */
+#include <ciuki/kheap_limits.h>
 #define main storage_fixture_main
 #include "test_storage.c"
 #undef main
@@ -43,7 +44,7 @@ void kwait_wake_all(struct kwait *q) { (void)q; }
 void task_sleep_ms(uint32_t ms) { (void)ms; CHECK(false); }
 /* f3-46: each read-cache block has a small reclaim tracker (kernel heap). */
 static unsigned disk_trackers;
-void *kmalloc(size_t bytes) { void *p = malloc(bytes); if (p) disk_trackers++; return p; }
+void *(kmalloc)(size_t bytes) { if (bytes > KHEAP_MAX_REQUEST) return 0; void *p = malloc(bytes); if (p) disk_trackers++; return p; }
 void kfree(void *p) { if (p) { CHECK(disk_trackers); disk_trackers--; free(p); } }
 #include "../../../src/kernel/vm/dosvm_disk.c"
 /* Transient overlays only; persistent title storage has its own harness (dos/persistent_saves_test.c). */

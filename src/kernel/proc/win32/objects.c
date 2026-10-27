@@ -25,7 +25,7 @@ struct process *w32_process_for_memory(struct uaddr *u)
 void *w32_alloc(uint32_t n)
 {
     void *p = 0;
-    if (n <= 2040)
+    if (n <= KHEAP_MAX_REQUEST)
         p = kzalloc(n);
     else if (n <= UINT32_MAX - (PAGE_SIZE - 1)) {
         uint32_t pages = PAGE_ALIGN_UP(n) / PAGE_SIZE, phys = pmm_alloc_contig(pages);
@@ -45,7 +45,7 @@ void w32_free(void *p, uint32_t n)
     if (!p)
         return;
     w32_accounts.metadata_bytes -= n;
-    if (n <= 2040)
+    if (n <= KHEAP_MAX_REQUEST)
         kfree(p);
     else {
         uint32_t pages = PAGE_ALIGN_UP(n) / PAGE_SIZE, phys = V2P(p);

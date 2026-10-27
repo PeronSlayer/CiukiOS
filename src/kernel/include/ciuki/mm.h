@@ -7,6 +7,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <ciuki/ledger.h>
+#include <ciuki/kheap_limits.h>
 
 #define PMM_MAX_PAGES   (768u * 256u)      /* direct map limit: 768 MiB */
 #define ZONE_LOW        0
@@ -137,6 +138,18 @@ bool as_range_ok(const struct aspace *as, uint32_t va, uint32_t len, bool write)
 void kheap_init(void);
 void *kmalloc(size_t size);
 void *kzalloc(size_t size);
+/* Keep the real symbols for allocator definitions and runtime boundary tests.
+ * sizeof never evaluates size: even a side-effecting argument runs only once.
+ * A negative array bound rejects oversized constants at every optimization level. */
+#define KHEAP_CHECK_SIZE(size) \
+    ((void)sizeof(char[__builtin_constant_p(size) ? \
+        ((size_t)(size) <= KHEAP_MAX_REQUEST ? 1 : -1) : 1]))
+#ifndef kmalloc
+#define kmalloc(size) (KHEAP_CHECK_SIZE(size), (kmalloc)(size))
+#endif
+#ifndef kzalloc
+#define kzalloc(size) (KHEAP_CHECK_SIZE(size), (kzalloc)(size))
+#endif
 void kfree(void *p);
 size_t kheap_in_use(void);
 /* Class-pool pages retained for reuse; class bytes include headers/padding.

@@ -5,8 +5,9 @@
 #include <ciuki/mm.h>
 #include <ciuki/cpu.h>
 
-#define NCLASS 7                          /* 32 .. 2048 bytes incl. header */
+#define NCLASS KHEAP_CLASS_COUNT           /* 32 .. 2048 bytes incl. header */
 struct hdr { uint32_t cls; uint32_t magic; };
+_Static_assert(sizeof(struct hdr) == KHEAP_HEADER_BYTES, "heap header geometry");
 #define HDR_MAGIC 0xC1A0F00Du
 
 static void *freelist[NCLASS];
@@ -14,7 +15,7 @@ static size_t in_use;
 static size_t peak;
 static uint32_t pool_pages;
 
-static unsigned class_size(unsigned c) { return 32u << c; }
+static unsigned class_size(unsigned c) { return KHEAP_CLASS_MIN << c; }
 
 void kheap_init(void)
 {
@@ -49,9 +50,10 @@ static bool refill(unsigned c)
     return true;
 }
 
-void *kmalloc(size_t size)
+void *(kmalloc)(size_t size)
 {
     if (ledger_assert_pinned_context) ledger_assert_pinned_context(true,(uintptr_t)__builtin_return_address(0));
+    if (size > KHEAP_MAX_REQUEST) return 0;
     size_t need = size + sizeof(struct hdr);
     unsigned c = 0;
     while (c < NCLASS && class_size(c) < need)
@@ -75,7 +77,7 @@ void *kmalloc(size_t size)
     return h + 1;
 }
 
-void *kzalloc(size_t size)
+void *(kzalloc)(size_t size)
 {
     void *p = kmalloc(size);
     if (p)

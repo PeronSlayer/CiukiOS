@@ -4,6 +4,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/abi.h>
 #include <ciuki/mm.h>
+#include <ciuki/desktop.h>
 #include <ciuki/display_driver.h>
 #include <ciuki/task.h>
 #include "../../../fs/fs_port.h"
@@ -393,8 +394,34 @@ int savage3d_owner_attach(struct render3d_service *s,const struct render3d_host 
     render3d_init(s,host,generation,savage3d_backend(),&device,device.heap);
     device.consumer=s; return 0;
 }
-static void *host_alloc(void *ctx,size_t bytes) { (void)ctx; return kmalloc(bytes); }
-static void host_free(void *ctx,void *p) { (void)ctx; kfree(p); }
+/* Qualification/revalidation is serialized by probe_active. Charge all
+ * scratch services, shadows and staging together, including page rounding,
+ * prefixes and retained quarantine, under the existing render3d RAM ceiling.
+ * Physical ownership is accounted by desktop_buffer_alloc to MM_IO_REQUEST. */
+static uint32_t probe_resident_bytes;
+static void *host_alloc(void *ctx,size_t bytes)
+{
+    (void)ctx;
+    if (!bytes || bytes > R3D_RAM_LIMIT - 8) return 0;
+    uint32_t extent=(uint32_t)bytes+8;
+    uint32_t charge=(extent+PAGE_SIZE-1)&~(PAGE_SIZE-1);
+    uint32_t backend=savage3d_backend()->resident_bytes;
+    if (backend>R3D_RAM_LIMIT-probe_resident_bytes ||
+        charge>R3D_RAM_LIMIT-probe_resident_bytes-backend) return 0;
+    probe_resident_bytes+=charge;
+    uint32_t *p=desktop_buffer_alloc(extent,MM_IO_REQUEST);
+    if (!p) { probe_resident_bytes-=charge; return 0; }
+    p[0]=extent; p[1]=charge; return p+2;
+}
+static void host_free(void *ctx,void *data)
+{
+    (void)ctx;
+    if (data) {
+        uint32_t *p=(uint32_t *)data-2, charge=p[1];
+        desktop_buffer_free(p,p[0],MM_IO_REQUEST);
+        probe_resident_bytes-=charge;
+    }
+}
 static uint64_t host_now(void *ctx)
 { (void)ctx; return device.engine->io.now_us(device.engine->io.ctx); }
 static int scratch_create(struct render3d_service **out,unsigned width,unsigned height,bool full,bool hardware)
@@ -402,7 +429,7 @@ static int scratch_create(struct render3d_service **out,unsigned width,unsigned 
     /* The existing inventory-derived pool must contain both mip chains and
      * their guards. This is preflight, never a larger VRAM claim or limit. */
     if (full && hardware && device.texture_bytes<480u*1024) return -ENOMEM;
-    struct render3d_service *s=kmalloc(sizeof(*s)); if (!s) return -ENOMEM;
+    struct render3d_service *s=host_alloc(0,sizeof(*s)); if (!s) return -ENOMEM;
     const struct render3d_host host={0,host_alloc,host_free,host_now,0};
     render3d_init(s,&host,device.generation,0,0,(struct render3d_extent){0});
     s->allocation_checkpoint=probe_checkpoint;
@@ -420,7 +447,7 @@ static int scratch_create(struct render3d_service **out,unsigned width,unsigned 
             unsigned base=i==2 ? 256 : 128,levels=i==2 ? 9 : 8;
             /* The copied texture outlives this bounded staging allocation.
              * Never use a 64 KiB command-ring slot for a 256-square image. */
-            pixels=kmalloc(base*base*4*2);
+            pixels=host_alloc(0,base*base*4*2);
             if (!pixels) { e=-ENOMEM; break; }
             struct render3d_texture_desc desc={.format=R3D_ARGB8888,.width=base,.height=base,.levels=levels};
             unsigned offset=0;
@@ -434,7 +461,7 @@ static int scratch_create(struct render3d_service **out,unsigned width,unsigned 
                 offset+=side*side;
             }
             if (!e) e=render3d_create_texture(s,1,context,&desc,&resource);
-            kfree(pixels);
+            host_free(0,pixels);
         } else {
             if (i==2) for (unsigned j=0;j<32*16;j++) pixels[j]=(j%32)<16 ? 0xff4080c0u : 0xffc04080u;
             e=render3d_create_resource(s,1,context,kinds[i],i==2 ? 32 : width,i==2 ? 16 : height,
@@ -448,14 +475,14 @@ static int scratch_create(struct render3d_service **out,unsigned width,unsigned 
             if (at>device.heap.first+device.heap.bytes-device.texture_bytes || tex_at>device.heap.first+device.heap.bytes) e=-ENOMEM;
         }
     }
-    if (e) { (void)render3d_close(s); kfree(s); return e; }
+    if (e) { (void)render3d_close(s); host_free(0,s); return e; }
     *out=s; return 0;
 }
 static int fullsize_diagnostic(struct render3d_service **scratch)
 {
     /* Minimum probe has completed/restored. Scratch allocation and scalar
      * reference rendering never occur inside presenter/engine ownership. */
-    if (*scratch) { (void)render3d_close(*scratch); kfree(*scratch); *scratch=0; }
+    if (*scratch) { (void)render3d_close(*scratch); host_free(0,*scratch); *scratch=0; }
     struct render3d_service *reference=0;
     probe_phase(0,"fullsize_prepare",0,true,0);
     device.fullsize_testing=true;
@@ -468,7 +495,7 @@ static int fullsize_diagnostic(struct render3d_service **scratch)
         e=savage3d_fullsize_probe(&device,reference);
         device.consumer=0;
     }
-    if (reference) { (void)render3d_close(reference); kfree(reference); }
+    if (reference) { (void)render3d_close(reference); host_free(0,reference); }
     klog("[3d] fullsize result=%s error=%d width=%u height=%u samples=%u reference=%08x hardware=%08x channel_error=%u depth_error=%u elapsed_us=%llu phase=%u guard=%u quarantined=%u",
         !e ? "qualified" : "refused",e,device.mode_width,device.mode_height,device.sample_count,
         device.reference_checksum,device.hardware_checksum,device.max_channel_error,device.max_depth_error,
@@ -485,7 +512,7 @@ static int attachment_diagnostic(struct render3d_service **scratch,bool depth24)
     if (!device.fullsize_qualified || device.lost) return -ENODEV;
     if (budget_reason) return -ETIMEDOUT;
     const char *prepare=depth24 ? "d24s8_prepare" : "rgb565_prepare";
-    if (*scratch) { (void)render3d_close(*scratch); kfree(*scratch); *scratch=0; }
+    if (*scratch) { (void)render3d_close(*scratch); host_free(0,*scratch); *scratch=0; }
     struct render3d_service *reference=0;
     probe_phase(0,prepare,0,true,0);
     device.depth24_testing=depth24; device.color565_testing=!depth24; device.fullsize_testing=true;
@@ -499,7 +526,7 @@ static int attachment_diagnostic(struct render3d_service **scratch,bool depth24)
         device.consumer=0;
     }
     device.depth24_testing=device.color565_testing=false;
-    if (reference) { (void)render3d_close(reference); kfree(reference); }
+    if (reference) { (void)render3d_close(reference); host_free(0,reference); }
     klog("[3d] attachment format=%s result=%s error=%d width=%u height=%u depth_error=%u expected=%08x actual=%08x quarantined=%u budget=%s",
         depth24 ? "D24S8" : "RGB565",(depth24 ? device.depth24_qualified : device.color565_qualified) ? "qualified" : "refused",e,device.mode_width,device.mode_height,
         device.max_depth_error,device.expected,device.actual,device.lost,budget_reason ? budget_reason : "ok");
@@ -686,7 +713,7 @@ static void qualification(void)
              * an excuse to recycle any referenced object. */
             device.consumer=scratch; render3d_device_lost(scratch);
             scratch->contexts[0].hardware=true;
-        } else { (void)render3d_close(scratch); kfree(scratch); }
+        } else { (void)render3d_close(scratch); host_free(0,scratch); }
     }
     engine->render3d_qualified=device.qualified && !e;
     if (!device.lost && device.engine) {
