@@ -5,6 +5,12 @@
 #include "fat.h"
 #include "security_policy.h"
 #define VFS_DRIVE_REMOVABLE 1u
+/* fx-emptydrive: struct vfs.slot_type, the removable-media drive that owns a
+ * letter whether or not a medium is mounted. Windows 98 reserves one letter
+ * per removable-media drive at startup when no medium is present (Windows 98
+ * Resource Kit, ch. 10, "Assigning Drive Letters for Removable Media"). */
+#define VFS_SLOT_FLOPPY 1u
+#define VFS_SLOT_OPTICAL 2u
 #include <ciuki/fs_ro.h>
 #define VFS_NODES 64u
 #define VFS_DESCRIPTIONS 128u
@@ -209,6 +215,7 @@ struct vfs {
     unsigned default_drive; /* operation's legacy path-resolution snapshot */
     struct fat_volume *volumes[26];
     uint32_t drive_flags[26];
+    uint8_t slot_type[26]; /* VFS_SLOT_*, namespace lock; set once, never cleared */
     struct fs_ro_volume *ro_volumes[26];
     uint32_t generation[26];
     struct vfs_node nodes[VFS_NODES];
@@ -375,6 +382,11 @@ int vfs_attach_locked(struct vfs *, unsigned drive, struct fat_volume *);
 int vfs_attach_ro(struct vfs *, unsigned drive, struct fs_ro_volume *);
 int vfs_attach_ro_locked(struct vfs *, unsigned drive, struct fs_ro_volume *);
 bool vfs_drive_present(struct vfs *, unsigned drive);
+/* fx-emptydrive: the VFS_SLOT_* drive owning letter d (0: none). An owned
+ * letter without a mounted volume answers -FS_ENXIO (not ready) to path
+ * operations instead of -FS_ENOENT, and letter allocators skip it. */
+static inline unsigned vfs_drive_slot(const struct vfs *v, unsigned d) { return d < 26 ? v->slot_type[d] : 0; }
+static inline bool vfs_letter_taken(struct vfs *v, unsigned d) { return vfs_drive_present(v, d) || vfs_drive_slot(v, d); }
 /* Namespace lock held. EIO invalidates media cache/names/nodes/cwd and
  * removes the letter, even with live descriptions. No media writes. */
 int vfs_ro_check_locked(struct vfs *, unsigned drive);

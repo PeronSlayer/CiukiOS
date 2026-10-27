@@ -280,13 +280,14 @@ static int publish_locked(struct storage *s, unsigned disk, const struct storage
     if (!why && (!table->count || table->entries[0].logical || table->entries[0].start != 2048 ||
         (table->entries[0].type != 0x0b && table->entries[0].type != 0x0c))) why = "partition1";
     unsigned d = 3;
-    while (!why && d < 26 && (vfs_drive_present(&s->vfs, d) || s->volumes[d].present)) d++;
+    /* fx-emptydrive: a CD-ROM or floppy drive's letter is never reused. */
+    while (!why && d < 26 && (vfs_letter_taken(&s->vfs, d) || s->volumes[d].present)) d++;
     if (!why && d >= 26) why = "letters";
     uint32_t reasons = 0;
     e = scanned;
     if (!why) {
         vfs_reserve_locked(&s->vfs, vfs_drive_mask(d)); vfs_tag_locked(&s->vfs, "mount");
-        if (vfs_drive_present(&s->vfs, d) || s->volumes[d].present) why = "letters";
+        if (vfs_letter_taken(&s->vfs, d) || s->volumes[d].present) why = "letters";
         else if ((e = storage_publish_locked(s, disk, d, &table->entries[0], &reasons))) why = "mount";
     }
     if (why) {

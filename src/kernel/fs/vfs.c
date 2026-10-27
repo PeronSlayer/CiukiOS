@@ -1003,7 +1003,9 @@ static int normalize(struct vfs_table *t, const char *s, unsigned *drive, char o
     unsigned d=t->vfs->default_drive;
     if (s[1]==':') { d=(unsigned)(path_upper((uint8_t)s[0])-'A'); if (d>=26) return -FS_EINVAL; }
     int e=path_normalize(s,d,t->cwd[d],drive,out); if (e) return e;
-    return t->vfs->volumes[*drive] ? 0 : -FS_ENOENT;
+    if (t->vfs->volumes[*drive]) return 0;
+    /* fx-emptydrive: an empty CD-ROM or floppy drive is "not ready". */
+    return !t->vfs->ro_volumes[*drive] && vfs_drive_slot(t->vfs,*drive) ? -FS_ENXIO : -FS_ENOENT;
 }
 /* f1-89 writer turn. One FAT-mutating operation per letter plans and
  * publishes at a time (no spurious EAGAIN, no lost FSInfo/free-count

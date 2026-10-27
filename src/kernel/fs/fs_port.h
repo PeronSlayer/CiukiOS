@@ -365,7 +365,10 @@ enum fs_error {
     FS_EBUSY=16, FS_EEXIST=17, FS_EXDEV=18, FS_ENOTDIR=20, FS_EISDIR=21,
     FS_EINVAL=22, FS_EMFILE=24, FS_EFBIG=27, FS_ENOSPC=28, FS_EROFS=30,
     FS_ENAMETOOLONG=36, FS_ENOTEMPTY=39, FS_ELOOP=40, FS_EILSEQ=84,
-    FS_EOPNOTSUPP=95, FS_EUCLEAN=117, FS_EQUARANTINED=200
+    FS_EOPNOTSUPP=95, FS_EUCLEAN=117, FS_EQUARANTINED=200,
+    /* fx-emptydrive: the letter belongs to a removable-media drive (CD-ROM,
+     * floppy) with no medium mounted: Win32 ERROR_NOT_READY, DOS 15h. */
+    FS_ENXIO=6
 };
 static inline uint16_t fs_rd16(const void *v) {
     const uint8_t *p=v; return (uint16_t)(p[0] | (uint16_t)p[1]<<8);

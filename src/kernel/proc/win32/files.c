@@ -28,6 +28,8 @@ static uint32_t dos_error(int e) {
     return 36;
   case -EBADF:
     return 6;
+  case -ENXIO:
+    return 21; /* fx-emptydrive: ERROR_NOT_READY, an empty CD-ROM/floppy drive */
   case -EINTR:
     return 995;
   case -EFAULT:
@@ -330,12 +332,21 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
     unsigned d = full[0] ? full[0] - 'A' : cwd->drive;
     struct vfs *v = s->vfs;
     vfs_lock(v, 0);
+    /* fx-emptydrive: GetLogicalDrives lists every drive letter, also a
+     * CD-ROM or floppy drive without a medium (Windows 98 reserves one
+     * letter per removable-media drive at startup). */
     for (unsigned i = 0; i < 26; i++)
-      if (v->volumes[i] || v->ro_volumes[i])
+      if (v->volumes[i] || v->ro_volumes[i] || vfs_drive_slot(v, i))
         info.drives |= 1u << i;
     if (d >= 26 || !(info.drives & (1u << d)))
       error = 15;
-    else {
+    else if (!v->volumes[d] && !v->ro_volumes[d]) {
+      /* Empty drive: GetDriveType still answers from the copied record;
+       * volume and space queries fail with ERROR_NOT_READY. */
+      info.type = vfs_drive_slot(v, d) == VFS_SLOT_OPTICAL ? 5 : 2;
+      info.max_component = 0;
+      error = 21;
+    } else {
       vfs_reserve_locked(v, vfs_drive_mask(d));
       struct fat_volume *vol = v->volumes[d];
       struct fs_ro_volume *ro = v->ro_volumes[d];
@@ -370,8 +381,8 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
       info.total_high = (uint32_t)(total >> 32);
     }
     vfs_unlock(v);
-    if (!error && (a->bytes != sizeof(info) ||
-                   copy_to_user(a->buffer, &info, sizeof(info))))
+    if ((!error || error == 21) && (a->bytes != sizeof(info) ||
+                                     copy_to_user(a->buffer, &info, sizeof(info))))
       error = 998;
     goto done;
   }

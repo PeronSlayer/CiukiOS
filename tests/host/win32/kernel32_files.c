@@ -128,6 +128,48 @@ static void delete_attr_race(void) {
   puts("PASS f1-89 delete versus SetFileAttributes: attribute call queued for the writer turn, "
        "ERROR_FILE_NOT_FOUND, deleted slot not resurrected");
 }
+/* fx-emptydrive: an empty CD-ROM drive (E:) and floppy drive (A:) keep their
+ * letters. GetLogicalDrives lists them, GetDriveType answers DRIVE_CDROM /
+ * DRIVE_REMOVABLE from the record copied with ERROR_NOT_READY, volume, space,
+ * open, find, attribute and directory requests fail with ERROR_NOT_READY (21);
+ * a letter nobody owns stays ERROR_INVALID_DRIVE (15) / not found. */
+static struct ciuki_w32_file_args open_request(const char *path, unsigned access, unsigned share, unsigned disposition);
+static uint32_t disk_request(const char *path, struct ciuki_w32_disk_info *info) {
+  if (path) put_path(USER, path);
+  struct ciuki_w32_file_args a = {.action = W32_F_DISK, .path = path ? USER : 0,
+                                  .buffer = USER2, .bytes = sizeof(*info)};
+  CHECK(!ua_write(client->memory, USER2, &(struct ciuki_w32_disk_info){0}, sizeof(*info)));
+  CHECK(!w32_file_call(client_thread, &a));
+  CHECK(!ua_read(client->memory, info, USER2, sizeof(*info)));
+  return a.error;
+}
+static void empty_drives(void) {
+  vfs_lock(&vfs, 0); vfs.slot_type[4] = VFS_SLOT_OPTICAL; vfs.slot_type[0] = VFS_SLOT_FLOPPY; vfs_unlock(&vfs);
+  struct ciuki_w32_disk_info info;
+  CHECK(!disk_request(0, &info) && info.drives == ((1u << 0) | (1u << 2) | (1u << 3) | (1u << 4)) && info.type == 3);
+  CHECK(disk_request("E:\\", &info) == 21 && info.type == 5 && info.drives == 0x1du && !info.label[0] &&
+        !info.filesystem[0] && !info.total_low && !info.free_low);
+  CHECK(disk_request("A:\\", &info) == 21 && info.type == 2);
+  CHECK(disk_request("D:\\", &info) == 0 && info.type == 3);
+  CHECK(disk_request("F:\\", &info) == 15 && !info.type);
+  struct ciuki_w32_file_args a = open_request("E:\\SETUP.EXE", 0x80000000u, 7, 3);
+  CHECK(a.error == 21 && !a.result);
+  CHECK(open_request("A:\\README.TXT", 0x80000000u, 7, 3).error == 21);
+  CHECK(open_request("E:\\NEW.TXT", 0x40000000u, 0, 2).error == 21);
+  CHECK(open_request("F:\\SETUP.EXE", 0x80000000u, 7, 3).error != 21);
+  CHECK(path_request("E:\\GAMES", W32_F_MKDIR) == 21);
+  put_path(USER, "E:\\*.*");
+  struct ciuki_w32_file_info found;
+  a = (struct ciuki_w32_file_args){.action = W32_F_FIRST, .path = USER, .buffer = USER2, .bytes = sizeof(found)};
+  CHECK(!w32_file_call(client_thread, &a) && a.error == 21 && !a.result);
+  put_path(USER, "E:\\SETUP.EXE");
+  a = (struct ciuki_w32_file_args){.action = W32_F_STAT, .path = USER, .buffer = USER2, .bytes = sizeof(found)};
+  CHECK(!w32_file_call(client_thread, &a) && a.error == 21);
+  vfs_lock(&vfs, 0); vfs.slot_type[4] = 0; vfs.slot_type[0] = 0; vfs_unlock(&vfs);
+  CHECK(disk_request("E:\\", &info) == 15);
+  puts("PASS fx-emptydrive Win32 drives: empty CD-ROM E: and floppy A: in GetLogicalDrives, DRIVE_CDROM/DRIVE_REMOVABLE "
+       "with ERROR_NOT_READY for volume/space, open/create/find/stat/mkdir ERROR_NOT_READY, unknown letter ERROR_INVALID_DRIVE");
+}
 static struct ciuki_w32_file_args open_request(const char *path,
                                                unsigned access, unsigned share,
                                                unsigned disposition) {
@@ -364,6 +406,7 @@ int main(int argc, char **argv) {
     vfs_table_destroy(&t);
   }
   amendment_file_identity();
+  empty_drives();
   amendment_files();
   delete_attr_race();
   struct ciuki_w32_file_args a =

@@ -145,7 +145,9 @@ static int cd_tray(struct storage *s, uint32_t address, uint32_t bytes)
     if (drive < 26) return px_error(optical_eject(s, drive, generation));
     e = atapi_eject(d);
     s->optical_bindings[r.slot].attempted_generation = 0;
-    klog("[optical] media slot=%u stage=eject drive=- generation=%u result=%d", r.slot, generation, e);
+    unsigned letter = s->optical_bindings[r.slot].drive; /* fx-emptydrive: kept while empty */
+    klog("[optical] media slot=%u stage=eject drive=%c generation=%u result=%d", r.slot,
+         letter >= 3 && letter < 26 ? 'A' + letter : '-', generation, e);
     return e == -FS_EINVAL ? -EINVAL : px_error(e);
 }
 

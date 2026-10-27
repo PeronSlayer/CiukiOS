@@ -14,6 +14,10 @@ struct optical_binding {
     uint64_t next_poll;
     uint32_t attempted_generation, observed_generation;
     int result;
+    /* fx-emptydrive: the letter this drive owns from its first service pass
+     * (after the hard-disk volumes, before USB media), with or without a
+     * disc; 0 until reserved. Namespace lock. */
+    unsigned drive;
 };
 struct storage_volume {
     struct blkpart part;
@@ -141,6 +145,11 @@ int storage_add_ro(struct storage *, unsigned slot, struct blkdev *, uint64_t se
 int storage_add_ro_locked(struct storage *, unsigned slot, struct blkdev *, uint64_t session);
 void storage_refresh_ro(struct storage *);
 int optical_bind(struct storage *, unsigned slot, struct ata_device *);
+/* fx-emptydrive: reserve letter d for a removable-media drive (VFS_SLOT_*)
+ * whether or not a medium is mounted; namespace lock held. The floppy
+ * platform reserves A:/B: for each drive the controller found. */
+void storage_reserve_slot_locked(struct storage *, unsigned drive, unsigned type);
+void storage_reserve_floppy(unsigned drive);
 void optical_service(struct storage *, uint64_t now_ms);
 void optical_start_service(struct storage *);
 int optical_eject(struct storage *, unsigned drive, uint32_t generation);

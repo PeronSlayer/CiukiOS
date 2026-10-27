@@ -187,8 +187,18 @@ static void insert_disk_prompt(struct files_app *a, int drive, const char *path)
 /* fx-17b: A:/B: drives the controller found, listed with or without a disk. */
 static int floppy_drive(const struct files_app *a, int d)
 { return d>=0 && d<2 && a->media.type[d]==CIUKI_MEDIA_FLOPPY; }
+/* fx-emptydrive: a CD-ROM drive keeps its letter with or without a disc. */
+static int optical_drive(const struct files_app *a, int d)
+{ return d>=3 && d<26 && a->media.type[d]==CIUKI_MEDIA_OPTICAL; }
+/* An existing drive without a mounted medium: Windows 98 asks for one. */
+static int empty_drive(const struct files_app *a, int d)
+{ return (floppy_drive(a,d) || optical_drive(a,d)) && !(a->media.removable_mask & (1u<<d)); }
 static uint32_t floppy_slots(const struct files_app *a)
-{ return (floppy_drive(a,0) ? 1u : 0u) | (floppy_drive(a,1) ? 2u : 0u) | a->media.removable_mask; }
+{
+    uint32_t slots=(floppy_drive(a,0) ? 1u : 0u) | (floppy_drive(a,1) ? 2u : 0u) | a->media.removable_mask;
+    for (int d=3;d<26;d++) if (optical_drive(a,d)) slots|=1u<<d;
+    return slots;
+}
 static void checkpoint(struct files_app *a, int stage)
 {
     if (!a->test || stage != a->stage + 1) return;
@@ -450,7 +460,7 @@ static void tree_items(struct files_app *a)
         if (here) current = (int)i;
         it->text[0] = n->name;
         it->icon16 = !i ? (a->ciuki ? a->ciuki16 : named("place:computer", 16)) :
-                     named(n->depth == 1 ? (n->name[0]>='D' && n->name[0]<='Z' && a->media.type[n->name[0]-'A']==CIUKI_MEDIA_OPTICAL ? "place:optical" :
+                     named(n->depth == 1 ? (n->name[0]>='D' && n->name[0]<='Z' && optical_drive(a,n->name[0]-'A') ? "place:optical" :
                                             floppy_drive(a,n->name[0]-'A') ? "place:floppy" : "place:volume") : here ? "type:folder-open" : "type:folder", 16);
         it->selected = (uint8_t)here; it->depth = (uint8_t)(n->depth > 255 ? 255 : n->depth);
         it->expanded = n->expanded; it->children = n->children;
@@ -568,7 +578,7 @@ void files_update(struct files_app *a)
         int drive=computer && e->name[0]>='A' && e->name[0]<='Z' && e->name[0]!='C' ? e->name[0]-'A' : -1;
         int floppy=floppy_drive(a,drive);
         int removable=drive>=3 && (a->media.removable_mask & (1u<<drive));
-        int optical=removable && a->media.type[drive]==CIUKI_MEDIA_OPTICAL;
+        int optical=optical_drive(a,drive);
         const char *drive_icon=floppy ? "place:floppy" : optical ? "place:optical" : removable ? "place:removable" : "place:volume";
         char buffer[40]; snprintf(t->type, sizeof(t->type), "%s", computer ? (floppy ? "3.5-Inch Floppy Disk" : optical ? "CD-ROM Drive" : removable ? "Removable Drive" : "Disk Drive") : fm_type_name(e, buffer, sizeof(buffer)));
         time_text(t->modified, sizeof(t->modified), computer ? 0 : e->meta.modified);
@@ -592,6 +602,8 @@ void files_update(struct files_app *a)
             char *dot=strrchr(t->label,'.'); if (dot && dot!=t->label) *dot=0;
         } else t->label[0]=0;
         if (volume_label[0]) snprintf(t->label,sizeof(t->label),"%s (%s)",volume_label,e->name);
+        /* fx-emptydrive: Windows 98 My Computer names an empty CD-ROM drive. */
+        else if (computer && optical && !removable) snprintf(t->label,sizeof(t->label),"Compact Disc (%s)",e->name);
         if (bin && e->bin && i < a->bin_row_capacity) {
             /* G2: the original name, location and deletion time; sizes also for folders. */
             struct files_bin_row *br = &a->bin_rows[i]; const struct rb_item *item = rb_entry_item(m, e);
@@ -1165,7 +1177,7 @@ static void scan_poll(struct files_app *a)
         if (floppy>=0 && (a->media.removable_mask&(1u<<floppy)) &&
             (a->media.type[floppy]==CIUKI_MEDIA_FLOPPY || a->media.type[floppy]==CIUKI_MEDIA_USB) &&
             fm_drive_root(s->target) && s->kind==SCAN_NAVIGATE) (void)files_disk_open(a,(unsigned)floppy,1);
-        else if (floppy_drive(a, floppy) && s->kind == SCAN_NAVIGATE) insert_disk_prompt(a, floppy, s->target);
+        else if ((floppy_drive(a, floppy) || empty_drive(a, floppy)) && s->kind == SCAN_NAVIGATE) insert_disk_prompt(a, floppy, s->target);
         else if (s->error != -ENOENT || s->kind != SCAN_HISTORY)
             error_box(a, "Files", s->kind == SCAN_SEARCH ? "Cannot search this location:" : "Cannot open the folder.", s->error);
     } else {
@@ -1503,7 +1515,7 @@ static void property_paint(struct du_ui *u,void *ctx)
     struct du_canvas *c=&u->canvas;
     int drive=a->property_drive;
     int floppy=floppy_drive(a,drive), removable=drive>=3 && (a->media.removable_mask & (1u<<drive));
-    int optical=removable && a->media.type[drive]==CIUKI_MEDIA_OPTICAL;
+    int optical=optical_drive(a,drive);
     const char *icon=floppy ? "place:floppy" : optical ? "place:optical" : removable ? "place:removable" : "place:volume";
     const uint32_t *pixels=named(icon,32);
     if (pixels) du_icon_blit(c,bx+PD_X,by+PD_ICON_Y,pixels,32,DU_ICON_NORMAL);
@@ -2209,7 +2221,8 @@ static void command(struct files_app *a, int id)
             /* Raw/blank-media slots outlive a missing /mnt directory. The
              * acknowledged removal must expire this cached slot immediately. */
             a->media.removable_mask&=~(1u<<(unsigned)d);
-            a->media.type[d]=optical ? CIUKI_MEDIA_NONE : CIUKI_MEDIA_SAFE_REMOVED;
+            /* fx-emptydrive: an ejected CD-ROM drive keeps its letter. */
+            a->media.type[d]=optical ? CIUKI_MEDIA_OPTICAL : CIUKI_MEDIA_SAFE_REMOVED;
             a->model.drive_slots=floppy_slots(a);
             files_navigate(a,FM_COMPUTER); snprintf(a->note,sizeof(a->note),"%s",optical ? "The disc has been ejected." : "It is safe to unplug the USB device."); files_update(a); }
         break;

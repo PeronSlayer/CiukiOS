@@ -519,13 +519,27 @@ static BOOL disk_info(const char *root, struct ciuki_w32_disk_info *info) {
                                   .bytes = sizeof(*info)};
   return k32_file(&a);
 }
+/* fx-emptydrive: an empty CD-ROM or floppy drive answers ERROR_NOT_READY
+ * (21) with its record filled: the drive exists (GetLogicalDrives bit,
+ * GetDriveType DRIVE_CDROM/DRIVE_REMOVABLE) while GetVolumeInformation and
+ * GetDiskFreeSpace(Ex) fail with ERROR_NOT_READY, as on Windows 98. */
+static int disk_present(const char *root, struct ciuki_w32_disk_info *info) {
+  DWORD saved = GetLastError();
+  *info = (struct ciuki_w32_disk_info){0};
+  if (disk_info(root, info))
+    return 1;
+  if (GetLastError() != 21 || !info->type)
+    return 0;
+  SetLastError(saved);
+  return 1;
+}
 DWORD W32API GetLogicalDrives(void) {
   struct ciuki_w32_disk_info i;
-  return disk_info(0, &i) ? i.drives : 0;
+  return disk_present(0, &i) ? i.drives : 0;
 }
 DWORD W32API GetDriveTypeA(const char *p) {
   struct ciuki_w32_disk_info i;
-  return disk_info(p, &i) ? i.type : 1;
+  return disk_present(p, &i) ? i.type : 1;
 }
 DWORD W32API GetLogicalDriveStringsA(DWORD cap, char *out) {
   DWORD bits = GetLogicalDrives(), n = 0;

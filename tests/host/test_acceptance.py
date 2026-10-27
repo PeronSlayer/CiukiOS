@@ -683,6 +683,10 @@ class RecordFormatTests(unittest.TestCase):
             ('src/kernel/drivers/optical.c', '[storage] optical slot=', {'order': ['slot', 'drive', 'gen', 'result', 'reason'],
              'drive': 'D', 'result': 3, 'reason': 'mounted'},
              r'^\[storage\] optical slot=\d+ drive=(?P<cd>[A-Z]) mode=ro generation=\d+ result=\d+ reason=mounted$'),
+            # fx-emptydrive: an empty drive's record names the letter it keeps.
+            ('src/kernel/drivers/optical.c', '[storage] optical slot=', {'order': ['slot', 'drive', 'gen', 'result', 'reason'],
+             'drive': 'D', 'result': -123, 'reason': 'no_medium'},
+             r'^\[storage\] optical slot=\d+ drive=D mode=ro generation=\d+ result=-?\d+ reason=no_medium$'),
             ('src/kernel/proc/win32/diagnostics.c', '[win32] start pid=%u exe=%s pe=%08x:%08x shims=%s',
              {'order': ['pid', 'exe'], 'pid': 12, 'exe': 'C:\\Documents\\Desktop\\Quake_III_Arena_Demo\\Q3ADemo.exe'},
              r'^\[win32\] start pid=(?P<setup>\d+) exe=\S*[Qq]3[Aa][Dd][Ee][Mm][Oo]\.[Ee][Xx][Ee] '),
@@ -959,11 +963,11 @@ class RunnerIntegrationTests(unittest.TestCase):
                                   r'^\[user \d+\] \[desktop\] autoplay probe drive=<<cd>> entries=<<media_std_root>> ']},
                         {'name': 'eject', 'check': 'cd', 'actions': [{'media': {'eject': True}}]},
                         {'name': 'gone', 'check': 'cd', 'timeout': 20,
-                         'wait': r'^\[storage\] optical slot=\d+ drive=- mode=ro generation=\d+ result=-?\d+ reason=no_medium$'}])
+                         'wait': r'^\[storage\] optical slot=\d+ drive=<<cd>> mode=ro generation=\d+ result=-?\d+ reason=no_medium$'}])
         scenario = {'records': ['L:CPU signature=1'],
                     'on_qmp': {'blockdev-change-medium#1': ['[storage] optical slot=2 drive=D mode=ro generation=2 result=3 reason=mounted',
                                                             D + ' autoplay probe drive=D entries=3 run_kind=0 music=0 pictures=0 result=0'],
-                               'eject#1': ['[storage] optical slot=2 drive=- mode=ro generation=3 result=-123 reason=no_medium']}}
+                               'eject#1': ['[storage] optical slot=2 drive=D mode=ro generation=3 result=-123 reason=no_medium']}}
         result, directory = self.run_case(c, **scenario)
         self.assertEqual(result['outcome'], 'pass', (result['reason'], result.get('acceptance', {}).get('steps')))
         args = result['qemu']['arguments']

@@ -1400,6 +1400,9 @@ struct ciuki_time_zone {
 
 /dev/media: v2 adds per-drive types; v1 remains accepted at its old size.
 removable_mask includes ejectable USB and optical media; type[] distinguishes them.
+fx-emptydrive: a CD-ROM drive owns its letter from boot; type[] reports
+CIUKI_MEDIA_OPTICAL there with or without a disc, removable_mask has the
+bit (and generation[] the medium) only while a disc is mounted.
 A removal names a generation and ejects the physical USB device or CD.
 
 ```c

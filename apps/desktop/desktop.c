@@ -1661,7 +1661,8 @@ static void media_remove(struct desktop *d)
     if (!e && r.drive<26 && d->sh.media.generation[r.drive]==r.generation) {
         struct ciuki_media_state state=d->sh.media;
         state.removable_mask&=~(1u<<r.drive);
-        state.type[r.drive]=optical ? 0 : CIUKI_MEDIA_SAFE_REMOVED;
+        /* fx-emptydrive: the CD-ROM drive keeps its letter after an eject. */
+        state.type[r.drive]=optical ? CIUKI_MEDIA_OPTICAL : CIUKI_MEDIA_SAFE_REMOVED;
         desk_shell_media_update(d,&state);
     }
     observer_close(&d->media_fd);

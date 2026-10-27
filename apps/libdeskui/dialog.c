@@ -104,6 +104,13 @@ void du_dialog_tick(struct du_ui *u)
             place_add(p,label,path,"media-floppy");
         }
         for (unsigned drive=3;drive<26;drive++) {
+            /* fx-emptydrive: an empty CD-ROM drive is listed as in Windows 98. */
+            if (state.type[drive]==CIUKI_MEDIA_OPTICAL && !(state.removable_mask&(1u<<drive))) {
+                char label[32],path[16];
+                snprintf(label,sizeof(label),"Compact Disc (%c:)",'A'+drive); snprintf(path,sizeof(path),"/mnt/%c",'a'+drive);
+                place_add(p,label,path,"drive-optical");
+                continue;
+            }
             if (!(state.removable_mask&(1u<<drive)) ||
                 (state.type[drive]!=CIUKI_MEDIA_USB && state.type[drive]!=CIUKI_MEDIA_OPTICAL)) continue;
             struct ciuki_media_volume v={.version=CIUKI_MEDIA_VERSION,.size=sizeof(v),.drive=drive};
@@ -824,6 +831,26 @@ static void sub_message(struct du_ui *u, int icon, const char *fmt, const char *
     sub_open(u, SUB_MESSAGE, text, icon, NULL);
 }
 
+/* fx-emptydrive: a drive letter without a medium (an empty CD-ROM or floppy
+ * drive, ENXIO) asks for one, as Windows 98 does. A floppy is read on
+ * access first (fx-17b MEDIA_FLOPPY_LOAD: there is no insertion event). */
+static int open_folder(struct du_ui *u, const char *path)
+{
+    int r = navigate(u, path);
+    if (r != -ENXIO || strncmp(path, "/mnt/", 5) || path[5] < 'a' || path[5] > 'z') return r;
+    unsigned drive = (unsigned)(path[5] - 'a');
+#if defined(__i386__) || defined(DU_NATIVE_MEDIA)
+    struct du_dialog *d = &u->dialog;
+    if (drive < 2 && d->places && d->places->fd >= 0) {
+        struct ciuki_media_remove load = {CIUKI_MEDIA_VERSION, sizeof(load), drive, 0};
+        if (!ciuki_devctl(d->places->fd, MEDIA_FLOPPY_LOAD, &load, sizeof(load)) && !(r = navigate(u, path))) return 0;
+    }
+#endif
+    char name[3] = {(char)('A' + drive), ':', 0};
+    sub_message(u, DU_DLG_ICON_WARNING, "Please insert a disk into drive %s", name);
+    return r;
+}
+
 /* Publish only on acceptance, while the owned list and names still exist. */
 static int file_result(struct du_ui *u, const char *path)
 {
@@ -1051,11 +1078,11 @@ static void process(struct du_ui *u)
             if (file && index == 0) accept_file(u); else finish(u, index);
         } else if (e->type == DU_EV_ACTIVATE && e->id == ID_UP) parent_folder(u);
         else if ((e->type==DU_EV_SELECT || e->type==DU_EV_OPEN) && e->id==ID_PLACES && e->index>=0 && d->places && (unsigned)e->index<d->places->count) {
-            if (!navigate(u,d->places->entries[e->index].path)) du_set_text(&d->items[F_NAME],"");
+            if (!open_folder(u,d->places->entries[e->index].path)) du_set_text(&d->items[F_NAME],"");
             places_select(d);
         }
         else if (e->type == DU_EV_COMMIT && e->id == ID_NAME) accept_file(u);
-        else if (e->type == DU_EV_COMMIT && e->id == ID_FOLDER) { if (navigate(u, d->items[F_FOLDER].text)) du_set_text(&d->items[F_FOLDER], d->folder); }
+        else if (e->type == DU_EV_COMMIT && e->id == ID_FOLDER) { if (open_folder(u, d->items[F_FOLDER].text)) du_set_text(&d->items[F_FOLDER], d->folder); }
         else if (e->type == DU_EV_COMMIT && e->id == ID_EDIT) finish(u, 0);
         else if (e->type == DU_EV_COMMIT && d->accept) finish(u, 0);
         else if (e->type == DU_EV_CANCEL) finish(u, d->cancel);
@@ -1092,7 +1119,7 @@ static int file_event(struct du_ui *u, const struct du_event *e)
     if (e->type == DU_EV_CANCEL && e->id == ID_SUB_EDIT) { sub_no(u); return 1; }
     if (e->type == DU_EV_CHANGE && e->id == ID_NAME) { f->selection_input = 0; return 0; }
     if (e->type == DU_EV_SELECT && e->id == ID_FOLDER) {
-        if ((unsigned)e->index < f->look_count && navigate(u, f->look_path[e->index])) du_set_text(&d->items[F_FOLDER], d->folder);
+        if ((unsigned)e->index < f->look_count && open_folder(u, f->look_path[e->index])) du_set_text(&d->items[F_FOLDER], d->folder);
         return 1;
     }
     if (e->type == DU_EV_SELECT && e->id == ID_TYPE) {

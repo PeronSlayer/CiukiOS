@@ -789,6 +789,53 @@ static void floppy_namespace_tests(void)
     namespace_stop(s,true);
     puts("PASS fx-17b floppy namespace: /dev/media floppy type, Retry load without and with a diskette, volume space, A: listed first under /mnt, files readable, no /mnt/c, B: absent, removal");
 }
+/* fx-emptydrive: an empty CD-ROM drive owns D: (Windows 98 reserves one
+ * letter per removable-media drive at startup): /dev/media lists it without
+ * the medium bit, its paths are "not ready" (ENXIO, not ENOENT), /mnt lists
+ * no root for it, and a USB stick takes the next letter after it. A floppy
+ * drive found by the controller owns A: the same way. */
+static void empty_drive_namespace_tests(void)
+{
+    struct px_namespace *space;struct storage *s=namespace_start(&space);(void)space;
+    CHECK(!vfs_drive_present(&s->vfs,3) && !vfs_letter_taken(&s->vfs,3));
+    vfs_lock(&s->vfs,0); storage_reserve_slot_locked(s,3,VFS_SLOT_OPTICAL); vfs_unlock(&s->vfs);
+    storage_reserve_floppy(1);
+    CHECK(vfs_drive_slot(&s->vfs,3)==VFS_SLOT_OPTICAL && vfs_drive_slot(&s->vfs,1)==VFS_SLOT_FLOPPY);
+    CHECK(vfs_letter_taken(&s->vfs,3) && !vfs_drive_present(&s->vfs,3) && !vfs_drive_slot(&s->vfs,5));
+    int control=file_open(&supervisor,"/dev/media",O_RDONLY,0);CHECK(control>=0);
+    struct ciuki_media_state st={.version=CIUKI_MEDIA_VERSION,.size=sizeof(st)};media_user=&st;
+    OK(media_devctl(&supervisor,control,MEDIA_GET_STATE,1,sizeof(st)));
+    CHECK(st.type[3]==CIUKI_MEDIA_OPTICAL && !(st.removable_mask&(1u<<3)) && !st.generation[3]);
+    struct ciuki_media_volume v={.version=CIUKI_MEDIA_VERSION,.size=sizeof(v),.drive=3};media_user=&v;
+    OK(media_devctl(&supervisor,control,MEDIA_GET_VOLUME,1,sizeof(v)));CHECK(!v.flags && !v.generation && !v.label[0]);
+    OK(file_close(&supervisor,control));
+    /* Not ready, not "no such drive"; a letter nobody owns stays ENOENT. */
+    CHECK(file_open(&supervisor,"/mnt/d",O_RDONLY|O_DIRECTORY,0)==-ENXIO);
+    CHECK(file_open(&supervisor,"/mnt/d/SETUP.EXE",O_RDONLY,0)==-ENXIO);
+    CHECK(file_open(&supervisor,"/mnt/D/NEW.TXT",O_CREAT|O_RDWR,0666)==-ENXIO);
+    CHECK(px_chdir(&supervisor,"/mnt/d")==-ENXIO);
+    CHECK(file_open(&supervisor,"/mnt/b",O_RDONLY|O_DIRECTORY,0)==-ENXIO);
+    CHECK(file_open(&supervisor,"/mnt/f",O_RDONLY|O_DIRECTORY,0)==-ENOENT);
+    CHECK(vfs_open(&table,"D:/SETUP.EXE",VFS_READ,VFS_DENY_NONE,0)==-FS_ENXIO);
+    CHECK(vfs_mkdir(&table,"D:/NEW",0)==-FS_ENXIO);
+    struct vfs_find find;struct fat_entry entry;
+    CHECK(vfs_find_first(&table,"D:/*.*",0x37,&find,&entry)==-FS_ENXIO);
+    CHECK(vfs_open(&table,"F:/SETUP.EXE",VFS_READ,VFS_DENY_NONE,0)==-FS_ENOENT);
+    int dir=file_open(&supervisor,"/mnt",O_RDONLY|O_DIRECTORY,0);CHECK(dir>=3);
+    struct ciuki_dirent ent;
+    while (native_next(file_fd(&supervisor,dir),&ent)>0) CHECK(strcmp(ent.d_name,"d") && strcmp(ent.d_name,"b"));
+    OK(file_close(&supervisor,dir));
+    /* A USB stick never takes a CD-ROM drive's letter: with a second empty
+     * CD-ROM drive owning E:, the stick mounts at F:. */
+    vfs_lock(&s->vfs,0); storage_reserve_slot_locked(s,4,VFS_SLOT_OPTICAL); vfs_unlock(&s->vfs);
+    OK(storage_add_removable(s,&media[2].dev));CHECK(!s->vfs.volumes[3] && !s->vfs.volumes[4] && s->vfs.volumes[5]);
+    int fd=file_open(&supervisor,"/mnt/f/SHORT.BIN",O_RDONLY,0);CHECK(fd>=3);OK(file_close(&supervisor,fd));
+    CHECK(file_open(&supervisor,"/mnt/e/SHORT.BIN",O_RDONLY,0)==-ENXIO);
+    OK(storage_remove_removable(s,&media[2].dev,false));CHECK(!s->vfs.volumes[5] && vfs_drive_slot(&s->vfs,3)==VFS_SLOT_OPTICAL);
+    media[2].dev.quarantined=false;
+    namespace_stop(s,true);
+    puts("PASS fx-emptydrive namespace: empty CD-ROM D: and floppy B: reserved, /dev/media type without medium bit, ENXIO/FS_ENXIO paths (open, create, chdir, find, mkdir), no /mnt root, USB stick at F: after the reserved D:/E:");
+}
 static void ntfs_status_tests(void)
 {
     struct px_namespace *space; struct storage *s=namespace_start(&space); (void)space;
@@ -821,7 +868,7 @@ int main(int argc, char **argv)
     for (unsigned i = 0; i < 3; i++) OK(fake_open(&media[i], argv[i + 1]));
     baseline(); media[2].undo_enabled = true;
     ntfs_status_tests();
-    latency_tests(); healthy_writer_reservation_test(); writer_shutdown_test(); bounded_shutdown_test(); cancelled_wait_test(); cwd_tests(); busy_tests(); removable_namespace_tests(); detach_tests(); namespace_probe_tests(); floppy_namespace_tests();
+    latency_tests(); healthy_writer_reservation_test(); writer_shutdown_test(); bounded_shutdown_test(); cancelled_wait_test(); cwd_tests(); busy_tests(); removable_namespace_tests(); detach_tests(); namespace_probe_tests(); floppy_namespace_tests(); empty_drive_namespace_tests();
     for (unsigned i = 0; i < 3; i++) fake_close(&media[i]);
     printf("STORAGE NAMESPACE RESULT checks=%u records=%u failures=0 ASan/UBSan=enabled\n", checks, records);
     return 0;
