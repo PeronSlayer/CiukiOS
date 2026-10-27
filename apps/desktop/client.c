@@ -480,17 +480,30 @@ void desk_animation_tick(struct desktop *d)
         a.w+(b.w-a.w)*(int)step/6,a.h+(b.h-a.h)*(int)step/6};
     animation_damage(d,d->animation.box);
 }
-/* Only a successfully presented frame in the requested/confirmed mode may
- * replace the saved preference. Control Panel previews retain that preference
- * until its confirmation save. Failed reallocations still have the old id. */
+void desk_display_start_recover(struct desktop *d)
+{
+    d->display_start_mode=0;
+    if (d->safe_mode) return;
+    d->sh.cfg.display_mode=d->display_mode;
+    d->sh.want_save=1;
+    char text[256];
+    snprintf(text,sizeof(text),"CiukiOS could not use your saved display settings.\nThe desktop is using %ux%u.\nChoose a different mode in Display Properties if needed.",d->width,d->height);
+    desk_shell_message(d,"Display Settings",text,0);
+}
+/* A completed frame acknowledges scanout, never a preference change. Games,
+ * DOS returns and watchdog rollbacks all deliver the same notification.
+ * Display Properties owns the confirmed preference's durable save. */
 int desk_display_frame_commit(struct desktop *d, int redraw)
 {
     if (redraw || !d->display_pending || d->display_pending != d->display_mode || d->damage.count) return 0;
     uint16_t mode=d->display_pending;
     d->display_pending = 0;
+    if (d->display_start_mode) {
+        if (mode!=d->display_start_mode) desk_display_start_recover(d);
+        else d->display_start_mode=0;
+    }
     if (d->display_reply_mode && d->display_reply_preview) return DESK_DISPLAY_PREVIEW_FRAME;
-    d->sh.cfg.display_mode=mode;
-    return DESK_DISPLAY_PERSIST_FRAME;
+    return DESK_DISPLAY_COMPLETE_FRAME;
 }
 void desk_display_reply(struct desktop *d, int result)
 {

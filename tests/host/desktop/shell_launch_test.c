@@ -31,6 +31,10 @@
 #include <time.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+static struct ciuki_display_info startup_display_info;
+static int startup_display_enabled, startup_display_error;
+static unsigned startup_display_sets;
+static uint16_t startup_display_last_mode;
 /* Keep the cfg_writer.write member out of the write() syscall macro below. */
 #include "../../../apps/desktop/settings_io.h"
 #define CIUKI_RUNTIME_H
@@ -472,7 +476,16 @@ static int media_wait_read(struct desktop *d)
 static int (*const media_read_production)(struct desktop *)=media_read;
 #define media_read media_wait_read
 static uint32_t last_power_action;
-int ciuki_power(uint32_t action) { last_power_action=action; errno=ENOSYS; return -1; }
+static int power_kernel_success;
+static unsigned power_kernel_reboots;
+int ciuki_power(uint32_t action)
+{
+    last_power_action=action;
+    if (power_kernel_success && action==CIUKI_POWER_REBOOT) {
+        __atomic_add_fetch(&power_kernel_reboots,1,__ATOMIC_RELAXED); return 0;
+    }
+    errno=ENOSYS; return -1;
+}
 int ciuki_power_status(struct ciuki_power_status *out) { (void)out; errno=ENOSYS; return -1; }
 /* G11: the EVENTS and POLICY records (no kernel in these scenarios). */
 int ciuki_power_events(struct ciuki_power_events *out) { (void)out; errno=ENOSYS; return -1; }
@@ -1339,6 +1352,7 @@ __attribute__((noinline)) static void test_launch_timing(void)
     puts("PASS launch timing: three policies/models, quiet mode, CREATE/DAMAGE/present distinction, failed present retry, no duplicate frames, bounded startup polling, shutdown blocks launch before tracing");
 }
 #include "shutdown_sequence_test.h"
+#include "display_start_test.h"
 #include "end_session_test.h"
 #include "hang_close_test.h"
 static pthread_mutex_t wallpaper_test_lock=PTHREAD_MUTEX_INITIALIZER;
@@ -1717,13 +1731,25 @@ int main(int argc,char **argv)
     test_launch_timing();
     test_wallpaper_startup();
     test_shutdown_sequence();
+    test_display_start();
+    test_display_safe();
+    test_display_restart();
     test_end_session();
     test_t23_hang_close();
     return 0;
 }
 
-int ciuki_display_query(struct ciuki_display_info *i) { assert(i->version==CIUKI_DISPLAY_VERSION && i->size==sizeof(*i)); return -ENOSYS; }
-int ciuki_display_set(uint16_t id) { (void)id; return -EPERM; }
+int ciuki_display_query(struct ciuki_display_info *i)
+{
+    assert(i->version==CIUKI_DISPLAY_VERSION && i->size==sizeof(*i));
+    if (!startup_display_enabled) return -ENOSYS;
+    *i=startup_display_info; return 0;
+}
+int ciuki_display_set(uint16_t id)
+{
+    if (!startup_display_enabled) return -EPERM;
+    startup_display_last_mode=id; startup_display_sets++; return startup_display_error;
+}
 
 /* This desktop fixture has no installed SETUP.STATE. */
 int desk_firstboot(struct desktop *d) { (void)d; return 0; }

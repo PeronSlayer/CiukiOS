@@ -1263,6 +1263,7 @@ static void performance_sample(struct desktop *d, uint64_t now)
 }
 static int display_apply(struct desktop *d, uint16_t id)
 {
+    if (d->safe_mode) return -EOPNOTSUPP;
     int e = ciuki_display_set(id);
     if (!e && id != d->display_mode) d->display_pending = id;
     return e;
@@ -1303,8 +1304,7 @@ static void display_poll(struct desktop *d)
     d->display_counter = counter;
     d->display_mode = mode;
     d->lfb_bytes_per_pixel=(info.bpp+7)/8;
-    /* Includes rollback. The frame classifier preserves preferences for a
-     * Control Panel preview; ordinary completed mode changes remain durable. */
+    /* Includes rollback; observing scanout never changes the preference. */
     d->display_pending = mode;
 }
 static void display_start(struct desktop *d)
@@ -1316,13 +1316,18 @@ static void display_start(struct desktop *d)
     uint32_t counter;
     if (read(d->display, &counter, sizeof(counter)) == sizeof(counter)) d->display_counter = counter;
     uint16_t wanted = d->sh.cfg.display_mode;
-    d->sh.cfg.display_mode = d->display_mode;
-    if (d->sh.gate || !wanted || wanted == d->display_mode) return;
+    if (d->safe_mode || d->sh.gate || !wanted || wanted == d->display_mode) return;
     for (unsigned i = 0; i < info.mode_count && i < 32; i++) if (info.modes[i].id == wanted) {
+        const struct ciuki_display_mode *m=&info.modes[i];
+        /* The kernel skips identical layouts even when firmware IDs alias.
+         * Such a request has no change counter or pending frame to wait for. */
+        if (m->width==info.width && m->height==info.height && m->bpp==info.bpp && m->pitch==info.pitch) return;
         int e = display_apply(d, wanted);
-        if (e) desk_shell_notify_error(d,"Display mode unavailable",e);
-        break;
+        if (e) desk_display_start_recover(d);
+        else d->display_start_mode=wanted;
+        return;
     }
+    desk_display_start_recover(d); /* preference absent from this boot's inventory */
 }
 
 static void wallpaper_load(struct desktop *d)
@@ -2008,7 +2013,9 @@ static void power_prepare_files(void)
 static void *power_call_worker(void *arg)
 {
     int action=(int)(intptr_t)arg;
+    fprintf(stderr,"[desktop] power worker action=%d stage=files\n",action);
     if (power_files_pending) { power_prepare_files(); power_files_pending=0; }
+    fprintf(stderr,"[desktop] power worker action=%d stage=kernel\n",action);
     int r=ciuki_power(action==1 ? CIUKI_POWER_REBOOT : CIUKI_POWER_OFF), e=errno;
     pthread_mutex_lock(&power_call_lock);
     power_call_result=r; power_call_errno=e; power_call_done=1; power_call_running=0;
@@ -2289,12 +2296,12 @@ static void shell_service(struct desktop *d)
             int old_spacing_x=sh->cfg.icon_spacing_x, old_spacing_y=sh->cfg.icon_spacing_y, old_icon_font=sh->cfg.icon_font;
             uint32_t old_colour=sh->cfg.desktop_color;
             struct appearance old_appearance=sh->cfg.appearance; int old_appearance_set=sh->cfg.appearance_set, old_pointer=sh->cfg.pointer_scheme, old_document=sh->cfg.document_icon, old_recycle=sh->cfg.recycle_icon;
-            uint16_t confirmed = sh->cfg.display_mode;
             sh->recent_serial++;
             cfg_defaults(&sh->cfg);
             int rejected=reload_error ? 0 : cfg_parse(&sh->cfg,reload_text,reload_size);
             if (rejected) snprintf(d->notice,sizeof(d->notice),"desktop.cfg: %d line(s) ignored",rejected);
-            sh->cfg.display_mode = confirmed;
+            /* Display Properties saved its confirmed mode in this snapshot.
+             * Scanout/lease notifications never supply a durable preference. */
             desk_saver_config(d);
             desk_shell_power_config(d);   /* G11: Control Panel's power_* lines */
 
@@ -3020,6 +3027,7 @@ int main(int argc, char **argv)
     static struct ciuki_devices_info devices;
     devices.version=CIUKI_DEVICES_VERSION; devices.size=sizeof(devices);
     if (!ciuki_devices(&devices)) {
+        safe_mode=!!(devices.boot_flags&CIUKI_BOOT_SAFE_MODE);
         verbose_boot=!!(devices.boot_flags&(1u<<11)); /* CBI_F_VERBOSE */
         statistics_boot=!!(devices.boot_flags&((1u<<11)|(1u<<12)|(1u<<6))); /* logged, diagnostic, test */
     }
@@ -3094,6 +3102,7 @@ int main(int argc, char **argv)
     if (flags < 0 || fcntl(input,F_SETFL,flags|O_NONBLOCK)) return gate_setup_error(gate,GATE_SETUP_INPUT,errno);
     if (du_completion_init(&desktop_completion)) return gate_setup_error(gate,GATE_SETUP_INPUT,errno);
     d->wake=du_completion_notify; d->wake_ctx=&desktop_completion;
+    d->safe_mode=safe_mode;
     if (desk_recovery_init) desk_recovery_init(d,safe_mode,terminal_shell);
     int firstboot_pages=gate || terminal_shell ? 0 : desk_firstboot(d);
     shell_setup(d,gate);
@@ -3373,8 +3382,6 @@ int main(int argc, char **argv)
         int mode_frame=desk_display_frame_commit(d,redraw);
         if (mode_frame) {
             desk_display_reply(d,d->display_reply_mode && d->display_reply_mode!=d->display_mode ? -EIO : 0);
-            if (mode_frame==DESK_DISPLAY_PERSIST_FRAME && d->shell && !d->sh.gate && settings_save(d))
-                snprintf(d->notice, sizeof(d->notice), "Display applied; settings not saved");
         }
         if (!gate) performance_sample(d,d->now_ns); /* f2-95: the turn's clock, 2 s cadence */
         /* The controller hashes the framebuffer during this report: send it
