@@ -62,11 +62,29 @@ void w32_thread_cleanup(struct proc_thread *t)
 
 /* Only the two IS5 stub operations are replaced; no Win16 code is run. */
 #include "is5boot.h"
+/* fx-autorun: a 16-bit Windows program (MZ with an "NE" header whose target
+ * OS byte, NE+0x36, is 2) that the IS5 admission did not take. Windows 9x
+ * runs it in its Win16 subsystem; CiukiOS has none yet (the Win16 subsystem
+ * follows the 1.0 Beta), so the refusal names that instead of calling the
+ * file an invalid Win32 application. Classification as Wine 10.0
+ * server/mapping.c get_image_params (STATUS_INVALID_IMAGE_WIN_16). */
+static bool w32_win16_image(const struct ciuki_file *file) {
+    uint8_t dos[64],ne[64];
+    if(file->bytes<64 || file->read(file->cookie,0,dos,64) || is5_word(dos)!=0x5a4d)return false;
+    uint32_t h=is5_word(dos+60)|(uint32_t)is5_word(dos+62)<<16;
+    return h>=64 && h<=file->bytes && file->bytes-h>=64 && !file->read(file->cookie,h,ne,64) &&
+           is5_word(ne)==0x454e && ne[54]==2;
+}
 int w32_spawn(struct process *p, const struct ciuki_file *file, const struct proc_strings *s, uint64_t mask)
 {
     if (!s->argc || s->argc > 2) return -EINVAL;
     int bootstrap = is5_redirect(p, file, s, mask);
     if (bootstrap != 1) return bootstrap;
+    if (w32_win16_image(file)) {
+        klog("[win32] load check=win16-application error=193");
+        w32_refusal_queue(p,W32_REFUSE_WIN16,p->name,193);
+        return -ENOEXEC;
+    }
     uint32_t scratch = pmm_alloc();
     if (!scratch) return -ENOMEM;
     struct w32_image *im = P2V(scratch);
@@ -74,7 +92,10 @@ int w32_spawn(struct process *p, const struct ciuki_file *file, const struct pro
     int err = w32_pe_validate(file, im);
     if (err) { klog("[win32] load check=%s error=193", im->failure ? im->failure : "read");
         w32_refusal_queue(p,im->failure&&(!strncmp(im->failure,"machine-not-i386",17)||!strncmp(im->failure,"unsupported-subsystem",21)||!strncmp(im->failure,"optional-magic-not-pe32",23)||!strncmp(im->failure,"unsupported-runtime",20))?W32_REFUSE_RUNTIME:W32_REFUSE_IMAGE,p->name,193);goto done; }
-    if (im->flags & 0x2000) { klog("[win32] load check=expected-executable error=193");err = -ENOEXEC; goto done; }
+    /* fx-autorun: a DLL started as a program gets the same "not a valid
+     * Win32 application" dialog as any other image refusal, so a refused
+     * spawn (-ENOEXEC) is always reported to the user in words. */
+    if (im->flags & 0x2000) { klog("[win32] load check=expected-executable error=193");w32_refusal_queue(p,W32_REFUSE_IMAGE,p->name,193);err = -ENOEXEC; goto done; }
     p->personality = PROC_WIN32; p->memory->win32 = true;
     err = w32_process_init(p);
     if (err) goto done;

@@ -102,7 +102,7 @@ def build(lua_files=False):
             if path.name=='locale.c' and path.parent.name=='libciuki':
                 compile_flags += ['-I',str(source/'newlib/libc/locale')]
             if path.name=='libc_smoke.c':
-                compile_flags += ['-DCIUKI_LIBC_HOST_REGIONAL=1']
+                compile_flags += ['-DCIUKI_LIBC_HOST_REGIONAL=1','-DCIUKI_LIBC_HOST_STDIO=1']
             if lua_files and path.suffix=='.c':
                 compile_flags += ['-DLUA_COMPAT_5_3','-I',str(lua_source),'-I',str(OUT)]
             subprocess.run([clang,*compile_flags,'-c',str(path),'-o',str(obj)],env=env,stdout=log,stderr=subprocess.STDOUT,check=True)

@@ -36,6 +36,7 @@ int main(int argc,char **argv)
     assert(argc==2);char *args[]={"shell-launch","0","C:\\Program Files\\fixture.exe","/remove \"keep spaces\"",argv[1],NULL};
     assert(!desk_w32_launcher_main(5,args));
     assert(!strcmp(path,"/Program Files/fixture.exe") && !maps && launched==1);
+    assert(!strcmp(words[0],"C:\\Program Files\\fixture.exe"));   /* fx-autorun: the Windows image name */
     assert(!strcmp(words[1],"\"C:\\Program Files\\fixture.exe\" /remove \"keep spaces\""));assert(!strcmp(cwd,argv[1]));
     assert(show==1);
     char text[]="one \"two words\" empty\\\"quote \"\"";char *native[6]={0};
@@ -62,6 +63,11 @@ int main(int argc,char **argv)
     assert(!strcmp(words[1],"\"C:\\tmp\\quake3.exe\" +set r_mode 3"));
     char *root_args[]={"shell-launch","0","C:\\top.exe","","",NULL};
     assert(!desk_w32_launcher_main(5,root_args) && !strcmp(cwd,"/"));
+    /* fx-autorun: a program on a disc (native /mnt/d) is started as D:\\..., so
+     * the kernel's IS5 admission finds SETUP.INS next to it from any drive. */
+    char *disc_args[]={"shell-launch","0","/mnt/d/SETUP.EXE","-s",argv[1],NULL};
+    assert(!desk_w32_launcher_main(5,disc_args) && !strcmp(path,"/mnt/d/SETUP.EXE"));
+    assert(!strcmp(words[0],"D:\\SETUP.EXE") && !strcmp(words[1],"\"D:\\SETUP.EXE\" -s") && !words[2][0]);
     unsigned saved=launched;show_args[5]="10";
     assert(desk_w32_launcher_main(6,show_args)==1 && reply_result==-EINVAL && launched==saved);
     puts("PASS production PE/DOS launcher and shared native argv parser: full quoted command line, native argv quoting, DOS window, cwd isolation, bad cwd refusal");return 0;

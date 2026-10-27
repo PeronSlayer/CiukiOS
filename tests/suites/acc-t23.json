@@ -2464,7 +2464,7 @@
        "keys": "esc"
       }
      ],
-     "note": "no AUTORUN.INF: AutoPlay offers the folder; Esc closes the prompt (AutoPlay runs only DOS programs today, autoplay.c run_kind 2)"
+     "note": "no AUTORUN.INF: AutoPlay offers the folder; Esc closes the prompt (a Windows open= program would be the default choice since fx-autorun)"
     },
     {
      "name": "run-open",

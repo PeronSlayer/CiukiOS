@@ -2603,6 +2603,7 @@ struct links_worker {
     struct du_file_entry browse_entries[DU_FILE_ENTRIES];
     unsigned browse_count;
     struct desk_launch_record requested_record; /* G19: explicit target/argument launch */
+    unsigned requested_origin, completed_origin; /* fx-autorun: DESK_LAUNCH_* of the queued record launch */
     struct desk_link_entry published[DESK_LINKS], scratch[DESK_LINKS];
     struct link_stamp published_stamps[DESK_LINKS], scratch_stamps[DESK_LINKS];
 };
@@ -2689,7 +2690,8 @@ static void *links_thread(void *arg)
         else if (run) { w->run_requested=0; w->run_busy=1; }
         else if (history) { w->history_requested=0; w->history_busy=1; }
         else if (browse) { w->browse_requested=0; w->browse_busy=1; }
-        else if (launch) { memcpy(path,w->source,sizeof(path)); w->launch_requested=0; w->launch_busy=1; }
+        else if (launch) { memcpy(path,w->source,sizeof(path)); w->launch_requested=0; w->launch_busy=1;
+            w->completed_origin=launch==3 ? w->requested_origin : 0; w->requested_origin=0; }
         else { w->scan_requested=0; games=w->games_requested; w->games_requested=0; w->scanning=1; }
         pthread_mutex_unlock(&w->mutex);
         if(edit){
@@ -2860,8 +2862,8 @@ static int link_launch_async(struct desktop *d,const struct desk_launch_record *
     const char *source=NULL;
     for (unsigned k=0;k<d->v3_link_count;k++) if (!memcmp(record,&d->v3_links[k].launch,sizeof(*record))) source=d->v3_links[k].source;
     if (!desk_launch_valid(record)) { pthread_mutex_unlock(&w->mutex); return -EINVAL; }
-    if (source) { snprintf(w->source,sizeof(w->source),"%s",source); w->launch_requested=1; }
-    else { w->requested_record=*record; w->launch_requested=3; }
+    if (source) { snprintf(w->source,sizeof(w->source),"%s",source); w->launch_requested=1; w->requested_origin=0; }
+    else { w->requested_record=*record; w->launch_requested=3; w->requested_origin=d->launch_request.origin; }
     d->launch_link_until=d->now_ns+5000000000ull;
     desk_cursor_update(d);
     pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->mutex); return 0;
@@ -2946,6 +2948,7 @@ static void links_service(struct desktop *d)
     }
     int edit_done=w->edit_done,edit_result=w->edit_result;w->edit_done=0;
     int completed=w->completed, result=w->result; w->completed=0;
+    unsigned origin=completed ? w->completed_origin : 0;
 
     int run_done=w->run_done,run_result=w->run_result;
     char command[DESK_RUN_MAX]; command[0]=0;
@@ -2984,7 +2987,10 @@ static void links_service(struct desktop *d)
     if (completed) d->launch_link_until=0;
     if (run_done) d->launch_run_until=0;
     if (completed || run_done) desk_cursor_update(d);
-    if (completed && result<0) desk_shell_message(d,"Programs","This shortcut is unavailable or its target could not be started.",1);
+    /* fx-autorun: AutoPlay reports its own Windows launch (and keeps quiet
+     * where the Win32 personality already showed the refusal). */
+    if (completed && origin==DESK_LAUNCH_AUTOPLAY) desk_autoplay_completed(d,result);
+    else if (completed && result<0) desk_shell_message(d,"Programs","This shortcut is unavailable or its target could not be started.",1);
     if (run_done) desk_run_result(d,command,run_result<0 ? run_result : 0);
     if (history_error) desk_shell_notify_error(d,"Run history could not be saved",-history_error);
 }
@@ -3070,18 +3076,9 @@ extern void desk_recovery_init(struct desktop *, int, int) __attribute__((weak))
 extern void desk_recovery_start(struct desktop *) __attribute__((weak));
 int main(int argc, char **argv)
 {
-#ifdef __i386__
-    /* fx-acc1: one console line per record. The kernel publishes every
-     * write() to the console as its own "[console] " line, and newlib's
-     * unbuffered stderr writes each fprintf conversion separately, so a
-     * record such as "[desktop] end task dialog kind=dos pid=6 session=0"
-     * reached the serial log as seven lines (acceptance run f63df5ab, lines
-     * 1402-1408) and the DOS games' close step never saw it. ISO C lets
-     * stderr be line buffered (never fully buffered); every desktop record
-     * ends with a newline, so each one is a single write when fprintf
-     * returns, as glibc's unbuffered stderr does. */
-    setvbuf(stderr, NULL, _IOLBF, BUFSIZ);
-#endif
+    /* fx-acc1/fx-autorun: stderr is line buffered for every native program
+     * by the SDK C runtime (sdk/crt/start.c stdio_line_buffering), so each
+     * newline-terminated desktop record is one console write. */
     desk_worker_role("input-compositor-shell");
     int safe_mode = 0, terminal_shell = 0;
     startup_begin=monotonic(); startup_stage("entry");

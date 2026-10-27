@@ -363,6 +363,58 @@ static void label_cache_tests(void)
     files_destroy(&app);fake_assert_clean();
     puts("PASS Files labels: cached UI/selection/layout, unchanged polls, per-drive generation, volume/AUTORUN metadata changes, retry, absence/reinsert and F5");
 }
+/* fx-autorun: My Computer's AutoPlay verb (Microsoft "Enabling and Disabling
+ * AutoRun", "Autorun.inf Entries" shell): a drive whose AUTORUN.INF names a
+ * program gets a bold AutoPlay item first, double-click/Enter runs it, Open
+ * still browses; a drive without one keeps Open as its default. */
+static unsigned autoplay_infos, autoplay_records;
+static struct desk_launch_record autoplay_last;
+static int autoplay_info(unsigned d,char out[33],int *autoplay,struct desk_launch_record *r)
+{
+    autoplay_infos++; snprintf(out,33,"%s",d==3 ? "Half-Life" : "Stick"); *autoplay=d==3;
+    if (d==3) { memset(r,0,sizeof(*r)); strcpy(r->label,"Half-Life"); strcpy(r->target,"/mnt/d/AUTORUN.EXE"); strcpy(r->directory,"/mnt/d"); r->show=1; }
+    return 0;
+}
+static int autoplay_record_open(struct files_app *a,const struct desk_launch_record *r)
+{ (void)a; autoplay_records++; autoplay_last=*r; return 0; }
+static int popup_item(const char *label,unsigned *flags)
+{
+    for (unsigned i=0;i<app.popup_count;i++) if (app.popup[i].label && !strcmp(app.popup[i].label,label)) { if (flags) *flags=app.popup[i].flags; return app.popup[i].id; }
+    return 0;
+}
+static void autoplay_verb_tests(void)
+{
+    fake_image_tree(); fake_create("/mnt/d",FM_DIR); fake_file("/mnt/d/AUTORUN.EXE",64,1); fake_create("/mnt/e",FM_DIR);
+    memset(&app,0,sizeof(app)); du_init(&ui,pixels,WIDTH,HEIGHT);
+    memset(label_keys,0,sizeof(label_keys)); label_error=0; autoplay_infos=autoplay_records=0;
+    app.media_read=read_media; app.media_label_key=label_source; app.media_autoplay=autoplay_info; app.shell_record=autoplay_record_open;
+    media_state=(struct ciuki_media_state){.version=CIUKI_MEDIA_VERSION,.size=sizeof(media_state),.removable_mask=(1u<<3)|(1u<<4)};
+    media_state.generation[3]=90; media_state.generation[4]=91; media_state.type[3]=CIUKI_MEDIA_OPTICAL; media_state.type[4]=CIUKI_MEDIA_USB;
+    assert(!files_setup(&app,&ui,&fake_vfs,FM_COMPUTER));
+    assert(autoplay_infos==2 && app.drive_labels[3].autoplay && !app.drive_labels[4].autoplay);
+    int row=list_find("D:"); assert(row>=0 && !strcmp(app.rows[row].text[0],"Half-Life (D:)"));
+    fm_select(&app.model,(unsigned)row,0); files_update(&app);
+    struct du_event context={.type=DU_EV_CONTEXT,.id=107,.index=row,.x=300,.y=200}; files_event(&ui,&context,&app);
+    unsigned flags=0; int autoplay=popup_item("Auto&Play",&flags);
+    assert(autoplay && app.popup[0].id==autoplay && (flags & DU_ITEM_DEFAULT));
+    int open=popup_item("&Open",&flags); assert(open && !(flags & DU_ITEM_DEFAULT));
+    du_popup(&ui,NULL,0,0,0,0);
+    activate(autoplay);
+    assert(autoplay_records==1 && !strcmp(autoplay_last.target,"/mnt/d/AUTORUN.EXE") && !strcmp(autoplay_last.directory,"/mnt/d") && !app.model.path[0]);
+    struct du_event twice={.type=DU_EV_OPEN,.id=107,.index=row}; files_event(&ui,&twice,&app); files_test_wait(&app);
+    assert(autoplay_records==2 && !app.model.path[0]);           /* double-click: the default verb */
+    activate(open); files_test_wait(&app);
+    assert(autoplay_records==2 && !strcmp(app.model.path,"/mnt/d")); /* Open browses the disc */
+    assert(!files_navigate(&app,FM_COMPUTER)); files_test_wait(&app);
+    row=list_find("E:"); assert(row>=0); fm_select(&app.model,(unsigned)row,0); files_update(&app);
+    context.index=row; files_event(&ui,&context,&app);
+    assert(!popup_item("Auto&Play",NULL) && popup_item("&Open",&flags) && (flags & DU_ITEM_DEFAULT));
+    du_popup(&ui,NULL,0,0,0,0);
+    twice.index=row; files_event(&ui,&twice,&app); files_test_wait(&app);
+    assert(autoplay_records==2 && !strcmp(app.model.path,"/mnt/e"));
+    files_destroy(&app); fake_assert_clean();
+    puts("PASS fx-autorun Files: AutoPlay verb first and default on an autorun drive, double-click runs it, Open browses, other drives unchanged");
+}
 static void blocker_dialog_tests(void)
 {
     for (unsigned theme=0;theme<(unsigned)desk_theme_count();theme++) for (int small=0;small<2;small++) for (int long_names=0;long_names<2;long_names++) {
@@ -848,6 +900,7 @@ int main(int argc, char **argv)
     floppy_ui_tests();
     external_removal_tests();
     label_cache_tests();
+    autoplay_verb_tests();
     blocker_dialog_tests();
     /* Default associations run through the actual Files controller. */
     fake_image_tree(); fake_file("/Programs/paint",100,1); fake_file("/Programs/viewer",100,1); fake_file("/Programs/music",100,1);

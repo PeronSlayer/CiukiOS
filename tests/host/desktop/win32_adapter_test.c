@@ -233,6 +233,37 @@ int main(int argc,char **argv)
     r.target[0]=0;assert(ciuki_win32_shell_launch(&r)==-EINVAL);
     char native[260];assert(desk_w32_native_path("",native,sizeof(native))==-EINVAL);assert(!desk_w32_native_path("C:\\Program Files\\a.exe",native,sizeof(native)));
     assert(!strcmp(native,"/Program Files/a.exe"));assert(desk_w32_native_path("D:\\a.exe",native,sizeof(native))==-ENODEV);
-    assert(launches==6 && calls>0);puts("PASS shell launch: PE, ELF and DOS content classification; exact bounded record and path translation");
+    /* fx-autorun: launch routing for Run, Files, shortcuts and AutoPlay
+     * (exe_kind.h, Wine get_image_params): PE and 16-bit Windows NE go to the
+     * Win32 personality (the kernel then runs the IS5 bootstrap or refuses);
+     * every other MZ, .com and .bat goes to the DOS Box. */
+    uint8_t image[256];
+    #define HEADER(lfanew,sig,os) do { memset(image,0,sizeof(image));image[0]='M';image[1]='Z';image[60]=(uint8_t)(lfanew); \
+        memcpy(image+(lfanew),sig,strlen(sig)==2?2:4);if(os)image[(lfanew)+0x36]=(os); } while(0)
+    snprintf(path,sizeof(path),"%s/SETUP.EXE",argv[1]);
+    HEADER(128,"NE",2);file(path,image,sizeof(image));assert(desk_w32_identify(path)==DESK_W32_PE);   /* IS5 stub / Windows 3.x */
+    snprintf(r.target,sizeof(r.target),"%s",path);r.arguments[0]=0;
+    assert(ciuki_win32_shell_launch(&r)==123 && kind==DESK_W32_PE && !strcmp(launched.target,path));
+    HEADER(128,"NE",1);file(path,image,sizeof(image));assert(desk_w32_identify(path)==DESK_W32_DOS);  /* OS/2 NE */
+    HEADER(128,"NE",5);file(path,image,sizeof(image));assert(desk_w32_identify(path)==DESK_W32_DOS);  /* BOSS: DOS in Wine */
+    HEADER(128,"LE",0);file(path,image,sizeof(image));assert(desk_w32_identify(path)==DESK_W32_DOS);  /* DOS/4GW */
+    HEADER(128,"LX",0);file(path,image,sizeof(image));assert(desk_w32_identify(path)==DESK_W32_DOS);
+    HEADER(128,"PE\0\0",0);file(path,image,sizeof(image));assert(desk_w32_identify(path)==DESK_W32_PE);
+    HEADER(128,"NE",2);file(path,image,128+0x30);assert(desk_w32_identify(path)==DESK_W32_DOS);  /* truncated NE header */
+    memset(image,0,sizeof(image));image[0]='M';image[1]='Z';file(path,image,sizeof(image));assert(desk_w32_identify(path)==DESK_W32_DOS); /* e_lfanew 0 */
+    HEADER(32,"PE\0\0",0);file(path,image,sizeof(image));assert(desk_w32_identify(path)==DESK_W32_DOS); /* below 64: kernel refuses PE there */
+    image[60]=0;image[61]=0x10;file(path,image,sizeof(image));assert(desk_w32_identify(path)==DESK_W32_DOS); /* past EOF */
+    snprintf(path,sizeof(path),"%s/GAME.COM",argv[1]);file(path,(const uint8_t *)"\xeb\xfe",2);assert(desk_w32_identify(path)==DESK_W32_DOS);
+    snprintf(path,sizeof(path),"%s/INSTALL.BAT",argv[1]);file(path,(const uint8_t *)"@echo off\r\n",11);assert(desk_w32_identify(path)==DESK_W32_DOS);
+    #undef HEADER
+    char windows[260];
+    assert(!desk_w32_windows_path("/mnt/d/SETUP.EXE",windows,sizeof(windows)) && !strcmp(windows,"D:\\SETUP.EXE"));
+    assert(!desk_w32_windows_path("/mnt/e/Sub Dir/a.exe",windows,sizeof(windows)) && !strcmp(windows,"E:\\Sub Dir\\a.exe"));
+    assert(!desk_w32_windows_path("/Program Files/x.exe",windows,sizeof(windows)) && !strcmp(windows,"C:\\Program Files\\x.exe"));
+    assert(!desk_w32_windows_path("/mnt/data/x.exe",windows,sizeof(windows)) && !strcmp(windows,"C:\\mnt\\data\\x.exe"));
+    assert(!desk_w32_windows_path("d:\\AUTORUN.EXE",windows,sizeof(windows)) && !strcmp(windows,"D:\\AUTORUN.EXE"));
+    assert(desk_w32_windows_path("relative.exe",windows,sizeof(windows))==-EINVAL);
+    assert(desk_w32_windows_path("/mnt/d/SETUP.EXE",windows,8)==-ENAMETOOLONG);
+    assert(launches==7 && calls>0);puts("PASS shell launch: PE, ELF and DOS content classification; NE Windows to Win32, OS/2 NE, LE/LX, COM and BAT to DOS (fx-autorun); exact bounded record and path translation");
     return 0;
 }

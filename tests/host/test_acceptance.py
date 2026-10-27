@@ -787,14 +787,16 @@ class RecordFormatTests(unittest.TestCase):
         write() of a program is its own [console] line, and newlib's
         unbuffered stderr wrote each fprintf conversion separately, so
         "end task dialog kind=dos pid=6 session=0" arrived as seven lines and
-        the DOS games' close step never matched it. The desktop makes stderr
-        line buffered before anything else; every record it writes ends with
-        a newline, so none is held back."""
-        source = (ROOT / 'apps/desktop/desktop.c').read_text()
-        body = source[source.index('int main(int argc, char **argv)\n{') :]
-        head = body[:body.index('desk_worker_role(')]
-        self.assertIn('#ifdef __i386__', head)
-        self.assertIn('setvbuf(stderr, NULL, _IOLBF, BUFSIZ);', head)
+        the DOS games' close step never matched it. fx-autorun: the SDK C
+        runtime makes stderr line buffered for every native program before
+        main (the desktop's own setvbuf is gone); every record the desktop
+        writes ends with a newline, so none is held back."""
+        crt = (ROOT / 'sdk/crt/start.c').read_text()
+        start = crt[crt.index('void __ciuki_start(uint32_t *stack) {'):]
+        self.assertLess(start.index('__sinit(&main_reent);'), start.index('stdio_line_buffering();'))
+        self.assertLess(start.index('stdio_line_buffering();'), start.index('exit(main(argc,argv,environ));'))
+        self.assertIn('stderr->_flags=(short)((stderr->_flags&~__SNBF)|__SLBF);', crt)
+        self.assertNotIn('setvbuf(stderr', (ROOT / 'apps/desktop/desktop.c').read_text())
         unterminated, other = [], []
         for path in sorted((ROOT / 'apps/desktop').glob('*.c')):
             text = path.read_text()

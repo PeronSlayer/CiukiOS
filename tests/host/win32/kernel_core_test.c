@@ -344,7 +344,13 @@ static void test_is5_spawn(void) {
     CHECK(!proc_strings_add(s,command,sizeof(command),false));
     CHECK(!proc_strings_add(s,"A=B",4,true));
     struct process *p=0;
+    /* fx-autorun: a Windows NE without the IS5 evidence is refused as a
+     * 16-bit Windows program (not as an invalid Win32 image). */
+    w32_fault_count=0;
     CHECK(proc_spawn_file(proc_supervisor(),&f,s,0,0,0,0,&p)==-ENOEXEC);
+    CHECK(w32_fault_count==1&&w32_fault_queue[w32_fault_head].kind==W32_REPORT_REFUSE&&
+          w32_fault_queue[w32_fault_head].code==W32_REFUSE_WIN16&&w32_fault_queue[w32_fault_head].offset==193);
+    w32_fault_count=0;
     is5_siblings=true;is5_helper_missing=true;
     CHECK(proc_spawn_file(proc_supervisor(),&f,s,0,0,0,0,&p)==-ENOENT);
     is5_helper_missing=false;
@@ -355,8 +361,13 @@ static void test_is5_spawn(void) {
     CHECK(!ua_read(p->memory,text,params.command_line,sizeof(command)));CHECK(!strcmp(text,command));
     CHECK(!ua_read(p->memory,text,params.environment,5));CHECK(!memcmp(text,"A=B\0\0",5));
     proc_stop(p,0,0);proc_collect();
+    w32_fault_count=0;
     ne[128+54]=1;CHECK(proc_spawn_file(proc_supervisor(),&f,s,0,0,0,0,&p)==-ENOEXEC);
+    CHECK(w32_fault_count==1&&w32_fault_queue[w32_fault_head].code==W32_REFUSE_IMAGE); /* OS/2 NE: not Windows */
+    w32_fault_count=0;
     ne[128+54]=2;put16(ne+128+12,0x8000);CHECK(proc_spawn_file(proc_supervisor(),&f,s,0,0,0,0,&p)==-ENOEXEC);
+    CHECK(w32_fault_count==1&&w32_fault_queue[w32_fault_head].code==W32_REFUSE_WIN16); /* a Windows NE library */
+    w32_fault_count=0;
     is5_siblings=false;proc_strings_free(s);
     put16(ne+128+12,0);s=proc_strings_new();CHECK(s);
     CHECK(!proc_strings_add(s,"/_ISDEL.EXE",12,false));
@@ -365,7 +376,7 @@ static void test_is5_spawn(void) {
     CHECK(proc_spawn_file(proc_supervisor(),&f,s,0,0,0,0,&p)>0);
     proc_stop(p,0,0);proc_collect();is5_cleanup_record=false;
     proc_strings_free(s);CHECK(pages_used==baseline);
-    puts("w32 IS5 admission: NE+sibling evidence, generic/OS2/DLL refusal, helper rollback, argv/environment and teardown PASS");
+    puts("w32 IS5 admission: NE+sibling evidence, generic/OS2/DLL refusal (Win16 named, fx-autorun), helper rollback, argv/environment and teardown PASS");
 }
 static void test_advpack_process_flags(struct proc_thread *parent)
 {
@@ -449,6 +460,15 @@ static void test_spawn_exceptions(void)
     put32(pe_data+0x98+96+4*8,0x2300);put32(pe_data+0x98+100+4*8,8);CHECK(!w32_pe_validate(&f,im));make_pe(pe_data,false);
     const struct ciuki_file_ops ops={.open=loader_open};proc_set_file_ops(&ops);
     test_is5_spawn();
+    { /* fx-autorun: a DLL started as a program is refused in words too. */
+        static uint8_t library[0x2400];make_pe(library,true);
+        struct ciuki_file dll={library,sizeof(library),pe_read,0};
+        struct proc_strings *ds=proc_strings_new();CHECK(ds);CHECK(!proc_strings_add(ds,"/fixture.dll",13,false));
+        struct process *dp=0;w32_fault_count=0;
+        CHECK(proc_spawn_file(proc_supervisor(),&dll,ds,0,0,0,0,&dp)==-ENOEXEC);
+        CHECK(w32_fault_count==1&&w32_fault_queue[w32_fault_head].code==W32_REFUSE_IMAGE);
+        w32_fault_count=0;proc_strings_free(ds);
+    }
     struct proc_strings *s=proc_strings_new();CHECK(s);CHECK(!proc_strings_add(s,"/fixture.exe",13,false));CHECK(!proc_strings_add(s,"\"quoted  argument\"",19,false));
     struct process *p;loader_missing=true;unsigned baseline=pages_used;
     CHECK(proc_spawn_file(proc_supervisor(),&f,s,0,0,0,0,&p)==-ENOENT&&pages_used==baseline);
