@@ -375,6 +375,7 @@ int dosvm_fullscreen_enter(struct dosvm_key key)
     dosvm_kbd_release(v); dosvm_mouse_event(v,0,0,0);
     fullscreen_dirty=0; fullscreen_revoked=false; /* the load above is a full synchronisation */
     fullscreen_owner=v; v->fullscreen=true;
+    v->fullscreen_hotkey=false; /* fx-dosfull: the hotkey path marks its own entry */
     fullscreen_background=false;
     v->fullscreen_progress=g_ticks; v->fullscreen_ip=UINT32_MAX;
     v->fullscreen_seconds=v->fullscreen_frame_seconds=0;
@@ -421,6 +422,7 @@ int dosvm_fullscreen_leave(struct dosvm_key key, bool background)
     uint64_t began=g_ticks;
     struct dosvm *v=fullscreen_owner;
     v->fullscreen_cause=fullscreen_cause_next ? fullscreen_cause_next : DOSVM_FS_REQUEST;
+    v->fullscreen_hotkey=v->fullscreen_cause==DOSVM_FS_HOTKEY;
     fullscreen_cause_next=0;
     display_fullscreen_return_request();
     display_fullscreen_checkpoint("guest-revoke",0);
@@ -623,6 +625,9 @@ release:
         if (v && same_key(key,dosvm_focused_key())) v->fullscreen_suspended=false;
         int e=dosvm_fullscreen_enter(key);
         if (e==DISPLAY_FULLSCREEN_WINDOWED) e=0;
+        /* fx-dosfull: an entry through Alt+Enter is the user's choice (STATUS
+         * CIUKI_DOSVM_FULLSCREEN_HOTKEY); a refusal changes nothing. */
+        if (!e && dosvm_fullscreen_active(key) && (v=dosvm_lookup(key))) v->fullscreen_hotkey=true;
         entry_error(key,e);
         if (e) klog("[dosvm] fullscreen_refused vm=%u generation=%u error=%d",key.id,key.generation,e);
     }

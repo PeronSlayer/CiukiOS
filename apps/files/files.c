@@ -16,6 +16,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include "../desktop/tz_env.h"
+#include "../dosbox/program.h"
 
 #define CHECKPOINT_SERIAL 0xf2310000u
 
@@ -268,6 +269,29 @@ static int media_blockers(unsigned drive,uint32_t generation,struct ciuki_media_
     int fd=open("/dev/media",O_RDONLY|O_CLOEXEC); if (fd<0) return -errno;
     int e=ciuki_devctl(fd,MEDIA_GET_BLOCKERS,b,sizeof(*b)) ? -errno : 0; close(fd); return e;
 }
+/* fx-dosfull: the Screen usage of an MS-DOS program, from the DOS Box
+ * profile of the command the desktop types for it (apps/dosbox/program.h).
+ * The profile store moves with the DOS Box settings (sec-user-05). */
+static int native_dos_usage(const char *path, unsigned *usage)
+{
+    char key[97];
+    if (dosbox_native_key(path,key)) return -ENOEXEC;
+    int dos=dosbox_dos_program(path);
+    if (dos<0) return -errno;
+    if (!dos) return -ENOEXEC;
+    struct dosbox_profile p;
+    dosbox_profile_default(&p,key);
+    (void)dosbox_profile_load(&p);              /* missing or invalid: the defaults */
+    *usage=p.screen;
+    return 0;
+}
+static int native_set_dos_usage(const char *path, unsigned usage)
+{
+    char key[97];
+    if (dosbox_native_key(path,key)) return -EINVAL;
+    return dosbox_profile_usage_save(key,usage) ? -errno : 0;
+}
+
 int main(int argc, char **argv)
 {
     (void)setlocale(LC_ALL, ""); /* G24: opt into the user's regional formats. */
@@ -334,6 +358,7 @@ int main(int argc, char **argv)
     a->media_defrag=media_defrag; a->media_convert=media_convert; a->media_format=media_format; a->cleanup_fs=fm_native_cleanup_vfs();
     a->backup_call=native_backup; a->media_image=media_image; a->media_format=media_format; a->cleanup_fs=fm_native_cleanup_vfs();
     a->file_info=native_info; a->set_attributes=native_attributes; a->set_label=native_label; a->volume_label=native_volume_label; a->version_info=fm_native_version;
+    a->dos_usage=native_dos_usage; a->set_dos_usage=native_set_dos_usage;
     if (property) snprintf(a->property_request,sizeof(a->property_request),"%s",property);
     if (test) a->checkpoint = checkpoint;
     m->window.close_request = close_request; m->window.message = on_message; m->window.user = a;

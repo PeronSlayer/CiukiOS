@@ -649,7 +649,9 @@ class DesktopTests(unittest.TestCase):
         # and session end with the toolbar; fx-23: 27-28 CREATE on its worker (PING answered, owner stop).
         # dec2: 29-30 EXIT at the prompt with Close on exit on/off.
         # 31-32 a program's return after 12 s closes it; an early return keeps "Finished - <name>".
-        self.dosbox_loading_replay(range(33), True)
+        # fx-dosfull: 33-37 full screen at the first graphics mode, the user's Alt+Enter remembered,
+        # a refusal keeps the window once and stores nothing, mode-change re-entry, busy retry.
+        self.dosbox_loading_replay(range(38), True)
 
     def test_dosbox_save_quota(self):
         self.dosbox_loading_replay((18, 19), False)
@@ -673,6 +675,7 @@ class DesktopTests(unittest.TestCase):
                 result = subprocess.run([str(binary), str(scenario)], capture_output=True, text=True,
                                         timeout=30, env=dict(os.environ, ASAN_OPTIONS="detect_leaks=0"))
                 self.assertEqual(result.returncode, 0, f"scenario {scenario}: {result.stderr}")
+                if scenario >= 33: self.assertIn("PASS fx-dosfull scenario=%d " % scenario, result.stdout)
                 expected = ("PASS G17 DOS program lifecycle" if 23 <= scenario <= 26 else
                             "PASS fx-23 slow CREATE" if scenario == 27 else
                             "PASS fx-23 close during CREATE" if scenario == 28 else "PASS dosbox loading replay")

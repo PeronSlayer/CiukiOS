@@ -2190,6 +2190,19 @@ resynchronizes desktop input; Alt+Tab additionally supplies a balanced desktop
 switch chord. Re-focusing or requesting full screen resumes a paused session.
 The dated F3-20 amendment in `device-firmware-ownership.md` defines the precise
 VGA/firmware authority and the hardware state readback limits.
+### fx-dosfull amendment — graphics and Alt+Enter in STATUS (2026-10-27)
+
+STATUS.changed gains two output bits; the 136-byte command is unchanged.
+`CIUKI_DOSVM_GRAPHICS` (256): the guest display is in a graphics mode (an
+active VBE mode, a BIOS graphics mode in BDA 0049h other than 0-3 and 7, or a
+windowed VGA model in a graphics layout); computed in the STATUS call only.
+`CIUKI_DOSVM_FULLSCREEN_HOTKEY` (512): the last full-screen entry or return was
+the user's Alt+Enter through the kernel input filter; an entry by operation 9,
+a mode-change, Alt+Tab, watchdog or stop return clears it, and a refused entry
+leaves it unchanged. The DOS Box uses them to enter full screen at a program's
+first graphics mode and to remember the user's choice per program
+(`docs/design/dos-program-properties.md`, fx-dosfull).
+
 ## f5-03a — Win32 kernel transport freeze (2026-10-14)
 
 The additive Win32 family is global call **96**, `CIUKI_SYS_W32`; native

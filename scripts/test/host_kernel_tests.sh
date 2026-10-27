@@ -452,6 +452,9 @@ read -r -a vm_profile_args <<< "$vm_profile"
 # dosvm_test.c (game_launch_kernel.c), with a scripted DOS guest. Modes:
 # the first DOOM frame reaches the window; DOOM quits to DOS and "Close on
 # exit" closes the window; the desktop closes a plain DOS Box at C:\>.
+# fx-dosfull: frame and exit refuse full screen (QEMU, f3-29: one request,
+# the game continues in its window); fullscreen accepts it (the game enters
+# at mode 13h, the user's Alt+Enter returns and is remembered as Window).
 launch="$out/game-launch"
 mkdir -p "$launch/include/ciuki"
 for name in dosvm.h channel.h surface.h; do cp "$root/sdk/sysroot-overlay/include/ciuki/$name" "$launch/include/ciuki/"; done
@@ -470,10 +473,10 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast -fsanitize=
     "$root/src/kernel/vm/vga_x86.c" "$root/src/kernel/vm/vga_presenter.c" \
     "$out/dosvm_audio_vm_source.o" "$out/dosvm_audio_opl3.o" "$out/dosvm_audio_mixer.o" \
     "$launch/app.o" "$launch/protocol.o" "$pool" -pthread -Wl,-u,pool_fixture_start -o "$launch/game-launch"
-for mode in frame exit close; do
+for mode in frame exit close fullscreen; do
     rm -rf "$launch/prefs"
     result="$(ASAN_OPTIONS=detect_leaks=0 "$launch/game-launch" "$mode")" || { printf '%s\n' "$result"; exit 1; }
-    grep -E '^PASS DOS (game launch|game exit|Box close)' <<< "$result"
+    grep -E '^PASS DOS (game launch|game exit|Box close|game full screen|game refused full screen)' <<< "$result"
 done
 
 # F4-28: optimized VM-source callback cost (the sanitized full suite above

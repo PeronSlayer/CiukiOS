@@ -110,6 +110,14 @@ struct files_app {
     int (*set_label)(unsigned, const char *);
     int (*version_info)(const char *, char *, size_t);
     char property_version[768];
+    /* fx-dosfull: the Screen page of an MS-DOS program (Windows 98 "Usage"),
+     * stored in the program's DOS Box profile (apps/dosbox/program.h).
+     * dos_usage returns 0 and the usage for a DOS program, -ENOEXEC for any
+     * other file; set_dos_usage stores only the usage. */
+    int (*dos_usage)(const char *, unsigned *);
+    int (*set_dos_usage)(const char *, unsigned);
+    unsigned property_dos_usage;
+    int property_have_dos;
     int (*volume_label)(unsigned, char out[33]);
     struct ciuki_file_info property_info;
     int property_attributes[4];

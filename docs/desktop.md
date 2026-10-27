@@ -1718,6 +1718,14 @@ full-screen entry resumes it. The window and taskbar entry survive throughout.
 Its retained surface says “Running full screen — Alt+Enter to return”. A refused
 entry reports its reason temporarily, while the DOS session remains available.
 
+Since fx-dosfull (owner decision 2026-10-27) a DOS game starts full screen by
+itself at its first graphics mode, as Windows 98 does; its text screens and the
+DOS prompt stay in the window. Alt+Enter, the toolbar's Full screen and the
+menu entry are remembered per program as the Screen tab's Usage (DOS Box
+Properties, or Files > Properties of the program). A refusal (QEMU's standard
+VGA) keeps the game in its window without a message and changes no setting.
+See `docs/design/dos-program-properties.md`.
+
 Presentation/acceleration return EBUSY while the display grant is suspended;
 the desktop keeps servicing its channels and input. This intentional pause does
 not trigger the desktop frame watchdog. Return increments the existing display

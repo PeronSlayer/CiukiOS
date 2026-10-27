@@ -794,7 +794,7 @@
      "quake"
     ]
    },
-   "title": "DOS games from the Games menu (DOOM, Wolfenstein 3-D, Warcraft II demo, Duke Nukem 3D shareware, Quake): window, demo loop or gameplay, full screen and back, exit; window performance counters",
+   "title": "DOS games from the Games menu (DOOM, Wolfenstein 3-D, Warcraft II demo, Duke Nukem 3D shareware, Quake): full screen at the first graphics mode (window on QEMU's refusal), window, demo loop or gameplay, Alt+Enter, exit; window performance counters",
    "steps": [
     {
      "template": "boot",
@@ -861,16 +861,87 @@
      ]
     },
     {
-     "name": "doom-graphics",
+     "name": "doom-fs-auto",
      "check": "doom",
      "timeout": 900,
      "on_fail": "continue",
      "requires": [
       "doom-vm"
      ],
+     "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<doom_vm>\\d+) generation=(?P<doom_gen>\\d+) mode=(?P<doom_auto_mode>\\d+)$",
+     "fail": [
+      "^\\[dosvm\\] create refused ",
+      "^\\[launch\\] name=dosbox pid=<<doom_pid>> error="
+     ],
+     "note": "fx-dosfull (owner decision 2026-10-27): the game's first graphics mode asks for full screen by itself, without a key, as Windows 98 runs a game that uses graphics modes full screen (Resource Kit ch. 25)"
+    },
+    {
+     "name": "doom-fs-auto-entered",
+     "check": "doom",
+     "timeout": 90,
+     "on_fail": "continue",
+     "requires": [
+      "doom-fs-auto"
+     ],
+     "settle": 8,
+     "wait": "^\\[dosvm\\] fullscreen=1 vm=<<doom_vm>> generation=<<doom_gen>> mode=\\d+$",
+     "fail": "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=<<doom_vm>> generation=<<doom_gen>> ",
+     "known_failure": {
+      "directive": "f3-29",
+      "on": "pattern",
+      "note": "QEMU standard VGA does not read back every VGA register and the entry rolls back; the game continues in its window (step doom-fs-auto-fallback); on the T23 a refusal is a failure"
+     },
+     "actions": [
+      {
+       "screendump": "doom-fullscreen-auto"
+      },
+      {
+       "keys": "alt+ret"
+      }
+     ],
+     "note": "a display that accepts full screen: the game runs full screen; then the user's Alt+Enter returns to the window"
+    },
+    {
+     "name": "doom-fs-auto-return",
+     "check": "doom",
+     "timeout": 120,
+     "on_fail": "continue",
+     "requires": [
+      "doom-fs-auto-entered"
+     ],
+     "wait": [
+      "^\\[dosvm\\] fullscreen=0 vm=<<doom_vm>> generation=<<doom_gen>> result=0 ",
+      "^\\[console\\] dosbox: screen usage vm=<<doom_vm>> generation=<<doom_gen>> usage=window source=alt-enter saved=1$"
+     ],
+     "note": "the DOS Box remembers the user's choice (Window) for this program, as Windows 98 does"
+    },
+    {
+     "name": "doom-fs-auto-fallback",
+     "check": "doom",
+     "timeout": 60,
+     "on_fail": "continue",
+     "requires": [
+      "doom-fs-auto"
+     ],
+     "unless": [
+      "doom-fs-auto-entered"
+     ],
+     "since": "boot",
+     "wait": "^\\[console\\] dosbox: fullscreen auto vm=<<doom_vm>> generation=<<doom_gen>> usage=graphics graphics=1 result=refused error=-?\\d+ continuation=windowed$",
+     "fail": "^\\[console\\] dosbox: screen usage vm=<<doom_vm>> generation=<<doom_gen>> ",
+     "note": "the refusal (QEMU, f3-29) keeps the game in its window with no message: one DOS Box record, no retry, the setting unchanged"
+    },
+    {
+     "name": "doom-graphics",
+     "check": "doom",
+     "timeout": 900,
+     "on_fail": "continue",
+     "requires": [
+      "doom-fs-auto"
+     ],
      "settle": 3,
      "wait": [
-      "^\\[dosvm-window\\] video vm=(?P<doom_vm>\\d+) gen=(?P<doom_gen>\\d+) vbe=[0-9a-f]+ width=(?P<doom_width>[1-9]\\d{2,3}) height=(?P<doom_height>[1-9]\\d{2,3}) text=0$",
+      "^\\[dosvm-window\\] video vm=<<doom_vm>> gen=<<doom_gen>> vbe=[0-9a-f]+ width=(?P<doom_width>[1-9]\\d{2,3}) height=(?P<doom_height>[1-9]\\d{2,3}) text=0$",
       "^\\[dosvm\\] perf vm=<<doom_vm>> gen=<<doom_gen>> exits=[1-9]\\d* ",
       "^\\[dosvm\\] perf vm=<<doom_vm>> gen=<<doom_gen>> exits=[1-9]\\d* ",
       "^\\[dosvm\\] perf vm=<<doom_vm>> gen=<<doom_gen>> exits=[1-9]\\d* "
@@ -888,7 +959,8 @@
        "keys": "alt+ret"
       }
      ],
-     "note": "the game left the DOS prompt for its graphics mode and runs (three active 2 s VM samples): its demo loop or gameplay; then Alt+Enter"
+     "note": "the game runs in its window (after QEMU's refusal, or after the Alt+Enter return): three active 2 s VM samples of its demo loop or gameplay; then the user's Alt+Enter asks for full screen again",
+     "since": "boot"
     },
     {
      "name": "doom-fs-request",
@@ -1026,16 +1098,87 @@
      ]
     },
     {
-     "name": "wolf3d-graphics",
+     "name": "wolf3d-fs-auto",
      "check": "wolf3d",
      "timeout": 900,
      "on_fail": "continue",
      "requires": [
       "wolf3d-vm"
      ],
+     "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<wolf3d_vm>\\d+) generation=(?P<wolf3d_gen>\\d+) mode=(?P<wolf3d_auto_mode>\\d+)$",
+     "fail": [
+      "^\\[dosvm\\] create refused ",
+      "^\\[launch\\] name=dosbox pid=<<wolf3d_pid>> error="
+     ],
+     "note": "fx-dosfull (owner decision 2026-10-27): the game's first graphics mode asks for full screen by itself, without a key, as Windows 98 runs a game that uses graphics modes full screen (Resource Kit ch. 25)"
+    },
+    {
+     "name": "wolf3d-fs-auto-entered",
+     "check": "wolf3d",
+     "timeout": 90,
+     "on_fail": "continue",
+     "requires": [
+      "wolf3d-fs-auto"
+     ],
+     "settle": 8,
+     "wait": "^\\[dosvm\\] fullscreen=1 vm=<<wolf3d_vm>> generation=<<wolf3d_gen>> mode=\\d+$",
+     "fail": "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=<<wolf3d_vm>> generation=<<wolf3d_gen>> ",
+     "known_failure": {
+      "directive": "f3-29",
+      "on": "pattern",
+      "note": "QEMU standard VGA does not read back every VGA register and the entry rolls back; the game continues in its window (step wolf3d-fs-auto-fallback); on the T23 a refusal is a failure"
+     },
+     "actions": [
+      {
+       "screendump": "wolf3d-fullscreen-auto"
+      },
+      {
+       "keys": "alt+ret"
+      }
+     ],
+     "note": "a display that accepts full screen: the game runs full screen; then the user's Alt+Enter returns to the window"
+    },
+    {
+     "name": "wolf3d-fs-auto-return",
+     "check": "wolf3d",
+     "timeout": 120,
+     "on_fail": "continue",
+     "requires": [
+      "wolf3d-fs-auto-entered"
+     ],
+     "wait": [
+      "^\\[dosvm\\] fullscreen=0 vm=<<wolf3d_vm>> generation=<<wolf3d_gen>> result=0 ",
+      "^\\[console\\] dosbox: screen usage vm=<<wolf3d_vm>> generation=<<wolf3d_gen>> usage=window source=alt-enter saved=1$"
+     ],
+     "note": "the DOS Box remembers the user's choice (Window) for this program, as Windows 98 does"
+    },
+    {
+     "name": "wolf3d-fs-auto-fallback",
+     "check": "wolf3d",
+     "timeout": 60,
+     "on_fail": "continue",
+     "requires": [
+      "wolf3d-fs-auto"
+     ],
+     "unless": [
+      "wolf3d-fs-auto-entered"
+     ],
+     "since": "boot",
+     "wait": "^\\[console\\] dosbox: fullscreen auto vm=<<wolf3d_vm>> generation=<<wolf3d_gen>> usage=graphics graphics=1 result=refused error=-?\\d+ continuation=windowed$",
+     "fail": "^\\[console\\] dosbox: screen usage vm=<<wolf3d_vm>> generation=<<wolf3d_gen>> ",
+     "note": "the refusal (QEMU, f3-29) keeps the game in its window with no message: one DOS Box record, no retry, the setting unchanged"
+    },
+    {
+     "name": "wolf3d-graphics",
+     "check": "wolf3d",
+     "timeout": 900,
+     "on_fail": "continue",
+     "requires": [
+      "wolf3d-fs-auto"
+     ],
      "settle": 3,
      "wait": [
-      "^\\[dosvm-window\\] video vm=(?P<wolf3d_vm>\\d+) gen=(?P<wolf3d_gen>\\d+) vbe=[0-9a-f]+ width=(?P<wolf3d_width>[1-9]\\d{2,3}) height=(?P<wolf3d_height>[1-9]\\d{2,3}) text=0$",
+      "^\\[dosvm-window\\] video vm=<<wolf3d_vm>> gen=<<wolf3d_gen>> vbe=[0-9a-f]+ width=(?P<wolf3d_width>[1-9]\\d{2,3}) height=(?P<wolf3d_height>[1-9]\\d{2,3}) text=0$",
       "^\\[dosvm\\] perf vm=<<wolf3d_vm>> gen=<<wolf3d_gen>> exits=[1-9]\\d* ",
       "^\\[dosvm\\] perf vm=<<wolf3d_vm>> gen=<<wolf3d_gen>> exits=[1-9]\\d* ",
       "^\\[dosvm\\] perf vm=<<wolf3d_vm>> gen=<<wolf3d_gen>> exits=[1-9]\\d* "
@@ -1053,7 +1196,8 @@
        "keys": "alt+ret"
       }
      ],
-     "note": "the game left the DOS prompt for its graphics mode and runs (three active 2 s VM samples): its demo loop or gameplay; then Alt+Enter"
+     "note": "the game runs in its window (after QEMU's refusal, or after the Alt+Enter return): three active 2 s VM samples of its demo loop or gameplay; then the user's Alt+Enter asks for full screen again",
+     "since": "boot"
     },
     {
      "name": "wolf3d-fs-request",
@@ -1190,16 +1334,87 @@
      ]
     },
     {
-     "name": "war2-graphics",
+     "name": "war2-fs-auto",
      "check": "war2",
      "timeout": 900,
      "on_fail": "continue",
      "requires": [
       "war2-vm"
      ],
+     "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<war2_vm>\\d+) generation=(?P<war2_gen>\\d+) mode=(?P<war2_auto_mode>\\d+)$",
+     "fail": [
+      "^\\[dosvm\\] create refused ",
+      "^\\[launch\\] name=dosbox pid=<<war2_pid>> error="
+     ],
+     "note": "fx-dosfull (owner decision 2026-10-27): the game's first graphics mode asks for full screen by itself, without a key, as Windows 98 runs a game that uses graphics modes full screen (Resource Kit ch. 25)"
+    },
+    {
+     "name": "war2-fs-auto-entered",
+     "check": "war2",
+     "timeout": 90,
+     "on_fail": "continue",
+     "requires": [
+      "war2-fs-auto"
+     ],
+     "settle": 8,
+     "wait": "^\\[dosvm\\] fullscreen=1 vm=<<war2_vm>> generation=<<war2_gen>> mode=\\d+$",
+     "fail": "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=<<war2_vm>> generation=<<war2_gen>> ",
+     "known_failure": {
+      "directive": "f3-29",
+      "on": "pattern",
+      "note": "QEMU standard VGA does not read back every VGA register and the entry rolls back; the game continues in its window (step war2-fs-auto-fallback); on the T23 a refusal is a failure"
+     },
+     "actions": [
+      {
+       "screendump": "war2-fullscreen-auto"
+      },
+      {
+       "keys": "alt+ret"
+      }
+     ],
+     "note": "a display that accepts full screen: the game runs full screen; then the user's Alt+Enter returns to the window"
+    },
+    {
+     "name": "war2-fs-auto-return",
+     "check": "war2",
+     "timeout": 120,
+     "on_fail": "continue",
+     "requires": [
+      "war2-fs-auto-entered"
+     ],
+     "wait": [
+      "^\\[dosvm\\] fullscreen=0 vm=<<war2_vm>> generation=<<war2_gen>> result=0 ",
+      "^\\[console\\] dosbox: screen usage vm=<<war2_vm>> generation=<<war2_gen>> usage=window source=alt-enter saved=1$"
+     ],
+     "note": "the DOS Box remembers the user's choice (Window) for this program, as Windows 98 does"
+    },
+    {
+     "name": "war2-fs-auto-fallback",
+     "check": "war2",
+     "timeout": 60,
+     "on_fail": "continue",
+     "requires": [
+      "war2-fs-auto"
+     ],
+     "unless": [
+      "war2-fs-auto-entered"
+     ],
+     "since": "boot",
+     "wait": "^\\[console\\] dosbox: fullscreen auto vm=<<war2_vm>> generation=<<war2_gen>> usage=graphics graphics=1 result=refused error=-?\\d+ continuation=windowed$",
+     "fail": "^\\[console\\] dosbox: screen usage vm=<<war2_vm>> generation=<<war2_gen>> ",
+     "note": "the refusal (QEMU, f3-29) keeps the game in its window with no message: one DOS Box record, no retry, the setting unchanged"
+    },
+    {
+     "name": "war2-graphics",
+     "check": "war2",
+     "timeout": 900,
+     "on_fail": "continue",
+     "requires": [
+      "war2-fs-auto"
+     ],
      "settle": 3,
      "wait": [
-      "^\\[dosvm-window\\] video vm=(?P<war2_vm>\\d+) gen=(?P<war2_gen>\\d+) vbe=[0-9a-f]+ width=(?P<war2_width>[1-9]\\d{2,3}) height=(?P<war2_height>[1-9]\\d{2,3}) text=0$",
+      "^\\[dosvm-window\\] video vm=<<war2_vm>> gen=<<war2_gen>> vbe=[0-9a-f]+ width=(?P<war2_width>[1-9]\\d{2,3}) height=(?P<war2_height>[1-9]\\d{2,3}) text=0$",
       "^\\[dosvm\\] perf vm=<<war2_vm>> gen=<<war2_gen>> exits=[1-9]\\d* ",
       "^\\[dosvm\\] perf vm=<<war2_vm>> gen=<<war2_gen>> exits=[1-9]\\d* ",
       "^\\[dosvm\\] perf vm=<<war2_vm>> gen=<<war2_gen>> exits=[1-9]\\d* "
@@ -1217,7 +1432,8 @@
        "keys": "alt+ret"
       }
      ],
-     "note": "the game left the DOS prompt for its graphics mode and runs (three active 2 s VM samples): its demo loop or gameplay; then Alt+Enter"
+     "note": "the game runs in its window (after QEMU's refusal, or after the Alt+Enter return): three active 2 s VM samples of its demo loop or gameplay; then the user's Alt+Enter asks for full screen again",
+     "since": "boot"
     },
     {
      "name": "war2-fs-request",
@@ -1355,16 +1571,87 @@
      ]
     },
     {
-     "name": "duke3d-graphics",
+     "name": "duke3d-fs-auto",
      "check": "duke3d",
      "timeout": 900,
      "on_fail": "continue",
      "requires": [
       "duke3d-vm"
      ],
+     "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<duke3d_vm>\\d+) generation=(?P<duke3d_gen>\\d+) mode=(?P<duke3d_auto_mode>\\d+)$",
+     "fail": [
+      "^\\[dosvm\\] create refused ",
+      "^\\[launch\\] name=dosbox pid=<<duke3d_pid>> error="
+     ],
+     "note": "fx-dosfull (owner decision 2026-10-27): the game's first graphics mode asks for full screen by itself, without a key, as Windows 98 runs a game that uses graphics modes full screen (Resource Kit ch. 25)"
+    },
+    {
+     "name": "duke3d-fs-auto-entered",
+     "check": "duke3d",
+     "timeout": 90,
+     "on_fail": "continue",
+     "requires": [
+      "duke3d-fs-auto"
+     ],
+     "settle": 8,
+     "wait": "^\\[dosvm\\] fullscreen=1 vm=<<duke3d_vm>> generation=<<duke3d_gen>> mode=\\d+$",
+     "fail": "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=<<duke3d_vm>> generation=<<duke3d_gen>> ",
+     "known_failure": {
+      "directive": "f3-29",
+      "on": "pattern",
+      "note": "QEMU standard VGA does not read back every VGA register and the entry rolls back; the game continues in its window (step duke3d-fs-auto-fallback); on the T23 a refusal is a failure"
+     },
+     "actions": [
+      {
+       "screendump": "duke3d-fullscreen-auto"
+      },
+      {
+       "keys": "alt+ret"
+      }
+     ],
+     "note": "a display that accepts full screen: the game runs full screen; then the user's Alt+Enter returns to the window"
+    },
+    {
+     "name": "duke3d-fs-auto-return",
+     "check": "duke3d",
+     "timeout": 120,
+     "on_fail": "continue",
+     "requires": [
+      "duke3d-fs-auto-entered"
+     ],
+     "wait": [
+      "^\\[dosvm\\] fullscreen=0 vm=<<duke3d_vm>> generation=<<duke3d_gen>> result=0 ",
+      "^\\[console\\] dosbox: screen usage vm=<<duke3d_vm>> generation=<<duke3d_gen>> usage=window source=alt-enter saved=1$"
+     ],
+     "note": "the DOS Box remembers the user's choice (Window) for this program, as Windows 98 does"
+    },
+    {
+     "name": "duke3d-fs-auto-fallback",
+     "check": "duke3d",
+     "timeout": 60,
+     "on_fail": "continue",
+     "requires": [
+      "duke3d-fs-auto"
+     ],
+     "unless": [
+      "duke3d-fs-auto-entered"
+     ],
+     "since": "boot",
+     "wait": "^\\[console\\] dosbox: fullscreen auto vm=<<duke3d_vm>> generation=<<duke3d_gen>> usage=graphics graphics=1 result=refused error=-?\\d+ continuation=windowed$",
+     "fail": "^\\[console\\] dosbox: screen usage vm=<<duke3d_vm>> generation=<<duke3d_gen>> ",
+     "note": "the refusal (QEMU, f3-29) keeps the game in its window with no message: one DOS Box record, no retry, the setting unchanged"
+    },
+    {
+     "name": "duke3d-graphics",
+     "check": "duke3d",
+     "timeout": 900,
+     "on_fail": "continue",
+     "requires": [
+      "duke3d-fs-auto"
+     ],
      "settle": 3,
      "wait": [
-      "^\\[dosvm-window\\] video vm=(?P<duke3d_vm>\\d+) gen=(?P<duke3d_gen>\\d+) vbe=[0-9a-f]+ width=(?P<duke3d_width>[1-9]\\d{2,3}) height=(?P<duke3d_height>[1-9]\\d{2,3}) text=0$",
+      "^\\[dosvm-window\\] video vm=<<duke3d_vm>> gen=<<duke3d_gen>> vbe=[0-9a-f]+ width=(?P<duke3d_width>[1-9]\\d{2,3}) height=(?P<duke3d_height>[1-9]\\d{2,3}) text=0$",
       "^\\[dosvm\\] perf vm=<<duke3d_vm>> gen=<<duke3d_gen>> exits=[1-9]\\d* ",
       "^\\[dosvm\\] perf vm=<<duke3d_vm>> gen=<<duke3d_gen>> exits=[1-9]\\d* ",
       "^\\[dosvm\\] perf vm=<<duke3d_vm>> gen=<<duke3d_gen>> exits=[1-9]\\d* "
@@ -1382,7 +1669,8 @@
        "keys": "alt+ret"
       }
      ],
-     "note": "the game left the DOS prompt for its graphics mode and runs (three active 2 s VM samples): its demo loop or gameplay; then Alt+Enter"
+     "note": "the game runs in its window (after QEMU's refusal, or after the Alt+Enter return): three active 2 s VM samples of its demo loop or gameplay; then the user's Alt+Enter asks for full screen again",
+     "since": "boot"
     },
     {
      "name": "duke3d-fs-request",
@@ -1519,16 +1807,87 @@
      ]
     },
     {
-     "name": "quake-graphics",
+     "name": "quake-fs-auto",
      "check": "quake",
      "timeout": 900,
      "on_fail": "continue",
      "requires": [
       "quake-vm"
      ],
+     "wait": "^\\[dosvm\\] fullscreen_request vm=(?P<quake_vm>\\d+) generation=(?P<quake_gen>\\d+) mode=(?P<quake_auto_mode>\\d+)$",
+     "fail": [
+      "^\\[dosvm\\] create refused ",
+      "^\\[launch\\] name=dosbox pid=<<quake_pid>> error="
+     ],
+     "note": "fx-dosfull (owner decision 2026-10-27): the game's first graphics mode asks for full screen by itself, without a key, as Windows 98 runs a game that uses graphics modes full screen (Resource Kit ch. 25)"
+    },
+    {
+     "name": "quake-fs-auto-entered",
+     "check": "quake",
+     "timeout": 90,
+     "on_fail": "continue",
+     "requires": [
+      "quake-fs-auto"
+     ],
+     "settle": 8,
+     "wait": "^\\[dosvm\\] fullscreen=1 vm=<<quake_vm>> generation=<<quake_gen>> mode=\\d+$",
+     "fail": "^\\[dosvm\\] fullscreen_(?:refused|transport_fault) vm=<<quake_vm>> generation=<<quake_gen>> ",
+     "known_failure": {
+      "directive": "f3-29",
+      "on": "pattern",
+      "note": "QEMU standard VGA does not read back every VGA register and the entry rolls back; the game continues in its window (step quake-fs-auto-fallback); on the T23 a refusal is a failure"
+     },
+     "actions": [
+      {
+       "screendump": "quake-fullscreen-auto"
+      },
+      {
+       "keys": "alt+ret"
+      }
+     ],
+     "note": "a display that accepts full screen: the game runs full screen; then the user's Alt+Enter returns to the window"
+    },
+    {
+     "name": "quake-fs-auto-return",
+     "check": "quake",
+     "timeout": 120,
+     "on_fail": "continue",
+     "requires": [
+      "quake-fs-auto-entered"
+     ],
+     "wait": [
+      "^\\[dosvm\\] fullscreen=0 vm=<<quake_vm>> generation=<<quake_gen>> result=0 ",
+      "^\\[console\\] dosbox: screen usage vm=<<quake_vm>> generation=<<quake_gen>> usage=window source=alt-enter saved=1$"
+     ],
+     "note": "the DOS Box remembers the user's choice (Window) for this program, as Windows 98 does"
+    },
+    {
+     "name": "quake-fs-auto-fallback",
+     "check": "quake",
+     "timeout": 60,
+     "on_fail": "continue",
+     "requires": [
+      "quake-fs-auto"
+     ],
+     "unless": [
+      "quake-fs-auto-entered"
+     ],
+     "since": "boot",
+     "wait": "^\\[console\\] dosbox: fullscreen auto vm=<<quake_vm>> generation=<<quake_gen>> usage=graphics graphics=1 result=refused error=-?\\d+ continuation=windowed$",
+     "fail": "^\\[console\\] dosbox: screen usage vm=<<quake_vm>> generation=<<quake_gen>> ",
+     "note": "the refusal (QEMU, f3-29) keeps the game in its window with no message: one DOS Box record, no retry, the setting unchanged"
+    },
+    {
+     "name": "quake-graphics",
+     "check": "quake",
+     "timeout": 900,
+     "on_fail": "continue",
+     "requires": [
+      "quake-fs-auto"
+     ],
      "settle": 3,
      "wait": [
-      "^\\[dosvm-window\\] video vm=(?P<quake_vm>\\d+) gen=(?P<quake_gen>\\d+) vbe=[0-9a-f]+ width=(?P<quake_width>[1-9]\\d{2,3}) height=(?P<quake_height>[1-9]\\d{2,3}) text=0$",
+      "^\\[dosvm-window\\] video vm=<<quake_vm>> gen=<<quake_gen>> vbe=[0-9a-f]+ width=(?P<quake_width>[1-9]\\d{2,3}) height=(?P<quake_height>[1-9]\\d{2,3}) text=0$",
       "^\\[dosvm\\] perf vm=<<quake_vm>> gen=<<quake_gen>> exits=[1-9]\\d* ",
       "^\\[dosvm\\] perf vm=<<quake_vm>> gen=<<quake_gen>> exits=[1-9]\\d* ",
       "^\\[dosvm\\] perf vm=<<quake_vm>> gen=<<quake_gen>> exits=[1-9]\\d* "
@@ -1546,7 +1905,8 @@
        "keys": "alt+ret"
       }
      ],
-     "note": "the game left the DOS prompt for its graphics mode and runs (three active 2 s VM samples): its demo loop or gameplay; then Alt+Enter"
+     "note": "the game runs in its window (after QEMU's refusal, or after the Alt+Enter return): three active 2 s VM samples of its demo loop or gameplay; then the user's Alt+Enter asks for full screen again",
+     "since": "boot"
     },
     {
      "name": "quake-fs-request",
@@ -1663,10 +2023,10 @@
     {
      "name": "doom-fullscreen",
      "check": "doom",
-     "from": "doom-graphics",
+     "from": "doom-fs-auto",
      "to": "doom-exit",
      "reducer": "lines",
-     "pattern": "^\\[dosvm\\] fullscreen(?:=1|=0|_request|_refused|_transport_fault|_return|_watchdog) vm=<<doom_vm>> "
+     "pattern": "^(?:\\[dosvm\\] fullscreen(?:=1|=0|_request|_refused|_transport_fault|_return|_watchdog) vm=<<doom_vm>> |\\[console\\] dosbox: (?:fullscreen auto|screen usage) vm=<<doom_vm>> )"
     },
     {
      "name": "doom-video",
@@ -1696,10 +2056,10 @@
     {
      "name": "wolf3d-fullscreen",
      "check": "wolf3d",
-     "from": "wolf3d-graphics",
+     "from": "wolf3d-fs-auto",
      "to": "wolf3d-exit",
      "reducer": "lines",
-     "pattern": "^\\[dosvm\\] fullscreen(?:=1|=0|_request|_refused|_transport_fault|_return|_watchdog) vm=<<wolf3d_vm>> "
+     "pattern": "^(?:\\[dosvm\\] fullscreen(?:=1|=0|_request|_refused|_transport_fault|_return|_watchdog) vm=<<wolf3d_vm>> |\\[console\\] dosbox: (?:fullscreen auto|screen usage) vm=<<wolf3d_vm>> )"
     },
     {
      "name": "wolf3d-video",
@@ -1729,10 +2089,10 @@
     {
      "name": "war2-fullscreen",
      "check": "war2",
-     "from": "war2-graphics",
+     "from": "war2-fs-auto",
      "to": "war2-exit",
      "reducer": "lines",
-     "pattern": "^\\[dosvm\\] fullscreen(?:=1|=0|_request|_refused|_transport_fault|_return|_watchdog) vm=<<war2_vm>> "
+     "pattern": "^(?:\\[dosvm\\] fullscreen(?:=1|=0|_request|_refused|_transport_fault|_return|_watchdog) vm=<<war2_vm>> |\\[console\\] dosbox: (?:fullscreen auto|screen usage) vm=<<war2_vm>> )"
     },
     {
      "name": "war2-video",
@@ -1762,10 +2122,10 @@
     {
      "name": "duke3d-fullscreen",
      "check": "duke3d",
-     "from": "duke3d-graphics",
+     "from": "duke3d-fs-auto",
      "to": "duke3d-exit",
      "reducer": "lines",
-     "pattern": "^\\[dosvm\\] fullscreen(?:=1|=0|_request|_refused|_transport_fault|_return|_watchdog) vm=<<duke3d_vm>> "
+     "pattern": "^(?:\\[dosvm\\] fullscreen(?:=1|=0|_request|_refused|_transport_fault|_return|_watchdog) vm=<<duke3d_vm>> |\\[console\\] dosbox: (?:fullscreen auto|screen usage) vm=<<duke3d_vm>> )"
     },
     {
      "name": "duke3d-video",
@@ -1795,10 +2155,10 @@
     {
      "name": "quake-fullscreen",
      "check": "quake",
-     "from": "quake-graphics",
+     "from": "quake-fs-auto",
      "to": "quake-exit",
      "reducer": "lines",
-     "pattern": "^\\[dosvm\\] fullscreen(?:=1|=0|_request|_refused|_transport_fault|_return|_watchdog) vm=<<quake_vm>> "
+     "pattern": "^(?:\\[dosvm\\] fullscreen(?:=1|=0|_request|_refused|_transport_fault|_return|_watchdog) vm=<<quake_vm>> |\\[console\\] dosbox: (?:fullscreen auto|screen usage) vm=<<quake_vm>> )"
     },
     {
      "name": "quake-video",
@@ -1818,7 +2178,99 @@
      "pattern": "^(?:\\[dosvm\\] (?:close|lifecycle) |\\[console\\] \\[desktop\\] end task )"
     }
    ],
-   "note": "Fullscreen entries refused by the QEMU VGA readback (f3-29) are known failures; any other refusal or a missing request fails the game."
+   "note": "fx-dosfull: every game asks for full screen by itself at its first graphics mode. On the T23 and other displays that accept it, the game runs full screen and the user's Alt+Enter returns it to the window (remembered); QEMU's standard VGA refuses it (f3-29, known failure), and the game continues in its window with one record. The later Alt+Enter cycle is the user's own switch; its QEMU refusal is the same known failure; any other refusal or a missing request fails the game.",
+   "assertions": [
+    {
+     "name": "doom-fs-refused-once",
+     "check": "doom",
+     "from": "doom-vm",
+     "to": "doom-fs-auto-fallback",
+     "max": 1,
+     "pattern": "^\\[dosvm\\] fullscreen_refused vm=<<doom_vm>> generation=<<doom_gen>> ",
+     "note": "fx-dosfull: the automatic request is refused (and logged) once; the DOS Box never retries it"
+    },
+    {
+     "name": "wolf3d-fs-refused-once",
+     "check": "wolf3d",
+     "from": "wolf3d-vm",
+     "to": "wolf3d-fs-auto-fallback",
+     "max": 1,
+     "pattern": "^\\[dosvm\\] fullscreen_refused vm=<<wolf3d_vm>> generation=<<wolf3d_gen>> ",
+     "note": "fx-dosfull: the automatic request is refused (and logged) once; the DOS Box never retries it"
+    },
+    {
+     "name": "war2-fs-refused-once",
+     "check": "war2",
+     "from": "war2-vm",
+     "to": "war2-fs-auto-fallback",
+     "max": 1,
+     "pattern": "^\\[dosvm\\] fullscreen_refused vm=<<war2_vm>> generation=<<war2_gen>> ",
+     "note": "fx-dosfull: the automatic request is refused (and logged) once; the DOS Box never retries it"
+    },
+    {
+     "name": "duke3d-fs-refused-once",
+     "check": "duke3d",
+     "from": "duke3d-vm",
+     "to": "duke3d-fs-auto-fallback",
+     "max": 1,
+     "pattern": "^\\[dosvm\\] fullscreen_refused vm=<<duke3d_vm>> generation=<<duke3d_gen>> ",
+     "note": "fx-dosfull: the automatic request is refused (and logged) once; the DOS Box never retries it"
+    },
+    {
+     "name": "quake-fs-refused-once",
+     "check": "quake",
+     "from": "quake-vm",
+     "to": "quake-fs-auto-fallback",
+     "max": 1,
+     "pattern": "^\\[dosvm\\] fullscreen_refused vm=<<quake_vm>> generation=<<quake_gen>> ",
+     "note": "fx-dosfull: the automatic request is refused (and logged) once; the DOS Box never retries it"
+    },
+    {
+     "name": "doom-fs-auto-refused-once",
+     "check": "doom",
+     "from": "doom-vm",
+     "to": "doom-exit",
+     "max": 1,
+     "pattern": "^\\[console\\] dosbox: fullscreen auto vm=<<doom_vm>> generation=<<doom_gen>> \\S+ \\S+ result=refused ",
+     "note": "the DOS Box records a refused automatic full screen once per session"
+    },
+    {
+     "name": "wolf3d-fs-auto-refused-once",
+     "check": "wolf3d",
+     "from": "wolf3d-vm",
+     "to": "wolf3d-exit",
+     "max": 1,
+     "pattern": "^\\[console\\] dosbox: fullscreen auto vm=<<wolf3d_vm>> generation=<<wolf3d_gen>> \\S+ \\S+ result=refused ",
+     "note": "the DOS Box records a refused automatic full screen once per session"
+    },
+    {
+     "name": "war2-fs-auto-refused-once",
+     "check": "war2",
+     "from": "war2-vm",
+     "to": "war2-exit",
+     "max": 1,
+     "pattern": "^\\[console\\] dosbox: fullscreen auto vm=<<war2_vm>> generation=<<war2_gen>> \\S+ \\S+ result=refused ",
+     "note": "the DOS Box records a refused automatic full screen once per session"
+    },
+    {
+     "name": "duke3d-fs-auto-refused-once",
+     "check": "duke3d",
+     "from": "duke3d-vm",
+     "to": "duke3d-exit",
+     "max": 1,
+     "pattern": "^\\[console\\] dosbox: fullscreen auto vm=<<duke3d_vm>> generation=<<duke3d_gen>> \\S+ \\S+ result=refused ",
+     "note": "the DOS Box records a refused automatic full screen once per session"
+    },
+    {
+     "name": "quake-fs-auto-refused-once",
+     "check": "quake",
+     "from": "quake-vm",
+     "to": "quake-exit",
+     "max": 1,
+     "pattern": "^\\[console\\] dosbox: fullscreen auto vm=<<quake_vm>> generation=<<quake_gen>> \\S+ \\S+ result=refused ",
+     "note": "the DOS Box records a refused automatic full screen once per session"
+    }
+   ]
   },
   {
    "id": "acc-netsurf-site-1",

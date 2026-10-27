@@ -1067,6 +1067,7 @@ int main(void)
     if (getenv("CIUKI_VM_101_NATIVE")) { test_101_native(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_MPU")) { test_mpu_uart(); test_vm_midi(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_PROPERTIES")) { test_dos_properties(); free(ram); fflush(stdout); return 0; }
+    if (getenv("CIUKI_VM_DOSFULL")) { test_fullscreen_service(); test_fullscreen_dosfull(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_CLIPBOARD")) { test_programmatic_clipboard(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_SAVE_TEST")) {
         test_persistent_provider(); test_client_boundary();
@@ -1146,6 +1147,7 @@ int main(void)
     test_fullscreen_service();
     test_fullscreen_dpmi_refusal();
     test_fullscreen_more_modes();
+    test_fullscreen_dosfull();
     test_fullscreen_vbe();
     test_vbe_window();
     test_vbe_native_war2_t23();
