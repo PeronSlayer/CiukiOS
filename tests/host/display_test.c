@@ -241,6 +241,23 @@ int biosvm_video_fullscreen_end(uint16_t mode,uint8_t info[256]) {
     mode_info(mode,info); return 0;
 }
 uint32_t supervisor_desktop_pid(void) { return 2; }
+/* sec-k04: display.c asks the retained subject (security_device.h). The
+ * fixture models the k01 interim desktop: one interactive session, no roles. */
+static struct ciuki_credential desktop_credential = {.uid = 1000, .session_id = 1, .flags = CIUKI_CRED_INTERACTIVE};
+static struct ciuki_credential other_credential = {.uid = 1000, .session_id = 1, .flags = CIUKI_CRED_INTERACTIVE};
+const struct ciuki_credential *security_credential(const struct process *p)
+{ return p == &desktop ? &desktop_credential : p == &other ? &other_credential : 0; }
+bool security_process_live(const struct process *p) { return p == &desktop || p == &other; }
+bool security_system(const struct process *p) { (void)p; return false; }
+/* Programs the desktop starts inherit its subject (same user and session). */
+bool security_same(const struct process *a, const struct process *b)
+{
+    const struct ciuki_credential *x = security_credential(a), *y = security_credential(b);
+    return x && y && x->uid == y->uid && x->session_id == y->session_id;
+}
+uint32_t security_role(const struct process *p) { (void)p; return 0; }
+bool security_roles_active(void) { return false; }
+struct process *security_session_desktop(uint32_t session) { return session == 1 ? &desktop : 0; }
 bool grants_display_owner(const struct process *p) { return owner && p == &desktop; }
 bool grants_display_busy(void) { return busy; }
 uint32_t grants_display_pid(void) { return check_boot ? 0 : desktop.pid; }
