@@ -302,6 +302,42 @@ static void test_security_handoff(struct proc_thread *system)
     channel_peer_put(&peer);CHECK(!desktop_close(system->process,fds[0]));
     puts("H01 review (b): ordinary inheritance preserves established peer/generation; explicit initial handoff binds child PASS");
 }
+/* sec-wire (QEMU, image ae977fbe: "Files: desktop connection failed: No such
+ * process"): the interim uid-1000 desktop launches a program with a pair, a
+ * spawn mapping the client end to fd 3 and close() of its own copy. The
+ * child's endpoint must stay usable (POSIX close releases one descriptor);
+ * the side closes with the child's last descriptor. A subject's close with
+ * no other holder still revokes at once. */
+static void test_security_inherited_close(struct proc_thread *system)
+{
+    struct ciuki_credential c={.version=1,.size=64,.uid=1000,.primary_gid=545,.group_count=2,.groups={544,545},.flags=1};
+    struct ciuki_security_profile profile=profile_for(1000);uint32_t id;
+    CHECK(!security_session_create(&c,&profile,&id));
+    struct process *desktop;struct proc_thread *dt=session_process(system->process,id,&desktop);(void)dt;
+    int32_t pair[2];CHECK(!channel_pair(desktop,pair));
+    desktop->fds[pair[1]].flags=0;
+    struct process *child;struct ciuki_spawn_fd map={pair[1],3};
+    CHECK(!proc_prepare(desktop,&child));CHECK(!proc_inherit(child,desktop,&map,1));proc_publish(child,0);
+    struct security_peer seen={0};CHECK(!channel_peer_get(desktop,pair[0],&seen));
+    CHECK(!desktop_close(desktop,pair[1]));              /* launch_program: close(pair[1]) */
+    struct desktop_description *end=desktop_fd(child,3);CHECK(end && end->kind==DESKTOP_CHANNEL);
+    struct channel *ch=end->u.endpoint.channel;
+    CHECK(!ch->revoked[0] && !ch->revoked[1] && channel_peer_live(&seen));
+    struct security_peer back={0};CHECK(!channel_peer_get(child,3,&back)); /* channel_send's ESRCH test is clear */
+    struct desktop_description *near=desktop_fd(desktop,pair[0]);
+    CHECK(!(channel_poll_events(end) & POLLHUP) && (channel_poll_events(end) & POLLOUT) &&
+          !(channel_poll_events(near) & POLLHUP));
+    channel_peer_put(&back);
+    stop_collect(child);                                 /* the program exits: final release closes the side */
+    CHECK(!channel_peer_live(&seen) && (channel_poll_events(near) & POLLHUP));
+    channel_peer_put(&seen);CHECK(!desktop_close(desktop,pair[0]));
+    CHECK(!channel_pair(desktop,pair));CHECK(!channel_peer_get(desktop,pair[0],&seen));
+    CHECK(!desktop_close(desktop,pair[1]));CHECK(!channel_peer_live(&seen)); /* no other holder: revoked */
+    channel_peer_put(&seen);CHECK(!desktop_close(desktop,pair[0]));
+    uint32_t state;CHECK(!security_session_end(id,true,&state));
+    g_current=&controller;proc_collect();CHECK(!security_session_end(id,false,&state) && state==3);
+    puts("H01 sec-wire: inherited client end survives the launcher's close, closes with the child's last descriptor; lone close revokes PASS");
+}
 static void test_security_spawn(struct proc_thread *system)
 {
     struct ciuki_credential c=standard(1003);struct ciuki_security_profile profile=profile_for(c.uid);uint32_t id;
@@ -1040,6 +1076,7 @@ int main(void)
     system_process->actions[SIGCHLD].handler=SIG_IGN;
     test_security_records(system);test_security_templates(system);test_security_inheritance(system);
     test_security_channels(system);test_security_failure(system);test_security_handoff(system);
+    test_security_inherited_close(system);
     test_security_spawn(system);test_security_retention(system);
     test_security_boot_service(system);
     test_amendment_environment(system); test_amendment_launch(system); test_amendment_service(system);

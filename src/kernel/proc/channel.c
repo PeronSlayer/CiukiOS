@@ -485,6 +485,34 @@ void channel_peer_put(struct security_peer *p)
     if (p->endpoint) p->endpoint->release(p->endpoint);
     *p = (struct security_peer){0};
 }
+/* sec-wire (QEMU run of image ae977fbe: "Files: desktop connection failed:
+ * No such process"): the desktop launches a program as POSIX does, a pair,
+ * a spawn that maps the client end to the child's fd 3, then close() of
+ * its own copy (apps/desktop/desktop.c launch_program). POSIX close(2)
+ * releases only that descriptor; the open description lives until the
+ * last descriptor referring to it is closed. An ordinary endpoint reaches
+ * another process only through same-credential inheritance (proc_inherit
+ * requires security_same, channel_process_prepare checks the bound
+ * credential; attachments carry surfaces only), and inheritance keeps the
+ * established peer (user-security-kernel.md: "Dup/inheritance do not change
+ * its peer"). So the bound subject's close does not revoke an ordinary side
+ * while a live process with that credential still holds it; the side then
+ * closes at the final release (channel_release) or with the subject's exit
+ * (channel_security_revoke). Service links keep revocation at close. */
+/* Weak: channel host harnesses without the process table keep the plain rule. */
+#pragma weak proc_reserved_at_slot
+static bool channel_endpoint_inherited(const struct process *closing, const struct desktop_description *d,
+                                       const struct security_subject *bound)
+{
+    if (d->references <= 1 || !proc_reserved_at_slot) return false; /* only the closing descriptor remains */
+    for (unsigned slot = 0; slot < CIUKI_PROCESS_MAX; slot++) {
+        const struct process *q = proc_reserved_at_slot(slot);
+        if (!q || q == closing || !q->fds || !security_process_live(q) || !security_subject_matches(bound, q)) continue;
+        for (unsigned fd = 0; fd < CIUKI_OPEN_MAX; fd++)
+            if (q->fds[fd].object == &d->object) return true;
+    }
+    return false;
+}
 void channel_fd_closed(struct process *p, struct proc_object *object)
 {
     /* Called after detaching the slot. A duplicate still owns the endpoint. */
@@ -497,7 +525,8 @@ void channel_fd_closed(struct process *p, struct proc_object *object)
     if (d->kind == DESKTOP_CHANNEL) {
         struct channel *c = d->u.endpoint.channel;
         unsigned side = d->u.endpoint.side;
-        if (c->subjects[side] == p->subject) {
+        if (c->subjects[side] == p->subject &&
+            (c->service || !channel_endpoint_inherited(p, d, c->subjects[side]))) {
             c->revoked[side] = true;
             if (c->service) channel_security_discard(c);
             kwait_wake_all(&c->changed[0]); kwait_wake_all(&c->changed[1]);

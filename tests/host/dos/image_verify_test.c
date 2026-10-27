@@ -43,6 +43,7 @@ void klog(const char *fmt, ...)
 }
 void kpreempt_point(void) { g_ticks++; }
 uint64_t deadline_after_ms(uint32_t ms) { return g_ticks + ms; }
+bool deadline_passed(uint64_t deadline) { return g_ticks >= deadline; }
 void task_sleep_ms(uint32_t ms) { g_ticks += ms; }
 struct task *task_create_kernel(const char *n, void (*fn)(void *), void *a, enum task_prio p)
 { (void)n; (void)fn; (void)a; (void)p; assert(!"test mode never creates the task"); return 0; }
@@ -352,9 +353,51 @@ int main(int argc, char **argv)
         OK(vfs_delete(&table, path));
     }
 
+    /* 9. sec-wire (QEMU run of image ae977fbe: nine "[storage] shutdown
+     * busy drive=C holder=open" refusals until the first-boot hash ended):
+     * the storage shutdown preflight stops a running check at once (handle,
+     * table and pin released, reported cancelled), nothing starts while the
+     * shutdown holds it, a refused shutdown re-arms the interrupted check,
+     * and a finished result and its pin survive a stop and resume. */
+    reboot(); set_mtime(0x5b5e, 0x6a20);
+    dosvm_image_desktop_presented();
+    assert(dosvm_image_step()); assert(dosvm_image_step());
+    assert(iv.busy && iv.fd >= 0 && iv.table_ready && watch_refs() == 1);
+    OK(dosvm_image_shutdown(5000));
+    dosvm_image_query(&state, &progress, &error);
+    assert(state == CIUKI_DOSVM_IMAGE_UNCHECKED && !iv.busy && iv.fd < 0 && !iv.table_ready && !watch_refs());
+    assert(strstr(last_record, "result=cancelled") && block_allocs == block_frees);
+    writer = vfs_open(&table, "C:\\SYSTEM\\DOS\\UNIFIED.IMG", VFS_READ | VFS_WRITE, VFS_DENY_ALL, 0);
+    assert(writer >= 0); OK(vfs_close(&table, writer));  /* no handle of the check is left */
+    assert(!dosvm_image_step());                        /* held for the shutdown: nothing starts */
+    dosvm_image_desktop_presented();
+    assert(!dosvm_image_step() && !iv.armed);
+    dosvm_image_shutdown_resume();                       /* refused shutdown: the check comes back */
+    dosvm_image_query(&state, &progress, &error); assert(state == CIUKI_DOSVM_IMAGE_VERIFYING);
+    assert(dosvm_image_step()); run_to_end();
+    dosvm_image_query(&state, &progress, &error);
+    assert(state == CIUKI_DOSVM_IMAGE_VERIFIED && iv.blocks == expected_blocks() && watch_refs() == 1);
+    OK(dosvm_image_shutdown(5000));                      /* a finished result is kept */
+    dosvm_image_query(&state, &progress, &error);
+    assert(state == CIUKI_DOSVM_IMAGE_VERIFIED && watch_refs() == 1 && iv.fd < 0);
+    dosvm_image_shutdown_resume();
+    assert(!iv.armed && !dosvm_image_step());
+    dosvm_image_query(&state, &progress, &error); assert(state == CIUKI_DOSVM_IMAGE_VERIFIED);
+    /* Armed but not started (the first-frame settle): stays out, armed again. */
+    reboot(); set_mtime(0x5b5f, 0x6a20);
+    dosvm_image_desktop_presented();
+    OK(dosvm_image_shutdown(5000)); assert(!iv.armed && !dosvm_image_step());
+    dosvm_image_shutdown_resume(); assert(iv.armed);
+    assert(dosvm_image_step()); run_to_end();
+    dosvm_image_query(&state, &progress, &error); assert(state == CIUKI_DOSVM_IMAGE_VERIFIED);
+    /* A game removal hold is independent: a shutdown resume does not end it. */
+    dosvm_image_hold(); OK(dosvm_image_shutdown(5000)); dosvm_image_shutdown_resume();
+    assert(iv.held && !iv.armed && !dosvm_image_step() && !watch_refs());
+    printf("sec-wire shutdown stop: running check cancelled and released at once, held while stopped, re-armed on refusal, finished result kept, removal hold independent\n");
+
     assert(block_allocs == block_frees && !stamp_errors && records && digest_publishes && !watch_refs());
     vfs_table_destroy(&table); OK(vfs_detach(&storage.vfs, 2)); vfs_destroy(&storage.vfs);
     cache_destroy(&storage.cache); fake_close(&disk); assert(!fs_host_contig_live);
-    puts("PASS fx-4b image verify: background hash with progress, stamp reuse, 4 identity changes re-hash, launch joins in-flight check (EINTR on owner exit), mismatch reported and never stamped, removal hold/release; fx-23: finished result reused, re-armed check instead of a launch hash; dec1: pinned version across unrelated changes, own change voids, no watch left after hold/release or a void check");
+    puts("PASS fx-4b image verify: background hash with progress, stamp reuse, 4 identity changes re-hash, launch joins in-flight check (EINTR on owner exit), mismatch reported and never stamped, removal hold/release, sec-wire shutdown stop/resume; fx-23: finished result reused, re-armed check instead of a launch hash; dec1: pinned version across unrelated changes, own change voids, no watch left after hold/release or a void check");
     return 0;
 }

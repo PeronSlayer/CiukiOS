@@ -1416,19 +1416,36 @@ int storage_writeback(struct storage *s, uint32_t now)
     return e;
 }
 static int shutdown_volumes(struct storage *s);
+/* sec-wire: the kernel's own background reader of C: (the DOS base image
+ * check, vm/dosvm_image.c) holds a VFS handle; it is stopped before the
+ * preflight like the pagefile and resumed when the shutdown is refused.
+ * Weak: host storage harnesses without the DOS VM keep the plain path. */
+extern int dosvm_image_shutdown(uint32_t wait_ms) __attribute__((weak));
+extern void dosvm_image_shutdown_resume(void) __attribute__((weak));
+extern uint32_t storage_shutdown_wait_ms;
 int storage_shutdown(struct storage *s)
 {
     if (!s || !s->ready) return -FS_EINVAL;
+    bool readers=s==&system_storage && dosvm_image_shutdown;
+    if (readers) {
+        int e=dosvm_image_shutdown(storage_shutdown_wait_ms);
+        if (e) {
+            klog("[storage] shutdown busy holder=dos-image-check wait_ms=%u result=%d",storage_shutdown_wait_ms,-FS_EBUSY);
+            if (dosvm_image_shutdown_resume) dosvm_image_shutdown_resume();
+            return -FS_EBUSY;
+        }
+    }
     /* The pagefile handle is the volume dependency: page-out and growth
      * stop and in-flight page I/O retires before detach may proceed. Live
      * slots stay readable through their runs; a refused shutdown resumes. */
     bool paged=pagefile_on(s,0) && !system_pagefile.detached;
     if (paged) {
         int e=pager_shutdown ? pager_shutdown() : pagefile_detach ? pagefile_detach(&system_pagefile) : 0;
-        if (e) return e;
+        if (e) { if (readers && dosvm_image_shutdown_resume) dosvm_image_shutdown_resume(); return e; }
     }
     int e=shutdown_volumes(s);
     if (e && paged) { if (pager_resume) pager_resume(); else if (pagefile_reattach) pagefile_reattach(&system_pagefile); }
+    if (e && readers && dosvm_image_shutdown_resume) dosvm_image_shutdown_resume();
     return e;
 }
 /* T23 trial c42f556e: the shutdown preflight waits for the namespace, for

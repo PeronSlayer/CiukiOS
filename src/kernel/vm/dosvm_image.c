@@ -56,6 +56,7 @@ static struct {
     struct kwait wake, done;
     struct task *task;
     bool desktop, armed, starting, busy, cancel, held, settled, raised;
+    bool quiesced, resume_arm; /* sec-wire: stopped for the storage shutdown preflight */
     uint64_t urgent_until;
     unsigned waiters;
     uint32_t state, error, size, at, blocks, pauses;
@@ -72,6 +73,9 @@ static struct {
     bool test; /* host harness: no task, the test drives dosvm_image_step */
 } iv = {.fd = -1};
 
+/* Game removal (held) or the storage shutdown preflight (quiesced) keeps
+ * new checks out. */
+static bool held_now(void) { return iv.held || iv.quiesced; }
 static bool hex64(const char *s)
 {
     for (unsigned i = 0; i < 64; i++)
@@ -232,7 +236,7 @@ static bool begin(void)
 {
     struct storage *s = storage_get();
     uint32_t f = irq_save();
-    if (iv.busy || iv.starting || iv.held || !iv.armed) { irq_restore(f); return false; }
+    if (iv.busy || iv.starting || held_now() || !iv.armed) { irq_restore(f); return false; }
     iv.armed = false; iv.cancel = false; iv.starting = true;
     iv.at = iv.blocks = iv.pauses = iv.error = 0; iv.size = 0; iv.sha[0] = 0; iv.source = "background";
     irq_restore(f);
@@ -366,8 +370,8 @@ static uint32_t pause_ms(void)
     uint64_t pause = spent * IV_PAUSE_FACTOR;
     return pause < IV_PAUSE_MIN_MS ? IV_PAUSE_MIN_MS : pause > 1000 ? 1000u : (uint32_t)pause;
 }
-static bool armed_ready(void *arg) { (void)arg; return iv.armed && !iv.held; }
-static bool settle_over(void *arg) { (void)arg; return urgent() || iv.held; }
+static bool armed_ready(void *arg) { (void)arg; return iv.armed && !held_now(); }
+static bool settle_over(void *arg) { (void)arg; return urgent() || held_now(); }
 /* Idle class; a waiting or watching launch raises it to normal for the
  * remaining blocks (and a CREATE waiter also lends its own level). */
 static void verifier_class(void)
@@ -419,7 +423,7 @@ void dosvm_image_desktop_presented(void)
         if (!iv.task) { klog("[dosvm] image verify result=failed step=task error=%d", -ENOMEM); return; }
     }
     f = irq_save();
-    if (!iv.held) iv.armed = true;
+    if (!held_now()) iv.armed = true;
     irq_restore(f);
     if (iv.task) task_start(iv.task);
 }
@@ -452,6 +456,49 @@ void dosvm_image_release(void)
     vfs_version_unpin(&old);
     if (iv.task) kwait_wake_all(&iv.wake);
 }
+/* sec-wire (QEMU run of image ae977fbe): the check reads UNIFIED.IMG
+ * through its own kernel VFS table, so the shutdown preflight (fs/mount.c
+ * shutdown_volumes) refused nine power-off attempts with "[storage]
+ * shutdown busy drive=C holder=open" until the first-boot hash of 54.6 MB
+ * finished (ms=21862, pauses=833). Windows 98 has no such boot-time reader
+ * (System File Checker runs on demand, Resource Kit wrkc27_2/wrkc10_7), and
+ * here the check is a deferrable convenience: storage_shutdown stops it
+ * first, within wait_ms, the way game removal does (dosvm_image_hold), and
+ * a refused shutdown resumes it. A finished result (verified or mismatch)
+ * and its pin are kept; a check that was armed, starting or running (it
+ * ends cancelled, unchecked) is armed again on resume. 0, or -EBUSY when the check still holds the image at the
+ * deadline (the preflight then refuses before any change). */
+static bool pending(void);
+int dosvm_image_shutdown(uint32_t wait_ms)
+{
+    uint32_t f = irq_save();
+    if (!iv.quiesced) iv.resume_arm = pending();
+    iv.quiesced = true; iv.armed = false;
+    if (iv.busy) iv.cancel = true;
+    irq_restore(f);
+    if (iv.task) kwait_wake_all(&iv.wake);
+    uint64_t end = deadline_after_ms(wait_ms);
+    while (iv.busy || iv.starting) {
+        if (iv.busy) iv.cancel = true; /* a start that was opening meanwhile */
+        if (iv.test) { (void)dosvm_image_step(); continue; }
+        if (deadline_passed(end)) {
+            klog("[dosvm] image verify shutdown stop timeout wait_ms=%u", wait_ms);
+            return -EBUSY;
+        }
+        kwait_wait_until(&iv.done, not_busy, 0, end);
+    }
+    return 0;
+}
+void dosvm_image_shutdown_resume(void)
+{
+    uint32_t f = irq_save();
+    /* Restore exactly the pending check the preflight took away. */
+    if (iv.quiesced && iv.resume_arm && iv.desktop && (iv.task || iv.test)) iv.armed = true;
+    iv.quiesced = iv.resume_arm = false;
+    if (!iv.busy) iv.cancel = false;
+    irq_restore(f);
+    if (iv.task) kwait_wake_all(&iv.wake);
+}
 
 /* Launch path (dosvm_disk.c base_identity, unified base only, after a
  * session-cache miss). An armed, starting or running verification is
@@ -459,7 +506,7 @@ void dosvm_image_release(void)
  * creating owner) and its result used when it names this same version;
  * otherwise a verified stamp for this identity and sidecar. -ENOENT: the
  * caller hashes now, as before fx-4b. */
-static bool pending(void) { return (iv.armed && !iv.held) || iv.starting || iv.busy; }
+static bool pending(void) { return (iv.armed && !held_now()) || iv.starting || iv.busy; }
 static bool settled_result(void *arg) { (void)arg; return !pending(); }
 /* fx-23: the result of a check that already finished in this session, for
  * this exact version. The hash was made after this mount, so the stamp's
@@ -481,7 +528,7 @@ static bool finished_result(const struct vfs_file_version *version, char sha[65]
 static bool rearm(void)
 {
     uint32_t f = irq_save();
-    bool ok = iv.desktop && (iv.task || iv.test) && !iv.held;
+    bool ok = iv.desktop && (iv.task || iv.test) && !held_now();
     if (ok && !pending()) { iv.armed = true; iv.settled = true; }
     irq_restore(f);
     return ok;

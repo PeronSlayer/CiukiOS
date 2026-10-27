@@ -823,3 +823,77 @@ CAN_OFF, latch-only entry, forced path), the desktop shutdown sequence
 test (no error code on ENOTSUP). QEMU: the i440fx FADT has SMI_CMD B2h /
 ACPI_ENABLE F1h and `\_S5` = Package(4){0,0,0,0} at PM1a_CNT 604h; with the
 ACPI provider unqualified the fallback's SLP_EN write ends the guest.
+
+## SeaBIOS tables in E820 reserved RAM (sec-wire, 2026-10-27)
+
+QEMU run of the canonical image ae977fbe (SeaBIOS 1.17, i440fx, 512 MiB;
+lead's private serial capture): `[acpi] inventory status=4105 ... tables=1`
+(AE_BAD_ADDRESS), `[apm] window ranges=2 source=none pm1_cnt=0000`, then at
+power-off `[power] acpi s5 fallback unavailable step=rsdt` and SeaBIOS's
+APM Set Power State Off (`INT 15h AX=5307h CX=3`) writing `2000h` to port
+`604h`, refused by the BIOS VM (`reason=port_denied`, APM family
+quarantined). The RSDP was found and checksummed (F segment); the RSDT was
+refused by the firmware-table window, which admitted only the BIOS/EBDA
+areas and E820 types 3/4.
+
+Research:
+
+- ACPI 1.0b 5.2.5 (RSDP search: first KiB of the EBDA, E0000h-FFFFFh, the
+  20-byte checksum; 2.0 adds the 36-byte extended checksum): the loader's
+  scan (`src/boot/ciukldr/platform.inc rsdp_scan`) already follows it.
+- SeaBIOS [`src/fw/romfile_loader.c`](https://raw.githubusercontent.com/coreboot/seabios/master/src/fw/romfile_loader.c)
+  allocates every table-loader file in `ZoneHigh` or `ZoneFSeg`; QEMU
+  `hw/i386/acpi-build.c` allocates only the RSDP in the F segment.
+  [`src/malloc.c`](https://raw.githubusercontent.com/coreboot/seabios/master/src/malloc.c)
+  `malloc_preinit` carves `ZoneHigh` from the top of the highest RAM range
+  below 4 GiB and adds it as `E820_RESERVED`; `malloc_prepboot` gives the
+  unused part back as RAM, so the reserved tail starts where a usable range
+  ends. [`src/config.h`](https://raw.githubusercontent.com/coreboot/seabios/master/src/config.h):
+  `BUILD_MAX_HIGHTABLE` is 16 MiB.
+- SeaBIOS [`src/apm.c`](https://raw.githubusercontent.com/coreboot/seabios/master/src/apm.c)
+  `apm_shutdown` writes `outw(0x2000, acpi_pm1a_cnt)` (SLP_TYP 0, SLP_EN),
+  the PM1a_CNT that [`src/fw/biostables.c`](https://raw.githubusercontent.com/coreboot/seabios/master/src/fw/biostables.c)
+  `find_acpi_features` reads from the FADT; QEMU `hw/acpi/core.c`
+  `acpi_pm1_cnt_write` powers off on SLP_EN with SLP_TYP 0. Windows 98
+  under APM lets the BIOS perform this write itself (Resource Kit chapter
+  30, "the BIOS controls system power management"); the fx-18 window is
+  CiukiOS's bounded equivalent.
+- Linux maps ACPI tables wherever the root table points
+  (`drivers/acpi/osl.c`), without an E820 type rule.
+
+Decisions:
+
+1. **Power windows admit the firmware RAM tail.** `acpi_firmware_table_map`
+   (the S5 fallback's and the new FADT reader's window, `acpi/platform.c`)
+   uses `acpi_firmware_extent` (`core/power.c`) with the reserved tail: an
+   E820 type 2 range of at most 16 MiB, ending at or below 4 GiB, that
+   starts exactly where a type 1 range ends. Device windows (I/O APIC,
+   LAPIC, BIOS flash, PCI holes), oversize, non-adjacent and straddling
+   ranges stay refused; pages must still be PMM-reserved. Types 3/4 and the
+   BIOS/EBDA areas are unchanged (T23 trial 6c3b7800:
+   `tables=8`, `source=fadt+chipset pm1_cnt=1004`, S5 fallback available).
+2. **The ACPICA inventory keeps the narrower rule.** Admitting the tail
+   there would let QEMU load its DSDT and attempt `fw_power_takeover`,
+   i.e. OS-owned ACPI with SCI on QEMU, diverging from the T23 that the
+   `qemu-t23` acceptance twin models (firmware-owned) and changing every
+   QEMU suite at once. Whether QEMU should load its tables in the inventory
+   is left to a lead decision.
+3. **APM window FADT source.** `install_window` (`core/apm_platform.c`)
+   uses the inventory's blocks when they exist (T23 unchanged) and
+   otherwise `power_firmware_pm_blocks` (`core/power_acpi_s5.c`): the same
+   RSDP/RSDT/XSDT/FACP checks as the S5 parse, the fixed-hardware blocks of
+   ACPI 2.0c 5.2.8 (a present SystemIO X_ block of matching width
+   supersedes the legacy field; an unsupported block is left out), its own
+   window table, nothing read without an RSDP, a failure logged as
+   `[power] firmware fadt blocks unavailable step=...`. The fx-18 rule is
+   unchanged: PM1_CNT writes with SLP_EN only under 5307h, never SCI_EN,
+   the PM timer read-only. Expected QEMU record:
+   `[apm] window ranges=6 source=fadt pm1_cnt=0604 chipset=0000`, and
+   power-off by APM 5307h; should APM fail, the S5 fallback is now
+   available (`source=dsdt pm1a_cnt=0604 typ=0/0`).
+
+Host evidence: `tests/host/power_test.c` `test_seabios` (QEMU-shaped tables
+behind the exact QEMU E820 map: the old rule fails at `rsdt` as the run
+did; the power rule parses S5 and the blocks; the window admits 604h for
+5307h only; bounds of the tail rule), `tests/host/power_s5_test.c`
+`test_firmware_pm_blocks`, `tests/host/apm_t23_test.c` case 7.

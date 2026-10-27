@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <ciuki/power.h>
+#include <ciuki/apm_ports.h>
 #include "../../src/kernel/core/power.c"   /* the read-only parser (POWER_HOST: no runtime) */
 
 /* ---- the parser's tables (same layout as power_test.c) --------------- */
@@ -350,11 +351,33 @@ static void test_review_round_1(void)
     for (unsigned i = 0; i < 16; i++) CHECK(port8[0x61C + i] == i + 1);
     puts("PASS Review round 1 P1/P2: mode/mask rollback, rollback requirement, enable timeout, uncertain ownership, B-only SCI_EN and combined non-sleep bits with separate SLP_TYP");
 }
+/* sec-wire: the fx-18 APM window's FADT source through the same firmware
+ * windows (core/power_acpi_s5.c power_firmware_pm_blocks): every window it
+ * mapped is unmapped again; without an RSDP nothing is read or logged; a
+ * damaged FADT names its step. */
+static void test_firmware_pm_blocks(void)
+{
+    tables(s5_qemu, sizeof(s5_qemu), 0, 0xB2, 0xF1); rsdp_phys = RSDP;
+    unsigned m0 = maps, u0 = unmaps; struct apm_pm_blocks pb; memset(&pb, 0xEE, sizeof(pb));
+    CHECK(!power_firmware_pm_blocks(&pb) && pb.pm1a_cnt == 0x604 && pb.pm1_cnt_len == 2 && pb.pm1a_evt == 0x600);
+    CHECK(pb.gpe0 == 0x60C && pb.gpe0_len == 4 && pb.smi_cmd == 0xB2 && !pb.pm1b_cnt && !pb.pm_tmr);
+    CHECK(maps > m0 && maps - m0 == unmaps - u0 && !pm_window_count);
+    size_t logged = strlen(all_logs);
+    rsdp_phys = 0; m0 = maps;
+    CHECK(power_firmware_pm_blocks(&pb) == -ENOENT && maps == m0 && strlen(all_logs) == logged);
+    rsdp_phys = RSDP; mem[FADT + 20]++;                 /* checksum broken */
+    m0 = maps; u0 = unmaps;
+    CHECK(power_firmware_pm_blocks(&pb) == -ENOTSUP && strstr(last_log, "firmware fadt blocks unavailable step=fadt"));
+    CHECK(maps - m0 == unmaps - u0 && !pm_window_count);
+    CHECK(power_firmware_pm_blocks(NULL) == -EINVAL);
+    puts("PASS sec-wire firmware FADT blocks: QEMU blocks, windows released, silent without RSDP, damaged FADT named");
+}
 int main(void)
 {
     test_parse_and_state();
     test_off_sequence();
     test_review_round_1();
+    test_firmware_pm_blocks();
     printf("power s5 fallback: %u failures\n", failures);
     return failures ? 1 : 0;
 }
