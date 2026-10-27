@@ -113,7 +113,7 @@ static int grant(struct process *d, struct ciuki_w32_display_args *a)
     bool suspended=false;
     if (!e) { e=grants_display_suspend(true); suspended=!e; }
     if (!e) fbdev_cursor_hide();
-    if (!e) e=display_set_for_present(d,(uint16_t)a->mode,true);
+    if (!e) e=supervisor_interactive_test(&g_boot) ? -EIO : display_set_for_present(d,(uint16_t)a->mode,true);
     const struct fb_device *f=fbdev_get();
     unsigned chosen=cvp_surface_scale(&a->surface,f->width,f->height,a->scale);
     if (!e && (!chosen || (f->bpp!=16 && f->bpp!=32))) e=-EOPNOTSUPP;

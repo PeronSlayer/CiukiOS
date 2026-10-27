@@ -69,8 +69,10 @@ struct u32_window {
   UINT dcs;
   int pixel_format;
   struct dd_lease lease;
+  HWND lease_carrier; /* borrowed grant: release the actual carrier synchronously */
   DWORD lease_w, lease_h, lease_bpp;
   BOOL lease_wanted;
+  BOOL lease_failed; /* permanent driver failure: GL uses composition */
   BOOL destroy_request; /* U32_DESTROY is honoured only when USER sent it */
   BOOL closing;         /* q3exec3: DESK_CLOSE sent; nothing else names the window */
   BOOL desktop_close;   /* G3: a desktop CLOSE_REQUEST posted WM_SYSCOMMAND SC_CLOSE (T23 c42f556e; it
@@ -180,6 +182,7 @@ LRESULT u32_invoke(HWND, UINT, WPARAM, LPARAM);
 LRESULT u32_hooks(int, int, WPARAM, LPARAM);
 BOOL u32_queue(DWORD, HWND, UINT, WPARAM, LPARAM, UINT, DWORD, POINT);
 BOOL u32_message(struct ciuki_w32_message_args *);
+BOOL u32_sent(void);
 void u32_pump(void);
 void u32_flush(void);
 BOOL u32_connect(void);

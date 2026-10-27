@@ -11,6 +11,7 @@ struct w32_section { uint32_t rva, bytes, offset, raw, flags; };
 struct w32_image {
     uint32_t base, bytes, entry, headers, stack_reserve, stack_commit, count, flags;
     uint32_t timestamp;
+    uint32_t subsystem;
     uint32_t directories[32];
     struct w32_section section[96];
     const char *failure;

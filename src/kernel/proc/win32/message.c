@@ -210,8 +210,37 @@ static bool send_ready(void *arg)
     struct proc_thread *t = thread_id(s->sender);
     return s->replied || !t || t->process->state != PROC_LIVE || (w32_queue_bits(t) & W32_QS_SENDMESSAGE);
 }
+static bool process_has_queue(struct process *p)
+{
+    for (unsigned i = 0; i < CIUKI_THREAD_MAX; i++) {
+        struct proc_thread *t = proc_thread_slot(i);
+        if (t && t->process == p && t->w32 && !t->w32->ending && t->w32->queue)
+            return true;
+    }
+    return false;
+}
 uint32_t w32_message_call(struct proc_thread *t, struct ciuki_w32_message_args *a)
 {
+    if (a->action == W32_MSG_INPUT_IDLE) {
+        if (a->tid) {
+            if (a->tid != t->tid || a->token) a->error = 87;
+            else if (t->process->w32->gui && t->w32->queue && !w32_queue_bits(t)) {
+                t->process->w32->input_idle = true;
+                a->result = 1;
+            }
+            return 0;
+        }
+        struct w32_object *o = w32_lookup(t, a->token, W32_OBJ_PROCESS);
+        struct process *p = o ? proc_find(o->id) : 0;
+        a->result = W32_WAIT_FAILED;
+        if (!p || !p->w32 || p->w32->identity != o || o->signalled || p->state != PROC_LIVE)
+            a->error = 6;
+        else if (!p->w32->gui || (!p->w32->input_idle && !process_has_queue(p)))
+            a->error = 1471; /* ERROR_NOT_GUI_PROCESS */
+        else
+            a->result = p->w32->input_idle ? 0 : W32_WAIT_TIMEOUT;
+        return 0;
+    }
     if (a->bits & ~W32_QS_ALL) {
         a->error = 87;
         return 0;

@@ -48,6 +48,18 @@ def suite_cases():
 
 
 class SelectorTableTests(unittest.TestCase):
+    def test_interactive_lease_probe_keeps_desktop_ownership(self):
+        import subprocess
+        out = ROOT/'build/host/q3-lease-probe'
+        out.mkdir(parents=True, exist_ok=True)
+        binary = out/'probe'
+        subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
+                        '-I'+str(ROOT/'src/kernel/include'),
+                        str(ROOT/'tests/host/q3_lease_probe_test.c'), '-o', str(binary)], check=True)
+        result = subprocess.run([binary], capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+        self.assertIn('sleeping continuation', result.stdout)
+
     def test_table_parsers_read_every_phase(self):
         kernel, menu = probe_tables.kernel_names(), probe_tables.menu_names()
         for phase in probe_tables.PHASES:

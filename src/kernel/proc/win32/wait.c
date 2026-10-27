@@ -181,6 +181,12 @@ uint32_t w32_wait_call(struct proc_thread *t, struct ciuki_w32_wait_args *a)
         w32_wait_pump();
         if (w.result != W32_WAIT_PENDING)
             break;
+        /* Initial GUI idle is a process latch, never an inference from a
+         * window existing or a Sleep. Yielding PeekMessage publishes idle
+         * separately; PM_NOYIELD and zero-time waits do not.
+         * The whole queue must be empty, even for a filtered input wait. */
+        if (a->wake_mask && t->w32->queue && !w32_queue_bits(t) && t->process->w32->gui)
+            t->process->w32->input_idle = true;
         uint64_t wake = now + 1;
         kwait_wait_until(&w32_changed, wait_ready, &w, wake);
         if (t->process->state != PROC_LIVE || t->stopped) {

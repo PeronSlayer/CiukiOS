@@ -1719,7 +1719,7 @@ void desk_close_timeouts(struct desktop *d)
     for (int i=0; i<DESK_CLIENTS; i++) {
         struct desk_client *c=&d->clients[i];
         if (!c->window || c->internal || !c->closing || !c->close_sent_ns || c->version==DESK_VERSION || !c->pid ||
-            !c->unresponsive || d->now_ns<c->close_sent_ns+DESK_HUNG_NS) continue;
+            !c->unresponsive || d->now_ns<c->close_sent_ns+DESK_HUNG_NS || d->now_ns<c->hang_retry_ns) continue;
         c->close_sent_ns=0; /* one dialog per close request */
         desk_end_task_open(d,DESK_HANG_NOT_RESPONDING,0,c->pid,c->window_id,c->title);
         return;
@@ -1732,7 +1732,7 @@ void desk_close_timeouts(struct desktop *d)
      * Setup" page has no Cancel). One dialog per End Task. */
     for (int i=0; i<DESK_CLIENTS; i++) {
         struct desk_client *c=&d->clients[i];
-        if (!c->window || c->internal || !c->end_task_ns || d->now_ns<c->end_task_ns) continue;
+        if (!c->window || c->internal || !c->end_task_ns || d->now_ns<c->end_task_ns || d->now_ns<c->hang_retry_ns) continue;
         uint32_t pid=c->pid;
         int shown=i;   /* the program's front window names the dialog */
         for (int k=0; k<DESK_CLIENTS; k++) if (d->clients[k].window && !d->clients[k].internal && d->clients[k].pid==pid) {
@@ -1776,6 +1776,7 @@ void desk_user_close(struct desktop *d, int i)
     if (session_escalate(d,t)) return;
     if (!c->internal && c->closing && c->version!=DESK_VERSION && c->pid && c->pid!=d->self_pid && d->terminate &&
         !desk_session_busy(d) && (c->unresponsive || !c->close_later)) {
+        if (d->now_ns<c->hang_retry_ns) return;
         if (d->end_task.kind && !d->end_task.session && d->end_task.window>=0) { desk_focus(d,d->end_task.window); return; }
         desk_end_task_open(d,DESK_HANG_NOT_RESPONDING,0,c->pid,c->window_id,c->title);
         return;
@@ -1875,6 +1876,7 @@ int desk_task_end(struct desktop *d, uint32_t window_id, uint32_t pid)
          * whose End Task terminates the authenticated host process. */
         if (!c->internal && (c->closing || c->unresponsive)) {
             if (!d->terminate || !c->pid || c->pid==d->self_pid) return -EPERM;
+            if (d->now_ns<c->hang_retry_ns) return 0;
             desk_end_task_open(d,DESK_HANG_NOT_RESPONDING,0,c->pid,c->window_id,c->title);
             return 0;
         }
@@ -2750,6 +2752,7 @@ uint64_t desk_session_deadline(const struct desktop *d)
         const struct desk_client *c=&d->clients[i];
         if (c->window && c->closing && c->close_sent_ns && c->unresponsive && c->version!=DESK_VERSION) {
             uint64_t t=c->close_sent_ns+DESK_HUNG_NS;
+            if (t<c->hang_retry_ns) t=c->hang_retry_ns;
             if (!next || t<next) next=t;
         }
         if (c->window && !c->internal && c->end_task_ns && (!next || c->end_task_ns<next)) next=c->end_task_ns;
@@ -2833,6 +2836,14 @@ void desk_end_task_choice(struct desktop *d, int end)
     }
     if (!end) {
         if (e.session) { desk_session_cancel(d); return; }
+        if (e.kind==DESK_HANG_NOT_RESPONDING)
+            for (int i=0;i<DESK_CLIENTS;i++) {
+                struct desk_client *c=&d->clients[i];
+                if (c->window && !c->internal && c->pid==e.pid) {
+                    c->hang_retry_ns=d->now_ns+DESK_HUNG_NS;
+                    if (c->end_task_ns) c->end_task_ns=c->hang_retry_ns;
+                }
+            }
         if (e.kind==DESK_HANG_DOS)   /* No: the window and its program stay */
             for (int i=0; i<DESK_CLIENTS; i++) if (d->clients[i].window && d->clients[i].pid==e.pid && d->clients[i].closing) {
                 d->clients[i].closing=0; d->clients[i].close_sent_ns=0; desk_caption_damage(d,i);
@@ -2952,6 +2963,8 @@ static int lease_request(struct desktop *d, int i, const struct desk_packet *p)
         else if (d->v3_lease_state) { desk_v3_revoke(d); if (d->v3_lease_state) error=-EBUSY; }
     }
     else if (d->focus!=i || d->power.state || d->sh.user_gate || d->sh.levels || d->v3_lease_state) error=-EBUSY;
+    else if (p->flags==DESK_V3_LEASE_CARRIER &&
+             ((c->v3_style&3)!=DESK_V3_TOOL || c->owner_id)) error=-EINVAL;
     else if (!d->v3_lease) error=-ENOSYS;
     else {
         if (!++d->v3_lease_generation) ++d->v3_lease_generation;
@@ -2959,6 +2972,7 @@ static int lease_request(struct desktop *d, int i, const struct desk_packet *p)
         error=d->v3_lease(d,c->pid,1,p->width,p->height,p->bpp,d->v3_lease_generation);
         if (!error) { c->v3_lease_wanted=1; c->v3_lease_w=p->width; c->v3_lease_h=p->height; c->v3_lease_bpp=p->bpp;
             d->v3_lease_started=d->now_ns; d->v3_lease_state=1; d->v3_lease_window=c->window_id; d->v3_lease_pid=c->pid;
+            d->v3_lease_carrier=p->flags==DESK_V3_LEASE_CARRIER ? c->window_id : 0;
             d->v3_lease_w=p->width; d->v3_lease_h=p->height; d->v3_lease_bpp=p->bpp; c->v3_lease_mode=d->v3_lease_tuple.mode; v3_lease_event(d,i,1); }
     }
     return error;
@@ -2979,7 +2993,7 @@ void desk_v3_revoke(struct desktop *d)
     if (d->v3_lease && d->v3_lease(d,d->v3_lease_pid,0,
         d->v3_lease_w,d->v3_lease_h,d->v3_lease_bpp,d->v3_lease_generation)) return;
     if (i>=0) v3_lease_event(d,i,3);
-    d->v3_lease_state=0; d->v3_lease_window=0;
+    d->v3_lease_state=0; d->v3_lease_window=0; d->v3_lease_carrier=0;
     desk_v3_pointer_release(d); d->cursor_dirty=1; d->scanout_valid=0;
     desk_accel_reset(d,0); d->cursor_loaded=DESK_CURSOR_COUNT; d->hw_cursor=0;
     desk_damage_add(&d->damage,(struct desk_box){0,0,(int)d->width,(int)d->height},d->width,d->height);
@@ -3554,6 +3568,7 @@ void desk_v3_reactivate(struct desktop *d, int i)
     if (error) {d->v3_lease_error=error;v3_lease_event(d,i,0);return;}
     d->v3_lease_started=d->now_ns;
     d->v3_lease_state=1; d->v3_lease_window=c->window_id; d->v3_lease_pid=c->pid;
+    d->v3_lease_carrier=0;
     d->v3_lease_w=c->v3_lease_w; d->v3_lease_h=c->v3_lease_h; d->v3_lease_bpp=c->v3_lease_bpp;
     v3_lease_event(d,i,1);
 }

@@ -12,7 +12,7 @@ F3_PROBES = ('vm-boot', 'vm-memory', 'vm-devices', 'vm-video', 'vm-window', 'vm-
              'dos4gw', 'doom', 'doom-sound', 'wolf3d', 'vm-starve', 'quake', 'vm-fullscreen', 'dos-conformance',
              'vm-game')
 F4_PROBES = ('optical', 'audio-native', 'ntfs-ro', 'vm-audio', 'media-remove', 'vm-audio-jitter')  # F4 probes run by selector only; not in the sweep yet
-F5_PROBES = ('f5-core', 'w32-exceptions', 'w32-memory', 'w32-objects', 'w32-dialogs', 'w32-upper-dlls', 'w32-media', 'w32-fixtures', 'w32-kernel32', 'w32-fullscreen', 'w32-registry', 'w32-audio', 'w32-gdi32', 'w32-crash', 'w32-user32', 'w32-codecs', 'w32-ddraw', 'w32-input', 'w32-restart', 'w32-installer-nsis', 'w32-gl',
+F5_PROBES = ('f5-core', 'w32-exceptions', 'w32-memory', 'w32-objects', 'w32-dialogs', 'w32-upper-dlls', 'w32-media', 'w32-fixtures', 'w32-kernel32', 'w32-fullscreen', 'w32-registry', 'w32-audio', 'w32-gdi32', 'w32-crash', 'w32-user32', 'w32-codecs', 'w32-ddraw', 'w32-input', 'w32-restart', 'w32-installer-nsis', 'w32-gl', 'q3-lease-eio',
              # f5-15C installers tier: title aliases (tests/win32/workloads.json)
              'win32-diablo-shareware', 'win32-sc', 'win32-aoe-trial', 'win32-half-life-uplink', 'win32-ut-demo-348', 'win32-wa', 'win32-heroes3-demo', 'win32-rct-demo', 'win32-jazz2-shareware', 'win32-ta-demo')
 F6_PROBES = ('net-arp', 'browser')  # explicit selectors; no F6 hardware sweep yet

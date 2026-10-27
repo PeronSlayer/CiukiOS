@@ -165,6 +165,7 @@ struct desk_client {
      * responding" whether or not it answers PINGs. close_later: the program
      * answered CLOSE_ACK LATER and is showing its own prompt. */
     uint64_t end_task_ns;
+    uint64_t hang_retry_ns;       /* Wait/Cancel starts a fresh HungAppTimeout */
     int close_later;
     int slot_tier;   /* DESK_SLOT_*: the tier this slot was taken at (quota accounting) */
     uint32_t pid, serial, version, window_id;
@@ -420,6 +421,7 @@ struct desktop {
     int v3_pointer_window; /* slot + 1, zero means no capture/clip */
     unsigned v3_cursor_id, v3_cursor_slot, v3_cursor_hidden;
     uint32_t v3_lease_window, v3_lease_generation, v3_lease_state, v3_lease_pid;
+    uint32_t v3_lease_carrier; /* window id, cleared after the single drawable handoff */
     uint32_t v3_lease_w, v3_lease_h, v3_lease_bpp;
     struct desk_lease_tuple v3_lease_tuple;
     uint32_t v3_lease_preferred_mode;

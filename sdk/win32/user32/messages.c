@@ -99,7 +99,7 @@ LRESULT u32_invoke(HWND h, UINT m, WPARAM wp, LPARAM lp) {
   u32_hooks(4, 0, 0, (LPARAM)&call);
   return u32_call_proc(proc, w->unicode, 0, h, m, wp, lp);
 }
-static BOOL sent(void) {
+BOOL u32_sent(void) {
   u32_session_pump();
   struct u32_thread *t = u32_thread();
   if (!t)
@@ -238,7 +238,7 @@ static LRESULT send(HWND h, UINT m, WPARAM wp, LPARAM lp, UINT flags,
   DWORD start = u32_ticks();
   while (a.token) {
     if (!(flags & 1))
-      while (sent()) {
+      while (u32_sent()) {
       }
     a.action = W32_MSG_POLL_REPLY;
     if (!u32_message(&a)) {
@@ -335,7 +335,7 @@ BOOL W32API PeekMessageA(MSG *out, HWND h, UINT lo, UINT hi, UINT flags) {
   if (!mask)
     mask = QS_ALLINPUT;
   if (mask & QS_SENDMESSAGE)
-    while (sent()) {
+    while (u32_sent()) {
     }
   u32_pump();
   u32_mark();
@@ -361,7 +361,7 @@ BOOL W32API PeekMessageA(MSG *out, HWND h, UINT lo, UINT hi, UINT flags) {
     }
   }
   if (mask & QS_SENDMESSAGE)
-    while (sent()) {
+    while (u32_sent()) {
     }
   for (UINT i = 0; i < U32_WINDOWS; i++) {
     struct u32_window *w = &u32_windows[i];
@@ -395,6 +395,10 @@ BOOL W32API PeekMessageA(MSG *out, HWND h, UINT lo, UINT hi, UINT flags) {
         timer->due = u32_ticks() + timer->period;
       goto found;
     }
+  }
+  if (!(flags & 2u /* PM_NOYIELD */)) {
+    struct ciuki_w32_message_args idle = {.action = W32_MSG_INPUT_IDLE, .tid = t->id};
+    u32_message(&idle);
   }
   return 0;
 found:

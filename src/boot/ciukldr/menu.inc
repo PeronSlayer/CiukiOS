@@ -888,6 +888,6 @@ menu_tick dd 0
 menu_polls dw 0
 
 f4_probe_names db 'optical',0,'audio-native',0,'ntfs-ro',0,'vm-audio',0,'media-remove',0,'vm-audio-jitter',0,0
-f5_probe_names db 'f5-core',0,'w32-exceptions',0,'w32-memory',0,'w32-objects',0,'w32-dialogs',0,'w32-upper-dlls',0,'w32-media',0,'w32-fixtures',0,'w32-kernel32',0,'w32-fullscreen',0,'w32-registry',0,'w32-audio',0,'w32-gdi32',0,'w32-crash',0,'w32-user32',0,'w32-codecs',0,'w32-ddraw',0,'w32-input',0,'w32-restart',0,'w32-installer-nsis',0,'w32-gl',0,'win32-diablo-shareware',0,'win32-sc',0,'win32-aoe-trial',0,'win32-half-life-uplink',0,'win32-ut-demo-348',0,'win32-wa',0,'win32-heroes3-demo',0,'win32-rct-demo',0,'win32-jazz2-shareware',0,'win32-ta-demo',0,0
+f5_probe_names db 'f5-core',0,'w32-exceptions',0,'w32-memory',0,'w32-objects',0,'w32-dialogs',0,'w32-upper-dlls',0,'w32-media',0,'w32-fixtures',0,'w32-kernel32',0,'w32-fullscreen',0,'w32-registry',0,'w32-audio',0,'w32-gdi32',0,'w32-crash',0,'w32-user32',0,'w32-codecs',0,'w32-ddraw',0,'w32-input',0,'w32-restart',0,'w32-installer-nsis',0,'w32-gl',0,'q3-lease-eio',0,'win32-diablo-shareware',0,'win32-sc',0,'win32-aoe-trial',0,'win32-half-life-uplink',0,'win32-ut-demo-348',0,'win32-wa',0,'win32-heroes3-demo',0,'win32-rct-demo',0,'win32-jazz2-shareware',0,'win32-ta-demo',0,0
 f6_probe_names db 'net-arp',0
 f6_browser_name db 'browser',0,0

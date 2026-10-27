@@ -211,10 +211,10 @@ void desk_clip_dims(uint32_t n, uint32_t *width, uint32_t *height)
 }
 /* f7-14: the lease payloads are shared by DESK_V3_LEASE/LEASE_EVENT and the
  * v2 DESK_LEASE/LEASE_EVENT of native clients. */
-static int lease_request_fields(const uint8_t *b, struct desk_packet *p)
+static int lease_request_fields(const uint8_t *b, struct desk_packet *p, int allow_carrier)
 {
     p->flags=desk_get32(b); p->width=desk_get32(b+4); p->height=desk_get32(b+8); p->bpp=desk_get32(b+12);
-    if (p->flags>1 || (!p->flags && (p->width || p->height || p->bpp)) ||
+    if (p->flags>(allow_carrier ? DESK_V3_LEASE_CARRIER : 1u) || (!p->flags && (p->width || p->height || p->bpp)) ||
         (p->flags && (!p->width || !p->height || p->width>2048 || p->height>2048 ||
             (p->bpp!=8 && p->bpp!=16 && p->bpp!=32)))) return 0;
     return 1;
@@ -423,7 +423,7 @@ static int v3_parse(const struct ciuki_message *m, int client,
         if (!client || n!=8) return 0;
         p->x=(int32_t)desk_get32(b); p->y=(int32_t)desk_get32(b+4); expected=8; break;
     case DESK_V3_LEASE:
-        if (!client || n!=16 || !lease_request_fields(b,p)) return 0;
+        if (!client || n!=16 || !lease_request_fields(b,p,1)) return 0;
         expected=16; break;
     case DESK_V3_POINTER_STATE:
         if (client || n!=4) return 0;
@@ -581,7 +581,7 @@ int desk_parse(const struct ciuki_message *m, int client,
         n=m->length; break;
     case DESK_LEASE:
         if (!client || m->data[0]!=DESK_SHELL_VERSION || m->length!=20 || m->fd_count ||
-            !lease_request_fields(m->data+4,p)) return 0;
+            !lease_request_fields(m->data+4,p,0)) return 0;
         n=20; break;
     case DESK_LEASE_EVENT:
         if (client || m->data[0]!=DESK_SHELL_VERSION || m->length!=76 || m->fd_count ||

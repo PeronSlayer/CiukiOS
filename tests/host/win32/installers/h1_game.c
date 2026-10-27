@@ -45,6 +45,8 @@ static struct { uint32_t id, generation, fd; } windows[64];
 static struct ciuki_message inbox[INBOX];
 static uint32_t in_head, in_tail, focus_id, focus_generation;
 static uint32_t lease_token = 0x40, lease_generation = 0x80, lease_serial, lease_w, lease_h, lease_bpp;
+static int lease_eio;
+static unsigned lease_failures, close_after_eio, close_sent;
 static struct ciuki_w32_message queue[QUEUE];
 static uint32_t queue_bits[QUEUE], queue_count, quit_pending, quit_code, marked, changed;
 static uint32_t frames, presents, requests, refused, gamma_records, first_ms, last_ms, checksum;
@@ -337,6 +339,8 @@ static const char *after(const char *line, const char *marker) {
     return 0;
 }
 void h1_game_script(const char *command_line) {
+    lease_eio = after(command_line, "+set ciuki_lease_eio 1") != 0;
+    close_after_eio = after(command_line, "+set ciuki_close_after_eio 1") != 0;
     const char *text = after(command_line, "+set ciuki_keys \"");
     if (!text) return;
     unsigned n = 0;
@@ -454,7 +458,11 @@ static int32_t desktop_send(const struct ciuki_message *m) {
         activate(id, generation);
     if (op == DESK_V3_LEASE && m->length >= DESK_V3_HEADER + 16) {
         uint32_t action = get32(m->data + 16);
-        if (action)
+        if (action && lease_eio) {
+            lease_failures++;
+            host_print("GAME lease injected result=-5\n");
+            result = -5;
+        } else if (action)
             lease_event(id, generation, 1, get32(m->data + 20), get32(m->data + 24), get32(m->data + 28));
         else if (lease_w)
             lease_event(id, generation, 3, lease_w, lease_h, lease_bpp);
@@ -506,6 +514,12 @@ static int matches(const struct ciuki_w32_message_args *a, uint32_t k) {
 static int32_t message(struct ciuki_w32_message_args *a) {
     a->result = a->error = 0;
     switch (a->action) {
+    case W32_MSG_INPUT_IDLE:
+        /* Game mode has one GUI queue. Accept yielding PeekMessage's
+         * publication; cross-process GUI waits belong to the kernel fixture. */
+        if (a->tid && !a->token) a->result = !queue_count && !quit_pending && !marked;
+        else { a->result = W32_WAIT_FAILED; a->error = 1471; }
+        return 0;
     case W32_MSG_POST:
         if (key_active || key_at) if (a->message.message >= 0x100 && a->message.message <= 0x107) {
             host_print("GAME post msg="); hex(a->message.message); host_print(" wp="); hex(a->message.wparam);
@@ -592,6 +606,14 @@ int h1_game_kernel(void *record, uint32_t size, int32_t *status) {
             return 0; /* object handles: the fixture service */
         a->error = 0;
         if (queue_count || quit_pending || (marked & a->wake_mask)) { a->result = 0; *status = 0; return 1; }
+        /* A fatal renderer error in id's Win32 implementation runs the
+         * console's GetMessage loop. Act as the user closing that window;
+         * never synthesize success or bypass the production window proc. */
+        if (close_after_eio && lease_failures && !close_sent && focus_id && a->timeout) {
+            event(DESK_CLOSE_REQUEST,0,0,focus_id,focus_generation);
+            close_sent=1;
+            host_print("GAME close after failed lease\n");
+        }
         sleep_ms(a->timeout > 10 ? 10 : a->timeout);
         a->result = W32_WAIT_TIMEOUT;
         *status = 0;

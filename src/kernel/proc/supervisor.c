@@ -247,7 +247,7 @@ static bool setup_bootstrap(struct process **out, int *result)
 
 void supervisor_bootstrap(void)
 {
-    if (bootstrap_attempted || (g_boot.flags & CBI_F_TEST_REQUEST)) return;
+    if (bootstrap_attempted || ((g_boot.flags & CBI_F_TEST_REQUEST) && !supervisor_interactive_test(&g_boot))) return;
     bootstrap_attempted = true;
     struct process *setup = 0;
     int setup_result = 0;

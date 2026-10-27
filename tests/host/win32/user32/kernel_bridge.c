@@ -52,6 +52,26 @@ void ui_kernel_switch(unsigned i) {
   g_current->state = T_RUNNING;
 }
 unsigned ui_kernel_current(void) { return current_thread; }
+uint32_t ui_kernel_child_handle(uint32_t gui) {
+  struct w32_process *s = ui_processes[1]->w32;
+  s->gui = gui;
+  s->input_idle = false;
+  uint32_t h;
+  CHECK(!w32_handle_install(ui_processes[0], s->identity, 0, false, &h));
+  return h;
+}
+void ui_kernel_close_handle(uint32_t h) { CHECK(!w32_handle_close(ui_processes[0], h)); }
+void ui_kernel_child_wait(uint32_t pending, uint32_t timeout) {
+  unsigned previous = current_thread;
+  ui_kernel_switch(2);
+  struct proc_thread *t = ui_threads[2];
+  struct ciuki_w32_message_args m = {.action = W32_MSG_MARK,
+    .bits = pending ? W32_QS_POSTMESSAGE : 0, .message.wparam = W32_QS_ALL};
+  CHECK(!w32_message_call(t, &m) && !m.error);
+  struct ciuki_w32_wait_args a = {.wake_mask = W32_QS_ALL, .timeout = timeout};
+  CHECK(!w32_wait_call(t, &a) && !a.error);
+  ui_kernel_switch(previous);
+}
 uint32_t ui_kernel_tid(void) { return ui_threads[current_thread]->tid; }
 uint32_t ui_kernel_pid(void) {
   return ui_threads[current_thread]->process->pid;

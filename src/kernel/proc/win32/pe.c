@@ -53,6 +53,7 @@ int w32_pe_validate(const struct ciuki_file *f, struct w32_image *im)
     PE_CHECK(table <= f->bytes && im->count * 40 <= f->bytes - table, "section-table-bounds");
     PE_CHECK(table + im->count * 40 <= im->headers && im->headers <= f->bytes && im->headers <= im->bytes, "headers-size");
     PE_CHECK(pe16(op + 68) == 2 || pe16(op + 68) == 3, "unsupported-subsystem");
+    im->subsystem = pe16(op + 68);
     PE_CHECK(im->entry < im->bytes, "entrypoint-bounds");
     im->stack_reserve = pe32(op + 72); im->stack_commit = pe32(op + 76);
     for (unsigned i = 0; i < im->count; i++) {

@@ -138,6 +138,11 @@ struct ciuki_w32_message_args {
 #define W32_MSG_NOTIFY 10u
 #define W32_MSG_QUIT 11u
 #define W32_MSG_START 12u /* start synchronous send, return token without blocking */
+/* INPUT_IDLE: token is a process handle. Query the initial GUI idle latch;
+ * result is WAIT_OBJECT_0 or WAIT_TIMEOUT; invalid/non-GUI processes fail.
+ * With tid=this thread and token=0, publish a yielding empty PeekMessage;
+ * the kernel rechecks that this thread's entire input queue is empty. */
+#define W32_MSG_INPUT_IDLE 13u
 #define W32_SELECT_REMOVE 1u
 #define W32_SELECT_SENT_ONLY 2u
 /* wait.reserved bit zero selects new arrivals; zero retains the f5-04 ABI. */
