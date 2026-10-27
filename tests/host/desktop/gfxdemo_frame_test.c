@@ -81,7 +81,8 @@ static void packets(void)
     desk_put32(m.data+32,1);assert(!desk_parse(&m,1,&info,&p));desk_put32(m.data+32,0);
     desk_put32(m.data+8,UINT32_MAX);assert(!desk_parse(&m,1,&info,&p));desk_put32(m.data+8,60);
     m.fd_count=1;m.fds[0]=10;assert(!desk_parse(&m,1,&info,&p));m.fd_count=0;m.fds[0]=0;
-    m.data[2]=0;assert(!desk_parse(&m,1,&info,&p));m.data[2]=1;
+    /* fx-doswin3: a v2.0 client may send the 64-byte form. */
+    m.data[2]=0;assert(desk_parse(&m,1,&info,&p));m.data[2]=1;
     desk_put32(m.data+24,641);assert(!desk_parse(&m,1,&info,&p));
     desk_message(&m,DESK_GFX_FRAME,64);m.data[0]=2;m.data[2]=1;desk_put32(m.data+4,10);
     assert(desk_parse(&m,1,&info,&p));desk_put32(m.data+44,1);assert(!desk_parse(&m,1,&info,&p));
