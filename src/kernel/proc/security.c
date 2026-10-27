@@ -65,6 +65,9 @@ extern int channel_kernel_receive(struct process *, int32_t, struct ciuki_messag
 extern int channel_control_install(struct process *,struct proc_object *) __attribute__((weak));
 extern void channel_security_revoke(struct process *) __attribute__((weak));
 extern int proc_security_launch_prepare(struct process *, struct ciuki_security_launch *, struct process **) __attribute__((weak));
+/* sec-k07: the real device backend and the session drain, when linked. */
+#pragma weak secure_console_ops
+#pragma weak secure_session_retained
 
 void security_init(struct process *p)
 {
@@ -76,6 +79,7 @@ void security_init(struct process *p)
     role_generations[CIUKI_SECURITY_ROLE_OWNER]=1;
     p->fds=owner_endpoint_fds;
     p->subject = &system_subject;
+    if (&secure_console_ops) security_grants=&secure_console_ops; /* sec-k07 */
 }
 const struct ciuki_credential *security_credential(const struct process *p)
 { return p && p->subject ? &p->subject->credential : 0; }
@@ -338,6 +342,9 @@ int security_session_end(uint32_t id, bool begin, uint32_t *state)
             if (p && p->subject && p->subject->session == s && p->state != PROC_ZOMBIE)
                 draining = true;
         }
+        /* sec-k07: DOS VMs (kernel tasks, not processes) and Win32 session
+         * objects/reports are drained by PID 1; nonblocking query here. */
+        if (secure_session_retained && secure_session_retained(id)) draining = true;
         /* Unpublished children fence admission. Revoked subject snapshots
          * retain the DEAD record but cannot keep an old desktop executing. */
         if (!draining && !s->fence_pending && !s->fencing && !s->constructing) {
@@ -346,7 +353,14 @@ int security_session_end(uint32_t id, bool begin, uint32_t *state)
             boot_console.session_id = boot_console.session_generation = 0;
             boot_console.authentication_required = 0;
             boot_console.restore_cookie_lo = boot_console.restore_cookie_hi = 0;
-            if (security_grants && security_grants->release) security_grants->release(id);
+            /* sec-k07: the backend releases kernel-held endpoints whose last
+             * subject reference may be this session's; keep the record alive
+             * until its state has been reported. */
+            if (security_grants && security_grants->release && s->refs != UINT32_MAX) {
+                s->refs++;
+                security_grants->release(id);
+                s->refs--;
+            }
         }
     }
     *state = s->state;

@@ -585,6 +585,48 @@ int channel_endpoint_handoff(struct process *parent, int32_t fd, struct process 
     *child_fd=slot;
     return 0;
 }
+/* --- sec-k07 (begin): kernel-held notification endpoint ---
+ * The W32SRV child's child_service_fd: side 0 belongs to the unpublished
+ * child, side 1 is bound to the kernel subject and held only by the secure
+ * console backend (no descriptor anywhere). The kernel posts at most one
+ * pending 16-byte notification; the child sees POLLHUP when the session's
+ * backend record releases its end. Never inheritable or attachable. */
+int channel_kernel_endpoint(struct process *child, int32_t *child_fd, struct proc_object **kernel_end)
+{
+    if (!child || child->published || child->state!=PROC_PREPARING || !child_fd || !kernel_end) return -EPERM;
+    int32_t fds[2];
+    int err=channel_pair(child,fds);
+    if (err) return err;
+    struct desktop_description *u=desktop_fd(child,fds[0]), *k=desktop_fd(child,fds[1]);
+    struct channel *c=k->u.endpoint.channel;
+    err=security_subject_get(proc_supervisor()->subject);
+    if (err) { desktop_close(child,fds[0]); desktop_close(child,fds[1]); return err; }
+    security_subject_put(c->subjects[1]); c->subjects[1]=proc_supervisor()->subject;
+    c->handed[0]=c->handed[1]=true;
+    k->object.inheritable=u->object.inheritable=false;
+    child->fds[fds[1]]=(struct proc_fd){0}; /* the reference moves to the kernel */
+    *kernel_end=&k->object; *child_fd=fds[0];
+    return 0;
+}
+int channel_kernel_notify(struct proc_object *end, const void *data, uint32_t length)
+{
+    if (!desktop_object_is_channel(end) || !data || length>CIUKI_MESSAGE_PAYLOAD_MAX) return -EINVAL;
+    struct desktop_description *d=(struct desktop_description *)end;
+    struct channel *c=d->u.endpoint.channel; unsigned peer=d->u.endpoint.side^1;
+    if (c->revoked[0] || c->revoked[1] || !c->open[peer]) return -EPIPE;
+    if (c->inbox[peer].count) return 0; /* level-triggered: one wakeup suffices */
+    struct channel_message *m=kzalloc(sizeof(*m));
+    if (!m) return -ENOMEM;
+    m->wire.length=length; memcpy(m->wire.data,data,length);
+    struct channel_queue *q=&c->inbox[peer];
+    if (q->tail) q->tail->next=m; else q->head=m;
+    q->tail=m; q->count++;
+    desktop_objects.messages++;
+    kwait_wake_all(&c->changed[peer]);
+    if (net_fd_changed) net_fd_changed(0,0);
+    return 1;
+}
+/* --- sec-k07 (end) --- */
 /* The readiness coordinator is kernel-owned. A LOGON instance owns its fd,
  * while its death cannot discard a child's authenticated ready handshake.
  * Only this initial, unpublished binding and fixed-role recovery can install

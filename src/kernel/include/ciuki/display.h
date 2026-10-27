@@ -18,6 +18,7 @@ void display_present_poll(void);
 void display_present_process_exit(struct process *);
 void display_present_returned(void);
 uint32_t display_change_counter(void);
+void display_console_changed(void); /* sec-k07 */
 /* Successful desktop upload. Mode changes require a full frame; verified
  * full-screen restoration accepts the first upload in the new generation. */
 void display_frame_complete(uint32_t generation, bool full_frame);

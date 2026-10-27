@@ -251,9 +251,74 @@ static void queue_resync(struct controller *c, uint64_t tick)
     if (c==&native && dosvm_fullscreen_input) dosvm_fullscreen_input(INPUT_RESYNC,0,0);
     queue_event(c, INPUT_RESYNC, 0, (int32_t)q->stats.buttons, tick, q->stats.overflow);
 }
+/* --- sec-k07 (begin): trusted secure attention and input domains ---
+ * Microsoft Winlogon registers Ctrl+Alt+Delete as the secure attention
+ * sequence and switches the physical keyboard/screen to its own desktop
+ * (learn.microsoft.com/windows/win32/secauthn/initializing-winlogon). Here
+ * the merged native queue is the only producer of physical keys: PS/2 decode,
+ * USB HID and the firmware adapter all reach key_emit; no syscall injects
+ * into it. Once the kernel LOGON role exists (security_attention_armed) the
+ * Delete press with a physically held Ctrl and Alt is consumed here, before
+ * the DOS full-screen hook and the desktop queue, and its repeats/release are
+ * swallowed too. The queue then feeds only the trusted domain: pending user
+ * events are discarded, consumers get RESYNC, LOGON_UI an ATTENTION event.
+ * Without LOGON (the interim desktop) nothing changes: Ctrl+Alt+Del stays an
+ * ordinary key sequence and opens Task Manager as before. */
+extern bool security_attention_armed(void) __attribute__((weak));
+extern void security_attention_physical(void) __attribute__((weak));
+static bool secure_trusted;
+static uint16_t secure_swallow;
+static uint64_t secure_discarded, secure_attentions;
+bool input_secure_trusted(void) { return secure_trusted; }
+void input_secure_stats(uint64_t *discarded, uint64_t *attentions)
+{
+    uint32_t f = irq_save();
+    if (discarded) *discarded = secure_discarded;
+    if (attentions) *attentions = secure_attentions;
+    irq_restore(f);
+}
+/* Domain switch: nonblocking, IRQ-exclusive. Events queued for the previous
+ * owner never reach the next one (typed passwords stay trusted, user keys
+ * never reach the logon UI); both sides restart from one RESYNC. */
+void input_secure_domain(bool trusted, uint32_t attention)
+{
+    uint32_t f = irq_save();
+    struct input_queue *q = &native.queue;
+    if (secure_trusted != trusted) {
+        secure_trusted = trusted;
+        if (dosvm_fullscreen_input) dosvm_fullscreen_input(INPUT_RESYNC,0,0);
+        secure_discarded += q->stats.pending;
+        q->head = q->tail = q->stats.pending = 0;
+        q->stats.resync++;
+        queue_event(&native, INPUT_RESYNC, 0, (int32_t)q->stats.buttons, g_ticks, q->stats.overflow);
+    }
+    if (attention && trusted) {
+        if (q->stats.pending == INPUT_CAPACITY) queue_resync(&native, g_ticks);
+        queue_event(&native, INPUT_ATTENTION, (uint16_t)attention, 0, g_ticks, 0);
+        secure_attentions++;
+    }
+    irq_restore(f);
+}
+static bool secure_attention(struct controller *c, uint16_t code, int32_t value)
+{
+    if (secure_swallow && code == secure_swallow) {
+        if (!value) secure_swallow = 0;
+        return true;
+    }
+    if (value != 1 || (code != 0x153 && code != 0x53)) return false;
+    const struct input_queue *q = &c->queue;
+    if (!(q->down[0x1D] || q->down[0x11D]) || !(q->down[0x38] || q->down[0x138])) return false;
+    if (!security_attention_armed || !security_attention_armed()) return false;
+    secure_swallow = code;
+    input_secure_domain(true, CIUKI_SECURITY_SECURE_ATTENTION);
+    if (security_attention_physical) security_attention_physical();
+    return true;
+}
+/* --- sec-k07 (end) --- */
 static void enqueue(struct controller *c, uint16_t type, uint16_t code, int32_t value, uint64_t tick)
 {
-    if (c==&native && dosvm_fullscreen_input && dosvm_fullscreen_input(type,code,value)) return;
+    /* sec-k07: a trusted console never feeds a DOS full-screen guest. */
+    if (c==&native && dosvm_fullscreen_input && !secure_trusted && dosvm_fullscreen_input(type,code,value)) return;
     if (c->queue.stats.pending == INPUT_CAPACITY) queue_resync(c, tick);
     queue_event(c, type, code, value, tick, 0);
 }
@@ -276,6 +341,7 @@ static void key_emit(struct controller *c, uint16_t code, bool down, uint64_t ti
         if (down) q->stats.keys_down++;
         else q->stats.keys_down--;
     }
+    if (c == &native && secure_attention(c, code, value)) return; /* sec-k07 */
     enqueue(c, INPUT_KEY, code, value, tick);
     if (down && !c->stats.firmware) {
         char ch = input_unshifted(code);
@@ -471,6 +537,19 @@ bool input_read(struct input_event *out)
     touchpad_flush(&native, g_ticks);
     irq_restore(f);
     return dequeue(&native, out);
+}
+/* sec-k07: dequeue only while the queue feeds the caller's domain, in the
+ * same IRQ-exclusive interval as the domain test (input_read may yield). */
+bool input_read_domain(struct input_event *out, bool trusted)
+{
+    if (!out) return false;
+    input_retry();
+    keyboard_preferences_service();
+    uint32_t f = irq_save();
+    touchpad_flush(&native, g_ticks);
+    bool have = secure_trusted == trusted && dequeue(&native, out);
+    irq_restore(f);
+    return have;
 }
 void input_snapshot(struct input_stats *out)
 {

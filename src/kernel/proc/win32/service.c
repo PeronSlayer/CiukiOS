@@ -28,6 +28,7 @@ struct service_link {
 static struct service_link *links;
 static uint32_t service_pid[2];
 extern void display_present_process_exit(struct process *) __attribute__((weak));
+#pragma weak secure_service_notify /* sec-k07: w32srv accept notification */
 bool w32_service_desktop_client(struct process *desktop, uint32_t pid)
 {
     if (!desktop || desktop->pid!=supervisor_desktop_pid() ||
@@ -123,6 +124,10 @@ static uint32_t connect_service(struct process *client, uint32_t service, uint32
     client->w32->endpoint[service - 1] = (uint32_t)fds[0] + 1;
     *endpoint = (uint32_t)fds[0];
     w32_changed_wake();
+    /* sec-k07: a session W32SRV learns of the pending link on its
+     * child_service_fd instead of only by polling ACCEPT. */
+    if (service == W32_SERVICE_W32SRV && security_role(server) == CIUKI_SECURITY_ROLE_W32SRV &&
+        secure_service_notify) secure_service_notify(credential->session_id);
     return 0;
 }
 /* A registered server whose authority is gone: a window server whose

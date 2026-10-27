@@ -74,11 +74,27 @@ static void test_security_isolation(void)
         .target=W32_CURRENT_PROCESS,.handle=ah,.access=0x100003};
     CHECK(!w32_object_call(a,&duplicate_args)&&duplicate_args.error==5);
     struct w32_object *retained=w32_lookup(a,handle,W32_OBJ_TOKEN);CHECK(retained);w32_retain(retained);
+    /* --- sec-k07 (begin): Win32 part of logoff teardown (production
+     * diagnostics.c mailbox and objects list, called by PID 1 while CLOSING). */
+    w32_refusal_queue(alice,4,"k07-user.dll",2); w32_refusal_queue(system,5,"k07-system.dll",3);
+    unsigned k07_mine=0,k07_total=w32_fault_count;
+    for(unsigned i=0;i<w32_fault_count;i++) k07_mine+=w32_fault_session[(w32_fault_head+i)%16]==c.session_id;
+    CHECK(k07_mine>=1 && k07_total>k07_mine);
+    unsigned k07_bound=0;
+    for(struct w32_object *o=w32_objects;o;o=o->next)
+        k07_bound+=o->security_session==c.session_id||(o->type==W32_OBJ_TOKEN&&o->u.token.session_id==c.session_id);
+    CHECK(k07_bound>=2 && w32_session_revoke(c.session_id)==k07_bound);
+    CHECK(w32_fault_count==k07_total-k07_mine);
+    for(unsigned i=0;i<w32_fault_count;i++) CHECK(w32_fault_session[(w32_fault_head+i)%16]!=c.session_id);
+    CHECK(!w32_session_revoke(0));
+    /* --- sec-k07 (end) --- */
     uint32_t sid=c.session_id,state;CHECK(!security_session_end(sid,true,&state));
     CHECK(!w32_lookup(a,handle,W32_OBJ_TOKEN));
     g_current=&controller;proc_discard(alice);proc_discard(owner);proc_collect();CHECK(!security_session_end(sid,false,&state)&&state==CIUKI_SECURITY_SESSION_DEAD);
     /* Nontransferability is enforced at admission as well as lookup. */
     CHECK(w32_handle_install(system,retained,8,false,&th)==5);w32_release(retained);
+    CHECK(!w32_session_revoke(sid)); /* sec-k07: nothing of the drained session remains */
     CHECK(!w32_handle_close(system,sh));proc_discard(system);(void)native;
     puts("H07 kernel: real token/query/rights/revocation, session names, protected process, APC/message denial and unchanged queues PASS");
+    puts("H09 Win32 teardown (sec-k07): session reports purged, bound named objects/tokens counted until released PASS");
 }

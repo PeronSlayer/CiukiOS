@@ -14,10 +14,199 @@ extern uint32_t net_socket_count(void) __attribute__((weak));
 
 static uint32_t grant_owner, grant_descriptions, presenting;
 static bool display_suspended;
-uint32_t grants_display_pid(void) { return grant_owner; }
+/* --- sec-k07 (begin): trusted and session presentation domains ---
+ * One physical console, two exclusive domains (Microsoft "Desktops": one
+ * input desktop at a time, Winlogon's desktop for secure attention). The
+ * interim bootstrap desktop is the only USER owner and the domain never
+ * changes without LOGON, so its behaviour is the pre-k07 single grant.
+ * With LOGON the trusted UI (LOGON_UI) owns separate descriptions; session
+ * grants start suspended and only SECURE_LEAVE/initial activation (via
+ * security.c) enables them. A suspended display answers EBUSY like a DOS
+ * handoff; suspended input reads no events (EAGAIN/blocks). Concealment
+ * fences in-flight user presents, DOS full screen, the present lease and a
+ * neutral black kernel frame before any trusted pixel; the neutral frame is
+ * painted by PID 1 (grants_console_neutral), never with IRQs masked. */
+extern void display_console_changed(void) __attribute__((weak));
+extern bool display_fullscreen_active(void) __attribute__((weak));
+extern bool display_present_active(void) __attribute__((weak));
+extern void display_worker_wake(void) __attribute__((weak));
+extern bool input_secure_trusted(void) __attribute__((weak));
+extern void input_secure_domain(bool, uint32_t) __attribute__((weak));
+extern bool input_read_domain(struct input_event *, bool) __attribute__((weak));
+static uint32_t trusted_owner, trusted_descriptions, trusted_presenting;
+static uint32_t user_session, active_session;
+static bool console_trusted, neutral_pending;
+static uint64_t neutral_frames;
+static bool input_trusted_now(void) { return input_secure_trusted && input_secure_trusted(); }
+static bool user_active(void)
+{ return grant_owner && !console_trusted && user_session == active_session; }
+static void console_changed(void) { if (display_console_changed) display_console_changed(); }
+/* User-domain pixels that may still reach scanout after concealment. */
+static bool user_draining(void)
+{
+    return presenting != trusted_presenting || display_suspended ||
+        (display_fullscreen_active && display_fullscreen_active()) ||
+        (display_present_active && display_present_active());
+}
+static int grant_domain(const struct desktop_description *d, enum desktop_kind kind)
+{
+    if (d->grant_trusted) {
+        if (!trusted_owner || trusted_owner != d->owner) return -EACCES;
+        if (kind == DESKTOP_INPUT) return input_trusted_now() ? 0 : -EBUSY;
+        return console_trusted && !neutral_pending ? 0 : -EBUSY;
+    }
+    if (!grant_owner || grant_owner != d->owner || d->grant_session != user_session) return -EACCES;
+    if (kind == DESKTOP_INPUT && input_trusted_now()) return -EBUSY;
+    return user_active() ? 0 : -EBUSY;
+}
+bool grants_console_trusted(void) { return console_trusted; }
+void grants_console_snapshot(struct grants_console_state *out)
+{
+    uint32_t f = irq_save();
+    *out = (struct grants_console_state){ .trusted_owner = trusted_owner, .user_owner = grant_owner,
+        .user_session = user_session, .active_session = active_session,
+        .trusted = console_trusted, .neutral_pending = neutral_pending,
+        .draining = user_draining(), .neutral_frames = neutral_frames };
+    irq_restore(f);
+}
+/* Nonblocking, IRQ-masked by security.c. EBUSY while any user pixel source
+ * drains or the neutral frame is still owed; never re-exposes user output. */
+int grants_console_conceal(uint32_t session)
+{
+    (void)session;
+    uint32_t f = irq_save();
+    bool exposed = user_active();
+    console_trusted = true;
+    if (input_secure_domain) input_secure_domain(true, 0);
+    if (exposed) { neutral_pending = true; console_changed(); }
+    int busy = user_draining() || neutral_pending ? -EBUSY : 0;
+    irq_restore(f);
+    if (busy) {
+        if (display_worker_wake) display_worker_wake(); /* DOS/present return */
+        proc_notify();                                   /* PID 1 paints neutral */
+    }
+    return busy;
+}
+int grants_console_activate(uint32_t session)
+{
+    uint32_t f = irq_save();
+    if (!session || session != user_session || !grant_owner) { irq_restore(f); return -ESRCH; }
+    console_trusted = false;
+    neutral_pending = false;
+    active_session = session;
+    if (input_secure_domain) input_secure_domain(false, 0);
+    console_changed();
+    irq_restore(f);
+    return 0;
+}
+void grants_console_release(uint32_t session)
+{
+    uint32_t f = irq_save();
+    if (session && session == user_session) {
+        if (active_session == session) active_session = 0;
+        if (!console_trusted) { console_trusted = true; console_changed(); }
+        if (input_secure_domain && trusted_owner) input_secure_domain(true, 0);
+    }
+    irq_restore(f);
+}
+/* PID 1 thread context: the neutral kernel frame owed by a concealment. */
+int grants_console_neutral(void)
+{
+    uint32_t f = irq_save();
+    bool owed = neutral_pending && console_trusted && !user_draining();
+    if (owed) presenting++;
+    irq_restore(f);
+    if (!owed) return neutral_pending ? -EBUSY : 0;
+    const struct fb_device *dev = fbdev_get();
+    int err = 0;
+    uint32_t page = dev->present ? pmm_alloc() : 0;
+    if (dev->present && !page) err = -ENOMEM;
+    if (page) {
+        memset(P2V(page), 0, PAGE_SIZE);
+        fbdev_cursor_hide();
+        uint32_t generation = dev->generation;
+        for (uint32_t y = 0; y < dev->height && !err; y++)
+            for (uint32_t x = 0; x < dev->width && !err; x += PAGE_SIZE / 4) {
+                uint32_t width = dev->width - x > PAGE_SIZE / 4 ? PAGE_SIZE / 4 : dev->width - x;
+                struct fb_surface src = { P2V(page), width, 1, width * 4, width * 4 };
+                struct fb_rect dst = { (int32_t)x, (int32_t)y, (int32_t)width, 1 };
+                err = fbdev_present(&src, &dst);
+                kpreempt_point();
+                if (!err && (!console_trusted || fbdev_get()->generation != generation)) err = -EAGAIN;
+            }
+        pmm_free(page);
+    }
+    f = irq_save();
+    presenting--;
+    if (!err && console_trusted) { neutral_pending = false; neutral_frames++; console_changed(); }
+    irq_restore(f);
+    return err;
+}
+static void grant_owned(void)
+{ if (grant_descriptions + trusted_descriptions == 2) console_display_owned(true); }
+static int grant_pair(struct process *p, bool trusted, uint32_t session, int32_t fds[2])
+{
+    int a = desktop_fd_slot(p, 0), b = a < 0 ? a : desktop_fd_slot(p, (unsigned)a + 1);
+    if (b < 0) return -EMFILE;
+    if (desktop_objects.descriptions + FILE_OBJECTS > CIUKI_OPEN_DESCRIPTION_MAX - 2) return -ENFILE;
+    struct desktop_description *display = desktop_description_new(DESKTOP_DISPLAY, O_WRONLY);
+    struct desktop_description *input = desktop_description_new(DESKTOP_INPUT, O_RDONLY);
+    if (!display || !input) {
+        if (display) display->object.release(&display->object);
+        if (input) input->object.release(&input->object);
+        return -ENOMEM;
+    }
+    display->grant_trusted = input->grant_trusted = trusted;
+    display->grant_session = input->grant_session = session;
+    display->owner = input->owner = p->pid;
+    display->maximum = PROT_WRITE;
+    input->maximum = PROT_READ;
+    desktop_objects.grants += 2;
+    p->fds[a] = (struct proc_fd){ &display->object, FD_CLOEXEC };
+    p->fds[b] = (struct proc_fd){ &input->object, FD_CLOEXEC };
+    fds[0] = a; fds[1] = b;
+    return 0;
+}
+/* LOGON_UI's private grants, installed by PID 1 before publication. */
+int grants_install_trusted(struct process *p, int32_t fds[2])
+{
+    if (!p || p == proc_supervisor() || !p->fds || p->published) return -EPERM;
+    if (trusted_owner) return -EBUSY;
+    int err = grant_pair(p, true, 0, fds);
+    if (err) return err;
+    uint32_t f = irq_save();
+    trusted_owner = p->pid;
+    trusted_descriptions = 2;
+    if (!user_active()) {
+        console_trusted = true;
+        if (input_secure_domain) input_secure_domain(true, 0);
+    }
+    irq_restore(f);
+    grant_owned();
+    return 0;
+}
+/* SESSION_LAUNCH desktop grants: suspended until activation. One session
+ * domain at a time; a lingering earlier owner blocks the next logon. */
+int grants_install_session(struct process *p, uint32_t session, int32_t fds[2])
+{
+    if (!p || p == proc_supervisor() || !p->fds || p->published || !session) return -EPERM;
+    if (grant_owner) return -EBUSY;
+    int err = grant_pair(p, false, session, fds);
+    if (err) return err;
+    uint32_t f = irq_save();
+    grant_owner = p->pid;
+    grant_descriptions = 2;
+    user_session = session;
+    if (active_session == session) active_session = 0;
+    irq_restore(f);
+    grant_owned();
+    return 0;
+}
+/* --- sec-k07 (end) --- */
+uint32_t grants_display_pid(void) { return user_active() ? grant_owner : 0; } /* sec-k07: active USER owner */
 int grants_display_suspend(bool suspended)
 {
-    if (suspended && (display_suspended || presenting || !grant_owner)) return -EBUSY;
+    if (suspended && (display_suspended || presenting || !user_active())) return -EBUSY;
     display_suspended = suspended;
     return 0;
 }
@@ -27,7 +216,7 @@ extern void dosvm_image_desktop_presented(void) __attribute__((weak)); /* fx-4b 
 extern void bootstat_presented(void) __attribute__((weak)); /* G14: the start is complete */
 bool grants_display_owner(const struct process *p)
 {
-    if (!p || p->pid != grant_owner) return false;
+    if (!p || p->pid != grant_owner || !user_active()) return false; /* sec-k07 */
     for (unsigned i = 0; i < CIUKI_OPEN_MAX; i++) {
         struct desktop_description *d = desktop_fd(p, (int32_t)i);
         if (d && d->kind == DESKTOP_DISPLAY && d->owner == p->pid && (d->maximum & PROT_WRITE)) return true;
@@ -43,16 +232,24 @@ void grant_release(struct desktop_description *d)
     grant_batch_close(d);
     if (!d->owner) return;
     desktop_objects.grants--;
+    /* sec-k07: each domain forgets its owner with its last description. */
+    if (d->grant_trusted) {
+        if (!--trusted_descriptions) trusted_owner = 0;
+    } else if (!--grant_descriptions) {
+        grant_owner = 0;
+        user_session = 0;
+    }
     /* The last grant description closes: the screen console draws again. */
-    if (!--grant_descriptions) {
+    if (!grant_descriptions && !trusted_descriptions) {
         fbdev_cursor_hide();
-        grant_owner = 0; console_display_owned(false);
+        console_display_owned(false);
     }
 }
 
 int grants_install(struct process *p, int32_t fds[2])
 {
-    if (!p || p == proc_supervisor() || !p->fds || grant_owner) return -EPERM;
+    /* sec-k07: never a legacy grant beside the trusted logon domain. */
+    if (!p || p == proc_supervisor() || !p->fds || grant_owner || trusted_owner) return -EPERM;
     int a = desktop_fd_slot(p, 0), b = a < 0 ? a : desktop_fd_slot(p, (unsigned)a + 1);
     if (b < 0) return -EMFILE;
     if (desktop_objects.descriptions + FILE_OBJECTS > CIUKI_OPEN_DESCRIPTION_MAX - 2) return -ENFILE;
@@ -65,6 +262,7 @@ int grants_install(struct process *p, int32_t fds[2])
     }
     grant_owner = p->pid;
     grant_descriptions = 2;
+    user_session = active_session = 0; /* sec-k07: interim USER domain, always active */
     desktop_objects.grants += 2;
     display->owner = input->owner = p->pid;
     display->maximum = PROT_WRITE;
@@ -84,18 +282,26 @@ static int grant_check(struct process *p, int32_t fd, enum desktop_kind kind, ui
     struct desktop_description *d = desktop_fd(p, fd);
     if (!d || d->kind != kind) return -EBADF;
     if (kind == DESKTOP_DISPLAY && display_suspended) return -EBUSY;
-    return d->owner == p->pid && grant_owner == p->pid && (d->maximum & right) ? 0 : -EACCES;
+    if (d->owner != p->pid || !(d->maximum & right)) return -EACCES;
+    return grant_domain(d, kind); /* sec-k07 */
 }
 int grant_batch_authorized(struct process *p, struct desktop_description *d)
 {
     if (!d || d->kind!=DESKTOP_DISPLAY) return -EBADF;
-    if (d->owner!=p->pid || grant_owner!=p->pid || !(d->maximum&PROT_WRITE)) return -EACCES;
-    if (display_suspended) return -EBUSY;
+    if (d->owner!=p->pid || !(d->maximum&PROT_WRITE)) return -EACCES;
+    /* sec-k07: the trusted UI has no batch engine; batches re-check the
+     * domain through this callback between slices and stop when concealed. */
+    if (d->grant_trusted) return -EOPNOTSUPP;
+    int domain=grant_domain(d,DESKTOP_DISPLAY);
+    if (domain==-EACCES) return domain;
+    if (display_suspended || domain) return -EBUSY;
     return p->state==PROC_LIVE ? 0 : -ECANCELED;
 }
 void grant_batch_busy(bool busy) { if (busy) presenting++; else presenting--; }
 
 struct accel_operation { struct desktop_description *grant; bool presenting; uint32_t page; };
+static bool grant_still_active(const struct desktop_description *d) /* sec-k07 */
+{ return !grant_domain(d, DESKTOP_DISPLAY); }
 int grant_accel_info(struct process *p, int32_t fd, const struct ciuki_accel_request *q,
                      struct ciuki_accel_info *out)
 {
@@ -110,7 +316,7 @@ void grants_display_yield(void) { kpreempt_point(); }
 static void accel_cleanup(void *arg)
 {
     struct accel_operation *op=arg;
-    if (op->presenting) presenting--;
+    if (op->presenting) { presenting--; if (op->grant->grant_trusted) trusted_presenting--; }
     if (op->page) { pmm_free(op->page); op->page=0; }
     op->grant->object.release(&op->grant->object);
 }
@@ -165,6 +371,7 @@ static int accel_write(struct process *p, const struct ciuki_accel_request *q, s
             else if (e) cpu = 1;
             kpreempt_point();
             if (!err && (p->state != PROC_LIVE || (t && proc_signal_caught(t)))) err = -EINTR;
+            if (!err && !grant_still_active(op->grant)) err = -EBUSY; /* sec-k07 */
         }
     }
     pmm_free(op->page); op->page = 0;
@@ -180,6 +387,7 @@ int grant_accel(struct process *p, int32_t fd, const struct ciuki_accel_request 
     op.grant->object.retain(&op.grant->object);
     if (t) { t->cleanup=accel_cleanup; t->operation=&op; }
     presenting++;
+    if (op.grant->grant_trusted) trusted_presenting++; /* sec-k07 */
     err = q->size == sizeof(*q) && q->operation == CIUKI_ACCEL_WRITE ? accel_write(p,q,&op) : fbdev_accel_request(q);
     if (t) { t->cleanup=0; t->operation=0; }
     accel_cleanup(&op);
@@ -238,7 +446,7 @@ struct present_operation { struct surface *surface; struct desktop_description *
 static void present_cleanup(void *arg)
 {
     struct present_operation *op = arg;
-    if (op->presenting) presenting--;
+    if (op->presenting) { presenting--; if (op->grant->grant_trusted) trusted_presenting--; } /* sec-k07 */
     surface_release(op->surface);
     op->grant->object.release(&op->grant->object);
     pmm_free(op->row_page);
@@ -277,6 +485,7 @@ int grant_present(struct process *p, int32_t display, int32_t fd, const struct c
         return err;
     }
     presenting++; op.presenting = true;
+    if (op.grant->grant_trusted) trusted_presenting++; /* sec-k07 */
     for (unsigned y = 0; y < clipped.height && !err; y++) {
         for (unsigned x = 0; x < clipped.width; x += PAGE_SIZE / 4) {
             uint32_t width = clipped.width - x;
@@ -293,6 +502,7 @@ int grant_present(struct process *p, int32_t display, int32_t fd, const struct c
              * operation retains its surface and grant across the yield. */
             kpreempt_point();
             if (p->state != PROC_LIVE || (t && proc_signal_caught(t))) err = -EINTR;
+            else if (!grant_still_active(op.grant)) err = -EBUSY; /* sec-k07: concealed */
             else if (fbdev_get()->generation != generation || display_live()) err = -EIO;
             if (err) break;
         }
@@ -334,6 +544,7 @@ void desktop_input_event(const struct input_event *in, uint32_t lost, uint32_t b
     case INPUT_BTN: out->type = CIUKI_INPUT_BUTTON; out->code = in->code + 1; out->value = in->value; break;
     case INPUT_RESYNC:
         out->type = CIUKI_INPUT_RESYNC; out->lost_count = lost; out->value = (int32_t)(buttons & 31); break;
+    case INPUT_ATTENTION: out->type = CIUKI_INPUT_ATTENTION; out->code = in->code; break; /* sec-k07 */
     }
 }
 
@@ -414,7 +625,8 @@ static void input_cleanup(void *arg)
 int grant_input_read(struct process *p, int32_t fd, uint32_t events, uint32_t capacity)
 {
     int err = grant_check(p, fd, DESKTOP_INPUT, PROT_READ);
-    if (err) return err;
+    if (err && err != -EBUSY) return err; /* sec-k07: a suspended domain reads no events */
+    err = 0;
     if (!capacity || capacity > CIUKI_INPUT_READ_MAX) return -EINVAL;
     /* This grant owns the merged queue, not a particular controller. Device
      * absence (including i8042 quarantine) is an empty queue, not lost access.
@@ -430,17 +642,22 @@ int grant_input_read(struct process *p, int32_t fd, uint32_t events, uint32_t ca
     unsigned count = 0;
     for (;;) {
         if (p->state == PROC_STOPPING) { err = -EINTR; break; }
+        /* sec-k07: each turn re-proves the domain; dequeue is atomic with it. */
+        int live = grant_domain(d, DESKTOP_INPUT);
+        if (live == -EACCES) { err = -EACCES; break; }
         extern bool dosvm_fullscreen_desktop_event(struct ciuki_input_event *) __attribute__((weak));
         struct ciuki_input_event pending;
-        if (dosvm_fullscreen_desktop_event && dosvm_fullscreen_desktop_event(&pending)) {
+        if (!live && !d->grant_trusted && dosvm_fullscreen_desktop_event && dosvm_fullscreen_desktop_event(&pending)) {
             err=copy_to_user(events+count*sizeof(pending),&pending,sizeof(pending));
             if (err || ++count==capacity) break;
             continue;
         }
         struct input_event in;
-        bool have = input_read(&in);
+        bool have = !live && (input_read_domain ? input_read_domain(&in, d->grant_trusted) :
+                              !d->grant_trusted && input_read(&in));
         if (have) {
             if (in.type == INPUT_ABS) continue; /* internal pad sample; REL/BTN is the public projection */
+            if (in.type == INPUT_ATTENTION && !d->grant_trusted) continue; /* sec-k07: trusted UI only */
             struct ciuki_input_event out;
             desktop_input_event(&in, (uint32_t)in.lost_count, (uint32_t)in.value, &out);
             err = copy_to_user(events + count * sizeof(out), &out, sizeof(out));

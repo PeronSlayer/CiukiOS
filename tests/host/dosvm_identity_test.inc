@@ -4,6 +4,31 @@
  * other drive number, no transfer or buffer change on refusal. Included by
  * dosvm_test.c after the production sources; fakes in dosvm_video_test.inc.
  * SPDX-License-Identifier: GPL-2.0-only */
+/* --- sec-k07 (begin): logoff teardown calls the production
+ * dosvm_session_revoke from PID 1 while the session is CLOSING; it ends
+ * exactly that session's window VMs, leaves others running, is idempotent
+ * and reports what it had to retain (0 here: no binding was busy). */
+static void test_session_revoke(void)
+{
+    struct process *saved_current = fake_current;
+    window_fixtures();
+    fake_identity(1, true, true); /* proc 1: Standard user, session 8; proc 0: session 7 */
+    struct ciuki_dosvm_command a, b;
+    fake_current = &fake_proc[0]; CHECK(!create_window(0, "Alice", &a));
+    fake_current = &fake_proc[1]; CHECK(!create_window(3, "Bob", &b));
+    struct dosvm_key ka = {a.id, a.generation}, kb = {b.id, b.generation};
+    CHECK(dosvm_valid(ka) && dosvm_valid(kb) && fake_subject[0].refs && fake_subject[1].refs);
+    CHECK(!dosvm_session_revoke(9) && !dosvm_session_revoke(0) && dosvm_valid(ka) && dosvm_valid(kb));
+    CHECK(!dosvm_session_revoke(7) && !dosvm_valid(ka) && dosvm_valid(kb) && !fake_subject[0].refs);
+    CHECK(!dosvm_session_revoke(7) && dosvm_valid(kb));
+    CHECK(!dosvm_session_revoke(8) && !dosvm_valid(kb) && !fake_subject[1].refs);
+    { struct dosvm_ledger l; dosvm_snapshot(&l); CHECK(!l.vms); }
+    memset(fake_proc, 0, sizeof(fake_proc));
+    fake_current = saved_current;
+    empty();
+    puts("H09 DOS teardown (sec-k07): dosvm_session_revoke ends only the closing session's window VMs, idempotently PASS");
+}
+/* --- sec-k07 (end) --- */
 static void test_vm_identity(void)
 {
     empty();
@@ -55,4 +80,5 @@ static void test_vm_identity(void)
     memset(fake_proc, 0, sizeof(fake_proc));
     empty();
     puts("H06 VM identity: PASS (capture refusals, own reference before boot, owner match, no physical FDC, INT13 private provider only, release when DEAD)");
+    test_session_revoke(); /* sec-k07 */
 }

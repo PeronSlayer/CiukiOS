@@ -382,6 +382,7 @@ static int description_io_locked(struct file_description *d, void *buffer, size_
     if (!bytes) return 0;
     if (n->kind == PX_NULL) { *done = write ? bytes : 0; return 0; }
     if (n->kind == PX_CONSOLE) {
+        if (!write) { *done = 0; return 0; } /* sec-k07: session console input is EOF */
         int err = device_write(buffer, (uint32_t)bytes);
         if (err >= 0) { *done = (size_t)err; supervisor_output(g_current, d->stream, buffer, (uint32_t)err); return 0; }
         return err;
@@ -484,6 +485,33 @@ int files_stdio(struct process *p)
     if (fd != 2) { file_dup(p, fd, 2, true, 0); file_close(p, fd); }
     return 0;
 }
+/* --- sec-k07 (begin): private session console for SESSION_LAUNCH children
+ * and LOGON_UI. One write-only /dev/console description, upgraded to O_RDWR
+ * so reads return EOF ("input EOF until ordinary ownership"); a user can
+ * never open it O_RDWR (device_open) and F_SETFL keeps the access mode. It
+ * occupies 0..2 plus a duplicate at 3 (child_console_fd). No SYSTEM log
+ * history is readable through it. The child must be unpublished, with an
+ * empty table (k01 discards every inherited description first). */
+int files_session_console(struct process *p, int32_t *console)
+{
+    if (!p || !p->fds || p->published || !console) return -EPERM;
+    for (unsigned i = 0; i < 4; i++) if (p->fds[i].object) return -EBUSY;
+    int fd = file_open(p, "/dev/console", O_WRONLY, 0);
+    if (fd < 0) return fd;
+    struct file_description *d = file_fd(p, fd);
+    if (fd != 0 || !d || !d->node || d->node->kind != PX_CONSOLE) { file_close(p, fd); return -EIO; }
+    d->flags = (d->flags & ~O_ACCMODE) | O_RDWR;
+    for (int32_t i = 1; i < 4; i++) {
+        int slot = file_dup(p, 0, i, true, 0);
+        if (slot != i) {
+            for (int32_t j = i - 1; j >= 0; j--) file_close(p, j);
+            return slot < 0 ? slot : -EIO;
+        }
+    }
+    *console = 3;
+    return 0;
+}
+/* --- sec-k07 (end) --- */
 int files_bootstrap(struct vfs *v)
 {
     struct px_namespace *s;

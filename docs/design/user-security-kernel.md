@@ -1092,6 +1092,14 @@ all old successes. If trusted UI cannot restart, retain neutral error/shutdown
 presentation. Session termination uses END_BEGIN/END_COLLECT, not an unlock
 shortcut. Sec-k01 supplies operations/state machine and host grant adapter;
 sec-k07 qualifies every real display/input backend before a secure-lock claim.
+(sec-k07, 2026-10-27, details in [sec-k07](../validation/sec-k07.md): the
+merged native input queue consumes physical Ctrl+Alt+Delete only once a LOGON
+role exists, so the interim desktop keeps its Task Manager sequence until
+sec-user-03; LOGON is notified through LOGON_UI, which receives
+CIUKI_INPUT_ATTENTION on its trusted input grant and relays LOCK_EVENT.
+Concealing a visible session also waits for a neutral kernel frame; SECURE_ENTER
+returns EBUSY until then. END_COLLECT stays CLOSING until PID 1 has ended the
+session's DOS VMs and no Win32 object of the session remains.)
 
 Mandatory H01/H09 sequences, repeated with service generations/process/fd reuse:
 (1) pending launch -> SECURE_ENTER(LOCK) -> both ready -> LAUNCH_POLL: READY and
