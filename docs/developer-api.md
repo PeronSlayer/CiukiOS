@@ -5543,6 +5543,18 @@ STATUS.changed: game data quota/disk space exhausted
 armed EXEC returned to its shell
 
 ```c
+#define CIUKI_DOSVM_GRAPHICS 256u
+```
+
+STATUS.changed: the guest display is in a graphics mode (VBE, BIOS or programmed VGA)
+
+```c
+#define CIUKI_DOSVM_FULLSCREEN_HOTKEY 512u
+```
+
+STATUS.changed: the last full-screen entry or return was the user's Alt+Enter
+
+```c
 #define CIUKI_DOSVM_BOOTING 0u
 #define CIUKI_DOSVM_RUNNING 1u
 #define CIUKI_DOSVM_STOPPED 2u

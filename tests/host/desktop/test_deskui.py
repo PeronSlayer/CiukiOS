@@ -95,10 +95,12 @@ FILES_FRAMES = {
 PIN = "PIN-FROM-FIRST-RUN"
 
 # Fix A (2026-10-24): reviewed regional text and combined property-sheet frames.
-# G6: reviewed property sheets, drive pie/counting, Version and Attributes.
+# G6: reviewed property sheets, drive pie/counting, Version and Attributes;
+# fx-dosfull: a DOS program's Screen page (Usage).
 G6_FRAMES = {
     "g6-attributes.xrgb": "36c4b31cf29863de56400ecf085ed32903fd69f2cfc9eb64683fbdf24568fd40",
     "g6-counting.xrgb": "ee3d760c0609ee2cbeaff3cd8845687e3a61c7f216256a1f0e82901fac2f97d2",
+    "g6-dos-screen.xrgb": "aae40ec2684c02e63ee446e4e144cbe0f65469230eb731a6b872b0131f1733e7",
     "g6-drive.xrgb": "44e70c1c971f2e8cc9caf125425b222b54eb8efc5c6705cc4cd5ee29ce915923",
     "g6-file.xrgb": "78f6614dd348b74028bed3ae0c3d247d27d6dc762a2a61b41683dd302538e2f7",
     "g6-folder.xrgb": "bfb0324a30b2e80c88d939ea5455cda68e60b14c71adffbd06223f9c9198b9f5",

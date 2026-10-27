@@ -22,7 +22,8 @@ struct dosbox_window {
 struct dosbox_field { const char *name; unsigned page, offset, maximum; const char *const *choices; };
 static const char *const db_zoom[]={"Fit","100%","125%"};
 static const char *const db_memory[]={"Automatic (paged)","Locked (compatibility)"};
-static const char *const db_screen[]={"Window","Full screen","Exclusive full screen"};
+/* fx-dosfull: Screen "Usage", indexed by DOSBOX_SCREEN_* (program.h). */
+static const char *const db_screen[]={"Window","Full screen","Exclusive full screen","Full screen for graphics"};
 #define DB_FIELD(name,page,member,max,choices) {name,page,offsetof(struct dosbox_profile,member),max,choices}
 static const struct dosbox_field db_fields[]={
     DB_FIELD("Command line",0,command,96,NULL),
@@ -31,7 +32,7 @@ static const struct dosbox_field db_fields[]={
     DB_FIELD("Close on exit",0,close_on_exit,1,NULL),
     DB_FIELD("Font size",1,zoom,2,db_zoom),
     DB_FIELD("XMS / EMS / DPMI pool",2,memory,1,db_memory),
-    DB_FIELD("Start in",3,screen,2,db_screen),
+    DB_FIELD("Usage",3,screen,DOSBOX_SCREEN_MAX,db_screen),
     DB_FIELD("Continue in background",4,background,1,NULL),
     DB_FIELD("QuickEdit",4,quickedit,1,NULL),
     DB_FIELD("Allow fast pasting",4,fast_paste,1,NULL),
@@ -132,7 +133,7 @@ static inline int db_apply(struct dosbox_window *w, int close_sheet)
 {
     if (dosbox_profile_save(&w->draft)) { db_notice(w,"Cannot save properties. Check command, paths and available disk space."); return DB_NONE; }
     w->profile=w->draft; w->properties=!close_sheet; w->dirty=1;
-    db_notice(w,"Saved. Program, memory and startup screen changes apply on the next launch.");
+    db_notice(w,"Saved. Program and memory changes apply on the next launch.");
     return DB_APPLY;
 }
 static inline int db_source_x(const struct dosbox_window *w, int x)
@@ -430,7 +431,7 @@ static inline void db_paint_sheet(struct dosbox_window *w, struct du_canvas *c)
     static const char *const help[]={"Command, folder and batch take effect next launch. F6 changes page.",
         "VGA raster font; guest glyphs and colours are preserved. Wheel over toolbar scrolls.",
         "Conventional, EMS, XMS and DPMI amounts: automatic. Protected memory: VMM managed.",
-        "Exclusive uses the program profile and startup batch. Alt+Enter returns to the desktop.",
+        "For graphics: text in a window, graphics full screen. Exclusive pauses in the background. Alt+Enter switches and is kept.",
         "Higher idle sensitivity detects empty keyboard polling sooner. Tab selects a field."};
     db_rect(c,page.x+10,page.y+page.h-72,page.w-20,1,DU_SHADOW); db_rect(c,page.x+10,page.y+page.h-71,page.w-20,1,DU_HILITE);
     du_text_wrap(c,(struct du_rect){page.x+12,page.y+page.h-64,page.w-24,32},help[w->page],DU_INK);

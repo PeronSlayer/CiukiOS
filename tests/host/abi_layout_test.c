@@ -2568,6 +2568,8 @@ static const struct expectation expectations[] = {
     {"constant.CIUKI_DOSVM_POLICY", CIUKI_DOSVM_POLICY, 23u},
     {"constant.CIUKI_DOSVM_TEXT_BYTES", CIUKI_DOSVM_TEXT_BYTES, 48u},
     {"constant.CIUKI_DOSVM_PROGRAM_RETURNED", CIUKI_DOSVM_PROGRAM_RETURNED, 128u},
+    {"constant.CIUKI_DOSVM_GRAPHICS", CIUKI_DOSVM_GRAPHICS, 256u},
+    {"constant.CIUKI_DOSVM_FULLSCREEN_HOTKEY", CIUKI_DOSVM_FULLSCREEN_HOTKEY, 512u},
     {"sizeof.ciuki_dosvm_text_chunk", sizeof(struct ciuki_dosvm_text_chunk), 64u},
     {"alignof.ciuki_dosvm_text_chunk", _Alignof(struct ciuki_dosvm_text_chunk), 4u},
     {"offsetof.ciuki_dosvm_text_chunk.row", __builtin_offsetof(struct ciuki_dosvm_text_chunk,row), 0u},

@@ -195,6 +195,7 @@ static uint32_t status_flags(const struct dosvm *v)
            (v->fullscreen_error ? CIUKI_DOSVM_FULLSCREEN_REFUSED : 0) |
            (v->persistent && v->save.full ? CIUKI_DOSVM_SAVE_FULL : 0) |
            (v->launch_returned && !v->exec_pending && !v->exec_overflow ? CIUKI_DOSVM_PROGRAM_RETURNED : 0) |
+           (v->fullscreen_hotkey ? CIUKI_DOSVM_FULLSCREEN_HOTKEY : 0) |
            (dosvm_shell_idle(v) && v->idle.sleeping && !v->key_count && !v->kbd.count ? CIUKI_DOSVM_SHELL_READY : 0);
 }
 static uint32_t wait_phase(void)
@@ -317,6 +318,21 @@ static void video_mode(struct dosvm *v, struct ciuki_dosvm_command *c)
 {
     uint8_t mode = 0;
     if (!dosvm_read(v, 0x449, &mode, 1)) c->video_mode = mode;
+}
+/* fx-dosfull: Windows 98 runs a game "that uses graphics modes" full screen
+ * (Resource Kit ch. 25, Running Games); the DOS Box enters full screen at the
+ * first one. Graphics: an active VBE mode, a BIOS graphics mode in the BDA
+ * (0049h other than the text modes 0-3 and 7), or a windowed VGA model a
+ * program set to a graphics layout through the registers alone. Read in the
+ * STATUS call only: the BDA read may fault in a page, which the WAIT_PRESENT
+ * predicate (status_flags) must never do. */
+static bool status_graphics(struct dosvm *v, uint32_t bios_mode)
+{
+    if (v->vbe_mode) return true;
+    bios_mode &= 0x7Fu;
+    if (bios_mode > 3 && bios_mode != 7) return true;
+    cvga_geometry g;
+    return !v->fullscreen && cvga_get_geometry(&v->vga, &g) && !g.text;
 }
 
 int32_t dosvm_client_syscall(struct trap_frame *tf)
@@ -556,6 +572,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
             if (v->launch_failed || c.state == CIUKI_DOSVM_STOPPED)
                 memcpy(c.name, v->console_line, sizeof(c.name) - 1);
             video_mode(v, &c);
+            if (c.state != CIUKI_DOSVM_STOPPED && status_graphics(v, c.video_mode)) c.changed |= CIUKI_DOSVM_GRAPHICS;
             dosvm_startup_report(v, false);
             dosvm_perf_report(v);
         } else if (op==CIUKI_DOSVM_CLIP_REQUEST || op==CIUKI_DOSVM_CLIP_COMPLETE)

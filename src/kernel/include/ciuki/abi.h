@@ -3070,6 +3070,8 @@ struct ciuki_dosvm_policy {
 #define CIUKI_DOSVM_FULLSCREEN_REFUSED 16u /* STATUS.reason is positive errno */
 #define CIUKI_DOSVM_SAVE_FULL 64u /* STATUS.changed: game data quota/disk space exhausted */
 #define CIUKI_DOSVM_PROGRAM_RETURNED 128u /* armed EXEC returned to its shell */
+#define CIUKI_DOSVM_GRAPHICS 256u /* STATUS.changed: the guest display is in a graphics mode (VBE, BIOS or programmed VGA) */
+#define CIUKI_DOSVM_FULLSCREEN_HOTKEY 512u /* STATUS.changed: the last full-screen entry or return was the user's Alt+Enter */
 #define CIUKI_DOSVM_BOOTING 0u
 #define CIUKI_DOSVM_RUNNING 1u
 #define CIUKI_DOSVM_STOPPED 2u

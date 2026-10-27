@@ -407,6 +407,82 @@ static void test_fullscreen_more_modes(void)
     CHECK(!finish_test_vm(&close,sizeof(close)));empty();
     puts("PASS f3-37 VGA: 16 chain-4/unchained 320/360 x200/240/400/480 variants and planar 0d/0e/10/11/12 plus 640x400, enter/nonblack frame/dirty-store proof/capture/return");
 }
+/* fx-dosfull: STATUS reports a graphics mode (the DOS Box enters full screen
+ * at a program's first one, Windows 98 Resource Kit ch. 25 "Running Games")
+ * and whether the last full-screen entry or return was the user's Alt+Enter,
+ * the only transition the DOS Box remembers per program. The DOS Box's own
+ * request, a mode change or a refused entry is no choice. */
+static uint32_t dosfull_status(struct dosvm_key key)
+{
+    struct ciuki_dosvm_command s=command_for(key.id,key.generation);
+    CHECK(!dosvm_call(CIUKI_DOSVM_STATUS,&s,sizeof(s)));
+    return s.changed&(CIUKI_DOSVM_GRAPHICS|CIUKI_DOSVM_FULLSCREEN_HOTKEY|CIUKI_DOSVM_FULL_SCREEN|CIUKI_DOSVM_FULLSCREEN_REFUSED);
+}
+static void dosfull_hotkey(struct dosvm *v)
+{
+    struct ciuki_input_event out;
+    CHECK(!dosvm_fullscreen_input(INPUT_KEY,0x38,1));
+    CHECK(dosvm_fullscreen_input(INPUT_KEY,0x1C,1));
+    v->fullscreen_parked=true; dosvm_fullscreen_poll();
+    CHECK(dosvm_fullscreen_input(INPUT_KEY,0x1C,0));
+    dosvm_fullscreen_input(INPUT_KEY,0x38,0);
+    while (dosvm_fullscreen_desktop_event(&out)) {}
+    if (v->fullscreen) hardware=card_bus;
+}
+static void test_fullscreen_dosfull(void)
+{
+    window_fixtures();
+    struct ciuki_dosvm_command w; CHECK(!create_window(0,"Usage",&w));
+    struct dosvm_key key={w.id,w.generation}; struct dosvm *v=dosvm_lookup(key);
+    CHECK(v && w.video_mode==3 && !dosfull_status(key));
+    CHECK(dosvm_input_focus(key,true));
+    struct ciuki_dosvm_command f=command_for(key.id,key.generation); f.focused=1;
+    CHECK(!dosvm_call(CIUKI_DOSVM_FOCUS,&f,sizeof(f)));
+    v->fullscreen_parked=true;
+    /* INT 10h mode 13h: a BIOS graphics mode in the BDA. */
+    int10(v,0x0013,0,0,0); dosvm_vga_sync(v,true);
+    struct ciuki_dosvm_command s=command_for(key.id,key.generation);
+    CHECK(!dosvm_call(CIUKI_DOSVM_STATUS,&s,sizeof(s)) && s.video_mode==0x13);
+    CHECK(dosfull_status(key)==CIUKI_DOSVM_GRAPHICS);
+    /* The DOS Box's automatic request enters: not the user's choice. */
+    f=command_for(key.id,key.generation); f.focused=1;
+    CHECK(!dosvm_call(CIUKI_DOSVM_FULLSCREEN,&f,sizeof(f)) && v->fullscreen); hardware=card_bus;
+    CHECK(dosfull_status(key)==(CIUKI_DOSVM_GRAPHICS|CIUKI_DOSVM_FULL_SCREEN));
+    /* Alt+Enter returns to the window: the user's choice. */
+    dosfull_hotkey(v); CHECK(!v->fullscreen && !fs_display);
+    CHECK(dosfull_status(key)==(CIUKI_DOSVM_GRAPHICS|CIUKI_DOSVM_FULLSCREEN_HOTKEY));
+    /* Alt+Enter in the window enters: the user's choice again. */
+    dosfull_hotkey(v); CHECK(v->fullscreen && fs_display);
+    CHECK(dosfull_status(key)==(CIUKI_DOSVM_GRAPHICS|CIUKI_DOSVM_FULL_SCREEN|CIUKI_DOSVM_FULLSCREEN_HOTKEY));
+    /* An ordered return the user did not ask for (a VBE mode change, the
+     * DOS Box leaving for a notice) clears it. */
+    v->fullscreen_parked=true; CHECK(!dosvm_fullscreen_leave(key,false) && !v->fullscreen);
+    CHECK(dosfull_status(key)==CIUKI_DOSVM_GRAPHICS);
+    /* A refused Alt+Enter (the QEMU readback, f3-29) changes nothing: the
+     * game continues in its window, one refusal record. */
+    dosfull_hotkey(v); dosfull_hotkey(v);
+    CHECK(!v->fullscreen && dosfull_status(key)==(CIUKI_DOSVM_GRAPHICS|CIUKI_DOSVM_FULLSCREEN_HOTKEY));
+    uint32_t refusals=v->fullscreen_refusals; fs_refuse=true;
+    dosfull_hotkey(v);
+    CHECK(!v->fullscreen && v->fullscreen_refusals==refusals+1 && strstr(last_dosvm_log,"continuation=windowed"));
+    CHECK(dosfull_status(key)==(CIUKI_DOSVM_GRAPHICS|CIUKI_DOSVM_FULLSCREEN_HOTKEY));
+    f=command_for(key.id,key.generation); f.focused=1;
+    CHECK(!dosvm_call(CIUKI_DOSVM_FULLSCREEN,&f,sizeof(f)) && !v->fullscreen && v->fullscreen_refusals==refusals+2);
+    CHECK(dosfull_status(key)==(CIUKI_DOSVM_GRAPHICS|CIUKI_DOSVM_FULLSCREEN_HOTKEY));
+    fs_refuse=false;
+    /* Text modes are not graphics; registers alone (a tweaked Mode X with
+     * the BDA still at 3) and a VBE mode are. */
+    int10(v,0x0003,0,0,0); dosvm_vga_sync(v,true);
+    CHECK(!(dosfull_status(key)&CIUKI_DOSVM_GRAPHICS));
+    uint8_t mono=7; CHECK(!dosvm_write(v,0x449,&mono,1)); CHECK(!(dosfull_status(key)&CIUKI_DOSVM_GRAPHICS));
+    uint8_t text=3; CHECK(!dosvm_write(v,0x449,&text,1));
+    tweak_mode(&v->vga,320,240,false); CHECK(dosfull_status(key)&CIUKI_DOSVM_GRAPHICS);
+    int10(v,0x0003,0,0,0); dosvm_vga_sync(v,true); CHECK(!(dosfull_status(key)&CIUKI_DOSVM_GRAPHICS));
+    v->vbe_mode=0x101; CHECK(dosfull_status(key)&CIUKI_DOSVM_GRAPHICS); v->vbe_mode=0;
+    struct ciuki_dosvm_command close=command_for(key.id,key.generation);
+    CHECK(!finish_test_vm(&close,sizeof(close))); empty();
+    puts("PASS fx-dosfull STATUS: graphics in BIOS 13h, register-only Mode X and VBE (not text 3/7); Alt+Enter entry/return marked as the user's choice, own request, ordered return and refusals not");
+}
 static int vbe_changing_row(void *arg,unsigned y,const void *pixels,unsigned bytes)
 {
     struct dosvm *v=arg;

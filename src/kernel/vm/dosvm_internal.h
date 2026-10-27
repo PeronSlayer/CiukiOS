@@ -226,6 +226,11 @@ struct dosvm {
     /* f3-61: why the last full-screen session ended (enum dosvm_fullscreen_cause),
      * kept until the next entry for STATUS/probe evidence. */
     uint8_t fullscreen_cause;
+    /* fx-dosfull: the last full-screen entry or return was the user's
+     * Alt+Enter (STATUS CIUKI_DOSVM_FULLSCREEN_HOTKEY). The DOS Box remembers
+     * that choice per program, as Windows 98 does; its own requests, a mode
+     * change, Alt+Tab and a watchdog return are not a choice. */
+    bool fullscreen_hotkey;
     /* f3-61: per-second frame evidence of the current session: seconds
      * sampled and seconds in which the guest stored to the scanout (aperture
      * PTE dirty bits, or a VBE frame flush). Reset at each entry. */

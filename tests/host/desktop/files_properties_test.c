@@ -29,6 +29,21 @@ static int info(const char *path,struct ciuki_file_info *out)
 }
 static int version_info(const char *path,char *out,size_t n)
 { if (!strstr(path,"Program.exe")) return -ENOENT; snprintf(out,n,"File version:\t1.2.3.4\nCompany:\tCiukiOS"); return 0; }
+/* fx-dosfull: an MS-DOS program's Screen usage (its DOS Box profile). */
+static unsigned dos_value=3,dos_sets; static char dos_path[256];
+static int dos_usage(const char *path,unsigned *usage)
+{
+    if (expect_worker) assert(!pthread_equal(main_thread,pthread_self()));
+    if (!strstr(path,"GAME.EXE")) return -ENOEXEC;
+    *usage=dos_value; return 0;
+}
+static int set_dos_usage(const char *path,unsigned usage)
+{
+    assert(pthread_equal(main_thread,pthread_self()) && usage<=3);
+    dos_sets++; snprintf(dos_path,sizeof(dos_path),"%s",path);
+    if (refuse) return -EROFS;
+    dos_value=usage; return 0;
+}
 static int attributes(const char *path,uint32_t bits)
 {
     sets++; if (refuse) return -EROFS;
@@ -83,6 +98,7 @@ int main(int argc,char **argv)
     fake_nodes[hidden].meta.allocated=4096; fake_nodes[hidden].meta.allocated_known=1;
     du_init(&ui,pixels,760,520); assert(!files_setup(&app,&ui,&fake_vfs,"/Documents"));
     app.file_info=info; app.set_attributes=attributes; app.media_space=space; app.media_label=get_label; app.set_label=set_label; app.version_info=version_info;
+    app.dos_usage=dos_usage; app.set_dos_usage=set_dos_usage;
     files_test_wait(&app);app.show_folder_options=1;assert(ui.service);ui.service(&ui,ui.user);
     assert(!app.show_folder_options && ui.dialog.sheet && app.property_options);cancel();
     sheet("/Documents/Long name.txt");
@@ -149,6 +165,28 @@ int main(int argc,char **argv)
     assert(du_get(&ui,107)->column_count==5 && !strcmp(app.rows[long_index].text[4],"RA"));
     assert(strstr(du_get(&ui,108)->text,"300 KB free"));
     dump(argv[1],"g6-attributes");
+    /* fx-dosfull: a DOS program's sheet has General and Screen (Windows 98
+     * Screen tab, Usage); the Usage group shows only on Screen, the default
+     * graphics full screen first, and Apply stores only a changed usage. */
+    fake_file("/Documents/GAME.EXE",12,1);   /* added last: the earlier frames keep their listing */
+    sheet("/Documents/GAME.EXE"); assert(app.property_have_dos && app.property_dos_usage==3 && !app.property_have_version);
+    assert(ui.dialog.items[3].count==2 && !strcmp(ui.dialog.items[3].items[1].text[0],"Screen"));
+    assert(!ui.dialog.items[4].hidden && ui.dialog.items[8].hidden && ui.dialog.items[9].hidden && ui.dialog.items[12].hidden);
+    ui.dialog.items[3].active=1; ui.dialog.changed(&ui,&(struct du_event){.type=DU_EV_SELECT},&app);
+    assert(ui.dialog.items[4].hidden && !ui.dialog.items[8].hidden && ui.dialog.items[8].kind==DU_GROUP);
+    assert(ui.dialog.items[9].kind==DU_RADIO && ui.dialog.items[9].value==1 && !ui.dialog.items[10].value && !ui.dialog.items[12].value);
+    assert(!strcmp(ui.dialog.items[12].text,"&Window") && strstr(ui.dialog.text,"Alt+Enter"));
+    same_as_full("DOS program sheet, Screen page");
+    dump(argv[1],"g6-dos-screen");
+    apply(); assert(!dos_sets);
+    ui.dialog.items[9].value=0; ui.dialog.items[12].value=1; apply();
+    assert(dos_sets==1 && dos_value==0 && !strcmp(dos_path,"/Documents/GAME.EXE") && app.property_dos_usage==0);
+    apply(); assert(dos_sets==1); cancel();
+    sheet("/Documents/GAME.EXE"); assert(app.property_dos_usage==0);
+    ui.dialog.items[3].active=1; ui.dialog.changed(&ui,&(struct du_event){.type=DU_EV_SELECT},&app);
+    assert(ui.dialog.items[12].value==1 && !ui.dialog.items[9].value);
+    refuse=1; ui.dialog.items[12].value=0; ui.dialog.items[10].value=1; apply();
+    assert(dos_sets==2 && dos_value==0 && app.property_dos_usage==0 && strstr(ui.dialog.text,"Cannot apply changes:")); cancel(); refuse=0;
     struct fm_model *fresh=calloc(1,sizeof(*fresh)); assert(fresh); fm_init(fresh,&fake_vfs);
     int columns=0; assert(!fm_view_load(fresh,&columns) && fresh->show_hidden && fresh->hide_system && fresh->hide_extensions && columns);
     struct du_event failure_options={.type=DU_EV_ACTIVATE,.id=310}; files_event(&ui,&failure_options,&app);

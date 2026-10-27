@@ -809,6 +809,39 @@ class RecordFormatTests(unittest.TestCase):
         settings = (ROOT / 'apps/desktop/settings_io.c').read_text()
         self.assertIn('"[desktop] stage=%s us=%llu%s\\n"', settings)
 
+    def test_dosbox_full_screen_records(self):
+        """fx-dosfull: the DOS Box's automatic full screen, its refusal and the
+        remembered usage are one console line each (stderr line buffered as
+        the desktop's, fx-acc1), and the acc-dos-games patterns match them."""
+        source = (ROOT / 'apps/dosbox/dosbox.c').read_text()
+        body = source[source.index('int main(int argc, char **argv)\n{'):]
+        head = body[:body.index('int channel = 3')]
+        self.assertIn('#ifdef __i386__', head)
+        self.assertIn('setvbuf(stderr, NULL, _IOLBF, BUFSIZ);', head)
+        for match in re.finditer(r'fprintf\(\s*stderr\s*,\s*((?:"(?:[^"\\]|\\.)*"\s*)+)', source):
+            self.assertTrue(''.join(re.findall(r'"((?:[^"\\]|\\.)*)"', match[1])).endswith('\\n'), match[0])
+        refused = '[console] ' + self.render('apps/dosbox/dosbox.c', 'result=refused error=%d continuation=windowed',
+                                             order=['vm', 'gen', 'usage', 'graphics', 'error'], usage='graphics', graphics=1, error=0)
+        self.assertEqual(refused, '[console] dosbox: fullscreen auto vm=1 generation=1 usage=graphics graphics=1 result=refused error=0 continuation=windowed')
+        usage = '[console] ' + self.render('apps/dosbox/dosbox.c', 'dosbox: screen usage vm=',
+                                           order=['vm', 'gen', 'usage', 'origin', 'saved'], usage='window', origin='alt-enter', saved=1)
+        self.assertEqual(usage, '[console] dosbox: screen usage vm=1 generation=1 usage=window source=alt-enter saved=1')
+        entered = '[console] ' + self.render('apps/dosbox/dosbox.c', 'result=entered',
+                                             order=['vm', 'gen', 'usage', 'graphics'], usage='graphics', graphics=1)
+        games = next(c for c in json.loads((ROOT / 'tests/suites/acc-t23.json').read_text())['cases'] if c['id'] == 'acc-dos-games')
+        steps = {s['name']: s for s in games['steps'] if 'name' in s}
+        for g in ('doom', 'wolf3d', 'war2', 'duke3d', 'quake'):
+            with self.subTest(game=g):
+                self.assertMatches(steps[g + '-fs-auto-fallback']['wait'], refused)
+                self.assertMatches(steps[g + '-fs-auto-return']['wait'][1], usage)
+                self.assertMatches(steps[g + '-fs-auto-fallback']['fail'], usage)
+                self.assertNotRegex(entered, steps[g + '-fs-auto-fallback']['wait'].replace('<<%s_vm>>' % g, '1').replace('<<%s_gen>>' % g, '1'))
+                assertion = next(a for a in games['assertions'] if a['name'] == g + '-fs-auto-refused-once')
+                self.assertMatches(assertion['pattern'], refused)
+                # The automatic request precedes the window record (QEMU) or replaces it until the return (hardware).
+                self.assertEqual(steps[g + '-graphics']['since'], 'boot')
+                self.assertEqual(steps[g + '-fs-auto-fallback']['unless'], [g + '-fs-auto-entered'])
+
     def test_kernel_records(self):
         cases = (
             ('src/kernel/vm/dosvm_vga.c', '[dosvm-window] video vm=', {'order': ['vm', 'gen', 'vbe', 'w', 'h', 'text'], 'vm': 1, 'gen': 2,
