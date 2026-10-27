@@ -37,6 +37,7 @@
  * GUEST_PLAY_KEYS=01@12000,... presses window keys during play:, whose end
  * prints the window picture (H61 PLAY FRAME, GUEST_PLAY_SHOT=<file.ppm>).
  * SPDX-License-Identifier: GPL-2.0-only */
+#include <ciuki/kheap_limits.h>
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
@@ -203,7 +204,7 @@ void klog_diag(const char *fmt,...)
     vsnprintf(line,sizeof(line),fmt,ap);va_end(ap);klog("%s",line);
 }
 
-void *kmalloc(size_t n) { return malloc(n); }
+void *(kmalloc)(size_t n) { if (n > KHEAP_MAX_REQUEST) return 0; return malloc(n); }
 void kfree(void *p) { free(p); }
 #include "dosvm_aspace.inc"
 

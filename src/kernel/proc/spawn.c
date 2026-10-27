@@ -278,6 +278,8 @@ static void spawn_cleanup(void *operation)
     kfree(op);
 }
 
+_Static_assert(CIUKI_OPEN_MAX * sizeof(struct ciuki_spawn_fd) <= KHEAP_MAX_REQUEST,
+               "spawn descriptor vector fits the kernel heap");
 int proc_spawn(uint32_t args_va)
 {
     uint64_t spawn_us = proc_launch_now();

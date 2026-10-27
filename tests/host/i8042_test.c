@@ -1,6 +1,7 @@
 /* T0: production controller/decoders and registry with fake hardware/time.
  * scripts/test/host_kernel_tests.sh, ASan/UBSan.
  * SPDX-License-Identifier: GPL-2.0-only */
+#include <ciuki/kheap_limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -353,11 +354,10 @@ int ksnprintf(char *buf, size_t size, const char *fmt, ...)
     return result;
 }
 __attribute__((noreturn)) void panic(const char *fmt, ...) { fprintf(stderr, "panic: %s\n", fmt); exit(2); }
-void *kzalloc(size_t n)
-{
+void *(kzalloc)(size_t n) { if (n > KHEAP_MAX_REQUEST) return 0;
     host_allocations++;
     /* Match core/kheap.c's largest class, including its 8-byte header. */
-    return n <= 2048 - 8 ? calloc(1, n) : 0;
+    return n <= KHEAP_MAX_REQUEST ? calloc(1, n) : 0;
 }
 void kfree(void *p) { free(p); }
 void task_start(struct task *t) { t->state = T_READY; }
@@ -1792,7 +1792,7 @@ static void test_native_fault_probe(void)
     unsigned reads = hw.reads, writes = hw.writes, pic = pic_changes, passes = record_pass;
     /* core/kheap.c: largest class is 2048 bytes, including an 8-byte header.
      * An unrestricted libc calloc hid the guest's oversized fixture request. */
-    CHECK(sizeof(struct controller) > 2048 - 8 && !kzalloc(sizeof(struct controller)));
+    CHECK(sizeof(struct controller) > KHEAP_MAX_REQUEST && !(kzalloc)(sizeof(struct controller)));
     unsigned allocations = host_allocations;
     fake_fw_state = BIOSVM_OFF;
     unsigned calls = firmware_selftests, absent = absent_records;

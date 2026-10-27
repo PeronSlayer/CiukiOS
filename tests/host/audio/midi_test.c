@@ -1,4 +1,5 @@
 /* MIDI parser, native output queue and real FM renderer. SPDX-License-Identifier: GPL-2.0-only */
+#include <ciuki/kheap_limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,6 +10,7 @@
 #undef WTERMSIG
 #include <ciuki/kernel.h>
 #include <ciuki/mm.h>
+#include <ciuki/desktop.h>
 #include <ciuki/audio.h>
 #include <ciuki/midi_fm.h>
 #include <ciuki/opl3.h>
@@ -16,8 +18,12 @@
 struct audio_state audio;
 static unsigned allocations,wakes;
 static bool refuse_allocation;
-void *kzalloc(size_t bytes) { if (refuse_allocation) return NULL; void *p=calloc(1,bytes); if (p) allocations++; return p; }
+void *(kzalloc)(size_t bytes) { if (bytes > KHEAP_MAX_REQUEST) return 0; if (refuse_allocation) return NULL; void *p=calloc(1,bytes); if (p) allocations++; return p; }
 void kfree(void *p) { if (p) { CHECK(allocations); allocations--; free(p); } }
+void *desktop_buffer_alloc(uint32_t bytes,enum mm_owner owner)
+{ CHECK(owner==MM_IO_REQUEST); if (refuse_allocation) return 0; void *p=calloc(1,bytes); if (p) allocations++; return p; }
+void desktop_buffer_free(void *p,uint32_t bytes,enum mm_owner owner)
+{ CHECK(bytes && owner==MM_IO_REQUEST); kfree(p); }
 void audio_wake(void) { wakes++; }
 static uint8_t regs[512];
 static void reg_write(void *ctx,unsigned reg,uint8_t value)

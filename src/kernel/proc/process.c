@@ -5,6 +5,7 @@
 #include <ciuki/cpu.h>
 #include <ciuki/process.h>
 #include <ciuki/signal.h>
+#include "fd_storage.h"
 #include <ciuki/supervisor.h>
 
 extern void w32_process_cleanup(struct process *) __attribute__((weak));
@@ -80,7 +81,7 @@ int proc_prepare(struct process *parent, struct process **out)
     p->state = PROC_PREPARING;
     processes[slot] = p;                /* private reservation, not findable */
     kwait_init(&p->changed);
-    p->fds = kzalloc(CIUKI_OPEN_MAX * sizeof(*p->fds));
+    p->fds = proc_fds_new();
     p->actions = kzalloc((SIGCHLD + 1) * sizeof(*p->actions));
     p->memory = kzalloc(sizeof(*p->memory));
     if (!p->fds || !p->actions || !p->memory || ua_init(p->memory, p)) {
@@ -330,7 +331,7 @@ static void close_resources(struct process *p)
             if (o)
                 o->release(o);
         }
-        kfree(p->fds);
+        proc_fds_free(p->fds);
         p->fds = 0;
     }
     if (p->cwd) {

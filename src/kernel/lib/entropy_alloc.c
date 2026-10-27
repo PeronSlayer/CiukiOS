@@ -11,7 +11,7 @@ void *entropy_alloc(size_t size)
     if (!size || size > 262144) return NULL;
     size_t total = size + sizeof(struct entropy_allocation);
     struct entropy_allocation *h;
-    if (total <= 2040) {
+    if (total <= KHEAP_MAX_REQUEST) {
         h = kmalloc(total);
         if (!h) return NULL;
         memset(h, 0, sizeof(*h));

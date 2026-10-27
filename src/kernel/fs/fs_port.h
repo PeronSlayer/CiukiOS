@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <ciuki/kheap_limits.h>
 /* Request context is task scoped and follows f1-83 calldowns, including a
  * controller worker. The caller keeps it alive until transport retirement. */
 #define VFS_ETIMEOUT 205
@@ -117,7 +118,7 @@ static inline void fs_event_wait_ms(struct fs_event *q, fs_lock *l, uint32_t ms)
            pthread_cond_timedwait(&q->changed,&q->mutex,&until)==0) {}
     pthread_mutex_unlock(&q->mutex); fs_lock_take(l);
 }
-static inline void *fs_alloc(size_t n) { return n <= 2040 ? malloc(n) : NULL; }
+static inline void *fs_alloc(size_t n) { return n <= KHEAP_MAX_REQUEST ? malloc(n) : NULL; }
 static inline void fs_free(void *p) { free(p); }
 extern unsigned fs_host_page_fail;
 static inline void *fs_page_alloc(void) {
@@ -237,7 +238,7 @@ static inline void fs_event_wait_ms(struct fs_event *q, fs_lock *l, uint32_t ms)
     struct fs_event_ticket t={q,q->sequence}; fs_lock_drop(l);
     kwait_wait_until(&q->wait,fs_event_changed,&t,deadline_after_ms(ms)); fs_lock_take(l);
 }
-static inline void *fs_alloc(size_t n) { return n <= 2040 ? kmalloc(n) : 0; }
+static inline void *fs_alloc(size_t n) { return n <= KHEAP_MAX_REQUEST ? kmalloc(n) : 0; }
 static inline void fs_free(void *p) { kfree(p); }
 static inline void *fs_page_alloc(void) {
     uint32_t p = pmm_alloc();

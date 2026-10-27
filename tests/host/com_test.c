@@ -1,5 +1,6 @@
 /* Banked UART hardware model, production COM service. No guest evidence.
  * SPDX-License-Identifier: GPL-2.0-only */
+#include <ciuki/kheap_limits.h>
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -7,6 +8,7 @@
 #define CIUKI_CPU_H
 #include <ciuki/kernel.h>
 #include <ciuki/com.h>
+#include <ciuki/desktop.h>
 #include <ciuki/task.h>
 #include <ciuki/work.h>
 #include <ciuki/input.h>
@@ -119,8 +121,12 @@ static uint8_t fake_read(void *c,uint16_t p) { (void)c; return inb(p); }
 static void fake_write(void *c,uint16_t p,uint8_t b) { (void)c; outb(p,b); }
 static const struct com_io io={fake_read,fake_write,pause_io,0};
 void task_sleep_ms(uint32_t ms) { (void)ms; }
-void *kzalloc(size_t n) { if (fail_alloc) return 0; allocations++; return calloc(1,n); }
+void *(kzalloc)(size_t n) { if (n > KHEAP_MAX_REQUEST) return 0; if (fail_alloc) return 0; allocations++; return calloc(1,n); }
 void kfree(void *p) { if (p) { assert(allocations); allocations--; free(p); } }
+void *desktop_buffer_alloc(uint32_t bytes,enum mm_owner owner)
+{ assert(bytes==2*CIUKI_COM_QUEUE && owner==MM_IO_REQUEST); if (fail_alloc) return 0; void *p=calloc(1,bytes); if (p) allocations++; return p; }
+void desktop_buffer_free(void *p,uint32_t bytes,enum mm_owner owner)
+{ assert(bytes==2*CIUKI_COM_QUEUE && owner==MM_IO_REQUEST); kfree(p); }
 void klog(const char *fmt,...) { (void)fmt; }
 #ifndef COM_WITH_LOGGER
 bool serial_present(void) { return logger_present; }

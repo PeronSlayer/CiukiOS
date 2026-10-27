@@ -1,6 +1,7 @@
 /* Production 3D owner against the real keyed-marker implementation and the
  * unchanged committed/cache VFS fixture. Each variant is a separate boot.
  * SPDX-License-Identifier: GPL-2.0-only */
+#include <ciuki/kheap_limits.h>
 #define main old_marker_main
 #define klog old_marker_log
 #include "display_attempt_test.c"
@@ -8,6 +9,7 @@
 #undef main
 #include <stdlib.h>
 #include <ciuki/mm.h>
+#include <ciuki/desktop.h>
 #include <ciuki/task.h>
 #include "../../src/kernel/drivers/video/s3savage/savage3d.h"
 #define THREE_KEY "C:/system/settings/accel-3d-s3savage-5333-8c2e.cfg"
@@ -22,7 +24,9 @@ static unsigned variant3, claimed3, released3, quarantined3, locked3, stores3, p
 static bool prepared3, return_busy3;
 static unsigned take_busy3;
 static void *allocations3[512];
-static unsigned allocations_count3, reserves3;
+static unsigned allocations_count3, reserves3, page_live3, prepare_ok3, minimum_started3;
+static uint32_t page_sizes3[512], page_bytes3;
+static unsigned page_attempts3, page_failures3, fail_page3=UINT32_MAX;
 static void (*worker3)(void *);
 static bool frame3, worker_running3;
 static uint64_t now3;
@@ -70,6 +74,8 @@ void klog(const char *fmt,...)
     char line[512]; va_list ap; va_start(ap,fmt); vsnprintf(line,sizeof(line),fmt,ap); va_end(ap);
     assert(strstr(line,"[3d] probe") || strstr(line,"[3d] fullsize") || strstr(line,"[3d] precision") ||
         strstr(line,"[3d] runtime") || strstr(line,"[3d] attachment") || strstr(line,"[accel] retry "));
+    if (strstr(line,"phase=prepare index=0 state=end") && strstr(line,"error=0")) prepare_ok3++;
+    if (strstr(line,"phase=minimum index=0 state=begin")) minimum_started3++;
     if ((variant3==5 || variant3==11) && strstr(line,"[3d] probe result=")) assert(strstr(line,"marker=unknown"));
     if (strstr(line,"d24s8") || strstr(line,"D24S8")) d24_logs3++;
     if (variant3==22 && strstr(line,"[3d] probe result=")) assert(strstr(line,"result=qualified") && strstr(line,"marker=clear"));
@@ -81,12 +87,37 @@ void klog(const char *fmt,...)
     if (variant3==27 && strstr(line,"[3d] probe result=")) assert(strstr(line,"reason=budget_total") && strstr(line,"marker=retained"));
     if (variant3==25 && strstr(line,"[3d] probe result=") && strstr(line,"budget_revalidate")) assert(strstr(line,"marker=clear"));
 }
-void *kmalloc(size_t bytes)
+static void *backing_alloc3(size_t bytes)
 {
     assert(!locked3);
     if (variant3==9 && allocations_count3==2) return 0;
     void *p=calloc(1,bytes); assert(p && allocations_count3<512);
     allocations3[allocations_count3++]=p; return p;
+}
+void *(kmalloc)(size_t bytes)
+{ if (bytes > KHEAP_MAX_REQUEST) return 0; return backing_alloc3(bytes); }
+void *desktop_buffer_alloc(uint32_t bytes,enum mm_owner owner)
+{
+    assert(bytes && owner==MM_IO_REQUEST);
+    if (page_attempts3++==fail_page3) { page_failures3++; return 0; }
+    void *p=backing_alloc3(bytes);
+    if (p) {
+        page_sizes3[allocations_count3-1]=bytes; page_live3++;
+        page_bytes3+=(bytes+PAGE_SIZE-1)&~(PAGE_SIZE-1);
+        assert(page_bytes3+savage3d_backend()->resident_bytes<=R3D_RAM_LIMIT);
+    }
+    return p;
+}
+void desktop_buffer_free(void *p,uint32_t bytes,enum mm_owner owner)
+{
+    assert(owner==MM_IO_REQUEST && p);
+    for (unsigned i=0;i<allocations_count3;i++) if (allocations3[i]==p) {
+        assert(page_sizes3[i]==bytes && page_live3);
+        page_sizes3[i]=0; page_live3--;
+        page_bytes3-=(bytes+PAGE_SIZE-1)&~(PAGE_SIZE-1);
+        kfree(p); return;
+    }
+    assert(0);
 }
 void kfree(void *p)
 {
@@ -137,7 +168,7 @@ int registry_quarantine(int h,gen_t generation)
     assert(h>=0 && (unsigned)h<claimed3 && generation==claims3[h].generation);
     claims3[h].state=RS_QUARANTINED; quarantined3++; return 0;
 }
-void *vmm_reserve_mmio(uint32_t bytes) { reserves3++; return kmalloc(bytes); }
+void *vmm_reserve_mmio(uint32_t bytes) { reserves3++; return backing_alloc3(bytes); }
 void *vmm_replace_mmio(void *p,uint32_t capacity,uint32_t phys,uint32_t bytes)
 {
     assert(!locked3 && capacity>=bytes && (phys==0xe0000000+heap_first3 || phys==0xf0000000));
@@ -241,11 +272,12 @@ int __wrap_savage3d_color565_probe(struct savage3d_device *d,struct render3d_ser
 { if (variant3<21) return __real_savage3d_color565_probe(d,r); assert(r); return optional3(d,false); }
 int __wrap_savage3d_depth24_probe(struct savage3d_device *d,struct render3d_service *r)
 { if (variant3<21) return __real_savage3d_depth24_probe(d,r); assert(r); return optional3(d,true); }
-static void *owner_alloc3(void *ctx,size_t n) { (void)ctx; return kmalloc(n); }
+static void *owner_alloc3(void *ctx,size_t n) { (void)ctx; return backing_alloc3(n); }
 static void owner_free3(void *ctx,void *p) { (void)ctx; kfree(p); }
 int main(int argc,char **argv)
 {
-    assert(argc==2); variant3=(unsigned)atoi(argv[1]); reset();
+    assert(argc==2 || argc==3); variant3=(unsigned)atoi(argv[1]); reset();
+    if (argc==3) { assert(variant3==23); fail_page3=(unsigned)atoi(argv[2]); }
     g_boot.display.vram_bytes=16*1024*1024;
     strcpy(g_boot.options,variant3==0 ? "x3d=probe 3d=probeX" : "3d=probe");
     engine3=(struct savage2d){.chip=SAVAGE_SUPER,.active=true,.cpu_safe=true,
@@ -282,8 +314,22 @@ int main(int argc,char **argv)
         savage3d_boot_diagnostic(&engine3,&fb3); savage3d_desktop_presented(42); assert(reaped3==1);
         assert(worker_task3.state==T_DEAD);
     }
+    if (argc==3) {
+        assert(page_failures3==1 && !page_live3 && !page_bytes3 &&
+            !locked3 && !prepared3 && !quarantined3 && claimed3==released3 && !size_of(THREE_KEY));
+        if (fail_page3<6) assert(!prepare_ok3 && !minimum_started3 && !engine3.render3d_qualified);
+        else assert(prepare_ok3 && minimum_started3 && engine3.render3d_qualified);
+        printf("probe page failure index=%u scratch/fullsize/reference cleanup PASS\n",fail_page3);
+        goto teardown;
+    }
     bool admitted=variant3==21 || variant3==22 || variant3==23 || variant3==24 || variant3==25 || variant3==26;
     assert(!locked3 && !prepared3 && engine3.render3d_qualified==admitted);
+    if (variant3==21) {
+        assert(prepare_ok3 && minimum_started3 && !page_live3);
+        puts("bounded heap: background prepare reached minimum; page scratch fully released PASS");
+    }
+    if (variant3==9) assert(!prepare_ok3 && !minimum_started3 && !page_live3);
+    if (!engine3.quarantined) assert(!page_live3);
     /* Every marker operation reached the real block-request conversion. */
     assert(!commits || marker_checks3);
     if (claimed3) assert(reserves3==2);
@@ -404,6 +450,7 @@ int main(int argc,char **argv)
         }
         free(client);
     }
+teardown:
     /* Destroy the emulated device/boot, then free all retained allocations.
      * This is fixture teardown, not a production quarantine-release path. */
     for (unsigned i=0;i<allocations_count3;i++) free(allocations3[i]);

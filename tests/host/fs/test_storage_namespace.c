@@ -1,6 +1,7 @@
 /* Native namespace over the production F1 storage harness. Only process,
  * scheduler and memory services are faked; storage/path/fd code is linked.
  * SPDX-License-Identifier: GPL-2.0-only */
+#include <ciuki/kheap_limits.h>
 #define main storage_fixture_main
 #include "test_storage.c"
 #undef main
@@ -18,8 +19,8 @@
 static struct process supervisor = { .state = PROC_LIVE };
 struct task *g_current;
 struct desktop_ledger desktop_objects;
-void *kmalloc(size_t bytes) { return malloc(bytes); }
-void *kzalloc(size_t bytes) { return calloc(1, bytes); }
+void *(kmalloc)(size_t bytes) { if (bytes > KHEAP_MAX_REQUEST) return 0; return malloc(bytes); }
+void *(kzalloc)(size_t bytes) { if (bytes > KHEAP_MAX_REQUEST) return 0; return calloc(1, bytes); }
 void kfree(void *p) { free(p); }
 void panic(const char *fmt, ...) { fprintf(stderr, "unexpected panic: %s\n", fmt); abort(); }
 struct process *proc_supervisor(void) { return &supervisor; }
@@ -35,11 +36,16 @@ void console_write(const char *s,size_t n) { (void)s;(void)n; abort(); }
 void task_sleep_ms(uint32_t ms) { (void)ms; abort(); }
 void proc_set_file_ops(const struct ciuki_file_ops *ops) { (void)ops; }
 void supervisor_set_io_ops(const struct supervisor_io_ops *ops) { (void)ops; }
-uint32_t pmm_alloc(void) { abort(); }
-void pmm_free(uint32_t page) { (void)page; abort(); }
-static void *host_page(uint32_t page) { (void)page; abort(); }
+static _Alignas(PAGE_SIZE) uint8_t descriptor_page[PAGE_SIZE];
+static bool descriptor_page_live;
+uint32_t pmm_alloc(void)
+{ CHECK(!descriptor_page_live); descriptor_page_live=true; return PAGE_SIZE; }
+void pmm_free(uint32_t page)
+{ CHECK(page==PAGE_SIZE && descriptor_page_live); descriptor_page_live=false; }
+static void *host_page(uint32_t page)
+{ CHECK(page==PAGE_SIZE && descriptor_page_live); return descriptor_page; }
 #define P2V(page) host_page(page)
-#define V2P(ptr) ((void)(ptr), 0u)
+#define V2P(ptr) ((void)(ptr), PAGE_SIZE)
 bool clock_fat_utc(uint16_t date, uint16_t time, int64_t *seconds)
 { (void)date; (void)time; *seconds = 0; return false; }
 int file_clock_now(uint32_t clock, const struct process *p, struct ciuki_timespec *out)
@@ -56,7 +62,7 @@ static void namespace_close(void)
     for (int fd = 0; fd < CIUKI_OPEN_MAX; fd++)
         if (supervisor.fds[fd].object) OK(file_close(&supervisor, fd));
     px_release(supervisor.cwd); supervisor.cwd = 0;
-    kfree(supervisor.fds); supervisor.fds = 0;
+    proc_fds_free(supervisor.fds); supervisor.fds = 0; CHECK(!descriptor_page_live);
 }
 
 static struct storage *namespace_start(struct px_namespace **space)

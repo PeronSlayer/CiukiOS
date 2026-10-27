@@ -1,5 +1,6 @@
 /* Production F2 process code with fake physical RAM and scheduling only.
  * SPDX-License-Identifier: GPL-2.0-only */
+#include <ciuki/kheap_limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -55,8 +56,8 @@ uint32_t pmm_alloc(void)
     return 0;
 }
 void pmm_free(uint32_t p) { CHECK(p && !(p & (PAGE_SIZE - 1)) && p / PAGE_SIZE < HOST_PAGES && allocated[p / PAGE_SIZE]); allocated[p / PAGE_SIZE] = false; pages_used--; }
-void *kmalloc(size_t n) { if (fail_alloc()) return 0; void *p = malloc(n); if (p) heap_blocks++; return p; }
-void *kzalloc(size_t n) { void *p = kmalloc(n); if (p) memset(p, 0, n); return p; }
+void *(kmalloc)(size_t n) { if (n > KHEAP_MAX_REQUEST) return 0; if (fail_alloc()) return 0; void *p = malloc(n); if (p) heap_blocks++; return p; }
+void *(kzalloc)(size_t n) { if (n > KHEAP_MAX_REQUEST) return 0; void *p = kmalloc(n); if (p) memset(p, 0, n); return p; }
 void kfree(void *p) { if (p) { CHECK(heap_blocks); heap_blocks--; free(p); } }
 void panic(const char *fmt, ...) { fprintf(stderr, "unexpected panic: %s\n", fmt); abort(); }
 int as_create(struct aspace *as) { as->pd_phys = pmm_alloc(); if (!as->pd_phys) return -ENOMEM; memset(P2V(as->pd_phys), 0, PAGE_SIZE); return 0; }

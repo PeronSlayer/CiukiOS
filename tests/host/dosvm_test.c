@@ -1,6 +1,7 @@
 /* T0: production DOS lifecycle/BIOS/disk/monitor and paging functions.
  * Only CPU, scheduler, PMM and VFS transport are fake. No DOS boot claimed.
  * SPDX-License-Identifier: GPL-2.0-only */
+#include <ciuki/kheap_limits.h>
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
@@ -211,8 +212,7 @@ void klog_diag(const char *fmt,...)
  * fail here too (f3-06 lookup table, vm-window QEMU 2026-10-12). The fake
  * scheduler's own task/stack storage uses harness_alloc instead. */
 static void *harness_alloc(size_t n) { if (allocation_fails()) return 0; void *p = malloc(n); if (p) heap_blocks++; return p; }
-void *dosvm_host_alloc(size_t n) { return harness_alloc(n); }
-void *kmalloc(size_t n) { return n > 2040 ? 0 : harness_alloc(n); }
+void *(kmalloc)(size_t n) { if (n > KHEAP_MAX_REQUEST) return 0; return harness_alloc(n); }
 void kfree(void *p) { if (p) { CHECK(heap_blocks); heap_blocks--; free(p); } }
 /* Generated from the unmodified production user-address-space section. */
 #define AS_AUDIT_CHARGE creation_cost_charge

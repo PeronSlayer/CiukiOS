@@ -187,6 +187,10 @@ class RenderTests(unittest.TestCase):
             flags=['-pthread',*wraps])
         for variant in range(1,28):
             subprocess.run([str(OUT/'owner'),str(variant)],check=True)
+        # Initial service/resources, both full-size services, texture staging,
+        # and texture copies all fail once, with bounded heap fidelity active.
+        for failure in range(24):
+            subprocess.run([str(OUT/'owner'),'23',str(failure)],check=True)
 
     def test_fullsize(self):
         OUT.mkdir(parents=True, exist_ok=True)

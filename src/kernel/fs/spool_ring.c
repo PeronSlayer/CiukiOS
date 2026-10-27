@@ -9,6 +9,7 @@
  * action is to ignore, so a record left by an earlier boot is harmless.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/desktop.h>
 #include <ciuki/files.h>
 #include <ciuki/process.h>
 #include <ciuki/signal.h>
@@ -35,7 +36,7 @@ bool spool_publication(const char *full)
 }
 void spool_ring(struct vfs *vfs)
 {
-    struct vfs_table *t = kzalloc(sizeof(*t));
+    struct vfs_table *t = desktop_buffer_alloc(sizeof(*t),MM_IO_REQUEST);
     if (!t) return;
     uint32_t pid = 0; size_t n = 0;
     if (!vfs_table_init(vfs, t, 2)) {
@@ -46,7 +47,7 @@ void spool_ring(struct vfs *vfs)
         }
         vfs_table_destroy(t);
     }
-    kfree(t);
+    desktop_buffer_free(t,sizeof(*t),MM_IO_REQUEST);
     struct process *p = pid ? proc_find(pid) : 0;
     if (p && p->state == PROC_LIVE) proc_signal_post(p, 0, SIGCHLD, 0);
 }

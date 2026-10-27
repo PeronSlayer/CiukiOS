@@ -3,6 +3,7 @@
  * Only privileged instructions, user memory and allocation are host boundaries.
  * Dispatch/draw costs are assumptions, not T23 hardware measurements.
  * SPDX-License-Identifier: MIT */
+#include <ciuki/kheap_limits.h>
 #define HOST_SYNC_TIMERS
 #define CIUKI_CPU_H
 #include <ciuki/process.h>
@@ -57,7 +58,7 @@ static struct proc_thread ui_thread, worker_thread;
 static struct ciuki_sigaction actions[SIGCHLD+1];
 struct desktop_ledger desktop_objects;
 static unsigned heap_live, pins;
-void *kzalloc(size_t n) { void *p=calloc(1,n);CHECK(p);heap_live++;return p; }
+void *(kzalloc)(size_t n) { if (n > KHEAP_MAX_REQUEST) return 0; void *p=calloc(1,n);CHECK(p);heap_live++;return p; }
 void kfree(void *p) { if(p) { CHECK(heap_live);heap_live--;free(p); } }
 static void fixture_retain(struct proc_object *o) { ((struct desktop_description *)o)->references++; }
 static void fixture_release(struct proc_object *o)
