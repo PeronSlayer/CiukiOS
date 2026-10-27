@@ -10,6 +10,7 @@
 #include <ciuki/storage.h>
 #include <ciuki/splash.h>
 #include <ciuki/systime.h>
+#include <ciuki/security.h>
 #pragma weak timezone_env
 #pragma weak console_splash_phase
 extern void dosvm_client_poll(void) __attribute__((weak));
@@ -21,8 +22,11 @@ extern void w32_services_desktop_died(uint32_t) __attribute__((weak));
 
 static const struct supervisor_io_ops *supervisor_io;
 extern void w32_service_delegate(struct process *,struct process *,const char *) __attribute__((weak));
+extern int px_security_cwd(struct process *, const char *) __attribute__((weak));
 static uint32_t desktop_pid, desktop_deaths;
+
 static bool bootstrap_attempted;
+static struct { uint32_t pid, generation; uint64_t retry_at; bool enabled; } trusted_roles[6];
 /* G13 (ER-3): an abnormal death of the bootstrap desktop restarts it, as
  * Windows 9x restarts a crashed Explorer shell. At most three restarts in a
  * minute; after that (or when the restart cannot start) the console takes
@@ -81,21 +85,30 @@ void supervisor_capture_tail(const struct supervisor_capture *c, uint8_t *out)
 }
 void supervisor_set_io_ops(const struct supervisor_io_ops *ops) { supervisor_io = ops; }
 uint32_t supervisor_desktop_deaths(void) { return desktop_deaths; }
-uint32_t supervisor_desktop_pid(void) { return desktop_pid; }
+uint32_t supervisor_desktop_pid(void)
+{
+    if (!security_roles_active()) return desktop_pid;
+    for (unsigned i=1;i<CIUKI_PROCESS_MAX;i++) {
+        struct process *p=proc_at_slot(i);
+        if (p && p->state==PROC_LIVE && security_role(p)==CIUKI_SECURITY_ROLE_DESKTOP && security_process_live(p))
+            return p->pid;
+    }
+    return 0;
+}
 uint32_t supervisor_desktop_restarts(void) { return desktop_restarts; }
 /* A desktop is running or about to be restarted: faults of other programs
  * still have somebody to tell (proc/win32/diagnostics.c). */
-bool supervisor_desktop_expected(void) { return desktop_pid || desktop_restarting; }
+bool supervisor_desktop_expected(void) { return supervisor_desktop_pid() || desktop_restarting; }
 
 static int spawn_process(const char *path, const char *const argv[], const char *cwd,
-                         bool desktop, bool setup, struct process **out);
+                         bool desktop, bool setup, uint32_t role, struct process **out);
 int supervisor_spawn(const char *path, const char *const argv[], const char *cwd,
                       bool desktop, struct process **out)
 {
-    return spawn_process(path, argv, cwd, desktop, false, out);
+    return spawn_process(path, argv, cwd, desktop, false, 0, out);
 }
 static int spawn_process(const char *path, const char *const argv[], const char *cwd,
-                         bool desktop, bool setup, struct process **out)
+                         bool desktop, bool setup, uint32_t role, struct process **out)
 {
     const struct ciuki_file_ops *files = proc_get_file_ops();
     if (!files || !files->open) return -ENOENT;
@@ -119,6 +132,10 @@ static int spawn_process(const char *path, const char *const argv[], const char 
     struct proc_thread *thread = 0;
     uint32_t esp = 0;
     if (!err) err = proc_prepare(proc_supervisor(), &p);
+    if (!err && role) err=security_role_prepare(proc_supervisor(),p,role,path);
+    if (!err && desktop) err = security_bootstrap_desktop(p);
+    if (!err && desktop && proc_supervisor()->cwd)
+        err = px_security_cwd ? px_security_cwd(p, "/") : -EIO;
     /* f1-98: the desktop's threads keep a minimum CPU share beside a game. */
     if (!err && desktop) proc_share_group(p);
     if (!err) proc_set_name(p, path);
@@ -129,7 +146,8 @@ static int spawn_process(const char *path, const char *const argv[], const char 
     if (!err && desktop && console_splash_phase) console_splash_phase(SPLASH_PHASE_DESKTOP);
     if (!err) err = proc_thread_prepare(p, image.entry, 0, 0, CIUKI_THREAD_STACK_DEFAULT, 0, 0, true, &thread);
     if (!err) {
-        err = supervisor_io && supervisor_io->stdio ? supervisor_io->stdio(p) : -ENODEV;
+        if (role==CIUKI_SECURITY_ROLE_LOGON_UI) err=security_trusted_prepare(p);
+        else err = supervisor_io && supervisor_io->stdio ? supervisor_io->stdio(p) : -ENODEV;
     }
     if (!err && cwd) err = supervisor_io && supervisor_io->cwd ? supervisor_io->cwd(p, cwd) : -ENODEV;
     if (!err && (desktop || setup)) { int32_t grants[2]; err = grants_install(p, grants); }
@@ -166,12 +184,34 @@ static int spawn_process(const char *path, const char *const argv[], const char 
     }
     if (file.close) file.close(file.cookie);
     proc_strings_free(strings);
+    if (!err && !security_process_live(p)) err = -EACCES;
     if (err) { if (p) proc_discard(p); return err; }
     if(w32_service_delegate)w32_service_delegate(proc_supervisor(),p,path);
+    if (!security_process_live(p)) { proc_discard(p); return -EACCES; }
     proc_publish(p, CIUKI_SPAWN_NEW_GROUP);
     *out = p;
     return (int)p->pid;
 }
+
+/* Fixed sealed service entry; never dispatched by a public spawn path or
+ * selected using argv/environment. The service image lands in sec-user-01. */
+int supervisor_spawn_security_role(uint32_t role, struct process **out)
+{
+    const char *path=security_role_image(role);
+    if (!path || role==CIUKI_SECURITY_ROLE_DESKTOP || role==CIUKI_SECURITY_ROLE_W32SRV ||
+        role==CIUKI_SECURITY_ROLE_SETUP) return -EINVAL;
+    const char *argv[]={path,0};
+    int result=spawn_process(path,argv,0,false,false,role,out);
+    if (result>0) {
+        trusted_roles[role].enabled=true;
+        trusted_roles[role].pid=(*out)->pid;
+        trusted_roles[role].generation=security_process_generation(*out);
+        trusted_roles[role].retry_at=0;
+    }
+    return result;
+}
+int supervisor_spawn_account_service(struct process **out)
+{ return supervisor_spawn_security_role(CIUKI_SECURITY_ROLE_ACCOUNT,out); }
 
 /* f3-02: the DOS window authority (syscall 70) follows only an exact
  * "/Programs/dosbox" spawned by the supervisor or by a process that owns both a
@@ -237,7 +277,7 @@ static bool setup_bootstrap(struct process **out, int *result)
     }
     const char *argv[] = { "setup", 0 };
     klog("[supervisor] bootstrap: spawning /Programs/setup");
-    *result = spawn_process("/Programs/setup", argv, 0, false, true, out);
+    *result = spawn_process("/Programs/setup", argv, 0, false, true, CIUKI_SECURITY_ROLE_SETUP, out);
     if (*result == -ENOENT) *result = supervisor_spawn_standin(proc_supervisor(), out);
     if (*result >= 0) klog("[supervisor] setup pid=%u pgid=%u setup_capability=%u",
                            (*out)->pid, (*out)->pgid, (*out)->setup_capability);
@@ -253,6 +293,21 @@ void supervisor_bootstrap(void)
     int setup_result = 0;
     if (setup_bootstrap(&setup, &setup_result)) {
         if (pager_bootstrap_complete) pager_bootstrap_complete();
+        return;
+    }
+    /* sec-user-01 supplies this sealed image. Its absence during the k01
+     * transition leaves the existing boot working; other failures are visible. */
+    struct process *accounts = 0;
+    int account_result = supervisor_spawn_account_service(&accounts);
+    if (account_result < 0 && account_result != -ENOENT && account_result != -EBUSY)
+        klog("[supervisor] account service unavailable: %d", account_result);
+    struct process *trusted=0;
+    (void)supervisor_spawn_security_role(CIUKI_SECURITY_ROLE_REGISTRY,&trusted);
+    (void)supervisor_spawn_security_role(CIUKI_SECURITY_ROLE_LOGON_UI,&trusted);
+    int logon_result=supervisor_spawn_security_role(CIUKI_SECURITY_ROLE_LOGON,&trusted);
+    if (logon_result>0) return;
+    if (logon_result!=-ENOENT) {
+        klog("[supervisor] trusted logon unavailable: %d",logon_result);
         return;
     }
     /* G14 (docs/design/startup-recovery.md 2.3): Safe mode's corner labels
@@ -346,6 +401,20 @@ static void desktop_restart_step(void)
 
 void supervisor_poll(void)
 {
+    security_poll();
+    /* Restart only roles that this manifest actually started. Missing images
+     * on transitional/test boots never become a public registration route. */
+    for (unsigned role=1;role<ARRAY_SIZE(trusted_roles);role++) {
+        if (!trusted_roles[role].enabled || role==CIUKI_SECURITY_ROLE_OWNER) continue;
+        struct process *p=proc_find(trusted_roles[role].pid);
+        if (p && p->state==PROC_LIVE && security_process_live(p) &&
+            security_process_generation(p)==trusted_roles[role].generation) continue;
+        if (g_ticks<trusted_roles[role].retry_at) continue;
+        trusted_roles[role].retry_at=g_ticks+1000;
+        struct process *replacement=0;
+        int err=supervisor_spawn_security_role(role,&replacement);
+        if (err<0 && err!=-EBUSY) klog("[supervisor] trusted role %u restart failed: %d",role,err);
+    }
     if (dosvm_client_poll) dosvm_client_poll();
     if (desktop_restarting) desktop_restart_step();
     if (desktop_pid) {

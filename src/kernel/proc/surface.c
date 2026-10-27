@@ -7,6 +7,7 @@ extern uint32_t file_description_count(void) __attribute__((weak));
 extern uint32_t net_socket_count(void) __attribute__((weak));
 #include <ciuki/cpu.h>
 #include <ciuki/desktop.h>
+#include <ciuki/security.h>
 #include <ciuki/swdib.h>
 
 struct surface {
@@ -99,12 +100,20 @@ int desktop_fd_install(struct process *p, struct desktop_description *d, uint32_
     return fd;
 }
 
+bool desktop_object_is_channel(const struct proc_object *o)
+{
+    return o && o->release == description_release &&
+        ((const struct desktop_description *)o)->kind == DESKTOP_CHANNEL;
+}
+
 int desktop_close(struct process *p, int32_t fd)
 {
     if (!p || !p->fds || fd < 0 || fd >= CIUKI_OPEN_MAX || !p->fds[fd].object)
         return -EBADF;
     struct proc_object *o = p->fds[fd].object;
+    struct desktop_description *d = desktop_fd(p, fd);
     p->fds[fd] = (struct proc_fd){ 0 };
+    if (d && d->kind == DESKTOP_CHANNEL) channel_fd_closed(p, o);
     o->release(o);
     return 0;
 }

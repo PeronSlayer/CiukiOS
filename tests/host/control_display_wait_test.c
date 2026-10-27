@@ -48,7 +48,34 @@ void cu_wait_change(unsigned seq,uint64_t deadline)
 }
 #include <ciuki/desktop.h>
 extern int channel_poll_events(struct desktop_description *) __attribute__((weak));
+#pragma weak channel_fd_closed
 #include "../../src/kernel/proc/channel.c"
+/* This pacing fixture has no credential/session store. Model one live subject
+ * and count its channel references; credential policy is exercised by H01. */
+static unsigned subject_token, subject_refs;
+static struct security_subject *fixture_subject(void)
+{ return (struct security_subject *)&subject_token; }
+bool security_process_live(const struct process *p)
+{ return p && p->state==PROC_LIVE && p->subject==fixture_subject(); }
+bool security_subject_live(const struct security_subject *s)
+{ return s==fixture_subject(); }
+bool security_subject_matches(const struct security_subject *s,const struct process *p)
+{ return security_process_live(p) && s==p->subject; }
+uint32_t security_subject_pid(const struct security_subject *s)
+{ CHECK(s==fixture_subject()); return 42; }
+int security_subject_get(struct security_subject *s)
+{ CHECK(s==fixture_subject()); subject_refs++; return 0; }
+void security_subject_put(struct security_subject *s)
+{ if (s) { CHECK(s==fixture_subject() && subject_refs); subject_refs--; } }
+void pmm_free(uint32_t page) { (void)page; CHECK(false); }
+uint32_t pmm_alloc(void) { CHECK(false); return 0; }
+void security_process_stopping(struct process *p)
+{ CHECK(p && p->subject==fixture_subject()); channel_security_revoke(p); }
+/* Pending service endpoint reclamation is outside this ordinary-channel
+ * pacing fixture; H01 exercises its real process lookup and fd cleanup. */
+struct process *proc_find(uint32_t pid) { (void)pid; CHECK(false); return NULL; }
+struct process *proc_supervisor(void) { CHECK(false); return NULL; }
+int desktop_close(struct process *p,int32_t fd) { (void)p;(void)fd;CHECK(false);return -EBADF; }
 #include "../../src/kernel/drivers/i8042.c"
 #include "../../src/kernel/net/lwip/sockets.c"
 
@@ -61,6 +88,8 @@ static unsigned heap_live, pins;
 void *(kzalloc)(size_t n) { if (n > KHEAP_MAX_REQUEST) return 0; void *p=calloc(1,n);CHECK(p);heap_live++;return p; }
 void kfree(void *p) { if(p) { CHECK(heap_live);heap_live--;free(p); } }
 static void fixture_retain(struct proc_object *o) { ((struct desktop_description *)o)->references++; }
+bool desktop_object_is_channel(const struct proc_object *o)
+{ return o && o->retain==fixture_retain && ((const struct desktop_description *)o)->kind==DESKTOP_CHANNEL; }
 static void fixture_release(struct proc_object *o)
 {
     struct desktop_description *d=(void *)o;
@@ -182,11 +211,11 @@ static void dispatch(void)
 }
 static void setup(void)
 {
-    CHECK(!heap_live && !pins && !waiters);
+    CHECK(!heap_live && !pins && !waiters && !subject_refs);
     reset();normal.state=hog.state=ui.state=T_BLOCKED;
     task_set_class(&ui,P_NORMAL);task_focus(&ui);
     memset(test_fds,0,sizeof(test_fds));memset(actions,0,sizeof(actions));
-    client=(struct process){.pid=42,.state=PROC_LIVE,.fds=test_fds,.actions=actions};
+    client=(struct process){.pid=42,.state=PROC_LIVE,.fds=test_fds,.actions=actions,.subject=fixture_subject()};
     ui_thread=(struct proc_thread){.task=&ui,.process=&client,.tid=ui.id,.slot=0,.in_syscall=true};
     worker_thread=(struct proc_thread){.task=&normal,.process=&client,.tid=normal.id,.slot=1,.in_syscall=true};
     actions[SIGUSR1].handler=0x400000;
@@ -213,7 +242,7 @@ static void finish(void)
 {
     latency_switch_hook=0;timing_end_hook=0;
     for (unsigned i=0;i<CIUKI_OPEN_MAX;i++) if(test_fds[i].object) CHECK(!file_close(&client,(int)i));
-    CHECK(!heap_live && !pins && !desktop_objects.messages && !desktop_objects.channels);
+    CHECK(!heap_live && !pins && !desktop_objects.messages && !desktop_objects.channels && !subject_refs);
     CHECK(!ui.sync_waiter && !normal.sync_waiter && !waiters && !ui_thread.cleanup && !worker_thread.cleanup);
 }
 static int poll_ui(int timeout)
@@ -223,6 +252,9 @@ static int poll_ui(int timeout)
     if (source==RAW_INPUT && result==1) CHECK(fds[1].revents==POLLIN);
     if (source==CLOSE_FD && result==1) CHECK(fds[0].revents==POLLNVAL);
     if (source==PEER_CLOSE && result==1) CHECK(fds[0].revents&POLLHUP);
+    /* Stopping revokes the subject's channels before the wait resumes.
+     * Poll observes ready HUP before its interruption check. */
+    if (source==STOP) CHECK(client.state==PROC_STOPPING && result==1 && (fds[0].revents&POLLHUP));
     return result;
 }
 static void dispatch_idle_worker(void)
@@ -253,7 +285,9 @@ int main(void)
         if (kind==MASKED_SIGNAL) ui_thread.mask=CIUKI_SIGBIT(SIGUSR1);
         bool timed=kind==TIMEOUT || kind==SPURIOUS_TIMEOUT;
         int result=poll_ui(timed ? (int)event_ms : -1);
-        CHECK(result==((kind==CAUGHT_SIGNAL || kind==STOP) ? -EINTR : timed ? 0 : 1));
+        if (result!=(kind==CAUGHT_SIGNAL ? -EINTR : timed ? 0 : 1))
+            fprintf(stderr,"native poll kind=%u result=%d\n",kind,result);
+        CHECK(result==(kind==CAUGHT_SIGNAL ? -EINTR : timed ? 0 : 1));
         CHECK(g_ticks==event_ms+(kind==RAW_INPUT) && wait_calls==((kind==SPURIOUS || kind==SPURIOUS_TIMEOUT) ? 2u : 1u));
         CHECK(ui.kernel_ticks==0 && ui.run_cycles==wait_calls*150);
         finish();

@@ -27,6 +27,7 @@ struct desktop_description *desktop_description_new(enum desktop_kind kind, uint
 struct desktop_description *desktop_fd(const struct process *p, int32_t fd);
 int desktop_fd_slot(const struct process *p, unsigned start);
 int desktop_fd_install(struct process *p, struct desktop_description *d, uint32_t flags);
+bool desktop_object_is_channel(const struct proc_object *o);
 int desktop_close(struct process *p, int32_t fd);
 int desktop_dup(struct process *p, int32_t fd, int32_t target, bool exact, uint32_t flags);
 int desktop_fcntl(struct process *p, int32_t fd, uint32_t cmd, uint32_t arg);

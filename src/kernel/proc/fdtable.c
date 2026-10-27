@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/files.h>
+#include <ciuki/security.h>
+#pragma weak channel_fd_closed
 #include <ciuki/desktop.h>
 #include <ciuki/supervisor.h>
 #include <ciuki/signal.h>
@@ -144,6 +146,7 @@ int file_close(struct process *p, int32_t fd)
     struct file_description *d = file_fd(p, fd);
     p->fds[fd] = (struct proc_fd){ 0 }; /* remove before a possibly blocking final release */
     if (net_fd_changed) net_fd_changed(p, (unsigned)fd);
+    if (channel_fd_closed) channel_fd_closed(p, o);
     if (d) return file_description_close(d) ? -EIO : 0;
     o->release(o); return 0;
 }
@@ -168,7 +171,10 @@ int file_dup(struct process *p, int32_t fd, int32_t target, bool exact, uint32_t
     if (net_fd_changed) net_fd_changed(p, (unsigned)slot);
     /* Atomic replacement is published before release can yield. dup2's
      * closed error set intentionally discards a final-close I/O error. */
-    if (previous) previous->release(previous);
+    if (previous) {
+        if (channel_fd_closed) channel_fd_closed(p, previous);
+        previous->release(previous);
+    }
     return slot;
 }
 int file_fcntl(struct process *p, int32_t fd, uint32_t cmd, uint32_t arg)

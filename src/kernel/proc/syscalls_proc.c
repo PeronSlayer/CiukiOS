@@ -3,6 +3,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
 #include <ciuki/process.h>
+#include <ciuki/security.h>
 #include <ciuki/signal.h>
 uint32_t supervisor_desktop_pid(void); /* proc/supervisor.c */
 /* Standalone process harnesses have no console; they may supply these sinks. */
@@ -296,6 +297,7 @@ int32_t proc_syscall(struct trap_frame *tf)
     case CIUKI_SYS_LAUNCH_MARK:
         if (tf->edi || tf->ebp) return -EINVAL;
         return proc_launch_mark(p, tf->ebx, tf->ecx, (uint64_t)tf->edx | (uint64_t)tf->esi << 32);
+    case CIUKI_SYS_SECURITY: return security_syscall(tf);
     case CIUKI_SYS_SPAWN: return proc_spawn(tf->ebx);
     case CIUKI_SYS_WAITPID: return proc_waitpid((int32_t)tf->ebx, tf->ecx, tf->edx);
     case CIUKI_SYS_GETPID: return (int32_t)p->pid;

@@ -561,6 +561,9 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     "$root/tests/host/fwqueue_test.c" "$root/src/kernel/core/apm.c" -o "$out/fwqueue_service_test"
 "$out/fwqueue_service_test"
 
+# sec-k01 H01: immutable production subjects and call-101 transactions.
+python3 -B -m unittest discover -s "$root/tests/host/security" -p test_credentials.py
+
 # F2 production parser, mappings, wait queues, stack and lifecycle with fake
 # physical memory/scheduling; no guest execution or host runner lock.
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \

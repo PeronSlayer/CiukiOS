@@ -1124,6 +1124,8 @@ static int desktop_open_error;
 static int desktop_open(void *cwd, const char *path, struct ciuki_file *file)
 {
     (void)cwd;
+    /* Transitional fixture has no sealed security-service images. */
+    if (!strncmp(path,"/System/Services/",sizeof("/System/Services/")-1)) return -ENOENT;
     CHECK(!strcmp(path, "/Programs/desktop"));
     desktop_opens++;
     if (desktop_open_error) return desktop_open_error;
@@ -1920,7 +1922,10 @@ void desktop_spawn_host_finish(void)
 #ifdef CIUKI_DESKTOP_REAL_INPUT
 #define main desktop_input_fixture_main
 #endif
-int main(int argc, char **argv)
+#ifndef CIUKI_DESKTOP_HOST_MAIN
+#define CIUKI_DESKTOP_HOST_MAIN main
+#endif
+int CIUKI_DESKTOP_HOST_MAIN(int argc, char **argv)
 {
     setvbuf(stdout, 0, _IOLBF, 0);
     ram = calloc(HOST_PAGES, PAGE_SIZE); CHECK(ram);

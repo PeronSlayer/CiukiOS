@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/files.h>
+#include <ciuki/security.h>
 #include <ciuki/clock.h>
 extern int32_t timezone_offset_at(int64_t) __attribute__((weak));
 #include <ciuki/fat_native.h>
@@ -546,6 +547,28 @@ int px_chdir(struct process *p, const char *path)
     }
     vfs_unlock(s->vfs);
     px_release(cwd);
+    return err;
+}
+int px_security_cwd(struct process *p, const char *path)
+{
+    if (!p || p->published || p->state != PROC_PREPARING || p->cwd || !path || path[0] != '/') return -EINVAL;
+    struct px_node *boot = proc_supervisor()->cwd;
+    if (!boot) return -ENOENT;
+    struct px_node *root = boot->space->root;
+    px_retain(root);
+    vfs_lock(root->space->vfs, 0);
+    struct px_path result;
+    int err = px_resolve_locked(root->space, root, path, false, &result);
+    if (!err && !security_process_live(p)) err = -EACCES;
+    if (!err && !directory(result.node)) err = -ENOTDIR;
+    if (!err) {
+        px_retain(result.node);
+        p->cwd = result.node;
+        p->cwd_retain = px_retain;
+        p->cwd_release = px_release;
+    }
+    vfs_unlock(root->space->vfs);
+    px_release(root);
     return err;
 }
 
