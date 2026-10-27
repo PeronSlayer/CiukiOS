@@ -589,7 +589,9 @@ int px_policy_label_locked(struct px_node *n,struct policy_label *out)
         struct px_node *child=chain[--count]; uint64_t locator=0;
         struct owner_store *s=p->owners;
         if((l.kind==POLICY_PROFILES || l.kind==POLICY_ROOT) && s) {
-            if(!s->ready || s->busy) return -EIO;
+            /* sec-own: an owner transaction in flight keeps committed records
+             * readable; its own names are fenced below (pending, root intent). */
+            if(!s->ready) return -EIO;
             unsigned total=l.kind==POLICY_PROFILES?s->profile_count:s->root_count;
             for(unsigned i=0;i<total;i++) {
                 const struct owner_record *r=l.kind==POLICY_PROFILES?&s->profiles[i]:&s->roots[i];

@@ -57,7 +57,7 @@ int owner_profile(const struct owner_store *s,uint32_t uid,struct owner_record *
 }
 int owner_label(const struct owner_store *s,uint64_t locator,struct owner_record *out)
 {
-    if(!s || !out || !s->ready || s->busy || !locator) return -EIO;
+    if(!s || !out || !s->ready || !locator) return -EIO; /* sec-own: label reads do not wait for a transaction */
     for(unsigned i=0;i<s->profile_count+s->root_count;i++) {
         const struct owner_record *r=i<s->profile_count?&s->profiles[i]:&s->roots[i-s->profile_count];
         if(r->binding.locator==locator) {

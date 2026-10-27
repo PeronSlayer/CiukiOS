@@ -452,6 +452,55 @@ The account-service lock is a kernel-owned mutex/endpoint lifetime lock;
 death releases ownership and wakes waiters. Persistent intent is recoverable
 transaction state, never an immortal exclusive .lock file.
 
+#### System-volume binding and OWNER queries (sec-own amendment, 2026-10-27)
+
+Implementation record and decisions: `docs/validation/sec-own.md`.
+
+- **Volume identity.** The managed system volume is identified by its FAT32
+  partition's first LBA << 32 | BPB volume serial (`ciuki_provision_volume_id`),
+  the same value the image builder and Setup stage in `bootstrap.state`. The
+  kernel computes it from the mounted C: and gives it to ACCOUNT through OWNER
+  IDENTITY; a superfloppy, non-FAT32 or Setup-mode C: is not managed.
+- **Binding at boot** (`fs/owner_system.c`, before PID 1 starts any service or
+  desktop): with `/System/Security/machine.sid` the existing OWNER store opens
+  (recovery included), the OWNER service binds it, and the volume's
+  `policy_volume` with its OWNER lease is bound. With neither SID nor store the
+  volume stays unmanaged (the sec-k03 interim rule) until the first account
+  batch. A SID without a store, or an unreadable store, closes the account
+  service; the volume stays unmanaged so the interim administrator desktop
+  keeps booting.
+- **Fresh provisioning gate.** Only the first RESERVE of the ACCOUNT role may
+  create the store, and only when the destination's own durable evidence
+  shows an UNPROVISIONED installation: `bootstrap.state` valid and
+  UNPROVISIONED for this volume with no replacement candidates, `machine.sid`
+  and ACCOUNT's `bootstrap.sid` intent naming the request's SID, volume, origin
+  and seed digest, the staged `provision.seed` (origins 1/2) matching that
+  digest, no published database and no OWNER store. The policy and lease are
+  bound as soon as that store is open.
+- **ACCOUNT evidence** for the OWNER core is read by the kernel itself under
+  `/System/Security`, never written: `accounts.db` (generation, whole-file
+  digest), the `acct.commit`/`acct.abort` phase markers plus the
+  `accounts.db.txn` intent of the exact request digest (COMMIT_REQUIRED), the
+  `owner.checkpoint` blob (exact CHECKPOINT header and watermarks) and the
+  `enrollment.catalogue` map (retained G32 roots).
+- **Query operations 8..14** on service 3 (same ACCOUNT/boot-SETUP admission,
+  fixed 160-byte request and reply, layout in `fs/owner_system.h`): IDENTITY,
+  GENERATION, BINDING (committed live record: key, generation, root; retired or
+  pending EACCES, none ENOENT), ROOT_OCCUPIED, SNAPSHOT (the candidate
+  checkpoint image is written to the SYSTEM-only `/System/Security/Owner/snapshot`
+  and named by size and digest, because it can exceed a service body),
+  RECOVER_ORPHANS (an owner batch ACCOUNT no longer carries is finished from
+  ACCOUNT's durable intent) and CHECKPOINT_FLOOR.
+- **Transactions in flight.** `owner_store.busy` is the single-writer
+  admission of OWNER transactions, not unavailable metadata: label and policy
+  readers keep using committed records while a batch or creator-root operation
+  is in flight (the in-flight names stay fenced by the pending records and
+  root intent; the kernel is non-preemptible, so the in-memory map changes
+  only between yield points).
+- **Interim session.** The bootstrap desktop session (uid 1000) carries the
+  committed profile descriptor of uid 1000 once OWNER has it, so k05's DOS data
+  roots move from the legacy machine store into that profile.
+
 ### Enforcement points and retained handles
 
 | Operation | Required checks before first side effect |

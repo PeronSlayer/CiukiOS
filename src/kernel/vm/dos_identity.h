@@ -67,7 +67,8 @@ int dos_identity_export_name(const struct dos_identity *, const char *folder, ch
 int dos_identity_prepare(const struct dos_identity *, struct vfs_table *, enum dos_identity_root);
 /* sec-k03 seam: bind the retained subject to a table the VMM uses for this
  * VM, so the common VFS entry points authorize every operation on it as
- * that subject. No-op until sec-k03 provides vfs_table_subject. */
+ * that subject (vfs_table_bind_subject, wired by sec-own). A user identity
+ * without the binding fails closed (EACCES). */
 int dos_identity_bind(const struct dos_identity *, struct vfs_table *);
 /* Host-volume gate for a guest view of D:/E:; NULL for SYSTEM/internal VMs,
  * whose views are not user-reachable. The gate lives in the identity's VM. */

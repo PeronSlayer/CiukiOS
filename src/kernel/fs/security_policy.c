@@ -135,8 +135,11 @@ int policy_child(const struct policy_volume *v,const struct policy_label *p,
             if (v->rules[i].kind!=POLICY_PUBLIC) l.kind=v->rules[i].kind;
             break;
         }
+    /* sec-own: a transaction in flight (owners->busy) is not unavailable
+     * metadata. Its in-flight names stay fenced by pending/root intents; the
+     * non-preemptible kernel mutates the in-memory map between yields only. */
     if(p->kind==POLICY_ROOT && l.kind==POLICY_PUBLIC && !v->removable &&
-        (!v->owners || !v->owners->ready || v->owners->busy)) l.kind=POLICY_DENY;
+        (!v->owners || !v->owners->ready)) l.kind=POLICY_DENY;
     if (locator) {
         if(p->kind!=POLICY_ROOT && p->kind!=POLICY_PROFILES) return -EIO;
         struct owner_record record;
@@ -177,7 +180,7 @@ int policy_check(const struct policy_volume *v,const struct policy_label *l,
     const struct ciuki_credential *c=security_subject_credential(s);
     if (!c || c->group_count>8) return -EACCES;
     if ((l->kind==POLICY_PROFILE || l->kind==POLICY_CREATOR || l->kind==POLICY_PUBLIC) &&
-        (!v->owners || !v->owners->ready || v->owners->busy)) return -EIO;
+        (!v->owners || !v->owners->ready)) return -EIO; /* sec-own: busy is not unavailable (policy_child) */
     if ((v->readonly || l->kind==POLICY_READONLY) && (access&POLICY_MUTATE)) return -EROFS;
     if (l->kind==POLICY_DENY) return -EACCES;
     if (!c->uid) return 0;

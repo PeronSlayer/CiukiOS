@@ -345,9 +345,13 @@ static void test_host_views(void)
 static void test_removable_view(void)
 {
     char text[64],names[256];
-    /* E: present but its volume has no policy binding: fail closed. */
+    /* E: present but its volume has no policy binding. sec-own: the
+     * integrated sec-k03 unmanaged-volume rule (contract rule table,
+     * "Unmanaged removable FAT") lets a live session read; the view itself
+     * stays read-only. */
     e_present=true; logon(&bob,&BOB,2); c_format(); vm_start(&bob);
-    CHECK(dos_open("E:\\SHORT.BIN",1)==5 && dos_list("E:\\*.*",names,sizeof(names))==5);
+    CHECK(!dos_open("E:\\SHORT.BIN",1) && !dos_read(1,4,text) && !ifs(0x1106,0,0,1));
+    CHECK(!dos_list("E:\\*.*",names,sizeof(names)) && strstr(names,"SHORT.BIN") && dos_create("E:\\BOB.TXT",2)==5);
     vm_stop();
     struct policy_volume *removable=calloc(1,sizeof(*removable)); CHECK(removable);
     CHECK(!policy_init(removable,33,3,false,true,false,0));
@@ -362,7 +366,7 @@ static void test_removable_view(void)
     CHECK(!dos_open("E:\\SHORT.BIN",1) && !ifs(0x1106,0,0,1) && dos_create("E:\\GUEST.TXT",2)==5);
     vm_stop(); logoff(&guest_actor);
     vfs_lock(&vfs,0); policy_unbind_locked(&vfs,3); vfs_unlock(&vfs); free(removable); e_present=false;
-    puts("H06 E: view: PASS (unbound policy denies, removable read for Standard/Guest, read-only provider never widened)");
+    puts("H06 E: view: PASS (unbound volume: unmanaged read-only view, removable read for Standard/Guest, read-only provider never widened)");
 }
 
 static void test_gate_swap(void)

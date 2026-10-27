@@ -17,4 +17,7 @@ void channel_owner_done(struct owner_exchange *);
 int owner_service_bind(struct owner_store *);
 void owner_service_unbind(struct owner_store *);
 void owner_service_poll(void);
+/* sec-own: optional dispatcher replacing owner_call (owner_system.c). */
+typedef int (*owner_dispatch_fn)(const struct security_subject *,const void *,size_t,void *,size_t,size_t *);
+void owner_service_dispatcher(owner_dispatch_fn);
 #endif

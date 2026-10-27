@@ -27,12 +27,12 @@
 #pragma weak px_resolve_volume_subject_locked
 #pragma weak px_retain
 #pragma weak px_release
-/* sec-k03 interface, declared here and defined with the VFS entry points:
- * bind a retained subject to a table before its first operation; the table
- * holds its own reference until vfs_table_destroy and every later lookup,
- * open, create, find, rename, delete, attribute, time and commit on it is
- * authorized as that subject (user-security-kernel.md K4). */
-extern int vfs_table_subject(struct vfs_table *, struct security_subject *) __attribute__((weak));
+/* sec-k03 interface (fs/vfs.c), wired by sec-own: bind a retained subject
+ * to a table before its first operation; the table holds its own reference
+ * until vfs_table_destroy and every later lookup, open, create, find,
+ * rename, delete, attribute, time and commit on it is authorized as that
+ * subject (user-security-kernel.md K4). Weak for DOS harnesses without it. */
+#pragma weak vfs_table_bind_subject
 
 static const char legacy_store[] = "C:\\SYSTEM\\DOS\\SAVES";
 static const char legacy_scratch[] = "C:\\SYSTEM\\DOS";
@@ -208,9 +208,13 @@ int dos_identity_prepare(const struct dos_identity *id, struct vfs_table *t, enu
 }
 int dos_identity_bind(const struct dos_identity *id, struct vfs_table *t)
 {
-    if (!vfs_table_subject) return 0;
+    /* Standalone DOS harnesses link neither table subjects nor credentials;
+     * their tables stay kernel work, as before. The kernel links both. */
+    if (!vfs_table_bind_subject || !security_subject_get) return 0;
     if (!id->subject) return id->system ? 0 : -FS_EACCES;
-    int e = vfs_table_subject(t, id->subject);
+    /* A table already bound to this VM's identity keeps it (idempotent). */
+    if (t->subject == id->subject) return 0;
+    int e = vfs_table_bind_subject(t, id->subject);
     return e ? -FS_EACCES : 0;
 }
 

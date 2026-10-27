@@ -9,11 +9,17 @@ struct validate_frame { uint8_t db[ACCT_FILE_MAX]; struct acct_owner_request q; 
 static int validate_inner(const struct acct_store *s, const struct acct_db *d, const void *v, size_t n, uint64_t floor, struct validate_frame *f)
 {
     const uint8_t *p=v;
-    if(!p || n<160 || memcmp(p,"CIUKIOCP",8) || a32(p+8)!=1 || a32(p+12)!=160 || a32(p+16)>32 || a32(p+20)>256 ||
+    /* sec-own: OWNER emits CIUKIOCP v2 once creator-owned root records exist
+     * (src/kernel/fs/owner_checkpoint.c): root count @140, then 160-byte root
+     * records after the profiles. Version 1 keeps 140..160 zero. */
+    unsigned version=p && n>=160 ? a32(p+8) : 0, roots=version==2 ? a32(p+140) : 0;
+    if(!p || n<160 || memcmp(p,"CIUKIOCP",8) || (version!=1 && version!=2) || a32(p+12)!=160 || a32(p+16)>32 || a32(p+20)>256 ||
         memcmp(p+24,d->sid,12) || a32(p+36) || a64(p+40)!=s->volume || a64(p+48)!=floor ||
         floor>s->high_generation || a64(p+56)!=d->generation || a64(p+96)>a64(p+104) || a64(p+112)<a32(p+16) ||
         a64(p+120)<a32(p+16) || n<160+112*a32(p+16)) return -EIO;
-    if(a64(p+128)<floor || a64(p+128)>s->high_generation || a32(p+136)<d->next_uid || a32(p+136)>s->high_uid || !azero(p+140,20)) return -EIO;
+    if(a64(p+128)<floor || a64(p+128)>s->high_generation || a32(p+136)<d->next_uid || a32(p+136)>s->high_uid ||
+        (version==1 && !azero(p+140,20)) || (version==2 && (!roots || roots>256 || !azero(p+144,16) ||
+        n<160+112*(size_t)a32(p+16)+160*(size_t)roots))) return -EIO;
     uint8_t *db=f->db, digest[32]; size_t bytes=0; int e=acct_encode(d,0,db,ACCT_FILE_MAX,&bytes);
     if(!e) { sha256(db,bytes,digest); if(memcmp(digest,p+64,32)) e=-EIO; }
     acct_wipe(db,ACCT_FILE_MAX); if(e) return e;
@@ -33,6 +39,16 @@ static int validate_inner(const struct acct_store *s, const struct acct_db *d, c
     }
     if(matched!=d->count) return -EIO;
     size_t offset=160+112*a32(p+16); uint64_t prior=floor;
+    /* sec-own: creator-owned root records (v2): keys/locators within the
+     * snapshot's watermarks, unique, single-component names; never profiles. */
+    for(unsigned i=0;i<roots;++i,offset+=160) {
+        const uint8_t *b=p+offset; uint32_t action=a32(b+4);
+        if((action!=1 && action!=2) || !a64(b+8) || a64(b+8)>a64(p+112) || !a64(b+16) || a64(b+16)>a64(p+104) ||
+            a64(b+24)!=s->volume || !a64(b+32) || a64(b+32)>a64(p+120) || !apadded(b+40,64) || b[40]!='/' || !b[41] ||
+            strchr((const char *)b+41,'/') || a64(b+104) || azero(b+112,32) || !azero(b+144,16)) return -EIO;
+        for(unsigned j=0;j<a32(p+16);++j) { const uint8_t *a=p+160+112*j; if(a64(a+8)==a64(b+8) || a64(a+32)==a64(b+32)) return -EIO; }
+        for(unsigned j=0;j<i;++j) { const uint8_t *a=p+160+112*a32(p+16)+160*j; if(a64(a+8)==a64(b+8) || a64(a+32)==a64(b+32)) return -EIO; }
+    }
     for(unsigned i=0;i<a32(p+20);++i) {
         if(n-offset<8) return -EIO;
         size_t qn=a32(p+offset),rn=a32(p+offset+4); offset+=8;
