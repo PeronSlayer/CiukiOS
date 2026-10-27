@@ -190,6 +190,37 @@ static void execute(void){
   a.file="https://example.com/";assert(!ShellExecuteExA(&a));
   a.file="C:\\msiexec.exe";assert(!ShellExecuteExA(&a) && host_refusals==2);
   puts("PASS ShellExecute association verbs / exact command tail / retained process / MSI / URL refusal");
+  /* fx-q3vise: a folder (the VISE engine's call: SEE_MASK 0, no verb,
+   * SW_SHOW) opens in Files, with Explorer's hidden stand-in window:
+   * CabinetWClass titled with the folder's name, as Windows 98 names it. */
+  assert(shell_mkdirs("C:\\WINDOWS\\Start Menu\\Programs\\Ciuki Game\\Extras"));
+  SHELL_EXECUTE f={.size=sizeof(f),.mask=0x40,.file="C:\\WINDOWS\\Start Menu\\Programs\\Ciuki Game",.show=5};
+  assert(ShellExecuteExA(&f) && (uintptr_t)f.instance>32 && !f.process);
+  assert(host_folder_launches==1 && !strcmp(host_folder_launch[0],"/WINDOWS/Start Menu/Programs/Ciuki Game"));
+  assert(host_window_count==1 && host_windows[0].live && !strcmp(host_windows[0].klass,"CabinetWClass") &&
+         !strcmp(host_windows[0].title,"Ciuki Game") && host_windows[0].style==0x80000000u);
+  /* The same folder again (a trailing backslash): Explorer only activates its window. */
+  f.file="C:\\WINDOWS\\Start Menu\\Programs\\Ciuki Game\\";
+  assert(ShellExecuteExA(&f) && (uintptr_t)f.instance>32 && host_folder_launches==1 && host_window_count==1);
+  /* "explore" is Explorer's two-pane window class. */
+  assert((uintptr_t)ShellExecuteA(0,"explore","C:\\WINDOWS\\Start Menu\\Programs\\Ciuki Game\\Extras",0,0,1)>32);
+  assert(host_folder_launches==2 && !strcmp(host_folder_launch[1],"/WINDOWS/Start Menu/Programs/Ciuki Game/Extras"));
+  assert(!strcmp(host_windows[1].klass,"ExploreWClass") && !strcmp(host_windows[1].title,"Extras"));
+  /* Another drive is /mnt/<letter> in Files; the A form and the default verb. */
+  assert(shell_mkdirs("E:\\Games"));
+  assert((uintptr_t)ShellExecuteA(0,0,"E:\\Games",0,0,1)>32 && host_folder_launches==3 && !strcmp(host_folder_launch[2],"/mnt/e/Games"));
+  /* A refusing desktop fails the open (ERROR_ACCESS_DENIED) and leaves no window behind. */
+  assert(shell_mkdirs("C:\\Refused"));
+  host_folder_refuse=1;f.file="C:\\Refused";
+  assert(!ShellExecuteExA(&f) && GetLastError()==5 && (uintptr_t)f.instance==5 && host_window_count==4 && !host_windows[3].live);
+  host_folder_refuse=0;
+  /* A folder has no "print" verb; a drive root keeps the refusal; a missing folder is not a folder. */
+  assert((uintptr_t)ShellExecuteA(0,"print","C:\\Refused",0,0,1)<=32);
+  assert((uintptr_t)ShellExecuteA(0,0,"C:\\",0,0,1)<=32);
+  assert((uintptr_t)ShellExecuteA(0,0,"C:\\Missing Folder",0,0,1)<=32 && host_folder_launches==3);
+  const char *folders[]={"C:\\Refused","E:\\Games","C:\\WINDOWS\\Start Menu\\Programs\\Ciuki Game\\Extras","C:\\WINDOWS\\Start Menu\\Programs\\Ciuki Game"};
+  for(unsigned i=0;i<sizeof(folders)/sizeof(*folders);i++)assert(RemoveDirectoryA(folders[i]));
+  puts("PASS ShellExecute folders: Files launch, Explorer-class window and title, reuse, explore, other drive, refusal");
 }
 static void versions(void){
   extern DWORD VerInstallFileA(DWORD,const char *,const char *,const char *,const char *,const char *,char *,DWORD *);

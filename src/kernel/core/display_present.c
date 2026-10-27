@@ -35,6 +35,15 @@ static uint64_t next_frame;
 static bool frame_running;
 static bool awaiting_first_frame;
 static uint64_t first_frame_deadline;
+/* fx-q3vise: the grant's tick, for the first frame's record. On the T23
+ * (image 6c3b7800) a Quake III lease was granted and the log ended three
+ * seconds later with no trace of whether any frame had reached the panel. */
+static uint64_t granted_ticks;
+static void first_frame_record(uint32_t pid, uint32_t lease, const char *path)
+{
+    klog("[display] present_lease=first-frame pid=%u token=%u ms=%llu path=%s",
+         pid,lease,(unsigned long long)(g_ticks-granted_ticks),path);
+}
 
 bool display_present_active(void) { return active || transfer; }
 static bool owner_live(uint32_t pid)
@@ -142,7 +151,7 @@ static int grant(struct process *d, struct ciuki_w32_display_args *a)
     if (!e) {
         holder=a->pid; desktop_pid=d->pid; token=fresh; fb_generation=f->generation;
         scale=chosen; layout=a->surface; next_frame=0;
-        awaiting_first_frame=true; first_frame_deadline=deadline_after_ms(10000);
+        awaiting_first_frame=true; first_frame_deadline=deadline_after_ms(10000); granted_ticks=g_ticks;
         for (unsigned i=0;i<256;++i) {
             palette[i]=0;
             gamma.red[i]=gamma.green[i]=gamma.blue[i]=(uint16_t)(i*257);
@@ -226,11 +235,14 @@ static int frame(struct proc_thread *t, struct ciuki_w32_display_args *a)
     }
     kmutex_lock(&lease_lock);
     if (!e && !valid(p,a)) e=-EACCES;
+    bool first=false;
     if (!e) {
         next_frame=cvp_present_deadline(g_ticks*UINT64_C(1000000));
+        first=awaiting_first_frame;
         awaiting_first_frame=false;
     }
     kmutex_unlock(&lease_lock);
+    if (first) first_frame_record(p->pid,a->token,"copy");
     t->cleanup=0; t->operation=0; frame_cleanup(&op);
     return e;
 }
@@ -256,6 +268,7 @@ int display_present_render3d(void *service, uint32_t pid,
     if (!e && (s.format!=CIUKI_PRESENT_XRGB8888 || s.width!=r->width ||
         s.height!=r->height || s.pitch!=r->pitch || s.size!=bytes)) e=-EOPNOTSUPP;
     bool direct=n==1 && s.width<=f.width && s.height<=f.height && service && render3d_scanout;
+    const char *how="render3d-copy";
     if (!e && !pixels && !direct) e=-EOPNOTSUPP;
     if (!e) frame_running=true;
     kmutex_unlock(&lease_lock);
@@ -274,7 +287,7 @@ int display_present_render3d(void *service, uint32_t pid,
             kmutex_unlock(&lease_lock);
             if (e!=-EBUSY) break;
         }
-        if (e!=-EOPNOTSUPP || !pixels) goto complete;
+        if (e!=-EOPNOTSUPP || !pixels) { how="render3d"; goto complete; }
         e=0;
     }
     uint8_t *out=P2V(page);
@@ -303,12 +316,15 @@ int display_present_render3d(void *service, uint32_t pid,
 complete:
     kmutex_lock(&lease_lock);
     if (!e && !valid(proc_find(pid),&a)) e=-EACCES;
+    bool first=false;
     if (!e) {
         next_frame=cvp_present_deadline(g_ticks*UINT64_C(1000000));
+        first=awaiting_first_frame;
         awaiting_first_frame=false;
     }
     frame_running=false;
     kmutex_unlock(&lease_lock);
+    if (first) first_frame_record(pid,a.token,how);
     if (page) pmm_free(page);
     return e;
 }

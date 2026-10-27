@@ -44,7 +44,7 @@ static int native_begin_error,native_end_error;
 static unsigned native_prepares,native_begins,native_ends,native_completes,native_publishes;
 static int native_publish_error;
 static bool native_recovered;
-static char native_results[256],return_timing[256],frame_timing[256];
+static char native_results[256],return_timing[256],frame_timing[256],mode_paths[256];
 static char mode_failure_record[256];
 void bootlog_snapshot(struct bootlog_stats *s) { memset(s,0,sizeof(*s));s->active=log_active; }
 int bootlog_sync(bool (*cancel)(void *),void (*pause)(void *),void *arg)
@@ -111,7 +111,7 @@ static void mode_info(uint16_t id, uint8_t m[256])
 {
     memset(m, 0, 256); wr16(m, 0x91); m[24] = 1; m[27] = 6;
     uint16_t w = id == 0x118 || id == 0x117 ? 1024 : 640, h = id == 0x118 || id == 0x117 ? 768 : 480;
-    m[25] = id == 0x118 ? 32 : 16;
+    m[25] = id == 0x118 || id == 0x112 ? 32 : 16;
     wr16(m + 18, w); wr16(m + 20, h); wr16(m + 50, w * (m[25] / 8) + (id==0x117 ? 0 : 16));
     wr32(m + 40, id == 0x118 ? 0xE0000000 : 0xE1000003);
     if (m[25] == 32) { m[54] = m[56] = m[58] = m[60] = 8; m[55] = 16; m[57] = 8; m[61] = 24; }
@@ -124,7 +124,9 @@ int biosvm_video_prepare(void) { return prepare_failure ? -EPERM : 0; }
 int biosvm_video_switch(uint16_t id, uint8_t m[256])
 {
     assert(!accel_ports_owned);
-    if (is_supersavage) assert(native_ends>=1 && suspended);
+    /* The video BIOS never runs under a native provider that still holds
+     * the head (a mode no provider implements never began one). */
+    if (is_supersavage) assert(native_ends>=native_begins && suspended);
     event(4); assert(!fbdev_get()->present && !fbdev_get()->mapped);
     assert(resources[fbdev_get()->handle].state == RS_QUIESCING || resources[fbdev_get()->handle].state == RS_RELEASED);
     assert(switches < 16); called[switches++] = id;
@@ -136,7 +138,7 @@ int biosvm_video_switch(uint16_t id, uint8_t m[256])
 void klog(const char *fmt, ...) {
     if (strstr(fmt,"fullscreen_log error=")) log_errors++;
     char *out=strstr(fmt,"mode_failure mode=") ? mode_failure_record :
-        strstr(fmt,"native_result=") ? native_results :
+        strstr(fmt,"native_result=") ? native_results : strstr(fmt,"mode_path ") ? mode_paths :
         strstr(fmt,"lease_return_ms=") ? return_timing :
         strstr(fmt,"desktop_frame_ms=") ? frame_timing : NULL;
     if (out) { va_list ap;va_start(ap,fmt);vsnprintf(out,256,fmt,ap);va_end(ap); }
@@ -279,7 +281,7 @@ static void fixture(void)
     fullscreen_return_timed=false;fullscreen_return_tick=0;
     fullscreen_recovering=fullscreen_log_failed=false;
     native_prepares=native_begins=native_ends=native_completes=blackbox_syncs=0;native_recovered=false;blackbox_error=0;
-    native_results[0]=return_timing[0]=frame_timing[0]=0;
+    native_results[0]=return_timing[0]=frame_timing[0]=mode_paths[0]=0;
     mode_failure_record[0]=0;
     is_supersavage=false;log_active=true;log_sync_error=0;log_syncs=0;
     log_requests=log_errors=0;
@@ -468,6 +470,25 @@ static void panel_firmware_tests(void)
     assert(!display_set_for_present(&desktop,0x111,true));
     assert(switches==1 && called[0]==0x111 && native_begins==1 && !native_publishes && !present_provider);
     assert(native_ends==1 && native_recovered && fbdev_get()->present);
+    assert(strstr(mode_paths,"mode_path mode=273 path=native-refused-firmware-vbe result=0"));
+    /* fx-q3vise: Quake III's lease on the T23 panel, 112h (640x480x32), which
+     * no native SuperSavage path implements: the video BIOS sets it (4F02)
+     * without a native provider ever touching the head, and the record says
+     * so (biosvm_video_switch itself records nothing when it succeeds). */
+    fixture();is_supersavage=native_supported=suspended=true;
+    g_boot.display.mode_count=3;
+    g_boot.display.modes[2]=(struct ciuki_boot_display_mode){0x112,640,480,32,2576,1,0};
+    assert(!display_set_for_present(&desktop,0x112,true));
+    assert(switches==1 && called[0]==0x112 && !native_prepares && !native_begins && !present_provider);
+    assert(fbdev_get()->present && fbdev_get()->width==640 && fbdev_get()->bpp==32 && fbdev_get()->pitch==2576);
+    assert(strstr(mode_paths,"mode_path mode=274 path=firmware-vbe result=0"));
+    assert(!display_set_for_present(&desktop,0x118,true) && switches==2 && called[1]==0x118);
+    assert(strstr(mode_paths,"mode_path mode=280 path=firmware-vbe result=0"));
+    fixture();is_supersavage=native_supported=suspended=true;fail_firmware=true;
+    g_boot.display.mode_count=3;
+    g_boot.display.modes[2]=(struct ciuki_boot_display_mode){0x112,640,480,32,2576,1,0};
+    assert(display_set_for_present(&desktop,0x112,true)==-EIO && fbdev_get()->present && fbdev_get()->mode_id==0x118);
+    assert(strstr(mode_paths,"mode_path mode=274 path=firmware-vbe result=-5"));
 
     const uint16_t modes[]={0x101,0x103,0x111,0x114};
     for (unsigned i=0;i<ARRAY_SIZE(modes);i++) {
@@ -501,7 +522,7 @@ static void panel_firmware_tests(void)
     assert(native_begins==1 && native_ends==1); /* never retry unqualified native programming */
     fixture();is_supersavage=native_supported=true;native_begin_error=-EOPNOTSUPP;native_end_error=-EIO;
     assert(display_fullscreen_begin(0x101)==DISPLAY_FULLSCREEN_WINDOWED && !fullscreen_lfb.mapped);
-    puts("PASS Review round 1 panel routing: Win32 firmware fallback; DOS BIOS VBE 101/103/111/114, checked aperture/format, bounded copies, direct LFB metadata, revoke-before-restore, bad layouts and firmware failure stay windowed");
+    puts("PASS Review round 1 panel routing: Win32 firmware fallback, fx-q3vise 112h lease by the video BIOS with its mode_path record; DOS BIOS VBE 101/103/111/114, checked aperture/format, bounded copies, direct LFB metadata, revoke-before-restore, bad layouts and firmware failure stay windowed");
 }
 static void fullscreen_tests(void)
 {

@@ -3383,8 +3383,11 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
         else desk_power_reply(d,i,p.serial,p.flags);
         break;
     case DESK_V3_LAUNCH:
+        /* fx-q3vise: a window that carries a Win32 HWND (DESK_V3_WIN32_HWND)
+         * may open Files on a folder: ShellExecute(Ex) of a directory. */
         error=(!netsurf_wallpaper_request(c,&p) &&
-               !( !strcmp(anchor->application,"netsurf") && !strcmp(p.title,"files") && desk_browser_file_argument(p.argument))) || !d->shell
+               !( !strcmp(anchor->application,"netsurf") && !strcmp(p.title,"files") && desk_browser_file_argument(p.argument)) &&
+               !(c->v3_win32_hwnd && !strcmp(p.title,"files") && desk_folder_argument(p.argument))) || !d->shell
               ? -EPERM : desk_task_launch(d,p.title,p.argument);
         if (error>0) error=0; /* A positive PID means the Control Panel was started. */
         d->launch_deferred=0; /* V3 replies report accepted queueing, not a later v2 TASK_RESULT. */

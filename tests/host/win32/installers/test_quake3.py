@@ -235,5 +235,79 @@ class Quake3DemoTests(unittest.TestCase):
             f'{result[0]}\n' + '\n'.join(f'{name} {count} {count / frames:.2f}' for name, count in calls) + '\n')
 
 
+INSTALLER = ROOT / 'third_party/games/q3a-demo-installer/Q3ADemo.exe'
+INSTALLER_SHA256 = '6af96cb1b5c97535c9923d8855ca85ec21b21b65b48738b2c5e674e17c65835d'
+PROGRAMS = 'Quake 3 Arena Demo'
+SHORTCUTS = {'quake3.lnk', 'readme.lnk', 'Remove Quake 3 Arena Demo.lnk', 'Extras/Announcements & News.lnk',
+             'Extras/Challenge Ladders & Leagues.lnk', 'Extras/Current Player Statistics & Rankings.lnk',
+             'Extras/Discussion Forums.lnk', 'Extras/Team (Clan) Listings.lnk',
+             'Extras/Play Quake 3 Arena on Mplayer.com.lnk', 'Extras/Help/HELP!.lnk'}
+
+
+class Quake3InstallerTests(unittest.TestCase):
+    """fx-q3vise: the original Q3ADemo.exe (Installer VISE 3.x) from its
+    Welcome page to its exit on the H1 adapter in game mode, with the
+    production builtins, the reused Wine DLLs and the w32srv registry of the
+    image. h1_game.c presses Enter (Y on the licence page) on each untitled
+    wizard page that has stayed unchanged for 4 s. At the end the VISE engine
+    opens each Start-menu folder it filled (ShellExecuteEx, no verb) and polls
+    FindWindow("CabinetWClass", path or name) for up to 5 s per shortcut
+    without pumping messages; on the T23 (image 6c3b7800) ten such waits made
+    the installer "not responding" until End Task. On Windows 98 Explorer's
+    folder window answers at once."""
+
+    def test_install_to_the_end(self):
+        if not INSTALLER.is_file() or hashlib.sha256(INSTALLER.read_bytes()).hexdigest() != INSTALLER_SHA256:
+            self.skipTest('Q3ADemo.exe absent or differs from third_party/games/q3a-demo-installer/UPSTREAM.json')
+        OUT.mkdir(parents=True, exist_ok=True)
+        try:
+            fixture.build(test_flow_fixtures.OUT / 'fixtures')
+        except FileNotFoundError as error:
+            raise unittest.SkipTest(str(error)) from error
+        program = test_flow_fixtures.h1_program(test_flow_fixtures.OUT / 'fixtures', self)
+        library, _, _ = host_services.build_bridge(test_flow_fixtures.OUT / 'services')
+        root = OUT / 'installer-root'
+        shutil.rmtree(root, ignore_errors=True)
+        service = host_services.Services(root, library, program)
+        service.request_timeout = 600
+        folder = root / 'C/Documents/Desktop/Quake III Arena Demo'
+        folder.mkdir(parents=True)
+        done = subprocess.run(['cp', '--reflink=auto', '--', str(INSTALLER), str(folder)])
+        self.assertEqual(done.returncode, 0)
+        image = 'C:\\Documents\\Desktop\\Quake III Arena Demo\\Q3ADemo.exe'
+        began = time.monotonic()
+        child = service.start_adapter(['game-exec', image, f'"{image}" +set ciuki_installer 4000 +set ciuki_installer_max 8 '
+                                       '+set ciuki_installer_keys .y +set ciuki_installer_untitled 1'],
+                                      'Q3ADemo', cwd='C:\\Documents\\Desktop\\Quake III Arena Demo')
+        code, output = child.finish(600)
+        seconds = time.monotonic() - began
+        (OUT / 'installer.log').write_text(output)
+        self.assertEqual(code, 0, output[-4000:])
+        self.assertIn('TERMINATE 0', output)
+        for marker in ('GAME watchdog:', 'REPORT action='):
+            self.assertNotIn(marker, output)
+        # The game is installed (the same 1.11 executable as the game tests).
+        self.assertEqual(hashlib.sha256((root / 'C/Q3Ademo/quake3.exe').read_bytes()).hexdigest(), EXE_SHA256)
+        self.assertEqual((root / 'C/Q3Ademo/demoq3/pak0.pk3').stat().st_size, PAK_SIZE)
+        menu = root / 'C/WINDOWS/Start Menu/Programs' / PROGRAMS
+        self.assertEqual({p.relative_to(menu).as_posix() for p in menu.rglob('*.lnk')}, SHORTCUTS)
+        # Each Start-menu folder is opened once, in Files (the desktop's
+        # DESK_V3_LAUNCH), as Explorer opens it once and then only activates it.
+        launches = re.findall(r'^GAME launch title=files argument=(.+) ms=(\d+)$', output, re.M)
+        base = '/WINDOWS/Start Menu/Programs/' + PROGRAMS
+        self.assertEqual(sorted(path for path, _ in launches), [base, base + '/Extras', base + '/Extras/Help'])
+        # From the first folder to the Finished page (the last untitled window)
+        # the engine no longer waits: ten five-second FindWindow loops before.
+        pages = [int(ms) for ms in re.findall(r'^GAME desktop op=2 window=\d+ generation=\d+ bytes=52 ms=(\d+)$', output, re.M)]
+        end = pages[-1] - int(launches[0][1])
+        self.assertLess(end, 10000, output[-4000:])
+        # The FindWindow polling cost 710,110 w32srv requests on the H1 host before.
+        requests = int(re.search(r'^STATS kernel_records=\d+ kernel_enosys=\d+ server_requests=(\d+)', output, re.M)[1])
+        self.assertLess(requests, 50000)
+        print(f'\nQuake III installer (VISE) on the H1 host: run {seconds:.0f} s, first folder to Finished page '
+              f'{end} ms, {requests} w32srv requests, {len(launches)} folders opened')
+        shutil.rmtree(root, ignore_errors=True)
+
+
 if __name__ == '__main__':
     unittest.main()

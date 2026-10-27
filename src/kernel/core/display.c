@@ -477,10 +477,17 @@ int display_set_for_present(struct process *p, uint16_t id, bool delegated)
         }
     }
     if (display_worker_start()) return refuse(id, -ENOMEM);
+    /* fx-q3vise: which path set the mode, in one durable record before the
+     * mode record. biosvm_video_switch (INT 10h 4F02/4F01/4F03) records
+     * nothing when it succeeds, and the [biosvm] step=fullscreen records
+     * belong to the DOS full screen's VBE state transaction only, so a panel
+     * lease set by the video BIOS (T23 6c3b7800: mode 112h, which no native
+     * provider implements) looked like a lease without a BIOS call. */
+    const char *path = !provider ? "firmware-vbe" : returning ? "native-return" : "native-driver";
     switching = true;
     previous = *fbdev_get();
     int e = provider ? 0 : biosvm_video_prepare();
-    if (e) { switching = false; return refuse(id, mode_failure(id,"bios-prepare",e)); }
+    if (e) { switching = false; klog("[display] mode_path mode=%u path=%s result=%d",id,path,-EIO); return refuse(id, mode_failure(id,"bios-prepare",e)); }
     if (grants_display_busy()) { switching = false; return refuse(id, -EBUSY); }
     e = fbdev_change_begin();
     if (e) mode_failure(id,"framebuffer-begin",e);
@@ -492,12 +499,15 @@ int display_set_for_present(struct process *p, uint16_t id, bool delegated)
         } else if (returning) {
             e=provider->end();
             if (!e) e=fbdev_change_commit(&present_previous);
-            if (e && !biosvm_video_prepare()) e=apply(id,&next);
+            if (e && !biosvm_video_prepare()) { path="native-return-firmware-vbe"; e=apply(id,&next); }
             provider->complete(!e);
             if (!e) present_provider=0;
         } else {
             e=provider->begin(id);
             if (e==-EOPNOTSUPP) {
+                /* The provider refused this head (a flat panel: fx-biosvm
+                 * amendment 1) before touching scanout: the video BIOS sets it. */
+                path="native-refused-firmware-vbe";
                 int released=provider->end();
                 if (!released) {
                     provider->complete(true);
@@ -538,6 +548,7 @@ int display_set_for_present(struct process *p, uint16_t id, bool delegated)
     }
     switching = false;
     if (e) e = -EIO;
+    klog("[display] mode_path mode=%u path=%s result=%d",id,path,e);
     log_mode(id, e);
     return e;
 }

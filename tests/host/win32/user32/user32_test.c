@@ -2956,6 +2956,7 @@ static void run(void) {
   test_spi();
 #ifndef U32_TEST_EXTERNAL_MODULES
   test_g18_shell();
+  test_shell_folder();
 #endif
   test_order();
   test_arrange();
