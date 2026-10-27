@@ -1789,6 +1789,12 @@ int main(int argc,char **argv)
     return 0;
 }
 
+/* fx-dispmode made display_poll reachable from these harnesses; the startup
+ * fixture never changes layout, so no lease or surface is ever needed. */
+__attribute__((weak)) int ciuki_display_info(int fd, struct ciuki_framebuffer_info *i)
+{ (void)fd; (void)i; return -ENOSYS; }
+__attribute__((weak)) int ciuki_surface_create(uint32_t w, uint32_t h, uint32_t format)
+{ (void)w; (void)h; (void)format; return -ENOSYS; }
 int ciuki_display_query(struct ciuki_display_info *i)
 {
     assert(i->version==CIUKI_DISPLAY_VERSION && i->size==sizeof(*i));
