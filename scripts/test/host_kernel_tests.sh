@@ -576,6 +576,12 @@ python3 -B -m unittest discover -s "$root/tests/host/security" -p test_owner_pol
 # exec and mapping entry point enforces the retained subject; frontend census.
 python3 -B -m unittest discover -s "$root/tests/host/security" -p test_file_enforcement.py
 # ---- end sec-k03 ----
+# --- sec-k05 block (begin) ---
+# H06: DOS VM identity, credential-filtered D:/E: through the live IFS and
+# per-user stores. Its VM-lifecycle/INT 13h and title-store cases run in
+# this suite's dosvm_test (default sequence) and run_persistent_saves.sh.
+python3 -B -m unittest discover -s "$root/tests/host/security" -p test_dos_identity.py -k test_identity_views_and_stores
+# --- sec-k05 block (end) ---
 
 # F2 production parser, mappings, wait queues, stack and lifecycle with fake
 # physical memory/scheduling; no guest execution or host runner lock.

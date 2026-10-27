@@ -49,12 +49,14 @@ void kfree(void *p) { if (p) { CHECK(disk_trackers); disk_trackers--; free(p); }
 #include "../../../src/kernel/vm/dosvm_disk.c"
 /* Transient overlays only; persistent title storage has its own harness (dos/persistent_saves_test.c). */
 int dos_save_store_open(struct dos_save_file *f,struct dos_save *s,const struct dos_save_identity *id,
-                        char path[128],unsigned *archived)
+                        const char *root,char path[DOS_SAVE_PATH],unsigned *archived)
 {
     (void)s; *archived=0; f->fd=-1; f->absent=true;
-    snprintf(path,128,DOS_SAVE_ROOT "\\G%uK%u%s.COW",id->game,id->kernel,id->base);
+    snprintf(path,DOS_SAVE_PATH,"%s\\G%uK%u%s.COW",root,id->game,id->kernel,id->base);
     return -FS_EROFS;
 }
+/* sec-k05: a zero identity is the legacy machine namespace (no subject). */
+#include "../../../src/kernel/vm/dos_identity.c"
 #include "../../../src/kernel/vm/dos_save.c"
 static struct dosvm vm;
 void kpreempt_point(void) { CHECK(!vm.disk_busy); }

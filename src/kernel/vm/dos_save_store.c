@@ -30,12 +30,19 @@ static int save_file_resize(void *arg,uint32_t size)
 { struct dos_save_file *f=arg; return f->writable ? vfs_truncate(f->table,f->fd,size) : 0; }
 void dos_save_file_io(struct dos_save_file *f,struct dos_save_io *io)
 { *io=(struct dos_save_io){save_file_read,save_file_write,save_file_flush,save_file_resize,f}; }
-static int save_archive(struct vfs_table *t,const char *path,unsigned game)
+/* Every name below a root fits DOS_SAVE_PATH with this root bound. */
+#define SAVE_ROOT_MAX 96u
+static int save_root_valid(const char *root)
+{
+    size_t n=root ? strlen(root) : 0;
+    return n<3 || n>SAVE_ROOT_MAX || root[1]!=':' || root[n-1]=='\\' ? -FS_EINVAL : 0;
+}
+static int save_archive(struct vfs_table *t,const char *root,const char *path,unsigned game)
 {
     uint16_t date,time; uint8_t tenths; fs_timestamp(&date,&time,&tenths);
-    char to[128];
+    char to[DOS_SAVE_PATH];
     for (unsigned collision=0;collision<4096;collision++) {
-        save_format(to,sizeof(to),DOS_SAVE_ROOT "\\G%u-%04u%02u%02u-%02u%02u%02u-%u.BAK",
+        save_format(to,sizeof(to),"%s\\G%u-%04u%02u%02u-%02u%02u%02u-%u.BAK",root,
             game,1980u+(date>>9),(date>>5)&15u,date&31u,time>>11,(time>>5)&63u,(time&31u)*2u,collision);
         struct fat_entry entry; int e=vfs_stat(t,to,&entry);
         if (!e) continue;
@@ -44,29 +51,30 @@ static int save_archive(struct vfs_table *t,const char *path,unsigned game)
     }
     return -FS_ENOSPC;
 }
-static void save_pattern(char out[80],unsigned game)
-{ save_format(out,80,DOS_SAVE_ROOT "\\G%uK*.COW",game); }
+static void save_pattern(char out[DOS_SAVE_PATH],const char *root,unsigned game)
+{ save_format(out,DOS_SAVE_PATH,"%s\\G%uK*.COW",root,game); }
 int dos_save_store_open(struct dos_save_file *file,struct dos_save *s,
-                        const struct dos_save_identity *id,char path[128],unsigned *archived)
+                        const struct dos_save_identity *id,const char *root,
+                        char path[DOS_SAVE_PATH],unsigned *archived)
 {
     struct vfs_table *t=file->table; file->fd=-1; file->absent=false; *archived=0;
-    if (id->base[64]) return -FS_EINVAL;
+    if (id->base[64] || save_root_valid(root)) return -FS_EINVAL;
     for (unsigned i=0;i<64;i++) if (!((id->base[i]>='0' && id->base[i]<='9') ||
                                      (id->base[i]>='a' && id->base[i]<='f'))) return -FS_EINVAL;
-    save_format(path,128,DOS_SAVE_ROOT "\\G%uK%u%s.COW",id->game,id->kernel,id->base);
-    int e=vfs_mkdir(t,DOS_SAVE_ROOT,0);
+    save_format(path,DOS_SAVE_PATH,"%s\\G%uK%u%s.COW",root,id->game,id->kernel,id->base);
+    int e=vfs_mkdir(t,root,0);
     if (e && e!=-FS_EEXIST && e!=-FS_EROFS) return e;
-    char pattern[80]; save_pattern(pattern,id->game);
+    char pattern[DOS_SAVE_PATH]; save_pattern(pattern,root,id->game);
     struct vfs_find find; struct fat_entry entry;
     /* Only the matching active identity remains a .COW. Archives are never
      * auto-deleted/reused. Restart a search after every namespace mutation. */
     for (unsigned budget=0;budget<4096;budget++) {
         e=vfs_find_first(t,pattern,0,&find,&entry);
         while (!e) {
-            if (strlen(entry.name)>=128-sizeof(DOS_SAVE_ROOT)) return -FS_ENAMETOOLONG;
-            char old[128]; save_format(old,sizeof(old),DOS_SAVE_ROOT "\\%s",entry.name);
+            if (strlen(entry.name)>=DOS_SAVE_PATH-1-strlen(root)) return -FS_ENAMETOOLONG;
+            char old[DOS_SAVE_PATH]; save_format(old,sizeof(old),"%s\\%s",root,entry.name);
             if (strncmp(old,path,sizeof(old))) {
-                e=save_archive(t,old,id->game); if (e) return e;
+                e=save_archive(t,root,old,id->game); if (e) return e;
                 (*archived)++; break;
             }
             e=vfs_find_next(t,&find,&entry);
@@ -90,7 +98,7 @@ int dos_save_store_open(struct dos_save_file *file,struct dos_save *s,
     e=dos_save_open(s,&io,id,size);
     if (e==DOS_SAVE_MISMATCH) {
         int ce=vfs_close(t,file->fd); file->fd=-1; if (ce) return ce;
-        e=save_archive(t,path,id->game); if (e) return e; (*archived)++;
+        e=save_archive(t,root,path,id->game); if (e) return e; (*archived)++;
         file->writable=true;
         file->fd=vfs_open(t,path,VFS_READ|VFS_WRITE|VFS_CREATE|VFS_EXCLUSIVE,VFS_DENY_ALL,0);
         if (file->fd<0) return file->fd;
@@ -100,9 +108,10 @@ int dos_save_store_open(struct dos_save_file *file,struct dos_save *s,
     if (e) { dos_save_release(s); (void)vfs_close(t,file->fd); file->fd=-1; }
     return e;
 }
-int dos_save_store_query(struct vfs_table *t,unsigned game,uint32_t *bytes)
+int dos_save_store_query(struct vfs_table *t,const char *root,unsigned game,uint32_t *bytes)
 {
-    char pattern[80]; save_pattern(pattern,game); *bytes=0;
+    *bytes=0; if (save_root_valid(root)) return -FS_EINVAL;
+    char pattern[DOS_SAVE_PATH]; save_pattern(pattern,root,game);
     struct vfs_find find; struct fat_entry entry;
     int e=vfs_find_first(t,pattern,0,&find,&entry);
     while (!e) {
@@ -111,16 +120,17 @@ int dos_save_store_query(struct vfs_table *t,unsigned game,uint32_t *bytes)
     }
     return e==-FS_ENOENT ? 0 : e;
 }
-int dos_save_store_reset(struct vfs_table *t,unsigned game)
+int dos_save_store_reset(struct vfs_table *t,const char *root,unsigned game)
 {
-    char pattern[80]; save_pattern(pattern,game);
+    if (save_root_valid(root)) return -FS_EINVAL;
+    char pattern[DOS_SAVE_PATH]; save_pattern(pattern,root,game);
     for (unsigned n=0;n<4096;n++) {
         struct vfs_find find; struct fat_entry entry;
         int e=vfs_find_first(t,pattern,0,&find,&entry);
         if (e==-FS_ENOENT) return 0;
         if (e) return e;
-        if (strlen(entry.name)>=128-sizeof(DOS_SAVE_ROOT)) return -FS_ENAMETOOLONG;
-        char path[128]; save_format(path,sizeof(path),DOS_SAVE_ROOT "\\%s",entry.name);
+        if (strlen(entry.name)>=DOS_SAVE_PATH-1-strlen(root)) return -FS_ENAMETOOLONG;
+        char path[DOS_SAVE_PATH]; save_format(path,sizeof(path),"%s\\%s",root,entry.name);
         e=vfs_delete(t,path); if (e) return e;
     }
     return -FS_ELOOP;
@@ -130,7 +140,7 @@ struct save_export {
     struct blkpart partition[2];
     struct partition_table parts;
     struct vfs_table *target;
-    char destination[32],relative[FS_PATH_BYTES],path[FS_PATH_BYTES];
+    char destination[DOS_SAVE_PATH],relative[FS_PATH_BYTES],path[FS_PATH_BYTES];
     uint8_t bytes[4096],original[4096];
     uint32_t files,budget;
 };
@@ -209,12 +219,14 @@ static int save_export_walk(struct save_export *x)
     return 0;
 }
 int dos_save_store_export(struct vfs_table *t,struct blkdev *merged,struct blkdev *base,
-                          struct block_cache *cache,unsigned game,char path[32],uint32_t *files)
+                          struct block_cache *cache,unsigned game,const char *destination,
+                          char path[DOS_SAVE_PATH],uint32_t *files)
 {
     *files=0; path[0]=0;
+    if (save_root_valid(destination)) return -FS_EINVAL;
     struct save_export *x=fs_contig_alloc(sizeof(*x)); if (!x) return -FS_ENOMEM;
     x->target=t;
-    int e=vfs_mkdir(t,"C:\\Documents\\Saves",0);
+    int e=vfs_mkdir(t,destination,0);
     if (e==-FS_EEXIST) e=0;
     bool view_open=false,base_open=false;
     if (!e) { e=save_mount(x,&x->view,merged,cache,0); view_open=!e; }
@@ -222,7 +234,7 @@ int dos_save_store_export(struct vfs_table *t,struct blkdev *merged,struct blkde
     if (!e) {
         e=-FS_ENOSPC;
         for (unsigned n=0;n<4096;n++) {
-            save_format(x->destination,sizeof(x->destination),"C:\\Documents\\Saves\\G%u-%u",game,n);
+            save_format(x->destination,sizeof(x->destination),"%s\\G%u-%u",destination,game,n);
             e=vfs_mkdir(t,x->destination,0);
             if (e!=-FS_EEXIST) break;
         }

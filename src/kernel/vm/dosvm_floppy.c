@@ -156,6 +156,9 @@ int dosvm_floppy_assign(struct dosvm_key key, unsigned guest, unsigned physical)
 {
     struct dosvm *v=dosvm_lookup(key);
     if (!v || guest>=2 || v->started || v->info.state!=DOSVM_CREATING) return -FS_EINVAL;
+    /* sec-k05: BIOS INT 13h of a user VM (administrators included) reaches
+     * only its private providers; a physical FDC lease is internal-only. */
+    if (!v->identity.system) return -FS_EACCES;
     if (v->floppy.binding[guest].assigned) return -FS_EBUSY;
     struct fdc *c=floppy_controller ? floppy_controller() : 0;
     if (!c || !fdc_acquire || !fdc_revalidate || !fdc_release || physical>=2) return -FS_ENOENT;

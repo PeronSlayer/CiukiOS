@@ -4,7 +4,7 @@
 static void test_speed_window(void)
 {
     memset(fake_proc, 0, sizeof(fake_proc));
-    fake_proc[0].pid = 10; fake_proc[0].state = PROC_LIVE; fake_proc[0].dosvm_capability = true;
+    fake_proc[0].pid = 10; fake_proc[0].state = PROC_LIVE; fake_identity(0, true, false);
     fake_current = &fake_proc[0];
     fake_surface[0] = (struct surface){.info = {sizeof(struct ciuki_surface_info), 640, 480, 2560,
         CIUKI_SURFACE_XRGB8888, 640 * 480 * 4}, .pixels = frame_buffer, .references = 1};

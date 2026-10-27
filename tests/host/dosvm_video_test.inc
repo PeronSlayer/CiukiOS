@@ -25,6 +25,34 @@ int dosvm_model_write(const struct uaddr *, uint32_t, const void *, uint32_t);
 struct proc_thread *proc_thread_for(const struct task *t) { return t == &caller ? &window_thread : 0; }
 bool proc_signal_caught(struct proc_thread *t) { CHECK(t == &window_thread); return caught_signal; }
 struct process *proc_current(void) { return fake_current; }
+/* sec-k05: the k01 credential boundary the DOS layer consumes (accessors
+ * only). Session 7 is the interim bootstrap desktop (administrator, no
+ * committed profile); session 8 is a Standard user with a profile. */
+struct security_subject { struct ciuki_credential credential; bool live; uint32_t refs; };
+static struct security_subject fake_subject[3];
+const struct ciuki_credential *security_subject_credential(const struct security_subject *s) { return s ? &s->credential : 0; }
+bool security_subject_live(const struct security_subject *s) { return s && s->live; }
+int security_subject_get(struct security_subject *s) { if (!s) return -EACCES; s->refs++; return 0; }
+void security_subject_put(struct security_subject *s) { CHECK(s && s->refs); s->refs--; }
+bool security_subject_matches(const struct security_subject *s,const struct process *p)
+{ return s && p && p->subject && !memcmp(&s->credential,&p->subject->credential,sizeof(s->credential)); }
+int security_session_profile(uint32_t id,struct ciuki_security_profile *out)
+{
+    if (id==7) { *out=(struct ciuki_security_profile){.version=1,.size=112,.uid=1000}; return 0; }
+    if (id!=8) return -ESRCH;
+    *out=(struct ciuki_security_profile){.version=1,.size=112,.uid=1001,.path_bytes=28};
+    memcpy(out->path,"/Windows/Profiles/u000003e9",28); return 0;
+}
+/* Interactive administrator (bootstrap) by default; standard selects 1001. */
+static void fake_identity(unsigned i,bool attached,bool standard)
+{
+    CHECK(!fake_subject[i].refs);
+    fake_subject[i]=(struct security_subject){.credential={.version=1,.size=64,.uid=standard ? 1001 : 1000,.primary_gid=545,
+        .group_count=standard ? 1 : 2,.groups={standard ? 545 : 544,545},.session_id=standard ? 8 : 7,
+        .flags=CIUKI_CRED_INTERACTIVE},.live=true};
+    if (standard) fake_subject[i].credential.groups[1]=0;
+    fake_proc[i].subject=attached ? &fake_subject[i] : 0;
+}
 struct process *proc_find(uint32_t pid)
 {
     for (unsigned i = 0; i < 3; i++) if (pid && fake_proc[i].pid == pid) return &fake_proc[i];
@@ -542,7 +570,7 @@ static void window_fixtures(void)
     static uint8_t pixels[3][DOSVM_VIDEO_WIDTH * DOSVM_VIDEO_HEIGHT * 4];
     memset(fake_proc, 0, sizeof(fake_proc));
     for (unsigned i = 0; i < 3; i++) { fake_proc[i].pid = 10 + i; fake_proc[i].state = PROC_LIVE; }
-    fake_proc[0].dosvm_capability = fake_proc[1].dosvm_capability = true;
+    fake_identity(0,true,false); fake_identity(1,true,false); fake_identity(2,false,false);
     for (unsigned i = 0; i < 3; i++) {
         uint32_t w = i == 1 ? 320 : 640, h = i == 1 ? 200 : 480;
         fake_surface[i] = (struct surface){{sizeof(struct ciuki_surface_info), w, h, w * 4, CIUKI_SURFACE_XRGB8888,
@@ -559,26 +587,38 @@ static void test_client_boundary(void)
 {
     window_fixtures();
     struct ciuki_dosvm_command c, w;
-    /* F3-64 game-data management uses strict records and separate authority. */
+    /* F3-64 game-data management uses strict records. sec-k05: title data
+     * is own-session for every user class (no applet grant); a caller
+     * without an interactive session (SYSTEM, revoked) is refused first. */
     fake_current=&fake_proc[2];
     for (unsigned op=CIUKI_DOSVM_SAVE_QUERY;op<=CIUKI_DOSVM_SAVE_EXPORT;op++) {
         struct ciuki_dosvm_command data=command_for(0,0); data.launch.game=1;
-        fake_proc[2].programs_capability=false;
-        if (op!=CIUKI_DOSVM_SAVE_QUERY) CHECK(dosvm_call(op,&data,sizeof(data))==-EPERM);
-        fake_proc[2].programs_capability=true;
+        fake_proc[2].subject=0; CHECK(dosvm_call(op,&data,sizeof(data))==-EPERM);
+        fake_proc[2].subject=&fake_subject[2]; fake_subject[2].live=false;
+        CHECK(dosvm_call(op,&data,sizeof(data))==-EPERM); fake_subject[2].live=true;
         data.launch.reserved[1]=1; CHECK(dosvm_call(op,&data,sizeof(data))==-EINVAL);
         data.launch.reserved[1]=0; data.name[0]='x'; CHECK(dosvm_call(op,&data,sizeof(data))==-EINVAL);
         data.name[0]=0; user_fault=true; CHECK(dosvm_call(op,&data,sizeof(data))==-EFAULT); user_fault=false;
         CHECK(!dosvm_call(op,&data,sizeof(data)) && data.changed==1024 && data.reason==DOS_SAVE_QUOTA);
+        CHECK(!strcmp(game_data_root,"C:\\SYSTEM\\DOS\\SAVES") && game_data_uid==1000 && !fake_subject[2].refs);
+        /* A Standard user reaches only the store in its own profile. */
+        fake_proc[2].subject=0; fake_identity(2,true,true);
+        data=command_for(0,0); data.launch.game=1;
+        CHECK(!dosvm_call(op,&data,sizeof(data)) && game_data_uid==1001 && !fake_subject[2].refs &&
+              !strcmp(game_data_root,"C:\\Windows\\Profiles\\u000003e9\\Settings\\DOS"));
+        fake_identity(2,false,false);
     }
-    fake_proc[2].programs_capability=false;
+    fake_proc[2].subject=0;
     /* Query/remove use the actual syscall validation and fixture storage. */
     struct ciuki_dosvm_command q=command_for(0,0);q.launch.game=2;
     unsigned before=program_calls;
     fake_current=&fake_proc[2];
     CHECK(dosvm_call(CIUKI_DOSVM_GAME_REMOVE,&q,sizeof(q))==-EPERM && program_calls==before);
     CHECK(!dosvm_call(CIUKI_DOSVM_GAME_QUERY,&q,sizeof(q)) && q.state==1 && q.changed==8192);
-    fake_proc[2].programs_capability=true;
+    /* Machine-wide removal: a Standard user is refused before any work. */
+    fake_identity(2,true,true);
+    CHECK(dosvm_call(CIUKI_DOSVM_GAME_REMOVE,&q,sizeof(q))==-EPERM && program_calls==before+1);
+    fake_identity(2,true,false);
     for(unsigned op=CIUKI_DOSVM_GAME_QUERY;op<=CIUKI_DOSVM_GAME_REMOVE;op++){
         q=command_for(0,0);q.launch.game=2;q.version=2;
         CHECK(dosvm_call(op,&q,sizeof(q))==-EOPNOTSUPP);
@@ -591,7 +631,7 @@ static void test_client_boundary(void)
         user_fault=true;CHECK(dosvm_call(op,&q,sizeof(q))==-EFAULT);user_fault=false;
         program_result=1;CHECK(!dosvm_call(op,&q,sizeof(q)) && q.state==2);program_result=0;
     }
-    fake_proc[2].programs_capability=false;
+    fake_proc[2].subject=0;
     CHECK(!dosvm_game_remove_reserve(2));
     struct dosvm *reserved_vm=0;struct dosvm_config reserved_config={.game=2};
     CHECK(dosvm_create(&reserved_config,&reserved_vm)==-EBUSY && !reserved_vm);
@@ -943,7 +983,7 @@ static uint16_t typing_read(struct dosvm *v, struct v86_frame *f)
 static void test_client_typing(void)
 {
     memset(fake_proc, 0, sizeof(fake_proc));
-    fake_proc[0].pid = 10; fake_proc[0].state = PROC_LIVE; fake_proc[0].dosvm_capability = true;
+    fake_proc[0].pid = 10; fake_proc[0].state = PROC_LIVE; fake_identity(0, true, false);
     fake_current = &fake_proc[0];
     struct ciuki_dosvm_command c;
     CHECK(!create_window(0, "Typing", &typing_window));

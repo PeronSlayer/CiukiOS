@@ -162,7 +162,7 @@ int main(int argc, char **argv)
     g_ticks = 1000;
     /* The desktop-launched /Programs/dosbox process and its guest surface. */
     memset(fake_proc, 0, sizeof(fake_proc));
-    fake_proc[0].pid = 10; fake_proc[0].state = PROC_LIVE; fake_proc[0].dosvm_capability = true;
+    fake_proc[0].pid = 10; fake_proc[0].state = PROC_LIVE; fake_identity(0, true, false);
     fake_current = &fake_proc[0];
     fake_surface[0] = (struct surface){{sizeof(struct ciuki_surface_info), CIUKI_DOSVM_WIDTH, CIUKI_DOSVM_HEIGHT,
         CIUKI_DOSVM_WIDTH * 4, CIUKI_SURFACE_XRGB8888, CIUKI_DOSVM_WIDTH * CIUKI_DOSVM_HEIGHT * 4},
