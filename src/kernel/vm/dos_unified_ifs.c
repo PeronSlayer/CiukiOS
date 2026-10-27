@@ -411,7 +411,7 @@ static void dos_error(struct dfv2_call *k,int e,bool writing,unsigned *cause) {
     k->ax=(uint16_t)c; k->flags|=1;
 }
 static bool critical_error(int e,unsigned sub) {
-    return e==-VFS_ECRITICAL_SHARE || e==-FS_EIO || e==-FS_EUCLEAN || e==-FS_EQUARANTINED || e==-FS_EAGAIN ||
+    return e==-VFS_ECRITICAL_SHARE || e==-FS_EIO || e==-FS_EUCLEAN || e==-FS_EQUARANTINED || e==-FS_EAGAIN || e==-FS_ENXIO ||
            e==-FS_EROFS || (e==-VFS_ELOCK && (sub==0x08 || sub==0x09));
 }
 static bool same_request(const struct dfv2_call *a,const struct dfv2_call *b) {

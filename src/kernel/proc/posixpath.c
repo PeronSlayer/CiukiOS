@@ -451,7 +451,10 @@ static int child_lookup_namespace(struct px_node *p, const char *name, struct px
     }
     if (p == s->mnt) {
         unsigned d = (unsigned)(path_upper((uint8_t)name[0]) - 'A');
-        if (name[1] || d == 2 || d >= 26 || !vfs_drive_present(s->vfs,d)) return -ENOENT;
+        if (name[1] || d == 2 || d >= 26) return -ENOENT;
+        /* fx-emptydrive: the letter of an empty CD-ROM or floppy drive
+         * exists but is not ready (Win32 ERROR_NOT_READY). */
+        if (!vfs_drive_present(s->vfs,d)) return vfs_drive_slot(s->vfs,d) ? -ENXIO : -ENOENT;
         *out = mount_root(s, d); return *out ? 0 : -ENOMEM;
     }
     if (p->ro) {

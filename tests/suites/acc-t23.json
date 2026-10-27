@@ -147,7 +147,7 @@
      "check": "cd",
      "timeout": 90,
      "settle": 3,
-     "wait": "^\\[storage\\] optical slot=\\d+ drive=- mode=ro generation=\\d+ result=-?\\d+ reason=no_medium$"
+     "wait": "^\\[storage\\] optical slot=\\d+ drive=<<cd_std>> mode=ro generation=\\d+ result=-?\\d+ reason=no_medium$"
     },
     {
      "name": "cd-vs0-insert",
@@ -202,7 +202,7 @@
      "check": "cd",
      "timeout": 90,
      "settle": 3,
-     "wait": "^\\[storage\\] optical slot=\\d+ drive=- mode=ro generation=\\d+ result=-?\\d+ reason=no_medium$"
+     "wait": "^\\[storage\\] optical slot=\\d+ drive=<<cd_vs0>> mode=ro generation=\\d+ result=-?\\d+ reason=no_medium$"
     },
     {
      "name": "cd-joliet-insert",
@@ -257,7 +257,7 @@
      "check": "cd",
      "timeout": 90,
      "settle": 3,
-     "wait": "^\\[storage\\] optical slot=\\d+ drive=- mode=ro generation=\\d+ result=-?\\d+ reason=no_medium$"
+     "wait": "^\\[storage\\] optical slot=\\d+ drive=<<cd_joliet>> mode=ro generation=\\d+ result=-?\\d+ reason=no_medium$"
     }
    ],
    "assertions": [
@@ -284,9 +284,7 @@
      "to": "b1-quiet",
      "min": 1,
      "pattern": "^\\[storage\\] optical slot=\\d+ drive=D mode=ro generation=\\d+ result=-?\\d+ reason=no_medium$",
-     "known_failure": {
-      "directive": "none yet (fx-accept item 4): Windows 98 shows an empty CD-ROM drive as D: in My Computer; the kernel publishes a drive letter only for a mounted ISO (docs/design/optical-drive-binding.md)"
-     }
+     "note": "fx-emptydrive: the empty CD-ROM drive owns D: from boot (Windows 98 reserves one letter per removable-media drive at startup) and keeps it after every eject"
     },
     {
      "name": "cd-std-is-d",

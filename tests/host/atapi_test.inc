@@ -289,8 +289,21 @@ static void test_optical_lifecycle(void)
         f.responses=true; f.image=image; f.image_blocks=(uint32_t)(size/2048); f.no_medium=true;
         CHECK(!storage_setup(&optical_store,32768));
         CHECK(!optical_bind(&optical_store,slot,d));
+        captured_logs[0]=0; capture_logs=true;
         optical_service(&optical_store,0);
         CHECK(d->media==ATAPI_NO_MEDIUM && !optical_store.optical[slot].mounted && !vfs_drive_present(&optical_store.vfs,3));
+        /* fx-emptydrive: the empty drive owns D: from its first pass, after
+         * the hard-disk letters; paths on it are not ready, not missing. */
+        CHECK(optical_store.optical_bindings[slot].drive==3 && vfs_drive_slot(&optical_store.vfs,3)==VFS_SLOT_OPTICAL);
+        CHECK(vfs_letter_taken(&optical_store.vfs,3) && optical_store.next_drive==4);
+        CHECK(strstr(captured_logs,"stage=letter drive=D result=0") && strstr(captured_logs,"drive=D mode=ro") && strstr(captured_logs,"reason=no_medium"));
+        capture_logs=false;
+        {
+            struct vfs_table probe; CHECK(!vfs_table_init(&optical_store.vfs,&probe,2));
+            CHECK(vfs_open(&probe,"D:/README.TXT",VFS_READ,VFS_DENY_NONE,0)==-FS_ENXIO);
+            CHECK(vfs_open(&probe,"E:/README.TXT",VFS_READ,VFS_DENY_NONE,0)==-FS_ENOENT);
+            vfs_table_destroy(&probe);
+        }
         unsigned issued=f.packets; optical_service(&optical_store,999); CHECK(f.packets==issued);
         f.no_medium=false; f.attentions=1;
         optical_service(&optical_store,1000);
@@ -307,6 +320,7 @@ static void test_optical_lifecycle(void)
         uint32_t generation=d->block.media_generation;
         f.no_medium=true; optical_service(&optical_store,2000);
         CHECK(!vfs_drive_present(&optical_store.vfs,3) && !optical_store.optical[slot].mounted && d->block.media_generation>generation);
+        CHECK(optical_store.optical_bindings[slot].drive==3 && vfs_drive_slot(&optical_store.vfs,3)==VFS_SLOT_OPTICAL); /* kept */
         CHECK(vfs_read(&optical_handles,h,bytes,1,&count)==-FS_EIO && !count);
         f.no_medium=false; optical_service(&optical_store,3000);
         CHECK(vfs_drive_present(&optical_store.vfs,3));
@@ -315,6 +329,7 @@ static void test_optical_lifecycle(void)
         f.eject_check=check_eject_unmounted;
         CHECK(!optical_eject(&optical_store,3,d->block.media_generation) && !vfs_drive_present(&optical_store.vfs,3));
         f.eject_check=0;
+        CHECK(vfs_drive_slot(&optical_store.vfs,3)==VFS_SLOT_OPTICAL); /* the letter outlives the eject */
         struct fs_ro_volume occupied={.mounted=true,.cache=&optical_store.cache};
         optical_store.vfs.ro_volumes[3]=&occupied;
         f.no_medium=false; optical_service(&optical_store,4000);
@@ -329,8 +344,24 @@ static void test_optical_lifecycle(void)
         CHECK(!d->media_writes && !d->block.write && !d->block.flush && !d->dma_enabled && !c->stopped);
         vfs_table_destroy(&optical_handles); storage_destroy(&optical_store);
     }
+    /* fx-emptydrive: hard-disk volumes C:, D: and E: (next_drive 5): the
+     * empty CD-ROM drive takes F:, and a disc inserted later mounts there. */
+    {
+        struct packet_fake f; packet_fresh(&f,12);
+        struct ata_device *d=&f.disk.channel.devices[1];
+        f.responses=true; f.image=image; f.image_blocks=(uint32_t)(size/2048); f.no_medium=true;
+        CHECK(!storage_setup(&optical_store,32768));
+        optical_store.next_drive=5;
+        CHECK(!optical_bind(&optical_store,1,d));
+        optical_service(&optical_store,0);
+        CHECK(optical_store.optical_bindings[1].drive==5 && optical_store.next_drive==6 && vfs_drive_slot(&optical_store.vfs,5)==VFS_SLOT_OPTICAL);
+        f.no_medium=false; f.attentions=1; optical_service(&optical_store,1000);
+        CHECK(optical_store.vfs.ro_volumes[5]==&optical_store.optical[1] && !vfs_drive_present(&optical_store.vfs,3));
+        storage_destroy(&optical_store);
+    }
     fclose(image);
     puts("PASS optical lifecycle: secondary master/slave, empty boot, 1s insertion polling, reset attention, Joliet reads, EROFS, busy/stale eject, removal/stale handles, reinsertion, zero writes/PIO");
+    puts("PASS fx-emptydrive optical letters: empty drive owns D: (after C:) or F: (after three hard-disk letters) from its first pass, record names it, D: paths not ready (FS_ENXIO), letter kept after removal and eject, disc mounts at the owned letter");
 }
 
 /* f5-12B2: CD-audio packet paths (optical_cd.c) on the same packet fake:

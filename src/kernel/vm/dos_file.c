@@ -188,7 +188,10 @@ void dos_file_error_from_fs(struct dos_file_error *e,int error,bool write) {
     case FS_EROFS: *e=(struct dos_file_error){19,11,7,2}; break;
     case FS_EIO: case FS_EUCLEAN: case FS_EQUARANTINED: case VFS_ETIMEOUT: case VFS_ECANCELLED:
         *e=(struct dos_file_error){write ? 29 : 30,5,1,2}; break;
-    case FS_EAGAIN: *e=(struct dos_file_error){21,11,7,2}; break;
+    /* fx-emptydrive: an empty removable-media drive is "drive not ready"
+     * (15h, class 0Bh media, action 07h retry after user intervention,
+     * locus 02h block device), never "invalid drive" (0Fh). */
+    case FS_EAGAIN: case FS_ENXIO: *e=(struct dos_file_error){21,11,7,2}; break;
     case FS_EBUSY: case VFS_ESHARE: case VFS_ECRITICAL_SHARE: *e=(struct dos_file_error){32,10,2,2}; break;
     case VFS_ELOCK: *e=(struct dos_file_error){33,10,2,2}; break;
     case VFS_ELOCKFULL: *e=(struct dos_file_error){36,1,4,2}; break;
@@ -863,7 +866,7 @@ static enum dos_file_result execute_request(struct dos_file *d,struct dos_file_f
             output.ax=(uint16_t)((f->ax&0xff00)|255); output.flags=f->flags;
         }
         if (e==-VFS_ESHARE || e==-VFS_ECRITICAL_SHARE) output.ax=5;
-        bool critical=e==-VFS_ECRITICAL_SHARE || e==-FS_EIO || e==-FS_EAGAIN || e==-FS_EROFS ||
+        bool critical=e==-VFS_ECRITICAL_SHARE || e==-FS_EIO || e==-FS_EAGAIN || e==-FS_ENXIO || e==-FS_EROFS ||
             (e==-VFS_ELOCK && ((f->ax>>8)==0x3f || (f->ax>>8)==0x40));
         bool no_critical=(f->ax==0x6c00 && (f->bx&0x2000));
         unsigned ah=f->ax>>8;

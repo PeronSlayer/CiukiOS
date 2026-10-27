@@ -79,6 +79,8 @@ FILES_FRAMES = {
     'files-rename-error.xrgb': '6cdd24b8827fa7ca852ed8262d17a52a6c0241ebfa84673518d34e3d9bc6311e',
     'files-replace-prompt.xrgb': 'cec02d03e9d335d0a30d388a723b1dd96bca646d4a1c9cfb425c5653eea76819',
     'files-computer.xrgb': 'b1ae97064dec9bc510c53263f622d91e22239a4fc6c0f031744611ddd8c7a916',
+    'files-empty-cd-computer.xrgb': '5aa3fa9899537cbd5007062e2c71aaa00c562bba19c228b2f5c0f95453db52a1',
+    'files-empty-cd-insert.xrgb': '3006ffdbe7a6a19db345c90de848bea4f0d545f595bb59cbc689bffa72fe99dc',
     'files-c-drive.xrgb': '4d1cea3e20a476875979d6a6f5bd3bb1e1b8cbac70dc12ab57cb67e357fff174',
     'files-root-details.xrgb': 'a805bd6fd7b4574c2b87c4cb46cd2bb4f4e59616f81e043127b3cd68d413be25',
     'files-sort-size-desc.xrgb': 'f1099a836f08f9d8ac97b566077a1a4cce53f46ae1e07a4c9ba3e83895c6c09e',
@@ -297,7 +299,7 @@ class DeskuiTests(unittest.TestCase):
     def test_files_ui_script_and_frames(self):
         stdout, digests = self.files_ui()
         self.assertIn("PASS Files UI", stdout)
-        self.assertEqual(len(digests), 29)
+        self.assertEqual(len(digests), 31)
         self.check_frames(digests, FILES_FRAMES, "FILES")
 
     def test_files_qemu_script_targets(self):

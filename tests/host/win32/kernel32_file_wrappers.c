@@ -194,10 +194,53 @@ int32_t w32_ciuki_call(void *record, uint32_t bytes) {
   case W32_F_ATTR:
     destination.attributes = a->flags;
     break;
+  case W32_F_DISK: {
+    /* fx-emptydrive: the kernel's answers for C: (fixed), E: (empty CD-ROM:
+     * ERROR_NOT_READY with the record copied) and F: (no drive). */
+    char letter = a->path ? *(const char *)(uintptr_t)a->path : 'C';
+    struct ciuki_w32_disk_info info = {.drives = 0x1du, .sector_bytes = 512};
+    CHECK(a->bytes == sizeof(info));
+    if (letter == 'F') { a->error = 15; break; }
+    if (letter == 'E') { info.type = 5; a->error = 21; }
+    else {
+      info.type = 3; info.cluster_bytes = 4096; info.max_component = 255; info.serial = 0x1234;
+      info.total_low = 4096u * 100; info.free_low = 4096u * 40;
+      memcpy(info.label, "CIUKIOS", 8); memcpy(info.filesystem, "FAT32", 6);
+    }
+    memcpy((void *)(uintptr_t)a->buffer, &info, sizeof(info));
+    break;
+  }
   default:
     CHECK(0);
   }
   return 0;
+}
+extern DWORD W32API GetLogicalDrives(void);
+extern DWORD W32API GetDriveTypeA(const char *);
+extern DWORD W32API GetLogicalDriveStringsA(DWORD, char *);
+extern BOOL W32API GetDiskFreeSpaceA(const char *, DWORD *, DWORD *, DWORD *, DWORD *);
+extern BOOL W32API GetDiskFreeSpaceExA(const char *, uint64_t *, uint64_t *, uint64_t *);
+/* fx-emptydrive: Windows 98 facade over an empty CD-ROM drive E:. */
+static void empty_drive_facade(void) {
+  SetLastError(1234);
+  CHECK(GetLogicalDrives() == 0x1du && GetLastError() == 1234);
+  CHECK(GetDriveTypeA("E:\\") == 5 && GetLastError() == 1234);        /* DRIVE_CDROM, no error */
+  CHECK(GetDriveTypeA("C:\\") == 3 && GetDriveTypeA("F:\\") == 1);   /* DRIVE_FIXED, DRIVE_NO_ROOT_DIR */
+  char strings[64];
+  CHECK(GetLogicalDriveStringsA(sizeof(strings), strings) == 16 && !memcmp(strings, "A:\\\0C:\\\0D:\\\0E:\\\0\0", 17));
+  char label[32] = "x", fs[16] = "x"; DWORD serial = 7, component = 7, flags = 7;
+  CHECK(!GetVolumeInformationA("E:\\", label, sizeof(label), &serial, &component, &flags, fs, sizeof(fs)) &&
+        GetLastError() == 21 && serial == 7 && !strcmp(label, "x"));
+  CHECK(GetVolumeInformationA("C:\\", label, sizeof(label), &serial, &component, &flags, fs, sizeof(fs)) &&
+        !strcmp(label, "CIUKIOS") && !strcmp(fs, "FAT32") && serial == 0x1234);
+  DWORD spc, bps, free_clusters, total_clusters; uint64_t available, total, free_bytes;
+  SetLastError(0);
+  CHECK(!GetDiskFreeSpaceA("E:\\", &spc, &bps, &free_clusters, &total_clusters) && GetLastError() == 21);
+  SetLastError(0);
+  CHECK(!GetDiskFreeSpaceExA("E:\\", &available, &total, &free_bytes) && GetLastError() == 21);
+  CHECK(GetDiskFreeSpaceA("C:\\", &spc, &bps, &free_clusters, &total_clusters) && spc == 8 && total_clusters == 100);
+  SetLastError(0);
+  CHECK(!GetVolumeInformationA("F:\\", label, sizeof(label), 0, 0, 0, 0, 0) && GetLastError() == 15);
 }
 static void upper_files(void) {
   WIN32_FILE_ATTRIBUTE_DATA fa;
@@ -322,6 +365,7 @@ static void *run(void *unused) {
   injected_error=0;
   CHECK(UnlockFileEx((HANDLE)4,0,8,1,&lock)&&!lock.internal);
   upper_files();
+  empty_drive_facade();
   return 0;
 }
 int main(void) {
@@ -338,5 +382,6 @@ int main(void) {
   puts("PASS file wrappers offsets counts completion errors copy metadata "
        "process ambiguity");
   puts("PASS file wrappers f5-20A attributes handle information size pointer device final path");
+  puts("PASS file wrappers fx-emptydrive GetLogicalDrives GetDriveType DRIVE_CDROM ERROR_NOT_READY volume space");
   return 0;
 }

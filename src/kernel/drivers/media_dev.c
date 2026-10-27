@@ -334,6 +334,10 @@ int media_devctl(struct process *p,int32_t fd,uint32_t op,uint32_t address,uint3
                 }
             }
             for (unsigned d=3;d<26;d++) {
+                /* fx-emptydrive: a CD-ROM drive is listed at its letter with
+                 * or without a disc (Windows 98 My Computer); the bit and
+                 * the generation only while a disc is mounted. */
+                if (vfs_drive_slot(&s->vfs,d)==VFS_SLOT_OPTICAL && !state.type[d]) state.type[d]=CIUKI_MEDIA_OPTICAL;
                 struct fs_ro_volume *ro=s->vfs.ro_volumes[d];
                 if (!ro || ro->dev->quarantined || ro->mount_generation!=ro->dev->media_generation) continue;
                 for (unsigned slot=0;slot<STORAGE_DISKS;slot++) if (ro==&s->optical[slot]) {

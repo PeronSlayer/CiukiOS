@@ -470,6 +470,9 @@ CHECK(check_optical_drive)
                      d->dma_enabled, d->block.quarantined);
     selftest_token(r->figures, sizeof(r->figures), "model", d->model);
     selftest_token(r->figures, sizeof(r->figures), "firmware", d->firmware);
+    /* fx-emptydrive: the letter the drive owns with or without a disc. */
+    unsigned letter = s->optical_bindings[slot].drive;
+    selftest_figures(r, "letter=%c", letter >= 3 && letter < 26 ? 'A' + letter : '-');
     selftest_token(r->figures, sizeof(r->figures), "media", media_text(d->media));
     selftest_token(r->figures, sizeof(r->figures), "ready_stage", d->ready_stage ? d->ready_stage : "-");
     selftest_figures(r, "ready_error=%d sense=%x/%x/%x packets=%llu",
