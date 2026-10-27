@@ -39,9 +39,11 @@ static char log_repair_record[256];
 static char writeback_record[256];
 static char writeback_progress_record[512];
 static char shutdown_record[256];
+static char busy_record[256];
 void klog(const char *fmt, ...) {
     char line[512]; va_list ap; va_start(ap,fmt); vsnprintf(line,sizeof(line),fmt,ap); va_end(ap);
     if (!strncmp(line,"[storage] shutdown ",19)) memcpy(shutdown_record,line,sizeof(shutdown_record));
+    if (!strncmp(line,"[storage] shutdown busy ",24)) memcpy(busy_record,line,sizeof(busy_record));
     if (!strncmp(line,"[storage] readonly ",19)) { readonly_reports++; memcpy(readonly_record,line,sizeof(readonly_record)); }
     if (!strncmp(line,"[storage] log_repair ",21)) memcpy(log_repair_record,line,sizeof(log_repair_record));
     if (strstr(line,"failure stage=writeback")) memcpy(writeback_record,line,sizeof(writeback_record));
@@ -679,6 +681,56 @@ static void shutdown_busy_tests(void) {
     reset();
     puts("PASS fx-5 shutdown: bounded drain-owner and open-file refusals keep storage serving, read-only removable untouched, retry durable and clean, repeat harmless");
 }
+/* sec-wire (QEMU run of image ae977fbe: nine "[storage] shutdown busy
+ * drive=C holder=open" refusals until the DOS base image check finished):
+ * a kernel background reader holds a C: handle through its own VFS table.
+ * storage_shutdown stops it through the production hook before the
+ * preflight (vm/dosvm_image.c dosvm_image_shutdown) and resumes it when the
+ * shutdown is refused. Modes: 0 no stop (the pre-fix kernel), 1 the reader
+ * does not stop within the bound, 2 it stops and releases its table. */
+static struct vfs_table bg_table;
+static int bg_reader=-1;
+static unsigned bg_mode, bg_stops, bg_resumes;
+extern uint32_t storage_shutdown_wait_ms;
+int dosvm_image_shutdown(uint32_t wait_ms) {
+    bg_stops++; CHECK(wait_ms==storage_shutdown_wait_ms);
+    if (bg_reader<0 || bg_mode==0) return 0;
+    if (bg_mode==1) return -FS_EBUSY;
+    OK(vfs_close(&bg_table,bg_reader)); bg_reader=-1; vfs_table_destroy(&bg_table);
+    return 0;
+}
+void dosvm_image_shutdown_resume(void) { bg_resumes++; }
+static void shutdown_background_reader_tests(void) {
+    struct storage *s=start(); OK(storage_enable_write(s,2));
+    int h=vfs_open(&table,"C:/SYSTEM/BGIMAGE.BIN",VFS_READ|VFS_WRITE|VFS_CREATE,VFS_DENY_NONE,0); CHECK(h>=0);
+    size_t n; OK(vfs_write(&table,h,"unified\n",8,&n)); CHECK(n==8); OK(vfs_close(&table,h));
+    vfs_table_destroy(&table);
+    OK(vfs_table_init(&s->vfs,&bg_table,2));
+    bg_reader=vfs_open(&bg_table,"C:/SYSTEM/BGIMAGE.BIN",VFS_READ,VFS_DENY_WRITE,0); CHECK(bg_reader>=0);
+    unsigned stops=bg_stops, resumes=bg_resumes;
+    /* 0: the QEMU record, a refusal before any change; the reader is resumed. */
+    bg_mode=0;
+    CHECK(storage_sync()==-FS_EBUSY && !s->stopped && strstr(busy_record,"drive=C holder=open"));
+    CHECK(strstr(shutdown_record,"refused stage=volumes result=-16") && bg_stops==stops+1 && bg_resumes==resumes+1);
+    char text[16]; OK(vfs_read(&bg_table,bg_reader,text,sizeof(text),&n)); CHECK(n==8); /* still reading */
+    /* 1: the reader does not stop in time: refused, nothing changed, resumed. */
+    bg_mode=1;
+    CHECK(storage_sync()==-FS_EBUSY && !s->stopped && strstr(busy_record,"holder=dos-image-check"));
+    CHECK(bg_stops==stops+2 && bg_resumes==resumes+2 && bg_reader>=0 && s->volumes[2].fat.mounted);
+    OK(storage_writeback(s,fs_now_ms()+5001)); /* the writer still serves */
+    /* 2: the reader stops: the volumes detach clean, no resume. */
+    bg_mode=2;
+    OK(storage_sync()); CHECK(s->stopped && bg_reader<0 && !s->vfs.volumes[2]);
+    CHECK(bg_stops==stops+3 && bg_resumes==resumes+2);
+    storage_destroy(s); bootlog_reset();
+    for(unsigned i=0;i<2;i++) {
+        struct scan_result scan=independent_scan(media[0].fd,i);
+        CHECK(!scan.dirty && !scan.divergent && !scan.lost && !scan.crosslinks && !scan.corrupt);
+    }
+    s=start(); OK(storage_enable_write(s,2)); OK(vfs_delete(&table,"C:/SYSTEM/BGIMAGE.BIN")); stop(s,true);
+    reset(); bg_mode=0;
+    puts("PASS sec-wire shutdown: a kernel background reader of C: is stopped before the preflight (holder=open reproduced without it), a reader past the bound refuses before any change and resumes, the stopped reader's volume detaches clean");
+}
 static void unsupported_flush_views(void) {
     for (unsigned writable=0;writable<2;writable++) {
         struct storage *s=start();
@@ -788,7 +840,7 @@ static void stall_record_tests(void) {
 int main(int argc,char **argv) {
     CHECK(argc==4);
     for(unsigned i=0;i<3;i++) OK(fake_open(&media[i],argv[i+1]));
-    baseline(); superfloppy_tests(); mount_tests(); dirty_recovery_tests(); reserved_log_io(); log_tests(); failure_tests(); writeback_isolation(); cfg_tests(); sweep_write_tests(); unsupported_flush_views(); cache_fault_recorder(); shutdown_recorder(); shutdown_busy_tests(); probe_tests(); mount_probe_tests(); stall_record_tests();
+    baseline(); superfloppy_tests(); mount_tests(); dirty_recovery_tests(); reserved_log_io(); log_tests(); failure_tests(); writeback_isolation(); cfg_tests(); sweep_write_tests(); unsupported_flush_views(); cache_fault_recorder(); shutdown_recorder(); shutdown_busy_tests(); shutdown_background_reader_tests(); probe_tests(); mount_probe_tests(); stall_record_tests();
     for(unsigned i=0;i<3;i++) fake_close(&media[i]);
     printf("STORAGE RESULT checks=%u records=%u max_record=%u failures=0 ASan/UBSan=enabled\n",checks,records,max_record);
     return 0;

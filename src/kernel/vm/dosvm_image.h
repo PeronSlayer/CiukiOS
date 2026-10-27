@@ -14,6 +14,10 @@ int dosvm_image_lookup(struct vfs_table *, const struct vfs_file_version *, char
                        const char **source, bool (*cancelled)(void *), void *arg);
 void dosvm_image_publish(struct vfs_table *, const struct vfs_file_version *, const char sha[65]);
 void dosvm_image_query(uint32_t *state, uint32_t *progress, uint32_t *error);
+/* sec-wire: the storage shutdown preflight stops the background check
+ * (0, or -EBUSY past wait_ms) and resumes it when the shutdown is refused. */
+int dosvm_image_shutdown(uint32_t wait_ms);
+void dosvm_image_shutdown_resume(void);
 /* Host harnesses: no task; the test drives the steps. */
 bool dosvm_image_step(void);
 void dosvm_image_test_mode(void);

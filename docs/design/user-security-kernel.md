@@ -917,7 +917,14 @@ cross-credential handoff is only an explicit SYSTEM-installed broker channel.
 Dup/inheritance do not change its peer, and fd close/reuse cannot retarget a
 retained request. Closed/revoked links or dead peer sessions return ESRCH, wrong fd/kind
 EBADF; querying another process's fd is impossible. Ordinary same-session
-links reject a sender whose credential differs from the bound peer. Services
+links reject a sender whose credential differs from the bound peer.
+(sec-wire, 2026-10-27: close keeps POSIX semantics for an inherited ordinary
+endpoint. The bound subject's close revokes its side only when no other live
+process with that credential still holds the endpoint, as after the
+desktop's pair, spawn-with-fd-3, close(pair[1]) launch; the side then closes
+at the last descriptor's release or with the subject's exit. Service links
+are revoked at the subject's close as before. QEMU run of image ae977fbe:
+every launched program failed with ESRCH.) Services
 must hold an actual endpoint/subject reference across asynchronous work;
 QUERY_PEER's copied answer alone is not a revocation-proof authorization lease.
 Sec-k01 provides retained-subject primitives; later brokers use them.

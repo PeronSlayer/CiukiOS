@@ -1274,6 +1274,16 @@ and must equal `UNIFIED.SHA`) and moves the work out of CREATE
 - **Records:** `[dosvm] image verify stage=start bytes=…`,
   `result=verified|cancelled|stopped source=… bytes ms blocks pauses`,
   `result=failed step=… error=…`, `[dosvm] image stamp write error=…`.
+- **Shutdown (sec-wire, 2026-10-27).** The storage shutdown preflight stops
+  a running check the way game removal does (`dosvm_image_shutdown`, bounded
+  by `storage_shutdown_wait_ms`; result `cancelled`, handle, table and pin
+  released) and keeps new checks out while it holds them; a refused
+  shutdown resumes (`dosvm_image_shutdown_resume`) and re-arms exactly the
+  check it interrupted or kept from starting. A finished result and its pin
+  are kept. A game-removal hold is independent of it. QEMU run of image
+  ae977fbe: without it the first-boot hash held C: for 21.9 s and refused
+  nine power-off attempts (`vfs-storage-contract.md`, sec-wire amendment).
+  Host evidence: `tests/host/dos/test_image_verify.py` section 9.
 
 Host evidence: `tests/host/dos/test_image_verify.py` (production FAT/VFS:
 background hash and progress, stamp reuse without image reads, re-hash on

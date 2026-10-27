@@ -14,6 +14,10 @@
 /* fx-18: the ACPI layer supplies the FADT blocks and the legacy-EC hold;
  * weak so that builds and host tests without ACPI link. */
 int acpi_pm_blocks(struct apm_pm_blocks *) __attribute__((weak));
+/* sec-wire: the read-only FADT blocks of the power code (core/power_acpi_s5.c)
+ * when the inventory loaded no tables; weak for builds and host tests
+ * without it. */
+int power_firmware_pm_blocks(struct apm_pm_blocks *) __attribute__((weak));
 int acpi_ec_firmware_hold(unsigned ms) __attribute__((weak));
 void acpi_ec_firmware_release(void) __attribute__((weak));
 bool registry_smi_snapshot(struct registry_smi *) __attribute__((weak));
@@ -215,6 +219,12 @@ static void install_window(void)
 {
     struct apm_pm_blocks fadt;
     bool have_fadt = acpi_pm_blocks && !acpi_pm_blocks(&fadt);
+    /* sec-wire: SeaBIOS (QEMU) keeps its tables in E820 reserved RAM, which
+     * the ACPI inventory does not map; its APM Set Power State Off writes
+     * SLP_EN to the FADT's PM1a_CNT (SeaBIOS src/apm.c apm_shutdown, port
+     * from src/fw/biostables.c find_acpi_features). The same FADT, read by
+     * the power code's parser, bounds the window by the same fx-18 rule. */
+    if (!have_fadt && power_firmware_pm_blocks) have_fadt = !power_firmware_pm_blocks(&fadt);
     struct registry_smi chip;
     bool have_chip = registry_smi_snapshot && registry_smi_snapshot(&chip) && chip.decoded && chip.base;
     apm_port_window_build(&window, have_fadt ? &fadt : NULL, have_chip ? chip.base : 0, have_chip ? 128 : 0);

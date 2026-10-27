@@ -183,6 +183,21 @@ and nothing reserved; the holder's later release is unaffected
 `cancelled_wait_test`). Review: Codex on `63c964019`, finding P1-1
 (`docs/validation/t23-win32-hang-shutdown-2026-10-25.md`).
 
+**[sec-wire amendment, 2026-10-27]** The kernel's own background reader of
+the system volume, the DOS base image check (`dos-dpmi-contract.md`, fx-4b),
+holds a VFS handle on `C:\SYSTEM\DOS\UNIFIED.IMG` through its own table.
+QEMU run of image ae977fbe: nine power-off attempts were refused with
+`[storage] shutdown busy drive=C holder=open` until the first-boot hash of
+the 54.6 MB image ended (`ms=21862 pauses=833`), then the tenth succeeded.
+`storage_shutdown` (system storage only) now stops that check before the
+pagefile and volume preflight, within `storage_shutdown_wait_ms`, and
+resumes it when the shutdown is refused at any later stage; a check that
+does not stop in time refuses before any change
+(`[storage] shutdown busy holder=dos-image-check wait_ms=...`). Host
+evidence: `tests/host/fs/test_storage.c`
+`shutdown_background_reader_tests` (the holder=open refusal reproduced
+without the stop, a reader past the bound, a stopped reader's clean detach).
+
 - Default size 8 MiB (`boot-memory.md` budget), adjustable at boot.
 - Dirty blocks become eligible for the `device`-priority writer after
   1 second or at the dirty budget (F1-82 below), on explicit `flush`, before unmount, and

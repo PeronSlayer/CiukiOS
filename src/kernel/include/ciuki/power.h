@@ -44,6 +44,27 @@ int acpi_soft_off_parse(acpi_map_fn map, void *ctx, uint32_t rsdp_phys,
                         struct acpi_soft_off *out, const char **why);
 /* Finds Name(\_S5, Package(){a, b, ...}) in an AML body. 0 or -ENOENT. */
 int acpi_s5_find(const uint8_t *aml, uint32_t len, uint8_t *typa, uint8_t *typb);
+/* sec-wire: the firmware memory the read-only table parsers may map: the
+ * BIOS area E0000h-FFFFFh, the EBDA window 80000h-9FFFFh, E820
+ * AddressRangeACPI/NVS (types 3/4) and, with reserved_tail, the firmware
+ * RAM tail where SeaBIOS (QEMU, Bochs) keeps every table but the RSDP: an
+ * E820 AddressRangeReserved range (type 2) of at most
+ * ACPI_RESERVED_TAIL_MAX bytes, at or below 4 GiB, that starts exactly
+ * where a usable (type 1) range ends. Device windows stay refused. The
+ * caller still requires reserved pages. */
+#define ACPI_RESERVED_TAIL_MAX (16u * 1024u * 1024u) /* SeaBIOS BUILD_MAX_HIGHTABLE */
+struct ciuki_e820;
+bool acpi_firmware_extent(const struct ciuki_e820 *map, unsigned count, uint32_t phys, uint32_t len,
+                          bool reserved_tail);
+/* sec-wire: the FADT's fixed-hardware SystemIO blocks (RSDP, RSDT or XSDT,
+ * FACP checked as acpi_soft_off_parse does; no DSDT needed) for the fx-18
+ * APM port window when the ACPI inventory loaded no tables. 0, or a
+ * negative errno with *why naming the failed step. */
+struct apm_pm_blocks;
+int acpi_fadt_pm_blocks(acpi_map_fn map, void *ctx, uint32_t rsdp_phys, struct apm_pm_blocks *out,
+                        const char **why);
+/* Kernel: the same through the power code's firmware windows (power_acpi_s5.c). */
+int power_firmware_pm_blocks(struct apm_pm_blocks *out);
 
 /* fx-acpioff: the ACPI S5 register fallback (core/power_acpi_s5.c), used by
  * call 73 only when no active provider is qualified for Off, or after the

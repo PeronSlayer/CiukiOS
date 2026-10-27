@@ -138,6 +138,37 @@ static void s5_unmap_all(void)
     for (unsigned i = 0; i < s5_window_count; i++) s5_unmap(s5_windows[i].p, s5_windows[i].len);
     s5_window_count = 0;
 }
+/* sec-wire: the FADT's fixed-hardware blocks for the fx-18 APM port window
+ * when the ACPI inventory loaded no tables (core/apm_platform.c
+ * install_window; QEMU run of image ae977fbe: "[apm] window ranges=2
+ * source=none"). Read-only, through the same firmware windows, with its own
+ * window table: the APM worker runs it once at boot, independent of the S5
+ * parse. 0, -ENOENT without an RSDP, or -ENOTSUP with the failed step
+ * logged. */
+static struct s5_window pm_windows[S5_MAPS];
+static unsigned pm_window_count;
+static const uint8_t *pm_map_cb(void *ctx, uint32_t phys, uint32_t len)
+{
+    (void)ctx;
+    for (unsigned i = 0; i < pm_window_count; i++)
+        if (pm_windows[i].phys == phys && pm_windows[i].len >= len) return pm_windows[i].p;
+    if (pm_window_count == S5_MAPS) return NULL;
+    const uint8_t *p = s5_map(phys, len);
+    if (!p) return NULL;
+    pm_windows[pm_window_count++] = (struct s5_window){phys, len, p};
+    return p;
+}
+int power_firmware_pm_blocks(struct apm_pm_blocks *out)
+{
+    if (!out) return -EINVAL;
+    if (!s5_rsdp()) return -ENOENT; /* no ACPI tables: nothing to read, nothing to log */
+    const char *why = "rsdp";
+    int e = acpi_fadt_pm_blocks(pm_map_cb, NULL, s5_rsdp(), out, &why);
+    for (unsigned i = 0; i < pm_window_count; i++) s5_unmap(pm_windows[i].p, pm_windows[i].len);
+    pm_window_count = 0;
+    if (e) s5_log("[power] firmware fadt blocks unavailable step=%s", why);
+    return e;
+}
 static bool s5_why_is_s5(void) { return s5.why && s5.why[0] == 's' && s5.why[1] == '5' && !s5.why[2]; }
 static const char *s5_source_name(unsigned source)
 {

@@ -23,6 +23,8 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/abi.h>
 #include <ciuki/power.h>
+#include <ciuki/boot_info.h>
+#include <ciuki/apm_ports.h>
 #if !defined(POWER_HOST) || defined(POWER_HOST_RUNTIME)
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
@@ -256,36 +258,51 @@ static bool s5_in_ssdts(acpi_map_fn map, void *ctx, const uint8_t *root, uint32_
     }
     return false;
 }
-int acpi_soft_off_parse(acpi_map_fn map, void *ctx, uint32_t rsdp_phys,
-                        struct acpi_soft_off *out, const char **why)
+/* RSDP (ACPI 1.0 20-byte checksum; 2.0 extended 36-byte one before the
+ * XSDT is used), RSDT or XSDT, then the first FACP. NULL with *why naming
+ * the failed step. */
+struct acpi_root { const uint8_t *table; uint32_t len; unsigned width; };
+static const uint8_t *fadt_locate(acpi_map_fn map, void *ctx, uint32_t rsdp_phys, struct acpi_root *root,
+                                  uint32_t *fadt_len, const char **why)
 {
     *why = "rsdp";
-    if (!rsdp_phys) return -ENOTSUP;
+    if (!rsdp_phys) return 0;
     const uint8_t *rsdp = map(ctx, rsdp_phys, 36);
-    if (!rsdp || !sig_is(rsdp, "RSD ") || !sig_is(rsdp + 4, "PTR ") || sum8(rsdp, 20)) return -ENOTSUP;
+    if (!rsdp || !sig_is(rsdp, "RSD ") || !sig_is(rsdp + 4, "PTR ") || sum8(rsdp, 20)) return 0;
     uint32_t len, rsdt_phys = rd32(rsdp + 16);
     const uint8_t *fadt = 0;
-    uint32_t fadt_len = 0;
-    const uint8_t *root = table(map, ctx, rsdt_phys, "RSDT", 36, ACPI_RSDT_MAX, &len);
+    const uint8_t *table_root = table(map, ctx, rsdt_phys, "RSDT", 36, ACPI_RSDT_MAX, &len);
     unsigned width = 4;
-    if (!root && rsdp[15] >= 2) {
+    if (!table_root && rsdp[15] >= 2) {
         /* ACPI 2.0+: an XSDT entry above 4 GiB is unreachable here. */
         const uint8_t *x = map(ctx, rsdp_phys, 36);
         if (x && !sum8(x, 36) && !rd32(x + 28))
-            root = table(map, ctx, rd32(x + 24), "XSDT", 36, 36u + 8u * 256u, &len);
+            table_root = table(map, ctx, rd32(x + 24), "XSDT", 36, 36u + 8u * 256u, &len);
         width = 8;
     }
     *why = "rsdt";
-    if (!root) return -ENOTSUP;
+    if (!table_root) return 0;
     for (uint32_t at = 36; at + width <= len && !fadt; at += width) {
-        if (width == 8 && rd32(root + at + 4)) continue;
-        uint32_t phys = rd32(root + at);
+        if (width == 8 && rd32(table_root + at + 4)) continue;
+        uint32_t phys = rd32(table_root + at);
         const uint8_t *h = phys ? map(ctx, phys, 36) : 0;
         if (h && sig_is(h, "FACP"))
-            fadt = table(map, ctx, phys, "FACP", 116, 4096, &fadt_len);
+            fadt = table(map, ctx, phys, "FACP", 116, 4096, fadt_len);
     }
     *why = "fadt";
+    *root = (struct acpi_root){table_root, len, width};
+    return fadt;
+}
+int acpi_soft_off_parse(acpi_map_fn map, void *ctx, uint32_t rsdp_phys,
+                        struct acpi_soft_off *out, const char **why)
+{
+    struct acpi_root tables;
+    uint32_t fadt_len = 0;
+    const uint8_t *fadt = fadt_locate(map, ctx, rsdp_phys, &tables, &fadt_len, why);
     if (!fadt) return -ENOTSUP;
+    const uint8_t *root = tables.table;
+    uint32_t len = tables.len;
+    unsigned width = tables.width;
     struct acpi_soft_off r = { 0 };
     r.fadt_revision = fadt[8];
     r.flags = rd32(fadt + 112);
@@ -334,6 +351,74 @@ int acpi_soft_off_parse(acpi_map_fn map, void *ctx, uint32_t rsdp_phys,
     *why = "ok";
     *out = r;
     return 0;
+}
+
+/* sec-wire: the fx-18 APM port window's FADT source when the ACPI
+ * inventory loaded no tables (QEMU run of image ae977fbe: "[apm] window
+ * ranges=2 source=none", then SeaBIOS's Set Power State Off wrote 2000h to
+ * PM1a_CNT 604h and the BIOS VM refused it, "reason=port_denied"). The
+ * blocks follow ACPI 2.0c 5.2.8 (legacy fields 48-93; a present X_ GAS in
+ * SystemIO with matching width supersedes them, as io_port does); an
+ * unsupported block is left out of the window, never guessed. */
+int acpi_fadt_pm_blocks(acpi_map_fn map, void *ctx, uint32_t rsdp_phys, struct apm_pm_blocks *out,
+                        const char **why)
+{
+    struct acpi_root tables;
+    uint32_t fadt_len = 0;
+    const uint8_t *fadt = fadt_locate(map, ctx, rsdp_phys, &tables, &fadt_len, why);
+    if (!fadt) return -ENOTSUP;
+    struct apm_pm_blocks b = { 0 };
+    uint32_t smi = rd32(fadt + 48);
+    b.smi_cmd = smi <= 0xFFFFu ? (uint16_t)smi : 0;
+    b.pm1_evt_len = fadt[88]; b.pm1_cnt_len = fadt[89]; b.pm2_cnt_len = fadt[90];
+    b.pm_tmr_len = fadt[91]; b.gpe0_len = fadt[92]; b.gpe1_len = fadt[93];
+    static const struct { uint8_t legacy, gas, access; } at[] = {
+        {56, 148, 2}, {60, 160, 2}, {64, 172, 2}, {68, 184, 2}, {72, 196, 1}, {76, 208, 4}, {80, 220, 1}, {84, 232, 1}};
+    const uint8_t lengths[] = {b.pm1_evt_len, b.pm1_evt_len, b.pm1_cnt_len, b.pm1_cnt_len, b.pm2_cnt_len,
+                               b.pm_tmr_len, b.gpe0_len, b.gpe1_len};
+    uint16_t *ports[] = {&b.pm1a_evt, &b.pm1b_evt, &b.pm1a_cnt, &b.pm1b_cnt, &b.pm2_cnt, &b.pm_tmr, &b.gpe0, &b.gpe1};
+    for (unsigned i = 0; i < sizeof(at) / sizeof(at[0]); i++) {
+        uint16_t port = 0;
+        /* The GAS width covers the whole block, a GPE block's too (as for
+         * the S5 parse above). */
+        if (lengths[i] && io_port(fadt, fadt_len, at[i].legacy, at[i].gas, lengths[i], at[i].access, &port) == IO_BLOCK_VALID)
+            *ports[i] = port;
+    }
+    *why = "pm1a_cnt";
+    if (!b.pm1a_cnt || b.pm1_cnt_len != 2) return -ENOTSUP;
+    *why = "ok";
+    *out = b;
+    return 0;
+}
+/* sec-wire: see power.h. ACPI 1.0b 5.2.5 (RSDP in the first KiB of the
+ * EBDA or E0000h-FFFFFh); E820 types 3/4 hold the tables on the qualified
+ * laptops (T23 trial 6c3b7800: "[acpi] inventory ... tables=8"). SeaBIOS
+ * allocates every QEMU table but the RSDP from its ZoneHigh
+ * (src/fw/romfile_loader.c ROMFILE_LOADER_ALLOC_ZONE_HIGH; QEMU
+ * hw/i386/acpi-build.c allocates only the RSDP in FSEG), which
+ * malloc_preinit (src/malloc.c) carves from the top of the highest RAM range
+ * below 4 GiB and reports as E820_RESERVED, at most BUILD_MAX_HIGHTABLE =
+ * 16 MiB (src/config.h); the unused part is given back as RAM, so the tail
+ * starts where a usable range ends. Linux maps ACPI tables wherever the
+ * root table points (drivers/acpi/osl.c); here only that tail is added. */
+bool acpi_firmware_extent(const struct ciuki_e820 *map, unsigned count, uint32_t phys, uint32_t len,
+                          bool reserved_tail)
+{
+    if (!len || phys > UINT32_MAX - len) return false;
+    uint64_t start = phys, end = (uint64_t)phys + len;
+    if ((start >= 0xe0000 && end <= 0x100000) || (start >= 0x80000 && end <= 0xa0000)) return true;
+    for (unsigned i = 0; map && i < count; i++) {
+        uint64_t base = map[i].base, length = map[i].length;
+        uint32_t type = map[i].type;
+        if (length > UINT64_MAX - base || base > start || base + length < end) continue;
+        if (type == 3 || type == 4) return true;
+        if (!reserved_tail || type != 2 || length > ACPI_RESERVED_TAIL_MAX || base + length > 0x100000000ull) continue;
+        for (unsigned j = 0; j < count; j++) {
+            uint64_t ram = map[j].base, ram_length = map[j].length;
+            if (map[j].type == 1 && ram_length && ram_length <= UINT64_MAX - ram && ram + ram_length == base) return true;
+        }
+    }
+    return false;
 }
 
 #if !defined(POWER_HOST) || defined(POWER_HOST_RUNTIME)

@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "../../src/kernel/core/power.c"
+#include "../../src/kernel/core/apm_ports.c"   /* sec-wire: the fx-18 window from parsed blocks */
 
 static unsigned failures;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d %s\n", __FILE__, __LINE__, #c); failures++; } } while (0)
@@ -132,6 +133,114 @@ static void test_register_validation(const uint8_t *aml, unsigned size)
     tables(aml, size, 0x604, 0); mem[FADT + 89] = 4; seal(FADT);
     CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, "pm1_cnt_len"));
     puts("PASS Review round 1 P2: absent/valid/unsupported GAS, independent blocks, metadata, precedence and full legacy/GAS I/O extents");
+}
+/* sec-wire (QEMU run of image ae977fbe, SeaBIOS 1.17, 512 MiB i440fx:
+ * "[power] acpi s5 fallback unavailable step=rsdt", "[apm] window ranges=2
+ * source=none", then APM Off denied at port 604h). SeaBIOS copies the RSDP
+ * to the F segment and every other table to its ZoneHigh, an E820
+ * reserved range at the top of RAM below 4 GiB that starts where the
+ * usable range ends. The map applies the production firmware-extent rule
+ * to this exact E820 table; the memory behind it is sparse. */
+enum { SB_FSEG = 0xF0000, SB_RSDP = 0xF5A50, SB_TAIL = 0x1FFE0000, SB_TAIL_LEN = 0x20000,
+       SB_FACS = SB_TAIL, SB_DSDT = SB_TAIL + 0x40, SB_FADT = SB_TAIL + 0x1C99, SB_APIC = SB_TAIL + 0x1D0D,
+       SB_RSDT = SB_TAIL + 0x1E2D };
+static uint8_t sb_fseg[0x10000], sb_tail[SB_TAIL_LEN];
+static const struct ciuki_e820 sb_e820[] = {
+    {0x0, 0x9FC00, 1, 1}, {0x9FC00, 0x400, 2, 1}, {0xF0000, 0x10000, 2, 1},
+    {0x100000, SB_TAIL - 0x100000, 1, 1}, {SB_TAIL, SB_TAIL_LEN, 2, 1},
+    {0xFEFFC000, 0x4000, 2, 1}, {0xFFFC0000, 0x40000, 2, 1}};
+static bool sb_tail_rule;
+static unsigned sb_refused;
+static const uint8_t *sb_map(void *ctx, uint32_t phys, uint32_t len)
+{
+    (void)ctx;
+    if (!acpi_firmware_extent(sb_e820, sizeof(sb_e820) / sizeof(sb_e820[0]), phys, len, sb_tail_rule)) {
+        sb_refused++; return 0;
+    }
+    if (phys >= SB_FSEG && (uint64_t)phys + len <= SB_FSEG + sizeof(sb_fseg)) return sb_fseg + (phys - SB_FSEG);
+    if (phys >= SB_TAIL && (uint64_t)phys + len <= SB_TAIL + sizeof(sb_tail)) return sb_tail + (phys - SB_TAIL);
+    return 0;
+}
+static uint8_t *sb_at(uint32_t phys) { return phys >= SB_TAIL ? sb_tail + (phys - SB_TAIL) : sb_fseg + (phys - SB_FSEG); }
+static void sb_put32(uint32_t phys, uint32_t v) { for (int i = 0; i < 4; i++) sb_at(phys)[i] = (uint8_t)(v >> (8 * i)); }
+static void sb_header(uint32_t phys, const char *sig, uint32_t len, uint8_t rev)
+{ memcpy(sb_at(phys), sig, 4); sb_put32(phys + 4, len); sb_at(phys)[8] = rev; memcpy(sb_at(phys) + 10, "BOCHS ", 6); }
+static void sb_seal(uint32_t phys, uint32_t sum_at, uint32_t len)
+{
+    uint8_t *t = sb_at(phys), x = 0; t[sum_at] = 0;
+    for (uint32_t i = 0; i < len; i++) x = (uint8_t)(x + t[i]);
+    t[sum_at] = (uint8_t)-x;
+}
+static void sb_tables(void)
+{
+    static const uint8_t s5[] = { 0x10, 0x0F, 0x5C, 0x00, 0x08, '_', 'S', '5', '_', 0x12, 0x06, 0x04, 0, 0, 0, 0, 0xA3 };
+    memset(sb_fseg, 0, sizeof(sb_fseg)); memset(sb_tail, 0, sizeof(sb_tail));
+    memcpy(sb_at(SB_FACS), "FACS", 4); sb_put32(SB_FACS + 4, 64);
+    sb_header(SB_DSDT, "DSDT", 36 + sizeof(s5), 1); memcpy(sb_at(SB_DSDT) + 36, s5, sizeof(s5)); sb_seal(SB_DSDT, 9, 36 + sizeof(s5));
+    /* QEMU acpi-build.c (PIIX4 PM at 600h): PM1a_EVT 600h/4, PM1a_CNT 604h/2,
+     * PM_TMR 608h/4, GPE0 AFE0h/4, SMI_CMD B2h, ACPI_ENABLE F1h, SCI 9. */
+    sb_header(SB_FADT, "FACP", 116, 1);
+    sb_put32(SB_FADT + 36, SB_FACS); sb_put32(SB_FADT + 40, SB_DSDT);
+    sb_at(SB_FADT)[46] = 9; sb_put32(SB_FADT + 48, 0xB2); sb_at(SB_FADT)[52] = 0xF1; sb_at(SB_FADT)[53] = 0xF0;
+    sb_put32(SB_FADT + 56, 0x600); sb_put32(SB_FADT + 64, 0x604); sb_put32(SB_FADT + 76, 0x608); sb_put32(SB_FADT + 80, 0xAFE0);
+    sb_at(SB_FADT)[88] = 4; sb_at(SB_FADT)[89] = 2; sb_at(SB_FADT)[91] = 4; sb_at(SB_FADT)[92] = 4;
+    sb_seal(SB_FADT, 9, 116);
+    sb_header(SB_APIC, "APIC", 44, 1); sb_seal(SB_APIC, 9, 44);
+    sb_header(SB_RSDT, "RSDT", 36 + 8, 1); sb_put32(SB_RSDT + 36, SB_FADT); sb_put32(SB_RSDT + 40, SB_APIC);
+    sb_seal(SB_RSDT, 9, 44);
+    memcpy(sb_at(SB_RSDP), "RSD PTR ", 8); memcpy(sb_at(SB_RSDP) + 9, "BOCHS ", 6);
+    sb_put32(SB_RSDP + 16, SB_RSDT); sb_seal(SB_RSDP, 8, 20);
+}
+static void test_seabios(void)
+{
+    struct acpi_soft_off r; struct apm_pm_blocks b; const char *why;
+    sb_tables();
+    /* The QEMU record: the ACPICA/OSL rule refuses the reserved tail. */
+    sb_tail_rule = false; sb_refused = 0;
+    CHECK(acpi_soft_off_parse(sb_map, 0, SB_RSDP, &r, &why) == -ENOTSUP && !strcmp(why, "rsdt") && sb_refused);
+    CHECK(acpi_fadt_pm_blocks(sb_map, 0, SB_RSDP, &b, &why) == -ENOTSUP && !strcmp(why, "rsdt"));
+    /* The power windows: the tables, \_S5 and the fixed-hardware blocks. */
+    sb_tail_rule = true; sb_refused = 0;
+    CHECK(acpi_soft_off_parse(sb_map, 0, SB_RSDP, &r, &why) == 0 && !strcmp(why, "ok") && !sb_refused);
+    CHECK(r.pm1a_cnt == 0x604 && !r.pm1b_cnt && r.slp_typa == 0 && r.slp_typb == 0 && r.source == ACPI_S5_SOURCE_DSDT);
+    CHECK(r.smi_cmd == 0xB2 && r.acpi_enable == 0xF1 && r.pm1a_evt == 0x600 && r.gpe0 == 0xAFE0 && r.sci_int == 9);
+    memset(&b, 0xEE, sizeof(b));
+    CHECK(acpi_fadt_pm_blocks(sb_map, 0, SB_RSDP, &b, &why) == 0 && !strcmp(why, "ok"));
+    CHECK(b.pm1a_cnt == 0x604 && b.pm1_cnt_len == 2 && !b.pm1b_cnt && b.pm1a_evt == 0x600 && b.pm1_evt_len == 4);
+    CHECK(b.pm_tmr == 0x608 && b.pm_tmr_len == 4 && b.gpe0 == 0xAFE0 && b.gpe0_len == 4 && !b.gpe1 && !b.pm2_cnt);
+    CHECK(b.smi_cmd == 0xB2);
+    /* fx-18 window from these blocks: SeaBIOS apm_shutdown's outw(2000h,
+     * 604h) is admitted for Set Power State Off only; SCI_EN never; the PM
+     * timer read-only; nothing outside the FADT blocks. */
+    struct apm_port_window w; uint8_t k; const char *reason;
+    apm_port_window_build(&w, &b, 0, 0);
+    CHECK(w.source == APM_PORT_SOURCE_FADT);
+    CHECK(apm_port_check(&w, 0x604, 2, true, 0x2000, 0x5307, &k, &reason) == APM_PORT_ALLOW && k == APM_PORT_PM1_CNT);
+    CHECK(apm_port_check(&w, 0x604, 2, true, 0x2000, 0x5300, &k, &reason) == APM_PORT_DENY && !strcmp(reason, "slp_en"));
+    CHECK(apm_port_check(&w, 0x604, 2, true, 0x0001, 0x5307, &k, &reason) == APM_PORT_DENY && !strcmp(reason, "sci_en"));
+    CHECK(apm_port_check(&w, 0x608, 4, false, 0, 0x530a, &k, &reason) == APM_PORT_ALLOW && k == APM_PORT_PM_TMR);
+    CHECK(apm_port_check(&w, 0x608, 4, true, 0, 0x530a, &k, &reason) == APM_PORT_DENY);
+    CHECK(apm_port_check(&w, 0x610, 1, true, 0, 0x5307, &k, &reason) == APM_PORT_DENY && !strcmp(reason, "outside_window"));
+    /* Bounds of the tail rule: device windows, oversize, not adjacent to
+     * RAM, above 4 GiB, straddling, and the narrower ACPICA rule. */
+    const unsigned n = sizeof(sb_e820) / sizeof(sb_e820[0]);
+    CHECK(acpi_firmware_extent(sb_e820, n, SB_RSDT, 44, true) && !acpi_firmware_extent(sb_e820, n, SB_RSDT, 44, false));
+    CHECK(acpi_firmware_extent(sb_e820, n, SB_RSDP, 20, false));             /* F segment: both rules */
+    CHECK(!acpi_firmware_extent(sb_e820, n, 0xFEFFC000, 36, true));          /* not adjacent to RAM */
+    CHECK(!acpi_firmware_extent(sb_e820, n, 0xFFFC0000, 36, true));          /* BIOS flash */
+    CHECK(!acpi_firmware_extent(sb_e820, n, SB_TAIL - 16, 36, true));        /* straddles usable RAM */
+    CHECK(!acpi_firmware_extent(sb_e820, n, SB_TAIL + SB_TAIL_LEN - 8, 36, true)); /* past the tail */
+    CHECK(!acpi_firmware_extent(sb_e820, n, 0x200000, 36, true));            /* kernel RAM */
+    CHECK(!acpi_firmware_extent(sb_e820, n, 0, 0, true) && !acpi_firmware_extent(sb_e820, n, 0xFFFFFFF0u, 36, true));
+    struct ciuki_e820 big[] = {{0x100000, 0x7EF00000, 1, 1}, {0x7F000000, 0x1000000 + 0x1000, 2, 1}};
+    CHECK(!acpi_firmware_extent(big, 2, 0x7F000000, 36, true));            /* above BUILD_MAX_HIGHTABLE */
+    big[1].length = 0x1000000;
+    CHECK(acpi_firmware_extent(big, 2, 0x7FFFFFC0, 36, true));
+    struct ciuki_e820 high[] = {{0x100000, 0xFFE00000, 1, 1}, {0xFFF00000, 0x200000, 2, 1}};
+    CHECK(!acpi_firmware_extent(high, 2, 0xFFF00000, 36, true));            /* the range runs past 4 GiB */
+    struct ciuki_e820 acpi3[] = {{0x100000, 0x1FEE0000, 1, 1}, {0x1FFE0000, 0x20000, 3, 1}};
+    CHECK(acpi_firmware_extent(acpi3, 2, 0x1FFE1000, 36, false));            /* T23/VirtualBox shape unchanged */
+    puts("PASS sec-wire SeaBIOS tables: RSDT/FADT/DSDT in the E820 reserved RAM tail parsed for S5 and the APM window (604h admitted for 5307 only); device windows, oversize, non-adjacent and straddling ranges refused");
 }
 int main(void)
 {
@@ -285,6 +394,7 @@ int main(void)
     CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, "s5") && r.pm1b_cnt == 0x644 && r.source == ACPI_S5_SOURCE_NONE);
 
     test_register_validation(qemu, sizeof(qemu));
+    test_seabios();
     printf("power: acpi soft-off parser, %u failures (%u maps)\n", failures, maps);
     return failures ? 1 : 0;
 }
