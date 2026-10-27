@@ -31,6 +31,10 @@ struct files_drive_label {
     int valid;
     char text[33];
     struct files_label_key key;
+    /* fx-autorun: AUTORUN.INF open= names a program this drive's AutoPlay
+     * verb starts (My Computer: bold AutoPlay item and double-click). */
+    int autoplay;
+    struct desk_launch_record autoplay_record;
 };
 struct files_app {
     unsigned job_publication;
@@ -83,6 +87,9 @@ struct files_app {
     struct ciuki_media_state media;
     struct files_drive_label drive_labels[26];
     int (*media_label)(unsigned drive, char out[33]);
+    /* fx-autorun: label plus AutoPlay verb (files.c: ap_drive_info); when
+     * set, it replaces media_label for the drive label cache. */
+    int (*media_autoplay)(unsigned drive, char label[33], int *autoplay, struct desk_launch_record *);
     int (*media_label_key)(unsigned drive, struct files_label_key *);
     int (*media_read)(struct ciuki_media_state *);
     int (*ntfs_status)(unsigned slot, struct ciuki_ntfs_status *);

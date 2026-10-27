@@ -26,7 +26,7 @@ enum {
     D_DELETE = 200, D_REPLACE, D_ERROR, D_PROPERTIES, D_INFO, D_PROGRESS, D_CANCEL_JOB, D_BIN_PURGE, D_BIN_EMPTY, D_BIN_PROPS, D_BIN_ITEM, D_INSERT, D_FIND = 228,
     C_GO_DOCUMENTS = 300, C_GO_GAMES, C_GO_CONTROL, C_GO_DESKTOP, C_MUSIC, C_GO_RECYCLE, C_RESTORE, C_EMPTY_BIN, C_BIN_PROPS, C_DELETE_NOW,
     C_OPTIONS = 310, C_ATTRIBUTES = 311,
-    C_CLEANUP = 312, C_FORMAT = 313, C_COPY_DISK = 314, C_BACKUP = 315, C_DEFRAG = 316, C_CONVERT = 317,
+    C_CLEANUP = 312, C_FORMAT = 313, C_COPY_DISK = 314, C_BACKUP = 315, C_DEFRAG = 316, C_CONVERT = 317, C_AUTOPLAY = 318,
     T_JOB = 1, T_MEDIA, T_BROWSER, T_DRAG_REFRESH
 };
 #define PANE_TOP 92
@@ -60,6 +60,7 @@ static void scan_poll(struct files_app *);
 static void scan_stop(struct files_app *);
 static void open_item(struct files_app *, unsigned, int);
 static int operation_open(struct files_app *,const char *);
+static int operation_spawn_record(struct files_app *,struct desk_launch_record *);
 static void open_with(struct files_app *,const char *);
 static int operations_command(struct files_app *,int);
 static int operations_result(struct files_app *,const struct du_event *);
@@ -537,14 +538,39 @@ static int labels_refresh(struct files_app *a, const struct files_scan *s)
         int same=label->valid && label->generation==a->media.generation[d] &&
             !strcmp(label->key.volume,key.volume) && label->key.size==key.size &&
             label->key.ino==key.ino && label->key.modified==key.modified && label->key.inf_status==key.inf_status;
-        if (same || !a->media_label) continue;
-        char text[33]={0};
-        if (a->media_label(d,text)) continue;
+        if (same || (!a->media_label && !a->media_autoplay)) continue;
+        char text[33]={0}; int autoplay=0;
+        if (a->media_autoplay ? a->media_autoplay(d,text,&autoplay,&label->autoplay_record) : a->media_label(d,text)) continue;
         text[32]=0;
-        memcpy(label->text,text,sizeof(text)); label->key=key;
+        memcpy(label->text,text,sizeof(text)); label->key=key; label->autoplay=autoplay;
         label->generation=a->media.generation[d]; label->valid=1; changed=1;
     }
     return changed;
+}
+/* fx-autorun: the drive of My Computer row index whose cached AUTORUN.INF
+ * open= program the AutoPlay verb starts, else -1. Microsoft "Enabling and
+ * Disabling AutoRun": the drive's shortcut menu includes an AutoPlay command
+ * and "To run AutoRun manually, either right-click the drive icon and select
+ * AutoPlay from the shortcut menu or double-click the drive icon"; "Autorun.inf
+ * Entries", shell: without shell=, "the default menu item text will be
+ * "AutoPlay", which launches the application specified by the open entry". */
+static int autoplay_drive(const struct files_app *a,unsigned index)
+{
+    if (a->model.path[0] || a->model.searching || index>=a->model.count) return -1;
+    const struct fm_entry *e=&a->model.entries[index];
+    if (e->name[0]<'D' || e->name[0]>'Z' || e->name[1]!=':') return -1;
+    int d=e->name[0]-'A';
+    if (!(a->media.removable_mask & (1u<<d))) return -1;
+    const struct files_drive_label *l=&a->drive_labels[d];
+    return l->valid && l->autoplay && l->generation==a->media.generation[d] ? d : -1;
+}
+static void autoplay_run(struct files_app *a,int d)
+{
+    if (d<0 || d>=26) return;
+    struct desk_launch_record *r=malloc(sizeof(*r));
+    int e=r ? 0 : -ENOMEM;
+    if (r) { *r=a->drive_labels[d].autoplay_record; e=operation_spawn_record(a,r); free(r); }
+    if (e<0) files_launch_failed(a,e);
 }
 static const char *drive_label(const struct files_app *a,int drive)
 {
@@ -1103,6 +1129,7 @@ static int scan_submit(struct files_app *a, enum scan_kind kind, const char *pat
     memcpy(b->leaf, a->leaf, sizeof(b->leaf)); b->leaf_count = a->leaf_count;
     b->media = a->media; memcpy(b->drive_labels, a->drive_labels, sizeof(b->drive_labels));
     b->media_read = a->media_read; b->media_label_key = a->media_label_key; b->media_label = a->media_label;
+    b->media_autoplay = a->media_autoplay;
     b->ntfs_status=a->ntfs_status; b->ntfs_notified=a->ntfs_notified;
     memcpy(b->ntfs_notice,a->ntfs_notice,sizeof(b->ntfs_notice));
     b->media_load = a->media_load; b->model.drive_slots = a->model.drive_slots;
@@ -2137,7 +2164,9 @@ static void context(struct files_app *a, const struct du_event *e)
             du_popup(a->ui, a->popup, a->popup_count, e->x, e->y, e->id);
             return;
         }
-        popup_add(a, "&Open", C_OPEN, DU_ITEM_DEFAULT);
+        int autoplay = n == 1 ? autoplay_drive(a, (unsigned)e->index) : -1;
+        if (autoplay >= 0) popup_add(a, "Auto&Play", C_AUTOPLAY, DU_ITEM_DEFAULT);
+        popup_add(a, "&Open", C_OPEN, autoplay >= 0 ? 0 : DU_ITEM_DEFAULT);
         if (m->searching) popup_add(a, "Open Containing &Folder", C_FIND_FOLDER, 0);
         int target=removal_target(a);
         if (target>=3) popup_add(a, removal_label(a,target), C_SAFE_REMOVE, 0);
@@ -2284,6 +2313,9 @@ static void command(struct files_app *a, int id)
         if (drive>=0) (void)files_disk_open(a,(unsigned)drive,id==C_FORMAT);
         break;
     }
+    case C_AUTOPLAY:
+        if (!a->loading && fm_selected(m, NULL)==1 && m->active < m->count) autoplay_run(a, autoplay_drive(a, m->active));
+        break;
     case C_SAFE_REMOVE: {
         int d=removal_target(a);
         if (d<3) break;
@@ -2779,7 +2811,11 @@ void files_event(struct du_ui *u, const struct du_event *e, void *arg)
         }
         break;
     case DU_EV_OPEN:
-        if (e->id == W_LIST && e->index >= 0) open_item(a, (unsigned)e->index, 0);
+        /* fx-autorun: double-click/Enter runs a drive's default verb, which
+         * is AutoPlay when its AUTORUN.INF names a program (autoplay_drive). */
+        if (e->id == W_LIST && e->index >= 0 && !a->loading && autoplay_drive(a, (unsigned)e->index) >= 0)
+            autoplay_run(a, autoplay_drive(a, (unsigned)e->index));
+        else if (e->id == W_LIST && e->index >= 0) open_item(a, (unsigned)e->index, 0);
         else if (e->id == W_TREE) toggle_node(a, e->index);
         break;
     case DU_EV_SORT: {

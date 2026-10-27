@@ -3128,6 +3128,9 @@ void desk_w32_fault_dialog(struct desktop *d,const struct ciuki_w32_fault *f)
     case W32_REFUSE_MISSING_DLL:snprintf(text,sizeof(text),"The dynamic link library %.63s could not be found in the specified path.",f->module);break;
     case W32_REFUSE_EXPORT:snprintf(text,sizeof(text),"The %.63s file is linked to missing export %.63s.",f->exe,f->module);break;
     case W32_REFUSE_SERVER:snprintf(text,sizeof(text),"The Windows program server is not available. Please try again.");break;
+    /* fx-autorun: a 16-bit Windows (NE) program other than an InstallShield 5
+     * setup stub; Windows 98 runs these in its Win16 subsystem. */
+    case W32_REFUSE_WIN16:snprintf(text,sizeof(text),"%.63s is a 16-bit Windows program. It needs 16-bit Windows support, which this version of CiukiOS does not include.",f->exe);break;
     default:snprintf(text,sizeof(text),"%.63s is not a valid Win32 application.",f->exe);break;
     }
     desk_shell_message(d,"Error Starting Program",text,1);

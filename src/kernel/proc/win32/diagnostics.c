@@ -91,10 +91,10 @@ static bool diag_enqueue(const struct ciuki_w32_fault *f){
     w32_fault_queue[(w32_fault_head+w32_fault_count)%16]=*f;w32_fault_count++;return true;
 }
 void w32_refusal_queue(struct process *p,uint32_t reason,const char *module,uint32_t error){
-    if(reason<1||reason>7)return;
+    if(reason<1||reason>W32_REFUSE_WIN16)return;
     struct w32_diagnostic_state *s=p->w32?p->w32->diagnostics:0;
     if(s){if(s->refused&(1u<<reason))return;s->refused|=1u<<reason;}
-    const char *reasons[]={"","msi","driver","runtime","missing-dll","missing-export","invalid-image","no-server"};
+    const char *reasons[]={"","msi","driver","runtime","missing-dll","missing-export","invalid-image","no-server","win16"};
     struct ciuki_w32_fault f={.kind=W32_REPORT_REFUSE,.pid=p->pid,.code=reason,.offset=error};
     diag_name(f.exe,sizeof(f.exe),p->name);diag_name(f.module,sizeof(f.module),module);diag_enqueue(&f);
     klog("[win32] refuse %s pid=%u module=%s error=%u",reasons[reason],p->pid,f.module,error);

@@ -805,6 +805,12 @@ static void frames(const char *folder)
             assert(d.v3_dialog_kind==3);char name[32];snprintf(name,sizeof(name),"refuse-%u",reason);frame(folder,themes[t],name);
             key(0x1c,1);key(0x1c,0);assert(!d.v3_dialog_kind);flush();cleanup();
         }
+        /* fx-autorun: the 16-bit Windows refusal names the missing support. */
+        setup();{struct ciuki_w32_fault fault={.kind=W32_REPORT_REFUSE,.code=W32_REFUSE_WIN16,.pid=42};
+            strcpy(fault.exe,"SETUP.EXE");desk_w32_fault_dialog(&d,&fault);
+            assert(d.v3_dialog_kind==3&&!strcmp(d.sh.message_title,"Error Starting Program"));
+            assert(strstr(d.sh.message_text,"SETUP.EXE is a 16-bit Windows program. It needs 16-bit Windows support"));
+            key(0x1c,1);key(0x1c,0);assert(!d.v3_dialog_kind);flush();cleanup();}
         /* G13 (ER-1): a native program's fault, Windows 9x wording, Details and the crash file text. */
         setup();struct ciuki_w32_fault nf={.kind=W32_REPORT_NATIVE_FAULT,.pid=42,.tid=43,.code=14u|6u<<8,.eip=0x401234,.offset=0x10,.valid=3};
         strcpy(nf.exe,"crasher");nf.registers[7]=0xbffffff0;nf.stack[0]=0xdeadbeef;nf.stack[1]=0x01020304;
