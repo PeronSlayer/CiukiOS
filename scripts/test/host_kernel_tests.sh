@@ -276,7 +276,9 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/power_test.c" -o "$out/power_test"
 "$out/power_test"
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
-    -I "$root/src/kernel/include" "$root/tests/host/power_runtime_test.c" -o "$out/power_runtime_test"
+    -ffunction-sections -fdata-sections -Wl,--gc-sections \
+    -I "$root/src/kernel/include" "$root/tests/host/power_runtime_test.c" \
+    "$root/tests/host/security/subject_fixture.c" -o "$out/power_runtime_test"
 "$out/power_runtime_test"
 # fx-acpioff: the ACPI S5 register fallback (SCI_EN handshake, status/GPE
 # clearing, PM1a/PM1b writes, bounds, registry owner refusal, hint states).
@@ -565,6 +567,9 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 
 # sec-k01 H01: immutable production subjects and call-101 transactions.
 python3 -B -m unittest discover -s "$root/tests/host/security" -p test_credentials.py
+# sec-k04 H05: production device/admin authority, raw disk and dispatch.
+python3 -B -m unittest discover -s "$root/tests/host/security" -p test_devices.py
+# end sec-k04 registration
 # sec-k02 H02: OWNER batches/checkpoints and resolved FAT path policy.
 python3 -B -m unittest discover -s "$root/tests/host/security" -p test_owner_policy.py
 # ---- sec-k03 H04 (one block): every native/Win32/legacy-table file, handle,

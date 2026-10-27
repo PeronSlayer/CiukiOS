@@ -2,6 +2,7 @@
  * executes here: delivery only rewrites a user return frame after kernel work.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/security_device.h>
 #include <ciuki/cpu.h>
 #include <ciuki/signal.h>
 
@@ -175,7 +176,8 @@ int proc_signal_kill(struct process *caller, int32_t pid, uint32_t signo)
         struct process *p = proc_find((uint32_t)pid);
         if (!p)
             return -ESRCH;
-        if (p->pgid != caller->pgid)
+        if (p->pgid != caller->pgid || !security_process_live(caller) || !security_same(caller,p) ||
+            security_system(p) || !p->live_threads)
             return -EPERM;
         if (p->state != PROC_LIVE)
             return -ESRCH;
@@ -191,7 +193,8 @@ int proc_signal_kill(struct process *caller, int32_t pid, uint32_t signo)
     unsigned count = 0;
     for (unsigned i = 0; i < CIUKI_THREAD_MAX; i++) {
         struct proc_thread *t = proc_thread_slot(i);
-        if (!signal_live(t) || t->process->pid == 1 || t->process->pgid != caller->pgid)
+        if (!signal_live(t) || t->process->pid == 1 || t->process->pgid != caller->pgid ||
+            !security_process_live(caller) || !security_same(caller,t->process) || security_system(t->process))
             continue;
         unsigned j = 0;
         while (j < count && targets[j] != t->process)

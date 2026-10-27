@@ -231,7 +231,8 @@ static struct storage *start(struct model *m, unsigned slot)
         snprintf(s->raw[slot].firmware, sizeof(s->raw[slot].firmware), "1.0");
     }
     OK(vfs_table_init(&s->vfs, &H.table, 3)); H.table_ready = true;
-    H.s = s; H.caller = (struct storage_caller){ 42, true };
+    s->setup_mode=true;
+    H.s = s; H.caller = (struct storage_caller){ .pid=42,.setup_capability=true,.administrator=true,.system=true };
     H.logging = false; H.logs = 0; H.log_bytes = 0;
     H.fail_op = 0; H.fail_after = 0; H.op_calls = 0; H.before_publish = 0;
     H.writer_error = 0;

@@ -2,6 +2,7 @@
  * input consumes its single queue, never controller ports or firmware calls.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/security_device.h>
 extern uint32_t file_description_count(void) __attribute__((weak));
 #define FILE_OBJECTS ((file_description_count ? file_description_count() : 0) + (net_socket_count ? net_socket_count() : 0))
 extern uint32_t net_socket_count(void) __attribute__((weak));
@@ -350,10 +351,16 @@ int grant_input_devctl(struct process *p, int32_t fd, uint32_t command, uint32_t
 {
     int err=grant_check(p,fd,DESKTOP_INPUT,PROT_READ);
     if (err) return err;
+    if (!security_process_live(p)) return -EACCES;
+    /* Existing calibration storage is machine-wide. Until the per-profile
+     * adapter exists, never let a personal request alter that store. */
+    if (command==INPUT_HID_CALIBRATE && !security_device_system(p)) return -EOPNOTSUPP;
     if (command == INPUT_KEYBOARD_SET) {
         struct ciuki_keyboard_settings settings;
         if (bytes != sizeof(settings)) return -EINVAL;
         err = copy_from_user(&settings, address, bytes);
+        if (!err) err=grant_check(p,fd,DESKTOP_INPUT,PROT_READ);
+        if (!err && !security_process_live(p)) err=-EACCES;
         return err ? err : input_keyboard_settings ? input_keyboard_settings(&settings) : -ENODEV;
     }
     unsigned expected=command==INPUT_HID_GET_CAPS ? sizeof(struct ciuki_hid_caps) :
@@ -371,6 +378,15 @@ int grant_input_devctl(struct process *p, int32_t fd, uint32_t command, uint32_t
     if (!err && (record.header[0]!=(command==INPUT_JOY_CONTROL ? CIUKI_JOYSTICK_VERSION : CIUKI_HID_VERSION) || record.header[1]!=bytes ||
         (command==INPUT_HID_GET_CAPS && record.caps.reserved) ||
         (command==INPUT_HID_GET_STATE && record.state.reserved))) err=-EINVAL;
+    if (!err && command==INPUT_JOY_CONTROL && !security_device_system(p)) {
+        switch (record.joystick.operation) {
+        case CIUKI_JOY_CALIBRATE: case CIUKI_JOY_ROUTE: case CIUKI_JOY_CONFIGURE: case CIUKI_JOY_SAVE_GAME:
+            err=-EOPNOTSUPP; break;
+        default: break;
+        }
+    }
+    if (!err) err=grant_check(p,fd,DESKTOP_INPUT,PROT_READ);
+    if (!err && !security_process_live(p)) err=-EACCES;
     if (!err) {
         uint32_t flags=irq_save();
         if (command==INPUT_HID_CALIBRATE && joystick_settings_calibrate) {

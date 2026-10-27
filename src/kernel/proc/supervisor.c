@@ -232,18 +232,15 @@ void supervisor_dosvm_delegate(struct process *parent, struct process *child, co
     bool authorized = parent == proc_supervisor() || (display && input);
     child->setup_capability = false; /* f9-01: never inherited or path-derived */
     child->dosvm_capability = authorized && !strncmp(path,"/Programs/dosbox",sizeof("/Programs/dosbox"));
-    child->dhcp_capability = authorized && !strncmp(path,"/Programs/terminal",sizeof("/Programs/terminal"));
-    child->network_capability = authorized &&
-        (!strncmp(path,"/Programs/desktop",sizeof("/Programs/desktop")) || !strncmp(path,"/Programs/control",sizeof("/Programs/control")));
+    /* sec-k04: compatibility flags describe actual rights, never image paths.
+     * Consumers authorize the actual issuer's credential on every operation. */
+    bool admin = security_process_live(child) && security_admin(child);
+    child->dhcp_capability = admin;
+    child->network_capability = admin;
     child->programs_capability = authorized &&
         (!strncmp(path,"/Programs/desktop",sizeof("/Programs/desktop")) || !strncmp(path,"/Programs/control",sizeof("/Programs/control")));
-    child->time_capability = authorized &&
-        (!strncmp(path,"/Programs/desktop",sizeof("/Programs/desktop")) || !strncmp(path,"/Programs/control",sizeof("/Programs/control")));
-    static const char *const recovery[] = { "/Programs/desktop", "/Programs/control", "/Programs/terminal",
-                                            "/Programs/scandisk", "/Programs/msconfig" };
-    child->recovery_capability = false;
-    for (unsigned i = 0; authorized && i < ARRAY_SIZE(recovery); i++)
-        if (!strncmp(path, recovery[i], strlen(recovery[i]) + 1)) child->recovery_capability = true;
+    child->time_capability = admin;
+    child->recovery_capability = admin;
 }
 
 int supervisor_spawn_gate(bool supplement, struct process **out)

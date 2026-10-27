@@ -14,6 +14,7 @@
 #include <ciuki/net_stack.h>
 #include <ciuki/net_control.h>
 #include <ciuki/files.h>
+#include "../security/subject_fixture.h"
 #include <ciuki/desktop.h>
 #include <ciuki/signal.h>
 #include <stdio.h>
@@ -622,7 +623,8 @@ static void cycles(void)
 int main(int argc,char **argv)
 {
     setvbuf(stdout,NULL,_IOLBF,0);
-    client=(struct process){.pid=1,.state=PROC_LIVE,.fds=fds};arch_tests();
+    client=(struct process){.pid=1,.state=PROC_LIVE,.fds=fds};
+    security_fixture_identity(&client,1000,1,true,0);arch_tests();
     ciuki_lwip_seed(0x12345678);CHECK(!net_stack_init());
     CHECK(entropy_before_transport);
     if(argc==2 && !strcmp(argv[1],"--f6-24")){

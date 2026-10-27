@@ -11,7 +11,6 @@ static void irq_restore(uint32_t f) { sys_arch_unprotect(f); }
 /* Only ordinary-channel readiness is supported by this synthetic fixture.
  * Fail loudly if the production poll path starts using service/session work. */
 volatile uint64_t g_ticks;
-bool security_subject_live(const struct security_subject *s) { (void)s; abort(); }
 void pmm_free(uint32_t page) { (void)page; abort(); }
 void kfree(void *p) { (void)p; abort(); }
 void kwait_wake_all(struct kwait *q) { (void)q; abort(); }

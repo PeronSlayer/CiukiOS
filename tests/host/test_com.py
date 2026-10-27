@@ -17,6 +17,7 @@ class ComTests(unittest.TestCase):
                             '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections',
                             '-I', str(ROOT / 'src/kernel/include'),
                             str(ROOT / 'tests/host/com_test.c'),
+                            str(ROOT / 'tests/host/security/subject_fixture.c'),
                             str(ROOT / 'src/kernel/drivers/serial_protocol.c'), '-o', str(binary)], check=True)
             subprocess.run([binary], check=True)
 

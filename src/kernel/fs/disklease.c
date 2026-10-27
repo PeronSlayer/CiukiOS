@@ -3,12 +3,12 @@
  * device nodes /dev/ata0..3 (drivers/disk_dev.c) only copy records: every
  * decision is here, so the host suite runs it against file-backed disks.
  *
- * Authority: reads, DISK_GET_INFO and DISK_LEASE_STATE are open. Every
- * mutating request (write, flush, acquire, release, publish, phase, recheck)
- * needs the CALLER's Setup capability (EPERM) and, except the acquire, the
- * lease held by that caller (EACCES), checked on each call, never at open.
- * G29c adds a separate nonboot editor acquisition for ordinary callers; it
- * grants raw I/O/flush/release only, never Setup publish/phase/recheck.
+ * Authority (sec-k04): geometry/state are public. Raw reads require an
+ * administrator on non-system disks; every user, including administrators,
+ * is refused raw access to the managed system disk. Writes/flush/release
+ * additionally require the actual caller's exclusive lease. Setup acquisition
+ * and publication require SYSTEM Setup in Setup boot; a non-system partition
+ * editor requires administrator membership and keeps the existing blockers.
  * State lives in struct storage under the VFS namespace lock; device I/O
  * runs without it. Errors are negative ABI errno values; no panic paths.
  *
@@ -73,10 +73,19 @@ static void record(unsigned disk, uint32_t pid, const char *state, const char *r
 {
     klog("[disk] lease disk=%u pid=%u state=%s reason=%s", disk, pid, state, reason);
 }
+static bool system_disk(const struct storage *s, unsigned disk)
+{
+    const struct blkdev *dev=s->raw[disk].dev;
+    return (!s->setup_mode && (!disk || (dev && dev==s->raw[0].dev))) ||
+        (s->volumes[2].present && !s->volumes[2].optical &&
+         (s->volumes[2].disk==disk || (dev && dev==s->volumes[2].part.parent)));
+}
 static int authorize(struct storage *s, unsigned disk, const struct storage_caller *c)
 {
     const struct storage_lease *l = &s->raw[disk].lease;
-    if (!c || (!c->setup_capability && !l->partition_tool)) return -EPERM;
+    if (!c || !c->pid || !c->administrator ||
+        (!l->partition_tool && !(c->system && c->setup_capability && s->setup_mode))) return -EPERM;
+    if (!c->system && system_disk(s,disk)) return -EPERM;
     return leased(l) && l->holder == c->pid ? 0 : -EACCES;
 }
 static bool on_disk(const struct storage *s, unsigned disk, const struct storage_volume *v)
@@ -221,10 +230,11 @@ static int detach_locked(struct storage *s, unsigned disk)
 static int acquire_locked(struct storage *s, unsigned disk, const struct storage_caller *c, struct ciuki_disk_info *out, bool editor)
 {
     struct storage_disk *r = &s->raw[disk];
-    if (!c || !c->pid || (!editor && !c->setup_capability)) return -EPERM;
+    if (!c || !c->pid || !c->administrator ||
+        (!editor && !(c->system && c->setup_capability && s->setup_mode))) return -EPERM;
     /* The native editor never detaches the boot disk, even if temporarily
      * read-only. Setup's original whole-disk install path is separate. */
-    if (editor && (!disk || on_disk(s,disk,&s->volumes[2]))) return -EBUSY;
+    if (editor && (!disk || system_disk(s,disk))) return -EBUSY;
     uint32_t mask = disk_drives(s, disk);
     if (mask) { vfs_reserve_locked(&s->vfs, mask); vfs_tag_locked(&s->vfs, "lease"); }
     const char *busy = busy_locked(s, disk);
@@ -401,7 +411,8 @@ int storage_disk_control(struct storage *s, unsigned disk, const struct storage_
         if (q->flags || q->reserved) return -EINVAL;
         return storage_disk_flush(s, disk, c);
     }
-    if ((op==DISK_PUBLISH || op==DISK_RECHECK || op==DISK_SET_PHASE) && (!c || !c->setup_capability)) return -EPERM;
+    if ((op==DISK_PUBLISH || op==DISK_RECHECK || op==DISK_SET_PHASE) &&
+        (!c || !c->system || !c->setup_capability || !s->setup_mode)) return -EPERM;
     if (op == DISK_PUBLISH) return publish(s, disk, c, record_in);
     vfs_lock(&s->vfs, 0);
     struct storage_disk *r = &s->raw[disk];
@@ -446,6 +457,10 @@ int storage_disk_io(struct storage *s, unsigned disk, const struct storage_calle
     struct storage_disk *r = &s->raw[disk];
     struct blkdev *dev = r->dev;
     int e = !dev ? -ENXIO : dev->sector_size != CIUKI_DISK_SECTOR ? -EINVAL : abi_error(blkdev_range(dev, lba, count));
+    if (!e && (!c || !c->pid || !c->administrator)) e = -EPERM;
+    /* K-Q4: the entire physical system disk, including other partitions,
+     * is private. A mount flag/removable alias cannot expose its sectors. */
+    if (!e && !c->system && system_disk(s,disk)) e = -EPERM;
     if (!e && write) e = authorize(s, disk, c);
     if (!e && write) {
         /* The published volume owns its sectors and its cache. */
