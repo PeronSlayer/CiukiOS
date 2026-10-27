@@ -16,3 +16,4 @@ void h1_game_report(void);
 void h1_game_module(const char *,void *); /* after a DLL's successful DLL_PROCESS_ATTACH: GL call profile hooks */
 #endif
 void h1_game_script(const char *command_line);   /* +set ciuki_keys "text": console typing on the lease frames */
+void h1_game_options(const char *options);      /* game-exec harness option defaults=IDLE_MS,MAX (fx-is5boot) */

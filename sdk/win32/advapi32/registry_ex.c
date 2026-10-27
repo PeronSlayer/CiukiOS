@@ -19,6 +19,7 @@ IMPORT int W32API FreeLibrary(void *);
 IMPORT void *W32API FindResourceA(void *, const char *, const char *);
 IMPORT void *W32API LoadResource(void *, void *);
 IMPORT uint32_t W32API SizeofResource(void *, void *);
+IMPORT int W32API GetComputerNameA(char *, uint32_t *);
 LONG W32API RegOpenKeyExA(uint32_t, const char *, uint32_t, uint32_t, uint32_t *);
 LONG W32API RegOpenKeyExW(uint32_t, const WCHAR *, uint32_t, uint32_t, uint32_t *);
 LONG W32API RegCloseKey(uint32_t);
@@ -290,4 +291,44 @@ LONG W32API RegLoadMUIStringW(uint32_t key, const WCHAR *value, WCHAR *out, uint
   w32r_free(path);
   w32r_free(loaded);
   return e;
+}
+/* RegConnectRegistry: the local computer (NULL, "" or its own name, with or
+ * without the leading backslashes) opens the named predefined root, as
+ * Windows and Wine do through RegOpenKey(hKey, NULL); w32srv answers that
+ * with the root's own handle, which RegCloseKey accepts. CiukiOS has no
+ * remote registry service, so any other computer is ERROR_BAD_NETPATH (53).
+ * The InstallShield 5 engine imports the ANSI entry point. */
+static LONG connect_registry(const void *machine, int wide, uint32_t key, uint32_t *out) {
+  if (!out)
+    return 87;
+  *out = 0;
+  const uint8_t *a = machine;
+  const WCHAR *w = machine;
+  unsigned at = 0;
+  if (machine && (wide ? w[0] : a[0]) == '\\' && (wide ? w[1] : a[1]) == '\\')
+    at = 2;
+  if (machine && (wide ? w[at] : a[at])) {
+    char local[32];
+    uint32_t n = sizeof(local);
+    if (!GetComputerNameA(local, &n))
+      return 53;
+    for (unsigned i = 0;; i++, at++) {
+      uint32_t c = wide ? w[at] : a[at], l = (uint8_t)local[i];
+      if (c >= 'a' && c <= 'z')
+        c -= 32;
+      if (l >= 'a' && l <= 'z')
+        l -= 32;
+      if (c != l)
+        return 53;
+      if (!c)
+        break;
+    }
+  }
+  return RegOpenKeyExA(key, NULL, 0, 0xf003f, out);
+}
+LONG W32API RegConnectRegistryA(const char *machine, uint32_t key, uint32_t *out) {
+  return connect_registry(machine, 0, key, out);
+}
+LONG W32API RegConnectRegistryW(const WCHAR *machine, uint32_t key, uint32_t *out) {
+  return connect_registry(machine, 1, key, out);
 }

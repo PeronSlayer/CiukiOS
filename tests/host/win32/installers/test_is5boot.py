@@ -3,6 +3,7 @@
 from pathlib import Path
 import errno
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -66,9 +67,32 @@ class BootstrapTests(unittest.TestCase):
         subprocess.run([binary], check=True)
 
 
+def records(process):
+    """An H1 child's own records, read in memory only (never persisted)."""
+    if process.output is not None:
+        return process.output
+    return os.pread(process.log.fileno(), 1024 * 1024, 0).decode(errors='replace')
+
+
+def diagnostics(service):
+    """CiukiOS's own records for a failure message. Window titles and file
+    names are the engine's text: each record is cut before such a field."""
+    ours = []
+    for process in list(service.children):
+        log = records(process)
+        ours.append('process %d: %d bytes, %d lines' % (process.process.pid, len(log), len(log.splitlines())))
+        ours += [line.split(' title=')[0].split(' path=')[0][:160] for line in log.splitlines()
+                 if line.startswith(('[', 'GAME', 'H1', 'adapter', 'FAULT', 'fault', 'REPORT', 'REFUSE'))]
+    return '\n'.join(dict.fromkeys(ours))
+
+
 @unittest.skipUnless(CD.is_dir(), 'original Half-Life CD is not mounted')
 class LocalEngineTests(unittest.TestCase):
-    def test_original_setup_to_first_dialog(self):
+    def harness(self, options=None, volume=None):
+        """The H1 installer services with a read-only D: view of the mounted
+        CD and the kernel's IS5 admission. `options` are H1 game-exec harness
+        settings (h1_game.c h1_game_options); `volume` overrides the fixture
+        C: free/total bytes reported by GetDiskFreeSpace."""
         from scripts.win32 import is5boot, installer_fixture
         from tests.host.win32.wine import test_wine_upper as upper
         from . import host_services, test_flow_fixtures
@@ -108,6 +132,38 @@ class LocalEngineTests(unittest.TestCase):
                     p = matches[0]
                 return p
 
+            def handle_path(self, h, writing=False):
+                # A handle opened on the read-only CD view maps back to D:.
+                current = Path(os.readlink(f'/proc/self/fd/{h.value}'))
+                try:
+                    relative = current.relative_to(CD)
+                except ValueError:
+                    return super().handle_path(h, writing)
+                if writing:
+                    raise OSError(errno.EROFS, 'original CD is read-only')
+                return self.path('D:\\' + '\\'.join(relative.parts))
+
+            def file(self, a, raw):
+                super().file(a, raw)
+                # GetDiskFreeSpace (action 19) of C: on a volume large enough
+                # for the title; the files really land on the host disk.
+                if volume and a[4] == 19 and not a[17] and self.fullpath(self.string(raw, a[6]) or '')[0] == 'C':
+                    struct.pack_into('<4I', raw, a[8] + 24, volume[0] & 0xffffffff, volume[0] >> 32,
+                                     volume[1] & 0xffffffff, volume[1] >> 32)
+
+            def dispatch(self, kind, raw, cap):
+                # w32srv's own directory records identify dialog windows:
+                # WINDOW_ALLOC (17) of the dialog class atom WC_DIALOG
+                # (#32770, 0x8002); the reply key is the HWND. MessageBox
+                # and DialogBox both build #32770 windows.
+                status, out = super().dispatch(kind, raw, cap)
+                if (kind == 2 and not status and len(raw) >= 40 and len(out) >= 40 and
+                        struct.unpack_from('<I', raw, 4)[0] == 17 and struct.unpack_from('<I', raw, 16)[0] == 0x8002 and
+                        not struct.unpack_from('<I', out, 4)[0]):
+                    with self.service.lock:
+                        self.service.dialogs.add((self.pid, struct.unpack_from('<I', out, 8)[0]))
+                return status, out
+
         class Services(host_services.Services):
             def session(self, cwd='C:\\WINDOWS\\TEMP'):
                 with self.lock:
@@ -143,37 +199,76 @@ class LocalEngineTests(unittest.TestCase):
                             tail = text.split(None, 1)[1] if len(text.split(None, 1)) > 1 else ''
                         command = '"' + image + '" ' + tail
                         image = 'C:\\System\\Win32\\is5boot.exe'
-                return self.start_adapter(['game-exec', image, command], image, cwd, flags)
+                return self.start_adapter(['game-exec', image, command, *([options] if options else [])], image, cwd, flags)
 
-        with tempfile.TemporaryDirectory(dir=OUT) as scratch:
-            service = Services(Path(scratch) / 'root', library, program)
-            target = service.root / 'C/System/Win32/is5boot.exe'
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(helper, target)
-            try:
-                child = service.start('D:\\SETUP.EXE', '"D:\\SETUP.EXE"', 'D:\\')
-                deadline = time.monotonic() + 90
-                while time.monotonic() < deadline:
-                    extracted = list((service.root / 'C/WINDOWS/TEMP').glob('_ISTMP*.DIR/*'))
-                    dialogs = False
-                    for process in list(service.children):
-                        # Read diagnostics in memory only; never persist text
-                        # emitted by the commercial engine.
-                        log = os.pread(process.log.fileno(), 1024*1024, 0).decode(errors='replace')
-                        if ' modal=1' in log and 'GAME frame n=' in log and 'kind=window' in log:
-                            dialogs = True
-                    if extracted and dialogs:
-                        print('Half-Life H1: native bootstrap, _ISTMP support extraction and first modal dialog frame')
-                        break
-                    if child.process.poll() is not None:
-                        self.fail('Half-Life helper exited before support extraction and a dialog frame; exit=' + str(child.process.returncode))
-                    time.sleep(0.05)
-                else:
-                    self.fail('Half-Life engine did not reach support extraction and first dialog within 90 seconds')
-            finally:
-                # Close before TemporaryDirectory exits: no commercial
-                # expanded engine/support bytes remain on disk.
-                service.close()
+        scratch = tempfile.TemporaryDirectory(dir=OUT)
+        self.addCleanup(scratch.cleanup)
+        service = Services(Path(scratch.name) / 'root', library, program)
+        service.dialogs = set()
+        # Close before the TemporaryDirectory is removed: no commercial
+        # expanded engine/support or installed bytes remain on disk.
+        self.addCleanup(service.close)
+        target = service.root / 'C/System/Win32/is5boot.exe'
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(helper, target)
+        return service
+
+    def test_original_setup_to_first_dialog(self):
+        service = self.harness()
+        child = service.start('D:\\SETUP.EXE', '"D:\\SETUP.EXE"', 'D:\\')
+        deadline = time.monotonic() + 90
+        while time.monotonic() < deadline:
+            extracted = list((service.root / 'C/WINDOWS/TEMP').glob('_ISTMP*.DIR/*'))
+            dialogs = False
+            for process in list(service.children):
+                log = records(process)
+                # The dialog's wire window (DESK_V3_WIN32_HWND) and a GDI
+                # frame (DESK_DAMAGE) of that window generation.
+                hwnds = {h for pid, h in set(service.dialogs) if pid == process.process.pid}
+                wires = {(w, g) for w, g, h in re.findall(
+                    r'^GAME desktop op=78 window=(\d+) generation=(\d+) bytes=\d+ hwnd=(\d+)', log, re.M)
+                    if int(h) in hwnds}
+                shown = set(re.findall(r'^GAME frame n=\d+ kind=gdi window=(\d+) generation=(\d+) ', log, re.M))
+                if wires & shown:
+                    dialogs = True
+            if extracted and dialogs:
+                print('Half-Life H1: native bootstrap, _ISTMP support extraction (%d files) and the first dialog frame'
+                      % len(extracted))
+                return
+            if child.process.poll() is not None:
+                self.fail('Half-Life helper exited before support extraction and a dialog frame; exit=%s\n%s'
+                          % (child.process.returncode, diagnostics(service)))
+            time.sleep(0.05)
+        self.fail('Half-Life engine did not reach support extraction and first dialog within 90 seconds; extracted=%d\n%s'
+                  % (len(extracted), diagnostics(service)))
+
+    @unittest.skipUnless(os.environ.get('CIUKI_IS5_INSTALL'),
+                         'opt-in: the whole Half-Life install into a scratch C: (about 400 MB, minutes)')
+    def test_original_setup_complete_install(self):
+        """The whole original install in H1, to the engine's exit.
+
+        Defaults on every page (Enter after 5 s without window or write
+        activity), except the third prompt: H1 has no sound device (winmm's
+        int 0x80 is refused by the confinement), so Sierra's system test
+        reports the missing sound card and its "continue?" box defaults to
+        No; the answer there is the &Yes mnemonic. C: reports 4 GiB free
+        (the fixture volume's 128 MiB is too small for the title)."""
+        service = self.harness('defaults=5000,80 answers=..y', (4 << 30, 8 << 30))
+        child = service.start('D:\\SETUP.EXE', '"D:\\SETUP.EXE"', 'D:\\')
+        try:
+            code, _ = child.finish(int(os.environ.get('CIUKI_IS5_INSTALL_SECONDS', '1800')))
+        except subprocess.TimeoutExpired:
+            self.fail('Half-Life install did not finish\n' + diagnostics(service))
+        installed = [p for p in (service.root / 'C').rglob('*') if p.is_file() and 'WINDOWS' not in p.parts
+                     and 'System' not in p.parts]
+        size = sum(p.stat().st_size for p in installed)
+        engine = [process for process in service.children if process is not child][:1]
+        log = records(engine[0]) if engine else ''
+        self.assertEqual(code, 0, diagnostics(service))
+        self.assertNotIn('REFUSE ', log, diagnostics(service))
+        self.assertNotIn('REPORT action=1', log, diagnostics(service))
+        self.assertGreater(size, 300 << 20, 'installed %d files, %d bytes' % (len(installed), size))
+        print('Half-Life H1: install complete, engine exit 0, %d files, %d bytes' % (len(installed), size))
 
 
 if __name__ == '__main__':

@@ -189,3 +189,23 @@ HANDLE W32API LocalHandle(const void *p) { return GlobalHandle(p); }
 HANDLE W32API LocalReAlloc(HANDLE h, DWORD n, DWORD f) {
   return GlobalReAlloc(h, n, f);
 }
+/* Win16 compatibility entry points kept by Win32 (the InstallShield 5 engine
+ * imports GlobalCompact). There are no discardable segments to compact: the
+ * result is the largest free block of the process heap, as on Windows NT and
+ * ReactOS (RtlCompactHeap of the process heap); minimum-free and new-size
+ * arguments are ignored. Fix/Wire pin a block by locking it. */
+DWORD W32API HeapCompact(HANDLE, DWORD);
+DWORD W32API GlobalCompact(DWORD min_free) {
+  (void)min_free;
+  return HeapCompact(GetProcessHeap(), 0);
+}
+DWORD W32API LocalCompact(DWORD min_free) { return GlobalCompact(min_free); }
+DWORD W32API LocalShrink(HANDLE h, DWORD size) {
+  (void)h;
+  (void)size;
+  return GlobalCompact(0);
+}
+void W32API GlobalFix(HANDLE h) { GlobalLock(h); }
+void W32API GlobalUnfix(HANDLE h) { GlobalUnlock(h); }
+void *W32API GlobalWire(HANDLE h) { return GlobalLock(h); }
+BOOL W32API GlobalUnWire(HANDLE h) { return GlobalUnlock(h); }

@@ -171,6 +171,30 @@ int main(int argc, char **argv) {
   assert(!strcmp(p[0].pDatatype, "RAW"));
   assert(((uint8_t *)buf)[needed] == 0xa5);
   free(buf);
+  /* EnumPorts: the native parallel devices, exact sizes, levels 1/2. */
+  assert(!EnumPortsA(0, 1, 0, 0, &needed, &returned) && last_error == 122 &&
+         returned == 0 && needed == 3 * sizeof(PORT_INFO_1A) + 30);
+  buf = malloc(needed + 8);
+  memset(buf, 0xa5, needed + 8);
+  assert(!EnumPortsA(0, 1, buf, needed - 1, &needed, &returned) &&
+         last_error == 122 && returned == 0);
+  assert(EnumPortsA("", 1, buf, needed, &needed, &returned) && returned == 3);
+  assert(!strcmp(((PORT_INFO_1A *)buf)[0].pName, "/dev/lpt0") &&
+         !strcmp(((PORT_INFO_1A *)buf)[2].pName, "/dev/lpt2"));
+  assert(((uint8_t *)buf)[needed] == 0xa5);
+  free(buf);
+  assert(!EnumPortsW(0, 2, 0, 0, &needed, &returned) && last_error == 122);
+  buf = malloc(needed);
+  assert(EnumPortsW(0, 2, buf, needed, &needed, &returned) && returned == 3);
+  PORT_INFO_2W *port = buf;
+  assert(port[1].pPortName[0] == '/' && port[1].pPortName[8] == '1' &&
+         !port[1].pPortName[9] && port[1].fPortType == PORT_TYPE_WRITE &&
+         port[1].pDescription[17] == '2' && !port[1].Reserved);
+  free(buf);
+  assert(!EnumPortsA("\\\\SERVER", 1, 0, 0, &needed, &returned) &&
+         last_error == 50);
+  assert(!EnumPortsA(0, 3, 0, 0, &needed, &returned) && last_error == 124);
+  assert(!EnumPortsA(0, 1, 0, 0, 0, &returned) && last_error == 87);
   WCHAR wide[64];
   DWORD size = 64;
   assert(GetDefaultPrinterW(wide, &size) && size == 11 && wide[0] == 'P');
