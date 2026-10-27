@@ -1035,6 +1035,11 @@ int desk_client_damage(struct desktop *d,int index,struct desk_box box)
     for(int i=0;i<DESK_CLIENTS && comparable;i++)if(i!=index && d->clients[i].window &&
         !d->clients[i].minimized && d->clients[i].order>c->order &&
         desk_intersect(box,desk_outer(&d->clients[i]),&ignored))comparable=0;
+    /* fx-doswin3 round 3: the RAM frame is older than the scanout where a
+     * DOS window was presented straight from its surface (direct_stale):
+     * a frame that returns to those older pixels is a change on screen. */
+    for(unsigned i=0;i<d->direct_stale.count && comparable;i++)
+        if(desk_intersect(box,d->direct_stale.boxes[i],&ignored))comparable=0;
     if(comparable && d->shell) {
         struct desk_box boxes[SH_LEVELS+6];unsigned n=desk_shell_occluders ? desk_shell_occluders(d,boxes) : 0;
         for(unsigned i=0;i<n;i++) {
@@ -1923,8 +1928,11 @@ static void vram_check(struct desktop *d, uint64_t now, uint32_t next)
 static void region_load(struct desktop *,pixman_region32_t *,const struct desk_damage *);
 static int scroll_plan(struct desktop *d, struct ciuki_rect *out, pixman_region32_t *copied)
 {
+    /* fx-doswin3 round 3: no plan while any RAM pixels are older than the
+     * scanout (direct_stale): a candidate's translated source could match
+     * them and copy different scanout pixels. */
     if (!(d->accel_caps&1u) || !d->hw_cursor || !d->scanout_valid ||
-        !d->damage.count || d->power.state) return 0;
+        !d->damage.count || d->power.state || d->direct_stale.count) return 0;
     pixman_region32_t dirty;region_load(d,&dirty,&d->damage);
     for (unsigned i=0; i<DESK_CLIENTS; i++) {
         struct desk_client *c=&d->clients[i];
@@ -2361,10 +2369,21 @@ static void direct_settle_damage(struct desktop *d)
     for (unsigned i=0;i<d->direct_stale.count;i++) desk_damage_add(&d->damage,d->direct_stale.boxes[i],d->width,d->height);
     d->direct_stale.count=0; d->direct_settling=1;
 }
+/* Before a reader of the RAM frame (Print Screen, the graphics benchmark):
+ * one composed frame first (direct_settling forces it), which also resolves
+ * a pending move, whose copy source is the RAM frame of the old geometry,
+ * and presents the recomposed boxes. If that frame cannot run now (a
+ * leased display, monitor off), the boxes stay damaged for the scanout and,
+ * without a pending move, are composed for the reader. */
 void desk_direct_settle(struct desktop *d)
 {
-    for (unsigned i=0;i<d->direct_stale.count;i++) scene(d,d->direct_stale.boxes[i]);
-    d->direct_stale.count=0;
+    if (!d->direct_stale.count && !d->copy_pending) return;
+    struct desk_damage stale=d->direct_stale;
+    for (unsigned i=0;i<stale.count;i++) desk_damage_add(&d->damage,stale.boxes[i],d->width,d->height);
+    d->direct_stale.count=0; d->direct_settling=1;
+    (void)desk_redraw(d);
+    if (!d->copy_pending && d->damage.count)
+        for (unsigned i=0;i<stale.count;i++) scene(d,stale.boxes[i]);
 }
 static void latency_record(struct desktop *d, uint64_t latency)
 {
@@ -2495,7 +2514,7 @@ int desk_redraw(struct desktop *d)
     /* fx-doswin3 round 3: only an unobscured DOS window changed: present
      * its damage straight from its surface (direct_present). Otherwise a
      * frame that touches its older RAM pixels recomposes them first. */
-    int direct=direct_client(d), complete=1;
+    int direct=d->direct_settling ? -1 : direct_client(d), complete=1;
     if (direct<0) direct_settle_damage(d);
     if (direct>=0) {
         begin=time_now(d);

@@ -451,3 +451,20 @@ replay and properties, eight i686 kernel units with the kernel flags; of the
 34 desktop model tests 33 pass and `test_shell_launcher` fails, identically
 on the committed round-2 tree (pre-existing). Commands and the next-trial records are in
 `build/codex/fx-doswin3-report.md` (Round 3).
+
+### Round 3 review fixes (2026-10-27)
+
+Review `build/lead-scratch/fx-doswin3-review-0314.md` (Codex, probes on
+`2f24fcecc`): three P2 and one P3, all fixed with regressions that fail on
+the reviewed commit. The direct path's older RAM pixels (`direct_stale`)
+are now also excluded from the desktop's equality suppression of repeated
+client frames (A -> B shown directly, then back to A, was dropped) and from
+scroll plans (a translated source inside them copied different scanout
+pixels); `desk_direct_settle` (Print Screen, graphics benchmark) runs one
+forced composed frame, so a pending window move is resolved before its RAM
+copy source is recomposed, instead of composing the boxes with the new
+geometry. The presenter-first dispatch also waits for any requested,
+unmasked virtual IRQ (`dosvm_pic_pending`), not only the timer and SB IRQs
+that `dosvm_task_irq` makes urgent (a keyboard or UART request). Details,
+negative controls and commands: `build/codex/fx-doswin3-report.md`,
+"Round 3 review fixes".

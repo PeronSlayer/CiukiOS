@@ -213,9 +213,6 @@ static void clip_destroy_locked(struct desktop *d)
 }
 static int clip_capture_locked(struct desktop *d, int active)
 {
-    /* fx-doswin3 round 3: a DOS window presented straight from its surface
-     * left older pixels in the RAM frame; compose them before the copy. */
-    if (desk_direct_settle) desk_direct_settle(d);
     struct desk_box box={0,0,d->width,d->height};
     if (active) { if (d->focus<0) return -ENOENT; box=desk_outer(&d->clients[d->focus]); }
     if (box.x<0) { box.w+=box.x; box.x=0; } if (box.y<0) { box.h+=box.y; box.y=0; }
@@ -243,7 +240,13 @@ void desk_clip_drop(struct desktop *d,int i)
 void desk_clip_destroy(struct desktop *d)
 { if (!enter()) { clip_destroy_locked(d); pthread_mutex_unlock(&lock); } }
 int desk_clip_capture(struct desktop *d,int active)
-{ int e=enter(); if (e) return -e; e=clip_capture_locked(d,active); pthread_mutex_unlock(&lock); return e; }
+{
+    /* fx-doswin3 round 3: a DOS window presented straight from its surface
+     * left older pixels in the RAM frame; one composed frame first (outside
+     * the clipboard lock: it is the ordinary redraw). */
+    if (desk_direct_settle) desk_direct_settle(d);
+    int e=enter(); if (e) return -e; e=clip_capture_locked(d,active); pthread_mutex_unlock(&lock); return e;
+}
 
 int desk_clip_key(struct desktop *d,int code,int down,int alt)
 {

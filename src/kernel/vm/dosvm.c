@@ -852,12 +852,16 @@ uint32_t dosvm_task_quantum(const struct task *t, uint32_t normal)
  * A handler that sends its EOI early and re-enables interrupts (DMX's
  * timer service) would be re-entered by the IRQ0 edges of a longer absence
  * (f3-12: DMX returns without EOI once its private IRQ stacks are
- * exhausted); a V86 handler after its own EOI is not visible here. */
+ * exhausted); a V86 handler after its own EOI is not visible here. Nor
+ * while any virtual IRQ is requested and unmasked (dosvm_pic_pending):
+ * dosvm_task_irq makes only the timer and SB IRQs urgent, so a pending
+ * keyboard or UART request would otherwise wait behind the presenter. */
 static bool present_pending(const struct dosvm *v)
 {
     return v->present_dispatch && v->present_waiter && !v->fullscreen &&
            g_ticks - v->present_dispatch_tick < DOSVM_PRESENT_DISPATCH_MS &&
-           !dosvm_in_irq(v) && !v->monitor.pic[0].isr && !v->monitor.pic[1].isr;
+           !dosvm_in_irq(v) && !v->monitor.pic[0].isr && !v->monitor.pic[1].isr &&
+           dosvm_pic_pending(&v->monitor) < 0;
 }
 const struct task *dosvm_task_focus(void)
 {

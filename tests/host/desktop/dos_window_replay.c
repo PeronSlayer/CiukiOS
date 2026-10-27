@@ -65,6 +65,17 @@ static void check_frame(void)
     }
     free(reference);
 }
+static void check_composed(void)
+{
+    uint32_t *reference=calloc((size_t)d.width*d.height,4);assert(reference);
+    uint32_t *pixels=d.pixels;d.pixels=reference;
+    desk_composite(&d,(struct desk_box){0,0,(int)d.width,(int)d.height});d.pixels=pixels;
+    unsigned ram=0,shown=0;
+    for (size_t i=0;i<(size_t)d.width*d.height;i++) { ram+=pixels[i]!=reference[i]; shown+=scanout[i]!=reference[i]; }
+    if (ram || shown) fprintf(stderr,"check_composed: %u RAM and %u scanout pixels differ from a full composition\n",ram,shown);
+    assert(!ram && !shown);
+    free(reference);
+}
 static void check_settled(void)
 {
     desk_direct_settle(&d); assert(!d.direct_stale.count);
@@ -258,12 +269,47 @@ static void direct_replay(void)
     assert(!desk_redraw(&d));check_frame();
     /* 6. A non-DOS client may not use the scene-less form. */
     int plain=window_client(12,22,100,80,0x0000ffu);
-    desk_move(&d,plain,700,500);
+    desk_move(&d,plain,880,640);            /* clear of the DOS window */
     struct ciuki_message m;desk_message(&m,DESK_GFX_FRAME,64);m.sender_pid=42+12;
     desk_put32(m.data+4,9);desk_receive(&d,plain,&m);
     assert(presented_reply(plain,9,&result) && result==-EPERM);
     assert(!desk_redraw(&d));check_frame();check_settled();
-    printf("dos-window-direct frames=4 requests_per_frame=%llu direct_px_per_frame=%llu scene_px=0 ack=presented/eagain/eperm overlap=composed move=exact capture=settled\n",
+    /* Review 2026-10-27 03:14, P2-1: A shown, B presented directly (the RAM
+     * frame keeps A), back to A: not an unchanged frame. */
+    damage_frame(&w,&canvas,guest,client,11);assert(!desk_redraw(&d));check_frame();check_settled();
+    damage_frame(&w,&canvas,guest,client,12);assert(!desk_redraw(&d));check_frame();assert(d.direct_stale.count);
+    damage_frame(&w,&canvas,guest,client,11);
+    assert(d.damage.count);                  /* the change back to A is damage */
+    assert(!desk_redraw(&d));check_frame();
+    check_settled();
+    /* P2-2: a scroll plan whose translated source lies in stale pixels. Rows
+     * 150..199 take the RAM frame's older pixels of rows 200..249, which the
+     * scanout no longer shows; another window's change keeps the frame
+     * composed without touching the stale rows. */
+    uint32_t *surface=(uint32_t *)d.clients[client].pixels;
+    struct desk_box content=desk_content(&d.clients[client]);
+    for (unsigned r=0;r<480;r++) for (unsigned x=0;x<640;x++) surface[r*640+x]=(r*1024u+x)&0x7fffffu;
+    desk_client_damage(&d,client,content);assert(!desk_redraw(&d));check_frame();check_settled();
+    for (unsigned r=200;r<300;r++) for (unsigned x=0;x<640;x++) surface[r*640+x]=0x800000u|((r*1024u+x)&0x7fffffu);
+    desk_client_damage(&d,client,(struct desk_box){content.x,content.y+200,640,100});
+    assert(!desk_redraw(&d));check_frame();assert(d.direct_stale.count);
+    for (unsigned r=150;r<200;r++) for (unsigned x=0;x<640;x++) surface[r*640+x]=((r+50)*1024u+x)&0x7fffffu;
+    desk_client_damage(&d,client,(struct desk_box){content.x,content.y+150,640,50});
+    uint32_t *plain_pixels=(uint32_t *)d.clients[plain].pixels; plain_pixels[0]^=0x00ff00u;
+    struct desk_box plain_content=desk_content(&d.clients[plain]);
+    desk_client_damage(&d,plain,(struct desk_box){plain_content.x,plain_content.y,1,1});
+    uint64_t copies=copied;
+    assert(!desk_redraw(&d));check_frame();check_settled();
+    assert(copied==copies);                  /* no scroll copy from the scanout */
+    /* P2-3: Print Screen between a move and its frame resolves the move
+     * first (its copy source is the RAM frame of the old geometry). */
+    damage_frame(&w,&canvas,guest,client,13);assert(!desk_redraw(&d));check_frame();assert(d.direct_stale.count);
+    desk_move(&d,client,120,110);
+    desk_direct_settle(&d);                  /* what desk_clip_capture does first */
+    assert(!d.copy_pending && !d.direct_stale.count);
+    check_composed();                        /* the capture's source is the composed screen */
+    assert(!desk_redraw(&d));check_frame();check_composed();
+    printf("dos-window-direct frames=4 requests_per_frame=%llu direct_px_per_frame=%llu scene_px=0 ack=presented/eagain/eperm overlap=composed move=exact capture=settled review=a-b-a/scroll-source/capture-move\n",
            (unsigned long long)(direct_requests/4),(unsigned long long)(direct_px/4));
     free(guest);for(int i=0;i<DESK_CLIENTS;i++)desk_drop_client(&d,i);
     desk_render_release(&d);free(d.sh.icons);free(d.sh.wall);free(d.pixels);free(scanout);

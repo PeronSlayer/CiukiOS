@@ -244,6 +244,17 @@ static void r2_dispatch_hook(void)
     CHECK(!dosvm_task_present());
     v->monitor.pic[1].isr = 0;
     CHECK(dosvm_task_present() == v->present_waiter && dosvm_task_focus() == v->task);
+    /* Round 3 review (P3): any requested, unmasked IRQ keeps the VM first,
+     * not only the timer/SB ones dosvm_task_irq makes urgent: a keyboard
+     * IRQ1 and a UART IRQ4. */
+    uint8_t imr = v->monitor.pic[0].imr, irr = v->monitor.pic[0].irr;
+    static const unsigned irqs[] = {1, 4};
+    for (unsigned k = 0; k < ARRAY_SIZE(irqs); k++) {
+        v->monitor.pic[0].imr = (uint8_t)(imr & ~(1u << irqs[k])); v->monitor.pic[0].irr = (uint8_t)(irr | 1u << irqs[k]);
+        CHECK(dosvm_pic_pending(&v->monitor) == (int)irqs[k] && !dosvm_task_irq() && !dosvm_task_present());
+        v->monitor.pic[0].imr = imr; v->monitor.pic[0].irr = irr;
+    }
+    CHECK(dosvm_task_present() == v->present_waiter);
 }
 static void test_doswin3_present_dispatch(void)
 {
