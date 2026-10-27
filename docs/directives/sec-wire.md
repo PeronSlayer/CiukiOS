@@ -1,0 +1,17 @@
+# sec-wire: main boots to a working desktop with the security foundations; shutdown on QEMU
+
+- **Written:** 2026-10-27 16:20 by the lead. Implementer: Claude agent. Base: main 5a26ef79e or later (contains sec-k01, sec-user-01, sec-int-01, sec-k02 via 581d2ebd6).
+- **Evidence (lead QEMU run of the canonical image ae977fbe…, KVM, `-vga std`, 512 MiB):** serial capture `legacy/local/qemu-2026-10-27/shots-serial.log` in the lead's checkout (read it; it is not tracked).
+  1. `[accounts] sealed service starting; OWNER interim (publication refused)` then `[accounts] open refused; every request is answered with EIO: -5`.
+  2. Files starts (`[desktop] launch name=files pid=6 error=0`) but its window never appears (double-click or Enter on My Computer); Files stays alive holding C: open.
+  3. Shutdown: `[storage] shutdown busy drive=C holder=open result=-16` for ten attempts; then `[power] acpi s5 fallback unavailable step=rsdt`; then the APM soft-off INT 15h AX=5307 writes port 0x604 (QEMU PIIX4 PM1a control) and is refused (`reason=port_denied`, APM family quarantined); the screen ends at "Power-off returned error 1".
+- **Background:** sec-user-02 (on `wt/sec-user02`, not yet in main) reported that the account service and the ownership service must use the same volume ID as the image builder and Setup (partition start sector shifted 32 bits plus the FAT volume serial), and that first boot stays closed until that is wired.
+
+## Scope
+
+1. Make the canonical image boot with an operational account service in the interim model the contract allows before sec-k07/sec-user-03 (ready images: CiukiUser logged on without password): find why publication is refused (volume ID, owner binding, seed absence on main, first-boot path) and wire it so that requests succeed. Read `docs/design/user-security-contract.md` and `user-security-kernel.md` for what the interim desktop bootstrap (k01-D1: uid 1000, groups [544,545]) may do; do not weaken any rule of the contract.
+2. Files and every other desktop program must work under that interim model: find what Files waits for (profile, shell folders, account queries, registry) and make every such query either succeed or fail fast with the documented fallback; no program may hang on the account service.
+3. Shutdown on QEMU, VirtualBox and VMware: (a) storage shutdown must not be blocked by a hung client: the existing forced-close path (End Task, bounded waits, fx t23-w32hang) must release C:; (b) the ACPI S5 fallback (fx-acpioff) must find QEMU's RSDP/RSDT/XSDT (SeaBIOS places the RSDP in the BIOS area E0000h–FFFFFh; check the EBDA and the ACPI 1.0/2.0 checksum rules) and power off; (c) APM soft-off on QEMU writes PM1a at 0x604: research how Windows 98's VPOWERD/the APM BIOS power path admits chipset PM ports and admit QEMU's PM1a for the APM family under the same bounded rule as fx-18 (`[apm] window ranges=... source=fadt+chipset`).
+4. Host regressions for each item, using a SeaBIOS-like ACPI table fixture and a hung-client shutdown fixture; the kernel, desktop, power and security suites stay green.
+
+Rules: work only in `/home/peronslayer/Desktop/CiukiOS-wt-sec-wire` (branch `wt/sec-wire`); never commit, merge or push; never run QEMU or image builds (the lead re-runs QEMU and sends you the serial log); run tests through `/home/peronslayer/Desktop/CiukiOS/build/lead-scratch/heavy.sh`. Report to `build/codex/sec-wire-report.md` in the worktree. Leave changes uncommitted.
