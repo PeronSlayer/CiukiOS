@@ -214,6 +214,7 @@ void entropy_erase(void *p, size_t n) { (void)p; (void)n; }
 int storage_sync(void) { CHECK(!"storage_sync outside the Files case"); return -EIO; }
 /* These native gate replays never select the installer controller. Keep
  * its VFS dependency explicit and fail if the harness accidentally enters it. */
+#ifndef CIUKI_DESKTOP_REAL_VFS
 int vfs_table_init(struct vfs *v,struct vfs_table *t,unsigned drive)
 { (void)v;(void)t;(void)drive;CHECK(!"installer VFS in desktop spawn replay");return -EIO; }
 void vfs_table_destroy(struct vfs_table *t)
@@ -233,6 +234,7 @@ int vfs_find_next(struct vfs_table *t,struct vfs_find *f,struct fat_entry *e)
 {(void)t;(void)f;(void)e;CHECK(!"installers-tier walk in desktop replay");return -EIO;}
 int vfs_flush_drive(struct vfs_table *t,unsigned drive)
 {(void)t;(void)drive;CHECK(!"installers-tier flush in desktop replay");return -EIO;}
+#endif
 static int report_fixture_spawn(const char *path, const char *const argv[], const char *cwd,
                                 bool desktop, struct process **out)
 {
@@ -1124,6 +1126,8 @@ static int desktop_open_error;
 static int desktop_open(void *cwd, const char *path, struct ciuki_file *file)
 {
     (void)cwd;
+    /* Transitional fixture has no sealed security-service images. */
+    if (!strncmp(path,"/System/Services/",sizeof("/System/Services/")-1)) return -ENOENT;
     CHECK(!strcmp(path, "/Programs/desktop"));
     desktop_opens++;
     if (desktop_open_error) return desktop_open_error;
@@ -1920,7 +1924,10 @@ void desktop_spawn_host_finish(void)
 #ifdef CIUKI_DESKTOP_REAL_INPUT
 #define main desktop_input_fixture_main
 #endif
-int main(int argc, char **argv)
+#ifndef CIUKI_DESKTOP_HOST_MAIN
+#define CIUKI_DESKTOP_HOST_MAIN main
+#endif
+int CIUKI_DESKTOP_HOST_MAIN(int argc, char **argv)
 {
     setvbuf(stdout, 0, _IOLBF, 0);
     ram = calloc(HOST_PAGES, PAGE_SIZE); CHECK(ram);

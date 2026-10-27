@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/files.h>
 #include <ciuki/kernel.h>
+#include <ciuki/security.h>
 #include <ciuki/w32_core.h>
 #include <ciuki/w32_objects.h>
 extern uint32_t w32_native_path(struct process *, const char *, char *, char *);
@@ -270,7 +271,7 @@ uint32_t w32_process_call(struct proc_thread *t,
     if (a->error)
       err = -ENOMEM;
   }
-  if (!err && (t->process->state!=PROC_LIVE || !t->process->w32 || t->process->w32->closing)) err=-EINTR;
+  if (!err && (t->process->state!=PROC_LIVE || !security_process_live(child) || !t->process->w32 || t->process->w32->closing)) err=-EINTR;
   if (!err) {
     child->w32->priority_class = priority;
     /* FORCEOFF wins if both flags are supplied; each child owns its state. */

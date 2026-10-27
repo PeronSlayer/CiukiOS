@@ -3,6 +3,7 @@
 #ifndef CIUKI_VFS_H
 #define CIUKI_VFS_H
 #include "fat.h"
+#include "security_policy.h"
 #define VFS_DRIVE_REMOVABLE 1u
 #include <ciuki/fs_ro.h>
 #define VFS_NODES 64u
@@ -138,6 +139,7 @@ struct vfs_contention_budget {
 void vfs_wait_observer(char,uint32_t,char,const char *,const struct fs_task_identity *,const struct vfs_hold_info *) __attribute__((weak));
 void vfs_hold_observer(char,uint32_t,const struct vfs_hold_info *,uint32_t) __attribute__((weak));
 struct vfs {
+    struct policy_volume *policy[26]; /* explicit managed mount binding */
     /* Order: namespace (1) -> volumes (2, ascending letter) -> cache (3)
      * -> device (4). Never wait for a reserved volume with namespace held.
      * Bookkeeping/identity phases hold namespace and the operation's volumes.

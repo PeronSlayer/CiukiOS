@@ -7,6 +7,7 @@
 #include <ciuki/desktop.h>
 #include <ciuki/supervisor.h>
 #include <ciuki/display.h>
+#include <ciuki/security.h>
 /* Private launch permission, not a registrable server role. Never inherited. */
 enum { NATIVE_CONTROL_REGISTRY = 3 };
 static bool registry_desktop(struct process *p)
@@ -31,7 +32,8 @@ bool w32_service_desktop_client(struct process *desktop, uint32_t pid)
 {
     if (!desktop || desktop->pid!=supervisor_desktop_pid() ||
         desktop->state!=PROC_LIVE || !desktop->w32 ||
-        desktop->w32->service!=W32_SERVICE_DESKTOP || service_pid[0]!=desktop->pid) return false;
+        desktop->w32->service!=W32_SERVICE_DESKTOP ||
+        (security_roles_active() ? security_role(desktop)!=CIUKI_SECURITY_ROLE_DESKTOP : service_pid[0]!=desktop->pid)) return false;
     for (struct service_link *l=links;l;l=l->next)
         if (l->server==desktop && l->client->pid==pid && l->accepted &&
             l->client->state==PROC_LIVE && l->service==W32_SERVICE_DESKTOP &&
@@ -45,9 +47,11 @@ void w32_service_delegate(struct process *parent, struct process *child, const c
     if (child->personality != PROC_NATIVE)
         return;
     uint32_t role = 0;
-    if (parent == proc_supervisor() && !strncmp(path, "/Programs/desktop", sizeof("/Programs/desktop")))
+    if (security_role(child)==CIUKI_SECURITY_ROLE_DESKTOP) role=W32_SERVICE_DESKTOP;
+    else if (security_role(child)==CIUKI_SECURITY_ROLE_W32SRV) role=W32_SERVICE_W32SRV;
+    if (!role && !security_roles_active() && parent == proc_supervisor() && !strncmp(path, "/Programs/desktop", sizeof("/Programs/desktop")))
         role = W32_SERVICE_DESKTOP;
-    else if (parent && parent->w32 && parent->w32->service == W32_SERVICE_DESKTOP
+    else if (!role && !security_roles_active() && parent && parent->w32 && parent->w32->service == W32_SERVICE_DESKTOP
         && parent->pid == supervisor_desktop_pid()
         && !strncmp(path, "/System/Win32/w32srv", sizeof("/System/Win32/w32srv")))
         role = W32_SERVICE_W32SRV;
@@ -69,7 +73,14 @@ static struct process *server_for(uint32_t service)
 }
 static uint32_t connect_service(struct process *client, uint32_t service, uint32_t *endpoint)
 {
-    struct process *server = server_for(service);
+    const struct ciuki_credential *credential=security_credential(client);
+    if (!credential || !security_process_live(client)) return 5;
+    struct process *server=service==W32_SERVICE_W32SRV ?
+        security_service_server(CIUKI_SECURITY_SERVICE_W32SRV,credential->session_id) :
+        security_session_desktop(credential->session_id);
+    /* Preserve interim boots until the new paired launch is installed. Once
+     * LOGON exists, the global legacy registration is never authority. */
+    if (!server && !security_roles_active()) server=server_for(service);
     if (!server)
         return 1062;
     for (struct service_link *l = links; l; l = l->next)
@@ -197,6 +208,12 @@ uint32_t w32_service_call(struct proc_thread *t, struct ciuki_w32_service_args *
             a->error = 5;
             return 0;
         }
+        if (security_roles_active()) {
+            if (security_role(p)!=(a->service==W32_SERVICE_W32SRV ? CIUKI_SECURITY_ROLE_W32SRV : CIUKI_SECURITY_ROLE_DESKTOP)) {
+                a->error=5; return 0;
+            }
+            a->result=1; return 0; /* registration was completed before publication */
+        }
         struct process *old = server_for(a->service);
         uint32_t retired = 0;
         if (old && old != p) {
@@ -228,7 +245,11 @@ uint32_t w32_service_call(struct proc_thread *t, struct ciuki_w32_service_args *
         a->error = connect_service(p, a->service, &a->endpoint);
         a->result = !a->error;
     } else if (a->action == W32_SVC_ACCEPT) {
-        if (server_for(a->service) != p) {
+        const struct ciuki_credential *credential=security_credential(p);
+        bool session_server=credential && (a->service==W32_SERVICE_W32SRV ?
+            security_service_server(CIUKI_SECURITY_SERVICE_W32SRV,credential->session_id)==p :
+            security_session_desktop(credential->session_id)==p);
+        if (!session_server && (security_roles_active() || server_for(a->service) != p)) {
             a->error = 5;
             return 0;
         }
@@ -259,13 +280,15 @@ uint32_t w32_service_call(struct proc_thread *t, struct ciuki_w32_service_args *
             a->result = 1;
         }
     } else if (a->action == W32_SVC_FOCUS || a->action == W32_SVC_INPUT) {
-        if (p->w32->service != W32_SERVICE_DESKTOP || server_for(W32_SERVICE_DESKTOP) != p
+        bool registered=security_roles_active() ? security_session_desktop(security_credential(p)->session_id)==p :
+            server_for(W32_SERVICE_DESKTOP)==p;
+        if (p->w32->service != W32_SERVICE_DESKTOP || !registered
             || p->pid != supervisor_desktop_pid()) {
             a->error = 5;
             return 0;
         }
         struct process *target = proc_find(a->pid);
-        if (!target || target->personality != PROC_WIN32) {
+        if (!target || target->personality != PROC_WIN32 || !security_same(p,target)) {
             a->error = 6;
             return 0;
         }

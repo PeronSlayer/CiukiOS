@@ -758,17 +758,17 @@ static __attribute__((noinline)) int next_entry(struct fat_volume *v, uint32_t d
     while (*cursor<limit) {
         if (!total) *settled=*cursor;
         uint8_t b[32]; uint32_t i=(*cursor)++; int e=walk_read(v,w,dir,i,b); if (e) return e;
-        if (!b[0]) { if (total) v->lfn_orphans++; return -FS_ENOENT; }
-        if (b[0]==0xe5) { if (total) v->lfn_orphans++; expected=total=0; continue; }
+        if (!b[0]) { if (total) { v->lfn_orphans++; if(v->strict_names) return -FS_EILSEQ; } return -FS_ENOENT; }
+        if (b[0]==0xe5) { if (total) { v->lfn_orphans++; if(v->strict_names) return -FS_EILSEQ; } expected=total=0; continue; }
         if (b[11]==15) {
             unsigned ord=b[0]&31;
-            if (b[0]&64) { if (total) v->lfn_orphans++; total=expected=ord; sum=b[13]; start=i; memset(name,0xff,sizeof(name)); }
-            if (!ord || ord>20 || ord!=expected || b[0]&(0x80|0x20) || b[12] || fs_rd16(b+26) || b[13]!=sum) { v->lfn_invalid++; expected=total=0; continue; }
+            if (b[0]&64) { if (total) { v->lfn_orphans++; if(v->strict_names) return -FS_EILSEQ; } total=expected=ord; sum=b[13]; start=i; memset(name,0xff,sizeof(name)); }
+            if (!ord || ord>20 || ord!=expected || b[0]&(0x80|0x20) || b[12] || fs_rd16(b+26) || b[13]!=sum) { v->lfn_invalid++; if(v->strict_names) return -FS_EILSEQ; expected=total=0; continue; }
             for (unsigned k=0;k<13;k++) name[(ord-1)*13+k]=fs_rd16(b+lfn_offsets[k]);
             expected--; continue;
         }
         if (b[11]&FAT_ATTR_VOLUME) {
-            if (total) v->lfn_orphans++; expected=total=0;
+            if (total) { v->lfn_orphans++; if(v->strict_names) return -FS_EILSEQ; } expected=total=0;
             if (!labels) continue;
             memset(entry,0,sizeof(*entry)); entry->parent=dir; entry->index=i; entry->lfn_index=i;
             uint16_t label[11]; unsigned length=11;
@@ -785,12 +785,14 @@ static __attribute__((noinline)) int next_entry(struct fat_volume *v, uint32_t d
             bool ok=n>0 && n<=255;
             if (n<total*13) { if (name[n]!=0) ok=false; for (unsigned k=n+1;k<total*13;k++) if (name[k]!=0xffff) ok=false; }
             if (ok && !path_from_ucs2(name,n,entry->name,sizeof(entry->name)) && !path_validate_name(entry->name,name,&n)) { entry->lfn_index=start; entry->lfn_count=(uint8_t)total; }
-            else { v->lfn_invalid++; memcpy(entry->name,entry->alias,strlen(entry->alias)+1); }
+            else { v->lfn_invalid++; if(v->strict_names) return -FS_EILSEQ; memcpy(entry->name,entry->alias,strlen(entry->alias)+1); }
         } else if (total) {
             if (expected) v->lfn_orphans++; else v->lfn_bad_checksum++;
+            if(v->strict_names) return -FS_EILSEQ;
         }
         decode_entry(v,b,entry); return 0;
     }
+    if(v->strict_names && total) return -FS_EILSEQ;
     if (!dir && v->type!=32) return -FS_ENOENT;
     /* A directory may fill the entire available chain without a 00 slot.
      * Reaching the walk bound is not proof of a cycle: verify its last link.

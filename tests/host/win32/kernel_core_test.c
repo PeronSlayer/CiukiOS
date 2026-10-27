@@ -381,6 +381,8 @@ static void test_advpack_process_flags(struct proc_thread *parent)
             .environment=scratch.address+512,.environment_bytes=sizeof(env),.flags=flags[i]};
         CHECK(!w32_process_call(parent,&a) && !a.error && a.pid && a.process_handle && a.thread_handle);
         struct process *child=proc_find(a.pid);CHECK(child && child->published);
+        CHECK(security_same(parent->process,child));
+        CHECK(child->subject!=parent->process->subject);
         CHECK(child->pgid==((flags[i]&0x200) && !(flags[i]&0x10)?child->pid:parent->process->pgid));
         uint32_t parameters;struct ciuki_w32_parameters p;char copied[sizeof(command)];
         CHECK(!ua_read(child->memory,&parameters,child->w32_peb+16,4));

@@ -27,8 +27,6 @@ int chmod(const char *p,mode_t m) { (void)p;(void)m;return excluded(); }
 int fchmod(int f,mode_t m) { (void)f;(void)m;return excluded(); }
 mode_t umask(mode_t m) { (void)m;excluded();return (mode_t)-1; }
 int chown(const char *p,uid_t u,gid_t g) { (void)p;(void)u;(void)g;return excluded(); }
-int setuid(uid_t u) { (void)u;return excluded(); }
-int setgid(gid_t g) { (void)g;return excluded(); }
 int link(const char *a,const char *b) { (void)a;(void)b;return excluded(); }
 int symlink(const char *a,const char *b) { (void)a;(void)b;return excluded(); }
 

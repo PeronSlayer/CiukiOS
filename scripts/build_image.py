@@ -465,12 +465,20 @@ def application_payloads(stage=None):
     w32_spec.loader.exec_module(w32_build)
     w32_sources, w32_directories, w32_metadata = w32_build.image_payloads()
     sources.update(w32_sources)
+    accounts_spec = importlib.util.spec_from_file_location("image_accounts", ROOT / "apps/accounts/build_accounts.py")
+    accounts_build = importlib.util.module_from_spec(accounts_spec)
+    accounts_spec.loader.exec_module(accounts_build)
+    # sec-int-01: the sealed account service at the kernel's fixed role image
+    # path, plus its SYSTEM-only store directory (empty until provisioning).
+    accounts_sources, accounts_directories, accounts_metadata = accounts_build.image_payloads()
+    sources.update(accounts_sources)
     directories = {"/Programs", "/tmp", "/Documents", "/Documents/Desktop", "/System", "/system/tests",
                    "/system/licenses", "/system/assets", TEST_PATH}
     directories.update(f"{TEST_PATH}/{name}" for name in manifest["test_directories"])
     directories.update(desktop_directories)
     directories.update(tcc_directories)
     directories.update(w32_directories)
+    directories.update(accounts_directories)
     metadata = {"sdk_manifest_sha256": expected["sdk_manifest_sha256"],
                 "lua": {"version": manifest["version"],
                         "manifest_sha256": sha256(LUA / "manifest.json"),
@@ -480,6 +488,7 @@ def application_payloads(stage=None):
     metadata["desktop"] = desktop_metadata
     metadata["tcc"] = tcc_metadata
     metadata["w32srv"] = w32_metadata
+    metadata["accounts"] = accounts_metadata
     metadata["native_elf"] = strip_payloads(sources, stage) if stage is not None else []
     # The gate's relative supplement argv uses TEST_PATH. Retain the f2-07
     # absolute path as an alias; both copies are separately verified in T1.
