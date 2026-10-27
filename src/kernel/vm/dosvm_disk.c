@@ -354,6 +354,10 @@ int dosvm_disk_open_step(struct dosvm *v, const char *base, const char **step)
     int e = vfs_table_init(&s->vfs, &v->disk_table, 2);
     if (e) return base_error(base, e, reason);
     v->table_ready = true;
+    /* sec-k05: every base, overlay, title-data, spool and export operation
+     * on this table runs as the VM's retained subject (sec-k03 seam). */
+    *step = "identity";
+    if ((e = dos_identity_bind(&v->identity, &v->disk_table))) return base_error(base, e, "identity");
     *step = "base-stat";
     struct fat_entry entry;
     e = vfs_stat(&v->disk_table, base, &entry);
@@ -399,8 +403,14 @@ int dosvm_disk_open_step(struct dosvm *v, const char *base, const char **step)
         struct dos_save_identity identity={.game=v->game,.kernel=v->kernel};
         memcpy(identity.base,v->base_sha256,sizeof(identity.base));
         unsigned archived=0;
+        /* sec-k05: this user's title data under PROFILE(uid) (contract 8.4);
+         * the machine namespace only for internal VMs and the interim
+         * bootstrap session. No other user's store is ever opened. */
+        char root[DOS_IDENTITY_PATH];
+        e=dos_identity_root(&v->identity,DOS_ROOT_STORE,root,sizeof(root));
         disk_gate_take(v);
-        e=dos_save_store_open(&v->save_file,&v->save,&identity,v->overlay_path,&archived);
+        if (!e) e=dos_identity_prepare(&v->identity,&v->disk_table,DOS_ROOT_STORE);
+        if (!e) e=dos_save_store_open(&v->save_file,&v->save,&identity,root,v->overlay_path,&archived);
         disk_gate_drop(v);
         if (archived) klog("[dosvm] game-data game=%u action=archive reason=identity-mismatch count=%u base=%s error=%d",
                           v->game,archived,v->base_sha256,e);
@@ -415,11 +425,17 @@ int dosvm_disk_open_step(struct dosvm *v, const char *base, const char **step)
         return 0;
     }
     *step = "overlay";
-    ksnprintf(v->overlay_path, sizeof(v->overlay_path), "C:\\SYSTEM\\DOS\\VM%08x.COW",
-              v->info.key.generation);
+    /* sec-k05: a transient overlay lives with the owner's private data. */
+    char scratch[DOS_IDENTITY_PATH];
+    e = dos_identity_root(&v->identity, DOS_ROOT_SCRATCH, scratch, sizeof(scratch));
+    if (!e) e = dos_identity_prepare(&v->identity, &v->disk_table, DOS_ROOT_SCRATCH);
+    if (e) return e;
+    int written = ksnprintf(v->overlay_path, sizeof(v->overlay_path), "%s\\VM%08x.COW",
+              scratch, v->info.key.generation);
     if (v->game || v->kernel)
-        ksnprintf(v->overlay_path,sizeof(v->overlay_path),"C:\\SYSTEM\\DOS\\G%uK%u%sV%08x.COW",
-                  v->game,v->kernel,v->base_sha256,v->info.key.generation);
+        written = ksnprintf(v->overlay_path,sizeof(v->overlay_path),"%s\\G%uK%u%sV%08x.COW",
+                  scratch,v->game,v->kernel,v->base_sha256,v->info.key.generation);
+    if (written < 0 || (unsigned)written >= sizeof(v->overlay_path)) return -FS_ENAMETOOLONG;
     v->overlay = vfs_open(&v->disk_table, v->overlay_path,
         VFS_READ | VFS_WRITE | VFS_CREATE | VFS_EXCLUSIVE, VFS_DENY_ALL, 0);
     /* A metadata write gate must not hide readable game sectors. A caller

@@ -278,8 +278,16 @@ struct storage *storage_get(void) { return &store; }
 #define vfs_handle_stat transport_vfs_handle_stat
 #define vfs_version_pin(...) transport_vfs_version_pin(__VA_ARGS__)
 #define vfs_version_unpin transport_vfs_version_unpin
+#define vfs_mkdir transport_vfs_mkdir
 #endif
 int vfs_table_init(struct vfs *vfs, struct vfs_table *table, unsigned drive) { (void)vfs; (void)table; (void)drive; return 0; }
+/* sec-k05: the VM-private scratch directory already exists in this transport. */
+int vfs_mkdir(struct vfs_table *table, const char *path, uint8_t attr) { (void)table; (void)path; (void)attr; return -FS_EEXIST; }
+#ifndef CIUKI_DOSVM_FILE_CPU
+/* Internal VMs only: the identity adapter's host-view gate is never used. */
+void vfs_lock(struct vfs *v, uint32_t mask) { (void)v; (void)mask; abort(); }
+void vfs_unlock(struct vfs *v) { (void)v; abort(); }
+#endif
 void vfs_table_destroy(struct vfs_table *table) { (void)table; }
 int vfs_handle_stat(struct vfs_table *table,int h,struct fat_entry *entry,uint64_t *pos)
 { (void)table;(void)h;(void)entry;(void)pos;return -FS_EOPNOTSUPP; }
@@ -407,14 +415,16 @@ void fs_service(void) { }
 #endif
 /* Explicit guest fixtures have no native persistent title store. */
 int dos_save_store_open(struct dos_save_file *f,struct dos_save *s,const struct dos_save_identity *id,
-                        char path[128],unsigned *archived)
+                        const char *root,char path[DOS_SAVE_PATH],unsigned *archived)
 {
     (void)s; *archived=0; f->fd=-1; f->absent=true;
-    snprintf(path,128,DOS_SAVE_ROOT "\\G%uK%u%s.COW",id->game,id->kernel,id->base);
+    snprintf(path,DOS_SAVE_PATH,"%s\\G%uK%u%s.COW",root,id->game,id->kernel,id->base);
     return -FS_EROFS;
 }
 #include "../../src/kernel/vm/dos_save.c"
 #include "../../src/kernel/vm/dosvm_disk.c"
+/* sec-k05 identity adapter on the same transport as the VM's disk table. */
+#include "../../src/kernel/vm/dos_identity.c"
 #ifdef CIUKI_DOSVM_FILE_CPU
 #undef vfs_table_init
 #undef vfs_table_destroy
@@ -430,6 +440,7 @@ int dos_save_store_open(struct dos_save_file *f,struct dos_save *s,const struct 
 #undef vfs_handle_stat
 #undef vfs_version_pin
 #undef vfs_version_unpin
+#undef vfs_mkdir
 #endif
 
 /* GUEST_INT10_TRACE=1: every INT 10h the VM's BIOS serves (the end of the

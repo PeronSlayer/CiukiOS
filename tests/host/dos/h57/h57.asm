@@ -61,6 +61,7 @@ start:
     TEST t_time, 'time'
     TEST t_fcb, 'fcb-close-metadata'
     TEST t_readonly, 'readonly-d'
+    TEST t_absolute, 'absolute-sectors'
     TEST t_retry, 'critical-retry'
     TEST t_fail, 'critical-fail'
     TEST t_nocrit, 'nocrit'
@@ -775,6 +776,156 @@ t_readonly:
     xor ax, ax
     ret
 
+; sec-k05 (H06): absolute sector APIs on the managed IFS drives (C: private,
+; D: read-only system view) fail without any transfer, as the unified
+; contract's redirected-drive matrix freezes: INT 25h/26h CF=1 AX=0201 with
+; the extra FLAGS word still on the caller's stack, INT 21h/7305h (valid
+; packet, read and write) CF=1 AX=020C, invalid drives 0201/0207. The guest
+; buffer keeps its sentinel and no provider sector or guest INT 13h is
+; issued: port EBh 21h snapshots the harness counters, IN EBh reads the delta.
+t_absolute:
+    mov al, 0x21
+    out 0xeb, al
+    mov di, buf2
+    mov cx, 512
+    mov al, 0xa5
+    cld
+    rep stosb
+    mov [abs_pkt+8], cs
+    mov byte [abs_drv], 2           ; C:
+.drive:
+    mov word [abs_step], 0
+    call abs_int25
+    or ax, ax
+    jnz .bad
+    call abs_int26
+    or ax, ax
+    jnz .bad
+    xor si, si                      ; 7305h read
+    call abs_7305
+    or ax, ax
+    jnz .bad
+    mov si, 1                       ; 7305h write
+    call abs_7305
+    or ax, ax
+    jnz .bad
+    inc byte [abs_drv]
+    cmp byte [abs_drv], 4           ; C: and D:
+    jb .drive
+    mov byte [abs_drv], 26          ; beyond Z:
+    mov word [abs_step], 0x10
+    call abs_int25
+    or ax, ax
+    jnz .bad
+    mov bx, abs_pkt                 ; 7305h DL=0: invalid drive 0207
+    mov cx, 0xffff
+    xor dx, dx
+    xor si, si
+    mov ax, 0x7305
+    int 0x21
+    EXPECT jc, 0x21
+    cmp ax, 0x0207
+    EXPECT je, 0x22
+    call abs_intact
+    EXPECT je, 0x23
+    in al, 0xeb                     ; provider sectors + INT 13h since the snapshot
+    cmp al, 0
+    EXPECT je, 0x24
+    xor ax, ax
+    ret
+.bad:
+    jmp test_fail
+
+abs_intact:                         ; ZF=1: buf2[0..511] still hold A5h
+    mov di, buf2
+    mov cx, 512
+    mov al, 0xa5
+    cld
+    repe scasb
+    ret
+
+abs_int25:                          ; AX=0 or failing step
+    mov [abs_sp], sp
+    mov al, [abs_drv]
+    mov cx, 1
+    xor dx, dx
+    mov bx, buf2
+    int 0x25
+    jmp abs_after
+abs_int26:
+    add word [abs_step], 4
+    mov [abs_sp], sp
+    mov al, [abs_drv]
+    mov cx, 1
+    xor dx, dx
+    mov bx, buf2
+    int 0x26
+abs_after:                          ; the INT 25h/26h FLAGS word is still pushed
+    pushf
+    pop word [abs_fl]
+    mov [abs_ax], ax
+    mov [cs:dbg_ax], ax
+    mov ax, sp
+    add ax, 2
+    cmp ax, [abs_sp]
+    jne .stack
+    add sp, 2
+    test word [abs_fl], 1
+    jz .carry
+    cmp word [abs_ax], 0x0201
+    jne .code
+    call abs_intact
+    jne .buffer
+    xor ax, ax
+    ret
+.stack:                             ; restore the caller frame before failing
+    mov sp, [abs_sp]
+    mov ax, 0x31
+    jmp .out
+.carry:
+    mov ax, 0x32
+    jmp .out
+.code:
+    mov ax, 0x33
+    jmp .out
+.buffer:
+    mov ax, 0x34
+.out:
+    add ax, [abs_step]
+    ret
+
+abs_7305:                           ; SI = 0 read / 1 write; AX=0 or failing step
+    mov dword [abs_pkt], 0
+    mov word [abs_pkt+4], 1
+    mov bx, abs_pkt
+    mov cx, 0xffff
+    mov dl, [abs_drv]
+    inc dl
+    mov ax, 0x7305
+    push si
+    int 0x21
+    pop si
+    mov [cs:dbg_ax], ax
+    jnc .carry
+    cmp ax, 0x020c
+    jne .code
+    call abs_intact
+    jne .buffer
+    xor ax, ax
+    ret
+.carry:
+    mov ax, 0x41
+    jmp .out
+.code:
+    mov ax, 0x42
+    jmp .out
+.buffer:
+    mov ax, 0x43
+.out:
+    add ax, si
+    add ax, [abs_step]
+    ret
+
 install24:                      ; AL = reply
     mov [crit_reply], al
     mov word [crit_count], 0
@@ -1035,6 +1186,15 @@ fcb_name db 'F       DAT'
 tail_abort db 2, ' A', 13
 align 2
 mode db 0
+abs_drv db 0
+align 2
+abs_step dw 0
+abs_sp dw 0
+abs_fl dw 0
+abs_ax dw 0
+abs_pkt dd 0                    ; 7305h packet: sector, count, buffer far pointer
+    dw 1
+    dw buf2, 0
 fails dw 0
 dbg_ax dw 0
 cur_name dw 0

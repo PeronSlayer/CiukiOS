@@ -138,16 +138,19 @@ static struct block_cache CACHE;
 static struct dos_file_volume CVOL,DVOL;
 static uint8_t *dimage; static size_t dimage_bytes;
 static unsigned fault_reads,faults_hit,mounts,unmounts,held_samples[64],held_n;
+/* sec-k05 (H06): every provider sector transfer and guest INT 13h; port EBh
+ * 21h snapshots the sum, IN EBh returns the change since (0..255). */
+static unsigned provider_sectors,sector_snapshot;
 static bool fault_sticky,dvol_open;
 static const char *ifs_fail;
 static int c_read(struct blkdev *d,uint64_t lba,uint32_t n,void *buf) {
-    (void)d;
+    (void)d; provider_sectors+=n;
     if (fault_sticky || fault_reads) { if (fault_reads) fault_reads--; faults_hit++; return -FS_EIO; }
     for (uint32_t i=0;i<n;i++) sector_read(63u+(uint32_t)lba+i,(uint8_t *)buf+512u*i);
     return 0;
 }
 static int c_write(struct blkdev *d,uint64_t lba,uint32_t n,const void *buf) {
-    (void)d;
+    (void)d; provider_sectors+=n;
     for (uint32_t i=0;i<n;i++) if (!sector_write(63u+(uint32_t)lba+i,(const uint8_t *)buf+512u*i)) return -FS_EIO;
     return 0;
 }
@@ -155,7 +158,7 @@ static int c_flush(struct blkdev *d) { (void)d; return 0; }
 static struct blkdev CPROV={.read=c_read,.write=c_write,.flush=c_flush,.capacity=262144u-63u,.sector_size=512,
     .write_cache_state=BLKDEV_CACHE_DISABLED,.logical=true};
 static int d_read(struct blkdev *d,uint64_t lba,uint32_t n,void *buf) {
-    (void)d; memset(buf,0,512u*n);
+    (void)d; provider_sectors+=n; memset(buf,0,512u*n);
     for (uint32_t i=0;i<n;i++) { size_t off=(size_t)(lba+i)*512u; if (off<dimage_bytes)
         memcpy((uint8_t *)buf+512u*i,dimage+off,dimage_bytes-off<512 ? dimage_bytes-off : 512); }
     return 0;
@@ -195,8 +198,12 @@ static void hreq_pause(void *a) { (void)a; }
 /* Guest control port EBh: 00 disarm, 1n arm n failing C: provider reads,
  * 1F persistent faults, 20 sample the native ledger. Arming first commits
  * and drops the clean cache so the next data read reaches the provider. */
+static unsigned sector_delta(void) {
+    unsigned d=provider_sectors+int13_after-sector_snapshot; return d>255 ? 255 : d;
+}
 static void ifs_control(unsigned v) {
     if (v==0x20) { if (held_n<64) held_samples[held_n++]=dfv2_ifs_held(&IFS); return; }
+    if (v==0x21) { sector_snapshot=provider_sectors+int13_after; return; }
     if (!v) { fault_reads=0; fault_sticky=false; return; }
     if (v<0x11 || v>0x1f || !IFS.active) return;
     static struct vfs_request hreq={.deadline=UINT64_MAX,.now=hreq_now,.cancelled=hreq_cancelled,.pause=hreq_pause};
@@ -375,6 +382,9 @@ static unsigned memio(x86emu_t *e,u32 addr,u32 *val,unsigned type) {
     }
     if (kind==X86EMU_MEMIO_I) {
         *val=addr==0x3fd ? 0x60 : 0xffffffffu;
+#ifdef H57_IFS
+        if (addr==0xeb) { *val=sector_delta(); return 0; }
+#endif
         if (!(addr>=0x3f8 && addr<=0x3ff)) ports_unknown++;
         return 0;
     }

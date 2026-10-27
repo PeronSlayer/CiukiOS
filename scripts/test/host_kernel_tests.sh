@@ -565,6 +565,12 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 python3 -B -m unittest discover -s "$root/tests/host/security" -p test_credentials.py
 # sec-k02 H02: OWNER batches/checkpoints and resolved FAT path policy.
 python3 -B -m unittest discover -s "$root/tests/host/security" -p test_owner_policy.py
+# --- sec-k05 block (begin) ---
+# H06: DOS VM identity, credential-filtered D:/E: through the live IFS and
+# per-user stores. Its VM-lifecycle/INT 13h and title-store cases run in
+# this suite's dosvm_test (default sequence) and run_persistent_saves.sh.
+python3 -B -m unittest discover -s "$root/tests/host/security" -p test_dos_identity.py -k test_identity_views_and_stores
+# --- sec-k05 block (end) ---
 
 # F2 production parser, mappings, wait queues, stack and lifecycle with fake
 # physical memory/scheduling; no guest execution or host runner lock.
