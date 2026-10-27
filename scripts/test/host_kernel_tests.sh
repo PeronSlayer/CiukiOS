@@ -565,6 +565,10 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 python3 -B -m unittest discover -s "$root/tests/host/security" -p test_credentials.py
 # sec-k02 H02: OWNER batches/checkpoints and resolved FAT path policy.
 python3 -B -m unittest discover -s "$root/tests/host/security" -p test_owner_policy.py
+# ---- sec-k03 H04 (one block): every native/Win32/legacy-table file, handle,
+# exec and mapping entry point enforces the retained subject; frontend census.
+python3 -B -m unittest discover -s "$root/tests/host/security" -p test_file_enforcement.py
+# ---- end sec-k03 ----
 
 # F2 production parser, mappings, wait queues, stack and lifecycle with fake
 # physical memory/scheduling; no guest execution or host runner lock.

@@ -19,6 +19,13 @@
 #pragma weak vfs_turn_take_locked
 #pragma weak vfs_turn_drop_locked
 #pragma weak klog /* host harnesses link no log sink */
+/* sec-k03: standalone storage harnesses link no credential or process
+ * implementation (see px_process_subject); the kernel always does. */
+#pragma weak security_subject_put
+#pragma weak security_subject_live
+#pragma weak security_subject_matches
+#pragma weak security_system
+#pragma weak proc_current
 uint32_t net_socket_count(void) __attribute__((weak));
 uint32_t *net_socket_flags(struct proc_object *) __attribute__((weak));
 void net_fd_changed(struct process *, unsigned) __attribute__((weak));
@@ -99,11 +106,18 @@ struct file_description *file_description_new(uint32_t flags)
     __atomic_add_fetch(&file_descriptions,1,__ATOMIC_RELAXED);
     return d;
 }
+/* F5 W14 keeps the builtin store C:\System\Win32 read-only to Win32
+ * processes. K-Q4 (sec-k03): on a managed system volume the common prefix
+ * policy replaces the former all-C:\System Win32 write ban; an unmanaged
+ * (not yet provisioned) volume keeps that ban until it is bound. */
 static bool win32_protected_file(const struct file_description *d)
 {
     if (!d->win32) return false;
-    for (const struct px_node *n=d->node;n && n->parent && n!=n->parent;n=n->parent)
-        if (n->drive==2 && n->parent->mountpoint && path_equal(n->entry.name,"System")) return true;
+    bool managed = d->node && d->node->drive < 26 && d->node->space->vfs->policy[d->node->drive];
+    const struct px_node *child = 0;
+    for (const struct px_node *n=d->node;n && n->parent && n!=n->parent;child=n,n=n->parent)
+        if (n->drive==2 && n->parent->mountpoint && path_equal(n->entry.name,"System"))
+            return !managed || (child && path_equal(child->entry.name,"Win32"));
     return false;
 }
 int file_description_close(struct file_description *d)
@@ -131,6 +145,7 @@ int file_description_close(struct file_description *d)
         { int drop=px_drop_locked(d->node); if (!err) err=drop; }
         vfs_unlock(s->vfs);
     }
+    if (d->subject && security_subject_put) security_subject_put(d->subject); /* sec-k03 */
     __atomic_sub_fetch(&file_descriptions,1,__ATOMIC_RELAXED); kfree(d);
     return err;
 }
@@ -217,7 +232,9 @@ int file_open(struct process *p, const char *path, uint32_t flags, uint32_t mode
     px_retain(cwd);
     vfs_lock(cwd->space->vfs,0);
     struct proc_thread *t = proc_thread_for(g_current);
-    err = t && (t->process->state == PROC_STOPPING || proc_signal_caught(t)) ? -EINTR : px_open_locked(cwd->space, cwd, path, flags, d);
+    /* sec-k03: authorized as the opening process's retained subject. */
+    err = t && (t->process->state == PROC_STOPPING || proc_signal_caught(t)) ? -EINTR :
+        px_open_as_locked(cwd->space, cwd, path, flags, d, px_process_subject(p));
     px_release(cwd);
     if (!err && d->node->kind==PX_FILE && d->node->volume)
         err=px_error(vfs_identity_get(cwd->space->vfs,d->node->volume,&d->node->entry,&d->identity));
@@ -300,6 +317,38 @@ static int native_write_turn(struct file_description *d,uint64_t *position,bool 
     d->lock_description.io_active=false; n->writing=false; fs_event_wake(&v->volume_changed);
     return e;
 }
+/* sec-k03: description rights for the calling process. Rights frozen at
+ * open only shrink (a read-only fd never becomes writable for an
+ * administrator); the caller must be live and the object's current label
+ * must still permit the access (generation-checked, no FAT lookup). An
+ * open-unlinked object keeps its tombstoned rights for the same credential.
+ * A description opened by kernel work carries no subject and is usable only
+ * by SYSTEM. Devices carry no file policy (k04). */
+int file_description_authorize_locked(struct file_description *d, unsigned access)
+{
+    struct px_node *n = d ? d->node : 0;
+    if (!n || !access) return 0;
+    if (n->kind != PX_FILE && n->kind != PX_DIRECTORY && n->kind != PX_MNT && n->kind != PX_DEV) return 0;
+    struct process *p = proc_current ? proc_current() : 0;
+    if (!p) return 0; /* kernel task: SYSTEM work, no user process context */
+    const struct security_subject *caller = px_process_subject(p);
+    if (caller == PX_KERNEL) return 0; /* no credential implementation linked */
+    if (!caller || !security_subject_live(caller)) return -EACCES;
+    if (!d->subject) return security_system(p) ? 0 : -EACCES;
+    if (access & ~d->granted) return -EACCES;
+    if (!n->linked)
+        return security_subject_matches(d->subject, p) || security_system(p) ? 0 : -EACCES;
+    int e = px_policy_check_locked(n, caller, access);
+    /* A namespace operation on this very node is in flight; it was itself
+     * authorized and refuses policy-boundary moves of referenced objects. */
+    return e == -EBUSY ? 0 : e;
+}
+/* Mapped-section paging and writeback run under the section's original
+ * admission (the mapping's rights), never with fresh caller authority. */
+static int description_grant_locked(const struct file_description *d, unsigned access)
+{
+    return !d->subject || !(access & ~d->granted) ? 0 : -EACCES;
+}
 static int read_range(void *arg,uint64_t position,size_t bytes)
 {
     struct read_range_check *check=arg;
@@ -324,6 +373,10 @@ static int description_io_locked(struct file_description *d, void *buffer, size_
     if (write ? mode == O_RDONLY : mode == O_WRONLY) return -EBADF;
     struct px_node *n = d->node;
     if (n->kind != PX_FILE && n->kind != PX_NULL && n->kind != PX_CONSOLE) return -EISDIR;
+    /* sec-k03: retained subject and current object policy before any I/O. */
+    int allowed = section ? description_grant_locked(d, write ? POLICY_WRITE : POLICY_READ) :
+        file_description_authorize_locked(d, write ? POLICY_WRITE : POLICY_READ);
+    if (allowed) return allowed;
     if (positioned && n->kind != PX_FILE) return -ESPIPE;
     if (positioned && offset > INT64_MAX) return -EINVAL;
     if (!bytes) return 0;
@@ -392,6 +445,8 @@ int file_truncate_locked(struct file_description *d, uint64_t length)
     if (d->node->ro || px_write_denied(d->node)) return -EROFS;
     if ((d->flags & O_ACCMODE) == O_RDONLY) return -EBADF;
     if (d->node->kind != PX_FILE) return d->node->kind == PX_NULL || d->node->kind == PX_CONSOLE ? -EINVAL : -EISDIR;
+    int allowed = file_description_authorize_locked(d, POLICY_WRITE); /* sec-k03 */
+    if (allowed) return allowed;
     if (length > INT64_MAX) return -EINVAL;
     if (length > UINT32_MAX) return -EFBIG;
     struct fat_entry before = d->node->entry;
@@ -734,18 +789,24 @@ static int image_fat(struct px_namespace *s, struct px_node *n, struct file_imag
     int drop = px_drop_locked(n);
     return err ? err : drop;
 }
-static int image_snapshot_open(void *cwd_arg, const char *path, struct ciuki_file *out, bool whole)
+/* sec-k03: executable bytes are authorized as the subject that will run
+ * them (READ|EXEC on the resolved object) before any byte is read; every
+ * open re-authorizes, so a snapshot or image cache is never a grant. */
+static int image_snapshot_open(void *cwd_arg, const struct security_subject *subject, const char *path,
+                               struct ciuki_file *out, bool whole)
 {
     struct px_node *cwd = cwd_arg;
     if (!cwd) return -ENOENT;
+    if (!subject) return -EACCES;
     struct file_image *image = kzalloc(sizeof(*image));
     if (!image) return -ENOMEM;
     struct px_namespace *s = cwd->space;
     vfs_lock(s->vfs,0);
     struct px_path r;
-    int err = px_resolve_locked(s, cwd, path, false, &r);
+    int err = px_resolve_as_locked(s, cwd, path, false, subject, &r);
     vfs_tag_locked(s->vfs,"open"); vfs_site_locked(s->vfs,"native");
     if (!err && r.node->kind != PX_FILE) err = -EACCES;
+    if (!err) err = px_policy_check_locked(r.node, subject, POLICY_READ | POLICY_EXEC);
     /* The size limit applies to the loader's byte set (image_snapshot). */
     if (!err && (r.node->ro ? r.node->ro_size : r.node->entry.size) > UINT32_MAX) err = -ENOEXEC;
     if (!err) err = px_share_locked(r.node, VFS_READ, 0);
@@ -767,7 +828,38 @@ static int image_snapshot_open(void *cwd_arg, const char *path, struct ciuki_fil
     *out = (struct ciuki_file){ image, image->bytes, image_read, image_close };
     return 0;
 }
+/* The ciuki_file_ops interface carries no subject: it authorizes as the
+ * calling process (public spawn and Win32 CreateProcess children inherit
+ * that exact credential; PID 1 is SYSTEM). A kernel task with no process is
+ * SYSTEM work. Different-credential launches use security_exec_open. */
+static const struct security_subject *image_caller(void)
+{
+    struct process *p = proc_current ? proc_current() : 0;
+    return !p ? PX_KERNEL : px_process_subject(p);
+}
 static int image_open(void *cwd, const char *path, struct ciuki_file *out)
-{ return image_snapshot_open(cwd, path, out, false); }
+{ return image_snapshot_open(cwd, image_caller(), path, out, false); }
 static int image_open_whole(void *cwd, const char *path, struct ciuki_file *out)
-{ return image_snapshot_open(cwd, path, out, true); }
+{ return image_snapshot_open(cwd, image_caller(), path, out, true); }
+int file_image_open_as(struct px_node *cwd, const struct security_subject *subject, const char *path, bool whole,
+                       struct ciuki_file *out)
+{ return image_snapshot_open(cwd, subject, path, out, whole); }
+int file_image_authorize(struct px_node *cwd, const struct security_subject *subject, const char *path)
+{
+    if (!cwd) return -ENOENT;
+    if (!subject) return -EACCES;
+    struct px_namespace *s = cwd->space; struct px_path r;
+    vfs_lock(s->vfs,0);
+    int err = px_resolve_as_locked(s, cwd, path, false, subject, &r);
+    if (!err && r.node->kind != PX_FILE) err = -EACCES;
+    if (!err) err = px_policy_check_locked(r.node, subject, POLICY_READ | POLICY_EXEC);
+    vfs_unlock(s->vfs);
+    return err;
+}
+/* k01 seam: credential spawn resolves, authorizes and freezes the image as
+ * the prepared child in one operation (security.h). */
+int security_exec_open(struct process *child, const char *path, struct ciuki_file *out)
+{
+    if (!child || !child->subject || !path || !out) return -EACCES;
+    return file_image_open_as(child->cwd, child->subject, path, false, out);
+}
