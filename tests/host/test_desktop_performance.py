@@ -28,7 +28,7 @@ class DesktopPerformanceTests(unittest.TestCase):
         self.run_model("performance", ["tests/host/desktop/performance_test.c", "tests/host/desktop/fake.c",
                        *(f"apps/desktop/{p}.c" for p in ("client", "protocol", "input", "compositor", "theme", "shell", "autoplay", "autoplay_content", "settings", "power_policy", "wallpaper", "keymap", "folder")),
                        "apps/files/model.c", "apps/files/transfer.c",
-                       *(f"apps/libdeskui/{p}.c" for p in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map"))],
+                       *(f"apps/libdeskui/{p}.c" for p in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map", "iconx", "fileicon"))],
                        ["apps/desktop", "tests/host/desktop", "src/kernel/include"],
                        ["-DF125_WRAP_ALLOC", "-Wl,--wrap=malloc"])
 
@@ -40,6 +40,6 @@ class DesktopPerformanceTests(unittest.TestCase):
         self.run_model("dos-window", ["tests/host/desktop/dos_window_replay.c", "tests/host/desktop/fake.c",
                        *(f"apps/desktop/{p}.c" for p in ("client", "protocol", "input", "compositor", "theme", "shell", "autoplay", "autoplay_content", "settings", "power_policy", "wallpaper", "keymap", "folder")),
                        "apps/files/model.c", "apps/files/transfer.c",
-                       *(f"apps/libdeskui/{p}.c" for p in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map"))],
+                       *(f"apps/libdeskui/{p}.c" for p in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map", "iconx", "fileicon"))],
                        ["apps/desktop", "tests/host/desktop", "src/kernel/include"],
                        ["-D_POSIX_C_SOURCE=200809L", "-include", str(ROOT / "tests/host/desktop/replay_base.h")])

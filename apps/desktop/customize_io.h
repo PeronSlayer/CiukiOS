@@ -5,6 +5,7 @@
 #define CIUKI_CUSTOMIZE_IO_H
 #include "customize.h"
 #include "shell_link.h"
+#include "../libdeskui/deskui.h"
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -161,7 +162,14 @@ static inline void sh_object_ext(char *out,const char *name)
 }
 static inline void sh_item_icon(struct sh_folder_item *e,int is_dir,size_t len)
 {
-    e->icon[0]=0;
+    e->icon[0]=0; e->own_icon=0;
+    /* fx-exeicons: decided here, on the worker, by the shortcut's or
+     * program's resources; the shell extracts the pixels asynchronously. */
+    if (!is_dir && du_file_icon_candidate(sh_basename(e->path),0)) {
+        struct du_icon_source *src=malloc(sizeof(*src));
+        if (src && du_file_icon_resolve(e->path,0,src)>0) e->own_icon=1;
+        free(src);
+    }
     if (is_dir) {
         static const struct { const char *label,*object; } known[]={
             {"Accessories","menu:accessories"},{"System Tools","menu:system-tools"},{"Games","menu:games"},

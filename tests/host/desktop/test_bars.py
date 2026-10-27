@@ -36,7 +36,7 @@ class BarTests(unittest.TestCase):
             sources = [ROOT / "apps/desktop" / f"{n}.c" for n in
                        ("client", "protocol", "input", "compositor", "theme")]
             sources += desktop.SHELL_SOURCES
-            sources += [ROOT / p for p in ("apps/libdeskui/icons.c", "apps/libdeskui/icon_map.c",
+            sources += [ROOT / p for p in ("apps/libdeskui/icons.c", "apps/libdeskui/icon_map.c", "apps/libdeskui/iconx.c", "apps/libdeskui/fileicon.c",
                                           "tests/host/desktop/fake.c", "tests/host/desktop/bars_test.c")]
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
                             "-fsanitize=address,undefined",

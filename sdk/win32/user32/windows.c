@@ -979,6 +979,10 @@ uintptr_t W32API SetClassLongA(HWND h, int index, intptr_t value) {
       return u32_fail(1413);
     w32_put32(c->extra + index, value);
   }
+  if (index == -14 || index == -34) /* fx-exeicons: the class's windows show the new icon */
+    for (UINT k = 0; k < U32_WINDOWS; k++)
+      if (u32_windows[k].handle && u32_windows[k].cls == c && !u32_windows[k].parent)
+        (void)u32_window_icon(&u32_windows[k]);
   return old;
 }
 uint16_t W32API GetWindowWord(HWND h, int n) {
@@ -1378,6 +1382,21 @@ LRESULT W32API DefWindowProcA(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
       u32_mark();
     }
     return 0;
+  case 0x0080: { /* WM_SETICON: ICON_SMALL 0, ICON_BIG 1; the previous icon */
+    if (!w || wp > 1)
+      return 0;
+    HICON old = wp ? w->icon_big : w->icon_small;
+    if (wp)
+      w->icon_big = (HICON)lp;
+    else
+      w->icon_small = (HICON)lp;
+    (void)u32_window_icon(w);
+    return (LRESULT)old;
+  }
+  case 0x007f: /* WM_GETICON: ICON_SMALL2 2 is the small icon or the one made from the big */
+    if (!w)
+      return 0;
+    return (LRESULT)(wp == 1 ? w->icon_big : wp == 0 ? w->icon_small : wp == 2 ? (w->icon_small ? w->icon_small : w->icon_big) : 0);
   case WM_GETTEXT:
     return title_copy(h, (char *)lp, (int)wp);
   case WM_GETTEXTLENGTH:

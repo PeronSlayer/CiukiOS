@@ -1864,6 +1864,23 @@ static const char *uninstall_icon(const struct desk_uninstall_entry *r)
     if (r->kind==DESK_PROGRAM_DOS) return du_icon_name("program:dosbox");
     return du_icon_name("type:executable");
 }
+/* fx-exeicons: the program's own icon (DisplayIcon, or its Start menu
+ * shortcut; programs.c), extracted by libdeskui's icon worker; the kind's
+ * icon until then. */
+static const uint32_t *uninstall_pixels(const struct desk_uninstall_entry *r, unsigned size)
+{
+    const uint32_t *own = r->icon[0] ? du_file_icon_flags(r->icon, 0, size, 0) : NULL;
+    return own ? own : du_icon_argb(uninstall_icon(r), size);
+}
+void cp_uninstall_icons(struct cp_app *a)
+{
+    if (a->page != CP_UNINSTALL) return;
+    for (unsigned k = 0; k < a->uninstall_count; k++) {
+        a->uninstall_items[k].icon16 = uninstall_pixels(&a->uninstall[k], 16);
+        a->uninstall_items[k].icon32 = uninstall_pixels(&a->uninstall[k], 32);
+    }
+    if (a->ui) a->ui->dirty = 1;
+}
 /* A single-page applet used to wear a one-tab strip repeating the window title. Win98 property sheets put the
  * tabs directly on the dialog and a page without siblings has none: hide the strip and lift the body into it. */
 static void flatten_page(struct cp_app *a)
@@ -2150,8 +2167,8 @@ static void build(struct cp_app *a)
             struct desk_uninstall_entry *r=&a->uninstall[k];
             r->name[sizeof(r->name)-1]=0; r->key[sizeof(r->key)-1]=0;
             memset(&a->uninstall_items[k],0,sizeof(a->uninstall_items[k]));
-            a->uninstall_items[k].icon16=du_icon_argb(uninstall_icon(r),16);
-            a->uninstall_items[k].icon32=du_icon_argb(uninstall_icon(r),32);
+            a->uninstall_items[k].icon16=uninstall_pixels(r,16);
+            a->uninstall_items[k].icon32=uninstall_pixels(r,32);
             a->uninstall_items[k].text[0]=r->name;
             a->uninstall_items[k].text[1]=r->version;
             a->uninstall_items[k].text[2]=r->publisher;

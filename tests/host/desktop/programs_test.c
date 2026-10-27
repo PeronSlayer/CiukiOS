@@ -10,7 +10,7 @@
 #include <unistd.h>
 static struct cp_program_store store;
 static struct desk_uninstall_entry entries[96];
-static unsigned games=31,registered=1,keep_key,runs,logs,icons,save_failure,saves,key_checks;
+static unsigned games=31,registered=1,keep_key,runs,logs,icons,save_failure,saves,key_checks,display_icon;
 static int check_key(void *ctx,const char *key){(void)ctx;assert(!strcmp(key,"HKCU/fixture"));key_checks++;return registered;}
 static int persist(void *ctx){(void)ctx;saves++;return save_failure ? -EIO : 0;}
 static char logged[256];
@@ -19,6 +19,7 @@ static int registry(void *ctx,struct desk_uninstall_entry *out,unsigned cap)
     (void)ctx;assert(cap>=2);
     if(!registered)return 0;
     out[0]=(struct desk_uninstall_entry){.name="Zulu Win32",.key="HKCU/fixture",.command="C:\\Programs\\Win\\remove.exe",.version="2.4",.publisher="Fixture",.estimated_kb=5};
+    if(display_icon)strcpy(out[0].icon,"\"C:\\Programs\\Win\\APP.EXE\",2");
     return 1;
 }
 static int run(void *ctx,const char *key)
@@ -69,6 +70,15 @@ int main(int argc,char **argv)
     i=find("hwreport");assert(entries[i].system_component && cp_program_remove(&store,&entries[i])==-EPERM && exists("/Programs/hwreport"));
     i=find("control");assert(entries[i].system_component && cp_program_remove(&store,&entries[i])==-EPERM && exists("/Programs/control"));
     i=find("DOOM (shareware)");assert(!strcmp(entries[i].version,"1.9") && !strcmp(entries[i].publisher,"id Software") && strstr(entries[i].licence,"/system/licenses/"));
+    /* fx-exeicons: DisplayIcon names the icon; without it, the Start menu
+     * shortcut whose target lies in the program's folder (Win.lnk), never
+     * the one that runs its uninstaller, and not a mere name match. */
+    link_file("/Windows/Start Menu/Programs/Remove Zulu Win32.lnk","Remove Zulu Win32","C:\\Programs\\Win\\remove.exe","");
+    link_file("/Windows/Start Menu/Programs/Zulu Win32 Readme.lnk","Zulu Win32 Readme","C:\\Docs\\zulu.txt","");
+    i=find("Zulu Win32");assert(!strcmp(entries[i].icon,"/Windows/Start Menu/Programs/Win.lnk"));
+    display_icon=1;i=find("Zulu Win32");assert(!strcmp(entries[i].icon,"/Programs/Win/APP.EXE|2"));display_icon=0;
+    char removal[1024];snprintf(removal,sizeof(removal),"%s/Windows/Start Menu/Programs/Remove Zulu Win32.lnk",store.root);assert(!unlink(removal));
+    snprintf(removal,sizeof(removal),"%s/Windows/Start Menu/Programs/Zulu Win32 Readme.lnk",store.root);assert(!unlink(removal));
     i=find("Zulu Win32");assert(!strcmp(entries[i].location,"/Programs/Win"));keep_key=1;assert(cp_program_remove(&store,&entries[i])==-EAGAIN && exists("/Windows/Start Menu/Programs/Win.lnk"));
     keep_key=0;assert(!cp_program_remove(&store,&entries[i]) && runs==2 && key_checks==2 && !exists("/Windows/Start Menu/Programs/Win.lnk"));
     i=find("External DOS launch");assert(!cp_program_remove(&store,&entries[i]));

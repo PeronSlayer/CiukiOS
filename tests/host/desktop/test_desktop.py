@@ -173,7 +173,7 @@ class DesktopTests(unittest.TestCase):
             binary = folder / "capture"
             sources = [ROOT / "apps/desktop" / n for n in ("client.c", "protocol.c", "input.c", "compositor.c", "theme.c")] + SHELL_SOURCES
             sources += [ROOT / "tests/host/desktop" / n for n in ("fake.c", "compositor_capture.c")]
-            sources += [ROOT / "apps/libdeskui" / n for n in ("icons.c", "icon_map.c")]
+            sources += [ROOT / "apps/libdeskui" / n for n in ("icons.c", "icon_map.c", "iconx.c", "fileicon.c")]
             subprocess.run(["clang", "-std=c17", "-D_POSIX_C_SOURCE=200809L", "-include", str(ROOT / "tests/host/desktop/replay_base.h"), "-O1", "-Wall", "-Wextra", "-Werror",
                             "-fsanitize=address,undefined", "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
                             "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "src/kernel/include"),
@@ -200,7 +200,7 @@ class DesktopTests(unittest.TestCase):
             binary = folder / "capture"
             sources = [ROOT / "apps/desktop" / n for n in ("client.c", "protocol.c", "input.c", "compositor.c", "theme.c")] + SHELL_SOURCES
             sources += [ROOT / "tests/host/desktop" / n for n in ("fake.c", "compositor_capture.c")]
-            sources += [ROOT / "apps/libdeskui" / n for n in ("icons.c", "icon_map.c")]
+            sources += [ROOT / "apps/libdeskui" / n for n in ("icons.c", "icon_map.c", "iconx.c", "fileicon.c")]
             subprocess.run(["clang", "-std=c17", "-D_POSIX_C_SOURCE=200809L", "-include", str(ROOT / "tests/host/desktop/replay_base.h"), "-O1", "-Wall", "-Wextra", "-Werror",
                             "-fsanitize=address,undefined", "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
                             "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "src/kernel/include"),
@@ -226,7 +226,7 @@ class DesktopTests(unittest.TestCase):
             binary = folder / "capture"
             sources = [ROOT / "apps/desktop" / n for n in ("client.c", "protocol.c", "input.c", "compositor.c", "theme.c")] + SHELL_SOURCES
             sources += [ROOT / "tests/host/desktop" / n for n in ("fake.c", "compositor_capture.c")]
-            sources += [ROOT / "apps/libdeskui" / n for n in ("icons.c", "icon_map.c")]
+            sources += [ROOT / "apps/libdeskui" / n for n in ("icons.c", "icon_map.c", "iconx.c", "fileicon.c")]
             subprocess.run(["clang", "-std=c17", "-D_POSIX_C_SOURCE=200809L", "-include", str(ROOT / "tests/host/desktop/replay_base.h"), "-O1", "-Wall", "-Wextra", "-Werror",
                             "-fsanitize=address,undefined", "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
                             "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "src/kernel/include"),
@@ -289,7 +289,7 @@ class DesktopTests(unittest.TestCase):
             plain += [ROOT / "apps/files" / n for n in ("model.c","transfer.c")]
             posix = [ROOT / "tests/host/desktop/look_capture.c", *(ROOT / "apps/libdeskui" / f"{n}.c" for n in
                                                                    ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea",
-                                                                    "icons", "icon_map"))]
+                                                                    "icons", "icon_map", "iconx", "fileicon"))]
             icons = load("look_icon_assets", ROOT / "tests/host/desktop/icon_assets.py").defines()
             objects = []
             for k, source in enumerate([*plain, *posix]):
@@ -406,7 +406,7 @@ class DesktopTests(unittest.TestCase):
             binary = folder / "capture"
             sources = [ROOT / "apps/desktop" / n for n in ("client.c", "protocol.c", "input.c", "compositor.c", "theme.c", "image.c")]
             sources += SHELL_SOURCES + [ROOT / "tests/host/desktop" / n for n in ("fake.c", "compositor_capture.c")]
-            sources += [ROOT / "apps/libdeskui" / n for n in ("icons.c","icon_map.c")]
+            sources += [ROOT / "apps/libdeskui" / n for n in ("icons.c","icon_map.c","iconx.c","fileicon.c")]
             icons=load("wall_icons",ROOT / "tests/host/desktop/icon_assets.py")
             subprocess.run(["clang", "-std=c17", "-D_POSIX_C_SOURCE=200809L", "-include", str(ROOT / "tests/host/desktop/replay_base.h"), "-O1", "-Wall", "-Wextra", "-Werror", "-DCAPTURE_DECODE",
                             "-DCAPTURE_ICONS",*icons.defines(),
@@ -459,7 +459,7 @@ class DesktopTests(unittest.TestCase):
             icons = load("control_icon_assets", ROOT / "tests/host/desktop/icon_assets.py")   # the guest's /system/icons store
             sources = ["tests/host/desktop/control_test.c", "apps/control/app.c", "apps/desktop/power_policy.c", "apps/systools/devctl.c", "apps/systools/profiles.c", "apps/control/driver_pack_ui.c", "apps/control/display.c", "apps/control/fonts.c", "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c", "apps/desktop/protocol.c",
                        *(f"apps/desktop/{n}.c" for n in ("settings", "sounds", "wallpaper", "image", "compositor", "theme")),
-                       *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map"))]
+                       *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map", "iconx", "fileicon"))]
             ft = load("control_freetype", ROOT / "sdk/freetype/build.py"); library = ft.host()
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_POSIX_C_SOURCE=200809L",
                             "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined", *icons.defines(),
@@ -498,7 +498,7 @@ class DesktopTests(unittest.TestCase):
             icons = load("control_modes_icons", ROOT / "tests/host/desktop/icon_assets.py")
             sources = ["tests/host/desktop/control_modes_test.c", "apps/control/app.c", "apps/desktop/power_policy.c", "apps/systools/devctl.c", "apps/systools/profiles.c", "apps/control/driver_pack_ui.c", "apps/control/display.c", "apps/control/fonts.c", "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c",
                        *(f"apps/desktop/{n}.c" for n in ("protocol", "settings", "sounds", "wallpaper", "image", "compositor", "theme")),
-                       *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map"))]
+                       *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map", "iconx", "fileicon"))]
             ft = load("control_modes_freetype", ROOT / "sdk/freetype/build.py"); library = ft.host()
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_POSIX_C_SOURCE=200809L",
                             "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined", *icons.defines(),
@@ -534,7 +534,7 @@ class DesktopTests(unittest.TestCase):
             icons = load("control_async_icons", ROOT / "tests/host/desktop/icon_assets.py")
             sources = ["tests/host/desktop/control_async_test.c", "tests/host/desktop/control_channel_host.c", "apps/control/decoder.c", "apps/control/app.c", "apps/desktop/power_policy.c", "apps/systools/devctl.c", "apps/systools/profiles.c", "apps/control/driver_pack_ui.c", "apps/control/display.c", "apps/control/fonts.c", "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c",
                        *(f"apps/desktop/{n}.c" for n in ("protocol", "settings", "sounds", "wallpaper", "image", "compositor", "theme")),
-                       *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map"))]
+                       *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map", "iconx", "fileicon"))]
             ft = load("control_async_freetype", ROOT / "sdk/freetype/build.py"); library = ft.host()
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-D_POSIX_C_SOURCE=200809L",
                             '-DCP_THUMB_DIR="thumbnails"', "-fsanitize=address,undefined", "-fno-sanitize-recover=undefined", *icons.defines(),
@@ -596,7 +596,7 @@ class DesktopTests(unittest.TestCase):
             sources += [ROOT / "tests/host/desktop" / n for n in ("fake.c", "shell_launch_test.c")]
             sources += [ROOT / "apps/desktop/users.c", ROOT / "apps/desktop/users_io.c", ROOT / "apps/desktop/schedsvc.c"]
             sources += [ROOT / "apps/desktop/image.c", ROOT / "apps/desktop/wallpaper_io.c"]  # shell_service's workers
-            sources += [ROOT / "apps/libdeskui" / n for n in ("icons.c", "icon_map.c")]
+            sources += [ROOT / "apps/libdeskui" / n for n in ("icons.c", "icon_map.c", "iconx.c", "fileicon.c")]
             bridge = folder / "kernel-poll.o"
             subprocess.run(["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
                             "-fsanitize=address,undefined", "-ffunction-sections", "-fdata-sections",
@@ -717,7 +717,7 @@ class DesktopTests(unittest.TestCase):
             sources = [ROOT / "apps/desktop" / n for n in
                        ("protocol.c", "client.c", "input.c", "compositor.c", "theme.c")] + SHELL_SOURCES
             sources += [ROOT / "tests/host/desktop" / n for n in ("fake.c", "desktop_test.c")]
-            sources += [ROOT / "apps/libdeskui" / n for n in ("icons.c", "icon_map.c")]
+            sources += [ROOT / "apps/libdeskui" / n for n in ("icons.c", "icon_map.c", "iconx.c", "fileicon.c")]
             subprocess.run(["cc", "-std=c17", "-D_POSIX_C_SOURCE=200809L", "-include", str(ROOT / "tests/host/desktop/replay_base.h"), "-O1", "-g", "-Wall", "-Wextra", "-Werror",
                             "-fsanitize=address,undefined", "-fno-omit-frame-pointer",
                             "-I", str(ROOT / "apps/desktop"), "-I", str(ROOT / "src/kernel/include"),
@@ -921,7 +921,7 @@ class AppCaseReplayTests(unittest.TestCase):
                  *((f"desktop_{n}", [], ROOT / f"apps/desktop/{n}.c") for n in ("client", "protocol", "input", "compositor", "theme",
                                                                                   "shell", "autoplay", "autoplay_content", "sounds", "clipboard", "settings", "power_policy", "settings_io", "wallpaper", "wallpaper_io", "keymap", "image", "folder")),
                  *((f"deskui_{n}", posix, ROOT / f"apps/libdeskui/{n}.c") for n in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea")),
-                 *((f"deskui_{n}", posix + icons.defines(), ROOT / f"apps/libdeskui/{n}.c") for n in ("icons", "icon_map")),
+                 *((f"deskui_{n}", posix + icons.defines(), ROOT / f"apps/libdeskui/{n}.c") for n in ("icons", "icon_map", "iconx", "fileicon")),
                  ("deskui_client", os_calls, ROOT / "apps/libdeskui/client.c"),
                  ("deskui_recent", os_calls, ROOT / "apps/libdeskui/recent.c"),   # CiukNote's recent list (off in --test runs)
                  *((f"deskui_{n}", posix, ROOT / f"apps/libdeskui/{n}.c") for n in ("clipboard", "clipfile", "clipstore")),   # the shared clipboard (G5)

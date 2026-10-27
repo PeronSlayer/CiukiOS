@@ -2542,6 +2542,7 @@ struct links_worker {
     struct desk_launch_record edit_record;
     unsigned char icon_valid[DESK_LINKS], scratch_icon_valid[DESK_LINKS];
     uint32_t icons[DESK_LINKS][DESK_SHORTCUT_PIXELS], scratch_icons[DESK_LINKS][DESK_SHORTCUT_PIXELS];
+    char fallbacks[DESK_LINKS][48], scratch_fallbacks[DESK_LINKS][48];   /* fx-exeicons: target's type icon */
     int run_requested, run_busy, run_done, run_result;
     char run_command[DESK_RUN_MAX];
     int history_requested, history_busy, history_done, history_error;
@@ -2571,6 +2572,7 @@ static int links_profile_update(struct desktop *d)
 /* Render-owned snapshot: worker writes never race a paint using these pixels. */
 static unsigned char links_icon_valid[DESK_LINKS];
 static uint32_t links_icons[DESK_LINKS][DESK_SHORTCUT_PIXELS];
+static char links_fallbacks[DESK_LINKS][48];
 static int run_history_idle(void)
 {
     struct links_worker *w=links_worker; if (!w) return 1;
@@ -2588,8 +2590,10 @@ static void links_scan_once(struct links_worker *w, int games)
     pthread_mutex_unlock(&w->mutex);
     int count=links_list(&s);
     memset(w->scratch_icon_valid,0,sizeof(w->scratch_icon_valid));
+    memset(w->scratch_fallbacks,0,sizeof(w->scratch_fallbacks));
     for(unsigned k=0;k<s.count;k++)
-        w->scratch_icon_valid[k]=(unsigned char)desk_shortcut_icon_load(&w->scratch[k].launch,w->scratch_icons[k]);
+        w->scratch_icon_valid[k]=(unsigned char)desk_shortcut_icon_load(w->scratch[k].source,w->scratch_icons[k],
+                                                                          w->scratch_fallbacks[k],sizeof(w->scratch_fallbacks[k]));
     unsigned removed=w->games_removed;
     for(unsigned g=1;games && g<=CIUKI_DOSVM_GAME_COUNT;g++){
         struct ciuki_dosvm_command c={.version=CIUKI_DOSVM_VERSION,.size=sizeof(c)};c.launch.game=g;
@@ -2604,6 +2608,7 @@ static void links_scan_once(struct links_worker *w, int games)
     memcpy(w->published_stamps,w->scratch_stamps,w->count*sizeof(*w->published_stamps));
     memcpy(w->icon_valid,w->scratch_icon_valid,sizeof(w->icon_valid));
     memcpy(w->icons,w->scratch_icons,w->count*sizeof(*w->icons));
+    memcpy(w->fallbacks,w->scratch_fallbacks,sizeof(w->fallbacks));
     w->scanned_ns=monotonic(); w->scanning=0;
     w->scans++; w->game_scans+=!!games; w->stats+=s.stats; w->reads+=s.reads;
     desk_wake(w->desktop);
@@ -2724,10 +2729,11 @@ static int links_snapshot(struct desktop *d, struct desk_link_entry *out, unsign
     unsigned n=w->count<cap ? w->count : cap;
     int same=n==d->v3_link_count && !memcmp(out,w->published,n*sizeof(*out));
     same=same && !memcmp(links_icon_valid,w->icon_valid,n*sizeof(*links_icon_valid)) &&
-        !memcmp(links_icons,w->icons,n*sizeof(*links_icons));
+        !memcmp(links_icons,w->icons,n*sizeof(*links_icons)) && !memcmp(links_fallbacks,w->fallbacks,n*sizeof(*links_fallbacks));
     if (!same) memcpy(out,w->published,n*sizeof(*out));
     memcpy(links_icon_valid,w->icon_valid,n*sizeof(*links_icon_valid));
     memcpy(links_icons,w->icons,n*sizeof(*links_icons));
+    memcpy(links_fallbacks,w->fallbacks,n*sizeof(*links_fallbacks));
     links_request(w,d,monotonic());
     pthread_mutex_unlock(&w->mutex); return same ? -EAGAIN : (int)n;
 }
@@ -2771,11 +2777,14 @@ static int drop_snapshot(struct desktop *d)
     if (munmap(out,rows*4096)) { close(fd); return -1; }
     return fd;
 }
+/* fx-exeicons: a shortcut without an own icon shows its target's type
+ * (a document, a folder, a bundled DOS game), as Windows 98 does. */
 static const uint32_t *link_icon_cached(struct desktop *d,const char *source,unsigned size)
 {
     if(size!=16 && size!=32)return NULL;
     for(unsigned k=0;k<d->v3_link_count;k++)if(!strcmp(source,d->v3_links[k].source))
-        return links_icon_valid[k] ? links_icons[k]+(size==32 ? 16*16 : 0) : NULL;
+        return links_icon_valid[k] ? links_icons[k]+(size==32 ? 16*16 : 0) :
+               links_fallbacks[k][0] ? desk_shell_icon(du_icon_name(links_fallbacks[k]),(int)size) : NULL;
     return NULL;
 }
 static int link_save_async(struct desktop *d,const char *source,const struct desk_launch_record *record)
@@ -2929,9 +2938,12 @@ static void links_service(struct desktop *d)
     if (run_done) desk_run_result(d,command,run_result<0 ? run_result : 0);
     if (history_error) desk_shell_notify_error(d,"Run history could not be saved",-history_error);
 }
+/* fx-exeicons: the own-icon worker wakes the desktop when it published. */
+static void icons_wake(void *ctx) { desk_wake(ctx); }
 static void shell_setup(struct desktop *d, int gate)
 {
     if (!gate) {
+        if (du_file_icons_start(icons_wake,d)) fprintf(stderr,"[desktop] icon worker unavailable\n");
         desk_w32_start(d); links_start(d); d->v3_lease=win32_lease; d->v3_lease_poll=desk_w32_presenter_poll;
         d->v3_restart=win32_restart;
     }

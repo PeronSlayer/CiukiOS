@@ -38,7 +38,9 @@ static void draw_toolbars(struct desktop *d,struct desk_box clip)
             du_text(&c,field.x+4,field.y+4,shown,SH_INK);
             if (d->sh.address_focus) du_vline(&c,field.x+4+du_text_width(shown),field.y+3,field.h-6,SH_INK);
         } else if (s->kind==DESK_TOOLBAR_ITEM) {
-            const uint32_t *ic=desk_shell_icon(d->sh.custom && d->sh.custom->entries[s->arg].icon[0] ? du_icon_name(d->sh.custom->entries[s->arg].icon) : d->sh.custom && d->sh.custom->entries[s->arg].folder>=0 ? "folder" : "application-x-executable",16);
+            /* fx-exeicons: a Quick Launch shortcut or program shows its own icon. */
+            const uint32_t *ic=d->sh.custom && d->sh.custom->entries[s->arg].own_icon ? du_file_icon_flags(d->sh.custom->entries[s->arg].path,0,16,0) : NULL;
+            if (!ic) ic=desk_shell_icon(d->sh.custom && d->sh.custom->entries[s->arg].icon[0] ? du_icon_name(d->sh.custom->entries[s->arg].icon) : d->sh.custom && d->sh.custom->entries[s->arg].folder>=0 ? "folder" : "application-x-executable",16);
             if (ic) du_icon_blit(&c,s->box.x+(s->box.w-16)/2,s->box.y+5,ic,16,DU_ICON_NORMAL);
         } else {
             const char *label=s->kind==DESK_TOOLBAR_OVERFLOW ? ">>" : s->arg==SH_ROOT_QUICK ? ">>" :

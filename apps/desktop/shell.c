@@ -230,6 +230,14 @@ static const uint32_t *large_icon(const char *name,int size)
 }
 const uint32_t *desk_shell_icon(const char *name, int size)
 {
+    /* fx-exeicons: an absolute path names a file's own icon (libdeskui
+     * fileicon.c); its type's icon stands in while the worker extracts it. */
+    if (name && name[0]=='/') {
+        const uint32_t *own=size==16 || size==22 || size==32 || size==48 ? du_file_icon(name,0,(unsigned)size) : NULL;
+        if (own) return own;
+        const char *slash=strrchr(name,'/');
+        name=du_icon_file(slash ? slash+1 : name,0,0);
+    }
     if(size>48) return large_icon(name,size);
     if (!name || size <= 0) return NULL;
     for (unsigned i = 0; i < icon_cache_count; i++)
@@ -386,13 +394,23 @@ static const char *client_icon(const struct desktop *d, int i)
     return "application-x-executable";
 }
 
+/* fx-exeicons: a Win32 window's own icon (DESK_V3_WINDOW_ICON: WM_SETICON,
+ * its class icon or its executable's), else its program's icon. */
+static const uint32_t *client_pixels(const struct desktop *d, int i, int size)
+{
+    const struct desk_client *c = &d->clients[i];
+    if (size == 16 && (c->v3_icon_mask & 1u)) return c->v3_icon16;
+    if (size == 32 && (c->v3_icon_mask & 2u)) return c->v3_icon32;
+    return desk_shell_icon(client_icon(d, i), size);
+}
+
 /* ---- menus ------------------------------------------------------------- */
 static void item(struct sh_menu *m, const char *label, const char *icon, int action, int arg, unsigned flags)
 {
     if (m->count >= SH_ITEMS) return;
     struct sh_item *it = &m->items[m->count++];
     snprintf(it->label, sizeof(it->label), "%s", label);
-    it->icon = icon; it->action = (uint8_t)action; it->arg = (int16_t)arg; it->flags = (uint8_t)flags;
+    it->icon = icon; it->file_icon = NULL; it->action = (uint8_t)action; it->arg = (int16_t)arg; it->flags = (uint8_t)flags;
 }
 static void separator(struct sh_menu *m) { item(m, "", NULL, SH_ACT_NONE, 0, SH_ITEM_SEPARATOR); }
 
@@ -480,6 +498,9 @@ static void custom_folder_items(struct desktop *d,struct sh_menu *m,int folder)
         item(m,e->label,e->folder>=0 ? "folder" : e->icon[0] ? du_icon_name(e->icon) : "application-x-executable",   /* program groups use the folder icon, as in Windows 98 */
              
              e->folder>=0 ? SH_ACT_SUBMENU : SH_ACT_SHELL_ITEM,e->folder>=0 ? SH_MENU_FOLDER_BASE+e->folder : (int)k,0);
+        /* fx-exeicons: a shortcut with an own icon (installer-created ones
+         * name the program's), resolved by the Start menu worker. */
+        if (e->folder<0 && e->own_icon && m->count && m->items[m->count-1].arg==(int16_t)k) m->items[m->count-1].file_icon=e->path;
     }
     if (extra || s->truncated) item(m,"More... Open Folder","folder",SH_ACT_FOLDER_EXPLORE,folder,0);
 }
@@ -1450,6 +1471,7 @@ static void draw_menu(struct desktop *d, const struct sh_menu *m, struct desk_bo
         if (hot) hot_row(&c, (struct du_rect){platinum ? x0 - 1 : x0, y, platinum ? w + 2 : w, h});
         const uint32_t *ic = it->action==SH_ACT_WIN32_LINK && d->v3_link_icon && it->arg>=0 && (unsigned)it->arg<d->v3_link_count ?
             d->v3_link_icon(d,d->v3_links[it->arg].source,(unsigned)m->icon) : NULL;
+        if (!ic && it->file_icon && (m->icon==16 || m->icon==22 || m->icon==32 || m->icon==48)) ic=du_file_icon_flags(it->file_icon,0,(unsigned)m->icon,0);
         if (!ic) ic=desk_shell_icon(it->icon,m->icon);
         if (ic) du_icon_blit(&c, x0 + 6, y + (h - m->icon) / 2, ic, m->icon, it->flags & SH_ITEM_DISABLED ? DU_ICON_DISABLED : DU_ICON_NORMAL);
         if (it->flags & SH_ITEM_CHECKED)
@@ -1785,7 +1807,7 @@ static void draw_taskbar(struct desktop *d, struct desk_box clip)
             (d->clients[i].minimized ? DESK_TASK_MINIMIZED : 0),d->lfb_bytes_per_pixel==2);
         if (button.w > 24) {
             int icon_size=desk_scale(16);
-            const uint32_t *ic = desk_shell_icon(client_icon(d, i), icon_size);
+            const uint32_t *ic = client_pixels(d, i, icon_size);
             int dy = active ? 1 : 0;
             if (ic) du_icon_blit(&bc, button.x + desk_scale(5) + dy, button.y + (button.h-icon_size)/2 + dy, ic, icon_size, d->clients[i].minimized ? DU_ICON_GHOST : DU_ICON_NORMAL);
             const char *title = d->clients[i].closing ? "Closing..." : d->clients[i].unresponsive ? "Not responding" : d->clients[i].title;
@@ -2681,6 +2703,17 @@ static const uint8_t *label_halo_of(const struct desktop *d, int k, const char *
 }
 extern void desk_recovery_paint(struct desktop *, struct desk_box) __attribute__((weak));
 extern void desk_recovery_tick(struct desktop *) __attribute__((weak));
+/* fx-exeicons: a desktop item's own icon: a program, an icon file, a
+ * shortcut's IconLocation or target icon, a PIF, a read-only or system
+ * folder's desktop.ini icon (Windows 98 shows them on its desktop). */
+static const uint32_t *entry_file_icon(struct desktop *d, int k, int size)
+{
+    if (!icon_is_entry(d, k) || (size != 16 && size != 22 && size != 32 && size != 48)) return NULL;
+    const struct fm_entry *e = &d->sh.folder->model.entries[k - 3];
+    int dir = e->meta.type == FM_DIR;
+    if (dir ? !(e->meta.attributes & (CIUKI_ATTR_READONLY | CIUKI_ATTR_SYSTEM)) : !du_file_icon_candidate(e->name, 0)) return NULL;
+    return du_file_icon_flags(d->sh.icons[k].argument, e->meta.modified, (unsigned)size, 0);   /* own icons only */
+}
 static void draw_icons(struct desktop *d, struct desk_box clip)
 {
     /* G14: Safe mode's corner labels under the icons; no icons at a command prompt. */
@@ -2700,8 +2733,13 @@ static void draw_icons(struct desktop *d, struct desk_box clip)
             unsigned link=(unsigned)strtoul(ic->argument,NULL,10);
             if (link<d->v3_link_count) custom=d->v3_link_icon(d,d->v3_links[link].source,32);
         }
+        const uint32_t *own=custom ? NULL : entry_file_icon(d,k,icon_size);
         if (custom) du_icon_blit(&c,ix+(icon_size-32)/2,iy+(icon_size-32)/2,custom,32,selected ? DU_ICON_SELECTED : DU_ICON_NORMAL);
-        else {
+        else if (own) {
+            du_icon_blit(&c,ix,iy,own,icon_size,selected ? DU_ICON_SELECTED : DU_ICON_NORMAL);
+            if (!strcmp(ic->icon,"emblem-symbolic-link"))   /* a shortcut keeps its arrow */
+                du_icon_blit(&c,ix+icon_size-16,iy+icon_size-16,desk_shell_icon("emblem-symbolic-link",16),16,DU_ICON_NORMAL);
+        } else {
             const char *target=!strcmp(ic->icon,"emblem-symbolic-link") ? shortcut_icon(d,ic->argument) : NULL;
             du_icon_blit(&c, ix, iy, desk_shell_icon(target ? target : ic->icon, icon_size), icon_size, selected ? DU_ICON_SELECTED : DU_ICON_NORMAL);
             if (target) du_icon_blit(&c,ix+icon_size-16,iy+icon_size-16,desk_shell_icon("emblem-symbolic-link",16),16,DU_ICON_NORMAL);
@@ -3506,7 +3544,7 @@ static void draw_switcher(struct desktop *d, struct desk_box clip)
             du_fill(&c, cell, desk_mix(SH_HOT, SH_FACE, 60));
             du_outline(&c, cell, SH_HOT); du_outline(&c, (struct du_rect){cell.x + 1, cell.y + 1, 38, 38}, SH_HOT);
         }
-        du_icon_blit(&c, cell.x + 4, cell.y + 4, desk_shell_icon(client_icon(d, i), 32), 32,
+        du_icon_blit(&c, cell.x + 4, cell.y + 4, client_pixels(d, i, 32), 32,
                 d->clients[i].minimized ? DU_ICON_GHOST : DU_ICON_NORMAL);
     }
     if (d->sh.switch_pick >= 0 && d->sh.switch_pick < d->sh.switch_count) {
@@ -3820,7 +3858,7 @@ const uint32_t *desk_shell_window_icon(struct desktop *d, int index, int size)
 {
     if (index < 0 || index >= DESK_CLIENTS) return NULL;
     bind(d);
-    return desk_shell_icon(client_icon(d, index), size);
+    return client_pixels(d, index, size);
 }
 
 /* ---- built-in windows -------------------------------------------------- */
@@ -4287,7 +4325,11 @@ void desk_internal_paint(struct desktop *d, int index, struct desk_box content, 
         snprintf(title,sizeof(title),"%.32s (%c:)",a->content.inf.label[0] ? a->content.inf.label :
                  a->active.label[0] ? a->active.label : "Removable media",'A'+a->active.drive);
         if (a->content.cd_audio) snprintf(title,sizeof(title),"Audio CD");
-        du_icon_blit(&c,content.x+12,content.y+12,desk_shell_icon(a->active.flags & CIUKI_MEDIA_OPTICAL ? "media-optical" : "drive-removable-media",32),32,DU_ICON_NORMAL);
+        /* fx-exeicons: the medium's AUTORUN.INF icon= (Microsoft, "Autorun.inf Entries"). */
+        char root[8]="/";
+        if (a->active.drive!=2) snprintf(root,sizeof(root),"/mnt/%c",'a'+(char)(a->active.drive%26));
+        const uint32_t *medium=a->content.inf.icon[0] ? du_file_icon_flags(root,(int64_t)a->active.generation+1,32,0) : NULL;
+        du_icon_blit(&c,content.x+12,content.y+12,medium ? medium : desk_shell_icon(a->active.flags & CIUKI_MEDIA_OPTICAL ? "media-optical" : "drive-removable-media",32),32,DU_ICON_NORMAL);
         bold(&c,content.x+56,content.y+12,title,SH_INK);
         du_text(&c,content.x+56,content.y+32,"What do you want CiukiOS to do?",SH_INK);
         for (int k=0;k<AP_CHOICES;k++) {
@@ -4981,6 +5023,16 @@ void desk_shell_tick(struct desktop *d)
     while(d->pointer_trail_count && d->pointer_trail[d->pointer_trail_count-1].until<=d->now_ns) {
         unsigned k=--d->pointer_trail_count;
         damage(d,(struct desk_box){d->pointer_trail[k].x-64,d->pointer_trail[k].y-64,128,128});
+    }
+    /* fx-exeicons: the icon worker published own icons: repaint whatever
+     * shows file icons (desktop items, open menus, the taskbar). */
+    unsigned icons=du_file_icons_generation();
+    if (icons!=d->sh.icon_generation) {
+        d->sh.icon_generation=icons;
+        for (int k=0;k<d->sh.icon_count;k++) damage(d,d->sh.icons[k].box);
+        menus_damage(d);
+        damage(d,desk_taskbar(d));
+        for (int i=0;i<DESK_CLIENTS;i++) if (d->clients[i].window && d->clients[i].internal==DESK_INTERNAL_AUTOPLAY) damage(d,desk_outer(&d->clients[i]));
     }
     bar_autohide(d);
     dnd_tick(d);

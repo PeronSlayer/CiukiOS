@@ -34,7 +34,8 @@ def build(out, base, flags):
             'RegisterClassA':4,'CreateWindowExA':48,'ShowWindow':8,'UpdateWindow':4,
             'SetWindowTextA':8,'PeekMessageA':20,'PostQuitMessage':4,
             'TranslateMessage':4,'DispatchMessageA':4,'DestroyWindow':4,
-            'IsWindow':4,'CiukiShellOpenFolder':8}),   # fx-q3vise: ShellExecute(Ex) of a folder
+            'IsWindow':4,'CiukiShellOpenFolder':8,   # fx-q3vise: ShellExecute(Ex) of a folder
+            'CiukiShellIcon':4}),                    # fx-exeicons: SHGetFileInfo's default icons
         codecs.import_library(objdir, 'advapi32', {'RegOpenKeyExA': 20,
             'RegQueryValueExA': 24, 'RegCloseKey': 4})]
     # cdecl diagnostic functions are exported by ntdll with plain names.
@@ -44,7 +45,7 @@ def build(out, base, flags):
     codecs.run(['llvm-dlltool', '-m', 'i386', '-d', definition, '-l', lib])
     libraries.append(lib)
     objects, exports = [], {}
-    for source in [*sorted((ROOT/'sdk/win32/shell').glob('*.c')),
+    for source in [*sorted((ROOT/'sdk/win32/shell').glob('*.c')), ROOT/'apps/libdeskui/iconx.c',
                    ROOT/'sdk/win32/services/bytes.c', ROOT/'sdk/win32/services/stack.S']:
         obj = objdir/(source.stem+'.obj')
         extra = ['-Wno-unused-command-line-argument'] if source.suffix == '.S' else []

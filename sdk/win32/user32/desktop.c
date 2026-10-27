@@ -177,6 +177,7 @@ BOOL u32_create_wire(struct u32_window *w) {
     desk_put32(identity,1);
     if (!u32_wire(w,DESK_ACCEPT_FILES,identity,4,-1)) return 0;
   }
+  (void)u32_window_icon(w); /* fx-exeicons: caption, taskbar and Alt+Tab icon */
   if (!(w->style & WS_VISIBLE) || IsIconic(w->handle))
     return u32_place(w);
   return 1;

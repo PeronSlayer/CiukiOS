@@ -90,7 +90,13 @@ enum desk_v3_opcode {
      * no reply: like DAMAGE it only needs the window tuple of an open window. */
     DESK_V3_SOUND = 92,
     /* G19: desktop-owned Control Panel action request from a v3 client. */
-    DESK_V3_LAUNCH = 93
+    DESK_V3_LAUNCH = 93,
+    /* fx-exeicons WINDOW_ICON: client to desktop, 4 bytes: size (16 or 32)
+     * with one size x size ARGB8888 surface (straight alpha in the high byte),
+     * or 0 without a surface to drop the window's icons. The icon the window
+     * shows in its caption, taskbar button and Alt+Tab: WM_SETICON, else its
+     * class icon, else its executable's first icon group. */
+    DESK_V3_WINDOW_ICON = 97
 };
 /* G12: shared settings, v2/v3; no fds. Request: key (0=query), value,
  * flags (SPIF_UPDATEINIFILE=1, SENDCHANGE=2). Snapshot: 11 u32 values, changed key, flags.

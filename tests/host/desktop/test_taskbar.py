@@ -15,7 +15,7 @@ class TaskbarTests(unittest.TestCase):
                    ("client", "input", "protocol", "compositor", "theme", "shell", "autoplay", "autoplay_content",
                     "settings", "wallpaper", "keymap", "folder", "power_policy")]
         sources += [ROOT / f"apps/libdeskui/{n}.c" for n in
-                    ("draw", "widgets", "controls", "list", "menu", "dialog", "textarea", "icons", "icon_map")]
+                    ("draw", "widgets", "controls", "list", "menu", "dialog", "textarea", "icons", "icon_map", "iconx", "fileicon")]
         sources += [ROOT / "apps/files/model.c", ROOT / "apps/files/transfer.c", ROOT / "tests/host/desktop/fake.c",
                     ROOT / "tests/host/desktop/taskbar_test.c"]
         parent = ROOT / "build/host"

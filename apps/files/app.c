@@ -196,12 +196,45 @@ static void checkpoint(struct files_app *a, int stage)
     if (a->checkpoint) a->checkpoint(a, stage);
 }
 
-/* ---- icons: Tango store (libdeskui du_icon, icon_map.c) ---- */
-static const uint32_t *icon_of(const struct fm_entry *e, unsigned size)
-{ return du_icon_argb(du_icon_file(e->name, e->meta.type == FM_DIR, e->meta.exec != 0), size); }
-static const uint32_t *icon16(const struct fm_entry *e) { return icon_of(e, 16); }
-static const uint32_t *icon32(const struct fm_entry *e) { return icon_of(e, 32); }
+/* ---- icons: Tango store (libdeskui du_icon, icon_map.c) ----
+ * fx-exeicons: a program, library, icon file, shortcut (with the Windows
+ * overlay), PIF, Internet shortcut or read-only/system folder with a
+ * desktop.ini shows its own icon (libdeskui fileicon.c), as in Windows 98's
+ * Explorer. The icon worker extracts it off the UI thread; the type's icon
+ * stands in until files_service sees the published generation. */
+static const uint32_t *icon_of(struct files_app *a, const struct fm_entry *e, unsigned size)
+{
+    int dir = e->meta.type == FM_DIR;
+    if (dir ? (e->meta.attributes & (CIUKI_ATTR_READONLY | CIUKI_ATTR_SYSTEM)) != 0 : du_file_icon_candidate(e->name, 0)) {
+        char path[FM_PATH];
+        size_t index = (size_t)(e - a->model.entries);
+        if (index < a->model.count && !fm_entry_path(&a->model, (unsigned)index, path)) {
+            const uint32_t *own = du_file_icon_flags(path, e->meta.modified, size,
+                                                     DU_FILE_ICON_DEFAULT | (!dir && du_file_icon_shortcut(e->name) ? DU_FILE_ICON_LINK : 0));
+            if (own) return own;
+        }
+    }
+    return du_icon_argb(du_icon_file(e->name, dir, e->meta.exec != 0), size);
+}
+static const uint32_t *icon16(struct files_app *a, const struct fm_entry *e) { return icon_of(a, e, 16); }
+static const uint32_t *icon32(struct files_app *a, const struct fm_entry *e) { return icon_of(a, e, 32); }
 static const uint32_t *named(const char *object, unsigned size) { return du_icon_argb(du_icon_name(object), size); }
+/* A drive's AUTORUN.INF icon= (CD-ROM and fixed drives, as Windows 98); the
+ * medium's generation keys the cache, so another disc reads it again. */
+static const uint32_t *drive_icon_of(struct files_app *a, int letter, const char *fallback, unsigned size)
+{
+    if (letter >= 0 && letter < 26) {
+        int optical = (a->media.removable_mask & (1u << letter)) && a->media.type[letter] == CIUKI_MEDIA_OPTICAL;
+        int fixed = !(a->media.removable_mask & (1u << letter)) && a->media.type[letter] != CIUKI_MEDIA_FLOPPY;
+        if (optical || fixed) {
+            char root[8] = "/";
+            if (letter != 2) snprintf(root, sizeof(root), "/mnt/%c", 'a' + letter);
+            const uint32_t *own = du_file_icon_flags(root, (int64_t)a->media.generation[letter] + 1, size, 0);
+            if (own) return own;
+        }
+    }
+    return named(fallback, size);
+}
 
 /* Deterministic box-filter size conversion of the approved portrait array. */
 static void shrink(const uint32_t *src, uint32_t *dst, int size)
@@ -600,13 +633,14 @@ void files_update(struct files_app *a)
             time_text(br->deleted, sizeof(br->deleted), item->deleted);
             kb_text(t->size, sizeof(t->size), e->meta.size);
             a->rows[i] = (struct du_item){{br->name, br->where, br->deleted, t->type, t->size, t->modified},
-                                          icon16(e), icon32(e), (uint8_t)e->selected, 0, 0, 0, 0};
+                                          icon16(a, e), icon32(a, e), (uint8_t)e->selected, 0, 0, 0, 0};
             continue;
         }
         a->rows[i] = (struct du_item){{t->label[0] ? t->label : e->name, t->size, t->type, t->modified,
                                       a->attribute_column ? t->attributes : m->searching ? t->location : t->attributes,
                                       a->attribute_column && m->searching ? t->location : NULL},
-                                      computer ? named(drive_icon, 16) : icon16(e), computer ? named(drive_icon, 32) : icon32(e),
+                                      computer ? drive_icon_of(a, e->name[1] == ':' ? e->name[0] - 'A' : -1, drive_icon, 16) : icon16(a, e),
+                                      computer ? drive_icon_of(a, e->name[1] == ':' ? e->name[0] - 'A' : -1, drive_icon, 32) : icon32(a, e),
                                       (uint8_t)e->selected, (uint8_t)in_clipboard(a, i), 0, 0, 0};
     }
     struct du_widget *list = W(a, W_LIST);
@@ -1753,6 +1787,9 @@ static void files_service(struct du_ui *u,void *ctx)
 {
     (void)u; struct files_app *a=ctx;
     scan_poll(a); job_tick(a);
+    /* fx-exeicons: icons the worker published since the rows were built. */
+    unsigned icons=du_file_icons_generation();
+    if (icons!=a->icon_generation) { a->icon_generation=icons; if (!a->loading) files_update(a); }
     disk_service(a);
     if (a->show_folder_options && !a->loading && !a->job_active && !du_dialog_id(a->ui)) { a->show_folder_options=0;folder_options(a); }
     if (a->property_request[0] && !a->loading && !a->job_active && !du_dialog_id(a->ui)) {
@@ -1888,7 +1925,7 @@ static void bin_item_properties(struct files_app *a, unsigned index)
              name, type, where[0] ? where : "(unknown)", deleted[0] ? deleted : "-", size, g, modified[0] ? modified : "-");
     char title[FM_NAME + 32]; snprintf(title, sizeof(title), "%.60s Properties", name);
     du_message(a->ui, D_BIN_ITEM, title, text, DU_DLG_ICON_INFO, NULL, 0, 0, 0);
-    du_dialog_icon(a->ui, icon32(e));
+    du_dialog_icon(a->ui, icon32(a, e));
 }
 /* Recycle Bin Properties: one setting for all drives or one per drive (the
  * Drive button walks Global, C:, D:, ...), "do not move files", the maximum

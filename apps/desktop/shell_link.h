@@ -47,6 +47,10 @@ struct desk_uninstall_entry {
     unsigned kind, game, inventory_more;
     uint64_t disk_bytes;
     char licence[260];
+    /* fx-exeicons: the icon Add/Remove Programs shows, a libdeskui file
+     * icon key (POSIX path, "|index" for an explicit resource); empty: the
+     * kind's default. */
+    char icon[300];
 };
 static inline int desk_target_url(const char *s)
 {

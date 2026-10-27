@@ -15,7 +15,7 @@ _review = _review_util.module_from_spec(_review_spec); _review_spec.loader.exec_
 capture = _review.capture
 
 ROOT = Path(__file__).resolve().parents[3]
-TOOLKIT = ["draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map"]
+TOOLKIT = ["draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map", "iconx", "fileicon"]
 # F2-99: nine generic-pointer goldens updated in integ-fix1; all other frames
 # and all pixels outside the pointer footprints retain their former pins.
 

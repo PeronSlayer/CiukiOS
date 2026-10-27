@@ -177,6 +177,47 @@ const char *du_icon_name(const char *object);
 const char *du_icon_file(const char *filename, int directory, int executable);
 const struct du_icon *du_icon_for(const char *object, unsigned size);   /* du_icon(du_icon_name(object), size) */
 
+/* fx-exeicons: the icon a file shows by itself (fileicon.c, iconx.c;
+ * docs/design/file-icons.md): a program's or library's first icon group,
+ * an .ico/.cur/.ani, a shortcut's IconLocation or its target's icon, a
+ * .pif's icon, an Internet shortcut's IconFile, a read-only or system
+ * folder's desktop.ini icon, a medium's AUTORUN.INF icon. Keys are absolute
+ * POSIX paths ("what the shell shows for this file") or "file|index" for an
+ * explicit icon resource (ExtractIcon index rules: a negative index is a
+ * resource ID). */
+#define DU_FILE_ICON_PATH 260
+#define DU_FILE_ICON_KEY 300
+#define DU_FILE_ICON_SLOTS 4               /* 16, 22, 32, 48 */
+#define DU_FILE_ICON_DEFAULT 1u            /* no own icon: return the resolved type default */
+#define DU_FILE_ICON_LINK 2u               /* compose the shortcut overlay (lower-left, as Windows) */
+struct du_icon_source {
+    char file[DU_FILE_ICON_PATH];          /* the icon resource file (POSIX) when own */
+    int32_t index;
+    int own;
+    char fallback[64];                     /* du_icon_name() object of the default ("type:.txt", "program:calc") */
+    int resolved;                          /* the file was read: fallback is what it shows; 0 the caller's default */
+};
+struct du_file_icon_stats { uint32_t lookups, hits, queued, extracted, defaults, stale, evicted, refused, entries, bytes; };
+int du_file_icon_candidate(const char *name, int directory);   /* may show an own icon (by extension; folders always) */
+int du_file_icon_shortcut(const char *name);                   /* .lnk, .ciuki, .pif, .url: drawn with the shortcut overlay */
+/* Synchronous resolution and extraction (file I/O; workers and tools).
+ * resolve: 1 own icon at out->file/index, 0 the default out->fallback, <0 error. */
+int du_file_icon_resolve(const char *path, int directory, struct du_icon_source *out);
+int du_file_icon_extract(const char *file, int32_t index, const unsigned *sizes, uint32_t *const *argb, unsigned count);
+int du_file_icon_load(const char *path, int directory, unsigned size, uint32_t *argb, struct du_icon_source *source);
+int du_file_icon_native(const char *location, const char *base, char *out, size_t cap);   /* Windows/relative -> POSIX */
+/* The cache (UI thread). NULL while pending, or when the file has no own
+ * icon and DU_FILE_ICON_DEFAULT is not asked: the caller draws its default.
+ * mtime: the subject's modification time, 0 when unknown. size 16/22/32/48. */
+const uint32_t *du_file_icon(const char *key, int64_t mtime, unsigned size);   /* flags DU_FILE_ICON_DEFAULT */
+const uint32_t *du_file_icon_flags(const char *key, int64_t mtime, unsigned size, unsigned flags);
+int du_file_icon_fallback(const char *key, char *out, size_t cap);   /* resolved default; 1 own, 0 none, -1 unknown */
+int du_file_icons_start(void (*wake)(void *), void *ctx);   /* background worker; 0 or -errno */
+void du_file_icons_stop(void);                               /* joins the worker, empties the cache */
+unsigned du_file_icons_generation(void);                     /* changes when results were published */
+void du_file_icons_snapshot(struct du_file_icon_stats *);
+int du_file_icons_root(const char *prefix);                  /* host harnesses: POSIX paths live under prefix */
+
 /* List and tree content belongs to the application; the toolkit only reads it. */
 struct du_item {
     const char *text[DU_COLUMNS];
