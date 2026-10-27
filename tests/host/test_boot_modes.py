@@ -324,6 +324,8 @@ class LoaderParserTests(unittest.TestCase):
                    'safe=0\tserial=1', 'safe=1\x00', 'A'*127, ' '*127, ' '*128,
                    'ecpoll=0', 'safe=1 ecpoll=0\r\nusbscan=0', 'ecpoll=1', 'ecpoll=00',
                    'serial=0 ecpoll=1\r\necpoll=0', 'ecpoll=2', 'ecpoll=11',
+                   '3d=probe', 'safe=0 serial=1 3d=probe', '3d=probe\r\nsafe=1',
+                   'serial=0 3d=probe\n', '3d=probeX', 'x3d=probe', '3d=', '3d=off',
                    # G14 Startup menu and AutoScan tokens.
                    'menu=1', 'autoscan=0', 'autoscan=2', 'safe=0 serial=1 menu=1 autoscan=2\n', 'menu=0', 'autoscan=1', 'menu=11')
         for flags in (0, 1, 2, 3):
@@ -342,6 +344,23 @@ class LoaderParserTests(unittest.TestCase):
         self.assertTrue(self.machine.config(text))
         self.assertEqual(self.machine.field(8) & 0x43, 0x41)
         self.assertFalse(self.machine.config(text + '\nprobe=f0:core run=12345678'))
+
+    def test_assembled_3d_probe_reaches_kernel_without_a_test_selector(self):
+        text='safe=0 serial=1 3d=probe'
+        # Reproduce the old fatal path using the same assembled parser: hide
+        # only the newly added table entry, then restore it for acceptance.
+        at=self.machine.initial.find(b'3d=probe\0')
+        self.assertGreaterEqual(at,0x20000)
+        self.assertLess(at,0x26000)
+        self.machine.initial[at]=ord('x')
+        try:
+            self.assertFalse(self.machine.config(text, 2))
+        finally:
+            self.machine.initial[at]=ord('3')
+        self.assertTrue(self.machine.config(text, 2))
+        self.assertEqual(self.machine.field(8) & 0x43, 2)
+        start=0x20000+self.machine.info+0x0a8  # CBI options, independent wire offset
+        self.assertEqual(self.machine.mem[start:start+len(text)+1],text.encode()+b'\0')
 
     def test_elf_fills_shared_scratch_before_first_header_validation(self):
         m = self.machine

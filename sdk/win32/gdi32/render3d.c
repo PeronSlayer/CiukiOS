@@ -4,7 +4,7 @@
 #include "../opengl32/encode.h"
 #include "../opengl32/admission.h"
 struct provider_context {
-  unsigned id, color, depth, linear, width, height;
+  unsigned id, color, depth, linear, width, height, depth_bits, stencil_bits, rgb565;
   struct ciuki_r3d_caps caps;
   unsigned sequence_lo, sequence_hi, ordinal_lo, ordinal_hi;
 };
@@ -30,7 +30,8 @@ static struct provider_context *lookup(unsigned id) {
 static int query_caps(const struct gl_hw_format *f,struct ciuki_r3d_caps *c) {
   if (!gl_hw_format_supported(f)) return 0;
   struct ciuki_w32_render3d_args a={.action=CIUKI_R3D_QUERY,.width=f->width,
-    .height=f->height,.kind=CIUKI_R3D_D16,.format=CIUKI_R3D_ARGB8888,.bytes=sizeof(*c)};
+    .height=f->height,.kind=f->depth_bits==24 ? CIUKI_R3D_D24S8 : CIUKI_R3D_D16,
+    .levels=f->stencil_bits,.format=f->rgb565 ? CIUKI_R3D_RGB565 : CIUKI_R3D_ARGB8888,.bytes=sizeof(*c)};
   return !exchange(&a,c) && c->version==CIUKI_R3D_VERSION && c->features &&
     c->max_size>=f->width && c->max_size>=f->height;
 }
@@ -61,8 +62,10 @@ static int open_provider(unsigned dc,const struct gl_hw_format *f,unsigned *out)
   int e=exchange(&a,0);
   if (e) return e;
   c->id=a.context; c->width=f->width; c->height=f->height;
+  c->depth_bits=f->depth_bits; c->stencil_bits=f->stencil_bits; c->rgb565=f->rgb565;
   unsigned *handles[]={&c->color,&c->depth,&c->linear};
-  const unsigned kinds[]={R3D_COLOR,R3D_D16,R3D_LINEAR_COLOR};
+  const unsigned kinds[]={f->rgb565 ? R3D_COLOR565 : R3D_COLOR,
+    f->depth_bits==24 ? R3D_D24S8 : R3D_D16,f->rgb565 ? R3D_LINEAR565 : R3D_LINEAR_COLOR};
   for (unsigned i=0;i<3;i++) {
     a=args(c,CIUKI_R3D_RESOURCE); a.kind=kinds[i]; a.width=f->width; a.height=f->height;
     e=exchange(&a,0);
@@ -77,22 +80,34 @@ static int accept(unsigned id,const struct sw_state *s,unsigned mask,const struc
   struct gl_hw_command *g=gdi_alloc(sizeof(*g));
   struct render3d_request *r=gdi_alloc(sizeof(*r));
   if (!g || !r) { gdi_free(g,sizeof(*g)); gdi_free(r,sizeof(*r)); return 0; }
-  g->state=*s; g->clear_mask=mask; g->count=count; g->clear_depth=65535;
+  g->state=*s; g->clear_mask=mask; g->count=count; g->clear_depth=s->depth24 ? 16777215u : 65535u;
   if (v && count) w32_copy(g->vertices,v,count*sizeof(*v));
   int e=gl_hw_encode(&c->caps,g,c->color,c->depth,0,r);
   gdi_free(g,sizeof(*g)); gdi_free(r,sizeof(*r)); return e ? -1 : 1;
 }
 static int transfer(unsigned id,struct sw_state *s,unsigned action) {
   struct provider_context *c=lookup(id);
-  if (!c || s->width!=c->width || s->height!=c->height || !s->color || !s->depth ||
-      s->depth24 || s->color2 || s->rgb565 || s->stencil) return -EOPNOTSUPP;
+  if (!c || s->width!=c->width || s->height!=c->height || !s->color ||
+      (c->depth_bits==24 ? !s->depth24 || s->depth : !s->depth || s->depth24) ||
+      !!s->stencil!=!!c->stencil_bits || s->color2 || !!s->rgb565!=!!c->rgb565) return -EOPNOTSUPP;
   unsigned n=c->width*c->height;
   struct ciuki_w32_render3d_args a=args(c,action);
   a.resource=c->color; a.bytes=n*4;
   int e=exchange(&a,s->color);
   if (e) return e;
-  a=args(c,action); a.resource=c->depth; a.bytes=n*2;
-  return exchange(&a,s->depth);
+  a=args(c,action); a.resource=c->depth;
+  if (c->depth_bits==16) { a.bytes=n*2; return exchange(&a,s->depth); }
+  a.bytes=n*4;
+  uint32_t *packed=gdi_alloc(a.bytes);
+  if (!packed) return -ENOMEM;
+  if (action==CIUKI_R3D_UPLOAD) for (unsigned i=0;i<n;i++)
+    packed[i]=(s->depth24[i]&0xffffffu)|(s->stencil ? (unsigned)s->stencil[i]<<24 : 0);
+  e=exchange(&a,packed);
+  if (!e && action==CIUKI_R3D_READ) for (unsigned i=0;i<n;i++) {
+    s->depth24[i]=packed[i]&0xffffffu;
+    if (s->stencil) s->stencil[i]=packed[i]>>24;
+  }
+  gdi_free(packed,a.bytes); return e;
 }
 static int load(unsigned id,const struct sw_state *s) {
   struct sw_state copy=*s; return transfer(id,&copy,CIUKI_R3D_UPLOAD);
@@ -179,8 +194,18 @@ static int present(unsigned id,unsigned token,unsigned generation,unsigned width
   e=exchange(&a,0);
   return e ? e : 1;
 }
+/* f7-15: the owned linear copy of the last present is the front buffer of a
+ * GPU swap. The kernel reads it back from VRAM only on this request. */
+static int read_presented(unsigned id,uint32_t *pixels,unsigned width,unsigned height) {
+  struct provider_context *c=lookup(id);
+  if (!c || !pixels || width!=c->width || height!=c->height || c->rgb565) return -EOPNOTSUPP;
+  struct ciuki_w32_render3d_args a=args(c,CIUKI_R3D_READ);
+  a.resource=c->linear; a.bytes=width*height*4;
+  return exchange(&a,pixels);
+}
 static const struct gl_hw_driver provider={GL_HW_VERSION,sizeof(provider),query,open_provider,
-  close_provider,accept,load,read_provider,texture,free_texture,submit,finish_provider,present};
+  close_provider,accept,load,read_provider,texture,free_texture,submit,finish_provider,present,
+  read_presented};
 #ifdef W32_HOST_MODEL
 const struct gl_hw_driver *w32_gdi_render3d_native(unsigned version) {
   return version==GL_HW_VERSION ? &provider : 0;

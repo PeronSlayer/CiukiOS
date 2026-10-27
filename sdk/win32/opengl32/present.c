@@ -218,12 +218,18 @@ BOOL gl_present(struct gl_context *c, int front) {
     gl_prepare_present(c, c->dc);
     if (!user.lease)
       return 0;
+    /* A first lease may switch the display mode (Quake III's full screen),
+     * which revokes the GPU copy with the old generation: make RAM coherent
+     * once before it, then probe the new generation for a fresh context. */
+    int first_lease = c->leased_window != window;
+    if (first_lease) gl_hw_coherent(c);
     struct gl_lease lease = {0};
     if (user.lease(window, c->sw.width, c->sw.height, c->sw.rgb565 ? 16 : 32,
                    &lease) ||
         !lease.active)
       return 0;
     c->leased_window = window;
+    if (first_lease) gl_hw_probe(c);
     if (lease.width != c->sw.width || lease.height != c->sw.height ||
         (lease.bpp != 16 && lease.bpp != 32) ||
         lease.pitch < c->sw.width * (lease.bpp / 8) || lease.pitch > 65536)
@@ -233,7 +239,8 @@ BOOL gl_present(struct gl_context *c, int front) {
     int gpu = front ? 0 : gl_hw_present(c, lease.token, lease.generation,
         lease.width, lease.height, lease.bpp, lease.pitch);
     if (gpu < 0) return 0;
-    if (gpu > 0) { gl_hw_sync(c); size_log(c, w, h); return 1; }
+    /* GPU frame: the attachments stay resident, nothing is read back. */
+    if (gpu > 0) { size_log(c, w, h); return 1; }
     gl_hw_sync(c);
     uint8_t *copy = gl_alloc(lease.pitch * lease.height);
     if (!copy)

@@ -186,26 +186,54 @@ static inline int gl_hw_clamp_interior(const struct ciuki_r3d_caps *caps,const s
   }
   return 1;
 }
+static int gl_r3d_stencil(int op) {
+  switch (op) {
+  case GL_KEEP: return CIUKI_R3D_STENCIL_KEEP;
+  case GL_ZERO: return CIUKI_R3D_STENCIL_ZERO;
+  case GL_REPLACE: return CIUKI_R3D_STENCIL_REPLACE;
+  case GL_INCR: return CIUKI_R3D_STENCIL_INCR;
+  case GL_DECR: return CIUKI_R3D_STENCIL_DECR;
+  case GL_INVERT: return CIUKI_R3D_STENCIL_INVERT;
+  default: return -1;
+  }
+}
 static int gl_hw_encode(const struct ciuki_r3d_caps *caps, const struct gl_hw_command *g, unsigned target,
     unsigned depth, unsigned copy, struct render3d_request *out) {
   const struct sw_state *s = &g->state;
   *out = (struct render3d_request){0};
   if (!s->width || !s->height || s->width > R3D_MAX_SIZE || s->height > R3D_MAX_SIZE ||
-      g->count > caps->max_vertices || g->count>R3D_VERTICES || g->count % 3 || s->depth24 || s->rgb565 ||
+      g->count > caps->max_vertices || g->count>R3D_VERTICES || g->count % 3 ||
+      (s->rgb565 && !(caps->color_formats&CIUKI_R3D_RGB565)) ||
       s->color_disabled || s->color2 || s->color_mask != UINT32_MAX || !gl_hw_scissor_full(s) ||
-      (s->stencil_test && s->stencil) || s->fog ||
-      (g->clear_mask & ~(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT))) return -1;
+      (s->depth24 && !(caps->depth_formats&CIUKI_R3D_D24S8)) || s->fog ||
+      (g->clear_mask & ~(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT))) return -1;
   out->target = target;
+  if (s->stencil && ((g->clear_mask&GL_STENCIL_BUFFER_BIT) || (g->count && s->stencil_test))) {
+    if (!s->depth24) return -1;
+    out->stencil.write_mask=s->stencil_write_mask&255;
+    if (g->clear_mask&GL_STENCIL_BUFFER_BIT) {
+      out->flags|=R3D_CLEAR_STENCIL; out->stencil.clear=g->clear_stencil&255;
+    }
+    if (g->count && s->stencil_test) {
+      int f=gl_r3d_compare(s->stencil_func),a=gl_r3d_stencil(s->stencil_fail),
+        b=gl_r3d_stencil(s->stencil_zfail),c=gl_r3d_stencil(s->stencil_zpass);
+      if (f<0 || a<0 || b<0 || c<0) return -1;
+      out->flags|=R3D_STENCIL_TEST; out->stencil.function=f;
+      out->stencil.reference=(unsigned)s->stencil_ref&255; out->stencil.read_mask=s->stencil_mask&255;
+      out->stencil.fail=a; out->stencil.zfail=b; out->stencil.zpass=c;
+    }
+  }
   if (g->clear_mask & GL_COLOR_BUFFER_BIT) out->flags |= R3D_CLEAR_COLOR;
   if ((g->clear_mask & GL_DEPTH_BUFFER_BIT) && s->depth_write) out->flags |= R3D_CLEAR_DEPTH;
   if (g->count && s->depth_test) {
     out->flags |= R3D_DEPTH_TEST;
     if (s->depth_write) out->flags |= R3D_DEPTH_WRITE;
   }
-  if (out->flags & (R3D_CLEAR_DEPTH | R3D_DEPTH_TEST | R3D_DEPTH_WRITE)) out->depth = depth;
+  if (out->flags & R3D_DEPTH_FLAGS) out->depth = depth;
   out->clear_color = g->clear_color;
-  if (g->clear_depth > 65535) return -1;
-  out->clear_depth = g->clear_depth;
+  unsigned zmax=s->depth24 ? 16777215u : 65535u;
+  if (g->clear_depth > zmax) return -1;
+  out->clear_depth = out->depth ? g->clear_depth : 0;
   if (!caps->features || s->width>caps->max_size || s->height>caps->max_size ||
       (caps->max_width && s->width>caps->max_width) ||
       (caps->max_height && s->height>caps->max_height)) return -1;
@@ -265,7 +293,8 @@ static int gl_hw_encode(const struct ciuki_r3d_caps *caps, const struct gl_hw_co
     out->state.sampler[u].repeat_v=t->wrap_t==GL_REPEAT;
   }
   if (copy) { out->flags |= R3D_COPY; out->copy_target = copy; }
-  if (g->count && !(out->flags & (R3D_TEXTURED|R3D_DEPTH_TEST))) {
+  if (g->count && !(out->flags&R3D_DEPTH_TEST) &&
+      (s->depth24 || !(out->flags&R3D_TEXTURED))) {
     if (!(caps->depth_functions & (1u<<R3D_ALWAYS))) return -1;
     out->flags|=R3D_DEPTH_TEST; out->depth=depth; out->state.depth_func=R3D_ALWAYS;
   }
@@ -274,12 +303,12 @@ static int gl_hw_encode(const struct ciuki_r3d_caps *caps, const struct gl_hw_co
     const struct sw_vertex *v = &g->vertices[i];
     struct render3d_vertex *r = &out->vertices[i];
     if (v->x < 0 || v->y < 0 || (unsigned)v->x > s->width * 16 ||
-        (unsigned)v->y > s->height * 16 || v->z < 0 || v->z > 65535) return -1;
+        (unsigned)v->y > s->height * 16 || v->z < 0 || (unsigned)v->z > zmax) return -1;
     r->x = v->x * 4096;
     r->y = ((int)s->height * 16 - v->y) * 4096;
     int64_t z=(int64_t)v->z+s->offset;
     /* Clamping vertices would change the depth plane. */
-    if (z<0 || z>65535) return -1;
+    if (z<0 || z>zmax) return -1;
     r->z = (unsigned)z; r->rhw = 65536;
     for (unsigned k = 0; k < 4; k++) if (v->color[k] < 0 || v->color[k] > 255) return -1;
     r->color = (unsigned)v->color[3] << 24 | (unsigned)v->color[0] << 16 |

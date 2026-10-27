@@ -84,6 +84,7 @@ int fbdev_fill(const struct fb_rect *rect, uint32_t colour);
 struct ciuki_accel_request;
 int fbdev_accel_request(const struct ciuki_accel_request *);
 /* f2-92 CIUKI_ACCEL_WRITE band (see fbdev.c): 0 engine, 1 CPU, <0 error. */
+int fbdev_accel_write_epoch(uint32_t, const struct fb_rect *, const struct fb_rect *, void *, uint32_t, uint32_t);
 int fbdev_accel_write(uint32_t generation, const struct fb_rect *dst, const struct fb_rect *limit,
                       void *rows, uint32_t stride);
 struct ciuki_accel_info;

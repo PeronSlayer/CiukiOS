@@ -49,7 +49,9 @@ static int cursor_test(const struct accel_ops *ops,uint64_t deadline,bool (*canc
     int hidden=ops->cursor_show(ops->ctx,false);
     return e ? e : hidden;
 }
+extern void savage3d_desktop_presented(uint32_t) __attribute__((weak));
 const struct display_driver s3savage_driver = {
+    .desktop_presented=savage3d_desktop_presented,
     .render3d=&render_family,
     .id="s3savage", .attempt_files={"C:/system/settings/accel.cfg",
         "C:/system/settings/accel-3d-s3savage-5333-%04x.cfg"}, .name="S3 Savage", .matches=matches,

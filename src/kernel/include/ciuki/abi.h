@@ -2474,6 +2474,9 @@ enum { CIUKI_ACCEL_QUERY, CIUKI_ACCEL_COPY, CIUKI_ACCEL_FILL,
 #define CIUKI_ACCEL_FENCE 11u
 #define CIUKI_ACCEL_QUERY_COMMANDS 12u
 #define CIUKI_ACCEL_QUERY_SURFACE 13u
+/* Revocable offscreen cache epoch. Offscreen COPY/WRITE background and VIDEO
+ * target reserved[0] must equal this value; other reserved words stay zero. */
+#define CIUKI_ACCEL_CACHE_EPOCH 14u
 #define CIUKI_BATCH_VERSION 1u
 #define CIUKI_BATCH_MAGIC 826426435u
 #define CIUKI_BATCH_MAX_BYTES 1048576u
@@ -2563,7 +2566,7 @@ struct ciuki_batch_target {
     uint32_t handle; /* 4 */
     uint32_t generation; /* 8 */
     uint32_t flags; /* 12 */
-    uint32_t reserved[4]; /* 16 */
+    uint32_t reserved[4]; /* 16; VIDEO: cache epoch in [0], [1..3]=0 */
 };
 _Static_assert(sizeof(struct ciuki_batch_target) == 32, "ciuki_batch_target size");
 struct ciuki_batch_clip {
@@ -3376,7 +3379,7 @@ _Static_assert(sizeof(struct ciuki_w32_header) == 16, "ciuki_w32_header frozen s
  * All dispatch runs on the existing display worker. State enum ordinals follow
  * the native render3d contract; unknown state is rejected before submission. */
 #define W32_RENDER3D 514u
-#define CIUKI_R3D_VERSION 2u
+#define CIUKI_R3D_VERSION 3u
 #define CIUKI_R3D_QUERY 1u
 #define CIUKI_R3D_OPEN 2u
 #define CIUKI_R3D_CLOSE 3u
@@ -3389,6 +3392,7 @@ _Static_assert(sizeof(struct ciuki_w32_header) == 16, "ciuki_w32_header frozen s
 #define CIUKI_R3D_WAIT 10u
 #define CIUKI_R3D_PRESENT 11u
 #define CIUKI_R3D_D16 1u
+#define CIUKI_R3D_D24S8 2u
 #define CIUKI_R3D_ARGB8888 1u
 #define CIUKI_R3D_RGB565 4u
 #define CIUKI_R3D_ARGB4444 8u
@@ -3411,6 +3415,8 @@ _Static_assert(sizeof(struct ciuki_w32_header) == 16, "ciuki_w32_header frozen s
 #define CIUKI_R3D_DEPTH_WRITE 16u
 #define CIUKI_R3D_COPY 32u
 #define CIUKI_R3D_TEXTURE1 64u
+#define CIUKI_R3D_STENCIL_TEST 128u
+#define CIUKI_R3D_CLEAR_STENCIL 256u
 #define CIUKI_R3D_LESS 0u
 #define CIUKI_R3D_NEVER 1u
 #define CIUKI_R3D_ALWAYS 2u
@@ -3451,6 +3457,17 @@ _Static_assert(sizeof(struct ciuki_w32_header) == 16, "ciuki_w32_header frozen s
 #define CIUKI_R3D_RESOURCE_D16 2u
 #define CIUKI_R3D_RESOURCE_TEXTURE 3u
 #define CIUKI_R3D_RESOURCE_LINEAR_COLOR 4u
+#define CIUKI_R3D_RESOURCE_D24S8 5u
+/* RGB565 resources keep canonical ARGB8888 shadows; no alpha attachment. */
+#define CIUKI_R3D_RESOURCE_COLOR565 6u
+#define CIUKI_R3D_RESOURCE_LINEAR565 7u
+/* Stencil operations; zero initialized state keeps the stored value. */
+#define CIUKI_R3D_STENCIL_KEEP 0u
+#define CIUKI_R3D_STENCIL_ZERO 1u
+#define CIUKI_R3D_STENCIL_REPLACE 2u
+#define CIUKI_R3D_STENCIL_INCR 3u
+#define CIUKI_R3D_STENCIL_DECR 4u
+#define CIUKI_R3D_STENCIL_INVERT 5u
 
 struct ciuki_r3d_sampler {
     uint32_t combine;
@@ -3478,6 +3495,16 @@ struct ciuki_r3d_vertex {
     int32_t u;
     int32_t v;
 };
+struct ciuki_r3d_stencil {
+    uint32_t function;
+    uint32_t reference;
+    uint32_t read_mask;
+    uint32_t write_mask;
+    uint32_t fail;
+    uint32_t zfail;
+    uint32_t zpass;
+    uint32_t clear;
+};
 struct ciuki_r3d_draw {
     uint32_t flags;
     uint32_t target;
@@ -3492,6 +3519,7 @@ struct ciuki_r3d_draw {
     uint32_t flat_color[256];
     int32_t uv1[768][2];
     struct ciuki_r3d_vertex vertices[768];
+    struct ciuki_r3d_stencil stencil;
 };
 struct ciuki_r3d_caps {
     uint32_t version;
@@ -3526,6 +3554,8 @@ struct ciuki_r3d_caps {
  * Completed receipts authenticate generation/context/ordinal (sequence is then
  * informational). PRESENT: exact existing lease token, owned linear resource,
  * dimensions/pitch, completed fence; no user payload or framebuffer mapping.
+ * D24S8 canonical words: increasing Z in bits 23:0, S in bits 31:24.
+ * Vertex/clear Z is 0..65535 for D16, 0..16777215 for D24S8.
  * Other actions require the queried generation. result=1 means success;
  * error is positive native errno. No backend packets or VRAM addresses. */
 struct ciuki_w32_render3d_args {

@@ -159,10 +159,14 @@ unsigned gl_read_color(struct gl_context *c, int x, int y) {
   return source[(c->sw.height - 1 - y) * c->sw.width + x] | 0xff000000;
 }
 void gl_select_buffer(struct gl_context *c) {
+  uint32_t *color = (c->draw_buffer == GL_FRONT || c->draw_buffer == GL_FRONT_LEFT) ? c->front_color : c->back_color;
+  uint32_t *color2 = c->doublebuffer && c->draw_buffer == GL_FRONT_AND_BACK ? c->front_color : 0;
+  int disabled = c->draw_buffer == GL_NONE;
+  /* Quake III selects GL_BACK every frame: an unchanged selection keeps the
+   * GPU-resident attachments (no readback and no reload, f7-15). */
+  if (color == c->sw.color && color2 == c->sw.color2 && disabled == c->sw.color_disabled) return;
   gl_hw_software(c);
-  c->sw.color = (c->draw_buffer == GL_FRONT || c->draw_buffer == GL_FRONT_LEFT) ? c->front_color : c->back_color;
-  c->sw.color2 = c->doublebuffer && c->draw_buffer == GL_FRONT_AND_BACK ? c->front_color : 0;
-  c->sw.color_disabled = c->draw_buffer == GL_NONE;
+  c->sw.color = color; c->sw.color2 = color2; c->sw.color_disabled = disabled;
 }
 static void free_attachments(struct gl_context *c) {
   if (c->doublebuffer) gl_dealloc(c->front_color);
@@ -444,7 +448,9 @@ BOOL W32API w32_gl_swap(HDC dc) {
     return 0;
   if (!gl_present(c, 0))
     return 0;
-  if (c->doublebuffer) {
+  /* After a GPU swap the front buffer is the completed presentation copy,
+   * read only when the CPU reads, draws or presents the front (f7-15). */
+  if (c->doublebuffer && !gl_hw_swap_front(c)) {
     /* The CPU copy changes front even when it is the loaded GPU attachment. */
     gl_hw_software(c);
     w32_copy(c->front_color, c->back_color, c->sw.width * c->sw.height * 4);

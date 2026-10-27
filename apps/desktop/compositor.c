@@ -1453,6 +1453,7 @@ static uint64_t time_now(struct desktop *d) { return d->time_ns ? d->time_ns() :
 static int accel_call(struct desktop *d, struct ciuki_accel_request *q)
 {
     q->size=sizeof(*q); q->generation=d->accel_generation;
+    if (q->operation==CIUKI_ACCEL_COPY || q->operation==CIUKI_ACCEL_WRITE) q->background=d->vram_epoch;
     return d->accel ? d->accel(d->display,q) : -ENOSYS;
 }
 /* f2-96: answers that leave the engine and its cursor exactly as they were
@@ -1508,6 +1509,7 @@ static int command_submit_targets(struct desktop *d, const struct ciuki_batch_re
     memcpy(blob+h->targets_offset,&target,32);
     if (video) {
         target.kind=CIUKI_TARGET_VIDEO; target.handle=(uint32_t)d->display;
+        target.reserved[0]=d->vram_epoch;
         memcpy(blob+h->targets_offset+32,&target,32);
     }
     if (bytes) memcpy(blob+prefix,payload,bytes);
@@ -1590,6 +1592,12 @@ static void vram_free(struct desk_vram_entry *e)
 static void vram_query(struct desktop *d)
 {
     d->vram_queries++;
+    struct ciuki_accel_request epoch={.operation=CIUKI_ACCEL_CACHE_EPOCH};
+    int current=accel_call(d,&epoch);
+    if (current>=0 && (uint32_t)current!=d->vram_epoch) {
+        for (unsigned i=0;i<DESK_VRAM_ENTRIES;i++) vram_free(&d->vram[i]);
+        d->vram_first=d->vram_end=0; d->vram_epoch=(uint32_t)current;
+    }
     struct ciuki_accel_request q={.operation=CIUKI_ACCEL_OFFSCREEN};
     int rows=accel_call(d,&q);
     uint32_t first=rows>0 ? (uint32_t)rows&0xffffu : 0, end=rows>0 ? (uint32_t)rows>>16 : 0;
@@ -2357,6 +2365,7 @@ int desk_redraw(struct desktop *d)
     memset(s,0,sizeof(*s)); s->frames=1;
     uint64_t begin=time_now(d);
     if (d->accel) {
+        vram_query(d);
         command_query(d);
         uint32_t had=d->accel_caps;
         d->accel_caps=accel_query(d);

@@ -159,7 +159,18 @@ static void precision_blend(const struct render3d_state *s,unsigned lo,unsigned 
     if (*low>255) *low=255;
     if (*high>255) *high=255;
 }
-struct precision_position { int32_t uv[2][2]; unsigned lod[2]; struct precision_arithmetic arithmetic; };
+struct precision_work { void *ctx; int (*checkpoint)(void *); int error; unsigned steps; };
+struct precision_position {
+    int32_t uv[2][2]; unsigned lod[2]; struct precision_arithmetic arithmetic;
+    struct precision_work *work;
+};
+static bool precision_expired(const struct precision_position *p)
+{
+    struct precision_work *w=p->work;
+    if (!w || !w->checkpoint) return false;
+    if (!w->error && !(w->steps++%16)) w->error=w->checkpoint(w->ctx);
+    return w->error!=0;
+}
 static void precision_source(const struct render3d_request *q,struct render3d_resource *const r[R3D_REFS],
     const struct precision_position *p,const int32_t box[6][2],unsigned lower[4],unsigned upper[4])
 {
@@ -196,12 +207,14 @@ static bool precision_outcome(const struct render3d_request *q,const unsigned lo
 static bool precision_fit(const struct render3d_request *q,struct render3d_resource *const r[R3D_REFS],
     const struct precision_position *p,const int32_t box[6][2],uint32_t actual,bool rejected,unsigned phase)
 {
+    if (precision_expired(p)) return false;
     int32_t point[6][2]={{0}}; unsigned lower[4],upper[4];
     precision_source(q,r,p,point,lower,upper);
     if (precision_outcome(q,lower,upper,actual,rejected)) return true;
     if (!phase && (box[2][1] || box[5][1])) {
         for (int step=1;step<=14;step++) for (unsigned mask=1;mask<4;mask++)
         for (int sign=-1;sign<=1;sign+=2) {
+            if (precision_expired(p)) return false;
             for (unsigned stage=0;stage<2;stage++) {
                 int a=(mask&(1u<<stage)) ? sign*step : 0;
                 if (a<box[stage*3+2][0]) a=box[stage*3+2][0];
@@ -216,6 +229,7 @@ static bool precision_fit(const struct render3d_request *q,struct render3d_resou
     if (!precision_outcome(q,lower,upper,actual,rejected)) return false;
     if (!phase) return false;
     for (unsigned scale=0;scale<4;scale++) for (unsigned code=1;code<81;code++) {
+        if (precision_expired(p)) return false;
         unsigned c=code;
         for (unsigned stage=0;stage<2;stage++) for (unsigned axis=0;axis<2;axis++) {
             unsigned digit=c%3; c/=3;
@@ -228,6 +242,7 @@ static bool precision_fit(const struct render3d_request *q,struct render3d_resou
     if (phase==1) return false;
     uint32_t seed=0x12345678;
     for (unsigned trial=0;trial<512;trial++) {
+        if (precision_expired(p)) return false;
         for (unsigned i=0;i<6;i++) {
             seed=seed*1664525u+1013904223u;
             int32_t radius=box[i][1];
@@ -245,7 +260,7 @@ static bool precision_fit(const struct render3d_request *q,struct render3d_resou
 static bool precision_search(const struct render3d_request *q,struct render3d_resource *const r[R3D_REFS],
     const struct precision_position *p,int32_t box[6][2],uint32_t actual,bool rejected,unsigned *budget,unsigned depth)
 {
-    if (!*budget) return false;
+    if (!*budget || precision_expired(p)) return false;
     --*budget;
     int32_t point[6][2]; unsigned lower[4],upper[4];
     for (unsigned i=0;i<6;i++) point[i][0]=point[i][1]=box[i][0]+(box[i][1]-box[i][0])/2;
@@ -264,8 +279,9 @@ static bool precision_search(const struct render3d_request *q,struct render3d_re
     box[axis][0]=a;
     return found;
 }
-static bool precision_pixel(const struct render3d_request *q,struct render3d_resource *const r[R3D_REFS],
-                             unsigned x,unsigned y,uint32_t actual,unsigned z,unsigned delta,unsigned bits)
+static bool precision_pixel_controlled(const struct render3d_request *q,struct render3d_resource *const r[R3D_REFS],
+                             unsigned x,unsigned y,uint32_t actual,unsigned z,unsigned delta,unsigned bits,
+                             struct precision_work *work)
 {
     if (bits<8 || bits>16 || delta<2) return false;
     /* Calibration geometry has integer-pixel corners and shared W. Products
@@ -278,7 +294,7 @@ static bool precision_pixel(const struct render3d_request *q,struct render3d_res
         first=3; w[0]=(2*(int64_t)height-yy)*2*width;
         w[2]=(2*(int64_t)width-xx)*2*height; w[1]=area-w[0]-w[2];
     }
-    struct precision_position p={0};
+    struct precision_position p={.work=work};
     for (unsigned stage=0;stage<2;stage++) {
         for (unsigned axis=0;axis<2;axis++) p.uv[stage][axis]=precision_coordinate(q,first,w,stage,axis);
         const struct render3d_resource *tex=r[stage ? 4 : 2];
@@ -309,6 +325,7 @@ static bool precision_pixel(const struct render3d_request *q,struct render3d_res
         box[stage*3+axis][0]=-radius; box[stage*3+axis][1]=radius;
     }
     for (unsigned phase=0;phase<3;phase++) for (unsigned mode=0;mode<10;mode++) {
+        if (precision_expired(&p)) return false;
         p.arithmetic=(struct precision_arithmetic){.bits=mode<4 ? bits : mode<8 ? (bits<=12 ? bits+4 : 16) : 0,
             .rounded=(mode&2)!=0,.separable=(mode&1)!=0};
         unsigned budget=1024;
@@ -321,4 +338,7 @@ static bool precision_pixel(const struct render3d_request *q,struct render3d_res
     }
     return false;
 }
+static inline bool precision_pixel(const struct render3d_request *q,struct render3d_resource *const r[R3D_REFS],
+                             unsigned x,unsigned y,uint32_t actual,unsigned z,unsigned delta,unsigned bits)
+{ return precision_pixel_controlled(q,r,x,y,actual,z,delta,bits,0); }
 #endif

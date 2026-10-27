@@ -13,6 +13,7 @@ struct swdib_target {
     const void *identity;
     uint64_t offset;
     uint32_t rights, kind;
+    uint32_t cache_epoch;
 };
 struct swdib_command {
     const struct ciuki_batch_record *record;

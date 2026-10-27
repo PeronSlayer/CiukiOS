@@ -921,7 +921,7 @@ union gl_arg w32_gl_dispatch(unsigned id, const union gl_arg *a) {
     return result;
   case ID_glFlush:
   case ID_glFinish:
-    if (id == ID_glFinish) gl_hw_sync(c);
+    if (id == ID_glFinish) gl_hw_finish(c);
     else gl_hw_flush(c);
     if ((c->draw_buffer == GL_FRONT || c->draw_buffer == GL_FRONT_LEFT || c->draw_buffer == GL_FRONT_AND_BACK) && !gl_present(c, 1))
       gl_error(c, GL_INVALID_OPERATION);

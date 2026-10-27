@@ -34,7 +34,9 @@ int display_batch_validate(struct display_batch *b)
     uint32_t ranges[128][2]; unsigned range_count=0;
     for (unsigned i=0;i<h->target_count;i++) {
         const struct ciuki_batch_target *t=(const void *)(b->blob+h->targets_offset+i*32);
-        if (t->kind<1 || t->kind>3 || t->flags || !zero(t->reserved,16)) return -EINVAL;
+        if (t->kind<1 || t->kind>3 || t->flags ||
+            !zero(t->reserved+(t->kind==CIUKI_TARGET_VIDEO ? 1 : 0),t->kind==CIUKI_TARGET_VIDEO ? 12 : 16)) return -EINVAL;
+        if (t->kind==CIUKI_TARGET_VIDEO && t->reserved[0]!=b->targets[i].cache_epoch) return -EAGAIN;
         if (t->kind==1 && (t->handle || t->generation!=h->generation)) return -EINVAL;
         if (t->generation!=b->targets[i].device.generation) return -EAGAIN;
         int e=swdib_target_valid(&b->targets[i]); if (e) return e;

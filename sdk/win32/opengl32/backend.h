@@ -52,12 +52,24 @@ struct gl_hw_driver {
    * 1=completed, 0=unsupported (no effect), negative=failure. */
   int (*present)(unsigned context, unsigned token, unsigned generation,
                  unsigned width, unsigned height, unsigned bpp, unsigned pitch);
+  /* Optional (f7-15): read the completed copy of the last successful present
+   * (top-down XRGB, width*height words) for the front buffer, on demand. */
+  int (*read_presented)(unsigned context, uint32_t *pixels, unsigned width, unsigned height);
 };
 struct gl_context;
 void gl_hw_probe(struct gl_context *);
 void gl_hw_close(struct gl_context *);
 void gl_hw_flush(struct gl_context *);
+/* GPU-resident attachments (f7-15): RAM is read back only when the CPU needs
+ * the pixels. sync = coherent RAM for the selected attachments (and the
+ * front buffer when it is read or drawn); coherent = also before a GPU copy
+ * may be revoked (first lease, close); finish = completion only for window
+ * targets; swap_front = after a successful swap, 1 when the front buffer is
+ * the GPU presentation copy (materialized on demand) instead of a CPU copy. */
 void gl_hw_sync(struct gl_context *);
+void gl_hw_coherent(struct gl_context *);
+void gl_hw_finish(struct gl_context *);
+int gl_hw_swap_front(struct gl_context *);
 void gl_hw_software(struct gl_context *);
 int gl_hw_triangle(struct gl_context *, const struct sw_vertex *);
 int gl_hw_clear(struct gl_context *, unsigned, unsigned, unsigned);
