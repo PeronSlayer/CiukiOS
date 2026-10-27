@@ -5,7 +5,7 @@ bool dosvm_irq_held(const struct dosvm *v, unsigned irq)
 {
     if (irq >= 16) return false;
     uint32_t flags = irq_save();
-    uint64_t now = g_ticks;
+    uint64_t now = v->fullscreen_parked ? v->fullscreen_park_tick : g_ticks;
     bool held = v->irq.rm[irq].active && now - v->irq.rm[irq].tick < DPMI_ISR_WAIT_MS;
     for (unsigned i = 0; !held && i < v->dpmi.depth; i++) {
         const struct dpmi_record *r = &v->dpmi.rec[i];
@@ -43,6 +43,9 @@ static void dosvm_rm_irq_return(struct dosvm *v, uint16_t ss, uint16_t sp)
 void dosvm_irq_release(struct dosvm *v)
 {
     uint32_t flags = irq_save();
+    /* No guest ISR can complete while suspended. Keep owed IRQ/PIT state
+     * intact until the VM resumes, even after the wall-time guard passes. */
+    if (v->fullscreen_parked) { irq_restore(flags); return; }
     uint16_t owed = v->irq.owed;
     while (owed) {
         unsigned irq = (unsigned)__builtin_ctz((unsigned)owed);

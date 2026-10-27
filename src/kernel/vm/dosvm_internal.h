@@ -215,6 +215,7 @@ struct dosvm {
     int32_t input_x, input_y;
     bool pointer_known, mouse_captured;
     bool fullscreen, fullscreen_hold, fullscreen_parked, fullscreen_pause, fullscreen_model;
+    uint64_t fullscreen_park_tick; /* frozen IRQ-guard clock while parked */
     bool fullscreen_suspended;
     bool window_marking;
     uint8_t window_idle; /* zero: default; otherwise sensitivity + 1 */

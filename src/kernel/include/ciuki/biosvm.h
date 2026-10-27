@@ -8,6 +8,10 @@ struct kwait;
 
 #define BIOSVM_SCRATCH 0x10000u
 #define BIOSVM_STACK 0x11000u
+/* Dedicated to VBE 4F04, inside boot-memory.md's fixed BIOS reservation.
+ * Separate from the interrupt stub, mouse ring, mode-info scratch and stack. */
+#define BIOSVM_VIDEO_STATE 0x12000u
+#define BIOSVM_VIDEO_STATE_SIZE 0x4000u
 #define BIOSVM_MOUSE_OFFSET 0x100u
 #define BIOSVM_MOUSE_RING 0x400u
 #define BIOSVM_MOUSE_CAP 32u
@@ -33,7 +37,8 @@ int biosvm_call(struct biosvm_regs *regs, uint32_t deadline_ms);
  * 5302/5303 PM connections are refused. Serialized V86, 1..2000 ms budget
  * including mutex/queue admission. Faults/timeouts quarantine APM for this
  * boot, including disconnect; input and video keep separate fault latches.
- * Native-owned ports remain denied. No DOS entry. */
+ * Native-owned ports remain denied except CMOS through the RTC owner's
+ * serialized byte accessor. No DOS entry. */
 int biosvm_apm_call(struct biosvm_regs *regs, uint32_t deadline_ms);
 /* Kernel-only, fixed INT15/5300 installation check, 100 ms. Does not
  * connect, accept caller registers, or widen input/DOS firmware access. */
@@ -75,8 +80,9 @@ int biosvm_video_fullscreen_begin(uint16_t mode, uint8_t info[256]);
 int biosvm_video_fullscreen_end(uint16_t desktop_mode, uint8_t info[256]);
 enum biosvm_backend biosvm_backend_state(void);
 void biosvm_stats(struct v86_stats *out);
-/* RTC service is outside f1-07: supply its validated cache before first use.
- * No native CMOS reads, NMI-mask changes or fabricated time in this VM. */
+/* Input/video RTC service requires a validated cache, never fabricated time.
+ * Only the dedicated APM callback can use the serialized native CMOS owner;
+ * its private index/NMI byte is scoped to each data-port transaction. */
 int biosvm_set_rtc_cache(const uint8_t values[128]);
 void biosvm_set_input_service(void (*service)(void));
 /* Observes the single trapped physical read, never consumes the controller.
@@ -114,7 +120,7 @@ void biosvm_trap(struct trap_frame *tf);
 uint32_t biosvm_task_cr3(const struct task *t, uint32_t normal);
 uint32_t biosvm_task_esp0(const struct task *t, uint32_t normal);
 
-#define BIOSVM_MAP_COUNT 6u
+#define BIOSVM_MAP_COUNT 7u
 struct biosvm_mapping { uint32_t start, end, flags; }; /* page-aligned, end exclusive */
 struct biosvm_selftest_report {
     uint8_t pic_before[2], pic_after[2], pit_before, pit_after;

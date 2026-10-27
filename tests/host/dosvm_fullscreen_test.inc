@@ -79,6 +79,101 @@ static void test_fullscreen_transport(void)
     }
     puts("PASS full-screen VGA transport: text 01/03, planar 12, chain-4 13; all registers, DAC and 256 KiB planes; load latches/partial DAC; non-destructive capture");
 }
+
+static struct dosvm *refused_dpmi_vm;
+static bool refused_dpmi_irq;
+static void refuse_parked_dpmi(void)
+{
+    struct dosvm *v=refused_dpmi_vm;
+    CHECK(v->fullscreen_parked && v->fullscreen_hold && !v->frame_pm);
+    struct task *guest=g_current;
+    /* Replay the trial's display pause, well beyond the 50 ms ISR guard.
+     * The clock service can run while the guest's continuation sleeps. */
+    g_ticks+=1578;
+    v->irq.owed|=1u<<3;
+    if (refused_dpmi_irq) v->irq.owed|=1u<<5;
+    uint16_t owed=v->irq.owed;
+    dosvm_irq_release(v);
+    CHECK(v->irq.owed==owed && dosvm_irq_held(v,3));
+    if (refused_dpmi_irq) CHECK(dosvm_irq_held(v,5));
+    g_current=&caller;
+    CHECK(dosvm_fullscreen_enter(dosvm_key(v))==DISPLAY_FULLSCREEN_WINDOWED);
+    CHECK(!v->fullscreen_hold && !v->fullscreen && !v->fullscreen_error);
+    g_current=guest;
+    sleep_hook=0;
+}
+static void test_fullscreen_dpmi_refusal(void)
+{
+    /* A 32-bit DOS/4GW-style client: default PM INT10 reflection, explicit
+     * 0300h translation, and an RM interrupt nested in a reflected IRQ. */
+    for (unsigned route=0;route<3;route++) {
+        window_fixtures();
+        struct dosvm *v=dpmi_vm(true);
+        v->owner_pid=10; v->window_input=true;
+        CHECK(dosvm_input_focus(dosvm_key(v),true));
+        v86_start(); enter(v,true); CHECK(in_pm());
+        uint16_t data=(uint16_t)cur.tf.ds;
+        struct v86_frame before;
+        if (route==2) {
+            uint16_t ivt[2]={0,IRET_SEG};
+            CHECK(!dosvm_write(v,0x0D*4,ivt,4));
+            v->monitor.pic[0].imr&=(uint8_t)~(1u<<5);
+            CHECK(dosvm_irq_raise(dosvm_key(v),5));
+            const uint8_t in21[]={0xE4,0x21};
+            exec(v,in21,sizeof(in21),13,0); /* trapped PM instruction */
+            CHECK(!in_pm() && v->dpmi.depth==1 && dosvm_irq_held(v,5));
+            before=v->dpmi.rec[0].saved;
+            cur.tf.eax=0x13; v86_int(v,0x10);
+        } else if (route==1) {
+            rmcs_set(v,0x13,0,0x0202,0,0,0,0,0);
+            cur.tf.ebx=0x10; cur.tf.ecx=0; cur.tf.es=data; cur.tf.edi=0x200;
+            before=cur; int31(v,0x0300);
+        } else {
+            cur.tf.eax=0x13; before=cur; pm_int(v,0x10);
+        }
+        CHECK(!in_pm() && cur.tf.cs==0xF000 && cur.tf.eip==0x100);
+        step(v,13,0); /* synthetic BIOS INT FE, including mode 13h */
+        CHECK(!in_pm() && cur.tf.eip==0x102 && !v->monitor.vif);
+        uint8_t mode; CHECK(!dosvm_read(v,0x449,&mode,1) && mode==0x13);
+        struct v86_frame bios_result=cur;
+        struct dpmi_record record=v->dpmi.rec[0];
+        uint8_t stack[32]; uint32_t at=(cur.tf.user_ss<<4)+(uint16_t)cur.tf.user_esp;
+        CHECK(!dosvm_read(v,at,stack,sizeof(stack)));
+        v->irq.rm[3].active=true; v->irq.rm[3].tick=g_ticks-10;
+        refused_dpmi_vm=v; refused_dpmi_irq=route==2;
+        fs_refuse=true; v->fullscreen_hold=true; sleep_hook=refuse_parked_dpmi;
+        g_current=v->task;
+        dosvm_fullscreen_checkpoint(v); /* production park and wake */
+        g_current=&caller;
+        CHECK(!v->fullscreen_parked && !v->fullscreen_hold && !v->monitor.vif);
+        CHECK(!memcmp(&cur,&bios_result,sizeof(cur)) && v->dpmi.depth==1);
+        uint8_t after[32]; CHECK(!dosvm_read(v,at,after,sizeof(after)) && !memcmp(stack,after,sizeof(stack)));
+        CHECK(!memcmp(&v->dpmi.rec[0].saved,&record.saved,sizeof(record.saved)));
+        CHECK(dosvm_irq_held(v,3) && (!refused_dpmi_irq || dosvm_irq_held(v,5)));
+        CHECK(!v->dpmi.rec[0].isr_expired);
+        v->irq.rm[3].active=false; v->irq.owed=0;
+        /* The guest completes the exact BIOS IRET, then its own IRQ IRET
+         * if applicable, then the real host trampoline to PM. */
+        step(v,13,0);
+        if (route==2) {
+            CHECK(!in_pm() && cur.tf.cs==IRET_SEG && cur.tf.eip==2);
+            uint32_t value=0x20; CHECK(!v86_io(&v->monitor,0x20,1,true,&value));
+            op1(v,0xCF);
+        }
+        CHECK(!in_pm() && cur.tf.cs==0xF000 && cur.tf.eip==DPMI_RM_RETURN);
+        step(v,13,0);
+        CHECK(in_pm() && v->frame_pm && !v->dpmi.depth && v->monitor.vif);
+        CHECK(cur.tf.cs==before.tf.cs && cur.tf.user_ss==before.tf.user_ss &&
+            cur.tf.user_esp==before.tf.user_esp && cur.tf.eip==before.tf.eip+(route==2 ? 0 : 2));
+        CHECK(!(cur.tf.eflags&V86_VM) && (cur.tf.eflags&V86_IF));
+        if (route==1) CHECK(!cf() && (rmcs32(v,0x1C)&0xFF)==0x13);
+        unsigned pm_exits=v->perf.exits[5]; op1(v,0xFA); op1(v,0xFB);
+        CHECK(v->perf.exits[5]>pm_exits && in_pm());
+        fs_refuse=false;
+        destroy(v,true); empty();
+    }
+    puts("PASS fx-biosvm2 refusal: 32-bit PM INT10/0300h mode 13h, held RM/DPMI IRQs across 1578-ms park, byte-identical BIOS stack/frame, IRET/trampoline resumes PM");
+}
 static void test_fullscreen_service(void)
 {
     window_fixtures();

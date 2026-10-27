@@ -17,6 +17,7 @@
 #include <ciuki/init.h>
 #include <ciuki/apm_ports.h>
 #include <ciuki/dos_video_modes.h>
+#include "../fs/fs_port.h"
 
 extern void v86_enter(const struct v86_frame *f, uint32_t *continuation);
 extern void v86_leave(uint32_t continuation) __attribute__((noreturn));
@@ -291,8 +292,8 @@ static int map_firmware(void)
 {
     /* boot-memory.md dedicates 10000-1FFFF physically to BIOS calls. The
      * PMM already excludes ALL low pages; no general LOW allocation exists.
-     * Reuse two pages of that explicit reservation, never allocator RAM. */
-    if (!reserved_ram(BIOSVM_SCRATCH, BIOSVM_STACK + PAGE_SIZE))
+     * Scratch, stack and VBE state use six pages, never allocator RAM. */
+    if (!reserved_ram(BIOSVM_SCRATCH, BIOSVM_VIDEO_STATE + BIOSVM_VIDEO_STATE_SIZE))
         return init_error("scratch_reservation", -EFAULT);
     uint16_t ebda_seg, conventional_kib;
     memcpy(&ebda_seg, P2V(0x40E), 2);
@@ -336,11 +337,14 @@ static int map_firmware(void)
      * Only this private PDE exposes their physical identity as user RW. */
     mappings[4] = (struct biosvm_mapping){0xC0000, 0xF0000, rom | PTE_W};
     mappings[5] = (struct biosvm_mapping){0xF0000, 0x100000, rom};
+    mappings[6] = (struct biosvm_mapping){BIOSVM_VIDEO_STATE,
+        BIOSVM_VIDEO_STATE + BIOSVM_VIDEO_STATE_SIZE, rw};
     for (unsigned i = 0; i < BIOSVM_MAP_COUNT; i++)
         for (uint32_t p = mappings[i].start; p < mappings[i].end; p += PAGE_SIZE)
             pt[p >> 12] = p | mappings[i].flags;
     memset(P2V(BIOSVM_SCRATCH), 0, PAGE_SIZE);
     memset(P2V(BIOSVM_STACK), 0, PAGE_SIZE);
+    memset(P2V(BIOSVM_VIDEO_STATE), 0, BIOSVM_VIDEO_STATE_SIZE);
     size_t stub_bytes = (size_t)(biosvm_mouse_stub_end - biosvm_mouse_stub);
     if (stub_bytes > BIOSVM_MOUSE_RING - BIOSVM_MOUSE_OFFSET)
         return init_error("mouse_stub_size", -EFAULT);
@@ -578,10 +582,20 @@ static int apm_io(void *arg, uint16_t port, unsigned width, bool write, uint32_t
     (void)arg;
     /* APM has no physical resource claim of its own.
      * Native i8042 ownership must not be bypassed by the firmware monitor's
-     * input port rules. PIC/PIT/RTC remain virtual. fx-18: the chipset
+     * input port rules. PIC/PIT remain virtual. CMOS data is serialized
+     * through the native RTC owner; the firmware index remains private.
+     * fx-18: the chipset
      * power-management window the APM BIOS needs is admitted, bounded and
      * logged; every other port stays denied. */
     if ((!input_enabled || family_disabled(BIOS_INPUT)) && (port == 0x60 || port == 0x64)) return -V86_EPERM;
+    if (width == 1 && (port == 0x70 || port == 0x71)) {
+        firmware.stats.io[V86_RTC]++;
+        if (port == 0x70) {
+            if (write) firmware.rtc_index = (uint8_t)*value;
+            else *value = firmware.rtc_index;
+        } else *value = fs_cmos_bios_data(firmware.rtc_index, write, (uint8_t)*value);
+        return 0;
+    }
     if (!delay_io(arg, port, width, write, value)) {
         apm_io_stats.absorbed++;
         return 0;
@@ -1300,9 +1314,13 @@ done:
     kmutex_unlock(&request_mutex); return e;
 }
 
-/* f3-20: persistent display ownership, not generic guest firmware forwarding.
- * The existing 2 KiB private scratch tail bounds the firmware state buffer. */
-static uint8_t fullscreen_saved[2048];
+/* f3-20/fx-biosvm2: persistent display ownership, no guest forwarding.
+ * VBE's BIOS-defined block count is bounded by dedicated real-mode pages;
+ * keep a kernel copy because intervening firmware calls can alter low RAM. */
+static uint8_t fullscreen_saved[BIOSVM_VIDEO_STATE_SIZE];
+_Static_assert(BIOSVM_VIDEO_STATE >= BIOSVM_STACK + PAGE_SIZE &&
+    BIOSVM_VIDEO_STATE + BIOSVM_VIDEO_STATE_SIZE <= 0x20000u &&
+    BIOSVM_VIDEO_STATE_SIZE <= 0x10000u, "VBE state must fit the BIOS reservation and ES segment");
 static unsigned fullscreen_bytes;
 static void fullscreen_aperture(bool active)
 {
@@ -1348,11 +1366,11 @@ int biosvm_video_fullscreen_begin(uint16_t mode, uint8_t info[256])
     if ((e=fullscreen_call(&r,&budget,true,false))) goto revoke_fs;
     unsigned bytes=(uint16_t)r.ebx*64u;
     if (!bytes || bytes>sizeof(fullscreen_saved)) { e=-EOPNOTSUPP; goto revoke_fs; }
-    memset(P2V(BIOSVM_SCRATCH+0x800),0,bytes);
+    memset(P2V(BIOSVM_VIDEO_STATE),0,bytes);
     r=(struct biosvm_regs){.interrupt=0x10,.eax=0x4F04,.ecx=15,.edx=1,
-        .es=BIOSVM_SCRATCH>>4,.ebx=0x800};
+        .es=BIOSVM_VIDEO_STATE>>4,.ebx=0};
     if ((e=fullscreen_call(&r,&budget,true,false))) goto revoke_fs;
-    memcpy(fullscreen_saved,P2V(BIOSVM_SCRATCH+0x800),bytes);
+    memcpy(fullscreen_saved,P2V(BIOSVM_VIDEO_STATE),bytes);
     fullscreen_bytes=bytes;
     /* The fixed synthetic inventory is selected by the display service;
      * guest registers/firmware pointers are never forwarded. */
@@ -1394,9 +1412,9 @@ int biosvm_video_fullscreen_end(uint16_t mode, uint8_t info[256])
     if (!fullscreen_video || !fullscreen_bytes) goto done_restore;
     fullscreen_aperture(true);
     uint32_t budget=2000;
-    memcpy(P2V(BIOSVM_SCRATCH+0x800),fullscreen_saved,fullscreen_bytes);
+    memcpy(P2V(BIOSVM_VIDEO_STATE),fullscreen_saved,fullscreen_bytes);
     struct biosvm_regs r={.interrupt=0x10,.eax=0x4F04,.ecx=15,.edx=2,
-        .es=BIOSVM_SCRATCH>>4,.ebx=0x800};
+        .es=BIOSVM_VIDEO_STATE>>4,.ebx=0};
     if ((e=fullscreen_call(&r,&budget,true,true))) goto revoke_restore;
     r=(struct biosvm_regs){.interrupt=0x10,.eax=0x4F03};
     if ((e=fullscreen_call(&r,&budget,true,true))) goto revoke_restore;

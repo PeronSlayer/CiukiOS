@@ -190,28 +190,9 @@ bool fs_rtc_write(const struct fs_rtc_writer *w,void *ctx,uint16_t date,uint16_t
 }
 
 #ifndef FS_HOST
-/* UP platform service, sole native CMOS accessor. Software policy leaves NMI
- * enabled (shadow bit 7 = 0); never read port 70h to infer this write-only
- * policy. IRQ8 remains masked, register C is never read, port 71h never
- * written except by the checked SET transaction. NMI diagnostics do not access CMOS. Each complete sample is one
- * short irq-save section, not the UIP wait. */
-static uint32_t rtc_flags;
-static const uint8_t rtc_nmi_shadow = 0;
-static void rtc_begin(void *ctx) { (void)ctx; rtc_flags = irq_save(); }
-static void rtc_end(void *ctx) { (void)ctx; irq_restore(rtc_flags); }
-static uint8_t rtc_read(void *ctx, uint8_t reg)
-{
-    (void)ctx; outb(0x70, rtc_nmi_shadow | reg); return inb(0x71);
-}
-uint8_t fs_floppy_cmos_types(void)
-{ rtc_begin(0); uint8_t types=rtc_read(0,0x10); rtc_end(0); return types; }
-/* fx-26: one byte of the standard 128-byte CMOS bank (the ThinkPad EC
- * driver's NVRAM key watch reads 60h every 100 ms); read only, same short
- * irq-save section as a calendar sample. */
-uint8_t fs_cmos_read(uint8_t reg)
-{ rtc_begin(0); uint8_t value=rtc_read(0,reg&0x7f); rtc_end(0); return value; }
-static void rtc_write(void *ctx,uint8_t reg,uint8_t value)
-{ (void)ctx; outb(0x70,rtc_nmi_shadow|reg); outb(0x71,value); }
+/* Each sample holds the UP RTC lock briefly, never across a UIP wait.
+ * Native calendar code does not read register C; IRQ8 remains masked. */
+#include "fs_cmos.inc"
 static uint32_t rtc_now(void *ctx) { (void)ctx; return fs_now_ms(); }
 static bool rtc_pause(void *ctx) { (void)ctx; return !udelay(100); }
 static bool rtc_calendar(uint16_t *date, uint16_t *time, uint8_t *tenths)
