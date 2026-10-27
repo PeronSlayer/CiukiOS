@@ -1045,10 +1045,17 @@ static void test_t23dosperf(void) {}
 #include "dosvm_101_revoke_race_test.inc"
 #include "dosvm_101_native_test.inc"
 #include "dosvm_mouse_test.inc"
+#ifndef FX_DOSWIN3_BASELINE
+#include "dosvm_doswin3_r2_test.inc"
+#include "dosvm_doswin3_test.inc"
+#endif
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
     if (getenv("CIUKI_VM_DOSMOUSE")) { test_dos_mouse(); free(ram); fflush(stdout); return 0; }
+#ifndef FX_DOSWIN3_BASELINE
+    if (getenv("CIUKI_VM_DOSWIN3")) { test_doswin3(); free(ram); fflush(stdout); return 0; }
+#endif
     if (getenv("CIUKI_VM_101_REVOKE_RACE")) { test_101_revoke_races(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_101_BENCH")) { bench_101_video(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_101_VIDEO")) { test_101_video(); free(ram); fflush(stdout); return 0; }
@@ -1124,6 +1131,9 @@ int main(void)
     test_fx27();
     test_doomfs2();
     test_t23dosperf();
+#ifndef FX_DOSWIN3_BASELINE
+    test_doswin3();
+#endif
     test_101_video();
     test_exit_cost();
     test_idle();

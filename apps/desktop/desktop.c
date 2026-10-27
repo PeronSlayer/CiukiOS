@@ -1168,6 +1168,7 @@ static int gfx_benchmark(struct desktop *d, unsigned index, uint64_t values[3])
     /* The composite remains authoritative. This separate surface is only the
      * software baseline; restore scanout on success and partial failure alike. */
     struct gfx_display_target ctx={d,-1};
+    if (desk_direct_settle) desk_direct_settle(d); /* fx-doswin3: the RAM frame is restored below */
     struct gfx_bench_target t={.ctx=&ctx,.width=d->width,.height=d->height,
         .bpp=d->lfb_bytes_per_pixel*8,.generation=d->accel_generation,
         .now=gfx_clock,.info=gfx_info,.accel=gfx_accel,.upload=gfx_upload};
@@ -1207,11 +1208,16 @@ static int accel_record_line(const struct desktop *d, char *line, size_t size, u
     /* f2-96: who draws the pointer (hw, sw, or hiding: a hardware cursor
      * still to be hidden), busy retries and software fallbacks since boot. */
     const char *pointer=d->hw_cursor ? "hw" : d->hw_cursor_shown ? "hiding" : "sw";
-    int n=snprintf(line,size,"[desktop] accel fills=%llu copies=%llu writes=%llu fallback=%llu cache_rows=%llu frames=%llu lfb_bytes=%llu caps=%u vram_rows=%u pointer=%s pointer_retries=%u pointer_fallbacks=%u\n",
+    /* fx-doswin3: the window's composition and present time and request
+     * count, so a trial prices each stage of a DOS window frame; direct_px:
+     * pixels presented straight from an unobscured DOS window's surface. */
+    int n=snprintf(line,size,"[desktop] accel fills=%llu copies=%llu writes=%llu fallback=%llu cache_rows=%llu frames=%llu lfb_bytes=%llu caps=%u vram_rows=%u pointer=%s pointer_retries=%u pointer_fallbacks=%u composite_us=%llu present_us=%llu presents=%llu scene_px=%llu direct_px=%llu\n",
         (unsigned long long)s->accel_fills,(unsigned long long)s->accel_copies,(unsigned long long)s->accel_writes,
         (unsigned long long)s->accel_fallback,(unsigned long long)s->cache_rows,(unsigned long long)s->frames,
         (unsigned long long)s->lfb_bytes,d->accel_caps,d->vram_end>d->vram_first ? d->vram_end-d->vram_first : 0u,
-        pointer,d->hw_cursor_retries,d->hw_cursor_fallbacks);
+        pointer,d->hw_cursor_retries,d->hw_cursor_fallbacks,(unsigned long long)(s->composite_ns/1000),
+        (unsigned long long)(s->present_ns/1000),(unsigned long long)s->presents,(unsigned long long)s->scene_px,
+        (unsigned long long)s->direct_px);
     return n>0 && (size_t)n<size ? n : 0;
 }
 static void accel_record(struct desktop *d, uint64_t now)

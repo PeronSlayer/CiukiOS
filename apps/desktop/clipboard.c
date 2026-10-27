@@ -240,7 +240,13 @@ void desk_clip_drop(struct desktop *d,int i)
 void desk_clip_destroy(struct desktop *d)
 { if (!enter()) { clip_destroy_locked(d); pthread_mutex_unlock(&lock); } }
 int desk_clip_capture(struct desktop *d,int active)
-{ int e=enter(); if (e) return -e; e=clip_capture_locked(d,active); pthread_mutex_unlock(&lock); return e; }
+{
+    /* fx-doswin3 round 3: a DOS window presented straight from its surface
+     * left older pixels in the RAM frame; one composed frame first (outside
+     * the clipboard lock: it is the ordinary redraw). */
+    if (desk_direct_settle) desk_direct_settle(d);
+    int e=enter(); if (e) return -e; e=clip_capture_locked(d,active); pthread_mutex_unlock(&lock); return e;
+}
 
 int desk_clip_key(struct desktop *d,int code,int down,int alt)
 {

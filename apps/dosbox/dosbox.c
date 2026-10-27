@@ -162,6 +162,16 @@ static void dosbox_create_work(void *arg)
 }
 #define DOSBOX_CREATE_FIRST_MS 20
 #define DOSBOX_CREATE_POLL_MS 100
+/* fx-doswin3 round 3: the composed acknowledgement. A frame whose DAMAGE
+ * finds no marker outstanding is followed by the scene-less DESK_GFX_FRAME
+ * (the marker); the desktop's DESK_GFX_PRESENTED says that frame is on
+ * screen (or was not needed). The DOS Box converts one more frame meanwhile
+ * (the two stages overlap), then waits for the answer: it is at most one
+ * frame ahead of the desktop and converts no frame the desktop would
+ * coalesce away. It waits only once the desktop has answered one
+ * (ack_live), and never longer than this: the desktop is not a dependency
+ * of the VM. */
+#define DOSBOX_ACK_MS 100
 static int name_valid(const char *name)
 {
     size_t n = strlen(name);
@@ -420,11 +430,14 @@ int main(int argc, char **argv)
     }
     int running = 1, fullscreen = 0, fullscreen_painted = 0;
     int startup_fullscreen=window.profile.screen!=0, returned_seen=0, kept_early=0;
+    uint32_t ack_serial=0, ack_wait=0; uint64_t ack_until=0; unsigned ack_ahead=0;
+    int ack_supported=1, ack_live=0, drained=0;
     while (running) {
         dos_clip_vm(id,generation,server);
+        drained=0;
         for (unsigned budget = 0; budget < 32; budget++) {
             int n = dos_clip_recv(&m);
-            if (n < 0 && (errno == EAGAIN || errno == EINTR)) break;
+            if (n < 0 && (errno == EAGAIN || errno == EINTR)) { drained = errno == EAGAIN; break; }
             if (n <= 0) { running = 0; break; }               /* desktop gone */
             struct desk_packet packet;
             int valid = m.sender_pid && (!server || server == m.sender_pid) &&
@@ -442,6 +455,12 @@ int main(int argc, char **argv)
             }
             if (packet.opcode == DESK_END_SESSION) {
                 if (packet.focused) { running = 0; break; }  /* every program agreed: close (forced if still running) */
+                continue;
+            }
+            if (packet.opcode == DESK_GFX_PRESENTED) {
+                if (packet.serial == ack_wait) { ack_wait = 0; ack_ahead = 0; }
+                if (packet.result == -EPERM) ack_supported = ack_live = 0;   /* a desktop without the DOS window form */
+                else ack_live = 1;
                 continue;
             }
             if (packet.opcode == DESK_CLOSE_REQUEST) {
@@ -548,6 +567,16 @@ int main(int argc, char **argv)
          * changed pixels through the same viewport as ordinary VGA damage. */
         if (dos_clip_dirty()) window.dirty=1;
         if (failure) goto panel;
+        /* The last frame is not on screen yet: serve the channel (its
+         * PRESENTED reply, input) instead of converting another frame. */
+        if (ack_wait && ack_live && ack_ahead) {
+            uint64_t now=now_ms();
+            if (now<ack_until) {
+                if (drained) { struct pollfd p={channel,POLLIN,0}; (void)poll(&p,1,(int)(ack_until-now)); }
+                continue;
+            }
+            ack_wait=0; ack_ahead=0;
+        }
         /* Producer events and the VM's fractional VGA deadline determine
          * the frame rate. This timeout bounds input/lifecycle service only. */
         command(&c,id,generation); c.wait.timeout_ms=CIUKI_DOSVM_WAIT_MAX_MS;
@@ -709,6 +738,7 @@ int main(int argc, char **argv)
                 }
                 db_paint_rows(&window,&canvas,guest,full ? NULL : source_rows,damage_rows);
                 if (full) for (unsigned y=0;y<480;y++) damage_rows[y/32]|=1u<<(y%32);
+                int sent=0;
                 for (unsigned y=0;y<480;) {
                     if (!(damage_rows[y/32]&(1u<<(y%32)))) { y++; continue; }
                     unsigned first=y++;
@@ -716,6 +746,14 @@ int main(int argc, char **argv)
                     desk_message(&m,DESK_DAMAGE,20); desk_put32(m.data+8,first);
                     desk_put32(m.data+12,640); desk_put32(m.data+16,y-first);
                     if (send_packet(channel,&m)) goto done;
+                    sent=1;
+                }
+                if (sent && ack_supported && ack_wait) ack_ahead++;
+                else if (sent && ack_supported) {
+                    if (!++ack_serial) ack_serial=1;
+                    desk_message(&m,DESK_GFX_FRAME,64); desk_put32(m.data+4,ack_serial);
+                    if (send_packet(channel,&m)) goto done;
+                    ack_wait=ack_serial; ack_until=now_ms()+DOSBOX_ACK_MS; ack_ahead=0;
                 }
             }
             redraw=0;

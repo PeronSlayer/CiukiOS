@@ -540,7 +540,9 @@ int desk_parse(const struct ciuki_message *m, int client,
         if (!p->serial || p->focused>1 || (p->flags&~DESK_ENDSESSION_FLAGS)) return 0;
         n=16; break;
     case DESK_GFX_FRAME:
-        if (!client || !resize || (m->length!=64 && m->length!=68 && m->length!=84) || !desk_surface_valid(s)) return 0;
+        /* fx-doswin3: the 64-byte form needs no v2.1 attachment, so a v2.0
+         * client (the DOS Box) may send it too. */
+        if (!client || (!resize && m->length!=64) || (m->length!=64 && m->length!=68 && m->length!=84) || !desk_surface_valid(s)) return 0;
         if (m->length>=68) { p->resize_serial=desk_get32(m->data+64);if (m->length==68 && !p->resize_serial) return 0; }
         if (m->length==84) {
             p->timing_serial=desk_get32(m->data+68);p->render_us=desk_get32(m->data+72);
@@ -567,7 +569,7 @@ int desk_parse(const struct ciuki_message *m, int client,
             p->damage_w>p->source_w-p->damage_x || p->damage_h>p->source_h-p->damage_y) return 0;
         n=m->length; break;
     case DESK_GFX_PRESENTED:
-        if (client || !resize || (m->length!=32 && m->length!=64) || desk_get32(m->data+28)) return 0;
+        if (client || (!resize && m->length!=32) || (m->length!=32 && m->length!=64) || desk_get32(m->data+28)) return 0;
         p->serial=desk_get32(m->data+4); p->result=(int32_t)desk_get32(m->data+8);
         p->completed_ns=(uint64_t)desk_get32(m->data+12)|(uint64_t)desk_get32(m->data+16)<<32;
         p->next_frame_ns=(uint64_t)desk_get32(m->data+20)|(uint64_t)desk_get32(m->data+24)<<32;
