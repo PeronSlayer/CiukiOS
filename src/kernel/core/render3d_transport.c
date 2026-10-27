@@ -4,6 +4,7 @@
 #include <ciuki/desktop.h>
 #include <ciuki/display.h>
 #include <ciuki/w32_core.h>
+#include <ciuki/selftest.h>
 #include "../drivers/video/render3d_transport.h"
 struct wire_job {
     struct ciuki_w32_render3d_args args;
@@ -74,10 +75,104 @@ static void cleanup(void *arg)
 }
 extern int display_present_render3d(void *,uint32_t,const struct ciuki_w32_render3d_args *,const void *,uint32_t);
 extern int render3d_native_refresh(struct render3d_service *) __attribute__((weak));
+/* The service for the current mode generation. After a mode change the
+ * owner's hook already cancelled/lost its device; quarantined service memory
+ * is retained, because an unproven writer cannot be freed. */
+static int service_open(void)
+{
+    if (service && service->generation!=fbdev_get()->generation) {
+        int e=render3d_close(service);
+        if (e) return e;
+        rfree(0,service); service=0;
+    }
+    if (service) return 0;
+    service=ralloc(0,sizeof(*service));
+    if (!service) return -ENOMEM;
+    struct render3d_host h={.alloc=ralloc,.free=rfree,.now_us=now,.yield=pause_ms};
+    int e=render3d_native_init(service,&h);
+    if (e) { rfree(0,service); service=0; }
+    return e;
+}
+/* fx-selftest (docs/design/self-test.md): one 64x64 triangle through the
+ * production service with a hardware-required context, on this worker like
+ * every wire job. The pid is never a process: if anything outlives this
+ * call, the poll's dead-process sweep below retires it. */
+#define SELFTEST_PROCESS 0x7FFFFF00u
+static struct render3d_selftest selftest_result;
+static bool selftest_requested, selftest_done;
+static void selftest_draw(void)
+{
+    struct render3d_selftest r={.width=64,.height=64,.expected=0xFF00FF00u,.stage="service"};
+    uint64_t began=g_ticks;
+    uint32_t context=0,target=0;
+    struct render3d_request *q=0; uint32_t *pixels=0;
+    int e=service_open();
+    if (!e && render3d_native_refresh) e=render3d_native_refresh(service);
+    if (!e) { r.stage="context"; e=render3d_create_context(service,SELFTEST_PROCESS,R3D_HARDWARE_REQUIRED,&context); }
+    if (!e) {
+        for (unsigned i=0;i<R3D_CONTEXTS;i++)
+            if (service->contexts[i].live && service->contexts[i].handle==context) r.hardware=service->contexts[i].hardware;
+        r.stage="target"; e=render3d_create_resource(service,SELFTEST_PROCESS,context,R3D_COLOR,64,64,0,0,&target);
+    }
+    if (!e) {
+        r.stage="request";
+        q=ralloc(0,sizeof(*q)); pixels=ralloc(0,64*64*4);
+        if (!q || !pixels) e=-ENOMEM;
+    }
+    if (!e) {
+        memset(q,0,sizeof(*q));
+        q->flags=R3D_CLEAR_COLOR; q->target=target; q->clear_color=0xFF000000u; q->count=3;
+        static const int32_t xy[3][2]={{8,8},{56,8},{32,56}};
+        for (unsigned i=0;i<3;i++)
+            q->vertices[i]=(struct render3d_vertex){.x=xy[i][0]<<16,.y=xy[i][1]<<16,.rhw=65536,.color=r.expected};
+        struct render3d_fence fence;
+        r.stage="submit"; e=render3d_submit(service,SELFTEST_PROCESS,context,q,sizeof(*q),&fence);
+        r.stage="complete";
+        while (!e) {
+            int step=render3d_step(service);
+            int wait=render3d_wait(service,SELFTEST_PROCESS,context,fence,0);
+            if (!wait) break;
+            if (wait!=-ETIMEDOUT) e=wait;
+            else if (step<0) e=step;
+            else if (g_ticks-began>=2000) e=-ETIMEDOUT;
+            else pause_ms(0);
+        }
+    }
+    if (!e) { r.stage="readback"; e=render3d_readback(service,SELFTEST_PROCESS,context,target,pixels,64*64*4); }
+    if (!e) {
+        r.actual=pixels[32*64+28];
+        r.stage="compare";
+        if (r.actual!=r.expected || pixels[0]!=0xFF000000u) e=-EIO;
+        else r.stage="done";
+    }
+    if (target) (void)render3d_destroy_resource(service,SELFTEST_PROCESS,context,target);
+    if (context) (void)render3d_destroy_context(service,SELFTEST_PROCESS,context);
+    rfree(0,q); rfree(0,pixels);
+    r.error=e; r.elapsed_ms=(uint32_t)(g_ticks-began);
+    uint32_t flags=irq_save(); selftest_result=r; selftest_done=true; irq_restore(flags);
+}
+int w32_render3d_selftest(struct render3d_selftest *out,uint32_t timeout_ms)
+{
+    if (display_worker_start()) return -ENOMEM;
+    uint32_t flags=irq_save();
+    bool busy=selftest_requested;
+    if (!busy) { selftest_requested=true; selftest_done=false; }
+    irq_restore(flags);
+    if (busy) return -EBUSY;
+    display_worker_wake();
+    uint64_t start=g_ticks;  /* the same clock as w32_render3d_call's bound */
+    while (!__atomic_load_n(&selftest_done,__ATOMIC_ACQUIRE)) {
+        if (g_ticks-start>=timeout_ms) return -ETIMEDOUT;
+        task_sleep_ms(5);
+    }
+    flags=irq_save(); *out=selftest_result; selftest_requested=false; irq_restore(flags);
+    return out->error;
+}
 void w32_render3d_poll(void)
 {
     if (polling) return;
     polling=true;
+    if (selftest_requested && !selftest_done) selftest_draw();
     if (service) {
         for (unsigned i=0;i<R3D_CONTEXTS;i++) {
             struct render3d_context *c=&service->contexts[i];
@@ -94,21 +189,7 @@ void w32_render3d_poll(void)
     if (j) {
         struct process *p=proc_find(j->process);
         int e=j->cancelled || !p || p->state!=PROC_LIVE ? -ECANCELED : 0;
-        if (!e && service && service->generation!=fbdev_get()->generation) {
-            /* Owner's mode hook already cancels/losses its device. Retain
-             * quarantined service memory; an unproven writer cannot be freed. */
-            e=render3d_close(service);
-            if (!e) { rfree(0,service); service=0; }
-        }
-        if (!e && !service) {
-            service=ralloc(0,sizeof(*service));
-            struct render3d_host h={.alloc=ralloc,.free=rfree,.now_us=now,.yield=pause_ms};
-            if (!service) e=-ENOMEM;
-            else {
-                e=render3d_native_init(service,&h);
-                if (e) { rfree(0,service); service=0; }
-            }
-        }
+        if (!e) e=service_open();
         if (!e) {
             struct render3d_transport t={service,service,display_present_render3d};
             e=render3d_transport_dispatch(&t,j->process,&j->args,j->data,j->args.bytes);

@@ -141,6 +141,7 @@ CiukiOS 1.0.0 alpha Startup Menu
   6. Safe mode command prompt only
   7. Safe mode without disks
   8. Hardware check
+  9. Self-test (unattended, about 5 minutes)
 
 Enter a choice: 1   Time remaining: 30
 F5=Safe mode  Shift+F5=Command prompt  Shift+F8=Step-by-step confirmation [N]
@@ -168,6 +169,7 @@ a person can read the menu and the step-by-step prompts.
 | 6 Safe mode command prompt only | `CBI_F_SAFE_MODE | CBI_F_SAFE_STORAGE | CBI_F_CMD_ONLY` |
 | 7 Safe mode without disks | `CBI_F_SAFE_MODE` (the earlier S) |
 | 8 Hardware check | `CBI_F_HW_CHECK | CBI_F_VERBOSE` (as H) |
+| 9 Self-test | `CBI_F_SELF_TEST` (as T; fx-selftest, [self-test](self-test.md)) |
 
 Step-by-step prompts, each `[Enter=Y,Esc=N]` (Y keeps the default): "Create
 a startup log on screen?" (Y adds the Logged flags), "Load the accelerated

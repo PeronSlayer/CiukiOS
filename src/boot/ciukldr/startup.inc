@@ -90,7 +90,7 @@ startup_menu:
     test al, al
     jz .scan
     sub al, '1'
-    cmp al, 7
+    cmp al, 8
     ja .again
     add al, '1'
     mov [startup_choice], al
@@ -109,7 +109,7 @@ startup_menu:
 .clamp:
     cmp al, '1'
     jb .again
-    cmp al, '8'
+    cmp al, '9'
     ja .again
     mov [startup_choice], al
     jmp .again
@@ -125,7 +125,7 @@ startup_menu:
     call print
     mov al, [startup_choice]
     ; fall through
-; AL=choice '1'..'8': its boot flags, a serial record, then Step-by-step.
+; AL=choice '1'..'9': its boot flags, a serial record, then Step-by-step.
 startup_apply:
     mov [startup_choice], al
     mov byte [screen_quiet], 0
@@ -343,11 +343,11 @@ startup_choice db '1'
 startup_secs db '30'
 step_action db 0
 align 4, db 0
-; Boot flags of choices 1-8 (design 2.2 table).
+; Boot flags of choices 1-9 (design 2.2 table); 9 is the fx-selftest boot.
 startup_flags dd 0, CBI_F_VERBOSE | CBI_F_DIAG_VERBOSE
     dd CBI_F_SAFE_MODE | CBI_F_SAFE_STORAGE, CBI_F_STEP, CBI_F_CMD_ONLY
     dd CBI_F_SAFE_MODE | CBI_F_SAFE_STORAGE | CBI_F_CMD_ONLY, CBI_F_SAFE_MODE
-    dd CBI_F_HW_CHECK | CBI_F_VERBOSE
+    dd CBI_F_HW_CHECK | CBI_F_VERBOSE, CBI_F_SELF_TEST
 startup_title db 'CiukiOS ', CIUKI_VERSION, ' Startup Menu',13,10
     db '================================',13,10,0
 startup_failed db 'CiukiOS did not start successfully. Safe mode is selected.',13,10,0
@@ -359,7 +359,8 @@ startup_items db 13,10
     db '  5. Command prompt only',13,10
     db '  6. Safe mode command prompt only',13,10
     db '  7. Safe mode without disks',13,10
-    db '  8. Hardware check',13,10,0
+    db '  8. Hardware check',13,10
+    db '  9. Self-test (unattended, about 5 minutes)',13,10,0
 startup_keys db 'F5=Safe mode  Shift+F5=Command prompt  Shift+F8=Step-by-step confirmation [N]',0
 startup_enter db 'Enter a choice: ',0
 startup_time db '   Time remaining: ',0

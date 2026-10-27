@@ -8,6 +8,7 @@
 #include <ciuki/display_driver.h>
 #include <ciuki/task.h>
 #include "../../../fs/fs_port.h"
+#include <ciuki/selftest.h>
 #include "savage3d.h"
 static struct savage3d_device device;
 static struct vfs *marker_vfs;
@@ -72,6 +73,8 @@ static struct kwait probe_wait;
 static bool desktop_ready;
 static uint32_t desktop_generation;
 static uint64_t probe_started, phase_started, phase_deadline=UINT64_MAX, revalidate_deadline;
+/* fx-selftest: the last qualification's outcome and phases, read-only. */
+static struct render3d_qualification_report last_report;
 static const char *budget_reason;
 /* f7-1213 review P2-1 (lead decision, amendment 1): every gate after the
  * qualified minimum is optional. It must finish SAVAGE3D_PROBE_MARKER_US
@@ -133,7 +136,15 @@ static void probe_phase(void *ctx,const char *name,unsigned index,bool begin,int
     if (begin) {
         phase_started=probe_now();
         phase_deadline=phase_started+(!strncmp(name,"marker",6) ? SAVAGE3D_PROBE_MARKER_US : SAVAGE3D_PROBE_PHASE_US);
-    } else phase_deadline=UINT64_MAX; /* cleanup/logging after a phase is not budget_phase (P3-4) */
+    } else {
+        phase_deadline=UINT64_MAX; /* cleanup/logging after a phase is not budget_phase (P3-4) */
+        if (last_report.phase_count<RENDER3D_QUALIFICATION_PHASES) {
+            uint64_t us=probe_now()-phase_started;
+            last_report.phases[last_report.phase_count].name=name;
+            last_report.phases[last_report.phase_count].us=us>UINT32_MAX ? UINT32_MAX : (uint32_t)us;
+            last_report.phases[last_report.phase_count++].error=error;
+        }
+    }
     klog("[3d] probe phase=%s index=%u state=%s elapsed_us=%llu total_us=%llu error=%d",
         name,index,begin ? "begin" : "end",probe_now()-phase_started,probe_now()-probe_started,error);
 }
@@ -542,7 +553,23 @@ static bool token(void)
         if (i-first==8 && !memcmp(g_boot.options+first,"3d=probe",8)) return true;
         if (i<sizeof(g_boot.options) && g_boot.options[i]) i++;
     }
-    return false;
+    /* fx-selftest: the T boot forces the background qualification. */
+    return (g_boot.flags&CBI_F_SELF_TEST)!=0;
+}
+/* fx-selftest: the qualification fills last_report completely before it
+ * publishes probe_finished (release), so a copy taken after observing it
+ * (acquire) is stable; before that only the scheduled/active/finished flags
+ * are meaningful to the reader. No interrupt producer writes these fields. */
+void render3d_qualification_report(struct render3d_qualification_report *out)
+{
+    bool finished=__atomic_load_n(&probe_finished,__ATOMIC_ACQUIRE);
+    *out=last_report;
+    /* The qualified backend serves the SuperSavage/IX only (qualification). */
+    const struct pci_func *pci=display_driver_owner();
+    out->present=pci && pci->vendor==0x5333 && pci->device==0x8c2e;
+    out->scheduled=reported || probe_task || out->finished;
+    out->active=probe_active;
+    out->finished=finished && out->finished;
 }
 static void qualification(void)
 {
@@ -550,9 +577,12 @@ static void qualification(void)
     const struct fb_device *fb=&pending_fb;
     if (!layout_key.valid && desktop_generation!=fb->generation) {
         klog("[3d] probe result=blocked reason=mode_changed error=%d hardware=0 marker=clear elapsed_us=0",-ENODEV);
+        last_report=(struct render3d_qualification_report){.scheduled=true,.finished=true,.error=-ENODEV,
+            .result="blocked",.reason="mode_changed",.marker="clear"};
         return;
     }
     probe_active=true; budget_reason=0; checkpoint_count=0; revalidate_deadline=0;
+    last_report=(struct render3d_qualification_report){.scheduled=true};
     optional_gate=optional_stop=false; optional_reason=0; phase_deadline=UINT64_MAX;
     probe_started=probe_now();
     probe_phase(0,"prepare",0,true,0);
@@ -588,6 +618,8 @@ static void qualification(void)
         if (!e) e=inventory;
         if (!e && largest_bytes<required) e=-ENOMEM;
     }
+    last_report.heap_bytes=heap.bytes; last_report.required=required;
+    last_report.free_vram=free_bytes; last_report.largest_vram=largest_bytes;
     const char *reason="mode_heap";
     uint32_t alias=pci ? pci->bar[2]&~15u : 0;
     if (!e && (!pci || pci->vendor!=0x5333 || pci->device!=0x8c2e || (pci->command&3)!=3 ||
@@ -727,6 +759,18 @@ static void qualification(void)
     if (pinned) fbdev_render3d_prepared();
     probe_active=false;
     device.probe_checkpoint=0; device.probe_phase=0;
+    {
+        struct render3d_qualification_report *r=&last_report;
+        r->qualified=!e && engine->render3d_qualified; r->lost=device.lost; r->error=e;
+        r->result=!e ? "qualified" : device.lost ? "failed" : "blocked";
+        r->reason=!e ? "pixel_depth_copy_guards_restore" : reason;
+        r->marker=marker_fresh || marker_retained ? "retained" : marker_unknown ? "unknown" : "clear";
+        r->elapsed_us=probe_now()-probe_started; r->packets=device.packets; r->triangles=device.triangles;
+        r->copies=device.copies; r->failed_phase=device.failed_phase; r->texture_bytes=device.texture_bytes;
+        r->fullsize=device.fullsize_qualified; r->perspective=device.perspective_qualified;
+        r->depth24=device.depth24_qualified; r->color565=device.color565_qualified;
+        r->finished=true;
+    }
     klog("[3d] probe result=%s reason=%s error=%d hardware=%u phase=%u expected=%08x actual=%08x guard=%u status=%08x packets=%llu triangles=%llu copies=%llu marker=%s elapsed_us=%llu",
         !e ? "qualified" : device.lost ? "failed" : "blocked",!e ? "pixel_depth_copy_guards_restore" : reason,e,
         engine->render3d_qualified,device.failed_phase,device.expected,device.actual,device.guard_offset,

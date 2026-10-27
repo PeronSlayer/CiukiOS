@@ -49,6 +49,7 @@ static inline void mm_free(uint32_t phys, enum mm_owner owner)
     else pmm_free(phys); /* fake-PMM host fixtures */
 }
 uint32_t pmm_free_count(void);
+uint32_t pmm_refusals(void);           /* fx-selftest: public allocations that returned 0 */
 uint32_t pmm_zone_free(int zone);
 uint32_t pmm_zone_total(int zone);
 uint32_t pmm_total_usable(void);
@@ -157,6 +158,7 @@ size_t kheap_in_use(void);
 struct kheap_ledger {
     uint32_t pages;
     size_t in_use, peak;
+    uint32_t refused; /* fx-selftest: kmalloc returned NULL (oversize or no page) */
 };
 void kheap_snapshot(struct kheap_ledger *out);
 

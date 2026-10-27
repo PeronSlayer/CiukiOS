@@ -21,6 +21,7 @@ ALLOWED = {
     'probes/installer_probe.inc', # f5-15A2 registered w32-installer-nsis controller, included by desktop probe TU
     'probes/installer_title_probe.inc', # f5-15C registered win32-<alias> installers-tier observer, included by desktop probe TU
     'probes/f2_probes_app.c',
+    'probes/selftest.c',   # fx-selftest T-boot controller: rec_set_run, BEGIN first, probe=selftest records only
     'probes/f2_probes_files.c',
     'probes/f4_probes_audio.c', # f4-01 native audio controller
     'probes/f5_probes_core.c', # f5-03 personality mechanism controller

@@ -27,6 +27,7 @@
 #include <ciuki/thinkpad_ec.h>
 #pragma weak thinkpad_ec_smbios_snapshot
 #include <ciuki/bootlog.h>
+#include <ciuki/selftest.h>
 #pragma weak bootlog_report_snapshot
 #pragma weak firmware_inventory_page
 #include "../drivers/floppy.h"
@@ -37,6 +38,7 @@
 
 /* Like proc_list: UP, non-preemptible kernel, no waits between fill and copy.
  * Keeping these out of the 16 KiB task stack also avoids heap size limits. */
+bool selftest_device_state(char *, size_t, uint32_t *) __attribute__((weak));
 static struct registry_inventory_copy inventory;
 static struct ciuki_devices_info query_buffer;
 static struct ciuki_firmware_page firmware_buffer;
@@ -377,6 +379,16 @@ void devices_snapshot(struct ciuki_devices_info *out)
     }
     uint32_t f = irq_save(); out->uptime_ms = g_ticks; irq_restore(f);
     cpu_info(out);
+    /* fx-selftest: first row, so a truncated inventory never drops it. The
+     * desktop shows the notice and starts the DOS box from this row only. */
+    if (selftest_device_state) {
+        char reason[80]; uint32_t generation = 0;
+        if (selftest_device_state(reason, sizeof(reason), &generation)) {
+            struct ciuki_device_record *d = append(out, SELFTEST_DEVICE_ID, CIUKI_DEVICE_SYSTEM, CIUKI_BUS_LOADER,
+                                                  "Self-test", "selftest", CIUKI_DEVICE_READY, reason);
+            if (d) d->generation = generation;
+        }
+    }
     /* Preserve the fixed ABI: read-only volumes use ordinary inventory rows.
      * Reasons come from the live retained cause, not the boot ledger. */
     if (storage_readonly_info) for (unsigned drive=0;drive<26;drive++) {
