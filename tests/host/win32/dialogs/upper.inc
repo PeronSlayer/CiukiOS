@@ -842,7 +842,8 @@ static void upper_windows(void) {
         GetPixel((GH)(uintptr_t)dc, 2, 2) == (~before & 0xffffff));
   ReleaseDC(top, dc);
   /* Process idle and help. */
-  CHECK(!WaitForInputIdle((HANDLE)(uintptr_t)0x44, 10));
+  CHECK(WaitForInputIdle((HANDLE)(uintptr_t)0x44, 10) == W32_WAIT_FAILED &&
+        GetLastError() == 6);
   CHECK(WinHelpW(top, L("x.hlp"), 2, 0) && !WinHelpW(top, L("x.hlp"), 1, 0) &&
         GetLastError() == 2);
   DestroyWindow(child);
