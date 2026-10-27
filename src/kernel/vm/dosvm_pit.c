@@ -88,7 +88,10 @@ int dosvm_pit_port(struct dosvm *v, uint16_t port, unsigned width, bool write, u
         }
         struct dosvm_pit_channel *c = &v->pit.channel[ch];
         if (!access) { pit_latch(c, true, false); return 0; }
-        if (!ch) v->pit.owed = 0; /* a reprogrammed timer owes nothing */
+        if (!ch) {
+            v->pit.owed = 0; /* a reprogrammed timer owes nothing */
+            v->irq.owed &= ~1u;
+        }
         bool gate = c->gate;
         memset(c, 0, sizeof(*c));
         c->gate = gate; c->access = access; c->mode = b >> 1 & 7;
@@ -183,6 +186,7 @@ static void pit_irq0(struct dosvm *v, uint32_t edges)
     bool masked = v->monitor.pic[0].imr & 1u;
     bool requested = v->monitor.pic[0].irr & 1u;
     bool in_service = v->monitor.pic[0].isr & 1u;
+    bool held = dosvm_irq_held(v, 0);
     irq_restore(flags);
     if (masked) {
         v->pit.owed = 0;
@@ -191,13 +195,12 @@ static void pit_irq0(struct dosvm *v, uint32_t edges)
     }
     uint32_t owed = v->pit.owed + edges;
     if (!owed) return;
-    /* A new edge raises as on the 8259A. An owed one waits until the guest
-     * has finished the previous tick (not requested, not in service) and
-     * half a period has passed: a handler slower than its own timer must
-     * not be re-entered back to back (a livelock reinjection can cause). */
+    /* fx-dospic: new AND owed edges wait for the handler's IRET/timeout,
+     * independently of DMX's early EOI. An owed edge additionally waits
+     * for EOI and half a period, as before. See fx-dospic.md. */
     uint32_t half = v->pit.channel[0].reload / 2u;
     bool paced = edges || (!in_service && v->pit.clocks - v->pit.irq0_clock >= half);
-    if (!requested && paced) {
+    if (!held && !requested && paced) {
         dosvm_irq_raise(v->info.key, 0);
         v->pit.irq0_clock = v->pit.clocks;
         if (!edges) v->pit.reinjected++;
@@ -209,6 +212,9 @@ static void pit_irq0(struct dosvm *v, uint32_t edges)
 }
 void dosvm_pit_advance(struct dosvm *v, uint64_t ticks)
 {
+    /* The VM return boundary may also drain owed edges with ticks=0. Keep
+     * it atomic with the independent VM clock task's count/queue update. */
+    uint32_t flags = irq_save();
     if (ticks > DOSVM_PIT_CATCHUP) { v->pit.dropped_ticks += ticks - DOSVM_PIT_CATCHUP; ticks = DOSVM_PIT_CATCHUP; }
     uint32_t clocks = (uint32_t)ticks * 1193u;
     v->pit.clocks += clocks;
@@ -216,4 +222,5 @@ void dosvm_pit_advance(struct dosvm *v, uint64_t ticks)
         uint32_t edges = pit_advance_channel(&v->pit.channel[i], clocks);
         if (!i) { v->pit.edges += edges; pit_irq0(v, edges); }
     }
+    irq_restore(flags);
 }
