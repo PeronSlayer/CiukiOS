@@ -33,7 +33,8 @@ def build(out, base, flags):
             'GetPropA':8,'SetPropA':12,'RemovePropA':8,'DefWindowProcA':16,
             'RegisterClassA':4,'CreateWindowExA':48,'ShowWindow':8,'UpdateWindow':4,
             'SetWindowTextA':8,'PeekMessageA':20,'PostQuitMessage':4,
-            'TranslateMessage':4,'DispatchMessageA':4,'DestroyWindow':4}),
+            'TranslateMessage':4,'DispatchMessageA':4,'DestroyWindow':4,
+            'IsWindow':4,'CiukiShellOpenFolder':8}),   # fx-q3vise: ShellExecute(Ex) of a folder
         codecs.import_library(objdir, 'advapi32', {'RegOpenKeyExA': 20,
             'RegQueryValueExA': 24, 'RegCloseKey': 4})]
     # cdecl diagnostic functions are exported by ntdll with plain names.

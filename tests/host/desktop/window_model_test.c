@@ -124,11 +124,13 @@ static void app_answer_pings(void)
 static struct fake_app *last_app;
 static int next_size_w, next_size_h;
 static unsigned find_launches;
+static char last_launch_arg[DESK_ARG_MAX+1];
 /* d->launch: the fx-8 asynchronous launcher (desktop.c launch_program):
  * the slot exists at once, AppStarting shows, the process comes later. */
 static int fake_launch(struct desktop *dd, const struct desk_program *program)
 {
     if (!strcmp(program->name,"files") && dd->launch_arg && !strcmp(dd->launch_arg,"find:")) find_launches++;
+    snprintf(last_launch_arg,sizeof(last_launch_arg),"%s",dd->launch_arg ? dd->launch_arg : "");
     int k=0; while (k<DESK_CLIENTS && apps[k].stage!=APP_FREE) k++;
     if (k==DESK_CLIENTS || fds_left()<8) { errno=EAGAIN; return -1; }
     struct fake_app *a=&apps[k]; memset(a,0,sizeof(*a));
@@ -2699,6 +2701,43 @@ static void row_g26c_launch_error(unsigned m)
     app_paint(a,0,218,360,22,0x832170);step("desktop late launch refusal status without opener navigation");
     wm_end();
 }
+/* fx-q3vise: ShellExecute(Ex) of a folder by a Win32 program (the VISE
+ * installer opens each Start-menu folder it filled): a window that carries a
+ * Win32 HWND may open Files on an absolute folder path, nothing else. */
+#include "browser_launch.h"
+static int folder_launch(int window,const char *title,const char *arg)
+{
+    struct desk_client *c=&d.clients[window];struct ciuki_message request;
+    unsigned t=(unsigned)strlen(title),n=(unsigned)strlen(arg);
+    v3msg(&request,DESK_V3_LAUNCH,8+t+n,c->v3_id,c->v3_generation);
+    desk_put32(request.data+16,t);memcpy(request.data+20,title,t);
+    desk_put32(request.data+20+t,n);memcpy(request.data+24+t,arg,n);
+    last_app=NULL;last_launch_arg[0]=0;
+    return desk_v3_receive(&d,v3_root,&request);
+}
+static void row_q3vise_folder(unsigned m)
+{
+    row_name="fx-q3vise Win32 folder opens Files";wm_begin(m,1);
+    int program=wm_v3_window(DESK_V3_POPUP,-1,40,60,1,1);assert(program>=0);
+    const char *folder="/WINDOWS/Start Menu/Programs/Quake 3 Arena Demo";
+    strcpy(d.clients[v3_root].application,"setup");   /* a Win32 program, not the browser of the G26C rows */
+    d.clients[program].v3_win32_hwnd=0;
+    assert(folder_launch(program,"files",folder)==-EPERM && !last_app);step("a window without a Win32 HWND is refused");
+    d.clients[program].v3_win32_hwnd=0x1234;
+    const char *refused[]={"--open=/Documents","--file-action=348:/Documents/a.txt","Documents","/","/Documents/../system",
+        "/Documents/./x","/Documents//x"};
+    for (unsigned k=0;k<sizeof(refused)/sizeof(*refused);k++) assert(folder_launch(program,"files",refused[k])==-EPERM && !last_app);
+    assert(folder_launch(program,"ciuknote","/Documents")==-EPERM && !last_app);
+    assert(folder_launch(program,"control","/Documents")==-EPERM && !last_app);
+    /* A control character never parses (the desktop ends that connection); the rule refuses it too. */
+    assert(!desk_folder_argument("/Documents/a\001b") && desk_folder_argument(folder));
+    char longest[DESK_ARG_MAX+2]="/"; memset(longest+1,'a',DESK_ARG_MAX); longest[DESK_ARG_MAX+1]=0;
+    assert(!desk_folder_argument(longest)); longest[DESK_ARG_MAX]=0; assert(desk_folder_argument(longest));
+    step("options, relative, traversal and other programs refused");
+    assert(!folder_launch(program,"files",folder) && last_app && !strcmp(last_launch_arg,folder));
+    struct fake_app *files=last_app;app_spawned(files);app_create_window(files);step("Files opens on the folder");
+    app_close(files);step("Files closes");wm_end();
+}
 /* G16B: append after all existing scenarios; actual toolkit pixels travel
  * through the same client DAMAGE route as an application window. */
 static int common_lister(void *ctx,const char *path,struct du_file_entry *out,unsigned cap,unsigned *count)
@@ -2838,7 +2877,7 @@ static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overl
     row_common_folder_rename, row_g27b_statistics, row_g27b_viewer_save, row_g27b_terminal,
     row_g27b_serial, row_protected_saver, row_resume_password,
     row_feedback_native, row_feedback_win32, row_feedback_dos, row_feedback_failure,
-    row_feedback_timeout, row_feedback_overlap, row_feedback_precedence};
+    row_feedback_timeout, row_feedback_overlap, row_feedback_precedence, row_q3vise_folder};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).

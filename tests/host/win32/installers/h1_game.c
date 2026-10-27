@@ -20,6 +20,11 @@
  *   foreground window); LEASE grants the requested mode with the 72-byte
  *   tuple, as the desktop does, before the RESULT.
  *
+ * fx-q3vise: with "+set ciuki_installer <ms>" the same mode runs a wizard
+ * installer (the Quake III demo's Installer VISE), pressing the keys of its
+ * pages; launch requests (DESK_V3_LAUNCH) and window creations are printed
+ * with their times.
+ *
  * Threads stay unavailable (W32_THREAD ENOSYS): DirectSound's mixer thread
  * cannot start, so a game runs without sound here (the audio path has its
  * own host tests). Frames are counted with a checksum; when the directory
@@ -41,7 +46,8 @@
 static int32_t (*kernel_call)(void *, uint32_t);
 static int enabled;
 static struct { uint8_t *pixels; uint32_t width, height, pitch, bytes; int used; } surfaces[SURFACES];
-static struct { uint32_t id, generation, fd; } windows[64];
+static struct { uint32_t id, generation, fd; int titled; } windows[64];
+static uint32_t launches;
 static struct ciuki_message inbox[INBOX];
 static uint32_t in_head, in_tail, focus_id, focus_generation;
 static uint32_t lease_token = 0x40, lease_generation = 0x80, lease_serial, lease_w, lease_h, lease_bpp;
@@ -262,9 +268,9 @@ static void gl_report(void) {
 }
 
 /* ---- frames ------------------------------------------------------------ */
-static void dump(const uint8_t *pixels, uint32_t w, uint32_t h, uint32_t pitch, uint32_t bpp) {
+static void dump_named(const uint8_t *pixels, uint32_t w, uint32_t h, uint32_t pitch, uint32_t bpp, char letter, uint32_t n) {
     char name[40] = "q3-frames/f00000.ppm";
-    uint32_t n = frames;
+    name[10] = letter;
     for (int i = 15; i >= 11; i--, n /= 10) name[i] = (char)('0' + n % 10);
     LONG fd = host_syscall(5, (ULONG)(uintptr_t)name, 01 | 0100 | 01000, 0644, 0, 0, 0); /* O_WRONLY|O_CREAT|O_TRUNC */
     if (fd < 0)
@@ -292,6 +298,9 @@ static void dump(const uint8_t *pixels, uint32_t w, uint32_t h, uint32_t pitch, 
         host_syscall(4, (ULONG)fd, (ULONG)(uintptr_t)row, w * 3, 0, 0, 0);
     }
     host_syscall(6, (ULONG)fd, 0, 0, 0, 0, 0);
+}
+static void dump(const uint8_t *pixels, uint32_t w, uint32_t h, uint32_t pitch, uint32_t bpp) {
+    dump_named(pixels, w, h, pitch, bpp, 'f', frames);
 }
 static void frame(const uint8_t *pixels, uint32_t w, uint32_t h, uint32_t pitch, uint32_t bpp, const char *kind) {
     uint32_t t = now_ms(), sum = 2166136261u;
@@ -338,9 +347,103 @@ static const char *after(const char *line, const char *marker) {
     }
     return 0;
 }
+/* fx-q3vise: a wizard-style installer (VISE, InstallShield) run in game mode.
+ * "+set ciuki_installer <idle_ms>" at the end of the command line (cut off
+ * before the program sees it) presses Enter on the focused window whenever
+ * nothing has been presented for idle_ms, idle_ms passed since the last
+ * press and the program has read the previous key: a static wizard page
+ * takes its default button (Next, Install, Close), a progress page keeps
+ * repainting and is left alone. "+set ciuki_installer_max N" bounds the
+ * presses (default 24). Every press and window creation is printed with its
+ * time in ms since the start, and the focused window is written to
+ * q3-frames/eNNNNN.ppm before each press when that directory exists. */
+static uint32_t installer_idle_ms, installer_max = 24, installer_presses, installer_key_ms, installer_present_ms;
+static int installer_up_pending;
+/* "+set ciuki_installer_keys <letters>": the key of each press in order (a
+ * lower-case letter is that key, a dialog mnemonic; anything else and every
+ * press past the end is Enter). */
+static char installer_keys[64];
+static uint8_t installer_scan;
+/* "+set ciuki_installer_untitled 1": press only on windows created without
+ * a title (VISE wizard pages; its progress window and message boxes are
+ * created with one). */
+static int installer_untitled;
+static void key_event(uint32_t type, uint32_t code, uint32_t value, uint32_t ms);
+/* "+set ciuki_installer_stacks 1": a wait or sleep of a second or more and
+ * every 100000th kernel record print the words of the caller's stack that
+ * point into an executable image (the EXE at 0x400000, an installer DLL at
+ * 0x10000000, the builtins above 0x70000000), mapped offline to modules
+ * and exports. This found the VISE engine's FindWindow loop (fx-q3vise). */
+static unsigned installer_waits;
+static int installer_stacks;
+static void installer_stack(const char *what, uint32_t a, uint32_t b) {
+    if (!installer_stacks || installer_waits >= 120)
+        return;
+    installer_waits++;
+    host_print("GAME installer "); host_print(what); host_print(" a="); host_number(a); host_print(" b="); host_number(b);
+    host_print(" ms="); host_number(now_ms() - start_ms); host_print(" stack");
+    const uint32_t *sp = __builtin_frame_address(0);
+    unsigned shown = 0;
+    for (unsigned i = 0; i < 2048 && shown < 40; i++) {
+        uint32_t v = sp[i];
+        if ((v >= 0x400000u && v < 0x500000u) || (v >= 0x10000000u && v < 0x10080000u) || (v >= 0x70000000u && v < 0x7ffe0000u)) {
+            host_print(" "); hex(v); shown++;
+        }
+    }
+    host_print("\n");
+}
+static void installer_tick(void) {
+    if (!installer_idle_ms || !focus_id)
+        return;
+    uint32_t t = now_ms();
+    if (installer_up_pending) {
+        if (t - installer_key_ms < 40)
+            return;
+        key_event(CIUKI_INPUT_KEY, installer_scan, 0, t - start_ms);
+        installer_up_pending = 0;
+        return;
+    }
+    if (in_head != in_tail)
+        return; /* the program has not read the previous key yet */
+    if (installer_untitled)
+        for (unsigned i = 0; i < 64; i++)
+            if (windows[i].id == focus_id && windows[i].generation == focus_generation && windows[i].titled)
+                return; /* a progress window or a message box: never its default button */
+    if (installer_presses >= installer_max || !installer_present_ms ||
+        t - installer_present_ms < installer_idle_ms || t - installer_key_ms < installer_idle_ms)
+        return;
+    installer_presses++; installer_key_ms = t; installer_up_pending = 1;
+    for (unsigned i = 0; i < 64; i++)
+        if (windows[i].id == focus_id && windows[i].generation == focus_generation) {
+            uint32_t k = windows[i].fd - SURFACE_FD;
+            if (k < SURFACES && surfaces[k].used)
+                dump_named(surfaces[k].pixels, surfaces[k].width, surfaces[k].height, surfaces[k].pitch, 32, 'e', installer_presses);
+        }
+    host_print("GAME installer enter n="); host_number(installer_presses); host_print(" window="); host_number(focus_id);
+    host_print(" idle_ms="); host_number(t - installer_present_ms); host_print(" ms="); host_number(t - start_ms); host_print("\n");
+    char c = installer_presses <= sizeof(installer_keys) ? installer_keys[installer_presses - 1] : 0;
+    installer_scan = c >= 'a' && c <= 'z' ? key_scan[(uint8_t)c] : 0x1c;
+    key_event(CIUKI_INPUT_KEY, installer_scan, 1, t - start_ms);
+    key_event(CIUKI_INPUT_TEXT, installer_scan == 0x1c ? '\r' : (uint8_t)c, 0, t - start_ms);
+}
 void h1_game_script(const char *command_line) {
     lease_eio = after(command_line, "+set ciuki_lease_eio 1") != 0;
     close_after_eio = after(command_line, "+set ciuki_close_after_eio 1") != 0;
+    const char *installer = after(command_line, "+set ciuki_installer ");
+    if (installer) {
+        for (; *installer >= '0' && *installer <= '9'; installer++) installer_idle_ms = installer_idle_ms * 10 + (uint32_t)(*installer - '0');
+        const char *max = after(command_line, "+set ciuki_installer_max ");
+        if (max) { installer_max = 0; for (; *max >= '0' && *max <= '9'; max++) installer_max = installer_max * 10 + (uint32_t)(*max - '0'); }
+        installer_untitled = after(command_line, "+set ciuki_installer_untitled 1") != 0;
+        installer_stacks = after(command_line, "+set ciuki_installer_stacks 1") != 0;
+        const char *keys = after(command_line, "+set ciuki_installer_keys ");
+        for (unsigned k = 0; keys && k < sizeof(installer_keys) - 1 && keys[k] > ' '; k++) installer_keys[k] = keys[k];
+        opcode_log = 0; /* the window log stays open for the whole install (see desktop_send) */
+        host_print("GAME installer idle_ms="); host_number(installer_idle_ms); host_print(" max="); host_number(installer_max); host_print("\n");
+        /* The program's command line ends before the first installer option. */
+        char *cut = (char *)after(command_line, " +set ciuki_installer");
+        if (cut) cut[-21] = 0;
+    }
     const char *text = after(command_line, "+set ciuki_keys \"");
     if (!text) return;
     unsigned n = 0;
@@ -426,7 +529,8 @@ static int32_t desktop_send(const struct ciuki_message *m) {
         return 0; /* HELLO and other legacy-form messages need no answer */
     uint32_t token = get32(m->data + 4), id = get32(m->data + 8), generation = get32(m->data + 12);
     requests++;
-    if (opcode_log < 200 && op != DESK_DAMAGE && op != DESK_V3_PRESENT) {
+    if ((opcode_log < 200 || installer_idle_ms) && op != DESK_DAMAGE && op != DESK_V3_PRESENT && op != DESK_V3_PLACE &&
+        op != DESK_INPUT_SETTINGS) {
         opcode_log++;
         host_print("GAME desktop op="); host_number(op); host_print(" window="); host_number(id);
         host_print(" generation="); host_number(generation); host_print(" bytes="); host_number(m->length);
@@ -436,6 +540,7 @@ static int32_t desktop_send(const struct ciuki_message *m) {
             w32_copy(title, m->data + DESK_V3_HEADER + 36, n); title[n] = 0;
             host_print(" title="); host_print(title);
         }
+        if (installer_idle_ms) { host_print(" ms="); host_number(now_ms() - start_ms); }
         host_print("\n");
     }
     int32_t result = 0;
@@ -443,17 +548,34 @@ static int32_t desktop_send(const struct ciuki_message *m) {
         for (unsigned i = 0; i < 64; i++)
             if (!windows[i].id || (windows[i].id == id && windows[i].generation != generation)) {
                 windows[i].id = id; windows[i].generation = generation; windows[i].fd = (uint32_t)m->fds[0];
+                windows[i].titled = m->length > DESK_V3_HEADER + 36;
                 break;
             }
+    }
+    /* fx-q3vise: ShellExecute(Ex) of a folder asks the desktop for Files there. */
+    if (op == DESK_V3_LAUNCH && m->length >= DESK_V3_HEADER + 8) {
+        uint32_t t = get32(m->data + DESK_V3_HEADER), n = t < 64 ? get32(m->data + DESK_V3_HEADER + 4 + t) : 0;
+        char text[256];
+        host_print("GAME launch title=");
+        if (t < 64 && DESK_V3_HEADER + 8 + t + n == m->length && n < sizeof(text)) {
+            w32_copy(text, m->data + DESK_V3_HEADER + 4, t); text[t] = 0; host_print(text);
+            w32_copy(text, m->data + DESK_V3_HEADER + 8 + t, n); text[n] = 0; host_print(" argument="); host_print(text);
+        } else
+            host_print("? malformed");
+        host_print(" ms="); host_number(now_ms() - start_ms); host_print("\n");
+        launches++;
     }
     if (op == DESK_V3_RESIZE && m->fd_count == 1)
         for (unsigned i = 0; i < 64; i++)
             if (windows[i].id == id && windows[i].generation == generation)
                 windows[i].fd = (uint32_t)m->fds[0];
-    if (op == DESK_CLOSE)
+    if (op == DESK_CLOSE) {
         for (unsigned i = 0; i < 64; i++)
             if (windows[i].id == id && windows[i].generation == generation)
                 windows[i].id = 0;
+        if (installer_idle_ms && focus_id == id && focus_generation == generation)
+            focus_id = focus_generation = 0; /* the next window created takes the focus */
+    }
     if (op == DESK_V3_ACTIVATE && m->length >= DESK_V3_HEADER + 8 && get32(m->data + 16))
         activate(id, generation);
     if (op == DESK_V3_LEASE && m->length >= DESK_V3_HEADER + 16) {
@@ -469,6 +591,7 @@ static int32_t desktop_send(const struct ciuki_message *m) {
     }
     if (op == DESK_V3_PRESENT || op == DESK_DAMAGE) {
         presents++;
+        installer_present_ms = now_ms();
         for (unsigned i = 0; i < 64 && op == DESK_V3_PRESENT; i++)
             if (windows[i].id == id && windows[i].generation == generation) {
                 uint32_t k = windows[i].fd - SURFACE_FD;
@@ -589,6 +712,9 @@ int h1_game_kernel(void *record, uint32_t size, int32_t *status) {
     if (!enabled || size < sizeof(*h))
         return 0;
     trace(h->operation << 16 | (size >= 20 ? ((const uint32_t *)record)[4] & 0xffff : 0));
+    static uint32_t sampled;
+    if (installer_stacks && !(++sampled % 100000u))
+        installer_stack("record", h->operation, size >= 20 ? ((const uint32_t *)record)[4] : 0);
     if (h->operation == W32_SERVICE && size == sizeof(struct ciuki_w32_service_args)) {
         struct ciuki_w32_service_args *a = record;
         if (a->action != W32_SVC_CONNECT || a->service != W32_SERVICE_DESKTOP)
@@ -602,8 +728,10 @@ int h1_game_kernel(void *record, uint32_t size, int32_t *status) {
     }
     if (h->operation == W32_WAIT && size == sizeof(struct ciuki_w32_wait_args)) {
         struct ciuki_w32_wait_args *a = record;
-        if (a->count)
+        if (a->count) {
+            if (a->timeout >= 1000) installer_stack("wait-handles", a->timeout, a->count);
             return 0; /* object handles: the fixture service */
+        }
         a->error = 0;
         if (queue_count || quit_pending || (marked & a->wake_mask)) { a->result = 0; *status = 0; return 1; }
         /* A fatal renderer error in id's Win32 implementation runs the
@@ -614,6 +742,8 @@ int h1_game_kernel(void *record, uint32_t size, int32_t *status) {
             close_sent=1;
             host_print("GAME close after failed lease\n");
         }
+        if (a->timeout >= 1000) installer_stack("wait", a->timeout, a->wake_mask);
+        installer_tick();   /* a key goes to the desktop channel, read after this wait */
         sleep_ms(a->timeout > 10 ? 10 : a->timeout);
         a->result = W32_WAIT_TIMEOUT;
         *status = 0;
@@ -644,7 +774,7 @@ int h1_game_gate(uint32_t call, uint32_t a, uint32_t b, uint32_t c, int32_t *out
         return 0;
     trace(call);
     switch (call) {
-    case CIUKI_SYS_SLEEP_MS: sleep_ms(a); *out = 0; return 1;
+    case CIUKI_SYS_SLEEP_MS: if (a >= 100) installer_stack("sleep", a, 0); sleep_ms(a); *out = 0; return 1;
     case CIUKI_SYS_CLOCK_GETTIME: {
         struct ciuki_timespec *t = (void *)(uintptr_t)b;
         struct { uint32_t sec, nsec; } now = {0, 0};
@@ -714,6 +844,7 @@ int h1_game_gate(uint32_t call, uint32_t a, uint32_t b, uint32_t c, int32_t *out
         return 1;
     case CIUKI_SYS_CHANNEL_RECV:
         if (a != DESKTOP_FD) return 0;
+        if (in_head == in_tail) installer_tick();
         if (in_head == in_tail) { *out = -11; return 1; }
         *(struct ciuki_message *)(uintptr_t)b = inbox[in_head++ % INBOX];
         *out = 1;
@@ -737,6 +868,7 @@ void h1_game_report(void) {
     host_print(" first_to_last_ms="); host_number(frames ? last_ms - first_ms : 0);
     host_print(" last_checksum="); hex(checksum);
     host_print(" lease="); host_number(lease_w); host_print("x"); host_number(lease_h); host_print("x"); host_number(lease_bpp);
+    host_print(" launches="); host_number(launches);
     host_print("\n");
     (void)frame_sum;
     gl_report();

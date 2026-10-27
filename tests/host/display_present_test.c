@@ -2,6 +2,7 @@
  * sleeping/pinning/copy boundary. No firmware or framebuffer emulation claims.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <assert.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -69,7 +70,12 @@ void kmutex_lock(struct kmutex *m){
     assert(!pthread_mutex_lock(&host_mutex));assert(!m->owner);m->owner=(void *)1;
 }
 void kmutex_unlock(struct kmutex *m){assert(m->owner);m->owner=0;assert(!pthread_mutex_unlock(&host_mutex));}
-void klog(const char *fmt,...){(void)fmt;}
+/* fx-q3vise: the first frame of each grant is recorded once. */
+static unsigned first_frames;static char first_frame_line[160];
+void klog(const char *fmt,...){
+    if(!strstr(fmt,"present_lease=first-frame"))return;
+    va_list ap;va_start(ap,fmt);vsnprintf(first_frame_line,sizeof(first_frame_line),fmt,ap);va_end(ap);first_frames++;
+}
 uint32_t pmm_alloc(void){if(allocation_fail)return 0;assert(!allocations);allocations++;return 4096;}
 void pmm_free(uint32_t p){assert(p==4096&&allocations==1);allocations--;}
 int ua_pin(struct uaddr *u,struct ua_pin *pin,uint32_t base,uint32_t n,bool write){
@@ -142,7 +148,10 @@ static void native_formats(void){
         memcpy(user+65000,&ramp,sizeof(ramp));
         struct ciuki_w32_display_args q=holder_args(&a,W32_DISPLAY_GAMMA);q.address=65000;
         w32_display_call(&gt,&q);assert(!q.error);
+        unsigned recorded=first_frames;
         q=holder_args(&a,W32_DISPLAY_FRAME);w32_display_call(&gt,&q);assert(!q.error);
+        assert(first_frames==recorded+1 && strstr(first_frame_line," path=copy"));
+        q=holder_args(&a,W32_DISPLAY_FRAME);w32_display_call(&gt,&q);assert(!q.error && first_frames==recorded+1);
         cvp_format f={.width=640,.height=480,.pitch=2560,.bytes=4,.red_size=8,.red_pos=16,.green_size=8,.green_pos=8,.blue_size=8};
         assert(!cvp_surface_blit(&a.surface,user,palette,&ramp,&f,n,NULL,expected,sizeof(scanout)));
         assert(!memcmp(scanout,expected,sizeof(scanout)));
@@ -184,7 +193,7 @@ static void render3d_frames(void)
         if (schedule==3) on_yield=die_now;
         if (schedule==4) r.pitch++;
         int e=display_present_render3d(0,3,&r,pixels,sizeof(pixels));
-        if (!schedule) assert(!e && writes>before && !awaiting_first_frame);
+        if (!schedule) assert(!e && writes>before && !awaiting_first_frame && strstr(first_frame_line," path=render3d-copy"));
         else if (schedule==4) assert(e==-EOPNOTSUPP && writes==before);
         else assert(e==-EACCES);
         if (active) assert(display_present_revoke_kernel()==1);
