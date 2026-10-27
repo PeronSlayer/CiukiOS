@@ -466,13 +466,27 @@ int as_replace_pages(struct aspace *as, uint32_t va, const uint32_t *frames,
     for (unsigned i = 0; i < count; i++)
         if (!(pt[i] & PTE_P) || (!as->memory && (pt[i]&PTE_BORROWED)) ||
             (frames && (frames[i] & (PAGE_SIZE - 1)))) return -EFAULT;
-    uint32_t d = 0, a = 0, changed = 0;
+    uint32_t d = 0, a = 0, stale = 0;
     for (unsigned i = 0; i < count; i++) {
         uint32_t old = pt[i];
+        uint32_t next = frames ? frames[i] | (flags & (PTE_U | PTE_W)) | PTE_P : old & ~0x40u;
+        if (old != next) {
+            /* fx-doswin3: an entry read with A (or D) set is invalidated
+             * whatever happens next; D implies A for a translation the
+             * processor set it through. One read with both clear may still
+             * meet a page walk (speculative ones included) before the
+             * store, so that store is one locked exchange and its result
+             * decides (Intel SDM Vol. 3A rev. 090, 11.1.2.1 "Automatic
+             * Locking": XCHG with a memory operand). A later walk loads
+             * the new entry. */
+            if (old & 0x60u) { pt[i] = next; stale |= 1u << i; }
+            else {
+                old = __atomic_exchange_n(&pt[i], next, __ATOMIC_SEQ_CST);
+                if (old & 0x60u) stale |= 1u << i;
+            }
+        }
         if (old & 0x40u) d |= 1u << i;
         if (old & 0x20u) a |= 1u << i;
-        uint32_t next = frames ? frames[i] | (flags & (PTE_U | PTE_W)) | PTE_P : old & ~0x40u;
-        if (old != next) { pt[i] = next; changed |= 1u << i; }
     }
     /* fx-27: invalidate exactly the changed entries (at most 32, below
      * Linux's 33-page tlb_single_page_flush_ceiling). The kernel's own
@@ -480,9 +494,33 @@ int as_replace_pages(struct aspace *as, uint32_t va, const uint32_t *frames,
      * discard every kernel and guest translation the rest of the exit and
      * the guest's next instructions need (Intel SDM Vol. 3A 4.10.4.1).
      * INVLPG of an entry whose D was cleared makes the CPU set D again on
-     * the next native store, so the next collection still sees it. */
-    if (changed && read_cr3() == as->pd_phys)
-        for (unsigned i = 0; i < count; i++) if (changed & (1u << i)) invlpg(va + i * PAGE_SIZE);
+     * the next native store, so the next collection still sees it.
+     * fx-doswin3: only a changed entry whose replaced value had A (or D) set.
+     * "The processor does not cache a translation for a page number unless
+     * the accessed flag is 1 in each of the paging-structure entries used
+     * during translation" (Intel SDM Vol. 3A rev. 090, 5.10.2.3 "Details of
+     * TLB Use"; this includes speculative and prefetch translations), and
+     * every path that clears A in a present entry invalidates it while its
+     * space is current (this function, as_sample_page, dosvm_pool
+     * pte_sample; a CR3 load flushes the others: no CR4.PGE), so an entry
+     * replaced with A clear has no TLB entry to invalidate; SDM 5.10.4.3
+     * "Optional Invalidation": changing the accessed flag from 0 to 1 needs
+     * no invalidation (assuming one was performed when it last changed from
+     * 1 to 0), "because no TLB entry or paging-structure cache entry is
+     * created with information from a paging-structure entry in which the
+     * accessed flag is 0". Preconditions, revisit if any changes: one CPU
+     * (no application processor is started, so no other TLB), CR4.PGE and
+     * CR4.PCIDE clear (entry.asm clears PGE; nothing sets either), and the
+     * A 1->0 writers named above invalidate while their space is current.
+     * FreeBSD's i386 pmap_enter applies the same rule on every x86 vendor
+     * (sys/i386/i386/pmap.c: invalidate only when the old PTE had PG_A),
+     * the basis for the baseline's AMD desktops. INVLPG is a serializing instruction
+     * (SDM Vol. 3A, "Serializing Instructions"). A Mode Y plane switch
+     * touches about four of the window's sixteen pages per column (one
+     * page holds 51 rows of a plane), so most of each switch's sixteen
+     * INVLPGs were redundant. */
+    if (stale && read_cr3() == as->pd_phys)
+        for (unsigned i = 0; i < count; i++) if (stale & (1u << i)) invlpg(va + i * PAGE_SIZE);
     if (dirty) *dirty = d;
     if (accessed) *accessed = a;
     return 0;

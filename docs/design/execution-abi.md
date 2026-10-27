@@ -2038,6 +2038,19 @@ provider. B=`CIUKI_POWER_STATUS` (4), C=record, D=756 copies the cached
 `ciuki_power_status` record without firmware calls; `provider` names ACPI (1),
 APM (2) or none (0). Details: [`acpi-events-power.md`](acpi-events-power.md).
 
+**Amendment (fx-acpioff, 2026-10-26).** A third soft-off path exists behind
+the same call: the ACPI S5 register fallback (`core/power_acpi_s5.c`,
+[`acpi-events-power.md`](acpi-events-power.md) "ACPI S5 register
+fallback"). OFF and FORCE_OFF consult it only when no active provider is
+qualified for Off, or after the active provider's Off returned; it writes
+SLP_TYPx|SLP_EN from a bounded read-only parse of the FADT and the `\_S5`
+package (DSDT, SSDTs, or the inventory's evaluated value) after the same
+latch, with the SCI_EN handshake when needed and no AML. `CIUKI_POWER_CAN_OFF`
+is set when either the provider or the fallback is qualified. `ENOTSUP`
+from OFF after STOPPED now means "no soft-off method on this computer" and
+the desktop shows the safe-to-turn-off screen without an error code;
+`EIO` (a method left the machine on) still names its error.
+
 **Amendment (f9 Setup authority, staging merge 2026-10-23).** In Setup mode
 (`setup=1`, `core/setup_mode.c`) the process holding the supervisor's
 non-inherited Setup capability may also call 73, besides the live desktop;

@@ -49,7 +49,7 @@ def build_fixture(out, gl=False):
         import importlib.util
         spec=importlib.util.spec_from_file_location('q3gl',ROOT/'sdk/libgl/build.py')
         module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
-        gl_library=module.host(sanitize=True)
+        gl_library=module.host_tinygl(sanitize=True)
         engine += sorted((ROOT/'sdk/win32/opengl32').glob('*.c'))
         engine += [ROOT/'sdk/libgl/software/renderer.c',HERE/'gl_host.c']
     defined=set()

@@ -59,6 +59,24 @@ int main(void)
     g.vertices[0].x=g.vertices[2].x=0;
     tex.min=GL_NEAREST;tex.mag=GL_NEAREST;
     uint32_t d24=0;g.state.depth24=&d24;assert(gl_hw_encode(&caps,&g,1,2,0,&q));
+    caps.depth_formats=CIUKI_R3D_D24S8; caps.features=R3D_ALL_FEATURES;
+    g.state.unit[0].enabled=g.state.unit[1].enabled=0;
+    g.clear_mask=GL_DEPTH_BUFFER_BIT|GL_STENCIL_BUFFER_BIT; g.clear_depth=0x123457; g.clear_stencil=0xa5;
+    uint8_t stencil=0; g.state.stencil=&stencil; g.state.stencil_test=1;
+    g.state.stencil_func=GL_EQUAL; g.state.stencil_ref=17; g.state.stencil_mask=0x5a; g.state.stencil_write_mask=0xa5;
+    g.state.stencil_fail=GL_KEEP; g.state.stencil_zfail=GL_INCR; g.state.stencil_zpass=GL_REPLACE;
+    for (unsigned i=0;i<3;i++) g.vertices[i].z=0x123457;
+    assert(!gl_hw_encode(&caps,&g,1,2,0,&q));
+    assert(q.vertices[0].z==0x123457 && q.clear_depth==0x123457 && q.stencil.clear==0xa5 &&
+      q.stencil.reference==17 && q.stencil.function==R3D_EQUAL && q.stencil.read_mask==0x5a &&
+      q.stencil.write_mask==0xa5 && q.stencil.zfail==CIUKI_R3D_STENCIL_INCR &&
+      q.stencil.zpass==CIUKI_R3D_STENCIL_REPLACE && (q.flags&R3D_STENCIL_TEST));
+    caps.features&=~R3D_STENCIL_TEST; assert(gl_hw_encode(&caps,&g,1,2,0,&q)); caps.features=R3D_ALL_FEATURES;
+    g.state.stencil_zpass=0xdead; assert(gl_hw_encode(&caps,&g,1,2,0,&q)); g.state.stencil_zpass=GL_KEEP;
+    g.state.stencil_test=0; g.state.depth_test=0; g.clear_mask=0;
+    assert(!gl_hw_encode(&caps,&g,1,2,0,&q) && q.depth==2 && q.state.depth_func==R3D_ALWAYS);
+    g.vertices[0].z=16777216; assert(gl_hw_encode(&caps,&g,1,2,0,&q));
+    puts("PASS D24/S8 encoder: exact 24-bit values, stencil state/masks, unsupported operations/caps, attachment typing without depth test");
     puts("PASS capability-driven encoder: two stages, depth/alpha/blend masks, filter/combiner mismatch, sampling boundary, D24 and offset refusal");
     return 0;
 }

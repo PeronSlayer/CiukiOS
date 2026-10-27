@@ -1273,6 +1273,37 @@ static bool offscreen_idle(int handle, gen_t generation)
     (void)handle; (void)generation;
     return !(engine.submitted && !engine.cpu_safe);
 }
+/* Revocable cache, not permanent 2D storage. The caller owns the presenter
+ * and idle drawing domain; existing batch snapshots are rechecked there. */
+int savage2d_cache_transfer(void *ctx,bool take)
+{
+    struct savage2d *s=ctx;
+    if (s!=&engine || !s->active || s->quarantined || !s->cpu_safe || s->event_pending) return -EIO;
+    if (take) {
+        if (offscreen_claim>=0) {
+            int e=registry_quiesce(offscreen_claim,offscreen_generation,offscreen_idle);
+            if (!e) e=registry_release(offscreen_claim,offscreen_generation);
+            if (e) { registry_quarantine(offscreen_claim,offscreen_generation); return e; }
+            offscreen_claim=-1;
+        }
+        s->rows=s->height; s->offscreen_ok=false;
+        return 0;
+    }
+    if (offscreen_claim>=0 || offscreen_end_row<=offscreen_first_row) return 0;
+    const struct fb_device *fb=s->fb;
+    uint32_t first=fb->phys+offscreen_first_row*fb->pitch,end=fb->phys+offscreen_end_row*fb->pitch;
+    int claim=registry_claim(RES_MMIO,first,end,"savage-offscreen",false);
+    if (claim<0) return claim;
+    gen_t generation=registry_get(claim)->generation;
+    int e=registry_activate(claim,generation);
+    if (e) { registry_quarantine(claim,generation); return e; }
+    offscreen_claim=claim; offscreen_generation=generation;
+    s->offscreen_first=offscreen_first_row; s->rows=offscreen_end_row;
+    /* Contents were overwritten by 3D. First use proves a new cache. */
+    s->offscreen_ok=false;
+    if (s->write_state>0) s->write_state=0; /* never retry a failed hardware gate */
+    return 0;
+}
 static bool port_idle(int handle, gen_t generation)
 {
     (void)handle; (void)generation;

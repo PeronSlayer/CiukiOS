@@ -273,7 +273,8 @@ static int scenario_hold(const struct desktop *d, uint64_t now)
 {
     for (int i=0; i<DESK_CLIENTS; i++) {
         const struct desk_client *c=&d->clients[i];
-        if (c->channel>=0 && c->awaiting_frame && now-c->launched_ns<GATE_HOLD_MAX_NS) return 1;
+        /* Remote startup feedback is visual only; it never gates input. */
+        if (c->channel>=0 && c->awaiting_frame && !c->launch_feedback_remote && now-c->launched_ns<GATE_HOLD_MAX_NS) return 1;
     }
     return 0;
 }
@@ -733,7 +734,7 @@ static unsigned launch_service(struct desktop *d)
         int exit_status=0, gone=launch_exited(pid,&exit_status);
         if (live) {
             c->spawn_pending=0; c->pid=pid;
-            c->launched_ns=monotonic(); /* AppStarting runs from the process's creation */
+            /* Keep the request time: a slow spawn must also time out. */
         }
         if (!gone) d->children[job->child].pid=pid;
         desk_launch_completed(d,&job->request,job->program.name,(int)pid);
@@ -1167,6 +1168,7 @@ static int gfx_benchmark(struct desktop *d, unsigned index, uint64_t values[3])
     /* The composite remains authoritative. This separate surface is only the
      * software baseline; restore scanout on success and partial failure alike. */
     struct gfx_display_target ctx={d,-1};
+    if (desk_direct_settle) desk_direct_settle(d); /* fx-doswin3: the RAM frame is restored below */
     struct gfx_bench_target t={.ctx=&ctx,.width=d->width,.height=d->height,
         .bpp=d->lfb_bytes_per_pixel*8,.generation=d->accel_generation,
         .now=gfx_clock,.info=gfx_info,.accel=gfx_accel,.upload=gfx_upload};
@@ -1206,11 +1208,16 @@ static int accel_record_line(const struct desktop *d, char *line, size_t size, u
     /* f2-96: who draws the pointer (hw, sw, or hiding: a hardware cursor
      * still to be hidden), busy retries and software fallbacks since boot. */
     const char *pointer=d->hw_cursor ? "hw" : d->hw_cursor_shown ? "hiding" : "sw";
-    int n=snprintf(line,size,"[desktop] accel fills=%llu copies=%llu writes=%llu fallback=%llu cache_rows=%llu frames=%llu lfb_bytes=%llu caps=%u vram_rows=%u pointer=%s pointer_retries=%u pointer_fallbacks=%u\n",
+    /* fx-doswin3: the window's composition and present time and request
+     * count, so a trial prices each stage of a DOS window frame; direct_px:
+     * pixels presented straight from an unobscured DOS window's surface. */
+    int n=snprintf(line,size,"[desktop] accel fills=%llu copies=%llu writes=%llu fallback=%llu cache_rows=%llu frames=%llu lfb_bytes=%llu caps=%u vram_rows=%u pointer=%s pointer_retries=%u pointer_fallbacks=%u composite_us=%llu present_us=%llu presents=%llu scene_px=%llu direct_px=%llu\n",
         (unsigned long long)s->accel_fills,(unsigned long long)s->accel_copies,(unsigned long long)s->accel_writes,
         (unsigned long long)s->accel_fallback,(unsigned long long)s->cache_rows,(unsigned long long)s->frames,
         (unsigned long long)s->lfb_bytes,d->accel_caps,d->vram_end>d->vram_first ? d->vram_end-d->vram_first : 0u,
-        pointer,d->hw_cursor_retries,d->hw_cursor_fallbacks);
+        pointer,d->hw_cursor_retries,d->hw_cursor_fallbacks,(unsigned long long)(s->composite_ns/1000),
+        (unsigned long long)(s->present_ns/1000),(unsigned long long)s->presents,(unsigned long long)s->scene_px,
+        (unsigned long long)s->direct_px);
     return n>0 && (size_t)n<size ? n : 0;
 }
 static void accel_record(struct desktop *d, uint64_t now)
@@ -2801,16 +2808,17 @@ static int link_launch_async(struct desktop *d,const struct desk_launch_record *
     if (!desk_launch_valid(record)) { pthread_mutex_unlock(&w->mutex); return -EINVAL; }
     if (source) { snprintf(w->source,sizeof(w->source),"%s",source); w->launch_requested=1; }
     else { w->requested_record=*record; w->launch_requested=3; }
+    d->launch_link_until=d->now_ns+5000000000ull;
+    desk_cursor_update(d);
     pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->mutex); return 0;
 }
 static int run_submit(struct desktop *d,const char *command)
 {
-    (void)d;
     if (!command || strlen(command)>=DESK_RUN_MAX) return -E2BIG;
     struct links_worker *w=links_worker; if (!w) return -ENOSYS;
     pthread_mutex_lock(&w->mutex); int result=0;
     if (w->run_requested || w->run_busy || w->run_done) result=-EBUSY;
-    else { strcpy(w->run_command,command); w->run_requested=1; pthread_cond_signal(&w->changed); }
+    else { d->launch_run_until=d->now_ns+5000000000ull; desk_cursor_update(d); strcpy(w->run_command,command); w->run_requested=1; pthread_cond_signal(&w->changed); }
     pthread_mutex_unlock(&w->mutex); return result;
 }
 static int shell_open_path(struct desktop *d,const char *path)
@@ -2822,7 +2830,7 @@ static int shell_open_path(struct desktop *d,const char *path)
     if (!w || pthread_mutex_trylock(&w->mutex)) return -EBUSY;
     int e=0;
     if (w->launch_requested || w->launch_busy || w->completed) e=-EBUSY;
-    else { strcpy(w->source,path); w->launch_requested=4; pthread_cond_signal(&w->changed); }
+    else { d->launch_link_until=d->now_ns+5000000000ull; desk_cursor_update(d); strcpy(w->source,path); w->launch_requested=4; pthread_cond_signal(&w->changed); }
     pthread_mutex_unlock(&w->mutex); return e;
 }
 extern uint32_t desk_w32_exchange(const void *,uint32_t,void *,uint32_t,uint32_t *) __attribute__((weak));
@@ -2841,7 +2849,7 @@ static int install_program(struct desktop *d,const char *path)
     int e=0;
     if(w->launch_requested || w->launch_busy || w->completed)e=-EBUSY;
     else if(strlen(path)>=sizeof(w->source))e=-ENAMETOOLONG;
-    else {strcpy(w->source,path);w->launch_requested=2;pthread_cond_signal(&w->changed);}
+    else {d->launch_link_until=d->now_ns+5000000000ull;desk_cursor_update(d);strcpy(w->source,path);w->launch_requested=2;pthread_cond_signal(&w->changed);}
     pthread_mutex_unlock(&w->mutex);return e;
 }
 static void links_start(struct desktop *d)
@@ -2915,6 +2923,13 @@ static void links_service(struct desktop *d)
         if(edit_result<0)desk_shell_message(d,"Shortcut Properties","The shortcut could not be saved. Check that the file is still available and writable.",1);
     }
     if (save_done) desk_game_data_result(d,save_game,save_op,save_result,&save_command);
+    /* The worker may publish a PE after this turn's Win32 poll. Transfer
+     * feedback before removing preparation, without a one-frame gap. */
+    if (((completed && result>=0) || (run_done && run_result>=0)) && d->launch_presented)
+        d->launch_presented(d,0);
+    if (completed) d->launch_link_until=0;
+    if (run_done) d->launch_run_until=0;
+    if (completed || run_done) desk_cursor_update(d);
     if (completed && result<0) desk_shell_message(d,"Programs","This shortcut is unavailable or its target could not be started.",1);
     if (run_done) desk_run_result(d,command,run_result<0 ? run_result : 0);
     if (history_error) desk_shell_notify_error(d,"Run history could not be saved",-history_error);

@@ -137,8 +137,10 @@ static int virtual_port(struct dosvm *v, uint16_t port, unsigned width, bool wri
     if (write) dosvm_ne2000_write(&n->ne, port, width, *value);
     else {
         *value = dosvm_ne2000_read(&n->ne, port, width);
-        if (port == DOSVM_NE2000_LAST && width == 1)
+        if (port == DOSVM_NE2000_LAST && width == 1) {
             v->monitor.pic[0].irr &= ~(1u << DOSVM_NE2000_IRQ);
+            v->irq.owed &= ~(1u << DOSVM_NE2000_IRQ);
+        }
     }
     return 0;
 }
@@ -244,6 +246,7 @@ int dosvm_network_detach(struct dosvm *v)
     bool pending = !n->port->bridge.count && n->port->bridge.promiscuous;
     net_bridge_port_release(n->port);
     v->monitor.pic[0].irr &= ~(1u << DOSVM_NE2000_IRQ);
+    v->irq.owed &= ~(1u << DOSVM_NE2000_IRQ);
     if (pending) return -16; /* Retain owner until receive-mode cleanup succeeds. */
     memset(n, 0, sizeof(*n)); v->network_attached = false; return 0;
 }

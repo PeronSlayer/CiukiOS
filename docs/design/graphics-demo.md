@@ -1,5 +1,45 @@
 # Graphics Demo (f2-52)
 
+## f7-14 amendment (2026-10-26): hardware GL consumer
+
+Directive: [f7-14](../directives/f7-14-native-gl-hardware.md); library
+decisions and research in [opengl-software.md](opengl-software.md). The cube
+and tiles now run on the shared GL engine of native `libgl`; on a device with
+a qualified render3d provider they render on the GPU, otherwise in software.
+
+- **Backend** (OpenGL pages): a button cycles `Backend: Automatic`,
+  `Hardware` and `Software` (`ciuki_gl_set_backend`). Hardware that is not
+  available keeps rendering in software and the status line says
+  "hardware unavailable"; a permanent fallback says "hardware failed".
+  Command line: `--backend auto|hardware|software`.
+- **Native resolution** (check box, on by default): the scene renders at the
+  view's size, or in full screen at the display's size; cleared, it renders
+  320 x 240 and scales (contract 7.2: lower resolution is a user option and
+  both sizes are reported).
+- **Full screen**: `DESK_LEASE` asks the desktop for the common present
+  lease of the focused window; the demo then renders into a target of the
+  leased size and presents each frame with `ciuki_gl_present` (a GPU copy on a
+  qualified provider, else the CPU frame path), paced on 60 Hz slots. Esc
+  releases it; Alt+Tab or focus loss revokes it and refocus reactivates it,
+  as for Win32 full-screen windows. While leased, the hidden window repaints
+  only its status and never re-binds GL to the windowed target. Command
+  line: `--fullscreen`; with `--benchmark N --fullscreen` the run measures
+  uncapped leased frames from the first leased frame (`pacing=uncapped`).
+- **Metrics**: FPS counts completed frames: desktop present completions in a
+  window, completed lease copies in full screen (completed-copy FPS, not
+  measured scanout refresh). The status strip shows the active backend, the
+  policy, GPU frames (every draw and clear on the provider), CPU frames,
+  refusals and fallbacks, the render and view sizes and the present mode
+  (`desktop-copy`, `gpu-copy`, `cpu-copy`). The per-second log and the
+  benchmark summary append `backend= policy= gpu_frames= cpu_frames=
+  refusals= fallbacks= present=` (and `pacing=` for the benchmark); a run
+  with `--backend hardware` fails with `status=not_hardware` if any measured
+  frame ran on the CPU.
+- Narrow windows (under 680 pixels) place Native resolution, Full screen and
+  the frame counter on a second control row; the scene moves down 26 pixels.
+  The texture stays the exact approved Ciuki portrait (deterministic XRGB to
+  RGB conversion, bilinear, edge clamp, modulate).
+
 F7-01 amendment (2026-10-15): the scene implementation and default source
 resolution described below are superseded by
 [Software OpenGL](opengl-software.md). The cube and tiles now use the SDK

@@ -30,7 +30,7 @@ static HDC make_kernel_context(HGLRC *rc) {
   assert(bitmap && SelectObject(dc,bitmap));
   PIXELFORMATDESCRIPTOR f={.nSize=40,.nVersion=1,.dwFlags=PFD_DRAW_TO_BITMAP|PFD_SUPPORT_OPENGL|PFD_DOUBLEBUFFER,
     .cColorBits=32,.cDepthBits=16,.cStencilBits=replay_stencil};
-  int pf=ChoosePixelFormat(dc,&f); assert(pf && SetPixelFormat(dc,pf,&f));
+  int pf=replay_stencil ? 7 : ChoosePixelFormat(dc,&f); assert(pf && SetPixelFormat(dc,pf,&f));
   *rc=wglCreateContext(dc); assert(*rc && wglMakeCurrent(dc,*rc));
   /* GDI retains the selected bitmap; teardown restores and deletes it. */
   return dc;
@@ -143,11 +143,90 @@ static void pixel_work_replay(void) {
   assert(DeleteDC(dc) && DeleteObject(bitmap)); replay_stencil=0;
   puts("PASS production D16/S8 with stencil disabled: provider stays closed, clear/draw remain software");
 }
+/* Q3 GLW_ChoosePFD's relevant strict filters and ordered preference.
+ * Its first attempt needs stencil; GLW_InitDriver retries with stencil zero.
+ * The fixture owns this independent implementation; no game source/assets. */
+int gl_quake3_enumerate_format(HDC dc,unsigned stencil) {
+  PIXELFORMATDESCRIPTOR best={0}; int chosen=0;
+  int count=DescribePixelFormat(dc,1,0,0);
+  for (int n=1;n<=count;n++) {
+    PIXELFORMATDESCRIPTOR p; assert(DescribePixelFormat(dc,n,40,&p)==count);
+    if ((p.dwFlags&PFD_GENERIC_FORMAT) || p.iPixelType!=PFD_TYPE_RGBA ||
+        !(p.dwFlags&PFD_SUPPORT_OPENGL) || !(p.dwFlags&PFD_DOUBLEBUFFER) ||
+        p.cDepthBits<15 || (stencil && p.cStencilBits<4)) continue;
+    if (!chosen || (best.cColorBits!=32 && (p.cColorBits==32 || p.cColorBits>best.cColorBits)) ||
+        (best.cDepthBits!=24 && (p.cDepthBits==24 || p.cDepthBits>best.cDepthBits)) ||
+        (best.cStencilBits!=stencil && (p.cStencilBits==stencil || (stencil && p.cStencilBits>best.cStencilBits)))) {
+      chosen=n; best=p;
+    }
+  }
+  return chosen;
+}
+static void default_formats(int qualified) {
+  unsigned pixels[32*32]={0}; struct w32_dib dib=test_dib(pixels,32,32,32,0,1);
+  HDC dc=w32_gdi_surface_dc(&dib,(POINT){0},0,0); assert(dc);
+  unsigned writes=gl_kernel_writes();
+  PIXELFORMATDESCRIPTOR request={.nSize=40,.nVersion=1,
+    .dwFlags=PFD_DOUBLEBUFFER|PFD_SUPPORT_OPENGL|PFD_DRAW_TO_WINDOW,.cColorBits=32,.cDepthBits=24,.cStencilBits=8};
+  int expected=qualified==2 ? 9 : qualified ? 1 : 9;
+  assert(ChoosePixelFormat(dc,&request)==expected);
+  request.dwFlags|=PFD_GENERIC_FORMAT|0x1000u; /* ignored input description bits */
+  assert(ChoosePixelFormat(dc,&request)==expected);
+  request.dwFlags&=~(PFD_GENERIC_FORMAT|0x1000u);
+  request.cColorBits=16;
+  assert(ChoosePixelFormat(dc,&request)==(qualified==2 ? 2 : qualified ? 1 : 10));
+  request.cColorBits=32; request.dwFlags&=~PFD_DOUBLEBUFFER;
+  assert(ChoosePixelFormat(dc,&request)==3);
+  request.dwFlags|=PFD_SUPPORT_GDI; assert(!ChoosePixelFormat(dc,&request)); request.dwFlags&=~PFD_SUPPORT_GDI;
+  request.dwFlags|=PFD_STEREO; assert(!ChoosePixelFormat(dc,&request)); request.dwFlags|=0x80000000u;
+  assert(ChoosePixelFormat(dc,&request)==3);
+  for (int n=1;n<=10;n++) {
+    PIXELFORMATDESCRIPTOR p; assert(DescribePixelFormat(dc,n,40,&p)==10);
+    int generic=qualified && !(n==1 || n==3 || (qualified==2 && (n==2 || n==4 || n==5 || n==9)));
+    assert(!!(p.dwFlags&PFD_GENERIC_FORMAT)==generic);
+  }
+  assert(gl_kernel_writes()==writes);
+  assert(DeleteDC(dc));
+  printf("PASS default pixel formats qualification=%d: class before precision, 16/32 colour, explicit ten indices, ignored generic input, buffering/stereo/GDI rules, zero writes\n",qualified);
+}
+static void optional_formats_replay(void) {
+  static unsigned pixels[64*64]; uint32_t z[64*64]; uint8_t stencil[64*64];
+  struct w32_dib dib=test_dib(pixels,64,64,32,0,1);
+  HDC dc=w32_gdi_surface_dc(&dib,(POINT){0},0,0); assert(dc);
+  default_formats(2);
+  assert(gl_quake3_enumerate_format(dc,8)==9);
+  const struct gl_hw_driver *d=w32_gdi_render3d_native(GL_HW_VERSION);
+  struct gl_hw_format f={64,64,24,8,0}; struct gl_hw_caps caps; unsigned id;
+  assert(d->query(0,&f,&caps) && !d->open(0,&f,&id));
+  struct gl_hw_command q={.state={.width=64,.height=64,.color=pixels,.depth24=z,.stencil=stencil,
+    .color_mask=~0u,.depth_write=1,.stencil_write_mask=255},
+    .clear_mask=GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT|GL_STENCIL_BUFFER_BIT,
+    .clear_color=0xff123456,.clear_depth=0x123457,.clear_stencil=0xa5};
+  for (unsigned i=0;i<64*64;i++) { pixels[i]=0; z[i]=17; stencil[i]=9; }
+  assert(!d->load(id,&q.state) && !d->submit(id,&q) && !d->finish(id) && !d->read(id,&q.state));
+  assert(z[0]==0x123457 && stencil[0]==0xa5 && pixels[0]==0xff123456);
+  q.clear_mask=GL_STENCIL_BUFFER_BIT; q.clear_stencil=0x5a; q.state.stencil_write_mask=0x0f;
+  assert(!d->submit(id,&q) && !d->finish(id) && !d->read(id,&q.state));
+  assert(z[0]==0x123457 && stencil[0]==0xaa);
+  q.clear_mask=GL_DEPTH_BUFFER_BIT; q.clear_depth=0xabcdef;
+  assert(!d->submit(id,&q) && !d->finish(id) && !d->read(id,&q.state));
+  assert(z[0]==0xabcdef && stencil[0]==0xaa);
+  d->close(id);
+  uint16_t z16[64*64]={0}; f=(struct gl_hw_format){64,64,16,0,1};
+  assert(d->query(0,&f,&caps) && !d->open(0,&f,&id));
+  q=(struct gl_hw_command){.state={.width=64,.height=64,.color=pixels,.depth=z16,
+    .rgb565=1,.color_mask=~0u,.depth_write=1},.clear_mask=GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT,
+    .clear_color=0xff123456,.clear_depth=65535};
+  assert(!d->load(id,&q.state) && !d->submit(id,&q) && !d->finish(id) && !d->read(id,&q.state));
+  assert(pixels[0]==0xff103452 && z16[0]==65535);
+  d->close(id); assert(DeleteDC(dc));
+  puts("PASS copied provider D24/S8 exact packed load/read, separate masked clears preserve other attachment, RGB565 deterministic conversion");
+}
 void gl_kernel_replay(void) {
   uint32_t golden[4096*5],actual[4096*5];
   gl_hardware_native(1);
-  gl_kernel_setup(0); replay(golden,0); assert(!gl_kernel_writes()); gl_kernel_teardown();
-  gl_kernel_setup(1); replay(actual,1);
+  gl_kernel_setup(0); default_formats(0); replay(golden,0); assert(!gl_kernel_writes()); gl_kernel_teardown();
+  gl_kernel_setup(1); default_formats(1); replay(actual,1);
   unsigned different=0;
   for (unsigned i=0;i<4096*5;i++) for (unsigned c=0;c<4;c++) {
     int d=(int)(actual[i]>>(c*8)&255)-(int)(golden[i]>>(c*8)&255);
@@ -183,6 +262,7 @@ void gl_kernel_replay(void) {
   struct gl_hw_format full_format={640,480,16,0,0};
   assert(d->query(0,&full_format,&caps) && caps.max_pixel_work==4*640*480);
   pixel_work_replay();
+  optional_formats_replay();
   gl_kernel_teardown(); gl_hardware_native(0); replay_width=replay_height=64;
   puts("PASS 640x480 real GL/GDI/copied-wire/fake Savage: full-size boot qualification, lightmap/depth/blend/HUD replay equals software golden within two levels; unqualified zero writes");
 }

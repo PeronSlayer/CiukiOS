@@ -451,6 +451,30 @@ static void test_desktop_channels(void)
     puts("desktop channels: queue cap, drain/EOF, SIGPIPE, atomic receive, attachment lifetime PASS");
 }
 
+/* f7-14: the present lease admits a native client that holds the opposite
+ * open end of one channel with the desktop (channel_connected). */
+static void test_desktop_channel_peers(void)
+{
+    struct process *p, *q;
+    struct proc_thread *t = make_process(proc_supervisor(), &p); desktop_select(t);
+    make_process(proc_supervisor(), &q);
+    int32_t pair[2]; CHECK(!channel_pair(p, pair));
+    CHECK(!channel_connected(p, p) && !channel_connected(p, q) && !channel_connected(0, q));
+    /* Hand one end to q as a launch inheritance would. */
+    struct desktop_description *end = desktop_fd(p, pair[1]);
+    end->object.retain(&end->object);
+    int fd = desktop_fd_install(q, end, 0); CHECK(fd >= 0);
+    CHECK(!desktop_close(p, pair[1]));
+    CHECK(channel_connected(p, q) && channel_connected(q, p) && !channel_connected(q, q));
+    /* A duplicate of the same end in the same process is no peer. */
+    int dup = desktop_dup(p, pair[0], 0, false, 0); CHECK(dup >= 0);
+    CHECK(!channel_connected(p, p) && channel_connected(p, q));
+    CHECK(!desktop_close(p, dup) && !desktop_close(p, pair[0]));
+    CHECK(!channel_connected(p, q) && !channel_connected(q, p)); /* the desktop end is gone */
+    CHECK(!desktop_close(q, fd));
+    stop_collect(q); desktop_clean(p);
+    puts("desktop channel peers: opposite open ends across processes only, closed or same-process ends refused PASS");
+}
 static void test_desktop_scheduler_hints(void)
 {
     struct process *p; struct proc_thread *t=make_process(proc_supervisor(),&p);desktop_select(t);
@@ -1915,7 +1939,7 @@ int main(int argc, char **argv)
         test_captured_handshake(argv[2],argc==4 ? argv[3] : 0);
         CHECK(!pages_used && !g_user_mappings && heap_blocks==1); free(ram); return 0;
     }
-    test_desktop_surfaces(); test_desktop_channels(); test_desktop_scheduler_hints(); test_desktop_channel_rollback(); test_desktop_waits(); test_desktop_grants(); test_desktop_present(); test_setup_bootstrap(); test_pager_boot_fallback(); test_desktop_restart(); test_desktop_capture();
+    test_desktop_surfaces(); test_desktop_channels(); test_desktop_channel_peers(); test_desktop_scheduler_hints(); test_desktop_channel_rollback(); test_desktop_waits(); test_desktop_grants(); test_desktop_present(); test_setup_bootstrap(); test_pager_boot_fallback(); test_desktop_restart(); test_desktop_capture();
     test_native_reports(); test_native_v3_reports(); test_native_input_records(); test_native_app_reports(); test_native_controller(); test_native_diagnostics();
 #ifdef CIUKI_DESKTOP_PAYLOAD_BIN
     test_standin_controller_records();

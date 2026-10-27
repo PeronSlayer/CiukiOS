@@ -754,6 +754,8 @@ static void test_client_boundary(void)
     c = command_for(w.id, w.generation); c.event.type = CIUKI_INPUT_RESYNC;
     CHECK(!dosvm_call(CIUKI_DOSVM_INPUT, &c, sizeof(c)) && press(v, &w, 0x1E) == 0x1E61);
     /* Buttons and motion reach the INT 33h model while focused. */
+    c = command_for(w.id, w.generation); c.event.type = CIUKI_INPUT_MOTION; c.event.value = 5; c.event.value2 = 7;
+    CHECK(!dosvm_call(CIUKI_DOSVM_INPUT, &c, sizeof(c)));
     c = command_for(w.id, w.generation); c.event.type = CIUKI_INPUT_BUTTON; c.event.code = 1; c.event.value = 1;
     CHECK(!dosvm_call(CIUKI_DOSVM_INPUT, &c, sizeof(c)) && (v->mouse.buttons & 1));
     c.event.value = 0; CHECK(!dosvm_call(CIUKI_DOSVM_INPUT, &c, sizeof(c)) && !(v->mouse.buttons & 1));

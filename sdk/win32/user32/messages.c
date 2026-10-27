@@ -423,6 +423,9 @@ BOOL W32API GetMessageA(MSG *out, HWND h, UINT lo, UINT hi) {
     u32_fail(1400);
     return -1;
   }
+  struct ciuki_w32_system_args idle = {.action = W32_S_LAUNCH_IDLE};
+  idle.header = (struct ciuki_w32_header){1, sizeof(idle), W32_SYSTEM, 0};
+  u32_backend.call(&idle, sizeof(idle));
   while (!PeekMessageA(out, h, lo, hi, 1)) {
     DWORD r = MsgWaitForMultipleObjectsEx(0, 0, W32_INFINITE, QS_ALLINPUT,
                                           MWMO_INPUTAVAILABLE);

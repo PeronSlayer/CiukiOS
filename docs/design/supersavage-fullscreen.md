@@ -3,6 +3,28 @@
 This implements the provider anticipated by f3-26. Qualification on the T23
 remains separate from the host register model.
 
+## fx-biosvm review round 1: firmware owns unqualified panels
+
+Lead amendment 1 supersedes native panel admission and the native-only VBE
+full-screen requirement below. The driver reads the active head under its
+exclusive mode claims. CR6B ActiveLCD, dual-head/TV and unknown routing cause
+a clean refusal before blanking, VRAM transfer or PLL programming. Register
+locks and indices are restored and the caller releases all aliases/claims;
+this refusal costs no native strike. Single-CRT native mode sequences retain
+host coverage; they do not qualify the T23 panel.
+
+Both Win32 present leases and DOS full screen then use the BIOS VM. DOS
+uses the existing bounded VBE state-save transaction, 4F02 with LFB enabled,
+4F03 readback and 4F01 information. Only 101h/103h/111h/114h are admitted,
+with exact guest geometry, pitch and pixel format. A temporary alias borrows
+the stopped desktop's same physical aperture and registry generation for the
+existing copy and direct-LFB transports. It is revoked before BIOS state
+restoration and fbdev commit. A firmware failure remains windowed; it never
+retries the unqualified native panel path. Standard VGA modes use BIOS INT10.
+
+Sources, the logged-register replay and APM shutdown coverage are recorded in
+[BIOS service isolation, review round 1](../validation/fx-biosvm.md#review-round-1-apm-soft-off-and-panel-mode-ownership).
+
 ## war2vbe amendment: guest VBE without a native provider (2026-10-25)
 
 The F3-37 rule below ("a synthetic VBE 2.0 interface only when the native

@@ -55,6 +55,25 @@ static void channel_message_free(struct channel_message *m)
     kfree(m);
 }
 
+/* f7-14: both processes hold opposite open ends of one channel. The
+ * desktop's native clients are exactly its channel peers; the present lease
+ * admits them beside the Win32 service links. */
+bool channel_connected(const struct process *a, const struct process *b)
+{
+    if (!a || !b || a == b) return false;
+    for (unsigned i = 0; i < CIUKI_OPEN_MAX; i++) {
+        struct desktop_description *x = desktop_fd(a, (int32_t)i);
+        if (!x || x->kind != DESKTOP_CHANNEL) continue;
+        struct channel *c = x->u.endpoint.channel;
+        if (!c->open[0] || !c->open[1]) continue;
+        for (unsigned j = 0; j < CIUKI_OPEN_MAX; j++) {
+            struct desktop_description *y = desktop_fd(b, (int32_t)j);
+            if (y && y->kind == DESKTOP_CHANNEL && y->u.endpoint.channel == c &&
+                y->u.endpoint.side != x->u.endpoint.side) return true;
+        }
+    }
+    return false;
+}
 void channel_release(struct desktop_description *d)
 {
     struct channel *c = d->u.endpoint.channel;

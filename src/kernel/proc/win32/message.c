@@ -236,7 +236,7 @@ uint32_t w32_message_call(struct proc_thread *t, struct ciuki_w32_message_args *
         if (!p || !p->w32 || p->w32->identity != o || o->signalled || p->state != PROC_LIVE)
             a->error = 6;
         else if (!p->w32->gui || (!p->w32->input_idle && !process_has_queue(p)))
-            a->error = 1471; /* ERROR_INVALID_GUI_PROCESS_HANDLE */
+            a->error = 1471; /* ERROR_NOT_GUI_PROCESS */
         else
             a->result = p->w32->input_idle ? 0 : W32_WAIT_TIMEOUT;
         return 0;

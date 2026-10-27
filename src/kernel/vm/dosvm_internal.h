@@ -48,6 +48,15 @@ _Static_assert(DOSVM_PORTS >= 23, "integrated peripheral port ranges");
 #define DOSVM_VIDEO_BAND 8u
 #define DOSVM_CURSOR_TICKS 250u
 #define DOSVM_BLINK_TICKS 500u
+/* fx-doswin3: a guest that changed its CRTC start address within its flip
+ * hold (twice its last flip gap, at least one refresh, at most this many ms;
+ * dosvm_vga.c flip_hold_ms) is page flipping; its presenter wakes on the
+ * displayed page (flip, display registers, palette), not on every
+ * back-buffer store. 50 ms: Windows 9x's default WindowUpdateTime. */
+#define DOSVM_FLIP_HOLD_MS 50u
+/* fx-doswin3: the longest a woken presenter may be run ahead of its
+ * focused VM (dosvm_task_present) before it has run. */
+#define DOSVM_PRESENT_DISPATCH_MS 20u
 #define DOSVM_HEARTBEAT_TICKS 2000u
 #define DOSVM_HEARTBEAT_LIMIT 60u
 #define DOSVM_PIC_STALL_TICKS 1000u
@@ -106,7 +115,7 @@ struct dosvm_perf_sample {
     uint32_t ms, frames, flips, harvests, pages, trapped, converted, rows, present_rate;
     uint32_t exits[6], irqs[16];
     uint64_t guest_us, monitor_us, present_us, harvest_us, log_us, edges, insn[V86_INSNS];
-    uint32_t cost_count[DOSVM_COST_COUNT], batched, lean_exits, dac_batched, linear_direct;
+    uint32_t cost_count[DOSVM_COST_COUNT], batched, lean_exits, dac_batched, dac_counted, linear_direct;
     uint64_t cost_us[DOSVM_COST_COUNT];
     uint32_t idle_blocks, idle_reasons, idle_count[DOSVM_IDLE_REASONS], busy_permille;
     uint32_t port_remaps, burst_insn, latch_read_windows;
@@ -128,7 +137,7 @@ struct dosvm_perf_raw {
     uint32_t return_armed, return_expired, return_reacquired;
     uint32_t ms, frames, starts, harvests, direct_pages, trapped_bytes, converted_bytes, rows;
     uint32_t port_remaps, burst_insn, latch_read_windows, batched, port_overflow, ticks;
-    uint32_t lean_exits, dac_batched, linear_direct;
+    uint32_t lean_exits, dac_batched, dac_counted, linear_direct;
     uint32_t present_samples, present_waits;
     uint64_t present_wait_cycles, present_wait_max_cycles;
     uint32_t exits[6], irqs[16], cost_count[DOSVM_COST_COUNT];
@@ -175,6 +184,12 @@ struct dosvm {
     uint32_t frames[DOSVM_PAGES];
     struct task *task;
     struct v86 monitor;
+    /* fx-dospic: IRQ completion is independent of an early PIC EOI.
+     * DPMI already owns records; V86 owns the exact reflected IRET frame. */
+    struct {
+        struct { uint64_t tick; uint16_t ss, sp; bool active; } rm[16];
+        uint16_t owed; /* non-PIT requests retain one latched request/line */
+    } irq;
     struct v86_frame frame;  /* working copy of the trapped frame (f3-04) */
     struct dos_file *files; /* published only after f3-50's checked BIND */
     struct dos_file_volume *file_volume;
@@ -198,7 +213,7 @@ struct dosvm {
     struct dosvm_floppy floppy;
     bool window_input;
     int32_t input_x, input_y;
-    bool pointer_known;
+    bool pointer_known, mouse_captured;
     bool fullscreen, fullscreen_hold, fullscreen_parked, fullscreen_pause, fullscreen_model;
     bool fullscreen_suspended;
     bool window_marking;
@@ -225,6 +240,13 @@ struct dosvm {
     /* t23-dosperf: when the waiting presenter's VIDEO event became true
      * (VM context, present_ready), consumed by its WAIT_PRESENT return. */
     uint64_t present_ready_tsc;
+    /* fx-doswin3: tick of that wake while the presenter has not yet run;
+     * the scheduler may run that presenter (present_waiter, the task inside
+     * WAIT_PRESENT) ahead of the focused VM meanwhile (dosvm_task_present,
+     * task.c PRESENT_SLICE), bounded by DOSVM_PRESENT_DISPATCH_MS. */
+    uint64_t present_dispatch_tick;
+    const struct task *present_waiter;
+    bool present_dispatch;
     struct {
         bool sleeping, seen;
         uint64_t last_tick, poll_tick;
@@ -318,6 +340,10 @@ struct dosvm {
     uint64_t video_tick;
     uint64_t video_due_us, video_period_us;
     uint64_t video_flip_us;
+    /* fx-doswin3: host tick of the last write that changed the CRTC start
+     * address (a page flip), merged or not into video_flip_us. */
+    uint64_t video_flip_tick;
+    unsigned video_flip_hold_ms; /* that flip's hold (dosvm_vga.c flip_hold_ms) */
     unsigned video_flip_run, video_present_rate;
     bool video_flip_seen;
     uint32_t video_display, video_changes, video_phase, owner_pid;
@@ -387,6 +413,7 @@ struct dosvm {
         /* fx-27: exits retired on the lean port path, OUTs batched by the DAC
          * burst, chain-4 pages presented without a plane deinterleave. */
         uint32_t lean_exits, last_lean_exits, dac_batched, last_dac_batched;
+        uint32_t dac_counted, last_dac_counted;
         uint32_t linear_direct, last_linear_direct;
         /* t23-dosperf: WAIT_PRESENT returns with a VIDEO event and the
          * cycles from the event becoming true to that return (the
@@ -537,6 +564,7 @@ void dosvm_launch_video(struct dosvm *);
 uint32_t dosvm_task_quantum(const struct task *, uint32_t normal);
 const struct task *dosvm_task_focus(void);
 const struct task *dosvm_task_irq(void);
+const struct task *dosvm_task_present(void);
 int dosvm_io_burst(struct dosvm *, struct v86_frame *);
 /* fx-27: dosvm_io_burst, then the DAC palette burst after a DAC write. */
 int dosvm_port_bursts(struct dosvm *, struct v86_frame *);
@@ -547,6 +575,9 @@ uint64_t dosvm_perf_task_clock(void);
 void dosvm_vif_restore(struct dosvm *, bool, enum dosvm_if_path);
 void dosvm_isr_begin(struct dosvm *, struct dpmi_record *, unsigned irq);
 void dosvm_isr_end(struct dosvm *, const struct dpmi_record *);
+bool dosvm_irq_held(const struct dosvm *, unsigned irq);
+void dosvm_irq_release(struct dosvm *);
+int dosvm_rm_irq_deliver(struct dosvm *, struct v86_frame *);
 void dosvm_perf_report(struct dosvm *);
 void dosvm_perf_dump(struct dosvm *);
 void dosvm_startup_report(struct dosvm *, bool force);
@@ -634,6 +665,15 @@ void dosvm_input_poll(struct dosvm *);
 void dosvm_idle_wake(struct dosvm *);
 void dosvm_present_notify(struct dosvm *);
 void dosvm_present_checkpoint(struct dosvm *);
+/* fx-doswin3: whether VGA stores and register writes (vga.changes) alone
+ * wake the presenter: not while a graphics-mode guest is page flipping,
+ * when only the displayed page's own changes do (dosvm_client.c
+ * present_events). Text modes (hardware scrolling) keep the store wake. */
+static inline bool dosvm_present_store_wake(const struct dosvm *v, uint64_t tick)
+{
+    return !(v->video_flip_seen && !v->vbe_mode && !v->video_geometry.text &&
+             tick - v->video_flip_tick <= v->video_flip_hold_ms);
+}
 #include "dosvm_clock.h" /* fx-9 VM clock task */
 _Static_assert(DOSVM_CLOCK_SLOTS == DOSVM_LIMIT, "vm-clock serves every VM slot");
 _Static_assert(DOSVM_CLOCK_TURNS == DOSVM_AUDIO_SLICE / DOSVM_AUDIO_TURN + 2u, "vm-clock turns per tick");

@@ -73,7 +73,7 @@ static struct dosvm_key input_focus;
  * recursive IRQ0s. DMX exhausts its private IRQ stacks after four such
  * entries and returns without EOI (f3-12 validation). Snapshot now, print
  * only outside the whole IRQ chain, including its real calls/callbacks.
- * Never change delivery, virtual IF, device time or the guest's EOI. */
+ * Formatting must never change virtual IF, device time or the guest's EOI. */
 static bool dosvm_in_irq(const struct dosvm *v)
 {
     for (unsigned i = 0; i < v->dpmi.depth; i++)
@@ -82,12 +82,13 @@ static bool dosvm_in_irq(const struct dosvm *v)
 }
 
 #include "dosvm_perf.inc"
+#include "dosvm_irq.inc"
 #include "dosvm_io_burst.inc"
 #include "dosvm_clipboard.inc"
 
 /* ---- fx-27 lean port exits ----
  * A trapped IN/OUT to a hot emulated port (the VGA register file, PIT,
- * PIC, AdLib/OPL and the DMA controllers) is the windowed VM's most frequent
+ * PIC, AdLib/OPL and the DMA controllers) is a VM's most frequent
  * exit: DOOM's Mode Y selects the plane of every column with an OUT to
  * 3C5h (about 950 per frame), Quake loads 768 DAC bytes per palette change
  * and reads the PIT and DMA counters several thousand times a second. The
@@ -110,7 +111,8 @@ static bool dosvm_in_irq(const struct dosvm *v)
 static bool lean_port(const struct dosvm *v, uint16_t port, unsigned width)
 {
     if ((port >= 0x3C0 && port <= 0x3CF) || port == 0x3D4 || port == 0x3D5 || port == 0x3DA ||
-        port == 0x3B4 || port == 0x3B5 || port == 0x3BA) return width <= 2;
+        port == 0x3B4 || port == 0x3B5 || port == 0x3BA)
+        return width <= 2 && dosvm_vga_ports_modeled(v);
     if (width != 1) return false;
     /* t23-dosperf: the Sound Blaster's own OPL3 ports (base+0..3, base+8/9)
      * reach the same dosvm_opl_io as 388h-38Bh (dosvm_sb16.c sb_io).
@@ -148,14 +150,18 @@ static bool lean_fetch(struct dosvm *v, const struct v86_frame *f, const struct 
 }
 static bool lean_before(const struct dosvm *v, const struct v86_frame *f)
 {
-    if (v->info.state >= DOSVM_STOPPING || !v->info.dos_ready || !dosvm_vga_ports_modeled(v) ||
+    /* fx-doomfs2: only VGA ports depend on display ownership. OPL, PIC,
+     * PIT, DMA and PM flags stay virtualized in a VGA full screen too;
+     * gating them on modeled VGA cost DOOM 0.8-1.3 s per 5 s under load
+     * on the T23. Keep all transition and interrupt obligations below. */
+    if (v->info.state >= DOSVM_STOPPING || !v->info.dos_ready ||
         v->fullscreen_hold || v->fullscreen_suspended || v->idle.depth || v->network_attached ||
         v->audio.sb.irq_entry_ready || v->monitor.state == V86_HALTED || g_need_resched) return false;
     if (v->dpmi.active && !dpmi_lean_eligible(v, f)) return false;
+    if (v->mouse.pending_mask && v->mouse.mask && !v->mouse.active) return false;
     if (v->frame_pm) return true;
     if (v->monitor.shadow || (f->tf.eflags & V86_TF)) return false;
-    const struct dosvm_mouse *m = &v->mouse;
-    return !(m->pending_mask && m->mask && !m->active);
+    return true;
 }
 /* IF clear: nothing may become pending between this check and IRET. */
 static bool lean_after(struct dosvm *v, const struct v86_frame *f)
@@ -167,6 +173,7 @@ static bool lean_after(struct dosvm *v, const struct v86_frame *f)
     dosvm_pic_cascade(&v->monitor);
     if (dosvm_pic_pending(&v->monitor) >= 0) return false;
     if (v->dpmi.active && !dpmi_lean_quiet(v, f)) return false;
+    if (v->mouse.pending_mask && v->mouse.mask && !v->mouse.active) return false;
     if (v->frame_pm) return true;
     if (v->launch_exec && f->tf.cs == v->launch_cs && f->tf.eip == v->launch_ip &&
         f->tf.user_ss == v->launch_ss && (uint16_t)f->tf.user_esp == v->launch_sp) return false;
@@ -190,6 +197,9 @@ static int lean_io(struct dosvm *v, struct v86_frame *f, int *error)
      * STI, then the next CLI). A pending IRQ is still delivered on the
      * ordinary tail (lean_after). */
     if (v->frame_pm) v->dpmi.shadow = false;
+    /* The ordinary #GP path's first step for V86 (dosvm_trap): a software
+     * STI/MOV SS shadow ends at any boundary other than its own. */
+    else v86_retire_shadow(&v->monitor, f);
     if (!lean_before(v, f)) return 0;
     struct dpmi_seg seg, *cs = 0;
     if (v->frame_pm) {
@@ -205,11 +215,34 @@ static int lean_io(struct dosvm *v, struct v86_frame *f, int *error)
     }
     /* t23-dosperf: an unprefixed PM CLI/STI (DOS/4GW and Watcom clients:
      * Warcraft II, 10,143 per second in trial c42f556e bank n=4) takes the
-     * same lean return as a port exit. V86 CLI/STI keep v86_emulate. */
+     * same lean return as a port exit (V86 CLI/STI: below). */
     if ((op == 0xFA || op == 0xFB) && len == 1 && cs) {
         bool quiet = dpmi_lean_flags(v, f, cs, op);
         cli();
         if (quiet && lean_after(v, f)) { v->perf.lean_exits++; return 1; }
+        sti();
+        return 2;
+    }
+    /* fx-doswin3: an unprefixed V86 CLI/STI (Wolfenstein 3-D's VGAMAPMASK,
+     * VGAREADMAP and VGAWRITEMODE macros, ID_VL.H: cli; mov dx,..; out dx,ax;
+     * sti around every plane select of its menus, text and fizzle fade; T23
+     * trial 5bb73dba bank n=6: 36,206 CLI and 35,923 STI exits at 7.9 and
+     * 8.9 us on the ordinary path). The instruction is v86_emulate's own,
+     * with its virtual IF, STI shadow and TF rules; lean_before already
+     * required no shadow or TF before it, and lean_after requires no
+     * pending virtual IRQ after it, so the ordinary tail would deliver
+     * nothing here either (an STI that enables a pending IRQ, or any other
+     * obligation, continues through the ordinary tail without emulating
+     * again). The cause and IF-enable records are the ordinary path's. */
+    if ((op == 0xFA || op == 0xFB) && len == 1 && !cs) {
+        bool was_vif = v->monitor.vif;
+        int e = v86_emulate(&v->monitor, f);
+        v->perf.cause = op == 0xFA ? DOSVM_COST_RM_CLI : DOSVM_COST_RM_STI;
+        if (e) { *error = e; return 2; }
+        if (!was_vif && v->monitor.vif) v->perf.if_enable[DOSVM_IF_STI]++;
+        if (v->dpmi.active) v->dpmi.if_steps = 0; /* dpmi_deliver's if_recovery_end */
+        cli();
+        if (lean_after(v, f)) { v->perf.lean_exits++; return 1; }
         sti();
         return 2;
     }
@@ -817,11 +850,42 @@ uint32_t dosvm_task_quantum(const struct task *t, uint32_t normal)
     if (focused) return normal < 8u ? normal : 8u;
     return normal < 4u ? normal : 4u;
 }
+/* fx-doswin3: the VM's own presenter has been woken for a frame and has not
+ * yet run (present_ready, wait_present). Bounded: a presenter that does not
+ * run within DOSVM_PRESENT_DISPATCH_MS no longer counts. Only a windowed VM
+ * has a waiting presenter. Not while a guest hardware-interrupt handler is
+ * visibly in progress: an open DPMI hardware-interrupt record, or an
+ * in-service bit on the virtual PIC (a real-mode handler before its EOI).
+ * A handler that sends its EOI early and re-enables interrupts (DMX's
+ * timer service) would be re-entered by the IRQ0 edges of a longer absence
+ * (f3-12: DMX returns without EOI once its private IRQ stacks are
+ * exhausted); a V86 handler after its own EOI is not visible here. Nor
+ * while any virtual IRQ is requested and unmasked (dosvm_pic_pending):
+ * dosvm_task_irq makes only the timer and SB IRQs urgent, so a pending
+ * keyboard or UART request would otherwise wait behind the presenter. */
+static bool present_pending(const struct dosvm *v)
+{
+    return v->present_dispatch && v->present_waiter && !v->fullscreen &&
+           g_ticks - v->present_dispatch_tick < DOSVM_PRESENT_DISPATCH_MS &&
+           !dosvm_in_irq(v) && !v->monitor.pic[0].isr && !v->monitor.pic[1].isr &&
+           dosvm_pic_pending(&v->monitor) < 0;
+}
 const struct task *dosvm_task_focus(void)
 {
     struct dosvm *v = dosvm_lookup(input_focus);
     return v && v->owner_pid && v->window_input && v->info.state < DOSVM_STOPPING &&
-           v->info.state != DOSVM_BLOCKED && !v->window_marking && !v->fullscreen_suspended && !idle_recent(v) ? v->task : 0;
+           v->info.state != DOSVM_BLOCKED && !v->window_marking && !v->fullscreen_suspended && !idle_recent(v) ?
+           v->task : 0;
+}
+/* fx-doswin3 round 3: the presenter the scheduler may run ahead of the
+ * focused VM's preference (task.c rq_pop), for at most PRESENT_SLICE ticks;
+ * the VM stays the focus, so every other task picked while it is ready
+ * keeps its 2-tick cap, and a pending virtual timer/SB IRQ still wins
+ * (dosvm_task_irq is asked first). */
+const struct task *dosvm_task_present(void)
+{
+    struct dosvm *v = dosvm_lookup(input_focus);
+    return v && present_pending(v) ? v->present_waiter : 0;
 }
 const struct task *dosvm_task_irq(void)
 {
@@ -897,7 +961,7 @@ static bool wake_condition(void *arg)
     struct dosvm *v = arg;
     return v->info.state == DOSVM_STOPPING ||
            (v->monitor.vif && !v->monitor.shadow && !v->dpmi.shadow &&
-            (v86_irq_pending(&v->monitor) >= 0 || (!v->frame_pm && v->mouse.pending_mask)));
+            (v86_irq_pending(&v->monitor) >= 0 || (!v->mouse.active && v->mouse.pending_mask)));
 }
 void dosvm_idle_wake(struct dosvm *v)
 {
@@ -917,7 +981,7 @@ static bool idle_event(void *arg)
     struct dosvm *v = w->v;
     return v->info.state >= DOSVM_STOPPING || v->idle.events != w->events ||
            (w->halt ? wake_condition(v) :
-            (v86_irq_pending(&v->monitor) >= 0 || (!v->frame_pm && v->mouse.pending_mask) ||
+            (v86_irq_pending(&v->monitor) >= 0 || (!v->mouse.active && v->mouse.pending_mask) ||
              v->key_count || dosvm_kbd_irq_ready(v)));
 }
 static uint64_t idle_deadline(const struct dosvm *v)
@@ -1090,8 +1154,11 @@ static int dosvm_deliver_irq(struct dosvm *v, struct v86_frame *f)
     int e = 0;
     uint32_t flags = irq_save();
     e = dosvm_network_dispatch(v, f);
-    if (!v->frame_pm && !e) e = dosvm_mouse_dispatch(v, f);
-    if (!v->dpmi.active && !e) e = v86_irq_deliver(&v->monitor, f);
+    if (!e) e = dosvm_mouse_dispatch(v, f);
+    if (!v->dpmi.active && !e) {
+        dosvm_irq_release(v);
+        e = dosvm_rm_irq_deliver(v, f);
+    }
     irq_restore(flags);
     if (v->dpmi.active && !e) e = dpmi_deliver(v, f);
     if (v->monitor.stats.delivered[v->audio.sb.irq & 15] != sb_delivered)
@@ -1194,6 +1261,7 @@ bool dosvm_trap(struct trap_frame *tf)
             v86_retire_shadow(&v->monitor, f);
             if (!dosvm_io_fast(v, f, 0, &e)) {
                 uint64_t ints = v->monitor.stats.insn[V86_INT], irets = v->monitor.stats.insn[V86_IRET];
+                uint16_t iret_ss = (uint16_t)f->tf.user_ss, iret_sp = (uint16_t)f->tf.user_esp;
                 uint64_t flags_insn[4] = {0}, hlts = 0;
                 {
                     for (unsigned i = 0; i < 4; i++) flags_insn[i] = v->monitor.stats.insn[V86_PUSHF + i];
@@ -1201,6 +1269,8 @@ bool dosvm_trap(struct trap_frame *tf)
                 }
                 v->perf.cause = DOSVM_COST_RM_FLAGS;
                 e = v86_emulate(&v->monitor, f);
+                if (e >= 0 && v->monitor.stats.insn[V86_IRET] != irets)
+                    dosvm_rm_irq_return(v, iret_ss, iret_sp);
                 if (v->monitor.stats.insn[V86_INT] != ints) v->perf.cause = DOSVM_COST_RM_INT;
                 if (v->monitor.stats.insn[V86_IRET] != irets) v->perf.cause = DOSVM_COST_RM_IRET;
                 {
@@ -1944,7 +2014,8 @@ bool dosvm_irq_raise(struct dosvm_key key, unsigned irq)
     struct dosvm *v = dosvm_lookup(key);
     if (!v || !dosvm_valid(key) || irq >= 16) return false;
     uint32_t flags = irq_save();
-    v86_irq_raise(&v->monitor, irq);
+    if (dosvm_irq_held(v, irq)) v->irq.owed |= 1u << irq;
+    else v86_irq_raise(&v->monitor, irq);
     irq_restore(flags);
     dosvm_idle_wake(v);
     return true;
@@ -2008,6 +2079,7 @@ bool dosvm_clock_turn(unsigned slot, uint32_t *generation)
     v->clock_ms += elapsed;
     uint64_t begin = dosvm_perf_clock();
     if (elapsed) dosvm_pit_advance(v, elapsed);
+    dosvm_irq_release(v);
     uint64_t audio = dosvm_perf_clock();
     bool pending = dosvm_audio_advance(v, elapsed);
     uint64_t end = dosvm_perf_clock();
@@ -2091,15 +2163,21 @@ bool dosvm_input_focus(struct dosvm_key key, bool focused)
         task_input_withdraw(previous->task);
         dosvm_kbd_release(previous); dosvm_mouse_event(previous, 0, 0, 0);
         previous->pointer_known = false;
+        previous->mouse_captured = false;
         if (previous->fullscreen_pause && !previous->fullscreen) previous->fullscreen_suspended=true;
     }
     v->window_input = true;
     bool resumed = focused && v->fullscreen_suspended;
-    if (focused) { input_focus = key; v->pointer_known = false; v->fullscreen_suspended=false; }
+    if (focused) {
+        input_focus = key;
+        if (previous != v) { v->pointer_known = false; v->mouse_captured=false; }
+        v->fullscreen_suspended=false;
+    }
     else if (input_focus.id == key.id && input_focus.generation == key.generation) {
         task_input_withdraw(v->task);
         dosvm_kbd_release(v); dosvm_mouse_event(v, 0, 0, 0);
         v->pointer_known = false; input_focus = (struct dosvm_key){0};
+        v->mouse_captured = false;
         if (v->fullscreen_pause && !v->fullscreen) v->fullscreen_suspended=true;
     }
     if (resumed) kwait_wake_all(&v->wake); /* fx-22: a parked VM blocks on it */
@@ -2107,6 +2185,14 @@ bool dosvm_input_focus(struct dosvm_key key, bool focused)
     return true;
 }
 struct dosvm_key dosvm_focused_key(void) { return input_focus; }
+static bool window_key_held(const struct dosvm *v, unsigned code)
+{ return v->kbd.held[code >> 3] & (1u << (code & 7)); }
+static void window_mouse_release(struct dosvm *v)
+{
+    v->mouse_captured=false;
+    v->pointer_known=false;
+    dosvm_mouse_event(v,0,0,0);
+}
 bool dosvm_input_event(struct dosvm_key key, const struct ciuki_input_event *e)
 {
     struct dosvm *v = dosvm_lookup(key);
@@ -2114,24 +2200,39 @@ bool dosvm_input_event(struct dosvm_key key, const struct ciuki_input_event *e)
         input_focus.id != key.id || input_focus.generation != key.generation) return false;
     uint32_t flags = irq_save(); bool ok = true;
     switch (e->type) {
-    case CIUKI_INPUT_KEY: ok = dosvm_kbd_event(v, e->code, e->value); break;
+    case CIUKI_INPUT_KEY:
+        ok = dosvm_kbd_event(v, e->code, e->value);
+        if (ok && e->value && !v->fullscreen) {
+            bool alt=window_key_held(v,0x38) || window_key_held(v,0x138);
+            bool ctrl=window_key_held(v,0x1D) || window_key_held(v,0x11D);
+            if (alt && (ctrl || e->code==0x0F)) window_mouse_release(v);
+        }
+        break;
     case CIUKI_INPUT_TEXT: break; /* KEY already supplies the guest keyboard */
     case CIUKI_INPUT_WHEEL:
         if (e->value<-127 || e->value>127) { ok=false; break; }
-        dosvm_mouse_wheel(v,-e->value); break;
+        if (v->mouse_captured || v->fullscreen) dosvm_mouse_wheel(v,-e->value);
+        break;
     case CIUKI_INPUT_MOTION:
-        if (v->pointer_known) {
+        if (v->pointer_known && (v->mouse_captured || v->fullscreen)) {
             int64_t dx = (int64_t)e->value - v->input_x, dy = (int64_t)e->value2 - v->input_y;
             if (dx < INT32_MIN || dx > INT32_MAX || dy < INT32_MIN || dy > INT32_MAX) { ok = false; break; }
             dosvm_mouse_event(v, dx, dy, v->mouse.buttons);
         }
+        if (v->mouse_captured || v->fullscreen) dosvm_mouse_absolute(v,e->value,e->value2);
         v->input_x = e->value; v->input_y = e->value2; v->pointer_known = true; break;
     case CIUKI_INPUT_BUTTON:
         if (e->code < 1 || e->code > 3 || (e->value != 0 && e->value != 1)) { ok = false; break; }
+        if (!v->mouse_captured && !v->fullscreen) {
+            if (!e->value || !v->pointer_known || v->input_x<0 || v->input_y<0 ||
+                (unsigned)v->input_x>=DOSVM_VIDEO_WIDTH || (unsigned)v->input_y>=DOSVM_VIDEO_HEIGHT) break;
+            v->mouse_captured=true;
+            dosvm_mouse_absolute(v,v->input_x,v->input_y);
+        }
         dosvm_mouse_event(v, 0, 0, e->value ? v->mouse.buttons | (1u << (e->code - 1)) :
                          v->mouse.buttons & ~(1u << (e->code - 1))); break;
     case CIUKI_INPUT_RESYNC:
-        dosvm_kbd_release(v); dosvm_mouse_event(v, 0, 0, 0); v->pointer_known = false; break;
+        dosvm_kbd_release(v); window_mouse_release(v); break;
     default: ok = false;
     }
     if (ok && e->type != CIUKI_INPUT_TEXT) dosvm_idle_wake(v);

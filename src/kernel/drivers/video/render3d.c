@@ -2,6 +2,7 @@
  * See docs/design/f7-3d-acceleration-contract.md. GPL-2.0-only. */
 #include <ciuki/kernel.h>
 #include <ciuki/abi.h>
+#include <ciuki/fbdev.h>
 #include "render3d.h"
 _Static_assert(sizeof(struct render3d_request) <= R3D_JOB_BYTES, "job bound");
 _Static_assert(sizeof(((struct render3d_service *)0)->ring) == 262144, "ring bound");
@@ -27,7 +28,16 @@ static void *allocate(struct render3d_service *s, uint32_t bytes)
     if (backend>R3D_RAM_LIMIT-sizeof(*s) || s->ram_bytes>R3D_RAM_LIMIT-sizeof(*s)-backend ||
         bytes>R3D_RAM_LIMIT-sizeof(*s)-backend-s->ram_bytes) return 0;
     void *p=s->host.alloc(s->host.ctx,bytes);
-    if (p) { s->ram_bytes+=bytes; memset(p,0,bytes); }
+    if (p) {
+        if (s->allocation_checkpoint) {
+            for (uint32_t at=0;at<bytes;at+=65536) {
+                if (s->allocation_checkpoint(s->host.ctx)) { s->host.free(s->host.ctx,p); return 0; }
+                uint32_t n=bytes-at; if (n>65536) n=65536;
+                memset((uint8_t *)p+at,0,n);
+            }
+        } else memset(p,0,bytes);
+        s->ram_bytes+=bytes;
+    }
     return p;
 }
 static void release(struct render3d_service *s, void *p, uint32_t bytes)
@@ -93,6 +103,14 @@ int render3d_create_context(struct render3d_service *s, uint32_t p, enum render3
     }
     if (owned>=4 || !free) return -EAGAIN;
     uint32_t id=handle(s); if (!id) return -ENOSPC;
+    bool first=true;
+    for (unsigned i=0;i<R3D_CONTEXTS;i++)
+        if (s->contexts[i].live && s->contexts[i].hardware) first=false;
+    if (hw && first && s->backend->reserve) {
+        int e=s->backend->reserve(s->device);
+        if (e && policy==R3D_HARDWARE_REQUIRED) return e;
+        if (e) hw=false;
+    }
     *free=(struct render3d_context){.handle=id,.process=p,.generation=s->generation,.policy=policy,.live=true,.hardware=hw};
     *out=id; return 0;
 }
@@ -105,7 +123,12 @@ static void collect(struct render3d_service *s, struct render3d_context *c)
     }
     if (c->dying && !c->queued) {
         if (s->quarantined && c->hardware) return;
+        bool hardware=c->hardware;
         release(s,c->resources,R3D_RESOURCES*sizeof(*c->resources)); memset(c,0,sizeof(*c));
+        bool last=true;
+        for (unsigned i=0;i<R3D_CONTEXTS;i++)
+            if (s->contexts[i].live && s->contexts[i].hardware) last=false;
+        if (hardware && last && s->backend && s->backend->unreserve) s->backend->unreserve(s->device);
     }
 }
 int render3d_destroy_context(struct render3d_service *s, uint32_t p, uint32_t id)
@@ -236,6 +259,12 @@ static void texture_decode(const struct render3d_texture_desc *t,struct render3d
         w=w>1 ? w/2 : 1; h=h>1 ? h/2 : 1;
     }
 }
+static void canonicalize_color(struct render3d_resource *r)
+{
+    if (r->kind!=R3D_COLOR565 && r->kind!=R3D_LINEAR565) return;
+    uint32_t *pixels=r->shadow;
+    for (unsigned i=0;i<r->width*r->height;i++) pixels[i]=render3d_expand565(render3d_pack565(pixels[i]));
+}
 static int create_resource(struct render3d_service *s, uint32_t p, uint32_t id,
     enum render3d_kind kind, uint32_t w, uint32_t h, const struct render3d_texture_desc *t, uint32_t *out)
 {
@@ -243,7 +272,7 @@ static int create_resource(struct render3d_service *s, uint32_t p, uint32_t id,
     struct render3d_context *c=context(s,p,id);
     if (!c || c->dying || c->generation!=s->generation) return -ENOENT;
     if (c->failure) return c->failure;
-    if (!out || kind<R3D_COLOR || kind>R3D_LINEAR_COLOR || !w || !h || w>R3D_MAX_SIZE || h>R3D_MAX_SIZE) return -EINVAL;
+    if (!out || kind<R3D_COLOR || kind>R3D_LINEAR565 || !w || !h || w>R3D_MAX_SIZE || h>R3D_MAX_SIZE) return -EINVAL;
     if (kind==R3D_TEXTURE && ((w&(w-1)) || (h&(h-1)))) return -EINVAL;
     uint32_t pitch=w*(kind==R3D_D16 ? 2u : 4u), size=pitch*h;
     struct render3d_resource r={.kind=kind,.width=w,.height=h,.pitch=pitch,.bytes=size,.hardware=c->hardware};
@@ -269,6 +298,7 @@ static int create_resource(struct render3d_service *s, uint32_t p, uint32_t id,
     r.handle=handle(s); if (!r.handle) return -ENOSPC;
     r.shadow=allocate(s,size); if (!r.shadow) return -ENOMEM;
     if (t) texture_decode(t,&r);
+    canonicalize_color(&r);
     r.live=true; *slot=r; *out=r.handle; return 0;
 }
 int render3d_create_texture(struct render3d_service *s,uint32_t p,uint32_t c,
@@ -291,6 +321,10 @@ int render3d_create_resource(struct render3d_service *s,uint32_t p,uint32_t c,
 int render3d_validate_state(const struct render3d_request *q)
 {
     const struct render3d_state *a=&q->state;
+    const struct ciuki_r3d_stencil *t=&q->stencil;
+    if (t->function>R3D_GEQUAL || t->reference>255 || t->read_mask>255 ||
+        t->write_mask>255 || t->clear>255 || t->fail>CIUKI_R3D_STENCIL_INVERT ||
+        t->zfail>CIUKI_R3D_STENCIL_INVERT || t->zpass>CIUKI_R3D_STENCIL_INVERT) return -EINVAL;
     if (a->depth_func>R3D_GEQUAL || a->alpha_func>R3D_GEQUAL || a->alpha_ref>255 ||
         a->alpha_test>1 || a->blend>1 || a->flat>1 || a->source>R3D_INV_DST_ALPHA || a->destination>R3D_INV_DST_ALPHA ||
         a->source==R3D_SRC_COLOR || a->source==R3D_INV_SRC_COLOR ||
@@ -314,23 +348,27 @@ static void resources(struct render3d_context *c, const struct render3d_request 
 { r[0]=resource(c,q->target); r[1]=resource(c,q->depth); r[2]=resource(c,q->texture); r[3]=resource(c,q->copy_target); r[4]=resource(c,q->texture1); }
 static int validate(struct render3d_context *c, const struct render3d_request *q, struct render3d_resource *r[R3D_REFS], uint32_t *work)
 {
-    if (!q->flags || (q->flags&~R3D_ALL_FEATURES) || q->count>R3D_VERTICES || q->count%3 || q->clear_depth>65535) return -EINVAL;
+    if (!q->flags || (q->flags&~R3D_ALL_FEATURES) || q->count>R3D_VERTICES || q->count%3) return -EINVAL;
     if (render3d_validate_state(q)) return -EINVAL;
     resources(c,q,r);
-    if (!r[0] || r[0]->pending_free || r[0]->kind!=R3D_COLOR) return -EINVAL;
-    if ((q->flags&(R3D_CLEAR_DEPTH|R3D_DEPTH_TEST|R3D_DEPTH_WRITE)) ?
-        (!r[1] || r[1]->pending_free || r[1]->kind!=R3D_D16 || r[1]->width!=r[0]->width || r[1]->height!=r[0]->height) : q->depth!=0) return -EINVAL;
+    if (!r[0] || r[0]->pending_free || (r[0]->kind!=R3D_COLOR && r[0]->kind!=R3D_COLOR565)) return -EINVAL;
+    if ((q->flags&R3D_DEPTH_FLAGS) ?
+        (!r[1] || r[1]->pending_free || (r[1]->kind!=R3D_D16 && r[1]->kind!=R3D_D24S8) || r[1]->width!=r[0]->width || r[1]->height!=r[0]->height) : q->depth!=0) return -EINVAL;
     if ((q->flags&R3D_TEXTURED) ? (!r[2] || r[2]->pending_free || r[2]->kind!=R3D_TEXTURE || !q->count) : q->texture!=0) return -EINVAL;
     if ((q->flags&R3D_TEXTURE1) ? (!(q->flags&R3D_TEXTURED) || !r[4] || r[4]->pending_free ||
         r[4]->kind!=R3D_TEXTURE || !q->count) : q->texture1!=0) return -EINVAL;
     if ((q->flags&R3D_COPY) ? (!r[3] || r[3]->pending_free || r[3]==r[0] ||
-        (r[3]->kind!=R3D_COLOR && r[3]->kind!=R3D_LINEAR_COLOR) ||
+        (r[0]->kind==R3D_COLOR565 ? r[3]->kind!=R3D_LINEAR565 :
+         (r[3]->kind!=R3D_COLOR && r[3]->kind!=R3D_LINEAR_COLOR)) ||
         r[3]->width!=r[0]->width || r[3]->height!=r[0]->height) : q->copy_target!=0) return -EINVAL;
+    uint32_t zmax=r[1] && r[1]->kind==R3D_D24S8 ? 16777215u : 65535u;
+    if (q->clear_depth>zmax || ((q->flags&(R3D_STENCIL_TEST|R3D_CLEAR_STENCIL)) &&
+        (!r[1] || r[1]->kind!=R3D_D24S8))) return -EINVAL;
     uint64_t pixels=0;
     for (unsigned i=0;i<q->count;i++) {
         const struct render3d_vertex *v=&q->vertices[i];
         if (v->x<0 || v->y<0 || v->x>(int32_t)(r[0]->width<<16) || v->y>(int32_t)(r[0]->height<<16) ||
-            v->z>65535 || v->rhw<256 || v->rhw>16777216 || v->u < -16*65536 || v->u>16*65536 || v->v < -16*65536 || v->v>16*65536 ||
+            v->z>zmax || v->rhw<256 || v->rhw>16777216 || v->u < -16*65536 || v->u>16*65536 || v->v < -16*65536 || v->v>16*65536 ||
             q->uv1[i][0] < -16*65536 || q->uv1[i][0]>16*65536 ||
             q->uv1[i][1] < -16*65536 || q->uv1[i][1]>16*65536) return -EINVAL;
         if (i%3==2) {
@@ -405,6 +443,38 @@ int render3d_submit(struct render3d_service *s, uint32_t p, uint32_t id,
     s->jobs[slot]=(struct render3d_job){.context=id,.fence=f,.occupied=true,.software=software};
     c->queued++; c->submitted=f.sequence; s->queued++; *out=f; return 0;
 }
+/* GPU-resident attachments (f7-15 lead decision): the shadow is read back
+ * only when the CPU needs it (READ, a scalar job of a hardware context, a
+ * CPU presentation copy). Caller owns s->busy. A passing presenter conflict
+ * is retried for at most R3D_SYNC_RETRY_US; a download timeout fails only the
+ * context after proven idle, any other error loses the device. */
+#define R3D_SYNC_RETRY_US 20000u
+static int sync_owned(struct render3d_service *s, struct render3d_context *c, struct render3d_resource *r)
+{
+    if (!r || !r->stale || !r->hardware || !r->resident || r->kind==R3D_TEXTURE) return 0;
+    if (!usable(s) || !s->backend->download) return -EIO;
+    uint64_t start=s->host.now_us(s->host.ctx);
+    int e=-EBUSY;
+    for (unsigned attempt=0;attempt<1024 && e==-EBUSY;attempt++) {
+        if (attempt) {
+            if (s->host.now_us(s->host.ctx)-start>=R3D_SYNC_RETRY_US) break;
+            if (s->host.yield) s->host.yield(s->host.ctx);
+        }
+        e=s->backend->enter(s->device);
+        if (e==-EBUSY || e==-EAGAIN) { e=-EBUSY; continue; }
+        if (e) { render3d_device_lost(s); return e; }
+        r->references++;
+        e=s->backend->download(s->device,r);
+        int idle=s->backend->idle(s->device);
+        if (!e) e=idle;
+        if (e && (e!=-ETIMEDOUT || idle)) render3d_device_lost(s);
+        s->backend->leave(s->device);
+        if (!s->quarantined) r->references--;
+    }
+    if (!e) r->stale=false;
+    else if (c && !c->failure && e!=-EBUSY) c->failure=e;
+    return e;
+}
 void render3d_device_lost(struct render3d_service *s)
 {
     /* Permanent for the boot; do not reset, retry or release referenced VRAM. */
@@ -455,15 +525,31 @@ int render3d_step(struct render3d_service *s)
                 s->backend->leave(s->device);
             } else if (e!=-EAGAIN && e!=-EBUSY) render3d_device_lost(s);
         }
-    } else done=render3d_scalar_slice(q,r,j,&s->host);
+    } else {
+        /* A scalar job of a hardware context reads and writes the shadows:
+         * synchronize device-resident attachments first (no-op when fresh). */
+        if (c->hardware) for (unsigned i=0;!e && i<R3D_REFS;i++) e=sync_owned(s,c,r[i]);
+        if (!e) done=render3d_scalar_slice(q,r,j,&s->host);
+    }
     s->busy=false;
     if (e==-EAGAIN || e==-EBUSY) return e;
+    /* Device-resident result: shadows of written attachments are now stale. */
+    if (!e && c->hardware && !j->software && s->backend && s->backend->download) {
+        if (r[0] && (q->count || (q->flags&R3D_CLEAR_COLOR))) r[0]->stale=true;
+        if (r[1] && ((q->flags&(R3D_CLEAR_DEPTH|R3D_CLEAR_STENCIL)) ||
+            (q->count && (q->flags&(R3D_DEPTH_WRITE|R3D_STENCIL_TEST))))) r[1]->stale=true;
+        if (r[3] && (q->flags&R3D_COPY)) r[3]->stale=true;
+    }
     if (!done && !e) {
         /* Round-robin at every bounded scalar slice, without a second ring
          * or a large stack copy. A full ring rotates by changing head only. */
         rotate(s);
         return 1;
     }
+    if (!e && (q->count || (q->flags&R3D_CLEAR_COLOR)))
+        for (unsigned i=0;i<R3D_RESOURCES;i++)
+            if (c->resources[i].copied_from==q->target) c->resources[i].copied_from=0;
+    if (!e && (q->flags&R3D_COPY)) r[3]->copied_from=j->software ? 0 : q->target;
     if (!e && j->software && c->hardware) for (unsigned i=0;i<R3D_REFS;i++)
         if (r[i] && r[i]->kind!=R3D_TEXTURE) r[i]->resident=false;
     if (e && !c->failure) c->failure=e;
@@ -507,8 +593,15 @@ int render3d_readback(struct render3d_service *s, uint32_t p, uint32_t id, uint3
     if (c->failure) return c->failure;
     if (!out || bytes!=r->bytes) return -EINVAL;
     if (r->references) return -EAGAIN;
-    /* Executing backends synchronize canonical shadows before completion.
-     * A new resource's zero/texture shadow is also its defined initial data. */
+    /* A device-resident attachment is downloaded now, on demand. Otherwise
+     * the shadow is current (backends without download synchronize it in
+     * execute); a new resource's zero/texture shadow is its initial data. */
+    if (r->stale) {
+        s->busy=true;
+        int e=sync_owned(s,c,r);
+        s->busy=false;
+        if (e) return e;
+    }
     memcpy(out,r->shadow,bytes); return 0;
 }
 int render3d_upload(struct render3d_service *s, uint32_t p, uint32_t id,
@@ -520,7 +613,42 @@ int render3d_upload(struct render3d_service *s, uint32_t p, uint32_t id,
     if (!s->admission || c->failure) return c->failure ? c->failure : -ENODEV;
     if (!input || bytes!=r->bytes || r->kind==R3D_TEXTURE) return -EINVAL;
     if (r->references) return -EAGAIN;
-    memcpy(r->shadow,input,bytes); r->resident=false; return 0;
+    for (unsigned i=0;i<R3D_RESOURCES;i++)
+        if (c->resources[i].copied_from==h) c->resources[i].copied_from=0;
+    r->copied_from=0;
+    memcpy(r->shadow,input,bytes); canonicalize_color(r); r->resident=false; r->stale=false; return 0;
+}
+/* Only the lease presenter calls this, after its authority/gamma/scale
+ * checks. A retained linear shadow is not proof that its former tiled source
+ * still has those pixels; the receipt is invalidated by writes/uploads. */
+int render3d_scanout(struct render3d_service *s,uint32_t p,const struct ciuki_w32_render3d_args *a,
+                     const struct fb_device *fb)
+{
+    if (!s || !a || !fb || !usable(s) || !s->backend->scanout) return -EOPNOTSUPP;
+    if (s->busy) return -EBUSY;
+    struct render3d_context *c=context(s,p,a->context);
+    struct render3d_resource *linear=resource(c,a->resource);
+    struct render3d_resource *source=linear ? resource(c,linear->copied_from) : 0;
+    if (!c || c->dying || c->failure || !c->hardware || !linear || !source ||
+        !linear->hardware || !linear->resident || linear->pending_free || linear->references ||
+        !source->hardware || !source->resident || source->pending_free || source->references ||
+        (linear->kind!=R3D_LINEAR_COLOR && linear->kind!=R3D_LINEAR565) ||
+        (source->kind!=R3D_COLOR && source->kind!=R3D_COLOR565) ||
+        source->width!=a->width || source->height!=a->height || linear->width!=source->width ||
+        linear->height!=source->height || fb->generation!=s->generation || a->generation!=s->generation)
+        return -EOPNOTSUPP;
+    s->busy=true; source->references++; linear->references++;
+    int e=s->backend->enter(s->device);
+    if (!e) {
+        e=s->backend->scanout(s->device,source,fb);
+        int idle=s->backend->idle(s->device);
+        if (!e) e=idle;
+        if (e && e!=-EOPNOTSUPP && (e!=-ETIMEDOUT || idle)) render3d_device_lost(s);
+        s->backend->leave(s->device);
+    } else if (e!=-EBUSY && e!=-EAGAIN) render3d_device_lost(s);
+    if (!s->quarantined) { source->references--; linear->references--; }
+    s->busy=false; collect(s,c);
+    return e;
 }
 void render3d_process_exit(struct render3d_service *s, uint32_t p)
 {

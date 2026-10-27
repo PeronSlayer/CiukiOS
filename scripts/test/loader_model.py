@@ -265,7 +265,7 @@ def boot_options(options, safe=False, serial=True):
             serial=serial and token=='serial=1'
         elif token in ('usbscan=0','ecpoll=0','ecpoll=1'):
             pass  # Kernel diagnostic policy; raw BOOT.CFG options are retained.
-        elif token in ('accel=0','setup=1'):
+        elif token in ('accel=0','setup=1','3d=probe'):
             pass  # Preserved boot-info options; consumed by the kernel.
         elif token in ('menu=1','autoscan=0','autoscan=2'):
             pass  # G14: Startup menu and AutoScan; also left for the kernel.

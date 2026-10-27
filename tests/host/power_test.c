@@ -58,6 +58,8 @@ static void tables(const uint8_t *aml, uint32_t aml_len, uint32_t pm1a, uint32_t
     mem[FADT + 52] = 0xF1;
     put32(FADT + 64, pm1a);
     put32(FADT + 68, pm1b);
+    mem[FADT + 88] = 4;                 /* PM1_EVT_LEN and PM1_CNT_LEN as every real FADT */
+    mem[FADT + 89] = 2;
     seal(FADT);
     header(DSDT, "DSDT", 36 + aml_len, 1);
     memcpy(mem + DSDT + 36, aml, aml_len);
@@ -70,6 +72,67 @@ static int parse(struct acpi_soft_off *r, const char **why)
     return acpi_soft_off_parse(map, 0, RSDP, r, why);
 }
 
+static void test_register_validation(const uint8_t *aml, unsigned size)
+{
+    static const struct { unsigned legacy, gas, bytes, access; const char *why; } blocks[] = {
+        {64, 172, 2, 2, "pm1a_cnt"}, {68, 184, 2, 2, "pm1b_cnt"},
+        {56, 148, 4, 2, "pm1a_evt"}, {60, 160, 4, 2, "pm1b_evt"},
+        {80, 220, 4, 1, "gpe0"}, {84, 232, 4, 1, "gpe1"}
+    };
+    struct acpi_soft_off r;
+    const char *why;
+    for (unsigned b = 0; b < sizeof(blocks) / sizeof(blocks[0]); b++) {
+        unsigned gas = blocks[b].gas;
+        /* Each extended block is independent: all absent optional blocks
+         * are accepted, all unsupported present blocks refuse. */
+        tables(aml, size, 0x604, 0); header(FADT, "FACP", 244, 3);
+        put32(FADT + blocks[b].legacy, 0);
+        mem[FADT + 92] = mem[FADT + 93] = 4;
+        mem[FADT + gas] = 1; mem[FADT + gas + 1] = blocks[b].bytes * 8;
+        mem[FADT + gas + 3] = blocks[b].access;
+        put32(FADT + gas + 4, 0x700); seal(FADT);
+        CHECK(parse(&r, &why) == 0);
+        mem[FADT + gas] = 0; seal(FADT); /* present SystemMemory */
+        CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, blocks[b].why));
+        mem[FADT + gas] = 1;
+        mem[FADT + gas + 2] = 1; seal(FADT);
+        CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, blocks[b].why));
+        mem[FADT + gas + 2] = 0;
+        mem[FADT + gas + 1] = 8; seal(FADT);
+        CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, blocks[b].why));
+        mem[FADT + gas + 1] = blocks[b].bytes * 8;
+        mem[FADT + gas + 3] = 3; seal(FADT);
+        CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, blocks[b].why));
+        mem[FADT + gas + 3] = 0; seal(FADT); /* unspecified access is valid */
+        CHECK(parse(&r, &why) == 0);
+        put32(FADT + gas + 8, 1); seal(FADT);
+        CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, blocks[b].why));
+        put32(FADT + gas + 8, 0);
+        put32(FADT + gas + 4, 0x10000 - blocks[b].bytes); seal(FADT);
+        CHECK(parse(&r, &why) == 0); /* last complete extent */
+        put32(FADT + gas + 4, 0x10001 - blocks[b].bytes); seal(FADT);
+        CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, blocks[b].why));
+        /* The same extent guard applies to legacy fields. */
+        put32(FADT + gas + 4, 0);
+        put32(FADT + blocks[b].legacy, 0x10000 - blocks[b].bytes); seal(FADT);
+        CHECK(parse(&r, &why) == 0);
+        put32(FADT + blocks[b].legacy, 0x10001 - blocks[b].bytes); seal(FADT);
+        CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, blocks[b].why));
+        put32(FADT + blocks[b].legacy, 0x10000); seal(FADT);
+        CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, blocks[b].why));
+    }
+    /* A present unsupported extended PM1b must not be hidden by legacy IO. */
+    tables(aml, size, 0x604, 0x644); header(FADT, "FACP", 244, 3);
+    mem[FADT + 185] = 16; put32(FADT + 188, 0x700); seal(FADT);
+    CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, "pm1b_cnt"));
+    mem[FADT + 184] = 1; seal(FADT);
+    CHECK(parse(&r, &why) == 0 && r.pm1b_cnt == 0x700);
+    tables(aml, size, 0x604, 0); put32(FADT + 48, 0x10000); seal(FADT);
+    CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, "smi_cmd"));
+    tables(aml, size, 0x604, 0); mem[FADT + 89] = 4; seal(FADT);
+    CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, "pm1_cnt_len"));
+    puts("PASS Review round 1 P2: absent/valid/unsupported GAS, independent blocks, metadata, precedence and full legacy/GAS I/O extents");
+}
 int main(void)
 {
     struct acpi_soft_off r;
@@ -165,6 +228,63 @@ int main(void)
     seal(FADT);
     CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, "pm1a_cnt"));
 
+    /* fx-acpioff: the fixed-hardware blocks the S5 fallback clears, the
+     * FADT variants of real machines, and \_S5 packages in an SSDT. */
+    tables(qemu, sizeof(qemu), 0x604, 0);
+    put32(FADT + 56, 0x600); put32(FADT + 60, 0x640); put32(FADT + 80, 0x60C); put32(FADT + 84, 0x620);
+    mem[FADT + 46] = 9; mem[FADT + 53] = 0xF0; mem[FADT + 92] = 4; mem[FADT + 93] = 8; put32(FADT + 112, 0xA5);
+    seal(FADT);
+    CHECK(parse(&r, &why) == 0 && r.source == ACPI_S5_SOURCE_DSDT);
+    CHECK(r.pm1a_evt == 0x600 && r.pm1b_evt == 0x640 && r.gpe0 == 0x60C && r.gpe1 == 0x620);
+    CHECK(r.pm1_evt_len == 4 && r.pm1_cnt_len == 2 && r.gpe0_len == 4 && r.gpe1_len == 8);
+    CHECK(r.sci_int == 9 && r.acpi_disable == 0xF0 && r.flags == 0xA5);
+    /* SMI_CMD zero (always ACPI mode) parses; the handshake fields are zero. */
+    tables(qemu, sizeof(qemu), 0x604, 0);
+    put32(FADT + 48, 0); mem[FADT + 52] = 0; seal(FADT);
+    CHECK(parse(&r, &why) == 0 && !r.smi_cmd && !r.acpi_enable && r.pm1a_cnt == 0x604 && !r.pm1b_cnt);
+    /* PM1_CNT_LEN below 2 or a hardware-reduced FADT (revision 5+, flag bit 20) refuse. */
+    tables(qemu, sizeof(qemu), 0x604, 0);
+    mem[FADT + 89] = 1; seal(FADT);
+    CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, "pm1_cnt_len"));
+    tables(qemu, sizeof(qemu), 0x604, 0);
+    mem[FADT + 8] = 5; put32(FADT + 112, 1u << 20); seal(FADT);
+    CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, "hw_reduced"));
+    tables(qemu, sizeof(qemu), 0x604, 0);
+    put32(FADT + 112, 1u << 20); seal(FADT);   /* the bit is reserved before revision 5 */
+    CHECK(parse(&r, &why) == 0);
+    /* Two-element package with Zero/One, and a four-element package with
+     * BytePrefix values, as real BIOSes emit them. */
+    static const uint8_t two[] = { 0x08, '_', 'S', '5', '_', 0x12, 0x04, 0x02, 0x01, 0x00 };
+    tables(two, sizeof(two), 0x604, 0);
+    CHECK(parse(&r, &why) == 0 && r.slp_typa == 1 && r.slp_typb == 0);
+    static const uint8_t four[] = { 0x08, 0x5C, '_', 'S', '5', '_', 0x12, 0x0A, 0x04, 0x0A, 0x05, 0x0A, 0x05, 0x0A, 0x00, 0x0A, 0x00 };
+    tables(four, sizeof(four), 0x604, 0x644);
+    CHECK(parse(&r, &why) == 0 && r.slp_typa == 5 && r.slp_typb == 5 && r.pm1b_cnt == 0x644);
+    /* \_S5 in an SSDT: the DSDT has none; the root table names an APIC, a
+     * bad-checksum SSDT (skipped), an SSDT without \_S5 and the one with it.
+     * On the "s5" failure the FADT description is still returned. */
+    static const uint8_t ssdt_other[] = { 0x08, '_', 'S', '3', '_', 0x12, 0x06, 0x04, 0x05, 0x05, 0, 0 };
+    enum { SSDT_A = 0x8000, SSDT_B = 0x9000, SSDT_C = 0xA000 };
+    tables(none, sizeof(none), 0x604, 0);
+    header(RSDT, "RSDT", 36 + 20, 1);
+    put32(RSDT + 44, SSDT_A); put32(RSDT + 48, SSDT_B); put32(RSDT + 52, SSDT_C); seal(RSDT);
+    header(SSDT_A, "SSDT", 36 + sizeof(ich), 1); memcpy(mem + SSDT_A + 36, ich, sizeof(ich)); seal(SSDT_A); mem[SSDT_A + 40]++;
+    header(SSDT_B, "SSDT", 36 + sizeof(ssdt_other), 1); memcpy(mem + SSDT_B + 36, ssdt_other, sizeof(ssdt_other)); seal(SSDT_B);
+    header(SSDT_C, "SSDT", 36 + sizeof(two), 1); memcpy(mem + SSDT_C + 36, two, sizeof(two)); seal(SSDT_C);
+    CHECK(parse(&r, &why) == 0 && r.source == ACPI_S5_SOURCE_SSDT && r.slp_typa == 1 && r.slp_typb == 0);
+    /* The DSDT wins over an SSDT when both define it. */
+    header(DSDT, "DSDT", 36 + sizeof(ich), 1); memcpy(mem + DSDT + 36, ich, sizeof(ich)); seal(DSDT);
+    CHECK(parse(&r, &why) == 0 && r.source == ACPI_S5_SOURCE_DSDT && r.slp_typa == 7);
+    /* A truncated SSDT (length beyond the mapped memory) is skipped. */
+    header(DSDT, "DSDT", 36 + sizeof(none), 1); memcpy(mem + DSDT + 36, none, sizeof(none)); seal(DSDT);
+    put32(SSDT_C + 4, 0x40000);
+    CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, "s5"));
+    CHECK(r.pm1a_cnt == 0x604 && r.source == ACPI_S5_SOURCE_NONE && r.smi_cmd == 0xB2);
+    /* No \_S5 anywhere, no SSDTs: the FADT description still comes back. */
+    tables(none, sizeof(none), 0x604, 0x644);
+    CHECK(parse(&r, &why) == -ENOTSUP && !strcmp(why, "s5") && r.pm1b_cnt == 0x644 && r.source == ACPI_S5_SOURCE_NONE);
+
+    test_register_validation(qemu, sizeof(qemu));
     printf("power: acpi soft-off parser, %u failures (%u maps)\n", failures, maps);
     return failures ? 1 : 0;
 }

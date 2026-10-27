@@ -4197,6 +4197,13 @@ created with the BATCH_* formats; they cannot be mapped into user space.
 #define CIUKI_ACCEL_FENCE 11u
 #define CIUKI_ACCEL_QUERY_COMMANDS 12u
 #define CIUKI_ACCEL_QUERY_SURFACE 13u
+```
+
+Revocable offscreen cache epoch. Offscreen COPY/WRITE background and VIDEO
+target reserved[0] must equal this value; other reserved words stay zero.
+
+```c
+#define CIUKI_ACCEL_CACHE_EPOCH 14u
 #define CIUKI_BATCH_VERSION 1u
 #define CIUKI_BATCH_MAGIC 826426435u
 #define CIUKI_BATCH_MAX_BYTES 1048576u
@@ -4414,7 +4421,7 @@ uint32_t flags;
 uint32_t reserved[4];
 ```
 
-16
+16; VIDEO: cache epoch in [0], [1..3]=0
 
 ```c
 };
@@ -5290,7 +5297,7 @@ game is the catalog index+1, or zero for the interactive shell.
 sole CiukiDOS K2043 fork, DFV2 binding and native IFS
 
 ```c
-#define CIUKI_DOSVM_GAME_COUNT 4u
+#define CIUKI_DOSVM_GAME_COUNT 5u
 ```
 
 f3-46 CREATE launch.memory: 0 demand-zero, pageable pool (default); 1 the
@@ -5618,7 +5625,7 @@ the native render3d contract; unknown state is rejected before submission.
 
 ```c
 #define W32_RENDER3D 514u
-#define CIUKI_R3D_VERSION 2u
+#define CIUKI_R3D_VERSION 3u
 #define CIUKI_R3D_QUERY 1u
 #define CIUKI_R3D_OPEN 2u
 #define CIUKI_R3D_CLOSE 3u
@@ -5631,6 +5638,7 @@ the native render3d contract; unknown state is rejected before submission.
 #define CIUKI_R3D_WAIT 10u
 #define CIUKI_R3D_PRESENT 11u
 #define CIUKI_R3D_D16 1u
+#define CIUKI_R3D_D24S8 2u
 #define CIUKI_R3D_ARGB8888 1u
 #define CIUKI_R3D_RGB565 4u
 #define CIUKI_R3D_ARGB4444 8u
@@ -5665,6 +5673,8 @@ Qualified sample-space policy, not a silicon precision specification.
 #define CIUKI_R3D_DEPTH_WRITE 16u
 #define CIUKI_R3D_COPY 32u
 #define CIUKI_R3D_TEXTURE1 64u
+#define CIUKI_R3D_STENCIL_TEST 128u
+#define CIUKI_R3D_CLEAR_STENCIL 256u
 #define CIUKI_R3D_LESS 0u
 #define CIUKI_R3D_NEVER 1u
 #define CIUKI_R3D_ALWAYS 2u
@@ -5709,6 +5719,25 @@ and ONE/ZERO work in either slot. Caps contain the union of selector bits.
 #define CIUKI_R3D_RESOURCE_D16 2u
 #define CIUKI_R3D_RESOURCE_TEXTURE 3u
 #define CIUKI_R3D_RESOURCE_LINEAR_COLOR 4u
+#define CIUKI_R3D_RESOURCE_D24S8 5u
+```
+
+RGB565 resources keep canonical ARGB8888 shadows; no alpha attachment.
+
+```c
+#define CIUKI_R3D_RESOURCE_COLOR565 6u
+#define CIUKI_R3D_RESOURCE_LINEAR565 7u
+```
+
+Stencil operations; zero initialized state keeps the stored value.
+
+```c
+#define CIUKI_R3D_STENCIL_KEEP 0u
+#define CIUKI_R3D_STENCIL_ZERO 1u
+#define CIUKI_R3D_STENCIL_REPLACE 2u
+#define CIUKI_R3D_STENCIL_INCR 3u
+#define CIUKI_R3D_STENCIL_DECR 4u
+#define CIUKI_R3D_STENCIL_INVERT 5u
 
 struct ciuki_r3d_sampler {
     uint32_t combine;
@@ -5736,6 +5765,16 @@ struct ciuki_r3d_vertex {
     int32_t u;
     int32_t v;
 };
+struct ciuki_r3d_stencil {
+    uint32_t function;
+    uint32_t reference;
+    uint32_t read_mask;
+    uint32_t write_mask;
+    uint32_t fail;
+    uint32_t zfail;
+    uint32_t zpass;
+    uint32_t clear;
+};
 struct ciuki_r3d_draw {
     uint32_t flags;
     uint32_t target;
@@ -5750,6 +5789,7 @@ struct ciuki_r3d_draw {
     uint32_t flat_color[256];
     int32_t uv1[768][2];
     struct ciuki_r3d_vertex vertices[768];
+    struct ciuki_r3d_stencil stencil;
 };
 struct ciuki_r3d_caps {
     uint32_t version;
@@ -5786,6 +5826,8 @@ WAIT: 64-bit sequence/ordinal split into halves; timeout capped at 100 ms.
 Completed receipts authenticate generation/context/ordinal (sequence is then
 informational). PRESENT: exact existing lease token, owned linear resource,
 dimensions/pitch, completed fence; no user payload or framebuffer mapping.
+D24S8 canonical words: increasing Z in bits 23:0, S in bits 31:24.
+Vertex/clear Z is 0..65535 for D16, 0..16777215 for D24S8.
 Other actions require the queried generation. result=1 means success;
 error is positive native errno. No backend packets or VRAM addresses.
 
@@ -6692,6 +6734,22 @@ DESK_CLIPBOARD = 92, DESK_CLIPBOARD_EVENT = 93,
 v2 desktop to DOS window: u32 action 1 Mark, 2 Copy, 3 Paste, 4 toggle QuickEdit, 5 toggle Exclusive mode
 
 ```c
+,
+```
+
+f7-14: the common present lease for native (v2) clients, with the v3
+LEASE/LEASE_EVENT payloads after the 4-byte header (DESK_SHELL_VERSION).
+LEASE (client to desktop, 20 bytes): action (0 release, 1 request),
+  w, h, bpp. The focused window of the client is the lease window.
+LEASE_EVENT (desktop to client, 76 bytes): the additive 72-byte v3
+  event: state (0 refused/ended, 1 granted, 2 pending, 3 revoked),
+  generation, w, h, bpp, token, fb-generation, mode, scale, source
+  w/h/pitch/size/format, native w/h/bpp, signed error. The holder
+  presents through W32_DISPLAY_FRAME or the render3d GPU copy with
+  the token and fb-generation (ciuki_gl_present).
+
+```c
+DESK_LEASE = 95, DESK_LEASE_EVENT = 96
 };
 enum desk_clip_op { DESK_CLIP_QUERY = 1, DESK_CLIP_EMPTY, DESK_CLIP_PUT, DESK_CLIP_CLOSE,
                     DESK_CLIP_GET, DESK_CLIP_WATCH, DESK_CLIP_REGISTER, DESK_CLIP_NAME, DESK_CLIP_OPEN, DESK_CLIP_RELEASE, DESK_CLIP_DISPLAY, DESK_CLIP_DISPLAY_REPLY };
@@ -7263,6 +7321,134 @@ int ciuki_font_paint(struct ciuki_font_face *, unsigned em_size, const char *, s
                      int x, int baseline, ciuki_font_painter, void *, int32_t *advance);
 int ciuki_font_cache_info(struct ciuki_font_face *, struct ciuki_font_cache_stats *);
 void ciuki_font_cache_clear(struct ciuki_font_face *);
+#endif
+```
+
+## `ciuki/gl.h`
+
+Source: `sdk/libgl/include/ciuki/gl.h`.
+
+Native OpenGL target binding, backend policy, completion accounting and
+full-screen presentation (f7-01, f7-14). SPDX-License-Identifier: MIT
+
+```c
+#ifndef CIUKI_GL_H
+#define CIUKI_GL_H
+#include <stdint.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
+```
+
+One context per process, one calling thread. Stride is in pixels.
+Pixels remain caller-owned and must be writable until finish/rebind/close.
+Invalid targets return -EINVAL; allocation failure returns -ENOMEM.
+Initial creation resets GL state; later binds retain it, resetting the
+viewport and scissor to the new target. The target is XRGB8888, top-down,
+with a 16-bit depth attachment owned by the library. A packed target
+(stride == width) is rendered in place; other strides use private rows
+copied out by ciuki_gl_finish. Do not call the engine's TinyGL internals.
+
+```c
+int ciuki_gl_bind(uint32_t *pixels, unsigned width, unsigned height, unsigned stride);
+```
+
+Ends the frame: completes every queued hardware batch, reads the finished
+target back into the caller's pixels and records the frame's backend.
+
+```c
+void ciuki_gl_finish(void);
+void ciuki_gl_close(void);
+unsigned ciuki_gl_generation(void);
+```
+
+Backend policy (contract 7.1): automatic uses the qualified hardware path
+when the kernel advertises it for the bound target, software never opens
+it, hardware refuses (-ENODEV) when it is unavailable and keeps rendering
+in software. The policy applies from the next GL call.
+
+```c
+#define CIUKI_GL_BACKEND_AUTO 0u
+#define CIUKI_GL_BACKEND_SOFTWARE 1u
+#define CIUKI_GL_BACKEND_HARDWARE 2u
+int ciuki_gl_set_backend(unsigned policy);
+```
+
+Completion accounting. A frame is a hardware frame when every draw and
+clear of the frame executed on the provider; a frame with any scalar
+draw is a software frame; a frame without draws is counted only in
+frames. Frames end at ciuki_gl_finish or ciuki_gl_present.
+refusals are temporary provider refusals
+(software for that draw); fallbacks are permanent whole-context
+fallbacks (contract 7.2). Counters are cumulative since bind.
+
+```c
+struct ciuki_gl_status {
+    uint32_t size;
+```
+
+in: sizeof(struct ciuki_gl_status)
+
+```c
+uint32_t policy;
+```
+
+CIUKI_GL_BACKEND_* requested
+
+```c
+uint32_t backend;
+```
+
+CIUKI_GL_BACKEND_HARDWARE or _SOFTWARE now active
+
+```c
+uint32_t hardware_failed;
+```
+
+permanent software fallback for this context
+
+```c
+uint32_t generation;
+```
+
+provider capability generation, 0 without hardware
+
+```c
+uint32_t reserved;
+    uint64_t frames, hardware_frames, software_frames;
+    uint64_t hardware_draws, software_draws, refusals, fallbacks;
+    uint64_t presents, hardware_presents;
+};
+int ciuki_gl_status(struct ciuki_gl_status *out);
+```
+
+Full-screen presentation through the desktop's present lease
+(DESK_LEASE / DESK_LEASE_EVENT). The bound target must match the lease
+surface (width, height, XRGB8888). A qualified provider copies the
+completed frame on the GPU and the kernel writes it to the scanout
+(returns 1); the frame then stays resident on the provider and is not
+read back into the caller's pixels: ciuki_gl_finish or a pixel read
+makes them current, while a rebind or close before the next draw
+releases them without writing (they may already be freed). Otherwise
+the finished pixels are presented by the CPU frame path (returns 0).
+Negative errno: the lease is no longer valid (-EACCES), the layout does
+not match (-EINVAL) or the kernel refused.
+
+```c
+struct ciuki_gl_lease {
+    uint32_t token, generation, width, height, bpp, pitch;
+};
+int ciuki_gl_present(const struct ciuki_gl_lease *lease);
+```
+
+Address of an advertised extension entry point by name (the
+wglGetProcAddress set of opengl32), NULL for core or unknown names.
+
+```c
+void *ciuki_gl_get_proc_address(const char *name);
+#ifdef __cplusplus
+}
+#endif
 #endif
 ```
 

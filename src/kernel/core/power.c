@@ -17,8 +17,9 @@
  *   to 0x600 (PM1a_CNT 0x604) when QEMU supplies etc/table-loader.
  * Runtime ownership and AML sleep preparation are supplied by acpi/events.c
  * (or APM 1.2, core/apm_platform.c) through ciuki/power_source.h; this file
- * owns the single orderly-shutdown path and retains the read-only parser for
- * compatibility tests only.
+ * owns the single orderly-shutdown path. fx-acpioff (2026-10-26): the
+ * read-only parser below feeds the ACPI S5 register fallback
+ * (core/power_acpi_s5.c), consulted only after the active provider.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/abi.h>
 #include <ciuki/power.h>
@@ -218,15 +219,43 @@ int acpi_s5_find(const uint8_t *aml, uint32_t len, uint8_t *typa, uint8_t *typb)
     return s5_terms(aml, len, 0, typa, typb);
 }
 
-static uint16_t io_port(const uint8_t *fadt, uint32_t len, uint32_t legacy, uint32_t gas)
+enum io_block_state { IO_BLOCK_ABSENT, IO_BLOCK_VALID, IO_BLOCK_UNSUPPORTED };
+static enum io_block_state io_port(const uint8_t *fadt, uint32_t len, uint32_t legacy,
+                                    uint32_t gas, unsigned bytes, unsigned access, uint16_t *out)
 {
     uint32_t port = rd32(fadt + legacy);
-    /* The extended block counts only in SystemIO space (space id 1). */
-    if (!port && len >= gas + 12 && fadt[gas] == 1 && !rd32(fadt + gas + 8))
+    *out = 0;
+    /* ACPI 2.0c: a present extended address supersedes the legacy block.
+     * Unsupported is never equivalent to an optional, absent block. */
+    if (len >= gas + 12 && (rd32(fadt + gas + 4) || rd32(fadt + gas + 8))) {
+        if (fadt[gas] != 1 || rd32(fadt + gas + 8) || fadt[gas + 2] ||
+            fadt[gas + 1] != bytes * 8u ||
+            (fadt[gas + 3] && fadt[gas + 3] != access)) return IO_BLOCK_UNSUPPORTED;
         port = rd32(fadt + gas + 4);
-    return port <= 0xFFFFu ? (uint16_t)port : 0;
+    }
+    if (!port) return IO_BLOCK_ABSENT;
+    if (!bytes || (uint64_t)port + bytes > 0x10000u) return IO_BLOCK_UNSUPPORTED;
+    *out = (uint16_t)port;
+    return IO_BLOCK_VALID;
 }
 
+/* fx-acpioff: \_S5 may live in an SSDT (ACPI 2.0 5.2.11.2: SSDT definition
+ * blocks are loaded after the DSDT and add objects to the namespace; iPXE
+ * acpipwr.c extracts \_S5 "from DSDT or any SSDT"). A table that fails its
+ * checksum or bounds is skipped, never guessed. */
+static bool s5_in_ssdts(acpi_map_fn map, void *ctx, const uint8_t *root, uint32_t len, unsigned width,
+                        uint8_t *typa, uint8_t *typb)
+{
+    for (uint32_t at = 36; at + width <= len; at += width) {
+        if (width == 8 && rd32(root + at + 4)) continue;
+        uint32_t phys = rd32(root + at), n;
+        const uint8_t *h = phys ? map(ctx, phys, 36) : 0;
+        if (!h || !sig_is(h, "SSDT")) continue;
+        const uint8_t *t = table(map, ctx, phys, "SSDT", 36, ACPI_TABLE_MAX, &n);
+        if (t && !acpi_s5_find(t + 36, n - 36, typa, typb)) return true;
+    }
+    return false;
+}
 int acpi_soft_off_parse(acpi_map_fn map, void *ctx, uint32_t rsdp_phys,
                         struct acpi_soft_off *out, const char **why)
 {
@@ -259,13 +288,37 @@ int acpi_soft_off_parse(acpi_map_fn map, void *ctx, uint32_t rsdp_phys,
     if (!fadt) return -ENOTSUP;
     struct acpi_soft_off r = { 0 };
     r.fadt_revision = fadt[8];
-    r.pm1a_cnt = io_port(fadt, fadt_len, 64, 172);
-    r.pm1b_cnt = io_port(fadt, fadt_len, 68, 184);
+    r.flags = rd32(fadt + 112);
+    r.sci_int = (uint16_t)(fadt[46] | fadt[47] << 8);
+    r.pm1_evt_len = fadt[88]; r.pm1_cnt_len = fadt[89];
+    r.gpe0_len = fadt[92]; r.gpe1_len = fadt[93];
     uint32_t smi = rd32(fadt + 48);
-    r.smi_cmd = smi <= 0xFFFFu ? (uint16_t)smi : 0;
-    r.acpi_enable = fadt[52];
+    *why = "smi_cmd";
+    if (smi > 0xFFFFu) return -ENOTSUP;
+    r.smi_cmd = (uint16_t)smi;
+    r.acpi_enable = fadt[52]; r.acpi_disable = fadt[53];
+    /* ACPI 5.0 HW_REDUCED_ACPI (flags bit 20): no PM1 registers exist;
+     * the SLEEP_CONTROL_REG path is not implemented. */
+    *why = "hw_reduced";
+    if (r.fadt_revision >= 5 && (r.flags & (1u << 20))) return -ENOTSUP;
+    *why = "pm1_cnt_len";
+    if (r.pm1_cnt_len != 2) return -ENOTSUP;
     *why = "pm1a_cnt";
-    if (!r.pm1a_cnt) return -ENOTSUP;
+    if (io_port(fadt, fadt_len, 64, 172, r.pm1_cnt_len, 2, &r.pm1a_cnt) != IO_BLOCK_VALID) return -ENOTSUP;
+    *why = "pm1b_cnt";
+    if (io_port(fadt, fadt_len, 68, 184, r.pm1_cnt_len, 2, &r.pm1b_cnt) == IO_BLOCK_UNSUPPORTED) return -ENOTSUP;
+    *why = "pm1a_evt";
+    if (io_port(fadt, fadt_len, 56, 148, r.pm1_evt_len, 2, &r.pm1a_evt) == IO_BLOCK_UNSUPPORTED ||
+        (r.pm1a_evt && r.pm1_evt_len != 4)) return -ENOTSUP;
+    *why = "pm1b_evt";
+    if (io_port(fadt, fadt_len, 60, 160, r.pm1_evt_len, 2, &r.pm1b_evt) == IO_BLOCK_UNSUPPORTED ||
+        (r.pm1b_evt && r.pm1_evt_len != 4)) return -ENOTSUP;
+    *why = "gpe0";
+    if (io_port(fadt, fadt_len, 80, 220, r.gpe0_len, 1, &r.gpe0) == IO_BLOCK_UNSUPPORTED ||
+        (r.gpe0 && ((r.gpe0_len & 1) || r.gpe0_len > 32))) return -ENOTSUP;
+    *why = "gpe1";
+    if (io_port(fadt, fadt_len, 84, 232, r.gpe1_len, 1, &r.gpe1) == IO_BLOCK_UNSUPPORTED ||
+        (r.gpe1 && ((r.gpe1_len & 1) || r.gpe1_len > 32))) return -ENOTSUP;
     uint32_t dsdt_phys = rd32(fadt + 40);
     if (!dsdt_phys && fadt_len >= 148 && !rd32(fadt + 144))
         dsdt_phys = rd32(fadt + 140);
@@ -273,8 +326,11 @@ int acpi_soft_off_parse(acpi_map_fn map, void *ctx, uint32_t rsdp_phys,
     const uint8_t *dsdt = table(map, ctx, dsdt_phys, "DSDT", 36, ACPI_TABLE_MAX, &dsdt_len);
     *why = "dsdt";
     if (!dsdt) return -ENOTSUP;
+    *out = r;
     *why = "s5";
-    if (acpi_s5_find(dsdt + 36, dsdt_len - 36, &r.slp_typa, &r.slp_typb)) return -ENOTSUP;
+    if (!acpi_s5_find(dsdt + 36, dsdt_len - 36, &r.slp_typa, &r.slp_typb)) r.source = ACPI_S5_SOURCE_DSDT;
+    else if (s5_in_ssdts(map, ctx, root, len, width, &r.slp_typa, &r.slp_typb)) r.source = ACPI_S5_SOURCE_SSDT;
+    else return -ENOTSUP;
     *why = "ok";
     *out = r;
     return 0;
@@ -284,6 +340,19 @@ int acpi_soft_off_parse(acpi_map_fn map, void *ctx, uint32_t rsdp_phys,
 extern int power_devices_quiesce_terminal(void) __attribute__((weak));
 extern int ata_power_quiesce(void) __attribute__((weak));
 extern int audio_settings_flush(void) __attribute__((weak));
+/* fx-acpioff: the ACPI S5 register fallback (core/power_acpi_s5.c), weak so
+ * host harnesses without it keep the two-provider behaviour. Provider order
+ * (docs/design/acpi-events-power.md, "ACPI S5 register fallback"): the
+ * active provider first (ACPI owned by the OS, else APM Off), then the
+ * fallback when no provider is qualified or the provider's Off returned. */
+#pragma weak power_s5_fallback_qualified
+#pragma weak power_s5_fallback_state
+#pragma weak power_s5_fallback_off
+static bool s5_fallback_ready(void)
+{ return power_s5_fallback_qualified && power_s5_fallback_qualified(); }
+static const char *s5_fallback_state(void)
+{ return power_s5_fallback_state ? power_s5_fallback_state() : "absent"; }
+static bool power_can_off(void) { return power_source_can_off() || s5_fallback_ready(); }
 static uint32_t power_progress;
 static void power_checkpoint(void)
 { if (blackbox_checkpoint) (void)blackbox_checkpoint(); }
@@ -341,12 +410,22 @@ static int power_sequence(bool off)
     if (!off) { klog("[power] stage=reset fallback=8042-triple-fault"); power_checkpoint(); kernel_reboot(); }
     struct power_source_snapshot provider; power_source_snapshot(&provider);
     const char *name = provider.provider == POWER_SOURCE_ACPI ? "acpi" : provider.provider == POWER_SOURCE_APM ? "apm" : "none";
-    if (!power_source_can_off()) {
-        klog("[power] no qualified soft-off provider=%s; devices stopped, safe to turn off", name); power_checkpoint(); return -ENOTSUP;
+    bool active = power_source_can_off(), fallback = s5_fallback_ready();
+    if (!active && !fallback) {
+        klog("[power] no qualified soft-off provider=%s acpi_s5=%s; devices stopped, safe to turn off", name, s5_fallback_state());
+        power_checkpoint(); return -ENOTSUP;
     }
-    klog("[power] stage=%s-off state=quiescent", name); power_checkpoint();
-    e = power_source_soft_off();
-    klog("[power] %s soft-off returned error=%d; stopped devices and leases retained", name, e); power_checkpoint();
+    if (active) {
+        klog("[power] stage=%s-off state=quiescent", name); power_checkpoint();
+        e = power_source_soft_off();
+        klog("[power] %s soft-off returned error=%d; stopped devices and leases retained", name, e); power_checkpoint();
+        if (!fallback) return e;
+        klog("[power] stage=acpi-s5-off provider=fallback after=%s error=%d", name, e);
+    } else klog("[power] stage=acpi-s5-off provider=fallback state=quiescent unqualified=%s", name);
+    power_checkpoint();
+    int fallback_error = power_s5_fallback_off(false);
+    klog("[power] acpi s5 fallback returned error=%d; stopped devices and leases retained", fallback_error); power_checkpoint();
+    if (!active || fallback_error != -ENOTSUP) e = fallback_error;
     return e;
 }
 /* T23 trial c42f556e (docs/validation/t23-win32-hang-shutdown-2026-10-25.md):
@@ -407,11 +486,24 @@ static int power_force(bool off, uint32_t pid)
             klog("[power] stage=forced-reset fallback=8042-triple-fault"); kernel_reboot();
         }
     }
-    if (!power_source_can_off()) { klog("[power] forced off: no soft-off provider"); return -ENOTSUP; }
+    bool active = power_source_can_off(), fallback = s5_fallback_ready();
+    if (!active && !fallback) { klog("[power] forced off: no soft-off provider acpi_s5=%s", s5_fallback_state()); return -ENOTSUP; }
     if (fence) { klog("[power] forced off refused: devices not quiescent (error %d); turn the computer off with its power button", fence); return -EBUSY; }
     power_source_mark_emergency_stopped();
-    int e = power_source_soft_off_forced();   /* the forced authorization, never the orderly entry (review 3, finding 4) */
-    klog("[power] forced soft-off returned error=%d", e);
+    int e = -ENOTSUP;
+    if (active) {
+        e = power_source_soft_off_forced();   /* the forced authorization, never the orderly entry (review 3, finding 4) */
+        klog("[power] forced soft-off returned error=%d", e);
+    }
+    if (e && fallback) {
+        /* fx-acpioff: the same S5 write on the emergency proof; a provider
+         * without a forced entry (ENOTSUP) or whose Off returned is followed
+         * by the register fallback, never preceded by it. */
+        klog("[power] stage=acpi-s5-off provider=fallback forced=1 after=%d", e);
+        int fallback_error = power_s5_fallback_off(true);
+        klog("[power] forced acpi s5 fallback returned error=%d", fallback_error);
+        if (fallback_error != -ENOTSUP) e = fallback_error;
+    }
     return e;
 }
 /* The desktop, or Setup's capability holder in Setup mode, owns call 73's
@@ -541,7 +633,7 @@ int32_t power_syscall(uint32_t action)
      * soft-off (ACPI S5 or APM Off). */
     if (!power_authorized(caller)) return -EPERM;
     if (action == CIUKI_POWER_QUERY)
-        return power_progress | CIUKI_POWER_CAN_REBOOT | (power_source_can_off() ? CIUKI_POWER_CAN_OFF : 0) |
+        return power_progress | CIUKI_POWER_CAN_REBOOT | (power_can_off() ? CIUKI_POWER_CAN_OFF : 0) |
                (!(power_progress & (CIUKI_POWER_STOPPED | CIUKI_POWER_UNCERTAIN)) &&
                 power_source_standby_reason() == CIUKI_POWER_STANDBY_AVAILABLE ? CIUKI_POWER_CAN_STANDBY : 0);
     if (action == CIUKI_POWER_STANDBY || action == CIUKI_POWER_CANCEL_STANDBY) {

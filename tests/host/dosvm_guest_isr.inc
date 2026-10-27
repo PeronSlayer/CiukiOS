@@ -27,6 +27,18 @@ static bool isr_replay(void)
     bool sound = getenv("GUEST_MENU_SOUND") != 0;
     CHECK(guest_perf && dosvm_input_focus(dosvm_key(gv), true));
     if (!menu_wait(1000)) return false;
+    if (getenv("GUEST_ISR_ROCKETS")) {
+        /* Type IDDQD, IDKFA, 5 through the virtual keyboard: the original
+         * game grants/selects rockets. No guest code or WAD is patched. */
+        static const unsigned keys[] = {0x17,0x20,0x20,0x10,0x20,0x17,0x20,0x25,0x21,0x1E,0x06};
+        for (unsigned i = 0; i < sizeof(keys)/sizeof(keys[0]); i++) {
+            window_key(keys[i], 1);
+            if (!menu_wait(30)) return false;
+            window_key(keys[i], 0);
+            if (!menu_wait(30)) return false;
+        }
+        if (!menu_wait(500)) return false;
+    }
     isr_stats("startup");
     memset(gv->perf.isr, 0, sizeof(gv->perf.isr));
     memset(gv->perf.if_enable, 0, sizeof(gv->perf.if_enable));
@@ -98,7 +110,7 @@ static bool isr_replay(void)
             printf("t23x_lean cause=%s exits=%llu code_ns_per_exit=%.1f t23_us_per_exit=%.1f\n", names[i],
                    (unsigned long long)t23x_lean_exits[i], (double)t23x_lean_ns[i] / t23x_lean_exits[i],
                    (double)t23x_lean_charged[i] / 1e3 / t23x_lean_exits[i]);
-        printf("t23x_model=%s host_clock_ns=%.1f\n", t23_fx27 ? "fx27" : "fx16", host_clock_ns);
+        printf("t23x_model=%s host_clock_ns=%.1f\n", t23_doomfs2 ? "doomfs2" : t23_fx27 ? "fx27" : "fx16", host_clock_ns);
         uint64_t edges = gv->pit.edges - pit_edges, irq0 = gv->monitor.stats.delivered[0] - timer;
         printf("t23_model ms=%llu monitor_ms=%.1f monitor_pm=%.0f pit_edges=%llu irq0=%llu irq0_lost_pm=%.1f reinjected=%llu lost=%llu sb_late_acks=%u merged=%u if_clear=%u descheduled=%u irq_latency_avg_us=%llu irq_latency_max_us=%u\n",
             (unsigned long long)ms, total / 1e6, ms ? total / 1e3 / ms : 0.0,
