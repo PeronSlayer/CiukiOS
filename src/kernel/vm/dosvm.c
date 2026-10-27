@@ -190,6 +190,9 @@ static int lean_io(struct dosvm *v, struct v86_frame *f, int *error)
      * STI, then the next CLI). A pending IRQ is still delivered on the
      * ordinary tail (lean_after). */
     if (v->frame_pm) v->dpmi.shadow = false;
+    /* The ordinary #GP path's first step for V86 (dosvm_trap): a software
+     * STI/MOV SS shadow ends at any boundary other than its own. */
+    else v86_retire_shadow(&v->monitor, f);
     if (!lean_before(v, f)) return 0;
     struct dpmi_seg seg, *cs = 0;
     if (v->frame_pm) {
@@ -205,11 +208,34 @@ static int lean_io(struct dosvm *v, struct v86_frame *f, int *error)
     }
     /* t23-dosperf: an unprefixed PM CLI/STI (DOS/4GW and Watcom clients:
      * Warcraft II, 10,143 per second in trial c42f556e bank n=4) takes the
-     * same lean return as a port exit. V86 CLI/STI keep v86_emulate. */
+     * same lean return as a port exit (V86 CLI/STI: below). */
     if ((op == 0xFA || op == 0xFB) && len == 1 && cs) {
         bool quiet = dpmi_lean_flags(v, f, cs, op);
         cli();
         if (quiet && lean_after(v, f)) { v->perf.lean_exits++; return 1; }
+        sti();
+        return 2;
+    }
+    /* fx-doswin3: an unprefixed V86 CLI/STI (Wolfenstein 3-D's VGAMAPMASK,
+     * VGAREADMAP and VGAWRITEMODE macros, ID_VL.H: cli; mov dx,..; out dx,ax;
+     * sti around every plane select of its menus, text and fizzle fade; T23
+     * trial 5bb73dba bank n=6: 36,206 CLI and 35,923 STI exits at 7.9 and
+     * 8.9 us on the ordinary path). The instruction is v86_emulate's own,
+     * with its virtual IF, STI shadow and TF rules; lean_before already
+     * required no shadow or TF before it, and lean_after requires no
+     * pending virtual IRQ after it, so the ordinary tail would deliver
+     * nothing here either (an STI that enables a pending IRQ, or any other
+     * obligation, continues through the ordinary tail without emulating
+     * again). The cause and IF-enable records are the ordinary path's. */
+    if ((op == 0xFA || op == 0xFB) && len == 1 && !cs) {
+        bool was_vif = v->monitor.vif;
+        int e = v86_emulate(&v->monitor, f);
+        v->perf.cause = op == 0xFA ? DOSVM_COST_RM_CLI : DOSVM_COST_RM_STI;
+        if (e) { *error = e; return 2; }
+        if (!was_vif && v->monitor.vif) v->perf.if_enable[DOSVM_IF_STI]++;
+        if (v->dpmi.active) v->dpmi.if_steps = 0; /* dpmi_deliver's if_recovery_end */
+        cli();
+        if (lean_after(v, f)) { v->perf.lean_exits++; return 1; }
         sti();
         return 2;
     }
@@ -817,11 +843,25 @@ uint32_t dosvm_task_quantum(const struct task *t, uint32_t normal)
     if (focused) return normal < 8u ? normal : 8u;
     return normal < 4u ? normal : 4u;
 }
+/* fx-doswin3: no preference while the VM's own presenter has been woken
+ * for a frame and has not yet run (present_ready, wait_present). Bounded:
+ * a presenter that does not run within DOSVM_PRESENT_DISPATCH_MS no longer
+ * suspends it. Only a windowed VM has a waiting presenter. Never inside a
+ * guest hardware-interrupt handler: a handler that sends its EOI early and
+ * re-enables interrupts (DMX's timer service) would be re-entered by the
+ * IRQ0 edges of a longer absence (f3-12: DMX returns without EOI once its
+ * private IRQ stacks are exhausted). */
+static bool present_pending(const struct dosvm *v)
+{
+    return v->present_dispatch && !v->fullscreen && g_ticks - v->present_dispatch_tick < DOSVM_PRESENT_DISPATCH_MS &&
+           !dosvm_in_irq(v);
+}
 const struct task *dosvm_task_focus(void)
 {
     struct dosvm *v = dosvm_lookup(input_focus);
     return v && v->owner_pid && v->window_input && v->info.state < DOSVM_STOPPING &&
-           v->info.state != DOSVM_BLOCKED && !v->window_marking && !v->fullscreen_suspended && !idle_recent(v) ? v->task : 0;
+           v->info.state != DOSVM_BLOCKED && !v->window_marking && !v->fullscreen_suspended && !idle_recent(v) &&
+           !present_pending(v) ? v->task : 0;
 }
 const struct task *dosvm_task_irq(void)
 {

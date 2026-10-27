@@ -182,6 +182,8 @@ class SplashProgressTests(unittest.TestCase):
         self.assertIn('d->sh.notification.expires=d->now_ns+10000000000ull;', desktop)
         # f2-92: the engine-use record of the 2 s performance window.
         self.assertIn('"[desktop] accel fills=%llu copies=%llu writes=%llu fallback=%llu cache_rows=%llu', desktop)
+        # fx-doswin3: the same 2 s window prices composition and presentation.
+        self.assertIn('composite_us=%llu present_us=%llu presents=%llu scene_px=%llu\\n"', desktop)
         sample = desktop.split('static void performance_sample(struct desktop *d, uint64_t now)\n{', 1)[1].split('\n}\n', 1)[0]
         self.assertIn('accel_record(d,now);', sample)
         self.assertLess(sample.index('desk_stats_sample(d);'), sample.index('accel_record(d,now);'))

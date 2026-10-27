@@ -174,3 +174,135 @@ decide whether the scoped 1.9x envelope is sufficient; the recurring gameplay
 complaint remains unqualified. Next T23 evidence should compare VM CPU/cost/
 port/remap/presenter banks, `vm_perf_checkpoint dac_counted`, desktop frame/
 accel work, CPU shares and VM-audio/kernel latency against the image hash.
+
+## Round 2 (2026-10-27): replay with the real games, presenter pacing, exit costs
+
+Host evidence only, against the sources of round 1 (`a59c3eb70`). No QEMU,
+image build or hardware run; physical figures are trial `5bb73dba`.
+
+### Sources and decisions
+
+- **Intel SDM Vol. 3A rev. 090** ([PDF](https://cdrdv2-public.intel.com/874249/253668-090-sdm-vol-3a.pdf)),
+  5.10.2.3 "Details of TLB Use": "the processor does not cache a
+  translation for a page number unless the accessed flag is 1 in each of
+  the paging-structure entries used during translation; before caching a
+  translation, the processor sets any of these accessed flags that is not
+  already 1", including translations for prefetches and speculative
+  accesses; 5.8: the dirty flag is set by writes; 11.1.2.1 "Automatic
+  Locking" (XCHG with a memory operand); "Serializing Instructions": INVLPG
+  is a privileged serializing instruction.
+  [FreeBSD i386 `pmap_enter`](https://raw.githubusercontent.com/freebsd/freebsd-src/main/sys/i386/i386/pmap.c)
+  invalidates a replaced PTE only when it had `PG_A`. Decision: a VGA window
+  PTE swap (`as_replace_pages`) invalidates only entries replaced with A or
+  D set; an entry read with both clear is replaced by one locked exchange
+  whose result decides. Every path that clears A in a present entry
+  invalidates while its space is current (this function, `as_sample_page`,
+  `dosvm_pool pte_sample`); a CR3 load flushes the rest (no CR4.PGE).
+  Agner Fog's [P6 tables](https://www.agner.org/optimize/instruction_tables.pdf):
+  `XCHG r,m` 4 µops with an implicit LOCK, CPUID 23-48 clocks; the T23 price
+  of INVLPG is not published and must come from the trial.
+- **Wolfenstein 3-D source** ([ID_VL.H](https://raw.githubusercontent.com/id-Software/wolf3d/master/WOLFSRC/ID_VL.H),
+  [ID_VL.C](https://raw.githubusercontent.com/id-Software/wolf3d/master/WOLFSRC/ID_VL.C),
+  [WL_DRAW.C](https://raw.githubusercontent.com/id-Software/wolf3d/master/WOLFSRC/WL_DRAW.C),
+  [ID_US_1.C](https://raw.githubusercontent.com/id-Software/wolf3d/master/WOLFSRC/ID_US_1.C)):
+  `VGAMAPMASK`, `VGAREADMAP` and `VGAWRITEMODE` are
+  `cli; mov dx,..; out dx,..; sti` around each plane select of menus, text,
+  latch copies and the fizzle fade (one `VGAREADMAP` and one `VGAMAPMASK`
+  per pixel), so each costs a V86 CLI exit, a port exit and an STI exit;
+  `ThreeDRefresh` flips with `cli; out 3D4h,0Ch; out 3D5h,hi; sti` once per
+  frame; `TEDLEVEL n NOWAIT` (US_Startup) starts a map directly (used by the
+  replay). Decision: a lean V86 CLI/STI exit, the instruction executed by
+  `v86_emulate` itself (virtual IF, STI shadow, TF), the shadow retired at
+  the next foreign boundary as on the ordinary path, every lean_before and
+  lean_after obligation kept.
+- **FreeVGA CRTC registers** ([Start Address High/Low, 0Ch/0Dh](https://www.scs.stanford.edu/22wi-cs212/pintos/specs/freevga/vga/crtcreg.htm)):
+  the start address selects the displayed page; a page-flipping game draws
+  into the other pages. Windows 3.x/9x refreshed a windowed DOS display on
+  a timer (`WindowUpdateTime`, 50 ms default; see
+  `t23-dos-window-lag-2026-10-25.md`). Decision: while a graphics-mode,
+  non-VBE guest changed its start address within the last 250 ms, the
+  presenter wakes only on displayed-page changes (start address, display
+  registers, palette, mode), not on every register write or back-buffer
+  store; each sample then shows a completed frame. After 250 ms without a
+  flip, and in text and VBE modes, the store wake is unchanged.
+- **Scheduler** (`task.c` rq_pop, `FOCUS_BUDGET` 8 of 10 ticks; the desktop
+  group's 25 % share): a woken DOS Box presenter (base 9) waited behind the
+  focused VM (base 7) for the VM's focused ticks (trial: WAIT dispatch 7.7
+  ms average for Wolfenstein, 12.8 ms for DOOM, 100 ms maximum). Decision:
+  from the presenter's VIDEO wake until it runs, at most 20 ms, the VM's
+  focus preference is suspended (`dosvm_task_focus`), never while the VM
+  is inside a guest hardware-interrupt handler (DMX's timer service sends
+  its EOI early and re-enables interrupts; the edges of a longer absence
+  re-enter it, and four deep it returns without EOI, f3-12); IRQ urgency
+  (`dosvm_task_irq`), the desktop share and every quantum are unchanged.
+- **Evidence for the next trial.** The desktop's `[desktop] accel` record
+  (every 2 s window with engine work, published once a minute) now carries
+  `composite_us`, `present_us`, `presents` and `scene_px`, so a DOS window
+  frame's composition and display requests are priced separately from the
+  kernel conversion (`vm_perf_present`); `[vm-audio] cadence_clock` carries
+  `cli_control`, the PM CLIs proven by the control-flow decode, which are
+  never cached as sites and restart the seed demand behind DOOM's
+  window-only return-tracker checkpoints (trial bank n=4: 10,674 `db`
+  exits, 377 ms; full screen 0 armed). The host DOOM replay does not arm
+  the tracker (`ret=0`), so its cause is not fixed here.
+
+### Results
+
+Replay `tests/host/dos/window_parity.py` (opt-in, not a suite): the
+pinned DOOM 1.9 shareware, Wolfenstein 3-D 1.4 shareware and Warcraft II
+demo on the production monitor (libx86emu guest runner), every exit priced
+at trial `5bb73dba`'s measured average for its cause (`GUEST_T23_MODEL=fixed`,
+deterministic), plus a DOS Box and desktop presentation model at the
+trial's per-row prices (13.9 us kernel conversion, ~7 us DOS Box copy,
+~50 us desktop per changed row, 25 % desktop share). Calibrated with a
+starved presenter, round 1's sources reproduce the trial's DOOM window
+bank n=4 (shown 8.6 against 6.8 frames/s, guest/monitor/off-CPU 195/360/447
+against 208/357/435 ms/s) and Wolfenstein's shown rate (12.8 against 11.6).
+
+| Shown frames per s (factor full/window) | Full screen | Round 1 | Round 2, presenter still starved | Round 2, presenter dispatched |
+| --- | ---: | ---: | ---: | ---: |
+| DOOM (attract demo) | 33.15 | 8.60 (3.85) | 9.35 (3.55) | 13.90 (2.38) |
+| Wolfenstein 3-D (E1M1) | 70.06 | 12.84 (5.46) | 14.74 (4.75) | 22.55 (3.11) |
+
+The last column assumes the dispatch change gives the presenter up to 20 %
+of the CPU after a 1 ms delay (the replay parametrizes the scheduler); the
+next trial's `vm_perf_presenter` waits and `[cpu]` shares confirm or refute
+it. Warcraft II's demo title is static in the replay (0.22 changed
+frames/s) and gives no in-game figure.
+
+Measured on the replay: INVLPGs per DOOM remap 16 → 1.5 (334,009 →
+33,443 per s, at an equal presenter share); presenter wakes per presented
+frame 1.80 → 1.00 (DOOM, 27.25 → 16.10 wakes/s); Wolfenstein's V86 CLI/STI
+exits lean (priced 3.02 instead of 7.85/8.87 us).
+
+Remaining, with what-ifs on the round-2 sources: the desktop stage caps
+the shown rate at 0.25 / (rows x 50 us + 250 us), 14.2 fps for DOOM's 346
+changed rows and 22.7 for Wolfenstein's 213, where both settle. A 4x cheaper
+presentation pipeline gives Wolfenstein 64.77 (1.08x) and DOOM 26.00
+(1.27x); DOOM reaches 32.65 (1.02x) only if its ~1,660 trapped plane
+selects per frame are also 4x cheaper. Decision for the lead: parity needs
+structural work, not further tuning of this path: (a) a scanout region for
+an unobscured DOS window on the existing presentation lease, or (b) the
+VM's native frame expanded and scaled by the display engine (the model's
+STRETCH table qualifies only 3dfx row replication), both with a contract and
+a driver-pack hardware sequence; (c) a plane-select fast path or a
+remap-free planar representation for Mode Y games. Interim: a desktop
+"composed" acknowledgement so the DOS Box converts only frames the desktop
+shows (Wolfenstein: 35.6 conversions/s for 22.6 shown).
+
+Finding (pre-existing, not changed): with a single 7 ms off-CPU block per
+100 ms the DOOM replay stalls at ~12.5 s; DMX's IRQ0 handler sends its EOI
+early, re-enters four deep and returns without EOI (f3-12), after which
+IRQ0/IRQ7 stay blocked. The trial's stretches are 1-4 ms (one 11 ms), so
+the replay spreads its stretch; the presenter dispatch never yields inside
+a guest IRQ handler for this reason. Whether owed IRQ0 edges should wait
+for the handler's return rather than its EOI is an IRQ-delivery decision
+for the lead.
+
+Host suites green: full DOS body 61,053,171 checks, fx-27 622,987,
+t23-dosperf 117,276, fx-doswin3 rounds 1 and 2, fx-16, WAIT_PRESENT, file
+API, unified DOS (H57: 7 CPU boots), kernel latency, VM, audio, VGA x86,
+display names/model/commands, presenter, Savage family, splash, desktop
+accel/performance/native, DOS Box properties, seven i686 production units
+with the kernel flags. Commands and the next-trial comparison table are in
+`build/codex/fx-doswin3-report.md` (Round 2).

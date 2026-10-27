@@ -176,6 +176,7 @@ int dosvm_vga_port(struct dosvm *v, uint16_t port, unsigned width,
                 cvga_write_port(&v->vga, (uint16_t)p, (uint8_t)(*value >> (8 * i)));
                 if (flip && old_start != (unsigned)v->vga.crtc[0x0C] * 256u + v->vga.crtc[0x0D]) {
                     uint64_t now = g_ticks * 1000u, period = vga_frame_us(&v->vga);
+                    v->video_flip_tick = g_ticks;
                     /* Low/high writes within half a refresh form one change.
                      * Two refresh-spaced transitions establish fast flipping;
                      * repeated writes of the same address never do. */

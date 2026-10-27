@@ -144,4 +144,5 @@ static void test_doswin3(void)
         destroy(v,true);empty();
     }
     puts("fx-doswin3 counted DAC guards: one-component budget, tick/reschedule, debug/IF/shadow, pending IRQ, full-screen/hold and 16-bit refusal preserve registers and DAC PASS");
+    test_doswin3_r2();
 }

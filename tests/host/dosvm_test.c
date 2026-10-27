@@ -1043,6 +1043,7 @@ static void test_t23dosperf(void) {}
 #include "dosvm_101_revoke_race_test.inc"
 #include "dosvm_101_native_test.inc"
 #ifndef FX_DOSWIN3_BASELINE
+#include "dosvm_doswin3_r2_test.inc"
 #include "dosvm_doswin3_test.inc"
 #endif
 int main(void)

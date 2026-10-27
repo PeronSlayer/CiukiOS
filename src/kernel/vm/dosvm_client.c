@@ -220,9 +220,20 @@ static uint32_t present_events(struct present_request *r)
         events |= CIUKI_DOSVM_EVENT_STATE;
     if (v->clipboard.pending && !v->clipboard.done) events |= CIUKI_DOSVM_EVENT_CLIPBOARD;
     if (b->console != v->console_sequence) events |= CIUKI_DOSVM_EVENT_CONSOLE;
+    /* fx-doswin3: every VGA register write (Mode Y selects the plane of
+     * each column, about 1,300 OUTs per DOOM frame) and every harvest of
+     * back-buffer stores advance vga.changes without changing the page on
+     * screen. While the guest is page flipping, the displayed page changes
+     * only with the CRTC start address (display_changes, video_starts) and
+     * the other display registers and palette (display_changes), so only
+     * those wake the presenter: each sample then shows a completed frame
+     * (T23 trial 5bb73dba, DOOM window bank n=4: 76 samples and 87 flips
+     * for 34 changed frames). A guest that stops flipping returns to the
+     * store-driven wake after DOSVM_FLIP_HOLD_MS. */
     if (!v->fullscreen && !v->fullscreen_hold && deadline_passed(v->present_due_us / 1000u) &&
         (!v->video_presented || (!v->vbe_mode && v->video_geometry.text) || deadline_passed(v->video_due_us / 1000u)) &&
-        (b->video_pending || !b->observed || b->changes != v->vga.changes || b->display != v->vga.display_changes ||
+        (b->video_pending || !b->observed || (dosvm_present_store_wake(v, g_ticks) && b->changes != v->vga.changes) ||
+         b->display != v->vga.display_changes ||
          b->starts != v->video_starts || b->mode != v->vbe_mode || b->vbe_changes != v->present_vbe_changes ||
          (v->video_geometry.text && b->phase != wait_phase()))) events |= CIUKI_DOSVM_EVENT_VIDEO;
     return events;
@@ -236,6 +247,15 @@ static bool present_ready(void *arg)
      * wait_present measures how long the presenter took to run after it. */
     if ((events & CIUKI_DOSVM_EVENT_VIDEO) && !r->vm->present_ready_tsc)
         r->vm->present_ready_tsc = dosvm_perf_clock();
+    /* fx-doswin3: from this wake until the presenter runs, the focused VM
+     * gives up its scheduling preference (dosvm_task_focus), so the woken
+     * presenter (base 9 above the VM's 7) runs at the next dispatch instead
+     * of behind the VM's eight focused ticks (trial 5bb73dba: WAIT dispatch
+     * 7.7-12.8 ms average, 100 ms maximum, for Wolfenstein 3-D and DOOM). */
+    if ((events & CIUKI_DOSVM_EVENT_VIDEO) && !r->vm->present_dispatch) {
+        r->vm->present_dispatch = true;
+        r->vm->present_dispatch_tick = g_ticks;
+    }
     return events != 0;
 }
 static int wait_present(struct binding *b, struct dosvm *v, struct process *p, struct ciuki_dosvm_command *c)
@@ -248,6 +268,7 @@ static int wait_present(struct binding *b, struct dosvm *v, struct process *p, s
     v->present_ready_tsc = 0;
     kwait_wait_until(&v->present_wait, present_ready, &r, deadline_after_ms(timeout));
     kwait_set_owner(&v->present_wait, 0);
+    v->present_dispatch = false; /* the presenter runs: the VM's preference returns */
     if (present_interrupted(&r)) return -EINTR;
     c->wait.events = present_events(&r);
     uint32_t flags = irq_save();
