@@ -12,3 +12,11 @@
 Fix what you find with host regressions. Do not touch files owned by running tasks unless the fix is a one-line change you list in the report: fx-dispmode (apps/desktop display preference, power restart path), fx-doomwin (src/kernel/vm DOS window paths), fx-q3vise (Win32 COM/installer, display lease policy), fx-is5boot (Win32 loader NE handling), fx-accept, fx-selftest.
 
 Report to build/codex/fx-classaudit-report.md with a table per class. Leave changes uncommitted.
+
+## Lead amendment 1 (2026-10-27 12:55): round 2
+
+Your work is merged into main as f7406f0ef. Decisions and remaining work:
+1. **NTFS dirty volumes (lead decision, supersedes the strict refusal of f4-03 for this case only):** mount read-only when the dirty flag is set but `$LogFile`'s restart area shows a clean shutdown (no redo/undo needed), as Linux ntfs3 does for read-only mounts; keep refusing when the journal needs replay or a hibernation file is active (Windows 2000/XP hibernate), with a plain-language reason in Files. Regressions for the three cases. Record the decision and sources in the NTFS design document.
+2. **Failed-read preference saves:** fix both defects you found (Control Panel `app.c` load/changed and the desktop counterpart): preserve the last complete durable snapshot, create defaults only on ENOENT at first boot, and fail the save when the merge snapshot could not be read; injected read-error regressions.
+3. List the format gaps of your item 3 (CORE/RLE BMP, extended ICO, SMF type 2, wider AVI layouts, .reg/hive interchange, ZIP consumers) as rows in `docs/design/os-feature-inventory.md` with status "gap" and the source of each finding; do not implement them in this round.
+Report as "Round 2". Leave changes uncommitted.
