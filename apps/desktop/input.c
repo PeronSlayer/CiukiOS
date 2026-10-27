@@ -118,6 +118,32 @@ static void focus_record(const struct desktop *d, int i)
                      c ? c->internal : -1, app);
     if (n > 0 && (size_t)n < sizeof(line)) desk_diag_record(line, n);
 }
+/* fx-acc1: a program window's title and visibility, once per change, also
+ * in quiet boots. Installer VISE creates each wizard page hidden and
+ * untitled, names it in WM_INITDIALOG and shows it afterwards, so no focus
+ * record carried the page's name (acceptance run c634b7c6: "focus ...
+ * window=4 titled=0 app=-" was the Welcome page). The acceptance suite
+ * drives an installer page by page from these records. */
+const char *desk_window_state(const struct desktop *d, int i)
+{
+    int m=d->clients[i].minimized;
+    return m==2 ? "hidden" : m ? "minimized" : "shown";
+}
+void desk_window_record(const struct desktop *d, int i, const char *state)
+{
+    if (i<0 || i>=DESK_CLIENTS) return;
+    const struct desk_client *c=&d->clients[i];
+    if (!c->window || c->internal || c->version!=DESK_V3_VERSION) return;
+    /* Untitled modeless popups (tooltips, drop-down lists) show and hide on
+     * every hover: never recorded. */
+    if (!(c->v3_style & DESK_V3_MODAL) && !c->title[0] && (c->v3_style & 3u) == DESK_V3_POPUP) return;
+    char line[200], title[48];
+    desk_diag_token(title, sizeof(title), c->title);
+    int n = snprintf(line, sizeof(line), "[desktop] window pid=%u window=%u owner=%u modal=%u state=%s title=%s",
+                     (unsigned)c->pid, (unsigned)c->window_id, (unsigned)c->owner_id,
+                     (c->v3_style & DESK_V3_MODAL) ? 1u : 0u, state, title);
+    if (n > 0 && (size_t)n < sizeof(line)) desk_diag_record(line, n);
+}
 void desk_focus(struct desktop *d, int i)
 {
     i=desk_modal_target(d,i);

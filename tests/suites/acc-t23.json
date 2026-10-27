@@ -451,23 +451,73 @@
       "^\\[win32\\] crash pid=<<setup>> "
      ],
      "wizard": {
-      "keys": [
-       "ret",
-       "y"
-      ],
-      "then": "ret",
+      "pid": "setup",
       "idle": 6,
-      "max": 14,
       "start_after": 10,
-      "focus": "^\\[user \\d+\\] \\[desktop\\] focus ",
-      "press_when": "^\\[user \\d+\\] \\[desktop\\] focus pid=<<setup>> window=\\d+ titled=0 internal=0 ",
+      "page_timeout": 300,
+      "retry": 60,
+      "max_retries": 2,
+      "pages": [
+       {
+        "name": "welcome",
+        "title": "^Welcome$",
+        "modal": true,
+        "keys": [
+         "ret"
+        ],
+        "timeout": 300
+       },
+       {
+        "name": "licence",
+        "title": "Licen[cs]e|Agreement",
+        "modal": true,
+        "keys": [
+         "y"
+        ],
+        "timeout": 300
+       },
+       {
+        "name": "destination",
+        "title": "Destination",
+        "modal": true,
+        "keys": [
+         "ret"
+        ],
+        "timeout": 300
+       },
+       {
+        "name": "finished",
+        "title": "^Finish|Complete",
+        "modal": true,
+        "keys": [
+         "ret"
+        ],
+        "timeout": 600
+       },
+       {
+        "name": "page",
+        "title": ".",
+        "modal": true,
+        "keys": [
+         "ret"
+        ],
+        "timeout": 300
+       },
+       {
+        "name": "copy",
+        "title": ".",
+        "modal": false,
+        "keys": [],
+        "timeout": 2400
+       }
+      ],
       "close_when": "^\\[user \\d+\\] \\[desktop\\] focus pid=\\d+ window=\\d+ titled=1 internal=0 app=files$",
       "close_keys": [
        "alt+f4"
       ],
       "max_closes": 6
      },
-     "note": "Enter on each untitled VISE page that stays still for 6 s, Y on the licence (the host replay of fx-q3vise); the Start-menu folder windows VISE opens at the end are closed so its last page gets the focus"
+     "note": "fx-acc1: page by page from the desktop's window records (pid <<setup>>, owned windows): Enter on Welcome, Y on the licence, Enter on the destination, the other wizard pages and Finished (the keys of the H1 replay of fx-q3vise, tests/host/win32/installers/test_quake3.py), nothing on the progress window; a page that stays past its timeout fails the step naming it; the Start-menu folder windows VISE opens at the end are closed so its last page gets the focus"
     },
     {
      "name": "menu-refresh",
@@ -674,7 +724,7 @@
      "to": "install",
      "reducer": "lines",
      "page": false,
-     "pattern": "^\\[user \\d+\\] \\[desktop\\] focus "
+     "pattern": "^\\[user \\d+\\] \\[desktop\\] (?:focus|window) "
     },
     {
      "name": "installer-not-responding",
@@ -828,7 +878,9 @@
       "^\\[dosvm\\] perf vm=<<doom_vm>> gen=<<doom_gen>> exits=[1-9]\\d* "
      ],
      "fail": [
-      "^\\[dosvm\\] lifecycle stage=stop vm=<<doom_vm>> generation=<<doom_gen>> "
+      "^\\[dosvm\\] lifecycle stage=stop vm=<<doom_vm>> generation=<<doom_gen>> ",
+      "^\\[dosvm\\] create refused ",
+      "^\\[launch\\] name=dosbox pid=<<doom_pid>> error="
      ],
      "actions": [
       {
@@ -928,7 +980,7 @@
        "keys": "y"
       }
      ],
-     "note": "Windows 98: \"cannot shut down this program automatically\", Yes"
+     "note": "Windows 98: \"cannot shut down this program automatically\", Yes. The record is one console line since fx-acc1 (the desktop's stderr is line buffered; before, newlib wrote each fprintf conversion as its own [console] line and this wait never matched)"
     },
     {
      "name": "doom-exit",
@@ -991,7 +1043,9 @@
       "^\\[dosvm\\] perf vm=<<wolf3d_vm>> gen=<<wolf3d_gen>> exits=[1-9]\\d* "
      ],
      "fail": [
-      "^\\[dosvm\\] lifecycle stage=stop vm=<<wolf3d_vm>> generation=<<wolf3d_gen>> "
+      "^\\[dosvm\\] lifecycle stage=stop vm=<<wolf3d_vm>> generation=<<wolf3d_gen>> ",
+      "^\\[dosvm\\] create refused ",
+      "^\\[launch\\] name=dosbox pid=<<wolf3d_pid>> error="
      ],
      "actions": [
       {
@@ -1091,7 +1145,7 @@
        "keys": "y"
       }
      ],
-     "note": "Windows 98: \"cannot shut down this program automatically\", Yes"
+     "note": "Windows 98: \"cannot shut down this program automatically\", Yes. The record is one console line since fx-acc1 (the desktop's stderr is line buffered; before, newlib wrote each fprintf conversion as its own [console] line and this wait never matched)"
     },
     {
      "name": "wolf3d-exit",
@@ -1153,7 +1207,9 @@
       "^\\[dosvm\\] perf vm=<<war2_vm>> gen=<<war2_gen>> exits=[1-9]\\d* "
      ],
      "fail": [
-      "^\\[dosvm\\] lifecycle stage=stop vm=<<war2_vm>> generation=<<war2_gen>> "
+      "^\\[dosvm\\] lifecycle stage=stop vm=<<war2_vm>> generation=<<war2_gen>> ",
+      "^\\[dosvm\\] create refused ",
+      "^\\[launch\\] name=dosbox pid=<<war2_pid>> error="
      ],
      "actions": [
       {
@@ -1253,7 +1309,7 @@
        "keys": "y"
       }
      ],
-     "note": "Windows 98: \"cannot shut down this program automatically\", Yes"
+     "note": "Windows 98: \"cannot shut down this program automatically\", Yes. The record is one console line since fx-acc1 (the desktop's stderr is line buffered; before, newlib wrote each fprintf conversion as its own [console] line and this wait never matched)"
     },
     {
      "name": "war2-exit",
@@ -1316,7 +1372,9 @@
       "^\\[dosvm\\] perf vm=<<duke3d_vm>> gen=<<duke3d_gen>> exits=[1-9]\\d* "
      ],
      "fail": [
-      "^\\[dosvm\\] lifecycle stage=stop vm=<<duke3d_vm>> generation=<<duke3d_gen>> "
+      "^\\[dosvm\\] lifecycle stage=stop vm=<<duke3d_vm>> generation=<<duke3d_gen>> ",
+      "^\\[dosvm\\] create refused ",
+      "^\\[launch\\] name=dosbox pid=<<duke3d_pid>> error="
      ],
      "actions": [
       {
@@ -1416,7 +1474,7 @@
        "keys": "y"
       }
      ],
-     "note": "Windows 98: \"cannot shut down this program automatically\", Yes"
+     "note": "Windows 98: \"cannot shut down this program automatically\", Yes. The record is one console line since fx-acc1 (the desktop's stderr is line buffered; before, newlib wrote each fprintf conversion as its own [console] line and this wait never matched)"
     },
     {
      "name": "duke3d-exit",
@@ -1478,7 +1536,9 @@
       "^\\[dosvm\\] perf vm=<<quake_vm>> gen=<<quake_gen>> exits=[1-9]\\d* "
      ],
      "fail": [
-      "^\\[dosvm\\] lifecycle stage=stop vm=<<quake_vm>> generation=<<quake_gen>> "
+      "^\\[dosvm\\] lifecycle stage=stop vm=<<quake_vm>> generation=<<quake_gen>> ",
+      "^\\[dosvm\\] create refused ",
+      "^\\[launch\\] name=dosbox pid=<<quake_pid>> error="
      ],
      "actions": [
       {
@@ -1578,7 +1638,7 @@
        "keys": "y"
       }
      ],
-     "note": "Windows 98: \"cannot shut down this program automatically\", Yes"
+     "note": "Windows 98: \"cannot shut down this program automatically\", Yes. The record is one console line since fx-acc1 (the desktop's stderr is line buffered; before, newlib wrote each fprintf conversion as its own [console] line and this wait never matched)"
     },
     {
      "name": "quake-exit",
@@ -2345,15 +2405,259 @@
    "id": "acc-installshield5",
    "item": 9,
    "timeout": 1800,
-   "title": "An InstallShield 5 setup with a generated test archive starts through the native bootstrap",
-   "pending": {
-    "directive": "fx-is5boot",
-    "requires": [
-     "docs/design/installshield5-bootstrap.md"
-    ],
-    "reason": "written once fx-is5boot is merged: its generated InstallShield 5 test medium and bootstrap records define the steps (the real Half-Life CD stays local-only)"
+   "items": {
+    "9": [
+     "boot",
+     "bootstrap",
+     "engine",
+     "shutdown",
+     "disk"
+    ]
    },
-   "steps": []
+   "title": "An InstallShield 5 setup with a generated test archive starts through the native bootstrap",
+   "devices": {
+    "optical": "empty"
+   },
+   "media": {
+    "is5": {
+     "generator": "xorriso",
+     "level": 3,
+     "label": "CIUKI_IS5",
+     "content": "is5"
+    }
+   },
+   "steps": [
+    {
+     "template": "boot",
+     "prefix": "b1",
+     "check": "boot",
+     "settle": 15
+    },
+    {
+     "name": "is5-insert",
+     "check": "bootstrap",
+     "settle": 3,
+     "actions": [
+      {
+       "media": {
+        "insert": "is5"
+       }
+      }
+     ],
+     "note": "QMP blockdev-change-medium of the generated InstallShield 5 test medium (scripts/test/iso_fixtures.py is5_files: authored NE header, SETUP.INS/INI/LID, a Stirling archive of literal-only DCL members with an authored engine PE)"
+    },
+    {
+     "name": "is5-mount",
+     "check": "bootstrap",
+     "timeout": 120,
+     "wait": "^\\[storage\\] optical slot=\\d+ drive=(?P<is5_cd>D) mode=ro generation=\\d+ result=\\d+ reason=mounted$"
+    },
+    {
+     "name": "is5-autoplay",
+     "check": "bootstrap",
+     "timeout": 120,
+     "settle": 3,
+     "wait": [
+      "^\\[user \\d+\\] \\[desktop\\] autoplay probe drive=D entries=\\d+ run_kind=\\d+ music=\\d+ pictures=\\d+ result=0$",
+      "^\\[user \\d+\\] \\[desktop\\] autoplay prompt drive=D default=\\d+$"
+     ],
+     "actions": [
+      {
+       "keys": "esc"
+      }
+     ],
+     "note": "no AUTORUN.INF: AutoPlay offers the folder; Esc closes the prompt (AutoPlay runs only DOS programs today, autoplay.c run_kind 2)"
+    },
+    {
+     "name": "run-open",
+     "check": "bootstrap",
+     "actions": [
+      {
+       "keys": "meta_l+r"
+      }
+     ],
+     "screen_settle": {
+      "changed": true,
+      "stable": 1.5,
+      "timeout": 30
+     },
+     "note": "Win+R opens Run"
+    },
+    {
+     "name": "run-setup",
+     "check": "bootstrap",
+     "actions": [
+      {
+       "text": "D:\\SETUP.EXE"
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "the NE stub as a user starts it; the kernel's IS5 admission (src/kernel/proc/win32/is5boot.h) runs C:\\System\\Win32\\is5boot.exe in its place"
+    },
+    {
+     "name": "is5-helper",
+     "check": "bootstrap",
+     "timeout": 300,
+     "wait": "^\\[win32\\] start pid=(?P<is5_helper>\\d+) exe=\\S*[Ii][Ss]5[Bb][Oo][Oo][Tt]\\.[Ee][Xx][Ee] ",
+     "fail": [
+      "^\\[user \\d+\\] \\[desktop\\] message icon=error ",
+      "^\\[user \\d+\\] \\[launch\\] name="
+     ]
+    },
+    {
+     "name": "is5-engine",
+     "check": "engine",
+     "timeout": 300,
+     "wait": "^\\[win32\\] start pid=(?P<is5_engine>\\d+) exe=\\S*_INS\\d{4}\\._MP ",
+     "fail": [
+      "^\\[user \\d+\\] \\[desktop\\] message icon=error ",
+      "^\\[win32\\] exit pid=<<is5_helper>> ",
+      "^\\[win32\\] crash pid=<<is5_helper>> ",
+      "^\\[user \\d+\\] \\[desktop\\] window pid=<<is5_helper>> window=\\d+ owner=\\d+ modal=\\d state=shown "
+     ],
+     "note": "the engine the bootstrap decoded from _INST32I.EX_ into the temp directory, started with an empty command line"
+    },
+    {
+     "name": "is5-engine-exit",
+     "check": "engine",
+     "timeout": 300,
+     "wait": "^\\[win32\\] exit pid=<<is5_engine>> code=0000002a reason=normal ",
+     "fail": [
+      "^\\[win32\\] exit pid=<<is5_engine>> code=(?!0000002a )",
+      "^\\[win32\\] exit pid=<<is5_engine>> code=\\S+ reason=(?:crash|killed|restart) ",
+      "^\\[win32\\] crash pid=<<is5_engine>> ",
+      "^\\[user \\d+\\] \\[desktop\\] window pid=<<is5_helper>> window=\\d+ owner=\\d+ modal=\\d state=shown "
+     ],
+     "note": "the authored engine writes its current directory to C:\\Documents\\is5engine.txt and exits with 42"
+    },
+    {
+     "name": "is5-helper-exit",
+     "check": "bootstrap",
+     "timeout": 300,
+     "wait": "^\\[win32\\] exit pid=<<is5_helper>> code=0000002a reason=normal ",
+     "fail": [
+      "^\\[user \\d+\\] \\[desktop\\] message icon=error ",
+      "^\\[win32\\] exit pid=<<is5_helper>> code=(?!0000002a )",
+      "^\\[win32\\] crash pid=<<is5_helper>> ",
+      "^\\[user \\d+\\] \\[desktop\\] window pid=<<is5_helper>> window=\\d+ owner=\\d+ modal=\\d state=shown "
+     ],
+     "note": "the bootstrap waits for its engine, returns the engine's status and removes its temporary files"
+    },
+    {
+     "name": "is5-shutdown",
+     "check": "shutdown",
+     "arm": "shutdown",
+     "settle": 5,
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "esc",
+        "ctrl+esc",
+        "u"
+       ],
+       "pause": 1.0
+      },
+      {
+       "sleep": 2
+      },
+      {
+       "keys": "s",
+       "pause": 1.0
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "Start > Shut Down... > Shut down (S) > Enter: the engine's file reaches the disk before the overlay is read"
+    },
+    {
+     "name": "is5-power",
+     "check": "shutdown",
+     "timeout": 240,
+     "wait": [
+      "^\\[power\\] power off requested by pid \\d+ attempt=\\d+ progress=\\d+ storage=\\w+$",
+      "^\\[storage\\] completion drive=C kind=durable result=0 ",
+      "^\\[power\\] stage=(?:(?:acpi|apm)-off state=quiescent$|acpi-s5-off )"
+     ],
+     "fail": [
+      "^\\[storage\\] shutdown (?:busy|refused) ",
+      "^\\[power\\] no qualified soft-off provider",
+      "^\\[power\\] (?:storage flush failed|native quiesce failed|power off request by pid \\d+ refused)"
+     ]
+    },
+    {
+     "name": "is5-off",
+     "check": "shutdown",
+     "wait_event": "SHUTDOWN",
+     "timeout": 120
+    }
+   ],
+   "assertions": [
+    {
+     "name": "bootstrap-no-error-box",
+     "check": "bootstrap",
+     "from": "is5-helper",
+     "to": "is5-helper-exit",
+     "max": 0,
+     "pattern": "^\\[user \\d+\\] \\[desktop\\] window pid=<<is5_helper>> ",
+     "note": "the bootstrap shows no window: its only window is the error box of a failed start (sdk/win32/is5boot/main.c MessageBoxA)"
+    },
+    {
+     "name": "bootstrap-never-not-responding",
+     "check": "bootstrap",
+     "from": "is5-helper",
+     "to": "is5-helper-exit",
+     "max": 0,
+     "pattern": "^\\[user \\d+\\] \\[desktop\\] not-responding pid=<<is5_helper>> "
+    }
+   ],
+   "figures": [
+    {
+     "name": "autoplay",
+     "check": "bootstrap",
+     "pattern": "^\\[user \\d+\\] \\[desktop\\] autoplay probe drive=D ",
+     "reducer": "first"
+    },
+    {
+     "name": "helper-start",
+     "check": "bootstrap",
+     "pattern": "^\\[win32\\] start pid=<<is5_helper>> ",
+     "reducer": "first"
+    },
+    {
+     "name": "engine-start",
+     "check": "engine",
+     "pattern": "^\\[win32\\] start pid=<<is5_engine>> ",
+     "reducer": "first"
+    },
+    {
+     "name": "engine-exit",
+     "check": "engine",
+     "pattern": "^\\[win32\\] exit pid=<<is5_engine>> ",
+     "reducer": "first"
+    },
+    {
+     "name": "helper-exit",
+     "check": "bootstrap",
+     "pattern": "^\\[win32\\] exit pid=<<is5_helper>> ",
+     "reducer": "first"
+    }
+   ],
+   "disk": {
+    "check": "disk",
+    "menu_links": false,
+    "files": [
+     {
+      "path": "C:\\Documents\\is5engine.txt",
+      "size": 3,
+      "sha256": "25176a623236914040aa0caf4b44622e672b7b50d796b8f2812da9004a232f05"
+     }
+    ]
+   },
+   "note": "fx-acc1 item 9 (fx-is5boot): the native bootstrap's first guest run. The engine's file holds the current directory the bootstrap gave it (the media root D:\\); a different value is a finding, its bytes are in the kept overlay. Never the real Half-Life CD."
   }
  ]
 }

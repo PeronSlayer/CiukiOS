@@ -3069,6 +3069,18 @@ extern void desk_recovery_init(struct desktop *, int, int) __attribute__((weak))
 extern void desk_recovery_start(struct desktop *) __attribute__((weak));
 int main(int argc, char **argv)
 {
+#ifdef __i386__
+    /* fx-acc1: one console line per record. The kernel publishes every
+     * write() to the console as its own "[console] " line, and newlib's
+     * unbuffered stderr writes each fprintf conversion separately, so a
+     * record such as "[desktop] end task dialog kind=dos pid=6 session=0"
+     * reached the serial log as seven lines (acceptance run f63df5ab, lines
+     * 1402-1408) and the DOS games' close step never saw it. ISO C lets
+     * stderr be line buffered (never fully buffered); every desktop record
+     * ends with a newline, so each one is a single write when fprintf
+     * returns, as glibc's unbuffered stderr does. */
+    setvbuf(stderr, NULL, _IOLBF, BUFSIZ);
+#endif
     desk_worker_role("input-compositor-shell");
     int safe_mode = 0, terminal_shell = 0;
     startup_begin=monotonic(); startup_stage("entry");

@@ -11,8 +11,16 @@
 #include <ciuki/maestro.h>
 #include <ciuki/emu10k1.h>
 static struct mm_pin backend_pins[3];
-struct audio_dma_device audio_dma;
+struct audio_dma_device audio_dma = { .claims = { -1, -1, -1, -1, -1, -1, -1, -1 } };
 static bool dma_selected;
+/* fx-acc1: a backend selection ran (ac97_init or the DMA scan set every
+ * claim to -1 first). Safe Mode never runs one (audio_init stops at
+ * "safe_mode", as Windows 98 Safe Mode loads no sound driver): the zeroed
+ * static AC'97 record then holds twelve "claims" equal to registry handle 0,
+ * and a shutdown that took them for its own failed its generation check,
+ * quarantined handle 0 and refused Restart ("[power] native quiesce failed:
+ * -5", acceptance run 61ab9db4). Nothing was started, so nothing is stopped. */
+static bool backend_selected;
 /* One selected cyclic engine; IRQ and worker serialize these with irq_save. */
 static bool dma_cursor_retrying;
 static uint64_t dma_cursor_retry_since;
@@ -306,6 +314,7 @@ static int backend_codec_restore(struct audio_dma_device *d)
 }
 void audio_backend_shutdown(void)
 {
+    if (!backend_selected && !dma_selected) return;
     if (!dma_selected) {
         if (audio_dma.kind == AUDIO_ICH) audio_dma.state.ready=false;
         if (audio_dma.kind == AUDIO_ICH && audio_dma.capture.phys && audio_capture_shutdown(&audio_dma))
@@ -497,7 +506,7 @@ int audio_backend_init(void)
 {
     /* Quarantined DMA retains its original owner; never select a fallback. */
     if (audio.quarantined || audio_dma.state.quarantine) { audio.reason = "stop_unproved"; return -EIO; }
-    dma_selected = false;
+    dma_selected = false; backend_selected = true;
     int e = ac97_init();
     if (e != -ENODEV || ac97.pci.vendor) {
         if (!e) ac97_capture_attach();

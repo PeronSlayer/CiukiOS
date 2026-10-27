@@ -283,6 +283,48 @@ static void ownership(void)
     assert(!d.clients[root].v3_failed && d.clients[root].v3_over_count>=1); fake_block=0; flush(); assert(d.clients[a].window); cleanup();
     puts("PASS v3 multiwindow: ownership, generations, topmost, modal owner death, transport loss and backpressure");
 }
+/* fx-acc1 (acceptance run c634b7c6, Quake III installer): Installer VISE's
+ * pages are DialogBox prompts, created hidden (CREATE, then a hiding PLACE),
+ * titled in WM_INITDIALOG and shown afterwards. The hiding PLACE gave the
+ * focus back to the disabled owner, and the page, shown without an
+ * activation request, stayed inactive with its owner's caption active over
+ * it ("focus ... window=4 titled=0", then "focus ... window=3"). A modal
+ * prompt shown while its owner holds the focus takes it, as Windows
+ * activates a dialog box over its disabled owner; other windows do not. */
+static void place_window(int root, unsigned id, int index, unsigned show, unsigned style)
+{
+    struct ciuki_message m; msg(&m,DESK_V3_PLACE,28,id,d.clients[index].v3_generation); m.sender_pid=42;
+    desk_put32(m.data+16,d.clients[index].frame.x); desk_put32(m.data+20,d.clients[index].frame.y);
+    desk_put32(m.data+24,200); desk_put32(m.data+28,100); desk_put32(m.data+32,1);
+    desk_put32(m.data+36,show); desk_put32(m.data+40,style);
+    assert(!desk_v3_receive(&d,root,&m));
+}
+static void modal_page_shown(void)
+{
+    setup(); int root=peer(10,42), owner=create(root,20,1,1,0,0); assert(d.focus==owner);
+    int page=create(root,21,2,1,DESK_V3_MODAL,1); assert(d.focus==page);
+    place_window(root,2,page,2,DESK_V3_MODAL); assert(d.clients[page].minimized==2 && d.focus==owner);
+    struct ciuki_message m; msg(&m,DESK_SET_TITLE,11,2,1); desk_put32(m.data+16,7); memcpy(m.data+20,"Welcome",7);
+    assert(!desk_v3_receive(&d,root,&m)); assert(!strcmp(d.clients[page].title,"Welcome") && d.focus==owner);
+    place_window(root,2,page,0,DESK_V3_MODAL); assert(!d.clients[page].minimized && d.focus==page);
+    assert(desk_modal_target(&d,owner)==page && !strcmp(desk_window_state(&d,page),"shown"));
+    /* The next page: the owner is activated while the old page closes, the
+     * new one is created, hidden, titled and shown: it holds the focus. */
+    msg(&m,DESK_CLOSE,0,2,1); assert(!desk_v3_receive(&d,root,&m)); flush(); assert(d.focus==owner);
+    int next=create(root,22,2,2,DESK_V3_MODAL,1); assert(d.focus==next);
+    place_window(root,2,next,2,DESK_V3_MODAL); assert(d.focus==owner);
+    place_window(root,2,next,0,DESK_V3_MODAL); assert(d.focus==next && !strcmp(desk_window_state(&d,next),"shown"));
+    /* An owned window that is not a modal prompt, shown again, leaves the focus alone. */
+    int tool=create(root,23,3,1,DESK_V3_TOOL,0); place_window(root,3,tool,2,DESK_V3_TOOL);
+    desk_focus(&d,next); place_window(root,3,tool,0,DESK_V3_TOOL); assert(d.focus==next);
+    /* A modal prompt of another window shown again leaves this focus alone. */
+    int other=create(root,24,4,1,0,0); int prompt=create(root,25,5,1,DESK_V3_MODAL,4);
+    place_window(root,5,prompt,2,DESK_V3_MODAL); desk_focus(&d,next);
+    place_window(root,5,prompt,0,DESK_V3_MODAL); assert(d.focus==next && other>=0);
+    assert(!strcmp(desk_window_state(&d,prompt),"shown"));
+    flush(); cleanup();
+    puts("PASS v3 modal prompt shown after a hiding PLACE takes the focus from its owner (Installer VISE pages); other windows keep it");
+}
 /* q3exec2/q3exec3: a per-window message that arrives after its window's
  * DESK_CLOSE or names window 0 (a PING answer included), or a frame update
  * whose rectangle no longer fits the window's surface, is refused alone;
@@ -791,6 +833,6 @@ int main(int argc,char **argv)
 #ifdef DESKTOP_ADAPTER_FIXTURE
     production_lease_replay();
 #endif
-    protocol(); ownership(); stale_updates(); window_order(); context_help(); input_and_lease(); resize_and_cursor(); bridge(); native_power(); links(); shell_links(); close_and_native_tasks(); slow_client_storm(); frames(argv[2]);
+    protocol(); ownership(); modal_page_shown(); stale_updates(); window_order(); context_help(); input_and_lease(); resize_and_cursor(); bridge(); native_power(); links(); shell_links(); close_and_native_tasks(); slow_client_storm(); frames(argv[2]);
     puts("PASS desktop v3 integration (host only)"); return 0;
 }

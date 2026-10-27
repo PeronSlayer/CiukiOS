@@ -4,12 +4,14 @@ ISO generators and the guest record formats the suite matches. Host evidence
 only: no QEMU (tests/host/fake_qemu.py stands in), no image.
 """
 import copy
+import hashlib
 import http.client
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -33,6 +35,10 @@ D = '[user 7] [desktop]'
 SCRATCH = ROOT / 'build/host/acceptance'
 SCRATCH.mkdir(parents=True, exist_ok=True)
 HAVE_XORRISO = shutil.which('xorriso') is not None
+
+
+def struct_unpack(fmt, data, offset):
+    return struct.unpack_from(fmt, data, offset)
 
 
 def ppm(colour, width=320, height=320):
@@ -354,6 +360,116 @@ class SessionTests(Base):
         self.assertGreaterEqual(log[2]['t'], 40)
         self.assertFalse((self.dir / acceptance.PACE_FILE).exists())
 
+    def quake3_wizard(self):
+        suite = json.loads((ROOT / 'tests/suites/acc-t23.json').read_text())
+        quake = next(c for c in suite['cases'] if c['id'] == 'acc-quake3')
+        return copy.deepcopy(next(s['wizard'] for s in quake['steps'] if s.get('name') == 'install'))
+
+    def page_case(self, wizard):
+        return case(steps=[{'name': 'start', 'wait': '^\\[win32\\] start pid=(?P<setup>\\d+) '},
+                           {'name': 'install', 'wait': '^\\[win32\\] exit pid=<<setup>> code=\\S+ reason=normal ', 'timeout': 3000,
+                            'wizard': wizard}])
+
+    WINDOW = D + ' window pid=%d window=%d owner=%d modal=%d state=%s title=%s'
+    FOCUS = D + ' focus pid=%d window=%d titled=%d internal=0 app=%s'
+
+    def page(self, window, title, focus=True, modal=1, owner=3):
+        """A DialogBox page as Installer VISE shows it (run c634b7c6): created
+        untitled, hidden, titled in WM_INITDIALOG, then shown."""
+        W = self.WINDOW
+        lines = [W % (12, window, owner, modal, 'shown', '-'), W % (12, window, owner, modal, 'hidden', '-'),
+                 W % (12, window, owner, modal, 'hidden', title), W % (12, window, owner, modal, 'shown', title)]
+        return lines + ([self.FOCUS % (12, window, 1, title)] if focus else [])
+
+    def test_page_wizard_follows_the_installer_pages_by_title(self):
+        """fx-acc1 (acceptance run c634b7c6): the Welcome page stayed 3000 s
+        because the focus-driven wizard pressed only while an untitled
+        window held the focus; the page, titled before it was shown, never
+        did (the focus was on the setup frame). The suite's own Quake III
+        page specs: Enter, Y on the licence, Enter, nothing on the progress
+        window, Alt+F4 on a Files window, Enter on Finished."""
+        W, F = self.WINDOW, self.FOCUS
+        closed = lambda window, title: W % (12, window, 3, 1, 'closed', title)
+        s, qmp = self.session(self.page_case(self.quake3_wizard()), frames=[ppm((10, 10, 10)), ppm((20, 20, 20))], on_key={
+            # Welcome -> licence: the page closes, the frame holds the focus, the next page appears.
+            'ret#1': [closed(4, 'Welcome'), F % (12, 3, 1, 'Quake_3_Arena_Demo_Setup'), *self.page(5, 'Software_License_Agreement')],
+            'y#1': [closed(5, 'Software_License_Agreement'), *self.page(6, 'Choose_Destination_Location')],
+            'ret#2': [closed(6, 'Choose_Destination_Location'), *self.page(7, 'Start_Installation')],
+            # The progress window: owned, modeless, titled at creation.
+            'ret#3': [closed(7, 'Start_Installation'), W % (12, 8, 3, 0, 'shown', 'IDS_TITLE'), F % (12, 8, 1, 'IDS_TITLE'),
+                      W % (12, 8, 3, 0, 'shown', 'Setup')],
+            'alt#1': [F % (12, 3, 1, 'Quake_3_Arena_Demo_Setup'), *self.page(9, 'Finished')],
+            'ret#4': ['[win32] exit pid=12 code=00000000 reason=normal peak_commit=1']})
+        lines = [(0.0, '[win32] start pid=12 exe=C:\\Q3ADemo.exe pe=1:2 shims='),
+                 (0.5, W % (12, 2, 0, 0, 'shown', 'IDS_TITLE')), (1.0, W % (12, 2, 0, 0, 'closed', 'IDS_TITLE')),
+                 (1.5, W % (12, 3, 0, 0, 'shown', 'Quake_3_Arena_Demo_Setup')), (1.5, F % (12, 3, 1, 'Quake_3_Arena_Demo_Setup')),
+                 # The welcome page; the old image left the focus on the frame (window 3), same process.
+                 *[(2.0, line) for line in self.page(4, 'Welcome', focus=False)],
+                 # The copy ends: the progress window closes, VISE opens a Files window over the setup.
+                 (300.0, W % (12, 8, 3, 0, 'closed', 'Setup')), (300.5, F % (14, 20, 1, 'files'))]
+        drive(s, qmp, until=600, lines=lines)
+        self.assertTrue(s.done, (s.failed, s.state[1]))
+        self.assertEqual(qmp.pressed(), ['ret', 'y', 'ret', 'ret', 'alt', 'f4', 'ret'])
+        log = s.state[1]['wizard']
+        self.assertEqual([(e['kind'], e['page']) for e in log],
+                         [('press', 'welcome'), ('press', 'licence'), ('press', 'destination'), ('press', 'page'),
+                          ('close', None), ('press', 'finished')])
+        self.assertTrue(all(e['idle'] >= 6 for e in log))
+        pages = [(e['page'], e['title']) for e in s.state[1]['pages']]
+        self.assertIn(('welcome', 'Welcome'), pages)
+        # The progress window retitled in the same turn stays one page.
+        self.assertEqual([p for p in pages if p[0] == 'copy'], [('copy', 'Setup')])
+        self.assertEqual(pages[-1], ('finished', 'Finished'))
+        self.assertGreaterEqual(log[4]['t'], 300)   # nothing pressed while the progress window was up
+
+    def test_page_wizard_names_the_page_it_stopped_on(self):
+        s, qmp = self.session(self.page_case(self.quake3_wizard()), frames=[ppm((10, 10, 10))])
+        lines = [(0.0, '[win32] start pid=12 exe=C:\\Q3ADemo.exe pe=1:2 shims='),
+                 (1.0, self.WINDOW % (12, 3, 0, 0, 'shown', 'Quake_3_Arena_Demo_Setup')),
+                 (1.0, self.FOCUS % (12, 3, 1, 'Quake_3_Arena_Demo_Setup')),
+                 *[(2.0, line) for line in self.page(4, 'Welcome', focus=False)]]
+        drive(s, qmp, until=400, lines=lines)
+        self.assertTrue(s.failed)
+        self.assertIn('wizard stopped on page welcome (title Welcome, window 4) for 30', s.state[1]['reason'])
+        self.assertEqual(s.state[1]['failure_kind'], 'timeout')
+        # One press, then the retries 60 s apart (max_retries 2).
+        self.assertEqual(qmp.pressed(), ['ret', 'ret', 'ret'])
+        times = [e['t'] for e in s.state[1]['wizard']]
+        self.assertGreaterEqual(times[1] - times[0], 60)
+
+    def test_page_wizard_presses_only_while_the_installer_holds_the_focus(self):
+        """The desktop (pid 0) or another program holding the focus gets no
+        installer key; a page past its timeout with no page at all is named
+        by the page before it."""
+        wizard = self.quake3_wizard()
+        s, qmp = self.session(self.page_case(wizard), frames=[ppm((10, 10, 10))])
+        lines = [(0.0, '[win32] start pid=12 exe=C:\\Q3ADemo.exe pe=1:2 shims='),
+                 *[(2.0, line) for line in self.page(4, 'Welcome', focus=False)],
+                 (2.1, self.FOCUS % (0, 0, 0, 'desktop'))]
+        drive(s, qmp, until=200, lines=lines)
+        self.assertEqual(qmp.pressed(), [])
+        s, qmp = self.session(self.page_case(wizard), frames=[ppm((10, 10, 10))],
+                              on_key={'ret#1': [self.WINDOW % (12, 4, 3, 1, 'closed', 'Welcome')]})
+        lines = [(0.0, '[win32] start pid=12 exe=C:\\Q3ADemo.exe pe=1:2 shims='),
+                 *[(2.0, line) for line in self.page(4, 'Welcome')]]
+        drive(s, qmp, until=400, lines=lines)
+        self.assertTrue(s.failed)
+        self.assertIn('no installer page shown after page welcome (title Welcome, window 4)', s.state[1]['reason'])
+
+    def test_page_wizard_validation(self):
+        wizard = self.quake3_wizard()
+        for change, message in (({'pid': None}, 'pid'), ({'pid': 'other'}, 'not captured'), ({'keys': ['ret']}, 'replace'),
+                                ({'pages': []}, 'page specs'), ({'pages': [{'name': 'a', 'title': '('}]}, 'title expression'),
+                                ({'pages': [{'name': 'a', 'title': 'x', 'keys': ['nokey']}]}, 'unknown key'),
+                                ({'pages': [{'name': 'a', 'title': 'x'}, {'name': 'a', 'title': 'y'}]}, 'unique'),
+                                ({'retry': 1}, 'retry'), ({'max_retries': 9}, 'max_retries')):
+            spec = {**wizard, **change}
+            spec = {k: v for k, v in spec.items() if v is not None}
+            with self.subTest(change=change):
+                with self.assertRaises(res.Refusal) as caught:
+                    acceptance.validate_case(self.page_case(spec))
+                self.assertIn(message, str(caught.exception))
+
     def test_wizard_waits_for_a_still_screen(self):
         steps = [{'name': 'install', 'wait': '^done$', 'timeout': 60,
                   'wizard': {'keys': ['ret'], 'idle': 6, 'max': 1}}]
@@ -632,8 +748,22 @@ class RecordFormatTests(unittest.TestCase):
         self.assertEqual(focus, '[user 7] [desktop] focus pid=12 window=1 titled=0 internal=0 app=files')
         suite = json.loads((ROOT / 'tests/suites/acc-t23.json').read_text())
         wizard = next(s['wizard'] for c in suite['cases'] for s in c.get('steps', []) if 'wizard' in s)
-        self.assertRegex(focus, acceptance.PLACEHOLDER.sub('12', wizard['press_when']))
         self.assertRegex(focus.replace('titled=0', 'titled=1'), wizard['close_when'])
+        self.assertEqual(acceptance.FOCUS_RECORD.match(focus)['pid'], '12')
+        # fx-acc1: the program-window record the page wizard follows.
+        window = '[user 7] ' + self.render('apps/desktop/input.c', 'window pid=', order=['pid', 'w', 'owner', 'modal', 'state', 'title'],
+                                            pid=12, w=4, owner=3, modal=1, state='shown', title='Welcome')
+        self.assertEqual(window, '[user 7] [desktop] window pid=12 window=4 owner=3 modal=1 state=shown title=Welcome')
+        record = acceptance.WINDOW_RECORD.match(window)
+        self.assertEqual((record['pid'], record['window'], record['owner'], record['modal'], record['state'], record['title']),
+                         ('12', '4', '3', '1', 'shown', 'Welcome'))
+        states = re.findall(r'"(hidden|minimized|shown|closed)"', (ROOT / 'apps/desktop/input.c').read_text() +
+                            (ROOT / 'apps/desktop/client.c').read_text())
+        self.assertEqual(set(states), {'hidden', 'minimized', 'shown', 'closed'})
+        self.assertFalse(acceptance.WINDOW_RECORD.match(window.replace('title=Welcome', 'title=Two words')))
+        welcome = acceptance.Session._page_spec(wizard, {'title': 'Welcome', 'modal': True})
+        self.assertEqual(welcome['name'], 'welcome')
+        self.assertEqual(acceptance.Session._page_spec(wizard, {'title': 'IDS_TITLE', 'modal': False})['name'], 'copy')
         hung = '[user 7] ' + self.render('apps/desktop/client.c', 'not-responding pid=', order=['pid', 'w', 'state'], pid=12, state=1)
         self.assertRegex(hung, r'^\[user \d+\] \[desktop\] not-responding pid=12 window=\d+ state=1 ')
         notice = '[user 7] ' + self.render('apps/desktop/shell.c', '[desktop] %s icon=%s title=', order=['kind', 'icon'],
@@ -651,6 +781,33 @@ class RecordFormatTests(unittest.TestCase):
         self.assertRegex(files, r'^\[user \d+\] \[desktop\] launch name=files pid=(?P<cd_files>[1-9]\d*) error=0 ')
         dialog = '[console] ' + self.render('apps/desktop/client.c', 'end task dialog kind=', order=['kind', 'pid'], kind='dos', pid=40)
         self.assertRegex(dialog, r'^\[console\] \[desktop\] end task dialog kind=dos pid=40 ')
+
+    def test_desktop_console_records_are_single_lines(self):
+        """fx-acc1 (acceptance run f63df5ab, serial lines 1402-1408): every
+        write() of a program is its own [console] line, and newlib's
+        unbuffered stderr wrote each fprintf conversion separately, so
+        "end task dialog kind=dos pid=6 session=0" arrived as seven lines and
+        the DOS games' close step never matched it. The desktop makes stderr
+        line buffered before anything else; every record it writes ends with
+        a newline, so none is held back."""
+        source = (ROOT / 'apps/desktop/desktop.c').read_text()
+        body = source[source.index('int main(int argc, char **argv)\n{') :]
+        head = body[:body.index('desk_worker_role(')]
+        self.assertIn('#ifdef __i386__', head)
+        self.assertIn('setvbuf(stderr, NULL, _IOLBF, BUFSIZ);', head)
+        unterminated, other = [], []
+        for path in sorted((ROOT / 'apps/desktop').glob('*.c')):
+            text = path.read_text()
+            for match in re.finditer(r'fprintf\(\s*stderr\s*,\s*((?:"(?:[^"\\]|\\.)*"\s*)+)', text):
+                literal = ''.join(re.findall(r'"((?:[^"\\]|\\.)*)"', match[1]))
+                if not literal.endswith('\\n'):
+                    unterminated.append((path.name, literal[:60]))
+            other += [(path.name, m[0]) for m in re.finditer(r'\b(?:fputs|fwrite|vfprintf|perror|fputc|putc)\s*\([^;]*\bstderr\b', text)]
+        self.assertEqual(unterminated, [])
+        # settings_io.c writes whole records it formatted with a final newline.
+        self.assertEqual(sorted({name for name, _ in other}), ['settings_io.c'])
+        settings = (ROOT / 'apps/desktop/settings_io.c').read_text()
+        self.assertIn('"[desktop] stage=%s us=%llu%s\\n"', settings)
 
     def test_kernel_records(self):
         cases = (
@@ -749,6 +906,162 @@ class IsoFixtureTests(unittest.TestCase):
             done = subprocess.run([sys.executable, str(ROOT / 'scripts/test/iso_fixtures.py'), '--out', str(out), '--volume-sequence', '0'],
                                   capture_output=True, text=True, check=True)
             self.assertEqual(json.loads(done.stdout)['volume_sequence'], 0)
+
+
+class InstallShield5MediumTests(unittest.TestCase):
+    """fx-acc1 item 9: the generated InstallShield 5 test medium of
+    acc-installshield5 (iso_fixtures.is5_files): authored bytes only, admitted
+    and decoded by the production bootstrap code (sdk/win32/is5boot)."""
+    CHECK = r'''
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "private.h"
+static unsigned char *load(const char *path, unsigned *n) {
+    FILE *f = fopen(path, "rb"); if (!f) return 0;
+    fseek(f, 0, SEEK_END); long size = ftell(f); rewind(f);
+    unsigned char *p = malloc(size ? (size_t)size : 1);
+    if (p && fread(p, 1, (size_t)size, f) != (size_t)size) { free(p); p = 0; }
+    fclose(f); *n = (unsigned)size; return p;
+}
+int main(int argc, char **argv) {
+    unsigned n = 0, size = 0;
+    unsigned char *stub = load(argv[1], &n);
+    if (!stub || !is5_ne(stub, n)) { puts("FAIL stub"); return 1; }
+    unsigned char *raw = load(argv[2], &size); struct is5_archive a;
+    if (!raw || !is5_directory(raw, size, &a)) { puts("FAIL directory"); return 1; }
+    if ((int)a.count * 3 != argc - 3) { puts("FAIL count"); return 1; }
+    for (unsigned i = 0; i < a.count; i++) {
+        struct is5_member *m = a.member + i; unsigned want = 0;
+        unsigned char *expected = load(argv[5 + 3 * i], &want), *out = malloc(want ? want : 1);
+        if (!expected || strcmp(m->original, argv[3 + 3 * i]) || strcmp(m->runtime, argv[4 + 3 * i]) || m->expanded != want ||
+            !is5_dcl(raw + m->offset, m->packed, out, want) || memcmp(out, expected, want)) { printf("FAIL member %u\n", i); return 1; }
+        free(out); free(expected);
+    }
+    printf("PASS %u members\n", a.count);
+    free(raw); free(stub); return 0;
+}
+'''
+
+    def test_admitted_and_decoded_by_the_production_bootstrap(self):
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as temp:
+            temp = Path(temp)
+            files = iso_fixtures.is5_files()
+            for name, data in files.items():
+                (temp / name).write_bytes(data)
+            members = [('INSTALL.EXE', '_INS0000._MP', iso_fixtures.is5_engine_pe()),
+                       ('zdata.dll', 'ZDataI51.dll', b'CiukiOS IS5 test support file 1\r\n'),
+                       ('WUTL95i.DLL', '_WUTL951.DLL', b'CiukiOS IS5 test support file 2\r\n')]
+            arguments = []
+            for k, (name, runtime, data) in enumerate(members):
+                (temp / ('member%d' % k)).write_bytes(data)
+                arguments += [name, runtime, str(temp / ('member%d' % k))]
+            (temp / 'check.c').write_text(self.CHECK)
+            binary = temp / 'check'
+            subprocess.run(['clang', '-std=c17', '-O1', '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined',
+                            '-I', str(ROOT / 'sdk/win32/is5boot'), str(ROOT / 'sdk/win32/is5boot/archive.c'),
+                            str(temp / 'check.c'), '-o', str(binary)], check=True)
+            done = subprocess.run([str(binary), str(temp / 'SETUP.EXE'), str(temp / '_INST32I.EX_'), *arguments],
+                                  capture_output=True, text=True)
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            self.assertIn('PASS 3 members', done.stdout)
+            # A corrupted stream or a library NE header is refused by the same code.
+            broken = bytearray(files['_INST32I.EX_']); broken[-1] ^= 0xff
+            (temp / 'broken').write_bytes(broken)
+            self.assertNotEqual(subprocess.run([str(binary), str(temp / 'SETUP.EXE'), str(temp / 'broken'), *arguments],
+                                               capture_output=True).returncode, 0)
+            library = bytearray(files['SETUP.EXE']); library[0x80 + 13] |= 0x80
+            (temp / 'library').write_bytes(library)
+            self.assertNotEqual(subprocess.run([str(binary), str(temp / 'library'), str(temp / '_INST32I.EX_'), *arguments],
+                                               capture_output=True).returncode, 0)
+        # The kernel admission (is5boot.h is5_redirect) reads the same header
+        # fields and needs SETUP.INS and _INST32I.EX_ beside the stub.
+        admission = (ROOT / 'src/kernel/proc/win32/is5boot.h').read_text()
+        for needle in ('"SETUP.INS","_INST32I.EX_"', 'ne[54]!=2', '(is5_word(ne+12)&0x8000)'):
+            self.assertIn(needle, admission)
+        self.assertEqual(sorted(files), ['SETUP.EXE', 'SETUP.INI', 'SETUP.INS', 'SETUP.LID', '_INST32I.EX_'])
+        self.assertIn(b'[Startup]', files['SETUP.INI'])
+        self.assertIn(b'[Languages]', files['SETUP.LID'])
+        self.assertEqual(iso_fixtures.is5_files(), files)   # deterministic
+
+    def test_engine_pe_layout(self):
+        pe = iso_fixtures.is5_engine_pe()
+        self.assertEqual(len(pe), 1536)
+        self.assertEqual(pe[:2], b'MZ')
+        self.assertEqual(pe[0x40:0x44], b'PE\0\0')
+        machine, sections = struct_unpack('<HH', pe, 0x44)
+        self.assertEqual((machine, sections), (0x14c, 1))
+        magic = struct_unpack('<H', pe, 0x58)[0]
+        entry, = struct_unpack('<I', pe, 0x58 + 16)
+        subsystem, = struct_unpack('<H', pe, 0x58 + 68)
+        self.assertEqual((magic, subsystem), (0x10b, 2))
+        self.assertTrue(0x1000 <= entry < 0x1400)
+        for name in (b'kernel32.dll', b'CreateFileA', b'GetCurrentDirectoryA', b'WriteFile', b'CloseHandle', b'ExitProcess',
+                     iso_fixtures.IS5_ENGINE_LOG.encode()):
+            self.assertIn(name, pe)
+        self.assertIn(b'\x6a' + bytes([iso_fixtures.IS5_ENGINE_EXIT]) + b'\xff\x15', pe)   # push 42; call [ExitProcess]
+
+    @unittest.skipUnless(os.environ.get('CIUKI_IS5_WINE') and shutil.which('wine'), 'set CIUKI_IS5_WINE=1 to run the engine under Wine')
+    def test_engine_runs_under_wine(self):
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as temp:
+            temp = Path(temp)
+            (temp / 'engine.exe').write_bytes(iso_fixtures.is5_engine_pe('C:\\windows\\temp\\is5engine.txt'))
+            env = dict(os.environ, WINEPREFIX=str(temp / 'prefix'), WINEDEBUG='-all')
+            done = subprocess.run(['wine', 'engine.exe'], cwd=temp, env=env, capture_output=True, text=True, timeout=600)
+            self.assertEqual(done.returncode, iso_fixtures.IS5_ENGINE_EXIT, done.stderr[-2000:])
+            written = (temp / 'prefix/drive_c/windows/temp/is5engine.txt').read_text()
+            self.assertTrue(written.endswith(temp.name), written)
+
+    @unittest.skipUnless(HAVE_XORRISO, 'xorriso absent')
+    def test_medium_iso(self):
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as temp:
+            manifest = iso_fixtures.generate({'level': 3, 'label': 'CIUKI_IS5', 'content': 'is5'}, temp, media_name='is5')
+            self.assertEqual(manifest['root_entries'], ['/README.TXT', '/SETUP.EXE', '/SETUP.INI', '/SETUP.INS', '/SETUP.LID', '/_INST32I.EX_'])
+            files = iso_fixtures.is5_files()
+            for entry in manifest['entries']:
+                name = entry['path'][1:]
+                if name in files:
+                    self.assertEqual(entry['sha256'], hashlib.sha256(files[name]).hexdigest(), name)
+            self.assertEqual(manifest['content'], 'is5')
+            with self.assertRaises(ValueError):
+                iso_fixtures.generate({'level': 3, 'content': 'other'}, temp, media_name='other')
+
+    def test_case_records(self):
+        suite = json.loads((ROOT / 'tests/suites/acc-t23.json').read_text())
+        c = next(c for c in suite['cases'] if c['id'] == 'acc-installshield5')
+        self.assertFalse(c.get('pending'))
+        self.assertEqual(c['media']['is5']['content'], 'is5')
+        acceptance.validate_case(c)
+        steps = {s['name']: s for s in acceptance.expand_steps(c['steps'])}
+        start = RecordFormatTests.render('src/kernel/proc/win32/diagnostics.c', '[win32] start pid=%u exe=%s pe=%08x:%08x shims=%s',
+                                         order=['pid', 'exe'], pid=21, exe='C:\\System\\Win32\\is5boot.exe')
+        self.assertRegex(start, steps['is5-helper']['wait'])
+        self.assertRegex(start.replace('C:\\System\\Win32\\is5boot.exe', '/System/Win32/is5boot.exe'), steps['is5-helper']['wait'])
+        self.assertNotRegex(start.replace('is5boot.exe', 'SETUP.EXE'), steps['is5-helper']['wait'])
+        engine = start.replace('pid=21', 'pid=22').replace('C:\\System\\Win32\\is5boot.exe', 'C:\\WINDOWS\\TEMP\\_INS1234._MP')
+        self.assertRegex(engine, steps['is5-engine']['wait'])
+        exit_line = RecordFormatTests.render('src/kernel/proc/win32/diagnostics.c', '[win32] exit pid=', order=['pid', 'code', 'reason'],
+                                             pid=22, code='0000002a', reason='normal')
+        variables = {'is5_engine': '22', 'is5_helper': '21'}
+        fill = lambda p: acceptance.PLACEHOLDER.sub(lambda m: variables[m[1]], p)
+        self.assertRegex(exit_line, fill(steps['is5-engine-exit']['wait']))
+        self.assertTrue(any(re.match(fill(p), exit_line.replace('0000002a', '00000000')) for p in steps['is5-engine-exit']['fail']))
+        self.assertFalse(any(re.match(fill(p), exit_line) for p in steps['is5-engine-exit']['fail']))
+        self.assertRegex(exit_line.replace('pid=22', 'pid=21'), fill(steps['is5-helper-exit']['wait']))
+        box = '[user 7] ' + RecordFormatTests.render('apps/desktop/input.c', 'window pid=', order=['pid', 'w', 'owner', 'modal', 'state', 'title'],
+                                                     pid=21, w=9, owner=0, modal=0, state='shown', title='CiukiOS_IS5_Test')
+        self.assertTrue(any(re.match(fill(p), box) for p in steps['is5-helper-exit']['fail']))
+        self.assertEqual(c['disk']['files'][0]['sha256'], hashlib.sha256(b'D:\\').hexdigest())
+        self.assertEqual(c['disk']['files'][0]['path'], iso_fixtures.IS5_ENGINE_LOG)
+        self.assertIs(c['disk']['menu_links'], False)
+        self.assertEqual(steps['run-setup']['actions'][0]['text'], 'D:\\SETUP.EXE')
+        # A disk check without Start-menu links passes on its files alone.
+        delta = {'added': [{'path': 'C:/Documents/is5engine.txt', 'kind': 'file', 'size': 3, 'sha256': c['disk']['files'][0]['sha256']}]}
+        self.assertEqual(acceptance.disk_check(c['disk'], delta)['status'], 'pass')
+        self.assertEqual(acceptance.disk_check({k: v for k, v in c['disk'].items() if k != 'menu_links'}, delta)['status'], 'fail')
 
 
 class SiteFixtureTests(unittest.TestCase):
