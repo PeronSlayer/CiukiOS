@@ -147,6 +147,7 @@ void desk_drop_client(struct desktop *d, int i)
     if (c->v3_peer && c->window_id) for (int j=0;j<DESK_CLIENTS;j++)
         if (d->clients[j].v3_peer==c->v3_peer && d->clients[j].owner_id==c->window_id) desk_drop_client(d,j);
     if (desk_clip_drop) desk_clip_drop(d,i);
+    desk_window_record(d,i,"closed");
     uint32_t pid=c->pid, owner=c->owner_id, id=c->window_id;
     if (id) desk_shell_program_remove(d,id);
     char application[sizeof(c->application)]; memcpy(application,c->application,sizeof(application));
@@ -3372,7 +3373,7 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
                     if (owner>=0 && (d->clients[owner].v3_style&DESK_V3_TOPMOST)) p.style|=DESK_V3_TOPMOST;
                     memcpy(c->title,p.title,sizeof(c->title)); anchor->v3_last[id-1]=generation;
                     if (anchor->awaiting_frame && !anchor->window_ns) anchor->window_ns=client_clock(d);
-                    v3_place(d,i,&p); v3_reply(d,peer,&p,0); desk_focus(d,i);
+                    v3_place(d,i,&p); v3_reply(d,peer,&p,0); desk_window_record(d,i,desk_window_state(d,i)); desk_focus(d,i);
                     /* fx-2: its task button, as for a native window. */
                     if (d->shell) desk_damage_add(&d->damage,desk_taskbar(d),d->width,d->height);
                     return 0;
@@ -3483,8 +3484,21 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
         if ((p.style&DESK_V3_MODAL) && !c->owner_id) { error=-EINVAL; break; }
         if (c->owner_id) for (int k=0;k<DESK_CLIENTS;k++) if (d->clients[k].window_id==c->owner_id &&
             (d->clients[k].v3_style&DESK_V3_TOPMOST)) p.style|=DESK_V3_TOPMOST;
-        v3_place(d,i,&p); if (c->minimized && d->focus==i) desk_focus(d,desk_next_window(d,i,0,NULL));
+    {
+        int was=c->minimized;
+        v3_place(d,i,&p);
+        if (was!=c->minimized) desk_window_record(d,i,desk_window_state(d,i));
+        if (c->minimized && d->focus==i) desk_focus(d,desk_next_window(d,i,0,NULL));
+        /* fx-acc1: a modal prompt that becomes visible while its owner chain
+         * holds the focus takes it, as Windows activates a dialog box over
+         * its disabled owner. A page created hidden (every DialogBox page)
+         * gave the focus back to its owner at the hiding PLACE; shown later
+         * without an activation request, it stayed inactive with its owner
+         * active under it (acceptance run c634b7c6, Quake III's Welcome page). */
+        else if (was && !c->minimized && (c->v3_style&DESK_V3_MODAL) && d->focus>=0 && d->focus!=i &&
+                 desk_modal_target(d,d->focus)==i) desk_focus(d,d->focus);
         break;
+    }
     case DESK_V3_RESIZE: {
         struct desk_box b=desk_content(c);
         if (p.serial!=c->resize_serial || p.serial<=c->applied_serial || p.width!=(unsigned)b.w/c->v3_scale || p.height!=(unsigned)b.h/c->v3_scale) error=-ENOENT;
@@ -3508,7 +3522,7 @@ int desk_v3_receive(struct desktop *d, int peer, const struct ciuki_message *m)
         else if (d->focus==i) desk_focus(d,desk_next_window(d,i,0,NULL));
         break;
     case DESK_SET_TITLE:
-        if(strcmp(c->title,p.title)) { memcpy(c->title,p.title,sizeof(c->title));desk_caption_damage(d,i); }
+        if(strcmp(c->title,p.title)) { memcpy(c->title,p.title,sizeof(c->title));desk_caption_damage(d,i);desk_window_record(d,i,desk_window_state(d,i)); }
         break;
     case DESK_SET_CURSOR:
         if (p.index && !(c->v3_cursor_valid&(1u<<(p.index-1)))) error=-ENOENT;

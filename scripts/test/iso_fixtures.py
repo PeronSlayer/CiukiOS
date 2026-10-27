@@ -12,6 +12,7 @@ import os
 import shutil
 import subprocess
 import argparse
+import struct
 
 DATE = '2020010100000000'
 EPOCH = 1577836800
@@ -25,6 +26,144 @@ def generate_mixed_mode(source, directory, audio_seconds=4):
     """Authored data + CD-DA media; needs a track-aware guest transport."""
     from iso_directory import mixed_mode
     return mixed_mode(source, directory, audio_seconds)
+
+# ---- fx-acc1: InstallShield 5 test medium -------------------------------------
+# A medium the IS5 native bootstrap (docs/design/installshield5-bootstrap.md,
+# src/kernel/proc/win32/is5boot.h, sdk/win32/is5boot) admits and runs, made of
+# authored bytes only (no commercial InstallShield or Stirling code):
+# SETUP.EXE is a minimal Windows NE header (admission reads only the header),
+# SETUP.INS is a marker, SETUP.INI and SETUP.LID carry the keys the bootstrap
+# reads, and _INST32I.EX_ is a Stirling installer archive (82-byte header,
+# signature 2a ab 79 d8 00 01, member directory; Deark installshld.c) whose
+# three members are literal-only PKWARE DCL streams (zlib contrib/blast:
+# literal flag 0, 6 dictionary bits, each byte a 0 bit then its 8 bits, the
+# end code length 519). INSTALL.EXE is the authored engine below; the two
+# support DLLs are marker files the bootstrap only writes and deletes.
+IS5_ENGINE_LOG = 'C:\\Documents\\is5engine.txt'
+IS5_ENGINE_EXIT = 42
+IS5_SIGNATURE = bytes((0x2a, 0xab, 0x79, 0xd8, 0x00, 0x01, 0x00, 0x00))
+
+
+def is5_dcl_literal(data):
+    """Literal-only DCL (blast): header bytes 0 (uncoded literals) and 6; per
+    byte a 0 bit and its 8 bits; the end is length code 519 (a 1 bit, the
+    7-bit code of length symbol 15, 255 in its 8 extra bits), LSB first."""
+    bits = []
+    for byte in data:
+        bits.append(0)
+        bits += [(byte >> i) & 1 for i in range(8)]
+    bits += [1] + [0] * 7 + [1] * 8
+    out = bytearray([0, 6]) + bytearray((len(bits) + 7) // 8)
+    for i, bit in enumerate(bits):
+        out[2 + i // 8] |= bit << (i % 8)
+    return bytes(out)
+
+
+def is5_archive(members):
+    """Stirling installer archive; members are (name, runtime name, bytes)."""
+    directory = bytearray()
+    packed = [is5_dcl_literal(data) for _, _, data in members]
+    offset = 82 + sum(20 + 4 + len(name) + len(runtime) for name, runtime, _ in members)
+    for (name, runtime, data), stream in zip(members, packed):
+        directory += struct.pack('<III8x', offset, len(stream), len(data))
+        directory += struct.pack('<H', len(name)) + name.encode('ascii')
+        directory += struct.pack('<H', len(runtime)) + runtime.encode('ascii')
+        offset += len(stream)
+    header = bytearray(82)
+    header[0:8] = IS5_SIGNATURE
+    struct.pack_into('<I', header, 78, len(members))
+    return bytes(header + directory + b''.join(packed))
+
+
+def is5_ne_stub():
+    """A 256-byte Windows NE application header, no code: MZ with e_lfanew
+    0x80, "NE", target OS 2 (Windows), application flags (bit 15 clear), an
+    empty resource table (the bootstrap then uses its English error texts)."""
+    stub = bytearray(256)
+    stub[0:2] = b'MZ'
+    struct.pack_into('<I', stub, 60, 0x80)
+    stub[0x80:0x82] = b'NE'
+    struct.pack_into('<H', stub, 0x80 + 36, 64)        # resource table at NE+64: shift 4, no types
+    struct.pack_into('<H', stub, 0x80 + 64, 4)
+    stub[0x80 + 54] = 2
+    return bytes(stub)
+
+
+def is5_files():
+    """The root files of the InstallShield 5 test medium."""
+    return {'SETUP.EXE': is5_ne_stub(),
+            'SETUP.INS': b'CiukiOS acceptance InstallShield 5 test script marker\r\n',
+            'SETUP.INI': b'[Startup]\r\nAppName=CiukiOS IS5 Test\r\nEnableLangDlg=N\r\n',
+            'SETUP.LID': b'[Languages]\r\nDefault=0009\r\n',
+            '_INST32I.EX_': is5_archive([('INSTALL.EXE', '_INS0000._MP', is5_engine_pe()),
+                                         ('zdata.dll', 'ZDataI51.dll', b'CiukiOS IS5 test support file 1\r\n'),
+                                         ('WUTL95i.DLL', '_WUTL951.DLL', b'CiukiOS IS5 test support file 2\r\n')])}
+
+
+def is5_engine_pe(log_path=None, exit_code=None):
+    """fx-acc1: the stand-in InstallShield engine (INSTALL.EXE of the test
+    archive), an authored 1.5 KiB PE32 GUI program written byte by byte (no
+    toolchain, no third-party code). It writes the current directory it was
+    started in (the bootstrap starts the engine from the media root) to
+    log_path and exits with exit_code; it imports CreateFileA,
+    GetCurrentDirectoryA, WriteFile, CloseHandle and ExitProcess from
+    kernel32.dll (Microsoft PE/COFF specification: optional header, import
+    directory and IAT). Checked on the host under Wine."""
+    log_path = log_path or IS5_ENGINE_LOG
+    exit_code = IS5_ENGINE_EXIT if exit_code is None else exit_code
+    base, rva = 0x400000, 0x1000
+    names = ['CreateFileA', 'GetCurrentDirectoryA', 'WriteFile', 'CloseHandle', 'ExitProcess']
+    sec = bytearray(0x400)
+    # import descriptor at 0x000 (+ null at 0x014); ILT at 0x028; IAT at 0x040
+    ilt, iat, dll = 0x028, 0x040, 0x058
+    sec[dll:dll + 13] = b'kernel32.dll\0'
+    at = 0x068
+    hints = []
+    for name in names:
+        hints.append(at)
+        entry = b'\0\0' + name.encode() + b'\0'
+        if len(entry) % 2: entry += b'\0'
+        sec[at:at + len(entry)] = entry; at += len(entry)
+    for k, h in enumerate(hints):
+        struct.pack_into('<I', sec, ilt + 4 * k, rva + h)
+        struct.pack_into('<I', sec, iat + 4 * k, rva + h)
+    struct.pack_into('<IIIII', sec, 0, rva + ilt, 0, 0, rva + dll, rva + iat)
+    path = log_path.encode('ascii') + b'\0'
+    path_at = at; sec[at:at + len(path)] = path; at += len(path)
+    at = (at + 15) & ~15
+    written, buf = 0x2d8, 0x2e0   # zero-filled; buf + 260 stays inside the 0x400-byte section
+    va = lambda off: base + rva + off
+    imp = lambda name: va(iat + 4 * names.index(name))
+    code = bytearray()
+    code += b'\x6a\x00' + b'\x68' + struct.pack('<I', 0x80) + b'\x6a\x02' + b'\x6a\x00' + b'\x6a\x00'
+    code += b'\x68' + struct.pack('<I', 0x40000000) + b'\x68' + struct.pack('<I', va(path_at))
+    code += b'\xff\x15' + struct.pack('<I', imp('CreateFileA'))
+    code += b'\x89\xc6'                                         # mov esi, eax
+    code += b'\x68' + struct.pack('<I', va(buf)) + b'\x68' + struct.pack('<I', 260)
+    code += b'\xff\x15' + struct.pack('<I', imp('GetCurrentDirectoryA'))
+    code += b'\x6a\x00' + b'\x68' + struct.pack('<I', va(written)) + b'\x50'
+    code += b'\x68' + struct.pack('<I', va(buf)) + b'\x56'
+    code += b'\xff\x15' + struct.pack('<I', imp('WriteFile'))
+    code += b'\x56' + b'\xff\x15' + struct.pack('<I', imp('CloseHandle'))
+    code += b'\x6a' + bytes([exit_code]) + b'\xff\x15' + struct.pack('<I', imp('ExitProcess'))
+    entry = at; sec[at:at + len(code)] = code; at += len(code)
+    assert at <= written
+    head = bytearray(0x200)
+    head[0:2] = b'MZ'; struct.pack_into('<I', head, 60, 0x40)
+    head[0x40:0x44] = b'PE\0\0'
+    struct.pack_into('<HHIIIHH', head, 0x44, 0x14c, 1, 0, 0, 0, 0xe0, 0x0103)
+    o = 0x58
+    struct.pack_into('<HBBIIIIIIIIIHHHHHHIIIIHHIIIIII', head, o,
+                     0x10b, 1, 0, 0x400, 0, 0, rva + entry, rva, rva, base, 0x1000, 0x200,
+                     4, 0, 0, 0, 4, 0, 0, 0x2000, 0x200, 0, 2, 0, 0x100000, 0x1000, 0x100000, 0x1000, 0, 16)
+    dirs = o + 96
+    struct.pack_into('<II', head, dirs + 8 * 1, rva, 40)          # import table
+    struct.pack_into('<II', head, dirs + 8 * 12, rva + iat, 24)   # IAT
+    s = 0x58 + 0xe0
+    head[s:s + 8] = b'.text\0\0\0'
+    struct.pack_into('<IIIIIIHHI', head, s + 8, 0x400, rva, 0x400, 0x200, 0, 0, 0, 0, 0xe0000060)
+    return bytes(head + sec)
+
 
 def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -93,12 +232,17 @@ def generate(spec, directory, index=0, media_name=None):
     image = directory / (f'media-{media_name}.iso' if media_name else f'fixture-{index}.iso')
     if source.exists() or extracted.exists():
         raise ValueError('ISO scratch directory already exists')
+    content = spec.get('content')
+    if content not in (None, 'is5'):
+        raise ValueError('ISO content: is5 or the default fixture tree')
     files = {'README.TXT': b'Ciuki F4 optical fixture seed=1\n',
              'DATA/ODD.BIN': bytes((i * 17 + 3) & 255 for i in range(4099)),
              'DATA/EMPTY.BIN': b''}
-    if level > 1:
+    if content == 'is5':
+        files = {'README.TXT': b'CiukiOS InstallShield 5 bootstrap test medium (authored bytes only)\n', **is5_files()}
+    if level > 1 and content is None:
         files['Long directory/Long optical file.bin'] = bytes(range(256)) * 33
-    if spec.get('joliet'):
+    if spec.get('joliet') and content is None:
         files['Caf\u00e9/Gr\u00fc\u00dfe.txt'] = 'Ciuki: caff\u00e8, Gr\u00fc\u00dfe.\n'.encode()
     try:
         source.mkdir()
@@ -124,6 +268,7 @@ def generate(spec, directory, index=0, media_name=None):
                             'kind': 'directory' if p.is_dir() else 'file',
                             **({} if p.is_dir() else {'size': p.stat().st_size, 'sha256': sha(p)})})
         manifest = {'generator': 'xorriso', 'level': level, 'joliet': bool(spec.get('joliet')),
+                    **({'content': content} if content else {}),
                     'seed': 1, 'path': str(image.resolve()), 'size': image.stat().st_size,
                     'declared_files': {p: hashlib.sha256(b).hexdigest() for p, b in sorted(files.items())},
                     'entries': entries, 'independent_tool': 'xorriso -osirrox on -extract /',

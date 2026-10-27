@@ -14,7 +14,8 @@
 #include <ciuki/timing.h>
 
 static struct mm_pin ac97_pins[9];
-struct ac97_device ac97;
+/* fx-acc1: no claim before ac97_init (handle 0 is another owner's resource). */
+struct ac97_device ac97 = { .claims = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 } };
 #define AC97_ANALOG_WAIT_MS 5000u
 #define AC97_ACTIVATION_MS 7000u
 static uint32_t read_io(void *cookie, uint16_t port, unsigned width)

@@ -863,6 +863,11 @@ void desk_flush(struct desktop *, int index);
 void desk_heartbeat(struct desktop *, uint64_t now_ns);
 void desk_focus(struct desktop *, int index);
 int desk_modal_target(const struct desktop *, int index);
+/* fx-acc1: "[desktop] window pid= window= owner= modal= state= title=" once
+ * per title or visibility change of a program window (v3), also in quiet
+ * boots (input.c). state: shown, minimized, hidden or closed. */
+void desk_window_record(const struct desktop *, int index, const char *state);
+const char *desk_window_state(const struct desktop *, int index);
 int desk_next_window(const struct desktop *, int excluded, uint32_t pid, const char *application);
 void desk_preferences_changed(struct desktop *);
 void desk_preferences_persistent(const struct desktop *, struct ciuki_settings *);

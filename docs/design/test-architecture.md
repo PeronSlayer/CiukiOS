@@ -280,7 +280,7 @@ INCOMPLETE, one line per trial item, key figures and evidence paths).
 - **Predicates** are line-anchored regular expressions over the serial
   capture, never a frame digest: kernel `klog` lines, program output
   (`[console] ...`) and the desktop's diagnostic records
-  (`[user N] [desktop] display start|focus|not-responding|notify|message|autoplay ...`,
+  (`[user N] [desktop] display start|focus|window|not-responding|notify|message|autoplay ...`,
   `apps/desktop/diag_record.h`, written through diagnostic call 2 also in
   quiet boots) and `[dosvm-window] video` (`src/kernel/vm/dosvm_vga.c`, one
   line per change of a DOS window's layout). Steps wait for patterns in order
@@ -289,9 +289,29 @@ INCOMPLETE, one line per trial item, key figures and evidence paths).
   Installed files and Start-menu links are compared on the overlay after a
   verified teardown (`win32_inventory.overlay_delta`). Screendumps only pace
   the input (`screen_settle`; an installer `wizard` presses its next key once
-  the screen has been still for some seconds and the focused window is one
-  of the installer's untitled pages) and check geometry and the desktop
-  layout colours of `observe_normal_boot_screen`.
+  the screen has been still for some seconds) and check geometry and the
+  desktop layout colours of `observe_normal_boot_screen`. fx-acc1: a wizard
+  with `pages` follows the installer page by page from the desktop's
+  `window pid= window= owner= modal= state= title=` records (one per title
+  or visibility change of a program window, `apps/desktop/input.c`): the
+  newest shown owned window of the installer's process is the page, named by
+  the first page spec whose title expression matches; its keys are pressed
+  once (again after `retry` seconds, at most `max_retries` times) while the
+  installer's process holds the focus, and a page that stays past its
+  timeout fails the step naming the page. The first run (c634b7c6) showed
+  why the untitled-focus rule could not work: Installer VISE creates each
+  DialogBox page hidden and untitled, titles it in WM_INITDIALOG and shows
+  it afterwards, so the focus record of a page carried no title.
+- **Program output records are whole lines only when written by one
+  `write()`**: the kernel publishes every console write as its own
+  `[console] ` line, and newlib's unbuffered `stderr` (opened `__SRW|__SNBF`,
+  so its `_UNBUF_STREAM_OPT` single-write path never applies) writes each
+  `fprintf` conversion separately. The desktop makes `stderr` line buffered
+  at start (ISO C 7.21.3: stderr is never fully buffered; every desktop
+  record ends with a newline), so its records are single lines (fx-acc1,
+  run f63df5ab: `end task dialog kind=dos` arrived as seven lines and the DOS
+  close step never matched). Other programs' `fprintf(stderr)` records are
+  still fragmented; prefer klog lines and diagnostic records in predicates.
 - **Known failures** name their directive (`known_failure`, optionally only
   for a `fail` pattern): the summary shows the item as PASS* and they do not
   block. Today: the DOS full-screen entry refused by QEMU's standard VGA
@@ -307,7 +327,15 @@ INCOMPLETE, one line per trial item, key figures and evidence paths).
   absent snapshots make the case `not_run`. Same-site fetch errors fail it,
   other hosts are recorded.
 - A pending item (`pending`: directive, required paths, reason) is `not_run`
-  and does not block (item 9 until fx-is5boot is merged).
+  and does not block.
+- **Item 9** (fx-acc1) inserts a generated InstallShield 5 test medium
+  (`iso_fixtures.is5_files`, media `content: "is5"`): an authored NE header
+  as SETUP.EXE, SETUP.INS/INI/LID and a Stirling `_INST32I.EX_` of
+  literal-only DCL members whose engine is an authored 1.5 KiB PE that writes
+  its current directory to `C:\Documents\is5engine.txt` and exits 42. The
+  case starts `D:\SETUP.EXE` from Run and waits for the bootstrap helper,
+  the `_INSnnnn._MP` engine and both exits, then shuts down so the overlay
+  holds the engine's file (`disk.menu_links: false`).
 
 ## Migration
 

@@ -79,7 +79,8 @@ ACTION_KEYS = {'keys', 'text', 'pause', 'media', 'screendump', 'sleep', 'hold'}
 ASSERTION_KEYS = {'name', 'check', 'pattern', 'from', 'to', 'min', 'max', 'required', 'known_failure', 'note'}
 FIGURE_KEYS = {'name', 'check', 'pattern', 'from', 'to', 'reducer', 'page'}
 WIZARD_KEYS = {'keys', 'then', 'idle', 'max', 'focus', 'press_when', 'close_when', 'close_keys', 'max_closes',
-               'region', 'start_after'}
+               'region', 'start_after', 'pid', 'pages', 'page_timeout', 'retry', 'max_retries'}
+PAGE_KEYS = {'name', 'title', 'modal', 'keys', 'timeout'}
 REDUCERS = ('dosvm_perf', 'lines', 'count', 'first', 'last')
 NICS = (None, 'i82559er', 'rtl8139', 'ne2k_pci', 'e1000', 'pcnet')
 EVENTS = ('RESET', 'SHUTDOWN')
@@ -104,6 +105,12 @@ BASE_FORBID = (r'^Ciuki VMM (?:panic|double fault)',
 # Diagnostic records of the desktop (apps/desktop/diag_record.h): the kernel
 # prefixes "[user <task>] " (src/kernel/core/syscall.c sys_debug_write).
 DESKTOP = r'\[user \d+\] \[desktop\]'
+# fx-acc1: the desktop's program-window record (apps/desktop/input.c
+# desk_window_record) and its focus record (focus_record): the page-driven
+# wizard follows an installer's pages by their titles.
+WINDOW_RECORD = re.compile(r'^\[user \d+\] \[desktop\] window pid=(?P<pid>\d+) window=(?P<window>\d+) owner=(?P<owner>\d+) '
+                           r'modal=(?P<modal>[01]) state=(?P<state>[a-z]+) title=(?P<title>\S+)$')
+FOCUS_RECORD = re.compile(r'^\[user \d+\] \[desktop\] focus pid=(?P<pid>\d+) window=(?P<window>\d+) ')
 
 # ---- keys ----------------------------------------------------------------
 # QAPI QKeyCode names (qapi/ui.json). Friendly aliases first.
@@ -283,8 +290,44 @@ def validate_wizard(spec, where):
     for key in ('focus', 'press_when', 'close_when'):
         if key in spec:
             compile_pattern(spec[key], where + ' wizard ' + key)
-    refuse(('press_when' not in spec and 'close_when' not in spec) or 'focus' in spec,
+    refuse(('press_when' not in spec and 'close_when' not in spec) or 'focus' in spec or 'pages' in spec,
            where + ': wizard press_when/close_when need a focus pattern')
+    pages = spec.get('pages')
+    if pages is not None:
+        # fx-acc1: page-driven wizard. Each shown window of the installer's
+        # process that has an owner (its wizard pages, its progress window)
+        # is a page, named by the first spec whose title expression matches
+        # the record's title token (and its modal flag when given).
+        refuse(isinstance(pages, list) and 1 <= len(pages) <= 24, where + ': wizard pages is a list of 1..24 page specs')
+        refuse(isinstance(spec.get('pid'), str) and re.fullmatch('[a-z][a-z0-9_]{0,31}', spec['pid']),
+               where + ': wizard pages need pid, the variable holding the installer process id')
+        refuse('press_when' not in spec and 'keys' not in spec and 'then' not in spec and 'max' not in spec,
+               where + ': wizard pages replace press_when, keys, then and max')
+        names = set()
+        for page in pages:
+            refuse(isinstance(page, dict) and not set(page) - PAGE_KEYS and isinstance(page.get('name'), str)
+                   and re.fullmatch('[a-z0-9-]{1,24}', page['name']) and page['name'] not in names,
+                   where + ': wizard page keys ' + ', '.join(sorted(PAGE_KEYS)) + ' with a unique name [a-z0-9-]')
+            names.add(page['name'])
+            refuse(isinstance(page.get('title'), str) and page['title'], where + ': wizard page %s: title expression' % page['name'])
+            try:
+                re.compile(page['title'])
+            except re.error as error:
+                raise res.Refusal('acceptance case: %s: wizard page %s: invalid title expression: %s' % (where, page['name'], error)) from error
+            refuse(page.get('modal') in (None, True, False), where + ': wizard page %s: modal is a boolean' % page['name'])
+            keys = page.get('keys', [])
+            refuse(isinstance(keys, list) and len(keys) <= 8, where + ': wizard page %s: keys is a list of up to 8 chords' % page['name'])
+            for k in keys:
+                try:
+                    chord(k)
+                except ValueError as error:
+                    raise res.Refusal('acceptance case: %s: wizard page %s: %s' % (where, page['name'], error)) from error
+            refuse(type(page.get('timeout', 60)) in (int, float) and 10 <= page.get('timeout', 60) <= 3600,
+                   where + ': wizard page %s: timeout 10..3600 s' % page['name'])
+        for key, low, high in (('page_timeout', 10, 3600), ('retry', 5, 600)):
+            if key in spec:
+                refuse(type(spec[key]) in (int, float) and low <= spec[key] <= high, '%s: wizard %s %s..%s s' % (where, key, low, high))
+        refuse(type(spec.get('max_retries', 2)) is int and 0 <= spec.get('max_retries', 2) <= 5, where + ': wizard max_retries 0..5')
     region = spec.get('region')
     refuse(region is None or isinstance(region, list) and len(region) == 4 and all(type(v) is int and v >= 0 for v in region),
            where + ': wizard region [x, y, w, h]')
@@ -309,8 +352,10 @@ def validate_case(case, root=ROOT):
     refuse(isinstance(media, dict) and len(media) <= 6, 'media: at most 6 generated images')
     for name, spec in media.items():
         refuse(re.fullmatch('[a-z0-9-]{1,16}', name) and isinstance(spec, dict), 'media names [a-z0-9-]')
-        refuse(spec.get('generator') == 'xorriso' and set(spec) <= {'generator', 'level', 'joliet', 'volume_sequence', 'label', 'seed'},
-               'media are xorriso images: level, joliet, volume_sequence, label')
+        refuse(spec.get('generator') == 'xorriso' and set(spec) <= {'generator', 'level', 'joliet', 'volume_sequence', 'label', 'seed', 'content'},
+               'media are xorriso images: level, joliet, volume_sequence, label, content')
+        # fx-acc1: content "is5" is the InstallShield 5 test medium (iso_fixtures.is5_files).
+        refuse(spec.get('content') in (None, 'is5'), 'media content: is5 or the default fixture tree')
         refuse(spec.get('volume_sequence') is None or type(spec['volume_sequence']) is int and 0 <= spec['volume_sequence'] <= 0xFFFF,
                'media volume_sequence 0..65535')
     refuse(not media or devices.get('optical') == 'empty', 'media need devices.optical "empty"')
@@ -375,6 +420,8 @@ def validate_case(case, root=ROOT):
             refuse(isinstance(step.get(key, []), list), where + ': %s is a list of step names' % key)
             for need in step.get(key, []):
                 refuse(need in names and need != name, where + ': %s names an earlier step: %s' % (key, need))
+        if step.get('wizard', {}).get('pid'):
+            refuse(step['wizard']['pid'] in captured, where + ': wizard pid <<%s>> is not captured by an earlier step' % step['wizard']['pid'])
         texts = [*waits, *fails, *(step.get('wizard', {}).get(k) for k in ('press_when', 'close_when') if step.get('wizard', {}).get(k))]
         own = set()
         for pattern in waits:
@@ -409,8 +456,10 @@ def validate_case(case, root=ROOT):
                 checks.add(item.get('check', 'main'))
     disk = case.get('disk')
     if disk is not None:
-        refuse(isinstance(disk, dict) and set(disk) <= {'check', 'files', 'menu_link_target', 'required'} and disk.get('files'),
-               'disk: check, files, menu_link_target, required')
+        refuse(isinstance(disk, dict) and set(disk) <= {'check', 'files', 'menu_link_target', 'menu_links', 'required'} and disk.get('files'),
+               'disk: check, files, menu_link_target, menu_links, required')
+        refuse(type(disk.get('menu_links', True)) is bool and (disk.get('menu_links', True) or 'menu_link_target' not in disk),
+               'disk: menu_links is a boolean; false (no Start-menu link expected) excludes menu_link_target')
         for row in disk['files']:
             refuse(isinstance(row, dict) and set(row) <= {'path', 'size', 'sha256'} and isinstance(row.get('path'), str), 'disk.files rows')
         checks.add(disk.get('check', 'disk'))
@@ -892,8 +941,107 @@ class Session:
             return True
         return False
 
+    def _still(self, w, spec, now, qmp):
+        """Pacing: True once the screen has not changed for `idle` seconds
+        since its last change and the wizard's last action."""
+        if now < w['next']:
+            return False
+        w['next'] = now + WIZARD_POLL
+        current = self._pace_hash(qmp, spec.get('region'))
+        if current is None:
+            return False
+        if current != w['hash']:
+            w['hash'] = current; w['last_change'] = now
+            return False
+        return now - max(w['last_change'], w['last_action']) >= spec.get('idle', 6)
+
+    @staticmethod
+    def _page_spec(spec, window):
+        for page in spec['pages']:
+            if re.search(page['title'], window['title']) and page.get('modal') in (None, window['modal']):
+                return page
+        return None
+
+    def _wizard_pages(self, step, now, qmp):
+        """fx-acc1: drive an installer page by page. A page is a shown
+        window of the installer's process with an owner (its wizard pages and
+        progress window; the frame and helper windows have none), the newest
+        one shown; its title token names it through the first matching page
+        spec. Once the screen is still and the installer's process holds the
+        focus, the page's keys are pressed once, again after `retry` seconds
+        up to `max_retries` times; a page that stays longer than its timeout
+        fails the step naming that page. Files windows the installer opens
+        over its last page are closed through close_when as before."""
+        spec = step['wizard']; ctx = self.ctx
+        w = ctx.setdefault('wizard', {'closes': 0, 'last_action': now, 'last_change': now, 'hash': None,
+                                      'next': now + spec.get('start_after', 0), 'focus': None, 'focus_pid': None,
+                                      'scanned': self.state[self.index].get('first_line', self.cursor),
+                                      'windows': {}, 'page': None, 'since': now, 'presses': 0, 'last_press': None,
+                                      'previous': None})
+        pid = self.vars.get(spec['pid'])
+        close = spec.get('close_when') and self.substitute(spec['close_when'], strict=False)
+        lines = self.parser.lines
+        for row in lines[w['scanned']:]:
+            match = WINDOW_RECORD.match(row['text'])
+            if match and match['pid'] == pid:
+                if match['state'] == 'closed':
+                    w['windows'].pop(match['window'], None)
+                else:
+                    w['windows'][match['window']] = {'window': match['window'], 'owner': match['owner'], 'modal': match['modal'] == '1',
+                                                     'state': match['state'], 'title': match['title'], 'line': row['i']}
+                continue
+            match = FOCUS_RECORD.match(row['text'])
+            if match:
+                w['focus'] = row['text']; w['focus_pid'] = match['pid']
+        w['scanned'] = len(lines)
+        shown = [v for v in w['windows'].values() if v['state'] == 'shown' and v['owner'] != '0']
+        window = max(shown, key=lambda v: v['line']) if shown else None
+        page = self._page_spec(spec, window) if window else None
+        identity = (window['window'], page['name'] if page else None) if window else None
+        log = self.state[self.index].setdefault('pages', [])
+        if identity != w['page']:
+            if w['page'] is not None and w['page'][0] is not None:
+                w['previous'] = w['page_label']
+            w['page'] = identity; w['since'] = now; w['presses'] = 0; w['last_press'] = None
+            w['page_label'] = ('%s (title %s, window %s)' % (page['name'] if page else 'unknown page', window['title'], window['window'])
+                               if window else None)
+            if window and len(log) < 64:
+                log.append({'t': self._rel(now), 'page': page['name'] if page else None, 'title': window['title'],
+                            'window': int(window['window']), 'modal': window['modal']})
+        limit = (page or {}).get('timeout', spec.get('page_timeout', 300)) if window else \
+            spec.get('page_timeout', 300) + (spec.get('start_after', 0) if w['previous'] is None else 0)
+        if now - w['since'] > limit:
+            if window:
+                what = 'wizard stopped on page %s' % w['page_label']
+            elif w['previous']:
+                what = 'wizard: no installer page shown after page %s' % w['previous']
+            else:
+                what = 'wizard: no installer page shown'
+            raise StepFailure('step %s: %s for %.0f s' % (step['name'], what, now - w['since']), 'timeout')
+        if not self._still(w, spec, now, qmp):
+            return
+        text = w['focus'] or ''
+        actions = self.state[self.index].setdefault('wizard', [])
+        if close and close.match(text) and w['closes'] < spec.get('max_closes', 8):
+            keys, kind = spec.get('close_keys', ['alt+f4']), 'close'
+            w['closes'] += 1
+        elif page and page.get('keys') and w['focus_pid'] == pid and \
+                (w['presses'] == 0 or (w['presses'] <= spec.get('max_retries', 2) and now - w['last_press'] >= spec.get('retry', 45))):
+            keys, kind = page['keys'], 'press'
+            w['presses'] += 1; w['last_press'] = now
+        else:
+            return
+        for k in keys:
+            self._press(chord(k), qmp)
+        w['last_action'] = now
+        if len(actions) < 64:
+            actions.append({'t': self._rel(now), 'kind': kind, 'keys': keys, 'focus': text[:160],
+                            'page': page['name'] if page and kind == 'press' else None, 'idle': round(now - w['last_change'], 1)})
+
     def _wizard(self, step, now, qmp):
         """Press the installer's next key once the screen has stayed still."""
+        if step['wizard'].get('pages'):
+            return self._wizard_pages(step, now, qmp)
         spec = step['wizard']; ctx = self.ctx
         w = ctx.setdefault('wizard', {'presses': 0, 'closes': 0, 'last_action': now, 'last_change': now,
                                       'hash': None, 'next': now + spec.get('start_after', 0), 'focus': None, 'scanned': 0})
@@ -1135,6 +1283,8 @@ def disk_check(spec, delta):
     wanted = spec.get('menu_link_target')
     link_ok = bool(links) and (not wanted or any(wanted.casefold() in (l.get('target') or '').casefold() or l.get('target') == '<foreign>'
                                                   for l in targets))
+    if spec.get('menu_links') is False:
+        link_ok = True   # fx-acc1: a case that installs no Start-menu link (the IS5 test engine)
     return {'check': spec.get('check', 'disk'), 'required': spec.get('required', True),
             'status': 'pass' if ok and link_ok else 'fail', 'files': rows, 'menu_links': links[:20],
             'link_targets': targets[:20], 'menu_link_ok': link_ok}
