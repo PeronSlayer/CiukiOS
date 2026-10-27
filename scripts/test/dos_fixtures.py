@@ -49,7 +49,7 @@ REDISTRIBUTION = 'local-only'
 # through the OPL; port 544 = 220h, IRQ 7, DMA 1 as CIUKIDOS's BLASTER).
 DOOM_CONFIG = ''.join(f'{key} {value}\r\n' for key, value in (
     ('mouse_sensitivity', 5), ('sfx_volume', 8), ('music_volume', 8), ('show_messages', 1),
-    ('use_mouse', 0), ('use_joystick', 0), ('screenblocks', 10), ('detaillevel', 0),
+    ('use_mouse', 1), ('use_joystick', 0), ('screenblocks', 10), ('detaillevel', 0),
     ('snd_channels', 8), ('snd_musicdevice', 3), ('snd_sfxdevice', 3), ('snd_sbport', 544),
     ('snd_sbirq', 7), ('snd_sbdma', 1), ('snd_mport', -1), ('usegamma', 0))).encode('ascii')
 

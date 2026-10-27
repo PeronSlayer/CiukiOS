@@ -42,6 +42,9 @@ BOOL w32_user_gl_damage(DWORD dc) {
 }
 int32_t w32_user_display_lease(uintptr_t w, DWORD x, DWORD y, DWORD bpp, struct gl_lease *l) {
   assert(w == 7);
+  /* A grant may switch the display mode (kernel fixture, f7-15 review). */
+  extern void gl_test_lease_hook(void) __attribute__((weak));
+  if (!gl_test_lease && gl_test_lease_hook) gl_test_lease_hook();
   *l = (struct gl_lease){1, gl_test_token, gl_test_generation, x, y, bpp, x * (bpp / 8)};
   gl_test_lease = 1;
   return 0;

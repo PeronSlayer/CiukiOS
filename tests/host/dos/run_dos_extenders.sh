@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # DOS extenders in the DOS Box (DOSX): a DOS/4GW 1.97 client and the Warcraft
-# II demo under DOS/4GW Professional 1.97 on the production VM code with
+# II demo and Duke Nukem 3D shareware under DOS/4GW Professional on the production VM code with
 # libx86emu (selector 40h, nested saved flags images). No QEMU, systemd scope
 # or OS image. See dos_extenders.py.
 set -euo pipefail

@@ -8,6 +8,7 @@
 #include <ciuki/abi.h>
 #include <ciuki/display_driver.h>
 #include "../../src/kernel/drivers/video/render3d.h"
+#include "../../src/kernel/drivers/video/render3d_transport.h"
 #include "../../src/kernel/drivers/video/s3savage/savage3d.h"
 static struct render3d_service service;
 static uint64_t now;
@@ -307,9 +308,25 @@ static void diagnostic(void)
     struct render3d_extent heap; uint32_t required;
     assert(!savage3d_mode_heap(&engine,&fb,16*1024*1024,&heap,&required));
     assert(heap.first==8*1024*1024 && heap.bytes==8*1024*1024-4096 && required==8183808);
+    engine.cursor_offset=15532032-4096;
+    assert(savage3d_mode_heap(&engine,&fb,15532032,&heap,&required)==-ENOMEM);
+    assert(heap.first==8388608 && heap.bytes==7139328 && required==8183808);
+    engine.cursor_offset=16*1024*1024-4096;
     assert(savage3d_mode_heap(&engine,&fb,8*1024*1024,&heap,&required)==-EOPNOTSUPP);
     engine.cursor_offset=heap.first+4096;
     assert(savage3d_mode_heap(&engine,&fb,16*1024*1024,&heap,&required)==-ENOMEM);
+    /* T23 census: 1280 cached rows after the 768-row desktop. Borrowing
+     * them is explicit; the checked layout never silently overlaps 2D. */
+    static const unsigned widths[]={1024,1024,640,640},heights[]={768,768,480,480},bpps[]={32,16,32,16};
+    for (unsigned i=0;i<4;i++) {
+        fb.width=widths[i]; fb.height=heights[i]; fb.bpp=bpps[i];
+        fb.pitch=fb.width*(fb.bpp/8); fb.size=fb.pitch*fb.height;
+        engine.height=fb.height; engine.rows=fb.height; engine.cursor_offset=15532032-4096;
+        assert(!savage3d_mode_heap(&engine,&fb,15532032,&heap,&required));
+        assert(heap.first==fb.size && heap.first+heap.bytes==engine.cursor_offset && heap.bytes>=required);
+        printf("T23 plan %ux%ux%u scanout=%u heap_first=%u heap_bytes=%u D16_required=%u PASS\n",
+            fb.width,fb.height,fb.bpp,fb.size,heap.first,heap.bytes,required);
+    }
     puts("unchanged 2D lease, guarded full-mode buffer + minimum texture admission PASS");
 }
 static void queued_close(void)
@@ -387,8 +404,23 @@ static void scalar_numeric_bounds(void)
     assert(!render3d_close(&service) && !outstanding);
     puts("scalar tiny-area derivatives, maximum texture/UV/reciprocal-W products and signed wrap PASS");
 }
+static void canonical_rgb565(void)
+{
+    init(NULL); uint32_t c=create(1,R3D_SOFTWARE),h,pixel;
+    const unsigned kinds[]={R3D_COLOR565,R3D_LINEAR565};
+    for (unsigned k=0;k<2;k++) {
+        assert(!render3d_create_resource(&service,1,c,kinds[k],1,1,NULL,0,&h));
+        assert(!render3d_readback(&service,1,c,h,&pixel,4) && pixel==0xff000000u);
+        pixel=0x00123456;
+        assert(!render3d_upload(&service,1,c,h,&pixel,4));
+        assert(!render3d_readback(&service,1,c,h,&pixel,4) && pixel==0xff103452u);
+    }
+    assert(!render3d_close(&service));
+    puts("RGB565 canonical shadows: creation, immediate upload/read quantization and absent alpha PASS");
+}
 int main(int argc,char **argv)
 {
+    canonical_rgb565();
     if (argc==2 && !strcmp(argv[1],"queued-close")) queued_close();
     else if (argc==2 && !strcmp(argv[1],"completed-receipts")) completed_receipts();
     else { security(); software(); queues(); hardware(); limits(); layouts(); diagnostic(); queued_close(); completed_receipts(); scalar_numeric_bounds(); }

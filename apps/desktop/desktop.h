@@ -142,6 +142,7 @@ struct desk_client {
     int mixer;                    /* launched Volume Control or Music Player; may send MIXER_SET */
     int awaiting_frame;           /* launched graphical program that has not sent its first DAMAGE yet */
     int launch_frame_pending;    /* first DAMAGE accepted, awaiting successful desktop present */
+    int launch_feedback_remote; /* Win32 feedback is owned by the kernel */
     uint64_t launch_input_ns;     /* original click, retained through first-frame presentation */
     uint64_t launched_ns;         /* its launch time (desktop.c: the gate scenarios' input hold) */
     uint64_t window_ns, damage_ns; /* fx-15: its first CREATE_WINDOW and first frame (first-frame record) */
@@ -527,6 +528,9 @@ struct desktop {
     const char *launch_arg;      /* single argument for the next launch (LAUNCH from Files) */
     int (*launch)(struct desktop *, const struct desk_program *);
     uint64_t launch_click_ns;
+    uint64_t launch_link_until, launch_run_until, launch_remote_until;
+    unsigned launch_remote_count;
+    void (*launch_presented)(struct desktop *, uint32_t pid);
     /* fx-8: launch_async: spawns run on the launcher worker (never in gate
      * scenarios); launch_request: the next launch's origin, reset after it;
      * launch_deferred: the last launch returned 0 and completes later. */
@@ -673,7 +677,7 @@ struct desktop {
     struct ciuki_rect copy_rect;
     /* f2-92: offscreen rows [vram_first, vram_end), their surface caches,
      * the next window stability check and an engine lost while in use. */
-    uint32_t vram_first, vram_end, vram_queries, vram_failures;
+    uint32_t vram_first, vram_end, vram_queries, vram_failures, vram_epoch;
     struct desk_vram_entry vram[DESK_VRAM_ENTRIES];
     uint64_t vram_check_ns, vram_query_ns;
     int accel_lost;

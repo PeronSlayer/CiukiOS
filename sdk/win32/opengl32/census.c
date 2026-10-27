@@ -8,6 +8,7 @@ struct census_key {
   int stage[2][9]; /* enabled, width, height, min, mag, S/T wrap, env, internal */
   int blend, source, destination, alpha, alpha_func, alpha_ref;
   int depth, depth_func, depth_mask, fog, offset;
+  unsigned stencil[8];
   int scissor[5];
   unsigned w_class, uv_class, reason;
   unsigned width, height;
@@ -75,18 +76,19 @@ static unsigned verdict(struct gl_context *context) {
   const struct sw_state *s=&g->state;
   const struct gl_hw_format format={s->width,s->height,context->depth_bits,
     context->stencil_bits,(unsigned)s->rgb565};
-  if (!gl_hw_format_supported(&format) || s->depth24 || s->stencil) return C_FORMAT;
-  const struct ciuki_r3d_caps caps={.features=127,.max_size=1024,.max_width=1024,.max_height=1024,
+  if (!gl_hw_format_supported(&format)) return C_FORMAT;
+  const struct ciuki_r3d_caps caps={.features=R3D_ALL_FEATURES,
+    .depth_formats=CIUKI_R3D_D16|CIUKI_R3D_D24S8,.color_formats=CIUKI_R3D_ARGB8888|CIUKI_R3D_RGB565,.max_size=1024,.max_width=1024,.max_height=1024,
     .max_vertices=R3D_VERTICES,.texture_units=2,.max_texture_size=256,.depth_functions=255,
     .alpha_functions=255,.blend_factors=1023,.combine_modes=15,.filters=31,
     .sampling_features=CIUKI_R3D_AFFINE_EXACT|CIUKI_R3D_PROJECTIVE_BILINEAR};
   if (!gl_hw_encode(&caps,g,1,2,0,&c->request)) return C_ADMIT;
-  if (g->clear_mask&~(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT)) return C_STATE;
+  if (g->clear_mask&~(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT|GL_STENCIL_BUFFER_BIT)) return C_STATE;
   if (!gl_hw_scissor_full(s)) return C_SCISSOR;
   if (s->color_disabled || s->color2 || s->color_mask!=~0u) return C_MASK;
   if (s->fog) return C_FOG;
   for (unsigned i=0;i<3;i++) if ((int64_t)g->vertices[i].z+s->offset<0 ||
-      (int64_t)g->vertices[i].z+s->offset>65535) return C_OFFSET;
+      (int64_t)g->vertices[i].z+s->offset>(s->depth24 ? 16777215 : 65535)) return C_OFFSET;
   int src=gl_r3d_blend(s->sfactor),dst=gl_r3d_blend(s->dfactor);
   if (s->blend && (src<0 || dst<0 || src==R3D_SRC_COLOR || src==R3D_INV_SRC_COLOR ||
       dst==R3D_DST_COLOR || dst==R3D_INV_DST_COLOR)) return C_BLEND;
@@ -153,7 +155,7 @@ void gl_census_clear(struct gl_context *context,unsigned mask) {
   if (!mask) return;
   struct gl_census *c=context->census;
   c->command.state=context->sw; c->command.count=0;
-  c->command.clear_mask=mask; c->command.clear_depth=65535;
+  c->command.clear_mask=mask; c->command.clear_depth=c->command.state.depth24 ? 16777215u : 65535u;
   unsigned reason=verdict(context);
   if (!reason) candidate(c); else c->batch_vertices=0;
   c->clear_reasons[reason]++; c->frame_open=1;
@@ -199,6 +201,10 @@ void gl_census_draw(struct gl_context *context,const struct sw_vertex *v) {
   key.depth_bits=context->depth_bits; key.stencil_bits=context->stencil_bits; key.rgb565=s->rgb565;
   key.alpha=s->alpha_test; key.alpha_func=s->alpha_func; key.alpha_ref=s->alpha_ref;
   key.depth=s->depth_test; key.depth_func=s->depth_func; key.depth_mask=s->depth_write;
+  key.stencil[0]=s->stencil_test; key.stencil[1]=s->stencil_func;
+  key.stencil[2]=(unsigned)s->stencil_ref&255; key.stencil[3]=s->stencil_mask&255;
+  key.stencil[4]=s->stencil_write_mask&255; key.stencil[5]=s->stencil_fail;
+  key.stencil[6]=s->stencil_zfail; key.stencil[7]=s->stencil_zpass;
   key.fog=s->fog; key.offset=s->offset;
   key.scissor[0]=s->scissor;
   for (unsigned i=0;i<4;i++) key.scissor[i+1]=s->box[i];
@@ -314,7 +320,10 @@ static void flush(struct gl_context *context) {
     word(&l," scissor=");
     for (unsigned j=0;j<5;j++) { if (j) word(&l,","); integer(&l,k->scissor[j]); }
     field(&l," fog=",k->fog); word(&l," offset="); integer(&l,k->offset);
-    field(&l," w_q20=",b->w_min); field(&l,",",b->w_max); field(&l," uv_abs_q16=",b->uv_max); emit(context,&l);
+    field(&l," w_q20=",b->w_min); field(&l,",",b->w_max); field(&l," uv_abs_q16=",b->uv_max);
+    word(&l," stencil=");
+    for (unsigned j=0;j<8;j++) { if (j) word(&l,","); number(&l,k->stencil[j]); }
+    emit(context,&l);
   }
   c->frames=c->bins=0; c->draws=c->fragments=c->refused=c->hardware_frames=0;
   c->overflow_draws=c->overflow_fragments=0; memset(c->bin,0,sizeof(c->bin));

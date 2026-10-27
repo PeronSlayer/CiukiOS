@@ -139,7 +139,7 @@ static bool manager_busy;
 static unsigned reservations;
 struct storage *storage_get(void) { return &manager_storage; }
 int dosvm_game_remove_reserve(unsigned game)
-{ assert(game && game<=4); if (manager_busy) return -FS_EBUSY; reservations++; return 0; }
+{ assert(game && game<=CIUKI_DOSVM_GAME_COUNT); if (manager_busy) return -FS_EBUSY; reservations++; return 0; }
 void dosvm_game_remove_release(unsigned game) { assert(game && reservations); reservations--; }
 int dosvm_game_data(unsigned,unsigned,struct ciuki_dosvm_command *);
 static struct fat_volume native;
@@ -255,6 +255,28 @@ static void store_tests(void)
     namespace_open(&id,path,&archived); assert(archived==1 && !save.rows); namespace_close(true);
     OK(dosvm_game_data(1,CIUKI_DOSVM_SAVE_RESET,&command)); assert(!reservations);
     OK(dos_save_store_query(&table,1,&bytes)); assert(!bytes);
+    namespace_open(&other,path,&archived); OK(dos_file_volume_open(guest,&cache,&merged_device,true));
+    read_file(&guest->table,"C:\\OTHER.SAV","title two"); OK(dos_file_volume_close(guest)); namespace_close(true);
+    /* fx-duke3d: game 5 owns ordinary CFG/SAV writes in its COW, survives
+     * reopen, exports them, and resets without touching another title. */
+    struct dos_save_identity duke=identity(5,'a');
+    sha256(base_disk,sizeof(base_disk),digest); sha256_hex(digest,duke.base);
+    namespace_open(&duke,path,&archived); assert(!archived);
+    OK(dos_file_volume_open(guest,&cache,&merged_device,true));
+    OK(vfs_mkdir(&guest->table,"C:\\DUKE3D",0));
+    write_file(&guest->table,"C:\\DUKE3D\\GAME0.SAV","Hollywood Holocaust");
+    write_file(&guest->table,"C:\\DUKE3D\\DUKE3D.CFG","MusicToggle = 1");
+    OK(dos_file_volume_close(guest)); namespace_close(true);
+    namespace_open(&duke,path,&archived); assert(save.rows && save.sealed && !archived);
+    OK(dos_file_volume_open(guest,&cache,&merged_device,true));
+    read_file(&guest->table,"C:\\DUKE3D\\GAME0.SAV","Hollywood Holocaust");
+    read_file(&guest->table,"C:\\DUKE3D\\DUKE3D.CFG","MusicToggle = 1");
+    OK(dos_file_volume_close(guest)); namespace_close(true);
+    OK(dosvm_game_data(5,CIUKI_DOSVM_SAVE_QUERY,&command)); assert(command.changed);
+    OK(dosvm_game_data(5,CIUKI_DOSVM_SAVE_EXPORT,&command)); assert(command.changed==2 && !reservations);
+    snprintf(saved,sizeof(saved),"%s\\DUKE3D\\GAME0.SAV",command.name); read_file(&table,saved,"Hollywood Holocaust");
+    OK(dosvm_game_data(5,CIUKI_DOSVM_SAVE_RESET,&command)); assert(!reservations);
+    OK(dos_save_store_query(&table,5,&bytes)); assert(!bytes);
     namespace_open(&other,path,&archived); OK(dos_file_volume_open(guest,&cache,&merged_device,true));
     read_file(&guest->table,"C:\\OTHER.SAV","title two"); OK(dos_file_volume_close(guest)); namespace_close(true);
     free(guest);

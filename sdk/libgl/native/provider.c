@@ -22,18 +22,25 @@
 #include <ciuki/runtime.h>
 #endif
 unsigned ciuki_gl_native_policy(void);
+/* Per-frame capability cache: the engine probes at every call. A failed
+ * exchange drops it, so the backend's revocation check after that failure
+ * (a new display generation is not a hardware failure, f7-15) sees the
+ * kernel's current answer instead of this frame's cached one. */
+static struct { int valid, result; struct gl_hw_format format; struct gl_hw_caps caps; } cache;
 static int exchange(struct ciuki_w32_render3d_args *a, void *payload) {
   a->header = (struct ciuki_w32_header){1, sizeof(*a), W32_RENDER3D, 0};
   a->result = a->error = 0;
+  int e;
 #ifdef CIUKI_GL_HOST_MODEL
   extern int ciuki_gl_host_exchange(struct ciuki_w32_render3d_args *, void *) __attribute__((weak));
-  if (!ciuki_gl_host_exchange) return -ENOSYS;
-  return ciuki_gl_host_exchange(a, payload);
+  e = ciuki_gl_host_exchange ? ciuki_gl_host_exchange(a, payload) : -ENOSYS;
 #else
   a->address = (uint32_t)(uintptr_t)payload;
-  int e = (int)ciuki_syscall(CIUKI_SYS_W32, (uint32_t)(uintptr_t)a, sizeof(*a), 0, 0, 0, 0);
-  return e < 0 ? e : a->error ? -(int)a->error : a->result ? 0 : -EIO;
+  e = (int)ciuki_syscall(CIUKI_SYS_W32, (uint32_t)(uintptr_t)a, sizeof(*a), 0, 0, 0, 0);
+  e = e < 0 ? e : a->error ? -(int)a->error : a->result ? 0 : -EIO;
 #endif
+  if (e) cache.valid = 0;
+  return e;
 }
 static int gl_provider_exchange(struct ciuki_w32_render3d_args *a, void *payload) { return exchange(a, payload); }
 static void *provider_alloc(unsigned n) { return calloc(1, n); }
@@ -44,8 +51,6 @@ static void provider_free(void *p, unsigned n) { (void)n; free(p); }
 #define GL_PROVIDER_ZERO(p,n) memset(p,0,n)
 #include "../../win32/opengl32/provider.inc"
 
-/* Per-frame capability cache: the engine probes at every call. */
-static struct { int valid, result; struct gl_hw_format format; struct gl_hw_caps caps; } cache;
 void ciuki_gl_native_frame(void) { cache.valid = 0; }
 /* The last answered capability generation (the cache is dropped per frame). */
 unsigned ciuki_gl_native_generation(void) { return cache.result ? cache.caps.generation : 0; }
@@ -65,7 +70,8 @@ int ciuki_gl_native_available(const struct gl_hw_format *f) {
   return cached_query(0, f, &caps);
 }
 static const struct gl_hw_driver native_provider = {GL_HW_VERSION, sizeof(native_provider), cached_query,
-  open_provider, close_provider, accept, load, read_provider, texture, free_texture, submit, finish_provider, present};
+  open_provider, close_provider, accept, load, read_provider, texture, free_texture, submit, finish_provider, present,
+  read_presented};
 const struct gl_hw_driver *ciuki_gl_native_render3d(unsigned version) {
   return version == GL_HW_VERSION ? &native_provider : 0;
 }

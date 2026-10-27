@@ -1,0 +1,111 @@
+CiukiOS: bounded two-color sRGB color-mix(), premultiplied alpha.
+
+--- a/libcss/src/parse/properties/utils.c
++++ b/libcss/src/parse/properties/utils.c
+@@ -452,6 +452,92 @@
+  * Post condition: \a *ctx is updated with the next token to process
+  *                 If the input is invalid, then \a *ctx remains unchanged.
+  */
++/* CSS Color 5: the measured pages use two-color sRGB mixes. Parse only
++ * absolute colors here; currentColor and other spaces need computed colors. */
++static css_error ciuki_mix_percentage(const parserutils_vector *vector,
++		int32_t *ctx, css_fixed *percentage, bool *present)
++{
++	consumeWhitespace(vector, ctx);
++	const css_token *token = parserutils_vector_peek(vector, *ctx);
++	*present = token != NULL && token->type == CSS_TOKEN_PERCENTAGE;
++	if (!*present) return CSS_OK;
++	size_t consumed;
++	*percentage = css__number_from_lwc_string(token->idata, false, &consumed);
++	if (consumed != lwc_string_length(token->idata) ||
++			*percentage < 0 || *percentage > F_100) return CSS_INVALID;
++	parserutils_vector_iterate(vector, ctx);
++	return CSS_OK;
++}
++
++static css_error ciuki_parse_mix(css_language *c, const parserutils_vector *vector,
++		int32_t *ctx, uint16_t *value, uint32_t *result)
++{
++	static unsigned nesting;
++	uint32_t colors[2];
++	css_fixed percentages[2] = {0};
++	bool present[2];
++	css_error error = CSS_INVALID;
++	if (nesting == 8) return CSS_INVALID;
++	nesting++;
++	const css_token *token;
++	consumeWhitespace(vector, ctx);
++	token = parserutils_vector_iterate(vector, ctx);
++	if (token == NULL || token->type != CSS_TOKEN_IDENT ||
++			lwc_string_length(token->idata) != 2 ||
++			strncasecmp(lwc_string_data(token->idata), "in", 2) != 0) goto done;
++	consumeWhitespace(vector, ctx);
++	token = parserutils_vector_iterate(vector, ctx);
++	if (token == NULL || token->type != CSS_TOKEN_IDENT ||
++			lwc_string_length(token->idata) != 4 ||
++			strncasecmp(lwc_string_data(token->idata), "srgb", 4) != 0) goto done;
++	consumeWhitespace(vector, ctx);
++	if (!tokenIsChar(parserutils_vector_iterate(vector, ctx), ',')) goto done;
++	for (unsigned i = 0; i < 2; i++) {
++		uint16_t kind;
++		bool before;
++		error = ciuki_mix_percentage(vector, ctx, &percentages[i], &before);
++		if (error != CSS_OK) goto done;
++		error = css__parse_colour_specifier(c, vector, ctx, &kind, &colors[i]);
++		if (error != CSS_OK) goto done;
++		if (kind == COLOR_CURRENT_COLOR) { error = CSS_INVALID; goto done; }
++		bool after;
++		css_fixed second;
++		error = ciuki_mix_percentage(vector, ctx, &second, &after);
++		if (error != CSS_OK) goto done;
++		if (before && after) { error = CSS_INVALID; goto done; }
++		if (after) percentages[i] = second;
++		present[i] = before || after;
++		consumeWhitespace(vector, ctx);
++		if (!tokenIsChar(parserutils_vector_iterate(vector, ctx), i == 0 ? ',' : ')')) {
++			error = CSS_INVALID;
++			goto done;
++		}
++	}
++	if (!present[0] && !present[1]) percentages[0] = percentages[1] = F_100 / 2;
++	else if (!present[0]) percentages[0] = F_100 - percentages[1];
++	else if (!present[1]) percentages[1] = F_100 - percentages[0];
++	int64_t sum = (int64_t)percentages[0] + percentages[1];
++	/* Zero total weight is transparent under the current Color 5 draft. */
++	int64_t a0 = (colors[0] >> 24) * (int64_t)percentages[0];
++	int64_t a1 = (colors[1] >> 24) * (int64_t)percentages[1];
++	int64_t alpha = a0 + a1;
++	*result = 0;
++	if (sum != 0 && alpha != 0) {
++		int64_t divisor = sum < F_100 ? F_100 : sum;
++		*result = (uint32_t)((alpha + divisor / 2) / divisor) << 24;
++		for (unsigned shift = 0; shift < 24; shift += 8) {
++			int64_t channel = ((colors[0] >> shift) & 255) * a0 +
++					((colors[1] >> shift) & 255) * a1;
++			*result |= (uint32_t)((channel + alpha / 2) / alpha) << shift;
++		}
++	}
++	*value = COLOR_SET;
++	error = CSS_OK;
++ done:
++	nesting--;
++	return error;
++}
++
+ css_error css__parse_colour_specifier(css_language *c,
+ 		const parserutils_vector *vector, int32_t *ctx,
+ 		uint16_t *value, uint32_t *result)
+@@ -529,6 +615,13 @@
+ 	} else if (token->type == CSS_TOKEN_FUNCTION) {
+ 		uint8_t r = 0, g = 0, b = 0, a = 0xff;
+ 		int colour_channels = 0;
++
++		if (lwc_string_length(token->idata) == 9 &&
++				strncasecmp(lwc_string_data(token->idata), "color-mix", 9) == 0) {
++			error = ciuki_parse_mix(c, vector, ctx, value, result);
++			if (error != CSS_OK) goto invalid;
++			return CSS_OK;
++		}
+ 
+ 		/* CiukiOS: CSS Color 5 light-dark(<color>, <color>) gives the
+ 		 * first colour when the used colour scheme is light, as on

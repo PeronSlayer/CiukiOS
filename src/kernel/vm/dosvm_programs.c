@@ -2,6 +2,7 @@
  * modified only through the outer VFS C: write gate, never a VM's private COW.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/abi.h>
 #include <ciuki/cpu.h>
 #include <ciuki/storage.h>
 #include <ciuki/task.h>
@@ -102,7 +103,7 @@ int dosvm_game_program(unsigned game,bool remove,uint32_t *size)
 int dosvm_game_program_checked(unsigned game,bool remove,uint32_t *size,const char **step,const char **detail)
 {
     *step="request";*detail="none";
-    if(!size || !game || game>4)return -FS_EINVAL;
+    if(!size || !game || game>CIUKI_DOSVM_GAME_COUNT)return -FS_EINVAL;
     *size=0;
     *step="reservation";
     int reservation=remove ? dosvm_game_remove_reserve(game) : 0;

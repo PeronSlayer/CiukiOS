@@ -311,6 +311,9 @@ static void sb_advance(struct dosvm *v)
 {
     struct dosvm_sb16 *s = &v->audio.sb;
     uint64_t now = v->audio.clock;
+    /* The clock owner fixes this ceiling before the turn. DMA and block
+     * transitions cannot change it; avoid reloading it for every tiny block. */
+    uint64_t end = v->audio.advance_end;
     uint32_t budget = DOSVM_AUDIO_TURN;
     /* At <=45 kHz stereo there are at most two sample units per timeline
      * frame. Tiny blocks must not inherit the old 32-boundary wait cap. */
@@ -324,8 +327,8 @@ static void sb_advance(struct dosvm *v)
             s->pos = now - DOSVM_AUDIO_BACKLOG; span = DOSVM_AUDIO_BACKLOG;
         }
         if (span > s->max_lag) s->max_lag = (uint32_t)span;
-        if (s->pos >= v->audio.advance_end) return;
-        if (span > v->audio.advance_end - s->pos) span = v->audio.advance_end - s->pos;
+        if (s->pos >= end) return;
+        if (span > end - s->pos) span = end - s->pos;
         if (span > budget) span = budget;
         uint64_t due = ((uint64_t)s->phase + span * x->rate) / x->threshold;
         bool boundary = due >= x->left;

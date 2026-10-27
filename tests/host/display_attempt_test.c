@@ -21,7 +21,8 @@ static unsigned count, step, fail_step, commits, migrations, writes, truncates, 
 static bool opened, table_open, reenter, short_read, short_write, retry_mode;
 static int active;
 static unsigned access_flags;
-static bool fault(void) { return ++step==fail_step; }
+static void (*storage_observer)(void); /* optional; set by including fixtures */
+static bool fault(void) { if (storage_observer) storage_observer(); return ++step==fail_step; }
 
 void klog(const char *fmt, ...)
 {

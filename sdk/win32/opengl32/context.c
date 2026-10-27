@@ -342,7 +342,9 @@ BOOL W32API w32_gl_swap(HDC dc) {
     return 0;
   if (!gl_present(c, 0))
     return 0;
-  if (c->doublebuffer) {
+  /* After a GPU swap the front buffer is the completed presentation copy,
+   * read only when the CPU reads, draws or presents the front (f7-15). */
+  if (c->doublebuffer && !gl_hw_swap_front(c)) {
     /* The CPU copy changes front even when it is the loaded GPU attachment. */
     gl_hw_software(c);
     w32_copy(c->front_color, c->back_color, c->sw.width * c->sw.height * 4);

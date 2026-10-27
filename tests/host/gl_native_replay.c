@@ -214,9 +214,11 @@ static void fullscreen(const uint32_t *golden,unsigned w,unsigned h,struct gfx_s
     struct ciuki_gl_lease lease={.token=1234,.generation=42,.width=w,.height=h,.bpp=32,.pitch=w*4};
     gl_native_lease(1234,42);
     s->lease=&lease;
-    unsigned copies=gl_native_copies();
+    unsigned copies=gl_native_copies(),reads=gl_native_reads(),uploads=gl_native_uploads();
     render(s,0,phases[0]);
     assert(s->presented==1 && gl_native_gpu_presents()==1 && gl_native_copies()==copies+1 && !gl_native_cpu_presents());
+    /* f7-15 resident targets: a GPU present reads nothing back. */
+    assert(gl_native_reads()==reads && gl_native_uploads()==uploads);
     struct difference d=compare(gl_native_frame(),golden,w*h,clear_colour(golden));
     assert(!d.coverage && d.over2*1000<=w*h);
     struct ciuki_gl_status st=status();
@@ -299,11 +301,32 @@ int main(int argc,char **argv)
     hardware_replay(full,1024,768,s);
     struct ciuki_gl_lease lease={.token=77,.generation=42,.width=1024,.height=768,.bpp=32,.pitch=4096};
     gl_native_lease(77,42); s->lease=&lease;
-    for (unsigned scene=0;scene<3;scene++) { render(s,scene,phases[1]); assert(s->presented==1); }
+    unsigned reads=gl_native_reads(),uploads=gl_native_uploads();
+    for (unsigned scene=0;scene<3;scene++) {
+        render(s,scene,phases[1]); assert(s->presented==1);
+        const uint32_t *ref=full+(size_t)(scene*2+1)*1024*768;
+        struct difference d=compare(gl_native_frame(),ref,1024*768,clear_colour(ref));
+        assert(!d.coverage && d.over2*1000<=1024*768);
+    }
     st=status();
     assert(st.hardware_presents==3 && gl_native_gpu_presents()==3 && !st.fallbacks);
-    ciuki_gl_close(); gl_native_teardown();
-    printf("PASS 1024x768 (contract T2 size): cube flat/Gouraud and tiles on the GPU, %u completed GPU-copy presents\n",gl_native_gpu_presents());
+    printf("GL_NATIVE_LEASE width=1024 height=768 frames=3 gpu_presents=%u reads=%u uploads=%u\n",
+        gl_native_gpu_presents(),gl_native_reads()-reads,gl_native_uploads()-uploads);
+    assert(gl_native_reads()==reads && gl_native_uploads()==uploads); /* no per-frame readback */
+    /* gfxdemo frees its full-screen buffer when the lease ends and binds its
+     * window target next: the GPU-presented frame is released, never read
+     * back into the freed pixels (ASan); the new frame reads back once. */
+    uint32_t *next=malloc((size_t)1024*768*4); assert(next);
+    free(target); target=next; s->target=next; s->lease=0;
+    render(s,0,phases[1]);
+    struct difference d=compare(next,full+(size_t)1*1024*768,1024*768,clear_colour(full));
+    assert(!d.coverage && gl_native_reads()==reads+2 && gl_native_uploads()==uploads);
+    /* Close right after a GPU present releases the frame without a readback. */
+    s->lease=&lease; render(s,1,phases[1]); assert(s->presented==1);
+    reads=gl_native_reads();
+    ciuki_gl_close(); assert(gl_native_reads()==reads);
+    gl_native_teardown();
+    printf("PASS 1024x768 (contract T2 size): cube flat/Gouraud and tiles on the GPU, %u completed GPU-copy presents without readback; rebind and close after a GPU present release the frame\n",gl_native_gpu_presents());
     free(full); free(target); free(golden); free(s); free(portrait);
     return 0;
 }

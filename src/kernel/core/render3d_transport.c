@@ -49,6 +49,9 @@ static void rfree(void *ctx,void *data)
     }
 }
 static uint64_t now(void *ctx) { (void)ctx; return g_ticks*1000; }
+/* Only on a passing presenter conflict while synchronizing a GPU-resident
+ * attachment (render3d.c); the worker holds no lock across it. */
+static void pause_ms(void *ctx) { (void)ctx; task_sleep_ms(1); }
 static void drop(struct wire_job *j)
 {
     uint32_t flags=irq_save();
@@ -70,6 +73,7 @@ static void cleanup(void *arg)
     drop(j);
 }
 extern int display_present_render3d(void *,uint32_t,const struct ciuki_w32_render3d_args *,const void *,uint32_t);
+extern int render3d_native_refresh(struct render3d_service *) __attribute__((weak));
 void w32_render3d_poll(void)
 {
     if (polling) return;
@@ -80,6 +84,7 @@ void w32_render3d_poll(void)
             struct process *p=c->live ? proc_find(c->process) : 0;
             if (c->live && (!p || p->state!=PROC_LIVE)) render3d_process_exit(service,c->process);
         }
+        if (render3d_native_refresh) (void)render3d_native_refresh(service);
         (void)render3d_step(service);
     }
     uint32_t flags=irq_save();
@@ -97,7 +102,7 @@ void w32_render3d_poll(void)
         }
         if (!e && !service) {
             service=ralloc(0,sizeof(*service));
-            struct render3d_host h={.alloc=ralloc,.free=rfree,.now_us=now};
+            struct render3d_host h={.alloc=ralloc,.free=rfree,.now_us=now,.yield=pause_ms};
             if (!service) e=-ENOMEM;
             else {
                 e=render3d_native_init(service,&h);
@@ -105,7 +110,7 @@ void w32_render3d_poll(void)
             }
         }
         if (!e) {
-            struct render3d_transport t={service,0,display_present_render3d};
+            struct render3d_transport t={service,service,display_present_render3d};
             e=render3d_transport_dispatch(&t,j->process,&j->args,j->data,j->args.bytes);
         }
         p=proc_find(j->process);

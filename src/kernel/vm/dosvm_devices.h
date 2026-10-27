@@ -14,11 +14,13 @@ struct dosvm_pit_channel {
     uint8_t access, mode, write_phase, read_phase, latch_phase, write_byte, status;
     bool latched, status_latched, null_count, bcd, gate, running, out, load;
 };
-/* fx-16: IRQ0 edges that found IRQ0 still requested (or arrived together
- * in one advance) are owed and re-raised once the guest has finished the
- * previous one, at most one per half timer period (KVM i8254 "reinject",
- * paced). At most DOSVM_PIT_OWED_MAX ticks are owed; beyond, the guest is
- * slower than its own timer and the edge is dropped (counted). */
+/* fx-16/fx-dospic: IRQ0 edges that found its handler still running, IRQ0
+ * still requested (or arrived together in one advance) are owed and
+ * re-raised once the guest has finished the
+ * previous one, at most one per half timer period (VPICD IRET/timeout
+ * guard plus paced reinjection). At most DOSVM_PIT_OWED_MAX ticks are owed;
+ * beyond, the guest is slower than its own timer and the edge is dropped
+ * (counted). */
 #define DOSVM_PIT_OWED_MAX 4u
 struct dosvm_pit {
     struct dosvm_pit_channel channel[3];
@@ -45,7 +47,9 @@ struct dosvm_mouse {
     int16_t wheel, callback_wheel;
     uint16_t wheel_x, wheel_y;
     uint16_t pressed[3], released[3], press_x[3], press_y[3], release_x[3], release_y[3];
-    bool active, saved_vif;
+    bool active, saved_vif, callback_pm;
+    uint16_t callback_ss, callback_sp;
+    unsigned callback_depth;
     struct v86_frame saved;
 };
 int dosvm_joystick_port(struct dosvm *, uint16_t, unsigned, bool, uint32_t *, void *) __attribute__((weak));
@@ -60,7 +64,10 @@ void dosvm_kbd_release(struct dosvm *);
 int dosvm_kbd_bios(struct dosvm *);
 bool dosvm_kbd_irq_ready(const struct dosvm *);
 void dosvm_mouse_init(struct dosvm *);
+int dosvm_mouse_install(struct dosvm *);
+void dosvm_mouse_callback_free(struct dosvm *, uint16_t cs, unsigned ip, unsigned bytes);
 void dosvm_mouse_event(struct dosvm *, int32_t dx, int32_t dy, unsigned buttons);
+void dosvm_mouse_absolute(struct dosvm *, int32_t x, int32_t y);
 void dosvm_mouse_wheel(struct dosvm *, int32_t delta);
 int dosvm_mouse_bios(struct dosvm *, struct v86_frame *);
 int dosvm_mouse_dispatch(struct dosvm *, struct v86_frame *);

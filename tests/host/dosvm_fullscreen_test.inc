@@ -421,7 +421,37 @@ static void test_fullscreen_vbe(void)
         CHECK(*(uint32_t *)frame_buffer!=0 && damage.width==640 && damage.height==480);
         unsigned pages=v->vbe_buffer.pages;uint32_t saved[256];CHECK(pages==256);
         for (unsigned p=0;p<pages;p++) as_lookup(&v->as,v->vbe_buffer.base+p*PAGE_SIZE,&saved[p]);
-        fs_linear_writes=0;CHECK(!dosvm_fullscreen_enter(key) && fs_linear_writes && !memcmp(fs_linear,pattern,4));
+        /* Warcraft II's 101h BIOS transport uses the VBE six-bit default;
+         * native indexed transport uses its verified eight-bit CLUT.
+         * Exercise real guest palette calls, entry and running updates,
+         * observing raw DAC writes before the VGA model truncates them. */
+        fs_dac_bits=i ? 8 : 6;
+        uint8_t palette[4]={16,32,63,0};
+        if (m->bpp==8) {
+            CHECK(!dosvm_write(v,0x20000,palette,sizeof(palette)));
+            f=vf(0x4F09,0,1,0);f.es=0x2000;
+            CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x004F);
+        }
+        fs_linear_writes=fs_palette_writes=0;
+        CHECK(!dosvm_fullscreen_enter(key) && fs_linear_writes && !memcmp(fs_linear,pattern,4));
+        if (m->bpp==8) {
+            CHECK(fs_palette_writes==sizeof(fs_palette_bytes));
+            for (unsigned k=0;k<3;k++) {
+                unsigned c=palette[2-k];
+                CHECK(fs_palette_bytes[k]==(fs_dac_bits==8 ? (c<<2)|(c>>4) : c));
+            }
+            CHECK(!linear_palette(v,false) && fs_palette_writes==sizeof(fs_palette_bytes));
+            palette[0]=63;palette[1]=1;palette[2]=32;
+            CHECK(!dosvm_write(v,0x20000,palette,sizeof(palette)));
+            f=vf(0x4F09,0,1,0);f.es=0x2000;
+            CHECK(!dosvm_vga_bios(v,&f) && (uint16_t)f.tf.eax==0x004F);
+            dosvm_fullscreen_poll();
+            CHECK(fs_palette_writes==2*sizeof(fs_palette_bytes));
+            for (unsigned k=0;k<3;k++) {
+                unsigned c=palette[2-k];
+                CHECK(fs_palette_bytes[k]==(fs_dac_bits==8 ? (c<<2)|(c>>4) : c));
+            }
+        } else CHECK(!fs_palette_writes);
         dosvm_fullscreen_switch(v->task);CHECK(!fs_ports); /* VBE is always trapped */
         uint8_t physical=*(uint8_t *)P2V(0xB8000),virtual_byte=physical^0x80;
         CHECK(!dosvm_write(v,0xB8000,&virtual_byte,1) && *(uint8_t *)P2V(0xB8000)==physical);

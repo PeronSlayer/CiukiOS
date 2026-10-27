@@ -51,9 +51,13 @@ int ciuki_gl_status(struct ciuki_gl_status *out);
  * (DESK_LEASE / DESK_LEASE_EVENT). The bound target must match the lease
  * surface (width, height, XRGB8888). A qualified provider copies the
  * completed frame on the GPU and the kernel writes it to the scanout
- * (returns 1); otherwise the finished pixels are presented by the CPU
- * frame path (returns 0). Negative errno: the lease is no longer valid
- * (-EACCES), the layout does not match (-EINVAL) or the kernel refused. */
+ * (returns 1); the frame then stays resident on the provider and is not
+ * read back into the caller's pixels: ciuki_gl_finish or a pixel read
+ * makes them current, while a rebind or close before the next draw
+ * releases them without writing (they may already be freed). Otherwise
+ * the finished pixels are presented by the CPU frame path (returns 0).
+ * Negative errno: the lease is no longer valid (-EACCES), the layout does
+ * not match (-EINVAL) or the kernel refused. */
 struct ciuki_gl_lease {
     uint32_t token, generation, width, height, bpp, pitch;
 };

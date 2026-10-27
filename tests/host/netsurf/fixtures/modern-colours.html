@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Modern color parser</title>
+<style>
+body { background: white; color: black; margin: 12px; font: 16px sans-serif }
+.swatch { float: left; width: 120px; height: 60px; margin: 6px; border: 2px solid black }
+p { clear: both }
+</style>
+</head>
+<body>
+<h1>Modern color parser</h1>
+<div class="swatch" style="background: rgb(255 0 0)"></div>
+<div class="swatch" style="background: rgb(0 100% 0)"></div>
+<div class="swatch" style="background: rgba(0 0 255 / 50%)"></div>
+<div class="swatch" style="background: #f008"></div>
+<div class="swatch" style="background: #112233ff"></div>
+<div class="swatch" style="background: light-dark(rgb(255 255 0), #0000)"></div>
+<p>RGB channels, slash alpha, hex alpha and nested light-dark.</p>
+</body>
+</html>

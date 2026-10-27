@@ -181,6 +181,8 @@ void display_driver_software(const char *reason)
     if (reason && console_splash_accel) console_splash_accel(false,false,reason);
 }
 void display_driver_record(void) { if (bound && bound->record) bound->record(); }
+void display_driver_desktop_presented(uint32_t generation)
+{ if (bound && bound->desktop_presented) bound->desktop_presented(generation); }
 void display_driver_count(unsigned operation, bool native)
 {
     if (operation < CIUKI_ENGINE_OPERATIONS) (native ? native_count : software_count)[operation]++;

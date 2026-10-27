@@ -626,3 +626,200 @@ resumes, status changes); the kernel's answers to them are unchanged:
 standby and suspend requests are still rejected (5307h CX=0005h) because no
 standby is qualified. Standby needs a provider sleep capability and a resume
 path for every native DMA driver; `power_devices_resume_ready` reports none.
+
+## ACPI S5 register fallback (fx-acpioff, 2026-10-26)
+
+T23 trial of image 5bb73dba: Shut Down ended with `[power] no qualified
+soft-off provider=apm; devices stopped, safe to turn off` and the desktop
+showed "Power-off returned error 95" (EOPNOTSUPP); the owner switched the
+machine off by hand. APM was not qualified because the BIOS VM quarantined
+at boot (INT 15h AX=5301 wrote port 0EDh, which the BIOS VM denied; fixed
+separately in wt/fx-biosvm). The machine has ACPI tables (`[power] platform
+owner=installed services=quiesce_dma,resume acpi_tables=1`) which the OS
+leaves to the firmware by lead decision (passive-cooling zones), so neither
+provider could turn it off.
+
+### Sources
+
+- ACPI 1.0b (1999): 4.7.2.5 "Legacy/ACPI Select and the SCI Interrupt"
+  (SMI_CMD, ACPI_ENABLE, SCI_EN), 4.7.3.1.1 "PM1 Status Registers"
+  (WAK_STS bit 15), 4.7.3.2.1 "PM1 Control Registers" (SCI_EN bit 0,
+  SLP_TYPx bits 10-12, SLP_EN bit 13 write-only: "Setting this bit causes
+  the system to sequence into the sleeping state associated with the
+  SLP_TYPx fields"), 5.2.5 "Fixed ACPI Description Table (FACP)", 7.3.1
+  `_PTS` and 7.3.4 `\_S5`. ACPI 2.0 (2000): the same material at 4.7.2.5,
+  4.7.3.1.1, 4.7.3.2.1, 5.2.8 (FADT, with the X_ generic address blocks),
+  5.2.11.2 (SSDT: definition blocks loaded after the DSDT add objects to the
+  namespace), 7.3.2 `_PTS`, 7.3.3 `_GTS`, 7.3.9 `\_S5`. ACPI 6.4 (HTML at
+  uefi.org/htmlspecs, which refuses automated fetches: section numbers from
+  its table of contents): 4.8.2.5, 4.8.3.1.1, 4.8.3.2.1, 5.2.9, 7.4.1
+  `_PTS`, 7.4.2.6 `\_S5` ("OSPM must write the PM1a_CNT.SLP_TYP register
+  before the PM1b_CNT.SLP_TYP register"), 16.1 (the `\_Sx` package: "the
+  first is the SLP_TYPa value and the second is the SLP_TYPb value").
+  `_GTS` was deprecated in ACPI 5.0 and ACPICA removed its evaluation.
+- FADT byte offsets (ACPI 2.0 5.2.8 as Linux encodes it),
+  [`include/acpi/actbl.h`](https://raw.githubusercontent.com/torvalds/linux/master/include/acpi/actbl.h)
+  `struct acpi_table_fadt`: SCI_INT 46, SMI_CMD 48, ACPI_ENABLE 52,
+  ACPI_DISABLE 53, PM1a_EVT_BLK 56, PM1b_EVT_BLK 60, PM1a_CNT_BLK 64,
+  PM1b_CNT_BLK 68, GPE0_BLK 80, GPE1_BLK 84, PM1_EVT_LEN 88, PM1_CNT_LEN 89,
+  GPE0_BLK_LEN 92, GPE1_BLK_LEN 93, flags 112 (HW_REDUCED bit 20), X_DSDT
+  140, X_PM1a_EVT_BLK 148, X_PM1b_EVT_BLK 160, X_PM1a_CNT_BLK 172,
+  X_PM1b_CNT_BLK 184, X_GPE0_BLK 220, X_GPE1_BLK 232.
+- Register bits,
+  [`drivers/acpi/acpica/aclocal.h`](https://raw.githubusercontent.com/torvalds/linux/master/drivers/acpi/acpica/aclocal.h):
+  SCI_ENABLE 0x0001, SLEEP_TYPE 0x1C00, SLEEP_ENABLE 0x2000,
+  ALL_FIXED_STATUS = TMR 0x0001 | BM 0x0010 | GBL 0x0020 | PWRBTN 0x0100 |
+  SLPBTN 0x0200 | RTC 0x0400 | PCIEXP_WAKE 0x4000 | WAK 0x8000 = 0xC731.
+- Sleep sequence,
+  [`drivers/acpi/acpica/hwsleep.c`](https://raw.githubusercontent.com/torvalds/linux/master/drivers/acpi/acpica/hwsleep.c)
+  `acpi_hw_legacy_sleep`: clear WAKE_STATUS, disable all GPEs, clear the
+  ACPI status registers, read PM1a control, clear SLP_TYP and SLP_EN, copy
+  the value to PM1b, insert the two sleep types, write #1 (SLP_TYP only,
+  "to work around poorly implemented hardware"), OR in SLP_EN, write #2,
+  and for states above S3 "Wait ten seconds, then try again. This is to get
+  S4/S5 to work on all machines". `_GTS` is not called there.
+  [`hwxfsleep.c`](https://raw.githubusercontent.com/torvalds/linux/master/drivers/acpi/acpica/hwxfsleep.c)
+  `acpi_enter_sleep_state_prep` evaluates `_PTS` (NOT_FOUND ignored) and
+  `_SST`; `acpi_enter_sleep_state` "MUST BE CALLED WITH INTERRUPTS
+  DISABLED" and refuses sleep types above 7.
+  [`hwxface.c`](https://raw.githubusercontent.com/torvalds/linux/master/drivers/acpi/acpica/hwxface.c)
+  `acpi_get_sleep_type_data`: one element gives SLP_TYPa in byte 0 and
+  SLP_TYPb in byte 1; two or more integer elements give SLP_TYPa and
+  SLP_TYPb ("existing practice by many BIOS vendors is to return a package
+  with 2 or more integer elements").
+- ACPI mode,
+  [`hwacpi.c`](https://raw.githubusercontent.com/torvalds/linux/master/drivers/acpi/acpica/hwacpi.c):
+  `acpi_hw_set_mode` writes ACPI_ENABLE to SMI_CMD (AE_NO_HARDWARE_RESPONSE
+  when SMI_CMD is zero, AE_OK without a write when both enable values are
+  zero); `acpi_hw_get_mode` reads SCI_EN and reports ACPI mode when SMI_CMD
+  is zero or the platform is hardware-reduced; `acpi_enable` polls the mode
+  for 3 s in 1 ms steps.
+- Linux power-off and provider precedence:
+  [`drivers/acpi/sleep.c`](https://raw.githubusercontent.com/torvalds/linux/master/drivers/acpi/sleep.c)
+  registers `acpi_power_off_prepare` (`acpi_sleep_prepare(S5)`,
+  `acpi_disable_all_gpes`) and `acpi_power_off` (`local_irq_disable`, then
+  `acpi_enter_sleep_state(S5)`) when S5 is supported;
+  [`arch/x86/kernel/apm_32.c`](https://raw.githubusercontent.com/torvalds/linux/master/arch/x86/kernel/apm_32.c)
+  refuses to load when ACPI is active ("overridden by ACPI") and otherwise
+  installs `apm_power_off` (Set Power State Off). Linux therefore prefers
+  ACPI and never runs both.
+- Windows 98 (Resource Kit chapter 30, owner's media `build/rskt/wrkc30_4.htm`):
+  "During Windows 98 Setup, ACPI is installed only on systems that are
+  listed on the retail compact disc as good ACPI systems"; `ACPIOption` 0
+  (good list only), 1 (any ACPI BIOS), 2 (never); otherwise the machine
+  runs under APM, where the BIOS controls power management. Windows uses
+  one of the two, never both; nothing in Windows corresponds to "ACPI
+  tables present, left to the firmware, APM broken".
+- QEMU [`hw/acpi/core.c`](https://raw.githubusercontent.com/qemu/qemu/master/hw/acpi/core.c)
+  `acpi_pm_cnt_write`: SLP_EN with the S5 SLP_TYP requests a guest
+  shutdown without testing SCI_EN; PIIX4 answers ACPI_ENABLE on port B2h
+  by setting SCI_EN. iPXE
+  [`acpipwr.c`](https://raw.githubusercontent.com/ipxe/ipxe/master/src/arch/x86/interface/pcbios/acpipwr.c)
+  extracts `\_S5` "from DSDT or any SSDT" and writes SLP_TYP|SLP_EN to
+  PM1a and PM1b without any AML. osdev.org "Shutdown": hobby operating
+  systems take the same path and note that `_PTS` is skipped; on some
+  hardware the shutdown then fails or freezes half-way.
+
+### Provider order (binding)
+
+1. ACPI owned by the OS (`acpi/events.c`: `_PTS(5)`, evaluated `\_S5`,
+   wake status and GPEs handled by ACPICA) when `fw_power_takeover`
+   succeeded: Windows 98 in ACPI mode and Linux both prefer it.
+2. APM 1.2 Set Power State Off (`core/apm_platform.c`) when APM is
+   connected and admitted (no RSDP, or firmware-owned ACPI): Windows 98
+   under APM and the Linux apm driver.
+3. The ACPI S5 register fallback (`core/power_acpi_s5.c`), consulted only
+   when neither provider is qualified for Off (`power_source_can_off`
+   false: no reservation, a quarantined or unconnected provider, ACPI
+   without an evaluated `\_S5`) or after the active provider's Off
+   returned. A machine whose APM Off works today never sees it before APM:
+   the only change there is a second attempt after a returned APM error.
+
+`CIUKI_POWER_CAN_OFF` is the OR of the active provider's qualification and
+the fallback's. `REBOOT` never uses the fallback.
+
+### The fallback
+
+Review round 1 (2026-10-26):
+
+- [ACPI 1.0b §§4.7, 4.7.2.5, 5.2.5](https://stuff.mit.edu/afs/sipb/contrib/doc/specs/protocol/acpi/acpi10b.pdf)
+  defines A-or-B control reads (except SLP_TYP) and ACPI_DISABLE hand-back.
+  Save incoming mode and PM1/GPE enable masks before ACPI_ENABLE. Require
+  ACPI_DISABLE before requesting ownership. If S5 returns, mask events,
+  restore non-sleep control bits, issue ACPI_DISABLE after any enable
+  attempt (including timeout), and poll for at most 3000 ms. Restore incoming
+  masks only after confirmed hand-back. If incoming mode was ACPI, restore
+  masks without disabling it. Failed hand-back retains an explicit
+  `ownership_uncertain` state, masks events, refuses further attempts and
+  reports EIO. Status bits already cleared cannot be reconstructed.
+- [ACPI 2.0c §§5.2.3.1, 5.2.8](https://uefi.org/sites/default/files/resources/ACPI_2_Errata_C.pdf)
+  defines independent GAS blocks. Distinguish absent, valid and unsupported
+  registers. A nonzero extended address takes precedence. Admit only complete
+  SystemIO extents with zero bit offset, matching block width and unspecified
+  or compatible access size: word accesses for 2-byte PM1 control / 4-byte
+  events, byte accesses for even GPE blocks up to 32 bytes. Refuse unsupported
+  present blocks and out-of-range SMI_CMD, rather than silently omitting them.
+- Provider order and the registry guard remain binding. When the fallback
+  refuses with ENOTSUP, retain the active provider's original error on both
+  orderly and forced paths. Insert SLP_TYPa/b separately into the shared
+  non-sleep bits read from A OR B.
+
+- Qualification (once per boot, read-only, cache-only afterwards; skipped
+  on safe and hardware-check boots and when the power class is skipped):
+  `core/power.c acpi_soft_off_parse` through the ACPI backend's firmware
+  windows (`acpi_firmware_table_map`: BIOS window or E820 ACPI/NVS,
+  reserved pages, every table at most 256 KiB, at most 96 windows): RSDP,
+  RSDT (or XSDT), FADT (116 bytes or more, not hardware-reduced,
+  PM1a_CNT_BLK present, PM1_CNT_LEN exactly 2), the DSDT, then every SSDT
+  the root table names. `\_S5` is accepted only as `Name(_S5, Package)`
+  at the root or inside `Scope(\)`, with the first two elements ZeroOp,
+  OneOp or Byte/Word/DWord constants of at most 7 (two- and four-element
+  packages); the walker refuses discovery on any term it cannot size.
+  When the walker finds no `\_S5`, the inventory's evaluated value
+  (`acpi/events.c fw_s5_hint_capture`: `AcpiGetSleepTypeData(S5)` right
+  after the load, in every inventory mode) is used once the inventory
+  decided ownership; until then the fallback is pending. Everything is
+  logged once: `[power] acpi s5 fallback available source=dsdt|ssdt|acpica
+  ...` with every register block, or `... unavailable step=<why>`.
+- Entry: only `power_sequence` after the STOPPED latch, or `power_force`
+  after the proved fence and the emergency latch, both after the active
+  provider's attempt. No write when another registry owner holds a PM1
+  control port range in state claimed, active, quiescing or quarantined
+  (`[power] acpi s5 fallback refused: PM1 control ports held by <owner>`):
+  the quarantine rule of the providers applies to the fallback as well.
+- Sequence (interrupts disabled from the mode check to the last wait, as
+  ACPICA and Linux require; nothing needs service after the fence):
+  SCI_EN from A OR B set, or SMI_CMD zero, is ACPI mode; otherwise ACPI_ENABLE
+  is written to SMI_CMD once if ACPI_DISABLE is also available, and SCI_EN
+  polled for 3000 ms in 1 ms steps; a platform that does not answer, or has
+  no ACPI_ENABLE or ACPI_DISABLE value, is written
+  in legacy mode anyway (logged `mode=legacy_*`) because the alternative
+  is the power button. In ACPI mode only, the fixed status bits (0xC731)
+  are cleared in PM1a/PM1b_STS and every admitted GPE block (even length,
+  at most 32 bytes) has its enables zeroed and its status cleared, so no
+  pending wake event turns the machine back on. Then A OR B's non-sleep bits
+  with SLP_TYPa (PM1b takes the same bits with SLP_TYPb), PM1a before PM1b,
+  then the same with SLP_EN; a 2 s wait, ACPICA's one SLP_EN rewrite, a
+  1 s wait, bounded ownership/mask rollback as above, interrupts restored,
+  `-EIO` ("machine still running"). No AML method runs.
+- Risk accepted: `_PTS(5)` and `_GTS` are not evaluated. The ACPI
+  specification requires `_PTS` before any sleep state; some firmware
+  needs it (an EC or GPIO step) and may stay on or freeze. The fallback
+  is reached only where the alternative is the owner's power button, and
+  the ACPICA-owned provider, which runs `_PTS`, stays first wherever it
+  exists. A failure is reported with the register values in the log and
+  the desktop's safe-to-turn-off ending.
+- Desktop: ENOTSUP after STOPPED (no method on this computer) is a normal
+  ending, "It is now safe to turn off your computer" without an error code;
+  a method that left the machine on (EIO) still names its error.
+
+Host tests: `tests/host/power_test.c` (parser: SSDT packages, two- and
+four-element packages, BytePrefix and Zero/One, hardware-reduced, event
+blocks, truncated and bad-checksum SSDTs), `tests/host/power_s5_test.c`
+(the sequence against a scripted port space: SCI_EN already set, SMI_CMD
+zero, no enable value, enable timeout, PM1b, GPE bounds, registry owner,
+pending/hint states), `tests/host/power_runtime_test.c` (provider order,
+CAN_OFF, latch-only entry, forced path), the desktop shutdown sequence
+test (no error code on ENOTSUP). QEMU: the i440fx FADT has SMI_CMD B2h /
+ACPI_ENABLE F1h and `\_S5` = Package(4){0,0,0,0} at PM1a_CNT 604h; with the
+ACPI provider unqualified the fallback's SLP_EN write ends the guest.

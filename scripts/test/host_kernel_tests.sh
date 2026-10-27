@@ -274,6 +274,11 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/power_runtime_test.c" -o "$out/power_runtime_test"
 "$out/power_runtime_test"
+# fx-acpioff: the ACPI S5 register fallback (SCI_EN handshake, status/GPE
+# clearing, PM1a/PM1b writes, bounds, registry owner refusal, hint states).
+clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+    -I "$root/src/kernel/include" "$root/tests/host/power_s5_test.c" -o "$out/power_s5_test"
+"$out/power_s5_test"
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/sdk/sysroot-overlay/include" -I "$root/src/kernel/include" \
     "$root/tests/host/power_sdk_test.c" -o "$out/power_sdk_test"
@@ -396,7 +401,8 @@ bash "$root/tests/host/joystick/run.sh"
 
 # F1 V86 decoder, device models, worker aborts and firmware event adapter.
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
-    -I "$root/src/kernel/include" "$root/tests/host/v86_test.c" -o "$out/v86_test"
+    -I "$root/src/kernel/include" "$root/tests/host/v86_test.c" \
+    "$root/src/kernel/core/apm.c" -o "$out/v86_test"
 "$out/v86_test"
 
 # F3 lifecycle, BIOS/disk preflight and record channel. Keep paging production
@@ -541,15 +547,16 @@ fi
 
 # F1 firmware queue: fake-time scheduler and the existing production VM fakes.
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
-    -I "$root/src/kernel/include" "$root/tests/host/fwqueue_test.c" -o "$out/fwqueue_test"
+    -I "$root/src/kernel/include" "$root/tests/host/fwqueue_test.c" \
+    "$root/src/kernel/core/apm.c" -o "$out/fwqueue_test"
 "$out/fwqueue_test"
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -DFWQUEUE_FIRMWARE_TEST -I "$root/src/kernel/include" \
-    "$root/tests/host/fwqueue_test.c" -o "$out/fwqueue_firmware_test"
+    "$root/tests/host/fwqueue_test.c" "$root/src/kernel/core/apm.c" -o "$out/fwqueue_firmware_test"
 "$out/fwqueue_firmware_test"
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -DFWQUEUE_SERVICE_TEST -I "$root/src/kernel/include" \
-    "$root/tests/host/fwqueue_test.c" -o "$out/fwqueue_service_test"
+    "$root/tests/host/fwqueue_test.c" "$root/src/kernel/core/apm.c" -o "$out/fwqueue_service_test"
 "$out/fwqueue_service_test"
 
 # F2 production parser, mappings, wait queues, stack and lifecycle with fake

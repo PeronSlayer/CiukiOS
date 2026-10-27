@@ -1069,7 +1069,6 @@ static bool return_step_safe(struct dosvm *v, const struct v86_frame *f)
  * covers a restore that retired before tracing began, or an unsafe barrier. */
 #define DPMI_IF_STEPS 4096u
 #define DPMI_IF_WAIT_MS 2u
-#define DPMI_ISR_WAIT_MS 50u
 #define DPMI_IF_RECORDS 16u
 static bool if_step_context(const struct dpmi *d, const struct v86_frame *f, bool retired)
 {
@@ -1144,7 +1143,8 @@ static void if_recovery_prepare(struct dosvm *v, struct v86_frame *f)
     struct dpmi *d = &v->dpmi;
     uint32_t flags = irq_save();
     dosvm_pic_cascade(&v->monitor);
-    bool pending = dosvm_pic_pending(&v->monitor) >= 0;
+    bool pending = dosvm_pic_pending(&v->monitor) >= 0 ||
+        (v->mouse.pending_mask && v->mouse.mask && !v->mouse.active);
     uint64_t tick = g_ticks;
     irq_restore(flags);
     if (!v->frame_pm || v->monitor.vif || !pending) { if_recovery_end(v, f); return; }
@@ -1799,6 +1799,7 @@ int dpmi_deliver(struct dosvm *v, struct v86_frame *f)
 {
     struct dpmi *d = &v->dpmi;
     dpmi_irq_resync(v, f);
+    dosvm_irq_release(v);
     return_resume(v, f);
     if (v->frame_pm) armed_observe(v, f);
     if_recovery_prepare(v, f);
@@ -1813,7 +1814,7 @@ int dpmi_deliver(struct dosvm *v, struct v86_frame *f)
     struct v86_frame from;
     if (!irq && (g_boot.flags & CBI_F_VERBOSE)) from = *f;
     if (!hooked && !v->frame_pm) {
-        int e = v86_irq_deliver(&v->monitor, f);
+        int e = dosvm_rm_irq_deliver(v, f);
         irq_restore(flags);
         if (!irq && !e && (g_boot.flags & CBI_F_VERBOSE))
             dosvm_trace(v, DOSVM_TRACE_IRQ0, &from, vector, f->tf.cs & 0xFFFF, f->tf.eip);

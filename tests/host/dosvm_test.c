@@ -642,7 +642,7 @@ int dos_save_store_open(struct dos_save_file *f,struct dos_save *s,const struct 
 static unsigned program_calls;
 static int program_result;
 int dosvm_game_program(unsigned game,bool remove,uint32_t *size)
-{ CHECK(game && game<=4);(void)remove;program_calls++;*size=8192;return program_result; }
+{ CHECK(game && game<=CIUKI_DOSVM_GAME_COUNT);(void)remove;program_calls++;*size=8192;return program_result; }
 /* fx-4: the production inventory names its failed step; this fixture
  * reports the step/detail a case selects (dosvm_fx4_test.inc). */
 static const char *program_step="fixture",*program_detail="none";
@@ -656,7 +656,7 @@ int dosvm_game_program_checked(unsigned game,bool remove,uint32_t *size,const ch
 static uint32_t fake_dma_free_pages;
 uint32_t pmm_zone_free(int zone) { return zone==ZONE_NORMAL ? pmm_free_count() : zone==ZONE_DMA ? fake_dma_free_pages : 0; }
 int dosvm_game_data(unsigned game,unsigned op,struct ciuki_dosvm_command *c)
-{ CHECK(game && game<=3 && op>=14 && op<=16); c->changed=1024; c->reason=DOS_SAVE_QUOTA; return 0; }
+{ CHECK(game && game<=CIUKI_DOSVM_GAME_COUNT && op>=14 && op<=16); c->changed=1024; c->reason=DOS_SAVE_QUOTA; return 0; }
 #include "../../src/kernel/vm/dosvm_client.c"
 #include "../../src/kernel/vm/vga_hardware.c"
 #include "../../src/kernel/vm/dosvm_fullscreen.c"
@@ -1030,9 +1030,11 @@ static void test_memory_services(bool locked)
 #include "dosvm_uart_test.inc"
 #include "dosvm_fx4_test.inc"
 #include "dosvm_fx16_test.inc"     /* fx-16: T23 trial e831e685 replays */
+#include "dosvm_dospic_test.inc"   /* fx-dospic: early EOI and handler completion */
 #include "dosvm_fx22_test.inc"     /* fx-22: T23 trial f441c5bd full-screen return */
 #include "dosvm_properties_test.inc"
 #include "dosvm_fx27_test.inc"     /* fx-27: windowed DOS graphics budgets */
+#include "dosvm_doomfs2_test.inc" /* fx-doomfs2: full-screen sound load */
 #ifndef T23_HEAD_BASELINE
 #include "dosvm_t23dosperf_test.inc" /* t23-dosperf: trial c42f556e DOS window lag */
 #else
@@ -1042,9 +1044,11 @@ static void test_t23dosperf(void) {}
 #include "dosvm_vbe_window_test.inc"  /* war2vbe: windowed VBE without a native provider */
 #include "dosvm_101_revoke_race_test.inc"
 #include "dosvm_101_native_test.inc"
+#include "dosvm_mouse_test.inc"
 int main(void)
 {
     ram=calloc(HOST_PAGES,PAGE_SIZE); CHECK(ram);
+    if (getenv("CIUKI_VM_DOSMOUSE")) { test_dos_mouse(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_101_REVOKE_RACE")) { test_101_revoke_races(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_101_BENCH")) { bench_101_video(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_101_VIDEO")) { test_101_video(); free(ram); fflush(stdout); return 0; }
@@ -1066,8 +1070,10 @@ int main(void)
         free(ram);fflush(stdout);return 0;
     }
     if (getenv("CIUKI_VM_FX16")) { test_fx16(); printf("fx-16 checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
+    if (getenv("CIUKI_VM_DOSPIC")) { test_dospic(); printf("fx-dospic checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
     if (getenv("CIUKI_VM_FX22")) { test_fx22(); printf("fx-22 checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
     if (getenv("CIUKI_VM_FX27")) { test_fx27(); printf("fx-27 checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
+    if (getenv("CIUKI_VM_DOOMFS2")) { test_doomfs2(); printf("fx-doomfs2 checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
     if (getenv("CIUKI_VM_T23DOSPERF")) { test_t23dosperf(); printf("t23-dosperf checks=%u\n", checks); fflush(stdout); free(ram); return 0; }
     if (getenv("CIUKI_VM_SERIAL")) { test_serial_uart(); free(ram); fflush(stdout); return 0; }
     if (getenv("CIUKI_VM_WAIT_PRESENT")) {
@@ -1093,7 +1099,7 @@ int main(void)
     test_maximum_creation();
     test_maximum_teardown();
     test_vga_transaction_bound();
-    test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors(); test_memory_services(true); test_memory_services(false); test_devices(); test_audio(); test_dpmi();
+    test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors(); test_memory_services(true); test_memory_services(false); test_devices(); test_audio(); test_dpmi(); test_dos_mouse();
     test_video();
     test_programmatic_clipboard();
     test_wait_present();
@@ -1107,6 +1113,7 @@ int main(void)
     test_fx4b_launch_paths();
     test_timer();
     test_fx16();
+    test_dospic();
     test_menu();
     test_irq_stall();
     test_isr_recovery_boundary(); test_isr_nested_hardware();
@@ -1115,6 +1122,7 @@ int main(void)
     test_speed();
     test_cost_bursts();
     test_fx27();
+    test_doomfs2();
     test_t23dosperf();
     test_101_video();
     test_exit_cost();

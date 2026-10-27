@@ -27,7 +27,10 @@ static struct fb_device device={.present=true,.width=640,.height=480,.pitch=2560
     .red_size=8,.red_pos=16,.green_size=8,.green_pos=8,.blue_size=8,.generation=1,.mode_id=0x118};
 static uint8_t user[70000],scanout[640*480*4];
 static bool suspended,connected=true,grant_available=true,mode_fail,allocation_fail,pin_fail,read_fail;
-static unsigned allocations,pins,writes,returns,mode_calls,revoked_writes;
+static unsigned allocations,pins,writes,returns,mode_calls,revoked_writes,mode_prepares;
+static bool prepare_kill;
+static unsigned gpu_presents;
+static uint32_t native_frame[640*480];
 static uint32_t fresh;
 static void (*on_pin)(void),(*on_read)(void),(*on_yield)(void),(*on_sleep)(void),(*on_write)(void);
 const struct fb_device *fbdev_get(void){return &device;}
@@ -84,6 +87,21 @@ int fbdev_present_native(uint32_t generation,unsigned x,unsigned y,const void *p
     memcpy(scanout+y*device.pitch+x*4,p,count*4);if(on_write)on_write();return 0;
 }
 #include "../../src/kernel/core/display_present.c"
+static unsigned busy_scanouts;
+int render3d_native_prepare(void)
+{
+    assert(suspended && transfer && !active && !lease_lock.owner);
+    mode_prepares++;
+    if (prepare_kill) { prepare_kill=false; game.state=PROC_STOPPING; }
+    return -ENODEV; /* Clean 3D refusal preserves a software-capable lease. */
+}
+int render3d_scanout(struct render3d_service *s,uint32_t pid,const struct ciuki_w32_render3d_args *a,const struct fb_device *fb)
+{
+    assert((void *)s==(void *)1 && pid==game.pid && frame_running && lease_lock.owner && active);
+    assert(a->generation==fb->generation && a->width==fb->width && a->height==fb->height);
+    if (busy_scanouts) { busy_scanouts--; return -EBUSY; }
+    gpu_presents++; memcpy(scanout,native_frame,sizeof(scanout)); return 0;
+}
 static struct ciuki_w32_display_args grant_args(void){return (struct ciuki_w32_display_args){
     .action=W32_DISPLAY_GRANT,.pid=3,.mode=0x111,.scale=2,
     .surface={320,200,320,64000,CIUKI_PRESENT_INDEX8}};}
@@ -176,12 +194,39 @@ static void render3d_frames(void)
     game.state=PROC_LIVE;
     puts("PASS render3d common presenter: completed frame, token/layout refusal, mid-frame revoke/death, desktop restoration, zero writes after revoke");
 }
+static void render3d_native_frame(void)
+{
+    struct ciuki_w32_display_args g=grant_args(); g.scale=1;
+    g.surface=(struct ciuki_present_surface){640,480,2560,sizeof(scanout),CIUKI_PRESENT_XRGB8888};
+    w32_display_call(&dt,&g); assert(!g.error);
+    for (unsigned i=0;i<640*480;i++) native_frame[i]=0xff123456;
+    struct ciuki_w32_render3d_args a={.context=1,.resource=2,.width=640,.height=480,.pitch=2560,
+        .token=g.token,.generation=g.generation};
+    unsigned before=writes,gpu=gpu_presents;
+    assert(!display_present_render3d((void *)1,game.pid,&a,native_frame,sizeof(native_frame)));
+    assert(gpu_presents==gpu+1 && writes==before && !memcmp(scanout,native_frame,sizeof(scanout)));
+    a.token++; assert(display_present_render3d((void *)1,game.pid,&a,native_frame,sizeof(native_frame))==-EACCES);
+    assert(gpu_presents==gpu+1 && writes==before); a.token--;
+    /* f7-15: a GPU-resident frame (NULL pixels) uses only the direct path;
+     * a passing presenter conflict is retried outside the lease lock. */
+    busy_scanouts=3; uint64_t ticks=g_ticks;
+    assert(!display_present_render3d((void *)1,game.pid,&a,0,sizeof(native_frame)));
+    assert(gpu_presents==gpu+2 && writes==before && !busy_scanouts && g_ticks==ticks+3 && !frame_running);
+    gamma.red[0]=257; /* nonidentity gamma retains the canonical CPU path */
+    assert(display_present_render3d((void *)1,game.pid,&a,0,sizeof(native_frame))==-EOPNOTSUPP);
+    assert(gpu_presents==gpu+2 && writes==before && !frame_running);
+    assert(!display_present_render3d((void *)1,game.pid,&a,native_frame,sizeof(native_frame)));
+    assert(gpu_presents==gpu+2 && writes>before && !frame_running);
+    assert(display_present_revoke_kernel()==1); complete();
+    puts("render3d lease scanout: authority before GPU, no CPU upload on native identity frame, GPU-resident direct-only call, 3 transient EBUSY retried, gamma -> read-back CPU path, stale token refusal PASS");
+}
 int main(void)
 {
     memset(user,1,sizeof(user));
     struct ciuki_w32_display_args a=grant_args();connected=false;w32_display_call(&dt,&a);assert(a.error==EPERM&&!mode_calls);connected=true;
     a=grant_args();w32_display_call(&gt,&a);assert(a.error==EPERM&&!mode_calls);
     a=grant_args();mode_fail=true;w32_display_call(&dt,&a);assert(a.error==EIO&&!active&&!suspended);
+    a=grant_args();prepare_kill=true;w32_display_call(&dt,&a);assert(a.error==ESRCH&&!active&&!suspended&&mode_prepares);game.state=PROC_LIVE;
     a=grant_args();a.scale=3;w32_display_call(&dt,&a);assert(a.error==EOPNOTSUPP&&!active&&!suspended&&device.mode_id==0x118);
     struct ciuki_display_info modes={.mode_count=3};
     modes.modes[0]=(struct ciuki_display_mode){.id=0x115,.width=800,.height=600,.bpp=16,.pitch=1600,.linear=1};
@@ -245,6 +290,7 @@ int main(void)
     q=holder_args(&a,W32_DISPLAY_FRAME);q.pid=native.pid;q.address=0;w32_display_call(&nt,&q);assert(!q.error&&q.result&&writes>prior);
     channel_open=false;display_present_poll();assert(!active&&!suspended);channel_open=true;complete();
     native_formats();race();render3d_frames();printf("PASS production lease: revoke at pin/read/copy/pacing, death, stale tokens, authority, mode failure/rollback, cleanup; writes=%u returns=%u\n",writes,returns);
+    render3d_native_frame();
     return 0;
 }
 #ifdef DESKTOP_ADAPTER_FIXTURE

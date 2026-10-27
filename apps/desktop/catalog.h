@@ -70,6 +70,7 @@ static const struct desk_game_entry desk_games[] = {
     /* Blizzard's Warcraft II demo (owner 2026-10-25). WAR2.BAT starts WAR2.EXE, which uses the DOS VM's
      * VESA BIOS (640x480x256 in the window, war2vbe); DIG.INI/MDI.INI are generated for the VM's Sound Blaster. */
     {"Warcraft II (demo)", "Warcraft II", "\\WAR2\\WAR2.BAT", "input-gaming"},
+    {"Duke Nukem 3D (shareware)", "Duke Nukem 3D", "\\DUKE3D\\DUKE3D.BAT", "input-gaming"},
 };
 #define DESK_GAME_COUNT (sizeof(desk_games) / sizeof(desk_games[0]))
 static inline const struct desk_catalog_entry *desk_catalog_find(const char *name)

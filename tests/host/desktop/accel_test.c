@@ -29,7 +29,7 @@ static int display_info(int display,struct ciuki_framebuffer_info *out)
 static int fail_copy, fail_cursor, fail_cursor_set, fail_fill, shown, cursor_x, cursor_y;
 /* f2-92: engine-only rows below the scanout ([vram_first, vram_end), the
  * scanout buffer extends over them) and host-to-screen writes. */
-static uint32_t vram_first, vram_end;
+static uint32_t vram_first, vram_end, cache_epoch;
 static unsigned writes, cache_copies, fail_write;
 static uint64_t written_pixels, engine_copied_pixels;
 static struct ciuki_accel_request cursor;
@@ -86,6 +86,7 @@ static void completed_ram_frame(void)
 static int service(int display,const struct ciuki_accel_request *q)
 {
     assert(display==7 && q->size==sizeof(*q) && q->generation==expected_generation);
+    if (q->operation==CIUKI_ACCEL_CACHE_EPOCH) return (int)cache_epoch;
     if (q->operation==CIUKI_ACCEL_QUERY) return caps;
     if (q->operation==CIUKI_ACCEL_OFFSCREEN) return (caps&1u) && vram_end ? (int)(vram_end<<16|vram_first) : 0;
     if (q->operation==CIUKI_ACCEL_WRITE) {
@@ -377,6 +378,14 @@ static void cache_scenario(void)
     unsigned windows_cached=0;
     for (int k=1;k<DESK_VRAM_ENTRIES;k++) if (d.vram[k].valid && d.vram[k].kind==DESK_VRAM_WINDOW) windows_cached++;
     assert(windows_cached==2);
+    /* 3D overwrites and returns exactly the same row range. Cached RAM
+     * shadows alone cannot prove those pixels: the new epoch drops them. */
+    cache_epoch++;
+    memset(scanout+(size_t)d.width*vram_first,0xcc,(size_t)d.width*(vram_end-vram_first)*4);
+    desk_move(&d,a,42,62); redraw();
+    assert(d.vram_epoch==cache_epoch);
+    for (unsigned i=0;i<DESK_VRAM_ENTRIES;i++) assert(!d.vram[i].valid);
+    cache_steps(&now); assert(d.vram[0].valid);
     unsigned before=cache_copies;
     /* Moves expose wallpaper and the other window; raises expose content. */
     for (int k=0;k<6;k++) { desk_move(&d,a,40+k*23,60+k*11); redraw(); }

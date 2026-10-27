@@ -27,6 +27,14 @@ static uint32_t *target;            /* caller pixels */
 static unsigned target_stride;       /* in pixels */
 static uint32_t *private_rows;       /* padded/strided targets render here */
 static uint64_t frames, hardware_frames, software_frames, presents, hardware_presents;
+/* The last frame ended with a GPU present (f7-15 resident targets): the
+ * caller's pixels were not written back. A rebind or close before the next
+ * draw releases them without a readback (gfxdemo frees its full-screen
+ * buffer when the lease ends). */
+static int gpu_presented;
+static int released(const struct gl_context *c) {
+  return gpu_presented && !c->frame_hardware_draws && !c->frame_software_draws;
+}
 
 /* Engine services the Win32 context module provides from the loader. */
 void *gl_alloc(unsigned n) {
@@ -88,6 +96,7 @@ static int attach(struct gl_context *c, uint32_t *pixels, unsigned width, unsign
     if (!depth) { free(rows); return -ENOMEM; }
     /* Contents after a target change are undefined; no engine may keep
      * the old storage. */
+    if (released(c)) gl_hw_release(c);
     gl_hw_close(c);
     free_attachments(c);
     c->sw.depth = depth;
@@ -96,8 +105,10 @@ static int attach(struct gl_context *c, uint32_t *pixels, unsigned width, unsign
     c->scissor[0] = c->scissor[1] = 0; c->scissor[2] = (int)width; c->scissor[3] = (int)height;
   } else if (color != c->back_color) {
     /* Same geometry, different storage: the journal's checkpoint names the
-     * old pixels, so complete and release it before re-pointing. */
-    gl_hw_software(c);
+     * old pixels, so complete and release it before re-pointing (a frame
+     * the GPU presented is released without writing them). */
+    if (released(c)) gl_hw_release(c);
+    else gl_hw_software(c);
     free(private_rows); private_rows = 0;
   } else { free(rows); rows = 0; }
   if (rows) private_rows = rows;
@@ -109,6 +120,7 @@ static int attach(struct gl_context *c, uint32_t *pixels, unsigned width, unsign
   gl_sync_viewport(c);
   gl_selected_context = 0;
   target = pixels; target_stride = stride;
+  gpu_presented = 0;
   return 0;
 }
 static int create(uint32_t *pixels, unsigned width, unsigned height, unsigned stride) {
@@ -160,6 +172,7 @@ int ciuki_gl_bind(uint32_t *pixels, unsigned width, unsigned height, unsigned st
   return attach(current, pixels, width, height, stride);
 }
 static void account(struct gl_context *c) {
+  gpu_presented = 0;
   frames++;
   /* A frame without any draw or clear is neither (frames counts it). */
   if (c->frame_hardware_draws && !c->frame_software_draws) hardware_frames++;
@@ -185,6 +198,8 @@ void ciuki_gl_finish(void) {
 void ciuki_gl_close(void) {
   struct gl_context *c = current;
   if (!c) return;
+  if (released(c)) gl_hw_release(c);
+  gpu_presented = 0;
   gl_hw_close(c);
   gl_census_close(c);
   current = 0;
@@ -267,9 +282,15 @@ int ciuki_gl_present(const struct ciuki_gl_lease *l) {
   }
   int gpu = gl_hw_present(c, l->token, l->generation, l->width, l->height, l->bpp, l->pitch);
   if (gpu < 0) { gl_hw_sync(c); copy_out(c); account(c); return gpu; }
+  if (gpu > 0) {
+    /* GPU frame (as opengl32's GPU swap, f7-15): the attachments stay
+     * resident on the provider, nothing is read back into the caller's
+     * pixels; ciuki_gl_finish or a pixel read makes them current. */
+    account(c); presents++; hardware_presents++; gpu_presented = 1;
+    return 1;
+  }
   gl_hw_sync(c);
   copy_out(c);
-  if (gpu > 0) { account(c); presents++; hardware_presents++; return 1; }
   const uint32_t *source = c->back_color;
   const void *bytes = source;
   uint8_t *copy = 0;

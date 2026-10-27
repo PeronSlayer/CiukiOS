@@ -19,7 +19,10 @@ void render3d_filter_caps(const struct ciuki_r3d_caps *snapshot,
     if (a->width && a->height && a->width<=snapshot->max_size && a->height<=snapshot->max_size &&
         (!snapshot->max_width || a->width<=snapshot->max_width) &&
         (!snapshot->max_height || a->height<=snapshot->max_height) &&
-        a->format==CIUKI_R3D_ARGB8888 && a->kind==CIUKI_R3D_D16 && !a->levels)
+        (a->format==CIUKI_R3D_ARGB8888 || a->format==CIUKI_R3D_RGB565) &&
+        (snapshot->color_formats&a->format) && !(a->format==CIUKI_R3D_RGB565 && a->kind==CIUKI_R3D_D24S8) && (a->kind==CIUKI_R3D_D16 || a->kind==CIUKI_R3D_D24S8) &&
+        (snapshot->depth_formats&a->kind) &&
+        (!a->levels || (a->kind==CIUKI_R3D_D24S8 && a->levels==8)))
         *out=*snapshot;
 }
 static int finish(struct render3d_service *s, uint32_t p, uint32_t id,
@@ -98,7 +101,6 @@ int render3d_transport_dispatch(struct render3d_transport *t, uint32_t p,
             !a->width || !a->height || a->width>R3D_MAX_SIZE || a->height>R3D_MAX_SIZE ||
             a->pitch!=a->width*4u) return -EOPNOTSUPP;
         int e=finish(s,p,a->context,f,100);
-        if (!e) e=render3d_readback(s,p,a->context,a->resource,data,bytes);
         if (e) return e;
         /* Require the owned linear destination, never an arbitrary texture. */
         bool linear=false;
@@ -108,10 +110,17 @@ int render3d_transport_dispatch(struct render3d_transport *t, uint32_t p,
                 for (unsigned j=0;j<R3D_RESOURCES;j++) {
                     struct render3d_resource *r=&c->resources[j];
                     if (r->live && !r->pending_free && r->handle==a->resource &&
-                        r->kind==R3D_LINEAR_COLOR && r->width==a->width && r->height==a->height) linear=true;
+                        (r->kind==R3D_LINEAR_COLOR || r->kind==R3D_LINEAR565) && r->width==a->width && r->height==a->height) linear=true;
                 }
         }
-        return linear ? t->present(t->present_ctx,p,a,data,bytes) : -EINVAL;
+        if (!linear) return -EINVAL;
+        /* GPU-resident frame: NULL pixels ask the presenter for its direct
+         * native path only. The linear copy is read back (on demand) only
+         * when presentation needs the CPU (conversion, gamma, scaling). */
+        e=t->present(t->present_ctx,p,a,0,bytes);
+        if (e!=-EOPNOTSUPP) return e;
+        e=render3d_readback(s,p,a->context,a->resource,data,bytes);
+        return e ? e : t->present(t->present_ctx,p,a,data,bytes);
     }
     default: return -EINVAL;
     }

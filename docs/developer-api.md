@@ -4197,6 +4197,13 @@ created with the BATCH_* formats; they cannot be mapped into user space.
 #define CIUKI_ACCEL_FENCE 11u
 #define CIUKI_ACCEL_QUERY_COMMANDS 12u
 #define CIUKI_ACCEL_QUERY_SURFACE 13u
+```
+
+Revocable offscreen cache epoch. Offscreen COPY/WRITE background and VIDEO
+target reserved[0] must equal this value; other reserved words stay zero.
+
+```c
+#define CIUKI_ACCEL_CACHE_EPOCH 14u
 #define CIUKI_BATCH_VERSION 1u
 #define CIUKI_BATCH_MAGIC 826426435u
 #define CIUKI_BATCH_MAX_BYTES 1048576u
@@ -4414,7 +4421,7 @@ uint32_t flags;
 uint32_t reserved[4];
 ```
 
-16
+16; VIDEO: cache epoch in [0], [1..3]=0
 
 ```c
 };
@@ -5290,7 +5297,7 @@ game is the catalog index+1, or zero for the interactive shell.
 sole CiukiDOS K2043 fork, DFV2 binding and native IFS
 
 ```c
-#define CIUKI_DOSVM_GAME_COUNT 4u
+#define CIUKI_DOSVM_GAME_COUNT 5u
 ```
 
 f3-46 CREATE launch.memory: 0 demand-zero, pageable pool (default); 1 the
@@ -5618,7 +5625,7 @@ the native render3d contract; unknown state is rejected before submission.
 
 ```c
 #define W32_RENDER3D 514u
-#define CIUKI_R3D_VERSION 2u
+#define CIUKI_R3D_VERSION 3u
 #define CIUKI_R3D_QUERY 1u
 #define CIUKI_R3D_OPEN 2u
 #define CIUKI_R3D_CLOSE 3u
@@ -5631,6 +5638,7 @@ the native render3d contract; unknown state is rejected before submission.
 #define CIUKI_R3D_WAIT 10u
 #define CIUKI_R3D_PRESENT 11u
 #define CIUKI_R3D_D16 1u
+#define CIUKI_R3D_D24S8 2u
 #define CIUKI_R3D_ARGB8888 1u
 #define CIUKI_R3D_RGB565 4u
 #define CIUKI_R3D_ARGB4444 8u
@@ -5665,6 +5673,8 @@ Qualified sample-space policy, not a silicon precision specification.
 #define CIUKI_R3D_DEPTH_WRITE 16u
 #define CIUKI_R3D_COPY 32u
 #define CIUKI_R3D_TEXTURE1 64u
+#define CIUKI_R3D_STENCIL_TEST 128u
+#define CIUKI_R3D_CLEAR_STENCIL 256u
 #define CIUKI_R3D_LESS 0u
 #define CIUKI_R3D_NEVER 1u
 #define CIUKI_R3D_ALWAYS 2u
@@ -5709,6 +5719,25 @@ and ONE/ZERO work in either slot. Caps contain the union of selector bits.
 #define CIUKI_R3D_RESOURCE_D16 2u
 #define CIUKI_R3D_RESOURCE_TEXTURE 3u
 #define CIUKI_R3D_RESOURCE_LINEAR_COLOR 4u
+#define CIUKI_R3D_RESOURCE_D24S8 5u
+```
+
+RGB565 resources keep canonical ARGB8888 shadows; no alpha attachment.
+
+```c
+#define CIUKI_R3D_RESOURCE_COLOR565 6u
+#define CIUKI_R3D_RESOURCE_LINEAR565 7u
+```
+
+Stencil operations; zero initialized state keeps the stored value.
+
+```c
+#define CIUKI_R3D_STENCIL_KEEP 0u
+#define CIUKI_R3D_STENCIL_ZERO 1u
+#define CIUKI_R3D_STENCIL_REPLACE 2u
+#define CIUKI_R3D_STENCIL_INCR 3u
+#define CIUKI_R3D_STENCIL_DECR 4u
+#define CIUKI_R3D_STENCIL_INVERT 5u
 
 struct ciuki_r3d_sampler {
     uint32_t combine;
@@ -5736,6 +5765,16 @@ struct ciuki_r3d_vertex {
     int32_t u;
     int32_t v;
 };
+struct ciuki_r3d_stencil {
+    uint32_t function;
+    uint32_t reference;
+    uint32_t read_mask;
+    uint32_t write_mask;
+    uint32_t fail;
+    uint32_t zfail;
+    uint32_t zpass;
+    uint32_t clear;
+};
 struct ciuki_r3d_draw {
     uint32_t flags;
     uint32_t target;
@@ -5750,6 +5789,7 @@ struct ciuki_r3d_draw {
     uint32_t flat_color[256];
     int32_t uv1[768][2];
     struct ciuki_r3d_vertex vertices[768];
+    struct ciuki_r3d_stencil stencil;
 };
 struct ciuki_r3d_caps {
     uint32_t version;
@@ -5786,6 +5826,8 @@ WAIT: 64-bit sequence/ordinal split into halves; timeout capped at 100 ms.
 Completed receipts authenticate generation/context/ordinal (sequence is then
 informational). PRESENT: exact existing lease token, owned linear resource,
 dimensions/pitch, completed fence; no user payload or framebuffer mapping.
+D24S8 canonical words: increasing Z in bits 23:0, S in bits 31:24.
+Vertex/clear Z is 0..65535 for D16, 0..16777215 for D24S8.
 Other actions require the queried generation. result=1 means success;
 error is positive native errno. No backend packets or VRAM addresses.
 
@@ -7378,9 +7420,13 @@ Full-screen presentation through the desktop's present lease
 (DESK_LEASE / DESK_LEASE_EVENT). The bound target must match the lease
 surface (width, height, XRGB8888). A qualified provider copies the
 completed frame on the GPU and the kernel writes it to the scanout
-(returns 1); otherwise the finished pixels are presented by the CPU
-frame path (returns 0). Negative errno: the lease is no longer valid
-(-EACCES), the layout does not match (-EINVAL) or the kernel refused.
+(returns 1); the frame then stays resident on the provider and is not
+read back into the caller's pixels: ciuki_gl_finish or a pixel read
+makes them current, while a rebind or close before the next draw
+releases them without writing (they may already be freed). Otherwise
+the finished pixels are presented by the CPU frame path (returns 0).
+Negative errno: the lease is no longer valid (-EACCES), the layout does
+not match (-EINVAL) or the kernel refused.
 
 ```c
 struct ciuki_gl_lease {

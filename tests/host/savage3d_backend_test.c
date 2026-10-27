@@ -9,12 +9,14 @@
 static struct savage3d_device gpu3d;
 static struct render3d_service scratch3d;
 static uint8_t ram3d[0x7ff000];
+static uint8_t *ram_storage3d;
 static uint32_t batch3d[32], count3d, need3d;
 static unsigned draw3d, copy3d, writes3d, memory3d, corruption3d, allocations3d;
 static bool dropping3d, bad_restore3d;
-static unsigned read_delay3d;
+static unsigned read_delay3d,attachment_fault3d,scanout_copies3d,memory_writes3d;
 static uint64_t fragments3d;
 static bool slow_guard3d;
+static bool background_minimum3d;
 struct sampling_model3d { unsigned interpolant_bits, address_bits, filter_bits; bool round_weights, affine; long double bias; unsigned address_integer_bits; };
 static struct sampling_model3d sampling3d={24,12,8,false,false,0,14};
 static unsigned probe_filter_bits3d;
@@ -34,13 +36,33 @@ static uint32_t destination3d(uint32_t base,unsigned pitch,unsigned bytes,unsign
 }
 static uint32_t load3d(uint32_t address,unsigned bytes)
 {
-    uint32_t value=0; memcpy(&value,ram3d+physical3d(address,bytes),bytes); return value;
+    uint32_t value=0; memcpy(&value,(ram_storage3d ? ram_storage3d : ram3d)+physical3d(address,bytes),bytes); return value;
 }
 static void store3d(uint32_t address,uint32_t value,unsigned bytes)
-{ memcpy(ram3d+physical3d(address,bytes),&value,bytes); }
+{ memcpy((ram_storage3d ? ram_storage3d : ram3d)+physical3d(address,bytes),&value,bytes); }
 static long double ieee3d(uint32_t word)
 { float v; memcpy(&v,&word,4); return v; }
+/* f7-15: attachments stay resident in VRAM; a fixture that inspects shadows
+ * first downloads the stale ones through the production READ path. */
+static void sync3d(struct render3d_service *s)
+{
+    for (unsigned i=0;i<R3D_CONTEXTS;i++) {
+        struct render3d_context *c=&s->contexts[i];
+        if (!c->live || !c->resources) continue;
+        for (unsigned j=0;j<R3D_RESOURCES;j++) {
+            struct render3d_resource *r=&c->resources[j];
+            if (!r->live || !r->stale) continue;
+            void *copy=malloc(r->bytes); CHECK(copy);
+            CHECK(!render3d_readback(s,c->process,c->handle,r->handle,copy,r->bytes) && !r->stale);
+            free(copy);
+        }
+    }
+}
 #include "savage3d_sampling.inc"
+static uint32_t expand_color565_3d(uint32_t p) {
+    unsigned r=p>>11&31,g=p>>5&63,b=p&31;
+    return 0xff000000u|((r<<3|r>>2)<<16)|((g<<2|g>>4)<<8)|(b<<3|b>>2);
+}
 static void raster3d(void)
 {
     CHECK(batch3d[0]==0x800300c8u || batch3d[0]==0x80030008u);
@@ -48,21 +70,27 @@ static void raster3d(void)
     uint32_t zctrl=m.reg[0x485d4/4],local=m.reg[0x48584/4];
     bool depth_enabled=zctrl&0x20u,depth_write=local&0x08000000u;
     unsigned comparison=zctrl&7u;
-    CHECK((zctrl&~0x27u)==0x80000000u); /* integer D16, W-to-Z */
+    CHECK((zctrl&~0x00ff0027u)==0x80000000u); /* integer D16, W-to-Z */
     CHECK(m.reg[0x48578/4]==0); /* not the actual local-control address */
     CHECK(!(local&~0xde000077u) && (local&0xc4000000u)==0xc4000000u);
     CHECK(!depth_write || depth_enabled);
     CHECK(m.reg[0x485e8/4]==0x00001818u && m.reg[0x485ec/4]==0x4f000000u);
     uint32_t dc=m.reg[0x485dc/4],zc=m.reg[0x485d8/4],td=m.reg[0x485a8/4];
+    bool d24=zc&0x80000000u;
+    unsigned zbytes=d24 ? 4 : 2,zmax=d24 ? 16777215u : 65535u;
+    uint32_t stencil=m.reg[0x485d0/4];
+    bool stencil_enabled=stencil&8u;
+    CHECK(!stencil_enabled || (d24 && depth_enabled));
     bool textured=td&0x02000000u,second=td&0x04000000u;
     CHECK(second==(stride==9));
     CHECK(!!(td&0x01000000u)==second); /* required texture blending loop */
     uint32_t cb=((dc>>8)&0x3fff)*2048,zb=(zc&0x3fff)*2048;
     unsigned cp=(dc&127)*128,zp=((zc>>25)&63)*128;
+    bool color565=!(dc&128u); unsigned colorbytes=color565 ? 2 : 4;
     uint32_t scissor=m.reg[0x485e4/4];
     unsigned width=(scissor&0x7ff)+1,height=((scissor>>12)&0xfff)+1;
-    CHECK(width<=1024 && height<=1024 && cp==((width*4+127)&~127u));
-    CHECK(!depth_enabled || zp==((width*2+127)&~127u));
+    CHECK(width<=1024 && height<=1024 && cp==((width*colorbytes+127)&~127u));
+    CHECK(!depth_enabled || zp==((width*zbytes+127)&~127u));
     long double x[3],y[3],z[3],u[3],v[3],u1[3],v1[3],rw[3]; uint32_t colors[3];
     for (unsigned i=0;i<3;i++) {
         const uint32_t *p=batch3d+1+i*stride;
@@ -97,9 +125,13 @@ static void raster3d(void)
         long double b=(x[2]-px)*(y[0]-py)-(y[2]-py)*(x[0]-px);
         long double c=(x[0]-px)*(y[1]-py)-(y[0]-py)*(x[1]-px);
         if (a<0 || b<0 || c<0 || (!a && !inclusive[0]) || (!b && !inclusive[1]) || (!c && !inclusive[2])) continue;
-        unsigned depth=(unsigned)((a*z[0]+b*z[1]+c*z[2])*65535/area+0.5L);
-        uint32_t da=depth_enabled ? destination3d(zb,zp,2,xx,yy) : 0;
-        if (!dropping3d && depth_enabled && !compare3d(depth,load3d(da,2),comparison)) continue;
+        unsigned depth=(unsigned)((a*z[0]+b*z[1]+c*z[2])*zmax/area+0.5L);
+        uint32_t da=depth_enabled ? destination3d(zb,zp,zbytes,xx,yy) : 0;
+        uint32_t old=depth_enabled ? load3d(da,zbytes) : 0;
+        bool zpass=!depth_enabled || compare3d(depth,old&zmax,comparison);
+        bool spass=!stencil_enabled || compare3d((zctrl>>16&255)&(stencil>>4&255),
+            (old>>24)&(stencil>>4&255),stencil&7);
+        if (!dropping3d && !stencil_enabled && !zpass) continue;
         long double rhw=a*rw[0]+b*rw[1]+c*rw[2];
         uint32_t color=0;
         for (unsigned shift=0;shift<32;shift+=8) {
@@ -133,9 +165,27 @@ static void raster3d(void)
         uint32_t dc1=m.reg[0x485e4/4];
         if ((dc1&0x80000000u) && !compare3d(color>>24,m.reg[0x485e0/4]>>24,dc1>>28&7)) continue;
         CHECK(!(dc1&0x80000000u) || (local&0x02000000u));
-        uint32_t ca=destination3d(cb,cp,4,xx,yy);
-        store3d(ca,blend3d(color,load3d(ca,4),local),4);
-        if (depth_write) store3d(da,depth,2);
+        if (stencil_enabled) {
+            unsigned op=stencil>>(!spass ? 20 : !zpass ? 23 : 26)&7;
+            unsigned value=old>>24;
+            if (op==1) value=0;
+            else if (op==2) value=zctrl>>16&255;
+            else if (op==3 && value<255) value++;
+            else if (op==4 && value) value--;
+            else if (op==5) value^=255;
+            unsigned mask=stencil>>12&255;
+            value=((old>>24)&~mask)|(value&mask);
+            old=(old&0xffffffu)|(value<<24);
+            store3d(da,old,zbytes);
+        }
+        if (!spass || (!dropping3d && !zpass)) continue;
+        uint32_t ca=destination3d(cb,cp,colorbytes,xx,yy);
+        uint32_t dest=load3d(ca,colorbytes);
+        if (color565) dest=expand_color565_3d(dest);
+        color=blend3d(color,dest,local);
+        if (color565) color=((color>>8)&0xf800)|((color>>5)&0x7e0)|((color>>3)&31);
+        store3d(ca,color,colorbytes);
+        if (depth_write) store3d(da,((d24 ? old&0xff000000u : 0)|depth)^(attachment_fault3d==1 ? 0x100u : attachment_fault3d==2 ? 0x1000000u : 0),zbytes);
     }
     draw3d++;
 }
@@ -146,28 +196,44 @@ static void interpret3d(void)
         unsigned n=(cmd>>16)&255,reg=cmd&65535;
         CHECK(n+1==need3d);
         for (unsigned i=0;i<n;i++) {
-            uint32_t addr=reg+i>=0xe2 ? 0x8170+(reg+i-0xe2)*4 : 0x4850c+(reg+i)*4;
+            uint32_t addr=reg+i==0xd7 ? 0x8128 : reg+i>=0xe2 ? 0x8170+(reg+i-0xe2)*4 : 0x4850c+(reg+i)*4;
             CHECK(addr!=0x8168 && addr!=0x816c); /* retained GBD */
             if (!(bad_restore3d && reg==0x1e && draw3d)) m.reg[addr/4]=batch3d[i+1];
         }
     } else if (cmd==0x4bcc8c00) {
         CHECK(need3d==6);
         uint32_t bd=batch3d[2]; unsigned bytes=(bd>>16&255)/8,w=batch3d[5]&65535,h=batch3d[5]>>16;
-        CHECK((bd&0x13000000u)==0x11000000u && !batch3d[4]);
+        bool front=batch3d[1]==0;
+        CHECK((bd&0x13000000u)==(front ? 0x10000000u : 0x11000000u) && !batch3d[4]);
         m.reg[0x8170/4]=batch3d[1]; m.reg[0x8174/4]=bd;
-        for (unsigned y=0;y<h;y++) for (unsigned x=0;x<w;x++)
-            store3d(destination3d(batch3d[1],(bd&65535)*bytes,bytes,x,y),batch3d[3],bytes);
+        uint32_t mask=m.reg[0x8128/4];
+        for (unsigned y=0;y<h;y++) for (unsigned x=0;x<w;x++) {
+            if (front) {
+                CHECK(w==device.width && h==device.height && bytes==device.bpp/8 && mask==UINT32_MAX);
+                memcpy(device.mapped+y*device.pitch+x*bytes,&batch3d[3],bytes);
+            } else {
+                uint32_t address=destination3d(batch3d[1],(bd&65535)*bytes,bytes,x,y);
+                store3d(address,(load3d(address,bytes)&~mask)|(batch3d[3]&mask),bytes);
+            }
+        }
     } else if (cmd==0x4bcc14c0) {
-        CHECK(need3d==8 && !batch3d[5] && !batch3d[6]);
+        CHECK(need3d==8 && !batch3d[5]);
         unsigned w=batch3d[7]&65535,h=batch3d[7]>>16;
-        CHECK(batch3d[2]==(0x10200000u|w) && batch3d[4]==(0x11200000u|((w+31)&~31u)));
+        unsigned bytes=(batch3d[2]>>16&255)/8;
+        bool front=batch3d[1]==0;
+        CHECK((bytes==2 || bytes==4) && batch3d[2]==(0x10000000u|(bytes*8u<<16)|(front ? device.pitch/bytes : w)) &&
+            batch3d[4]==(0x11000000u|(bytes*8u<<16)|(((w*bytes+127)&~127u)/bytes)));
         m.reg[0x8178/4]=batch3d[1]; m.reg[0x817c/4]=batch3d[2];
         m.reg[0x8170/4]=batch3d[3]; m.reg[0x8174/4]=batch3d[4];
         for (unsigned y=0;y<h;y++) for (unsigned x=0;x<w;x++) {
-            uint32_t value=load3d(destination3d(batch3d[3],(batch3d[4]&65535)*4,4,x,y),4);
-            store3d(batch3d[1]+(y*w+x)*4,value^(corruption3d==2 ? 1u : 0u),4);
+            uint32_t value=load3d(destination3d(batch3d[3],(batch3d[4]&65535)*bytes,bytes,x,y),bytes);
+            if (front) {
+                unsigned ox=batch3d[6]&65535,oy=batch3d[6]>>16;
+                CHECK(ox+w<=device.width && oy+h<=device.height && bytes==device.bpp/8);
+                memcpy(device.mapped+(y+oy)*device.pitch+(x+ox)*bytes,&value,bytes);
+            } else store3d(batch3d[1]+(y*w+x)*bytes,value^(corruption3d==2 ? 1u : 0u),bytes);
         }
-        copy3d++;
+        copy3d++; if (front) scanout_copies3d++;
     } else if ((cmd==0x800300c8 || cmd==0x80030008)) raster3d();
     else CHECK(false);
     if (corruption3d==1 && draw3d) ram3d[0]=0;
@@ -202,7 +268,7 @@ static void write_engine3d(void *ctx,uint32_t off,uint32_t value)
 }
 static uint32_t memory_read3d(void *ctx,bool alias,uint32_t offset,unsigned bytes)
 {
-    (void)ctx; CHECK(locks==1); memory3d++;
+    (void)ctx; CHECK(locks==1 || (gpu3d.probe_checkpoint && !alias)); memory3d++;
     m.us+=read_delay3d;
     if (slow_guard3d && !alias && offset>=gpu3d.heap.first && offset<gpu3d.heap.first+4096) m.us+=9;
     if (alias) {
@@ -215,14 +281,19 @@ static uint32_t memory_read3d(void *ctx,bool alias,uint32_t offset,unsigned byte
 }
 static void memory_write3d(void *ctx,bool alias,uint32_t offset,uint32_t value,unsigned bytes)
 {
-    (void)ctx; CHECK(locks==1); memory3d++;
+    (void)ctx; CHECK(locks==1 || (gpu3d.probe_checkpoint && !alias)); memory3d++; memory_writes3d+=alias;
     if (alias) {
         uint32_t desc=m.reg[0x48c40/4]; unsigned bpp=desc>>30,pitch=bpp==2 ? 4096 : 8192;
         offset=destination3d((desc&0xfffffu)<<6,(desc>>20&63)*128,bytes,(offset%pitch)/bytes,offset/pitch);
     }
     store3d(offset,value,bytes);
 }
-static int lock3d(void *ctx,uint32_t generation) { (void)ctx; return fbdev_render3d_enter(generation); }
+static unsigned transient_busy3d;
+static int lock3d(void *ctx,uint32_t generation) {
+    (void)ctx;
+    if (transient_busy3d) { transient_busy3d--; return -EBUSY; }
+    return fbdev_render3d_enter(generation);
+}
 static void unlock3d(void *ctx) { (void)ctx; fbdev_render3d_leave(); }
 static void *allocate3d(void *ctx,size_t bytes)
 { (void)ctx; void *p=malloc(bytes); if (p) allocations3d++; return p; }
@@ -243,7 +314,18 @@ static void native_consumer3d(const struct render3d_host *host,const uint32_t *t
 {
     CHECK(!render3d_close(&scratch3d)); gpu3d.consumer=0;
     bound=&native_driver3d;
+    gpu3d.qualified=false;
     CHECK(!render3d_native_init(&scratch3d,host));
+    uint32_t software;
+    CHECK(!render3d_native_refresh(&scratch3d) && !scratch3d.backend);
+    CHECK(!render3d_create_context(&scratch3d,7,R3D_SOFTWARE,&software));
+    gpu3d.qualified=true;
+    CHECK(!render3d_native_refresh(&scratch3d) && !scratch3d.backend);
+    CHECK(!render3d_destroy_context(&scratch3d,7,software));
+    uint32_t previous_handle=scratch3d.next_handle;
+    scratch3d.sequence=123;
+    CHECK(!render3d_native_refresh(&scratch3d) && scratch3d.backend &&
+        scratch3d.next_handle==previous_handle && scratch3d.sequence==123);
     struct render3d_caps caps; render3d_query_caps(&scratch3d,&caps);
     CHECK(caps.hardware_features==R3D_ALL_FEATURES && caps.hardware_max_size==64);
     uint32_t c,handles[4]; CHECK(!render3d_create_context(&scratch3d,7,R3D_HARDWARE_REQUIRED,&c));
@@ -267,6 +349,7 @@ static void native_consumer3d(const struct render3d_host *host,const uint32_t *t
     CHECK(!allocations3d && !scratch3d.ram_bytes);
     CHECK(render3d_submit(&scratch3d,7,c,&q,sizeof(q),&fence)<0 && writes3d==before);
     bound=0;
+    puts("native late admission: live software context retained, empty service attached, handles/fence sequence preserved PASS");
 }
 static void variants3d(const struct render3d_host *host)
 {
@@ -315,6 +398,7 @@ static void variants3d(const struct render3d_host *host)
         CHECK(!render3d_submit(&scratch3d,7,c,&q,sizeof(q),&fence));
         CHECK(render3d_step(&scratch3d)==1 && !render3d_wait(&scratch3d,7,c,fence,0));
         CHECK(draw3d==old_draws+draw && copy3d==old_copies+!!(flags&R3D_COPY));
+        sync3d(&scratch3d);
         for (unsigned y=0;y<h;y++) for (unsigned x=0;x<w;x++) {
             uint32_t expected=flags&R3D_CLEAR_COLOR ? q.clear_color : 0xff203040;
             unsigned expected_z=flags&R3D_CLEAR_DEPTH ? q.clear_depth : 32768;
@@ -355,10 +439,11 @@ static void variants3d(const struct render3d_host *host)
 }
 #include "savage3d_fixed_function.inc"
 #include "savage3d_fullsize.inc"
+#include "savage3d_background.inc"
 static void backend3d(unsigned fault,bool variants)
 {
     CHECK(!allocations3d);
-    prepare(32); m.reg[0x48578/4]=0;
+    prepare(32); m.exact_clock=true; m.reg[0x48578/4]=0;
     uint32_t old_gbd[2]={m.reg[0x8168/4],m.reg[0x816c/4]};
     memset(ram3d,0x7a,sizeof(ram3d)); draw3d=copy3d=writes3d=memory3d=count3d=0;
     corruption3d=fault==1 || fault==2 ? fault : 0; dropping3d=fault==3; bad_restore3d=fault==4;
@@ -378,9 +463,19 @@ static void backend3d(unsigned fault,bool variants)
         CHECK(!savage3d_backend()->layout(&gpu3d,r)); if (i!=2) at+=r->reserved;
     }
     gpu3d.consumer=&scratch3d; test_engine.io.write32=write_engine3d;
+    if (background_minimum3d) {
+        gpu3d.probe_checkpoint=background_checkpoint3d;
+        background_start3d=background_phase_start3d=m.us;
+        background_cpu3d=0; background_frames3d=0; m.exact_clock=true;
+    }
     CHECK(!fbdev_render3d_prepare(42)); CHECK(fbdev_change_begin()==-EBUSY);
     if (fault==5) scratch3d.contexts[0].resources[1].offset=gpu3d.heap.first-4096;
     int e=savage3d_probe(&gpu3d);
+    gpu3d.probe_checkpoint=0;
+    if (background_minimum3d) {
+        CHECK(background_frames3d>0);
+        printf("background minimum: desktop_frames=%u, three restored draws/copies PASS\n",background_frames3d);
+    }
     fbdev_render3d_prepared();
     CHECK((e==0)==(fault==0)); CHECK(!locks && !drawing && !accel_inflight);
     CHECK(m.reg[0x8168/4]==old_gbd[0] && m.reg[0x816c/4]==old_gbd[1]);
@@ -401,11 +496,185 @@ static void backend3d(unsigned fault,bool variants)
     /* Engine destroyed before fixture frees (models reboot, no recovery API). */
     CHECK(!render3d_close(&scratch3d) && !allocations3d && !scratch3d.ram_bytes); finish();
 }
+static int cache_rows3d(void *ctx,bool take)
+{
+    struct savage2d *s=ctx;
+    s->rows=take ? s->height : s->height+16;
+    return 0;
+}
+static void cache_epoch3d(void)
+{
+    prepare(32); m.exact_clock=true;
+    test_engine.rows=test_engine.height+16; test_engine.offscreen_first=test_engine.height;
+    test_engine.write_state=1; test_engine.offscreen_ok=true;
+    kmutex_lock(&presenter); presenter_unlock();
+    struct swdib_target old;
+    CHECK(!fbdev_batch_video_target(42,&old));
+    struct display_batch *b=calloc(1,sizeof(*b)); CHECK(b);
+    b->header.generation=42; b->header.target_count=1; b->targets[0]=old;
+    CHECK(!batch_begin(0,b));
+    uint32_t epoch=video_cache_epoch;
+    CHECK(fbdev_render3d_cache(42,cache_rows3d,&test_engine,true)==-EBUSY && video_cache_epoch==epoch);
+    batch_end(b);
+    CHECK(!fbdev_render3d_cache(42,cache_rows3d,&test_engine,true));
+    CHECK(!fbdev_render3d_cache(42,cache_rows3d,&test_engine,false));
+    CHECK(video_cache_epoch==epoch+1 && batch_begin(0,b)==-EAGAIN && !drawing);
+    struct ciuki_accel_request q={.size=sizeof(q),.generation=42,.operation=CIUKI_ACCEL_COPY,
+        .rect={0,(int32_t)test_engine.height,0,0,8,1},.background=epoch};
+    unsigned packets=m.packets;
+    CHECK(fbdev_accel_request(&q)==-EAGAIN && m.packets==packets);
+    uint32_t pixels[8]={0}; struct fb_rect dst={0,(int32_t)test_engine.height,8,1};
+    CHECK(fbdev_accel_write_epoch(42,&dst,&dst,pixels,sizeof(pixels),epoch)==-EAGAIN && m.packets==packets);
+    CHECK(!fbdev_batch_video_target(42,&b->targets[0]) && !batch_begin(0,b)); batch_end(b);
+    free(b); finish();
+    puts("cache epoch: active batch excludes transfer; old batch/COPY/WRITE refused before pixels; fresh generation admits PASS");
+}
+static bool scanout_rgb3d(unsigned x,unsigned y,uint32_t rgb)
+{ uint32_t value; memcpy(&value,device.mapped+y*device.pitch+x*4,4); return (value&0xffffffu)==rgb; }
+static void scanout_receipt3d(void)
+{
+    prepare(32); m.exact_clock=true; device.width=64;
+    gpu3d=(struct savage3d_device){.engine=&test_engine,.heap={0x800000,sizeof(ram3d)},.generation=42,
+        .qualified=true,.memory={0,memory_read3d,memory_write3d,lock3d,unlock3d}};
+    test_engine.render3d_qualified=true; test_engine.io.write32=write_engine3d;
+    struct render3d_host host={0,allocate3d,free3d,clock3d,0};
+    render3d_init(&scratch3d,&host,42,savage3d_backend(),&gpu3d,gpu3d.heap); gpu3d.consumer=&scratch3d;
+    unsigned c,color,linear;
+    CHECK(!render3d_create_context(&scratch3d,7,R3D_HARDWARE_REQUIRED,&c));
+    CHECK(!render3d_create_resource(&scratch3d,7,c,R3D_COLOR,64,64,0,0,&color));
+    CHECK(!render3d_create_resource(&scratch3d,7,c,R3D_LINEAR_COLOR,64,64,0,0,&linear));
+    struct render3d_request q={.target=color,.copy_target=linear,.flags=R3D_CLEAR_COLOR|R3D_COPY,.clear_color=0xff123456};
+    struct render3d_fence fence;
+    CHECK(!render3d_submit(&scratch3d,7,c,&q,sizeof(q),&fence) && render3d_step(&scratch3d)==1);
+    struct ciuki_w32_render3d_args a={.context=c,.resource=linear,.width=64,.height=64,.generation=42};
+    unsigned before=scanout_copies3d;
+    m.reg[0x8128/4]=0x0f0f0f0f;
+    CHECK(!render3d_scanout(&scratch3d,7,&a,&device) && scanout_copies3d==before+1);
+    CHECK(m.reg[0x8128/4]==0x0f0f0f0f && scanout_rgb3d(63,63,0x123456));
+    a.generation=41; CHECK(render3d_scanout(&scratch3d,7,&a,&device)==-EOPNOTSUPP); a.generation=42;
+    CHECK(render3d_scanout(&scratch3d,8,&a,&device)==-EOPNOTSUPP && scanout_copies3d==before+1);
+    /* A later draw invalidates the old tiled receipt, but preserves the
+     * independently owned linear copy for CPU/gamma presentation. */
+    q.flags=R3D_CLEAR_COLOR; q.copy_target=0; q.clear_color=0xffabcdef;
+    CHECK(!render3d_submit(&scratch3d,7,c,&q,sizeof(q),&fence) && render3d_step(&scratch3d)==1);
+    CHECK(render3d_scanout(&scratch3d,7,&a,&device)==-EOPNOTSUPP && scanout_rgb3d(0,0,0x123456));
+    q.flags=R3D_COPY; q.copy_target=linear;
+    CHECK(!render3d_submit(&scratch3d,7,c,&q,sizeof(q),&fence) && render3d_step(&scratch3d)==1);
+    CHECK(!render3d_scanout(&scratch3d,7,&a,&device) && scanout_rgb3d(0,0,0xabcdef));
+    device.width=96; /* desktop-mode lease with a smaller drawable */
+    CHECK(!render3d_scanout(&scratch3d,7,&a,&device));
+    CHECK(scanout_rgb3d(0,0,0) && scanout_rgb3d(15,63,0) && scanout_rgb3d(16,0,0xabcdef) &&
+        scanout_rgb3d(79,63,0xabcdef) && scanout_rgb3d(80,0,0));
+    CHECK(!render3d_destroy_resource(&scratch3d,7,c,color));
+    CHECK(render3d_scanout(&scratch3d,7,&a,&device)==-EOPNOTSUPP);
+    CHECK(!render3d_close(&scratch3d) && !allocations3d); finish();
+    puts("GPU scanout: padded current pitch, tiled copy, exact inherited mask restore, stale generation/owner refusal, modified/freed source receipt refusal PASS");
+}
+/* f7-15 lead decision: render targets stay GPU-resident. A frame that
+ * starts with a full clear uploads nothing; jobs read nothing back; the CPU
+ * gets the pixels only on demand (READ, a scalar job, a CPU presentation). */
+static void resident3d(void)
+{
+    prepare(32); m.exact_clock=true; device.width=64;
+    gpu3d=(struct savage3d_device){.engine=&test_engine,.heap={0x800000,sizeof(ram3d)},.generation=42,
+        .qualified=true,.memory={0,memory_read3d,memory_write3d,lock3d,unlock3d}};
+    test_engine.render3d_qualified=true; test_engine.io.write32=write_engine3d;
+    struct render3d_host host={0,allocate3d,free3d,clock3d,0};
+    render3d_init(&scratch3d,&host,42,savage3d_backend(),&gpu3d,gpu3d.heap); gpu3d.consumer=&scratch3d;
+    unsigned c,color,depth,linear;
+    CHECK(!render3d_create_context(&scratch3d,7,R3D_AUTO,&c));
+    CHECK(!render3d_create_resource(&scratch3d,7,c,R3D_COLOR,64,64,0,0,&color));
+    CHECK(!render3d_create_resource(&scratch3d,7,c,R3D_D16,64,64,0,0,&depth));
+    CHECK(!render3d_create_resource(&scratch3d,7,c,R3D_LINEAR_COLOR,64,64,0,0,&linear));
+    struct render3d_resource *rc=&scratch3d.contexts[0].resources[0],*rd=&scratch3d.contexts[0].resources[1],
+        *rl=&scratch3d.contexts[0].resources[2];
+    struct render3d_request q={.target=color,.depth=depth,.copy_target=linear,.count=3,
+        .flags=R3D_CLEAR_COLOR|R3D_CLEAR_DEPTH|R3D_DEPTH_TEST|R3D_DEPTH_WRITE|R3D_COPY,
+        .clear_color=0xff102030,.clear_depth=65535};
+    q.vertices[0]=(struct render3d_vertex){0,0,16384,65536,0xff804020,0,0};
+    q.vertices[1]=(struct render3d_vertex){0,64<<16,16384,65536,0xff804020,0,65536};
+    q.vertices[2]=(struct render3d_vertex){64<<16,0,16384,65536,0xff804020,65536,0};
+    struct render3d_fence fence;
+    unsigned writes=memory_writes3d,accesses=memory3d;
+    CHECK(!render3d_submit(&scratch3d,7,c,&q,sizeof(q),&fence) && render3d_step(&scratch3d)==1);
+    /* Full clears and the copy initialize all three: only guard pages were
+     * written (linear, 3 x 2048 words) and 3 x 32 guard words sampled. */
+    CHECK(memory_writes3d==writes && memory3d-accesses==3*2048+3*32);
+    CHECK(rc->resident && rd->resident && rl->resident && rc->stale && rd->stale && rl->stale);
+    uint32_t pixels[64*64]; uint16_t z[64*64];
+    accesses=memory3d;
+    CHECK(!render3d_readback(&scratch3d,7,c,color,pixels,sizeof(pixels)) && !rc->stale && rd->stale);
+    CHECK(memory3d-accesses==64*64+2048);
+    CHECK(pixels[0]==0xff804020 && pixels[63*64+63]==0xff102030);
+    /* An unchanged attachment reads nothing again. */
+    accesses=memory3d;
+    CHECK(!render3d_readback(&scratch3d,7,c,color,pixels,sizeof(pixels)) && memory3d==accesses);
+    /* A depth-only clear (Quake III's frame start) leaves colour resident. */
+    q=(struct render3d_request){.target=color,.depth=depth,.flags=R3D_CLEAR_DEPTH,.clear_depth=40000};
+    accesses=memory3d;
+    CHECK(!render3d_submit(&scratch3d,7,c,&q,sizeof(q),&fence) && render3d_step(&scratch3d)==1);
+    CHECK(memory3d==accesses && !rc->stale && rd->stale);
+    CHECK(!render3d_readback(&scratch3d,7,c,depth,z,sizeof(z)) && z[5]==40000 && !rd->stale);
+    /* A scalar job of this hardware context (an AUTO fallback for a feature
+     * the backend lacks would do the same) synchronizes stale shadows first. */
+    q=(struct render3d_request){.target=color,.flags=R3D_CLEAR_COLOR,.clear_color=0xff0000ff};
+    CHECK(!render3d_submit(&scratch3d,7,c,&q,sizeof(q),&fence) && render3d_step(&scratch3d)==1 && rc->stale);
+    q=(struct render3d_request){.target=color,.copy_target=linear,.flags=R3D_COPY};
+    CHECK(!render3d_submit(&scratch3d,7,c,&q,sizeof(q),&fence));
+    scratch3d.jobs[scratch3d.head].software=true; /* fixture-forced scalar slice */
+    accesses=memory3d;
+    while (scratch3d.queued) CHECK(render3d_step(&scratch3d)>=0);
+    CHECK(!rc->stale && !rc->resident && !rl->resident && memory3d-accesses>=64*64);
+    CHECK(!render3d_readback(&scratch3d,7,c,linear,pixels,sizeof(pixels)) && pixels[100]==0xff0000ff);
+    /* After the CPU wrote shadows, the next hardware job uploads them. */
+    writes=memory_writes3d;
+    q=(struct render3d_request){.target=color,.count=3,.flags=R3D_DEPTH_TEST|R3D_DEPTH_WRITE,.depth=depth};
+    q.vertices[0]=(struct render3d_vertex){0,0,16384,65536,0xff00ff00,0,0};
+    q.vertices[1]=(struct render3d_vertex){0,8<<16,16384,65536,0xff00ff00,0,65536};
+    q.vertices[2]=(struct render3d_vertex){8<<16,0,16384,65536,0xff00ff00,65536,0};
+    CHECK(!render3d_submit(&scratch3d,7,c,&q,sizeof(q),&fence) && render3d_step(&scratch3d)==1);
+    CHECK(memory_writes3d-writes==64*64 && rc->resident && rc->stale);
+    CHECK(!render3d_readback(&scratch3d,7,c,color,pixels,sizeof(pixels)) && pixels[0]==0xff00ff00 && pixels[64*64-1]==0xff0000ff);
+    CHECK(!render3d_close(&scratch3d) && !allocations3d); finish();
+    puts("GPU-resident targets: full-clear frame uploads nothing, jobs read nothing back, READ downloads once, depth-only clear keeps colour resident, scalar job syncs, CPU writes reupload PASS");
+}
+static void scanout_5653d(void)
+{
+    prepare(16); m.exact_clock=true; device.width=64;
+    gpu3d=(struct savage3d_device){.engine=&test_engine,.heap={0x800000,sizeof(ram3d)},.generation=42,
+        .qualified=true,.color565_qualified=true,.memory={0,memory_read3d,memory_write3d,lock3d,unlock3d}};
+    test_engine.render3d_qualified=true; test_engine.io.write32=write_engine3d;
+    struct render3d_host host={0,allocate3d,free3d,clock3d,0};
+    render3d_init(&scratch3d,&host,42,savage3d_backend(),&gpu3d,gpu3d.heap); gpu3d.consumer=&scratch3d;
+    unsigned c,color,linear;
+    CHECK(!render3d_create_context(&scratch3d,7,R3D_HARDWARE_REQUIRED,&c));
+    CHECK(!render3d_create_resource(&scratch3d,7,c,R3D_COLOR565,64,64,0,0,&color));
+    CHECK(!render3d_create_resource(&scratch3d,7,c,R3D_LINEAR565,64,64,0,0,&linear));
+    struct render3d_request q={.target=color,.copy_target=linear,.flags=R3D_CLEAR_COLOR|R3D_COPY,.clear_color=0xff123456};
+    struct render3d_fence fence;
+    CHECK(!render3d_submit(&scratch3d,7,c,&q,sizeof(q),&fence) && render3d_step(&scratch3d)==1);
+    struct ciuki_w32_render3d_args a={.context=c,.resource=linear,.width=64,.height=64,.generation=42};
+    unsigned before=scanout_copies3d;
+    CHECK(!render3d_scanout(&scratch3d,7,&a,&device) && scanout_copies3d==before+1);
+    uint16_t pixel; memcpy(&pixel,device.mapped+63*device.pitch+63*2,2); CHECK(pixel==0x11aa);
+    CHECK(!render3d_close(&scratch3d) && !allocations3d); finish();
+    puts("GPU scanout RGB565: native packed pixels, padded current stride, guards and restoration PASS");
+}
 #include "savage3d_review4.inc"
 int main(int argc,char **argv)
 {
     setvbuf(stdout,0,_IONBF,0);
-    if (argc==2 && !strcmp(argv[1],"fullsize")) fullsize_suite3d();
+    if (argc==2 && !strcmp(argv[1],"background")) {
+        background_suite3d(); background_minimum3d=true; backend3d(0,false);
+    }
+    else if (argc==2 && !strcmp(argv[1],"scanout")) { scanout_receipt3d(); scanout_5653d(); resident3d(); }
+    else if (argc==2 && !strcmp(argv[1],"cache")) cache_epoch3d();
+    else if (argc==2 && !strcmp(argv[1],"t23")) {
+        attachments3d(1024,768,true,0,false); attachments3d(1024,768,true,0,true);
+    }
+    else if (argc==2 && !strcmp(argv[1],"formats")) attachment_suite3d();
+    else if (argc==2 && !strcmp(argv[1],"fullsize")) fullsize_suite3d();
+    else if (argc==2 && !strcmp(argv[1],"batch")) large_batch3d();
     else if (argc==2 && !strcmp(argv[1],"review4")) review4_suite3d();
     else if (argc==2 && !strcmp(argv[1],"shader")) shader_precision3d();
     else if (argc==2 && !strcmp(argv[1],"variants")) backend3d(0,true);

@@ -77,6 +77,8 @@ struct savage2d {
     enum savage_chip chip;
     uint32_t status_reg, fifo_mask, cob_offset, saved_cob;
 };
+/* Idle presenter/drawing exclusion is required for a cache transfer. */
+int savage2d_cache_transfer(void *, bool);
 bool savage2d_supported(const struct pci_func *);
 /* f2-92: engine-only rows [first, end) for a mode, VRAM size and cursor
  * page offset (0: none); false when nothing fits. */

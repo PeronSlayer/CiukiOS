@@ -417,6 +417,7 @@ static bool ready_record(struct dosvm *v)
         else paragraphs = paragraphs * 16 + d;
     }
     if (!major || !paragraphs || paragraphs > 0xA000) return false;
+    if (!v->info.dos_ready && dosvm_mouse_install(v)) return false;
     v->info.dos_major = major; v->info.dos_minor = minor;
     v->info.free_paragraphs = paragraphs; v->info.drive = v->line[25] - 'A';
     v->info.dos_ready = true;
@@ -554,6 +555,12 @@ int dosvm_io(void *arg, uint16_t port, unsigned width, bool write, uint32_t *val
         v->perf.cause = DOSVM_COST_PIT_PIC;
         if (width != 1) return -V86_EPERM;
         uint32_t flags = irq_save();
+        if (write && !(port & 1) && (*value & 0x10)) {
+            /* ICW1 cancels latched requests, including those held outside
+             * IRR until the current handler returns. */
+            v->irq.owed &= port >= 0xA0 ? 0x00FFu : 0xFF00u;
+            if (port < 0xA0) v->pit.owed = 0;
+        }
         uint8_t b = dosvm_pic_register(&v->monitor.pic[port >= 0xA0], port & 1, write, (uint8_t)*value);
         dosvm_pic_cascade(&v->monitor);
         v->monitor.stats.io[V86_PIC]++;

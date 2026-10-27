@@ -99,8 +99,12 @@ unsigned gl_read_color(struct gl_context *c, int x, int y) {
   return source[(c->sw.height - 1 - y) * c->sw.width + x] | 0xff000000;
 }
 void gl_select_buffer(struct gl_context *c) {
+  uint32_t *color = (c->draw_buffer == GL_FRONT || c->draw_buffer == GL_FRONT_LEFT) ? c->front_color : c->back_color;
+  uint32_t *color2 = c->doublebuffer && c->draw_buffer == GL_FRONT_AND_BACK ? c->front_color : 0;
+  int disabled = c->draw_buffer == GL_NONE;
+  /* Quake III selects GL_BACK every frame: an unchanged selection keeps the
+   * GPU-resident attachments (no readback and no reload, f7-15). */
+  if (color == c->sw.color && color2 == c->sw.color2 && disabled == c->sw.color_disabled) return;
   gl_hw_software(c);
-  c->sw.color = (c->draw_buffer == GL_FRONT || c->draw_buffer == GL_FRONT_LEFT) ? c->front_color : c->back_color;
-  c->sw.color2 = c->doublebuffer && c->draw_buffer == GL_FRONT_AND_BACK ? c->front_color : 0;
-  c->sw.color_disabled = c->draw_buffer == GL_NONE;
+  c->sw.color = color; c->sw.color2 = color2; c->sw.color_disabled = disabled;
 }

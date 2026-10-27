@@ -105,3 +105,13 @@ Expected cost on the hardware path: like opengl32, every completed frame
 journal's checkpoint: 1.8 MB per 640x480 frame, 4.7 MB per 1024x768 frame.
 The completed-copy FPS above includes that readback; it is not the contract
 T2 gate (which also needs the textured T2 scene).
+
+Superseded for full-screen frames by the integration with f7-15 (GPU-resident
+targets, 2026-10-27): a `ciuki_gl_present` that the provider completes on the
+GPU reads nothing back into the caller's pixels (as opengl32's GPU swap); the
+kernel presents the completed linear copy directly on the scanout when the
+lease is unscaled with identity gamma, otherwise it reads that copy back for
+the CPU presenter. A rebind or close right after a GPU present releases the
+frame without a readback. Windowed frames (`ciuki_gl_finish`) still read the
+colour and D16 target back, because the window presents the caller's pixels.
+Host replay: 0 target reads and 0 uploads over three 1024x768 lease frames.

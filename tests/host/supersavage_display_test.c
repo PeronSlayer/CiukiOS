@@ -100,6 +100,7 @@ static struct fb_device desktop;
 static void runtime_fixture(void)
 {
     for (unsigned i=0;i<nwindows;i++) free(windows[i]);nwindows=0;
+    published=false;
     register_window=aperture_window=linear_window=0;register_mapping=aperture_mapping=linear_mapping=0;
     memset(&saved_mode,0,sizeof(saved_mode));native_strikes=0;session_struck=restore_failed=recovery_confirmed=false;strike_count=0;adapter=0;
     for (unsigned i=0;i<NCLAIMS;i++) claims[i]=-1;
@@ -214,7 +215,7 @@ static void refusal_and_recovery(void)
     assert(leases[1].state==RS_ACTIVE);
     runtime_fixture();assert(!supersavage_display_prepare(&desktop,0x13));card.cr[0x6B]=0x82;
     assert(supersavage_display_begin(0x13)==-EOPNOTSUPP && !card.memcycles);
-    assert(!supersavage_display_end() && native_strikes==1);
+    assert(!supersavage_display_end() && !native_strikes);
     supersavage_display_complete(true);
     puts("PASS f3-39 resources: transient claim/map refusal costs no strike, activation quarantine persists until ownership released/replaced; no foreign generation mutated");
     runtime_fixture();card.sr[0x58]=0;
@@ -286,9 +287,41 @@ static void strikes_and_retry(void)
     assert(native_strikes==1 && strike_count==1);
     puts("PASS f0-40 strikes: four recovered restores cost zero; failed native+fallback and entry failures log 1/2/3 once per session; unrecovered snapshot retained; fourth entry at cap performs no I/O");
 }
+static void present_handoff(void)
+{
+    runtime_fixture();
+    struct card before=card;
+    assert(!supersavage_display_prepare(&desktop,0x111));
+    assert(!supersavage_display_begin(0x111));
+    struct fb_device scanout;
+    assert(!supersavage_display_publish(&scanout));
+    assert(scanout.phys==desktop.phys && scanout.width==640 && scanout.height==480 &&
+        scanout.pitch==1280 && scanout.bpp==16 && scanout.size==614400);
+    assert(!register_mapping && !aperture_mapping && !linear_mapping && saved_mode.saved && published);
+    for (unsigned i=0;i<nleases;i++) assert(leases[i].state==RS_RELEASED);
+    /* fbdev may replace the framebuffer generation while the saved desktop
+     * is retained: end must neither borrow nor release that obsolete lease. */
+    framebuffer.generation++;
+    unsigned maps=mapped;
+    assert(!supersavage_display_end() && mapped==maps+2);
+    supersavage_display_complete(true);
+    assert(!saved_mode.saved && !published);
+    assert(!memcmp(card.cr,before.cr,sizeof(card.cr)) && !memcmp(card.sr,before.sr,sizeof(card.sr)));
+    puts("PASS fx-biosvm native present: real packed programming/readback, publish revokes all aliases/claims, desktop snapshot restored after framebuffer generation handoff");
+}
 int main(void)
 {
-    ownership();accelerator_quarantine();packed_ownership();refusal_and_recovery();strikes_and_retry();
+    present_handoff();ownership();accelerator_quarantine();packed_ownership();refusal_and_recovery();strikes_and_retry();
+    runtime_fixture(); card.cr[0x6B]=2;
+    for (unsigned n=0;n<4;n++) {
+        assert(!supersavage_display_prepare(&desktop,0x101));
+        assert(supersavage_display_begin(0x101)==-EOPNOTSUPP && !card.memcycles && !card.pll_edges);
+        assert(!supersavage_display_end() && !native_strikes);
+        supersavage_display_complete(true);
+        assert(!saved_mode.saved && !register_mapping && !aperture_mapping && !linear_mapping);
+        for (unsigned i=0;i<nleases;i++) assert(leases[i].state==RS_RELEASED);
+    }
+    puts("PASS Review round 1 panel provider: repeated clean refusal releases every mapping/claim, no native strikes or programmed pixels/clocks");
     for (unsigned i=0;i<nwindows;i++) free(windows[i]);
     puts("SuperSavage display provider host tests: PASS");return 0;
 }

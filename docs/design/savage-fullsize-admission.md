@@ -1,5 +1,13 @@
 # Savage full-size admission (f7-11)
 
+The [f7-15 target and VRAM contract](savage-modes-vram.md) supersedes the
+scanout-generation, permanent 2D cache and CPU masked-clear rules below.
+
+The [f7-12 default format extension](savage-default-formats.md) supersedes
+the D16-only attachment and default-launch limitations below when its
+additional current-mode probes pass. The original D16 and precision gates
+continue to apply.
+
 ## Review round 5: production batch work and framebuffer census
 
 Research rechecked on 2026-10-26 before the amendment-5 code changes:
@@ -42,11 +50,13 @@ Quake III's upstream
 [`GLW_InitDriver`](https://raw.githubusercontent.com/id-Software/Quake-III-Arena/master/code/win32/win_glimp.c)
 chooses D24 for a >16-bit desktop when `r_depthbits=0`, and allows stencil
 only at depth >=24. The H1 default-format replay explicitly requests XRGB32,
-D24/S8 and selects Ciuki pixel-format index 9. That context cannot open on
-the current Savage provider. The separate D16/S0 H1 replay is the eligible
-hardware profile; a hardware trial must explicitly select `r_depthbits 16`
-and `r_stencilbits 0`. Default-format software results are not evidence of
-Savage acceleration.
+D24/S8. In f7-11 it selected software index 9; only the separate D16/S0
+replay was hardware eligible. The f7-12 extension selects qualified index 9
+when its additional D24/S8 gate fits and passes, or accelerated D16 index 1
+otherwise. Quake's own strict enumeration can use its built-in stencil-zero
+retry. Hardware trials now use the plain Start-menu entry and timedemo,
+without format overrides. Default-format software results alone remain
+insufficient evidence of Savage acceleration.
 
 Research checked 2026-10-26 before implementation. This implements the lead's
 [f7-11 directive](../directives/f7-11-full-size-admission.md) and supersedes only

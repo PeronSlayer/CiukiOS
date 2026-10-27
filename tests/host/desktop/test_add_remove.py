@@ -38,7 +38,7 @@ class AddRemoveTests(unittest.TestCase):
             (folder/'Games/Test/Sub/data').write_bytes(b'fixture')
             (folder/'Programs/UserDirectory/file').write_bytes(b'fixture')
             (folder/'system/settings/dos-game-3.cfg').write_text('kernel=0\n')
-            for package in ('wolf3d-shareware','doom-shareware','quake-shareware','war2-demo'):
+            for package in ('wolf3d-shareware','doom-shareware','quake-shareware','war2-demo','duke3d-shareware'):
                 shutil.copyfile(ROOT/f'third_party/games/{package}/UPSTREAM.json',folder/f'system/licenses/{package}-UPSTREAM.json')
             env=dict(os.environ,TMPDIR=temporary)
             command=['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror','-D_POSIX_C_SOURCE=200809L',

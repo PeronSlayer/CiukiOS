@@ -32,6 +32,10 @@ static int present_wire(void *ctx,uint32_t pid,const struct ciuki_w32_render3d_a
 {
     (void)ctx;
     if (pid!=wire_pid || !lease_token || a->token!=lease_token || a->generation!=lease_generation) return -EACCES;
+    /* f7-15 transport: NULL pixels ask for the direct native scanout only.
+     * This model has none (the H1/T23 GL fixture covers it), so the kernel
+     * reads the completed linear copy back and calls again with it. */
+    if (!data) return -EOPNOTSUPP;
     CHECK(bytes<=sizeof(frame_pixels) && bytes==a->width*a->height*4);
     memcpy(frame_pixels,data,bytes); gpu_presents++; return 0;
 }
