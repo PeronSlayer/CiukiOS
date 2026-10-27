@@ -296,16 +296,31 @@ static void fault_tests(struct fake *f) {
         CHECK(fat_mount(&vol,&cache,&f->dev,0,f->dev.capacity,true)==-FS_EINVAL);
         CHECK(!f->writes); cache_destroy(&cache); fake_reset(f);
     }
-    patch_fat(f,&geometry,0,0,0); OK(cache_init(&cache,2*1024*1024));
-    CHECK(fat_mount(&vol,&cache,&f->dev,0,f->dev.capacity,true)==-FS_EINVAL); cache_destroy(&cache); fake_reset(f);
-    patch_fat(f,&geometry,0,1,0); OK(cache_init(&cache,2*1024*1024));
-    CHECK(fat_mount(&vol,&cache,&f->dev,0,f->dev.capacity,true)==-FS_EINVAL); cache_destroy(&cache); fake_reset(f);
+    patch_fat(f,&geometry,0,0,0); assert_ro(f,FAT_RO_CORRUPT); fake_reset(f);
+    patch_fat(f,&geometry,0,1,0); assert_ro(f,FAT_RO_CORRUPT); fake_reset(f);
     if (bits==32) {
-        OK(fake_raw_read(f,geometry.fsinfo,b)); b[0]^=1; OK(fake_raw_write(f,geometry.fsinfo,b));
-        OK(cache_init(&cache,2*1024*1024)); CHECK(fat_mount(&vol,&cache,&f->dev,0,f->dev.capacity,true)==-FS_EINVAL); cache_destroy(&cache); fake_reset(f);
+        for (unsigned sig=0;sig<3;sig++) {
+            uint8_t hint[512], after[512];
+            OK(fake_raw_read(f,geometry.fsinfo,hint)); hint[sig==0 ? 0 : sig==1 ? 484 : 508]^=1;
+            OK(fake_raw_write(f,geometry.fsinfo,hint));
+            mounted(f,true); CHECK(!vol.fsinfo && !vol.readonly && vol.scan_complete);
+            int h=create("C:/No FSInfo.txt"); size_t done;
+            OK(vfs_write(&table,h,"hintless",8,&done)); CHECK(done==8); OK(vfs_close(&table,h));
+            unmounted(); OK(fake_raw_read(f,geometry.fsinfo,after)); CHECK(!memcmp(hint,after,512));
+            fake_reset(f);
+        }
+        /* Missing or misplaced optional metadata must not prevent reads,
+         * nor become a write to the BPB, a FAT sector, or its backup. */
+        const uint16_t positions[]={0,0xffff,geometry.reserved,geometry.backup};
+        for (unsigned i=0;i<sizeof(positions)/sizeof(positions[0]);i++) {
+            OK(fake_raw_read(f,0,b)); fs_wr16(b+48,positions[i]); OK(fake_raw_write(f,0,b));
+            mounted(f,false); CHECK(!vol.fsinfo); CHECK(!f->writes); unmounted(); fake_reset(f);
+        }
         OK(fake_raw_read(f,0,b)); fs_wr32(b+44,geometry.clusters+2); OK(fake_raw_write(f,0,b));
         OK(cache_init(&cache,2*1024*1024)); CHECK(fat_mount(&vol,&cache,&f->dev,0,f->dev.capacity,true)==-FS_EINVAL); cache_destroy(&cache); fake_reset(f);
     }
+    OK(fake_raw_read(f,0,b)); b[0]=b[1]=b[2]=0; OK(fake_raw_write(f,0,b));
+    mounted(f,false); CHECK(!f->writes); unmounted(); fake_reset(f);
     f->dev.write_cache_state=BLKDEV_CACHE_UNKNOWN; assert_ro(f,FAT_RO_DURABILITY); f->dev.write_cache_state=BLKDEV_CACHE_ENABLED;
     int (*flush)(struct blkdev *)=f->dev.flush; f->dev.flush=0; assert_ro(f,FAT_RO_DURABILITY); f->dev.flush=flush;
     if (bits!=12) {

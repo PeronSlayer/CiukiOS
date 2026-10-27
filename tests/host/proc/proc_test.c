@@ -47,12 +47,38 @@ static uint32_t read_cr3(void) { return host_cr3; }
 static void invlpg(uint32_t va) { (void)va; invlpgs++; }
 static bool fail_alloc(void) { if (alloc_fail < 0) return false; if (!alloc_fail) return true; alloc_fail--; return false; }
 
+/* Physical runs obey the production zone boundaries even on a 64-bit host.
+ * Failure injection is applied once by the public allocation entry. */
+static uint32_t host_alloc_run_zone(int zone, uint32_t count, uint32_t alignment)
+{
+    if ((zone!=ZONE_DMA && zone!=ZONE_NORMAL) || !count || !alignment ||
+        (alignment&(alignment-1)) || alignment>PMM_NORMAL_START_PFN) return 0;
+    unsigned lo=zone==ZONE_DMA ? PMM_DMA_START_PFN : PMM_NORMAL_START_PFN;
+    unsigned hi=zone==ZONE_DMA ? PMM_NORMAL_START_PFN : HOST_PAGES;
+    if (hi>HOST_PAGES) hi=HOST_PAGES;
+    if (lo>=hi || count>hi-lo) return 0;
+    for (unsigned first=(lo+alignment-1)&~(alignment-1);first<=hi-count;first+=alignment) {
+        unsigned n=0; while (n<count && !allocated[first+n]) n++;
+        if (n!=count) continue;
+        for (n=0;n<count;n++) {
+            allocated[first+n]=true; pages_used++;
+            memset(P2V((first+n)*PAGE_SIZE),0xa5,PAGE_SIZE);
+        }
+        return first*PAGE_SIZE;
+    }
+    return 0;
+}
 uint32_t pmm_alloc(void)
 {
     if (fail_alloc()) return 0;
-    for (unsigned i = 1; i < HOST_PAGES; i++)
-        if (!allocated[i]) { allocated[i] = true; pages_used++; memset(P2V(i * PAGE_SIZE), 0xa5, PAGE_SIZE); return i * PAGE_SIZE; }
-    return 0;
+    uint32_t p=host_alloc_run_zone(ZONE_NORMAL,1,1);
+    return p ? p : host_alloc_run_zone(ZONE_DMA,1,1);
+}
+static __attribute__((unused)) uint32_t host_alloc_contig(uint32_t count)
+{
+    if (!count || fail_alloc()) return 0;
+    uint32_t p=host_alloc_run_zone(ZONE_NORMAL,count,1);
+    return p ? p : host_alloc_run_zone(ZONE_DMA,count,1);
 }
 void pmm_free(uint32_t p) { CHECK(p && !(p & (PAGE_SIZE - 1)) && p / PAGE_SIZE < HOST_PAGES && allocated[p / PAGE_SIZE]); allocated[p / PAGE_SIZE] = false; pages_used--; }
 void *kmalloc(size_t n) { if (fail_alloc()) return 0; void *p = malloc(n); if (p) heap_blocks++; return p; }
@@ -147,8 +173,8 @@ static uint32_t fake_desktop_pid;
 /* Renamed for syscalls_proc.c only: harnesses that include this fixture also
  * link the production supervisor.c/signal.c definitions. */
 uint32_t proc_test_desktop_pid(void) { return fake_desktop_pid; }
-uint32_t pmm_total_usable(void) { return HOST_PAGES - 1; }
-uint32_t pmm_free_count(void) { return HOST_PAGES - 1 - pages_used; }
+uint32_t pmm_total_usable(void) { return HOST_PAGES - PMM_DMA_START_PFN; }
+uint32_t pmm_free_count(void) { return pmm_total_usable() - pages_used; }
 void kheap_snapshot(struct kheap_ledger *out) { *out = (struct kheap_ledger){ .pages = 7, .in_use = 1234, .peak = 5678 }; }
 static struct { uint32_t pid, signo, sender; unsigned calls; } posted;
 void proc_test_signal_post(struct process *p, struct proc_thread *t, uint32_t signo, uint32_t sender)
@@ -755,7 +781,7 @@ static void test_enumeration(void)
     CHECK(list_records(p, buffer, CIUKI_PROC_LIST_MIN, &sys, rec) == 0);
     CHECK(sys.version == CIUKI_PROC_VERSION && sys.size == sizeof(sys) && sys.records == 0 && sys.processes == 9);
     CHECK(sys.tick_hz == 1000 && sys.total_ticks == 9000 && sys.idle_ticks == 4000 && !sys.disk_read_kib && !sys.disk_write_kib);
-    CHECK(sys.usable_pages == HOST_PAGES - 1 && sys.free_pages == HOST_PAGES - 1 - pages_used);
+    CHECK(sys.usable_pages == pmm_total_usable() && sys.free_pages == pmm_free_count());
     CHECK(sys.kheap_pages == 7 && sys.kheap_bytes == 1234 && sys.kheap_high_water == 5678);
     CHECK(get_word(p->memory, buffer + 64) == 0xccccccccu);           /* nothing beyond the system record */
     CHECK(list_records(p, buffer, 64 + 2 * 80 + 79, &sys, rec) == 2 && sys.processes == 9 && sys.records == 2);

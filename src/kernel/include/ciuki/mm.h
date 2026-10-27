@@ -7,8 +7,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <ciuki/ledger.h>
+#include <ciuki/memory_limits.h>
 
-#define PMM_MAX_PAGES   (768u * 256u)      /* direct map limit: 768 MiB */
 #define ZONE_LOW        0
 #define ZONE_DMA        1
 #define ZONE_NORMAL     2

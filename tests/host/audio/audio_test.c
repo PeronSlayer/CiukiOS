@@ -73,7 +73,8 @@ bool ktime_elapsed_us(uint64_t start, uint32_t us) { return ktime_cycles() - sta
 uint64_t deadline_after_ms(uint32_t ms) { return g_ticks + ms; }
 bool deadline_passed(uint64_t deadline) { return (int64_t)(g_ticks - deadline) >= 0; }
 gen_t gen_alloc(void) { static gen_t next; return ++next; }
-uint32_t pmm_alloc_zone(int zone) { CHECK(zone == ZONE_DMA); return pmm_alloc(); }
+uint32_t pmm_alloc_zone(int zone)
+{ CHECK(zone == ZONE_DMA); return fail_alloc() ? 0 : host_alloc_run_zone(zone,1,1); }
 void task_yield(void) { task_sleep_ms(0); }
 /* fx-5: the production order rule of kmutex_lock_until (sync.h
  * kmutex_order_conflict over the task's held mutexes) and its unlock-order
@@ -200,27 +201,11 @@ void pic_mask(unsigned irq)
 { CHECK(irq==5); if (!second_pic_masked) { second_pic_masked=true; second_pic_masks++; } }
 void pic_unmask(unsigned irq)
 { CHECK(irq==5 && second_isa_handler); if (second_pic_masked) { second_pic_masked=false; second_pic_unmasks++; } }
-uint32_t pmm_alloc_contig(uint32_t pages)
-{
-    if (fail_alloc()) return 0;
-    for (unsigned at=1;at+pages<=HOST_PAGES;at++) {
-        unsigned i; for (i=0;i<pages&&!allocated[at+i];i++);
-        if (i!=pages) continue;
-        for (i=0;i<pages;i++) { allocated[at+i]=true; pages_used++; }
-        return at*PAGE_SIZE;
-    }
-    return 0;
-}
+uint32_t pmm_alloc_contig(uint32_t pages) { return host_alloc_contig(pages); }
 uint32_t pmm_alloc_dma_run(uint32_t pages,uint32_t alignment)
 {
     if (fail_alloc()) return 0;
-    for (unsigned at=alignment;at+pages<=4096;at+=alignment) {
-        unsigned i; for (i=0;i<pages&&!allocated[at+i];i++);
-        if (i!=pages) continue;
-        for (i=0;i<pages;i++) { allocated[at+i]=true; pages_used++; }
-        return at*PAGE_SIZE;
-    }
-    return 0;
+    return host_alloc_run_zone(ZONE_DMA,pages,alignment);
 }
 #include "../../../src/kernel/audio/stream.c"
 #include "../../../src/kernel/audio/mixer.c"

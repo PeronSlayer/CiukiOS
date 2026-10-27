@@ -14,6 +14,28 @@ from scripts.win32 import fixtures, core_fixtures
 
 
 class KernelCoreTests(unittest.TestCase):
+    def test_unaligned_pe_header_is_readable(self):
+        from scripts.win32.census import PE, PEError
+        for path in sorted(self.corpus.glob('*.exe')):
+            data=bytearray(path.read_bytes())
+            try: original=PE(data)
+            except PEError: continue
+            offset=struct.unpack_from('<I',data,60)[0]
+            end=original.opt+struct.unpack_from('<H',data,offset+20)[0]+40*len(original.sections)
+            if offset%4 or end>=original.headers: continue
+            data[offset+1:end+1]=data[offset:end]
+            struct.pack_into('<I',data,60,offset+1)
+            parsed=PE(data)
+            self.assertIn('pe-offset-alignment',parsed.warnings)
+            self.assertEqual(parsed.entry,original.entry)
+            target=self.out/'unaligned.exe'; target.write_bytes(data)
+            result=subprocess.run([str(self.program),'--pe',str(target)],
+                                  capture_output=True,text=True,env=self.env,timeout=5)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual(result.stdout.strip(),'valid')
+            return
+        self.fail('no valid PE fixture has one spare header byte')
+
     @classmethod
     def setUpClass(cls):
         cls.out = ROOT/'build/host/win32/kernel'

@@ -83,6 +83,20 @@ def run_fixture(out,binary):
     return result.returncode,trace.read_text()
 
 class User32Tests(unittest.TestCase):
+    def test_rectangular_icon_parser(self):
+        out=ROOT/'build/host/win32/classaudit-icon'; out.mkdir(parents=True,exist_ok=True)
+        user32.icon_header(out)
+        binary=out/'icon'
+        subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror',
+                        '-DW32_HOST_MODEL','-ffunction-sections','-fdata-sections','-Wl,--gc-sections',
+                        '-fsanitize=address,undefined','-fno-sanitize-recover=all',
+                        '-I'+str(ROOT/'src/kernel/include'),'-I'+str(ROOT/'sdk/win32/include'),'-I'+str(out),
+                        str(HERE/'classaudit_icon.c'),str(ROOT/'sdk/win32/services/bytes.c'),
+                        '-o',str(binary)],check=True)
+        result=subprocess.run([str(binary)],capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn('PASS rectangular ICO',result.stdout)
+
     def test_gl_lease_failure(self):
         out=ROOT/'build/host/win32/user32-gl'
         code,output=run_fixture(out,build_fixture(out,gl=True))

@@ -32,6 +32,18 @@ if [[ ${1:-} == --bootlog ]]; then
     exit 0
 fi
 # Focused entries keep the filesystem runner lock and sanitizer policy.
+run_memory_model_test() {
+    clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+        -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread -Isrc/kernel/include -Isrc/kernel/fs \
+        tests/host/fs/test_host_memory.c src/kernel/fs/fs_port.c -o build/host/fs/test_host_memory
+    build/host/fs/test_host_memory
+    rm build/host/fs/test_host_memory
+}
+if [[ ${1:-} == --host-memory ]]; then
+    run_memory_model_test
+    exit 0
+fi
+run_memory_model_test
 run_startup_image_tests() {
     ((missing == 0)) || exit 1
     python3 tests/host/fs/fixtures.py

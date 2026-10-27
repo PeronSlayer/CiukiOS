@@ -95,14 +95,7 @@ void channel_release(struct desktop_description *d) { (void)d; }
 #ifndef FILES_TEST_OWN_PLATFORM
 uint32_t pmm_alloc_contig(uint32_t count)
 {
-    if (fail_alloc()) return 0;
-    for (unsigned i=1;i+count<=HOST_PAGES;i++) {
-        unsigned n=0; while (n<count && !allocated[i+n]) n++;
-        if (n!=count) continue;
-        for (n=0;n<count;n++) { allocated[i+n]=true; pages_used++; memset(P2V((i+n)*PAGE_SIZE),0xa5,PAGE_SIZE); }
-        return i*PAGE_SIZE;
-    }
-    return 0;
+    return host_alloc_contig(count);
 }
 unsigned pci_count(void) { return 0; }
 const struct pci_func *pci_get(unsigned i) { (void)i; return 0; }

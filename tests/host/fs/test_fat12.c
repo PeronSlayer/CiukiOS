@@ -108,7 +108,7 @@ static void corruption(void) {
         CHECK(media[0].writes==writes); fat12_stop(s);
     }
     fake_reset(&media[0]);
-    /* Header refusal, independently in BPB and in each reserved FAT copy. */
+    /* Impossible BPBs refuse; reserved FAT metadata allows safe reads. */
     for (unsigned i=0;i<5;i++) {
         uint8_t b[512]; OK(fake_raw_read(&media[0],0,b));
         uint32_t sec=0;
@@ -121,11 +121,20 @@ static void corruption(void) {
         }
         OK(fake_raw_write(&media[0],sec,b));
         s=calloc(1,sizeof(*s)); CHECK(s); OK(storage_setup(s,0));
-        CHECK(storage_add_removable(s,&media[0].dev)==-FS_EINVAL);
-        CHECK(!vfs_drive_present(&s->vfs,4) && !media[0].writes && !media[0].flushes);
+        int result=storage_add_removable(s,&media[0].dev);
+        if (i<3) {
+            CHECK(result==-FS_EINVAL && !vfs_drive_present(&s->vfs,4));
+        } else {
+            CHECK(!result && vfs_drive_present(&s->vfs,4));
+            struct fat_volume *v=&s->volumes[4].fat;
+            CHECK(v->readonly && (v->ro_reasons&FAT_RO_CORRUPT));
+            struct fat_entry readable; OK(fat_lookup(v,v->root,"SEED.BIN",&readable));
+            CHECK(readable.first==ent.first && fat_enable_write(v)==-FS_EROFS);
+        }
+        CHECK(!media[0].writes && !media[0].flushes);
         storage_destroy(s); free(s); fake_reset(&media[0]);
     }
-    printf("PASS FAT12 cycles/free/bad/reserved/out-of-range chains and BPB/media refusals\n");
+    printf("PASS FAT12 chain corruption, BPB/media refusals and readable reserved-FAT diagnostics\n");
 }
 static void readonly_case(bool dmf) {
     if (!dmf) media[0].dev.write=0;
