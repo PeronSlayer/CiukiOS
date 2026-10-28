@@ -244,7 +244,7 @@ def main() -> int:
                     [SRC / "drivers/video" / name for name in ("registry.c", "attempt.c", "swdib.c", "native.c", "batch.c",
                         "native_hw.c", "render3d.c", "render3d_scalar.c", "render3d_native.c", "render3d_transport.c", "intel2d/engine.c", "intel2d/driver.c", "unichrome/engine.c",
                         "unichrome/driver.c", "sis/engine.c", "sis/cursor.c", "sis/register.c",
-                        "vmwaresvga/engine.c", "vmwaresvga/driver.c", "vmwaresvga/io.c", "mach64/engine.c",
+                        "vmwaresvga/engine.c", "vmwaresvga/driver.c", "vmwaresvga/io.c", "vmwaresvga/vmwaresvga3d.c", "vmwaresvga/vmwaresvga3d_owner.c", "mach64/engine.c",
                         "mach64/driver.c", "rage128/driver.c", "rage128/engine.c", "cirrus/engine.c",
                         "cirrus/driver.c", "tdfx/driver.c", "tdfx/engine.c", "s3legacy/engine.c",
                         "s3legacy/driver.c", "s3legacy/platform.c", "s3trio64/engine.c", "s3virge/engine.c",

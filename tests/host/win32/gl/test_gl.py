@@ -18,10 +18,13 @@ class GLTests(unittest.TestCase):
  def setUpClass(cls):
   cls.build(sanitize=True)
  @classmethod
- def build(cls,sanitize,profile=True,gamma_hooks=True):
-  out=ROOT/'build/host/win32/gl';out.mkdir(parents=True,exist_ok=True);cls.out=out
+ def build(cls,sanitize,profile=True,gamma_hooks=True,family='savage',sanitizer='address,undefined'):
+  # Family = the fake 3D engine behind the same production GL/GDI/wire/service.
+  # vmwaresvga* select the SVGA3D host model (f7-31) and its semantics.
+  svga={'vmwaresvga':'VMWARE','vmwaresvga-vbox':'VBOX_GL'}.get(family)
+  out=ROOT/'build/host/win32/gl'/(family if svga else '');out.mkdir(parents=True,exist_ok=True);cls.out=out
   spec=importlib.util.spec_from_file_location('glbuild',ROOT/'sdk/libgl/build.py');gl=importlib.util.module_from_spec(spec);spec.loader.exec_module(gl)
-  lib=gl.host(sanitize=sanitize)
+  lib=gl.host(sanitize=sanitize and 'address' in sanitizer)
   units=[ROOT/'sdk/win32/gdi32'/n for n in gdi32.SOURCES if n not in ('compiler.c','compiler.S')]
   units += [ROOT/'sdk/win32/services/bytes.c',ROOT/'tests/host/win32/gdi32/support.c',HERE/'engine.c',HERE/'census.c',HERE/'amendment.c',HERE/'review.c',HERE/'amendment2.c',HERE/'transport.c',HERE/'fixture.c',HERE/'quake3.c',HERE/'raster.c',HERE/'raster_reference.c']
   units += list((ROOT/'sdk/win32/opengl32').glob('*.c'))+[ROOT/'sdk/libgl/software/renderer.c']
@@ -29,13 +32,17 @@ class GLTests(unittest.TestCase):
   (out/'savage3d_backend_fixture.inc').write_text(fixture_source.replace('int main(int argc,char **argv)','int frozen_3d_main(int argc,char **argv)'))
   fixture_source=(ROOT/'tests/host/savage2d_test.c').read_text()
   (out/'savage2d_fixture.inc').write_text(fixture_source.replace('\nint main(void)\n','\nint frozen_2d_main(void)\n'))
-  units += [HERE/'hardware.c',HERE/'kernel_engine.c',HERE/'kernel_replay.c']
-  units += [ROOT/'src/kernel/drivers/video'/n for n in ('render3d.c','render3d_scalar.c','render3d_native.c','render3d_transport.c','s3savage/savage3d.c')]
+  engine=ROOT/'tests/host/vmwaresvga3d_gl_engine.c' if svga else HERE/'kernel_engine.c'
+  units += [HERE/'hardware.c',engine,HERE/'kernel_replay.c']
+  backend=('vmwaresvga/vmwaresvga3d.c','vmwaresvga/engine.c') if svga else ('s3savage/savage3d.c',)
+  units += [ROOT/'src/kernel/drivers/video'/n for n in ('render3d.c','render3d_scalar.c','render3d_native.c','render3d_transport.c',*backend)]
+  if svga:units += [ROOT/'tests/host/vmwaresvga3d_model.c']
   units += [ROOT/'src/kernel/lib/fmt.c']
   cls.binary=out/(('engine' if sanitize else 'benchmark')+('' if gamma_hooks else '-no-gamma'))
   flags=['-std=c17','-D_GNU_SOURCE','-DW32_HOST_MODEL','-O2','-g','-ffp-contract=off','-Wall','-Wextra','-Werror','-Wno-unused-function','-fno-vectorize','-fno-slp-vectorize','-I'+str(ROOT/'sdk/win32/include'),'-I'+str(ROOT/'sdk/libgl/vendor/include')]
   flags+=['-I'+str(ROOT/'src/kernel/include'),'-I'+str(ROOT/'tests/host'),'-I'+str(out)]
-  if sanitize:flags+=['-fsanitize=address,undefined','-fno-sanitize-recover=all']
+  if svga:flags+=['-DSVGA_H1_HOST=SVGA_HOST_'+svga]
+  if sanitize:flags+=['-fsanitize='+sanitizer,'-fno-sanitize-recover=all']
   if profile:flags+=['-DSW_PROFILE']
   if not gamma_hooks:flags+=['-DGL_TEST_NO_GAMMA']
   fixture=out/('fixture-sanitize.o' if sanitize else 'fixture.o')

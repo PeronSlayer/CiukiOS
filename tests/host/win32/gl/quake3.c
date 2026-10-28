@@ -587,6 +587,7 @@ void gl_quake3_benchmark(unsigned iterations, int default_format) {
 /* Complete H1 frames through production GL/GDI/wire and fake Savage packets.
  * No game assets; both one-pass and two-pass lightmapped worlds. */
 void gl_quake3_savage(void) {
+  extern unsigned gl_kernel_h1_scenarios(void) __attribute__((weak));
   extern void gl_hardware_native(int),gl_kernel_setup(int),gl_kernel_teardown(void);
   extern void gl_kernel_mode(unsigned,unsigned),gl_savage_begin(void);
   extern unsigned gl_kernel_draws(void);
@@ -596,7 +597,8 @@ void gl_quake3_savage(void) {
   for (unsigned size=0;size<2;size++) {
     unsigned w=size ? 1024 : 640,h=size ? 768 : 480;
     gl_kernel_mode(w,h); gl_kernel_setup(2);
-    for (unsigned scenario=0;scenario<2;scenario++) {
+    unsigned scenarios=gl_kernel_h1_scenarios ? gl_kernel_h1_scenarios() : 2;
+    for (unsigned scenario=0;scenario<scenarios;scenario++) {
       unsigned *pixels=calloc(w*h,4); assert(pixels);
       struct w32_dib dib=test_dib(pixels,w,h,32,0,1);
       HDC dc=w32_gdi_surface_dc(&dib,(POINT){0},0,0); assert(dc);
@@ -617,7 +619,7 @@ void gl_quake3_savage(void) {
         memset(work,0,sizeof(work));
 #endif
         extern void gl_savage_scope(unsigned);
-        gl_savage_scope(scenario); gl_savage_begin(); frame(scenario); glFinish();
+        gl_savage_scope(scenario); gl_savage_begin(); frame(scenario==2 ? -1 : (int)scenario); glFinish();
 #ifdef SW_PROFILE
         gl_savage_end(w,h,f,gl_kernel_draws()-before,gl_kernel_fragments()-fragments,work[SW_TRIANGLE],work[SW_FRAGMENT]);
 #else

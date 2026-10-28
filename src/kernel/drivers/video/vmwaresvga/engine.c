@@ -114,6 +114,61 @@ static int submit(struct vmsvga_engine *s,unsigned words)
     W(s,SVGA_REG_SYNC,1);
     return wait_idle(s);
 }
+/* SVGA3D batches (f7-31). SVGA_CMD_FENCE semantics: Mesa 21.3.9
+ * svga_reg.h:1508-1525 ("copy the 'fence' value into SVGA_FIFO_FENCE");
+ * availability needs SVGA_FIFO_CAP_FENCE and a FIFO_MIN beyond the register. */
+static int wait_fence(struct vmsvga_engine *s,uint32_t fence,unsigned wait_us)
+{
+    uint64_t start=s->io.now(s->io.ctx);
+    unsigned polls=wait_us/POLL_US+1u;
+    for (unsigned i=0;i<polls;i++) {
+        if (!valid(s)) return fault(s,"resource_revoked");
+        uint32_t tail;
+        if (!ring(s,&tail)) return fault(s,"fifo_corrupt");
+        s->status=R(s,SVGA_REG_BUSY);
+        if (!s->status && tail==s->next) {
+            /* Drained ring: the batch's own fence must be the last one seen. */
+            if (FR(s,SVGA_FIFO_FENCE)!=fence) return fault(s,"fence_mismatch");
+            return finish(s);
+        }
+        if (s->io.now(s->io.ctx)-start>=wait_us) break;
+        if (i && !(i%(1000u/POLL_US)) && s->pause) {
+            int e=s->pause(s->pause_ctx);
+            if (e) { vmsvga_engine_quarantine(s,"wait_cancelled"); return e; }
+        }
+        if (s->io.delay(s->io.ctx,POLL_US)) break;
+    }
+    s->timeouts++; vmsvga_engine_quarantine(s,"fence_timeout"); return -ETIMEDOUT;
+}
+int vmsvga_engine_submit3d(struct vmsvga_engine *s,const uint32_t *words,unsigned count,
+                           uint32_t fence,unsigned wait_us)
+{
+    if (!s || !words || !count || !fence || !wait_us || wait_us>VMSVGA_WAIT3D_LIMIT_US) return -EINVAL;
+    if (!s->active || s->quarantined) return -EIO;
+    if (!(s->fifo_caps&SVGA_FIFO_CAP_FENCE) || s->min<=4u*SVGA_FIFO_FENCE) return -EOPNOTSUPP;
+    if (count>(s->fifo_size-s->min)/4u || (count+2u)*4u>=s->fifo_size-s->min) return -EOPNOTSUPP;
+    if (!valid(s)) { s->cpu_safe=false; return fault(s,"resource_revoked"); }
+    uint32_t tail;
+    if (!ring(s,&tail)) { s->cpu_safe=false; return fault(s,"fifo_corrupt"); }
+    if (!s->cpu_safe || tail!=s->next) { s->cpu_safe=false; return fault(s,"fifo_not_idle"); }
+    drain(s); /* CPU staging writes precede device DMA reads. */
+    s->cpu_safe=false; s->pending=true;
+    W(s,SVGA_REG_CONFIG_DONE,1);
+    if (R(s,SVGA_REG_CONFIG_DONE)!=1) return fault(s,"fifo_enable_failed");
+    uint32_t at=s->next;
+    for (unsigned i=0;i<count+2u;i++) {
+        uint32_t value=i<count ? words[i] : i==count ? SVGA_CMD_FENCE : fence;
+        s->io.fifo_write(s->io.ctx,at,value);
+        at+=4;
+        if (at==s->fifo_size) at=s->min;
+    }
+    drain(s);
+    s->next=at;
+    FW(s,SVGA_FIFO_NEXT_CMD,at);
+    drain(s); s->packets++;
+    W(s,SVGA_REG_SYNC,1);
+    return wait_fence(s,fence,wait_us);
+}
 static bool rect(struct vmsvga_engine *s,const struct fb_rect *r)
 {
     return r && r->x>=0 && r->y>=0 && r->width>=0 && r->height>=0 &&
@@ -244,6 +299,7 @@ int vmsvga_engine_init(struct vmsvga_engine *s,const struct vmsvga_io *io,
         R(s,SVGA_REG_RED_MASK)!=red || R(s,SVGA_REG_GREEN_MASK)!=green ||
         R(s,SVGA_REG_BLUE_MASK)!=blue) return -EOPNOTSUPP;
     s->caps=R(s,SVGA_REG_CAPABILITIES);
+    s->vram_size=R(s,SVGA_REG_VRAM_SIZE); /* read-only plan input for SVGA3D staging */
     if ((s->caps&(VMSVGA_CAP_FILL|SVGA_CAP_RECT_COPY))!=(VMSVGA_CAP_FILL|SVGA_CAP_RECT_COPY)) {
         s->reason="native_fill_unavailable"; return -EOPNOTSUPP;
     }
