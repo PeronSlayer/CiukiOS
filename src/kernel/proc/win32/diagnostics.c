@@ -116,9 +116,10 @@ void w32_diagnostic_record(struct proc_thread *t,const struct ciuki_w32_diagnost
     if(warning)s->warnings++;
     klog("[win32] %s check=%s module=%s pid=%u tid=%u",event,reason,module,t->process->pid,t->tid);
 }
-static bool diag_enqueue(const struct ciuki_w32_fault *f){
+/* The owner is passed, not looked up by pid: a refusal queued while the
+ * process is being spawned (w32_spawn) comes before proc_find publishes it. */
+static bool diag_enqueue(struct process *owner,const struct ciuki_w32_fault *f){
     if(w32_fault_count==16){klog("[win32] warning check=dialog-queue-full pid=%u",f->pid);return false;}
-    struct process *owner=proc_find(f->pid);
     const struct ciuki_credential *credential=security_credential(owner);
     if(!credential)return false;
     w32_fault_session[(w32_fault_head+w32_fault_count)%16]=credential->session_id;
@@ -130,7 +131,7 @@ void w32_refusal_queue(struct process *p,uint32_t reason,const char *module,uint
     if(s){if(s->refused&(1u<<reason))return;s->refused|=1u<<reason;}
     const char *reasons[]={"","msi","driver","runtime","missing-dll","missing-export","invalid-image","no-server","win16"};
     struct ciuki_w32_fault f={.kind=W32_REPORT_REFUSE,.pid=p->pid,.code=reason,.offset=error};
-    diag_name(f.exe,sizeof(f.exe),p->name);diag_name(f.module,sizeof(f.module),module);diag_enqueue(&f);
+    diag_name(f.exe,sizeof(f.exe),p->name);diag_name(f.module,sizeof(f.module),module);diag_enqueue(p,&f);
     klog("[win32] refuse %s pid=%u module=%s error=%u",reasons[reason],p->pid,f.module,error);
 }
 void w32_crash_capture(struct proc_thread *t,const struct ciuki_w32_context *c,uint32_t code,const char *module,uint32_t base){
@@ -147,7 +148,7 @@ void w32_crash_capture(struct proc_thread *t,const struct ciuki_w32_context *c,u
     w32_log("[win32] crash pid=%u tid=%u code=%08x module=%s+%08x eip=%08x r=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x s=%02x:%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x",
         f.pid,f.tid,f.code,f.module,f.offset,f.eip,regs[0],regs[1],regs[2],regs[3],regs[4],regs[5],regs[6],regs[7],regs[8],f.valid,
         f.stack[0],f.stack[1],f.stack[2],f.stack[3],f.stack[4],f.stack[5],f.stack[6],f.stack[7]);
-    s->dialog_queued=diag_enqueue(&f);
+    s->dialog_queued=diag_enqueue(t->process,&f);
 }
 /* G13 (ER-1, SY-8): a native program killed by a processor fault goes to the
  * same desktop mailbox as a Win32 crash, so the desktop shows "has performed
@@ -169,7 +170,7 @@ void native_fault_report(struct proc_thread *t,const struct trap_frame *tf,uint3
     diag_name(f.exe,sizeof(f.exe),p->name);
     for(unsigned i=0;i<8;i++)
         if(tf->user_esp<=UINT32_MAX-4*i-3&&ua_range(p->memory,tf->user_esp+4*i,4,PROT_READ)&&!ua_read(p->memory,&f.stack[i],tf->user_esp+4*i,4))f.valid|=1u<<i;
-    diag_enqueue(&f);
+    diag_enqueue(p,&f);
 }
 static bool diag_crash_closed(void *arg){struct process *p=arg;return p->state!=PROC_LIVE||!proc_find(supervisor_desktop_pid());}
 uint32_t w32_report_call(struct proc_thread *t,struct ciuki_w32_report_args *a){
