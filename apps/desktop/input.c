@@ -414,6 +414,7 @@ static void input(struct desktop *d, const struct ciuki_input_event *in)
         break;
     }
     case CIUKI_INPUT_RESYNC:
+        d->logon_query = 1;   /* sec-user-03: activation after the secure console; ask LOGON */
         if (desk_access_resync) desk_access_resync(d);
         desk_v3_pointer_release(d);
         /* The input stream was cut: keys are released below, and the screen may

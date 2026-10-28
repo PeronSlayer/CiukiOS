@@ -806,6 +806,15 @@ body with frame status=0. No failure can be interpreted as verified identity.
 | OWNER (3) | PREPARE=1, COMMIT=2, ABORT=3, STATUS=4, CHECKPOINT=5, COMPACT=6, RESERVE=7; exact batch/checkpoint codecs in section 3.5. |
 | LOGON (5) | AUTH_OUTCOME=1 (304 bytes, ACCOUNT only); LOCK_EVENT=2, POWER_EVENT=3 (32 bytes, LOGON_UI only); BEGIN_AUTH=4 (64 bytes, LOGON_UI only); SESSION_LOCK=5 (32 bytes, same-session DESKTOP only); SUBMIT_AUTH=6 (208 bytes), ENROLL_PLAN=7 (32+40*N bytes), both LOGON_UI only. No role can substitute another operation by changing a frame selector. |
 
+(sec-user-03 implementation note, 2026-10-28, for lead review; details in
+[sec-user03](../validation/sec-user03.md): LOGON adds two private operations,
+UI_STATE=8 (LOGON_UI only: the trusted screen to show, the ATTENTION relay and
+the security-menu choices bound to the current session/console) and
+SESSION_EVENT=9 (same-session DESKTOP only: the pending menu choice and the
+desktop's end-of-session notice). Neither authenticates, unlocks or creates a
+session; the kernel frame limit of service 5 is 9. SESSION_LOCK's progress
+status is -EPERM for a password-less owner: set-password guidance, no lock.)
+
 The 208-byte UI SUBMIT_AUTH body retains these offsets: version u32@0=1,
 flags u32@4=0, attempt_id u64@8, session_id u32@16 (0 for fresh logon/enrollment),
 console_generation u32@20, name_bytes u32@24, secret_bytes u32@28,

@@ -596,6 +596,12 @@ python3 -B -m unittest discover -s "$root/tests/host/security" -p test_system_ow
 # session drain/teardown and the real session console on the fd table.
 python3 -B -m unittest discover -s "$root/tests/host/security" -p test_secure_gate.py
 # --- sec-k07 block (end) ---
+# --- sec-user-03 block: H10, the production LOGON coordinator and the
+# account service on the k01/k07 kernel harness (ready autologon, Welcome,
+# lock/unlock, secure attention menu, Log Off/shutdown collection, Safe Mode
+# recovery account, service restarts) and the LOGON_UI model/view goldens. ---
+python3 -B -m unittest discover -s "$root/tests/host/security" -p test_logon.py
+# --- sec-user-03 block (end) ---
 
 # F2 production parser, mappings, wait queues, stack and lifecycle with fake
 # physical memory/scheduling; no guest execution or host runner lock.

@@ -627,6 +627,16 @@ struct desktop {
     int (*power_state)(void); /* query capabilities and irreversible progress */
     void (*power_prepare)(struct desktop *);
     void (*logoff)(struct desktop *); /* G32: called after G3 has closed the session */
+    /* --- sec-user-03 (begin): desktop of a session the trusted LOGON service
+     * launched (SESSION_LAUNCH labels present). No desktop-owned logon gate:
+     * Lock goes to LOGON (SESSION_LOCK), Log Off/Shut Down end the session
+     * after G3's query/veto and LOGON collects it; a secure-menu choice made
+     * on the Ctrl+Alt+Del screen is fetched (SESSION_EVENT) after the
+     * activation's RESYNC. session_lock: 0 locking, LGN_STATUS_NO_PASSWORD
+     * (set-password guidance), other -errno. */
+    int logon_session, logon_query;
+    int (*session_lock)(struct desktop *);
+    /* --- sec-user-03 (end) --- */
     int (*power_alive)(struct desktop *, uint32_t pid);
     /* T23 c42f556e: the live Win32 processes (w32srv's authenticated
      * clients), including those whose desktop connection ended or that have

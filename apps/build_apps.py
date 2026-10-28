@@ -45,6 +45,11 @@ def validate_payloads():
     registry = load("apps_registry", ROOT / "apps/registry/build_registry.py").validate_payloads()
     files[registry["image_path"]] = {"source": "build/apps/registry/registry", "sha256": registry["files"]["registry"], "elf": registry["elf"]}
     # end sec-k06
+    # sec-user-03: sealed LOGON and LOGON_UI service images.
+    logon = load("apps_logon", ROOT / "apps/logon/build_logon.py").validate_payloads()
+    for name, path in logon["image_paths"].items():
+        files[path] = {"source": "build/apps/logon/" + name, "sha256": logon["files"][name], "elf": logon["elf"][name]}
+    # end sec-user-03
     result = {"schema_version": 1, "sdk_manifest_sha256": hashlib.sha256((ROOT / "build/tools/ciuki-sdk/manifest.json").read_bytes()).hexdigest(),
               "applications": files, "newlib": sdk["newlib"], "guest_qualification": "not_run"}
     return result
@@ -66,6 +71,7 @@ def main():
     # sec-k06
     load("apps_registry_build", ROOT / "apps/registry/build_registry.py").build()
     # end sec-k06
+    load("apps_logon_build", ROOT / "apps/logon/build_logon.py").build()   # sec-user-03 (after the desktop: libdeskui)
     (ROOT / "build/apps/manifest.json").write_text(json.dumps(validate_payloads(), indent=2, sort_keys=True) + "\n")
 
 if __name__ == "__main__":

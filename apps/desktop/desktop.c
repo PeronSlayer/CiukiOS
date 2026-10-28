@@ -18,6 +18,8 @@
 #include "wallpaper_io.h"
 #include "diag_record.h"
 #include "profile.h" /* sec-user-05: session profile root and temp */
+#include "logon_session.h"   /* sec-user-03 */
+#include "../logon/logon_proto.h"
 #ifdef __i386__
 #include <ciuki/devices.h>
 #endif
@@ -2048,6 +2050,14 @@ __attribute__((weak)) void desk_w32_poll(struct desktop *d) { (void)d; }
 __attribute__((weak)) void desk_w32_child_exited(struct desktop *d,uint32_t pid,int status)
 { (void)d; (void)pid; (void)status; }
 __attribute__((weak)) int desk_w32_shutdown(void) { return 1; }
+/* sec-user-03: host models of this file have no LOGON session binding. */
+__attribute__((weak)) int desk_logon_detect(int *display, int *input) { (void)display; (void)input; return 0; }
+__attribute__((weak)) void desk_logon_profile(struct desktop *d) { users_profile(&d->sh.profile,"",0,0); }
+__attribute__((weak)) void desk_logon_ready(struct desktop *d) { (void)d; }
+__attribute__((weak)) int desk_logon_ready_sent(void) { return 1; }
+__attribute__((weak)) void desk_logon_poll(struct desktop *d) { (void)d; }
+__attribute__((weak)) int desk_logon_lock(struct desktop *d) { (void)d; return -ENOSYS; }
+__attribute__((weak)) void desk_logon_end(struct desktop *d, unsigned notice) { (void)d; (void)notice; exit(0); }
 /* Review P1-1 (T23 c42f556e): call 73 runs on its own thread. The orderly
  * REBOOT/OFF may wait inside the kernel (a storage preflight bounded to 5 s
  * per stage, the device quiesce); the desktop loop keeps presenting the
@@ -2084,8 +2094,12 @@ static void *power_call_worker(void *arg)
     pthread_mutex_unlock(&power_call_lock);
     return NULL;
 }
+static void logon_end(struct desktop *d, unsigned notice);
 static int power_request(struct desktop *d, int action)
 {
+    /* sec-user-03: a LOGON session ends here after G3; LOGON collects the
+     * session and then makes the orderly power call itself. */
+    if (d->logon_session && (action==1 || action==2)) logon_end(d,action==1 ? LGN_NOTICE_RESTART : LGN_NOTICE_SHUTDOWN);
     pthread_mutex_lock(&power_call_lock);
     if (power_call_done) {
         int r=power_call_result; errno=power_call_errno; power_call_done=0;
@@ -2161,8 +2175,19 @@ static void power_prepare(struct desktop *d)
     }
     power_files_pending=1;
 }
+/* sec-user-03: settings are saved by G3 (want_power) or the power state;
+ * wait (bounded) for the writer, then end the LOGON session. */
+static void logon_end(struct desktop *d, unsigned notice)
+{
+    uint64_t until=monotonic()+UINT64_C(3000000000);
+    while (settings_writer_started && cfg_writer_busy(&settings_writer) && monotonic()<until) {
+        struct timespec pause={.tv_sec=0,.tv_nsec=10000000L}; nanosleep(&pause,NULL);
+    }
+    desk_logon_end(d,notice);
+}
 static void user_logoff(struct desktop *d)
 {
+    if (d->logon_session) logon_end(d,LGN_NOTICE_LOGOFF);   /* sec-user-03: G3 has closed the programs */
     user_initial=0; user_switch_saving=user_default_loading=user_default_ready=0;
     desk_logon_open(d,1);
     d->sh.user_request.operation=USERS_READ; d->sh.user_want=1;
@@ -3069,8 +3094,9 @@ static void shell_setup(struct desktop *d, int gate)
     scan_programs(d);
     /* Runtime gate scenarios keep the built-in defaults and never touch desktop.cfg. */
     d->sh.gate=gate;
-    users_profile(&d->sh.profile,"",0,0);
-    if (!gate) session_folders(&d->sh.profile);
+    if (d->logon_session) desk_logon_profile(d);   /* sec-user-03: the session's committed profile */
+    else users_profile(&d->sh.profile,"",0,0);
+    if (!gate) session_folders(&d->sh.profile);   /* sec-user-05: XP per-user and common shell folders */
     d->logoff=user_logoff;
     if (!gate) settings_load(d);
     if (!gate) startup_stage("settings_read");
@@ -3098,13 +3124,13 @@ static void shell_setup(struct desktop *d, int gate)
     }
     if (!gate) { startup_stage("fonts_icons_ready"); mixer_read(d); system_read(d); wallpaper_load(d); wallpaper_preload(d); wallpaper_worker_prepare(d); }
     else desk_shell_wallpaper_update(d);
-    if (!gate) {
+    if (!gate && !d->logon_session) {
         /* Keep the ordinary first desktop frame when logon is disabled;
          * hold input only until the worker has read the optional policy. */
         user_initial=1; d->sh.user_gate=-1; d->sh.user_previous_focus=d->focus;
         d->sh.user_request.operation=USERS_READ; d->sh.user_want=1;
         desktop_watchdog_start(d);
-    }
+    } else if (!gate) desktop_watchdog_start(d);   /* sec-user-03: LOGON authenticated this session */
     /* fx-8: ordinary desktops spawn on the launcher worker. */
     if (!gate) { int error=launcher_start(d); if (error) desk_shell_notify_error(d,"Program launcher unavailable",error); }
 }
@@ -3159,6 +3185,15 @@ int main(int argc, char **argv)
                    !strcmp(argv[a]+14,"unified")) startup_game_kernel=argv[a]+14;
         else return 2;
     }
+    /* sec-user-03: SESSION_LAUNCH names the installed grant descriptors. */
+    int logon_session=0;
+    if (!test && !fullscreen_test && !launch && !channel_count) {
+        int ld=display, li=input;
+        if (desk_logon_detect(&ld,&li)) { logon_session=1; display=ld; input=li; }
+    }
+#ifdef __i386__
+    if (logon_session && (devices.boot_flags&CIUKI_BOOT_CMD_ONLY)) terminal_shell=1;
+#endif
     if (display < 3 || input < 3 || display == input || cycles < 1 ||
         channel_count+demo_count+(victim != NULL) > DESK_CLIENTS) return 2;
     for (int i=0; i<channel_count; i++) if (channels[i]==display || channels[i]==input) return 2;
@@ -3175,6 +3210,7 @@ int main(int argc, char **argv)
     if (!d || !portrait) { free(d); free(portrait); return gate_setup_error(gate,GATE_SETUP_MEMORY,ENOMEM); }
     const struct desk_ops ops = {ciuki_channel_send,ciuki_surface_info,ciuki_surface_map,munmap,close,ciuki_present};
     desk_init(d,&ops,info.width,info.height); d->display=display; d->input=input;
+    d->logon_session=logon_session; d->session_lock=logon_session ? desk_logon_lock : NULL;   /* sec-user-03 */
     d->drop_snapshot=drop_snapshot;
     du_clip_bind(desk_clip_local,d);
     d->now_ns=monotonic(); /* startup notifications use the same clock as service turns */
@@ -3467,6 +3503,10 @@ int main(int argc, char **argv)
             fprintf(stderr,"desktop: present failed (errno=%d)\n",errno); display_reported=1;
         }
         if (!gate && render_ready && !redraw && d->presents) startup_stage("first_frame_presented");
+        /* sec-user-03: profile loaded and the first frame composed (still
+         * concealed): the session's readiness; then LOGON's menu choices. */
+        if (d->logon_session && render_ready && !desk_logon_ready_sent()) { startup_stage("session_ready"); desk_logon_ready(d); }
+        if (d->logon_session) desk_logon_poll(d);
         desktop_stage(STALL_REPORT); startup_flush();
         if (!gate && d->shell && d->presents && !startup_sound) { startup_sound=1; desk_sound(d,SOUND_STARTUP); desk_sound(d,SOUND_LOGON); }
         if (!gate && d->shell && d->presents && !accel_noticed && (accel_noticed=accel_notice(d))) d->accel_lost=0;

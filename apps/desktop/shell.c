@@ -602,7 +602,7 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         char logoff_label[44];
         snprintf(logoff_label,sizeof(logoff_label),"Log Off%s%.31s...",d->sh.profile.name[0] ? " " : "",d->sh.profile.name);
         item(m,logoff_label,"system-log-out",SH_ACT_LOGOFF,0,0);
-        if (d->sh.profile.name[0] && (d->sh.users.flags&USERS_LOCK))
+        if (d->sh.profile.name[0] && ((d->sh.users.flags&USERS_LOCK) || d->logon_session)) /* sec-user-03 */
             item(m, "Lock", "system-lock-screen", SH_ACT_LOCK, 0, 0);
         item(m, "Shut Down...", "system-shutdown", SH_ACT_SHUTDOWN, 0, 0);
         break;

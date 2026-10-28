@@ -75,7 +75,7 @@ def inputs():
     files = [p for directory in (ROOT / "apps/desktop", ROOT / "apps/demo", ROOT / "apps/gfxdemo", ROOT / "apps/dosbox", ROOT / "apps/libdeskui",
                                  ROOT / "apps/files", ROOT / "apps/tasks", ROOT / "apps/ciuknote", ROOT / "apps/control",
                                  ROOT / "apps/ciukide", ROOT / "apps/wordpad", ROOT / "apps/regedit", ROOT / "apps/hwreport", ROOT / "apps/systools", ROOT / "apps/accessories", ROOT / "apps/paint",
-                                 ROOT / "apps/music", ROOT / "apps/terminal", ROOT / "apps/printers", ROOT / "apps/libprint", ROOT / "apps/games", ROOT / "apps/serial", ROOT / "apps/sysrecovery", ROOT / "third_party/minimp3", ROOT / "third_party/stb", ROOT / "assets/fonts/native")
+                                 ROOT / "apps/music", ROOT / "apps/terminal", ROOT / "apps/printers", ROOT / "apps/libprint", ROOT / "apps/games", ROOT / "apps/serial", ROOT / "apps/sysrecovery", ROOT / "apps/logon", ROOT / "third_party/minimp3", ROOT / "third_party/stb", ROOT / "assets/fonts/native")
              for p in directory.rglob("*") if p.is_file() and "__pycache__" not in p.parts]
     files.extend(ROOT / name for name in ("scripts/build_sounds.py", "assets/sounds/LICENSE.txt",
                  "assets/sounds/CREDITS.TXT", "assets/sounds/kenney-interface/UPSTREAM.json",
@@ -181,7 +181,9 @@ def build():
     start = time.monotonic()
     sources = {"shell-launch": ["win32_launcher.c", "win32_launch.c", "protocol.c"],
                "desktop": ["clipboard.c", "v3_fixture.c", "w32_fixture_gate.c", "installer_fixture.c", "installer_registry.c", "installer_title.c", "win32_presenter.c", "win32_crash.c", "win32_syscall.c", "win32_native.c", "win32_registry.c", "win32_service.c", "win32_restart.c", "win32_launch.c", "desktop.c", "client.c", "gl_present.c", "protocol.c", "input.c", "compositor.c", "theme.c", "assets.c", *SHELL,
-                           "../libdeskui/icons.c", "../libdeskui/icon_map.c", "recovery.c", "recovery_view.c", "../sysrecovery/regcheck.c", "../sysrecovery/scanreport.c"],
+                           "../libdeskui/icons.c", "../libdeskui/icon_map.c", "recovery.c", "recovery_view.c", "../sysrecovery/regcheck.c", "../sysrecovery/scanreport.c",
+                           # sec-user-03: LOGON session binding and the private LOGON client
+                           "logon_session.c", "../logon/logon_proto.c", "../logon/client_ciuki.c"],
                "demo": ["../demo/demo.c", "protocol.c", "compositor.c", "theme.c"],
                "dosbox": ["../dosbox/dosbox.c", "../dosbox/clipboard.c", "protocol.c"]}
     evidence, commands = {}, {}

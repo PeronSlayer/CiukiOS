@@ -740,8 +740,10 @@ static int channel_security_frame(struct channel *c, unsigned side, const struct
         h[9]>192 || m->length!=64+h[9] || h[13]>8192 ||
         h[14]>h[13] || h[9]>h[13]-h[14] || h[15] ||
         (!h[9] && h[13]) || (int32_t)h[12]>0 || (!side && h[12]) || (h[12] && h[13])) return -EINVAL;
-    /* sec-own: OWNER (service 3) adds the query operations 8..14. */
-    static const uint32_t max_op[]={0,7,9,14,0xffffffffu,7,0xffffffffu};
+    /* sec-own: OWNER (service 3) adds the query operations 8..14.
+     * sec-user-03: LOGON (service 5) adds private UI_STATE=8 (LOGON_UI) and
+     * SESSION_EVENT=9 (same-session DESKTOP); LOGON authorizes each route. */
+    static const uint32_t max_op[]={0,7,9,14,0xffffffffu,9,0xffffffffu};
     if (!h[4] || h[4]>max_op[c->service]) return -EOPNOTSUPP;
     bool first=!c->exchange;
     if (first) {
