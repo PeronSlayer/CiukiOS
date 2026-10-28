@@ -10,6 +10,7 @@
 #include "firstboot.h"
 
 #define ACCT_SERVER_OPEN_RETRY_MS 30000u
+#define ACCT_SERVER_ENTROPY_RETRY_MS 100u
 struct acct_tree_io; /* sec-own: production.h */
 struct acct_server {
     struct acct_kernel_adapter kernel;
