@@ -67,6 +67,9 @@ struct lui {
     struct lgn_source source;
     int source_valid, first_admin, enroll_record;
     char labels[LGN_SOURCE_MAX][32];
+    /* sec-user-06: the last painted view the serial record named. */
+    uint32_t recorded[5];
+    int recorded_valid;
 };
 
 void lui_init(struct lui *, const struct lui_host *, const uint32_t *portrait, int layout);

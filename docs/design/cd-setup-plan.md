@@ -11,6 +11,11 @@ Nothing here is implemented yet. Section 15 lists the open points the lead must
 close before f9-01 and f9-02 launch (two of them come from loader facts found
 during the rework, O1 and O2).
 
+> **Superseded in part by user security** (sec-user-06 reconciliation, 2026-10-28). Setup creates a custom administrator with a
+> recovery password and no CiukiUser; ready images carry the blank CiukiUser seed, consumed once at
+> the first boot ([Setup and ready-made image provisioning](user-security-contract.md#5-setup-and-ready-made-image-provisioning)).
+> Host evidence H08; the runtime case su-02-setup waits for a CD installation path in the runner.
+
 Review findings are referenced as F1…F15; lead decisions as D1…D14.
 
 ## 1. Goal and scope

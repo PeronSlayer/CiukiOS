@@ -53,7 +53,8 @@ ACCESSORIES = {
 }
 # G30 system tools (apps/systools): Start > Programs > Accessories > System Tools.
 SYSTOOLS = ("resmeter", "schedtask", "sysinfo", "sysmon")
-PROGRAMS = ("desktop", "shell-launch", "demo", "gfxdemo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", "hwreport", "printers", "printspool", *SYSTOOLS, *ACCESSORIES)
+# sec-user-06: the runtime security probe of the acceptance and security suites (console only, no toolkit).
+PROGRAMS = ("desktop", "shell-launch", "demo", "gfxdemo", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", "hwreport", "printers", "printspool", *SYSTOOLS, "sectest", *ACCESSORIES)
 # Desktop shell (shell.c and friends): shell, startup, users, files, scheduler and resource meter.
 SHELL = ["access.c", "access_desktop.c", "users.c", "users_io.c", "../../src/kernel/lib/sha256.c", "startup.c", "firstboot.c", "firstboot_native.c", "firstboot_games.c", "sounds.c", "sound_storage.c", "master_storage.c", "sound_runtime.c", "shell.c", "autoplay.c", "autoplay_content.c", "autoplay_registry.c", "settings.c", "power_policy.c", "settings_io.c", "wallpaper.c", "wallpaper_io.c", "image.c", "keymap.c", "folder.c", "schedsvc.c", "resources.c", "../systools/sched.c", "../systools/service.c", "../systools/resmeter.c", "../files/model.c", "../files/transfer.c", "../files/clipboard.c", "../files/vfs.c"]
 
@@ -215,6 +216,7 @@ def build():
     sources["sysmon"] = ["../systools/sysmon_main.c", "../systools/sysmon_view.c", *systools, "../tasks/model.c"]
     sources["resmeter"] = ["../systools/resmeter_main.c", "../systools/resmeter_view.c", *systools]
     sources["schedtask"] = ["../systools/schedtask_main.c", "../systools/schedtask_ui.c", *systools]
+    sources["sectest"] = ["../systools/sectest_main.c", "../systools/sectest_model.c"]   # sec-user-06
     # sec-user-04: the Control Panel links accounts_client.c and the LOGON CSC1 client (User Accounts).
     sources["control"] = ["../files/model.c", "users.c", "users_io.c", "startup.c", "win32_syscall.c", "win32_native.c", "win32_registry.c", "win32_service.c", "win32_restart.c", "win32_launch.c", "autoplay_registry.c", "../control/main.c", "../control/decoder.c", "../control/programs.c", "../control/app.c", "../control/accounts_client.c", "../logon/logon_proto.c", "../logon/client_ciuki.c", "../systools/devctl.c", "../systools/profiles.c", "../control/driver_pack_ui.c", "../control/driver_pack.c", "../control/driver_pack_io.c", "../../src/kernel/ndis/package.c", "../../src/kernel/lib/sha256.c", "../control/display.c", "../control/fonts.c", "sounds.c", "sound_storage.c", "settings.c", "power_policy.c", "settings_io.c", "wallpaper.c", "image.c"]
     sources["regedit"] = ["../regedit/main.c", "../regedit/app.c", "../accessories/acc.c"]
@@ -233,7 +235,7 @@ def build():
                           *(str(ROOT / "apps/desktop" / p) for p in files),
                           *([str(library)] if name in ("desktop", "dosbox", "files", "tasks", "ciuknote", "ciukide", "control", "terminal", "regedit", "gfxdemo", "hwreport", "printers", "printspool", *SYSTOOLS, *ACCESSORIES) else []),
                           *( ["-I", str(ROOT / "build/apps/lua/lua-5.4.8/src"), str(ROOT / "build/apps/lua/liblua.a")] if name == "terminal" else []),
-                          *( ["-ldisk"] if name == "terminal" else []), *( ["-lm"] if name in ACCESSORIES else []), *( ["-lgl"] if name == "gfxdemo" else []), *( ["-lfont"] if name in ("control", "charmap", "wordpad") else []), *( ["-lreg"] if name in ("regedit", "desktop", "control", "terminal", "msconfig") else []), "-o", str(OUT / name)]
+                          *( ["-ldisk"] if name == "terminal" else []), *( ["-lm"] if name in ACCESSORIES else []), *( ["-lgl"] if name == "gfxdemo" else []), *( ["-lfont"] if name in ("control", "charmap", "wordpad") else []), *( ["-lreg"] if name in ("regedit", "desktop", "control", "terminal", "msconfig", "sectest") else []), "-o", str(OUT / name)]
         subprocess.run(commands[name], check=True, cwd=ROOT, env=env)
         evidence[name] = lua.checker().inspect(OUT / name)
     # Toolkit/compositor remain integer-only; TinyGL's scene uses the SDK x87 ABI.

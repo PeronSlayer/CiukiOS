@@ -2019,6 +2019,37 @@ Round-1 additions to the same SU cases (not permission to run them here):
 | SU-07/13 | Alice's interrupted personal restart queue stays suspended through Bob's logon; machine journal replay needs broker authorization. Demotion/deletion, unowned v1/.DEFAULT migration and uncertain program launch never execute as Bob or SYSTEM. Existing native applets use production libreg adapter with direct machine backing access denied. |
 | SU-02/13 | Bootstrap has three account/owner bindings; migration has all sixteen legacy profiles plus built-ins. Interrupt each PREPARE/COMMIT/DB/seed/SID state barrier; STATUS/key/digest/watermarks agree across adapters. Abort consumes generations, missing/contradictory consumed state never creates blank CiukiUser. |
 
+#### sec-user-06 wiring (2026-10-28, host evidence only)
+
+The proposed suite now exists as `tests/suites/sec-users.json` (acceptance kind, profile
+qemu-t23, menu boots driven like a user; the fw_cfg question is answered in
+[test architecture](test-architecture.md#security-runtime-cases-amendment-sec-user-06-2026-10-28)),
+run with `scripts/test/acceptance.sh --suite sec-users`. The owner's account trials are acc-t23
+items 10-18 (`acc-accounts`). H14 (`tests/host/security/test_runner_contract.py`) parses every case
+and matches every awaited pattern to the record its source writes; no QEMU result exists yet.
+
+| Case | Covers | Runtime state |
+| --- | --- | --- |
+| su-01-ready | SU-01, R1 SU-01/04/12 reboot, launch credentials | wired |
+| su-02-setup | SU-02, R1 SU-02/13 seed | pending: no CD installation path in the runner (H08) |
+| su-03-refusal | SU-03, A2-1 generic refusal | wired |
+| su-04-roles | SU-04..08, R1 SU-05/08 installer store and DLL, A1-9 machine libreg | wired; 256 roots, second volume, USB, HKCU/GetUserName and installer runs as a Standard user stay host (H02, H07, H11, H08) |
+| su-09-lock | SU-09, A2-2 | wired; DOS/Win32 full-screen dismissal stays host (H09) |
+| su-10-resume | SU-10 | pending: no qualified virtual standby provider |
+| su-11-logoff | SU-11 | wired; Win32/DOS teardown stays host (H09/H10) |
+| su-12-recovery | SU-12, M-Q1/M-Q2 | wired; Setup CD repair stays host (H08) |
+| su-13-crash | SU-13 (power cut during a creation) | wired; service kill, stale v1 lock and per-stage cuts stay host (H02/H03/H08) |
+| su-14-shutdown | SU-14 | wired |
+| su-r2-gate | A2-2/A2-3 lock, attention, epochs | wired; challenge relays and service restarts stay host (H01/H09/H10) |
+| su-r2-status | A2-4/A2-6 | pending (H03) |
+| su-r2-profile | A2-8 | pending: G32 upgrade fixture (H11) |
+| su-r1-dos | A1-7 | pending: DOS-side record probe (H06) |
+| su-r1-restart | A1-8 restart journals, role restarts | pending: no runtime fault selector (H07/H09) |
+| su-r1-console | A1-10 console backing | pending: Win32 console fixture (H11) |
+
+The planned `--profile qemu-desktop-1998` runs are not wired: acceptance cases fix their profile and
+the directive asks for qemu-t23.
+
 ### 10.2 Documentation and inventory migration
 
 Keep G32's recorded implementation history and mark its profile-only security

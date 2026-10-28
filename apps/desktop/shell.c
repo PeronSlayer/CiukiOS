@@ -370,6 +370,8 @@ static const struct program_info programs[] = {
     {"ciukide", "CiukIDE", "applications-development", "developer", NULL},
     {"tcc", "Tiny C Compiler", "text-x-script", "developer", NULL},
     {"libc_smoke", "libc smoke test", "package-x-generic", "developer", NULL},
+    /* U6-4: keep the probe launchable by Run while hiding menu entries. */
+    {"sectest", "Security Test", "emblem-readonly", "hidden", NULL},
 };
 static const struct program_info *program_find(const char *name)
 {
@@ -624,6 +626,7 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         for (size_t k = 0; k < sizeof(programs) / sizeof(programs[0]); k++) {
             int at = program_index(d, programs[k].name);
             if (at < 0 && !(programs[k].target && d->v3_launch)) continue;
+            if (!strcmp(programs[k].category, "hidden")) continue;
             if (!strcmp(programs[k].category, "system-tools")) { system_tools = 1; continue; }
             if (!strcmp(programs[k].category, "accessories")) { accessories = 1; continue; }
             if (!strcmp(programs[k].category, "games")) { games = 1; continue; }

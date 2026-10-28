@@ -458,7 +458,7 @@
     ]
    },
    "timeout": 5400,
-   "title": "Quake III Arena demo: the VISE installer from the desktop folder to its exit (files, shortcuts, never not responding), then the game from the Start menu to its first presented frame and quit",
+   "title": "Quake III Arena demo: the VISE installer from the protected installer store to its exit (files, shortcuts, never not responding), then the game from the Start menu to its first presented frame and quit",
    "steps": [
     {
      "template": "boot",
@@ -479,14 +479,14 @@
       "stable": 1.5,
       "timeout": 30
      },
-     "note": "Win+R opens Run; the installer is the bundled desktop folder copy (scripts/q3a_demo.py)"
+     "note": "Win+R opens Run; the installer is the protected installer store copy that the desktop folder's Install shortcut targets (scripts/q3a_demo.py, sec-user-02 A1-5; the desktop folder holds shortcuts only)"
     },
     {
      "name": "run-installer",
      "check": "install",
      "actions": [
       {
-       "text": "\"C:\\Documents\\Desktop\\Quake III Arena Demo\\Q3ADemo.exe\""
+       "text": "\"C:\\Programs\\Installers\\Quake III Arena Demo\\Q3ADemo.exe\""
       },
       {
        "keys": "ret"
@@ -11381,6 +11381,1174 @@
      ]
     }
    ]
+  },
+  {
+   "kind": "acceptance",
+   "probe": "acceptance",
+   "profile": "qemu-t23",
+   "expected": {
+    "evidence_kind": "acceptance"
+   },
+   "id": "acc-accounts",
+   "item": 10,
+   "timeout": 6000,
+   "title": "User accounts: the first boot logs on to the CiukiUser desktop automatically; User Accounts creates a Standard user; Log Off, then log on as that user, who cannot install into C:\\Programs but can into C:\\GAME and cannot write HKLM, read another profile or save machine settings; Guest; the password-protected screen saver locks; Ctrl+Alt+Del reaches the trusted screen; Restart and Shut Down from the logon screen",
+   "resets": 1,
+   "items": {
+    "10": [
+     "autologon",
+     "secrets"
+    ],
+    "11": [
+     "create-user"
+    ],
+    "12": [
+     "logoff-logon"
+    ],
+    "13": [
+     "sectest-standard",
+     "install"
+    ],
+    "14": [
+     "sectest-standard",
+     "refusals"
+    ],
+    "15": [
+     "guest"
+    ],
+    "16": [
+     "saver-lock"
+    ],
+    "17": [
+     "secure-attention"
+    ],
+    "18": [
+     "logon-power"
+    ]
+   },
+   "steps": [
+    {
+     "template": "boot",
+     "prefix": "b1",
+     "check": "autologon",
+     "settle": 15
+    },
+    {
+     "name": "b1-session-startup",
+     "check": "autologon",
+     "since": "boot",
+     "timeout": 30,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] session 1 running uid=\\d+ start_ms=\\d+$",
+      "^(?:\\[console\\]|\\[user \\d+\\]) startup: snapshot ready entries=\\d+$"
+     ]
+    },
+    {
+     "name": "b1-win32-run",
+     "check": "autologon",
+     "actions": [
+      {
+       "keys": "meta_l+r"
+      }
+     ],
+     "screen_settle": {
+      "changed": true,
+      "stable": 1.5,
+      "timeout": 30
+     }
+    },
+    {
+     "name": "b1-win32-command",
+     "check": "autologon",
+     "actions": [
+      {
+       "text": "C:\\WINDOWS\\CDPLAYER.EXE"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "b1-win32-start",
+     "check": "autologon",
+     "timeout": 60,
+     "wait": "^\\[win32\\] start pid=(?P<boot_win32>\\d+) exe=\\S*[Cc][Dd][Pp][Ll][Aa][Yy][Ee][Rr]\\.[Ee][Xx][Ee] "
+    },
+    {
+     "name": "b1-win32-window",
+     "check": "autologon",
+     "timeout": 60,
+     "wait": "^\\[user \\d+\\] \\[desktop\\] focus pid=<<boot_win32>> window=\\d+ titled=1 internal=0 app=\\S+$",
+     "actions": [
+      {
+       "keys": "alt+f4"
+      }
+     ]
+    },
+    {
+     "name": "b1-win32-closed",
+     "check": "autologon",
+     "timeout": 30,
+     "wait": "^\\[user \\d+\\] \\[desktop\\] focus pid=0 window=0 titled=0 internal=-1 app=desktop$"
+    },
+    {
+     "name": "cp1-run",
+     "check": "create-user",
+     "actions": [
+      {
+       "keys": "meta_l+r"
+      }
+     ],
+     "screen_settle": {
+      "changed": true,
+      "stable": 1.5,
+      "timeout": 30
+     },
+     "note": "Win+R opens Run"
+    },
+    {
+     "name": "cp1-type",
+     "check": "create-user",
+     "actions": [
+      {
+       "text": "control --panel=users"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "cp1-window",
+     "check": "create-user",
+     "timeout": 120,
+     "settle": 8,
+     "wait": [
+      "^\\[user \\d+\\] \\[desktop\\] launch name=control pid=(?P<cp1>[1-9]\\d*) error=0 ",
+      "^\\[user \\d+\\] \\[desktop\\] focus pid=<<cp1>> window=\\d+ titled=\\d internal=0 app=control$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[desktop\\] launch name=control pid=0 "
+     ]
+    },
+    {
+     "name": "cp1-pw",
+     "check": "create-user",
+     "actions": [
+      {
+       "keys": [
+        "tab",
+        "tab",
+        "tab",
+        "tab",
+        "tab"
+       ],
+       "pause": 0.4
+      },
+      {
+       "keys": "ret",
+       "pause": 2.5
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "text": "Ciuki-pass-2026"
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "text": "Ciuki-pass-2026"
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "User Accounts: Change the password (current, new, confirm)"
+    },
+    {
+     "name": "cp1-pw-done",
+     "check": "create-user",
+     "timeout": 120,
+     "wait": "^\\[user \\d+\\] \\[accounts\\] manage op=password caller=1000 target=1000 type=admin result=0$",
+     "fail": "^\\[user \\d+\\] \\[accounts\\] manage op=password caller=\\d+ target=\\d+ type=\\w+ result=-\\d+$"
+    },
+    {
+     "name": "newbob",
+     "check": "create-user",
+     "settle": 3,
+     "actions": [
+      {
+       "keys": [
+        "tab",
+        "tab",
+        "tab"
+       ],
+       "pause": 0.4
+      },
+      {
+       "keys": "ret",
+       "pause": 2.5
+      },
+      {
+       "text": "Bob"
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "text": "Bob-pass-2026"
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "text": "Bob-pass-2026"
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "User Accounts: Create a new account Bob (standard user)"
+    },
+    {
+     "name": "newbob-done",
+     "check": "create-user",
+     "timeout": 120,
+     "wait": "^\\[user \\d+\\] \\[accounts\\] manage op=create caller=1000 target=(?P<newbob_uid>\\d+) type=standard result=0$",
+     "fail": "^\\[user \\d+\\] \\[accounts\\] manage op=create caller=\\d+ target=\\d+ type=\\w+ result=-\\d+$"
+    },
+    {
+     "name": "cp1-close",
+     "check": "create-user",
+     "settle": 1,
+     "actions": [
+      {
+       "keys": "alt+f4",
+       "pause": 1.5
+      }
+     ],
+     "note": "Alt+F4 closes the Control Panel"
+    },
+    {
+     "name": "lo1",
+     "check": "logoff-logon",
+     "settle": 2,
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "esc",
+        "ctrl+esc"
+       ],
+       "pause": 1.0
+      },
+      {
+       "keys": "l",
+       "pause": 0.8
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "Start > Log Off"
+    },
+    {
+     "name": "lo1-done",
+     "check": "logoff-logon",
+     "timeout": 240,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] session (?P<lo1_session>\\d+) ending reason=1$",
+      "^\\[user \\d+\\] \\[logon\\] session <<lo1_session>> ended reason=1$",
+      "^\\[user \\d+\\] \\[logon\\] screen welcome$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[logon\\] automatic logon requested$"
+     ]
+    },
+    {
+     "template": "logon",
+     "prefix": "bob",
+     "check": "logoff-logon",
+     "user": "Bob",
+     "password": "Bob-pass-2026",
+     "settle": 8
+    },
+    {
+     "name": "stbob-run",
+     "check": "sectest-standard",
+     "actions": [
+      {
+       "keys": "meta_l+r"
+      }
+     ],
+     "screen_settle": {
+      "changed": true,
+      "stable": 1.5,
+      "timeout": 30
+     },
+     "note": "Win+R opens Run"
+    },
+    {
+     "name": "stbob-type",
+     "check": "sectest-standard",
+     "actions": [
+      {
+       "text": "sectest --expect=standard --keep"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "stbob-done",
+     "check": "sectest-standard",
+     "timeout": 240,
+     "wait": [
+      "^\\[user \\d+\\] \\[desktop\\] launch name=sectest pid=(?P<stbob_pid>[1-9]\\d*) error=0 ",
+      "^\\[console\\] sectest begin version=1 uid=<<newbob_uid>> gid=\\d+ session=\\d+ groups=545 role=standard expect=standard profile=\\S+ result=0 verdict=pass$",
+      "^\\[console\\] sectest end role=standard checks=\\d+ passed=\\d+ failed=0 skipped=\\d+$"
+     ],
+     "fail": [
+      "^\\[console\\] sectest usage",
+      "^\\[console\\] sectest begin .* verdict=fail$",
+      "^\\[console\\] sectest check=\\S+ .* verdict=fail",
+      "^\\[user \\d+\\] \\[desktop\\] launch name=sectest pid=0 "
+     ],
+     "note": "sectest --expect=standard --keep: one record per check (apps/systools/sectest_model.c)"
+    },
+    {
+     "name": "saver-run",
+     "check": "saver-lock",
+     "actions": [
+      {
+       "keys": "meta_l+r"
+      }
+     ],
+     "screen_settle": {
+      "changed": true,
+      "stable": 1.5,
+      "timeout": 30
+     },
+     "note": "Win+R opens Run"
+    },
+    {
+     "name": "saver-type",
+     "check": "saver-lock",
+     "actions": [
+      {
+       "text": "sectest saver"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "saver-start",
+     "check": "saver-lock",
+     "timeout": 120,
+     "settle": 3,
+     "wait": [
+      "^\\[console\\] sectest saver result=0$",
+      "^\\[user \\d+\\] \\[desktop\\] saver start kind=\\d+ source=command$"
+     ],
+     "actions": [
+      {
+       "keys": "shift"
+      }
+     ],
+     "note": "a key dismisses the saver"
+    },
+    {
+     "name": "saver-locked",
+     "check": "saver-lock",
+     "timeout": 120,
+     "settle": 2,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] session <<bob_session>> locked by the screen saver$",
+      "^\\[user \\d+\\] \\[logon-ui\\] view mode=locked view=password items=\\d+ accounts=\\d+ status=\\w+$"
+     ],
+     "actions": [
+      {
+       "text": "Wrong-pass-0000"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "saver-refused",
+     "check": "saver-lock",
+     "timeout": 60,
+     "settle": 2,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] authentication refused action=3 status=-13$",
+      "^\\[user \\d+\\] \\[logon-ui\\] view mode=locked view=password items=\\d+ accounts=\\d+ status=incorrect$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[logon\\] session <<bob_session>> unlocked$"
+     ],
+     "actions": [
+      {
+       "text": "Bob-pass-2026"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "saver-unlocked",
+     "check": "saver-lock",
+     "timeout": 120,
+     "wait": [
+      "^\\[security\\] console leave session=<<bob_session>>$",
+      "^\\[user \\d+\\] \\[logon\\] session <<bob_session>> unlocked$"
+     ]
+    },
+    {
+     "name": "cad",
+     "check": "secure-attention",
+     "settle": 2,
+     "actions": [
+      {
+       "keys": "ctrl+alt+delete"
+      }
+     ],
+     "note": "Ctrl+Alt+Del"
+    },
+    {
+     "name": "cad-menu",
+     "check": "secure-attention",
+     "timeout": 60,
+     "settle": 1,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] screen security$",
+      "^\\[user \\d+\\] \\[logon-ui\\] view mode=security view=menu items=5 accounts=\\d+ status=\\w+$"
+     ],
+     "actions": [
+      {
+       "keys": "esc"
+      }
+     ],
+     "note": "Esc: Cancel"
+    },
+    {
+     "name": "cad-return",
+     "check": "secure-attention",
+     "timeout": 60,
+     "wait": [
+      "^\\[security\\] console leave session=<<bob_session>>$",
+      "^\\[user \\d+\\] \\[logon\\] screen hidden$"
+     ]
+    },
+    {
+     "name": "lo2",
+     "check": "guest",
+     "settle": 2,
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "esc",
+        "ctrl+esc"
+       ],
+       "pause": 1.0
+      },
+      {
+       "keys": "l",
+       "pause": 0.8
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "Start > Log Off"
+    },
+    {
+     "name": "lo2-done",
+     "check": "guest",
+     "timeout": 240,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] session (?P<lo2_session>\\d+) ending reason=1$",
+      "^\\[user \\d+\\] \\[logon\\] session <<lo2_session>> ended reason=1$",
+      "^\\[user \\d+\\] \\[logon\\] screen welcome$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[logon\\] automatic logon requested$"
+     ]
+    },
+    {
+     "template": "logon",
+     "prefix": "ciuki",
+     "check": "guest",
+     "user": "CiukiUser",
+     "password": "Ciuki-pass-2026",
+     "settle": 8
+    },
+    {
+     "name": "cp2-run",
+     "check": "guest",
+     "actions": [
+      {
+       "keys": "meta_l+r"
+      }
+     ],
+     "screen_settle": {
+      "changed": true,
+      "stable": 1.5,
+      "timeout": 30
+     },
+     "note": "Win+R opens Run"
+    },
+    {
+     "name": "cp2-type",
+     "check": "guest",
+     "actions": [
+      {
+       "text": "control --panel=users"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "cp2-window",
+     "check": "guest",
+     "timeout": 120,
+     "settle": 8,
+     "wait": [
+      "^\\[user \\d+\\] \\[desktop\\] launch name=control pid=(?P<cp2>[1-9]\\d*) error=0 ",
+      "^\\[user \\d+\\] \\[desktop\\] focus pid=<<cp2>> window=\\d+ titled=\\d internal=0 app=control$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[desktop\\] launch name=control pid=0 "
+     ]
+    },
+    {
+     "name": "guest-select",
+     "check": "guest",
+     "settle": 3,
+     "actions": [
+      {
+       "keys": [
+        "tab",
+        "tab"
+       ],
+       "pause": 0.4
+      },
+      {
+       "keys": [
+        "down"
+       ],
+       "pause": 2.5
+      }
+     ],
+     "note": "the list cursor starts at item 0 (CiukiAdministrator); Down selects Guest"
+    },
+    {
+     "name": "guest-pw",
+     "check": "guest",
+     "settle": 2,
+     "actions": [
+      {
+       "keys": [
+        "tab",
+        "tab",
+        "tab",
+        "tab"
+       ],
+       "pause": 0.4
+      },
+      {
+       "keys": "ret",
+       "pause": 2.5
+      },
+      {
+       "text": "Guest-pass-2026"
+      },
+      {
+       "keys": "tab",
+       "pause": 0.4
+      },
+      {
+       "text": "Guest-pass-2026"
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "User Accounts: Reset the password"
+    },
+    {
+     "name": "guest-pw-done",
+     "check": "guest",
+     "timeout": 120,
+     "wait": "^\\[user \\d+\\] \\[accounts\\] manage op=password caller=1000 target=501 type=guest result=0$",
+     "fail": "^\\[user \\d+\\] \\[accounts\\] manage op=password caller=\\d+ target=\\d+ type=\\w+ result=-\\d+$"
+    },
+    {
+     "name": "guest-on",
+     "check": "guest",
+     "settle": 3,
+     "actions": [
+      {
+       "keys": [
+        "tab",
+        "tab",
+        "tab",
+        "tab",
+        "tab",
+        "tab"
+       ],
+       "pause": 0.4
+      },
+      {
+       "keys": "ret",
+       "pause": 2.5
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "User Accounts: Turn on the account"
+    },
+    {
+     "name": "guest-on-done",
+     "check": "guest",
+     "timeout": 120,
+     "wait": "^\\[user \\d+\\] \\[accounts\\] manage op=enable caller=1000 target=501 type=guest result=0$",
+     "fail": "^\\[user \\d+\\] \\[accounts\\] manage op=enable caller=\\d+ target=\\d+ type=\\w+ result=-\\d+$"
+    },
+    {
+     "name": "cp2-close",
+     "check": "guest",
+     "settle": 1,
+     "actions": [
+      {
+       "keys": "alt+f4",
+       "pause": 1.5
+      }
+     ],
+     "note": "Alt+F4 closes the Control Panel"
+    },
+    {
+     "name": "lo3",
+     "check": "guest",
+     "settle": 2,
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "esc",
+        "ctrl+esc"
+       ],
+       "pause": 1.0
+      },
+      {
+       "keys": "l",
+       "pause": 0.8
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "Start > Log Off"
+    },
+    {
+     "name": "lo3-done",
+     "check": "guest",
+     "timeout": 240,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] session (?P<lo3_session>\\d+) ending reason=1$",
+      "^\\[user \\d+\\] \\[logon\\] session <<lo3_session>> ended reason=1$",
+      "^\\[user \\d+\\] \\[logon\\] screen welcome$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[logon\\] automatic logon requested$"
+     ]
+    },
+    {
+     "template": "logon",
+     "prefix": "guest",
+     "check": "guest",
+     "user": "Guest",
+     "password": "Guest-pass-2026",
+     "settle": 8
+    },
+    {
+     "name": "stguest-run",
+     "check": "guest",
+     "actions": [
+      {
+       "keys": "meta_l+r"
+      }
+     ],
+     "screen_settle": {
+      "changed": true,
+      "stable": 1.5,
+      "timeout": 30
+     },
+     "note": "Win+R opens Run"
+    },
+    {
+     "name": "stguest-type",
+     "check": "guest",
+     "actions": [
+      {
+       "text": "sectest --expect=guest"
+      },
+      {
+       "keys": "ret"
+      }
+     ]
+    },
+    {
+     "name": "stguest-done",
+     "check": "guest",
+     "timeout": 240,
+     "wait": [
+      "^\\[user \\d+\\] \\[desktop\\] launch name=sectest pid=(?P<stguest_pid>[1-9]\\d*) error=0 ",
+      "^\\[console\\] sectest begin version=1 uid=501 gid=\\d+ session=\\d+ groups=546 role=guest expect=guest profile=\\S+ result=0 verdict=pass$",
+      "^\\[console\\] sectest end role=guest checks=\\d+ passed=\\d+ failed=0 skipped=\\d+$"
+     ],
+     "fail": [
+      "^\\[console\\] sectest usage",
+      "^\\[console\\] sectest begin .* verdict=fail$",
+      "^\\[console\\] sectest check=\\S+ .* verdict=fail",
+      "^\\[user \\d+\\] \\[desktop\\] launch name=sectest pid=0 "
+     ],
+     "note": "sectest --expect=guest: one record per check (apps/systools/sectest_model.c)"
+    },
+    {
+     "name": "lo4",
+     "check": "guest",
+     "settle": 2,
+     "actions": [
+      {
+       "keys": [
+        "esc",
+        "esc",
+        "ctrl+esc"
+       ],
+       "pause": 1.0
+      },
+      {
+       "keys": "l",
+       "pause": 0.8
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "Start > Log Off"
+    },
+    {
+     "name": "lo4-done",
+     "check": "guest",
+     "timeout": 240,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] session (?P<lo4_session>\\d+) ending reason=1$",
+      "^\\[user \\d+\\] \\[logon\\] session <<lo4_session>> ended reason=1$",
+      "^\\[user \\d+\\] \\[logon\\] screen welcome$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[logon\\] automatic logon requested$"
+     ]
+    },
+    {
+     "name": "wprestart",
+     "check": "logon-power",
+     "arm": "reset",
+     "settle": 1,
+     "wait": "^\\[user \\d+\\] \\[logon-ui\\] view mode=welcome view=list items=\\d+ accounts=[1-9]\\d* status=\\w+$",
+     "actions": [
+      {
+       "keys": "up",
+       "pause": 0.6
+      },
+      {
+       "keys": "ret",
+       "pause": 1.0
+      }
+     ],
+     "note": "Welcome: Turn Off Computer"
+    },
+    {
+     "name": "wprestart-confirm",
+     "check": "logon-power",
+     "settle": 0.5,
+     "timeout": 60,
+     "wait": "^\\[user \\d+\\] \\[logon-ui\\] view mode=welcome view=confirm-power items=3 ",
+     "actions": [
+      {
+       "keys": "down",
+       "pause": 0.5
+      },
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "Restart"
+    },
+    {
+     "name": "wprestart-power",
+     "check": "logon-power",
+     "timeout": 240,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] restart requested at the logon screen$",
+      "^\\[power\\] reboot requested by pid \\d+ attempt=\\d+ progress=\\d+ storage=\\w+$",
+      "^\\[storage\\] completion drive=C kind=durable result=0 ",
+      "^\\[power\\] stage=reset fallback=8042-triple-fault$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[logon\\] power request refused: ",
+      "^\\[storage\\] shutdown (?:busy|refused) "
+     ]
+    },
+    {
+     "name": "wprestart-reset",
+     "check": "logon-power",
+     "wait_event": "RESET",
+     "timeout": 120
+    },
+    {
+     "name": "b2-loader",
+     "check": "logon-power",
+     "wait": "^SELECT_READY$",
+     "timeout": 900,
+     "actions": [
+      {
+       "keys": "n"
+      }
+     ],
+     "note": "loader menu: N, Normal"
+    },
+    {
+     "name": "b2-kernel",
+     "check": "logon-power",
+     "timeout": 600,
+     "wait": [
+      "^L:SELECT_SOURCE=menu$",
+      "^Ciuki VMM F0 build (?P<b2_build>[!-~]+) - CiukiOS$"
+     ],
+     "fail": [
+      "^L:SAFE=1$",
+      "^L:STARTUP="
+     ]
+    },
+    {
+     "name": "b2-welcome",
+     "check": "logon-power",
+     "timeout": 900,
+     "wait": [
+      "^\\[supervisor\\] bootstrap: trusted logon pid=\\d+$",
+      "^\\[user \\d+\\] \\[logon\\] screen welcome$"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[logon\\] authenticated uid=",
+      "^\\[user \\d+\\] \\[logon\\] automatic logon requested$"
+     ]
+    },
+    {
+     "name": "wpoff",
+     "check": "logon-power",
+     "arm": "shutdown",
+     "settle": 1,
+     "wait": "^\\[user \\d+\\] \\[logon-ui\\] view mode=welcome view=list items=\\d+ accounts=[1-9]\\d* status=\\w+$",
+     "actions": [
+      {
+       "keys": "up",
+       "pause": 0.6
+      },
+      {
+       "keys": "ret",
+       "pause": 1.0
+      }
+     ],
+     "note": "Welcome: Turn Off Computer"
+    },
+    {
+     "name": "wpoff-confirm",
+     "check": "logon-power",
+     "settle": 0.5,
+     "timeout": 60,
+     "wait": "^\\[user \\d+\\] \\[logon-ui\\] view mode=welcome view=confirm-power items=3 ",
+     "actions": [
+      {
+       "keys": "ret"
+      }
+     ],
+     "note": "Shut Down"
+    },
+    {
+     "name": "wpoff-power",
+     "check": "logon-power",
+     "timeout": 240,
+     "wait": [
+      "^\\[user \\d+\\] \\[logon\\] shutdown requested at the logon screen$",
+      "^\\[power\\] power off requested by pid \\d+ attempt=\\d+ progress=\\d+ storage=\\w+$",
+      "^\\[storage\\] completion drive=C kind=durable result=0 ",
+      "^\\[power\\] stage=(?:(?:acpi|apm)-off state=quiescent$|acpi-s5-off )"
+     ],
+     "fail": [
+      "^\\[user \\d+\\] \\[logon\\] power request refused: ",
+      "^\\[storage\\] shutdown (?:busy|refused) ",
+      "^\\[power\\] no qualified soft-off provider"
+     ]
+    },
+    {
+     "name": "wpoff-off",
+     "check": "logon-power",
+     "wait_event": "SHUTDOWN",
+     "timeout": 120
+    }
+   ],
+   "assertions": [
+    {
+     "name": "autologon-requested",
+     "check": "autologon",
+     "from": "b1-loader",
+     "to": "b1-display",
+     "min": 1,
+     "pattern": "^\\[user \\d+\\] \\[logon\\] automatic logon requested$"
+    },
+    {
+     "name": "autologon-without-welcome",
+     "check": "autologon",
+     "from": "b1-loader",
+     "to": "b1-display",
+     "max": 0,
+     "pattern": "^\\[user \\d+\\] \\[logon\\] screen welcome$"
+    },
+    {
+     "name": "ciukiuser-desktop",
+     "check": "autologon",
+     "from": "b1-loader",
+     "to": "b1-display",
+     "min": 1,
+     "pattern": "^\\[security\\] session \\d+ desktop pid=\\d+ pgid=\\d+ uid=1000 gid=545 groups=544,545$"
+    },
+    {
+     "name": "ciukiuser-w32srv",
+     "check": "autologon",
+     "from": "b1-loader",
+     "to": "b1-display",
+     "min": 1,
+     "pattern": "^\\[security\\] session \\d+ w32srv pid=\\d+ pgid=\\d+ uid=1000 gid=545 groups=544,545$"
+    },
+    {
+     "name": "no-autologon-after-logoff",
+     "check": "logoff-logon",
+     "from": "lo1",
+     "to": "bob-display",
+     "max": 0,
+     "pattern": "^\\[user \\d+\\] \\[logon\\] automatic logon requested$"
+    },
+    {
+     "name": "bob-desktop",
+     "check": "logoff-logon",
+     "from": "bob-auth",
+     "to": "bob-display",
+     "min": 1,
+     "pattern": "^\\[security\\] session \\d+ desktop pid=\\d+ pgid=\\d+ uid=<<newbob_uid>> gid=545 groups=545$"
+    },
+    {
+     "name": "bob-programs-refused",
+     "check": "install",
+     "from": "stbob-run",
+     "to": "stbob-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=programs expect=deny result=-(?:1|13|30) verdict=pass$"
+    },
+    {
+     "name": "bob-game-folder",
+     "check": "install",
+     "from": "stbob-run",
+     "to": "stbob-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=root-folder expect=allow result=0 verdict=pass$"
+    },
+    {
+     "name": "bob-hklm-refused",
+     "check": "refusals",
+     "from": "stbob-run",
+     "to": "stbob-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=machine-registry expect=deny result=-(?:1|13|30) verdict=pass$"
+    },
+    {
+     "name": "bob-other-profile-refused",
+     "check": "refusals",
+     "from": "stbob-run",
+     "to": "stbob-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=other-profile expect=deny result=-(?:1|13|30) verdict=pass$"
+    },
+    {
+     "name": "bob-machine-setting-refused",
+     "check": "refusals",
+     "from": "stbob-run",
+     "to": "stbob-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=machine-setting expect=deny result=-(?:1|13|30) verdict=pass$"
+    },
+    {
+     "name": "saver-gate-entered",
+     "check": "saver-lock",
+     "from": "saver-start",
+     "to": "saver-unlocked",
+     "min": 1,
+     "pattern": "^\\[security\\] console enter session=<<bob_session>> reason=saver authentication=1$"
+    },
+    {
+     "name": "saver-locked-before-desktop",
+     "check": "saver-lock",
+     "from": "saver-start",
+     "to": "saver-unlocked",
+     "min": 1,
+     "pattern": "^\\[user \\d+\\] \\[desktop\\] saver wake protect=1 lock=0$"
+    },
+    {
+     "name": "one-unlock",
+     "check": "saver-lock",
+     "from": "saver-locked",
+     "to": "saver-unlocked",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[security\\] console leave session=<<bob_session>>$"
+    },
+    {
+     "name": "kernel-secure-attention",
+     "check": "secure-attention",
+     "from": "cad",
+     "to": "cad-return",
+     "min": 1,
+     "pattern": "^\\[security\\] secure attention source=keyboard result=-?\\d+$"
+    },
+    {
+     "name": "guest-desktop",
+     "check": "guest",
+     "from": "guest-auth",
+     "to": "guest-display",
+     "min": 1,
+     "pattern": "^\\[security\\] session \\d+ desktop pid=\\d+ pgid=\\d+ uid=501 gid=546 groups=546$"
+    },
+    {
+     "name": "guest-root-refused",
+     "check": "guest",
+     "from": "stguest-run",
+     "to": "stguest-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=root-folder expect=deny result=-(?:1|13|30) verdict=pass$"
+    },
+    {
+     "name": "guest-programs-refused",
+     "check": "guest",
+     "from": "stguest-run",
+     "to": "stguest-done",
+     "min": 1,
+     "max": 1,
+     "pattern": "^\\[console\\] sectest check=programs expect=deny result=-(?:1|13|30) verdict=pass$"
+    },
+    {
+     "name": "no-autologon-after-password",
+     "check": "logon-power",
+     "from": "b2-loader",
+     "to": "wpoff",
+     "max": 0,
+     "pattern": "^\\[user \\d+\\] \\[logon\\] (?:automatic logon requested|authenticated uid=)"
+    },
+    {
+     "name": "no-secret-on-serial",
+     "check": "secrets",
+     "from": "start",
+     "to": "end",
+     "max": 0,
+     "pattern": "^.*(?:Ciuki-pass-2026|Bob-pass-2026|Wrong-pass-0000|Guest-pass-2026)",
+     "note": "contract 4.3: no typed password (right or wrong) appears in a serial record"
+    },
+    {
+     "name": "boot-logon-session",
+     "check": "autologon",
+     "from": "b1-loader",
+     "to": "b1-session-startup",
+     "min": 1,
+     "pattern": "^\\[user \\d+\\] \\[logon\\] session <<b1_session>> running uid=\\d+ start_ms=\\d+$"
+    },
+    {
+     "name": "boot-startup-snapshot",
+     "check": "autologon",
+     "from": "b1-loader",
+     "to": "b1-session-startup",
+     "min": 1,
+     "pattern": "^(?:\\[console\\]|\\[user \\d+\\]) startup: snapshot ready entries=\\d+$"
+    },
+    {
+     "name": "boot-first-win32",
+     "check": "autologon",
+     "from": "b1-win32-command",
+     "to": "b1-win32-start",
+     "min": 1,
+     "pattern": "^\\[win32\\] start pid=<<boot_win32>> exe=\\S*[Cc][Dd][Pp][Ll][Aa][Yy][Ee][Rr]\\.[Ee][Xx][Ee] "
+    }
+   ],
+   "figures": [
+    {
+     "name": "logon-records",
+     "check": "records",
+     "reducer": "lines",
+     "page": false,
+     "pattern": "^\\[user \\d+\\] \\[logon\\] "
+    },
+    {
+     "name": "security-records",
+     "check": "records",
+     "reducer": "lines",
+     "page": false,
+     "pattern": "^\\[security\\] "
+    },
+    {
+     "name": "account-records",
+     "check": "records",
+     "reducer": "lines",
+     "pattern": "^\\[user \\d+\\] \\[accounts\\] manage "
+    },
+    {
+     "name": "sectest-records",
+     "check": "records",
+     "reducer": "lines",
+     "page": false,
+     "pattern": "^\\[console\\] sectest "
+    },
+    {
+     "name": "gate-latency",
+     "check": "records",
+     "reducer": "lines",
+     "pattern": "^\\[security\\] console (?:concealed|restored) "
+    }
+   ],
+   "note": "sec-user-06 (owner trial list, security items): LOGON, ACCOUNT, kernel launch/console and sectest records (docs/design/test-architecture.md, security acceptance). The ready image CiukiUser receives its password first (A2-7). User Accounts is driven by its Tab order after each page build (focus on the Control Panel button)."
   }
  ]
 }

@@ -48,6 +48,9 @@ enum { INPUT_ATTENTION = 13 };
 bool input_secure_trusted(void);
 void input_secure_domain(bool trusted, uint32_t attention);
 void input_secure_stats(uint64_t *discarded, uint64_t *attentions);
+/* sec-user-06: the T boot's security.lock_latency only (drivers/i8042.c);
+ * -EPERM outside a self-test boot, -ENOENT before the LOGON role. */
+int input_selftest_attention(void);
 struct input_event;
 bool input_read_domain(struct input_event *out, bool trusted);
 /* --- sec-k07 (end) --- */

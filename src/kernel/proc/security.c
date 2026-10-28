@@ -10,6 +10,7 @@
 #pragma weak desktop_close
 #include <ciuki/desktop.h>
 extern struct ciuki_boot_info g_boot __attribute__((weak));
+#pragma weak klog /* sec-user-06 records; host harnesses link no log sink */
 
 extern int security_owner_verify(const struct ciuki_security_profile *) __attribute__((weak));
 extern void channel_fd_closed(struct process *,struct proc_object *) __attribute__((weak));
@@ -647,12 +648,25 @@ static int console_enter_locked(struct process *logon, uint32_t id, const struct
     *out=*c;
     return 0;
 }
+/* sec-user-06: one record per completed trusted-gate transition, also in
+ * quiet boots: an entry that issued a fresh restoration cookie (retries
+ * that only drained a fence, and idempotent re-entries, write none) and a
+ * leave that activated the session. Reasons are the frozen
+ * CIUKI_SECURITY_SECURE_* values; no secret or name. */
+static const char *console_reason(uint32_t r)
+{ return r==1 ? "lock" : r==2 ? "saver" : r==3 ? "resume" : r==4 ? "attention" : "other"; }
 static int console_enter(struct process *logon, uint32_t id, const struct ciuki_security_console *in,
                          struct ciuki_security_console *out, bool physical)
 {
     uint32_t flags=irq_save();
+    uint64_t cookie=cookie_high_water;
     int err=console_enter_locked(logon,id,in,out,physical);
-    irq_restore(flags); return err;
+    bool fresh=!err && cookie_high_water!=cookie;
+    uint32_t required=fresh ? out->authentication_required : 0;
+    irq_restore(flags);
+    if (fresh && klog) klog("[security] console enter session=%u reason=%s authentication=%u%s",id,console_reason(in->reason),
+                    required,physical ? " physical=1" : "");
+    return err;
 }
 static bool launch_pair_ready(struct security_session *s)
 { return s->launches[0].state>=2 && s->launches[0].state<=3 && s->launches[1].state>=2 && s->launches[1].state<=3; }
@@ -716,7 +730,9 @@ static int console_leave(struct process *p, uint32_t id, const struct ciuki_secu
 {
     uint32_t flags=irq_save();
     int err=console_leave_locked(p,id,in,out);
-    irq_restore(flags); return err;
+    irq_restore(flags);
+    if (!err && klog) klog("[security] console leave session=%u",id);   /* sec-user-06 */
+    return err;
 }
 static void launch_fds_clear(struct ciuki_security_launch *l)
 {
@@ -786,6 +802,28 @@ void security_launch_preparation_done(uint32_t id)
     if (!s || !s->constructing) return;
     s->constructing=false; s->refs--;
     if (!s->refs && s->state==CIUKI_SECURITY_SESSION_DEAD) memset(s,0,sizeof(*s));
+}
+/* sec-user-06: one serial record per published session program, also in
+ * quiet boots. On LOGON images PID 1 no longer spawns the desktop, so this
+ * is the runner's desktop milestone (scripts/test/run.py, acceptance.py),
+ * and it carries the credential the program runs with (contract 10.1
+ * SU-01: uid, groups, never SYSTEM). Ids only; no name or secret. */
+static void launch_record(const struct security_session *s, unsigned which, const struct process *child)
+{
+    if (!klog) return;
+    const struct ciuki_credential *c=security_credential(child);
+    char groups[8*11+2]; unsigned used=0;
+    for (unsigned i=0;c && i<c->group_count && i<8;i++) {
+        char digits[10]; unsigned n=0; uint32_t v=c->groups[i];
+        do { digits[n++]=(char)('0'+v%10); v/=10; } while (v && n<sizeof(digits));
+        if (i) groups[used++]=',';
+        while (n) groups[used++]=digits[--n];
+    }
+    if (!used) groups[used++]='-';
+    groups[used]=0;
+    klog("[security] session %u %s pid=%u pgid=%u uid=%u gid=%u groups=%s",s->credential.session_id,
+         which ? "w32srv" : "desktop",child->pid,child->pgid,c ? c->uid : CIUKI_UID_INVALID,
+         c ? c->primary_gid : CIUKI_GID_INVALID,groups);
 }
 static int session_launch(struct process *parent, const struct ciuki_security_launch *in,
                           struct ciuki_security_launch *out, bool poll)
@@ -874,6 +912,7 @@ static int session_launch(struct process *parent, const struct ciuki_security_la
     *l=next;
     s->deadlines[which]=g_ticks+CIUKI_SECURITY_LAUNCH_TIMEOUT_MS;
     proc_publish(child,CIUKI_SPAWN_NEW_GROUP);
+    launch_record(s,which,child);   /* sec-user-06 */
     *out=*l;
     return 0;
 }

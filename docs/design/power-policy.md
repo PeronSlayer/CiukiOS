@@ -8,6 +8,13 @@
   mechanism (`screen-saver.md` in its branch); this document owns the timers
   that decide *when* the monitor, the disks and the system power down.
 
+> **Superseded in part by user security** (sec-user-06 reconciliation, 2026-10-28). Password on resume is armed before Stand by
+> through LOGON (U4-3); machine-wide power settings are written through the SYSTEM service (U4-6,
+> sec-k08); Shut Down and Restart stay available at the logon screen (K-Q8)
+> ([lock, saver and resume](user-security-contract.md#43-lock-saver-and-resume), [Log Off and shutdown](user-security-contract.md#44-log-off-switch-user-and-shutdown)).
+> Runtime: acc-accounts item 18, su-14-shutdown; su-10-resume stays not run without a qualified
+> virtual standby provider; self-test `security.lock_latency`.
+
 ## Sources
 
 - Windows 98 Resource Kit, chapter 30, "Overview of Power Management"

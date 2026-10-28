@@ -135,10 +135,15 @@ class KeysAndValidationTests(Base):
         self.assertEqual(normal[0]['actions'], [{'keys': 'n'}])
         self.assertTrue(all(s['check'] == 'boot' for s in normal))
         self.assertIn('safe=0$', normal[3]['wait'])
+        # sec-user-06: PID 1's desktop or the one LOGON's SESSION_LAUNCH published.
+        for line in ('[supervisor] desktop pid=3 pgid=3', '[security] session 1 desktop pid=8 pgid=8 uid=1000 gid=545 groups=544,545'):
+            self.assertRegex(line, normal[2]['wait'])
         safe = acceptance.expand_steps([{'template': 'boot-safe', 'prefix': 's1'}])
         self.assertEqual(safe[0]['actions'], [{'keys': 'f5'}])
         self.assertEqual(safe[1]['wait'][0], r'^L:STARTUP=3$')
-        self.assertIn('safe=1$', safe[3]['wait'])
+        # Safe mode never logs on automatically: the blank CiukiUser logs on at Welcome.
+        self.assertEqual([s['name'] for s in safe], ['s1-loader', 's1-kernel', 's1-welcome', 's1-typed', 's1-auth', 's1-desktop', 's1-display'])
+        self.assertIn('safe=1$', safe[-1]['wait'])
         for bad in ({'template': 'boot', 'prefix': 'B1'}, {'template': 'nope', 'prefix': 'b1'},
                     {'template': 'boot', 'prefix': 'b1', 'name': 'x'}, {'template': 'boot', 'prefix': 'b1', 'timeout': 10}):
             with self.subTest(step=bad), self.assertRaises(res.Refusal):
@@ -229,10 +234,19 @@ class SessionTests(Base):
 
     def test_safe_template_and_wrong_menu_choice(self):
         c = case(steps=[{'template': 'boot-safe', 'prefix': 's1', 'settle': 0.1}])
-        lines = ['L:STARTUP=3'] + boot_lines('mode=274 640x480x32 saved=0 safe=1')
-        s, qmp = self.session(c, on_key={'f5': lines})
-        drive(s, qmp, lines=[(0.0, 'SELECT_READY')])
-        self.assertTrue(s.done); self.assertEqual(qmp.pressed(), ['f5'])
+        # sec-user-06: LOGON does not log on automatically in Safe mode.
+        lines = ['L:STARTUP=3', 'L:SELECT_SOURCE=menu', 'Ciuki VMM F0 build f5242070d0b4 - CiukiOS',
+                 '[supervisor] bootstrap: trusted logon pid=4', '[user 5] [logon] automatic logon not applicable safe=1',
+                 '[user 10] [logon-ui] view mode=welcome view=list items=3 accounts=1 status=none']
+        logon = ['[user 5] [logon] authenticated uid=1000; starting session', '[user 5] [logon] session 1 created uid=1000',
+                 '[security] session 1 desktop pid=8 pgid=8 uid=1000 gid=545 groups=544,545',
+                 '[user 5] [logon] session 1 running uid=1000 start_ms=700', D + ' display start mode=274 640x480x32 saved=0 safe=1']
+        s, qmp = self.session(c, on_key={'f5': lines, 'ret#1': ['[user 10] [logon-ui] view mode=welcome view=typed items=5 accounts=1 status=none'],
+                                         'ret#3': logon})
+        drive(s, qmp, until=60, lines=[(0.0, 'SELECT_READY')])
+        self.assertTrue(s.done, s.state)
+        self.assertEqual(qmp.pressed()[:4], ['f5', 'up', 'up', 'ret'])
+        self.assertEqual(qmp.pressed().count('ret'), 3)   # list, name (empty password follows), submit
         c = case(steps=[{'template': 'boot', 'prefix': 'b1', 'settle': 0.1}])
         s, qmp = self.session(c, on_key={'n': ['L:SAFE=1'] + boot_lines()})
         drive(s, qmp, lines=[(0.0, 'SELECT_READY')])
@@ -645,6 +659,21 @@ class SuiteTests(unittest.TestCase):
         self.assertEqual(steps['b1-win32-command']['actions'][0]['text'], r'C:\WINDOWS\CDPLAYER.EXE')
         self.assertEqual(steps['b1-win32-window']['actions'], [{'keys': 'alt+f4'}])
 
+    def test_accounts_autologon_keeps_the_first_boot_runtime_checks(self):
+        boot = next(c for c in self.raw['cases'] if c['id'] == 'acc-desktop-cd')
+        accounts = next(c for c in self.raw['cases'] if c['id'] == 'acc-accounts')
+        acceptance.validate_case(accounts)
+        steps = {s.get('name'): s for s in accounts['steps']}
+        for step in boot['steps']:
+            if step.get('name', '').startswith(('b1-session-', 'b1-win32-')):
+                self.assertEqual(steps[step['name']], {**step, 'check': 'autologon'})
+        assertions = {a['name']: a for a in accounts['assertions']}
+        for name in ('boot-logon-session', 'boot-startup-snapshot', 'boot-first-win32'):
+            self.assertEqual(assertions[name]['check'], 'autologon')
+        pattern = assertions['boot-logon-session']['pattern'].replace('<<b1_session>>', '1')
+        self.assertRegex('[user 35] [logon] session 1 running uid=1000 start_ms=1224', pattern)
+        self.assertNotRegex('[user 35] [logon] session 2 running uid=1001 start_ms=2400', pattern)
+
     def test_the_owner_list_in_order(self):
         self.assertTrue(self.suite['acceptance'])
         self.assertNotIn('prerequisites', self.raw)
@@ -653,6 +682,7 @@ class SuiteTests(unittest.TestCase):
                     'acc-safe-restart-shutdown', 'acc-installshield5']
         self.assertEqual(ids[:len(original)], original)
         additions = ids[len(original):]
+        self.assertIn('acc-accounts', additions)
         self.assertEqual(len([i for i in additions if i.startswith('acc-dos-')]), 20)
         self.assertGreaterEqual(len([i for i in additions if i.startswith('acc-ipx-')]), 6)
         covered = set()
@@ -660,7 +690,7 @@ class SuiteTests(unittest.TestCase):
             covered |= {int(n) for n in c.get('items', {str(c['item']): []})}
             self.assertEqual(c['profile'], 'qemu-t23')
             self.assertTrue(c['title'])
-        self.assertEqual(covered, set(range(1, 10)))
+        self.assertEqual(covered, set(range(1, 19)))   # sec-user-06: items 10..18 are the account trials
         self.assertEqual(self.suite['cases'][0]['gate'], 'boot')
 
     def test_cases_are_valid_and_bounded(self):
@@ -718,10 +748,13 @@ class SuiteTests(unittest.TestCase):
             source = q3.read_text()
             self.assertIn(exe['sha256'], source)
             self.assertIn(str(next(f for f in quake['disk']['files'] if f['path'].endswith('pak0.pk3'))['size']), source)
+        # sec-user-02 (A1-5): the installer lives in the protected installer
+        # store; the desktop folder holds only shortcuts to it (sec-user-06).
         bundled = (ROOT / 'scripts/q3a_demo.py').read_text()
-        self.assertIn('C:\\\\Documents\\\\Desktop\\\\Quake III Arena Demo\\\\Q3ADemo.exe', bundled)
+        self.assertIn('STORE_WINDOWS = "C:\\\\Programs\\\\Installers\\\\Quake III Arena Demo"', bundled)
+        self.assertIn('"Install Quake III Arena Demo.lnk": ("Install Quake III Arena Demo", "Q3ADemo.exe")', bundled)
         typed = next(a['text'] for s in quake['steps'] if s.get('name') == 'run-installer' for a in s['actions'] if 'text' in a)
-        self.assertEqual(typed, '"C:\\Documents\\Desktop\\Quake III Arena Demo\\Q3ADemo.exe"')
+        self.assertEqual(typed, '"C:\\Programs\\Installers\\Quake III Arena Demo\\Q3ADemo.exe"')
 
     def test_games_follow_the_catalogue(self):
         catalog = (ROOT / 'apps/desktop/catalog.h').read_text()

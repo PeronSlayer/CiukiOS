@@ -120,7 +120,13 @@ struct lgn {
      * until when a gate moved by the kernel counts as that event's. */
     uint32_t resumes_seen;
     uint64_t resume_until;
+    /* sec-user-06: a self-test boot (fx-selftest, boot flag bit 23): the
+     * first security menu returns by itself (self-test security.lock_latency). */
+    int selftest, selftest_returned;
+    unsigned selftest_tries;
+    uint64_t selftest_return_at;
 };
+#define LGN_BOOT_SELF_TEST 0x00800000u   /* CBI_F_SELF_TEST in this start's CIUKI_BOOT_* flags */
 
 int lgn_init(struct lgn *, const struct lgn_sys *);
 /* One pass: accept, receive, advance timers, then wait at most idle_ms. */

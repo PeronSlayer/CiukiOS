@@ -4,6 +4,12 @@ Author: Codex. Directive: f2-00. Date: 2026-10-10.
 Status: revised after cross-review; lead approval pending.
 No implementation or runtime qualification is claimed.
 
+> **Superseded in part by user security** (sec-user-06 reconciliation, 2026-10-28). Process credentials, the account and profile
+> queries behind `getpwuid`/`HOME`/`TMPDIR`/`USERPROFILE`, and the EACCES/EPERM answers of the
+> path policy follow [native libc and DOS](user-security-contract.md#84-native-libc-and-dos) and the
+> [call-101 ABI](user-security-kernel.md#frozen-abi-for-sec-k01-not-implemented). Runtime: sectest `environment` and the
+> refusals of su-04-roles.
+
 ## Scope and authority
 
 **[F2]** Implementations MUST follow this document, the F2 extension of

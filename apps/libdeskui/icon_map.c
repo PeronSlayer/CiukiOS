@@ -40,6 +40,7 @@ const struct du_icon_map du_icon_map[] = {
     {"program:hello", "face-wink"},                   /* prints a greeting */
     {"program:lua", "weather-clear-night"},                  /* Lua interpreter (runs scripts; the Developer folder is applications-development) */
     {"program:libc_smoke", "package-x-generic"},     /* C library self-test */
+    {"program:sectest", "emblem-readonly"},          /* sec-user-06: runtime security probe (Developer) */
     {"program:desktop", "user-desktop"},
     {"program:setup", "system-installer"},
     {"program:netsurf", "internet-web-browser"},       /* NetSurf, the browser application (apps/desktop/catalog.h) */
