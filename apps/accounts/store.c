@@ -77,7 +77,10 @@ static int bindings(struct acct_store *s, const struct acct_db *d)
     for(unsigned i=0;i<d->count;++i) {
         char root[64]={0}; struct acct_owner_binding b={0};
         int e=s->owner.binding(s->owner.ctx,s->volume,d->records[i].uid,root,&b);
-        if(e || !b.key || !b.generation || b.volume!=s->volume ||
+        /* ENOENT here is a missing committed binding, never the unpublished
+         * store sentinel consumed by service open. Only EAGAIN is transient. */
+        if(e) return acct_boot_result(s,ACCT_BOOT_BINDING,e==-EAGAIN?e:-EIO);
+        if(!b.key || !b.generation || b.volume!=s->volume ||
             b.uid!=d->records[i].uid || b.action==ACCT_OWNER_RETIRE || !acct_profile_root_valid(root)) return -EIO;
     }
     return 0;
@@ -86,7 +89,7 @@ int acct_owner_requests(struct acct_store *s, const struct acct_db *d, struct ac
 {
     if(!s || !d || !q || !count || d->count<2 || d->count>ACCT_MAX) return -EINVAL;
     memset(q,0,sizeof(*q)); q->volume=s->volume; q->transaction=d->generation;
-    memcpy(q->sid,d->sid,12); int e=s->owner.generation(s->owner.ctx,&q->expected_generation);
+    memcpy(q->sid,d->sid,12); int e=acct_boot_result(s,ACCT_BOOT_GENERATION,s->owner.generation(s->owner.ctx,&q->expected_generation));
     for(unsigned i=0;!e && i<d->count;++i) {
         struct acct_owner_binding *b=&q->bindings[q->count++]; b->uid=d->records[i].uid; b->volume=s->volume;
         e=s->owner.binding(s->owner.ctx,s->volume,b->uid,b->root,b);
@@ -94,6 +97,7 @@ int acct_owner_requests(struct acct_store *s, const struct acct_db *d, struct ac
             memset(b,0,sizeof(*b)); b->uid=d->records[i].uid; b->volume=s->volume; b->action=ACCT_OWNER_CREATE;
             snprintf(b->root,64,"/Windows/Profiles/u%08x",b->uid); e=0;
         } else if(!e) { b->action=ACCT_OWNER_KEEP; b->locator=0; }
+        if(e) acct_boot_result(s,ACCT_BOOT_BINDING,e);
     }
     *count=e?0:1; return e;
 }
@@ -132,8 +136,8 @@ int acct_boot_identity(struct acct_store *s, struct acct_db *d, int create)
         if(s->io.read(s->io.ctx,"machine.sid",existing,sizeof(existing),&m)!=-ENOENT) return -EIO;
         if(!create) return -ENOENT;
         memset(p,0,128); memcpy(p,"CIUKISPR",8); w32(p+8,b.origin); w64(p+16,s->volume); memcpy(p+40,b.seed_digest,32);
-        e=s->kernel.entropy(s->kernel.ctx,p+24,12); if(e) return e;
-        if(azero(p+24,12)) return -EAGAIN;
+        e=acct_boot_result(s,ACCT_BOOT_ENTROPY_SID,s->kernel.entropy(s->kernel.ctx,p+24,12)); if(e) return e;
+        if(azero(p+24,12)) return acct_boot_result(s,ACCT_BOOT_ENTROPY_SID,-EAGAIN);
         sha256(p,96,p+96); e=durable(s,"bootstrap.sid",p,128); if(e) return e;
     } else {
         if(e || n!=128 || memcmp(p,"CIUKISPR",8) || a32(p+8)!=b.origin || a32(p+12) ||
@@ -224,7 +228,7 @@ static int run_intent(struct acct_store *s, struct workspace *w)
     if(!visible_error && w->current.generation==w->q.transaction &&
         (w->r.state==ACCT_OWNER_NONE || w->r.state==ACCT_OWNER_ABORTED ||
          (w->r.state==ACCT_OWNER_PENDING && irrevocable==-ENOENT))) return -EIO;
-    e=s->owner.validate_stage(s->owner.ctx,&w->q); if(e) return e;
+    e=acct_boot_result(s,ACCT_BOOT_VALIDATE_STAGE,s->owner.validate_stage(s->owner.ctx,&w->q)); if(e) return e;
     if(w->r.state==ACCT_OWNER_NONE) return -EIO;
     if(w->r.state==ACCT_OWNER_RESERVED) {
         e=acct_owner_call(s,ACCT_OWNER_PREPARE,&w->q,&w->r); if(e) return e;
@@ -291,7 +295,7 @@ int acct_store_commit(struct acct_store *s, const struct acct_db *old, const str
     if(!e && old) e=acct_owner_checkpoint(s,old,0);
     if(!e) {
         unsigned c; if(given && count) w->q=*given; else e=acct_owner_requests(s,next,&w->q,&c);
-        if(w->q.count>32 || !w->q.count) e=-EINVAL;
+        if(!e && (w->q.count>32 || !w->q.count)) e=-EINVAL;
         w->q.expected_accounts_generation=old?old->generation:0;
         /* Retired roots remain in the owner store and are never reassigned. */
         if(old) for(unsigned i=0;!e && i<old->count;++i) {
@@ -305,8 +309,8 @@ int acct_store_commit(struct acct_store *s, const struct acct_db *old, const str
             struct acct_owner_binding b=w->q.bindings[i]; unsigned j=i;
             while(j && w->q.bindings[j-1].uid>b.uid) { w->q.bindings[j]=w->q.bindings[j-1]; --j; } w->q.bindings[j]=b;
         }
-        if(w->q.count>32 || w->q.volume!=s->volume || w->q.transaction!=next->generation ||
-            memcmp(w->q.sid,next->sid,12)) e=-EINVAL;
+        if(!e && (w->q.count>32 || w->q.volume!=s->volume || w->q.transaction!=next->generation ||
+            memcmp(w->q.sid,next->sid,12))) e=-EINVAL;
         for(unsigned i=0;!e && i<next->count;++i) {
             unsigned found=0;
             for(unsigned j=0;j<w->q.count;++j)
@@ -323,10 +327,10 @@ int acct_store_commit(struct acct_store *s, const struct acct_db *old, const str
     }
     if(!e) {
         uint8_t *manifest=w->manifest; size_t mn=0; char path[128];
-        e=s->owner.stage(s->owner.ctx,&w->q,manifest,ACCT_MANIFEST_MAX,&mn);
+        e=acct_boot_result(s,ACCT_BOOT_STAGE,s->owner.stage(s->owner.ctx,&w->q,manifest,ACCT_MANIFEST_MAX,&mn));
         if(!e) e=acct_manifest_validate(&w->q,manifest,mn);
         for(unsigned i=0;!e && i<w->q.count;++i) {
-            uint8_t actual_tree[32]; e=s->owner.tree_digest(s->owner.ctx,w->q.transaction,w->q.bindings[i].uid,actual_tree);
+            uint8_t actual_tree[32]; e=acct_boot_result(s,ACCT_BOOT_TREE_DIGEST,s->owner.tree_digest(s->owner.ctx,w->q.transaction,w->q.bindings[i].uid,actual_tree));
             if(!e && memcmp(actual_tree,manifest+64+256*i+208,32)) e=-EIO;
             unsigned legacy=0;
             for(unsigned j=0;j<next->count;++j) if(next->records[j].uid==w->q.bindings[i].uid) legacy=next->records[j].legacy_id;
@@ -350,7 +354,7 @@ int acct_store_commit(struct acct_store *s, const struct acct_db *old, const str
         }
     }
     if(!e) e=acct_owner_call(s,ACCT_OWNER_RESERVE,&w->q,&w->r);
-    if(!e) e=durable(s,TXN,w->intent,w->intent_bytes);
+    if(!e) e=acct_boot_result(s,ACCT_BOOT_INTENT,durable(s,TXN,w->intent,w->intent_bytes));
     if(!e) { w->next=*next; e=run_intent(s,w); }
     return finish(s,w,e);
 }
@@ -385,7 +389,7 @@ int acct_store_recover(struct acct_store *s, struct acct_db *d)
         if(e) return finish(s,w,e);
         e=acct_boot_read(s,&b); if(e) return finish(s,w,e);
     } else if(e!=-ENOENT) return finish(s,w,e);
-    e=s->owner.recover_orphans(s->owner.ctx,s->volume,0); if(e) return finish(s,w,e);
+    e=acct_boot_result(s,ACCT_BOOT_ORPHANS,s->owner.recover_orphans(s->owner.ctx,s->volume,0)); if(e) return finish(s,w,e);
     size_t n; e=read_db(s,DB,w->bytes,&w->next,&n);
     if(b.state==ACCT_UNPROVISIONED) {
         if(e!=-ENOENT) return finish(s,w,-EIO);
@@ -417,7 +421,7 @@ int acct_store_recover(struct acct_store *s, struct acct_db *d)
             if(identity || watermarks(s,w->recipe.sid,0,0,0) || !s->high_generation) e=-EIO;
         }
         /* end sec-user-02 */
-        if(!e) e=s->owner.generation(s->owner.ctx,&owner_g);
+        if(!e) e=acct_boot_result(s,ACCT_BOOT_GENERATION,s->owner.generation(s->owner.ctx,&owner_g));
         if(!e && owner_g) e=-EIO;
         return finish(s,w,e?(e==-ENOENT?-EIO:e):-ENOENT);
     }

@@ -138,10 +138,15 @@ int acct_firstboot_prepare(const struct acct_store *s, const struct acct_legacy_
     return e;
 }
 
+static void remove_consumed_seed(struct acct_store *s)
+{
+    /* Recovery may have finished CONSUMED without returning through promote. */
+    if (!s->io.remove(s->io.ctx,"provision.seed")) (void)s->io.barrier(s->io.ctx);
+}
 int acct_firstboot_promote(struct acct_service *s)
 {
     if (!s || !s->leased) return -EINVAL;
-    if (s->available) return ACCT_FIRSTBOOT_NOTHING;
+    if (s->available) { remove_consumed_seed(&s->store); return ACCT_FIRSTBOOT_NOTHING; }
     struct acct_store *st = &s->store;
     struct acct_bootstrap b;
     int e = acct_boot_read(st, &b);
@@ -164,6 +169,6 @@ int acct_firstboot_promote(struct acct_service *s)
     if (e) return e == -ENOENT ? -EIO : e;
     /* CONSUMED is durable: a residual seed (crash before this unlink) is
      * never replayed, so removal failure does not undo the promotion. */
-    if (!st->io.remove(st->io.ctx, "provision.seed")) (void)st->io.barrier(st->io.ctx);
+    remove_consumed_seed(st);
     return ACCT_FIRSTBOOT_PROMOTED;
 }
