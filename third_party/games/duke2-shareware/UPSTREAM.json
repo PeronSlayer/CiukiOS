@@ -1,13 +1,13 @@
 {
   "project": "Duke Nukem II (original DOS shareware)",
   "authors": "Apogee",
-  "archive": "1duke2.zip",
+  "archive": "4duke.zip",
   "sources": [
-    "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1duke2.zip"
+    "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/4duke.zip"
   ],
-  "sha256": "lead-pins",
-  "size": null,
-  "status": "lead-pins",
+  "sha256": "c94479ace93a8923615ddebea96bcd18242a3a31f54cdcbc84e02ca0ab685829",
+  "size": 1146465,
+  "status": "pinned",
   "license": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
   "license_files": [],
   "redistribution": "test-media only; package review pending",

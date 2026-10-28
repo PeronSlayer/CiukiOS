@@ -302,7 +302,9 @@ def fetch(title, pin, root=ROOT, lead_pin=False):
     target = cache / pin['archive']; temp = cache / (pin['archive'] + '.download')
     require(not target.is_symlink() and not temp.exists(), 'unsafe/existing download temporary')
     try:
-        with urllib.request.urlopen(pin['url'], timeout=30) as source, temp.open('xb') as out:
+        # gamers.org answers 403 to the default Python-urllib agent.
+        request = urllib.request.Request(pin['url'], headers={'User-Agent': 'CiukiOS-dos-games/1'})
+        with urllib.request.urlopen(request, timeout=30) as source, temp.open('xb') as out:
             total = 0
             while block := source.read(65536):
                 total += len(block); require(total <= MAX_BYTES, 'download budget'); out.write(block)

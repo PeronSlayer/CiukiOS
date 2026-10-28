@@ -5,9 +5,9 @@
   "sources": [
     "https://image.dosgamesarchive.com/games/d2demo10.zip"
   ],
-  "sha256": "lead-pins",
-  "size": null,
-  "status": "lead-pins",
+  "sha256": "a7c31eae6dfd22e1f6a4c0b9fb2dfb2e25197831bc43c3e9d65734c7fa446c4d",
+  "size": 4307914,
+  "status": "pinned",
   "license": "Original demo package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
   "license_files": [],
   "redistribution": "test-media only; package review pending",

@@ -1,13 +1,13 @@
 {
   "project": "Shadow Warrior (original DOS shareware)",
   "authors": "3D Realms",
-  "archive": "1sw12.zip",
+  "archive": "3dsw12.zip",
   "sources": [
-    "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1sw12.zip"
+    "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/3dsw12.zip"
   ],
-  "sha256": "lead-pins",
-  "size": null,
-  "status": "lead-pins",
+  "sha256": "6e41b3769d0373fc160c2113469c6f8bc2932dc1a77b69c81c1bd9644a189a8f",
+  "size": 13299147,
+  "status": "pinned",
   "license": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
   "license_files": [],
   "redistribution": "test-media only; package review pending",

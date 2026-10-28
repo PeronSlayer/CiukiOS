@@ -5,9 +5,9 @@
   "sources": [
     "https://image.dosgamesarchive.com/games/jazz.zip"
   ],
-  "sha256": "lead-pins",
-  "size": null,
-  "status": "lead-pins",
+  "sha256": "ed025415c0bc5ebc3a41e7a070551bdfdfb0b65b5314241152d8bd31f87c22da",
+  "size": 1421049,
+  "status": "pinned",
   "license": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
   "license_files": [],
   "redistribution": "test-media only; package review pending",

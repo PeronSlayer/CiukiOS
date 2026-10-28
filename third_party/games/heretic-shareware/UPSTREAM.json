@@ -5,9 +5,9 @@
   "sources": [
     "https://www.gamers.org/pub/idgames/idstuff/heretic/htic_v12.zip"
   ],
-  "sha256": "lead-pins",
-  "size": null,
-  "status": "lead-pins",
+  "sha256": "5ffbb47e4a5750fef144c312973ee5782266b4a63474b77478103b6c1aaed39d",
+  "size": 2898794,
+  "status": "pinned",
   "license": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
   "license_files": [],
   "redistribution": "test-media only; package review pending",

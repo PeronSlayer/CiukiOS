@@ -1,13 +1,13 @@
 {
   "project": "Blake Stone (original DOS shareware)",
   "authors": "JAM Productions / Apogee",
-  "archive": "1bs6.zip",
+  "archive": "1bs30.zip",
   "sources": [
-    "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1bs6.zip"
+    "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1bs30.zip"
   ],
-  "sha256": "lead-pins",
-  "size": null,
-  "status": "lead-pins",
+  "sha256": "9a7e39037689cb84054bd3ddca290ab3644e327f951eb08e7ad79500e9c0dfb3",
+  "size": 1495394,
+  "status": "pinned",
   "license": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
   "license_files": [],
   "redistribution": "test-media only; package review pending",

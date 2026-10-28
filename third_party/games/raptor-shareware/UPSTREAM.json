@@ -1,13 +1,13 @@
 {
   "project": "Raptor (original DOS shareware)",
   "authors": "Cygnus Studios / Apogee",
-  "archive": "1raptor.zip",
+  "archive": "1rap12.zip",
   "sources": [
-    "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1raptor.zip"
+    "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1rap12.zip"
   ],
-  "sha256": "lead-pins",
-  "size": null,
-  "status": "lead-pins",
+  "sha256": "7d6b062dcdc76d9ea02d8d71af14e5043223581d792f6ead4eb1316fd0351552",
+  "size": 2013010,
+  "status": "pinned",
   "license": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
   "license_files": [],
   "redistribution": "test-media only; package review pending",

@@ -1,13 +1,13 @@
 {
   "project": "Bio Menace (original DOS shareware)",
   "authors": "Apogee",
-  "archive": "1bio10.zip",
+  "archive": "1bio11.zip",
   "sources": [
-    "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1bio10.zip"
+    "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1bio11.zip"
   ],
-  "sha256": "lead-pins",
-  "size": null,
-  "status": "lead-pins",
+  "sha256": "3c5e4e5774b13f2d233b9b532cd34b5708b8fcec14b27824b75d16563298b719",
+  "size": 717127,
+  "status": "pinned",
   "license": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
   "license_files": [],
   "redistribution": "test-media only; package review pending",

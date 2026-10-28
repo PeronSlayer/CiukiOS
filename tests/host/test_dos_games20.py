@@ -87,10 +87,12 @@ class CatalogTests(unittest.TestCase):
         tracked = dos_titles.load(ROOT / 'tests/dos-titles/tracked.json', True)['titles']
         self.assertEqual({t['id'] for t in tracked}, {t['id'] for t in titles})
         self.assertEqual(len(titles), 20)
-        self.assertEqual(sum(p['status'] == 'lead-pins' for p in pins['titles']), 14)
+        self.assertEqual({p['status'] for p in pins['titles']} - {'pinned', 'lead-pins'}, set())
         for pin in pins['titles'][6:]:
             self.assertEqual(pin['licence']['class'], 'test-media')
-            self.assertEqual(pin['sha256'], 'lead-pins')
+            # The lead pins each candidate with dos_games.py fetch --lead-pin.
+            if pin['status'] == 'lead-pins':self.assertEqual(pin['sha256'], 'lead-pins')
+            else:self.assertRegex(pin['sha256'], '^[0-9a-f]{64}$'); self.assertGreater(pin['size'], 0)
             self.assertNotIn('package', pin)  # canonical bundling path cannot ingest candidates
         self.assertTrue(all(1990 <= t['year'] <= 1998 for t in tracked))
         self.assertGreaterEqual(sum(t['lan'] is not None for t in titles), 6)
@@ -102,7 +104,7 @@ class CatalogTests(unittest.TestCase):
         for case in actual:
             self.assertEqual(runner.case_kind(case), 'acceptance')
         listed = subprocess.run(['bash', 'scripts/test/acceptance.sh', '--list'], cwd=ROOT, capture_output=True, text=True, check=True)
-        self.assertEqual({line.split('\t')[0] for line in listed.stdout.splitlines()}, {c['id'] for c in suite['cases']})
+        self.assertEqual({line.split()[0] for line in listed.stdout.splitlines() if not line.endswith(' cases valid')}, {c['id'] for c in suite['cases']})
 
     def test_downgraded_predicates_and_malformed_pairs_are_refused(self):
         title = games.load()[0][0]
@@ -171,6 +173,8 @@ class CatalogTests(unittest.TestCase):
                 with self.assertRaises(EvidenceNotRun): games.fetch(title, pin, root)
                 opened.assert_not_called()
                 result = games.fetch(title, pin, root, lead_pin=True)
+                request = opened.call_args.args[0]
+                self.assertEqual((request.full_url, request.get_header('User-agent')), (pin['url'], 'CiukiOS-dos-games/1'))
             self.assertEqual(result['sha256'], hashlib.sha256(b'archive').hexdigest())
             title, pin = games.title_for('heretic', root)
             with patch.object(games.urllib.request, 'urlopen', return_value=io.BytesIO(b'bad')):

@@ -5,9 +5,9 @@
   "sources": [
     "https://www.gamers.org/pub/idgames/idstuff/hexen/hexndemo.zip"
   ],
-  "sha256": "lead-pins",
-  "size": null,
-  "status": "lead-pins",
+  "sha256": "469ee3a254959d2fca624aec7391292fbd1ac3ebd9074b65f05cbc74de3c4572",
+  "size": 5664734,
+  "status": "pinned",
   "license": "Original demo package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
   "license_files": [],
   "redistribution": "test-media only; package review pending",

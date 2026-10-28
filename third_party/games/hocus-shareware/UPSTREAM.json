@@ -1,13 +1,13 @@
 {
   "project": "Hocus Pocus (original DOS shareware)",
   "authors": "Moonlite Software / Apogee",
-  "archive": "1hocus.zip",
+  "archive": "1hp11.zip",
   "sources": [
-    "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1hocus.zip"
+    "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1hp11.zip"
   ],
-  "sha256": "lead-pins",
-  "size": null,
-  "status": "lead-pins",
+  "sha256": "83352f33279c05f8e6137c285e2432d0500cb07623a9d3875a17829ec7a342a4",
+  "size": 937575,
+  "status": "pinned",
   "license": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
   "license_files": [],
   "redistribution": "test-media only; package review pending",

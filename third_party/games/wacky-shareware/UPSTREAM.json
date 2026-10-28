@@ -5,9 +5,9 @@
   "sources": [
     "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1wacky.zip"
   ],
-  "sha256": "lead-pins",
-  "size": null,
-  "status": "lead-pins",
+  "sha256": "3c3c35bb696194b420c5156ac9641819213f01812801f5c1683817c8bb70f4a3",
+  "size": 1655316,
+  "status": "pinned",
   "license": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
   "license_files": [],
   "redistribution": "test-media only; package review pending",

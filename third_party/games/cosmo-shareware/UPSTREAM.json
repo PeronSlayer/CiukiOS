@@ -5,9 +5,9 @@
   "sources": [
     "https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/1cosmo.zip"
   ],
-  "sha256": "lead-pins",
-  "size": null,
-  "status": "lead-pins",
+  "sha256": "45e30c651e2676b818187d466a1135701b0b26145c7ad2f40775ed2d43acec4c",
+  "size": 597300,
+  "status": "pinned",
   "license": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
   "license_files": [],
   "redistribution": "test-media only; package review pending",
