@@ -209,6 +209,25 @@ HDC W32API CreateCompatibleDC(HDC ref) {
     return 0;
   return new_dc(1, 0);
 }
+/* fx-hlrun: USER's screen DC (GetDC(NULL), GetWindowDC of the desktop
+ * window). A program has no access to the composed screen (f5-20B), so the
+ * DC keeps a memory DC's empty target, but it is the display device for
+ * everything that asks for the device: GetDeviceCaps reports the display
+ * and CreateCompatibleBitmap/CreateDIBitmap make display-format bitmaps.
+ * Windows: "the bitmap is compatible with the device identified by hdc"
+ * (Microsoft CreateCompatibleBitmap); only a memory DC yields a bitmap in
+ * the format of its selected bitmap, monochrome for its default 1x1 one
+ * (Wine 10.0 dlls/win32u/bitmap.c NtGdiCreateCompatibleBitmap: the format
+ * of the DC's device, the selected bitmap's for a memory DC). InstallShield 5
+ * builds its dialog images with CreateCompatibleBitmap(GetDC(NULL)). */
+HDC W32API w32_gdi_display_dc(void) {
+  GDI_GUARD;
+  HDC h = new_dc(1, 0);
+  struct dc *d = gdi_dc(h);
+  if (d)
+    d->display = 1;
+  return h;
+}
 static int surface_layout(struct w32_dib *out, const struct w32_dib *in) {
   if (!in)
     return 0;
@@ -477,7 +496,7 @@ void gdi_palette_targets(void) {
       continue;
     w32_copy(s->colors, colors, sizeof(colors));
     s->color_count = 256;
-    gdi_damage(d, (RECT){0, 0, (LONG)s->width, (LONG)s->height});
+    gdi_repaint(d, (RECT){0, 0, (LONG)s->width, (LONG)s->height});
   }
 }
 void W32API w32_gdi_process_exit(void) {
@@ -641,6 +660,11 @@ static int display_caps(DWORD *out) {
   w32_copy(out, v, sizeof(v));
   return 1;
 }
+unsigned gdi_display_bpp(void) {
+  DWORD shown[3];
+  unsigned bpp = desktop.bpp ? desktop.bpp : display_caps(shown) ? shown[2] : 32;
+  return bpp <= 1 ? 1 : bpp <= 4 ? 4 : bpp <= 8 ? 8 : bpp <= 16 ? 16 : bpp <= 24 ? 24 : 32;
+}
 int W32API GetDeviceCaps(HDC h, int cap) {
   GDI_GUARD;
   struct dc *d = gdi_dc(h);
@@ -723,7 +747,99 @@ BOOL W32API GetDCOrgEx(HDC h, POINT *p) {
   *p = d->screen_origin;
   return 1;
 }
+/* fx-hlrun: bounding-rectangle accumulation (Windows 3.1+ GDI, kept by
+ * Windows 98; Wine 10.0 dlls/win32u/dc.c NtGdiSetBoundsRect and
+ * NtGdiGetBoundsRect). While enabled, every drawing operation of the DC adds
+ * the device rectangle it touched; SetBoundsRect(DCB_ACCUMULATE) adds a
+ * logical rectangle. The rectangle is a DC attribute (SaveDC/RestoreDC keep
+ * it) and is reported clipped to the DC's visible area, in logical units. */
+#define DCB_RESET 1u
+#define DCB_ACCUMULATE 2u
+#define DCB_SET 3u
+#define DCB_ENABLE 4u
+#define DCB_DISABLE 8u
+static void bounds_add(RECT *b, RECT r) {
+  if (r.left >= r.right || r.top >= r.bottom)
+    return;
+  if (b->left >= b->right || b->top >= b->bottom) {
+    *b = r;
+    return;
+  }
+  if (r.left < b->left)
+    b->left = r.left;
+  if (r.top < b->top)
+    b->top = r.top;
+  if (r.right > b->right)
+    b->right = r.right;
+  if (r.bottom > b->bottom)
+    b->bottom = r.bottom;
+}
+DWORD W32API SetBoundsRect(HDC h, const RECT *r, DWORD flags) {
+  GDI_GUARD;
+  struct dc *d = gdi_dc(h);
+  if (!d || ((flags & DCB_ENABLE) && (flags & DCB_DISABLE)))
+    return 0;
+  DWORD old = (d->bounds_enabled ? DCB_ENABLE : DCB_DISABLE) |
+             (d->bounds.left < d->bounds.right && d->bounds.top < d->bounds.bottom
+                  ? DCB_SET
+                  : DCB_RESET);
+  if (flags & DCB_RESET)
+    d->bounds = (RECT){0, 0, 0, 0};
+  if ((flags & DCB_ACCUMULATE) && r)
+    bounds_add(&d->bounds, gdi_rect(d, *r));
+  if (flags & DCB_ENABLE)
+    d->bounds_enabled = 1;
+  if (flags & DCB_DISABLE)
+    d->bounds_enabled = 0;
+  return old;
+}
+DWORD W32API GetBoundsRect(HDC h, RECT *r, DWORD flags) {
+  GDI_GUARD;
+  struct dc *d = gdi_dc(h);
+  struct w32_dib *s = gdi_target(d);
+  if (!d)
+    return 0;
+  DWORD result = 0;
+  if (r) {
+    RECT b = d->bounds;
+    RECT area = {0, 0, s ? (LONG)s->width : 0, s ? (LONG)s->height : 0};
+    if (d->has_visible) {
+      RECT v = gdi_region_box(&d->visible);
+      area = (RECT){v.left > area.left ? v.left : area.left, v.top > area.top ? v.top : area.top,
+                    v.right < area.right ? v.right : area.right, v.bottom < area.bottom ? v.bottom : area.bottom};
+    } else {
+      area.left = d->origin.x > 0 ? d->origin.x : 0;
+      area.top = d->origin.y > 0 ? d->origin.y : 0;
+    }
+    if (b.left >= b.right || b.top >= b.bottom) {
+      *r = (RECT){0, 0, 0, 0};
+      result = DCB_RESET;
+    } else {
+      if (b.left < area.left)
+        b.left = area.left;
+      if (b.top < area.top)
+        b.top = area.top;
+      if (b.right > area.right)
+        b.right = area.right;
+      if (b.bottom > area.bottom)
+        b.bottom = area.bottom;
+      POINT p[2] = {{b.left, b.top}, {b.right, b.bottom}};
+      if (!gdi_transform(d, p, 2, 1))
+        return 0;
+      *r = (RECT){p[0].x, p[0].y, p[1].x, p[1].y};
+      result = DCB_SET;
+    }
+  }
+  if (flags & DCB_RESET)
+    d->bounds = (RECT){0, 0, 0, 0};
+  return result;
+}
 void gdi_damage(struct dc *d, RECT r) {
+  if (d && d->bounds_enabled)
+    bounds_add(&d->bounds, r);
+  gdi_repaint(d, r);
+}
+void gdi_repaint(struct dc *d, RECT r) {
   struct w32_dib *s = gdi_target(d);
   if (!s || !d->damage)
     return;

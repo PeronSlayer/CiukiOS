@@ -26,7 +26,9 @@ void host_number(ULONG n) {
     host_print(text + i);
 }
 void host_exit(ULONG code) {
-    host_syscall(1, code, 0, 0, 0, 0, 0);
+    /* exit_group: the whole process, also when the H1 game mode runs
+     * Win32 threads as Linux threads (fx-hlrun). */
+    host_syscall(252, code, 0, 0, 0, 0, 0);
     __builtin_trap();
 }
 static ULONG round_page(ULONG n) {

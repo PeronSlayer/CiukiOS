@@ -131,13 +131,22 @@ intptr_t W32API ICSendMessage(uintptr_t h, uint32_t message, uintptr_t p1,
   if (message == 0x400b)
     return cc_video_query(v->kind, (void *)p1, (void *)p2);
   if (message == 0x400a) {
+    /* ICM_DECOMPRESS_GET_FORMAT: an indexed output format carries the
+     * source's colour table after its 40-byte header, and a NULL output asks
+     * for that whole size (Wine 10.0 msrle32.c DecompressGetFormat;
+     * comctl32's animation control sizes its output BITMAPINFO this way). */
     struct cc_bitmap *in = (void *)p1, *out = (void *)p2;
     if (cc_video_query(v->kind, in, 0))
       return CC_BADFORMAT;
+    uint16_t bits = v->kind == kinds[2] ? 24 : (v->kind == kinds[0] ? 8 : in->bits);
+    uint32_t colors = bits > 8 ? 0 : in->colors && in->colors <= 256u ? in->colors : 1u << bits;
     if (!out)
-      return 40;
+      return 40 + colors * 4;
     cc_copy(out, in, 40);
-    out->bits = v->kind == kinds[2] ? 24 : (v->kind == kinds[0] ? 8 : in->bits);
+    if (colors)
+      cc_copy((uint8_t *)out + 40, (const uint8_t *)in + in->size, colors * 4);
+    out->bits = bits;
+    out->colors = colors;
     out->compression = 0;
     out->size = 40;
     out->bytes = (((uint32_t)out->width * out->bits + 31) / 32) * 4 *

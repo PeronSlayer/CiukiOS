@@ -167,6 +167,9 @@ HBITMAP W32API CreateCompatibleBitmap(HDC h, int w, int height) {
   struct w32_dib *s = gdi_target(d);
   if (!s)
     return 0;
+  /* fx-hlrun: the screen DC stands for the display (w32_gdi_display_dc). */
+  if (d->display)
+    return CreateBitmap(w, height, 1, gdi_display_bpp(), 0);
   HBITMAP bitmap = CreateBitmap(w, height, 1, s->bpp, 0);
   struct object *b = gdi_object(bitmap, GDI_BITMAP);
   if (b && !b->stock) {
@@ -184,9 +187,11 @@ HBITMAP W32API CreateDIBitmap(HDC h, const BITMAPINFOHEADER *header, DWORD init,
   if (!header || header->biSize < 40 || header->biWidth <= 0 ||
       header->biHeight == (-2147483647 - 1))
     return 0;
-  HBITMAP b = CreateCompatibleBitmap(h, header->biWidth,
-                                     header->biHeight < 0 ? -header->biHeight
-                                                          : header->biHeight);
+  /* fx-hlrun: without a DC the bitmap is monochrome (Wine 10.0
+   * dlls/gdi32/dib.c CreateDIBitmap: CreateBitmap(width, height, 1, 1)). */
+  int lines = header->biHeight < 0 ? -header->biHeight : header->biHeight;
+  HBITMAP b = h ? CreateCompatibleBitmap(h, header->biWidth, lines)
+                : CreateBitmap(header->biWidth, lines, 1, 1, 0);
   if (b && (init & CBM_INIT) &&
       (!info || !bits ||
        !SetDIBits(h, b, 0,
@@ -225,12 +230,18 @@ static int scan_transfer(struct w32_dib *dst, unsigned start, unsigned lines,
     }
   return (int)lines;
 }
+/* fx-hlrun: SetDIBits/GetDIBits also work on a bitmap that is selected into
+ * a memory DC. Microsoft's reference asks callers not to do it, but Windows
+ * performs the transfer (it is a copy of the bitmap's bits, not a DC
+ * operation) and Wine 10.0 dlls/win32u/dib.c NtGdiSetDIBitsInternal and
+ * NtGdiGetDIBitsInternal have no such refusal; Half-Life's launcher draws
+ * its owner-drawn buttons by reading back the bitmap of its memory DC. */
 int W32API SetDIBits(HDC h, HBITMAP bitmap, unsigned start, unsigned lines,
                      const void *bits, const BITMAPINFO *info, unsigned usage) {
   GDI_GUARD;
   struct object *o = gdi_object(bitmap, GDI_BITMAP);
   struct w32_dib src;
-  if (!o || o->refs || !bits || !gdi_info(h, info, usage, (void *)bits, &src))
+  if (!o || !bits || !gdi_info(h, info, usage, (void *)bits, &src))
     return 0;
   if (start >= o->u.bitmap.dib.height)
     return 0;
@@ -247,7 +258,7 @@ int W32API GetDIBits(HDC h, HBITMAP bitmap, unsigned start, unsigned lines,
                      void *bits, BITMAPINFO *info, unsigned usage) {
   GDI_GUARD;
   struct object *o = gdi_object(bitmap, GDI_BITMAP);
-  if (!o || o->refs || !info || usage > 1 || info->bmiHeader.biSize < 40)
+  if (!o || !info || usage > 1 || info->bmiHeader.biSize < 40)
     return 0;
   struct w32_dib *src = &o->u.bitmap.dib;
   if (!info->bmiHeader.biBitCount) {

@@ -435,6 +435,21 @@ uint32_t w32_object_call(struct proc_thread *t, struct ciuki_w32_object_args *a)
                     w32_release(o);
                 }
             }
+        } else if (a->type == W32_OBJ_SECTION && a->action == W32_OBJ_OPEN) {
+            /* fx-hlrun: OpenFileMapping. Sections are created and named by the
+             * W32_SECTION record (CreateFileMapping); opening finds the named
+             * object in the one global namespace, as on Windows 98. A section
+             * still being constructed is busy, as in w32_named_create. */
+            for (struct w32_object *it = w32_objects; name[0] && it; it = it->next)
+                if (name_equal(it->name, flat_name(name))) {
+                    o = it;
+                    break;
+                }
+            error = !name[0] ? 87
+                : !o ? 2
+                : o->type != W32_OBJ_SECTION ? 6
+                : !o->u.section || !o->section_limit ? 170
+                : w32_handle_install(t->process, o, a->access, !!a->flags, &a->result);
         } else if (a->type == W32_OBJ_EVENT || a->type == W32_OBJ_MUTEX || a->type == W32_OBJ_SEMAPHORE
             || a->type == W32_OBJ_TIMER || a->type == W32_OBJ_WINSTATION) {
             if (a->type == W32_OBJ_SEMAPHORE

@@ -146,8 +146,10 @@ static void input_event(struct u32_window *root, const struct ciuki_input_event 
       u32_help_end(); /* G15: Esc leaves What's This? */
       return;
     }
-    if (u32_hooks(2, 0, key, lp))
+    if (u32_hooks(2, 0, key, lp)) {
+      u32_hooks(5, 7 /* HCBT_KEYSKIPPED */, key, lp); /* fx-hlrun */
       return;
+    }
     if (down) {
       t->key_scan=(UINT)e->code;
       t->key_window = h;
@@ -258,8 +260,10 @@ static void input_event(struct u32_window *root, const struct ciuki_input_event 
       UINT hit;
       uintptr_t extra;
     } mouse = {p, h, hit ? hit : 1, 0};
-    if (u32_hooks(7, 0, m, (LPARAM)&mouse))
+    if (u32_hooks(7, 0, m, (LPARAM)&mouse)) {
+      u32_hooks(5, 6 /* HCBT_CLICKSKIPPED */, m, (LPARAM)&mouse); /* fx-hlrun */
       return;
+    }
   }
   if (m) {
     DWORD tid = GetWindowThreadProcessId(h, 0);
@@ -292,6 +296,10 @@ HWND W32API SetFocus(HWND h) {
   HWND old = t->focus;
   if (old == h)
     return old;
+  /* fx-hlrun: WH_CBT HCBT_SETFOCUS (wParam gains, lParam loses the focus);
+   * a nonzero result keeps the focus where it is and SetFocus returns 0. */
+  if ((h || old) && u32_hooks(5, 9 /* HCBT_SETFOCUS */, (WPARAM)h, (LPARAM)old))
+    return 0;
   t->dead_accent=0;
   t->focus = h;
   if (old)
@@ -352,6 +360,17 @@ void u32_activate(struct u32_window *w, BOOL focused, BOOL active) {
     return;
   HWND old = t->active;
   BOOL was_app = !!u32_foreground;
+  /* fx-hlrun: WH_CBT HCBT_ACTIVATE before the window becomes the active
+   * window (CBTACTIVATESTRUCT: fMouse, hWndActive); a nonzero result keeps
+   * the previous active window. */
+  if (focused && old != h) {
+    struct {
+      BOOL mouse;
+      HWND active;
+    } cbt = {0, old};
+    if (u32_hooks(5, 5 /* HCBT_ACTIVATE */, (WPARAM)h, (LPARAM)&cbt) || !u32_window(h))
+      return;
+  }
   if (focused) {
     t->active = h;
     u32_foreground = h;
@@ -487,6 +506,11 @@ BOOL W32API ClipCursor(const RECT *r) {
   U32_GUARD;
   if (r && IsRectEmpty(r))
     return u32_fail(87);
+  /* fx-hlrun: NULL frees the cursor (Microsoft ClipCursor); a cursor that
+   * is not confined stays as it is and the desktop is not asked again
+   * (Half-Life's launcher calls ClipCursor(NULL) on every idle pass). */
+  if (!r && !clipped)
+    return 1;
   RECT old = clip;
   BOOL prev = clipped;
   clipped = !!r;

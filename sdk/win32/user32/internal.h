@@ -65,7 +65,8 @@ struct u32_window {
   struct u32_surface surface;
   struct u32_region update, damage;
   struct u32_prop *props;
-  BOOL destroying, creating, redraw, erase, internal_paint;
+  BOOL destroying, creating, redraw, internal_paint;
+  UINT erase; /* fx-hlrun: U32_ERASE_PENDING or U32_ERASE_DELAYED */
   UINT dcs;
   int pixel_format;
   struct dd_lease lease;
@@ -181,6 +182,7 @@ BOOL u32_directory_window(HWND, struct w32r_window *, char *);
 BOOL u32_sync_window(struct u32_window *);
 LRESULT u32_invoke(HWND, UINT, WPARAM, LPARAM);
 LRESULT u32_hooks(int, int, WPARAM, LPARAM);
+BOOL u32_hook_set(int kind); /* fx-hlrun */
 BOOL u32_queue(DWORD, HWND, UINT, WPARAM, LPARAM, UINT, DWORD, POINT);
 BOOL u32_message(struct ciuki_w32_message_args *);
 BOOL u32_sent(void);
@@ -278,6 +280,11 @@ void u32_paint_frame(HWND);
 void u32_caret_paint(HWND, HDC);
 UINT u32_hit_test(HWND, POINT);
 void u32_invalidate_children(struct u32_window *, RECT, BOOL);
+/* fx-hlrun: background erase states and the erase-now path (paint.c). */
+#define U32_ERASE_PENDING 1u
+#define U32_ERASE_DELAYED 2u
+void u32_erase_window(HWND);
+void u32_erase_now(HWND, UINT rdw_flags);
 HANDLE W32API LoadMenuA(HINSTANCE, const char *);
 /* f5-20B Unicode layer (unicode.c), Microsoft Layer for Unicode model: the
  * ANSI core stays authoritative and Unicode callers are converted through

@@ -86,132 +86,150 @@ def diagnostics(service):
     return '\n'.join(dict.fromkeys(ours))
 
 
+def cd_services(self, root, options=None, volume=None, fonts=False):
+    """The H1 installer services with a read-only D: view of the mounted
+    CD and the kernel's IS5 admission, over the service root `root` (kept by
+    the caller: a temporary tree, or fx-hlrun's local installed tree).
+    `options` are H1 game-exec harness settings (h1_game.c h1_game_options);
+    `volume` overrides the fixture C: free/total bytes reported by
+    GetDiskFreeSpace; `fonts` adds the w32srv font service (text in frames).
+    The services close at the test's cleanup."""
+    from scripts.win32 import is5boot, installer_fixture
+    from tests.host.win32.wine import test_wine_upper as upper
+    from . import host_services, test_flow_fixtures
+    # Optional read-only build inputs; never mutate another worktree.
+    saved = upper.CORE, upper.BUILD
+    upper.CORE = Path(os.environ.get('CIUKI_IS5_CORE', upper.CORE))
+    upper.BUILD = Path(os.environ.get('CIUKI_IS5_UPPER', upper.BUILD))
+    self.addCleanup(setattr, upper, 'CORE', saved[0])
+    self.addCleanup(setattr, upper, 'BUILD', saved[1])
+    if not (upper.CORE / 'builtin-store.json').is_file() or not upper.local_build_matches():
+        self.skipTest('H1 core outputs / qualified reused PEs absent')
+    # Run the normal H1 confinement preflight before reading commercial
+    # payload or compiling fixtures. A post-startup PE fault is a failure.
+    preflight = os.environ.get('CIUKI_IS5_H1_PREFLIGHT')
+    if preflight:
+        upper.require_h1_sandbox(self, Path(preflight))
+    fixtures = OUT / 'fixtures'
+    installer_fixture.build(fixtures)
+    program = test_flow_fixtures.h1_program(fixtures, self)
+    library, _, _ = host_services.build_bridge(OUT / 'services', fonts)
+    helper = is5boot.build(OUT / 'pe')
+
+    class Session(host_services.Session):
+        def path(self, name, writing=False):
+            full = self.fullpath(name)
+            if full[0] != 'D':
+                return super().path(name, writing)
+            if writing:
+                raise OSError(errno.EROFS, 'original CD is read-only')
+            p = CD
+            for part in full[3:].split('\\'):
+                if not part:
+                    continue
+                matches = [x for x in p.iterdir() if x.name.casefold() == part.casefold()]
+                if not matches:
+                    raise FileNotFoundError(errno.ENOENT, 'CD file absent')
+                p = matches[0]
+            return p
+
+        def handle_path(self, h, writing=False):
+            # A handle opened on the read-only CD view maps back to D:.
+            current = Path(os.readlink(f'/proc/self/fd/{h.value}'))
+            try:
+                relative = current.relative_to(CD)
+            except ValueError:
+                return super().handle_path(h, writing)
+            if writing:
+                raise OSError(errno.EROFS, 'original CD is read-only')
+            return self.path('D:\\' + '\\'.join(relative.parts))
+
+        def file(self, a, raw):
+            super().file(a, raw)
+            # GetDiskFreeSpace (action 19) of C: on a volume large enough
+            # for the title; the files really land on the host disk.
+            drive = self.fullpath(self.string(raw, a[6]) or '')[0] if a[4] == 19 and not a[17] else ''
+            if volume and drive == 'C':
+                struct.pack_into('<4I', raw, a[8] + 24, volume[0] & 0xffffffff, volume[0] >> 32,
+                                 volume[1] & 0xffffffff, volume[1] >> 32)
+            # fx-hlrun: D: is the mounted CD, as the kernel reports a CD
+            # drive (GetDriveType DRIVE_CDROM, the disc's label, CDFS, no
+            # free space): Half-Life looks for its disc among the CD drives.
+            if drive == 'D':
+                size = os.statvfs(CD)
+                total = size.f_blocks * size.f_frsize
+                struct.pack_into('<I', raw, a[8] + 4, 5)
+                struct.pack_into('<4I', raw, a[8] + 24, 0, 0, total & 0xffffffff, total >> 32)
+                struct.pack_into('<64s16s', raw, a[8] + 40, CD.name.encode()[:63], b'CDFS')
+
+        def dispatch(self, kind, raw, cap):
+            # w32srv's own directory records identify dialog windows:
+            # WINDOW_ALLOC (17) of the dialog class atom WC_DIALOG
+            # (#32770, 0x8002); the reply key is the HWND. MessageBox
+            # and DialogBox both build #32770 windows.
+            status, out = super().dispatch(kind, raw, cap)
+            if (kind == 2 and not status and len(raw) >= 40 and len(out) >= 40 and
+                    struct.unpack_from('<I', raw, 4)[0] == 17 and struct.unpack_from('<I', raw, 16)[0] == 0x8002 and
+                    not struct.unpack_from('<I', out, 4)[0]):
+                with self.service.lock:
+                    self.service.dialogs.add((self.pid, struct.unpack_from('<I', out, 8)[0]))
+            return status, out
+
+    class Services(host_services.Services):
+        def session(self, cwd='C:\\WINDOWS\\TEMP'):
+            with self.lock:
+                self.next_pid += 1
+                result = Session(self, self.next_pid, cwd)
+                self.sessions.append(result)
+                return result
+
+        def start(self, image, command, cwd='C:\\WINDOWS\\TEMP', flags=0):
+            source = Session(self, 0, cwd).path(image)
+            with source.open('rb') as f:
+                dos = f.read(64)
+                ne = b''
+                if len(dos) == 64 and dos[:2] == b'MZ':
+                    f.seek(struct.unpack_from('<I', dos, 60)[0]); ne = f.read(64)
+            # H1 replaces the kernel admission only. The native helper,
+            # decoder and original engine execute unchanged as PE32.
+            if len(ne) == 64 and ne[:2] == b'NE' and ne[54] == 2 and not struct.unpack_from('<H', ne, 12)[0] & 0x8000:
+                siblings = {p.name.upper() for p in source.parent.iterdir()}
+                bundle = 'SETUP.INS' in siblings and siblings.intersection({'_INST32I.EX_', '_INST32A.EX_', '_INST32M.EX_', '_INST32P.EX_'})
+                cleanup = False
+                if source.name.upper() == '_ISDEL.EXE':
+                    ini = Session(self, 0, cwd).path('C:\\WINDOWS\\_delis43.ini')
+                    if ini.is_file() and ini.stat().st_size <= 4096:
+                        data = ini.read_bytes()
+                        cleanup = data.startswith(b'[file') and all(key in data for key in
+                            (b'\nmain=', b'\nexeostype=1\r\n', b'\nalt0=', b'\nalt1='))
+                if bundle or cleanup:
+                    text = command.lstrip()
+                    if text.startswith('"'):
+                        end = text.find('"', 1); tail = text[end+1:].lstrip() if end >= 0 else ''
+                    else:
+                        tail = text.split(None, 1)[1] if len(text.split(None, 1)) > 1 else ''
+                    command = '"' + image + '" ' + tail
+                    image = 'C:\\System\\Win32\\is5boot.exe'
+            return self.start_adapter(['game-exec', image, command, *([options] if options else [])], image, cwd, flags)
+
+    service = Services(Path(root), library, program, fonts)
+    service.dialogs = set()
+    # Close before the TemporaryDirectory is removed: no commercial
+    # expanded engine/support or installed bytes remain on disk.
+    self.addCleanup(service.close)
+    target = service.root / 'C/System/Win32/is5boot.exe'
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(helper, target)
+    return service
+
+
 @unittest.skipUnless(CD.is_dir(), 'original Half-Life CD is not mounted')
 class LocalEngineTests(unittest.TestCase):
     def harness(self, options=None, volume=None):
-        """The H1 installer services with a read-only D: view of the mounted
-        CD and the kernel's IS5 admission. `options` are H1 game-exec harness
-        settings (h1_game.c h1_game_options); `volume` overrides the fixture
-        C: free/total bytes reported by GetDiskFreeSpace."""
-        from scripts.win32 import is5boot, installer_fixture
-        from tests.host.win32.wine import test_wine_upper as upper
-        from . import host_services, test_flow_fixtures
-        # Optional read-only build inputs; never mutate another worktree.
-        saved = upper.CORE, upper.BUILD
-        upper.CORE = Path(os.environ.get('CIUKI_IS5_CORE', upper.CORE))
-        upper.BUILD = Path(os.environ.get('CIUKI_IS5_UPPER', upper.BUILD))
-        self.addCleanup(setattr, upper, 'CORE', saved[0])
-        self.addCleanup(setattr, upper, 'BUILD', saved[1])
-        if not (upper.CORE / 'builtin-store.json').is_file() or not upper.local_build_matches():
-            self.skipTest('H1 core outputs / qualified reused PEs absent')
-        # Run the normal H1 confinement preflight before reading commercial
-        # payload or compiling fixtures. A post-startup PE fault is a failure.
-        preflight = os.environ.get('CIUKI_IS5_H1_PREFLIGHT')
-        if preflight:
-            upper.require_h1_sandbox(self, Path(preflight))
-        fixtures = OUT / 'fixtures'
-        installer_fixture.build(fixtures)
-        program = test_flow_fixtures.h1_program(fixtures, self)
-        library, _, _ = host_services.build_bridge(OUT / 'services')
-        helper = is5boot.build(OUT / 'pe')
-
-        class Session(host_services.Session):
-            def path(self, name, writing=False):
-                full = self.fullpath(name)
-                if full[0] != 'D':
-                    return super().path(name, writing)
-                if writing:
-                    raise OSError(errno.EROFS, 'original CD is read-only')
-                p = CD
-                for part in full[3:].split('\\'):
-                    if not part:
-                        continue
-                    matches = [x for x in p.iterdir() if x.name.casefold() == part.casefold()]
-                    if not matches:
-                        raise FileNotFoundError(errno.ENOENT, 'CD file absent')
-                    p = matches[0]
-                return p
-
-            def handle_path(self, h, writing=False):
-                # A handle opened on the read-only CD view maps back to D:.
-                current = Path(os.readlink(f'/proc/self/fd/{h.value}'))
-                try:
-                    relative = current.relative_to(CD)
-                except ValueError:
-                    return super().handle_path(h, writing)
-                if writing:
-                    raise OSError(errno.EROFS, 'original CD is read-only')
-                return self.path('D:\\' + '\\'.join(relative.parts))
-
-            def file(self, a, raw):
-                super().file(a, raw)
-                # GetDiskFreeSpace (action 19) of C: on a volume large enough
-                # for the title; the files really land on the host disk.
-                if volume and a[4] == 19 and not a[17] and self.fullpath(self.string(raw, a[6]) or '')[0] == 'C':
-                    struct.pack_into('<4I', raw, a[8] + 24, volume[0] & 0xffffffff, volume[0] >> 32,
-                                     volume[1] & 0xffffffff, volume[1] >> 32)
-
-            def dispatch(self, kind, raw, cap):
-                # w32srv's own directory records identify dialog windows:
-                # WINDOW_ALLOC (17) of the dialog class atom WC_DIALOG
-                # (#32770, 0x8002); the reply key is the HWND. MessageBox
-                # and DialogBox both build #32770 windows.
-                status, out = super().dispatch(kind, raw, cap)
-                if (kind == 2 and not status and len(raw) >= 40 and len(out) >= 40 and
-                        struct.unpack_from('<I', raw, 4)[0] == 17 and struct.unpack_from('<I', raw, 16)[0] == 0x8002 and
-                        not struct.unpack_from('<I', out, 4)[0]):
-                    with self.service.lock:
-                        self.service.dialogs.add((self.pid, struct.unpack_from('<I', out, 8)[0]))
-                return status, out
-
-        class Services(host_services.Services):
-            def session(self, cwd='C:\\WINDOWS\\TEMP'):
-                with self.lock:
-                    self.next_pid += 1
-                    result = Session(self, self.next_pid, cwd)
-                    self.sessions.append(result)
-                    return result
-
-            def start(self, image, command, cwd='C:\\WINDOWS\\TEMP', flags=0):
-                source = Session(self, 0, cwd).path(image)
-                with source.open('rb') as f:
-                    dos = f.read(64)
-                    ne = b''
-                    if len(dos) == 64 and dos[:2] == b'MZ':
-                        f.seek(struct.unpack_from('<I', dos, 60)[0]); ne = f.read(64)
-                # H1 replaces the kernel admission only. The native helper,
-                # decoder and original engine execute unchanged as PE32.
-                if len(ne) == 64 and ne[:2] == b'NE' and ne[54] == 2 and not struct.unpack_from('<H', ne, 12)[0] & 0x8000:
-                    siblings = {p.name.upper() for p in source.parent.iterdir()}
-                    bundle = 'SETUP.INS' in siblings and siblings.intersection({'_INST32I.EX_', '_INST32A.EX_', '_INST32M.EX_', '_INST32P.EX_'})
-                    cleanup = False
-                    if source.name.upper() == '_ISDEL.EXE':
-                        ini = Session(self, 0, cwd).path('C:\\WINDOWS\\_delis43.ini')
-                        if ini.is_file() and ini.stat().st_size <= 4096:
-                            data = ini.read_bytes()
-                            cleanup = data.startswith(b'[file') and all(key in data for key in
-                                (b'\nmain=', b'\nexeostype=1\r\n', b'\nalt0=', b'\nalt1='))
-                    if bundle or cleanup:
-                        text = command.lstrip()
-                        if text.startswith('"'):
-                            end = text.find('"', 1); tail = text[end+1:].lstrip() if end >= 0 else ''
-                        else:
-                            tail = text.split(None, 1)[1] if len(text.split(None, 1)) > 1 else ''
-                        command = '"' + image + '" ' + tail
-                        image = 'C:\\System\\Win32\\is5boot.exe'
-                return self.start_adapter(['game-exec', image, command, *([options] if options else [])], image, cwd, flags)
-
+        """cd_services over a temporary root removed at cleanup."""
         scratch = tempfile.TemporaryDirectory(dir=OUT)
         self.addCleanup(scratch.cleanup)
-        service = Services(Path(scratch.name) / 'root', library, program)
-        service.dialogs = set()
-        # Close before the TemporaryDirectory is removed: no commercial
-        # expanded engine/support or installed bytes remain on disk.
-        self.addCleanup(service.close)
-        target = service.root / 'C/System/Win32/is5boot.exe'
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(helper, target)
-        return service
+        return cd_services(self, Path(scratch.name) / 'root', options, volume)
 
     def test_original_setup_to_first_dialog(self):
         service = self.harness()

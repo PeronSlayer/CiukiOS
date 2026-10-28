@@ -73,6 +73,14 @@ struct dc {
   void *opaque;
   void *printer; /* G31 printer lifecycle, independent of saved DC state. */
   struct gdi_recorder *record; /* f5-20B: a metafile DC records its calls */
+  /* fx-hlrun: SetBoundsRect/GetBoundsRect accumulation, in buffer
+   * coordinates like the damage rectangles; empty when right <= left. */
+  RECT bounds;
+  int bounds_enabled;
+  /* fx-hlrun: the screen DC of GetDC(NULL) (w32_gdi_display_dc): a memory
+   * DC without pixels that stands for the display device, so bitmaps made
+   * compatible with it take the display's format. */
+  int display;
 };
 struct object {
   unsigned type, refs, stock;
@@ -114,6 +122,8 @@ int gdi_visible(void *, int, int);
 int gdi_transform(struct dc *, POINT *, int, int);
 RECT gdi_rect(struct dc *, RECT);
 void gdi_damage(struct dc *, RECT);
+void gdi_repaint(struct dc *, RECT); /* damage without drawing bounds */
+unsigned gdi_display_bpp(void); /* fx-hlrun: bits per pixel of the display */
 DWORD gdi_color(COLORREF);
 DWORD gdi_resolve_color(struct dc *, COLORREF);
 DWORD gdi_encode_color(struct dc *, COLORREF);

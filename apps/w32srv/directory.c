@@ -109,7 +109,9 @@ uint32_t wr_directory_call(struct wr_server *s,uint32_t pid,const struct w32r_re
         /* G5: clipboard bytes live only in the desktop. Keep this service's
          * Win32 thread lock and viewer chain, but reject the retired data API. */
         if(r->op==W32R_CLIP_GET||r->op==W32R_CLIP_SET||r->op==W32R_CLIP_EMPTY||r->op==W32R_CLIP_QUERY)return 120;
-        out->key=d->clip_owner;out->type=d->clip_viewer;
+        /* fx-hlrun: count reports the window that has the clipboard open
+         * (GetOpenClipboardWindow); type is the first viewer. */
+        out->key=d->clip_owner;out->type=d->clip_viewer;out->count=d->clip_window;
         if(r->op==W32R_CLIP_OPEN){
             if(d->clip_pid)return 5;
             if(!r->index)return 87;

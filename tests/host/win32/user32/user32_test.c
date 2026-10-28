@@ -1128,6 +1128,7 @@ static void test_quake_pump(void) {
   u32_clear_input();
   puts("PASS Quake III pump: PeekMessage(PM_NOREMOVE)/GetMessage/TranslateMessage per message types every character of \"map q3dm17\" for six arrival points of the next key");
 }
+static UINT sent_count(UINT opcode);
 static void test_input(void) {
   MSG msg;
   struct u32_window *w = u32_window(windows[0]);
@@ -1211,10 +1212,26 @@ static void test_input(void) {
   CHECK(cursor);
   SetCursor(cursor);
   CHECK(ShowCursor(0) == -1 && ShowCursor(1) == 0);
+  /* fx-hlrun: only a visibility change (display count crossing 0) and a
+   * real clip change reach the desktop; Half-Life's launcher repeats
+   * ShowCursor(TRUE), ShowCursor(FALSE) and ClipCursor(NULL) on every
+   * idle pass (Microsoft ShowCursor, ClipCursor). */
+  UINT cursor_sent = sent_count(DESK_SET_CURSOR), pointer_sent = sent_count(DESK_V3_POINTER);
+  CHECK(ShowCursor(1) == 1 && ShowCursor(0) == 0 && ClipCursor(0) && ClipCursor(0));
+  CHECK(sent_count(DESK_SET_CURSOR) == cursor_sent && sent_count(DESK_V3_POINTER) == pointer_sent);
+  CHECK(ShowCursor(0) == -1 && sent_count(DESK_SET_CURSOR) == cursor_sent + 1);
+  CHECK(ShowCursor(1) == 0 && sent_count(DESK_SET_CURSOR) == cursor_sent + 2);
+  CHECK(ClipCursor(&(RECT){10, 10, 40, 40}) && sent_count(DESK_V3_POINTER) == pointer_sent + 1);
+  CHECK(ClipCursor(0) && sent_count(DESK_V3_POINTER) == pointer_sent + 2);
   printf("TRACE capture focus loss/resync cursor clip warp\n");
 }
 static void test_paint(void) {
   struct u32_window *w = u32_window(windows[0]);
+  /* fx-hlrun: UpdateWindow also paints children that still need it; paint
+   * what earlier steps left pending before measuring the damage records. */
+  CHECK(UpdateWindow(windows[0]));
+  ui_kernel_pause(20);
+  u32_flush();
   ValidateRect(windows[0], 0);
   outgoing_count = 0;
   ui_kernel_pause(20);
@@ -1229,11 +1246,21 @@ static void test_paint(void) {
     if (outgoing[i].data[1] == DESK_DAMAGE) {
       UINT *expected =
           damages == 0 ? (UINT[4]){1, 2, 3, 4} : (UINT[4]){10, 10, 2, 2};
+      UINT got[4];
       for (UINT j = 0; j < 4; j++)
-        CHECK(desk_get32(outgoing[i].data + 16 + j * 4) == expected[j]);
+        got[j] = desk_get32(outgoing[i].data + 16 + j * 4);
+      if (damages >= 2) {
+        /* fx-hlrun: UpdateWindow then repaints the child (5,5 20x20) that
+         * the second rectangle invalidated too (no WS_CLIPCHILDREN). */
+        CHECK(got[0] >= 5 && got[1] >= 5 && got[0] + got[2] <= 25 && got[1] + got[3] <= 25);
+        damages++;
+        continue;
+      }
+      for (UINT j = 0; j < 4; j++)
+        CHECK(got[j] == expected[j]);
       damages++;
     }
-  CHECK(damages == 2);
+  CHECK(damages == 2 || damages == 3);
   CHECK(w32_u32((uint8_t *)w->surface.pixels + 2 * w->surface.pitch + 4) ==
         0xaabbcc);
   CHECK(w32_u32(w->surface.pixels) == 0);
@@ -1429,6 +1456,313 @@ static void test_extras(void) {
   ui_kernel_switch(0);
   printf("TRACE hooks LIFO timer callback global enumeration desktop rejection "
          "standard icons metrics thread routing\n");
+}
+
+/* fx-hlrun: WH_CBT as MFC uses it (AfxHookWindowCreate subclasses each new
+ * window in HCBT_CREATEWND, before its first message) and the other CBT
+ * codes with their refusals. */
+struct cbt_call { int code; WPARAM wp; LPARAM lp; };
+static struct cbt_call cbt_seen[64];
+static UINT cbt_count, cbt_refuse, cbt_nccreate_subclassed, cbt_oversize;
+static WNDPROC cbt_original;
+static HWND cbt_subclassed;
+static char cbt_class[32];
+static WCHAR cbt_wide_class[32];
+static LRESULT W32API cbt_subclass(HWND h, UINT m, WPARAM wp, LPARAM lp) {
+  if (m == WM_NCCREATE && h == cbt_subclassed)
+    cbt_nccreate_subclassed++;
+  return CallWindowProcA(cbt_original, h, m, wp, lp);
+}
+static LRESULT W32API cbt_hook(int code, WPARAM wp, LPARAM lp) {
+  if (cbt_count < 64)
+    cbt_seen[cbt_count++] = (struct cbt_call){code, wp, lp};
+  if (code == 3 /* HCBT_CREATEWND */) {
+    CREATESTRUCTA *cs = *(CREATESTRUCTA **)lp;
+    snprintf(cbt_class, sizeof(cbt_class), "%s", cs->lpszClass);
+    if (cbt_oversize)
+      cs->cx = 5000; /* a size USER refuses: creation fails after the hook */
+    if (!cbt_subclassed) {
+      cbt_subclassed = (HWND)wp;
+      /* The fixture is not position independent: code addresses fit in a LONG. */
+      cbt_original = (WNDPROC)(uintptr_t)(DWORD)SetWindowLongA((HWND)wp, GWL_WNDPROC, (LONG)(uintptr_t)cbt_subclass);
+    }
+  }
+  if (cbt_refuse == (UINT)code + 1)
+    return 1;
+  return CallNextHookEx(0, code, wp, lp);
+}
+static LRESULT W32API cbt_hook_wide(int code, WPARAM wp, LPARAM lp) {
+  if (code == 3) {
+    /* CREATESTRUCTW: the class name pointer follows the window name. */
+    const struct { void *params; HINSTANCE i; HANDLE menu; HWND parent; int cy, cx, y, x; LONG style;
+                   const WCHAR *name, *klass; DWORD ex; } *cs = *(void **)lp;
+    for (UINT i = 0; i < 31 && cs->klass[i]; i++)
+      cbt_wide_class[i] = cs->klass[i];
+  }
+  return CallNextHookEx(0, code, wp, lp);
+}
+static UINT trace_index(HWND h, UINT m);
+static UINT cbt_find(int code, WPARAM wp) {
+  for (UINT i = 0; i < cbt_count; i++)
+    if (cbt_seen[i].code == code && cbt_seen[i].wp == wp)
+      return i + 1;
+  return 0;
+}
+static void test_cbt(void) {
+  extern HANDLE W32API SetWindowsHookExW(int, HOOKPROC, HINSTANCE, DWORD);
+  HANDLE hook = SetWindowsHookExA(5, cbt_hook, 0, u32_tid());
+  CHECK(hook);
+  traces = 0;
+  HWND w = CreateWindowExA(0, "USER fixture", "cbt", WS_CAPTION, 40, 40, 60, 60, 0, 0, 0, 0);
+  CHECK(w && w == cbt_subclassed && cbt_nccreate_subclassed == 1 && !strcmp(cbt_class, "USER fixture"));
+  UINT created = cbt_find(3, (WPARAM)w);
+  CHECK(created && trace_index(w, WM_NCCREATE) < 9999);
+  /* A refused creation: no window, no message. */
+  cbt_refuse = 3 + 1;
+  cbt_count = 0;
+  traces = 0;
+  CHECK(!CreateWindowExA(0, "USER fixture", "refused", WS_CAPTION, 0, 0, 30, 30, 0, 0, 0, 0));
+  CHECK(cbt_count >= 1 && cbt_seen[0].code == 3);
+  HWND refused = (HWND)cbt_seen[0].wp;
+  for (UINT i = 0; i < traces; i++)
+    CHECK(trace[i].h != refused);
+  CHECK(!IsWindow(refused));
+  cbt_refuse = 0;
+  /* fx-hlrun: a creation that fails after the hook saw the window ends it
+   * with WM_NCDESTROY (MFC detaches the CWnd it attached in the hook). */
+  cbt_oversize = 1;
+  cbt_count = 0;
+  traces = 0;
+  CHECK(!CreateWindowExA(0, "USER fixture", "oversize", WS_CAPTION, 0, 0, 30, 30, 0, 0, 0, 0));
+  HWND failed = (HWND)cbt_seen[0].wp;
+  CHECK(cbt_count >= 1 && cbt_seen[0].code == 3 && trace_index(failed, WM_NCDESTROY) < 9999 &&
+        trace_index(failed, WM_NCCREATE) == 9999 && !IsWindow(failed));
+  cbt_oversize = 0;
+  /* HCBT_MINMAX (lParam: the show command) and its refusal. */
+  cbt_count = 0;
+  ShowWindow(w, 3 /* SW_MAXIMIZE */);
+  CHECK(cbt_find(1, (WPARAM)w) && cbt_seen[cbt_find(1, (WPARAM)w) - 1].lp == 3 && IsZoomed(w));
+  cbt_refuse = 1 + 1;
+  ShowWindow(w, 6 /* SW_MINIMIZE */);
+  CHECK(!IsIconic(w) && IsZoomed(w));
+  cbt_refuse = 0;
+  ShowWindow(w, 9 /* SW_RESTORE */);
+  CHECK(!IsZoomed(w));
+  /* HCBT_SYSCOMMAND from DefWindowProc; a refusal skips the command. */
+  cbt_count = 0;
+  keep_on_close = 0;
+  cbt_refuse = 8 + 1;
+  traces = 0;
+  CHECK(!DefWindowProcA(w, WM_SYSCOMMAND, SC_CLOSE, 0));
+  CHECK(cbt_find(8, SC_CLOSE) && trace_index(w, WM_CLOSE) == 9999 && IsWindow(w));
+  cbt_refuse = 0;
+  /* HCBT_SETFOCUS: refused focus stays where it was. */
+  HWND focus = GetFocus();
+  cbt_count = 0;
+  cbt_refuse = 9 + 1;
+  if (focus != w)
+    CHECK(!SetFocus(w) && GetFocus() == focus && cbt_find(9, (WPARAM)w));
+  cbt_refuse = 0;
+  /* A Unicode hook sees the class name in Unicode. */
+  HANDLE wide = SetWindowsHookExW(5, cbt_hook_wide, 0, u32_tid());
+  CHECK(wide);
+  HWND w2 = CreateWindowExA(0, "USER fixture", "wide", WS_CAPTION, 0, 0, 30, 30, 0, 0, 0, 0);
+  CHECK(w2 && cbt_wide_class[0] == 'U' && cbt_wide_class[4] == ' ' && cbt_wide_class[5] == 'f');
+  CHECK(UnhookWindowsHookEx(wide));
+  /* HCBT_DESTROYWND: a refusal keeps the window. */
+  cbt_count = 0;
+  cbt_refuse = 4 + 1;
+  CHECK(!DestroyWindow(w2) && IsWindow(w2) && cbt_find(4, (WPARAM)w2));
+  cbt_refuse = 0;
+  CHECK(DestroyWindow(w2) && !IsWindow(w2));
+  SetWindowLongA(w, GWL_WNDPROC, (LONG)(uintptr_t)cbt_original);
+  /* fx-hlrun: WindowFromDC names the window of a DC until ReleaseDC; the
+   * screen DC belongs to the desktop window; other DCs have none. */
+  extern HWND W32API WindowFromDC(HDC);
+  extern HWND W32API GetDesktopWindow(void);
+  HDC dc = GetDC(w), screen = GetDC(0);
+  CHECK(dc && WindowFromDC(dc) == w);
+  if (screen) /* the screen DC needs the GDI engine (real_gdi fixtures) */
+    CHECK(WindowFromDC(screen) == GetDesktopWindow() && ReleaseDC(0, screen) == 1 && !WindowFromDC(screen));
+  CHECK(ReleaseDC(w, dc) == 1 && !WindowFromDC(dc) && !WindowFromDC(0));
+  CHECK(DestroyWindow(w));
+  CHECK(UnhookWindowsHookEx(hook));
+  cbt_subclassed = 0;
+  printf("TRACE WH_CBT: HCBT_CREATEWND subclass before WM_NCCREATE, refused creation without messages, "
+         "MINMAX, SYSCOMMAND, SETFOCUS and DESTROYWND refusals, Unicode CREATESTRUCT\n");
+}
+
+/* fx-hlrun: a child that begins painting takes its update region out of the
+ * ancestors without WS_CLIPCHILDREN (Wine server/window.c validate_parents):
+ * a parent painting after its child no longer paints over it. */
+static BOOL region_meets(const struct u32_region *r, RECT box) {
+  for (UINT i = 0; i < r->n; i++) {
+    RECT hit;
+    if (IntersectRect(&hit, &r->r[i], &box))
+      return 1;
+  }
+  return 0;
+}
+static void test_child_paint_validates_parent(void) {
+  for (int clip = 0; clip < 2; clip++) {
+    HWND parent = CreateWindowExA(0, "USER fixture", "paint order", WS_VISIBLE | WS_POPUP | (clip ? WS_CLIPCHILDREN : 0),
+                                  20, 20, 120, 90, 0, 0, 0, 0);
+    HWND child = CreateWindowExA(0, "USER fixture", 0, WS_VISIBLE | WS_CHILD, 10, 10, 40, 30, parent, 0, 0, 0);
+    CHECK(parent && child);
+    MSG m;
+    while (PeekMessageA(&m, 0, WM_PAINT, WM_PAINT, PM_REMOVE))
+      DispatchMessageA(&m);
+    CHECK(InvalidateRect(parent, 0, 1) && (clip || InvalidateRect(child, 0, 1)));
+    if (clip)
+      CHECK(InvalidateRect(child, 0, 1));
+    struct u32_window *pw = u32_window(parent);
+    RECT area = {10, 10, 50, 40};
+    CHECK(pw->update.n && region_meets(&pw->update, area));
+    CHECK(UpdateWindow(child));
+    /* Without WS_CLIPCHILDREN the child's area left the parent's region;
+     * with it the parent's region never covered the child to begin with
+     * (InvalidateRect does not reach children), and stays unchanged. */
+    CHECK(region_meets(&pw->update, area) == (clip ? 1 : 0));
+    CHECK(region_meets(&pw->update, (RECT){60, 50, 100, 80}));
+    CHECK(DestroyWindow(parent) && !IsWindow(child));
+  }
+  /* UpdateWindow paints the window, then its children that still need it,
+   * within the call (RDW_UPDATENOW | RDW_ALLCHILDREN). */
+  HWND parent = CreateWindowExA(0, "USER fixture", "update now", WS_VISIBLE | WS_POPUP, 20, 20, 120, 90, 0, 0, 0, 0);
+  HWND child = CreateWindowExA(0, "USER fixture", 0, WS_VISIBLE | WS_CHILD, 10, 10, 40, 30, parent, 0, 0, 0);
+  CHECK(parent && child && InvalidateRect(parent, 0, 1));
+  traces = 0;
+  CHECK(UpdateWindow(parent));
+  UINT first = trace_index(parent, WM_PAINT), second = trace_index(child, WM_PAINT);
+  CHECK(first < second && second < 9999 && !u32_window(parent)->update.n && !u32_window(child)->update.n);
+  /* RDW_NOCHILDREN keeps the children waiting. */
+  CHECK(InvalidateRect(parent, 0, 1));
+  traces = 0;
+  CHECK(RedrawWindow(parent, 0, 0, 0x100 /* RDW_UPDATENOW */ | 0x40 /* RDW_NOCHILDREN */));
+  CHECK(trace_index(parent, WM_PAINT) < 9999 && trace_index(child, WM_PAINT) == 9999 && u32_window(child)->update.n);
+  CHECK(DestroyWindow(parent));
+  printf("TRACE child BeginPaint validates the update region of ancestors without WS_CLIPCHILDREN; "
+         "UpdateWindow paints parent then children\n");
+}
+
+/* fx-hlrun: erasing outside WM_PAINT. SetWindowPos/ShowWindow erase a
+ * window that becomes visible (and a parent that a hidden child uncovers)
+ * at once, RDW_ERASENOW erases without painting, GetUpdateRect(TRUE) erases
+ * through the update region; the update region stays pending through the
+ * erase, so a WM_ERASEBKGND handler calling BeginPaint (MFC programs:
+ * Half-Life's launcher and CD menu) paints and validates it; an unhandled
+ * erase is reported as fErase without a second WM_ERASEBKGND (Wine 10.0
+ * win32u/dce.c erase_now/send_erase, window.c set_window_pos). */
+struct erase_entry { HWND h; UINT m; BOOL erase; RECT paint; };
+static struct erase_entry erase_log[64];
+static UINT erase_count;
+static int erase_nested;
+static LRESULT erase_answer = 1;
+static LRESULT W32API erase_proc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
+  if (m == WM_ERASEBKGND) {
+    UINT k = erase_count < 64 ? erase_count++ : 63;
+    erase_log[k] = (struct erase_entry){h, m, 0, {0, 0, 0, 0}};
+    CHECK(wp);
+    if (erase_nested) {
+      PAINTSTRUCT ps;
+      CHECK(BeginPaint(h, &ps));
+      erase_log[k].paint = ps.rcPaint;
+      erase_log[k].erase = ps.fErase;
+      CHECK(EndPaint(h, &ps));
+    }
+    return erase_answer;
+  }
+  if (m == WM_PAINT) {
+    PAINTSTRUCT ps;
+    UINT k = erase_count < 64 ? erase_count++ : 63;
+    CHECK(BeginPaint(h, &ps));
+    erase_log[k] = (struct erase_entry){h, m, ps.fErase, ps.rcPaint};
+    CHECK(EndPaint(h, &ps));
+    return 0;
+  }
+  return DefWindowProcA(h, m, wp, lp);
+}
+static UINT erase_find(HWND h, UINT m) {
+  for (UINT i = 0; i < erase_count; i++)
+    if (erase_log[i].h == h && erase_log[i].m == m)
+      return i + 1;
+  return 0;
+}
+static void test_erase_now(void) {
+  WNDCLASSA c = {.lpfnWndProc = erase_proc, .lpszClassName = "fx-hlrun erase"};
+  CHECK(RegisterClassA(&c));
+  /* Shown: erased at once, the update region still pending for WM_PAINT,
+   * which then reports no erase left to do. */
+  HWND h = CreateWindowExA(0, "fx-hlrun erase", "erase", WS_POPUP, 30, 30, 90, 60, 0, 0, 0, 0);
+  CHECK(h);
+  erase_count = 0;
+  ShowWindow(h, 5);
+  CHECK(erase_find(h, WM_ERASEBKGND) == 1 && !erase_find(h, WM_PAINT) && u32_window(h)->update.n);
+  CHECK(UpdateWindow(h) && erase_find(h, WM_PAINT) == 2 && !erase_log[1].erase);
+  CHECK(erase_count == 2 && !u32_window(h)->update.n);
+  /* An unhandled erase is left to the painter: fErase, no second message. */
+  ShowWindow(h, 0);
+  erase_answer = 0;
+  erase_count = 0;
+  ShowWindow(h, 5);
+  CHECK(UpdateWindow(h) && erase_count == 2 && erase_log[0].m == WM_ERASEBKGND && erase_log[1].m == WM_PAINT &&
+        erase_log[1].erase);
+  erase_answer = 1;
+  /* The MFC pattern: BeginPaint inside WM_ERASEBKGND gets the whole pending
+   * region and validates it, so no WM_PAINT follows. */
+  ShowWindow(h, 0);
+  erase_nested = 1;
+  erase_count = 0;
+  ShowWindow(h, 5);
+  CHECK(erase_count == 1 && erase_log[0].paint.right == 90 && erase_log[0].paint.bottom == 60 &&
+        !u32_window(h)->update.n);
+  CHECK(UpdateWindow(h) && erase_count == 1);
+  erase_nested = 0;
+  /* RDW_ERASENOW erases and leaves WM_PAINT queued; RDW_UPDATENOW paints. */
+  erase_count = 0;
+  CHECK(RedrawWindow(h, 0, 0, 1 /* RDW_INVALIDATE */ | 4 /* RDW_ERASE */ | 0x200 /* RDW_ERASENOW */));
+  CHECK(erase_count == 1 && erase_log[0].m == WM_ERASEBKGND && u32_window(h)->update.n);
+  CHECK(RedrawWindow(h, 0, 0, 0x100 /* RDW_UPDATENOW */) && erase_count == 2 && erase_log[1].m == WM_PAINT);
+  /* GetUpdateRect(TRUE) erases through the update region. */
+  CHECK(InvalidateRect(h, &(RECT){5, 5, 20, 20}, 1));
+  erase_count = 0;
+  erase_nested = 1;
+  RECT r;
+  CHECK(GetUpdateRect(h, &r, 1) && erase_count == 1 && erase_log[0].paint.left == 5 && erase_log[0].paint.right == 20);
+  erase_nested = 0;
+  /* A desktop placement that only confirms or moves the window keeps its
+   * pixels; a new size repaints (DESK_CONFIGURE: width, height, scale,
+   * serial, x, y, state, style). */
+  struct u32_window *w = u32_window(h);
+  ValidateRect(h, 0);
+  UINT same[] = {90, 60, 1, 41, 70, 80, 0, 1};
+  event(w, DESK_CONFIGURE, same, 8);
+  u32_pump();
+  CHECK(!u32_window(h)->update.n);
+  UINT bigger[] = {100, 70, 1, 42, 70, 80, 0, 1};
+  event(w, DESK_CONFIGURE, bigger, 8);
+  u32_pump();
+  CHECK(u32_window(h)->update.n);
+  discard();
+  /* Children are erased with a parent that clips them; otherwise they wait
+   * for the parent's WM_PAINT. Hiding a child erases its parent now. */
+  for (int clip = 0; clip < 2; clip++) {
+    HWND parent = CreateWindowExA(0, "fx-hlrun erase", "parent", WS_POPUP | (clip ? WS_CLIPCHILDREN : 0), 20, 20,
+                                  120, 90, 0, 0, 0, 0);
+    HWND child = CreateWindowExA(0, "fx-hlrun erase", 0, WS_CHILD | WS_VISIBLE, 10, 10, 40, 30, parent, 0, 0, 0);
+    CHECK(parent && child);
+    erase_count = 0;
+    ShowWindow(parent, 5);
+    CHECK(erase_find(parent, WM_ERASEBKGND) == 1 && !!erase_find(child, WM_ERASEBKGND) == clip);
+    discard();
+    erase_count = 0;
+    ShowWindow(child, 0);
+    CHECK(erase_find(parent, WM_ERASEBKGND) && !erase_find(parent, WM_PAINT));
+    CHECK(DestroyWindow(parent));
+  }
+  CHECK(DestroyWindow(h));
+  puts("TRACE erase now: show/SetWindowPos/RDW_ERASENOW/GetUpdateRect erase outside WM_PAINT, region pending, "
+       "nested BeginPaint validates, unhandled erase as fErase, CONFIGURE repaints only a new size");
 }
 
 /* Last WINDOW_ORDER request sent for W, as {flags, after, gen, owner, gen}. */
@@ -2848,6 +3182,27 @@ static void test_production_gdi(void) {
   CHECK(!w32_user_gl_damage(U32_PTR(first_dc)));
   CHECK(ReleaseDC(windows[0],first_dc));
   puts("TRACE window pixel format survives simultaneous and reacquired DCs");
+  {
+    /* fx-hlrun: ExcludeUpdateRgn keeps a DC from drawing where WM_PAINT
+     * will repaint (the pending update region), on the production engine. */
+    extern int W32API ExcludeUpdateRgn(HDC, HWND);
+    ValidateRect(windows[0], 0);
+    CHECK(InvalidateRect(windows[0], &(RECT){0, 0, 10, 10}, 0));
+    HDC excluded = GetDC(windows[0]);
+    CHECK(excluded && ExcludeUpdateRgn(excluded, windows[0]) > 1);
+    RECT all;
+    GetClientRect(windows[0], &all);
+    CHECK(FillRect(excluded, &all, (HBRUSH)9 /* COLOR_WINDOWTEXT + 1 */));
+    CHECK(ReleaseDC(windows[0], excluded));
+    uint8_t *pixels = w->surface.pixels;
+    POINT origin = u32_origin(w), surface = u32_surface_origin(w);
+    UINT x = (UINT)(origin.x - surface.x), y = (UINT)(origin.y - surface.y);
+    CHECK(w32_u32(pixels + (y + 5) * w->surface.pitch + (x + 5) * 4) == 0xc0c0c0);
+    CHECK(w32_u32(pixels + (y + 15) * w->surface.pitch + (x + 15) * 4) != 0xc0c0c0);
+    CHECK(!ExcludeUpdateRgn(excluded, (HWND)(uintptr_t)0x7ff0) && GetLastError() == 1400);
+    ValidateRect(windows[0], 0);
+    puts("TRACE ExcludeUpdateRgn leaves the pending update region to WM_PAINT");
+  }
   /* q3exec4 review: the production v3 tail empties a busy DC's visible
    * region (what USER does to the DCs of a window it hides). */
   CHECK(u32_gdi->version == 3 && u32_gdi->visible);
@@ -2993,6 +3348,9 @@ static void run(void) {
   puts("STEP clipboard");
   test_clipboard();
   test_extras();
+  test_cbt();
+  test_child_paint_validates_parent();
+  test_erase_now();
   #ifndef U32_TEST_EXTERNAL_MODULES
   test_help_requests();
   #endif

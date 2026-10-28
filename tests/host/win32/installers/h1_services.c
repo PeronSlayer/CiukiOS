@@ -35,10 +35,37 @@ static int text(uint32_t *field){
     while(n<32768 && p[n])n++;
     return n<32768 && append(field,n+1,1);
 }
+static int32_t record(void *r,uint32_t size);
+/* fx-hlrun: a ReadFile/WriteFile larger than one relay packet goes in
+ * bounded chunks, as the kernel's W32_F_READ/W32_F_WRITE relay does
+ * (src/kernel/proc/win32/files.c, CIUKI_IO_MAX chunks under one VFS
+ * transaction): sequential chunks advance the file pointer, positional
+ * ones (flags 0x10000) the offset; the call stops at the first error or
+ * short transfer and reports the bytes moved. Half-Life's launcher reads a
+ * 2.9 MB bitmap from its PAK in one ReadFile. */
+#define CHUNK (512u*1024u)
+static int32_t chunked(struct ciuki_w32_file_args *a){
+    uint64_t at=((uint64_t)a->high<<32)|a->low;uint32_t total=0;int32_t e=0;
+    a->error=0;
+    do{
+        struct ciuki_w32_file_args one=*a;uint32_t n=a->bytes-total;if(n>CHUNK)n=CHUNK;
+        one.buffer=a->buffer+total;one.bytes=n;
+        if(a->flags&0x10000u){one.low=(uint32_t)(at+total);one.high=(uint32_t)((at+total)>>32);}
+        if((e=record(&one,sizeof(one))))break;
+        total+=one.result;a->error=one.error;
+        if(one.error || one.result<n)break;
+    }while(total<a->bytes);
+    a->result=total;return e;
+}
 static int32_t record(void *r,uint32_t size){
     uint32_t buffer=0,bytes=0,offset=0,used=0;
     struct ciuki_w32_header *header=r;
     if(size>128)return -22;
+    if(header->operation==W32_FILE && size==sizeof(struct ciuki_w32_file_args)){
+        struct ciuki_w32_file_args *a=r;
+        if((a->action==W32_F_READ || a->action==W32_F_WRITE) && a->bytes>CHUNK && !a->path && !a->path2)
+            return chunked(a);
+    }
     w32_copy(packet,r,size);length=size;
     if(header->operation==W32_FILE){
         struct ciuki_w32_file_args *a=(void *)packet;
@@ -169,6 +196,17 @@ static int memory(void *record,uint32_t op){
         uint32_t prot=a->protect==1?0:a->protect==2?1:a->protect==4?3:a->protect==0x10?4:a->protect==0x20?5:7;
         if(!host.services.protect(&host,(void *)(uintptr_t)a->address,a->bytes,prot))return -22;
         a->old_protect=regions[i].protect;regions[i].protect=a->protect;return 0;
+    }
+    /* fx-hlrun: VirtualProtect of mapped image pages (the kernel changes any
+     * committed extent, src/kernel/proc/win32/memory.c): the Quake-family
+     * software renderer makes its own code writable (Sys_MakeCodeWriteable).
+     * Image protections are not tracked here; the old value reported is the
+     * image code default PAGE_EXECUTE_READ. An unmapped range still fails. */
+    if(op==W32_VM_PROTECT && a->bytes){
+        uint32_t base=a->address&~4095u,end=(a->address+a->bytes+4095u)&~4095u;
+        uint32_t prot=a->protect==1?0:a->protect==2?1:a->protect==4?3:a->protect==0x10?4:a->protect==0x20?5:7;
+        if(end<=base || !host.services.protect(&host,(void *)(uintptr_t)base,end-base,prot))return -22;
+        a->old_protect=0x20;a->address=base;a->bytes=end-base;return 0;
     }
     return -22;
 }

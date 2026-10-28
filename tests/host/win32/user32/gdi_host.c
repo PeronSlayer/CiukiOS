@@ -133,7 +133,8 @@ static const struct {
                EXPORT(w32_gdi_palette_hook), EXPORT(w32_gdi_gl_window_format),
                EXPORT(w32_gdi_live_objects), EXPORT(GetPaletteEntries), EXPORT(CreatePalette),
                EXPORT(GetMetaFileBitsEx), EXPORT(SetMetaFileBitsEx), EXPORT(GetEnhMetaFileBits),
-               EXPORT(SetEnhMetaFileBits), EXPORT(DeleteMetaFile), EXPORT(DeleteEnhMetaFile)};
+               EXPORT(SetEnhMetaFileBits), EXPORT(DeleteMetaFile), EXPORT(DeleteEnhMetaFile),
+               EXPORT(ExcludeClipRect), EXPORT(GetClipBox) /* fx-hlrun: ExcludeUpdateRgn */};
 void *host_gdi_proc(const char *name) {
   for (unsigned i = 0; i < sizeof(exports) / sizeof(*exports); i++)
     if (!strcmp(exports[i].name, name))
