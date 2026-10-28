@@ -314,10 +314,14 @@ int desk_w32_native_shortcut(struct desktop *d,const struct desk_launch_record *
  * (a thread in a kernel wait) is abandoned and the shutdown proceeds (call
  * 73 then reports its holders as EBUSY and the user may Force). */
 #define DESK_W32_SHUTDOWN_MS 10000u
+/* sec-user-03: in a LOGON session the window server is the session's
+ * W32SRV launched by LOGON; the desktop neither spawns nor restarts it. */
+static int role_server;
 static int shutdown_pending,shutdown_done,shutdown_error,shutdown_killed;
 static uint64_t shutdown_sent_ms;
 int desk_w32_shutdown(void)
 {
+    if(role_server)return 1;   /* sec-user-03: the session's W32SRV flushes when the session ends */
     uint64_t now=clock_ns()/1000000;
     if(!shutdown_pending){
         supervisor.stopping=1;shutdown_pending=1;shutdown_done=0;shutdown_error=0;shutdown_killed=0;shutdown_sent_ms=now;
@@ -612,7 +616,9 @@ void desk_w32_start(struct desktop *d)
 {
     owner=d;struct w32r_service a;uint32_t e=service(1,1,&a);
     if(e || !a.result){fprintf(stderr,"[win32] desktop endpoint unavailable error=%u\n",e);return;}
-    authorized=1;d->launch_presented=launch_feedback_poll;d->w32_session=w32_session;d->w32_power=w32_power;d->power_w32_pids=w32_power_pids;desk_w32_supervise(&supervisor,&supervision,clock_ns());
+    role_server=d->logon_session;
+    authorized=1;d->launch_presented=launch_feedback_poll;d->w32_session=w32_session;d->w32_power=w32_power;d->power_w32_pids=w32_power_pids;
+    if(!role_server)desk_w32_supervise(&supervisor,&supervision,clock_ns());
 }
 void desk_w32_poll(struct desktop *d)
 {
@@ -632,7 +638,7 @@ void desk_w32_poll(struct desktop *d)
         shutdown_pending=shutdown_done=shutdown_error=0;
         supervisor.stopping=0;
     }
-    desk_w32_supervise(&supervisor,&supervision,now);
+    if(!role_server)desk_w32_supervise(&supervisor,&supervision,now);
     struct w32r_service a;
     for(unsigned k=0;k<DESK_CLIENTS;k++){
         if(service(3,1,&a) || !a.result)break;

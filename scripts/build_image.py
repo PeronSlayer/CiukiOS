@@ -479,6 +479,14 @@ def application_payloads(stage=None):
     registry_sources, registry_directories, registry_metadata = registry_build.image_payloads()
     sources.update(registry_sources)
     # end sec-k06
+    # sec-user-03: LOGON/LOGON_UI replace the interim desktop when the account
+    # service can publish accounts (build_logon.install_gate).
+    logon_spec = importlib.util.spec_from_file_location("image_logon", ROOT / "apps/logon/build_logon.py")
+    logon_build = importlib.util.module_from_spec(logon_spec)
+    logon_spec.loader.exec_module(logon_build)
+    logon_sources, logon_directories, logon_metadata = logon_build.image_payloads(accounts_metadata)
+    sources.update(logon_sources)
+    # end sec-user-03
     directories = {"/Programs", "/tmp", "/Documents", "/Documents/Desktop", "/System", "/system/tests",
                    "/system/licenses", "/system/assets", TEST_PATH}
     directories.update(f"{TEST_PATH}/{name}" for name in manifest["test_directories"])
@@ -500,6 +508,8 @@ def application_payloads(stage=None):
     metadata["registry"] = registry_metadata
     # end sec-k06
     metadata["accounts"] = accounts_metadata
+    directories.update(logon_directories)   # sec-user-03
+    metadata["logon"] = logon_metadata      # sec-user-03
     metadata["native_elf"] = strip_payloads(sources, stage) if stage is not None else []
     # The gate's relative supplement argv uses TEST_PATH. Retain the f2-07
     # absolute path as an alias; both copies are separately verified in T1.

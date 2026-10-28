@@ -268,6 +268,8 @@ void desk_logon_done(struct desktop *);
 int desk_logon_input(struct desktop *, const struct ciuki_input_event *);
 void desk_session_lock(struct desktop *);
 void desk_session_resume(struct desktop *);
+/* sec-user-03: a secure-menu action handed back by LOGON (logon_proto.h LGN_ACT_*). */
+void desk_session_action(struct desktop *, unsigned action);
 void desk_shortcut_properties(struct desktop *, unsigned link, int repair);
 const char *desk_program_menu_label(const char *);
 void desk_shell_reset(struct desktop *);

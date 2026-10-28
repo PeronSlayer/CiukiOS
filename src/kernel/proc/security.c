@@ -505,8 +505,8 @@ int security_subject_check(const struct security_subject *s, uint32_t action, ui
     if (service==1) return r==1 ? (op>=1 && op<=7 ? 0 : -EOPNOTSUPP) :
         r==2 && op==1 ? 0 : -EPERM;
     if (service==5) {
-        if ((r==3 && op==1) || (r==2 && (op==2 || op==3 || op==4 || op==6 || op==7)) ||
-            (r==6 && op==5 && scope && s->credential.session_id==scope)) return 0;
+        if ((r==3 && op==1) || (r==2 && (op==2 || op==3 || op==4 || op==6 || op==7 || op==8)) ||
+            (r==6 && (op==5 || op==9) && scope && s->credential.session_id==scope)) return 0; /* sec-user-03: 8, 9 */
         return -EPERM;
     }
     if (service==3 && r!=3 && r!=8) return -EPERM;

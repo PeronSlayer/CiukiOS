@@ -57,6 +57,11 @@ int main(int argc,char **argv)
     if(!initialized){fprintf(stderr,"[win32] registry load-failed\n");return 1;}
     if(seed){uint32_t e=wr_flush(&s);wr_destroy(&s);return e?1:0;}
     s.compat_writer_pid=(uint32_t)getppid();
+    /* sec-user-03: launched by LOGON, the parent is LOGON; the writer is the
+     * session's DESKTOP, bound below from a kernel-attested link. */
+    const char *launch_purpose=getenv("CIUKI_LAUNCH_PURPOSE");
+    int logon_launched=launch_purpose&&!strcmp(launch_purpose,"2");
+    if(logon_launched)s.compat_writer_pid=0;
     const char *user=getenv("CIUKI_SESSION_USER"), *profile=getenv("CIUKI_SESSION_ROOT");
     if (!s.session_only && ((user && *user) || (profile && *profile))) {
         uint32_t e=wr_select_profile(&s,user ? user : "",profile ? profile : "");
@@ -108,6 +113,23 @@ int main(int argc,char **argv)
 #endif
         ws_destroy(shell);wr_destroy(&s);return 1;
     }
+    /* --- sec-user-03: launched by LOGON (SESSION_LAUNCH W32SRV), the hive is
+     * loaded and the service registered: one 16-byte readiness message
+     * {1, launch id, launch generation, 0} on the kernel's readiness
+     * endpoint. Labels are descriptive; the kernel checks the sender. */
+    {
+        const char *fd_text=getenv("CIUKI_LAUNCH_READY_FD"),*id_text=getenv("CIUKI_LAUNCH_ID"),
+                   *generation_text=getenv("CIUKI_LAUNCH_GENERATION"),*purpose=getenv("CIUKI_LAUNCH_PURPOSE");
+        if(fd_text&&id_text&&generation_text&&purpose&&!strcmp(purpose,"2")){
+            struct ciuki_message ready;memset(&ready,0,sizeof(ready));
+            uint32_t words[4]={1,(uint32_t)strtoul(id_text,NULL,10),(uint32_t)strtoul(generation_text,NULL,10),0};
+            memcpy(ready.data,words,16);ready.length=16;
+            int sent=ciuki_channel_send(atoi(fd_text),&ready,DONTWAIT);
+            snprintf(failure,sizeof(failure),"[win32] w32srv session ready launch=%u result=%d",words[1],sent<0?-errno:0);
+            io.log(io.opaque,failure);
+        }
+    }
+    /* --- sec-user-03 (end) --- */
     uint64_t display_deadline=now()+2000;
     static struct {int fd;struct wr_session session;} clients[64];
     for(unsigned i=0;i<64;i++){clients[i].fd=-1;memset(&clients[i].session,0,sizeof(clients[i].session));}
@@ -120,6 +142,26 @@ int main(int argc,char **argv)
 #endif
     while(!stopping){
         int busy=0;
+#if !defined(__linux__)
+        /* --- sec-user-03: the session DESKTOP connects once to call-101
+         * service 6; the ACCEPT record's peer role/session (kernel output)
+         * names the end-session writer. No pid or name is trusted. --- */
+        if(logon_launched&&!s.compat_writer_pid){
+            struct ciuki_credential own;
+            for(unsigned n=0;n<4&&!ciuki_security_self(&own);n++){
+                struct ciuki_security_link in={.version=1,.size=64,.service=CIUKI_SECURITY_SERVICE_W32SRV},out;
+                memset(&out,0,sizeof(out));
+                struct ciuki_security_args sa={.version=1,.size=64,.operation=CIUKI_SECURITY_SERVICE_ACCEPT,
+                    .spawn_address=CU_PTR(&in),.output_address=CU_PTR(&out),.output_bytes=64};
+                if(ciuki_security(&sa))break;
+                if(out.peer_role==CIUKI_SECURITY_ROLE_DESKTOP&&out.session_id==own.session_id&&own.session_id)
+                    s.compat_writer_pid=out.peer_pid;
+                close(out.endpoint_fd);
+                if(s.compat_writer_pid)break;
+            }
+        }
+#endif
+        /* --- sec-user-03 (end) --- */
         while(service(3,&a)>0){
             unsigned i=0;while(i<64&&clients[i].fd>=0)i++;
             if(i==64){close((int)a.endpoint);continue;}
