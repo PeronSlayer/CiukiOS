@@ -43,14 +43,6 @@ DWORD W32API GetFullPathNameA(const char *s, DWORD n, char *out, char **file) {
 }
 void W32API SetLastError(DWORD e) { last_error = e; }
 DWORD W32API GetLastError(void) { return last_error; }
-/* sec-user-05: no profile session here, so jobs use the machine queue. */
-DWORD W32API GetEnvironmentVariableA(const char *name, char *out, DWORD n) {
-  (void)name;
-  (void)out;
-  (void)n;
-  last_error = 203;
-  return 0;
-}
 static int host_path(char *out, const char *p) {
   if (strncmp(p, CP_ROOT, strlen(CP_ROOT)))
     return 0;

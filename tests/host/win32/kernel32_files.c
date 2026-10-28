@@ -170,6 +170,19 @@ static void empty_drives(void) {
   puts("PASS fx-emptydrive Win32 drives: empty CD-ROM E: and floppy A: in GetLogicalDrives, DRIVE_CDROM/DRIVE_REMOVABLE "
        "with ERROR_NOT_READY for volume/space, open/create/find/stat/mkdir ERROR_NOT_READY, unknown letter ERROR_INVALID_DRIVE");
 }
+static void empty_drives_by_identity(void) {
+  struct ciuki_credential saved = client->subject->credential;
+  for (unsigned admin = 0; admin < 2; admin++) {
+    client->subject->credential = (struct ciuki_credential){
+        .version = 1, .size = sizeof(struct ciuki_credential), .uid = 1000,
+        .primary_gid = 545, .session_id = 1, .flags = CIUKI_CRED_INTERACTIVE,
+        .group_count = admin ? 2 : 1, .groups = {admin ? 544 : 545, 545}};
+    CHECK(security_admin(client) == (bool)admin);
+    empty_drives();
+  }
+  client->subject->credential = saved;
+  puts("PASS fx-emptydrive administrator and Standard user: no find handle without media");
+}
 static struct ciuki_w32_file_args open_request(const char *path,
                                                unsigned access, unsigned share,
                                                unsigned disposition) {
@@ -406,7 +419,7 @@ int main(int argc, char **argv) {
     vfs_table_destroy(&t);
   }
   amendment_file_identity();
-  empty_drives();
+  empty_drives_by_identity();
   amendment_files();
   delete_attr_race();
   struct ciuki_w32_file_args a =

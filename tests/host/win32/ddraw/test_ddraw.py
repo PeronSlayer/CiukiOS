@@ -82,7 +82,7 @@ class DirectDrawTests(unittest.TestCase):
         cls.binary=cls.out/'engine'
         units=[ROOT/'sdk/win32/ddraw'/s for s in ddraw.SOURCES if s!='native.c']
         units += [ROOT/'sdk/win32/gdi32'/s for s in gdi32.SOURCES if s not in ('compiler.c','compiler.S')]
-        units += [ROOT/'sdk/win32/services/bytes.c',HERE/'support.c',HERE/'shim.c',HERE/'replay.c',ROOT/'apps/desktop/protocol.c',HERE/'engine.c']
+        units += [ROOT/'sdk/win32/services/bytes.c',HERE/'support.c',ROOT/'tests/host/win32/no_environment.c',HERE/'shim.c',HERE/'replay.c',ROOT/'apps/desktop/protocol.c',HERE/'engine.c']
         cls.env=dict(os.environ,ASAN_OPTIONS='detect_leaks=0',TMPDIR=str(cls.out))
         cls.units=units
         cls.flags=['-std=c17','-D_GNU_SOURCE','-DW32_HOST_MODEL','-O2','-g','-fno-builtin','-fno-vectorize','-fno-slp-vectorize','-Wall','-Wextra','-Werror','-I'+str(ROOT/'sdk/win32/include'),'-idirafter',str(ROOT/'sdk/sysroot-overlay/include'),'-I'+str(ROOT/'src/kernel/include')]

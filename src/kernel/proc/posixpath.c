@@ -1073,7 +1073,10 @@ int vfs_resolve_subject_locked(struct vfs_table *t,const struct security_subject
     if(path[0] && path[1]==':') { drive=(unsigned)(path_upper((uint8_t)path[0])-'A'); path+=2; }
     /* sec-k03: an unbound drive is resolved too; px_policy_check_locked
      * applies the unmanaged-volume rule to it, never an implicit SYSTEM. */
-    if(drive>=26 || !vfs_drive_present(t->vfs,drive)) return drive>=26?-EACCES:-ENOENT;
+    if(drive>=26) return -EACCES;
+    /* fx-emptydrive: an owned letter without media is not a missing path.
+     * Report readiness before resolving/authorizing a directory on it. */
+    if(!vfs_drive_present(t->vfs,drive)) return vfs_drive_slot(t->vfs,drive)?-ENXIO:-ENOENT;
     /* Resolve the actual cwd before relative components. Never pre-normalize
      * input strings: that would erase an unauthorized intermediate directory. */
     struct px_node *start=s->root;
