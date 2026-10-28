@@ -6,6 +6,7 @@
  * told to set a password (contract 4.3) instead of a false lock. The G32 gate
  * below stays for the interim desktop of images without LOGON. */
 #include "../logon/logon_proto.h"
+#include "session_prefs.h"   /* sec-user-04 */
 static struct desk_box logon_box(const struct desktop *d)
 {
     int w=(int)d->width-16; if (w>420) w=420;
@@ -54,11 +55,43 @@ void desk_session_lock(struct desktop *d)
 }
 void desk_session_resume(struct desktop *d)
 {
-    /* sec-user-03: password-on-resume of a LOGON session is the trusted lock;
-     * sec-user-04 moves it before the frame is restored (RESUME entry). */
-    if (d->logon_session) { if (d->sh.power_cfg.password && d->session_lock) (void)d->session_lock(d); return; }
+    /* sec-user-04: a LOGON session arms password-on-resume before Stand by
+     * (desk_session_arm_resume); a resume it did not arm (firmware-initiated
+     * suspend) locks at once through LOGON (SECURE_ENTER RESUME), before the
+     * desktop repaints. A password-less owner has nothing to unlock with:
+     * no lock and no guidance here. */
+    if (d->logon_session) {
+        if (desk_secure_pref(d->sh.cfg.extra,DESK_SECURE_RESUME) && d->session_secure)
+            (void)d->session_secure(d,LGN_NOTICE_STANDBY,NULL);
+        return;
+    }
     if (!d->sh.user_gate && d->sh.power_cfg.password && d->sh.profile.name[0]) desk_logon_open(d,2);
 }
+/* --- sec-user-04 (contract 4.3): trusted saver dismissal and resume lock. */
+int desk_session_saver_lock(struct desktop *d)
+{
+    if (!d->logon_session || !desk_secure_pref(d->sh.cfg.extra,DESK_SECURE_SAVER)) return 0;
+    unsigned flags=0;
+    int e=d->session_secure ? d->session_secure(d,LGN_NOTICE_SAVER,&flags) : -ENOSYS;
+    return e;   /* a failure keeps the saver: fail closed, the next input retries */
+}
+int desk_session_arm_resume(struct desktop *d)
+{
+    if (!d->logon_session || !desk_secure_pref(d->sh.cfg.extra,DESK_SECURE_RESUME)) return 1;
+    if (!d->session_secure) return -ENOSYS;
+    unsigned flags=0;
+    int e=d->session_secure(d,d->resume_arming ? LGN_NOTICE_QUERY : LGN_NOTICE_STANDBY,&flags);
+    if (!d->resume_arming) { d->resume_arming=1; d->resume_arm_until=d->now_ns+3000000000ull; }
+    if (e) { d->resume_arming=0; return e; }
+    if ((flags&LGN_EVENT_BLANK) || (flags&LGN_EVENT_LOCKED)) { d->resume_arming=0; return 1; }
+    if (d->now_ns>=d->resume_arm_until) { d->resume_arming=0; return -ETIMEDOUT; }
+    return 0;   /* the gate's fence is still draining: Stand by waits */
+}
+int desk_session_password_set(struct desktop *d)
+{
+    return d->logon_session && d->session_secure ? d->session_secure(d,LGN_NOTICE_PASSWORD,NULL) : 0;
+}
+/* --- end sec-user-04 --- */
 void desk_session_action(struct desktop *d,unsigned action)
 {
     if (!d->logon_session || d->sh.gate) return;

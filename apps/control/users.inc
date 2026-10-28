@@ -2,6 +2,14 @@
  * Passwords stay in the controller; DU_CANVAS displays only a mask. */
 enum { U_LIST=1600,U_NAME,U_OLD,U_NEW,U_CONFIRM,U_CREATE,U_DELETE,U_CHANGE,U_LOGON,U_PROFILES,U_LOCK,U_APPLY,U_NOTE,U_DELETE_CONFIRM,U_REFRESH };
 static int user_page(const struct cp_app *a) { return a->page==CP_USERS || a->page==CP_PASSWORDS; }
+/* sec-user-04: in a kernel profile session the same pages are User Accounts
+ * over the SYSTEM account service (accounts.inc); the G32 code below stays
+ * for the interim desktop of an image without LOGON. */
+static int accounts_mode(const struct cp_app *);
+static void accounts_build(struct cp_app *);
+static void accounts_paint(struct cp_app *);
+static int accounts_event(struct cp_app *, const struct du_event *);
+static void accounts_poll(struct cp_app *);
 static void user_wipe(struct cp_app *a)
 {
     volatile char *p=(volatile char *)&a->user_request;
@@ -33,6 +41,7 @@ static void user_submit(struct cp_app *a,unsigned op)
 }
 static void user_poll(struct cp_app *a)
 {
+    if (accounts_mode(a)) { accounts_poll(a); return; }   /* sec-user-04 */
     if (a->building || !a->user_busy || !a->host.user_poll) return;
     struct users_view v; int e;
     if (!a->host.user_poll(a->host.ctx,&v,&e)) return;
@@ -50,6 +59,7 @@ static void user_poll(struct cp_app *a)
 }
 static void user_build(struct cp_app *a)
 {
+    if (accounts_mode(a)) { accounts_build(a); return; }   /* sec-user-04 */
     int passwords=a->page==CP_PASSWORDS;
     if (!passwords) {
         for (unsigned i=0;i<a->users.count;i++) a->user_items[i]=(struct du_item){.text={a->users.names[i]}};
@@ -82,6 +92,7 @@ static void user_build(struct cp_app *a)
 static void user_paint(struct cp_app *a)
 {
     if (!user_page(a)) return;
+    if (accounts_mode(a)) { accounts_paint(a); return; }   /* sec-user-04 */
     for (int id=U_OLD;id<=U_CONFIRM;id++) {
         struct du_widget *w=du_get(a->ui,id); if (!w) continue;
         const char *value=id==U_OLD ? a->user_request.old_password : id==U_NEW ? a->user_request.password : a->user_request.confirm;
@@ -95,6 +106,7 @@ static void user_paint(struct cp_app *a)
 static int user_event(struct cp_app *a,const struct du_event *e)
 {
     if (!user_page(a)) return 0;
+    if (accounts_mode(a)) return accounts_event(a,e);   /* sec-user-04 */
     if (e->type==DU_EV_KEY && e->id>=U_OLD && e->id<=U_CONFIRM) {
         if (a->user_busy) return 1;
         char *p=e->id==U_OLD ? a->user_request.old_password : e->id==U_NEW ? a->user_request.password : a->user_request.confirm;

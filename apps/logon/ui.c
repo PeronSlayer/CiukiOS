@@ -24,7 +24,11 @@
 
 static uint64_t now_of(struct lui *u) { return u->host->now_ms(u->host->ctx); }
 static void note(struct lui *u, const char *line) { if (u->host->log) u->host->log(u->host->ctx,line); }
-static void wipe_secret(struct lui *u) { lgn_wipe(u->password,sizeof(u->password)); }
+static void wipe_secret(struct lui *u)
+{
+    lgn_wipe(u->password,sizeof(u->password));
+    lgn_wipe(u->old_password,sizeof(u->old_password)); lgn_wipe(u->confirm,sizeof(u->confirm)); /* sec-user-04 */
+}
 void lui_wipe(struct lui *u) { wipe_secret(u); lgn_wipe(u->name,sizeof(u->name)); }
 static void status(struct lui *u, const char *text) { snprintf(u->status,sizeof(u->status),"%s",text); u->dirty=1; }
 static void rd(const uint8_t *p, uint32_t *v) { *v=(uint32_t)p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24; }
@@ -67,9 +71,14 @@ static const char *message_text(uint32_t m)
     case LGN_MSG_PROFILE_FAILED: return "Your user profile could not be loaded. Try logging on again.";
     case LGN_MSG_POWER_FAILED: return "CiukiOS could not shut down. Try again in a moment.";
     case LGN_MSG_SERVICE_RESTART: return "A system service restarted, so this computer was locked. Type your password to continue.";
+    /* sec-user-04 */
+    case LGN_MSG_ADMIN_ENDED: return "An administrator logged off the previous user. Their unsaved work was lost.";
+    case LGN_MSG_NOT_ADMIN: return "Only an administrator can log off another user's session.";
+    case LGN_MSG_ENROLLED: return "The user accounts were converted. Log on with your new password.";
     default: return NULL;
     }
 }
+static void enroll_refresh(struct lui *u);   /* sec-user-04 */
 static void enter_mode(struct lui *u, uint32_t mode)
 {
     wipe_secret(u); u->busy=0; u->retry_until=0; u->status[0]=0; u->focus=0;
@@ -78,6 +87,7 @@ static void enter_mode(struct lui *u, uint32_t mode)
     case LGN_MODE_LOCKED: u->view=LUI_VIEW_PASSWORD; u->focus=0; break;
     case LGN_MODE_SECURITY: u->view=LUI_VIEW_MENU; break;
     case LGN_MODE_UNAVAILABLE: u->view=LUI_VIEW_LIST; break;
+    case LGN_MODE_ENROLL: u->first_admin=-1; memset(u->labels,0,sizeof(u->labels)); enroll_refresh(u); break; /* sec-user-04 */
     default: break;
     }
 }
@@ -85,7 +95,8 @@ static int query(struct lui *u, uint32_t command)
 {
     struct lgn_ui_command c={command,0,0};
     if (command==LGN_CMD_LOGOFF || command==LGN_CMD_TASKMGR || command==LGN_CMD_FORCE_LOGOFF ||
-        command==LGN_CMD_SET_PASSWORD || command==LGN_CMD_SHUTDOWN || command==LGN_CMD_RESTART) {
+        command==LGN_CMD_SET_PASSWORD || command==LGN_CMD_SHUTDOWN || command==LGN_CMD_RESTART ||
+        command==LGN_CMD_OVERRIDE) {   /* sec-user-04 */
         c.session=u->state.session; c.console=u->state.console;
     }
     uint8_t body[LGN_UI_COMMAND_BYTES], reply[LGN_UI_STATE_BYTES]; size_t used=0;
@@ -117,6 +128,9 @@ void lui_tick(struct lui *u)
     if (!u->busy && now>=u->next_query) (void)query(u,LGN_CMD_QUERY);
     if (u->state_valid && u->state.mode==LGN_MODE_WELCOME && !u->list_valid && now>=u->retry_until) {
         list(u); if (!u->list_valid) u->retry_until=now+1000;
+    }
+    if (u->state_valid && u->state.mode==LGN_MODE_ENROLL && !u->source_valid && !u->busy && now>=u->retry_until) {
+        enroll_refresh(u); if (!u->source_valid) u->retry_until=now+1000;   /* sec-user-04 */
     }
 }
 
@@ -175,6 +189,111 @@ static void submit(struct lui *u)
     failed(u,p.status ? p.status : -EACCES,p.retry_after_ms);
     u->next_query=0;
 }
+/* ---- sec-user-04: administrator log-off and G32 enrollment ---------------
+ * One BEGIN_AUTH/SUBMIT_AUTH exchange (contract A2-1 bodies); secrets are
+ * wiped by the caller's wipe_secret on every path. */
+static int exchange(struct lui *u, uint32_t action, uint32_t selector, uint32_t uid, const char *name,
+                    const char *secret, const char *new_secret, struct lgn_progress *p)
+{
+    uint8_t begin[64]; memset(begin,0,64);
+    uint32_t words[6]={1,action,0,0,selector,uid};
+    for (unsigned i=0;i<6;i++) for (unsigned j=0;j<4;j++) begin[4*i+j]=(uint8_t)(words[i]>>(8*j));
+    if (selector==2) { size_t k=0; while (k<31 && name[k]) k++; memcpy(begin+24,name,k); }
+    uint8_t challenge[64], body[LGN_SUBMIT_BYTES], reply[LGN_PROGRESS_BYTES]; size_t used=0;
+    int e=logon_call(u,LGN_OP_BEGIN_AUTH,begin,64,challenge,64,&used);
+    if (!e && used!=64) e=-EIO;
+    if (!e) e=lgn_submit_encode(challenge,selector==2 ? name : "",secret,new_secret,body);
+    if (!e) {
+        e=logon_call(u,LGN_OP_SUBMIT_AUTH,body,LGN_SUBMIT_BYTES,reply,sizeof(reply),&used);
+        if (!e && (used!=16 || lgn_progress_decode(p,reply,16))) e=-EIO;
+    }
+    lgn_wipe(body,sizeof(body)); lgn_wipe(challenge,sizeof(challenge));
+    return e;
+}
+/* Locked screen: an administrator's typed name and password end the locked
+ * session (Windows XP WlxWkstaLockedSAS FORCE_LOGOFF after confirmation). */
+static void override_submit(struct lui *u)
+{
+    if (u->busy || now_of(u)<u->retry_until) return;
+    if (!lgn_name_syntax(u->name)) { status(u,"Type an administrator's user name."); return; }
+    u->busy=1; status(u,"Checking the administrator's password...");
+    int e=query(u,LGN_CMD_OVERRIDE);
+    struct lgn_progress p={0,0,0};
+    if (!e) e=exchange(u,2,2,0,u->name,u->password,"",&p);
+    wipe_secret(u); u->busy=0;
+    if (e) { (void)query(u,LGN_CMD_OVERRIDE_CANCEL); failed(u,e,0); u->next_query=0; return; }
+    if (p.disposition==LGN_AUTHENTICATED && !p.status) { status(u,"Logging off..."); u->view=LUI_VIEW_PASSWORD; }
+    else failed(u,p.status ? p.status : -EACCES,p.retry_after_ms);
+    u->next_query=0; lui_tick(u);
+}
+/* Enrollment state: the protected source (LOGON ENROLL_SOURCE) and, once a
+ * plan is staged, the provisional catalogue (AUTH LIST); the next record to
+ * enroll is the first unstaged one other than Guest (uid 501). */
+static void enroll_refresh(struct lui *u)
+{
+    uint8_t reply[LGN_SOURCE_BYTES(LGN_SOURCE_MAX)]; size_t used=0;
+    int e=logon_call(u,LGN_OP_ENROLL_SOURCE,NULL,0,reply,sizeof(reply),&used);
+    u->source_valid=!e && !lgn_source_decode(&u->source,reply,used);
+    if (!u->source_valid) { u->view=LUI_VIEW_ENROLL_PLAN; status(u,"The account service is not ready. Try again in a moment."); return; }
+    for (unsigned i=0;i<u->source.count;i++)
+        if (!u->labels[i][0] && !(u->source.rows[i].flags&LGN_SOURCE_REPLACE)) memcpy(u->labels[i],u->source.rows[i].name,32);
+    if (!(u->source.flags&LGN_SOURCE_PLAN)) { u->view=LUI_VIEW_ENROLL_PLAN; return; }
+    list(u);
+    u->enroll_record=-1;
+    for (unsigned i=0;i<u->count;i++)
+        if (u->accounts[i].uid!=501 && !(u->source.staged&(1u<<i))) { u->enroll_record=(int)i; break; }
+    u->view=LUI_VIEW_ENROLL_PASSWORD; u->focus=0; u->dirty=1;
+}
+static int enroll_imported(const struct lui *u, uint32_t uid)
+{
+    for (unsigned i=0;i<u->source.count;i++) if (u->source.rows[i].uid==uid) return 1;
+    return 0;
+}
+static void plan_submit(struct lui *u)
+{
+    if (u->busy) return;
+    uint32_t count=u->source.count ? u->source.count : 1;
+    uint8_t body[32+40*LGN_SOURCE_MAX]; memset(body,0,sizeof(body));
+    if (u->source.count && (u->first_admin<0 || u->first_admin>=(int)u->source.count)) { status(u,"Choose the account that becomes the first administrator."); return; }
+    for (uint32_t i=0;i<count;i++) {
+        const char *label=u->source.count ? u->labels[i] : u->name;
+        if (!lgn_name_syntax(label)) {
+            status(u,u->source.count ? "Every account needs a name: letters, digits, '_' and '-' only." :
+                                      "Type a name for the new administrator: letters, digits, '_' and '-' only.");
+            return;
+        }
+        uint8_t *r=body+32+40*i; uint32_t id=u->source.count ? u->source.rows[i].old_id : 0;
+        for (unsigned j=0;j<4;j++) r[j]=(uint8_t)(id>>(8*j));
+        { size_t k=0; while (k<31 && label[k]) k++; memcpy(r+4,label,k); }
+    }
+    uint32_t first=u->source.count ? u->source.rows[u->first_admin].old_id : 0;
+    uint32_t words[3]={1,count,first};
+    for (unsigned i=0;i<3;i++) for (unsigned j=0;j<4;j++) body[4*i+j]=(uint8_t)(words[i]>>(8*j));
+    u->busy=1; status(u,"Preparing the accounts...");
+    uint8_t reply[16+144*LUI_ACCOUNTS]; size_t used=0;
+    int e=logon_call(u,LGN_OP_ENROLL_PLAN,body,32+40*count,reply,sizeof(reply),&used);
+    u->busy=0;
+    if (e) { status(u,e==-EINVAL ? "These names cannot be used. Choose different names." : "The accounts could not be prepared. Try again."); return; }
+    u->status[0]=0; enroll_refresh(u);
+}
+static void enroll_submit(struct lui *u)
+{
+    if (u->busy || now_of(u)<u->retry_until || u->enroll_record<0 || u->enroll_record>=(int)u->count) return;
+    size_t n=strlen(u->password);
+    if (n<8 || n>63) { wipe_secret(u); status(u,"The new password must have 8 to 63 characters."); return; }
+    if (strcmp(u->password,u->confirm)) { wipe_secret(u); status(u,"The passwords do not match. Type them again."); return; }
+    uint32_t uid=u->accounts[u->enroll_record].uid;
+    u->busy=1; status(u,"Saving the password...");
+    struct lgn_progress p={0,0,0};
+    int e=exchange(u,4,1,uid,"",enroll_imported(u,uid) ? u->old_password : "",u->password,&p);
+    wipe_secret(u); u->busy=0;
+    if (e) { failed(u,e,0); return; }
+    if (!p.status && p.disposition==LGN_ENROLL_STAGED) { u->status[0]=0; enroll_refresh(u); return; }
+    if (!p.status && p.disposition==LGN_ENROLL_COMMITTED) { status(u,"The accounts were converted."); u->next_query=0; lui_tick(u); return; }
+    if (p.status==-EACCES) { status(u,"The old password is incorrect. Type the password this account used before the upgrade."); u->retry_until=now_of(u)+1000; }
+    else failed(u,p.status ? p.status : -EIO,p.retry_after_ms);
+}
+/* ---- end sec-user-04 ---------------------------------------------------- */
 static void event(struct lui *u, uint32_t op, uint32_t action)
 {
     uint8_t body[32], reply[16]; size_t used=0; memset(body,0,32);
@@ -203,7 +322,8 @@ static void activate(struct lui *u, const struct lui_item *it)
     case LUI_OK: submit(u); break;
     case LUI_BACK:
         wipe_secret(u); u->status[0]=0; u->focus=0;
-        if (u->state.mode==LGN_MODE_SECURITY) u->view=LUI_VIEW_MENU;
+        if (u->view==LUI_VIEW_OVERRIDE) { u->view=LUI_VIEW_PASSWORD; lgn_wipe(u->name,sizeof(u->name)); (void)query(u,LGN_CMD_OVERRIDE_CANCEL); } /* sec-user-04 */
+        else if (u->state.mode==LGN_MODE_SECURITY) u->view=LUI_VIEW_MENU;
         else if (u->state.mode!=LGN_MODE_LOCKED) { u->view=LUI_VIEW_LIST; u->selected=-1; lgn_wipe(u->name,sizeof(u->name)); }
         break;
     case LUI_TYPED: u->view=LUI_VIEW_TYPED; u->focus=0; wipe_secret(u); lgn_wipe(u->name,sizeof(u->name)); u->status[0]=0; break;
@@ -212,7 +332,9 @@ static void activate(struct lui *u, const struct lui_item *it)
         if (u->state.mode==LGN_MODE_SECURITY) command(u,it->action==LUI_SHUTDOWN ? LGN_CMD_SHUTDOWN : LGN_CMD_RESTART);
         else event(u,LGN_OP_POWER_EVENT,it->action==LUI_SHUTDOWN ? LGN_EVENT_SHUTDOWN : LGN_EVENT_RESTART);
         break;
-    case LUI_RETRY: u->next_query=0; u->list_valid=0; u->retry_until=0; lui_tick(u); break;
+    case LUI_RETRY:
+        if (u->state.mode==LGN_MODE_ENROLL) { u->status[0]=0; enroll_refresh(u); break; }   /* sec-user-04 */
+        u->next_query=0; u->list_valid=0; u->retry_until=0; lui_tick(u); break;
     case LUI_LOCK: event(u,LGN_OP_LOCK_EVENT,LGN_EVENT_LOCK); break;
     case LUI_LOGOFF: u->view=LUI_VIEW_CONFIRM_LOGOFF; u->focus=0; break;
     case LUI_LOGOFF_CONFIRM: command(u,LGN_CMD_LOGOFF); break;
@@ -223,8 +345,16 @@ static void activate(struct lui *u, const struct lui_item *it)
         if (u->view!=LUI_VIEW_MENU && u->state.mode==LGN_MODE_SECURITY) u->view=LUI_VIEW_MENU;
         else if (u->state.mode==LGN_MODE_SECURITY) event(u,LGN_OP_LOCK_EVENT,LGN_EVENT_MENU_RETURN);
         else if (u->state.mode==LGN_MODE_WELCOME || u->state.mode==LGN_MODE_UNAVAILABLE) u->view=LUI_VIEW_LIST;
+        else if (u->state.mode==LGN_MODE_ENROLL) enroll_refresh(u);   /* sec-user-04: back to the enrollment step */
         u->focus=0; break;
     case LUI_DISMISS: u->status[0]=0; break;
+    /* sec-user-04 */
+    case LUI_OVERRIDE: u->view=LUI_VIEW_OVERRIDE; u->focus=0; wipe_secret(u); lgn_wipe(u->name,sizeof(u->name)); u->status[0]=0; break;
+    case LUI_OVERRIDE_OK: override_submit(u); break;
+    case LUI_ROW: u->first_admin=it->index; u->focus=0; u->status[0]=0; break;
+    case LUI_PLAN_OK: plan_submit(u); break;
+    case LUI_ENROLL_OK: enroll_submit(u); break;
+    case LUI_FIELD_OLD: case LUI_FIELD_CONFIRM: case LUI_FIELD_LABEL: break;
     }
     u->dirty=1;
 }
@@ -256,16 +386,22 @@ static void layout(struct lui *u)
             add(u,LUI_BACK,0,RIGHT_X+216,246,76,26,"Cancel");
         }
         add(u,LUI_POWER_MENU,0,LUI_W-148,438,124,28,"Turn Off Computer");
-    } else if (power_choice && (welcome || mode==LGN_MODE_SECURITY || mode==LGN_MODE_UNAVAILABLE)) {
+    } else if (power_choice && (welcome || mode==LGN_MODE_SECURITY || mode==LGN_MODE_UNAVAILABLE || mode==LGN_MODE_ENROLL /* sec-user-04 */)) {
         add(u,LUI_SHUTDOWN,0,RIGHT_X,196,92,28,"Shut Down");
         add(u,LUI_RESTART,0,RIGHT_X+100,196,92,28,"Restart");
         add(u,LUI_CANCEL,0,RIGHT_X+200,196,92,28,"Cancel");
+    } else if (mode==LGN_MODE_LOCKED && u->view==LUI_VIEW_OVERRIDE) {   /* sec-user-04 */
+        add(u,LUI_FIELD_NAME,0,RIGHT_X,236,RIGHT_W,24,NULL);
+        add(u,LUI_FIELD_PASSWORD,0,RIGHT_X,286,RIGHT_W,24,NULL);
+        add(u,LUI_OVERRIDE_OK,0,RIGHT_X+92,322,108,26,"Log Off User");
+        add(u,LUI_BACK,0,RIGHT_X+208,322,84,26,"Cancel");
     } else if (mode==LGN_MODE_LOCKED) {
         if (blank_locked(u)) add(u,LUI_END_SESSION,0,RIGHT_X,236,120,28,"End Session");
         else {
             add(u,LUI_FIELD_PASSWORD,0,RIGHT_X,190,212,24,NULL);
             add(u,LUI_OK,0,RIGHT_X+220,189,72,26,"OK");
         }
+        add(u,LUI_OVERRIDE,0,24,438,220,28,"Log off this user (administrator)");   /* sec-user-04 */
     } else if (mode==LGN_MODE_SECURITY) {
         if (u->view==LUI_VIEW_CONFIRM_LOGOFF) {
             add(u,LUI_LOGOFF_CONFIRM,0,RIGHT_X,212,92,28,"Log Off");
@@ -282,20 +418,45 @@ static void layout(struct lui *u)
     } else if (mode==LGN_MODE_UNAVAILABLE) {
         add(u,LUI_RETRY,0,RIGHT_X,230,92,28,"Retry");
         add(u,LUI_POWER_MENU,0,LUI_W-148,438,124,28,"Turn Off Computer");
+    } else if (mode==LGN_MODE_ENROLL && u->view==LUI_VIEW_ENROLL_PASSWORD && u->enroll_record>=0) {   /* sec-user-04 */
+        int imported=enroll_imported(u,u->accounts[u->enroll_record].uid), y=imported ? 248 : 200;
+        if (imported) add(u,LUI_FIELD_OLD,0,RIGHT_X,200,RIGHT_W,22,NULL);
+        add(u,LUI_FIELD_PASSWORD,0,RIGHT_X,y,RIGHT_W,22,NULL);
+        add(u,LUI_FIELD_CONFIRM,0,RIGHT_X,y+42,RIGHT_W,22,NULL);
+        add(u,LUI_ENROLL_OK,0,RIGHT_X+200,y+74,92,26,"Next");
+        add(u,LUI_POWER_MENU,0,LUI_W-148,438,124,28,"Turn Off Computer");
+    } else if (mode==LGN_MODE_ENROLL && u->source_valid) {
+        if (!u->source.count) add(u,LUI_FIELD_NAME,0,RIGHT_X,196,RIGHT_W,22,NULL);
+        for (unsigned i=0;i<u->source.count;i++) add(u,LUI_ROW,(int)i,RIGHT_X,154+(int)i*15,RIGHT_W,15,u->labels[i]);
+        if (u->first_admin>=0 && (unsigned)u->first_admin<u->source.count) add(u,LUI_FIELD_LABEL,u->first_admin,RIGHT_X,398,180,20,NULL);
+        add(u,LUI_PLAN_OK,0,RIGHT_X+200,396,92,24,"Continue");
+        add(u,LUI_POWER_MENU,0,LUI_W-148,438,124,28,"Turn Off Computer");
+    } else if (mode==LGN_MODE_ENROLL) {
+        add(u,LUI_RETRY,0,RIGHT_X,230,92,28,"Retry");
+        add(u,LUI_POWER_MENU,0,LUI_W-148,438,124,28,"Turn Off Computer");
     }
     if (u->focus>=(int)u->item_count) u->focus=0;
 }
 static const struct lui_item *focused(const struct lui *u)
 { return u->item_count ? &u->items[u->focus<(int)u->item_count ? u->focus : 0] : NULL; }
-static char *field_text(struct lui *u, int action) { return action==LUI_FIELD_NAME ? u->name : u->password; }
+static char *field_text(struct lui *u, int action)
+{
+    /* sec-user-04: enrollment's old/confirm secrets and the selected row's label. */
+    if (action==LUI_FIELD_OLD) return u->old_password;
+    if (action==LUI_FIELD_CONFIRM) return u->confirm;
+    if (action==LUI_FIELD_LABEL) return u->first_admin>=0 && u->first_admin<(int)LGN_SOURCE_MAX ? u->labels[u->first_admin] : u->name;
+    return action==LUI_FIELD_NAME ? u->name : u->password;
+}
+static int field_action(int action)
+{ return action==LUI_FIELD_NAME || action==LUI_FIELD_PASSWORD || action==LUI_FIELD_OLD || action==LUI_FIELD_CONFIRM || action==LUI_FIELD_LABEL; }
 
 /* ---- input -------------------------------------------------------------- */
 static void type_key(struct lui *u, unsigned code)
 {
     const struct lui_item *it=focused(u);
-    if (!it || (it->action!=LUI_FIELD_NAME && it->action!=LUI_FIELD_PASSWORD)) return;
+    if (!it || !field_action(it->action)) return;
     char *text=field_text(u,it->action);
-    size_t n=strlen(text), cap=it->action==LUI_FIELD_NAME ? 31 : 63;
+    size_t n=strlen(text), cap=it->action==LUI_FIELD_NAME || it->action==LUI_FIELD_LABEL ? 31 : 63;
     if (code==DU_KEY_BACKSPACE) { if (n) text[n-1]=0; u->dirty=1; return; }
     unsigned state=((u->modifiers&DU_SHIFT) ? DU_KEYMAP_SHIFT : 0)|((u->modifiers&8u) ? DU_KEYMAP_ALTGR : 0)|
                    ((u->modifiers&16u) ? DU_KEYMAP_CAPS : 0);
@@ -326,7 +487,11 @@ void lui_input(struct lui *u, const struct ciuki_input_event *e)
     const struct lui_item *it=focused(u);
     switch (code) {
     case DU_KEY_ENTER: case 0x11c:
-        if (it && (it->action==LUI_FIELD_NAME || it->action==LUI_FIELD_PASSWORD)) {
+        if (it && field_action(it->action)) {
+            /* sec-user-04: multi-field forms move to the next field, then submit. */
+            if (u->view==LUI_VIEW_OVERRIDE) { if (it->action==LUI_FIELD_NAME) u->focus++; else override_submit(u); break; }
+            if (u->view==LUI_VIEW_ENROLL_PASSWORD) { if (it->action!=LUI_FIELD_CONFIRM) u->focus++; else enroll_submit(u); break; }
+            if (u->view==LUI_VIEW_ENROLL_PLAN) { plan_submit(u); break; }
             if (it->action==LUI_FIELD_NAME && u->view==LUI_VIEW_TYPED) { u->focus++; break; }
             submit(u);
         } else if (it) { struct lui_item copy=*it; activate(u,&copy); }
@@ -334,7 +499,9 @@ void lui_input(struct lui *u, const struct ciuki_input_event *e)
     case DU_KEY_ESC: {
         /* Esc clears the attempt or returns; it never starts a session. */
         int back=u->state.mode==LGN_MODE_SECURITY ? LUI_CANCEL : LUI_BACK;
-        if (u->state.mode==LGN_MODE_LOCKED) { wipe_secret(u); u->status[0]=0; }
+        if (u->state.mode==LGN_MODE_LOCKED && u->view==LUI_VIEW_OVERRIDE) { struct lui_item c={LUI_BACK,0,{0,0,0,0},0}; activate(u,&c); } /* sec-user-04 */
+        else if (u->state.mode==LGN_MODE_ENROLL && u->view!=LUI_VIEW_CONFIRM_POWER) { wipe_secret(u); u->status[0]=0; }
+        else if (u->state.mode==LGN_MODE_LOCKED) { wipe_secret(u); u->status[0]=0; }
         else if (u->state.mode==LGN_MODE_SECURITY && u->view==LUI_VIEW_MENU) { struct lui_item c={LUI_CANCEL,0,{0,0,0,0},0}; activate(u,&c); }
         else { struct lui_item c={back,0,{0,0,0,0},0}; if (u->view==LUI_VIEW_CONFIRM_POWER) c.action=LUI_CANCEL; activate(u,&c); }
         break;
@@ -438,7 +605,8 @@ void lui_paint(struct lui *u, struct du_canvas *c)
     case LGN_MODE_HIDDEN: head="Please wait..."; break;
     default: break;
     }
-    if (u->view==LUI_VIEW_CONFIRM_POWER && (mode==LGN_MODE_WELCOME || mode==LGN_MODE_SECURITY || mode==LGN_MODE_UNAVAILABLE)) {
+    if (u->view==LUI_VIEW_CONFIRM_POWER && (mode==LGN_MODE_WELCOME || mode==LGN_MODE_SECURITY || mode==LGN_MODE_UNAVAILABLE ||
+                                           mode==LGN_MODE_ENROLL /* sec-user-04 */)) {
         head="Turn off computer";
         body=mode==LGN_MODE_SECURITY ? "What do you want the computer to do? Your programs will be asked to save your work first." :
                                       "What do you want the computer to do?";
@@ -450,6 +618,24 @@ void lui_paint(struct lui *u, struct du_canvas *c)
         } else if (u->view==LUI_VIEW_PASSWORD && u->selected>=0) {
             head=u->accounts[u->selected].name; body="Type your password";
         } else { head="Log on to CiukiOS"; }
+    } else if (mode==LGN_MODE_LOCKED && u->view==LUI_VIEW_OVERRIDE) {   /* sec-user-04 */
+        snprintf(line,sizeof(line),"An administrator can end this session. %s's programs will be closed and unsaved work "
+                 "will be lost. Type an administrator's user name and password.",
+                 u->state.owner_name[0] ? u->state.owner_name : "The user");
+        head="Log off this user"; body=line;
+    } else if (mode==LGN_MODE_ENROLL) {   /* sec-user-04 */
+        if (!u->source_valid) { head="Please wait..."; body="The upgraded user accounts are being prepared."; }
+        else if (u->view==LUI_VIEW_ENROLL_PASSWORD && u->enroll_record>=0) {
+            uint32_t uid=u->accounts[u->enroll_record].uid;
+            head=u->accounts[u->enroll_record].name;
+            if (uid==500) body="Choose the recovery password of the built-in administrator, used in Safe Mode (8 to 63 characters).";
+            else if (enroll_imported(u,uid)) body="Type the password this account used before the upgrade (leave it empty if it had none), then choose a new password (8 to 63 characters).";
+            else body="Choose a password for this administrator (8 to 63 characters).";
+        } else if (u->view==LUI_VIEW_ENROLL_PASSWORD) { head="Please wait..."; body="Converting the accounts."; }
+        else if (!u->source.count) { head="Create the administrator";
+            body="This computer was upgraded without user accounts. Type a name for the first administrator."; }
+        else { head="Convert the user accounts";
+            body="Click the first administrator; the others become standard users. Rows marked * need a new name."; }
     } else if (mode==LGN_MODE_LOCKED) {
         head="This computer is locked";
         if (blank_locked(u)) {
@@ -474,7 +660,18 @@ void lui_paint(struct lui *u, struct du_canvas *c)
         text(c,DESK_FONT_UI,RIGHT_X,134,"User name:",WHITE);
         text(c,DESK_FONT_UI,RIGHT_X,190,"Password:",WHITE);
     }
-    if (mode==LGN_MODE_LOCKED && !blank_locked(u)) text(c,DESK_FONT_UI,RIGHT_X,174,"Password:",WHITE);
+    if (mode==LGN_MODE_LOCKED && !blank_locked(u) && u->view!=LUI_VIEW_OVERRIDE) text(c,DESK_FONT_UI,RIGHT_X,174,"Password:",WHITE);
+    /* sec-user-04: field captions of the override and enrollment forms. */
+    for (unsigned i=0;i<u->item_count;i++) {
+        const struct lui_item *it=&u->items[i];
+        const char *caption=it->action==LUI_FIELD_OLD ? "Old password:" : it->action==LUI_FIELD_CONFIRM ? "Confirm new password:" :
+            it->action==LUI_FIELD_LABEL ? "New name for the selected account:" : NULL;
+        if (it->action==LUI_FIELD_PASSWORD && (u->view==LUI_VIEW_OVERRIDE || u->view==LUI_VIEW_ENROLL_PASSWORD))
+            caption=u->view==LUI_VIEW_OVERRIDE ? "Administrator's password:" : "New password:";
+        if (it->action==LUI_FIELD_NAME && (u->view==LUI_VIEW_OVERRIDE || mode==LGN_MODE_ENROLL))
+            caption=u->view==LUI_VIEW_OVERRIDE ? "Administrator's user name:" : "Administrator name:";
+        if (caption) text(c,DESK_FONT_UI,it->box.x,it->box.y-14,caption,WHITE);
+    }
     for (unsigned i=0;i<u->item_count;i++) {
         const struct lui_item *it=&u->items[i]; int f=(int)i==u->focus;
         int hot=du_contains(it->box,u->mouse_x,u->mouse_y);
@@ -483,15 +680,25 @@ void lui_paint(struct lui *u, struct du_canvas *c)
             if (f) du_outline(c,it->box,LINE);
             user_glyph(c,it->box.x+4,it->box.y+4,it->label);
             text(c,DESK_FONT_TITLE,it->box.x+44,it->box.y+13,it->label,WHITE);
-        } else if (it->action==LUI_FIELD_NAME || it->action==LUI_FIELD_PASSWORD)
-            field(c,it,field_text(u,it->action),it->action==LUI_FIELD_PASSWORD,f);
-        else if (it->action==LUI_TYPED || it->action==LUI_BACK) {
+        } else if (it->action==LUI_ROW) {   /* sec-user-04: one G32 source row */
+            int chosen=it->index==u->first_admin;
+            if (chosen || f || hot) du_fill(c,it->box,TILE);
+            char row[96]; const struct lgn_source *src=&u->source;
+            snprintf(row,sizeof(row),"%s%s%s",it->label[0] ? it->label : src->rows[it->index].name,
+                     (src->rows[it->index].flags&LGN_SOURCE_REPLACE) && !it->label[0] ? " *" : "",
+                     chosen ? "  - administrator" : "");
+            du_text_fit(c,it->box.x+4,it->box.y+2,it->box.w-8,row,chosen ? WHITE : SOFT);
+        } else if (field_action(it->action))
+            field(c,it,field_text(u,it->action),it->action==LUI_FIELD_PASSWORD || it->action==LUI_FIELD_OLD || it->action==LUI_FIELD_CONFIRM,f);
+        else if (it->action==LUI_TYPED || it->action==LUI_BACK || it->action==LUI_OVERRIDE) {
             if (it->action==LUI_BACK && it->box.y<400) { button(c,it,f); continue; }
             text(c,DESK_FONT_UI,it->box.x,it->box.y+8,it->label,hot || f ? WHITE : SOFT);
             du_hline(c,it->box.x,it->box.y+8+desk_font_cap(DESK_FONT_UI)+3,du_text_width_font(DESK_FONT_UI,it->label),hot || f ? WHITE : SOFT);
         } else button(c,it,f);
     }
-    if (u->status[0]) paragraph(c,RIGHT_X,y>290 ? y+8 : 300,RIGHT_W,u->status,WARN);
+    /* sec-user-04: the taller forms keep their status under the portrait. */
+    if (u->status[0] && (u->view==LUI_VIEW_OVERRIDE || mode==LGN_MODE_ENROLL)) paragraph(c,24,326,252,u->status,WARN);
+    else if (u->status[0]) paragraph(c,RIGHT_X,y>290 ? y+8 : 300,RIGHT_W,u->status,WARN);
     if (u->state_valid && (u->state.flags&LGN_STATE_SAFE)) {
         text(c,DESK_FONT_BOLD,8,8,"Safe Mode",WHITE); text(c,DESK_FONT_BOLD,LUI_W-8-du_text_width_font(DESK_FONT_BOLD,"Safe Mode"),8,"Safe Mode",WHITE);
     }

@@ -2170,6 +2170,108 @@ static void row_resume_password(unsigned m)
     step("unchanged counters, disabled option and default profile do not lock");
     wm_end();
 }
+/* --- sec-user-04: a LOGON session's protected saver and Stand by reach the
+ * trusted gate (SESSION_EVENT SAVER/STANDBY to LOGON) before the desktop is
+ * restored or the firmware sleeps; a failure keeps the saver or refuses Stand
+ * by; preferences and a password-less owner never produce a false lock. --- */
+#include "../../../apps/logon/logon_proto.h"
+#include "session_prefs.h"
+static unsigned lock_notices[16], lock_count, lock_flags, lock_standbys;
+static int lock_error, lock_dpms;
+static int lock_secure(struct desktop *dd, unsigned notice, unsigned *flags)
+{
+    (void)dd;
+    if (notice==LGN_NOTICE_SAVER) assert(d.saver_active || (lock_dpms && !d.monitor_off));   /* still concealed */
+    if (lock_count<16) lock_notices[lock_count]=notice;
+    lock_count++;
+    if (flags) *flags=lock_flags;
+    return lock_error;
+}
+static int lock_standby(void) { assert(lock_count && lock_notices[0]==LGN_NOTICE_STANDBY && (lock_flags&(LGN_EVENT_LOCKED|LGN_EVENT_BLANK))); lock_standbys++; return 0; }
+static void lock_reset(unsigned flags, int error) { lock_count=0; lock_flags=flags; lock_error=error; }
+static void row_logon_locks(unsigned m)
+{
+    row_name="sec-user-04 LOGON saver and resume locks"; wm_begin(m,1);
+    (void)app_open("files",260,180,60,60);
+    d.now_ns=wm_clock+=3000000000ull;
+    d.logon_session=1; d.session_secure=lock_secure; strcpy(d.sh.profile.name,"Alice");
+    struct ciuki_input_event motion={.type=CIUKI_INPUT_MOTION,.value=1};
+    d.sh.cfg.saver_enabled=1; d.sh.cfg.saver_seconds=1;
+    lock_reset(LGN_EVENT_LOCKED,0);
+    d.saver_idle=d.now_ns-2000000000ull; desk_saver_tick(&d); assert(d.saver_active && !d.saver_preview);
+    desk_input(&d,&motion);
+    assert(!d.saver_active && !d.sh.user_gate && lock_count==1 && lock_notices[0]==LGN_NOTICE_SAVER);
+    step("protected saver dismissal asks LOGON for the trusted gate first");
+    lock_reset(0,-ESRCH);
+    d.saver_idle=d.now_ns-2000000000ull; desk_saver_tick(&d); assert(d.saver_active);
+    desk_input(&d,&motion); assert(d.saver_active && lock_count==1);
+    step("LOGON unreachable: the saver keeps concealing");
+    lock_reset(LGN_EVENT_LOCKED,0); desk_input(&d,&motion); assert(!d.saver_active && lock_count==1);
+    step("next input retries and dismisses after the gate");
+    lock_reset(LGN_EVENT_BLANK,0);
+    d.saver_idle=d.now_ns-2000000000ull; desk_saver_tick(&d); desk_input(&d,&motion);
+    assert(!d.saver_active && lock_count==1 && !d.sh.notification.active);
+    step("a password-less owner: no false lock, no guidance");
+    assert(!desk_secure_store(d.sh.cfg.extra,sizeof(d.sh.cfg.extra),DESK_SECURE_SAVER,0));
+    lock_reset(LGN_EVENT_LOCKED,0);
+    d.saver_idle=d.now_ns-2000000000ull; desk_saver_tick(&d); desk_input(&d,&motion);
+    assert(!d.saver_active && !lock_count);
+    assert(!desk_saver_start(&d,0)); desk_input(&d,&motion); assert(!lock_count);
+    step("saver protection off and Preview never lock");
+    assert(!desk_secure_store(d.sh.cfg.extra,sizeof(d.sh.cfg.extra),DESK_SECURE_SAVER,1));
+    d.sh.cfg.saver_enabled=0;
+    /* DPMS: the monitor wakes first (black frame), then the gate; a failure
+     * keeps a blank concealment instead of the desktop. */
+    d.monitor_power=saver_monitor; saver_monitor_error=0; d.sh.cfg.monitor_seconds=1; lock_dpms=1;
+    d.saver_idle=d.now_ns-2000000000ull; desk_saver_tick(&d); assert(d.monitor_off && !d.saver_active);
+    d.sh.cfg.monitor_seconds=0;
+    lock_reset(0,-ESRCH); desk_input(&d,&motion);
+    assert(!d.monitor_off && d.saver_active && !d.saver_kind && lock_count==1);
+    step("DPMS wake with LOGON unreachable keeps a blank concealment");
+    lock_reset(LGN_EVENT_LOCKED,0); desk_input(&d,&motion); assert(!d.saver_active && lock_count==1);
+    step("the next input passes the gate, then the desktop returns");
+    lock_dpms=0;
+    /* Stand by: armed (LOCKED) before the call; pending waits; failures refuse. */
+    d.sh.power_can_standby=1; d.power_standby=lock_standby; lock_standbys=0;
+    lock_reset(0,0); unsigned n=d.pbt.standbys; d.sh.want_standby=1;
+    for (unsigned tick=0;tick<30;tick++) desk_power_policy_tick(&d);
+    assert(d.pbt.standbys==n && !lock_standbys && lock_count>1 && lock_notices[0]==LGN_NOTICE_STANDBY && lock_notices[1]==LGN_NOTICE_QUERY);
+    lock_flags=LGN_EVENT_LOCKED;
+    for (unsigned tick=0;tick<10 && d.pbt.standbys==n;tick++) desk_power_policy_tick(&d);
+    assert(d.pbt.standbys==n+1 && lock_standbys==1 && !d.pbt.standby_error && !d.resume_arming);
+    step("Stand by waits for LOGON's gate, then sleeps");
+    d.sh.notification.active=0; for (unsigned tick=0;tick<4;tick++) desk_power_policy_tick(&d);
+    lock_reset(0,-EIO); n=d.pbt.standbys; d.sh.want_standby=1;
+    for (unsigned tick=0;tick<20 && d.pbt.standbys==n;tick++) desk_power_policy_tick(&d);
+    assert(d.pbt.standbys==n+1 && lock_standbys==1 && d.pbt.standby_error==EIO);
+    step("a gate that cannot be raised refuses Stand by");
+    d.sh.notification.active=0; for (unsigned tick=0;tick<4;tick++) desk_power_policy_tick(&d);
+    lock_reset(0,0); n=d.pbt.standbys; d.sh.want_standby=1;
+    for (unsigned tick=0;tick<40 && d.pbt.standbys==n;tick++) { d.now_ns+=200000000ull; desk_power_policy_tick(&d); }
+    assert(d.pbt.standbys==n+1 && lock_standbys==1 && d.pbt.standby_error==ETIMEDOUT);
+    step("the bounded wait expires: Stand by refused");
+    d.sh.notification.active=0; for (unsigned tick=0;tick<4;tick++) desk_power_policy_tick(&d);
+    assert(!desk_secure_store(d.sh.cfg.extra,sizeof(d.sh.cfg.extra),DESK_SECURE_RESUME,0));
+    lock_reset(0,0); n=d.pbt.standbys; d.sh.want_standby=1; d.power_standby=row_standby;
+    for (unsigned tick=0;tick<20 && d.pbt.standbys==n;tick++) desk_power_policy_tick(&d);
+    assert(d.pbt.standbys==n+1 && !lock_count && !d.pbt.standby_error);
+    step("resume protection off: Stand by without the gate");
+    assert(!desk_secure_store(d.sh.cfg.extra,sizeof(d.sh.cfg.extra),DESK_SECURE_RESUME,1));
+    /* A firmware resume the desktop did not arm locks at once. */
+    d.sh.notification.active=0; for (unsigned tick=0;tick<4;tick++) desk_power_policy_tick(&d);
+    struct ciuki_power_events e={.version=CIUKI_POWER_EVENTS_VERSION,.size=sizeof(e),.resumes=1};
+    lock_reset(LGN_EVENT_LOCKED,0); d.sh.power_events_valid=0;
+    desk_shell_power_events(&d,&e,CIUKI_POWER_CAN_STANDBY); assert(!lock_count);
+    e.resumes++; desk_shell_power_events(&d,&e,CIUKI_POWER_CAN_STANDBY);
+    assert(lock_count==1 && lock_notices[0]==LGN_NOTICE_STANDBY && !d.sh.user_gate);
+    step("an unarmed firmware resume locks through LOGON");
+    d.logon_session=0; d.session_secure=NULL; d.sh.profile.name[0]=0; d.sh.power_cfg.password=0;
+    static int reported;
+    if (!reported++) puts("PASS sec-user-04 LOGON saver/resume locks: gate before the saver or DPMS returns, fail-closed concealment, "
+                          "Stand by armed (bounded wait, refusals), preferences, blank owner, unarmed firmware resume");
+    wm_end();
+}
+/* --- end sec-user-04 --- */
 /* G22B, appended after every existing scenario. Render the actual Volume
  * Control client, send only its toolkit damage, then compare each presenter. */
 static struct ciuki_mixer_line wm_lines[2][6];
@@ -2877,7 +2979,8 @@ static void (*const rows[])(unsigned)={row_create,row_stretched,row_scroll_overl
     row_common_folder_rename, row_g27b_statistics, row_g27b_viewer_save, row_g27b_terminal,
     row_g27b_serial, row_protected_saver, row_resume_password,
     row_feedback_native, row_feedback_win32, row_feedback_dos, row_feedback_failure,
-    row_feedback_timeout, row_feedback_overlap, row_feedback_precedence, row_q3vise_folder};
+    row_feedback_timeout, row_feedback_overlap, row_feedback_precedence, row_q3vise_folder,
+    row_logon_locks /* sec-user-04 */};
 static void wm_rows(unsigned m)
 {
     /* WM_ROW=<index> runs one row (the per-row evidence against older code).

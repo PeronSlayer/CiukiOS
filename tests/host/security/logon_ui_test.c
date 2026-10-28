@@ -28,6 +28,8 @@ static int begin_status, submit_disposition = LGN_AUTHENTICATED, submit_status, 
 static uint32_t submit_retry;
 static int accounts = 2;
 static uint32_t challenge_uid = 1000;
+/* sec-user-04: the scripted enrollment source, plan and provisional catalogue. */
+static int enrolling, planned; static uint32_t staged; static uint8_t last_plan[32 + 40 * 16]; static size_t last_plan_bytes;
 
 static uint64_t host_now(void *ctx) { (void)ctx; return now; }
 static void put32(uint8_t *p, uint32_t v) { for (unsigned i = 0; i < 4; i++) p[i] = (uint8_t)(v >> (8 * i)); }
@@ -38,13 +40,33 @@ static int host_call(void *ctx, unsigned service, uint32_t op, const void *body,
     if (service == LGN_SERVICE_AUTH) {
         CHECK(op == LGN_AUTH_LIST && n == 0);
         calls[15]++;
+        if (enrolling && planned) {   /* sec-user-04: provisional catalogue, nothing enabled */
+            static const char *const draft[] = { "CiukiAdministrator", "Guest", "Dad", "Kid" };
+            static const uint32_t uids[] = { 500, 501, 1000, 1001 };
+            uint8_t *r = reply; size_t need = 16 + 144 * 4; CHECK(cap >= need);
+            memset(r, 0, need); put32(r, 1); put32(r + 4, 4); put32(r + 8, 9);
+            for (int i = 0; i < 4; i++) { put32(r + 16 + 144 * i, uids[i]); strcpy((char *)r + 16 + 144 * i + 16, draft[i]); }
+            *used = need; return 0;
+        }
         uint8_t *r = reply; size_t need = 16 + 144 * (size_t)accounts; CHECK(cap >= need);
         memset(r, 0, need); put32(r, 1); put32(r + 4, (uint32_t)accounts); put32(r + 8, 7);
         static const char *const names[] = { "CiukiUser", "Alice", "Bob" };
         for (int i = 0; i < accounts; i++) { put32(r + 16 + 144 * i, 1000 + (uint32_t)i); put32(r + 16 + 144 * i + 8, 1); strcpy((char *)r + 16 + 144 * i + 16, names[i]); }
         *used = need; return 0;
     }
-    CHECK(service == LGN_SERVICE_LOGON && op >= 1 && op <= 9);
+    CHECK(service == LGN_SERVICE_LOGON && op >= 1 && op <= LGN_OP_ENROLL_SOURCE);   /* sec-user-04: 10 */
+    if (op == LGN_OP_ENROLL_SOURCE) {
+        calls[10]++; CHECK(!n);
+        struct lgn_source src; memset(&src, 0, sizeof(src));
+        src.count = 2; src.rows[0].old_id = 3; strcpy(src.rows[0].name, "Dad");
+        src.rows[1].old_id = 5; src.rows[1].flags = LGN_SOURCE_REPLACE; strcpy(src.rows[1].name, "Guest");
+        if (planned) { src.flags = LGN_SOURCE_PLAN; src.generation = 9; src.staged = staged; src.rows[0].uid = 1000; src.rows[1].uid = 1001; }
+        CHECK(!lgn_source_encode(&src, reply, cap, used)); return 0;
+    }
+    if (op == LGN_OP_ENROLL_PLAN) {
+        CHECK(n >= 72 && n <= sizeof(last_plan)); memcpy(last_plan, body, n); last_plan_bytes = n; planned = 1;
+        uint8_t *r = reply; memset(r, 0, 16); put32(r, 1); *used = 16; return 0;
+    }
     calls[op]++;
     const uint8_t *b = body;
     if (op == LGN_OP_UI_STATE) {
@@ -71,7 +93,8 @@ static int host_call(void *ctx, unsigned service, uint32_t op, const void *body,
         CHECK(n == 208); memcpy(last_submit, b, 208);
         struct lgn_progress p = { (uint32_t)submit_disposition, submit_status, submit_retry };
         CHECK(!lgn_progress_encode(&p, reply, cap)); *used = 16;
-        if (submit_disposition == LGN_AUTHENTICATED) script.mode = script.mode == LGN_MODE_LOCKED ? LGN_MODE_HIDDEN : LGN_MODE_LOADING;
+        if (submit_disposition == LGN_AUTHENTICATED)
+            script.mode = script.mode == LGN_MODE_LOCKED ? (r32(last_begin + 4) == 2 ? LGN_MODE_ENDING : LGN_MODE_HIDDEN) : LGN_MODE_LOADING;
         return 0;
     }
     if (op == LGN_OP_LOCK_EVENT || op == LGN_OP_POWER_EVENT) {
@@ -279,6 +302,63 @@ int main(int argc, char **argv)
     CHECK(ui.list_valid && ui.count == 0);
     frame("welcome-safe-empty");
     puts("H10 UI power/unavailable: Turn Off Computer -> POWER_EVENT with the boot console, Retry re-queries, messages acknowledged once PASS");
+
+    /* --- sec-user-04 block: an administrator's log-off of a locked session. --- */
+    script.flags = 0; script.session = 3; script.console = 11; script.owner_uid = 1001; strcpy(script.owner_name, "Alice");
+    accounts = 2; set_mode(LGN_MODE_LOCKED);
+    press(LUI_OVERRIDE, 0);
+    CHECK(ui.view == LUI_VIEW_OVERRIDE && item(LUI_FIELD_NAME, 0) && item(LUI_FIELD_PASSWORD, 0));
+    frame("locked-override");
+    key(DU_KEY_ESC);
+    CHECK(ui.view == LUI_VIEW_PASSWORD && last_command == LGN_CMD_OVERRIDE_CANCEL);
+    press(LUI_OVERRIDE, 0);
+    ui.focus = 0; type("Bob"); key(DU_KEY_ENTER); type("bobpass12");
+    unsigned begins = calls[LGN_OP_BEGIN_AUTH];
+    key(DU_KEY_ENTER);
+    CHECK(calls[LGN_OP_BEGIN_AUTH] == begins + 1 && r32(last_begin + 4) == 2 && !r32(last_begin + 8) && !r32(last_begin + 12) &&
+          r32(last_begin + 16) == 2 && !strcmp((const char *)last_begin + 24, "Bob"));
+    CHECK(!memcmp(last_submit + 48, "Bob", 4) && !memcmp(last_submit + 80, "bobpass12", 9) && zero(ui.password, 64));
+    CHECK(ui.state.mode == LGN_MODE_ENDING);
+    puts("H10 UI administrator log-off (sec-user-04): locked-screen link, Esc cancels the armed request, OVERRIDE then a typed-name LOGON BEGIN, secrets wiped PASS");
+
+    /* --- sec-user-04 block: G32 upgrade enrollment. --- */
+    script.session = 0; script.owner_uid = 0; memset(script.owner_name, 0, sizeof(script.owner_name)); script.console = 13;
+    enrolling = 1; set_mode(LGN_MODE_ENROLL);
+    CHECK(calls[10] >= 1 && ui.source_valid && ui.view == LUI_VIEW_ENROLL_PLAN && ui.source.count == 2 && ui.first_admin < 0);
+    CHECK(!strcmp(ui.labels[0], "Dad") && !ui.labels[1][0]);
+    frame("enroll-plan");
+    press(LUI_PLAN_OK, 0); CHECK(!planned && strstr(ui.status, "first administrator"));
+    press(LUI_ROW, 1); CHECK(ui.first_admin == 1);
+    press(LUI_PLAN_OK, 0); CHECK(!planned && strstr(ui.status, "needs a name"));
+    press(LUI_FIELD_LABEL, 1); type("Kid");
+    press(LUI_ROW, 0); CHECK(ui.first_admin == 0 && !strcmp(ui.labels[1], "Kid"));
+    press(LUI_PLAN_OK, 0);
+    CHECK(planned && last_plan_bytes == 32 + 80 && r32(last_plan) == 1 && r32(last_plan + 4) == 2 && r32(last_plan + 8) == 3 &&
+          r32(last_plan + 32) == 3 && !strcmp((const char *)last_plan + 36, "Dad") && r32(last_plan + 72) == 5 &&
+          !strcmp((const char *)last_plan + 76, "Kid") && zero(last_plan + 24, 8));
+    CHECK(ui.view == LUI_VIEW_ENROLL_PASSWORD && ui.enroll_record == 0 && ui.accounts[0].uid == 500 && !item(LUI_FIELD_OLD, 0));
+    frame("enroll-password");
+    submit_disposition = LGN_ENROLL_STAGED; submit_status = 0;
+    press(LUI_FIELD_PASSWORD, 0); type("recovery12"); press(LUI_FIELD_CONFIRM, 0); type("recovery13");
+    begins = calls[LGN_OP_BEGIN_AUTH]; press(LUI_ENROLL_OK, 0);
+    CHECK(calls[LGN_OP_BEGIN_AUTH] == begins && strstr(ui.status, "do not match") && zero(ui.password, 64) && zero(ui.confirm, 64));
+    press(LUI_FIELD_PASSWORD, 0); type("recovery12"); press(LUI_FIELD_CONFIRM, 0); type("recovery12");
+    challenge_uid = 500; staged = 1; press(LUI_ENROLL_OK, 0);
+    CHECK(r32(last_begin + 4) == 4 && r32(last_begin + 16) == 1 && r32(last_begin + 20) == 500 && !r32(last_submit + 28) &&
+          r32(last_submit + 32) == 10 && !memcmp(last_submit + 144, "recovery12", 10));
+    CHECK(ui.enroll_record == 2 && item(LUI_FIELD_OLD, 0) && zero(ui.password, 64));
+    frame("enroll-imported");
+    press(LUI_FIELD_OLD, 0); type("dadpass"); press(LUI_FIELD_PASSWORD, 0); type("dadpass12"); press(LUI_FIELD_CONFIRM, 0); type("dadpass12");
+    challenge_uid = 1000; staged = 5; press(LUI_ENROLL_OK, 0);
+    CHECK(r32(last_begin + 20) == 1000 && r32(last_submit + 28) == 7 && !memcmp(last_submit + 80, "dadpass", 7) &&
+          !memcmp(last_submit + 144, "dadpass12", 9) && ui.enroll_record == 3 && zero(ui.old_password, 64));
+    submit_disposition = LGN_ENROLL_COMMITTED; challenge_uid = 1001;
+    press(LUI_FIELD_OLD, 0); press(LUI_FIELD_PASSWORD, 0); type("kidpass12"); press(LUI_FIELD_CONFIRM, 0); type("kidpass12");
+    press(LUI_ENROLL_OK, 0);
+    CHECK(r32(last_begin + 20) == 1001 && !r32(last_submit + 28) && strstr(ui.status, "converted"));
+    submit_disposition = LGN_AUTHENTICATED; challenge_uid = 1000; enrolling = 0; planned = 0;
+    puts("H10 UI G32 enrollment (sec-user-04): ENROLL_SOURCE rows, first administrator and replacement label required, exact "
+         "ENROLL_PLAN rows, recovery/imported/fresh password forms, local confirmation, ENROLL BEGIN/SUBMIT bodies, staged then committed PASS");
 
     lui_wipe(&ui);
     CHECK(zero(ui.password, 64) && zero(ui.name, 32));

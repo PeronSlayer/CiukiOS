@@ -101,10 +101,13 @@ void desk_logon_profile(struct desktop *d)
     if (home && !strncmp(home,"/Windows/Profiles/",18) && !strstr(home,"/..")) (void)copy_path(p->documents,sizeof(p->documents),home,"");
     else if (root) (void)copy_path(p->documents,sizeof(p->documents),root,"/Documents");
     else strcpy(p->documents,"/Documents");
-    /* The shared desktop and Start menu remain the image's common folders
-     * (All Users in Windows XP terms); per-user merges are later work. */
-    strcpy(p->desktop,"/Documents/Desktop");
-    strcpy(p->programs,"/Windows/Start Menu/Programs");
+    /* sec-user-04: the user's own Desktop and Start Menu (Windows XP
+     * CSIDL_DESKTOPDIRECTORY <profile>/Documents/Desktop, CSIDL_PROGRAMS
+     * <profile>/Start Menu/Programs, contract 8.2); sec-user-05's merges show
+     * the All Users items (/Documents/Desktop, /Windows/Start Menu) beside
+     * them. Without a committed root the common folders stay. */
+    if (!root || copy_path(p->desktop,sizeof(p->desktop),root,"/Documents/Desktop")) strcpy(p->desktop,"/Documents/Desktop");
+    if (!root || copy_path(p->programs,sizeof(p->programs),root,"/Start Menu/Programs")) strcpy(p->programs,"/Windows/Start Menu/Programs");
     if (settings && root && !strncmp(settings,root,strlen(root)) && !strstr(settings,"/.."))
         (void)copy_path(p->settings,sizeof(p->settings),settings,"");
     else if (root) (void)copy_path(p->settings,sizeof(p->settings),root,"/Settings/desktop.cfg");
@@ -149,6 +152,16 @@ int desk_logon_lock(struct desktop *d)
     int e=call(LGN_OP_SESSION_LOCK,body,sizeof(body),reply,sizeof(reply),&used);
     if (!e && (used!=sizeof(reply) || lgn_progress_decode(&p,reply,used))) e=-EIO;
     return e ? e : p.status;
+}
+/* sec-user-04: SAVER/STANDBY/PASSWORD notices (logon_proto.h). */
+int desk_logon_secure(struct desktop *d, unsigned notice, unsigned *flags)
+{
+    (void)d;
+    struct lgn_session_event ev;
+    int e=event(notice,&ev);
+    if (!e && flags) *flags=ev.flags;
+    if (e) fprintf(stderr,"[desktop] logon notice %u failed: %d\n",notice,e);
+    return e;
 }
 static struct { struct ciuki_proc_system system; struct ciuki_proc_record records[CIUKI_PROCESS_MAX]; } snapshot;
 /* The session's LOGON-launched window server: same credential, fixed image. */

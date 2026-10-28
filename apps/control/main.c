@@ -64,6 +64,9 @@ struct cp_main { unsigned icon_generation; /* fx-exeicons: du_file_icons_generat
     struct cp_job program_scan; int programs_requested,programs_ready,program_count,next_program_count;
     struct desk_uninstall_entry program_cache[CP_PROGRAM_MAX], *program_next;
     pthread_mutex_t completion_lock;
+    /* sec-user-04: User Accounts worker (accounts_client.c over the
+     * ACCOUNTS link); the request copy holds secrets only while it runs. */
+    struct cp_job accounts_job; struct cpa_request accounts_request; struct cpa_view accounts_view; int accounts_error;
     int completion[2];
     uint32_t applet_serial;
     uint64_t tick_next;
@@ -84,6 +87,59 @@ static int user_begin(void *ctx,const struct users_request *q)
 { struct cp_main *m=ctx; return users_begin(&m->users_worker,q,notify_completion,m); }
 static int user_poll(void *ctx,struct users_view *v,int *e)
 { struct cp_main *m=ctx; return users_poll(&m->users_worker,v,e); }
+/* --- sec-user-04: User Accounts over the SYSTEM account service. The link
+ * (call-101 SERVICE_CONNECT to ACCOUNTS, server role ACCOUNT) and QUERY_SELF
+ * carry this process's kernel credential; nothing here is an authority.
+ * Target only: host harnesses that include this file keep the G32 pages. --- */
+#ifdef __i386__
+#include "../logon/sys_ciuki.h"
+#include <ciuki/security.h>
+static struct lgn_client accounts_link;
+static int accounts_call(void *ctx,uint32_t op,uint64_t generation,const void *body,size_t n,void *reply,size_t cap,size_t *used,int *status)
+{
+    (void)ctx;
+    if (!accounts_link.sys) lgn_client_init(&accounts_link,&lgn_client_ciuki,CIUKI_SECURITY_SERVICE_ACCOUNTS,CIUKI_SECURITY_ROLE_ACCOUNT);
+    return lgn_client_call(&accounts_link,op,generation,body,n,reply,cap,used,status,15000);
+}
+static int accounts_self(void *ctx,uint32_t *uid,uint32_t groups[8],unsigned *count)
+{
+    (void)ctx; struct ciuki_credential c;
+    if (ciuki_security_self(&c)) return errno ? -errno : -EIO;
+    *uid=c.uid; *count=c.group_count>8 ? 8 : c.group_count;
+    for (unsigned i=0;i<*count;i++) groups[i]=c.groups[i];
+    return 0;
+}
+static const struct cpa_transport accounts_transport={NULL,accounts_call,accounts_self};
+static void accounts_work(void *ctx)
+{
+    struct cp_main *m=ctx;
+    m->accounts_error=cpa_execute(&accounts_transport,&m->accounts_request,&m->accounts_view);
+    cpa_wipe(&m->accounts_request,sizeof(m->accounts_request));
+}
+static int accounts_begin(void *ctx,const struct cpa_request *q)
+{
+    struct cp_main *m=ctx;
+    if (m->accounts_job.started) return -EBUSY;
+    m->accounts_request=*q;
+    int e=cp_job_start(&m->accounts_job,accounts_work,m,notify_completion,m);
+    if (e) cpa_wipe(&m->accounts_request,sizeof(m->accounts_request));
+    return e;
+}
+static int accounts_poll_io(void *ctx,struct cpa_view *v,int *e)
+{
+    struct cp_main *m=ctx;
+    if (!cp_job_ready(&m->accounts_job)) return 0;
+    cp_job_finish(&m->accounts_job); *v=m->accounts_view; *e=m->accounts_error; return 1;
+}
+static int self_admin(void *ctx)
+{
+    uint32_t uid=0,groups[8]; unsigned n=0;
+    if (accounts_self(ctx,&uid,groups,&n)) return 0;   /* unknown: machine controls stay disabled */
+    for (unsigned i=0;i<n;i++) if (groups[i]==CPA_GROUP_ADMINS && uid) return 1;
+    return 0;
+}
+#endif
+/* --- end sec-user-04 --- */
 /* All applet jobs share one bounded notification channel. Queue saturation
  * already means readable; other send failures close the peer and wake HUP.
  * Serialize send/close so concurrent producers cannot use a recycled fd. */
@@ -723,7 +779,8 @@ static void idle(void *arg)
     if (m->title_page!=m->app.page) {
         m->title_page=m->app.page;
         const char *title=m->app.page==CP_DISPLAY ? "Display Properties" :
-            m->app.page==CP_DEVICES || m->app.page==CP_DRIVERS ? "System" : "Control Panel";
+            m->app.page==CP_DEVICES || m->app.page==CP_DRIVERS ? "System" :
+            m->app.page==CP_PASSWORDS ? "User Accounts" : "Control Panel";   /* sec-user-04: the Passwords alias */
         for (unsigned k=0;k<CP_APPLETS;k++) if (cp_applets[k].page==m->app.page && m->app.page!=CP_DISPLAY) title=cp_applets[k].label;
         du_window_set_title(&m->window,title);
     }
@@ -808,6 +865,7 @@ static struct cp_program_store programs={.root="",.registry_list=registry_list,.
 static void scan_programs(void *ctx)
 {
     struct cp_main *m=ctx; struct cp_program_store store=programs;
+    store.profile=profile_root_path(); /* sec-user-04 */
     m->next_program_count=cp_program_list(&store,m->program_next,CP_PROGRAM_MAX);
 }
 static void programs_poll(struct cp_main *m)
@@ -837,6 +895,7 @@ static int program_remove(void *ctx,const struct desk_uninstall_entry *r)
 {
     struct cp_main *m=ctx; if (m->program_scan.started) return -EBUSY;
     programs.ctx=ctx;
+    programs.profile=profile_root_path(); /* sec-user-04: per-user shortcuts too */
     int result=cp_program_remove(&programs,r);
     struct cp_program_store recorder=programs;recorder.log=program_log;
     cp_program_record(&recorder,r,result);return result;
@@ -949,6 +1008,9 @@ int main(int argc, char **argv)
     m->writer_started=!cfg_writer_start(&m->writer,profile_settings(),m->settings_temp);
     struct cp_host *h = &m->app.host;
     h->user_begin=user_begin; h->user_poll=user_poll;
+#ifdef __i386__
+    if (profile_root_path()) { h->accounts_begin=accounts_begin; h->accounts_poll=accounts_poll_io; h->self_admin=self_admin; } /* sec-user-04 */
+#endif
     h->menu_begin=menu_begin_io;h->menu_poll=menu_poll_io;h->menu_explore=menu_explore;
     h->pack_scan=pack_scan; h->pack_preview=pack_preview;
     h->pack_install=pack_install; h->pack_remove=pack_remove;
@@ -1004,6 +1066,10 @@ int main(int argc, char **argv)
     du_file_icons_stop();
     cp_decoder_stop();
     cp_job_finish(&m->users_worker.job);
+    cp_job_finish(&m->accounts_job); cpa_wipe(&m->accounts_request,sizeof(m->accounts_request)); /* sec-user-04 */
+#ifdef __i386__
+    lgn_client_close(&accounts_link);
+#endif
     cp_job_finish(&m->menu_job);
     cp_job_finish(&m->game_job);
     cp_job_finish(&m->program_scan); free(m->program_next);

@@ -27,6 +27,9 @@
 extern int files_session_console(struct process *, int32_t *) __attribute__((weak));
 extern unsigned dosvm_session_revoke(uint32_t) __attribute__((weak));
 extern unsigned w32_session_revoke(uint32_t) __attribute__((weak));
+/* sec-user-04: a closing session's joystick preferences return to the
+ * machine store (sec-user-05's per-user scope, drivers/joystick_settings.c). */
+extern void joystick_settings_session_end(uint32_t) __attribute__((weak));
 #pragma weak channel_kernel_endpoint
 #pragma weak channel_kernel_notify
 
@@ -171,6 +174,7 @@ void secure_console_poll(void)
         unsigned retained = 0;
         if (dosvm_session_revoke) retained += dosvm_session_revoke(session);
         if (w32_session_revoke) retained += w32_session_revoke(session);
+        if (joystick_settings_session_end) joystick_settings_session_end(session); /* sec-user-04 */
         drain_passes++;
         /* The record may have been released while the drain yielded. */
         if (records[i].session != session) continue;

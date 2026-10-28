@@ -159,10 +159,28 @@ static int records(struct cp_program_store *s,const char *dir,const char *locati
     if(closedir(d) && !error)error=-errno;
     return error ? error : matched;
 }
+/* sec-user-04: the shortcut folders of Windows XP's two scopes, machine
+ * (All Users) first, then the user's own Start Menu/Programs and Desktop
+ * (CSIDL_PROGRAMS, CSIDL_DESKTOPDIRECTORY). Returns the count. */
+#define SHORTCUT_ROOTS 7u
+static unsigned shortcut_roots(const struct cp_program_store *s,char storage[2][160],const char *roots[SHORTCUT_ROOTS])
+{
+    static const char *const machine[]={"/Windows/Start Menu/Programs","/Windows/Desktop","/Documents/Desktop","/Games","/Programs"};
+    unsigned n=0;
+    for(unsigned i=0;i<5;i++)roots[n++]=machine[i];
+    const char *profile=s->profile;
+    if(profile && !strncmp(profile,"/Windows/Profiles/",18) && profile[18] && !strstr(profile,"/..") && strlen(profile)<120){
+        snprintf(storage[0],160,"%s/Start Menu/Programs",profile);roots[n++]=storage[0];
+        snprintf(storage[1],160,"%s/Documents/Desktop",profile);roots[n++]=storage[1];
+    }
+    return n;
+}
 static int launch_record(struct cp_program_store *s,const char *location,struct desk_launch_record *r)
 {
-    const char *const roots[]={location,"/Games","/Programs","/Windows/Start Menu/Programs","/Windows/Desktop","/Documents/Desktop"};
-    for(unsigned i=0;i<sizeof(roots)/sizeof(*roots);i++){
+    char storage[2][160];const char *shortcuts[SHORTCUT_ROOTS];unsigned count=shortcut_roots(s,storage,shortcuts);
+    const char *roots[1+SHORTCUT_ROOTS]={location,"/Games","/Programs","/Windows/Start Menu/Programs","/Windows/Desktop","/Documents/Desktop"};
+    unsigned total=6;for(unsigned i=5;i<count;i++)roots[total++]=shortcuts[i];
+    for(unsigned i=0;i<total;i++){
         unsigned budget=WALK_ENTRIES;int n=records(s,roots[i],location,r,0,WALK_DEPTH,&budget);
         if(n>0)return 1;if(n<0 && n!=-ENOTDIR)return n;
     }
@@ -290,6 +308,10 @@ static __attribute__((noinline)) void program_icon(struct cp_program_store *s,st
     struct desk_launch_record record;
     if(desk_uninstall_command(r->command,&record))(void)normal(record.target,x->uninstaller);
     icon_folder(x,"/Windows/Start Menu/Programs","",2);
+    if(s->profile && !strncmp(s->profile,"/Windows/Profiles/",18) && !strstr(s->profile,"/..") && strlen(s->profile)<120){
+        char personal[160];snprintf(personal,sizeof(personal),"%s/Start Menu/Programs",s->profile); /* sec-user-04 */
+        icon_folder(x,personal,"",2);
+    }
     if(x->best>0)snprintf(r->icon,sizeof(r->icon),"%s",x->path);
     free(x);
 }
@@ -433,12 +455,12 @@ int cp_program_remove(struct cp_program_store *s,const struct desk_uninstall_ent
             for(int i=0;i<n;i++)if(!strcmp(fresh[i].key,r->key))result=-EAGAIN;
             free(fresh);
         }
-        const char *const roots[]={"/Windows/Start Menu/Programs","/Windows/Desktop","/Documents/Desktop","/Games","/Programs"};
+        char storage[2][160];const char *roots[SHORTCUT_ROOTS];unsigned count=shortcut_roots(s,storage,roots);
         /* First collect icon ownership while every record still exists.
          * Persist that snapshot before deleting the records, so a failed save
          * or restart never loses the identities needed for a retry. */
         for(unsigned phase=2;phase && !result;phase--){
-            for(unsigned i=0;!result && r->location[0] && i<5;i++){
+            for(unsigned i=0;!result && r->location[0] && i<count;i++){
                 unsigned budget=WALK_ENTRIES;int e=records(s,roots[i],r->location,NULL,(int)phase,WALK_DEPTH,&budget);if(e<0)result=e;
             }
             if(phase==2 && !result && s->persist)result=s->persist(s->ctx);

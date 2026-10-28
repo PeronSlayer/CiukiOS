@@ -270,6 +270,13 @@ void desk_session_lock(struct desktop *);
 void desk_session_resume(struct desktop *);
 /* sec-user-03: a secure-menu action handed back by LOGON (logon_proto.h LGN_ACT_*). */
 void desk_session_action(struct desktop *, unsigned action);
+/* sec-user-04 (logon.inc): LOGON-session lock hooks. saver_lock: 0 when the
+ * protected saver may go (locked, or a password-less owner), -errno to keep
+ * it; arm_resume: 1 ready to sleep (locked or nothing to protect), 0 still
+ * arming, -errno refuse Stand by; password_set: LOGON's PASSWORD notice. */
+int desk_session_saver_lock(struct desktop *);
+int desk_session_arm_resume(struct desktop *);
+int desk_session_password_set(struct desktop *);
 void desk_shortcut_properties(struct desktop *, unsigned link, int repair);
 const char *desk_program_menu_label(const char *);
 void desk_shell_reset(struct desktop *);

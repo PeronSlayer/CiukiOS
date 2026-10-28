@@ -2058,6 +2058,8 @@ __attribute__((weak)) int desk_logon_ready_sent(void) { return 1; }
 __attribute__((weak)) void desk_logon_poll(struct desktop *d) { (void)d; }
 __attribute__((weak)) int desk_logon_lock(struct desktop *d) { (void)d; return -ENOSYS; }
 __attribute__((weak)) void desk_logon_end(struct desktop *d, unsigned notice) { (void)d; (void)notice; exit(0); }
+__attribute__((weak)) int desk_logon_secure(struct desktop *d, unsigned notice, unsigned *flags) /* sec-user-04 */
+{ (void)d; (void)notice; (void)flags; return -ENOSYS; }
 /* Review P1-1 (T23 c42f556e): call 73 runs on its own thread. The orderly
  * REBOOT/OFF may wait inside the kernel (a storage preflight bounded to 5 s
  * per stage, the device quiesce); the desktop loop keeps presenting the
@@ -3211,6 +3213,7 @@ int main(int argc, char **argv)
     const struct desk_ops ops = {ciuki_channel_send,ciuki_surface_info,ciuki_surface_map,munmap,close,ciuki_present};
     desk_init(d,&ops,info.width,info.height); d->display=display; d->input=input;
     d->logon_session=logon_session; d->session_lock=logon_session ? desk_logon_lock : NULL;   /* sec-user-03 */
+    d->session_secure=logon_session ? desk_logon_secure : NULL;   /* sec-user-04 */
     d->drop_snapshot=drop_snapshot;
     du_clip_bind(desk_clip_local,d);
     d->now_ns=monotonic(); /* startup notifications use the same clock as service turns */

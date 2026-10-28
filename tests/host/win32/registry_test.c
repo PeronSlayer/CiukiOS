@@ -228,6 +228,21 @@ static int only_twenty(void *unused,uint32_t pid){(void)unused;return pid==20;}
 static void default_deletions(void)
 {
     struct disk d={0};struct wr_server s;start(&s,&d);
+    /* --- sec-user-04: a new machine hive carries the Windows XP all-users
+     * values (CSIDL_COMMON_STARTMENU/STARTUP/APPDATA/DOCUMENTS). --- */
+    static const char *const common[][2]={{"Common Start Menu","C:\\WINDOWS\\Start Menu"},
+        {"Common Startup","C:\\WINDOWS\\Start Menu\\Programs\\StartUp"},{"Common AppData","C:\\WINDOWS\\Application Data"},
+        {"Common Documents","C:\\Documents"},{"Common Programs","C:\\WINDOWS\\Start Menu\\Programs"}};
+    for (unsigned user=0;user<2;user++) {
+        char path[128];snprintf(path,sizeof(path),"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\%sShell Folders",user?"User ":"");
+        CHECK(!rpc(&s,10,W32R_OPEN,W32R_HKLM,path,"",0,NULL,0,0));uint32_t folders=r.key;
+        for (unsigned i=0;i<5;i++) {
+            CHECK(!get(&s,folders,common[i][0]) && r.type==1 && r.data_bytes==(strlen(common[i][1])+1)*2);
+            for (size_t b=0;b<strlen(common[i][1]);b++) CHECK(result[40+b*2]==(uint8_t)common[i][1][b] && !result[41+b*2]);
+        }
+        CHECK(!rpc(&s,10,W32R_CLOSE,folders,"","",0,NULL,0,0));
+    }
+    /* --- end sec-user-04 --- */
     uint32_t key=create(&s,"Software\\Microsoft\\Windows\\CurrentVersion");
     CHECK(!rpc(&s,10,W32R_DELETE_VALUE,key,"","RegisteredOwner",0,NULL,0,0));
     CHECK(!rpc(&s,10,W32R_DELETE_KEY,key,"Run","",0,NULL,0,0));CHECK(!wr_flush(&s));wr_destroy(&s);start(&s,&d);

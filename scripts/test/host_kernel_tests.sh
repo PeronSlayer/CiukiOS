@@ -602,6 +602,11 @@ python3 -B -m unittest discover -s "$root/tests/host/security" -p test_secure_ga
 # recovery account, service restarts) and the LOGON_UI model/view goldens. ---
 python3 -B -m unittest discover -s "$root/tests/host/security" -p test_logon.py
 # --- sec-user-03 block (end) ---
+# --- sec-user-04 block: H12, User Accounts (Control Panel client against the
+# production account service), saver/resume locks, an administrator's log-off
+# of a locked session and the G32 upgrade enrollment, on H10's harness. ---
+python3 -B -m unittest discover -s "$root/tests/host/security" -p test_account_controls.py
+# --- sec-user-04 block (end) ---
 
 # F2 production parser, mappings, wait queues, stack and lifecycle with fake
 # physical memory/scheduling; no guest execution or host runner lock.

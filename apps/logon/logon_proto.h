@@ -112,6 +112,55 @@ enum lgn_notice {
 #define LGN_EVENT_BLANK 1u
 #define LGN_EVENT_RECOVERY 2u
 
+/* ---- sec-user-04 block (private schema 1, contract amendment
+ * "G32 enrollment source and account controls (sec-user-04)") -------------
+ *
+ * - LOGON op ENROLL_SOURCE=10 (LOGON_UI only, empty request): LOGON relays
+ *   AUTH ENROLL_SOURCE=8 (LOGON only) unchanged. The reply lists the
+ *   protected G32 source an upgrade must enroll: 32-byte header (version
+ *   u32@0=1, count u32@4 0..16, flags u32@8 bit0 plan staged, staged mask
+ *   u32@12 by catalogue index, plan generation u64@16, reserved[8]@24=0)
+ *   and count 48-byte rows (old id u32@0, flags u32@4 bit0 replacement
+ *   label required, staged uid u32@8 or 0, reserved u32@12=0, G32
+ *   name[32]@16). Names and ids only: never a salt, verifier or path.
+ * - SESSION_EVENT notices SAVER=5 (a password-protected saver is being
+ *   dismissed: SECURE_ENTER(SAVER)) and STANDBY=6 (arm password-on-resume
+ *   before Stand by, or lock at an unarmed resume: SECURE_ENTER(RESUME)).
+ *   A blank owner gets LGN_EVENT_BLANK and no lock; LGN_EVENT_LOCKED is set
+ *   once the session's trusted gate is up (no entry still draining).
+ * - UI_STATE commands OVERRIDE=9 / OVERRIDE_CANCEL=10 (LOGON_UI, LOCKED
+ *   screen): arm or disarm an administrator's log-off of the locked
+ *   session (Windows XP WlxWkstaLockedSAS FORCE_LOGOFF). While armed, a
+ *   LOGON BEGIN_AUTH (action 2, typed name) authenticates an administrator
+ *   without creating a session; success ends the locked session (forced,
+ *   confirmed) and returns to Welcome, where the administrator logs on
+ *   afresh. A non-administrator fails with -EACCES and nothing changes.
+ */
+#define LGN_OP_ENROLL_SOURCE 10u
+#define LGN_AUTH_ENROLL_SOURCE 8u
+#define LGN_MODE_ENROLL 10u            /* G32 upgrade: accounts must be enrolled first */
+#define LGN_STATE_OVERRIDE 32u         /* an administrator's log-off of the locked session is armed */
+#define LGN_MSG_ADMIN_ENDED 8u         /* an administrator ended the locked session */
+#define LGN_MSG_NOT_ADMIN 9u           /* the typed account is not an administrator */
+#define LGN_MSG_ENROLLED 10u           /* the converted accounts were committed */
+#define LGN_CMD_OVERRIDE 9u
+#define LGN_CMD_OVERRIDE_CANCEL 10u
+#define LGN_NOTICE_SAVER 5u
+#define LGN_NOTICE_STANDBY 6u
+#define LGN_EVENT_LOCKED 4u
+#define LGN_SOURCE_MAX 16u
+#define LGN_SOURCE_BYTES(n) (32u + 48u * (n))
+#define LGN_SOURCE_REPLACE 1u
+#define LGN_SOURCE_PLAN 1u
+struct lgn_source {
+    uint32_t count, flags, staged;
+    uint64_t generation;
+    struct { uint32_t old_id, flags, uid; char name[32]; } rows[LGN_SOURCE_MAX];
+};
+int lgn_source_encode(const struct lgn_source *, void *, size_t, size_t *);
+int lgn_source_decode(struct lgn_source *, const void *, size_t);
+/* ---- end sec-user-04 block ---------------------------------------------- */
+
 /* Progress result_status of SESSION_LOCK/LOCK_EVENT for a passwordless owner. */
 #define LGN_STATUS_NO_PASSWORD (-EPERM)
 #define LGN_UI_COMMAND_BYTES 32u

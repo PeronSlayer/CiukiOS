@@ -33,7 +33,8 @@ class AddRemoveTests(unittest.TestCase):
         work=ROOT/'build/host/f2-87';work.mkdir(parents=True,exist_ok=True)
         with tempfile.TemporaryDirectory(dir=work) as temporary:
             folder=Path(temporary)
-            for name in ('Games/Test/Sub','Programs/UserDirectory','Programs/DosUser','Programs/Win','Windows/Desktop','Windows/Start Menu/Programs','Documents/Desktop','system/licenses','system/settings','System'):
+            for name in ('Games/Test/Sub','Programs/UserDirectory','Programs/DosUser','Programs/Win','Windows/Desktop','Windows/Start Menu/Programs','Documents/Desktop','system/licenses','system/settings','System',
+                         'Windows/Profiles/u000003e8/Start Menu/Programs','Windows/Profiles/u000003e8/Documents/Desktop'):  # sec-user-04
                 (folder/name).mkdir(parents=True,exist_ok=True)
             (folder/'Games/Test/Sub/data').write_bytes(b'fixture')
             (folder/'Programs/UserDirectory/file').write_bytes(b'fixture')

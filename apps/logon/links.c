@@ -135,6 +135,15 @@ static int k_gate_state(void *ctx, uint32_t session, uint32_t *console, uint32_t
     struct lgn *g=self_of(ctx);
     if (!console || !epoch || !uid) return -EINVAL;
     if (!session) {
+        /* sec-user-04: an armed administrator log-off authenticates (action 2,
+         * session 0) against the locked session's current console, so a
+         * console change (attention, unlock, restart) invalidates it. */
+        if (g->override && g->session.phase==LGN_ACTIVE && g->mode==LGN_MODE_LOCKED && g->session.console_valid &&
+            g->session.console.state==CIUKI_SECURITY_CONSOLE_TRUSTED) {
+            *console=g->session.console.console_generation; *epoch=g->session.console.authentication_epoch;
+            *uid=CIUKI_UID_INVALID;
+            return 0;
+        }
         if (!g->boot_valid || g->session.phase) return -EAGAIN;
         *console=g->boot.console_generation; *epoch=g->boot.authentication_epoch; *uid=CIUKI_UID_INVALID;
         return 0;
