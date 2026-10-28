@@ -39,6 +39,15 @@ wrap publication retain the rejecting guard; no reset establishes CPU safety.
 Register and complete VRAM reservations stay pinned and can be reused only
 at their exact extents after stop. Durable attempt markers remain PCI-keyed.
 
+## 3D admission (f7-26)
+
+This family explicitly selects software 3D. The inspected nouveau_vieux and
+Linux sources require channel/PGRAPH context machinery beyond this 2D PIO
+owner; a complete PIO 3D lifecycle and restoration recipe is not established.
+There is no 3D provider or boot probe, including with `3d=probe`; native/GL
+hardware caps remain zero. Existing 2D qualification is independent. See the
+[source evidence and remaining gates](../../../../../docs/design/f7-family-nvidia-nv04-nv20.md).
+
 ## Provenance and credits
 
 Primary donor: [X.Org xf86-video-nv](https://gitlab.freedesktop.org/xorg/driver/xf86-video-nv),
