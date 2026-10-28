@@ -613,12 +613,26 @@ static void creation_cost_store(cvga_state *v, uint32_t at, uint8_t byte)
  * here exercise the supported read-only system-volume launch path. */
 void fs_service(void) { }
 int dos_save_store_open(struct dos_save_file *f,struct dos_save *s,const struct dos_save_identity *id,
-                        char path[128],unsigned *archived)
+                        const char *root,char path[DOS_SAVE_PATH],unsigned *archived)
 {
     (void)s; *archived=0; f->fd=-1; f->absent=true;
-    snprintf(path,128,DOS_SAVE_ROOT "\\G%uK%u%s.COW",id->game,id->kernel,id->base);
+    CHECK(!strcmp(root,DOS_SAVE_ROOT)); /* internal/bootstrap identities: machine namespace */
+    snprintf(path,DOS_SAVE_PATH,"%s\\G%uK%u%s.COW",root,id->game,id->kernel,id->base);
     return -FS_EROFS;
 }
+/* sec-k05: the scratch and title directories exist in this transport; the
+ * identity adapter's host-view gate is never reached (no D:/E: here). */
+static char last_mkdir[DOS_IDENTITY_PATH];
+int vfs_mkdir(struct vfs_table *table,const char *path,uint8_t attr)
+{
+    (void)file_slot(table);
+    CHECK(!attr && (!strcmp(path,"C:\\SYSTEM\\DOS") || !strcmp(path,"C:\\SYSTEM\\DOS\\SAVES") ||
+          !strncmp(path,"C:\\Windows\\Profiles\\",20)) && strlen(path)<sizeof(last_mkdir));
+    strcpy(last_mkdir,path);
+    return -FS_EEXIST;
+}
+void vfs_lock(struct vfs *v,uint32_t mask) { (void)v; (void)mask; CHECK(false); }
+void vfs_unlock(struct vfs *v) { (void)v; CHECK(false); }
 #include "../../src/kernel/vm/dos_save.c"
 #include "../../src/kernel/vm/dosvm_disk.c"
 #include "../../src/kernel/vm/dosvm_bios.c"
@@ -657,8 +671,16 @@ int dosvm_game_program_checked(unsigned game,bool remove,uint32_t *size,const ch
  * NORMAL (pmm_alloc_zone CHECKs it); a case may set the DMA figure. */
 static uint32_t fake_dma_free_pages;
 uint32_t pmm_zone_free(int zone) { return zone==ZONE_NORMAL ? pmm_free_count() : zone==ZONE_DMA ? fake_dma_free_pages : 0; }
-int dosvm_game_data(unsigned game,unsigned op,struct ciuki_dosvm_command *c)
-{ CHECK(game && game<=CIUKI_DOSVM_GAME_COUNT && op>=14 && op<=16); c->changed=1024; c->reason=DOS_SAVE_QUOTA; return 0; }
+/* sec-k05: the store the caller's identity names (own data only). */
+static char game_data_root[DOS_IDENTITY_PATH];
+static uint32_t game_data_uid;
+int dosvm_game_data(unsigned game,unsigned op,struct ciuki_dosvm_command *c,const struct dos_identity *owner)
+{
+    CHECK(game && game<=CIUKI_DOSVM_GAME_COUNT && op>=14 && op<=16 && owner && !owner->system);
+    CHECK(!dos_identity_root(owner,DOS_ROOT_STORE,game_data_root,sizeof(game_data_root)));
+    game_data_uid=owner->credential.uid;
+    c->changed=1024; c->reason=DOS_SAVE_QUOTA; return 0;
+}
 #include "../../src/kernel/vm/dosvm_client.c"
 #include "../../src/kernel/vm/vga_hardware.c"
 #include "../../src/kernel/vm/dosvm_fullscreen.c"
@@ -670,6 +692,7 @@ int dosvm_game_data(unsigned game,unsigned op,struct ciuki_dosvm_command *c)
 #undef as_map
 #undef memcpy
 #undef memset
+#include "../../src/kernel/vm/dos_identity.c"
 #include "dosvm_network_seams.inc"
 #include "../../src/kernel/vm/dpmi_desc.c"
 #include "../../src/kernel/vm/dpmi_switch.c"
@@ -1029,6 +1052,7 @@ static void test_memory_services(bool locked)
 #include "dosvm_paging_test.inc"
 #include "dosvm_wait_present_test.inc"
 #include "dosvm_floppy_test.inc"
+#include "dosvm_identity_test.inc" /* sec-k05: VM identity, INT 13h private provider */
 #include "dosvm_uart_test.inc"
 #include "dosvm_fx4_test.inc"
 #include "dosvm_fx16_test.inc"     /* fx-16: T23 trial e831e685 replays */
@@ -1100,6 +1124,7 @@ int main(void)
     if (getenv("CIUKI_VM_DISK_TRACE")) { test_disk_trace(); free(ram); return 0; }
     if (getenv("CIUKI_VM_FX4")) { test_fx4_vm_create(); test_fx4b_launch_paths(); printf("fx-4 checks=%u\n",checks); fflush(stdout); free(ram); return 0; }
     if(getenv("CIUKI_VM_PROGRAMS")){test_client_boundary();fflush(stdout);free(ram);return 0;}
+    if (getenv("CIUKI_VM_IDENTITY")) { test_vm_identity(); test_client_boundary(); printf("H06 VM identity checks=%u\n",checks); fflush(stdout); free(ram); return 0; }
     if(getenv("CIUKI_VM_KERNEL_CHOICE")){
         test_kernel_choice();test_client_boundary();
         printf("H55-04 native selector/overlay tests: PASS (%u checks)\n",checks);
@@ -1111,7 +1136,7 @@ int main(void)
     test_maximum_creation();
     test_maximum_teardown();
     test_vga_transaction_bound();
-    test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_lifecycle_records(); test_cleanup_errors(); test_memory_services(true); test_memory_services(false); test_devices(); test_audio(); test_dpmi(); test_dos_mouse();
+    test_admission(); test_creation_failures(); test_memory_disk(); test_bios_bounds(); test_vm_identity(); test_lifecycle_records(); test_cleanup_errors(); test_memory_services(true); test_memory_services(false); test_devices(); test_audio(); test_dpmi(); test_dos_mouse();
     test_video();
     test_programmatic_clipboard();
     test_wait_present();

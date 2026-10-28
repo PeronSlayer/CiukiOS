@@ -5,6 +5,7 @@
 #include <ciuki/cpu.h>
 #include <ciuki/clock.h>
 #include <ciuki/w32_objects.h>
+#include <ciuki/security.h>
 uint64_t w32_system_time(void)
 {
     struct ciuki_timespec now;
@@ -121,7 +122,9 @@ uint32_t w32_apc_call(
             if (v && v->tid == o->id && v->w32 && v->w32->identity == o)
                 target = v;
         }
-        a->error = w32_apc_queue(target, a->routine, a->argument, 0, 0);
+        a->error = target && (!security_same(t->process,target->process) ||
+            !security_process_live(target->process) || !w32_handle_access(t,a->thread,0x10)) ?
+            5 : w32_apc_queue(target, a->routine, a->argument, 0, 0);
         a->result = !a->error;
     } else if (a->action == W32_APC_RETURN) {
         if (!t->w32->apc_context)
@@ -244,6 +247,9 @@ uint32_t w32_context_call(struct proc_thread *caller, struct ciuki_w32_context_a
         a->error = 6;
         return 0;
     }
+    uint32_t right = a->action==W32_CTX_GET?8u:a->action==W32_CTX_SET?0x10u:2u;
+    if (!security_same(caller->process,t->process) || !security_process_live(t->process) ||
+        !w32_handle_access(caller,a->thread,right)) { a->error=5; return 0; }
     if (t->process->personality != PROC_WIN32) {
         a->error = 120;
         return 0;

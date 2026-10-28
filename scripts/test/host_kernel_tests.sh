@@ -276,7 +276,9 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -I "$root/src/kernel/include" "$root/tests/host/power_test.c" -o "$out/power_test"
 "$out/power_test"
 clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
-    -I "$root/src/kernel/include" "$root/tests/host/power_runtime_test.c" -o "$out/power_runtime_test"
+    -ffunction-sections -fdata-sections -Wl,--gc-sections \
+    -I "$root/src/kernel/include" "$root/tests/host/power_runtime_test.c" \
+    "$root/tests/host/security/subject_fixture.c" -o "$out/power_runtime_test"
 "$out/power_runtime_test"
 # fx-acpioff: the ACPI S5 register fallback (SCI_EN handshake, status/GPE
 # clearing, PM1a/PM1b writes, bounds, registry owner refusal, hint states).
@@ -568,8 +570,21 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
 
 # sec-k01 H01: immutable production subjects and call-101 transactions.
 python3 -B -m unittest discover -s "$root/tests/host/security" -p test_credentials.py
+# sec-k04 H05: production device/admin authority, raw disk and dispatch.
+python3 -B -m unittest discover -s "$root/tests/host/security" -p test_devices.py
+# end sec-k04 registration
 # sec-k02 H02: OWNER batches/checkpoints and resolved FAT path policy.
 python3 -B -m unittest discover -s "$root/tests/host/security" -p test_owner_policy.py
+# ---- sec-k03 H04 (one block): every native/Win32/legacy-table file, handle,
+# exec and mapping entry point enforces the retained subject; frontend census.
+python3 -B -m unittest discover -s "$root/tests/host/security" -p test_file_enforcement.py
+# ---- end sec-k03 ----
+# --- sec-k05 block (begin) ---
+# H06: DOS VM identity, credential-filtered D:/E: through the live IFS and
+# per-user stores. Its VM-lifecycle/INT 13h and title-store cases run in
+# this suite's dosvm_test (default sequence) and run_persistent_saves.sh.
+python3 -B -m unittest discover -s "$root/tests/host/security" -p test_dos_identity.py -k test_identity_views_and_stores
+# --- sec-k05 block (end) ---
 
 # F2 production parser, mappings, wait queues, stack and lifecycle with fake
 # physical memory/scheduling; no guest execution or host runner lock.
@@ -697,11 +712,17 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -o "$out/fs/test_storage_power_flush"
 "$out/fs/test_storage_power_flush"
 for storage_test in test_storage_namespace test_storage test_log_recovery test_powercuts; do
+    # sec-k04: the namespace harness links media_dev.c, which asks the
+    # production credential predicates (proc/security.c via the subject fixture).
+    storage_extra=()
+    if [[ $storage_test == test_storage_namespace ]]; then
+        storage_extra=("$root/tests/host/security/subject_fixture.c")
+    fi
     clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
         -ffunction-sections -fdata-sections -Wl,--gc-sections \
         -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread \
         -I "$root/src/kernel/include" -I "$root/src/kernel/fs" \
-        "${storage_sources[@]}" "$root/tests/host/fs/$storage_test.c" \
+        "${storage_sources[@]}" "${storage_extra[@]}" "$root/tests/host/fs/$storage_test.c" \
         -o "$out/fs/$storage_test"
     "$out/fs/$storage_test" "$out/fs/fat32.img" "$out/fs/fat12.img" "$out/fs/fat16.img"
     # The storage fixture's baseline SYSTEM directory is intentionally
@@ -781,6 +802,10 @@ clang++ -std=c++17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -I 
     "$root/tests/host/opl3_ref_test.cpp" "$out/dbopl/dbopl.o" "$out/dbopl/opl3_port.o" -o "$out/opl3_ref_test"
 "$out/opl3_ref_test"
 python3 "$root/tests/host/test_opl3_tables.py"
+
+# sec-k06: production Win32 isolation, SYSTEM registry and restart journals.
+python3 -B -m unittest discover -s "$root/tests/host/security" -p test_win32_broker.py
+# end sec-k06
 
 # F5 personality mechanisms, fixture parity and core selector wiring.
 python3 -B -m unittest discover -s "$root/tests/host/win32" -p test_kernel_core.py

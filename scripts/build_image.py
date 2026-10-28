@@ -472,6 +472,13 @@ def application_payloads(stage=None):
     # path, plus its SYSTEM-only store directory (empty until provisioning).
     accounts_sources, accounts_directories, accounts_metadata = accounts_build.image_payloads()
     sources.update(accounts_sources)
+    # sec-k06: the kernel's sealed REGISTRY role image and protected stores.
+    registry_spec = importlib.util.spec_from_file_location("image_registry", ROOT / "apps/registry/build_registry.py")
+    registry_build = importlib.util.module_from_spec(registry_spec)
+    registry_spec.loader.exec_module(registry_build)
+    registry_sources, registry_directories, registry_metadata = registry_build.image_payloads()
+    sources.update(registry_sources)
+    # end sec-k06
     directories = {"/Programs", "/tmp", "/Documents", "/Documents/Desktop", "/System", "/system/tests",
                    "/system/licenses", "/system/assets", TEST_PATH}
     directories.update(f"{TEST_PATH}/{name}" for name in manifest["test_directories"])
@@ -488,6 +495,10 @@ def application_payloads(stage=None):
     metadata["desktop"] = desktop_metadata
     metadata["tcc"] = tcc_metadata
     metadata["w32srv"] = w32_metadata
+    # sec-k06
+    directories.update(registry_directories)
+    metadata["registry"] = registry_metadata
+    # end sec-k06
     metadata["accounts"] = accounts_metadata
     metadata["native_elf"] = strip_payloads(sources, stage) if stage is not None else []
     # The gate's relative supplement argv uses TEST_PATH. Retain the f2-07
@@ -869,7 +880,113 @@ def registry_payloads(directory):
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / "System.reg"
     path.write_text(text, encoding="utf-8")
-    return {"/System/Registry/System.reg": path}, {"/System", "/System/Registry"}
+    # sec-k06: native machine roots use only the SYSTEM broker's backing tree.
+    programs = directory / "Programs.reg"
+    programs.write_text("; ciuki-registry generation=0\n[Programs]\n", encoding="utf-8")
+    machine = "/System/Security/Registry/Machine"
+    return {machine + "/System.reg": path, machine + "/Programs.reg": programs}, {
+        "/System", "/System/Security", "/System/Security/Registry", machine}
+    # end sec-k06
+
+
+# ---- sec-user-02: ready-image account provisioning (user-security-contract.md 3.6, 5.2) ----
+# A ready image (the canonical build/f0 image: QEMU, VirtualBox, VMware, raw
+# disk) carries the exact section 3.6 READY seed and its UNPROVISIONED
+# bootstrap.state, declared by explicit build metadata ("provisioning": kind
+# "ready"), never inferred from a missing users.dat. The seed holds no secret:
+# CiukiUser's empty verifier, its fresh salt and the per-install machine SID
+# are created by ACCOUNT on the first boot of each copy. CiukiAdministrator and
+# Guest stay disabled and unset. The Setup CD excludes these files
+# (scripts/build_cd.py); Setup stages its own Setup seed instead.
+PROVISION_DIRECTORY = "/System/Security"
+PROVISION_SEED = PROVISION_DIRECTORY + "/provision.seed"
+PROVISION_STATE = PROVISION_DIRECTORY + "/bootstrap.state"
+PROVISION_DIRECTORIES = {"/System", PROVISION_DIRECTORY, "/WINDOWS", "/WINDOWS/Profiles"}
+READY_RECORDS = ((500, 2, 3, "CiukiAdministrator"), (501, 2, 4, "Guest"), (1000, 9, 3, "CiukiUser"))
+
+
+def ready_seed():
+    """CIUKISEE version 2, generation 0, next_uid 1001, three records, origin 1,
+    auto_logon_uid 1000; SHA-256 of the whole file with its digest field zeroed."""
+    data = bytearray(96 + 256 * len(READY_RECORDS))
+    data[0:8] = b"CIUKISEE"
+    struct.pack_into("<IIQIIII", data, 8, 2, 96, 0, 1001, len(READY_RECORDS), 0, 256)
+    struct.pack_into("<IIII", data, 52, 1, 1000, 0, 0)  # origin, auto_logon_uid, reserved (SID 40..52 zero)
+    for index, (uid, flags, groups, name) in enumerate(READY_RECORDS):
+        record = 96 + 256 * index
+        struct.pack_into("<IIIIII", data, record, uid, flags, groups, 0, 0, 0)
+        data[record + 24:record + 24 + len(name)] = name.encode("ascii")
+    data[64:96] = hashlib.sha256(bytes(data)).digest()
+    return bytes(data)
+
+
+def volume_identity(volume):
+    """ciuki_provision_volume_id (sdk/private/provision.h): partition LBA << 32 | FAT32 BPB serial."""
+    with Path(volume).open("rb") as stream:
+        boot = stream.read(SECTOR)
+    require(len(boot) == SECTOR and boot[82:90] == b"FAT32   ", "FAT32 boot sector for the volume identity")
+    serial = struct.unpack_from("<I", boot, 67)[0]
+    require(serial != 0, "FAT32 volume serial")
+    return PART_LBA << 32 | serial
+
+
+def bootstrap_state(origin, volume_id, seed_digest):
+    """CIUKIBST version 1, 160 bytes, state UNPROVISIONED, state_generation 1."""
+    require(origin in (1, 2, 3) and volume_id and len(seed_digest) == 32 and any(seed_digest), "bootstrap.state inputs")
+    data = bytearray(160)
+    data[0:8] = b"CIUKIBST"
+    struct.pack_into("<IIIIQ", data, 8, 1, 160, 1, origin, volume_id)
+    data[32:64] = seed_digest
+    struct.pack_into("<IIQ", data, 104, 1001, 0, 1)
+    data[120:152] = hashlib.sha256(bytes(data)).digest()
+    return bytes(data)
+
+
+def ready_provisioning(directory, volume):
+    """(sources, directories, metadata) of the ready seed for this formatted volume."""
+    directory.mkdir(parents=True, exist_ok=True)
+    seed = ready_seed()
+    identity = volume_identity(volume)
+    state = bootstrap_state(1, identity, hashlib.sha256(seed).digest())
+    (directory / "provision.seed").write_bytes(seed)
+    (directory / "bootstrap.state").write_bytes(state)
+    metadata = {"kind": "ready", "origin": 1, "auto_logon_uid": 1000,
+                "records": [{"uid": uid, "name": name, "flags": flags, "groups": groups} for uid, flags, groups, name in READY_RECORDS],
+                "volume_id": f"0x{identity:016x}", "seed": PROVISION_SEED, "state": PROVISION_STATE,
+                "seed_sha256": hashlib.sha256(seed).hexdigest(), "state_sha256": hashlib.sha256(state).hexdigest(),
+                "setup_media": "excluded (scripts/build_cd.py); Setup stages its own origin-2 seed"}
+    return ({PROVISION_SEED: directory / "provision.seed", PROVISION_STATE: directory / "bootstrap.state"},
+            set(PROVISION_DIRECTORIES), metadata)
+
+
+# ---- sec-user-02: no shipped executable in shared /Documents (contract 8.3, A1-5) ----
+EXECUTABLE_SUFFIXES = (".exe", ".com", ".dll", ".bat", ".cmd", ".pif", ".scr", ".sys", ".drv", ".ocx", ".cpl",
+                       ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".ps1", ".sh", ".msi", ".lua", ".ciuki")
+
+
+def shared_executable(name, source):
+    """Why a payload under /Documents would be executable, or None. Content
+    decides as well as the name: PE/MZ, ELF, CiukiOS shell scripts and '#!'
+    scripts without a suffix are all refused."""
+    if name.casefold().endswith(EXECUTABLE_SUFFIXES):
+        return "executable suffix"
+    with Path(source).open("rb") as stream:
+        head = stream.read(4)
+    if head[:2] in (b"MZ", b"ZM"):
+        return "MZ/PE image"
+    if head == b"\x7fELF":
+        return "ELF image"
+    if head[:2] == b"#!":
+        return "script"
+    return None
+
+
+def refuse_shared_executables(sources):
+    """Static payload-map check: shared /Documents carries data only; bundled
+    executables live in the protected /Programs/Installers store."""
+    found = [f"{name} ({reason})" for name, source in sorted(sources.items())
+             if name.casefold().startswith("/documents/") and (reason := shared_executable(name, source))]
+    require(not found, "executable payload under shared /Documents: " + ", ".join(found))
 
 
 def build(kernel, out, boot_cfg):
@@ -954,6 +1071,11 @@ def build_with_stage(kernel, out, boot_cfg, stage):
             "-n", "CIUKIOS", volume)
         initialize_blackbox(volume)
         initialize_bootstat(volume)
+        # sec-user-02: the ready seed bound to this formatted volume's identity.
+        provision_sources, provision_directories, metadata["provisioning"] = ready_provisioning(scratch / "provision", volume)
+        sources.update(provision_sources)
+        directories.update(provision_directories)
+        refuse_shared_executables(sources)
         sources.update({"/system/VMM.ELF": installed_kernel, "/system/BOOT.CFG": cfg})
         stage_sfc(scratch / "sfc", sources)
         # /System/BUILD.TXT: provenance quoted by the Hardware Report. It

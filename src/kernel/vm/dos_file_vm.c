@@ -84,7 +84,9 @@ static bool file_disk_writable(const struct dosvm *v) {
     return v->overlay_open && (!v->persistent || (v->save_file.writable && !v->save.readonly));
 }
 static int file_bind(struct dosvm *v,struct dos_file_frame *f,uint16_t caller_cs) {
-    if (v->disable_file_bridge) return -FS_EACCES;
+    /* sec-k05: the retired v1 bridge maps unfiltered host views; only a
+     * kernel-internal VM (never user-reachable) may still bind it. */
+    if (v->disable_file_bridge || !v->identity.system) return -FS_EACCES;
     if (v->files) return -FS_EINVAL;
     unsigned extra=v->conformance_media.mode ? sizeof(struct dos_file_volume) : 0;
     unsigned bytes=(sizeof(struct file_runtime)+extra+PAGE_SIZE-1)&~(PAGE_SIZE-1);
@@ -102,7 +104,8 @@ static int file_bind(struct dosvm *v,struct dos_file_frame *f,uint16_t caller_cs
     if (!e) e=dos_file_map(&runtime->files,2,&runtime->volume.table,2,!file_disk_writable(v));
     if (!e && vfs_drive_present(&storage->vfs,2)) {
         e=vfs_table_init(&storage->vfs,&runtime->native,2);
-        if (!e) { runtime->native_ready=true; e=dos_file_native_views(&runtime->files,&runtime->native,false); }
+        if (!e) { runtime->native_ready=true; e=dos_identity_bind(&v->identity,&runtime->native); }
+        if (!e) e=dos_file_native_views(&runtime->files,&runtime->native,false);
     }
     if (!e && v->conformance_media.mode) {
         runtime->removable_provider=(struct blkdev){.read=removable_read,.capacity=D48_VOLUME_SECTORS,
@@ -140,7 +143,10 @@ static int file_finish(struct dosvm *v,struct v86_frame *f,const struct dos_file
  * bind mounts this VM's logical C: view through f3-47 (the same provider and
  * generation as BIOS INT 13h, which then serializes through it), maps the
  * read-only system D: and the policy-controlled E:, and converts their CDS
- * entries to IFS drives. */
+ * entries to IFS drives. sec-k05: C: is the VM's private FAT16 (its owner's
+ * COW, never the host system volume); D:/E: are read-only host views whose
+ * every path, listing and transfer is authorized as the VM's retained
+ * subject (dos_identity.c gate) for a user VM. */
 struct unified_runtime {
     struct dos_unified unified;
     struct dfv2_ifs ifs;
@@ -189,9 +195,13 @@ static int unified_mount(void *arg,struct dfv2_ifs *s) {
     dosvm_disk_provider_init(v,&r->provider);
     int e=dos_file_volume_open(&r->volume,&storage->cache,unified_source(r),file_disk_writable(v));
     if (!e) { r->volume_open=true; e=dfv2_ifs_map(s,2,&r->volume.table,2,!file_disk_writable(v)); }
+    /* A user VM's host views always carry its gate; an internal VM's are
+     * SYSTEM views. Both stay read-only. */
+    const struct dos_host_gate *gate=v->identity.system ? 0 : &v->file_gate;
     if (!e && vfs_drive_present(&storage->vfs,2)) {
         e=vfs_table_init(&storage->vfs,&r->native,2);
-        if (!e) { r->native_ready=true; e=dfv2_ifs_map(s,3,&r->native,2,true); }
+        if (!e) { r->native_ready=true; e=dos_identity_bind(&v->identity,&r->native); }
+        if (!e) e=gate ? dfv2_ifs_map_host(s,3,&r->native,2,gate) : dfv2_ifs_map(s,3,&r->native,2,true);
     }
     if (!e && v->conformance_media.mode) {
         r->removable_provider=(struct blkdev){.read=removable_read,.capacity=D48_VOLUME_SECTORS,
@@ -201,7 +211,8 @@ static int unified_mount(void *arg,struct dfv2_ifs *s) {
     } else if (!e && r->native_ready) {
         for (unsigned i=3;i<26;i++)
             if (vfs_drive_present(&storage->vfs,i) && (storage->vfs.drive_flags[i]&VFS_DRIVE_REMOVABLE)) {
-                e=dfv2_ifs_map(s,4,&r->native,i,true); break;   /* policy: not writable */
+                /* policy: not writable; security never widens it (8.4) */
+                e=gate ? dfv2_ifs_map_host(s,4,&r->native,i,gate) : dfv2_ifs_map(s,4,&r->native,i,true); break;
             }
     }
     if (e) { unified_unmount(v,s); return e; }

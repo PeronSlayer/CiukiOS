@@ -40,6 +40,8 @@ if args.kernel:
     files += [ROOT / ('src/kernel/drivers/' + name + '.c') for name in (
         'net_dev', 'net_arp', 'net_e100', 'net_rtl8139', 'net_ne2000', 'net_e1000',
         'net_pcnet', 'net_tulip', 'net_3c90x', 'net_rhine')]
+if not args.kernel:
+    files += [ROOT / 'tests/host/security/subject_fixture.c']
 files += [ROOT / 'src/kernel/net/config.c', ROOT / 'src/kernel/lib/fmt.c']
 objects = []
 for index, path in enumerate(files):

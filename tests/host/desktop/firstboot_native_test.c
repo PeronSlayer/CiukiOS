@@ -27,6 +27,14 @@ int ciuki_dosvm(uint32_t op,struct ciuki_dosvm_command *out)
 int getentropy(void *out,size_t bytes)
 {assert(bytes==1);if(entropy_pending){errno=EAGAIN;return -1;}memset(out,0,bytes);return 0;}
 int ciuki_devices(struct ciuki_devices_info *out){(void)out;errno=ENOSYS;return -1;}
+/* sec-user-02: the session credential (call 101 QUERY_SELF). */
+static int credential_groups=2,credential_error;
+int ciuki_security_self(struct ciuki_credential *c)
+{
+    if(credential_error){errno=credential_error;return -1;}
+    memset(c,0,sizeof(*c));c->version=1;c->size=64;c->uid=credential_groups==2?1000:1001;c->primary_gid=545;
+    c->group_count=(uint32_t)credential_groups;c->groups[0]=545;if(credential_groups==2)c->groups[1]=544;return 0;
+}
 int sound_load_at(struct sound_scheme *s,const char *a,const char *b,const char *c)
 {(void)a;(void)b;(void)c;sound_defaults(s);return 0;}
 static void put(const char *path,const void *bytes,size_t count)
@@ -37,10 +45,16 @@ int main(void)
     dir(FB_ROOT "/SYSTEM");dir(FB_ROOT "/System");dir(FB_ROOT "/System/Registry");
     dir(FB_ROOT "/system");dir(FB_ROOT "/system/settings");dir(FB_ROOT "/system/sounds");dir(FB_ROOT "/dev");
     struct desktop d={.display=61,.accel_generation=7};struct native_fb n={.desktop=&d,.audio=-1};
-    struct fb_host h={&n,state_read,append,service,cancel_service,record,action};struct firstboot f;
+    struct fb_host h={&n,state_read,append,service,cancel_service,record,action,NULL};struct firstboot f;
     assert(fb_begin(&f,&h)==0);
     const char pending[]="phase=installed\nfirstboot=pending\n";
     put(FB_ROOT "/SYSTEM/SETUP.STATE",pending,sizeof(pending)-1);
+    /* sec-user-02: only an administrator session runs the pending wizard;
+     * Standard users and an unreadable credential leave it pending. */
+    struct fb_host gated=h;gated.administrator=administrator;
+    credential_groups=1;assert(fb_begin(&f,&gated)==0&&!f.active);
+    credential_error=EPERM;assert(fb_begin(&f,&gated)==0&&!f.active);credential_error=0;
+    credential_groups=2;assert(fb_begin(&f,&gated)==1&&f.active);
     assert(fb_begin(&f,&h)==1);fb_tick(&f,0);assert(synced==1&&f.result[0]==FB_OK);
     fail_sync=1;assert(append(&n,"\nstep=sound result=ok\n",22)==-EIO);fail_sync=0;
     char text[192];assert(!service(&n,FB_ACCEL,1,text,sizeof(text))&&strstr(text,"is on"));

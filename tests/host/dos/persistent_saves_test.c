@@ -3,6 +3,7 @@
 #include <ciuki/abi.h>
 #include "../../../src/kernel/vm/dos_save_store.h"
 #include "../../../src/kernel/vm/dos_file_volume.h"
+#include "../../../src/kernel/vm/dos_identity.h"
 #include <ciuki/storage.h>
 #include <ciuki/blkpart.h>
 #include <assert.h>
@@ -141,7 +142,12 @@ struct storage *storage_get(void) { return &manager_storage; }
 int dosvm_game_remove_reserve(unsigned game)
 { assert(game && game<=CIUKI_DOSVM_GAME_COUNT); if (manager_busy) return -FS_EBUSY; reservations++; return 0; }
 void dosvm_game_remove_release(unsigned game) { assert(game && reservations); reservations--; }
-int dosvm_game_data(unsigned,unsigned,struct ciuki_dosvm_command *);
+int dosvm_game_data(unsigned,unsigned,struct ciuki_dosvm_command *,const struct dos_identity *);
+/* sec-k05: the legacy machine namespace (interim bootstrap/internal) is a
+ * zero identity; profile identities are exercised below and in H06. */
+static const struct dos_identity legacy_owner;
+static int game_data(unsigned game,unsigned op,struct ciuki_dosvm_command *c)
+{ return dosvm_game_data(game,op,c,&legacy_owner); }
 static struct fat_volume native;
 static struct vfs_table table;
 static struct blkdev system_device,base_device,merged_device;
@@ -159,10 +165,10 @@ static int merged_read(struct blkdev *d,uint64_t lba,uint32_t count,void *buf)
 static int merged_write(struct blkdev *d,uint64_t lba,uint32_t count,const void *buf)
 { (void)d; int e=0; for (unsigned i=0;!e && i<count;i++) e=dos_save_write(&save,(uint32_t)lba+i,(const uint8_t *)buf+i*512u); return e; }
 static int merged_flush(struct blkdev *d) { (void)d; return dos_save_commit(&save,false); }
-static void namespace_open(struct dos_save_identity *id,char path[128],unsigned *archived)
+static void namespace_open(struct dos_save_identity *id,char path[DOS_SAVE_PATH],unsigned *archived)
 {
     save=(struct dos_save){0}; save_file=(struct dos_save_file){.table=&table};
-    OK(dos_save_store_open(&save_file,&save,id,path,archived));
+    OK(dos_save_store_open(&save_file,&save,id,DOS_SAVE_ROOT,path,archived));
 }
 static void namespace_close(bool orderly)
 {
@@ -199,7 +205,7 @@ static void store_tests(void)
     size_t done=0; OK(vfs_write(&table,image,base_disk,sizeof(base_disk),&done)); assert(done==sizeof(base_disk));
     OK(vfs_commit(&table,image)); OK(vfs_close(&table,image));
     manager_storage.ready=true;
-    struct dos_save_identity id=identity(1,'a'); unsigned archived; char path[128];
+    struct dos_save_identity id=identity(1,'a'); unsigned archived; char path[DOS_SAVE_PATH];
     uint8_t digest[32]; sha256(base_disk,sizeof(base_disk),digest); sha256_hex(digest,id.base);
     namespace_open(&id,path,&archived); assert(!archived);
     struct dos_file_volume *guest=calloc(1,sizeof(*guest)); assert(guest);
@@ -222,19 +228,19 @@ static void store_tests(void)
     read_file(&guest->table,"C:\\GAME\\SAVE.DAT","saved level 7");
     read_file(&guest->table,"C:\\GAME\\SETUP.CFG","sound=sb16");
     OK(dos_file_volume_close(guest));
-    char exported[32]; uint32_t files;
-    int exported_error=dos_save_store_export(&table,&merged_device,&base_device,&cache,1,exported,&files);
+    char exported[DOS_SAVE_PATH]; uint32_t files;
+    int exported_error=dos_save_store_export(&table,&merged_device,&base_device,&cache,1,DOS_SAVE_EXPORT_ROOT,exported,&files);
     if (exported_error) fprintf(stderr,"export error %d\n",exported_error);
     OK(exported_error); assert(files==2);
     char saved[128]; snprintf(saved,sizeof(saved),"%s\\GAME\\SAVE.DAT",exported); read_file(&table,saved,"saved level 7");
     namespace_close(true);
     struct ciuki_dosvm_command command={0};
     manager_busy=true;
-    OK(dosvm_game_data(1,CIUKI_DOSVM_SAVE_QUERY,&command)); assert(command.changed && command.reason==DOS_SAVE_QUOTA);
-    assert(dosvm_game_data(1,CIUKI_DOSVM_SAVE_RESET,&command)==-FS_EBUSY);
-    assert(dosvm_game_data(1,CIUKI_DOSVM_SAVE_EXPORT,&command)==-FS_EBUSY);
+    OK(game_data(1,CIUKI_DOSVM_SAVE_QUERY,&command)); assert(command.changed && command.reason==DOS_SAVE_QUOTA);
+    assert(game_data(1,CIUKI_DOSVM_SAVE_RESET,&command)==-FS_EBUSY);
+    assert(game_data(1,CIUKI_DOSVM_SAVE_EXPORT,&command)==-FS_EBUSY);
     manager_busy=false; command=(struct ciuki_dosvm_command){0};
-    OK(dosvm_game_data(1,CIUKI_DOSVM_SAVE_EXPORT,&command)); assert(command.changed==2 && !reservations);
+    OK(game_data(1,CIUKI_DOSVM_SAVE_EXPORT,&command)); assert(command.changed==2 && !reservations);
     snprintf(saved,sizeof(saved),"%s\\GAME\\SAVE.DAT",command.name); read_file(&table,saved,"saved level 7");
     struct dos_save_identity other=identity(2,'a'); namespace_open(&other,path,&archived);
     OK(dos_file_volume_open(guest,&cache,&merged_device,true));
@@ -242,7 +248,7 @@ static void store_tests(void)
     write_file(&guest->table,"C:\\OTHER.SAV","title two"); OK(dos_file_volume_close(guest)); namespace_close(true);
     id=identity(1,'b'); namespace_open(&id,path,&archived); assert(archived==1 && !save.rows); namespace_close(true);
     struct vfs_find find; OK(vfs_find_first(&table,DOS_SAVE_ROOT "\\G1-*.BAK",0,&find,&entry));
-    assert(entry.size>1024); uint32_t bytes=0; OK(dos_save_store_query(&table,1,&bytes)); assert(bytes==1024);
+    assert(entry.size>1024); uint32_t bytes=0; OK(dos_save_store_query(&table,DOS_SAVE_ROOT,1,&bytes)); assert(bytes==1024);
     id.kernel=1; namespace_open(&id,path,&archived); assert(archived==1 && !save.rows); namespace_close(true);
     /* Same namespace, incompatible filesystem identity with a valid header
      * checksum: preserve it as well, without attaching any old sectors. */
@@ -253,8 +259,8 @@ static void store_tests(void)
     OK(vfs_seek(&table,incompatible,0,VFS_SEEK_SET,&pos)); OK(vfs_write(&table,incompatible,header,512,&done)); assert(done==512);
     OK(vfs_commit(&table,incompatible)); OK(vfs_close(&table,incompatible));
     namespace_open(&id,path,&archived); assert(archived==1 && !save.rows); namespace_close(true);
-    OK(dosvm_game_data(1,CIUKI_DOSVM_SAVE_RESET,&command)); assert(!reservations);
-    OK(dos_save_store_query(&table,1,&bytes)); assert(!bytes);
+    OK(game_data(1,CIUKI_DOSVM_SAVE_RESET,&command)); assert(!reservations);
+    OK(dos_save_store_query(&table,DOS_SAVE_ROOT,1,&bytes)); assert(!bytes);
     namespace_open(&other,path,&archived); OK(dos_file_volume_open(guest,&cache,&merged_device,true));
     read_file(&guest->table,"C:\\OTHER.SAV","title two"); OK(dos_file_volume_close(guest)); namespace_close(true);
     /* fx-duke3d: game 5 owns ordinary CFG/SAV writes in its COW, survives
@@ -272,11 +278,11 @@ static void store_tests(void)
     read_file(&guest->table,"C:\\DUKE3D\\GAME0.SAV","Hollywood Holocaust");
     read_file(&guest->table,"C:\\DUKE3D\\DUKE3D.CFG","MusicToggle = 1");
     OK(dos_file_volume_close(guest)); namespace_close(true);
-    OK(dosvm_game_data(5,CIUKI_DOSVM_SAVE_QUERY,&command)); assert(command.changed);
-    OK(dosvm_game_data(5,CIUKI_DOSVM_SAVE_EXPORT,&command)); assert(command.changed==2 && !reservations);
+    OK(game_data(5,CIUKI_DOSVM_SAVE_QUERY,&command)); assert(command.changed);
+    OK(game_data(5,CIUKI_DOSVM_SAVE_EXPORT,&command)); assert(command.changed==2 && !reservations);
     snprintf(saved,sizeof(saved),"%s\\DUKE3D\\GAME0.SAV",command.name); read_file(&table,saved,"Hollywood Holocaust");
-    OK(dosvm_game_data(5,CIUKI_DOSVM_SAVE_RESET,&command)); assert(!reservations);
-    OK(dos_save_store_query(&table,5,&bytes)); assert(!bytes);
+    OK(game_data(5,CIUKI_DOSVM_SAVE_RESET,&command)); assert(!reservations);
+    OK(dos_save_store_query(&table,DOS_SAVE_ROOT,5,&bytes)); assert(!bytes);
     namespace_open(&other,path,&archived); OK(dos_file_volume_open(guest,&cache,&merged_device,true));
     read_file(&guest->table,"C:\\OTHER.SAV","title two"); OK(dos_file_volume_close(guest)); namespace_close(true);
     free(guest);
@@ -287,9 +293,9 @@ static void store_tests(void)
     vfs_init(&space); OK(vfs_attach(&space,2,&native)); OK(vfs_table_init(&space,&table,2));
     namespace_open(&other,path,&archived); assert(save.readonly && !save_file.writable); namespace_close(false);
     other.kernel=1; save=(struct dos_save){0}; save_file=(struct dos_save_file){.table=&table};
-    assert(dos_save_store_open(&save_file,&save,&other,path,&archived)==-FS_EROFS && !save_file.absent && !archived);
+    assert(dos_save_store_open(&save_file,&save,&other,DOS_SAVE_ROOT,path,&archived)==-FS_EROFS && !save_file.absent && !archived);
     other=identity(3,'a'); save=(struct dos_save){0}; save_file=(struct dos_save_file){.table=&table};
-    assert(dos_save_store_open(&save_file,&save,&other,path,&archived)==-FS_EROFS && save_file.absent);
+    assert(dos_save_store_open(&save_file,&save,&other,DOS_SAVE_ROOT,path,&archived)==-FS_EROFS && save_file.absent);
     vfs_table_destroy(&table); OK(vfs_detach(&space,2)); vfs_destroy(&space); cache_destroy(&cache);
     puts("PASS FAT/VFS: save/close/reboot/reopen, setup, identity archive, two titles isolated, changed-file export, reset");
 }
@@ -308,7 +314,7 @@ static void partitioned_export_test(void)
     vfs_init(&space); OK(vfs_attach(&space,2,&native)); OK(vfs_table_init(&space,&table,2));
     OK(vfs_mkdir(&table,"C:\\SYSTEM",0)); OK(vfs_mkdir(&table,"C:\\SYSTEM\\DOS",0)); OK(vfs_mkdir(&table,"C:\\Documents",0));
     base_device.ctx=part_disk;
-    struct dos_save_identity id=identity(2,'e'); unsigned archived; char path[128];
+    struct dos_save_identity id=identity(2,'e'); unsigned archived; char path[DOS_SAVE_PATH];
     namespace_open(&id,path,&archived); assert(!archived);
     /* The guest writes through the same C: view dos_file_vm.c builds. */
     static struct partition_table parts; static struct blkpart view;
@@ -319,8 +325,8 @@ static void partitioned_export_test(void)
     OK(dos_file_volume_open(guest,&cache,drive,true));
     OK(vfs_mkdir(&guest->table,"C:\\DOOM",0)); write_file(&guest->table,"C:\\DOOM\\DOOMSAV0.DSG","e1m1 saved");
     OK(dos_file_volume_close(guest)); free(guest);
-    char exported[32]; uint32_t files=0;
-    OK(dos_save_store_export(&table,&merged_device,&base_device,&cache,2,exported,&files)); assert(files==1);
+    char exported[DOS_SAVE_PATH]; uint32_t files=0;
+    OK(dos_save_store_export(&table,&merged_device,&base_device,&cache,2,DOS_SAVE_EXPORT_ROOT,exported,&files)); assert(files==1);
     char saved[128]; snprintf(saved,sizeof(saved),"%s\\DOOM\\DOOMSAV0.DSG",exported); read_file(&table,saved,"e1m1 saved");
     namespace_close(true); base_device.ctx=base_disk;
     vfs_table_destroy(&table); OK(vfs_detach(&space,2)); vfs_destroy(&space); cache_destroy(&cache);
@@ -339,7 +345,7 @@ static void physical_abandon(void)
 static void physical_cut_tests(void)
 {
     uint8_t old[512],next[512],got[512]; memset(old,0x11,512); memset(next,0x22,512);
-    struct dos_save_identity id=identity(1,'c'); unsigned archived; char path[128];
+    struct dos_save_identity id=identity(1,'c'); unsigned archived; char path[DOS_SAVE_PATH];
     format(system_disk,SYSTEM_SECTORS); physical_mount();
     OK(vfs_mkdir(&table,"C:\\SYSTEM",0)); OK(vfs_mkdir(&table,"C:\\SYSTEM\\DOS",0));
     namespace_open(&id,path,&archived);
@@ -364,4 +370,75 @@ static void physical_cut_tests(void)
     free(baseline);
     printf("PASS outer FAT/VFS power cuts: every physical write, writes=%u cuts=%u (lost/torn), both saved sectors atomic after remount\n",events,events*2u);
 }
-int main(void) { crash_tests(); store_tests(); partitioned_export_test(); physical_cut_tests(); assert(!fs_host_contig_live); fflush(stdout); return 0; }
+/* sec-k05: two users' title data through the production store, manager and
+ * FAT/VFS: each store lives under its own committed profile root (never a
+ * uid-derived spelling), reset/export/query see only their owner's data and
+ * the machine namespace stays untouched. Authorization of these paths is
+ * H06's (tests/host/security/test_dos_identity.py). */
+static void profile_store_tests(void)
+{
+    format(system_disk,SYSTEM_SECTORS); format(base_disk,DISK_SECTORS);
+    base_device.ctx=base_disk; physical_stopped=false; physical_cut_at=0;
+    OK(cache_init(&cache,65536)); OK(fat_mount(&native,&cache,&system_device,0,SYSTEM_SECTORS,true));
+    vfs_init(&space); OK(vfs_attach(&space,2,&native)); OK(vfs_table_init(&space,&table,2));
+    static const char *const dirs[]={"C:\\SYSTEM","C:\\SYSTEM\\DOS","C:\\Windows","C:\\Windows\\Profiles",
+        "C:\\Windows\\Profiles\\u00000003","C:\\Windows\\Profiles\\u00000003\\Documents",
+        "C:\\Windows\\Profiles\\u000003e9","C:\\Windows\\Profiles\\u000003e9\\Documents"};
+    for (unsigned i=0;i<sizeof(dirs)/sizeof(*dirs);i++) OK(vfs_mkdir(&table,dirs[i],0));
+    int image=vfs_open(&table,"C:\\SYSTEM\\DOS\\UNIFIED.IMG",VFS_WRITE|VFS_CREATE,VFS_DENY_ALL,0); assert(image>=0);
+    size_t done=0; OK(vfs_write(&table,image,base_disk,sizeof(base_disk),&done)); OK(vfs_close(&table,image));
+    /* uid 1007 keeps its retained G32 root u00000003 (A2-8). */
+    struct dos_identity alice={.credential={.uid=1007,.session_id=3},.profile="/Windows/Profiles/u00000003"};
+    struct dos_identity bob={.credential={.uid=1001,.session_id=4},.profile="/Windows/Profiles/u000003e9"};
+    char root[DOS_IDENTITY_PATH],path[DOS_SAVE_PATH]; unsigned archived;
+    struct dos_save_identity id=identity(1,'a'); uint8_t digest[32];
+    sha256(base_disk,sizeof(base_disk),digest); sha256_hex(digest,id.base);
+    OK(dos_identity_root(&alice,DOS_ROOT_STORE,root,sizeof(root)));
+    assert(!strcmp(root,"C:\\Windows\\Profiles\\u00000003\\Settings\\DOS"));
+    OK(dos_identity_prepare(&alice,&table,DOS_ROOT_STORE)); OK(dos_identity_prepare(&alice,&table,DOS_ROOT_STORE));
+    save=(struct dos_save){0}; save_file=(struct dos_save_file){.table=&table};
+    OK(dos_save_store_open(&save_file,&save,&id,root,path,&archived)); assert(!archived && !strncmp(path,root,strlen(root)));
+    struct dos_file_volume *guest=calloc(1,sizeof(*guest)); assert(guest);
+    OK(dos_file_volume_open(guest,&cache,&merged_device,true));
+    OK(vfs_mkdir(&guest->table,"C:\\TEMP",0)); OK(vfs_mkdir(&guest->table,"C:\\WORK",0));
+    write_file(&guest->table,"C:\\TEMP\\INSTALL.TMP","alice temp");
+    write_file(&guest->table,"C:\\WORK\\SAVE.DAT","alice level 9");
+    OK(dos_file_volume_close(guest)); namespace_close(true);
+    /* Bob's first launch of the same title starts from the pristine base. */
+    OK(dos_identity_root(&bob,DOS_ROOT_STORE,root,sizeof(root))); OK(dos_identity_prepare(&bob,&table,DOS_ROOT_STORE));
+    save=(struct dos_save){0}; save_file=(struct dos_save_file){.table=&table};
+    OK(dos_save_store_open(&save_file,&save,&id,root,path,&archived)); assert(!archived && !save.rows);
+    OK(dos_file_volume_open(guest,&cache,&merged_device,true));
+    struct fat_entry entry; assert(vfs_stat(&guest->table,"C:\\WORK\\SAVE.DAT",&entry)==-FS_ENOENT);
+    assert(vfs_stat(&guest->table,"C:\\TEMP",&entry)==-FS_ENOENT);
+    OK(vfs_mkdir(&guest->table,"C:\\WORK",0)); write_file(&guest->table,"C:\\WORK\\SAVE.DAT","bob level 2");
+    OK(dos_file_volume_close(guest)); namespace_close(true);
+    /* Alice again: her COW persisted, untouched by Bob's run. */
+    OK(dos_identity_root(&alice,DOS_ROOT_STORE,root,sizeof(root)));
+    save=(struct dos_save){0}; save_file=(struct dos_save_file){.table=&table};
+    OK(dos_save_store_open(&save_file,&save,&id,root,path,&archived)); assert(save.rows && !archived);
+    OK(dos_file_volume_open(guest,&cache,&merged_device,true));
+    read_file(&guest->table,"C:\\WORK\\SAVE.DAT","alice level 9"); read_file(&guest->table,"C:\\TEMP\\INSTALL.TMP","alice temp");
+    OK(dos_file_volume_close(guest)); namespace_close(true);
+    manager_storage.ready=true;
+    struct ciuki_dosvm_command command={0};
+    OK(dosvm_game_data(1,CIUKI_DOSVM_SAVE_QUERY,&command,&alice)); uint32_t alice_bytes=command.changed; assert(alice_bytes);
+    command=(struct ciuki_dosvm_command){0};
+    OK(dosvm_game_data(1,CIUKI_DOSVM_SAVE_EXPORT,&command,&alice));
+    assert(command.changed==2 && !strcmp(command.name,"Documents\\Saves\\G1-0") && !reservations);
+    read_file(&table,"C:\\Windows\\Profiles\\u00000003\\Documents\\Saves\\G1-0\\WORK\\SAVE.DAT","alice level 9");
+    assert(vfs_stat(&table,DOS_SAVE_EXPORT_ROOT,&entry)==-FS_ENOENT);
+    /* Bob's reset removes only Bob's store. */
+    OK(dosvm_game_data(1,CIUKI_DOSVM_SAVE_RESET,&command,&bob));
+    command=(struct ciuki_dosvm_command){0};
+    OK(dosvm_game_data(1,CIUKI_DOSVM_SAVE_QUERY,&command,&bob)); assert(!command.changed);
+    OK(dosvm_game_data(1,CIUKI_DOSVM_SAVE_QUERY,&command,&alice)); assert(command.changed==alice_bytes);
+    /* Never the machine namespace; a user without a store yet has zero. */
+    assert(vfs_stat(&table,DOS_SAVE_ROOT,&entry)==-FS_ENOENT);
+    struct dos_identity carol={.credential={.uid=1002},.profile="/Windows/Profiles/u000003ea"};
+    OK(dosvm_game_data(1,CIUKI_DOSVM_SAVE_QUERY,&command,&carol)); assert(!command.changed);
+    free(guest);
+    vfs_table_destroy(&table); OK(vfs_detach(&space,2)); vfs_destroy(&space); cache_destroy(&cache);
+    puts("PASS sec-k05 profile stores: two users, own Settings\\DOS COW and C:\\WORK/C:\\TEMP, persistence, own export/reset/query, machine namespace untouched");
+}
+int main(void) { crash_tests(); store_tests(); partitioned_export_test(); physical_cut_tests(); profile_store_tests(); assert(!fs_host_contig_live); fflush(stdout); return 0; }

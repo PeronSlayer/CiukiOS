@@ -32,6 +32,16 @@ bool supervisor_output(struct task *t,unsigned stream,const void *b,uint32_t n)
 void proc_launch_volume_read(uint32_t requested,size_t done) { (void)requested;(void)done; }
 void serial_write(const char *s,size_t n) { (void)s;(void)n; abort(); }
 void console_write(const char *s,size_t n) { (void)s;(void)n; abort(); }
+/* sec-k04: media_dev.c asks the production credential predicates; the
+ * subject fixture links proc/security.c. Every harness process is a SYSTEM
+ * kernel service, as PID 1 (security_init: uid 0, no session, OWNER role),
+ * and the harness issues its calls from kernel context (no current process,
+ * as fdtable.c's weak hook assumed before). */
+#include "../security/subject_fixture.h"
+struct process *proc_current(void) { return 0; }
+#define harness_system(p) security_fixture_identity((p),CIUKI_UID_SYSTEM,0,false,CIUKI_SECURITY_ROLE_OWNER)
+#else
+#define harness_system(p) ((void)(p))
 #endif
 void task_sleep_ms(uint32_t ms) { (void)ms; abort(); }
 void proc_set_file_ops(const struct ciuki_file_ops *ops) { (void)ops; }
@@ -100,11 +110,11 @@ static void cwd_tests(void)
     CHECK(file_open(&supervisor, "/dev", O_RDONLY | O_DIRECTORY, 0) >= 3);
     OK(storage_add_disk(s, 1, &media[2].dev));
     struct process peer = { .state = PROC_LIVE, .cwd = space->root };
-    px_retain(peer.cwd);
+    harness_system(&peer); px_retain(peer.cwd);
     OK(px_chdir(&peer, "/Fixture dir"));
     CHECK(vfs_rmdir(&table, "C:/Fixture dir") == -FS_EBUSY);
     struct process other = { .state = PROC_LIVE, .cwd = space->root };
-    px_retain(other.cwd);
+    harness_system(&other); px_retain(other.cwd);
     OK(px_chdir(&other, "/mnt/d/Fixture dir"));
     struct px_node *synthetic[] = { space->mnt, space->dev, space->null, space->console };
     for (unsigned i = 0; i < ARRAY_SIZE(synthetic); i++) px_retain(synthetic[i]);
@@ -706,6 +716,7 @@ static void latency_tests(void)
         struct latency_run r={.native=native,.media_fd=control};
         r.slow=(struct process){.state=PROC_LIVE,.cwd=space->root,.fds=calloc(CIUKI_OPEN_MAX,sizeof(struct proc_fd))};
         r.fast=(struct process){.state=PROC_LIVE,.cwd=space->root,.fds=calloc(CIUKI_OPEN_MAX,sizeof(struct proc_fd))};
+        harness_system(&r.slow); harness_system(&r.fast);
         latency_owners[0]=&r.slow; latency_owners[1]=&r.fast;
         CHECK(r.slow.fds && r.fast.fds); px_retain(r.slow.cwd); px_retain(r.fast.cwd);
         OK(vfs_table_init(&s->vfs,&r.slow_table,4)); OK(vfs_table_init(&s->vfs,&r.fast_table,2));
@@ -866,6 +877,7 @@ int main(int argc, char **argv)
     setvbuf(stdout,0,_IOLBF,0);
     CHECK(argc == 4);
     for (unsigned i = 0; i < 3; i++) OK(fake_open(&media[i], argv[i + 1]));
+    harness_system(&supervisor);
     baseline(); media[2].undo_enabled = true;
     ntfs_status_tests();
     latency_tests(); healthy_writer_reservation_test(); writer_shutdown_test(); bounded_shutdown_test(); cancelled_wait_test(); cwd_tests(); busy_tests(); removable_namespace_tests(); detach_tests(); namespace_probe_tests(); floppy_namespace_tests(); empty_drive_namespace_tests();

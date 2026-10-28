@@ -17,6 +17,8 @@
 #include <ciuki/abi.h>
 #include <ciuki/tzdata.h>
 #include <stdint.h>
+#include "../../sdk/private/provision.h"
+struct acct_io; /* apps/accounts/adapter.h: protected store I/O of the repair target */
 
 #define ST_W 640                       /* design size; larger modes centre it */
 #define ST_H 480
@@ -35,11 +37,13 @@
 
 enum st_page {
     ST_PAGE_WELCOME, ST_PAGE_LICENCE, ST_PAGE_HARDWARE, ST_PAGE_DISK, ST_PAGE_COMPONENTS,
-    ST_PAGE_USER, ST_PAGE_NETWORK, ST_PAGE_SUMMARY, ST_PAGE_COPY, ST_PAGE_RESTART,
+    ST_PAGE_USER, ST_PAGE_ACCOUNT /* sec-user-02: passwords */, ST_PAGE_NETWORK, ST_PAGE_SUMMARY, ST_PAGE_COPY, ST_PAGE_RESTART,
     ST_PAGE_STOP,      /* screen 12: hardware refusal (the graphical form of the kernel's) */
     ST_PAGE_FAILED,    /* "Setup did not complete" */
     ST_PAGE_STATUS,    /* unattended stop: the status id */
-    ST_PAGE_RESCUE, ST_PAGE_TEXT, ST_PAGES
+    ST_PAGE_RESCUE, ST_PAGE_TEXT,
+    ST_PAGE_REPAIR,    /* sec-user-02: confirmed lost-password repair from Rescue */
+    ST_PAGES
 };
 /* Kernel-evaluable refusals of plan §3.2 (screen 12). */
 enum st_stop { ST_STOP_NONE, ST_STOP_VIDEO, ST_STOP_NO_DISK, ST_STOP_NO_CD, ST_STOP_DISK };
@@ -98,6 +102,32 @@ struct st_host {
     int (*power_status)(void *, struct ciuki_power_status *);            /* call 73 STATUS, read-only */
     char (*dest_letter)(void *);                                          /* published destination */
     const uint32_t *portrait;                                             /* 256x256 XRGB or NULL */
+    /* sec-user-02: kernel entropy (all bytes or -errno, never a fallback) for
+     * password salts, and the protected /System/Security store of an
+     * identified installed volume for the confirmed account repair only. */
+    int (*entropy)(void *, void *, size_t);
+    int (*repair_io)(void *, char letter, struct acct_io *out);
+};
+
+/* sec-user-02 accounts (user-security-contract.md 3.6, 5.1-5.3). Secrets
+ * live only in these bounded buffers, are masked on screen, never logged,
+ * and are wiped on Back, Cancel, finish and error. The seed holds salted
+ * verifiers only, built when the Passwords page is accepted. */
+#define ST_SECRET_FIELDS 4
+#define ST_SECRET_BYTES 64
+struct st_accounts {
+    char secret[ST_SECRET_FIELDS][ST_SECRET_BYTES];  /* password, confirmation, recovery, confirmation */
+    uint8_t seed[CIUKI_PROVISION_SEED_BYTES];
+    int seed_ready;
+};
+struct st_repair {
+    uint64_t generation, next_generation, high_generation;
+    uint32_t high_uid;
+    int slot, recovery_configured, pending;
+    unsigned count;
+    uint32_t uids[18];
+    uint8_t administrator[18], enabled[18];
+    char names[18][32];
 };
 
 struct st_hw_row { uint8_t mark; char name[20]; char text[200]; };
@@ -158,6 +188,10 @@ struct st_app {
     uint64_t countdown_deadline, eject_deadline; int restart_state;
     char dest_letter;
     uint64_t now;
+    /* sec-user-02 */
+    struct st_accounts acct;
+    struct st_repair repair; int repair_state, repair_choice, repair_volumes;
+    char repair_letters[8]; char repair_status[200];
 };
 
 /* app.c */
@@ -180,8 +214,10 @@ enum {
     ST_ID_USER = 40, ST_ID_COMPUTER, ST_ID_KBD, ST_ID_CLOCK, ST_ID_TZ, ST_ID_UTC,
     ST_ID_DHCP = 50, ST_ID_MANUAL, ST_ID_IP, ST_ID_MASK, ST_ID_GATEWAY, ST_ID_DNS, ST_ID_IPX, ST_ID_LOBBY,
     ST_ID_TEXT = 60,
+    ST_ID_SECRET = 70,                     /* + field index (sec-user-02 masked password fields) */
+    ST_ID_REPAIR = 76, ST_ID_REPAIR_RUN, ST_ID_REPAIR_VOLUME = 80, /* + volume index */
     ST_DLG_EXIT = 100, ST_DLG_HELP, ST_DLG_ERROR, ST_DLG_CANCEL, ST_DLG_MESSAGE, ST_DLG_PREPARE, ST_DLG_SHUTDOWN,
-    ST_DLG_POWER
+    ST_DLG_POWER, ST_DLG_REPAIR
 };
 /* app.c actions shared with pages.c */
 void st_action(struct st_app *, int id);
@@ -243,6 +279,16 @@ const char *st_pool(struct st_app *, const char *fmt, ...) __attribute__((format
 int st_rescue_copy(struct st_app *, char *result, size_t cap);
 int st_save_report(struct st_app *, char *result, size_t cap);
 int st_usb_volume(const struct st_app *);   /* index in volumes[] of the first USB FAT volume, or -1 */
+/* accounts.c (sec-user-02): seed recipe and confirmed lost-password repair */
+int st_password_valid(const char *);          /* 8..63 printable ASCII bytes */
+int st_account_name_valid(const char *);      /* 1..31 [A-Za-z0-9_-], not reserved */
+void st_secret_wipe(void *, size_t);
+int st_seed_build(uint8_t out[CIUKI_PROVISION_SEED_BYTES], const char *name, const char *user_password,
+                  const char *recovery_password, int (*entropy)(void *, void *, size_t), void *ctx);
+int st_repair_inspect(const struct acct_io *, struct st_repair *);
+int st_repair_execute(const struct acct_io *, const char *password, int (*entropy)(void *, void *, size_t), void *ctx,
+                      struct st_repair *);
+void st_accounts_clear(struct st_app *);      /* wipe secrets and the seed */
 /* inf.c helpers used by the flow */
 int st_answers_load(struct st_app *);       /* 1 found and valid, 0 none, -1 stop (status set) */
 int st_licences_load(struct st_app *);

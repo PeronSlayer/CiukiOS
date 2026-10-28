@@ -3,6 +3,7 @@
  * selective startup, and ScanDisk. EBX=operation, ECX=record, EDX=size.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/security_storage.h>
 #include <ciuki/abi.h>
 #include <ciuki/process.h>
 #include <ciuki/uaddr.h>
@@ -17,10 +18,11 @@ static int fs_errno(int e)
         e == -FS_EROFS ? -EROFS : e == -FS_EIO ? -EIO : e == -FS_ENOMEM ? -ENOMEM : e;
 }
 
-int32_t recovery_syscall(struct trap_frame *tf)
+int32_t recovery_syscall_subject(struct process *p, const struct security_subject *subject, struct trap_frame *tf)
 {
-    struct process *p = proc_current();
-    bool authority = p && p->recovery_capability;
+    if (!security_process_live(p) || !security_subject_live(subject)) return -EACCES;
+    if (subject!=p->subject && !security_device_system(p)) return -EPERM;
+    bool authority = security_storage_admin(subject);
     uint32_t op = tf->ebx;
     if (op == CIUKI_RECOVERY_SCANDISK || op == CIUKI_RECOVERY_REPORT) {
         struct ciuki_scandisk r;
@@ -31,6 +33,12 @@ int32_t recovery_syscall(struct trap_frame *tf)
         if (op == CIUKI_RECOVERY_REPORT) e = storage_scandisk_report(r.drive, &r);
         else {
             if (!authority) return -EPERM;
+            struct storage *storage=storage_get();
+            if (!storage || !storage->ready) return -ENODEV;
+            vfs_lock(&storage->vfs,0);
+            e=security_storage_broker(subject,storage,r.drive);
+            vfs_unlock(&storage->vfs);
+            if (e) return e;
             if (r.flags & ~(uint32_t)(CIUKI_SCANDISK_FIX | CIUKI_SCANDISK_THOROUGH |
                                       CIUKI_SCANDISK_FREE_LOST | CIUKI_SCANDISK_NO_COPY)) return -EINVAL;
             bool schedule = false;
@@ -56,4 +64,10 @@ int32_t recovery_syscall(struct trap_frame *tf)
     if (!authority) return -EPERM;
     int e = op == CIUKI_RECOVERY_SET ? bootstat_configure(s.disabled, s.request) : bootstat_enable(s.skipped);
     return e == -FS_EINVAL ? -EINVAL : fs_errno(e);
+}
+
+int32_t recovery_syscall(struct trap_frame *tf)
+{
+    struct process *p=proc_current();
+    return recovery_syscall_subject(p,p ? p->subject : 0,tf);
 }

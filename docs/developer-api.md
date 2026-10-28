@@ -10385,7 +10385,12 @@ against the read-only disk enumeration after parsing.
 #include <stdint.h>
 #include <string.h>
 
-#define SETUP_INF_VERSION 1
+#define SETUP_INF_VERSION 2
+```
+
+sec-user-02: Version=1 and Version=2 parse; neither carries passwords
+
+```c
 #define SETUP_INF_MAX_BYTES 16384u
 ```
 
@@ -10420,13 +10425,13 @@ enum setup_disk_select { SETUP_DISK_UNSET, SETUP_DISK_ATA0, SETUP_DISK_MATCH, SE
 enum setup_net_mode { SETUP_NET_UNSET, SETUP_NET_DHCP, SETUP_NET_STATIC, SETUP_NET_NONE };
 enum setup_clock { SETUP_CLOCK_LOCAL, SETUP_CLOCK_UTC };
 enum setup_restart { SETUP_RESTART_EJECT, SETUP_RESTART_WAIT, SETUP_RESTART_FORCE };
-
-#define SETUP_USER_MAX 32u
 ```
 
-characters (UTF-8 Latin-1 range)
+Account name: 1-31 ASCII letters, digits, '_' or '-', not a reserved name
+(user-security-contract.md 3.1; supersedes the 32-character label).
 
 ```c
+#define SETUP_USER_MAX 31u
 #define SETUP_COMPUTER_MAX 15u
 ```
 
@@ -10570,6 +10575,15 @@ configuration step (\SYSTEM\HARDWARE.TXT and \SYSTEM\SETUP.LOG).
 ```c
 const char *hardware_report; size_t hardware_report_length;
     const struct setup_log *log;
+```
+
+sec-user-02: the section 3.6 Setup provisioning seed (CIUKISEE, origin 2,
+salted verifiers only, never plaintext), owned by the application and
+staged by the configuration step with its bootstrap.state record. No
+answer-file key can supply it: unattended mode stops before any write.
+
+```c
+const uint8_t *account_seed; size_t account_seed_length;
 };
 ```
 
@@ -10639,7 +10653,9 @@ int setup_inf_disk_rules(const struct setup_answers *, const struct setup_inf_di
 ```
 
 Unattended completeness in page order: 0, or -1 with missing_answer and
-the first key that has no answer.
+the first key that has no answer. After the INF keys, the two passwords
+(key "UserPassword") are required; no secure answer transport exists, so a
+SETUP.INF run always stops here before any disk write (contract 5.2).
 
 ```c
 int setup_inf_complete(const struct setup_answers *, struct setup_inf_status *);

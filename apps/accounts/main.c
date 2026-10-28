@@ -18,16 +18,19 @@
 
 static struct acct_server server;
 static struct acct_posix_io io_state;
+static struct acct_legacy_io legacy_io; /* sec-user-02: G32 settings for first-boot migration */
 
 int main(void)
 {
     struct acct_store tables; memset(&tables,0,sizeof(tables));
     acct_owner_interim(&tables.owner);
     tables.volume=ACCT_INTERIM_VOLUME;
-    if (acct_io_posix(&io_state,STORE_DIRECTORY,&tables.io) || acct_server_init(&server,&tables,0)) {
+    if (acct_io_posix(&io_state,STORE_DIRECTORY,&tables.io) || acct_server_init(&server,&tables,0) ||
+        acct_legacy_io_posix(&legacy_io)) {
         acct_sys_log("[accounts] binding failed; idle");
         for (;;) acct_sys_wait_readable(NULL,0,60000u);
     }
+    server.legacy=&legacy_io; /* sec-user-02 first-boot adapter */
     acct_sys_log("[accounts] sealed service starting; OWNER interim (publication refused)");
     for (;;) acct_server_step(&server,IDLE_WAIT_MS);
 }

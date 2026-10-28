@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/w32_objects.h>
+#include <ciuki/security.h>
 struct w32_send {
     struct w32_send *next;
     struct process *payer;
@@ -283,6 +284,8 @@ uint32_t w32_message_call(struct proc_thread *t, struct ciuki_w32_message_args *
         struct proc_thread *target = thread_id(a->tid);
         if (!target)
             a->error = 1444;
+        else if (!security_same(t->process,target->process) || !security_process_live(target->process))
+            a->error = 5;
         else if (pointer_message(a->message.message))
             a->error = 87;
         else
@@ -411,6 +414,9 @@ uint32_t w32_message_call(struct proc_thread *t, struct ciuki_w32_message_args *
         if (!target) {
             a->error = 1444;
             return 0;
+        }
+        if (!security_same(t->process,target->process) || !security_process_live(target->process)) {
+            a->error=5; return 0;
         }
         if (a->bytes > 65536 || (!pointer_message(a->message.message) && a->bytes) || !next_send) {
             a->error = 87;

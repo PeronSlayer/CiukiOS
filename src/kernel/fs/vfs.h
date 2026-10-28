@@ -107,7 +107,8 @@ struct vfs_node { struct fat_volume *volume; struct fat_entry entry; unsigned re
  * reads or writes it; fat.c validates it against the node entry. */
 struct vfs_description { struct vfs_node *node; uint64_t position; unsigned refs, access, deny;
     uint64_t owner; unsigned dos_mode; enum vfs_owner_type owner_type; bool io_active; struct cache_stream stream;
-    struct fat_cursor cursor; };
+    struct fat_cursor cursor;
+    unsigned granted; /* sec-k03: POLICY_* rights frozen at a subject table's open; 0 = kernel table */ };
 struct vfs_range_lock { struct vfs_description *description; struct vfs_node *node;
     uint64_t owner, start, end, length; enum vfs_owner_type owner_type; bool shared; };
 #define VFS_RANGE_LOCKS 128u
@@ -251,6 +252,10 @@ struct vfs_table {
     uint64_t owner; /* context id within owner_type, not a global PID namespace */
     enum vfs_owner_type owner_type;
     bool owner_registered; /* legacy DOS tables still set owner directly until bridge adoption */
+    /* sec-k03: retained subject of a user frontend's table (DOS VM, Win32
+     * find). NULL only for kernel tables from vfs_table_init (SYSTEM work:
+     * drivers, logs, OWNER backend); never for a user-reachable frontend. */
+    struct security_subject *subject;
 };
 struct vfs_find {
     unsigned drive; uint32_t generation, directory, cursor;
@@ -394,6 +399,24 @@ void vfs_ro_expire_locked(struct vfs *, unsigned drive);
 int vfs_detach(struct vfs *, unsigned drive); /* durable unmount, refuses opens */
 int vfs_table_init(struct vfs *, struct vfs_table *, unsigned default_drive);
 void vfs_table_destroy(struct vfs_table *);
+/* ---- sec-k03: legacy-table subjects (one block) ----------------------
+ * A user frontend's table carries the originating retained subject; every
+ * path and handle operation is authorized with it through the native
+ * namespace resolver (vfs_hooks.h). Binding fails while handles are open
+ * or a subject is already bound; destroy releases the reference. */
+int vfs_table_init_subject(struct vfs *, struct vfs_table *, unsigned default_drive, struct security_subject *);
+int vfs_table_bind_subject(struct vfs_table *, struct security_subject *);
+/* Authorized identity returned by the native resolver to the legacy table
+ * (vfs_hooks.h px_table_*); granted holds the POLICY_* rights for a handle. */
+struct vfs_policy_target {
+    struct fat_volume *volume;
+    uint32_t parent, index, directory;
+    unsigned granted;
+    bool exists, ro;
+};
+#define VFS_POLICY_MISSING 1u   /* the leaf may be absent: ADD on its parent */
+#define VFS_POLICY_DIRECTORY 2u /* authorize the directory of a find pattern */
+/* ---- end sec-k03 ----------------------------------------------------- */
 int vfs_open(struct vfs_table *, const char *path, unsigned flags, enum vfs_share, uint8_t create_attr);
 /* Same atomic namespace transaction as native open; mode 0..4 is DOS sharing,
  * 255 denotes native explicit sharing. status receives 1/2/3 only on success. */

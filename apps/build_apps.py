@@ -41,6 +41,10 @@ def validate_payloads():
                               "sha256":browser["files"]["Programs/netsurf"],"elf":browser["elf"]}
     accounts = load("apps_accounts", ROOT / "apps/accounts/build_accounts.py").validate_payloads()
     files[accounts["image_path"]] = {"source": "build/apps/accounts/accounts", "sha256": accounts["files"]["accounts"], "elf": accounts["elf"]}
+    # sec-k06: sealed SYSTEM broker is an independent service image.
+    registry = load("apps_registry", ROOT / "apps/registry/build_registry.py").validate_payloads()
+    files[registry["image_path"]] = {"source": "build/apps/registry/registry", "sha256": registry["files"]["registry"], "elf": registry["elf"]}
+    # end sec-k06
     result = {"schema_version": 1, "sdk_manifest_sha256": hashlib.sha256((ROOT / "build/tools/ciuki-sdk/manifest.json").read_bytes()).hexdigest(),
               "applications": files, "newlib": sdk["newlib"], "guest_qualification": "not_run"}
     return result
@@ -59,6 +63,9 @@ def main():
     load("apps_w32srv_build", ROOT / "apps/w32srv/build_w32srv.py").build()
     load("apps_netsurf_build", ROOT / "sdk/netsurf/build.py").build()
     load("apps_accounts_build", ROOT / "apps/accounts/build_accounts.py").build()
+    # sec-k06
+    load("apps_registry_build", ROOT / "apps/registry/build_registry.py").build()
+    # end sec-k06
     (ROOT / "build/apps/manifest.json").write_text(json.dumps(validate_payloads(), indent=2, sort_keys=True) + "\n")
 
 if __name__ == "__main__":

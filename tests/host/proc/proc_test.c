@@ -805,6 +805,14 @@ static void test_enumeration(void)
     r = find_record(rec, n, owner->pid); CHECK(r && !r->threads && !r->resident_pages && !r->name[0] && r->state == CIUKI_PROC_LIVE);
 
     /* Termination: arguments, descriptor, target, then permission. */
+    /* sec-k04: admission fixtures use real credentials; an authority fd
+     * never changes uid/session or group membership. */
+    struct ciuki_credential ordinary={.version=1,.size=64,.uid=1000,.primary_gid=545,
+        .session_id=1,.flags=CIUKI_CRED_INTERACTIVE,.group_count=1,.groups={545}};
+    p->subject->credential=child->subject->credential=grand->subject->credential=ordinary;
+    other->subject->credential=ordinary;other->subject->credential.uid=1001;
+    desk->subject->credential=desk_child->subject->credential=ordinary;
+    desk->subject->credential.uid=desk_child->subject->credential.uid=1002;
     const int32_t none = (int32_t)CIUKI_PROC_NO_AUTHORITY;
     CHECK(proc_terminate(p, (int32_t)other->pid, SIGUSR1, none) == -EINVAL);
     CHECK(proc_terminate(p, 0, SIGTERM, none) == -EINVAL && proc_terminate(p, -3, SIGTERM, none) == -EINVAL);
@@ -821,7 +829,11 @@ static void test_enumeration(void)
     int fd = proc_authority_install(p); CHECK(fd >= 3 && proc_authority_object(p->fds[fd].object));
     CHECK(heap_blocks == heap_before + 1 && p->fds[fd].object->inheritable && !(p->fds[fd].flags & FD_CLOEXEC));
     CHECK(proc_authority_install(proc_supervisor()) == -EPERM);
-    CHECK(proc_terminate(p, (int32_t)other->pid, SIGKILL, fd) == 0 && posted.pid == other->pid && posted.signo == SIGKILL);
+    CHECK(proc_terminate(p, (int32_t)other->pid, SIGKILL, fd) == -EPERM);
+    p->subject->credential.group_count=2;p->subject->credential.groups[0]=544;p->subject->credential.groups[1]=545;
+    CHECK(!proc_terminate(p, (int32_t)other->pid, SIGKILL, none));
+    CHECK(posted.pid==other->pid && posted.signo==SIGKILL);
+    p->subject->credential=ordinary;
     CHECK(proc_terminate(p, (int32_t)owner->pid, SIGKILL, fd) == -EPERM);  /* no user thread */
     /* Explicit delegation reaches the owner's direct child only. */
     struct ciuki_spawn_fd map = { fd, 4 };
@@ -832,7 +844,7 @@ static void test_enumeration(void)
     struct ciuki_spawn_fd again = { 4, 4 };
     CHECK(proc_spawn_file(delegate, &file2, s, &again, 1, 0, 0, &nested) > 0 && proc_authority_object(nested->fds[4].object));
     proc_strings_free(s);
-    CHECK(proc_terminate(delegate, (int32_t)other->pid, SIGTERM, 4) == 0);
+    CHECK(proc_terminate(delegate, (int32_t)other->pid, SIGTERM, 4) == -EPERM);
     CHECK(proc_terminate(nested, (int32_t)other->pid, SIGTERM, 4) == -EPERM);
     /* A delegate never ends its owner or the owner's group, even unrecorded. */
     CHECK(!fake_desktop_pid && proc_terminate(delegate, (int32_t)p->pid, SIGKILL, 4) == -EPERM);
@@ -845,6 +857,7 @@ static void test_enumeration(void)
     CHECK(proc_terminate(p, (int32_t)desk->pid, SIGKILL, fd) == -EPERM);
     CHECK(proc_terminate(desk, (int32_t)desk_child->pid, SIGTERM, none) == 0 && posted.pid == desk_child->pid);
     fake_desktop_pid = 0;
+    p->subject->credential.group_count=2;p->subject->credential.groups[0]=544;p->subject->credential.groups[1]=545;
     CHECK(proc_terminate(p, (int32_t)desk_child->pid, SIGKILL, fd) == 0);
     /* Zombies are not targets; their records report state 3 and no threads. */
     stop_collect(other); g_current = pt->task;

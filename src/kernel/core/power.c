@@ -27,6 +27,7 @@
 #include <ciuki/apm_ports.h>
 #if !defined(POWER_HOST) || defined(POWER_HOST_RUNTIME)
 #include <ciuki/kernel.h>
+#include <ciuki/security_device.h>
 #include <ciuki/cpu.h>
 #include <ciuki/mm.h>
 #include <ciuki/task.h>
@@ -591,12 +592,14 @@ static int power_force(bool off, uint32_t pid)
     }
     return e;
 }
-/* The desktop, or Setup's capability holder in Setup mode, owns call 73's
- * control actions. */
+/* Session desktop coordinates local actions, including Guest. SYSTEM Setup
+ * and the fixed logon roles have their separate, bounded power routes. */
 static bool power_authorized(const struct process *caller)
 {
-    return caller && ((setup_mode && setup_mode() && caller->setup_capability) ||
-                      (supervisor_desktop_pid() && caller->pid == supervisor_desktop_pid()));
+    return security_device_desktop(caller) ||
+        (security_device_setup(caller) && setup_mode && setup_mode()) ||
+        (security_device_system(caller) && (security_role(caller) == CIUKI_SECURITY_ROLE_LOGON ||
+                                           security_role(caller) == CIUKI_SECURITY_ROLE_LOGON_UI));
 }
 /* G11 (docs/design/power-policy.md): the drive standby timer (ATA IDLE
  * E3h, programmed by drivers/ata.c on every fixed disk with the Power
@@ -700,7 +703,7 @@ int32_t power_record_call(uint32_t action, uint32_t address, uint32_t bytes)
         return copy_to_user(address, &out, sizeof(out));
     }
     if (action != CIUKI_POWER_POLICY) return -EINVAL;
-    if (!power_authorized(proc_current())) return -EPERM;
+    if (!security_device_admin(proc_current())) return -EPERM;
     struct ciuki_power_policy p;
     if (bytes != sizeof(p)) return -EINVAL;
     int e = copy_from_user(&p, address, sizeof(p));
@@ -716,11 +719,13 @@ int32_t power_syscall(uint32_t action)
     /* Both take the same orderly path below: storage flush, native device
      * quiesce, the stopped latch, then reset or the active provider's
      * soft-off (ACPI S5 or APM Off). */
-    if (!power_authorized(caller)) return -EPERM;
     if (action == CIUKI_POWER_QUERY)
         return power_progress | CIUKI_POWER_CAN_REBOOT | (power_can_off() ? CIUKI_POWER_CAN_OFF : 0) |
                (!(power_progress & (CIUKI_POWER_STOPPED | CIUKI_POWER_UNCERTAIN)) &&
                 power_source_standby_reason() == CIUKI_POWER_STANDBY_AVAILABLE ? CIUKI_POWER_CAN_STANDBY : 0);
+    if (!power_authorized(caller)) return -EPERM;
+    if (security_device_system(caller) && !security_device_setup(caller) &&
+        action != CIUKI_POWER_REBOOT && action != CIUKI_POWER_OFF) return -EPERM;
     if (action == CIUKI_POWER_STANDBY || action == CIUKI_POWER_CANCEL_STANDBY) {
         uint32_t f=irq_save(); bool busy=power_running || power_progress;
         if (!busy) power_running=true;

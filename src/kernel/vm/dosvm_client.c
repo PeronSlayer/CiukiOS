@@ -1,6 +1,10 @@
 /* f3-02 native owner boundary: syscall 72 (dosvm) for one DOS window VM per
- * process, delegated only to a desktop-launched /Programs/dosbox. No public VM
- * lookup, device grant or physical display access. execution-abi.md, F3-02.
+ * process. No public VM lookup, device grant or physical display access.
+ * execution-abi.md, F3-02. sec-k05 (user-security-kernel.md "DOSVM
+ * operations (call 72)"): authority comes from the caller's retained
+ * credential, never an executable path. VM operations are own-session (the
+ * creating process and its unchanged credential); game removal needs an
+ * administrator; title data is always the caller's own store.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
@@ -121,8 +125,15 @@ static int release_binding(struct binding *b, bool owner_gone)
     return e;
 }
 /* Supervisor collection hook: the owner died (crash, signal, exit without
- * CLOSE). Idempotent; a binding busy in its owner's syscall is collected by
- * that syscall's exit check or by a later collection pass. */
+ * CLOSE), or sec-k05: its session left ACTIVE (logoff/teardown), so no VM
+ * keeps running under a closing session. Idempotent; a binding busy in its
+ * owner's syscall is collected by that syscall's exit check or by a later
+ * collection pass. */
+static bool binding_revoked(const struct binding *b)
+{
+    struct dosvm *v = dosvm_lookup(b->key);
+    return v && v->info.state != DOSVM_DEAD && !dos_identity_live(&v->identity);
+}
 void dosvm_client_poll(void)
 {
     dosvm_fullscreen_poll();
@@ -130,12 +141,29 @@ void dosvm_client_poll(void)
         struct binding *b = &bindings[i];
         if (!b->pid || b->busy) continue;
         struct process *p = proc_find(b->pid);
-        if (!p || p->state >= PROC_STOPPING) {
+        if (!p || p->state >= PROC_STOPPING || binding_revoked(b)) {
             b->busy = true;
             release_binding(b, true);
             b->busy = false;
         }
     }
+}
+
+unsigned dosvm_session_revoke(uint32_t session)
+{
+    unsigned retained = 0;
+    if (!session) return 0;
+    for (unsigned i = 0; i < DOSVM_LIMIT; i++) {
+        struct binding *b = &bindings[i];
+        struct dosvm *v = b->pid ? dosvm_lookup(b->key) : 0;
+        if (!v || dos_identity_session(&v->identity) != session) continue;
+        if (b->busy) { retained++; continue; }
+        b->busy = true;
+        release_binding(b, true);
+        b->busy = false;
+        if (b->pid) retained++;
+    }
+    return retained;
 }
 
 /* Probe view (f3:vm-window): the first window VM and its owner, if any. */
@@ -353,7 +381,9 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         return copy_to_user(tf->ecx,&c,sizeof(c));
     }
     if (op>=CIUKI_DOSVM_SAVE_QUERY && op<=CIUKI_DOSVM_SAVE_EXPORT) {
-        if (op!=CIUKI_DOSVM_SAVE_QUERY && !p->programs_capability) return -EPERM;
+        /* Own-session: the caller's own store only, for every user class
+         * (Guest included: its data lives in its own profile). */
+        if (!dos_process_interactive(p)) return -EPERM;
         if (tf->edx!=sizeof(struct ciuki_dosvm_command)) return -EINVAL;
         struct ciuki_dosvm_command c,valid={0};
         int e=copy_from_user(&c,tf->ecx,sizeof(c)); if (e) return e;
@@ -361,14 +391,17 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         valid.version=CIUKI_DOSVM_VERSION; valid.size=sizeof(valid); valid.launch.game=c.launch.game;
         if (!c.launch.game || c.launch.game>CIUKI_DOSVM_GAME_COUNT || memcmp(&c,&valid,sizeof(c))) return -EINVAL;
         struct ua_pin pin; e=ua_pin(p->memory,&pin,tf->ecx,sizeof(c),true); if (e) return e;
-        e=dosvm_game_data(c.launch.game,op,&c);
+        struct dos_identity owner;
+        e=dos_identity_capture(&owner,p);
+        if (!e) { e=dosvm_game_data(c.launch.game,op,&c,&owner); dos_identity_release(&owner); }
         if (!e) e=copy_to_user(tf->ecx,&c,sizeof(c));
         ua_unpin(p->memory,&pin); return e;
     }
-    /* Query is read-only. Removal requires the separately delegated applet
-     * authority; C: write admission alone never grants process authority. */
+    /* Query is public catalogue state. Removal is a machine-wide change:
+     * administrator only (no path-derived applet grant). Other users'
+     * private title data is left to explicit file management. */
     if(op==CIUKI_DOSVM_GAME_QUERY || op==CIUKI_DOSVM_GAME_REMOVE) {
-        if(op==CIUKI_DOSVM_GAME_REMOVE && !p->programs_capability)return -EPERM;
+        if(op==CIUKI_DOSVM_GAME_REMOVE && !dos_process_admin(p))return -EPERM;
         if(tf->edx!=sizeof(struct ciuki_dosvm_command))return -EINVAL;
         struct ciuki_dosvm_command c,valid={0};
         int error=copy_from_user(&c,tf->ecx,sizeof(c));if(error)return error;
@@ -384,7 +417,8 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         if(!error)error=copy_to_user(tf->ecx,&c,sizeof(c));
         ua_unpin(p->memory,&pin);return error;
     }
-    if (!p->dosvm_capability) return -EPERM;
+    /* Own-session class: an authenticated interactive session. */
+    if (!dos_process_interactive(p)) return -EPERM;
     if (op < CIUKI_DOSVM_CREATE || (op > CIUKI_DOSVM_WAIT_PRESENT &&
         op != CIUKI_DOSVM_TEXT && op != CIUKI_DOSVM_MARK &&
         op != CIUKI_DOSVM_TEXT_CHUNK && op != CIUKI_DOSVM_POLICY &&
@@ -488,9 +522,12 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
          * it. Without a prior mode switch nothing else would (QEMU case
          * vm-fullscreen-qemu-t23 was refused only at cleanup, -EPERM). */
         if (display_worker_start && (e = display_worker_start())) goto out;
+        /* The credential is fixed before guest boot; no later input changes it. */
+        struct dos_identity identity;
+        if ((e = dos_identity_capture(&identity, p))) goto out;
         unsigned reservation = 0;
         while (reservation < DOSVM_LIMIT && creating[reservation]) reservation++;
-        if (reservation == DOSVM_LIMIT) { e = -ENOSPC; goto out; }
+        if (reservation == DOSVM_LIMIT) { dos_identity_release(&identity); e = -ENOSPC; goto out; }
         creating[reservation] = p->pid;
         /* ABI 0/1 are compatibility aliases. Every desktop window, including
          * the interactive shell, uses the qualified unified base. */
@@ -503,8 +540,9 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         const struct dosvm_config config = {.probe = window_probe(), .base = workload, .dpmi = true,
             .game=(uint8_t)c.launch.game,.kernel=(uint8_t)c.launch.kernel,
             .memory_locked=c.launch.memory==CIUKI_DOSVM_MEMORY_LOCKED,
-            .disable_file_bridge=true,.cancelled=owner_stopping,.cancel_arg=p};
+            .disable_file_bridge=true,.cancelled=owner_stopping,.cancel_arg=p,.identity=&identity};
         e = dosvm_create(&config, &v);
+        dos_identity_release(&identity); /* the VM holds its own reference */
         creating[reservation] = 0;
         if (e) { surface_release(surface); e = e==-ENOENT && c.launch.game ? e : closed_error(e); goto out; }
         c.changed|=v->ports_changed;
@@ -553,6 +591,11 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         b->busy = true;
         v = dosvm_lookup(key);
         if (!v) { e = -ESRCH; goto out; }
+        /* Same pid alone is not ownership: the creating credential and
+         * session must be unchanged and live (no reused-pid control). A VM
+         * already DEAD has released its identity and runs nothing; its
+         * owner may still collect the binding as before. */
+        if (v->info.state != DOSVM_DEAD && !dos_identity_owner(&v->identity, p)) { e = -ESRCH; goto out; }
         binding_priority(b,v);
         if (op == CIUKI_DOSVM_CLOSE) {
             e = closed_error(release_binding(b, false));

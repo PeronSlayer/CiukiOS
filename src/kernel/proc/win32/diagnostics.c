@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/w32_objects.h>
+#include <ciuki/security.h>
 #include <ciuki/supervisor.h>
 #include <ciuki/sha256.h>
 struct w32_stub_record {struct w32_stub_record *next;char name[212];};
@@ -17,6 +18,7 @@ struct w32_diagnostic_state {
 };
 static struct ciuki_w32_fault w32_fault_queue[16];
 static unsigned w32_fault_head,w32_fault_count;
+static uint32_t w32_fault_session[16];
 static int diag_cmp(const char *a,const char *b){size_t n=strlen(a);return n==strlen(b)?strncmp(a,b,n):1;}
 static struct w32_diagnostic_state *diag_state(struct process *p){
     if(!p->w32&&w32_process_init(p))return 0;
@@ -88,6 +90,10 @@ void w32_diagnostic_record(struct proc_thread *t,const struct ciuki_w32_diagnost
 }
 static bool diag_enqueue(const struct ciuki_w32_fault *f){
     if(w32_fault_count==16){klog("[win32] warning check=dialog-queue-full pid=%u",f->pid);return false;}
+    struct process *owner=proc_find(f->pid);
+    const struct ciuki_credential *credential=security_credential(owner);
+    if(!credential)return false;
+    w32_fault_session[(w32_fault_head+w32_fault_count)%16]=credential->session_id;
     w32_fault_queue[(w32_fault_head+w32_fault_count)%16]=*f;w32_fault_count++;return true;
 }
 void w32_refusal_queue(struct process *p,uint32_t reason,const char *module,uint32_t error){
@@ -144,8 +150,13 @@ uint32_t w32_report_call(struct proc_thread *t,struct ciuki_w32_report_args *a){
         if(!p->w32||p->w32->service!=W32_SERVICE_DESKTOP||p->pid!=supervisor_desktop_pid())return W32_STATUS_ACCESS_DENIED;
         if(a->action==W32_REPORT_CLOSE){
             struct process *victim=proc_find(a->code);
-            if(victim&&victim->w32&&victim->w32->diagnostics&&victim->w32->diagnostics->crashed)proc_stop(victim,victim->raw_exit,0);
+            if(victim&&security_same(p,victim)&&victim->w32&&victim->w32->diagnostics&&victim->w32->diagnostics->crashed)proc_stop(victim,victim->raw_exit,0);
             return 0;
+        }
+        const struct ciuki_credential *credential=security_credential(p);
+        if(!credential||!security_process_live(p))return W32_STATUS_ACCESS_DENIED;
+        while(w32_fault_count&&w32_fault_session[w32_fault_head]!=credential->session_id){
+            w32_fault_head=(w32_fault_head+1)%16;w32_fault_count--;
         }
         if(w32_fault_count){
             if(copy_to_user(a->buffer,&w32_fault_queue[w32_fault_head],sizeof(struct ciuki_w32_fault)))return W32_STATUS_ACCESS_VIOLATION;

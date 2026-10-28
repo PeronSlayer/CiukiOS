@@ -11,6 +11,8 @@ _Static_assert(sizeof(((struct ciuki_security_link *)0)->reserved)==8,"ciuki_sec
 #include <ciuki/bootstat.h>
 #include <ciuki/w32_core.h>
 #include <ciuki/w32_transport.h>
+/* sec-k06: additive token kind; transport reuses the existing object record. */
+_Static_assert(W32_OBJ_TOKEN == 15, "sec-k06 query-token object kind");
 _Static_assert(W32_MSG_INPUT_IDLE == 13u, "fx-q3hang input-idle query action");
 _Static_assert(W32_S_LAUNCH_FEEDBACK == 14, "fx-launchfb desktop query");
 _Static_assert(W32_S_LAUNCH_IDLE == 15, "fx-launchfb GetMessage completion");
@@ -212,7 +214,7 @@ _Static_assert(SETUP_ERASED_MAX==16u,"Setup preview capacity");
 #if defined(__i386__)
 _Static_assert(sizeof(struct setup_erased_partition)==32,"Setup erased record");
 _Static_assert(_Alignof(struct setup_erased_partition)==4,"Setup erased alignment");
-_Static_assert(sizeof(struct setup_plan)==1204,"Setup plan version 2");
+_Static_assert(sizeof(struct setup_plan)==1208,"Setup plan version 2 (sec-user-02 provisioning seed in the answers)");
 #define SETUP_OFFSET(field, expected) _Static_assert(__builtin_offsetof(struct setup_plan,field)==expected,"Setup plan " #field)
 SETUP_OFFSET(version,0);
 SETUP_OFFSET(disk,4);
@@ -228,8 +230,8 @@ SETUP_OFFSET(reserve_bytes,668);
 SETUP_OFFSET(free_after_bytes,676);
 SETUP_OFFSET(components,684);
 SETUP_OFFSET(answers,688);
-SETUP_OFFSET(source_image_sha,1072);
-SETUP_OFFSET(source_iso_sha,1137);
+SETUP_OFFSET(source_image_sha,1076);
+SETUP_OFFSET(source_iso_sha,1141);
 _Static_assert(__builtin_offsetof(struct setup_erased_partition,type)==0,"erased type");
 _Static_assert(__builtin_offsetof(struct setup_erased_partition,start)==4,"erased start");
 _Static_assert(__builtin_offsetof(struct setup_erased_partition,count)==12,"erased count");

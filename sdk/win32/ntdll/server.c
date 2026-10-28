@@ -16,6 +16,7 @@ static uint32_t w32r_gate(uint32_t op,uintptr_t a,uintptr_t b,uintptr_t c) {
     return result;
 #endif
 }
+#include "registry_broker.h"
 static void disconnect(void)
 {
     if(endpoint!=UINT32_MAX)w32r_gate(CIUKI_SYS_CLOSE,endpoint,0,0);
@@ -59,6 +60,10 @@ uint32_t w32_server_exchange(const void *in,uint32_t n,void *out,uint32_t cap,ui
     *used=0;
     RTL_CRITICAL_SECTION *lock=NtCurrentTeb()->ProcessEnvironmentBlock->FastPebLock;
     RtlEnterCriticalSection(lock);
+    const struct w32r_request *request=in;
+    if(request->op<=W32R_FLUSH||request->op==W32R_COMPAT){
+        uint32_t result=broker_exchange(in,n,out,cap,used);RtlLeaveCriticalSection(lock);return result;
+    }
     uint32_t e=0;
     for(unsigned attempt=0;attempt<2;attempt++){
         if(!connected){

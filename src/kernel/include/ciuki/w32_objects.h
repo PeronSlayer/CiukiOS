@@ -55,6 +55,7 @@ struct w32_object {
     struct w32_object *next;
     uint32_t refs, type, id, exit_code;
     uint32_t section_limit, section_protect;
+    uint32_t security_uid, security_session;
     uint16_t *name;
     bool manual, signalled, abandoned;
     union {
@@ -78,6 +79,7 @@ struct w32_object {
             struct file_description *description;
             uint32_t access, share;
         } file;
+        struct ciuki_credential token;
         void *section;
     } u;
 };
@@ -109,6 +111,7 @@ struct w32_object *w32_object_new(uint32_t type);
 void w32_retain(struct w32_object *o);
 void w32_release(struct w32_object *o);
 struct w32_object *w32_lookup(struct proc_thread *t, uint32_t handle, uint32_t type);
+bool w32_handle_access(struct proc_thread *, uint32_t handle, uint32_t rights);
 uint32_t w32_handle_install(
     struct process *p, struct w32_object *o, uint32_t access, bool inherit, uint32_t *handle);
 uint32_t w32_handle_close(struct process *p, uint32_t handle);

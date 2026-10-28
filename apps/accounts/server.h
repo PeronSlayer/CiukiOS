@@ -7,6 +7,7 @@
 #define ACCT_SERVER_H
 #include "accounts.h"
 #include "kernel_adapter.h"
+#include "firstboot.h"
 
 #define ACCT_SERVER_OPEN_RETRY_MS 30000u
 struct acct_server {
@@ -18,6 +19,10 @@ struct acct_server {
     uint64_t next_open;
     unsigned sweep;
     int opened, last_open_error, host_test;
+    /* sec-user-02 first-boot adapter: the shared G32 settings binding (NULL:
+     * no G32 migration) and the last adapter result, for diagnostics. */
+    const struct acct_legacy_io *legacy;
+    int firstboot_result;
 };
 /* Binds the production kernel adapter beside the supplied OWNER/storage
  * tables and volume. host_test is set only by host harnesses; the image
