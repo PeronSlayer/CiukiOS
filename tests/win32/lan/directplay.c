@@ -34,9 +34,10 @@ int WINAPI entry(void)
     }
     DPID player;DPNAME name={0};name.dwSize=sizeof(name);name.lpszShortNameA=host ? "host" : "joining peer";
     require(SUCCEEDED(IDirectPlayX_CreatePlayer(play,&player,&name,NULL,NULL,0,0)),"FAIL player create\r\n");
-    char chat[]="CiukiOS LAN2 chat",buffer[2048];DWORD start=GetTickCount(),last=0;int received=0;
+    char chat[]="CiukiOS LAN2 chat",buffer[2048];DWORD start=GetTickCount(),last=0;
+    DPID seen[4]={0};unsigned received=0,needed=option(" --peers=3") ? 2 : 1;
     log_line(host ? "LAN2 DirectPlay host ready\r\n" : "LAN2 DirectPlay joined\r\n");
-    while(GetTickCount()-start<60000&&!received){
+    while(GetTickCount()-start<60000&&received<needed){
         DWORD now=GetTickCount();if(now-last>=1000){
             require(SUCCEEDED(IDirectPlayX_Send(play,player,DPID_ALLPLAYERS,DPSEND_GUARANTEED,chat,sizeof(chat))),"FAIL guaranteed send\r\n");last=now;
         }
@@ -44,9 +45,11 @@ int WINAPI entry(void)
         if(hr==DPERR_NOMESSAGES){Sleep(10);continue;}
         require(SUCCEEDED(hr),"FAIL receive\r\n");
         if(from!=DPID_SYSMSG&&from!=player&&n==sizeof(chat)&&!memcmp(buffer,chat,n)){
-            require(SUCCEEDED(IDirectPlayX_Send(play,player,from,DPSEND_GUARANTEED,chat,sizeof(chat))),"FAIL guaranteed reply\r\n");received=1;
+            require(SUCCEEDED(IDirectPlayX_Send(play,player,from,DPSEND_GUARANTEED,chat,sizeof(chat))),"FAIL guaranteed reply\r\n");
+            unsigned i=0;while(i<received&&seen[i]!=from)i++;
+            if(i==received&&received<4)seen[received++]=from;
         }
     }
     IDirectPlayX_DestroyPlayer(play,player);IDirectPlayX_Close(play);IDirectPlayX_Release(play);
-    require(received,"FAIL DirectPlay chat timeout\r\n");log_line("PASS LAN2 DirectPlay COM enumerate/open/player/guaranteed chat/close\r\n");ExitProcess(0);return 0;
+    require(received==needed,"FAIL DirectPlay chat timeout\r\n");log_line("PASS LAN2 DirectPlay COM enumerate/open/player/guaranteed chat/close\r\n");ExitProcess(0);return 0;
 }

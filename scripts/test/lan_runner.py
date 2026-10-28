@@ -17,7 +17,9 @@ from evidence import EvidenceError, EvidenceNotRun
 
 
 def validate_network(spec):
-    if (not isinstance(spec, dict) or set(spec) != {'group', 'port', 'mac', 'identity'} or
+    if (not isinstance(spec, dict) or set(spec) - {'group', 'port', 'mac', 'identity', 'mode'} or
+            not {'group', 'port', 'mac', 'identity'} <= set(spec) or
+            spec.get('mode', 'mcast') not in ('mcast', 'listen', 'connect') or
             not isinstance(spec['group'], str) or not re.fullmatch(r'239\.255\.(?:[0-9]{1,3})\.(?:[0-9]{1,3})', spec['group']) or
             any(int(p) > 255 for p in spec['group'].split('.')) or
             type(spec['port']) is not int or not 1024 <= spec['port'] <= 65535 or
@@ -27,6 +29,9 @@ def validate_network(spec):
 
 
 def validate(case, root):
+    if 'lan_live' in case:
+        import lan_live
+        return lan_live.validate(case, root)
     import acceptance
     allowed = {'id', 'kind', 'probe', 'profile', 'timeout', 'expected', 'item', 'title', 'guests', 'blocking', '_prune_keep'}
     if set(case) - allowed or not isinstance(case.get('guests'), list) or len(case['guests']) != 2:
@@ -49,12 +54,23 @@ def validate(case, root):
     return acceptance.KIND
 
 
-def pair_networks():
+def pair_networks(count=2, backend='mcast'):
+    if type(count) is not int or count not in (2, 3) or backend not in ('mcast', 'stream') or count == 3 and backend != 'mcast':
+        raise res.Refusal('isolated LAN requires two or three guests; three use multicast')
     entropy = secrets.token_bytes(4)
     group = '239.255.%d.%d' % (entropy[0], entropy[1])
     port = 10000 + int.from_bytes(entropy[2:], 'big') % 50000
     return [{'group': group, 'port': port, 'mac': '52:54:00:%02x:%02x:%02x' % (entropy[0], entropy[1], i + 1),
-             'identity': secrets.token_hex(16)} for i in range(2)]
+             'identity': secrets.token_hex(16),
+             **({'mode': 'listen' if i == 0 else 'connect'} if backend == 'stream' else {})} for i in range(count)]
+
+
+def netdev(spec):
+    validate_network(spec)
+    mode = spec.get('mode', 'mcast')
+    if mode == 'mcast':
+        return 'socket,id=ciuknet0,mcast=%s:%d,localaddr=127.0.0.1' % (spec['group'], spec['port'])
+    return 'socket,id=ciuknet0,%s=127.0.0.1:%d' % (mode, spec['port'])
 
 
 def reserve_other_slots():

@@ -38,7 +38,7 @@ for arg in "$@"; do
     case $arg in --suite|--suite=*|--list) ;; *) [ "$previous" = --suite ] || args+=("$arg") ;; esac
     previous=$arg
 done
-case $suite in acc-t23|sec-users) ;; *) echo "acceptance: unknown acceptance suite: $suite" >&2; exit 2 ;; esac
+case $suite in acc-t23|sec-users|lan-t23) ;; *) echo "acceptance: unknown acceptance suite: $suite" >&2; exit 2 ;; esac
 if [ "$list" -eq 1 ]; then
     # Parses every case exactly as run.py does before a boot; no QEMU, no image.
     python3 -B scripts/test/acceptance.py validate "$suite"

@@ -15,7 +15,11 @@ and `build/host/lan2-pe/build.json`. Build the authored Win32 fixtures with
 headers exist. These are console PEs compiled from tracked source, without
 commercial payloads. Copy only the two resulting PEs into the lead's fixture
 staging through the normal image/fixture mechanism, before the image hash is
-fixed. Do not rebuild an image while any overlay depends on it.
+fixed. **f6-28 amendment:** the authored `lan-t23` suite instead delivers these
+PEs and declared first-boot settings through each run's private overlay, with
+PE/source hashes in its evidence; see [the runtime runner](f6-28-lan-live.md).
+It does not require these PEs in the canonical image. Do not rebuild an image
+while any overlay depends on it.
 
 Use `qemu-t23` and separate qcow2 overlays under `build/test-runs/`. The owner's
 LAN exception permits two live guests and at most three; this supersedes the
