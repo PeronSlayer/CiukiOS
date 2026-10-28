@@ -186,3 +186,4 @@ Documenti di design, validazione, fonti esterne.
 | [Decisione: utenti reali con ruoli di amministratore applicati dal kernel (modello Windows XP)](2026-10-26-02-decisione-utenti-ruoli-amministratore.md) | 26 ottobre 2026 | decisione (sicurezza) |
 | [Prova T23 5bb73dba…: sonda 3D bloccante, blocco di Quake III da quarantena APM, errore 95 allo spegnimento; decisioni su F7](2026-10-26-03-prova-t23-5bb73dba.md) | 26 ottobre 2026 | analisi, decisione |
 | [Immagine T23 6c3b7800…: correzioni della prova 5bb73dba e linea Savage completa](2026-10-27-01-immagine-t23-correzioni-prova-savage-completo.md) | 27 ottobre 2026 | modifica, integrazione |
+| [Decisioni del proprietario per il lavoro continuo verso la 1.0 Beta](2026-10-28-01-decisioni-proprietario-verso-beta.md) | 28 ottobre 2026 | decisione |
