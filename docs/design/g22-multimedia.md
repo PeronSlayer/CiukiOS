@@ -22,6 +22,31 @@ Primary online references:
 - [Microsoft: MCI_STATUS](https://learn.microsoft.com/en-us/windows/win32/multimedia/mci-status)
 - [Microsoft: MCI_PLAY](https://learn.microsoft.com/en-us/windows/win32/multimedia/mci-play)
 
+## Win32 format-0 MIDI headers (fx-w32green, 2026-10-28)
+
+The [Standard MIDI Files 1.0 specification](https://midi.org/standard-midi-files)
+defines format 0 as one multichannel track, with `ntrks` equal to one
+(Header Chunks in the [specification text mirror](https://www.tmetz.net/midi/SMFtmetz.html)).
+Wine's [MIDI_mciReadMThd](https://github.com/wine-mirror/wine/blob/master/dlls/mciseq/mcimidi.c)
+warns and normalizes any other declared format-0 track count to one before
+allocating tracks. This is a compatibility recovery for malformed files,
+not an alternative valid SMF layout. The Resource Kit's `wrkc12_2.htm`
+describes MIDI playback and streams but does not specify malformed-header
+handling.
+
+`sdk/win32/audio/mciseq.c` already normalizes these counts, but the
+`010fb0839` merge dropped the diagnostic introduced by `fx-classaudit`.
+Restore one `format0_track_count` diagnostic per normalization; retain the
+existing format, track capacity, chunk/payload and time-division checks.
+The WinMM import library must include the existing kernel32
+[`OutputDebugStringA`](https://learn.microsoft.com/en-us/windows/win32/api/debugapi/nf-debugapi-outputdebugstringa)
+endpoint with its one-pointer i386 stdcall decoration (`@4`), so the
+diagnostic also links in the production PE facade.
+The production-loader host regression covers counts 0, 1, 2 and 65535,
+expects exactly three diagnostics and still rejects malformed track data,
+zero division and a format-1 file with zero tracks. No Windows 98 runtime
+comparison is claimed.
+
 ## Repository comparison and decisions
 
 The existing sound worker loads bounded PCM WAV clips; preserve its format

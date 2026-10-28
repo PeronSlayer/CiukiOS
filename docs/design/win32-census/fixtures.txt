@@ -167,7 +167,7 @@ REFUSED optional-header-bounds
 
 FILE bad-pe-offset-alignment.exe
 SHA256 d1e55acb9f310df28ac43e58a32a29c05e9dd1cc7a54d379df711e13bed0144a
-REFUSED pe-offset-alignment
+REFUSED pe-signature
 
 FILE bad-pe-offset-bounds.exe
 SHA256 22f9911dffc14e88b3ec0a9d58b32567a9c6dca68d641e47dced7fc44156c7e0
