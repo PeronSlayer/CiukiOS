@@ -245,7 +245,7 @@ def main() -> int:
                         "native_hw.c", "render3d.c", "render3d_scalar.c", "render3d_native.c", "render3d_transport.c", "intel2d/engine.c", "intel2d/driver.c", "unichrome/engine.c",
                         "unichrome/driver.c", "sis/engine.c", "sis/cursor.c", "sis/register.c",
                         "vmwaresvga/engine.c", "vmwaresvga/driver.c", "vmwaresvga/io.c", "mach64/engine.c",
-                        "mach64/driver.c", "rage128/driver.c", "rage128/engine.c", "cirrus/engine.c",
+                        "mach64/driver.c", "mach64/mach64_3d.c", "mach64/mach64_3d_owner.c", "rage128/driver.c", "rage128/engine.c", "cirrus/engine.c",
                         "cirrus/driver.c", "tdfx/driver.c", "tdfx/engine.c", "s3legacy/engine.c",
                         "s3legacy/driver.c", "s3legacy/platform.c", "s3trio64/engine.c", "s3virge/engine.c",
                         "i810/driver.c", "i810/memory.c", "i740/driver.c")] +
