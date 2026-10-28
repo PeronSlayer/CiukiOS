@@ -155,14 +155,44 @@ static void count(uint16_t event)
     default: break;
     }
 }
+/* ---- sec-k08 (lead decision U4-3; docs/validation/sec-k08.md): a
+ * suspend the session did not arm locks in the kernel. APM 1.2 4.3.9: a
+ * Critical System Suspend (0008h) is answered with Set Power State Suspend
+ * by the OS itself within the BIOS's 5 s, without the desktop, so the
+ * desktop's password-on-resume (armed before a call-73 Stand by) never ran;
+ * 0004h Critical Resume and a 0003h/000Bh resume notification that is not
+ * the echo of a call-73 Stand by mean the same. The trusted gate is raised
+ * through PID 1 (secure_console.c) at 0008h, before the acknowledgment, so
+ * the session is concealed before the machine sleeps; LOGON then locks an
+ * owner with a password and restores a passwordless one. ACPI sleeping
+ * states are entered only by OSPM (ACPI 1.0b/2.0 section 9.1) and CiukiOS
+ * enters none (power-policy.md, Stand by item 21). */
+void security_attention_resume(void) __attribute__((weak));
+/* A call-73 Stand by returned: the BIOS's own resume notification of that
+ * suspend (APM 1.2 4.3.4) may still be queued. It is consumed by the next
+ * resume notification and dropped by any other suspend request. */
+static bool resume_echo;
+static void firmware_resume_lock(uint16_t event)
+{
+    bool resume = event == 3 || event == 4 || event == 11;
+    bool request = event == 1 || event == 2 || event == 8 || event == 9 || event == 10;
+    uint32_t f = irq_save();
+    bool echo = (event == 3 || event == 11) && (off_running || resume_echo);
+    if ((resume || request) && !off_running) resume_echo = false;
+    irq_restore(f);
+    if ((event == 8 || resume) && !echo && security_attention_resume) security_attention_resume();
+}
+/* ---- end sec-k08 ---- */
 void power_source_event(enum power_source_kind kind, uint16_t event, uint16_t info)
 {
     uint32_t f = irq_save();
-    if (source.active && source.provider == kind) {
+    bool counted = source.active && source.provider == kind;
+    if (counted) {
         source.last_event = event; source.event_info = info; source.events++;
         count(event);
     }
     irq_restore(f);
+    if (counted) firmware_resume_lock(event);   /* sec-k08 */
 }
 void power_source_counters(struct power_source_counters *out)
 {
@@ -187,7 +217,7 @@ int power_source_standby(void)
     if (off_running || stopped || handoff_pending || !source.active) { irq_restore(f); return -EBUSY; }
     struct power_source_ops ops = provider_ops; off_running = true; irq_restore(f);
     int e = ops.standby ? ops.standby(ops.ctx) : -ENOTSUP;
-    f = irq_save(); off_running = false; irq_restore(f);
+    f = irq_save(); off_running = false; resume_echo = true; irq_restore(f);   /* sec-k08 */
     return e;
 }
 int power_source_cancel_standby(void)

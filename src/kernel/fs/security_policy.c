@@ -42,7 +42,10 @@ static bool boot_input(const struct policy_volume *v,const struct policy_label *
     if (node_named(v,p->trie,"System",0)) return path_equal(name,"HWPROF.CFG");
     if (!node_named(v,p->trie,"Settings","System")) return false;
     return path_equal(name,"performance.cfg") || path_equal(name,"hwprofiles.cfg") ||
-           path_wildcard("accel*.cfg",name) || (display_attempt_file && display_attempt_file(name));
+           path_wildcard("accel*.cfg",name) || (display_attempt_file && display_attempt_file(name)) ||
+           /* sec-k08: clock.cfg, the time zone store read at boot (S2-5), and
+            * power.cfg, the machine power buttons every desktop reads (U4-6). */
+           path_equal(name,"clock.cfg") || path_equal(name,"power.cfg");
 }
 /* ---- end sec-sysvc2 ---- */
 uint64_t policy_epoch(const struct policy_volume *v)
@@ -209,6 +212,9 @@ int policy_check(const struct policy_volume *v,const struct policy_label *l,
     if (!s || !access || (access&~POLICY_ALL)) return -EACCES;
     if (!security_subject_live(s)) return -ESRCH;
     if (!v || !l || !v->ready || !l->object || l->mount!=v->mount || l->epoch!=policy_epoch(v)) return -EACCES;
+    /* sec-k08 (coverage audit): a label kind outside the table is corrupt
+     * metadata, never a public object; it denies every subject. */
+    if (l->kind>POLICY_DENY) return -EACCES;
     const struct ciuki_credential *c=security_subject_credential(s);
     if (!c || c->group_count>8) return -EACCES;
     if ((l->kind==POLICY_PROFILE || l->kind==POLICY_CREATOR || l->kind==POLICY_PUBLIC) &&

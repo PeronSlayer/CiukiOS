@@ -105,6 +105,14 @@ struct cp_host {
     int (*accounts_poll)(void *,struct cpa_view *,int *);
     int (*self_admin)(void *);
     /* --- end sec-user-04 --- */
+    /* --- sec-k08 (lead decision U4-6): the machine's power buttons in a
+     * LOGON session (apps/desktop/power_policy.h PP_MACHINE_FILE). load
+     * reads power.cfg (-ENOENT: defaults); save goes through the SYSTEM
+     * setting service (EPERM for Standard users and Guest). NULL: the
+     * interim desktop, whose buttons stay in desktop.cfg. */
+    int (*power_machine_load)(void *,char *text,size_t cap,size_t *n);
+    int (*power_machine_save)(void *,const char *text,size_t n);
+    /* --- end sec-k08 --- */
     int (*internet_clear_history)(void *);
     int (*internet_default)(void *);
     int (*internet_programs)(void *);

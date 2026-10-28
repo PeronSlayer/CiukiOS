@@ -1874,6 +1874,7 @@ void desk_shell_power_config(struct desktop *d)
     int width = desk_shell_tray_box(d).w;
     struct desk_box tip = d->sh.tooltip == 6 ? tooltip_box(d) : (struct desk_box){0};
     (void)pp_load(&d->sh.power_cfg, d->sh.cfg.extra);
+    if (d->sh.power_machine_set) pp_machine_apply(&d->sh.power_cfg, &d->sh.power_machine);   /* sec-k08 (U4-6) */
     d->sh.power_meter_hidden = !d->sh.power_cfg.show_meter;
     if (d->sh.tooltip == 6 && !desk_shell_power_shown(d)) tooltip_hide(d);
     desk_shell_tray_damage(d,width);

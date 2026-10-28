@@ -112,6 +112,8 @@ int security_console_attention(uint32_t reason); /* kernel physical input/resume
 extern const struct security_grant_ops secure_console_ops;
 bool security_attention_armed(void);
 void security_attention_physical(void);
+/* sec-k08 (U4-3): a firmware-initiated suspend/resume (core/power_source.c). */
+void security_attention_resume(void);
 void secure_console_poll(void);
 unsigned secure_session_retained(uint32_t session);
 void secure_service_notify(uint32_t session);

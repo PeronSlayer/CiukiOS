@@ -10,6 +10,85 @@ static struct proc_thread *security_fixture_user(struct process **out)
 }
 static struct process *token_exit_target;
 static void token_exit_during_allocation(void){proc_stop(token_exit_target,0,0);}
+#ifdef CIUKI_POLICY_COVERAGE
+/* ---- sec-k08 H13 (tests/host/security/test_policy_coverage.py): the Win32
+ * personality. A Standard user (uid 1007) and Guest, each in its own
+ * session, try another user's (Bob's, uid 1001, another session) process,
+ * token, threads (messages, APCs, suspension) and named objects, and a
+ * SYSTEM process; every attempt fails with ERROR_ACCESS_DENIED (or the
+ * object stays in the caller's own session namespace) and three more
+ * attempts change no Win32 object/handle/message/APC/endpoint account, page
+ * or heap block. ---- */
+static void h13_credential(struct process *p,uint32_t uid,uint32_t gid,uint32_t session)
+{
+    struct ciuki_credential *c=&p->subject->credential;
+    c->uid=uid;c->primary_gid=gid;c->group_count=1;c->groups[0]=gid;c->session_id=session;c->flags=CIUKI_CRED_INTERACTIVE;
+}
+static unsigned h13_cases;
+struct h13_state { struct w32_account a; unsigned pages,heap; };
+static void h13_snapshot(struct h13_state *s){s->a=w32_accounts;s->pages=pages_used;s->heap=heap_blocks;}
+static void h13_same(const char *what,const struct h13_state *b)
+{
+    struct h13_state e;h13_snapshot(&e);
+    if(memcmp(b,&e,sizeof(e)))printf("H13 win32 leak in %s: objects %u/%u handles %u/%u messages %u/%u apcs %u/%u pages %u/%u heap %u/%u\n",what,
+        b->a.objects,e.a.objects,b->a.handles,e.a.handles,b->a.messages,e.a.messages,b->a.apcs,e.a.apcs,b->pages,e.pages,b->heap,e.heap);
+    CHECK(!memcmp(b,&e,sizeof(e)));h13_cases++;
+}
+static uint32_t h13_open(struct proc_thread *t,uint32_t pid,uint32_t access)
+{
+    struct ciuki_w32_object_args open={.action=W32_OBJ_OPEN,.type=W32_OBJ_PROCESS,.value=pid,.access=access};
+    CHECK(!w32_object_call(t,&open));if(!open.error&&open.result)CHECK(!w32_handle_close(t->process,open.result));return open.error;
+}
+static uint32_t h13_message(struct proc_thread *t,uint32_t action,uint32_t tid,uint32_t buffer)
+{
+    struct ciuki_w32_message_args m={.action=action,.tid=tid,.message={.message=action==W32_MSG_SEND?0xc:0x400},.buffer=buffer,.bytes=buffer?16:0};
+    CHECK(!w32_message_call(t,&m));return m.error;
+}
+static uint32_t h13_thread_action(struct proc_thread *t,struct proc_thread *target,bool apc)
+{
+    uint32_t th;CHECK(!w32_handle_install(t->process,target->w32->identity,UINT32_MAX,false,&th));uint32_t error;
+    if(apc){struct ciuki_w32_apc_args a={.action=W32_APC_QUEUE,.thread=th,.routine=CIUKI_W32_LOW};bool replaced=false;
+        CHECK(!w32_apc_call(t,&a,NULL,&replaced));error=a.error;CHECK(!target->w32->head);}
+    else{struct ciuki_w32_context_args c={.action=W32_CTX_SUSPEND,.thread=th};CHECK(!w32_context_call(t,&c));error=c.error;CHECK(!target->w32->suspend);}
+    CHECK(!w32_handle_close(t->process,th));return error;
+}
+#define H13_W32(what,expr) do{CHECK((expr)==5);struct h13_state h13_b;h13_snapshot(&h13_b);\
+    for(unsigned h13_i=0;h13_i<3;h13_i++)CHECK((expr)==5);h13_same(what,&h13_b);}while(0)
+static void h13_win32(void)
+{
+    struct process *bob,*system,*actors[2];
+    struct proc_thread *bt=object_process(proc_supervisor(),&bob),*st=object_process(proc_supervisor(),&system),*at[2];
+    (void)st;h13_credential(bob,1001,545,301);
+    at[0]=object_process(proc_supervisor(),&actors[0]);h13_credential(actors[0],1007,545,300);
+    at[1]=object_process(proc_supervisor(),&actors[1]);h13_credential(actors[1],501,546,302);
+    uint16_t name[]={'h','1','3','-','s','h','a','r','e',0};struct w32_object *bo;uint32_t bh;bool existing;
+    CHECK(!w32_named_create(bob,W32_OBJ_EVENT,name,3,false,&bo,&bh,&existing)&&!existing);
+    for(unsigned w=0;w<2;w++){
+        struct proc_thread *t=at[w];g_current=t->task;g_current->state=T_RUNNING;
+        struct ciuki_w32_vm scratch=request(0,PAGE_SIZE,W32_MEM_RESERVE|W32_MEM_COMMIT,W32_PAGE_READWRITE);
+        CHECK(!w32_vm_alloc(t->process->memory,&scratch));
+        static const uint32_t rights[]={0x1000,0x400,0x0010,0x0020,0x0001,0x1fffff};   /* query, read/write memory, terminate, all */
+        for(unsigned i=0;i<sizeof(rights)/sizeof(*rights);i++){
+            H13_W32("Bob's process",h13_open(t,bob->pid,rights[i]));
+            H13_W32("SYSTEM process",h13_open(t,system->pid,rights[i]));
+        }
+        H13_W32("post to Bob's thread",h13_message(t,W32_MSG_POST,bt->tid,0));
+        H13_W32("send to Bob's thread",h13_message(t,W32_MSG_SEND,bt->tid,scratch.address));
+        H13_W32("APC to Bob's thread",h13_thread_action(t,bt,true));
+        H13_W32("suspend Bob's thread",h13_thread_action(t,bt,false));
+        H13_W32("APC to a SYSTEM thread",h13_thread_action(t,st,true));
+        /* Bob's named event: the caller gets its own session's object. */
+        struct w32_object *mine;uint32_t mh;
+        CHECK(!w32_named_create(t->process,W32_OBJ_EVENT,name,3,false,&mine,&mh,&existing)&&!existing&&mine!=bo);
+        bo->signalled=true;CHECK(w32_wait_try(t,&mh,1,false,0)==W32_WAIT_TIMEOUT||!mine->signalled);bo->signalled=false;
+        CHECK(!w32_handle_close(t->process,mh));h13_cases++;
+    }
+    CHECK(!w32_handle_close(bob,bh));
+    g_current=&controller;for(unsigned w=0;w<2;w++)proc_discard(actors[w]);proc_discard(bob);proc_discard(system);proc_collect();
+    printf("H13 win32: %u refusals (Standard user and Guest: another session's process/token rights, messages, APCs, suspension and named objects, SYSTEM process and thread) without object/handle/message/APC/page/heap leaks PASS\n",h13_cases);
+}
+/* ---- end sec-k08 ---- */
+#endif
 static void test_security_isolation(void)
 {
     proc_init();struct process *owner,*alice,*system;struct proc_thread *native=security_fixture_user(&owner);
@@ -95,6 +174,9 @@ static void test_security_isolation(void)
     CHECK(w32_handle_install(system,retained,8,false,&th)==5);w32_release(retained);
     CHECK(!w32_session_revoke(sid)); /* sec-k07: nothing of the drained session remains */
     CHECK(!w32_handle_close(system,sh));proc_discard(system);(void)native;
+#ifdef CIUKI_POLICY_COVERAGE
+    h13_win32();   /* sec-k08 */
+#endif
     puts("H07 kernel: real token/query/rights/revocation, session names, protected process, APC/message denial and unchanged queues PASS");
     puts("H09 Win32 teardown (sec-k07): session reports purged, bound named objects/tokens counted until released PASS");
 }

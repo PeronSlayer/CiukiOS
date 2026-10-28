@@ -73,6 +73,10 @@ int sysvc_system_rewrite(const char *path, const char *text, size_t length, size
 /* SYSTEM appends to C:\SYSTEM\LOGS\name (limit 0: the default). */
 int sysvc_log_system_append(const char *name, const void *data, size_t bytes, uint32_t limit, uint32_t *total);
 /* ---- end sec-sysvc2 ---- */
+/* ---- sec-k08: sealed clock.cfg (S2-5) and machine power buttons (U4-6). */
+#define SYSVC_CLOCK "/System/Settings/clock.cfg"
+#define SYSVC_POWER "/System/Settings/power.cfg"
+/* ---- end sec-k08 ---- */
 
 /* Shared by sysvc.c and sysvc_drivers.c. */
 struct vfs_table;

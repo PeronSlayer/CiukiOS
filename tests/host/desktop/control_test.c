@@ -524,6 +524,50 @@ static void accounts_controls(void)
          "secure_resume), power buttons and the standby/disk timers stay with administrators");
 }
 /* --- end sec-user-04 block --- */
+/* --- sec-k08 block (lead decision U4-6): in a LOGON session the power
+ * button and lid are the machine's power.cfg, saved through the SYSTEM
+ * setting service; the user's own desktop.cfg lines neither show nor change
+ * them. The service itself is H16. --- */
+static char machine_text[160]; static size_t machine_n; static int machine_saves, machine_error;
+static int machine_load(void *ctx,char *t,size_t cap,size_t *n)
+{ (void)ctx; if (!machine_n) return -ENOENT; assert(machine_n<cap); memcpy(t,machine_text,machine_n); *n=machine_n; return 0; }
+static int machine_save(void *ctx,const char *t,size_t n)
+{ (void)ctx; if (machine_error) return machine_error; assert(n<sizeof(machine_text)); memcpy(machine_text,t,n); machine_text[n]=0; machine_n=n; machine_saves++; return 0; }
+static void machine_power_buttons(void)
+{
+    power_events_record=(struct ciuki_power_events){.version=1,.size=sizeof(power_events_record),.standby_reason=CIUKI_POWER_STANDBY_AVAILABLE};
+    power_events_ok=1; saved_n=0; saves=applies=0; machine_saves=0; machine_error=0; acct_admin=1;
+    /* The user's own file says Stand by; the machine file says Shut down. */
+    strcpy(saved,"power_button=standby\npower_lid=standby\n"); saved_n=strlen(saved);
+    strcpy(machine_text,"power_button=shutdown\npower_lid=none\n"); machine_n=strlen(machine_text);
+    attach(CP_HOME); a.host.power_status=apm_t23_fixture; a.host.power_events=power_events;
+    a.host.accounts_begin=acct_begin; a.host.accounts_poll=acct_poll; a.host.self_admin=acct_self_admin; a.host.apply=acct_apply;
+    a.host.power_machine_load=machine_load; a.host.power_machine_save=machine_save;
+    cp_open(&a,CP_POWER); power_emit(DU_EV_SELECT,PW_TABS,3,NULL);
+    assert(!strcmp(du_get(&u,PW_BUTTON)->text,"Shut down") && !strcmp(du_get(&u,PW_LID)->text,"None"));
+    /* An administrator: the choice goes to the SYSTEM service, not to desktop.cfg. */
+    at_click_widget(&u,PW_BUTTON); power_pick("Stand by");
+    assert(machine_saves==1 && !strcmp(machine_text,"power_button=standby\npower_lid=none\n") && !saves && applies==1);
+    at_click_widget(&u,PW_LID); power_pick("Shut down");
+    assert(machine_saves==2 && !strcmp(machine_text,"power_button=standby\npower_lid=shutdown\n") && !saves);
+    assert(!strcmp(du_get(&u,PW_BUTTON)->text,"Stand by") && !strcmp(du_get(&u,PW_LID)->text,"Shut down"));
+    cp_detach(&a);
+    /* A Standard user: controls disabled; a forced change is refused by the
+     * service and the page shows the machine's values again. */
+    acct_admin=0; machine_error=-EPERM;
+    attach(CP_HOME); a.host.power_status=apm_t23_fixture; a.host.power_events=power_events;
+    a.host.accounts_begin=acct_begin; a.host.accounts_poll=acct_poll; a.host.self_admin=acct_self_admin; a.host.apply=acct_apply;
+    a.host.power_machine_load=machine_load; a.host.power_machine_save=machine_save;
+    cp_open(&a,CP_POWER); power_emit(DU_EV_SELECT,PW_TABS,3,NULL);
+    assert(du_get(&u,PW_BUTTON)->disabled && du_get(&u,PW_LID)->disabled && !strcmp(du_get(&u,PW_BUTTON)->text,"Stand by"));
+    at_click_widget(&u,PW_BUTTON); assert(!u.popup_count);
+    power_emit(DU_EV_ACTIVATE,PW_ITEM,PW_BUTTON,NULL);   /* a forged menu choice */
+    assert(machine_saves==2 && !saves && !strcmp(machine_text,"power_button=standby\npower_lid=shutdown\n"));
+    cp_detach(&a); acct_admin=1; machine_error=0; saved_n=0; machine_n=0;
+    puts("PASS sec-k08 machine power buttons: power.cfg shown over the user's own lines, administrators save through the SYSTEM "
+         "setting service (desktop reloads), Standard users see them disabled and the service refusal keeps the machine's values");
+}
+/* --- end sec-k08 block --- */
 #include "regional_control_test.h"
 static void internet_page(void)
 {
@@ -586,6 +630,7 @@ int main(int argc, char **argv)
     if(argc==2 && !strcmp(argv[1],"--internet-only")) { setvbuf(stdout,NULL,_IONBF,0);internet_page();return 0; }
     users_controls();
     accounts_controls();   /* sec-user-04 */
+    machine_power_buttons();   /* sec-k08 */
     assert(argc == 3 || argc == 4);
     FILE *f = fopen(argv[1], "rb"); assert(f && fread(portrait, 4, 256 * 256, f) == 256 * 256); fclose(f);
     folder = argv[2];

@@ -86,6 +86,25 @@ void pp_alarm_fix(struct pp_config *);
 /* An action that is not available (standby) falls back to Shut down. */
 int pp_action_effective(int action, int standby_available);
 
+/* ---- sec-k08 (lead decision U4-6): the machine's power buttons. In a
+ * LOGON session the power-button and lid actions are machine settings,
+ * C:\SYSTEM\SETTINGS\power.cfg: sealed, written by administrators through
+ * the SYSTEM setting service (call 99 SETTING POWER), read by every
+ * session's desktop. The user's own power_button/power_lid lines are then
+ * ignored; schemes, alarms, the meter and the resume preference stay the
+ * user's. The G32 interim desktop keeps desktop.cfg's lines. */
+#define PP_MACHINE_FILE "/system/settings/power.cfg"
+#define PP_MACHINE_MAX 127u
+struct pp_machine { int power_button, lid; };
+void pp_machine_defaults(struct pp_machine *);              /* Shut down, lid: none */
+/* power_button= and power_lid= lines (what the kernel service accepts);
+ * returns the number of rejected lines, which keep the defaults. */
+int pp_machine_parse(struct pp_machine *, const char *text, size_t n);
+size_t pp_machine_format(const struct pp_machine *, char *out, size_t cap); /* 0: no room */
+void pp_machine_apply(struct pp_config *, const struct pp_machine *);
+void pp_machine_take(struct pp_machine *, const struct pp_config *);
+/* ---- end sec-k08 ---- */
+
 void pp_summarize(const struct ciuki_power_status *, struct pp_summary *);
 /* Tray tooltip, one or two lines (the scheme name second when given). */
 void pp_tooltip(const struct pp_summary *, const char *scheme, char *out, size_t size);

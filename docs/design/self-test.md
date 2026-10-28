@@ -70,7 +70,7 @@ Each check has a bound and returns PASS, FAIL or SKIP with its figures. The mode
 that returns after its bound (`deadline_exceeded=1 limit_ms=<bound>`, measured figures kept).
 Every check skips with a reason when its device or subsystem is absent, so the same image runs on
 every supported machine. The table is `selftest_phase1` and `selftest_phase2` in
-`selftest_checks.c`; the bounds add up to 569 s in the worst case, while the host T23 profile
+`selftest_checks.c`; the bounds add up to 584 s in the worst case (sec-k08 added `security.kdf`, 15 s), while the host T23 profile
 completes in about 30 s of check time plus the real desktop, 3D and DOS start-up times.
 
 | Check | Bound | What it observes | PASS / SKIP |
@@ -104,6 +104,7 @@ completes in about 30 s of check time plus the real desktop, 3D and DOS start-up
 | `usb.controllers` | 10 s | controllers by kind (UHCI/OHCI/EHCI), ready, quarantined, after their port scan (Details per controller) | SKIP no controller |
 | `usb.devices` | 2 s | present, configured and quarantined devices (Details per device) | SKIP no device |
 | `storage.ata` | 2 s | ATA/ATAPI units, DMA and UDMA mode, errors, retries (Details per unit) | SKIP no ATA unit |
+| `security.kdf` | 15 s | sec-k08: five PBKDF2-HMAC-SHA-256 derivations of the ACCOUNT service's work factor (10,000 iterations, `ciuki/pbkdf2.h`, byte-identical to `acct_derive` by H13) on a fixed non-secret input while the desktop runs: `iterations runs min_ms median_ms max_ms target_ms=1000` | PASS median within the 1000 ms target of `user-security-kernel.md`; FAIL over it (the lead's Pentium III runtime gate) |
 | `serial.records` | 1 s | UART records accepted/sent/queued/dropped during the run | FAIL evidence records lost; SKIP no UART |
 | `memory.end` | 3 s | the memory figures again, heap and page-allocator refusals during the run, free-page delta | FAIL ledger mismatch or an allocation refused |
 
