@@ -22,14 +22,17 @@ class RegistryTests(unittest.TestCase):
         cls.env=dict(os.environ,ASAN_OPTIONS='detect_leaks=0',TMPDIR=str(cls.out))
         cls.program=cls.out/'registry-tests'
         sources=[ROOT/'apps/w32srv'/n for n in ('registry.c','storage.c','defaults.c','directory.c','protocol.c','posix_io.c')]
-        sources += [ROOT/'sdk/win32/advapi32'/n for n in ('registry.c','registry_ex.c','security.c','text.c')]
+        sources += [ROOT/'sdk/win32/advapi32'/n for n in ('registry.c','registry_ex.c','security.c','text.c',
+                                                         'identity.c')]  # sec-user-05: GetUserName/privileges
         sources += [ROOT/'sdk/win32/services/bytes.c',ROOT/'sdk/win32/version/version.c']
         sources += [ROOT/'sdk/win32/lz32'/n for n in ('lz32.c','decode.c')]
         sources += [ROOT/'sdk/win32/lz32/mspack'/n for n in ('kwajd.c','szddd.c','lzssd.c','mszipd.c')]
-        sources += [ROOT/'tests/host/win32/registry_test.c',ROOT/'tests/host/win32/registry_facades_test.c']
+        sources += [ROOT/'tests/host/win32/registry_test.c',ROOT/'tests/host/win32/registry_facades_test.c',
+                    ROOT/'tests/host/win32/registry_identity_fixture.c']  # sec-user-05
         subprocess.run(['clang','-std=c17','-DW32_HOST_MODEL','-DMSPACK_NO_DEFAULT_SYSTEM','-O1','-g','-Wall','-Wextra','-Werror',
                         '-Wno-unused-parameter','-Wno-sign-compare','-fsanitize=address,undefined','-fno-sanitize-recover=all',
                         '-I'+str(ROOT/'sdk/win32/include'),'-I'+str(ROOT/'sdk/win32/lz32/mspack'),
+                        '-I'+str(ROOT/'src/kernel/include'),
                         *map(str,sources),'-o',str(cls.program)],check=True,env=cls.env)
         cls.store=facades.build(cls.out/'builtin')
         cls.image=cls.out/'builtin/version.dll'
@@ -63,7 +66,8 @@ class RegistryTests(unittest.TestCase):
     def test_connection_lifetime_client_announcement(self):
         binary=self.out/'service-transport'
         sources=['sdk/win32/ntdll/server.c','sdk/win32/services/bytes.c',
-                 'tests/host/win32/service_transport_test.c']
+                 'tests/host/win32/service_transport_test.c','apps/registry/broker.c',
+                 'sdk/libreg/registry.c','sdk/libreg/storage.c','sdk/libreg/transport.c']
         sources+=['apps/w32srv/'+n+'.c' for n in ('registry','storage','defaults','directory','protocol','posix_io')]
         subprocess.run(['clang','-std=c17','-D_POSIX_C_SOURCE=200809L','-DW32_HOST_MODEL',
                         '-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
@@ -87,6 +91,7 @@ class RegistryTests(unittest.TestCase):
     def test_szdd_and_all_kwaj_methods(self):self.execute('lz',self.out)
     def test_f5_20a_upper_registry_and_security(self):self.execute('upper')
     def test_f5_20b_nt_delete_key_by_handle(self):self.execute('handle-delete')
+    def test_xp_maximum_allowed_for_standard_users(self):self.execute('xp-access')  # sec-user-05
 
     def test_f5_20a_decided_exports_in_facades(self):
         coverage=json.loads((self.out/'builtin/upper-coverage.json').read_text())

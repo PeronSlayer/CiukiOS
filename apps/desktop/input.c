@@ -1,6 +1,7 @@
 #include "input_text.h"
 /* SPDX-License-Identifier: MIT */
 #include "desktop.h"
+#include "diag_record.h"
 #include <string.h>
 #include <errno.h>
 #include <stdio.h>
@@ -101,6 +102,48 @@ int desk_next_window(const struct desktop *d, int excluded, uint32_t pid, const 
     }
     return next;
 }
+/* fx-accept: which window holds the keyboard focus, once per change, also in
+ * quiet boots. The acceptance suite presses an installer's wizard keys only
+ * while one of its untitled pages has the focus (Installer VISE creates its
+ * pages without a title, its progress window and message boxes with one) and
+ * closes the Files windows an installer opens over its last page. index -1
+ * is the desktop (or the taskbar) itself. */
+static void focus_record(const struct desktop *d, int i)
+{
+    char line[160], app[25];
+    const struct desk_client *c = i >= 0 && i < DESK_CLIENTS ? &d->clients[i] : NULL;
+    desk_diag_token(app, sizeof(app), c ? (c->application[0] ? c->application : c->title) : "desktop");
+    int n = snprintf(line, sizeof(line), "[desktop] focus pid=%u window=%u titled=%u internal=%d app=%s",
+                     c ? (unsigned)c->pid : 0u, c ? (unsigned)c->window_id : 0u, c && c->title[0] ? 1u : 0u,
+                     c ? c->internal : -1, app);
+    if (n > 0 && (size_t)n < sizeof(line)) desk_diag_record(line, n);
+}
+/* fx-acc1: a program window's title and visibility, once per change, also
+ * in quiet boots. Installer VISE creates each wizard page hidden and
+ * untitled, names it in WM_INITDIALOG and shows it afterwards, so no focus
+ * record carried the page's name (acceptance run c634b7c6: "focus ...
+ * window=4 titled=0 app=-" was the Welcome page). The acceptance suite
+ * drives an installer page by page from these records. */
+const char *desk_window_state(const struct desktop *d, int i)
+{
+    int m=d->clients[i].minimized;
+    return m==2 ? "hidden" : m ? "minimized" : "shown";
+}
+void desk_window_record(const struct desktop *d, int i, const char *state)
+{
+    if (i<0 || i>=DESK_CLIENTS) return;
+    const struct desk_client *c=&d->clients[i];
+    if (!c->window || c->internal || c->version!=DESK_V3_VERSION) return;
+    /* Untitled modeless popups (tooltips, drop-down lists) show and hide on
+     * every hover: never recorded. */
+    if (!(c->v3_style & DESK_V3_MODAL) && !c->title[0] && (c->v3_style & 3u) == DESK_V3_POPUP) return;
+    char line[200], title[48];
+    desk_diag_token(title, sizeof(title), c->title);
+    int n = snprintf(line, sizeof(line), "[desktop] window pid=%u window=%u owner=%u modal=%u state=%s title=%s",
+                     (unsigned)c->pid, (unsigned)c->window_id, (unsigned)c->owner_id,
+                     (c->v3_style & DESK_V3_MODAL) ? 1u : 0u, state, title);
+    if (n > 0 && (size_t)n < sizeof(line)) desk_diag_record(line, n);
+}
 void desk_focus(struct desktop *d, int i)
 {
     i=desk_modal_target(d,i);
@@ -112,7 +155,25 @@ void desk_focus(struct desktop *d, int i)
     }
     if (i == d->focus) return;
     if (i >= 0 && d->shell && d->sh.taskbar_key) desk_shell_taskbar_leave(d);   /* a window took the focus from the taskbar */
-    if (d->v3_lease_state) desk_v3_revoke(d);
+    if (d->v3_lease_state) {
+        /* CDS can precede the drawable. Consume exactly one handoff from its
+         * marked carrier to a mode-sized popup, never to a composed dialog.
+         * After a frame the kernel watchdog no longer protects an invisible
+         * dialog, even when that dialog belongs to the lease's own process. */
+        int handoff=0;
+        if (d->v3_lease_state==1 && d->v3_lease_carrier==d->v3_lease_window &&
+            d->v3_lease_carrier && d->focus>=0 &&
+            d->clients[d->focus].window_id==d->v3_lease_carrier && i>=0) {
+            const struct desk_client *c=&d->clients[i];
+            struct desk_box b=desk_content(c);
+            handoff=c->pid==d->v3_lease_pid && c->version==DESK_V3_VERSION &&
+                (c->v3_style&(3u|DESK_V3_MODAL))==DESK_V3_POPUP && !c->owner_id &&
+                c->v3_scale && (uint32_t)b.w/c->v3_scale==d->v3_lease_w &&
+                (uint32_t)b.h/c->v3_scale==d->v3_lease_h;
+        }
+        if (handoff) d->v3_lease_carrier=0;
+        else desk_v3_revoke(d);
+    }
     desk_v3_pointer_release(d);
     struct ciuki_input_event e = { .monotonic_ns = d->now_ns };
     release(d, &e);
@@ -130,6 +191,7 @@ void desk_focus(struct desktop *d, int i)
         focus_damage(d,d->focus);
     }
     d->focus = i;
+    focus_record(d, i);
     /* Publish the new lease generation before activation can dispatch a
      * WM_ACTIVATEAPP handler that immediately calls DirectDraw Restore. */
     desk_v3_reactivate(d,i);
@@ -205,14 +267,7 @@ void desk_cursor_update(struct desktop *d)
             }
         }
         if (shape==DESK_CURSOR_ARROW && !edges && d->shell) shape=desk_shell_cursor(d);
-        if (shape==DESK_CURSOR_ARROW && !edges) for (int k=0;k<DESK_CLIENTS;k++) {
-            const struct desk_client *c=&d->clients[k];
-            /* AppStarting: from the click while the process is created (fx-8), then
-             * until its first frame or 5 s after the process exists. */
-            if (c->spawn_pending || (c->awaiting_frame && d->now_ns>=c->launched_ns && d->now_ns-c->launched_ns<5000000000ull)) {
-                shape=DESK_CURSOR_ARROW_BUSY; break;
-            }
-        }
+
     }
     if (edges) {
         unsigned horizontal=edges&(DESK_EDGE_LEFT|DESK_EDGE_RIGHT), vertical=edges&(DESK_EDGE_TOP|DESK_EDGE_BOTTOM);
@@ -230,6 +285,21 @@ void desk_cursor_update(struct desktop *d)
             d->v3_cursor_id=vc->v3_cursor; d->v3_cursor_slot=(unsigned)vi;
             d->v3_cursor_hidden=vc->v3_visibility<0 || (vc->v3_pointer&DESK_V3_HIDDEN);
         }
+    }
+    /* Startup feedback decorates only the system's default arrow. Client
+     * shapes and visibility, interactive operations and full-screen ownership
+     * retain precedence. Requests time out even during a slow spawn. */
+    int starting=(d->launch_link_until>d->now_ns || d->launch_run_until>d->now_ns ||
+        (d->launch_remote_count && d->launch_remote_until>d->now_ns));
+    for (int k=0;!starting && k<DESK_CLIENTS;k++) {
+        const struct desk_client *c=&d->clients[k];
+        if (c->channel>=0 && !c->launch_feedback_remote &&
+            (c->spawn_pending || c->awaiting_frame || c->launch_frame_pending) &&
+            d->now_ns>=c->launched_ns && d->now_ns-c->launched_ns<5000000000ull) starting=1;
+    }
+    if (starting && shape==DESK_CURSOR_ARROW && !d->v3_cursor_id && !d->v3_cursor_hidden &&
+        !d->v3_lease_state && !d->power.state && !d->sh.user_gate && d->drag<0 && !d->sh.dnd.active) {
+        shape=DESK_CURSOR_ARROW_BUSY;
     }
     if (old_custom!=d->v3_cursor_id || old_slot!=d->v3_cursor_slot || old_hidden!=d->v3_cursor_hidden) {
         trail_damage(d);d->pointer_trail_count=0;d->cursor_dirty=1;
@@ -344,6 +414,7 @@ static void input(struct desktop *d, const struct ciuki_input_event *in)
         break;
     }
     case CIUKI_INPUT_RESYNC:
+        d->logon_query = 1;   /* sec-user-03: activation after the secure console; ask LOGON */
         if (desk_access_resync) desk_access_resync(d);
         desk_v3_pointer_release(d);
         /* The input stream was cut: keys are released below, and the screen may

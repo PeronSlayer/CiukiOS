@@ -69,8 +69,10 @@ struct u32_window {
   UINT dcs;
   int pixel_format;
   struct dd_lease lease;
+  HWND lease_carrier; /* borrowed grant: release the actual carrier synchronously */
   DWORD lease_w, lease_h, lease_bpp;
   BOOL lease_wanted;
+  BOOL lease_failed; /* permanent driver failure: GL uses composition */
   BOOL destroy_request; /* U32_DESTROY is honoured only when USER sent it */
   BOOL closing;         /* q3exec3: DESK_CLOSE sent; nothing else names the window */
   BOOL desktop_close;   /* G3: a desktop CLOSE_REQUEST posted WM_SYSCOMMAND SC_CLOSE (T23 c42f556e; it
@@ -83,6 +85,7 @@ struct u32_window {
   HANDLE menu, system_menu;
   BOOL unicode; /* f5-20B: the window procedure takes Unicode messages */
   HANDLE rgn;   /* f5-20B: SetWindowRgn region, owned by USER (window coordinates) */
+  HICON icon_big, icon_small; /* fx-exeicons: WM_SETICON */
   struct u32_scroll_state {
     int minimum, maximum, position, track;
     UINT page, disabled;
@@ -180,6 +183,7 @@ LRESULT u32_invoke(HWND, UINT, WPARAM, LPARAM);
 LRESULT u32_hooks(int, int, WPARAM, LPARAM);
 BOOL u32_queue(DWORD, HWND, UINT, WPARAM, LPARAM, UINT, DWORD, POINT);
 BOOL u32_message(struct ciuki_w32_message_args *);
+BOOL u32_sent(void);
 void u32_pump(void);
 void u32_flush(void);
 BOOL u32_connect(void);
@@ -189,6 +193,7 @@ BOOL u32_input_setting(UINT, UINT, UINT);
 void u32_input_refresh(void);
 void u32_caret_preferences(void);
 BOOL u32_wire(struct u32_window *, UINT, const void *, UINT, int);
+BOOL u32_window_icon(struct u32_window *); /* fx-exeicons: DESK_V3_WINDOW_ICON */
 BOOL u32_create_wire(struct u32_window *);
 BOOL u32_place(struct u32_window *);
 BOOL u32_order_wire(struct u32_window *, HWND, HWND, UINT);

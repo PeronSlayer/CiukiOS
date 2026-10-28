@@ -108,6 +108,8 @@ def build(out=None):
     store['msvcrt_policy']='msvcrt.dll: Wine 10.0 PE selected by measurement (config/wine-upper.json, f5-14B); not staged until qualified'
     manifest=out/'builtin-store.json';manifest.write_text(json.dumps(store,sort_keys=True,indent=2)+'\n')
     stubs.verify_store(manifest)
+    from scripts.win32 import is5boot
+    is5boot.build(out)
     binary=struct.pack('<II',1,len(store['dlls']))
     for dll in store['dlls']:
         binary+=struct.pack('<64s65s3xII4H',dll['name'].encode(),dll['sha256'].encode(),dll['base'],dll['size'],*dll['version'])

@@ -133,6 +133,19 @@ static void test_audio_records(void)
     CHECK(v->audio.diag.count<=16 && v->audio.diag.used[DOSVM_AUDIO_RESET]==4);
     while(v->audio.diag.count) { ms(100); dosvm_audio_log(v); }
     while(v->audio.diag.state_count) { ms(100);dosvm_audio_log(v); }
+    /* fx-games20: timer/detection traffic is not music; musical activity is
+     * emitted once by the safe worker, never synchronously in a port trap. */
+    unsigned activity=vm_audio_logs;
+    opl_w(v,0x388,0,2,255);ms(100);dosvm_audio_log(v);
+    CHECK(vm_audio_logs==activity && !v->audio.diag.opl_activity);
+    opl_w(v,0x388,0,0xb0,0x20);CHECK(vm_audio_logs==activity);
+    ms(100);dosvm_audio_log(v);
+    CHECK(vm_audio_logs==activity+1 && strstr(last_vm_audio_log,"opl_writes=") && strstr(last_vm_audio_log,"key_writes=1"));
+    a_out(v,0x331,0x3f);a_out(v,0x330,0x90);a_out(v,0x330,60);a_out(v,0x330,100);
+    CHECK(vm_audio_logs==activity+1);
+    ms(100);dosvm_audio_log(v);
+    CHECK(vm_audio_logs==activity+2 && strstr(last_vm_audio_log,"midi_bytes=3 note_ons=1"));
+    ms(100);dosvm_audio_log(v);CHECK(vm_audio_logs==activity+2);
     unsigned quiet=vm_audio_logs;
     ms(2000);dosvm_audio_log(v);CHECK(vm_audio_logs==quiet);
     g_boot.flags|=CBI_F_DIAG_VERBOSE;

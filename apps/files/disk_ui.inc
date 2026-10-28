@@ -268,7 +268,7 @@ int files_backup_open(struct files_app *a,const char *source,const char *archive
     int e=pthread_mutex_init(&w->lock,NULL); if (e) { free(w); return -e; }
     a->disk=w; w->app=a; w->backup_call=a->backup_call; w->backup_mode=mode; w->replace=BK_OLDER;
     snprintf(w->archive,sizeof(w->archive),"%s",archive ? archive : "/Documents/Backup.cbk");
-    snprintf(w->backup_source,sizeof(w->backup_source),"%s",source ? source : "/Documents");
+    snprintf(w->backup_source,sizeof(w->backup_source),"%s",source ? source : profile_home());
     static const struct du_item pages[]={{.text={"Job"}},{.text={"Files"}},{.text={"Restore"}}};
     du_property_sheet(a->ui,D_BACKUP,"Backup",510,350,pages,3);
     struct du_dialog *d=&a->ui->dialog; d->accept=disk_backup_accept; d->accept_ctx=a;

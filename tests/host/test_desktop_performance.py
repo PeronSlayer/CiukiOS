@@ -28,9 +28,18 @@ class DesktopPerformanceTests(unittest.TestCase):
         self.run_model("performance", ["tests/host/desktop/performance_test.c", "tests/host/desktop/fake.c",
                        *(f"apps/desktop/{p}.c" for p in ("client", "protocol", "input", "compositor", "theme", "shell", "autoplay", "autoplay_content", "settings", "power_policy", "wallpaper", "keymap", "folder")),
                        "apps/files/model.c", "apps/files/transfer.c",
-                       *(f"apps/libdeskui/{p}.c" for p in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map"))],
+                       *(f"apps/libdeskui/{p}.c" for p in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map", "iconx", "fileicon"))],
                        ["apps/desktop", "tests/host/desktop", "src/kernel/include"],
                        ["-DF125_WRAP_ALLOC", "-Wl,--wrap=malloc"])
 
     def test_settings_worker(self):
-        self.run_model("settings", ["tests/host/desktop/settings_io_test.c", "apps/desktop/settings_io.c"], ["apps/desktop"], ["-Wl,--wrap=rename"])
+        self.run_model("settings", ["tests/host/desktop/settings_io_test.c", "apps/desktop/settings_io.c"], ["apps/desktop"],
+                       ["-Wl,--wrap=rename,--wrap=fopen,--wrap=fread,--wrap=ferror,--wrap=fclose"])
+
+    def test_dos_window_replay(self):
+        self.run_model("dos-window", ["tests/host/desktop/dos_window_replay.c", "tests/host/desktop/fake.c",
+                       *(f"apps/desktop/{p}.c" for p in ("client", "protocol", "input", "compositor", "theme", "shell", "autoplay", "autoplay_content", "settings", "power_policy", "wallpaper", "keymap", "folder")),
+                       "apps/files/model.c", "apps/files/transfer.c",
+                       *(f"apps/libdeskui/{p}.c" for p in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map", "iconx", "fileicon"))],
+                       ["apps/desktop", "tests/host/desktop", "src/kernel/include"],
+                       ["-D_POSIX_C_SOURCE=200809L", "-include", str(ROOT / "tests/host/desktop/replay_base.h")])

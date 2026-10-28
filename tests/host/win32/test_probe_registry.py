@@ -23,6 +23,9 @@ UNREGISTERED = {}
 # Empty this tuple when the patch is applied: the test then requires equality.
 MENU_PENDING = ()  # the ten f5-15C title probes joined the loader table on 2026-10-21 (after f0-54)
 F5_SUITES = ('f5-core.json', 'f5-installers.json', 'f5-titles.json')
+# Interactive reproductions emit READY and leave the desktop to a person; with
+# no terminal record they cannot be suite cases, so their host tests stand in.
+INTERACTIVE = {'q3-lease-eio': 'tests/host/q3_lease_probe_test.c'}  # fx-q3hang
 
 
 def selector_names():
@@ -82,7 +85,10 @@ class ProbeRegistryTests(unittest.TestCase):
         for name in selector_names():
             if name == 'f5-core':
                 continue
-            self.assertIn(name, probes, name)
+            if name in INTERACTIVE:
+                self.assertTrue((ROOT / INTERACTIVE[name]).is_file(), name)
+            else:
+                self.assertIn(name, probes, name)
             self.assertIn(f'CIUKI_F5_PROBE("{name}"', sources, name)
 
     def test_upper_dlls_case_selector_is_accepted_by_the_model(self):

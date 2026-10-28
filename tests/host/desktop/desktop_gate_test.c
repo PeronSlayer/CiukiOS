@@ -59,6 +59,9 @@ int master_preference_save(const char *directory, unsigned left, unsigned right,
 { (void)directory; (void)left; (void)right; (void)mute; return 0; }
 int line_preference_save(const char *directory, const struct ciuki_mixer_line *line)
 { (void)directory; (void)line; return 0; }
+/* sec-user-05: the gate has no profile session, so no saved session levels. */
+int mixer_preferences_restore(int fd, int (*apply)(int, unsigned, void *, size_t))
+{ (void)fd; (void)apply; return 0; }
 
 #undef main
 #undef mmap

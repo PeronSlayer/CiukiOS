@@ -24,13 +24,13 @@ class G27BTests(unittest.TestCase):
                    'autoplay_registry', 'settings', 'power_policy', 'wallpaper',
                    'keymap', 'folder', 'recovery_view']
         toolkit = ['draw', 'widgets', 'list', 'menu', 'dialog', 'controls',
-                   'commdlg', 'textarea', 'icons', 'icon_map']
+                   'commdlg', 'textarea', 'icons', 'icon_map', 'iconx', 'fileicon']
         sources = [*(f'apps/desktop/{n}.c' for n in desktop),
                    *(f'apps/libdeskui/{n}.c' for n in toolkit),
                    'apps/files/model.c', 'apps/files/transfer.c',
                    'apps/accessories/mixer_view.c', 'tests/host/desktop/fake.c',
                    'src/kernel/drivers/video/swdib.c', 'src/kernel/drivers/video/batch.c',
-                   'sdk/libreg/registry.c', 'sdk/libreg/storage.c', 'sdk/libreg/hardware.c',
+                   'sdk/libreg/registry.c', 'sdk/libreg/storage.c', 'sdk/libreg/hardware.c','sdk/libreg/transport.c',
                    'tests/host/desktop/g27b_window_test.c']
         self.run_case('g27b-window', sources,
                       ['-include', str(ROOT/'tests/host/desktop/replay_base.h'),

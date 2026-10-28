@@ -62,7 +62,7 @@ static void run_case(void)
 }
 static void base_request(unsigned size)
 {
-    request=(struct render3d_request){.flags=R3D_ALL_FEATURES,.count=3,.clear_color=0x80604020,.clear_depth=65535};
+    request=(struct render3d_request){.flags=VMSVGA3D_FEATURES,.count=3,.clear_color=0x80604020,.clear_depth=65535};
     for (unsigned i=0;i<3;i++) {
         request.vertices[i]=(struct render3d_vertex){i==1 ? (int32_t)size<<16 : 0,i==2 ? (int32_t)size<<16 : 0,
             16384,65536,0xc0806040,i==1 ? 65536 : 0,i==2 ? 65536 : 0};
@@ -131,14 +131,14 @@ static void differential(enum svga_host host_kind)
     request.state.alpha_test=0;
     /* Equal-depth redraws separate LESS/LEQUAL/EQUAL/GEQUAL exactly. */
     for (unsigned depth=0;depth<8;depth++) {
-        request.flags=R3D_ALL_FEATURES; request.state.depth_func=R3D_LESS; run_case();
+        request.flags=VMSVGA3D_FEATURES; request.state.depth_func=R3D_LESS; run_case();
         request.flags=R3D_TEXTURED|R3D_TEXTURE1|R3D_DEPTH_TEST|R3D_DEPTH_WRITE|R3D_COPY;
         request.state.depth_func=depth;
         for (unsigned i=0;i<3;i++) request.vertices[i].color=0xff2040ffu;
         run_case();
         for (unsigned i=0;i<3;i++) request.vertices[i].color=0xc0806040;
     }
-    request.flags=R3D_ALL_FEATURES; request.state.depth_func=R3D_LESS;
+    request.flags=VMSVGA3D_FEATURES; request.state.depth_func=R3D_LESS;
     for (unsigned src=0;src<10;src++) for (unsigned dst=0;dst<10;dst++) {
         request.state.blend=1; request.state.source=src; request.state.destination=dst;
         if (!render3d_validate_state(&request)) run_case();
@@ -146,9 +146,9 @@ static void differential(enum svga_host host_kind)
     request.state.blend=0; request.state.flat=1; request.flat_color[0]=0xff80a0c0; run_case();
     request.state.flat=0;
     /* Write-only depth (ZFUNC ALWAYS) and test-only depth. */
-    request.flags=R3D_ALL_FEATURES&~R3D_DEPTH_TEST; run_case();
-    request.flags=R3D_ALL_FEATURES&~R3D_DEPTH_WRITE; run_case();
-    request.flags=R3D_ALL_FEATURES;
+    request.flags=VMSVGA3D_FEATURES&~R3D_DEPTH_TEST; run_case();
+    request.flags=VMSVGA3D_FEATURES&~R3D_DEPTH_WRITE; run_case();
+    request.flags=VMSVGA3D_FEATURES;
     for (unsigned i=0;i<3;i++) { request.vertices[i].rhw=32768u<<i; request.vertices[i].color=0xc0806040; }
     run_case();
     /* Varying W with non-uniform colour stays in software (affine colour contract). */
@@ -299,6 +299,26 @@ static void hosts(void)
     puts("PASS SVGA3D host gates: QEMU (no SVGA_CAP_3D), hardware version, caps record bounds, devcap limits, FIFO fence/registers refuse with zero writes; VirtualBox GL devcaps parsed, real 2D caps refuse legacy FILL");
 }
 static unsigned random_word(unsigned *s) { *s=*s*1664525u+1013904223u; return *s; }
+static void unsupported_features(void)
+{
+    svga_model_init(64,64,SVGA_HOST_VMWARE);
+    admit(VMSVGA3D_COMBINE_REPLACE0);
+    svga_model_resources(&hardware,64,64,true,true);
+    struct render3d_resource *r[R3D_REFS]; resources(&hardware,r);
+    const struct render3d_backend *b=vmsvga3d_backend();
+    struct ciuki_r3d_caps caps; b->query_caps(&M.device,&caps);
+    CHECK(b->features==VMSVGA3D_FEATURES && caps.features==VMSVGA3D_FEATURES);
+    const unsigned stencil[]={R3D_STENCIL_TEST,R3D_CLEAR_STENCIL,R3D_STENCIL_TEST|R3D_CLEAR_STENCIL};
+    for (unsigned i=0;i<3;i++) {
+        base_request(64); request.flags|=stencil[i];
+        uint64_t fifo=M.fifo_writes;
+        CHECK(b->validate(&M.device,&request,r)==-EOPNOTSUPP);
+        CHECK(b->execute(&M.device,&request,r)==-EOPNOTSUPP);
+        CHECK(fifo==M.fifo_writes && !svga_model_live());
+    }
+    CHECK(!render3d_close(&hardware)); svga_model_destroy();
+    puts("PASS SVGA3D unsupported stencil: test, clear and combined refuse with zero FIFO writes; no stencil capability");
+}
 static void fuzz(void)
 {
     svga_model_init(64,64,SVGA_HOST_VMWARE);
@@ -497,6 +517,7 @@ int main(int argc,char **argv)
     }
     else if (!strcmp(mode,"budget")) budget();
     else if (!strcmp(mode,"fuzz")) fuzz();
+    else if (!strcmp(mode,"unsupported")) unsupported_features();
     else if (!strcmp(mode,"service")) service();
     else if (!strcmp(mode,"eviction")) eviction();
     else if (!strcmp(mode,"hosts")) hosts();

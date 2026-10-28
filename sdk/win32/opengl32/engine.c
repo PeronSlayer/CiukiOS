@@ -95,7 +95,10 @@ void gl_triangle(GLContext *tiny, GLVertex *a, GLVertex *b, GLVertex *d) {
   extern void gl_host_draw(const struct sw_state *,const struct sw_vertex *,int) __attribute__((weak));
   if (gl_host_draw) gl_host_draw(&c->sw,v,hardware);
 #endif
-  if (!hardware) sw_triangle(&c->sw, v, v + 1, v + 2);
+  if (!hardware) {
+    sw_triangle(&c->sw, v, v + 1, v + 2);
+    c->software_draws++; c->frame_software_draws++;
+  }
   c->sw.offset = 0;
 }
 void gl_compat_line(GLContext *tiny, GLVertex *a, GLVertex *b) {
@@ -921,7 +924,7 @@ union gl_arg w32_gl_dispatch(unsigned id, const union gl_arg *a) {
     return result;
   case ID_glFlush:
   case ID_glFinish:
-    if (id == ID_glFinish) gl_hw_sync(c);
+    if (id == ID_glFinish) gl_hw_finish(c);
     else gl_hw_flush(c);
     if ((c->draw_buffer == GL_FRONT || c->draw_buffer == GL_FRONT_LEFT || c->draw_buffer == GL_FRONT_AND_BACK) && !gl_present(c, 1))
       gl_error(c, GL_INVALID_OPERATION);
@@ -1380,6 +1383,7 @@ union gl_arg w32_gl_dispatch(unsigned id, const union gl_arg *a) {
     unsigned color = sw_color_format(&c->sw, rgba(c->clear));
     int z = (int)(c->clear_depth * (c->depth_bits == 24 ? 16777215 : 65535));
     if (gl_hw_clear(c, (unsigned)I(0), color, (unsigned)z)) break;
+    c->software_draws++; c->frame_software_draws++;
     for (unsigned y = 0; y < c->sw.height; y++)
       for (unsigned x = 0; x < c->sw.width; x++) {
         if (c->sw.scissor && ((int)x < c->sw.box[0] || (int)y < c->sw.box[1] ||

@@ -13,6 +13,28 @@ static uint64_t bench_ns(void)
     return (uint64_t)t.tv_sec * 1000000000u + (uint64_t)t.tv_nsec;
 }
 static unsigned bench_rows;
+static void bench_war2_palette(void)
+{
+    struct dosvm *v=fx27_vm(true);
+    const uint8_t code[]={0x66,0xBA,0xC8,0x03,0xEE,0x66,0x42,
+        0xEB,0,0x8A,3,0x43,0xEE,0x49,0x75,0xF7,0x90};
+    uint8_t palette[768];
+    for (unsigned i=0;i<sizeof(palette);i++)palette[i]=(uint8_t)(i*7+3);
+    CHECK(!dosvm_write(v,0x32000,code,sizeof(code)));
+    CHECK(!dosvm_write(v,0x50000,palette,sizeof(palette)));
+    const unsigned loads=300;
+    uint64_t elapsed=0;unsigned exits=0;
+    for (unsigned i=0;i<loads;i++) {
+        cur.tf.eip=0x32000;cur.tf.eax=0;cur.tf.ebx=0x50000;cur.tf.ecx=768;
+        uint64_t start=bench_ns();
+        exits+=fx27_run(v,0x32010,100000,false);
+        elapsed+=bench_ns()-start;
+        CHECK(v->vga.dac[255][2]==(palette[767]&63));
+    }
+    printf("replay=war2-palette loads=%u exits_per_load=%.2f host_us_per_load=%.3f\n",
+        loads,(double)exits/loads,(double)elapsed/loads/1000);
+    destroy(v,true);empty();
+}
 static int bench_row(void *arg, unsigned y, const void *pixels, unsigned bytes)
 {
     bench_rows++;
@@ -169,6 +191,7 @@ static void bench_replay(const char *name, unsigned wolf_width)
     static uint8_t ref[4][16384];
     const unsigned frames = 120;
     uint64_t present = 0, replay = 0, harvest = v->perf.harvest_cycles;
+    uint64_t fault_cycles=v->perf.cost_cycles[DOSVM_COST_VGA_PF];
     uint64_t remap = v->perf.remap_cycles, ports = v->perf.port_cycles[DOSVM_VGA_SR_MASK];
     unsigned port_writes = v->perf.port_count[DOSVM_VGA_SR_MASK], swaps = v->perf.port_remaps;
     unsigned maps = v->video_maps, faults = v->video_faults, harvests = v->perf.harvests,
@@ -222,11 +245,12 @@ static void bench_replay(const char *name, unsigned wolf_width)
         }
     }
     printf("replay=%s frames=%u planes_per_frame=%.2f faults_per_frame=%.2f harvests_per_frame=%.2f "
-           "dirty_pages_per_frame=%.2f harvest_us_per_frame=%.3f present_us_per_frame=%.3f replay_us_per_frame=%.3f\n",
+           "dirty_pages_per_frame=%.2f harvest_us_per_frame=%.3f present_us_per_frame=%.3f replay_us_per_frame=%.3f fault_us_per_frame=%.3f\n",
            name, frames, (double)(v->video_maps - maps) / frames, (double)(v->video_faults - faults) / frames,
            (double)(v->perf.harvests - harvests) / frames, (double)(v->perf.direct_pages - pages) / frames,
            (double)(v->perf.harvest_cycles - harvest) / frames / 1000,
-           (double)present / frames / 1000, (double)replay / frames / 1000);
+           (double)present / frames / 1000, (double)replay / frames / 1000,
+           (double)(v->perf.cost_cycles[DOSVM_COST_VGA_PF]-fault_cycles)/frames/1000);
     unsigned writes = v->perf.port_count[DOSVM_VGA_SR_MASK] - port_writes;
     unsigned remaps = v->perf.port_remaps - swaps;
     printf("ports=%s map_mask_writes_per_frame=%.2f handler_ns_per_write=%.3f remap_ns_per_swap=%.3f projected_ports_percent_at_35fps=%.3f\n",
@@ -312,6 +336,7 @@ static void bench_planar_rows(void)
 int main(void)
 {
     ram = calloc(HOST_PAGES, PAGE_SIZE); CHECK(ram);
+    bench_war2_palette();
     if (getenv("CVGA_ROW_BENCH")) { bench_planar_rows(); free(ram); return 0; }
     bench_planar_rows();
     if (getenv("FX27_BENCH")) { bench_fx27(); free(ram); return 0; }

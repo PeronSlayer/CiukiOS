@@ -74,7 +74,9 @@ class IconStoreTests(unittest.TestCase):
         (ROOT / "build/host").mkdir(parents=True, exist_ok=True)
         cls.temp = tempfile.TemporaryDirectory(prefix="icons-", dir=ROOT / "build/host")
         cls.folder = Path(cls.temp.name)
-        cls.env = dict(os.environ, TMPDIR=cls.temp.name, ASAN_OPTIONS="detect_leaks=0")
+        cls.baseline = cls.folder / "tango.cis"
+        cls.baseline.write_bytes(cls.data)
+        cls.env = dict(os.environ, TMPDIR=cls.temp.name, ASAN_OPTIONS="detect_leaks=0", ICONS_STORE=str(cls.baseline))
         cls.binary = cls.folder / "icons_test"
         subprocess.run([*FLAGS, "-I", str(ROOT / "apps/libdeskui"), "-I", str(ROOT / "src/kernel/include"),
                         *cls.assets.defines(), str(ROOT / "tests/host/desktop/icons_test.c"),
@@ -106,7 +108,7 @@ class IconStoreTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(self.icons.ARCHIVE.read_bytes()).hexdigest(), self.icons.ARCHIVE_SHA)
         self.assertEqual(len(self.record["members"]), 645)            # every PNG of 16x16, 22x22 and 32x32
         self.assertEqual((self.record["names"], self.record["images"]), (246, 984))
-        self.assertEqual(hashlib.sha256(self.assets.store().read_bytes()).hexdigest(), STORE_SHA256)
+        self.assertEqual(hashlib.sha256(self.baseline.read_bytes()).hexdigest(), STORE_SHA256)
         print(f"PASS store: {len(self.data)} bytes, sha256 {STORE_SHA256[:16]}..., {self.record['names']} names, "
               f"{self.record['images']} images ({self.record['qoi_images']} QOI, {self.record['scaled_images']} scaled)")
 
@@ -178,12 +180,12 @@ class IconStoreTests(unittest.TestCase):
         print("PASS C reader: 246 names x 4 sizes equal the pinned decoded stream; ciuki = approved portrait, area filter")
 
     def test_every_mapping_resolves_at_four_sizes(self):
-        lines = [l.split() for l in self.harness("map").splitlines()]
+        lines = [l.split() for l in self.harness("map", env={"ICONS_STORE": str(self.assets.store())}).splitlines()]
         table = {l[0]: l[1] for l in lines}
         self.assertEqual(len(table), len(lines), "duplicate icon_map.c objects")
         bad = [l for l in lines if l[2:] != ["16", "22", "32", "48"]]
         self.assertEqual(bad, [])
-        store = set(self.icons.parse_store(self.data)) - {""}
+        store = set(self.icons.parse_store(self.assets.store().read_bytes())) - {""}
         self.assertEqual({t for t in table.values() if t not in store}, {"ciuki"})
         for obj, tango in REQUIRED.items():
             self.assertIn(obj, table)
@@ -191,13 +193,15 @@ class IconStoreTests(unittest.TestCase):
                 self.assertEqual(table[obj], tango, obj)
         programs = set(re.findall(r'"/Programs/([A-Za-z0-9_.-]+)"', (ROOT / "scripts/build_image.py").read_text()))
         self.assertEqual({p for p in programs if f"program:{p}" not in table}, set())
-        # Owner report 2026-10-24: every program has its own icon, none falls back to the generic executable.
+        # Every known program has an explicit icon; no generic executable fallback.
+        # Related card games share the Tango games subject (fx-icons).
         owners = {}
         for obj, tango in table.items():
             if obj.startswith("program:") and obj != "program:*":
                 self.assertNotEqual(tango, table["type:executable"], obj)
                 owners.setdefault(tango, []).append(obj)
-        self.assertEqual({t: o for t, o in owners.items() if len(o) > 1}, {})
+        self.assertEqual({t: o for t, o in owners.items() if len(o) > 1},
+                         {"applications-games": ["program:solitaire", "program:freecell"]})
         for obj, tango in table.items():
             if tango == "ciuki":
                 self.assertTrue(obj.endswith((":computer", ":about", ":start")), obj)
@@ -207,7 +211,7 @@ class IconStoreTests(unittest.TestCase):
         """One icon per object (owner feedback 2026-10-12: the icon set must not change from screen to screen): the
         shell's program table, Start menu rows, desktop icons and games use the Tango names of icon_map.c, which
         Files (/Programs) and Task Manager use for the same programs."""
-        table = {l.split()[0]: l.split()[1] for l in self.harness("map").splitlines()}
+        table = {l.split()[0]: l.split()[1] for l in self.harness("map", env={"ICONS_STORE": str(self.assets.store())}).splitlines()}
         shell = (ROOT / "apps/desktop/shell.c").read_text()
         catalog = (ROOT / "apps/desktop/catalog.h").read_text()
         programs = re.findall(r'\{"(\w+)", "[^"]+", "([a-z-]+)", "(?:programs|accessories|developer|system-tools|games)", (?:NULL|"[^"]*")\}', shell)
@@ -225,12 +229,13 @@ class IconStoreTests(unittest.TestCase):
             self.assertEqual(rows_by_name[name], (name, label, tango, "programs"), name)
             self.assertEqual(table[f"program:{name}"], tango, name)
         games = re.findall(r'\{"[^"]+", "[^"]+", "[^"]+", "([a-z-]+)"\}', catalog)
-        self.assertEqual(len(games), 4)  # Wolfenstein 3D, DOOM, Quake and the Warcraft II demo
+        self.assertEqual(len(games), 5)  # Four existing demos plus Duke Nukem 3D
         self.assertEqual(set(games), {table["menu:game"]})
         rows = dict(re.findall(r'item\(m,\s*"([^"]+)",\s*"([a-z-]+)"', shell))
         settings=(ROOT / "apps/desktop/settings_catalog.h").read_text()
         applets=re.findall(r'\{CP_\w+, CP_CAT_\w+, "[^"]+", "([^"]+)", "([a-z-]+)"\}',settings)
-        self.assertEqual(len(applets),19)  # Display, Taskbar, Sounds, Multimedia, Keyboard, Mouse, Game controllers, Accessibility, Date/Time, Regional, Internet, Network, Power, Storage, Add Hardware, Add/Remove Programs, Users, Passwords, System
+        # sec-user-04: Users and Passwords merged into User Accounts (contract 7.1; "passwords" is a launch alias).
+        self.assertEqual(len(applets),18)  # Display, Taskbar, Sounds, Multimedia, Keyboard, Mouse, Game controllers, Accessibility, Date/Time, Regional, Internet, Network, Power, Storage, Add Hardware, Add/Remove Programs, User Accounts, System
         rows.update(applets)
         objects = {"Programs": "menu:programs", "Documents": "menu:documents", "Settings": "menu:settings", "Help": "menu:help",
                    "Run...": "menu:run", "Shut Down...": "menu:shutdown", "Control Panel": "menu:control-panel", "My Documents": "place:home",
@@ -368,7 +373,7 @@ class IconStoreTests(unittest.TestCase):
         print("PASS licence: COPYING (Public Domain) and AUTHORS kept, notice in the store and shipped as /system/icons/TANGO.TXT")
 
     def test_contact_sheet(self):
-        lines = [l.split() for l in self.harness("map").splitlines()]
+        lines = [l.split() for l in self.harness("map", env={"ICONS_STORE": str(self.assets.store())}).splitlines()]
         cells, groups = [], {}
         for obj, tango, *_ in lines:
             if obj.startswith("type:."):
@@ -380,7 +385,7 @@ class IconStoreTests(unittest.TestCase):
         listing = self.folder / "sheet.txt"
         listing.write_text("".join(f"{label}\t{obj}\n" for label, obj in cells))
         ppm = self.folder / "contact-sheet-32.ppm"
-        stdout = self.harness("sheet", listing, ppm)
+        stdout = self.harness("sheet", listing, ppm, env={"ICONS_STORE": str(self.assets.store())})
         self.assertIn(f"SHEET cells={len(cells)} missing=0", stdout)
         target = ROOT / "build/host/icons/contact-sheet-32.png"
         write_png(ppm, target)

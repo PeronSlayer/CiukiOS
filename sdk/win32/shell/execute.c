@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: LGPL-2.1-or-later */
 #include <w32/shell.h>
 #include <w32/shims.h>
+#include <w32/user32.h>
 extern LONG W32API RegOpenKeyExA(DWORD,const char *,DWORD,DWORD,DWORD *);
 extern LONG W32API RegQueryValueExA(DWORD,const char *,DWORD *,DWORD *,void *,DWORD *);
 extern LONG W32API RegCloseKey(DWORD);
@@ -58,12 +59,85 @@ static DWORD command_for(const char *file,const char *verb,const char *parameter
   exe[n]=0;if(!n || (quote && *p!='"'))return 1155;
   return 0;
 }
+/* fx-q3vise: folders. On Windows 98 a directory is a Folder object whose
+ * "open" (also the default verb) and "explore" verbs show it in an Explorer
+ * window: class CabinetWClass, or ExploreWClass for "explore", titled with
+ * the folder's name (the default "Display the full path in title bar" is
+ * off); Explorer activates the window it already has for that folder.
+ * Microsoft Learn, ShellExecuteA: "To open a folder, use ... ShellExecute(
+ * handle, NULL, <fully_qualified_path_to_folder>, ...)" and "explore";
+ * class names: The Old New Thing, 2015-06-19 ("Why does the class name for
+ * Explorer change depending on whether you open it with /e?"), programs
+ * find Explorer's window with FindWindow on CabinetWClass. The Installer
+ * VISE engine (Quake III Arena demo) opens every Start-menu folder it filled
+ * and polls FindWindow("CabinetWClass", <path>) and (..., <name>) for five
+ * seconds without pumping messages; before this the open failed with
+ * ERROR_NO_ASSOCIATION and ten shortcuts cost fifty seconds of a
+ * not-responding installer. CiukiOS shows folders in Files: the desktop
+ * starts it on the folder (user32 CiukiShellOpenFolder). The shell keeps,
+ * per folder opened by this process, a hidden top-level window of the
+ * Explorer class with Explorer's title, so FindWindow and IsWindow answer
+ * as with Explorer's window; a second open of the same folder reuses it and
+ * starts nothing, as Explorer only activates its window. */
+#define FOLDER_WINDOWS 16
+static struct {HWND window;BOOL explore;char path[260];} folder_windows[FOLDER_WINDOWS];
+extern BOOL W32API CiukiShellOpenFolder(HWND,const char *);
+static LRESULT W32API folder_procedure(HWND h,UINT message,WPARAM wp,LPARAM lp){return DefWindowProcA(h,message,wp,lp);}
+/* The Files path of a Win32 drive path, as Files maps drives (C: is the
+ * root, another drive X: is /mnt/x): apps/files/model.c fm_posix_path. */
+static int folder_posix(const char *full,char *out,DWORD cap){
+  DWORD at=0;
+  char drive=full[0]>='a' && full[0]<='z'?(char)(full[0]-32):full[0];
+  if(drive<'A' || drive>'Z' || full[1]!=':' || full[2]!='\\')return 0;
+  if(drive!='C'){if(cap<8)return 0;w32_copy(out,"/mnt/",5);out[5]=(char)(drive+32);at=6;}
+  for(const char *p=full+2;*p;p++){
+    char c=*p=='\\'?'/':*p;
+    if(c=='/' && at && out[at-1]=='/')continue;
+    if(at+1>=cap)return 0;
+    out[at++]=c;
+  }
+  while(at>1 && out[at-1]=='/')at--;
+  out[at]=0;return at>1;
+}
+static DWORD open_folder(const char *file,BOOL explore){
+  char full[260],posix[260],title[260];
+  DWORD n=GetFullPathNameA(file,sizeof(full),full,0);
+  if(!n || n>=sizeof(full))return n?206:GetLastError();
+  while(n>3 && full[n-1]=='\\')full[--n]=0;
+  /* A drive root (My Computer's drive window) and UNC folders have no Files
+   * launch here: they keep the earlier refusal. */
+  if(n<=3 || !folder_posix(full,posix,sizeof(posix)))return 1155;
+  if(!shell_copy(title,sizeof(title),base(full)))return 206;
+  for(unsigned i=0;i<FOLDER_WINDOWS;i++)if(folder_windows[i].window && folder_windows[i].explore==explore &&
+      !w32_stricmp(folder_windows[i].path,full)){
+    if(IsWindow(folder_windows[i].window))return 0;
+    folder_windows[i].window=0;
+  }
+  const char *klass=explore?"ExploreWClass":"CabinetWClass";
+  WNDCLASSA cls={.lpfnWndProc=folder_procedure,.lpszClassName=klass};
+  RegisterClassA(&cls);   /* already registered by an earlier folder: the window creation decides */
+  HWND window=CreateWindowExA(0,klass,title,0x80000000u /* WS_POPUP, hidden */,0,0,1,1,0,0,0,0);
+  if(!window)return GetLastError()?GetLastError():8;
+  if(!CiukiShellOpenFolder(window,posix)){DWORD e=GetLastError();DestroyWindow(window);return e?e:1155;}
+  for(unsigned i=0;i<FOLDER_WINDOWS;i++)if(!folder_windows[i].window){
+    folder_windows[i].window=window;folder_windows[i].explore=explore;shell_copy(folder_windows[i].path,260,full);break;
+  }
+  return 0;
+}
 BOOL W32API ShellExecuteExA(SHELL_EXECUTE *a){
   if(!a || a->size!=sizeof(*a) || !a->file){SetLastError(87);return 0;}
   a->process=0;a->instance=0;
   const char *verb=a->verb && *a->verb?a->verb:"open";
   DWORD e=refused(a->file);
   if(!e && w32_stricmp(verb,"open") && w32_stricmp(verb,"explore") && w32_stricmp(verb,"print"))e=1155;
+  if(!e && w32_stricmp(verb,"print")){
+    DWORD attributes=GetFileAttributesA(a->file);
+    if(attributes!=0xffffffffu && (attributes&0x10)){
+      e=open_folder(a->file,!w32_stricmp(verb,"explore"));
+      if(!e){a->instance=(HANDLE)(uintptr_t)33;return 1;}
+      SetLastError(e);a->instance=(HANDLE)(uintptr_t)(e==2 || e==3?e:e==5?5:31);return 0;
+    }
+  }
   char exe[260];char *command=0;
   if(!e){command=shell_alloc(32768);if(!command)e=8;}
   if(!e)e=command_for(a->file,verb,a->parameters,exe,command);

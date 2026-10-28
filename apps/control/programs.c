@@ -18,7 +18,7 @@
 #endif
 #define WALK_DEPTH 16u
 #define WALK_ENTRIES 16384u
-static const char *const packages[]={"wolf3d-shareware","doom-shareware","quake-shareware","war2-demo"};
+static const char *const packages[]={"wolf3d-shareware","doom-shareware","quake-shareware","war2-demo","duke3d-shareware"};
 static int path(struct cp_program_store *s,const char *relative,char *out,size_t cap)
 {
     int n=snprintf(out,cap,"%s%s",s->root ? s->root : "",relative);
@@ -97,6 +97,30 @@ static int read_record(const char *file,struct desk_launch_record *out)
     int result=!bad && desk_link_decode(bytes,(unsigned)n,out) ? 0 : -EINVAL;
     free(bytes);return result;
 }
+/* A DOS Box record belongs to a game when one of its argument tokens names the
+ * game's executable inside the location (kept out of records()' recursive frame). */
+static __attribute__((noinline)) int dosbox_game(const struct desk_launch_record *r,const char *location)
+{
+    char launcher[260];
+    if(!normal(r->target,launcher) || strcasecmp(launcher,"/Programs/dosbox"))return 0;
+    /* Match a complete executable token, independently of optional
+     * switches, path separators, drive case and catalog spelling. */
+    const char *arg=r->arguments;
+    while(*arg){
+        while(*arg==' ' || *arg=='\t')arg++;
+        char token[260];unsigned n=0;int quoted=*arg=='"';if(quoted)arg++;
+        while(*arg && (quoted ? *arg!='"' : *arg!=' ' && *arg!='\t')){
+            if(n+1<sizeof(token))token[n++]=*arg;arg++;
+        }
+        if(quoted && *arg=='"')arg++;token[n]=0;
+        char executable[260];
+        if(normal(token,executable) && cp_program_contains(location,executable)){
+            const char *base=strrchr(executable,'/');
+            if(base && (!strcasecmp(base,"/DOOM.EXE") || !strcasecmp(base,"/WOLF3D.EXE") || !strcasecmp(base,"/QUAKE.EXE") || !strcasecmp(base,"/WAR2.BAT") || !strcasecmp(base,"/WAR2.EXE") || !strcasecmp(base,"/DUKE3D.BAT") || !strcasecmp(base,"/DUKE3D.EXE")))return 1;
+        }
+    }
+    return 0;
+}
 /* A .ciuki launch record uses the existing CIUKLNK3 encoding, avoiding another
  * executable/argument parser. Shell .lnk records are also recognized. */
 static int records(struct cp_program_store *s,const char *dir,const char *location,
@@ -124,25 +148,7 @@ static int records(struct cp_program_store *s,const char *dir,const char *locati
             if(read_error==-EINVAL)continue;
             if(read_error){error=read_error;break;}
             int belongs=cp_program_contains(location,r.target);
-            char launcher[260];
-            if(!belongs && normal(r.target,launcher) && !strcasecmp(launcher,"/Programs/dosbox")){
-                /* Match a complete executable token, independently of optional
-                 * switches, path separators, drive case and catalog spelling. */
-                const char *arg=r.arguments;
-                while(*arg){
-                    while(*arg==' ' || *arg=='\t')arg++;
-                    char token[260];unsigned n=0;int quoted=*arg=='"';if(quoted)arg++;
-                    while(*arg && (quoted ? *arg!='"' : *arg!=' ' && *arg!='\t')){
-                        if(n+1<sizeof(token))token[n++]=*arg;arg++;
-                    }
-                    if(quoted && *arg=='"')arg++;token[n]=0;
-                    char executable[260];
-                    if(normal(token,executable) && cp_program_contains(location,executable)){
-                        const char *base=strrchr(executable,'/');
-                        if(base && (!strcasecmp(base,"/DOOM.EXE") || !strcasecmp(base,"/WOLF3D.EXE") || !strcasecmp(base,"/QUAKE.EXE") || !strcasecmp(base,"/WAR2.BAT") || !strcasecmp(base,"/WAR2.EXE")))belongs=1;
-                    }
-                }
-            }
+            if(!belongs)belongs=dosbox_game(&r,location);
             if(!belongs)continue;
             if(found)*found=r;
             if(remove==1 && unlink(full)){error=-errno;break;}
@@ -153,10 +159,28 @@ static int records(struct cp_program_store *s,const char *dir,const char *locati
     if(closedir(d) && !error)error=-errno;
     return error ? error : matched;
 }
+/* sec-user-04: the shortcut folders of Windows XP's two scopes, machine
+ * (All Users) first, then the user's own Start Menu/Programs and Desktop
+ * (CSIDL_PROGRAMS, CSIDL_DESKTOPDIRECTORY). Returns the count. */
+#define SHORTCUT_ROOTS 7u
+static unsigned shortcut_roots(const struct cp_program_store *s,char storage[2][160],const char *roots[SHORTCUT_ROOTS])
+{
+    static const char *const machine[]={"/Windows/Start Menu/Programs","/Windows/Desktop","/Documents/Desktop","/Games","/Programs"};
+    unsigned n=0;
+    for(unsigned i=0;i<5;i++)roots[n++]=machine[i];
+    const char *profile=s->profile;
+    if(profile && !strncmp(profile,"/Windows/Profiles/",18) && profile[18] && !strstr(profile,"/..") && strlen(profile)<120){
+        snprintf(storage[0],160,"%s/Start Menu/Programs",profile);roots[n++]=storage[0];
+        snprintf(storage[1],160,"%s/Documents/Desktop",profile);roots[n++]=storage[1];
+    }
+    return n;
+}
 static int launch_record(struct cp_program_store *s,const char *location,struct desk_launch_record *r)
 {
-    const char *const roots[]={location,"/Games","/Programs","/Windows/Start Menu/Programs","/Windows/Desktop","/Documents/Desktop"};
-    for(unsigned i=0;i<sizeof(roots)/sizeof(*roots);i++){
+    char storage[2][160];const char *shortcuts[SHORTCUT_ROOTS];unsigned count=shortcut_roots(s,storage,shortcuts);
+    const char *roots[1+SHORTCUT_ROOTS]={location,"/Games","/Programs","/Windows/Start Menu/Programs","/Windows/Desktop","/Documents/Desktop"};
+    unsigned total=6;for(unsigned i=5;i<count;i++)roots[total++]=shortcuts[i];
+    for(unsigned i=0;i<total;i++){
         unsigned budget=WALK_ENTRIES;int n=records(s,roots[i],location,r,0,WALK_DEPTH,&budget);
         if(n>0)return 1;if(n<0 && n!=-ENOTDIR)return n;
     }
@@ -205,6 +229,92 @@ static __attribute__((noinline)) void uninstall_location(struct desk_uninstall_e
     if(system_path(directory) || !strcasecmp(directory,"/Programs") || !strcasecmp(directory,"/Games") || !strcasecmp(directory,"/Program Files"))return;
     snprintf(entry->location,sizeof(entry->location),"%s",directory);
 }
+/* fx-exeicons: the icon of a Windows program's entry, as a libdeskui file
+ * icon key. DisplayIcon names it ("file[,index]": Windows Installer's
+ * ARPPRODUCTICON); without it, Windows 2000/XP's Add/Remove Programs took
+ * the Start menu shortcut whose name shares the most words with DisplayName
+ * (R. Chen, "How does Add/Remove Programs get the size and other
+ * information?", The Old New Thing, 2004-07-09). Here a shortcut whose
+ * target lies in the program's folder outranks a name match, and the
+ * shortcut that runs the uninstaller never wins. Bounded walk of the Start
+ * menu: three levels, SHORTCUT_SCAN entries, CIUKLNK3 records only. */
+#define SHORTCUT_SCAN 256u
+static unsigned words_shared(const char *a,const char *b)
+{
+    char wa[16][24];unsigned na=0,shared=0;
+    for(const char *p=a;*p && na<16;){
+        while(*p && !((*p>='a' && *p<='z') || (*p>='A' && *p<='Z') || (*p>='0' && *p<='9')))p++;
+        unsigned n=0;while((*p>='a' && *p<='z') || (*p>='A' && *p<='Z') || (*p>='0' && *p<='9')){if(n<23)wa[na][n++]=(char)(*p>='A' && *p<='Z' ? *p+32 : *p);p++;}
+        if(n>1){wa[na][n]=0;na++;}
+    }
+    for(const char *p=b;*p;){
+        while(*p && !((*p>='a' && *p<='z') || (*p>='A' && *p<='Z') || (*p>='0' && *p<='9')))p++;
+        char w[24];unsigned n=0;while((*p>='a' && *p<='z') || (*p>='A' && *p<='Z') || (*p>='0' && *p<='9')){if(n<23)w[n++]=(char)(*p>='A' && *p<='Z' ? *p+32 : *p);p++;}
+        w[n]=0;
+        for(unsigned k=0;n>1 && k<na;k++)if(!strcmp(wa[k],w)){wa[k][0]=0;shared++;break;}
+    }
+    return shared;
+}
+struct icon_scan { struct cp_program_store *s; const struct desk_uninstall_entry *r; char uninstaller[260]; unsigned budget; int best; char path[260]; };
+static void icon_folder(struct icon_scan *x,const char *dir,const char *folder_label,unsigned depth)
+{
+    char full[1024];if(path(x->s,dir,full,sizeof(full)))return;
+    DIR *d=opendir(full);if(!d)return;
+    struct dirent *ent;
+    while(x->budget && (ent=readdir(d))){
+        x->budget--;
+        if(ent->d_name[0]=='.')continue;
+        char rel[260],child[1024];
+        if(snprintf(rel,sizeof(rel),"%s/%s",dir,ent->d_name)>=(int)sizeof(rel) || path(x->s,rel,child,sizeof(child)))continue;
+        struct stat st;if(program_stat(child,&st))continue;
+        size_t n=strlen(ent->d_name);
+        if(S_ISDIR(st.st_mode)){if(depth)icon_folder(x,rel,ent->d_name,depth-1);continue;}
+        if(n<5 || strcasecmp(ent->d_name+n-4,".lnk"))continue;
+        char label[300];snprintf(label,sizeof(label),"%.*s %s",(int)(n-4),ent->d_name,folder_label);
+        int score=(int)words_shared(x->r->name,label);
+        struct desk_launch_record *record=malloc(sizeof(*record));
+        if(!record)break;
+        if(!read_record(child,record)){
+            char target[260];
+            if(normal(record->target,target)){
+                if(x->uninstaller[0] && !strcasecmp(target,x->uninstaller))score=-1;
+                else {
+                    const char *ext=strrchr(target,'.');
+                    int program=ext && !strcasecmp(ext,".exe");
+                    if(x->r->location[0] && cp_program_contains(x->r->location,target))score+=program ? 100 : 50;
+                    else if(score>0 && program)score++;   /* a name match that starts a program */
+                }
+            }
+        } else score=score ? score : -1;
+        free(record);
+        if(score>0 && score>x->best){x->best=score;snprintf(x->path,sizeof(x->path),"%s",rel);}
+    }
+    closedir(d);
+}
+static __attribute__((noinline)) void program_icon(struct cp_program_store *s,struct desk_uninstall_entry *r)
+{
+    char location[300],native[260];
+    snprintf(location,sizeof(location),"%s",r->icon);r->icon[0]=0;
+    if(location[0]){
+        /* "C:\Path\File.exe,3": split the trailing integer index. */
+        char *comma=strrchr(location,',');long index=0;
+        if(comma){char *end;index=strtol(comma+1,&end,10);while(*end==' ')end++;if(!*end && end!=comma+1)*comma=0;else index=0;}
+        char *q=location;while(*q==' ' || *q=='"')q++;
+        size_t n=strlen(q);while(n && (q[n-1]==' ' || q[n-1]=='"'))q[--n]=0;
+        if(normal(q,native)){snprintf(r->icon,sizeof(r->icon),"%s|%ld",native,index);return;}
+    }
+    struct icon_scan *x=calloc(1,sizeof(*x));if(!x)return;
+    x->s=s;x->r=r;x->budget=SHORTCUT_SCAN;
+    struct desk_launch_record record;
+    if(desk_uninstall_command(r->command,&record))(void)normal(record.target,x->uninstaller);
+    icon_folder(x,"/Windows/Start Menu/Programs","",2);
+    if(s->profile && !strncmp(s->profile,"/Windows/Profiles/",18) && !strstr(s->profile,"/..") && strlen(s->profile)<120){
+        char personal[160];snprintf(personal,sizeof(personal),"%s/Start Menu/Programs",s->profile); /* sec-user-04 */
+        icon_folder(x,personal,"",2);
+    }
+    if(x->best>0)snprintf(r->icon,sizeof(r->icon),"%s",x->path);
+    free(x);
+}
 static int compare(const void *a,const void *b)
 {
     const struct desk_uninstall_entry *x=a,*y=b;int n=strcasecmp(x->name,y->name);
@@ -251,6 +361,7 @@ int cp_program_list(struct cp_program_store *s,struct desk_uninstall_entry *out,
     if(n && out[0].inventory_more)s->overflow=1;
     for(int i=0;i<n;i++){
         uninstall_location(&out[i]);
+        program_icon(s,&out[i]);
         out[i].kind=DESK_PROGRAM_WIN32;out[i].disk_bytes=(uint64_t)out[i].estimated_kb*1024;
         if(out[i].system_component || system_path(out[i].location))out[i].no_remove=1;
         if(!out[i].command[0])out[i].no_remove=1;
@@ -262,7 +373,7 @@ int cp_program_list(struct cp_program_store *s,struct desk_uninstall_entry *out,
         struct desk_uninstall_entry *r=&out[n];
         *r=(struct desk_uninstall_entry){.kind=DESK_PROGRAM_GAME,.game=game,.disk_bytes=bytes};
         snprintf(r->name,sizeof(r->name),"%s",desk_games[game-1].label);
-        snprintf(r->location,sizeof(r->location),"/%s",game==1 ? "WOLF3D" : game==2 ? "DOOM" : game==3 ? "QUAKE" : "WAR2");
+        snprintf(r->location,sizeof(r->location),"/%s",game==1 ? "WOLF3D" : game==2 ? "DOOM" : game==3 ? "QUAKE" : game==4 ? "WAR2" : "DUKE3D");
         int e=game_metadata(s,game,r);if(e)return e;n++;
     }
     const char *const roots[]={"/Games","/Programs"};
@@ -344,12 +455,12 @@ int cp_program_remove(struct cp_program_store *s,const struct desk_uninstall_ent
             for(int i=0;i<n;i++)if(!strcmp(fresh[i].key,r->key))result=-EAGAIN;
             free(fresh);
         }
-        const char *const roots[]={"/Windows/Start Menu/Programs","/Windows/Desktop","/Documents/Desktop","/Games","/Programs"};
+        char storage[2][160];const char *roots[SHORTCUT_ROOTS];unsigned count=shortcut_roots(s,storage,roots);
         /* First collect icon ownership while every record still exists.
          * Persist that snapshot before deleting the records, so a failed save
          * or restart never loses the identities needed for a retry. */
         for(unsigned phase=2;phase && !result;phase--){
-            for(unsigned i=0;!result && r->location[0] && i<5;i++){
+            for(unsigned i=0;!result && r->location[0] && i<count;i++){
                 unsigned budget=WALK_ENTRIES;int e=records(s,roots[i],r->location,NULL,(int)phase,WALK_DEPTH,&budget);if(e<0)result=e;
             }
             if(phase==2 && !result && s->persist)result=s->persist(s->ctx);

@@ -16,6 +16,10 @@
 #include "schedsvc.h"
 #include "resources.h"
 #include "wallpaper_io.h"
+#include "diag_record.h"
+#include "profile.h" /* sec-user-05: session profile root and temp */
+#include "logon_session.h"   /* sec-user-03 */
+#include "../logon/logon_proto.h"
 #ifdef __i386__
 #include <ciuki/devices.h>
 #endif
@@ -273,7 +277,8 @@ static int scenario_hold(const struct desktop *d, uint64_t now)
 {
     for (int i=0; i<DESK_CLIENTS; i++) {
         const struct desk_client *c=&d->clients[i];
-        if (c->channel>=0 && c->awaiting_frame && now-c->launched_ns<GATE_HOLD_MAX_NS) return 1;
+        /* Remote startup feedback is visual only; it never gates input. */
+        if (c->channel>=0 && c->awaiting_frame && !c->launch_feedback_remote && now-c->launched_ns<GATE_HOLD_MAX_NS) return 1;
     }
     return 0;
 }
@@ -434,7 +439,7 @@ struct launch_job {
     int client, child, channel, child_fd;
     uint64_t click_ns, begin_ns, end_ns;
     struct desk_program program;
-    char *argv[LAUNCH_ARGV], *env[12];
+    char *argv[LAUNCH_ARGV], *env[16]; /* sec-user-05: +USERPROFILE/TEMP/TMP */
     char strings[LAUNCH_STRINGS], display[40], keymap[24], tz[8 + CIUKI_TIME_RULE_MAX], language[20];
     struct ciuki_spawn_fd mapping[2];
     uint32_t mappings;
@@ -550,7 +555,17 @@ static int launch_prepare(struct desktop *d, const struct desk_program *program,
     snprintf(user,sizeof(user),"USER=%s",d->sh.profile.name);
     snprintf(settings,sizeof(settings),"CIUKI_SETTINGS=%s",d->sh.profile.settings[0] ? d->sh.profile.settings : CFG_FILE);
     snprintf(profile,sizeof(profile),"CIUKI_PROFILE=%s",d->sh.profile.root);
-    const char *env[]={job->language,job->tz,home,"TMPDIR=/tmp","PATH=/Programs",job->display,job->keymap,user,settings,profile,NULL};
+    /* sec-user-05 (contract 8.2, A1-10): children keep the session's committed
+     * profile root and private temporary directory from the kernel launch;
+     * only a profile-less bootstrap desktop passes the machine /tmp. */
+    char temp[176], userprofile[112], temp_var[176], tmp_var[176];
+    const char *root=profile_root_path(), *temporary=profile_temp();
+    snprintf(temp,sizeof(temp),"TMPDIR=%s",temporary);
+    snprintf(userprofile,sizeof(userprofile),"USERPROFILE=%s",root ? root : "");
+    snprintf(temp_var,sizeof(temp_var),"TEMP=%s",temporary);
+    snprintf(tmp_var,sizeof(tmp_var),"TMP=%s",temporary);
+    const char *env[]={job->language,job->tz,home,temp,"PATH=/Programs",job->display,job->keymap,user,settings,profile,
+                       root ? userprofile : NULL,temp_var,tmp_var,NULL};
     for (unsigned k=0;env[k];k++) if (launch_strings(job,&used,env[k],&job->env[k])) return E2BIG;
     job->mappings=tasks && d->authority_fd>=0 ? 2 : 1;
     job->mapping[1]=(struct ciuki_spawn_fd){d->authority_fd,4};
@@ -684,6 +699,23 @@ static void first_frame_record(struct desktop *d, const struct desk_client *c, u
     (void)write(STDERR_FILENO,"\n",1);
 #endif
 }
+/* fx-accept: the desktop's display mode once startup applied (or kept) the
+ * saved preference, also in quiet boots: the acceptance suite checks a normal
+ * boot at 1024x768 and that Safe mode's 640x480 never carries over (fx-dispmode).
+ * saved is the stored preference after startup; safe is G14's Safe mode. */
+static void display_start_record(const struct desktop *d)
+{
+    struct ciuki_display_info info = {.version = CIUKI_DISPLAY_VERSION, .size = sizeof(info)};
+    unsigned width = d->width, height = d->height, bpp = 0;
+    if (!ciuki_display_query(&info))
+        for (unsigned i = 0; i < info.mode_count && i < 32; i++)
+            if (info.modes[i].current) { width = info.modes[i].width; height = info.modes[i].height; bpp = info.modes[i].bpp; }
+    char line[160];
+    int n = snprintf(line, sizeof(line), "[desktop] display start mode=%u %ux%ux%u saved=%u safe=%u",
+                     (unsigned)d->display_mode, width, height, bpp, (unsigned)d->sh.cfg.display_mode, (unsigned)!!d->safe_mode);
+    if (n <= 0 || (size_t)n >= sizeof(line)) return;
+    desk_diag_record(line, n);
+}
 /* Input thread: an exit reaped while a spawn may still be unbound. */
 static void launch_note_exit(struct desktop *d, uint32_t pid, int status)
 {
@@ -733,7 +765,7 @@ static unsigned launch_service(struct desktop *d)
         int exit_status=0, gone=launch_exited(pid,&exit_status);
         if (live) {
             c->spawn_pending=0; c->pid=pid;
-            c->launched_ns=monotonic(); /* AppStarting runs from the process's creation */
+            /* Keep the request time: a slow spawn must also time out. */
         }
         if (!gone) d->children[job->child].pid=pid;
         desk_launch_completed(d,&job->request,job->program.name,(int)pid);
@@ -792,8 +824,21 @@ static struct cfg_writer settings_writer;
 static struct users_worker user_worker;
 static int user_initial, user_switch_saving, user_default_loading, user_default_ready, user_refresh_pending;
 static int links_profile_update(struct desktop *);
+/* sec-user-05 (Windows XP shell folders): a kernel profile session's own
+ * Start Menu\Programs and Desktop. The Start menu merges the per-user
+ * Programs with C:\WINDOWS\Start Menu\Programs (links_list), the desktop
+ * view merges the per-user Desktop with /Documents/Desktop (desktop_union.h)
+ * and shows C:\WINDOWS\Desktop shortcuts; G32 local profiles keep theirs. */
+static void session_folders(struct user_profile *p)
+{
+    if (p->root[0]) return;
+    char path[USERS_PATH];
+    if (profile_folder(path,sizeof(path),"Start Menu/Programs")) memcpy(p->programs,path,sizeof(path));
+    if (profile_folder(path,sizeof(path),"Documents/Desktop")) memcpy(p->desktop,path,sizeof(path));
+}
 static int settings_writer_started, verbose_boot, statistics_boot;
 static int settings_reload_pending, settings_reload_request, settings_reload_wallpaper;
+static int settings_snapshot_loaded, settings_snapshot_error;
 static int theme_read_pending;
 static struct desk_wall_worker wallpaper_worker;
 static int wallpaper_worker_started, wallpaper_worker_failed;
@@ -1006,6 +1051,11 @@ static int mixer_line_save(int fd,struct ciuki_mixer_line *line)
     if (!error && line_preference_save(REG_DIRECTORY,line)) error=errno;
     return error;
 }
+/* sec-user-05: one saved session level through the designated control fd. */
+static int mixer_restore_apply(int fd, unsigned line, void *record, size_t n)
+{
+    return ciuki_devctl(fd,line ? MIXER_SET_LINE : MIXER_SET_MASTER,record,n) ? -1 : 0;
+}
 static int mixer_job_run(void *record, size_t n)
 {
     if (n!=sizeof(struct mixer_job)) return EINVAL;
@@ -1052,38 +1102,19 @@ static int mixer_line_apply(struct desktop *d,const struct ciuki_mixer_line *lin
     return mixer_submit(&job);
 }
 /* ---- desktop shell services: the file and kernel side of shell.c ---- */
-static int read_file(const char *path, size_t limit, uint8_t **out, size_t *size)
-{
-    *out=NULL; *size=0;
-    FILE *f=fopen(path,"rb");
-    if (!f) return -1;
-    size_t cap=4096, n=0;
-    uint8_t *buffer=malloc(cap);
-    int ok=buffer!=NULL;
-    while (ok) {
-        if (n==cap) {
-            if (cap>=limit) { ok=0; errno=EFBIG; break; }
-            size_t next=cap*2>limit ? limit : cap*2;
-            uint8_t *grown=realloc(buffer,next);
-            if (!grown) { ok=0; break; }
-            buffer=grown; cap=next;
-        }
-        size_t got=fread(buffer+n,1,cap-n,f);
-        n+=got;
-        if (got==0) { ok=!ferror(f); break; }
-    }
-    if (fclose(f)) ok=0;
-    if (!ok) { free(buffer); return -1; }
-    *out=buffer; *size=n;
-    return 0;
-}
 static void settings_load(struct desktop *d)
 {
+    static char text[CFG_TEXT_MAX]; size_t n;
+    int error=cfg_read_at(d->sh.profile.settings[0] ? d->sh.profile.settings : CFG_FILE,text,sizeof(text),&n);
+    if (error && (error!=ENOENT || settings_snapshot_loaded)) {
+        settings_snapshot_error=error;
+        snprintf(d->notice,sizeof(d->notice),"Settings could not be read; saved preferences have been kept.");
+        return;
+    }
+    settings_snapshot_error=0;
+    if (!error) settings_snapshot_loaded=1;
     cfg_defaults(&d->sh.cfg);
-    uint8_t *text; size_t n;
-    if (read_file(d->sh.profile.settings[0] ? d->sh.profile.settings : CFG_FILE,CFG_TEXT_MAX,&text,&n)) return;   /* first boot: defaults */
-    int rejected=cfg_parse(&d->sh.cfg,(const char *)text,n);
-    free(text);
+    int rejected=error ? 0 : cfg_parse(&d->sh.cfg,text,n);
     if (rejected) snprintf(d->notice,sizeof(d->notice),"desktop.cfg: %d line(s) ignored",rejected);
     (void)pp_load(&d->sh.power_cfg,d->sh.cfg.extra);   /* G11: the power_* lines */
     d->sh.power_meter_hidden=!d->sh.power_cfg.show_meter;
@@ -1101,7 +1132,7 @@ static int theme_poll_async(struct desktop *d,uint64_t now)
     }
     if (!cfg_writer_read_result(&settings_writer,text,&n,&error)) return 0;
     theme_read_pending=0;
-    if (error && error!=ENOENT) return 0;
+    if (error) return 0; /* polling must never replace a durable theme with defaults */
     static struct ciuki_settings incoming;
     cfg_defaults(&incoming);
     if(!error) (void)cfg_parse(&incoming,text,n);
@@ -1119,6 +1150,7 @@ static int settings_save(struct desktop *d)
     /* A queued Control Panel reload owns the newest disk snapshot. Do not
      * overwrite it with the pre-reload theme/wallpaper while its read waits. */
     if (settings_reload_pending || (d->sh.want_reload&1)) { d->sh.want_save=1; return 0; }
+    if (settings_snapshot_error) { errno=settings_snapshot_error; return -1; }
     static char text[CFG_TEXT_MAX];
     static struct ciuki_settings durable;
     desk_preferences_persistent(d,&durable);
@@ -1127,6 +1159,7 @@ static int settings_save(struct desktop *d)
     if (!settings_writer_started) { errno=EIO; return -1; }
     int result=cfg_writer_try_submit(&settings_writer,text,n);
     if (result && errno==EAGAIN) { d->sh.want_save=1; return 0; }
+    if (!result) settings_snapshot_loaded=1;
     return result;
 }
 static int media_busy(void);
@@ -1167,6 +1200,7 @@ static int gfx_benchmark(struct desktop *d, unsigned index, uint64_t values[3])
     /* The composite remains authoritative. This separate surface is only the
      * software baseline; restore scanout on success and partial failure alike. */
     struct gfx_display_target ctx={d,-1};
+    if (desk_direct_settle) desk_direct_settle(d); /* fx-doswin3: the RAM frame is restored below */
     struct gfx_bench_target t={.ctx=&ctx,.width=d->width,.height=d->height,
         .bpp=d->lfb_bytes_per_pixel*8,.generation=d->accel_generation,
         .now=gfx_clock,.info=gfx_info,.accel=gfx_accel,.upload=gfx_upload};
@@ -1206,11 +1240,16 @@ static int accel_record_line(const struct desktop *d, char *line, size_t size, u
     /* f2-96: who draws the pointer (hw, sw, or hiding: a hardware cursor
      * still to be hidden), busy retries and software fallbacks since boot. */
     const char *pointer=d->hw_cursor ? "hw" : d->hw_cursor_shown ? "hiding" : "sw";
-    int n=snprintf(line,size,"[desktop] accel fills=%llu copies=%llu writes=%llu fallback=%llu cache_rows=%llu frames=%llu lfb_bytes=%llu caps=%u vram_rows=%u pointer=%s pointer_retries=%u pointer_fallbacks=%u\n",
+    /* fx-doswin3: the window's composition and present time and request
+     * count, so a trial prices each stage of a DOS window frame; direct_px:
+     * pixels presented straight from an unobscured DOS window's surface. */
+    int n=snprintf(line,size,"[desktop] accel fills=%llu copies=%llu writes=%llu fallback=%llu cache_rows=%llu frames=%llu lfb_bytes=%llu caps=%u vram_rows=%u pointer=%s pointer_retries=%u pointer_fallbacks=%u composite_us=%llu present_us=%llu presents=%llu scene_px=%llu direct_px=%llu\n",
         (unsigned long long)s->accel_fills,(unsigned long long)s->accel_copies,(unsigned long long)s->accel_writes,
         (unsigned long long)s->accel_fallback,(unsigned long long)s->cache_rows,(unsigned long long)s->frames,
         (unsigned long long)s->lfb_bytes,d->accel_caps,d->vram_end>d->vram_first ? d->vram_end-d->vram_first : 0u,
-        pointer,d->hw_cursor_retries,d->hw_cursor_fallbacks);
+        pointer,d->hw_cursor_retries,d->hw_cursor_fallbacks,(unsigned long long)(s->composite_ns/1000),
+        (unsigned long long)(s->present_ns/1000),(unsigned long long)s->presents,(unsigned long long)s->scene_px,
+        (unsigned long long)s->direct_px);
     return n>0 && (size_t)n<size ? n : 0;
 }
 static void accel_record(struct desktop *d, uint64_t now)
@@ -1256,6 +1295,7 @@ static void performance_sample(struct desktop *d, uint64_t now)
 }
 static int display_apply(struct desktop *d, uint16_t id)
 {
+    if (d->safe_mode) return -EOPNOTSUPP;
     int e = ciuki_display_set(id);
     if (!e && id != d->display_mode) d->display_pending = id;
     return e;
@@ -1296,8 +1336,7 @@ static void display_poll(struct desktop *d)
     d->display_counter = counter;
     d->display_mode = mode;
     d->lfb_bytes_per_pixel=(info.bpp+7)/8;
-    /* Includes rollback. The frame classifier preserves preferences for a
-     * Control Panel preview; ordinary completed mode changes remain durable. */
+    /* Includes rollback; observing scanout never changes the preference. */
     d->display_pending = mode;
 }
 static void display_start(struct desktop *d)
@@ -1309,13 +1348,18 @@ static void display_start(struct desktop *d)
     uint32_t counter;
     if (read(d->display, &counter, sizeof(counter)) == sizeof(counter)) d->display_counter = counter;
     uint16_t wanted = d->sh.cfg.display_mode;
-    d->sh.cfg.display_mode = d->display_mode;
-    if (d->sh.gate || !wanted || wanted == d->display_mode) return;
+    if (d->safe_mode || d->sh.gate || !wanted || wanted == d->display_mode) return;
     for (unsigned i = 0; i < info.mode_count && i < 32; i++) if (info.modes[i].id == wanted) {
+        const struct ciuki_display_mode *m=&info.modes[i];
+        /* The kernel skips identical layouts even when firmware IDs alias.
+         * Such a request has no change counter or pending frame to wait for. */
+        if (m->width==info.width && m->height==info.height && m->bpp==info.bpp && m->pitch==info.pitch) return;
         int e = display_apply(d, wanted);
-        if (e) desk_shell_notify_error(d,"Display mode unavailable",e);
-        break;
+        if (e) desk_display_start_recover(d);
+        else d->display_start_mode=wanted;
+        return;
     }
+    desk_display_start_recover(d); /* preference absent from this boot's inventory */
 }
 
 static void wallpaper_load(struct desktop *d)
@@ -1647,7 +1691,8 @@ static void media_remove(struct desktop *d)
     if (!e && r.drive<26 && d->sh.media.generation[r.drive]==r.generation) {
         struct ciuki_media_state state=d->sh.media;
         state.removable_mask&=~(1u<<r.drive);
-        state.type[r.drive]=optical ? 0 : CIUKI_MEDIA_SAFE_REMOVED;
+        /* fx-emptydrive: the CD-ROM drive keeps its letter after an eject. */
+        state.type[r.drive]=optical ? CIUKI_MEDIA_OPTICAL : CIUKI_MEDIA_SAFE_REMOVED;
         desk_shell_media_update(d,&state);
     }
     observer_close(&d->media_fd);
@@ -1922,6 +1967,37 @@ static void startup_launch(struct desktop *d,const char *name)
     for (unsigned i=0;i<d->program_count;i++) if (!strcmp(d->programs[i].name,name)) d->action=(int)i;
     if (d->action<0) snprintf(d->notice,sizeof(d->notice),"%.40s is not in /Programs",name);
 }
+/* fx-selftest (docs/design/self-test.md): on a T self-test boot the kernel's
+ * inventory row 0x7F000 asks for one DOS box ("launch-dosbox", once per
+ * generation) and finally carries "Self-test complete: N passed, M failed,
+ * K skipped" (or "Self-test stalled in <check>"), shown as a dialog. */
+static struct { int boot; uint32_t launched, shown; uint64_t next_ns; } selftest_view;
+static void selftest_poll(struct desktop *d)
+{
+#ifdef __i386__
+    if (!selftest_view.boot || d->now_ns<selftest_view.next_ns) return;
+    selftest_view.next_ns=d->now_ns+500000000ull;
+    static struct ciuki_devices_info info;
+    info.version=CIUKI_DEVICES_VERSION; info.size=sizeof(info);
+    if (ciuki_devices(&info)) return;
+    for (unsigned i=0;i<info.count && i<CIUKI_DEVICES_MAX;i++) {
+        const struct ciuki_device_record *v=&info.devices[i];
+        if (v->id!=0x7F000u || strcmp(v->driver,"selftest")) continue;
+        if (!strcmp(v->reason,"launch-dosbox")) {
+            if (selftest_view.launched!=v->generation) { selftest_view.launched=v->generation; startup_launch(d,"dosbox"); }
+        } else if (!strncmp(v->reason,"Self-test ",10) && selftest_view.shown!=v->generation) {
+            selftest_view.shown=v->generation;
+            char text[200];
+            snprintf(text,sizeof(text),"%s.\nThe full report is in C:\\SYSTEM\\LOGS\\SELFTEST.LOG.",v->reason);
+            desk_shell_message_class(d,"CiukiOS self-test",text,
+                strstr(v->reason," 0 failed") ? DU_DLG_ICON_INFO : DU_DLG_ICON_WARNING);
+        }
+        break;
+    }
+#else
+    (void)d;
+#endif
+}
 /* f3-61 f3:vm-game: one Programs > Games entry launched at startup through
  * the menu's own path, optionally asserting --dos-kernel=unified. */
 static int startup_game_index=-1;
@@ -1974,6 +2050,16 @@ __attribute__((weak)) void desk_w32_poll(struct desktop *d) { (void)d; }
 __attribute__((weak)) void desk_w32_child_exited(struct desktop *d,uint32_t pid,int status)
 { (void)d; (void)pid; (void)status; }
 __attribute__((weak)) int desk_w32_shutdown(void) { return 1; }
+/* sec-user-03: host models of this file have no LOGON session binding. */
+__attribute__((weak)) int desk_logon_detect(int *display, int *input) { (void)display; (void)input; return 0; }
+__attribute__((weak)) void desk_logon_profile(struct desktop *d) { users_profile(&d->sh.profile,"",0,0); }
+__attribute__((weak)) void desk_logon_ready(struct desktop *d) { (void)d; }
+__attribute__((weak)) int desk_logon_ready_sent(void) { return 1; }
+__attribute__((weak)) void desk_logon_poll(struct desktop *d) { (void)d; }
+__attribute__((weak)) int desk_logon_lock(struct desktop *d) { (void)d; return -ENOSYS; }
+__attribute__((weak)) void desk_logon_end(struct desktop *d, unsigned notice) { (void)d; (void)notice; exit(0); }
+__attribute__((weak)) int desk_logon_secure(struct desktop *d, unsigned notice, unsigned *flags) /* sec-user-04 */
+{ (void)d; (void)notice; (void)flags; return -ENOSYS; }
 /* Review P1-1 (T23 c42f556e): call 73 runs on its own thread. The orderly
  * REBOOT/OFF may wait inside the kernel (a storage preflight bounded to 5 s
  * per stage, the device quiesce); the desktop loop keeps presenting the
@@ -2001,15 +2087,21 @@ static void power_prepare_files(void)
 static void *power_call_worker(void *arg)
 {
     int action=(int)(intptr_t)arg;
+    fprintf(stderr,"[desktop] power worker action=%d stage=files\n",action);
     if (power_files_pending) { power_prepare_files(); power_files_pending=0; }
+    fprintf(stderr,"[desktop] power worker action=%d stage=kernel\n",action);
     int r=ciuki_power(action==1 ? CIUKI_POWER_REBOOT : CIUKI_POWER_OFF), e=errno;
     pthread_mutex_lock(&power_call_lock);
     power_call_result=r; power_call_errno=e; power_call_done=1; power_call_running=0;
     pthread_mutex_unlock(&power_call_lock);
     return NULL;
 }
+static void logon_end(struct desktop *d, unsigned notice);
 static int power_request(struct desktop *d, int action)
 {
+    /* sec-user-03: a LOGON session ends here after G3; LOGON collects the
+     * session and then makes the orderly power call itself. */
+    if (d->logon_session && (action==1 || action==2)) logon_end(d,action==1 ? LGN_NOTICE_RESTART : LGN_NOTICE_SHUTDOWN);
     pthread_mutex_lock(&power_call_lock);
     if (power_call_done) {
         int r=power_call_result; errno=power_call_errno; power_call_done=0;
@@ -2085,8 +2177,19 @@ static void power_prepare(struct desktop *d)
     }
     power_files_pending=1;
 }
+/* sec-user-03: settings are saved by G3 (want_power) or the power state;
+ * wait (bounded) for the writer, then end the LOGON session. */
+static void logon_end(struct desktop *d, unsigned notice)
+{
+    uint64_t until=monotonic()+UINT64_C(3000000000);
+    while (settings_writer_started && cfg_writer_busy(&settings_writer) && monotonic()<until) {
+        struct timespec pause={.tv_sec=0,.tv_nsec=10000000L}; nanosleep(&pause,NULL);
+    }
+    desk_logon_end(d,notice);
+}
 static void user_logoff(struct desktop *d)
 {
+    if (d->logon_session) logon_end(d,LGN_NOTICE_LOGOFF);   /* sec-user-03: G3 has closed the programs */
     user_initial=0; user_switch_saving=user_default_loading=user_default_ready=0;
     desk_logon_open(d,1);
     d->sh.user_request.operation=USERS_READ; d->sh.user_want=1;
@@ -2150,6 +2253,7 @@ static void user_service(struct desktop *d)
      * is over; update its profile only at the next worker boundary. */
     struct user_profile old=s->profile;
     users_profile(&s->profile,s->user_choose==1 ? s->user_request.name : "",s->user_choose==1 ? s->users.authenticated : 0,s->users.flags);
+    session_folders(&s->profile);
     for (unsigned i=0;i<s->users.count;i++) if (s->user_choose==1 && s->users.ids[i]==s->users.authenticated)
         snprintf(s->profile.name,sizeof(s->profile.name),"%s",s->users.names[i]);
     if (!links_profile_update(d)) { s->profile=old; return; }
@@ -2160,6 +2264,7 @@ static void user_service(struct desktop *d)
     desk_folder_destroy(d);
     settings_reload_pending=settings_reload_request=settings_reload_wallpaper=theme_read_pending=0;
     s->cfg=user_worker.settings;
+    settings_snapshot_loaded=1; settings_snapshot_error=0;
     d->pictures_exists=!!s->profile.root[0] || d->pictures_exists;
     s->icon_count=0; desk_shell_apply(d);
     int error=d->autoplay_fs ? desk_folder_init_async(d,d->autoplay_fs) : -ENOSYS;
@@ -2269,10 +2374,13 @@ static void shell_service(struct desktop *d)
     if (settings_reload_pending && !settings_reload_request && settings_writer_started &&
         cfg_writer_read_result(&settings_writer,reload_text,&reload_size,&reload_error)) {
         settings_reload_pending=0;
-        if (reload_error && reload_error!=ENOENT) {
+        if (reload_error && (reload_error!=ENOENT || settings_snapshot_loaded)) {
+            settings_snapshot_error=reload_error;
             desk_shell_notify_error(d,"Settings not loaded",reload_error);
             settings_reload_wallpaper=0;
         } else {
+            settings_snapshot_error=0;
+            if (!reload_error) settings_snapshot_loaded=1;
             int old_tray_width = desk_shell_tray_box(d).w;
             int old_bar_edge=sh->cfg.taskbar_edge,old_bar_size=sh->cfg.taskbar_size;
             int old_bar_top=sh->cfg.taskbar_top,old_bar_hide=sh->cfg.taskbar_autohide,old_start_small=sh->cfg.start_small;
@@ -2282,12 +2390,12 @@ static void shell_service(struct desktop *d)
             int old_spacing_x=sh->cfg.icon_spacing_x, old_spacing_y=sh->cfg.icon_spacing_y, old_icon_font=sh->cfg.icon_font;
             uint32_t old_colour=sh->cfg.desktop_color;
             struct appearance old_appearance=sh->cfg.appearance; int old_appearance_set=sh->cfg.appearance_set, old_pointer=sh->cfg.pointer_scheme, old_document=sh->cfg.document_icon, old_recycle=sh->cfg.recycle_icon;
-            uint16_t confirmed = sh->cfg.display_mode;
             sh->recent_serial++;
             cfg_defaults(&sh->cfg);
             int rejected=reload_error ? 0 : cfg_parse(&sh->cfg,reload_text,reload_size);
             if (rejected) snprintf(d->notice,sizeof(d->notice),"desktop.cfg: %d line(s) ignored",rejected);
-            sh->cfg.display_mode = confirmed;
+            /* Display Properties saved its confirmed mode in this snapshot.
+             * Scanout/lease notifications never supply a durable preference. */
             desk_saver_config(d);
             desk_shell_power_config(d);   /* G11: Control Panel's power_* lines */
 
@@ -2502,7 +2610,9 @@ static int links_list(struct links_scan *s)
 {
     s->count=0;
     if (s->programs[0] && strcmp(s->programs,links_roots[0])) {
-        s->budget=128; links_directory(s,s->programs,0,s->cap/2,3);
+        /* sec-user-05: the user's Programs leave the All Users Start Menu at
+         * least a quarter of the snapshot (Quake III, installed games). */
+        s->budget=128; links_directory(s,s->programs,0,s->cap/4,3);
     }
     for (unsigned r=0;r<sizeof(links_roots)/sizeof(*links_roots);r++) {
         s->budget=links_budget[r];
@@ -2540,6 +2650,7 @@ struct links_worker {
     struct desk_launch_record edit_record;
     unsigned char icon_valid[DESK_LINKS], scratch_icon_valid[DESK_LINKS];
     uint32_t icons[DESK_LINKS][DESK_SHORTCUT_PIXELS], scratch_icons[DESK_LINKS][DESK_SHORTCUT_PIXELS];
+    char fallbacks[DESK_LINKS][48], scratch_fallbacks[DESK_LINKS][48];   /* fx-exeicons: target's type icon */
     int run_requested, run_busy, run_done, run_result;
     char run_command[DESK_RUN_MAX];
     int history_requested, history_busy, history_done, history_error;
@@ -2550,6 +2661,7 @@ struct links_worker {
     struct du_file_entry browse_entries[DU_FILE_ENTRIES];
     unsigned browse_count;
     struct desk_launch_record requested_record; /* G19: explicit target/argument launch */
+    unsigned requested_origin, completed_origin; /* fx-autorun: DESK_LAUNCH_* of the queued record launch */
     struct desk_link_entry published[DESK_LINKS], scratch[DESK_LINKS];
     struct link_stamp published_stamps[DESK_LINKS], scratch_stamps[DESK_LINKS];
 };
@@ -2569,6 +2681,7 @@ static int links_profile_update(struct desktop *d)
 /* Render-owned snapshot: worker writes never race a paint using these pixels. */
 static unsigned char links_icon_valid[DESK_LINKS];
 static uint32_t links_icons[DESK_LINKS][DESK_SHORTCUT_PIXELS];
+static char links_fallbacks[DESK_LINKS][48];
 static int run_history_idle(void)
 {
     struct links_worker *w=links_worker; if (!w) return 1;
@@ -2586,8 +2699,10 @@ static void links_scan_once(struct links_worker *w, int games)
     pthread_mutex_unlock(&w->mutex);
     int count=links_list(&s);
     memset(w->scratch_icon_valid,0,sizeof(w->scratch_icon_valid));
+    memset(w->scratch_fallbacks,0,sizeof(w->scratch_fallbacks));
     for(unsigned k=0;k<s.count;k++)
-        w->scratch_icon_valid[k]=(unsigned char)desk_shortcut_icon_load(&w->scratch[k].launch,w->scratch_icons[k]);
+        w->scratch_icon_valid[k]=(unsigned char)desk_shortcut_icon_load(w->scratch[k].source,w->scratch_icons[k],
+                                                                          w->scratch_fallbacks[k],sizeof(w->scratch_fallbacks[k]));
     unsigned removed=w->games_removed;
     for(unsigned g=1;games && g<=CIUKI_DOSVM_GAME_COUNT;g++){
         struct ciuki_dosvm_command c={.version=CIUKI_DOSVM_VERSION,.size=sizeof(c)};c.launch.game=g;
@@ -2602,6 +2717,7 @@ static void links_scan_once(struct links_worker *w, int games)
     memcpy(w->published_stamps,w->scratch_stamps,w->count*sizeof(*w->published_stamps));
     memcpy(w->icon_valid,w->scratch_icon_valid,sizeof(w->icon_valid));
     memcpy(w->icons,w->scratch_icons,w->count*sizeof(*w->icons));
+    memcpy(w->fallbacks,w->scratch_fallbacks,sizeof(w->fallbacks));
     w->scanned_ns=monotonic(); w->scanning=0;
     w->scans++; w->game_scans+=!!games; w->stats+=s.stats; w->reads+=s.reads;
     desk_wake(w->desktop);
@@ -2632,7 +2748,8 @@ static void *links_thread(void *arg)
         else if (run) { w->run_requested=0; w->run_busy=1; }
         else if (history) { w->history_requested=0; w->history_busy=1; }
         else if (browse) { w->browse_requested=0; w->browse_busy=1; }
-        else if (launch) { memcpy(path,w->source,sizeof(path)); w->launch_requested=0; w->launch_busy=1; }
+        else if (launch) { memcpy(path,w->source,sizeof(path)); w->launch_requested=0; w->launch_busy=1;
+            w->completed_origin=launch==3 ? w->requested_origin : 0; w->requested_origin=0; }
         else { w->scan_requested=0; games=w->games_requested; w->games_requested=0; w->scanning=1; }
         pthread_mutex_unlock(&w->mutex);
         if(edit){
@@ -2722,10 +2839,11 @@ static int links_snapshot(struct desktop *d, struct desk_link_entry *out, unsign
     unsigned n=w->count<cap ? w->count : cap;
     int same=n==d->v3_link_count && !memcmp(out,w->published,n*sizeof(*out));
     same=same && !memcmp(links_icon_valid,w->icon_valid,n*sizeof(*links_icon_valid)) &&
-        !memcmp(links_icons,w->icons,n*sizeof(*links_icons));
+        !memcmp(links_icons,w->icons,n*sizeof(*links_icons)) && !memcmp(links_fallbacks,w->fallbacks,n*sizeof(*links_fallbacks));
     if (!same) memcpy(out,w->published,n*sizeof(*out));
     memcpy(links_icon_valid,w->icon_valid,n*sizeof(*links_icon_valid));
     memcpy(links_icons,w->icons,n*sizeof(*links_icons));
+    memcpy(links_fallbacks,w->fallbacks,n*sizeof(*links_fallbacks));
     links_request(w,d,monotonic());
     pthread_mutex_unlock(&w->mutex); return same ? -EAGAIN : (int)n;
 }
@@ -2769,11 +2887,14 @@ static int drop_snapshot(struct desktop *d)
     if (munmap(out,rows*4096)) { close(fd); return -1; }
     return fd;
 }
+/* fx-exeicons: a shortcut without an own icon shows its target's type
+ * (a document, a folder, a bundled DOS game), as Windows 98 does. */
 static const uint32_t *link_icon_cached(struct desktop *d,const char *source,unsigned size)
 {
     if(size!=16 && size!=32)return NULL;
     for(unsigned k=0;k<d->v3_link_count;k++)if(!strcmp(source,d->v3_links[k].source))
-        return links_icon_valid[k] ? links_icons[k]+(size==32 ? 16*16 : 0) : NULL;
+        return links_icon_valid[k] ? links_icons[k]+(size==32 ? 16*16 : 0) :
+               links_fallbacks[k][0] ? desk_shell_icon(du_icon_name(links_fallbacks[k]),(int)size) : NULL;
     return NULL;
 }
 static int link_save_async(struct desktop *d,const char *source,const struct desk_launch_record *record)
@@ -2799,18 +2920,19 @@ static int link_launch_async(struct desktop *d,const struct desk_launch_record *
     const char *source=NULL;
     for (unsigned k=0;k<d->v3_link_count;k++) if (!memcmp(record,&d->v3_links[k].launch,sizeof(*record))) source=d->v3_links[k].source;
     if (!desk_launch_valid(record)) { pthread_mutex_unlock(&w->mutex); return -EINVAL; }
-    if (source) { snprintf(w->source,sizeof(w->source),"%s",source); w->launch_requested=1; }
-    else { w->requested_record=*record; w->launch_requested=3; }
+    if (source) { snprintf(w->source,sizeof(w->source),"%s",source); w->launch_requested=1; w->requested_origin=0; }
+    else { w->requested_record=*record; w->launch_requested=3; w->requested_origin=d->launch_request.origin; }
+    d->launch_link_until=d->now_ns+5000000000ull;
+    desk_cursor_update(d);
     pthread_cond_signal(&w->changed); pthread_mutex_unlock(&w->mutex); return 0;
 }
 static int run_submit(struct desktop *d,const char *command)
 {
-    (void)d;
     if (!command || strlen(command)>=DESK_RUN_MAX) return -E2BIG;
     struct links_worker *w=links_worker; if (!w) return -ENOSYS;
     pthread_mutex_lock(&w->mutex); int result=0;
     if (w->run_requested || w->run_busy || w->run_done) result=-EBUSY;
-    else { strcpy(w->run_command,command); w->run_requested=1; pthread_cond_signal(&w->changed); }
+    else { d->launch_run_until=d->now_ns+5000000000ull; desk_cursor_update(d); strcpy(w->run_command,command); w->run_requested=1; pthread_cond_signal(&w->changed); }
     pthread_mutex_unlock(&w->mutex); return result;
 }
 static int shell_open_path(struct desktop *d,const char *path)
@@ -2822,7 +2944,7 @@ static int shell_open_path(struct desktop *d,const char *path)
     if (!w || pthread_mutex_trylock(&w->mutex)) return -EBUSY;
     int e=0;
     if (w->launch_requested || w->launch_busy || w->completed) e=-EBUSY;
-    else { strcpy(w->source,path); w->launch_requested=4; pthread_cond_signal(&w->changed); }
+    else { d->launch_link_until=d->now_ns+5000000000ull; desk_cursor_update(d); strcpy(w->source,path); w->launch_requested=4; pthread_cond_signal(&w->changed); }
     pthread_mutex_unlock(&w->mutex); return e;
 }
 extern uint32_t desk_w32_exchange(const void *,uint32_t,void *,uint32_t,uint32_t *) __attribute__((weak));
@@ -2841,7 +2963,7 @@ static int install_program(struct desktop *d,const char *path)
     int e=0;
     if(w->launch_requested || w->launch_busy || w->completed)e=-EBUSY;
     else if(strlen(path)>=sizeof(w->source))e=-ENAMETOOLONG;
-    else {strcpy(w->source,path);w->launch_requested=2;pthread_cond_signal(&w->changed);}
+    else {d->launch_link_until=d->now_ns+5000000000ull;desk_cursor_update(d);strcpy(w->source,path);w->launch_requested=2;pthread_cond_signal(&w->changed);}
     pthread_mutex_unlock(&w->mutex);return e;
 }
 static void links_start(struct desktop *d)
@@ -2851,6 +2973,7 @@ static void links_start(struct desktop *d)
     if (pthread_mutex_init(&w->mutex,NULL)) { free(w); return; }
     if (pthread_cond_init(&w->changed,NULL)) { pthread_mutex_destroy(&w->mutex); free(w); return; }
     w->desktop=d;
+    snprintf(w->profile_programs,sizeof(w->profile_programs),"%s",d->sh.profile.programs); /* sec-user-05 */
     w->scan_requested=w->games_requested=1; /* the first scan also queries the bundled games */
     fm_registry_exchange=desk_w32_exchange;
     if (pthread_create(&w->thread,NULL,links_thread,w)) { pthread_cond_destroy(&w->changed); pthread_mutex_destroy(&w->mutex); free(w); return; }
@@ -2884,6 +3007,7 @@ static void links_service(struct desktop *d)
     }
     int edit_done=w->edit_done,edit_result=w->edit_result;w->edit_done=0;
     int completed=w->completed, result=w->result; w->completed=0;
+    unsigned origin=completed ? w->completed_origin : 0;
 
     int run_done=w->run_done,run_result=w->run_result;
     char command[DESK_RUN_MAX]; command[0]=0;
@@ -2915,13 +3039,26 @@ static void links_service(struct desktop *d)
         if(edit_result<0)desk_shell_message(d,"Shortcut Properties","The shortcut could not be saved. Check that the file is still available and writable.",1);
     }
     if (save_done) desk_game_data_result(d,save_game,save_op,save_result,&save_command);
-    if (completed && result<0) desk_shell_message(d,"Programs","This shortcut is unavailable or its target could not be started.",1);
+    /* The worker may publish a PE after this turn's Win32 poll. Transfer
+     * feedback before removing preparation, without a one-frame gap. */
+    if (((completed && result>=0) || (run_done && run_result>=0)) && d->launch_presented)
+        d->launch_presented(d,0);
+    if (completed) d->launch_link_until=0;
+    if (run_done) d->launch_run_until=0;
+    if (completed || run_done) desk_cursor_update(d);
+    /* fx-autorun: AutoPlay reports its own Windows launch (and keeps quiet
+     * where the Win32 personality already showed the refusal). */
+    if (completed && origin==DESK_LAUNCH_AUTOPLAY) desk_autoplay_completed(d,result);
+    else if (completed && result<0) desk_shell_message(d,"Programs","This shortcut is unavailable or its target could not be started.",1);
     if (run_done) desk_run_result(d,command,run_result<0 ? run_result : 0);
     if (history_error) desk_shell_notify_error(d,"Run history could not be saved",-history_error);
 }
+/* fx-exeicons: the own-icon worker wakes the desktop when it published. */
+static void icons_wake(void *ctx) { desk_wake(ctx); }
 static void shell_setup(struct desktop *d, int gate)
 {
     if (!gate) {
+        if (du_file_icons_start(icons_wake,d)) fprintf(stderr,"[desktop] icon worker unavailable\n");
         desk_w32_start(d); links_start(d); d->v3_lease=win32_lease; d->v3_lease_poll=desk_w32_presenter_poll;
         d->v3_restart=win32_restart;
     }
@@ -2939,6 +3076,9 @@ static void shell_setup(struct desktop *d, int gate)
     const char *mixer=getenv("CIUKI_MIXER_FD");
     fd=mixer ? number(mixer,CIUKI_OPEN_MAX-1) : -1;
     d->mixer_fd=fd>=3 && fcntl(fd,F_GETFD)>=0 ? fd : -1;
+    /* sec-user-05: a profile session starts with its own saved levels. */
+    if (d->mixer_fd>=0 && mixer_preferences_restore(d->mixer_fd,mixer_restore_apply)<0)
+        fprintf(stderr,"[desktop] warning check=mixer-preference-restore error=%d\n",errno);
     observers_prepare(d);
     d->mixer_set=mixer_apply; d->mixer_line=mixer_line_apply;
     d->joystick_control=desktop_joystick_control;
@@ -2956,7 +3096,9 @@ static void shell_setup(struct desktop *d, int gate)
     scan_programs(d);
     /* Runtime gate scenarios keep the built-in defaults and never touch desktop.cfg. */
     d->sh.gate=gate;
-    users_profile(&d->sh.profile,"",0,0);
+    if (d->logon_session) desk_logon_profile(d);   /* sec-user-03: the session's committed profile */
+    else users_profile(&d->sh.profile,"",0,0);
+    if (!gate) session_folders(&d->sh.profile);   /* sec-user-05: XP per-user and common shell folders */
     d->logoff=user_logoff;
     if (!gate) settings_load(d);
     if (!gate) startup_stage("settings_read");
@@ -2984,13 +3126,13 @@ static void shell_setup(struct desktop *d, int gate)
     }
     if (!gate) { startup_stage("fonts_icons_ready"); mixer_read(d); system_read(d); wallpaper_load(d); wallpaper_preload(d); wallpaper_worker_prepare(d); }
     else desk_shell_wallpaper_update(d);
-    if (!gate) {
+    if (!gate && !d->logon_session) {
         /* Keep the ordinary first desktop frame when logon is disabled;
          * hold input only until the worker has read the optional policy. */
         user_initial=1; d->sh.user_gate=-1; d->sh.user_previous_focus=d->focus;
         d->sh.user_request.operation=USERS_READ; d->sh.user_want=1;
         desktop_watchdog_start(d);
-    }
+    } else if (!gate) desktop_watchdog_start(d);   /* sec-user-03: LOGON authenticated this session */
     /* fx-8: ordinary desktops spawn on the launcher worker. */
     if (!gate) { int error=launcher_start(d); if (error) desk_shell_notify_error(d,"Program launcher unavailable",error); }
 }
@@ -2998,6 +3140,9 @@ extern void desk_recovery_init(struct desktop *, int, int) __attribute__((weak))
 extern void desk_recovery_start(struct desktop *) __attribute__((weak));
 int main(int argc, char **argv)
 {
+    /* fx-acc1/fx-autorun: stderr is line buffered for every native program
+     * by the SDK C runtime (sdk/crt/start.c stdio_line_buffering), so each
+     * newline-terminated desktop record is one console write. */
     desk_worker_role("input-compositor-shell");
     int safe_mode = 0, terminal_shell = 0;
     startup_begin=monotonic(); startup_stage("entry");
@@ -3005,8 +3150,10 @@ int main(int argc, char **argv)
     static struct ciuki_devices_info devices;
     devices.version=CIUKI_DEVICES_VERSION; devices.size=sizeof(devices);
     if (!ciuki_devices(&devices)) {
+        safe_mode=!!(devices.boot_flags&CIUKI_BOOT_SAFE_MODE);
         verbose_boot=!!(devices.boot_flags&(1u<<11)); /* CBI_F_VERBOSE */
         statistics_boot=!!(devices.boot_flags&((1u<<11)|(1u<<12)|(1u<<6))); /* logged, diagnostic, test */
+        selftest_view.boot=!!(devices.boot_flags&(1u<<23)); /* CBI_F_SELF_TEST (fx-selftest) */
     }
 #endif
     int display = 3, input = 4, test = 0, gate = 0, cycles = 1, demo_count = 0, fullscreen_test = 0;
@@ -3040,6 +3187,15 @@ int main(int argc, char **argv)
                    !strcmp(argv[a]+14,"unified")) startup_game_kernel=argv[a]+14;
         else return 2;
     }
+    /* sec-user-03: SESSION_LAUNCH names the installed grant descriptors. */
+    int logon_session=0;
+    if (!test && !fullscreen_test && !launch && !channel_count) {
+        int ld=display, li=input;
+        if (desk_logon_detect(&ld,&li)) { logon_session=1; display=ld; input=li; }
+    }
+#ifdef __i386__
+    if (logon_session && (devices.boot_flags&CIUKI_BOOT_CMD_ONLY)) terminal_shell=1;
+#endif
     if (display < 3 || input < 3 || display == input || cycles < 1 ||
         channel_count+demo_count+(victim != NULL) > DESK_CLIENTS) return 2;
     for (int i=0; i<channel_count; i++) if (channels[i]==display || channels[i]==input) return 2;
@@ -3056,6 +3212,8 @@ int main(int argc, char **argv)
     if (!d || !portrait) { free(d); free(portrait); return gate_setup_error(gate,GATE_SETUP_MEMORY,ENOMEM); }
     const struct desk_ops ops = {ciuki_channel_send,ciuki_surface_info,ciuki_surface_map,munmap,close,ciuki_present};
     desk_init(d,&ops,info.width,info.height); d->display=display; d->input=input;
+    d->logon_session=logon_session; d->session_lock=logon_session ? desk_logon_lock : NULL;   /* sec-user-03 */
+    d->session_secure=logon_session ? desk_logon_secure : NULL;   /* sec-user-04 */
     d->drop_snapshot=drop_snapshot;
     du_clip_bind(desk_clip_local,d);
     d->now_ns=monotonic(); /* startup notifications use the same clock as service turns */
@@ -3079,17 +3237,22 @@ int main(int argc, char **argv)
     if (flags < 0 || fcntl(input,F_SETFL,flags|O_NONBLOCK)) return gate_setup_error(gate,GATE_SETUP_INPUT,errno);
     if (du_completion_init(&desktop_completion)) return gate_setup_error(gate,GATE_SETUP_INPUT,errno);
     d->wake=du_completion_notify; d->wake_ctx=&desktop_completion;
+    d->safe_mode=safe_mode;
     if (desk_recovery_init) desk_recovery_init(d,safe_mode,terminal_shell);
     int firstboot_pages=gate || terminal_shell ? 0 : desk_firstboot(d);
     shell_setup(d,gate);
     if (!gate && !test) {
         char *spool_argv[] = {"/System/printspool",NULL};
-        char *spool_env[] = {"PATH=/Programs",NULL};
+        /* sec-user-05: the session's worker services its own profile queue
+         * (apps/libprint/print.c), so it gets the session's profile paths. */
+        struct profile_env spool_profile; char *spool_env[8] = {"PATH=/Programs"};
+        spool_env[profile_env_add(&spool_profile,spool_env,1)] = NULL;
         if(ciuki_spawn(spool_argv[0],spool_argv,spool_env,NULL,0,0)<0)
             fprintf(stderr,"desktop: background print service unavailable (errno=%d)\n",errno);
     }
     if (fullscreen_test) d->realtime_second=12*3600;
     display_start(d);
+    if (!gate) display_start_record(d);
     if(firstboot_pages&(1u<<FB_DISPLAY))desk_task_launch_args(d,"control",(const char *const[]){"--panel=display"},1);
     if(firstboot_pages&(1u<<FB_CHANGE_CLOCK))desk_task_launch_args(d,"control",(const char *const[]){"--panel=datetime"},1);
     /* f3-02: --launch=<name> starts one /Programs menu program through the same
@@ -3343,9 +3506,14 @@ int main(int argc, char **argv)
             fprintf(stderr,"desktop: present failed (errno=%d)\n",errno); display_reported=1;
         }
         if (!gate && render_ready && !redraw && d->presents) startup_stage("first_frame_presented");
+        /* sec-user-03: profile loaded and the first frame composed (still
+         * concealed): the session's readiness; then LOGON's menu choices. */
+        if (d->logon_session && render_ready && !desk_logon_ready_sent()) { startup_stage("session_ready"); desk_logon_ready(d); }
+        if (d->logon_session) desk_logon_poll(d);
         desktop_stage(STALL_REPORT); startup_flush();
         if (!gate && d->shell && d->presents && !startup_sound) { startup_sound=1; desk_sound(d,SOUND_STARTUP); desk_sound(d,SOUND_LOGON); }
         if (!gate && d->shell && d->presents && !accel_noticed && (accel_noticed=accel_notice(d))) d->accel_lost=0;
+        if (!gate && d->shell && d->presents) selftest_poll(d);
         if (d->accel_lost && accel_noticed) {
             /* f2-92: the engine was quarantined after the notice: say so. */
             d->accel_lost=0; accel_noticed=0;
@@ -3358,8 +3526,6 @@ int main(int argc, char **argv)
         int mode_frame=desk_display_frame_commit(d,redraw);
         if (mode_frame) {
             desk_display_reply(d,d->display_reply_mode && d->display_reply_mode!=d->display_mode ? -EIO : 0);
-            if (mode_frame==DESK_DISPLAY_PERSIST_FRAME && d->shell && !d->sh.gate && settings_save(d))
-                snprintf(d->notice, sizeof(d->notice), "Display applied; settings not saved");
         }
         if (!gate) performance_sample(d,d->now_ns); /* f2-95: the turn's clock, 2 s cadence */
         /* The controller hashes the framebuffer during this report: send it

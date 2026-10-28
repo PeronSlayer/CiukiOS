@@ -1,6 +1,7 @@
 /* Public read-only network observations; no register or configuration access.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/security_device.h>
 #include <ciuki/files.h>
 #include <ciuki/net.h>
 #include <ciuki/setup_mode.h>
@@ -37,7 +38,7 @@ int net_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, uin
     struct file_description *d = file_fd(p, fd);
     if (!d || d->node->kind != PX_NET) return -ENOTTY;
     if (op==CIUKI_SETUP_NET_QUERY) {
-        if (!p->setup_capability || !setup_mode || !setup_mode()) return -EPERM;
+        if (!security_device_setup(p) || !setup_mode || !setup_mode()) return -EPERM;
         if (bytes!=sizeof(struct ciuki_setup_net)) return -EINVAL;
         struct ciuki_setup_net q;
         int e=copy_from_user(&q,address,sizeof(q)); if(e)return e;

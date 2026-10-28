@@ -381,10 +381,10 @@ def nearest(available, size):
     return larger[0] if larger else max(available)
 
 
-def build_store(archive_path=ARCHIVE):
+def build_store(archive_path=ARCHIVE, *, sources=None, notice_text=NOTICE):
     """Return (store bytes, record) for the pinned archive. Deterministic."""
     import struct
-    icons = store_sources(archive_path)
+    icons = store_sources(archive_path) if sources is None else sources
     names = sorted(icons, key=lambda n: n.encode())
     strings = bytearray()
     offsets = {}
@@ -393,7 +393,7 @@ def build_store(archive_path=ARCHIVE):
             offsets[text] = len(strings)
             strings.extend(text.encode("ascii") + b"\0")
         return offsets[text]
-    notice = string(NOTICE)
+    notice = string(notice_text)
     images, keys, blob = [], {}, bytearray()
     decoded = hashlib.sha256()
     def image(size, encoding, source, pixels, payload):
@@ -442,7 +442,7 @@ def build_store(archive_path=ARCHIVE):
               "conversion": STORE_CONVERSION, "names": len(table), "images": len(images),
               "qoi_images": sum(1 for e in images if e[1] == ENC_QOI), "scaled_images": sum(1 for e in images if e[1] == ENC_SCALE),
               "store_bytes": len(out), "store_sha256": sha(out), "decoded_sha256": decoded.hexdigest(),
-              "notice_sha256": sha(NOTICE.encode()), "members": dict(sorted(members.items()))}
+              "notice_sha256": sha(notice_text.encode()), "members": dict(sorted(members.items()))}
     return out, record
 
 

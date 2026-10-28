@@ -228,6 +228,21 @@ static int only_twenty(void *unused,uint32_t pid){(void)unused;return pid==20;}
 static void default_deletions(void)
 {
     struct disk d={0};struct wr_server s;start(&s,&d);
+    /* --- sec-user-04: a new machine hive carries the Windows XP all-users
+     * values (CSIDL_COMMON_STARTMENU/STARTUP/APPDATA/DOCUMENTS). --- */
+    static const char *const common[][2]={{"Common Start Menu","C:\\WINDOWS\\Start Menu"},
+        {"Common Startup","C:\\WINDOWS\\Start Menu\\Programs\\StartUp"},{"Common AppData","C:\\WINDOWS\\Application Data"},
+        {"Common Documents","C:\\Documents"},{"Common Programs","C:\\WINDOWS\\Start Menu\\Programs"}};
+    for (unsigned user=0;user<2;user++) {
+        char path[128];snprintf(path,sizeof(path),"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\%sShell Folders",user?"User ":"");
+        CHECK(!rpc(&s,10,W32R_OPEN,W32R_HKLM,path,"",0,NULL,0,0));uint32_t folders=r.key;
+        for (unsigned i=0;i<5;i++) {
+            CHECK(!get(&s,folders,common[i][0]) && r.type==1 && r.data_bytes==(strlen(common[i][1])+1)*2);
+            for (size_t b=0;b<strlen(common[i][1]);b++) CHECK(result[40+b*2]==(uint8_t)common[i][1][b] && !result[41+b*2]);
+        }
+        CHECK(!rpc(&s,10,W32R_CLOSE,folders,"","",0,NULL,0,0));
+    }
+    /* --- end sec-user-04 --- */
     uint32_t key=create(&s,"Software\\Microsoft\\Windows\\CurrentVersion");
     CHECK(!rpc(&s,10,W32R_DELETE_VALUE,key,"","RegisteredOwner",0,NULL,0,0));
     CHECK(!rpc(&s,10,W32R_DELETE_KEY,key,"Run","",0,NULL,0,0));CHECK(!wr_flush(&s));wr_destroy(&s);start(&s,&d);
@@ -381,6 +396,7 @@ uint32_t w32_shim_stub(volatile uint32_t *once,const char *dll,const char *name,
 void w32_report_refusal(uint32_t kind,const char *dll,uint32_t error){CHECK(kind==2&&!strcmp(dll,"advapi32.dll")&&error==5);refusals++;}
 void *w32r_alloc(uint32_t n){return malloc(n?n:1);}
 void w32r_free(void *p){free(p);}
+/* sec-user-05: identity.c boundaries are in registry_identity_fixture.c. */
 static uint32_t expand_ansi(const char *s,char *out,uint32_t cap)
 {char t[512];const char *w=strstr(s,"%WINDIR%");if(w)snprintf(t,sizeof(t),"%.*sC:\\WINDOWS%s",(int)(w-s),s,w+8);else snprintf(t,sizeof(t),"%s",s);
  uint32_t n=(uint32_t)strlen(t)+1;if(out&&cap>=n)memcpy(out,t,n);return n;}
@@ -392,6 +408,7 @@ static char loaded_path[300];static unsigned frees;
 static uint8_t strings_block[64];
 void *LoadLibraryExA(const char *p,void *f,uint32_t flags){CHECK(!f&&flags==2);snprintf(loaded_path,sizeof(loaded_path),"%s",p);return strstr(p,"missing")?NULL:(void *)0x1000;}
 int FreeLibrary(void *h){CHECK(h==(void *)0x1000);frees++;return 1;}
+int GetComputerNameA(char *out,uint32_t *n){CHECK(out&&n&&*n>=8);strcpy(out,"CIUKIOS");*n=7;return 1;}
 void *FindResourceA(void *h,const char *name,const char *type){CHECK(h==(void *)0x1000&&(uintptr_t)type==6);return (uintptr_t)name==2?strings_block:NULL;}
 void *LoadResource(void *h,void *r){(void)h;return r;}
 uint32_t SizeofResource(void *h,void *r){(void)h;(void)r;return sizeof(strings_block);}
@@ -424,6 +441,7 @@ DECL(int,CreateProcessAsUserW,(void *,const WCHAR *,WCHAR *,void *,void *,int,ui
 DECL(int,GetFileSecurityW,(const WCHAR *,uint32_t,void *,uint32_t,uint32_t *));DECL(int,GetFileSecurityA,(const char *,uint32_t,void *,uint32_t,uint32_t *));
 DECL(int,SetFileSecurityW,(const WCHAR *,uint32_t,void *));DECL(int,LookupPrivilegeValueW,(const WCHAR *,const WCHAR *,void *));
 DECL(uint32_t,CommandLineFromMsiDescriptor,(const WCHAR *,WCHAR *,uint32_t *));
+DECL(int,EqualSid,(const void *,const void *));DECL(void *,FreeSid,(void *));DECL(LONG,RegConnectRegistryA,(const char *,uint32_t,uint32_t *));DECL(LONG,RegConnectRegistryW,(const WCHAR *,uint32_t,uint32_t *));
 static const WCHAR *L16(const char *a){static WCHAR b[8][128];static unsigned n;WCHAR *w=b[n++%8];unsigned i=0;for(;a[i];i++)w[i]=(uint8_t)a[i];w[i]=0;return w;}
 static int weq(const WCHAR *w,const char *a){for(;*a;a++,w++)if(*w!=(uint8_t)*a)return 0;return !*w;}
 static void upper_registry(void)
@@ -503,17 +521,34 @@ static void upper_registry(void)
     uint32_t subs=0,vals=0;CHECK(!RegQueryInfoKeyW(w,NULL,NULL,NULL,&subs,NULL,NULL,&vals,NULL,NULL,NULL,NULL)&&subs==1&&vals==1);
     count=32;uint32_t vtype=0;CHECK(!RegEnumValueW(w,0,name,&count,NULL,&vtype,NULL,NULL)&&weq(name,"v")&&vtype==1);
     CHECK(!RegDeleteValueW(w,L16("v"))&&RegDeleteValueW(w,L16("v"))==2);CHECK(!RegCloseKey(w));
+    /* RegConnectRegistry: a local name opens the predefined root, which is
+     * that root's own handle (RegOpenKey(hKey, NULL), as w32srv answers an
+     * empty-path OPEN of a root); remote names fail. */
+    uint32_t remote=0,probe=0;CHECK(!RegConnectRegistryA(NULL,W32R_HKLM,&remote)&&remote==W32R_HKLM);
+    CHECK(!RegOpenKeyExA(remote,"Software\\Upper",0,1,&probe));CHECK(!RegCloseKey(probe));CHECK(!RegCloseKey(remote));
+    CHECK(!RegConnectRegistryA("",W32R_HKU,&remote)&&remote==W32R_HKU);CHECK(!RegCloseKey(remote));
+    CHECK(!RegConnectRegistryA("\\\\ciukios",W32R_HKLM,&remote));CHECK(!RegCloseKey(remote));
+    CHECK(!RegConnectRegistryW(L16("CIUKIOS"),W32R_HKLM,&remote));CHECK(!RegCloseKey(remote));
+    remote=7;CHECK(RegConnectRegistryA("\\\\SERVER",W32R_HKLM,&remote)==53&&remote==0);
+    CHECK(RegConnectRegistryW(L16("CIUKIOS2"),W32R_HKLM,&remote)==53&&RegConnectRegistryA("CIUKIO",W32R_HKLM,&remote)==53);
+    CHECK(RegConnectRegistryA(NULL,W32R_HKLM,NULL)==87);
     strcpy(s.user_name,"Ciuki");
     WCHAR user[16];uint32_t user_size=16;CHECK(GetUserNameW(user,&user_size)&&user_size==6);user_size=1;
     CHECK(!GetUserNameW(user,&user_size)&&user_size==6&&last_error==122);
     forgotten=0;CHECK(!RegCloseKey(k)&&forgotten==1);CHECK(RegCloseKey(k)==6&&forgotten==1);
     wr_destroy(&s);clear(&d);
-    puts("PASS f5-20A registry access normalization RegGetValue trees RegDeleteKeyEx MUI strings close notification");
+    puts("PASS f5-20A registry access normalization RegGetValue trees RegDeleteKeyEx MUI strings close notification RegConnectRegistry");
 }
 static void upper_security(void)
 {
     uint8_t sid[16]={1,2,0,0,0,0,0,5,32,0,0,0,32,2,0,0},bad_sid[8]={2,0};
     CHECK(GetLengthSid(sid)==16&&!GetLengthSid(NULL));
+    /* fx-is5boot: EqualSid compares valid SIDs and clears the error; FreeSid
+     * frees only a process-heap block (identity.c, sec-user-05). */
+    uint8_t same[16],other[16];memcpy(same,sid,16);memcpy(other,sid,16);other[15]=1;
+    last_error=77;CHECK(EqualSid(sid,same)&&last_error==0);CHECK(!EqualSid(sid,other)&&last_error==0);
+    CHECK(!EqualSid(sid,bad_sid)&&last_error==1337);CHECK(!EqualSid(NULL,sid)&&last_error==1337);
+    CHECK(!FreeSid(NULL));CHECK(FreeSid(sid)==sid&&last_error==87);
     uint8_t acl[64];last_error=0;
     CHECK(!InitializeAcl(acl,4,2)&&last_error==122);CHECK(!InitializeAcl(acl,64,3)&&last_error==87);CHECK(!InitializeAcl(acl,0x10000,2)&&last_error==87);
     CHECK(InitializeAcl(acl,63,2)&&acl[0]==2&&w32_u16(acl+2)==60&&!w32_u16(acl+4));
@@ -554,10 +589,51 @@ static void upper_security(void)
     uint8_t descriptor[20];CHECK(!GetFileSecurityW(L16("C:\\x"),4,descriptor,20,&needed)&&last_error==120&&needed==7);
     /* Amendment 1 item 2: the ANSI form fails identically (outputs untouched). */
     CHECK(!GetFileSecurityA("C:\\x",4,descriptor,20,&needed)&&last_error==120&&needed==7);
-    CHECK(!SetFileSecurityW(L16("C:\\x"),4,descriptor)&&!LookupPrivilegeValueW(NULL,L16("SeBackupPrivilege"),descriptor)&&last_error==120);
+    CHECK(!SetFileSecurityW(L16("C:\\x"),4,descriptor)&&last_error==120);
+    /* sec-user-05: the frozen three-name local privilege view (identity.c). */
+    CHECK(!LookupPrivilegeValueW(NULL,L16("SeBackupPrivilege"),descriptor)&&last_error==1313);
+    CHECK(LookupPrivilegeValueW(NULL,L16("SeShutdownPrivilege"),descriptor)&&w32_u32(descriptor)==1);
     CHECK(CommandLineFromMsiDescriptor(L16("x"),NULL,&length)==120&&length==5);
-    CHECK(stub_diagnostics==17);
+    CHECK(stub_diagnostics==16);
     puts("PASS f5-20A security structures hardware profile random bytes and W21 service NT-security MSI failures");
+}
+/* sec-user-05 (Windows XP, lead addition): MAXIMUM_ALLOWED and the legacy
+ * RegOpenKey/RegCreateKey/RegConnectRegistry masks are the largest the
+ * sec-k06 policy admits, so a Standard user reads HKLM\Software; explicit
+ * write rights stay refused with 5; administrators keep full access. */
+DECL(LONG,RegOpenKeyA,(uint32_t,const char *,uint32_t *));
+static void xp_access(void)
+{
+    struct disk d={0};struct wr_server s;start(&s,&d);uint32_t k=0,h=0,root=0,disp=0;
+    CHECK(!RegCreateKeyExA(W32R_HKLM,"Software\\Game",0,NULL,0,0xf003f,NULL,&k,NULL));
+    CHECK(!RegSetValueExA(k,"Detail",0,1,(const uint8_t *)"high",5));CHECK(!RegCloseKey(k));
+    s.secured=1;s.subject.uid=1000;s.subject.session=1;s.subject.group_count=1;s.subject.groups[0]=545;
+    char text[16];uint32_t type=0,size=sizeof(text);
+    CHECK(!RegOpenKeyA(W32R_HKLM,"Software\\Game",&h));
+    CHECK(!RegQueryValueExA(h,"Detail",NULL,&type,(uint8_t *)text,&size)&&type==1&&!strcmp(text,"high"));
+    CHECK(RegSetValueExA(h,"Detail",0,1,(const uint8_t *)"low",4)==5);CHECK(!RegCloseKey(h));
+    CHECK(!RegOpenKeyExA(W32R_HKLM,"Software\\Game",0,0x02000000u,&h));size=sizeof(text);
+    CHECK(!RegQueryValueExA(h,"Detail",NULL,&type,(uint8_t *)text,&size)&&!strcmp(text,"high"));
+    CHECK(RegDeleteValueA(h,"Detail")==5);CHECK(!RegCloseKey(h));
+    CHECK(!RegConnectRegistryA(NULL,W32R_HKLM,&root)&&root==W32R_HKLM);
+    CHECK(!RegOpenKeyExA(root,"Software\\Game",0,0x20019,&h));CHECK(!RegCloseKey(h));CHECK(!RegCloseKey(root));
+    /* Explicit write rights, alone or next to MAXIMUM_ALLOWED, stay refused. */
+    h=7;CHECK(RegOpenKeyExA(W32R_HKLM,"Software\\Game",0,0x20006,&h)==5&&!h);
+    CHECK(RegOpenKeyExA(W32R_HKLM,"Software\\Game",0,0xf003f,&h)==5);
+    CHECK(RegOpenKeyExA(W32R_HKLM,"Software\\Game",0,0x02000000u|2u,&h)==5);
+    /* RegCreateKey opens an existing key for reading and cannot make a new one. */
+    CHECK(!RegCreateKeyA(W32R_HKLM,"Software\\Game",&h));CHECK(RegSetValueExA(h,"Detail",0,1,(const uint8_t *)"low",4)==5);CHECK(!RegCloseKey(h));
+    CHECK(!RegCreateKeyExA(W32R_HKLM,"Software\\Game",0,NULL,0,0x02000000u,NULL,&h,&disp)&&disp==2);CHECK(!RegCloseKey(h));
+    CHECK(RegCreateKeyA(W32R_HKLM,"Software\\Other",&h)==5);
+    CHECK(RegCreateKeyExA(W32R_HKLM,"Software\\Game\\New",0,NULL,0,0x02000000u,NULL,&h,NULL)==5);
+    /* An absent key is still not found, never a refusal. */
+    CHECK(RegOpenKeyA(W32R_HKLM,"Software\\Missing",&h)==2);
+    /* An administrator keeps full access through the same calls. */
+    s.subject.groups[0]=544;
+    CHECK(!RegOpenKeyA(W32R_HKLM,"Software\\Game",&h));CHECK(!RegSetValueExA(h,"Detail",0,1,(const uint8_t *)"low",4));CHECK(!RegCloseKey(h));
+    CHECK(!RegCreateKeyA(W32R_HKLM,"Software\\Other",&h));CHECK(!RegCloseKey(h));
+    wr_destroy(&s);clear(&d);
+    puts("PASS sec-user-05 XP registry access: Standard user reads HKLM\\Software via RegOpenKey, RegOpenKeyEx(MAXIMUM_ALLOWED), RegConnectRegistry and RegCreateKey of an existing key; writes and new keys refused with 5; administrator full access");
 }
 /* f5-20B (directive f5-20 amendment 1, item 3): NtDeleteKey deletes the
  * key of an open handle (empty name) when the handle has DELETE access; a
@@ -612,7 +688,10 @@ static void user_profiles(void)
 {
     struct disk d={0}; struct wr_server s; start(&s,&d); s.compat_writer_pid=99;
     uint32_t n=32; char name[32]="unchanged";
-    CHECK(!GetUserNameA(name,&n) && last_error==1245 && !strcmp(name,"unchanged"));
+    /* sec-user-05: GetUserName is the authenticated account of the caller's
+     * kernel credential (uid 1000 "Ciuki" here), never the profile label the
+     * desktop selects in w32srv (user-security-contract.md 8.1). */
+    CHECK(GetUserNameA(name,&n) && n==6 && !strcmp(name,"Ciuki"));
     CHECK(!rpc(&s,10,W32R_CREATE,W32R_HKCU,"Seed","",0,NULL,0,0)); uint32_t key=r.key;
     CHECK(!rpc(&s,10,W32R_SET,key,"","Marker",3,"default",8,0));
     CHECK(!rpc(&s,10,W32R_CLOSE,key,"","",0,NULL,0,0));
@@ -620,14 +699,14 @@ static void user_profiles(void)
     CHECK(rpc(&s,99,DESK_W32_PROFILE,0,"/Windows/Profiles/../bad","Alice",0,NULL,0,0)==87);
     CHECK(!rpc(&s,99,DESK_W32_PROFILE,0,"/Windows/Profiles/u00000001","Alice",0,NULL,0,0));
     n=1; CHECK(!GetUserNameA(name,&n) && n==6 && last_error==122);
-    n=sizeof(name); CHECK(GetUserNameA(name,&n) && n==6 && !strcmp(name,"Alice"));
+    n=sizeof(name); CHECK(GetUserNameA(name,&n) && n==6 && !strcmp(name,"Ciuki"));
     CHECK(!rpc(&s,10,W32R_OPEN,W32R_HKCU,"Seed","",0,NULL,0,0)); key=r.key;
     CHECK(!get(&s,key,"Marker") && r.data_bytes==8 && !memcmp(result+40,"default",8));
     CHECK(!rpc(&s,10,W32R_SET,key,"","Marker",3,"alice",6,0));
     CHECK(!rpc(&s,10,W32R_CLOSE,key,"","",0,NULL,0,0));
     CHECK(!wr_client_join(&s,10));
     CHECK(rpc(&s,99,DESK_W32_PROFILE,0,"/Windows/Profiles/u00000002","Bob",0,NULL,0,0)==170);
-    n=sizeof(name);CHECK(GetUserNameA(name,&n) && !strcmp(name,"Alice"));
+    n=sizeof(name);CHECK(GetUserNameA(name,&n) && !strcmp(name,"Ciuki"));
     CHECK(!wr_exit(&s,10));
     CHECK(!rpc(&s,99,DESK_W32_PROFILE,0,"/Windows/Profiles/u00000002","Bob",0,NULL,0,0));
     CHECK(!rpc(&s,10,W32R_OPEN,W32R_HKCU,"Seed","",0,NULL,0,0)); key=r.key;
@@ -651,7 +730,7 @@ static void user_profiles(void)
         }
         CHECK(!rpc(&s,10,W32R_CLOSE,key,"","",0,NULL,0,0));
     }
-    CHECK(!wr_select_profile(&s,"",""));n=sizeof(name);CHECK(!GetUserNameA(name,&n) && last_error==1245);
+    CHECK(!wr_select_profile(&s,"",""));n=sizeof(name);CHECK(GetUserNameA(name,&n) && !strcmp(name,"Ciuki"));
     CHECK(!rpc(&s,10,W32R_OPEN,W32R_HKCU,"Seed","",0,NULL,0,0));key=r.key;
     CHECK(!get(&s,key,"Marker") && !memcmp(result+40,"default",8));
     CHECK(!rpc(&s,10,W32R_CLOSE,key,"","",0,NULL,0,0));
@@ -693,10 +772,12 @@ static void user_profiles(void)
     CHECK(!rpc(&s,10,W32R_OPEN,W32R_HKCU,"Seed","",0,NULL,0,0));key=r.key;
     CHECK(wr_select_profile(&s,"Bob","/Windows/Profiles/u00000002")==170);
     CHECK(!rpc(&s,10,W32R_CLOSE,key,"","",0,NULL,0,0));
+    /* A 31-byte desktop label is accepted by w32srv but is not the caller's
+     * name (sec-user-05): GetUserNameW keeps the authenticated "Ciuki". */
     const char *long_name="ABCDEFGHIJKLMNOPQRSTUVWXYZ12345";
-    CHECK(!wr_select_profile(&s,long_name,""));n=sizeof(name);CHECK(GetUserNameA(name,&n) && n==32 && !strcmp(name,long_name));
-    WCHAR wide[32];n=31;CHECK(!GetUserNameW(wide,&n) && n==32 && last_error==122);
-    n=32;CHECK(GetUserNameW(wide,&n) && n==32);for(unsigned i=0;i<32;i++)CHECK(wide[i]==(uint8_t)long_name[i]);
+    CHECK(!wr_select_profile(&s,long_name,""));CHECK(!strcmp(s.user_name,long_name));
+    WCHAR wide[32];n=5;CHECK(!GetUserNameW(wide,&n) && n==6 && last_error==122);
+    n=32;CHECK(GetUserNameW(wide,&n) && n==6);for(unsigned i=0;i<6;i++)CHECK(wide[i]==(uint8_t)"Ciuki"[i]);
     wr_destroy(&s);clear(&d);current=NULL;
     puts("PASS g32b identity: default error, authenticated publication, buffers, seeded isolated durable HKCU, live identity, personal folder keys, failed/corrupt switch preserves session");
 }
@@ -705,6 +786,6 @@ int main(int argc,char **argv)
     CHECK(argc>=2);
     if(!strcmp(argv[1],"users"))user_profiles();else if(!strcmp(argv[1],"compat"))compatibility();else if(!strcmp(argv[1],"basics"))basics();else if(!strcmp(argv[1],"limits"))limits();else if(!strcmp(argv[1],"faults"))faults();
     else if(!strcmp(argv[1],"lifecycle")){lifecycle();reconciliation();batch_reconciliation();default_deletions();}else if(!strcmp(argv[1],"concurrent"))concurrent();else if(!strcmp(argv[1],"malformed"))malformed();
-    else if(!strcmp(argv[1],"version")){CHECK(argc==3);version_tests(argv[2]);}else if(!strcmp(argv[1],"lz")){CHECK(argc==3);lz_tests(argv[2]);}else if(!strcmp(argv[1],"upper")){upper_registry();upper_security();}else if(!strcmp(argv[1],"handle-delete"))handle_deletion();else CHECK(0);
+    else if(!strcmp(argv[1],"version")){CHECK(argc==3);version_tests(argv[2]);}else if(!strcmp(argv[1],"lz")){CHECK(argc==3);lz_tests(argv[2]);}else if(!strcmp(argv[1],"upper")){upper_registry();upper_security();}else if(!strcmp(argv[1],"handle-delete"))handle_deletion();else if(!strcmp(argv[1],"xp-access"))xp_access();else CHECK(0);
     printf("w32srv %s checks=%u PASS\n",argv[1],checks);return 0;
 }

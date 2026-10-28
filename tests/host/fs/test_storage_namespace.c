@@ -1,6 +1,7 @@
 /* Native namespace over the production F1 storage harness. Only process,
  * scheduler and memory services are faked; storage/path/fd code is linked.
  * SPDX-License-Identifier: GPL-2.0-only */
+#include <ciuki/kheap_limits.h>
 #define main storage_fixture_main
 #include "test_storage.c"
 #undef main
@@ -18,8 +19,8 @@
 static struct process supervisor = { .state = PROC_LIVE };
 struct task *g_current;
 struct desktop_ledger desktop_objects;
-void *kmalloc(size_t bytes) { return malloc(bytes); }
-void *kzalloc(size_t bytes) { return calloc(1, bytes); }
+void *(kmalloc)(size_t bytes) { if (bytes > KHEAP_MAX_REQUEST) return 0; return malloc(bytes); }
+void *(kzalloc)(size_t bytes) { if (bytes > KHEAP_MAX_REQUEST) return 0; return calloc(1, bytes); }
 void kfree(void *p) { free(p); }
 void panic(const char *fmt, ...) { fprintf(stderr, "unexpected panic: %s\n", fmt); abort(); }
 struct process *proc_supervisor(void) { return &supervisor; }
@@ -31,15 +32,30 @@ bool supervisor_output(struct task *t,unsigned stream,const void *b,uint32_t n)
 void proc_launch_volume_read(uint32_t requested,size_t done) { (void)requested;(void)done; }
 void serial_write(const char *s,size_t n) { (void)s;(void)n; abort(); }
 void console_write(const char *s,size_t n) { (void)s;(void)n; abort(); }
+/* sec-k04: media_dev.c asks the production credential predicates; the
+ * subject fixture links proc/security.c. Every harness process is a SYSTEM
+ * kernel service, as PID 1 (security_init: uid 0, no session, OWNER role),
+ * and the harness issues its calls from kernel context (no current process,
+ * as fdtable.c's weak hook assumed before). */
+#include "../security/subject_fixture.h"
+struct process *proc_current(void) { return 0; }
+#define harness_system(p) security_fixture_identity((p),CIUKI_UID_SYSTEM,0,false,CIUKI_SECURITY_ROLE_OWNER)
+#else
+#define harness_system(p) ((void)(p))
 #endif
 void task_sleep_ms(uint32_t ms) { (void)ms; abort(); }
 void proc_set_file_ops(const struct ciuki_file_ops *ops) { (void)ops; }
 void supervisor_set_io_ops(const struct supervisor_io_ops *ops) { (void)ops; }
-uint32_t pmm_alloc(void) { abort(); }
-void pmm_free(uint32_t page) { (void)page; abort(); }
-static void *host_page(uint32_t page) { (void)page; abort(); }
+static _Alignas(PAGE_SIZE) uint8_t descriptor_page[PAGE_SIZE];
+static bool descriptor_page_live;
+uint32_t pmm_alloc(void)
+{ CHECK(!descriptor_page_live); descriptor_page_live=true; return PAGE_SIZE; }
+void pmm_free(uint32_t page)
+{ CHECK(page==PAGE_SIZE && descriptor_page_live); descriptor_page_live=false; }
+static void *host_page(uint32_t page)
+{ CHECK(page==PAGE_SIZE && descriptor_page_live); return descriptor_page; }
 #define P2V(page) host_page(page)
-#define V2P(ptr) ((void)(ptr), 0u)
+#define V2P(ptr) ((void)(ptr), PAGE_SIZE)
 bool clock_fat_utc(uint16_t date, uint16_t time, int64_t *seconds)
 { (void)date; (void)time; *seconds = 0; return false; }
 int file_clock_now(uint32_t clock, const struct process *p, struct ciuki_timespec *out)
@@ -56,7 +72,7 @@ static void namespace_close(void)
     for (int fd = 0; fd < CIUKI_OPEN_MAX; fd++)
         if (supervisor.fds[fd].object) OK(file_close(&supervisor, fd));
     px_release(supervisor.cwd); supervisor.cwd = 0;
-    kfree(supervisor.fds); supervisor.fds = 0;
+    proc_fds_free(supervisor.fds); supervisor.fds = 0; CHECK(!descriptor_page_live);
 }
 
 static struct storage *namespace_start(struct px_namespace **space)
@@ -94,11 +110,11 @@ static void cwd_tests(void)
     CHECK(file_open(&supervisor, "/dev", O_RDONLY | O_DIRECTORY, 0) >= 3);
     OK(storage_add_disk(s, 1, &media[2].dev));
     struct process peer = { .state = PROC_LIVE, .cwd = space->root };
-    px_retain(peer.cwd);
+    harness_system(&peer); px_retain(peer.cwd);
     OK(px_chdir(&peer, "/Fixture dir"));
     CHECK(vfs_rmdir(&table, "C:/Fixture dir") == -FS_EBUSY);
     struct process other = { .state = PROC_LIVE, .cwd = space->root };
-    px_retain(other.cwd);
+    harness_system(&other); px_retain(other.cwd);
     OK(px_chdir(&other, "/mnt/d/Fixture dir"));
     struct px_node *synthetic[] = { space->mnt, space->dev, space->null, space->console };
     for (unsigned i = 0; i < ARRAY_SIZE(synthetic); i++) px_retain(synthetic[i]);
@@ -700,6 +716,7 @@ static void latency_tests(void)
         struct latency_run r={.native=native,.media_fd=control};
         r.slow=(struct process){.state=PROC_LIVE,.cwd=space->root,.fds=calloc(CIUKI_OPEN_MAX,sizeof(struct proc_fd))};
         r.fast=(struct process){.state=PROC_LIVE,.cwd=space->root,.fds=calloc(CIUKI_OPEN_MAX,sizeof(struct proc_fd))};
+        harness_system(&r.slow); harness_system(&r.fast);
         latency_owners[0]=&r.slow; latency_owners[1]=&r.fast;
         CHECK(r.slow.fds && r.fast.fds); px_retain(r.slow.cwd); px_retain(r.fast.cwd);
         OK(vfs_table_init(&s->vfs,&r.slow_table,4)); OK(vfs_table_init(&s->vfs,&r.fast_table,2));
@@ -783,13 +800,87 @@ static void floppy_namespace_tests(void)
     namespace_stop(s,true);
     puts("PASS fx-17b floppy namespace: /dev/media floppy type, Retry load without and with a diskette, volume space, A: listed first under /mnt, files readable, no /mnt/c, B: absent, removal");
 }
+/* fx-emptydrive: an empty CD-ROM drive owns D: (Windows 98 reserves one
+ * letter per removable-media drive at startup): /dev/media lists it without
+ * the medium bit, its paths are "not ready" (ENXIO, not ENOENT), /mnt lists
+ * no root for it, and a USB stick takes the next letter after it. A floppy
+ * drive found by the controller owns A: the same way. */
+static void empty_drive_namespace_tests(void)
+{
+    struct px_namespace *space;struct storage *s=namespace_start(&space);(void)space;
+    CHECK(!vfs_drive_present(&s->vfs,3) && !vfs_letter_taken(&s->vfs,3));
+    vfs_lock(&s->vfs,0); storage_reserve_slot_locked(s,3,VFS_SLOT_OPTICAL); vfs_unlock(&s->vfs);
+    storage_reserve_floppy(1);
+    CHECK(vfs_drive_slot(&s->vfs,3)==VFS_SLOT_OPTICAL && vfs_drive_slot(&s->vfs,1)==VFS_SLOT_FLOPPY);
+    CHECK(vfs_letter_taken(&s->vfs,3) && !vfs_drive_present(&s->vfs,3) && !vfs_drive_slot(&s->vfs,5));
+    int control=file_open(&supervisor,"/dev/media",O_RDONLY,0);CHECK(control>=0);
+    struct ciuki_media_state st={.version=CIUKI_MEDIA_VERSION,.size=sizeof(st)};media_user=&st;
+    OK(media_devctl(&supervisor,control,MEDIA_GET_STATE,1,sizeof(st)));
+    CHECK(st.type[3]==CIUKI_MEDIA_OPTICAL && !(st.removable_mask&(1u<<3)) && !st.generation[3]);
+    struct ciuki_media_volume v={.version=CIUKI_MEDIA_VERSION,.size=sizeof(v),.drive=3};media_user=&v;
+    OK(media_devctl(&supervisor,control,MEDIA_GET_VOLUME,1,sizeof(v)));CHECK(!v.flags && !v.generation && !v.label[0]);
+    OK(file_close(&supervisor,control));
+    /* Not ready, not "no such drive"; a letter nobody owns stays ENOENT. */
+    CHECK(file_open(&supervisor,"/mnt/d",O_RDONLY|O_DIRECTORY,0)==-ENXIO);
+    CHECK(file_open(&supervisor,"/mnt/d/SETUP.EXE",O_RDONLY,0)==-ENXIO);
+    CHECK(file_open(&supervisor,"/mnt/D/NEW.TXT",O_CREAT|O_RDWR,0666)==-ENXIO);
+    CHECK(px_chdir(&supervisor,"/mnt/d")==-ENXIO);
+    CHECK(file_open(&supervisor,"/mnt/b",O_RDONLY|O_DIRECTORY,0)==-ENXIO);
+    CHECK(file_open(&supervisor,"/mnt/f",O_RDONLY|O_DIRECTORY,0)==-ENOENT);
+    CHECK(vfs_open(&table,"D:/SETUP.EXE",VFS_READ,VFS_DENY_NONE,0)==-FS_ENXIO);
+    CHECK(vfs_mkdir(&table,"D:/NEW",0)==-FS_ENXIO);
+    struct vfs_find find;struct fat_entry entry;
+    CHECK(vfs_find_first(&table,"D:/*.*",0x37,&find,&entry)==-FS_ENXIO);
+    CHECK(vfs_open(&table,"F:/SETUP.EXE",VFS_READ,VFS_DENY_NONE,0)==-FS_ENOENT);
+    int dir=file_open(&supervisor,"/mnt",O_RDONLY|O_DIRECTORY,0);CHECK(dir>=3);
+    struct ciuki_dirent ent;
+    while (native_next(file_fd(&supervisor,dir),&ent)>0) CHECK(strcmp(ent.d_name,"d") && strcmp(ent.d_name,"b"));
+    OK(file_close(&supervisor,dir));
+    /* A USB stick never takes a CD-ROM drive's letter: with a second empty
+     * CD-ROM drive owning E:, the stick mounts at F:. */
+    vfs_lock(&s->vfs,0); storage_reserve_slot_locked(s,4,VFS_SLOT_OPTICAL); vfs_unlock(&s->vfs);
+    OK(storage_add_removable(s,&media[2].dev));CHECK(!s->vfs.volumes[3] && !s->vfs.volumes[4] && s->vfs.volumes[5]);
+    int fd=file_open(&supervisor,"/mnt/f/SHORT.BIN",O_RDONLY,0);CHECK(fd>=3);OK(file_close(&supervisor,fd));
+    CHECK(file_open(&supervisor,"/mnt/e/SHORT.BIN",O_RDONLY,0)==-ENXIO);
+    OK(storage_remove_removable(s,&media[2].dev,false));CHECK(!s->vfs.volumes[5] && vfs_drive_slot(&s->vfs,3)==VFS_SLOT_OPTICAL);
+    media[2].dev.quarantined=false;
+    namespace_stop(s,true);
+    puts("PASS fx-emptydrive namespace: empty CD-ROM D: and floppy B: reserved, /dev/media type without medium bit, ENXIO/FS_ENXIO paths (open, create, chdir, find, mkdir), no /mnt root, USB stick at F: after the reserved D:/E:");
+}
+static void ntfs_status_tests(void)
+{
+    struct px_namespace *space; struct storage *s=namespace_start(&space); (void)space;
+    int fd=file_open(&supervisor,"/dev/media",O_RDONLY,0); CHECK(fd>=0);
+    for (unsigned i=0;i<3;i++) {
+        struct storage_ntfs *n=&s->ntfs[i];
+        n->present=true; n->disk=1; n->partition=i+1;
+        n->error=i ? -FS_EUCLEAN : 0;
+        n->ro.diagnostic=i==1 ? "ntfs_recovery_required" : i==2 ? "ntfs_hibernated" : "ntfs";
+        struct ciuki_ntfs_status r={.version=CIUKI_MEDIA_VERSION,.size=sizeof(r),.slot=i}; media_user=&r;
+        OK(media_devctl(&supervisor,fd,MEDIA_GET_NTFS_STATUS,1,sizeof(r)));
+        CHECK(r.disk==1 && r.partition==i+1 && r.error==n->error);
+        CHECK(i==0 ? !r.reason[0] : strstr(r.reason,i==1 ? "needs recovery" : "hibernated")!=NULL);
+        CHECK(!n->reads && !n->writes && !n->flushes);
+        n->present=false;
+    }
+    struct ciuki_ntfs_status r={.version=CIUKI_MEDIA_VERSION,.size=sizeof(r)}; media_user=&r;
+    CHECK(media_devctl(&supervisor,fd,MEDIA_GET_NTFS_STATUS,1,sizeof(r))==-ENOENT);
+    r.slot=CIUKI_MEDIA_NTFS_SLOTS; CHECK(media_devctl(&supervisor,fd,MEDIA_GET_NTFS_STATUS,1,sizeof(r))==-EINVAL);
+    r.slot=0; r.reason[127]=1; CHECK(media_devctl(&supervisor,fd,MEDIA_GET_NTFS_STATUS,1,sizeof(r))==-EINVAL);
+    r.reason[127]=0; r.version=0; CHECK(media_devctl(&supervisor,fd,MEDIA_GET_NTFS_STATUS,1,sizeof(r))==-EOPNOTSUPP);
+    CHECK(media_devctl(&supervisor,fd,MEDIA_GET_NTFS_STATUS,1,sizeof(r)-1)==-EINVAL);
+    OK(file_close(&supervisor,fd)); namespace_stop(s,true);
+    puts("PASS Round 2 NTFS status: mounted/replay/hibernation reasons, no disk I/O, absent slot and input bounds");
+}
 int main(int argc, char **argv)
 {
     setvbuf(stdout,0,_IOLBF,0);
     CHECK(argc == 4);
     for (unsigned i = 0; i < 3; i++) OK(fake_open(&media[i], argv[i + 1]));
+    harness_system(&supervisor);
     baseline(); media[2].undo_enabled = true;
-    latency_tests(); healthy_writer_reservation_test(); writer_shutdown_test(); bounded_shutdown_test(); cancelled_wait_test(); cwd_tests(); busy_tests(); removable_namespace_tests(); detach_tests(); namespace_probe_tests(); floppy_namespace_tests();
+    ntfs_status_tests();
+    latency_tests(); healthy_writer_reservation_test(); writer_shutdown_test(); bounded_shutdown_test(); cancelled_wait_test(); cwd_tests(); busy_tests(); removable_namespace_tests(); detach_tests(); namespace_probe_tests(); floppy_namespace_tests(); empty_drive_namespace_tests();
     for (unsigned i = 0; i < 3; i++) fake_close(&media[i]);
     printf("STORAGE NAMESPACE RESULT checks=%u records=%u failures=0 ASan/UBSan=enabled\n", checks, records);
     return 0;

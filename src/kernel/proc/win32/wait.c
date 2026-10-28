@@ -5,6 +5,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
 #include <ciuki/w32_objects.h>
+#include <ciuki/security.h>
 struct w32_wait {
     struct w32_wait *next;
     struct proc_thread *thread;
@@ -43,7 +44,8 @@ static bool consume(struct w32_object *o, uint32_t tid)
 }
 static uint32_t acquire(struct w32_wait *w)
 {
-    if (w->thread->process->state != PROC_LIVE || w->thread->stopped || w->thread->w32->terminate_requested)
+    if (w->thread->process->state != PROC_LIVE || !security_process_live(w->thread->process) ||
+        w->thread->stopped || w->thread->w32->terminate_requested)
         return W32_WAIT_FAILED;
     if (w->alertable && w->thread->w32->head)
         return W32_WAIT_IO_COMPLETION;
@@ -89,6 +91,8 @@ static uint32_t resolve(struct w32_wait *w, const uint32_t *handles)
                 || o->type == W32_OBJ_MUTEX || o->type == W32_OBJ_SEMAPHORE || o->type == W32_OBJ_TIMER
                 || o->type == W32_OBJ_FILE))
             return 6;
+        if (!w32_handle_access(w->thread, handles[i], 0x100000u))
+            return 5;
         for (unsigned j = 0; j < i; j++)
             if (w->objects[j] == o)
                 return 87;
@@ -121,6 +125,7 @@ static bool wait_ready(void *arg)
 uint32_t w32_wait_call(struct proc_thread *t, struct ciuki_w32_wait_args *a)
 {
     a->result = W32_WAIT_FAILED;
+    if (!security_process_live(t->process)) { a->error=5; return 0; }
     if (a->count > 64 || (a->wake_mask && a->count == 64) || a->all > 1 || a->alertable > 1
         || a->wake_mask & ~W32_QS_ALL || a->reserved & ~W32_WAIT_NEW_INPUT) {
         a->error = 87;
@@ -181,6 +186,12 @@ uint32_t w32_wait_call(struct proc_thread *t, struct ciuki_w32_wait_args *a)
         w32_wait_pump();
         if (w.result != W32_WAIT_PENDING)
             break;
+        /* Initial GUI idle is a process latch, never an inference from a
+         * window existing or a Sleep. Yielding PeekMessage publishes idle
+         * separately; PM_NOYIELD and zero-time waits do not.
+         * The whole queue must be empty, even for a filtered input wait. */
+        if (a->wake_mask && t->w32->queue && !w32_queue_bits(t) && t->process->w32->gui)
+            t->process->w32->input_idle = true;
         uint64_t wake = now + 1;
         kwait_wait_until(&w32_changed, wait_ready, &w, wake);
         if (t->process->state != PROC_LIVE || t->stopped) {

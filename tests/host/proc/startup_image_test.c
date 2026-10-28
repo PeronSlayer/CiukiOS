@@ -93,6 +93,7 @@ int main(int argc,char **argv) {
     settle=fs_now_ms(); vfs_startup_settle(&vfs,60000,80);
     CHECK(fs_now_ms()-settle>=80 && fs_now_ms()-settle<5000 && vfs.startup_count==3);
     CHECK(vfs_startup_flush(&vfs,true)==3 && log_clock()==before+4+VFS_STARTUP_QUEUE+VFS_STARTUP_URGENT);
+    vfs_init(&media_observation.vfs);media_observation.ready=true;
     fd=file_open(client,"/dev/media",O_RDONLY,0); CHECK(fd>=0);
     struct ciuki_media_defrag request={.version=CIUKI_MEDIA_VERSION,.size=sizeof(request),
         .drive=2,.flags=CIUKI_DEFRAG_STARTUP,.placement=2};
@@ -100,6 +101,7 @@ int main(int argc,char **argv) {
     CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_DEFRAG_ANALYZE,USER,sizeof(request),0)==-EOPNOTSUPP);
     CHECK(call(CIUKI_SYS_DEVCTL,fd,MEDIA_DEFRAG_STEP,USER,sizeof(request),0)==-EOPNOTSUPP);
     CHECK(maintenance_calls==2 && !file_close(client,fd));
+    vfs_destroy(&media_observation.vfs);
     all_closed(); stop_collect(client);
     struct file_ledger ledger; files_snapshot(space,&ledger); CHECK(!ledger.descriptions && !ledger.pins);
     for (unsigned i=0;i<mounted_volumes;i++) CHECK(!vfs_detach(&vfs,volume_drive(i)));

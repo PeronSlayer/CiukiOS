@@ -40,7 +40,7 @@ static int step(void *ctx,unsigned s,int start,char *text,size_t cap)
 static void record(void *ctx,const char *line)
 {(void)ctx;fat.records++;assert(strstr(fat.durable,"step="));strcat(fat.log,line);strcat(fat.log,"\n");}
 static void action(void *ctx,unsigned a){(void)ctx;assert(a<2);fat.actions[a]++;}
-static struct fb_host host={NULL,rd,append,step,NULL,record,action};
+static struct fb_host host={NULL,rd,append,step,NULL,record,action,NULL};
 static void reset(const char *fixture){memset(&fat,0,sizeof(fat));if(fixture)strcpy(fat.bytes,fixture);else fat.absent=1;strcpy(fat.durable,fat.bytes);}
 static const char pending[]="phase=installed\nrelease=fixture\nfirstboot=pending\n";
 static void run(struct firstboot *f)
@@ -96,9 +96,9 @@ static void engine_tests(void)
     fb_tick(&f,0);assert(f.done&&fat.commits==1);
     puts("PASS firstboot triggers, crash/resume, durability, idempotence, time bounds, actions");
 }
-static unsigned present=15,queries;
+static unsigned present=31,queries;
 static int game(void *ctx,unsigned id,int remove,uint32_t *bytes)
-{(void)ctx;assert(!remove&&id>=1&&id<=4);queries++;*bytes=4096;return !!(present&(1u<<(id-1)));}
+{(void)ctx;assert(!remove&&id>=1&&id<=5);queries++;*bytes=4096;return !!(present&(1u<<(id-1)));}
 int ciuki_devices(struct ciuki_devices_info *v){(void)v;errno=ENOSYS;return -1;}
 static void games_test(const char *directory)
 {

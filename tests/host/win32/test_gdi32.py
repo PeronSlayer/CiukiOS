@@ -127,7 +127,7 @@ class Gdi32Tests(unittest.TestCase):
         cls.env = dict(os.environ, ASAN_OPTIONS='detect_leaks=0', TMPDIR=str(cls.out))
         cls.fontlib = freetype.build(cls.out/'freetype', flags=['-O2', '-fPIC'], env=cls.env)
         sources = [ROOT/'sdk/win32/gdi32'/n for n in gdi32.SOURCES if n not in ('compiler.c','compiler.S')]
-        sources += [ROOT/'sdk/win32/gdi32/native_font.c', ROOT/'sdk/win32/services/bytes.c', ROOT/'sdk/libfont/font.c', HERE/'support.c', HERE/'engine_test.c']
+        sources += [ROOT/'sdk/win32/gdi32/native_font.c', ROOT/'sdk/win32/services/bytes.c', ROOT/'sdk/libfont/font.c', HERE/'support.c', ROOT/'tests/host/win32/no_environment.c', HERE/'engine_test.c']
         cls.sources = sources
         cls.program = cls.out/'gdi-tests'
         cls.flags = ['-std=c17','-D_GNU_SOURCE','-DW32_HOST_MODEL','-O2','-g','-Wall','-Wextra','-Werror',

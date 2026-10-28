@@ -5,10 +5,16 @@ import ast
 import operator
 import re
 import sys
+import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
 KERNEL = ROOT / "src/kernel"
-MAX_CLASS = 2048
+# Ask the compiler for the production geometry, rather than duplicating it.
+_geometry = subprocess.run(['clang', '-E', '-P', '-x', 'c',
+                            '-I', str(KERNEL/'include'), '-'],
+                           input='#include <ciuki/kheap_limits.h>\nKHEAP_MAX_REQUEST\n',
+                           text=True, capture_output=True, check=True).stdout.strip()
+MAX_CLASS = eval(re.sub(r"(?<=\d)[uUlL]+", "", _geometry), {"__builtins__": {}}, {})
 
 
 def main():

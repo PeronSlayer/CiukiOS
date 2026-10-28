@@ -64,6 +64,41 @@ static void connect_usb(unsigned slot,unsigned port,unsigned generation,
     }
     serial_text=serial; usb_identity_serial(d,serial ? 1 : 0);
 }
+/* --- sec-user-05: per-session store fixture. The production layering
+ * (joystick_storage.c read_personal) reads the machine record of a record
+ * the profile never saved; this fixture does the same over byte maps. --- */
+static struct disk_file personal[64];
+static unsigned personal_files, personal_writes, subject_refs;
+static bool subject_live=true;
+struct security_subject { int unused; };
+static struct security_subject session_subject;
+int security_subject_get(struct security_subject *s) { CHECK(s==&session_subject); subject_refs++; return 0; }
+void security_subject_put(struct security_subject *s) { CHECK(s==&session_subject && subject_refs); subject_refs--; }
+bool security_subject_live(const struct security_subject *s) { return s==&session_subject && subject_live; }
+static struct disk_file *personal_file(const char *name)
+{
+    for (unsigned i=0;i<personal_files;i++) if (!strcmp(name,personal[i].name)) return &personal[i];
+    return 0;
+}
+static int read_personal(void *ctx,const char *name,void *data,size_t cap,size_t *n)
+{
+    (void)ctx; CHECK(!joystick_irq_depth);
+    struct disk_file *f=personal_file(name);
+    if (f) { if (f->size>cap) return -EIO; memcpy(data,f->bytes,f->size); *n=f->size; return 0; }
+    char other[112]; snprintf(other,sizeof(other),"%s",name); size_t len=strlen(other);
+    if (len>6 && (other[len-5]=='0' || other[len-5]=='1')) { other[len-5]^=1; if (personal_file(other)) return -ENOENT; }
+    return read_disk(0,name,data,cap,n);
+}
+static int write_personal(void *ctx,const char *name,const void *data,size_t n)
+{
+    (void)ctx; CHECK(!joystick_irq_depth); personal_writes++;
+    struct disk_file *f=personal_file(name);
+    if (!f) { CHECK(personal_files<64); f=&personal[personal_files++]; snprintf(f->name,sizeof(f->name),"%s",name); }
+    CHECK(n<=sizeof(f->bytes)); f->size=n; memcpy(f->bytes,data,n); return 0;
+}
+static int bind_personal(void *ctx,struct joystick_settings_io *out)
+{ CHECK(ctx==&session_subject); *out=(struct joystick_settings_io){read_personal,write_personal,0}; return 0; }
+/* --- end sec-user-05 --- */
 static void save_game(unsigned game,unsigned a,unsigned b)
 {
     struct ciuki_joystick_control c=request(CIUKI_JOY_SAVE_GAME,a,a && a!=CIUKI_JOY_DISABLED ? query(a).generation : 0);
@@ -208,6 +243,37 @@ int main(void)
     struct ciuki_joystick_control second_port=query(259);
     CHECK(!joystick_identity(259,second_port.generation,moved_id) && memcmp(id,moved_id,32));
     CHECK(second_port.position[0]<0); /* The 201h calibration was not applied to 300h. */
+    /* --- sec-user-05: interactive preferences are the session's own. --- */
+    fresh();connect_usb(0,0,500,"stick-S",&reports);
+    joystick_settings_start(&io);joystick_settings_service();
+    calibrate(1,700);save_game(3,1,0);joystick_settings_service();
+    unsigned machine_writes=writes;
+    CHECK(joystick_settings_scope(9,&session_subject,bind_personal,&session_subject)==0 && subject_refs==1);
+    CHECK(joystick_settings_scope_session()==9);
+    joystick_settings_service();
+    CHECK(reports.calibration[0][1]==700);            /* machine default until the user saves */
+    CHECK(!joystick_settings_game(3,&r) && r.device==1);
+    calibrate(1,-300);save_game(3,CIUKI_JOY_DISABLED,0);joystick_settings_service();
+    CHECK(writes==machine_writes && personal_writes==2);   /* never the machine store */
+    CHECK(reports.calibration[0][1]==-300);
+    CHECK(!joystick_settings_game(3,&r) && !r.device);    /* the user's own route: off */
+    /* Session end: machine scope, machine calibration re-applied on attach. */
+    joystick_settings_session_end(9);
+    CHECK(!joystick_settings_scope_session() && !subject_refs);
+    joystick_settings_service();
+    CHECK(reports.calibration[0][1]==700 && !joystick_settings_game(3,&r) && r.device==1);
+    /* The same user's next session finds its saved preferences. */
+    CHECK(!joystick_settings_scope(9,&session_subject,bind_personal,&session_subject));
+    joystick_settings_service();
+    CHECK(reports.calibration[0][1]==-300 && !joystick_settings_game(3,&r) && !r.device);
+    /* A revoked session subject: the worker returns to the machine store. */
+    subject_live=false;joystick_settings_service();
+    CHECK(!joystick_settings_scope_session() && !subject_refs);
+    joystick_settings_service();CHECK(reports.calibration[0][1]==700 && writes==machine_writes);
+    subject_live=true;
+    CHECK(joystick_settings_scope(9,0,bind_personal,0)==-EOPNOTSUPP);
+    printf("PASS joystick per-session store: personal calibration/route saved to the profile store only, machine defaults kept, session end and revocation restore the machine store\n");
+    /* --- end sec-user-05 --- */
     printf("PASS joystick persistence: %u assertions; reboot, moved port, identical devices, corruption, migration, save failure, analog and wiring\n",assertions);
     fflush(stdout);return 0;
 }

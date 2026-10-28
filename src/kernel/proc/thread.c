@@ -3,6 +3,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
 #include <ciuki/process.h>
+#include <ciuki/security.h>
 #include <ciuki/signal.h>
 
 extern int w32_thread_init(struct proc_thread *, bool) __attribute__((weak));
@@ -100,6 +101,7 @@ int proc_thread_prepare(struct process *p, uint32_t entry, uint32_t argument,
                         uint32_t trampoline, uint32_t stack_bytes, uint32_t flags,
                         uint64_t mask, bool main, struct proc_thread **out)
 {
+    if (!security_process_live(p)) return -EACCES;
     unsigned slot = 0;
     while (slot < CIUKI_THREAD_MAX && threads[slot])
         slot++;
@@ -234,7 +236,7 @@ int proc_thread_create(uint32_t args_va)
         return err;
     /* Allocation can now pass a voluntary point. A concurrent process stop
      * must not publish a new runnable thread after it revoked creation. */
-    if (parent->process->state != PROC_LIVE) {
+    if (parent->process->state != PROC_LIVE || !security_process_live(parent->process)) {
         proc_thread_discard(t);
         return -EINTR;
     }

@@ -170,7 +170,7 @@ def main():
     shutil.copy2(ROOT/'sdk/libsetup/NOTICE',notice_dir/'libsetup.txt')
     ft.notices(notice_dir)
     gl.notices(notice_dir)
-    manifest['opengl_backend']={'name':'TinyGL',**gl_recipe,'notice':'sdk/libgl/LICENSE-TinyGL.txt'}
+    manifest['opengl_backend']={'name':'TinyGL front-end with the shared opengl32 engine',**gl_recipe,'notice':'sdk/libgl/LICENSE-TinyGL.txt','engine_notice':'licenses/opengl-engine-LGPL-2.1.txt'}
     manifest['font_backend']={'name':'FreeType',**ft.recipe(),'notice':'licenses/FreeType-FTL.txt',
                              'source_files':{str(p.relative_to(ft_src)):digest(p) for p in sorted(ft_src.rglob('*')) if p.is_file() and p.name!='ciuki-source-hashes.json'}}
     inventory=[]
@@ -213,7 +213,7 @@ def main():
     linked={}
     for mapfile in (OUT/'tests').glob('*.elf.map'):
         members=sorted(set(re.findall(r'([^\s/]+\.a)\(([^)]+)\)',mapfile.read_text())))
-        linked[mapfile.name.removesuffix('.map')]=[{'archive':a,'member':o,'source_notices':['licenses/SDK-MIT.txt','sdk/libgl/LICENSE-TinyGL.txt'] if a=='libgl.a' else ['licenses/SDK-MIT.txt','licenses/libdisk.txt'] if a=='libdisk.a' else ['licenses/SDK-MIT.txt','licenses/libsetup.txt'] if a=='libsetup.a' else ['licenses/SDK-MIT.txt','licenses/FreeType-FTL.txt'] if a in ('libfont.a','libfreetype.a') else ['licenses/SDK-MIT.txt'] if a in ('libciuki.a','libpthread.a','libreg.a','libcompiler.a') else [entry['notice'] for entry in inventory if Path(entry['source']).stem==o.removeprefix('libc_a-').removeprefix('libm_a-').removesuffix('.o')]} for a,o in members]
+        linked[mapfile.name.removesuffix('.map')]=[{'archive':a,'member':o,'source_notices':['licenses/SDK-MIT.txt','sdk/libgl/LICENSE-TinyGL.txt','licenses/opengl-engine-LGPL-2.1.txt'] if a=='libgl.a' else ['licenses/SDK-MIT.txt','licenses/libdisk.txt'] if a=='libdisk.a' else ['licenses/SDK-MIT.txt','licenses/libsetup.txt'] if a=='libsetup.a' else ['licenses/SDK-MIT.txt','licenses/FreeType-FTL.txt'] if a in ('libfont.a','libfreetype.a') else ['licenses/SDK-MIT.txt'] if a in ('libciuki.a','libpthread.a','libreg.a','libcompiler.a') else [entry['notice'] for entry in inventory if Path(entry['source']).stem==o.removeprefix('libc_a-').removeprefix('libm_a-').removesuffix('.o')]} for a,o in members]
     manifest['linked_file_licenses']=linked
     manifest['test_evidence']=json.loads((OUT/'tests/host-checks.json').read_text())
     manifest['installed_bytes']=sum(p.stat().st_size for p in (OUT/'sysroot').rglob('*') if p.is_file())

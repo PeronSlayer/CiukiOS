@@ -18,6 +18,7 @@ struct px_node {
     struct vfs_node *legacy;
     struct ciuki_timespec ctime;
     uint64_t ino;
+    struct policy_label policy;
     uint32_t refs, generation, drive;
     enum px_kind kind;
     bool linked, mountpoint, delete_pending, writing, namespace_busy;
@@ -46,6 +47,11 @@ struct file_description {
     bool observed_valid;
     struct fat_cursor fat_cursor; /* f3-51c FAT cluster cursor; namespace + volume reservation */
     struct fat_dir_hint dir_hint; /* f1-93b readdir position of cursor; namespace + volume reservation */
+    /* sec-k03: opener's retained subject (NULL only for kernel-internal
+     * descriptions) and the POLICY_* rights granted at open; rights only
+     * shrink and every later operation is checked against them. */
+    struct security_subject *subject;
+    uint32_t granted;
 };
 struct px_namespace {
     struct vfs *vfs;
@@ -65,10 +71,12 @@ struct px_path {
 struct file_ledger { uint32_t nodes, descriptions, pins; };
 
 int files_attach(struct vfs *vfs, struct px_namespace **out);
+struct px_namespace *files_namespace_locked(struct vfs *); /* no allocation */
 void files_detach(struct vfs *vfs); /* quiescent, from vfs_destroy */
 void files_snapshot(struct px_namespace *space, struct file_ledger *out);
 int files_bootstrap(struct vfs *vfs); /* install PID 1 cwd, stdio and loader */
 int files_stdio(struct process *p);
+int files_session_console(struct process *p, int32_t *console); /* sec-k07 */
 void px_retain(void *node);
 /* Pins all borrowed native identities across a bounded FAT transaction. */
 int px_fat_transaction_locked(struct px_node *,struct px_node *,struct px_node *,struct fat_transaction_args);
@@ -86,6 +94,9 @@ int px_resolve_locked(struct px_namespace *, struct px_node *cwd, const char *,
                       bool missing_leaf, struct px_path *out);
 int px_getcwd_locked(struct px_node *, char out[CIUKI_PATH_MAX]);
 int px_chdir(struct process *, const char *);
+/* Prepare a fresh cwd from the boot namespace root, without copying a
+ * service's cwd capability across credentials. Unpublished child only. */
+int px_security_cwd(struct process *, const char *);
 int px_stat_locked(struct px_node *, struct ciuki_stat *);
 /* G6 file_info (call 98): check validates the copied record; get fills it
  * for a resolved node; set takes the writer turn, resolves and publishes. */
@@ -165,4 +176,48 @@ void px_volume_detached(struct vfs *, unsigned drive);
 bool px_ro_busy(struct vfs *, struct fs_ro_volume *);
 int px_ro_check_locked(struct px_node *);
 int vfs_directory_pinned(struct vfs *, struct fat_volume *, uint32_t directory);
+
+/* ---- sec-k03: subject-attributed file, handle and mapping entry points ----
+ * Every user frontend (native syscalls, Win32 file/section/view/loader, the
+ * legacy VFS tables) authorizes the resolved object with the caller's
+ * retained subject. A NULL subject denies (K4). The historical names above
+ * (px_open_locked, px_mkdir_locked, px_remove_locked, px_rename_locked,
+ * px_file_info_set_locked, px_resolve_locked) are kernel-internal SYSTEM work
+ * and equal the *_as forms with PX_KERNEL; user frontends never call them. */
+extern const char px_kernel_actor;
+#define PX_KERNEL ((const struct security_subject *)(const void *)&px_kernel_actor)
+int px_resolve_as_locked(struct px_namespace *, struct px_node *cwd, const char *, bool missing_leaf,
+                         const struct security_subject *, struct px_path *);
+int px_open_as_locked(struct px_namespace *, struct px_node *, const char *, uint32_t,
+                      struct file_description *, const struct security_subject *);
+int px_mkdir_as_locked(struct px_namespace *, struct px_node *, const char *, uint32_t,
+                       const struct security_subject *);
+int px_remove_as_locked(struct px_namespace *, struct px_node *, const char *, bool directory,
+                        const struct security_subject *);
+int px_rename_as_locked(struct px_namespace *, struct px_node *, const char *, const char *,
+                        const struct security_subject *);
+int px_file_info_set_as_locked(struct px_namespace *, struct px_node *cwd, const char *,
+                               const struct ciuki_file_info *, const struct security_subject *);
+/* Win32 DeleteFile on a resolved node: REMOVE intent now, deletion possibly
+ * deferred to the last close of the same identity. */
+int px_delete_as_locked(struct px_node *, const struct security_subject *);
+/* POLICY_* decision for a resolved node (devices: none; unbound volume:
+ * unmanaged rule). */
+int px_policy_check_locked(struct px_node *, const struct security_subject *, unsigned access);
+/* Description rights for the CALLING process (or SYSTEM kernel context):
+ * frozen rights at open, live subject, then the current label. */
+int file_description_authorize_locked(struct file_description *, unsigned access);
+/* Executable snapshot authorized as `subject` (READ|EXEC on the actual
+ * object, before any byte is read or a cached snapshot is reused). */
+int file_image_open_as(struct px_node *cwd, const struct security_subject *, const char *, bool whole,
+                       struct ciuki_file *);
+/* Same resolution/authorization without a snapshot (cached-image reuse). */
+int file_image_authorize(struct px_node *cwd, const struct security_subject *, const char *);
+/* The process's retained subject; NULL (denied) when it has none. Only a
+ * standalone harness without proc/security.c attributes to PX_KERNEL. */
+const struct security_subject *px_process_subject(const struct process *);
+/* Stale creator-root OWNER intent reconciled from namespace evidence; the
+ * caller holds the drive's writer turn (also usable once at mount). */
+int px_creator_reconcile_locked(struct px_namespace *, unsigned drive);
+/* ---- end sec-k03 --------------------------------------------------------- */
 #endif

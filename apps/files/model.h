@@ -49,6 +49,10 @@ struct fm_vfs {
     int (*sync)(void *, int);
     int (*close)(void *, int);
     int (*metadata)(void *, const char *, const struct fm_meta *); /* optional: no setter in the F2 ABI */
+    /* sec-user-05, optional: the physical location (FM_PATH bytes) of an
+     * entry path in a merged view (the desktop's per-user + All Users
+     * folders); fm_entry_path hands it to clipboards, jobs and launches. */
+    int (*physical)(void *, const char *, char *);
 };
 /* G7: private Files search criteria, never a public ABI record. */
 struct fm_search_query {

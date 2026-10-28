@@ -15,6 +15,11 @@ static void test_irq_restore_delivery(void)
         cur.tf.eip = 0x300; step(v, 0x20, 0);
         cur.tf.eip = 0x302; cur.tf.eax = V86_IF | 2; op1(v, 0xFA);
         CHECK(v->dpmi.if_armed && !v->monitor.vif && (cur.tf.eax & V86_TF));
+        /* fx-doomwin: the proven site is cached and wants no seed. The case
+         * below was written when every proof restarted the demand: forget
+         * the site so its seed (a live near-return slot) is wanted again. */
+        CHECK(!dpmi_seed_wanted(v));
+        dpmi_cli_sites_reset(v);
         /* POPF; NOP retired: the saved-image #DB and a PIT edge coincide.
          * A live near-return slot seeds the sparse return checkpoint. */
         pm_push(v, 0x400);
@@ -35,7 +40,8 @@ static void test_irq_restore_delivery(void)
         v->dpmi.if_armed = true;
         cur.tf.eax = 0x20; const uint8_t eoi[] = {0xE6, 0x20};
         exec(v, eoi, sizeof(eoi), 13, 0);
-        CHECK(!v->monitor.pic[0].isr && (v->monitor.pic[0].irr & 1) && cur.tf.eip == 0x702);
+        CHECK(!v->monitor.pic[0].isr && !(v->monitor.pic[0].irr & 1) &&
+              (v->irq.owed & 1) && cur.tf.eip == 0x702);
         v->dpmi.if_armed = false;
         pm_iret(v); at_stub(v, DPMI_PM_IRQRET);
         CHECK(cur.tf.eip == 0x700 && v->dpmi.depth == 1 && v->monitor.stats.delivered[0] == 2);
@@ -216,6 +222,10 @@ static void test_irq_trace_latency(void)
           v->monitor.pic[0].isr == 1 && v->deferred_trace.count == 1);
     diag_time_hook = 0;
     cur.tf.eax = 0x20; exec(v, eoi, sizeof(eoi), 13, 0); pm_iret(v); at_stub(v, DPMI_PM_IRQRET);
+    /* fx-dospic: the completed handler releases one tick already paced
+     * during the UART flush. Further owed ticks still wait half a period. */
+    CHECK(v->monitor.stats.delivered[0] == 3 && v->dpmi.depth == 1 && cur.tf.eip == 0x700);
+    cur.tf.eax = 0x20; exec(v, eoi, sizeof(eoi), 13, 0); pm_iret(v); at_stub(v, DPMI_PM_IRQRET);
     CHECK(!v->dpmi.depth && !v->deferred_trace.count && !v->monitor.pic[0].isr);
     /* Quiet boots allocate no queue entries. */
     g_boot.flags = 0; before = records;
@@ -367,7 +377,7 @@ static void test_irq_private_stack(void)
         CHECK(dosvm_irq_raise(v->info.key, 0)); step(v, 0x20, 0);
         CHECK(dosvm_irq_raise(v->info.key, 0) && dosvm_irq_raise(v->info.key, 1) &&
               dosvm_irq_raise(v->info.key, 7));
-        CHECK(v->monitor.pic[0].isr == 0x81 && v->monitor.pic[0].irr == 0x83 &&
+        CHECK(v->monitor.pic[0].isr == 0x81 && v->monitor.pic[0].irr == 0x02 && v->irq.owed == 0x81 &&
               v->monitor.pic[0].imr == 0x78 && v86_irq_pending(&v->monitor) < 0);
         printf("f3-23 nested snapshot: client=%u stack=%u isr=%02x irr=%02x imr=%02x depth=%u\n",
                bits ? 32 : 16, big ? 32 : 16, v->monitor.pic[0].isr,
@@ -395,7 +405,7 @@ static void test_irq_private_stack(void)
               v->monitor.stats.delivered[0] == 2 && v->monitor.stats.delivered[7] == 1);
         destroy(v, true); empty();
     }
-    puts("f3-23 nested PM IRQ: 16/32-bit clients and stacks, suspended host bytes intact, ISR=81 IRR=83, guest EOIs and pending timer delivered PASS");
+    puts("f3-23 nested PM IRQ: 16/32-bit clients and stacks, suspended host bytes intact, ISR=81 IRR=02 held=81, IRR=83 after returns, guest EOIs and pending timer delivered PASS");
 }
 
 static void test_irq_private_stack_rejection(void)

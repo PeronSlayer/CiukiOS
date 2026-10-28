@@ -134,6 +134,28 @@ typedef struct {
   DWORD AveragePPM;
 } PRINTER_INFO_2W;
 typedef struct {
+  char *pName;
+} PORT_INFO_1A;
+typedef struct {
+  WCHAR *pName;
+} PORT_INFO_1W;
+typedef struct {
+  char *pPortName;
+  char *pMonitorName;
+  char *pDescription;
+  DWORD fPortType;
+  DWORD Reserved;
+} PORT_INFO_2A;
+typedef struct {
+  WCHAR *pPortName;
+  WCHAR *pMonitorName;
+  WCHAR *pDescription;
+  DWORD fPortType;
+  DWORD Reserved;
+} PORT_INFO_2W;
+#define PORT_TYPE_WRITE 1u
+#define PORT_TYPE_READ 2u
+typedef struct {
   DWORD JobId;
   WCHAR *pPrinterName;
   WCHAR *pMachineName;
@@ -174,6 +196,8 @@ BOOL W32API EnumPrintersA(DWORD, char *, DWORD, void *, DWORD, DWORD *,
                           DWORD *);
 BOOL W32API EnumPrintersW(DWORD, WCHAR *, DWORD, void *, DWORD, DWORD *,
                           DWORD *);
+BOOL W32API EnumPortsA(char *, DWORD, void *, DWORD, DWORD *, DWORD *);
+BOOL W32API EnumPortsW(WCHAR *, DWORD, void *, DWORD, DWORD *, DWORD *);
 BOOL W32API GetDefaultPrinterA(char *, DWORD *);
 BOOL W32API GetDefaultPrinterW(WCHAR *, DWORD *);
 BOOL W32API SetDefaultPrinterA(const char *);

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #ifndef CIUKI_HID_H
 #define CIUKI_HID_H
+#include <ciuki/kheap_limits.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <ciuki/input_abi.h>
@@ -44,8 +45,8 @@ struct usb_hid_reports {
 };
 /* kheap payload limit is 2040, including neither its 8-byte header nor a
  * foreign large-allocation fallback. Keep both independent objects within it. */
-_Static_assert(sizeof(struct usb_hid_reports)<=2040, "HID state exceeds kheap payload");
-_Static_assert(sizeof(struct hid_layout)<=2040, "HID layout exceeds kheap payload");
+_Static_assert(sizeof(struct usb_hid_reports)<=KHEAP_MAX_REQUEST, "HID state exceeds kheap payload");
+_Static_assert(sizeof(struct hid_layout)<=KHEAP_MAX_REQUEST, "HID layout exceeds kheap payload");
 /* All failures leave out byte-for-byte unchanged. Unknown IDs return zero;
  * rollover returns 2 and also leaves out unchanged. Valid reports return 1. */
 bool hid_parse(struct hid_layout *out, const uint8_t *, unsigned);

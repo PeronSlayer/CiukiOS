@@ -57,6 +57,11 @@ static void test_dos_properties(void)
     c=command_for(w.id,w.generation);
     CHECK(!dosvm_call(CIUKI_DOSVM_BACKGROUND,&c,sizeof(c)) && !v->fullscreen_suspended && park_released(v));
     c=command_for(w.id,w.generation); c.focused=1; CHECK(!dosvm_call(CIUKI_DOSVM_FOCUS,&c,sizeof(c)));
+    c=command_for(w.id,w.generation); c.event.type=CIUKI_INPUT_MOTION;
+    c.event.value=100; c.event.value2=100; CHECK(!dosvm_call(CIUKI_DOSVM_INPUT,&c,sizeof(c)));
+    c.event.type=CIUKI_INPUT_BUTTON; c.event.code=1; c.event.value=1; c.event.value2=0;
+    CHECK(!dosvm_call(CIUKI_DOSVM_INPUT,&c,sizeof(c)));
+    c.event.value=0; CHECK(!dosvm_call(CIUKI_DOSVM_INPUT,&c,sizeof(c)));
     c=command_for(w.id,w.generation); c.event.type=CIUKI_INPUT_WHEEL; c.event.value=-3;
     CHECK(!dosvm_call(CIUKI_DOSVM_INPUT,&c,sizeof(c)) && v->mouse.wheel==3);
     c=command_for(w.id,w.generation); c.event.type=CIUKI_INPUT_WHEEL; c.event.value=128;

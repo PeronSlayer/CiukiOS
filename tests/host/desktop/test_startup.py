@@ -23,7 +23,7 @@ class StartupTests(unittest.TestCase):
         subprocess.run([*flags, '-c', ROOT/'apps/w32srv/posix_io.c', '-o', io], check=True)
         sources = ['apps/desktop/'+n+'.c' for n in ('startup', 'win32_registry', 'win32_launch', 'protocol')]
         sources += ['apps/w32srv/'+n+'.c' for n in ('registry', 'storage', 'directory', 'defaults')]
-        sources += ['sdk/libreg/'+n+'.c' for n in ('registry', 'storage', 'hardware')]
+        sources += ['sdk/libreg/'+n+'.c' for n in ('registry', 'storage', 'hardware', 'transport')]
         sources += ['tests/host/desktop/startup_test.c']
         binary = work/'startup-test'
         subprocess.run([*flags, '-include', ROOT/'tests/host/desktop/replay_base.h',

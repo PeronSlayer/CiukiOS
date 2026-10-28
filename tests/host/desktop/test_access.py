@@ -62,7 +62,7 @@ class AccessTests(unittest.TestCase):
                        "apps/control/display.c", "apps/control/fonts.c", "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c",
                        "apps/desktop/protocol.c",
                        *(f"apps/desktop/{n}.c" for n in ("settings", "sounds", "wallpaper", "image", "compositor", "theme")),
-                       *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map"))]
+                       *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map", "iconx", "fileicon"))]
             ft = load("access_freetype", ROOT / "sdk/freetype/build.py")
             library = ft.host()
             subprocess.run(["clang", *CFLAGS, *icons.defines(), "-I", str(ROOT / "src/kernel/include"),

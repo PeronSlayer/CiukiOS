@@ -19,6 +19,11 @@ struct fb_host {
     void (*cancel)(void *, unsigned);
     void (*record)(void *, const char *);
     void (*action)(void *, unsigned);
+    /* sec-user-02 (user-security-contract.md 5.1): the wizard runs in the
+     * authenticated administrator's session, never as SYSTEM. 1 when the
+     * session credential holds Administrators (544), 0 otherwise, <0 when it
+     * cannot be read; NULL keeps the pre-security behaviour (host fixtures). */
+    int (*administrator)(void *);
 };
 struct firstboot {
     struct fb_host host;

@@ -2,11 +2,12 @@
 
 Research date: 2026-10-26 (`date` on the workstation). Directive:
 [f7-31](../directives/f7-31-vmware-svga3d.md); umbrella rules: the f7-20
-amendment of [f7-3d-acceleration-contract.md](f7-3d-acceleration-contract.md)
-(sections A and B). This is a source-derived implementation with a strict host
+[f7-20 directive](../directives/f7-20-other-families.md) and the VMware
+section of [f7-3d-acceleration-contract.md](f7-3d-acceleration-contract.md). This is a source-derived implementation with a strict host
 model; it is not a qualification on a real hypervisor. No QEMU, VirtualBox or
-VMware session was run for this document. The tree has the Savage `record`
-hook, not f7-13's background worker; the owner uses the same hook.
+VMware session was run for this document. The VMware owner retains its
+original synchronous `record` hook; integration 6's Savage background worker
+is preserved without changes.
 The resumption audit on 2026-10-28 (`date` checked) applies the lead's
 binding D-F2 restoration/self-check rule and corrects the VirtualBox 2D
 prerequisite and marker-clear ordering described below.
@@ -379,8 +380,8 @@ size, combiners the host did not qualify.
   acceptable for correctness, a persistent texture cache is a follow-up.
 * Q3 on a slow host may exceed the 30 s budget: perspective refused,
   affine admitted.
-* A mode change ends this boot's admission (no re-qualification hook until
-  f7-13).
+* A mode change ends this boot's VMware admission; this family does not
+  implement the Savage background requalification hook.
 
 ## 13. Lead procedure (VM evidence; VirtualBox use is lead decision G.2)
 
@@ -413,3 +414,24 @@ combiners. `VBox.log` lines `VMSVGA3d: cap[...]` record the host devcaps for
 comparison with the identity record. A `result=failed` line (quarantine) or a
 retained `accel-3d-vmwaresvga-15ad-0405.cfg` marker on the next boot is a
 finding to report, not to retry blindly.
+
+
+## Merge6 allocation compatibility
+
+Integration 6 enforces `KHEAP_MAX_REQUEST` in `ciuki/mm.h`. VMware's scratch
+service and mode-sized resource shadows exceed the small-object heap bound.
+Use the existing Savage owner pattern (`savage3d_owner.c`, `host_alloc` and
+`host_free`): page-backed `desktop_buffer_alloc` with `MM_IO_REQUEST`
+ownership, an extent/charge prefix, and a combined page-rounded ceiling of
+`R3D_RAM_LIMIT` including backend staging. Scratch services, mip staging and
+shadows share that accounting; failed allocation rolls its charge back.
+No memory limit changes. The owner fixture enforces the heap bound and tracks
+the page allocation sizes, owners, live bytes and failure cleanup.
+
+Integration 6 also adds shared stencil flags and precision cancellation hooks.
+The VMware precision envelope copy follows the integrated Savage version.
+`VMSVGA3D_FEATURES` explicitly lists the seven already-qualified D16 features;
+stencil test/clear must refuse before emission and are absent from capability
+snapshots. The differential fixture uses that family subset instead of the
+expanded shared feature mask. The encoder continues to disable stencil
+(`SVGA3D_RS_STENCILENABLE`, pinned protocol citations in the family header).

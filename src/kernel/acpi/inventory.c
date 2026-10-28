@@ -233,6 +233,7 @@ static ACPI_STATUS inventory_run(const struct fw_ops *ops, uint32_t rsdp, bool p
         if (fw_error()) status = fw_error();
         fw_budget_end();
         if (!status) fw_pm_blocks_capture(); /* fx-18: APM BIOS port window */
+        if (!status) fw_s5_hint_capture();   /* fx-acpioff: \_S5 for the S5 register fallback */
         if (!status) {
             struct ciuki_firmware_record *root = append();
             if (root) {

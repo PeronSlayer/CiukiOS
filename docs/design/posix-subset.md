@@ -384,6 +384,24 @@ fd 0 opened on null and fds 1–2 on console unless its launcher explicitly
 supplies files. Interactive text input MUST go through a desktop client; the
 kernel console MUST NOT consume the exclusive F1 input queue a second time.
 
+**[fx-autorun amendment, 2026-10-27] Standard stream buffering.** The kernel
+publishes every console `write()` as one `[console] ` serial line, and
+newlib 4.5 opens stderr unbuffered (`findfp.c` `stderr_init`,
+`__SRW|__SNBF`), for which `vfprintf` writes each conversion separately: one
+`fprintf(stderr, ...)` record reached the serial log as several lines
+(fx-acc1). Before `main`, the SDK C runtime (`sdk/crt/start.c`
+`stdio_line_buffering`) therefore makes stderr line buffered and, when fd 1
+is a character device (the console/serial log, a COM/LPT port, `/dev/null`;
+a terminal would be one too), stdout as well; pipes and regular files keep
+newlib's full buffering. [ISO C 7.21.3p7](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf)
+requires only that stderr is not fully buffered; line-buffered output is
+flushed at each newline, before input is read from a line-buffered or
+unbuffered stream, by `fflush` and at exit. Only the mode bits are set: the
+buffer is allocated on the first write (`__smakebuf_r` keeps a preset
+`__SLBF`), and a program's own `setvbuf` overrides the choice. `isatty` keeps
+returning zero, and errno is zero when `main` starts. A partial line written
+without a newline appears at the next newline, flush or exit.
+
 **[F2]** `sigemptyset` and `sigfillset` MUST write zero or the supported signal
 bits respectively. Add/delete/member MUST reject unsupported numbers with
 EINVAL. Signal masks MUST include only the supported set; pthread_sigmask MUST

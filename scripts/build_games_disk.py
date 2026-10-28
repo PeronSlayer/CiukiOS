@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Build the bundled shareware DOS games disk CIUKIGAM.IMG (owner decisions 2026-10-12/14).
 
-Wolfenstein 3-D, DOOM, Quake and the Warcraft II demo are pre-installed games
+Wolfenstein 3-D, DOOM, Quake, Warcraft II demo and Duke Nukem 3D are pre-installed games
 of CiukiOS in their shareware releases, the only ones whose packages may be
 redistributed:
 Wolfenstein 3-D v1.4 (1wolf14.zip, episode 1), DOOM v1.9 (doom19s.zip,
 episode 1), Quake v1.06 (quake106.zip, episode 1) and the Warcraft II: Tides
-of Darkness DOS demo v1.20elc (war2demo.exe, Blizzard's electronic release).
+of Darkness DOS demo v1.20elc (war2demo.exe, Blizzard's electronic release),
+and Duke Nukem 3D v1.3d (3dduke13.zip, Episode One).
 Registered game data never enters this disk, the image or the repository.
 
 Inputs are only the vendored original archives under third_party/games/
@@ -25,6 +26,8 @@ installed must be listed as excluded with a reason. Unpacking:
   ZIP archive (the DEICE installer's split; RPM Fusion doom-shareware and
   AUR doom1-wad unpack it the same way).
 
+- 3dduke13.zip holds DN3DSW13.SHR, a nested ZIP. All 17 original members
+  are installed unchanged, including LICENSE.TXT (V.7.16.98).
 - quake106.zip holds RESOURCE.1, an MZ LHA self-extractor with 16 -lh5-
   members. The pinned 1945-byte prefix is skipped; every member CRC-16
   and installed SHA-256 is checked, including ID1/PAK0.PAK.
@@ -57,7 +60,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GAMES = "third_party/games"
 NAME = "CIUKIGAM.IMG"
 # Install order on the disk; each name is a directory under third_party/games.
-PACKAGES = ("wolf3d-shareware", "doom-shareware", "quake-shareware", "war2-demo")
+PACKAGES = ("wolf3d-shareware", "doom-shareware", "quake-shareware", "war2-demo", "duke3d-shareware")
 REDISTRIBUTION = "free"
 SECTOR = 512
 
@@ -540,6 +543,8 @@ def unpack(record, data):
         inner = shr_members(outer[spec["member"]])
     elif spec.get("format") == "lha-sfx":
         inner = lha_members(outer[spec["member"]][spec["offset"]:])
+    elif spec.get("format") == "zip-sfx":         # DN3DSW13.SHR is a ZIP, not Wolf's DCL container
+        inner = zip_members(outer[spec["member"]])
     else:
         raise ValueError("unknown unpack format: " + str(spec.get("format")))
     return outer, inner
@@ -629,18 +634,125 @@ def war2_files():
     return files
 
 
+def duke3d_files():
+    """Original release has no CFG; CONFIG.C/SNDCARDS.H define this format.
+    VGA 320x200, SB16 PCM and SoundBlaster OPL music (device 0), keyboard
+    and mouse. DUKESB selects IRQ 5 in the VM's existing CT1745 mixer;
+    changing BLASTER alone would leave the virtual card on IRQ 7."""
+    text = """;CiukiOS Duke Nukem 3D shareware defaults
+[Screen Setup]
+ScreenMode = 0
+ScreenWidth = 320
+ScreenHeight = 200
+ScreenSize = 8
+ScreenGamma = 0
+Shadows = 1
+Detail = 1
+Tilt = 1
+Messages = 1
+Out = 0
+Password = ""
+[Sound Setup]
+FXDevice = 0
+MusicDevice = 0
+FXVolume = 192
+MusicVolume = 160
+SoundToggle = 1
+MusicToggle = 1
+VoiceToggle = 1
+AmbienceToggle = 1
+NumVoices = 8
+NumChannels = 2
+NumBits = 16
+MixRate = 22000
+MidiPort = 0x330
+BlasterAddress = 0x220
+BlasterType = 6
+BlasterInterrupt = 5
+BlasterDma8 = 1
+BlasterDma16 = 5
+BlasterEmu = 0x620
+ReverseStereo = 0
+[Controls]
+ControllerType = 1
+MouseSensitivity = 32768
+MouseAiming = 0
+MouseButton0 = "Fire"
+MouseButton1 = "Open"
+MouseButtonClicked0 = ""
+MouseButtonClicked1 = ""
+MouseAnalogAxes0 = "analog_turning"
+MouseAnalogAxes1 = "analog_moving"
+MouseAnalogScale0 = 65536
+MouseAnalogScale1 = 65536
+[KeyDefinitions]
+Move_Forward = "Up" "W"
+Move_Backward = "Down" "S"
+Turn_Left = "Left" ""
+Turn_Right = "Right" ""
+Strafe_Left = "A" ""
+Strafe_Right = "D" ""
+Strafe = "LAlt" "RAlt"
+Fire = "LCtrl" "RCtrl"
+Open = "Space" "E"
+Run = "LShift" "RShift"
+AutoRun = "CapLck" ""
+Jump = "X" ""
+Crouch = "C" ""
+Look_Up = "PgUp" ""
+Look_Down = "PgDn" ""
+Aim_Up = "Home" ""
+Aim_Down = "End" ""
+Weapon_1 = "1" ""
+Weapon_2 = "2" ""
+Weapon_3 = "3" ""
+Weapon_4 = "4" ""
+Weapon_5 = "5" ""
+Weapon_6 = "6" ""
+Weapon_7 = "7" ""
+Weapon_8 = "8" ""
+Weapon_9 = "9" ""
+Weapon_10 = "0" ""
+Inventory = "Enter" ""
+Inventory_Left = "[" ""
+Inventory_Right = "]" ""
+Map = "Tab" ""
+Shrink_Screen = "-" ""
+Enlarge_Screen = "=" ""
+Center_View = "Kpad5" ""
+[Comm Setup]
+PlayerName = "Duke"
+RTSName = "DUKE.RTS"
+[Misc]
+Executions = 0
+RunMode = 0
+Crosshairs = 1
+"""
+    # NASM is already a DOS payload build dependency; keep machine code in
+    # its source file rather than an opaque embedded byte string.
+    with tempfile.TemporaryDirectory(prefix="dukesb-") as temp:
+        helper = _dos_build().assemble("src/com/dukesb.asm", Path(temp) / "DUKESB.COM")
+    launcher = (b"@ECHO OFF\r\nDUKESB.COM 5\r\nSET BLASTER=A220 I5 D1 H5 T6\r\n"
+                b"DUKE3D.EXE\r\nDUKESB.COM 7\r\nSET BLASTER=A220 I7 D1 H5 T6\r\n")
+    return [("/DUKE3D/DUKE3D.CFG", text.replace("\n", "\r\n").encode("ascii")),
+            ("/DUKE3D/DUKE3D.BAT", launcher), ("/DUKE3D/DUKESB.COM", helper)]
+
+
 def generated_files(fixtures=None):
     """Every generated (not pinned) game file, [(disk path, bytes, record)]:
-    DOOM's CIUKI.CFG and the Warcraft II demo's launcher and sound setup. The
+    DOOM's CIUKI.CFG, Warcraft II's sound setup and Duke's preset/launchers. The
     games disk and the DOS image (scripts/build_dos_image.py) both install
     exactly this list, so a generated file cannot reach only one of them."""
     fixtures = fixtures or _fixtures()
-    # f3-06 DOOM defaults (dos_fixtures.DOOM_CONFIG): SB16 at 220h/IRQ 7/DMA 1, no mouse or joystick.
+    # DOOM defaults: SB16 at 220h/IRQ 7/DMA 1, mouse enabled, no joystick.
     files = [("/DOOM/CIUKI.CFG", fixtures.DOOM_CONFIG, {"package": None, "role": "config",
                                                         "redistribution": REDISTRIBUTION, "generated": True})]
     for path, data in war2_files():
         files.append((path, data, {"package": None, "role": "config" if path.endswith(".INI") else "launcher",
                                    "redistribution": REDISTRIBUTION, "generated": True}))
+    for path, data in duke3d_files():
+        files.append((path, data, {"package": None, "role": "config" if path.endswith(".CFG") else "launcher",
+                                  "redistribution": REDISTRIBUTION, "generated": True}))
     return files
 
 
@@ -659,6 +771,11 @@ def refuse_registered(files, root=ROOT):
         if (WAR2_DATA.fullmatch(name) or path.upper() == WAR2_DIR + "/WAR2.EXE") and (
                 info.get("package") != "war2-demo" or sha256(data) not in free):
             raise ValueError(f"refusing Warcraft II data that is not the pinned demo's {path}")
+        if name in ("DUKE3D.EXE", "DUKE3D.GRP"):
+            pins = upstream("duke3d-shareware", root)["install"]["files"]
+            expected = next(f["sha256"] for f in pins if f["name"] == name)
+            if info.get("package") != "duke3d-shareware" or sha256(data) != expected:
+                raise ValueError(f"refusing Duke 3D data that is not the pinned shareware's {path}")
     dos.refuse_local_payloads({path: sha256(data) for path, data, _ in files}, root, free=free)
 
 

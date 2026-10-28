@@ -579,6 +579,13 @@ these. No priority elevation is exposed to ordinary clients.
 #define CIUKI_INPUT_BUTTON 4
 #define CIUKI_INPUT_RESYNC 5
 #define CIUKI_INPUT_WHEEL 6
+```
+
+Kernel secure attention (physical Ctrl+Alt+Delete), delivered only on the
+trusted logon UI's input grant; code = CIUKI_SECURITY_SECURE_ATTENTION.
+
+```c
+#define CIUKI_INPUT_ATTENTION 13
 #define CIUKI_KEY_VALUE_UP 0
 #define CIUKI_KEY_VALUE_DOWN 1
 #define CIUKI_KEY_VALUE_REPEAT 2
@@ -831,6 +838,7 @@ CIUKI_SYS_TIME = 97,
     CIUKI_SYS_FILE_INFO = 98,
     CIUKI_SYS_RECOVERY = 99,
     CIUKI_SYS_NET_INFO = 100,
+    CIUKI_SYS_SECURITY = 101,
 };
 ```
 
@@ -839,6 +847,182 @@ free for F6). Only Win32-personality processes may use it.
 
 ```c
 enum ciuki_w32_syscall { CIUKI_SYS_W32 = 96 };
+```
+
+sec-k01: frozen credential/session transport; user-security-kernel.md.
+
+```c
+#define CIUKI_SECURITY_VERSION 1u
+#define CIUKI_UID_SYSTEM 0u
+#define CIUKI_UID_ADMINISTRATOR 500u
+#define CIUKI_UID_GUEST 501u
+#define CIUKI_UID_FIRST_USER 1000u
+#define CIUKI_UID_LAST_USER 0xfffffffeu
+#define CIUKI_UID_INVALID 0xffffffffu
+#define CIUKI_GID_SYSTEM 0u
+#define CIUKI_GID_ADMINISTRATORS 544u
+#define CIUKI_GID_USERS 545u
+#define CIUKI_GID_GUESTS 546u
+#define CIUKI_GID_INVALID 0xffffffffu
+#define CIUKI_SECURITY_GROUP_MAX 8u
+#define CIUKI_SECURITY_PROFILE_PATH_MAX 64u
+#define CIUKI_SECURITY_SESSION_MAX 4u
+#define CIUKI_CRED_INTERACTIVE 0x00000001u
+#define CIUKI_CRED_SAFE_RECOVERY 0x00000002u
+#define CIUKI_SECURITY_QUERY_SELF 1u
+#define CIUKI_SECURITY_QUERY_PROCESS 2u
+#define CIUKI_SECURITY_QUERY_PEER 3u
+#define CIUKI_SECURITY_SESSION_CREATE 4u
+#define CIUKI_SECURITY_SPAWN_CREDENTIAL 5u
+#define CIUKI_SECURITY_SESSION_END 6u
+#define CIUKI_SECURITY_SESSION_QUERY 7u
+#define CIUKI_SECURITY_SESSION_LAUNCH 8u
+#define CIUKI_SECURITY_LAUNCH_POLL 9u
+#define CIUKI_SECURITY_SECURE_ENTER 10u
+#define CIUKI_SECURITY_SECURE_LEAVE 11u
+#define CIUKI_SECURITY_SERVICE_CONNECT 12u
+#define CIUKI_SECURITY_SERVICE_ACCEPT 13u
+#define CIUKI_SECURITY_SERVICE_CANCEL 14u
+#define CIUKI_SECURITY_LAUNCH_DESKTOP 1u
+#define CIUKI_SECURITY_LAUNCH_W32SRV 2u
+#define CIUKI_SECURITY_LAUNCH_PREPARING 1u
+#define CIUKI_SECURITY_LAUNCH_READY 2u
+#define CIUKI_SECURITY_LAUNCH_RUNNING 3u
+#define CIUKI_SECURITY_LAUNCH_FAILED 4u
+#define CIUKI_SECURITY_SECURE_LOCK 1u
+#define CIUKI_SECURITY_SECURE_SAVER 2u
+#define CIUKI_SECURITY_SECURE_RESUME 3u
+#define CIUKI_SECURITY_SECURE_ATTENTION 4u
+#define CIUKI_SECURITY_CONSOLE_TRUSTED 1u
+#define CIUKI_SECURITY_CONSOLE_USER 2u
+#define CIUKI_SECURITY_ROLE_NONE 0u
+#define CIUKI_SECURITY_ROLE_LOGON 1u
+#define CIUKI_SECURITY_ROLE_LOGON_UI 2u
+#define CIUKI_SECURITY_ROLE_ACCOUNT 3u
+#define CIUKI_SECURITY_ROLE_OWNER 4u
+#define CIUKI_SECURITY_ROLE_REGISTRY 5u
+#define CIUKI_SECURITY_ROLE_DESKTOP 6u
+#define CIUKI_SECURITY_ROLE_W32SRV 7u
+#define CIUKI_SECURITY_ROLE_SETUP 8u
+#define CIUKI_SECURITY_SERVICE_AUTH 1u
+#define CIUKI_SECURITY_SERVICE_ACCOUNTS 2u
+#define CIUKI_SECURITY_SERVICE_OWNER 3u
+#define CIUKI_SECURITY_SERVICE_REGISTRY 4u
+#define CIUKI_SECURITY_SERVICE_LOGON 5u
+#define CIUKI_SECURITY_SERVICE_W32SRV 6u
+#define CIUKI_SECURITY_SERVICE_BODY_MAX 8192u
+#define CIUKI_SECURITY_SERVICE_PENDING_MAX 8u
+#define CIUKI_SECURITY_SERVICE_FRAGMENT_MAX 192u
+#define CIUKI_SECURITY_LAUNCH_TIMEOUT_MS 5000u
+#define CIUKI_SECURITY_SERVICE_TIMEOUT_MS 5000u
+#define CIUKI_SECURITY_END_BEGIN 0x00000001u
+#define CIUKI_SECURITY_END_COLLECT 0x00000002u
+#define CIUKI_SECURITY_SESSION_ACTIVE 1u
+#define CIUKI_SECURITY_SESSION_CLOSING 2u
+#define CIUKI_SECURITY_SESSION_DEAD 3u
+#pragma pack(push, 4)
+struct ciuki_credential {
+    uint32_t version;
+    uint32_t size;
+    uint32_t uid;
+    uint32_t primary_gid;
+    uint32_t group_count;
+    uint32_t groups[8];
+    uint32_t session_id;
+    uint32_t flags;
+    uint32_t reserved;
+};
+struct ciuki_security_profile {
+    uint32_t version;
+    uint32_t size;
+    uint32_t uid;
+    uint32_t flags;
+    uint32_t volume_id_lo;
+    uint32_t volume_id_hi;
+    uint32_t owner_generation_lo;
+    uint32_t owner_generation_hi;
+    uint32_t owner_key_lo;
+    uint32_t owner_key_hi;
+    uint32_t path_bytes;
+    uint32_t reserved;
+    char path[64];
+};
+struct ciuki_security_args {
+    uint32_t version;
+    uint32_t size;
+    uint32_t operation;
+    uint32_t flags;
+    uint32_t credential_address;
+    uint32_t spawn_address;
+    uint32_t session_id;
+    uint32_t target_pid;
+    int32_t endpoint_fd;
+    uint32_t profile_address;
+    uint32_t output_address;
+    uint32_t output_bytes;
+    uint32_t result;
+    uint32_t state;
+    uint32_t reserved[2];
+};
+struct ciuki_security_launch {
+    uint32_t version;
+    uint32_t size;
+    uint32_t purpose;
+    uint32_t flags;
+    uint32_t session_id;
+    uint32_t session_generation;
+    uint32_t launch_id;
+    uint32_t launch_generation;
+    uint32_t pid;
+    uint32_t process_generation;
+    int32_t control_fd;
+    int32_t child_ready_fd;
+    int32_t child_console_fd;
+    int32_t child_display_fd;
+    int32_t child_input_fd;
+    int32_t child_service_fd;
+    uint32_t service_generation;
+    uint32_t grant_generation;
+    uint32_t state;
+    int32_t error;
+    uint32_t activation_console_epoch;
+    uint32_t activation_authentication_epoch;
+    uint32_t reserved[2];
+};
+struct ciuki_security_console {
+    uint32_t version;
+    uint32_t size;
+    uint32_t session_id;
+    uint32_t session_generation;
+    uint32_t console_generation;
+    uint32_t reason;
+    uint32_t grant_generation;
+    uint32_t restore_cookie_lo;
+    uint32_t restore_cookie_hi;
+    uint32_t state;
+    uint32_t authentication_required;
+    uint32_t console_epoch;
+    uint32_t authentication_epoch;
+    uint32_t reserved[3];
+};
+struct ciuki_security_link {
+    uint32_t version;
+    uint32_t size;
+    uint32_t service;
+    uint32_t flags;
+    int32_t endpoint_fd;
+    uint32_t endpoint_generation;
+    uint32_t server_role;
+    uint32_t peer_pid;
+    uint32_t peer_process_generation;
+    uint32_t peer_role;
+    uint32_t session_id;
+    uint32_t service_generation;
+    uint32_t request_id_lo;
+    uint32_t request_id_hi;
+    uint32_t reserved[2];
+};
+#pragma pack(pop)
 ```
 
 f2-39: diagnostic markers, no copied wire record. See execution-abi.md.
@@ -1223,6 +1407,9 @@ struct ciuki_time_zone {
 
 /dev/media: v2 adds per-drive types; v1 remains accepted at its old size.
 removable_mask includes ejectable USB and optical media; type[] distinguishes them.
+fx-emptydrive: a CD-ROM drive owns its letter from boot; type[] reports
+CIUKI_MEDIA_OPTICAL there with or without a disc, removable_mask has the
+bit (and generation[] the medium) only while a disc is mounted.
 A removal names a generation and ejects the physical USB device or CD.
 
 ```c
@@ -1326,6 +1513,24 @@ background (FAT32 FSInfo unknown) and free_clusters is its upper bound.
 
 ```c
 #define MEDIA_GET_SPACE 0x4d06u
+```
+
+Read-only mount diagnostics; slot enumeration also includes refused volumes.
+Unused slots return ENOENT. Input: version, size, slot; other fields zero.
+
+```c
+#define MEDIA_GET_NTFS_STATUS 0x4d22u
+#define CIUKI_MEDIA_NTFS_SLOTS 8u
+struct ciuki_ntfs_status {
+    uint32_t version;
+    uint32_t size;
+    uint32_t slot;
+    uint32_t disk;
+    uint32_t partition;
+    int32_t error;
+    char reason[128];
+};
+
 #define CIUKI_MEDIA_SPACE_COUNTING 1u
 struct ciuki_media_space {
     uint32_t version;
@@ -3383,8 +3588,432 @@ char first_problem[64];
 
 ```c
 };
+```
 
+---- sec-sysvc: SYSTEM services on call 99 (user-security-kernel.md
+"SYSTEM services and logs", K-Q4). The kernel checks the caller's retained
+subject, then acts as SYSTEM on fixed targets; a caller-chosen input is read
+as the caller and no SYSTEM descriptor is handed out. EPERM: not an
+administrator (or SYSTEM). EDX is the exact record size.
+BOOT_CONFIG SET (administrators): C:\SYSTEM\BOOT.CFG becomes `length`
+bytes of `text` (printable ASCII, tab, CR, LF; the loader's 127 at most);
+the previous text is restored when the write fails.
+LOG: MACHINE scope is C:\SYSTEM\LOGS. LIST and READ are for administrators
+(Event Viewer model); its files are written by SYSTEM, except APPEND of the
+maintenance reports SCANDISK.LOG and SFC.LOG by an administrator. USER scope
+is the caller's own log folder, <profile>\Local Settings\Application Data\
+CiukiOS\Logs, listed, read and written as the caller; a session without a
+profile (the interim administrator session of a first boot) uses
+C:\SYSTEM\LOGS\Users\u<8 hex uid>. Names are 8.3 of [A-Za-z0-9_-]; MACHINE
+names may also be Users/u<8 hex>/NAME. LIST returns the index-th file
+(ENOENT past the last); READ copies `bytes` (at most DATA_MAX) from
+`offset`; APPEND starts the file over when it would pass `limit`; REPLACE
+rewrites it. `total` returns the file size.
+DRIVER_PACK (administrators): INSTALL copies the files named by the sealed
+package manifest (the exact manifest.ndp image) from `root`, read as the
+caller, into C:\SYSTEM\DRIVERS\<package>, verifying every byte; REMOVE
+deletes the adapter's installed package once its host is stopped. The
+result is 0 or -errno; `reason` says what happened in words.
+SFC_RESTORE (administrators): System File Checker's "Restore file" for any
+file of the sealed baseline C:\SYSTEM\SFC.LST: `source` + `path`, read as
+the caller, must have the baseline's size and SHA-256 (EILSEQ otherwise;
+ENOENT: not in the baseline); the current file is first copied to
+C:\SYSTEM\Helpdesk\SFC, then the original replaces it in one rename.
 
+```c
+#define CIUKI_RECOVERY_BOOT_CONFIG 5u
+#define CIUKI_RECOVERY_LOG 6u
+#define CIUKI_RECOVERY_DRIVER_PACK 7u
+#define CIUKI_RECOVERY_SFC_RESTORE 8u
+#define CIUKI_BOOT_CONFIG_VERSION 1u
+#define CIUKI_BOOT_CONFIG_SET 1u
+#define CIUKI_BOOT_CONFIG_MAX 127u
+struct ciuki_boot_config {
+    uint32_t version;
+```
+
+0
+
+```c
+uint32_t size;
+```
+
+4
+
+```c
+uint32_t action;
+```
+
+8: CIUKI_BOOT_CONFIG_SET
+
+```c
+uint32_t length;
+```
+
+12: bytes of text
+
+```c
+char text[128];
+```
+
+16
+
+```c
+};
+
+#define CIUKI_SYSTEM_LOG_VERSION 1u
+#define CIUKI_SYSTEM_LOG_LIST 1u
+#define CIUKI_SYSTEM_LOG_READ 2u
+#define CIUKI_SYSTEM_LOG_APPEND 3u
+#define CIUKI_SYSTEM_LOG_REPLACE 4u
+#define CIUKI_SYSTEM_LOG_MACHINE 1u
+#define CIUKI_SYSTEM_LOG_USER 2u
+#define CIUKI_SYSTEM_LOG_NAME_MAX 48u
+#define CIUKI_SYSTEM_LOG_DATA_MAX 65536u
+#define CIUKI_SYSTEM_LOG_LIMIT 65536u
+#define CIUKI_SYSTEM_LOG_LIMIT_MAX 1048576u
+struct ciuki_system_log {
+    uint32_t version;
+```
+
+0
+
+```c
+uint32_t size;
+```
+
+4
+
+```c
+uint32_t action;
+```
+
+8: CIUKI_SYSTEM_LOG_*
+
+```c
+uint32_t scope;
+```
+
+12: MACHINE or USER
+
+```c
+uint32_t index;
+```
+
+16: LIST
+
+```c
+uint32_t offset;
+```
+
+20: READ
+
+```c
+uint32_t buffer;
+```
+
+24: READ, APPEND, REPLACE: data address
+
+```c
+uint32_t bytes;
+```
+
+28: READ: capacity in, bytes out; APPEND, REPLACE: bytes
+
+```c
+uint32_t total;
+```
+
+32: out: the file's size
+
+```c
+uint32_t limit;
+```
+
+36: APPEND: 0 is CIUKI_SYSTEM_LOG_LIMIT
+
+```c
+uint32_t reserved[2];
+```
+
+40
+
+```c
+char name[48];
+```
+
+48: NUL terminated; LIST returns it
+
+```c
+};
+
+#define CIUKI_DRIVER_PACK_JOB_VERSION 1u
+#define CIUKI_DRIVER_PACK_INSTALL 1u
+#define CIUKI_DRIVER_PACK_REMOVE 2u
+#define CIUKI_DRIVER_PACK_MANIFEST_BYTES 48088u
+#define CIUKI_DRIVER_PACK_SOURCE_BYTES 192u
+#define CIUKI_DRIVER_PACK_FILES 32u
+struct ciuki_driver_pack_job {
+    uint32_t version;
+```
+
+0
+
+```c
+uint32_t size;
+```
+
+4
+
+```c
+uint32_t action;
+```
+
+8: INSTALL or REMOVE
+
+```c
+uint32_t manifest;
+```
+
+12: INSTALL: address of the sealed manifest image
+
+```c
+uint32_t manifest_bytes;
+```
+
+16: CIUKI_DRIVER_PACK_MANIFEST_BYTES
+
+```c
+uint32_t sources;
+```
+
+20: INSTALL: one 192-byte path per manifest file, relative to root
+
+```c
+uint32_t source_bytes;
+```
+
+24: file count times 192
+
+```c
+uint32_t reserved;
+```
+
+28
+
+```c
+uint32_t bus;
+```
+
+32: REMOVE: the adapter
+
+```c
+uint32_t slot;
+```
+
+36
+
+```c
+uint32_t function;
+```
+
+40
+
+```c
+uint32_t vendor;
+```
+
+44
+
+```c
+uint32_t device;
+```
+
+48
+
+```c
+uint32_t sub_vendor;
+```
+
+52
+
+```c
+uint32_t sub_device;
+```
+
+56
+
+```c
+uint32_t revision;
+```
+
+60
+
+```c
+char root[256];
+```
+
+64: INSTALL: the package folder, a native path
+
+```c
+char reason[160];
+```
+
+320: out: the outcome in words
+
+```c
+};
+
+#define CIUKI_SFC_RESTORE_VERSION 1u
+struct ciuki_sfc_restore {
+    uint32_t version;
+```
+
+0
+
+```c
+uint32_t size;
+```
+
+4
+
+```c
+uint32_t reserved[2];
+```
+
+8
+
+```c
+char path[160];
+```
+
+16: the baseline path, as /System/VMM.ELF
+
+```c
+char source[256];
+```
+
+176: the folder holding the originals, a native path
+
+```c
+};
+```
+
+---- end sec-sysvc ----
+
+---- sec-sysvc2: SYSTEM jobs and sealed boot settings on call 99
+(user-security-kernel.md, sec-sysvc2 amendment). Same model as the
+services above: the kernel checks the caller's retained subject, then acts
+as SYSTEM on fixed targets.
+JOB (every live session subject, administrators, standard users, Guest,
+and SYSTEM): scheduled system maintenance runs as SYSTEM, never as the
+session user (Windows XP runs it under LocalSystem). STARTUP_REPORT appends
+every ScanDisk check this start ran (REPORT) to C:\SYSTEM\LOGS\SCANDISK.LOG,
+once per start and drive, formatted by the kernel from its own record; no
+caller data reaches the log. `done` returns the reports this call appended.
+SETTING SET (administrators, or SYSTEM): a sealed boot setting, a file the
+kernel or the loader reads at the next start, becomes `length` bytes read
+from `buffer`: HWPROFILES C:\SYSTEM\HWPROF.CFG (printable text, tab, CR,
+LF, at most SETTING_MAX), PERFORMANCE C:\SYSTEM\SETTINGS\performance.cfg
+(a complete valid performance record), ACCEL_RETRY the display retry
+request C:\SYSTEM\SETTINGS\accel-retry.cfg (exactly
+"driver=<id>\npci=<vvvv>:<dddd>\n" of DM8: id 1..15 of [a-z0-9_-],
+lowercase hex). EINVAL otherwise; the previous text is restored when the
+write fails.
+
+```c
+#define CIUKI_RECOVERY_JOB 9u
+#define CIUKI_RECOVERY_SETTING 10u
+#define CIUKI_SYSTEM_JOB_VERSION 1u
+#define CIUKI_SYSTEM_JOB_STARTUP_REPORT 1u
+struct ciuki_system_job {
+    uint32_t version;
+```
+
+0
+
+```c
+uint32_t size;
+```
+
+4
+
+```c
+uint32_t job;
+```
+
+8: CIUKI_SYSTEM_JOB_*
+
+```c
+uint32_t done;
+```
+
+12: out: work done by this call (reports appended)
+
+```c
+uint32_t reserved[4];
+```
+
+16: zero
+
+```c
+};
+
+#define CIUKI_SYSTEM_SETTING_VERSION 1u
+#define CIUKI_SYSTEM_SETTING_SET 1u
+#define CIUKI_SYSTEM_SETTING_HWPROFILES 1u
+#define CIUKI_SYSTEM_SETTING_PERFORMANCE 2u
+#define CIUKI_SYSTEM_SETTING_ACCEL_RETRY 3u
+#define CIUKI_SYSTEM_SETTING_MAX 24575u
+struct ciuki_system_setting {
+    uint32_t version;
+```
+
+0
+
+```c
+uint32_t size;
+```
+
+4
+
+```c
+uint32_t action;
+```
+
+8: CIUKI_SYSTEM_SETTING_SET
+
+```c
+uint32_t setting;
+```
+
+12: HWPROFILES, PERFORMANCE or ACCEL_RETRY
+
+```c
+uint32_t buffer;
+```
+
+16: address of the text
+
+```c
+uint32_t length;
+```
+
+20: bytes of text
+
+```c
+uint32_t reserved[2];
+```
+
+24: zero
+
+```c
+};
+```
+
+---- end sec-sysvc2 ----
+
+```c
 struct ciuki_spawn_fd {
     int32_t source;
 ```
@@ -4197,6 +4826,13 @@ created with the BATCH_* formats; they cannot be mapped into user space.
 #define CIUKI_ACCEL_FENCE 11u
 #define CIUKI_ACCEL_QUERY_COMMANDS 12u
 #define CIUKI_ACCEL_QUERY_SURFACE 13u
+```
+
+Revocable offscreen cache epoch. Offscreen COPY/WRITE background and VIDEO
+target reserved[0] must equal this value; other reserved words stay zero.
+
+```c
+#define CIUKI_ACCEL_CACHE_EPOCH 14u
 #define CIUKI_BATCH_VERSION 1u
 #define CIUKI_BATCH_MAGIC 826426435u
 #define CIUKI_BATCH_MAX_BYTES 1048576u
@@ -4414,7 +5050,7 @@ uint32_t flags;
 uint32_t reserved[4];
 ```
 
-16
+16; VIDEO: cache epoch in [0], [1..3]=0
 
 ```c
 };
@@ -5290,7 +5926,7 @@ game is the catalog index+1, or zero for the interactive shell.
 sole CiukiDOS K2043 fork, DFV2 binding and native IFS
 
 ```c
-#define CIUKI_DOSVM_GAME_COUNT 4u
+#define CIUKI_DOSVM_GAME_COUNT 5u
 ```
 
 f3-46 CREATE launch.memory: 0 demand-zero, pageable pool (default); 1 the
@@ -5336,6 +5972,18 @@ STATUS.changed: game data quota/disk space exhausted
 ```
 
 armed EXEC returned to its shell
+
+```c
+#define CIUKI_DOSVM_GRAPHICS 256u
+```
+
+STATUS.changed: the guest display is in a graphics mode (VBE, BIOS or programmed VGA)
+
+```c
+#define CIUKI_DOSVM_FULLSCREEN_HOTKEY 512u
+```
+
+STATUS.changed: the last full-screen entry or return was the user's Alt+Enter
 
 ```c
 #define CIUKI_DOSVM_BOOTING 0u
@@ -5618,7 +6266,7 @@ the native render3d contract; unknown state is rejected before submission.
 
 ```c
 #define W32_RENDER3D 514u
-#define CIUKI_R3D_VERSION 2u
+#define CIUKI_R3D_VERSION 3u
 #define CIUKI_R3D_QUERY 1u
 #define CIUKI_R3D_OPEN 2u
 #define CIUKI_R3D_CLOSE 3u
@@ -5631,6 +6279,7 @@ the native render3d contract; unknown state is rejected before submission.
 #define CIUKI_R3D_WAIT 10u
 #define CIUKI_R3D_PRESENT 11u
 #define CIUKI_R3D_D16 1u
+#define CIUKI_R3D_D24S8 2u
 #define CIUKI_R3D_ARGB8888 1u
 #define CIUKI_R3D_RGB565 4u
 #define CIUKI_R3D_ARGB4444 8u
@@ -5665,6 +6314,8 @@ Qualified sample-space policy, not a silicon precision specification.
 #define CIUKI_R3D_DEPTH_WRITE 16u
 #define CIUKI_R3D_COPY 32u
 #define CIUKI_R3D_TEXTURE1 64u
+#define CIUKI_R3D_STENCIL_TEST 128u
+#define CIUKI_R3D_CLEAR_STENCIL 256u
 #define CIUKI_R3D_LESS 0u
 #define CIUKI_R3D_NEVER 1u
 #define CIUKI_R3D_ALWAYS 2u
@@ -5709,6 +6360,25 @@ and ONE/ZERO work in either slot. Caps contain the union of selector bits.
 #define CIUKI_R3D_RESOURCE_D16 2u
 #define CIUKI_R3D_RESOURCE_TEXTURE 3u
 #define CIUKI_R3D_RESOURCE_LINEAR_COLOR 4u
+#define CIUKI_R3D_RESOURCE_D24S8 5u
+```
+
+RGB565 resources keep canonical ARGB8888 shadows; no alpha attachment.
+
+```c
+#define CIUKI_R3D_RESOURCE_COLOR565 6u
+#define CIUKI_R3D_RESOURCE_LINEAR565 7u
+```
+
+Stencil operations; zero initialized state keeps the stored value.
+
+```c
+#define CIUKI_R3D_STENCIL_KEEP 0u
+#define CIUKI_R3D_STENCIL_ZERO 1u
+#define CIUKI_R3D_STENCIL_REPLACE 2u
+#define CIUKI_R3D_STENCIL_INCR 3u
+#define CIUKI_R3D_STENCIL_DECR 4u
+#define CIUKI_R3D_STENCIL_INVERT 5u
 
 struct ciuki_r3d_sampler {
     uint32_t combine;
@@ -5736,6 +6406,16 @@ struct ciuki_r3d_vertex {
     int32_t u;
     int32_t v;
 };
+struct ciuki_r3d_stencil {
+    uint32_t function;
+    uint32_t reference;
+    uint32_t read_mask;
+    uint32_t write_mask;
+    uint32_t fail;
+    uint32_t zfail;
+    uint32_t zpass;
+    uint32_t clear;
+};
 struct ciuki_r3d_draw {
     uint32_t flags;
     uint32_t target;
@@ -5750,6 +6430,7 @@ struct ciuki_r3d_draw {
     uint32_t flat_color[256];
     int32_t uv1[768][2];
     struct ciuki_r3d_vertex vertices[768];
+    struct ciuki_r3d_stencil stencil;
 };
 struct ciuki_r3d_caps {
     uint32_t version;
@@ -5786,6 +6467,8 @@ WAIT: 64-bit sequence/ordinal split into halves; timeout capped at 100 ms.
 Completed receipts authenticate generation/context/ordinal (sequence is then
 informational). PRESENT: exact existing lease token, owned linear resource,
 dimensions/pitch, completed fence; no user payload or framebuffer mapping.
+D24S8 canonical words: increasing Z in bits 23:0, S in bits 31:24.
+Vertex/clear Z is 0..65535 for D16, 0..16777215 for D24S8.
 Other actions require the queried generation. result=1 means success;
 error is positive native errno. No backend packets or VRAM addresses.
 
@@ -6351,6 +7034,12 @@ G15 WS_EX_CONTEXTHELP: the "?" caption button (it replaces minimise and zoom)
 #define DESK_V3_HIDDEN 8u
 ```
 
+Internal CDS preflight: one carrier-to-drawable focus handoff.
+
+```c
+#define DESK_V3_LEASE_CARRIER 2u
+```
+
 WINDOW_ORDER flags; order targets occupy a separate namespace from ids.
 
 ```c
@@ -6369,7 +7058,7 @@ PLACE: x,y,w,h,scale,show (0 normal,1 minimized,2 hidden),style;
 TITLE: byte-count,UTF-8; CURSOR: shape,id,visibility-count;
 CURSOR_BITMAP: id,hot-x,hot-y + one 32x32 ARGB8888 surface fd;
 POINTER: flags,clip-x,clip-y,clip-w,clip-h; WARP: logical client x,y;
-LEASE: action (0 release,1 request),w,h,bpp;
+LEASE: action (0 release,1 request,2 CDS carrier request),w,h,bpp;
 RESULT: request-opcode,signed errno; CONFIGURE: w,h,scale,configure-serial,physical-client-x,physical-client-y,show,style;
 ACTIVATE: focus,active; LEASE_EVENT: state,generation,w,h,bpp;
 additive 72-byte LEASE_EVENT: above + token,fb-generation,mode,scale,
@@ -6443,7 +7132,17 @@ DESK_V3_SOUND = 92,
 G19: desktop-owned Control Panel action request from a v3 client.
 
 ```c
-DESK_V3_LAUNCH = 93
+DESK_V3_LAUNCH = 93,
+```
+
+fx-exeicons WINDOW_ICON: client to desktop, 4 bytes: size (16 or 32)
+with one size x size ARGB8888 surface (straight alpha in the high byte),
+or 0 without a surface to drop the window's icons. The icon the window
+shows in its caption, taskbar button and Alt+Tab: WM_SETICON, else its
+class icon, else its executable's first icon group.
+
+```c
+DESK_V3_WINDOW_ICON = 97
 };
 ```
 
@@ -6686,6 +7385,22 @@ DESK_CLIPBOARD = 92, DESK_CLIPBOARD_EVENT = 93,
 v2 desktop to DOS window: u32 action 1 Mark, 2 Copy, 3 Paste, 4 toggle QuickEdit, 5 toggle Exclusive mode
 
 ```c
+,
+```
+
+f7-14: the common present lease for native (v2) clients, with the v3
+LEASE/LEASE_EVENT payloads after the 4-byte header (DESK_SHELL_VERSION).
+LEASE (client to desktop, 20 bytes): action (0 release, 1 request),
+  w, h, bpp. The focused window of the client is the lease window.
+LEASE_EVENT (desktop to client, 76 bytes): the additive 72-byte v3
+  event: state (0 refused/ended, 1 granted, 2 pending, 3 revoked),
+  generation, w, h, bpp, token, fb-generation, mode, scale, source
+  w/h/pitch/size/format, native w/h/bpp, signed error. The holder
+  presents through W32_DISPLAY_FRAME or the render3d GPU copy with
+  the token and fb-generation (ciuki_gl_present).
+
+```c
+DESK_LEASE = 95, DESK_LEASE_EVENT = 96
 };
 enum desk_clip_op { DESK_CLIP_QUERY = 1, DESK_CLIP_EMPTY, DESK_CLIP_PUT, DESK_CLIP_CLOSE,
                     DESK_CLIP_GET, DESK_CLIP_WATCH, DESK_CLIP_REGISTER, DESK_CLIP_NAME, DESK_CLIP_OPEN, DESK_CLIP_RELEASE, DESK_CLIP_DISPLAY, DESK_CLIP_DISPLAY_REPLY };
@@ -7260,6 +7975,134 @@ void ciuki_font_cache_clear(struct ciuki_font_face *);
 #endif
 ```
 
+## `ciuki/gl.h`
+
+Source: `sdk/libgl/include/ciuki/gl.h`.
+
+Native OpenGL target binding, backend policy, completion accounting and
+full-screen presentation (f7-01, f7-14). SPDX-License-Identifier: MIT
+
+```c
+#ifndef CIUKI_GL_H
+#define CIUKI_GL_H
+#include <stdint.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
+```
+
+One context per process, one calling thread. Stride is in pixels.
+Pixels remain caller-owned and must be writable until finish/rebind/close.
+Invalid targets return -EINVAL; allocation failure returns -ENOMEM.
+Initial creation resets GL state; later binds retain it, resetting the
+viewport and scissor to the new target. The target is XRGB8888, top-down,
+with a 16-bit depth attachment owned by the library. A packed target
+(stride == width) is rendered in place; other strides use private rows
+copied out by ciuki_gl_finish. Do not call the engine's TinyGL internals.
+
+```c
+int ciuki_gl_bind(uint32_t *pixels, unsigned width, unsigned height, unsigned stride);
+```
+
+Ends the frame: completes every queued hardware batch, reads the finished
+target back into the caller's pixels and records the frame's backend.
+
+```c
+void ciuki_gl_finish(void);
+void ciuki_gl_close(void);
+unsigned ciuki_gl_generation(void);
+```
+
+Backend policy (contract 7.1): automatic uses the qualified hardware path
+when the kernel advertises it for the bound target, software never opens
+it, hardware refuses (-ENODEV) when it is unavailable and keeps rendering
+in software. The policy applies from the next GL call.
+
+```c
+#define CIUKI_GL_BACKEND_AUTO 0u
+#define CIUKI_GL_BACKEND_SOFTWARE 1u
+#define CIUKI_GL_BACKEND_HARDWARE 2u
+int ciuki_gl_set_backend(unsigned policy);
+```
+
+Completion accounting. A frame is a hardware frame when every draw and
+clear of the frame executed on the provider; a frame with any scalar
+draw is a software frame; a frame without draws is counted only in
+frames. Frames end at ciuki_gl_finish or ciuki_gl_present.
+refusals are temporary provider refusals
+(software for that draw); fallbacks are permanent whole-context
+fallbacks (contract 7.2). Counters are cumulative since bind.
+
+```c
+struct ciuki_gl_status {
+    uint32_t size;
+```
+
+in: sizeof(struct ciuki_gl_status)
+
+```c
+uint32_t policy;
+```
+
+CIUKI_GL_BACKEND_* requested
+
+```c
+uint32_t backend;
+```
+
+CIUKI_GL_BACKEND_HARDWARE or _SOFTWARE now active
+
+```c
+uint32_t hardware_failed;
+```
+
+permanent software fallback for this context
+
+```c
+uint32_t generation;
+```
+
+provider capability generation, 0 without hardware
+
+```c
+uint32_t reserved;
+    uint64_t frames, hardware_frames, software_frames;
+    uint64_t hardware_draws, software_draws, refusals, fallbacks;
+    uint64_t presents, hardware_presents;
+};
+int ciuki_gl_status(struct ciuki_gl_status *out);
+```
+
+Full-screen presentation through the desktop's present lease
+(DESK_LEASE / DESK_LEASE_EVENT). The bound target must match the lease
+surface (width, height, XRGB8888). A qualified provider copies the
+completed frame on the GPU and the kernel writes it to the scanout
+(returns 1); the frame then stays resident on the provider and is not
+read back into the caller's pixels: ciuki_gl_finish or a pixel read
+makes them current, while a rebind or close before the next draw
+releases them without writing (they may already be freed). Otherwise
+the finished pixels are presented by the CPU frame path (returns 0).
+Negative errno: the lease is no longer valid (-EACCES), the layout does
+not match (-EINVAL) or the kernel refused.
+
+```c
+struct ciuki_gl_lease {
+    uint32_t token, generation, width, height, bpp, pitch;
+};
+int ciuki_gl_present(const struct ciuki_gl_lease *lease);
+```
+
+Address of an advertised extension entry point by name (the
+wglGetProcAddress set of opengl32), NULL for core or unknown names.
+
+```c
+void *ciuki_gl_get_proc_address(const char *name);
+#ifdef __cplusplus
+}
+#endif
+#endif
+```
+
 ## `ciuki/lpt.h`
 
 Source: `sdk/sysroot-overlay/include/ciuki/lpt.h`.
@@ -7573,6 +8416,7 @@ SPDX-License-Identifier: MIT
 ```c
 #ifndef CIUKI_USER_RECOVERY_H
 #define CIUKI_USER_RECOVERY_H
+#include <stddef.h>
 #include <ciuki/abi.h>
 ```
 
@@ -7608,6 +8452,48 @@ The check that ran on drive at this start (RAN clear: none).
 
 ```c
 int ciuki_scandisk_report(unsigned drive, struct ciuki_scandisk *out);
+```
+
+sec-sysvc: SYSTEM services of call 99 (abi.h "SYSTEM services"). Each
+returns 0, or -1 with errno (EPERM: not an administrator; ENOENT: no such
+log, or LIST past the last entry).
+boot_config_set: C:\SYSTEM\BOOT.CFG becomes text (administrators).
+system_log_list/read: scope CIUKI_SYSTEM_LOG_MACHINE (the system logs,
+administrators) or CIUKI_SYSTEM_LOG_USER (the caller's own logs); read
+copies at most CIUKI_SYSTEM_LOG_DATA_MAX bytes from offset, *total is the
+file size. system_log_write: append (replace 0; the file starts over past
+limit, 0 for CIUKI_SYSTEM_LOG_LIMIT) or rewrite one of the caller's own
+logs; MACHINE accepts only an administrator's append of SCANDISK.LOG and
+SFC.LOG. driver_pack: the job record (version, size and action filled in by
+the caller); job->reason receives the outcome even on failure.
+
+```c
+int ciuki_boot_config_set(const char *text, size_t length);
+int ciuki_system_log_list(unsigned scope, unsigned index, char name[CIUKI_SYSTEM_LOG_NAME_MAX], uint32_t *total);
+int ciuki_system_log_read(unsigned scope, const char *name, uint32_t offset, void *buffer, size_t capacity,
+                          size_t *got, uint32_t *total);
+int ciuki_system_log_write(unsigned scope, const char *name, int replace, const void *data, size_t bytes, uint32_t limit);
+int ciuki_driver_pack(struct ciuki_driver_pack_job *job);
+```
+
+System File Checker "Restore file" (administrators): source + path must be
+the baseline's original (EILSEQ otherwise, ENOENT: not in SFC.LST).
+
+```c
+int ciuki_sfc_restore(const char *path, const char *source);
+```
+
+sec-sysvc2: SYSTEM jobs and sealed boot settings of call 99 (abi.h
+"sec-sysvc2"). Each returns 0, or -1 with errno.
+system_job: run a CIUKI_SYSTEM_JOB_* as SYSTEM (every session, Guest too);
+*done (optional) counts the work done, e.g. the ScanDisk reports appended.
+system_setting_set: a sealed boot setting (CIUKI_SYSTEM_SETTING_HWPROFILES,
+_PERFORMANCE, _ACCEL_RETRY) becomes text (administrators; EPERM otherwise,
+EINVAL for text the kernel would not accept).
+
+```c
+int ciuki_system_job(unsigned job, uint32_t *done);
+int ciuki_system_setting_set(unsigned setting, const char *text, size_t length);
 #endif
 ```
 
@@ -7729,6 +8615,35 @@ static inline struct ciuki_tcb *ciuki_tcb(void) {
 uint32_t ciuki_heap_high_water(void);
 void __ciuki_pthread_main(void);
 void __ciuki_sigreturn(void);
+#endif
+```
+
+## `ciuki/security.h`
+
+Source: `sdk/sysroot-overlay/include/ciuki/security.h`.
+
+SPDX-License-Identifier: MIT
+
+```c
+#ifndef CIUKI_SDK_SECURITY_H
+#define CIUKI_SDK_SECURITY_H
+#include <ciuki/abi.h>
+```
+
+Call 101. Records/constants are copied from the canonical ABI at SDK build.
+Return 0, or -1 with errno; buffers remain unchanged on failure.
+
+```c
+int ciuki_security(struct ciuki_security_args *args);
+int ciuki_security_self(struct ciuki_credential *credential);
+int ciuki_security_process(uint32_t pid, struct ciuki_credential *credential);
+int ciuki_security_peer(int fd, struct ciuki_credential *credential);
+```
+
+Read-only state query; a session id is never a transferable credential.
+
+```c
+int ciuki_security_session(uint32_t session, uint32_t *state);
 #endif
 ```
 
@@ -8159,8 +9074,16 @@ processor fault.
 ```c
 enum w32_report_action { W32_REPORT_CRASH=1, W32_REPORT_REFUSE,
     W32_REPORT_NEXT, W32_REPORT_CLOSE, W32_REPORT_REASON, W32_REPORT_NATIVE_FAULT };
+```
+
+W32_REFUSE_WIN16 (fx-autorun) is queued only by the kernel's spawn
+admission, for a 16-bit Windows (NE) program other than an InstallShield 5
+setup stub; user-mode W32_REPORT_REFUSE stays limited to codes 1..7.
+
+```c
 enum w32_refusal { W32_REFUSE_MSI=1, W32_REFUSE_DRIVER, W32_REFUSE_RUNTIME,
-    W32_REFUSE_MISSING_DLL, W32_REFUSE_EXPORT, W32_REFUSE_IMAGE, W32_REFUSE_SERVER };
+    W32_REFUSE_MISSING_DLL, W32_REFUSE_EXPORT, W32_REFUSE_IMAGE, W32_REFUSE_SERVER,
+    W32_REFUSE_WIN16 };
 enum w32_exit_reason { W32_EXIT_NORMAL, W32_EXIT_CRASH, W32_EXIT_KILLED, W32_EXIT_RESTART };
 struct ciuki_w32_report_args {
     struct ciuki_w32_header header;
@@ -8496,6 +9419,124 @@ const struct du_icon *du_icon_for(const char *object, unsigned size);
 ```
 
 du_icon(du_icon_name(object), size)
+
+fx-exeicons: the icon a file shows by itself (fileicon.c, iconx.c;
+docs/design/file-icons.md): a program's or library's first icon group,
+an .ico/.cur/.ani, a shortcut's IconLocation or its target's icon, a
+.pif's icon, an Internet shortcut's IconFile, a read-only or system
+folder's desktop.ini icon, a medium's AUTORUN.INF icon. Keys are absolute
+POSIX paths ("what the shell shows for this file") or "file|index" for an
+explicit icon resource (ExtractIcon index rules: a negative index is a
+resource ID).
+
+```c
+#define DU_FILE_ICON_PATH 260
+#define DU_FILE_ICON_KEY 300
+#define DU_FILE_ICON_SLOTS 4
+```
+
+16, 22, 32, 48
+
+```c
+#define DU_FILE_ICON_DEFAULT 1u
+```
+
+no own icon: return the resolved type default
+
+```c
+#define DU_FILE_ICON_LINK 2u
+```
+
+compose the shortcut overlay (lower-left, as Windows)
+
+```c
+struct du_icon_source {
+    char file[DU_FILE_ICON_PATH];
+```
+
+the icon resource file (POSIX) when own
+
+```c
+int32_t index;
+    int own;
+    char fallback[64];
+```
+
+du_icon_name() object of the default ("type:.txt", "program:calc")
+
+```c
+int resolved;
+```
+
+the file was read: fallback is what it shows; 0 the caller's default
+
+```c
+};
+struct du_file_icon_stats { uint32_t lookups, hits, queued, extracted, defaults, stale, evicted, refused, entries, bytes; };
+int du_file_icon_candidate(const char *name, int directory);
+```
+
+own icon/type resolution candidate; includes extensionless Programs entries
+
+```c
+int du_file_icon_shortcut(const char *name);
+```
+
+.lnk, .ciuki, .pif, .url: drawn with the shortcut overlay
+
+Synchronous resolution and extraction (file I/O; workers and tools).
+resolve: 1 own icon at out->file/index, 0 the default out->fallback, <0 error.
+
+```c
+int du_file_icon_resolve(const char *path, int directory, struct du_icon_source *out);
+int du_file_icon_extract(const char *file, int32_t index, const unsigned *sizes, uint32_t *const *argb, unsigned count);
+int du_file_icon_load(const char *path, int directory, unsigned size, uint32_t *argb, struct du_icon_source *source);
+int du_file_icon_native(const char *location, const char *base, char *out, size_t cap);
+```
+
+Windows/relative -> POSIX
+
+The cache (UI thread). NULL while pending, or when the file has no own
+icon and DU_FILE_ICON_DEFAULT is not asked: the caller draws its default.
+mtime: the subject's modification time, 0 when unknown. size 16/22/32/48.
+
+```c
+const uint32_t *du_file_icon(const char *key, int64_t mtime, unsigned size);
+```
+
+flags DU_FILE_ICON_DEFAULT
+
+```c
+const uint32_t *du_file_icon_flags(const char *key, int64_t mtime, unsigned size, unsigned flags);
+int du_file_icon_fallback(const char *key, char *out, size_t cap);
+```
+
+resolved default; 1 own, 0 none, -1 unknown
+
+```c
+int du_file_icons_start(void (*wake)(void *), void *ctx);
+```
+
+background worker; 0 or -errno
+
+```c
+void du_file_icons_stop(void);
+```
+
+joins the worker, empties the cache
+
+```c
+unsigned du_file_icons_generation(void);
+```
+
+changes when results were published
+
+```c
+void du_file_icons_snapshot(struct du_file_icon_stats *);
+int du_file_icons_root(const char *prefix);
+```
+
+host harnesses: POSIX paths live under prefix
 
 List and tree content belongs to the application; the toolkit only reads it.
 
@@ -9818,7 +10859,12 @@ against the read-only disk enumeration after parsing.
 #include <stdint.h>
 #include <string.h>
 
-#define SETUP_INF_VERSION 1
+#define SETUP_INF_VERSION 2
+```
+
+sec-user-02: Version=1 and Version=2 parse; neither carries passwords
+
+```c
 #define SETUP_INF_MAX_BYTES 16384u
 ```
 
@@ -9853,13 +10899,13 @@ enum setup_disk_select { SETUP_DISK_UNSET, SETUP_DISK_ATA0, SETUP_DISK_MATCH, SE
 enum setup_net_mode { SETUP_NET_UNSET, SETUP_NET_DHCP, SETUP_NET_STATIC, SETUP_NET_NONE };
 enum setup_clock { SETUP_CLOCK_LOCAL, SETUP_CLOCK_UTC };
 enum setup_restart { SETUP_RESTART_EJECT, SETUP_RESTART_WAIT, SETUP_RESTART_FORCE };
-
-#define SETUP_USER_MAX 32u
 ```
 
-characters (UTF-8 Latin-1 range)
+Account name: 1-31 ASCII letters, digits, '_' or '-', not a reserved name
+(user-security-contract.md 3.1; supersedes the 32-character label).
 
 ```c
+#define SETUP_USER_MAX 31u
 #define SETUP_COMPUTER_MAX 15u
 ```
 
@@ -10003,6 +11049,15 @@ configuration step (\SYSTEM\HARDWARE.TXT and \SYSTEM\SETUP.LOG).
 ```c
 const char *hardware_report; size_t hardware_report_length;
     const struct setup_log *log;
+```
+
+sec-user-02: the section 3.6 Setup provisioning seed (CIUKISEE, origin 2,
+salted verifiers only, never plaintext), owned by the application and
+staged by the configuration step with its bootstrap.state record. No
+answer-file key can supply it: unattended mode stops before any write.
+
+```c
+const uint8_t *account_seed; size_t account_seed_length;
 };
 ```
 
@@ -10072,7 +11127,9 @@ int setup_inf_disk_rules(const struct setup_answers *, const struct setup_inf_di
 ```
 
 Unattended completeness in page order: 0, or -1 with missing_answer and
-the first key that has no answer.
+the first key that has no answer. After the INF keys, the two passwords
+(key "UserPassword") are required; no secure answer transport exists, so a
+SETUP.INF run always stops here before any disk write (contract 5.2).
 
 ```c
 int setup_inf_complete(const struct setup_answers *, struct setup_inf_status *);

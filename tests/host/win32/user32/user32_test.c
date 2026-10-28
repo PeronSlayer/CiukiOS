@@ -35,6 +35,9 @@ void ui_kernel_init(void), ui_kernel_finish(void), ui_kernel_switch(unsigned),
 unsigned ui_kernel_current(void);
 uint32_t ui_kernel_tid(void), ui_kernel_pid(void), ui_kernel_ticks(void);
 int32_t ui_kernel_call(void *, uint32_t);
+uint32_t ui_kernel_child_handle(uint32_t);
+void ui_kernel_close_handle(uint32_t), ui_kernel_child_wait(uint32_t, uint32_t);
+DWORD W32API WaitForInputIdle(HANDLE, DWORD);
 static DWORD errors[3];
 DWORD W32API GetLastError(void) { return errors[ui_kernel_current()]; }
 void W32API SetLastError(DWORD n) { errors[ui_kernel_current()] = n; }
@@ -346,6 +349,7 @@ static void g18_snapshot_length(int fd,DWORD length) {
 static struct ciuki_message outgoing[2048], incoming[256];
 static UINT outgoing_count, in_head, in_tail, reject_opcode;
 static DWORD lease_token = 0x40, lease_generation = 0x80, lease_serial;
+static BOOL lease_eio;
 static DWORD frames_seen, frames_refused, frame_token, frame_generation;
 static uint64_t fake_ns;
 /* q3exec3: a test may add the desktop's own events around a request's
@@ -423,7 +427,7 @@ DWORD w32r_gate(DWORD call, DWORD a, DWORD b, DWORD c) {
       desk_put32(state->data+16+DESK_INPUT_VALUES*4,key);desk_put32(state->data+20+DESK_INPUT_VALUES*4,flags);
     }
     if (sent->data[1]==DESK_V3_CLIPBOARD) { fixture_clipboard(sent); return 0; }
-    if (sent->data[1] == DESK_V3_LEASE && sent->data[1] != reject_opcode) {
+    if (sent->data[1] == DESK_V3_LEASE && sent->data[1] != reject_opcode && !lease_eio) {
       DWORD flags = desk_get32(sent->data + 16);
       lease_event(desk_get32(sent->data + 8), desk_get32(sent->data + 12),
                   flags ? 1 : 3, flags ? desk_get32(sent->data + 20) : 320,
@@ -437,6 +441,7 @@ DWORD w32r_gate(DWORD call, DWORD a, DWORD b, DWORD c) {
                       desk_get32(sent->data + 8), desk_get32(sent->data + 12));
       desk_put32(reply->data + 16, sent->data[1]);
       desk_put32(reply->data + 20,
+                 sent->data[1] == DESK_V3_LEASE && lease_eio ? (DWORD)-5 :
                  sent->data[1] == reject_opcode ? (DWORD)-12 : 0);
       if (sent->data[1] == reject_opcode)
         reject_opcode = 0;
@@ -1826,6 +1831,13 @@ static void test_zoom_limits(void) {
     if (trace[i].h == h && trace[i].m == WM_SIZE && trace[i].wp == SIZE_MAXIMIZED)
       size_zoom++;
   CHECK(size_zoom == 1 && IsZoomed(h) && !IsIconic(h));
+  /* fx-is5boot: GetWindowPlacement reports the state USER holds. */
+  extern BOOL W32API GetWindowPlacement(HWND, void *);
+  struct { UINT length, flags, show; POINT minimum, maximum; RECT normal; } place;
+  memset(&place, 0x5a, sizeof(place));
+  CHECK(GetWindowPlacement(h, &place) && place.length == 44 && !place.flags && place.show == 3 &&
+        place.minimum.x == -1 && place.maximum.y == -1);
+  CHECK(!GetWindowPlacement((HWND)(uintptr_t)0x7ff0, &place) && GetLastError() == 1400);
   /* the desktop restores it (title button): state 0 clears the maximised state */
   traces = 0;
   UINT normal[] = {220, 160, 1, 10, 30, 40, 0, 0};
@@ -1836,6 +1848,10 @@ static void test_zoom_limits(void) {
     if (trace[i].h == h && trace[i].m == WM_SIZE && trace[i].wp == SIZE_RESTORED)
       size_restore++;
   CHECK(size_restore == 1 && !IsZoomed(h));
+  RECT frame_rect, area;
+  CHECK(GetWindowPlacement(h, &place) && place.show == 1 && GetWindowRect(h, &frame_rect) &&
+        SystemParametersInfoA(48, 0, &area, 0) && place.normal.left == frame_rect.left - area.left &&
+        place.normal.bottom == frame_rect.bottom - area.top);
   CHECK(DestroyWindow(h));
   printf("TRACE zoom: placement state 3, SIZE_MAXIMIZED, SIZE_RESTORED, "
          "WM_GETMINMAXINFO track sizes sent once\n");
@@ -1878,6 +1894,61 @@ static void q3_devmode(uint8_t *dm, UINT size, DWORD fields, DWORD w, DWORD h, D
   w32_put32(dm + 108, w);
   w32_put32(dm + 112, h);
 }
+static DWORD child_idle_at;
+static void child_becomes_idle(void) {
+  /* This callback runs on the caller's sleep. Another GUI thread must be
+   * able to take USER's lock while the installer waits for the child. */
+  unsigned previous = ui_kernel_current();
+  ui_kernel_switch(1);
+  (void)GetQueueStatus(QS_ALLINPUT);
+  ui_kernel_switch(previous);
+  if ((int32_t)(GetTickCount() - child_idle_at) >= 0) {
+    ui_kernel_schedule(0);
+    ui_kernel_child_wait(0, 1);
+  }
+}
+static void test_input_idle(void) {
+  HANDLE h = (HANDLE)(uintptr_t)ui_kernel_child_handle(1);
+  DWORD start = GetTickCount();
+  /* GUI PE metadata is not a runtime queue. INFINITE must not enter the
+   * parent's sleep/pump loop until a child thread has created a queue. */
+  CHECK(WaitForInputIdle(h, 25) == W32_WAIT_FAILED && GetLastError() == 1471);
+  CHECK(GetTickCount() == start);
+  CHECK(WaitForInputIdle(h, W32_INFINITE) == W32_WAIT_FAILED && GetTickCount() == start);
+  ui_kernel_child_wait(0, 0); /* create a runtime queue without becoming idle */
+  CHECK(WaitForInputIdle(h, 0) == W32_WAIT_TIMEOUT);
+  CHECK(WaitForInputIdle(h, 25) == W32_WAIT_TIMEOUT && GetTickCount() - start == 25);
+  ui_kernel_child_wait(1, 1); /* pending input is not idle */
+  CHECK(WaitForInputIdle(h, 0) == W32_WAIT_TIMEOUT);
+  ui_kernel_child_wait(0, 0); /* nonblocking poll is not a wait for input */
+  CHECK(WaitForInputIdle(h, 0) == W32_WAIT_TIMEOUT);
+  child_idle_at = GetTickCount() + 20;
+  ui_kernel_schedule(child_becomes_idle);
+  CHECK(WaitForInputIdle(h, 100) == 0);
+  ui_kernel_child_wait(1, 1); /* a satisfied latch survives later work */
+  CHECK(WaitForInputIdle(h, 0) == 0);
+  ui_kernel_close_handle(U32_PTR(h));
+  CHECK(WaitForInputIdle(h, 0) == W32_WAIT_FAILED && GetLastError() == 6);
+  h = (HANDLE)(uintptr_t)ui_kernel_child_handle(1);
+  ui_kernel_child_wait(0, 0);
+  ui_kernel_switch(2);
+  MSG msg;
+  CHECK(!PeekMessageA(&msg,0,0,0,2 /* PM_NOYIELD */));
+  ui_kernel_switch(0);
+  CHECK(WaitForInputIdle(h,0)==W32_WAIT_TIMEOUT);
+  ui_kernel_switch(2);
+  CHECK(!PeekMessageA(&msg,0,0,0,0));
+  ui_kernel_switch(0);
+  CHECK(WaitForInputIdle(h,0)==0);
+  ui_kernel_close_handle(U32_PTR(h));
+  h = (HANDLE)(uintptr_t)ui_kernel_child_handle(0);
+  start = GetTickCount();
+  CHECK(WaitForInputIdle(h, W32_INFINITE) == W32_WAIT_FAILED && GetLastError() == 1471);
+  CHECK(GetTickCount() == start);
+  ui_kernel_close_handle(U32_PTR(h));
+  ui_kernel_child_wait(0, 0);
+  puts("TRACE fx-q3hang input idle: no-queue GUI fails immediately, busy timeout, pending input, first idle latch, invalid/console, USER lock released");
+}
 static void test_quake3(void) {
   BOOL saved = host_modules;
   host_modules = 1;
@@ -1890,6 +1961,48 @@ static void test_quake3(void) {
   CHECK(ChangeDisplaySettingsA(dm, 2 /* CDS_TEST */) == 0 && !w32_user_display_mode(mode));
   CHECK(ChangeDisplaySettingsA(dm, 4 /* CDS_FULLSCREEN */) == 0);
   CHECK(w32_user_display_mode(mode) && mode[0] == 640 && mode[1] == 480 && mode[2] == 32);
+  UINT leases = sent_count(DESK_V3_LEASE);
+  CHECK(ChangeDisplaySettingsA(dm, 4) == 0 && sent_count(DESK_V3_LEASE) == leases);
+  /* An explicit reset must consult the driver even for the current mode. */
+  lease_eio = 1;
+  CHECK(ChangeDisplaySettingsA(dm, 4 | 0x40000000u /* CDS_RESET */) == -1);
+  CHECK(!w32_user_display_mode(mode));
+  lease_eio = 0;
+  CHECK(ChangeDisplaySettingsA(dm, 4) == 0);
+  HWND borrower=CreateWindowExA(0,"USER fixture","borrower",WS_POPUP|WS_VISIBLE,
+                                  0,0,640,480,0,0,0,0);
+  HWND alias=CreateWindowExA(0,"USER fixture","alias",WS_POPUP|WS_VISIBLE,
+                               0,0,640,480,0,0,0,0);
+  struct dd_lease borrowed, shared;
+  CHECK(borrower && alias && !w32_user_display_lease((uintptr_t)borrower,640,480,32,&borrowed));
+  CHECK(!w32_user_display_lease((uintptr_t)alias,640,480,32,&shared));
+  HWND carrier=u32_window(borrower)->lease_carrier;
+  CHECK(carrier && borrowed.active && shared.token==borrowed.token);
+  leases=sent_count(DESK_V3_LEASE);
+  w32_user_display_release((uintptr_t)borrower);
+  CHECK(sent_count(DESK_V3_LEASE)==leases+1 && IsWindow(carrier));
+  CHECK(!u32_window(carrier)->lease.active && !u32_window(carrier)->lease_wanted);
+  w32_user_display_poll((uintptr_t)alias,&shared);
+  CHECK(!shared.active && !u32_window(alias)->lease_carrier);
+  w32_user_display_release((uintptr_t)borrower);
+  w32_user_display_release((uintptr_t)alias);
+  CHECK(sent_count(DESK_V3_LEASE)==leases+1);
+  CHECK(DestroyWindow(borrower) && DestroyWindow(alias));
+  CHECK(ChangeDisplaySettingsA(dm,4)==0);
+  /* Keep the original active-carrier destruction regression as well. */
+  borrower=CreateWindowExA(0,"USER fixture","carrier lifetime",WS_POPUP|WS_VISIBLE,
+                            0,0,640,480,0,0,0,0);
+  CHECK(borrower && !w32_user_display_lease((uintptr_t)borrower,640,480,32,&borrowed));
+  carrier=u32_window(borrower)->lease_carrier;
+  CHECK(borrowed.active && carrier && DestroyWindow(carrier) && !w32_user_display_mode(mode));
+  w32_user_display_poll((uintptr_t)borrower,&shared);
+  CHECK(!shared.active && !u32_window(borrower)->lease_carrier);
+  CHECK(DestroyWindow(borrower) && ChangeDisplaySettingsA(dm,4)==0);
+  HWND scaled=CreateWindowExA(0,"USER fixture","scaled drawable",WS_POPUP|WS_VISIBLE,
+                               0,0,640,480,0,0,0,0);
+  struct dd_lease scaled_lease;
+  CHECK(scaled && !w32_user_display_lease((uintptr_t)scaled,320,240,16,&scaled_lease));
+  CHECK(scaled_lease.active && scaled_lease.width==320 && scaled_lease.height==240 && scaled_lease.bpp==16);
   memset(dm, 0x55, sizeof(dm));
   w32_put16(dm + 36, 148);
   CHECK(EnumDisplaySettingsA(0, 0xffffffffu, dm));
@@ -1900,6 +2013,7 @@ static void test_quake3(void) {
         w32_u32(dm + 112) == 600);
   CHECK(ChangeDisplaySettingsA(0, 0) == 0 && !w32_user_display_mode(mode));
   CHECK(EnumDisplaySettingsA(0, 0xffffffffu, dm) && w32_u32(dm + 108) == 800);
+  CHECK(DestroyWindow(scaled));
   /* Refusals: unknown size, 24 bpp, persistence, bad flags, short DEVMODE. */
   q3_devmode(dm, 148, 0x80000 | 0x100000, 641, 480, 0);
   CHECK(ChangeDisplaySettingsA(dm, 4) == -2);
@@ -1917,6 +2031,16 @@ static void test_quake3(void) {
   w32_put32(dm + 120, 75); /* a refresh rate is accepted and ignored */
   CHECK(ChangeDisplaySettingsA(dm, 0) == 0 && w32_user_display_mode(mode) && mode[2] == 16);
   CHECK(ChangeDisplaySettingsA(0, 0) == 0);
+  /* The T23's quarantined BIOS returns EIO on every grant. CDS must report
+   * the driver failure now, before GLW_SetMode commits to a popup drawable. */
+  lease_eio = 1;
+  q3_devmode(dm, 148, 0x80000 | 0x100000, 640, 480, 0);
+  for (UINT attempt = 0; attempt < 3; attempt++) {
+    CHECK(ChangeDisplaySettingsA(dm, 4) == -1);
+    CHECK(!w32_user_display_mode(mode));
+    CHECK(ChangeDisplaySettingsA(0, 0) == 0);
+  }
+  lease_eio = 0;
   /* Enumeration: 7 sizes up to 800x600 at 8, 16 and 32 bits, each accepted. */
   UINT n = 0, last_bpp = 0;
   BOOL saw = 0;
@@ -1948,6 +2072,80 @@ static void test_quake3(void) {
   host_modules = saved;
   puts("TRACE quake3: ChangeDisplaySettingsA full-screen record, EnumDisplaySettingsA, CloseWindow");
 }
+#ifdef U32_TEST_GL
+extern BOOL ui_gl_frame(DWORD);
+extern void ui_gl_close(void);
+static void test_gl_failure(void) {
+  host_modules=real_gdi=1;
+  u32_gdi=0;
+  u32_gdi_ensure();
+  uint8_t dm[156];
+  q3_devmode(dm,148,0x80000|0x100000,640,480,0);
+  UINT before=sent_count(DESK_V3_LEASE);
+  CHECK(ChangeDisplaySettingsA(dm,4)==0);
+  CHECK(sent_count(DESK_V3_LEASE)==before+1);
+  HWND good=CreateWindowExA(0,"USER fixture","GL lease",WS_POPUP|WS_VISIBLE,
+                              0,0,640,480,0,0,0,0);
+  CHECK(good);
+  HDC good_dc=GetDC(good);
+  CHECK(good_dc && ui_gl_frame(U32_PTR(good_dc)) && ui_gl_frame(U32_PTR(good_dc)));
+  CHECK(sent_count(DESK_V3_LEASE)==before+1);
+  HWND carrier=0;
+  for (UINT i=0;i<U32_WINDOWS;i++)
+    if (u32_windows[i].handle && u32_windows[i].lease_wanted && u32_windows[i].lease.active)
+      carrier=u32_windows[i].handle;
+  CHECK(carrier && carrier!=good);
+  CHECK(u32_window(good)->lease_carrier==carrier);
+  /* GL teardown must revoke the real grant without destroying its carrier. */
+  before=sent_count(DESK_V3_LEASE);
+  ui_gl_close();
+  CHECK(sent_count(DESK_V3_LEASE)==before+1 && IsWindow(carrier));
+  CHECK(!u32_window(carrier)->lease.active && !u32_window(carrier)->lease_wanted);
+  struct dd_lease expired;
+  w32_user_display_poll((uintptr_t)good,&expired);
+  CHECK(!expired.active && !u32_window(good)->lease_carrier);
+  /* Borrow again, then switch a live GL context to composed presentation. */
+  CHECK(ChangeDisplaySettingsA(dm,4)==0);
+  CHECK(ui_gl_frame(U32_PTR(good_dc)));
+  carrier=u32_window(good)->lease_carrier;
+  CHECK(carrier && IsWindow(carrier));
+  before=sent_count(DESK_V3_LEASE);
+  CHECK(SetWindowLongA(good,GWL_STYLE,WS_CAPTION|WS_VISIBLE));
+  CHECK(ui_gl_frame(U32_PTR(good_dc)));
+  CHECK(sent_count(DESK_V3_LEASE)==before+1 && IsWindow(carrier));
+  CHECK(!u32_window(carrier)->lease.active && !u32_window(carrier)->lease_wanted);
+  w32_user_display_poll((uintptr_t)good,&expired);
+  CHECK(!expired.active && !u32_window(good)->lease_carrier);
+  ui_gl_close();
+  CHECK(DestroyWindow(carrier) && !w32_user_display_mode(0));
+  CHECK(ChangeDisplaySettingsA(0,0)==0);
+  CHECK(ReleaseDC(good,good_dc) && DestroyWindow(good));
+  HWND w = CreateWindowExA(0,"USER fixture","GL failure",WS_POPUP|WS_VISIBLE,
+                           0,0,640,480,0,0,0,0);
+  CHECK(w);
+  HDC dc=GetDC(w);
+  CHECK(dc);
+  before=sent_count(DESK_V3_LEASE);
+  lease_eio=1;
+  CHECK(!ui_gl_frame(U32_PTR(dc)));
+  CHECK(sent_count(DESK_V3_LEASE)==before+1);
+  for (UINT i=0;i<3;i++) CHECK(ui_gl_frame(U32_PTR(dc)));
+  CHECK(sent_count(DESK_V3_LEASE)==before+1);
+  struct u32_window *window=u32_window(w);
+  CHECK(window->lease_failed && !window->lease.active);
+  CHECK((w32_u32(window->surface.pixels)&0xffffff)==0xff0000);
+  /* A sibling program still receives input while this drawable composes. */
+  CHECK(PostMessageA(windows[0],WM_USER+83,42,0));
+  MSG m;
+  CHECK(PeekMessageA(&m,windows[0],WM_USER+83,WM_USER+83,PM_REMOVE) && m.wParam==42);
+  ui_gl_close();
+  lease_eio=0;
+  CHECK(ReleaseDC(w,dc) && DestroyWindow(w));
+  host_modules=real_gdi=0;
+  u32_set_gdi(&test_gdi);
+  puts("TRACE fx-q3hang production GL: EIO once, three composed red frames, sibling queue responsive");
+}
+#endif
 static void test_display(void) {
   HWND g = CreateWindowExA(0, "USER fixture", "game", WS_VISIBLE | WS_POPUP, 0,
                            0, 320, 200, 0, 0, 0, 0);
@@ -2708,6 +2906,38 @@ static void test_production_gdi(void) {
 #include "../shell/clients.inc"
 #include "g18_test.inc"
 #endif
+/* fx-exeicons: a captioned top-level window tells the desktop its icon
+ * (DESK_V3_WINDOW_ICON, 32 then 16 px, one surface each): WM_SETICON, else
+ * the class icon; WM_GETICON answers the WM_SETICON icons, ICON_SMALL2 the
+ * small one or else the big one. A window without a caption sends none. */
+static UINT window_icon_sends(UINT from, UINT size) {
+  UINT n = 0;
+  for (UINT i = from; i < outgoing_count; i++)
+    if (outgoing[i].data[0] == DESK_V3_VERSION && outgoing[i].data[1] == DESK_V3_WINDOW_ICON &&
+        outgoing[i].fd_count == 1 && desk_get32(outgoing[i].data + 16) == size)
+      n++;
+  return n;
+}
+static void test_window_icons(void) {
+  WNDCLASSA c = {.lpfnWndProc = DefWindowProcA, .lpszClassName = "fx-exeicons",
+                 .hIcon = LoadIconA(0, (const char *)(uintptr_t)32515)};
+  CHECK(c.hIcon && RegisterClassA(&c));
+  UINT begin = outgoing_count;
+  HWND h = CreateWindowExA(0, "fx-exeicons", "Icon", WS_CAPTION, 10, 10, 120, 80, 0, 0, 0, 0);
+  CHECK(h && window_icon_sends(begin, 32) == 1 && window_icon_sends(begin, 16) == 1);
+  CHECK(!SendMessageA(h, 0x7f, 1, 0) && !SendMessageA(h, 0x7f, 0, 0));
+  HICON other = LoadIconA(0, (const char *)(uintptr_t)32513);
+  begin = outgoing_count;
+  CHECK(!SendMessageA(h, 0x80, 1, (LPARAM)other));
+  CHECK((HICON)SendMessageA(h, 0x7f, 1, 0) == other && (HICON)SendMessageA(h, 0x7f, 2, 0) == other);
+  CHECK(window_icon_sends(begin, 32) == 1 && window_icon_sends(begin, 16) == 1);
+  CHECK((HICON)SendMessageA(h, 0x80, 1, 0) == other);
+  begin = outgoing_count;
+  HWND bare = CreateWindowExA(0, "fx-exeicons", "Popup", WS_POPUP, 10, 10, 50, 50, 0, 0, 0, 0);
+  CHECK(bare && !window_icon_sends(begin, 32) && !window_icon_sends(begin, 16));
+  CHECK(DestroyWindow(bare) && DestroyWindow(h));
+  discard();
+}
 static void run(void) {
   puts("STEP init");
   ui_kernel_init();
@@ -2721,6 +2951,7 @@ static void run(void) {
                                 ui_kernel_tid,  ui_kernel_pid, ui_kernel_ticks,
                                 surface,        drop,          ui_kernel_pause};
   u32_set_backend(&backend);
+  test_input_idle();
   u32_set_gdi(&test_gdi);
   WNDCLASSA cls = {.style = 8,
                    .lpfnWndProc = procedure,
@@ -2768,13 +2999,18 @@ static void run(void) {
   test_spi();
 #ifndef U32_TEST_EXTERNAL_MODULES
   test_g18_shell();
+  test_shell_folder();
 #endif
+  test_window_icons();
   test_order();
   test_arrange();
   test_zoom_limits();
   test_display();
   test_quake3();
   test_production_gdi();
+#ifdef U32_TEST_GL
+  test_gl_failure();
+#endif
   test_g23_appearance();
   traces = 0;
   CHECK(DestroyWindow(windows[0]));

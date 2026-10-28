@@ -7,6 +7,7 @@
 #undef main
 #include <stdlib.h>
 #include <ciuki/mm.h>
+#include <ciuki/desktop.h>
 #include "vmwaresvga3d_model.h"
 #define M svga_model
 #define THREE_KEY "C:/system/settings/accel-3d-vmwaresvga-15ad-0405.cfg"
@@ -18,6 +19,7 @@ static unsigned claimed3,released3,quarantined3,variant3,logs3,checks2d;
 static bool prepared3,qualified_log3,refused_log3;
 static char last_log3[512];
 static void *allocations3[64]; static unsigned allocation_count3;
+static uint32_t page_sizes3[64],page_bytes3;
 void klog(const char *fmt,...)
 {
     assert(!M.locks);
@@ -26,7 +28,7 @@ void klog(const char *fmt,...)
     if (strstr(last_log3,"[3d] probe driver=vmwaresvga result=qualified")) qualified_log3=true;
     if (strstr(last_log3,"[3d] probe driver=vmwaresvga result=") && !strstr(last_log3,"result=qualified")) refused_log3=true;
 }
-void *kmalloc(size_t n)
+static void *backing_alloc3(size_t n)
 {
     assert(!M.locks);
     if (variant3==8 && allocation_count3==2) return 0;
@@ -37,6 +39,29 @@ void kfree(void *p)
     assert(!M.locks);
     for (unsigned i=0;i<allocation_count3;i++) if (allocations3[i]==p) { free(p); allocations3[i]=0; return; }
     assert(!p);
+}
+void *(kmalloc)(size_t n)
+{ return n>KHEAP_MAX_REQUEST ? 0 : backing_alloc3(n); }
+void *desktop_buffer_alloc(uint32_t bytes,enum mm_owner owner)
+{
+    assert(bytes && owner==MM_IO_REQUEST);
+    void *p=backing_alloc3(bytes);
+    if (p) {
+        page_sizes3[allocation_count3-1]=bytes;
+        page_bytes3+=(bytes+PAGE_SIZE-1)&~(PAGE_SIZE-1);
+        assert(page_bytes3+vmsvga3d_backend()->resident_bytes<=R3D_RAM_LIMIT);
+    }
+    return p;
+}
+void desktop_buffer_free(void *p,uint32_t bytes,enum mm_owner owner)
+{
+    assert(owner==MM_IO_REQUEST && p);
+    for (unsigned i=0;i<allocation_count3;i++) if (allocations3[i]==p) {
+        assert(page_sizes3[i]==bytes);
+        page_sizes3[i]=0; page_bytes3-=(bytes+PAGE_SIZE-1)&~(PAGE_SIZE-1);
+        kfree(p); return;
+    }
+    assert(0);
 }
 const struct pci_func *display_driver_owner(void) { return &pci3; }
 uint32_t pmm_free_count(void) { return 10000; }
@@ -172,6 +197,7 @@ int main(int argc,char **argv)
         assert(!display_attempt_prepare(&storage,&declaration,&pci3,&retained));
         assert(!retained && !size_of(THREE_KEY));
     }
+    if (!M.engine.quarantined) assert(!page_bytes3);
     free(consumer);
     for (unsigned i=0;i<allocation_count3;i++) free(allocations3[i]);
     svga_model_destroy();

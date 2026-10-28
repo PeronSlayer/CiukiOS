@@ -24,6 +24,8 @@ struct dosvm_network {
     uint64_t host_ms;
     uint32_t rx_overflows;
     unsigned callback_depth;
+    unsigned trace_tx, trace_rx, trace_tx_logged;
+    uint8_t trace_tx_header[14];
     uint16_t callback_ss, callback_sp;
     bool active, saved_vif, allocated, callback_pm;
 };
@@ -123,7 +125,13 @@ static int bridge_send(void *arg, const uint8_t *p, unsigned length)
     net_bridge_port_carrier(n->port);
     int result = n->port->closing ? -19 : net_bridge_send(&n->port->bridge,
         (struct bridge_key){n->key.id,n->key.generation}, p, length, n->host_ms);
-    net_bridge_port_release(n->port); return result;
+    net_bridge_port_release(n->port);
+    /* Record bounded evidence here; serial I/O belongs to the worker. */
+    if (!result && length >= 44 && p[12] == 0x81 && p[13] == 0x37 && n->trace_tx < 4) {
+        n->trace_tx++;
+        memcpy(n->trace_tx_header,p,sizeof(n->trace_tx_header));
+    }
+    return result;
 }
 static void virtual_irq(void *arg, bool level)
 {
@@ -137,8 +145,10 @@ static int virtual_port(struct dosvm *v, uint16_t port, unsigned width, bool wri
     if (write) dosvm_ne2000_write(&n->ne, port, width, *value);
     else {
         *value = dosvm_ne2000_read(&n->ne, port, width);
-        if (port == DOSVM_NE2000_LAST && width == 1)
+        if (port == DOSVM_NE2000_LAST && width == 1) {
             v->monitor.pic[0].irr &= ~(1u << DOSVM_NE2000_IRQ);
+            v->irq.owed &= ~(1u << DOSVM_NE2000_IRQ);
+        }
     }
     return 0;
 }
@@ -244,6 +254,7 @@ int dosvm_network_detach(struct dosvm *v)
     bool pending = !n->port->bridge.count && n->port->bridge.promiscuous;
     net_bridge_port_release(n->port);
     v->monitor.pic[0].irr &= ~(1u << DOSVM_NE2000_IRQ);
+    v->irq.owed &= ~(1u << DOSVM_NE2000_IRQ);
     if (pending) return -16; /* Retain owner until receive-mode cleanup succeeds. */
     memset(n, 0, sizeof(*n)); v->network_attached = false; return 0;
 }
@@ -251,6 +262,12 @@ void dosvm_network_service(struct dosvm *v, uint64_t host_ms)
 {
     struct dosvm_network *n = network(v); if (!n || !live(n)) return;
     if (!(read_eflags() & 0x200)) return; /* final IRQ-off return boundary */
+    if (n->trace_tx != n->trace_tx_logged) {
+        const uint8_t *p=n->trace_tx_header;
+        n->trace_tx_logged=n->trace_tx;
+        klog("[dos-ipx] vm=%u gen=%u event=tx count=%u src=%02x%02x%02x%02x%02x%02x dst=%02x%02x%02x%02x%02x%02x",
+             n->key.id,n->key.generation,n->trace_tx,p[6],p[7],p[8],p[9],p[10],p[11],p[0],p[1],p[2],p[3],p[4],p[5]);
+    }
     n->host_ms = host_ms;
     if (!net_bridge_port_acquire(n->port)) return;
     net_bridge_port_carrier(n->port);
@@ -279,7 +296,12 @@ void dosvm_network_service(struct dosvm *v, uint64_t host_ms)
         int bytes = net_bridge_receive(&n->port->bridge, (struct bridge_key){n->key.id,n->key.generation}, frame, sizeof(frame));
         net_bridge_port_release(n->port);
         if (bytes <= 0) break;
-        (void)dosvm_ipx_receive(&n->ipx, frame, (unsigned)bytes);
+        int received = dosvm_ipx_receive(&n->ipx, frame, (unsigned)bytes);
+        if (received > 0 && n->trace_rx < 4) {
+            n->trace_rx++;
+            klog("[dos-ipx] vm=%u gen=%u event=rx count=%u bytes=%u src=%02x%02x%02x%02x%02x%02x dst=%02x%02x%02x%02x%02x%02x",
+                 n->key.id,n->key.generation,n->trace_rx,(unsigned)bytes,frame[6],frame[7],frame[8],frame[9],frame[10],frame[11],frame[0],frame[1],frame[2],frame[3],frame[4],frame[5]);
+        }
         (void)dosvm_ne2000_receive(&n->ne, frame, (unsigned)bytes); kpreempt_point();
     }
 }

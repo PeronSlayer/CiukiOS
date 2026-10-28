@@ -11,6 +11,12 @@
 #include <ciuki/net_config.h>
 #include <ciuki/tzrule.h>
 #include "../../sdk/libsetup/internal.h"
+/* sec-user-02: the Setup seed recipe and the account service's own codecs. */
+#include "../../apps/accounts/accounts.h"
+#include "../../sdk/private/provision.h"
+#include <ciuki/sha256.h>
+int st_seed_build(uint8_t out[CIUKI_PROVISION_SEED_BYTES], const char *name, const char *user_password,
+                  const char *recovery_password, int (*entropy)(void *, void *, size_t), void *ctx);
 int st_hopen(const char *);
 int st_hread(int,void *,unsigned);
 int st_hseek(int,uint64_t);
@@ -277,6 +283,10 @@ static void end(void)
     CHECK(S.opens==0 && heap_live==0);
     H.s->vfs.ro_volumes[3]=NULL; stop(); model_close(&S.m);
 }
+/* sec-user-02: deterministic test entropy; production uses getentropy. */
+static int test_entropy(void *ctx,void *out,size_t n)
+{ unsigned *next=ctx; for(size_t i=0;i<n;i++)((uint8_t *)out)[i]=(uint8_t)(++*next*37u); return 0; }
+static uint8_t test_seed[CIUKI_PROVISION_SEED_BYTES];
 static struct setup_answers answers(void)
 {
     struct setup_answers a; setup_answers_defaults(&a); a.accept_licences=1; a.erase_disk=1; a.reinstall=1;
@@ -284,7 +294,36 @@ static struct setup_answers answers(void)
     snprintf(a.user_name,sizeof(a.user_name),"Tester"); snprintf(a.computer_name,sizeof(a.computer_name),"CIUKI-PC");
     snprintf(a.keyboard,sizeof(a.keyboard),"it");
     a.hardware_report="Generic PC hardware fixture\n"; a.hardware_report_length=strlen(a.hardware_report);
+    static unsigned counter; if(!test_seed[0]) OK(st_seed_build(test_seed,"Tester","tester password","recovery password",test_entropy,&counter));
+    a.account_seed=test_seed; a.account_seed_length=sizeof(test_seed);
     return a;
+}
+/* sec-user-02: the destination carries exactly the Setup seed and its
+ * UNPROVISIONED state, decoded by the account service's codecs, bound to the
+ * formatted volume (partition LBA and BPB serial); no accounts.db. */
+static void check_provisioning(const struct setup_answers *a)
+{
+    static uint8_t seed[CIUKI_PROVISION_SEED_BYTES+1],state[CIUKI_PROVISION_STATE_BYTES+1];
+    CHECK(b_read_file(NULL,'E',"System/Security/provision.seed",seed,sizeof(seed))==(int)CIUKI_PROVISION_SEED_BYTES);
+    CHECK(!memcmp(seed,a->account_seed,CIUKI_PROVISION_SEED_BYTES));
+    struct acct_db *db=calloc(1,sizeof(*db)); CHECK(db);
+    OK(acct_decode(db,1,seed,CIUKI_PROVISION_SEED_BYTES));
+    CHECK(db->origin==2 && db->count==3 && !db->auto_logon_uid && db->records[2].uid==1000 && !strcmp(db->records[2].name,"Tester"));
+    CHECK(db->records[0].flags==6 && db->records[1].flags==2 && db->records[2].flags==5);
+    uint8_t derived[32];
+    OK(acct_derive("tester password",db->records[2].salt,ACCT_ITERATIONS,derived)); CHECK(!memcmp(derived,db->records[2].verifier,32));
+    OK(acct_derive("recovery password",db->records[0].salt,ACCT_ITERATIONS,derived)); CHECK(!memcmp(derived,db->records[0].verifier,32));
+    CHECK(memcmp(db->records[0].salt,db->records[2].salt,16));
+    for(unsigned i=0;i<db->count;i++) CHECK(strcmp(db->records[i].name,"CiukiUser"));
+    free(db);
+    CHECK(b_read_file(NULL,'E',"System/Security/bootstrap.state",state,sizeof(state))==(int)CIUKI_PROVISION_STATE_BYTES);
+    struct acct_bootstrap b; OK(acct_boot_decode(&b,state,CIUKI_PROVISION_STATE_BYTES));
+    uint8_t boot[512],digest[32]; OK(fake_raw_read(&S.m.vol,0,boot)); sha256(seed,CIUKI_PROVISION_SEED_BYTES,digest);
+    CHECK(b.state==1 && b.origin==2 && b.next_uid==1001 && !b.flags && b.generation==1 && !b.transaction);
+    CHECK(b.volume==ciuki_provision_volume_id(2048,disk_rd32(boot+67)) && b.volume>>32==2048 && !memcmp(b.seed_digest,digest,32));
+    char probe[8]; CHECK(b_read_file(NULL,'E',"System/Security/accounts.db",probe,sizeof(probe))<0);
+    struct fat_entry f; OK(vfs_stat(&H.table,"E:/Windows/Profiles",&f)); CHECK(f.attr&16);
+    CHECK(vfs_stat(&H.table,"E:/Windows/Profiles/u000003e8",&f)==-ENOENT);
 }
 static void expect_error(int result,enum setup_error_class cls,enum setup_phase phase)
 {
@@ -318,6 +357,16 @@ static void test_prepare(void)
         CHECK(p.free_after_bytes==(size==1 ? 980273562ull : 4034158592ull));
         end();
     }
+    /* sec-user-02: no seed, a seed for another name or a ready seed is refused before any write. */
+    begin(2097152);
+    { struct setup_answers b=answers(); b.account_seed=NULL; b.account_seed_length=0;
+      expect_error(setup_txn_prepare(&b,&p),SETUP_ERR_INTERNAL,SETUP_PHASE_PLAN);
+      b=answers(); snprintf(b.user_name,sizeof(b.user_name),"Other"); expect_error(setup_txn_prepare(&b,&p),SETUP_ERR_INTERNAL,SETUP_PHASE_PLAN);
+      static uint8_t ready[CIUKI_PROVISION_SEED_BYTES]; memcpy(ready,test_seed,sizeof(ready)); ready[52]=1;
+      b=answers(); b.account_seed=ready; expect_error(setup_txn_prepare(&b,&p),SETUP_ERR_INTERNAL,SETUP_PHASE_PLAN);
+      b=answers(); b.account_seed_length--; expect_error(setup_txn_prepare(&b,&p),SETUP_ERR_INTERNAL,SETUP_PHASE_PLAN);
+      CHECK(!S.m.head.writes && !S.m.vol.writes); }
+    end();
     begin(2097152); S.missing=true;
     expect_error(setup_txn_prepare(&a,&p),SETUP_ERR_SOURCE_READ,SETUP_PHASE_PLAN);
     CHECK(!S.m.head.writes && !S.m.vol.writes); S.missing=false;
@@ -368,6 +417,8 @@ static void test_complete(void)
         char *nl=strchr(line,'\n'); CHECK(nl); line=nl+1;
     }
     CHECK(b_read_file(NULL,'E',"SYSTEM/HARDWARE.TXT",text,sizeof(text))==(int)a.hardware_report_length);
+    check_provisioning(&a);
+    CHECK(!strstr(log_text,"tester password") && !strstr(log_text,"recovery password") && strstr(log_text,"accounts staged origin=setup"));
     struct fat_entry f; CHECK(vfs_stat(&H.table,"E:/SYSTEM/PAGEFILE.SWP",&f)==-ENOENT);
     CHECK(vfs_stat(&H.table,"E:/Optional/DOS component.txt",&f)==-ENOENT);
     OK(vfs_stat(&H.table,"E:/Empty directory",&f)); CHECK(f.attr&16);

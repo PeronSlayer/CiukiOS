@@ -16,6 +16,11 @@ missing=0
 for tool in clang ar python3 mkfs.fat fsck.fat mcopy mmd mdir mtype mdel nm nasm; do
     if ! command -v "$tool" >/dev/null; then printf 'MISSING TOOL: %s\n' "$tool"; missing=1; fi
 done
+if [[ ${1:-} == --owner-policy ]]; then
+    ((missing == 0)) || exit 1
+    python3 -B -m unittest discover -s tests/host/security -p test_owner_policy.py
+    exit 0
+fi
 # The RAM logger's production pacing/retention model uses this runner's
 # standard filesystem sanitizer policy; no disk/image fixture is needed.
 if [[ ${1:-} == --bootlog ]]; then
@@ -32,6 +37,18 @@ if [[ ${1:-} == --bootlog ]]; then
     exit 0
 fi
 # Focused entries keep the filesystem runner lock and sanitizer policy.
+run_memory_model_test() {
+    clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
+        -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread -Isrc/kernel/include -Isrc/kernel/fs \
+        tests/host/fs/test_host_memory.c src/kernel/fs/fs_port.c -o build/host/fs/test_host_memory
+    build/host/fs/test_host_memory
+    rm build/host/fs/test_host_memory
+}
+if [[ ${1:-} == --host-memory ]]; then
+    run_memory_model_test
+    exit 0
+fi
+run_memory_model_test
 run_startup_image_tests() {
     ((missing == 0)) || exit 1
     python3 tests/host/fs/fixtures.py
@@ -555,6 +572,12 @@ run_startup_tests
 run_startup_image_tests
 python3 tests/host/test_boot_conversion.py
 run_convert_tests
+# sec-k02 uses this runner's existing filesystem sanitizer policy. The direct
+# H02 command retains its default LeakSanitizer setting.
+python3 -B -m unittest discover -s tests/host/security -p test_owner_policy.py
+# ---- sec-k03 H04 (one block): subject enforcement on the production VFS. ----
+python3 -B -m unittest discover -s tests/host/security -p test_file_enforcement.py
+# ---- end sec-k03 ----
 python3 - <<'PY'
 from pathlib import Path
 root=Path('build/host/fs')

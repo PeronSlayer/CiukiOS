@@ -1,5 +1,6 @@
 /* Production F2 process code with fake physical RAM and scheduling only.
  * SPDX-License-Identifier: GPL-2.0-only */
+#include <ciuki/kheap_limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -30,6 +31,7 @@ static void (*on_schedule)(void);
 static jmp_buf exited;
 static bool expect_exit;
 static unsigned trap_calls;
+static int copy_fail_after = -1; /* input-copy boundary failure injection */
 char copy_user_fault_start[8], copy_user_fault_end[1], copy_user_fixup[1];
 void trap_dispatch(struct trap_frame *tf) { (void)tf; trap_calls++; }
 struct task *g_current;
@@ -47,16 +49,42 @@ static uint32_t read_cr3(void) { return host_cr3; }
 static void invlpg(uint32_t va) { (void)va; invlpgs++; }
 static bool fail_alloc(void) { if (alloc_fail < 0) return false; if (!alloc_fail) return true; alloc_fail--; return false; }
 
+/* Physical runs obey the production zone boundaries even on a 64-bit host.
+ * Failure injection is applied once by the public allocation entry. */
+static uint32_t host_alloc_run_zone(int zone, uint32_t count, uint32_t alignment)
+{
+    if ((zone!=ZONE_DMA && zone!=ZONE_NORMAL) || !count || !alignment ||
+        (alignment&(alignment-1)) || alignment>PMM_NORMAL_START_PFN) return 0;
+    unsigned lo=zone==ZONE_DMA ? PMM_DMA_START_PFN : PMM_NORMAL_START_PFN;
+    unsigned hi=zone==ZONE_DMA ? PMM_NORMAL_START_PFN : HOST_PAGES;
+    if (hi>HOST_PAGES) hi=HOST_PAGES;
+    if (lo>=hi || count>hi-lo) return 0;
+    for (unsigned first=(lo+alignment-1)&~(alignment-1);first<=hi-count;first+=alignment) {
+        unsigned n=0; while (n<count && !allocated[first+n]) n++;
+        if (n!=count) continue;
+        for (n=0;n<count;n++) {
+            allocated[first+n]=true; pages_used++;
+            memset(P2V((first+n)*PAGE_SIZE),0xa5,PAGE_SIZE);
+        }
+        return first*PAGE_SIZE;
+    }
+    return 0;
+}
 uint32_t pmm_alloc(void)
 {
     if (fail_alloc()) return 0;
-    for (unsigned i = 1; i < HOST_PAGES; i++)
-        if (!allocated[i]) { allocated[i] = true; pages_used++; memset(P2V(i * PAGE_SIZE), 0xa5, PAGE_SIZE); return i * PAGE_SIZE; }
-    return 0;
+    uint32_t p=host_alloc_run_zone(ZONE_NORMAL,1,1);
+    return p ? p : host_alloc_run_zone(ZONE_DMA,1,1);
+}
+static __attribute__((unused)) uint32_t host_alloc_contig(uint32_t count)
+{
+    if (!count || fail_alloc()) return 0;
+    uint32_t p=host_alloc_run_zone(ZONE_NORMAL,count,1);
+    return p ? p : host_alloc_run_zone(ZONE_DMA,count,1);
 }
 void pmm_free(uint32_t p) { CHECK(p && !(p & (PAGE_SIZE - 1)) && p / PAGE_SIZE < HOST_PAGES && allocated[p / PAGE_SIZE]); allocated[p / PAGE_SIZE] = false; pages_used--; }
-void *kmalloc(size_t n) { if (fail_alloc()) return 0; void *p = malloc(n); if (p) heap_blocks++; return p; }
-void *kzalloc(size_t n) { void *p = kmalloc(n); if (p) memset(p, 0, n); return p; }
+void *(kmalloc)(size_t n) { if (n > KHEAP_MAX_REQUEST) return 0; if (fail_alloc()) return 0; void *p = malloc(n); if (p) heap_blocks++; return p; }
+void *(kzalloc)(size_t n) { if (n > KHEAP_MAX_REQUEST) return 0; void *p = kmalloc(n); if (p) memset(p, 0, n); return p; }
 void kfree(void *p) { if (p) { CHECK(heap_blocks); heap_blocks--; free(p); } }
 void panic(const char *fmt, ...) { fprintf(stderr, "unexpected panic: %s\n", fmt); abort(); }
 int as_create(struct aspace *as) { as->pd_phys = pmm_alloc(); if (!as->pd_phys) return -ENOMEM; memset(P2V(as->pd_phys), 0, PAGE_SIZE); return 0; }
@@ -132,6 +160,10 @@ void schedule(void)
 void task_sleep_ms(uint32_t ms) { g_ticks += ms ? ms - 1 : 0; g_current->state = T_BLOCKED; schedule(); }
 int copy_user(void *dst, const void *src, uint32_t bytes)
 {
+    if ((uintptr_t)src <= UINT32_MAX) {
+        if (!copy_fail_after) return -EFAULT;
+        if (copy_fail_after > 0) copy_fail_after--;
+    }
     struct process *p = proc_current();
     if ((uintptr_t)src <= UINT32_MAX)
         return ua_read(p->memory, dst, (uint32_t)(uintptr_t)src, bytes);
@@ -147,8 +179,8 @@ static uint32_t fake_desktop_pid;
 /* Renamed for syscalls_proc.c only: harnesses that include this fixture also
  * link the production supervisor.c/signal.c definitions. */
 uint32_t proc_test_desktop_pid(void) { return fake_desktop_pid; }
-uint32_t pmm_total_usable(void) { return HOST_PAGES - 1; }
-uint32_t pmm_free_count(void) { return HOST_PAGES - 1 - pages_used; }
+uint32_t pmm_total_usable(void) { return HOST_PAGES - PMM_DMA_START_PFN; }
+uint32_t pmm_free_count(void) { return pmm_total_usable() - pages_used; }
 void kheap_snapshot(struct kheap_ledger *out) { *out = (struct kheap_ledger){ .pages = 7, .in_use = 1234, .peak = 5678 }; }
 static struct { uint32_t pid, signo, sender; unsigned calls; } posted;
 void proc_test_signal_post(struct process *p, struct proc_thread *t, uint32_t signo, uint32_t sender)
@@ -160,6 +192,7 @@ void proc_test_signal_post(struct process *p, struct proc_thread *t, uint32_t si
 #include "../../../src/kernel/proc/elf.c"
 #include "../../../src/kernel/proc/waitword.c"
 #include "../../../src/kernel/proc/process.c"
+#include "../../../src/kernel/proc/security.c"
 #include "../../../src/kernel/proc/thread.c"
 #include "../../../src/kernel/proc/spawn.c"
 #define supervisor_desktop_pid proc_test_desktop_pid
@@ -755,7 +788,7 @@ static void test_enumeration(void)
     CHECK(list_records(p, buffer, CIUKI_PROC_LIST_MIN, &sys, rec) == 0);
     CHECK(sys.version == CIUKI_PROC_VERSION && sys.size == sizeof(sys) && sys.records == 0 && sys.processes == 9);
     CHECK(sys.tick_hz == 1000 && sys.total_ticks == 9000 && sys.idle_ticks == 4000 && !sys.disk_read_kib && !sys.disk_write_kib);
-    CHECK(sys.usable_pages == HOST_PAGES - 1 && sys.free_pages == HOST_PAGES - 1 - pages_used);
+    CHECK(sys.usable_pages == pmm_total_usable() && sys.free_pages == pmm_free_count());
     CHECK(sys.kheap_pages == 7 && sys.kheap_bytes == 1234 && sys.kheap_high_water == 5678);
     CHECK(get_word(p->memory, buffer + 64) == 0xccccccccu);           /* nothing beyond the system record */
     CHECK(list_records(p, buffer, 64 + 2 * 80 + 79, &sys, rec) == 2 && sys.processes == 9 && sys.records == 2);
@@ -772,6 +805,14 @@ static void test_enumeration(void)
     r = find_record(rec, n, owner->pid); CHECK(r && !r->threads && !r->resident_pages && !r->name[0] && r->state == CIUKI_PROC_LIVE);
 
     /* Termination: arguments, descriptor, target, then permission. */
+    /* sec-k04: admission fixtures use real credentials; an authority fd
+     * never changes uid/session or group membership. */
+    struct ciuki_credential ordinary={.version=1,.size=64,.uid=1000,.primary_gid=545,
+        .session_id=1,.flags=CIUKI_CRED_INTERACTIVE,.group_count=1,.groups={545}};
+    p->subject->credential=child->subject->credential=grand->subject->credential=ordinary;
+    other->subject->credential=ordinary;other->subject->credential.uid=1001;
+    desk->subject->credential=desk_child->subject->credential=ordinary;
+    desk->subject->credential.uid=desk_child->subject->credential.uid=1002;
     const int32_t none = (int32_t)CIUKI_PROC_NO_AUTHORITY;
     CHECK(proc_terminate(p, (int32_t)other->pid, SIGUSR1, none) == -EINVAL);
     CHECK(proc_terminate(p, 0, SIGTERM, none) == -EINVAL && proc_terminate(p, -3, SIGTERM, none) == -EINVAL);
@@ -788,7 +829,11 @@ static void test_enumeration(void)
     int fd = proc_authority_install(p); CHECK(fd >= 3 && proc_authority_object(p->fds[fd].object));
     CHECK(heap_blocks == heap_before + 1 && p->fds[fd].object->inheritable && !(p->fds[fd].flags & FD_CLOEXEC));
     CHECK(proc_authority_install(proc_supervisor()) == -EPERM);
-    CHECK(proc_terminate(p, (int32_t)other->pid, SIGKILL, fd) == 0 && posted.pid == other->pid && posted.signo == SIGKILL);
+    CHECK(proc_terminate(p, (int32_t)other->pid, SIGKILL, fd) == -EPERM);
+    p->subject->credential.group_count=2;p->subject->credential.groups[0]=544;p->subject->credential.groups[1]=545;
+    CHECK(!proc_terminate(p, (int32_t)other->pid, SIGKILL, none));
+    CHECK(posted.pid==other->pid && posted.signo==SIGKILL);
+    p->subject->credential=ordinary;
     CHECK(proc_terminate(p, (int32_t)owner->pid, SIGKILL, fd) == -EPERM);  /* no user thread */
     /* Explicit delegation reaches the owner's direct child only. */
     struct ciuki_spawn_fd map = { fd, 4 };
@@ -799,7 +844,7 @@ static void test_enumeration(void)
     struct ciuki_spawn_fd again = { 4, 4 };
     CHECK(proc_spawn_file(delegate, &file2, s, &again, 1, 0, 0, &nested) > 0 && proc_authority_object(nested->fds[4].object));
     proc_strings_free(s);
-    CHECK(proc_terminate(delegate, (int32_t)other->pid, SIGTERM, 4) == 0);
+    CHECK(proc_terminate(delegate, (int32_t)other->pid, SIGTERM, 4) == -EPERM);
     CHECK(proc_terminate(nested, (int32_t)other->pid, SIGTERM, 4) == -EPERM);
     /* A delegate never ends its owner or the owner's group, even unrecorded. */
     CHECK(!fake_desktop_pid && proc_terminate(delegate, (int32_t)p->pid, SIGKILL, 4) == -EPERM);
@@ -812,6 +857,7 @@ static void test_enumeration(void)
     CHECK(proc_terminate(p, (int32_t)desk->pid, SIGKILL, fd) == -EPERM);
     CHECK(proc_terminate(desk, (int32_t)desk_child->pid, SIGTERM, none) == 0 && posted.pid == desk_child->pid);
     fake_desktop_pid = 0;
+    p->subject->credential.group_count=2;p->subject->credential.groups[0]=544;p->subject->credential.groups[1]=545;
     CHECK(proc_terminate(p, (int32_t)desk_child->pid, SIGKILL, fd) == 0);
     /* Zombies are not targets; their records report state 3 and no threads. */
     stop_collect(other); g_current = pt->task;

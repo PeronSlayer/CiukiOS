@@ -1,12 +1,15 @@
 /* Banked UART hardware model, production COM service. No guest evidence.
  * SPDX-License-Identifier: GPL-2.0-only */
+#include <ciuki/kheap_limits.h>
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #define CIUKI_CPU_H
 #include <ciuki/kernel.h>
+#include "security/subject_fixture.h"
 #include <ciuki/com.h>
+#include <ciuki/desktop.h>
 #include <ciuki/task.h>
 #include <ciuki/work.h>
 #include <ciuki/input.h>
@@ -119,8 +122,12 @@ static uint8_t fake_read(void *c,uint16_t p) { (void)c; return inb(p); }
 static void fake_write(void *c,uint16_t p,uint8_t b) { (void)c; outb(p,b); }
 static const struct com_io io={fake_read,fake_write,pause_io,0};
 void task_sleep_ms(uint32_t ms) { (void)ms; }
-void *kzalloc(size_t n) { if (fail_alloc) return 0; allocations++; return calloc(1,n); }
+void *(kzalloc)(size_t n) { if (n > KHEAP_MAX_REQUEST) return 0; if (fail_alloc) return 0; allocations++; return calloc(1,n); }
 void kfree(void *p) { if (p) { assert(allocations); allocations--; free(p); } }
+void *desktop_buffer_alloc(uint32_t bytes,enum mm_owner owner)
+{ assert(bytes==2*CIUKI_COM_QUEUE && owner==MM_IO_REQUEST); if (fail_alloc) return 0; void *p=calloc(1,bytes); if (p) allocations++; return p; }
+void desktop_buffer_free(void *p,uint32_t bytes,enum mm_owner owner)
+{ assert(bytes==2*CIUKI_COM_QUEUE && owner==MM_IO_REQUEST); kfree(p); }
 void klog(const char *fmt,...) { (void)fmt; }
 #ifndef COM_WITH_LOGGER
 bool serial_present(void) { return logger_present; }
@@ -439,7 +446,14 @@ static void native(void)
     assert(!com_devctl(&user_process,5,COM_GET_OWNER,0x1000,sizeof(owner)));
     memcpy(&owner,user_bytes,sizeof(owner)); assert(owner.kind==CIUKI_COM_OWNER_NATIVE && owner.id==42 && owner.generation==d.com_generation);
     struct ciuki_com_mouse mouse={1,sizeof(mouse),CIUKI_SERIAL_MOUSE_LOGITECH,0};
-    memcpy(user_bytes,&mouse,sizeof(mouse)); assert(!com_devctl(&user_process,5,COM_SET_MOUSE,0x1000,sizeof(mouse)));
+    memcpy(user_bytes,&mouse,sizeof(mouse));
+    unsigned mouse_writes=writes;
+    security_fixture_identity(&user_process,1001,1,false,0);
+    assert(com_devctl(&user_process,5,COM_SET_MOUSE,0x1000,sizeof(mouse))==-EPERM && writes==mouse_writes);
+    security_fixture_identity(&user_process,501,1,false,0);
+    assert(com_devctl(&user_process,5,COM_SET_MOUSE,0x1000,sizeof(mouse))==-EPERM && writes==mouse_writes);
+    security_fixture_identity(&user_process,500,1,true,0);
+    assert(!com_devctl(&user_process,5,COM_SET_MOUSE,0x1000,sizeof(mouse)));
     mouse.protocol=0; memcpy(user_bytes,&mouse,sizeof(mouse));
     assert(!com_devctl(&user_process,5,COM_SET_MOUSE,0x1000,sizeof(mouse)));
     assert(com_devctl(&user_process,6,COM_GET_STATUS,0x1000,sizeof(s))==-EBADF);
@@ -487,4 +501,4 @@ static void peripheral_leases(void)
     r.flags=0; assert(!com_open(0,&g)); assert(com_firmware_assigned(&r)==-EBUSY); com_close(0,g);
     printf("COM peripheral leases, firmware routes and input: PASS\n");
 }
-int main(void) { setvbuf(stdout,0,_IONBF,0); generations(); arbitration(); faults_and_abi(); aggregate_budget(); discovery(); native(); peripheral_leases(); reset(); return 0; }
+int main(void) { security_fixture_identity(&user_process,1000,1,true,0); setvbuf(stdout,0,_IONBF,0); generations(); arbitration(); faults_and_abi(); aggregate_budget(); discovery(); native(); peripheral_leases(); reset(); return 0; }

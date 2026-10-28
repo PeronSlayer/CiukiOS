@@ -41,6 +41,10 @@ static int component(const char *id)
     for(unsigned i=0;i<SETUP_COMP_COUNT;i++)if(!strcmp(id,setup_component_names[i]))return (int)i;
     if(!strcmp(id,"dos-reference")||!strcmp(id,"dos-unified"))return 1;
     if(!strcmp(id,"doom")||!strcmp(id,"quake")||!strcmp(id,"wolf3d"))return 4;
+    /* sec-user-02: as libsetup's catalogue (manifest.c): DOS demos with the
+     * games, the Quake III Arena demo installer with Windows. */
+    if(!strcmp(id,"war2-demo")||!strcmp(id,"duke3d-shareware"))return 4;
+    if(!strcmp(id,"q3a-demo"))return 2;
     /* Notices/fonts/runtime libraries belong to the mandatory system. */
     if(!strcmp(id,"jitterentropy")||!strcmp(id,"lwip"))return 0;
     return -1;

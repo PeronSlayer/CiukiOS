@@ -40,7 +40,7 @@ static int registry(const struct cp_configuration_store *s,const char *root,cons
         if (!e) e=string_value(t,"System\\TimeZone","TZ",zone>=0 ? ciuki_tz_zones[zone].tz : rule);
         if (!e) e=number_value(t,"System\\TimeZone","AutoDST",1);
     } else {
-        static const char *const packages[]={"wolf3d-shareware","doom-shareware","quake-shareware","war2-demo"};
+        static const char *const packages[]={"wolf3d-shareware","doom-shareware","quake-shareware","war2-demo","duke3d-shareware"};
         for (unsigned i=0;!e && i<DESK_GAME_COUNT;i++) {
             char key[96]; snprintf(key,sizeof(key),"Programs\\BundledGames\\%s",packages[i]);
             e=number_value(t,key,"Installed",!!(a->components&SETUP_COMP_GAMES));

@@ -12,6 +12,7 @@
 #include <ciuki/cpustat.h>
 #include <ciuki/registry.h>
 extern bool dosvm_trap(struct trap_frame *) __attribute__((weak));
+extern bool dosvm_trap_fast(struct trap_frame *) __attribute__((weak));
 extern void dosvm_perf_enter(void) __attribute__((weak));
 extern bool dosvm_client(const struct task *) __attribute__((weak));
 extern void entropy_irq(unsigned) __attribute__((weak));
@@ -118,6 +119,12 @@ void trap_dispatch(struct trap_frame *tf)
      * No registered foreign callback means this hook is inert. */
     if (ndis_execution_exception && ndis_execution_exception(tf)) return;
     if (tf->vector==14 && ledger_assert_pinned_context) ledger_assert_pinned_context(true,tf->eip);
+    /* fx-doomwin: a DOS VM's plane select (V86 or its DPMI client at ring
+     * 3) retires here, IF clear to the IRET, without the per-exit task
+     * stamps; otherwise dosvm_trap_fast is false with no VM state changed
+     * (it may have taken the monitor's entry stamp, which dosvm_trap keeps). */
+    if (tf->vector == 13 && !tf->err && dosvm_trap_fast &&
+        ((tf->eflags & V86_VM) || (tf->cs & 3) == 3) && dosvm_trap_fast(tf)) return;
     cpu_trap_enter(tf);
     /* F1: VM has CPL3 regardless of the low bits in real-mode CS.
      * Dispatch/EOI physical IRQs exactly once before firmware reflection.

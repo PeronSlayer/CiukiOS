@@ -136,5 +136,52 @@ class InstallerShellTests(unittest.TestCase):
             p=subprocess.run([model,renamed,'0'],capture_output=True,text=True,timeout=20)
             self.assertEqual(p.returncode,0,p.stdout+p.stderr)
 
+class ShellIconTests(unittest.TestCase):
+    """fx-exeicons: ciukishell's SHGetFileInfoA/ExtractIconA (sdk/win32/shell/icons.c)
+    on the Linux file adapter, with USER stand-ins recording the icon locations."""
+
+    def test_shell_file_icons(self):
+        import sys
+        sys.path.insert(0, str(ROOT/'tests/host/desktop'))
+        import icon_fixtures as fx
+        out = ROOT/'build/host/win32/installers'
+        out.mkdir(parents=True, exist_ok=True)
+        fixtures = out/'icon-fixtures'
+        fixtures.mkdir(exist_ok=True)
+        image = [fx.Image(32, 32, lambda x, y: (255, 200, 0, 0), bpp=8)]
+        pe = bytearray(fx.pe([(1, image)]))
+        optional = 0x80 + 24
+        struct.pack_into('<HH', pe, optional + 48, 4, 0)    # subsystem version 4.0
+        struct.pack_into('<H', pe, optional + 68, 2)        # IMAGE_SUBSYSTEM_WINDOWS_GUI
+        (fixtures/'hl.exe').write_bytes(bytes(pe))
+        ne = bytearray(fx.ne([(1, image)]))
+        struct.pack_into('<H', ne, 0x40 + 0x3e, 0x030a)    # ne_expver: Windows 3.10
+        (fixtures/'win16.exe').write_bytes(bytes(ne))
+        (fixtures/'doom.exe').write_bytes(fx.dos_exe())
+        (fixtures/'doom.pif').write_bytes(fx.pif('C:\\GAMES\\DOOM.EXE', 'DOOM.ICO', 0))
+        (fixtures/'plain.pif').write_bytes(fx.pif('C:\\GAMES\\DOOM.EXE'))
+        sources = [ROOT/'sdk/win32/shell'/n for n in
+            ('folders.c','pidl.c','link.c','execute.c','fileop.c','strings.c','icons.c')]
+        sources += [ROOT/'apps/libdeskui/iconx.c', ROOT/'sdk/win32/services/bytes.c',
+            ROOT/'sdk/win32/kernel32/text.c',ROOT/'apps/desktop/protocol.c']
+        sources += [ROOT/'sdk/win32/version'/n for n in ('version.c','install.c')]
+        sources += [ROOT/'sdk/win32/advapi32'/n for n in ('registry.c','text.c')]
+        sources += [ROOT/'apps/w32srv'/n for n in
+            ('registry.c','storage.c','defaults.c','directory.c','posix_io.c')]
+        sources += [ROOT/'tests/host/win32/installers'/n for n in ('host.c','shell_icons_test.c')]
+        program = out/'shell-icons-test'
+        subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror',
+            '-DW32_HOST_MODEL','-ffunction-sections','-fdata-sections','-Wl,--gc-sections',
+            '-fsanitize=address,undefined','-fno-sanitize-recover=all',
+            '-I'+str(ROOT/'sdk/win32/include'),'-I'+str(ROOT/'src/kernel/include'),
+            *map(str,sources),'-o',str(program)],check=True)
+        with tempfile.TemporaryDirectory(dir=out) as name:
+            result = subprocess.run([str(program), name, str(fixtures)], capture_output=True, text=True, timeout=60,
+                                    env={'ASAN_OPTIONS': 'detect_leaks=0'})
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            print(result.stdout, end='')
+            self.assertEqual(result.stdout.count('PASS '), 4)
+
+
 if __name__=='__main__':
     unittest.main()

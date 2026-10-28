@@ -69,7 +69,12 @@ enum w32_system_action {
   /* G11: GetSystemPowerStatus (docs/design/power-policy.md 24): low = AC
    * (0/1/255), high = battery flag, value = percent (255 unknown), extra =
    * remaining seconds, result = full-life seconds (0xffffffff unknown). */
-  W32_S_POWER
+  W32_S_POWER,
+  /* Desktop only: value=presented PID (0=query), result=pending launches.
+   * low/high=earliest expiry in monotonic milliseconds. */
+  W32_S_LAUNCH_FEEDBACK,
+  /* Calling process only: first GetMessage ends its startup feedback. */
+  W32_S_LAUNCH_IDLE
 };
 struct ciuki_w32_system_args {
   struct ciuki_w32_header header;

@@ -17,6 +17,9 @@ struct desktop_description {
     void *display_fences;
     uint64_t display_sequence;
     union { struct surface *surface; struct { struct channel *channel; unsigned side; } endpoint; } u;
+    /* sec-k07: grant domain (trusted logon UI or one session's desktop). */
+    bool grant_trusted;
+    uint32_t grant_session;
 };
 struct desktop_ledger { uint32_t descriptions, surfaces, pages, channels, messages, grants; };
 extern struct desktop_ledger desktop_objects; /* internal object accounting */
@@ -27,6 +30,7 @@ struct desktop_description *desktop_description_new(enum desktop_kind kind, uint
 struct desktop_description *desktop_fd(const struct process *p, int32_t fd);
 int desktop_fd_slot(const struct process *p, unsigned start);
 int desktop_fd_install(struct process *p, struct desktop_description *d, uint32_t flags);
+bool desktop_object_is_channel(const struct proc_object *o);
 int desktop_close(struct process *p, int32_t fd);
 int desktop_dup(struct process *p, int32_t fd, int32_t target, bool exact, uint32_t flags);
 int desktop_fcntl(struct process *p, int32_t fd, uint32_t cmd, uint32_t arg);
@@ -56,11 +60,32 @@ void *desktop_buffer_alloc(uint32_t bytes, enum mm_owner);
 void desktop_buffer_free(void *, uint32_t bytes, enum mm_owner);
 
 int channel_pair(struct process *p, int32_t fds[2]);
+bool channel_connected(const struct process *a, const struct process *b);
 int channel_send(struct process *p, int32_t fd, uint32_t message, uint32_t flags);
 int channel_recv(struct process *p, int32_t fd, uint32_t message, uint32_t flags);
 
 /* No public syscall can install a grant. Caller is the bootstrap controller. */
 int grants_install(struct process *p, int32_t fds[2]);
+/* --- sec-k07 (begin): secure console domains (proc/grants.c) ---
+ * install_trusted: LOGON_UI's private pair; install_session: suspended
+ * SESSION_LAUNCH desktop pair. conceal/activate/release are nonblocking and
+ * IRQ-safe (called by the k01 console coordinator); conceal returns EBUSY
+ * until every user pixel source is fenced and the neutral frame is painted
+ * by grants_console_neutral (thread context, PID 1). */
+struct grants_console_state {
+    uint32_t trusted_owner, user_owner, user_session, active_session;
+    bool trusted, neutral_pending, draining;
+    uint64_t neutral_frames;
+};
+int grants_install_trusted(struct process *p, int32_t fds[2]);
+int grants_install_session(struct process *p, uint32_t session, int32_t fds[2]);
+int grants_console_conceal(uint32_t session);
+int grants_console_activate(uint32_t session);
+void grants_console_release(uint32_t session);
+int grants_console_neutral(void);
+bool grants_console_trusted(void);
+void grants_console_snapshot(struct grants_console_state *out);
+/* --- sec-k07 (end) --- */
 int grant_display_info(struct process *p, int32_t fd, struct ciuki_framebuffer_info *out);
 int grant_present(struct process *p, int32_t display, int32_t surface, const struct ciuki_rect *rect);
 int grant_accel(struct process *p, int32_t display, const struct ciuki_accel_request *request);

@@ -37,6 +37,7 @@ class Svga3DTests(unittest.TestCase):
     def test_qualification(self): self.run_mode('qualification')
     def test_budget(self): self.run_mode('budget')
     def test_fuzz(self): self.run_mode('fuzz')
+    def test_unsupported_features(self): self.run_mode('unsupported')
     def test_service(self): self.run_mode('service')
     def test_eviction(self): self.run_mode('eviction')
     def test_hosts(self): self.run_mode('hosts')

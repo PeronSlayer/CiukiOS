@@ -47,17 +47,21 @@
 #define CBI_F_SCANDISK_SKIP    (1u << 20) /* Esc at the loader's ScanDisk message */
 #define CBI_F_SCANDISK_THOROUGH (1u << 21)
 #define CBI_F_MENU_SHOWN       (1u << 22) /* the Startup menu was on screen */
+/* fx-selftest: menu T, one unattended self-test boot ending at the desktop
+ * (docs/design/self-test.md). The last undefined bit. */
+#define CBI_F_SELF_TEST        (1u << 23)
 /* Bits 24-31: driver classes skipped this start (bootstat.h class bits). */
 #define CBI_F_SKIP_SHIFT       24u
 #define CBI_F_SKIP_MASK        (0xFFu << CBI_F_SKIP_SHIFT)
-#define CBI_F_DEFINED_MASK     0xFF7FFFFFu
+#define CBI_F_DEFINED_MASK     0xFFFFFFFFu
 
 /* A normal boot keeps the screen quiet until the desktop takes it: no test
  * request, no safe mode, no L choice and a linear framebuffer. Every other
  * boot draws the kernel log on screen as before. */
 static inline int cbi_quiet_console(uint32_t flags)
 {
-    return !(flags & (CBI_F_TEST_REQUEST | CBI_F_SAFE_MODE | CBI_F_VERBOSE | CBI_F_TEXT_MODE | CBI_F_HW_CHECK));
+    return !(flags & (CBI_F_TEST_REQUEST | CBI_F_SAFE_MODE | CBI_F_VERBOSE | CBI_F_TEXT_MODE | CBI_F_HW_CHECK |
+                      CBI_F_SELF_TEST));
 }
 
 #define CBI_A20_ALREADY_ON     1u

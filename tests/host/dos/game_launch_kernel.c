@@ -12,12 +12,21 @@
  *          a return in the first 10 s keeps a "Finished - <name>" window
  *          (apps/dosbox/loading.h DOSBOX_EARLY_EXIT_MS, dosbox replay 23/32);
  *   close  a plain DOS Box at its idle C:\> prompt is closed from the desktop
- *          (close button, Alt+F4): CLOSE ends the VM and the window closes.
+ *          (close button, Alt+F4): CLOSE ends the VM and the window closes;
+ *   fullscreen  fx-dosfull on a display that accepts full screen: the DOS Box
+ *          enters full screen by itself at the game's mode 13h; the user's
+ *          Alt+Enter (the kernel input path) returns it to the window, which
+ *          the DOS Box remembers as the program's Window usage; frames then
+ *          reach the window and no second entry follows.
+ * frame and exit run on a display that refuses full screen (QEMU's standard
+ * VGA, f3-29): one automatic request, one refusal, the game continues in the
+ * window and no usage is stored.
  * SPDX-License-Identifier: GPL-2.0-only */
 #define main dosvm_test_suite_main
 #include "../dosvm_test.c"
 #undef main
 #include <pthread.h>
+#define DOSBOX_SCREEN_WINDOW_VALUE 0   /* apps/dosbox/program.h DOSBOX_SCREEN_WINDOW */
 
 /* One kernel CPU: a system call, the scripted guest and a sleep never overlap. */
 static pthread_mutex_t game_cpu = PTHREAD_MUTEX_INITIALIZER;
@@ -30,7 +39,13 @@ static char game_line[128];
 static unsigned game_line_length, game_lines, game_execs, game_draws, game_calls[32];
 static char game_program[128];
 static bool game_stepping;
-int game_mode;                      /* 0 frame, 1 exit, 2 close */
+int game_mode;                      /* 0 frame, 1 exit, 2 close, 3 fullscreen */
+static uint64_t game_fs_entered, game_fs_returned;
+/* The window closes on a game frame drawn after full screen settled: the
+ * refused request (frame, exit) or the user's return (fullscreen). */
+static unsigned game_draws_after;   /* frames the guest drew after that: it was not stalled (fx-biosvm2) */
+static int game_fullscreen_settled(void) { return game_mode == 3 ? game_fs_returned != 0 : fs_begins != 0; }
+int game_fullscreen_returned(void) { return game_fullscreen_settled() && game_draws_after; }
 static uint64_t game_returned_at, game_exec_at;
 
 uint64_t game_now_ms(void) { return g_ticks; }
@@ -60,6 +75,10 @@ static void game_guest_step(void)
 {
     struct dosvm *v = game_vm;
     if (game_stepping || !v || !dosvm_valid(dosvm_key(v)) || v->info.state >= DOSVM_STOPPING) return;
+    /* A full-screen switch holds the VM: it parks at its next checkpoint
+     * (dosvm_fullscreen_checkpoint) and runs nothing until released. */
+    v->fullscreen_parked = v->fullscreen_hold;
+    if (v->fullscreen_hold) return;
     game_stepping = true;
     switch (game_state) {
     case GUEST_NONE: break;
@@ -102,16 +121,23 @@ static void game_guest_step(void)
             game_prompt_idle(v); game_state = GUEST_PROMPT; game_state_at = g_ticks;
             break;
         }
-        if (g_ticks - game_state_at >= 28 && v->video_direct == VIDEO_LINEAR && (game_mode != 1 || game_draws < 5)) {
+        /* A store to a window the full-screen attempt synchronised (unmapped)
+         * faults and the kernel maps it again (f3-06 direct plane window). */
+        if (g_ticks - game_state_at >= 28 && !v->fullscreen && v->video_direct != VIDEO_LINEAR) dosvm_vga_direct(v);
+        if (g_ticks - game_state_at >= 28 && !v->fullscreen && v->video_direct == VIDEO_LINEAR && (game_mode != 1 || game_draws < 5)) {
             /* One frame: a band of colour 0x2A at the top of the screen. */
             for (unsigned x = 0; x < 320; x += 4) linear_store(v, 10 * 320 + x, 0x2A);
             game_draws++; game_state_at = g_ticks;
+            if (game_fullscreen_settled()) game_draws_after++;
         }
         break;
     }
     game_stepping = false;
 }
-static void game_sleep_hook(void) { game_guest_step(); }
+static void game_fullscreen_tick(void);
+/* Kernel sleeps (WAIT_PRESENT while the window shows its full-screen page,
+ * the switch's park) let the guest and the display worker run. */
+static void game_sleep_hook(void) { game_guest_step(); game_fullscreen_tick(); }
 /* The desktop's close request in mode "close": the plain DOS Box has sat at
  * its idle prompt for a second. */
 int game_prompt_ready(void)
@@ -142,27 +168,54 @@ int game_dosvm(uint32_t op, struct ciuki_dosvm_command *c)
     return e;     /* the application side turns it into errno */
 }
 /* The window thread's poll(): kernel time passes; the guest runs. */
+/* fx-dosfull mode "fullscreen": 1.5 s after the DOS Box entered full
+ * screen, the user presses Alt+Enter; the display worker returns it. */
+static void game_fullscreen_tick(void)
+{
+    static bool ticking;
+    struct dosvm *v = game_vm;
+    if (game_mode != 3 || !v || game_fs_returned || ticking || fullscreen_busy) return;
+    if (v->fullscreen && !game_fs_entered) {
+        game_fs_entered = g_ticks; hardware = card_bus;
+        printf("kernel: full screen entered at t=%llu ms\n", (unsigned long long)g_ticks);
+    }
+    if (!game_fs_entered || !v->fullscreen || g_ticks - game_fs_entered < 1500) return;
+    struct ciuki_input_event out;
+    ticking = true;
+    CHECK(!dosvm_fullscreen_input(INPUT_KEY, 0x38, 1));
+    CHECK(dosvm_fullscreen_input(INPUT_KEY, 0x1C, 1));
+    v->fullscreen_parked = true; dosvm_fullscreen_poll();
+    CHECK(dosvm_fullscreen_input(INPUT_KEY, 0x1C, 0));
+    dosvm_fullscreen_input(INPUT_KEY, 0x38, 0);
+    while (dosvm_fullscreen_desktop_event(&out)) {}
+    ticking = false;
+    CHECK(!v->fullscreen && v->fullscreen_hotkey);
+    game_fs_returned = g_ticks;
+    printf("kernel: Alt+Enter returned the game to its window at t=%llu ms\n", (unsigned long long)g_ticks);
+}
 void game_sleep(unsigned ms)
 {
     pthread_mutex_lock(&game_cpu);
-    for (unsigned i = 0; i < ms; i++) { g_ticks++; host_clock_tick(); game_guest_step(); }
+    for (unsigned i = 0; i < ms; i++) { g_ticks++; host_clock_tick(); game_guest_step(); game_fullscreen_tick(); }
     pthread_mutex_unlock(&game_cpu);
 }
 
 int game_dosbox_main(int, char **);
+int game_stored_usage(void);
 void game_debug_surfaces(void);
 uint64_t game_window_closed(void), game_close_requested(void);
 int main(int argc, char **argv)
 {
     CHECK(argc <= 2);
     const char *mode = argc == 2 ? argv[1] : "frame";
-    game_mode = !strcmp(mode, "exit") ? 1 : !strcmp(mode, "close") ? 2 : 0;
+    game_mode = !strcmp(mode, "exit") ? 1 : !strcmp(mode, "close") ? 2 : !strcmp(mode, "fullscreen") ? 3 : 0;
     CHECK(game_mode || !strcmp(mode, "frame"));
+    fs_refuse = game_mode != 3;          /* the QEMU standard VGA keeps the window (f3-29) */
     ram = calloc(HOST_PAGES, PAGE_SIZE); CHECK(ram);
     g_ticks = 1000;
     /* The desktop-launched /Programs/dosbox process and its guest surface. */
     memset(fake_proc, 0, sizeof(fake_proc));
-    fake_proc[0].pid = 10; fake_proc[0].state = PROC_LIVE; fake_proc[0].dosvm_capability = true;
+    fake_proc[0].pid = 10; fake_proc[0].state = PROC_LIVE; fake_identity(0, true, false);
     fake_current = &fake_proc[0];
     fake_surface[0] = (struct surface){{sizeof(struct ciuki_surface_info), CIUKI_DOSVM_WIDTH, CIUKI_DOSVM_HEIGHT,
         CIUKI_DOSVM_WIDTH * 4, CIUKI_SURFACE_XRGB8888, CIUKI_DOSVM_WIDTH * CIUKI_DOSVM_HEIGHT * 4},
@@ -177,7 +230,11 @@ int main(int argc, char **argv)
     char *plain_argv[] = {"dosbox", 0};
     int result = game_mode == 2 ? game_dosbox_main(1, plain_argv) : game_dosbox_main(3, game_argv);
     struct dosvm *v = game_vm;
-    if (game_mode) {
+    if (game_mode == 1 || game_mode == 2) {
+        /* fx-dosfull: the game asked for full screen once at its mode 13h and
+         * was refused; the plain DOS prompt never asked. */
+        CHECK(fs_begins == (game_mode == 1 ? 1u : 0u) && v && v->fullscreen_refusals == fs_begins && !v->fullscreen);
+        CHECK(game_stored_usage() < 0);
         /* The DOS Box closed itself: CLOSE at the idle prompt is an ordinary
          * EXIT, the VM is destroyed (no retained VM, no forced termination)
          * and the window went away within a second of the trigger. */
@@ -207,6 +264,18 @@ int main(int argc, char **argv)
     CHECK(v && game_execs == 1 && !strcmp(game_program, "DOOM.EXE -config CIUKI.CFG"));
     CHECK(v->launch_exec && v->launch_ready && !v->launch_failed);
     CHECK(game_draws && game_desktop_frames());
+    if (game_mode == 3) {
+        /* Entered by itself, returned by the user's Alt+Enter, remembered as
+         * Window (the DOS Box stored only the usage), never entered again. */
+        CHECK(game_fs_entered && game_fs_returned && fs_begins == 1 && fs_ends == 1 && !v->fullscreen_refusals && game_draws_after);
+        CHECK(game_fs_entered - game_exec_at < 1000 && game_stored_usage() == DOSBOX_SCREEN_WINDOW_VALUE);
+        printf("PASS DOS game full screen: entered at the first graphics mode %llu ms after EXEC, Alt+Enter back to the "
+               "window remembered as Window, frames in the window, no second entry\n",
+               (unsigned long long)(game_fs_entered - game_exec_at));
+    } else {
+        CHECK(fs_begins == 1 && v->fullscreen_refusals == 1 && !v->fullscreen && game_stored_usage() < 0 && game_draws_after);
+        puts("PASS DOS game refused full screen: one automatic request at mode 13h, refused, the game continued in its window, no usage stored");
+    }
     /* The window closed while the game ran: CLOSE asked it to quit (Ctrl+C);
      * the test ends the session as the owner's exit does. */
     struct dosvm_key key = dosvm_key(v);

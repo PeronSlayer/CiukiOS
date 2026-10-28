@@ -139,7 +139,7 @@ Design and Windows 98 sources: [startup-recovery](design/startup-recovery.md).
   complete, with Safe mode selected. Choices: 1 Normal, 2 Logged, 3 Safe
   mode (with the disks), 4 Step-by-step confirmation, 5 Command prompt only,
   6 Safe mode command prompt only, 7 Safe mode without disks (the earlier
-  `S`), 8 Hardware check. Digits and Up/Down select, Enter starts, the
+  `S`), 8 Hardware check, 9 Self-test. Digits and Up/Down select, Enter starts, the
   30-second countdown restarts at every key; F5, Shift+F5 and Shift+F8 start
   Safe mode, Safe mode command prompt only and Step-by-step at once (also
   during the 3-second window). The serial log records `L:STARTUP=<n>`.
@@ -168,6 +168,7 @@ boots:
 | Safe mode | `S` in the menu, Startup menu choices 3, 6 and 7, or `safe=1` in `BOOT.CFG` |
 | Serial log | `L` in the menu (sets boot flag bit 11; still toggles bit 1) |
 | Hardware check | `H` in the menu; bounded diagnostic page instead of the desktop ([contract](design/hardware-check.md)) |
+| Self-test | `T` in the menu or Startup menu choice 9; one unattended run of the hardware checks that ends at the desktop with `C:\SYSTEM\LOGS\SELFTEST.LOG` ([design](design/self-test.md)) |
 | Probe | `P` in the menu and a selector |
 | Test request | QEMU fw_cfg `opt/it.alcybercloud.ciukios/test`, or `probe=` in `BOOT.CFG` (sweeps) |
 | Text console | the loader found no usable VBE linear framebuffer |

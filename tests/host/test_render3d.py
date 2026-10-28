@@ -17,6 +17,32 @@ OUT = ROOT / 'build/host/render3d'
 VIDEO = ROOT / 'src/kernel/drivers/video'
 
 class RenderTests(unittest.TestCase):
+    def test_probe_cost_model(self):
+        # The repository's PIII-933 coefficients, rounded into conservative
+        # per-fragment scalar classes: 1400 cycles dual bilinear, 4500 with
+        # finite-difference mip/tri-linear sampling, 420 on early depth reject.
+        # These are analytic estimates, never measured T23 read bandwidth.
+        for w,h in ((640,480),(800,600),(1024,768)):
+            pixels=w*h
+            sampled=w*((h-1)//16+1+bool((h-1)%16))
+            bus=(sampled*10+5*8192*2)/(100*1024*1024)*1000
+            print(f'PROBE MODEL {w}x{h} samples={sampled} readback_bytes={sampled*10} '
+                  f'guard_read_bound=81920 assumed_read_ms={bus:.3f}')
+            total=0
+            for name,cycles,work,count in (
+                ('fullsize-1',1400,pixels,1),('fullsize-2',420,pixels,1),
+                ('fullsize-3',4500,pixels,1),('fullsize-4',1400,32768,1),
+                ('precision-bilinear',1400,pixels,10),('precision-mip',4500,pixels,13)):
+                old_ms=work*cycles/933000
+                new_ms=0 if name.startswith('precision') else old_ms*sampled/pixels
+                total+=count*old_ms
+                print(f'PROBE PHASE {w}x{h} phase={name} count={count} '
+                      f'old_reference_ms={old_ms:.3f} sampled_reference_ms={new_ms:.3f} '
+                      f'old_reference_plus_reads_ms={old_ms+bus:.3f}')
+            self.assertLess(sampled,pixels/14)
+            print(f'PROBE TOTAL {w}x{h} old_reference_ms={total:.3f} '
+                  'excludes precision envelope search, GPU raster, uploads, allocation, storage, scheduling')
+
     def test_submission_cost_model(self):
         # Explicit assumptions, not a host timing extrapolation to silicon.
         # 1 GHz Pentium III, 120 cycles/UC word, 250/status observation,
@@ -24,24 +50,30 @@ class RenderTests(unittest.TestCase):
         # match the existing single/two-pass Quake-like GL replay workloads.
         mhz = 1000
         self.assertEqual(256*28,7168)
-        self.assertLess(28772,65536)
+        self.assertLess(28804,65536)
         for triangles in (1024,3000,4600):
             batches=(triangles+255)//256
-            # Draw: 17 state + 17 restore + bitmap restore + one draw event.
-            small_words,events=17*2+17*2+5,36
-            # Final color-to-linear copy: 8 words + 18 restore packets/events.
-            present_words=8+17*2+5+19*2
+            # Draw: 17 state, write-mask setup/restore, bitmap restore and events.
+            small_words,events=18*2+18*2+5,38
+            # Final color-to-linear copy, write mask and complete state restore.
+            present_words=8+2+18*2+5+21*2
             words=triangles*28+batches*(small_words+events*2)+present_words
             observations=(triangles*28+7)//8+batches*events*2+19*2
             submit_us=(words*120+observations*250)/mhz
             for w,h in ((640,480),(800,600),(1024,768)):
-                # Every geometry job reads color/D16; present reads both
-                # the color target and its linear copy. No asynchronous DMA.
-                read_bytes=(batches*6+8)*w*h
+                # Round 1 read color/D16 back after every geometry job and
+                # the linear copy at present. f7-15 review: GPU-resident
+                # targets read only sampled guards (16 words per guard page,
+                # color/depth/linear/2 textures) on the COPY job and the full
+                # guard pages of the native scanout source.
+                old_bytes=(batches*6+8)*w*h
+                read_bytes=5*2*16*4+2*4096
+                self.assertLess(read_bytes*100,w*h*4) # under 1% of one colour attachment
                 read_ms=read_bytes/(100*1024*1024)*1000
                 print(f'PIII MODEL {w}x{h}: {triangles} triangles/{batches} batches, '
                       f'{words} UC words/frame, submission={submit_us/1000:.3f} ms, '
-                      f'readback={read_bytes} bytes/{read_ms:.3f} ms at assumed 100 MiB/s; '
+                      f'readback={read_bytes} bytes/{read_ms:.3f} ms (round 1: {old_bytes} bytes/'
+                      f'{old_bytes/(100*1024*1024)*1000:.3f} ms) at assumed 100 MiB/s; '
                       'excludes initial uploads/clear, FIFO stalls, scalar fallback, raster latency and scanout')
 
     def build_run(self, name, sources, args=(), flags=()):
@@ -81,7 +113,7 @@ class RenderTests(unittest.TestCase):
         keys=['sizeof.ciuki_r3d_draw','offsetof.ciuki_r3d_draw.uv1',
               'offsetof.ciuki_r3d_draw.vertices','rows.ciuki_r3d_draw.uv1',
               'components.ciuki_r3d_draw.uv1','strideof.ciuki_r3d_draw.uv1']
-        expected=(28772,1124,7268,768,2,8)
+        expected=(28804,1124,7268,768,2,8)
         flags=runpy.run_path(str(ROOT/'scripts/build_kernel.py'))['CFLAGS']
         OUT.mkdir(parents=True,exist_ok=True)
         with tempfile.TemporaryDirectory(dir=OUT) as tmp:
@@ -111,6 +143,10 @@ class RenderTests(unittest.TestCase):
     def test_scalar_recovery(self):
         self.build_run('scalar_recovery', ['tests/host/render3d_scalar_test.c'])
 
+    def test_sampled_scalar(self):
+        self.build_run('scalar_sample', ['tests/host/render3d_scalar_sample_test.c',
+            'src/kernel/drivers/video/render3d_scalar.c'])
+
     def test_shared_transport(self):
         OUT.mkdir(parents=True, exist_ok=True)
         source=(ROOT/'tests/host/savage2d_test.c').read_text()
@@ -130,12 +166,31 @@ class RenderTests(unittest.TestCase):
             'src/kernel/drivers/video/s3savage/savage3d.c'])
 
     def test_owner(self):
+        OUT.mkdir(parents=True, exist_ok=True)
+        # The marker deadline is checked through the real block-request scope
+        # and its millisecond conversion (blkreq.c, host build).
+        sanitizer = 'address,undefined' if os.environ.get('CIUKI_DISPLAY_ASAN') else 'undefined'
+        blkreq = OUT/'owner_blkreq.o'
+        subprocess.run(['clang', '-std=c17', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-DFS_HOST',
+                        '-D_POSIX_C_SOURCE=200809L', '-pthread', '-fsanitize='+sanitizer,
+                        '-fno-sanitize-recover=undefined', '-ffunction-sections', '-fdata-sections',
+                        '-I', str(ROOT/'src/kernel/include'), '-I', str(ROOT/'src/kernel/fs'),
+                        '-c', str(ROOT/'src/kernel/fs/blkreq.c'), '-o', str(blkreq)], check=True)
+        # Variants 21-23 replace the engine gates at link time to test the
+        # owner's decisions after a qualified minimum; others call them.
+        wraps = ['-Wl,--wrap='+n for n in ('savage3d_probe', 'savage3d_fullsize_probe',
+                                           'savage3d_color565_probe', 'savage3d_depth24_probe')]
         self.build_run('owner',['tests/host/savage3d_owner_test.c','src/kernel/lib/fmt.c',
             'src/kernel/drivers/video/attempt.c','src/kernel/drivers/video/render3d.c',
             'src/kernel/drivers/video/render3d_scalar.c','src/kernel/drivers/video/s3savage/savage3d.c',
-            'src/kernel/drivers/video/s3savage/savage3d_owner.c'], args=['0'])
-        for variant in range(1,15):
+            'src/kernel/drivers/video/s3savage/savage3d_owner.c',str(blkreq)], args=['0'],
+            flags=['-pthread',*wraps])
+        for variant in range(1,28):
             subprocess.run([str(OUT/'owner'),str(variant)],check=True)
+        # Initial service/resources, both full-size services, texture staging,
+        # and texture copies all fail once, with bounded heap fidelity active.
+        for failure in range(24):
+            subprocess.run([str(OUT/'owner'),'23',str(failure)],check=True)
 
     def test_fullsize(self):
         OUT.mkdir(parents=True, exist_ok=True)
@@ -147,8 +202,26 @@ class RenderTests(unittest.TestCase):
             'src/kernel/drivers/video/render3d_native.c',
             'src/kernel/drivers/video/s3savage/savage3d.c'],args=['fullsize'])
 
+    def test_large_batch(self):
+        self.run_shader_case("batch")
+
+    def test_optional_formats(self):
+        self.run_shader_case("formats")
+
     def test_review4(self):
         self.run_shader_case("review4")
+
+    def test_scanout(self):
+        self.run_shader_case("scanout")
+
+    def test_t23_formats(self):
+        self.run_shader_case("t23")
+
+    def test_cache_epoch(self):
+        self.run_shader_case("cache")
+
+    def test_background_qualification(self):
+        self.run_shader_case("background")
 
     def test_sampled_shaders(self):
         self.run_shader_case("shader")
@@ -171,7 +244,9 @@ class RenderTests(unittest.TestCase):
             descriptors=[p for p in (VIDEO/folder).glob('*.c') if 'render_family =' in p.read_text()]
             self.assertEqual(len(descriptors),1,folder)
             source=descriptors[0].read_text()
-            self.assertIn('R3D_UNQUALIFIED' if folder in ('s3savage','vmwaresvga') else 'R3D_NOT_IMPLEMENTED',source)
+            status = {'s3savage': 'R3D_UNQUALIFIED', 'nv2d': 'R3D_SOFTWARE_ONLY',
+                      'vmwaresvga': 'R3D_UNQUALIFIED'}
+            self.assertIn(status.get(folder, 'R3D_NOT_IMPLEMENTED'), source)
             self.assertRegex(source,r'render3d=&render_family|S3_RENDER_FAMILY \(&render_family\)')
             found.add(folder)
         self.assertEqual(found,expected)

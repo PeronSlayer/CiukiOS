@@ -1,17 +1,79 @@
-/* INT33 state and checked V86 far-call continuation. No host callback pointer.
- * Research: f3-acceptance.md. SPDX-License-Identifier: GPL-2.0-only */
+/* INT33 state and checked V86/DPMI far-call continuation. No host callback pointer.
+ * Research: docs/validation/dos-mouse.md. SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include "dosvm_internal.h"
 
 static void mouse_low(uint32_t *r, uint16_t n) { *r = (*r & 0xFFFF0000u) | n; }
 static int32_t mouse_clamp(int64_t n, int32_t lo, int32_t hi) { return n < lo ? lo : n > hi ? hi : (int32_t)n; }
+/* INT33 uses character cells only in text modes, never in VBE graphics. */
+static uint16_t mouse_coord(struct dosvm *v, int32_t n)
+{
+    cvga_geometry g;
+    return !v->vbe_mode && cvga_get_geometry(&v->vga, &g) && g.text ? (uint16_t)n & ~7u : (uint16_t)n;
+}
+/* Private guest save format. Only the settings/counters prefix is copied;
+ * active continuations and suspended frames always belong to the host. */
+#define MOUSE_SETTINGS_BYTES offsetof(struct dosvm_mouse, active)
+struct mouse_state {
+    uint32_t magic, version;
+    uint8_t settings[MOUSE_SETTINGS_BYTES];
+};
+static bool mouse_handler_live(struct dosvm *v, uint16_t cs, uint16_t ip)
+{
+    if (!dosvm_range(v, ((uint32_t)cs << 4) + ip, 1, false)) return false;
+    if (cs != 0xF000 || ip < DPMI_RM_CALLBACK || ip >= DPMI_RM_END) return true;
+    unsigned slot = (ip - DPMI_RM_CALLBACK) / 4;
+    unsigned c = slot / DPMI_CALLBACKS, k = slot % DPMI_CALLBACKS;
+    if ((ip - DPMI_RM_CALLBACK) % 4 || c >= v->dpmi.clients ||
+        !v->dpmi.client[c].used || !v->dpmi.client[c].cb[k].used) return false;
+    struct dpmi_callback *cb = &v->dpmi.client[c].cb[k];
+    uint32_t lin;
+    return dpmi_handler_live(v, (struct dpmi_vec){cb->off, cb->sel}) &&
+           dpmi_ptr(v, cb->struct_sel, cb->struct_off, 0x32, true, &lin);
+}
+void dosvm_mouse_callback_free(struct dosvm *v, uint16_t cs, unsigned ip, unsigned bytes)
+{
+    struct dosvm_mouse *m = &v->mouse;
+    if (m->callback_cs == cs && m->callback_ip >= ip && m->callback_ip - ip < bytes) {
+        m->mask = m->pending_mask = 0;
+        m->callback_cs = m->callback_ip = 0;
+        m->callback_wheel = 0;
+    }
+}
 void dosvm_mouse_init(struct dosvm *v)
 {
-    memset(&v->mouse, 0, sizeof(v->mouse));
+    /* A reset from inside a live callback must still be able to RETF/IRET.
+     * dpmi_unwind drops a terminated callback's host bookkeeping. */
+    memset(&v->mouse, 0, MOUSE_SETTINGS_BYTES);
     v->mouse.max_x = 639; v->mouse.max_y = 199;
-    v->mouse.x = 320; v->mouse.y = 96; v->mouse.visible = -1;
+    cvga_geometry g;
+    const struct dos_video_mode *mode = dos_video_mode(v->vbe_mode);
+    if (v->vbe_mode && mode) {
+        v->mouse.max_x = mode->width - 1; v->mouse.max_y = mode->height - 1;
+    } else if (cvga_get_geometry(&v->vga, &g) && g.width && g.height) {
+        unsigned width = g.text ? g.width / g.char_width * 8 : g.width;
+        unsigned height = g.text ? g.height / g.char_height * 8 : g.height;
+        /* Low-resolution graphics retain the Microsoft 640-column space. */
+        if (!g.text && width < 640) width = 640;
+        if (width && height && width <= 65536 && height <= 65536) {
+            v->mouse.max_x = width - 1; v->mouse.max_y = height - 1;
+        }
+    }
+    v->mouse.x = mouse_coord(v,(v->mouse.max_x + 1u) / 2);
+    v->mouse.y = mouse_coord(v,(v->mouse.max_y + 1u) / 2); v->mouse.visible = -1;
     v->mouse.ratio_x = 8; v->mouse.ratio_y = 16;
     v->mouse.screen_mask = 0xFFFF; v->mouse.cursor_mask = 0x7700;
+}
+/* DOS initializes 23h..3Fh to its empty IRET, overwriting our boot IVT.
+ * Install once after DOS/CONFIG/AUTOEXEC, preserving a guest mouse TSR. */
+int dosvm_mouse_install(struct dosvm *v)
+{
+    uint16_t entry[2]; uint8_t op;
+    if (dosvm_read(v,0x33*4,entry,sizeof(entry))) return -EFAULT;
+    if ((entry[0] || entry[1]) &&
+        (dosvm_read(v,((uint32_t)entry[1]<<4)+entry[0],&op,1) || op!=0xCF)) return 0;
+    entry[0]=0x330; entry[1]=0xF000;
+    return dosvm_write(v,0x33*4,entry,sizeof(entry));
 }
 void dosvm_mouse_event(struct dosvm *v, int32_t dx, int32_t dy, unsigned buttons)
 {
@@ -28,11 +90,34 @@ void dosvm_mouse_event(struct dosvm *v, int32_t dx, int32_t dy, unsigned buttons
         event |= 1u << (2 * i + (down ? 1 : 2));
         uint16_t *count = down ? m->pressed : m->released;
         if (count[i] < 0x7FFF) count[i]++;
-        (down ? m->press_x : m->release_x)[i] = m->x & ~7u;
-        (down ? m->press_y : m->release_y)[i] = m->y & ~7u;
+        (down ? m->press_x : m->release_x)[i] = mouse_coord(v,m->x);
+        (down ? m->press_y : m->release_y)[i] = mouse_coord(v,m->y);
     }
     m->buttons = buttons & 7;
     m->pending_mask |= event & m->mask;
+}
+/* The DOS window's input and presenter share the drawn source rectangle.
+ * Integrate absolute positions over the complete INT33 virtual range (War2
+ * uses twice its VBE width), while retaining relative raw motion for FPSes. */
+void dosvm_mouse_absolute(struct dosvm *v, int32_t x, int32_t y)
+{
+    struct dosvm_mouse *m=&v->mouse;
+    int32_t old_x=m->x, old_y=m->y;
+    unsigned width=DOSVM_VIDEO_WIDTH, height=DOSVM_VIDEO_HEIGHT, left=0, top=0;
+    cvga_geometry g;
+    if (!v->vbe_mode && cvga_get_geometry(&v->vga,&g) && g.width && g.height &&
+        g.width<=width && g.height<=height) {
+        unsigned scale=width/g.width;
+        if (height/g.height<scale) scale=height/g.height;
+        width=g.width*scale; height=g.height*scale;
+        left=(DOSVM_VIDEO_WIDTH-width)/2; top=(DOSVM_VIDEO_HEIGHT-height)/2;
+    }
+    int32_t at_x=mouse_clamp((int64_t)x-left,0,width-1);
+    int32_t at_y=mouse_clamp((int64_t)y-top,0,height-1);
+    m->x=m->min_x+(uint32_t)at_x*(m->max_x-m->min_x)/(width>1 ? width-1 : 1);
+    m->y=m->min_y+(uint32_t)at_y*(m->max_y-m->min_y)/(height>1 ? height-1 : 1);
+    m->fraction_x=m->fraction_y=0;
+    if (m->x!=old_x || m->y!=old_y) m->pending_mask|=m->mask&1;
 }
 /* CuteMouse Wheel API 1.0: polling and callback counters are independent. */
 void dosvm_mouse_wheel(struct dosvm *v, int32_t delta)
@@ -40,7 +125,7 @@ void dosvm_mouse_wheel(struct dosvm *v, int32_t delta)
     struct dosvm_mouse *m=&v->mouse;
     m->wheel=(int16_t)mouse_clamp((int64_t)m->wheel+delta,-32768,32767);
     m->callback_wheel=(int16_t)mouse_clamp((int64_t)m->callback_wheel+delta,-128,127);
-    m->wheel_x=m->x&~7u; m->wheel_y=m->y&~7u;
+    m->wheel_x=mouse_coord(v,m->x); m->wheel_y=mouse_coord(v,m->y);
     if (delta) m->pending_mask|=m->mask&0x80;
 }
 static uint16_t wheel_byte(int value)
@@ -51,17 +136,16 @@ int dosvm_mouse_bios(struct dosvm *v, struct v86_frame *f)
     unsigned fn = (uint16_t)f->tf.eax;
     switch (fn) {
     case 0: case 0x21:
-        /* A reset inside a callback must still return through its continuation. */
-        if (m->active) return -V86_EPERM;
         dosvm_mouse_init(v); mouse_low(&f->tf.eax, 0xFFFF); mouse_low(&f->tf.ebx, 3); return 0;
     case 1: if (m->visible < 0) m->visible++; return 0;
     case 2: if (m->visible > -32768) m->visible--; return 0;
     case 3:
         mouse_low(&f->tf.ebx, m->buttons|wheel_byte(m->wheel)); m->wheel=0;
-        mouse_low(&f->tf.ecx, m->x & ~7u); mouse_low(&f->tf.edx, m->y & ~7u); return 0;
+        mouse_low(&f->tf.ecx, mouse_coord(v,m->x)); mouse_low(&f->tf.edx, mouse_coord(v,m->y)); return 0;
     case 4:
-        m->x = mouse_clamp((uint16_t)f->tf.ecx & ~7u, m->min_x, m->max_x);
-        m->y = mouse_clamp((uint16_t)f->tf.edx & ~7u, m->min_y, m->max_y); return 0;
+        m->x = mouse_clamp(mouse_coord(v,(uint16_t)f->tf.ecx), m->min_x, m->max_x);
+        m->y = mouse_clamp(mouse_coord(v,(uint16_t)f->tf.edx), m->min_y, m->max_y);
+        m->fraction_x = m->fraction_y = 0; return 0;
     case 5: case 6: {
         unsigned button = (uint16_t)f->tf.ebx;
         mouse_low(&f->tf.eax, m->buttons|wheel_byte(m->wheel));
@@ -77,27 +161,58 @@ int dosvm_mouse_bios(struct dosvm *v, struct v86_frame *f)
     }
     case 7: case 8: {
         uint16_t lo = f->tf.ecx, hi = f->tf.edx;
-        lo &= ~7u; hi &= ~7u;
-        if (lo > hi) return -V86_EPERM;
+        lo = mouse_coord(v,lo); hi = mouse_coord(v,hi);
+        if (lo > hi) { uint16_t swap=lo; lo=hi; hi=swap; }
         if (fn == 7) { m->min_x = lo; m->max_x = hi; m->x = mouse_clamp(m->x, lo, hi); }
         else { m->min_y = lo; m->max_y = hi; m->y = mouse_clamp(m->y, lo, hi); }
         return 0;
     }
     case 0xA:
-        if ((uint16_t)f->tf.ebx > 1) return -V86_EPERM;
+        if ((uint16_t)f->tf.ebx > 1) return 0;
         m->text_type = f->tf.ebx; m->screen_mask = f->tf.ecx; m->cursor_mask = f->tf.edx; return 0;
     case 0xB:
         mouse_low(&f->tf.ecx, m->motion_x); mouse_low(&f->tf.edx, m->motion_y);
         m->motion_x = m->motion_y = 0; return 0;
     case 0xC: case 0x14: {
         uint16_t mask = f->tf.ecx, cs = f->es, ip = f->tf.edx;
-        if ((mask & ~0xFFu) || (mask && (f->es > 0xFFFF || !dosvm_range(v, ((uint32_t)cs << 4) + ip, 1, false)))) return -V86_EPERM;
+        if ((mask & ~0xFFu) || (mask && (f->es > 0xFFFF || !mouse_handler_live(v,cs,ip)))) return 0;
         if (fn == 0x14) { mouse_low(&f->tf.ecx, m->mask); mouse_low(&f->tf.edx, m->callback_ip); f->es = m->callback_cs; }
         m->mask = mask; m->callback_cs = cs; m->callback_ip = ip; m->pending_mask = 0; m->callback_wheel=0; return 0;
     }
     case 0xF:
-        if (!(uint16_t)f->tf.ecx || !(uint16_t)f->tf.edx) return -V86_EPERM;
+        if (!(uint16_t)f->tf.ecx || !(uint16_t)f->tf.edx) return 0;
         m->ratio_x = f->tf.ecx; m->ratio_y = f->tf.edx; m->fraction_x = m->fraction_y = 0; return 0;
+    case 0x15:
+        mouse_low(&f->tf.ebx,sizeof(struct mouse_state)); return 0;
+    case 0x16: case 0x17: {
+        struct mouse_state state;
+        memset(&state,0,sizeof(state)); /* also clear the private buffer's tail padding */
+        state.magic=0x53554F4D; state.version=1;
+        uint32_t at=(f->es<<4)+(uint16_t)f->tf.edx;
+        if (f->es>0xFFFF || !dosvm_range(v,at,sizeof(state),fn==0x16)) return 0;
+        if (fn==0x16) {
+            memcpy(state.settings,m,MOUSE_SETTINGS_BYTES);
+            (void)dosvm_write(v,at,&state,sizeof(state));
+        } else {
+            if (dosvm_read(v,at,&state,sizeof(state)) || state.magic!=0x53554F4D || state.version!=1) return 0;
+            struct dosvm_mouse saved = {0};
+            memcpy(&saved,state.settings,MOUSE_SETTINGS_BYTES);
+            if (saved.min_x>saved.max_x || saved.min_y>saved.max_y || !saved.ratio_x || !saved.ratio_y ||
+                saved.text_type>1 || saved.visible>0 || saved.visible< -32768 || saved.buttons>7 ||
+                (saved.mask & ~0xFFu)) return 0;
+            saved.x=mouse_clamp(saved.x,saved.min_x,saved.max_x);
+            saved.y=mouse_clamp(saved.y,saved.min_y,saved.max_y);
+            saved.motion_x=mouse_clamp(saved.motion_x,-32768,32767);
+            saved.motion_y=mouse_clamp(saved.motion_y,-32768,32767);
+            saved.fraction_x%=saved.ratio_x; saved.fraction_y%=saved.ratio_y;
+            saved.pending_mask=0; saved.callback_wheel=0;
+            if (saved.mask && !mouse_handler_live(v,saved.callback_cs,saved.callback_ip)) {
+                saved.mask=0; saved.callback_cs=saved.callback_ip=0;
+            }
+            memcpy(m,&saved,MOUSE_SETTINGS_BYTES);
+        }
+        return 0;
+    }
     case 0x11:
         mouse_low(&f->tf.eax,0x574D); mouse_low(&f->tf.ebx,0); mouse_low(&f->tf.ecx,1); return 0;
     default:
@@ -108,17 +223,32 @@ int dosvm_mouse_bios(struct dosvm *v, struct v86_frame *f)
 int dosvm_mouse_dispatch(struct dosvm *v, struct v86_frame *f)
 {
     struct dosvm_mouse *m = &v->mouse;
-    if (m->active || !m->pending_mask || !m->mask || !v->monitor.vif || v->monitor.shadow) return 0;
-    if (f->tf.user_ss > 0xFFFF || (uint16_t)f->tf.user_esp < 4 ||
-        !dosvm_range(v, ((uint32_t)m->callback_cs << 4) + m->callback_ip, 1, false)) return -EFAULT;
-    uint16_t sp = (uint16_t)f->tf.user_esp - 4;
-    uint16_t ret[2] = {DOSVM_MOUSE_RETURN,0xF000};
-    if (dosvm_write(v, (f->tf.user_ss << 4) + sp, ret, 4)) return -EFAULT;
-    m->saved = *f; m->saved_vif = v->monitor.vif; m->active = true;
-    mouse_low(&f->tf.user_esp, sp); f->tf.cs = m->callback_cs; f->tf.eip = m->callback_ip;
+    if (m->active || !m->pending_mask || !m->mask || !v->monitor.vif ||
+        v->monitor.shadow || v->dpmi.shadow) return 0;
+    if (!mouse_handler_live(v,m->callback_cs,m->callback_ip)) {
+        dosvm_mouse_callback_free(v,m->callback_cs,m->callback_ip,1); return 0;
+    }
+    if (v->frame_pm) {
+        /* DOS/4GW installs a real-mode thunk (possibly a DPMI 0303h
+         * callback). Use a host real stack while the application runs PM. */
+        if (v->dpmi.depth >= DPMI_DEPTH || v->dpmi.rstack_top < DPMI_RSTACK_LEVEL) return 0;
+        int e=dpmi_to_real_call(v,f,m->callback_cs,m->callback_ip,DOSVM_MOUSE_RETURN);
+        if (e) return e;
+        m->callback_pm=true; m->callback_depth=v->dpmi.depth;
+        m->callback_ss=f->tf.user_ss; m->callback_sp=(uint16_t)f->tf.user_esp+4;
+    } else {
+        if (f->tf.user_ss > 0xFFFF || (uint16_t)f->tf.user_esp < 4 ||
+            !dosvm_range(v, ((uint32_t)m->callback_cs << 4) + m->callback_ip, 1, false)) return -EFAULT;
+        uint16_t sp = (uint16_t)f->tf.user_esp - 4;
+        uint16_t ret[2] = {DOSVM_MOUSE_RETURN,0xF000};
+        if (dosvm_write(v, (f->tf.user_ss << 4) + sp, ret, 4)) return -EFAULT;
+        m->saved = *f; m->saved_vif = v->monitor.vif; m->callback_pm=false;
+        mouse_low(&f->tf.user_esp, sp); f->tf.cs = m->callback_cs; f->tf.eip = m->callback_ip;
+    }
+    m->active = true;
     mouse_low(&f->tf.eax, m->pending_mask); mouse_low(&f->tf.ebx, m->buttons|wheel_byte(m->callback_wheel));
     m->callback_wheel=0;
-    mouse_low(&f->tf.ecx, m->x & ~7u); mouse_low(&f->tf.edx, m->y & ~7u);
+    mouse_low(&f->tf.ecx, mouse_coord(v,m->x)); mouse_low(&f->tf.edx, mouse_coord(v,m->y));
     mouse_low(&f->tf.esi, m->motion_x); mouse_low(&f->tf.edi, m->motion_y);
     m->pending_mask = 0;
     v->monitor.vif = false; v->monitor.state = V86_RUNNING;
@@ -128,8 +258,15 @@ int dosvm_mouse_dispatch(struct dosvm *v, struct v86_frame *f)
 int dosvm_mouse_return(struct dosvm *v, struct v86_frame *f)
 {
     struct dosvm_mouse *m = &v->mouse;
-    if (!m->active || f->tf.cs != 0xF000 || f->tf.eip != DOSVM_MOUSE_RETURN + 2 ||
-        f->tf.user_ss != m->saved.tf.user_ss || f->tf.user_esp != m->saved.tf.user_esp) return -V86_EPERM;
+    if (!m->active || f->tf.cs != 0xF000 || f->tf.eip != DOSVM_MOUSE_RETURN + 2) return -V86_EPERM;
+    if (m->callback_pm) {
+        if (v->frame_pm || v->dpmi.depth != m->callback_depth ||
+            f->tf.user_ss != m->callback_ss || (uint16_t)f->tf.user_esp != m->callback_sp) return -V86_EPERM;
+        int e=dpmi_v86_return(v,f);
+        if (!e) { m->active=false; m->callback_pm=false; v->monitor.state=V86_RUNNING; }
+        return e;
+    }
+    if (f->tf.user_ss != m->saved.tf.user_ss || f->tf.user_esp != m->saved.tf.user_esp) return -V86_EPERM;
     *f = m->saved; m->active = false; v->monitor.vif = m->saved_vif;
     /* Wake from HLT: resume at the instruction following the HLT. */
     v->monitor.state = V86_RUNNING;

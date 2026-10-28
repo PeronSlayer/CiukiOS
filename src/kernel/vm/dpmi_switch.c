@@ -59,6 +59,9 @@ static void pop_record(struct dosvm *v)
 void dpmi_unwind(struct dosvm *v, unsigned depth)
 {
     while (v->dpmi.depth > depth) pop_record(v);
+    if (v->mouse.active && v->mouse.callback_pm && v->mouse.callback_depth > v->dpmi.depth) {
+        v->mouse.active = v->mouse.callback_pm = false;
+    }
 }
 
 /* Switch the working frame's mode. The VM's V86 A20 state is preserved

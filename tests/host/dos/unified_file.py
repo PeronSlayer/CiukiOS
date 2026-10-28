@@ -106,8 +106,8 @@ def passed(run, test):
 
 
 H57_TESTS = ("classify", "files", "dup", "find", "attr", "rename", "dirs", "space", "lock", "extopen", "time",
-             "fcb-close-metadata", "readonly-d", "critical-retry", "critical-fail", "nocrit", "critical-abort",
-             "after-abort")
+             "fcb-close-metadata", "readonly-d", "absolute-sectors", "critical-retry", "critical-fail", "nocrit",
+             "critical-abort", "after-abort")
 
 
 def production_vm(installed, identity):

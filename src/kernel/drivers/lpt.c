@@ -5,6 +5,7 @@
  * and SeaBIOS rel-1.16.3 src/serial.c. No donor code is incorporated.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/desktop.h>
 #include <ciuki/cpu.h>
 #include <ciuki/lpt.h>
 #include <ciuki/task.h>
@@ -219,7 +220,7 @@ void lpt_pci_discover(const struct pci_func *f)
 static void lpt_firmware(void *unused)
 {
     (void)unused;
-    struct ciuki_firmware_page *page=kzalloc(sizeof(*page));
+    struct ciuki_firmware_page *page=desktop_buffer_alloc(sizeof(*page),MM_IO_REQUEST);
     if (!page) { klog("[lpt] firmware discovery unavailable: allocation"); return; }
     for (unsigned wait=0;wait<30000;wait++) {
         *page=(struct ciuki_firmware_page){.version=CIUKI_FIRMWARE_VERSION,.size=sizeof(*page)};
@@ -253,7 +254,7 @@ static void lpt_firmware(void *unused)
         if (firmware_inventory_page(page)) break;
     } while (true);
     else klog("[lpt] firmware discovery still pending; no PnP activation");
-    kfree(page);
+    desktop_buffer_free(page,sizeof(*page),MM_IO_REQUEST);
 }
 void lpt_init(void)
 {

@@ -57,6 +57,8 @@
 #endif
 
 static struct storage system_storage;
+/* fx-emptydrive: floppy drives found before storage_setup; it reserves them. */
+static uint8_t floppy_reserve_pending;
 /* The canonical storage instance owns the hardware sweep. Keep its cursor
  * ledger private here, without changing the frozen storage/VFS interfaces. */
 static uint64_t system_sweep_writes;
@@ -200,6 +202,11 @@ int storage_setup(struct storage *s, size_t bytes)
     s->cache.refresh = refresh_cache; s->cache.refresh_ctx = s;
     vfs_init(&s->vfs);
     s->next_drive = 3; s->ready = true;
+    if (s == &system_storage) {
+        /* fx-emptydrive: floppy drives the controller found first own A:/B:. */
+        uint8_t pending = __atomic_exchange_n(&floppy_reserve_pending, 0, __ATOMIC_ACQ_REL);
+        for (unsigned d = 0; d < 2; d++) if (pending & (1u << d)) s->vfs.slot_type[d] = VFS_SLOT_FLOPPY;
+    }
     return 0;
 }
 static bool fat_partition(uint8_t type)
@@ -237,8 +244,8 @@ int storage_ntfs_mount(struct storage *s, unsigned slot)
     for (unsigned d=3;d<26;d++) if (s->vfs.ro_volumes[d]==&n->ro) { vfs_unlock(&s->vfs); return -FS_EBUSY; }
     if (n->ro.mounted) { vfs_unlock(&s->vfs); return -FS_EBUSY; }
     unsigned d = n->drive;
-    if (d < 3 || d >= 26 || vfs_drive_present(&s->vfs, d)) {
-        d = 3; while (d < 26 && vfs_drive_present(&s->vfs, d)) d++;
+    if (d < 3 || d >= 26 || vfs_letter_taken(&s->vfs, d)) {
+        d = 3; while (d < 26 && vfs_letter_taken(&s->vfs, d)) d++;
         if (d >= 26) { n->error=-FS_ENOSPC; vfs_unlock(&s->vfs); return n->error; }
     }
     vfs_reserve_locked(&s->vfs,vfs_drive_mask(d)); vfs_tag_locked(&s->vfs,"mount"); vfs_site_locked(&s->vfs,"mount");
@@ -459,7 +466,8 @@ static int add_removable(struct storage *s, struct blkdev *dev,
         unsigned d=fixed;
         if (fixed==UINT32_MAX) {
             if (s->next_drive<4) s->next_drive=4;
-            while (s->next_drive<26 && vfs_drive_present(&s->vfs,s->next_drive)) s->next_drive++;
+            /* fx-emptydrive: an empty CD-ROM drive keeps its letter. */
+            while (s->next_drive<26 && vfs_letter_taken(&s->vfs,s->next_drive)) s->next_drive++;
             d=s->next_drive++;
         } else if (vfs_drive_present(&s->vfs,d) || s->volumes[d].fat.preparing || s->volumes[d].formatting) {
             vfs_unlock(&s->vfs); return -FS_EBUSY;
@@ -962,6 +970,26 @@ int storage_floppy_image(struct storage *s,struct ciuki_floppy_image *r,void *bu
 {
     return buffer ? storage_floppy_copy(s,r,floppy_memory_copy,buffer,write) : -FS_EINVAL;
 }
+void storage_reserve_slot_locked(struct storage *s, unsigned d, unsigned type)
+{
+    if (!s || !s->ready || d>=26 || !type || s->vfs.slot_type[d]==type) return;
+    /* No media event here: the optical service's first record (same pass)
+     * wakes /dev/media observers; floppy types follow the controller. */
+    s->vfs.slot_type[d]=(uint8_t)type;
+}
+void storage_reserve_floppy(unsigned d)
+{
+    struct storage *s=&system_storage;
+    if (d>=2) return;
+    /* Before storage_setup the bit waits for it; recheck so a setup that
+     * consumed the mask meanwhile cannot lose this drive. */
+    __atomic_fetch_or(&floppy_reserve_pending,(uint8_t)(1u<<d),__ATOMIC_ACQ_REL);
+    if (!__atomic_load_n(&s->ready,__ATOMIC_ACQUIRE)) return;
+    uint8_t pending=__atomic_exchange_n(&floppy_reserve_pending,0,__ATOMIC_ACQ_REL);
+    vfs_lock(&s->vfs,0);
+    for (unsigned k=0;k<2;k++) if (pending & (1u<<k)) storage_reserve_slot_locked(s,k,VFS_SLOT_FLOPPY);
+    vfs_unlock(&s->vfs);
+}
 int storage_add_ro_locked(struct storage *s, unsigned slot, struct blkdev *dev, uint64_t session)
 {
     if (!s || !s->ready || s->stopped || slot>=STORAGE_DISKS || !dev) return -FS_EINVAL;
@@ -969,8 +997,14 @@ int storage_add_ro_locked(struct storage *s, unsigned slot, struct blkdev *dev, 
     struct fs_ro_volume *ro=&s->optical[slot];
     for (unsigned d=3;d<26;d++) if (s->vfs.ro_volumes[d]==ro) return -FS_EBUSY;
     if (ro->mounted) return -FS_EBUSY;
-    unsigned d=s->next_drive;
-    while (d<26 && vfs_drive_present(&s->vfs,d)) d++;
+    /* fx-emptydrive: a disc mounts at the letter its drive owns; without one
+     * (Setup's boot CD, before the first service pass) or if that letter is
+     * held by another volume, the next free letter that no drive owns. */
+    unsigned d=s->optical_bindings[slot].drive;
+    if (d<3 || d>=26 || vfs_drive_present(&s->vfs,d)) {
+        d=s->next_drive;
+        while (d<26 && vfs_letter_taken(&s->vfs,d)) d++;
+    }
     if (d>=26) return -FS_ENOSPC;
     vfs_reserve_locked(&s->vfs,vfs_drive_mask(d)); vfs_tag_locked(&s->vfs,"mount"); vfs_site_locked(&s->vfs,"mount");
     if (s->stopped || vfs_drive_present(&s->vfs,d) || ro->mounted) return -FS_EBUSY;
@@ -1416,19 +1450,36 @@ int storage_writeback(struct storage *s, uint32_t now)
     return e;
 }
 static int shutdown_volumes(struct storage *s);
+/* sec-wire: the kernel's own background reader of C: (the DOS base image
+ * check, vm/dosvm_image.c) holds a VFS handle; it is stopped before the
+ * preflight like the pagefile and resumed when the shutdown is refused.
+ * Weak: host storage harnesses without the DOS VM keep the plain path. */
+extern int dosvm_image_shutdown(uint32_t wait_ms) __attribute__((weak));
+extern void dosvm_image_shutdown_resume(void) __attribute__((weak));
+extern uint32_t storage_shutdown_wait_ms;
 int storage_shutdown(struct storage *s)
 {
     if (!s || !s->ready) return -FS_EINVAL;
+    bool readers=s==&system_storage && dosvm_image_shutdown;
+    if (readers) {
+        int e=dosvm_image_shutdown(storage_shutdown_wait_ms);
+        if (e) {
+            klog("[storage] shutdown busy holder=dos-image-check wait_ms=%u result=%d",storage_shutdown_wait_ms,-FS_EBUSY);
+            if (dosvm_image_shutdown_resume) dosvm_image_shutdown_resume();
+            return -FS_EBUSY;
+        }
+    }
     /* The pagefile handle is the volume dependency: page-out and growth
      * stop and in-flight page I/O retires before detach may proceed. Live
      * slots stay readable through their runs; a refused shutdown resumes. */
     bool paged=pagefile_on(s,0) && !system_pagefile.detached;
     if (paged) {
         int e=pager_shutdown ? pager_shutdown() : pagefile_detach ? pagefile_detach(&system_pagefile) : 0;
-        if (e) return e;
+        if (e) { if (readers && dosvm_image_shutdown_resume) dosvm_image_shutdown_resume(); return e; }
     }
     int e=shutdown_volumes(s);
     if (e && paged) { if (pager_resume) pager_resume(); else if (pagefile_reattach) pagefile_reattach(&system_pagefile); }
+    if (e && readers && dosvm_image_shutdown_resume) dosvm_image_shutdown_resume();
     return e;
 }
 /* T23 trial c42f556e: the shutdown preflight waits for the namespace, for

@@ -135,6 +135,39 @@ int w32_kernel32_runtime(void) {
   g = GlobalAlloc(2 | 0x1000 | 0x4000, 8);
   CHECK(g && !GlobalFree(g));
   CHECK(!GlobalAlloc(0x8000, 8) && GetLastError() == 87);
+  /* fx-is5boot: the Win16 compatibility family (the InstallShield 5 engine
+   * imports GlobalCompact): compaction reports the process heap's largest
+   * free block (NT/ReactOS); Fix/Wire lock, Unfix/UnWire unlock. */
+  extern DWORD W32API GlobalCompact(DWORD);
+  extern DWORD W32API LocalCompact(DWORD);
+  extern DWORD W32API LocalShrink(HANDLE, DWORD);
+  extern DWORD W32API GlobalFlags(HANDLE);
+  extern void W32API GlobalFix(HANDLE);
+  extern void W32API GlobalUnfix(HANDLE);
+  extern void *W32API GlobalWire(HANDLE);
+  extern BOOL W32API GlobalUnWire(HANDLE);
+  extern DWORD W32API HeapCompact(HANDLE, DWORD);
+  extern HANDLE W32API GetProcessHeap(void);
+  CHECK(GlobalCompact(0) == HeapCompact(GetProcessHeap(), 0) &&
+        LocalCompact(4096) == GlobalCompact(4096) && LocalShrink(0, 0) == GlobalCompact(0));
+  g = GlobalAlloc(2, 16);
+  CHECK(g);
+  GlobalFix(g);
+  CHECK((GlobalFlags(g) & 0xff) == 1);
+  b = GlobalWire(g);
+  CHECK(b && (GlobalFlags(g) & 0xff) == 2);
+  CHECK(GlobalUnWire(g) && (GlobalFlags(g) & 0xff) == 1);
+  GlobalUnfix(g);
+  CHECK(!(GlobalFlags(g) & 0xff) && !GlobalFree(g));
+  extern int W32API lstrlenW(const WCHAR *);
+  extern WCHAR *W32API lstrcpyW(WCHAR *, const WCHAR *);
+  extern WCHAR *W32API lstrcatW(WCHAR *, const WCHAR *);
+  extern WCHAR *W32API lstrcpynW(WCHAR *, const WCHAR *, int);
+  WCHAR wide_text[8], wide_ab[] = {'a', 'b', 0};
+  CHECK(lstrlenW(wide_ab) == 2 && !lstrlenW(0));
+  CHECK(lstrcpyW(wide_text, wide_ab) == wide_text && lstrcatW(wide_text, wide_ab) == wide_text &&
+        lstrlenW(wide_text) == 4 && wide_text[2] == 'a');
+  CHECK(lstrcpynW(wide_text, wide_ab, 2) == wide_text && wide_text[0] == 'a' && !wide_text[1]);
   HANDLE event = CreateEventA(0, 0, 0, 0);
   CHECK(event);
   CHECK(WaitForSingleObject(event, 0) == 258);

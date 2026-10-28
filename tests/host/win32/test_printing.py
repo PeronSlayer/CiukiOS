@@ -15,7 +15,7 @@ class PrintingTests(unittest.TestCase):
         env=dict(os.environ,TMPDIR=str(out))
         lib=freetype.build(out/'freetype',flags=['-O2','-fPIC'],env=env)
         sources=[ROOT/'sdk/win32/gdi32'/n for n in gdi32.SOURCES if n not in ('compiler.c','compiler.S')]
-        sources += [ROOT/'sdk/win32/gdi32/native_font.c',ROOT/'sdk/win32/services/bytes.c',ROOT/'sdk/libfont/font.c',ROOT/'apps/libprint/print.c',ROOT/'tests/host/win32/gdi32/printing_test.c']
+        sources += [ROOT/'sdk/win32/gdi32/native_font.c',ROOT/'sdk/win32/services/bytes.c',ROOT/'sdk/libfont/font.c',ROOT/'apps/libprint/print.c',ROOT/'tests/host/win32/gdi32/printing_test.c',ROOT/'tests/host/win32/no_environment.c']
         flags=['-std=c17','-D_GNU_SOURCE','-DW32_HOST_MODEL','-O1','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-sanitize-recover=all','-I'+str(ROOT/'sdk/win32/include'),'-idirafter',str(ROOT/'sdk/sysroot-overlay/include'),'-I'+str(ROOT/'src/kernel/include'),*freetype.includes()]
         program=out/'printing-test'
         subprocess.run(['clang',*flags,*map(str,sources),str(lib),'-pthread','-o',str(program)],check=True,env=env)

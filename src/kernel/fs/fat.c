@@ -758,17 +758,17 @@ static __attribute__((noinline)) int next_entry(struct fat_volume *v, uint32_t d
     while (*cursor<limit) {
         if (!total) *settled=*cursor;
         uint8_t b[32]; uint32_t i=(*cursor)++; int e=walk_read(v,w,dir,i,b); if (e) return e;
-        if (!b[0]) { if (total) v->lfn_orphans++; return -FS_ENOENT; }
-        if (b[0]==0xe5) { if (total) v->lfn_orphans++; expected=total=0; continue; }
+        if (!b[0]) { if (total) { v->lfn_orphans++; if(v->strict_names) return -FS_EILSEQ; } return -FS_ENOENT; }
+        if (b[0]==0xe5) { if (total) { v->lfn_orphans++; if(v->strict_names) return -FS_EILSEQ; } expected=total=0; continue; }
         if (b[11]==15) {
             unsigned ord=b[0]&31;
-            if (b[0]&64) { if (total) v->lfn_orphans++; total=expected=ord; sum=b[13]; start=i; memset(name,0xff,sizeof(name)); }
-            if (!ord || ord>20 || ord!=expected || b[0]&(0x80|0x20) || b[12] || fs_rd16(b+26) || b[13]!=sum) { v->lfn_invalid++; expected=total=0; continue; }
+            if (b[0]&64) { if (total) { v->lfn_orphans++; if(v->strict_names) return -FS_EILSEQ; } total=expected=ord; sum=b[13]; start=i; memset(name,0xff,sizeof(name)); }
+            if (!ord || ord>20 || ord!=expected || b[0]&(0x80|0x20) || b[12] || fs_rd16(b+26) || b[13]!=sum) { v->lfn_invalid++; if(v->strict_names) return -FS_EILSEQ; expected=total=0; continue; }
             for (unsigned k=0;k<13;k++) name[(ord-1)*13+k]=fs_rd16(b+lfn_offsets[k]);
             expected--; continue;
         }
         if (b[11]&FAT_ATTR_VOLUME) {
-            if (total) v->lfn_orphans++; expected=total=0;
+            if (total) { v->lfn_orphans++; if(v->strict_names) return -FS_EILSEQ; } expected=total=0;
             if (!labels) continue;
             memset(entry,0,sizeof(*entry)); entry->parent=dir; entry->index=i; entry->lfn_index=i;
             uint16_t label[11]; unsigned length=11;
@@ -785,12 +785,14 @@ static __attribute__((noinline)) int next_entry(struct fat_volume *v, uint32_t d
             bool ok=n>0 && n<=255;
             if (n<total*13) { if (name[n]!=0) ok=false; for (unsigned k=n+1;k<total*13;k++) if (name[k]!=0xffff) ok=false; }
             if (ok && !path_from_ucs2(name,n,entry->name,sizeof(entry->name)) && !path_validate_name(entry->name,name,&n)) { entry->lfn_index=start; entry->lfn_count=(uint8_t)total; }
-            else { v->lfn_invalid++; memcpy(entry->name,entry->alias,strlen(entry->alias)+1); }
+            else { v->lfn_invalid++; if(v->strict_names) return -FS_EILSEQ; memcpy(entry->name,entry->alias,strlen(entry->alias)+1); }
         } else if (total) {
             if (expected) v->lfn_orphans++; else v->lfn_bad_checksum++;
+            if(v->strict_names) return -FS_EILSEQ;
         }
         decode_entry(v,b,entry); return 0;
     }
+    if(v->strict_names && total) return -FS_EILSEQ;
     if (!dir && v->type!=32) return -FS_ENOENT;
     /* A directory may fill the entire available chain without a 00 slot.
      * Reaching the walk bound is not proof of a cycle: verify its last link.
@@ -828,7 +830,7 @@ static int update(struct fat_volume *v, const struct fat_entry *e) {
     return barrier(v);
 }
 static int hints(struct fat_volume *v) {
-    if (v->type!=32) return 0;
+    if (v->type!=32 || !v->fsinfo) return 0;
     int stage_error=publication_stage(v,FAT_P_FSINFO); if (stage_error) return stage_error;
     uint8_t b[512]; int e=readsec(v,v->fsinfo,b); if (e) return write_error(v,e);
     /* fx-17b: while the count is unknown FSInfo keeps saying so
@@ -1939,12 +1941,17 @@ int fat_scan(struct fat_volume *v) {
     return e;
 }
 static int reject(struct fat_volume *v, const char *why) { v->diagnostic=why; v->mounted=false; return -FS_EINVAL; }
+static void mount_notice(struct fat_volume *v, const char *field, unsigned value) {
+    if (klog) klog("[storage] fat mount field=%s value=%u action=ignore start=%llu",
+                   field,value,(unsigned long long)v->start);
+}
 static int mount_volume(struct fat_volume *v, struct block_cache *cache, struct blkdev *dev, uint64_t start, uint64_t sectors, bool wr, bool preparing, struct fat_prepare_cache *private) {
     memset(v,0,sizeof(*v)); v->cache=cache; v->dev=dev; v->start=start; v->sectors=sectors;
     v->preparing=preparing; v->prepare_cache=private;
     if (!dev || dev->sector_size!=512 || !sectors || start>=dev->capacity || sectors>dev->capacity-start) return reject(v,"device/partition bounds");
     uint8_t b[512], other[512]; int e=readsec(v,0,b); if (e) return e;
-    if (fs_rd16(b+510)!=0xaa55 || fs_rd16(b+11)!=512 || (b[0]!=0xe9 && !(b[0]==0xeb && b[2]==0x90))) return reject(v,"BPB signature/sector size/jump");
+    if (fs_rd16(b+510)!=0xaa55 || fs_rd16(b+11)!=512) return reject(v,"BPB signature/sector size");
+    if (b[0]!=0xe9 && !(b[0]==0xeb && b[2]==0x90)) mount_notice(v,"boot_jump",b[0]);
     v->spc=b[13]; v->reserved=fs_rd16(b+14); v->fats=b[16]; v->root_entries=fs_rd16(b+17); v->media=b[21];
     uint32_t total=fs_rd16(b+19); if (!total) total=fs_rd32(b+32);
     uint32_t fat16=fs_rd16(b+22); v->fat_sectors=fat16 ? fat16 : fs_rd32(b+36);
@@ -1973,17 +1980,33 @@ static int mount_volume(struct fat_volume *v, struct block_cache *cache, struct 
     if (v->type==32) {
         v->root=fs_rd32(b+44); v->fsinfo=fs_rd16(b+48); v->backup=fs_rd16(b+50);
         uint16_t flags=fs_rd16(b+40);
-        if (!valid(v,v->root) || fs_rd16(b+42) || !v->fsinfo || v->fsinfo>=v->reserved || (v->backup!=0 && v->backup!=0xffff && (v->backup>=v->reserved || v->backup==v->fsinfo)) || (flags&0xff70)) return reject(v,"FAT32 root/version/reserved geometry");
+        if (!valid(v,v->root)) return reject(v,"FAT32 root geometry");
+        if (fs_rd16(b+42)) mount_notice(v,"version",fs_rd16(b+42));
+        if (flags&0xff70) mount_notice(v,"reserved_flags",flags);
+        /* Zero/absent/out-of-range FSInfo is not a filesystem extent. Use
+         * zero internally to disable every hint write, including rebases. */
+        if (!v->fsinfo || v->fsinfo>=v->reserved || v->fsinfo==v->backup) {
+            mount_notice(v,"fsinfo_location",v->fsinfo); v->fsinfo=0;
+        }
+        if (v->backup!=0 && v->backup!=0xffff && v->backup>=v->reserved) {
+            mount_notice(v,"backup_location",v->backup); v->backup=0;
+        }
         if (flags&0x80) {
             v->active_fat=(uint8_t)(flags&15); if (v->active_fat>=v->fats) return reject(v,"active FAT index");
             v->ro_reasons|=FAT_RO_ACTIVE_ONLY;
-        } else if (flags&15) return reject(v,"mirrored FAT active bits");
-        if ((e=readsec(v,v->fsinfo,other))) return e;
-        if (fs_rd32(other)!=0x41615252 || fs_rd32(other+484)!=0x61417272 || fs_rd32(other+508)!=0xaa550000) return reject(v,"FSInfo signatures");
-        uint32_t free=fs_rd32(other+488), next=fs_rd32(other+492);
-        v->free_clusters=free<=v->clusters ? free : 0;
-        v->free_unknown=free>v->clusters; /* 0xFFFFFFFF: unknown (FAT spec FSI_Free_Count) */
-        v->next_free=valid(v,next) ? next : 2;
+        } else if (flags&15) mount_notice(v,"mirrored_active_bits",flags&15);
+        v->free_unknown=true; v->next_free=2;
+        if (v->fsinfo) {
+            if ((e=readsec(v,v->fsinfo,other))) return e;
+            if (fs_rd32(other)!=0x41615252 || fs_rd32(other+484)!=0x61417272 || fs_rd32(other+508)!=0xaa550000) {
+                mount_notice(v,"fsinfo_signatures",v->fsinfo); v->fsinfo=0;
+            } else {
+                uint32_t free=fs_rd32(other+488), next=fs_rd32(other+492);
+                v->free_clusters=free<=v->clusters ? free : 0;
+                v->free_unknown=free>v->clusters; /* FSI_Free_Count: unknown */
+                v->next_free=valid(v,next) ? next : 2;
+            }
+        }
         if (v->backup && v->backup!=0xffff) {
             if ((e=readsec(v,v->backup,other))) return e;
             if (memcmp(b+11,other+11,79) || fs_rd16(other+510)!=0xaa55) v->ro_reasons|=FAT_RO_CORRUPT;
@@ -1994,7 +2017,9 @@ static int mount_volume(struct fat_volume *v, struct block_cache *cache, struct 
         uint32_t z,o;
         unsigned f=preparing && !private ? copy : v->active_fat;
         if ((e=get_copy(v,f,0,&z)) || (e=get_copy(v,f,1,&o))) return e;
-        if (z!=((mask(v)&~255u)|v->media) || (v->type==12 ? !eoc(v,o) : (o|(cleanbit(v)|errorbit(v)))!=mask(v))) return reject(v,"FAT reserved entries/media/flags");
+        if (z!=((mask(v)&~255u)|v->media) || (v->type==12 ? !eoc(v,o) : (o|(cleanbit(v)|errorbit(v)))!=mask(v))) {
+            mount_notice(v,"reserved_entries",f); v->ro_reasons|=FAT_RO_CORRUPT;
+        }
         if (copy && (z!=zero || o!=one)) v->ro_reasons|=FAT_RO_COPIES;
         zero=z;one=o;
         if (cleanbit(v) && !(one&cleanbit(v))) v->ro_reasons|=FAT_RO_DIRTY;
@@ -2304,7 +2329,7 @@ static void transaction_merge(struct fat_volume *v) {
             img[k]=(uint8_t)((img[k]&ours)|(cur[k]&(uint8_t)~ours));
         }
         memcpy(base,cur,512);
-        if (v->type==32 && t->sectors[i]==v->fsinfo) { fs_wr32(img+488,t->source->free_unknown ? 0xffffffffu : v->free_clusters); fs_wr32(img+492,v->next_free); }
+        if (v->type==32 && v->fsinfo && t->sectors[i]==v->fsinfo) { fs_wr32(img+488,t->source->free_unknown ? 0xffffffffu : v->free_clusters); fs_wr32(img+492,v->next_free); }
     }
 }
 static int transaction_durable(struct fat_volume *v) {

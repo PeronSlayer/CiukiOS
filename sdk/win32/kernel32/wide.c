@@ -460,6 +460,39 @@ static int compare(const WCHAR *a, const WCHAR *b, int fold) {
 }
 int W32API lstrcmpW(const WCHAR *a, const WCHAR *b) { return compare(a, b, 0); }
 int W32API lstrcmpiW(const WCHAR *a, const WCHAR *b) { return compare(a, b, 1); }
+/* The UTF-16 lstr family Windows 98 KERNEL32 implements (the InstallShield 5
+ * engine imports lstrlenW): NULL has length 0, as lstrlenA. */
+int W32API lstrlenW(const WCHAR *s) {
+  int n = 0;
+  if (s)
+    while (s[n])
+      n++;
+  return n;
+}
+WCHAR *W32API lstrcpyW(WCHAR *d, const WCHAR *s) {
+  if (!d || !s)
+    return 0;
+  int n = lstrlenW(s);
+  for (int i = 0; i <= n; i++)
+    d[i] = s[i];
+  return d;
+}
+WCHAR *W32API lstrcatW(WCHAR *d, const WCHAR *s) {
+  if (!d || !s)
+    return 0;
+  lstrcpyW(d + lstrlenW(d), s);
+  return d;
+}
+/* At most n - 1 units and always a terminator, as lstrcpynA. */
+WCHAR *W32API lstrcpynW(WCHAR *d, const WCHAR *s, int n) {
+  if (!d || !s || n <= 0)
+    return n > 0 && d ? (*d = 0, d) : d;
+  int i = 0;
+  for (; i < n - 1 && s[i]; i++)
+    d[i] = s[i];
+  d[i] = 0;
+  return d;
+}
 /* Readable committed pages (VirtualQuery), never touching a page that is
  * not; NULL with a non-zero bound is bad, a zero bound never is. */
 static BOOL bad_string(const void *p, DWORD max, DWORD unit) {

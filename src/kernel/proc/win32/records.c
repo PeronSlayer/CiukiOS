@@ -81,7 +81,10 @@ int w32_record_validate(const void *record, uint32_t bytes, bool win32)
     if (bytes < sizeof(struct ciuki_w32_header)) return -EINVAL;
     const struct ciuki_w32_header *h = record;
     if (h->version != 1 || h->size != bytes || h->reserved) return -EINVAL;
-    if(!win32 && h->operation!=W32_SERVICE && h->operation!=W32_DISPLAY && h->operation!=W32_REPORT)return -EPERM;
+    /* f7-14: the copied render3d wire is process-keyed and personality
+     * neutral; native GL programs use it like the Win32 personality. */
+    if(!win32 && h->operation!=W32_SERVICE && h->operation!=W32_DISPLAY && h->operation!=W32_REPORT &&
+       h->operation!=W32_SYSTEM && h->operation!=W32_RENDER3D)return -EPERM;
     uint32_t size = w32_record_size(h->operation);
     if (!size) return -ENOSYS;
     if (size != bytes) return -EINVAL;
@@ -139,6 +142,10 @@ int w32_record_validate(const void *record, uint32_t bytes, bool win32)
     }
     case W32_SYSTEM: {
         const struct ciuki_w32_system_args *a=record;
+        if (a->action==W32_S_LAUNCH_FEEDBACK || a->action==W32_S_LAUNCH_IDLE)
+            return a->handle||a->low||a->high||a->extra||a->result||a->error||
+                (a->action==W32_S_LAUNCH_IDLE && (!win32 || a->value))?-EINVAL:0;
+        if (!win32) return -EPERM;
         if (a->action==W32_S_READ_MEMORY || a->action==W32_S_WRITE_MEMORY)
             return a->result||a->error?-EINVAL:0;
         return a->result||a->error||a->low||a->high||(a->extra&&(a->action!=W32_S_TERMINATE_THREAD||a->handle))||a->action<1||a->action>W32_S_WRITE_MEMORY?-EINVAL:0;
@@ -158,7 +165,7 @@ int w32_record_validate(const void *record, uint32_t bytes, bool win32)
     case W32_WAIT: {const struct ciuki_w32_wait_args *a=record;return (a->reserved&~W32_WAIT_NEW_INPUT)||a->result||a->error||a->count>64||a->all>1||a->alertable>1||a->wake_mask&~W32_QS_ALL?-EINVAL:0;}
     case W32_APC: {const struct ciuki_w32_apc_args *a=record;return a->result||a->error||a->action<1||a->action>3?-EINVAL:0;}
     case W32_CONTEXT: {const struct ciuki_w32_context_args *a=record;return a->result||a->error||a->action<1||a->action>4?-EINVAL:0;}
-    case W32_MESSAGE: {const struct ciuki_w32_message_args *a=record;return a->result||a->error||a->action<1||a->action>W32_MSG_START||a->bits&~W32_QS_ALL?-EINVAL:0;}
+    case W32_MESSAGE: {const struct ciuki_w32_message_args *a=record;return a->result||a->error||a->action<1||a->action>W32_MSG_INPUT_IDLE||a->bits&~W32_QS_ALL?-EINVAL:0;}
     case W32_SECTION: {const struct ciuki_w32_section_args *a=record;return a->result||a->error||a->flags&~1u?-EINVAL:0;}
     case W32_VIEW: {const struct ciuki_w32_view_args *a=record;return a->reserved||a->result||a->error||a->action<1||a->action>3?-EINVAL:0;}
     case W32_SERVICE: {const struct ciuki_w32_service_args *a=record;return a->result||a->error||a->action<1||a->action>6?-EINVAL:0;}

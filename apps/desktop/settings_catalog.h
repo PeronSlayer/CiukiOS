@@ -2,6 +2,7 @@
  * One settings hierarchy for the panel, Start and tray shortcuts. */
 #ifndef CIUKI_SETTINGS_CATALOG_H
 #define CIUKI_SETTINGS_CATALOG_H
+#define DESK_SETTINGS_PASSWORD_SET 11u /* sec-user-04: values zero; the owner set his password (LOGON notice) */
 #define DESK_SETTINGS_SAVER_PREVIEW 10u /* kind 0..2, full-screen until input */
 #define DESK_SETTINGS_PROGRAMS 9u /* values zero; program and launcher inventory changed */
 #define DESK_SETTINGS_DISPLAY_PREVIEW 8u /* mode id; Control Panel owns persistence */
@@ -36,8 +37,9 @@ static const struct cp_applet cp_applets[] = {
     {CP_AUTOPLAY, CP_CAT_DEVICES, "storage", "Storage and removable devices", "drive-removable-media"},
     {CP_ADDHW, CP_CAT_DEVICES, "addhw", "Add New Hardware", "preferences-desktop-peripherals"},
     {CP_UNINSTALL, CP_CAT_SYSTEM, "programs", "Add/Remove Programs", "system-installer"},
-    {CP_USERS, CP_CAT_SYSTEM, "users", "Users", "system-users"},
-    {CP_PASSWORDS, CP_CAT_SYSTEM, "passwords", "Passwords", "system-lock-screen"},
+    /* sec-user-04: Users and Passwords merged into User Accounts (contract
+     * 7.1); "passwords" stays a launch alias (app.c page_names). */
+    {CP_USERS, CP_CAT_SYSTEM, "users", "User Accounts", "system-users"},
     {CP_SYSTEM, CP_CAT_SYSTEM, "system", "System", "ciuki"}
 };
 #define CP_APPLETS (sizeof(cp_applets) / sizeof(cp_applets[0]))

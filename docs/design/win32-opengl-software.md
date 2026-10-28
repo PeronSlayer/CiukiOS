@@ -213,6 +213,11 @@ MMX/SSE. Host C float code uses the host ABI and is not a PIII timing proxy.
 | 7 / 8 | XRGB32 / RGB565 (24 / 16 RGB bits) | Double | D16 / S8 |
 | 9 / 10 | XRGB32 / RGB565 (24 / 16 RGB bits) | Double | D24 / S8 |
 
+The f7-12 [qualified default format contract](savage-default-formats.md)
+extends this selection with acceleration-class priority and independently
+qualified RGB565/D16 and XRGB/D24S8 attachments. Unqualified devices retain
+the behavior below.
+
 ChoosePixelFormat prefers sufficient precision then the smallest excess, in
 color/depth/stencil order, with lower-index ties and the original XRGB/D16
 zero-request defaults. It respects buffering and requested drawing flags;

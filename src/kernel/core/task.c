@@ -40,7 +40,18 @@ static struct task *rq_head[SCHED_LEVELS], *rq_tail[SCHED_LEVELS];
 extern uint32_t dosvm_task_quantum(const struct task *, uint32_t) __attribute__((weak));
 extern const struct task *dosvm_task_focus(void) __attribute__((weak));
 extern const struct task *dosvm_task_irq(void) __attribute__((weak));
+/* fx-doswin3 round 3: the focused VM's own presenter, woken for a frame and
+ * not yet run (dosvm.c dosvm_task_present), or 0. */
+extern const struct task *dosvm_task_present(void) __attribute__((weak));
 static const struct task *focus_task;
+/* The presenter dispatched ahead of the focused VM's preference in this
+ * schedule() (rq_pop), and the most ticks it may run before the VM gets the
+ * CPU back. Every other task picked while the focused VM is ready keeps the
+ * 2-tick cap. 4 ticks bound the VM's virtual IRQ latency below DMX's 7.1 ms
+ * timer period (DOOM's sound driver re-enters its IRQ0 service when edges
+ * arrive while it is off the CPU, f3-12). */
+static const struct task *present_turn;
+#define PRESENT_SLICE 4u
 static struct task *ui_focus;
 static struct task *input_proxy;
 static uint32_t focus_ticks, ordinary_ticks;
@@ -751,6 +762,7 @@ static struct task *rq_take(unsigned p)
 static struct task *rq_pop(void)
 {
     const struct task *focus = dosvm_task_irq ? dosvm_task_irq() : 0;
+    bool irq_focus = focus != 0;
     if (!focus) focus = dosvm_task_focus ? dosvm_task_focus() : 0;
     focus_task = focus;
     /* Starvation dispatch and native input/inheritance take precedence over
@@ -782,6 +794,15 @@ static struct task *rq_pop(void)
         /* A foreground native input boost or donated lock owner beats a VM. */
         for (int p = SCHED_BOOST_CAP - 1; p > (int)focus->effective_priority; p--)
             if (rq_head[p] && (p > (int)SCHED_FOREGROUND || rq_head[p]->input_priority || rq_head[p]->inherited_priority)) return rq_take(p);
+        /* fx-doswin3 round 3: a presenter woken for the VM's frame runs
+         * first, for at most PRESENT_SLICE ticks (schedule), never ahead of
+         * a pending virtual timer/SB IRQ (dosvm_task_irq above). */
+        const struct task *presenter = !irq_focus && dosvm_task_present ? dosvm_task_present() : 0;
+        if (presenter && presenter != focus && presenter->state == T_READY) {
+            struct task *t = (struct task *)presenter;
+            ktimer_cancel(&t->ready_timer); rq_remove(t); present_turn = t;
+            return t;
+        }
         struct task *t = (struct task *)focus; rq_remove(t); return t;
     }
     /* Forwarded input shares the VM's bounded preference. Repeated key
@@ -1003,7 +1024,7 @@ void schedule(void)
             rq_push(prev);
         }
     }
-    share_picked = false;
+    share_picked = false; present_turn = 0;
     struct task *next = rq_pop();
     if (!next)
         next = idle_task;
@@ -1015,7 +1036,7 @@ void schedule(void)
     if (next == focus_task && focus_ticks < FOCUS_BUDGET && slice_left > FOCUS_BUDGET - focus_ticks)
         slice_left = FOCUS_BUDGET - focus_ticks;
     if (focus_task && focus_task->state == T_READY && next != focus_task && next->prio != P_DEVICE && slice_left > 2)
-        slice_left = 2;
+        slice_left = next == present_turn ? (slice_left > PRESENT_SLICE ? PRESENT_SLICE : slice_left) : 2;
     if (share_picked) { /* a share turn lasts at most its credit (>= one tick) */
         uint64_t tick = share_scale * 1000u, credit = share_credit > 0 ? (uint64_t)share_credit : 0;
         uint32_t ticks = 1; /* credit <= SHARE_BURST_US: at most 3 ticks, no division */

@@ -24,6 +24,12 @@ class PresenterTests(unittest.TestCase):
         result=subprocess.run([program],capture_output=True,text=True,env=env)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         print(result.stdout,end='')
+    def test_mode_transactions(self):
+        program,env=self.build('tests/host/display_present_modes_test.c',[
+            '-fsanitize=address,undefined',str(ROOT/'src/kernel/core/display_present.c')])
+        result=subprocess.run([program],capture_output=True,text=True,env=env)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        print(result.stdout,end='')
     def test_cost(self):
         program,env=self.build('tests/host/present_surface_test.c',['-O2','-mno-sse','-mno-sse2','-mno-mmx','-fno-vectorize','-fno-slp-vectorize'])
         result=subprocess.run([program,'--bench'],check=True,capture_output=True,text=True,env=env)

@@ -49,7 +49,13 @@ void dfv2_ifs_init(struct dfv2_ifs *s,struct dos_unified *u,const struct dos_fil
 }
 int dfv2_ifs_map(struct dfv2_ifs *s,unsigned guest,struct vfs_table *t,unsigned native,bool readonly) {
     if (s->active || guest>=26 || native>=26 || !t || !t->vfs || !vfs_drive_present(t->vfs,native)) return IFS_BAD_DRIVE;
-    s->view[guest]=(struct dfv2_ifs_view){t,(uint8_t)native,readonly,t->vfs->generation[native]}; return 0;
+    s->view[guest]=(struct dfv2_ifs_view){t,(uint8_t)native,readonly,t->vfs->generation[native],0}; return 0;
+}
+int dfv2_ifs_map_host(struct dfv2_ifs *s,unsigned guest,struct vfs_table *t,unsigned native,const struct dos_host_gate *gate) {
+    if (!gate || !gate->check || !gate->retain || !gate->child || !gate->recheck || !gate->release) return -FS_EACCES;
+    int e=dfv2_ifs_map(s,guest,t,native,true);       /* host views are never writable here */
+    if (!e) s->view[guest].gate=gate;
+    return e;
 }
 unsigned dfv2_ifs_held(const struct dfv2_ifs *s) {
     unsigned n=0;
@@ -126,9 +132,17 @@ static int file_of(struct dfv2_ifs *s,const struct dfv2_call *k,struct sft *f,st
     if (r->generation!=r->table->vfs->generation[s->view[g].drive]) return -FS_EAGAIN;
     use(s,r->table,u16(f->b+0x31)); *x=r; *index=(unsigned)i; return 0;
 }
+/* sec-k05: the gate of the view an owned record belongs to (NULL: C:). */
+static const struct dos_host_gate *gate_of(struct dfv2_ifs *s,unsigned g) { return g<26 ? s->view[g].gate : 0; }
+static int gate_denied(struct dfv2_ifs *s,int e) { if (e==-FS_EACCES) s->stats.denied++; return e; }
+static void file_unbind(struct dfv2_ifs *s,struct dfv2_ifs_file *r) {
+    const struct dos_host_gate *gate=gate_of(s,r->guest);
+    if (r->object && gate) gate->release(gate,r->table,r->object);
+    r->object=0;
+}
 static void release_file(struct dfv2_ifs *s,struct dfv2_ifs_file *r) {
     if (!r->used) return;
-    (void)vfs_close(r->table,r->handle); r->used=false; s->stats.closes++;
+    (void)vfs_close(r->table,r->handle); file_unbind(s,r); r->used=false; s->stats.closes++;
 }
 
 /* ---- operations ---------------------------------------------------- */
@@ -158,12 +172,20 @@ static int do_open(struct dfv2_ifs *s,struct dfv2_call *k) {
     if (r->used) { release_file(s,r); s->stats.reclaimed++; }   /* the guest reused a slot we still held */
     static const enum vfs_share shares[]={VFS_DENY_ALL,VFS_DENY_ALL,VFS_DENY_WRITE,VFS_DENY_READ,VFS_DENY_NONE};
     struct vfs_table *t=use(s,s->view[g].table,u16(f.b+0x31)); unsigned status=0;
+    /* sec-k05: a host view authorizes the actual object (including EXEC,
+     * overlay and FCB opens, which all arrive here) before any open. */
+    const struct dos_host_gate *gate=gate_of(s,g);
+    if (gate && (e=gate->check(gate,t,native,POLICY_READ))) return e==-FS_ENOENT ? path_error(t,native,e) : gate_denied(s,e);
     int h=vfs_open_claim(t,native,access|flags,shares[(mode>>4)&7],(uint8_t)attr,(mode>>4)&7,&status);
     if (h<0) return path_error(t,native,h);
+    void *object=0;
+    if (gate && (e=gate->retain(gate,t,native,POLICY_READ,h,&object))) { (void)vfs_close(t,h); return gate_denied(s,e==-FS_ENOENT ? -FS_EACCES : e); }
     struct fat_entry ent; uint64_t position;
-    if ((e=vfs_handle_stat(t,h,&ent,&position))) { (void)vfs_close(t,h); return e; }
+    if ((e=vfs_handle_stat(t,h,&ent,&position))) {
+        (void)vfs_close(t,h); if (object) gate->release(gate,t,object); return e;
+    }
     *r=(struct dfv2_ifs_file){.used=true,.guest=(uint8_t)g,.handle=h,.nonce=++s->nonce,
-        .generation=t->vfs->generation[s->view[g].drive],.table=t};
+        .generation=t->vfs->generation[s->view[g].drive],.table=t,.object=object};
     f.b[4]=ent.attr; w16(f.b+5,SFT_FSHARED|SFT_FCLEAN|g);
     w32(f.b+7,0); w16(f.b+0x0b,0); w16(f.b+0x0d,ent.times.write_time); w16(f.b+0x0f,ent.times.write_date);
     w32(f.b+0x11,ent.size); w32(f.b+0x15,0); w16(f.b+0x19,0); w32(f.b+0x1b,r->nonce); f.b[0x1f]=0;
@@ -173,24 +195,33 @@ static int do_open(struct dfv2_ifs *s,struct dfv2_call *k) {
     if (sub==0x2e) k->cx=(uint16_t)status;
     s->stats.opens++; return 0;
 }
-static int apply_times(struct dfv2_ifs_file *r,const struct sft *f) {
-    return (u16(f->b+5)&SFT_FDATE) ? vfs_handle_times(r->table,r->handle,u16(f->b+0x0f),u16(f->b+0x0d)) : 0;
+/* sec-k05: a date set on a handle (5701h) is a metadata change; a read-only
+ * host view (D:/E:) never applies it to the host file (DOS error 5). */
+static int apply_times(struct dfv2_ifs *s,struct dfv2_ifs_file *r,const struct sft *f) {
+    if (!(u16(f->b+5)&SFT_FDATE)) return 0;
+    if (s->view[r->guest].readonly) return -FS_EACCES;
+    return vfs_handle_times(r->table,r->handle,u16(f->b+0x0f),u16(f->b+0x0d));
 }
 static int do_close(struct dfv2_ifs *s,struct dfv2_call *k,bool commit_only) {
     struct sft f; struct dfv2_ifs_file *r=0; unsigned i; int e0=file_of(s,k,&f,&r,&i); if (e0) return e0;
-    int e=apply_times(r,&f);
+    int e=apply_times(s,r,&f);
     if (commit_only) return e ? e : vfs_commit(r->table,r->handle);
     unsigned count=u16(f.b);
     if (count>1) { w16(f.b,count-1); return sft_write(s,i,&f) ? e : IFS_BAD_POINTER; }
     /* Last reference (RBIL 2F/1106h: the redirector decrements the count;
      * K2043 dosfns.c:700 does not). Close before publishing count 0. */
-    int c=vfs_close(r->table,r->handle); r->used=false; s->stats.closes++;
+    int c=vfs_close(r->table,r->handle); file_unbind(s,r); r->used=false; s->stats.closes++;
     w16(f.b,0); if (!sft_write(s,i,&f)) return IFS_BAD_POINTER;
     return e ? e : c;
 }
 static int do_rw(struct dfv2_ifs *s,struct dfv2_call *k,bool writing) {
     struct sft f; struct dfv2_ifs_file *r=0; unsigned i; int e0=file_of(s,k,&f,&r,&i); if (e0) return e0;
     if (writing && s->view[r->guest].readonly) return -FS_EACCES;
+    /* sec-k05: every transfer rechecks the retained subject and the object's
+     * current label (logoff, revocation, policy change deny here). */
+    const struct dos_host_gate *gate=gate_of(s,r->guest);
+    if (gate) { int denied=r->object ? gate->recheck(gate,r->table,r->object,writing ? POLICY_WRITE : POLICY_READ) : -FS_EACCES;
+        if (denied) return gate_denied(s,denied); }
     uint8_t d[4]; if (!grd(s,sda(s,DFV2_SDA_DTA),d,4)) return IFS_BAD_POINTER;
     struct dos_file_far data=at(u16(d+2),u16(d)); unsigned want=k->cx; uint32_t pos=u32(f.b+0x15);
     if (want && (want>65536u-data.off || !s->ops.check(s->ops.arg,lin(data),want,!writing))) return IFS_BAD_POINTER;
@@ -259,6 +290,8 @@ static int do_attr(struct dfv2_ifs *s,struct dfv2_call *k,bool set) {
         if (k->arg&~0x27u) return -FS_EACCES;
         e=vfs_attrib(t,native,(uint8_t)k->arg); return path_error(t,native,e);
     }
+    const struct dos_host_gate *gate=gate_of(s,g);
+    if (gate && (e=gate->check(gate,t,native,POLICY_READ))) return e==-FS_ENOENT ? path_error(t,native,e) : gate_denied(s,e);
     struct fat_entry ent; e=vfs_stat(t,native,&ent); if (e) return path_error(t,native,e);
     k->ax=ent.attr; k->bx=(uint16_t)(ent.size>>16); k->di=(uint16_t)ent.size;
     k->cx=ent.times.write_time; k->dx=ent.times.write_date; return 0;
@@ -276,6 +309,9 @@ static int do_dir(struct dfv2_ifs *s,struct dfv2_call *k) {
     struct vfs_table *t=use(s,s->view[g].table,0);
     if (sub==0x05) {
         if (!native[3]) return 0;
+        const struct dos_host_gate *gate=gate_of(s,g);
+        if (gate && (e=gate->check(gate,t,native,POLICY_READ)))
+            return e==-FS_ENOENT || e==-FS_ENOTDIR ? IFS_BAD_PARENT : gate_denied(s,e);
         struct fat_entry ent; e=vfs_stat(t,native,&ent);
         if (e) return e==-FS_ENOENT || e==-FS_ENOTDIR ? IFS_BAD_PARENT : e;
         return (ent.attr&0x10) ? 0 : IFS_BAD_PARENT;
@@ -328,12 +364,33 @@ static int put_entry(struct dfv2_ifs *s,struct dos_file_far dta,unsigned index,c
     w16(b+47,(uint16_t)ent->first); w32(b+49,ent->size);
     return gwr(s,dta,b,sizeof(b)) ? 0 : IFS_BAD_POINTER;
 }
+/* sec-k05: a gated view lists only entries the retained subject may READ
+ * (credential-filtered D:/E:, contract 8.4): stable 8.3 aliases from the
+ * real resolver, never a hidden/private name. ENOENT ends the search. */
+static int find_filtered(struct dfv2_ifs *s,const struct dos_host_gate *gate,struct vfs_table *t,
+                         void *directory,struct vfs_find *find,struct fat_entry *ent,int e) {
+    for (unsigned guard=0;gate && !e;guard++) {
+        if (guard>=65536u) return -FS_ELOOP;
+        int visible=directory ? gate->child(gate,t,directory,short_name(ent),POLICY_READ) : -FS_EACCES;
+        if (!visible) return 0;
+        if (visible!=-FS_EACCES && visible!=-FS_ENOENT && visible!=-FS_ENOTDIR && visible!=-FS_EILSEQ &&
+            visible!=-FS_EINVAL && visible!=-FS_ENAMETOOLONG) return visible;
+        s->stats.hidden++;
+        e=vfs_find_next(t,find,ent);
+    }
+    return e;
+}
+static void search_drop(struct dfv2_ifs *s,struct dfv2_ifs_search *c) {
+    const struct dos_host_gate *gate=gate_of(s,c->guest);
+    if (c->used && c->directory && gate) gate->release(gate,c->table,c->directory);
+    c->directory=0; c->used=false;
+}
 static int do_find(struct dfv2_ifs *s,bool first) {
     uint8_t d[4]; if (!grd(s,sda(s,DFV2_SDA_DTA),d,4)) return IFS_BAD_POINTER;
     struct dos_file_far dta=at(u16(d+2),u16(d)); struct fat_entry ent; int e;
     for (unsigned i=0;i<DFV2_IFS_SEARCHES;i++) {
         struct dfv2_ifs_search *c=&s->search[i];
-        if (c->used && c->find.generation!=c->table->vfs->generation[c->find.drive]) c->used=false;
+        if (c->used && c->find.generation!=c->table->vfs->generation[c->find.drive]) search_drop(s,c);
     }
     uint8_t psp_b[2]; if (!grd(s,sda(s,DFV2_SDA_PSP),psp_b,2)) return IFS_BAD_POINTER;
     uint16_t psp=u16(psp_b);
@@ -341,8 +398,25 @@ static int do_find(struct dfv2_ifs *s,bool first) {
         char native[FS_PATH_BYTES]; unsigned g; if ((e=path(s,DFV2_SDA_FN1,native,&g))) return e;
         uint8_t attr; if (!grd(s,sda(s,DFV2_SDA_ATTR),&attr,1)) return IFS_BAD_POINTER;
         struct vfs_table *t=use(s,s->view[g].table,psp); struct vfs_find find;
+        const struct dos_host_gate *gate=gate_of(s,g);
+        void *directory=0;
+        if (gate) {
+            /* Enumeration needs READ on the real directory (each ancestor
+             * traversed); a private directory is not listed at all.
+             * "X:\\DIR\\pattern" -> "X:\\DIR"; the root is "X:\\". */
+            char *dir=(char *)s->io; size_t cut=(size_t)(leaf(native)-native);
+            if (cut<3) return IFS_BAD_POINTER;
+            if (cut>3) cut--;
+            memcpy(dir,native,cut); dir[cut]=0;
+            if ((e=gate->retain(gate,t,dir,POLICY_READ,-1,&directory)))
+                return e==-FS_ENOENT || e==-FS_ENOTDIR ? IFS_BAD_PARENT : gate_denied(s,e);
+        }
         e=vfs_find_first(t,native,(uint8_t)((attr&0x3f)|VFS_FIND_DOS),&find,&ent);
-        if (e) { if (e!=-FS_ENOENT) return e; e=path_error(t,native,e); return e==-FS_ENOENT ? IFS_DOS(18) : e; }
+        if (gate) e=find_filtered(s,gate,t,directory,&find,&ent,e);
+        if (e) {
+            if (directory) gate->release(gate,t,directory);
+            if (e!=-FS_ENOENT) return e; e=path_error(t,native,e); return e==-FS_ENOENT ? IFS_DOS(18) : e;
+        }
         struct dfv2_ifs_search *c=0; unsigned index=0;
         for (unsigned i=0;i<DFV2_IFS_SEARCHES;i++) {
             struct dfv2_ifs_search *o=&s->search[i];
@@ -351,9 +425,14 @@ static int do_find(struct dfv2_ifs *s,bool first) {
             if (!o->used && !c) { c=o; index=i; }
         }
         if (!c) { c=&s->search[0]; index=0;     /* bounded: retire the least recently used */
-            for (unsigned i=1;i<DFV2_IFS_SEARCHES;i++) if (s->search[i].stamp<c->stamp) { c=&s->search[i]; index=i; } c->used=false; }
-        if (!c->used) *c=(struct dfv2_ifs_search){.used=true,.guest=(uint8_t)g,.psp=psp,.nonce=++s->nonce*0x2545f491u,.table=t,.find=find};
+            for (unsigned i=1;i<DFV2_IFS_SEARCHES;i++) if (s->search[i].stamp<c->stamp) { c=&s->search[i]; index=i; } search_drop(s,c); }
+        if (!c->used) {
+            *c=(struct dfv2_ifs_search){.used=true,.guest=(uint8_t)g,.psp=psp,.nonce=++s->nonce*0x2545f491u,.table=t,.find=find,
+                .directory=directory};
+            directory=0;
+        }
         else if (find.cursor>c->find.cursor) c->find.cursor=find.cursor;
+        if (directory) gate->release(gate,t,directory);   /* an equal live search already holds one */
         c->stamp=++s->stamp; s->stats.finds++;
         return put_entry(s,dta,index,c,find.cursor,&ent);
     }
@@ -366,13 +445,15 @@ static int do_find(struct dfv2_ifs *s,bool first) {
     if (!(s->owned&(1u<<c->guest))) return IFS_CHAIN;
     struct vfs_find find=c->find; find.cursor=cursor;
     use(s,c->table,psp); e=vfs_find_next(c->table,&find,&ent);
-    if (e) { if (e!=-FS_ENOENT) c->used=false; return e==-FS_ENOENT ? IFS_DOS(18) : e; }
+    const struct dos_host_gate *gate=gate_of(s,c->guest);
+    if (gate) e=find_filtered(s,gate,c->table,c->directory,&find,&ent,e);
+    if (e) { if (e!=-FS_ENOENT) search_drop(s,c); return e==-FS_ENOENT ? IFS_DOS(18) : e; }
     if (find.cursor>c->find.cursor) c->find.cursor=find.cursor;
     c->stamp=++s->stamp; s->stats.finds++;
     return put_entry(s,dta,index,c,find.cursor,&ent);
 }
 static void process_end(struct dfv2_ifs *s,uint16_t psp) {
-    for (unsigned i=0;i<DFV2_IFS_SEARCHES;i++) if (s->search[i].used && s->search[i].psp==psp) s->search[i].used=false;
+    for (unsigned i=0;i<DFV2_IFS_SEARCHES;i++) if (s->search[i].used && s->search[i].psp==psp) search_drop(s,&s->search[i]);
 }
 static void flush_all(struct dfv2_ifs *s) {
     for (unsigned g=0;g<26;g++) if (s->owned&(1u<<g) && !s->view[g].readonly && !view_live(s,g)) {
@@ -411,7 +492,7 @@ static void dos_error(struct dfv2_call *k,int e,bool writing,unsigned *cause) {
     k->ax=(uint16_t)c; k->flags|=1;
 }
 static bool critical_error(int e,unsigned sub) {
-    return e==-VFS_ECRITICAL_SHARE || e==-FS_EIO || e==-FS_EUCLEAN || e==-FS_EQUARANTINED || e==-FS_EAGAIN ||
+    return e==-VFS_ECRITICAL_SHARE || e==-FS_EIO || e==-FS_EUCLEAN || e==-FS_EQUARANTINED || e==-FS_EAGAIN || e==-FS_ENXIO ||
            e==-FS_EROFS || (e==-VFS_ELOCK && (sub==0x08 || sub==0x09));
 }
 static bool same_request(const struct dfv2_call *a,const struct dfv2_call *b) {
@@ -553,6 +634,7 @@ static void destroy(void *arg) {
     struct dfv2_ifs *s=arg;
     s->active=false; s->retry.armed=false;
     for (unsigned i=0;i<DFV2_SFT_MAX;i++) release_file(s,&s->file[i]);
+    for (unsigned i=0;i<DFV2_IFS_SEARCHES;i++) search_drop(s,&s->search[i]);
     memset(s->search,0,sizeof(s->search));
     if (s->mounted && s->host.unmount) s->host.unmount(s->host.arg,s);
     s->mounted=false; s->owned=0; memset(s->view,0,sizeof(s->view));

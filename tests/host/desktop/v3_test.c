@@ -106,18 +106,21 @@ static int peer(int fd, unsigned pid)
     struct ciuki_message m; desk_v3_message(&m,DESK_HELLO,0,0,0,0); m.sender_pid=pid;
     assert(!desk_v3_receive(&d,root,&m)); return root;
 }
-static int create(int root, int fd, unsigned id, unsigned generation, unsigned style, unsigned owner)
+static int create_size(int root, int fd, unsigned id, unsigned generation, unsigned style, unsigned owner,
+                       unsigned width, unsigned height)
 {
-    fake_surface(fd,200,100,0x7498b0);
+    fake_surface(fd,width,height,0x7498b0);
     struct ciuki_message m; msg(&m,DESK_CREATE_WINDOW,40,id,generation); m.sender_pid=d.clients[root].pid;
     m.fd_count=1; m.fds[0]=fd;
     desk_put32(m.data+16,style); desk_put32(m.data+20,owner); desk_put32(m.data+24,owner ? 1 : 0);
     desk_put32(m.data+28,80+id*20); desk_put32(m.data+32,100+id*24);
-    desk_put32(m.data+36,200); desk_put32(m.data+40,100); desk_put32(m.data+44,1); desk_put32(m.data+48,4); memcpy(m.data+52,"Test",4);
+    desk_put32(m.data+36,width); desk_put32(m.data+40,height); desk_put32(m.data+44,1); desk_put32(m.data+48,4); memcpy(m.data+52,"Test",4);
     assert(!desk_v3_receive(&d,root,&m));
     for (int i=0;i<DESK_CLIENTS;i++) if (d.clients[i].v3_peer==(unsigned)root+1 && d.clients[i].v3_id==id) return i;
     assert(0); return -1;
 }
+static int create(int root, int fd, unsigned id, unsigned generation, unsigned style, unsigned owner)
+{ return create_size(root,fd,id,generation,style,owner,200,100); }
 static void setup(void)
 {
     fake_reset(); desk_init(&d,&fake_ops,800,600); d.portrait=portrait;
@@ -153,7 +156,7 @@ static void request_lease(int root,unsigned id)
 #ifdef DESKTOP_ADAPTER_FIXTURE
 int ciuki_win32_presenter_lease(struct desktop *,uint32_t,int,int,uint32_t,uint32_t,uint32_t,uint32_t);
 void desk_w32_presenter_poll(struct desktop *);
-void presenter_adapter_init(void),presenter_adapter_failure(int),presenter_adapter_timeout(void);
+void presenter_adapter_init(void),presenter_adapter_failure(int),presenter_adapter_timeout(void),presenter_adapter_frame(void);
 int presenter_desktop_info(int,struct ciuki_framebuffer_info *),presenter_adapter_suspended(void);
 static int real_lease(struct desktop *p,uint32_t pid,int acquire,uint32_t w,uint32_t h,uint32_t bpp,uint32_t gen)
 {
@@ -210,7 +213,34 @@ static void production_lease_replay(void)
         assert(!desk_redraw(&d));d.now_ns+=1000000;desk_heartbeat(&d,d.now_ns);
         assert(!d.v3_restoring && d.v3_restore_reported && !d.v3_lease_state);cleanup();
     }
-    setup();presenter_adapter_init();int root=peer(10,42);create(root,20,1,1,0,0);d.v3_lease=real_lease;
+    int root;
+    for (unsigned path=0;path<7;path++) {
+        setup();presenter_adapter_init();root=peer(10,42);
+        int first=create(root,20,1,1,DESK_V3_TOOL,0);d.v3_lease=real_lease;
+        d.ops.present=ordered_present;
+        desk_focus(&d,first);
+        struct ciuki_message m;msg(&m,DESK_V3_LEASE,16,1,1);
+        desk_put32(m.data+16,path==6 ? 1 : DESK_V3_LEASE_CARRIER);desk_put32(m.data+20,320);
+        desk_put32(m.data+24,200);desk_put32(m.data+28,8);
+        assert(!desk_v3_receive(&d,root,&m));
+        uint32_t held=d.v3_lease_tuple.token;
+        if (path>=2 && path<6) {
+            int drawable=create_size(root,21,2,1,DESK_V3_POPUP,0,320,200);desk_focus(&d,drawable);
+            assert(d.v3_lease_state==1 && d.v3_lease_tuple.token==held && presenter_adapter_suspended());
+            presenter_adapter_frame();presenter_adapter_timeout();
+            assert(d.v3_lease_state==1 && presenter_adapter_suspended());
+        }
+        /* Modal prompts/error consoles before or after the first frame, a
+         * second mode-sized popup, and a foreign process all restore composition. */
+        unsigned style=path==0 || path==2 ? DESK_V3_MODAL : path==4 || path==6 ? DESK_V3_POPUP : 0;
+        unsigned owner=style==DESK_V3_MODAL ? (path>=2 ? 2 : 1) : 0;
+        int target_root=path==5 ? peer(11,84) : root;
+        int other=create_size(target_root,22,3,1,style,owner,320,200);desk_focus(&d,other);
+        assert(!d.v3_lease_state && !presenter_adapter_suspended());
+        assert(!desk_redraw(&d));cleanup();
+    }
+    puts("PASS fx-q3hang review 1 focus: one CDS carrier handoff; same-process modal/error/popup restores composition after first frame");
+    setup();presenter_adapter_init();root=peer(10,42);create(root,20,1,1,0,0);d.v3_lease=real_lease;
     struct ciuki_message failure;msg(&failure,DESK_V3_LEASE,16,1,1);
     desk_put32(failure.data+16,1);desk_put32(failure.data+20,320);desk_put32(failure.data+24,200);desk_put32(failure.data+28,8);
     presenter_adapter_failure(1);assert(desk_v3_receive(&d,root,&failure)==-EIO);assert(!d.v3_lease_state && !presenter_adapter_suspended());
@@ -252,6 +282,48 @@ static void ownership(void)
     /* f2-91: a full ring no longer fails the channel inside the silence deadline. */
     assert(!d.clients[root].v3_failed && d.clients[root].v3_over_count>=1); fake_block=0; flush(); assert(d.clients[a].window); cleanup();
     puts("PASS v3 multiwindow: ownership, generations, topmost, modal owner death, transport loss and backpressure");
+}
+/* fx-acc1 (acceptance run c634b7c6, Quake III installer): Installer VISE's
+ * pages are DialogBox prompts, created hidden (CREATE, then a hiding PLACE),
+ * titled in WM_INITDIALOG and shown afterwards. The hiding PLACE gave the
+ * focus back to the disabled owner, and the page, shown without an
+ * activation request, stayed inactive with its owner's caption active over
+ * it ("focus ... window=4 titled=0", then "focus ... window=3"). A modal
+ * prompt shown while its owner holds the focus takes it, as Windows
+ * activates a dialog box over its disabled owner; other windows do not. */
+static void place_window(int root, unsigned id, int index, unsigned show, unsigned style)
+{
+    struct ciuki_message m; msg(&m,DESK_V3_PLACE,28,id,d.clients[index].v3_generation); m.sender_pid=42;
+    desk_put32(m.data+16,d.clients[index].frame.x); desk_put32(m.data+20,d.clients[index].frame.y);
+    desk_put32(m.data+24,200); desk_put32(m.data+28,100); desk_put32(m.data+32,1);
+    desk_put32(m.data+36,show); desk_put32(m.data+40,style);
+    assert(!desk_v3_receive(&d,root,&m));
+}
+static void modal_page_shown(void)
+{
+    setup(); int root=peer(10,42), owner=create(root,20,1,1,0,0); assert(d.focus==owner);
+    int page=create(root,21,2,1,DESK_V3_MODAL,1); assert(d.focus==page);
+    place_window(root,2,page,2,DESK_V3_MODAL); assert(d.clients[page].minimized==2 && d.focus==owner);
+    struct ciuki_message m; msg(&m,DESK_SET_TITLE,11,2,1); desk_put32(m.data+16,7); memcpy(m.data+20,"Welcome",7);
+    assert(!desk_v3_receive(&d,root,&m)); assert(!strcmp(d.clients[page].title,"Welcome") && d.focus==owner);
+    place_window(root,2,page,0,DESK_V3_MODAL); assert(!d.clients[page].minimized && d.focus==page);
+    assert(desk_modal_target(&d,owner)==page && !strcmp(desk_window_state(&d,page),"shown"));
+    /* The next page: the owner is activated while the old page closes, the
+     * new one is created, hidden, titled and shown: it holds the focus. */
+    msg(&m,DESK_CLOSE,0,2,1); assert(!desk_v3_receive(&d,root,&m)); flush(); assert(d.focus==owner);
+    int next=create(root,22,2,2,DESK_V3_MODAL,1); assert(d.focus==next);
+    place_window(root,2,next,2,DESK_V3_MODAL); assert(d.focus==owner);
+    place_window(root,2,next,0,DESK_V3_MODAL); assert(d.focus==next && !strcmp(desk_window_state(&d,next),"shown"));
+    /* An owned window that is not a modal prompt, shown again, leaves the focus alone. */
+    int tool=create(root,23,3,1,DESK_V3_TOOL,0); place_window(root,3,tool,2,DESK_V3_TOOL);
+    desk_focus(&d,next); place_window(root,3,tool,0,DESK_V3_TOOL); assert(d.focus==next);
+    /* A modal prompt of another window shown again leaves this focus alone. */
+    int other=create(root,24,4,1,0,0); int prompt=create(root,25,5,1,DESK_V3_MODAL,4);
+    place_window(root,5,prompt,2,DESK_V3_MODAL); desk_focus(&d,next);
+    place_window(root,5,prompt,0,DESK_V3_MODAL); assert(d.focus==next && other>=0);
+    assert(!strcmp(desk_window_state(&d,prompt),"shown"));
+    flush(); cleanup();
+    puts("PASS v3 modal prompt shown after a hiding PLACE takes the focus from its owner (Installer VISE pages); other windows keep it");
 }
 /* q3exec2/q3exec3: a per-window message that arrives after its window's
  * DESK_CLOSE or names window 0 (a PING answer included), or a frame update
@@ -733,6 +805,12 @@ static void frames(const char *folder)
             assert(d.v3_dialog_kind==3);char name[32];snprintf(name,sizeof(name),"refuse-%u",reason);frame(folder,themes[t],name);
             key(0x1c,1);key(0x1c,0);assert(!d.v3_dialog_kind);flush();cleanup();
         }
+        /* fx-autorun: the 16-bit Windows refusal names the missing support. */
+        setup();{struct ciuki_w32_fault fault={.kind=W32_REPORT_REFUSE,.code=W32_REFUSE_WIN16,.pid=42};
+            strcpy(fault.exe,"SETUP.EXE");desk_w32_fault_dialog(&d,&fault);
+            assert(d.v3_dialog_kind==3&&!strcmp(d.sh.message_title,"Error Starting Program"));
+            assert(strstr(d.sh.message_text,"SETUP.EXE is a 16-bit Windows program. It needs 16-bit Windows support"));
+            key(0x1c,1);key(0x1c,0);assert(!d.v3_dialog_kind);flush();cleanup();}
         /* G13 (ER-1): a native program's fault, Windows 9x wording, Details and the crash file text. */
         setup();struct ciuki_w32_fault nf={.kind=W32_REPORT_NATIVE_FAULT,.pid=42,.tid=43,.code=14u|6u<<8,.eip=0x401234,.offset=0x10,.valid=3};
         strcpy(nf.exe,"crasher");nf.registers[7]=0xbffffff0;nf.stack[0]=0xdeadbeef;nf.stack[1]=0x01020304;
@@ -761,6 +839,6 @@ int main(int argc,char **argv)
 #ifdef DESKTOP_ADAPTER_FIXTURE
     production_lease_replay();
 #endif
-    protocol(); ownership(); stale_updates(); window_order(); context_help(); input_and_lease(); resize_and_cursor(); bridge(); native_power(); links(); shell_links(); close_and_native_tasks(); slow_client_storm(); frames(argv[2]);
+    protocol(); ownership(); modal_page_shown(); stale_updates(); window_order(); context_help(); input_and_lease(); resize_and_cursor(); bridge(); native_power(); links(); shell_links(); close_and_native_tasks(); slow_client_storm(); frames(argv[2]);
     puts("PASS desktop v3 integration (host only)"); return 0;
 }

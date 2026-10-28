@@ -3,6 +3,84 @@
 This implements the provider anticipated by f3-26. Qualification on the T23
 remains separate from the host register model.
 
+## fx-biosvm review round 1: firmware owns unqualified panels
+
+Lead amendment 1 supersedes native panel admission and the native-only VBE
+full-screen requirement below. The driver reads the active head under its
+exclusive mode claims. CR6B ActiveLCD, dual-head/TV and unknown routing cause
+a clean refusal before blanking, VRAM transfer or PLL programming. Register
+locks and indices are restored and the caller releases all aliases/claims;
+this refusal costs no native strike. Single-CRT native mode sequences retain
+host coverage; they do not qualify the T23 panel.
+
+Both Win32 present leases and DOS full screen then use the BIOS VM. DOS
+uses the existing bounded VBE state-save transaction, 4F02 with LFB enabled,
+4F03 readback and 4F01 information. Only 101h/103h/111h/114h are admitted,
+with exact guest geometry, pitch and pixel format. A temporary alias borrows
+the stopped desktop's same physical aperture and registry generation for the
+existing copy and direct-LFB transports. It is revoked before BIOS state
+restoration and fbdev commit. A firmware failure remains windowed; it never
+retries the unqualified native panel path. Standard VGA modes use BIOS INT10.
+
+Sources, the logged-register replay and APM shutdown coverage are recorded in
+[BIOS service isolation, review round 1](../validation/fx-biosvm.md#review-round-1-apm-soft-off-and-panel-mode-ownership).
+
+The fx-biosvm2 state transaction queries the BIOS-defined count of 64-byte
+blocks and admits up to 16 KiB. Its ES:BX save/restore area occupies
+12000h–15FFFh inside the reserved BIOS workspace, separate from the
+10000h scratch/mouse page and 11000h stack. A kernel copy survives other
+firmware calls; mode information still uses the scratch tail. The T23's
+BX=003Bh (3776 bytes) fits this bound. A refused request retains the guest
+BIOS/DPMI continuation, and suspended time does not expire its held-IRQ
+guard. Sources and regression boundaries:
+[BIOS buffers and continuations](../validation/fx-biosvm2.md).
+
+## fx-q3vise: the Quake III lease of 112h on the T23 panel (2026-10-27)
+
+T23 image 6c3b7800 (private BOOT1.LOG): `quake3.exe` got `[display]
+mode=274 640x480x32 pitch=2560 result=0` and `present_lease=grant ...
+result=0`, the Savage 2D engine reinitialized for 640x480x32, the panel
+stayed black and the log ended about three seconds after the grant. No
+`[biosvm] step=fullscreen` record preceded the mode set.
+
+That absence is not a missing BIOS call. Mode 112h is not in the native
+provider's table (`dos_video_mode`: 101h, 103h, 111h, 114h only), so
+`supersavage_display_supported` is false, `display_set_for_present` drops the
+provider before `prepare` and sets the mode through `biosvm_video_prepare` and
+`apply`, that is `biosvm_video_switch`: INT 10h 4F02 BX=4112h, 4F01, 4F03 in
+the BIOS VM, exactly amendment 1's policy. `biosvm_video_switch` logs nothing
+when it succeeds; `[biosvm] step=fullscreen regs=...` comes only from
+`fullscreen_call`, the DOS full screen's 4F04 state transaction
+(`biosvm_video_fullscreen_begin`/`_end`). The log agrees: no
+`[display] native_supersavage` record (the native provider's `begin` always
+records the head state), and the framebuffer commit sized 640x480x4 =
+1,228,800 bytes from the BIOS's 4F01 information (`[display] mtrr wc
+base=e8000000 size=1228800`). A black panel therefore does not follow from
+the policy; the only native code that ran on the head afterwards is the
+Savage 2D initialization, the same sequence that runs after the boot mode set
+(its logged writes match the desktop's, CR50 from 30h to 70h by the BIOS mode).
+The log cannot tell a panel that did not show the BIOS mode from a machine
+that stopped before the game's first frame: the periodic `[cpu]` windows and
+`[mem]` snapshots stop as well, and a lease frame left no record.
+
+Two durable records make the next trial decidable (`src/kernel/core`):
+
+- `[display] mode_path mode=<id> path=<firmware-vbe | native-driver |
+  native-refused-firmware-vbe | native-return | native-return-firmware-vbe>
+  result=<e>`, before the `[display] mode=` record of every
+  `display_set_for_present` transaction;
+- `[display] present_lease=first-frame pid=<pid> token=<t> ms=<since grant>
+  path=<copy | render3d | render3d-copy>`, once per grant, when the first
+  frame reached the scanout.
+
+Host tests: `tests/host/display_test.c` (`panel_firmware_tests`: 112h on the
+SuperSavage fixture is set by the video BIOS without any native provider
+call, the return to 118h too, a firmware failure rolls back, each with its
+`mode_path`; the panel refusal of 111h records
+`native-refused-firmware-vbe`), `tests/host/display_present_test.c` (one
+first-frame record per grant, copy and render3d copy paths). `biosvm.c` is
+unchanged (fx-biosvm2 owns it).
+
 ## war2vbe amendment: guest VBE without a native provider (2026-10-25)
 
 The F3-37 rule below ("a synthetic VBE 2.0 interface only when the native

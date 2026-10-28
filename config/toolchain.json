@@ -17,38 +17,38 @@
     "crt": "none (freestanding fixtures); MSVCRT required for future CRT builds",
     "tools": {
       "clang": {
-        "version": "23.1.3",
-        "sha256": "0451d773d5454ae843bc95c9615ede4871c340e238f66d2bedaebc665f02773e",
+        "version": "23.1.4",
+        "sha256": "b53890006355553d68159ddeafd47586f74d9bf8febee4132763fa0ec84e3b44",
         "status": "installed",
         "version_probe": "clang"
       },
       "lld-link": {
-        "version": "23.1.3",
-        "sha256": "4556b3566858d6f9734a0cc7887e64fd9b6373c79e93e1600b56c6aacee7fc9c",
+        "version": "23.1.4",
+        "sha256": "7f5f9486c8974579a464deaa8b805b1363ad1208d41fe26361f7e32981cdc568",
         "status": "installed",
         "version_probe": "lld-link"
       },
       "llvm-dlltool": {
-        "version": "23.1.3",
-        "sha256": "70cd529c103e2b983863fa3797101ae602712b6e4fa232c20f41abccc023bace",
+        "version": "23.1.4",
+        "sha256": "ecc27aa80655e09b8fc60cf2e3edf7bbf92fdf7d8025820d131ac63c81ce3b32",
         "status": "installed",
         "version_probe": "llvm-ar"
       },
       "llvm-rc": {
-        "version": "23.1.3",
-        "sha256": "64fade4272f1d7321eb16f7e4e9c308495d0a0fd4e8eb9cd937f8a0743f3abc6",
+        "version": "23.1.4",
+        "sha256": "aad0104e2688a7069517e76311432077f0ffc79b9b9562586ee37b76842ca889",
         "status": "installed",
         "version_probe": "llvm-config"
       },
       "llvm-readobj": {
-        "version": "23.1.3",
-        "sha256": "01539fdc1d8dc2d3d5bb3f613a04726463b4703eacb5960eb84830229c6fd1cb",
+        "version": "23.1.4",
+        "sha256": "ec6aa834e023e4397243c23ff6ab125f3a856425d32674c9f4f94181c1cf8ccc",
         "status": "installed",
         "version_probe": "llvm-readobj"
       },
       "llvm-objdump": {
-        "version": "23.1.3",
-        "sha256": "acad71af393c089f5261cacf089631c7ed86cbc927e4010b118830a4eef90cca",
+        "version": "23.1.4",
+        "sha256": "aedf9e1a0b7db6453c1cbf58e01c71b90caf7225f5a713ea2183d6121725482f",
         "status": "installed",
         "version_probe": "llvm-objdump"
       }

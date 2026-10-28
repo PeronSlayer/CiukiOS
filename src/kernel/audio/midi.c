@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/mm.h>
+#include <ciuki/desktop.h>
 #include <ciuki/audio.h>
 #include <ciuki/midi_fm.h>
 #include <ciuki/opl3.h>
@@ -21,7 +22,7 @@ int audio_midi_write(struct audio_stream *s,struct ciuki_midi_data *data)
     if (s->draining || (!s->midi && s->configured)) return -EBUSY;
     if (audio_output_rate()!=OPL3_RATE) return -EOPNOTSUPP;
     if (!s->midi) {
-        struct audio_midi *m=kzalloc(sizeof(*m));
+        struct audio_midi *m=desktop_buffer_alloc(sizeof(*m),MM_IO_REQUEST);
         if (!m) return -ENOMEM;
         opl3_init(&m->chip); midi_fm_reset(&m->control,midi_register,m);
         s->midi=m; s->source=CIUKI_MIXER_MIDI;
@@ -38,7 +39,7 @@ int audio_midi_write(struct audio_stream *s,struct ciuki_midi_data *data)
 void audio_midi_close(struct audio_stream *s)
 {
     if (!s || !s->midi) return;
-    kfree(s->midi); s->midi=0;
+    desktop_buffer_free(s->midi,sizeof(*s->midi),MM_IO_REQUEST); s->midi=0;
 }
 bool audio_midi_active(struct audio_stream *s)
 { return s && s->midi && (s->midi->count || !opl3_silent(&s->midi->chip)); }

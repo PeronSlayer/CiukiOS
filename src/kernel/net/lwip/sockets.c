@@ -12,6 +12,7 @@
 #include <ciuki/desktop.h>
 #include <ciuki/signal.h>
 #include <ciuki/kernel.h>
+#include <ciuki/security_device.h>
 
 #define REQUESTS 8u
 struct socket_object {
@@ -26,8 +27,14 @@ struct socket_object {
     struct ciuki_sockaddr_in local, peer;
     struct process *origin;
     uint32_t origin_pid;
+    uint32_t security_uid, security_session;
     bool pending, used, closing, control, connecting, connected, listening, eof, failed, network_down;
 };
+static bool socket_subject(const struct process *p,const struct socket_object *s)
+{
+    const struct ciuki_credential *c=security_credential(p);
+    return security_process_live(p) && c && c->uid==s->security_uid && c->session_id==s->security_session;
+}
 static struct socket_object sockets[CIUKI_SOCKET_MAX];
 static unsigned object_generation, tcp_count, udp_count, listeners;
 static sys_mbox_t commands;
@@ -106,9 +113,21 @@ uint32_t net_socket_count(void)
 void net_socket_snapshot(struct ciuki_net_socket_list *list)
 {
     memset(list,0,sizeof(*list));list->size=sizeof(*list);list->version=1;
+    const struct process *caller=proc_current();
+    const struct ciuki_credential *credential=security_credential(caller);
+    if (!security_process_live(caller) || !credential) return;
+    bool system=security_device_system(caller), admin=security_device_admin(caller);
     sys_prot_t f=sys_arch_protect();
     for(unsigned i=0;i<CIUKI_SOCKET_MAX;i++) {
         struct socket_object *s=&sockets[i];if(!s->used || s->pending || s->closing)continue;
+        if (!system && (s->security_uid==CIUKI_UID_SYSTEM ||
+            (!admin && (s->security_uid!=credential->uid || s->security_session!=credential->session_id)))) continue;
+        if (!system && !admin) {
+            bool owned=false;
+            for (unsigned fd=0;fd<CIUKI_OPEN_MAX && !owned;fd++)
+                owned=file_fd_object(caller,(int)fd)==&s->object;
+            if (!owned) continue;
+        }
         struct ciuki_net_socket_info *out=&list->sockets[list->count++];
         out->pid=s->origin_pid;out->type=s->type;
         out->state=s->listening?CIUKI_NET_SOCKET_LISTEN:s->connecting?CIUKI_NET_SOCKET_CONNECTING:
@@ -248,11 +267,12 @@ static struct socket_object *lookup(struct process *p, int fd, int *error)
 {
     struct proc_object *o = file_fd_object(p, fd);
     *error = !o ? -EBADF : !net_socket_object(o) ? -ENOTSOCK : 0;
+    if (!*error && !socket_subject(p,(void *)o)) *error=-EACCES;
     return *error ? NULL : (void *)o;
 }
 static bool still_open(struct process *p, int fd, unsigned generation, struct socket_object *s)
 {
-    return p->state != PROC_STOPPING && p->fd_generation[fd] == generation &&
+    return socket_subject(p,s) && p->state != PROC_STOPPING && p->fd_generation[fd] == generation &&
            file_fd_object(p, fd) == &s->object && !s->closing;
 }
 int net_socket_capture(struct process *p, int fd, struct net_socket_ref *ref)
@@ -679,7 +699,9 @@ static unsigned process_sockets(struct process *p)
 static struct socket_object *reserve_socket(struct process *p, unsigned type, int *error)
 {
     sys_prot_t f = sys_arch_protect();
-    *error = 0;
+    const struct ciuki_credential *credential=security_credential(p);
+    *error = security_process_live(p) && credential ? 0 : -EACCES;
+    if (*error) { sys_arch_unprotect(f); return NULL; }
     if (process_sockets(p) >= CIUKI_SOCKET_PROCESS_MAX) *error = -EMFILE;
     else if (net_socket_count() + file_description_count() + desktop_objects.descriptions >= CIUKI_OPEN_DESCRIPTION_MAX) *error = -ENFILE;
     if (*error) { sys_arch_unprotect(f); return NULL; }
@@ -690,6 +712,7 @@ static struct socket_object *reserve_socket(struct process *p, unsigned type, in
         s->object = (struct proc_object){ retain, release, true }; s->type = type; s->flags = O_RDWR;
         s->local.family = AF_INET; s->peer.family = AF_INET;
         s->generation = ++object_generation; s->origin = p; s->origin_pid = p->pid; s->pending = true;
+        s->security_uid=credential->uid; s->security_session=credential->session_id;
         if (type == SOCK_STREAM) tcp_count++; else udp_count++;
         break;
     }
@@ -875,6 +898,7 @@ static int readiness(struct process *p, int fd, struct proc_object *o)
 {
     if (net_socket_object(o)) {
         struct socket_object *s = (void *)o;
+        if (!socket_subject(p,s)) return POLLNVAL;
         int events = 0;
         if (s->tcp_rx || s->udp_rx || s->eof || s->receive_events > 0 || (s->shut & 1) ||
             (!s->control && s->conn && netconn_is_flag_set(s->conn, NETCONN_FIN_RX_PENDING)) ||

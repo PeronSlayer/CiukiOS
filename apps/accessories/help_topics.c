@@ -529,7 +529,15 @@ const struct help_topic help_topics[] = {
 "Closing the window ends the machine; the window asks first when\n"
 "a program is running. Programs > Games opens the window and\n"
 "starts a bundled game; to start your own, type its name at the\n"
-"DOS prompt.\n"},
+"DOS prompt.\n"
+"\n"
+"A game starts full screen when it switches to a graphics mode;\n"
+"its text screens and the DOS prompt stay in the window. Alt+Enter\n"
+"switches between full screen and the window, and the window\n"
+"remembers the choice for that program. Properties > Screen in the\n"
+"window's toolbar, or in the program file's Properties, sets it.\n"
+"If the display cannot show the game full screen, it keeps\n"
+"running in the window.\n"},
 {"lua", "Lua", "Programs",
  "Lua;script;scripting;interpreter;.lua",
 "Lua\n"

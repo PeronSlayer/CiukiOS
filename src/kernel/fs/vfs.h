@@ -3,7 +3,14 @@
 #ifndef CIUKI_VFS_H
 #define CIUKI_VFS_H
 #include "fat.h"
+#include "security_policy.h"
 #define VFS_DRIVE_REMOVABLE 1u
+/* fx-emptydrive: struct vfs.slot_type, the removable-media drive that owns a
+ * letter whether or not a medium is mounted. Windows 98 reserves one letter
+ * per removable-media drive at startup when no medium is present (Windows 98
+ * Resource Kit, ch. 10, "Assigning Drive Letters for Removable Media"). */
+#define VFS_SLOT_FLOPPY 1u
+#define VFS_SLOT_OPTICAL 2u
 #include <ciuki/fs_ro.h>
 #define VFS_NODES 64u
 #define VFS_DESCRIPTIONS 128u
@@ -100,7 +107,8 @@ struct vfs_node { struct fat_volume *volume; struct fat_entry entry; unsigned re
  * reads or writes it; fat.c validates it against the node entry. */
 struct vfs_description { struct vfs_node *node; uint64_t position; unsigned refs, access, deny;
     uint64_t owner; unsigned dos_mode; enum vfs_owner_type owner_type; bool io_active; struct cache_stream stream;
-    struct fat_cursor cursor; };
+    struct fat_cursor cursor;
+    unsigned granted; /* sec-k03: POLICY_* rights frozen at a subject table's open; 0 = kernel table */ };
 struct vfs_range_lock { struct vfs_description *description; struct vfs_node *node;
     uint64_t owner, start, end, length; enum vfs_owner_type owner_type; bool shared; };
 #define VFS_RANGE_LOCKS 128u
@@ -138,6 +146,7 @@ struct vfs_contention_budget {
 void vfs_wait_observer(char,uint32_t,char,const char *,const struct fs_task_identity *,const struct vfs_hold_info *) __attribute__((weak));
 void vfs_hold_observer(char,uint32_t,const struct vfs_hold_info *,uint32_t) __attribute__((weak));
 struct vfs {
+    struct policy_volume *policy[26]; /* explicit managed mount binding */
     /* Order: namespace (1) -> volumes (2, ascending letter) -> cache (3)
      * -> device (4). Never wait for a reserved volume with namespace held.
      * Bookkeeping/identity phases hold namespace and the operation's volumes.
@@ -207,6 +216,7 @@ struct vfs {
     unsigned default_drive; /* operation's legacy path-resolution snapshot */
     struct fat_volume *volumes[26];
     uint32_t drive_flags[26];
+    uint8_t slot_type[26]; /* VFS_SLOT_*, namespace lock; set once, never cleared */
     struct fs_ro_volume *ro_volumes[26];
     uint32_t generation[26];
     struct vfs_node nodes[VFS_NODES];
@@ -242,6 +252,10 @@ struct vfs_table {
     uint64_t owner; /* context id within owner_type, not a global PID namespace */
     enum vfs_owner_type owner_type;
     bool owner_registered; /* legacy DOS tables still set owner directly until bridge adoption */
+    /* sec-k03: retained subject of a user frontend's table (DOS VM, Win32
+     * find). NULL only for kernel tables from vfs_table_init (SYSTEM work:
+     * drivers, logs, OWNER backend); never for a user-reachable frontend. */
+    struct security_subject *subject;
 };
 struct vfs_find {
     unsigned drive; uint32_t generation, directory, cursor;
@@ -373,6 +387,11 @@ int vfs_attach_locked(struct vfs *, unsigned drive, struct fat_volume *);
 int vfs_attach_ro(struct vfs *, unsigned drive, struct fs_ro_volume *);
 int vfs_attach_ro_locked(struct vfs *, unsigned drive, struct fs_ro_volume *);
 bool vfs_drive_present(struct vfs *, unsigned drive);
+/* fx-emptydrive: the VFS_SLOT_* drive owning letter d (0: none). An owned
+ * letter without a mounted volume answers -FS_ENXIO (not ready) to path
+ * operations instead of -FS_ENOENT, and letter allocators skip it. */
+static inline unsigned vfs_drive_slot(const struct vfs *v, unsigned d) { return d < 26 ? v->slot_type[d] : 0; }
+static inline bool vfs_letter_taken(struct vfs *v, unsigned d) { return vfs_drive_present(v, d) || vfs_drive_slot(v, d); }
 /* Namespace lock held. EIO invalidates media cache/names/nodes/cwd and
  * removes the letter, even with live descriptions. No media writes. */
 int vfs_ro_check_locked(struct vfs *, unsigned drive);
@@ -380,6 +399,24 @@ void vfs_ro_expire_locked(struct vfs *, unsigned drive);
 int vfs_detach(struct vfs *, unsigned drive); /* durable unmount, refuses opens */
 int vfs_table_init(struct vfs *, struct vfs_table *, unsigned default_drive);
 void vfs_table_destroy(struct vfs_table *);
+/* ---- sec-k03: legacy-table subjects (one block) ----------------------
+ * A user frontend's table carries the originating retained subject; every
+ * path and handle operation is authorized with it through the native
+ * namespace resolver (vfs_hooks.h). Binding fails while handles are open
+ * or a subject is already bound; destroy releases the reference. */
+int vfs_table_init_subject(struct vfs *, struct vfs_table *, unsigned default_drive, struct security_subject *);
+int vfs_table_bind_subject(struct vfs_table *, struct security_subject *);
+/* Authorized identity returned by the native resolver to the legacy table
+ * (vfs_hooks.h px_table_*); granted holds the POLICY_* rights for a handle. */
+struct vfs_policy_target {
+    struct fat_volume *volume;
+    uint32_t parent, index, directory;
+    unsigned granted;
+    bool exists, ro;
+};
+#define VFS_POLICY_MISSING 1u   /* the leaf may be absent: ADD on its parent */
+#define VFS_POLICY_DIRECTORY 2u /* authorize the directory of a find pattern */
+/* ---- end sec-k03 ----------------------------------------------------- */
 int vfs_open(struct vfs_table *, const char *path, unsigned flags, enum vfs_share, uint8_t create_attr);
 /* Same atomic namespace transaction as native open; mode 0..4 is DOS sharing,
  * 255 denotes native explicit sharing. status receives 1/2/3 only on success. */

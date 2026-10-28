@@ -48,7 +48,7 @@ def build_footprint(folder, env):
     sources += [ROOT / "apps/desktop/users.c", ROOT / "apps/desktop/users_io.c", ROOT / "src/kernel/lib/sha256.c"]
     sources += SHELL_SOURCES + [ROOT / "apps/desktop" / n for n in ("image.c", "wallpaper_io.c", "sounds.c", "sound_storage.c", "master_storage.c", "sound_runtime.c")]
     sources += [ROOT / name for name in icon_assets.SOURCES]
-    sources += [ROOT / "sdk/libreg" / name for name in ("registry.c", "storage.c", "hardware.c")]
+    sources += [ROOT / "sdk/libreg" / name for name in ("registry.c", "storage.c", "hardware.c", "transport.c")]
     host = ROOT / "tests/host/desktop"
     sources += [host / n for n in ("fake.c", "shell_launch_test.c", "footprint_alloc.c")]
     objects = []
@@ -87,7 +87,7 @@ class MemoryFootprintTests(unittest.TestCase):
             host = ROOT / "tests/host/desktop"
             sources = [host / "sound_runtime_test.c", host / "footprint_alloc.c"]
             sources += [ROOT / "apps/desktop" / n for n in ("sounds.c", "protocol.c", "sound_storage.c", "master_storage.c")]
-            sources += [ROOT / "sdk/libreg" / n for n in ("registry.c", "storage.c", "hardware.c")]
+            sources += [ROOT / "sdk/libreg" / n for n in ("registry.c", "storage.c", "hardware.c", "transport.c")]
             common = ["clang", "-std=c17", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
                       "-D_POSIX_C_SOURCE=200809L", "-DDESK_FOOTPRINT_TEST", "-Wno-macro-redefined",
                       "-include", str(host / "replay_base.h"), "-fsanitize=address,undefined",

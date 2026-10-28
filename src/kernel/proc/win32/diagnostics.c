@@ -1,7 +1,9 @@
 /* Bounded process records, virtual I/O, crash facts and desktop mailbox.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/cpu.h> /* sec-k07 */
 #include <ciuki/w32_objects.h>
+#include <ciuki/security.h>
 #include <ciuki/supervisor.h>
 #include <ciuki/sha256.h>
 struct w32_stub_record {struct w32_stub_record *next;char name[212];};
@@ -17,6 +19,34 @@ struct w32_diagnostic_state {
 };
 static struct ciuki_w32_fault w32_fault_queue[16];
 static unsigned w32_fault_head,w32_fault_count;
+static uint32_t w32_fault_session[16];
+/* --- sec-k07 (begin): Win32 part of logoff teardown ---
+ * Called by PID 1 while a session is CLOSING (after its processes were
+ * stopped): pending crash/refusal reports of that session are discarded so
+ * no later desktop can read them, and the Win32 objects still bound to the
+ * session (named objects, query tokens) are counted; COLLECT keeps the
+ * session CLOSING until none remains. Handles/views/waits die with their
+ * processes (proc exit), tokens already deny queries once CLOSING. */
+unsigned w32_session_revoke(uint32_t session)
+{
+    if (!session) return 0;
+    uint32_t f=irq_save();
+    unsigned kept=0,n=w32_fault_count;
+    for (unsigned i=0;i<n;i++) {
+        unsigned from=(w32_fault_head+i)%16;
+        if (w32_fault_session[from]==session) continue;
+        unsigned to=(w32_fault_head+kept)%16;
+        if (to!=from) { w32_fault_queue[to]=w32_fault_queue[from]; w32_fault_session[to]=w32_fault_session[from]; }
+        kept++;
+    }
+    w32_fault_count=kept;
+    unsigned retained=0;
+    for (struct w32_object *o=w32_objects;o;o=o->next)
+        if (o->security_session==session || (o->type==W32_OBJ_TOKEN && o->u.token.session_id==session)) retained++;
+    irq_restore(f);
+    return retained;
+}
+/* --- sec-k07 (end) --- */
 static int diag_cmp(const char *a,const char *b){size_t n=strlen(a);return n==strlen(b)?strncmp(a,b,n):1;}
 static struct w32_diagnostic_state *diag_state(struct process *p){
     if(!p->w32&&w32_process_init(p))return 0;
@@ -86,17 +116,22 @@ void w32_diagnostic_record(struct proc_thread *t,const struct ciuki_w32_diagnost
     if(warning)s->warnings++;
     klog("[win32] %s check=%s module=%s pid=%u tid=%u",event,reason,module,t->process->pid,t->tid);
 }
-static bool diag_enqueue(const struct ciuki_w32_fault *f){
+/* The owner is passed, not looked up by pid: a refusal queued while the
+ * process is being spawned (w32_spawn) comes before proc_find publishes it. */
+static bool diag_enqueue(struct process *owner,const struct ciuki_w32_fault *f){
     if(w32_fault_count==16){klog("[win32] warning check=dialog-queue-full pid=%u",f->pid);return false;}
+    const struct ciuki_credential *credential=security_credential(owner);
+    if(!credential)return false;
+    w32_fault_session[(w32_fault_head+w32_fault_count)%16]=credential->session_id;
     w32_fault_queue[(w32_fault_head+w32_fault_count)%16]=*f;w32_fault_count++;return true;
 }
 void w32_refusal_queue(struct process *p,uint32_t reason,const char *module,uint32_t error){
-    if(reason<1||reason>7)return;
+    if(reason<1||reason>W32_REFUSE_WIN16)return;
     struct w32_diagnostic_state *s=p->w32?p->w32->diagnostics:0;
     if(s){if(s->refused&(1u<<reason))return;s->refused|=1u<<reason;}
-    const char *reasons[]={"","msi","driver","runtime","missing-dll","missing-export","invalid-image","no-server"};
+    const char *reasons[]={"","msi","driver","runtime","missing-dll","missing-export","invalid-image","no-server","win16"};
     struct ciuki_w32_fault f={.kind=W32_REPORT_REFUSE,.pid=p->pid,.code=reason,.offset=error};
-    diag_name(f.exe,sizeof(f.exe),p->name);diag_name(f.module,sizeof(f.module),module);diag_enqueue(&f);
+    diag_name(f.exe,sizeof(f.exe),p->name);diag_name(f.module,sizeof(f.module),module);diag_enqueue(p,&f);
     klog("[win32] refuse %s pid=%u module=%s error=%u",reasons[reason],p->pid,f.module,error);
 }
 void w32_crash_capture(struct proc_thread *t,const struct ciuki_w32_context *c,uint32_t code,const char *module,uint32_t base){
@@ -113,7 +148,7 @@ void w32_crash_capture(struct proc_thread *t,const struct ciuki_w32_context *c,u
     w32_log("[win32] crash pid=%u tid=%u code=%08x module=%s+%08x eip=%08x r=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x s=%02x:%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x",
         f.pid,f.tid,f.code,f.module,f.offset,f.eip,regs[0],regs[1],regs[2],regs[3],regs[4],regs[5],regs[6],regs[7],regs[8],f.valid,
         f.stack[0],f.stack[1],f.stack[2],f.stack[3],f.stack[4],f.stack[5],f.stack[6],f.stack[7]);
-    s->dialog_queued=diag_enqueue(&f);
+    s->dialog_queued=diag_enqueue(t->process,&f);
 }
 /* G13 (ER-1, SY-8): a native program killed by a processor fault goes to the
  * same desktop mailbox as a Win32 crash, so the desktop shows "has performed
@@ -135,7 +170,7 @@ void native_fault_report(struct proc_thread *t,const struct trap_frame *tf,uint3
     diag_name(f.exe,sizeof(f.exe),p->name);
     for(unsigned i=0;i<8;i++)
         if(tf->user_esp<=UINT32_MAX-4*i-3&&ua_range(p->memory,tf->user_esp+4*i,4,PROT_READ)&&!ua_read(p->memory,&f.stack[i],tf->user_esp+4*i,4))f.valid|=1u<<i;
-    diag_enqueue(&f);
+    diag_enqueue(p,&f);
 }
 static bool diag_crash_closed(void *arg){struct process *p=arg;return p->state!=PROC_LIVE||!proc_find(supervisor_desktop_pid());}
 uint32_t w32_report_call(struct proc_thread *t,struct ciuki_w32_report_args *a){
@@ -144,8 +179,13 @@ uint32_t w32_report_call(struct proc_thread *t,struct ciuki_w32_report_args *a){
         if(!p->w32||p->w32->service!=W32_SERVICE_DESKTOP||p->pid!=supervisor_desktop_pid())return W32_STATUS_ACCESS_DENIED;
         if(a->action==W32_REPORT_CLOSE){
             struct process *victim=proc_find(a->code);
-            if(victim&&victim->w32&&victim->w32->diagnostics&&victim->w32->diagnostics->crashed)proc_stop(victim,victim->raw_exit,0);
+            if(victim&&security_same(p,victim)&&victim->w32&&victim->w32->diagnostics&&victim->w32->diagnostics->crashed)proc_stop(victim,victim->raw_exit,0);
             return 0;
+        }
+        const struct ciuki_credential *credential=security_credential(p);
+        if(!credential||!security_process_live(p))return W32_STATUS_ACCESS_DENIED;
+        while(w32_fault_count&&w32_fault_session[w32_fault_head]!=credential->session_id){
+            w32_fault_head=(w32_fault_head+1)%16;w32_fault_count--;
         }
         if(w32_fault_count){
             if(copy_to_user(a->buffer,&w32_fault_queue[w32_fault_head],sizeof(struct ciuki_w32_fault)))return W32_STATUS_ACCESS_VIOLATION;

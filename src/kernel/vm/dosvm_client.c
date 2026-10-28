@@ -1,6 +1,10 @@
 /* f3-02 native owner boundary: syscall 72 (dosvm) for one DOS window VM per
- * process, delegated only to a desktop-launched /Programs/dosbox. No public VM
- * lookup, device grant or physical display access. execution-abi.md, F3-02.
+ * process. No public VM lookup, device grant or physical display access.
+ * execution-abi.md, F3-02. sec-k05 (user-security-kernel.md "DOSVM
+ * operations (call 72)"): authority comes from the caller's retained
+ * credential, never an executable path. VM operations are own-session (the
+ * creating process and its unchanged credential); game removal needs an
+ * administrator; title data is always the caller's own store.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
@@ -15,6 +19,7 @@
 extern uint32_t joystick_session(void) __attribute__((weak));
 extern int joystick_route_validate(const struct joystick_route *) __attribute__((weak));
 extern bool joystick_settings_game(unsigned, struct joystick_route *) __attribute__((weak));
+extern int joystick_settings_select(struct process *) __attribute__((weak)); /* sec-user-05 */
 #include "dosvm_network.h"
 #include <ciuki/dosvm_network_abi.h>
 extern int display_worker_start(void) __attribute__((weak));
@@ -121,8 +126,15 @@ static int release_binding(struct binding *b, bool owner_gone)
     return e;
 }
 /* Supervisor collection hook: the owner died (crash, signal, exit without
- * CLOSE). Idempotent; a binding busy in its owner's syscall is collected by
- * that syscall's exit check or by a later collection pass. */
+ * CLOSE), or sec-k05: its session left ACTIVE (logoff/teardown), so no VM
+ * keeps running under a closing session. Idempotent; a binding busy in its
+ * owner's syscall is collected by that syscall's exit check or by a later
+ * collection pass. */
+static bool binding_revoked(const struct binding *b)
+{
+    struct dosvm *v = dosvm_lookup(b->key);
+    return v && v->info.state != DOSVM_DEAD && !dos_identity_live(&v->identity);
+}
 void dosvm_client_poll(void)
 {
     dosvm_fullscreen_poll();
@@ -130,12 +142,29 @@ void dosvm_client_poll(void)
         struct binding *b = &bindings[i];
         if (!b->pid || b->busy) continue;
         struct process *p = proc_find(b->pid);
-        if (!p || p->state >= PROC_STOPPING) {
+        if (!p || p->state >= PROC_STOPPING || binding_revoked(b)) {
             b->busy = true;
             release_binding(b, true);
             b->busy = false;
         }
     }
+}
+
+unsigned dosvm_session_revoke(uint32_t session)
+{
+    unsigned retained = 0;
+    if (!session) return 0;
+    for (unsigned i = 0; i < DOSVM_LIMIT; i++) {
+        struct binding *b = &bindings[i];
+        struct dosvm *v = b->pid ? dosvm_lookup(b->key) : 0;
+        if (!v || dos_identity_session(&v->identity) != session) continue;
+        if (b->busy) { retained++; continue; }
+        b->busy = true;
+        release_binding(b, true);
+        b->busy = false;
+        if (b->pid) retained++;
+    }
+    return retained;
 }
 
 /* Probe view (f3:vm-window): the first window VM and its owner, if any. */
@@ -195,6 +224,7 @@ static uint32_t status_flags(const struct dosvm *v)
            (v->fullscreen_error ? CIUKI_DOSVM_FULLSCREEN_REFUSED : 0) |
            (v->persistent && v->save.full ? CIUKI_DOSVM_SAVE_FULL : 0) |
            (v->launch_returned && !v->exec_pending && !v->exec_overflow ? CIUKI_DOSVM_PROGRAM_RETURNED : 0) |
+           (v->fullscreen_hotkey ? CIUKI_DOSVM_FULLSCREEN_HOTKEY : 0) |
            (dosvm_shell_idle(v) && v->idle.sleeping && !v->key_count && !v->kbd.count ? CIUKI_DOSVM_SHELL_READY : 0);
 }
 static uint32_t wait_phase(void)
@@ -220,9 +250,21 @@ static uint32_t present_events(struct present_request *r)
         events |= CIUKI_DOSVM_EVENT_STATE;
     if (v->clipboard.pending && !v->clipboard.done) events |= CIUKI_DOSVM_EVENT_CLIPBOARD;
     if (b->console != v->console_sequence) events |= CIUKI_DOSVM_EVENT_CONSOLE;
+    /* fx-doswin3: every VGA register write (Mode Y selects the plane of
+     * each column, about 1,300 OUTs per DOOM frame) and every harvest of
+     * back-buffer stores advance vga.changes without changing the page on
+     * screen. While the guest is page flipping, the displayed page changes
+     * only with the CRTC start address (display_changes, video_starts) and
+     * the other display registers and palette (display_changes), so only
+     * those wake the presenter: each sample then shows a completed frame
+     * (T23 trial 5bb73dba, DOOM window bank n=4: 76 samples and 87 flips
+     * for 34 changed frames). A guest that stops flipping returns to the
+     * store-driven wake after its flip hold (twice its last flip gap, one
+     * refresh to DOSVM_FLIP_HOLD_MS; dosvm_vga.c flip_hold_ms). */
     if (!v->fullscreen && !v->fullscreen_hold && deadline_passed(v->present_due_us / 1000u) &&
         (!v->video_presented || (!v->vbe_mode && v->video_geometry.text) || deadline_passed(v->video_due_us / 1000u)) &&
-        (b->video_pending || !b->observed || b->changes != v->vga.changes || b->display != v->vga.display_changes ||
+        (b->video_pending || !b->observed || (dosvm_present_store_wake(v, g_ticks) && b->changes != v->vga.changes) ||
+         b->display != v->vga.display_changes ||
          b->starts != v->video_starts || b->mode != v->vbe_mode || b->vbe_changes != v->present_vbe_changes ||
          (v->video_geometry.text && b->phase != wait_phase()))) events |= CIUKI_DOSVM_EVENT_VIDEO;
     return events;
@@ -236,6 +278,16 @@ static bool present_ready(void *arg)
      * wait_present measures how long the presenter took to run after it. */
     if ((events & CIUKI_DOSVM_EVENT_VIDEO) && !r->vm->present_ready_tsc)
         r->vm->present_ready_tsc = dosvm_perf_clock();
+    /* fx-doswin3: from this wake until the presenter runs, the scheduler
+     * may run the woken presenter (base 9 above the VM's 7) ahead of the
+     * focused VM's preference for at most PRESENT_SLICE ticks
+     * (dosvm_task_present, task.c rq_pop) instead of behind the VM's eight
+     * focused ticks (trial 5bb73dba: WAIT dispatch 7.7-12.8 ms average,
+     * 100 ms maximum, for Wolfenstein 3-D and DOOM). */
+    if ((events & CIUKI_DOSVM_EVENT_VIDEO) && !r->vm->present_dispatch) {
+        r->vm->present_dispatch = true;
+        r->vm->present_dispatch_tick = g_ticks;
+    }
     return events != 0;
 }
 static int wait_present(struct binding *b, struct dosvm *v, struct process *p, struct ciuki_dosvm_command *c)
@@ -246,8 +298,11 @@ static int wait_present(struct binding *b, struct dosvm *v, struct process *p, s
     kwait_set_owner(&v->present_wait, v->task);
     unsigned timeout=c->wait.timeout_ms>33 ? 33 : c->wait.timeout_ms;
     v->present_ready_tsc = 0;
+    v->present_waiter = g_current;
     kwait_wait_until(&v->present_wait, present_ready, &r, deadline_after_ms(timeout));
     kwait_set_owner(&v->present_wait, 0);
+    v->present_dispatch = false; /* the presenter runs: the VM's preference returns */
+    v->present_waiter = 0;
     if (present_interrupted(&r)) return -EINTR;
     c->wait.events = present_events(&r);
     uint32_t flags = irq_save();
@@ -293,6 +348,21 @@ static void video_mode(struct dosvm *v, struct ciuki_dosvm_command *c)
     uint8_t mode = 0;
     if (!dosvm_read(v, 0x449, &mode, 1)) c->video_mode = mode;
 }
+/* fx-dosfull: Windows 98 runs a game "that uses graphics modes" full screen
+ * (Resource Kit ch. 25, Running Games); the DOS Box enters full screen at the
+ * first one. Graphics: an active VBE mode, a BIOS graphics mode in the BDA
+ * (0049h other than the text modes 0-3 and 7), or a windowed VGA model a
+ * program set to a graphics layout through the registers alone. Read in the
+ * STATUS call only: the BDA read may fault in a page, which the WAIT_PRESENT
+ * predicate (status_flags) must never do. */
+static bool status_graphics(struct dosvm *v, uint32_t bios_mode)
+{
+    if (v->vbe_mode) return true;
+    bios_mode &= 0x7Fu;
+    if (bios_mode > 3 && bios_mode != 7) return true;
+    cvga_geometry g;
+    return !v->fullscreen && cvga_get_geometry(&v->vga, &g) && !g.text;
+}
 
 int32_t dosvm_client_syscall(struct trap_frame *tf)
 {
@@ -312,7 +382,9 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         return copy_to_user(tf->ecx,&c,sizeof(c));
     }
     if (op>=CIUKI_DOSVM_SAVE_QUERY && op<=CIUKI_DOSVM_SAVE_EXPORT) {
-        if (op!=CIUKI_DOSVM_SAVE_QUERY && !p->programs_capability) return -EPERM;
+        /* Own-session: the caller's own store only, for every user class
+         * (Guest included: its data lives in its own profile). */
+        if (!dos_process_interactive(p)) return -EPERM;
         if (tf->edx!=sizeof(struct ciuki_dosvm_command)) return -EINVAL;
         struct ciuki_dosvm_command c,valid={0};
         int e=copy_from_user(&c,tf->ecx,sizeof(c)); if (e) return e;
@@ -320,14 +392,17 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         valid.version=CIUKI_DOSVM_VERSION; valid.size=sizeof(valid); valid.launch.game=c.launch.game;
         if (!c.launch.game || c.launch.game>CIUKI_DOSVM_GAME_COUNT || memcmp(&c,&valid,sizeof(c))) return -EINVAL;
         struct ua_pin pin; e=ua_pin(p->memory,&pin,tf->ecx,sizeof(c),true); if (e) return e;
-        e=dosvm_game_data(c.launch.game,op,&c);
+        struct dos_identity owner;
+        e=dos_identity_capture(&owner,p);
+        if (!e) { e=dosvm_game_data(c.launch.game,op,&c,&owner); dos_identity_release(&owner); }
         if (!e) e=copy_to_user(tf->ecx,&c,sizeof(c));
         ua_unpin(p->memory,&pin); return e;
     }
-    /* Query is read-only. Removal requires the separately delegated applet
-     * authority; C: write admission alone never grants process authority. */
+    /* Query is public catalogue state. Removal is a machine-wide change:
+     * administrator only (no path-derived applet grant). Other users'
+     * private title data is left to explicit file management. */
     if(op==CIUKI_DOSVM_GAME_QUERY || op==CIUKI_DOSVM_GAME_REMOVE) {
-        if(op==CIUKI_DOSVM_GAME_REMOVE && !p->programs_capability)return -EPERM;
+        if(op==CIUKI_DOSVM_GAME_REMOVE && !dos_process_admin(p))return -EPERM;
         if(tf->edx!=sizeof(struct ciuki_dosvm_command))return -EINVAL;
         struct ciuki_dosvm_command c,valid={0};
         int error=copy_from_user(&c,tf->ecx,sizeof(c));if(error)return error;
@@ -343,7 +418,8 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         if(!error)error=copy_to_user(tf->ecx,&c,sizeof(c));
         ua_unpin(p->memory,&pin);return error;
     }
-    if (!p->dosvm_capability) return -EPERM;
+    /* Own-session class: an authenticated interactive session. */
+    if (!dos_process_interactive(p)) return -EPERM;
     if (op < CIUKI_DOSVM_CREATE || (op > CIUKI_DOSVM_WAIT_PRESENT &&
         op != CIUKI_DOSVM_TEXT && op != CIUKI_DOSVM_MARK &&
         op != CIUKI_DOSVM_TEXT_CHUNK && op != CIUKI_DOSVM_POLICY &&
@@ -447,9 +523,12 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
          * it. Without a prior mode switch nothing else would (QEMU case
          * vm-fullscreen-qemu-t23 was refused only at cleanup, -EPERM). */
         if (display_worker_start && (e = display_worker_start())) goto out;
+        /* The credential is fixed before guest boot; no later input changes it. */
+        struct dos_identity identity;
+        if ((e = dos_identity_capture(&identity, p))) goto out;
         unsigned reservation = 0;
         while (reservation < DOSVM_LIMIT && creating[reservation]) reservation++;
-        if (reservation == DOSVM_LIMIT) { e = -ENOSPC; goto out; }
+        if (reservation == DOSVM_LIMIT) { dos_identity_release(&identity); e = -ENOSPC; goto out; }
         creating[reservation] = p->pid;
         /* ABI 0/1 are compatibility aliases. Every desktop window, including
          * the interactive shell, uses the qualified unified base. */
@@ -462,8 +541,9 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         const struct dosvm_config config = {.probe = window_probe(), .base = workload, .dpmi = true,
             .game=(uint8_t)c.launch.game,.kernel=(uint8_t)c.launch.kernel,
             .memory_locked=c.launch.memory==CIUKI_DOSVM_MEMORY_LOCKED,
-            .disable_file_bridge=true,.cancelled=owner_stopping,.cancel_arg=p};
+            .disable_file_bridge=true,.cancelled=owner_stopping,.cancel_arg=p,.identity=&identity};
         e = dosvm_create(&config, &v);
+        dos_identity_release(&identity); /* the VM holds its own reference */
         creating[reservation] = 0;
         if (e) { surface_release(surface); e = e==-ENOENT && c.launch.game ? e : closed_error(e); goto out; }
         c.changed|=v->ports_changed;
@@ -472,6 +552,9 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
             if (c.launch.reserved[1]!=CIUKI_JOY_DISABLED)
                 v->joystick.route=(struct joystick_route){c.launch.reserved[1],c.launch.reserved[2],c.launch.reserved[3],c.launch.reserved[4],c.launch.reserved[5]};
         } else if (joystick_settings_game) {
+            /* sec-user-05: the creator's own saved routes (its session's
+             * store); a failure keeps the store already active. */
+            if (joystick_settings_select) (void)joystick_settings_select(p);
             uint32_t jf=irq_save();
             bool fallback=joystick_settings_game(c.launch.game,&v->joystick.route);
             irq_restore(jf);
@@ -512,6 +595,11 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
         b->busy = true;
         v = dosvm_lookup(key);
         if (!v) { e = -ESRCH; goto out; }
+        /* Same pid alone is not ownership: the creating credential and
+         * session must be unchanged and live (no reused-pid control). A VM
+         * already DEAD has released its identity and runs nothing; its
+         * owner may still collect the binding as before. */
+        if (v->info.state != DOSVM_DEAD && !dos_identity_owner(&v->identity, p)) { e = -ESRCH; goto out; }
         binding_priority(b,v);
         if (op == CIUKI_DOSVM_CLOSE) {
             e = closed_error(release_binding(b, false));
@@ -531,6 +619,7 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
             if (v->launch_failed || c.state == CIUKI_DOSVM_STOPPED)
                 memcpy(c.name, v->console_line, sizeof(c.name) - 1);
             video_mode(v, &c);
+            if (c.state != CIUKI_DOSVM_STOPPED && status_graphics(v, c.video_mode)) c.changed |= CIUKI_DOSVM_GRAPHICS;
             dosvm_startup_report(v, false);
             dosvm_perf_report(v);
         } else if (op==CIUKI_DOSVM_CLIP_REQUEST || op==CIUKI_DOSVM_CLIP_COMPLETE)

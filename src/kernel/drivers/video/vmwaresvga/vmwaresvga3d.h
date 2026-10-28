@@ -8,6 +8,9 @@
 #include "../render3d.h"
 #include "vmwaresvga3d_protocol.h"
 
+/* The VGPU9 backend qualifies D16 only; shared stencil additions do not
+ * expand its hardware claim. */
+#define VMSVGA3D_FEATURES (R3D_TEXTURED|R3D_CLEAR_COLOR|R3D_CLEAR_DEPTH|R3D_DEPTH_TEST|R3D_DEPTH_WRITE|R3D_COPY|R3D_TEXTURE1)
 #define VMSVGA3D_TEXTURE_MIN (256u * 1024u)
 #define VMSVGA3D_TEXTURE_FULLSIZE (480u * 1024u) /* both Q2/Q3 mip chains + guards */
 #define VMSVGA3D_HEAP_EXTRA (8u * 1024u * 1024u)  /* texture pool cap above the plan */

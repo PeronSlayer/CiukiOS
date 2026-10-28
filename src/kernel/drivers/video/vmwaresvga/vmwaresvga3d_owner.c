@@ -4,6 +4,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/abi.h>
 #include <ciuki/mm.h>
+#include <ciuki/desktop.h>
 #include <ciuki/display_driver.h>
 #include "vmwaresvga3d.h"
 #define MARKER_KEY "3d-vmwaresvga"
@@ -124,15 +125,39 @@ int vmsvga3d_owner_attach(struct render3d_service *s,const struct render3d_host 
         (struct render3d_extent){device.heap.first+VMSVGA3D_SCRATCH_BYTES,device.heap.bytes-VMSVGA3D_SCRATCH_BYTES});
     device.consumer=s; return 0;
 }
-static void *host_alloc(void *ctx,size_t bytes) { (void)ctx; return kmalloc(bytes); }
-static void host_free(void *ctx,void *p) { (void)ctx; kfree(p); }
+/* Page-backed qualification storage, following the integrated Savage owner.
+ * Include prefixes, page rounding and backend staging in the shared ceiling. */
+static uint32_t probe_resident_bytes;
+static void *host_alloc(void *ctx,size_t bytes)
+{
+    (void)ctx;
+    if (!bytes || bytes>R3D_RAM_LIMIT-8) return 0;
+    uint32_t extent=(uint32_t)bytes+8;
+    uint32_t charge=(extent+PAGE_SIZE-1)&~(PAGE_SIZE-1);
+    uint32_t backend=vmsvga3d_backend()->resident_bytes;
+    if (backend>R3D_RAM_LIMIT-probe_resident_bytes ||
+        charge>R3D_RAM_LIMIT-probe_resident_bytes-backend) return 0;
+    probe_resident_bytes+=charge;
+    uint32_t *p=desktop_buffer_alloc(extent,MM_IO_REQUEST);
+    if (!p) { probe_resident_bytes-=charge; return 0; }
+    p[0]=extent; p[1]=charge; return p+2;
+}
+static void host_free(void *ctx,void *data)
+{
+    (void)ctx;
+    if (data) {
+        uint32_t *p=(uint32_t *)data-2,charge=p[1];
+        desktop_buffer_free(p,p[0],MM_IO_REQUEST);
+        probe_resident_bytes-=charge;
+    }
+}
 static uint64_t host_now(void *ctx) { (void)ctx; return device.engine->io.now(device.engine->io.ctx); }
 /* Scratch services for the boot scenes: software services whose resources
  * are then placed, hardware-flagged, inside the claimed plan. */
 static int scratch_create(struct render3d_service **out,unsigned width,unsigned height,bool full,bool hardware)
 {
     if (full && hardware && device.texture_bytes<VMSVGA3D_TEXTURE_FULLSIZE) return -ENOMEM;
-    struct render3d_service *s=kmalloc(sizeof(*s)); if (!s) return -ENOMEM;
+    struct render3d_service *s=host_alloc(0,sizeof(*s)); if (!s) return -ENOMEM;
     const struct render3d_host host={0,host_alloc,host_free,host_now,0};
     render3d_init(s,&host,device.generation,0,0,(struct render3d_extent){0});
     uint32_t context;
@@ -145,7 +170,7 @@ static int scratch_create(struct render3d_service **out,unsigned width,unsigned 
         uint32_t *pixels=(void *)s->ring[2];
         if (full && kinds[i]==R3D_TEXTURE) {
             unsigned base=i==2 ? 256 : 128,levels=i==2 ? 9 : 8;
-            pixels=kmalloc(base*base*4*2);
+            pixels=host_alloc(0,base*base*4*2);
             if (!pixels) { e=-ENOMEM; break; }
             struct render3d_texture_desc desc={.format=R3D_ARGB8888,.width=base,.height=base,.levels=levels};
             unsigned offset=0;
@@ -156,7 +181,7 @@ static int scratch_create(struct render3d_service **out,unsigned width,unsigned 
                 offset+=side*side;
             }
             e=render3d_create_texture(s,1,context,&desc,&resource);
-            kfree(pixels);
+            host_free(0,pixels);
         } else {
             if (i==2) for (unsigned j=0;j<32*16;j++) pixels[j]=(j%32)<16 ? 0xff4080c0u : 0xffc04080u;
             e=render3d_create_resource(s,1,context,kinds[i],i==2 ? 32 : width,i==2 ? 16 : height,
@@ -169,14 +194,14 @@ static int scratch_create(struct render3d_service **out,unsigned width,unsigned 
             if (kinds[i]==R3D_TEXTURE) texture_place+=r->reserved; else place+=r->reserved;
         }
     }
-    if (e) { (void)render3d_close(s); kfree(s); return e; }
+    if (e) { (void)render3d_close(s); host_free(0,s); return e; }
     *out=s; return 0;
 }
 static void fullsize_diagnostic(struct render3d_service **scratch)
 {
     /* Q1 is complete. Scratch allocation and scalar reference rendering
      * never occur inside presenter/engine ownership. */
-    (void)render3d_close(*scratch); kfree(*scratch); *scratch=0;
+    (void)render3d_close(*scratch); host_free(0,*scratch); *scratch=0;
     struct render3d_service *reference=0;
     device.fullsize_testing=true;
     int e=scratch_create(scratch,device.mode_width,device.mode_height,true,true);
@@ -187,7 +212,7 @@ static void fullsize_diagnostic(struct render3d_service **scratch)
         e=vmsvga3d_fullsize_probe(&device,reference);
         device.consumer=0;
     }
-    if (reference) { (void)render3d_close(reference); kfree(reference); }
+    if (reference) { (void)render3d_close(reference); host_free(0,reference); }
     if (e && !device.precision_error) device.precision_error=e;
     klog("[3d] fullsize driver=vmwaresvga result=%s error=%d width=%u height=%u samples=%u reference=%08x hardware=%08x channel_error=%u depth_error=%u elapsed_us=%llu phase=%u guard=%u quarantined=%u",
         device.fullsize_qualified ? "qualified" : "refused",e,device.mode_width,device.mode_height,device.sample_count,
@@ -341,7 +366,7 @@ void vmsvga3d_boot_diagnostic(struct vmsvga_engine *engine,const struct fb_devic
              * never an excuse to recycle a referenced object. */
             device.consumer=scratch; render3d_device_lost(scratch);
             scratch->contexts[0].hardware=true;
-        } else { (void)render3d_close(scratch); kfree(scratch); }
+        } else { (void)render3d_close(scratch); host_free(0,scratch); }
     }
     /* Q4: admission for this boot, generation and mode only. */
     device.qualified=!e && !device.lost && device.minimum_passed && device.fullsize_qualified;

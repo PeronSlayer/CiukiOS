@@ -1,5 +1,6 @@
 /* Production memory paths on fake physical RAM. No privileged instructions.
  * SPDX-License-Identifier: GPL-2.0-only */
+#include <ciuki/kheap_limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -54,8 +55,8 @@ void klog(const char *fmt, ...)
 static int memory_failure=-1;
 static bool memory_allocation_fails(void)
 { if (memory_failure<0) return false; if (!memory_failure) return true; memory_failure--; return false; }
-void *kmalloc(size_t bytes) { return memory_allocation_fails()?0:malloc(bytes); }
-void *kzalloc(size_t bytes) { void *p=kmalloc(bytes); if (p) memset(p,0,bytes); return p; }
+void *(kmalloc)(size_t bytes) { if (bytes > KHEAP_MAX_REQUEST) return 0; return memory_allocation_fails()?0:malloc(bytes); }
+void *(kzalloc)(size_t bytes) { if (bytes > KHEAP_MAX_REQUEST) return 0; void *p=kmalloc(bytes); if (p) memset(p,0,bytes); return p; }
 void kfree(void *p) { free(p); }
 static void (*memory_service)(void), (*memory_sleep)(void);
 void kpreempt_point(void) { CHECK(flags==0x200); if (memory_service) memory_service(); }

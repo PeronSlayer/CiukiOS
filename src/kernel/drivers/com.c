@@ -9,6 +9,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/cpu.h>
 #include <ciuki/com.h>
+#include <ciuki/desktop.h>
 #include <ciuki/task.h>
 #include <ciuki/work.h>
 #include <ciuki/input.h>
@@ -488,10 +489,10 @@ int com_lease_open(unsigned i, unsigned owner, uint32_t id, uint32_t *generation
         return -EBUSY;
     }
     if (!(p->status.flags&CIUKI_COM_READY) || !leases_valid(p)) return -ENODEV;
-    uint8_t *queues=kzalloc(2*CIUKI_COM_QUEUE); if (!queues) return -ENOMEM;
+    uint8_t *queues=desktop_buffer_alloc(2*CIUKI_COM_QUEUE,MM_IO_REQUEST); if (!queues) return -ENOMEM;
     uint32_t f=irq_save();
     if (p->queues || p->deferred || p->closing || !(p->status.flags&CIUKI_COM_READY) || !leases_valid(p) || open_generation==UINT32_MAX) {
-        irq_restore(f); kfree(queues); return -EBUSY;
+        irq_restore(f); desktop_buffer_free(queues,2*CIUKI_COM_QUEUE,MM_IO_REQUEST); return -EBUSY;
     }
     p->queues=queues; p->rx_head=p->tx_head=0; p->status.rx_queued=p->status.tx_queued=0;
     p->status.errors=p->status.received=p->status.transmitted=p->status.dropped=0;
@@ -500,7 +501,7 @@ int com_lease_open(unsigned i, unsigned owner, uint32_t id, uint32_t *generation
     p->line=default_line(); p->lcr=0; p->ier=13; p->mcr=0x0b;
     if (!program(p)) {
         p->queues=0; p->status.generation=0; p->status.flags&=~CIUKI_COM_OPEN; p->owner=p->owner_id=0;
-        irq_restore(f); kfree(queues); return -EIO;
+        irq_restore(f); desktop_buffer_free(queues,2*CIUKI_COM_QUEUE,MM_IO_REQUEST); return -EIO;
     }
     p->status.modem=rd(p,6); *generation=p->status.generation;
     if (reason) *reason="COM lease acquired.";
@@ -540,7 +541,7 @@ void com_close(unsigned i, uint32_t generation)
     if (!idle) quarantine(p,"Close idle timeout; resources retained.");
     p->closing=false;
     p->owner=p->owner_id=0;
-    kwait_wake_irq(&p->wait,false); irq_restore(f); kfree(queues);
+    kwait_wake_irq(&p->wait,false); irq_restore(f); desktop_buffer_free(queues,2*CIUKI_COM_QUEUE,MM_IO_REQUEST);
 }
 int com_transfer(unsigned i, uint32_t g, void *data, unsigned bytes, bool write)
 {

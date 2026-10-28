@@ -302,15 +302,26 @@ static void test_fx27_lean(void)
          * MOV SS shadow, and the saved return point of an open hardware
          * interrupt record (a late native return, dpmi_irq_resync). A PM
          * STI shadow ends at this #GP and the exit is lean (t23-dosperf). */
-        for (unsigned k = 0; k < 6; k++) {
+        for (unsigned k = 0; k < 7; k++) {
             if ((k == 3 || k == 5) && !pm) continue;
+            if (k == 6 && pm) continue;
             uint32_t eflags = cur.tf.eflags;
             if (k == 0) cur.tf.eflags |= V86_TF;
             if (k == 1) v->network_attached = true;
             if (k == 2) v->idle.depth = 1;
             if (k == 3) v->dpmi.cli_settled = false;
-            if (k == 4) { if (pm) { v->dpmi.shadow = true; v->dpmi.shadow_cs = 1; } else v->monitor.shadow = true; }
             cur.tf.eip = fx27_code(pm); cur.tf.edx = 0x3C5; cur.tf.eax = 2;
+            if (k == 4) {
+                if (pm) { v->dpmi.shadow = true; v->dpmi.shadow_cs = 1; }
+                else {   /* a V86 shadow left at a foreign boundary */
+                    v->monitor.shadow = true; v->monitor.shadow_cs = (uint16_t)(cur.tf.cs - 1);
+                    v->monitor.shadow_ip = v->monitor.shadow_next = 0x10;
+                }
+            }
+            if (k == 6) {        /* the shadowed instruction itself traps */
+                v->monitor.shadow = true; v->monitor.shadow_cs = (uint16_t)cur.tf.cs;
+                v->monitor.shadow_ip = v->monitor.shadow_next = (uint16_t)cur.tf.eip;
+            }
             if (k == 5) {
                 struct dpmi_record *r = &v->dpmi.rec[0];
                 *r = (struct dpmi_record){0};
@@ -325,10 +336,15 @@ static void test_fx27_lean(void)
             lean0 = v->perf.lean_exits;
             step(v, 13, 0);
             /* t23-dosperf: a PM STI shadow ends at any #GP(0), as pm_trap
-             * ends it; the exit after it is lean (no IRQ pending here). */
-            bool ended = k == 4 && pm;
+             * ends it; the exit after it is lean (no IRQ pending here).
+             * fx-doswin3: a V86 shadow ends at a boundary other than its own
+             * first, as the ordinary #GP path retires it (v86_retire_shadow),
+             * so that exit is lean too; at its own boundary it stays an
+             * obligation (ordinary path). */
+            bool ended = k == 4 && (pm || v->monitor.track_boundaries);
             CHECK(v->perf.lean_exits == lean0 + ended && v->vga.seq[2] == 2 && cur.tf.eip == fx27_code(pm) + 1);
-            CHECK(!ended || !v->dpmi.shadow);
+            CHECK(!ended || (!v->dpmi.shadow && !v->monitor.shadow));
+            if (k == 6) CHECK(!v->monitor.shadow && !(cur.tf.eflags & V86_TF));
             cur.tf.eflags = eflags & ~V86_TF;
             v->network_attached = false; v->idle.depth = 0; v->dpmi.cli_settled = true;
             v->dpmi.shadow = false; v->monitor.shadow = false;

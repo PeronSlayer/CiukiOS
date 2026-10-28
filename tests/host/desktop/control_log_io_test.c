@@ -63,8 +63,23 @@ static void state_log_test(void)
     puts("PASS display state records: one per transition, 1000 idle calls emit none, cancel, completion, tabs and close");
 }
 static const char *fixture;
-static unsigned reads, interruptions;
+static unsigned reads, interruptions, service_reads;
 static int fail_open;
+/* sec-sysvc: the SYSTEM log service. 0: ENOSYS (an older kernel: the
+ * native applet reads the file), 1: serves the fixture, 2: EPERM. */
+static int log_service;
+int ciuki_system_log_read(unsigned scope,const char *name,uint32_t offset,void *buffer,size_t capacity,size_t *got,uint32_t *total)
+{
+    assert(scope==CIUKI_SYSTEM_LOG_MACHINE && !strcmp(name,"BOOT.LOG") && capacity<=CIUKI_SYSTEM_LOG_DATA_MAX && got && total);
+    if (!log_service) { errno=ENOSYS; return -1; }
+    if (log_service==2) { errno=EPERM; return -1; }
+    service_reads++;
+    int fd=open(fixture,O_RDONLY); assert(fd>=0);
+    struct stat st; assert(!fstat(fd,&st)); *total=(uint32_t)st.st_size; *got=0;
+    size_t want=offset<*total ? *total-offset : 0; if (want>capacity) want=capacity;
+    ssize_t n=want ? pread(fd,buffer,want,offset) : 0; assert(n==(ssize_t)want); *got=(size_t)n;
+    close(fd); return 0;
+}
 int cp_test_open(const char *path, int flags, ...)
 {
     assert(!strcmp(path, CP_LOG_FILE));
@@ -96,7 +111,18 @@ int main(int argc, char **argv)
     assert(reads>40 && !interruptions);
     assert(!log_read(NULL,total,actual,sizeof(actual),&n,&total) && !n);
     fail_open=1; assert(log_read(NULL,0,actual,sizeof(actual),&n,&total)==-ENOENT);
+    /* The same pages through the SYSTEM log service, which an administrator
+     * uses on a managed system volume; a standard user gets EPERM. */
+    fail_open=0; log_service=1; unsigned file_reads=reads;
+    for (uint32_t offset=0;offset<(uint32_t)size;offset+=CP_LOG_BYTES) {
+        assert(!log_read(NULL,offset,actual,sizeof(actual),&n,&total));
+        assert(total==(uint32_t)size && n<=sizeof(actual));
+        assert(!fseek(f,(long)offset,SEEK_SET));
+        assert(fread(expected,1,sizeof(expected),f)==n && !memcmp(actual,expected,n));
+    }
+    assert(reads==file_reads && service_reads==(unsigned)((size+CP_LOG_BYTES-1)/CP_LOG_BYTES));
+    log_service=2; assert(log_read(NULL,0,actual,sizeof(actual),&n,&total)==-EPERM && reads==file_reads);
     fclose(f);
-    puts("PASS native boot log: fixed read-only path, complete 320 KiB in bounded pages, short reads, EINTR, EOF and missing file");
+    puts("PASS native boot log: fixed read-only path, complete 320 KiB in bounded pages, short reads, EINTR, EOF and missing file; SYSTEM log service pages, EPERM for a standard user");
     return 0;
 }

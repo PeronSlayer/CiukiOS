@@ -14,17 +14,26 @@
 #include <unistd.h>
 #include <ciuki/abi.h>
 #define CP_ACCEL_RETRY_PATH "/system/settings/accel-retry.cfg"
-static inline int cp_accel_retry_request(const char *path,const struct ciuki_display_engine_info *e)
+/* The request text for this engine record: its length, or -errno. sec-sysvc2:
+ * Control Panel hands it to the SYSTEM setting service (the file is sealed). */
+static inline int cp_accel_retry_text(const struct ciuki_display_engine_info *e,char *text,size_t cap)
 {
-    if(!path||!e||e->version!=CIUKI_DISPLAY_ENGINE_VERSION||e->size!=sizeof(*e))return -EINVAL;
+    if(!e||e->version!=CIUKI_DISPLAY_ENGINE_VERSION||e->size!=sizeof(*e))return -EINVAL;
     size_t n=strnlen(e->driver_id,sizeof(e->driver_id));
     if(!n||n>=sizeof(e->driver_id))return -EINVAL;
     for(size_t i=0;i<n;i++){char c=e->driver_id[i];if(!((c>='a'&&c<='z')||(c>='0'&&c<='9')||c=='_'||c=='-'))return -EINVAL;}
     /* No PCI function is bound (software renderer): nothing to re-arm. */
     if(!e->pci_vendor)return -ENODEV;
+    int length=snprintf(text,cap,"driver=%s\npci=%04x:%04x\n",e->driver_id,e->pci_vendor,e->pci_device);
+    if(length<0||(size_t)length>=cap)return -EINVAL;
+    return length;
+}
+static inline int cp_accel_retry_request(const char *path,const struct ciuki_display_engine_info *e)
+{
+    if(!path)return -EINVAL;
     char text[48];
-    int length=snprintf(text,sizeof(text),"driver=%s\npci=%04x:%04x\n",e->driver_id,e->pci_vendor,e->pci_device);
-    if(length<0||(size_t)length>=sizeof(text))return -EINVAL;
+    int length=cp_accel_retry_text(e,text,sizeof(text));
+    if(length<0)return length;
     int fd=open(path,O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC,0644);if(fd<0)return -errno;
     int r=0;
     for(const char *at=text;!r&&length;){

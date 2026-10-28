@@ -164,6 +164,11 @@ static uint32_t component(const char *s)
      * detailed than the eight selectable wizard components. */
     if(!strcmp(s,"dos-reference") || !strcmp(s,"dos-unified"))return SETUP_COMP_DOS;
     if(!strcmp(s,"wolf3d") || !strcmp(s,"doom") || !strcmp(s,"quake"))return SETUP_COMP_GAMES;
+    /* sec-user-02: rows added after f9-01. The bundled DOS demos install with
+     * the games; the Quake III Arena demo installer (protected store
+     * /Programs/Installers) is a Win32 program and installs with Windows. */
+    if(!strcmp(s,"war2-demo") || !strcmp(s,"duke3d-shareware"))return SETUP_COMP_GAMES;
+    if(!strcmp(s,"q3a-demo"))return SETUP_COMP_WINDOWS;
     if(!strcmp(s,"jitterentropy") || !strcmp(s,"lwip"))return SETUP_COMP_SYSTEM;
     return 0;
 }

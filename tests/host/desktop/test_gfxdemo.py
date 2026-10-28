@@ -16,12 +16,15 @@ ROOT = Path(__file__).resolve().parents[3]
 # F2-62: same scenes and viewport, rendered with the new Blue default.
 # F2-63: re-recorded for the pinned FreeType UI atlases.
 # F7-01: TinyGL scenes at native viewport size; GL tabs and product acknowledgment.
+# F7-14: shared GL engine scenes; backend/native/full-screen controls, GL status line, narrow two-row layout.
 GOLDENS = {
-    'benchmark': '17b617f0e3b209f9ee7d0168a38c346e83a131bf7f0114ad26db42b380211e6f',
-    'cube-flat': '39b432352407495b416d45b9923a1523b49c144504d3bef27121e64ffe63f8e5',
-    'cube-gouraud': 'bf2f59d9d9bc0550221d64fdc60b87f5f82b145a2f4068e7ec4115a172d43de9',
-    'sprites': '634c85fca6ea267679bf34fb74e80bcfe4b316dd7661bd3d101d0eb16dc6ea4e',
-    'software-only': '34337f9c73e297f3fa29e0ee1f6412c72998800a7236e329b2a01a13a37a95d2',
+    'benchmark': '97cd36a37115739655975fe635a71fcdc283b1448b688e93b975a4d2a1477071',
+    'cube-flat': '098ff069e91f0514f66bda39e3d911c14926d8350309507d45ddb3b4c201c30f',
+    'cube-gouraud': '1afd6ac15f8fc678377d8a2fd659c07b1da51f976b9a4ed64aaa7e31c931f453',
+    'sprites': '1d75e9d95fc49247ef266c608e675c847f1189ed9f4f2b85110bbb66ed288645',
+    'software-only': '98606386748c1b2242b2648e7c02c45b1c3889861637f4d3d2aeeb766dba66f6',
+    'cube-hardware-unavailable': '5d8893f68de227acffb0b312231a9b09c4bac9fa12a2e7e3622daca7e722a3be',
+    'narrow-controls': '80efcfd42c78c6545d6688e441b7ead544e65c777cda01e7d56c012ca8fc4774',
 }
 
 def load(name, path):
@@ -53,12 +56,13 @@ class GraphicsDemoTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             print(result.stdout)
             digests = {p.stem: hashlib.sha256(p.read_bytes()).hexdigest() for p in folder.glob("*.xrgb") if p.stem != "portrait"}
-            self.assertEqual(set(digests), {"benchmark", "cube-flat", "cube-gouraud", "sprites", "software-only"})
-            self.assertEqual(len(set(digests.values())), 5)
+            self.assertEqual(set(digests), set(GOLDENS))
+            self.assertEqual(len(set(digests.values())), len(GOLDENS))
             print("GFX_GOLDENS", digests)
             for p in folder.glob("*.xrgb"):
                 if p.stem != "portrait":
-                    capture("gfxdemo-" + p.stem, p.read_bytes(), 760, 640)
+                    width, height = map(int, p.with_suffix(".size").read_text().split())
+                    capture("gfxdemo-" + p.stem, p.read_bytes(), width, height)
             target = os.environ.get("CIUKI_GFX_FRAMES")
             if target:
                 Path(target).mkdir(parents=True, exist_ok=True)

@@ -198,7 +198,7 @@ static int resolve_targets(struct batch_transport *t, struct batch_fence *f)
         memcpy(&desc,b->blob+b->header.targets_offset+i*32,32);
         const struct fb_device *screen=fbdev_get();
         if (desc.flags || desc.kind<1 || desc.kind>3) return -EINVAL;
-        for (unsigned n=0;n<4;n++) if (desc.reserved[n]) return -EINVAL;
+        for (unsigned n=0;n<4;n++) if (desc.reserved[n] && !(desc.kind==CIUKI_TARGET_VIDEO && n==0)) return -EINVAL;
         if (desc.kind==CIUKI_TARGET_SCANOUT) {
             if (desc.handle || desc.generation!=b->header.generation) return -EINVAL;
             if (!screen->present) return -ENODEV;
@@ -214,6 +214,7 @@ static int resolve_targets(struct batch_transport *t, struct batch_fence *f)
             if (!lease || lease->kind!=DESKTOP_DISPLAY) return -EBADF;
             if (lease!=t->grant || lease->owner!=t->process->pid) return -EACCES;
             int e=fbdev_batch_video_target(desc.generation,&b->targets[i]); if (e) return e;
+            if (desc.reserved[0]!=b->targets[i].cache_epoch) return -EAGAIN;
             /* The grant owns this complete driver lease. Admission transfers
              * its pin to fbdev's in-flight owner; mode/stop cannot reclaim it
              * before completion. Grant destruction transfers that same pin

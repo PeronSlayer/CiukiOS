@@ -61,6 +61,7 @@ class ShellTests(unittest.TestCase):
     def test_command_transcripts_and_conversation_ownership(self):self.run_case('dde')
     def test_wininit_order_faults_bounds_and_interrupted_replay(self):self.run_case('wininit')
     def test_runonce_order_commit_failure_and_deletion(self):self.run_case('runonce')
+    def test_common_and_personal_program_groups(self):self.run_case('groups')  # sec-user-05
     def test_end_session_accept_veto_force_timeout_and_desktop(self):self.run_case('session')
 
     def test_restart_guest_fixture_and_predicate_dry_run(self):self.run_case('fixture')

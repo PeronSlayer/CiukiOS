@@ -54,7 +54,13 @@ void klog(const char *fmt,...) { (void)fmt; }
 
 /* ---- the production fx-22 policy ---- */
 #define DOSVM_STOPPING 3u
-struct dosvm { struct { unsigned state; } info; bool fullscreen_hold, fullscreen_suspended, fullscreen_parked, window_marking, clipboard_mark; /* G5/G17: a window mark selection also parks the VM */ struct kwait wake; };
+/* fx-biosvm2: the park freezes the held-IRQ guard and DPMI ISR clocks. */
+#define DPMI_RF_HWINT 2u
+struct dpmi_record { uint8_t flags; bool isr_measured; uint64_t isr_tsc, isr_tick; };
+struct dosvm { struct { unsigned state; } info; bool fullscreen_hold, fullscreen_suspended, fullscreen_parked, window_marking, clipboard_mark; /* G5/G17: a window mark selection also parks the VM */ struct kwait wake;
+    uint64_t fullscreen_park_tick; struct { struct { uint64_t tick; bool active; } rm[16]; } irq;
+    struct { unsigned depth; struct dpmi_record rec[4]; } dpmi; };
+static uint64_t dosvm_perf_clock(void) { return 0; }
 #include "fullscreen_return_policy.inc"
 /* Negative control: the pre-fx-22 checkpoint of dosvm_fullscreen.c. */
 static void pre_checkpoint(struct dosvm *v)

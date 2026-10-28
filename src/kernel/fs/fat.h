@@ -56,6 +56,7 @@ struct fat_volume {
     char volume_label[12];
     uint16_t fsinfo, backup; uint8_t type, spc, fats, media, active_fat;
     bool mounted, readonly, writable_session, dirty_recovered;
+    bool strict_names; /* managed policy: malformed LFN must not alias-fallback */
     bool preparing; /* unpublished mount: complete direct I/O, no cache mutex */
     bool scan_complete, scan_fast, scan_deferred;
     /* fx-17: removable media made writable without an ownership scan

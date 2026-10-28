@@ -29,7 +29,7 @@ class ControlIncrementalTests(unittest.TestCase):
                    "apps/control/driver_pack_ui.c", "apps/control/display.c", "apps/control/fonts.c",
                    "sdk/libfont/font.c", "apps/libdeskui/text_ttf.c", "apps/desktop/protocol.c",
                    *(f"apps/desktop/{n}.c" for n in ("settings", "sounds", "wallpaper", "image", "compositor", "theme")),
-                   *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map"))]
+                   *(f"apps/libdeskui/{n}.c" for n in ("draw", "widgets", "list", "menu", "dialog", "controls", "commdlg", "textarea", "icons", "icon_map", "iconx", "fileicon"))]
         with tempfile.TemporaryDirectory(prefix="cp-incremental-", dir=parent) as tmp:
             binary = Path(tmp) / "panel"
             subprocess.run(["clang", "-std=c17", "-D_POSIX_C_SOURCE=200809L", "-O1", "-g", "-Wall", "-Wextra", "-Werror",

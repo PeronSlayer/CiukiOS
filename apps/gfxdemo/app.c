@@ -6,16 +6,70 @@
 #include <string.h>
 static int compact_scene(const struct du_canvas *c)
 { return c->width>640 && c->height<404; }
+/* f7-14: the GL controls share one row from 680 pixels; narrower windows
+ * move Native resolution and Full screen to a second row. */
+static int two_rows(const struct du_canvas *c)
+{ return c->width<680; }
+static int scene_top(const struct gfx_app *a,const struct du_canvas *c)
+{ return a->page && two_rows(c) ? 92 : 66; }
+const char *gfx_backend_name(unsigned policy)
+{
+    return policy==CIUKI_GL_BACKEND_HARDWARE ? "Hardware" : policy==CIUKI_GL_BACKEND_SOFTWARE ? "Software" : "Automatic";
+}
+/* Presentation mode (contract 6): windowed frames are copied into the
+ * desktop's composition; a lease presents by GPU copy or CPU copy. */
+const char *gfx_present_name(const struct gfx_app *a)
+{
+    if (a->full_state!=GFX_FULL_ACTIVE) return "desktop-copy";
+    return a->scene.presented>0 ? "gpu-copy" : "cpu-copy";
+}
+void gfx_gl_status(struct gfx_app *a)
+{
+    struct ciuki_gl_status s={.size=sizeof(s)};
+    if (!ciuki_gl_status(&s)) a->gl=s;
+}
+void gfx_set_backend(struct gfx_app *a,unsigned policy)
+{
+    a->backend=policy;
+    /* -ENODEV for a required but unavailable hardware path: the library
+     * keeps rendering in software and the status line says so. */
+    a->backend_error=ciuki_gl_set_backend(policy);
+    if (a->ui && du_get(a->ui,GFX_BACKEND)) {
+        char text[40];snprintf(text,sizeof(text),"Backend: %s",gfx_backend_name(policy));
+        du_set_text(du_get(a->ui,GFX_BACKEND),text);du_invalidate_widget(a->ui,GFX_BACKEND);
+    }
+}
+int gfx_status_line(const struct gfx_app *a,char *out,size_t cap)
+{
+    const char *active=a->gl.backend==CIUKI_GL_BACKEND_HARDWARE ? "hardware 3D" : "software";
+    const char *note=a->gl.hardware_failed ? "; hardware failed, software for this context" :
+        a->backend_error ? "; hardware unavailable" : "";
+    return snprintf(out,cap,"OpenGL %s (%s): GPU frames %llu  CPU frames %llu  refused %llu  fallbacks %llu%s",
+        active,gfx_backend_name(a->backend),(unsigned long long)a->gl.hardware_frames,
+        (unsigned long long)a->gl.software_frames,(unsigned long long)a->gl.refusals,
+        (unsigned long long)a->gl.fallbacks,note);
+}
 static uint64_t scene_now(struct gfx_app *a)
 { return a->time_ns ? a->time_ns() : 0; }
 static void layout(struct du_ui *u,void *ctx)
 {
     struct gfx_app *a=ctx;
-    int compact=a->page && compact_scene(&u->canvas);
+    int compact=a->page && compact_scene(&u->canvas),rows=two_rows(&u->canvas);
     du_get(u,GFX_TABS)->box=(struct du_rect){8,8,u->canvas.width-16,u->canvas.height-(compact ? 56 : 88)};
     du_get(u,GFX_RUN)->box=(struct du_rect){16,36,124,22};
     du_get(u,GFX_SHADE)->box=(struct du_rect){16,36,124,22};
     du_get(u,GFX_PAUSE)->box=(struct du_rect){148,36,80,22};
+    du_get(u,GFX_BACKEND)->box=(struct du_rect){236,36,150,22};
+    du_get(u,GFX_NATIVE)->box=rows ? (struct du_rect){16,64,136,18} : (struct du_rect){396,38,136,18};
+    du_get(u,GFX_FULLSCREEN)->box=rows ? (struct du_rect){160,62,96,22} : (struct du_rect){540,36,96,22};
+}
+static void show_controls(struct du_ui *u,struct gfx_app *a)
+{
+    du_get(u,GFX_RUN)->hidden=a->page!=0;
+    du_get(u,GFX_SHADE)->hidden=a->page!=1;
+    du_get(u,GFX_BACKEND)->hidden=a->page==0;
+    du_get(u,GFX_NATIVE)->hidden=a->page==0;
+    du_get(u,GFX_FULLSCREEN)->hidden=a->page==0;
 }
 static void event(struct du_ui *u,const struct du_event *e,void *ctx)
 {
@@ -23,9 +77,24 @@ static void event(struct du_ui *u,const struct du_event *e,void *ctx)
     if (e->type==DU_EV_SELECT && e->id==GFX_TABS) {
         a->page=du_get(u,GFX_TABS)->active;
         layout(u,a);
-        du_get(u,GFX_RUN)->hidden=a->page!=0;
-        du_get(u,GFX_SHADE)->hidden=a->page!=1;
+        show_controls(u,a);
         u->dirty=1;
+    } else if (e->type==DU_EV_ACTIVATE && e->id==GFX_BACKEND) {
+        gfx_set_backend(a,a->backend==CIUKI_GL_BACKEND_AUTO ? CIUKI_GL_BACKEND_HARDWARE :
+            a->backend==CIUKI_GL_BACKEND_HARDWARE ? CIUKI_GL_BACKEND_SOFTWARE : CIUKI_GL_BACKEND_AUTO);
+        a->frames=0;a->sample_begin=0;a->fps10=a->ms1000=0;
+        u->dirty=1;
+    } else if (e->type==DU_EV_CHANGE && e->id==GFX_NATIVE) {
+        a->native_resolution=e->index!=0;
+        u->dirty=1;
+    } else if (e->type==DU_EV_ACTIVATE && e->id==GFX_FULLSCREEN && a->page && a->full_state==GFX_WINDOWED) {
+        /* The desktop answers with DESK_LEASE_EVENT; the runtime renders
+         * and presents while the lease holds. */
+        a->full_error=a->request ? a->request(a->request_ctx,DESK_LEASE,1) : -ENOSYS;
+        if (!a->full_error) a->full_state=GFX_FULL_REQUESTED;
+        u->dirty=1;
+    } else if (e->type==DU_EV_KEY && e->key==DU_KEY_ESC && a->full_state!=GFX_WINDOWED && a->request) {
+        (void)a->request(a->request_ctx,DESK_LEASE,0);
     } else if (e->type==DU_EV_ACTIVATE && e->id==GFX_SHADE) {
         a->gouraud=!a->gouraud;
         du_set_text(du_get(u,GFX_SHADE),a->gouraud ? "Gouraud shading" : "Flat shading"); du_invalidate_widget(u,GFX_SHADE); du_invalidate(u,a->viewport);
@@ -42,15 +111,32 @@ static void event(struct du_ui *u,const struct du_event *e,void *ctx)
 void gfx_attach(struct gfx_app *a,struct du_ui *u,const uint32_t *portrait)
 {
     memset(a,0,sizeof(*a)); a->ui=u; a->portrait=portrait;
-    a->native_resolution=1;
+    a->native_resolution=1; a->backend=CIUKI_GL_BACKEND_AUTO;
     a->tabs[0].text[0]="2D benchmark"; a->tabs[1].text[0]="OpenGL cube"; a->tabs[2].text[0]="OpenGL tiles";
     struct du_widget *tabs=du_add(u,DU_TABS,GFX_TABS,(struct du_rect){0},"");
     tabs->items=a->tabs; tabs->count=3;
     du_add(u,DU_BUTTON,GFX_RUN,(struct du_rect){0},"Run benchmark");
-    du_add(u,DU_BUTTON,GFX_SHADE,(struct du_rect){0},"Flat shading")->hidden=1;
+    du_add(u,DU_BUTTON,GFX_SHADE,(struct du_rect){0},"Flat shading");
     du_add(u,DU_BUTTON,GFX_PAUSE,(struct du_rect){0},"Pause");
+    du_add(u,DU_BUTTON,GFX_BACKEND,(struct du_rect){0},"Backend: Automatic");
+    du_add(u,DU_CHECKBOX,GFX_NATIVE,(struct du_rect){0},"Native resolution")->value=1;
+    du_add(u,DU_BUTTON,GFX_FULLSCREEN,(struct du_rect){0},"Full screen");
+    du_tooltip(u,GFX_BACKEND,"Automatic uses qualified 3D hardware when available; Hardware requires it; Software always renders on the CPU.");
+    du_tooltip(u,GFX_NATIVE,"Render at the size of the view (or of the screen in full screen) instead of 320 x 240 scaled.");
+    du_tooltip(u,GFX_FULLSCREEN,"Show the scene on the whole screen. Press Esc to return.");
     u->event=event; u->paint=gfx_paint; u->layout=layout; u->user=a;
+    show_controls(u,a);
     layout(u,a);
+}
+/* The rate and backend lines, below the scene (and beside the second row of
+ * controls in narrow windows); never the scene viewport itself. */
+void gfx_invalidate_status(struct gfx_app *a)
+{
+    struct du_canvas *c=&a->ui->canvas;
+    if (!a->page) { du_invalidate(a->ui,(struct du_rect){240,42,c->width-256,18}); return; }
+    int top=c->height-(compact_scene(c) ? 50 : 94);
+    du_invalidate(a->ui,(struct du_rect){8,top,c->width-16,c->height-top});
+    if (two_rows(c)) du_invalidate(a->ui,(struct du_rect){264,62,c->width-280,22});
 }
 void gfx_advance(struct gfx_app *a,uint64_t now)
 {
@@ -68,11 +154,16 @@ void gfx_advance(struct gfx_app *a,uint64_t now)
         uint64_t elapsed=now-a->sample_begin;
         a->fps10=(a->frames*10000000000ull+elapsed/2)/elapsed;
         a->ms1000=a->frames ? elapsed/a->frames/1000 : 0;
-        printf("[gfxdemo] fps=%llu.%llu frame_us=%llu scene=%s frames=%llu source=%ux%u\n",
+        printf("[gfxdemo] fps=%llu.%llu frame_us=%llu scene=%s frames=%llu source=%ux%u backend=%s policy=%s "
+            "gpu_frames=%llu cpu_frames=%llu refusals=%llu fallbacks=%llu present=%s\n",
             (unsigned long long)(a->fps10/10),(unsigned long long)(a->fps10%10),
             (unsigned long long)a->ms1000,a->page==1 ? "cube" : "tiles",
-            (unsigned long long)a->total_frames,a->scene.width,a->scene.height);
-        fflush(stdout);a->frames=0;a->sample_begin=now; du_invalidate(a->ui,(struct du_rect){240,42,a->ui->canvas.width-256,18});
+            (unsigned long long)a->total_frames,a->full_state==GFX_FULL_ACTIVE ? a->full_width : a->scene.width,
+            a->full_state==GFX_FULL_ACTIVE ? a->full_height : a->scene.height,
+            a->gl.backend==CIUKI_GL_BACKEND_HARDWARE ? "hardware" : "software",gfx_backend_name(a->backend),
+            (unsigned long long)a->gl.hardware_frames,(unsigned long long)a->gl.software_frames,
+            (unsigned long long)a->gl.refusals,(unsigned long long)a->gl.fallbacks,gfx_present_name(a));
+        fflush(stdout);a->frames=0;a->sample_begin=now; gfx_invalidate_status(a);
     }
     if (now<a->next_ns) return;
     a->next_ns+=((now-a->next_ns)/GFX_FRAME_NS+1)*GFX_FRAME_NS;
@@ -146,7 +237,7 @@ static void benchmark(struct gfx_app *a,struct du_canvas *c)
 static void scene_layout(struct gfx_app *a)
 {
     struct du_canvas *c=&a->ui->canvas;
-    int h=c->height-(compact_scene(c) ? 120 : 164),w=h*4/3;
+    int h=c->height-(compact_scene(c) ? 120 : 164)-(scene_top(a,c)-66),w=h*4/3;
     if (w>c->width-32) { w=c->width-32;h=w*3/4; }
     /* Wide, short windows reserve 320x240 and compact the status strip. */
     int native=c->width<=640 && c->height<=480;
@@ -154,7 +245,7 @@ static void scene_layout(struct gfx_app *a)
         int ratio=w/GFX_W<h/GFX_H ? w/GFX_W : h/GFX_H;
         if (ratio>=2) { w=GFX_W*ratio; h=GFX_H*ratio; }
     }
-    a->viewport=(struct du_rect){(c->width-w)/2,66,w,h};
+    a->viewport=(struct du_rect){(c->width-w)/2,scene_top(a,c),w,h};
     a->scene.width=(native || a->native_resolution) ? (unsigned)w : GFX_W;
     a->scene.height=(native || a->native_resolution) ? (unsigned)h : GFX_H;
     if (a->scene.width>GFX_MAX_W || a->scene.height>GFX_MAX_H) {
@@ -168,6 +259,7 @@ void gfx_update_scene(struct gfx_app *a)
     scene_layout(a);
     if (a->page==1) gfx_cube(&a->scene,a->elapsed_ns,a->portrait,a->gouraud);
     else gfx_sprites(&a->scene,a->elapsed_ns,a->portrait);
+    gfx_gl_status(a);
     gfx_store_scene(a);
     if (a->deferred) a->scene_render_ns=scene_now(a)-begin;
 }
@@ -179,6 +271,7 @@ void gfx_prepare_scene(struct gfx_app *a,const uint32_t *front,unsigned stride)
     scene_layout(a);
     if (a->page==1) gfx_cube(&a->scene,a->elapsed_ns,a->portrait,a->gouraud);
     else gfx_sprites(&a->scene,a->elapsed_ns,a->portrait);
+    gfx_gl_status(a);
     gfx_diff_scene(a,front,stride);
     a->scene_render_ns=scene_now(a)-begin;
 }
@@ -234,14 +327,23 @@ void gfx_store_scene(struct gfx_app *a)
 }
 void gfx_paint(struct du_ui *u,void *ctx)
 {
-    struct gfx_app *a=ctx; struct du_canvas *c=&u->canvas; char text[160];
+    struct gfx_app *a=ctx; struct du_canvas *c=&u->canvas; char text[192];
+    /* Completed frames: the desktop's present completion (windowed) or the
+     * kernel's completed lease copy (full screen); never submissions. */
     snprintf(text,sizeof(text),"Frame %llu  %llu.%llu FPS  %llu.%03llu ms/frame",(unsigned long long)a->total_frames,(unsigned long long)(a->fps10/10),
         (unsigned long long)(a->fps10%10),(unsigned long long)(a->ms1000/1000),(unsigned long long)(a->ms1000%1000));
-    du_text_fit(c,240,42,c->width-256,text,DU_INK);
+    if (!a->page) du_text_fit(c,240,42,c->width-256,text,DU_INK);
+    else {
+        int x=two_rows(c) ? 264 : 16,y=two_rows(c) ? 66 : 0;
+        if (y) du_text_fit(c,x,y,c->width-x-16,text,DU_INK);
+    }
     if (!a->page) { benchmark(a,c); a->viewport=(struct du_rect){0}; a->scene_ready=1; }
     else {
         scene_layout(a);
         struct du_rect clip=du_intersection(c->clip,a->viewport);
+        /* Under the lease the scene is on the whole screen; a status repaint
+         * of the hidden window must not rebind GL to the windowed target. */
+        if (a->full_state==GFX_FULL_ACTIVE) clip=(struct du_rect){0};
         if (clip.w>0 && clip.h>0) {
             gfx_update_scene(a);
             if (!a->deferred) desk_scale_rows(c->pixels+(size_t)clip.y*c->width+clip.x,(unsigned)c->width,
@@ -255,12 +357,13 @@ void gfx_paint(struct du_ui *u,void *ctx)
             a->scene_ready=1;
         }
         if (!compact_scene(c)) {
-            if (a->have_timing) snprintf(text,sizeof(text),"%dx%d / %ux%u: render %llu submit %llu wait %llu us",
-                c->width,c->height,a->scene.width,a->scene.height,
-                (unsigned long long)(a->render_ns/1000),(unsigned long long)(a->submit_ns/1000),(unsigned long long)(a->wait_ns/1000));
-            else snprintf(text,sizeof(text),"%s",a->page==1 ? "TinyGL CPU renderer, depth buffer, lit Ciuki texture." :
-                "16 OpenGL Ciuki tiles; elapsed-time motion, 60 Hz display pacing.");
-            label(c,16,c->height-90,text,DU_GRAY);
+            char line[256];
+            int n=snprintf(line,sizeof(line),"%s%sRender %u x %u in %d x %d (%s)",two_rows(c) ? "" : text,two_rows(c) ? "" : "  ",
+                a->scene.width,a->scene.height,c->width,c->height,gfx_present_name(a));
+            if (a->have_timing && n>0 && (size_t)n<sizeof(line))
+                snprintf(line+n,sizeof(line)-(size_t)n,"  R/S/W %llu/%llu/%llu us",(unsigned long long)(a->render_ns/1000),
+                    (unsigned long long)(a->submit_ns/1000),(unsigned long long)(a->wait_ns/1000));
+            label(c,16,c->height-90,line,DU_GRAY);
         }
     }
     int compact=a->page && compact_scene(c);
@@ -272,16 +375,20 @@ void gfx_paint(struct du_ui *u,void *ctx)
         a->display_w,a->display_h,a->bpp,a->engine.driver_id[0] ? a->engine.driver_id : "unavailable",
         (unsigned long long)a->accelerator.operations,a->accelerator.quarantined);
     label(c,12,c->height-(compact ? 35 : 64),text,DU_INK);
-    if (a->have_desktop) snprintf(text,sizeof(text),"Desktop average: present %llu.%03llu ms  composite %llu.%03llu ms",
+    if (a->page) {
+        if (compact) {
+            char status[160];gfx_status_line(a,status,sizeof(status));
+            snprintf(text,sizeof(text),"%llu.%llu FPS  %s",(unsigned long long)(a->fps10/10),(unsigned long long)(a->fps10%10),status);
+        } else gfx_status_line(a,text,sizeof(text));
+        if (a->full_error && a->full_state==GFX_WINDOWED && !compact)
+            snprintf(text+strlen(text),sizeof(text)-strlen(text),"; full screen refused (%d)",-a->full_error);
+    } else if (a->have_desktop) snprintf(text,sizeof(text),"Desktop average: present %llu.%03llu ms  composite %llu.%03llu ms",
         (unsigned long long)(a->desktop_present_ns/1000000),(unsigned long long)(a->desktop_present_ns/1000%1000),
         (unsigned long long)(a->desktop_composite_ns/1000000),(unsigned long long)(a->desktop_composite_ns/1000%1000));
     else snprintf(text,sizeof(text),"Desktop average: collecting present / composite times");
-    if (a->have_timing && a->page) snprintf(text,sizeof(text),
-        "%dx%d R/S/W %llu/%llu/%llu us  convert/copy %llu/%llu us  slot %llu us (60 Hz assumed)",c->width,c->height,
-        (unsigned long long)(a->render_ns/1000),(unsigned long long)(a->submit_ns/1000),(unsigned long long)(a->wait_ns/1000),
-        (unsigned long long)(a->convert_ns/1000),(unsigned long long)(a->copy_ns/1000),(unsigned long long)(a->slot_ns/1000));
     label(c,12,c->height-(compact ? 18 : 45),text,DU_INK);
-    if (!compact) label(c,12,c->height-24,a->scene.error ? "TinyGL rendering failed; see the application log." :
+    if (compact) return;
+    label(c,12,c->height-24,a->scene.error ? "OpenGL rendering failed; see the application log." :
         !a->portrait ? "Ciuki texture unavailable: install the approved portrait payload." :
-        "TinyGL by Fabrice Bellard, Gek (DMHSW), and C-Chads. FPS counts presents.",DU_GRAY);
+        "TinyGL by Fabrice Bellard, Gek (DMHSW), and C-Chads. FPS counts completed frames.",DU_GRAY);
 }
