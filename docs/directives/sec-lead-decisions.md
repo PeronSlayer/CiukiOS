@@ -26,3 +26,12 @@
 - S2-6: the synchronous backup against the desktop's 5 s request timeout is measured on the Pentium III in the self-test boot.
 - I-1 (integration): the Setup CD carries the machine registry hives that sec-k06 keeps under /System/Security/Registry/Machine (machine configuration Setup installs, like the default hives of a Windows Setup medium); the account seed and bootstrap.state stay excluded (sec-user-02).
 - I-2 (integration, sec-integfix): an owned drive letter without media reports ERROR_NOT_READY (ENXIO) before the sec-k03 subject-aware walk; unknown letters remain ENOENT.
+
+## Lead decisions on the sec-user-04 questions (2026-10-28 10:41)
+- U4-1 approved: the G32 upgrade enrollment amendment before section 7 of `user-security-contract.md`, with its private LOGON/ACCOUNT operation numbers and settings request 11.
+- U4-2 approved: an administrator's log-off of another user's locked session is forced, as Windows XP's "Log Off" of a disconnected user (unsaved data is lost and the dialog says so).
+- U4-3 approved for this step: the desktop raises the lock before Stand by; a firmware-initiated suspend locks when the desktop sees the resume. sec-k08 checks whether a kernel resume hook is needed for the APM/ACPI paths the hardware baseline uses.
+- U4-4: account pictures. Images ship only the default Ciuki portrait for now; a picture set derived from the approved portrait and Tango is a later UI item, never a substitute portrait.
+- U4-5: a Standard user cannot rename their own account (Windows XP limited accounts: change password and picture only); the ACCOUNT service must refuse it, not only the page. sec-k08 fixes it.
+- U4-6: machine-wide power settings (hibernation, the power button action) belong to the machine and are written through the SYSTEM service; per-user schemes stay per user. sec-k08 moves them.
+- U4-7 approved: per-user Desktop and Start Menu in a LOGON session, merged with All Users (the XP union already decided for sec-user-05), superseding sec-user-03's decision 6.
