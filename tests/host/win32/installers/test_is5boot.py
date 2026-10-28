@@ -11,6 +11,8 @@ import tempfile
 import time
 import unittest
 
+from . import host_services
+
 ROOT = Path(__file__).resolve().parents[4]
 HERE = Path(__file__).resolve().parent
 CD = Path('/run/media/peronslayer/Halflife')
@@ -86,13 +88,30 @@ def diagnostics(service):
     return '\n'.join(dict.fromkeys(ours))
 
 
-def cd_services(self, root, options=None, volume=None, fonts=False):
+PROFILE = 'C:\\Windows\\Profiles\\u000003e8'
+
+
+def profile_environment(root=PROFILE):
+    """A profile session's Win32 environment (sdk/win32/services/start.c
+    DOS-spells the kernel's USERPROFILE and TEMP/TMP = <profile>\\Local
+    Settings\\Temp, src/kernel/proc/spawn.c), as the H1 environment block."""
+    temp = root + '\\Local Settings\\Temp'
+    entries = ['USERPROFILE=' + root, 'TEMP=' + temp, 'TMP=' + temp, 'WINDIR=C:\\WINDOWS',
+               'PATH=C:\\WINDOWS;C:\\WINDOWS\\SYSTEM']
+    return ''.join(e + '\0' for e in entries).encode() + b'\0'
+
+
+def cd_services(self, root, options=None, volume=None, fonts=False, profile=None):
     """The H1 installer services with a read-only D: view of the mounted
     CD and the kernel's IS5 admission, over the service root `root` (kept by
     the caller: a temporary tree, or fx-hlrun's local installed tree).
     `options` are H1 game-exec harness settings (h1_game.c h1_game_options);
     `volume` overrides the fixture C: free/total bytes reported by
     GetDiskFreeSpace; `fonts` adds the w32srv font service (text in frames).
+    `profile` (fx-hlis5) runs a profile session as CiukiOS logs users on:
+    'temp' with <profile>\\Local Settings\\Temp present (the desktop
+    creates it at logon), 'no-temp' without it (a fresh profile before that
+    fix); None keeps the Windows 98 C:\\WINDOWS\\TEMP environment.
     The services close at the test's cleanup."""
     from scripts.win32 import is5boot, installer_fixture
     from tests.host.win32.wine import test_wine_upper as upper
@@ -214,6 +233,12 @@ def cd_services(self, root, options=None, volume=None, fonts=False):
 
     service = Services(Path(root), library, program, fonts)
     service.dialogs = set()
+    if profile:
+        folder = Session(service, 0, 'C:\\').path(PROFILE)   # C:\\WINDOWS's own spelling
+        folder.mkdir(parents=True, exist_ok=True)
+        if profile == 'temp':
+            (folder / 'Local Settings' / 'Temp').mkdir(parents=True, exist_ok=True)
+        service.environment = profile_environment()
     # Close before the TemporaryDirectory is removed: no commercial
     # expanded engine/support or installed bytes remain on disk.
     self.addCleanup(service.close)
@@ -223,13 +248,122 @@ def cd_services(self, root, options=None, volume=None, fonts=False):
     return service
 
 
+def dialog_shown(service, process):
+    """Whether PROCESS showed a dialog: w32srv's WINDOW_ALLOC record of the
+    dialog class names its HWND, the stand-in desktop maps it to a wire
+    window (DESK_V3_WIN32_HWND) and that window generation got a GDI frame."""
+    log = records(process)
+    hwnds = {h for pid, h in set(service.dialogs) if pid == process.process.pid}
+    wires = {(w, g) for w, g, h in re.findall(
+        r'^GAME desktop op=78 window=(\d+) generation=(\d+) bytes=\d+ hwnd=(\d+)', log, re.M) if int(h) in hwnds}
+    shown = set(re.findall(r'^GAME frame n=\d+ kind=gdi window=(\d+) generation=(\d+) ', log, re.M))
+    return bool(wires & shown)
+
+
+# fx-hlis5: the disc's own menu (AUTORUN.EXE, 540x420) draws its items as
+# text; "Install Half-Life" is the first item. The click is the user's.
+MENU_CLICK = 'click=330,199,540,420'
+
+
 @unittest.skipUnless(CD.is_dir(), 'original Half-Life CD is not mounted')
 class LocalEngineTests(unittest.TestCase):
-    def harness(self, options=None, volume=None):
+    def harness(self, options=None, volume=None, profile=None):
         """cd_services over a temporary root removed at cleanup."""
         scratch = tempfile.TemporaryDirectory(dir=OUT)
         self.addCleanup(scratch.cleanup)
-        return cd_services(self, Path(scratch.name) / 'root', options, volume)
+        return cd_services(self, Path(scratch.name) / 'root', options, volume, profile=profile)
+
+    def spawned(self, service, name):
+        return [c for c in list(service.children) if c.session.image.rsplit('\\', 1)[-1].casefold() == name.casefold()]
+
+    def test_disc_menu_install_in_profile_session(self):
+        """fx-hlis5: the way a user starts it on CiukiOS: the disc's menu
+        (AUTORUN.EXE), a click on its install item, ShellExecute("setup.exe")
+        with SW_HIDE, the kernel's IS5 admission, the native bootstrap and the
+        engine, in a logged-on profile session whose TEMP is <profile>\\Local
+        Settings\\Temp. The engine gets the 8.3 spelling of TEMP (its
+        operands are space-separated), extracts its support files there and
+        shows its first dialog; the bootstrap shows no window."""
+        service = self.harness(MENU_CLICK, profile='temp')
+        menu = service.start('D:\\AUTORUN.EXE', '"D:\\AUTORUN.EXE"', 'D:\\')
+        profile = host_services.Session(service, 0, 'C:\\').path(PROFILE)
+        temp = profile / 'Local Settings' / 'Temp'
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            helper, engine = self.spawned(service, 'is5boot.exe'), [c for c in list(service.children)
+                                                                   if c.session.image.upper().endswith('._MP')]
+            extracted = list(temp.glob('_ISTMP*.DIR/*'))
+            if helper and engine and extracted and dialog_shown(service, engine[0]):
+                # AUTORUN.EXE's ShellExecute: STARTF_USESHOWWINDOW, SW_HIDE.
+                self.assertEqual(helper[0].session.startup, (1, 0))
+                self.assertNotIn(' ', engine[0].session.image)
+                self.assertIn('LOCALS~1', engine[0].session.image.upper())
+                self.assertFalse((profile / 'Local').exists(), 'TEMP split at its space')
+                self.assertFalse(dialog_shown(service, helper[0]), diagnostics(service))
+                self.assertNotIn('is5-', records(helper[0]))
+                print('Half-Life H1: disc menu, install click, IS5 bootstrap (SW_HIDE) and engine in the profile '
+                      'session; %d support files, first dialog' % len(extracted))
+                return
+            if menu.process.poll() is not None and not helper:
+                self.fail('the disc menu exited without starting the setup\n' + diagnostics(service))
+            if helper and helper[0].process.poll() is not None:
+                self.fail('bootstrap exited before the engine showed a dialog; exit=%s\n%s'
+                          % (helper[0].process.returncode, diagnostics(service)))
+            time.sleep(0.05)
+        self.fail('disc menu install did not reach the engine\'s first dialog within 120 s\n' + diagnostics(service))
+
+    @unittest.skipUnless(os.environ.get('CIUKI_IS5_INSTALL'),
+                         'opt-in: the whole Half-Life install from the disc menu (about 400 MB, minutes)')
+    def test_disc_menu_complete_install_in_profile_session(self):
+        """fx-hlis5: the whole install as the user starts it (disc menu,
+        install item) in a profile session, to the bootstrap's exit with the
+        engine's status 0; the answers are those of
+        test_original_setup_complete_install."""
+        service = self.harness(MENU_CLICK + ' defaults=5000,80 answers=..y', (4 << 30, 8 << 30), profile='temp')
+        began = time.monotonic()
+        service.start('D:\\AUTORUN.EXE', '"D:\\AUTORUN.EXE"', 'D:\\')
+        limit = time.monotonic() + int(os.environ.get('CIUKI_IS5_INSTALL_SECONDS', '1800'))
+        helper = []
+        while time.monotonic() < limit and not helper:
+            helper = self.spawned(service, 'is5boot.exe')
+            time.sleep(0.2)
+        self.assertTrue(helper, diagnostics(service))
+        try:
+            code, _ = helper[0].finish(max(1, limit - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            self.fail('Half-Life install from the disc menu did not finish\n' + diagnostics(service))
+        installed = [p for p in (service.root / 'C').rglob('*') if p.is_file() and 'WINDOWS' not in p.parts
+                     and 'System' not in p.parts]
+        size = sum(p.stat().st_size for p in installed)
+        self.assertEqual(code, 0, diagnostics(service))
+        self.assertGreater(size, 300 << 20, 'installed %d files, %d bytes' % (len(installed), size))
+        engine = [c for c in list(service.children) if c.session.image.upper().endswith('._MP')]
+        self.assertTrue(engine and ' ' not in engine[0].session.image)
+        temp = host_services.Session(service, 0, 'C:\\').path(PROFILE) / 'Local Settings' / 'Temp'
+        self.assertFalse(list(temp.glob('_INS*._MP')), 'the bootstrap left its engine in TEMP')
+        print('Half-Life H1: install from the disc menu in a profile session complete in %.1f s, %d files, %d bytes'
+              % (time.monotonic() - began, len(installed), size))
+
+    def test_bootstrap_failure_box_is_shown(self):
+        """fx-hlis5: QEMU c02b6731. A fresh profile had no Local Settings\\Temp;
+        the bootstrap could not write its engine and its error box (unowned,
+        captioned) took AUTORUN.EXE's SW_HIDE from the first-ShowWindow
+        override: an invisible modal box, the setup apparently hung. The
+        failure is now recorded and the system-modal box is shown."""
+        service = self.harness(MENU_CLICK, profile='no-temp')
+        service.start('D:\\AUTORUN.EXE', '"D:\\AUTORUN.EXE"', 'D:\\')
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            helper = self.spawned(service, 'is5boot.exe')
+            if helper and dialog_shown(service, helper[0]):
+                self.assertEqual(helper[0].session.startup, (1, 0))
+                self.assertRegex(records(helper[0]), r'is5-engine-file-\d+')
+                self.assertFalse([c for c in list(service.children) if c.session.image.upper().endswith('._MP')])
+                return
+            if helper and helper[0].process.poll() is not None:
+                self.fail('bootstrap exited; exit=%s\n%s' % (helper[0].process.returncode, diagnostics(service)))
+            time.sleep(0.05)
+        self.fail('no visible bootstrap error box within 120 s\n' + diagnostics(service))
 
     def test_original_setup_to_first_dialog(self):
         service = self.harness()

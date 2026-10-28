@@ -219,7 +219,7 @@ void u32_clipboard_cleanup(DWORD);
 void u32_icons_cleanup(void);
 BOOL u32_tray_pixels(HICON,struct u32_surface *);
 void u32_drop_files(struct u32_window *,int,int,int);
-int u32_startup_show(int);
+int u32_startup_show(const struct u32_window *,int);
 void u32_startup_reset(void);
 void u32_display_event(struct u32_window *, const struct desk_packet *);
 void u32_display_cache(void);

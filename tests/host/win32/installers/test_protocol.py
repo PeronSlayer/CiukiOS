@@ -75,6 +75,10 @@ class ProtocolTests(unittest.TestCase):
         for op in range(1, 13):
             self.assertTrue(any(event[2].endswith(f' registry_op={op}') for event in replies))
         self.assertTrue(any('kind=3 size=0' in event[2] for event in replies))
+        # fx-hlis5: the creator's STARTUPINFO (STARTF_USESHOWWINDOW, SW_SHOWMINNOACTIVE)
+        # reached the spawned child's parameters (RPC 4).
+        spawned = [c for c in self.service.children if c.session.image.endswith('protocol-child.exe')]
+        self.assertEqual([c.session.startup for c in spawned], [(1, 7)])
         self.service.assert_quiescent(('protocol-child.exe',))
         print(output, end='')
 

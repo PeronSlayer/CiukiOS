@@ -808,7 +808,7 @@ BOOL W32API ShowWindow(HWND h, int cmd) {
   struct u32_window *w = u32_window(h);
   if (!w)
     return u32_fail(1400);
-  if (!w->parent) cmd=u32_startup_show(cmd);
+  if (!w->parent) cmd=u32_startup_show(w,cmd);
   BOOL old = !!(w->style & WS_VISIBLE);
   DWORD prev = w->style;
   /* fx-hlrun: WH_CBT HCBT_MINMAX (lParam: the show command) before a

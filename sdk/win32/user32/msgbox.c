@@ -220,8 +220,10 @@ int W32API MessageBoxExA(HWND owner, const char *text, const char *caption,
   if (!t)
     return u32_fail(8);
   w32_fill(t, 0, sizeof(*t));
+  /* fx-hlis5: MB_SYSTEMMODAL makes a system-modal box (DS_SYSMODAL), which
+   * the first-ShowWindow STARTUPINFO override never hides. */
   t->style = WS_POPUP | WS_CAPTION | 0x80000u | DS_MODALFRAME | DS_SETFONT |
-             WS_VISIBLE;
+             WS_VISIBLE | (type & MB_SYSTEMMODAL ? DS_SYSMODAL : 0);
   t->ex = (type & (MB_SYSTEMMODAL | MB_TOPMOST)) ? WS_EX_TOPMOST : 0;
   t->cx = t->cy = 40;
   t->has_font = 1;

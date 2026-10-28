@@ -238,3 +238,85 @@ not include." (Windows 98 runs these in its Win16 subsystem; CiukiOS's Win16
 subsystem follows the 1.0 Beta.) A DLL started as a program is now refused
 with the ordinary "not a valid Win32 application" dialog as well, so a spawn
 that fails with `-ENOEXEC` is always explained to the user.
+
+## The disc menu in a profile session (fx-hlis5, 2026-10-28)
+
+A QEMU run of image c02b6731 (integration 8) started the setup as a user
+does: AutoPlay, the disc's own menu `AUTORUN.EXE`, its install item. The
+kernel admitted `D:\setup.exe` and started the helper (`[win32] start
+pid=11 exe=C:\System\Win32\is5boot.exe`); the helper showed one window titled
+with SETUP.INI's `AppName`, hid it at once, and stayed in its modal loop for
+minutes: no engine ever started. Three defects, all outside the H1 harness's
+earlier model (a Windows 98 `C:\WINDOWS\TEMP`, no STARTUPINFO, direct
+`D:\SETUP.EXE`):
+
+1. **No TEMP folder in a fresh profile.** A logged-on session's Win32 TEMP
+   and TMP are `<profile>\Local Settings\Temp` (sec-user-05,
+   `sdk/win32/services/start.c`), but no account skeleton creates that
+   folder (`apps/accounts/owner_kernel.c` `skeleton[]`); only native
+   `tmpfile` and `AllocConsole` create it on demand. The helper's
+   `CreateFile(<TEMP>\_INSnnnn._MP, CREATE_NEW)` failed with
+   ERROR_PATH_NOT_FOUND and it raised its 7063 box ("unable to create a
+   temporary file"). On Windows 2000/XP every profile starts as a copy of
+   Default User, which holds `Local Settings\Temp` (Microsoft, [User Profile
+   Structure](https://technet.microsoft.com/en-us/library/cc775560.aspx));
+   [GetTempPath](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-gettemppatha)
+   does not verify that the folder exists, and programs rely on it.
+   Decision: the session desktop creates the missing components of TEMP
+   below the committed profile root when it loads the profile
+   (`apps/desktop/profile.h` `profile_temp_ready_at`, called from
+   `desk_logon_profile`), owner-only, for new and existing profiles; it
+   refuses anything outside the root, `..` and a file in the way.
+2. **The error box was hidden by the caller's STARTUPINFO.** `AUTORUN.EXE`
+   calls `ShellExecuteA(…, "open", "setup.exe", NULL, NULL, SW_HIDE)` for
+   its install item (its other items pass SW_SHOWNORMAL); the kernel puts
+   that STARTUPINFO into the helper's parameters, as for any child. USER
+   applied a supplied `wShowWindow` to the first ShowWindow of *any*
+   top-level window, so the helper's unowned error box was hidden: an
+   invisible modal loop that looked like a hang. Windows applies the
+   override only to a window it can take for the main one: top-level,
+   unowned, with WS_CAPTION, not system-modal, shown with SW_SHOW or
+   SW_SHOWNORMAL, once; SW_SHOWDEFAULT always asks for it (Raymond Chen,
+   [When does STARTF_USESHOWWINDOW override the parameter passed to
+   ShowWindow()?](https://devblogs.microsoft.com/oldnewthing/20100301-00/?p=14773),
+   rules zero to two; ReactOS `win32ss/user/ntuser/winpos.c`
+   `co_WinPosShowWindow` implements the top-level/caption/owner/command
+   conditions; Microsoft, STARTUPINFO, for SW_SHOWDEFAULT). Decisions:
+   `user32 u32_startup_show` follows those rules (a system-modal window is a
+   DS_SYSMODAL dialog; MessageBox with MB_SYSTEMMODAL builds one); the
+   helper's start-failure box is `MB_SYSTEMMODAL | MB_ICONHAND`, so a
+   critical start failure is never hidden by the stub's STARTUPINFO (rule
+   two item 5 exists for exactly that case), and the helper writes a record
+   first: `[win32] warning check=is5-<step>-<Win32 error> module=is5boot.exe`
+   (steps: image, temp-path, setup-ini, setup-lid, system-ini, archive,
+   decode, lock, engine-file, support-file, handoff, engine-start, cleanup;
+   `w32_diag`, the NTDLL export the core DLLs use).
+3. **A TEMP with a space split the engine's operands.** The handoff line
+   `-x<TEMP>\` is space-separated; with `...\Local Settings\Temp\` the
+   engine extracted its support files to `...\Local\` (seen in H1). A Win16
+   stub never sees such a path: its module path is short, and Windows NT
+   keeps TEMP/TMP in their short form "for compatibility" (Raymond Chen,
+   [Why does the system convert TEMP to a short file
+   name?](https://devblogs.microsoft.com/oldnewthing/20041224-00/?p=36893);
+   XP's `%TEMP%` is `C:\DOCUME~1\<user>\LOCALS~1\Temp`). Decision: the
+   helper uses `GetShortPathNameA` for the temp and source directories it
+   hands over (engine, support DLLs, `_INS0432.INI`, `_delis43.ini`), keeping
+   the long spelling only when there is no short form. The kernel answers
+   with the FAT aliases (`W32_F_FULLPATH` flags 1).
+
+The broader class (Win32 TEMP/TMP of a profile session are long, with a
+space, unlike XP's short values) affects any program that splits a TEMP path
+on spaces (batch files, other installers); it is left to the lead (the
+sec-user-05 environment test H11 fixes the long spelling today).
+
+H1 now models a profile session (`cd_services(profile='temp'|'no-temp')`:
+the environment block through H1 RPC 4), the caller's STARTUPINFO flags and
+show command for every spawned child (`h1_services.c` passes them, the
+service hands them to the child's parameters), FAT 8.3 aliases for
+GetShortPathName and alias path resolution (`host_services.short_aliases`,
+Microsoft FAT32 specification basis-name and numeric-tail algorithms), and a
+pointer click (`click=X,Y,W,H`, `h1_game.c`). Local tests on the owner's
+disc (`test_is5boot.LocalEngineTests`): the disc menu, install click and
+engine's first dialog in a profile session; the failure box visible and
+recorded with a missing TEMP; the opt-in complete install from the disc menu
+(166 s, 115 files, about 401 MB, the same as the direct `D:\SETUP.EXE` run).

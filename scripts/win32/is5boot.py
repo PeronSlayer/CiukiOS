@@ -25,6 +25,11 @@ def build(out):
         undefined.update(re.findall(r'\bU (\S+)', symbols))
     imports = {}
     for symbol in sorted(undefined - defined):
+        # fx-hlis5: the start-failure record goes through NTDLL's cdecl
+        # w32_diag export (sdk/win32/ntdll/ntdll.def), as the core DLLs' do.
+        if symbol == '_w32_diag':
+            imports.setdefault('ntdll', []).append('w32_diag')
+            continue
         match = re.fullmatch(r'_([A-Za-z]\w*)@(\d+)', symbol)
         if not match:
             raise ValueError('unexpected helper import: ' + symbol)
