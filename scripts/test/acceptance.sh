@@ -6,6 +6,7 @@
 #   scripts/test/acceptance.sh                      the whole suite acc-t23
 #   scripts/test/acceptance.sh --case acc-quake3    one case (repeatable)
 #   scripts/test/acceptance.sh --image PATH         another canonical image
+#   scripts/test/acceptance.sh --list               all case IDs (host-only)
 #
 # run.py runs the cases one at a time, each QEMU in its own systemd user scope
 # (MemoryMax=1500M, MemorySwapMax=0) on a copy-on-write overlay of the
@@ -18,6 +19,15 @@
 set -u
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "$root" || exit 2
+if [ "${1:-}" = --list ]; then
+    python3 -B - <<'PY'
+import json
+from pathlib import Path
+for case in json.loads(Path('tests/suites/acc-t23.json').read_text())['cases']:
+    print(case['id'] + '\t' + case['title'])
+PY
+    exit $?
+fi
 image=build/f0/ciukios.img
 for arg in "$@"; do
     case $arg in --image=*) image=${arg#--image=} ;; esac

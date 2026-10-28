@@ -631,8 +631,12 @@ class SuiteTests(unittest.TestCase):
         self.assertTrue(self.suite['acceptance'])
         self.assertNotIn('prerequisites', self.raw)
         ids = [c['id'] for c in self.suite['cases']]
-        self.assertEqual(ids, ['acc-desktop-cd', 'acc-quake3', 'acc-dos-games', 'acc-netsurf-site-1', 'acc-netsurf-site-2',
-                               'acc-safe-restart-shutdown', 'acc-installshield5'])
+        original = ['acc-desktop-cd', 'acc-quake3', 'acc-dos-games', 'acc-netsurf-site-1', 'acc-netsurf-site-2',
+                    'acc-safe-restart-shutdown', 'acc-installshield5']
+        self.assertEqual(ids[:len(original)], original)
+        additions = ids[len(original):]
+        self.assertEqual(len([i for i in additions if i.startswith('acc-dos-')]), 20)
+        self.assertGreaterEqual(len([i for i in additions if i.startswith('acc-ipx-')]), 6)
         covered = set()
         for c in self.suite['cases']:
             covered |= {int(n) for n in c.get('items', {str(c['item']): []})}
@@ -648,6 +652,12 @@ class SuiteTests(unittest.TestCase):
                 kind = runner.case_kind(c)
                 total += c['timeout']
                 if kind == 'acceptance':
+                    if 'guests' in c:
+                        self.assertEqual(len(c['guests']), 2)
+                        for guest in c['guests']:
+                            self.assertEqual(runner.case_kind(guest), 'acceptance')
+                            self.assertEqual(guest['steps'][0]['template'], 'boot')
+                        continue
                     steps = acceptance.expand_steps(c['steps'])
                     self.assertEqual(bool(steps), not c.get('pending'))
                     if steps:
@@ -665,7 +675,10 @@ class SuiteTests(unittest.TestCase):
                     self.assertEqual((parsed['phase'], parsed['probe']), (6, 'browser'))
                     self.assertTrue(runner.browser_case(c))
                     self.assertEqual(c['device_exceptions'], {'network': 'i82559er'})
-        self.assertLessEqual(total, 7200 * 4)
+        # fx-games20 adds twenty independent games and their bounded LAN pairs.
+        extra = [c for c in self.suite['cases'] if 'dos_game' in c or 'guests' in c]
+        self.assertTrue(all(c['timeout'] <= 2400 for c in extra))
+        self.assertLessEqual(total, 7200 * 4 + 2400 * len(extra))
 
     def test_no_site_host_names_in_tracked_files(self):
         # The owner's site list is private: snapshots are served by number.
@@ -1389,7 +1402,7 @@ class MainTests(unittest.TestCase):
         out = SCRATCH / 'main-root'
         (out / 'build/test-runs').mkdir(parents=True, exist_ok=True)
         image = out / 'image.raw'; image.write_bytes(b'image')
-        for gate_fails, expected in ((False, 7), (True, 1)):
+        for gate_fails, expected in ((False, len(SUITE['cases'])), (True, 1)):
             self.gate_fails = gate_fails; calls.clear()
             (out / 'build/test-runs/acc-t23').mkdir(parents=True, exist_ok=True)
             with patch.object(runner, 'ROOT', out), patch.object(runner, 'run_case', fake_run), \
@@ -1408,7 +1421,7 @@ class MainTests(unittest.TestCase):
             page = (out / 'build/test-runs/acc-t23/summary.txt').read_text()
             self.assertIn('verdict BLOCKED', page)
             data = json.loads((out / 'build/test-runs/acc-t23/summary.json').read_text())
-            self.assertEqual(len(data['cases']), 7)
+            self.assertEqual(len(data['cases']), len(SUITE['cases']))
             if gate_fails:
                 self.assertEqual(data['cases'][1]['reason'], 'gate acc-desktop-cd failed')
                 self.assertEqual(data['cases'][1]['item'], 2)

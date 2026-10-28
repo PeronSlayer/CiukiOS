@@ -4,7 +4,7 @@
  * this process forwards window focus and input, reports damage and closes
  * the VM with the window. Its death terminates the VM through the
  * supervisor. Protocol: apps/desktop/protocol.h (v2 close requests).
- * Usage: dosbox [--channel-fd=N] [--name=TITLE] [COMMAND...]: the optional
+ * Usage: dosbox [--channel-fd=N] [--name=TITLE] [--network=off|ipx] [COMMAND...]: the optional
  * command (its words joined by spaces) is typed at the DOS prompt once the
  * VM is running and the window has the focus (autorun.h; Programs > Games).
  * SPDX-License-Identifier: MIT */
@@ -301,7 +301,7 @@ int main(int argc, char **argv)
 #endif
     int channel = 3, result = 1, pause_background = 0, properties_requested=0;
     const char *name = "CiukiDOS";
-    const char *kernel_override=NULL;
+    const char *kernel_override=NULL, *network_override=NULL;
     char typed[DOSBOX_COMMAND_MAX + 1] = "";
     size_t typed_length = 0;
     for (int i = 1; i < argc; i++) {
@@ -311,6 +311,7 @@ int main(int argc, char **argv)
             channel = (int)n;
         } else if (!strncmp(argv[i], "--name=", 7)) name = argv[i] + 7;
         else if (!strncmp(argv[i],"--dos-kernel=",13)) kernel_override=argv[i]+13;
+        else if (!strncmp(argv[i],"--network=",10)) network_override=argv[i]+10;
         else if (!strcmp(argv[i], "--pause-background")) pause_background = 1;
         else if (!strcmp(argv[i], "--properties")) properties_requested=1;
         else if (!strncmp(argv[i], "--", 2)) return 2;
@@ -341,6 +342,14 @@ int main(int argc, char **argv)
     unsigned kernel=CIUKI_DOSVM_UNIFIED;
     unsigned memory=window.profile.memory;
     unsigned network=game ? dosbox_network_load(game) : CIUKI_DOSVM_NETWORK_OFF;
+    /* A shortcut may explicitly start a multiplayer session, including a
+     * locally installed game outside the bundled catalog. Never persist a
+     * command-line override in another program's per-game preferences. */
+    if (network_override) {
+        if (!strcmp(network_override,"ipx")) network=CIUKI_DOSVM_NETWORK_IPX;
+        else if (!strcmp(network_override,"off")) network=CIUKI_DOSVM_NETWORK_OFF;
+        else return 2;
+    }
     /* Runtime selector retained for existing test callers; it never writes. */
     if (kernel_override && strcmp(kernel_override,"unified")) return 2;
     size_t len = strlen(name);
@@ -671,7 +680,10 @@ int main(int argc, char **argv)
             fullscreen_seen=fullscreen;
         }
         if (autorun_launch_sent && (c.changed&CIUKI_DOSVM_PROGRAM_RETURNED) && (c.changed&CIUKI_DOSVM_SHELL_READY)) {
-            if (!returned_seen) kept_early=dosbox_early_exit(loading,launch_at,now_ms());
+            if (!returned_seen) {
+                kept_early=dosbox_early_exit(loading,launch_at,now_ms());
+                fprintf(stderr,"dosbox: program returned vm=%u generation=%u early=%d\n",id,generation,kept_early);
+            }
             if (window.profile.close_on_exit && !kept_early) break;
             if (!returned_seen) {
                 returned_seen=1; loading=0; shown=1; redraw=1;
