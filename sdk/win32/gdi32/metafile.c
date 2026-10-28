@@ -251,10 +251,14 @@ struct gdi_recorder {
   unsigned count;
   char file[260];
   int to_file;
+  int enhanced;
+  DWORD records, emf_objects;
 };
+static void record_enhanced(struct gdi_recorder *,unsigned,const int16_t *,unsigned,const void *,DWORD);
 static void record_words(struct gdi_recorder *r, unsigned function,
                          const int16_t *p, unsigned count, const void *tail,
                          DWORD tail_bytes) {
+  if(r->enhanced) {record_enhanced(r,function,p,count,tail,tail_bytes);return;}
   DWORD words = 3 + count + (tail_bytes + 1) / 2;
   put32(&r->data, words);
   put16(&r->data, function);
@@ -530,7 +534,7 @@ HGDIOBJ W32API CloseMetaFile(HDC h) {
   GDI_GUARD;
   struct dc *d = gdi_dc(h);
   struct gdi_recorder *r = d ? d->record : 0;
-  if (!r) {
+  if (!r || r->enhanced) {
     SetLastError(6);
     return 0;
   }
@@ -1851,4 +1855,199 @@ HGDIOBJ W32API SetWinMetaFileBits(DWORD size, const uint8_t *wmf, HDC ref,
     SetLastError(8);
   release(&b);
   return h;
+}
+
+/* Native EMF recording shares the existing WMF dispatch hooks. */
+static void enhanced_record(struct gdi_recorder *r,DWORD type,const DWORD *v,unsigned n) {
+  emf_record(&r->data,&r->records,type,v,n);
+}
+static void record_enhanced(struct gdi_recorder *r,unsigned f,const int16_t *p,unsigned count,const void *tail,DWORD bytes) {
+  DWORD v[12]={0},type=0;unsigned n=0;
+  switch(f) {
+  case M_SAVEDC:type=E_SAVEDC;break;
+  case M_RESTOREDC:type=E_RESTOREDC;n=1;v[0]=(DWORD)(LONG)p[0];break;
+  case M_SETMAPMODE:type=E_SETMAPMODE;n=1;v[0]=(DWORD)(LONG)p[0];break;
+  case M_SETBKMODE:type=E_SETBKMODE;n=1;v[0]=(DWORD)(LONG)p[0];break;
+  case M_SETROP2:type=E_SETROP2;n=1;v[0]=(DWORD)(LONG)p[0];break;
+  case M_SETPOLYFILLMODE:type=E_SETPOLYFILLMODE;n=1;v[0]=(DWORD)(LONG)p[0];break;
+  case M_SETSTRETCHBLTMODE:type=E_SETSTRETCHBLTMODE;n=1;v[0]=(DWORD)(LONG)p[0];break;
+  case M_SETTEXTALIGN:type=E_SETTEXTALIGN;n=1;v[0]=(uint16_t)p[0];break;
+  case M_SETTEXTCHAREXTRA:type=108;n=1;v[0]=(DWORD)(LONG)p[0];break;
+  case M_SETBKCOLOR:case M_SETTEXTCOLOR:
+    type=f==M_SETBKCOLOR ? E_SETBKCOLOR : E_SETTEXTCOLOR;n=1;
+    v[0]=(uint16_t)p[0]|((DWORD)(uint16_t)p[1]<<16);break;
+  case M_MOVETO:case M_LINETO:case M_SETWINDOWORG:case M_SETWINDOWEXT:
+  case M_SETVIEWPORTORG:case M_SETVIEWPORTEXT:
+    type=f==M_MOVETO ? E_MOVETOEX : f==M_LINETO ? E_LINETO :
+      f==M_SETWINDOWORG ? E_SETWINDOWORGEX : f==M_SETWINDOWEXT ? E_SETWINDOWEXTEX :
+      f==M_SETVIEWPORTORG ? E_SETVIEWPORTORGEX : E_SETVIEWPORTEXTEX;
+    n=2;v[0]=(DWORD)(LONG)p[1];v[1]=(DWORD)(LONG)p[0];break;
+  case M_RECTANGLE:case M_ELLIPSE:case M_EXCLUDECLIPRECT:case M_INTERSECTCLIPRECT:case M_ROUNDRECT:
+    type=f==M_RECTANGLE ? E_RECTANGLE : f==M_ELLIPSE ? E_ELLIPSE :
+      f==M_EXCLUDECLIPRECT ? E_EXCLUDECLIPRECT : f==M_INTERSECTCLIPRECT ? E_INTERSECTCLIPRECT : E_ROUNDRECT;
+    n=f==M_ROUNDRECT ? 6 : 4;
+    for(unsigned i=0;i<n;i++) v[i]=(DWORD)(LONG)p[n-1-i];break;
+  case M_SELECTOBJECT:type=E_SELECTOBJECT;n=1;v[0]=(uint16_t)p[0]+1u;break;
+  case M_CREATEPENINDIRECT:
+    type=E_CREATEPEN;n=5;v[0]=++r->emf_objects;v[1]=(uint16_t)p[0];
+    v[2]=(DWORD)(LONG)p[1];v[3]=0;v[4]=(uint16_t)p[3]|((DWORD)(uint16_t)p[4]<<16);break;
+  case M_CREATEBRUSHINDIRECT:
+    type=E_CREATEBRUSHINDIRECT;n=4;v[0]=++r->emf_objects;v[1]=(uint16_t)p[0];
+    v[2]=(uint16_t)p[1]|((DWORD)(uint16_t)p[2]<<16);v[3]=(uint16_t)p[3];break;
+  case M_CREATEFONTINDIRECT: {
+    uint8_t font[324]={0};w32_put32(font,++r->emf_objects);
+    for(unsigned i=0;i<5;i++) w32_put32(font+4+i*4,(DWORD)(LONG)p[i]);
+    if(bytes>=40) {
+      w32_copy(font+24,tail,8);
+      for(unsigned i=0;i<32;i++) w32_put16(font+32+i*2,(uint16_t)gdi_cp1252_unicode(((const uint8_t *)tail)[8+i]));
+    }
+    put32(&r->data,E_EXTCREATEFONTINDIRECTW);put32(&r->data,332);put_bytes(&r->data,font,sizeof(font));r->records++;return;
+  }
+  case M_POLYGON:case M_POLYLINE:case M_POLYPOLYGON: {
+    unsigned polygons=f==M_POLYPOLYGON ? (uint16_t)p[0] : 0,points=0,head=1+polygons;
+    if(polygons) {for(unsigned i=0;i<polygons;i++) points+=(uint16_t)p[1+i];}
+    else points=(uint16_t)p[0];
+    if(head+points*2>count) {r->data.failed=1;return;}
+    put32(&r->data,polygons ? E_POLYPOLYGON16 : f==M_POLYGON ? E_POLYGON16 : E_POLYLINE16);
+    put32(&r->data,(polygons ? 32+polygons*4 : 28)+points*4);
+    for(unsigned i=0;i<4;i++) put32(&r->data,0);
+    if(polygons) put32(&r->data,polygons);
+    put32(&r->data,points);
+    for(unsigned i=0;i<polygons;i++) put32(&r->data,(uint16_t)p[1+i]);
+    for(unsigned i=0;i<points*2;i++) put16(&r->data,(uint16_t)p[head+i]);
+    r->records++;return;
+  }
+  case M_SETPIXEL:
+    type=E_SETPIXELV;n=3;v[0]=(DWORD)(LONG)p[3];v[1]=(DWORD)(LONG)p[2];
+    v[2]=(uint16_t)p[0]|((DWORD)(uint16_t)p[1]<<16);break;
+  case M_ESCAPE:
+    if(count>=2 && p[0]==15 && (unsigned)(uint16_t)p[1]<=bytes) {
+      DWORD size=(uint16_t)p[1],pad=(size+3)&~3u;
+      put32(&r->data,E_GDICOMMENT);put32(&r->data,12+pad);put32(&r->data,size);
+      put_bytes(&r->data,tail,size);for(DWORD i=size;i<pad;i++) put_bytes(&r->data,"",1);
+      r->records++;return;
+    }
+    return;
+  case M_STRETCHDIB: {
+    if(count<11 || bytes<40) {r->data.failed=1;return;}
+    const uint8_t *dib=tail;
+    unsigned bpp=w32_u16(dib+14),colors=bpp<=8 ? w32_u32(dib+32) : w32_u32(dib+16)==3 ? 3 : 0;
+    if(bpp<=8 && !colors) colors=1u<<bpp;
+    DWORD bmi=40+colors*((uint16_t)p[2] ? 2u : 4u);
+    if(bmi>bytes) {r->data.failed=1;return;}
+    DWORD image=bytes-bmi,pad=(bytes+3)&~3u;
+    DWORD head[18]={0,0,0,0,(DWORD)(LONG)p[10],(DWORD)(LONG)p[9],
+      (DWORD)(LONG)p[6],(DWORD)(LONG)p[5],(DWORD)(LONG)p[4],(DWORD)(LONG)p[3],
+      80,bmi,80+bmi,image,(uint16_t)p[2],
+      (uint16_t)p[0]|((DWORD)(uint16_t)p[1]<<16),(DWORD)(LONG)p[8],(DWORD)(LONG)p[7]};
+    put32(&r->data,E_STRETCHDIBITS);put32(&r->data,80+pad);
+    for(unsigned i=0;i<18;i++) put32(&r->data,head[i]);
+    put_bytes(&r->data,dib,bytes);for(DWORD i=bytes;i<pad;i++) put_bytes(&r->data,"",1);
+    r->records++;return;
+  }
+  case M_EXTTEXTOUT: {
+    unsigned chars=(uint16_t)p[2],pad=(chars+3)&~3u;
+    if(chars>bytes) {r->data.failed=1;return;}
+    uint8_t header[68]={0};w32_put32(header+16,1);
+    w32_put32(header+20,0x3f800000);w32_put32(header+24,0x3f800000);
+    w32_put32(header+28,(DWORD)(LONG)p[1]);w32_put32(header+32,(DWORD)(LONG)p[0]);
+    w32_put32(header+36,chars);w32_put32(header+40,76);w32_put32(header+44,(uint16_t)p[3]);
+    if(count==8) for(unsigned i=0;i<4;i++) w32_put32(header+48+i*4,(DWORD)(LONG)p[4+i]);
+    unsigned dx=bytes>=((chars+1)&~1u)+chars*2 ? chars*4 : 0;
+    if(dx) w32_put32(header+64,76+pad);
+    put32(&r->data,E_EXTTEXTOUTA);put32(&r->data,76+pad+dx);put_bytes(&r->data,header,68);
+    put_bytes(&r->data,tail,chars);for(unsigned i=chars;i<pad;i++) put_bytes(&r->data,"",1);
+    for(unsigned i=0;i<dx/4;i++) put32(&r->data,(DWORD)(LONG)(int16_t)w32_u16((const uint8_t *)tail+((chars+1)&~1u)+i*2));
+    r->records++;return;
+  }
+  default:
+    /* Unsupported recorder operations fail closing, rather than silently
+     * producing a successful but incomplete metafile. */
+    r->data.failed=1;return;
+  }
+  enhanced_record(r,type,v,n);
+}
+static HDC create_enhanced(HDC ref,const char *file,const RECT *frame,const WCHAR *description) {
+  if(ref && !gdi_dc(ref)) return 0;
+  HDC h=create_metafile(file);struct dc *d=gdi_dc(h);if(!d) return 0;
+  struct gdi_recorder *r=d->record;r->enhanced=1;
+  unsigned chars=0;
+  if(description) {
+    while(chars<4094 && (description[chars] || description[chars+1])) chars++;
+    if(chars==4094) {DeleteDC(h);SetLastError(87);return 0;}
+    chars+=2;
+  }
+  DWORD header_size=(88+chars*2+3)&~3u;
+  RECT f=frame ? *frame : (RECT){0,0,2540,2540};
+  DWORD header[22]={1,header_size,0,0,95,95,(DWORD)f.left,(DWORD)f.top,(DWORD)f.right,(DWORD)f.bottom,
+      EMF_SIGNATURE,0x10000,0,0,65,chars,chars ? 88u : 0u,0,1024,768,270,203};
+  for(unsigned i=0;i<22;i++) put32(&r->data,header[i]);
+  for(unsigned i=0;i<chars;i++) put16(&r->data,description[i]);
+  while(r->data.n<header_size && !r->data.failed) put_bytes(&r->data,"",1);
+  r->records=1;
+  if(r->data.failed) {DeleteDC(h);SetLastError(8);return 0;}
+  return h;
+}
+HDC W32API CreateEnhMetaFileW(HDC ref,const WCHAR *file,const RECT *frame,const WCHAR *description) {
+  GDI_GUARD;char name[260];if(file && !narrow_name(file,name)) return 0;
+  return create_enhanced(ref,file ? name : 0,frame,description);
+}
+HDC W32API CreateEnhMetaFileA(HDC ref,const char *file,const RECT *frame,const char *description) {
+  GDI_GUARD;WCHAR desc[4096];unsigned n=0;
+  if(description) {
+    while(n<4094 && (description[n] || description[n+1])) {desc[n]=(WCHAR)gdi_cp1252_unicode((uint8_t)description[n]);n++;}
+    if(n==4094) {SetLastError(87);return 0;}desc[n]=desc[n+1]=0;
+  }
+  return create_enhanced(ref,file,frame,description ? desc : 0);
+}
+HGDIOBJ W32API CloseEnhMetaFile(HDC h) {
+  GDI_GUARD;struct dc *d=gdi_dc(h);struct gdi_recorder *r=d ? d->record : 0;
+  if(!r || !r->enhanced) {SetLastError(6);return 0;}
+  DWORD eof[3]={0,0,20};enhanced_record(r,E_EOF,eof,3);
+  HGDIOBJ result=0;
+  if(!r->data.failed) {
+    w32_put32(r->data.p+48,r->data.n);w32_put32(r->data.p+52,r->records);
+    if(!r->to_file || write_file(r->file,r->data.p,r->data.n)) result=meta_new(GDI_ENHMETAFILE,r->data.p,r->data.n);
+  } else SetLastError(8);
+  DeleteDC(h);return result;
+}
+BOOL W32API GdiComment(HDC h,unsigned count,const uint8_t *data) {
+  GDI_GUARD;struct dc *d=gdi_dc(h);
+  if(!d || !d->record || !d->record->enhanced || count>32000 || (count && !data)) return 0;
+  return gdi_metafile_escape(h,15,(int)count,data);
+}
+BOOL W32API EnumMetaFile(HDC dc,HGDIOBJ meta,int(W32API *callback)(HDC,HGDIOBJ *,const void *,int,intptr_t),intptr_t user) {
+  GDI_GUARD;struct object *o=meta_of(meta,GDI_METAFILE);
+  if(!o || !callback || (dc && !gdi_dc(dc))) return 0;
+  DWORD objects=w32_u16(o->u.meta.bits+10);if(objects>256) {SetLastError(87);return 0;}
+  HGDIOBJ handles[256]={0};DWORD at=18,end=w32_u32(o->u.meta.bits+6)*2;
+  HGDIOBJ pen=dc ? GetCurrentObject(dc,GDI_PEN) : 0,
+      brush=dc ? GetCurrentObject(dc,GDI_BRUSH) : 0,
+      font=dc ? GetCurrentObject(dc,GDI_FONT) : 0;
+  gdi_ref(meta,1);
+  BOOL result=1;
+  while(at+6<=end) {
+    DWORD n=w32_u32(o->u.meta.bits+at)*2;
+    if(!w32_u16(o->u.meta.bits+at+4)) break;
+    if(!callback(dc,handles,o->u.meta.bits+at,(int)objects,user)) {result=0;break;}
+    at+=n;
+  }
+  if(dc) {SelectObject(dc,pen);SelectObject(dc,brush);SelectObject(dc,font);}
+  for(unsigned i=0;i<objects;i++) if(handles[i]) DeleteObject(handles[i]);
+  gdi_ref(meta,-1);
+  return result;
+}
+BOOL W32API PlayMetaFileRecord(HDC dc,HGDIOBJ *table,const void *record,unsigned count) {
+  GDI_GUARD;
+  if(!gdi_dc(dc) || !record || count>256 || (count && !table)) return 0;
+  const uint8_t *p=record;DWORD words=w32_u32(p);
+  if(words<3 || words>WMF_LIMIT/2) return 0;
+  struct objects o={.count=count};if(count) w32_copy(o.h,table,count*sizeof(HGDIOBJ));
+  unsigned f=w32_u16(p+4);
+  if(f==M_CREATEPENINDIRECT || f==M_CREATEBRUSHINDIRECT || f==M_CREATEFONTINDIRECT) {
+    unsigned i=0;while(i<count && o.h[i]) i++;
+    if(i==count) return 0;
+  }
+  play_wmf_record(dc,&o,f,p+6,words*2-6);
+  if(count) w32_copy(table,o.h,count*sizeof(HGDIOBJ));return 1;
 }

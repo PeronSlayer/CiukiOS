@@ -76,13 +76,18 @@ int com_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, uin
     union { struct ciuki_com_status status; struct ciuki_com_line line; struct ciuki_com_modem modem;
         struct ciuki_com_owner owner; struct ciuki_com_mouse mouse; } record;
     unsigned size=op==COM_GET_LINE || op==COM_SET_LINE ? sizeof(record.line) :
-        op==COM_GET_STATUS ? sizeof(record.status) : op==COM_SET_MODEM ? sizeof(record.modem) :
+        op==COM_GET_STATUS || op==COM_CLEAR_ERRORS ? sizeof(record.status) : op==COM_SET_MODEM ? sizeof(record.modem) :
         op==COM_GET_OWNER ? sizeof(record.owner) : op==COM_SET_MOUSE ? sizeof(record.mouse) : 0;
     if (!size) return -ENOTTY;
     if (bytes!=size) return -EINVAL;
     int e=copy_from_user(&record,address,bytes); if (e) return e;
     if (!security_process_live(p) || (op==COM_SET_MOUSE && !security_device_admin(p))) return -EPERM;
+    struct ua_pin pin;bool pinned=false;
+    if(op==COM_CLEAR_ERRORS) {
+        e=ua_pin(p->memory,&pin,address,bytes,true);if(e) return e;pinned=true;
+    }
     e=com_control(d->node->drive,d->com_generation,op,&record,bytes,(d->flags&O_ACCMODE)!=O_RDONLY);
-    if (!e && (op==COM_GET_LINE || op==COM_GET_STATUS || op==COM_GET_OWNER)) e=copy_to_user(address,&record,bytes);
+    if (!e && (op==COM_GET_LINE || op==COM_GET_STATUS || op==COM_CLEAR_ERRORS || op==COM_GET_OWNER)) e=copy_to_user(address,&record,bytes);
+    if(pinned) ua_unpin(p->memory,&pin);
     return e;
 }

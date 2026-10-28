@@ -198,6 +198,9 @@ static HDC new_dc(int memory, const struct w32_dib *surface) {
                            .rop2 = 13,
                            .stretch = COLORONCOLOR,
                            .fill = ALTERNATE,
+                           .arc_direction = 1,
+                           .miter_bits = 0x41200000u,
+                           .color_adjustment = {24,0,0,0,0,0,0x10,0x27,0x10,0x27,0x10,0x27,0,0,0x10,0x27},
                            .map = MM_TEXT,
                            .window_ext = {1, 1},
                            .viewport_ext = {1, 1}};
@@ -324,6 +327,7 @@ BOOL W32API DeleteDC(HDC h) {
     return 0;
   gdi_printer_free(d);
   gdi_record_free(d);
+  gdi_path_free(d);
   state_refs(&d->s, -1);
   gdi_region_free(&d->s.clip);
   gdi_region_free(&d->visible);
@@ -333,6 +337,7 @@ BOOL W32API DeleteDC(HDC h) {
     d->saved = s->next;
     state_refs(&s->state, -1);
     gdi_region_free(&s->state.clip);
+    gdi_path_destroy(s->path);
     gdi_free(s, sizeof(*s));
   }
   struct object *o = gdi_object(h, 0);
@@ -354,6 +359,10 @@ int W32API SaveDC(HDC h) {
   if (!gdi_region_copy(&s->state.clip, &d->s.clip)) {
     gdi_free(s, sizeof(*s));
     return 0;
+  }
+  s->path=gdi_path_clone(d->path);
+  if(d->path && !s->path) {
+    gdi_region_free(&s->state.clip);gdi_free(s,sizeof(*s));return 0;
   }
   state_refs(&s->state, 1);
   s->level = ++d->level;
@@ -380,12 +389,14 @@ BOOL W32API RestoreDC(HDC h, int index) {
       state_refs(&d->s, -1);
       gdi_region_free(&d->s.clip);
       d->s = s->state;
+      gdi_path_free(d);d->path=s->path;
       d->level = target - 1;
       gdi_free(s, sizeof(*s));
       return 1;
     }
     state_refs(&s->state, -1);
     gdi_region_free(&s->state.clip);
+    gdi_path_destroy(s->path);
     gdi_free(s, sizeof(*s));
   }
   return 0;

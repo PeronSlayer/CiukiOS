@@ -4,37 +4,6 @@
 extern struct wa_engine *wa_process_engine(void);
 extern void wa_master(uint32_t[2]);
 uint32_t W32API auxGetNumDevs(void) { return 0; }
-uint32_t W32API joyGetNumDevs(void) { return 16; }
-uint32_t W32API joyGetPos(uint32_t id, void *p) {
-  (void)id;
-  (void)p;
-  return 167;
-}
-uint32_t W32API joyGetPosEx(uint32_t id, void *p) { return joyGetPos(id, p); }
-static uint32_t joycaps(uintptr_t id, void *p, uint32_t n, int wide) {
-  if (id)
-    return 165;
-  if (!p)
-    return 165;
-  uint8_t b[728] = {0};
-  w32_put16(b, 1);
-  w32_put16(b + 2, 1);
-  const char *name = "CiukiOS joystick (unplugged)";
-  for (unsigned i = 0; name[i]; i++)
-    if (wide)
-      w32_put16(b + 4 + i * 2, name[i]);
-    else
-      b[4 + i] = (uint8_t)name[i];
-  uint32_t size = wide ? 728 : 404;
-  w32_copy(p, b, n < size ? n : size);
-  return 0;
-}
-uint32_t W32API joyGetDevCapsA(uintptr_t id, void *p, uint32_t n) {
-  return joycaps(id, p, n, 0);
-}
-uint32_t W32API joyGetDevCapsW(uintptr_t id, void *p, uint32_t n) {
-  return joycaps(id, p, n, 1);
-}
 static uint32_t mixer_refs;
 uint32_t W32API mixerGetNumDevs(void) { return 1; }
 uint32_t W32API mixerOpen(uintptr_t *h, uint32_t id, uintptr_t cb,

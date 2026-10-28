@@ -279,12 +279,18 @@ Wine `b073859675060c9211fcbccfd90e4e87520dc2c2`, archive SHA-256 `c5e0b3f5f7efaf
 | dplayx.dll | `0x749b0000` | 196,608 | 196,608 | 48 | 2 | 6 | `70af7c0a6f4e47fc` | build candidate, pending H1 |
 | dplay.dll | `0x749e0000` | 24,576 | 24,576 | 6 | 1 | 3 | `781fc1f42428ae06` | build candidate, pending H1 |
 | dpwsockx.dll | `0x749f0000` | 57,344 | 57,344 | 14 | 2 | 6 | `c308629e8b22bbd0` | build candidate, pending H1 |
+| oledlg.dll | `0x74a00000` | 196,608 | 196,608 | 48 | 2 | 199 | `4ea51ccd43084b66` | build candidate, pending H1 |
+| wininet.dll | `0x74a30000` | 430,080 | 430,080 | 105 | 2 | 201 | `50a55e749b5e723d` | build candidate, pending H1 |
 
 `dplay.dll`: f6-26: H0 binds; H1 execution is blocked by sandbox SIGSYS; DirectPlay end-to-end and Windows 98 interoperability gates remain.
 
 `dplayx.dll`: f6-26: H0 binds; H1 execution is blocked by sandbox SIGSYS; DirectPlay end-to-end and Windows 98 interoperability gates remain.
 
 `dpwsockx.dll`: f6-26: H0 binds; H1 execution is blocked by sandbox SIGSYS; DirectPlay end-to-end and Windows 98 interoperability gates remain.
+
+`oledlg.dll`: fx-hlutils: import closure and H0/H1 qualification required.
+
+`wininet.dll`: fx-hlutils: import closure and H0/H1 qualification required.
 
 | Patch (applied in order) | SHA-256 (prefix) |
 | --- | --- |
@@ -303,6 +309,7 @@ Wine `b073859675060c9211fcbccfd90e4e87520dc2c2`, archive SHA-256 `c5e0b3f5f7efaf
 | `0013-directplay-enumeration.patch` | `fa3d13ff507e75f0` |
 | `0014-directplay-ipx.patch` | `694344d687101098` |
 | `0015-directplay-lobby-lifetime.patch` | `28699775c3b60229` |
+| `0016-wininet-no-tls.patch` | `5b23e05c89226401` |
 
 `0006-shell32-icon-trim.json` (resource filter): 430 icon images (1,776,519 bytes) in, 235 (357,298 bytes) out.
 
@@ -315,7 +322,7 @@ Missing eager imports, delayed imports and unresolved export forwarders of the c
 | advpack.dll | 0 | 0 | 0 | 0 |
 | cabinet.dll | 0 | 0 | 0 | 0 |
 | combase.dll | 0 | 0 | 0 | 5 |
-| comctl32.dll | 0 | 0 | 0 | 5 |
+| comctl32.dll | 0 | 0 | 0 | 25 |
 | comdlg32.dll | 0 | 0 | 0 | 11 |
 | coml2.dll | 0 | 0 | 0 | 0 |
 | dplay.dll | 0 | 0 | 0 | 0 |
@@ -324,14 +331,16 @@ Missing eager imports, delayed imports and unresolved export forwarders of the c
 | imm32.dll | 38 | 0 | 0 | 0 |
 | msvcrt.dll | 0 | 0 | 0 | 2 |
 | ole32.dll | 0 | 0 | 0 | 1 |
-| oleaut32.dll | 0 | 0 | 0 | 1 |
+| oleaut32.dll | 0 | 0 | 0 | 4 |
+| oledlg.dll | 0 | 0 | 0 | 0 |
 | riched20.dll | 0 | 0 | 0 | 3 |
 | riched32.dll | 0 | 0 | 0 | 0 |
-| rpcrt4.dll | 0 | 0 | 0 | 5 |
-| setupapi.dll | 0 | 0 | 0 | 10 |
+| rpcrt4.dll | 0 | 0 | 0 | 24 |
+| setupapi.dll | 0 | 0 | 0 | 14 |
 | shcore.dll | 0 | 0 | 0 | 0 |
-| shell32.dll | 0 | 0 | 0 | 13 |
-| shlwapi.dll | 0 | 0 | 3 | 2 |
+| shell32.dll | 0 | 0 | 0 | 21 |
+| shlwapi.dll | 0 | 0 | 2 | 5 |
+| wininet.dll | 0 | 0 | 0 | 18 |
 
 | Audit | Action | Entries |
 | --- | --- | ---: |
@@ -343,11 +352,11 @@ Missing eager imports, delayed imports and unresolved export forwarders of the c
 | f5-14b | `wine-compile-in` | 212 |
 | f5-14b | `wine-patch-remove` | 3 |
 | f5-14b | `wine-retarget` | 197 |
-| f5-20b | `core-implement` | 221 |
-| f5-20c | `core-implement` | 8 |
-| f5-20c | `core-w21-stub` | 8 |
+| f5-20b | `core-implement` | 233 |
+| f5-20c | `core-implement` | 9 |
+| f5-20c | `core-w21-stub` | 26 |
 | f5-20c | `not-reused` | 38 |
-| f5-20c | `w21-unresolved-forwarder` | 3 |
+| f5-20c | `w21-unresolved-forwarder` | 2 |
 
 Closure of the f5-14B decisions in this build:
 
@@ -432,10 +441,14 @@ Unique names per audit, rule and owning DLL:
 - f5-20b `core-api-f5-20b` → gdi32.dll (4): CopyEnhMetaFileA, CopyMetaFileA, CreateMetaFileA, DeleteColorSpace
 - f5-20b `core-api-f5-20b` → user32.dll (87): BeginDeferWindowPos, CallMsgFilterW, CallWindowProcW, CharLowerA, CharLowerBuffA, CharNextA, CharPrevA, CharToOemA, CharToOemBuffA, CharToOemBuffW, CharUpperA, CharUpperBuffA, ChildWindowFromPointEx, CreateIconFromResource, CreateWindowExW, DdeClientTransaction, DdeConnect, DdeCreateDataHandle, DdeCreateStringHandleA, DdeDisconnect, DdeFreeDataHandle, DdeFreeStringHandle, DdeGetData, DdeInitializeA, DdeNameService, DdeQueryStringA, DdeUninitialize, DefDlgProcW, DefWindowProcW, DeferWindowPos, DispatchMessageW, DlgDirListA, DlgDirListComboBoxA, EndDeferWindowPos, FindWindowExW, FindWindowW, GetClassInfoExW, GetClassInfoW, GetClassLongW, GetClassNameW, GetDesktopWindow, GetMessageW, GetMonitorInfoA, GetPropW, GetTabbedTextExtentW, GetWindowLongW, GetWindowTextLengthW, GetWindowTextW, GrayStringW, IsCharAlphaA, IsCharAlphaNumericA, IsCharLowerA, IsCharUpperA, LoadCursorW, LoadIconW, LoadMenuIndirectW, MessageBoxExW, MessageBoxIndirectA, MonitorFromPoint, OemToCharA, OemToCharBuffA, OemToCharBuffW, PeekMessageW, PostMessageW, PostThreadMessageW, PrivateExtractIconExA, PrivateExtractIconsA, RegisterClassExW, RegisterClassW, RegisterWindowMessageW, RemovePropW, SendMessageTimeoutW, SendMessageW, SendNotifyMessageW, SetClassLongW, SetPropW, SetWindowLongW, SetWindowTextW, SetWindowsHookExW, SystemParametersInfoW, UnregisterClassW, VkKeyScanExW, VkKeyScanW, WaitForInputIdle, WinHelpA, wsprintfA, wvsprintfA
 - f5-20c `absent-forwarder-dll` → userenv.dll (2): ExpandEnvironmentStringsForUserA, ExpandEnvironmentStringsForUserW
-- f5-20c `absent-forwarder-dll` → wininet.dll (1): InternetCrackUrlW
 - f5-20c `core-api-f5-20c` → kernel32.dll (4): DebugBreak, IsBadCodePtr, IsBadReadPtr, IsBadWritePtr
+- f5-20c `core-census-w21` → crypt32.dll (5): CertCreateCertificateContext, CertDuplicateCertificateChain, CertFreeCertificateChain, CertFreeCertificateContext, CertNameToStrA
+- f5-20c `core-census-w21` → cryptui.dll (1): CryptUIDlgViewCertificateW
+- f5-20c `core-census-w21` → dhcpcsvc.dll (1): DhcpRequestParams
 - f5-20c `core-census-w21` → imm32.dll (2): ImmGetContext, ImmReleaseContext
+- f5-20c `core-census-w21` → iphlpapi.dll (1): GetAdaptersAddresses
 - f5-20c `core-census-w21` → kernel32.dll (3): GetNumberOfConsoleInputEvents, ReadConsoleInputA, SetThreadDescription
+- f5-20c `core-census-w21` → secur32.dll (9): AcquireCredentialsHandleW, DecryptMessage, DeleteSecurityContext, EncryptMessage, FreeContextBuffer, FreeCredentialsHandle, InitializeSecurityContextW, QueryContextAttributesW, QuerySecurityPackageInfoW
 - f5-20c `core-census-w21` → winspool.drv (1): DocumentPropertiesA
 - f5-20c `not-reused` → imm32.dll (38): DelayLoadFailureHook, EnterCriticalSection, FreeLibrary, GetFileVersionInfoSizeW, GetFileVersionInfoW, GetModuleHandleA, GetModuleHandleW, GetProcAddress, GetTickCount, GlobalAlloc, GlobalFree, HeapAlloc, HeapReAlloc, InitOnceExecuteOnce, IsDBCSLeadByte, LCMapStringW, LeaveCriticalSection, LoadLibraryW, MultiByteToWideChar, NtUserAssociateInputContext, NtUserBuildHimcList, NtUserCallHwnd, NtUserCallTwoParam, NtUserCreateInputContext, NtUserDestroyInputContext, NtUserDisableThreadIme, NtUserMessageCall, NtUserNotifyIMEStatus, NtUserQueryInputContext, NtUserQueryWindow, NtUserUpdateInputContext, RaiseException, ResolveDelayLoadedAPI, RtlSetLastWin32Error, ToUnicodeEx, User32InitializeImmEntryTable, VerQueryValueW, WideCharToMultiByte
 
@@ -467,12 +480,12 @@ H0: native production-loader model, DllMain observed. H1: i386 Linux adapter, pr
 
 ### MSVCRT measurement (generated)
 
-Surface: the 88 MSVCRT functions the reused DLLs import.
+Surface: the 96 MSVCRT functions the reused DLLs import.
 
 | Candidate | Bytes | Pages (model) | Surface covered | Notes |
 | --- | ---: | ---: | ---: | --- |
-| Wine 10.0 `msvcrt.dll` PE | 606,208 file, 614,400 SizeOfImage | 153 (148 seed + 5 COW) | 88/88 | 1290 exported names, MSVCRT ABI |
-| CiukiOS newlib port (SDK `libc.a` `bf5a953a2007065d`) | 104,438 text + 460 data | 27 | 75/88 | missing: __iob_func, _assert, _create_locale, _findclose, _free_locale, _snwprintf_l, _wcslwr, _wfindfirst, _wfindnext, _wfopen, _wgetenv, _wopen, wcscpy_s; no MSVCRT ABI |
+| Wine 10.0 `msvcrt.dll` PE | 606,208 file, 614,400 SizeOfImage | 153 (148 seed + 5 COW) | 96/96 | 1290 exported names, MSVCRT ABI |
+| CiukiOS newlib port (SDK `libc.a` `e319cd81c2eb79d4`) | 104,942 text + 460 data | 27 | 81/96 | missing: __iob_func, _assert, _create_locale, _findclose, _free_locale, _ltow, _scprintf, _snwprintf_l, _wcslwr, _wfindfirst, _wfindnext, _wfopen, _wgetenv, _wopen, wcscpy_s; no MSVCRT ABI |
 
 Wine side: actual PE and section-store model. Newlib side: static CiukiOS SDK ELF with every covered surface function referenced, --gc-sections, minus an empty program; MSVCRT ABI glue (FILE/_iob layout, _errno, locale, SEH/C++ EH, startup) not included.
 
@@ -480,12 +493,12 @@ Wine side: actual PE and section-store model. Newlib side: static CiukiOS SDK EL
 
 | Figure | f5-20C build | f5-14B build |
 | --- | ---: | ---: |
-| Reused DLLs | 19 | 16 |
-| File bytes | 9,637,888 | 15,343,616 |
-| SizeOfImage | 9,781,248 | 15,486,976 |
-| Shared seed pages | 2353 (9,637,888 bytes) | 3746 |
-| Private COW commitment pages | 82 | 77 |
-| Startup committed pages (model) | 2435 | 3823 |
+| Reused DLLs | 21 | 16 |
+| File bytes | 10,264,576 | 15,343,616 |
+| SizeOfImage | 10,407,936 | 15,486,976 |
+| Shared seed pages | 2506 (10,264,576 bytes) | 3746 |
+| Private COW commitment pages | 86 | 77 |
+| Startup committed pages (model) | 2592 | 3823 |
 | Contract installer budget (P2+P4) | 14,680,064 | 14,680,064 |
 | SizeOfImage within budget | yes | no |
 | SHELL32 SizeOfImage | 3,293,184 | 9,363,456 |

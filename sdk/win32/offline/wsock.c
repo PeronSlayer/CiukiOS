@@ -536,3 +536,49 @@ int W32API getaddrinfo(const char *node,const char *service,const struct ws_addr
 void W32API freeaddrinfo(struct ws_addrinfo *info) { const struct w32_services *services=w32_get_services(); if(!services||!services->free)return; while(info) { struct ws_addrinfo *next=info->next; services->free(services->opaque,info,sizeof(struct ws_answer)); info=next; } }
 
 #include "wsasync.inc"
+
+/* WinINet's Unicode resolver imports share the existing native IPv4 path. */
+int W32API GetAddrInfoW(const WCHAR *node,const WCHAR *service,const struct ws_addrinfo *hints,struct ws_addrinfo **out) {
+  char n[254],s[32];
+  if(out) *out=0;
+  if(node) {unsigned i=0;for(;node[i] && i<sizeof(n)-1;i++) {if(node[i]>127)return 11001;n[i]=(char)node[i];}if(node[i])return 11001;n[i]=0;}
+  if(service) {unsigned i=0;for(;service[i] && i<sizeof(s)-1;i++) {if(service[i]>127)return 10109;s[i]=(char)service[i];}if(service[i])return 10109;s[i]=0;}
+  /* This resolver does not return a canonical-name allocation, so the wide
+   * and narrow record layouts and allocation ownership are identical. */
+  return getaddrinfo(node ? n : 0,service ? s : 0,hints,out);
+}
+void W32API FreeAddrInfoW(struct ws_addrinfo *info) {freeaddrinfo(info);}
+const char *W32API inet_ntop(int family,const void *address,char *out,uint32_t cap) {
+  if(family!=AF_INET) {fail(10047);return 0;}
+  if(!address || !out) {fail(10014);return 0;}
+  const uint8_t *a=address;char text[16],*p=text;
+  for(unsigned i=0;i<4;i++) {p=decimal(p,a[i]);*p++=i==3 ? 0 : '.';}
+  unsigned n=(unsigned)(p-text);if(cap<n) {fail(10014);return 0;}
+  w32_copy(out,text,n);return out;
+}
+int W32API getnameinfo(const struct ciuki_sockaddr_in *address,int bytes,char *host,uint32_t hostcap,char *service,uint32_t servicecap,int flags) {
+  if(!initialized()) return 10093;
+  if(!address || bytes<16 || (host && !hostcap) || (service && !servicecap) || (!host && !service)) return 10014;
+  if(address->family!=AF_INET) return 10047;
+  if(flags&~31) return 10022;
+  char name[254],port[32];
+  if(host) {
+    if(!(flags&2) && ws_reverse(address->address,name,sizeof(name))) {
+      if(flags&1) for(unsigned i=0;name[i];i++) if(name[i]=='.') {name[i]=0;break;}
+    } else {
+      if(flags&4) return 11001;
+      if(!inet_ntop(AF_INET,&address->address,name,sizeof(name))) return 10014;
+    }
+    if(w32_strlen(name)>=hostcap) return 10014;
+  }
+  if(service) {
+    const char *protocol=(flags&16) ? "udp" : "tcp";
+    struct ws_servent *s=(flags&8) ? 0 : getservbyport(address->port,protocol);
+    if(s) w32_copy(port,s->name,w32_strlen(s->name)+1);
+    else *decimal(port,ntohs(address->port))=0;
+    if(w32_strlen(port)>=servicecap) return 10014;
+  }
+  if(host) w32_copy(host,name,w32_strlen(name)+1);
+  if(service) w32_copy(service,port,w32_strlen(port)+1);
+  return 0;
+}

@@ -76,6 +76,7 @@ _Static_assert(sizeof(struct ciuki_joystick_control)==100, "joystick control ABI
 #define COM_SET_MODEM  0x434f0104u
 #define COM_GET_OWNER  0x434f0105u
 #define COM_SET_MOUSE  0x434f0106u
+#define COM_CLEAR_ERRORS 0x434f0107u /* returns COM status, acknowledges sticky errors */
 #define CIUKI_COM_OWNER_NONE 0u
 #define CIUKI_COM_OWNER_NATIVE 1u
 #define CIUKI_COM_OWNER_VM 2u

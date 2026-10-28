@@ -13,7 +13,7 @@ from scripts.win32 import stubs
 from scripts import build_kernel
 
 SOURCES = ('dib.c', 'region.c', 'objects.c', 'clip.c', 'bitmap.c', 'palette.c',
-           'draw.c', 'render3d.c', 'printing.c', 'text.c', 'font.c', 'compat.c', 'upper.c', 'metafile.c',
+           'draw.c', 'path.c', 'utilities.c', 'render3d.c', 'printing.c', 'text.c', 'font.c', 'compat.c', 'upper.c', 'metafile.c',
            'uniscribe.c', 'bridge.c', 'pixelformat.c', 'compiler.c', 'compiler.S')
 C_EXPORTS = ('w32_dib_validate','w32_dib_raw','w32_dib_rgb','w32_dib_encode',
              'w32_dib_put','w32_gdi_rop3','w32_dib_blt')

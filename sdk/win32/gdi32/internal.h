@@ -27,6 +27,7 @@ struct bitmap {
   DWORD alloc_size, offset;
   HDC selected_dc;
   int mono, dib_section;
+  SIZE dimension;
 };
 struct brush {
   LOGBRUSH log;
@@ -54,11 +55,16 @@ struct dc_state {
   SIZE window_ext, viewport_ext;
   struct region clip;
   int has_clip;
+  int arc_direction;
+  uint32_t miter_bits;
+  uint8_t color_adjustment[24];
+  int justify_extra, justify_breaks;
 };
 struct saved {
   struct saved *next;
   struct dc_state state;
   int level;
+  struct gdi_path *path;
 };
 struct dc {
   struct dc_state s;
@@ -81,7 +87,22 @@ struct dc {
    * DC without pixels that stands for the display device, so bitmaps made
    * compatible with it take the display's format. */
   int display;
+  struct gdi_path *path;
+  int (W32API *abort_proc)(HDC, int);
 };
+struct gdi_path {
+  POINT *points;
+  uint8_t *types;
+  unsigned count, capacity;
+  int open, fresh;
+};
+void gdi_path_free(struct dc *);
+void gdi_path_destroy(struct gdi_path *);
+struct gdi_path *gdi_path_clone(const struct gdi_path *);
+int gdi_path_poly(HDC, const POINT *, unsigned, int, int);
+int gdi_path_bezier(HDC, const POINT *, unsigned, int);
+int gdi_path_shape(HDC, int, int, int, int, int, int);
+BOOL gdi_arc(HDC, int, int, int, int, int, int, int, int, int);
 struct object {
   unsigned type, refs, stock;
   union {

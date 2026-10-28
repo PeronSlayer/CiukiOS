@@ -1,0 +1,106 @@
+CiukiOS Wine 10.0: fail TLS with ERROR_INTERNET_SECURITY_CHANNEL_ERROR.
+LGPL-2.1-or-later. Plain HTTP and FTP retain the upstream Winsock paths.
+
+--- a/dlls/wininet/netconnection.c
++++ b/dlls/wininet/netconnection.c
+@@ -594,36 +594,11 @@
+  */
+ DWORD NETCON_secure_connect(netconn_t *connection, server_t *server)
+ {
+-    DWORD res;
+-
+-    /* can't connect if we are already connected */
+-    if(connection->secure) {
+-        ERR("already connected\n");
+-        return ERROR_INTERNET_CANNOT_CONNECT;
+-    }
+-
+-    if(server != connection->server) {
+-        server_release(connection->server);
+-        server_addref(server);
+-        connection->server = server;
+-    }
+-
+-    /* connect with given TLS options */
+-    res = netcon_secure_connect_setup(connection, FALSE);
+-    if (res == ERROR_SUCCESS)
+-        return res;
+-
+-    /* FIXME: when got version alert and FIN from server */
+-    /* fallback to connect without TLSv1.1/TLSv1.2        */
+-    if (res == ERROR_INTERNET_SECURITY_CHANNEL_ERROR && have_compat_cred_handle)
+-    {
+-        closesocket(connection->socket);
+-        res = create_netconn_socket(connection->server, connection, 500);
+-        if (res != ERROR_SUCCESS)
+-            return res;
+-        res = netcon_secure_connect_setup(connection, TRUE);
+-    }
+-    return res;
++    /* CiukiOS has no Schannel provider yet. Do not enter delay imports
++     * that would trap; HTTP and FTP continue through the native Winsock. */
++    (void)connection;
++    (void)server;
++    return ERROR_INTERNET_SECURITY_CHANNEL_ERROR;
+ }
+ 
+ static BOOL send_ssl_chunk(netconn_t *conn, const void *msg, size_t size)
+--- a/dlls/oledlg/Makefile.in
++++ b/dlls/oledlg/Makefile.in
+@@ -1,6 +1,6 @@
+ MODULE    = oledlg.dll
+ IMPORTLIB = oledlg
+-IMPORTS   = ole32 comdlg32 user32 advapi32
++IMPORTS   = msvcrt ole32 comdlg32 user32 advapi32
+ 
+ SOURCES = \
+ 	insobjdlg.c \
+--- a/dlls/wininet/Makefile.in
++++ b/dlls/wininet/Makefile.in
+@@ -1,7 +1,7 @@
+ EXTRADEFS = -D_WININET_INTERNAL_
+ MODULE    = wininet.dll
+ IMPORTLIB = wininet
+-IMPORTS   = $(ZLIB_PE_LIBS) mpr shlwapi shell32 user32 ws2_32 advapi32
++IMPORTS   = msvcrt $(ZLIB_PE_LIBS) mpr shlwapi shell32 user32 ws2_32 advapi32
+ EXTRAINCL = $(ZLIB_PE_CFLAGS)
+ DELAYIMPORTS = secur32 crypt32 cryptui dhcpcsvc iphlpapi
+ 
+--- a/dlls/wininet/dialogs.c
++++ b/dlls/wininet/dialogs.c
+@@ -96,8 +96,16 @@
+ }
+ 
+ /* These two are not defined in the public headers */
+-extern DWORD WINAPI WNetCachePassword(LPSTR,WORD,LPSTR,WORD,BYTE,WORD);
+-extern DWORD WINAPI WNetGetCachedPassword(LPSTR,WORD,LPSTR,LPWORD,BYTE);
++static DWORD WINAPI WNetCachePassword(LPSTR resource,WORD rn,LPSTR password,WORD pn,BYTE kind,WORD flags)
++{
++    (void)resource; (void)rn; (void)password; (void)pn; (void)kind; (void)flags;
++    return ERROR_NOT_SUPPORTED;
++}
++static DWORD WINAPI WNetGetCachedPassword(LPSTR resource,WORD rn,LPSTR password,LPWORD pn,BYTE kind)
++{
++    (void)resource; (void)rn; (void)password; (void)pn; (void)kind;
++    return ERROR_NOT_SUPPORTED;
++}
+ 
+ /***********************************************************************
+  *         WININET_GetSetPassword
+--- a/dlls/wininet/http.c
++++ b/dlls/wininet/http.c
+@@ -952,6 +952,14 @@
+     struct HttpAuthInfo *pAuthInfo = *ppAuthInfo;
+     BOOL first = FALSE;
+     LPWSTR szRealm = NULL;
++
++    /* No SSPI credential provider: Basic remains handled by this module. */
++    if (wcsnicmp(pszAuthValue, L"Basic ", 6))
++    {
++        INTERNET_SetLastError(ERROR_INTERNET_LOGIN_FAILURE);
++        return FALSE;
++    }
++
+ 
+     TRACE("%s\n", debugstr_w(pszAuthValue));
+ 

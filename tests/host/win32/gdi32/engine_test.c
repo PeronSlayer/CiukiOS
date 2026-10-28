@@ -1218,9 +1218,72 @@ static void quake3(void) {
   DeleteDC(screen);
   puts("PASS quake3 display caps, driver pixel formats, device gamma ramps");
 }
+extern HGDIOBJ W32API CreateMetaFileA(const char *);
+extern HGDIOBJ W32API CloseMetaFile(HDC);
+extern BOOL W32API DeleteMetaFile(HGDIOBJ);
+extern BOOL W32API DeleteEnhMetaFile(HGDIOBJ);
+extern BOOL W32API PlayEnhMetaFile(HDC,HGDIOBJ,const RECT *);
+extern DWORD W32API GetEnhMetaFileBits(HGDIOBJ,DWORD,void *);
+static int W32API enum_play(HDC dc,HGDIOBJ *handles,const void *record,int count,intptr_t user) {
+  (*(unsigned *)user)++;
+  return PlayMetaFileRecord(dc,handles,record,(unsigned)count);
+}
+static void utility_paths(void) {
+  uint32_t pixels[32*24]={0};
+  struct w32_dib surface=test_dib(pixels,32,24,32,0,1);HDC dc=dc_for(&surface);
+  HBRUSH brush=CreateSolidBrush(RGB(250,10,20));HGDIOBJ old=SelectObject(dc,brush);
+  assert(!EndPath(dc));
+  assert(BeginPath(dc));assert(MoveToEx(dc,2,2,0));assert(LineTo(dc,16,2));
+  assert(LineTo(dc,2,16));assert(CloseFigure(dc));assert(EndPath(dc));
+  for(unsigned i=0;i<32*24;i++) assert(!pixels[i]);
+  POINT points[8];uint8_t types[8];assert(GetPath(dc,points,types,8)==3);
+  assert(points[0].x==2 && types[0]==6 && types[2]==3);
+  assert(FillPath(dc));assert(GetPixel(dc,4,4)==RGB(250,10,20));
+  assert(GetPixel(dc,20,20)==0);assert(GetPath(dc,0,0,0)==-1);
+  assert(BeginPath(dc));MoveToEx(dc,1,1,0);LineTo(dc,7,7);
+  int saved_path=SaveDC(dc);assert(saved_path && EndPath(dc) && AbortPath(dc));
+  assert(RestoreDC(dc,saved_path) && EndPath(dc) && GetPath(dc,0,0,0)==2);
+  saved_path=SaveDC(dc);assert(saved_path && BeginPath(dc));
+  assert(RestoreDC(dc,saved_path) && GetPath(dc,0,0,0)==2 && AbortPath(dc));
+  assert(BeginPath(dc));assert(Rectangle(dc,1,1,6,6));assert(EndPath(dc));
+  assert(SetViewportOrgEx(dc,10,0,0));
+  HRGN region=PathToRegion(dc);assert(region && PtInRegion(region,2,2) && !PtInRegion(region,12,2));
+  DeleteObject(region);SetViewportOrgEx(dc,0,0,0);
+  POINT curve[4]={{1,20},{4,10},{16,10},{20,20}};
+  assert(BeginPath(dc) && PolyBezier(dc,curve,4) && EndPath(dc));
+  assert(GetPath(dc,points,types,8)==4 && types[1]==4);
+  assert(FlattenPath(dc) && GetPath(dc,0,0,0)==33 && StrokePath(dc));
+  assert(BeginPath(dc) && Rectangle(dc,10,4,20,12) && EndPath(dc));
+  assert(SelectClipPath(dc,RGN_COPY));
+  assert(PatBlt(dc,0,0,32,24,PATCOPY));
+  assert(GetPixel(dc,12,8)==RGB(250,10,20));SelectClipRgn(dc,0);
+  assert(BeginPath(dc));MoveToEx(dc,10,5,0);LineTo(dc,10,18);assert(EndPath(dc));
+  HPEN pen=CreatePen(PS_SOLID,4,0);HGDIOBJ oldpen=SelectObject(dc,pen);
+  assert(WidenPath(dc));region=PathToRegion(dc);assert(region && PtInRegion(region,10,10) && PtInRegion(region,10,5) && PtInRegion(region,10,6));
+  assert(!PtInRegion(region,20,10));DeleteObject(region);SelectObject(dc,oldpen);DeleteObject(pen);
+  HDC meta=CreateEnhMetaFileA(dc,0,0,"CiukiOS\0Paths\0\0");assert(meta);
+  SelectObject(meta,brush);Rectangle(meta,2,2,16,16);
+  const uint8_t comment[3]={7,8,9};assert(GdiComment(meta,3,comment));
+  HGDIOBJ emf=CloseEnhMetaFile(meta);assert(emf);
+  DWORD size=GetEnhMetaFileBits(emf,0,0);uint8_t *bits=malloc(size);
+  assert(size>100 && GetEnhMetaFileBits(emf,size,bits)==size);
+  assert(w32_u32(bits+48)==size);free(bits);
+  memset(pixels,0,sizeof(pixels));RECT frame={0,0,96,96};
+  assert(PlayEnhMetaFile(dc,emf,&frame));assert(GetPixel(dc,4,4)==RGB(250,10,20));
+  assert(DeleteEnhMetaFile(emf));
+  meta=CreateMetaFileA(0);assert(meta);SelectObject(meta,brush);Rectangle(meta,3,3,12,12);
+  HGDIOBJ wmf=CloseMetaFile(meta);assert(wmf);
+  memset(pixels,0,sizeof(pixels));unsigned records=0;
+  assert(EnumMetaFile(dc,wmf,enum_play,(intptr_t)&records));assert(records>=3);
+  assert(GetPixel(dc,5,5)==RGB(250,10,20));SelectObject(dc,old);assert(DeleteMetaFile(wmf));
+  DeleteObject(brush);DeleteDC(dc);w32_gdi_process_exit();
+  puts("PASS utility path pixels, mapping, flattening, clips, widening, EMF and WMF callbacks");
+}
 int main(int argc, char **argv) {
   assert(argc >= 2);
-  if (!strcmp(argv[1], "lifetime"))
+  if (!strcmp(argv[1], "utility-paths"))
+    utility_paths();
+  else if (!strcmp(argv[1], "lifetime"))
     lifetime();
   else if (!strcmp(argv[1], "regions"))
     regions();

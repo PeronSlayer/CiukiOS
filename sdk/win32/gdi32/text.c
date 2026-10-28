@@ -78,12 +78,19 @@ static int text_metrics(struct font *f, struct w32_gdi_font_metrics *m) {
          m->descent >= 0 && (int64_t)m->ascent + m->descent <= GDI_LIMIT * 64 &&
          m->line_gap >= 0 && m->line_gap <= GDI_LIMIT * 64;
 }
+static int justify(struct dc *d,DWORD cp,unsigned *breaks) {
+  if(cp!=32 || d->s.justify_breaks<=0) return 0;
+  unsigned k=(*breaks)++;
+  if(k>=(unsigned)d->s.justify_breaks) return 0;
+  return (int)(((int64_t)d->s.justify_extra*(k+1)/d->s.justify_breaks)-
+      ((int64_t)d->s.justify_extra*k/d->s.justify_breaks));
+}
 static int measure(struct dc *d, const void *text, unsigned count, int wide,
                    const int *dx, int indices, int *width) {
   struct font *f = font_of(d);
   if (!f || (!text && count) || count > 8192)
     return 0;
-  unsigned at = 0;
+  unsigned at = 0, breaks = 0;
   int64_t advance = 0;
   DWORD previous = 0;
   while (at < count) {
@@ -103,7 +110,7 @@ static int measure(struct dc *d, const void *text, unsigned count, int wide,
       for (unsigned i = before; i < at; i++)
         advance += (int64_t)dx[i] * 64;
     } else
-      advance += (int64_t)g.advance + (int64_t)d->s.extra * 64 + kern;
+      advance += (int64_t)g.advance + (int64_t)d->s.extra * 64 + kern + (int64_t)justify(d,cp,&breaks)*64;
     f->provider.free_glyph(f->face, &g);
     previous = cp;
     if (advance < -GDI_LIMIT * 64 || advance > GDI_LIMIT * 64)
@@ -186,6 +193,10 @@ static void compose(struct dc *d, const struct w32_gdi_glyph *g, int x,
 int gdi_text(HDC h, int x, int y, unsigned flags, const RECT *rect,
              const void *text, unsigned count, const int *dx, int wide) {
   struct dc *d = gdi_dc(h);
+  if(d && d->path && d->path->open) {
+    /* The font provider currently exposes raster glyphs, not outlines. */
+    SetLastError(50);return 0;
+  }
   if (d && d->record && (text || !count)) /* f5-20B metafile DC */
     return gdi_record_text(d, x, y, flags, rect, text, count, dx, wide);
   struct font *f = font_of(d);
@@ -241,7 +252,7 @@ int gdi_text(HDC h, int x, int y, unsigned flags, const RECT *rect,
               gdi_rect(d, (RECT){x, baseline - ceil26(m.ascent), x + width,
                                  baseline + ceil26(m.descent)}),
               d->s.bk, clip);
-  unsigned at = 0;
+  unsigned at = 0, breaks = 0;
   int64_t pen = 0;
   DWORD previous = 0;
   while (at < count) {
@@ -263,7 +274,7 @@ int gdi_text(HDC h, int x, int y, unsigned flags, const RECT *rect,
       for (unsigned i = before; i < at; i++)
         pen += (int64_t)dx[i] * 64;
     else
-      pen += (int64_t)g.advance + (int64_t)d->s.extra * 64;
+      pen += (int64_t)g.advance + (int64_t)d->s.extra * 64 + (int64_t)justify(d,cp,&breaks)*64;
     f->provider.free_glyph(f->face, &g);
     previous = cp;
   }

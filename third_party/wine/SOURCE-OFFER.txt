@@ -44,3 +44,10 @@ local ignored archive and the upstream links alone are not a published source
 distribution. The bundled musl and zlib notices are retained separately as
 musl-COPYRIGHT.txt and zlib-NOTICE.txt, including in the image's WINE-*
 notices; their original source-file notices remain in the exact archive.
+
+The fx-hlutils recipe additionally builds oledlg.dll and wininet.dll from
+that exact archive, with patch 0016-wininet-no-tls.patch (MSVCRT selection
+and the documented failure for unavailable TLS). They are LGPL-2.1-or-later.
+Their qualification status is recorded in config/wine-upper.json; a build
+alone does not authorize distribution as a qualified system DLL. The exact
+patch, archive, recipe and notices are part of their corresponding source.
