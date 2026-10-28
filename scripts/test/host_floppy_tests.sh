@@ -56,7 +56,7 @@ clang "${flags[@]}" -DFS_HOST -D_POSIX_C_SOURCE=200809L \
     -c "$root/tests/host/floppy_vm_physical.c" -o "$out/floppy-physical.o"
 clang "${flags[@]}" -DCIUKI_FDC_FIXTURE -Wno-pointer-to-int-cast -ffunction-sections -fdata-sections -Wl,--gc-sections \
     -I "$out" "$root/tests/host/dosvm_test.c" "$root/tests/host/dosvm_uaddr_model.c" \
-    "$root/src/kernel/net/bridge.c" "$root/src/kernel/vm/dosvm_ipx.c" "$root/src/kernel/vm/dosvm_ne2000.c" \
+    "$root/src/kernel/net/ipx_config.c" "$root/src/kernel/net/bridge.c" "$root/src/kernel/vm/dosvm_ipx.c" "$root/src/kernel/vm/dosvm_ne2000.c" \
     "$root/src/kernel/lib/fmt.c" "$root/src/kernel/lib/sha256.c" \
     "$root/src/kernel/vm/virtual_vga.c" "$root/src/kernel/vm/virtual_vga_bios.c" \
     "$root/src/kernel/vm/vga_x86.c" "$root/src/kernel/vm/vga_presenter.c" \
