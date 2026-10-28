@@ -82,7 +82,9 @@ class SystemOwnerTests(unittest.TestCase):
                   'src/kernel/lib/sha256.c', 'src/kernel/lib/fmt.c', 'src/kernel/lib/tzrule.c',
                   'src/kernel/probes/selector.c', *OWNER]
         program = OUT / 'system_owner'
-        subprocess.run(['clang', *WARN, '-Wl,--gc-sections', '-Wl,--wrap=owner_service_bind', *SANITIZE, '-DFS_HOST', '-D_POSIX_C_SOURCE=200809L',
+        subprocess.run(['clang', *WARN, '-Wl,--gc-sections', '-Wl,--wrap=owner_vfs_backend',
+                        '-Wl,--wrap=owner_open', '-Wl,--wrap=vfs_stat', '-Wl,--wrap=vfs_rename',
+                        '-Wl,--wrap=acct_frame_alloc', *SANITIZE, '-DFS_HOST', '-D_POSIX_C_SOURCE=200809L',
                         '-pthread', '-Wno-unused-function', *include, '-I', str(ROOT / 'src/kernel/fs'),
                         *[str(ROOT / s) for s in kernel], *objects, '-o', str(program)], check=True, env=env)
         cut = OUT / 'cut.img'
@@ -102,7 +104,11 @@ class SystemOwnerTests(unittest.TestCase):
         # The first RESERVE hashes each tree twice (before/after fencing).
         # PREPARE/COMMIT each revalidate all three roots. Inject every position,
         # plus repeated refusals, an actual generation guard and orphan recovery.
-        cases = ['entropy-sid', 'entropy-salt', 'entropy-many', 'generation', 'binding', 'orphan', 'orphan-tree']
+        cases = ['entropy-sid', 'entropy-salt', 'entropy-many', 'generation', 'binding',
+                 'orphan', 'orphan-many', 'intent-partial', 'orphan-tree', 'recovery-commit', 'recovery-persist', 'recovery-close',
+                 'publish', 'publish-many', 'publish-error', 'publish-rename',
+                 'publish-barrier', 'allocation']
+        cases += [f'publish-proof-{at}' for at in range(1, 7)]
         cases += [f'tree-{op}-{at}-1' for op, positions in ((7, 6), (1, 3), (2, 3))
                   for at in range(1, positions + 1)]
         cases += ['tree-1-1-8', 'tree-7-1-8']
@@ -112,7 +118,7 @@ class SystemOwnerTests(unittest.TestCase):
                 result = subprocess.run([str(program), str(image), f'retry:{case}'], capture_output=True,
                                         text=True, env=env, timeout=300)
                 print(result.stdout, end='')
-                self.assertIn(f'H15 sec-firstboot {case}:', result.stdout)
+                self.assertIn(f'H15 sec-firstboot {case}:', result.stdout, result.stdout + result.stderr)
                 self.assertIn('reboot clean PASS', result.stdout)
                 fsck = subprocess.run(['fsck.fat', '-n', str(image)], capture_output=True, text=True)
                 self.assertEqual(fsck.returncode, 0, fsck.stdout + fsck.stderr)

@@ -216,9 +216,10 @@ static int transition(struct owner_store *s,const struct owner_request *q,struct
     if(e) { if(e!=-EAGAIN) s->ready=false; return e; }
     if(op==OWNER_PREPARE) { r->state=OWNER_PREPARED; return owner_persist(s); }
     int intent=owner_intent(s,q); if(intent!=1) return intent<0?intent:-EIO;
-    /* account COMMIT_REQUIRED forbids compensation even if publication or a
-     * following flush fails. Pending identities stay denied until reopen. */
+    /* account COMMIT_REQUIRED forbids compensation. A read-only publication
+     * refusal retains the exact pending batch; uncertain writes close it. */
     e=s->io.publish(s->io.ctx,q,s->pending);
+    if(e) { if(e!=-EAGAIN) s->ready=false; return e; }
     if(!e) e=s->io.barrier(s->io.ctx);
     if(!e) e=owner_save_records(s,q,r);
     if(!e) e=s->io.release(s->io.ctx,q,true);
@@ -277,10 +278,17 @@ int owner_open(struct owner_store *s,const struct owner_backend *io,const uint32
        !io->manifest || !io->tree || !io->reserve || !io->publish || !io->release || !io->account_intent ||
        !io->account_current || !io->checkpoint_marker || !io->import_map || !io->occupied || !io->verify) return -EINVAL;
     memset(s,0,sizeof(*s)); s->io=*io; memcpy(s->sid,sid,12); s->volume=volume; s->uid_high=1000;
-    int e=owner_load(s,fresh); if(!e) { s->ready=true; e=owner_recover(s); }
+    int e=owner_load(s,fresh); if(e) { s->ready=false; return e; }
+    s->ready=true;
+    return owner_open_resume(s);
+}
+int owner_open_resume(struct owner_store *s)
+{
+    if(!s || !s->ready) return -EIO;
+    int e=owner_recover(s);
     for(unsigned i=0;!e && i<s->profile_count+s->root_count;i++) {
         const struct owner_record *r=i<s->profile_count?&s->profiles[i]:&s->roots[i-s->profile_count];
         if(!r->pending) e=s->io.verify(s->io.ctx,r);
     }
-    if(e) s->ready=false; return e;
+    if(e && e!=-EAGAIN) s->ready=false; return e;
 }

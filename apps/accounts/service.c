@@ -80,6 +80,7 @@ void acct_service_close(struct acct_service *s)
     if (s->pending.occupied) { k->exchange_end(k->ctx,&s->pending.subject); k->release_peer(k->ctx, &s->pending.subject); }
     acct_attempts_clear(s);
     if(s->results) { acct_wipe(s->results,sizeof(*s->results)); k->deallocate(k->ctx,s->results,sizeof(*s->results)); }
+    acct_store_close(&s->store);
     if (s->leased) k->lease_release(k->ctx);
     acct_wipe(s, sizeof(*s));
 }

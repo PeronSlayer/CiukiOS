@@ -90,6 +90,7 @@ enum acct_boot_step {
     ACCT_BOOT_STATUS, ACCT_BOOT_PREPARE, ACCT_BOOT_COMMIT, ACCT_BOOT_ABORT,
     ACCT_BOOT_CHECKPOINT, ACCT_BOOT_COMPACT, ACCT_BOOT_INTENT, ACCT_BOOT_STEP_COUNT
 };
+struct acct_store_workspace;
 struct acct_store {
     struct acct_io io;
     struct acct_owner owner;
@@ -98,12 +99,14 @@ struct acct_store {
     uint64_t high_generation;
     uint32_t high_uid;
     enum acct_boot_step firstboot_step;
+    struct acct_store_workspace *pending_intent; /* exact sealed batch awaiting persistence */
     const struct acct_subject *subject; /* borrowed retained worker subject, or NULL for recovery */
 };
 static inline int acct_boot_result(struct acct_store *s, enum acct_boot_step step, int e)
 { if (e) s->firstboot_step=step; return e; }
 /* Store operations require the live service lease and its serialized worker. */
 int acct_store_recover(struct acct_store *, struct acct_db *);
+void acct_store_close(struct acct_store *);
 int acct_store_commit(struct acct_store *, const struct acct_db *,
                       const struct acct_db *, const struct acct_owner_request *, unsigned);
 int acct_store_load_watermarks(struct acct_store *, const uint32_t sid[3]);
