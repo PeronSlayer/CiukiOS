@@ -39,3 +39,11 @@ Like a Windows 98 user, the acceptance installs each title with its original ins
 - Never run QEMU, `systemd-run` or image builds.
 - Run host tests through `/home/peronslayer/Desktop/CiukiOS/build/lead-scratch/heavy.sh`.
 - Report to `build/codex/fx-games20c-report.md`. Leave the changes uncommitted.
+
+## Lead decision G20-2 (2026-10-28 20:48)
+
+The installers and sound-setup steps use the resources that the VM's `BLASTER` variable declares. The CiukiDOS factory setting is `A220 I7 D1 H5 T6` (SB16 at 220h, IRQ 7, DMA 1/5, MPU-401 at 330h), matching `src/kernel/vm/dosvm_audio_state.h`. A Windows 98 PC's game setup likewise takes the installed card's resources.
+
+- Where a setup program asks for the IRQ, the step selects 7.
+- The global default does not change.
+- The title battery's IRQ 5 text is corrected to read `BLASTER`.
