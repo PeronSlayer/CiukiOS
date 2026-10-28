@@ -1,6 +1,6 @@
 # fx-games20b: licence terms of the fourteen newly pinned DOS titles
 
-- **Written:** 2026-10-28 19:24 by the lead. Implementer: Codex `gpt-6.1-sol`, effort `medium`. Base: main 61e738370 or later.
+- **Written:** 2026-10-28 19:07 by the lead. Implementer: Codex `gpt-6.1-sol`, effort `medium`. Base: main 61e738370 or later.
 - **Inputs:**
   - the lead has downloaded and pinned the fourteen candidate archives (commit 5125ccb2a). They are in `/home/peronslayer/Desktop/CiukiOS/build/downloads/dos-titles/`, which is read-only for you;
   - `config/dos-titles.json`;
