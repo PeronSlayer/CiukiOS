@@ -8,9 +8,32 @@
   "sha256": "469ee3a254959d2fca624aec7391292fbd1ac3ebd9074b65f05cbc74de3c4572",
   "size": 5664734,
   "status": "pinned",
-  "license": "Original demo package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
-  "license_files": [],
-  "redistribution": "test-media only; package review pending",
+  "license": "README.TXT identifies the four-level demo re-released October 18, 1995 and states it is not shareware. No licence/vendor document or explicit sharing or bundling grant is present in the pinned ZIP; no redistribution permission inferred.",
+  "license_files": [
+    {
+      "name": "README.TXT",
+      "source": "hexndemo.zip!README.TXT",
+      "sha256": "052ab6d0f513ebef8484b359d3a744cb7af8a519b68b68361a02ba32eee3afdb"
+    }
+  ],
+  "redistribution": "test-media only; no OS-image bundling permission established",
   "game_data": "No retail, registered or abandonware payload. Never commit game bytes.",
-  "qualification": "Pin the download, inspect original installer and manual, record exact licence clauses and installed tree before running."
+  "qualification": "Original package terms reviewed; installed tree, sound setup and image-bound gameplay/input calibration remain pending.",
+  "licence": {
+    "source": "hexndemo.zip!README.TXT",
+    "terms": "README.TXT identifies the four-level demo re-released October 18, 1995 and states it is not shareware. No licence/vendor document or explicit sharing or bundling grant is present in the pinned ZIP; no redistribution permission inferred.",
+    "verification": "Read README.TXT and DM.DOC and inspected every pinned ZIP member; no separate licence/vendor document or explicit redistribution grant found. README hash records demo identification, not a licence grant.",
+    "distribution": "Local acceptance test media only; never included in images or releases.",
+    "class": "test-media",
+    "sha256": "052ab6d0f513ebef8484b359d3a744cb7af8a519b68b68361a02ba32eee3afdb"
+  },
+  "edition": "Four-level demo re-released October 18, 1995 (not shareware)",
+  "installation": {
+    "type": "zip",
+    "member": null,
+    "executable": "HEXEN.EXE",
+    "executable_verified": true,
+    "host_extractable": true,
+    "lead_action": "Payload is host-extractable; preserve every original file/document, run real sound setup and pin the measured tree. Extraction alone is not installation/gameplay evidence."
+  }
 }

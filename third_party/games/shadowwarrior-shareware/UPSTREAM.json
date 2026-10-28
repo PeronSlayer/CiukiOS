@@ -8,9 +8,37 @@
   "sha256": "6e41b3769d0373fc160c2113469c6f8bc2932dc1a77b69c81c1bd9644a189a8f",
   "size": 13299147,
   "status": "pinned",
-  "license": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
-  "license_files": [],
-  "redistribution": "test-media only; package review pending",
+  "license": "LICENSE.TXT [3][A-D]: no-charge sharing by individuals with friends, family, coworkers and nonprofit members; all files and notices unchanged. GTIS retail exclusivity ended September 1, 1997; later AOL/CompuServe forum distribution permitted. No general OS-image bundle grant.",
+  "license_files": [
+    {
+      "name": "LICENSE.TXT",
+      "source": "3dsw12.zip!LICENSE.TXT",
+      "sha256": "41a8d37ff59966e4ba76090752b43bf924f75313c0cb55f229122b39f7a7bdea"
+    },
+    {
+      "name": "LICENSE.TXT",
+      "source": "3dsw12.zip!SWSW12.SHR!LICENSE.TXT",
+      "sha256": "41a8d37ff59966e4ba76090752b43bf924f75313c0cb55f229122b39f7a7bdea"
+    }
+  ],
+  "redistribution": "test-media only; no OS-image bundling permission established",
   "game_data": "No retail, registered or abandonware payload. Never commit game bytes.",
-  "qualification": "Pin the download, inspect original installer and manual, record exact licence clauses and installed tree before running."
+  "qualification": "Original package terms reviewed; installed tree, sound setup and image-bound gameplay/input calibration remain pending.",
+  "licence": {
+    "source": "3dsw12.zip!SWSW12.SHR!LICENSE.TXT",
+    "terms": "LICENSE.TXT [3][A-D]: no-charge sharing by individuals with friends, family, coworkers and nonprofit members; all files and notices unchanged. GTIS retail exclusivity ended September 1, 1997; later AOL/CompuServe forum distribution permitted. No general OS-image bundle grant.",
+    "verification": "Read original licence and vendor documents from the exact size/SHA-256-verified pinned archive; member hash is over unmodified bytes. No OS-image redistribution permission asserted.",
+    "distribution": "Local acceptance test media only; never included in images or releases.",
+    "class": "test-media",
+    "sha256": "41a8d37ff59966e4ba76090752b43bf924f75313c0cb55f229122b39f7a7bdea"
+  },
+  "edition": "1.2 shareware Episode One",
+  "installation": {
+    "type": "zip-sfx",
+    "member": "SWSW12.SHR",
+    "executable": "SW.EXE",
+    "executable_verified": true,
+    "host_extractable": true,
+    "lead_action": "Payload is host-extractable; preserve every original file/document, run real sound setup and pin the measured tree. Extraction alone is not installation/gameplay evidence."
+  }
 }

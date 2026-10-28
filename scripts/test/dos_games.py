@@ -71,7 +71,7 @@ def load(root=ROOT):
             require(pin['status'] == 'pinned' and isinstance(pin['sha256'], str) and dos_titles.SHA.fullmatch(pin['sha256']) and type(pin['size']) is int and 0 < pin['size'] <= MAX_BYTES, 'archive SHA-256 and size')
         # A provenance record is required for every new candidate, but existing
         # battery entries with inline licence member citations retain that form.
-        source = pin['licence']['source']
+        source = pin.get('provenance', pin['licence']['source'])
         # Older battery rows cite the licence inside the archive. Where an
         # installed package provenance record exists, it remains authoritative
         # for the archive name and digest too (not just licence classification).
@@ -83,6 +83,8 @@ def load(root=ROOT):
         if source.startswith('third_party/'):
             upstream = json.loads((root / source).read_text())
             require(upstream['archive'] == pin['archive'] and upstream['sha256'] == pin['sha256'] and upstream['size'] == pin['size'], 'upstream pin mismatch')
+            if 'provenance' in pin:
+                require(upstream.get('licence') == pin['licence'], 'upstream licence mismatch')
         calibration = title['calibration']
         if calibration is not None:
             validate_calibration(calibration)
@@ -317,7 +319,7 @@ def fetch(title, pin, root=ROOT, lead_pin=False):
             data = json.loads((root / PINS).read_text())
             data['titles'] = [pin if p['id'] == pin['id'] else p for p in data['titles']]
             (root / PINS).write_text(json.dumps(data, indent=2) + '\n')
-            source = root / pin['licence']['source']
+            source = root / pin.get('provenance', pin['licence']['source'])
             upstream = json.loads(source.read_text()); upstream.update(size=total, sha256=digest, status='pinned')
             source.write_text(json.dumps(upstream, indent=2) + '\n')
         temp.replace(target)

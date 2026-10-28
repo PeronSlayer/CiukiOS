@@ -100,3 +100,61 @@ sidecar and temporary Games link. The canonical DOS kernel and image are not
 rebuilt. A fragmented nested volume is refused. Full-screen refusal is
 currently expected on standard QEMU VGA (fx-dosfull/f3-29), so these strict
 cases can expose that gate without granting a false gameplay pass.
+
+## fx-games20b: exact pinned package review
+
+The fourteen archive sizes and SHA-256 pins were checked against the lead's
+read-only downloads before reading their original licence/vendor members.
+`config/dos-titles.json` records exact member paths, byte hashes and clause
+summaries; each title's `UPSTREAM.json` repeats that evidence and records the
+observed edition, executable and installer container. No payload or installed
+tree is added. All fourteen remain `test-media`.
+
+Primary sources are the original publisher documents in those pinned archives,
+not the mirror's description or a source-code licence. The publisher FTP
+[Heretic index](https://www.gamers.org/pub/idgames/idstuff/heretic/) and
+[Hexen index](https://www.gamers.org/pub/idgames/idstuff/hexen/) confirm the
+archive names. The [3D Realms mirror index](https://www.gamers.org/pub/mirrors/ftp.3drealms.com/share/)
+was inaccessible to the web tool; the pinned packages themselves supply the
+vendor terms. Decisions from reading those documents:
+
+- Apogee VENDOR.DOC [3][A] requires all files unchanged; [3][C] requires prior
+  signed permission for software/hardware bundles and CD-ROM distribution.
+  Terminal Velocity LICENSE.TXT qualifies [3][C] with commercial distribution;
+  its key points also restrict commercial locations after May 1, 1996.
+- Shadow Warrior LICENSE.TXT grants no-charge individual sharing and specific
+  online-service distribution, with every file unchanged. Its expired GTIS
+  exclusivity does not grant general OS bundling permission.
+- Heretic LICENSE.DOC permits royalty-free electronic distribution in
+  compressed form, prohibits commercial exploitation, and refers vendors to
+  VENDOR.DOC. This does not establish permission for an installed OS bundle.
+- Hexen README.TXT identifies the October 18, 1995 four-level demo, explicitly
+  distinguishes it from shareware, and contains no redistribution grant.
+  No separate licence/vendor document exists in the ZIP; record this absence
+  rather than substituting Heretic's terms.
+- Descent LICENCE.TXT and Descent II README.TXT allow personal noncommercial
+  copies and no-cost sharing with friends/acquaintances; their limitations
+  expressly exclude bundling and promotional giveaways with another product.
+- Jazz LICENSE.DOC allows unchanged modem distribution, single-game floppy
+  sales below $9, small commercial CD/multi-disk collections with at most ten
+  programs and three Epic titles plus packaging/credit/sample obligations,
+  and free unchanged bundling with new hardware. These are conditional bundle
+  grants for lead review, not an established grant for this OS image.
+
+Container inspection used existing ZIP CRC checks and `shr_members` decoding
+in memory. Heretic's two numbered parts concatenate to a ZIP self-extractor;
+Cosmo and Bio Menace use the Apogee DCL SHR format; the other seven SHR
+containers are ZIP self-extractors. Hexen and Jazz already contain direct game
+files. These twelve payloads can be extracted without running a DOS installer,
+though real sound configuration and qualification remain outstanding. Descent
+and Descent II contain INSTALL.EXE and segmented SOW data; their installed
+executables cannot be confirmed from the outer member list and require the
+lead's original-installer run. No unmeasured automation or installed pins are
+invented. The tracked runner retains its existing pending ZIP definitions;
+installer kind and the required lead action are documented in provenance and
+install steps until actual installer automation is calibrated.
+
+Blake Stone 3.0 contains BS_AOG.EXE and BSTONE.BAT, not BLAKE.EXE; use the
+observed executable. Bio Menace is 1.1, not a later freeware edition. Jazz's
+FILE_ID.DIZ says 1.1 while VENDOR.DOC still says 1.0; retain both observations.
+A completed document review does not imply installation or gameplay evidence.

@@ -8,9 +8,37 @@
   "sha256": "ff55a2a54be15f73899cc591310a226ded1f652c1a73ceeaeeb72e9881346ca4",
   "size": 3795467,
   "status": "pinned",
-  "license": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
-  "license_files": [],
-  "redistribution": "test-media only; package review pending",
+  "license": "Complete unmodified Episode One may be shared free; retain all files/notices and credit Apogee. LICENSE.TXT [3][C] requires prior signed permission for commercial bundles, CD-ROMs or retail distribution. Key points additionally require written permission for commercial-location sale/distribution after May 1, 1996.",
+  "license_files": [
+    {
+      "name": "LICENSE.TXT",
+      "source": "3dtv12.zip!LICENSE.TXT",
+      "sha256": "3c1b606f5fe8c74c4e7757f1494d821f8aec8f442d0c8e45d8a7646734b76fd5"
+    },
+    {
+      "name": "LICENSE.TXT",
+      "source": "3dtv12.zip!TV12S.SHR!LICENSE.TXT",
+      "sha256": "3c1b606f5fe8c74c4e7757f1494d821f8aec8f442d0c8e45d8a7646734b76fd5"
+    }
+  ],
+  "redistribution": "test-media only; no OS-image bundling permission established",
   "game_data": "No retail, registered or abandonware payload. Never commit game bytes.",
-  "qualification": "Pin the download, inspect original installer and manual, record exact licence clauses and installed tree before running."
+  "qualification": "Original package terms reviewed; installed tree, sound setup and image-bound gameplay/input calibration remain pending.",
+  "licence": {
+    "source": "3dtv12.zip!TV12S.SHR!LICENSE.TXT",
+    "terms": "Complete unmodified Episode One may be shared free; retain all files/notices and credit Apogee. LICENSE.TXT [3][C] requires prior signed permission for commercial bundles, CD-ROMs or retail distribution. Key points additionally require written permission for commercial-location sale/distribution after May 1, 1996.",
+    "verification": "Read original licence and vendor documents from the exact size/SHA-256-verified pinned archive; member hash is over unmodified bytes. No OS-image redistribution permission asserted.",
+    "distribution": "Local acceptance test media only; never included in images or releases.",
+    "class": "test-media",
+    "sha256": "3c1b606f5fe8c74c4e7757f1494d821f8aec8f442d0c8e45d8a7646734b76fd5"
+  },
+  "edition": "1.2 shareware Episode One",
+  "installation": {
+    "type": "zip-sfx",
+    "member": "TV12S.SHR",
+    "executable": "TV.EXE",
+    "executable_verified": true,
+    "host_extractable": true,
+    "lead_action": "Payload is host-extractable; preserve every original file/document, run real sound setup and pin the measured tree. Extraction alone is not installation/gameplay evidence."
+  }
 }

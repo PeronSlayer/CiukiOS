@@ -8,9 +8,32 @@
   "sha256": "7d6b062dcdc76d9ea02d8d71af14e5043223581d792f6ead4eb1316fd0351552",
   "size": 2013010,
   "status": "pinned",
-  "license": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted.",
-  "license_files": [],
-  "redistribution": "test-media only; package review pending",
+  "license": "Complete, unmodified Episode One shareware may be shared without charge; retain all files and notices ([3][A]). Advertising must credit Apogee. Hardware/software bundles, CD-ROMs and retail distribution require prior signed written permission ([3][C]); charged distribution has additional packaging/current-version conditions ([3][B]).",
+  "license_files": [
+    {
+      "name": "VENDOR.DOC",
+      "source": "1rap12.zip!RAPSW12.SHR!VENDOR.DOC",
+      "sha256": "3e4811d1ce11e2dc2ea219b364573d8cc49590e63ecedde2f1626c54b82e4d62"
+    }
+  ],
+  "redistribution": "test-media only; no OS-image bundling permission established",
   "game_data": "No retail, registered or abandonware payload. Never commit game bytes.",
-  "qualification": "Pin the download, inspect original installer and manual, record exact licence clauses and installed tree before running."
+  "qualification": "Original package terms reviewed; installed tree, sound setup and image-bound gameplay/input calibration remain pending.",
+  "licence": {
+    "source": "1rap12.zip!RAPSW12.SHR!VENDOR.DOC",
+    "terms": "Complete, unmodified Episode One shareware may be shared without charge; retain all files and notices ([3][A]). Advertising must credit Apogee. Hardware/software bundles, CD-ROMs and retail distribution require prior signed written permission ([3][C]); charged distribution has additional packaging/current-version conditions ([3][B]).",
+    "verification": "Read original licence and vendor documents from the exact size/SHA-256-verified pinned archive; member hash is over unmodified bytes. No OS-image redistribution permission asserted.",
+    "distribution": "Local acceptance test media only; never included in images or releases.",
+    "class": "test-media",
+    "sha256": "3e4811d1ce11e2dc2ea219b364573d8cc49590e63ecedde2f1626c54b82e4d62"
+  },
+  "edition": "1.2 shareware",
+  "installation": {
+    "type": "zip-sfx",
+    "member": "RAPSW12.SHR",
+    "executable": "RAP.EXE",
+    "executable_verified": true,
+    "host_extractable": true,
+    "lead_action": "Payload is host-extractable; preserve every original file/document, run real sound setup and pin the measured tree. Extraction alone is not installation/gameplay evidence."
+  }
 }

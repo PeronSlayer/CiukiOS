@@ -2354,7 +2354,7 @@
       "licence": {
         "class": "test-media",
         "citation": "third_party/games/heretic-shareware/UPSTREAM.json",
-        "conditions": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted."
+        "conditions": "LICENSE.DOC sections 1-4: personal use; no commercial exploitation or distribution for consideration. Royalty-free electronic distribution only in compressed form. VENDOR.DOC reserves reseller distribution to GT Interactive and directs direct-sale vendors to obtain a licence. No installed OS-image bundling grant established."
       },
       "install": {
         "layout": "zip",
@@ -2363,9 +2363,10 @@
         "target": "HERETIC",
         "files": [],
         "steps": [
-          "Fetch only the original package at config/dos-titles.json URL into build/downloads/dos-titles.",
-          "Lead pins SHA-256, reads the exact licence, runs original installer and pins the installed tree.",
-          "Sound setup: SB16 220h IRQ 7 DMA 1/5; OPL or General MIDI as documented by this edition.",
+          "Pinned edition: 1.2, shareware Episode One (City of the Damned).",
+          "Original installer/container: split-zip-sfx; HTIC_V12.1+HTIC_V12.2.",
+          "Payload is host-extractable; preserve every original file/document, run real sound setup and pin the measured tree. Extraction alone is not installation/gameplay evidence.",
+          "Licence evidence: htic_v12.zip!HTIC_V12.1+HTIC_V12.2!LICENSE.DOC",
           "Proposed inputs and checkpoints require lead calibration; no compatibility claim yet."
         ]
       },
@@ -2659,7 +2660,7 @@
       "licence": {
         "class": "test-media",
         "citation": "third_party/games/hexen-demo/UPSTREAM.json",
-        "conditions": "Original demo package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted."
+        "conditions": "README.TXT identifies the four-level demo re-released October 18, 1995 and states it is not shareware. No licence/vendor document or explicit sharing or bundling grant is present in the pinned ZIP; no redistribution permission inferred."
       },
       "install": {
         "layout": "zip",
@@ -2668,9 +2669,10 @@
         "target": "HEXEN",
         "files": [],
         "steps": [
-          "Fetch only the original package at config/dos-titles.json URL into build/downloads/dos-titles.",
-          "Lead pins SHA-256, reads the exact licence, runs original installer and pins the installed tree.",
-          "Sound setup: SB16 220h IRQ 7 DMA 1/5; OPL or General MIDI as documented by this edition.",
+          "Pinned edition: Four-level demo re-released October 18, 1995 (not shareware).",
+          "Original installer/container: zip.",
+          "Payload is host-extractable; preserve every original file/document, run real sound setup and pin the measured tree. Extraction alone is not installation/gameplay evidence.",
+          "Licence evidence: hexndemo.zip!README.TXT",
           "Proposed inputs and checkpoints require lead calibration; no compatibility claim yet."
         ]
       },
@@ -2964,7 +2966,7 @@
       "licence": {
         "class": "test-media",
         "citation": "third_party/games/descent-shareware/UPSTREAM.json",
-        "conditions": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted."
+        "conditions": "Personal noncommercial home use and no-cost copies for friends/acquaintances only. Commercial copying/distribution, bundling with any other product/service and promotional giveaways are expressly excluded; permissions are revocable."
       },
       "install": {
         "layout": "zip",
@@ -2973,9 +2975,10 @@
         "target": "DESCENT",
         "files": [],
         "steps": [
-          "Fetch only the original package at config/dos-titles.json URL into build/downloads/dos-titles.",
-          "Lead pins SHA-256, reads the exact licence, runs original installer and pins the installed tree.",
-          "Sound setup: SB16 220h IRQ 7 DMA 1/5; OPL or General MIDI as documented by this edition.",
+          "Pinned edition: 1.4 special preview/shareware.",
+          "Original installer/container: segmented-sow-installer.",
+          "Run original INSTALL.EXE in DOS; inspect installed executable and documentation, configure sound, then pin measured installed tree.",
+          "Licence evidence: desc14sw.zip!LICENCE.TXT",
           "Proposed inputs and checkpoints require lead calibration; no compatibility claim yet."
         ]
       },
@@ -3269,7 +3272,7 @@
       "licence": {
         "class": "test-media",
         "citation": "third_party/games/descent2-demo/UPSTREAM.json",
-        "conditions": "Original demo package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted."
+        "conditions": "Personal noncommercial home use and no-cost copies for friends/acquaintances only. Commercial copying/distribution, bundling with any other product/service and promotional giveaways are expressly excluded; permissions are revocable."
       },
       "install": {
         "layout": "zip",
@@ -3278,9 +3281,10 @@
         "target": "DESCENT2",
         "files": [],
         "steps": [
-          "Fetch only the original package at config/dos-titles.json URL into build/downloads/dos-titles.",
-          "Lead pins SHA-256, reads the exact licence, runs original installer and pins the installed tree.",
-          "Sound setup: SB16 220h IRQ 7 DMA 1/5; OPL or General MIDI as documented by this edition.",
+          "Pinned edition: 1.0 interactive three-level demo.",
+          "Original installer/container: segmented-sow-installer.",
+          "Run original INSTALL.EXE in DOS; inspect installed executable and documentation, configure sound, then pin measured installed tree.",
+          "Licence evidence: d2demo10.zip!README.TXT",
           "Proposed inputs and checkpoints require lead calibration; no compatibility claim yet."
         ]
       },
@@ -3574,7 +3578,7 @@
       "licence": {
         "class": "test-media",
         "citation": "third_party/games/shadowwarrior-shareware/UPSTREAM.json",
-        "conditions": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted."
+        "conditions": "LICENSE.TXT [3][A-D]: no-charge sharing by individuals with friends, family, coworkers and nonprofit members; all files and notices unchanged. GTIS retail exclusivity ended September 1, 1997; later AOL/CompuServe forum distribution permitted. No general OS-image bundle grant."
       },
       "install": {
         "layout": "zip",
@@ -3583,9 +3587,10 @@
         "target": "SW",
         "files": [],
         "steps": [
-          "Fetch only the original package at config/dos-titles.json URL into build/downloads/dos-titles.",
-          "Lead pins SHA-256, reads the exact licence, runs original installer and pins the installed tree.",
-          "Sound setup: SB16 220h IRQ 7 DMA 1/5; OPL or General MIDI as documented by this edition.",
+          "Pinned edition: 1.2 shareware Episode One.",
+          "Original installer/container: zip-sfx; SWSW12.SHR.",
+          "Payload is host-extractable; preserve every original file/document, run real sound setup and pin the measured tree. Extraction alone is not installation/gameplay evidence.",
+          "Licence evidence: 3dsw12.zip!SWSW12.SHR!LICENSE.TXT",
           "Proposed inputs and checkpoints require lead calibration; no compatibility claim yet."
         ]
       },
@@ -3879,7 +3884,7 @@
       "licence": {
         "class": "test-media",
         "citation": "third_party/games/wacky-shareware/UPSTREAM.json",
-        "conditions": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted."
+        "conditions": "Complete, unmodified Episode One shareware may be shared without charge; retain all files and notices ([3][A]). Advertising must credit Apogee. Hardware/software bundles, CD-ROMs and retail distribution require prior signed written permission ([3][C]); charged distribution has additional packaging/current-version conditions ([3][B])."
       },
       "install": {
         "layout": "zip",
@@ -3888,9 +3893,10 @@
         "target": "WACKY",
         "files": [],
         "steps": [
-          "Fetch only the original package at config/dos-titles.json URL into build/downloads/dos-titles.",
-          "Lead pins SHA-256, reads the exact licence, runs original installer and pins the installed tree.",
-          "Sound setup: SB16 220h IRQ 7 DMA 1/5; OPL or General MIDI as documented by this edition.",
+          "Pinned edition: 1.1 shareware.",
+          "Original installer/container: zip-sfx; WWSW11.SHR.",
+          "Payload is host-extractable; preserve every original file/document, run real sound setup and pin the measured tree. Extraction alone is not installation/gameplay evidence.",
+          "Licence evidence: 1wacky.zip!WWSW11.SHR!VENDOR.DOC",
           "Proposed inputs and checkpoints require lead calibration; no compatibility claim yet."
         ]
       },
@@ -4184,7 +4190,7 @@
       "licence": {
         "class": "test-media",
         "citation": "third_party/games/cosmo-shareware/UPSTREAM.json",
-        "conditions": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted."
+        "conditions": "Complete, unmodified Episode One shareware may be shared without charge; retain all files and notices ([3][A]). Advertising must credit Apogee. Hardware/software bundles, CD-ROMs and retail distribution require prior signed written permission ([3][C]); charged distribution has additional packaging/current-version conditions ([3][B])."
       },
       "install": {
         "layout": "zip",
@@ -4193,9 +4199,10 @@
         "target": "COSMO",
         "files": [],
         "steps": [
-          "Fetch only the original package at config/dos-titles.json URL into build/downloads/dos-titles.",
-          "Lead pins SHA-256, reads the exact licence, runs original installer and pins the installed tree.",
-          "Sound setup: SB16 220h IRQ 7 DMA 1/5; OPL or General MIDI as documented by this edition.",
+          "Pinned edition: Episode One, COSSW12.SHR; VENDOR.DOC inventory stamped 1:20.",
+          "Original installer/container: apogee-shr; COSSW12.SHR.",
+          "Payload is host-extractable; preserve every original file/document, run real sound setup and pin the measured tree. Extraction alone is not installation/gameplay evidence.",
+          "Licence evidence: 1cosmo.zip!COSSW12.SHR!VENDOR.DOC",
           "Proposed inputs and checkpoints require lead calibration; no compatibility claim yet."
         ]
       },
@@ -4489,7 +4496,7 @@
       "licence": {
         "class": "test-media",
         "citation": "third_party/games/duke2-shareware/UPSTREAM.json",
-        "conditions": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted."
+        "conditions": "Complete, unmodified Episode One shareware may be shared without charge; retain all files and notices ([3][A]). Advertising must credit Apogee. Hardware/software bundles, CD-ROMs and retail distribution require prior signed written permission ([3][C]); charged distribution has additional packaging/current-version conditions ([3][B])."
       },
       "install": {
         "layout": "zip",
@@ -4498,9 +4505,10 @@
         "target": "DUKE2",
         "files": [],
         "steps": [
-          "Fetch only the original package at config/dos-titles.json URL into build/downloads/dos-titles.",
-          "Lead pins SHA-256, reads the exact licence, runs original installer and pins the installed tree.",
-          "Sound setup: SB16 220h IRQ 7 DMA 1/5; OPL or General MIDI as documented by this edition.",
+          "Pinned edition: Episode One, DN2SW10.SHR; VENDOR.DOC inventory stamped 1:00.",
+          "Original installer/container: zip-sfx; DN2SW10.SHR.",
+          "Payload is host-extractable; preserve every original file/document, run real sound setup and pin the measured tree. Extraction alone is not installation/gameplay evidence.",
+          "Licence evidence: 4duke.zip!DN2SW10.SHR!VENDOR.DOC",
           "Proposed inputs and checkpoints require lead calibration; no compatibility claim yet."
         ]
       },
@@ -4794,7 +4802,7 @@
       "licence": {
         "class": "test-media",
         "citation": "third_party/games/raptor-shareware/UPSTREAM.json",
-        "conditions": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted."
+        "conditions": "Complete, unmodified Episode One shareware may be shared without charge; retain all files and notices ([3][A]). Advertising must credit Apogee. Hardware/software bundles, CD-ROMs and retail distribution require prior signed written permission ([3][C]); charged distribution has additional packaging/current-version conditions ([3][B])."
       },
       "install": {
         "layout": "zip",
@@ -4803,9 +4811,10 @@
         "target": "RAPTOR",
         "files": [],
         "steps": [
-          "Fetch only the original package at config/dos-titles.json URL into build/downloads/dos-titles.",
-          "Lead pins SHA-256, reads the exact licence, runs original installer and pins the installed tree.",
-          "Sound setup: SB16 220h IRQ 7 DMA 1/5; OPL or General MIDI as documented by this edition.",
+          "Pinned edition: 1.2 shareware.",
+          "Original installer/container: zip-sfx; RAPSW12.SHR.",
+          "Payload is host-extractable; preserve every original file/document, run real sound setup and pin the measured tree. Extraction alone is not installation/gameplay evidence.",
+          "Licence evidence: 1rap12.zip!RAPSW12.SHR!VENDOR.DOC",
           "Proposed inputs and checkpoints require lead calibration; no compatibility claim yet."
         ]
       },
@@ -5099,7 +5108,7 @@
       "licence": {
         "class": "test-media",
         "citation": "third_party/games/hocus-shareware/UPSTREAM.json",
-        "conditions": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted."
+        "conditions": "Complete, unmodified Episode One shareware may be shared without charge; retain all files and notices ([3][A]). Advertising must credit Apogee. Hardware/software bundles, CD-ROMs and retail distribution require prior signed written permission ([3][C]); charged distribution has additional packaging/current-version conditions ([3][B])."
       },
       "install": {
         "layout": "zip",
@@ -5108,9 +5117,10 @@
         "target": "HOCUS",
         "files": [],
         "steps": [
-          "Fetch only the original package at config/dos-titles.json URL into build/downloads/dos-titles.",
-          "Lead pins SHA-256, reads the exact licence, runs original installer and pins the installed tree.",
-          "Sound setup: SB16 220h IRQ 7 DMA 1/5; OPL or General MIDI as documented by this edition.",
+          "Pinned edition: 1.1 shareware.",
+          "Original installer/container: zip-sfx; HPSW11.SHR.",
+          "Payload is host-extractable; preserve every original file/document, run real sound setup and pin the measured tree. Extraction alone is not installation/gameplay evidence.",
+          "Licence evidence: 1hp11.zip!HPSW11.SHR!VENDOR.DOC",
           "Proposed inputs and checkpoints require lead calibration; no compatibility claim yet."
         ]
       },
@@ -5404,7 +5414,7 @@
       "licence": {
         "class": "test-media",
         "citation": "third_party/games/biomenace-shareware/UPSTREAM.json",
-        "conditions": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted."
+        "conditions": "Complete, unmodified Episode One shareware may be shared without charge; retain all files and notices ([3][A]). Advertising must credit Apogee. Hardware/software bundles, CD-ROMs and retail distribution require prior signed written permission ([3][C]); charged distribution has additional packaging/current-version conditions ([3][B])."
       },
       "install": {
         "layout": "zip",
@@ -5413,9 +5423,10 @@
         "target": "BIOMEN",
         "files": [],
         "steps": [
-          "Fetch only the original package at config/dos-titles.json URL into build/downloads/dos-titles.",
-          "Lead pins SHA-256, reads the exact licence, runs original installer and pins the installed tree.",
-          "Sound setup: SB16 220h IRQ 7 DMA 1/5; OPL or General MIDI as documented by this edition.",
+          "Pinned edition: 1.1 shareware (not the later freeware release).",
+          "Original installer/container: apogee-shr; BMSW11.SHR.",
+          "Payload is host-extractable; preserve every original file/document, run real sound setup and pin the measured tree. Extraction alone is not installation/gameplay evidence.",
+          "Licence evidence: 1bio11.zip!BMSW11.SHR!VENDOR.DOC",
           "Proposed inputs and checkpoints require lead calibration; no compatibility claim yet."
         ]
       },
@@ -5709,7 +5720,7 @@
       "licence": {
         "class": "test-media",
         "citation": "third_party/games/blakestone-shareware/UPSTREAM.json",
-        "conditions": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted."
+        "conditions": "Complete, unmodified Episode One shareware may be shared without charge; retain all files and notices ([3][A]). Advertising must credit Apogee. Hardware/software bundles, CD-ROMs and retail distribution require prior signed written permission ([3][C]); charged distribution has additional packaging/current-version conditions ([3][B])."
       },
       "install": {
         "layout": "zip",
@@ -5718,13 +5729,14 @@
         "target": "BLAKE",
         "files": [],
         "steps": [
-          "Fetch only the original package at config/dos-titles.json URL into build/downloads/dos-titles.",
-          "Lead pins SHA-256, reads the exact licence, runs original installer and pins the installed tree.",
-          "Sound setup: SB16 220h IRQ 7 DMA 1/5; OPL or General MIDI as documented by this edition.",
+          "Pinned edition: 3.0 Aliens of Gold shareware.",
+          "Original installer/container: zip-sfx; BSSW30.SHR.",
+          "Payload is host-extractable; preserve every original file/document, run real sound setup and pin the measured tree. Extraction alone is not installation/gameplay evidence.",
+          "Licence evidence: 1bs30.zip!BSSW30.SHR!VENDOR.DOC",
           "Proposed inputs and checkpoints require lead calibration; no compatibility claim yet."
         ]
       },
-      "executable": "BLAKE.EXE",
+      "executable": "BS_AOG.EXE",
       "args": [],
       "checkpoints": [
         {
@@ -6014,7 +6026,7 @@
       "licence": {
         "class": "test-media",
         "citation": "third_party/games/terminal-shareware/UPSTREAM.json",
-        "conditions": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted."
+        "conditions": "Complete unmodified Episode One may be shared free; retain all files/notices and credit Apogee. LICENSE.TXT [3][C] requires prior signed permission for commercial bundles, CD-ROMs or retail distribution. Key points additionally require written permission for commercial-location sale/distribution after May 1, 1996."
       },
       "install": {
         "layout": "zip",
@@ -6023,9 +6035,10 @@
         "target": "TV",
         "files": [],
         "steps": [
-          "Fetch only the original package at config/dos-titles.json URL into build/downloads/dos-titles.",
-          "Lead pins SHA-256, reads the exact licence, runs original installer and pins the installed tree.",
-          "Sound setup: SB16 220h IRQ 7 DMA 1/5; OPL or General MIDI as documented by this edition.",
+          "Pinned edition: 1.2 shareware Episode One.",
+          "Original installer/container: zip-sfx; TV12S.SHR.",
+          "Payload is host-extractable; preserve every original file/document, run real sound setup and pin the measured tree. Extraction alone is not installation/gameplay evidence.",
+          "Licence evidence: 3dtv12.zip!TV12S.SHR!LICENSE.TXT",
           "Proposed inputs and checkpoints require lead calibration; no compatibility claim yet."
         ]
       },
@@ -6319,7 +6332,7 @@
       "licence": {
         "class": "test-media",
         "citation": "third_party/games/jazz-shareware/UPSTREAM.json",
-        "conditions": "Original shareware package only. Exact package terms and licence member hashes await lead download/read-back; no bundling grant asserted."
+        "conditions": "LICENSE.DOC permits unchanged modem sharing; charged downloads/single-game floppies must cost less than $9. Commercial CD/multi-disk collections: at most 10 programs and 3 Epic titles, front-cover credits/shareware labels and a copy sent to Epic. Free unchanged bundling with new hardware is allowed. Other distribution needs contact; no general OS-image grant established."
       },
       "install": {
         "layout": "zip",
@@ -6328,9 +6341,10 @@
         "target": "JAZZ",
         "files": [],
         "steps": [
-          "Fetch only the original package at config/dos-titles.json URL into build/downloads/dos-titles.",
-          "Lead pins SHA-256, reads the exact licence, runs original installer and pins the installed tree.",
-          "Sound setup: SB16 220h IRQ 7 DMA 1/5; OPL or General MIDI as documented by this edition.",
+          "Pinned edition: 1.1 per FILE_ID.DIZ; VENDOR.DOC retains Version 1.0 heading.",
+          "Original installer/container: zip.",
+          "Payload is host-extractable; preserve every original file/document, run real sound setup and pin the measured tree. Extraction alone is not installation/gameplay evidence.",
+          "Licence evidence: jazz.zip!LICENSE.DOC",
           "Proposed inputs and checkpoints require lead calibration; no compatibility claim yet."
         ]
       },

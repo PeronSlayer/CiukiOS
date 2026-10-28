@@ -333,7 +333,7 @@
         "directory": "build/downloads/dos-titles/heretic-installed",
         "files": []
       },
-      "terms_reviewed": false,
+      "terms_reviewed": true,
       "music": "opl"
     },
     {
@@ -434,7 +434,7 @@
         "directory": "build/downloads/dos-titles/descent-installed",
         "files": []
       },
-      "terms_reviewed": false,
+      "terms_reviewed": true,
       "music": "opl"
     },
     {
@@ -487,7 +487,7 @@
         "directory": "build/downloads/dos-titles/descent2-installed",
         "files": []
       },
-      "terms_reviewed": false,
+      "terms_reviewed": true,
       "music": "general-midi"
     },
     {
@@ -539,7 +539,7 @@
         "directory": "build/downloads/dos-titles/shadowwarrior-installed",
         "files": []
       },
-      "terms_reviewed": false,
+      "terms_reviewed": true,
       "music": "opl"
     },
     {
@@ -582,7 +582,7 @@
         "directory": "build/downloads/dos-titles/wacky-installed",
         "files": []
       },
-      "terms_reviewed": false,
+      "terms_reviewed": true,
       "music": "opl"
     },
     {
@@ -623,7 +623,7 @@
         "directory": "build/downloads/dos-titles/cosmo-installed",
         "files": []
       },
-      "terms_reviewed": false,
+      "terms_reviewed": true,
       "music": "opl"
     },
     {
@@ -664,7 +664,7 @@
         "directory": "build/downloads/dos-titles/duke2-installed",
         "files": []
       },
-      "terms_reviewed": false,
+      "terms_reviewed": true,
       "music": "opl"
     },
     {
@@ -707,7 +707,7 @@
         "directory": "build/downloads/dos-titles/raptor-installed",
         "files": []
       },
-      "terms_reviewed": false,
+      "terms_reviewed": true,
       "music": "opl"
     },
     {
@@ -748,7 +748,7 @@
         "directory": "build/downloads/dos-titles/hocus-installed",
         "files": []
       },
-      "terms_reviewed": false,
+      "terms_reviewed": true,
       "music": "opl"
     },
     {
@@ -789,14 +789,14 @@
         "directory": "build/downloads/dos-titles/biomenace-installed",
         "files": []
       },
-      "terms_reviewed": false,
+      "terms_reviewed": true,
       "music": "opl"
     },
     {
       "id": "blakestone",
       "name": "Blake Stone",
       "target": "BLAKE",
-      "executable": "BLAKE.EXE",
+      "executable": "BS_AOG.EXE",
       "genre": "fps",
       "coverage_targets": {
         "video": [
@@ -830,7 +830,7 @@
         "directory": "build/downloads/dos-titles/blakestone-installed",
         "files": []
       },
-      "terms_reviewed": false,
+      "terms_reviewed": true,
       "music": "opl"
     },
     {
@@ -881,7 +881,7 @@
         "directory": "build/downloads/dos-titles/terminal-installed",
         "files": []
       },
-      "terms_reviewed": false,
+      "terms_reviewed": true,
       "music": "opl"
     },
     {
@@ -922,7 +922,7 @@
         "directory": "build/downloads/dos-titles/jazz-installed",
         "files": []
       },
-      "terms_reviewed": false,
+      "terms_reviewed": true,
       "music": "digital"
     }
   ]
