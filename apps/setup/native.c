@@ -276,7 +276,8 @@ static struct acct_posix_io repair_state;
 static int repair_io(void *c,char letter,struct acct_io *out)
 {
     (void)c;if(letter<'E'||letter>'Z')return -EINVAL;
-    char base[64];int n=snprintf(base,sizeof(base),ST_NATIVE_ROOT "/mnt/%c/System/Security",letter-'A'+'a');
+    /* Sized from the format: the host tests prefix a long temporary root. */
+    char base[sizeof(ST_NATIVE_ROOT "/mnt/x/System/Security")];int n=snprintf(base,sizeof(base),ST_NATIVE_ROOT "/mnt/%c/System/Security",letter-'A'+'a');
     if(n<0||(size_t)n>=sizeof(base))return -ENAMETOOLONG;
     return acct_io_posix(&repair_state,base,out);
 }

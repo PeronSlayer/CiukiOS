@@ -328,7 +328,16 @@ static void refusal_tests(void)
     CHECK(net_socket_create(&client,10,SOCK_STREAM,0)==-EAFNOSUPPORT);
     CHECK(net_socket_create(&client,AF_INET,4,0)==-ESOCKTNOSUPPORT);
     CHECK(net_socket_create(&client,AF_INET,SOCK_STREAM,17)==-EPROTONOSUPPORT);
-    CHECK(call(CIUKI_SYS_NETCTL,0,0,0,0)==-EPERM);
+    /* sec-k04: GET is a public query whose bounds are still checked;
+     * SET/RENEW/RELEASE need a live administrator, refused before any copy. */
+    CHECK(call(CIUKI_SYS_NETCTL,CIUKI_NETCTL_GET,0,0,0)==-EINVAL);
+    CHECK(call(CIUKI_SYS_NETCTL,CIUKI_NETCTL_RELEASE+1,0,0,0)==-EINVAL);
+    for (unsigned uid=1001;uid;uid=uid==1001?501:0) {
+        security_fixture_identity(&client,uid,1,false,0);
+        for (unsigned op=CIUKI_NETCTL_SET;op<=CIUKI_NETCTL_RELEASE;op++) CHECK(call(CIUKI_SYS_NETCTL,op,0,0,0)==-EPERM);
+    }
+    security_fixture_identity(&client,1000,1,true,0);
+    CHECK(call(CIUKI_SYS_NETCTL,CIUKI_NETCTL_SET,0,0,0)==-EINVAL); /* administrator reaches the bounds */
     struct ciuki_pollfd entries[3]={{-1,POLLIN,7},{127,POLLIN,7},{127,POLLOUT,7}};
     CHECK(net_poll(&client,entries,3,0,NULL)==2 && !entries[0].revents && entries[1].revents==POLLNVAL);
     entries[0].events=0x200;CHECK(net_poll(&client,entries,1,0,NULL)==-EINVAL);
@@ -342,7 +351,8 @@ static void refusal_tests(void)
 static void limits_tests(void)
 {
     struct process owners[4];struct proc_fd tables[4][CIUKI_OPEN_MAX]={0};int all[3][16];
-    for(unsigned i=0;i<4;i++)owners[i]=(struct process){.pid=i+10,.state=PROC_LIVE,.fds=tables[i]};
+    /* sec-k04: sockets need a live subject; these are programs of the client's session. */
+    for(unsigned i=0;i<4;i++){owners[i]=(struct process){.pid=i+10,.state=PROC_LIVE,.fds=tables[i]};security_fixture_identity(&owners[i],1000,1,true,0);}
     for(unsigned i=0;i<3;i++)for(unsigned j=0;j<16;j++){
         all[i][j]=net_socket_create(&owners[i],AF_INET,i==2 ? SOCK_DGRAM : SOCK_STREAM,0);CHECK(all[i][j]>=0);
     }

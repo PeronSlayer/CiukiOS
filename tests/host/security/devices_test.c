@@ -150,6 +150,10 @@ static void management_tests(void)
         struct ciuki_media_label label={.version=CIUKI_MEDIA_VERSION,.size=sizeof(label),.drive=2,.label="SECURITY"};
         CHECK(device(fd,MEDIA_SET_LABEL,&label,sizeof(label))==-EPERM);
         CHECK(!device(fd,MEDIA_CD_STATE,&format,sizeof(format)));
+        /* The public NTFS status query (fx-classaudit) reaches its handler:
+         * an absent slot, never ENOTTY from the authorization census. */
+        struct ciuki_ntfs_status ntfs={.version=CIUKI_MEDIA_VERSION,.size=sizeof(ntfs)};
+        CHECK(device(fd,MEDIA_GET_NTFS_STATUS,&ntfs,sizeof(ntfs))==-ENOENT);
         struct ciuki_media_remove remove={.version=CIUKI_MEDIA_VERSION,.size=sizeof(remove),.drive=4,.generation=123};
         CHECK(!device(fd,MEDIA_SAFE_REMOVE,&remove,sizeof(remove)));
     }

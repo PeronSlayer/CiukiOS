@@ -31,6 +31,11 @@ are recorded in `build/codex/sec-k06-report.md`.
   RunServices/RunServicesOnce values; a new identity cannot inherit deferred
   commands from the template. H07 exercises the actual protected-slot load,
   profile selection, SID rename and persistence transition.
+- Microsoft [RegOpenKeyEx](https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regopenkeyexa):
+  an empty subkey on a predefined key returns that same handle. The w32srv
+  open path keeps this (RegConnectRegistry for the local machine relies on
+  it, fx-is5boot) after the k06 policy admits the requested access on the
+  root; later uses of the root are checked again (sec-wave3 integration, H07).
 - Microsoft [Run and RunOnce](https://learn.microsoft.com/en-us/windows/win32/setupapi/run-and-runonce-registry-keys):
   user and machine queues are distinct. The CiukiOS contract adds durable owned
   jobs, current authorization on replay, and a held uncertain-launch state.

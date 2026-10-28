@@ -173,6 +173,7 @@ int media_devctl_subject(struct process *p, const struct security_subject *subje
     case MEDIA_GET_STATE: case MEDIA_GET_VOLUME: case MEDIA_GET_SPACE: case MEDIA_GET_BLOCKERS:
     case MEDIA_GET_LABEL: case MEDIA_SET_LABEL: case MEDIA_GET_FORMAT: case MEDIA_GET_CONVERT:
     case MEDIA_CD_STATE: case MEDIA_CD_INFO: case MEDIA_CD_TOC: case MEDIA_CD_POSITION:
+    case MEDIA_GET_NTFS_STATUS: /* fx-classaudit: copied mount state and reason, no disk I/O */
         break;
     default: return -ENOTTY;
     }

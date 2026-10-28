@@ -709,11 +709,17 @@ clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
     -o "$out/fs/test_storage_power_flush"
 "$out/fs/test_storage_power_flush"
 for storage_test in test_storage_namespace test_storage test_log_recovery test_powercuts; do
+    # sec-k04: the namespace harness links media_dev.c, which asks the
+    # production credential predicates (proc/security.c via the subject fixture).
+    storage_extra=()
+    if [[ $storage_test == test_storage_namespace ]]; then
+        storage_extra=("$root/tests/host/security/subject_fixture.c")
+    fi
     clang -std=c17 -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
         -ffunction-sections -fdata-sections -Wl,--gc-sections \
         -DFS_HOST -D_POSIX_C_SOURCE=200809L -pthread \
         -I "$root/src/kernel/include" -I "$root/src/kernel/fs" \
-        "${storage_sources[@]}" "$root/tests/host/fs/$storage_test.c" \
+        "${storage_sources[@]}" "${storage_extra[@]}" "$root/tests/host/fs/$storage_test.c" \
         -o "$out/fs/$storage_test"
     "$out/fs/$storage_test" "$out/fs/fat32.img" "$out/fs/fat12.img" "$out/fs/fat16.img"
     # The storage fixture's baseline SYSTEM directory is intentionally

@@ -470,6 +470,13 @@ uint32_t wr_dispatch(struct wr_server *s, uint32_t pid, const void *input, size_
     if (a.op == W32R_OPEN || a.op == W32R_CREATE) {
         if (a.flags || a.type || (a.access & ~0x000f003fu)) { r.error = 87; goto done; }
         r.error=wr_key_policy(s,k,a.access);if(r.error)goto done;
+        /* RegOpenKeyEx: an empty subkey on a predefined key returns that same
+         * handle (MSDN); it is admitted by the same policy as a new handle,
+         * and every later use of the root is checked again by resolve(). */
+        if (a.op == W32R_OPEN && !*path && (a.key & 0x80000000u)) {
+            if(s->secured&&k==s->roots[1]&&(a.access&~0x20019u)){r.error=5;goto done;}
+            r.key = a.key; goto done;
+        }
         r.error = walk(s, k, path, a.op == W32R_CREATE, &k, &r.disposition); if (r.error) goto done;
         r.error=wr_key_policy(s,k,a.access);if(r.error)goto done;
         if(s->secured&&k==s->roots[1]&&(a.access&~0x20019u)){r.error=5;goto done;}

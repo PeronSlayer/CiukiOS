@@ -74,6 +74,12 @@ This keeps the interim uid-1000 administrator desktop, its games, DOS and
 installers working before binding, and makes Standard sessions read-only on
 the system volume until it is bound.
 
+The sec-k05 DOS host views use the same adapter, so a user VM's E: on an
+unbound removable volume reads like the native namespace (the contract's
+"Unmanaged removable" row) instead of the fail-closed DOS 5 sec-k05 had
+assumed before this resolver existed; the read-only E: provider still
+refuses every write (H06 E: view, sec-wave3 integration).
+
 The k02 adapter `vfs_resolve_subject_locked` moved from `fs/security_path.c`
 to `proc/posixpath.c` unchanged except for the unbound-volume rule above, so
 that every object linking the native resolver also has the legacy-table

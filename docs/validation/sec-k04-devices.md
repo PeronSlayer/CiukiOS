@@ -53,7 +53,7 @@ kernel contract; unknown selectors keep their typed rejection):
 | DISK raw pwrite / FLUSH / RELEASE | Same rights plus current holder PID, exclusive lease and durability/published-range checks. Dup/inheritance carries no authority. |
 | LEASE_ACQUIRE / PUBLISH / RECHECK / SET_PHASE | SYSTEM Setup role, noninherited Setup flag and Setup boot, plus existing transaction/phase checks. |
 | PARTITION_ACQUIRE | Administrator on a non-system disk, with mounted/pagefile/log/active-I/O blockers unchanged. |
-| MEDIA state/volume/space/blockers/label/format/convert and CD info queries | Public nonsecret copied inventory; no private file paths. |
+| MEDIA state/volume/space/blockers/label/format/convert, NTFS status and CD info queries | Public nonsecret copied inventory; no private file paths. NTFS status (fx-classaudit round 2, integrated after this census) copies the slot's mount state and reason without disk I/O. |
 | MEDIA safe-remove/floppy-load/CD audio, transport and tray | Live local interactive credential or SYSTEM; underlying generation, busy and flush checks remain. Guest is admitted. |
 | MEDIA label set | Guest denied; Users on unmanaged removable media, administrator on fixed data, SYSTEM execution plus administrator retained subject on system media. |
 | MEDIA format/convert/defrag/analyze and floppy raw snapshots | Administrator, with protected-system maintenance requiring a SYSTEM worker and live retained administrator client. Original medium/lease fencing remains. |

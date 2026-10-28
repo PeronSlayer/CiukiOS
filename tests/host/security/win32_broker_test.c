@@ -124,6 +124,11 @@ static void win32_cases(void)
     r=w32_call(slot,W32R_CREATE,W32R_HKCU,"Software",0xf003f,NULL,0);assert(!r.error);uint32_t own=r.key;
     r=w32_call(slot,W32R_OPEN,own,"",0x20019,NULL,0);assert(!r.error);uint32_t read_only=r.key;
     r=w32_call(slot,W32R_SET,read_only,"",0,"x",1);assert(r.error==5);
+    /* An empty subkey returns the predefined handle itself (MSDN
+     * RegOpenKeyEx, RegConnectRegistry) under the same admission. */
+    r=w32_call(slot,W32R_OPEN,W32R_HKLM,"",0x20019,NULL,0);assert(!r.error&&r.key==W32R_HKLM);
+    r=w32_call(slot,W32R_OPEN,W32R_HKLM,"",0xf003f,NULL,0);assert(r.error==5);
+    r=w32_call(slot,W32R_OPEN,W32R_HKU,"",0xf003f,NULL,0);assert(r.error==5);
     r=w32_call(slot,W32R_OPEN,W32R_HKU,".DEFAULT",0x20019,NULL,0);assert(r.error==5);
     r=w32_call(slot,W32R_OPEN,W32R_HKU,"S-1-5-21-1-2-3-1001",0x20019,NULL,0);assert(r.error==5);
     unsigned other;assert(!rb_connect(&broker,1,&other));r=w32_call(other,W32R_SET,own,"",0,"x",1);assert(r.error==6);rb_disconnect(&broker,other);
