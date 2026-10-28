@@ -1,5 +1,32 @@
 # f5-02A PE tools and host evidence (2026-10-14)
 
+## fx-w32green census correction (2026-10-28)
+
+The [Microsoft PE/COFF specification](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format)
+places the PE signature offset at DOS-header byte `0x3c` and describes
+8-byte PE-header alignment. That layout convention alone does not establish
+the refusal policy of a compatible loader. Wine 10.0's
+[get_image_params](https://github.com/wine-mirror/wine/blob/wine-10.0/server/mapping.c)
+reads at `e_lfanew` and checks the available header and signature without
+an offset-alignment refusal. The existing
+[fx-classaudit decision](../validation/fx-classaudit.md) therefore treats
+misalignment as diagnostic while retaining bounds and signature refusals.
+Both `sdk/pe/pe.c` and `src/kernel/proc/win32/pe.c` implement that policy.
+
+Commit `8f7e2561e` changed `scripts/win32/census.py` from an alignment refusal
+to a warning and changed the independent fixture refusal manifest to
+`pe-signature`; it did not regenerate `win32-census/fixtures.txt`.
+The fixture bytes did not change: `bad-pe-offset-alignment` changes only
+`e_lfanew` from 128 to 129, leaving the signature at 128. The header extent
+is within the file, but the signature at 129 is invalid. Thus the generator
+and manifest are correct; regenerate the committed census with
+`scripts/win32/fixtures.py --census`, keeping the fixture and loader policy.
+`bad-pe-offset-bounds` still refuses with `pe-header-bounds`. This correction
+does not claim reference Windows execution or change the earlier tolerance
+decision.
+
+## Original host preparation
+
 This is the host preparation milestone of the reviewed Win32 contract. It
 introduces no guest loader, runtime API, architecture decision or scope change.
 
