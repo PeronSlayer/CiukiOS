@@ -31,7 +31,7 @@
 
 /* ---- kernel_sys.h bound to the harness: the service acts as ACCOUNT ---- */
 static struct proc_thread *account_thread;
-static unsigned entropy_counter, owner_polls;
+static unsigned entropy_counter, owner_polls, entropy_unready;
 static struct process *account_process(void) { desktop_select(account_thread); return account_thread->process; }
 int acct_sys_security(struct ciuki_security_args *a, const void *in, uint32_t in_bytes, void *out, uint32_t out_bytes)
 {
@@ -81,7 +81,8 @@ int acct_sys_pids(uint32_t *pids, unsigned capacity)
 }
 uint64_t acct_sys_monotonic_ms(void) { return g_ticks; }
 int acct_sys_entropy(void *buffer, size_t bytes)
-{ uint8_t *b=buffer; for (size_t i=0;i<bytes;i++) b[i]=(uint8_t)(++entropy_counter*7u+1u); return 0; }
+{ if (entropy_unready) { entropy_unready--; return -EAGAIN; }
+  uint8_t *b=buffer; for (size_t i=0;i<bytes;i++) b[i]=(uint8_t)(++entropy_counter*7u+1u); return 0; }
 int acct_sys_boot_flags(uint32_t *flags) { *flags=0; return 0; }
 int acct_sys_file_present(const char *path) { (void)path; return 0; }
 void acct_sys_log(const char *line) { printf("  [service] %s\n",line); }
@@ -318,7 +319,13 @@ static void test_first_boot(void)
     /* The production server: lease, open, first-boot promotion, migration. */
     CHECK(!acct_server_init(&service_server,&tables,0)); service_server.tree=&service_tree;
     unsigned polls=owner_polls;
-    CHECK(acct_server_open(&service_server,0)==1 && service_server.service.available);
+    /* A slow first boot opens ACCOUNT before the kernel generator is seeded:
+     * getentropy EAGAIN closes the service and the next open resumes. */
+    entropy_unready=1;
+    CHECK(!acct_server_open(&service_server,0) && service_server.firstboot_result==-EAGAIN && !entropy_unready);
+    CHECK(!service_server.opened && owner_system_state()==OWNER_SYSTEM_UNPROVISIONED);
+    CHECK(!acct_server_open(&service_server,ACCT_SERVER_FIRSTBOOT_RETRY_MS-1));
+    CHECK(acct_server_open(&service_server,ACCT_SERVER_FIRSTBOOT_RETRY_MS)==1 && service_server.service.available);
     CHECK(service_server.firstboot_result==ACCT_FIRSTBOOT_PROMOTED);
     printf("  owner exchanges for the first boot: %u\n",owner_polls-polls);
     CHECK(owner_system_state()==OWNER_SYSTEM_OPEN && volume_vfs->policy[2] && volume_vfs->policy[2]->lease);
