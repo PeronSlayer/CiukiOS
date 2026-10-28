@@ -1,6 +1,7 @@
 /* Original implementation of the legacy ECB API; no Novell binary/source.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include "dosvm_ipx.h"
+#include <ciuki/ipx_wire.h>
 enum { ECB_FREE, ECB_LISTEN, ECB_SEND, ECB_TIMER, ECB_CALLBACK };
 static uint16_t le16(const uint8_t *p) { return p[0] | (uint16_t)p[1] << 8; }
 static uint16_t be16(const uint8_t *p) { return (uint16_t)p[0] << 8 | p[1]; }
@@ -158,7 +159,7 @@ int dosvm_ipx_interrupt(struct dosvm_ipx *v, unsigned vector, struct dosvm_ipx_r
     }
     case 8: r->ax = (uint16_t)v->ticks; break;
     case 9: {
-        uint8_t address[10] = {0}; memcpy(address + 4, v->mac, 6);
+        uint8_t address[10]; memcpy(address,v->network,4); memcpy(address + 4, v->mac, 6);
         al(r, memory_buffer(v, r->es, r->si, address, 10, true) ? 0xfd : 0); break;
     }
     case 10:
@@ -179,13 +180,13 @@ static void send_packet(struct dosvm_ipx *v, struct dosvm_ipx_ecb *e)
         }
         at += f->length;
     }
-    if (memcmp(e->immediate, p + 24, 6) || memcmp(p + 20, "\0\0\0\0", 4) ||
+    if (memcmp(e->immediate, p + 24, 6) || (memcmp(p + 20, "\0\0\0\0", 4) && memcmp(p+20,v->network,4)) ||
         ((p[24] & 1) && memcmp(p + 24, "\xff\xff\xff\xff\xff\xff", 6))) {
         complete(v, e, DOSVM_IPX_UNDELIVERABLE, true); return;
     }
     memcpy(p, e->immediate, 6); memcpy(p + 6, v->mac, 6); p[12] = 0x81; p[13] = 0x37;
     p[14] = p[15] = 0xff; p[16] = e->total >> 8; p[17] = (uint8_t)e->total; p[18] = 0;
-    memset(p + 32, 0, 4); memcpy(p + 36, v->mac, 6); p[42] = e->socket >> 8; p[43] = (uint8_t)e->socket;
+    memcpy(p + 32, v->network, 4); memcpy(p + 36, v->mac, 6); p[42] = e->socket >> 8; p[43] = (uint8_t)e->socket;
     /* The API fills the caller's first IPX header as well as its wire copy. */
     if (v->ops.write(v->ops.arg, e->fragment[0].linear, p + 14, 30)) {
         v->memory_errors++; complete(v, e, DOSVM_IPX_MALFORMED, true); return;
@@ -206,12 +207,14 @@ void dosvm_ipx_service(struct dosvm_ipx *v, uint64_t ticks)
 }
 int dosvm_ipx_receive(struct dosvm_ipx *v, const uint8_t *p, unsigned n)
 {
-    if (!v || !v->enabled || !p || n < 44 || n > 1514 || p[12] != 0x81 || p[13] != 0x37) return -EINVAL;
-    unsigned length = be16(p + 16);
-    if (p[14] != 255 || p[15] != 255 || length < 30 || length > n - 14 || p[18] ||
-        memcmp(p + 20, "\0\0\0\0", 4) || memcmp(p + 32, "\0\0\0\0", 4) ||
-        memcmp(p, p + 24, 6) || memcmp(p + 6, p + 36, 6) || (p[6] & 1) ||
-        (memcmp(p, v->mac, 6) && memcmp(p, "\xff\xff\xff\xff\xff\xff", 6))) return -EINVAL;
+    if (!v || !v->enabled || !p) return -EINVAL;
+    unsigned off=ipx_decode(p,n,NULL);
+    if(!off || (memcmp(p,v->mac,6) && !ipx_all(p)))return -EINVAL;
+    uint8_t canonical[1514];
+    if(off!=14) { int bytes=ipx_encode(canonical,p,n,IPX_II); if(bytes<0)return bytes; p=canonical; n=(unsigned)bytes; }
+    unsigned length=be16(p+16);
+    if(!memcmp(v->network,"\0\0\0\0",4) && memcmp(p+32,"\0\0\0\0",4))memcpy(v->network,p+32,4);
+    if(memcmp(p+20,"\0\0\0\0",4) && memcmp(p+20,v->network,4))return -EINVAL;
     uint16_t socket = be16(p + 30); struct dosvm_ipx_ecb *e = 0;
     for (unsigned i = 0; i < DOSVM_IPX_ECBS; i++) if (v->ecb[i].state == ECB_LISTEN && v->ecb[i].socket == socket &&
         (!e || v->ecb[i].order < e->order)) e = &v->ecb[i];

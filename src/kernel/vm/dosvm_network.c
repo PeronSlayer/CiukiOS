@@ -69,6 +69,21 @@ static struct dosvm_network *network(const struct dosvm *v)
 }
 static bool live(const struct dosvm_network *n)
 { return n->allocated && n->vm && n->key.generation == n->vm->info.key.generation && n->vm->info.state < DOSVM_STOPPING; }
+/* IRQ-off discovery can read this four-byte publication without waiting on
+ * the physical worker. The bridge's learned network is shared by every node. */
+static void sync_ipx_network(struct dosvm_network *n)
+{
+    uint32_t number=__atomic_load_n(&n->port->bridge.ipx_network,__ATOMIC_ACQUIRE);
+    if(!number) {
+        uint32_t learned;memcpy(&learned,n->ipx.network,4);
+        if(learned) {
+            uint32_t expected=0;
+            if(__atomic_compare_exchange_n(&n->port->bridge.ipx_network,&expected,learned,false,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE))number=learned;
+            else number=expected;
+        }
+    }
+    if(number)memcpy(n->ipx.network,&number,4);
+}
 /* Guest memory that stays resident through teardown: conventional RAM below
  * A0000h or the VM's published UMB arena (the range the DFV2 lifecycle checks
  * use). Video RAM, the EMS frame, ROM and pageable memory are refused. */
@@ -115,16 +130,20 @@ static int guest_write(void *arg, uint32_t at, const void *data, unsigned bytes)
     if (!guest_pinned(n, at, bytes, true)) return -EFAULT;
     return dosvm_write(n->vm, at, data, bytes);
 }
-static int bridge_send(void *arg, const uint8_t *p, unsigned length)
+static int bridge_send_format(void *arg, const uint8_t *p, unsigned length, bool api)
 {
     struct dosvm_network *n = arg;
     if (!live(n)) return -19;
     if (!net_bridge_port_acquire(n->port)) return -16;
     net_bridge_port_carrier(n->port);
-    int result = n->port->closing ? -19 : net_bridge_send(&n->port->bridge,
+    int result = n->port->closing ? -19 : (api ? net_bridge_send_ipx : net_bridge_send)(&n->port->bridge,
         (struct bridge_key){n->key.id,n->key.generation}, p, length, n->host_ms);
     net_bridge_port_release(n->port); return result;
 }
+static int bridge_send(void *arg,const uint8_t *p,unsigned n)
+{ return bridge_send_format(arg,p,n,false); }
+static int bridge_send_api(void *arg,const uint8_t *p,unsigned n)
+{ return bridge_send_format(arg,p,n,true); }
 static void virtual_irq(void *arg, bool level)
 {
     struct dosvm_network *n = arg;
@@ -220,9 +239,10 @@ int dosvm_network_attach(struct dosvm *v, struct net_bridge_port *port)
     if (error) { net_bridge_port_release(port); memset(n, 0, sizeof(*n)); return error; }
     const struct dosvm_ne2000_ops ne_ops = {n,bridge_send,virtual_irq};
     dosvm_ne2000_init(&n->ne, mac, &ne_ops);
-    const struct dosvm_ipx_ops ipx_ops = {n,guest_pin,guest_unpin,guest_read,guest_write,bridge_send,relinquish,guest_upcall};
+    const struct dosvm_ipx_ops ipx_ops = {n,guest_pin,guest_unpin,guest_read,guest_write,bridge_send_api,relinquish,guest_upcall};
     error = dosvm_ipx_init(&n->ipx, n->key.generation, mac, &ipx_ops);
     if (error) goto fail;
+    sync_ipx_network(n);
     dosvm_ipx_service(&n->ipx, interval_ticks(n->host_ms));
     error = dosvm_port_register(n->key, DOSVM_NE2000_BASE, DOSVM_NE2000_LAST, virtual_port, n);
     if (error) goto fail;
@@ -258,6 +278,7 @@ void dosvm_network_service(struct dosvm *v, uint64_t host_ms)
     if (!net_bridge_port_acquire(n->port)) return;
     net_bridge_port_carrier(n->port);
     bool link = n->port->bridge.link;
+    sync_ipx_network(n);
     net_bridge_port_release(n->port);
     if (!link) {
         dosvm_ipx_disconnect(&n->ipx);
@@ -283,6 +304,7 @@ void dosvm_network_service(struct dosvm *v, uint64_t host_ms)
         net_bridge_port_release(n->port);
         if (bytes <= 0) break;
         (void)dosvm_ipx_receive(&n->ipx, frame, (unsigned)bytes);
+        sync_ipx_network(n);
         (void)dosvm_ne2000_receive(&n->ne, frame, (unsigned)bytes); kpreempt_point();
     }
 }
@@ -314,6 +336,7 @@ int dosvm_network_interrupt(struct dosvm *v, struct v86_frame *f, uint8_t vector
         (uint16_t)f->tf.edx,(uint16_t)f->tf.esi,(uint16_t)f->tf.edi,(uint16_t)f->es};
     n->ipx.psp = v->files ? v->files->selected :
         v->dpmi.clients ? v->dpmi.client[v->dpmi.clients - 1].psp : 0;
+    sync_ipx_network(n);
     if (!dosvm_ipx_interrupt(&n->ipx, vector, &r)) return -ENOSYS;
     f->tf.eax = (f->tf.eax & 0xffff0000u) | r.ax;
     f->tf.ecx = (f->tf.ecx & 0xffff0000u) | r.cx;

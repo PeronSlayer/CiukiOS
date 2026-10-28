@@ -35,7 +35,7 @@ static uint32_t wire_pointer(uintptr_t pointer)
 }
 static void *field_pointer(uint32_t token,uintptr_t record)
 { (void)record; CHECK(token && token<=wire_pointer_count); return (void *)wire_pointers[token-1]; }
-struct object { int used,type,references,flags,ready; struct ciuki_socket_timeval timeout; uint32_t position; };
+struct object { int used,type,family,references,flags,ready; struct ciuki_socket_timeval timeout; uint32_t position; struct ciuki_sockaddr_in address; };
 static struct object objects[32];
 static struct object *descriptors[128];
 static int failure_op=-1,failure_error;
@@ -88,29 +88,36 @@ static struct object *lookup(uintptr_t fd) { return fd<128 ? descriptors[fd] : 0
 int32_t ws_native_model(uint32_t op,uintptr_t a,uintptr_t b,uintptr_t c,uintptr_t d) {
     native_calls++; if((int)op==failure_op) { failure_op=-1; return -failure_error; }
     struct object *object=lookup(a);
-    if(op==CIUKI_SYS_SOCKET) { CHECK(a==AF_INET); int fd=create((int)b); created++; last_native_fd=fd; return fd; }
+    if(op==CIUKI_SYS_SOCKET) { CHECK(a==AF_INET || a==AF_IPX); int fd=create((int)b); if(fd>=0) { descriptors[fd]->family=(int)a; descriptors[fd]->address.family=(uint16_t)a; } created++; last_native_fd=fd; return fd; }
     if(op==CIUKI_SYS_OPEN) { if(!strcmp((const char *)a,"/system/settings/LMHOSTS"))return -ENOENT;CHECK(!strcmp((const char *)a,"/system/settings/HOSTS")); CHECK(b==(O_RDONLY|O_CLOEXEC)); hosts_opens++; return create(0x100); }
     if(op==CIUKI_SYS_CLOSE) { if(!object)return -EBADF; descriptors[a]=0; closed++; if(!--object->references)object->used=0; return 0; }
     if(op==CIUKI_SYS_FCNTL) { if(!object)return -EBADF; if(b==F_DUPFD_CLOEXEC)return descriptor(object); if(b==F_GETFL)return object->flags; if(b==F_SETFL) { object->flags=(int)c; return 0; } return -EINVAL; }
     if(op==CIUKI_SYS_READ) { CHECK(object&&object->type==0x100); unsigned remaining=(unsigned)sizeof(hosts_text)-1-object->position; if(c>remaining)c=remaining; memcpy((void *)b,hosts_text+object->position,c); object->position+=(uint32_t)c; return (int)c; }
-    if(op==CIUKI_SYS_BIND||op==CIUKI_SYS_CONNECT) { CHECK(object&&c==16&&!d); CHECK(((const struct ciuki_sockaddr_in *)b)->family==AF_INET); return 0; }
+    if(op==CIUKI_SYS_BIND||op==CIUKI_SYS_CONNECT) { CHECK(object&&c==16&&!d); CHECK(((const struct ciuki_sockaddr_in *)b)->family==object->family); memcpy(&object->address,(void *)b,16); return 0; }
     if(op==CIUKI_SYS_LISTEN) { CHECK(object&&object->type==SOCK_STREAM); return 0; }
     if(op==CIUKI_SYS_ACCEPT) { CHECK(object); if(b) { struct ciuki_sockaddr_in addr={.family=AF_INET,.port=0x5000,.address=0x0100007f}; memcpy((void *)b,&addr,16); *(int *)c=16; } return create(SOCK_STREAM); }
     if(op==CIUKI_SYS_SHUTDOWN) { CHECK(object); return b>2?-EINVAL:0; }
-    if(op==CIUKI_SYS_SOCKNAME) { CHECK(object&&c&&d); struct ciuki_sockaddr_in addr={.family=AF_INET,.port=0x5000,.address=0x0100007f}; memcpy((void *)c,&addr,16); *(int *)d=16; return 0; }
+    if(op==CIUKI_SYS_SOCKNAME) { CHECK(object&&c&&d); struct ciuki_sockaddr_in addr={.family=AF_INET,.port=0x5000,.address=0x0100007f}; if(object->family==AF_IPX)addr=object->address; memcpy((void *)c,&addr,16); *(int *)d=16; return 0; }
     if(op==CIUKI_SYS_SENDTO||op==CIUKI_SYS_RECVFROM) {
         struct ciuki_socket_io *io=(void *)a; CHECK(io->size==40&&io->version==2&&!io->reserved[1]);
-        CHECK(lookup((uintptr_t)io->fd)); CHECK(io->bytes<=CIUKI_SOCKET_IO_MAX);
+        CHECK(lookup((uintptr_t)io->fd)); object=lookup((uintptr_t)io->fd); CHECK(io->bytes<=CIUKI_SOCKET_IO_MAX);
         void *data=field_pointer(io->buffer,a);
         if(op==CIUKI_SYS_SENDTO) { CHECK((io->flags&~MSG_DONTWAIT)==MSG_NOSIGNAL); CHECK(io->bytes<=sizeof(transmitted)); memcpy(transmitted,data,io->bytes); transmitted_length=io->bytes; sends++; return (int)io->bytes; }
         if(io->reserved[0])*(unsigned *)field_pointer(io->reserved[0],a)=io->bytes<5 && lookup(io->fd)->type==SOCK_DGRAM?MSG_TRUNC:0;
         unsigned n=io->bytes<5?io->bytes:5; memcpy(data,"reply",n);
-        if(io->address) { struct ciuki_sockaddr_in addr={.family=AF_INET,.port=0x5000,.address=0x0100007f}; memcpy(field_pointer(io->address,a),&addr,16); *(int *)field_pointer(io->address_length,a)=16; } return (int)n;
+        if(io->address) { struct ciuki_sockaddr_in addr={.family=AF_INET,.port=0x5000,.address=0x0100007f}; if(object->family==AF_IPX)addr=object->address; memcpy(field_pointer(io->address,a),&addr,16); *(int *)field_pointer(io->address_length,a)=16; } return (int)n;
     }
     if(op==CIUKI_SYS_SOCKOPT) {
         struct ciuki_socket_option *request=(void *)a; CHECK(request->size==40&&request->version==1); object=lookup((uintptr_t)request->fd); CHECK(object);
         last_level=request->level; last_option=request->name; void *value=field_pointer(request->value,a);
         unsigned n=request->operation?request->length:*(unsigned *)field_pointer(request->length,a);
+        if(request->level==NSPROTO_IPX) {
+            CHECK(n==(request->name==IPX_ADDRESS?24:request->name==IPX_GETNETINFO?20:4));
+            if(!request->operation && request->name==IPX_ADDRESS) {
+                struct ciuki_ipx_address_data info={.status=1,.maxpkt=1500};memcpy(info.nodenum,"abcdef",6);memcpy(value,&info,24);
+            }
+            return 0;
+        }
         if(request->level==SOL_SOCKET&&(request->name==SO_SNDTIMEO||request->name==SO_RCVTIMEO)) { CHECK(n==16); if(request->operation) { memcpy(&object->timeout,value,16); last_timeout=object->timeout; } else memcpy(value,&object->timeout,16); }
         else { CHECK(n==4); if(!request->operation) { int v=request->name==SO_ERROR?ECONNREFUSED:request->name==SO_TYPE?object->type:1; memcpy(value,&v,4); } }
         return 0;
@@ -239,5 +246,20 @@ int main(void) {
     CHECK(!WSACleanup());async_step();CHECK(posted==posts_before);
     overlapped_apc((uintptr_t)field_pointer(queued_apc.argument,0));CHECK(completion_calls==callbacks_before && allocation_count==1);
     no_descriptors();
+    CHECK(!WSAStartup(0x202,&data));
+    uintptr_t ipx=socket(AF_IPX,SOCK_DGRAM,NSPROTO_IPX+4);CHECK(ipx!=WS_INVALID);int ipx_fd=last_native_fd;
+    struct { uint8_t address[14],guard[8]; } ipx_address={0};
+    uint16_t ipx_family=AF_IPX;memcpy(ipx_address.address,&ipx_family,2);memcpy(ipx_address.address+6,"abcdef",6);
+    ipx_address.address[12]=0x86;ipx_address.address[13]=0x9c;memset(ipx_address.guard,0x5a,8);
+    CHECK(!bind(ipx,ipx_address.address,14));address_length=14;
+    CHECK(!getsockname(ipx,ipx_address.address,&address_length) && address_length==14 && ipx_address.guard[0]==0x5a);
+    CHECK(sendto(ipx,"IPX",3,0,ipx_address.address,14)==3);address_length=14;
+    CHECK(recvfrom(ipx,bytes,5,0,ipx_address.address,&address_length)==5 && address_length==14 && ipx_address.guard[0]==0x5a);
+    struct ciuki_ipx_address_data adapter={0};n=24;CHECK(!getsockopt(ipx,NSPROTO_IPX,IPX_ADDRESS,(char *)&adapter,&n) && n==24 && adapter.status && !memcmp(adapter.nodenum,"abcdef",6));
+    int ptype=7;CHECK(!setsockopt(ipx,NSPROTO_IPX,IPX_FILTERPTYPE,(char *)&ptype,4));
+    read=(struct ws_set){.count=1,.socket={ipx}};descriptors[ipx_fd]->ready=POLLIN;CHECK(select(0,&read,0,0,&wait)==1);
+    old_posts=posted;CHECK(!WSAAsyncSelect(ipx,(HWND)1,0x412,1));async_step();CHECK(posted==old_posts+1);
+    CHECK(!closesocket(ipx));CHECK(!WSACleanup());no_descriptors();
+    puts("PASS f6-25 Winsock IPX 14-byte address conversion, datagrams, adapter/ptype options, select and WSAAsyncSelect");
     puts("PASS G26 Winsock G26B async/event/DNS cancellation/FIONREAD/truncation/overlapped startup handles refs fd-reuse options select HOSTS DNS numeric synchronous vectors errors cleanup");return 0;
 }

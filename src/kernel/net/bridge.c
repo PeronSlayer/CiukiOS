@@ -1,6 +1,7 @@
 /* Bounded one-port Ethernet II IPX forwarding; see f6-11-dos-network.md.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/net_bridge.h>
+#include <ciuki/ipx_wire.h>
 
 static bool key_equal(struct bridge_key a, struct bridge_key b)
 { return a.id == b.id && a.generation == b.generation; }
@@ -8,15 +9,7 @@ static bool broadcast(const uint8_t *p)
 { static const uint8_t all[6] = {255,255,255,255,255,255}; return !memcmp(p, all, 6); }
 static bool frame_ok(const uint8_t *p, unsigned n)
 {
-    if (!p || n < 44 || n > BRIDGE_FRAME_MAX || p[12] != 0x81 || p[13] != 0x37) return false;
-    unsigned length = (unsigned)p[16] << 8 | p[17];
-    /* No checksum variant, router forwarding, VLAN, raw 802.3 or LLC. Padding
-     * is retained; the declared IPX datagram must fit the copied frame. */
-    return p[14] == 255 && p[15] == 255 && length >= 30 && length <= n - 14 &&
-        p[18] == 0 && !(p[6] & 1) && !broadcast(p + 6) &&
-        memcmp(p + 6, "\0\0\0\0\0\0", 6) &&
-        !memcmp(p, p + 24, 6) && !memcmp(p + 6, p + 36, 6) &&
-        !memcmp(p + 20, "\0\0\0\0", 4) && !memcmp(p + 32, "\0\0\0\0", 4);
+    return ipx_decode(p,n,NULL) != 0;
 }
 int bridge_pool_copy(struct bridge_pool *p, const uint8_t *data, unsigned n,
                      uint32_t interface, uint32_t generation)
@@ -80,7 +73,7 @@ int net_bridge_init(struct net_bridge *b, struct bridge_pool *pool, const struct
         (count && !physical) || !generation) return -EINVAL;
     uint8_t nonzero = 0; for (unsigned i = 0; i < 16; i++) nonzero |= id[i];
     if (!nonzero) return -EINVAL; /* Caller must load/create AND persist random identity first. */
-    memset(b, 0, sizeof(*b)); b->pool = pool; b->ops = *ops;
+    memset(b, 0, sizeof(*b)); b->wire_framing=IPX_II; b->pool = pool; b->ops = *ops;
     memcpy(b->host_id, id, 16); if (count) memcpy(b->physical, physical, count * 6);
     b->physical_count = count; b->interface = interface; b->generation = generation; b->identity_ready = true;
     return 0;
@@ -176,9 +169,12 @@ static void deliver(struct net_bridge *b, struct bridge_vm *v, unsigned slot, ui
 void net_bridge_ingress(struct net_bridge *b, uint32_t interface, uint32_t generation,
                         const uint8_t *p, unsigned n, uint64_t now)
 {
-    if (!b || !b->link || !b->count || interface != b->interface || generation != b->generation) return;
+    if (!b || !b->link || (!b->count && !b->host_input) || interface != b->interface || generation != b->generation) return;
     if (now > b->now_ms) b->now_ms = now;
     if (!frame_ok(p, n)) { b->malformed++; return; }
+    if(b->host_input && !memcmp(p+6,b->host_node,6)) { b->filtered++;return; }
+    for(unsigned i=0;i<BRIDGE_VMS;i++)if(b->vm[i].enabled && !memcmp(p+6,b->vm[i].mac,6)) { b->filtered++;return; }
+    if (b->host_input) b->host_input(b->host_arg,p,n,now);
     bool any = false;
     for (unsigned i = 0; i < BRIDGE_VMS; i++) if (b->vm[i].enabled) {
         if (!memcmp(p + 6, b->vm[i].mac, 6)) { b->filtered++; return; } /* reflection/spoof */
@@ -202,10 +198,11 @@ void net_bridge_step(struct net_bridge *b)
         struct bridge_vm *sender = &b->vm[(b->cursor + n) % BRIDGE_VMS];
         int slot = queue_pop(&sender->tx); if (slot < 0) continue;
         struct bridge_packet *p = &b->pool->packet[slot];
-        bool local = false;
+        bool local = b->host_input && !memcmp(p->data,b->host_node,6);
         for (unsigned i = 0; i < BRIDGE_VMS; i++) if (b->vm[i].enabled &&
             !memcmp(p->data, b->vm[i].mac, 6)) local = true;
         if (sender->enabled && p->generation == sender->key.generation) {
+            if (b->host_input) b->host_input(b->host_arg,p->data,p->length,b->now_ms);
             for (unsigned i = 0; i < BRIDGE_VMS; i++) if ((&b->vm[i] != sender || !broadcast(p->data)) && b->vm[i].enabled &&
                 (broadcast(p->data) || !memcmp(p->data, b->vm[i].mac, 6)))
                 deliver(b, &b->vm[i], (unsigned)slot, b->now_ms, true);
@@ -225,4 +222,31 @@ int net_bridge_receive(struct net_bridge *b, struct bridge_key k, uint8_t *out, 
     if (capacity < p->length) return -ENOSPC;
     int length = p->length; memcpy(out, p->data, p->length);
     (void)queue_pop(&v->rx); bridge_pool_release(b->pool, slot); return length;
+}
+
+/* Native frames have already passed the endpoint policy; fan out to DOS nodes
+ * without reflecting a local unicast onto the physical port. Gate held. */
+int net_bridge_host_send(struct net_bridge *b,const uint8_t *p,unsigned n)
+{
+    if(!b || !b->link)return -ENETDOWN;
+    if(!frame_ok(p,n) || memcmp(p+6,b->host_node,6))return -EINVAL;
+    bool local=false, any=false;
+    for(unsigned i=0;i<BRIDGE_VMS;i++)if(b->vm[i].enabled) {
+        bool match=!memcmp(p,b->vm[i].mac,6); local|=match; any|=match || broadcast(p);
+    }
+    int slot=any ? bridge_pool_copy(b->pool,p,n,b->interface,b->generation) : -1;
+    if(any && slot<0)return slot;
+    if(slot>=0) {
+        for(unsigned i=0;i<BRIDGE_VMS;i++)if(b->vm[i].enabled && (broadcast(p) || !memcmp(p,b->vm[i].mac,6)))
+            deliver(b,&b->vm[i],(unsigned)slot,b->now_ms,true);
+        bridge_pool_release(b->pool,(unsigned)slot);
+    }
+    return local ? 0 : b->ops.transmit(b->ops.arg,p,n);
+}
+
+int net_bridge_send_ipx(struct net_bridge *b,struct bridge_key key,const uint8_t *p,unsigned n,uint64_t now)
+{
+    if(!b)return -EINVAL;
+    uint8_t wire[1514];int size=ipx_encode(wire,p,n,b->wire_framing);
+    return size<0 ? size : net_bridge_send(b,key,wire,(unsigned)size,now);
 }
