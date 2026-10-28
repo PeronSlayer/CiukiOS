@@ -9002,7 +9002,7 @@ struct du_file_icon_stats { uint32_t lookups, hits, queued, extracted, defaults,
 int du_file_icon_candidate(const char *name, int directory);
 ```
 
-may show an own icon (by extension; folders always)
+own icon/type resolution candidate; includes extensionless Programs entries
 
 ```c
 int du_file_icon_shortcut(const char *name);
