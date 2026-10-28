@@ -18,7 +18,8 @@ class GLTests(unittest.TestCase):
  def setUpClass(cls):
   cls.build(sanitize=True)
  @classmethod
- def build(cls,sanitize,profile=True,gamma_hooks=True):
+ def build(cls,sanitize,profile=True,gamma_hooks=True, kernel_engine="kernel_engine.c",
+           backend=("s3savage/savage3d.c",)):
   out=ROOT/'build/host/win32/gl';out.mkdir(parents=True,exist_ok=True);cls.out=out
   spec=importlib.util.spec_from_file_location('glbuild',ROOT/'sdk/libgl/build.py');gl=importlib.util.module_from_spec(spec);spec.loader.exec_module(gl)
   lib=gl.host(sanitize=sanitize)
@@ -29,8 +30,8 @@ class GLTests(unittest.TestCase):
   (out/'savage3d_backend_fixture.inc').write_text(fixture_source.replace('int main(int argc,char **argv)','int frozen_3d_main(int argc,char **argv)'))
   fixture_source=(ROOT/'tests/host/savage2d_test.c').read_text()
   (out/'savage2d_fixture.inc').write_text(fixture_source.replace('\nint main(void)\n','\nint frozen_2d_main(void)\n'))
-  units += [HERE/'hardware.c',HERE/'kernel_engine.c',HERE/'kernel_replay.c']
-  units += [ROOT/'src/kernel/drivers/video'/n for n in ('render3d.c','render3d_scalar.c','render3d_native.c','render3d_transport.c','s3savage/savage3d.c')]
+  units += [HERE/'hardware.c',HERE/kernel_engine,HERE/'kernel_replay.c']
+  units += [ROOT/'src/kernel/drivers/video'/n for n in ('render3d.c','render3d_scalar.c','render3d_native.c','render3d_transport.c',*backend)]
   units += [ROOT/'src/kernel/lib/fmt.c']
   cls.binary=out/(('engine' if sanitize else 'benchmark')+('' if gamma_hooks else '-no-gamma'))
   flags=['-std=c17','-D_GNU_SOURCE','-DW32_HOST_MODEL','-O2','-g','-ffp-contract=off','-Wall','-Wextra','-Werror','-Wno-unused-function','-fno-vectorize','-fno-slp-vectorize','-I'+str(ROOT/'sdk/win32/include'),'-I'+str(ROOT/'sdk/libgl/vendor/include')]

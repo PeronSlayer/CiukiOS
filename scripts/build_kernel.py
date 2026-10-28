@@ -253,7 +253,7 @@ def main() -> int:
                     [SRC / "drivers/video/radeon2d" / name for name in ("engine.c", "cursor.c", "driver.c")] +
                     [SRC / "drivers/video/nv2d" / name for name in ("adapter.c", "engine.c", "hardware.c", "dma_hw.c")] +
                     [SRC / "drivers/video/riva128" / name for name in ("driver.c", "engine.c")] +
-                    [SRC / "drivers/video/matrox" / name for name in ("engine.c", "driver.c")] +
+                    [SRC / "drivers/video/matrox" / name for name in ("engine.c", "driver.c", "matrox3d.c", "matrox3d_owner.c")] +
                     [SRC / "drivers/video/trident" / name for name in ("engine.c", "driver.c")] +
                     [SRC / "drivers/video/neomagic" / name for name in ("driver.c", "engine.c", "cursor.c")] +
                     [SRC / "drivers/video/chipshiqv" / name for name in ("hiqv_engine.c", "chipshiqv.c")] +

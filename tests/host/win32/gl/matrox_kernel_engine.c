@@ -1,0 +1,186 @@
+/* Real copied wire/validator/MMIO emitter to independent fake silicon.
+ * GPL-2.0-only. Fixture callbacks model only hardware and the lease boundary. */
+#define main matrox_fixture_main
+#include "../../matrox3d_test.c"
+#undef main
+#define CHECK(x) assert(x)
+#include "../../../../src/kernel/drivers/video/render3d_transport.h"
+#include "../../../../sdk/win32/opengl32/encode.h"
+/* The replay binds its service explicitly below. Satisfy the generic native
+ * adapter's discovery seam too, without introducing a second display owner. */
+const struct display_driver *display_driver_bound(void) { return 0; }
+const struct fb_device *fbdev_get(void) {
+    static const struct fb_device fb={.present=true,.generation=42}; return &fb;
+}
+static unsigned wire_pid=7, lease_token, lease_generation, wire_presented;
+static uint32_t frame_pixels[1024*768];
+static unsigned mode_width=640,mode_height=480;
+static unsigned work_submissions,work_vertices[2],work_refusals,work_mip_refusals;
+static uint64_t work_peak,work_total;
+void gl_kernel_work_reset(void) {
+    work_submissions=work_refusals=0; work_peak=work_total=0;
+    memset(work_vertices,0,sizeof(work_vertices));
+}
+void gl_kernel_work_check(unsigned w,unsigned h) {
+    CHECK(work_submissions==2 && work_vertices[0]==12 && work_vertices[1]==3);
+    CHECK(!work_refusals && work_peak==4*(uint64_t)w*h && work_total==5*(uint64_t)w*h);
+    printf("PASS production pixel-work split: %ux%u five full-target boxes, batches=4+1, peak=%llu total=%llu, zero wire refusals\n",
+        w,h,(unsigned long long)work_peak,(unsigned long long)work_total);
+}
+void gl_kernel_mode(unsigned w,unsigned h) { mode_width=w; mode_height=h; }
+uint64_t gl_kernel_fragments(void) { return model.fragments; }
+static int present_wire(void *ctx,uint32_t pid,const struct ciuki_w32_render3d_args *a,
+                        const void *data,uint32_t bytes)
+{
+    (void)ctx;
+    if (pid!=7 || a->token!=lease_token || a->generation!=lease_generation) return -EACCES;
+    memcpy(frame_pixels,data,bytes); wire_presented++; return 0;
+}
+void gl_kernel_setup(int qualified)
+{
+    CHECK(!allocations);
+    prepare(mode_width,mode_height,true);
+    device.fullsize_testing=false; device.perspective_qualified=false;
+    if (qualified==2) CHECK(!matrox3d_fullsize_probe(&device,&reference));
+    CHECK(!render3d_close(&hardware) && !render3d_close(&reference));
+    device.consumer=0; device.qualified=qualified!=0;
+    render3d_init(&hardware,&host,42,matrox3d_backend(),&device,device.heap);
+    device.consumer=&hardware; wire_pid=7;
+    lease_token=1234; lease_generation=42; wire_presented=0;
+}
+void gl_kernel_teardown(void)
+{
+    CHECK(!render3d_close(&hardware)); CHECK(!allocations && !hardware.ram_bytes);
+    free(model.ram); model.ram=0;
+}
+void gl_kernel_revoke(void) { lease_token++; }
+void gl_kernel_process_exit(void) { render3d_process_exit(&hardware,7); }
+unsigned gl_kernel_draws(void) { return device.triangles; }
+unsigned gl_kernel_copies(void) { return device.copies; }
+unsigned gl_kernel_writes(void) { return model.writes; }
+unsigned gl_kernel_presents(void) { return wire_presented; }
+const uint32_t *gl_kernel_pixels(void) { return frame_pixels; }
+int w32_render3d_host_exchange(struct ciuki_w32_render3d_args *a,void *payload)
+{
+    /* Independent RAM snapshot is the syscall staging seam. No process
+     * pointer reaches the service; READ/QUERY publish only on success. */
+    struct ciuki_w32_render3d_args copied=*a;
+    void *data=copied.bytes ? calloc(1,copied.bytes) : 0;
+    bool output=a->action==CIUKI_R3D_QUERY || a->action==CIUKI_R3D_READ;
+    if (copied.bytes && !data) return -ENOMEM;
+    if (copied.bytes && !output && a->action!=CIUKI_R3D_PRESENT) {
+        CHECK(payload); memcpy(data,payload,copied.bytes);
+    }
+    struct render3d_transport t={&hardware,0,present_wire};
+    int e=render3d_transport_dispatch(&t,wire_pid,&copied,data,copied.bytes);
+    if (e==-EOPNOTSUPP && a->action==CIUKI_R3D_SUBMIT) {
+        /* Establish the actual family refusal, not merely the generic
+         * encoder's verdict. Removing mip selection must admit this exact
+         * copied batch, still with no emission or change to the replay. */
+        const struct render3d_request *q=data;
+        static struct render3d_request without_mip;
+        without_mip=*q;
+        for (unsigned i=0;i<2;i++) without_mip.state.sampler[i].filter=R3D_BILINEAR;
+        uint32_t handles[R3D_REFS]={q->target,q->depth,q->texture,q->copy_target,q->texture1};
+        struct render3d_resource *refs[R3D_REFS]={0};
+        for (unsigned c=0;c<R3D_CONTEXTS;c++) if (hardware.contexts[c].resources)
+            for (unsigned r=0;r<R3D_RESOURCES;r++)
+                for (unsigned i=0;i<R3D_REFS;i++) if (handles[i] &&
+                    hardware.contexts[c].resources[r].handle==handles[i]) refs[i]=&hardware.contexts[c].resources[r];
+        unsigned writes=model.writes;
+        CHECK(!matrox3d_backend()->validate(&device,&without_mip,refs) && writes==model.writes);
+        work_mip_refusals++;
+    }
+    if (e && a->action==CIUKI_R3D_SUBMIT && getenv("CIUKI_TEST_TRACE")) {
+        const struct render3d_request *q=data;
+        fprintf(stderr,"Matrox wire refused=%d count=%u flags=%u filters=%u/%u rhw=%u/%u/%u uv=%d/%d\n",
+            e,q->count,q->flags,q->state.sampler[0].filter,q->state.sampler[1].filter,
+            q->vertices[0].rhw,q->vertices[1].rhw,q->vertices[2].rhw,q->vertices[0].u,q->vertices[0].v);
+    }
+    if (a->action==CIUKI_R3D_SUBMIT) {
+        const struct render3d_request *q=data;
+        if (e) work_refusals++;
+        if (!e && q->count) {
+            uint64_t work=0;
+            for (unsigned i=0;i<q->count;i+=3) {
+                int xmin=q->vertices[i].x,xmax=xmin,ymin=q->vertices[i].y,ymax=ymin;
+                for (unsigned j=i+1;j<i+3;j++) {
+                    int x=q->vertices[j].x,y=q->vertices[j].y;
+                    if (x<xmin) xmin=x;
+                    if (x>xmax) xmax=x;
+                    if (y<ymin) ymin=y;
+                    if (y>ymax) ymax=y;
+                }
+                work+=(uint64_t)((xmax-xmin+65535)>>16)*((ymax-ymin+65535)>>16);
+            }
+            if (work_submissions<2) work_vertices[work_submissions]=q->count;
+            work_submissions++; work_total+=work;
+            if (work>work_peak) work_peak=work;
+        }
+    }
+    if (!e && output) memcpy(payload,data,copied.bytes);
+    if (!e) *a=copied;
+    free(data); return e;
+}
+
+/* H1 measurements run after the real per-boot fake-silicon qualification. */
+static unsigned admission_live,admission_class,admission_scope;
+void gl_savage_scope(unsigned s) { admission_scope=s; }
+static uint64_t admission_gpu,admission_cpu,admission_world,admission_entities;
+static uint64_t admission_world_ok,admission_entities_ok,admission_refused[6];
+static unsigned admission_switches,admission_previous;
+static unsigned admission_wire_refusals,admission_mip_refusals;
+void gl_savage_class(unsigned which) { admission_class=which; }
+void gl_savage_begin(void) {
+    admission_live=1; admission_gpu=admission_cpu=admission_world=admission_entities=0;
+    admission_world_ok=admission_entities_ok=admission_switches=admission_previous=0;
+    memset(admission_refused,0,sizeof(admission_refused));
+    admission_wire_refusals=work_refusals;
+    admission_mip_refusals=work_mip_refusals;
+}
+void gl_host_draw(const struct sw_state *s,const struct sw_vertex *v,int hardware) {
+    if (!admission_live) return;
+    static struct gl_hw_command g;
+    static struct render3d_request q;
+    struct ciuki_r3d_caps caps; matrox3d_backend()->query_caps(&device,&caps);
+    g=(struct gl_hw_command){.state=*s,.count=3}; memcpy(g.vertices,v,3*sizeof(*v));
+    bool eligible=!gl_hw_encode(&caps,&g,1,2,0,&q);
+    if (admission_class==1) { admission_world++; admission_world_ok+=eligible; }
+    if (admission_class==2) { admission_entities++; admission_entities_ok+=eligible; }
+    if (!eligible) {
+        unsigned reason=s->alpha_test ? 0 : s->blend && (s->sfactor==GL_DST_COLOR || s->dfactor==GL_DST_COLOR) ? 1 :
+            s->fog ? 2 : s->offset ? 3 : 4;
+        admission_refused[reason]++;
+    } else if (!hardware) admission_refused[5]++; /* context already software */
+    if (hardware) admission_gpu++; else admission_cpu++;
+    unsigned current=hardware ? 1 : 2;
+    if (admission_previous && current!=admission_previous) admission_switches++;
+    admission_previous=current;
+}
+void gl_savage_end(unsigned w,unsigned h,unsigned frame,unsigned gpu_draws,uint64_t gpu_fragments,
+                   uint64_t cpu_draws,uint64_t cpu_fragments) {
+    admission_live=0;
+    unsigned switches=(gpu_draws && cpu_draws) ? 1u : 0u;
+    printf("GL_MATROX_H1 scope=%s width=%u height=%u frame=%u gpu_draws=%u gpu_fragments=%llu cpu_draws=%llu cpu_fragments=%llu "
+        "eligible_world=%llu/%llu eligible_entities=%llu/%llu queued_gpu=%llu direct_cpu=%llu switches=%u queued_switches=%u "
+        "refused_alpha=%llu refused_blend=%llu refused_fog=%llu refused_offset=%llu refused_numeric=%llu context_software=%llu wire_refusals=%u mip_refusals=%u\n",
+        admission_scope ? "complete-multipass" : "complete",w,h,frame,gpu_draws,(unsigned long long)gpu_fragments,(unsigned long long)cpu_draws,(unsigned long long)cpu_fragments,
+        (unsigned long long)admission_world_ok,(unsigned long long)admission_world,
+        (unsigned long long)admission_entities_ok,(unsigned long long)admission_entities,
+        (unsigned long long)admission_gpu,(unsigned long long)admission_cpu,switches,admission_switches,
+        (unsigned long long)admission_refused[0],(unsigned long long)admission_refused[1],
+        (unsigned long long)admission_refused[2],(unsigned long long)admission_refused[3],
+        (unsigned long long)admission_refused[4],(unsigned long long)admission_refused[5],
+        work_refusals-admission_wire_refusals,work_mip_refusals-admission_mip_refusals);
+    CHECK(admission_world && admission_entities);
+    CHECK(admission_world_ok*100>=95*admission_world && admission_entities_ok*100>=95*admission_entities);
+    CHECK(admission_switches<=1);
+    /* Vendor TEXWIDTH forbids mip maps below eight texels. H1's minified
+     * geometry can exceed that chain: the real wire refusal must put the
+     * whole frame in software. Report it, never label encoder eligibility
+     * as family execution or silently clamp LOD to obtain an all-GPU pass. */
+    unsigned expected=admission_scope ? 4600u : 3000u;
+    CHECK((cpu_draws==expected && cpu_fragments) ||
+          (gpu_draws==expected && gpu_fragments && !cpu_draws));
+    CHECK(!device.lost && engine.cpu_safe && !engine.quarantined && !model.locks);
+}

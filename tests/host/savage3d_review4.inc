@@ -78,7 +78,8 @@ static void joint_layout3d(void)
             white[i]=~0u;
         }
         g=(struct gl_hw_command){.state={.width=64,.height=64},.count=3,.clear_color=0xff204060};
-        q=(struct render3d_request){.count=6,.clear_color=g.clear_color,.clear_depth=65535};
+        q=(struct render3d_request){.flags=R3D_TEXTURED|R3D_TEXTURE1,
+            .count=6,.clear_color=g.clear_color,.clear_depth=65535};
         for (unsigned unit=0;unit<2;unit++) {
             uint32_t *pixels=unit==stage ? colours : white;
             t[unit]=(struct sw_texture){.min=GL_LINEAR,.mag=GL_LINEAR,.wrap_s=GL_REPEAT,.wrap_t=GL_REPEAT};
@@ -134,6 +135,7 @@ static void joint_mip3d(void)
     struct oracle_position3d pos={.primary={255,255,255,255},.u={.5L},.v={.5L},.lambda={.5L}};
     long double box[6][2]; oracle_box3d(g,box);
     static struct render3d_request q;
+    q.flags=R3D_TEXTURED;
     q.state.sampler[0]=(struct render3d_sampler){R3D_MODULATE,R3D_TRILINEAR,1,1};
     q.state.sampler[1]=(struct render3d_sampler){R3D_MODULATE,R3D_BILINEAR,1,1};
     struct render3d_resource tex={.width=64,.height=64,.levels=2,.shadow=images,.level_offset={0,64*64*4}};
