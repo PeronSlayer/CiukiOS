@@ -592,7 +592,9 @@ int px_policy_label_locked(struct px_node *n,struct policy_label *out)
         struct px_node *child=chain[--count]; uint64_t locator=0;
         struct owner_store *s=p->owners;
         if((l.kind==POLICY_PROFILES || l.kind==POLICY_ROOT) && s) {
-            if(!s->ready || s->busy) return -EIO;
+            /* sec-own: an owner transaction in flight keeps committed records
+             * readable; its own names are fenced below (pending, root intent). */
+            if(!s->ready) return -EIO;
             unsigned total=l.kind==POLICY_PROFILES?s->profile_count:s->root_count;
             for(unsigned i=0;i<total;i++) {
                 const struct owner_record *r=l.kind==POLICY_PROFILES?&s->profiles[i]:&s->roots[i];
@@ -616,13 +618,410 @@ int px_policy_label_locked(struct px_node *n,struct policy_label *out)
     }
     *out=l; return 0;
 }
+/* sec-k03: one decision for every native, Win32 and legacy-table frontend.
+ * Devices carry no file policy (k04 owns device authority) but still need a
+ * live subject. A drive without a policy binding is an unmanaged volume:
+ * everyone live reads, SYSTEM/administrators modify, Guest never modifies,
+ * Standard users modify removable media only (a fixed volume that is not yet
+ * provisioned is public-readable, administrator-writable; contract
+ * user-security-kernel.md "Identity and evaluation" and rule table). */
+const char px_kernel_actor;
+/* Standalone storage/font/DOS harnesses link no credential implementation
+ * (proc/security.c). There a process has no identity at all and its calls
+ * remain kernel work, as before. The kernel always links security.c, so a
+ * process without a retained subject is denied (K4), never SYSTEM. */
+#pragma weak security_subject_live
+#pragma weak security_subject_credential
+#pragma weak security_subject_get
+#pragma weak security_process_live
+const struct security_subject *px_process_subject(const struct process *p)
+{
+    if (p && p->subject) return p->subject;
+    return security_subject_live ? 0 : PX_KERNEL;
+}
+static bool px_device_node(const struct px_node *n)
+{
+    return n->kind!=PX_FILE && n->kind!=PX_DIRECTORY && n->kind!=PX_MNT && n->kind!=PX_DEV;
+}
+static bool credential_has(const struct ciuki_credential *c,uint32_t gid)
+{
+    for(unsigned i=0;i<c->group_count && i<CIUKI_SECURITY_GROUP_MAX;i++) if(c->groups[i]==gid) return true;
+    return false;
+}
+static bool credential_admin(const struct ciuki_credential *c)
+{ return !c->uid || credential_has(c,CIUKI_GID_ADMINISTRATORS); }
+static bool credential_guest(const struct ciuki_credential *c)
+{ return c->uid==CIUKI_UID_GUEST || credential_has(c,CIUKI_GID_GUESTS); }
+static int unmanaged_check(struct px_node *volume,const struct ciuki_credential *c,unsigned access)
+{
+    if(!(access&POLICY_MUTATE) || credential_admin(c)) return 0;
+    if(volume->ro || (volume->volume && volume->volume->readonly)) return -EROFS;
+    if(credential_guest(c)) return -EACCES;
+    unsigned d=volume->drive;
+    return d<26 && (volume->space->vfs->drive_flags[d]&VFS_DRIVE_REMOVABLE) ? 0 : -EACCES;
+}
 int px_policy_check_locked(struct px_node *n,const struct security_subject *subject,unsigned access)
 {
-    if(!subject || !policy_check) return -EACCES;
-    struct policy_label l; int e=px_policy_label_locked(n,&l); if(e) return e;
+    if(subject==PX_KERNEL) return 0;
+    if(!subject || !n || !access || (access&~POLICY_ALL)) return -EACCES;
+    if(!security_subject_live || !security_subject_credential) return -EACCES;
+    /* A stopping process or a closing session gets no fresh authority. */
+    if(!security_subject_live(subject)) return -EACCES;
+    const struct ciuki_credential *c=security_subject_credential(subject);
+    if(!c || c->group_count>CIUKI_SECURITY_GROUP_MAX) return -EACCES;
+    if(px_device_node(n)) return 0;
     struct px_node *volume=(!n->volume && !n->ro)?n->space->root:n;
-    return policy_check(volume->space->vfs->policy[volume->drive],&l,subject,access);
+    if(!volume || volume->drive>=26) return -EACCES;
+    struct policy_volume *p=volume->space->vfs->policy[volume->drive];
+    if(!p) return unmanaged_check(volume,c,access);
+    if(!policy_check) return -EACCES;
+    struct policy_label l; int e=px_policy_label_locked(n,&l); if(e) return e;
+    e=policy_check(p,&l,subject,access);
+    return e==-ESRCH?-EACCES:e;
 }
+/* ---- sec-k03 resolved-object enforcement helpers (one block) ----------- */
+#pragma weak owner_root_reserve
+#pragma weak owner_root_change
+#pragma weak owner_root_finish
+bool owner_vfs_reserved(const struct owner_vfs *, const char *); /* fs/owner_vfs.h */
+#pragma weak owner_vfs_reserved
+static bool legacy_open(struct px_node *n);
+int px_resolve_as_locked(struct px_namespace *s,struct px_node *cwd,const char *path,
+                         bool missing_leaf,const struct security_subject *subject,struct px_path *out)
+{
+    if(subject==PX_KERNEL) return px_resolve_locked(s,cwd,path,missing_leaf,out);
+    if(!subject) return -EACCES;
+    return px_resolve_subject_locked(s,cwd,path,missing_leaf,subject,out);
+}
+static bool subject_admin(const struct security_subject *s)
+{
+    if(s==PX_KERNEL) return true;
+    const struct ciuki_credential *c=s && security_subject_credential?security_subject_credential(s):0;
+    return c && credential_admin(c);
+}
+/* Owner transactions need a real retained subject (never PX_KERNEL). */
+static const struct security_subject *owner_actor(const struct security_subject *s)
+{ return s==PX_KERNEL ? 0 : s; }
+static struct policy_volume *px_policy_of(const struct px_node *n)
+{
+    if(!n || n->drive>=26 || (!n->volume && !n->ro)) return 0;
+    return n->space->vfs->policy[n->drive];
+}
+/* Within-volume canonical path of n (resolved long names), plus an optional
+ * leaf. Used for OWNER lease and creator-root names; never authority. */
+static int px_volume_path_locked(struct px_node *n,const char *leaf,char out[CIUKI_PATH_MAX])
+{
+    char back[CIUKI_PATH_MAX]; unsigned used=0,count=0;
+    if(leaf) {
+        unsigned k=(unsigned)strlen(leaf); if(k+1>=sizeof(back)) return -ENAMETOOLONG;
+        for(unsigned i=k;i;i--) back[used++]=leaf[i-1];
+        back[used++]='/';
+    }
+    while(!n->mountpoint) {
+        if(++count>FS_PATH_CHARS || !n->parent) return -EIO;
+        unsigned k=(unsigned)strlen(n->entry.name);
+        if(used+k+1>=sizeof(back)) return -ENAMETOOLONG;
+        for(unsigned i=k;i;i--) back[used++]=n->entry.name[i-1];
+        back[used++]='/'; n=n->parent;
+    }
+    if(!used) back[used++]='/';
+    for(unsigned i=0;i<used;i++) out[i]=back[used-i-1];
+    out[used]=0; return 0;
+}
+/* OWNER batch lease: fences every attributed namespace mutation of the
+ * destination manifest, roots and ancestors (owner_vfs.h). */
+static int lease_check(struct px_node *n,const char *leaf,const struct security_subject *s)
+{
+    struct policy_volume *p=px_policy_of(n);
+    if(s==PX_KERNEL || !p || !p->lease) return 0;
+    if(!owner_vfs_reserved) return -EBUSY;
+    char path[CIUKI_PATH_MAX]; int e=px_volume_path_locked(n,leaf,path); if(e) return e;
+    return owner_vfs_reserved(p->lease,path)?-EBUSY:0;
+}
+/* Names recorded by OWNER at a volume root (live, retired tombstones, a
+ * pending creator intent, or an in-flight profile batch) cannot be created
+ * again by anyone; the in-memory map only, never storage I/O under lock. */
+static bool root_name_reserved(const struct owner_store *o,const char *name)
+{
+    if(!o) return false;
+    char root[72]; size_t n=strlen(name); if(n+2>sizeof(root)) return true;
+    root[0]='/'; memcpy(root+1,name,n+1);
+    if(o->root_key && ((o->root_old[0] && path_equal(root,o->root_old)) || (o->root_new[0] && path_equal(root,o->root_new)))) return true;
+    for(unsigned i=0;i<o->root_count && i<OWNER_ROOTS;i++) if(path_equal(root,o->roots[i].binding.path)) return true;
+    for(unsigned i=0;i<o->profile_count && i<OWNER_PROFILES;i++) if(path_equal(root,o->profiles[i].binding.path)) return true;
+    if(o->active) for(unsigned i=0;i<OWNER_PROFILES && o->pending[i].binding.locator;i++)
+        if(path_equal(root,o->pending[i].binding.path)) return true;
+    return false;
+}
+/* Label of the object `name` would get under parent (no object exists). */
+static int prospective_label(struct policy_volume *p,struct px_node *parent,const char *name,
+                             uint64_t object,struct policy_label *parent_label,struct policy_label *out)
+{
+    int e=px_policy_label_locked(parent,parent_label); if(e) return e;
+    if(!policy_child) return -EACCES;
+    return policy_child(p,parent_label,name,object?object:UINT64_MAX,0,out);
+}
+/* ADD on the actual parent, then the destination name's own rule: reserved,
+ * sealed, hive and service-only names need the right to write that rule.
+ * 0 = create directly, 1 = creator-owned root entry (reserve first). */
+static int create_authorize(struct px_node *parent,const char *name,const struct security_subject *s)
+{
+    if(s==PX_KERNEL) return 0;
+    int e=px_policy_check_locked(parent,s,POLICY_ADD); if(e) return e;
+    if((e=lease_check(parent,name,s))) return e;
+    struct policy_volume *p=px_policy_of(parent);
+    if(!p) return 0;
+    struct policy_label pl,cl; e=prospective_label(p,parent,name,0,&pl,&cl); if(e) return e;
+    if(pl.kind==POLICY_ROOT) {
+        if(root_name_reserved(p->owners,name)) return -EEXIST;
+        if(cl.trie==UINT16_MAX && cl.kind==POLICY_PUBLIC) return subject_admin(s)?0:1;
+    } else if(cl.kind==pl.kind && !cl.anchor) return 0;
+    e=policy_check(p,&cl,s,POLICY_WRITE|POLICY_ADD);
+    return e==-ESRCH?-EACCES:e;
+}
+/* Release/reacquire the namespace around OWNER storage work: OWNER methods
+ * run without a namespace mutex (owner.h). The caller keeps its writer turn,
+ * so no other mutator changes this drive meanwhile. */
+struct px_unlocked { struct vfs *v; uint32_t active; unsigned default_drive; };
+static struct px_unlocked px_unlock(struct vfs *v)
+{ struct px_unlocked u={v,v->active,v->default_drive}; vfs_unlock(v); return u; }
+static void px_relock(struct px_unlocked u)
+{ vfs_lock(u.v,u.active); u.v->default_drive=u.default_drive; }
+struct px_creator { struct owner_store *owners; uint64_t key; uint8_t proof[32]; bool pending; };
+/* A creator-root intent left by an interrupted operation (crash, power cut,
+ * failed finish) blocks every later root and account batch. Every creator
+ * operation holds the volume's writer turn from reserve/change to finish, so
+ * an intent seen by a turn holder is stale: reconcile it from the actual
+ * namespace evidence (owner.h: "the mutator must reconcile"). create: the
+ * new name exists -> publish its proof, else abort (retire); rename: exactly
+ * one of old/new exists -> finish/abort; delete: old gone -> retire, else
+ * abort. Contradictory evidence keeps the intent (deny-labelled) and EIO. */
+int px_creator_reconcile_locked(struct px_namespace *s, unsigned drive)
+{
+    struct vfs *v=s->vfs;
+    struct policy_volume *p=drive<26 ? v->policy[drive] : 0;
+    struct owner_store *o=p ? p->owners : 0;
+    if(!o || !o->ready) return -EIO;
+    if(!o->root_key) return 0;
+    if(o->busy || !owner_root_finish || !vfs_turn_held_locked(v,vfs_drive_mask(drive))) return -EBUSY;
+    struct px_node *root=mount_root(s,drive); if(!root) return -EIO;
+    struct px_node *old=0,*fresh=0; int e;
+    /* Physical entries only: never the native synthetic /mnt or /dev. */
+    if(o->root_old[0] && (e=child_lookup_namespace(root,o->root_old+1,&old,true,false)) && e!=-ENOENT) return e;
+    if(o->root_new[0] && (e=child_lookup_namespace(root,o->root_new+1,&fresh,true,false)) && e!=-ENOENT) return e;
+    if(old && !old->linked) old=0;
+    if(fresh && !fresh->linked) fresh=0;
+    uint64_t key=o->root_key; unsigned op=o->root_operation; bool abort; struct px_node *evidence=0;
+    uint8_t proof[32]; memset(proof,0,sizeof(proof));
+    if(op==1) { abort=!fresh; evidence=fresh; }
+    else if(op==2) { if(fresh && !old) { abort=false; evidence=fresh; } else if(old && !fresh) abort=true; else return -EIO; }
+    else if(op==3) {
+        abort=old!=0;
+        for(unsigned i=0;i<o->root_count && i<OWNER_ROOTS;i++) if(o->roots[i].binding.key==key) memcpy(proof,o->roots[i].proof,32);
+    } else return -EIO;
+    if(!abort && evidence && (e=px_object_proof_locked(evidence,proof))) return e;
+    if(evidence) px_retain(evidence);
+    struct px_unlocked u=px_unlock(v);
+    e=owner_root_finish(o,key,proof,abort);
+    px_relock(u); if(evidence) px_release(evidence);
+    return e;
+}
+static int creator_reserve(struct px_node *parent,const char *name,const struct security_subject *s,struct px_creator *c)
+{
+    struct policy_volume *p=px_policy_of(parent);
+    memset(c,0,sizeof(*c));
+    if(!p || !p->owners || !owner_root_reserve || !owner_root_finish) return -EIO;
+    char root[72]; size_t n=strlen(name); if(n+2>64) return -ENAMETOOLONG;
+    root[0]='/'; memcpy(root+1,name,n+1);
+    /* Placeholder evidence: the slot does not exist yet. owner_root_finish
+     * publishes the created object's real proof; until then the name is
+     * deny-labelled for everyone (px_policy_label_locked). */
+    uint8_t pending[32]; memset(pending,0xa5,sizeof(pending));
+    struct owner_record record; int e;
+    for(unsigned attempt=0;;attempt++) {
+        px_retain(parent);
+        struct px_unlocked u=px_unlock(parent->space->vfs);
+        e=owner_root_reserve(p->owners,owner_actor(s),root,pending,&record);
+        px_relock(u); px_release(parent);
+        if(e!=-EBUSY || attempt || !p->owners->root_key) break;
+        if((e=px_creator_reconcile_locked(parent->space,parent->drive))) break;
+        if(root_name_reserved(p->owners,name)) return -EEXIST;
+    }
+    if(e) return e==-ESRCH?-EACCES:e;
+    c->owners=p->owners; c->key=record.binding.key; c->pending=true;
+    /* Revalidate: same mounted parent, name still free under our turn. */
+    struct px_node *found=0;
+    if(!node_available(parent)) e=-ENOENT;
+    else { e=child_lookup(parent,name,&found,true); e=e==-ENOENT?0:e?e:-EEXIST; }
+    return e;
+}
+static int creator_finish(struct px_creator *c,struct px_node *n,struct vfs *v,bool abort)
+{
+    if(!c->pending) return 0;
+    uint8_t proof[32]; int e=0;
+    if(!abort && n) e=px_object_proof_locked(n,proof);
+    if(abort || e) memset(proof,0,sizeof(proof));
+    if(n) px_retain(n);
+    struct px_unlocked u=px_unlock(v);
+    int f=owner_root_finish(c->owners,c->key,proof,abort || e);
+    px_relock(u); if(n) px_release(n);
+    c->pending=false;
+    return e?e:f;
+}
+/* The creator-owned root entry itself (descendants share its label). */
+static bool creator_root_entry(struct px_node *n,struct policy_label *l)
+{
+    struct policy_volume *p=px_policy_of(n);
+    return p && p->owners && n->parent && n->parent->mountpoint && n->volume && !n->mountpoint &&
+        !px_policy_label_locked(n,l) && l->kind==POLICY_CREATOR && l->owner_key;
+}
+static int creator_change(struct px_node *n,const struct policy_label *l,const char *new_name,
+                          const struct security_subject *s,struct px_creator *c)
+{
+    struct policy_volume *p=px_policy_of(n);
+    memset(c,0,sizeof(*c));
+    if(!owner_root_change || !owner_root_finish) return -EIO;
+    int e=px_object_proof_locked(n,c->proof); if(e) return e;
+    char root[72]; if(new_name) {
+        size_t k=strlen(new_name); if(k+2>64) return -ENAMETOOLONG;
+        root[0]='/'; memcpy(root+1,new_name,k+1);
+    }
+    for(unsigned attempt=0;;attempt++) {
+        px_retain(n);
+        struct px_unlocked u=px_unlock(n->space->vfs);
+        e=owner_root_change(p->owners,owner_actor(s),l->owner_key,new_name?root:0,c->proof);
+        px_relock(u); px_release(n);
+        if(e!=-EBUSY || attempt || !p->owners->root_key) break;
+        if((e=px_creator_reconcile_locked(n->space,n->drive))) break;
+        if(!node_available(n)) return -ENOENT;
+    }
+    if(e) return e==-ESRCH?-EACCES:e;
+    c->owners=p->owners; c->key=l->owner_key; c->pending=true;
+    return node_available(n)?0:-ENOENT;
+}
+/* Delete keeps the recorded evidence; rename publishes the new slot. */
+static int creator_change_finish(struct px_creator *c,struct px_node *n,bool deleted,bool abort)
+{
+    if(!c->pending) return 0;
+    uint8_t proof[32]; memcpy(proof,c->proof,32); int e=0;
+    if(!abort && !deleted) e=px_object_proof_locked(n,proof);
+    struct vfs *v=n->space->vfs; px_retain(n);
+    struct px_unlocked u=px_unlock(v);
+    int f=owner_root_finish(c->owners,c->key,proof,abort || e);
+    px_relock(u); px_release(n);
+    c->pending=false;
+    return e?e:f;
+}
+/* Any live reference inside top's subtree: descriptions and cwd pin px
+ * nodes; legacy descriptions are mapped to px nodes or treated as busy. */
+static struct px_node *node_find(struct px_namespace *, struct fat_volume *, const struct fat_entry *);
+static bool px_below(const struct px_node *n,const struct px_node *top)
+{
+    for(unsigned depth=0;n && depth<=FS_PATH_CHARS;depth++) {
+        if(n==top) return true;
+        if(n->mountpoint || !n->parent || n->parent==n) return false;
+        n=n->parent;
+    }
+    return true;
+}
+static bool subtree_busy(struct px_node *top)
+{
+    struct px_namespace *s=top->space; struct vfs *v=s->vfs;
+    for(struct px_node *n=s->nodes;n;n=n->next)
+        if((n->refs || n->delete_pending) && px_below(n,top)) return true;
+    for(unsigned i=0;i<VFS_NODES;i++) {
+        struct vfs_node *o=&v->nodes[i];
+        if(!o->refs || o->volume!=top->volume) continue;
+        struct px_node *n=node_find(s,o->volume,&o->entry);
+        if(!n ? directory(top) || (o->entry.parent==top->entry.parent && o->entry.index==top->entry.index) : px_below(n,top)) return true;
+    }
+    if(directory(top) && top->volume) {
+        int e=vfs_directory_pinned(v,top->volume,top->entry.first);
+        if(e) return true;
+    }
+    return false;
+}
+/* Legacy VFS tables (vfs_hooks.h). Same resolver/decision as native calls;
+ * the returned identity is compared by vfs.c with its own lookup. Creator-
+ * owned root entries are created/renamed/deleted only through the native and
+ * Win32 frontends, whose OWNER transaction this frontend cannot carry. A vfs
+ * without the native namespace is a VM-private provider space (unified DOS
+ * C:): no host policy applies there, but the subject must still be live. */
+static int rename_authorize(struct px_path *, struct px_path *, const struct security_subject *,
+                            struct px_creator *, bool *);
+static int table_resolve(struct vfs_table *t,const char *path,bool missing,struct px_path *r)
+{
+    return vfs_resolve_subject_locked(t,t->subject,path,false,missing,r);
+}
+static void table_target(struct px_node *n,struct px_node *parent,struct vfs_policy_target *out)
+{
+    struct px_node *at=n?n:parent;
+    out->exists=n!=0; out->ro=at->ro!=0; out->volume=at->volume;
+    if(n) { out->parent=n->entry.parent; out->index=n->entry.index; }
+    out->directory=at->entry.first;
+}
+int px_table_authorize_locked(struct vfs_table *t,const char *path,unsigned flags,unsigned access,
+                              struct vfs_policy_target *out)
+{
+    memset(out,0,sizeof(*out));
+    if(!t || !t->subject || !path || !security_subject_live) return -EACCES;
+    const struct security_subject *s=t->subject;
+    if(!security_subject_live(s)) return -EACCES;
+    const unsigned all=POLICY_READ|POLICY_EXEC|POLICY_TRAVERSE|POLICY_WRITE|POLICY_META;
+    if(!files_namespace_locked(t->vfs)) { out->granted=all; out->ro=true; return 0; }
+    char parent[FS_PATH_BYTES]; const char *target=path;
+    if(flags&VFS_POLICY_DIRECTORY) {
+        size_t n=strlen(path); if(n>=sizeof(parent)) return -ENAMETOOLONG;
+        memcpy(parent,path,n+1); char *leaf=parent;
+        for(char *a=parent;*a;a++) if(*a=='/' || *a=='\\' || *a==':') leaf=a+1;
+        if(leaf==parent) memcpy(parent,".",2);
+        else if(leaf[-1]==':') { leaf[0]='.'; leaf[1]=0; }
+        else if(leaf-1==parent || (leaf-1==parent+2 && parent[1]==':')) *leaf=0;
+        else leaf[-1]=0;
+        target=parent;
+    }
+    struct px_path r; int e=table_resolve(t,target,(flags&VFS_POLICY_MISSING)!=0,&r);
+    if(e) return e;
+    if(r.node) {
+        if((flags&VFS_POLICY_DIRECTORY) && !directory(r.node)) return -ENOTDIR;
+        unsigned want=access?access:POLICY_READ;
+        if((e=px_policy_check_locked(r.node,s,want))) return e;
+        struct policy_label l;
+        if((want&(POLICY_REMOVE|POLICY_RENAME)) && creator_root_entry(r.node,&l)) return -EACCES;
+        if((want&(POLICY_REMOVE|POLICY_RENAME)) && (e=lease_check(r.node,0,s))) return e;
+        table_target(r.node,0,out);
+        out->granted=POLICY_READ|POLICY_EXEC|POLICY_TRAVERSE|(want&(POLICY_WRITE|POLICY_META));
+        /* DOS/Win32 set handle times without write access when the object's
+         * metadata may be modified; decided now, frozen with the handle. */
+        if(!(out->granted&POLICY_META) && !px_policy_check_locked(r.node,s,POLICY_META)) out->granted|=POLICY_META;
+        return 0;
+    }
+    int c=create_authorize(r.parent,r.name,s);
+    if(c<0) return c;
+    if(c) return -EACCES;
+    table_target(0,r.parent,out);
+    out->granted=all;
+    return 0;
+}
+int px_table_rename_locked(struct vfs_table *t,const char *from,const char *to,
+                           struct vfs_policy_target *source,struct vfs_policy_target *target)
+{
+    memset(source,0,sizeof(*source)); memset(target,0,sizeof(*target));
+    if(!t || !t->subject || !from || !to || !security_subject_live) return -EACCES;
+    if(!security_subject_live(t->subject)) return -EACCES;
+    if(!files_namespace_locked(t->vfs)) { source->ro=target->ro=true; return 0; }
+    struct px_path a,b; int e=table_resolve(t,from,false,&a);
+    if(!e) { px_retain(a.node); px_retain(a.parent); e=table_resolve(t,to,true,&b); px_release(a.parent); px_release(a.node); }
+    if(e) return e;
+    if(!a.node->volume || a.node->mountpoint || !b.parent->volume) return a.node->ro || b.parent->ro?-EROFS:-EACCES;
+    struct policy_label l;
+    if(creator_root_entry(a.node,&l) || (b.node && b.node!=a.node && creator_root_entry(b.node,&l))) return -EACCES;
+    struct px_creator c; bool retire;
+    if((e=rename_authorize(&a,&b,t->subject,&c,&retire))) return e;
+    table_target(a.node,0,source); table_target(b.node,b.parent,target);
+    return 0;
+}
+/* ---- end sec-k03 helpers ------------------------------------------------ */
 int px_resolve_volume_subject_locked(struct px_namespace *s,unsigned drive,struct px_node *cwd,
     const char *input,bool win32,bool missing,const struct security_subject *subject,struct px_path *out)
 {
@@ -664,6 +1063,34 @@ int px_resolve_volume_subject_locked(struct px_namespace *s,unsigned drive,struc
     return resolve_subject_common(s,cwd,native,missing,subject,out,root);
 }
 
+/* Shared VFS/native resolved identity adapter (k02, moved by sec-k03). */
+int vfs_resolve_subject_locked(struct vfs_table *t,const struct security_subject *subject,const char *path,
+    bool win32,bool missing,struct px_path *out)
+{
+    if(!t || !subject || !path || !out) return -EACCES;
+    struct px_namespace *s=files_namespace_locked(t->vfs); if(!s) return -EIO;
+    unsigned drive=t->drive;
+    if(path[0] && path[1]==':') { drive=(unsigned)(path_upper((uint8_t)path[0])-'A'); path+=2; }
+    /* sec-k03: an unbound drive is resolved too; px_policy_check_locked
+     * applies the unmanaged-volume rule to it, never an implicit SYSTEM. */
+    if(drive>=26) return -EACCES;
+    /* fx-emptydrive: an owned letter without media is not a missing path.
+     * Report readiness before resolving/authorizing a directory on it. */
+    if(!vfs_drive_present(t->vfs,drive)) return vfs_drive_slot(t->vfs,drive)?-ENXIO:-ENOENT;
+    /* Resolve the actual cwd before relative components. Never pre-normalize
+     * input strings: that would erase an unauthorized intermediate directory. */
+    struct px_node *start=s->root;
+    if(path[0]!='/' && path[0]!='\\') {
+        struct px_path cwd;
+        int e=px_resolve_volume_subject_locked(s,drive,s->root,t->cwd[drive],false,false,subject,&cwd);
+        if(e) return e;
+        uint32_t cluster=t->cwd_cluster[drive];
+        if(!cluster && cwd.node->volume && cwd.node->volume->type==32) cluster=cwd.node->volume->root;
+        if(cwd.node->volume && cwd.node->entry.first!=cluster) return -EIO;
+        start=cwd.node;
+    }
+    return px_resolve_volume_subject_locked(s,drive,start,path,win32,missing,subject,out);
+}
 int px_getcwd_locked(struct px_node *n, char out[CIUKI_PATH_MAX])
 {
     if (!node_available(n)) return -ENOENT;
@@ -693,8 +1120,12 @@ int px_chdir(struct process *p, const char *path)
     struct px_namespace *s = cwd->space;
     vfs_lock(s->vfs,0);
     struct px_path result;
-    int err = px_resolve_locked(s, cwd, path, false, &result);
+    /* sec-k03: the process's retained subject must traverse every component,
+     * including the new cwd itself. */
+    const struct security_subject *subject = px_process_subject(p);
+    int err = px_resolve_as_locked(s, cwd, path, false, subject, &result);
     if (!err && !directory(result.node)) err = -ENOTDIR;
+    if (!err) err = px_policy_check_locked(result.node, subject, POLICY_TRAVERSE);
     if (!err) {
         px_retain(result.node); px_release(p->cwd); p->cwd = result.node;
         p->cwd_retain = px_retain; p->cwd_release = px_release;
@@ -712,8 +1143,10 @@ int px_security_cwd(struct process *p, const char *path)
     px_retain(root);
     vfs_lock(root->space->vfs, 0);
     struct px_path result;
-    int err = px_resolve_locked(root->space, root, path, false, &result);
-    if (!err && !security_process_live(p)) err = -EACCES;
+    /* sec-k03: resolved as the unpublished child, never as its SYSTEM parent. */
+    int err = px_resolve_as_locked(root->space, root, path, false, px_process_subject(p), &result);
+    if (!err && (!security_process_live || !security_process_live(p))) err = -EACCES;
+    if (!err && directory(result.node)) err = px_policy_check_locked(result.node, px_process_subject(p), POLICY_TRAVERSE);
     if (!err && !directory(result.node)) err = -ENOTDIR;
     if (!err) {
         px_retain(result.node);
@@ -966,13 +1399,20 @@ static int file_info_set_inner(struct px_node *n, const struct ciuki_file_info *
  * Win32 W32_F_ATTR path takes it. */
 int px_file_info_set_locked(struct px_namespace *s, struct px_node *cwd, const char *path,
                             const struct ciuki_file_info *in)
+{ return px_file_info_set_as_locked(s,cwd,path,in,PX_KERNEL); }
+/* sec-k03: MODIFY_METADATA on the resolved object, including FAT readonly
+ * clear and creation time; FAT readonly is an extra check, not authority. */
+int px_file_info_set_as_locked(struct px_namespace *s, struct px_node *cwd, const char *path,
+                               const struct ciuki_file_info *in, const struct security_subject *subject)
 {
     int err = px_file_info_check(in);
     if (err) return err;
+    if (!subject) return -EACCES;
     uint32_t turn = 0;
     err = px_turn_take_path_locked(s, cwd, path, &turn);
     struct px_path r;
-    if (!err) err = px_resolve_locked(s, cwd, path, false, &r);
+    if (!err) err = px_resolve_as_locked(s, cwd, path, false, subject, &r);
+    if (!err && r.node->volume && !r.node->mountpoint) err = px_policy_check_locked(r.node, subject, POLICY_META);
     if (!err) err = file_info_set_inner(r.node, in);
     vfs_turn_drop_locked(s->vfs, turn);
     return err;
@@ -987,24 +1427,45 @@ int px_turn_take_path_locked(struct px_namespace *s, struct px_node *cwd, const 
     int err = px_validate(path); if (err) return err;
     return px_error(vfs_turn_take_locked(s->vfs, path_drives(s, cwd, path), turn));
 }
-static int open_inner(struct px_namespace *, struct px_node *, const char *, uint32_t, struct file_description *);
+static int open_inner(struct px_namespace *, struct px_node *, const char *, uint32_t, struct file_description *,
+                      const struct security_subject *);
 int px_open_locked(struct px_namespace *s, struct px_node *cwd, const char *path,
                    uint32_t flags, struct file_description *d)
+{ return px_open_as_locked(s,cwd,path,flags,d,PX_KERNEL); }
+int px_open_as_locked(struct px_namespace *s, struct px_node *cwd, const char *path,
+                      uint32_t flags, struct file_description *d, const struct security_subject *subject)
 {
-    if (!(flags & (O_CREAT | O_TRUNC)) || px_validate(path)) return open_inner(s, cwd, path, flags, d);
+    if (!subject) return -EACCES;
+    if (!(flags & (O_CREAT | O_TRUNC)) || px_validate(path)) return open_inner(s, cwd, path, flags, d, subject);
     uint32_t turn; int err = px_error(vfs_turn_take_locked(s->vfs, path_drives(s, cwd, path), &turn));
-    if (!err) err = open_inner(s, cwd, path, flags, d);
+    if (!err) err = open_inner(s, cwd, path, flags, d, subject);
     vfs_turn_drop_locked(s->vfs, turn);
     return err;
 }
+/* sec-k03: rights granted to a description at open. They only shrink: the
+ * resolver checked READ on the leaf; WRITE/META only with write access or
+ * O_TRUNC; REMOVE/RENAME only with Win32 DELETE access (delete-on-close). */
+static unsigned open_rights(uint32_t flags, const struct file_description *d)
+{
+    unsigned rights = POLICY_READ | POLICY_EXEC | POLICY_TRAVERSE;
+    if ((flags & O_ACCMODE) != O_RDONLY || (flags & O_TRUNC)) rights |= POLICY_WRITE | POLICY_META;
+    if (d->win32 && (d->share_access & 4)) rights |= POLICY_REMOVE | POLICY_RENAME;
+    return rights;
+}
 static int open_inner(struct px_namespace *s, struct px_node *cwd, const char *path,
-                   uint32_t flags, struct file_description *d)
+                   uint32_t flags, struct file_description *d, const struct security_subject *subject)
 {
     vfs_tag_locked(s->vfs,flags&O_TRUNC ? "truncate" : flags&O_CREAT ? "create" : "open");
     vfs_site_locked(s->vfs,"native");
     struct px_path r;
-    int err = px_resolve_locked(s, cwd, path, !!(flags & O_CREAT), &r);
+    int err = px_resolve_as_locked(s, cwd, path, !!(flags & O_CREAT), subject, &r);
     if (err) return err;
+    /* Retained before any side effect; file_description_close releases it. */
+    if (subject != PX_KERNEL && !d->subject) {
+        if (!security_subject_get) return -EACCES;
+        if ((err = security_subject_get((struct security_subject *)subject))) return err;
+        d->subject = (struct security_subject *)subject;
+    }
     if (((r.node && r.node->ro) || (r.parent && r.parent->ro)) &&
         ((flags&O_ACCMODE)!=O_RDONLY || (flags&(O_CREAT|O_TRUNC)))) return -EROFS;
     if (r.node && r.node->delete_pending) return -EACCES;
@@ -1028,19 +1489,42 @@ static int open_inner(struct px_namespace *s, struct px_node *cwd, const char *p
     }
     if (!r.node && px_write_denied(r.parent)) return -EROFS;
     if (r.node && (flags & O_TRUNC) && px_write_denied(r.node)) return -EROFS;
+    /* sec-k03: authorize the actual object/parent before any side effect.
+     * O_TRUNC needs WRITE before data is cleared; create needs ADD on the
+     * real parent plus the destination name's own rule. */
+    struct px_creator creator = { 0 };
+    int creating = 0;
+    if (r.node && !px_device_node(r.node)) {
+        unsigned rights = open_rights(flags, d);
+        err = px_policy_check_locked(r.node, subject, rights & (POLICY_READ | POLICY_WRITE | POLICY_REMOVE));
+        if (!err && (rights & POLICY_REMOVE) && subject != PX_KERNEL) {
+            struct policy_label root_label;
+            /* Delete-on-close cannot defer an OWNER record transaction to a
+             * final close inside another frontend's teardown. */
+            if (creator_root_entry(r.node, &root_label)) err = -EACCES;
+        }
+        if (err) return err;
+    } else if (!r.node) {
+        creating = create_authorize(r.parent, r.name, subject);
+        if (creating < 0) return creating;
+    }
     if (!r.node) {
         /* Reserve metadata BEFORE FAT create; allocation failure is pure. */
         struct px_node *n = node_new(s, r.parent, PX_FILE);
         if (!n) return -ENOMEM;
         n->linked = false; n->volume=r.parent->volume; n->drive=r.parent->drive;
+        if (creating && (err = creator_reserve(r.parent, r.name, subject, &creator))) {
+            creator_finish(&creator, 0, s->vfs, true); node_forget(n); return err;
+        }
         vfs_tag_locked(s->vfs,"create");
         vfs_site_locked(s->vfs,"native");
         n->generation=r.parent->generation;
         err = px_fat_transaction_locked(n,r.parent,0,(struct fat_transaction_args){.op=FAT_TX_CREATE,.directory=r.parent->entry.first,.name=r.name,.entry=&n->entry});
-        if (err) { node_forget(n); return px_error(err); }
+        if (err) { creator_finish(&creator, 0, s->vfs, true); node_forget(n); return px_error(err); }
         n->linked = true; n->volume = r.parent->volume; n->drive = r.parent->drive;
         n->generation = r.parent->generation; r.node = n;
         px_changed_locked(n); px_changed_locked(r.parent);
+        if ((err = creator_finish(&creator, n, s->vfs, false))) return err;
     }
     if (flags & O_TRUNC) {
         if ((err=px_range_locked(r.node,0,r.node->entry.size))) return err;
@@ -1064,41 +1548,54 @@ static int open_inner(struct px_namespace *s, struct px_node *cwd, const char *p
         if (err) { d->node = 0; return err; }
     }
     px_retain(r.node);
+    /* sec-k03: the description retains its opener's subject and rights. */
+    d->granted = px_device_node(r.node) ? 0 : open_rights(flags, d);
     d->next = s->descriptions; s->descriptions = d;
     return 0;
 }
 
-static int mkdir_inner(struct px_namespace *, struct px_node *, const char *, uint32_t);
+static int mkdir_inner(struct px_namespace *, struct px_node *, const char *, uint32_t, const struct security_subject *);
 int px_mkdir_locked(struct px_namespace *s, struct px_node *cwd, const char *path, uint32_t mode)
+{ return px_mkdir_as_locked(s,cwd,path,mode,PX_KERNEL); }
+int px_mkdir_as_locked(struct px_namespace *s, struct px_node *cwd, const char *path, uint32_t mode,
+                       const struct security_subject *subject)
 {
-    if (px_validate(path)) return mkdir_inner(s, cwd, path, mode);
+    if (!subject) return -EACCES;
+    if (px_validate(path)) return mkdir_inner(s, cwd, path, mode, subject);
     uint32_t turn; int err = px_error(vfs_turn_take_locked(s->vfs, path_drives(s, cwd, path), &turn));
-    if (!err) err = mkdir_inner(s, cwd, path, mode);
+    if (!err) err = mkdir_inner(s, cwd, path, mode, subject);
     vfs_turn_drop_locked(s->vfs, turn);
     return err;
 }
-static int mkdir_inner(struct px_namespace *s, struct px_node *cwd, const char *path, uint32_t mode)
+static int mkdir_inner(struct px_namespace *s, struct px_node *cwd, const char *path, uint32_t mode,
+                       const struct security_subject *subject)
 {
     vfs_tag_locked(s->vfs,"mkdir");
     vfs_site_locked(s->vfs,"native");
     if (mode & ~0777u) return -EINVAL;
-    struct px_path r; int err = px_resolve_locked(s, cwd, path, true, &r);
+    struct px_path r; int err = px_resolve_as_locked(s, cwd, path, true, subject, &r);
     if (err) return err;
     if ((r.node && r.node->ro) || (r.parent && r.parent->ro)) return -EROFS;
     if (r.node) return -EEXIST;
     if (px_write_denied(r.parent)) return -EROFS;
+    int creating = create_authorize(r.parent, r.name, subject); /* sec-k03 */
+    if (creating < 0) return creating;
     struct px_node *n = node_new(s, r.parent, PX_DIRECTORY);
     if (!n) return -ENOMEM;
     n->linked = false; n->volume=r.parent->volume; n->drive=r.parent->drive;
+    struct px_creator creator = { 0 };
+    if (creating && (err = creator_reserve(r.parent, r.name, subject, &creator))) {
+        creator_finish(&creator, 0, s->vfs, true); node_forget(n); return err;
+    }
     vfs_tag_locked(s->vfs,"mkdir");
     vfs_site_locked(s->vfs,"native");
     n->generation=r.parent->generation;
     err = px_fat_transaction_locked(n,r.parent,0,(struct fat_transaction_args){.op=FAT_TX_CREATE,.directory=r.parent->entry.first,.name=r.name,.attr=FAT_ATTR_DIR,.entry=&n->entry});
-    if (err) { node_forget(n); return px_error(err); }
+    if (err) { creator_finish(&creator, 0, s->vfs, true); node_forget(n); return px_error(err); }
     n->linked = true; n->volume = r.parent->volume; n->drive = r.parent->drive;
     n->generation = r.parent->generation;
     px_changed_locked(n); px_changed_locked(r.parent);
-    return 0;
+    return creator_finish(&creator, n, s->vfs, false);
 }
 
 /* FAT integration: a detached regular entry uses index UINT32_MAX. FAT must
@@ -1156,20 +1653,63 @@ int px_drop_locked(struct px_node *n)
     node_forget(n);
     return 0;
 }
-static int remove_inner(struct px_namespace *, struct px_node *, const char *, bool);
-int px_remove_locked(struct px_namespace *s, struct px_node *cwd, const char *path, bool dir)
+/* sec-k03: REMOVE on the child (labels inherit the parent's ownership, and
+ * anchors refuse removal), the OWNER lease, then the creator-owned root
+ * record transaction when the child is such a root entry. An open creator
+ * root entry is EBUSY: its record cannot be retired by a deferred close. */
+static int remove_as(struct px_node *n, const struct security_subject *subject)
 {
-    if (px_validate(path)) return remove_inner(s, cwd, path, dir);
+    int err = px_policy_check_locked(n, subject, POLICY_REMOVE);
+    if (!err) err = lease_check(n, 0, subject);
+    if (err) return err;
+    struct policy_label l;
+    /* Kernel-internal (PX_KERNEL) maintenance is unattributed raw work and
+     * carries no OWNER transaction; a stale record then denies (H02). */
+    if (subject == PX_KERNEL || !creator_root_entry(n, &l)) return remove_node(n);
+    if (n->refs || legacy_open(n) || n->delete_pending) return -EBUSY;
+    struct px_creator c;
+    err = creator_change(n, &l, 0, subject, &c);
+    if (!err && (n->refs || legacy_open(n) || !n->linked)) err = -EBUSY;
+    /* Pin the identity across removal and the record's retirement; the
+     * final drop releases a file's chain exactly as an unlinked close. */
+    px_retain(n);
+    if (!err) err = remove_node(n);
+    int f = creator_change_finish(&c, n, true, err != 0);
+    int drop = px_drop_locked(n);
+    return err ? err : f ? f : drop;
+}
+/* Win32 DeleteFile: authorized intent first; the deletion may be deferred
+ * to the last close of the same node identity (no later path lookup). */
+int px_delete_as_locked(struct px_node *n, const struct security_subject *subject)
+{
+    if (!subject || !n) return -EACCES;
+    struct policy_label l;
+    if (creator_root_entry(n, &l)) return remove_as(n, subject);
+    int err = px_policy_check_locked(n, subject, POLICY_REMOVE);
+    if (!err) err = lease_check(n, 0, subject);
+    if (err) return err;
+    n->delete_pending = true;
+    return px_delete_finish_locked(n);
+}
+static int remove_inner(struct px_namespace *, struct px_node *, const char *, bool, const struct security_subject *);
+int px_remove_locked(struct px_namespace *s, struct px_node *cwd, const char *path, bool dir)
+{ return px_remove_as_locked(s,cwd,path,dir,PX_KERNEL); }
+int px_remove_as_locked(struct px_namespace *s, struct px_node *cwd, const char *path, bool dir,
+                        const struct security_subject *subject)
+{
+    if (!subject) return -EACCES;
+    if (px_validate(path)) return remove_inner(s, cwd, path, dir, subject);
     uint32_t turn; int err = px_error(vfs_turn_take_locked(s->vfs, path_drives(s, cwd, path), &turn));
-    if (!err) err = remove_inner(s, cwd, path, dir);
+    if (!err) err = remove_inner(s, cwd, path, dir, subject);
     vfs_turn_drop_locked(s->vfs, turn);
     return err;
 }
-static int remove_inner(struct px_namespace *s, struct px_node *cwd, const char *path, bool dir)
+static int remove_inner(struct px_namespace *s, struct px_node *cwd, const char *path, bool dir,
+                        const struct security_subject *subject)
 {
     vfs_tag_locked(s->vfs,"unlink");
     vfs_site_locked(s->vfs,"native");
-    struct px_path r; int err = px_resolve_locked(s, cwd, path, false, &r);
+    struct px_path r; int err = px_resolve_as_locked(s, cwd, path, false, subject, &r);
     if (err) return err;
     if (r.node->ro || px_write_denied(r.node)) return -EROFS;
     if (dir && r.dot) return -EINVAL;
@@ -1182,7 +1722,7 @@ static int remove_inner(struct px_namespace *s, struct px_node *cwd, const char 
         err = vfs_directory_pinned(s->vfs, r.node->volume, r.node->entry.first);
         if (err) return err < 0 ? px_error(err) : -EBUSY;
     }
-    return remove_node(r.node);
+    return remove_as(r.node, subject);
 }
 static int empty_directory(struct px_node *n)
 {
@@ -1191,29 +1731,80 @@ static int empty_directory(struct px_node *n)
         if (!path_equal(child.name, ".") && !path_equal(child.name, "..")) return -ENOTEMPTY;
     return err == -FS_ENOENT ? 0 : px_error(err);
 }
-static int rename_inner(struct px_namespace *, struct px_node *, const char *, const char *);
-int px_rename_locked(struct px_namespace *s, struct px_node *cwd, const char *from, const char *to)
+/* sec-k03 rename endpoints: RENAME on the source object, ADD on the actual
+ * destination parent, REMOVE on a replaced object, the destination name's
+ * own rule, both OWNER lease names. Moving across an ownership/policy
+ * boundary is administrator/SYSTEM only and EBUSY while anything in the
+ * moved subtree is open, mapped or a cwd (labels are recomputed from the
+ * destination; no retained handle keeps the old rights). The creator-owned
+ * root entry rename is the explicit OWNER transaction. */
+static int rename_authorize(struct px_path *a, struct px_path *b, const struct security_subject *s,
+                            struct px_creator *c, bool *retire)
 {
-    if (px_validate(from) || px_validate(to)) return rename_inner(s, cwd, from, to);
+    memset(c, 0, sizeof(*c)); *retire = false;
+    int e = px_policy_check_locked(a->node, s, POLICY_RENAME);
+    if (!e) e = px_policy_check_locked(b->parent, s, POLICY_ADD);
+    if (!e && b->node && b->node != a->node) e = px_policy_check_locked(b->node, s, POLICY_REMOVE);
+    if (!e) e = lease_check(a->node, 0, s);
+    if (!e) e = lease_check(b->parent, b->name, s);
+    if (e) return e;
+    struct policy_volume *p = px_policy_of(a->node);
+    struct policy_label sl, pl, dl, root;
+    if (!p || s == PX_KERNEL) return 0;
+    if (b->node && b->node != a->node && creator_root_entry(b->node, &root)) return -EBUSY;
+    bool source_root = creator_root_entry(a->node, &root);
+    if (!policy_check) return -EACCES;
+    if ((e = px_policy_label_locked(a->node, &sl)) ||
+        (e = prospective_label(p, b->parent, b->name, a->node->ino, &pl, &dl))) return e;
+    bool to_root = pl.kind == POLICY_ROOT;
+    bool plain_root = to_root && dl.trie == UINT16_MAX && dl.kind == POLICY_PUBLIC;
+    if (to_root && root_name_reserved(p->owners, b->name)) return -EEXIST;
+    if (source_root) {
+        if (plain_root) return creator_change(a->node, &root, b->name, s, c);
+        if (!subject_admin(s)) return -EACCES;
+        if (subtree_busy(a->node)) return -EBUSY;
+        *retire = true;
+        e = creator_change(a->node, &root, 0, s, c);
+        return !e && subtree_busy(a->node) ? -EBUSY : e;
+    }
+    if (plain_root) { if (!subject_admin(s)) return -EACCES; }
+    else if (dl.kind != pl.kind || dl.anchor) {
+        e = policy_check(p, &dl, s, POLICY_WRITE | POLICY_ADD);
+        if (e) return e == -ESRCH ? -EACCES : e;
+    }
+    if (sl.kind == dl.kind && sl.uid == dl.uid && sl.owner_key == dl.owner_key) return 0;
+    if (!subject_admin(s)) return -EACCES;
+    return subtree_busy(a->node) ? -EBUSY : 0;
+}
+static int rename_inner(struct px_namespace *, struct px_node *, const char *, const char *, const struct security_subject *);
+static int rename_commit(struct px_namespace *, struct px_path *, struct px_path *);
+int px_rename_locked(struct px_namespace *s, struct px_node *cwd, const char *from, const char *to)
+{ return px_rename_as_locked(s,cwd,from,to,PX_KERNEL); }
+int px_rename_as_locked(struct px_namespace *s, struct px_node *cwd, const char *from, const char *to,
+                        const struct security_subject *subject)
+{
+    if (!subject) return -EACCES;
+    if (px_validate(from) || px_validate(to)) return rename_inner(s, cwd, from, to, subject);
     uint32_t turn; int err = px_error(vfs_turn_take_locked(s->vfs, path_drives(s, cwd, from) | path_drives(s, cwd, to), &turn));
-    if (!err) err = rename_inner(s, cwd, from, to);
+    if (!err) err = rename_inner(s, cwd, from, to, subject);
     vfs_turn_drop_locked(s->vfs, turn);
     return err;
 }
-static int rename_inner(struct px_namespace *s, struct px_node *cwd, const char *from, const char *to)
+static int rename_inner(struct px_namespace *s, struct px_node *cwd, const char *from, const char *to,
+                        const struct security_subject *subject)
 {
     vfs_tag_locked(s->vfs,"rename");
     vfs_site_locked(s->vfs,"native");
     int valid=px_validate(from); if (!valid) valid=px_validate(to); if (valid) return valid;
     reserve_paths(s,cwd,from,to);
     struct px_path a, b;
-    int err = px_resolve_locked(s, cwd, from, false, &a);
+    int err = px_resolve_as_locked(s, cwd, from, false, subject, &a);
     if (!err) {
         /* Destination lookup drops namespace while fetching cold metadata.
          * Keep the already-resolved source alive and reject a changed view. */
         px_retain(a.node); px_retain(a.parent);
         uint64_t sequence=a.node->volume ? a.node->volume->mutation_sequence : 0;
-        err=px_resolve_locked(s,cwd,to,true,&b);
+        err=px_resolve_as_locked(s,cwd,to,true,subject,&b);
         if (!err && a.node->volume && a.node->volume->mutation_sequence!=sequence) err=-EAGAIN;
         px_release(a.parent); px_release(a.node);
     }
@@ -1247,6 +1838,18 @@ static int rename_inner(struct px_namespace *s, struct px_node *cwd, const char 
     }
     if (a.node->volume->readonly) return -EROFS;
     if ((a.node->entry.attr & FAT_ATTR_RO) || (b.node && (b.node->entry.attr & FAT_ATTR_RO))) return -EACCES;
+    struct px_creator creator; bool retire;
+    if ((err = rename_authorize(&a, &b, subject, &creator, &retire))) {
+        creator_change_finish(&creator, a.node, retire, true);
+        return err;
+    }
+    err = rename_commit(s, &a, &b);
+    int finish = creator_change_finish(&creator, a.node, retire, err != 0);
+    return err ? err : finish;
+}
+static int rename_commit(struct px_namespace *s, struct px_path *pa, struct px_path *pb)
+{
+    struct px_path a = *pa, b = *pb; int err;
     legacy_open(a.node); /* preserve the legacy node across a new owning-entry index */
     struct px_node *parent = a.node->parent;
     if (b.node && b.node != a.node) {

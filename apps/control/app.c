@@ -28,7 +28,7 @@ enum {
 enum { C_REPEAT_DELAY=1500, C_REPEAT_SPEED, C_BLINK, C_SWAP, C_TRAILS,
        C_WHEEL, C_POINTER, C_LAYOUT_SWITCH, C_DOUBLE_TEST };
 static const char *const page_names[CP_PAGES] = {"display", "mouse", "keyboard", "sounds", "datetime", "system", "devices", "drivers", "network", "power", "adapter", "fonts", "autoplay", "programs", "joystick", "multimedia", "users", "passwords", "regional", "internet", "addhw", "access", "taskbar"};
-static const char *const page_labels[CP_PAGES] = {"Display Properties", "Mouse", "Keyboard", "Sounds and Audio", "Date and Time", "System", "System", "System", "Network", "Power", "Display Properties", "Display Properties", "Storage and removable devices", "Add/Remove Programs", "Game controllers", "Multimedia", "Users", "Passwords", "Regional Settings", "Internet Properties", "Add New Hardware", "Accessibility Options", "Taskbar & Start Menu"};
+static const char *const page_labels[CP_PAGES] = {"Display Properties", "Mouse", "Keyboard", "Sounds and Audio", "Date and Time", "System", "System", "System", "Network", "Power", "Display Properties", "Display Properties", "Storage and removable devices", "Add/Remove Programs", "Game controllers", "Multimedia", "User Accounts", "User Accounts", "Regional Settings", "Internet Properties", "Add New Hardware", "Accessibility Options", "Taskbar & Start Menu"};
 static int wallpaper_path(const char *path)
 {
     if (!path || path[0]!='/' || strstr(path,"/../") || strstr(path,"/./")) return 0;
@@ -80,6 +80,7 @@ static void list_style(struct du_widget *w, const char *title);
 #include "game_properties.inc"
 #include "joystick.inc"
 #include "users.inc"
+#include "accounts.inc"   /* sec-user-04: User Accounts over the account service */
 static const char *class_icon(unsigned k);
 static const char *product(struct cp_app *a, const struct ciuki_device_record *d, char *resolved, size_t size);
 static void list_style(struct du_widget *w, const char *title);
@@ -99,6 +100,30 @@ static int load(struct cp_app *a, struct ciuki_settings *out)
     cfg_defaults(out);
     if (!result) cfg_parse(out,buffer,n);
     if (!result) a->cfg_loaded=1;
+    return 0;
+}
+/* sec-user-04: a Standard user or Guest removes only programs installed in his
+ * own profile; all-users entries stay visible, their Remove disabled with the
+ * reason (contract 7.1; the kernel refuses the machine trees anyway). */
+static int uninstall_locked(const struct cp_app *a, const struct desk_uninstall_entry *r)
+{
+    if (!a->machine_locked) return 0;
+    const char *profile=getenv("USERPROFILE");
+    size_t n=profile && !strncmp(profile,"/Windows/Profiles/",18) ? strlen(profile) : 0;
+    return r->kind==DESK_PROGRAM_WIN32 || r->kind==DESK_PROGRAM_GAME || !n || strncmp(r->location,profile,n) ||
+           (r->location[n] && r->location[n]!='/');
+}
+/* sec-user-04: one per-user lock preference (session_prefs.h) saved into the
+ * caller's own desktop.cfg like the other pages; the desktop reloads it. */
+static int secure_pref_save(struct cp_app *a, const char *key, int value)
+{
+    static struct ciuki_settings now; static char out[CFG_TEXT_MAX];
+    if (load(a,&now) || desk_secure_store(now.extra,sizeof(now.extra),key,value)) return -1;
+    size_t n=cfg_format(&now,out,sizeof(out));
+    if (!n || !a->host.save || a->host.save(a->host.ctx,out,n)) return -1;
+    a->cfg_loaded=1;
+    if (!strcmp(key,DESK_SECURE_SAVER)) (void)desk_secure_store(a->cfg.extra,sizeof(a->cfg.extra),key,value);
+    if (a->host.apply) (void)a->host.apply(a->host.ctx,DESK_SETTINGS_RELOAD,0,0);
     return 0;
 }
 static int sound_commit(struct cp_app *a, const struct sound_scheme *next)
@@ -947,13 +972,15 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
         if (e->type==DU_EV_SELECT && e->index>=0 && (unsigned)e->index<a->uninstall_count) {
             a->uninstall_selected=(unsigned)e->index;
             struct desk_uninstall_entry *r=&a->uninstall[a->uninstall_selected];
-            du_get(u,983)->disabled=r->no_remove || r->system_component;
+            du_get(u,983)->disabled=r->no_remove || r->system_component || uninstall_locked(a,r);   /* sec-user-04 */
+            text(a,985,uninstall_locked(a,r) ? "You must be an administrator to change this setting." : "Protected components cannot be removed.");
         }
         break;
     case 983:
         if (e->type==DU_EV_ACTIVATE && a->uninstall_selected<a->uninstall_count) {
             struct desk_uninstall_entry *r=&a->uninstall[a->uninstall_selected];
             if(r->no_remove || r->system_component){text(a,C_STATUS,"This system component is protected.");break;}
+            if(uninstall_locked(a,r)){text(a,C_STATUS,"You must be an administrator to change this setting.");break;}   /* sec-user-04 */
             char prompt[512];
             snprintf(prompt,sizeof(prompt),"Remove %s? Its shortcuts will also be removed.%s",r->name,
                 r->kind==DESK_PROGRAM_GAME ? " This bundled game cannot be restored without reinstalling the system." : "");
@@ -1005,7 +1032,8 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
     case 976:
         if(e->type==DU_EV_ACTIVATE && a->host.accel_retry){
             int r=a->host.accel_retry(a->host.ctx);
-            text(a,975,r?"Could not re-arm acceleration; the marker was retained.":"Acceleration will be retried after you restart CiukiOS.");
+            text(a,975,r==-EPERM?"Only administrators can retry acceleration.": /* sec-sysvc2 */
+                       r?"Could not re-arm acceleration; the marker was retained.":"Acceleration will be retried after you restart CiukiOS.");
         }
         break;
     case CP_DISPLAY_TABS_ID:
@@ -1071,7 +1099,10 @@ static void event(struct du_ui *u, const struct du_event *e, void *user)
         }
         break;
     case CP_SAVER_PASSWORD:
-        if (e->type==DU_EV_CHANGE && a->user_loaded && !a->user_busy) {
+        if (e->type==DU_EV_CHANGE && accounts_mode(a)) {   /* sec-user-04 */
+            if (secure_pref_save(a,DESK_SECURE_SAVER,e->index!=0)) text(a,C_STATUS,"The screen saver setting could not be saved.");
+            build(a);
+        } else if (e->type==DU_EV_CHANGE && a->user_loaded && !a->user_busy) {
             user_submit(a,USERS_POLICY); build(a);
         }
         break;
@@ -1995,17 +2026,27 @@ static void build(struct cp_app *a)
             w=add(a,DU_BUTTON,CP_SAVER_KIND,40,202,234,24,names[choice]);
             add(a,DU_BUTTON,CP_SAVER_SETTINGS,286,202,104,24,"Settings...")->disabled=!choice;
             add(a,DU_BUTTON,CP_SAVER_PREVIEW,400,202,104,24,"Preview")->disabled=!choice || !a->host.apply;
+            if (accounts_mode(a)) {
+                /* sec-user-04: per-user "On resume, password protect" (XP
+                 * HKCU ScreenSaverIsSecure); LOGON locks only for an owner
+                 * with a password. */
+                w=add(a,DU_CHECKBOX,CP_SAVER_PASSWORD,40,232,250,22,"On resume, password protect");
+                w->value=desk_secure_pref(a->cfg.extra,DESK_SECURE_SAVER);
+                add(a,DU_BUTTON,CP_SAVER_CHANGE,400,232,104,22,"Password...");
+            } else {
             w=add(a,DU_CHECKBOX,CP_SAVER_PASSWORD,40,232,210,22,"Password protected");
             w->value=!!(a->users.flags&USERS_LOCK); w->disabled=!a->user_loaded || a->user_busy || !a->host.user_begin;
             add(a,DU_BUTTON,CP_SAVER_CHANGE,400,232,104,22,"Change...")->disabled=!a->host.user_begin;
             if (!a->user_loaded && !a->user_busy && a->host.user_begin) user_submit(a,USERS_READ);
+            }
             add(a,DU_LABEL,1977,40,266,42,18,"&Wait:");
             char wait[16]; snprintf(wait,sizeof(wait),"%d",a->cfg.saver_seconds/60);
             w=add(a,DU_EDIT,CP_SAVER_WAIT,94,262,50,24,wait); w->disabled=!choice; w->edit_up_down=1;
             add(a,DU_BUTTON,CP_SAVER_UP,144,262,20,12,"+")->disabled=!choice;
             add(a,DU_BUTTON,CP_SAVER_DOWN,144,274,20,12,"-")->disabled=!choice;
             add(a,DU_LABEL,1978,174,266,90,16,"minutes");
-            add(a,DU_LABEL,1976,40,288,460,14,"Uses the named profile password; change it in Passwords.");
+            add(a,DU_LABEL,1976,40,288,460,14,accounts_mode(a) ? "Uses your account password; without one the saver only hides the screen." :
+                                                             "Uses the named profile password; change it in Passwords.");
             add(a,DU_GROUP,1975,24,316,CP_WIDTH-48,42,"Energy saving features of monitor");
             add(a,DU_LABEL,1974,40,336,338,16,"Configure monitor power saving.");
             add(a,DU_BUTTON,CP_SAVER_POWER,400,330,104,24,"Settings...")->disabled=!a->host.open_applet;
@@ -2187,10 +2228,13 @@ static void build(struct cp_app *a)
         w->anchors=DU_ANCHOR_GROW_X|DU_ANCHOR_GROW_Y;
         du_set_text(w,count<0 ? "Program inventory unavailable. Refresh to try again." : "No programs are registered.");
         add(a,DU_BUTTON,983,24,316,100,24,"Remove")->disabled=!a->uninstall_count ||
-            (!a->host.program_remove && !a->host.uninstall_run) || a->uninstall[0].no_remove || a->uninstall[0].system_component;
+            (!a->host.program_remove && !a->host.uninstall_run) || a->uninstall[0].no_remove || a->uninstall[0].system_component ||
+            uninstall_locked(a,&a->uninstall[0]);   /* sec-user-04 */
         add(a,DU_BUTTON,984,136,316,96,24,"Refresh");
         add(a,DU_BUTTON,986,244,316,100,24,"Install")->disabled=!a->host.program_install;
-        add(a,DU_LABEL,985,24,350,508,16,a->uninstall_count && a->uninstall[0].inventory_more ? "More programs exist. Remove entries and refresh to see more." : "Protected components cannot be removed.");
+        add(a,DU_LABEL,985,24,350,508,16,a->uninstall_count && a->uninstall[0].inventory_more ? "More programs exist. Remove entries and refresh to see more." :
+            a->uninstall_count && uninstall_locked(a,&a->uninstall[0]) ? "You must be an administrator to change this setting." :
+            "Protected components cannot be removed.");   /* sec-user-04 */
     } else if (a->page==CP_AUTOPLAY) {
         static const char *const actions[]={"Open folder to view files","Play music","View pictures","Run program","Do nothing"};
         int count=a->host.autoplay_list ? a->host.autoplay_list(a->host.ctx,a->autoplay,AP_PREFS) : -1;
@@ -2249,6 +2293,10 @@ void cp_open(struct cp_app *a, int page)
     }
     user_wipe(a);
     if (page==CP_USERS || page==CP_PASSWORDS) a->user_loaded=0;
+    /* sec-user-04: secrets never survive a page change; Passwords opens the own-password task. */
+    accounts_wipe(a);
+    if (page==CP_USERS || page==CP_PASSWORDS) { a->account_loaded=0; a->account_task=0; a->account_note[0]=0; a->account_password_page=page==CP_PASSWORDS; }
+    a->machine_locked=a->host.self_admin && !a->host.self_admin(a->host.ctx);
     if (a->game_save) { game_note(a,"Waiting for game properties to finish saving...");return; }
     if (a->mode_state==CP_MODE_SAVE) { text(a,C_STATUS,"Waiting for display settings to finish saving..."); return; }
     if (a->display_session && page != CP_DISPLAY && page != CP_ADAPTER && page != CP_FONTS && !cp_display_leave(a)) {

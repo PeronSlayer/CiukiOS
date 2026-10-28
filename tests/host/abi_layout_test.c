@@ -11,6 +11,8 @@ _Static_assert(sizeof(((struct ciuki_security_link *)0)->reserved)==8,"ciuki_sec
 #include <ciuki/bootstat.h>
 #include <ciuki/w32_core.h>
 #include <ciuki/w32_transport.h>
+/* sec-k06: additive token kind; transport reuses the existing object record. */
+_Static_assert(W32_OBJ_TOKEN == 15, "sec-k06 query-token object kind");
 _Static_assert(W32_MSG_INPUT_IDLE == 13u, "fx-q3hang input-idle query action");
 _Static_assert(W32_S_LAUNCH_FEEDBACK == 14, "fx-launchfb desktop query");
 _Static_assert(W32_S_LAUNCH_IDLE == 15, "fx-launchfb GetMessage completion");
@@ -212,7 +214,7 @@ _Static_assert(SETUP_ERASED_MAX==16u,"Setup preview capacity");
 #if defined(__i386__)
 _Static_assert(sizeof(struct setup_erased_partition)==32,"Setup erased record");
 _Static_assert(_Alignof(struct setup_erased_partition)==4,"Setup erased alignment");
-_Static_assert(sizeof(struct setup_plan)==1204,"Setup plan version 2");
+_Static_assert(sizeof(struct setup_plan)==1208,"Setup plan version 2 (sec-user-02 provisioning seed in the answers)");
 #define SETUP_OFFSET(field, expected) _Static_assert(__builtin_offsetof(struct setup_plan,field)==expected,"Setup plan " #field)
 SETUP_OFFSET(version,0);
 SETUP_OFFSET(disk,4);
@@ -228,8 +230,8 @@ SETUP_OFFSET(reserve_bytes,668);
 SETUP_OFFSET(free_after_bytes,676);
 SETUP_OFFSET(components,684);
 SETUP_OFFSET(answers,688);
-SETUP_OFFSET(source_image_sha,1072);
-SETUP_OFFSET(source_iso_sha,1137);
+SETUP_OFFSET(source_image_sha,1076);
+SETUP_OFFSET(source_iso_sha,1141);
 _Static_assert(__builtin_offsetof(struct setup_erased_partition,type)==0,"erased type");
 _Static_assert(__builtin_offsetof(struct setup_erased_partition,start)==4,"erased start");
 _Static_assert(__builtin_offsetof(struct setup_erased_partition,count)==12,"erased count");
@@ -787,6 +789,107 @@ static const struct expectation expectations[] = {
     {"offsetof.ciuki_scandisk.elapsed_ms", __builtin_offsetof(struct ciuki_scandisk, elapsed_ms), 116u},
     {"offsetof.ciuki_scandisk.found", __builtin_offsetof(struct ciuki_scandisk, found), 120u},
     {"offsetof.ciuki_scandisk.first_problem", __builtin_offsetof(struct ciuki_scandisk, first_problem), 136u},
+    /* sec-sysvc: SYSTEM services of call 99 (boot configuration, logs, driver packs). */
+    {"constant.CIUKI_RECOVERY_BOOT_CONFIG", CIUKI_RECOVERY_BOOT_CONFIG, 5u},
+    {"constant.CIUKI_RECOVERY_LOG", CIUKI_RECOVERY_LOG, 6u},
+    {"constant.CIUKI_RECOVERY_DRIVER_PACK", CIUKI_RECOVERY_DRIVER_PACK, 7u},
+    {"constant.CIUKI_RECOVERY_SFC_RESTORE", CIUKI_RECOVERY_SFC_RESTORE, 8u},
+    {"constant.CIUKI_SFC_RESTORE_VERSION", CIUKI_SFC_RESTORE_VERSION, 1u},
+    {"constant.CIUKI_BOOT_CONFIG_VERSION", CIUKI_BOOT_CONFIG_VERSION, 1u},
+    {"constant.CIUKI_BOOT_CONFIG_SET", CIUKI_BOOT_CONFIG_SET, 1u},
+    {"constant.CIUKI_BOOT_CONFIG_MAX", CIUKI_BOOT_CONFIG_MAX, 127u},
+    {"constant.CIUKI_SYSTEM_LOG_VERSION", CIUKI_SYSTEM_LOG_VERSION, 1u},
+    {"constant.CIUKI_SYSTEM_LOG_LIST", CIUKI_SYSTEM_LOG_LIST, 1u},
+    {"constant.CIUKI_SYSTEM_LOG_READ", CIUKI_SYSTEM_LOG_READ, 2u},
+    {"constant.CIUKI_SYSTEM_LOG_APPEND", CIUKI_SYSTEM_LOG_APPEND, 3u},
+    {"constant.CIUKI_SYSTEM_LOG_REPLACE", CIUKI_SYSTEM_LOG_REPLACE, 4u},
+    {"constant.CIUKI_SYSTEM_LOG_MACHINE", CIUKI_SYSTEM_LOG_MACHINE, 1u},
+    {"constant.CIUKI_SYSTEM_LOG_USER", CIUKI_SYSTEM_LOG_USER, 2u},
+    {"constant.CIUKI_SYSTEM_LOG_NAME_MAX", CIUKI_SYSTEM_LOG_NAME_MAX, 48u},
+    {"constant.CIUKI_SYSTEM_LOG_DATA_MAX", CIUKI_SYSTEM_LOG_DATA_MAX, 65536u},
+    {"constant.CIUKI_SYSTEM_LOG_LIMIT", CIUKI_SYSTEM_LOG_LIMIT, 65536u},
+    {"constant.CIUKI_SYSTEM_LOG_LIMIT_MAX", CIUKI_SYSTEM_LOG_LIMIT_MAX, 1048576u},
+    {"constant.CIUKI_DRIVER_PACK_JOB_VERSION", CIUKI_DRIVER_PACK_JOB_VERSION, 1u},
+    {"constant.CIUKI_DRIVER_PACK_INSTALL", CIUKI_DRIVER_PACK_INSTALL, 1u},
+    {"constant.CIUKI_DRIVER_PACK_REMOVE", CIUKI_DRIVER_PACK_REMOVE, 2u},
+    {"constant.CIUKI_DRIVER_PACK_MANIFEST_BYTES", CIUKI_DRIVER_PACK_MANIFEST_BYTES, 48088u},
+    {"constant.CIUKI_DRIVER_PACK_SOURCE_BYTES", CIUKI_DRIVER_PACK_SOURCE_BYTES, 192u},
+    {"constant.CIUKI_DRIVER_PACK_FILES", CIUKI_DRIVER_PACK_FILES, 32u},
+    {"sizeof.ciuki_boot_config", sizeof(struct ciuki_boot_config), 144u},
+    {"alignof.ciuki_boot_config", _Alignof(struct ciuki_boot_config), 4u},
+    {"offsetof.ciuki_boot_config.version", __builtin_offsetof(struct ciuki_boot_config, version), 0u},
+    {"offsetof.ciuki_boot_config.size", __builtin_offsetof(struct ciuki_boot_config, size), 4u},
+    {"offsetof.ciuki_boot_config.action", __builtin_offsetof(struct ciuki_boot_config, action), 8u},
+    {"offsetof.ciuki_boot_config.length", __builtin_offsetof(struct ciuki_boot_config, length), 12u},
+    {"offsetof.ciuki_boot_config.text", __builtin_offsetof(struct ciuki_boot_config, text), 16u},
+    {"sizeof.ciuki_system_log", sizeof(struct ciuki_system_log), 96u},
+    {"alignof.ciuki_system_log", _Alignof(struct ciuki_system_log), 4u},
+    {"offsetof.ciuki_system_log.version", __builtin_offsetof(struct ciuki_system_log, version), 0u},
+    {"offsetof.ciuki_system_log.size", __builtin_offsetof(struct ciuki_system_log, size), 4u},
+    {"offsetof.ciuki_system_log.action", __builtin_offsetof(struct ciuki_system_log, action), 8u},
+    {"offsetof.ciuki_system_log.scope", __builtin_offsetof(struct ciuki_system_log, scope), 12u},
+    {"offsetof.ciuki_system_log.index", __builtin_offsetof(struct ciuki_system_log, index), 16u},
+    {"offsetof.ciuki_system_log.offset", __builtin_offsetof(struct ciuki_system_log, offset), 20u},
+    {"offsetof.ciuki_system_log.buffer", __builtin_offsetof(struct ciuki_system_log, buffer), 24u},
+    {"offsetof.ciuki_system_log.bytes", __builtin_offsetof(struct ciuki_system_log, bytes), 28u},
+    {"offsetof.ciuki_system_log.total", __builtin_offsetof(struct ciuki_system_log, total), 32u},
+    {"offsetof.ciuki_system_log.limit", __builtin_offsetof(struct ciuki_system_log, limit), 36u},
+    {"offsetof.ciuki_system_log.reserved", __builtin_offsetof(struct ciuki_system_log, reserved), 40u},
+    {"offsetof.ciuki_system_log.name", __builtin_offsetof(struct ciuki_system_log, name), 48u},
+    {"sizeof.ciuki_driver_pack_job", sizeof(struct ciuki_driver_pack_job), 480u},
+    {"alignof.ciuki_driver_pack_job", _Alignof(struct ciuki_driver_pack_job), 4u},
+    {"offsetof.ciuki_driver_pack_job.version", __builtin_offsetof(struct ciuki_driver_pack_job, version), 0u},
+    {"offsetof.ciuki_driver_pack_job.size", __builtin_offsetof(struct ciuki_driver_pack_job, size), 4u},
+    {"offsetof.ciuki_driver_pack_job.action", __builtin_offsetof(struct ciuki_driver_pack_job, action), 8u},
+    {"offsetof.ciuki_driver_pack_job.manifest", __builtin_offsetof(struct ciuki_driver_pack_job, manifest), 12u},
+    {"offsetof.ciuki_driver_pack_job.manifest_bytes", __builtin_offsetof(struct ciuki_driver_pack_job, manifest_bytes), 16u},
+    {"offsetof.ciuki_driver_pack_job.sources", __builtin_offsetof(struct ciuki_driver_pack_job, sources), 20u},
+    {"offsetof.ciuki_driver_pack_job.source_bytes", __builtin_offsetof(struct ciuki_driver_pack_job, source_bytes), 24u},
+    {"offsetof.ciuki_driver_pack_job.reserved", __builtin_offsetof(struct ciuki_driver_pack_job, reserved), 28u},
+    {"offsetof.ciuki_driver_pack_job.bus", __builtin_offsetof(struct ciuki_driver_pack_job, bus), 32u},
+    {"offsetof.ciuki_driver_pack_job.slot", __builtin_offsetof(struct ciuki_driver_pack_job, slot), 36u},
+    {"offsetof.ciuki_driver_pack_job.function", __builtin_offsetof(struct ciuki_driver_pack_job, function), 40u},
+    {"offsetof.ciuki_driver_pack_job.vendor", __builtin_offsetof(struct ciuki_driver_pack_job, vendor), 44u},
+    {"offsetof.ciuki_driver_pack_job.device", __builtin_offsetof(struct ciuki_driver_pack_job, device), 48u},
+    {"offsetof.ciuki_driver_pack_job.sub_vendor", __builtin_offsetof(struct ciuki_driver_pack_job, sub_vendor), 52u},
+    {"offsetof.ciuki_driver_pack_job.sub_device", __builtin_offsetof(struct ciuki_driver_pack_job, sub_device), 56u},
+    {"offsetof.ciuki_driver_pack_job.revision", __builtin_offsetof(struct ciuki_driver_pack_job, revision), 60u},
+    {"offsetof.ciuki_driver_pack_job.root", __builtin_offsetof(struct ciuki_driver_pack_job, root), 64u},
+    {"offsetof.ciuki_driver_pack_job.reason", __builtin_offsetof(struct ciuki_driver_pack_job, reason), 320u},
+    {"sizeof.ciuki_sfc_restore", sizeof(struct ciuki_sfc_restore), 432u},
+    {"alignof.ciuki_sfc_restore", _Alignof(struct ciuki_sfc_restore), 4u},
+    {"offsetof.ciuki_sfc_restore.version", __builtin_offsetof(struct ciuki_sfc_restore, version), 0u},
+    {"offsetof.ciuki_sfc_restore.size", __builtin_offsetof(struct ciuki_sfc_restore, size), 4u},
+    {"offsetof.ciuki_sfc_restore.reserved", __builtin_offsetof(struct ciuki_sfc_restore, reserved), 8u},
+    {"offsetof.ciuki_sfc_restore.path", __builtin_offsetof(struct ciuki_sfc_restore, path), 16u},
+    {"offsetof.ciuki_sfc_restore.source", __builtin_offsetof(struct ciuki_sfc_restore, source), 176u},
+    /* sec-sysvc2: SYSTEM jobs and sealed boot settings of call 99. */
+    {"constant.CIUKI_RECOVERY_JOB", CIUKI_RECOVERY_JOB, 9u},
+    {"constant.CIUKI_RECOVERY_SETTING", CIUKI_RECOVERY_SETTING, 10u},
+    {"constant.CIUKI_SYSTEM_JOB_VERSION", CIUKI_SYSTEM_JOB_VERSION, 1u},
+    {"constant.CIUKI_SYSTEM_JOB_STARTUP_REPORT", CIUKI_SYSTEM_JOB_STARTUP_REPORT, 1u},
+    {"constant.CIUKI_SYSTEM_SETTING_VERSION", CIUKI_SYSTEM_SETTING_VERSION, 1u},
+    {"constant.CIUKI_SYSTEM_SETTING_SET", CIUKI_SYSTEM_SETTING_SET, 1u},
+    {"constant.CIUKI_SYSTEM_SETTING_HWPROFILES", CIUKI_SYSTEM_SETTING_HWPROFILES, 1u},
+    {"constant.CIUKI_SYSTEM_SETTING_PERFORMANCE", CIUKI_SYSTEM_SETTING_PERFORMANCE, 2u},
+    {"constant.CIUKI_SYSTEM_SETTING_ACCEL_RETRY", CIUKI_SYSTEM_SETTING_ACCEL_RETRY, 3u},
+    {"constant.CIUKI_SYSTEM_SETTING_MAX", CIUKI_SYSTEM_SETTING_MAX, 24575u},
+    {"sizeof.ciuki_system_job", sizeof(struct ciuki_system_job), 32u},
+    {"alignof.ciuki_system_job", _Alignof(struct ciuki_system_job), 4u},
+    {"offsetof.ciuki_system_job.version", __builtin_offsetof(struct ciuki_system_job, version), 0u},
+    {"offsetof.ciuki_system_job.size", __builtin_offsetof(struct ciuki_system_job, size), 4u},
+    {"offsetof.ciuki_system_job.job", __builtin_offsetof(struct ciuki_system_job, job), 8u},
+    {"offsetof.ciuki_system_job.done", __builtin_offsetof(struct ciuki_system_job, done), 12u},
+    {"offsetof.ciuki_system_job.reserved", __builtin_offsetof(struct ciuki_system_job, reserved), 16u},
+    {"sizeof.ciuki_system_setting", sizeof(struct ciuki_system_setting), 32u},
+    {"alignof.ciuki_system_setting", _Alignof(struct ciuki_system_setting), 4u},
+    {"offsetof.ciuki_system_setting.version", __builtin_offsetof(struct ciuki_system_setting, version), 0u},
+    {"offsetof.ciuki_system_setting.size", __builtin_offsetof(struct ciuki_system_setting, size), 4u},
+    {"offsetof.ciuki_system_setting.action", __builtin_offsetof(struct ciuki_system_setting, action), 8u},
+    {"offsetof.ciuki_system_setting.setting", __builtin_offsetof(struct ciuki_system_setting, setting), 12u},
+    {"offsetof.ciuki_system_setting.buffer", __builtin_offsetof(struct ciuki_system_setting, buffer), 16u},
+    {"offsetof.ciuki_system_setting.length", __builtin_offsetof(struct ciuki_system_setting, length), 20u},
+    {"offsetof.ciuki_system_setting.reserved", __builtin_offsetof(struct ciuki_system_setting, reserved), 24u},
     {"sizeof.ciuki_file_info", sizeof(struct ciuki_file_info), 88u},
     {"alignof.ciuki_file_info", _Alignof(struct ciuki_file_info), 4u},
     {"offsetof.ciuki_file_info.version", __builtin_offsetof(struct ciuki_file_info, version), 0u},
@@ -3113,6 +3216,8 @@ static const struct expectation expectations[] = {
     {"constant.CIUKI_INPUT_MOTION", (uint32_t)(CIUKI_INPUT_MOTION), 3u},
     {"constant.CIUKI_INPUT_BUTTON", (uint32_t)(CIUKI_INPUT_BUTTON), 4u},
     {"constant.CIUKI_INPUT_WHEEL", (uint32_t)(CIUKI_INPUT_WHEEL), 6u},
+    /* sec-k07 */
+    {"constant.CIUKI_INPUT_ATTENTION", (uint32_t)(CIUKI_INPUT_ATTENTION), 13u},
     {"constant.CIUKI_BUS_USB", (uint32_t)(CIUKI_BUS_USB), 3u},
     {"constant.CIUKI_INPUT_RESYNC", (uint32_t)(CIUKI_INPUT_RESYNC), 5u},
     {"constant.CIUKI_KEY_VALUE_UP", (uint32_t)(CIUKI_KEY_VALUE_UP), 0u},

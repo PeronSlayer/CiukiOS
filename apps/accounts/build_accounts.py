@@ -16,8 +16,11 @@ SDK = ROOT / 'build/tools/ciuki-sdk'
 IMAGE_PATH = '/System/Services/accounts'
 STORE_DIRECTORY = '/System/Security'
 SERVICE_SOURCES = ('crypto.c', 'codec.c', 'owner.c', 'bootstrap.c', 'protocol.c', 'store.c', 'service.c', 'migration.c',
-                   'persist.c', 'results.c', 'auth.c', 'enrollment.c', 'manifest.c', 'checkpoint.c', 'logon.c')
-PRODUCTION_SOURCES = ('kernel_adapter.c', 'server.c', 'kernel_sys_ciuki.c', 'owner_interim.c', 'storage_posix.c', 'main.c')
+                   'persist.c', 'results.c', 'auth.c', 'enrollment.c', 'manifest.c', 'checkpoint.c', 'logon.c',
+                   'firstboot.c')  # sec-user-02 first-boot adapter
+PRODUCTION_SOURCES = ('kernel_adapter.c', 'server.c', 'kernel_sys_ciuki.c', 'storage_posix.c', 'main.c',
+                      'firstboot_posix.c',
+                      'owner_kernel.c', 'tree_posix.c')  # sec-own: kernel OWNER adapter replaces owner_interim.c
 SHARED_SOURCES = ('apps/desktop/users.c', 'src/kernel/lib/sha256.c', 'sdk/private/accounts_link.c')
 CFLAGS = ['-O2', '-Wall', '-Wextra', '-Werror']
 
@@ -74,7 +77,7 @@ def build():
     subprocess.run(command, check=True, cwd=ROOT)
     evidence = module('accounts_elf_build', ROOT / 'sdk/tests/check_sdk.py').inspect(OUT / 'accounts')
     record = {'inputs': expected, 'files': {'accounts': digest(OUT / 'accounts')}, 'elf': evidence,
-              'image_path': IMAGE_PATH, 'store_directory': STORE_DIRECTORY, 'owner_backend': 'interim-refusing',
+              'image_path': IMAGE_PATH, 'store_directory': STORE_DIRECTORY, 'owner_backend': 'kernel-owner',  # sec-own
               'command': command, 'guest_qualification': 'not_run'}
     (OUT / 'manifest.json').write_text(json.dumps(record, indent=2, sort_keys=True) + '\n')
     return record

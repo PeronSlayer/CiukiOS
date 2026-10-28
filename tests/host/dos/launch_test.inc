@@ -7,7 +7,7 @@ static void test_kernel_choice(void)
     struct dosvm_config config={.base=base,.game=1};
     struct dosvm *v=0;
     CHECK(!dosvm_create(&config,&v));
-    char first[128],hash[65]; strcpy(first,v->overlay_path); strcpy(hash,v->base_sha256);
+    char first[sizeof(v->overlay_path)],hash[65]; strcpy(first,v->overlay_path); strcpy(hash,v->base_sha256);
     CHECK(strstr(first,"G1K0") && strstr(first,hash) && !v->disable_file_bridge);
     destroy(v,false); empty();
     config.game=2; CHECK(!dosvm_create(&config,&v));

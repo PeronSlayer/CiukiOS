@@ -161,6 +161,25 @@ bind and Files access, or the precise raw operands of the remaining failure.
 
 ## fx-emptydrive: drives without media keep their letters
 
+Security integration correction (research checked 2026-10-28):
+
+- [FindFirstFileA](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-findfirstfilea)
+  requires directory access and returns no search handle on failure.
+- [System error codes](https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-)
+  distinguish ERROR_NOT_READY (21) from ERROR_FILE_NOT_FOUND (2).
+- The Resource Kit chapter and volume-information documentation cited below
+  distinguish a reserved removable-drive letter from its available medium.
+
+The sec-k03 `vfs_resolve_subject_locked` adapter returned ENOENT for every
+unmounted letter before its subject-aware directory walk. This changed
+Win32 FindFirstFile on an empty CD-ROM from error 21 to error 2. Preserve
+ENXIO for an owned empty slot at that adapter boundary, before file access
+checks; unknown letters remain ENOENT. Mounted volumes still use the same
+subject-aware resolver and policy checks. Exercise both administrator and
+Standard credentials through the production Win32/VFS path. This ordering
+implements the sec-integfix directive; the cited API pages document the
+error/handle contracts, not a general Windows access-check precedence rule.
+
 Research checked 2026-10-27 before implementation:
 
 - Microsoft Windows 98 Resource Kit (owner's media, `build/rskt/wrkc10_5.htm`),

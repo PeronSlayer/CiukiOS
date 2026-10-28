@@ -68,7 +68,13 @@ struct storage_disk {
     bool lba48;
     struct storage_lease lease;
 };
-struct storage_caller { uint32_t pid; bool setup_capability; };
+/* Kernel-created snapshot of the ACTUAL issuer, never user request fields. */
+struct storage_caller {
+    uint32_t pid;
+    bool setup_capability;
+    bool administrator;
+    bool system;
+};
 struct storage {
     struct block_cache cache;
     struct vfs vfs;

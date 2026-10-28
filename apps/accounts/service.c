@@ -111,7 +111,12 @@ static int admin(const struct acct_subject *subject)
     return 0;
 }
 static int authentication(unsigned op)
-{ return op == ACCT_AUTH || op == ACCT_UNLOCK || op == ACCT_ENROLL_VERIFY || op == ACCT_AUTOLOGON || op == ACCT_CHALLENGE || op == ACCT_ENROLL_PLAN; }
+{ return op == ACCT_AUTH || op == ACCT_UNLOCK || op == ACCT_ENROLL_VERIFY || op == ACCT_AUTOLOGON || op == ACCT_CHALLENGE || op == ACCT_ENROLL_PLAN ||
+         op == ACCT_ENROLL_SOURCE; /* sec-user-04: LOGON-only route, no secret */ }
+/* sec-user-04: the read-only source list is LOGON-only like authentication
+ * but never waits for the failed-authentication retry delay. */
+static int throttled(unsigned op)
+{ return (authentication(op) && op != ACCT_ENROLL_SOURCE) || op == ACCT_PASSWORD; }
 static uint32_t retry_ms(struct acct_service *s)
 {
     uint64_t now = s->store.kernel.monotonic_ms(s->store.kernel.ctx);
@@ -126,7 +131,7 @@ int acct_submit(struct acct_service *s, int endpoint, struct acct_request *q, si
     if (!q || bytes != sizeof(*q)) return out->error = -EINVAL;
     int e = 0;
     if (!s->leased || s->faulted || (!s->available && !(authentication(q->operation) || q->operation==ACCT_LIST))) e = -EIO;
-    else if (q->operation < ACCT_LIST || q->operation > ACCT_PROFILE ||
+    else if (q->operation < ACCT_LIST || q->operation > ACCT_ENROLL_SOURCE || /* sec-user-04 */
              !memchr(q->name, 0, 32) || !memchr(q->picture, 0, 96) ||
              !acct_password_valid(q->password, 1) || !acct_password_valid(q->confirm, 1) ||
              !acct_password_valid(q->old_password, 1)) e = -EINVAL;
@@ -148,7 +153,7 @@ int acct_submit(struct acct_service *s, int endpoint, struct acct_request *q, si
         if (!try_lock(&s->queue_lock)) e = -EAGAIN;
         else {
             uint32_t retry = retry_ms(s);
-            if ((authentication(q->operation) || q->operation == ACCT_PASSWORD) && retry) {
+            if (throttled(q->operation) && retry) {
                 out->retry_after_ms = retry; e = -EAGAIN;
             } else if (!s->next_ticket) e = -EAGAIN;
             else {
@@ -425,7 +430,7 @@ int acct_work(struct acct_service *s, struct acct_response *out)
     if (!try_lock(&s->queue_lock)) { unlock(&s->worker_lock); return -EAGAIN; }
     if (!s->active.occupied) { unlock(&s->queue_lock); unlock(&s->worker_lock); return 0; }
     uint32_t retry = s->completed ? 0 : retry_ms(s);
-    if (!s->faulted && retry && (authentication(s->active.request.operation) || s->active.request.operation == ACCT_PASSWORD)) {
+    if (!s->faulted && retry && throttled(s->active.request.operation)) {
         out->retry_after_ms = retry;
         unlock(&s->queue_lock); unlock(&s->worker_lock); return -EAGAIN;
     }

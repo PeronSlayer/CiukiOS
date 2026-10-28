@@ -184,6 +184,9 @@ static uint8_t task_fp[CIUKI_THREAD_MAX][512];
 static struct proc_thread *signal_process(struct process *parent, struct process **p)
 {
     struct proc_thread *t = make_process(parent, p);
+    /* Fake interactive admission, retaining the real signal/credential policy. */
+    (*p)->subject->credential=(struct ciuki_credential){.version=1,.size=64,.uid=1000,
+        .session_id=1,.flags=CIUKI_CRED_INTERACTIVE,.primary_gid=545,.group_count=1,.groups={545}};
     t->task->fpu_area = task_fp[t->slot];
     return t;
 }

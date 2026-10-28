@@ -1134,6 +1134,7 @@ void desk_receive(struct desktop *d, int i, const struct ciuki_message *m)
         int32_t result = (c->program != DESK_APP_CONTROL && !taskman_power) || !d->shell ? -EPERM : desk_session_busy(d) ? -EBUSY : 0;
         if (!result && p.request == DESK_SETTINGS_OPEN_POWER && desk_internal_open(d,DESK_INTERNAL_SHUTDOWN)<0) result=-ENOMEM;
         if (!result && p.request==DESK_SETTINGS_SAVER_PREVIEW) result=desk_saver_start(d,p.values[0]);
+        if (!result && p.request==DESK_SETTINGS_PASSWORD_SET) result=desk_session_password_set(d);   /* sec-user-04 */
         if (!result && p.request == DESK_SETTINGS_RELOAD) { d->sh.want_reload |= 1; d->sh.user_reload=1; }
         if (!result && p.request == DESK_SETTINGS_PROGRAMS) {d->sh.want_reload |= 3;d->sh.want_programs=1;d->v3_links_next=0;d->v3_links_force|=DESK_LINKS_SCAN|DESK_LINKS_GAMES;}
         if (!result && (p.request == DESK_SETTINGS_DISPLAY || p.request == DESK_SETTINGS_DISPLAY_PREVIEW)) {
@@ -1268,7 +1269,26 @@ static int saver_wake(struct desktop *d)
 {
     /* Gate first: even a DPMS wake must never scan out the old desktop.
      * Suppression can also terminate a protected saver without input. */
-    if ((d->saver_active && !d->saver_preview) || (d->monitor_off && !d->saver_preview))
+    int protect=(d->saver_active && !d->saver_preview) || (d->monitor_off && !d->saver_preview);
+    if (d->logon_session) {
+        /* sec-user-04: LOGON's trusted gate before the desktop is restored.
+         * The pre-DPMS black frame conceals scanout, so the monitor wakes
+         * first (a concealed session may not change DPMS); a failed lock
+         * keeps the saver (fail closed). */
+        if (protect) {
+            if (d->monitor_off) {
+                int e=d->monitor_power ? d->monitor_power(-1) : -ENOSYS;
+                if (e) return e;
+                d->monitor_off=0; saver_damage(d);
+            }
+            int e=desk_session_saver_lock(d);
+            if (e) {
+                /* A DPMS-only wake has no saver to keep: conceal with the blank one. */
+                if (!d->saver_active) { d->saver_active=1; d->saver_kind=0; d->saver_frame=d->now_ns; saver_damage(d); }
+                return e;
+            }
+        }
+    } else if (protect)
         desk_session_lock(d);
     if (d->monitor_off) {
         /* The pre-DPMS black frame conceals scanout until grants resume. */

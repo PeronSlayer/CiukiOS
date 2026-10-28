@@ -16,7 +16,8 @@ subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror',
     '-fsanitize=address,undefined','-fno-sanitize-recover=undefined',
     '-ffunction-sections','-fdata-sections','-Wl,--gc-sections',
     '-I',str(ROOT/'src/kernel/include'),str(ROOT/'tests/host/net/capability_test.c'),
-    str(ROOT/'src/kernel/proc/supervisor.c'),'-o',str(capability)],check=True)
+    str(ROOT/'src/kernel/proc/supervisor.c'),
+    str(ROOT/'tests/host/security/subject_fixture.c'),'-o',str(capability)],check=True)
 failed=False
 for test in (binary,capability):
     result=subprocess.run([str(test)])

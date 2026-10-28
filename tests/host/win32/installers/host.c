@@ -177,8 +177,19 @@ void host_init(const char *root){
 void host_finish(void){if(registry_live){assert(!wr_flush(&registry));wr_destroy(&registry);registry_live=0;}}
 void host_put(const char *w,const char *s){char p[1400];assert(path(w,p));FILE *f=fopen(p,"wb");assert(f);assert(fwrite(s,1,strlen(s),f)==strlen(s));assert(!fclose(f));}
 
+/* sec-user-05: a profile session's DOS-spelled USERPROFILE (Win32 startup
+ * converts the kernel-generated native value); none without a profile. */
+static char host_userprofile[200];
+DWORD W32API GetEnvironmentVariableA(const char *name,char *out,DWORD cap)
+{
+  if(strcmp(name,"USERPROFILE") || !host_userprofile[0]){error=203;return 0;}
+  DWORD n=(DWORD)strlen(host_userprofile);if(cap<=n)return n+1;
+  memcpy(out,host_userprofile,n+1);return n;
+}
 void host_profile(const char *name,const char *root)
 {
+  snprintf(host_userprofile,sizeof(host_userprofile),"%s%s",*root?"C:":"",root);
+  for(char *c=host_userprofile;*c;c++)if(*c=='/')*c='\\';
   char p[1400];snprintf(p,sizeof(p),"%s%s",hive_directory,root);
   for(char *c=p+1;;c++)if(!*c || *c=='/'){
     char end=*c;*c=0;assert(!mkdir(p,0700) || errno==EEXIST);*c=end;if(!end)break;

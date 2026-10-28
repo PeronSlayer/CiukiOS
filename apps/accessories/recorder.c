@@ -1,6 +1,7 @@
 /* Bounded PCM recorder/editor. SPDX-License-Identifier: MIT */
 #include <unistd.h>
 #include "recorder.h"
+#include "../desktop/profile.h" /* sec-user-04: My Documents is per user */
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -135,7 +136,7 @@ void recorder_event(struct du_ui *u,const struct du_event *e,void *ctx)
     if (e->type==DU_EV_DIALOG) {
         if (e->id==REC_D_CLOSE) {
             if (e->index==1) { a->dirty=0; finish_close(a,1); }
-            else if (e->index==0) du_file_dialog(u,REC_D_SAVE,1,"Save PCM WAV","/Documents","Recording.wav",NULL,NULL);
+            else if (e->index==0) du_file_dialog(u,REC_D_SAVE,1,"Save PCM WAV",profile_home(),"Recording.wav",NULL,NULL);
             else finish_close(a,0);
         } else if (e->id==REC_D_SAVE || e->id==REC_D_OPEN) {
             int error=0;
@@ -161,10 +162,10 @@ void recorder_event(struct du_ui *u,const struct du_event *e,void *ctx)
         case REC_SOURCE:
             a->source^=1; du_set_text(du_get(u,REC_SOURCE),a->source ? "Source: Line In" : "Source: Microphone");
             du_invalidate(u,du_get(u,REC_SOURCE)->box); break;
-        case REC_SAVE: du_file_dialog(u,REC_D_SAVE,1,"Save PCM WAV","/Documents","Recording.wav",NULL,NULL); break;
+        case REC_SAVE: du_file_dialog(u,REC_D_SAVE,1,"Save PCM WAV",profile_home(),"Recording.wav",NULL,NULL); break;
         case REC_OPEN:
             if (a->dirty) strcpy(a->status,"Save the current recording before opening another.");
-            else du_file_dialog(u,REC_D_OPEN,0,"Open PCM WAV (48000 Hz, stereo, 16-bit)","/Documents","",NULL,NULL);
+            else du_file_dialog(u,REC_D_OPEN,0,"Open PCM WAV (48000 Hz, stereo, 16-bit)",profile_home(),"",NULL,NULL);
             break;
         case REC_NEW:
             if (a->dirty) strcpy(a->status,"Save the current recording before starting a new one.");

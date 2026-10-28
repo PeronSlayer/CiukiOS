@@ -234,7 +234,8 @@ class IconStoreTests(unittest.TestCase):
         rows = dict(re.findall(r'item\(m,\s*"([^"]+)",\s*"([a-z-]+)"', shell))
         settings=(ROOT / "apps/desktop/settings_catalog.h").read_text()
         applets=re.findall(r'\{CP_\w+, CP_CAT_\w+, "[^"]+", "([^"]+)", "([a-z-]+)"\}',settings)
-        self.assertEqual(len(applets),19)  # Display, Taskbar, Sounds, Multimedia, Keyboard, Mouse, Game controllers, Accessibility, Date/Time, Regional, Internet, Network, Power, Storage, Add Hardware, Add/Remove Programs, Users, Passwords, System
+        # sec-user-04: Users and Passwords merged into User Accounts (contract 7.1; "passwords" is a launch alias).
+        self.assertEqual(len(applets),18)  # Display, Taskbar, Sounds, Multimedia, Keyboard, Mouse, Game controllers, Accessibility, Date/Time, Regional, Internet, Network, Power, Storage, Add Hardware, Add/Remove Programs, User Accounts, System
         rows.update(applets)
         objects = {"Programs": "menu:programs", "Documents": "menu:documents", "Settings": "menu:settings", "Help": "menu:help",
                    "Run...": "menu:run", "Shut Down...": "menu:shutdown", "Control Panel": "menu:control-panel", "My Documents": "place:home",

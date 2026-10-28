@@ -116,6 +116,17 @@ static const char Q_H[] = "Setup stopped";
 static const char Q_P[] = "Setup is installing from an answer file and stopped because an answer is missing or does not match this computer. Nothing has been written to the disk.";
 static const char RC_H[] = "Rescue console";
 static const char RC_P[] = "Read-only tools: nothing is written to the hard disks. Logs and the hardware report are copied to the first USB drive.";
+static const char RC_REPAIR[] = "Reset the recovery password of an installation\xe2\x80\xa6";
+/* sec-user-02: Passwords page and the confirmed account repair. */
+static const char A_H[] = "Passwords";
+static const char A_P[] = "Choose the password for your account. A password has 8 to 63 characters: letters, digits, spaces and symbols; capitals count.";
+static const char A_R[] = "CiukiAdministrator is the hidden recovery account. Its password lets you sign in to Safe Mode if you forget your own: write it down and keep it safe.";
+static const char A_BOX[] = "Setup never shows a password or writes it to the disk or the log: it stores only a salted hash. The summary says " ST_B "Password set" ST_B ".";
+static const char *const A_LABELS[ST_SECRET_FIELDS] = {"Your password", "Confirm password", "Recovery password", "Confirm password"};
+static const char RP_H[] = "Reset the recovery password";
+static const char RP_P[] = "Use this only when nobody can sign in as an administrator. Setup sets a new password for CiukiAdministrator, the hidden recovery account, on the installation you choose. Then start CiukiOS in Safe Mode, sign in as CiukiAdministrator and reset the other passwords in User Accounts.";
+static const char RP_WARN[] = ST_B "Back up your data first if you can." ST_B " Setup changes only the account files of the chosen installation; no other file is touched and no account is unlocked.";
+static const char RP_NONE[] = "No CiukiOS installation with user accounts was found on the hard disks.";
 
 /* ---- helpers ---- */
 static int para(int font, int w, int lh, const char *s) { return st_text_wrap(NULL, font, (struct du_rect){0, 0, w, 0}, lh, s, 0); }
@@ -181,7 +192,9 @@ const char *st_help(enum st_page p)
     case ST_PAGE_HARDWARE: return "A warning means the device works with a fallback. Setup stops only when the display, ATA disk 0, the CD drive or the disk itself cannot be used. The report can be saved to a USB drive.";
     case ST_PAGE_DISK: return "This Beta installs only on the whole of ATA disk 0: every partition on it is erased. Nothing is written until you choose Install on the summary page.";
     case ST_PAGE_COMPONENTS: return "Select components with Space. The games need the DOS personality. Sizes include the space the FAT32 file system needs.";
-    case ST_PAGE_USER: return "Type your name and a computer name for the LAN (letters, digits and hyphens, up to 15 characters). Use the arrow keys to choose the keyboard layout and the time zone. The clock is written to the RTC only while Setup copies the files.";
+    case ST_PAGE_USER: return "Type your user name (1 to 31 letters, digits, hyphens or underscores; it becomes the first administrator account) and a computer name for the LAN (letters, digits and hyphens, up to 15 characters). Use the arrow keys to choose the keyboard layout and the time zone. The clock is written to the RTC only while Setup copies the files.";
+    case ST_PAGE_ACCOUNT: return "Type each password twice. A password has 8 to 63 characters and capitals count. Tab moves between the fields and Backspace deletes. Back clears the passwords; nothing is written to the disk until Install.";
+    case ST_PAGE_REPAIR: return "Choose the installation with the arrow keys or the mouse, type the new recovery password twice and choose Reset password. Setup asks for confirmation before it writes anything. Afterwards start CiukiOS in Safe Mode and sign in as CiukiAdministrator.";
     case ST_PAGE_NETWORK: return "Choose Automatic (DHCP) when a router assigns addresses. Choose Manual for a crossover cable or a switch without a router; the gateway and the DNS server may be left empty.";
     case ST_PAGE_SUMMARY: return "Install erases ATA disk 0 and installs CiukiOS. Back returns to the previous pages; nothing has been written yet.";
     case ST_PAGE_COPY: return "Setup is copying the files. Cancel stops at the next safe point and leaves the disk unbootable; restart Setup from the CD to install again.";
@@ -479,6 +492,8 @@ static void build_summary(struct st_app *a)
     const char *kbd = s->keyboard;
     for (unsigned i = 0; i < st_keyboard_count; i++) if (!strcmp(st_keyboards[i].id, s->keyboard)) kbd = st_keyboards[i].label;
     st_view_add(&a->view, st_pool(a, ST_B "User:" ST_B " %s " MID " computer %s " MID " keyboard %s", s->user_name, s->computer_name, kbd), 0, F_UI, DU_INK, 0);
+    st_view_add(&a->view, st_pool(a, ST_B "Accounts:" ST_B " %s, administrator, %s " MID " CiukiAdministrator (hidden recovery account), %s " MID " Guest disabled",
+                s->user_name, s->account_seed ? "Password set" : "no password", s->account_seed ? "Password set" : "no password"), 0, F_UI, DU_INK, 0);
     int zone = st_zone_find(s->tz_zone);
     const char *where = zone >= 0 ? st_pool(a, "%s%s", st_zones[zone].label, st_zones[zone].daylight[0] ? ", daylight saving automatic" : "") :
         st_pool(a, "UTC%c%02d:%02d fixed offset", s->tz_minutes < 0 ? '-' : '+',
@@ -515,13 +530,67 @@ static void build_stop(struct st_app *a)
     du_focus(a->ui, ST_ID_RESTART);
 }
 
+/* ---- sec-user-02: masked password fields ---- */
+static size_t secret_len(const char *s) { const char *end = memchr(s, 0, ST_SECRET_BYTES); return end ? (size_t)(end - s) : ST_SECRET_BYTES - 1; }
+static void secret_field(struct st_app *a, int index, int x, int y, int w)
+{
+    add(a, DU_CANVAS, ST_ID_SECRET + index, (struct du_rect){x, y, w, 21}, NULL);
+}
+
+static void build_account(struct st_app *a)
+{
+    int y = CY;
+    a->r[0] = (struct du_rect){CX, y, CW, H1}; y += H1 + 8;
+    int h = para(F_UI, CW, LP, A_P); a->r[1] = (struct du_rect){CX, y, CW, h}; y += h + 8;
+    int fx = CX + 130, fw = CW - 130;
+    for (int i = 0; i < 2; i++) { a->r[2 + i] = (struct du_rect){CX, y, 120, 21}; secret_field(a, i, fx, y, fw); y += 27; }
+    h = para(F_UI, CW, LP, A_R); a->r[4] = (struct du_rect){CX, y + 2, CW, h}; y += h + 10;
+    for (int i = 2; i < 4; i++) { a->r[3 + i] = (struct du_rect){CX, y, 120, 21}; secret_field(a, i, fx, y, fw); y += 27; }
+    h = para(F_UI, CW - 16, LS, A_BOX);
+    a->r[7] = (struct du_rect){CX, y + 2, CW, h + 12};
+    a->r[8] = (struct du_rect){CX, y + 2 + h + 12, 0, 0};
+    wizard_buttons(a, "Next >", 0, 0);
+    du_focus(a->ui, ST_ID_SECRET);
+}
+
+static void build_repair(struct st_app *a)
+{
+    int y = CY;
+    a->r[0] = (struct du_rect){CX, y, CW, H1}; y += H1 + 8;
+    int h = para(F_UI, CW, LP, RP_P); a->r[1] = (struct du_rect){CX, y, CW, h}; y += h + 6;
+    h = para(F_UI, CW - 16, LS, RP_WARN); a->r[2] = (struct du_rect){CX, y, CW, h + 10}; y += h + 16;
+    int count = a->repair_volumes;
+    if (!count) { h = para(F_UI, CW, LS, RP_NONE); a->r[3] = (struct du_rect){CX, y, CW, h}; y += h + 6; }
+    for (int i = 0; i < count && i < 4; i++) {
+        a->r[10 + i] = (struct du_rect){CX + 22, y, CW - 22, LS};
+        struct du_widget *w = add(a, DU_RADIO, ST_ID_REPAIR_VOLUME + i, (struct du_rect){CX + 4, y, 16, LS}, NULL);
+        if (w) { w->total = count; w->value = i == a->repair_choice; }
+        y += LS + 4;
+    }
+    a->r[4] = (struct du_rect){CX, y + 2, CW, LS * 2}; y += LS * 2 + 6;
+    int fx = CX + 130, fw = CW - 130, disabled = !count || a->repair_state != 0;
+    for (int i = 0; i < 2; i++) {
+        a->r[5 + i] = (struct du_rect){CX, y, 120, 21};
+        struct du_widget *w = add(a, DU_CANVAS, ST_ID_SECRET + i, (struct du_rect){fx, y, fw, 21}, NULL);
+        if (w) w->disabled = (uint8_t)disabled;
+        y += 27;
+    }
+    a->r[7] = (struct du_rect){CX, y, 0, 0};
+    int x = CX + CW - BTN_W;
+    button(a, ST_ID_REPAIR_RUN, x - 6 - 110, 110, "Reset password", 1, disabled);
+    button(a, ST_ID_CLOSE, x, BTN_W, "Close", 0, 0);
+    if (!disabled) du_focus(a->ui, ST_ID_SECRET);
+    else du_focus(a->ui, ST_ID_CLOSE);
+}
+
 static void build_rescue(struct st_app *a)
 {
     int y = CY;
     a->r[0] = (struct du_rect){CX, y, CW, H1}; y += H1 + 8;
     int h = para(F_UI, CW, LP, RC_P); a->r[1] = (struct du_rect){CX, y, CW, h}; y += h + 8;
     a->r[3] = (struct du_rect){CX, BTN_Y - 10 - LS * 2, CW, LS * 2};
-    a->r[2] = (struct du_rect){CX, y, CW, a->r[3].y - 8 - y};
+    a->r[4] = (struct du_rect){CX, a->r[3].y - 6 - LS - 2, du_label_width(RC_REPAIR) + 8, LS + 2};  /* sec-user-02 */
+    a->r[2] = (struct du_rect){CX, y, CW, a->r[4].y - 6 - y};
     st_view_reset(&a->view, ST_ID_VIEW, a->r[2]);
     char size[24], model[48];
     for (int i = 0; i < a->disk_count; i++) {
@@ -547,6 +616,7 @@ static void build_rescue(struct st_app *a)
     }
     st_view_layout(&a->view);
     add(a, DU_CANVAS, ST_ID_VIEW, a->r[2], NULL);
+    add(a, DU_CANVAS, ST_ID_REPAIR, a->r[4], NULL);
     int x = CX + CW - BTN_W;
     button(a, ST_ID_COPY_LOGS, x - 6 - 110 - 6 - 120, 120, "Copy logs to USB", 0, 0);
     button(a, ST_ID_REPORT, x - 6 - 110, 110, "Hardware report", 0, 0);
@@ -582,6 +652,7 @@ void st_page_build(struct st_app *a)
     case ST_PAGE_DISK: build_disk(a); break;
     case ST_PAGE_COMPONENTS: build_components(a); break;
     case ST_PAGE_USER: build_user(a); break;
+    case ST_PAGE_ACCOUNT: build_account(a); break;
     case ST_PAGE_NETWORK: build_network(a); break;
     case ST_PAGE_SUMMARY: build_summary(a); break;
     case ST_PAGE_COPY:
@@ -592,6 +663,7 @@ void st_page_build(struct st_app *a)
     case ST_PAGE_STOP: case ST_PAGE_FAILED: case ST_PAGE_STATUS: build_stop(a); break;
     case ST_PAGE_RESCUE: build_rescue(a); break;
     case ST_PAGE_TEXT: build_text(a); break;
+    case ST_PAGE_REPAIR: build_repair(a); break;
     case ST_PAGES: break;
     }
     u->dirty = 1;
@@ -605,6 +677,8 @@ int st_page_height(struct st_app *a, enum st_page p)
     case ST_PAGE_WELCOME: case ST_PAGE_DISK: case ST_PAGE_COMPONENTS: case ST_PAGE_NETWORK: return a->r[4].y;
     case ST_PAGE_HARDWARE: return a->r[3].y;
     case ST_PAGE_USER: return a->r[7].y;
+    case ST_PAGE_ACCOUNT: return a->r[8].y;
+    case ST_PAGE_REPAIR: return a->r[7].y;
     default: return 0;
     }
 }
@@ -658,7 +732,10 @@ static void right_text(struct du_canvas *c, int font, int right, int y, int lh, 
 static int step_of(const struct st_app *a)
 {
     enum st_page p = a->page == ST_PAGE_TEXT ? a->back_page : a->page;
-    if (p <= ST_PAGE_NETWORK) return (int)p;
+    /* The Passwords page belongs to the "User and computer" step. */
+    if (p <= ST_PAGE_USER) return (int)p;
+    if (p == ST_PAGE_ACCOUNT) return 5;
+    if (p == ST_PAGE_NETWORK) return 6;
     if (p == ST_PAGE_SUMMARY || p == ST_PAGE_COPY) return 7;
     return -1;
 }
@@ -695,6 +772,7 @@ static void frame(struct st_app *a, struct du_canvas *c)
     else if (a->page == ST_PAGE_STOP) right = "Setup cannot continue";
     else if (a->page == ST_PAGE_FAILED) right = "Setup did not complete";
     else if (a->page == ST_PAGE_STATUS) right = "Setup stopped";
+    else if (a->page == ST_PAGE_REPAIR) right = "Account repair";
     else right = "Rescue console";
     right_text(c, F_UI, FX + FW - 8, FY + 2, TITLE_H, right, WHITE);
     /* Sidebar: the approved Ciuki portrait, the release, the tagline, the steps. */
@@ -732,7 +810,7 @@ static void frame(struct st_app *a, struct du_canvas *c)
     if (a->page == ST_PAGE_COPY) left = F_COPY;
     else if (a->page == ST_PAGE_RESTART) left = F_DONE;
     else if (a->page == ST_PAGE_STOP || a->page == ST_PAGE_FAILED || a->page == ST_PAGE_STATUS) { left = F_STOP; log = F_MEMORY; }
-    else if (a->page == ST_PAGE_RESCUE || (a->page == ST_PAGE_TEXT && s < 0)) { left = F_RESCUE; log = F_MEMORY; }
+    else if (a->page == ST_PAGE_RESCUE || a->page == ST_PAGE_REPAIR || (a->page == ST_PAGE_TEXT && s < 0)) { left = F_RESCUE; log = F_MEMORY; }
     text_at(c, F_UI, FX, FOOT_Y, LS, left, SILVER);
     right_text(c, F_UI, FX + FW, FOOT_Y + LS, LS, log, SILVER);
 }
@@ -865,6 +943,45 @@ static void paint_user(struct st_app *a, struct du_canvas *c)
     text_at(c, F_UI, a->r[8].x, a->r[8].y, 21, "Time zone", DU_INK);
     well(c, a->r[6]);
     wrap(c, F_UI, (struct du_rect){a->r[6].x + 8, a->r[6].y + 6, CW - 16, a->r[6].h - 12}, LS, U_BOX, DU_INK);
+}
+
+static void paint_account(struct st_app *a, struct du_canvas *c)
+{
+    heading(c, a->r[0], A_H);
+    wrap(c, F_UI, a->r[1], LP, A_P, DU_INK);
+    for (int i = 0; i < 2; i++) text_at(c, F_UI, a->r[2 + i].x, a->r[2 + i].y, 21, A_LABELS[i], DU_INK);
+    wrap(c, F_UI, a->r[4], LP, A_R, DU_INK);
+    for (int i = 2; i < 4; i++) text_at(c, F_UI, a->r[3 + i].x, a->r[3 + i].y, 21, A_LABELS[i], DU_INK);
+    well(c, a->r[7]);
+    wrap(c, F_UI, (struct du_rect){a->r[7].x + 8, a->r[7].y + 6, CW - 16, a->r[7].h - 12}, LS, A_BOX, DU_INK);
+}
+
+static const char *repair_sentence(struct st_app *a)
+{
+    if (!a->repair_volumes) return "";
+    char letter = a->repair_letters[a->repair_choice];
+    switch (a->repair_state) {
+    case 1: return st_pool(a, "Done. Start CiukiOS from drive %c: in Safe Mode and sign in as CiukiAdministrator.", letter);
+    case 2: return a->repair_status;
+    default: break;
+    }
+    return a->repair_status[0] ? a->repair_status : "";
+}
+
+static void paint_repair(struct st_app *a, struct du_canvas *c)
+{
+    heading(c, a->r[0], RP_H);
+    wrap(c, F_UI, a->r[1], LP, RP_P, DU_INK);
+    well(c, a->r[2]);
+    wrap(c, F_UI, (struct du_rect){a->r[2].x + 8, a->r[2].y + 5, CW - 16, a->r[2].h - 10}, LS, RP_WARN, DU_INK);
+    if (!a->repair_volumes) wrap(c, F_UI, a->r[3], LS, RP_NONE, DU_INK);
+    for (int i = 0; i < a->repair_volumes && i < 4; i++)
+        text_at(c, F_UI, a->r[10 + i].x, a->r[10 + i].y, LS,
+                st_pool(a, "Drive %c: CiukiOS installation", a->repair_letters[i]), DU_INK);
+    wrap(c, F_UI, a->r[4], LS, repair_sentence(a), a->repair_state == 2 ? WARN_RED : DU_INK);
+    int disabled = !a->repair_volumes || a->repair_state != 0;
+    static const char *const labels[2] = {"New password", "Confirm password"};
+    for (int i = 0; i < 2; i++) text_at(c, F_UI, a->r[5 + i].x, a->r[5 + i].y, 21, labels[i], disabled ? GREY : DU_INK);
 }
 
 static void paint_network(struct st_app *a, struct du_canvas *c)
@@ -1095,6 +1212,21 @@ static void paint_stop(struct st_app *a, struct du_canvas *c)
     wrap(c, F_UI, (struct du_rect){CX, y, CW, 0x7fff}, LS, a->status_line, SECONDARY);
 }
 
+/* A masked field: one '*' per typed byte, never the text itself. */
+static void paint_secret(struct st_app *a, struct du_canvas *c, const struct du_widget *w, int focused)
+{
+    unsigned field = (unsigned)(w->id - ST_ID_SECRET);
+    size_t n = field < ST_SECRET_FIELDS ? secret_len(a->acct.secret[field]) : 0;
+    du_well(c, w->box, w->disabled ? DU_FACE : DU_WINDOW);
+    char stars[ST_SECRET_BYTES]; memset(stars, '*', n); stars[n] = 0;
+    struct du_rect text = {w->box.x + 3, w->box.y + 3, w->box.w - 6, w->box.h - 6};
+    struct du_rect old = c->clip;
+    c->clip = du_intersection(old, text);
+    int width = st_text_line(c, F_UI, text.x + 1, text.y, text.h, stars, DU_INK);
+    if (focused) du_vline(c, text.x + 1 + width, text.y + 1, text.h - 2, DU_INK);
+    c->clip = old;
+}
+
 static void paint_rescue(struct st_app *a, struct du_canvas *c)
 {
     heading(c, a->r[0], RC_H);
@@ -1132,6 +1264,10 @@ static void canvas_paint(struct st_app *a, struct du_canvas *c, struct du_widget
     case ST_ID_LINK_SAVE: paint_link(c, w, H_LINK, focused); break;
     case ST_ID_DEFAULTS: paint_link(c, w, C_DEFAULTS, focused); break;
     case ST_ID_KBD: case ST_ID_TZ: paint_combo(a, c, w, focused); break;
+    case ST_ID_REPAIR: paint_link(c, w, RC_REPAIR, focused); break;
+    default:
+        if (w->id >= ST_ID_SECRET && w->id < ST_ID_SECRET + ST_SECRET_FIELDS) paint_secret(a, c, w, focused);
+        break;
     }
 }
 
@@ -1179,6 +1315,7 @@ void st_page_paint(struct st_app *a)
     case ST_PAGE_DISK: paint_disk(a, c); break;
     case ST_PAGE_COMPONENTS: paint_components(a, c); break;
     case ST_PAGE_USER: paint_user(a, c); break;
+    case ST_PAGE_ACCOUNT: paint_account(a, c); break;
     case ST_PAGE_NETWORK: paint_network(a, c); break;
     case ST_PAGE_SUMMARY: paint_summary(a, c); break;
     case ST_PAGE_COPY: paint_copy(a, c); break;
@@ -1186,6 +1323,7 @@ void st_page_paint(struct st_app *a)
     case ST_PAGE_STOP: case ST_PAGE_FAILED: case ST_PAGE_STATUS: paint_stop(a, c); break;
     case ST_PAGE_RESCUE: paint_rescue(a, c); break;
     case ST_PAGE_TEXT: heading(c, a->r[0], a->text_title); break;
+    case ST_PAGE_REPAIR: paint_repair(a, c); break;
     case ST_PAGES: break;
     }
 }
@@ -1292,7 +1430,7 @@ static int canvas_key(struct st_app *a, int id, unsigned code)
         }
         if (st_view_key(&a->view, code)) { a->ui->dirty = 1; return 1; }
         return 0;
-    case ST_ID_LINK_SAVE: case ST_ID_DEFAULTS:
+    case ST_ID_LINK_SAVE: case ST_ID_DEFAULTS: case ST_ID_REPAIR:
         if (code == DU_KEY_ENTER || code == DU_KEY_SPACE) { st_action(a, id); return 1; }
         return 0;
     case ST_ID_KBD: case ST_ID_TZ: {
@@ -1320,17 +1458,38 @@ static void components_changed(struct st_app *a)
     a->ui->dirty = 1;
 }
 
+/* sec-user-02: typing into a masked field. Printable ASCII only (the
+ * password policy's range); the text never reaches a widget, the log or the
+ * clipboard. Enter is left to the page's default button. */
+static int secret_key(struct st_app *a, int id, unsigned code, unsigned ch)
+{
+    unsigned field = (unsigned)(id - ST_ID_SECRET);
+    if (field >= ST_SECRET_FIELDS) return 0;
+    char *s = a->acct.secret[field];
+    size_t n = secret_len(s);
+    if (code == DU_KEY_BACKSPACE) { if (n) s[n - 1] = 0; a->ui->dirty = 1; return 1; }
+    if (code == DU_KEY_ENTER || code == DU_KEY_TAB || code == DU_KEY_ESC) return 0;
+    if (ch >= 0x20 && ch <= 0x7e) {
+        if (n + 1 < ST_SECRET_BYTES) { s[n] = (char)ch; s[n + 1] = 0; }
+        a->ui->dirty = 1;
+        return 1;
+    }
+    return 0;
+}
+
 int st_page_event(struct st_app *a, const struct du_event *e)
 {
     switch (e->type) {
-    case DU_EV_KEY: return canvas_key(a, e->id, e->key);
+    case DU_EV_KEY:
+        if (e->id >= ST_ID_SECRET && e->id < ST_ID_SECRET + ST_SECRET_FIELDS) return secret_key(a, e->id, e->key, e->ch);
+        return canvas_key(a, e->id, e->key);
     case DU_EV_POINTER:
         if (e->id == ST_ID_VIEW) {
             int was = a->view.selected, hit = st_view_pointer(&a->view, e);
             if (hit >= 0 && hit == was && a->page == ST_PAGE_LICENCE) canvas_key(a, ST_ID_VIEW, DU_KEY_ENTER);
             a->ui->dirty = 1;
         } else if (e->index == DU_POINTER_UP) {
-            if (e->id == ST_ID_LINK_SAVE || e->id == ST_ID_DEFAULTS) st_action(a, e->id);
+            if (e->id == ST_ID_LINK_SAVE || e->id == ST_ID_DEFAULTS || e->id == ST_ID_REPAIR) st_action(a, e->id);
             else if (e->id == ST_ID_KBD || e->id == ST_ID_TZ) popup_open(a, e->id);
         }
         return 1;
@@ -1353,6 +1512,11 @@ int st_page_event(struct st_app *a, const struct du_event *e)
             struct du_widget *w = du_get(a->ui, ST_ID_COMPUTER);
             if (w) for (char *p = w->text; *p; p++) if (*p >= 'a' && *p <= 'z') *p = (char)(*p - 32);
             return 1;
+        }
+        if (e->id >= ST_ID_REPAIR_VOLUME && e->id < ST_ID_REPAIR_VOLUME + 4) {
+            a->repair_choice = e->id - ST_ID_REPAIR_VOLUME; a->repair_state = 0;
+            st_secret_wipe(a->acct.secret, sizeof(a->acct.secret));
+            st_action(a, ST_ID_REPAIR); return 1;
         }
         if (e->id == ST_ID_CLOCK) { a->clock_edited = 1; return 1; }
         if (e->id == ST_ID_UTC) { a->clock_utc = e->index; return 1; }

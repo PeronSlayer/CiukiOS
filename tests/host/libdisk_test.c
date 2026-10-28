@@ -256,7 +256,8 @@ static struct storage *start(struct model *m, unsigned slot)
         snprintf(s->raw[slot].firmware, sizeof(s->raw[slot].firmware), "1.0");
     }
     OK(vfs_table_init(&s->vfs, &H.table, 3)); H.table_ready = true;
-    H.s = s; H.caller = (struct storage_caller){ 42, true };
+    s->setup_mode=true;
+    H.s = s; H.caller = (struct storage_caller){ .pid=42,.setup_capability=true,.administrator=true,.system=true };
     H.logging = false; H.logs = 0; H.log_bytes = 0;
     H.fail_op = 0; H.fail_after = 0; H.op_calls = 0; H.before_publish = 0;
     H.writer_error = 0;
@@ -687,12 +688,13 @@ static void test_authority(void)
     model_open(&m, "auth", 2097152, 0);
     start(&m, 0);
     uint8_t buf[512] = { 0 };
-    struct storage_caller plain = { 42, false }, other = { 43, true }, plain43 = { 43, false };
+    struct storage_caller plain = { .pid=42 },
+        other = { .pid=43,.setup_capability=true,.administrator=true,.system=true }, plain43 = { .pid=43 };
     struct ciuki_disk_request q = { CIUKI_DISK_VERSION, sizeof(q), 0, 0 };
     struct ciuki_disk_info info = { .version = CIUKI_DISK_VERSION, .size = sizeof(info) };
     struct ciuki_disk_lease l = { .version = CIUKI_DISK_VERSION, .size = sizeof(l) };
     /* No capability: reads and queries only. */
-    CHECK(storage_disk_io(H.s, 0, &plain, false, 0, buf, 512) == 512);
+    CHECK(storage_disk_io(H.s, 0, &plain, false, 0, buf, 512) == -EPERM);
     CHECK(storage_disk_io(H.s, 0, &plain, true, 0, buf, 512) == -EPERM);
     CHECK(storage_disk_flush(H.s, 0, &plain) == -EPERM);
     CHECK(storage_disk_control(H.s, 0, &plain, DISK_LEASE_ACQUIRE, &info, sizeof(info)) == -EPERM);
@@ -726,7 +728,7 @@ static void test_authority(void)
     CHECK(saw("[disk] lease disk=0 pid=43 state=refused reason=leased"));
     CHECK(storage_disk_control(H.s, 0, &other, DISK_LEASE_RELEASE, &q, sizeof(q)) == -EACCES);
     CHECK(storage_disk_io(H.s, 0, &plain43, true, 4096, buf, 512) == -EPERM);
-    CHECK(storage_disk_io(H.s, 0, &plain43, false, 4096, buf, 512) == 512);
+    CHECK(storage_disk_io(H.s, 0, &plain43, false, 4096, buf, 512) == -EPERM);
     CHECK(storage_disk_io(H.s, 0, &plain, true, 4096, buf, 512) == -EPERM); /* the holder pid without capability */
     /* Death of the holder revokes the lease, with no I/O. */
     unsigned writes = m.head.writes + m.vol.writes;
@@ -776,7 +778,11 @@ static void occupied(struct model *m)
 static void expect_busy(const char *reason)
 {
     char line[160];
-    CHECK(acquire(0) == -EBUSY);
+    bool mode=H.s->setup_mode;
+    H.s->setup_mode=true; /* probe the Setup lease against this storage state */
+    int admitted=acquire(0);
+    H.s->setup_mode=mode;
+    CHECK(admitted == -EBUSY);
     snprintf(line, sizeof(line), "state=refused reason=%s", reason);
     CHECK(saw(line));
     CHECK(!strcmp(lease_state(0).reason, reason));
@@ -811,6 +817,7 @@ static void test_busy(void)
     expect_busy("open");
     OK(vfs_close(&H.table, h));
     /* Writable volume (the ordinary boot state of C:). */
+    H.s->setup_mode=false;
     OK(storage_enable_write(H.s, 2));
     expect_busy("writable");
     /* Delayed write-back data of that volume with no open handle (vfs_close

@@ -262,12 +262,15 @@ static int fd_call(struct file_operation *op, const struct trap_frame *tf)
     }
     case CIUKI_SYS_FSTAT: {
         struct ciuki_stat out;
-        err = px_stat_locked(d->node, &out);
+        err = file_description_authorize_locked(d, POLICY_READ); /* sec-k03 */
+        if (!err) err = px_stat_locked(d->node, &out);
         if (!err) err = copy_to_user(tf->ecx, &out, sizeof(out));
         break;
     }
     case CIUKI_SYS_GETDENTS: {
         uint32_t done = 0;
+        /* sec-k03: directory enumeration needs READ on the retained object. */
+        if ((err = file_description_authorize_locked(d, POLICY_READ))) break;
         while (tf->edx - done >= sizeof(struct ciuki_dirent)) {
             uint64_t old_position = d->position; uint32_t old_cursor = d->cursor;
             op->reading = true;
@@ -309,10 +312,11 @@ static int file_info_call(struct file_operation *op, const struct trap_frame *tf
     struct px_namespace *s = op->cwd->space;
     vfs_lock(s->vfs,0);
     if (caught()) err = -EINTR;
-    else if (record.operation == CIUKI_FILE_INFO_SET) err = px_file_info_set_locked(s, op->cwd, op->path[0], &record);
+    else if (record.operation == CIUKI_FILE_INFO_SET)
+        err = px_file_info_set_as_locked(s, op->cwd, op->path[0], &record, px_process_subject(op->process));
     else {
-        struct px_path result;
-        err = px_resolve_locked(s, op->cwd, op->path[0], false, &result);
+        struct px_path result; /* sec-k03: READ through the subject's resolver */
+        err = px_resolve_as_locked(s, op->cwd, op->path[0], false, px_process_subject(op->process), &result);
         if (!err) err = px_file_info_get_locked(result.node, &record);
         if (!err) err = copy_to_user(tf->ecx, &record, sizeof(record));
     }
@@ -336,16 +340,20 @@ static int pathname_call(struct file_operation *op, const struct trap_frame *tf)
     }
     vfs_lock(s->vfs,0);
     if (caught()) err = -EINTR;
+    /* sec-k03: every pathname operation is attributed to the caller's
+     * immutable retained subject; there is no unattributed native path. */
+    const struct security_subject *subject = px_process_subject(op->process);
     if (!err) switch (tf->eax) {
-    case CIUKI_SYS_MKDIR: err = px_mkdir_locked(s, op->cwd, op->path[0], tf->ecx); break;
+    case CIUKI_SYS_MKDIR: err = px_mkdir_as_locked(s, op->cwd, op->path[0], tf->ecx, subject); break;
     case CIUKI_SYS_RMDIR: case CIUKI_SYS_UNLINK:
-        err = px_remove_locked(s, op->cwd, op->path[0], tf->eax == CIUKI_SYS_RMDIR); break;
-    case CIUKI_SYS_RENAME: err = px_rename_locked(s, op->cwd, op->path[0], op->path[1]); break;
+        err = px_remove_as_locked(s, op->cwd, op->path[0], tf->eax == CIUKI_SYS_RMDIR, subject); break;
+    case CIUKI_SYS_RENAME: err = px_rename_as_locked(s, op->cwd, op->path[0], op->path[1], subject); break;
     case CIUKI_SYS_CHDIR: case CIUKI_SYS_STAT: {
         struct px_path result;
-        err = px_resolve_locked(s, op->cwd, op->path[0], false, &result);
+        err = px_resolve_as_locked(s, op->cwd, op->path[0], false, subject, &result);
         if (!err && tf->eax == CIUKI_SYS_CHDIR) {
             if (result.node->kind != PX_DIRECTORY && result.node->kind != PX_MNT && result.node->kind != PX_DEV) err = -ENOTDIR;
+            else if ((err = px_policy_check_locked(result.node, subject, POLICY_TRAVERSE))) { }
             else {
                 px_retain(result.node); px_release(op->process->cwd);
                 op->process->cwd = result.node;
@@ -386,8 +394,15 @@ static int file_dispatch(struct process *p, struct trap_frame *tf)
             if(!e) e=display_refresh_query ? display_refresh_query(&q) : -ENOTTY;
             return e ? e : copy_to_user(tf->edx,&q,sizeof(q));
         }
-        if (tf->ecx==INPUT_HID_GET_CAPS || tf->ecx==INPUT_HID_GET_STATE || tf->ecx==INPUT_HID_CALIBRATE || tf->ecx==INPUT_JOY_CONTROL)
+        /* sec-k04 device dispatch: merge this block together. */
+        if (tf->ecx==INPUT_KEYBOARD_SET || tf->ecx==INPUT_HID_GET_CAPS || tf->ecx==INPUT_HID_GET_STATE ||
+            tf->ecx==INPUT_HID_CALIBRATE || tf->ecx==INPUT_JOY_CONTROL) {
+            if (tf->edi || tf->ebp) return -EINVAL;
             return grant_input_devctl ? grant_input_devctl(p,(int32_t)tf->ebx,tf->ecx,tf->edx,tf->esi) : -ENOTTY;
+        }
+        /* CIUKI_SETUP_NET_QUERY is routed only through the PX_NET branch
+         * below. net_devctl checks the SYSTEM Setup role and boot mode. */
+        /* end sec-k04 device dispatch */
         struct file_description *d = file_fd(p, (int32_t)tf->ebx);
         if (d && d->node->kind==PX_LPT)
             return lpt_devctl ? lpt_devctl(p,(int32_t)tf->ebx,tf->ecx,tf->edx,tf->esi) : -ENOTTY;
@@ -400,7 +415,12 @@ static int file_dispatch(struct process *p, struct trap_frame *tf)
             int e=copy_from_user(&q,tf->edx,sizeof(q));
             if (e) return e;
             d->object.retain(&d->object);
-            e=file_setup_fat ? file_setup_fat(p,d,tf->ecx,&q) : -ENOSYS;
+            /* sec-k03: Setup FAT attrib is MODIFY_METADATA on the retained
+             * object (query: READ), checked before the Setup adapter. */
+            vfs_lock(d->node->space->vfs,0);
+            e=file_description_authorize_locked(d,tf->ecx==CIUKI_SETUP_FAT_ATTRIB ? POLICY_META : POLICY_READ);
+            vfs_unlock(d->node->space->vfs);
+            if (!e) e=file_setup_fat ? file_setup_fat(p,d,tf->ecx,&q) : -ENOSYS;
             d->object.release(&d->object);
             return e ? e : copy_to_user(tf->edx,&q,sizeof(q));
         }

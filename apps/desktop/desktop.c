@@ -17,6 +17,9 @@
 #include "resources.h"
 #include "wallpaper_io.h"
 #include "diag_record.h"
+#include "profile.h" /* sec-user-05: session profile root and temp */
+#include "logon_session.h"   /* sec-user-03 */
+#include "../logon/logon_proto.h"
 #ifdef __i386__
 #include <ciuki/devices.h>
 #endif
@@ -436,7 +439,7 @@ struct launch_job {
     int client, child, channel, child_fd;
     uint64_t click_ns, begin_ns, end_ns;
     struct desk_program program;
-    char *argv[LAUNCH_ARGV], *env[12];
+    char *argv[LAUNCH_ARGV], *env[16]; /* sec-user-05: +USERPROFILE/TEMP/TMP */
     char strings[LAUNCH_STRINGS], display[40], keymap[24], tz[8 + CIUKI_TIME_RULE_MAX], language[20];
     struct ciuki_spawn_fd mapping[2];
     uint32_t mappings;
@@ -552,7 +555,17 @@ static int launch_prepare(struct desktop *d, const struct desk_program *program,
     snprintf(user,sizeof(user),"USER=%s",d->sh.profile.name);
     snprintf(settings,sizeof(settings),"CIUKI_SETTINGS=%s",d->sh.profile.settings[0] ? d->sh.profile.settings : CFG_FILE);
     snprintf(profile,sizeof(profile),"CIUKI_PROFILE=%s",d->sh.profile.root);
-    const char *env[]={job->language,job->tz,home,"TMPDIR=/tmp","PATH=/Programs",job->display,job->keymap,user,settings,profile,NULL};
+    /* sec-user-05 (contract 8.2, A1-10): children keep the session's committed
+     * profile root and private temporary directory from the kernel launch;
+     * only a profile-less bootstrap desktop passes the machine /tmp. */
+    char temp[176], userprofile[112], temp_var[176], tmp_var[176];
+    const char *root=profile_root_path(), *temporary=profile_temp();
+    snprintf(temp,sizeof(temp),"TMPDIR=%s",temporary);
+    snprintf(userprofile,sizeof(userprofile),"USERPROFILE=%s",root ? root : "");
+    snprintf(temp_var,sizeof(temp_var),"TEMP=%s",temporary);
+    snprintf(tmp_var,sizeof(tmp_var),"TMP=%s",temporary);
+    const char *env[]={job->language,job->tz,home,temp,"PATH=/Programs",job->display,job->keymap,user,settings,profile,
+                       root ? userprofile : NULL,temp_var,tmp_var,NULL};
     for (unsigned k=0;env[k];k++) if (launch_strings(job,&used,env[k],&job->env[k])) return E2BIG;
     job->mappings=tasks && d->authority_fd>=0 ? 2 : 1;
     job->mapping[1]=(struct ciuki_spawn_fd){d->authority_fd,4};
@@ -811,6 +824,18 @@ static struct cfg_writer settings_writer;
 static struct users_worker user_worker;
 static int user_initial, user_switch_saving, user_default_loading, user_default_ready, user_refresh_pending;
 static int links_profile_update(struct desktop *);
+/* sec-user-05 (Windows XP shell folders): a kernel profile session's own
+ * Start Menu\Programs and Desktop. The Start menu merges the per-user
+ * Programs with C:\WINDOWS\Start Menu\Programs (links_list), the desktop
+ * view merges the per-user Desktop with /Documents/Desktop (desktop_union.h)
+ * and shows C:\WINDOWS\Desktop shortcuts; G32 local profiles keep theirs. */
+static void session_folders(struct user_profile *p)
+{
+    if (p->root[0]) return;
+    char path[USERS_PATH];
+    if (profile_folder(path,sizeof(path),"Start Menu/Programs")) memcpy(p->programs,path,sizeof(path));
+    if (profile_folder(path,sizeof(path),"Documents/Desktop")) memcpy(p->desktop,path,sizeof(path));
+}
 static int settings_writer_started, verbose_boot, statistics_boot;
 static int settings_reload_pending, settings_reload_request, settings_reload_wallpaper;
 static int settings_snapshot_loaded, settings_snapshot_error;
@@ -1025,6 +1050,11 @@ static int mixer_line_save(int fd,struct ciuki_mixer_line *line)
     }
     if (!error && line_preference_save(REG_DIRECTORY,line)) error=errno;
     return error;
+}
+/* sec-user-05: one saved session level through the designated control fd. */
+static int mixer_restore_apply(int fd, unsigned line, void *record, size_t n)
+{
+    return ciuki_devctl(fd,line ? MIXER_SET_LINE : MIXER_SET_MASTER,record,n) ? -1 : 0;
 }
 static int mixer_job_run(void *record, size_t n)
 {
@@ -2020,6 +2050,16 @@ __attribute__((weak)) void desk_w32_poll(struct desktop *d) { (void)d; }
 __attribute__((weak)) void desk_w32_child_exited(struct desktop *d,uint32_t pid,int status)
 { (void)d; (void)pid; (void)status; }
 __attribute__((weak)) int desk_w32_shutdown(void) { return 1; }
+/* sec-user-03: host models of this file have no LOGON session binding. */
+__attribute__((weak)) int desk_logon_detect(int *display, int *input) { (void)display; (void)input; return 0; }
+__attribute__((weak)) void desk_logon_profile(struct desktop *d) { users_profile(&d->sh.profile,"",0,0); }
+__attribute__((weak)) void desk_logon_ready(struct desktop *d) { (void)d; }
+__attribute__((weak)) int desk_logon_ready_sent(void) { return 1; }
+__attribute__((weak)) void desk_logon_poll(struct desktop *d) { (void)d; }
+__attribute__((weak)) int desk_logon_lock(struct desktop *d) { (void)d; return -ENOSYS; }
+__attribute__((weak)) void desk_logon_end(struct desktop *d, unsigned notice) { (void)d; (void)notice; exit(0); }
+__attribute__((weak)) int desk_logon_secure(struct desktop *d, unsigned notice, unsigned *flags) /* sec-user-04 */
+{ (void)d; (void)notice; (void)flags; return -ENOSYS; }
 /* Review P1-1 (T23 c42f556e): call 73 runs on its own thread. The orderly
  * REBOOT/OFF may wait inside the kernel (a storage preflight bounded to 5 s
  * per stage, the device quiesce); the desktop loop keeps presenting the
@@ -2056,8 +2096,12 @@ static void *power_call_worker(void *arg)
     pthread_mutex_unlock(&power_call_lock);
     return NULL;
 }
+static void logon_end(struct desktop *d, unsigned notice);
 static int power_request(struct desktop *d, int action)
 {
+    /* sec-user-03: a LOGON session ends here after G3; LOGON collects the
+     * session and then makes the orderly power call itself. */
+    if (d->logon_session && (action==1 || action==2)) logon_end(d,action==1 ? LGN_NOTICE_RESTART : LGN_NOTICE_SHUTDOWN);
     pthread_mutex_lock(&power_call_lock);
     if (power_call_done) {
         int r=power_call_result; errno=power_call_errno; power_call_done=0;
@@ -2133,8 +2177,19 @@ static void power_prepare(struct desktop *d)
     }
     power_files_pending=1;
 }
+/* sec-user-03: settings are saved by G3 (want_power) or the power state;
+ * wait (bounded) for the writer, then end the LOGON session. */
+static void logon_end(struct desktop *d, unsigned notice)
+{
+    uint64_t until=monotonic()+UINT64_C(3000000000);
+    while (settings_writer_started && cfg_writer_busy(&settings_writer) && monotonic()<until) {
+        struct timespec pause={.tv_sec=0,.tv_nsec=10000000L}; nanosleep(&pause,NULL);
+    }
+    desk_logon_end(d,notice);
+}
 static void user_logoff(struct desktop *d)
 {
+    if (d->logon_session) logon_end(d,LGN_NOTICE_LOGOFF);   /* sec-user-03: G3 has closed the programs */
     user_initial=0; user_switch_saving=user_default_loading=user_default_ready=0;
     desk_logon_open(d,1);
     d->sh.user_request.operation=USERS_READ; d->sh.user_want=1;
@@ -2198,6 +2253,7 @@ static void user_service(struct desktop *d)
      * is over; update its profile only at the next worker boundary. */
     struct user_profile old=s->profile;
     users_profile(&s->profile,s->user_choose==1 ? s->user_request.name : "",s->user_choose==1 ? s->users.authenticated : 0,s->users.flags);
+    session_folders(&s->profile);
     for (unsigned i=0;i<s->users.count;i++) if (s->user_choose==1 && s->users.ids[i]==s->users.authenticated)
         snprintf(s->profile.name,sizeof(s->profile.name),"%s",s->users.names[i]);
     if (!links_profile_update(d)) { s->profile=old; return; }
@@ -2554,7 +2610,9 @@ static int links_list(struct links_scan *s)
 {
     s->count=0;
     if (s->programs[0] && strcmp(s->programs,links_roots[0])) {
-        s->budget=128; links_directory(s,s->programs,0,s->cap/2,3);
+        /* sec-user-05: the user's Programs leave the All Users Start Menu at
+         * least a quarter of the snapshot (Quake III, installed games). */
+        s->budget=128; links_directory(s,s->programs,0,s->cap/4,3);
     }
     for (unsigned r=0;r<sizeof(links_roots)/sizeof(*links_roots);r++) {
         s->budget=links_budget[r];
@@ -2915,6 +2973,7 @@ static void links_start(struct desktop *d)
     if (pthread_mutex_init(&w->mutex,NULL)) { free(w); return; }
     if (pthread_cond_init(&w->changed,NULL)) { pthread_mutex_destroy(&w->mutex); free(w); return; }
     w->desktop=d;
+    snprintf(w->profile_programs,sizeof(w->profile_programs),"%s",d->sh.profile.programs); /* sec-user-05 */
     w->scan_requested=w->games_requested=1; /* the first scan also queries the bundled games */
     fm_registry_exchange=desk_w32_exchange;
     if (pthread_create(&w->thread,NULL,links_thread,w)) { pthread_cond_destroy(&w->changed); pthread_mutex_destroy(&w->mutex); free(w); return; }
@@ -3017,6 +3076,9 @@ static void shell_setup(struct desktop *d, int gate)
     const char *mixer=getenv("CIUKI_MIXER_FD");
     fd=mixer ? number(mixer,CIUKI_OPEN_MAX-1) : -1;
     d->mixer_fd=fd>=3 && fcntl(fd,F_GETFD)>=0 ? fd : -1;
+    /* sec-user-05: a profile session starts with its own saved levels. */
+    if (d->mixer_fd>=0 && mixer_preferences_restore(d->mixer_fd,mixer_restore_apply)<0)
+        fprintf(stderr,"[desktop] warning check=mixer-preference-restore error=%d\n",errno);
     observers_prepare(d);
     d->mixer_set=mixer_apply; d->mixer_line=mixer_line_apply;
     d->joystick_control=desktop_joystick_control;
@@ -3034,7 +3096,9 @@ static void shell_setup(struct desktop *d, int gate)
     scan_programs(d);
     /* Runtime gate scenarios keep the built-in defaults and never touch desktop.cfg. */
     d->sh.gate=gate;
-    users_profile(&d->sh.profile,"",0,0);
+    if (d->logon_session) desk_logon_profile(d);   /* sec-user-03: the session's committed profile */
+    else users_profile(&d->sh.profile,"",0,0);
+    if (!gate) session_folders(&d->sh.profile);   /* sec-user-05: XP per-user and common shell folders */
     d->logoff=user_logoff;
     if (!gate) settings_load(d);
     if (!gate) startup_stage("settings_read");
@@ -3062,13 +3126,13 @@ static void shell_setup(struct desktop *d, int gate)
     }
     if (!gate) { startup_stage("fonts_icons_ready"); mixer_read(d); system_read(d); wallpaper_load(d); wallpaper_preload(d); wallpaper_worker_prepare(d); }
     else desk_shell_wallpaper_update(d);
-    if (!gate) {
+    if (!gate && !d->logon_session) {
         /* Keep the ordinary first desktop frame when logon is disabled;
          * hold input only until the worker has read the optional policy. */
         user_initial=1; d->sh.user_gate=-1; d->sh.user_previous_focus=d->focus;
         d->sh.user_request.operation=USERS_READ; d->sh.user_want=1;
         desktop_watchdog_start(d);
-    }
+    } else if (!gate) desktop_watchdog_start(d);   /* sec-user-03: LOGON authenticated this session */
     /* fx-8: ordinary desktops spawn on the launcher worker. */
     if (!gate) { int error=launcher_start(d); if (error) desk_shell_notify_error(d,"Program launcher unavailable",error); }
 }
@@ -3123,6 +3187,15 @@ int main(int argc, char **argv)
                    !strcmp(argv[a]+14,"unified")) startup_game_kernel=argv[a]+14;
         else return 2;
     }
+    /* sec-user-03: SESSION_LAUNCH names the installed grant descriptors. */
+    int logon_session=0;
+    if (!test && !fullscreen_test && !launch && !channel_count) {
+        int ld=display, li=input;
+        if (desk_logon_detect(&ld,&li)) { logon_session=1; display=ld; input=li; }
+    }
+#ifdef __i386__
+    if (logon_session && (devices.boot_flags&CIUKI_BOOT_CMD_ONLY)) terminal_shell=1;
+#endif
     if (display < 3 || input < 3 || display == input || cycles < 1 ||
         channel_count+demo_count+(victim != NULL) > DESK_CLIENTS) return 2;
     for (int i=0; i<channel_count; i++) if (channels[i]==display || channels[i]==input) return 2;
@@ -3139,6 +3212,8 @@ int main(int argc, char **argv)
     if (!d || !portrait) { free(d); free(portrait); return gate_setup_error(gate,GATE_SETUP_MEMORY,ENOMEM); }
     const struct desk_ops ops = {ciuki_channel_send,ciuki_surface_info,ciuki_surface_map,munmap,close,ciuki_present};
     desk_init(d,&ops,info.width,info.height); d->display=display; d->input=input;
+    d->logon_session=logon_session; d->session_lock=logon_session ? desk_logon_lock : NULL;   /* sec-user-03 */
+    d->session_secure=logon_session ? desk_logon_secure : NULL;   /* sec-user-04 */
     d->drop_snapshot=drop_snapshot;
     du_clip_bind(desk_clip_local,d);
     d->now_ns=monotonic(); /* startup notifications use the same clock as service turns */
@@ -3168,7 +3243,10 @@ int main(int argc, char **argv)
     shell_setup(d,gate);
     if (!gate && !test) {
         char *spool_argv[] = {"/System/printspool",NULL};
-        char *spool_env[] = {"PATH=/Programs",NULL};
+        /* sec-user-05: the session's worker services its own profile queue
+         * (apps/libprint/print.c), so it gets the session's profile paths. */
+        struct profile_env spool_profile; char *spool_env[8] = {"PATH=/Programs"};
+        spool_env[profile_env_add(&spool_profile,spool_env,1)] = NULL;
         if(ciuki_spawn(spool_argv[0],spool_argv,spool_env,NULL,0,0)<0)
             fprintf(stderr,"desktop: background print service unavailable (errno=%d)\n",errno);
     }
@@ -3428,6 +3506,10 @@ int main(int argc, char **argv)
             fprintf(stderr,"desktop: present failed (errno=%d)\n",errno); display_reported=1;
         }
         if (!gate && render_ready && !redraw && d->presents) startup_stage("first_frame_presented");
+        /* sec-user-03: profile loaded and the first frame composed (still
+         * concealed): the session's readiness; then LOGON's menu choices. */
+        if (d->logon_session && render_ready && !desk_logon_ready_sent()) { startup_stage("session_ready"); desk_logon_ready(d); }
+        if (d->logon_session) desk_logon_poll(d);
         desktop_stage(STALL_REPORT); startup_flush();
         if (!gate && d->shell && d->presents && !startup_sound) { startup_sound=1; desk_sound(d,SOUND_STARTUP); desk_sound(d,SOUND_LOGON); }
         if (!gate && d->shell && d->presents && !accel_noticed && (accel_noticed=accel_notice(d))) d->accel_lost=0;

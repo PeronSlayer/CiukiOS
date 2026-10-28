@@ -100,7 +100,7 @@ static int close_file(void *ctx, int fd) { (void)ctx; return close(fd) ? -errno 
 const struct fm_vfs *fm_native_vfs(void)
 {
     static const struct fm_vfs fs = {NULL, list, metadata_stat, make_dir, move, remove_file, remove_dir,
-                                     open_file, read_file, write_file, sync_file, close_file, NULL};
+                                     open_file, read_file, write_file, sync_file, close_file, NULL, NULL};
     return &fs;
 }
 
@@ -124,7 +124,7 @@ static int cleanup_metadata_stat(void *ctx, const char *path, struct fm_meta *m)
 const struct fm_vfs *fm_native_cleanup_vfs(void)
 {
     static const struct fm_vfs fs = {NULL, list, cleanup_metadata_stat, make_dir, move, remove_file, remove_dir,
-                                     open_file, read_file, write_file, sync_file, close_file, NULL};
+                                     open_file, read_file, write_file, sync_file, close_file, NULL, NULL};
     return &fs;
 }
 
@@ -142,7 +142,7 @@ static int backup_metadata(void *ctx,const char *path,const struct fm_meta *m)
 const struct fm_vfs *fm_native_backup_vfs(void)
 {
     static const struct fm_vfs fs={NULL,list,cleanup_metadata_stat,make_dir,move,remove_file,remove_dir,
-        open_file,read_file,write_file,sync_file,close_file,backup_metadata};
+        open_file,read_file,write_file,sync_file,close_file,backup_metadata,NULL};
     return &fs;
 }
 

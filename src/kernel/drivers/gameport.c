@@ -391,6 +391,7 @@ static void worker(void *arg)
 static void settings_worker(void *arg)
 {
     (void)arg;
+    joystick_settings_pause=task_sleep_ms; /* sec-user-05: scope switches wait for a storage pass */
     joystick_storage_start();
     for (;;) { joystick_settings_service(); task_sleep_ms(250); }
 }

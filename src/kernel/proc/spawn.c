@@ -19,6 +19,8 @@ extern int security_profile_timezone(const struct security_subject *,const struc
 #include <ciuki/signal.h>
 
 extern void w32_service_delegate(struct process *,struct process *,const char *) __attribute__((weak));
+extern int audio_mixer_delegate(struct process *, struct process *) __attribute__((weak)); /* sec-user-03 */
+#pragma weak proc_authority_install
 
 static const struct ciuki_file_ops *file_ops;
 void proc_set_file_ops(const struct ciuki_file_ops *ops) { file_ops = ops; }
@@ -600,6 +602,28 @@ int proc_security_launch_prepare(struct process *parent, struct ciuki_security_l
     desktop_fd(parent,pair[0])->object.inheritable=false;
     l->control_fd=pair[0];
     if ((err=security_launch_environment(op->strings,l))) goto done;
+    /* --- sec-user-03: the session desktop keeps the interim desktop's two
+     * delegations from PID 1 (supervisor.c): the /dev/mixer control handle
+     * and the termination authority it may pass to Task Manager. Labels
+     * describe the installed descriptors; a refused delegation leaves the
+     * label out (the desktop then reports the missing control). */
+    if (l->purpose==CIUKI_SECURITY_LAUNCH_DESKTOP) {
+        static const char *const keys[]={"CIUKI_MIXER_FD","CIUKI_TASKS_FD"};
+        for (unsigned i=0;i<2 && !err;i++) {
+            int fd=i ? (proc_authority_install ? proc_authority_install(op->child) : -ENOSYS) :
+                       (audio_mixer_delegate ? audio_mixer_delegate(proc_supervisor(),op->child) : -ENOSYS);
+            if (fd<0) continue;
+            char label[32]; unsigned n=(unsigned)strlen(keys[i]);
+            memcpy(label,keys[i],n); label[n++]='=';
+            char digits[10]; unsigned count=0; unsigned value=(unsigned)fd;
+            do { digits[count++]=(char)('0'+value%10); value/=10; } while (value);
+            while (count) label[n++]=digits[--count];
+            label[n]=0;
+            err=proc_strings_add(op->strings,label,n+1,true);
+        }
+        if (err) goto done;
+    }
+    /* --- sec-user-03 (end) --- */
     self->launch_loading=op->child;
     if ((err=security_exec_open(op->child,path,&op->file))) goto done;
     if (w32_is_pe && w32_is_pe(&op->file)) { err=-ENOEXEC; goto done; }

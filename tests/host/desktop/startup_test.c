@@ -128,7 +128,20 @@ int main(int argc,char **argv)
     assert(desk_startup_command("C:\\x.exe /x",&record)==0);
     assert(desk_startup_command("C:\\x.com",&record)==0);
     assert(desk_startup_command("relative/path",&record)==-EINVAL);
+    /* sec-user-05 (Windows XP): the All Users StartUp folder, then the user's own. */
+    int common=desk_startup_list_at(folder,registry,entries,DESK_STARTUP_MAX); assert(common>0);
+    char personal[300]; snprintf(personal,sizeof(personal),"%s/Personal",argv[1]); assert(!mkdir(personal,0700));
+    snprintf(path,sizeof(path),"%s/mine.lnk",personal); file(path,bytes,n);
+    count=desk_startup_list_folders_at(folder,personal,registry,entries,DESK_STARTUP_MAX); assert(count==common+1);
+    assert(entries[count-1].source==6 && !strcmp(entries[count-1].name,"mine.lnk") && strstr(entries[count-1].command,"/Personal/mine.lnk"));
+    for (int i=0;i<count-1;i++) assert(!strstr(entries[i].command,"/Personal/"));
+    assert(desk_startup_list_folders_at(folder,folder,registry,entries,DESK_STARTUP_MAX)==common);   /* one folder once */
+    assert(desk_startup_list_folders_at(folder,NULL,registry,entries,DESK_STARTUP_MAX)==common);
+    snprintf(path,sizeof(path),"%s/Absent",argv[1]);
+    assert(desk_startup_list_folders_at(folder,path,registry,entries,DESK_STARTUP_MAX)==common);    /* no StartUp of its own */
+    assert(!setenv("USERPROFILE","/Windows/Profiles/u00000003",1));   /* a session whose StartUp is absent */
+    assert(desk_startup_list_at(folder,registry,entries,DESK_STARTUP_MAX)==common); assert(!unsetenv("USERPROFILE"));
     assert(!desk_startup_begin(1));
     free(entries); wr_destroy(&server);
-    puts("PASS G21 startup: sources, persistence, Shift, once, malformed, failure, bounds"); return 0;
+    puts("PASS G21 startup: sources, persistence, Shift, once, malformed, failure, bounds, All Users and personal StartUp"); return 0;
 }

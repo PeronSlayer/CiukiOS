@@ -267,7 +267,9 @@ static void test_matrix(void)
         {"/System/BOOT.CFG",31,1},{"/Programs",31,3},{"/Programs/setup",31,1},
         {"/Program Files",31,3},{"/Documents",31,15},{"/Documents/Desktop",31,15},
         {"/Documents/Desktop/Quake III Arena Demo",31,3},
-        {"/CIUKILDR",31,1},{"/BOOT.CFG",31,1}
+        {"/CIUKILDR",31,1},{"/BOOT.CFG",31,1},
+        {"/System/SFC.LST",31,1}, /* sec-sysvc: the SFC restore service's baseline */
+        {"/System/SysBckup",1,1}  /* sec-sysvc2: Registry Checker's backups, the broker's restore input */
     };
     CHECK(v.count==1+sizeof(expected)/sizeof(*expected));
     for(unsigned rule=0;rule<sizeof(expected)/sizeof(*expected);rule++) {
@@ -298,6 +300,22 @@ static void test_matrix(void)
         CHECK(!policy_child(&v,&parent,hives[file],100+file,0,&hive));
         for(unsigned who=0;who<5;who++) for(unsigned bit=1;bit<=POLICY_META;bit<<=1)
             CHECK((policy_check(&v,&hive,subjects[who],bit)==0)==(who==0));
+    }
+    /* sec-sysvc2: boot inputs among the machine settings are sealed by name
+     * (no trie node): everyone reads, only SYSTEM writes or renames them. */
+    static const struct { const char *path; unsigned write; } boot_inputs[]={
+        {"/System/HWPROF.CFG",1},{"/System/hwprof.cfg",1},{"/System/Settings/performance.cfg",1},
+        {"/System/Settings/hwprofiles.cfg",1},{"/System/Settings/accel.cfg",1},{"/System/Settings/ACCEL-RETRY.CFG",1},
+        {"/System/Settings/accel-s3savage-5333-8c2e.cfg",1},{"/System/Settings/accel-i810.cfg",1},
+        {"/System/Settings/desktop.cfg",3},{"/System/Settings/accel.txt",3},{"/System/Settings/xaccel.cfg",3},
+        {"/System/Settings/HWPROF.CFG",3},{"/System/performance.cfg",3},{"/Programs/HWPROF.CFG",3}};
+    for(unsigned i=0;i<sizeof(boot_inputs)/sizeof(*boot_inputs);i++) {
+        struct policy_label label=policy_path(&v,boot_inputs[i].path,0);
+        for(unsigned who=0;who<5;who++) {
+            CHECK(!policy_check(&v,&label,subjects[who],POLICY_READ));
+            CHECK((policy_check(&v,&label,subjects[who],POLICY_WRITE)==0)==!!(boot_inputs[i].write&(1u<<who)));
+            if(boot_inputs[i].write==1) CHECK((policy_check(&v,&label,subjects[who],POLICY_RENAME|POLICY_REMOVE)==0)==(who==0));
+        }
     }
     struct policy_label shared=policy_path(&v,"/Documents/Desktop/notes.txt",0);
     struct policy_label launch=policy_path(&v,"/Documents/Desktop/Quake III Arena Demo/Install Quake III Arena Demo.lnk",0);
@@ -398,6 +416,49 @@ static void test_profile_limit_and_retirement(void)
     owner_close(s); fake_cut(&f); struct owner_backend io=fake_backend(&f); CHECK(!owner_open(s,&io,owner_sid,31,false)); CHECK(s->profiles[2].retired);
     owner_close(s); fake_destroy(&f); free(s); puts("H02 32-profile bound, full-vector KEEP/RETIRE, retained uid/root capacity and binding generations PASS");
 }
+/* sec-sysvc (lead decision): first-boot uid recovery. One CREATE binding
+ * for uid, the manifest patched to match (make_batch's single entry is 500). */
+static void make_single(struct owner_fake *f,uint32_t uid,uint64_t g)
+{
+    make_batch(f,1,g,false);
+    struct owner_binding *b=&f->request.bindings[0]; b->uid=uid; memset(b->path,0,64);
+    ksnprintf(b->path,64,"/Windows/Profiles/u%08x",uid);
+    uint8_t *p=f->manifest.data+64; fs_wr32(p,uid); memset(p+16,0,64); memcpy(p+16,b->path,strlen(b->path));
+    memset(p+144,0,64); ksnprintf((char *)p+144,64,"/System/Security/Staging/g%016llx/p%08x",(unsigned long long)g,uid);
+    tree_read(f,g,uid,p+208); sha256(f->manifest.data,f->manifest.bytes,f->request.manifest_digest);
+}
+static void test_first_boot_retry(void)
+{
+    struct owner_fake f; struct owner_store *s=calloc(1,sizeof(*s)); CHECK(s); uint8_t reply[OWNER_REPLY_MAX];
+    fresh_store(&f,s); f.uid_base=1002; make_batch(&f,3,1,false);
+    CHECK(!call(s,&f.request,OWNER_RESERVE,reply)); CHECK(!call(s,&f.request,OWNER_ABORT,reply));
+    CHECK(s->uid_high==1003 && s->receipt_count==1 && !s->generation && !s->profile_count);
+    /* Never reserved, although below the watermark: retired. */
+    unsigned events=f.events;
+    f.uid_base=1001; make_batch(&f,3,2,false); CHECK(call(s,&f.request,OWNER_RESERVE,reply)==-EIO);
+    f.uid_base=1000; make_batch(&f,3,2,false); CHECK(call(s,&f.request,OWNER_RESERVE,reply)==-EIO);
+    /* Incomplete history (a checkpoint floor) proves nothing: retired. */
+    f.uid_base=1002; make_batch(&f,3,2,false); s->floor=1; CHECK(call(s,&f.request,OWNER_RESERVE,reply)==-EIO); s->floor=0;
+    CHECK(f.events==events && s->receipt_count==1);
+    /* Only aborted reservations and nothing ever committed: reserved again,
+     * at a new generation; the aborted transaction stays retired. */
+    CHECK(!call(s,&f.request,OWNER_RESERVE,reply) && fs_rd32(reply+8)==OWNER_RESERVED && ow64(reply+48)==2);
+    CHECK(!call(s,&f.request,OWNER_PREPARE,reply)); f.intent=1; CHECK(!call(s,&f.request,OWNER_COMMIT,reply));
+    CHECK(s->profile_count==3 && s->generation==2 && s->receipt_count==2 && s->uid_high==1003);
+    struct owner_record r; CHECK(!owner_profile(s,1002,&r) && r.binding.generation==2);
+    owner_close(s); fake_cut(&f); struct owner_backend io=fake_backend(&f); CHECK(!owner_open(s,&io,owner_sid,31,false));
+    CHECK(s->profile_count==3 && s->receipt_count==2 && s->receipts[0]->state==OWNER_ABORTED && s->receipts[1]->state==OWNER_COMMITTED);
+    /* Once a batch committed, an aborted uid is retired for good. */
+    memcpy(f.account_digest,f.request.accounts_digest,32); f.accounts=2; f.intent=0;
+    make_single(&f,1003,3); f.request.owner_generation=s->generation;
+    CHECK(!call(s,&f.request,OWNER_RESERVE,reply)); CHECK(!call(s,&f.request,OWNER_ABORT,reply)); CHECK(s->uid_high==1004);
+    events=f.events; make_single(&f,1003,4); f.request.owner_generation=s->generation;
+    CHECK(call(s,&f.request,OWNER_RESERVE,reply)==-EIO && f.events==events);
+    make_single(&f,1004,4); f.request.owner_generation=s->generation;
+    CHECK(!call(s,&f.request,OWNER_RESERVE,reply)); CHECK(!call(s,&f.request,OWNER_ABORT,reply));
+    owner_close(s); fake_destroy(&f); free(s);
+    puts("H02 sec-sysvc first-boot uid recovery: only-aborted uid reserved again while nothing committed; never-reserved uid, floor or any committed batch keep it retired PASS");
+}
 static void test_allocation_failures(void)
 {
     unsigned failures=0;
@@ -473,7 +534,7 @@ int main(int argc,char **argv)
 #ifdef OWNER_REAL_VFS_TEST
     CHECK(argc==2); test_owner_real_vfs(argv[1]);
 #else
-    test_batches_and_cuts(3,false); test_batches_and_cuts(18,true); test_invalid_and_receipts(); test_compaction(); test_creator_roots(); test_matrix(); test_checkpoint_cuts(); test_root_cuts(); test_profile_limit_and_retirement(); test_allocation_failures(); test_transport();
+    test_batches_and_cuts(3,false); test_batches_and_cuts(18,true); test_invalid_and_receipts(); test_compaction(); test_creator_roots(); test_matrix(); test_checkpoint_cuts(); test_root_cuts(); test_profile_limit_and_retirement(); test_first_boot_retry(); test_allocation_failures(); test_transport();
 #endif
     struct process *account=proc_find(security_subject_pid(account_peer)); CHECK(account);
     security_subject_put(account_peer); account_peer=0; stop_collect(account);

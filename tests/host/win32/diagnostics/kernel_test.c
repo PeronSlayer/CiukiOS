@@ -130,7 +130,7 @@ static void native_faults(void){
     tf.cs=8;tf.user_esp=stack;native_fault_report(u,&tf,0);CHECK(w32_fault_count==2);  /* kernel mode frame: ignored */
     tf.cs=0x1b;q->personality=PROC_WIN32;native_fault_report(u,&tf,0);CHECK(w32_fault_count==2);   /* Win32 has its own path */
     q->personality=PROC_NATIVE;w32_fault_count=w32_fault_head=0;
-    for(unsigned i=0;i<16;i++){struct ciuki_w32_fault x={.kind=W32_REPORT_NATIVE_FAULT,.pid=5000+i};diag_enqueue(&x);}
+    for(unsigned i=0;i<16;i++){struct ciuki_w32_fault x={.kind=W32_REPORT_NATIVE_FAULT,.pid=5000+i};diag_enqueue(q,&x);}
     diagnostic_log[0]=0;native_fault_report(u,&tf,0);
     CHECK(w32_fault_count==16&&strstr(diagnostic_log,"dialog-queue-full"));
     w32_fault_count=w32_fault_head=0;

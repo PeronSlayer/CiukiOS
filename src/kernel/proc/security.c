@@ -65,6 +65,9 @@ extern int channel_kernel_receive(struct process *, int32_t, struct ciuki_messag
 extern int channel_control_install(struct process *,struct proc_object *) __attribute__((weak));
 extern void channel_security_revoke(struct process *) __attribute__((weak));
 extern int proc_security_launch_prepare(struct process *, struct ciuki_security_launch *, struct process **) __attribute__((weak));
+/* sec-k07: the real device backend and the session drain, when linked. */
+#pragma weak secure_console_ops
+#pragma weak secure_session_retained
 
 void security_init(struct process *p)
 {
@@ -76,6 +79,7 @@ void security_init(struct process *p)
     role_generations[CIUKI_SECURITY_ROLE_OWNER]=1;
     p->fds=owner_endpoint_fds;
     p->subject = &system_subject;
+    if (&secure_console_ops) security_grants=&secure_console_ops; /* sec-k07 */
 }
 const struct ciuki_credential *security_credential(const struct process *p)
 { return p && p->subject ? &p->subject->credential : 0; }
@@ -338,6 +342,9 @@ int security_session_end(uint32_t id, bool begin, uint32_t *state)
             if (p && p->subject && p->subject->session == s && p->state != PROC_ZOMBIE)
                 draining = true;
         }
+        /* sec-k07: DOS VMs (kernel tasks, not processes) and Win32 session
+         * objects/reports are drained by PID 1; nonblocking query here. */
+        if (secure_session_retained && secure_session_retained(id)) draining = true;
         /* Unpublished children fence admission. Revoked subject snapshots
          * retain the DEAD record but cannot keep an old desktop executing. */
         if (!draining && !s->fence_pending && !s->fencing && !s->constructing) {
@@ -346,7 +353,14 @@ int security_session_end(uint32_t id, bool begin, uint32_t *state)
             boot_console.session_id = boot_console.session_generation = 0;
             boot_console.authentication_required = 0;
             boot_console.restore_cookie_lo = boot_console.restore_cookie_hi = 0;
-            if (security_grants && security_grants->release) security_grants->release(id);
+            /* sec-k07: the backend releases kernel-held endpoints whose last
+             * subject reference may be this session's; keep the record alive
+             * until its state has been reported. */
+            if (security_grants && security_grants->release && s->refs != UINT32_MAX) {
+                s->refs++;
+                security_grants->release(id);
+                s->refs--;
+            }
         }
     }
     *state = s->state;
@@ -366,6 +380,14 @@ int security_bootstrap_desktop(struct process *p)
     struct ciuki_credential c = { .version = 1, .size = 64, .uid = 1000,
         .primary_gid = 545, .group_count = 2, .groups = {544, 545}, .flags = CIUKI_CRED_INTERACTIVE };
     struct ciuki_security_profile profile = { .version = 1, .size = 112, .uid = 1000 };
+    /* sec-own: once OWNER has committed uid 1000's profile (CiukiUser on a
+     * ready image, Setup's first administrator), the interim session carries
+     * that committed descriptor; until then it has none (k05 legacy stores). */
+    extern int owner_system_profile(uint32_t, struct ciuki_security_profile *) __attribute__((weak));
+    struct ciuki_security_profile committed;
+    if (owner_system_profile && !owner_system_profile(1000, &committed) &&
+        !profile_template(&committed, 1000) && security_owner_verify && !security_owner_verify(&committed)) profile = committed;
+    /* end sec-own */
     uint32_t id;
     int err = session_reserve(&c, &profile, &id);
     if (!err) session_find(id)->bootstrap = true;
@@ -487,12 +509,14 @@ int security_subject_check(const struct security_subject *s, uint32_t action, ui
     uint32_t service=action>>16, op=action&65535u, r=s->role;
     if (!service) return action ? -EINVAL : 0;
     if (!s->origin || !channel_peer_service || channel_peer_service(&s->peer)!=service) return -EACCES;
-    if (!op || (service==2 && op>9) || (service==3 && op>7)) return -EOPNOTSUPP;
-    if (service==1) return r==1 ? (op>=1 && op<=7 ? 0 : -EOPNOTSUPP) :
+    /* sec-own: OWNER query operations 8..14 (fs/owner_system.h). */
+    if (!op || (service==2 && op>9) || (service==3 && op>14)) return -EOPNOTSUPP;
+    /* sec-user-04: AUTH ENROLL_SOURCE=8 (LOGON), LOGON ENROLL_SOURCE=10 (LOGON_UI). */
+    if (service==1) return r==1 ? (op>=1 && op<=8 ? 0 : -EOPNOTSUPP) :
         r==2 && op==1 ? 0 : -EPERM;
     if (service==5) {
-        if ((r==3 && op==1) || (r==2 && (op==2 || op==3 || op==4 || op==6 || op==7)) ||
-            (r==6 && op==5 && scope && s->credential.session_id==scope)) return 0;
+        if ((r==3 && op==1) || (r==2 && (op==2 || op==3 || op==4 || op==6 || op==7 || op==8 || op==10)) ||
+            (r==6 && (op==5 || op==9) && scope && s->credential.session_id==scope)) return 0; /* sec-user-03: 8, 9 */
         return -EPERM;
     }
     if (service==3 && r!=3 && r!=8) return -EPERM;

@@ -16,6 +16,7 @@ static uint32_t w32r_gate(uint32_t op,uintptr_t a,uintptr_t b,uintptr_t c) {
     return result;
 #endif
 }
+#include "registry_broker.h"
 static void disconnect(void)
 {
     if(endpoint!=UINT32_MAX)w32r_gate(CIUKI_SYS_CLOSE,endpoint,0,0);
@@ -59,6 +60,10 @@ uint32_t w32_server_exchange(const void *in,uint32_t n,void *out,uint32_t cap,ui
     *used=0;
     RTL_CRITICAL_SECTION *lock=NtCurrentTeb()->ProcessEnvironmentBlock->FastPebLock;
     RtlEnterCriticalSection(lock);
+    const struct w32r_request *request=in;
+    if(request->op<=W32R_FLUSH||request->op==W32R_COMPAT){
+        uint32_t result=broker_exchange(in,n,out,cap,used);RtlLeaveCriticalSection(lock);return result;
+    }
     uint32_t e=0;
     for(unsigned attempt=0;attempt<2;attempt++){
         if(!connected){
@@ -88,3 +93,21 @@ uint32_t w32_server_exchange(const void *in,uint32_t n,void *out,uint32_t cap,ui
     }
     RtlLeaveCriticalSection(lock);return e;
 }
+/* --- sec-user-05: ADVAPI32's token/SID facade reads the protected
+ * per-install machine SID (RB_MACHINE_ID, empty request, 32-byte reply:
+ * version, A, B, C, volume u64, account generation u64) over this process's
+ * one REGISTRY link, serialized with the registry transaction. It carries no
+ * caller authority: the broker answers from its own protected state. --- */
+uint32_t w32_registry_machine(uint32_t out[8])
+{
+    if(!out)return 87;
+    RTL_CRITICAL_SECTION *lock=NtCurrentTeb()->ProcessEnvironmentBlock->FastPebLock;
+    RtlEnterCriticalSection(lock);
+    uint8_t reply[32];uint32_t used=0;
+    uint32_t e=broker_rpc(RB_MACHINE_ID,NULL,0,reply,sizeof(reply),&used);
+    RtlLeaveCriticalSection(lock);
+    if(!e&&(used!=sizeof(reply)||br32(reply)!=1))e=13;
+    if(!e)for(unsigned i=0;i<8;i++)out[i]=br32(reply+i*4);
+    return e;
+}
+/* --- end sec-user-05 --- */

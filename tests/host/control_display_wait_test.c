@@ -355,3 +355,8 @@ int main(void)
     puts("negative control: 1000 native 1 ms waits, 150000 us kernel work (>1 percent) PASS");
     return 0;
 }
+
+/* sec-k04: the included lwIP socket layer asks the caller's retained
+ * subject; this display-wait harness opens no socket. */
+__attribute__((weak)) const struct ciuki_credential *security_credential(const struct process *p)
+{ (void)p; return 0; }

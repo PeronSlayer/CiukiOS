@@ -822,18 +822,6 @@
     "status": "retained"
   },
   {
-    "icon": "system-lock-screen",
-    "label": "Passwords",
-    "object": "applet:passwords",
-    "previous": "system-lock-screen",
-    "previous_derived_sizes": [
-      48
-    ],
-    "previous_missing_runtime_sizes": [],
-    "source": "apps/desktop/settings_catalog.h",
-    "status": "retained"
-  },
-  {
     "icon": "system-shutdown",
     "label": "Power",
     "object": "applet:power",
@@ -917,7 +905,7 @@
   },
   {
     "icon": "system-users",
-    "label": "Users",
+    "label": "User Accounts",
     "object": "applet:users",
     "previous": "system-users",
     "previous_derived_sizes": [
@@ -1600,17 +1588,6 @@
     "icon": "system-installer",
     "object": "apps/desktop/settings_catalog.h:system-installer",
     "previous": "system-installer",
-    "previous_derived_sizes": [
-      48
-    ],
-    "previous_missing_runtime_sizes": [],
-    "source": "apps/desktop/settings_catalog.h",
-    "status": "retained"
-  },
-  {
-    "icon": "system-lock-screen",
-    "object": "apps/desktop/settings_catalog.h:system-lock-screen",
-    "previous": "system-lock-screen",
     "previous_derived_sizes": [
       48
     ],

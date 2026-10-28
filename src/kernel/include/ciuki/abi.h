@@ -515,6 +515,9 @@ typedef uint64_t ciuki_sigset_t;
 #define CIUKI_INPUT_BUTTON 4
 #define CIUKI_INPUT_RESYNC 5
 #define CIUKI_INPUT_WHEEL 6
+/* Kernel secure attention (physical Ctrl+Alt+Delete), delivered only on the
+ * trusted logon UI's input grant; code = CIUKI_SECURITY_SECURE_ATTENTION. */
+#define CIUKI_INPUT_ATTENTION 13
 #define CIUKI_KEY_VALUE_UP 0
 #define CIUKI_KEY_VALUE_DOWN 1
 #define CIUKI_KEY_VALUE_REPEAT 2
@@ -2387,6 +2390,161 @@ struct ciuki_scandisk {
     char first_problem[64]; /* 136: path of the first damaged entry */
 };
 _Static_assert(sizeof(struct ciuki_scandisk) == 200, "ScanDisk report ABI");
+/* ---- sec-sysvc: SYSTEM services on call 99 (user-security-kernel.md
+ * "SYSTEM services and logs", K-Q4). The kernel checks the caller's retained
+ * subject, then acts as SYSTEM on fixed targets; a caller-chosen input is read
+ * as the caller and no SYSTEM descriptor is handed out. EPERM: not an
+ * administrator (or SYSTEM). EDX is the exact record size.
+ * BOOT_CONFIG SET (administrators): C:\SYSTEM\BOOT.CFG becomes `length`
+ * bytes of `text` (printable ASCII, tab, CR, LF; the loader's 127 at most);
+ * the previous text is restored when the write fails.
+ * LOG: MACHINE scope is C:\SYSTEM\LOGS. LIST and READ are for administrators
+ * (Event Viewer model); its files are written by SYSTEM, except APPEND of the
+ * maintenance reports SCANDISK.LOG and SFC.LOG by an administrator. USER scope
+ * is the caller's own log folder, <profile>\Local Settings\Application Data\
+ * CiukiOS\Logs, listed, read and written as the caller; a session without a
+ * profile (the interim administrator session of a first boot) uses
+ * C:\SYSTEM\LOGS\Users\u<8 hex uid>. Names are 8.3 of [A-Za-z0-9_-]; MACHINE
+ * names may also be Users/u<8 hex>/NAME. LIST returns the index-th file
+ * (ENOENT past the last); READ copies `bytes` (at most DATA_MAX) from
+ * `offset`; APPEND starts the file over when it would pass `limit`; REPLACE
+ * rewrites it. `total` returns the file size.
+ * DRIVER_PACK (administrators): INSTALL copies the files named by the sealed
+ * package manifest (the exact manifest.ndp image) from `root`, read as the
+ * caller, into C:\SYSTEM\DRIVERS\<package>, verifying every byte; REMOVE
+ * deletes the adapter's installed package once its host is stopped. The
+ * result is 0 or -errno; `reason` says what happened in words.
+ * SFC_RESTORE (administrators): System File Checker's "Restore file" for any
+ * file of the sealed baseline C:\SYSTEM\SFC.LST: `source` + `path`, read as
+ * the caller, must have the baseline's size and SHA-256 (EILSEQ otherwise;
+ * ENOENT: not in the baseline); the current file is first copied to
+ * C:\SYSTEM\Helpdesk\SFC, then the original replaces it in one rename. */
+#define CIUKI_RECOVERY_BOOT_CONFIG 5u
+#define CIUKI_RECOVERY_LOG 6u
+#define CIUKI_RECOVERY_DRIVER_PACK 7u
+#define CIUKI_RECOVERY_SFC_RESTORE 8u
+#define CIUKI_BOOT_CONFIG_VERSION 1u
+#define CIUKI_BOOT_CONFIG_SET 1u
+#define CIUKI_BOOT_CONFIG_MAX 127u
+struct ciuki_boot_config {
+    uint32_t version; /* 0 */
+    uint32_t size; /* 4 */
+    uint32_t action; /* 8: CIUKI_BOOT_CONFIG_SET */
+    uint32_t length; /* 12: bytes of text */
+    char text[128]; /* 16 */
+};
+_Static_assert(sizeof(struct ciuki_boot_config) == 144, "boot configuration ABI");
+#define CIUKI_SYSTEM_LOG_VERSION 1u
+#define CIUKI_SYSTEM_LOG_LIST 1u
+#define CIUKI_SYSTEM_LOG_READ 2u
+#define CIUKI_SYSTEM_LOG_APPEND 3u
+#define CIUKI_SYSTEM_LOG_REPLACE 4u
+#define CIUKI_SYSTEM_LOG_MACHINE 1u
+#define CIUKI_SYSTEM_LOG_USER 2u
+#define CIUKI_SYSTEM_LOG_NAME_MAX 48u
+#define CIUKI_SYSTEM_LOG_DATA_MAX 65536u
+#define CIUKI_SYSTEM_LOG_LIMIT 65536u
+#define CIUKI_SYSTEM_LOG_LIMIT_MAX 1048576u
+struct ciuki_system_log {
+    uint32_t version; /* 0 */
+    uint32_t size; /* 4 */
+    uint32_t action; /* 8: CIUKI_SYSTEM_LOG_* */
+    uint32_t scope; /* 12: MACHINE or USER */
+    uint32_t index; /* 16: LIST */
+    uint32_t offset; /* 20: READ */
+    uint32_t buffer; /* 24: READ, APPEND, REPLACE: data address */
+    uint32_t bytes; /* 28: READ: capacity in, bytes out; APPEND, REPLACE: bytes */
+    uint32_t total; /* 32: out: the file's size */
+    uint32_t limit; /* 36: APPEND: 0 is CIUKI_SYSTEM_LOG_LIMIT */
+    uint32_t reserved[2]; /* 40 */
+    char name[48]; /* 48: NUL terminated; LIST returns it */
+};
+_Static_assert(sizeof(struct ciuki_system_log) == 96, "system log ABI");
+#define CIUKI_DRIVER_PACK_JOB_VERSION 1u
+#define CIUKI_DRIVER_PACK_INSTALL 1u
+#define CIUKI_DRIVER_PACK_REMOVE 2u
+#define CIUKI_DRIVER_PACK_MANIFEST_BYTES 48088u
+#define CIUKI_DRIVER_PACK_SOURCE_BYTES 192u
+#define CIUKI_DRIVER_PACK_FILES 32u
+struct ciuki_driver_pack_job {
+    uint32_t version; /* 0 */
+    uint32_t size; /* 4 */
+    uint32_t action; /* 8: INSTALL or REMOVE */
+    uint32_t manifest; /* 12: INSTALL: address of the sealed manifest image */
+    uint32_t manifest_bytes; /* 16: CIUKI_DRIVER_PACK_MANIFEST_BYTES */
+    uint32_t sources; /* 20: INSTALL: one 192-byte path per manifest file, relative to root */
+    uint32_t source_bytes; /* 24: file count times 192 */
+    uint32_t reserved; /* 28 */
+    uint32_t bus; /* 32: REMOVE: the adapter */
+    uint32_t slot; /* 36 */
+    uint32_t function; /* 40 */
+    uint32_t vendor; /* 44 */
+    uint32_t device; /* 48 */
+    uint32_t sub_vendor; /* 52 */
+    uint32_t sub_device; /* 56 */
+    uint32_t revision; /* 60 */
+    char root[256]; /* 64: INSTALL: the package folder, a native path */
+    char reason[160]; /* 320: out: the outcome in words */
+};
+_Static_assert(sizeof(struct ciuki_driver_pack_job) == 480, "driver pack job ABI");
+#define CIUKI_SFC_RESTORE_VERSION 1u
+struct ciuki_sfc_restore {
+    uint32_t version; /* 0 */
+    uint32_t size; /* 4 */
+    uint32_t reserved[2]; /* 8 */
+    char path[160]; /* 16: the baseline path, as /System/VMM.ELF */
+    char source[256]; /* 176: the folder holding the originals, a native path */
+};
+_Static_assert(sizeof(struct ciuki_sfc_restore) == 432, "SFC restore ABI");
+/* ---- end sec-sysvc ---- */
+/* ---- sec-sysvc2: SYSTEM jobs and sealed boot settings on call 99
+ * (user-security-kernel.md, sec-sysvc2 amendment). Same model as the
+ * services above: the kernel checks the caller's retained subject, then acts
+ * as SYSTEM on fixed targets.
+ * JOB (every live session subject, administrators, standard users, Guest,
+ * and SYSTEM): scheduled system maintenance runs as SYSTEM, never as the
+ * session user (Windows XP runs it under LocalSystem). STARTUP_REPORT appends
+ * every ScanDisk check this start ran (REPORT) to C:\SYSTEM\LOGS\SCANDISK.LOG,
+ * once per start and drive, formatted by the kernel from its own record; no
+ * caller data reaches the log. `done` returns the reports this call appended.
+ * SETTING SET (administrators, or SYSTEM): a sealed boot setting, a file the
+ * kernel or the loader reads at the next start, becomes `length` bytes read
+ * from `buffer`: HWPROFILES C:\SYSTEM\HWPROF.CFG (printable text, tab, CR,
+ * LF, at most SETTING_MAX), PERFORMANCE C:\SYSTEM\SETTINGS\performance.cfg
+ * (a complete valid performance record), ACCEL_RETRY the display retry
+ * request C:\SYSTEM\SETTINGS\accel-retry.cfg (exactly
+ * "driver=<id>\npci=<vvvv>:<dddd>\n" of DM8: id 1..15 of [a-z0-9_-],
+ * lowercase hex). EINVAL otherwise; the previous text is restored when the
+ * write fails. */
+#define CIUKI_RECOVERY_JOB 9u
+#define CIUKI_RECOVERY_SETTING 10u
+#define CIUKI_SYSTEM_JOB_VERSION 1u
+#define CIUKI_SYSTEM_JOB_STARTUP_REPORT 1u
+struct ciuki_system_job {
+    uint32_t version; /* 0 */
+    uint32_t size; /* 4 */
+    uint32_t job; /* 8: CIUKI_SYSTEM_JOB_* */
+    uint32_t done; /* 12: out: work done by this call (reports appended) */
+    uint32_t reserved[4]; /* 16: zero */
+};
+_Static_assert(sizeof(struct ciuki_system_job) == 32, "system job ABI");
+#define CIUKI_SYSTEM_SETTING_VERSION 1u
+#define CIUKI_SYSTEM_SETTING_SET 1u
+#define CIUKI_SYSTEM_SETTING_HWPROFILES 1u
+#define CIUKI_SYSTEM_SETTING_PERFORMANCE 2u
+#define CIUKI_SYSTEM_SETTING_ACCEL_RETRY 3u
+#define CIUKI_SYSTEM_SETTING_MAX 24575u
+struct ciuki_system_setting {
+    uint32_t version; /* 0 */
+    uint32_t size; /* 4 */
+    uint32_t action; /* 8: CIUKI_SYSTEM_SETTING_SET */
+    uint32_t setting; /* 12: HWPROFILES, PERFORMANCE or ACCEL_RETRY */
+    uint32_t buffer; /* 16: address of the text */
+    uint32_t length; /* 20: bytes of text */
+    uint32_t reserved[2]; /* 24: zero */
+};
+_Static_assert(sizeof(struct ciuki_system_setting) == 32, "system setting ABI");
+/* ---- end sec-sysvc2 ---- */
 
 struct ciuki_spawn_fd {
     int32_t source; /* 0 */

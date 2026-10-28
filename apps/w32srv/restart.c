@@ -81,6 +81,9 @@ static int journal_remove(struct ws_shell *s)
 }
 int ws_restart_recover(struct ws_shell *s)
 {
+    /* sec-k06: unowned v1 inputs never execute in a real user session.
+     * Schema-2 work belongs to the retained REGISTRY broker protocol. */
+    if(s->registry&&s->registry->session_only)return EOPNOTSUPP;
     char path[WS_PATH]; uint8_t *bytes = NULL; size_t n = 0;
     if (!in_windows(s, journal_tmp, path, sizeof(path))) return EINVAL;
     s->fs.unlink(s->fs.opaque, path); /* a torn write of the next journal */
@@ -221,6 +224,9 @@ static int wininit_step(struct ws_shell *s)
 }
 int ws_restart_tick(struct ws_shell *s)
 {
+    /* sec-k06: unowned v1 inputs never execute in a real user session.
+     * Schema-2 work belongs to the retained REGISTRY broker protocol. */
+    if(s->registry&&s->registry->session_only)return 0;
     if (s->phase != W32R_RESTART_WININIT || s->restart_error) return 0;
     if (!s->wininit_loaded) {
         int e = wininit_load(s);
@@ -298,6 +304,9 @@ static int expand(const char *in, char *out, size_t cap)
 }
 uint32_t ws_restart_next(struct ws_shell *s, char *command, size_t cap, uint32_t *type, uint32_t *handed)
 {
+    /* sec-k06: unowned v1 inputs never execute in a real user session.
+     * Schema-2 work belongs to the retained REGISTRY broker protocol. */
+    if(s->registry&&s->registry->session_only)return 120;
     if (s->restart_error) return 29;
     if (s->phase == W32R_RESTART_IDLE) return 87;
     if (s->phase == W32R_RESTART_WININIT) return 170; /* ERROR_BUSY: the WININIT pass is still running */
@@ -344,6 +353,9 @@ uint32_t ws_restart_next(struct ws_shell *s, char *command, size_t cap, uint32_t
 }
 int ws_restart_pending(struct ws_shell *s)
 {
+    /* sec-k06: unowned v1 inputs never execute in a real user session.
+     * Schema-2 work belongs to the retained REGISTRY broker protocol. */
+    if(s->registry&&s->registry->session_only)return 0;
     char path[WS_PATH];
     if (s->phase != W32R_RESTART_IDLE || s->resumed) return 1;
     int dir = 0; uint64_t size = 0;
@@ -355,6 +367,9 @@ int ws_restart_pending(struct ws_shell *s)
 /* ---- begin and end ------------------------------------------------------ */
 uint32_t ws_restart_begin(struct ws_shell *s, uint32_t flags)
 {
+    /* sec-k06: unowned v1 inputs never execute in a real user session.
+     * Schema-2 work belongs to the retained REGISTRY broker protocol. */
+    if(s->registry&&s->registry->session_only)return 120;
     if(s->restart_error){wininit_free(s);s->restart_error=0;ws_restart_recover(s);}
     if (s->phase != W32R_RESTART_IDLE) return 0; /* running or resumed: repeating is accepted */
     uint32_t e = s->registry ? wr_flush(s->registry) : 0;
@@ -367,6 +382,9 @@ uint32_t ws_restart_begin(struct ws_shell *s, uint32_t flags)
 }
 uint32_t ws_restart_end(struct ws_shell *s)
 {
+    /* sec-k06: unowned v1 inputs never execute in a real user session.
+     * Schema-2 work belongs to the retained REGISTRY broker protocol. */
+    if(s->registry&&s->registry->session_only)return 120;
     if (s->phase == W32R_RESTART_IDLE) return 0;
     if (s->phase == W32R_RESTART_WININIT || !s->exhausted || s->pending_run) return 170;
     uint32_t e = s->registry ? wr_flush(s->registry) : 0;

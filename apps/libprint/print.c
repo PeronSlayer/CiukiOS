@@ -10,10 +10,30 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static const char *base(const char *r) { return r ? r : CP_ROOT; }
+/* sec-user-05 (user-security-contract.md 8.2; sec-k05 open item): a profile
+ * session queues its jobs in its own <profile>/Settings/Spool, serviced by
+ * that session's worker (apps/printers/spool.c), so Standard users print
+ * without write access to /WINDOWS. The printer configuration stays the
+ * machine's CP_ROOT/printers: everyone reads it, administrators change it.
+ * A profile-less bootstrap session keeps the machine queue. An explicit
+ * root (host fixtures) holds both, as before. */
+static const char *queue_root(void)
+{
+    static char own[160];
+    const char *profile=getenv("USERPROFILE");
+    if(!profile || strncmp(profile,"/Windows/Profiles/",18) || !profile[18] || strlen(profile)>=96 || strstr(profile,"/.."))return CP_ROOT;
+    snprintf(own,sizeof(own),"%s/Settings/Spool",profile);return own;
+}
+static const char *base(const char *r) { return r ? r : queue_root(); }
+static const char *config_base(const char *r) { return r ? r : CP_ROOT; }
 static int path(char *out, size_t n, const char *r, unsigned id, const char *leaf)
 {
     int k = id ? snprintf(out,n,"%s/j%03u/%s",base(r),id,leaf) : snprintf(out,n,"%s/%s",base(r),leaf);
+    if (k<0 || (size_t)k>=n) { errno=ENAMETOOLONG; return -1; } return 0;
+}
+static int config_path(char *out, size_t n, const char *r, const char *leaf)
+{
+    int k = snprintf(out,n,"%s/%s",config_base(r),leaf);
     if (k<0 || (size_t)k>=n) { errno=ENAMETOOLONG; return -1; } return 0;
 }
 static int valid_string(const char *s,size_t n) { return memchr(s,0,n)!=NULL; }
@@ -60,7 +80,8 @@ static int read_saved(const char *p,void *v,size_t n)
 }
 static int acquire_lock(const char *r,const char *name,int self_stale)
 {
-    char p[CP_PATH+64],owner[CP_PATH+96];if(path(p,sizeof(p),r,0,name))return -1;
+    char p[CP_PATH+64],owner[CP_PATH+96];
+    if(strcmp(name,"config.lock") ? path(p,sizeof(p),r,0,name) : config_path(p,sizeof(p),r,name))return -1;
     snprintf(owner,sizeof(owner),"%s/owner",p);
     if(mkdir(p,0700)){
         uint32_t pid=0;
@@ -79,7 +100,7 @@ static int acquire_lock(const char *r,const char *name,int self_stale)
 static void release_lock(const char *r,const char *name)
 {
     int saved=errno;char p[CP_PATH+96];
-    if(!path(p,sizeof(p),r,0,name)){size_t n=strlen(p);if(n+6<sizeof(p)){strcat(p,"/owner");unlink(p);p[n]=0;rmdir(p);}}
+    if(!(strcmp(name,"config.lock") ? path(p,sizeof(p),r,0,name) : config_path(p,sizeof(p),r,name))){size_t n=strlen(p);if(n+6<sizeof(p)){strcat(p,"/owner");unlink(p);p[n]=0;rmdir(p);}}
     errno=saved;
 }
 static int config_lock(const char *r){return acquire_lock(r,"config.lock",0);}
@@ -111,7 +132,7 @@ static void default_config(struct cp_config *c)
 }
 int cp_config_load(const char *r,struct cp_config *c)
 {
-    char p[CP_PATH+64]; if(path(p,sizeof(p),r,0,"printers")) return -1;
+    char p[CP_PATH+64]; if(config_path(p,sizeof(p),r,"printers")) return -1;
     if(read_saved(p,c,sizeof(*c))) {if(errno==ENOENT){default_config(c);return 0;}return -1;}
     if(c->magic!=CP_CONFIG_MAGIC || c->version!=1 || c->default_printer>=CP_PRINTERS || !c->printers[c->default_printer].present) { errno=EINVAL;return -1; }
     for(unsigned i=0;i<CP_PRINTERS;i++) if(c->printers[i].present &&
@@ -120,7 +141,7 @@ int cp_config_load(const char *r,struct cp_config *c)
 }
 static int config_save(const char *r,const struct cp_config *c)
 {
-    char p[CP_PATH+64]; if(path(p,sizeof(p),r,0,"printers")) return -1;
+    char p[CP_PATH+64]; if(config_path(p,sizeof(p),r,"printers")) return -1;
     if(c->magic!=CP_CONFIG_MAGIC || c->version!=1 || c->default_printer>=CP_PRINTERS || !c->printers[c->default_printer].present) { errno=EINVAL;return -1; }
     for(unsigned i=0;i<CP_PRINTERS;i++)if(c->printers[i].present &&
         (c->printers[i].driver>CP_PCL || !valid_string(c->printers[i].name,64) || !valid_string(c->printers[i].port,CP_PATH) || !cp_page_valid(&c->printers[i].page))){errno=EINVAL;return -1;}
@@ -131,10 +152,21 @@ int cp_config_save(const char *r,const struct cp_config *c)
 
 int cp_init(const char *r)
 {
-    if(mkdir(base(r),0700) && errno!=EEXIST) return -1;
+    /* sec-user-05: a profile queue's Settings parent is created inside the profile. */
+    char settings[CP_PATH];const char *q=base(r),*slash=strrchr(q,'/');
+    if(!r && strcmp(q,CP_ROOT) && slash && (size_t)(slash-q)<sizeof(settings)){
+        memcpy(settings,q,(size_t)(slash-q));settings[slash-q]=0;
+        if(mkdir(settings,0700) && errno!=EEXIST) return -1;
+    }
+    if(mkdir(q,0700) && errno!=EEXIST) return -1;
     struct cp_config *c=malloc(sizeof(*c)); if(!c) return -1;
     int e=cp_config_load(r,c);char p[CP_PATH+64];struct stat st;
-    if(!e && !path(p,sizeof(p),r,0,"printers") && stat(p,&st)) e=cp_config_save(r,c);
+    /* The default configuration is published by whoever may write the
+     * machine folder; a Standard session prints with it unpublished. */
+    if(!e && !config_path(p,sizeof(p),r,"printers") && stat(p,&st)){
+        e=cp_config_save(r,c);
+        if(e && (errno==EACCES || errno==EPERM || errno==EROFS))e=0;
+    }
     free(c);return e;
 }
 int cp_add_printer(const char *r,const char *name,const char *port,unsigned driver,unsigned *index)

@@ -602,7 +602,7 @@ static void build(struct desktop *d, struct sh_menu *m, int kind)
         char logoff_label[44];
         snprintf(logoff_label,sizeof(logoff_label),"Log Off%s%.31s...",d->sh.profile.name[0] ? " " : "",d->sh.profile.name);
         item(m,logoff_label,"system-log-out",SH_ACT_LOGOFF,0,0);
-        if (d->sh.profile.name[0] && (d->sh.users.flags&USERS_LOCK))
+        if (d->sh.profile.name[0] && ((d->sh.users.flags&USERS_LOCK) || d->logon_session)) /* sec-user-03 */
             item(m, "Lock", "system-lock-screen", SH_ACT_LOCK, 0, 0);
         item(m, "Shut Down...", "system-shutdown", SH_ACT_SHUTDOWN, 0, 0);
         break;
@@ -2094,9 +2094,16 @@ static void standby_service(struct desktop *d)
         return;
     case DESK_STANDBY_SUSPEND: {
         if (!broadcast_finished(d, PP_PBT_SUSPEND)) return;
+        /* sec-user-04 (contract 4.3): a LOGON session arms password-on-resume
+         * before the firmware sleeps: LOGON enters the trusted gate (RESUME)
+         * and Stand by waits, bounded, until it is up, so no application
+         * frame or input can follow the resume before authentication. A gate
+         * that cannot be raised refuses Stand by (locally, nothing slept). */
+        int arm=d->logon_session ? desk_session_arm_resume(d) : 1;
+        if (!arm) return;
         errno = 0;
         int prepared=0,paint_error=0;
-        if (d->sh.power_cfg.password && d->sh.profile.name[0] && !d->sh.user_gate) {
+        if (!d->logon_session && d->sh.power_cfg.password && d->sh.profile.name[0] && !d->sh.user_gate) {
             /* Firmware may wake scanout before returning to us. Conceal the
              * framebuffer before sleeping, after every program has agreed. */
             desk_logon_open(d,2); prepared=1;
@@ -2106,7 +2113,8 @@ static void standby_service(struct desktop *d)
             } /* DPMS already published black before suspending grants. */
         }
         int attempted=0,r;
-        if (paint_error) { errno=EAGAIN; r=-1; }
+        if (arm<0) { errno=-arm; r=-1; }   /* sec-user-04: the trusted gate could not be raised */
+        else if (paint_error) { errno=EAGAIN; r=-1; }
         else if (desk_session_busy(d) || d->sh.gate) { errno=EBUSY; r=-1; }
         else if (!d->power_standby) { errno=ENOSYS; r=-1; }
         else { attempted=1; r=d->power_standby(); }
@@ -2509,7 +2517,7 @@ static void icons_build(struct desktop *d)
     if (d->sh.folder && d->sh.folder->bin_full) d->sh.icons[2].icon = d->sh.cfg.recycle_icon ? "edit-delete" : "user-trash-full";   /* G2: the bin holds something */
     if (d->sh.folder) for (unsigned i=0;i<d->sh.folder->model.count;i++) {
         const struct fm_entry *e=&d->sh.folder->model.entries[i];
-        char path[FM_PATH]; if (fm_join(path,d->sh.profile.desktop[0] ? d->sh.profile.desktop : DESK_FOLDER,e->name)) return;
+        char path[FM_PATH]; if (fm_entry_path(&d->sh.folder->model,i,path)) return;   /* sec-user-05: physical in a merged view */
         const struct desk_catalog_entry *cat=desk_catalog_file(path);
         icon_add(d,e->name,e->meta.type==FM_DIR ? "files" : cat ? cat->name : "ciuknote",path,
             e->meta.type==FM_DIR ? "folder" : strlen(e->name)>4 && fm_same_path(e->name+strlen(e->name)-4,".lnk") ? "emblem-symbolic-link" : e->meta.exec ? du_icon_file(e->name,0,1) : cat ? cat->tango : du_icon_file(e->name,0,0), SH_ACT_LAUNCH,0);

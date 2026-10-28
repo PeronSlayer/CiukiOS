@@ -324,7 +324,7 @@ static LONG connect_registry(const void *machine, int wide, uint32_t key, uint32
         break;
     }
   }
-  return RegOpenKeyExA(key, NULL, 0, 0xf003f, out);
+  return RegOpenKeyExA(key, NULL, 0, 0x02000000u, out); /* sec-user-05: MAXIMUM_ALLOWED, as Wine's RegOpenKey */
 }
 LONG W32API RegConnectRegistryA(const char *machine, uint32_t key, uint32_t *out) {
   return connect_registry(machine, 0, key, out);

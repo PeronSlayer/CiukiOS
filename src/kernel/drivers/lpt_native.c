@@ -1,5 +1,6 @@
 /* Checked, cancellable /dev/lptN I/O. SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/security_device.h>
 #include <ciuki/lpt.h>
 #include <ciuki/files.h>
 #include <ciuki/signal.h>
@@ -40,6 +41,7 @@ int lpt_rw_user(struct file_description *d, uint32_t address, uint32_t bytes, bo
 {
     if (bytes>CIUKI_IO_MAX) return -EINVAL;
     if (write ? (d->flags&O_ACCMODE)==O_RDONLY : (d->flags&O_ACCMODE)==O_WRONLY) return -EBADF;
+    if (!security_device_session(proc_current()) && !security_device_system(proc_current())) return -EACCES;
     if (!bytes) return 0;
     struct lpt_operation *o=kzalloc(sizeof(*o)); if (!o) return -ENOMEM;
     o->description=d; o->process=proc_current(); d->object.retain(&d->object);
@@ -64,6 +66,7 @@ int lpt_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, uin
 {
     struct file_description *d=file_fd(p,fd);
     if (!d || d->node->kind!=PX_LPT) return -EBADF;
+    if (!security_device_session(p) && !security_device_system(p)) return -EACCES;
     union { struct ciuki_lpt_status status; struct ciuki_lpt_config config; struct ciuki_lpt_init init; } record;
     unsigned size=op==LPT_GET_CONFIG || op==LPT_SET_CONFIG ? sizeof(record.config) :
         op==LPT_GET_STATUS ? sizeof(record.status) : op==LPT_INIT ? sizeof(record.init) : 0;
@@ -79,6 +82,7 @@ int lpt_devctl(struct process *p, int32_t fd, uint32_t op, uint32_t address, uin
     struct ua_pin pin;
     bool output=op==LPT_GET_CONFIG || op==LPT_GET_STATUS;
     if (output) { e=ua_pin(p->memory,&pin,address,bytes,true); if (!e) { o->pin=pin; o->pinned=true; } }
+    if (!e && (!security_process_live(p) || file_fd(p,fd)!=d)) e=-EACCES;
     if (!e) {
         o->active=true;
         e=lpt_control(d->node->drive,d->lpt_generation,op,&record,bytes,(d->flags&O_ACCMODE)!=O_RDONLY);

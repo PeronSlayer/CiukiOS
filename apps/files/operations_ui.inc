@@ -190,8 +190,8 @@ static int operations_send(struct files_app *a,unsigned index)
     operations_paths_free(o); int e=selection_paths(a,&o->paths,&o->count); if (e) return e;
     if (index==0) {
         struct fm_model *desktop=calloc(1,sizeof(*desktop)); if (!desktop) e=-ENOMEM;
-        else { fm_init(desktop,&a->model.fs); snprintf(desktop->path,sizeof(desktop->path),"/Documents/Desktop"); e=fm_link_selection(desktop,o->paths,o->count); fm_destroy(desktop); free(desktop); }
-    } else if (index==1 || index==2) e=start_job(a,FM_COPY,o->paths,o->count,index==1?"/Documents":"/mnt/a");
+        else { fm_init(desktop,&a->model.fs); profile_child(desktop->path,sizeof(desktop->path),"Desktop"); /* sec-user-04 */ e=fm_link_selection(desktop,o->paths,o->count); fm_destroy(desktop); free(desktop); }
+    } else if (index==1 || index==2) e=start_job(a,FM_COPY,o->paths,o->count,index==1?profile_home():"/mnt/a"); /* sec-user-04 */
     else if (index==3 || index==4) {
         du_message(a->ui,D_INFO,"Send To",index==3 ? "No mail program is registered. Install and register a mail application in SendTo." : "Briefcase synchronization is not installed. Add a destination folder to SendTo to copy files there.",DU_DLG_ICON_INFO,NULL,0,0,0);
     } else {

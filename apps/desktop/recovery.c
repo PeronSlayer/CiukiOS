@@ -80,21 +80,35 @@ void desk_recovery_start(struct desktop *d)
                  "Use System Configuration to enable it again.", list, s.newly_skipped & (s.newly_skipped - 1) ? "were" : "was");
         notice("Automatic Skip Driver", text, DU_DLG_ICON_WARNING, 1);
     }
+    /* sec-sysvc2: the at-start ScanDisk reports go to SCANDISK.LOG as a
+     * SYSTEM job, whoever logs on (XP logs autochk's result as the system,
+     * not as the user); the kernel writes them once from its own records.
+     * An older kernel (ENOSYS) or no managed system volume (ENODEV): the
+     * desktop appends them as before. */
+    uint32_t appended = 0;
+    int job = ciuki_system_job(CIUKI_SYSTEM_JOB_STARTUP_REPORT, &appended) ? errno : 0;
     for (unsigned drive = 2; drive < 26; drive++) {
         struct ciuki_scandisk r;
         if (ciuki_scandisk_report(drive, &r) || !(r.flags & CIUKI_SCANDISK_RAN)) continue;
-        (void)scandisk_log("", &r, (int64_t)time(NULL));
+        if (job == ENOSYS || job == ENODEV) (void)scandisk_log("", &r, (int64_t)time(NULL));
         scandisk_notice(&r);
     }
-    /* Registry Checker, as ScanRegW at every start: a damaged root comes
-     * back from the newest good backup, then the backup of the day. Not in
-     * Command prompt only, where SCANREG /RESTORE is the user's tool. */
+    /* Registry Checker, as ScanRegW at every start. sec-sysvc2: the SYSTEM
+     * registry broker restored a damaged root (or a backup an administrator
+     * chose) before anything used the registry; the backup of the day is its
+     * SYSTEM job, asked for by every session (rc_daily). Not in Command
+     * prompt only, where SCANREG is the user's tool. */
     if (!d->terminal_shell && !d->sh.gate) {
-        unsigned restored = 0; char from[16];
-        if (!rc_autorestore("", &restored, from) && restored) {
+        struct rc_status st;
+        int known = !rc_status("", &st);
+        if (known && st.restored) {
             snprintf(text, sizeof(text), "Registry Checker found an error in the system registry and restored "
-                     "it from the backup %s. Restart CiukiOS to use it everywhere.", from);
+                     "it from the backup %s.", st.from);
             notice("Registry Checker", text, DU_DLG_ICON_WARNING, 1);
+        }
+        if (known && st.applied[0]) {
+            snprintf(text, sizeof(text), "Registry Checker restored the registry from the backup %s.", st.applied);
+            notice("Registry Checker", text, DU_DLG_ICON_INFO, 0);
         }
         int made = 0, offset = 0;
         time_t now = time(NULL);

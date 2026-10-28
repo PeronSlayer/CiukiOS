@@ -181,8 +181,9 @@ static int partition_flush(struct blkdev *dev)
 static void editor_lease(void)
 {
     struct storage *s=storage_get(); OK(storage_setup(s,0));
-    s->raw[0].dev=s->raw[1].dev=&media.dev;
-    struct storage_caller owner={.pid=77},other={.pid=78};
+    struct blkdev boot={.sector_size=512,.capacity=4096};
+    s->raw[0].dev=&boot;s->raw[1].dev=&media.dev;
+    struct storage_caller owner={.pid=77,.administrator=true},other={.pid=78,.administrator=true};
     struct ciuki_disk_info info={.version=CIUKI_DISK_VERSION,.size=sizeof(info)};
     CHECK(storage_disk_control(s,0,&owner,DISK_PARTITION_ACQUIRE,&info,sizeof(info))==-EBUSY);
     CHECK(storage_disk_control(s,1,&owner,DISK_LEASE_ACQUIRE,&info,sizeof(info))==-EPERM);

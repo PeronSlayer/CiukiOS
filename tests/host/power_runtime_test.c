@@ -10,6 +10,7 @@
 #include <ciuki/kernel.h>
 #include <ciuki/mm.h>
 #include <ciuki/process.h>
+#include "security/subject_fixture.h"
 static inline uint32_t irq_save(void) { return 0x200; }
 static inline void irq_restore(uint32_t flags) { (void)flags; }
 #define P2V(p) ((void *)(uintptr_t)(p))
@@ -98,7 +99,8 @@ static void provide(enum power_source_kind kind)
 }
 static void reset(void)
 {
-    disk=(struct storage){.ready=true}; desktop.pid=42; stages=checkpoints=0; audio_stage=false; audio_error=0;
+    disk=(struct storage){.ready=true}; desktop.pid=42;
+    security_fixture_identity(&desktop,501,1,false,0); stages=checkpoints=0; audio_stage=false; audio_error=0;
     desktop.setup_capability=false; setup_active=false;
     power_progress=0; stopped=false; power_running=storage_flushed=false; power_requests=0;
     during_sync=0; nested_result=0;
@@ -108,13 +110,14 @@ static void reset(void)
 }
 /* f9 Setup authority: only Setup's capability holder in Setup mode, and it
  * takes the desktop's orderly path (flush, quiesce, latch, reset or soft-off). */
-static void setup_caller(void) { reset(); desktop.pid=7; desktop.setup_capability=true; setup_active=true; }
+static void setup_caller(void) { reset(); desktop.pid=7; desktop.setup_capability=true; setup_active=true;
+    security_fixture_identity(&desktop,0,0,true,CIUKI_SECURITY_ROLE_SETUP); }
 static void test_setup_authority(void)
 {
     reset(); desktop.pid=7; desktop.setup_capability=true;
-    assert(power_syscall(CIUKI_POWER_QUERY)==-EPERM && power_syscall(CIUKI_POWER_OFF)==-EPERM && !stages);
+    assert(power_syscall(CIUKI_POWER_QUERY)==3 && power_syscall(CIUKI_POWER_OFF)==-EPERM && !stages);
     reset(); desktop.pid=7; setup_active=true;
-    assert(power_syscall(CIUKI_POWER_QUERY)==-EPERM && power_syscall(CIUKI_POWER_REBOOT)==-EPERM && !stages);
+    assert(power_syscall(CIUKI_POWER_QUERY)==3 && power_syscall(CIUKI_POWER_REBOOT)==-EPERM && !stages);
     setup_caller(); assert(power_syscall(CIUKI_POWER_QUERY)==3 && !stages);
     assert(power_source_soft_off()==-EBUSY && !stages); /* no orderly proof yet */
     assert(power_syscall(CIUKI_POWER_OFF)==-EIO && !strcmp(order,"SNQP") && strstr(durable,"acpi soft-off"));
@@ -479,6 +482,7 @@ static void test_s5_fallback(void)
 }
 int main(void)
 {
+    setvbuf(stdout,NULL,_IOLBF,0);
     test_forced();
     test_audio_settings_flush();
     reset(); assert(power_source_soft_off()==-EBUSY && !stages); /* no orderly proof yet */
