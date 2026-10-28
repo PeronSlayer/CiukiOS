@@ -37,7 +37,7 @@ SCRATCH.mkdir(parents=True, exist_ok=True)
 def catalog_root(folder):
     """Copy small manifests, never game bytes or existing installed trees."""
     folder = Path(folder)
-    for path in (games.CATALOG, games.PINS):
+    for path in (games.CATALOG, games.PINS, games.INSTALL_PLANS):
         dest = folder / path; dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes((ROOT / path).read_bytes())
     pins = json.loads((ROOT / games.PINS).read_text())['titles']
@@ -110,7 +110,7 @@ class CatalogTests(unittest.TestCase):
         self.assertTrue({'mode13h', 'modex', 'vesa'} <= {v for t in titles for v in t['coverage_targets']['video']})
         self.assertTrue({'general-midi', 'opl', 'digital'} <= {t['music'] for t in titles})
         suite = json.loads((ROOT / 'tests/suites/acc-t23.json').read_text())
-        actual = [c for c in suite['cases'] if 'dos_game' in c or 'guests' in c]
+        actual = [c for c in suite['cases'] if 'dos_game' in c or 'guests' in c or c['id'].startswith('acc-install-')]
         self.assertEqual(actual, games.acceptance_cases(titles))
         for case in actual:
             self.assertEqual(runner.case_kind(case), 'acceptance')

@@ -477,8 +477,9 @@ def validate_case(case, root=ROOT):
     patterns(case.get('forbid'), 'forbid')
     pending = case.get('pending')
     if pending is not None:
-        refuse(isinstance(pending, dict) and set(pending) <= {'directive', 'requires', 'reason'} and pending.get('reason')
+        refuse(isinstance(pending, dict) and set(pending) <= {'directive', 'requires', 'reason', 'blocking'} and pending.get('reason')
                and isinstance(pending.get('requires', []), list), 'pending: directive, requires (paths), reason')
+        refuse(type(pending.get('blocking', False)) is bool, 'pending.blocking: boolean')
     steps = expand_steps(case.get('steps', []))
     refuse(isinstance(case.get('steps', []), list) and (steps or pending), 'steps (or a pending declaration)')
     names, captured, checks = set(), {media_var(n) for n in media}, set()
@@ -734,7 +735,8 @@ class Session:
         if pending:
             missing = [p for p in pending.get('requires', []) if not (self.root / p).exists()]
             if missing or not pending.get('requires') or not self.steps:
-                raise EvidenceNotRun('pending %s: %s%s' % (pending.get('directive', '-'), pending['reason'],
+                prefix = 'required pending' if pending.get('blocking') else 'pending'
+                raise EvidenceNotRun('%s %s: %s%s' % (prefix, pending.get('directive', '-'), pending['reason'],
                                                             ' (missing %s)' % ', '.join(missing) if missing else ''))
 
     def prepare(self):

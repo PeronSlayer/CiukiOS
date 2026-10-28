@@ -76,7 +76,7 @@ they do not prove the twenty games play or exchange multiplayer traffic.
    unless its terms permit the proposed bundle. Run the original installer
    and sound setup locally; do not use a DOSBox repack or registered edition.
 3. Put the installed files and tested sound settings under the manifest's
-   `ID-installed` directory (uppercase DOS 8.3 paths). Select SB16 220h/IRQ7/
+   `ID-installed` directory (uppercase DOS 8.3 paths). Select SB16 220h/IRQ5/
    DMA1/5, OPL music, and General MIDI via MPU-401 for the Descent II music
    case. Run `python3 -B scripts/test/dos_games.py pin-installed --title ID`.
    Its per-file pins include the original executable, data, licence documents
@@ -158,3 +158,99 @@ Blake Stone 3.0 contains BS_AOG.EXE and BSTONE.BAT, not BLAKE.EXE; use the
 observed executable. Bio Menace is 1.1, not a later freeware edition. Jazz's
 FILE_ID.DIZ says 1.1 while VENDOR.DOC still says 1.0; retain both observations.
 A completed document review does not imply installation or gameplay evidence.
+
+## fx-games20c: original installation and extraction references
+
+G20-1 requires the original installer wherever present, followed by the game's
+own sound configuration. A host extraction is a read-back reference only.
+Descent and Descent II SOW segments are excluded from host extraction. Direct
+ZIPs (Hexen and Jazz) have no original installer in these editions.
+
+Research before implementation compared the pinned packages and the existing
+`build_games_disk.py` decoders with [PKWARE APPNOTE 6.3.10](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT),
+[zlib's DCL decoder](https://github.com/madler/zlib/blob/develop/contrib/blast/blast.c)
+and the [Creative hardware programming guide](https://www.phatcode.net/res/243/files/sbhwpg.pdf).
+Reuse the existing DCL and LHA decoders; validate bounded ZIP paths and sizes
+before extracting, including SFX and concatenated parts. ZIP extraction must
+check CRC and reject links, duplicate DOS names and traversal. Every reference
+retains all payload members, including documents excluded from older bundled
+images. No reference becomes installed-tree evidence automatically.
+
+The original manuals/readmes and their hashes are cited per title in
+`tests/dos-titles/install20.json`. Executable help viewers need lead inspection;
+compressed program strings are not a substitute for their rendered manual.
+Only documented commands/keys may appear in proposed steps. Unknown desktop,
+installer destination, sound menu and save/exit screens are explicitly
+`needs-lead-calibration`; pending cases cannot grant acceptance.
+The local Windows 98 Resource Kit `wrkc25_3.htm`, "Understanding the Apps.inf
+File" and "Running Games", confirms per-program DOS settings; this change
+reuses the desktop DOS VM path. It does not introduce NTVDM assumptions.
+Sound selection uses the title-battery contract: SB16 220h IRQ5 DMA1/5,
+AdLib/OPL music or MPU-401 330h General MIDI where supported. Hardware choices
+are targets to verify on screen, never assumed menu indices.
+
+Usage (all commands below are host-only):
+
+```sh
+python3 -B scripts/test/dos_games.py extract --title doom --archive-dir /path/to/read-only/pinned-cache
+python3 -B scripts/test/dos_games.py pin-installed --title doom
+python3 -B scripts/test/dos_games.py compare-installed --title doom --archive-dir /path/to/read-only/pinned-cache
+python3 -B scripts/test/dos_games.py write-cases
+```
+
+`extract` writes `build/dos-games-reference/ID/{manifest.json,payload/}` and
+refuses an existing destination. Its manifest labels the result
+`extraction-reference-only`. It neither fills `ID-installed` nor updates pins.
+`--archive-dir` is an explicit read-only input override; without it the normal
+cache and existing package fallback are used. Original archive pins are always
+checked before decompression. No download, DOS execution or SFX execution occurs.
+
+Only after the lead's actual DOS installer/setup run, copy its measured target
+contents to `build/downloads/dos-titles/ID-installed` using uppercase DOS paths,
+then `pin-installed`. This command records bytes; it does not certify their
+origin. Keep the guest run/image evidence with the lead's qualification record.
+`compare-installed` rebuilds the reference in memory from the pinned archive
+and rehashes the measured directory against those installed pins. The report
+lists identical files, missing/changed/extra errors, original outer media and
+exact exceptions. Exit 1 means a mismatch. Every exception must be entered
+explicitly in the title's `comparison` object in `install20.json` after review:
+`reference_only` for omitted original files, `installer_only` for added installer
+outputs, and `config` for generated or modified configuration. No filename
+suffix or wildcard exempts data; a stale exception fails. Do not exempt the
+game executable. The default empty exception lists intentionally fail until
+actual installer/config differences have been reviewed. SOW comparisons refuse
+as not extractable rather than assert a reference match.
+
+Twenty `acc-install-ID` cases preserve the cited screen-by-screen proposals.
+They have unconditional pending declarations and are refused before a guest
+launch. They must remain blocked until the lead has reviewed the executable
+manuals, calibrated the named desktop/installer/sound/return screens, and
+replaced the proposal with image-bound execution/evidence steps. The separate
+gameplay cases still require measured installed pins and gameplay calibration.
+Their overlay media, batch working directory and shortcut now consistently use
+`C:\GAME\TARGET`, matching the original installation destination.
+
+A wiring check remains essential during calibration: the general desktop VM
+still initializes `DOSVM_SB_IRQ` to 7 (`dosvm_audio_state.h`); the older title
+battery explicitly programs IRQ5 through the mixer. An environment variable
+alone does not program mixer register 80h. The lead must verify IRQ5 in the
+desktop installation VM (and keep it consistent when launching the installed
+tree), or direct the scoped wiring implementation before accepting sound.
+This change does not change the general VM's IRQ default or claim measured
+IRQ5 support for the desktop cases.
+
+Required pending cases set `pending.blocking: true`; precheck emits
+`required pending` and the summary remains INCOMPLETE. This avoids the ordinary
+pending-item exemption used for future optional work. The flag defaults to
+false for existing pending cases. Synthetic tests cover both precheck refusal
+and the runner/summary path without starting any guest.
+
+All 18 exact pinned payloads passed the host read-back audit (including every
+original document and nested Quake directory); all 42 cited package-member
+hashes matched. Both SOW archives were pin-checked and excluded as specified.
+The audit removed the generated reference bytes immediately. The LHA format
+was also checked against the [upstream header specification](https://github.com/jca02266/lha/blob/master/header.doc.md).
+FAT-created ZIPs can carry non-POSIX high attribute bits (observed in the
+Wolfenstein archive); APPNOTE 4.4.2/4.4.15 makes attributes host-dependent.
+Therefore Unix file-type/link validation applies to Unix-created entries;
+DOS paths, budgets, CRCs and pin checks apply to every entry.

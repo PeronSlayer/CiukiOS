@@ -1,0 +1,1134 @@
+{
+  "schema_version": 1,
+  "titles": [
+    {
+      "id": "doom",
+      "target": "C:\\GAME\\DOOM",
+      "media": "C:\\MEDIA\\DOOM",
+      "extract": {
+        "format": "zip-split",
+        "parts": [
+          "DOOMS_19.1",
+          "DOOMS_19.2"
+        ]
+      },
+      "sources": [
+        {
+          "member": "DOOMS_19.1+DOOMS_19.2!README.TXT",
+          "sha256": "17878ebe5ca179de7ec2cc90bbabbc922ab69924118be168a25f8d317f65a2ff",
+          "kind": "package-document"
+        },
+        {
+          "member": "INSTALL.BAT",
+          "sha256": "1c49dca7b64a1ceb96b062ef7da0dcb2e5879d4dfbe902a10f5bfc94fe0e3a7d",
+          "kind": "package-document"
+        }
+      ],
+      "steps": [
+        {
+          "name": "desktop-dosvm",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Desktop DOS VM launch and initial C: prompt",
+          "goal": "Launch the DOS VM through the desktop DOS path; record the actual menu route and prompt. Set BLASTER=A220 I5 D1 H5 P330 T6 in this VM. No desktop menu mnemonic is assumed."
+        },
+        {
+          "name": "original-installer",
+          "command": "C:\\MEDIA\\DOOM\\INSTALL.BAT",
+          "status": "needs-lead-calibration",
+          "screen": "INSTALL.BAT welcome, destination editor, completion and any automatic setup/game launch",
+          "goal": "Stage the unchanged outer archive members at C:\\MEDIA\\DOOM; run INSTALL.BAT to natural exit. Enter C:\\GAME\\DOOM as destination; inspect the original manual/help before any navigation. Preserve automatic sound setup if launched; exit any automatically started game normally."
+        },
+        {
+          "name": "sound-setup",
+          "command": "C:\\GAME\\DOOM\\SETUP.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "SETUP.EXE sound devices, music, port, IRQ, DMA, save and exit",
+          "goal": "Select Sound Blaster/SB16 effects at 220h IRQ5 DMA1/5 where supported; AdLib/OPL music where supported. Save settings and exit normally; retain generated configuration files. README.TXT lines 102-118 documents SETUP plus Enter and automatic setup after installation; exact card selection and save/exit keys are not given."
+        },
+        {
+          "name": "installed-return",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Natural return to the DOS prompt after original installer and sound configuration",
+          "goal": "Record zero/natural installer and setup termination, capture C:\\GAME\\DOOM from the guest, pin that measured tree, and compare it with the extraction reference. Keep installer-only files and exact generated/modified config names explicit. SOW titles need original-installer evidence instead of a host reference."
+        }
+      ],
+      "comparison": {
+        "reference_only": [],
+        "installer_only": [],
+        "config": []
+      }
+    },
+    {
+      "id": "quake",
+      "target": "C:\\GAME\\QUAKE",
+      "media": "C:\\MEDIA\\QUAKE",
+      "extract": {
+        "format": "lha-sfx",
+        "member": "RESOURCE.1",
+        "offset": 1945
+      },
+      "sources": [
+        {
+          "member": "RESOURCE.1!README.TXT",
+          "sha256": "9ade267c7e22a1c4c4aa8fa3dd58ad3354c173ae2cfc39344093cea534316d61",
+          "kind": "package-document"
+        },
+        {
+          "member": "RESOURCE.1!TECHINFO.TXT",
+          "sha256": "b7c080df7487e69b0c3f9c6b3a8eff5ce29741f5c596d3d6a08534649691d314",
+          "kind": "package-document"
+        },
+        {
+          "member": "INSTALL.BAT",
+          "sha256": "60a8d0674615900781b0fbe872d1068dfb4210120c676566a152eb84b37fb9cc",
+          "kind": "package-document"
+        }
+      ],
+      "steps": [
+        {
+          "name": "desktop-dosvm",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Desktop DOS VM launch and initial C: prompt",
+          "goal": "Launch the DOS VM through the desktop DOS path; record the actual menu route and prompt. Set BLASTER=A220 I5 D1 H5 P330 T6 in this VM. No desktop menu mnemonic is assumed."
+        },
+        {
+          "name": "original-installer",
+          "command": "C:\\MEDIA\\QUAKE\\INSTALL.BAT",
+          "status": "needs-lead-calibration",
+          "screen": "INSTALL.BAT welcome, destination editor, completion and any automatic setup/game launch",
+          "goal": "Stage the unchanged outer archive members at C:\\MEDIA\\QUAKE; run INSTALL.BAT to natural exit. Enter C:\\GAME\\QUAKE as destination; inspect the original manual/help before any navigation. Preserve automatic sound setup if launched; exit any automatically started game normally."
+        },
+        {
+          "name": "sound-setup",
+          "command": "C:\\GAME\\QUAKE\\QUAKE.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "QUAKE.EXE sound devices, music, port, IRQ, DMA, save and exit",
+          "goal": "Select Sound Blaster/SB16 effects at 220h IRQ5 DMA1/5 where supported; enable the documented digital sound/music path. Save settings and exit normally; retain generated configuration files. README.TXT Audio Setup lines 87-105 documents SET BLASTER=A220 I5 D1 H5 P330 T6. INSTALL.BAT launches QUAKE after extraction; return naturally. No separate sound setup executable exists; verify detection and Options sound controls. Do not require OPL or CD music from this shareware package."
+        },
+        {
+          "name": "installed-return",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Natural return to the DOS prompt after original installer and sound configuration",
+          "goal": "Record zero/natural installer and setup termination, capture C:\\GAME\\QUAKE from the guest, pin that measured tree, and compare it with the extraction reference. Keep installer-only files and exact generated/modified config names explicit. SOW titles need original-installer evidence instead of a host reference."
+        }
+      ],
+      "comparison": {
+        "reference_only": [],
+        "installer_only": [],
+        "config": []
+      }
+    },
+    {
+      "id": "wolf3d",
+      "target": "C:\\GAME\\WOLF3D",
+      "media": "C:\\MEDIA\\WOLF3D",
+      "extract": {
+        "format": "apogee-shr",
+        "member": "W3DSW14.SHR"
+      },
+      "sources": [
+        {
+          "member": "W3DSW14.SHR!W3DHELP.EXE",
+          "sha256": "ea226934cbfa1d11060992c2201aabe6c5e2310a117225dd0388a068d5b23684",
+          "kind": "executable-help-needs-lead-inspection"
+        },
+        {
+          "member": "INSTALL.EXE",
+          "sha256": "ba77edfe22f4025fdaf1ef4d04c37fd9e973386b71efbfbff42d38ac13f44902",
+          "kind": "installer-command-only"
+        }
+      ],
+      "steps": [
+        {
+          "name": "desktop-dosvm",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Desktop DOS VM launch and initial C: prompt",
+          "goal": "Launch the DOS VM through the desktop DOS path; record the actual menu route and prompt. Set BLASTER=A220 I5 D1 H5 P330 T6 in this VM. No desktop menu mnemonic is assumed."
+        },
+        {
+          "name": "original-installer",
+          "command": "C:\\MEDIA\\WOLF3D\\INSTALL.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "INSTALL.EXE welcome, destination editor, completion and any automatic setup/game launch",
+          "goal": "Stage the unchanged outer archive members at C:\\MEDIA\\WOLF3D; run INSTALL.EXE to natural exit. Enter C:\\GAME\\WOLF3D as destination; inspect the original manual/help before any navigation. Preserve automatic sound setup if launched; exit any automatically started game normally."
+        },
+        {
+          "name": "sound-setup",
+          "command": "C:\\GAME\\WOLF3D\\WOLF3D.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "WOLF3D.EXE sound devices, music, port, IRQ, DMA, save and exit",
+          "goal": "Select Sound Blaster/SB16 effects at 220h IRQ5 DMA1/5 where supported; AdLib/OPL music where supported. Save settings and exit normally; retain generated configuration files. Read the executable help viewer in this package before navigating. The text archive has no usable sound-menu key sequence; confirm the setup or in-game menu, device choices, save and exit screens."
+        },
+        {
+          "name": "installed-return",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Natural return to the DOS prompt after original installer and sound configuration",
+          "goal": "Record zero/natural installer and setup termination, capture C:\\GAME\\WOLF3D from the guest, pin that measured tree, and compare it with the extraction reference. Keep installer-only files and exact generated/modified config names explicit. SOW titles need original-installer evidence instead of a host reference."
+        }
+      ],
+      "comparison": {
+        "reference_only": [],
+        "installer_only": [],
+        "config": []
+      }
+    },
+    {
+      "id": "rott",
+      "target": "C:\\GAME\\ROTT",
+      "media": "C:\\MEDIA\\ROTT",
+      "extract": {
+        "format": "zip-sfx",
+        "member": "ROTTSW13.SHR"
+      },
+      "sources": [
+        {
+          "member": "ROTTSW13.SHR!ROTTHELP.EXE",
+          "sha256": "6406a603834d2cc16be9175f325c6f2c434f25e878f8122ac8ce9b93840fd836",
+          "kind": "executable-help-needs-lead-inspection"
+        },
+        {
+          "member": "ROTTSW13.SHR!README.EXE",
+          "sha256": "488fd125f9efb6fb203c5021634eae101f91677be16e2aa76c7f0f93df5dadcb",
+          "kind": "executable-help-needs-lead-inspection"
+        },
+        {
+          "member": "INSTALL.EXE",
+          "sha256": "e5121569aead29c5b3fdc9f0a63c4f9efab397ac6d53b536aa01c5d8b08926f6",
+          "kind": "installer-command-only"
+        }
+      ],
+      "steps": [
+        {
+          "name": "desktop-dosvm",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Desktop DOS VM launch and initial C: prompt",
+          "goal": "Launch the DOS VM through the desktop DOS path; record the actual menu route and prompt. Set BLASTER=A220 I5 D1 H5 P330 T6 in this VM. No desktop menu mnemonic is assumed."
+        },
+        {
+          "name": "original-installer",
+          "command": "C:\\MEDIA\\ROTT\\INSTALL.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "INSTALL.EXE welcome, destination editor, completion and any automatic setup/game launch",
+          "goal": "Stage the unchanged outer archive members at C:\\MEDIA\\ROTT; run INSTALL.EXE to natural exit. Enter C:\\GAME\\ROTT as destination; inspect the original manual/help before any navigation. Preserve automatic sound setup if launched; exit any automatically started game normally."
+        },
+        {
+          "name": "sound-setup",
+          "command": "C:\\GAME\\ROTT\\SNDSETUP.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "SNDSETUP.EXE sound devices, music, port, IRQ, DMA, save and exit",
+          "goal": "Select Sound Blaster/SB16 effects at 220h IRQ5 DMA1/5 where supported; AdLib/OPL music where supported. Save settings and exit normally; retain generated configuration files. Read the executable help viewer in this package before navigating. The text archive has no usable sound-menu key sequence; confirm the setup or in-game menu, device choices, save and exit screens."
+        },
+        {
+          "name": "installed-return",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Natural return to the DOS prompt after original installer and sound configuration",
+          "goal": "Record zero/natural installer and setup termination, capture C:\\GAME\\ROTT from the guest, pin that measured tree, and compare it with the extraction reference. Keep installer-only files and exact generated/modified config names explicit. SOW titles need original-installer evidence instead of a host reference."
+        }
+      ],
+      "comparison": {
+        "reference_only": [],
+        "installer_only": [],
+        "config": []
+      }
+    },
+    {
+      "id": "keen4",
+      "target": "C:\\GAME\\KEEN4",
+      "media": "C:\\MEDIA\\KEEN4",
+      "extract": {
+        "format": "apogee-shr",
+        "member": "CK4SW14.SHR"
+      },
+      "sources": [
+        {
+          "member": "CK4SW14.SHR!KEEN4E.EXE",
+          "sha256": "bdbb46746e02c0dddcba9b24fa464c26cc7e3514a3b3931267c8c17b9fb9c405",
+          "kind": "executable-help-needs-lead-inspection"
+        },
+        {
+          "member": "INSTALL.EXE",
+          "sha256": "dc0ed7cd330e559fcacb2364de0cc291910374daa8cdaa065eeba541e857ce5b",
+          "kind": "installer-command-only"
+        }
+      ],
+      "steps": [
+        {
+          "name": "desktop-dosvm",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Desktop DOS VM launch and initial C: prompt",
+          "goal": "Launch the DOS VM through the desktop DOS path; record the actual menu route and prompt. Set BLASTER=A220 I5 D1 H5 P330 T6 in this VM. No desktop menu mnemonic is assumed."
+        },
+        {
+          "name": "original-installer",
+          "command": "C:\\MEDIA\\KEEN4\\INSTALL.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "INSTALL.EXE welcome, destination editor, completion and any automatic setup/game launch",
+          "goal": "Stage the unchanged outer archive members at C:\\MEDIA\\KEEN4; run INSTALL.EXE to natural exit. Enter C:\\GAME\\KEEN4 as destination; inspect the original manual/help before any navigation. Preserve automatic sound setup if launched; exit any automatically started game normally."
+        },
+        {
+          "name": "sound-setup",
+          "command": "C:\\GAME\\KEEN4\\KEEN4E.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "KEEN4E.EXE sound devices, music, port, IRQ, DMA, save and exit",
+          "goal": "Select Sound Blaster/SB16 effects at 220h IRQ5 DMA1/5 where supported; AdLib/OPL music where supported. Save settings and exit normally; retain generated configuration files. No separate help/readme or setup program is present in this payload. Inspect built-in help and sound configuration in KEEN4E.EXE; do not invent an F-key/menu route."
+        },
+        {
+          "name": "installed-return",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Natural return to the DOS prompt after original installer and sound configuration",
+          "goal": "Record zero/natural installer and setup termination, capture C:\\GAME\\KEEN4 from the guest, pin that measured tree, and compare it with the extraction reference. Keep installer-only files and exact generated/modified config names explicit. SOW titles need original-installer evidence instead of a host reference."
+        }
+      ],
+      "comparison": {
+        "reference_only": [],
+        "installer_only": [],
+        "config": []
+      }
+    },
+    {
+      "id": "duke3d",
+      "target": "C:\\GAME\\DUKE3D",
+      "media": "C:\\MEDIA\\DUKE3D",
+      "extract": {
+        "format": "zip-sfx",
+        "member": "DN3DSW13.SHR"
+      },
+      "sources": [
+        {
+          "member": "DN3DSW13.SHR!README.DOC",
+          "sha256": "bba1b4050f8f6d9d80d125dd911fa229c6883a1d6314a8d31a488a6c7b5f719e",
+          "kind": "package-document"
+        },
+        {
+          "member": "DN3DSW13.SHR!DN3DHELP.EXE",
+          "sha256": "5dccdf4da37aff04cca4a64af129587ebeead7c39a3986acf4afba5f4f26d177",
+          "kind": "executable-help-needs-lead-inspection"
+        },
+        {
+          "member": "INSTALL.EXE",
+          "sha256": "2ece6f5841143c577274e5bd02338ac9d0576cdafccdd9858fab0f76c05e3b72",
+          "kind": "installer-command-only"
+        }
+      ],
+      "steps": [
+        {
+          "name": "desktop-dosvm",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Desktop DOS VM launch and initial C: prompt",
+          "goal": "Launch the DOS VM through the desktop DOS path; record the actual menu route and prompt. Set BLASTER=A220 I5 D1 H5 P330 T6 in this VM. No desktop menu mnemonic is assumed."
+        },
+        {
+          "name": "original-installer",
+          "command": "C:\\MEDIA\\DUKE3D\\INSTALL.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "INSTALL.EXE welcome, destination editor, completion and any automatic setup/game launch",
+          "goal": "Stage the unchanged outer archive members at C:\\MEDIA\\DUKE3D; run INSTALL.EXE to natural exit. Enter C:\\GAME\\DUKE3D as destination; inspect the original manual/help before any navigation. Preserve automatic sound setup if launched; exit any automatically started game normally."
+        },
+        {
+          "name": "sound-setup",
+          "command": "C:\\GAME\\DUKE3D\\SETUP.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "SETUP.EXE sound devices, music, port, IRQ, DMA, save and exit",
+          "goal": "Select Sound Blaster/SB16 effects at 220h IRQ5 DMA1/5 where supported; AdLib/OPL music where supported. Save settings and exit normally; retain generated configuration files. Read the executable help viewer in this package before navigating. The text archive has no usable sound-menu key sequence; confirm the setup or in-game menu, device choices, save and exit screens."
+        },
+        {
+          "name": "installed-return",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Natural return to the DOS prompt after original installer and sound configuration",
+          "goal": "Record zero/natural installer and setup termination, capture C:\\GAME\\DUKE3D from the guest, pin that measured tree, and compare it with the extraction reference. Keep installer-only files and exact generated/modified config names explicit. SOW titles need original-installer evidence instead of a host reference."
+        }
+      ],
+      "comparison": {
+        "reference_only": [],
+        "installer_only": [],
+        "config": []
+      }
+    },
+    {
+      "id": "heretic",
+      "target": "C:\\GAME\\HERETIC",
+      "media": "C:\\MEDIA\\HERETIC",
+      "extract": {
+        "format": "zip-split",
+        "parts": [
+          "HTIC_V12.1",
+          "HTIC_V12.2"
+        ]
+      },
+      "sources": [
+        {
+          "member": "HTIC_V12.1+HTIC_V12.2!README.TXT",
+          "sha256": "435dd012258b93615a685688629209f389a0c9721dd4e30173095231a9601c20",
+          "kind": "package-document"
+        },
+        {
+          "member": "INSTALL.BAT",
+          "sha256": "74dee71aa112911d5601a141630e09eff3421b7156cf96762ca290686373b92a",
+          "kind": "package-document"
+        }
+      ],
+      "steps": [
+        {
+          "name": "desktop-dosvm",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Desktop DOS VM launch and initial C: prompt",
+          "goal": "Launch the DOS VM through the desktop DOS path; record the actual menu route and prompt. Set BLASTER=A220 I5 D1 H5 P330 T6 in this VM. No desktop menu mnemonic is assumed."
+        },
+        {
+          "name": "original-installer",
+          "command": "C:\\MEDIA\\HERETIC\\INSTALL.BAT",
+          "status": "needs-lead-calibration",
+          "screen": "INSTALL.BAT welcome, destination editor, completion and any automatic setup/game launch",
+          "goal": "Stage the unchanged outer archive members at C:\\MEDIA\\HERETIC; run INSTALL.BAT to natural exit. Enter C:\\GAME\\HERETIC as destination; inspect the original manual/help before any navigation. Preserve automatic sound setup if launched; exit any automatically started game normally."
+        },
+        {
+          "name": "sound-setup",
+          "command": "C:\\GAME\\HERETIC\\SETUP.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "SETUP.EXE sound devices, music, port, IRQ, DMA, save and exit",
+          "goal": "Select Sound Blaster/SB16 effects at 220h IRQ5 DMA1/5 where supported; AdLib/OPL music where supported. Save settings and exit normally; retain generated configuration files. README.TXT lines 87-103 documents SETUP plus Enter and automatic setup after installation; exact sound menu navigation is not given."
+        },
+        {
+          "name": "installed-return",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Natural return to the DOS prompt after original installer and sound configuration",
+          "goal": "Record zero/natural installer and setup termination, capture C:\\GAME\\HERETIC from the guest, pin that measured tree, and compare it with the extraction reference. Keep installer-only files and exact generated/modified config names explicit. SOW titles need original-installer evidence instead of a host reference."
+        }
+      ],
+      "comparison": {
+        "reference_only": [],
+        "installer_only": [],
+        "config": []
+      }
+    },
+    {
+      "id": "hexen",
+      "target": "C:\\GAME\\HEXEN",
+      "media": "C:\\MEDIA\\HEXEN",
+      "extract": {
+        "format": "zip"
+      },
+      "sources": [
+        {
+          "member": "README.TXT",
+          "sha256": "052ab6d0f513ebef8484b359d3a744cb7af8a519b68b68361a02ba32eee3afdb",
+          "kind": "package-document"
+        }
+      ],
+      "steps": [
+        {
+          "name": "desktop-dosvm",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Desktop DOS VM launch and initial C: prompt",
+          "goal": "Launch the DOS VM through the desktop DOS path; record the actual menu route and prompt. Set BLASTER=A220 I5 D1 H5 P330 T6 in this VM. No desktop menu mnemonic is assumed."
+        },
+        {
+          "name": "direct-zip",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "DOS prompt with original direct ZIP files in C:\\GAME\\HEXEN",
+          "goal": "This package has no installer. Copy all original direct ZIP members to C:\\GAME\\HEXEN; host extraction is allowed by G20-1. Record that exception, then configure sound in the VM; extraction alone is never accepted as a calibrated install."
+        },
+        {
+          "name": "sound-setup",
+          "command": "C:\\GAME\\HEXEN\\SETUP.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "SETUP.EXE sound devices, music, port, IRQ, DMA, save and exit",
+          "goal": "Select Sound Blaster/SB16 effects at 220h IRQ5 DMA1/5 where supported; AdLib/OPL music where supported. Save settings and exit normally; retain generated configuration files. README.TXT describes the demo and soundtrack, but gives no sound setup key sequence. SETUP.EXE is present; inspect its card, port, IRQ and save/exit screens."
+        },
+        {
+          "name": "installed-return",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Natural return to the DOS prompt after original installer and sound configuration",
+          "goal": "Record zero/natural installer and setup termination, capture C:\\GAME\\HEXEN from the guest, pin that measured tree, and compare it with the extraction reference. Keep installer-only files and exact generated/modified config names explicit. SOW titles need original-installer evidence instead of a host reference."
+        }
+      ],
+      "comparison": {
+        "reference_only": [],
+        "installer_only": [],
+        "config": []
+      }
+    },
+    {
+      "id": "descent",
+      "target": "C:\\GAME\\DESCENT",
+      "media": "C:\\MEDIA\\DESCENT",
+      "extract": null,
+      "sources": [
+        {
+          "member": "LICENCE.TXT",
+          "sha256": "963088fea6cafbcb913a44b7ecd5bedcd3fed097d1ccce52c6d21ed5210a7395",
+          "kind": "package-document"
+        },
+        {
+          "member": "INSTALL.EXE",
+          "sha256": "44ef2e2dea830779a7b1f9aa7d122f679d1bd559a3abb9d9afcf63bc31f0edd9",
+          "kind": "installer-command-only"
+        }
+      ],
+      "steps": [
+        {
+          "name": "desktop-dosvm",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Desktop DOS VM launch and initial C: prompt",
+          "goal": "Launch the DOS VM through the desktop DOS path; record the actual menu route and prompt. Set BLASTER=A220 I5 D1 H5 P330 T6 in this VM. No desktop menu mnemonic is assumed."
+        },
+        {
+          "name": "original-installer",
+          "command": "C:\\MEDIA\\DESCENT\\INSTALL.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "INSTALL.EXE welcome, destination editor, completion and any automatic setup/game launch",
+          "goal": "Stage the unchanged outer archive members at C:\\MEDIA\\DESCENT; run INSTALL.EXE to natural exit. Enter C:\\GAME\\DESCENT as destination; inspect the original manual/help before any navigation. Preserve automatic sound setup if launched; exit any automatically started game normally."
+        },
+        {
+          "name": "sound-setup",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Installed sound setup executable (name unconfirmed) sound devices, music, port, IRQ, DMA, save and exit",
+          "goal": "Select Sound Blaster/SB16 effects at 220h IRQ5 DMA1/5 where supported; AdLib/OPL music where supported. Save settings and exit normally; retain generated configuration files. Only LICENCE.TXT is exposed beside the SOW installer segments. Inspect INSTALL.EXE and its installed manual before choosing a setup executable or any menu key."
+        },
+        {
+          "name": "installed-return",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Natural return to the DOS prompt after original installer and sound configuration",
+          "goal": "Record zero/natural installer and setup termination, capture C:\\GAME\\DESCENT from the guest, pin that measured tree, and compare it with the extraction reference. Keep installer-only files and exact generated/modified config names explicit. SOW titles need original-installer evidence instead of a host reference."
+        }
+      ],
+      "comparison": {
+        "reference_only": [],
+        "installer_only": [],
+        "config": []
+      }
+    },
+    {
+      "id": "descent2",
+      "target": "C:\\GAME\\DESCENT2",
+      "media": "C:\\MEDIA\\DESCENT2",
+      "extract": null,
+      "sources": [
+        {
+          "member": "README.TXT",
+          "sha256": "b3aea81691fb512f29007337362a00441b582bdbcebf94d3ddfb837289a0aa3d",
+          "kind": "package-document"
+        },
+        {
+          "member": "INSTALL.EXE",
+          "sha256": "7ea2a5e27f914f519fb896dc654a0c28ebcb771d8e41719259711ca9fba2a187",
+          "kind": "installer-command-only"
+        }
+      ],
+      "steps": [
+        {
+          "name": "desktop-dosvm",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Desktop DOS VM launch and initial C: prompt",
+          "goal": "Launch the DOS VM through the desktop DOS path; record the actual menu route and prompt. Set BLASTER=A220 I5 D1 H5 P330 T6 in this VM. No desktop menu mnemonic is assumed."
+        },
+        {
+          "name": "original-installer",
+          "command": "C:\\MEDIA\\DESCENT2\\INSTALL.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "INSTALL.EXE welcome, destination editor, completion and any automatic setup/game launch",
+          "goal": "Stage the unchanged outer archive members at C:\\MEDIA\\DESCENT2; run INSTALL.EXE to natural exit. Enter C:\\GAME\\DESCENT2 as destination; inspect the original manual/help before any navigation. Preserve automatic sound setup if launched; exit any automatically started game normally."
+        },
+        {
+          "name": "sound-setup",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Installed sound setup executable (name unconfirmed) sound devices, music, port, IRQ, DMA, save and exit",
+          "goal": "Select Sound Blaster/SB16 effects at 220h IRQ5 DMA1/5 where supported; General MIDI music via MPU-401 330h. Save settings and exit normally; retain generated configuration files. Outer README.TXT is the demo licence, without installation or sound menu instructions. Inspect INSTALL.EXE and the installed manual; confirm the actual setup executable. Select General MIDI via MPU-401 330h for music."
+        },
+        {
+          "name": "installed-return",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Natural return to the DOS prompt after original installer and sound configuration",
+          "goal": "Record zero/natural installer and setup termination, capture C:\\GAME\\DESCENT2 from the guest, pin that measured tree, and compare it with the extraction reference. Keep installer-only files and exact generated/modified config names explicit. SOW titles need original-installer evidence instead of a host reference."
+        }
+      ],
+      "comparison": {
+        "reference_only": [],
+        "installer_only": [],
+        "config": []
+      }
+    },
+    {
+      "id": "shadowwarrior",
+      "target": "C:\\GAME\\SW",
+      "media": "C:\\MEDIA\\SW",
+      "extract": {
+        "format": "zip-sfx",
+        "member": "SWSW12.SHR"
+      },
+      "sources": [
+        {
+          "member": "SWSW12.SHR!SWHELP.EXE",
+          "sha256": "d601b3fcc50d93313e3186604e0b495bc4a27fdb3a48aa129c35f6c138058187",
+          "kind": "executable-help-needs-lead-inspection"
+        },
+        {
+          "member": "INSTALL.EXE",
+          "sha256": "3961c559f53b5732a06a1dec1094195684ad9316342b138f04c0952aab32ee6a",
+          "kind": "installer-command-only"
+        }
+      ],
+      "steps": [
+        {
+          "name": "desktop-dosvm",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Desktop DOS VM launch and initial C: prompt",
+          "goal": "Launch the DOS VM through the desktop DOS path; record the actual menu route and prompt. Set BLASTER=A220 I5 D1 H5 P330 T6 in this VM. No desktop menu mnemonic is assumed."
+        },
+        {
+          "name": "original-installer",
+          "command": "C:\\MEDIA\\SW\\INSTALL.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "INSTALL.EXE welcome, destination editor, completion and any automatic setup/game launch",
+          "goal": "Stage the unchanged outer archive members at C:\\MEDIA\\SW; run INSTALL.EXE to natural exit. Enter C:\\GAME\\SW as destination; inspect the original manual/help before any navigation. Preserve automatic sound setup if launched; exit any automatically started game normally."
+        },
+        {
+          "name": "sound-setup",
+          "command": "C:\\GAME\\SW\\SETUP.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "SETUP.EXE sound devices, music, port, IRQ, DMA, save and exit",
+          "goal": "Select Sound Blaster/SB16 effects at 220h IRQ5 DMA1/5 where supported; AdLib/OPL music where supported. Save settings and exit normally; retain generated configuration files. Read the executable help viewer in this package before navigating. The text archive has no usable sound-menu key sequence; confirm the setup or in-game menu, device choices, save and exit screens."
+        },
+        {
+          "name": "installed-return",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Natural return to the DOS prompt after original installer and sound configuration",
+          "goal": "Record zero/natural installer and setup termination, capture C:\\GAME\\SW from the guest, pin that measured tree, and compare it with the extraction reference. Keep installer-only files and exact generated/modified config names explicit. SOW titles need original-installer evidence instead of a host reference."
+        }
+      ],
+      "comparison": {
+        "reference_only": [],
+        "installer_only": [],
+        "config": []
+      }
+    },
+    {
+      "id": "wacky",
+      "target": "C:\\GAME\\WACKY",
+      "media": "C:\\MEDIA\\WACKY",
+      "extract": {
+        "format": "zip-sfx",
+        "member": "WWSW11.SHR"
+      },
+      "sources": [
+        {
+          "member": "WWSW11.SHR!WWHELP.EXE",
+          "sha256": "f5648733a57e099d3dab37aa672f8ffc023129b9a15b8d68476d66278959e903",
+          "kind": "executable-help-needs-lead-inspection"
+        },
+        {
+          "member": "INSTALL.EXE",
+          "sha256": "64b40d1e363df6f5f5e60fb7d3ea1593a259ce7075c141c1cbe66bba8adf2ed4",
+          "kind": "installer-command-only"
+        }
+      ],
+      "steps": [
+        {
+          "name": "desktop-dosvm",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Desktop DOS VM launch and initial C: prompt",
+          "goal": "Launch the DOS VM through the desktop DOS path; record the actual menu route and prompt. Set BLASTER=A220 I5 D1 H5 P330 T6 in this VM. No desktop menu mnemonic is assumed."
+        },
+        {
+          "name": "original-installer",
+          "command": "C:\\MEDIA\\WACKY\\INSTALL.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "INSTALL.EXE welcome, destination editor, completion and any automatic setup/game launch",
+          "goal": "Stage the unchanged outer archive members at C:\\MEDIA\\WACKY; run INSTALL.EXE to natural exit. Enter C:\\GAME\\WACKY as destination; inspect the original manual/help before any navigation. Preserve automatic sound setup if launched; exit any automatically started game normally."
+        },
+        {
+          "name": "sound-setup",
+          "command": "C:\\GAME\\WACKY\\SETUP.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "SETUP.EXE sound devices, music, port, IRQ, DMA, save and exit",
+          "goal": "Select Sound Blaster/SB16 effects at 220h IRQ5 DMA1/5 where supported; AdLib/OPL music where supported. Save settings and exit normally; retain generated configuration files. Read the executable help viewer in this package before navigating. The text archive has no usable sound-menu key sequence; confirm the setup or in-game menu, device choices, save and exit screens."
+        },
+        {
+          "name": "installed-return",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Natural return to the DOS prompt after original installer and sound configuration",
+          "goal": "Record zero/natural installer and setup termination, capture C:\\GAME\\WACKY from the guest, pin that measured tree, and compare it with the extraction reference. Keep installer-only files and exact generated/modified config names explicit. SOW titles need original-installer evidence instead of a host reference."
+        }
+      ],
+      "comparison": {
+        "reference_only": [],
+        "installer_only": [],
+        "config": []
+      }
+    },
+    {
+      "id": "cosmo",
+      "target": "C:\\GAME\\COSMO",
+      "media": "C:\\MEDIA\\COSMO",
+      "extract": {
+        "format": "apogee-shr",
+        "member": "COSSW12.SHR"
+      },
+      "sources": [
+        {
+          "member": "COSSW12.SHR!COSMO1.EXE",
+          "sha256": "9babfd342683bffea1cc272805f3beda54c2b1f2620c167688b6ac8bf38f6047",
+          "kind": "executable-help-needs-lead-inspection"
+        },
+        {
+          "member": "INSTALL.EXE",
+          "sha256": "c4fa5d6137dfc466502f52ffa2d1ddc0b4b4a03fc1acc8b96e4e969ba4ca92f1",
+          "kind": "installer-command-only"
+        }
+      ],
+      "steps": [
+        {
+          "name": "desktop-dosvm",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Desktop DOS VM launch and initial C: prompt",
+          "goal": "Launch the DOS VM through the desktop DOS path; record the actual menu route and prompt. Set BLASTER=A220 I5 D1 H5 P330 T6 in this VM. No desktop menu mnemonic is assumed."
+        },
+        {
+          "name": "original-installer",
+          "command": "C:\\MEDIA\\COSMO\\INSTALL.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "INSTALL.EXE welcome, destination editor, completion and any automatic setup/game launch",
+          "goal": "Stage the unchanged outer archive members at C:\\MEDIA\\COSMO; run INSTALL.EXE to natural exit. Enter C:\\GAME\\COSMO as destination; inspect the original manual/help before any navigation. Preserve automatic sound setup if launched; exit any automatically started game normally."
+        },
+        {
+          "name": "sound-setup",
+          "command": "C:\\GAME\\COSMO\\COSMO1.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "COSMO1.EXE sound devices, music, port, IRQ, DMA, save and exit",
+          "goal": "Select Sound Blaster/SB16 effects at 220h IRQ5 DMA1/5 where supported; AdLib/OPL music where supported. Save settings and exit normally; retain generated configuration files. No standalone manual or sound setup is present in this payload. Inspect built-in help and the sound menu in COSMO1.EXE; do not invent an F-key/menu route."
+        },
+        {
+          "name": "installed-return",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Natural return to the DOS prompt after original installer and sound configuration",
+          "goal": "Record zero/natural installer and setup termination, capture C:\\GAME\\COSMO from the guest, pin that measured tree, and compare it with the extraction reference. Keep installer-only files and exact generated/modified config names explicit. SOW titles need original-installer evidence instead of a host reference."
+        }
+      ],
+      "comparison": {
+        "reference_only": [],
+        "installer_only": [],
+        "config": []
+      }
+    },
+    {
+      "id": "duke2",
+      "target": "C:\\GAME\\DUKE2",
+      "media": "C:\\MEDIA\\DUKE2",
+      "extract": {
+        "format": "zip-sfx",
+        "member": "DN2SW10.SHR"
+      },
+      "sources": [
+        {
+          "member": "DN2SW10.SHR!DN2HELP.EXE",
+          "sha256": "440e075acc395cd1ace2951a4208b4a67dff7c07b0438e202f0824247224723f",
+          "kind": "executable-help-needs-lead-inspection"
+        },
+        {
+          "member": "INSTALL.EXE",
+          "sha256": "73a290c4efb2047a7905039ffd15a53616363c4ba6b6d3f00961474b5e69a095",
+          "kind": "installer-command-only"
+        }
+      ],
+      "steps": [
+        {
+          "name": "desktop-dosvm",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Desktop DOS VM launch and initial C: prompt",
+          "goal": "Launch the DOS VM through the desktop DOS path; record the actual menu route and prompt. Set BLASTER=A220 I5 D1 H5 P330 T6 in this VM. No desktop menu mnemonic is assumed."
+        },
+        {
+          "name": "original-installer",
+          "command": "C:\\MEDIA\\DUKE2\\INSTALL.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "INSTALL.EXE welcome, destination editor, completion and any automatic setup/game launch",
+          "goal": "Stage the unchanged outer archive members at C:\\MEDIA\\DUKE2; run INSTALL.EXE to natural exit. Enter C:\\GAME\\DUKE2 as destination; inspect the original manual/help before any navigation. Preserve automatic sound setup if launched; exit any automatically started game normally."
+        },
+        {
+          "name": "sound-setup",
+          "command": "C:\\GAME\\DUKE2\\NUKEM2.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "NUKEM2.EXE sound devices, music, port, IRQ, DMA, save and exit",
+          "goal": "Select Sound Blaster/SB16 effects at 220h IRQ5 DMA1/5 where supported; AdLib/OPL music where supported. Save settings and exit normally; retain generated configuration files. Read the executable help viewer in this package before navigating. The text archive has no usable sound-menu key sequence; confirm the setup or in-game menu, device choices, save and exit screens."
+        },
+        {
+          "name": "installed-return",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Natural return to the DOS prompt after original installer and sound configuration",
+          "goal": "Record zero/natural installer and setup termination, capture C:\\GAME\\DUKE2 from the guest, pin that measured tree, and compare it with the extraction reference. Keep installer-only files and exact generated/modified config names explicit. SOW titles need original-installer evidence instead of a host reference."
+        }
+      ],
+      "comparison": {
+        "reference_only": [],
+        "installer_only": [],
+        "config": []
+      }
+    },
+    {
+      "id": "raptor",
+      "target": "C:\\GAME\\RAPTOR",
+      "media": "C:\\MEDIA\\RAPTOR",
+      "extract": {
+        "format": "zip-sfx",
+        "member": "RAPSW12.SHR"
+      },
+      "sources": [
+        {
+          "member": "RAPSW12.SHR!RAPHELP.EXE",
+          "sha256": "c6d5bcd7d8c58bfda7ce471ddb11a34957c324bc5acccfcf6e8eb7e49ce2fe34",
+          "kind": "executable-help-needs-lead-inspection"
+        },
+        {
+          "member": "INSTALL.EXE",
+          "sha256": "6d498bcc7b573d43a4d98cae7050a2ac30e1cf77312729b334b2cdc12962cba4",
+          "kind": "installer-command-only"
+        }
+      ],
+      "steps": [
+        {
+          "name": "desktop-dosvm",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Desktop DOS VM launch and initial C: prompt",
+          "goal": "Launch the DOS VM through the desktop DOS path; record the actual menu route and prompt. Set BLASTER=A220 I5 D1 H5 P330 T6 in this VM. No desktop menu mnemonic is assumed."
+        },
+        {
+          "name": "original-installer",
+          "command": "C:\\MEDIA\\RAPTOR\\INSTALL.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "INSTALL.EXE welcome, destination editor, completion and any automatic setup/game launch",
+          "goal": "Stage the unchanged outer archive members at C:\\MEDIA\\RAPTOR; run INSTALL.EXE to natural exit. Enter C:\\GAME\\RAPTOR as destination; inspect the original manual/help before any navigation. Preserve automatic sound setup if launched; exit any automatically started game normally."
+        },
+        {
+          "name": "sound-setup",
+          "command": "C:\\GAME\\RAPTOR\\SETUP.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "SETUP.EXE sound devices, music, port, IRQ, DMA, save and exit",
+          "goal": "Select Sound Blaster/SB16 effects at 220h IRQ5 DMA1/5 where supported; AdLib/OPL music where supported. Save settings and exit normally; retain generated configuration files. Read the executable help viewer in this package before navigating. The text archive has no usable sound-menu key sequence; confirm the setup or in-game menu, device choices, save and exit screens."
+        },
+        {
+          "name": "installed-return",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Natural return to the DOS prompt after original installer and sound configuration",
+          "goal": "Record zero/natural installer and setup termination, capture C:\\GAME\\RAPTOR from the guest, pin that measured tree, and compare it with the extraction reference. Keep installer-only files and exact generated/modified config names explicit. SOW titles need original-installer evidence instead of a host reference."
+        }
+      ],
+      "comparison": {
+        "reference_only": [],
+        "installer_only": [],
+        "config": []
+      }
+    },
+    {
+      "id": "hocus",
+      "target": "C:\\GAME\\HOCUS",
+      "media": "C:\\MEDIA\\HOCUS",
+      "extract": {
+        "format": "zip-sfx",
+        "member": "HPSW11.SHR"
+      },
+      "sources": [
+        {
+          "member": "HPSW11.SHR!HPHELP.EXE",
+          "sha256": "0957fb96409d6add1be0ffe9bd5e165579d727c1f9c3d54a4d67b853e9e9238b",
+          "kind": "executable-help-needs-lead-inspection"
+        },
+        {
+          "member": "INSTALL.EXE",
+          "sha256": "77da584a197ed53cab97041d6b75c3b49dafa68426c2dedd8deb72575935feb5",
+          "kind": "installer-command-only"
+        }
+      ],
+      "steps": [
+        {
+          "name": "desktop-dosvm",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Desktop DOS VM launch and initial C: prompt",
+          "goal": "Launch the DOS VM through the desktop DOS path; record the actual menu route and prompt. Set BLASTER=A220 I5 D1 H5 P330 T6 in this VM. No desktop menu mnemonic is assumed."
+        },
+        {
+          "name": "original-installer",
+          "command": "C:\\MEDIA\\HOCUS\\INSTALL.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "INSTALL.EXE welcome, destination editor, completion and any automatic setup/game launch",
+          "goal": "Stage the unchanged outer archive members at C:\\MEDIA\\HOCUS; run INSTALL.EXE to natural exit. Enter C:\\GAME\\HOCUS as destination; inspect the original manual/help before any navigation. Preserve automatic sound setup if launched; exit any automatically started game normally."
+        },
+        {
+          "name": "sound-setup",
+          "command": "C:\\GAME\\HOCUS\\SETUP.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "SETUP.EXE sound devices, music, port, IRQ, DMA, save and exit",
+          "goal": "Select Sound Blaster/SB16 effects at 220h IRQ5 DMA1/5 where supported; AdLib/OPL music where supported. Save settings and exit normally; retain generated configuration files. Read the executable help viewer in this package before navigating. The text archive has no usable sound-menu key sequence; confirm the setup or in-game menu, device choices, save and exit screens."
+        },
+        {
+          "name": "installed-return",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Natural return to the DOS prompt after original installer and sound configuration",
+          "goal": "Record zero/natural installer and setup termination, capture C:\\GAME\\HOCUS from the guest, pin that measured tree, and compare it with the extraction reference. Keep installer-only files and exact generated/modified config names explicit. SOW titles need original-installer evidence instead of a host reference."
+        }
+      ],
+      "comparison": {
+        "reference_only": [],
+        "installer_only": [],
+        "config": []
+      }
+    },
+    {
+      "id": "biomenace",
+      "target": "C:\\GAME\\BIOMEN",
+      "media": "C:\\MEDIA\\BIOMEN",
+      "extract": {
+        "format": "apogee-shr",
+        "member": "BMSW11.SHR"
+      },
+      "sources": [
+        {
+          "member": "BMSW11.SHR!BMHELP.EXE",
+          "sha256": "a3583ab1f5d7f4a8130c2053f5e92d3bd69d6706d1c95ea50fe0b13d4450583e",
+          "kind": "executable-help-needs-lead-inspection"
+        },
+        {
+          "member": "INSTALL.EXE",
+          "sha256": "e069491c0dffe2350859c93e3e2cf2e62c729d2803555ee1eadf4e3a2ad8283a",
+          "kind": "installer-command-only"
+        }
+      ],
+      "steps": [
+        {
+          "name": "desktop-dosvm",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Desktop DOS VM launch and initial C: prompt",
+          "goal": "Launch the DOS VM through the desktop DOS path; record the actual menu route and prompt. Set BLASTER=A220 I5 D1 H5 P330 T6 in this VM. No desktop menu mnemonic is assumed."
+        },
+        {
+          "name": "original-installer",
+          "command": "C:\\MEDIA\\BIOMEN\\INSTALL.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "INSTALL.EXE welcome, destination editor, completion and any automatic setup/game launch",
+          "goal": "Stage the unchanged outer archive members at C:\\MEDIA\\BIOMEN; run INSTALL.EXE to natural exit. Enter C:\\GAME\\BIOMEN as destination; inspect the original manual/help before any navigation. Preserve automatic sound setup if launched; exit any automatically started game normally."
+        },
+        {
+          "name": "sound-setup",
+          "command": "C:\\GAME\\BIOMEN\\BMENACE1.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "BMENACE1.EXE sound devices, music, port, IRQ, DMA, save and exit",
+          "goal": "Select Sound Blaster/SB16 effects at 220h IRQ5 DMA1/5 where supported; AdLib/OPL music where supported. Save settings and exit normally; retain generated configuration files. Read the executable help viewer in this package before navigating. The text archive has no usable sound-menu key sequence; confirm the setup or in-game menu, device choices, save and exit screens."
+        },
+        {
+          "name": "installed-return",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Natural return to the DOS prompt after original installer and sound configuration",
+          "goal": "Record zero/natural installer and setup termination, capture C:\\GAME\\BIOMEN from the guest, pin that measured tree, and compare it with the extraction reference. Keep installer-only files and exact generated/modified config names explicit. SOW titles need original-installer evidence instead of a host reference."
+        }
+      ],
+      "comparison": {
+        "reference_only": [],
+        "installer_only": [],
+        "config": []
+      }
+    },
+    {
+      "id": "blakestone",
+      "target": "C:\\GAME\\BLAKE",
+      "media": "C:\\MEDIA\\BLAKE",
+      "extract": {
+        "format": "zip-sfx",
+        "member": "BSSW30.SHR"
+      },
+      "sources": [
+        {
+          "member": "BSSW30.SHR!BSHELP.EXE",
+          "sha256": "4c743c5cca54bf89f187b372a835c6078e6ec59ae159c971fcbf16f84f66ba65",
+          "kind": "executable-help-needs-lead-inspection"
+        },
+        {
+          "member": "INSTALL.EXE",
+          "sha256": "65e5e80c4d067bf175f74917bb4a68716b7bebba8781164378f66876286da4ad",
+          "kind": "installer-command-only"
+        }
+      ],
+      "steps": [
+        {
+          "name": "desktop-dosvm",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Desktop DOS VM launch and initial C: prompt",
+          "goal": "Launch the DOS VM through the desktop DOS path; record the actual menu route and prompt. Set BLASTER=A220 I5 D1 H5 P330 T6 in this VM. No desktop menu mnemonic is assumed."
+        },
+        {
+          "name": "original-installer",
+          "command": "C:\\MEDIA\\BLAKE\\INSTALL.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "INSTALL.EXE welcome, destination editor, completion and any automatic setup/game launch",
+          "goal": "Stage the unchanged outer archive members at C:\\MEDIA\\BLAKE; run INSTALL.EXE to natural exit. Enter C:\\GAME\\BLAKE as destination; inspect the original manual/help before any navigation. Preserve automatic sound setup if launched; exit any automatically started game normally."
+        },
+        {
+          "name": "sound-setup",
+          "command": "C:\\GAME\\BLAKE\\BS_AOG.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "BS_AOG.EXE sound devices, music, port, IRQ, DMA, save and exit",
+          "goal": "Select Sound Blaster/SB16 effects at 220h IRQ5 DMA1/5 where supported; AdLib/OPL music where supported. Save settings and exit normally; retain generated configuration files. BSHELP.EXE is an executable help viewer; inspect it and the in-game sound menu. SETBLAST.EXE is present but its role must be confirmed from the manual before use."
+        },
+        {
+          "name": "installed-return",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Natural return to the DOS prompt after original installer and sound configuration",
+          "goal": "Record zero/natural installer and setup termination, capture C:\\GAME\\BLAKE from the guest, pin that measured tree, and compare it with the extraction reference. Keep installer-only files and exact generated/modified config names explicit. SOW titles need original-installer evidence instead of a host reference."
+        }
+      ],
+      "comparison": {
+        "reference_only": [],
+        "installer_only": [],
+        "config": []
+      }
+    },
+    {
+      "id": "terminal",
+      "target": "C:\\GAME\\TV",
+      "media": "C:\\MEDIA\\TV",
+      "extract": {
+        "format": "zip-sfx",
+        "member": "TV12S.SHR"
+      },
+      "sources": [
+        {
+          "member": "TV12S.SHR!TVHELP.EXE",
+          "sha256": "a2d5111baf5bb7e3862807d3fe69e46a60192b0b649cc2e221e0781c759b12a1",
+          "kind": "executable-help-needs-lead-inspection"
+        },
+        {
+          "member": "INSTALL.EXE",
+          "sha256": "dcd4145126229f07a90345c6380dfdd366ab4e01e8ae4857b7ba13a7febc8311",
+          "kind": "installer-command-only"
+        }
+      ],
+      "steps": [
+        {
+          "name": "desktop-dosvm",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Desktop DOS VM launch and initial C: prompt",
+          "goal": "Launch the DOS VM through the desktop DOS path; record the actual menu route and prompt. Set BLASTER=A220 I5 D1 H5 P330 T6 in this VM. No desktop menu mnemonic is assumed."
+        },
+        {
+          "name": "original-installer",
+          "command": "C:\\MEDIA\\TV\\INSTALL.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "INSTALL.EXE welcome, destination editor, completion and any automatic setup/game launch",
+          "goal": "Stage the unchanged outer archive members at C:\\MEDIA\\TV; run INSTALL.EXE to natural exit. Enter C:\\GAME\\TV as destination; inspect the original manual/help before any navigation. Preserve automatic sound setup if launched; exit any automatically started game normally."
+        },
+        {
+          "name": "sound-setup",
+          "command": "C:\\GAME\\TV\\SETUP.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "SETUP.EXE sound devices, music, port, IRQ, DMA, save and exit",
+          "goal": "Select Sound Blaster/SB16 effects at 220h IRQ5 DMA1/5 where supported; AdLib/OPL music where supported. Save settings and exit normally; retain generated configuration files. Read the executable help viewer in this package before navigating. The text archive has no usable sound-menu key sequence; confirm the setup or in-game menu, device choices, save and exit screens."
+        },
+        {
+          "name": "installed-return",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Natural return to the DOS prompt after original installer and sound configuration",
+          "goal": "Record zero/natural installer and setup termination, capture C:\\GAME\\TV from the guest, pin that measured tree, and compare it with the extraction reference. Keep installer-only files and exact generated/modified config names explicit. SOW titles need original-installer evidence instead of a host reference."
+        }
+      ],
+      "comparison": {
+        "reference_only": [],
+        "installer_only": [],
+        "config": []
+      }
+    },
+    {
+      "id": "jazz",
+      "target": "C:\\GAME\\JAZZ",
+      "media": "C:\\MEDIA\\JAZZ",
+      "extract": {
+        "format": "zip"
+      },
+      "sources": [
+        {
+          "member": "HELPME.DOC",
+          "sha256": "9df51b28486d57ecfe499a428852238ca57f49f56bd2958d3cc497b26b6cd6aa",
+          "kind": "package-document"
+        },
+        {
+          "member": "MANUAL.DOC",
+          "sha256": "ed8ede7711bbdf019589163bed2a8c3daa449ae3ce79799f5e597c96d6fd75c0",
+          "kind": "package-document"
+        }
+      ],
+      "steps": [
+        {
+          "name": "desktop-dosvm",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Desktop DOS VM launch and initial C: prompt",
+          "goal": "Launch the DOS VM through the desktop DOS path; record the actual menu route and prompt. Set BLASTER=A220 I5 D1 H5 P330 T6 in this VM. No desktop menu mnemonic is assumed."
+        },
+        {
+          "name": "direct-zip",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "DOS prompt with original direct ZIP files in C:\\GAME\\JAZZ",
+          "goal": "This package has no installer. Copy all original direct ZIP members to C:\\GAME\\JAZZ; host extraction is allowed by G20-1. Record that exception, then configure sound in the VM; extraction alone is never accepted as a calibrated install."
+        },
+        {
+          "name": "sound-setup",
+          "command": "C:\\GAME\\JAZZ\\SETUP.EXE",
+          "status": "needs-lead-calibration",
+          "screen": "SETUP.EXE sound devices, music, port, IRQ, DMA, save and exit",
+          "goal": "Select Sound Blaster/SB16 effects at 220h IRQ5 DMA1/5 where supported; enable the documented digital sound/music path. Save settings and exit normally; retain generated configuration files. HELPME.DOC Sound Card Problems documents SETUP and address/IRQ/DMA checks. The menu indices, sound quality selection and save/exit keys need screen calibration; its music is digital."
+        },
+        {
+          "name": "installed-return",
+          "command": null,
+          "status": "needs-lead-calibration",
+          "screen": "Natural return to the DOS prompt after original installer and sound configuration",
+          "goal": "Record zero/natural installer and setup termination, capture C:\\GAME\\JAZZ from the guest, pin that measured tree, and compare it with the extraction reference. Keep installer-only files and exact generated/modified config names explicit. SOW titles need original-installer evidence instead of a host reference."
+        }
+      ],
+      "comparison": {
+        "reference_only": [],
+        "installer_only": [],
+        "config": []
+      }
+    }
+  ]
+}
