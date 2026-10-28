@@ -755,6 +755,7 @@ bash "$root/tests/host/usb/ehci_run.sh"
 # F6: production ownership/queues and three register-level NIC models.
 bash "$root/tests/host/net/run.sh"
 python3 "$root/tests/host/lwip/fd_run.py" --frame
+python3 -B "$root/tests/host/net/test_ipx.py"
 python3 "$root/tests/host/lwip/run.py"
 python3 "$root/tests/host/lwip/fd_run.py"
 python3 "$root/tests/host/lwip/run.py" --kernel

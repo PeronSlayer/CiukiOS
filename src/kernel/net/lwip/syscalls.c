@@ -180,7 +180,7 @@ static int dispatch(struct user_operation *o, struct trap_frame *tf)
         if (e) return e;
         if (r.size != sizeof(r) || r.version != 1 || r.operation > 1 || r.reserved[0] || r.reserved[1]) return -EINVAL;
         e = net_socket_capture(p, r.fd, &o->socket); if (e) return e;
-        unsigned length = r.length; uint8_t value[16] = {0};
+        unsigned length = r.length; uint8_t value[32] = {0};
         if (r.operation) {
             if (length > sizeof(value)) return -EINVAL;
             e = copy_from_user(value, r.value, length);
@@ -189,6 +189,14 @@ static int dispatch(struct user_operation *o, struct trap_frame *tf)
             if (!e && length > 65535) e = -EINVAL;
             if (!e) e = pin(o, r.length, 4);
             unsigned actual = r.level == SOL_SOCKET && (r.name == SO_RCVTIMEO || r.name == SO_SNDTIMEO) ? 16 : 4;
+            if(r.level==NSPROTO_IPX || r.level==NSPROTO_SPX) {
+                actual=r.name==IPX_ADDRESS ? sizeof(struct ciuki_ipx_address_data) :
+                    (r.name==IPX_GETNETINFO || r.name==IPX_GETNETINFO_NORIP) ? sizeof(struct ciuki_ipx_netnum_data) : 4;
+                if(length<actual)e=-EINVAL;
+                if(!e && (r.name==IPX_ADDRESS || r.name==IPX_GETNETINFO || r.name==IPX_GETNETINFO_NORIP))
+                    e=copy_from_user(value,r.value,actual);
+            }
+            if(r.level==SOL_SOCKET && r.name==SO_LINGER)actual=sizeof(struct ciuki_socket_linger);
             if (!e) e = pin(o, r.value, length < actual ? length : actual);
         }
         unsigned capacity = length;

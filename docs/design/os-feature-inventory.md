@@ -406,7 +406,7 @@ see `dos-program-properties.md` for their respective selection/paste paths.
 | NW-10 | FTP and Telnet clients | RK-net (`wrkc20_4`) | absent (scope) | Out of scope in `docs/design/network-contract.md:805` |
 | NW-11 | Dial-Up Networking (modem, PPP), Dial-Up Server, Direct Cable Connection, VPN | RK-net (ch. 19), RK-comp | absent (scope) | PPP excluded (`network-contract.md:32`) |
 | NW-12 | Client for Microsoft Networks, File and Printer Sharing, Network Neighborhood, mapped drives | RK-net (ch. 16, 18) | absent | — |
-| NW-13 | IPX/SPX and NetBIOS for games and LANs | RK-net | partial | Existing DOS NE2000/IPX bridge; G26B adds LMHOSTS/B-node NBNS name resolution to native libc and synchronous Winsock. No NetBIOS name registration, datagram/session transport, WINS or native IPX. |
+| NW-13 | IPX/SPX and NetBIOS for games and LANs | RK-net | partial | f6-25 adds a shared native/DOS bridge IPX endpoint hub, Winsock AF_IPX datagrams and classic SPX streams/sequenced packets, four Ethernet framings and bounded RIP frame discovery; see [win32-ipx.md](win32-ipx.md). Host evidence and limitations are in build/codex/f6-25-report.md; guest/game/physical LAN qualification remains pending. G26B supplies LMHOSTS/B-node NBNS name resolution. NetBIOS name registration, datagram/session transport and WINS remain absent; SPX II and IPX routing remain unsupported. |
 | NW-14 | Internet Connection Sharing (Windows 98 SE) | — | absent (scope) | Routing and NAT excluded (`network-contract.md:32`) |
 | NW-15 | Network status in the tray | — | done | TB-9 |
 ## 23. MS-DOS programs

@@ -83,7 +83,14 @@ static bool bridge_tap_frame(struct netif *d, const struct net_packet *p)
 {
     uint32_t flags = irq_save();
     net_bridge_tap_fn fn = bridge_tap.fn;
-    if (!fn || p->length < 14 || (((uint16_t)p->data[12] << 8) | p->data[13]) != bridge_tap.type) {
+    /* All four IPX formats share this exclusive protocol tap. Non-IPX 802.3
+     * frames continue to the native classifier. Full validation is in bridge. */
+    unsigned type=p->length>=14 ? ((unsigned)p->data[12]<<8)|p->data[13] : 0;
+    bool ipx=type==bridge_tap.type || (type<=1500 && p->length>=16 &&
+        ((p->data[14]==255 && p->data[15]==255) ||
+         (p->length>=17 && !memcmp(p->data+14,"\xe0\xe0\x03",3)) ||
+         (p->length>=22 && !memcmp(p->data+14,"\xaa\xaa\x03\0\0\0\x81\x37",8))));
+    if (!fn || p->length < 14 || !ipx) {
         irq_restore(flags); return false;
     }
     void *cookie = bridge_tap.cookie; bridge_tap.active = true; irq_restore(flags);

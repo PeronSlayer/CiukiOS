@@ -176,7 +176,7 @@ int main(void)
     send_ecb(&b,0x2000,0x5000,0x6000,12,a.mac,2,3); call(&b,3,0,0,0x2000);
     net_bridge_link(&bridge,false); dosvm_ipx_service(&b.ipx,b.ipx.ticks);
     CHECK(b.memory[0x2009]==0xfe && !b.live); net_bridge_link(&bridge,true);
-    /* Runt, raw 802.3, LLC and malformed IPX cannot consume a listener. */
+    /* Runt, unknown EtherTypes and malformed IPX cannot consume a listener. */
     ecb(&b,0x3000,0xb000,64,0x869c,false); call(&b,4,0,0,0x3000);
     frame[13]=0; CHECK(dosvm_ipx_receive(&b.ipx,frame,64)==-EINVAL && b.memory[0x3008]==0xfe);
     frame[13]=0x37; frame[17]=51; CHECK(dosvm_ipx_receive(&b.ipx,frame,64)==-EINVAL && b.memory[0x3008]==0xfe);
