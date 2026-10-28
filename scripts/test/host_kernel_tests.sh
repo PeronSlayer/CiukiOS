@@ -42,6 +42,7 @@ python3 -B -m unittest discover -s "$root/tests/host" -p test_sysrecovery.py
 python3 -B -m unittest discover -s "$root/tests/host/reliability" -p 'test_*.py'
 python3 -B "$root/tests/host/test_display_driver_model.py"
 python3 -B "$root/tests/host/test_radeon2d.py"
+python3 -B "$root/tests/host/test_radeon3d.py"
 python3 -B "$root/tests/host/test_nv2d.py"
 python3 -B "$root/tests/host/test_riva128.py"
 python3 -B "$root/tests/host/test_intel2d.py"

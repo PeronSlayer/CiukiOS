@@ -1,12 +1,20 @@
 /* Real copied wire/validator/BCI emitter to independent fake silicon.
  * GPL-2.0-only. Fixture callbacks model only hardware and the lease boundary. */
+#ifdef GL_KERNEL_FAMILY_RADEON
+#include "radeon3d_model.inc"
+#define family_backend radeon3d_backend
+#else
 #include "savage3d_backend_fixture.inc"
+#define family_backend savage3d_backend
+#endif
 #include "../../../../src/kernel/drivers/video/render3d_transport.h"
 static unsigned wire_pid=7, lease_token, lease_generation, wire_presented;
 static unsigned wire_reads, wire_uploads, direct_presented;
 static uint32_t frame_pixels[1024*768];
 static unsigned mode_width=640,mode_height=480;
+#ifndef GL_KERNEL_FAMILY_RADEON
 static bool t23_presenting;
+#endif
 static unsigned work_submissions,work_vertices[2],work_refusals;
 static uint64_t work_peak,work_total;
 void gl_kernel_work_reset(void) {
@@ -26,6 +34,7 @@ static int present_wire(void *ctx,uint32_t pid,const struct ciuki_w32_render3d_a
 {
     (void)ctx;
     if (pid!=7 || a->token!=lease_token || a->generation!=lease_generation) return -EACCES;
+#ifndef GL_KERNEL_FAMILY_RADEON
     /* f7-15 transport: NULL pixels ask for the direct native path only. */
     if (!data) {
         if (!t23_presenting) return -EOPNOTSUPP;
@@ -42,17 +51,28 @@ static int present_wire(void *ctx,uint32_t pid,const struct ciuki_w32_render3d_a
         if (e==-EOPNOTSUPP) e=fbdev_present(&source,&dest);
         if (e) return e;
     }
+#else
+    if (!data) return -EOPNOTSUPP;
+#endif
     if (data!=frame_pixels) memcpy(frame_pixels,data,bytes); wire_presented++; return 0;
 }
 void gl_kernel_setup(int qualified)
 {
     CHECK(!allocations3d);
+#ifdef GL_KERNEL_FAMILY_RADEON
+    prepare(32);
+    test_engine.group_id=RADEON_R200;
+    gpu3d=(struct radeon3d_device){.engine=&test_engine,.heap={0x400000,sizeof(ram3d)},.generation=42,
+        .memory={0,memory_read3d,memory_write3d,lock3d,unlock3d},.qualified=qualified,.r200=true};
+    test_engine.render3d_qualified=qualified;
+#else
     prepare(32); m.exact_clock=true; m.reg[0x48578/4]=0;
     memset(ram3d,0x7a,sizeof(ram3d)); draw3d=copy3d=writes3d=memory3d=count3d=attachment_fault3d=0;
     gpu3d=(struct savage3d_device){.engine=&test_engine,.heap={0x800000,sizeof(ram3d)},.generation=42,
         .memory={0,memory_read3d,memory_write3d,lock3d,unlock3d},.qualified=qualified};
     test_engine.render3d_qualified=qualified;
     test_engine.io.write32=write_engine3d;
+#endif
     struct render3d_host host={0,allocate3d,free3d,clock3d,0};
     if (qualified==2) {
         gpu3d.texture_bytes=480*1024;
@@ -61,8 +81,13 @@ void gl_kernel_setup(int qualified)
         fullsize_resources3d(&scratch3d,&host,mode_width,mode_height,true);
         fullsize_resources3d(&reference3d,&host,mode_width,mode_height,false);
         gpu3d.fullsize_testing=false; gpu3d.consumer=&scratch3d;
+#ifdef GL_KERNEL_FAMILY_RADEON
+        CHECK(!radeon3d_fullsize_probe(&gpu3d,&reference3d));
+#else
         CHECK(!savage3d_fullsize_probe(&gpu3d,&reference3d));
+#endif
         CHECK(!render3d_close(&scratch3d) && !render3d_close(&reference3d)); gpu3d.consumer=0;
+#ifndef GL_KERNEL_FAMILY_RADEON
         gpu3d.color565_testing=gpu3d.fullsize_testing=true;
         fullsize_resources3d(&scratch3d,&host,mode_width,mode_height,true);
         fullsize_resources3d(&reference3d,&host,mode_width,mode_height,false);
@@ -83,11 +108,13 @@ void gl_kernel_setup(int qualified)
             CHECK(!e);
             CHECK(!render3d_close(&scratch3d) && !render3d_close(&reference3d)); gpu3d.consumer=0;
         }
+#endif
     }
-    render3d_init(&scratch3d,&host,42,savage3d_backend(),&gpu3d,gpu3d.heap);
+    render3d_init(&scratch3d,&host,42,family_backend(),&gpu3d,gpu3d.heap);
     gpu3d.consumer=&scratch3d; wire_pid=7;
     lease_token=1234; lease_generation=42; wire_presented=0;
 }
+#ifndef GL_KERNEL_FAMILY_RADEON
 /* T23 census/lease fixture; cached target evidence is controlled below.
  * Minimum recheck, copied GL traffic, BCI and scanout copies are production. */
 static uint8_t t23_ram[16*1024*1024];
@@ -251,14 +278,33 @@ void gl_test_lease_hook(void)
     printf("GL_T23_SWITCH desktop=1024x768 lease=%ux%u generation=42->43 heap_first=%u heap_bytes=%u PASS\n",
         w,h,gpu3d.heap.first,gpu3d.heap.bytes);
 }
+#else
+/* These entry points exercise the Savage/T23 owner, absent from this family
+ * model. Fail explicitly if a caller accidentally selects those workloads. */
+void gl_kernel_fullscreen_setup(unsigned w,unsigned h)
+{ (void)w; (void)h; CHECK(false); }
+void gl_kernel_desktop_setup(unsigned w,unsigned h)
+{ (void)w; (void)h; CHECK(false); }
+void gl_kernel_present_lease(const uint32_t *pixels,unsigned w,unsigned h)
+{ (void)pixels; (void)w; (void)h; CHECK(false); }
+#endif
 void gl_kernel_counters(unsigned out[5])
 { out[0]=wire_reads; out[1]=wire_uploads; out[2]=direct_presented; out[3]=memory3d; out[4]=gpu3d.generation; }
+#ifndef GL_KERNEL_FAMILY_RADEON
 const uint8_t *gl_kernel_scanout(void) { return device.mapped; }
 unsigned gl_kernel_scanout_pitch(void) { return device.pitch; }
+#else
+const uint8_t *gl_kernel_scanout(void) { CHECK(false); return 0; }
+unsigned gl_kernel_scanout_pitch(void) { CHECK(false); return 0; }
+#endif
 void gl_kernel_teardown(void)
 {
     CHECK(!render3d_close(&scratch3d)); CHECK(!allocations3d && !scratch3d.ram_bytes);
+#ifndef GL_KERNEL_FAMILY_RADEON
     finish(); t23_presenting=false; ram_storage3d=0; CHECK(!failures);
+#else
+    finish(); CHECK(!failures);
+#endif
 }
 void gl_kernel_revoke(void) { lease_token++; }
 void gl_kernel_process_exit(void) { render3d_process_exit(&scratch3d,7); }
@@ -324,7 +370,7 @@ void gl_host_draw(const struct sw_state *s,const struct sw_vertex *v,int hardwar
     if (!admission_live) return;
     static struct gl_hw_command g;
     static struct render3d_request q;
-    struct ciuki_r3d_caps caps; savage3d_backend()->query_caps(&gpu3d,&caps);
+    struct ciuki_r3d_caps caps; family_backend()->query_caps(&gpu3d,&caps);
     g=(struct gl_hw_command){.state=*s,.count=3}; memcpy(g.vertices,v,3*sizeof(*v));
     bool eligible=!gl_hw_encode(&caps,&g,1,2,0,&q);
     if (admission_class==1) { admission_world++; admission_world_ok+=eligible; }
@@ -342,7 +388,13 @@ void gl_host_draw(const struct sw_state *s,const struct sw_vertex *v,int hardwar
 void gl_savage_end(unsigned w,unsigned h,unsigned frame,unsigned gpu_draws,uint64_t gpu_fragments,
                    uint64_t cpu_draws,uint64_t cpu_fragments) {
     admission_live=0;
-    printf("GL_SAVAGE_H1 scope=%s width=%u height=%u frame=%u gpu_draws=%u gpu_fragments=%llu cpu_draws=%llu cpu_fragments=%llu "
+    printf(
+#ifdef GL_KERNEL_FAMILY_RADEON
+        "GL_RADEON_H1 scope="
+#else
+        "GL_SAVAGE_H1 scope="
+#endif
+        "%s width=%u height=%u frame=%u gpu_draws=%u gpu_fragments=%llu cpu_draws=%llu cpu_fragments=%llu "
         "eligible_world=%llu/%llu eligible_entities=%llu/%llu queued_gpu=%llu direct_cpu=%llu switches=%u queued_switches=%u "
         "refused_alpha=%llu refused_blend=%llu refused_fog=%llu refused_offset=%llu refused_numeric=%llu context_software=%llu\n",
         admission_scope ? "complete-multipass" : "complete",w,h,frame,gpu_draws,(unsigned long long)gpu_fragments,(unsigned long long)cpu_draws,(unsigned long long)cpu_fragments,

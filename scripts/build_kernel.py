@@ -250,7 +250,7 @@ def main() -> int:
                         "s3legacy/driver.c", "s3legacy/platform.c", "s3trio64/engine.c", "s3virge/engine.c",
                         "i810/driver.c", "i810/memory.c", "i740/driver.c")] +
                     [SRC / "drivers/video/s3savage" / name for name in ("s3savage_register.c", "savage2d.c", "savage3d.c", "savage3d_owner.c", "supersavage_display.c", "supersavage_mode.c")] +
-                    [SRC / "drivers/video/radeon2d" / name for name in ("engine.c", "cursor.c", "driver.c")] +
+                    [SRC / "drivers/video/radeon2d" / name for name in ("engine.c", "cursor.c", "driver.c", "radeon3d.c", "radeon3d_owner.c")] +
                     [SRC / "drivers/video/nv2d" / name for name in ("adapter.c", "engine.c", "hardware.c", "dma_hw.c")] +
                     [SRC / "drivers/video/riva128" / name for name in ("driver.c", "engine.c")] +
                     [SRC / "drivers/video/matrox" / name for name in ("engine.c", "driver.c")] +

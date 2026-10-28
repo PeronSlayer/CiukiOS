@@ -597,7 +597,11 @@ void gl_quake3_savage(int default_format) {
   for (unsigned size=0;size<2;size++) {
     unsigned w=size ? 1024 : 640,h=size ? 768 : 480;
     gl_kernel_mode(w,h);
+#ifdef GL_KERNEL_FAMILY_RADEON
+    assert(!default_format); gl_kernel_setup(2);
+#else
     extern void gl_kernel_fullscreen_setup(unsigned,unsigned); gl_kernel_fullscreen_setup(w,h);
+#endif
     for (unsigned scenario=0;scenario<2;scenario++) {
       unsigned *pixels=calloc(w*h,4); assert(pixels);
       struct w32_dib dib=test_dib(pixels,w,h,32,0,1);
@@ -613,7 +617,13 @@ void gl_quake3_savage(int default_format) {
       }
       PIXELFORMATDESCRIPTOR actual; assert(DescribePixelFormat(dc,chosen,40,&actual));
       assert(!(actual.dwFlags&PFD_GENERIC_FORMAT));
-      printf("GL_SAVAGE_FORMAT width=%u height=%u request=%u/%u selected=%d depth=%u stencil=%u flags=%08x\n",
+      printf(
+#ifdef GL_KERNEL_FAMILY_RADEON
+          "GL_RADEON_FORMAT width="
+#else
+          "GL_SAVAGE_FORMAT width="
+#endif
+          "%u height=%u request=%u/%u selected=%d depth=%u stencil=%u flags=%08x\n",
           w,h,p.cDepthBits,p.cStencilBits,chosen,actual.cDepthBits,actual.cStencilBits,actual.dwFlags);
       assert(SetPixelFormat(dc,chosen,&p));
       HGLRC rc=wglCreateContext(dc); assert(rc && wglMakeCurrent(dc,rc));
@@ -631,7 +641,9 @@ void gl_quake3_savage(int default_format) {
 #endif
         extern void gl_savage_scope(unsigned);
         gl_savage_scope(scenario); gl_savage_begin(); frame(scenario); glFinish();
+#ifndef GL_KERNEL_FAMILY_RADEON
         extern void gl_kernel_present_lease(const uint32_t *,unsigned,unsigned); gl_kernel_present_lease(pixels,w,h);
+#endif
 #ifdef SW_PROFILE
         gl_savage_end(w,h,f,gl_kernel_draws()-before,gl_kernel_fragments()-fragments,work[SW_TRIANGLE],work[SW_FRAGMENT]);
 #else
@@ -643,7 +655,9 @@ void gl_quake3_savage(int default_format) {
     }
     gl_kernel_teardown();
   }
+#ifndef GL_KERNEL_FAMILY_RADEON
   extern void gl_quake3_lease_flow(int); gl_quake3_lease_flow(default_format);
+#endif
   gl_kernel_mode(640,480); gl_hardware_native(0); savage_frames=0;
 }
 /* f7-15 review P1 (real Quake III order): wglCreateContext and the first

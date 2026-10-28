@@ -244,7 +244,8 @@ class RenderTests(unittest.TestCase):
             descriptors=[p for p in (VIDEO/folder).glob('*.c') if 'render_family =' in p.read_text()]
             self.assertEqual(len(descriptors),1,folder)
             source=descriptors[0].read_text()
-            status = {'s3savage': 'R3D_UNQUALIFIED', 'nv2d': 'R3D_SOFTWARE_ONLY'}
+            status = {'s3savage': 'R3D_UNQUALIFIED', 'nv2d': 'R3D_SOFTWARE_ONLY',
+                      'radeon2d': 'R3D_UNQUALIFIED'}
             self.assertIn(status.get(folder, 'R3D_NOT_IMPLEMENTED'), source)
             self.assertRegex(source,r'render3d=&render_family|S3_RENDER_FAMILY \(&render_family\)')
             found.add(folder)

@@ -1001,3 +1001,20 @@ for speculative writes.
 F7-00 is complete when this source-backed contract and its handoff report are
 available. Lead cross-review/integration, production implementation, canonical
 builds, QEMU and physical T23 performance evidence remain subsequent work.
+
+
+## ATI Radeon R100/R200 family (f7-24)
+
+The `radeon2d` descriptor nominates the R100/R200 backend as
+`R3D_UNQUALIFIED`: hardware admission requires the boot minimum, full-size and
+precision probes. R300/R4xx devices matched by the 2D driver remain in
+software. Submission uses the bounded MMIO register FIFO with CP disabled,
+claimed offscreen VRAM and state restoration; no DMA or firmware activation
+is introduced. See [the Radeon family design](f7-family-ati-radeon.md) for
+PCI IDs, source hashes, register citations, supported state and gates.
+
+The independent Radeon host decoder and H1 GL replay establish model
+behavior only. They provide no silicon qualification, T23 evidence, or
+Savage format/scanout qualification for this family. Integration 6's Savage
+implementation, precision checkpoints, RGB565/D24 tests and T23 lease fixture
+remain authoritative and unchanged in the default host build.
