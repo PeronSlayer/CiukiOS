@@ -1,6 +1,7 @@
 /* Bounded process records, virtual I/O, crash facts and desktop mailbox.
  * SPDX-License-Identifier: GPL-2.0-only */
 #include <ciuki/kernel.h>
+#include <ciuki/cpu.h> /* sec-k07 */
 #include <ciuki/w32_objects.h>
 #include <ciuki/security.h>
 #include <ciuki/supervisor.h>
@@ -19,6 +20,33 @@ struct w32_diagnostic_state {
 static struct ciuki_w32_fault w32_fault_queue[16];
 static unsigned w32_fault_head,w32_fault_count;
 static uint32_t w32_fault_session[16];
+/* --- sec-k07 (begin): Win32 part of logoff teardown ---
+ * Called by PID 1 while a session is CLOSING (after its processes were
+ * stopped): pending crash/refusal reports of that session are discarded so
+ * no later desktop can read them, and the Win32 objects still bound to the
+ * session (named objects, query tokens) are counted; COLLECT keeps the
+ * session CLOSING until none remains. Handles/views/waits die with their
+ * processes (proc exit), tokens already deny queries once CLOSING. */
+unsigned w32_session_revoke(uint32_t session)
+{
+    if (!session) return 0;
+    uint32_t f=irq_save();
+    unsigned kept=0,n=w32_fault_count;
+    for (unsigned i=0;i<n;i++) {
+        unsigned from=(w32_fault_head+i)%16;
+        if (w32_fault_session[from]==session) continue;
+        unsigned to=(w32_fault_head+kept)%16;
+        if (to!=from) { w32_fault_queue[to]=w32_fault_queue[from]; w32_fault_session[to]=w32_fault_session[from]; }
+        kept++;
+    }
+    w32_fault_count=kept;
+    unsigned retained=0;
+    for (struct w32_object *o=w32_objects;o;o=o->next)
+        if (o->security_session==session || (o->type==W32_OBJ_TOKEN && o->u.token.session_id==session)) retained++;
+    irq_restore(f);
+    return retained;
+}
+/* --- sec-k07 (end) --- */
 static int diag_cmp(const char *a,const char *b){size_t n=strlen(a);return n==strlen(b)?strncmp(a,b,n):1;}
 static struct w32_diagnostic_state *diag_state(struct process *p){
     if(!p->w32&&w32_process_init(p))return 0;

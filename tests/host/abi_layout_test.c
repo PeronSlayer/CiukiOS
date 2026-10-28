@@ -3115,6 +3115,8 @@ static const struct expectation expectations[] = {
     {"constant.CIUKI_INPUT_MOTION", (uint32_t)(CIUKI_INPUT_MOTION), 3u},
     {"constant.CIUKI_INPUT_BUTTON", (uint32_t)(CIUKI_INPUT_BUTTON), 4u},
     {"constant.CIUKI_INPUT_WHEEL", (uint32_t)(CIUKI_INPUT_WHEEL), 6u},
+    /* sec-k07 */
+    {"constant.CIUKI_INPUT_ATTENTION", (uint32_t)(CIUKI_INPUT_ATTENTION), 13u},
     {"constant.CIUKI_BUS_USB", (uint32_t)(CIUKI_BUS_USB), 3u},
     {"constant.CIUKI_INPUT_RESYNC", (uint32_t)(CIUKI_INPUT_RESYNC), 5u},
     {"constant.CIUKI_KEY_VALUE_UP", (uint32_t)(CIUKI_KEY_VALUE_UP), 0u},

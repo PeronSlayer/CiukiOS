@@ -579,6 +579,13 @@ these. No priority elevation is exposed to ordinary clients.
 #define CIUKI_INPUT_BUTTON 4
 #define CIUKI_INPUT_RESYNC 5
 #define CIUKI_INPUT_WHEEL 6
+```
+
+Kernel secure attention (physical Ctrl+Alt+Delete), delivered only on the
+trusted logon UI's input grant; code = CIUKI_SECURITY_SECURE_ATTENTION.
+
+```c
+#define CIUKI_INPUT_ATTENTION 13
 #define CIUKI_KEY_VALUE_UP 0
 #define CIUKI_KEY_VALUE_DOWN 1
 #define CIUKI_KEY_VALUE_REPEAT 2

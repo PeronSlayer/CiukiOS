@@ -138,6 +138,10 @@ void display_fullscreen_entry_request(void)
 
 uint32_t display_change_counter(void) { return changes; }
 static void changed(void) { if (!++changes) ++changes; }
+/* sec-k07: a secure console domain switch; both owners repaint on the
+ * changed counter they read from their display grant (no I/O, IRQ safe). */
+void display_console_changed(void) { changed(); }
+#pragma weak grants_console_trusted
 void display_present_returned(void)
 {
     changed();
@@ -269,6 +273,7 @@ int display_check_begin(uint16_t id)
 {
     /* H page and the T self-test (before its desktop) only. */
     if (!(g_boot.flags & (CBI_F_HW_CHECK | CBI_F_SELF_TEST)) || grants_display_pid()) return -EPERM;
+    if (grants_console_trusted && grants_console_trusted()) return -EPERM; /* sec-k07: trusted UI owns scanout */
     if (check_display || switching || fullscreen_display || present_provider || awaiting_frame) return -EBUSY;
     if (!listed(id) || !listed(fbdev_get()->mode_id)) return -EOPNOTSUPP;
     if (!fbdev_get()->present) return -ENODEV;

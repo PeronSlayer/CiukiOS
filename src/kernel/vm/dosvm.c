@@ -1162,13 +1162,16 @@ static void idle_poll_return(struct dosvm *v, const struct v86_frame *f)
         return;
     }
 }
+#pragma weak input_read_domain /* sec-k07 */
 void dosvm_input_poll(struct dosvm *v)
 {
     if (v->owner_pid || v->window_input || !dosvm_valid(v->info.key) || input_focus.id != v->info.key.id ||
         !gen_matches(input_focus.generation, v->info.key.generation)) return;
     struct input_event event;
     unsigned budget = 32;
-    while (budget-- && v->key_count < ARRAY_SIZE(v->keyboard) && input_read(&event)) {
+    /* sec-k07: an owner-less VM never reads the trusted logon domain. */
+    while (budget-- && v->key_count < ARRAY_SIZE(v->keyboard) &&
+           (input_read_domain ? input_read_domain(&event, false) : input_read(&event))) {
         if (event.tick - v->input_since >= (1ull << 63)) continue;
         if (event.type == INPUT_TEXT && event.code && event.code < 128)
             dosvm_keyboard(v->info.key, event.code);

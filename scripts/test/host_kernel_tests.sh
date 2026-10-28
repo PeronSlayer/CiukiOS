@@ -590,6 +590,12 @@ python3 -B -m unittest discover -s "$root/tests/host/security" -p test_dos_ident
 # ACCOUNT service, bound policy, reboot and SID-without-store refusal.
 python3 -B -m unittest discover -s "$root/tests/host/security" -p test_system_owner.py
 # ---- end sec-own ----
+# --- sec-k07 block (begin) ---
+# H09: trusted gate with the real secure-console backend, physical secure
+# attention through the production merged input queue (PS/2, USB, firmware),
+# session drain/teardown and the real session console on the fd table.
+python3 -B -m unittest discover -s "$root/tests/host/security" -p test_secure_gate.py
+# --- sec-k07 block (end) ---
 
 # F2 production parser, mappings, wait queues, stack and lifecycle with fake
 # physical memory/scheduling; no guest execution or host runner lock.

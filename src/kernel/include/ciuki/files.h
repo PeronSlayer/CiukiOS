@@ -76,6 +76,7 @@ void files_detach(struct vfs *vfs); /* quiescent, from vfs_destroy */
 void files_snapshot(struct px_namespace *space, struct file_ledger *out);
 int files_bootstrap(struct vfs *vfs); /* install PID 1 cwd, stdio and loader */
 int files_stdio(struct process *p);
+int files_session_console(struct process *p, int32_t *console); /* sec-k07 */
 void px_retain(void *node);
 /* Pins all borrowed native identities across a bounded FAT transaction. */
 int px_fat_transaction_locked(struct px_node *,struct px_node *,struct px_node *,struct fat_transaction_args);
