@@ -166,7 +166,7 @@ static int self(void *p,uint32_t *uid,uint32_t groups[8],unsigned *count)
 static struct cpa_view panel;
 static void panel_manage(unsigned action,uint32_t uid,const char *name,const char *old,const char *password,int admin,int enable)
 {
-    struct cpa_transport t={NULL,panel_call,self};struct cpa_request q={.action=action,.uid=uid,.admin=admin,.enable=enable};
+    struct cpa_transport t={NULL,panel_call,self,NULL};struct cpa_request q={.action=action,.uid=uid,.admin=admin,.enable=enable};
     snprintf(q.name,sizeof(q.name),"%s",name);snprintf(q.old_password,sizeof(q.old_password),"%s",old);
     snprintf(q.password,sizeof(q.password),"%s",password);snprintf(q.confirm,sizeof(q.confirm),"%s",password);
     if(action==CPA_PICTURE)strcpy(q.picture,"catalogue/ciuki.png");
@@ -195,7 +195,7 @@ static void panel_matrix(void)
     panel_manage(CPA_DELETE,uid,"","","",0,0);
     for(unsigned i=2;i<=3;i++){
         caller=i;panel_manage(CPA_PASSWORD,i==2?1001:501,"","password1","password2",0,0);
-        struct cpa_transport t={NULL,panel_call,self};struct cpa_request q={.action=CPA_CREATE,.enable=1};
+        struct cpa_transport t={NULL,panel_call,self,NULL};struct cpa_request q={.action=CPA_CREATE,.enable=1};
         strcpy(q.name,"Forbidden");strcpy(q.password,"password1");strcpy(q.confirm,"password1");
         assert(cpa_execute(&t,&q,&panel)==-EPERM);
     }
@@ -222,7 +222,7 @@ static void account_matrix(void)
         selector(body,1000,0);
         int e=__ciuki_account_rpc(8,body,sizeof(body),reply,sizeof(reply),&used);
         assert(e==(i?EACCES:0));
-        struct cpa_transport t={NULL,panel_call,self};struct cpa_request q={.action=CPA_READ};struct cpa_view v={0};
+        struct cpa_transport t={NULL,panel_call,self,NULL};struct cpa_request q={.action=CPA_READ};struct cpa_view v={0};
         assert(!cpa_execute(&t,&q,&v)&&v.valid&&v.self_uid==uids[i]);
         printf("runtime ACCOUNTS role=%u generation=0/current/stale PROFILE/libc/panel PASS\n",i);
     }

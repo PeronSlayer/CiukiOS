@@ -268,6 +268,8 @@ int cp_close(struct cp_app *a)
         game_note(a,"Waiting for game properties to finish saving...");return 0;
     }
     a->close_pending = 1; a->display_accept = a->navigation_pending = 0;
+    /* Adopt an admitted account change and queue its session notice first. */
+    if (a->account_busy || a->account_notice_pending) return 0;
     if (!cp_display_leave(a)) return 0;
     a->close_pending = 0; a->quit = 1; return 1;
 }
@@ -596,11 +598,21 @@ void cp_audio_result(struct cp_app *a, int result)
     text(a,C_STATUS,result ? "Audio test failed; see hardware diagnostics." : "Audio test finished; see hardware diagnostics.");
     sync(a);
 }
-void cp_tick(struct cp_app *a)
+/* fx-uaccounts: adopt every finished worker result (User Accounts / Users,
+ * Network, Game properties). The native loop calls this on every turn after
+ * a completion wake-up, on every page: these pages have no one-second
+ * heartbeat, so adoption must never depend on cp_tick. */
+void cp_jobs_poll(struct cp_app *a)
 {
+    /* Every caller, including cp_tick, must preserve modal/capture ownership. */
+    if (a->ui->capture>=0 || a->ui->dialog.kind) return;
     user_poll(a);
     network_poll(a);
     game_poll(a);
+}
+void cp_tick(struct cp_app *a)
+{
+    cp_jobs_poll(a);
     if (a->page==CP_JOYSTICK) {
         if (a->joystick_save_pending && !a->joystick_busy && !a->joystick_calibrating) {
             struct ciuki_joystick_control c={.version=CIUKI_JOYSTICK_VERSION,.size=sizeof(c),.operation=CIUKI_JOY_SAVE_STATUS};

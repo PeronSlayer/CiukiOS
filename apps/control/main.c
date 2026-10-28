@@ -67,6 +67,7 @@ struct cp_main { unsigned icon_generation; /* fx-exeicons: du_file_icons_generat
     /* sec-user-04: User Accounts worker (accounts_client.c over the
      * ACCOUNTS link); the request copy holds secrets only while it runs. */
     struct cp_job accounts_job; struct cpa_request accounts_request; struct cpa_view accounts_view; int accounts_error;
+    unsigned accounts_action; uint64_t accounts_started;   /* fx-uaccounts: the adoption's serial record */
     int completion[2];
     uint32_t applet_serial;
     uint64_t tick_next;
@@ -90,26 +91,47 @@ static int user_poll(void *ctx,struct users_view *v,int *e)
 /* --- sec-user-04: User Accounts over the SYSTEM account service. The link
  * (call-101 SERVICE_CONNECT to ACCOUNTS, server role ACCOUNT) and QUERY_SELF
  * carry this process's kernel credential; nothing here is an authority.
- * Target only: host harnesses that include this file keep the G32 pages. --- */
+ * fx-uaccounts: this glue (link, QUERY_SELF, worker, completion and the
+ * page's adoption in idle()) is compiled on every build. Its only system
+ * seam is accounts_sys: the SDK binding (lgn_client_ciuki) on the target,
+ * the kernel host harness in tests/host/security/control_panel_test.c,
+ * which runs it against the production ACCOUNTS server. Host harnesses
+ * that leave accounts_sys unset keep the G32 pages. --- */
+#include "../logon/logon_proto.h"
+#include <ciuki/security.h>
 #ifdef __i386__
 #include "../logon/sys_ciuki.h"
-#include <ciuki/security.h>
+static const struct lgn_client_sys *accounts_sys=&lgn_client_ciuki;
+#else
+static const struct lgn_client_sys *accounts_sys;
+#endif
 static struct lgn_client accounts_link;
+static void raw_log(const char *line);
 static int accounts_call(void *ctx,uint32_t op,uint64_t generation,const void *body,size_t n,void *reply,size_t cap,size_t *used,int *status)
 {
     (void)ctx;
-    if (!accounts_link.sys) lgn_client_init(&accounts_link,&lgn_client_ciuki,CIUKI_SECURITY_SERVICE_ACCOUNTS,CIUKI_SECURITY_ROLE_ACCOUNT);
+    if (!accounts_sys) return -ENOSYS;
+    if (!accounts_link.sys) lgn_client_init(&accounts_link,accounts_sys,CIUKI_SECURITY_SERVICE_ACCOUNTS,CIUKI_SECURITY_ROLE_ACCOUNT);
     return lgn_client_call(&accounts_link,op,generation,body,n,reply,cap,used,status,15000);
 }
+/* QUERY_SELF through the same seam (the SDK's ciuki_security_self makes the
+ * identical call-101 request). */
 static int accounts_self(void *ctx,uint32_t *uid,uint32_t groups[8],unsigned *count)
 {
-    (void)ctx; struct ciuki_credential c;
-    if (ciuki_security_self(&c)) return errno ? -errno : -EIO;
+    (void)ctx;
+    if (!accounts_sys) return -ENOSYS;
+    struct ciuki_security_args a={.version=1,.size=64,.operation=CIUKI_SECURITY_QUERY_SELF};
+    struct ciuki_credential c; memset(&c,0,sizeof(c));
+    int e=accounts_sys->security(accounts_sys->ctx,&a,NULL,0,&c,sizeof(c));
+    if (e) return e<0 ? e : -EIO;
     *uid=c.uid; *count=c.group_count>8 ? 8 : c.group_count;
     for (unsigned i=0;i<*count;i++) groups[i]=c.groups[i];
     return 0;
 }
-static const struct cpa_transport accounts_transport={NULL,accounts_call,accounts_self};
+/* A busy service's LIST is asked again after a sleep (wait with no fd). */
+static void accounts_pause(void *ctx,unsigned ms)
+{ (void)ctx; if (accounts_sys) (void)accounts_sys->wait(accounts_sys->ctx,-1,ms); }
+static const struct cpa_transport accounts_transport={NULL,accounts_call,accounts_self,accounts_pause};
 static void accounts_work(void *ctx)
 {
     struct cp_main *m=ctx;
@@ -120,7 +142,7 @@ static int accounts_begin(void *ctx,const struct cpa_request *q)
 {
     struct cp_main *m=ctx;
     if (m->accounts_job.started) return -EBUSY;
-    m->accounts_request=*q;
+    m->accounts_request=*q; m->accounts_action=q->action; m->accounts_started=du_now();
     int e=cp_job_start(&m->accounts_job,accounts_work,m,notify_completion,m);
     if (e) cpa_wipe(&m->accounts_request,sizeof(m->accounts_request));
     return e;
@@ -129,7 +151,16 @@ static int accounts_poll_io(void *ctx,struct cpa_view *v,int *e)
 {
     struct cp_main *m=ctx;
     if (!cp_job_ready(&m->accounts_job)) return 0;
-    cp_job_finish(&m->accounts_job); *v=m->accounts_view; *e=m->accounts_error; return 1;
+    cp_job_finish(&m->accounts_job); *v=m->accounts_view; *e=m->accounts_error;
+    /* fx-uaccounts: one serial record per adopted request (no names or
+     * secrets): what the page now shows and how long the service took. */
+    static const char *const names[]={"read","create","delete","rename","type","password","picture","enable"};
+    char line[160];
+    snprintf(line,sizeof(line),"[control] accounts action=%s result=%d valid=%d accounts=%u self=%u admin=%d ms=%llu\n",
+             m->accounts_action<8 ? names[m->accounts_action] : "?",m->accounts_error,v->valid,v->count,(unsigned)v->self_uid,
+             v->self_admin,(unsigned long long)((du_now()-m->accounts_started)/1000000u));
+    raw_log(line);
+    return 1;
 }
 static int self_admin(void *ctx)
 {
@@ -138,6 +169,9 @@ static int self_admin(void *ctx)
     for (unsigned i=0;i<n;i++) if (groups[i]==CPA_GROUP_ADMINS && uid) return 1;
     return 0;
 }
+static void accounts_attach(struct cp_host *h)
+{ h->accounts_begin=accounts_begin; h->accounts_poll=accounts_poll_io; h->self_admin=self_admin; }
+#ifdef __i386__
 /* sec-k08 (lead decision U4-6): the machine's power buttons, power.cfg. */
 static int power_machine_load(void *ctx,char *text,size_t cap,size_t *n)
 { (void)ctx; int e=cfg_read_at(PP_MACHINE_FILE,text,cap,n); return e ? -e : 0; }
@@ -585,7 +619,6 @@ static int game_begin(void *ctx,unsigned game,const struct game_ports_settings *
 static int game_poll_result(void *ctx,struct cp_game_result *r)
 {
     struct cp_main *m=ctx;if (!cp_job_ready(&m->game_job)) return 0;
-    cp_job_finish(&m->menu_job);
     cp_job_finish(&m->game_job);*r=m->game_result;return 1;
 }
 static int joystick_request(void *ctx, const struct ciuki_joystick_control *c)
@@ -850,6 +883,13 @@ static void idle(void *arg)
         m->engine_next=mono+2000000000ull;
     }
     if (cp_job_ready(&m->game_job)) cp_tick(&m->app);
+    /* fx-uaccounts: User Accounts/Users, Network (and game) results are
+     * adopted here, on the turn after their completion token, on every
+     * page. cp_tick only runs on the one-second pages, so these pages used
+     * to keep "Reading the accounts..." forever. A modal dialog or a
+     * pointer capture defers adoption to the turn that ends it, as the
+     * program inventory does (the adoption rebuilds the page). */
+    cp_jobs_poll(&m->app);
     int error;
     if (settings_result(m,&error)) {
         if (m->reload_pending) {unsigned request=(unsigned)m->reload_pending;m->reload_pending=0; if (!error) apply(m,request,0,0); }
@@ -865,6 +905,11 @@ static void idle(void *arg)
         cp_tick(&m->app); m->tick_next=mono+1000000000ull;
     } else if (!ticking) m->tick_next=0;
     if (m->app.close_pending || m->app.navigation_pending) cp_tick(&m->app);
+    /* OK/Apply completion can request quit directly, too. Preserve the
+     * same account-completion ordering as the native close callback. */
+    if (m->app.quit && (m->app.account_busy || m->app.account_notice_pending)) {
+        m->app.quit=0; m->app.close_pending=1;
+    }
     if (settings_busy(m) && m->app.quit) return;
     if (m->app.quit) { remember_size(m); du_window_close(&m->window); m->app.quit = 0; }
 }
@@ -1039,34 +1084,18 @@ static int internet_programs(void *ctx)
     desk_put32(request.data+12+t,n);memcpy(request.data+16+t,arg,n);
     return du_window_queue(&m->window,&request);
 }
-int main(int argc, char **argv)
+/* Shared production lifecycle: the host integration test uses these same paths. */
+static int control_init(struct cp_main *m,int channel,int page,unsigned game,const char *set_wallpaper)
 {
-    int channel = 3, page = CP_HOME;
-    const char *set_wallpaper=NULL;
-    unsigned game=0;
-    for (int i = 1; i < argc; i++) {
-        if (!strncmp(argv[i], "--channel-fd=", 13)) {
-            char *end; long n = strtol(argv[i] + 13, &end, 10);
-            if (!argv[i][13] || *end || n < 3 || n >= 128) return 2;
-            channel = (int)n;
-        } else if (!strncmp(argv[i], "--panel=", 8)) page = cp_page_index(argv[i] + 8);
-        else if (!strncmp(argv[i],"--set-wallpaper=",16)) { set_wallpaper=argv[i]+16; page=CP_DISPLAY; }
-        else if (!strncmp(argv[i],"--game=",7)) {
-            char *end;unsigned long n=strtoul(argv[i]+7,&end,10);
-            if (!argv[i][7] || *end || !n || n>DESK_GAME_COUNT) return 2;
-            game=(unsigned)n;page=CP_JOYSTICK;
-        } else return 2;
-    }
-    struct cp_main *m = calloc(1, sizeof(*m));
-    if (!m) return 1;
-    if (completion_start(m)) { free(m); return 1; }
+    if (completion_start(m)) { return 1; }
+    m->network_worker.notify=notify_completion; m->network_worker.notify_ctx=m; /* fx-uaccounts */
     snprintf(m->settings_temp,sizeof(m->settings_temp),"%s.cpl",profile_settings());
     m->writer.notify=notify_completion; m->writer.notify_ctx=m;
     m->writer_started=!cfg_writer_start(&m->writer,profile_settings(),m->settings_temp);
     struct cp_host *h = &m->app.host;
     h->user_begin=user_begin; h->user_poll=user_poll;
+    if (profile_root_path() && accounts_sys) accounts_attach(h); /* sec-user-04 */
 #ifdef __i386__
-    if (profile_root_path()) { h->accounts_begin=accounts_begin; h->accounts_poll=accounts_poll_io; h->self_admin=self_admin; } /* sec-user-04 */
     if (profile_root_path()) { h->power_machine_load=power_machine_load; h->power_machine_save=power_machine_save; } /* sec-k08 */
 #endif
     h->menu_begin=menu_begin_io;h->menu_poll=menu_poll_io;h->menu_explore=menu_explore;
@@ -1110,24 +1139,25 @@ int main(int argc, char **argv)
          du_window_open(&m->window, &m->ui, channel, CP_WIDTH, CP_HEIGHT, "Control Panel"))) {
         fprintf(stderr, "Control Panel: desktop connection failed: %s\n", strerror(errno));
         if (m->writer_started) cfg_writer_stop(&m->writer);
-        completion_stop(m); free(m->hwid_pci); free(m->hwid_usb); free(m); return 1;
+        completion_stop(m); free(m->hwid_pci); free(m->hwid_usb); return 1;
     }
     du_help_topic(&m->ui, "control");   /* G15: F1 opens this program's Help topic */
     m->window.message = on_message; m->window.close_request = close_request; m->window.user = m;
     if (cp_attach(&m->app, &m->ui, game ? CP_HOME : page)) {
-        du_window_destroy(&m->window); if (m->writer_started) cfg_writer_stop(&m->writer); completion_stop(m); free(m->hwid_pci); free(m->hwid_usb); free(m); return 1;
+        du_window_destroy(&m->window); if (m->writer_started) cfg_writer_stop(&m->writer); completion_stop(m); free(m->hwid_pci); free(m->hwid_usb); return 1;
     }
     if (game) cp_game_open(&m->app,game);
     if (set_wallpaper && cp_wallpaper_set(&m->app,set_wallpaper)) fprintf(stderr,"control: wallpaper path is not a supported image\n");
     if (du_file_icons_start(m->ui.wake, m->ui.wake_ctx)) fprintf(stderr,"control: icon worker unavailable\n");   /* fx-exeicons */
-    int r = control_run(m);
+    return 0;
+}
+static void control_destroy(struct cp_main *m)
+{
     du_file_icons_stop();
     cp_decoder_stop();
     cp_job_finish(&m->users_worker.job);
     cp_job_finish(&m->accounts_job); cpa_wipe(&m->accounts_request,sizeof(m->accounts_request)); /* sec-user-04 */
-#ifdef __i386__
     lgn_client_close(&accounts_link);
-#endif
     cp_job_finish(&m->menu_job);
     cp_job_finish(&m->game_job);
     cp_job_finish(&m->program_scan); free(m->program_next);
@@ -1135,6 +1165,30 @@ int main(int argc, char **argv)
     if (!m->assets_ready) { free(m->pci_cache); free(m->usb_cache); }
     if (m->writer_started) cfg_writer_stop(&m->writer);
     network_worker_stop(&m->network_worker);
-    cp_detach(&m->app); completion_stop(m); du_window_destroy(&m->window); free(m->hwid_pci); free(m->hwid_usb); free(m);
+    cp_detach(&m->app); completion_stop(m); du_window_destroy(&m->window); free(m->hwid_pci); free(m->hwid_usb);
+}
+int main(int argc, char **argv)
+{
+    int channel = 3, page = CP_HOME;
+    const char *set_wallpaper=NULL;
+    unsigned game=0;
+    for (int i = 1; i < argc; i++) {
+        if (!strncmp(argv[i], "--channel-fd=", 13)) {
+            char *end; long n = strtol(argv[i] + 13, &end, 10);
+            if (!argv[i][13] || *end || n < 3 || n >= 128) return 2;
+            channel = (int)n;
+        } else if (!strncmp(argv[i], "--panel=", 8)) page = cp_page_index(argv[i] + 8);
+        else if (!strncmp(argv[i],"--set-wallpaper=",16)) { set_wallpaper=argv[i]+16; page=CP_DISPLAY; }
+        else if (!strncmp(argv[i],"--game=",7)) {
+            char *end;unsigned long n=strtoul(argv[i]+7,&end,10);
+            if (!argv[i][7] || *end || !n || n>DESK_GAME_COUNT) return 2;
+            game=(unsigned)n;page=CP_JOYSTICK;
+        } else return 2;
+    }
+    struct cp_main *m = calloc(1, sizeof(*m));
+    if (!m) return 1;
+    if (control_init(m,channel,page,game,set_wallpaper)) { free(m); return 1; }
+    int r = control_run(m);
+    control_destroy(m); free(m);
     return r < 0 ? 1 : 0;
 }

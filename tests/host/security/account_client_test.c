@@ -33,8 +33,40 @@ static int round_trip(uint32_t wire, uint32_t flags, uint32_t uid, const char *n
     return 0;
 }
 
+/* fx-uaccounts: a busy service (EAGAIN before admission) answers LIST again
+ * after the transport's pause; bounded; never without a pause. */
+static unsigned busy_lists, list_calls, pauses;
+static int busy_call(void *ctx, uint32_t op, uint64_t generation, const void *body, size_t n, void *reply, size_t cap,
+                     size_t *used, int *status)
+{
+    (void)ctx; (void)generation; (void)body; (void)n;
+    if (op != 6 || cap < 16) return -EINVAL;
+    list_calls++; *used = 0; *status = 0;
+    if (busy_lists) { busy_lists--; *status = -EAGAIN; return 0; }
+    uint8_t *r = reply; memset(r, 0, 16 + 144); r[0] = 1; r[4] = 1; r[8] = 9;   /* one record, generation 9 */
+    r[16] = 0xe8; r[17] = 0x03; r[20] = 3; r[24] = 3; memcpy(r + 32, "Alice", 6);
+    *used = 16 + 144; return 0;
+}
+static int busy_self(void *ctx, uint32_t *uid, uint32_t groups[8], unsigned *count)
+{ (void)ctx; *uid = 1000; groups[0] = 544; groups[1] = 545; *count = 2; return 0; }
+static void busy_pause(void *ctx, unsigned ms) { (void)ctx; if (ms) pauses++; }
+static int busy_read(const struct cpa_transport *t, unsigned busy, struct cpa_view *v)
+{
+    struct cpa_request q; memset(&q, 0, sizeof(q)); q.action = CPA_READ;
+    memset(v, 0, sizeof(*v)); busy_lists = busy; list_calls = pauses = 0;
+    return cpa_execute(t, &q, v);
+}
+
 int main(void)
 {
+    {
+        struct cpa_transport t = { NULL, busy_call, busy_self, busy_pause }; struct cpa_view v;
+        CHECK(!busy_read(&t, 3, &v) && list_calls == 4 && pauses == 3 && v.valid && v.count == 1 && v.generation == 9 &&
+              v.records[0].uid == 1000 && !strcmp(v.records[0].name, "Alice") && v.self_admin);
+        CHECK(busy_read(&t, 100, &v) == -EAGAIN && list_calls == 8 && pauses == 7 && !v.valid);
+        t.pause = NULL;
+        CHECK(busy_read(&t, 1, &v) == -EAGAIN && list_calls == 1 && !pauses);
+    }
     if (round_trip(2, 0, 1000, "", "oldpassword", "newpassword", "", ACCT_PASSWORD)) return 1;          /* own password */
     if (round_trip(3, 1, 0, "Bob", "", "bobpass12", "", ACCT_CREATE)) return 1;                       /* Standard */
     if (round_trip(3, 3, 0, "Admin2", "", "adminpass1", "", ACCT_CREATE)) return 1;                   /* administrator */
@@ -58,6 +90,6 @@ int main(void)
           !cpa_allowed(&v, CPA_PASSWORD, &v.records[2]) && !cpa_allowed(&v, CPA_ENABLE, &v.records[1]));
     char secret[8] = "secret"; cpa_wipe(secret, sizeof(secret)); CHECK(!secret[0] && !secret[5]);
     printf("H12 account client codec: 9 management kinds decoded by the service, equal operation digests, bounds, "
-           "role helpers PASS checks=%u\n", checks);
+           "role helpers, busy LIST asked again after a pause (bounded) PASS checks=%u\n", checks);
     return 0;
 }

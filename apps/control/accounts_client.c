@@ -25,6 +25,8 @@
 #define RECEIPT_COMMITTED 3u
 #define RECEIPT_ABORTED 4u
 #define STATUS_TRIES 20u
+#define LIST_TRIES 8u        /* fx-uaccounts: busy LIST, about 2 s in all */
+#define LIST_PAUSE_MS 250u
 
 static uint32_t rd32(const uint8_t *p) { return (uint32_t)p[0]|(uint32_t)p[1]<<8|(uint32_t)p[2]<<16|(uint32_t)p[3]<<24; }
 static uint64_t rd64(const uint8_t *p) { return rd32(p)|(uint64_t)rd32(p+4)<<32; }
@@ -58,8 +60,14 @@ int cpa_management_encode(uint32_t wire, uint32_t flags, uint32_t uid, uint64_t 
 static int list(const struct cpa_transport *t, struct cpa_view *v)
 {
     uint8_t reply[16+144*CPA_MAX]; size_t used=0; int status=0;
-    int e=t->call(t->ctx,OP_LIST,0,NULL,0,reply,sizeof(reply),&used,&status);
-    if (e) return e;
+    /* LIST is read-only: a busy service is asked again (bounded), so the
+     * page does not report "not available" for a transient refusal. */
+    for (unsigned attempt=1;;attempt++) {
+        int e=t->call(t->ctx,OP_LIST,0,NULL,0,reply,sizeof(reply),&used,&status);
+        if (e) return e;
+        if (status!=-EAGAIN || !t->pause || attempt>=LIST_TRIES) break;
+        t->pause(t->ctx,LIST_PAUSE_MS);
+    }
     if (status) return status;
     if (used<16 || rd32(reply)!=1 || rd32(reply+4)>CPA_MAX || used!=16+144*(size_t)rd32(reply+4)) return -EIO;
     v->generation=rd64(reply+8); v->count=rd32(reply+4);
