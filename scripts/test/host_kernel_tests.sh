@@ -63,6 +63,7 @@ python3 -B "$root/tests/host/test_display_commands.py"
 python3 -B "$root/tests/host/test_display_driver_names.py"
 python3 -B "$root/tests/host/test_savage_family.py"
 python3 -B "$root/tests/host/test_render3d.py"
+python3 -B "$root/tests/host/test_matrox3d.py"
 python3 -B -m unittest discover -s "$root/tests/host/ndis" -p test_package.py
 python3 -B "$root/tests/host/test_presenter_display.py"
 python3 -B "$root/tests/host/test_display_modes.py" DisplayTests.test_kernel_switch

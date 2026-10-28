@@ -1,3 +1,6 @@
+#if defined(GL_KERNEL_FAMILY_MATROX)
+#include "matrox_kernel_engine.c"
+#else
 /* Real copied wire/validator/BCI emitter to independent fake silicon.
  * GPL-2.0-only. Fixture callbacks model only hardware and the lease boundary. */
 #ifdef GL_KERNEL_FAMILY_RADEON
@@ -410,3 +413,5 @@ void gl_savage_end(unsigned w,unsigned h,unsigned frame,unsigned gpu_draws,uint6
     CHECK(gpu_draws==(admission_scope ? 4600u : 3000u) && gpu_fragments && !cpu_draws && !admission_switches);
     for (unsigned i=0;i<6;i++) CHECK(!admission_refused[i]);
 }
+
+#endif /* GL_KERNEL_FAMILY_MATROX */

@@ -1003,7 +1003,7 @@ available. Lead cross-review/integration, production implementation, canonical
 builds, QEMU and physical T23 performance evidence remain subsequent work.
 
 
-## ATI Radeon R100/R200 family (f7-24)
+## 10. ATI Radeon R100/R200 family (f7-24)
 
 The `radeon2d` descriptor nominates the R100/R200 backend as
 `R3D_UNQUALIFIED`: hardware admission requires the boot minimum, full-size and
@@ -1015,6 +1015,43 @@ PCI IDs, source hashes, register citations, supported state and gates.
 
 The independent Radeon host decoder and H1 GL replay establish model
 behavior only. They provide no silicon qualification, T23 evidence, or
-Savage format/scanout qualification for this family. Integration 6's Savage
+Savage format/scanout qualification for this family. Integration 8's Savage
 implementation, precision checkpoints, RGB565/D24 tests and T23 lease fixture
 remain authoritative and unchanged in the default host build.
+
+## 11. Matrox G family integration (f7-25, integration 8)
+
+The Matrox descriptor is `R3D_UNQUALIFIED` until its per-boot qualification
+succeeds. The family implementation and its independent MMIO model are
+specified in [Matrox G family](f7-family-matrox-g.md). G200 has one texture
+unit; G400/G450/G550 have two. Unsupported state and failed qualification
+retain whole-context software fallback. Host model results do not qualify
+physical silicon.
+
+Integration 8 remains the reference for the Savage engine, precision header,
+GL fixtures and universal `render3d.h`. Matrox retains its separate
+`matrox/matrox3d_precision.h` envelope with disabled-stage checks for G200; Savage
+continues to use its unchanged, budget-aware family header. The default
+Win32 GL host build still uses the integration 8 Savage engine. The Matrox
+H1 fixture selects its own engine and backend through the shared
+`KERNEL_FAMILIES` table and `GL_KERNEL_FAMILY_MATROX`; T23-specific lease replay remains
+exclusive to the default Savage fixture.
+
+Source checks: Mesa 7.11.2 `mga_xmesa.c:504-515` selects one versus two
+texture units; Linux v6.1 `mga_drv.h:377-382,675-683` defines the engine-idle
+mask/test; X.Org 2.0.0 `mga_reg.h:544,561,609-610` agrees on texture-control
+and dual-stage register addresses. Primary distributions:
+[Mesa 7.11.2](https://archive.mesa3d.org/older-versions/7.x/7.11.2/),
+[Linux v6.1 mga](https://github.com/torvalds/linux/tree/v6.1/drivers/gpu/drm/mga),
+[X.Org mga 2.0.0](https://www.x.org/releases/individual/driver/xf86-video-mga-2.0.0.tar.gz).
+The pinned local source hashes and register-level decisions remain in the
+family design. This merge changes no register programming or public ABI.
+
+Round 1 of [f7-unify](../directives/f7-unify.md) keeps those source-backed
+family boundaries in one GL harness table: Savage (default), Radeon and
+Matrox each declare their define, sources, engine entry and replaced units.
+The source ranges above were checked against the pinned primary-source cache
+before resolving the merge; the Mesa and X.Org upstream archive indexes
+were also checked online. No register sequence, precision envelope or
+qualification predicate changes. Matrox format diagnostics use their own
+family name; T23 scanout and lease-flow assertions compile only for Savage.

@@ -9,8 +9,15 @@
 #include "matrox.h"
 
 #include "../render3d.h"
+/* f7-25: the host-programmed trapezoid backend lives beside this adapter.
+ * Weak references keep the fixtures that compile this file alone inert. */
+extern const struct render3d_backend *matrox3d_backend(void) __attribute__((weak));
+extern void matrox3d_boot_diagnostic(struct matrox_engine *, const struct fb_device *) __attribute__((weak));
+extern void matrox3d_bind_vfs(struct vfs *) __attribute__((weak));
+extern int matrox3d_owner_stop(struct matrox_engine *) __attribute__((weak));
 static const struct render3d_family render_family = {
-    .status=R3D_NOT_IMPLEMENTED, .potential_units=2, .potential_texture_size=2048
+    .status=R3D_UNQUALIFIED, .potential_units=2, .potential_texture_size=2048,
+    .backend=matrox3d_backend
 };
 
 static struct matrox_engine engine;
@@ -116,6 +123,7 @@ done:
 }
 static int attempt_begin(struct vfs *vfs)
 {
+    if (matrox3d_bind_vfs) matrox3d_bind_vfs(vfs);
     if (!eligible(fbdev_get()) || armed) return -EIO;
     int e=marker(vfs,false);
     if (e) { blocked=true; reason="retained_or_unavailable_marker"; }
@@ -169,6 +177,9 @@ static int runtime_sync(void *ctx)
 static int runtime_stop(void *ctx)
 {
     (void)ctx;
+    if (matrox3d_owner_stop) {
+        int stopped=matrox3d_owner_stop(&engine); if (stopped) return stopped;
+    }
     engine.active=false; engine.shape=false;
     int e=registers ? matrox_engine_prove(&engine) : engine.cpu_safe ? 0 : -EIO;
     if (e) {
@@ -300,6 +311,8 @@ static void record(void)
         p && p->device==0x2527 ? "G550" : "G200";
     klog("[accel] driver=matrox family=%s ready=%u cpu_safe=%u quarantined=%u reason=%s",
          chip,engine.active,engine.cpu_safe,engine.quarantined,engine.quarantined ? engine.reason : reason);
+    /* Outside the presenter lock, after activation, like the 2D record. */
+    if (matrox3d_boot_diagnostic && engine.active && !engine.quarantined) matrox3d_boot_diagnostic(&engine,fbdev_get());
 }
 static int cursor_test(const struct accel_ops *ops,uint64_t deadline,bool (*cancel)(void *),void *ctx)
 {
@@ -322,7 +335,7 @@ static const struct display_match matches[]={
 };
 const struct display_driver matrox_driver={
     .render3d=&render_family,
-    .id="matrox",.attempt_files={LEGACY_PATH,MARKER_PATH},.name="Matrox G200/G400/G450/G550",.matches=matches,
+    .id="matrox",.attempt_files={LEGACY_PATH,MARKER_PATH,"C:/system/settings/accel-3d-matrox-102b-%04x.cfg"},.name="Matrox G200/G400/G450/G550",.matches=matches,
     .match_count=ARRAY_SIZE(matches),.framebuffer_bar=0,.probe=matrox_probe,.eligible=eligible,
     .start=start,.fallback=fallback,.attempt_begin=attempt_begin,.attempt_end=attempt_end,
     .attempt_failed=attempt_failed,.record=record,.quarantine=quarantine,
