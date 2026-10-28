@@ -77,6 +77,57 @@ static int environment_has(const char *environment, const char *entry) {
     }
     return 0;
 }
+/* --- sec-user-05 (user-security-contract.md 8.2, A1-10): a session that
+ * LOGON launched carries the kernel-generated native profile paths
+ * (USERPROFILE=<committed profile root>, TEMP/TMP=<root>/Local Settings/Temp).
+ * Win32 sees them DOS-spelled on the system drive, and an absent TMP/TEMP
+ * defaults to the profile's Local Settings\Temp: there is no shared
+ * C:\WINDOWS\TEMP for a profile session. Only a process with no profile at
+ * all (SYSTEM tools, the pre-logon bootstrap desktop) keeps the IO.SYS
+ * default above, which the kernel path policy leaves writable to
+ * administrators alone. Values confer no identity or right; the kernel
+ * checks every access. --- */
+static int environment_key(const char *entry, const char *key) {
+    ULONG i = 0;
+    while (key[i] && entry[i] && (entry[i] | 32) == (key[i] | 32))
+        i++;
+    return !key[i] && entry[i] == '=';
+}
+/* Native absolute value of a profile key: "/x/y" becomes "C:\x\y". */
+static int environment_native(const char *entry) {
+    static const char *const keys[] = {"USERPROFILE", "TEMP", "TMP"};
+    for (unsigned k = 0; k < 3; k++)
+        if (environment_key(entry, keys[k]))
+            return entry[w32_strlen(keys[k]) + 1] == '/' ? (int)w32_strlen(keys[k]) + 1 : 0;
+    return 0;
+}
+static ULONG environment_emit(WCHAR *out, const char *entry) {
+    int at = environment_native(entry);
+    ULONG n = 0;
+    for (const char *c = entry; *c; c++) {
+        if (at && c == entry + at) {
+            if (out) { out[n] = 'C'; out[n + 1] = ':'; }
+            n += 2;
+        }
+        if (out)
+            out[n] = at && c >= entry + at && *c == '/' ? '\\' : w32_acp_character((uint8_t)*c);
+        n++;
+    }
+    if (out)
+        out[n] = 0;
+    return n + 1;
+}
+static const char profile_temp[] = "\\Local Settings\\Temp";
+/* USERPROFILE as the Win32 value (DOS spelling), or NULL. */
+static const char *environment_profile(const char *environment, int *native) {
+    for (const char *q = environment; *q; q += w32_strlen(q) + 1)
+        if (environment_key(q, "USERPROFILE") && q[12]) {
+            *native = q[12] == '/';
+            return q + 12;
+        }
+    return 0;
+}
+/* --- end sec-user-05 --- */
 NTSTATUS w32_ciuki_start(struct w32_loader *l, struct w32_peb *peb, const char *exe,
                          const char *command, const char *directory, const char *environment,
                          struct w32_module **main) {
@@ -117,30 +168,45 @@ NTSTATUS w32_ciuki_start(struct w32_loader *l, struct w32_peb *peb, const char *
         !unicode(l->services, command, &p->CommandLine,0) ||
         !unicode(l->services, directory, &p->CurrentDirectory.DosPath,1))
         return STATUS_NO_MEMORY;
-    ULONG size = 0;
-    do {
-        while (environment[size++])
-            ;
-    } while (environment[size]);
-    size++;
-    ULONG entries = environment[0] ? size - 1 : 0, total = entries;
+    /* sec-user-05: profile keys converted, TMP/TEMP defaults per profile. */
+    int native = 0;
+    const char *profile = environment_profile(environment, &native);
+    ULONG total = 0;
+    for (const char *q = environment; *q; q += w32_strlen(q) + 1)
+        total += environment_emit(0, q);
     for (unsigned d = 0; d < sizeof(default_environment) / sizeof(*default_environment); d++)
         if (!environment_has(environment, default_environment[d]))
-            total += w32_strlen(default_environment[d]) + 1;
+            total += profile ? (d ? 5u : 4u) + (native ? 2u : 0u) + w32_strlen(profile) + sizeof(profile_temp)
+                             : w32_strlen(default_environment[d]) + 1;
     total += total ? 1 : 2;
     p->Environment = l->services->alloc(0, total * 2);
     if (!p->Environment)
         return STATUS_NO_MEMORY;
-    for (ULONG i = 0; i < entries; i++)
-        p->Environment[i] = w32_acp_character((uint8_t)environment[i]);
-    ULONG at = entries;
-    for (unsigned d = 0; d < sizeof(default_environment) / sizeof(*default_environment); d++)
-        if (!environment_has(environment, default_environment[d]))
-            for (const char *c = default_environment[d];; c++) {
-                p->Environment[at++] = (uint8_t)*c;
-                if (!*c)
-                    break;
-            }
+    ULONG at = 0;
+    for (const char *q = environment; *q; q += w32_strlen(q) + 1)
+        at += environment_emit(p->Environment + at, q);
+    for (unsigned d = 0; d < sizeof(default_environment) / sizeof(*default_environment); d++) {
+        if (environment_has(environment, default_environment[d]))
+            continue;
+        if (!profile) {
+            at += environment_emit(p->Environment + at, default_environment[d]);
+            continue;
+        }
+        const char *key = d ? "TEMP=" : "TMP=";
+        while (*key)
+            p->Environment[at++] = (uint8_t)*key++;
+        if (native) {
+            p->Environment[at++] = 'C';
+            p->Environment[at++] = ':';
+        }
+        for (const char *c = profile; *c; c++)
+            p->Environment[at++] = *c == '/' ? '\\' : w32_acp_character((uint8_t)*c);
+        for (const char *c = profile_temp;; c++) {
+            p->Environment[at++] = (uint8_t)*c;
+            if (!*c)
+                break;
+        }
+    }
     while (at < total)
         p->Environment[at++] = 0;
     for (const char *q = environment; *q; q += w32_strlen(q) + 1)

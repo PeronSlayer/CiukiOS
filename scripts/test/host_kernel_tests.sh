@@ -817,6 +817,13 @@ python3 "$root/tests/host/test_opl3_tables.py"
 # sec-k06: production Win32 isolation, SYSTEM registry and restart journals.
 python3 -B -m unittest discover -s "$root/tests/host/security" -p test_win32_broker.py
 # end sec-k06
+# --- sec-user-05 block (begin) ---
+# H11: ADVAPI32 token/SID/name/privilege facade over the kernel token objects,
+# Win32 profile environment/console/shell folders, native passwd adapters and
+# per-user mixer preferences (the per-session joystick store runs in the
+# joystick runner above).
+python3 -B -m unittest discover -s "$root/tests/host/security" -p test_identity_facades.py
+# --- sec-user-05 block (end) ---
 
 # F5 personality mechanisms, fixture parity and core selector wiring.
 python3 -B -m unittest discover -s "$root/tests/host/win32" -p test_kernel_core.py

@@ -5,6 +5,7 @@
 #include "worker_role.h"
 #include "folder.h"
 #include "../files/transfer_ui.h"
+#include "desktop_union.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +20,7 @@ struct folder_worker {
     unsigned revision;
     int pending, busy, ready, stopping, error, different;
     int bin_full, migrated; uint32_t fixed;   /* G2: the Recycle Bin icon's state, read beside the folder */
+    struct desk_union *merged;                 /* sec-user-05: the per-user Desktop is made here once */
     const char *activity;
 };
 static const char *folder_path(const struct desktop *d)
@@ -44,12 +46,22 @@ void desk_folder_changed(struct desktop *d)
 static int folder_init(struct desktop *d, const struct fm_vfs *fs,int deferred)
 {
     struct desk_folder *f = calloc(1, sizeof(*f)); if (!f) return -ENOMEM;
+    /* sec-user-05: a profile desktop merges the folder every user sees. */
+    if (strcmp(folder_path(d),DESK_FOLDER)) {
+        f->merged=desk_union_create(fs,folder_path(d),DESK_FOLDER);
+        if (!f->merged) { free(f); return -ENOMEM; }
+        fs=&f->merged->vfs;
+    }
     fm_init(&f->model, fs); fm_init(&f->result,fs); f->dialog_window=-1; f->wizard_window=-1; f->editing = -1; f->index = -1;
     int r=0;
+    if (f->merged && !deferred) (void)desk_union_ensure(f->merged);   /* sec-user-05: the user's Desktop exists from the start */
     if (deferred) snprintf(f->model.path,sizeof(f->model.path),"%s",folder_path(d));
     else r=fm_navigate(&f->model,folder_path(d));
+    if (r && f->merged) {   /* not made (yet): the view still lists the All Users items */
+        snprintf(f->model.path,sizeof(f->model.path),"%s",folder_path(d)); r=fm_refresh(&f->model);
+    }
     if (!r) r=poll_start(f,d);
-    if (r) { fm_destroy(&f->model); free(f); return r; }
+    if (r) { fm_destroy(&f->model); desk_union_destroy(f->merged); free(f); return r; }
     f->ready = 1; d->sh.folder = f; desk_folder_changed(d); return 0;
 }
 int desk_folder_init(struct desktop *d,const struct fm_vfs *fs) { return folder_init(d,fs,0); }
@@ -64,6 +76,7 @@ void desk_folder_destroy(struct desktop *d)
     free(d->sh.folder->dialog); free(d->sh.folder->dialog_pixels);
     fm_destroy(&d->sh.folder->result);
     fm_job_destroy(&d->sh.folder->job); fm_destroy(&d->sh.folder->model);
+    desk_union_destroy(d->sh.folder->merged);
     free(d->sh.folder); d->sh.folder = NULL;
 }
 void desk_folder_rename(struct desktop *d, int index)
@@ -365,6 +378,13 @@ int desk_folder_transfer(struct desktop *d, char *const *paths, unsigned count, 
     if (!r) { f->place=place; f->place_x=x; f->place_y=y; }
     return r;
 }
+/* sec-user-05: a parent folder shown by the desktop view (the merged
+ * shared folder included). */
+static int in_view(const struct desktop *d, const char *parent)
+{
+    const struct desk_folder *f=d->sh.folder;
+    return fm_same_path(parent,folder_path(d)) || (f && f->merged && fm_same_path(parent,f->merged->shared));
+}
 /* Saved desktop positions follow the items: forgotten when they leave the
  * Desktop folder, placed at the drop point when they arrive. */
 static void positions_after(struct desktop *d, struct fm_job *j)
@@ -373,12 +393,12 @@ static void positions_after(struct desktop *d, struct fm_job *j)
     /* G2: an item deleted or sent to the bin leaves its Desktop position behind. */
     if (j->kind==FM_DELETE) for (unsigned i=0;i<j->count;i++) {
         char parent[FM_PATH];
-        if ((!j->bin || (j->bin->done && j->bin->done[i])) && !fm_parent(parent,j->sources[i]) && fm_same_path(parent,folder_path(d)))
+        if ((!j->bin || (j->bin->done && j->bin->done[i])) && !fm_parent(parent,j->sources[i]) && in_view(d,parent))
             { cfg_icon_forget(&d->sh.cfg,fm_basename(j->sources[i])); changed=1; }
     }
     if (j->kind==FM_MOVE) for (unsigned i=0;i<j->completed && i<j->count;i++) {
         char parent[FM_PATH];
-        if (!fm_parent(parent,j->sources[i]) && fm_same_path(parent,folder_path(d)) && !fm_same_path(j->destination,folder_path(d)))
+        if (!fm_parent(parent,j->sources[i]) && in_view(d,parent) && !fm_same_path(j->destination,folder_path(d)))
             { cfg_icon_forget(&d->sh.cfg,fm_basename(j->sources[i])); changed=1; }
     }
     if (!d->safe_mode && f->place && fm_same_path(j->destination,folder_path(d))) {
@@ -444,7 +464,7 @@ static void *folder_poll_worker(void *arg)
         struct fm_vfs *fs=&w->snapshot.fs;
         w->error=fs->list(fs->ctx,w->snapshot.path,FM_LIST_NAMES_ONLY,check_entry,&check);
         w->different=!w->error && (check.changed || check.count!=w->snapshot.count);
-        if (!w->migrated) { (void)rb_migrate(fs); w->migrated=1; }
+        if (!w->migrated) { (void)rb_migrate(fs); if (w->merged) (void)desk_union_ensure(w->merged); w->migrated=1; }
         w->bin_full=rb_full(fs,w->fixed);
         if (w->different) {
             folder_activity(w,"directory-refresh");
@@ -460,7 +480,7 @@ static void *folder_poll_worker(void *arg)
 static int poll_start(struct desk_folder *f,struct desktop *d)
 {
     struct folder_worker *w=calloc(1,sizeof(*w)); if (!w) return -ENOMEM;
-    w->desktop=d;
+    w->desktop=d; w->merged=f->merged;
     fm_init(&w->snapshot,&f->model.fs); fm_init(&w->result,&f->model.fs);
     snprintf(w->result.path,sizeof(w->result.path),"%s",f->model.path);
     snprintf(w->snapshot.path,sizeof(w->snapshot.path),"%s",f->model.path);
@@ -584,7 +604,7 @@ void desk_folder_service(struct desktop *d)
             int suffix=n>=4 && !strcasecmp(f->shortcut_name+n-4,".lnk");
             if (n+(!suffix ? 4u : 0u)>=sizeof(name)) r=-ENAMETOOLONG;
             else { snprintf(name,sizeof(name),"%s",f->shortcut_name); if (!suffix) strcat(name,".lnk");
-                r=desk_folder_link_create(d,DESK_FOLDER,name,record); }
+                r=desk_folder_link_create(d,folder_path(d),name,record); }
             free(record);
         }
         if (r) { snprintf(f->wizard_error,sizeof(f->wizard_error),"Cannot create shortcut: %s",strerror(-r)); desk_shell_apply(d); return; }

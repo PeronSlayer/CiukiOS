@@ -873,6 +873,9 @@ int fm_native_version(const char *path,char *out,size_t cap)
 /* The mixer-line and disk-tool native file systems have no kernel in the replay either. */
 int line_preference_save(const char *directory,const struct ciuki_mixer_line *line)
 { (void)directory; (void)line; return 0; }
+/* sec-user-05: no profile session in the replay, so no saved session levels. */
+int mixer_preferences_restore(int fd,int (*apply)(int,unsigned,void *,size_t))
+{ (void)fd; (void)apply; return 0; }
 const struct fm_vfs *fm_native_backup_vfs(void) { return &fake_vfs; }
 const struct fm_vfs *fm_native_cleanup_vfs(void) { return &fake_vfs; }
 int ciuki_file_info_get(const char *path,struct ciuki_file_info *out)

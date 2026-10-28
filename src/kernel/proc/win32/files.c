@@ -8,6 +8,8 @@
 /* fs/spool_ring.c; absent from host fixtures that include this file. */
 extern bool spool_publication(const char *) __attribute__((weak));
 extern void spool_ring(struct vfs *) __attribute__((weak));
+/* sec-user-05: a profile session's own queue rings its own worker. */
+extern void spool_ring_from(struct vfs *, const char *, struct process *) __attribute__((weak));
 static uint32_t dos_error(int e) {
   switch (e) {
   case 0:
@@ -826,9 +828,11 @@ uint32_t w32_file_call(struct proc_thread *t, struct ciuki_w32_file_args *a) {
   error = error ? error : dos_error(e);
   /* A published spool record (job, control, printer configuration) rings
    * the print worker, which sleeps until then (fs/spool_ring.c). */
-  if (!error && a->action == W32_F_MOVE && spool_publication && spool_ring &&
-      spool_publication(full2))
-    spool_ring(s->vfs);
+  if (!error && a->action == W32_F_MOVE && spool_publication && (spool_ring_from || spool_ring) &&
+      spool_publication(full2)) {
+    if (spool_ring_from) spool_ring_from(s->vfs, full2, t->process); /* sec-user-05 */
+    else spool_ring(s->vfs);
+  }
 done:
   if (error)
     a->error = error;

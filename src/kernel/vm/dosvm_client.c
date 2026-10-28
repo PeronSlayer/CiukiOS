@@ -19,6 +19,7 @@
 extern uint32_t joystick_session(void) __attribute__((weak));
 extern int joystick_route_validate(const struct joystick_route *) __attribute__((weak));
 extern bool joystick_settings_game(unsigned, struct joystick_route *) __attribute__((weak));
+extern int joystick_settings_select(struct process *) __attribute__((weak)); /* sec-user-05 */
 #include "dosvm_network.h"
 #include <ciuki/dosvm_network_abi.h>
 extern int display_worker_start(void) __attribute__((weak));
@@ -551,6 +552,9 @@ int32_t dosvm_client_syscall(struct trap_frame *tf)
             if (c.launch.reserved[1]!=CIUKI_JOY_DISABLED)
                 v->joystick.route=(struct joystick_route){c.launch.reserved[1],c.launch.reserved[2],c.launch.reserved[3],c.launch.reserved[4],c.launch.reserved[5]};
         } else if (joystick_settings_game) {
+            /* sec-user-05: the creator's own saved routes (its session's
+             * store); a failure keeps the store already active. */
+            if (joystick_settings_select) (void)joystick_settings_select(p);
             uint32_t jf=irq_save();
             bool fallback=joystick_settings_game(c.launch.game,&v->joystick.route);
             irq_restore(jf);

@@ -93,3 +93,21 @@ uint32_t w32_server_exchange(const void *in,uint32_t n,void *out,uint32_t cap,ui
     }
     RtlLeaveCriticalSection(lock);return e;
 }
+/* --- sec-user-05: ADVAPI32's token/SID facade reads the protected
+ * per-install machine SID (RB_MACHINE_ID, empty request, 32-byte reply:
+ * version, A, B, C, volume u64, account generation u64) over this process's
+ * one REGISTRY link, serialized with the registry transaction. It carries no
+ * caller authority: the broker answers from its own protected state. --- */
+uint32_t w32_registry_machine(uint32_t out[8])
+{
+    if(!out)return 87;
+    RTL_CRITICAL_SECTION *lock=NtCurrentTeb()->ProcessEnvironmentBlock->FastPebLock;
+    RtlEnterCriticalSection(lock);
+    uint8_t reply[32];uint32_t used=0;
+    uint32_t e=broker_rpc(RB_MACHINE_ID,NULL,0,reply,sizeof(reply),&used);
+    RtlLeaveCriticalSection(lock);
+    if(!e&&(used!=sizeof(reply)||br32(reply)!=1))e=13;
+    if(!e)for(unsigned i=0;i<8;i++)out[i]=br32(reply+i*4);
+    return e;
+}
+/* --- end sec-user-05 --- */

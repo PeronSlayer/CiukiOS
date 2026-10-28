@@ -558,14 +558,20 @@ extern int usb_hid_query(uint32_t, void *) __attribute__((weak));
 extern int joystick_hid_query(uint32_t, void *) __attribute__((weak));
 extern int joystick_control(struct ciuki_joystick_control *) __attribute__((weak));
 extern int joystick_settings_calibrate(const struct ciuki_joystick_control *) __attribute__((weak));
+extern int joystick_settings_select(struct process *) __attribute__((weak)); /* sec-user-05 */
 int grant_input_devctl(struct process *p, int32_t fd, uint32_t command, uint32_t address, uint32_t bytes)
 {
     int err=grant_check(p,fd,DESKTOP_INPUT,PROT_READ);
     if (err) return err;
     if (!security_process_live(p)) return -EACCES;
-    /* Existing calibration storage is machine-wide. Until the per-profile
-     * adapter exists, never let a personal request alter that store. */
-    if (command==INPUT_HID_CALIBRATE && !security_device_system(p)) return -EOPNOTSUPP;
+    /* sec-user-05: joystick preferences are per session. Before any
+     * calibration or joystick operation the caller's scope is selected:
+     * SYSTEM the machine store, an interactive session its own profile store
+     * (joystick_storage.c); machine defaults are never changed by a session. */
+    if ((command==INPUT_HID_CALIBRATE || command==INPUT_JOY_CONTROL) && joystick_settings_select &&
+        (err=joystick_settings_select(p))) return err;
+    bool personal_store=joystick_settings_select!=0;
+    if (command==INPUT_HID_CALIBRATE && !personal_store && !security_device_system(p)) return -EOPNOTSUPP;
     if (command == INPUT_KEYBOARD_SET) {
         struct ciuki_keyboard_settings settings;
         if (bytes != sizeof(settings)) return -EINVAL;
@@ -589,7 +595,9 @@ int grant_input_devctl(struct process *p, int32_t fd, uint32_t command, uint32_t
     if (!err && (record.header[0]!=(command==INPUT_JOY_CONTROL ? CIUKI_JOYSTICK_VERSION : CIUKI_HID_VERSION) || record.header[1]!=bytes ||
         (command==INPUT_HID_GET_CAPS && record.caps.reserved) ||
         (command==INPUT_HID_GET_STATE && record.state.reserved))) err=-EINVAL;
-    if (!err && command==INPUT_JOY_CONTROL && !security_device_system(p)) {
+    /* Without the per-session store, personal changes must not reach the
+     * machine store (sec-k04's refusal). */
+    if (!err && command==INPUT_JOY_CONTROL && !personal_store && !security_device_system(p)) {
         switch (record.joystick.operation) {
         case CIUKI_JOY_CALIBRATE: case CIUKI_JOY_ROUTE: case CIUKI_JOY_CONFIGURE: case CIUKI_JOY_SAVE_GAME:
             err=-EOPNOTSUPP; break;

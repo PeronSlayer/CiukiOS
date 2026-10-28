@@ -344,7 +344,7 @@ static int vfs_write(void *ctx, int fd, const void *in, unsigned n) { (void)ctx;
 static int vfs_fd(void *ctx, int fd) { (void)ctx; (void)fd; return 0; }
 static int vfs_metadata(void *ctx, const char *path, const struct fm_meta *meta) { (void)ctx; (void)path; (void)meta; return -EROFS; }
 static const struct fm_vfs wm_vfs={NULL,vfs_list,vfs_stat,vfs_refuse_path,vfs_refuse_rename,vfs_refuse_path,vfs_refuse_path,
-    vfs_open,vfs_read,vfs_write,vfs_fd,vfs_fd,vfs_metadata};
+    vfs_open,vfs_read,vfs_write,vfs_fd,vfs_fd,vfs_metadata,NULL};
 /* ---- input as the hardware delivers it (desk_input) ---- */
 static void pointer_to(int x, int y)
 {

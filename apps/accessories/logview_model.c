@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT
  * CiukiOS Log Viewer model: which logs exist and their text; see logview.h. */
 #include "logview.h"
+#include "../desktop/profile.h" /* sec-user-05 */
 #include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
@@ -51,15 +52,25 @@ void lv_scan(struct lv_list *l, const char *root)
 {
     memset(l, 0, sizeof(*l));
     add(l, LV_BOOT, 0, "Boot log", root, "/system/logs/BOOT.LOG");
-    add(l, LV_NETSURF, 0, "NetSurf log", root, "/system/logs/NETSURF.LOG");
+    /* sec-user-05: a profile session's browser log and crash reports are the
+     * user's own (sdk/netsurf chrome.c, apps/desktop/win32_native.c). */
+    char own_log[200], own_crash[200];
+    const char *profile = !*root ? profile_root_path() : NULL;
+    if (profile) {
+        snprintf(own_log, sizeof(own_log), "%s/Local Settings/Application Data/NetSurf/NETSURF.LOG", profile);
+        snprintf(own_crash, sizeof(own_crash), "%s/Local Settings/Application Data/Crash", profile);
+        add(l, LV_NETSURF, 0, "NetSurf log", "", own_log);
+    } else add(l, LV_NETSURF, 0, "NetSurf log", root, "/system/logs/NETSURF.LOG");
     char setup[256];
     snprintf(setup, sizeof(setup), "%s/SYSTEM/SETUP.LOG", root);
     FILE *f = fopen(setup, "rb");
     if (f) { fclose(f); add(l, LV_SETUP, 0, "Setup log", root, "/SYSTEM/SETUP.LOG"); }
     unsigned first = l->count;
-    for (unsigned d = 0; d < sizeof(crash_dirs) / sizeof(crash_dirs[0]); d++) {
+    for (unsigned d = 0; d < 3; d++) {
+        const char *base = d < 2 ? crash_dirs[d] : profile ? own_crash : NULL, *prefix = d < 2 ? root : "";
+        if (!base) continue;
         char dir[256];
-        snprintf(dir, sizeof(dir), "%s%s", root, crash_dirs[d]);
+        snprintf(dir, sizeof(dir), "%s%s", prefix, base);
         DIR *dp = opendir(dir);
         if (!dp) continue;
         struct dirent *e;
@@ -71,10 +82,10 @@ void lv_scan(struct lv_list *l, const char *root)
             if (!crash_header(path, &sequence, name)) continue;
             char title[64], tail[40];
             snprintf(tail, sizeof(tail), "%s", name[0] ? name : "unknown program");
-            snprintf(title, sizeof(title), "%s %lu: %s", d ? "Win32 crash" : "Crash", sequence, tail);
-            char rel[128];
-            snprintf(rel, sizeof(rel), "%s/%s", crash_dirs[d], e->d_name);
-            add(l, LV_CRASH, sequence, title, root, rel);
+            snprintf(title, sizeof(title), "%s %lu: %s", d == 1 ? "Win32 crash" : "Crash", sequence, tail);
+            char rel[256];
+            snprintf(rel, sizeof(rel), "%s/%s", base, e->d_name);
+            add(l, LV_CRASH, sequence, title, prefix, rel);
         }
         closedir(dp);
     }
