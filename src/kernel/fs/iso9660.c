@@ -93,6 +93,27 @@ static int section_failure(struct fs_ro_volume *v, uint64_t id, const struct iso
                 r->gap, first->gap, r->name_length, first->name_length);
     return -FS_EIO;
 }
+/* fx-hlis5: RUN > 1 is the number of blocks of the same extent from LBA on
+ * that the caller will read next. A cache miss then reads them with one
+ * READ(10), bounded by the media and BLKDEV_READ_BYTES (cache_read_ahead,
+ * cache_read_limit), instead of one packet command per 2048-byte block.
+ * Windows 98's CDFS reads ahead of the application into its supplemental
+ * cache (Windows 98 Resource Kit, chapter 10 "VCACHE and CDFS Supplemental
+ * Cache"; chapter 26, the CD-ROM access pattern). On QEMU (image c02b6731)
+ * the Half-Life menu's 1.3 MB took about 45 s. */
+static int block_run(struct fs_ro_volume *v, uint64_t lba, uint32_t run, uint8_t *buf)
+{
+    struct iso_state *s = v->state;
+    uint64_t end = s->blocks ? s->blocks : v->start + v->sectors;
+    if (end > v->start + v->sectors) end = v->start + v->sectors;
+    if (lba < end && run > end - lba) run = (uint32_t)(end - lba);
+    if (run > BLKDEV_READ_BYTES / ISO_BLOCK) run = BLKDEV_READ_BYTES / ISO_BLOCK;
+    int e = lba >= end ? -FS_EIO : run > 1 ? cache_read_ahead(v->cache, v->dev, lba, run, buf) :
+            cache_read(v->cache, v->dev, lba, buf);
+    if (e) return values(v, lba, "set", ISO_READ, e, 0, lba, 0, 0,
+                         s->blocks ? s->blocks - 1 : v->start + v->sectors - 1, 1, v->start + v->sectors);
+    return 0;
+}
 static int block(struct fs_ro_volume *v, uint64_t lba, uint8_t *buf)
 {
     struct iso_state *s = v->state;
@@ -254,9 +275,9 @@ static int lookup(struct fs_ro_volume *v, uint64_t dir, const char *name, struct
     while (!(e = readdir(v, dir, &c, out))) if (path_equal(name, out->name)) return 0;
     return e;
 }
-static __attribute__((noinline)) int copy_data(struct fs_ro_volume *v, uint64_t lba, unsigned off, void *out, size_t n)
+static __attribute__((noinline)) int copy_data(struct fs_ro_volume *v, uint64_t lba, uint32_t run, unsigned off, void *out, size_t n)
 {
-    uint8_t data[ISO_BLOCK]; int e=block(v,lba,data); if (!e) memcpy(out,data+off,n); return e;
+    uint8_t data[ISO_BLOCK]; int e=block_run(v,lba,run,data); if (!e) memcpy(out,data+off,n); return e;
 }
 static int read_file(struct fs_ro_volume *v, uint64_t id, uint64_t position, void *buf, size_t bytes, size_t *done)
 {
@@ -282,7 +303,10 @@ static int read_file(struct fs_ro_volume *v, uint64_t id, uint64_t position, voi
         size_t n = ISO_BLOCK - off;
         if (n > bytes) n = bytes;
         if (n > r.bytes - position) n = (size_t)(r.bytes - position);
-        e=copy_data(v,lba,off,(uint8_t *)buf+*done,n); if (e) return e;
+        /* Contiguous blocks left in this section; interleaved ones one by one. */
+        uint64_t left = ((uint64_t)off + (r.bytes - position) + ISO_BLOCK - 1) / ISO_BLOCK;
+        uint32_t run = r.unit ? 1 : left > UINT32_MAX ? UINT32_MAX : (uint32_t)left;
+        e=copy_data(v,lba,run,off,(uint8_t *)buf+*done,n); if (e) return e;
         *done += n; position += n; bytes -= n;
         fs_service();
     }

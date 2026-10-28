@@ -791,6 +791,7 @@ static void key_frame(void) {
  * dialog takes its default button. It is a separate adapter argument,
  * never part of the program's command line. */
 static uint32_t defaults_idle, defaults_max, defaults_sent, last_activity;
+static void click_options(const char *text);
 /* fx-hlrun: "secret=PATH" reads up to 47 characters from a local file (the
  * owner's CD key, supplied by the test from the environment and removed
  * after the run); the answer '*' types them and Enter. Neither the text nor
@@ -933,6 +934,7 @@ int h1_game_syscall(uint32_t call, uint32_t a, uint32_t b, uint32_t c, uint32_t 
 }
 void h1_game_options(const char *text) {
     cd_options(text);
+    click_options(text);
     const char *w = after(text, "watchdog=");
     if (w) {
         watchdog_ms = 0;
@@ -987,6 +989,54 @@ void h1_game_options(const char *text) {
         answers[i] = a[i];
     host_print("GAME defaults idle_ms="); host_number(idle); host_print(" max="); host_number(max);
     host_print(" answers="); host_print(answers); host_print("\n");
+}
+/* fx-hlis5: "click=X,Y,W,H" moves the pointer to (X,Y) of the focused
+ * window and clicks the left button once, when that window's surface is
+ * WxH and nothing happened for 3 s: the Half-Life disc menu (AUTORUN.EXE)
+ * draws its items as text and starts the setup on a click, as the user
+ * does. Every child adapter gets the same options; the size keeps the
+ * click on the menu window. */
+static uint32_t click_x, click_y, click_w, click_h, click_done;
+static void click_options(const char *text) {
+    const char *v = after(text, "click=");
+    uint32_t n[4] = {0, 0, 0, 0};
+    for (unsigned k = 0; v && k < 4; k++) {
+        for (; *v >= '0' && *v <= '9'; v++) n[k] = n[k] * 10 + (uint32_t)(*v - '0');
+        if (*v == ',') v++;
+        else if (k < 3) return;
+    }
+    if (!v || !n[2] || !n[3]) return;
+    click_x = n[0]; click_y = n[1]; click_w = n[2]; click_h = n[3];
+    host_print("GAME click x="); host_number(click_x); host_print(" y="); host_number(click_y);
+    host_print(" window="); host_number(click_w); host_print("x"); host_number(click_h); host_print("\n");
+}
+static void pointer_event(uint32_t type, int32_t code, int32_t value, int32_t value2, uint32_t ms) {
+    struct ciuki_message *m = event(type == CIUKI_INPUT_MOTION ? DESK_MOTION : DESK_BUTTON, 40, 0, focus_id, focus_generation);
+    if (!m) return;
+    uint8_t *e = m->data + 16;
+    put32(e + 12, type); put32(e + 16, ms * 1000000u); put32(e + 20, 0);
+    put32(e + 24, (uint32_t)code); put32(e + 28, (uint32_t)value); put32(e + 32, (uint32_t)value2);
+}
+static void click_tick(void) {
+    if (!click_w || click_done || !focus_id || INBOX - (in_tail - in_head) < 3)
+        return;
+    uint32_t t = now_ms();
+    if (t - last_activity < 3000)
+        return;
+    for (unsigned i = 0; i < 64; i++) {
+        if (windows[i].id != focus_id || windows[i].generation != focus_generation)
+            continue;
+        uint32_t k = windows[i].fd - SURFACE_FD;
+        if (k >= SURFACES || !surfaces[k].used || surfaces[k].width != click_w || surfaces[k].height != click_h)
+            return;
+        click_done = 1;
+        last_activity = t;
+        host_print("GAME click window="); host_number(focus_id); host_print(" ms="); host_number(t - start_ms); host_print("\n");
+        pointer_event(CIUKI_INPUT_MOTION, 0, (int32_t)click_x, (int32_t)click_y, t - start_ms);
+        pointer_event(CIUKI_INPUT_BUTTON, 1, 1, 0, t - start_ms + 10);
+        pointer_event(CIUKI_INPUT_BUTTON, 1, 0, 0, t - start_ms + 90);
+        return;
+    }
 }
 static void default_key(void) {
     if (defaults_sent >= defaults_max || !focus_id || INBOX - (in_tail - in_head) < 3)
@@ -1844,6 +1894,8 @@ int h1_game_gate(uint32_t call, uint32_t a, uint32_t b, uint32_t c, int32_t *out
     case CIUKI_SYS_CHANNEL_RECV:
         if (a != DESKTOP_FD) return 0;
         if (in_head == in_tail) installer_tick();
+        if (in_head == in_tail && click_w)
+            click_tick();
         if (in_head == in_tail && defaults_max)
             default_key();
         if (in_head == in_tail) { *out = -11; return 1; }

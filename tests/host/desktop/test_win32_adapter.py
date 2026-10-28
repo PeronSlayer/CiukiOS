@@ -91,6 +91,24 @@ class Win32AdapterTests(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         (ROOT/'build/codex/f5-09b-native-lifecycle.log').write_text(result.stdout+result.stderr)
 
+    def test_profile_temp_folder_created_at_logon(self):
+        """fx-hlis5: <profile>/Local Settings/Temp exists for the session
+        (desk_logon_profile -> profile.h profile_temp_ready_at)."""
+        import shutil
+        work=ROOT/'build/host/desktop-win32';work.mkdir(parents=True,exist_ok=True)
+        binary=work/'profile-temp-test'
+        subprocess.run(['clang','-std=c17','-O1','-g','-Wall','-Wextra','-Werror','-D_POSIX_C_SOURCE=200809L',
+                        '-fsanitize=address,undefined','-fno-sanitize-recover=undefined',
+                        str(ROOT/'tests/host/desktop/profile_temp_test.c'),'-o',str(binary)],check=True)
+        volume=Path(tempfile.mkdtemp(dir=work))
+        try:
+            result=subprocess.run([binary,str(volume)],capture_output=True,text=True,timeout=15)
+        finally:
+            shutil.rmtree(volume,ignore_errors=True)
+        print(result.stdout,end='')
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn('profile_temp_ready_at(temp_root,profile_temp())',(ROOT/'apps/desktop/logon_session.c').read_text())
+
     def test_profile_publication_serializes_restart_snapshot(self):
         work=ROOT/'build/host/desktop-win32';work.mkdir(parents=True,exist_ok=True)
         binary=work/'profile-restart-test'

@@ -225,6 +225,22 @@ class RootRecords(OpticalHarness):
                 self.assertEqual(a['sha256'],b['sha256'])
                 self.check_image(a)
 
+    def test_file_data_read_in_runs(self):
+        """fx-hlis5: file data comes from multi-block READs (cache_read_ahead
+        through iso9660.c block_run), not one device read per 2048-byte block;
+        the bytes are the same (manifest hashes). The harness cache (128 KiB,
+        six 2048-byte slots) bounds each run to three blocks."""
+        source=self.directory/'runs-source'
+        source.mkdir()
+        (source/'BIG.BIN').write_bytes(bytes((i*7+i//2048)&255 for i in range(400*1024)))
+        a=iso_fixtures.generate_directory(source,self.directory/'runs.iso',False)
+        output=self.check_image(a)
+        counters=next(line for line in output.splitlines() if line.startswith('COUNTERS'))
+        reads=int(counters.split('reads=')[1].split()[0])
+        # 200 data blocks plus descriptors and directories: one device read
+        # per block was 206 reads; runs of three need about a third.
+        self.assertLess(reads,100,counters)
+
     def test_python_root_quirks_and_nested_records(self):
         for joliet in (False,True):
             for quirks in ((),('mismatch',),('unaligned',),('extended',),('mismatch','unaligned','extended')):

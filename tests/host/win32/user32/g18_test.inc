@@ -121,9 +121,21 @@ static void test_g18_shell(void) {
   /* Startup flag overrides the first call once; SW_SHOWDEFAULT rereads it. */
   struct w32_process_parameters params={.WindowFlags=1,.ShowWindowFlags=7};
   struct w32_peb peb={.ProcessParameters=&params}; struct w32_teb teb={.ProcessEnvironmentBlock=&peb};
+  struct u32_window main_window={.style=WS_CAPTION|0x80000u};
   w32_model_teb=&teb; u32_startup_reset();
-  CHECK(u32_startup_show(1)==7 && u32_startup_show(3)==3 && u32_startup_show(10)==7);
-  params.ShowWindowFlags=3; u32_startup_reset(); CHECK(u32_startup_show(1)==3);
+  CHECK(u32_startup_show(&main_window,1)==7 && u32_startup_show(&main_window,3)==3 && u32_startup_show(&main_window,10)==7);
+  params.ShowWindowFlags=3; u32_startup_reset(); CHECK(u32_startup_show(&main_window,5)==3);
+  /* fx-hlis5: only a window that can be the main one takes it (top-level,
+   * unowned, captioned, not system-modal, SW_SHOW/SW_SHOWNORMAL); the
+   * others keep their command and leave the override for that window. */
+  struct u32_window popup={.style=WS_POPUP},owned={.style=WS_CAPTION,.owner=(HWND)(uintptr_t)8},
+    child={.style=WS_CHILD|WS_CAPTION,.parent=(HWND)(uintptr_t)8},
+    system_box={.style=WS_POPUP|WS_CAPTION|DS_SYSMODAL,.dialog=(void *)&params};
+  params.ShowWindowFlags=0; u32_startup_reset(); /* SW_HIDE, as Half-Life's AUTORUN.EXE starts SETUP.EXE */
+  CHECK(u32_startup_show(&popup,5)==5 && u32_startup_show(&owned,1)==1 && u32_startup_show(&child,5)==5);
+  CHECK(u32_startup_show(&system_box,5)==5 && u32_startup_show(&main_window,3)==3 && u32_startup_show(&main_window,0)==0);
+  CHECK(u32_startup_show(&main_window,1)==0 && u32_startup_show(&main_window,1)==1);
+  params.WindowFlags=0; u32_startup_reset(); CHECK(u32_startup_show(&main_window,1)==1 && u32_startup_show(&main_window,10)==1);
   w32_model_teb=NULL; u32_startup_reset();
   CHECK(CiukiShellNotify(2,a,0));
   discard();

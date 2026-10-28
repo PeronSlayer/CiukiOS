@@ -2,18 +2,35 @@
  * SPDX-License-Identifier: LGPL-2.1-or-later */
 #include "internal.h"
 #include <w32/ntdll.h>
+#include <w32/controls.h>
 #ifdef W32_HOST_MODEL
 __attribute__((weak)) _Thread_local struct w32_teb *w32_model_teb;
 #endif
 static BOOL startup_used;
 void u32_startup_reset(void) { startup_used=0; }
-int u32_startup_show(int command) {
+/* STARTUPINFO's wShowWindow (STARTF_USESHOWWINDOW) replaces the show
+ * command of the program's main window once. SW_SHOWDEFAULT always asks for
+ * it (Microsoft, STARTUPINFO: "In subsequent calls to ShowWindow, the
+ * wShowWindow member is used if the nCmdShow parameter of ShowWindow is set
+ * to SW_SHOWDEFAULT"). Any other first show takes it only for a window the
+ * window manager can take for the main window: top-level, unowned, with a
+ * caption, not system-modal, shown with SW_SHOW or SW_SHOWNORMAL (Raymond
+ * Chen, "When does STARTF_USESHOWWINDOW override the parameter passed to
+ * ShowWindow()?", The Old New Thing 2010-03-01, rules zero to two; ReactOS
+ * win32ss/user/ntuser/winpos.c co_WinPosShowWindow). Until such a window
+ * takes it, the override stays unused. fx-hlis5: every top-level window
+ * took it before; Half-Life's AUTORUN.EXE starts the setup with SW_HIDE and
+ * the IS5 bootstrap's error box (a system-modal message box) was hidden. */
+int u32_startup_show(const struct u32_window *w, int command) {
   struct w32_teb *teb=NtCurrentTeb();
   struct w32_process_parameters *p=teb && teb->ProcessEnvironmentBlock ? teb->ProcessEnvironmentBlock->ProcessParameters : 0;
-  if (p && (p->WindowFlags&1u) && (!startup_used || command==10)) command=(int)p->ShowWindowFlags;
-  else if (command==10) command=1;
+  BOOL supplied=p && (p->WindowFlags&1u);
+  if (command==10) { startup_used=1; return supplied ? (int)p->ShowWindowFlags : 1; }
+  if (!supplied || startup_used || !w || w->parent || (w->style&WS_CHILD) || (w->style&WS_CAPTION)!=WS_CAPTION ||
+      w->owner || (w->dialog && (w->style&DS_SYSMODAL)) || (command!=1 && command!=5))
+    return command;
   startup_used=1;
-  return command;
+  return (int)p->ShowWindowFlags;
 }
 extern HANDLE W32API GlobalAlloc(DWORD,DWORD);
 extern HANDLE W32API GlobalFree(HANDLE);

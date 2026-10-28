@@ -76,8 +76,16 @@ static int32_t record(void *r,uint32_t size){
         struct ciuki_w32_spawn_args *a=(void *)packet;
         if(!text(&a->image) || !text(&a->command) || !text(&a->directory) ||
            (a->environment && !append(&a->environment,a->environment_bytes,1)))return -22;
-        /* Startup data is not dereferenced by the native service. */
-        a->startup=0;
+        /* Startup data is not dereferenced by the native service. fx-hlis5:
+         * its STARTF flags and show command travel as one word (bit 31 set),
+         * which the service gives the child (RPC 4), as the kernel puts the
+         * caller's STARTUPINFO into the child's parameters. */
+        uint32_t startup=0;
+        if(a->startup){
+            const struct ciuki_w32_startup *s=(const void *)(uintptr_t)a->startup;
+            startup=0x80000000u|(s->flags&0xffffu)|((s->show&0x7fffu)<<16);
+        }
+        a->startup=startup;
     }else if(header->operation==W32_WAIT){
         struct ciuki_w32_wait_args *a=(void *)packet;
         if(a->count>64 || (a->count && !append(&a->handles,a->count*4,1)))return -22;
@@ -310,7 +318,7 @@ static void fixture_close(void *o,struct w32_file *file){
         host.services.free(&host,snapshots[i].data,snapshots[i].size);snapshots[i].data=0;return;}
     original_close(o,file);
 }
-static WCHAR environment[256],cwd[778];
+static WCHAR environment[2048],cwd[778];
 void h1_installer_parameters(const char *command){
     static WCHAR line[4096];unsigned n=0;while(command[n] && n<4095){line[n]=(uint8_t)command[n];n++;}line[n]=0;
     RtlInitUnicodeString(&host.parameters.CommandLine,line);
@@ -318,12 +326,24 @@ void h1_installer_parameters(const char *command){
 int h1_installer_init(const char *fd){
     if(!fd || !*fd)return 0;service_fd=0;
     for(;*fd;fd++){if(*fd<'0' || *fd>'9' || service_fd>6553)return 0;service_fd=service_fd*10+*fd-'0';}
-    char directory[778];uint32_t used=0;
+    static const char fixed[]="TEMP=C:\\WINDOWS\\TEMP\0TMP=C:\\WINDOWS\\TEMP\0WINDIR=C:\\WINDOWS\0PATH=C:\\WINDOWS;C:\\WINDOWS\\SYSTEM\0\0";
+    /* fx-hlis5: the service may supply the creator's STARTUPINFO flags and
+     * show command and a session environment (a profile session's TEMP below
+     * Local Settings); otherwise the fixed Windows 98 values above. Asked
+     * before the startup cwd, which stays the last startup request. */
+    static char supplied[sizeof(environment)/sizeof(environment[0])+8];
+    const char *env=fixed;uint32_t env_bytes=sizeof(fixed),used=0;
+    if(!rpc(4,0,0,supplied,sizeof(supplied),&used) && used>=8 && used<=sizeof(supplied)){
+        const uint8_t *u=(const uint8_t *)supplied;
+        host.parameters.WindowFlags=u[0]|(uint32_t)u[1]<<8|(uint32_t)u[2]<<16|(uint32_t)u[3]<<24;
+        host.parameters.ShowWindowFlags=u[4]|(uint32_t)u[5]<<8|(uint32_t)u[6]<<16|(uint32_t)u[7]<<24;
+        if(used>=10 && !supplied[used-1] && !supplied[used-2]){env=supplied+8;env_bytes=used-8;}
+    }
+    for(unsigned i=0;i<env_bytes;i++)environment[i]=(uint8_t)env[i];host.parameters.Environment=environment;
+    char directory[778];used=0;
     if(rpc(3,0,0,directory,sizeof(directory),&used) || !used || used>sizeof(directory) || directory[used-1])return 0;
     for(unsigned i=0;i<used;i++)cwd[i]=(uint8_t)directory[i];
     RtlInitUnicodeString(&host.parameters.CurrentDirectory.DosPath,cwd);
-    const char env[]="TEMP=C:\\WINDOWS\\TEMP\0TMP=C:\\WINDOWS\\TEMP\0WINDIR=C:\\WINDOWS\0PATH=C:\\WINDOWS;C:\\WINDOWS\\SYSTEM\0\0";
-    for(unsigned i=0;i<sizeof(env);i++)environment[i]=(uint8_t)env[i];host.parameters.Environment=environment;
     original_open=host.services.open;original_close=host.services.close;
     host.services.open=fixture_open;host.services.close=fixture_close;return 1;
 }

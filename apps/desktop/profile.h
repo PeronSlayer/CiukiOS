@@ -39,6 +39,33 @@ static inline const char *profile_temp(void)
     snprintf(derived,sizeof(derived),"%s/Local Settings/Temp",root);
     return derived;
 }
+/* fx-hlis5: <profile>/Local Settings/Temp exists for the whole session, as
+ * on Windows 2000/XP, where every profile is a copy of Default User and
+ * Local Settings\Temp holds the user's temporary files (Microsoft, "User
+ * Profile Structure", Windows Server 2003 Technical Reference). Windows
+ * programs take it for granted: GetTempPath "does not verify that the path
+ * exists" (Microsoft Learn, GetTempPathA), and InstallShield 5's bootstrap
+ * writes its engine there directly. No account service skeleton creates it
+ * (apps/accounts owner_kernel.c), so a fresh profile had none and the
+ * Half-Life setup stopped at "unable to create a temporary file" (QEMU,
+ * image c02b6731). Missing components of TEMP below the committed root are
+ * created here, owner-only, when the session's desktop loads the profile;
+ * anything outside the root, a ".." or a file in the way is refused. */
+static inline int profile_temp_ready_at(const char *root,const char *temp)
+{
+    size_t r=root ? strlen(root) : 0,n=temp ? strlen(temp) : 0;
+    if(!r || n<=r+1 || n>=200 || strncmp(temp,root,r) || temp[r]!='/' || strstr(temp,"/..")) { errno=EINVAL; return -1; }
+    char path[200]; memcpy(path,temp,n+1);
+    for(size_t i=r+1;i<=n;i++) {
+        if(i<n && path[i]!='/') continue;
+        if(path[i-1]=='/') continue;
+        char c=path[i]; path[i]=0; struct stat st; int failed=0;
+        if(!stat(path,&st)) { if(!S_ISDIR(st.st_mode)) { errno=ENOTDIR; failed=1; } }
+        else if(errno!=ENOENT || (mkdir(path,0700) && errno!=EEXIST)) failed=1;
+        path[i]=c; if(failed) return -1;
+    }
+    return 0;
+}
 /* sec-sysvc2: the one per-user log folder below Local Settings\Application
  * Data, the kernel log service's USER scope (src/kernel/fs/sysvc.h
  * SYSVC_USER_LOGS): NETSURF.LOG and the crash reports CRASHn.TXT (native)

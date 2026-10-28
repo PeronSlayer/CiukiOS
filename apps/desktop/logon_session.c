@@ -18,6 +18,7 @@
 #include "desktop.h"
 #include "shell.h"
 #include "logon_session.h"
+#include "profile.h"
 #include "../logon/logon_proto.h"
 #include "../logon/sys_ciuki.h"
 #include <ciuki/channel.h>
@@ -115,6 +116,10 @@ void desk_logon_profile(struct desktop *d)
     char dir[USERS_PATH]; snprintf(dir,sizeof(dir),"%s",p->settings);
     char *slash=strrchr(dir,'/');
     if (slash) { *slash=0; (void)mkdir(dir,0700); (void)copy_path(p->temporary,sizeof(p->temporary),dir,"/desktop.new"); }
+    /* fx-hlis5: the session's TEMP (profile.h profile_temp_ready_at). */
+    const char *temp_root=profile_root_path();
+    if (temp_root && profile_temp_ready_at(temp_root,profile_temp()))
+        fprintf(stderr,"[desktop] profile temp unavailable error=%d\n",-errno);
     struct lgn_session_event ev;
     if (!event(LGN_NOTICE_QUERY,&ev)) {
         memcpy(p->name,ev.name,sizeof(p->name)-1);

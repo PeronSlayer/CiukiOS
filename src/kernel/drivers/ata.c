@@ -192,7 +192,9 @@ static int pace(struct ata_channel *c)
 {
     /* 9.5/9.6: >=400 ns after Command, >=one PIO cycle after a data
      * block. udelay has microsecond granularity: round UP to 1 us.
-     * IDENTIFY/ATAPI retain their original individual-word pacing.
+     * IDENTIFY and port backends without string I/O retain their
+     * original individual-word pacing; ATAPI data phases use bursts
+     * (fx-hlis5, packet_raw) like ATA data blocks (transfer_block).
      * Chipset DIOR-/DIOW-/IORDY timing remains firmware configured. */
     return c->ops->delay_us(c->port_ctx, 1);
 }
@@ -633,7 +635,27 @@ static int packet_raw(struct ata_device *d, const uint8_t *packet, unsigned leng
                 e = failure(d, start, status); break;
             }
             uint8_t *out = (uint8_t *)buffer + *done;
-            for (uint32_t i = 0; i < bytes; i += 2) {
+            if (c->ops->insw) {
+                /* fx-hlis5: the DRQ block as string input in bursts of at most
+                 * 2048 bytes, as transfer_block does for ATA since f1-39: the
+                 * host controller owns PIO cycle/IORDY timing (ATA/ATAPI-6
+                 * 10.2.2), software pacing follows the block, not each word
+                 * (Linux ata_sff_data_xfer: ioread16_rep). One inw, one 1 us
+                 * delay and a yield every 64 words made a 2048-byte READ(10)
+                 * CPU-bound (storage worker 72% of a CPU while the Half-Life
+                 * menu loaded, QEMU c02b6731). An odd final byte comes from
+                 * one more word, as before. */
+                uint32_t even = bytes & ~1u;
+                for (uint32_t i = 0; i < even;) {
+                    if (expired(c, deadline) || c->stopped || c->quiescing) { e = failure(d, start, alternate(c)); break; }
+                    uint32_t take = even - i;
+                    if (take > 2048) take = 2048;
+                    c->ops->insw(c->port_ctx, c->base, out + i, take / 2);
+                    i += take;
+                    if (i < even) task_yield();
+                }
+                if (!e && (bytes & 1)) out[bytes - 1] = (uint8_t)c->ops->in16(c->port_ctx, c->base);
+            } else for (uint32_t i = 0; i < bytes; i += 2) {
                 if (expired(c, deadline)) { e = failure(d, start, alternate(c)); break; }
                 uint16_t word = c->ops->in16(c->port_ctx, c->base);
                 out[i] = (uint8_t)word;
