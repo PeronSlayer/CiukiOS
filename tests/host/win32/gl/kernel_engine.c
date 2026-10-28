@@ -1,6 +1,12 @@
 /* Real copied wire/validator/BCI emitter to independent fake silicon.
  * GPL-2.0-only. Fixture callbacks model only hardware and the lease boundary. */
+#ifdef GL_KERNEL_FAMILY_RADEON
+#include "radeon3d_model.inc"
+#define family_backend radeon3d_backend
+#else
 #include "savage3d_backend_fixture.inc"
+#define family_backend savage3d_backend
+#endif
 #include "../../../../src/kernel/drivers/video/render3d_transport.h"
 static unsigned wire_pid=7, lease_token, lease_generation, wire_presented;
 static uint32_t frame_pixels[1024*768];
@@ -29,12 +35,20 @@ static int present_wire(void *ctx,uint32_t pid,const struct ciuki_w32_render3d_a
 void gl_kernel_setup(int qualified)
 {
     CHECK(!allocations3d);
+#ifdef GL_KERNEL_FAMILY_RADEON
+    prepare(32);
+    test_engine.group_id=RADEON_R200;
+    gpu3d=(struct radeon3d_device){.engine=&test_engine,.heap={0x400000,sizeof(ram3d)},.generation=42,
+        .memory={0,memory_read3d,memory_write3d,lock3d,unlock3d},.qualified=qualified,.r200=true};
+    test_engine.render3d_qualified=qualified;
+#else
     prepare(32); m.reg[0x48578/4]=0;
     memset(ram3d,0x7a,sizeof(ram3d)); draw3d=copy3d=writes3d=memory3d=count3d=0;
     gpu3d=(struct savage3d_device){.engine=&test_engine,.heap={0x800000,sizeof(ram3d)},.generation=42,
         .memory={0,memory_read3d,memory_write3d,lock3d,unlock3d},.qualified=qualified};
     test_engine.render3d_qualified=qualified;
     test_engine.io.write32=write_engine3d;
+#endif
     struct render3d_host host={0,allocate3d,free3d,clock3d,0};
     if (qualified==2) {
         gpu3d.texture_bytes=480*1024;
@@ -43,10 +57,14 @@ void gl_kernel_setup(int qualified)
         fullsize_resources3d(&scratch3d,&host,mode_width,mode_height,true);
         fullsize_resources3d(&reference3d,&host,mode_width,mode_height,false);
         gpu3d.fullsize_testing=false; gpu3d.consumer=&scratch3d;
+#ifdef GL_KERNEL_FAMILY_RADEON
+        CHECK(!radeon3d_fullsize_probe(&gpu3d,&reference3d));
+#else
         CHECK(!savage3d_fullsize_probe(&gpu3d,&reference3d));
+#endif
         CHECK(!render3d_close(&scratch3d) && !render3d_close(&reference3d)); gpu3d.consumer=0;
     }
-    render3d_init(&scratch3d,&host,42,savage3d_backend(),&gpu3d,gpu3d.heap);
+    render3d_init(&scratch3d,&host,42,family_backend(),&gpu3d,gpu3d.heap);
     gpu3d.consumer=&scratch3d; wire_pid=7;
     lease_token=1234; lease_generation=42; wire_presented=0;
 }
@@ -117,7 +135,7 @@ void gl_host_draw(const struct sw_state *s,const struct sw_vertex *v,int hardwar
     if (!admission_live) return;
     static struct gl_hw_command g;
     static struct render3d_request q;
-    struct ciuki_r3d_caps caps; savage3d_backend()->query_caps(&gpu3d,&caps);
+    struct ciuki_r3d_caps caps; family_backend()->query_caps(&gpu3d,&caps);
     g=(struct gl_hw_command){.state=*s,.count=3}; memcpy(g.vertices,v,3*sizeof(*v));
     bool eligible=!gl_hw_encode(&caps,&g,1,2,0,&q);
     if (admission_class==1) { admission_world++; admission_world_ok+=eligible; }
@@ -135,7 +153,13 @@ void gl_host_draw(const struct sw_state *s,const struct sw_vertex *v,int hardwar
 void gl_savage_end(unsigned w,unsigned h,unsigned frame,unsigned gpu_draws,uint64_t gpu_fragments,
                    uint64_t cpu_draws,uint64_t cpu_fragments) {
     admission_live=0;
-    printf("GL_SAVAGE_H1 scope=%s width=%u height=%u frame=%u gpu_draws=%u gpu_fragments=%llu cpu_draws=%llu cpu_fragments=%llu "
+    printf(
+#ifdef GL_KERNEL_FAMILY_RADEON
+        "GL_RADEON_H1 scope="
+#else
+        "GL_SAVAGE_H1 scope="
+#endif
+        "%s width=%u height=%u frame=%u gpu_draws=%u gpu_fragments=%llu cpu_draws=%llu cpu_fragments=%llu "
         "eligible_world=%llu/%llu eligible_entities=%llu/%llu queued_gpu=%llu direct_cpu=%llu switches=%u queued_switches=%u "
         "refused_alpha=%llu refused_blend=%llu refused_fog=%llu refused_offset=%llu refused_numeric=%llu context_software=%llu\n",
         admission_scope ? "complete-multipass" : "complete",w,h,frame,gpu_draws,(unsigned long long)gpu_fragments,(unsigned long long)cpu_draws,(unsigned long long)cpu_fragments,

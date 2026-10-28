@@ -62,8 +62,13 @@
 #include "engine.h"
 
 #include "../render3d.h"
+extern const struct render3d_backend *radeon3d_backend(void) __attribute__((weak));
+extern void radeon3d_boot_diagnostic(struct radeon_engine *, const struct fb_device *) __attribute__((weak));
+extern void radeon3d_bind_vfs(struct vfs *) __attribute__((weak));
+extern int radeon3d_owner_stop(struct radeon_engine *) __attribute__((weak));
 static const struct render3d_family render_family = {
-    .status=R3D_NOT_IMPLEMENTED, .potential_units=6, .potential_texture_size=2048
+    .status=R3D_UNQUALIFIED, .potential_units=6, .potential_texture_size=2048,
+    .backend=radeon3d_backend
 };
 
 /* Discrete primary functions from Linux v6.12 radeonfb_pci_table.
@@ -253,6 +258,7 @@ static int release_resources(void)
 static int runtime_stop(void *ctx)
 {
     struct radeon_engine *s=ctx;
+    if (radeon3d_owner_stop) { int e=radeon3d_owner_stop(s); if (e) return e; }
     s->active=false;
     int e=radeon_engine_idle(s);
     if (!e) e=radeon_cursor_hide(s);
@@ -364,6 +370,7 @@ out:
 }
 static int attempt_begin(struct vfs *vfs)
 {
+    if (radeon3d_bind_vfs) radeon3d_bind_vfs(vfs);
     const char *reason;
     authorized=false;
     if (display_accel_disabled(&reason)) { decision=reason; return -EOPNOTSUPP; }
@@ -407,6 +414,7 @@ static void snapshot(struct ciuki_accel_info *out)
 }
 static void record(void)
 {
+    if (prepared && radeon3d_boot_diagnostic) radeon3d_boot_diagnostic(&engine,&engine.fb);
     klog("[accel] driver=radeon2d ready=%u quarantined=%u cpu_ready=%u subgroup=%s verified=%x commands=%llu waits=%llu timeouts=%llu reason=%s",
         prepared && engine.active,engine.quarantined,engine.cpu_safe,engine.group ? engine.group->name : "unknown",engine.verified,engine.commands,engine.waits,
         engine.timeouts,engine.quarantined && engine.reason ? engine.reason : decision);
@@ -427,7 +435,7 @@ static int cursor_test(const struct accel_ops *ops, uint64_t deadline, bool (*ca
 }
 const struct display_driver radeon2d_driver={
     .render3d=&render_family,
-    .id="radeon2d", .attempt_files={ATTEMPT_PATH}, .name="ATI Radeon R100/R200/R300/R4xx", .matches=matches,
+    .id="radeon2d", .attempt_files={ATTEMPT_PATH,"C:/system/settings/accel-3d-radeon-1002-%04x.cfg"}, .name="ATI Radeon R100/R200/R300/R4xx", .matches=matches,
     .match_count=ARRAY_SIZE(matches), .framebuffer_bar=0, .probe=probe, .eligible=eligible,
     .start=start, .fallback=fallback, .attempt_begin=attempt_begin, .attempt_end=attempt_end,
     .attempt_failed=attempt_failed, .quarantine=quarantine, .summary=summary,

@@ -36,12 +36,16 @@ struct radeon_engine {
     uint32_t memory_location;
     uint64_t local_bytes;
     const struct radeon_group_info *group;
+    enum radeon_group group_id;
     unsigned verified;
     uint32_t cache_mode;
     bool testing;
     uint8_t *cursor;
     uint32_t cursor_offset;
     bool active, quarantined, cpu_safe, touched, cursor_loaded, cursor_hidden, unowned;
+    /* Never set by normal 2D activation. Only a completed guarded 3D
+     * qualification (radeon3d_owner.c) enables the shared-owner 3D path. */
+    bool render3d_qualified;
     const char *reason;
     uint64_t commands, waits, timeouts;
     int (*pause)(void *);

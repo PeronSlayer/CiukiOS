@@ -349,6 +349,7 @@ def desktop_payloads():
                "/Programs/paint": DESKTOP / "paint", "/Programs/music": DESKTOP / "music",
                "/system/assets/ciuki-portrait.xrgb": DESKTOP / "ciuki-portrait.xrgb"}
     sources.update(desktop_license_payloads())
+    sources.update(firmware_payloads())
     sources.update({f"/system/fonts/{p.name}": p for p in (ROOT / "assets/fonts/native").glob("*.CFN")})
     sources["/system/fonts/LICENSES.TXT"] = ROOT / "assets/fonts/LICENSES.TXT"
     font_sources, fonts = font_payloads()
@@ -375,7 +376,18 @@ def desktop_payloads():
     sound_sources, sounds = sound_payloads()
     sources.update(sound_sources)
     metadata["sounds"] = sounds
-    return sources, {"/WINDOWS", "/WINDOWS/SPOOL", "/Documents", "/Documents/Music", "/Documents/Pictures", "/system/sounds", "/Programs", "/System", "/System/Win32", "/System/hwids", "/System/cache", "/System/cache/wallpaper", "/System/cache/wallpaper/thumbnails", "/system/assets", "/system/icons", "/system/licenses", "/system/fonts", "/system/settings", "/system/wallpapers"}, metadata
+    return sources, {"/WINDOWS", "/WINDOWS/SPOOL", "/Documents", "/Documents/Music", "/Documents/Pictures", "/system/sounds", "/Programs", "/System", "/System/Win32", "/System/hwids", "/System/firmware", "/System/cache", "/System/cache/wallpaper", "/System/cache/wallpaper/thumbnails", "/system/assets", "/system/icons", "/system/licenses", "/system/fonts", "/system/settings", "/system/wallpapers"}, metadata
+
+
+def firmware_payloads():
+    """D-F5: unchanged CP firmware and notices; MMIO backend never loads it."""
+    folder = ROOT / "third_party/firmware/radeon"
+    manifest = json.loads((folder / "sources.json").read_text())
+    for name, expected in manifest["files"].items():
+        require(sha256(folder / name) == expected, "Radeon firmware hash: " + name)
+    return {"/System/firmware/" + name: folder / name for name in ("R100_cp.bin", "R200_cp.bin")} | {
+        "/System/firmware/radeon-WHENCE.txt": folder / "WHENCE",
+        "/System/firmware/radeon-LICENSE.txt": folder / "LICENSE"}
 
 
 def font_payloads():
