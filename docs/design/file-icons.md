@@ -24,6 +24,27 @@ identity icon (`AGENTS.md`); nothing here redraws or replaces either.
 | Wine, [user32/exticon.c](https://gitlab.winehq.org/wine/wine/-/blob/master/dlls/user32/exticon.c), [user32/cursoricon.c](https://gitlab.winehq.org/wine/wine/-/blob/master/dlls/user32/cursoricon.c) (`CURSORICON_FindBestIcon`, `CURSORICON_CreateIconFromANI`), [shell32/folders.c](https://gitlab.winehq.org/wine/wine/-/blob/master/dlls/shell32/folders.c) (`getIconLocationForFolder`) | Edge cases: the first language entry, NE group/icon lookup by `0x8000|id`, an NE table without TYPEINFO has no resources, ANI `anih` flag AF_ICON and the first `icon` chunk of `LIST fram`, the size-then-depth rule, desktop.ini lookup order. |
 | R. Chen, [How does Add/Remove Programs get the size and other information?](https://devblogs.microsoft.com/oldnewthing/20040709-00/?p=38493), The Old New Thing 2004 | Without DisplayIcon, Add/Remove Programs takes the Start menu shortcut whose name shares the most words with DisplayName. |
 
+### Native program and missing executable icons (fx-nativeicons, 2026-10-28)
+
+Microsoft's [`ExtractIconW`](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-extracticonw)
+defines index 0 as the first icon in an executable or DLL and returns NULL
+when no icons are present. [`SHGetFileInfoW`](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shgetfileinfow)
+retrieves the shell icon for a filesystem object. Microsoft's
+[icon documentation](https://learn.microsoft.com/en-us/windows/win32/menurc/about-icons)
+identifies the standard default application icon; CiukiOS uses the Tango
+`application-x-executable` equivalent for executable files without resources.
+The Windows 98 Resource Kit media normally extracted to `build/rskt/` was not
+present in this worktree, so this change is based on Microsoft's API documents
+and the existing Windows 98 behavior record above, not a new local book check.
+
+Decision: extensionless entries under `/Programs` resolve through the existing
+`program:<name>` Tango map, the same source used by the Start menu, and are
+requested through libdeskui's shared file-icon cache. `.com`, native
+extensionless programs, and resource-less `.exe` files use the executable
+fallback. Data files retain their extension-based type defaults. Files, the
+desktop, and the Open/Save listing use the resolver/cache for these entries;
+no second program icon catalogue is introduced.
+
 ## Decisions
 
 * **One bounded core**, `apps/libdeskui/iconx.c`: freestanding (no libc, no

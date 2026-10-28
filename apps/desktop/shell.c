@@ -2745,7 +2745,7 @@ static const uint32_t *entry_file_icon(struct desktop *d, int k, int size)
     const struct fm_entry *e = &d->sh.folder->model.entries[k - 3];
     int dir = e->meta.type == FM_DIR;
     if (dir ? !(e->meta.attributes & (CIUKI_ATTR_READONLY | CIUKI_ATTR_SYSTEM)) : !du_file_icon_candidate(e->name, 0)) return NULL;
-    return du_file_icon_flags(d->sh.icons[k].argument, e->meta.modified, (unsigned)size, 0);   /* own icons only */
+    return du_file_icon_flags(d->sh.icons[k].argument, e->meta.modified, (unsigned)size, DU_FILE_ICON_DEFAULT);
 }
 static void draw_icons(struct desktop *d, struct desk_box clip)
 {

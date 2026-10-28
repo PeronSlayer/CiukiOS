@@ -3,7 +3,8 @@
  * it (docs/design/file-icons.md), for every libdeskui client and the desktop.
  *
  * Resolution (du_file_icon_resolve) maps a path to an icon location: a
- * PE/NE program or library, .ico/.cur/.ani shows its own first icon; a
+ * PE/NE program or library, .ico/.cur/.ani shows its own first icon;
+ * extensionless files in /Programs use the shared program:<name> Tango map; a
  * shortcut (.lnk: CiukiOS CIUKLNK3 or MS-SHLLINK) its IconLocation or else
  * its target's icon; a .pif the icon of its "WINDOWS VMM 4.0" section, else
  * the MS-DOS program icon; an Internet shortcut its IconFile; a read-only or
@@ -249,7 +250,7 @@ static int ext_in(const char *ext, const char *const *list)
     for (; *list; list++) if (!strcasecmp(ext, *list)) return 1;
     return 0;
 }
-static const char *const own_types[] = {"exe", "cpl", "scr", "icl", "ico", "cur", "ani", NULL}; /* Windows 98: .dll and .ocx keep the generic library icon */;
+static const char *const own_types[] = {"exe", "com", "cpl", "scr", "icl", "ico", "cur", "ani", NULL}; /* Windows 98: .dll and .ocx keep the generic library icon */;
 static const char *const link_types[] = {"lnk", "ciuki", NULL};
 
 int du_file_icon_shortcut(const char *name)
@@ -261,7 +262,10 @@ int du_file_icon_candidate(const char *name, int directory)
 {
     if (directory) return 1;
     const char *ext = extension(name ? name : "");
-    return ext_in(ext, own_types) || ext_in(ext, link_types) || !strcasecmp(ext, "pif") || !strcasecmp(ext, "url");
+    /* Extensionless /Programs entries are native executables. The resolver
+     * validates their location and uses the same program:<name> Tango mapping
+     * as the Start menu. Other extensionless files are harmless cache misses. */
+    return !*ext || ext_in(ext, own_types) || ext_in(ext, link_types) || !strcasecmp(ext, "pif") || !strcasecmp(ext, "url");
 }
 
 /* /, or /mnt/<letter>: a medium's root, where AUTORUN.INF lives. */
@@ -366,6 +370,13 @@ static int resolve(const char *path, int directory, struct du_icon_source *out, 
         return 0;
     }
     parent_of(path, folder, sizeof(folder));
+    if (!*ext && !strncmp(path, "/Programs/", 10) && path[10] && !strchr(path + 10, '/')) {
+        char object[48];
+        snprintf(object, sizeof(object), "program:%.30s", name);
+        set_fallback(out, object);
+        out->resolved = !host_path(path, host, sizeof(host)) && !stat(host, &st) && S_ISREG(st.st_mode);
+        return 0;
+    }
     if (ext_in(ext, own_types)) {
         set_fallback(out, du_icon_file(name, 0, strcasecmp(ext, "ico") && strcasecmp(ext, "cur") && strcasecmp(ext, "ani")));
         snprintf(out->file, sizeof(out->file), "%s", path);
